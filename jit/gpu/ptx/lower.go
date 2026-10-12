@@ -300,6 +300,24 @@ func Lower(k *ir.Kernel, target string) (string, error) {
 			if sh.Kind == ir.MMAF16 {
 				types = "f32.f16.f16.f32"
 			}
+			if sh.Kind == ir.MMAS8 && sm >= 75 && sm < 80 {
+				// sm_75 has the int8 instruction only as m8n8k16 (the m16n8
+				// integer shapes are sm_80's). The m16n8 fragments are that
+				// shape's registers side by side -- A's word r is row g+8*(r&1),
+				// k 16*(r>>1)+4q; B's word r is k 16r+4q; D's pair p is row
+				// g+8p -- so each 8-row half of D takes one m8n8k16 per
+				// 16-element step of k, as llama.cpp's mma.cuh does on Turing.
+				a, bb := o.Vargs[:na], o.Vargs[na:na+nb]
+				for p := 0; p < 2; p++ {
+					for s := 0; s < nb; s++ {
+						b.Op("mma.sync.aligned.m8n8k16.row.col.s32.s8.s8.s32 {%v,%v},{%v},{%v},{%v,%v};",
+							d[2*p], d[2*p+1], reg[a[2*s+p]], reg[bb[s]], d[2*p], d[2*p+1])
+					}
+				}
+				mma[v] = d
+				reg[v] = d[0]
+				break
+			}
 			b.Op("mma.sync.aligned.m%dn%dk%d.row.col.%s %s,%s,%s,%s;",
 				sh.M, sh.N, sh.K, types, dl, list(o.Vargs[:na]), list(o.Vargs[na:na+nb]), dl)
 			mma[v] = d

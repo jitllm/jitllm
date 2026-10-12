@@ -47,3 +47,15 @@ func VulkanGroups(d Device) (limit uint32, dispatches uint64, ok bool) {
 // MetalKernelWrites overrides the write mask a Metal kernel was compiled
 // with: the violation arm of the concurrent encoder's gate.
 func MetalKernelWrites(k Kernel, m uint64) { k.(*mtlKern).k.SetWrites(m) }
+
+// ForcePTXTarget makes a CUDA device lower its kernels for target (say
+// "sm_75" on an sm_86 card, which the driver JIT-compiles from the PTX), and
+// reports false for any other device. A gate uses it to run an older card's
+// lowering on the card at hand.
+func ForcePTXTarget(d Device, target string) bool {
+	c, ok := d.(*cudaDev)
+	if ok {
+		c.d.Target = target
+	}
+	return ok
+}
