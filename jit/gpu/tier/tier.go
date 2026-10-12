@@ -185,7 +185,7 @@ type Config struct {
 	// bisection switch.
 	NoOperandFuse bool
 	// PreferGemmInt8 puts a prompt chunk's matvecs on the staged int8 GEMM
-	// (kernels.GemmInt8, sm_80 on) ahead of the m16n8 binary16 GEMM. Off by
+	// (kernels.GemmInt8, sm_75 on) ahead of the m16n8 binary16 GEMM. Off by
 	// default: on an L4 and an A100 the binary16 GEMM read Llama-3.2-1B's
 	// prompt at 0.75 and 0.91 of llama.cpp where this one read 0.67 and 0.78
 	// (gpu-kernels.md "The sm_80+ prompt"). The A/B arm.
@@ -669,7 +669,7 @@ type Stats struct {
 	// instruction (sm_75 on, devTier.f16Gemm) rather than MatVecMMA.
 	GemmF16 int
 	// GemmInt8 counts batched matvecs built as kernels.GemmInt8, the staged
-	// int8 GEMM (sm_80 on, devTier.int8Gemm).
+	// int8 GEMM (sm_75 on, devTier.int8Gemm).
 	GemmInt8 int
 	// NormF16, ActF16Fused and QuantActs count a prompt chunk's fused operand
 	// launches: a norm that wrote the binary16 GEMM's operand

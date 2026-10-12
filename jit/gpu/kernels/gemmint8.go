@@ -40,7 +40,7 @@ func Int8OK(q Quant) bool {
 func int8Pos(w int) int { return (w%4)*2 + w/4 }
 
 // GemmInt8 is the batched quantized matvec on the int8 matrix instruction
-// (m16n8k32, or m16n8k16 per 16-element sub-block; sm_80 on) with both
+// (m16n8k32, or m16n8k16 per 16-element sub-block; sm_80 on, four m8n8k16 on sm_75) with both
 // operands staged through shared memory, as llama.cpp's MMQ does: MatVecMMA's
 // arithmetic, blocked like GemmVolta.
 //

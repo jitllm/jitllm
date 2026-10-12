@@ -9472,7 +9472,7 @@ func (g *devTier) actWinFor(ntok int) int {
 }
 
 // batchMV compiles one matvec's batched twin for a prompt chunk: the staged
-// int8 GEMM where Config.PreferGemmInt8 asks for it (int8Gemm, sm_80 on), the
+// int8 GEMM where Config.PreferGemmInt8 asks for it (int8Gemm, sm_75 on), the
 // staged binary16 GEMM on the m16n8 instruction where the device has it
 // (f16Gemm, sm_75 on), then intBatchMV's forms.
 func (g *devTier) batchMV(m mv, ntok, tok int) (mv, bool) {

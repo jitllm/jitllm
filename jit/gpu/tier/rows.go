@@ -1200,7 +1200,8 @@ func (g *devTier) prewarmFused(bs *blockScratch) {
 }
 
 // int8GemmOn reports whether the device lowers GemmInt8, probed once by a
-// compile (the int8 m16n8k32 instruction is sm_80's). Callers hold g.mu.
+// compile (the int8 instruction is m16n8k32 from sm_80 and m8n8k16 pairs on
+// sm_75). Callers hold g.mu.
 func (g *devTier) int8GemmOn() bool {
 	if g.i8Gemm == 0 {
 		g.i8Gemm = -1

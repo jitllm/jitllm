@@ -13,7 +13,7 @@ import (
 // TestStagedGemmPrefillMatchesTheHost prefills real models on CUDA with every
 // block placed and holds the prompt's logits AND the decode that reads the
 // chunk's KV to the host, in two arms: Config.PreferGemmInt8, whose prompt
-// matvecs are the staged int8 GEMM (kernels.GemmInt8, sm_80 on), and the
+// matvecs are the staged int8 GEMM (kernels.GemmInt8, sm_75 on: m8n8k16 there), and the
 // default, whose are the staged binary16 GEMM on the m16n8 instruction
 // (GemmVolta's F16K, sm_75 on). The chunk's attention accumulates on m16n8k8
 // (kernels.PagedAttnAccMMA) behind the m16n8k16 scores in both.
@@ -138,9 +138,9 @@ func stagedGemmArm(t *testing.T, m *Model, g *tier.GPU, seq int, run func(*State
 	t.Logf("%s: %d matvecs on the int8 GEMM, %d on the m16n8 binary16 GEMM, %d on sm_70's; "+
 		"%d attention accumulates on m16n8k8", g.Name(), st.GemmInt8, st.GemmF16, st.VoltaMV, st.PagedAccMMA)
 	switch {
-	case !noInt8 && sm >= 80 && st.GemmInt8 == 0:
-		t.Fatalf("%s lowers the int8 m16n8k32 instruction and built no GemmInt8: MatVecMMA answered", g.Name())
-	case (noInt8 || sm < 80) && sm >= 75 && st.GemmF16 == 0:
+	case !noInt8 && sm >= 75 && st.GemmInt8 == 0:
+		t.Fatalf("%s lowers the int8 matrix instruction and built no GemmInt8: MatVecMMA answered", g.Name())
+	case noInt8 && sm >= 75 && st.GemmF16 == 0:
 		t.Fatalf("%s lowers the m16n8 binary16 instruction and built no GEMM on it: the int8 twin answered", g.Name())
 	case noInt8 && st.GemmInt8 != 0:
 		t.Fatalf("no GemmInt8 asked and %d GemmInt8 matvecs: the arm is not the binary16 GEMM", st.GemmInt8)
