@@ -43,6 +43,9 @@ func TestGemmVoltaMatchesTheReference(t *testing.T) {
 				// A 96-row block, whose 96 staging items do not nest in 128
 				// threads (gpt-oss's 2880-row projection).
 				{192, 512, 128, 2, kernels.VoltaTile{MT: 3, NT: 4, WM: 1, WN: 4, KB: 1}, true},
+				// The 16-token block of a prompt at an odd number of 16s.
+				{256, 512, 112, 1, kernels.VoltaTile{MT: 4, NT: 2, WM: 1, WN: 1, KB: 1}, true},
+				{192, 1024, 48, 2, kernels.VoltaTile{MT: 3, NT: 2, WM: 1, WN: 1, KB: 1}, false},
 			} {
 				s := kernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, MT: sh.tl.MT, NT: sh.tl.NT,
 					Split: sh.split, Bias: sh.bias}

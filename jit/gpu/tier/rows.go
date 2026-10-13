@@ -1006,6 +1006,9 @@ func (g *devTier) tileMV(m mv, ntok int) (mv, bool) {
 var voltaTiles = []kernels.VoltaTile{
 	{MT: 4, NT: 4, WM: 1, WN: 4}, {MT: 4, NT: 2, WM: 1, WN: 4}, {MT: 4, NT: 1, WM: 1, WN: 4},
 	{MT: 3, NT: 4, WM: 1, WN: 4}, {MT: 3, NT: 2, WM: 1, WN: 4},
+	// A 16-token block, for a prompt chunk that is an odd number of 16s
+	// (promptGrain on sm_70): one warp a workgroup.
+	{MT: 4, NT: 2, WM: 1, WN: 1}, {MT: 3, NT: 2, WM: 1, WN: 1},
 }
 
 // voltaGemm is m's batched twin as kernels.GemmVolta, the shared-memory-staged

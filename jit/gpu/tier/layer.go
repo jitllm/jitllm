@@ -9606,6 +9606,12 @@ func (g *devTier) promptGrain() int {
 	if !g.kb.noAttnMMA && g.f16GemmK() == 16 {
 		return max(batchGrain, 16*4)
 	}
+	// sm_70's staged GEMM has a 16-token block (voltaTiles' last), so a
+	// prompt runs at the next 16 rows rather than the next 32: a 104-token
+	// prompt at 112 rows, not 128.
+	if g.f16GemmK() == 0 && !g.NoVolta && !g.NoNarrowGrain && g.sm70() {
+		return batchGrain / 2
+	}
 	return batchGrain
 }
 

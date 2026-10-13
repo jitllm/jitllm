@@ -494,6 +494,9 @@ type Config struct {
 	// replaying a captured graph: the other arm of that comparison, a field so
 	// both arms can be live in one process.
 	NoGraph bool
+	// NoNarrowGrain keeps sm_70's prompt widths at 32-row steps (promptGrain),
+	// the arm before its 16-token GEMM block, for the A/B.
+	NoNarrowGrain bool
 	// ScalarSoftmax runs the thread-per-head softmax instead of the warp
 	// reduction, the other arm of that comparison. It is ignored on a device
 	// that did not pass pickSoftmax's check, where the scalar kernel runs
