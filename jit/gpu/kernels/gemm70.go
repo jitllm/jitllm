@@ -26,6 +26,11 @@ type VoltaTile struct {
 	MT, NT, WM, WN, KB int
 	F16K               int
 	Single             bool
+	// TokOff is the first token this launch covers, a prompt's tail after
+	// a wider tile's launch over the tokens before it: activations are read
+	// and outputs written at their own tokens, NTok of them from TokOff. A
+	// tail launch takes no k-split.
+	TokOff int
 }
 
 // mRows is one m-tile's rows.
@@ -178,6 +183,9 @@ func GemmVolta(s MatVecShape, t VoltaTile) (*ir.Kernel, error) {
 		// so f16Swizzle's permutation of eight has whole rows to work in.
 		return nil, fmt.Errorf("kernels: GemmVolta: an m16n8 tile stages 32 or a multiple of 64 elements a trip, not %d", 8*C)
 	}
+	if t.TokOff < 0 || t.TokOff%8 != 0 || t.TokOff > 0 && (split > 1 || grouped) {
+		return nil, fmt.Errorf("kernels: GemmVolta: token offset %d (split %d, grouped %v)", t.TokOff, split, grouped)
+	}
 	if t.Single && t.F16K == 0 {
 		return nil, fmt.Errorf("kernels: GemmVolta: a single-buffered stage is an m16n8 tile's")
 	}
@@ -202,6 +210,9 @@ func GemmVolta(s MatVecShape, t VoltaTile) (*ir.Kernel, error) {
 	}
 	if grouped {
 		name += fmt.Sprintf("_e%d", s.Experts)
+	}
+	if t.TokOff > 0 {
+		name += fmt.Sprintf("_o%d", t.TokOff)
 	}
 	b := ir.New(name, [3]int{nth, 1, 1})
 	pQS := b.Param("pQS", ir.U32)
@@ -262,6 +273,9 @@ func GemmVolta(s MatVecShape, t VoltaTile) (*ir.Kernel, error) {
 	}
 	rowBlk := b.Mul(ir.U32, bm, c(int64(BM)))
 	tokBlk := b.Mul(ir.U32, bn, c(int64(BN)))
+	if t.TokOff > 0 {
+		tokBlk = b.Add(ir.U32, tokBlk, c(int64(t.TokOff)))
+	}
 	tid := b.TID()
 
 	dq := newVoltaDeq(b, s.T, pQS, pD, pSC, s.Rows)

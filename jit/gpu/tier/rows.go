@@ -1006,10 +1006,14 @@ func (g *devTier) tileMV(m mv, ntok int) (mv, bool) {
 var voltaTiles = []kernels.VoltaTile{
 	{MT: 4, NT: 4, WM: 1, WN: 4}, {MT: 4, NT: 2, WM: 1, WN: 4}, {MT: 4, NT: 1, WM: 1, WN: 4},
 	{MT: 3, NT: 4, WM: 1, WN: 4}, {MT: 3, NT: 2, WM: 1, WN: 4},
-	// A 16-token block, for a prompt chunk that is an odd number of 16s
-	// (promptGrain on sm_70): one warp a workgroup.
-	{MT: 4, NT: 2, WM: 1, WN: 1}, {MT: 3, NT: 2, WM: 1, WN: 1},
 }
+
+// voltaTail16 are GemmVolta's 16-token blocks, for the tail of a prompt
+// chunk that is an odd number of 16s (promptGrain on sm_70): the chunk's
+// body runs on a voltaTiles block, these on the 16 tokens past it
+// (voltaGemmTail). One warp a workgroup, which is too little for a whole
+// GEMM and enough for a tail.
+var voltaTail16 = []kernels.VoltaTile{{MT: 4, NT: 2, WM: 1, WN: 1}, {MT: 3, NT: 2, WM: 1, WN: 1}}
 
 // voltaGemm is m's batched twin as kernels.GemmVolta, the shared-memory-staged
 // form of MatVecMMA70, with the ActF16T conversion it reads; false where no
@@ -1022,8 +1026,14 @@ var voltaTiles = []kernels.VoltaTile{
 func (g *devTier) voltaGemm(m mv, ntok int) (mv, bool) {
 	// A build reached from inside a submission takes g.mu (subLock).
 	defer g.subUnlock(g.subLock())
-	if bm, ok := g.stagedGemm(m, ntok, voltaTiles, 0, 0); ok || !kernels.IsFloat(m.q) {
+	if bm, ok := g.stagedGemm(m, ntok, voltaTiles, 0, 0); ok {
 		return bm, ok
+	}
+	if bm, ok := g.voltaGemmTail(m, ntok); ok {
+		return bm, ok
+	}
+	if !kernels.IsFloat(m.q) {
+		return mv{}, false
 	}
 	// A float weight has no MatVecMMA70 behind this, so a row count no 96-
 	// or 128-row block divides (ModernBERT-large's 2624) takes a 64-row one.
@@ -1688,4 +1698,88 @@ func (g *GPU) resetRecRows(sid uint64, rows []int) bool {
 func (s *gpuSession) ResetRecRows(rows []int) bool {
 	defer s.leave(s.enter())
 	return s.g.resetRecRows(s.sid, rows)
+}
+
+// voltaGemmTail is m's batched twin for a chunk no voltaTiles block divides
+// but a 16-token one does: the body, the tokens up to the last multiple of
+// 32, on the widest voltaTiles block that divides it, and the 16-token tail
+// after it on a voltaTail16 block (mv.tail, the same parameters). Both take
+// no k-split, since the tail writes its tokens in place. False where neither
+// divides. Callers hold g.mu (voltaGemm).
+func (g *devTier) voltaGemmTail(m mv, ntok int) (mv, bool) {
+	if g.NoNarrowGrain || m.slots > 0 || ntok%16 != 0 || ntok < 48 {
+		return mv{}, false
+	}
+	lead, rest := ntok-ntok%32, ntok%32
+	if rest == 0 {
+		return mv{}, false
+	}
+	sub, _, _, _ := kernels.Layout(m.q)
+	kb := max(32/sub, 1)
+	build := func(tl kernels.VoltaTile, n, off int) (backend.Kernel, kernels.MatVecShape, kernels.VoltaTile, bool) {
+		tl.KB, tl.TokOff = kb*max(tl.KB, 1), off
+		s := kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: n, Split: 1, Bias: m.bias != nil}
+		if m.rows%tl.Rows() != 0 || n%tl.Toks() != 0 {
+			return nil, s, tl, false
+		}
+		key := ragKey{kind: "gemmvolta", q: m.q, k: m.k, rows: m.rows, ntok: n, off: off,
+			tile: [5]int{tl.MT, tl.NT, tl.WM, tl.WN, tl.KB}, split: 1, bias: s.Bias}
+		c, ok := g.ragK[key]
+		if !ok {
+			ker, err := kernels.GemmVolta(s, tl)
+			if err == nil {
+				c, err = g.dev.Compile(ker)
+			}
+			if err != nil {
+				c = nil
+			}
+			if r, ok := backend.KernelResourcesOf(c); c != nil && ok && r.SpillBytes > 0 && !g.SpillingTiles {
+				c.Close()
+				c = nil
+			}
+			if g.ragK == nil {
+				g.ragK = map[ragKey]backend.Kernel{}
+			}
+			g.ragK[key] = c
+		}
+		return c, s, tl, c != nil
+	}
+	var body, tail backend.Kernel
+	var bs, ts kernels.MatVecShape
+	var bt, tt kernels.VoltaTile
+	for _, tl := range voltaTiles {
+		var ok bool
+		if body, bs, bt, ok = build(tl, lead, 0); ok {
+			break
+		}
+	}
+	for _, tl := range voltaTail16 {
+		var ok bool
+		if tail, ts, tt, ok = build(tl, rest, lead); ok {
+			break
+		}
+	}
+	if body == nil || tail == nil {
+		return mv{}, false
+	}
+	akey := ragKey{kind: "actf16t", q: m.q, ntok: ntok, k: m.k}
+	a, ok := g.ragK[akey]
+	if !ok {
+		ker, err := kernels.ActF16T(m.q, ntok, m.k)
+		if err == nil {
+			a, err = g.dev.Compile(ker)
+		}
+		if err != nil {
+			a = nil
+		}
+		g.ragK[akey] = a
+	}
+	if a == nil || !g.sizeF16(ntok*m.k*2) {
+		return mv{}, false
+	}
+	g.VoltaGemm++
+	g.VoltaTails++
+	return mv{kern: body, act: a, actN: ntok * m.k / sub, rows: m.rows, split: 1, bias: m.bias, q: m.q, k: m.k,
+		threads: kernels.GemmVoltaGroups(bs, bt) * bt.Threads(), width: bt.Threads(), redN: m.rows * ntok,
+		tail: &mvTail{kern: tail, threads: kernels.GemmVoltaGroups(ts, tt) * tt.Threads(), width: tt.Threads()}}, true
 }

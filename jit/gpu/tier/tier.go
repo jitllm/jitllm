@@ -978,6 +978,9 @@ type Stats struct {
 	// HeadFolds counts batched chunks that ran the output projection on
 	// their last row inside their own submission.
 	HeadFolds int
+	// VoltaTails counts sm_70 prompt GEMMs run as a wide block's body and a
+	// 16-token tail (voltaGemmTail).
+	VoltaTails int
 	// FlashPrefills counts batched attention launches of a one-kernel form
 	// (kernels.FlashPrefill70, FlashPrefillTile), paged or not.
 	FlashPrefills int
@@ -1267,6 +1270,7 @@ func (s *Stats) add(o Stats) {
 	s.PagedPrefillPasses += o.PagedPrefillPasses
 	s.EmbedLaunches += o.EmbedLaunches
 	s.HeadFolds += o.HeadFolds
+	s.VoltaTails += o.VoltaTails
 	s.FlashPrefills += o.FlashPrefills
 	s.VisionAttnChunks += o.VisionAttnChunks
 	if o.MMAWhy != "" {

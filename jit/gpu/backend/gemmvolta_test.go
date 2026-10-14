@@ -275,3 +275,70 @@ func TestGemmF16DeepStageMatchesTheReference(t *testing.T) {
 		t.Skip("no backend lowers an m16n8 binary16 shape here")
 	}
 }
+
+// TestGemmVoltaTailMatchesTheReference holds a prompt chunk that is an odd
+// number of 16s to the reference as the tier runs it (voltaGemmTail): a wide
+// block over the body's tokens and a 16-token block over the tail from its
+// token offset, two launches into one output. A tail reading or writing the
+// body's tokens, or the body reaching past its own, misses by whole tokens.
+func TestGemmVoltaTailMatchesTheReference(t *testing.T) {
+	gpuLock(t)
+	devs := backend.Open()
+	if len(devs) == 0 {
+		t.Skip("no GPU backend on this host")
+	}
+	ran := 0
+	for _, d := range devs {
+		defer d.Close()
+		for _, q := range []kernels.Quant{kernels.Q8_0, kernels.Q4_K, kernels.Q6_K, kernels.Q4_0} {
+			for _, sh := range []struct {
+				rows, k, ntok int
+				body, tail    kernels.VoltaTile
+				bias          bool
+			}{
+				{256, 512, 112, kernels.VoltaTile{MT: 4, NT: 1, WM: 1, WN: 4, KB: 1}, kernels.VoltaTile{MT: 4, NT: 2, WM: 1, WN: 1, KB: 1}, true},
+				{192, 1024, 48, kernels.VoltaTile{MT: 3, NT: 1, WM: 1, WN: 4, KB: 1}, kernels.VoltaTile{MT: 3, NT: 2, WM: 1, WN: 1, KB: 1}, false},
+			} {
+				lead, rest := sh.ntok-sh.ntok%32, sh.ntok%32
+				s := kernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, Bias: sh.bias}
+				bs, ts := s, s
+				bs.NTok, ts.NTok = lead, rest
+				sub, _, _, _ := kernels.Layout(q)
+				kb := max(32/sub, 1) // as the tier stages it
+				sh.body.KB, sh.tail.KB = kb, kb
+				tl := sh.tail
+				tl.TokOff = lead
+				bk, err := kernels.GemmVolta(bs, sh.body)
+				if err != nil {
+					t.Fatalf("%v body: %v", q, err)
+				}
+				tk, err := kernels.GemmVolta(ts, tl)
+				if err != nil {
+					t.Fatalf("%v tail: %v", q, err)
+				}
+				body, err := d.Compile(bk)
+				if err != nil {
+					if d.API() == "ptx" {
+						t.Fatalf("%s %v: %v", d.API(), q, err)
+					}
+					break
+				}
+				tail, err := d.Compile(tk)
+				if err != nil {
+					t.Fatalf("%s %v tail: %v", d.API(), q, err)
+				}
+				ran++
+				mma70Case(t, d, body, s, fmt.Sprintf("gemmvolta body %d + tail %d", lead, rest),
+					kernels.GemmVoltaGroups(bs, sh.body), sh.body.Threads(), true,
+					func(args ...backend.Buf) error {
+						return tail.Launch(kernels.GemmVoltaGroups(ts, tl), tl.Threads(), args...)
+					})
+				body.Close()
+				tail.Close()
+			}
+		}
+	}
+	if ran == 0 {
+		t.Skip("no backend lowers the m8n8k4 shape here")
+	}
+}
