@@ -13,7 +13,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/jitllm/jitllm/common/catalog"
+	"github.com/jitllm/jitllm/internal/localserver"
 	"github.com/jitllm/jitllm/examples/jivman/game"
 	"github.com/jitllm/jitllm/examples/jivman/play"
 	"github.com/jitllm/jitllm/examples/jivman/scores"
@@ -40,7 +40,7 @@ func main() {
 	var o options
 	// The command reads the environment and hands it over; the libraries
 	// read none.
-	flag.StringVar(&o.models, "models", catalog.DefaultDir(os.Getenv("JITLLM_MODELS"), os.Getenv("XDG_DATA_HOME")),
+	flag.StringVar(&o.models, "models", localserver.ModelsDir(os.Getenv("JITLLM_MODELS"), os.Getenv("XDG_DATA_HOME")),
 		"the folder the decision models (.jlm) are found in")
 	flag.StringVar(&o.model, "model", "", "the model to play: a name from the models folder, a .jlm path, or greedy (the fixed rule)")
 	flag.StringVar(&o.devices, "devices", "auto", "where the model runs, as jitllm's -devices: auto, cpu, cuda, vulkan, metal ...")

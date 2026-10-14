@@ -101,6 +101,10 @@
     "tui": {
       "module": "tui", "packages": ["./..."], "cap": "8G"
     },
+    "jivman": {
+      "module": "examples/jivman", "packages": ["./..."], "cap": "8G",
+      "note": "the jivman example: its game, scoreboard and headless runs; the model tests use the smallest decision model under JITLLM_MODELS"
+    },
     "dev-tools": {
       "module": ".", "packages": ["./dev/tools/...", "./dev/probe/...", "./dev/httpbench/...", "./dev/decisionbench/..."], "cap": "8G",
       "note": "the harnesses' own tests; dev/bench's perf floors are measured serially by the main session (RULE 2, RULE 4) and are not run here"
@@ -151,6 +155,7 @@
     {"prefix": "common/", "evidence": "README.md", "checks": ["common"]},
     {"prefix": "ui/", "evidence": "README.md", "checks": ["ui"]},
     {"prefix": "tui/", "evidence": "README.md", "checks": ["tui"]},
+    {"prefix": "examples/jivman/", "evidence": "examples/jivman/README.md", "checks": ["jivman"]},
     {"prefix": "dev/bench/", "evidence": "docs/perf/current.md", "checks": ["vet"], "manual": "perf floors: measured serially by the main session under RULE 1 and RULE 2, never by a parallel agent"},
     {"prefix": "dev/", "evidence": "docs/engineering-history/scheduling-and-measurement.md", "checks": ["dev-tools", "vet"]},
     {"prefix": "scripts/checks/", "evidence": "docs/checks.md", "checks": ["checks-map"]},

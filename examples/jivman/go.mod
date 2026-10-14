@@ -4,16 +4,11 @@ go 1.27.1
 
 replace github.com/jitllm/jitllm => ../..
 
-replace github.com/jitllm/jitllm/common => ../../common
-
-replace github.com/jitllm/jitllm/server => ../../server
-
 require (
 	github.com/gogpu/gg v0.52.3
 	github.com/gogpu/gogpu v0.53.0
 	github.com/gogpu/gpucontext v0.28.0
 	github.com/jitllm/jitllm v0.0.0
-	github.com/jitllm/jitllm/common v0.0.0
 	github.com/samyfodil/musql v0.3.0
 	golang.org/x/image v0.45.0
 )
