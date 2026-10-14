@@ -1244,8 +1244,8 @@ type Model struct {
 	// the host from inside its submission (hybrid experts): from then on a
 	// short prompt takes the decode path (forwardRowsFor).
 	hostExperts atomic.Bool
-	expBytes int64
-	expCalls int64
+	expBytes    int64
+	expCalls    int64
 	// hostStepRows is the rows StepRuns has run as host steps across
 	// sessions (stepHost); HostStepRows reports it.
 	hostStepRows int64
