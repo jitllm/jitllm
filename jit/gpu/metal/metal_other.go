@@ -92,3 +92,7 @@ func (c *Ctx) CounterSets() []string                   { return nil }
 
 // GPUCores is 0 off darwin.
 func GPUCores() int { return 0 }
+
+func SetKernelTiming(bool) {}
+
+func KernelTimes() (map[string]float64, map[string]int) { return nil, nil }

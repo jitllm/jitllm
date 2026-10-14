@@ -619,7 +619,79 @@ func (b *Batch) Encode(k *Kernel, groups, width int, bufs ...*Buf) error {
 	sendDispatch(b.enc, selDispatchTG,
 		mtlSize{uint64(groups), 1, 1}, mtlSize{uint64(width), 1, 1})
 	statEncodeNs.Add(uint64(time.Since(t0)))
+	if kernTiming.Load() {
+		b.timedSplit(k.name)
+	}
 	return nil
+}
+
+// kernTiming puts every dispatch in a command buffer of its own, whose
+// GPUStartTime/GPUEndTime then time that kernel alone; see SetKernelTiming.
+var kernTiming atomic.Bool
+
+// SetKernelTiming arms per-kernel device timing on Metal: each dispatch is
+// committed in its own command buffer, and the device's own start and end
+// stamps of it are read when the work is waited for (KernelTimes). A
+// measurement instrument, default off: a command buffer a dispatch costs its
+// own launch and loses the concurrency between dispatches, so the split it
+// gives is each kernel's time alone, not the token's.
+func SetKernelTiming(on bool) { kernTiming.Store(on) }
+
+// timedCBs names the command buffers committed under SetKernelTiming until a
+// wait reads them.
+var timedCBs struct {
+	sync.Mutex
+	name map[ID]string
+	us   map[string]float64
+	n    map[string]int
+}
+
+// timedSplit commits the batch's command buffer with the one dispatch just
+// encoded, remembers it under the kernel's name, and opens the next.
+func (b *Batch) timedSplit(name string) {
+	cb := b.cb
+	send0(b.enc, selEndEncoding)
+	send0(cb, selCommit)
+	b.q.hold(cb)
+	timedCBs.Lock()
+	if timedCBs.name == nil {
+		timedCBs.name = map[ID]string{}
+	}
+	timedCBs.name[cb] = name
+	timedCBs.Unlock()
+	nb := b.q.newBatch()
+	b.cb, b.enc, b.nrd, b.nwr = nb.cb, nb.enc, 0, 0
+	nb.cb, nb.enc = 0, 0
+	b.q.mu.Lock()
+	b.q.freeBatch = append(b.q.freeBatch, nb)
+	b.q.mu.Unlock()
+}
+
+// timedDone adds a completed command buffer's device time to its kernel's,
+// when it was a timed one.
+func timedDone(cb ID, t0, t1 float64) {
+	timedCBs.Lock()
+	defer timedCBs.Unlock()
+	name, ok := timedCBs.name[cb]
+	if !ok {
+		return
+	}
+	delete(timedCBs.name, cb)
+	if timedCBs.us == nil {
+		timedCBs.us, timedCBs.n = map[string]float64{}, map[string]int{}
+	}
+	timedCBs.us[name] += (t1 - t0) * 1e6
+	timedCBs.n[name]++
+}
+
+// KernelTimes returns, and clears, the per-kernel device microseconds and
+// launch counts SetKernelTiming recorded, for the work waited for so far.
+func KernelTimes() (us map[string]float64, n map[string]int) {
+	timedCBs.Lock()
+	defer timedCBs.Unlock()
+	us, n = timedCBs.us, timedCBs.n
+	timedCBs.us, timedCBs.n = nil, nil
+	return us, n
 }
 
 // MTLDispatchTypeConcurrent and MTLBarrierScopeBuffers.
@@ -785,6 +857,9 @@ func (q *sub) wait() error {
 		// token wall time minus this is measured rather than fitted. Valid
 		// only after completion.
 		if t0, t1 := sendF64(cb, selGPUStart), sendF64(cb, selGPUEnd); t1 > t0 {
+			if kernTiming.Load() {
+				timedDone(cb, t0, t1)
+			}
 			d := uint64((t1 - t0) * 1e9)
 			statGPUNs.Add(d)
 			statGPUN.Add(1)
