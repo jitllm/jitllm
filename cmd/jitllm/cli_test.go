@@ -15,6 +15,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
 // The command line: which subcommand runs, what a bad flag does, and the
@@ -146,6 +147,7 @@ func TestRunRefusesContradictoryFlagsBeforeLoading(t *testing.T) {
 func modelPath(t *testing.T, name string) string {
 	t.Helper()
 	p := testmodels.Path(name)
+	fresh.Must(t, p)
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}

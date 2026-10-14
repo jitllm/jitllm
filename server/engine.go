@@ -2343,6 +2343,9 @@ func (e *Engine) MoveBlocks(ctx context.Context, s *Session, first, last int, to
 	}
 	s.move = r
 	s.moveMu.Unlock()
+	// The pool's States are no sequence's, and would keep the blocks where
+	// they are (dropIdle).
+	e.dropIdle(s.lm)
 	tick := time.NewTicker(2 * time.Millisecond)
 	defer tick.Stop()
 	for {

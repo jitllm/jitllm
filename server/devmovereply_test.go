@@ -57,9 +57,17 @@ func TestAMoveLandsBetweenTwoTokensOfAReply(t *testing.T) {
 			t.Fatal(err)
 		}
 		last := int32(len(pl.Msg.GetPlacement().GetBlocks()) - 1)
-		if _, err := c.placement.RelocateBlocks(ctx, req(&v1.RelocateBlocksRequest{
-			SessionId: id, FirstBlock: 0, LastBlock: last, ToDeviceId: devs[0]})); err != nil {
+		setup, err := c.placement.RelocateBlocks(ctx, req(&v1.RelocateBlocksRequest{
+			SessionId: id, FirstBlock: 0, LastBlock: last, ToDeviceId: devs[0]}))
+		if err != nil {
 			t.Fatal(err)
+		}
+		// A block the first device refused stays where it was, and the reply
+		// says so: the move below would then start from two devices and
+		// prepare nothing ahead on the one already holding blocks.
+		if d := setup.Msg.GetDeclined(); len(d) > 0 {
+			t.Skipf("NO DEVICE ROOM: %s refused %d of %d blocks (block %d: %s) -- this gate proved nothing",
+				devs[0], len(d), last+1, d[0].GetBlockIndex(), d[0].GetReason())
 		}
 		st, err := c.inference.Generate(ctx, req(&v1.GenerateRequest{SessionId: id, Prompt: text(story),
 			MaxTokens: n, IgnoreEos: true}))

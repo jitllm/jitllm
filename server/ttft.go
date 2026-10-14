@@ -327,6 +327,20 @@ func (e *Engine) pool(lm *LoadedModel, st *model.State) bool {
 // closeIdle closes every pooled State and the memory cache. The model is
 // already unpublished, so nothing returns a State to the pool after it.
 func (e *Engine) closeIdle(lm *LoadedModel) {
+	e.dropIdle(lm)
+	if lm.ttft.store != nil {
+		lm.ttft.store.Close()
+	}
+}
+
+// dropIdle closes every pooled State. A pooled State is reset and holds no
+// sequence, but it is still a session of the tier on every block it was
+// placed on, and the tier moves a block between devices only when no other
+// session is on it (its history would be freed with the source's copy): left
+// in the pool, the warm-up's State alone kept every move from running. The
+// pool fills again from the next model_id requests, placed where the blocks
+// are then.
+func (e *Engine) dropIdle(lm *LoadedModel) {
 	e.mu.Lock()
 	idle := lm.ttft.idle
 	lm.ttft.idle = nil
@@ -334,9 +348,6 @@ func (e *Engine) closeIdle(lm *LoadedModel) {
 	for _, st := range idle {
 		lm.ttft.statesClosed.Add(1)
 		st.Close()
-	}
-	if lm.ttft.store != nil {
-		lm.ttft.store.Close()
 	}
 }
 

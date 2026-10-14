@@ -576,6 +576,13 @@ type State struct {
 	// headReady is what head is set back to by SetHeadOnDevice.
 	head      *nn.Head
 	headReady *nn.Head
+	// HostPick asks a prefill whose head runs on the host to project the
+	// listed vocabulary rows alone into HostPickVals (pickOnHost), the
+	// host's half of the label pick a device head does (nn.Head.Pick);
+	// HostPicked says the last prefill did. A decision readout sets them.
+	HostPick     []int32
+	HostPickVals []float32
+	HostPicked   bool
 	// cs is the rotary table for the current position: NRot floats, filled once
 	// per token and read by every head and by the device blocks.
 	cs []float32

@@ -43,6 +43,15 @@ func (g *devTier) prepPick(head *nn.Head) bool {
 		}
 		g.pickK = c
 	}
+	// The picked rows' own projection, compiled once for the head here:
+	// outside any session, where Compile is allowed. A float head keeps the
+	// whole matvec and the gather.
+	if hr := g.headRes(); hr != nil && g.pickMV == nil && !g.NoPickMV && !kernels.IsFloat(hr.t) {
+		if c, err := g.idKernel(kernels.MatVecShape{Center: g.center, T: hr.t, K: hr.k, Rows: pickMax,
+			Split: 1, PickOf: hr.nrows}); err == nil {
+			g.pickMV = c
+		}
+	}
 	l := g.lane
 	if l.pickIDs != nil {
 		return true
@@ -98,4 +107,12 @@ func (g *devTier) closePick() {
 		g.pickK.Close()
 		g.pickK = nil
 	}
+}
+
+// headRes is the head's resident weights, nil while no head is placed.
+func (g *devTier) headRes() *resident {
+	if g.bs == nil {
+		return nil
+	}
+	return g.bs.head
 }

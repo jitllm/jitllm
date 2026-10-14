@@ -50,7 +50,7 @@ func TestNoProductionCodeImportsTestModels(t *testing.T) {
 		}
 		checked++
 		for _, im := range f.Imports {
-			if strings.Trim(im.Path.Value, `"`) == me {
+			if ip := strings.Trim(im.Path.Value, `"`); ip == me || strings.HasPrefix(ip, me+"/") {
 				t.Errorf("%s imports %s: it is for tests only", p, me)
 			}
 		}

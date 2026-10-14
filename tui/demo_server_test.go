@@ -12,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"github.com/jitllm/jitllm/server"
 	"github.com/jitllm/jitllm/server/client"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
@@ -61,6 +62,7 @@ func (t *tap) snapshot() ([]moveInfo, string, bool) {
 func TestDemoRelocatesAStreamingReplyOnARealService(t *testing.T) {
 	const name = "stories15M-q8_0.jlm"
 	path := testmodels.Path(name)
+	fresh.Must(t, path)
 	if _, err := os.Stat(path); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}

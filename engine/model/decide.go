@@ -432,6 +432,21 @@ func (d *Decider) forwardSpans(spans []Span, groups [][]int32, v int) ([]float32
 		}
 		defer func() { h.Pick, h.PickVals = nil, nil }()
 	}
+	// Where the head runs on the host, the same pick there: the labels'
+	// rows alone (State.pickOnHost).
+	if d.violation != "no-pick" {
+		if cap(d.pickVals) < len(flat) {
+			d.pickVals = make([]float32, len(flat))
+		}
+		d.st.HostPick, d.st.HostPickVals = flat, d.pickVals[:len(flat)]
+		if d.violation == "pick-off-by-one" {
+			d.st.HostPick = make([]int32, len(flat))
+			for i, id := range flat {
+				d.st.HostPick[i] = id + 1
+			}
+		}
+		defer func() { d.st.HostPick, d.st.HostPickVals, d.st.HostPicked = nil, nil, false }()
+	}
 	var lg []float32
 	var err error
 	if len(spans) == 1 && spans[0].Picture == nil && spans[0].Embd == nil {
@@ -446,6 +461,10 @@ func (d *Decider) forwardSpans(spans []Span, groups [][]int32, v int) ([]float32
 	if h != nil && h.Picked {
 		d.picked++
 		return d.labelScoresOf(h.PickVals, groups, v)
+	}
+	if d.st.HostPicked {
+		d.picked++
+		return d.labelScoresOf(d.st.HostPickVals, groups, v)
 	}
 	vals := d.pickVals[:0]
 	for _, id := range flat {

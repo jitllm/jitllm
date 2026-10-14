@@ -70,6 +70,7 @@ func (g *devTier) tuneSplit(q kernels.Quant, rows, k int, r *resident) int {
 		return fallback
 	}
 
+	g.trialQuiet()
 	nb := k / 32
 	out, err := g.dev.Alloc(rows * 4)
 	if err != nil {
@@ -208,7 +209,12 @@ func (g *devTier) queueTune(j tuneJob) {
 	if !g.tuneRunning {
 		g.tuneRunning = true
 		g.tuneWG.Add(1)
-		go g.tuneWorker()
+		// The tuner is a session of its own over lane0, never the view of
+		// the session that queued the shape: that session's devSess says
+		// whether ITS submission is running (inSub), which the tuner's
+		// quiesce would read as its own and refuse.
+		tv := &devTier{devShared: g.devShared, devSess: &devSess{}, lane: g.lane0, Stats: &g.tot}
+		go tv.tuneWorker()
 	}
 }
 
@@ -269,6 +275,8 @@ func (g *devTier) runTuneJob(j tuneJob) {
 			return
 		}
 		g.mu.Lock()
+		// No submission may be in flight under a trial (trialQuiet).
+		g.trialQuiet()
 		if g.tuneStop || g.closed || !j.r.ok {
 			g.mu.Unlock()
 			return
@@ -328,6 +336,19 @@ func (g *devTier) waitQuiet() bool {
 		time.Sleep(tuneQuiet - idle)
 	}
 }
+
+// trialQuiet waits until no submission is in flight, before a split trial
+// that holds g.mu. A trial ends in Session.Sync, which on CUDA is
+// cuCtxSynchronize: it waits for every stream of the context, and the backend
+// holds it off while any queue is recording (cudaDev.capturing). A submission
+// runs outside g.mu (runUnlocked) and, while recording, may take g.mu again
+// for a build reached from inside it (subLock). With g.mu held here and a
+// submission in flight, the trial waits for the recording to end and the
+// recording for g.mu: the deadlock a server's warm-up prefill met beside the
+// background tuner on a T4. The placement-path trial also writes g.partBuf,
+// which a submission in flight may be reading. Callers hold g.mu, and are not
+// inside a submission or its prologue (quiesce refuses).
+func (g *devTier) trialQuiet() { g.quiesce() }
 
 // stopTune stops the background tuner and waits for it. Callers do not hold
 // g.mu.

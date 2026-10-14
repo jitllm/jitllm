@@ -111,3 +111,74 @@ func TestBlocksMoveBetweenDevicesThroughThePlacementService(t *testing.T) {
 		t.Fatal("the moved session generated nothing")
 	}
 }
+
+// TestAMoveRunsPastThePool: a model loaded warm with the default session
+// pool keeps the warm-up's State in the pool, reset and holding no sequence
+// but still on every block it was placed on. A move between devices runs
+// anyway: the tier moves a block only when no other session is on it, and
+// the pooled State kept jitllmd's relocation demo from moving anything
+// ("another session is using it") until -session-pool -1.
+func TestAMoveRunsPastThePool(t *testing.T) {
+	spec := os.Getenv("JITLLM_MOVE_DEVICES")
+	if spec == "" {
+		spec = "cuda:0,vulkan:1"
+	}
+	devs := strings.Split(spec, ",")
+	if len(devs) != 2 {
+		t.Fatalf("JITLLM_MOVE_DEVICES=%q: want two devices", spec)
+	}
+	path := modelPath(t, deviceModel)
+	e := New(Config{Version: "test", NoMemCache: true})
+	t.Cleanup(e.Close)
+	lm, err := e.LoadModel(LoadOptions{Path: path, ModelID: "dev", DeviceIDs: devs, Warm: true})
+	if err != nil {
+		t.Skipf("NO DEVICE: loading onto -devices %s failed (%v) -- this gate proved nothing", spec, err)
+	}
+	if n := e.MemCacheStats(lm).Pooled; n == 0 {
+		t.Fatalf("the warm load pooled no State: the gate would move past nothing")
+	}
+	c := serveEngine(t, e)
+	ctx := context.Background()
+	if _, err := e.CreateSession(SessionOptions{ModelID: "dev", SessionID: "moved", MaxSeq: 128}); err != nil {
+		t.Fatal(err)
+	}
+	pl, err := c.placement.GetPlacement(ctx, req(&v1.GetPlacementRequest{SessionId: "moved"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := pl.Msg.GetPlacement().GetBlocks()
+	for _, b := range blocks {
+		if b.GetLocation() != v1.BlockLocation_BLOCK_LOCATION_DEVICE {
+			t.Skipf("NO DEVICE ROOM: block %d is on the host", b.GetIndex())
+		}
+	}
+	from := blocks[0].GetDeviceId()
+	to := devs[0]
+	if to == from {
+		to = devs[1]
+	}
+	if _, err := c.inference.Complete(ctx, req(&v1.GenerateRequest{SessionId: "moved", Prompt: text(story), MaxTokens: 4})); err != nil {
+		t.Fatal(err)
+	}
+	nb := int32(len(blocks))
+	r, err := c.placement.RelocateBlocks(ctx, req(&v1.RelocateBlocksRequest{
+		SessionId: "moved", FirstBlock: 0, LastBlock: nb - 1, ToDeviceId: to,
+	}))
+	if err != nil {
+		t.Fatalf("%s -> %s with the pool on: %v", from, to, err)
+	}
+	if m := r.Msg; m.GetBlocksMoved() != nb || len(m.GetDeclined()) != 0 {
+		t.Fatalf("the move did not run: %+v", m)
+	}
+	got, err := c.inference.Complete(ctx, req(&v1.GenerateRequest{SessionId: "moved", Prompt: text(" and then"), MaxTokens: 4}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Msg.GetTokenIds()) == 0 {
+		t.Fatal("the moved session generated nothing")
+	}
+	// A model_id request after the move is served beside the moved session.
+	if _, err := c.inference.Complete(ctx, req(&v1.GenerateRequest{ModelId: "dev", Prompt: text(story), MaxTokens: 2})); err != nil {
+		t.Fatal(err)
+	}
+}

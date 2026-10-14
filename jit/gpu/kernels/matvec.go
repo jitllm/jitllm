@@ -226,6 +226,11 @@ type MatVecShape struct {
 	T    Quant
 	K    int // elements per row, a multiple of 32
 	Rows int // output rows
+	// PickOf, when set, makes output row r the weight's row pPick[r] of a
+	// PickOf-row matrix: the label pick's projection (nn.Head.Pick), Rows
+	// picked rows of a vocabulary head in place of all of them. pPick follows
+	// pOut and pBias. Dense one-token decode shapes only.
+	PickOf int
 	// Bias adds a per-row vector to the result (qwen2-style projections),
 	// folded into the store to save a launch per projection. With Split > 1 it
 	// is gated to segment 0 with ir.Select, a data-flow select rather than a
@@ -468,6 +473,10 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 	if s.Rows <= 0 {
 		return nil, fmt.Errorf("kernels: MatVec: Rows=%d must be positive", s.Rows)
 	}
+	if s.PickOf > 0 && (s.NTok > 1 || s.Experts > 1 || s.GroupSplit || s.Rowt > 1 || s.In.On || s.Gate ||
+		s.BiasRows || s.ActRows > 1 || into != nil) {
+		return nil, fmt.Errorf("kernels: MatVec: PickOf takes a dense one-token decode shape")
+	}
 	nsub := s.K / sub // sub-blocks per row, each with its own scale
 	nb := s.K / 32    // 32-element activation blocks
 	split := s.Split
@@ -507,6 +516,9 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 	// The shape is in the name so a profiler can tell projections apart; nothing
 	// looks a matvec up by it.
 	name := fmt.Sprintf("matvec_%s_%dx%d_s%d", strings.ToLower(s.T.String()), s.Rows, s.K, s.Split)
+	if s.PickOf > 0 {
+		name += fmt.Sprintf("_pick%d", s.PickOf)
+	}
 	if s.GroupSplit {
 		name += "g"
 	}
@@ -590,6 +602,10 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 	var pSel ir.Value
 	if experts > 1 {
 		pSel = b.Param("pSel"+suffix, ir.U32) // Slots expert ids, chosen by the router
+	}
+	var pPick ir.Value
+	if s.PickOf > 0 {
+		pPick = b.Param("pPick", ir.U32) // the weight row each output row reads
 	}
 
 	orows := b.Const(ir.U32, int64(s.Rows)) // rows of ONE expert; the output row count
@@ -687,6 +703,17 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 	// The originals are named orow/orows so a weight expression still written in
 	// terms of the bare row cannot silently compute a wrong address.
 	wrow, wrowD, wrowSC, bankRows := orow, orow, orow, orows
+	// wsel and wrows are the weight's row and row count where the narrow d
+	// plane and a float row address them: the output row and Rows, or the
+	// picked row and PickOf.
+	wsel, wrows := orow, s.Rows
+	if s.PickOf > 0 {
+		// An id past the matrix (the pick's padding) reads its last row; the
+		// caller reads only the ids it asked for.
+		wsel = b.Min(ir.U32, b.Load(ir.U32, pPick, orow, 0), b.Const(ir.U32, int64(s.PickOf-1)))
+		wrows = s.PickOf
+		wrow, wrowD, wrowSC, bankRows = wsel, wsel, wsel, b.Const(ir.U32, int64(s.PickOf))
+	}
 	// dExpAdd adds the expert's base without the row, which the narrow d plane
 	// needs: rows share a word there, so the row enters the index divided. A
 	// function, not a value, so the dense path emits nothing extra.
@@ -784,7 +811,7 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 	fw, fsub := 0, 0 // u32 words per row, and per 32-element sub-block
 	if qi.float > 0 {
 		fw, fsub = s.K*qi.float/4, sub*qi.float/4
-		rowF := orow
+		rowF := wsel
 		if experts > 1 {
 			rowF = b.Add(ir.U32, b.Mul(ir.U32, eSel, orows), orow)
 		}
@@ -997,9 +1024,9 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 		var dw ir.Value
 		var d ir.Value
 		if n := DSlots(s.T); n > 1 {
-			rowj := b.Add(ir.U32, orow, b.Const(ir.U32, tileOff(j)))
+			rowj := b.Add(ir.U32, wsel, b.Const(ir.U32, tileOff(j)))
 			idx := dExpAdd(b.Add(ir.U32,
-				b.Mul(ir.U32, super, b.Const(ir.U32, int64((s.Rows+n-1)/n))),
+				b.Mul(ir.U32, super, b.Const(ir.U32, int64((wrows+n-1)/n))),
 				b.Shr(ir.U32, rowj, b.Const(ir.U32, int64(log2(n))))))
 			w := b.Load(ir.U32, pD, idx, 0)
 			// Shift and mask, not Div and Rem: DSlots is a power of two, and this

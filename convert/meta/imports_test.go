@@ -142,6 +142,10 @@ func TestOnlyTheConverterReachesGGUF(t *testing.T) {
 		modPath + "/internal/modelsdoc":         "renders docs/models.md from the converter's own lists; converts nothing",
 		modPath + "/internal/capabilities":      "renders the capability manifest from the converter's own lists; converts nothing",
 		modPath + "/server/cmd/gencapabilities": "writes the capability manifest through internal/capabilities; converts nothing",
+		// Tests only (TestNoProductionCodeImportsTestModels covers it): the
+		// suite converts, so a container an earlier build left is
+		// reconverted from the GGUF beside it.
+		modPath + "/internal/testmodels/fresh": "test helper: reconverts a container this build cannot read from its GGUF; tests only",
 	}
 	g := pkgGraph(t, filepath.Join("..", ".."))
 	if len(g) < 10 {

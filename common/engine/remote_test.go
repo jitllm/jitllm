@@ -4,6 +4,7 @@ package engine
 
 import (
 	"context"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"net"
 	"os"
 	"os/exec"
@@ -94,6 +95,7 @@ func startJitllmd(t *testing.T, addr string) (stop func()) {
 
 func needModel(t *testing.T) {
 	t.Helper()
+	fresh.Must(t, modelPath)
 	if _, err := os.Stat(modelPath); err != nil {
 		t.Fatalf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proves nothing without it", err)
 	}
