@@ -13,10 +13,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/jitllm/jitllm/internal/localserver"
 	"github.com/jitllm/jitllm/examples/jivman/game"
 	"github.com/jitllm/jitllm/examples/jivman/play"
 	"github.com/jitllm/jitllm/examples/jivman/scores"
+	"github.com/jitllm/jitllm/internal/localserver"
 )
 
 type options struct {

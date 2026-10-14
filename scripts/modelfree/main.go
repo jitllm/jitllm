@@ -121,7 +121,7 @@ func modelFree() bool {
 	runs = append(runs, testRun{"server", filepath.Join(root, "server"), []string{"./..."}})
 	runs = append(runs, testRun{"common", filepath.Join(root, "common"), []string{"./..."}})
 	runs = append(runs, testRun{"tui", filepath.Join(root, "tui"), []string{"./..."}})
-	runs = append(runs, testRun{"examples/jivman", filepath.Join(root, "examples", "jivman"), []string{"./..."}})
+	runs = append(runs, testRun{"jivman", filepath.Join(root, "examples", "jivman"), []string{"./..."}})
 	uiPkgs, err := list(filepath.Join(root, "ui"))
 	if err != nil {
 		fatal(err)
