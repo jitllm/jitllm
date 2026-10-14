@@ -647,7 +647,7 @@ func (g *devTier) splitSwaps() int {
 	if g.SplitSwaps != 0 {
 		return max(g.SplitSwaps, 0)
 	}
-	return 2
+	return 8
 }
 
 // splitAdmit is Config.SplitAdmit with its default.

@@ -3695,7 +3695,7 @@ since its latent out-projection reads the sum. The cache takes in at most
 `Config.SplitAdmit` misses a block a token over the coldest slot this token
 does not read, by selection counts halved every 256 tokens; an occupied slot
 changes hands only to a miss selected at least twice as often plus two, and
-only within a per-token budget over every block (`Config.SplitSwaps`, 2). On
+only within a per-token budget over every block (`Config.SplitSwaps`, 8: alternating warm runs read 22.2 and 22.7 tok/s at 8, 17.1 and 20.2 at 2, 20.3 and 20.4 with none). On
 this file 43 sheets a block fit beside the 7.35 GiB base (2064 experts,
 6.4 GiB); the hit rate settles at 53-56%.
 

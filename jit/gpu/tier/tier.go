@@ -477,8 +477,10 @@ type Config struct {
 	// token at most; 0 is 2.
 	SplitAdmit int
 	// SplitSwaps is how many occupied cache slots change hands in a token,
-	// over every block; 0 is 2, negative none. A sheet sent is a host copy
-	// and a transfer on the token's path.
+	// over every block; 0 is 8, negative none. A sheet sent is a host copy
+	// and a transfer on the token's path. On Qwen3.8-Flash-Next over a V100,
+	// alternating, warm: 8 read 22.2 and 22.7 tok/s, 2 read 17.1 and 20.2,
+	// none 20.3 and 20.4.
 	SplitSwaps int
 	// NoAutoStream leaves a mixture block that no device can hold resident
 	// on the host, as before GPU.AutoStream, instead of streaming it.
