@@ -39,7 +39,8 @@ type modelOpts struct {
 	noShOverlap bool
 	// forwardRows is the longest prompt run a token at a time; see
 	// WithPrefillForwardRows.
-	forwardRows int
+	forwardRows    int
+	forwardRowsSet bool
 	// hybridSpin is how long the pool's workers spin between a token's
 	// host expert calls inside a device's submission; see WithHybridSpin.
 	hybridSpin    time.Duration
@@ -178,7 +179,14 @@ func WithHybridSpin(d time.Duration) Option {
 // is. A placement whose blocks suspend for host experts runs decode's split
 // (the card's cached experts beside the host's) where the batched chunk runs
 // every row's experts on the host.
-func WithPrefillForwardRows(n int) Option { return func(l *loadOpts) { l.opt.forwardRows = n } }
+//
+// Unset, a model whose device has run host experts takes hostRowsByRow, and
+// any other one token: on Qwen3.8-Flash-Next over a V100 a five-token prompt
+// took 210-236 ms this way and 474-482 ms as a chunk whose experts all ran
+// on the host.
+func WithPrefillForwardRows(n int) Option {
+	return func(l *loadOpts) { l.opt.forwardRows, l.opt.forwardRowsSet = n, true }
+}
 
 func WithSharedOverlap(on bool) Option { return func(l *loadOpts) { l.opt.noShOverlap = !on } }
 

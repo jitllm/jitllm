@@ -186,3 +186,51 @@ func TestSplitExpertsMatchTheHost(t *testing.T) {
 		})
 	}
 }
+
+// TestHybridShortPromptTakesTheDecodePath: once a device has run a model's
+// experts on the host, a prompt of up to hostRowsByRow tokens runs through
+// the decode path (where the split runs) and a longer one stays a chunk;
+// before any such call, a short prompt is a chunk too.
+func TestHybridShortPromptTakesTheDecodePath(t *testing.T) {
+	path, ok := existingModel(testmodels.Path("kimik3/Kimi-K3-0.40B.Q8_0.gguf"))
+	if !ok {
+		t.Skip("MODEL MISSING: kimik3/Kimi-K3-0.40B.Q8_0.gguf -- this gate proved nothing")
+	}
+	m, err := Open(jlmOf(t, path), noTune, WithKVF16(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
+		tier.WithConfig(func(c *tier.Config) { c.StreamExperts, c.HybridExperts = true, true }))
+	if err != nil || g == nil {
+		noDevice(t, "gpu:0", err)
+	}
+	defer g.Close()
+	short := []int32{1008, 10484, 318, 15383, 387}
+	long := append(append([]int32(nil), short...), 17374, 13, 646, 1008, 10484, 318, 15383)
+	prompt := func(ids []int32) int {
+		s := m.NewState(len(ids) + 2)
+		defer s.Close()
+		s.SetDeviceLayers(g, m.Cfg.NLayer)
+		if s.GPULayers() == 0 {
+			t.Fatalf("no block placed: %s", g.Stats().LastErr)
+		}
+		if _, err := s.Prefill(ids); err != nil {
+			t.Fatal(err)
+		}
+		return s.forwardPrompts
+	}
+	if n := prompt(short); n != 0 {
+		t.Fatalf("before any host expert call a short prompt ran %d prompts token by token", n)
+	}
+	if !m.hostExperts.Load() {
+		t.Fatal("a chunk on hybrid blocks did not mark the model")
+	}
+	if n := prompt(long); n != 0 {
+		t.Fatalf("a %d-token prompt ran token by token", len(long))
+	}
+	if n := prompt(short); n != 1 {
+		t.Fatalf("after host expert calls a %d-token prompt ran %d prompts token by token, want 1", len(short), n)
+	}
+}

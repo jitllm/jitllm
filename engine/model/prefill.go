@@ -385,7 +385,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 	// One token is decode; the batched path would allocate megabytes to beat
 	// it by nothing. Single-sequence only, because Forward writes row 0; a
 	// batch slot takes the chunked path at any length.
-	if !s.batched && (total == 1 || total <= s.m.opt.forwardRows && src == nil) && s.emb == nil && len(s.deep) == 0 {
+	if !s.batched && (total == 1 || total <= s.forwardRowsFor() && src == nil) && s.emb == nil && len(s.deep) == 0 {
 		var lg []float32
 		var err error
 		s.forwardPrompts++
@@ -1655,4 +1655,17 @@ func (s *State) pickOnHost() bool {
 	}
 	s.HostPicked = true
 	return true
+}
+
+// forwardRowsFor is the longest prompt run through the decode path: the
+// caller's WithPrefillForwardRows, else hostRowsByRow once a device has run
+// this model's experts on the host, else one.
+func (s *State) forwardRowsFor() int {
+	switch {
+	case s.m.opt.forwardRowsSet:
+		return s.m.opt.forwardRows
+	case s.m.hostExperts.Load():
+		return hostRowsByRow
+	}
+	return 1
 }
