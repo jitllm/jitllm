@@ -126,7 +126,9 @@ func TestSplitExpertsMatchTheHost(t *testing.T) {
 								if g.Stats().StreamCacheSize == 0 {
 									t.Skip("CARD TOO SMALL: no auto-sized cache to give back -- this arm proved nothing")
 								}
-								if _, err := g.SetBudget(g.Bytes() - 1); err != nil {
+								// Half of what the caches hold: anything smaller
+								// the unpack staging alone can cover.
+								if _, err := g.SetBudget(g.Bytes() - g.Stats().CacheBytes/2); err != nil {
 									t.Fatal(err)
 								}
 								if g.Stats().CachesDropped == 0 || s.GPULayers() != placed {

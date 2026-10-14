@@ -863,8 +863,10 @@ type Stats struct {
 	// on the card from its expert cache (streamBank.split), SplitHits the
 	// experts run there, SplitAdmits the experts the caches took in, and
 	// TSplitHost the host's share of those steps' wall.
-	// CachesDropped counts expert caches given back for room (dropCaches).
+	// CachesDropped counts expert caches given back for room (dropCaches),
+	// and CacheBytes is what the caches sized after placement hold now.
 	CachesDropped                     int
+	CacheBytes                        uint64
 	SplitRuns, SplitHits, SplitAdmits int
 	TSplitHost                        time.Duration
 	// TLateWrite is the wall of writing the host's expert sum back after
@@ -1266,6 +1268,7 @@ func (s *Stats) add(o Stats) {
 	s.THybrid += o.THybrid
 	s.SplitRuns += o.SplitRuns
 	s.CachesDropped += o.CachesDropped
+	s.CacheBytes += o.CacheBytes
 	s.SplitHits += o.SplitHits
 	s.SplitAdmits += o.SplitAdmits
 	s.TSplitHost += o.TSplitHost
@@ -2202,6 +2205,15 @@ func (d *devTier) stats() Stats {
 		s.KVPoolBytes = d.kvp.charged()
 	}
 	s.BudgetUsed = d.used
+	for _, l := range d.layers {
+		if l != nil && l.stream != nil && l.stream.cached() && l.stream.plain[2] != nil {
+			for _, r := range [3]*resident{l.gate, l.up, l.down} {
+				if r != nil {
+					s.CacheBytes += r.bytes()
+				}
+			}
+		}
+	}
 	s.ScratchBytes, s.ReservedPrompt, s.ReservedStep = d.scratch, d.promptW, d.stepW
 	s.TowerRows = d.visCap
 	s.Allocated, s.RoundingBytes = uint64(d.allocated()), d.rounding

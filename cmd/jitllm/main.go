@@ -817,6 +817,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// So the profile below describes DECODE, not the prompt that preceded it.
 	model.ResetProfile()
 
+	ignoreEOS := os.Getenv("JITLLM_IGNORE_EOS") == "1"
 	top := 0
 	if v := os.Getenv("JITLLM_TOP"); v != "" {
 		top, _ = strconv.Atoi(v)
@@ -925,7 +926,9 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 			}
 			fmt.Fprintln(os.Stderr)
 		}
-		if m.Vocab.IsEOG(next) {
+		// JITLLM_IGNORE_EOS=1 decodes all -n tokens past an end of
+		// generation, as a fixed-length benchmark does.
+		if m.Vocab.IsEOG(next) && !ignoreEOS {
 			break
 		}
 		out = append(out, next)
