@@ -441,6 +441,11 @@ func (g *devTier) trim() {
 	if g.over() && len(g.stream) == 0 {
 		g.freeRaw()
 	}
+	// Expert caches before blocks: a cache is copies of host pages, and its
+	// block keeps running on the plain bank without it.
+	if g.over() {
+		g.dropCaches(0)
+	}
 	for g.over() && g.pagesIn > 0 {
 		v := g.victim(-1, 0, 0, false)
 		if v < 0 {

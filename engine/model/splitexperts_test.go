@@ -85,8 +85,14 @@ func TestSplitExpertsMatchTheHost(t *testing.T) {
 			for _, arm := range []struct {
 				name  string
 				slots int
-			}{{"tight", k + 1}, {"auto", 0}, {"none", -1}} {
+				// yield is auto with the budget cut under what the card holds
+				// halfway through: the caches go before any block does.
+				yield bool
+			}{{"tight", k + 1, false}, {"auto", 0, false}, {"yield", 0, true}, {"none", -1, false}} {
 				t.Run(arm.name, func(t *testing.T) {
+					if arm.yield && !md.split {
+						t.Skip("a float bank keeps no cache to give back")
+					}
 					var st tier.Stats
 					var got [][]float32
 					var placed int
@@ -115,7 +121,19 @@ func TestSplitExpertsMatchTheHost(t *testing.T) {
 						if s.GPULayers() == 0 {
 							t.Fatalf("no block placed: %s", g.Stats().LastErr)
 						}
-						for _, id := range ids {
+						for i, id := range ids {
+							if arm.yield && i == len(ids)/2 {
+								if g.Stats().StreamCacheSize == 0 {
+									t.Skip("CARD TOO SMALL: no auto-sized cache to give back -- this arm proved nothing")
+								}
+								if _, err := g.SetBudget(g.Bytes() - 1); err != nil {
+									t.Fatal(err)
+								}
+								if g.Stats().CachesDropped == 0 || s.GPULayers() != placed {
+									t.Fatalf("the budget cut dropped %d caches and left %d of %d blocks placed",
+										g.Stats().CachesDropped, s.GPULayers(), placed)
+								}
+							}
 							l, err := s.Forward(id)
 							if err != nil {
 								t.Fatal(err)
