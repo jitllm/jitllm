@@ -755,6 +755,33 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		defer sp.Close()
 	}
 
+	// JITLLM_WARMUP=k runs the prompt and -n greedy tokens k times on this
+	// State, untimed, and resets it before the run that is measured: the
+	// expert caches fill and the tuners settle as a server's would. The
+	// device's counters printed at the end include the warm-ups.
+	if k, _ := strconv.Atoi(os.Getenv("JITLLM_WARMUP")); k > 0 && sp == nil && imgPath == "" && kvCacheDir == "" {
+		t0 := time.Now()
+		for i := 0; i < k; i++ {
+			lg, err := st.Prefill(ids)
+			if err != nil {
+				return withDeviceErr(err, dev)
+			}
+			tok := int32(0)
+			for j := range lg {
+				if lg[j] > lg[tok] {
+					tok = int32(j)
+				}
+			}
+			for j := 1; j < n; j++ {
+				if tok, err = st.ForwardGreedy(tok); err != nil {
+					return withDeviceErr(err, dev)
+				}
+			}
+			st.Reset()
+		}
+		fmt.Fprintf(os.Stderr, "warm-up  %d untimed run(s) of the prompt and %d tokens in %.1fs, then reset\n",
+			k, n, time.Since(t0).Seconds())
+	}
 	start := time.Now()
 	// Batched: the prompt is processed PrefillChunk tokens at a time, so the
 	// weights are read once per chunk instead of once per token. Prefill falls
