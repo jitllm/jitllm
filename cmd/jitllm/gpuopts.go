@@ -191,8 +191,17 @@ func gpuOptions() []tier.Option {
 		o = append(o, tier.WithConfig(func(c *tier.Config) { c.PrefillPass = w }))
 	}
 	// JITLLM_GPU_PERSIST composes each decode block into persistent kernels
-	// (tier.WithPersist), JITLLM_GPU_PERSIST_GRID capping their grid.
-	if set("JITLLM_GPU_PERSIST") {
+	// (tier.WithPersist), JITLLM_GPU_PERSIST_GRID capping their grid;
+	// JITLLM_GPU_PERSIST=deps orders them with dependency counters rather
+	// than grid barriers (tier.WithPersistDeps).
+	// JITLLM_GPU_GATEUP=1 runs a dense FFN's gate and up as one launch
+	// (tier.WithGateUpFuse).
+	if set("JITLLM_GPU_GATEUP") {
+		o = append(o, tier.WithGateUpFuse(str("JITLLM_GPU_GATEUP") != "0"))
+	}
+	if str("JITLLM_GPU_PERSIST") == "deps" {
+		o = append(o, tier.WithPersistDeps(true, int(num("JITLLM_GPU_PERSIST_GRID"))))
+	} else if set("JITLLM_GPU_PERSIST") {
 		o = append(o, tier.WithPersist(true, int(num("JITLLM_GPU_PERSIST_GRID"))))
 	}
 	if page := int(num("JITLLM_GPU_KV_PAGE")); page > 0 {

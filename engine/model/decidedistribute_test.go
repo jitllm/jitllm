@@ -3,6 +3,7 @@ package model
 import (
 	"math"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -240,7 +241,7 @@ func TestDecisionDistributes(t *testing.T) {
 			} {
 				t.Run(arm.name, func(t *testing.T) {
 					pl := Placement{Blocks: map[int]Place{}, Head: &Place{On: b}, Strict: true}
-					if c.kind == jlm.DecisionLaya {
+					if c.kind == jlm.DecisionLaya || c.kind == jlm.DecisionD1Omni {
 						pl.Head = nil // an encoder has no output projection: its scorer is the head's last block
 					}
 					want := map[string]int{}
@@ -341,9 +342,43 @@ func TestDecisionBatchMatchesAlone(t *testing.T) {
 						alone = append(alone, ans)
 						tokens = append(tokens, d.InputTokens())
 					}
+					if g != nil && !m.IsEncoder() && c.kind != jlm.DecisionClef {
+						// On a device each request runs alone (batchAlone): the
+						// same answers bit for bit, and no batch step.
+						got, err := d.DecideBatch(reqs)
+						if err != nil {
+							t.Fatal(err)
+						}
+						for i, r := range got {
+							if (r.Err != nil) != (len(reqs[i].Questions) == 0) {
+								t.Fatalf("request %d: error %v", i, r.Err)
+							}
+							for qi, a := range r.Answers {
+								if !slices.Equal(a.Probs, alone[i][qi].Probs) {
+									t.Fatalf("request %d question %d: %v in the batch, %v alone", i, qi, a.Probs, alone[i][qi].Probs)
+								}
+							}
+						}
+						if st := d.BatchStats(); st.Steps != 0 {
+							t.Fatalf("a batch on the device ran %d batch steps: its requests were to run alone", st.Steps)
+						}
+						// The batch session itself stays held to the answers alone.
+						d.violation = "device-batch"
+						defer func() { d.violation = "" }()
+					}
+					packs0 := d.packs
 					got, err := d.DecideBatch(reqs)
 					if err != nil {
 						t.Fatal(err)
+					}
+					if m.IsEncoder() {
+						// Packed: fewer encoder passes than prompts, more than
+						// one sequence in a pass.
+						passes := d.packs - packs0
+						t.Logf("%d prompts in %d packed encoder pass(es)", d.batchN, passes)
+						if passes == 0 || passes >= d.batchN {
+							t.Fatalf("%d prompts ran in %d encoder passes: nothing was packed", d.batchN, passes)
+						}
 					}
 					for i, r := range got {
 						if (r.Err != nil) != (len(reqs[i].Questions) == 0) {
@@ -360,8 +395,14 @@ func TestDecisionBatchMatchesAlone(t *testing.T) {
 						if st.MaxSeqs < 2 {
 							t.Fatalf("no step carried two prompts: the batch ran them one at a time")
 						}
-						if d.BatchDeviceBlocks() != placed {
+						// A device with no room for a step brings the session's
+						// blocks home first (nn.RowsRoomer); otherwise the
+						// session holds what the Decider holds.
+						if d.BatchDeviceBlocks() != placed && st.RoomHome == 0 {
 							t.Fatalf("the batch session holds %d device blocks, the Decider %d", d.BatchDeviceBlocks(), placed)
+						}
+						if st.RoomHome > 0 {
+							t.Logf("%d step(s) found no room on the device and ran with the blocks home", st.RoomHome)
 						}
 					}
 					// The band each readout is held to against llama.cpp: a batch
@@ -380,9 +421,6 @@ func TestDecisionBatchMatchesAlone(t *testing.T) {
 					t.Logf("%d requests in one batch: worst difference from each alone %.6f (bound %.3f)", len(reqs), worst, tol)
 					if !(worst <= tol) {
 						t.Errorf("batched, the answers moved %.6f from each alone", worst)
-					}
-					if m.IsEncoder() {
-						return
 					}
 					if c.kind == jlm.DecisionClef {
 						// Clef answers a request in one pass of its own (its
@@ -408,11 +446,17 @@ func TestDecisionBatchMatchesAlone(t *testing.T) {
 						}
 						return
 					}
-					// The violation: each prompt chunk's rows laid out at
-					// their positions reversed, so a row's history is not the
-					// prompt's (Scheduler.chunkPos).
-					d.batch.chunkPos = func(base, j, k int) int { return base + k - 1 - j }
-					defer func() { d.batch.chunkPos = nil }()
+					// The violation: a decoder's prompt chunks laid out at their
+					// positions reversed, so a row's history is not the prompt's
+					// (Scheduler.chunkPos); an encoder's packed sequences
+					// attending across one another.
+					if m.IsEncoder() {
+						d.emb.violation = "sequences-attend-across"
+						defer func() { d.emb.violation = "" }()
+					} else {
+						d.batch.chunkPos = func(base, j, k int) int { return base + k - 1 - j }
+						defer func() { d.batch.chunkPos = nil }()
+					}
 					vio, err := d.DecideBatch(reqs)
 					if err != nil {
 						t.Logf("the violation failed the batch: %v", err)
@@ -424,9 +468,9 @@ func TestDecisionBatchMatchesAlone(t *testing.T) {
 							seen = max(seen, decisionDiffRow(t, [][]DecisionAnswer{alone[i]}, [][]DecisionAnswer{vio[i].Answers}))
 						}
 					}
-					t.Logf("chunks at reversed positions: the answers move %.5f", seen)
-					if seen <= tol {
-						t.Errorf("chunks at reversed positions moved the answers %.5f: the gate does not see it", seen)
+					t.Logf("the violation moves the answers %.5f", seen)
+					if seen <= max(tol, decisionSeen) {
+						t.Errorf("the violation moved the answers %.5f: the gate does not see it", seen)
 					}
 				})
 			}

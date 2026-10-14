@@ -93,7 +93,7 @@ func (s *State) rowsTake(seq, pos []int) ([]int, error) {
 
 // relocateRows is relocateFor for a step in which slot q takes took[q] rows:
 // what has to fit is each stepping sequence's next took[q] positions.
-func (s *State) relocateRows(took []int) {
+func (s *State) relocateRows(took []int, rows int) {
 	if s.ld == nil {
 		return
 	}
@@ -103,9 +103,19 @@ func (s *State) relocateRows(took []int) {
 			end = max(end, s.bpos[q]+k)
 		}
 	}
+	room := func() bool { return true }
+	if rr, ok := s.ld.(nn.RowsRoomer); ok && s.devCount() > 0 {
+		room = func() bool { return rr.RowsRoom(rows, s.nseq) }
+		// Counted once a step: blocks go home for the step's room here,
+		// or all at once in forwardRows when relocation is off.
+		if !room() {
+			s.roomHome++
+		}
+	}
 	sd, ok := s.ld.(nn.SeqKVDevice)
 	if !ok || !sd.PerSequenceKV() || s.nseq == 1 {
 		s.relocateFor(end)
+		s.relocateUntil(end, room)
 		return
 	}
 	var bases, ends []int
@@ -114,13 +124,14 @@ func (s *State) relocateRows(took []int) {
 			bases, ends = append(bases, q*s.maxSeq), append(ends, s.bpos[q]+k)
 		}
 	}
-	s.relocateUntil(end, func() bool { return sd.ReserveKVSeqs(bases, ends) })
+	s.relocateUntil(end, func() bool { return room() && sd.ReserveKVSeqs(bases, ends) })
 }
 
 // flatSlots is each row's place in the device's flat history, sequence q's
 // position p at q*maxSeq+p (nn.RowsDevice).
 func (s *State) flatSlots(seq, pos []int) []int {
-	slot := make([]int, len(seq))
+	s.rrFlat = slices.Grow(s.rrFlat[:0], len(seq))[:len(seq)]
+	slot := s.rrFlat
 	for r, q := range seq {
 		slot[r] = q*s.maxSeq + pos[r]
 	}

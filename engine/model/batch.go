@@ -73,7 +73,15 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 	// A device that cannot hold the batch's history hands blocks to the host
 	// (or a later card) before the step, as Forward does; every row's history
 	// travels with them.
-	s.relocateRows(took)
+	// The step's own room -- its batched scratch, a recurrent state a
+	// sequence (nn.RowsRoomer) -- counts too, asked before the step so nothing
+	// has run. A device that still has no room once relocation is done (or
+	// is off) would refuse the step: the blocks come home with their history
+	// (SetGPULayers) and the step runs on the host.
+	s.relocateRows(took, n)
+	if rr, ok := s.ld.(nn.RowsRoomer); ok && s.devCount() > 0 && !rr.RowsRoom(n, s.nseq) {
+		s.SetGPULayers(0)
+	}
 	// A model wholly on one device runs the ragged step there. Otherwise the
 	// device's blocks go as rows with their own slots (nn.RowsDevice): the
 	// ordinary per-sequence call would write every row's history into one
@@ -333,20 +341,39 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 		// in bhf and runs attention from the same bh.
 		kind := c.LayerKind(li)
 		if kind.Recurrent() {
+			outRows := s.bh
+			if kind.Attends() {
+				outRows = s.bhf
+			}
+			// The projections as GEMMs over the step's rows around the row
+			// loop, as a prefill chunk's (linrows.go): only the recurrence is
+			// sequential, and a matvec per row reads the block's weights once
+			// a row. Rows owned by other sessions (stepHost) keep the matvec,
+			// the projections being this State's scratch.
+			batched := s.linearBatched() && len(s.rowOwn) == 0
+			if batched {
+				if err := s.linearPre(l, s.bh, n); err != nil {
+					return nil, err
+				}
+			}
 			t0 = s.tick()
 			for _, r := range causal {
 				h := s.bh[r*c.NEmbd : (r+1)*c.NEmbd]
-				out := h
-				if kind.Attends() {
-					out = s.bhf[r*c.NEmbd : (r+1)*c.NEmbd]
-				}
+				out := outRows[r*c.NEmbd : (r+1)*c.NEmbd]
 				o, slot := s.rowOwner(r, seq)
+				o.lin.r = r
 				o.jit.NewInput()
 				if err := o.linearAttn(li, l, slot, h, out); err != nil {
+					s.lin.on = false
 					return nil, err
 				}
 			}
 			s.tock(opAttn, t0)
+			if batched {
+				if err := s.linearPost(li, l, outRows, n); err != nil {
+					return nil, err
+				}
+			}
 		}
 		if kind.Attends() {
 			if c.MLA() {

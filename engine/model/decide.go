@@ -119,6 +119,14 @@ type Decider struct {
 	// pics is the request in flight's pictures, each its run of the prompt
 	// (cutPictures); nil between requests and for a text request.
 	pics [][]Span
+	// omniPre is d1-omni's picture prefix for the request in flight, rows of
+	// NEmbd (none for text), and omniVis the vision segment that encodes it.
+	omniPre []float32
+	// omniSpoken says the prefix is a voice clip's (DecideAudio), and
+	// omniClip is the clip as the tower reads it.
+	omniSpoken bool
+	omniClip   []float32
+	omniVis    *State
 	// vscores is each variant's scores (variantScores): a question's
 	// variants are answered together, so each keeps its own.
 	vscores [][]float32
@@ -132,6 +140,11 @@ type Decider struct {
 	jobs []*batchJob
 	// batchN is how many of jobs the last batch ran.
 	batchN int
+	// packIDs and packMarks are a packed encoder pass's ids and marker rows
+	// (layaPacked), and packs counts the passes run.
+	packIDs   []int32
+	packMarks []int
+	packs     int
 
 	// clef is Clef's head and its working memory (decideclef.go), and
 	// clefEmb the prefill mode its prompt runs under: the residual of every
@@ -198,9 +211,9 @@ func (m *Model) NewDecider(maxSeq int) (*Decider, error) {
 			return nil, err
 		}
 		return d, nil
-	case jlm.DecisionLaya:
+	case jlm.DecisionLaya, jlm.DecisionD1Omni:
 		if m.encMB() == nil || m.encMB().head == nil {
-			return nil, fmt.Errorf("model: a laya readout wants a ModernBERT encoder with its head")
+			return nil, fmt.Errorf("model: a %v readout wants an encoder with its head", kind)
 		}
 		d.emb = &Embedder{m: m}
 		if err := d.emb.encoderJIT(); err != nil {
@@ -218,6 +231,9 @@ func (m *Model) NewDecider(maxSeq int) (*Decider, error) {
 // Close releases the Decider's State.
 func (d *Decider) Close() error {
 	if d.emb != nil {
+		if d.omniVis != nil {
+			d.omniVis.Close()
+		}
 		d.emb.Close()
 		return nil
 	}
@@ -235,7 +251,15 @@ func (d *Decider) Close() error {
 // (Embedder.SetDevice).
 func (d *Decider) SetDevice(dev nn.Device, max int) error {
 	if d.emb != nil {
-		return d.emb.SetDeviceLayers(dev, max)
+		if err := d.emb.SetDeviceLayers(dev, max); err != nil {
+			return err
+		}
+		// An audio tower's blocks go where the encoder's do, every one the
+		// device takes (d1-omni's).
+		if max != 0 {
+			return d.emb.setAudioDevice(dev)
+		}
+		return d.emb.setAudioDevice(nil)
 	}
 	if err := d.st.SetDeviceLayers(dev, max); err != nil {
 		return err
@@ -274,9 +298,11 @@ func (d *Decider) Prepare(state jinja.Value, qs []DecisionQuestion, images int) 
 	if len(qs) == 0 {
 		return fmt.Errorf("questions must be a non-empty object")
 	}
-	// d1 and Clef read a null state (pictures alone): d1's runner and
+	// d1, d1-omni and Clef read a null state (pictures alone): d1's runner,
+	// d1-omni's system_one ("" for None) and
 	// llama.cpp allow it, and Clef's systemone renders it as JSON null.
-	if (state.IsNone() || state.IsUndefined()) && d.kind != jlm.DecisionLFM2D1 && d.kind != jlm.DecisionClef {
+	if (state.IsNone() || state.IsUndefined()) && d.kind != jlm.DecisionLFM2D1 && d.kind != jlm.DecisionClef &&
+		d.kind != jlm.DecisionD1Omni {
 		return fmt.Errorf("state must be provided")
 	}
 	for i := range qs {
@@ -324,7 +350,12 @@ func (d *Decider) DecideMedia(state jinja.Value, qs []DecisionQuestion, imgs []i
 	}
 	d.input = 0
 	d.pics, d.vids = nil, nil
-	if len(imgs) > 0 {
+	if len(imgs) > 0 && d.kind == jlm.DecisionD1Omni {
+		if err := d.d1OmniPrefix(imgs); err != nil {
+			return nil, err
+		}
+		defer func() { d.omniPre = d.omniPre[:0] }()
+	} else if len(imgs) > 0 {
 		pics, err := d.cutPictures(imgs)
 		if err != nil {
 			return nil, err
@@ -422,6 +453,13 @@ func (d *Decider) run(state jinja.Value, q *DecisionQuestion, v int) ([]float32,
 			return nil, err
 		}
 		return d.layaForward(ids, q.Type, markers, v)
+	}
+	if d.kind == jlm.DecisionD1Omni {
+		ids, markers, err := d.d1OmniSequence(state, q, d.d1OmniMaxLen())
+		if err != nil {
+			return nil, err
+		}
+		return d.d1OmniForward(ids, q.Type, markers, v)
 	}
 	if len(d.pics) > 0 {
 		spans, groups, err := d.promptSpans(state, q, v)
@@ -838,6 +876,9 @@ func (d *Decider) answer(q *DecisionQuestion, variants [][]float32) (DecisionAns
 	shown := d.order(q)
 	n := len(variants[0])
 	t := d.cfg.Temperature(q.Type, len(q.Options))
+	if d.kind == jlm.DecisionD1Omni && len(d.omniPre) > 0 {
+		t = 1 // the reference calibrates text alone (calibrate, modeling_d1.py)
+	}
 	if d.violation == "uncalibrated" {
 		t = 1
 	}
@@ -930,7 +971,7 @@ func (d *Decider) answer(q *DecisionQuestion, variants [][]float32) (DecisionAns
 		}
 		a.Confidence = confidenceScore(float64(dist), uni, n)
 	}
-	if d.kind == jlm.DecisionClef && d.violation != "typesafe-confidence" {
+	if (d.kind == jlm.DecisionClef || d.kind == jlm.DecisionD1Omni) && d.violation != "typesafe-confidence" {
 		// Clef's own (systemone_answer): the chosen option's probability, and
 		// a score's largest; llama.cpp gives TypeSafe's formula.
 		a.Confidence = top
@@ -1158,6 +1199,9 @@ type DecisionBody struct {
 	// (DecisionVideos).
 	Images []string
 	Videos []VideoURLs
+	// Audio is the voice clips' data URLs (data:audio/...): at most one, and
+	// never beside a picture (d1-omni's).
+	Audio []string
 }
 
 // ParseDecisionRequest reads a /v1/systemone body, every object's keys in the
@@ -1168,6 +1212,20 @@ func ParseDecisionRequest(body []byte) (DecisionBody, error) {
 	out.Model, out.State, out.Questions, out.Images, err = parseDecisionRequest(body)
 	if err != nil {
 		return out, err
+	}
+	// A voice clip rides "files" beside the pictures (llama.cpp's server
+	// tells them apart by content; here by the URL's media type).
+	pics := out.Images[:0]
+	for _, u := range out.Images {
+		if strings.HasPrefix(u, "data:audio/") {
+			out.Audio = append(out.Audio, u)
+		} else {
+			pics = append(pics, u)
+		}
+	}
+	out.Images = pics
+	if len(out.Audio) > 1 || len(out.Audio) == 1 && len(out.Images) > 0 {
+		return out, fmt.Errorf("a request has images or one audio clip, not both")
 	}
 	v, _ := jinja.FromJSON(body)
 	out.Videos, err = DecisionVideos(v.AsDict())

@@ -81,6 +81,8 @@ func decisionPrompts(t *testing.T, d *Decider) []decisionPrompt {
 				var err error
 				if d.kind == jlm.DecisionLaya {
 					p.ids, p.markers, err = d.layaSequence(state, q)
+				} else if d.kind == jlm.DecisionD1Omni {
+					p.ids, p.markers, err = d.d1OmniSequence(state, q, d.d1OmniMaxLen())
 				} else {
 					p.ids, p.groups, err = d.prompt(state, q, v)
 				}
@@ -131,6 +133,8 @@ func decisionAllocs(t *testing.T, m *Model, g *tier.GPU, n int) {
 			switch {
 			case p.clef != nil:
 				err = d.clefForward(p.clef, d.variantScores(0, len(p.clef.opts)))
+			case d.kind == jlm.DecisionD1Omni:
+				_, err = d.d1OmniForward(p.ids, p.qt, p.markers, p.v)
 			case m.IsEncoder():
 				_, err = d.layaForward(p.ids, p.qt, p.markers, p.v)
 			default:

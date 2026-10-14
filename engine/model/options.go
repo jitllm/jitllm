@@ -27,6 +27,9 @@ type modelOpts struct {
 	// noFuse runs a decode token's host blocks one pool region per op rather
 	// than as fused runs; see WithBlockFusion.
 	noFuse bool
+	// noServingSplit keeps a prefill on the P and E cores beside a decoding
+	// session; see WithServingSplit.
+	noServingSplit bool
 	// noGroups runs a fused run's matvecs a phase each; see WithMatVecGroups.
 	noGroups bool
 	// noLook turns off the fused runs' weight lookahead; see WithLookahead.
@@ -128,6 +131,16 @@ func defaultOpts() modelOpts {
 // kernels, their chunks and their order are the same, so the answer is the
 // same bits (TestFusedBlocksMatchPerOp); off is the other arm.
 func WithBlockFusion(on bool) Option { return func(l *loadOpts) { l.opt.noFuse = !on } }
+
+// WithServingSplit sets whether, while another session of the model decodes,
+// a session's prefill runs on the E-cores' own pool, leaving the P-cores and
+// their fused runs to the decoder. On by default where the host has E-cores a
+// thread can be kept on (macOS on Apple Silicon): measured, the decoder beside
+// a prefill goes from 11 to 52 tok/s and the prefill beside it loses a quarter
+// of its rate (docs/engineering-history/scheduling-and-measurement.md). A
+// session with no other decoding is not affected, and nothing changes off
+// macOS. Off, a prefill beside a decoder shares the P-cores' crew as before.
+func WithServingSplit(on bool) Option { return func(l *loadOpts) { l.opt.noServingSplit = !on } }
 
 // WithMatVecGroups sets whether a fused run's matvecs that read one activation
 // run as one region with the activation's quantization folded in

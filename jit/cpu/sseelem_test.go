@@ -865,6 +865,7 @@ func TestEveryElementwiseOpIsGeneratedSSE(t *testing.T) {
 		{"scale", sse.Scale},
 		{"softcap", sse.Softcap},
 		{"clamp", sse.Clamp},
+		{"ln", sse.Ln},
 	}
 	for _, k := range Gated {
 		rows = append(rows, struct {
@@ -903,6 +904,12 @@ func TestEveryElementwiseOpIsGeneratedSSE(t *testing.T) {
 			full, dst := sseElemBuf(n)
 			sfull, src := sseElemBuf(n)
 			sseElemInputs(dst, src)
+			if r.name == "ln" {
+				// ln's domain: the inputs' magnitudes, kept off zero.
+				for i := range dst {
+					dst[i] = float32(math.Abs(float64(dst[i]))) + 1e-3
+				}
+			}
 			args := Args{Out: &dst[0], AScale: &src[0], Scr: (*byte)(unsafe.Pointer(&consts[0])),
 				W: (*byte)(unsafe.Pointer(&kc[0])), K: n / ElemLanes, Rows: n % ElemLanes}
 			if r.name == "axpy" || r.name == "scale" {

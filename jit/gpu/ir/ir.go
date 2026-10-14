@@ -197,6 +197,13 @@ const (
 	// OpGridBarrier synchronises every workgroup of the launch through the
 	// sync buffer Args[0]; see gridsync.go.
 	OpGridBarrier
+	// The dependency counters (depsync.go): a task's start, the epoch read,
+	// a wait on a counter, a signal on one and the launch's exit.
+	OpDepTask
+	OpDepEpoch
+	OpDepWait
+	OpDepSignal
+	OpDepExit
 	nKind
 )
 
@@ -211,7 +218,7 @@ var kindName = [nKind]string{
 	"tile.load", "tile.splat", "tile.mma", "tile.store", "sub.f16x2", "fma.f16x2",
 	"loadv", "loadv.get", "storev", "funnel",
 	"subgroup.reduce", "subgroup.broadcast", "shuffle", "laneid", "subgroup.size", "prefetch",
-	"grid.barrier",
+	"grid.barrier", "dep.task", "dep.epoch", "dep.wait", "dep.signal", "dep.exit",
 }
 
 func (k Kind) String() string { return kindName[k] }
@@ -522,6 +529,9 @@ func (k *Kernel) Validate() error {
 	if err := k.validateGrid(); err != nil {
 		return err
 	}
+	if err := k.validateDeps(); err != nil {
+		return err
+	}
 	depth := 0
 	var loops []int // indices of the OpLoop ops currently open
 	for i, o := range k.Ops {
@@ -658,11 +668,13 @@ func (k *Kernel) Validate() error {
 		}
 	}
 	// Per phase: a grid barrier orders a write before every later read, so
-	// the sets start again after one (gridsync.go).
+	// the sets start again after one (gridsync.go); per task, likewise, where
+	// validateDeps has already required the wait that orders them
+	// (depsync.go).
 	var loaded, stored [maxParams]bool
 	for _, o := range k.Ops {
 		switch o.Kind {
-		case OpGridBarrier:
+		case OpGridBarrier, OpDepTask:
 			for i := range loaded {
 				if loaded[i] && stored[i] {
 					return fmt.Errorf("ir: param %d is both read and written; surplus threads clamp to "+

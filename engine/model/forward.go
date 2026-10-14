@@ -131,6 +131,9 @@ type State struct {
 	fuseOff   bool
 	fused     bool
 	FusedRuns int64
+	// ServedOnE counts the times a prefill was placed on the E-cores' pool beside a
+	// decoding session (serving.go): what a gate reads to know the split ran.
+	ServedOnE int64
 	// grp is groupOf's call, reused; groupOff keeps a fused run's matvecs
 	// one region each (SetMatVecGroups); Grouped counts the group calls.
 	grp      nn.MVGroup
@@ -406,6 +409,14 @@ type State struct {
 	tailPos []int
 	// rtTook, rtStart and rtSeen are rowsTake's scratch, kept from step to step.
 	rtTook, rtStart []int
+	// retireRow is Retire's one row, handed to the device without a slice
+	// made each time; rrBases, rrEnds and rrFlat are relocateRows' and
+	// flatSlots', and rrSD the device relocateRows reserves on.
+	retireRow       [1]int
+	rrBases, rrEnds []int
+	rrFlat          []int
+	rrSD            nn.SeqKVDevice
+	rrFits          func() bool
 	rtSeen          []bool
 	// relocate hands the device's highest block to the host when its history
 	// cannot grow, rather than letting the token fail. See SetRelocate.
@@ -539,7 +550,10 @@ type State struct {
 	ldSpill nn.Spiller
 	ldStep  nn.SessionStepper
 	ldRows  nn.RowsDevice
-	ldNamed nn.NamedDevice
+	// roomHome counts batch steps whose device had no room for them, so the
+	// blocks came home before the step (relocateRows, forwardRows).
+	roomHome int
+	ldNamed  nn.NamedDevice
 	// The lists a step this State leads reuses (step.go): Step's runs, the
 	// rows' sessions and positions, the wanted rows' logits and the result.
 	stepRuns   []Run
@@ -633,6 +647,10 @@ type State struct {
 	// first. Nil in every session but a gate's: it is how a comparison sees
 	// every position of a prompt rather than only the last row's logits.
 	rowTap func(base int, rows []float32)
+
+	// ranAt is when this State last started a decode token, in nanoseconds
+	// past servingEpoch plus one (0: never); see serving.go.
+	ranAt atomic.Int64
 }
 
 // NewState allocates a session able to hold maxSeq positions.
@@ -674,6 +692,7 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 		fuseOff: m.opt.noFuse, groupOff: m.opt.noGroups, lookOff: m.opt.noLook,
 		residFold: m.opt.residFold}
 	s.holdHostRuns()
+	m.live.add(s)
 	// A State over a prediction block projects through that block's head.
 	if lo < len(m.layers) {
 		if w := m.layers[lo].mtp; w != nil {
@@ -934,6 +953,7 @@ func (s *State) dev() nn.LayerDevice {
 // State must be closed before its Model (`defer m.Close()` then
 // `defer st.Close()` gives that order).
 func (s *State) Close() error {
+	s.m.live.remove(s)
 	// A move prepared and never committed gives its target's copies back.
 	if s.pending != nil {
 		s.pending.Cancel()
@@ -3224,7 +3244,11 @@ func (s *State) Reset() {
 			}
 		}
 		if rr, ok := s.ld.(nn.RecRowsDevice); !ok || !rr.ResetRecRows(s.allRows) {
-			s.retireErr = fmt.Errorf("model: the recurrent state on the device could not be reset")
+			why := ""
+			if er, ok := s.ld.(nn.ErrReporter); ok && er.Err() != "" {
+				why = ": " + er.Err()
+			}
+			s.retireErr = fmt.Errorf("model: the recurrent state on the device could not be reset%s", why)
 		}
 	}
 	s.kv.reset()
@@ -3246,7 +3270,8 @@ func (s *State) Retire(i int) {
 	if s.recurrent() {
 		s.ResetRecurrent(i)
 		if s.devLinear() {
-			if rr, ok := s.ld.(nn.RecRowsDevice); !ok || !rr.ResetRecRows([]int{i}) {
+			s.retireRow[0] = i
+			if rr, ok := s.ld.(nn.RecRowsDevice); !ok || !rr.ResetRecRows(s.retireRow[:]) {
 				s.retireErr = fmt.Errorf("model: row %d's recurrent state on the device could not be reset", i)
 			}
 		}
@@ -3414,6 +3439,7 @@ func (s *State) ForwardSample(token int32, smp *Sampler) (int32, error) {
 // fill is a closure because the device-failure path calls it again to restart
 // the token on the host (Layers may have written part of s.x).
 func (s *State) forward(fill func() error) ([]float32, error) {
+	s.touch()
 	// Brackets one decode step for the host tuners, which time real tokens.
 	// Not when the device ran the whole token: no CPU matvec ran, and a
 	// settled answer would be cached under the CPU's key for later runs.

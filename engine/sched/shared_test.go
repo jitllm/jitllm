@@ -112,6 +112,27 @@ func TestOverlappingCrewsShareTheirTurn(t *testing.T) {
 	}
 }
 
+// The E-cores alone are a set of their own, disjoint from the P-cores, so a
+// session on them takes turns apart from one decoding on the P-cores.
+func TestECoresAreTheirOwnCrew(t *testing.T) {
+	e := CoreSet("e")
+	if len(ECores()) == 0 {
+		if len(e) != 0 {
+			t.Fatalf("no E-cores here, and the \"e\" set is %v", e)
+		}
+		t.Skip("no E-cores on this host: the \"e\" set is empty")
+	}
+	if fmt.Sprint(e) != fmt.Sprint(ECores()) {
+		t.Fatalf("the \"e\" set is %v, want ECores %v", e, ECores())
+	}
+	p, ev := Shared(CoreSet("p")), Shared(e)
+	defer p.Close()
+	defer ev.Close()
+	if p.crew.mu == ev.crew.mu {
+		t.Fatal("the E-cores' crew takes turns with the P-cores'")
+	}
+}
+
 // A view waiting for the crew is handed the turn before the holder takes it
 // again: on a three-core runner one session once ran a whole reply while
 // another's generate produced no token. View a loops regions back to back on
@@ -138,7 +159,7 @@ func alternate(t *testing.T, procs int) {
 	defer a.Close()
 	defer b.Close()
 
-	var bQueued atomic.Bool
+	var bQueued, aIn atomic.Bool
 	var queued, worst, cur, aRuns atomic.Int64
 	onTurnQueue = func(w chan struct{}) {
 		if w == b.wake {
@@ -164,9 +185,22 @@ func alternate(t *testing.T, procs int) {
 			// Counted on the first chunk only: the region is one turn.
 			a.Do(64, 1, func(_, lo, hi int) {
 				if lo == 0 {
-					// a gives its P up mid-region, so on one P b runs and
-					// queues behind it.
-					runtime.Gosched()
+					// a holds the turn until b has queued behind it, so every
+					// one of b's regions meets a held turn: whether b ever
+					// queues no longer depends on how the runner schedules the
+					// two goroutines (on a small one a ran back to back and b
+					// found the turn free for all 500 regions, which this gate
+					// then reported as no contention). bQueued is cleared by
+					// b's own region, so a waits again for the next.
+					aIn.Store(true)
+					for !bQueued.Load() {
+						select {
+						case <-stop:
+							return
+						default:
+							runtime.Gosched()
+						}
+					}
 				}
 				if lo == 0 && bQueued.Load() {
 					if n := cur.Add(1); n > worst.Load() {
@@ -177,8 +211,8 @@ func alternate(t *testing.T, procs int) {
 			aRuns.Add(1)
 		}
 	}()
-	for aRuns.Load() < 100 {
-		runtime.Gosched() // a is looping back to back before b asks
+	for !aIn.Load() {
+		runtime.Gosched() // a is inside a region, holding the turn, before b asks
 	}
 	const regions = 500
 	for r := 0; r < regions; r++ {

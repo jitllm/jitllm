@@ -1610,6 +1610,11 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 	if os.Getenv("JITLLM_FUSE") == "0" {
 		o = append(o, model.WithBlockFusion(false))
 	}
+	// JITLLM_SERVING_SPLIT=0 keeps a prefill beside a decoding session on the
+	// P and E cores (model.WithServingSplit).
+	if os.Getenv("JITLLM_SERVING_SPLIT") == "0" {
+		o = append(o, model.WithServingSplit(false))
+	}
 	// JITLLM_FUSE_GROUPS=0 keeps a fused run's matvecs a phase each
 	// (model.WithMatVecGroups).
 	if os.Getenv("JITLLM_FUSE_GROUPS") == "0" {

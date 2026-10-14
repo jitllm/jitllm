@@ -38,6 +38,8 @@ type DecideOptions struct {
 	Images []image.Image
 	// Videos are the request's videos, each its frames (Clef's).
 	Videos []model.VideoFrames
+	// Audio is the request's voice clip, 16 kHz mono samples (d1-omni's).
+	Audio []float32
 }
 
 // DecideResult is one answer per question, in question order.
@@ -79,7 +81,7 @@ func (e *Engine) Decide(ctx context.Context, o DecideOptions) (*DecideResult, er
 			ErrInvalid, lm.id, lm.m.Cfg.Arch)
 	}
 	job := &decJob{ctx: ctx, req: model.DecisionRequest{State: o.State, Questions: o.Questions, Images: o.Images,
-		Videos: o.Videos},
+		Videos: o.Videos, Audio: o.Audio},
 		t0: time.Now(), done: make(chan struct{})}
 	lm.decQMu.Lock()
 	lm.decQ = append(lm.decQ, job)

@@ -1425,9 +1425,12 @@ func (g *GPU) migrateKV(sid uint64, li int, k, v []float32, pos int, toDevice bo
 // (nn.SeqKVDevice); a mixed tier answers false and migrates in the flat layout.
 func (g *GPU) PerSequenceKV() bool {
 	g.mu.Lock()
-	ds := make([]*devTier, 0, len(g.devs))
+	// On the stack for any machine's count of devices.
+	var arr [16]*devTier
+	ds := arr[:0]
+	// g.own is by block: each device once.
 	for _, d := range g.own {
-		if d != nil {
+		if d != nil && !slices.Contains(ds, d) {
 			ds = append(ds, d)
 		}
 	}

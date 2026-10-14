@@ -79,7 +79,25 @@ func (c *compat) systemOne(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pics := newPictures(c.img)
+	var clip []float32
 	for i, u := range urls {
+		// A voice clip rides "files" too (d1-omni's), told apart by its
+		// media type; one, and never beside a picture.
+		if strings.HasPrefix(u, "data:audio/") {
+			if clip != nil || len(urls) > 1 {
+				s1Fail(w, http.StatusUnprocessableEntity, "a request has images or one audio clip, not both")
+				return
+			}
+			if len(u) > maxDecisionAudioURL {
+				s1Fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("files[%d]: an audio clip over %d bytes", i, maxDecisionAudioURL))
+				return
+			}
+			if clip, err = model.DecodeAudioDataURL(u); err != nil {
+				s1Fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("files[%d]: %v", i, err))
+				return
+			}
+			continue
+		}
 		err := pics.add(fmt.Sprintf("images[%d]", i), func() (image.Image, error) { return pics.p.decodeDataURL(u) })
 		if err != nil {
 			s1Fail(w, http.StatusUnprocessableEntity, err.Error())
@@ -118,7 +136,8 @@ func (c *compat) systemOne(w http.ResponseWriter, r *http.Request) {
 			name = ls[0].ID
 		}
 	}
-	res, err := c.b.Decide(r.Context(), DecideOptions{Model: name, State: state, Questions: qs, Images: pics.imgs, Videos: vids})
+	res, err := c.b.Decide(r.Context(), DecideOptions{Model: name, State: state, Questions: qs, Images: pics.imgs, Videos: vids,
+		Audio: clip})
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrInvalid):
@@ -138,3 +157,8 @@ func writeRawJSON(w http.ResponseWriter, status int, b []byte) {
 	w.WriteHeader(status)
 	w.Write(b)
 }
+
+// maxDecisionAudioURL bounds a voice clip's data URL: the 30 seconds d1-omni
+// reads of 16 kHz 16-bit PCM, base64'd, with room for a WAV's header and a
+// longer clip it cuts.
+const maxDecisionAudioURL = 8 << 20

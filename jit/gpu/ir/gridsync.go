@@ -50,11 +50,12 @@ func (b *Builder) GridBarrier(sync Value) {
 	b.emit(Op{Kind: OpGridBarrier, Args: [3]Value{sync}})
 }
 
-// GridSync reports whether the kernel contains a grid barrier, and so may only
-// be launched with a grid the device holds resident at once.
+// GridSync reports whether the kernel contains a grid barrier or dependency
+// counters (depsync.go), and so may only be launched with a grid the device
+// holds resident at once.
 func (k *Kernel) GridSync() bool {
 	for _, o := range k.Ops {
-		if o.Kind == OpGridBarrier {
+		if o.Kind == OpGridBarrier || o.Kind == OpDepExit {
 			return true
 		}
 	}
@@ -64,7 +65,7 @@ func (k *Kernel) GridSync() bool {
 // GridSyncParam is the parameter index of the kernel's sync buffer, or -1.
 func (k *Kernel) GridSyncParam() int {
 	for _, o := range k.Ops {
-		if o.Kind == OpGridBarrier {
+		if o.Kind == OpGridBarrier || o.Kind == OpDepExit {
 			return k.paramOf(o.Args[0])
 		}
 	}

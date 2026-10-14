@@ -47,6 +47,9 @@ type headBlock struct {
 type modernBERT struct {
 	embNorm, finalNorm []float32
 	blocks             []mbBlock
+	// trunk is the encoder's block count, the head's first block: len(blocks),
+	// or an LFM2 encoder's (lfm2Enc) when the head sits on that trunk.
+	trunk              int
 	head               []headBlock
 	headFFN, headHeads int
 	types              []float32 // DecisionKind rows of NEmbd: choice, score, noul
@@ -135,6 +138,7 @@ func buildModernBERT(c *jlm.File, m *Model, enc *encoder) error {
 	mb.ropeG = nn.Rope{NRot: cfg.NRot, Base: cfg.RopeBase, Neox: true, Scale: 1}
 	mb.ropeL = nn.Rope{NRot: cfg.NRot, Base: cfg.RopeBaseSWA, Neox: true, Scale: 1}
 	mb.blocks = make([]mbBlock, cfg.NLayer)
+	mb.trunk = len(mb.blocks)
 	mb.local = func(li int) bool { return li < len(mb.blocks) && !mb.blocks[li].global }
 	for i := range mb.blocks {
 		b, bi := &mb.blocks[i], int32(i)
@@ -265,12 +269,17 @@ func (e *Embedder) mbEncode(ids []int32) error {
 		}
 	}
 	e.rowsLN(x, x, mb.embNorm, nil, n)
+	qseq, qpos := e.packRows(n)
 	for i := 0; i < n; i++ {
-		e.jit.RopeTable(mb.ropeG, e.cs[i*c.NRot:(i+1)*c.NRot], i)
-		e.jit.RopeTable(mb.ropeL, e.csL[i*c.NRot:(i+1)*c.NRot], i)
+		pos := i
+		if qseq != nil {
+			pos = i - e.seqs[qseq[i]].Lo
+		}
+		e.jit.RopeTable(mb.ropeG, e.cs[i*c.NRot:(i+1)*c.NRot], pos)
+		e.jit.RopeTable(mb.ropeL, e.csL[i*c.NRot:(i+1)*c.NRot], pos)
 	}
 	scale := float32(1 / math.Sqrt(float64(c.HeadDim)))
-	if err := e.devPrepare(n, c.SWAWindow/2); err != nil {
+	if err := e.devPrepare(n, c.SWAWindow/2, 0); err != nil {
 		return err
 	}
 	for li := 0; li < len(mb.blocks); li++ {
@@ -322,7 +331,7 @@ func (e *Embedder) mbEncode(ids []int32) error {
 		if !b.global && e.violation != "no-window" {
 			w = c.SWAWindow / 2
 		}
-		e.attend(e.attnEnc, h, q, k, v, n, n, w, c.NHead, c.HeadDim, scale)
+		e.attendSeqs(e.attnEnc, h, q, k, v, n, n, w, c.NHead, c.HeadDim, scale, qseq, qpos)
 		// 3. x += o(attn).
 		t := e.t[:n*d]
 		if err := e.mm(t, b.wo, h, n); err != nil {
@@ -359,13 +368,22 @@ func (e *Embedder) mbEncode(ids []int32) error {
 // keys) -- a window, or every key where w is keys. k and v are rows of the
 // residual's width.
 func (e *Embedder) attend(set *nn.AttnSet, out, q, k, v []float32, n, keys, w, nh, hd int, scale float32) {
+	e.attendSeqs(set, out, q, k, v, n, keys, w, nh, hd, scale, nil, nil)
+}
+
+// attendSeqs is attend over packed sequences: query i is row qpos[i] of
+// sequence qseq[i] and reads that sequence's keys inside its window. nil
+// qseq is one sequence, query i at row i.
+func (e *Embedder) attendSeqs(set *nn.AttnSet, out, q, k, v []float32, n, keys, w, nh, hd int, scale float32,
+	qseq, qpos []int32) {
 	j := &e.rg.attn
 	if j.fn == nil {
 		j.fn = e.attnHeads
 	}
 	j.set, j.out, j.q, j.k, j.v, j.n, j.keys, j.w, j.hd, j.scale = set, out, q, k, v, n, keys, w, hd, scale
+	j.qseq, j.qpos = qseq, qpos
 	e.jit.Parallel(nh, 1, j.fn)
-	j.set, j.out, j.q, j.k, j.v = nil, nil, nil, nil, nil
+	j.set, j.out, j.q, j.k, j.v, j.qseq, j.qpos = nil, nil, nil, nil, nil, nil, nil
 }
 
 // attnHeads is one chunk of attend: heads h0..h1-1.
@@ -378,6 +396,10 @@ func (e *Embedder) attnHeads(h0, h1 int) {
 		acc := e.acc[h*hd : (h+1)*hd]
 		for i := 0; i < j.n; i++ {
 			lo, hi := max(0, i-j.w), min(j.keys, i+j.w+1)
+			if j.qseq != nil && e.violation != "sequences-attend-across" {
+				s, r := e.seqs[j.qseq[i]], int(j.qpos[i])
+				lo, hi = max(s.Lo, r-j.w), min(s.Hi, r+j.w+1)
+			}
 			cnt := hi - lo
 			j.set.AttnScores(att[:cnt], j.k[lo*d+off:], j.q[i*d+off:], cnt)
 			nn.Scale32JIT(att[:cnt], j.scale)
@@ -395,11 +417,20 @@ func (e *Embedder) layaScores(out []float32, n int, qt jlm.QuestionType, markers
 	m, c, mb := e.m, e.m.Cfg, e.m.enc.mb
 	d := c.NEmbd
 	x := e.x[:n*d]
-	row := mb.types[int(qt)*d : (int(qt)+1)*d]
-	if e.violation == "type-row-0" {
-		row = mb.types[:d]
+	typeRow := func(qt jlm.QuestionType) []float32 {
+		if e.violation == "type-row-0" {
+			return mb.types[:d]
+		}
+		return mb.types[int(qt)*d : (int(qt)+1)*d]
 	}
-	e.addBiasRows(x, row, n)
+	qseq, qpos := e.packRows(n)
+	if qseq == nil {
+		e.addBiasRows(x, typeRow(qt), n)
+	} else {
+		for si, s := range e.seqs {
+			e.addBiasRows(x[s.Lo*d:s.Hi*d], typeRow(e.seqTypes[si]), s.Hi-s.Lo)
+		}
+	}
 	heads := mb.headHeads
 	if e.violation == "encoder-heads" {
 		heads = c.NHead
@@ -412,16 +443,16 @@ func (e *Embedder) layaScores(out []float32, n int, qt jlm.QuestionType, markers
 	// every row, so they are gathered after it.
 	gather := false
 	for bi := 0; bi < len(mb.head); bi++ {
-		if li := len(mb.blocks) + bi; e.onDevice(li) {
-			hi, err := e.devRun(li, len(mb.blocks)+len(mb.head), n, x, nil, nil)
+		if li := mb.trunk + bi; e.onDevice(li) {
+			hi, err := e.devRun(li, mb.trunk+len(mb.head), n, x, nil, nil)
 			if err != nil {
 				return err
 			}
-			bi = hi - len(mb.blocks) - 1
+			bi = hi - mb.trunk - 1
 			gather = bi == len(mb.head)-1
 			continue
 		}
-		if err := m.encBlockPageIn(len(mb.blocks) + bi); err != nil {
+		if err := m.encBlockPageIn(mb.trunk + bi); err != nil {
 			return err
 		}
 		b := &mb.head[bi]
@@ -442,18 +473,26 @@ func (e *Embedder) layaScores(out []float32, n int, qt jlm.QuestionType, markers
 		// The last block's output is read only at the markers: every row's k
 		// and v, and the rest of the block for the marker rows alone.
 		rows := n
+		aseq, apos := qseq, qpos
 		if last {
 			for j, r := range markers {
 				copy(q[j*d:(j+1)*d], q[r*d:(r+1)*d])
 				copy(x[j*d:(j+1)*d], x[r*d:(r+1)*d])
 			}
 			rows = nm
+			// Each marker query reads its own sequence's keys.
+			if qseq != nil {
+				aseq, apos = e.qseq[:nm], e.qpos[:nm]
+				for j, r := range markers {
+					aseq[j], apos[j] = e.rowSeq[r], int32(r)
+				}
+			}
 		}
 		set := e.attnHead
 		if heads != mb.headHeads {
 			set = e.attnEnc
 		}
-		e.attend(set, h, q, k, v, rows, n, n, heads, hd, scale)
+		e.attendSeqs(set, h, q, k, v, rows, n, n, heads, hd, scale, aseq, apos)
 		t := e.t[:rows*d]
 		if err := e.mm(t, b.wo, h, rows); err != nil {
 			return err
@@ -493,6 +532,29 @@ func (e *Embedder) layaScores(out []float32, n int, qt jlm.QuestionType, markers
 	}
 	e.addBiasRows(out[:nm], mb.scOutB, nm)
 	return nil
+}
+
+// packRows is, where sequences are packed (Embedder.seqs), each of the n
+// rows' sequence and the attention's query rows, the identity; nil, nil for
+// one sequence. The query slices are the Embedder's scratch, rewritten by the
+// last head block for its marker queries, so they are filled anew each call.
+func (e *Embedder) packRows(n int) (qseq, qpos []int32) {
+	if len(e.seqs) == 0 {
+		return nil, nil
+	}
+	if cap(e.rowSeq) < n {
+		e.rowSeq, e.qseq, e.qpos = make([]int32, n), make([]int32, n), make([]int32, n)
+	}
+	e.rowSeq, e.qseq, e.qpos = e.rowSeq[:n], e.qseq[:n], e.qpos[:n]
+	for si, s := range e.seqs {
+		for r := s.Lo; r < s.Hi; r++ {
+			e.rowSeq[r] = int32(si)
+		}
+	}
+	for r := range n {
+		e.qseq[r], e.qpos[r] = e.rowSeq[r], int32(r)
+	}
+	return e.qseq, e.qpos
 }
 
 // encMB is the model's ModernBERT graph, or nil.

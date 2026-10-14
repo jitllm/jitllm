@@ -124,6 +124,26 @@ func SetRowsFault(f string) { rowsFault = f }
 
 func rowsFaulted(f string) bool { return rowsFault == f }
 
+// roomFault makes a device short of room in one place, so the gate of the
+// path that copes can force it to fire, and names the violation that path
+// must not survive (RULE 10):
+//
+//	"nozeros"         the kept zeros a recurrent seat is reset from cannot
+//	                  be allocated: the seat is zeroed from the host
+//	"nozeros-nohost"  the same, and the host write is skipped: the reset fails
+//	"narrow"          no batched scratch wider than 64 rows fits: RowsWidth
+//	                  clamps the Scheduler's steps to it
+//	"narrow-lie"      the same, and RowsWidth says the requested width fits
+//	"noseat"          no recurrent seat for a batch fits: RowsRoom says so,
+//	                  and the blocks come home before the step
+//	"noseat-lie"      the same, and RowsRoom says there is room
+var roomFault string
+
+// SetRoomFault arms one shortage for the calls after it; "" disarms.
+func SetRoomFault(f string) { roomFault = f }
+
+func roomFaulted(f string) bool { return roomFault == f }
+
 // moeFault names a deliberate error in a batched mixture's wiring, so its gate
 // can run the violation and demand it fails (RULE 10):
 //

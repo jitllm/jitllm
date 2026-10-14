@@ -44,6 +44,8 @@ type encoder struct {
 	rope     *nn.Rope // nomic-bert's rotary, nil for BERT
 	swiglu   bool
 	mb       *modernBERT // ModernBERT's own graph; nil for BERT and nomic-bert
+	// lf is an LFM2 encoder's trunk (lfm2enc.go); its decision head is mb's.
+	lf *lfm2Enc
 	// zeros is the bias a LayerNorm without one is handed on a device
 	// (encZeros).
 	zeros []float32
@@ -63,6 +65,11 @@ type encPage struct {
 func (enc *encoder) planPages(c *jlm.File) {
 	var all [][]*tensor
 	if mb := enc.mb; mb != nil {
+		if enc.lf != nil {
+			for i := range enc.lf.blocks {
+				all = append(all, enc.lf.blocks[i].weights())
+			}
+		}
 		for i := range mb.blocks {
 			all = append(all, mb.blocks[i].weights())
 		}
@@ -165,8 +172,12 @@ func buildEncoder(c *jlm.File, m *Model) error {
 	if m.embd, err = get(jlm.RoleTokenEmbd, jlm.DenseBlock); err != nil {
 		return err
 	}
-	if cfg.Arch == jlm.ArchModernBERT.String() {
-		if err := buildModernBERT(c, m, enc); err != nil {
+	if cfg.Arch == jlm.ArchModernBERT.String() || cfg.Arch == jlm.ArchLFM2Enc.String() {
+		build := buildModernBERT
+		if cfg.Arch == jlm.ArchLFM2Enc.String() {
+			build = buildLFM2Enc
+		}
+		if err := build(c, m, enc); err != nil {
 			return err
 		}
 		enc.planPages(c)
@@ -307,7 +318,7 @@ func (e *Embedder) encode(ids []int32) error {
 		}
 	}
 	scale := float32(1 / math.Sqrt(float64(c.HeadDim)))
-	if err := e.devPrepare(n, 0); err != nil {
+	if err := e.devPrepare(n, 0, 0); err != nil {
 		return err
 	}
 	var cs []float32
@@ -445,6 +456,9 @@ type encRegions struct {
 	rows encRowRegion
 	vec  encVecRegion
 	attn encAttnRegion
+	// audAttn is an audio tower's attention (audio.go).
+	audAttn audAttnRegion
+	lfAttn  lfAttnRegion
 }
 
 // encRowOp is which per-row op an encRowRegion runs.
@@ -453,6 +467,7 @@ type encRowOp uint8
 const (
 	encRowLN   encRowOp = iota // y[r] = LayerNorm(x[r]; w, b)
 	encRowBias                 // y[r] += b
+	encRowRMS                  // y[r] = RMSNorm(x[r]; w)
 )
 
 type encRowRegion struct {
@@ -487,7 +502,11 @@ type encAttnRegion struct {
 	out, q, k, v   []float32
 	n, keys, w, hd int
 	scale          float32
-	fn             func(lo, hi int)
+	// qseq and qpos, where sequences are packed, are each query's sequence
+	// (an index of Embedder.seqs) and its row: its keys are its sequence's,
+	// inside the window about the row. nil is one sequence, query i at row i.
+	qseq, qpos []int32
+	fn         func(lo, hi int)
 }
 
 // rowsLN is y[r] = LayerNorm(x[r]) for n rows, on the pool.
@@ -525,6 +544,8 @@ func (e *Embedder) rowItems(lo, hi int) {
 		switch j.op {
 		case encRowLN:
 			nn.LayerNorm32JIT(j.y[r*d:(r+1)*d], j.x[r*d:(r+1)*d], j.w, j.b, j.eps)
+		case encRowRMS:
+			nn.RMSNorm32JIT(j.y[r*d:(r+1)*d], j.x[r*d:(r+1)*d], j.w, j.eps)
 		case encRowBias:
 			nn.Axpy32JIT(j.y[r*d:(r+1)*d], j.b, 1)
 		}

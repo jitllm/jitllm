@@ -76,7 +76,10 @@ func q8Twin(s *State) {
 func TestKVQ8IsSelectedAndRuns(t *testing.T) {
 	for _, name := range kvq8Models {
 		t.Run(name, func(t *testing.T) {
-			m, err := Open(jlmOf(t, testmodels.Path(name)))
+			// Untuned: the arms are held bit for bit, and a kernel pick timed
+			// mid-run (the arm64 per-shape choice) moves the reduction order
+			// between them -- the logits then differ by up to a few percent.
+			m, err := Open(jlmOf(t, testmodels.Path(name)), noTune)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -169,7 +172,7 @@ func argmaxF(x []float32) int {
 // Open, naming the reason, and through SetKVType on an open model.
 func TestKVQ8RefusesByName(t *testing.T) {
 	for _, c := range []struct{ name, why string }{
-		{"synth-deepseek-lite.jlm", "MLA"},
+		{"synth-deepseek-lite", "MLA"}, // the directory: jlmOf converts it fresh, a .jlm named here is opened as it stands
 		{"synth-deepseek32.gguf", "lightning indexer"},
 		{"synth-minimaxm3.gguf", "MiniMax Sparse Attention"},
 		{"synth-deepseek4.gguf", "compressor"},

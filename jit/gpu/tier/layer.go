@@ -68,6 +68,9 @@ type layer struct {
 	// set from the plan, not inferred from a nil weight.
 	linear                 bool
 	ssmGate, ssmBA, ssmOut *resident
+	// centred is a short convolution with no state over a whole non-causal
+	// call (nn.RecurrentPlan.Centred).
+	centred bool
 	// KDA's two low-rank gates, nil on qwen3next.
 	ssmFA, ssmFB, ssmGA, ssmGB *resident
 	mvSG, mvBA, mvSO           mv
@@ -220,7 +223,13 @@ type layer struct {
 	// mlaQK is MLA's query projection (q, or q_a under a q LoRA) and kv_a in
 	// one launch, and shGU the shared expert's gate and up: two matvecs over
 	// one activation each, built by fuseQKV like qkv. nil where declined.
-	mlaQK, shGU   *segLaunch
+	mlaQK, shGU *segLaunch
+	// gu is a dense gated FFN's gate and up in one launch (Config.GateUpFuse,
+	// fuseGateUp), and guDown the down projection forming act(gate)*up from
+	// their rows and quantizing it in its prologue, with the residual add:
+	// three launches where there were four. nil where declined.
+	gu            *segLaunch
+	guDown        backend.Kernel
 	mvo, mvg, mvu mv
 	mvd           mv
 	// MoE only: the F32 router matrix and its matvec. gate/up/down above hold
@@ -1585,6 +1594,11 @@ type blockScratch struct {
 	vwins    []backend.Buf
 	winMask  backend.Kernel
 	vwinRows int
+	// vsegs is the packed sequences' runs as each pass's rows' windows,
+	// which every unwindowed non-causal block masks with (SetSeqRuns), and
+	// vsegRows the rows they cover; 0 is one sequence and no mask.
+	vsegs    []backend.Buf
+	vsegRows int
 	// DBRX's clamp on q, k and v (LayerPlan.ClampKQV), out of place for the
 	// same reason: the clamped copies are what everything after the
 	// projections reads. nil for every other architecture.
@@ -1774,6 +1788,11 @@ type blockScratch struct {
 	// (scMul, kernels.ActMul with the identity).
 	scB, scC, scBx, scY backend.Buf
 	scMul               backend.Kernel
+	// convCentred is an LFM2 encoder's convolution (kernels.Conv3Centred),
+	// and vwinAll every row's window in one buffer, the taps' bounds
+	// (setWindowsLocked writes it beside the per-pass vwins).
+	convCentred backend.Kernel
+	vwinAll     backend.Buf
 	// ragLin is a ragged step's linear block per row count (LayersRows): the
 	// convolution and the fused rule over the step's runs, each a sequence's
 	// rows at consecutive positions (kernels' run forms), built for the real
@@ -1934,7 +1953,13 @@ func declineReason(p *nn.LayerPlan) string {
 		return r
 	}
 	switch {
-	case p.NonCausal && (p.Parallel || p.Recurrent.Conv > 0 || p.MLA() || p.NExpert > 0 || p.AttnSinks):
+	case p.Recurrent.Centred && (!p.NonCausal || !p.Recurrent.ShortConv || p.Recurrent.Conv != 3 || !p.Windowed):
+		// The centred convolution reads its neighbours through the call's row
+		// windows (kernels.Conv3Centred): a non-causal call is the whole
+		// sequence, and the windows are where the taps stop.
+		return "a centred convolution outside a windowed non-causal short convolution of three taps"
+	case p.NonCausal && (p.Parallel || p.Recurrent.Conv > 0 && !p.Recurrent.Centred || p.MLA() || p.NExpert > 0 ||
+		p.AttnSinks):
 		// A non-causal call is one submission of the block body's plain
 		// attention over its runs; these features are built only on the causal
 		// paths, and no non-causal model has them.
@@ -2365,11 +2390,18 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if g.bs = g.initScratch(sp, 1); g.bs == nil {
 			return false
 		}
-	} else if want := g.bs.p; p.NonCausal && sp.NFFN > want.NFFN {
+	} else if want := g.bs.p; p.NonCausal && (sp.NFFN > want.NFFN || sp.Recurrent.Conv > 0 && want.Recurrent.Conv == 0 ||
+		sp.QKNorm && !want.QKNorm) {
 		// A non-causal block with a wider MLP than the set was built for (a
 		// decision head after its encoder): the set grows to it, and every
-		// block runs its own width inside it (layer.nffn).
-		want.NFFN, want.MaxSeq = sp.NFFN, g.visMax
+		// block runs its own width inside it (layer.nffn). An LFM2 encoder's
+		// convolution blocks and attention blocks share a set too: it carries
+		// the convolution's kernels and the q/k norm's, whichever came first.
+		want.NFFN, want.MaxSeq = max(want.NFFN, sp.NFFN), g.visMax
+		if want.Recurrent.Conv == 0 {
+			want.Recurrent = sp.Recurrent
+		}
+		want.QKNorm = want.QKNorm || sp.QKNorm
 		if !g.towerAt(&want, g.visCap) {
 			return false
 		}
@@ -3460,7 +3492,8 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	l.linear = linear
 	l.withAttn = p.Recurrent.WithAttn
 	l.noFFN = p.NoFFN
-	if linear {
+	l.centred = p.Recurrent.Centred
+	if linear && !l.centred {
 		if !g.addSessionRec(sid, l, p) {
 			return false
 		}
@@ -3603,7 +3636,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// to the backend goroutine that is blocked running the session -- a
 	// deadlock. prepBatch walks the causal layers eagerly for the same reason.
 	if p.NonCausal && g.bs != nil {
-		for _, m := range []*mv{&l.mvq, &l.mvk, &l.mvv, &l.mvo, &l.mvg, &l.mvu, &l.mvd} {
+		for _, m := range []*mv{&l.mvq, &l.mvk, &l.mvv, &l.mvo, &l.mvg, &l.mvu, &l.mvd, &l.mvSG, &l.mvBA, &l.mvSO} {
 			if m.kern == nil {
 				continue
 			}
@@ -5029,6 +5062,12 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			return kernels.ActMul(rows*r.Chans, kernels.ActIdentity)
 		}},
+		{&bs.convCentred, func() (*ir.Kernel, error) {
+			if !r.Centred {
+				return nil, nil
+			}
+			return kernels.Conv3Centred(r.Chans, rows)
+		}},
 		{&bs.convShift, func() (*ir.Kernel, error) {
 			if r.Conv == 0 {
 				return nil, nil
@@ -5812,7 +5851,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 		bs := g.bs
 		// The windows staged in the set are whichever session's picture
 		// came last: this session's go in again.
-		wok := g.setWindowsLocked(g.winRuns, g.winPerRow)
+		wok := g.setWindowsLocked(g.winRuns, g.winPerRow) && g.setSeqsLocked(g.seqRuns)
 		g.mu.Unlock()
 		if !wok {
 			return false
@@ -6170,6 +6209,12 @@ type graphKey struct {
 	// persist says the recording holds composed persistent kernels
 	// (Config.Persist), which a per-op recording does not.
 	persist bool
+	// persistDeps says those kernels are ordered by dependency counters
+	// (Config.PersistDeps) rather than grid barriers.
+	persistDeps bool
+	// gateUp says the dense FFNs ran gate and up as one launch
+	// (Config.GateUpFuse).
+	gateUp bool
 	// sid is the session the recording was made for: it bakes that session's
 	// page descriptors and recurrent seats, so another session never replays
 	// it. Keying on it, rather than dropping every recording when the current
@@ -6343,6 +6388,12 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		if l.windowed && (bs.winMask == nil || bs.vwinRows != len(x)/bs.p.NEmbd) {
 			return refuse("block %d attends inside windows and the device holds windows for %d "+
 				"rows, not %d (SetKeyRuns)", li, bs.vwinRows, len(x)/bs.p.NEmbd)
+		}
+		// Packed sequences over other rows than the call's would let a row
+		// read another sequence's keys.
+		if l.nonCausal && bs.vsegRows != 0 && bs.vsegRows != len(x)/bs.p.NEmbd {
+			return refuse("block %d: the device holds packed sequences over %d rows, not %d (SetSeqRuns)",
+				li, bs.vsegRows, len(x)/bs.p.NEmbd)
 		}
 	}
 	g.Submits++
@@ -6666,7 +6717,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// home, whose uploads sit between launches.
 	persistOn := R == 1 && rag == nil && !(bs.pkv != nil && bs.pkv.st != nil) && g.ensurePersist()
 	key := graphKey{lo, hi, nCap, R, head != nil, g.TableSplit, g.ScalarSoftmax, g.flashOn(), g.KVF16,
-		ropeDev, argmax, sampleK, samplePen, pick, ragN, ragRuns, par, pagedVar, ragHead, hNormID, persistOn, sid, g.NoFuse, g.NoActFuse}
+		ropeDev, argmax, sampleK, samplePen, pick, ragN, ragRuns, par, pagedVar, ragHead, hNormID, persistOn, persistOn && g.PersistDeps, g.GateUpFuse, sid, g.NoFuse, g.NoActFuse}
 	if _, live := g.recs[key]; !live {
 		for k, r := range g.recs {
 			older := k
@@ -7829,7 +7880,9 @@ func (g *devTier) layersSession(s backend.Session) {
 							// Qwen2.5-VL's windowed blocks: every key outside a
 							// row's window to -inf before the softmax, the windows
 							// of this pass's rows in win.
-							if l.windowed {
+							// Packed sequences: every key outside a row's own
+							// sequence, the same mask over the runs (SetSeqRuns).
+							if win != nil {
 								lc.la(bs.winMask, R*p.NHead*bs.sstride, att, win, bs.attWin)
 								att = bs.attWin
 							}
@@ -8387,6 +8440,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					}
 				}
 				gIn, uIn := bs.g, bs.u
+				guDone := false
 				if l.clampB != nil && !ungated {
 					// Gemma 4's clipped linears: gate and up each read their own
 					// clamped copy of the normed rows, and the activation their
@@ -8405,98 +8459,118 @@ func (g *devTier) layersSession(s backend.Session) {
 					gIn, uIn = bs.gClamp, bs.uClamp
 				} else if ffnIn {
 					mvIn(l.mvg, l.mvg.kernIn, l.gate, bs.g, bs.x2, l.nFFN, nil)
+				} else if guOK := g.GateUpFuse && l.gu != nil && l.guDown != nil && R == 1 && rag == nil && !voltaOnly && !ungated &&
+					l.nSubFFN == nil && l.nPostFFN == nil && !resScaled && !skip["add"] && !skip["actmul"] && !skip["quantf"] &&
+					!g.TableSplit && l.mvd.k == nffn && l.k3 == nil && l.q4e == nil && !l.nonCausal && !l.sparse; guOK {
+					// Gate and up in one launch over one operand, and down
+					// forming act(gate)*up as it quantizes, with the residual
+					// add (fuseGateUp). Every row keeps its own reduction.
+					if err == nil {
+						err = lc.launch(l.gu.kern, l.gu.blocks, l.gu.w, bs.a, bs.ax,
+							l.gate.qs, l.gate.d, l.gate.sc, bs.g, l.up.qs, l.up.d, l.up.sc, bs.u)
+					}
+					if gateUpSwapped {
+						mvIn(l.mvd, l.guDown, l.down, bs.x, bs.u, bs.g, bs.x2)
+					} else {
+						mvIn(l.mvd, l.guDown, l.down, bs.x, bs.g, bs.u, bs.x2)
+					}
+					g.GateUpFused++
+					ffnFused = true
+					guDone = true
 				} else if !ungated {
 					mvrun(l.mvg, l.gate, bs.g)
 					// Gemma 3n's sparse lead: the gate's gaussian top-k.
 					gIn = g.emitGauss(lc, bs, l, R)
 				}
-				gated := false
-				switch {
-				case ffnIn && l.mvu.gatedIn != nil:
-					mvIn(l.mvu, l.mvu.gatedIn, l.up, bs.act, bs.x2, l.nFFN, gIn)
-					gated = true
-				case ffnIn:
-					mvIn(l.mvu, l.mvu.kernIn, l.up, bs.u, bs.x2, l.nFFN, nil)
-				default:
-					// BitNet normalises the product before down, so up does not
-					// form it in its own store.
-					gated = !ungated && l.clampB == nil && l.nSubFFN == nil && !skip["actmul"] && mvgate(l.mvu, l.up, bs.act, gIn)
-					if !gated && l.clampB == nil {
-						mvrun(l.mvu, l.up, bs.u)
-					}
-				}
-				// The down projection building its own operand (fuseActIn):
-				// quantizing act(gate)*up where up wrote it (downIn), or
-				// forming it from gate and up as it quantizes (downAct).
-				downOK := R == 1 && rag == nil && g.actInOn() && !voltaOnly && l.clampB == nil && l.nPostFFN == nil && l.nSubFFN == nil &&
-					!resScaled && !skip["add"] && !skip["quantf"] && !skip["actmul"] && l.k3 == nil && l.q4e == nil && !l.nonCausal &&
-					!(g.TableSplit && l.mvd.alt != nil) && l.mvd.k == nffn
-				downIn := downOK && gated && l.mvd.resIn != nil
-				downAct := downOK && ffnIn && !gated && l.mvd.resActIn != nil
-				// The activation writes the down projection's operand where it
-				// can: binary16 for a binary16 GEMM, int8 for the rest.
-				var actConv backend.Kernel
-				quantDoneF := downAct
-				if !skip["actmul"] && !gated && !ungated && l.clampB == nil && !downAct {
-					if voltaOnly {
-						if ak, conv, n := g.actF16For(bs, l.mvd, R); ak != nil {
-							lc.la(ak, n, gIn, uIn, g.f16Buf)
-							actConv = conv
-							g.ActF16Fused++
+				if !guDone {
+					gated := false
+					switch {
+					case ffnIn && l.mvu.gatedIn != nil:
+						mvIn(l.mvu, l.mvu.gatedIn, l.up, bs.act, bs.x2, l.nFFN, gIn)
+						gated = true
+					case ffnIn:
+						mvIn(l.mvu, l.mvu.kernIn, l.up, bs.u, bs.x2, l.nFFN, nil)
+					default:
+						// BitNet normalises the product before down, so up does not
+						// form it in its own store.
+						gated = !ungated && l.clampB == nil && l.nSubFFN == nil && !skip["actmul"] && mvgate(l.mvu, l.up, bs.act, gIn)
+						if !gated && l.clampB == nil {
+							mvrun(l.mvu, l.up, bs.u)
 						}
-					} else if bs.quantAct != nil && !skip["quantf"] && !g.NoOperandFuse && l.nSubFFN == nil {
-						lc.la(bs.quantAct, kernels.QuantizeThreads(R*p.NFFN/32), gIn, uIn, bs.act, bs.a, bs.ax)
+					}
+					// The down projection building its own operand (fuseActIn):
+					// quantizing act(gate)*up where up wrote it (downIn), or
+					// forming it from gate and up as it quantizes (downAct).
+					downOK := R == 1 && rag == nil && g.actInOn() && !voltaOnly && l.clampB == nil && l.nPostFFN == nil && l.nSubFFN == nil &&
+						!resScaled && !skip["add"] && !skip["quantf"] && !skip["actmul"] && l.k3 == nil && l.q4e == nil && !l.nonCausal &&
+						!(g.TableSplit && l.mvd.alt != nil) && l.mvd.k == nffn
+					downIn := downOK && gated && l.mvd.resIn != nil
+					downAct := downOK && ffnIn && !gated && l.mvd.resActIn != nil
+					// The activation writes the down projection's operand where it
+					// can: binary16 for a binary16 GEMM, int8 for the rest.
+					var actConv backend.Kernel
+					quantDoneF := downAct
+					if !skip["actmul"] && !gated && !ungated && l.clampB == nil && !downAct {
+						if voltaOnly {
+							if ak, conv, n := g.actF16For(bs, l.mvd, R); ak != nil {
+								lc.la(ak, n, gIn, uIn, g.f16Buf)
+								actConv = conv
+								g.ActF16Fused++
+							}
+						} else if bs.quantAct != nil && !skip["quantf"] && !g.NoOperandFuse && l.nSubFFN == nil {
+							lc.la(bs.quantAct, kernels.QuantizeThreads(R*p.NFFN/32), gIn, uIn, bs.act, bs.a, bs.ax)
+							fsrc = bs.act
+							quantDoneF = true
+							g.QuantActs++
+						}
+					}
+					if !skip["actmul"] && !gated && actConv == nil && !quantDoneF {
+						if ungated && l.xielu != nil {
+							// Apertus: the block's four numbers ride as a buffer.
+							lc.la(actK, R*nffn, bs.u, l.xielu, bs.act)
+						} else if ungated {
+							// One operand: the gate does not exist.
+							lc.la(actK, R*nffn, bs.u, bs.act)
+						} else {
+							lc.la(actK, R*nffn, gIn, uIn, bs.act)
+						}
+					}
+					if voltaOnly {
 						fsrc = bs.act
-						quantDoneF = true
-						g.QuantActs++
+						g.QuantSkipped++
+						if actConv != nil {
+							actMemoK, actMemoSrc = actConv, bs.act
+						}
+					} else if l.clampB != nil && !quantDoneF {
+						lc.la(bs.clampK[12], R*p.NFFN, bs.act, l.clampB, bs.cin)
+						lc.la(bs.quantF, kernels.QuantizeThreads(R*p.NFFN/32), bs.cin, bs.a, bs.ax)
+						fsrc = bs.cin
 					}
-				}
-				if !skip["actmul"] && !gated && actConv == nil && !quantDoneF {
-					if ungated && l.xielu != nil {
-						// Apertus: the block's four numbers ride as a buffer.
-						lc.la(actK, R*nffn, bs.u, l.xielu, bs.act)
-					} else if ungated {
-						// One operand: the gate does not exist.
-						lc.la(actK, R*nffn, bs.u, bs.act)
+					if downIn || downAct {
+						g.ActInSaved++
+					} else if l.nSubFFN != nil {
+						// BitNet: the norm over act(gate)*up and the quantize down
+						// reads, one launch a row.
+						laRows(bs.subQF, bs.act, l.nSubFFN, bs.sub, bs.a, bs.ax)
+						fsrc = bs.sub
+					} else if !voltaOnly && l.clampB == nil && !skip["quantf"] && !quantDoneF {
+						lc.la(bs.quantF, kernels.QuantizeThreads(R*nffn/32), bs.act, bs.a, bs.ax)
+					}
+					if downIn {
+						mvIn(l.mvd, l.mvd.resIn, l.down, bs.x, bs.act, nil, bs.x2)
+						ffnFused = true
+					} else if downAct {
+						// pIn is the gate's row and the norm-weight slot carries up's.
+						mvIn(l.mvd, l.mvd.resActIn, l.down, bs.x, gIn, uIn, bs.x2)
+						ffnFused = true
+					} else if l.clampB == nil && l.nPostFFN == nil && !resScaled && !skip["add"] && l.k3 == nil && l.q4e == nil && mvres(l.mvd, l.down, bs.x, bs.x2) {
+						ffnFused = true
 					} else {
-						lc.la(actK, R*nffn, gIn, uIn, bs.act)
-					}
-				}
-				if voltaOnly {
-					fsrc = bs.act
-					g.QuantSkipped++
-					if actConv != nil {
-						actMemoK, actMemoSrc = actConv, bs.act
-					}
-				} else if l.clampB != nil && !quantDoneF {
-					lc.la(bs.clampK[12], R*p.NFFN, bs.act, l.clampB, bs.cin)
-					lc.la(bs.quantF, kernels.QuantizeThreads(R*p.NFFN/32), bs.cin, bs.a, bs.ax)
-					fsrc = bs.cin
-				}
-				if downIn || downAct {
-					g.ActInSaved++
-				} else if l.nSubFFN != nil {
-					// BitNet: the norm over act(gate)*up and the quantize down
-					// reads, one launch a row.
-					laRows(bs.subQF, bs.act, l.nSubFFN, bs.sub, bs.a, bs.ax)
-					fsrc = bs.sub
-				} else if !voltaOnly && l.clampB == nil && !skip["quantf"] && !quantDoneF {
-					lc.la(bs.quantF, kernels.QuantizeThreads(R*nffn/32), bs.act, bs.a, bs.ax)
-				}
-				if downIn {
-					mvIn(l.mvd, l.mvd.resIn, l.down, bs.x, bs.act, nil, bs.x2)
-					ffnFused = true
-				} else if downAct {
-					// pIn is the gate's row and the norm-weight slot carries up's.
-					mvIn(l.mvd, l.mvd.resActIn, l.down, bs.x, gIn, uIn, bs.x2)
-					ffnFused = true
-				} else if l.clampB == nil && l.nPostFFN == nil && !resScaled && !skip["add"] && l.k3 == nil && l.q4e == nil && mvres(l.mvd, l.down, bs.x, bs.x2) {
-					ffnFused = true
-				} else {
-					mvrun(l.mvd, l.down, bs.mvOut)
-					if l.clampB != nil {
-						lc.la(bs.clampK[13], R*p.NEmbd, bs.mvOut, l.clampB, bs.cout)
-						ffnOut = bs.cout
+						mvrun(l.mvd, l.down, bs.mvOut)
+						if l.clampB != nil {
+							lc.la(bs.clampK[13], R*p.NEmbd, bs.mvOut, l.clampB, bs.cout)
+							ffnOut = bs.cout
+						}
 					}
 				}
 			}
@@ -10405,6 +10479,10 @@ func (g *devTier) emitLinear(sid uint64, s backend.Session, bs *blockScratch, l 
 	mvrun func(mv, *resident, backend.Buf),
 	mvrunAct func(mv, *resident, backend.Buf, backend.Buf, backend.Buf, backend.Buf)) {
 	r := bs.rec
+	if l.centred {
+		g.emitCentred(bs, l, li, R, p, errp, lc, mvrun)
+		return
+	}
 	// The real row count (bs.dRows) matters here where attention would mask:
 	// a zero padding column shifted into the state stays there. layersOnce
 	// stages it with the other per-call writes, outside emit, through the
@@ -10743,6 +10821,36 @@ func (g *devTier) emitSSD(sid uint64, bs *blockScratch, l *layer, li, R int, rag
 		g.stepFlip(sid, l)
 		g.recSteps++
 	}
+}
+
+// emitCentred issues one LFM2 encoder convolution block (d1-omni's trunk):
+// the pre-norm and its quantization, x, B and C, B*x through the centred
+// convolution over the call's rows -- each tap inside the row's window,
+// bs.vwinAll -- C times that, and out_proj into bs.mvOut. No state: the call
+// is the whole sequence.
+func (g *devTier) emitCentred(bs *blockScratch, l *layer, li, R int, p *nn.LayerPlan, errp *error,
+	lc *launcher, mvrun func(mv, *resident, backend.Buf)) {
+	r := bs.rec
+	// The windows cover this call's rows: a windowed block's submission is
+	// refused otherwise (layersOnce), and the padded rows past them read the
+	// whole call's window, whose output nothing copies out.
+	if bs.convCentred == nil || bs.vwinAll == nil {
+		if *errp == nil {
+			*errp = fmt.Errorf("tier: block %d convolves inside row windows and the device holds none", li)
+		}
+		return
+	}
+	lc.la(bs.normPart, R*bs.parts, bs.x, bs.part)
+	lc.la(bs.normApply, R*p.NEmbd, bs.x, l.nAttn, bs.part, bs.h)
+	lc.la(bs.quantE, kernels.QuantizeThreads(R*p.NEmbd/32), bs.h, bs.a, bs.ax)
+	mvrun(l.mvq, l.wq, bs.dMixed)
+	mvrun(l.mvSG, l.ssmGate, bs.scB)
+	mvrun(l.mvBA, l.ssmBA, bs.scC)
+	lc.la(bs.scMul, R*r.Chans, bs.scB, bs.dMixed, bs.scBx)
+	lc.la(bs.convCentred, R*r.Chans, bs.scBx, l.ssmConv1d, bs.vwinAll, bs.dConv)
+	lc.la(bs.scMul, R*r.Chans, bs.scC, bs.dConv, bs.scY)
+	lc.la(bs.quantE, kernels.QuantizeThreads(R*p.NEmbd/32), bs.scY, bs.a, bs.ax)
+	mvrun(l.mvSO, l.ssmOut, bs.mvOut)
 }
 
 // emitShortConv issues one LFM2 short-convolution block, from the quantized

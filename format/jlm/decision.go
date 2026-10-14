@@ -34,6 +34,12 @@ const (
 	// question in one pass (Cloudflare/clef-flash; decisionroles.go has its
 	// tensors).
 	DecisionClef
+	// DecisionD1Omni is d1-omni's readout (LiquidAI/d1-omni-600M): an LFM2
+	// encoder over one question's prompt (ArchLFM2Enc), the question type's
+	// row added to every row and Config.DecisionBlocks head blocks -- Laya's
+	// head -- and a scorer at each option's <|mask|>, a noul read as [false,
+	// true]. Images or a voice clip enter as a prefix of embedding rows.
+	DecisionD1Omni
 )
 
 var decisionNames = map[DecisionKind]string{
@@ -41,6 +47,7 @@ var decisionNames = map[DecisionKind]string{
 	DecisionLFM2D1: "lfm2-d1",
 	DecisionLaya:   "laya",
 	DecisionClef:   "clef",
+	DecisionD1Omni: "lfm2-d1-omni",
 }
 
 // String is the name llama.cpp writes as <arch>.decision.type.

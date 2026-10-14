@@ -72,6 +72,11 @@ var decisionCases = []struct {
 	// jitllm agree to the reference's rounding of its answers (6.5e-5); it
 	// is the Clef every gate can run on a card the release does not fit.
 	{"clef-fixture", "clef/fixture/clef-fixture.gguf", "clef-fixture", jlm.DecisionClef, true, 0.001},
+	// d1-omni's F16 GGUF: jitllm sits 5.5e-6 from the model's own code on
+	// these weights (TestD1OmniMatchesReference) and llama.cpp 0.0023 from
+	// both (its F16 products). Its confidence is its own code's (the chosen
+	// option's probability).
+	{"d1-omni", d1OmniModel, "d1-omni-600M-F16", jlm.DecisionD1Omni, true, 0.005},
 }
 
 // decisionRequests are the request bodies in testdata/decision: an object
@@ -289,7 +294,7 @@ func checkDecisions(t *testing.T, qs []DecisionQuestion, ans []DecisionAnswer, g
 // label moves them -- the answers are what the pick read.
 func TestDecisionPicksOnTheHost(t *testing.T) {
 	for _, c := range decisionCases {
-		if c.kind == jlm.DecisionLaya || c.kind == jlm.DecisionClef {
+		if c.kind == jlm.DecisionLaya || c.kind == jlm.DecisionClef || c.kind == jlm.DecisionD1Omni {
 			continue // an encoder's scorer and Clef's span head read no label logits
 		}
 		t.Run(c.name, func(t *testing.T) {

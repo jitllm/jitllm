@@ -266,6 +266,10 @@ type JIT struct {
 	// narrow is the decode pool and wide, when non-nil, the prefill pool;
 	// pool is whichever of them the current phase runs on. See BeginPrefill.
 	narrow, wide *sched.Pool
+	// eview is the E-cores' pool, built when the first prefill goes there
+	// (BeginPrefillE), and onE is whether one is running on it now.
+	eview *sched.Pool
+	onE   bool
 	// procs releases the GOMAXPROCS request BeginPrefill made, nil when none
 	// is live; see sched.RaiseProcs.
 	procs func()
@@ -503,6 +507,9 @@ func NewJIT(maxK, maxRows int, types []quant.Type, opts ...Option) *JIT {
 	workers := f.pool.Max()
 	if f.wide != nil {
 		workers = max(workers, f.wide.Max())
+	}
+	if cfg.ServingSplit && sched.CanSplitE() {
+		workers = max(workers, len(sched.CoreSet("e")))
 	}
 	f.qscr = make([]float32, max(1, workers)*cpu.QuantActNarrowScratch)
 	// The widest table default across the types present seeds the climb. It is
@@ -812,7 +819,10 @@ func (f *JIT) Close() error {
 	if f.wide != nil {
 		f.wide.Close()
 	}
-	f.pool, f.narrow, f.wide = nil, nil, nil
+	if f.eview != nil {
+		f.eview.Close()
+	}
+	f.pool, f.narrow, f.wide, f.eview = nil, nil, nil, nil
 	if f.procs != nil {
 		f.procs()
 		f.procs = nil
@@ -846,6 +856,45 @@ func (f *JIT) EndPrefill() {
 		return
 	}
 	f.pool = f.narrow
+	if f.procs != nil {
+		f.procs()
+		f.procs = nil
+	}
+}
+
+// BeginPrefillE runs every region until EndPrefillE on the E-cores' pool, and
+// reports whether it did: not unless Config.ServingSplit is set and the host
+// has E-cores a thread can ask for (sched.CanSplitE). The decode view on the
+// P-cores is parked meanwhile (sched.Pool.Park), so a session decoding there
+// is its cores' only user and can fuse; the prefill pool of BeginPrefill is
+// not used. The caller must run the prefill on a thread at the E-core class
+// (sched.OnE): it is participant 0 of every region. The tuners learn nothing
+// from a prefill here, whose rates are the E-cores', not the pool they tune.
+func (f *JIT) BeginPrefillE() bool {
+	if f == nil || f.narrow == nil || f.onE || !f.cfg.ServingSplit || !sched.CanSplitE() {
+		return false
+	}
+	if f.eview == nil {
+		f.eview = sched.Shared(sched.CoreSet("e"), f.cfg.Sched...)
+	}
+	f.narrow.Park()
+	f.pool = f.eview
+	f.onE = true
+	if f.procs == nil {
+		f.procs = sched.RaiseProcs(f.eview.Max())
+	}
+	return true
+}
+
+// EndPrefillE returns from the E-cores' pool to the decode pool and takes the
+// decode view back; see BeginPrefillE.
+func (f *JIT) EndPrefillE() {
+	if f == nil || !f.onE {
+		return
+	}
+	f.onE = false
+	f.pool = f.narrow
+	f.narrow.Unpark()
 	if f.procs != nil {
 		f.procs()
 		f.procs = nil

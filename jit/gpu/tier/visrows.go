@@ -64,7 +64,7 @@ func visRowsFor(n, most int) int {
 // hold g.mu.
 func (g *devTier) holdsTower() bool {
 	for _, l := range g.layers {
-		if l != nil && l.geo == geoNonCausal {
+		if l != nil && l.geo&geoNonCausal != 0 {
 			return true
 		}
 	}
@@ -128,15 +128,16 @@ func planeBytes(bs *blockScratch) int64 {
 	return n * int64(bs.arows*bs.p.NHead*bs.sstride*4)
 }
 
-// towerKV is every tower k/v pair on this device: the shared one and any a
-// block holds of its own (transientKV could not share). Callers hold g.mu.
+// towerKV is every tower k/v pair of the non-causal set in use: the shared
+// one (the encoder's set's) and any a block holds of its own (transientKV
+// could not share). Callers hold g.mu.
 func (g *devTier) towerKV() []*kvPair {
 	var out []*kvPair
-	if g.tkv != nil {
+	if g.tkv != nil && g.geoCur == geoNonCausal {
 		out = append(out, g.tkv)
 	}
 	for _, l := range g.layers {
-		if l == nil || l.geo != geoNonCausal {
+		if l == nil || l.geo != g.geoCur {
 			continue
 		}
 		for _, kvp := range l.kv {
@@ -252,7 +253,7 @@ func (g *devTier) towerWindowed() bool {
 // phases a chunk at a time (LayersPhase). Refused for windowed towers and
 // where even the narrowest chunk does not fit. Callers hold g.mu.
 func (g *devTier) chunkTower(n, want int) bool {
-	if g.NoTowerChunks || g.towerWindowed() {
+	if g.NoTowerChunks || g.towerWindowed() || g.hasHeadSet() {
 		return false
 	}
 	home := g.geoCur
@@ -351,7 +352,7 @@ func (g *devTier) resizeTower(n, want int) bool {
 		// still leave a streamed tower its slot, or the first page-in of
 		// the call fails the device mid-picture.
 		if keep == 0 || g.slots() >= minSlots {
-			return true
+			return g.headSetAt(want)
 		}
 		g.LastErr = fmt.Sprintf("a picture of %d rows: the tower's set at %d rows leaves %d block slot(s), "+
 			"below the %d a swap needs", n, want, g.slots(), minSlots)
@@ -425,7 +426,7 @@ func (g *devTier) towerKVAt(p *nn.LayerPlan) bool {
 		g.KVBytes += kvp.bytes
 	}
 	for _, l := range g.layers {
-		if l != nil && l.geo == geoNonCausal && l.kvBytes > 0 {
+		if l != nil && l.geo == g.geoCur && l.kvBytes > 0 {
 			l.kvBytes = uint64(cache + vcache)
 		}
 	}
@@ -437,10 +438,10 @@ func (g *devTier) towerKVAt(p *nn.LayerPlan) bool {
 // a Compile from inside a submission deadlocks. Callers hold g.mu.
 func (g *devTier) towerTwins() bool {
 	for li, l := range g.layers {
-		if l == nil || l.geo != geoNonCausal {
+		if l == nil || l.geo != g.geoCur {
 			continue
 		}
-		for _, m := range []*mv{&l.mvq, &l.mvk, &l.mvv, &l.mvo, &l.mvg, &l.mvu, &l.mvd} {
+		for _, m := range []*mv{&l.mvq, &l.mvk, &l.mvv, &l.mvo, &l.mvg, &l.mvu, &l.mvd, &l.mvSG, &l.mvBA, &l.mvSO} {
 			if m.kern == nil {
 				continue
 			}
@@ -492,17 +493,53 @@ func (g *devTier) dropIdleTower() {
 		return
 	}
 	home := g.geoCur
-	g.useGeom(geoNonCausal)
-	if g.bs != nil || len(g.bbs) > 0 {
-		g.dropGraph()
-		for w := range g.bbs {
-			g.dropBatch(w)
+	for _, k := range []geoKey{geoNonCausal, geoNonCausal | geoNCHead} {
+		g.useGeom(k)
+		if g.bs != nil || len(g.bbs) > 0 {
+			g.dropGraph()
+			for w := range g.bbs {
+				g.dropBatch(w)
+			}
+			g.dropScratch(g.bs)
+			g.bs = nil
 		}
-		g.dropScratch(g.bs)
-		g.bs = nil
 	}
 	g.useGeom(home)
 	g.visCap, g.visMax = 0, 0
+}
+
+// hasHeadSet reports a decision head's own non-causal set on this device
+// (geoNCHead). Callers hold g.mu.
+func (g *devTier) hasHeadSet() bool {
+	for _, l := range g.layers {
+		if l != nil && l.geo == geoNonCausal|geoNCHead {
+			return true
+		}
+	}
+	return false
+}
+
+// headSetAt moves a decision head's own set to rows rows, as resizeTower
+// moved the encoder's: one call runs both, so both hold its rows. A device
+// with no head set has nothing to move. Callers hold g.mu and dropped the
+// graph.
+func (g *devTier) headSetAt(rows int) bool {
+	if !g.hasHeadSet() {
+		return true
+	}
+	home := g.geoCur
+	g.useGeom(geoNonCausal | geoNCHead)
+	defer g.useGeom(home)
+	if g.bs == nil {
+		return true
+	}
+	plan := g.bs.p
+	plan.MaxSeq = g.visMax
+	if !g.towerAt(&plan, rows) {
+		g.LastErr = fmt.Sprintf("the decision head's set at %d rows: %s", rows, g.LastErr)
+		return false
+	}
+	return true
 }
 
 // ReserveRows asks every device (nn.RowsReserver); one holding no tower block

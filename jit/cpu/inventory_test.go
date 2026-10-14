@@ -62,6 +62,8 @@ var elementwiseInventory = []struct {
 	// attention and linear-layer output gates. actmul/silu would compute
 	// g*sigma(g)*v, plausible and wrong, hence a separate kernel.
 	{"sigmoidmul", EmitSigmoidMul},
+	// x = ln(x): a log-mel feature's log (d1-omni's audio front end).
+	{"ln", EmitLn},
 
 	// dst += alpha*src: the residual adds, every attention and projection bias,
 	// and the MoE's weighted accumulate. One kernel, because they are one shape.

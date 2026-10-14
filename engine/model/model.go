@@ -1308,6 +1308,8 @@ type Model struct {
 	// states counts the sessions built, so AddJITOptions can refuse to be late.
 	// Sessions are built concurrently (a server's requests), so it is atomic.
 	states atomic.Int64
+	// live is the open States, which a prefill asks whether another decodes.
+	live live
 	// enc is the BERT-family encoder graph, and nil for every decoder. A model
 	// with one has no layers, no output and no State: see encoder.go.
 	enc *encoder
@@ -1317,6 +1319,8 @@ type Model struct {
 	// tower is the vision tower, nil for a container with no vision section.
 	// It shares this model's container, budget and pager.
 	tower *Tower
+	// audio is the container's audio tower (audio.go), nil without one.
+	audio *audioTower
 	// imgCache is the vision segment's output rows by picture (imagekey.go),
 	// shared by every State of the model.
 	imgCache imageCache
@@ -1647,6 +1651,16 @@ func openContainer(path string, options ...Option) (*Model, error) {
 		}
 		m.tower = tw
 		m.imgCache.budget = defaultImageCache
+		if m.audio, err = buildAudio(c, m); err != nil {
+			c.Close()
+			return nil, err
+		}
+		// The audio blocks take their places in the block space after the
+		// vision blocks, as the container pages them; their weights are the
+		// tower's own (audioPageIn).
+		if m.audio != nil {
+			m.layers = append(m.layers, make([]layer, len(m.audio.blocks))...)
+		}
 		if tw.mn != nil && tw.mn.hard != nil {
 			m.hardEmbd = tw.mn.hardRows(m.Cfg.EmbdScale)
 		}
@@ -1942,8 +1956,13 @@ func (m *Model) pageIn(li int) error {
 	if m.container == nil || li >= len(m.layers) || li >= m.container.NPages() {
 		return nil
 	}
-	// An encoder's blocks are its own structs (encoder.go, modernbert.go).
-	if m.enc != nil {
+	// An encoder's blocks are its own structs (encoder.go, modernbert.go);
+	// a tower's after them (d1-omni's) are layers like any model's, and an
+	// audio tower's its own (audio.go).
+	if m.audio != nil && li >= m.audioFirst() {
+		return m.audioPageIn(li - m.audioFirst())
+	}
+	if m.enc != nil && li < m.encBlocks() {
 		return m.encBlockPageIn(li)
 	}
 	// The block's own weights, not its experts: moe() ensures those after the
@@ -4085,7 +4104,7 @@ func (m *Model) newJIT() *nn.JIT {
 	if m.tower != nil {
 		add(quant.F32)
 	}
-	opts := m.jit
+	opts := append(m.jit[:len(m.jit):len(m.jit)], nn.WithServingSplit(!m.opt.noServingSplit))
 	if m.Cfg.TokenAct {
 		// One window over the widest row: each row's blocks share its scale.
 		opts = append(append([]nn.Option(nil), opts...), nn.WithActWindow((maxK+31)/32*32))

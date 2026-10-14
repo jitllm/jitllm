@@ -410,6 +410,82 @@ func (g *GPU) layersRows(self uint64, lo, hi int, pos, slot []int, sid []uint64,
 	return true
 }
 
+// RowsWidth is the widest step of at most want rows every device holding a
+// block can run (nn.RowsWidther): each device's batched scratch for it held
+// or built now (batchFor), halving the width until one fits. 0 when none
+// does, or no device holds a block.
+func (g *GPU) RowsWidth(want int) int {
+	w := min(want, batchWidth)
+	if roomFaulted("narrow-lie") {
+		return w
+	}
+	for _, d := range g.devs {
+		d.mu.Lock()
+		held := false
+		for _, l := range d.layers {
+			if l != nil && l.ok {
+				held = true
+				break
+			}
+		}
+		if held && d.bs != nil {
+			for w >= 8 {
+				r := (w + 7) / 8 * 8
+				if b := d.batchFor(r); b >= r {
+					break
+				}
+				w /= 2
+			}
+		}
+		d.mu.Unlock()
+		if w < 8 {
+			return 0
+		}
+	}
+	return w
+}
+
+// rowsRoom is RowsRoom for session sid: on every device holding a block, the
+// batched scratch for rows rows (batchFor) and, where a linear block is
+// placed, the session's recurrent seat for seqs sequences (growSeat).
+func (g *GPU) rowsRoom(sid uint64, rows, seqs int) bool {
+	if roomFaulted("noseat-lie") || roomFaulted("narrow-lie") {
+		return true
+	}
+	r := (rows + 7) / 8 * 8
+	for _, d := range g.devs {
+		v := d.as(sid)
+		if v == nil {
+			continue
+		}
+		v.mu.Lock()
+		held, linear := false, false
+		for _, l := range v.layers {
+			if l != nil && l.ok {
+				held = true
+				linear = linear || l.linear
+			}
+		}
+		ok := !held || v.bs != nil && r <= batchWidth && v.batchFor(r) >= r && (!linear || v.growSeat(sid, seqs))
+		v.mu.Unlock()
+		v.done()
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// RowsRoom is rowsRoom for the zero session (nn.RowsRoomer).
+func (g *GPU) RowsRoom(rows, seqs int) bool { return g.rowsRoom(0, rows, seqs) }
+
+// RowsRoom is the session's (nn.RowsRoomer): its recurrent seat is its own.
+func (s *gpuSession) RowsRoom(rows, seqs int) bool { return s.g.rowsRoom(s.sid, rows, seqs) }
+
+// RowsWidth forwards the tier's (nn.RowsWidther): scratch is the device's,
+// not a session's.
+func (s *gpuSession) RowsWidth(want int) int { return s.g.RowsWidth(want) }
+
 func (s *gpuSession) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
 	defer s.leave(s.inputsTo(s.step()))
 	return s.g.layersRows(s.sid, lo, hi, pos, slot, nil, seqLen, x, cs, csSWA, head)

@@ -36,6 +36,9 @@ const (
 	// carries the indexer's key as one more head, which every K/V writer and
 	// the paged pool's geometry bake, where the dense lead's row does not.
 	geoMSA
+	// geoNCHead is, beside geoNonCausal, a decision head's own non-causal
+	// set (nn.LayerPlan.HeadSet): it resizes with the encoder's (visrows.go).
+	geoNCHead
 )
 
 // geoOf is the set block plan p runs in. A non-causal segment (a vision
@@ -45,6 +48,9 @@ const (
 // kinds over one residual, a segment takes a set of its own.
 func geoOf(p *nn.LayerPlan) geoKey {
 	if p.NonCausal {
+		if p.HeadSet {
+			return geoNonCausal | geoNCHead
+		}
 		return geoNonCausal
 	}
 	var k geoKey

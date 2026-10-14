@@ -47,9 +47,29 @@ type Embedder struct {
 	// The attention kernel sets of the encoder's blocks and of a decision
 	// head's, which differ when their head widths do.
 	attnEnc, attnHead *nn.AttnSet
+	// attnLF is an LFM2 encoder's: its head width, k and v rows of its GQA
+	// key heads.
+	attnLF *nn.AttnSet
+	// aud is the audio tower's scratch (audio.go), and audioTap, where set,
+	// sees its stages' rows -- the gates' bisection hook.
+	aud      audioRun
+	audioTap func(stage string, rows []float32)
+	// audSeg is the audio tower's segment State, the one its blocks are
+	// placed on a device through (audiodev.go); nil until a device is.
+	audSeg *State
 
 	// rg is the pool regions the host's blocks run (encRegions).
 	rg encRegions
+
+	// seqs packs several sequences into one encoder pass: each run of rows is
+	// a sequence of its own, whose rows attend inside it and count their
+	// positions from its start, and seqTypes is each one's question type (a
+	// decision head's type row). nil is one sequence over every row.
+	// rowSeq is each row's sequence and qseq, qpos the attention's queries'
+	// sequence and row, kept between calls.
+	seqs               []nn.KeyRun
+	seqTypes           []jlm.QuestionType
+	rowSeq, qseq, qpos []int32
 
 	// afterBlock, when set, sees the residual after every encoder block --
 	// the per-layer bisection hook the correctness gates use.
@@ -110,6 +130,13 @@ func (e *Embedder) encoderJIT() error {
 	types := []quant.Type{quant.F32, m.embd.typ}
 	width := max(c.NEmbd, c.NFFN)
 	if mb := m.enc.mb; mb != nil {
+		if lf := m.enc.lf; lf != nil {
+			for i := range lf.blocks {
+				for _, w := range lf.blocks[i].weights() {
+					types = append(types, w.typ)
+				}
+			}
+		}
 		for i := range mb.blocks {
 			for _, w := range mb.blocks[i].weights() {
 				types = append(types, w.typ)
@@ -131,6 +158,17 @@ func (e *Embedder) encoderJIT() error {
 			}
 		}
 	}
+	// A decision encoder that reads pictures runs its tower on this JIT
+	// (d1-omni's prefix): the tower's formats and widths too.
+	if m.tower != nil {
+		for i := range m.container.Entries() {
+			e := &m.container.Entries()[i]
+			if t, ok := containerShape(e); ok && e.Role.Vision() {
+				types = append(types, t.typ)
+				width = max(width, t.k, t.rows)
+			}
+		}
+	}
 	e.jit = nn.NewJIT(width, width, types, m.jit...)
 	if e.jit == nil {
 		return fmt.Errorf("model: no code generator for the encoder on this host")
@@ -145,6 +183,20 @@ func (e *Embedder) encoderJIT() error {
 	if mb := m.enc.mb; mb != nil && mb.head != nil {
 		e.attnHead = e.jit.AttnSetFor(c.NEmbd/mb.headHeads, c.NEmbd/mb.headHeads, c.NEmbd, cpu.KVF32)
 	}
+	if m.enc.lf != nil {
+		e.attnLF = e.jit.AttnSetFor(c.HeadDim, c.HeadDim, c.NKVHead*c.HeadDim, cpu.KVF32)
+	}
+	// The audio tower's depthwise subsampling rows, at the frequencies its
+	// mel bins halve to.
+	if a := m.audio; a != nil {
+		f := int(a.cfg.MelBins)
+		f = (f-1)/2 + 1
+		for range 2 {
+			fo := (f-1)/2 + 1
+			e.jit.AddDWConv(cpu.DWShape{K: 3, Stride: 2, WP: f + 2, Chans: int(a.cfg.SubChannels), WOut: fo})
+			f = fo
+		}
+	}
 	return nil
 }
 
@@ -157,6 +209,10 @@ func (e *Embedder) Close() {
 	if e.seg != nil {
 		e.seg.Close()
 		e.seg = nil
+	}
+	if e.audSeg != nil {
+		e.audSeg.Close()
+		e.audSeg = nil
 	}
 	if e.jit != nil {
 		e.jit.Close()

@@ -671,6 +671,13 @@ func (f *JIT) PrefillChunk() int {
 	prefillDuels.Lock()
 	defer prefillDuels.Unlock()
 	f.ensureTunersLocked()
+	if f.onE {
+		// The E-cores' pool is not the one the tuners climb on: every region
+		// takes its whole crew, at the width and sizes already settled.
+		f.pool.SetParticipants(f.pool.Max())
+		f.chunkBytes, f.gemmRows = f.rtune.best<<10, f.wtune.best
+		return f.ctune.best
+	}
 	// Applying the participant count here, per chunk, is what lets it be
 	// measured on the same end-to-end number as the batch width: it governs
 	// every region of the chunk, not just the matmul.
@@ -696,7 +703,7 @@ func (f *JIT) PrefillChunk() int {
 // and participant count also govern attention, norms and elementwise ops,
 // which the matmul rate cannot see.
 func (f *JIT) ObserveChunk(width, ntok int, d time.Duration) {
-	if f == nil || f.ctune == nil || d <= 0 || ntok != width {
+	if f == nil || f.ctune == nil || f.onE || d <= 0 || ntok != width {
 		return // a short final chunk is not a sample
 	}
 	prefillDuels.Lock()

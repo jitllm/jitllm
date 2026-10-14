@@ -101,10 +101,21 @@ func decideCmd(args []string) error {
 				vids[i].Frames = append(vids[i].Frames, f)
 			}
 		}
+		var clip []float32
+		if len(req.Audio) > 0 {
+			if clip, err = model.DecodeAudioDataURL(req.Audio[0]); err != nil {
+				return err
+			}
+		}
 		var ans []model.DecisionAnswer
 		for r := 0; r < max(1, *repeat); r++ {
 			t, reads, read := time.Now(), m.PagerReads(), m.BytesRead()
-			if ans, err = d.DecideMedia(state, qs, imgs, vids); err != nil {
+			if clip != nil {
+				ans, err = d.DecideAudio(state, qs, clip)
+			} else {
+				ans, err = d.DecideMedia(state, qs, imgs, vids)
+			}
+			if err != nil {
 				return err
 			}
 			fmt.Fprintf(os.Stderr, "%d questions, %d tokens in %v; %d page reads, %d MiB read\n", len(qs), d.InputTokens(),

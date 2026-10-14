@@ -200,6 +200,15 @@ func ArchitectureGraph(name string) (jlm.Arch, bool) {
 }
 
 func configOf(f *meta.File) (*jlm.Config, error) {
+	if head, ok := d1OmniHead(f); ok {
+		return d1OmniConfig(f, head)
+	}
+	return configOfFile(f)
+}
+
+// configOfFile is configOf for every file but the ones read through a view
+// (d1OmniConfig).
+func configOfFile(f *meta.File) (*jlm.Config, error) {
 	name := f.Arch()
 	arch, ok := archOf[name]
 	if !ok {
@@ -1102,6 +1111,9 @@ var projectorOf = map[string]jlm.Projector{
 	"kimivl":           jlm.ProjKimiVL,
 	"qwen3vl_merger":   jlm.ProjQwen3VL,
 	"lfm2":             jlm.ProjLFM2,
+	// d1-omni's vision half: LFM2-VL's tower and projector with no input
+	// norm, resampled bilinear (its vision.py).
+	"d1omni_v": jlm.ProjLFM2,
 }
 
 // Projectors is every name in that list, sorted.

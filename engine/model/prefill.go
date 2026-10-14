@@ -443,9 +443,11 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 	// The prefill pool, where the JIT has one (nn.Config.PrefillCores). A
 	// mixture stays on the decode pool: its expert GEMMs are a few routed
 	// tokens each and a wider pool measured slower (engine/nn/prefillcores.go).
+	// Chunk by chunk it is placed beside any session decoding (serving.go).
+	var place *prefillPlace
 	if c.NExpert == 0 {
-		s.jit.BeginPrefill()
-		defer s.jit.EndPrefill()
+		place = &prefillPlace{s: s}
+		defer place.end()
 	}
 	// headDone says the last chunk's submission ran the output projection on
 	// its last row (the folded head), so s.logits are filled and the tail call
@@ -467,6 +469,9 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 			return nil, ErrPrefillInterrupted
 		}
 		ps.before(s.seqPos(slot))
+		if place != nil {
+			place.at()
+		}
 		// Asked per chunk, not once: while the tuner is cycling, successive
 		// chunks deliberately use different widths.
 		width := s.jit.PrefillChunk()

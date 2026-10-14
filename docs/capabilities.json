@@ -464,6 +464,7 @@
     }
   ],
   "projectors": [
+    "d1omni_v",
     "gemma3",
     "gemma3nv",
     "gemma4v",

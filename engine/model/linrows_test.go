@@ -481,3 +481,78 @@ func TestLinearRowsCounts(t *testing.T) {
 		t.Errorf("the batched arm read the weights %d times, row by row %d", passes[false], passes[true])
 	}
 }
+
+// TestLinearRowsRideABatchStep holds a batch session's recurrent blocks --
+// prompt chunks of several sequences and decoding rows in one step -- with
+// their projections as GEMMs over the step to the same session row by row.
+// The batched arm must have run (lin.chunks), the row-by-row arm not.
+func TestLinearRowsRideABatchStep(t *testing.T) {
+	for _, f := range []struct {
+		name string
+		open func(t *testing.T) *Model
+	}{
+		{"hybrid", func(t *testing.T) *Model { return hybridModelOpt(t, hyOpt{ctx: 320}) }},
+		{"synth-lfm2", func(t *testing.T) *Model {
+			path, ok := existingModel(testmodels.Path("synth-lfm2.gguf"))
+			if !ok {
+				testmodels.Missing(t, "MODEL MISSING: %s (set JITLLM_MODELS) (RULE 11)", testmodels.Path("synth-lfm2.gguf"))
+			}
+			m, err := Open(jlmOf(t, path), noTune, WithKVF16(false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return m
+		}},
+	} {
+		t.Run(f.name, func(t *testing.T) {
+			m := f.open(t)
+			defer m.Close()
+			vocab := min(m.Cfg.NVocab, 1000)
+			run := func(ref bool) ([][][]float32, int64) {
+				sc := NewScheduler(m, 3, 200, WithPromptBudget(40))
+				defer sc.Close()
+				sc.st.lin.ref = ref
+				lg := make([][][]float32, 3)
+				seqs := make([]Seq, 3)
+				for i := range seqs {
+					seqs[i] = Seq{Prompt: linPrompt(30+25*i, vocab)[i:], MaxTokens: 4}
+					seqs[i].Sample = func(row []float32) int32 {
+						lg[i] = append(lg[i], append([]float32(nil), row...))
+						return int32(3 + len(lg[i])%5)
+					}
+					sc.Submit(&seqs[i])
+				}
+				for sc.Pending() > 0 || sc.Live() > 0 {
+					done, err := sc.Step()
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, s := range done {
+						if s.Err != nil {
+							t.Fatal(s.Err)
+						}
+					}
+				}
+				if sc.Stats().MixedRows == 0 {
+					t.Fatal("no prompt rows rode a decoding step: the mixed step is untested")
+				}
+				return lg, sc.st.lin.chunks
+			}
+			want, refChunks := run(true)
+			got, chunks := run(false)
+			if chunks == 0 || refChunks != 0 {
+				t.Fatalf("arms not selected: batched ran %d chunks, row-by-row %d", chunks, refChunks)
+			}
+			e := newLinEnv(linExact)
+			for i := range want {
+				if len(got[i]) != len(want[i]) || len(want[i]) != 4 {
+					t.Fatalf("sequence %d: %d logit rows against %d", i, len(got[i]), len(want[i]))
+				}
+				for r := range want[i] {
+					e.cmp(t, "logits", fmt.Sprintf("sequence %d row %d", i, r), want[i][r], got[i][r])
+				}
+			}
+			t.Logf("%d step-chunks batched; worst error relative to max|ref|:%v", chunks, e)
+		})
+	}
+}

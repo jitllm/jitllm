@@ -408,10 +408,16 @@ twice or half its rows, which the gates' two requests do at every question:
 it now shrinks only after `visShrinkCalls` calls in a row need half of it
 (`tier.TestATowerIsBuiltForItsPicture`).
 
-Batching is per readout: a decoder's prompts are rows of one batch session; an
-encoder's sequences run one encoder pass each, inside the same batch call,
-because its blocks attend over every row of a call and the device's
-non-causal set has one window list, not a sequence partition beside the local
-windows. Packing several Laya sequences into one pass is open. Clef answers a request in one pass of its own, in a batch too: its head reads
-every row of the prompt, and a batch session gives back each row's last.
+Batching is per readout: a decoder's prompts are rows of one batch session;
+an encoder's sequences are packed into passes of up to 1024 rows
+(`Decider.layaPacked`). Each sequence's rows count their rotary positions from
+its start and attend inside it: on the host through each query's sequence
+bounds, on a device through the sequence runs (`nn.SeqRunsDevice`), staged as
+a second per-row window list beside the local windows, which every unwindowed
+non-causal block masks with (the local blocks' windows are cut to their
+sequence by the caller). Its type row and its markers are its own, and the
+head's last block reads each marker's own sequence. The violation is the
+sequences attending across one another. Clef answers a request in one pass of
+its own, in a batch too: its head reads every row of the prompt, and a batch
+session gives back each row's last.
 

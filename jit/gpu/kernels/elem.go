@@ -1169,7 +1169,7 @@ func WindowMaskRows(rows, heads, sstride int) (*ir.Kernel, error) {
 // and SiLU here, as one launch, before x_proj reads it.
 func BiasAct(width, rows int, k ActKind) (*ir.Kernel, error) {
 	switch k {
-	case ActSiLU, ActGELU, ActQuickGELU, ActReLU2, ActReLU:
+	case ActSiLU, ActGELU, ActQuickGELU, ActReLU2, ActReLU, ActIdentity:
 	default:
 		return nil, fmt.Errorf("kernels: BiasAct: %v is not an ungated activation", k)
 	}

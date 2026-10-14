@@ -83,7 +83,7 @@ func (d *Decider) checkImages(n int) error {
 	if n > MaxDecisionImages {
 		return fmt.Errorf("too many images, the maximum is %d", MaxDecisionImages)
 	}
-	if d.kind != jlm.DecisionLFM2D1 && d.kind != jlm.DecisionClef {
+	if d.kind != jlm.DecisionLFM2D1 && d.kind != jlm.DecisionClef && d.kind != jlm.DecisionD1Omni {
 		return fmt.Errorf("this model reads text only; a request with images needs a vision decision model")
 	}
 	if d.m.Tower() == nil {

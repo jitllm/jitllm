@@ -1617,3 +1617,55 @@ step are not fused; their regions carry far more work each.
 On the laptop an empty phase cost 489 ns against an empty region's 1.06 us
 (`JITLLM_FUSE_BENCH=1 go test ./engine/sched -run Cheaper`, wide IQR: indicative).
 The Xeon rows are in docs/perf/current.md's evidence trail and the PR.
+
+## The serving split: the E-cores prefill while the P-cores decode
+
+Evidence for `model.WithServingSplit` (on by default where the host has E-cores
+a thread can be kept on: macOS on Apple Silicon). The rule that governs it is
+AGENTS.md's; this is what was measured.
+
+With the default pools, one session decoding while another prefills drops the
+decoder from ~52 tok/s (alone) to ~11: both sessions' P-core pools and the
+prefill's P+E pool overlap, so every region of either waits on one lock, and the
+decoder, never alone on its crew, never fuses. With the split, while another
+State of the model ran a token in the last 250 ms a prefill goes (chunk by
+chunk) to the E-cores' own pool and lock, its threads at the E-core QoS class;
+the decoder keeps the P pool and fuses. A session alone, or two sessions both
+prefilling, are on today's pools exactly.
+
+Two things the first build got wrong, both found by the A/B showing 0 fused
+runs: an E-core crew over cores the P+E prefill crew overlaps took that crew's
+lock (and so was a user of the decoder's), and a session's idle decode view was
+a user of the P-cores while it prefilled elsewhere. The E crew now has a lock of
+its own, the P+E crew takes it after its own, and a view whose caller prefills
+on the E-cores is parked (`sched.Pool.Park`) so the decoder is alone.
+
+Rows (M4, Llama-3.2-1B Q4_K_M; decoder at depth 64 timing 64 tokens while a
+second session prefills 32-token prompts in a loop; one process, base and split
+interleaved, n=20, A/A first, two passes; decode ratios are base/split time):
+
+| E-core QoS class | load | A/A | pass 1 | pass 2 | decode base -> split | prefill beside it, base -> split |
+|---|---|---|---|---|---|---|
+| UTILITY (0x11) | none | 1.0025 (1.1%) | 4.391 (3.2%) | 4.361 (3.9%) | 9.6 -> 42 tok/s | 154 -> 106 tok/s |
+| USER_INITIATED (0x19) | none | 1.0051 (2.4%) | 2.467 (3.9%) | 2.462 (2.1%) | 10.9 -> 27 tok/s | 174 -> 256 tok/s |
+| UTILITY | 6 foreign busy loops | 1.0060 (1.8%) | 4.520 (5.6%) | 4.642 (6.8%) | 6.7 -> 30.5 tok/s | 107 -> 15 tok/s |
+| USER_INITIATED | 6 foreign busy loops | 0.9959 (1.5%) | 2.527 (7.2%) | 2.621 (5.0%) | 6.7 -> 17 tok/s | 107 -> 236 tok/s |
+
+(Fused runs: none in the base arm, 1260 in every split arm.) USER_INITIATED's
+prefill beside the decoder is faster than the base arm's: its threads are not
+held on the efficiency cluster, they take P-cores from the decoder, and the
+win is half. BACKGROUND (0x09), measured before, held the E-cores but starved to
+0 tok/s under a foreign E-core load. UTILITY is the class that holds the
+decode win in both cases and still finishes prompts under load (15 tok/s against
+107, not 0); `TestServingSplitAB` fails on a split round that finishes none.
+
+A single session decoding and prefilling in turn, split on against off: decode
+plus second prefill 1.0028x and 1.0000x (IQR/median 2.1%, 1.8%; A/A 0.987), first
+prefill 1.0084x, 1.0085x; no prefill was placed on the E-cores
+(`TestServingSplitSingleSessionUnchanged`). Linux is unchanged by construction:
+`sched.CanSplitE` is false off macOS, so no prefill is placed on an E pool, no
+crew takes an extra lock, and the thread-class calls are empty.
+
+The cost is the prefill beside a decoder: it loses about 30% against the
+shared pools (154 -> 106). It is the trade, and `WithServingSplit(false)` /
+`JITLLM_SERVING_SPLIT=0` is the other arm.

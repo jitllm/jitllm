@@ -115,7 +115,7 @@ func padPatchK(t *jlm.Tensor, nembd int) error {
 func quantizeTower(ts []jlm.Tensor) error {
 	for i := range ts {
 		t := &ts[i]
-		if !towerMatrix[t.Role] {
+		if !towerMatrix[t.Role] && !jlm.AudioMatrix(t.Role) {
 			continue
 		}
 		if jlm.Packed(t.Type) {

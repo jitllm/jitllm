@@ -324,7 +324,20 @@ func (o *openOpts) devOpts() backend.Opts {
 // persistent kernels (Config.Persist); grid, when positive, caps their grid
 // below the device's co-residency limit (Config.PersistGrid). Off by default.
 func WithPersist(on bool, grid int) Option {
-	return WithConfig(func(c *Config) { c.Persist, c.PersistGrid = on, grid })
+	return WithConfig(func(c *Config) { c.Persist, c.PersistDeps, c.PersistGrid = on, false, grid })
+}
+
+// WithPersistDeps is WithPersist with the persistent kernels' tasks ordered
+// by dependency counters rather than grid barriers (Config.PersistDeps,
+// docs/design/dep-block.md). Off by default.
+func WithPersistDeps(on bool, grid int) Option {
+	return WithConfig(func(c *Config) { c.Persist, c.PersistDeps, c.PersistGrid = on, on, grid })
+}
+
+// WithGateUpFuse sets Config.GateUpFuse: a dense gated FFN's gate and up in
+// one launch, down forming act(gate)*up in its prologue.
+func WithGateUpFuse(on bool) Option {
+	return WithConfig(func(c *Config) { c.GateUpFuse = on })
 }
 
 // WithAutoStream sets whether a mixture block no device can hold resident is

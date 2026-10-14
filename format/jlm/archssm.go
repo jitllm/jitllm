@@ -44,9 +44,18 @@ const (
 	// and attention blocks with no rotary among them, each followed by a
 	// SwiGLU FFN or a softmax top-k mixture (on the blocks with a router).
 	ArchJamba Arch = 106
+
+	// ArchLFM2Enc is LFM2 made an encoder (LiquidAI's LFM2.5-Encoder, d1-omni's
+	// trunk): LFM2's blocks with no causal mask, a centred 3-tap convolution
+	// where LFM2's is causal, and the final norm over every row. A code of its
+	// own so a reader that knows only the decoder refuses the container rather
+	// than running it with a causal mask. A media prefix's rows attend only to
+	// each other and the convolution never lets them read the text.
+	ArchLFM2Enc Arch = 107
 )
 
 var ssmArchNames = map[Arch]string{
 	ArchMamba2: "mamba2", ArchGraniteHybrid: "granitehybrid", ArchNemotronH: "nemotron_h",
 	ArchFalconH1: "falcon-h1", ArchLFM2: "lfm2", ArchMamba: "mamba", ArchJamba: "jamba",
+	ArchLFM2Enc: "lfm2enc",
 }

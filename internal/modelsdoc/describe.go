@@ -128,6 +128,7 @@ var projectorModels = map[string]string{
 	"janus_pro":        "Janus-Pro",
 	"kimivl":           "Kimi-VL (MoonViT)",
 	"lfm2":             "LFM2-VL, LFM2.5-VL and d1-3B (SigLIP2 NaFlex, tiles and a thumbnail)",
+	"d1omni_v":         "d1-omni-600M's vision half (LFM2-VL's tower and projector, bilinear tiles; its rows a prefix of the decision prompt)",
 	"llama4":           "Llama 4 Scout, Maverick",
 	"mlp":              "LLaVA and LLaVA-style models (a CLIP tower and a two-matrix MLP), llava-phi-3",
 	"phi4":             "Phi-4-reasoning-vision-15B",

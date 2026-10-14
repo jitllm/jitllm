@@ -6335,3 +6335,96 @@ grid. What would win is not composition but fusion that keeps an intermediate
 on chip (norm into the matvec's activation, the reduce into its consumer) and
 so removes phases, which is the composer's next step rather than this one.
 Off by default (RULE 6: a clear regression).
+
+## The dependency-counter block: correct, and slower than both
+
+`Config.PersistDeps` (`tier.WithPersistDeps`, `JITLLM_GPU_PERSIST=deps`;
+design in `docs/design/dep-block.md`) composes the same runs as the persistent
+block and orders them with completion counters (`ir.PersistDeps`): a task waits
+only on the tasks it reads or overwrites, a tile of an elementwise task only on
+the producer tiles its span analysis says it touches, and a workgroup with no
+tile in a task skips its waits.
+
+Gates on the V100 (sm_70): `TestPersistentDecodeMatchesPerOp` holds the
+dependency-counter arm bit-identical to per-op on Llama-3.2-1B, Qwen2-1.5B and
+gemma-2b, every block placed with and without the graph and on a partial seam;
+`TestDepDecodeSeesABrokenWait` (every wait returning at once) changes 897792 of
+1026048 logits; `backend.TestDepCountersOrderTheChain` and its violation hold
+the protocol at the co-residency limit (1280 workgroups of 128) and inside a
+graph. A Llama-3.2-1B decode takes 476 tile edges in 1792 kernels; the rest
+are whole-task edges, because every matvec reads its whole input.
+
+Measured on the V100 (CUDA, in-process `verify -ab`, n=24 rounds of 64
+tokens, graph replay, two passes):
+
+| model | A/A | deps vs per-op | deps vs grid barrier |
+|---|---|---|---|
+| Llama-3.2-1B Q4_K_M | 1.0010 / 0.9945 | 0.8467 / 0.8430 | 0.9696 / 0.9702 |
+| Llama-3.2-3B Q4_K_M | 1.0009 / 1.0017 | 0.8164 / 0.8189 | 0.9700 / 0.9730 |
+| Llama-3.1-8B Q4_K_M | 0.9996 / 1.0009 | 0.8555 / 0.8572 | 0.9721 / 0.9728 |
+
+(IQR/median 0.9-5.3%.) It loses 14-18% to per-op and 3% to the grid barrier.
+A whole-task wait still waits on every active workgroup of the producer --
+the barrier's arrival set -- and adds a signal per task per workgroup and a
+wait per tile; the decode block's edges are almost all whole, so the counters
+remove little waiting and add atomics. What would change this is fusion that
+keeps an intermediate on chip and removes tasks, not finer ordering of the
+same tasks. Off by default (RULE 6: a clear regression).
+
+## Gate and up in one launch: exact, and a loss past the 1B
+
+`Config.GateUpFuse` (`tier.WithGateUpFuse`, `JITLLM_GPU_GATEUP=1`) runs a
+dense gated FFN's gate and up as one `kernels.MatVecSegments` launch over
+their shared operand, and has down form act(gate)*up from the two rows and
+quantize it in its prologue (`kernels.ActIn.Gated`) with the residual add:
+three launches where there were four (gate, up writing act(gate)*up, down
+quantizing it). Each row keeps its own reduction, and the element and its
+rounding are QuantizeAct's on both paths, so the logits are the same bits:
+`TestGateUpFuseMatchesThreeLaunches` (Llama-3.2-1B on the V100, every block
+placed with and without the graph and a half seam; both arms read one tuner
+cache so their splits agree), violation `TestGateUpFuseSeesASwap` (gate and up
+handed to down the wrong way round: 384768 of 513024 logits differ). It needs
+gate and up at one in-group split, which the tuner picks on a card and the
+fitted table does not (`Stats.GateUpWhy` names the refusal).
+
+V100, CUDA, tuner on (`JITLLM_GPU_TUNE=1`), in-process `verify -ab`, n=24
+rounds of 64 tokens, two passes:
+
+| model | A/A | fused vs four launches |
+|---|---|---|
+| Llama-3.2-1B Q4_K_M | 0.9977 / 1.0016 | 1.0064 / 1.0052 |
+| Llama-3.2-3B Q4_K_M | 1.0004 / 1.0018 | 0.9481 / 0.9545 |
+| Llama-3.1-8B Q4_K_M | 0.9986 / 1.0002 | 0.9124 / 0.9133 |
+
+(IQR/median 0.3-1.4%.) The launch it removes is worth half a percent on the
+1B; the cost it adds is down's prologue, which every one of down's workgroups
+pays over the whole FFN width (8192 on the 3B, 14336 on the 8B) -- the same
+reason the tuner keeps down's own operand prologue off on this card. Off by
+default; a per-shape choice is the joint tuner's to make. A form with no
+prologue in down needs one workgroup to own gate row i and up row i and
+write act(gate)*up itself (two weight streams a thread), which MatVecSegments
+cannot express.
+
+Note for every earlier `verify -ab` row in this file: verify pins the split
+tuner off unless `JITLLM_GPU_TUNE` says otherwise, so those rows are at the
+fitted table's splits, not the shipping tuned ones (the persistent and
+dependency-counter rows included).
+
+## Prefill on the V100: where a prompt's time goes
+
+`jitllm speed` with per-kernel timing (each kernel padded by ~3.9 us of
+event), V100, CUDA. Llama-3.2-1B Q4_K_M at 2048 tokens (102.3 ms of kernels):
+the f16 tensor-core GEMMs (GemmVolta) 70.5 ms, flash prefill 17.2 ms,
+rmsnormf16tw 3.5, actmulf16t 4.0, ropeqkvpaged 2.6, add 1.4, actf16t 1.3,
+split-K reduce 1.1. Llama-3.1-8B at 2048 (516 ms): GEMMs 412 ms, flash
+prefill 53.6, rmsnormf16tw 15.0, actmulf16t 13.0, rope 9.6, actf16t 5.5,
+add 5.0, reduce 2.2. Rates, three runs: 1B pp512 18270 / 16981 / 18292 tok/s,
+pp2048 18230 / 17008 / 18253; 8B pp512 3584 / 3569 / 3029, pp2048 3616 /
+3636 / 3608.
+
+The 8B's 14336x4096 GEMM at 512 tokens is ~770 us for 60 GFLOP, ~78 TFLOPS
+against the card's 125 tensor-core peak (62%); the 4096x4096 ~68 TFLOPS.
+GemmVolta already stages double-buffered (a trip's dequant runs under the
+previous trip's MMAs). At 64 tokens the background tuner's trials
+(WithLazyTune) land among the first prompts' kernels and the first
+prompt's rate is a fraction of the third (8B pp64 535 / 778 / 1850 tok/s).

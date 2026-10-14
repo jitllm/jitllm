@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jitllm/jitllm/dev/bench"
@@ -35,7 +36,7 @@ func verifyCmd(args []string) error {
 	// 0 asks the device, like run's.
 	vram := bytesFlag(fs, "vram", 0, "device weight budget, bytes or 3G/512M; 0 asks the device")
 	maxmem := bytesFlag(fs, "maxmem", 0, "host weight residency budget, bytes or 3G/512M; 0 works it out")
-	ab := fs.String("ab", "", "instead of verifying, run a paired A/B: split, submit, head, graph, softmax, fuse, actfuse, ropetab, persist, persist-aa, attnchunk, attnpair or regs")
+	ab := fs.String("ab", "", "instead of verifying, run a paired A/B: split, submit, head, graph, softmax, fuse, actfuse, ropetab, persist, persistdeps, persistdeps-grid, persist-aa, gateup, gateup-aa, attnchunk, attnpair or regs")
 	rounds := fs.Int("rounds", 21, "A/B rounds")
 	verify := fs.Bool("verify", false, "recompute every served matvec on the host and report disagreements")
 	prefill := fs.Int("prefill", 0, "gate the BATCHED device prefill: prefill this many tokens on both tiers and diff")
@@ -880,13 +881,27 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 		// no round pays for the other's capture or composition.
 		a = bench.Case{Name: "per-op launches", Fn: func(it int) { g.Persist = false; step(it) }}
 		b = bench.Case{Name: "persistent block kernels", Fn: func(it int) { g.Persist = true; step(it) }}
+	case "persistdeps":
+		// Dependency counters against the per-op path (Config.PersistDeps).
+		a = bench.Case{Name: "per-op launches", Fn: func(it int) { g.Persist, g.PersistDeps = false, false; step(it) }}
+		b = bench.Case{Name: "dependency-counter block kernels", Fn: func(it int) { g.Persist, g.PersistDeps = true, true; step(it) }}
+	case "persistdeps-grid":
+		// Dependency counters against grid barriers, both composed.
+		a = bench.Case{Name: "grid-barrier block kernels", Fn: func(it int) { g.Persist, g.PersistDeps = true, false; step(it) }}
+		b = bench.Case{Name: "dependency-counter block kernels", Fn: func(it int) { g.Persist, g.PersistDeps = true, true; step(it) }}
+	case "gateup":
+		a = bench.Case{Name: "gate, up, down", Fn: func(it int) { g.GateUpFuse = false; step(it) }}
+		b = bench.Case{Name: "gate+up, down forming act(gate)*up", Fn: func(it int) { g.GateUpFuse = true; step(it) }}
+	case "gateup-aa":
+		a = bench.Case{Name: "gate, up, down", Fn: func(it int) { g.GateUpFuse = false; step(it) }}
+		b = bench.Case{Name: "gate, up, down (again)", Fn: func(it int) { g.GateUpFuse = false; step(it) }}
 	case "persist-aa":
 		// The A/A self-control for "persist": the same arm twice through the
 		// same harness (RULE 2).
 		a = bench.Case{Name: "per-op launches", Fn: func(it int) { g.Persist = false; step(it) }}
 		b = bench.Case{Name: "per-op launches (again)", Fn: func(it int) { g.Persist = false; step(it) }}
 	default:
-		panic(fmt.Errorf("jitllm: -ab takes split, submit, head, graph, softmax, fuse, actfuse, ropetab, persist or persist-aa, not %q", which))
+		panic(fmt.Errorf("jitllm: -ab takes split, submit, head, graph, softmax, fuse, actfuse, ropetab, persist, persistdeps, persistdeps-grid, persist-aa, gateup or gateup-aa, not %q", which))
 	}
 	r := bench.AB(a, b, rounds, n)
 	fmt.Printf("\n%d blocks on device\n%s\n", s.GPULayers(), r)
@@ -894,10 +909,13 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 		st := g.Stats()
 		fmt.Printf("%d table(s) built on the device, %d uploaded\n", st.RopeTables, st.RopeTableUploads)
 	}
-	if which == "persist" {
+	if strings.HasPrefix(which, "gateup") {
+		fmt.Printf("gate/up fused in %d FFNs %s\n", g.Stats().GateUpFused, g.Stats().GateUpWhy)
+	}
+	if strings.HasPrefix(which, "persist") {
 		st := g.Stats()
-		fmt.Printf("persistent: %d launches ran %d per-op launches in %d phases; %d built, %d fell back%s\n",
-			st.PersistLaunches, st.PersistParts, st.PersistPhases, st.PersistCompiles, st.PersistFallbacks,
+		fmt.Printf("persistent: %d launches (%d with dependency counters, %d tile edges) ran %d per-op launches in %d phases; %d built, %d fell back%s\n",
+			st.PersistLaunches, st.PersistDepLaunches, st.PersistDepTiles, st.PersistParts, st.PersistPhases, st.PersistCompiles, st.PersistFallbacks,
 			map[bool]string{true: "; declined: " + st.PersistWhy, false: ""}[st.PersistWhy != ""])
 	}
 	if which == "fuse" || which == "actfuse" {

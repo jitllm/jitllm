@@ -363,7 +363,9 @@ func (a Arch) Valid() bool { return a != ArchNone && (a <= archMax || a.name() !
 // Encoder reports whether a is an embedding encoder (the BERT family): run by
 // the engine's encoder rather than its decoder graph, with no KV cache and no
 // logits. A decoder that pools (FlagPoolMean and its siblings) is not one.
-func (a Arch) Encoder() bool { return a == ArchBERT || a == ArchNomicBERT || a == ArchModernBERT }
+func (a Arch) Encoder() bool {
+	return a == ArchBERT || a == ArchNomicBERT || a == ArchModernBERT || a == ArchLFM2Enc
+}
 
 // Config is the model description. Every field is written by the converter and
 // read by the engine; nothing is derived at load from a string.
@@ -1018,6 +1020,11 @@ type Vision struct {
 	// only when set.
 	TileSize  uint32
 	Tolerance float32
+
+	// Audio is the container's audio tower, nil for none: its blocks follow
+	// the vision blocks in the tower's page array (see Audio). The last
+	// optional tail of the record.
+	Audio *Audio
 }
 
 // Projector is how tower embeddings become language-model tokens.

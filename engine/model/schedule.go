@@ -61,6 +61,9 @@ type SchedulerStats struct {
 	PromptRows, MixedRows, MaxChunk int
 	// MaxSeqs is the most sequences one step carried rows of.
 	MaxSeqs int
+	// RoomHome is the steps whose device had no room for them
+	// (nn.RowsRoomer), so blocks came home before the step.
+	RoomHome int
 }
 
 // SchedulerOption configures a Scheduler (NewScheduler).
@@ -135,7 +138,11 @@ func (sc *Scheduler) Live() int {
 }
 
 // Stats is what the Steps so far have run.
-func (sc *Scheduler) Stats() SchedulerStats { return sc.stats }
+func (sc *Scheduler) Stats() SchedulerStats {
+	st := sc.stats
+	st.RoomHome = sc.st.roomHome
+	return st
+}
 
 // Close releases the session.
 func (sc *Scheduler) Close() { sc.st.Close() }
@@ -282,6 +289,13 @@ func (sc *Scheduler) promptBudget() int {
 	width := MaxPrefillChunk
 	if sc.st.devCount() > 0 {
 		width = nn.MaxDevicePrefillChunk
+		// A device whose budget held a narrower batched scratch refuses a
+		// wider step rather than splitting it: keep under what it holds.
+		if rw, ok := sc.st.ld.(nn.RowsWidther); ok {
+			if w := rw.RowsWidth(width); w > 0 {
+				width = w
+			}
+		}
 	}
 	return max(width-len(sc.live), 1)
 }

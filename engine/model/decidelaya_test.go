@@ -108,8 +108,10 @@ func layaExpressible(m *Model, violation string) int {
 
 // layaDevTol is how far a device's logit may sit from the reference's beyond
 // the host's tolerance: the f32 reduction order of the device's own kernels
-// over 28 blocks (the checkpoint) or 2 (the fixture).
-var layaDevTol = map[string]float64{"fixture": 2e-4, "laya": 0.035}
+// over 28 blocks (the checkpoint) or 2 (the fixture), and on a V100 the
+// binary16 operands of sm_70's prompt kernels: the fixture there reads 2.6e-4,
+// and 1e-6 with tier.Config.NoMMA and NoVolta, which take them away.
+var layaDevTol = map[string]float64{"fixture": 4e-4, "laya": 0.035}
 
 func TestLayaMatchesReference(t *testing.T) {
 	for _, c := range layaCases {

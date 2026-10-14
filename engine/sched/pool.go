@@ -44,7 +44,8 @@ func newConfig(opts []Option) config {
 }
 
 // WithCoreSet picks which cores the pool may use: "" or "p" for P-cores, "pe"
-// to add the E-cores, "smt" for hyperthread siblings, "all" for everything.
+// to add the E-cores, "e" for the E-cores alone, "smt" for hyperthread
+// siblings, "all" for everything.
 func WithCoreSet(name string) Option { return func(c *config) { c.coreset = name } }
 
 // WithCores caps how many of them to take. It exists to measure scaling, not to
@@ -92,6 +93,8 @@ func CoreSet(name string) []int {
 	switch name {
 	case "pe":
 		return append(PCores(), ECores()...)
+	case "e":
+		return ECores()
 	case "smt":
 		return SMTSiblings()
 	case "all":
@@ -196,6 +199,16 @@ type Pool struct {
 	// beside is a view opened beside another of the same caller's
 	// (SharedBeside), which the turn's users do not count.
 	beside bool
+	// idle is how many of the crew's views are away (Park), under crews.mu.
+	idle int
+	// ex is the locks of crews wholly on the E-cores that this crew's cores
+	// overlap, taken after mu (lockAll); see SharedBeside.
+	// It is copied on write (a crew opening or closing changes it while regions
+	// run) and held is what the lock holder took, under mu.
+	ex   atomic.Pointer[[]*turn]
+	held []*turn
+	// away is this view's own state.
+	away bool
 	// fz is an open fused region's state (fuse.go), on the crew.
 	fz fused
 }
@@ -244,9 +257,20 @@ func New(cpus []int, opts ...Option) *Pool {
 		}
 	}
 	p.spin.Store(int64(p.spinDef))
+	// A pool wholly on the E-cores asks for them: macOS has no affinity, and
+	// its scheduler keeps a background-QoS thread on the efficiency cluster
+	// (EQoS). That keeps such a pool off the P-cores another session decodes
+	// on, and its cores do not overlap theirs, so it takes turns on a lock of
+	// its own (Shared).
+	e := allE(cpus)
 	for i := range p.start {
 		p.start[i] = make(chan struct{}, 1)
-		go p.worker(i)
+		go func() {
+			if e {
+				EQoS()
+			}
+			p.worker(i)
+		}()
 	}
 	return p
 }
@@ -649,8 +673,8 @@ func (p *Pool) dispatch(j job) {
 		// and the published job are the crew's. The participant count is the
 		// view's own, so each user's tuner keeps its answer.
 		c := p.crew
-		c.mu.Lock(p.wake)
-		defer c.mu.Unlock()
+		c.lockAll(p.wake)
+		defer c.unlockAll()
 		if c.stopped.Load() {
 			p.nSerial.Add(1)
 			j.call(0, 0, total)

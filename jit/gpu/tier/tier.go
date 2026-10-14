@@ -487,9 +487,20 @@ type Config struct {
 	// it replaces inside a CUDA graph (gpu-kernels.md, "A persistent decode
 	// block"). CUDA only; elsewhere it is declined (Stats.PersistWhy).
 	Persist bool
+	// PersistDeps orders a persistent kernel's tasks with dependency
+	// counters (ir.PersistDeps): a task waits only for the tasks it reads or
+	// overwrites, a tile of an elementwise task only for the producer tiles
+	// whose elements it touches, and a workgroup with nothing to do in a task
+	// does not wait for it. A mode of Persist; off by default.
+	PersistDeps bool
 	// PersistGrid caps a persistent kernel's grid below the co-residency
 	// limit; zero takes the limit, or the widest launch's groups when fewer.
 	PersistGrid int
+	// GateUpFuse runs a dense gated FFN's gate and up as one launch over
+	// their shared operand (kernels.MatVecSegments) and has down form
+	// act(gate)*up and quantize it in its prologue: three launches where there
+	// were four, every row reduced as before. Off by default.
+	GateUpFuse bool
 	// NoGraph issues the token's launches one driver call at a time instead of
 	// replaying a captured graph: the other arm of that comparison, a field so
 	// both arms can be live in one process.
@@ -692,13 +703,21 @@ type Stats struct {
 	// launches that carried decode's fusions over every token: q/k/v in one
 	// launch, the residual added by the projection, and act(gate)*up written
 	// by the up projection.
+	// GateUpFused counts dense gated FFNs whose gate and up ran as one
+	// launch and whose down formed act(gate)*up (Config.GateUpFuse).
+	GateUpFused int
+	// GateUpWhy is why the last block's gate and up could not be fused.
+	GateUpWhy                              string
 	RagQKVFused, RagResFused, RagGateFused int
 	// PersistLaunches counts persistent kernels launched (Config.Persist),
 	// PersistParts the per-op launches they ran, PersistPhases their
 	// grid-barrier-separated phases, PersistCompiles the compositions built
 	// and PersistFallbacks those that failed and ran per-op; PersistWhy is
 	// why the path is declined on this device.
+	// PersistDepLaunches counts those launched with dependency counters
+	// (Config.PersistDeps), PersistDepTiles their tile-wise edges.
 	PersistLaunches, PersistParts, PersistPhases, PersistCompiles, PersistFallbacks int
+	PersistDepLaunches, PersistDepTiles                                             int
 	PersistWhy                                                                      string
 	// RagHeadOne counts ragged steps whose head ran decode's own projection on
 	// the one row that wanted logits, rather than a batched twin over every
@@ -956,6 +975,9 @@ type Stats struct {
 	// RecZeroSource counts the bytes of zeros those copies read, uploaded
 	// once a zeroing.
 	RecZeroSource uint64
+	// RecZeroHost counts seat zeroings written from the host because the
+	// kept zeros could not be had on the device (recZeroLayers).
+	RecZeroHost int
 	// PagedStagedLaunches counts decode attentions that ran the staged
 	// kernels rather than FlashDecodeKV (kernels.ChooseDecodePlan).
 	PagedStagedLaunches int
@@ -1146,6 +1168,10 @@ func (s *Stats) add(o Stats) {
 	s.VoltaMV += o.VoltaMV
 	s.SpillRefused += o.SpillRefused
 	s.RagGroupMV += o.RagGroupMV
+	s.GateUpFused += o.GateUpFused
+	if o.GateUpWhy != "" {
+		s.GateUpWhy = o.GateUpWhy
+	}
 	s.RagQKVFused += o.RagQKVFused
 	s.RagResFused += o.RagResFused
 	s.PersistLaunches += o.PersistLaunches
@@ -1153,6 +1179,8 @@ func (s *Stats) add(o Stats) {
 	s.PersistPhases += o.PersistPhases
 	s.PersistCompiles += o.PersistCompiles
 	s.PersistFallbacks += o.PersistFallbacks
+	s.PersistDepLaunches += o.PersistDepLaunches
+	s.PersistDepTiles += o.PersistDepTiles
 	if o.PersistWhy != "" {
 		s.PersistWhy = o.PersistWhy
 	}
@@ -1270,6 +1298,7 @@ func (s *Stats) add(o Stats) {
 	s.RecZeroBytes += o.RecZeroBytes
 	s.RecZeroCopies += o.RecZeroCopies
 	s.RecZeroSource += o.RecZeroSource
+	s.RecZeroHost += o.RecZeroHost
 	s.PagedPrefill70 += o.PagedPrefill70
 	s.PagedAccMMA += o.PagedAccMMA
 	s.FlashPrefill80 += o.FlashPrefill80
@@ -1649,6 +1678,10 @@ type devShared struct {
 	// device's and not a session's: their calls are one at a time
 	// (GPU.convMu).
 	convTo launchTo
+	// convCall is the convolutional submission's arguments, and convFn its
+	// method value, made once (conv.go).
+	convCall convCallArgs
+	convFn   func(backend.Session)
 	// roomGen moves every time this device may have gained room: a refund, or
 	// a budget raised. A caller that gave blocks up reads it to know when
 	// asking for them back could succeed. See GPU.RoomGen.
@@ -1913,7 +1946,9 @@ type GPU struct {
 	// its submissions, in the scratch every convolutional block there shares
 	// (conv.go), so two sessions' calls go one after the other.
 	convTmp [2][]float32
-	convMu  sync.Mutex
+	// convRuns is ConvLayers' runs, reused under convMu.
+	convRuns []run
+	convMu   sync.Mutex
 	// rowsErr is why the last LayersRows failed, naming the device: the
 	// devices' LastErr summed by Stats is whichever wrote last, not the one
 	// that refused.
@@ -2017,6 +2052,7 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 	// A jitllmtest build can make the persistent path every tier's default
 	// (PersistByDefaultForTest), so the regression gates run through it.
 	cfg.Persist = persistDefault
+	cfg.PersistDeps = persistDepsDefault
 	for _, f := range o.cfg {
 		f(cfg)
 	}
@@ -2290,6 +2326,12 @@ func freeScratch(bs *blockScratch) {
 		}
 	}
 	bs.vwins = nil
+	for _, b := range bs.vsegs { // the packed sequences' buffers, likewise
+		if b != nil {
+			b.Free()
+		}
+	}
+	bs.vsegs = nil
 	freePaged(bs.pkv)
 	bs.mlab.free()
 	bs.ds4.free()

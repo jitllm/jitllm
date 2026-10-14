@@ -60,6 +60,7 @@ func WithGEMMTile(string) Option       { return func(*Config) {} }
 func WithPrefillChunk(int) Option      { return func(*Config) {} }
 func WithParticipants(int) Option      { return func(*Config) {} }
 func WithPrefillCoreSet(string) Option { return func(*Config) {} }
+func WithServingSplit(bool) Option     { return func(*Config) {} }
 func WithoutGEMM(bool) Option          { return func(*Config) {} }
 func WithActWindow(int) Option         { return func(*Config) {} }
 
@@ -111,6 +112,8 @@ func (f *JIT) PrefillChunk() int { return 32 }
 func (f *JIT) ObserveChunk(width, ntok int, d time.Duration) {}
 func (f *JIT) BeginPrefill()                                 {}
 func (f *JIT) EndPrefill()                                   {}
+func (f *JIT) BeginPrefillE() bool                           { return false }
+func (f *JIT) EndPrefillE()                                  {}
 
 // AddAttn, AttnScores and AttnAcc have no generated code here.
 func (f *JIT) AddAttn(hd, kvStride int, kv cpu.KVFmt)         {}
@@ -239,3 +242,5 @@ func (f *JIT) WidenKVRows(dst, src []float32, hd, n int)    { unsupported() }
 func (f *JIT) MatMulFloat(out []float32, t quant.Type, w []byte, x []float32, nrows, k, ntok int) bool {
 	return false
 }
+
+func Ln32JIT(x []float32) { unsupported() }

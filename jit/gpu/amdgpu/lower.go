@@ -325,6 +325,8 @@ func (l *lowerer) op(i int, o ir.Op, v ir.Value) error {
 		l.emit("fence syncscope(\"workgroup\") acquire")
 	case ir.OpGridBarrier:
 		l.gridBarrier(i+1, val(a0))
+	case ir.OpDepTask, ir.OpDepEpoch, ir.OpDepWait, ir.OpDepSignal, ir.OpDepExit:
+		return fmt.Errorf("amdgpu: op %d: %s: dependency counters are not lowered for AMDGPU yet", i, o.Kind)
 	case ir.OpConst:
 		switch o.Type {
 		case ir.F32:

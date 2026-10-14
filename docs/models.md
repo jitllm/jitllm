@@ -10,7 +10,7 @@ by name. `internal/srcgate.TestModelsDocIsGenerated` fails when the page and the
 - **69** GGUF text architecture names (`general.architecture`, `convert.Architectures`) on **60** graphs
 - **31** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **24** graphs, **1** of them reached only from safetensors
 - **61** graphs in all (`jlm.Arch`)
-- **18** vision projectors (`clip.projector_type`, `convert.Projectors`)
+- **19** vision projectors (`clip.projector_type`, `convert.Projectors`)
 - **3** embedding encoders, and pooling on any decoder
 - **15** weight types read (`quant.Dequantable`), **11** of them packed quantizations (`quant.PackedTypes`)
 - **87** models in the download catalogue (`jitllm library`), **9** of them with a vision tower
@@ -131,6 +131,7 @@ convert together, the text model one of the architectures above. The projector i
 
 | Projector | Models |
 |---|---|
+| `d1omni_v` | d1-omni-600M's vision half (LFM2-VL's tower and projector, bilinear tiles; its rows a prefix of the decision prompt) |
 | `gemma3` | Gemma 3 (SigLIP) |
 | `gemma3nv` | Gemma 3n E2B, E4B (MobileNet-V5) |
 | `gemma4v` | Gemma 4 |

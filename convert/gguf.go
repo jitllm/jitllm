@@ -74,6 +74,8 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 			return nil, fmt.Errorf("convert: %s is itself a vision tower; the first "+
 				"argument is the TEXT model", src)
 		}
+		af := vf
+		vf = withoutAudio(vf)
 		vs, err := sourceOf(vf)
 		if err != nil {
 			return nil, err
@@ -96,6 +98,19 @@ func buildGGUF(f, vf *meta.File, src, mmproj string, o options) (*jlm.Source, er
 			}
 		}
 		s.Tensors = append(s.Tensors, vs.Tensors...)
+		// The audio half, its blocks after the vision blocks.
+		aud, ats, err := audioOf(af, s.Vision.NLayer)
+		if err != nil {
+			return nil, err
+		}
+		if aud != nil {
+			if aud.ProjDim != s.Config.NEmbd {
+				return nil, fmt.Errorf("convert: %s's audio projects to %d and %s wants %d", mmproj, aud.ProjDim,
+					src, s.Config.NEmbd)
+			}
+			s.Vision.Audio = aud
+			s.Tensors = append(s.Tensors, ats...)
+		}
 		if s.Vision.Projector == jlm.ProjPixtral {
 			if err := imgBreakRow(s); err != nil {
 				return nil, err
@@ -595,8 +610,14 @@ func unfuse(e *jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, bool, error) {
 	// linear block uses the same name for a delta-rule projection that deltaGeom
 	// splits, and the row-count check below refuses a wrong split. nomic-bert
 	// and the C6 blocks (with a fused bias beside it) are q|k|v row ranges.
-	if c == nil || !fusesQKV(c.Arch) {
+	if c == nil || !fusesQKV(c.Arch) && !decisionHeadBlock(e, c) {
 		return nil, false, nil
+	}
+	// A decision head's block (Laya's, d1-omni's) is nn.MultiheadAttention's
+	// in_proj: q, k and v each the residual's width, whatever the trunk's
+	// heads.
+	if decisionHeadBlock(e, c) && (e.Role == jlm.RoleAttnQKV || e.Role == jlm.RoleAttnQKVBias) {
+		return unfuseThirds(e, c)
 	}
 	if e.Role == jlm.RoleAttnQKVBias {
 		return unfuseBias(e, c)

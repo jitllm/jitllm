@@ -40,9 +40,15 @@ const (
 // build (PersistByDefaultForTest), and persistTotal every persistent kernel
 // launched in the process, which that build's gates read.
 var (
-	persistDefault bool
-	persistTotal   atomic.Int64
+	persistDefault, persistDepsDefault bool
+	persistTotal, persistDepTotal      atomic.Int64
 )
+
+// depWords is a session's dep buffer, in u32 words: every composed kernel's
+// counter region is carved from it at plan time (persistCache.depNext), at
+// the same offset in every session's buffer. A plan that would pass the end
+// is composed with grid barriers instead.
+const depWords = 1 << 16
 
 // persistPend is one collected launch.
 type persistPend struct {
@@ -65,8 +71,9 @@ type persister struct {
 	bind [persistMaxPend][persistMaxArgs]int
 	sig  []uint64
 	args []backend.Buf
-	// sync is the session's grid barrier buffer (ir.GridSyncWords words).
-	sync backend.Buf
+	// sync is the session's grid barrier buffer (ir.GridSyncWords words),
+	// dep its dependency counters (depWords words, Config.PersistDeps).
+	sync, dep backend.Buf
 }
 
 // persistSeg is one piece of a plan: launches [lo, hi), composed into k, or
@@ -78,6 +85,10 @@ type persistSeg struct {
 	grid   int
 	width  int
 	phases int
+	// dep is a kernel ordered by dependency counters, launched on the
+	// session's dep buffer; tiles is its tile-wise edges.
+	dep   bool
+	tiles int
 }
 
 // persistPlan is a block's composition, found again by its signature.
@@ -92,6 +103,8 @@ type persistCache struct {
 	mu    sync.Mutex
 	plans map[uint64][]*persistPlan
 	why   string // the last composition that fell back, and why
+	// depNext is the first dep-buffer word no plan's region holds.
+	depNext int
 }
 
 // persistOK reports whether this device runs persistent kernels, and why not.
@@ -138,6 +151,19 @@ func (g *devTier) ensurePersist() bool {
 		}
 		t.ps.sync = b
 	}
+	if g.PersistDeps && t.ps.dep == nil {
+		b, err := g.dev.Alloc(4 * depWords)
+		if err != nil {
+			g.PersistWhy = "dep buffer: " + err.Error()
+			return false
+		}
+		if err := b.Write(make([]byte, 4*depWords)); err != nil {
+			b.Free()
+			g.PersistWhy = "dep buffer: " + err.Error()
+			return false
+		}
+		t.ps.dep = b
+	}
 	return true
 }
 
@@ -147,6 +173,10 @@ func (t *launchTo) closePersist() {
 	if t.ps != nil && t.ps.sync != nil {
 		t.ps.sync.Free()
 		t.ps.sync = nil
+	}
+	if t.ps != nil && t.ps.dep != nil {
+		t.ps.dep.Free()
+		t.ps.dep = nil
 	}
 }
 
@@ -219,6 +249,13 @@ func (g *devTier) persistIssue(t *launchTo, ps *persister, n int) error {
 	// grid, width and binding pattern.
 	ps.nd = 0
 	ps.sig = ps.sig[:0]
+	// The mode first: a plan composed with grid barriers is not one composed
+	// with dependency counters.
+	if g.PersistDeps && ps.dep != nil {
+		ps.sig = append(ps.sig, 1)
+	} else {
+		ps.sig = append(ps.sig, 0)
+	}
 	for i := 0; i < n; i++ {
 		p := &ps.pend[i]
 		ps.sig = append(ps.sig, uint64(uintptr(unsafe.Pointer(p.src))), uint64(p.groups)<<32|uint64(p.width), uint64(p.nb))
@@ -259,7 +296,11 @@ func (g *devTier) persistIssue(t *launchTo, ps *persister, n int) error {
 		for _, x := range s.bufs {
 			ps.args = append(ps.args, ps.dist[x])
 		}
-		ps.args = append(ps.args, ps.sync)
+		if s.dep {
+			ps.args = append(ps.args, ps.dep)
+		} else {
+			ps.args = append(ps.args, ps.sync)
+		}
 		err := t.s.Launch(s.k, s.grid, s.width, ps.args...)
 		for i := s.lo; i < s.hi; i++ {
 			clear(ps.pend[i].bufs[:ps.pend[i].nb])
@@ -272,6 +313,11 @@ func (g *devTier) persistIssue(t *launchTo, ps *persister, n int) error {
 		persistTotal.Add(1)
 		g.PersistParts += s.hi - s.lo
 		g.PersistPhases += s.phases
+		if s.dep {
+			g.PersistDepLaunches++
+			g.PersistDepTiles += s.tiles
+			persistDepTotal.Add(1)
+		}
 	}
 	return nil
 }
@@ -416,8 +462,22 @@ func (g *devTier) persistBuild(ps *persister, lo, hi, w int) (persistSeg, error)
 		parts = append(parts, ir.Part{K: p.src, Groups: p.groups, Bind: bind})
 		most = max(most, p.groups)
 	}
+	// With dependency counters the kernel's region starts at the first word
+	// no plan holds; a plan that does not fit composes with grid barriers.
+	dep := g.PersistDeps && ps.dep != nil
+	base := g.pcache.depNext
 	compose := func(grid int) (*ir.Persisted, backend.Kernel, error) {
-		pk, err := ir.Persist(fmt.Sprintf("persist%d_%d", hi-lo, grid), parts, w, grid)
+		var pk *ir.Persisted
+		var err error
+		if dep {
+			pk, err = ir.PersistDeps(fmt.Sprintf("persistdep%d_%d", hi-lo, grid), parts, w, grid, base)
+			if err == nil && base+pk.Words > depWords {
+				dep = false
+			}
+		}
+		if !dep {
+			pk, err = ir.Persist(fmt.Sprintf("persist%d_%d", hi-lo, grid), parts, w, grid)
+		}
 		if err != nil {
 			return nil, nil, err
 		}
@@ -448,7 +508,16 @@ func (g *devTier) persistBuild(ps *persister, lo, hi, w int) (persistSeg, error)
 		}
 	}
 	g.PersistCompiles++
-	return persistSeg{lo: lo, hi: hi, k: k, bufs: pk.Bufs, grid: pk.Grid, width: w, phases: pk.Phases}, nil
+	tiles := 0
+	if dep {
+		g.pcache.depNext = base + pk.Words
+		for _, o := range pk.K.Ops {
+			if o.Kind == ir.OpDepWait && o.Imm&ir.DepTile != 0 {
+				tiles++
+			}
+		}
+	}
+	return persistSeg{lo: lo, hi: hi, k: k, bufs: pk.Bufs, grid: pk.Grid, width: w, phases: pk.Phases, dep: dep, tiles: tiles}, nil
 }
 
 // persistable reports whether block l's launches are held: a block whose

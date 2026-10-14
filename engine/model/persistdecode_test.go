@@ -84,10 +84,15 @@ func TestPersistentDecodeMatchesPerOp(t *testing.T) {
 				noGraph bool
 			}{{-1, false}, {-1, true}, {m.Cfg.NLayer / 2, false}} {
 				seam := c.seam
-				var arms [2][][]float32
-				for i, persist := range []bool{true, false} {
+				// Arms: grid barriers, dependency counters, per-op (the last
+				// is the reference).
+				var arms [3][][]float32
+				for i, mode := range []int{1, 2, 0} {
+					persist, deps := mode > 0, mode == 2
 					g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff),
-						tier.WithConfig(func(cf *tier.Config) { cf.Persist, cf.NoGraph = persist, c.noGraph }))
+						tier.WithConfig(func(cf *tier.Config) {
+							cf.Persist, cf.PersistDeps, cf.NoGraph = persist, deps, c.noGraph
+						}))
 					if err != nil || g == nil {
 						t.Skipf("no GPU: %v", err)
 					}
@@ -111,19 +116,29 @@ func TestPersistentDecodeMatchesPerOp(t *testing.T) {
 						}
 						t.Fatalf("seam %d: no persistent kernel was launched: the per-op path answered", seam)
 					}
+					if deps && st.PersistDepLaunches == 0 {
+						t.Fatalf("seam %d: the dependency-counter arm launched no dep kernel (%d persistent)", seam, st.PersistLaunches)
+					}
+					if !deps && st.PersistDepLaunches != 0 {
+						t.Fatalf("seam %d: an arm without PersistDeps launched %d dep kernels", seam, st.PersistDepLaunches)
+					}
 					if persist {
-						t.Logf("seam %d graph %v: %d persistent launches ran %d per-op launches in %d phases (%d built, %d fell back)",
-							seam, !c.noGraph, st.PersistLaunches, st.PersistParts, st.PersistPhases, st.PersistCompiles, st.PersistFallbacks)
+						t.Logf("seam %d graph %v deps %v: %d persistent launches (%d with counters, %d tile edges) ran %d per-op launches in %d phases (%d built, %d fell back)",
+							seam, !c.noGraph, deps, st.PersistLaunches, st.PersistDepLaunches, st.PersistDepTiles, st.PersistParts, st.PersistPhases, st.PersistCompiles, st.PersistFallbacks)
 					}
 					arms[i] = got
 				}
-				for i := range arms[0] {
-					for j := range arms[0][i] {
-						if math.Float32bits(arms[0][i][j]) != math.Float32bits(arms[1][i][j]) {
-							t.Fatalf("seam %d step %d logit %d: persistent %v, per-op %v -- the composition is not its parts",
-								seam, i, j, arms[0][i][j], arms[1][i][j])
+				for a, name := range []string{"grid-barrier", "dependency-counter"} {
+					for i := range arms[a] {
+						for j := range arms[a][i] {
+							if math.Float32bits(arms[a][i][j]) != math.Float32bits(arms[2][i][j]) {
+								t.Fatalf("seam %d step %d logit %d: %s %v, per-op %v -- the composition is not its parts",
+									seam, i, j, name, arms[a][i][j], arms[2][i][j])
+							}
 						}
 					}
+				}
+				for i := range arms[0] {
 					var num, den float64
 					for j := range host[i] {
 						d := float64(arms[0][i][j] - host[i][j])
@@ -135,7 +150,7 @@ func TestPersistentDecodeMatchesPerOp(t *testing.T) {
 						t.Fatalf("seam %d step %d: NMSE %.3e against the host, argmax %d vs %d", seam, i, num/den, ga, ha)
 					}
 				}
-				t.Logf("seam %d graph %v: %d steps bit-identical persistent and per-op, coherent with the host", seam, !c.noGraph, steps)
+				t.Logf("seam %d graph %v: %d steps bit-identical grid-barrier, dependency-counter and per-op, coherent with the host", seam, !c.noGraph, steps)
 			}
 			ran++
 		})

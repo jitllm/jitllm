@@ -1,10 +1,10 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 )
 
@@ -77,8 +77,18 @@ func TestTheDefaultAddressIsNotSaved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(b), "4242") || strings.Contains(string(b), "8080") {
-		t.Errorf("an address the person never typed was written:\n%s", b)
+	// The address fields themselves: a substring search over the file also
+	// read the temporary directory's random name in the model folder, which
+	// held "4242" once on macOS.
+	var saved struct {
+		APIAddr     string `json:"api_addr"`
+		ServiceAddr string `json:"service_addr"`
+	}
+	if err := json.Unmarshal(b, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.APIAddr != "" || saved.ServiceAddr != "" {
+		t.Errorf("an address the person never typed was written: %q, %q", saved.APIAddr, saved.ServiceAddr)
 	}
 	fi, err := os.Stat(c.Path())
 	if err != nil || (runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600) {

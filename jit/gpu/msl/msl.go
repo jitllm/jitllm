@@ -306,6 +306,10 @@ func (l *lowerer) block(lo, hi int) error {
 			l.line("threadgroup_barrier(mem_flags::mem_threadgroup);")
 		case ir.OpGridBarrier:
 			l.line("jitllm_grid_barrier((device atomic_uint*)%s, jitllm_tid, jitllm_ngroups);", l.n(o.Args[0]))
+		case ir.OpDepTask, ir.OpDepEpoch, ir.OpDepWait, ir.OpDepSignal, ir.OpDepExit:
+			// Metal states no forward progress between threadgroups
+			// (docs/design/dep-block.md).
+			return fmt.Errorf("msl: op %d: %s: dependency counters are not lowered for Metal", i, o.Kind)
 		default:
 			if err := l.arith(i, o); err != nil {
 				return err

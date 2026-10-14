@@ -486,6 +486,11 @@ func (l *lowerer) block(lo, hi int) error {
 			inst(&l.m.funcs, opControlBarrier, l.u32c(2), l.u32c(2), l.u32c(0x108))
 		case ir.OpGridBarrier:
 			l.gridBarrier(l.val[o.Args[0]])
+		case ir.OpDepTask, ir.OpDepEpoch, ir.OpDepWait, ir.OpDepSignal, ir.OpDepExit:
+			// A workgroup spinning on another's counter needs that one to
+			// run, and Vulkan promises no forward progress between
+			// workgroups (docs/design/dep-block.md).
+			return fmt.Errorf("spirv: op %d: %s: dependency counters are not lowered for SPIR-V", i, o.Kind)
 		case ir.OpConst:
 			l.val[v] = l.constID(l.spvType(o.Type), uint32(o.Imm))
 		case ir.OpTID:

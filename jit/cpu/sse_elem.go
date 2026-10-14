@@ -554,3 +554,23 @@ func emitLnSumSSE(a *Buf) {
 	a.ADDPS(XMM0, XMM0, XMM6) // e*ln2 + ln(m)
 	a.ADDPS(XMM3, XMM3, XMM0)
 }
+
+// EmitLnSSE is EmitLn for the SSE tier: x = ln(x) in place, Scr
+// ActConsts().
+func EmitLnSSE() ([]byte, error) {
+	var a Buf
+	a.DeclareISA(ISATierSSE)
+	a.MOVLoad(RCX, At(RDI, 0))  // Out -> x, in place
+	a.MOVLoad(RBX, At(RDI, 56)) // Scr -> consts
+	a.MOVLoad(R10, At(RDI, 40)) // K -> whole 8-float units
+	a.MOVLoad(R11, At(RDI, 32)) // Rows -> tail elements
+	loadExpConstsSSE(&a)
+	elemLoopSSE(&a, R10, R11, []Reg{RCX}, func(ld func(Reg, Reg), st func(Reg, Reg)) {
+		ld(XMM4, RCX)
+		a.XORPS(XMM3, XMM3, XMM3)
+		emitLnSumSSE(&a)
+		st(RCX, XMM3)
+	})
+	a.RET()
+	return a.Bytes(), nil
+}

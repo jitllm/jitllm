@@ -18,6 +18,11 @@ type Config struct {
 	// drains through (BeginPrefill); "" takes the host default, and "p" -- or
 	// any set no wider than the decode pool -- builds none. See prefillCoreSet.
 	PrefillCores string
+	// ServingSplit lets a prefill run on the E-cores' own pool while another
+	// session decodes on the P-cores (BeginPrefillE): where there are E-cores
+	// to give (sched.CanSplitE, macOS) and the caller says another session is
+	// busy. Off, BeginPrefillE does nothing.
+	ServingSplit bool
 
 	// Profile arms the quantize/kernel/widen nanosecond counters inside MatVec.
 	// MatMulProf does the same for the batched path, splitting it into
@@ -182,6 +187,9 @@ func WithPrefillChunk(n int) Option { return func(c *Config) { c.Chunk = n } }
 
 // WithPrefillCoreSet names the core set prefill runs on; see Config.PrefillCores.
 func WithPrefillCoreSet(name string) Option { return func(c *Config) { c.PrefillCores = name } }
+
+// WithServingSplit allows the E-core prefill pool; see Config.ServingSplit.
+func WithServingSplit(on bool) Option { return func(c *Config) { c.ServingSplit = on } }
 
 // WithParticipants pins how many pool threads drain a region; 0 duels for it.
 func WithParticipants(n int) Option { return func(c *Config) { c.Part = n } }

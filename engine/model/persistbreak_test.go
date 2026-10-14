@@ -19,6 +19,27 @@ import (
 // are written, and its logits must leave the per-op arm's. If they do not,
 // the bit-identity the gate asserts says nothing about the barrier.
 func TestPersistentDecodeSeesABrokenBarrier(t *testing.T) {
+	persistBroken(t, false, func() func() {
+		old := ptx.BreakGridBarrierForTest(true)
+		return func() { ptx.BreakGridBarrierForTest(old) }
+	})
+}
+
+// TestDepDecodeSeesABrokenWait is the same violation for the dependency
+// counters (Config.PersistDeps): with every wait returning at once
+// (ptx.BreakDepWaitForTest) the decode must leave the per-op logits, or the
+// dep arm's bit-identity in TestPersistentDecodeMatchesPerOp says nothing
+// about the waits.
+func TestDepDecodeSeesABrokenWait(t *testing.T) {
+	persistBroken(t, true, func() func() {
+		old := ptx.BreakDepWaitForTest(true)
+		return func() { ptx.BreakDepWaitForTest(old) }
+	})
+}
+
+// persistBroken decodes per-op and then persistent with break applied, and
+// requires the logits to differ.
+func persistBroken(t *testing.T, deps bool, brk func() func()) {
 	name := "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
 	p := testmodels.Path(name)
 	if _, err := os.Stat(p); err != nil {
@@ -34,7 +55,11 @@ func TestPersistentDecodeSeesABrokenBarrier(t *testing.T) {
 	ids := m.Vocab.Encode("The river rose every spring until the bridges were islands, and", true)
 	const steps = 8
 	run := func(persist bool) ([][]float32, tier.Stats) {
-		g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), tier.WithPersist(persist, 0),
+		mode := tier.WithPersist(persist, 0)
+		if deps {
+			mode = tier.WithPersistDeps(persist, 0)
+		}
+		g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), mode,
 			tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
 		if err != nil || g == nil {
 			t.Skipf("no GPU: %v", err)
@@ -61,8 +86,11 @@ func TestPersistentDecodeSeesABrokenBarrier(t *testing.T) {
 		return out, g.Stats()
 	}
 	ref, _ := run(false)
-	defer ptx.BreakGridBarrierForTest(ptx.BreakGridBarrierForTest(true))
+	defer brk()()
 	got, st := run(true)
+	if deps && st.PersistDepLaunches == 0 {
+		t.Fatalf("no dependency-counter kernel ran (%s): the violation reached nothing", st.PersistWhy)
+	}
 	if st.PersistLaunches == 0 {
 		t.Fatalf("no persistent kernel ran (%s): the violation reached nothing", st.PersistWhy)
 	}
@@ -75,7 +103,7 @@ func TestPersistentDecodeSeesABrokenBarrier(t *testing.T) {
 		}
 	}
 	if diff == 0 {
-		t.Fatalf("%d persistent launches with grid barriers that wait for nothing gave the per-op logits bit for bit", st.PersistLaunches)
+		t.Fatalf("%d persistent launches whose waits wait for nothing gave the per-op logits bit for bit", st.PersistLaunches)
 	}
 	t.Logf("seen: %d of %d logits differ with the barrier broken", diff, steps*len(ref[0]))
 }

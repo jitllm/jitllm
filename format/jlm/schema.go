@@ -653,7 +653,7 @@ func TypeOf(t quant.Type) (Type, bool) {
 // any tower's), and two static sizes keep addressing an index.
 func (r Role) Vision() bool {
 	return r >= RoleVPatchEmbd && r <= RoleVProjNormBias || r >= RoleVRsQuery && r <= RoleVRsProj ||
-		r == RoleVFFNGate || r == RoleVFFNGateBias || visionFamRole(r) || visionFamilyRole(r)
+		r == RoleVFFNGate || r == RoleVFFNGateBias || visionFamRole(r) || visionFamilyRole(r) || audioRole(r)
 }
 
 // Expanded says a tensor is read once at load and copied out, rather than
@@ -712,5 +712,6 @@ func (r Role) Expanded() bool {
 		RoleNextnENorm, RoleNextnHNorm, RoleNextnHeadNorm:
 		return true
 	}
-	return r == RoleXIELU || r == RoleAttnSubNorm || r == RoleFFNSubNorm || flagshipExpanded(r) || visionFamExpanded(r) || visionFamilyExpanded(r)
+	return r == RoleXIELU || r == RoleAttnSubNorm || r == RoleFFNSubNorm || flagshipExpanded(r) || visionFamExpanded(r) || visionFamilyExpanded(r) ||
+		audioExpanded(r)
 }

@@ -48,6 +48,9 @@ type Emitters struct {
 	ActMul     func(k ActKind) ([]byte, error) // every kind in Gated
 	Act        func(k ActKind) ([]byte, error) // every kind in Ungated
 	SigmoidMul func() ([]byte, error)
+	// Ln is x = ln(x) in place over positive finite x, Scr = ActConsts()
+	// (EmitLn): a log-mel feature's log.
+	Ln func() ([]byte, error)
 	// XIELU is Apertus's ungated activation over a runtime length, its four
 	// numbers a buffer (xielu_const.go has the contract).
 	XIELU func() ([]byte, error)
@@ -315,6 +318,7 @@ var primaryEmitters = Emitters{
 	ActMul:     func(k ActKind) ([]byte, error) { return must("actmul", EmitActMul(k)) },
 	Act:        func(k ActKind) ([]byte, error) { return must("act", EmitAct(k)) },
 	SigmoidMul: func() ([]byte, error) { return must("sigmoidmul", EmitSigmoidMul()) },
+	Ln:         func() ([]byte, error) { return must("ln", EmitLn()) },
 	XIELU:      func() ([]byte, error) { return must("xielu", EmitXIELU()) },
 
 	RMSNorm:   func(n int) ([]byte, error) { return must("rmsnorm", EmitRMSNorm(n)) },
@@ -417,6 +421,7 @@ var sseEmitters = Emitters{
 	ActMul:        EmitActMulSSE,
 	Act:           EmitActSSE,
 	SigmoidMul:    EmitSigmoidMulSSE,
+	Ln:            EmitLnSSE,
 	XIELU:         EmitXIELUSSE,
 
 	RMSNorm:   EmitRMSNormSSE,

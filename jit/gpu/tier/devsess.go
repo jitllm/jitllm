@@ -81,6 +81,9 @@ type devSess struct {
 	// the set is the device's, and another session's picture may have been
 	// staged in it since.
 	winRuns []nn.KeyRun
+	// seqRuns is the packed sequences SetSeqRuns gave this session, staged
+	// with the windows at each of its non-causal calls.
+	seqRuns []nn.KeyRun
 	// winPerRow says winRuns is one window a row (SetRowWindows: a symmetric
 	// sliding window, whose rows' windows overlap) rather than runs
 	// partitioning the rows.
@@ -558,7 +561,7 @@ func (g *devTier) cloneLane() (*lane, bool) {
 		sets[k] = s
 	}
 	for k, s := range sets {
-		if s.bs == nil || k == geoNonCausal {
+		if s.bs == nil || k&geoNonCausal != 0 {
 			continue
 		}
 		v.useGeom(k)

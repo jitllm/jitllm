@@ -283,7 +283,7 @@ func retarget(arch jlm.Arch, role jlm.Role) jlm.Role {
 	// LFM2's final norm is named token_embd_norm (llama.cpp's
 	// LLM_TENSOR_OUTPUT_NORM_LFM2, "fix for wrong tensor name"); it is applied
 	// after the last block, not to the embeddings.
-	if arch == jlm.ArchLFM2 && role == jlm.RoleTokenEmbdNorm {
+	if (arch == jlm.ArchLFM2 || arch == jlm.ArchLFM2Enc) && role == jlm.RoleTokenEmbdNorm {
 		return jlm.RoleOutputNorm
 	}
 	// Qwen3.8-Flash-Next's n-gram table carries Gemma's per-layer table name

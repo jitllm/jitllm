@@ -70,6 +70,7 @@ type elemSet struct {
 	clamp   *cpu.Code
 	pflines *cpu.Code // the fused runs' lookahead (lookahead.go)
 	xielu   *cpu.Code // Apertus's ungated activation, its numbers a buffer
+	ln      *cpu.Code // x = ln(x), a log-mel feature's log
 }
 
 var (
@@ -160,6 +161,7 @@ func (s *elemSet) init(em *cpu.Emitters) {
 	}
 	s.sigMul = mustEmit("sigmoidmul")(em.SigmoidMul())
 	s.xielu = mustEmit("xielu")(em.XIELU())
+	s.ln = mustEmit("ln")(em.Ln())
 }
 
 // mustEmit maps an emitter's result or stops the process, naming the kernel:
@@ -252,6 +254,23 @@ func ActMul32JIT(dst, up []float32, k ActKind) {
 		Rows:   int64(n % cpu.ElemLanes),
 	}
 	e.actMul[i].Call(&args)
+}
+
+// Ln32JIT replaces x with ln(x), every element, with generated code; x must be
+// positive and finite (a log-mel feature with its floor added).
+func Ln32JIT(x []float32) {
+	e := elemFor()
+	n := len(x)
+	if n == 0 {
+		return
+	}
+	args := cpu.Args{
+		Out:  &x[0],
+		Scr:  (*byte)(unsafe.Pointer(&elemConsts[0])),
+		K:    int64(n / cpu.ElemLanes),
+		Rows: int64(n % cpu.ElemLanes),
+	}
+	e.ln.Call(&args)
 }
 
 // SigmoidMul32JIT computes gate[i] = sigma(gate[i]) * val[i] with generated

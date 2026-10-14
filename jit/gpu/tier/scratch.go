@@ -380,6 +380,10 @@ func freeRagOut(bs *blockScratch) {
 // pool grown into the rest, every width after was refused and a 64-row decode
 // step ran padded to the 512-row scratch, eight times its rows.
 func (g *devTier) batchFor(w int) int {
+	if w > 64 && (roomFaulted("narrow") || roomFaulted("narrow-lie")) {
+		g.LastErr = fmt.Sprintf("a %d-row batched scratch does not fit the budget (roomFault)", w)
+		return 0
+	}
 	if g.bbs[w] != nil && g.prepBatch(w) {
 		return w
 	}

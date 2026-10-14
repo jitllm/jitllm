@@ -69,6 +69,7 @@ func emitterCalls() []emitterCall {
 	add("softcap", func(em *Emitters) ([]byte, error) { return em.Softcap() }, emitted(EmitSoftcap()))
 	add("softmax", func(em *Emitters) ([]byte, error) { return em.Softmax() }, emitted(EmitSoftmax()))
 	add("sigmoidmul", func(em *Emitters) ([]byte, error) { return em.SigmoidMul() }, emitted(EmitSigmoidMul()))
+	add("ln", func(em *Emitters) ([]byte, error) { return em.Ln() }, emitted(EmitLn()))
 	for _, k := range Gated {
 		add("actmul/"+k.String(), func(em *Emitters) ([]byte, error) { return em.ActMul(k) }, emitted(EmitActMul(k)))
 	}

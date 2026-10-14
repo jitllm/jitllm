@@ -47,6 +47,9 @@ type Persisted struct {
 	// Grid is the workgroup count the kernel was composed for and must be
 	// launched with.
 	Grid int
+	// Words is how many words of the dep buffer, from the base it was
+	// composed at, a PersistDeps kernel's counters take; zero for Persist.
+	Words int
 }
 
 // PersistJoins reports whether a launch of k can join a persistent kernel of
@@ -234,6 +237,11 @@ func Persist(name string, parts []Part, w, grid int) (*Persisted, error) {
 		vb := b.Add(U32, b.Mul(U32, it, c(int64(slots))), vg0)
 		if err := b.inline(p, func(buf int, prm Param) Value { return paramFor(buf, prm) }, shared[i], vb, vt, c(int64(pw))); err != nil {
 			return nil, err
+		}
+		if p.K.usesGroupMemory() {
+			// The next group this workgroup runs reuses the arrays: no thread
+			// may start writing them while another still reads this group's.
+			b.Barrier()
 		}
 		b.SetPhi(it, b.Add(U32, it, c(1)))
 		b.EndLoop()

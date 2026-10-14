@@ -135,15 +135,9 @@ func TestFusedDecodeMatchesPerOp(t *testing.T) {
 						t.Fatalf("seam %d step %d: fused against per-op NMSE %.3e, argmax %d vs %d", seam, i, fn/fd,
 							argmaxID(arms[0][i]), argmaxID(arms[1][i]))
 					}
-					var num, den float64
-					for j := range host[i] {
-						d := float64(arms[0][i][j] - host[i][j])
-						num += d * d
-						den += float64(host[i][j]) * float64(host[i][j])
-					}
-					ga, ha := argmaxID(arms[0][i]), argmaxID(host[i])
-					if num/den > 2e-2 || ga != ha && float64(host[i][ha]-host[i][ga]) > tieMargin {
-						t.Fatalf("seam %d step %d: NMSE %.3e against the host, argmax %d vs %d", seam, i, num/den, ga, ha)
+					if nmse, ok := coherentWithTheHost(host[i], arms[0][i]); !ok {
+						t.Fatalf("seam %d step %d: NMSE %.3e against the host, argmax %d vs %d", seam, i, nmse,
+							argmaxID(arms[0][i]), argmaxID(host[i]))
 					}
 				}
 				t.Logf("seam %d: %d steps bit-identical fused and per-op, coherent with the host", seam, steps)

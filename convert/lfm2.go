@@ -35,7 +35,7 @@ func lfm2Config(f *meta.File, c *jlm.Config) error {
 // then x. Row ranges of a row-major matrix are byte ranges, so the bytes are
 // the source's.
 func unfuseLFM2(e *jlm.Tensor, c *jlm.Config) ([]jlm.Tensor, bool, error) {
-	if c == nil || c.Arch != jlm.ArchLFM2 || e.Role != jlm.RoleSSMInProj {
+	if c == nil || c.Arch != jlm.ArchLFM2 && c.Arch != jlm.ArchLFM2Enc || e.Role != jlm.RoleSSMInProj {
 		return nil, false, nil
 	}
 	n := uint64(c.NEmbd)

@@ -262,7 +262,11 @@ func clefRender(v jinja.Value) string {
 
 // clefJSON is json.dumps(v, ensure_ascii=False, separators=(",", ":"),
 // sort_keys=True).
-func clefJSON(b *strings.Builder, v jinja.Value) {
+func clefJSON(b *strings.Builder, v jinja.Value) { pyJSON(b, v, ",", ":", true) }
+
+// pyJSON is json.dumps(v, ensure_ascii=False, separators=(comma, colon),
+// sort_keys=sortKeys).
+func pyJSON(b *strings.Builder, v jinja.Value, comma, colon string, sortKeys bool) {
 	switch {
 	case v.IsString():
 		pyJSONString(b, v.AsString())
@@ -270,23 +274,26 @@ func clefJSON(b *strings.Builder, v jinja.Value) {
 		b.WriteByte('[')
 		for i, x := range v.AsList().Items {
 			if i > 0 {
-				b.WriteByte(',')
+				b.WriteString(comma)
 			}
-			clefJSON(b, x)
+			pyJSON(b, x, comma, colon, sortKeys)
 		}
 		b.WriteByte(']')
 	case v.IsDict():
 		dd := v.AsDict()
-		keys := append([]string(nil), dd.Keys...)
-		sort.Strings(keys)
+		keys := dd.Keys
+		if sortKeys {
+			keys = append([]string(nil), dd.Keys...)
+			sort.Strings(keys)
+		}
 		b.WriteByte('{')
 		for i, k := range keys {
 			if i > 0 {
-				b.WriteByte(',')
+				b.WriteString(comma)
 			}
 			pyJSONString(b, k)
-			b.WriteByte(':')
-			clefJSON(b, dd.Data[k])
+			b.WriteString(colon)
+			pyJSON(b, dd.Data[k], comma, colon, sortKeys)
 		}
 		b.WriteByte('}')
 	default:

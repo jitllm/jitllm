@@ -116,6 +116,20 @@ func Lower(k *ir.Kernel, target string) (string, error) {
 		case ir.OpGridBarrier:
 			gridBarrier(&b, reg[a0], sm)
 
+		case ir.OpDepTask:
+
+		case ir.OpDepEpoch:
+			reg[v] = depEpoch(&b, reg[a0], o.Imm, sm)
+
+		case ir.OpDepWait:
+			depWait(&b, reg[a0], reg[a1], reg[a2], sm)
+
+		case ir.OpDepSignal:
+			depSignal(&b, reg[a0], reg[a1], sm)
+
+		case ir.OpDepExit:
+			depExit(&b, reg[a0], o.Imm, sm)
+
 		case ir.OpParam:
 			r := b.Reg(class(o.Type))
 			b.Op("ld.param.u64 %v,[%s];", r, k.Params[o.Imm].Name)

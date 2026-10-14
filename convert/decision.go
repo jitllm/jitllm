@@ -67,6 +67,16 @@ func decisionOf(f *meta.File, c *jlm.Config) error {
 		if err := clefOf(f, c); err != nil {
 			return err
 		}
+	} else if kind == jlm.DecisionD1Omni {
+		// Laya's head, which d1-omni's encoder.py builds the same way:
+		// nn.TransformerEncoderLayer at d // 64 heads, on the trunk's rows.
+		if c.DecisionBlocks == 0 {
+			return fmt.Errorf("an lfm2-d1-omni readout needs its head blocks")
+		}
+		c.DecisionHeads = uint32(f.UintKey("decision.head_count", uint64(max(1, c.NEmbd/64))))
+		if c.DecisionHeads == 0 || c.NEmbd%c.DecisionHeads != 0 {
+			return fmt.Errorf("%d decision heads do not divide a %d-wide residual", c.DecisionHeads, c.NEmbd)
+		}
 	} else if c.DecisionBlocks != 0 {
 		return fmt.Errorf("decision type %q with %d head blocks: only laya's and clef's heads are implemented: %w", name, c.DecisionBlocks, ErrNotImplemented)
 	}

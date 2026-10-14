@@ -148,7 +148,12 @@ func TestKVCacheConsistency(t *testing.T) {
 		}
 	}
 
+	// Closed: a State left open keeps its JIT's view of the P-cores' crew for
+	// the life of the process, and a later gate's decode is then never that
+	// crew's only user, so no run of it fuses (TestKVPagesRelocateWithTheLayer
+	// opened none, on every model, whenever this ran first).
 	st := m.NewState(len(ids) + 1)
+	defer st.Close()
 	for _, id := range ids {
 		if _, err = st.Forward(id); err != nil {
 			t.Fatal(err)

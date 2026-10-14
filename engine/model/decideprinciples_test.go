@@ -187,7 +187,8 @@ func TestDecisionRelocatesBetweenDevices(t *testing.T) {
 	for _, c := range append([]struct {
 		name, gguf string
 		kind       jlm.DecisionKind
-	}{{"laya-fixture", "laya/fixture/laya-fixture.gguf", jlm.DecisionLaya}}, decisionNames()...) {
+	}{{"laya-fixture", "laya/fixture/laya-fixture.gguf", jlm.DecisionLaya},
+		{"d1-omni", d1OmniModel, jlm.DecisionD1Omni}}, decisionNames()...) {
 		t.Run(c.name, func(t *testing.T) {
 			m := openDecision(t, c.gguf, c.kind, noTune)
 			defer m.Close()
@@ -256,7 +257,7 @@ func decisionNames() []struct {
 		kind       jlm.DecisionKind
 	}
 	for _, c := range decisionCases {
-		if c.kind != jlm.DecisionLaya {
+		if c.kind != jlm.DecisionLaya && c.kind != jlm.DecisionD1Omni {
 			out = append(out, struct {
 				name, gguf string
 				kind       jlm.DecisionKind

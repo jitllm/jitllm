@@ -1,6 +1,7 @@
 package tier
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"github.com/jitllm/jitllm/engine/nn"
@@ -41,6 +42,15 @@ const (
 	cSc2
 	cA  // the int8 activation, bytes
 	cAX // its scales and sums
+	// A FastConformer block's (ConvConformer): the call's row count (one
+	// u32, written per call), the residual's three stages and a LayerNorm's
+	// two partial planes.
+	cTN
+	cX1
+	cX2
+	cX3
+	cLP
+	cLV
 	nConvScratch
 )
 
@@ -56,6 +66,38 @@ const (
 	cVD
 	cVDN
 	cVecEnd
+)
+
+// A FastConformer block's vectors (nn.ConformerVecs.List order), from cC0.
+const (
+	cC0 cbuf = 64 + iota
+	cCFF1NB
+	cCFF1UB
+	cCFF1DB
+	cCAttN
+	cCAttNB
+	cCQB
+	cCKB
+	cCVB
+	cCOB
+	cCU
+	cCV
+	cCConvN
+	cCConvNB
+	cCGLUVB
+	cCGLUGB
+	cCDW
+	cCBNS
+	cCBNH
+	cCPW2B
+	cCFF2N
+	cCFF2NB
+	cCFF2UB
+	cCFF2DB
+	cCOutN
+	cCOutNB
+	cCPE
+	cCEnd
 )
 
 // convStep is one launch. A matmul (mm set) is its batched twin over the
@@ -75,6 +117,11 @@ type convStep struct {
 type convLayer struct {
 	p    nn.ConvPlan
 	vecs [cVecEnd - cN1]backend.Buf
+	// cvecs is a FastConformer block's vectors, from cC0.
+	cvecs [cCEnd - cC0]backend.Buf
+	// ts is the layer's weight slots (layer.tensors), taken once: the slice
+	// is made on every call of tensors.
+	ts   []**resident
 	prog []convStep
 	// out is the block's output length in floats.
 	out int
@@ -308,6 +355,11 @@ func (g *devTier) convProgram(cl *convLayer, ws []nn.Weight) ([nConvScratch]int,
 		} else {
 			mm(3, cAO, cY, nin, qd)
 		}
+	case nn.ConvConformer:
+		why2 := g.conformerProgram(p, kern, launch, mm, want, need[:])
+		if why == "" {
+			why = why2
+		}
 	default:
 		return need, fmt.Sprintf("a convolutional block of kind %d", p.Kind)
 	}
@@ -357,7 +409,25 @@ func (g *devTier) prepConv(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage 
 		return true
 	}
 	have, want := convVecs(c, cw)
+	var chave [cCEnd - cC0][]float32
+	if c.Kind == nn.ConvConformer {
+		if cw.Conformer == nil {
+			g.LastErr = fmt.Sprintf("block %d: a conformer plan offered no conformer vectors", li)
+			return false
+		}
+		chave = cw.Conformer.List()
+		cwant := conformerVecLens(c)
+		for i, v := range chave {
+			if len(v) != cwant[i] {
+				g.LastErr = fmt.Sprintf("block %d: conformer vector %d is %d floats, want %d", li, i, len(v), cwant[i])
+				return false
+			}
+		}
+	}
 	var aux uint64
+	for _, v := range chave {
+		aux += uint64(4 * len(v))
+	}
 	for i, n := range want {
 		if len(have[i]) != n {
 			g.LastErr = fmt.Sprintf("block %d: convolutional vector %d is %d floats, want %d", li, i, len(have[i]), n)
@@ -412,7 +482,12 @@ func (g *devTier) prepConv(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage 
 	g.ensureRaw(ws, need)
 	l := &layer{nonCausal: true, conv: cl}
 	ts := l.tensors()
-	for i, x := range ws[:7] {
+	cl.ts = ts
+	nmat := 7
+	if c.Kind == nn.ConvConformer {
+		nmat = 12
+	}
+	for i, x := range ws[:nmat] {
 		if len(x.Data) == 0 {
 			continue
 		}
@@ -449,6 +524,29 @@ func (g *devTier) prepConv(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage 
 			return false
 		}
 		cl.vecs[i] = b
+	}
+	for i, v := range chave {
+		if len(v) == 0 {
+			continue
+		}
+		b, err := g.dev.Alloc(4 * len(v))
+		if err == nil {
+			err = b.Write(f32b(v))
+		}
+		if err != nil {
+			if b != nil {
+				b.Free()
+			}
+			for _, o := range append(cl.vecs[:], cl.cvecs[:]...) {
+				if o != nil {
+					o.Free()
+				}
+			}
+			g.dropTensors(l)
+			g.LastErr = fmt.Sprintf("block %d: %v", li, err)
+			return false
+		}
+		cl.cvecs[i] = b
 	}
 	l.auxBytes = aux
 	g.charge(aux)
@@ -511,7 +609,7 @@ func (g *devTier) convGrow(sz [nConvScratch]int) bool {
 		cs.actN = sz[cX]
 	}
 	for i := range sz {
-		if c := cbuf(i); c != cX && c != cY && !g.regrow(&cs.b[i], &cs.n[i], sz[i], 1, true, true) {
+		if c := cbuf(i); c != cX && c != cY && sz[i] > 0 && !g.regrow(&cs.b[i], &cs.n[i], sz[i], 1, true, true) {
 			return false
 		}
 	}
@@ -543,7 +641,7 @@ func (l *layer) convBufs() []backend.Buf {
 	if l.conv == nil {
 		return nil
 	}
-	return l.conv.vecs[:]
+	return append(l.conv.vecs[:], l.conv.cvecs[:]...)
 }
 
 // convOut is block li's output length in floats, 0 where this device does
@@ -601,39 +699,36 @@ func (g *devTier) convOnce(lo, hi int, first, last bool, x, out []float32, tap i
 		}
 	}
 	cs := &g.conv
+	p0 := &g.layers[lo].conv.p
+	// A conformer call is the clip's rows, at most the plan's.
+	conformer := p0.Kind == nn.ConvConformer
 	if first {
-		p := &g.layers[lo].conv.p
-		if len(x) != p.HIn*p.WIn*p.CIn || 4*len(x) > cs.actN {
-			g.LastErr = fmt.Sprintf("block %d reads %d floats, handed %d", lo, p.HIn*p.WIn*p.CIn, len(x))
+		bad := len(x) != p0.HIn*p0.WIn*p0.CIn
+		if conformer {
+			bad = len(x) == 0 || len(x)%p0.CIn != 0 || len(x) > p0.HIn*p0.CIn
+		}
+		if bad || 4*len(x) > cs.actN {
+			g.LastErr = fmt.Sprintf("block %d reads %d floats, handed %d", lo, p0.HIn*p0.WIn*p0.CIn, len(x))
 			return false
 		}
 	}
-	if l := g.layers[hi-1].conv; last && len(out) != l.out {
+	if l := g.layers[hi-1].conv; last && len(out) != l.out && !(conformer && len(out) == len(x)) {
 		g.LastErr = fmt.Sprintf("block %d writes %d floats, handed %d", hi-1, l.out, len(out))
 		return false
 	}
-	var err error
-	var fsrc, memoSrc backend.Buf
-	var memoK backend.Kernel
-	g.dev.Session(func(s backend.Session) {
-		g.convTo.s = s
-		defer func() { g.convTo.s = nil }()
-		lc := &launcher{to: &g.convTo, err: &err, fsrc: &fsrc, memoK: &memoK, memoSrc: &memoSrc}
-		if first {
-			err = s.Write(cs.act[cs.cur], f32b(x))
-		}
-		for li := lo; li < hi && err == nil; li++ {
-			l := g.layers[li]
-			g.convRun(lc, l, cs)
-			cs.cur = 1 - cs.cur
-			if li == tap && err == nil {
-				err = s.Read(cs.act[cs.cur], f32b(tapOut[:l.conv.out]))
-			}
-		}
-		if last && err == nil {
-			err = s.Read(cs.act[cs.cur], f32b(out))
-		}
-	})
+	// The call's arguments ride the devTier and the submission is a method
+	// value made once, so a warm call allocates no closure (RULE 2f).
+	c := &g.convCall
+	*c = convCallArgs{lo: lo, hi: hi, first: first, last: last, x: x, out: out, tap: tap, tapOut: tapOut}
+	if conformer {
+		c.rows = len(x) / p0.CIn
+	}
+	if g.convFn == nil {
+		g.convFn = g.convSession
+	}
+	g.dev.Session(g.convFn)
+	err := c.err
+	*c = convCallArgs{}
 	if err != nil {
 		g.LastErr = err.Error()
 		return false
@@ -642,22 +737,65 @@ func (g *devTier) convOnce(lo, hi int, first, last bool, x, out []float32, tap i
 	return true
 }
 
+// convCallArgs is one convOnce call's arguments and its submission's state.
+type convCallArgs struct {
+	lo, hi      int
+	first, last bool
+	x, out      []float32
+	tap         int
+	tapOut      []float32
+	rows        int // a conformer call's rows, 0 for another block's
+	err         error
+	fsrc, msrc  backend.Buf
+	memoK       backend.Kernel
+	lc          launcher
+	tn          [4]byte
+}
+
+// convSession is convOnce's submission, inside the backend's Session.
+func (g *devTier) convSession(s backend.Session) {
+	c, cs := &g.convCall, &g.conv
+	g.convTo.s = s
+	defer func() { g.convTo.s = nil }()
+	c.lc = launcher{to: &g.convTo, err: &c.err, fsrc: &c.fsrc, memoK: &c.memoK, memoSrc: &c.msrc}
+	if c.first {
+		c.err = s.Write(cs.act[cs.cur], f32b(c.x))
+		if c.rows > 0 && c.err == nil {
+			binary.LittleEndian.PutUint32(c.tn[:], uint32(c.rows))
+			c.err = s.Write(cs.b[cTN], c.tn[:])
+		}
+	}
+	for li := c.lo; li < c.hi && c.err == nil; li++ {
+		l := g.layers[li]
+		g.convRun(&c.lc, l, cs)
+		cs.cur = 1 - cs.cur
+		if li == c.tap && c.err == nil {
+			c.err = s.Read(cs.act[cs.cur], f32b(c.tapOut[:l.conv.out]))
+		}
+	}
+	if c.last && c.err == nil {
+		c.err = s.Read(cs.act[cs.cur], f32b(c.out))
+	}
+}
+
 // convRun launches one block's program. Callers hold g.mu, inside a Session.
 func (g *devTier) convRun(lc *launcher, l *layer, cs *convScratch) {
 	cl := l.conv
-	var bufs [8]backend.Buf
+	var bufs [12]backend.Buf
 	buf := func(b cbuf) backend.Buf {
 		switch {
 		case b == cX:
 			return cs.act[cs.cur]
 		case b == cY:
 			return cs.act[1-cs.cur]
+		case b >= cC0:
+			return cl.cvecs[b-cC0]
 		case b >= cN1:
 			return cl.vecs[b-cN1]
 		}
 		return cs.b[b]
 	}
-	ts := l.tensors()
+	ts := cl.ts
 	for i := range cl.prog {
 		st := &cl.prog[i]
 		if st.mm == nil {
@@ -716,7 +854,8 @@ func (g *GPU) ConvLayers(lo, hi int, x, out []float32, tap int, tapOut []float32
 	g.convMu.Lock()
 	defer g.convMu.Unlock()
 	g.mu.Lock()
-	rs, ok := g.runsInto(nil, lo, hi)
+	rs, ok := g.runsInto(g.convRuns[:0], lo, hi)
+	g.convRuns = rs
 	g.mu.Unlock()
 	if !ok || len(rs) == 0 {
 		return false
@@ -747,4 +886,119 @@ func (g *GPU) ConvLayers(lo, hi int, x, out []float32, tap int, tapOut []float32
 func (s *gpuSession) ConvLayers(lo, hi int, x, out []float32, tap int, tapOut []float32) bool {
 	defer s.leave(s.step())
 	return s.g.ConvLayers(lo, hi, x, out, tap, tapOut)
+}
+
+// conformerVecLens is the lengths nn.ConformerVecs.List's vectors must be.
+func conformerVecLens(p *nn.ConvPlan) [cCEnd - cC0]int {
+	d, ff, r := p.CIn, p.CExp, p.HIn
+	return [cCEnd - cC0]int{d, d, ff, d, d, d, d, d, d, d, d, d, d, d, d, d,
+		p.KMid * d, d, d, d, d, d, ff, d, d, d, (2*r - 1) * d}
+}
+
+// conformerProgram is convProgram's FastConformer block: over R = p.HIn rows
+// of width d, the first t (cTN, per call) the clip's.
+func (g *devTier) conformerProgram(p nn.ConvPlan, kern func(convKey, func() (*ir.Kernel, error)) backend.Kernel,
+	launch func(backend.Kernel, int, ...cbuf), mm func(int, cbuf, cbuf, int, int), want func(cbuf, int),
+	need []int) string {
+	r, d, ff, heads, kd := p.HIn, p.CIn, p.CExp, p.Heads, p.KD
+	if p.WIn != 1 || p.COut != d || heads*kd != d || p.KMid < 1 || p.KMid%2 != 1 {
+		return fmt.Sprintf("a conformer block of %d x %d into %d, %d heads of %d, %d taps", p.HIn, p.WIn, p.COut,
+			heads, kd, p.KMid)
+	}
+	need[cTN] = max(need[cTN], 4)
+	eps := float32(p.Eps)
+	parts := partsFor(d)
+	ln := func(src, w, b, dst cbuf) {
+		want(cLP, parts*r)
+		want(cLV, parts*r)
+		launch(kern(convKey{name: "lnpart", a: [8]int{d, parts, r}}, func() (*ir.Kernel, error) {
+			return kernels.LayerNormPartRows(d, parts, r)
+		}), parts*r, src, cLP)
+		launch(kern(convKey{name: "lnvar", a: [8]int{d, parts, r}}, func() (*ir.Kernel, error) {
+			return kernels.LayerNormVarRows(d, parts, r)
+		}), parts*r, src, cLP, cLV)
+		launch(kern(convKey{name: "lnapply", a: [8]int{d, parts, r}, eps: eps}, func() (*ir.Kernel, error) {
+			return kernels.LayerNormApplyRows(d, parts, eps, true, r)
+		}), d*r, src, w, cLP, cLV, b, dst)
+		want(dst, d*r)
+	}
+	bias := func(src, b, dst cbuf, width int, act kernels.ActKind) {
+		launch(kern(convKey{name: "biasact-" + act.String(), a: [8]int{width, r}}, func() (*ir.Kernel, error) {
+			return kernels.BiasAct(width, r, act)
+		}), width*r, src, b, dst)
+		want(dst, width*r)
+	}
+	add := func(a, b, dst cbuf) {
+		launch(kern(convKey{name: "add", a: [8]int{d * r}}, func() (*ir.Kernel, error) { return kernels.Add(d * r) }),
+			d*r, a, b, dst)
+		want(dst, d*r)
+	}
+	half := func(a, b, dst cbuf) {
+		// x + b/2: the half feed-forward's residual, alpha from cCHalf.
+		launch(kern(convKey{name: "addhalf", a: [8]int{d * r}}, func() (*ir.Kernel, error) {
+			return kernels.AddHalf(d * r)
+		}), d*r, a, b, dst)
+		want(dst, d*r)
+	}
+	ffn := func(in, norm, normB, upB, downB, out cbuf, up, down int) {
+		ln(in, norm, normB, cT1)
+		mm(up, cT1, cE1, r, d)
+		bias(cE1, upB, cE2, ff, kernels.ActSiLU)
+		mm(down, cE2, cT2, r, ff)
+		bias(cT2, downB, cT1, d, kernels.ActIdentity)
+		half(in, cT1, out)
+	}
+	// x1 = x + FF1(LN x)/2
+	ffn(cX, cC0, cCFF1NB, cCFF1UB, cCFF1DB, cX1, 5, 6)
+	// x2 = x1 + attention
+	ln(cX1, cCAttN, cCAttNB, cT1)
+	for _, s := range []struct {
+		slot int
+		b    cbuf
+		dst  cbuf
+	}{{0, cCQB, cQ}, {1, cCKB, cK}, {2, cCVB, cV}} {
+		mm(s.slot, cT1, cE1, r, d)
+		bias(cE1, s.b, s.dst, d, kernels.ActIdentity)
+	}
+	mm(4, cCPE, cCol, 2*r-1, d)
+	launch(kern(convKey{name: "relposscores", a: [8]int{r, heads, kd}}, func() (*ir.Kernel, error) {
+		return kernels.RelPosScores(r, heads, kd)
+	}), r*heads*r, cQ, cK, cCol, cCU, cCV, cTN, cSc)
+	want(cSc, r*heads*r)
+	launch(kern(convKey{name: "rowsoftmax", a: [8]int{r * heads, r}}, func() (*ir.Kernel, error) {
+		return kernels.RowSoftmax(r*heads, r)
+	}), r*heads, cSc, cSc2)
+	want(cSc2, r*heads*r)
+	launch(kern(convKey{name: "attnaccrows", a: [8]int{r, heads, kd}}, func() (*ir.Kernel, error) {
+		return kernels.AttnAccRows(r, heads, kd)
+	}), r*d, cSc2, cV, cTN, cAO)
+	want(cAO, r*d)
+	mm(3, cAO, cE1, r, d)
+	bias(cE1, cCOB, cT2, d, kernels.ActIdentity)
+	add(cX1, cT2, cX2)
+	// x3 = x2 + the convolution module
+	ln(cX2, cCConvN, cCConvNB, cT1)
+	mm(7, cT1, cE1, r, d)
+	bias(cE1, cCGLUVB, cT2, d, kernels.ActIdentity)
+	mm(10, cT1, cE1, r, d)
+	bias(cE1, cCGLUGB, cE2, d, kernels.ActIdentity)
+	launch(kern(convKey{name: "sigmoidmul", a: [8]int{d * r}}, func() (*ir.Kernel, error) {
+		return kernels.SigmoidMul(d * r)
+	}), d*r, cE2, cT2, cE1)
+	launch(kern(convKey{name: "dwconv1drows", a: [8]int{p.KMid, d, r}}, func() (*ir.Kernel, error) {
+		return kernels.DWConv1dRows(p.KMid, d, r)
+	}), d*r, cE1, cCDW, cTN, cT2)
+	launch(kern(convKey{name: "affinerows", a: [8]int{d, r}}, func() (*ir.Kernel, error) {
+		return kernels.AffineRows(d, r)
+	}), d*r, cT2, cCBNS, cCBNH, cE2)
+	launch(kern(convKey{name: "act-silu", a: [8]int{d * r}}, func() (*ir.Kernel, error) {
+		return kernels.Act(d*r, kernels.ActSiLU)
+	}), d*r, cE2, cE1)
+	mm(11, cE1, cT2, r, d)
+	bias(cT2, cCPW2B, cT1, d, kernels.ActIdentity)
+	add(cX2, cT1, cX3)
+	// out = LN(x3 + FF2(LN x3)/2)
+	ffn(cX3, cCFF2N, cCFF2NB, cCFF2UB, cCFF2DB, cX1, 8, 9)
+	ln(cX1, cCOutN, cCOutNB, cY)
+	return ""
 }
