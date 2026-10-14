@@ -583,6 +583,11 @@ type State struct {
 	HostPick     []int32
 	HostPickVals []float32
 	HostPicked   bool
+	// pickView is pickOnHost's view of the output matrix at a label's rows,
+	// kept on the State: a view made per label escaped to the heap, an
+	// allocation a label (TestDecisionDoesNotAllocate).
+	pickView nn.Packed
+	pickTmp  [8]float32
 	// cs is the rotary table for the current position: NRot floats, filled once
 	// per token and read by every head and by the device blocks.
 	cs []float32
