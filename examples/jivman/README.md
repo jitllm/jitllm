@@ -4,7 +4,7 @@ Pac-Man played by a decision model running inside the process. Pick a model,
 press Play and watch it steer Pac-Man against the classic arcade ghosts; or
 play him yourself with the arrow keys; or play him against the model's ghosts.
 
-![jivman: a decision model playing Pac-Man](screenshot.png)
+![jivman: Laya playing Pac-Man, its odds at the junction on the board and in the panel](screenshot.png)
 
 jivman is a Go re-implementation of **[jevman](https://github.com/joch/jevman)**
 by Johnny Chadda ("jevman: AI decision models play Pac-Man", r/LocalLLaMA).
@@ -41,6 +41,8 @@ Without a window:
     go run . -headless -model laya -ticks 3600     # one game, the score, the board
     go run . -headless -model greedy               # the fixed rule, as a baseline
     go run . -headless -model laya -shot out.png   # and the last frame as a picture
+    go run . -record frames -seconds 60 -model laya # the window's frames, in real time, as PNGs
+    go run . -request req.json                      # the first request a model is asked
 
 ## What it does, and how it maps to jevman
 
@@ -55,13 +57,23 @@ Without a window:
 | leaderboard | `npm run leaderboard`: 24 games per model on a server, ranked by mean | every finished game on this machine, kept in a [musql](https://github.com/samyfodil/musql) database (`-db`, default `jitllm/jivman/scores.musq` in the config directory): per player runs, best, mean ± 2 SE, mean latency |
 | headless | `npm run bench`, real time | `-headless`: the game clock stops while the model thinks, so a run measures the model's play rather than the machine's speed |
 
+Ghost mode asks four questions about one state, and today each is its own
+prefill of that state; the shared-trunk work (PR #148) answers them from one
+prefill once it lands.
+
 Not matched: sound, the touch pad, the recorded demo for visitors, Opper
 sign-in and costs (nothing is billed), fruit drawn as emoji (drawn from
 primitives here), and the speed slider.
 
 ## Scores measured here
 
-RESULTS
+Pending: the M4 (Metal) measurement, warm calls after the first, n >= 20
+per model, and a real-time recording.
+
+What is counted rather than timed: one Pac-Man question with the board in
+its state is 770 prompt tokens to Laya, 970 to d1-3B and 1830 to Lev (Lev
+asks every choice twice, options forward and reversed). A Pac-Man request is
+one question (two when the escape question is open).
 
 ## Layout
 

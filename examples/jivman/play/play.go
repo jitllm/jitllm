@@ -55,11 +55,24 @@ func (s *Stats) Mean() time.Duration {
 }
 
 // P50 is the median call latency.
-func (s *Stats) P50() time.Duration {
-	if len(s.Latencies) == 0 {
+func (s *Stats) P50() time.Duration { return median(s.Latencies) }
+
+// Warm is the median and the spread (p10, p90) of every call after the
+// first: the first pays the model's page-in and the JIT's first kernels.
+func (s *Stats) Warm() (p10, p50, p90 time.Duration, n int) {
+	if len(s.Latencies) < 2 {
+		return 0, 0, 0, 0
+	}
+	c := slices.Clone(s.Latencies[1:])
+	slices.Sort(c)
+	return c[len(c)/10], c[len(c)/2], c[len(c)*9/10], len(c)
+}
+
+func median(l []time.Duration) time.Duration {
+	if len(l) == 0 {
 		return 0
 	}
-	c := slices.Clone(s.Latencies)
+	c := slices.Clone(l)
 	slices.Sort(c)
 	return c[len(c)/2]
 }

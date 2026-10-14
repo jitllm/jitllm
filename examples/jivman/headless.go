@@ -95,6 +95,9 @@ func (r *headlessRun) print(w io.Writer) {
 		fmt.Fprintf(w, "decisions %d in %d calls, %d fallbacks; latency mean %.1f ms, p50 %.1f ms, %d prompt tokens a call, on %s\n",
 			s.Decisions, s.Calls, s.Fallbacks, ms(s.Mean()), ms(s.P50()), s.Tokens/max(1, s.Calls), r.Device)
 	}
+	if p10, p50, p90, n := s.Warm(); n > 0 {
+		fmt.Fprintf(w, "warm calls: %d, p50 %.1f ms (p10 %.1f, p90 %.1f)\n", n, ms(p50), ms(p10), ms(p90))
+	}
 	if s.Err != nil {
 		fmt.Fprintf(w, "last model error: %v\n", s.Err)
 	}

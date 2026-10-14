@@ -46,6 +46,9 @@ func newShooter(o options) *shooter {
 func (s *shooter) scene(g *game.Game, st *play.Stats, device string) *view.Scene {
 	sc := &view.Scene{G: g, Stats: st, PacmanBy: s.who, GhostsBy: "Classic", Device: device, Board: s.board,
 		T: float64(g.Ticks) / 60}
+	if s.o.frames != "" {
+		sc.Banner = "game paused while the model thinks · real latency shown"
+	}
 	sc.Driven[game.Pacman] = true
 	if len(s.board) > 0 {
 		sc.High = s.board[0].Best

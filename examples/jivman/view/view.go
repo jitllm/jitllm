@@ -128,7 +128,9 @@ type Scene struct {
 	Summary string
 
 	Dialog *Dialog
-	Note   string
+	// Banner is a line across the top of the board: what a recording's
+	// clock is, when it is not the wall's.
+	Banner string
 
 	hits []Hit
 }
@@ -227,6 +229,10 @@ func (p *Painter) Draw(dc *gg.Context, s *Scene) {
 	p.hud(dc, s)
 	p.board(dc, s)
 	p.controls(dc, s)
+	if s.Banner != "" {
+		p.rect(dc, boardX+8, boardY+4, p.measure(dc, s.Banner, p.F.sans, 12)+20, 22, 6, gg.RGBA2(0.08, 0.08, 0.12, 0.88))
+		p.text(dc, s.Banner, boardX+18, boardY+15, p.F.sans, 12, cAccent, 0)
+	}
 	if s.Tab == TabBoard {
 		p.leaderboard(dc, s)
 	} else {

@@ -31,6 +31,9 @@ type options struct {
 	frames   string
 	every    int
 	request  string
+	record   string
+	seconds  float64
+	fps      int
 }
 
 func main() {
@@ -50,6 +53,10 @@ func main() {
 	flag.StringVar(&o.frames, "frames", "", "headless: write a PNG frame into this folder every -every ticks")
 	flag.IntVar(&o.every, "every", 4, "headless: ticks between -frames")
 	flag.StringVar(&o.request, "request", "", "write the first request a model would be asked (System One JSON) to this file and exit")
+	flag.StringVar(&o.record, "record", "", "play one game in real time, the model on its own goroutine as in the window, "+
+		"and write the window's frames into this folder as PNG (no display needed)")
+	flag.Float64Var(&o.seconds, "seconds", 60, "-record: how long to record")
+	flag.IntVar(&o.fps, "fps", 20, "-record: frames a second")
 	flag.Parse()
 	if flag.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "jivman takes no arguments (got %q); flags go before nothing\n", flag.Args())
@@ -58,6 +65,8 @@ func main() {
 	var err error
 	if o.request != "" {
 		err = os.WriteFile(o.request, firstRequest(), 0o644)
+	} else if o.record != "" {
+		err = record(o)
 	} else if o.headless {
 		err = headless(o)
 	} else {
