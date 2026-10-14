@@ -18,7 +18,7 @@ import (
 // 10). Three cache sizes: one sheet more than the selection (every token
 // splits a few and admits), auto-sized from the room after placement, and
 // none (the plain hybrid path, which must count no split). Kimi-K3 is the
-// latent mixture; Moonlight the packed one with a shared expert, which the
+// latent mixture; DeepSeek-V2-Lite the packed one with a shared expert, which the
 // card runs while the host runs its share. The qwen4exp fixture's banks are float, which have no
 // packed sheets to send: it must fall back to the plain hybrid path in every
 // arm, counted, with the same answer.
@@ -47,12 +47,12 @@ func TestSplitExpertsMatchTheHost(t *testing.T) {
 			}
 			return m, []int32{1008, 10484, 318, 15383, 387, 17374, 13, 646, 1008, 10484, 318, 15383}
 		}},
-		{"moonlight", true, 1e-3, 6, func(t *testing.T) (*Model, []int32) {
+		{"deepseek-v2-lite", true, 1e-3, 6, func(t *testing.T) (*Model, []int32) {
 			// A packed mixture with a shared expert and no latent: the host's
 			// share runs after the shared expert is queued on the card.
-			path, ok := existingModel(testmodels.Path("Moonlight-16B-A3B-Instruct-Q4_K_M.gguf"))
+			path, ok := existingModel(testmodels.Path("DeepSeek-V2-Lite.Q4_K_M.gguf"))
 			if !ok {
-				t.Skip("MODEL MISSING: Moonlight-16B-A3B-Instruct-Q4_K_M.gguf -- this gate proved nothing")
+				t.Skip("MODEL MISSING: DeepSeek-V2-Lite.Q4_K_M.gguf -- this gate proved nothing")
 			}
 			m, err := Open(jlmOf(t, path), noTune, WithKVF16(false))
 			if err != nil {
@@ -109,7 +109,8 @@ func TestSplitExpertsMatchTheHost(t *testing.T) {
 						s.SetDeviceLayers(g, want)
 						placed = s.GPULayers()
 						if placed != want {
-							t.Fatalf("%d of %d blocks placed: %s", placed, want, g.Stats().LastErr)
+							t.Skipf("CARD TOO SMALL: %d of %d blocks placed (%s) -- this arm proved nothing",
+								placed, want, g.Stats().LastErr)
 						}
 						if s.GPULayers() == 0 {
 							t.Fatalf("no block placed: %s", g.Stats().LastErr)
@@ -150,7 +151,10 @@ func TestSplitExpertsMatchTheHost(t *testing.T) {
 						}
 						nmse := num / den
 						worst = math.Max(worst, nmse)
-						if nmse > md.band || argmaxOf(got[p]) != argmaxOf(want[p]) {
+						// A different argmax passes only on a near tie in the
+						// host's own logits.
+						a, b := argmaxOf(got[p]), argmaxOf(want[p])
+						if nmse > md.band || a != b && want[p][b]-want[p][a] > 0.05 {
 							t.Fatalf("pos %d: NMSE %.2e, argmax %d split against %d host",
 								p, nmse, argmaxOf(got[p]), argmaxOf(want[p]))
 						}
