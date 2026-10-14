@@ -87,7 +87,7 @@ hundred milliseconds; here every question is one prefill of the whole board
 (770-1760 tokens), and that prefill is the cost.
 
 [demo.mp4](demo.mp4) is a real-time recording on the M4 (`-record`, the
-window's own loop drawn offscreen): d1-3B playing for 60 seconds, the game
+window's own loop drawn offscreen): d1-3B playing for 60 seconds beside the leaderboard of the runs above, the game
 clock not stopped.
 
 ## Layout
