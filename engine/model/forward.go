@@ -409,7 +409,10 @@ type State struct {
 	// retireRow is Retire's one row, handed to the device without a slice
 	// made each time; rrBases, rrEnds and rrFlat are relocateRows' and
 	// flatSlots', and rrSD the device relocateRows reserves on.
-	retireRow       [1]int
+	retireRow [1]int
+	// pickView and pickTmp are pickOnHost's view of the head and its slot's rows.
+	pickView        nn.Packed
+	pickTmp         [8]float32
 	rrBases, rrEnds []int
 	rrFlat          []int
 	rrSD            nn.SeqKVDevice
