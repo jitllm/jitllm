@@ -69,6 +69,19 @@ func all(t *testing.T) map[string]*ir.Kernel {
 	add("k3/resmix", func() (*ir.Kernel, error) { return kernels.K3ResMix(64, 2, 3) })
 	add("k3/post-restart", func() (*ir.Kernel, error) { return kernels.K3Post(64, 2, 4, 2, true) })
 	add("k3/decaybound", func() (*ir.Kernel, error) { return kernels.DeltaDecayBoundRows(32, 2, -5) })
+	// Clef's decision head (kernels/dechead.go): a linear with its bias, two
+	// heads' scores and their values, a LayerNorm and an RMSNorm, and the
+	// head's row ops, at toy widths.
+	add("dh/matabt-bias", func() (*ir.Kernel, error) { return kernels.DHMatABt(1, 3, 8, 16, 16, 16, 8, 0, 0, 0, 1, true) })
+	add("dh/matabt-heads", func() (*ir.Kernel, error) { return kernels.DHMatABt(2, 3, 5, 4, 8, 8, 5, 4, 4, 15, .5, false) })
+	add("dh/matab-heads", func() (*ir.Kernel, error) { return kernels.DHMatAB(2, 3, 4, 5, 5, 8, 8, 15, 4, 4) })
+	add("dh/layernorm", func() (*ir.Kernel, error) { return kernels.DHNormRows(16, 3, 1e-5, false, true) })
+	add("dh/rmsnorm", func() (*ir.Kernel, error) { return kernels.DHNormRows(16, 3, 1e-6, true, false) })
+	add("dh/gatheradd", func() (*ir.Kernel, error) { return kernels.DHGatherAdd(16, 3) })
+	add("dh/l2", func() (*ir.Kernel, error) { return kernels.DHL2Rows(16, 3) })
+	add("dh/rowdot", func() (*ir.Kernel, error) { return kernels.DHRowDot(16, 3) })
+	add("dh/features", func() (*ir.Kernel, error) { return kernels.DHFeatures(16, 3) })
+	add("dh/combine", func() (*ir.Kernel, error) { return kernels.DHCombine(5, 1.5, 2, .25) })
 	// The grid barrier's gate kernel (kernels/gridprobe.go), so ptxas and
 	// spirv-val see the atomics and the spin loop.
 	add("grid/probe", func() (*ir.Kernel, error) { return kernels.GridProbe(4, 128), nil })

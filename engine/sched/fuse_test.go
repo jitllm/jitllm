@@ -113,6 +113,36 @@ func TestFuseRefusesASharedCrew(t *testing.T) {
 	}
 }
 
+// TestFuseBesideItsOwnWideView: a caller's prefill view on a wider core set
+// (SharedBeside) takes turns with its decode view and leaves the decode view
+// free to fuse -- which a host whose prefill set is wider than its decode set
+// (the M4's P and E cores) never did -- while another caller's view on the
+// wider set still refuses it, and closing that view gives fusion back.
+func TestFuseBesideItsOwnWideView(t *testing.T) {
+	narrow := Shared([]int{0, 1})
+	defer narrow.Close()
+	wide := SharedBeside([]int{0, 1, 2, 3}, narrow)
+	defer wide.Close()
+	if narrow.crew.mu != wide.crew.mu {
+		t.Fatal("the two views do not take turns on one lock: this gate is not on the case it names")
+	}
+	if !narrow.Fuse() {
+		t.Fatal("Fuse refused beside the caller's own wider view")
+	}
+	narrow.Unfuse()
+	other := Shared([]int{0, 1, 2, 3})
+	if narrow.Fuse() {
+		narrow.Unfuse()
+		other.Close()
+		t.Fatal("Fuse opened a region while another caller holds a view on cores it takes turns with")
+	}
+	other.Close()
+	if !narrow.Fuse() {
+		t.Fatal("Fuse refused after the other caller's view closed")
+	}
+	narrow.Unfuse()
+}
+
 // TestFusedPhaseIsCheaperThanARegion measures what fusion is for: a phase
 // against a region of the same empty body. Opt-in (JITLLM_FUSE_BENCH=1): it
 // logs a measurement and asserts nothing about it (RULE 4).

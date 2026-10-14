@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/jitllm/jitllm/engine/nn"
 )
@@ -57,7 +58,15 @@ func (s *State) forwardRowsDevice(tokens []int32, seq, pos, took []int, nlogit i
 // the rows it takes, each once. A gap would leave a position no row wrote and
 // a later one attends; a repeat would write one position twice.
 func (s *State) rowsTake(seq, pos []int) ([]int, error) {
-	took := make([]int, s.nseq)
+	// The State's own scratch, kept from step to step: took is the
+	// caller's until the next step.
+	s.rtTook = slices.Grow(s.rtTook[:0], s.nseq)[:s.nseq]
+	s.rtStart = slices.Grow(s.rtStart[:0], s.nseq)[:s.nseq]
+	s.rtSeen = slices.Grow(s.rtSeen[:0], len(seq))[:len(seq)]
+	took, start, seen := s.rtTook, s.rtStart, s.rtSeen
+	clear(took)
+	clear(start)
+	clear(seen)
 	for _, q := range seq {
 		if q < 0 || q >= s.nseq {
 			return nil, errSlot{q, s.nseq}
@@ -65,11 +74,9 @@ func (s *State) rowsTake(seq, pos []int) ([]int, error) {
 		took[q]++
 	}
 	// Each slot's run in seen, one flag per position it takes.
-	start := make([]int, s.nseq)
 	for q := 1; q < s.nseq; q++ {
 		start[q] = start[q-1] + took[q-1]
 	}
-	seen := make([]bool, len(seq))
 	for r, q := range seq {
 		if pos[r] >= s.maxSeq {
 			return nil, errFull{s.maxSeq, s.reqSeq}
@@ -306,7 +313,7 @@ func (s *State) rowsStep(tokens []int32, pos, slot []int, logits []float32, nlog
 	s.layerInputs(s.bple[:n*c.pleWidth()])
 	s.tokenIDs(tokens)
 	if c.streamHead() {
-		return s.altRowsStep(rd, pos, slot, n, logits, nlogit)
+		return s.altRowsStep(rd, pos, slot, tokens, n, logits, nlogit)
 	}
 	// The head's Logits is the single-sequence destination (s.logits); a step
 	// borrows it for the rows and hands it back.

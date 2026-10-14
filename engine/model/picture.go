@@ -48,7 +48,7 @@ func (s *State) ChatPictureSpans(msgs []ChatMessage, imgs []image.Image, tools [
 	if tw == nil {
 		return nil, fmt.Errorf("model: %d image(s) and this model has no vision tower", len(imgs))
 	}
-	if tw.Cfg.Kind != jlm.ProjLlama4 && tw.Cfg.PosBuckets == 0 {
+	if tw.Cfg.Kind != jlm.ProjLlama4 && tw.Cfg.Kind != jlm.ProjLFM2 && tw.Cfg.PosBuckets == 0 {
 		pics := make([]Image, len(imgs))
 		for i, img := range imgs {
 			pc, err := s.Picture(img)
@@ -73,6 +73,13 @@ func (s *State) ChatPictureSpans(msgs []ChatMessage, imgs []image.Image, tools [
 // pictureRun is the i-th picture's run of the prompt, markers included, for
 // a tower that cuts a picture into pieces.
 func (t *Tower) pictureRun(m *Model, i int, img image.Image) ([]Span, error) {
+	if t.Cfg.Kind == jlm.ProjLFM2 {
+		cols, rows, pieces, err := t.LFM2Pieces(img)
+		if err != nil {
+			return nil, err
+		}
+		return m.LFM2Spans(cols, rows, pieces)
+	}
 	if t.Cfg.Kind == jlm.ProjLlama4 {
 		rows, cols, pieces, err := t.Llama4Pieces(img)
 		if err != nil {

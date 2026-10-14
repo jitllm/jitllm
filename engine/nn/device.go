@@ -227,6 +227,10 @@ type LayerWeights struct {
 	MLAGate              Weight
 	RoutedDown, RoutedUp Weight
 	RoutedNorm           []float32
+	// Qwen3.8-Flash-Next (LayerPlan.Q4E): the two hyper-connections, and on
+	// the n-gram block its weights.
+	HCAttn, HCFFN HCWeights
+	NGram         NGramWeights
 
 	// Ensure makes the weight bytes valid, and is called by a tier once the
 	// block is admitted and before anything is read. nil means they already
@@ -261,6 +265,26 @@ type LayerWeights struct {
 	// stride of k+1 (ExpertRank's layout), w of k, in and out of the expert
 	// width.
 	HostExpertsRows func(sel []uint32, w, in, out []float32, rows, k int) error
+}
+
+// HCWeights are one Qwen3.8-Flash-Next hyper-connection's: the grouped
+// norm (HCMult rows of NEmbd), the gate's down (HCMult*NEmbd -> HCLowRank)
+// and up (back) projections, and the placement's projection (F32,
+// HCMult*NEmbd -> HCMult).
+type HCWeights struct {
+	Norm     []float32
+	Down, Up Weight
+	Inject   Weight
+}
+
+// NGramWeights are Qwen3.8-Flash-Next's n-gram block's: the key (NGramWidth
+// -> HCMult*NEmbd) and value (-> NEmbd) projections, three grouped norms
+// (HCMult rows of NEmbd) and the convolution (NGramConv taps of
+// HCMult*NEmbd channels, tap-major).
+type NGramWeights struct {
+	Key, Value                Weight
+	NormKey, NormQuery, NormC []float32
+	Conv                      []float32
 }
 
 // SSMWeights are the gated delta rule's tensors.
@@ -409,6 +433,9 @@ func (p *LayerPlan) Streams() int {
 	if p.K3 != nil {
 		return max(p.K3.Streams, 1)
 	}
+	if p.Q4E != nil {
+		return max(p.Q4E.HCMult, 1)
+	}
 	return max(p.AltUp, 1)
 }
 
@@ -422,11 +449,14 @@ func (p *LayerPlan) KVRow() int {
 	if p.MLA() {
 		return p.KVLoraRank + p.NRot + p.IdxHeadDim
 	}
-	if p.MSA() {
+	if p.MSA() || p.QSA() {
 		return (p.NKVHead + 1) * p.HeadDim
 	}
 	return p.NKVHead * p.HeadDim
 }
+
+// QSA reports Qwen3.8-Flash-Next's block selection on this block.
+func (p *LayerPlan) QSA() bool { return p.Q4E != nil && p.Q4E.QSARatio != 0 }
 
 // MSA reports MiniMax Sparse Attention's block selection on this block.
 func (p *LayerPlan) MSA() bool { return p.IdxBlock != 0 && p.IdxHeads != 0 }
@@ -544,6 +574,74 @@ type K3Plan struct {
 	// Fault breaks one piece of the graph on purpose, set only by a gate;
 	// the host honours the same faults (model's k3Fault).
 	Fault K3Fault
+}
+
+// Q4EPlan is Qwen3.8-Flash-Next at one block (model's q4e.go is the graph).
+// The residual is HCMult streams, stream-major in Layers' x; each sublayer
+// reads their mix through a HCLowRank gate (LayerWeights.HCAttn, HCFFN) and
+// is added into every stream at its placement weight. On a QSA block
+// (QSARatio non-zero) the indexer's raw key is one more kv head of the
+// cached row (KVRow, padded to HeadDim) and attention reads the plan's
+// IdxTopK/QSARatio best blocks of QSARatio positions and the tail, the
+// indexer being IdxHeads heads of IdxHeadDim. On the n-gram block
+// (NGramHere; NGramWidth is the model's, on every block, so a scratch built
+// for any block serves it) the gathered table rows of each row
+// (NGramDevice.SetNGramRows) are projected, gated per stream and convolved
+// over NGramConv taps NGramDil positions apart, the history the block's
+// recurrent tail (RecurrentPlan.TailLen). The head's mix is the host's.
+type Q4EPlan struct {
+	HCMult, HCLowRank int
+	QSARatio          int
+	NGramWidth        int
+	NGramConv         int
+	NGramDil          int
+	NGramHere         bool
+	// QSARope is the rotary's folded planes at a scalar position (Rope.
+	// TabPlanes), which a QSA block's pooled keys turn by at their blocks'
+	// first positions: an M-RoPE model's text rows turn by the same table.
+	QSARope []float32
+	// Fault breaks one piece of the graph on purpose, set only by a gate;
+	// the host honours the same faults (model's q4eFault).
+	Fault Q4EFault
+}
+
+// Q4EFault names a piece of Qwen3.8-Flash-Next's graph a gate takes out, in
+// the host's numbering (model's q4eFault).
+type Q4EFault uint8
+
+// The host's violations a device runs too: the mix by the plain mean, the
+// gate's low rank unscaled, every stream placed at one, the placement
+// halved, no n-gram embedding, no n-gram convolution, every key read on a
+// QSA block, a QSA block scored by its first key, the tail dropped, the
+// delta rule's gate silu.
+const (
+	Q4EFaultNone Q4EFault = iota
+	Q4EFaultNoGate
+	Q4EFaultPlainPlace
+	Q4EFaultNoNGram
+	Q4EFaultNoNGramConv
+	Q4EFaultNoEOSReset
+	Q4EFaultDenseQSA
+	Q4EFaultQSAFirstKey
+	Q4EFaultNoTail
+	Q4EFaultSiLUGate
+	Q4EFaultUnscaledGate
+	Q4EFaultHalfPlace
+)
+
+// NGramDevice is a device that runs Qwen3.8-Flash-Next's n-gram block: the
+// host hashes each row's n-gram, reads the table rows and hands them over,
+// rows*Q4EPlan.NGramWidth floats in the call's row order, before the call.
+type NGramDevice interface {
+	SetNGramRows(rows []float32)
+}
+
+// QSADevice is a device that runs Qwen3.8-Flash-Next's QSA blocks: before a
+// call the host hands over each row's rotary marks (where a picture moved the
+// positions after it, and by how much), in the call's row order: the row's
+// count, then its (position, delta) pairs.
+type QSADevice interface {
+	SetRopeMarks(marks []int32)
 }
 
 // K3Fault names a piece of Kimi-K3's graph a gate takes out.
@@ -866,6 +964,9 @@ type LayerPlan struct {
 	// K3 is Kimi-K3's residual attention and latent mixture at this block,
 	// nil on every other model.
 	K3 *K3Plan
+	// Q4E is Qwen3.8-Flash-Next's hyper-connections, QSA and n-gram
+	// embedding at this block, nil on every other model.
+	Q4E *Q4EPlan
 	// LatentNormEps is the MLA latent norms' epsilon (Kimi-K3 and
 	// Kimi-Linear's 1e-6); zero means RMSEps.
 	LatentNormEps float64
@@ -889,7 +990,7 @@ type RecurrentPlan struct {
 	VHeads    int // value heads, and the number of decay rates
 	KDim      int // key/query head width, and the state's key extent
 	VDim      int // value head width, and the state's value extent
-	StateLen  int // VHeads*VDim*KDim floats, per sequence, CONSTANT in context
+	StateLen  int // VHeads*VDim*KDim floats and TailLen more, per sequence, CONSTANT in context
 	ConvState int // (Conv-1)*Chans floats, per sequence
 	// ChanDecay is Kimi Delta Attention rather than qwen3next's gated delta
 	// rule: the state decays at a rate per channel instead of one per head,
@@ -927,6 +1028,15 @@ type RecurrentPlan struct {
 	ShortConv              bool
 	NormGroups             int
 	NormBeforeGate, NoNorm bool
+	// SigmoidGate gates the output norm by sigmoid(z) where the gated delta
+	// rule's is silu(z) (Qwen3.8-Flash-Next).
+	SigmoidGate bool
+	// TailLen is what the block's state carries per sequence after the delta
+	// rule's, inside StateLen: room for Qwen3.8-Flash-Next's n-gram
+	// predecessors and convolution history (model's recTailLen), the same on
+	// every linear block so a device keeps one slot width. A sequence's slot
+	// is [delta rule | tail]; the delta rule's kernels step its head.
+	TailLen int
 	// Mamba1 is Mamba-1's selective scan (jlm.LayerMamba1): VHeads channels
 	// of one row each over a KDim-wide state, B and C shared, the decay a
 	// vector exp(dt*A) per channel, dt off a rank-Rank bottleneck of the

@@ -561,6 +561,14 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 			if spans, err = m.ChatSpansParts(msgs, [][]model.Span{ps}, true); err != nil {
 				return err
 			}
+		} else if pic.lfm2 != nil {
+			ps, err := m.LFM2Spans(pic.lfm2[0], pic.lfm2[1], pic.pieces)
+			if err != nil {
+				return err
+			}
+			if spans, err = m.ChatSpansParts(msgs, [][]model.Span{ps}, true); err != nil {
+				return err
+			}
 		} else if pic.lay != nil {
 			ps, err := m.PictureSpans(*pic.lay, 0, true, pic.pieces)
 			if err != nil {
@@ -1910,6 +1918,13 @@ func prefillImage(st *model.State, m *model.Model, tw *model.Tower, pic *picture
 	if pic.tiles != nil {
 		fmt.Fprintf(os.Stderr, "vision   %s: a %dx%d canvas of tiles and %d piece(s) -> %d x %d embeddings of %d\n",
 			c.Projector, pic.tiles[1], pic.tiles[0], len(pic.pieces), len(pic.pieces), c.Tokens(), c.ProjDim)
+	} else if pic.lfm2 != nil {
+		rows := 0
+		for _, pc := range pic.pieces {
+			rows += pc.Rows
+		}
+		fmt.Fprintf(os.Stderr, "vision   %s: %dx%d tiles and %d piece(s) -> %d embeddings of %d\n",
+			c.Projector, pic.lfm2[0], pic.lfm2[1], len(pic.pieces), rows, c.ProjDim)
 	} else if pic.lay != nil {
 		fmt.Fprintf(os.Stderr, "vision   %s: %dx%d picture, an overview and %d slice(s) (%dx%d) -> "+
 			"%d x %d embeddings of %d\n", c.Projector, pic.lay.W, pic.lay.H, len(pic.lay.Pieces)-1,

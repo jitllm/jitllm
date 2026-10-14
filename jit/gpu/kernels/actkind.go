@@ -82,7 +82,17 @@ const (
 	// 0.5*((x + |x|) - |x|*q) with q = 1 - erf(|x|/sqrt 2), so a negative x
 	// is the small q times |x| and nothing cancels.
 	ActGELUErf
+	// ActSqrtSigmoid is Qwen3.8-Flash-Next's n-gram gate,
+	//
+	//	sigmoid(sign(x) * sqrt(max(|x|, 1e-6)))
+	//
+	// a sigmoid of the signed square root, the floor on the magnitude the
+	// reference's own (clamp_min(1e-6)). Ungated.
+	ActSqrtSigmoid
 )
+
+// SqrtSigmoidFloor is ActSqrtSigmoid's floor on |x|.
+const SqrtSigmoidFloor = float32(1e-6)
 
 // GELUErfP and GELUErfA are ActGELUErf's erf: t = 1/(1 + P*z), and
 // 1 - erf(z) = t*(A[0] + t*(A[1] + t*(A[2] + t*(A[3] + t*A[4])))) * exp(-z*z).
@@ -115,7 +125,8 @@ var (
 
 // Ungated is the set an ungated kernel may bake, in code order. It exists so a
 // gate can enumerate the kinds rather than restate them.
-var Ungated = [...]ActKind{ActSiLU, ActGELU, ActQuickGELU, ActReLU2, ActReLU, ActSqrtSoftplus, ActGELUErf}
+var Ungated = [...]ActKind{ActSiLU, ActGELU, ActQuickGELU, ActReLU2, ActReLU, ActSqrtSoftplus, ActGELUErf,
+	ActSqrtSigmoid}
 
 // Gated is the set a gated kernel (dst = act(dst) combined with up) may bake,
 // for the same reason.
@@ -149,6 +160,8 @@ func (k ActKind) String() string {
 		return "situ"
 	case ActGELUErf:
 		return "gelu-erf"
+	case ActSqrtSigmoid:
+		return "sqrt-sigmoid"
 	}
 	return "act(" + strconv.Itoa(int(k)) + ")"
 }

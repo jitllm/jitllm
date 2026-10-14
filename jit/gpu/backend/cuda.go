@@ -1058,26 +1058,49 @@ func (b *cudaBuf) WriteAt(off int, p []byte) error {
 	if q := b.dev.curQueue(); q != nil {
 		return q.write(b.b, off, p)
 	}
-	err := errCUDAClosed
-	b.dev.do(func() {
-		// Outside a queue the legacy stream does not wait for one, and a write
-		// must land after everything before it.
-		queues := b.dev.hasQueues()
-		if queues {
-			if err = b.dev.syncAll(); err != nil {
-				return
-			}
-		}
-		err = b.b.WriteAt(off, unsafe.Pointer(&p[0]), len(p))
-		// From pageable memory the copy returns once the driver has staged
-		// the bytes, not once they have landed: a queue's next launch, on a
-		// stream that does not wait for the legacy one, could read the old
-		// ones.
-		if err == nil && queues {
-			err = cuda.SyncLegacy()
-		}
-	})
+	r := cudaWrites.Get().(*cudaWrite)
+	*r = cudaWrite{b: b, off: off, p: p, err: errCUDAClosed, fn: r.fn}
+	b.dev.do(r.fn)
+	err := r.err
+	*r = cudaWrite{fn: r.fn}
+	cudaWrites.Put(r)
 	return err
+}
+
+// cudaWrite is one WriteAt outside a queue, with the function the owner
+// goroutine runs for it, kept as cudaCopy is: a closure over WriteAt's locals
+// was a heap object per write.
+type cudaWrite struct {
+	b   *cudaBuf
+	off int
+	p   []byte
+	err error
+	fn  func()
+}
+
+var cudaWrites = sync.Pool{New: func() any {
+	r := &cudaWrite{}
+	r.fn = r.run
+	return r
+}}
+
+func (r *cudaWrite) run() {
+	d := r.b.dev
+	// Outside a queue the legacy stream does not wait for one, and a write
+	// must land after everything before it.
+	queues := d.hasQueues()
+	if queues {
+		if r.err = d.syncAll(); r.err != nil {
+			return
+		}
+	}
+	r.err = r.b.b.WriteAt(r.off, unsafe.Pointer(&r.p[0]), len(r.p))
+	// From pageable memory the copy returns once the driver has staged the
+	// bytes, not once they have landed: a queue's next launch, on a stream
+	// that does not wait for the legacy one, could read the old ones.
+	if r.err == nil && queues {
+		r.err = cuda.SyncLegacy()
+	}
 }
 
 func (b *cudaBuf) Read(p []byte) error {
@@ -1117,20 +1140,45 @@ func (c *cudaDev) Copy(dst Buf, dstOff int, src Buf, srcOff, n int) error {
 	if err := copyRange(db.b.Len(), dstOff, sb.b.Len(), srcOff, n, db.b == sb.b); err != nil || n == 0 {
 		return err
 	}
-	err := errCUDAClosed
-	c.do(func() {
-		// The legacy stream does not wait for a queue's non-blocking stream,
-		// so with queues open the copy waits for the whole context first.
-		if c.hasQueues() {
-			if err = c.syncAll(); err != nil {
-				return
-			}
-		}
-		if err = cuda.CopyDtoD(db.b, dstOff, sb.b, srcOff, n); err == nil {
-			err = c.syncAll()
-		}
-	})
+	r := cudaCopies.Get().(*cudaCopy)
+	*r = cudaCopy{c: c, db: db, sb: sb, dOff: dstOff, sOff: srcOff, n: n, err: errCUDAClosed, fn: r.fn}
+	c.do(r.fn)
+	err := r.err
+	*r = cudaCopy{fn: r.fn}
+	cudaCopies.Put(r)
 	return err
+}
+
+// cudaCopy is one Copy's arguments with the function the owner goroutine runs
+// for it, made once a request and the requests kept (cudaCopies): a closure
+// over Copy's locals was a heap object per copy, and a recurrent block's
+// zeroing makes four a block every prompt.
+type cudaCopy struct {
+	c             *cudaDev
+	db, sb        *cudaBuf
+	dOff, sOff, n int
+	err           error
+	fn            func()
+}
+
+var cudaCopies = sync.Pool{New: func() any {
+	r := &cudaCopy{}
+	r.fn = r.run
+	return r
+}}
+
+func (r *cudaCopy) run() {
+	c := r.c
+	// The legacy stream does not wait for a queue's non-blocking stream, so
+	// with queues open the copy waits for the whole context first.
+	if c.hasQueues() {
+		if r.err = c.syncAll(); r.err != nil {
+			return
+		}
+	}
+	if r.err = cuda.CopyDtoD(r.db.b, r.dOff, r.sb.b, r.sOff, r.n); r.err == nil {
+		r.err = c.syncAll()
+	}
 }
 
 type cudaKern struct {

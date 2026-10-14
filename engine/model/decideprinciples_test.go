@@ -60,18 +60,9 @@ func TestDecisionRelocatesMidPrompt(t *testing.T) {
 			}
 			defer d.Close()
 			state, qs := decisionRequest(t, filepath.Join("testdata", "decision", "ambiguous.json"))
-			ids, groups, err := d.prompt(state, &qs[0], 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			labels := func(lg []float32) []float32 {
-				s, err := d.labelScores(lg, groups)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return s
-			}
-			d.st.Reset()
+			rp := readoutOf(t, d, state, qs)
+			ids, labels := rp.ids, rp.finish
+			rp.start()
 			lg, err := d.st.Prefill(ids)
 			if err != nil {
 				t.Fatal(err)
@@ -83,7 +74,8 @@ func TestDecisionRelocatesMidPrompt(t *testing.T) {
 			// the violation: a migration that carried nothing.
 			headHome := false
 			moved := func(t *testing.T, g *tier.GPU, lose bool) ([]float32, int) {
-				d.st.Reset()
+				rp.start()
+				rows0 := d.st.PrefillRows()
 				if _, err := d.st.Prefill(ids[:a]); err != nil {
 					t.Fatal(err)
 				}
@@ -113,6 +105,11 @@ func TestDecisionRelocatesMidPrompt(t *testing.T) {
 				lg, err := d.st.Prefill(ids[b:])
 				if err != nil {
 					t.Fatal(err)
+				}
+				// Each row ran once: the moves carried the history rather
+				// than computing it again.
+				if got := d.st.PrefillRows() - rows0; got != len(ids) {
+					t.Fatalf("%d prompt rows run for a %d-token prompt", got, len(ids))
 				}
 				return labels(lg), placed
 			}
@@ -180,7 +177,7 @@ func TestDecisionRelocatesMidPrompt(t *testing.T) {
 // on the V100 (CUDA, Vulkan): d1 0.029-0.037, with its short convolutions'
 // state lost 0.082-0.095 (three taps of history: a thin but clean margin);
 // lev above 0.3 on CUDA, with its delta-rule state lost 3.2.
-var decisionRelocTol = map[string]float64{"d1-3B": 0.06, "lev": 1.0}
+var decisionRelocTol = map[string]float64{"d1-3B": 0.06, "lev": 1.0, "clef": 1.0, "clef-fixture": 0.01}
 
 // TestDecisionRelocatesBetweenDevices moves one Decider's blocks from the host
 // onto each device in turn and home, answering the same request at every
@@ -208,7 +205,7 @@ func TestDecisionRelocatesBetweenDevices(t *testing.T) {
 			defer d.Close()
 			state, qs := decisionRequest(t, filepath.Join("testdata", "decision", "support.json"))
 			answer := func() [][]DecisionAnswer {
-				ans, err := d.Decide(state, qs)
+				ans, err := d.Decide(state, qs, nil)
 				if err != nil {
 					t.Fatal(err)
 				}

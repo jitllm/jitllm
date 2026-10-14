@@ -27,8 +27,10 @@ import (
 // history -- moves it to the picture's rows rounded up to an eighth of the
 // power of two above them (visRowsFor): up when the picture has more rows than the set, after asking the
 // budget for the build's bytes, extrapolated from the set it replaces; down
-// when the picture needs half the set or less, so a large picture once does
-// not make every later one run its rows. A picture the budget cannot hold is
+// when visShrinkCalls calls in a row have needed half the set or less, so a
+// large picture once does not make every later one run its rows, and calls
+// whose sizes alternate (an encoder's questions, short and long) do not
+// rebuild the set -- and compile its kernels -- at every call. A picture the budget cannot hold is
 // refused with nothing allocated, and the State takes tower blocks home until
 // it fits (model.State.reserveTowerRows): the picture encodes on the host,
 // never out of memory. The last tower block to leave takes the set with it
@@ -36,6 +38,10 @@ import (
 
 // visStart is the rows a tower's set is built for at placement.
 const visStart = 1024
+
+// visShrinkCalls is how many calls in a row must need half the set or less
+// before ReserveRows shrinks it.
+const visShrinkCalls = 8
 
 // visGrain is the finest step a tower's rows move in.
 const visGrain = 64
@@ -151,9 +157,9 @@ func (g *devTier) towerGrowth(old *blockScratch, rows int) int64 {
 }
 
 // ReserveRows makes this device's tower blocks able to take a call of n rows
-// (nn.RowsReserver): their set grows to n, or shrinks to it when it is twice
-// what n needs, and false -- with the set as it was -- is a budget that cannot
-// hold it. A device holding no tower block has nothing to size. Callers must
+// (nn.RowsReserver): their set grows to n, or shrinks to it when it has been
+// twice what the calls needed for visShrinkCalls calls in a row, and false --
+// with the set as it was -- is a budget that cannot hold it. A device holding no tower block has nothing to size. Callers must
 // NOT hold g.mu: a resize drops the captured graph and compiles.
 func (g *devTier) ReserveRows(n int) bool {
 	g.mu.Lock()
@@ -167,8 +173,15 @@ func (g *devTier) ReserveRows(n int) bool {
 	}
 	want := visRowsFor(n, g.visMax)
 	if want == g.visCap || n <= g.visCap && 2*want > g.visCap {
+		g.visSmall = 0
 		return true
 	}
+	if n <= g.visCap {
+		if g.visSmall++; g.visSmall < visShrinkCalls {
+			return true
+		}
+	}
+	g.visSmall = 0
 	return g.resizeTower(n, want)
 }
 

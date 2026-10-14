@@ -35,7 +35,7 @@ var sseMnemonicISA = func() map[string]ISA {
 		}
 	}
 	add(0, `mov movabs movzx movsx movsxd add sub and or xor inc dec neg not test cmp
-		lea imul shl shr sar sal rol ror jmp je jne jz jnz ja jae jb jbe jg jge jl jle
+		lea imul div shl shr sar sal rol ror jmp je jne jz jnz ja jae jb jbe jg jge jl jle
 		js jns ret nop prefetcht0 prefetcht1 prefetcht2 prefetchnta
 		cmove cmovne cmovz cmovnz cmova cmovae cmovb cmovbe cmovg cmovge cmovl cmovle`)
 	add(ISASSE2, `movaps movups movss movd movq movdqu movdqa movhlps movlhps movmskps pmovmskb

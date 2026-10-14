@@ -43,14 +43,6 @@ func (m *Model) encBlocks() int {
 	return len(m.enc.blocks)
 }
 
-// encBlockPageIn is pageIn for an encoder's block li.
-func (m *Model) encBlockPageIn(li int) error {
-	if m.enc.mb != nil {
-		return m.mbPageIn(li)
-	}
-	return m.encPageIn(li)
-}
-
 // encMaxRows is the longest sequence an encoder's blocks take on a device:
 // BERT's position table, or the context it was trained at.
 func (m *Model) encMaxRows() int {

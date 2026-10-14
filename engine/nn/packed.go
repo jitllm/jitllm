@@ -586,6 +586,15 @@ type hotRegions struct {
 		k, es int
 		fn    func(lo, hi int)
 	}
+	// floatMM is MatMulFloat's tile of tokens over rows: an encoder's every
+	// projection, every block of every sequence.
+	floatMM struct {
+		code               *cpu.Code
+		out, x             []float32
+		w                  []byte
+		k, rowBytes, nrows int
+		fn                 func(lo, hi int)
+	}
 }
 
 func (h *hotRegions) fusedFn(f *JIT) func(worker, lo, hi int) {
@@ -655,6 +664,19 @@ func (h *hotRegions) floatFn() func(lo, hi int) {
 		}
 	}
 	return h.float.fn
+}
+
+func (h *hotRegions) floatMMFn() func(lo, hi int) {
+	if h.floatMM.fn == nil {
+		h.floatMM.fn = func(lo, hi int) {
+			j := &h.floatMM
+			j.code.Call(&cpu.Args{
+				Out: &j.out[lo], W: &j.w[lo*j.rowBytes], A: (*int8)(unsafe.Pointer(&j.x[0])),
+				Rows: int64(hi - lo), K: int64(j.k), RowStr: int64(j.rowBytes), OutStr: int64(4 * j.nrows),
+			})
+		}
+	}
+	return h.floatMM.fn
 }
 
 func (h *hotRegions) quantFn(f *JIT) func(worker, lo, hi int) {

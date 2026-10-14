@@ -74,10 +74,21 @@ func MSAScoresPaged(rows, heads, dim, tcap, page, kvRow, koff int) (*ir.Kernel, 
 // MSABlocks is how many blocks of blk positions tcap positions span.
 func MSABlocks(tcap, blk int) int { return (tcap + blk - 1) / blk }
 
-// msaOwn is the query's own block: the block of its row's last position.
-func msaOwn(b *ir.Builder, pRow, r ir.Value, blk int) (end, own ir.Value) {
+// selMode is how a selection names its forced block: MiniMax's (the zero
+// value) forces the block of the row's last position; QSA's
+// (Qwen3.8-Flash-Next) forces the incomplete tail, the block at end/blk,
+// which is empty when the history ends on a block boundary, and noTail (a
+// gate's violation) keeps the tail out of the kept positions.
+type selMode struct{ qsa, noTail bool }
+
+// msaOwn is the query's own block: the block of its row's last position, or
+// under QSA the tail's.
+func msaOwn(b *ir.Builder, pRow, r ir.Value, blk int, m selMode) (end, own ir.Value) {
 	one := b.Const(ir.U32, 1)
 	end = b.Max(ir.U32, pagedDesc(b, pRow, r, PRowEnd), one)
+	if m.qsa {
+		return end, b.Div(ir.U32, end, b.Const(ir.U32, int64(blk)))
+	}
 	return end, b.Div(ir.U32, b.Sub(ir.U32, end, one), b.Const(ir.U32, int64(blk)))
 }
 
@@ -103,7 +114,7 @@ func MSABlockMax(rows, heads, tcap, blk, local int) (*ir.Kernel, error) {
 	bi := b.Rem(ir.U32, flat, b.Const(ir.U32, int64(nb)))
 	rh := b.Div(ir.U32, flat, b.Const(ir.U32, int64(nb)))
 	r := b.Div(ir.U32, rh, b.Const(ir.U32, int64(heads)))
-	end, own := msaOwn(b, pRow, r, blk)
+	end, own := msaOwn(b, pRow, r, blk, selMode{})
 	negInf := b.Bitcast(ir.F32, b.Const(ir.U32, 0xFF800000))
 	posInf := b.Bitcast(ir.F32, b.Const(ir.U32, 0x7F800000))
 	t0 := b.Mul(ir.U32, bi, b.Const(ir.U32, int64(blk)))
@@ -132,6 +143,16 @@ func MSABlockMax(rows, heads, tcap, blk, local int) (*ir.Kernel, error) {
 // thread per (row, group, block). Parameters: pBlk (MSABlockMax's), pRow,
 // pFlag (rows x heads x blocks, u32 0 or 1).
 func MSASelect(rows, heads, tcap, blk, k int) (*ir.Kernel, error) {
+	return msaSelect(rows, heads, tcap, blk, k, selMode{})
+}
+
+// QSASelect is MSASelect under QSA's forced tail (selMode): k is the kept
+// complete blocks plus the tail, and tcap spans the tail's block too.
+func QSASelect(rows, heads, tcap, blk, k int) (*ir.Kernel, error) {
+	return msaSelect(rows, heads, tcap, blk, k, selMode{qsa: true})
+}
+
+func msaSelect(rows, heads, tcap, blk, k int, m selMode) (*ir.Kernel, error) {
 	if rows < 1 || heads < 1 || tcap < 1 || blk < 1 || k < 1 {
 		return nil, fmt.Errorf("kernels: MSASelect: rows=%d heads=%d tcap=%d blk=%d k=%d",
 			rows, heads, tcap, blk, k)
@@ -147,7 +168,7 @@ func MSASelect(rows, heads, tcap, blk, k int) (*ir.Kernel, error) {
 	bi := b.Rem(ir.U32, flat, b.Const(ir.U32, int64(nb)))
 	rh := b.Div(ir.U32, flat, b.Const(ir.U32, int64(nb)))
 	r := b.Div(ir.U32, rh, b.Const(ir.U32, int64(heads)))
-	_, own := msaOwn(b, pRow, r, blk)
+	_, own := msaOwn(b, pRow, r, blk, m)
 	n := b.Min(ir.U32, b.Add(ir.U32, own, one), b.Const(ir.U32, int64(nb)))
 	keep := b.Min(ir.U32, n, b.Const(ir.U32, int64(k)))
 	base := b.Mul(ir.U32, rh, b.Const(ir.U32, int64(nb)))
@@ -204,21 +225,31 @@ func MSAGatherPages(k, blk, page int) int { return (k*blk + page - 1) / page }
 // msaKept is a row's kept positions, the same in every group: every kept
 // block whole but the query's own, which is the last and ends at the
 // history's end.
-func msaKept(b *ir.Builder, end, own ir.Value, blk, k int) ir.Value {
+func msaKept(b *ir.Builder, end, own ir.Value, blk, k int, m selMode) ir.Value {
 	one := b.Const(ir.U32, 1)
 	nsel := b.Min(ir.U32, b.Add(ir.U32, own, one), b.Const(ir.U32, int64(k)))
 	bl := b.Const(ir.U32, int64(blk))
-	return b.Add(ir.U32, b.Mul(ir.U32, b.Sub(ir.U32, nsel, one), bl), b.Sub(ir.U32, end, b.Mul(ir.U32, own, bl)))
+	whole := b.Mul(ir.U32, b.Sub(ir.U32, nsel, one), bl)
+	if m.noTail {
+		return whole
+	}
+	return b.Add(ir.U32, whole, b.Sub(ir.U32, end, b.Mul(ir.U32, own, bl)))
 }
 
 // msaGatherPos is the history position gathered key j of row r's group h
 // reads, and the source page id holding it: its kept block's position, clamped
 // to the kept count so a slot past it reads the last kept key, which no
 // descriptor reads.
-func msaGatherPos(b *ir.Builder, pTab, pRow, pSel, r, h, j ir.Value, heads, blk, k, page int) (t, pid ir.Value) {
+func msaGatherPos(b *ir.Builder, pTab, pRow, pSel, r, h, j ir.Value, heads, blk, k, page int,
+	m selMode) (t, pid ir.Value) {
 	one := b.Const(ir.U32, 1)
-	end, own := msaOwn(b, pRow, r, blk)
-	jj := b.Min(ir.U32, j, b.Sub(ir.U32, msaKept(b, end, own, blk, k), one))
+	end, own := msaOwn(b, pRow, r, blk, m)
+	kept := msaKept(b, end, own, blk, k, m)
+	if m.noTail {
+		// The violation can keep nothing; a slot past it still reads a key.
+		kept = b.Max(ir.U32, kept, one)
+	}
+	jj := b.Min(ir.U32, j, b.Sub(ir.U32, kept, one))
 	bl := b.Const(ir.U32, int64(blk))
 	rh := b.Add(ir.U32, b.Mul(ir.U32, r, b.Const(ir.U32, int64(heads))), h)
 	blkID := b.Load(ir.U32, pSel, b.Add(ir.U32, b.Mul(ir.U32, rh, b.Const(ir.U32, int64(k+1))), b.Div(ir.U32, jj, bl)), 0)
@@ -231,6 +262,15 @@ func msaGatherPos(b *ir.Builder, pTab, pRow, pSel, r, h, j ir.Value, heads, blk,
 // the kept position j of e's group, both [width][P] pages. Parameters: pSrc
 // (the pool), pTab, pRow, pSel, pDst.
 func MSAGatherK(rows, heads, headDim, blk, k, page, kvRow int) (*ir.Kernel, error) {
+	return msaGatherK(rows, heads, headDim, blk, k, page, kvRow, selMode{})
+}
+
+// QSAGatherK is MSAGatherK under QSA's forced tail (selMode).
+func QSAGatherK(rows, heads, headDim, blk, k, page, kvRow int, noTail bool) (*ir.Kernel, error) {
+	return msaGatherK(rows, heads, headDim, blk, k, page, kvRow, selMode{qsa: true, noTail: noTail})
+}
+
+func msaGatherK(rows, heads, headDim, blk, k, page, kvRow int, m selMode) (*ir.Kernel, error) {
 	if err := checkPage("MSAGatherK", page); err != nil {
 		return nil, err
 	}
@@ -255,7 +295,7 @@ func MSAGatherK(rows, heads, headDim, blk, k, page, kvRow int) (*ir.Kernel, erro
 	e := b.Rem(ir.U32, er, b.Const(ir.U32, int64(w)))
 	r := b.Div(ir.U32, er, b.Const(ir.U32, int64(w)))
 	h := b.Div(ir.U32, e, b.Const(ir.U32, int64(headDim)))
-	t, pid := msaGatherPos(b, pTab, pRow, pSel, r, h, j, heads, blk, k, page)
+	t, pid := msaGatherPos(b, pTab, pRow, pSel, r, h, j, heads, blk, k, page, m)
 	src := b.Add(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, pid, b.Const(ir.U32, int64(page*kvRow))),
 		b.Mul(ir.U32, e, b.Const(ir.U32, int64(page)))), pageRem(b, t, page))
 	gp := b.Add(ir.U32, b.Mul(ir.U32, r, b.Const(ir.U32, int64(ppr))), pageDiv(b, j, page))
@@ -270,6 +310,15 @@ func MSAGatherK(rows, heads, headDim, blk, k, page, kvRow int) (*ir.Kernel, erro
 // which never straddles a head since headDim is even). Parameters: pSrc (the
 // pool), pTab, pRow, pSel, pDst.
 func MSAGatherV(rows, heads, headDim, blk, k, page, kvRow int, f16 bool) (*ir.Kernel, error) {
+	return msaGatherV(rows, heads, headDim, blk, k, page, kvRow, f16, selMode{})
+}
+
+// QSAGatherV is MSAGatherV under QSA's forced tail (selMode).
+func QSAGatherV(rows, heads, headDim, blk, k, page, kvRow int, f16, noTail bool) (*ir.Kernel, error) {
+	return msaGatherV(rows, heads, headDim, blk, k, page, kvRow, f16, selMode{qsa: true, noTail: noTail})
+}
+
+func msaGatherV(rows, heads, headDim, blk, k, page, kvRow int, f16 bool, m selMode) (*ir.Kernel, error) {
 	if err := checkPage("MSAGatherV", page); err != nil {
 		return nil, err
 	}
@@ -299,7 +348,7 @@ func MSAGatherV(rows, heads, headDim, blk, k, page, kvRow int, f16 bool) (*ir.Ke
 	j := b.Rem(ir.U32, rj, b.Const(ir.U32, int64(kc)))
 	r := b.Div(ir.U32, rj, b.Const(ir.U32, int64(kc)))
 	h := b.Div(ir.U32, b.Mul(ir.U32, u, b.Const(ir.U32, int64(ew))), b.Const(ir.U32, int64(headDim)))
-	t, pid := msaGatherPos(b, pTab, pRow, pSel, r, h, j, heads, blk, k, page)
+	t, pid := msaGatherPos(b, pTab, pRow, pSel, r, h, j, heads, blk, k, page, m)
 	src := b.Add(ir.U32, b.Mul(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, pid, b.Const(ir.U32, int64(page))),
 		pageRem(b, t, page)), b.Const(ir.U32, int64(rw))), u)
 	gp := b.Add(ir.U32, b.Mul(ir.U32, r, b.Const(ir.U32, int64(ppr))), pageDiv(b, j, page))
@@ -313,6 +362,15 @@ func MSAGatherV(rows, heads, headDim, blk, k, page, kvRow int, f16 bool) (*ir.Ke
 // r*MSAGatherPages, its keys 0..kept, written nowhere. Parameters: pRow (the
 // history's), pOut.
 func MSADesc(rows, blk, k, page int) (*ir.Kernel, error) {
+	return msaDesc(rows, blk, k, page, selMode{})
+}
+
+// QSADesc is MSADesc under QSA's forced tail (selMode).
+func QSADesc(rows, blk, k, page int, noTail bool) (*ir.Kernel, error) {
+	return msaDesc(rows, blk, k, page, selMode{qsa: true, noTail: noTail})
+}
+
+func msaDesc(rows, blk, k, page int, m selMode) (*ir.Kernel, error) {
 	if rows < 1 || blk < 1 || k < 1 {
 		return nil, fmt.Errorf("kernels: MSADesc: rows=%d blk=%d k=%d", rows, blk, k)
 	}
@@ -324,13 +382,187 @@ func MSADesc(rows, blk, k, page int) (*ir.Kernel, error) {
 	w := b.Rem(ir.U32, flat, b.Const(ir.U32, PRowWords))
 	r := b.Div(ir.U32, flat, b.Const(ir.U32, PRowWords))
 	zero := b.Const(ir.U32, 0)
-	end, own := msaOwn(b, pRow, r, blk)
-	kept := msaKept(b, end, own, blk, k)
+	end, own := msaOwn(b, pRow, r, blk, m)
+	kept := msaKept(b, end, own, blk, k, m)
 	tab := b.Mul(ir.U32, r, b.Const(ir.U32, int64(MSAGatherPages(k, blk, page))))
 	isTab := b.Lt(ir.U32, w, b.Const(ir.U32, PRowTab+1))
 	isEnd := b.Select(ir.U32, b.Lt(ir.U32, w, b.Const(ir.U32, PRowEnd)), zero,
 		b.Select(ir.U32, b.Lt(ir.U32, w, b.Const(ir.U32, PRowEnd+1)), b.Const(ir.U32, 1), zero))
 	v := b.Select(ir.U32, isTab, tab, b.Mul(ir.U32, isEnd, kept))
 	b.Store(pOut, flat, v, 0)
+	return b.Done(), nil
+}
+
+// QSAScores is QSA's block score (Qwen3.8-Flash-Next; engine/model/qsa.go is
+// the graph): for each row and each complete block b of its history, the
+// mean of the block's blk raw indexer keys (column koff of the K row, dim
+// wide; its first key alone under firstKey, a gate's violation), RMSNormed
+// against pW, rotated at the block's first position by row b of pCS (a
+// RopeTable over positions 0, blk, 2*blk, ...: nRot dimensions, NEOX pairs
+// or adjacent ones), scored sum_h relu(q_h . key) over the row's heads
+// queries. The tail's block (end/blk) scores +inf and a block past it -inf,
+// so QSASelect keeps the tail and the best complete blocks; under dense (a
+// gate's violation) every complete block scores +inf too. The score is
+// written for each of groups kv groups, which QSAGatherK/V read the
+// selection per. One thread per (row, block) of nb blocks a row (the
+// complete blocks of tcap and the tail's).
+//
+// A picture moves the rotary position of the text after it (M-RoPE): a
+// block starting at p turns by p plus the delta of the last of its row's
+// marks at or before p. pMark is the rows' marks: rows+1 offsets into the
+// marks, then each mark's position with the delta's sign in bit 31; pDCS is
+// a RopeTable over the marks' |delta|, mark-major, and the block's turn is
+// pCS's composed with it. Parameters: pQ (rows x heads x dim), pK (the
+// pool), pTab, pRow, pCS (nb x nRot), pW (dim), pMark, pDCS, pOut (rows x
+// groups x nb).
+func QSAScores(rows, heads, dim, nb, blk, groups, page, kvRow, koff, nRot int, neox bool, eps float32,
+	firstKey, dense bool) (*ir.Kernel, error) {
+	if err := checkPage("QSAScores", page); err != nil {
+		return nil, err
+	}
+	if rows < 1 || heads < 1 || dim < 1 || nb < 1 || blk < 1 || groups < 1 || koff < 0 || koff+dim > kvRow ||
+		nRot < 0 || nRot%2 != 0 || nRot > dim {
+		return nil, fmt.Errorf("kernels: QSAScores: rows=%d heads=%d dim=%d nb=%d blk=%d groups=%d row=%d col=%d rot=%d",
+			rows, heads, dim, nb, blk, groups, kvRow, koff, nRot)
+	}
+	b := ir.New("qsascores", [3]int{128, 1, 1})
+	pQ := b.Param("pQ", ir.F32)
+	pK := b.Param("pK", ir.F32)
+	pTab := b.Param("pTab", ir.U32)
+	pRow := b.Param("pRow", ir.U32)
+	pCS := b.Param("pCS", ir.F32)
+	pW := b.Param("pW", ir.F32)
+	pMark := b.Param("pMark", ir.U32)
+	pDCS := b.Param("pDCS", ir.F32)
+	pOut := b.Param("pOut", ir.F32)
+	u := func(v int) ir.Value { return b.Const(ir.U32, int64(v)) }
+	flat := b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID()), u(rows*nb-1))
+	bi := b.Rem(ir.U32, flat, u(nb))
+	r := b.Div(ir.U32, flat, u(nb))
+	one := u(1)
+	end := b.Max(ir.U32, pagedDesc(b, pRow, r, PRowEnd), one)
+	tail := b.Div(ir.U32, end, u(blk))
+	// A block past the history reads its last position: a clamp, its score
+	// replaced below.
+	tab := pagedDesc(b, pRow, r, PRowTab)
+	nk := blk
+	if firstKey {
+		nk = 1
+	}
+	kbase := make([]ir.Value, nk)
+	for j := range kbase {
+		t := b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, bi, u(blk)), u(j)), b.Sub(ir.U32, end, one))
+		pid := pageOf(b, pTab, tab, t, page)
+		kbase[j] = b.Add(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, pid, u(page*kvRow)), u(koff*page)), pageRem(b, t, page))
+	}
+	mean := func(i ir.Value) ir.Value {
+		acc := b.ConstF32(0)
+		for j := range kbase {
+			acc = b.Add(ir.F32, acc, b.Load(ir.F32, pK, b.Add(ir.U32, kbase[j], b.Mul(ir.U32, i, u(page))), 0))
+		}
+		if nk > 1 {
+			acc = b.Mul(ir.F32, acc, b.ConstF32(1/float32(nk)))
+		}
+		return acc
+	}
+	zu, zf := u(0), b.ConstF32(0)
+	// The row's last mark at or before the block's start, its index into pDCS
+	// (none: the mark count, which selects no turn below).
+	m0 := b.Load(ir.U32, pMark, r, 0)
+	nm := b.Sub(ir.U32, b.Load(ir.U32, pMark, r, 1), m0)
+	start := b.Mul(ir.U32, bi, u(blk))
+	none := u(0x7FFFFFFF)
+	sign := u(0x80000000)
+	b.LoopN(nm)
+	mi := b.Phi(ir.U32, zu)
+	sel := b.Phi(ir.U32, none)
+	w := b.Load(ir.U32, pMark, b.Add(ir.U32, b.Add(ir.U32, m0, mi), u(rows+1)), 0)
+	at := b.And(ir.U32, w, u(0x7FFFFFFF))
+	b.SetPhi(sel, b.Select(ir.U32, b.Lt(ir.U32, start, at), sel, b.Add(ir.U32, m0, mi)))
+	b.SetPhi(mi, b.Add(ir.U32, mi, one))
+	b.EndLoop()
+	marked := b.Lt(ir.U32, sel, none)
+	selC := b.Select(ir.U32, marked, sel, zu)
+	neg := b.Lt(ir.U32, zu, b.And(ir.U32, b.Load(ir.U32, pMark, b.Add(ir.U32, selC, u(rows+1)), 0), sign))
+	dsign := b.Select(ir.F32, neg, b.ConstF32(-1), b.ConstF32(1))
+	// The norm's sum of squares.
+	b.Loop(int64(dim))
+	i := b.Phi(ir.U32, zu)
+	ss := b.Phi(ir.F32, zf)
+	m := mean(i)
+	b.SetPhi(ss, b.Fma(m, m, ss))
+	b.SetPhi(i, b.Add(ir.U32, i, one))
+	b.EndLoop()
+	inv := b.Div(ir.F32, b.ConstF32(1), b.Sqrt(b.Add(ir.F32, b.Mul(ir.F32, ss, b.ConstF32(1/float32(dim))), b.ConstF32(eps))))
+	qb := b.Mul(ir.U32, r, u(heads*dim))
+	nv := func(i ir.Value) ir.Value { return b.Mul(ir.F32, b.Mul(ir.F32, mean(i), inv), b.Load(ir.F32, pW, i, 0)) }
+	acc := make([]ir.Value, heads)
+	for h := range acc {
+		acc[h] = zf
+	}
+	if np := nRot / 2; np > 0 {
+		// The rotated pairs.
+		csb := b.Mul(ir.U32, bi, u(nRot))
+		b.Loop(int64(np))
+		p := b.Phi(ir.U32, zu)
+		ph := make([]ir.Value, heads)
+		for h := range ph {
+			ph[h] = b.Phi(ir.F32, zf)
+		}
+		ia, ib := b.Add(ir.U32, p, p), b.Add(ir.U32, b.Add(ir.U32, p, p), one)
+		if neox {
+			ia, ib = p, b.Add(ir.U32, p, u(np))
+		}
+		va, vb := nv(ia), nv(ib)
+		c1 := b.Load(ir.F32, pCS, b.Add(ir.U32, csb, b.Add(ir.U32, p, p)), 0)
+		s1 := b.Load(ir.F32, pCS, b.Add(ir.U32, csb, b.Add(ir.U32, p, p)), 1)
+		// The mark's turn after the block start's: cos(a+b), sin(a+b).
+		db := b.Add(ir.U32, b.Mul(ir.U32, selC, u(nRot)), b.Add(ir.U32, p, p))
+		c2 := b.Select(ir.F32, marked, b.Load(ir.F32, pDCS, db, 0), b.ConstF32(1))
+		s2 := b.Select(ir.F32, marked, b.Mul(ir.F32, dsign, b.Load(ir.F32, pDCS, db, 1)), zf)
+		c := b.Sub(ir.F32, b.Mul(ir.F32, c1, c2), b.Mul(ir.F32, s1, s2))
+		s := b.Add(ir.F32, b.Mul(ir.F32, s1, c2), b.Mul(ir.F32, c1, s2))
+		ra := b.Sub(ir.F32, b.Mul(ir.F32, va, c), b.Mul(ir.F32, vb, s))
+		rb := b.Add(ir.F32, b.Mul(ir.F32, va, s), b.Mul(ir.F32, vb, c))
+		for h := range ph {
+			qa := b.Load(ir.F32, pQ, b.Add(ir.U32, qb, ia), int64(h*dim))
+			qv := b.Load(ir.F32, pQ, b.Add(ir.U32, qb, ib), int64(h*dim))
+			b.SetPhi(ph[h], b.Fma(qv, rb, b.Fma(qa, ra, ph[h])))
+		}
+		b.SetPhi(p, b.Add(ir.U32, p, one))
+		b.EndLoop()
+		copy(acc, ph)
+	}
+	if nRot < dim {
+		// The dimensions past the rotary, as they are.
+		j0 := u(nRot)
+		b.Loop(int64(dim - nRot))
+		j := b.Phi(ir.U32, j0)
+		ph := make([]ir.Value, heads)
+		for h := range ph {
+			ph[h] = b.Phi(ir.F32, acc[h])
+		}
+		v := nv(j)
+		for h := range ph {
+			b.SetPhi(ph[h], b.Fma(b.Load(ir.F32, pQ, b.Add(ir.U32, qb, j), int64(h*dim)), v, ph[h]))
+		}
+		b.SetPhi(j, b.Add(ir.U32, j, one))
+		b.EndLoop()
+		copy(acc, ph)
+	}
+	score := zf
+	for h := range acc {
+		score = b.Add(ir.F32, score, b.Max(ir.F32, acc[h], zf))
+	}
+	negInf := b.Bitcast(ir.F32, u(0xFF800000))
+	posInf := b.Bitcast(ir.F32, u(0x7F800000))
+	if dense {
+		score = posInf
+	}
+	score = b.Select(ir.F32, b.Lt(ir.U32, bi, tail), score, b.Select(ir.F32, b.Lt(ir.U32, tail, bi), negInf, posInf))
+	ob := b.Add(ir.U32, b.Mul(ir.U32, r, u(groups*nb)), bi)
+	for g := 0; g < groups; g++ {
+		b.Store(pOut, ob, score, int64(g*nb))
+	}
 	return b.Done(), nil
 }

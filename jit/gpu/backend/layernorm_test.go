@@ -152,6 +152,12 @@ func actCase(t *testing.T, d backend.Device) {
 			return math.Sqrt(math.Log1p(math.Exp(v)))
 		case kernels.ActGELUErf:
 			return 0.5 * v * (1 + math.Erf(v/math.Sqrt2))
+		case kernels.ActSqrtSigmoid:
+			m := math.Sqrt(math.Max(math.Abs(v), 1e-6))
+			if v < 0 {
+				m = -m
+			}
+			return 1 / (1 + math.Exp(-m))
 		}
 		return v / (1 + math.Exp(-v))
 	}

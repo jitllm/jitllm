@@ -1345,7 +1345,8 @@ func (g *GPU) EmbedRows(ids []int32, dst []float32) bool {
 func (g *GPU) embedRows(sid uint64, ids []int32, dst []float32) bool {
 	g.mu.Lock()
 	hd := g.head
-	rs, ok := g.runs(0, 1)
+	// The device running block 0, where the chunk's first submission goes.
+	first := g.own[0]
 	g.mu.Unlock()
 	if hd == nil {
 		return false
@@ -1358,7 +1359,7 @@ func (g *GPU) embedRows(sid uint64, ids []int32, dst []float32) bool {
 	if !v.EmbedRows(ids, dst) {
 		return false
 	}
-	if !ok || len(rs) == 0 || rs[0].dev != hd {
+	if first != hd {
 		v.takeEmbed(nil) // nil is no submission's x: this materializes
 	}
 	return true

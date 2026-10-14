@@ -68,6 +68,9 @@ func (s *State) PreprocessImage(img image.Image) ([]float32, error) {
 	if s.vis.t.Cfg.Kind == jlm.ProjKimiVL {
 		return s.preprocessKimi(toRGB8(img))
 	}
+	if s.vis.t.Cfg.Kind == jlm.ProjLFM2 {
+		return nil, fmt.Errorf("model: an lfm2 tower takes a picture as its pieces (Tower.LFM2Pieces), not one grid")
+	}
 	if s.vis.t.Cfg.Dynamic() {
 		return s.preprocessPIL(img)
 	}

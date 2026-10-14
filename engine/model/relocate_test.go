@@ -23,7 +23,7 @@ func relocationModel(t *testing.T) (*Model, []int32, uint64) {
 	// No KV prewarm: these gates squeeze the budget to what attaching
 	// spends and need the history's growth to outrun it, which pages grown
 	// ahead into the attach's room would cover.
-	m, err := Open(p, WithKVPrewarm(false))
+	m, err := Open(p, noTune, WithKVPrewarm(false))
 	if err != nil {
 		t.Fatal(err)
 	}

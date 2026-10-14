@@ -64,9 +64,10 @@ func TestEveryTensorHasARole(t *testing.T) {
 				n = r
 			}
 			tensors++
-			// Qwen3.5's split gates never reach the name table: sourceOf fuses
-			// them into ssm_ba first (fuseBetaAlpha, gated by its own test).
-			if (f.Arch() == "qwen35" || f.Arch() == "qwen35moe") && splitBetaAlpha(n) {
+			// Qwen3.5's and Qwen3.8-Flash-Next's split gates never reach the
+			// name table: sourceOf fuses them into ssm_ba first
+			// (fuseBetaAlpha, gated by its own test).
+			if (f.Arch() == "qwen35" || f.Arch() == "qwen35moe" || f.Arch() == "qwen4exp") && splitBetaAlpha(n) {
 				continue
 			}
 			// A tower's tensors are named as conversion names them

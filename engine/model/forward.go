@@ -267,7 +267,9 @@ type State struct {
 	ds *ds4Scratch
 	// k3 is Kimi-K3's residual attention and latent mixture buffers (k3.go),
 	// nil on every other model.
-	k3  *k3Scratch
+	k3 *k3Scratch
+	// q4 is Qwen3.8-Flash-Next's scratch (q4e.go); xa is its streams too.
+	q4  *q4eScratch
 	tok int32
 	// tok1 hands a decode step's token to the device (tokenIDs) without an
 	// allocation, and rowx one row's streams in a prefill's row-by-row
@@ -279,6 +281,10 @@ type State struct {
 	// face (nn.TokenDevice).
 	ldInputs nn.LayerInputDevice
 	ldTokens nn.TokenDevice
+	// ldNGram is its n-gram face (nn.NGramDevice), Qwen3.8-Flash-Next's.
+	ldNGram nn.NGramDevice
+	// ldQSA is its QSA face (nn.QSADevice), Qwen3.8-Flash-Next's.
+	ldQSA nn.QSADevice
 	// dmoe is Gemma 4's mixture block's scratch (Config.DenseMoE): the
 	// router's input and the mixture's sum, each NEmbd wide. See denseMoE.
 	dmoe [2][]float32
@@ -398,6 +404,9 @@ type State struct {
 	// tailPos is a ragged tail step's positions, kept so the step allocates
 	// nothing once grown.
 	tailPos []int
+	// rtTook, rtStart and rtSeen are rowsTake's scratch, kept from step to step.
+	rtTook, rtStart []int
+	rtSeen          []bool
 	// relocate hands the device's highest block to the host when its history
 	// cannot grow, rather than letting the token fail. See SetRelocate.
 	relocate     bool
@@ -789,6 +798,11 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 	if c.DSV4() {
 		want = cpu.KVF32
 	}
+	// Qwen3.8-Flash-Next's QSA pools its indexer's raw cached keys, which
+	// the references hold at f32 (qsa.go).
+	if c.QSARatio != 0 {
+		want = cpu.KVF32
+	}
 	if c.Hybrid() {
 		// The delta rule's kernel, provisioned per model like the attention
 		// ones beside it: the state width is a header field, so it is baked
@@ -822,6 +836,7 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 	s.provisionAttn()
 	s.allocDS4()
 	s.allocK3()
+	s.allocQ4E()
 	// After AddAttnKV: kvl.fmt sizes every page.
 	s.kv = newKVCacheRange(c, nextCacheID(), nseq, s.kvl, nil, s.m.opt.kvPage, s.lo, s.hi)
 	s.kv.usePool(&m.kvPool)
@@ -1558,6 +1573,7 @@ func (s *State) layerWeightsAt(li int) nn.LayerWeights {
 		w.IdxQNorm, w.IdxKNorm = l.idxQNorm, l.idxKNorm
 	}
 	s.ds4Weights(li, &w)
+	s.q4eWeights(li, &w)
 	w.ResAttn, w.ResFFN = l.resAttn, l.resFFN
 	w.MLAGate, w.RoutedDown, w.RoutedUp, w.RoutedNorm = wt(l.mlaGate), wt(l.routedDown), wt(l.routedUp), l.routedNorm
 	return w
@@ -1981,7 +1997,7 @@ func (s *State) planFor(li int) *nn.LayerPlan {
 		plan.Recurrent = nn.RecurrentPlan{
 			Conv: g.conv, Chans: g.chans, KHeads: g.kHeads, VHeads: g.vHeads,
 			KDim: g.kDim, VDim: g.vDim,
-			StateLen: g.deltaStateLen(), ConvState: g.convStateLen(),
+			StateLen: g.stateStride(), ConvState: g.convStateLen(),
 			ChanDecay: c.ChanDecay(), KeyTiled: g.tiled,
 		}
 		if g.ssd {
@@ -1998,6 +2014,7 @@ func (s *State) planFor(li int) *nn.LayerPlan {
 		}
 	}
 	s.k3Plan(li, &plan)
+	s.q4ePlan(li, &plan)
 	return &plan
 }
 
@@ -3452,6 +3469,16 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 			return nil
 		}
 	}
+	if c.Q4E() {
+		inner := fill
+		fill = func() error {
+			if err := inner(); err != nil {
+				return err
+			}
+			s.q4eExpand(s.xa, 1)
+			return nil
+		}
+	}
 	// Kimi-K3's bank starts every token empty (k3.go).
 	if c.ResAttn() {
 		inner := fill
@@ -3513,7 +3540,13 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 			s.layerInputs(s.ple)
 			s.tok1[0] = s.tok
 			s.tokenIDs(s.tok1[:])
+			// Qwen3.8-Flash-Next's n-gram rows, when the run holds its n-gram
+			// block (q4edev.go).
+			if err := s.ngramToDevice(li, hi, 1, nil, s.selfSlot0, s.tok1At); err != nil {
+				return nil, err
+			}
 			if !s.ld.Layers(li, hi, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.NRotSWA), fold) {
+				s.ngramUndoRows()
 				// A failed run demotes everything and restarts the token on the
 				// host from the embeddings (Layers may have written part of the
 				// residual), unless SetDeviceFallback(false) asked for the
@@ -3593,6 +3626,21 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 		t0 := s.tick()
 		// Kimi-K3's attention reads its mix over the bank (k3.go).
 		attnIn := s.x
+		if c.Q4E() {
+			// Qwen3.8-Flash-Next's n-gram block adds its embedding, then
+			// every sublayer reads its hyper-connection's mix (q4e.go).
+			if c.NGramAt(li) {
+				tok := s.tok
+				if err := s.ngramApply(li, l, s.xa, 1, nil, func(int) (*State, int) { return s, 0 },
+					func(int) int32 { return tok }); err != nil {
+					return nil, err
+				}
+			}
+			if err := s.hcMix(s.xa, 1, &l.q4e.attn); err != nil {
+				return nil, err
+			}
+			attnIn = s.q4.mix[:c.NEmbd]
+		}
 		if c.ResAttn() {
 			var err error
 			if attnIn, err = s.k3AttnIn(li, l, s.xa, 1); err != nil {
@@ -3648,7 +3696,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 			kvd := c.KVDimAt(li)
 			// q, k and v as one region inside a fused run (fuse.go).
 			s.aheadOf(li, 0, [nn.MaxGroup]*tensor{&l.wo})
-			grouped := !c.AttnOutGate && !c.KVShared(li) && !l.vFromK && !c.MSAAt(li) &&
+			grouped := !c.AttnOutGate && !c.KVShared(li) && !l.vFromK && !c.extraKVHead(li) &&
 				s.groupOf(s.h, [nn.MaxGroup]*tensor{&l.wq, &l.wk, &l.wv},
 					[nn.MaxGroup][]float32{s.q, s.kc, s.vc}, 3)
 			if grouped {
@@ -3692,6 +3740,17 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 				if err := s.msaQuery(s.msaQ, l, s.h, cs); err != nil {
 					return nil, err
 				}
+			}
+			// QSA: the indexer's raw key rides the row the same way, padded
+			// to a head (qsa.go).
+			if c.QSAAt(li) {
+				kvr = c.KVRowAt(li)
+				g := s.qsa()
+				if err := s.qsaProject(s.kc[kvd:kvr], g.q, l, s.h,
+					s.ropeTable(li, s.cs, s.csSWA, 0)); err != nil {
+					return nil, err
+				}
+				clear(s.vc[kvd:kvr])
 			}
 
 			// attnPrep applies qwen3's per-head q/k norm (before RoPE), the
@@ -3756,6 +3815,10 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 					s.msaKept, &s.msaOrd)
 				j.bstride = s.attStride
 			}
+			if c.QSAAt(li) {
+				g := s.qsa()
+				j.bias = s.qsaMask(s, kvli, 0, j.w0+j.an, g.q, g.bias, l)
+			}
 			if j.fn == nil {
 				j.fn = s.attnHeads
 			}
@@ -3783,7 +3846,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 				// With nothing between the projection and the residual, the
 				// add rides the projection's rows (fuse.go).
 				plain := s.residFold && l.bo == nil && !kind.Recurrent() && l.postAttnNorm == nil &&
-					!c.ResAttn() && c.AltUp == 0
+					!c.ResAttn() && c.AltUp == 0 && !c.Q4E()
 				if plain {
 					s.grp.Resid, s.grp.Alpha = s.x, float32(c.ResidualScale)
 				}
@@ -3811,7 +3874,9 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 			s.tock(opRMSNorm, t0)
 		}
 		t0 = s.tick()
-		if c.ResAttn() {
+		if c.Q4E() {
+			s.hcPlace(s.xa, 1, s.h)
+		} else if c.ResAttn() {
 			s.k3Resid(li, s.x, s.h, 1)
 		} else if !attnResid {
 			s.addInto(s.x, s.h)
@@ -3838,6 +3903,11 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 				return nil, err
 			}
 			s.norm(s.h, in, l.ffnNorm, l.ffnNormB)
+		} else if c.Q4E() {
+			if err := s.hcMix(s.xa, 1, &l.q4e.ffn); err != nil {
+				return nil, err
+			}
+			copy(s.h, s.q4.mix[:c.NEmbd])
 		} else {
 			s.norm(s.h, s.x, l.ffnNorm, l.ffnNormB)
 		}
@@ -3869,6 +3939,13 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 				if err := s.k3MoE(li, l, ffnIn, s.x); err != nil {
 					return nil, err
 				}
+			} else if c.Q4E() {
+				out := s.q4.out[:c.NEmbd]
+				clear(out)
+				if err := s.moe(li, l, ffnIn, ffnIn, out); err != nil {
+					return nil, err
+				}
+				s.hcPlace(s.xa, 1, out)
 			} else if err := s.moe(li, l, ffnIn, ffnIn, s.x); err != nil {
 				return nil, err
 			}
@@ -3963,6 +4040,11 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 	}
 	if c.ResAttn() {
 		if err := s.k3Collapse(s.xa, 1); err != nil {
+			return nil, err
+		}
+	}
+	if c.Q4E() {
+		if err := s.q4eCollapse(s.xa, 1); err != nil {
 			return nil, err
 		}
 	}
@@ -4336,6 +4418,8 @@ func (s *State) setLD(ld nn.LayerDevice) {
 	s.ldNamed, _ = ld.(nn.NamedDevice)
 	s.ldInputs, _ = ld.(nn.LayerInputDevice)
 	s.ldTokens, _ = ld.(nn.TokenDevice)
+	s.ldNGram, _ = ld.(nn.NGramDevice)
+	s.ldQSA, _ = ld.(nn.QSADevice)
 }
 
 // layerInputs hands the device the rows' per-layer embedding inputs for the

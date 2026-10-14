@@ -42,6 +42,9 @@ var obtainableExempt = map[string]string{
 	"gemma4": "built and gated on synthetic fixtures from transformers' own Gemma4ForCausalLM; " +
 		"the 31B is the only published size whose graph is complete here (E2B/E4B carry " +
 		"per-layer embeddings, the 26B a mixture), and it is not yet verified against llama.cpp",
+	"qwen4exp": "Qwen3.8-Flash-Next is 125B, 111 GB at UD-Q4_K_XL in four GGUF parts, and a " +
+		"catalogue entry names one file; built and gated on a synthetic fixture from " +
+		"transformers' own Qwen4ExpForCausalLM, and its UD-Q4_K_XL converts from the first part",
 	"dots1": "dots.llm1 is 142B, 96 GB at Q4_K_M in three GGUF parts, and a catalogue entry " +
 		"names one file; built and gated on a synthetic fixture from transformers' own " +
 		"Dots1ForCausalLM, and 18 of 20 teacher-forced against llama.cpp (V100 box)",

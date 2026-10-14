@@ -64,6 +64,8 @@ type deltaGeom struct {
 	// shared by all, and only x convolved -- B and C come off it afterwards,
 	// so chans is Inner. rank is its dt bottleneck.
 	mamba1 bool
+	// tail is the recurrent state's tail per sequence (Config.recTailLen).
+	tail int
 }
 
 func (c *Config) delta() deltaGeom {
@@ -87,6 +89,7 @@ func (c *Config) delta() deltaGeom {
 	g.chanDecay, g.rank = c.ChanDecay(), g.kDim
 	g.tiled = c.DeltaKeyTiled
 	g.ssd = c.SSD()
+	g.tail = c.recTailLen()
 	if c.Mamba1() {
 		g.mamba1, g.chans, g.qkBytes, g.rank = true, int(c.SSM.Inner), 0, c.dtRank
 	}
@@ -111,6 +114,10 @@ func (g deltaGeom) keyHead(vh int) int {
 func (g deltaGeom) convStateLen() int  { return (g.conv - 1) * g.chans }
 func (g deltaGeom) deltaStateLen() int { return g.vHeads * g.vDim * g.kDim }
 
+// stateStride is one sequence's whole recurrent state row: the delta rule's
+// and the tail after it (Config.recTailLen).
+func (g deltaGeom) stateStride() int { return g.deltaStateLen() + g.tail }
+
 // allocRecurrent sizes the recurrent state and the scratch the delta rule
 // needs. Both are nil for every architecture that is not a hybrid.
 //
@@ -131,7 +138,7 @@ func (s *State) allocRecurrent(nseq int) {
 			continue
 		}
 		s.rconv[i] = make([]float32, nseq*g.convStateLen())
-		s.rstate[i] = make([]float32, nseq*g.deltaStateLen())
+		s.rstate[i] = make([]float32, nseq*g.stateStride())
 	}
 	s.dMixed = make([]float32, g.chans)
 	if g.mamba1 {
@@ -192,9 +199,32 @@ func (s *State) ResetRecurrent(row int) {
 		}
 		n := s.dg.convStateLen()
 		clear(s.rconv[li][row*n : (row+1)*n])
-		n = s.dg.deltaStateLen()
+		n = s.dg.stateStride()
 		clear(s.rstate[li][row*n : (row+1)*n])
 	}
+}
+
+// recTail is sequence slot's tail of layer li's recurrent state (recTailLen),
+// after its delta-rule state; empty on a model with none.
+func (s *State) recTail(li, slot int) []float32 {
+	if s.dg.tail == 0 || s.rstate == nil || s.rstate[li] == nil {
+		return nil
+	}
+	n := s.dg.stateStride()
+	return s.rstate[li][slot*n+s.dg.deltaStateLen() : (slot+1)*n]
+}
+
+// recTailLen is what each linear block's recurrent state carries per
+// sequence after the delta rule's: room for Qwen3.8-Flash-Next's n-gram
+// predecessors and convolution history (ngram.go), which its n-gram block
+// fills and every other leaves unread, nothing on any other model. Every
+// linear block has the same row, [delta rule | tail], so a device keeps one
+// slot width for all of them (nn.RecurrentPlan.TailLen).
+func (c *Config) recTailLen() int {
+	if c.NGramBlock != 0 {
+		return c.ngramStateLen()
+	}
+	return 0
 }
 
 // linearAttn runs one token of one sequence through layer li's gated delta net.
@@ -335,6 +365,9 @@ func (s *State) linearAttn(li int, l *layer, row int, h, out []float32) error {
 		// KDA's gate is out*sigma(z) (KimiLinearRMSNormGated), where
 		// qwen3next's is SiLU(z)*out: they differ by a factor of z.
 		nn.SigmoidMul32JIT(s.dZ, s.dOut)
+	} else if c.q4eSigmoidGate() {
+		// Qwen3.8-Flash-Next's gate is sigmoid(z)*out (output_gate_type).
+		nn.SigmoidMul32JIT(s.dZ, s.dOut)
 	} else {
 		nn.ActMul32JIT(s.dZ, s.dOut, nn.ActSiLU)
 	}
@@ -377,7 +410,7 @@ func (s *State) delta(li, row int) {
 	g := s.dg
 	j := &s.rg.delta
 	j.d = s.m.layers[li].ssmD
-	j.st = s.rstate[li][row*g.deltaStateLen():]
+	j.st = s.rstate[li][row*g.stateStride():][:g.deltaStateLen()]
 	j.q = s.dMixed[:g.qkBytes]
 	j.k = s.dMixed[g.qkBytes : 2*g.qkBytes]
 	j.v = s.dMixed[2*g.qkBytes:]
@@ -604,7 +637,7 @@ func (s *State) mamba1Attn(li int, l *layer, row int, h, out []float32) error {
 func (s *State) mamba1Scan(li, row int) {
 	g, l := s.dg, &s.m.layers[li]
 	j := &s.rg.mamba1
-	j.st = s.rstate[li][row*g.deltaStateLen():][:g.deltaStateLen()]
+	j.st = s.rstate[li][row*g.stateStride():][:g.deltaStateLen()]
 	j.a, j.d = l.ssmA, l.ssmD
 	if j.fn == nil {
 		j.fn = s.mamba1Channels

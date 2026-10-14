@@ -98,7 +98,7 @@ func (g *devTier) exclusiveRange(lo, hi int, rag *ragStep, bs *blockScratch) boo
 		if l == nil {
 			continue
 		}
-		if l.nonCausal || l.linear || l.withAttn || l.stream != nil || l.ds4 != nil || l.conv != nil {
+		if l.nonCausal || l.linear || l.withAttn || l.stream != nil || l.ds4 != nil || l.q4e != nil || l.conv != nil {
 			return true
 		}
 	}

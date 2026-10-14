@@ -332,6 +332,11 @@ type LoadedModel struct {
 	decMu     sync.Mutex
 	dec       *model.Decider
 	decClosed bool
+	// decQ is the decisions waiting for the Decider, guarded by decQMu;
+	// decBatchMax the most requests one batch has answered.
+	decQMu      sync.Mutex
+	decQ        []*decJob
+	decBatchMax atomic.Int64
 
 	tokensGenerated atomic.Int64
 	tokensPrefilled atomic.Int64

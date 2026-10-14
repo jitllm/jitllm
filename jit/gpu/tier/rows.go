@@ -1554,13 +1554,24 @@ func (g *devTier) prepRagLinear(bs *blockScratch, n int) bool {
 		}},
 		{&rk.conv, func() (*ir.Kernel, error) { return kernels.Conv1dRowsRuns(r.Conv, r.Chans, n) }},
 		{&rk.shift, func() (*ir.Kernel, error) { return kernels.Conv1dShiftRuns(r.Conv, r.Chans, n) }},
+		{&rk.ngConv, func() (*ir.Kernel, error) {
+			// Qwen3.8-Flash-Next's n-gram convolution, each run's history
+			// moved on through its rows (q4e.go).
+			q := bs.p.Q4E
+			if q == nil || q.NGramWidth == 0 {
+				return nil, nil
+			}
+			hd, hist := q.HCMult*bs.p.NEmbd, q.NGramDil*(q.NGramConv-1)
+			return kernels.Q4ENGramConv(hd, q.NGramConv, q.NGramDil, n, r.StateLen, r.StateLen-hist*hd,
+				true, q.Fault == nn.Q4EFaultNoNGramConv)
+		}},
 	} {
 		var kk *ir.Kernel
 		if kk, err = k.mk(); err == nil && kk != nil {
 			*k.dst, err = g.dev.Compile(kk)
 		}
 		if err != nil {
-			for _, c := range []backend.Kernel{rk.conv, rk.shift, rk.delta} {
+			for _, c := range []backend.Kernel{rk.conv, rk.shift, rk.delta, rk.ngConv} {
 				if c != nil {
 					closeKern(c)
 				}
@@ -1597,12 +1608,14 @@ func (g *devTier) resetRecRows(sid uint64, rows []int) bool {
 	if !seated || len(rows) == 0 {
 		return true
 	}
-	var ls []*layer
+	ls := g.recLs[:0]
 	for _, l := range g.layers {
 		if l != nil && l.linear && l.recOf(sid) != nil {
 			ls = append(ls, l)
 		}
 	}
+	g.recLs = ls
+	defer clear(g.recLs)
 	for _, row := range rows {
 		if row < 0 || row >= st.rows {
 			continue // a row the batch has not grown to holds nothing yet

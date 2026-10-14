@@ -384,7 +384,12 @@ func (c TowerConfig) tilesOf(w, h int) int {
 // TokensFor is how many embeddings a w x h picture becomes: Tokens per tile.
 // A caller sizing a prompt before the picture is encoded asks this rather than
 // Tokens, which is one tile's.
-func (c TowerConfig) TokensFor(w, h int) int { return c.tilesOf(w, h) * c.Tokens() }
+func (c TowerConfig) TokensFor(w, h int) int {
+	if c.Kind == jlm.ProjLFM2 {
+		return c.lfm2Tokens(w, h)
+	}
+	return c.tilesOf(w, h) * c.Tokens()
+}
 
 // preprocessReference is the reference processor's pixels for a projector
 // that has one here: every tile, ImageSz square, [tile][y][x][channel].

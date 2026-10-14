@@ -851,7 +851,33 @@ func (s *State) migrateRec(li int, toDevice bool) bool {
 	if s.ld == nil || s.rconv == nil || li >= len(s.rconv) || s.rconv[li] == nil {
 		return true // an attention block, or a session with no recurrence
 	}
-	return s.ld.MigrateRec(li, s.rconv[li], s.rstate[li], toDevice)
+	return s.migrateRecLayer(li, toDevice)
+}
+
+// migrateRecLayer is LayerDevice.MigrateRec on block li's host arrays, with
+// the one part of a recurrent state the host keeps for itself:
+// Qwen3.8-Flash-Next's n-gram predecessors, which the host hashes whichever
+// side runs the block, so the device's copy of them is never the live one
+// and a migration home keeps the host's.
+func (s *State) migrateRecLayer(li int, toDevice bool) bool {
+	if toDevice || !s.c.NGramAt(li) {
+		return s.ld.MigrateRec(li, s.rconv[li], s.rstate[li], toDevice)
+	}
+	nseq := len(s.rstate[li]) / s.dg.stateStride()
+	np := s.c.NGram - 1
+	keep := make([]float32, nseq*np)
+	for slot := 0; slot < nseq; slot++ {
+		prev, _ := s.ngramState(li, slot)
+		copy(keep[slot*np:], prev)
+	}
+	if !s.ld.MigrateRec(li, s.rconv[li], s.rstate[li], false) {
+		return false
+	}
+	for slot := 0; slot < nseq; slot++ {
+		prev, _ := s.ngramState(li, slot)
+		copy(prev, keep[slot*np:(slot+1)*np])
+	}
+	return true
 }
 
 // The paged read walk. Every attention read in model/ goes through these four,
@@ -1586,7 +1612,7 @@ func (s *State) syncRecFromDevice() error {
 		if s.rconv[li] == nil {
 			continue // not a linear block
 		}
-		if !s.ld.MigrateRec(li, s.rconv[li], s.rstate[li], false) {
+		if !s.migrateRecLayer(li, false) {
 			// A capability gap, not a wrong answer: nothing is cached for this
 			// run rather than a summary that did not come from it.
 			s.kv.syncFailed++
@@ -1606,7 +1632,7 @@ func (s *State) pushRecToDevice() bool {
 		if s.rconv[li] == nil {
 			continue
 		}
-		if !s.ld.MigrateRec(li, s.rconv[li], s.rstate[li], true) {
+		if !s.migrateRecLayer(li, true) {
 			return false
 		}
 	}
@@ -2200,13 +2226,38 @@ func (kc *kvCache) reset() {
 	for li := kc.lo; li < len(kc.layers); li++ {
 		s := &kc.layers[li]
 		for n := range s.k {
-			s.drop(n)
+			s.keepOnReset(n)
 		}
 		s.k, s.v, s.out, s.lastSealed, s.written = s.k[:0], s.v[:0], s.out[:0], 0, 0
 	}
 	kc.entTruncate(0)
 	kc.seq, kc.named = kc.seq[:0], kc.named[:0]
-	kc.bh = map[int][]string{}
+	if kc.bh == nil {
+		kc.bh = map[int][]string{}
+	}
+	clear(kc.bh)
+}
+
+// keepOnReset lets page n go as reset does, its memory kept in spare for the
+// next sequence to grow into: a State reused prompt after prompt (a Decider's)
+// would otherwise hand the collector its whole history each time and make it
+// again. A layer with no window keeps what it held; a windowed layer what its
+// window turns over (spareMax), so it still holds its window and not the
+// context. A shared page is the store's: its reference goes.
+func (s *kvPages) keepOnReset(n int) {
+	if s.isShared(n) {
+		s.drop(n)
+		return
+	}
+	for _, b := range [2][]float32{s.k[n], s.v[n]} {
+		if b != nil && len(b) == s.pp && (s.win <= 0 || len(s.spare) < s.spareMax()) {
+			s.spare = append(s.spare, b)
+		}
+		if s.latent {
+			break // the value is the key's memory
+		}
+	}
+	s.drop(n)
 }
 
 // kvEnsureWindow faults every page of layer li covering [w0, w0+want) into

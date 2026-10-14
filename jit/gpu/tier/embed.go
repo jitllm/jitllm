@@ -3,6 +3,7 @@ package tier
 import (
 	"encoding/binary"
 	"fmt"
+	"slices"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
@@ -53,7 +54,9 @@ func (g *devTier) EmbedRows(ids []int32, dst []float32) bool {
 	if !g.embedKernel(bs) {
 		return false
 	}
-	g.embPend = &embPend{dst: dst, ids: append([]int32(nil), ids...)}
+	pe := &g.embBuf
+	pe.dst, pe.ids = dst, append(pe.ids[:0], ids...)
+	g.embPend = pe
 	return true
 }
 
@@ -154,7 +157,8 @@ func (g *devTier) materializeLocked(pe *embPend) {
 	ob := bs.embOut
 	var err error
 	g.dev.Session(func(s backend.Session) {
-		if err = s.Write(ib, embIDs(pe.ids, batchWidth, r.nrows)); err != nil {
+		g.subBytes.embIDs = embIDs(g.subBytes.embIDs, pe.ids, batchWidth, r.nrows)
+		if err = s.Write(ib, g.subBytes.embIDs); err != nil {
 			return
 		}
 		threads := kernels.GetRowsThreads(r.t, r.k, n)
@@ -174,8 +178,8 @@ func (g *devTier) materializeLocked(pe *embPend) {
 // nrows -- a padding row, which the gather writes as zeros. A launch whose last
 // group can run past its rows (materialize) writes the whole buffer, so it
 // reads padding and never a stale id; one that cannot writes only its rows.
-func embIDs(ids []int32, rows, nrows int) []byte {
-	raw := make([]byte, rows*4)
+func embIDs(raw []byte, ids []int32, rows, nrows int) []byte {
+	raw = slices.Grow(raw[:0], rows*4)[:rows*4]
 	for i := 0; i < rows; i++ {
 		v := uint32(nrows)
 		if i < len(ids) {

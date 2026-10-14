@@ -102,12 +102,13 @@ func TestElementwiseEntryPointsComputeOnTheSSETier(t *testing.T) {
 			func(d []float32) cpu.Args { return elem(d, true, scr) }, gatedRef[k], 1e-9})
 	}
 	ungatedRef := map[ActKind]func(a, _ float64) float64{
-		ActSiLU:      func(a, _ float64) float64 { return oracle.SiLU(a) },
-		ActGELU:      func(a, _ float64) float64 { return oracle.GELUTanh(a) },
-		ActGELUErf:   func(a, _ float64) float64 { return oracle.GELUErf(a) },
-		ActQuickGELU: func(a, _ float64) float64 { return quick(a) },
-		ActReLU2:     func(a, _ float64) float64 { r := math.Max(a, 0); return r * r },
-		ActReLU:      func(a, _ float64) float64 { return math.Max(a, 0) },
+		ActSiLU:        func(a, _ float64) float64 { return oracle.SiLU(a) },
+		ActGELU:        func(a, _ float64) float64 { return oracle.GELUTanh(a) },
+		ActGELUErf:     func(a, _ float64) float64 { return oracle.GELUErf(a) },
+		ActSqrtSigmoid: func(a, _ float64) float64 { return oracle.SqrtSigmoid(a) },
+		ActQuickGELU:   func(a, _ float64) float64 { return quick(a) },
+		ActReLU2:       func(a, _ float64) float64 { r := math.Max(a, 0); return r * r },
+		ActReLU:        func(a, _ float64) float64 { return math.Max(a, 0) },
 		ActSqrtSoftplus: func(a, _ float64) float64 {
 			return oracle.SqrtSoftplus(a)
 		},

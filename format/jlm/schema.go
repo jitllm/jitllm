@@ -65,7 +65,13 @@ const (
 	// 256).
 	TypeQ51 Type = 12
 
-	typeMax = TypeQ51
+	// TypeIQ4NL is GGUF's IQ4_NL, carried verbatim in its own 18-byte blocks
+	// (an f16 scale and 32 nibbles indexing quant.IQ4NLValues). It is not
+	// packed: the only tensor that may be this type is a row table
+	// (RoleNGramTable), read a row at a time and gathered, never multiplied.
+	TypeIQ4NL Type = 13
+
+	typeMax = TypeIQ4NL
 )
 
 // Valid reports whether t is a code this format defines. A file carrying
@@ -98,6 +104,8 @@ func (t Type) String() string {
 		return "q51"
 	case TypeBF16:
 		return "bf16"
+	case TypeIQ4NL:
+		return "iq4nl"
 	}
 	return "type(" + itoa(uint64(t)) + ")"
 }
@@ -567,6 +575,8 @@ func SourceType(t Type) (quant.Type, bool) {
 		return quant.Q5_K, true
 	case TypeQ6S:
 		return quant.Q6_K, true
+	case TypeIQ4NL:
+		return quant.IQ4_NL, true
 	}
 	return 0, false
 }
@@ -598,6 +608,8 @@ func TypeOf(t quant.Type) (Type, bool) {
 		return TypeQ5S, true
 	case quant.Q6_K:
 		return TypeQ6S, true
+	case quant.IQ4_NL:
+		return TypeIQ4NL, true
 	}
 	return 0, false
 }

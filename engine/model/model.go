@@ -269,6 +269,19 @@ type Config struct {
 	// ds4Fault breaks one piece of DeepSeek V4's graph, for a gate's
 	// violation only.
 	ds4Fault ds4Fault
+	// Qwen3.8-Flash-Next (q4e.go): the hyper-connections' gate rank, QSA's
+	// block size, the n-gram embedding (its one-based block, n, heads per n,
+	// row width, convolution taps, the end-of-sequence and picture ids and
+	// the hash's constants) and the delta rule's sigmoid output gate.
+	HCLowRank, QSARatio              int
+	NGramBlock, NGram, NGramHeadsPer int
+	NGramRowDim, NGramConv           int
+	NGramEOS, NGramImage             int32
+	NGramMul, NGramOff, NGramVoc     []uint64
+	DeltaSigmoidGate                 bool
+	// q4eFault breaks one piece of Qwen3.8-Flash-Next's graph, for a gate's
+	// violation only.
+	q4eFault q4eFault
 	// Kimi-K3 (k3.go): a residual checkpoint every AttnResBlock blocks, each
 	// sublayer's input their softmax mix with the running residual (zero is
 	// none); the routed experts at ExpertLatent (zero is n_embd); KDA's decay
@@ -399,7 +412,7 @@ func (c *Config) MLA() bool { return c.KVLoraRank != 0 }
 
 // Indexer reports that attention reads only the positions DeepSeek V3.2's
 // lightning indexer selects.
-func (c *Config) Indexer() bool { return c.IdxHeads != 0 && c.IdxBlock == 0 && !c.DSV4() }
+func (c *Config) Indexer() bool { return c.IdxHeads != 0 && c.IdxBlock == 0 && !c.DSV4() && !c.Q4E() }
 
 // MSA reports MiniMax Sparse Attention: attention on the blocks past the
 // dense lead reads only the position blocks each kv group's indexer head
@@ -410,12 +423,17 @@ func (c *Config) MSA() bool { return c.IdxHeads != 0 && c.IdxBlock != 0 }
 // lead of an MSA model.
 func (c *Config) MSAAt(li int) bool { return c.MSA() && li >= c.NDenseLead }
 
+// extraKVHead reports that layer li's cached row carries an indexer key as
+// one more kv head: MiniMax-M3's (msa.go) and Qwen3.8-Flash-Next's QSA
+// (qsa.go).
+func (c *Config) extraKVHead(li int) bool { return c.MSAAt(li) || c.QSAAt(li) }
+
 // KVRowAt is one cached position's width in layer li's history: KVDimAt,
 // plus on an MSA block the indexer's key as one more kv head (msa.go). Every
 // cache allocation, page and migration of a layer goes through it; the k and
 // v projections are KVDimAt wide.
 func (c *Config) KVRowAt(li int) int {
-	if c.MSAAt(li) {
+	if c.extraKVHead(li) {
 		return (c.NKVHead + 1) * c.HeadDim
 	}
 	if c.DSV4() {
@@ -526,8 +544,9 @@ func (c *Config) MaxKVDim() int {
 	if c.KVLoraRank != 0 {
 		return c.KVDim()
 	}
-	if c.MSA() {
-		// The row an MSA block writes: its k with the indexer's key after it.
+	if c.MSA() || c.QSARatio != 0 {
+		// The row an MSA or QSA block writes: its k with the indexer's key
+		// after it.
 		return (c.NKVHead + 1) * c.HeadDim
 	}
 	if c.DSV4() {
@@ -735,6 +754,7 @@ func configFrom(c *jlm.Config) (*Config, error) {
 		Parallel:       c.Flags.Has(jlm.FlagParallel),
 
 		HCMult:      int(c.HCMult),
+		HCLowRank:   int(c.HCLowRank),
 		HCIters:     int(c.HCIters),
 		HCEps:       float64(c.HCEps),
 		OGroups:     int(c.OGroups),
@@ -897,6 +917,9 @@ func configFrom(c *jlm.Config) (*Config, error) {
 	if err := ds4Config(out, c); err != nil {
 		return nil, err
 	}
+	if err := q4eConfig(out, c); err != nil {
+		return nil, err
+	}
 	if err := k3Config(out, c, nact); err != nil {
 		return nil, err
 	}
@@ -1021,6 +1044,8 @@ type layer struct {
 	// compressors and grouped output projection; the query latent is
 	// wqa/qaNorm/wqb, the key wk with kvaNorm, the output's second half wo.
 	ds4 *ds4Layer
+	// q4e is Qwen3.8-Flash-Next's hyper-connections and n-gram weights.
+	q4e *q4eLayer
 	// Kimi-K3 (k3.go): the residual attention's two score vectors and their
 	// one-row F32 views (the generated matvec scores every stream with one
 	// call), the MLA output gate (RoleAttnGate in a full block; a linear
@@ -1223,6 +1248,9 @@ type Model struct {
 	ropeB *nn.Rope
 	// ds4Head is DeepSeek V4's stream collapse before the head (ds4.go).
 	ds4Head *ds4Head
+	// q4eHead is Qwen3.8-Flash-Next's head mix and ngram its n-gram table.
+	q4eHead *q4eHead
+	ngram   *ngramTable
 	// resOut is Kimi-K3's head score vector (RoleOutputResScore) and resOutT
 	// its one-row view; nil without residual attention.
 	resOut  []float32
@@ -1231,6 +1259,12 @@ type Model struct {
 	// q/k RMSNorm runs the generated norm against. nil unless QKL2Norm.
 	onesHD  []float32
 	outNorm []float32
+	// clef is a Clef decision model's joint schema head, loaded by the first
+	// Decider (decideclef.go) under bind; nil on every other model.
+	clef *clefHead
+	// clefDev is that head as a device reads it (decideclefdev.go), built
+	// the first time a device runs it.
+	clefDev *nn.ClefHead
 	// outNormB and outB are the output LayerNorm's bias and the head's bias
 	// (phi-2), nil everywhere else.
 	outNormB, outB []float32
@@ -1557,6 +1591,11 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	bindOne(c, &m.altProj)
 	for i := range m.altUnembd {
 		bindOne(c, &m.altUnembd[i])
+	}
+	if m.q4eHead != nil {
+		for _, t := range m.q4eHead.hc.tensors() {
+			bindOne(c, t)
+		}
 	}
 	// A container that carries a tower builds one. Nothing is faulted in: the
 	// tower's norms and biases are in the dense region like the text model's,
@@ -2443,6 +2482,14 @@ func releaseLayer(c *jlm.File, li int, l *layer, keepExperts bool) {
 			t.packed.QS, t.packed.D, t.packed.SC = nil, nil, nil
 		}
 	}
+	if l.q4e != nil {
+		for _, t := range l.q4e.tensors() {
+			t.data = nil
+			if t.packed != nil {
+				t.packed.QS, t.packed.D, t.packed.SC = nil, nil, nil
+			}
+		}
+	}
 	if l.ds4 != nil {
 		for _, t := range append(l.ds4.tensors(), &l.wqa, &l.wqb) {
 			t.data = nil
@@ -2581,6 +2628,11 @@ func bindPacked(c *jlm.File, cfg *Config, l *layer) error {
 	}
 	// DeepSeek V4's matrices, and the grouped projection's per-group views,
 	// re-cut when the bank moved as the heads below are.
+	if d := l.q4e; d != nil {
+		for _, t := range d.tensors() {
+			bindOne(c, t)
+		}
+	}
 	if d := l.ds4; d != nil {
 		for _, t := range d.tensors() {
 			bindOne(c, t)
@@ -2798,7 +2850,13 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	if m.embd, err = get(jlm.RoleTokenEmbd, jlm.DenseBlock, -1); err != nil {
 		return nil, err
 	}
-	if m.outNorm, err = vec(jlm.RoleOutputNorm, jlm.DenseBlock); err != nil {
+	// Qwen3.8-Flash-Next has no output norm: the head's hyper-connection mix
+	// stands in for it (q4e.go).
+	outNorm := vec
+	if cfg.Q4E() {
+		outNorm = optVec
+	}
+	if m.outNorm, err = outNorm(jlm.RoleOutputNorm, jlm.DenseBlock); err != nil {
 		return nil, err
 	}
 	if p := cfg.PLEDim; p != 0 {
@@ -2833,6 +2891,9 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		}
 	}
 	if err := loadK3Head(m, cfg, vec); err != nil {
+		return nil, err
+	}
+	if err := loadQ4EHead(m, cfg, c, get, vec); err != nil {
 		return nil, err
 	}
 	if m.outNormB, err = optVec(jlm.RoleOutputNormBias, jlm.DenseBlock); err != nil {
@@ -3147,14 +3208,15 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		// A post-norm block (OLMo 2, EXAONE 4) has no pre-norms at all: each
 		// branch reads the residual as it is and normalises its output instead.
 		postNorm := c.Has(jlm.RolePostAttnNorm, bi, -1) && c.Has(jlm.RolePostFFNNorm, bi, -1)
-		if postNorm && !c.Has(jlm.RoleAttnNorm, bi, -1) {
+		if (postNorm || cfg.Q4E()) && !c.Has(jlm.RoleAttnNorm, bi, -1) {
+			// Qwen3.8-Flash-Next's hyper-connection mixes are its norms.
 			l.attnNorm = nil
 		} else if l.attnNorm, err = vec(jlm.RoleAttnNorm, bi); err != nil {
 			return nil, err
 		}
 		// A parallel block may share one norm between its branches, and then
 		// has no ffn_norm. Every other sequential block needs its own.
-		if cfg.Parallel || (postNorm && l.attnNorm == nil) || l.noFFN {
+		if cfg.Parallel || (postNorm && l.attnNorm == nil) || l.noFFN || cfg.Q4E() {
 			l.ffnNorm, err = optVec(jlm.RoleFFNNorm, bi)
 		} else {
 			l.ffnNorm, err = vec(jlm.RoleFFNNorm, bi)
@@ -3492,6 +3554,14 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		}
 		if err := loadK3(l, bi, cfg, c, get, vec); err != nil {
 			return nil, err
+		}
+		if err := loadQ4E(l, bi, cfg, get, vec); err != nil {
+			return nil, err
+		}
+		if cfg.QSAAt(i) {
+			if err := loadQSA(l, bi, cfg, get, vec); err != nil {
+				return nil, err
+			}
 		}
 		if cfg.QKNormAt(i) {
 			if l.qNorm, err = vec(jlm.RoleAttnQNorm, bi); err != nil {
@@ -3839,6 +3909,11 @@ func (m *Model) maxMatVec() (rows, k int) {
 			&l.laurelR, &l.wqa, &l.wqb} {
 			see(t)
 		}
+		if l.q4e != nil {
+			for _, t := range l.q4e.tensors() {
+				see(t)
+			}
+		}
 		if l.ds4 != nil {
 			for _, t := range l.ds4.tensors() {
 				see(t)
@@ -3851,6 +3926,11 @@ func (m *Model) maxMatVec() (rows, k int) {
 	see(&m.output)
 	see(&m.embd)
 	see(&m.pleProj)
+	if m.q4eHead != nil {
+		for _, t := range m.q4eHead.hc.tensors() {
+			see(t)
+		}
+	}
 	see(&m.altProj)
 	for i := range m.altUnembd {
 		see(&m.altUnembd[i])

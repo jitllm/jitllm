@@ -319,6 +319,12 @@ func (s *State) Speculate(opts ...SpecOption) (*Speculator, error) {
 		// in as they arrive, which State.rewind does not take back. Not
 		// built, so refused by name, whoever drafts.
 		return nil, fmt.Errorf("model: speculation on %s is not built", c.Arch)
+	case c.Q4E():
+		// Its prediction block is hyper-connected as its trunk is, which the
+		// draft path's ordinary block does not run, and a rewind takes the
+		// device's n-gram history back but not the host's predecessors.
+		// Not built, so refused by name, whoever drafts.
+		return nil, fmt.Errorf("model: speculation on %s is not built", c.Arch)
 	case s.batched || s.nseq != 1:
 		return nil, fmt.Errorf("model: speculation drives a single sequence, not a batch")
 	case s.pos != 0:

@@ -63,6 +63,14 @@ func TestRecurrentPoolReturnsEveryByte(t *testing.T) {
 			}
 		}
 	}
+	// zeros is the zeroing's source the pools keep (recZeros): one buffer
+	// once a seat has been zeroed.
+	zeros := func() int {
+		if dt.recZeros != nil {
+			return 1
+		}
+		return 0
+	}
 	// check asks for slots slots in each of the two pools, and the seats.
 	check := func(when string, slots int, seats map[uint64]int) {
 		t.Helper()
@@ -76,9 +84,9 @@ func TestRecurrentPoolReturnsEveryByte(t *testing.T) {
 		case l0.recBytes+l1.recBytes != want:
 			t.Fatalf("%s: the blocks hold %d, want %d: the release walks refund l.recBytes",
 				when, l0.recBytes+l1.recBytes, want)
-		case len(d.liveBufs)-live0 != 8:
-			t.Fatalf("%s: %d live buffers, want 8 -- two pools, two halves of state and window",
-				when, len(d.liveBufs)-live0)
+		case len(d.liveBufs)-live0 != 8+zeros():
+			t.Fatalf("%s: %d live buffers, want 8 and the zeros kept (%d) -- two pools, two halves of state and window",
+				when, len(d.liveBufs)-live0, zeros())
 		case len(dt.recSeats) != len(seats):
 			t.Fatalf("%s: %d seats, want %d", when, len(dt.recSeats), len(seats))
 		}
@@ -158,7 +166,7 @@ func TestRecurrentPoolReturnsEveryByte(t *testing.T) {
 	attach(5)
 	attach(6)
 	dt.ReleaseLayers(1, 2)
-	if l1.pool != nil || l0.pool == nil || dt.used-used0 != 2*slot || len(d.liveBufs)-live0 != 4 {
+	if l1.pool != nil || l0.pool == nil || dt.used-used0 != 2*slot || len(d.liveBufs)-live0 != 4+zeros() {
 		t.Fatalf("after releasing a block: its pool %v, the other's %v, %d charged, %d live",
 			l1.pool != nil, l0.pool != nil, dt.used-used0, len(d.liveBufs)-live0)
 	}

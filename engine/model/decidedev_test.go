@@ -2,6 +2,8 @@ package model
 
 import (
 	"fmt"
+
+	"github.com/jitllm/jitllm/format/jlm"
 	"math"
 	"path/filepath"
 	"testing"
@@ -30,7 +32,7 @@ import (
 // near-tie, a nine-way rating distribution whose top two sit 0.02 apart
 // (ambiguous question 3, p 0.47 against 0.49): the laptop's 0.058 on five
 // blocks is the same. Its violations move the answers 0.65-0.69.
-var decisionDevTol = map[string]float64{"d1-3B": 0.03, "lev": 0.08, "laya": 0.01}
+var decisionDevTol = map[string]float64{"d1-3B": 0.03, "lev": 0.08, "laya": 0.01, "clef": 0.05, "clef-fixture": 0.002}
 
 // decisionBlocks is how many blocks a Decider's readout runs: the decoder's,
 // or the encoder segment's (a decision head's blocks with it).
@@ -82,7 +84,7 @@ func decideOn(t *testing.T, m *Model, dev nn.Device, n int, ok func(placed int) 
 	var out [][]DecisionAnswer
 	for _, req := range decisionRequests {
 		state, qs := decisionRequest(t, filepath.Join("testdata", "decision", req+".json"))
-		ans, err := d.Decide(state, qs)
+		ans, err := d.Decide(state, qs, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -96,6 +98,11 @@ func decideOn(t *testing.T, m *Model, dev nn.Device, n int, ok func(placed int) 
 	if gpu != nil && placed > 0 && gpu.Stats().Submits-s0 < len(decisionRequests) {
 		t.Fatalf("%d submission(s) for %d requests: the placed blocks did not run on the device",
 			gpu.Stats().Submits-s0, len(decisionRequests))
+	}
+	// Clef has no labels to pick: what the device took is its head, one
+	// request at a time.
+	if d.kind == jlm.DecisionClef {
+		return out, placed, why, d.clefDevRuns
 	}
 	return out, placed, why, d.picked
 }
@@ -156,6 +163,10 @@ var decisionDevViolations = map[string]decisionDevViolation{
 	}},
 	// The device reads which blocks are local from the plan (mb.local): every
 	// block global there attends over every row at the global base.
+	// The device reads its own copy of the head (clefDevHead): with the joint
+	// score gated off there, only the prior answers on the device.
+	"clef":         {"the device head's joint score gated off", clefDevGateOff},
+	"clef-fixture": {"the device head's joint score gated off", clefDevGateOff},
 	"laya": {"every block global on the device", func(m *Model) func() {
 		mb := m.enc.mb
 		was := mb.local
@@ -228,7 +239,23 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 						if worst > tol {
 							t.Errorf("the answers moved %.5f from the host's, past %.3f", worst, tol)
 						}
-						if !m.IsEncoder() {
+						if c.kind == jlm.DecisionClef {
+							// The head ran on the device for every request, and
+							// the same rows through the host's head answer within
+							// the band.
+							if picked != len(decisionRequests) {
+								t.Fatalf("Clef's head ran on %s for %d of %d requests", spec, picked, len(decisionRequests))
+							}
+							home, _, _, hp := decideOn(t, m, g, -1, all, "host-head")
+							if hp != 0 {
+								t.Fatalf("the host-head arm ran the head on the device %d times", hp)
+							}
+							w := decisionDiff(t, home, got)
+							t.Logf("the head on %s against the host's head over the same rows: %.5f", spec, w)
+							if w > tol {
+								t.Errorf("the device's head answers %.5f from the host's over the same rows", w)
+							}
+						} else if !m.IsEncoder() {
 							// The labels' logits were picked on the device, and
 							// are the row's: the same placement reading the whole
 							// row back answers bit for bit. Picked one past each
@@ -279,5 +306,25 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 				noDevice(t, "device", nil)
 			}
 		})
+	}
+}
+
+// clefDevGateOff hands the device a copy of Clef's head whose joint score is
+// gated off (the residual gate's value zero), which the host's head does not
+// read.
+func clefDevGateOff(m *Model) func() {
+	if _, err := m.clefLoad(); err != nil {
+		panic(err)
+	}
+	h := m.clefDevHead()
+	cp := *h
+	cp.Scales[2] = 0
+	m.bind.Lock()
+	m.clefDev = &cp
+	m.bind.Unlock()
+	return func() {
+		m.bind.Lock()
+		m.clefDev = h
+		m.bind.Unlock()
 	}
 }

@@ -73,6 +73,9 @@ func (c *Config) KVTypeRefusal(t KVType) error {
 	case c.MSA():
 		return fmt.Errorf("model: %s selects blocks by its indexer's cached key (MiniMax Sparse Attention): "+
 			"a q8_0 KV cache is not implemented for it", c.Arch)
+	case c.QSARatio != 0:
+		return fmt.Errorf("model: %s pools its QSA indexer's raw cached keys, which its references hold "+
+			"at f32: a q8_0 KV cache is not implemented for it", c.Arch)
 	case c.DSV4():
 		return fmt.Errorf("model: %s caches its compressor's pending inputs beside the key: "+
 			"a q8_0 KV cache is not implemented for it", c.Arch)

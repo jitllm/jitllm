@@ -173,6 +173,21 @@ func dequant[T destination](t Type, src []byte, dst []T) error {
 			}
 		}
 
+	case IQ4_NL:
+		// block_iq4_nl { ggml_half d; uint8_t qs[16]; } -- 32 elements in 18
+		// bytes, Q4_0's layout (low nibble element j, high nibble j+16), the
+		// nibble an index into a fixed non-linear int8 table rather than q-8.
+		// d times an int8 is exact in f32, so both destinations agree.
+		for b := uint64(0); b < blocks; b++ {
+			blk := src[b*18:]
+			d := f16(binary.LittleEndian.Uint16(blk))
+			out := dst[b*32:]
+			for j := 0; j < 16; j++ {
+				out[j] = T(float64(IQ4NLValues[blk[2+j]&0xF]) * d)
+				out[j+16] = T(float64(IQ4NLValues[blk[2+j]>>4]) * d)
+			}
+		}
+
 	case Q3_K:
 		dequantQ3K(src, dst, blocks)
 	case Q4_K:
@@ -192,10 +207,13 @@ func dequant[T destination](t Type, src []byte, dst []T) error {
 // ggml's kvalues_mxfp4. The scale that goes with it is 2^(e-128), not 2^(e-127).
 var MXFP4Values = [16]int8{0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12}
 
+// IQ4NLValues is IQ4_NL's code table, ggml's kvalues_iq4nl.
+var IQ4NLValues = [16]int8{-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113}
+
 // Dequantable reports whether Dequant handles type t.
 func Dequantable(t Type) bool {
 	switch t {
-	case F32, F16, BF16, Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, MXFP4:
+	case F32, F16, BF16, Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, MXFP4, IQ4_NL:
 		return true
 	}
 	return false

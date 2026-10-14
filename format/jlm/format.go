@@ -44,6 +44,8 @@ var Magic = [8]byte{'J', 'I', 'T', 'L', 'L', 'M', 0, 0}
 //
 // Revisions, newest first, each of which a previous reader would misread:
 //
+//	v29  a row table (RowTable) after the page arrays, read a row at a time,
+//	     and TypeIQ4NL
 //	v28  multi-token-prediction blocks kept after the trunk (Config.NMTP) and
 //	     the roles that make one (RoleNextnEHProj and its siblings)
 //	v27  Q4_K/Q5_K sub-block scales and minima packed as a 96-bit stream, the
@@ -65,7 +67,7 @@ var Magic = [8]byte{'J', 'I', 'T', 'L', 'L', 'M', 0, 0}
 //	     block, index) identity, a typed config and pre-tokenizer stages
 //	v5   Q6_K's payload is a 4-bit plus a 2-bit plane
 //	v3   no tensor is in GGUF layout
-const Version = 28
+const Version = 29
 
 // HeaderBytes is the fixed header. Everything after it is located by offset.
 // It is 192 because every offset in this header is u64; squeezing offsets

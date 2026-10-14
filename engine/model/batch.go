@@ -208,6 +208,10 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 	if c.ResAttn() {
 		s.k3Expand(s.bx[:n*c.ResidW()], n)
 	}
+	if c.Q4E() {
+		s.growQ4E(n)
+		s.q4eExpand(s.bx[:n*c.ResidW()], n)
+	}
 	s.tock(opResid, t0)
 
 	// At each row's rotary position, which an image earlier in its sequence
@@ -241,6 +245,14 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 			}
 			withHead := headOnDev && hi == s.hi
 			s.tokenIDs(tokens)
+			// Qwen3.8-Flash-Next's n-gram rows, when the run holds its n-gram
+			// block, each sequence's in position order.
+			if c.NGramBlock != 0 {
+				s.q4.setRows(s, seq, tokens)
+				if err := s.ngramToDevice(li, hi, n, causal, s.q4.rowsOwner, s.q4.callTok); err != nil {
+					return nil, err
+				}
+			}
 			if err := s.rowsRun(li, hi, pos, devSlot, s.bx[:n*c.ResidW()], cs, csSWA,
 				withHead, s.blogits[:nlogit*c.NVocab], nlogit); err != nil {
 				return nil, err
@@ -277,6 +289,21 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 		t0 = s.tick()
 		// Kimi-K3's attention reads its mix over the bank (k3.go).
 		attnIn := s.bx
+		if c.Q4E() {
+			// The n-gram embedding in each sequence's position order, then
+			// the attention's hyper-connection mix (q4e.go).
+			x := s.bx[:n*c.ResidW()]
+			if c.NGramAt(li) {
+				if err := s.ngramApply(li, l, x, n, causal, func(i int) (*State, int) { return s.rowOwner(i, seq) },
+					func(i int) int32 { return tokens[i] }); err != nil {
+					return nil, err
+				}
+			}
+			if err := s.hcMix(x, n, &l.q4e.attn); err != nil {
+				return nil, err
+			}
+			attnIn = s.q4.mix
+		}
 		if c.ResAttn() {
 			var err error
 			if attnIn, err = s.k3AttnIn(li, l, s.bx[:n*c.ResidW()], n); err != nil {
@@ -362,12 +389,21 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 						return nil, err
 					}
 				}
+				qsa := c.QSAAt(li)
+				if qsa {
+					if err := s.qsaProjectRows(l, n, cs, csSWA, li); err != nil {
+						return nil, err
+					}
+				}
 
 				// No outer timer: attnPrep charges its own RoPE.
 				for i := 0; i < n; i++ {
 					k, v := s.bk[i*kvDim:(i+1)*kvDim], s.bv[i*kvDim:(i+1)*kvDim]
 					if msa {
 						k, v = s.msaRowOf(li, i, k, v)
+					}
+					if qsa {
+						k, v = s.qsaRowOf(li, i, k, v)
 					}
 					// Each row has its own position, table slice and cache slot.
 					// Every row's K and V land here, before any row attends.
@@ -419,6 +455,11 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 				masks, mstride = s.msaMasks, s.attStride
 				s.msaRows(kvli, n, func(i int) int { return seq[i] }, func(i int) int { return pos[i] + 1 }, masks)
 			}
+			if c.QSAAt(li) {
+				masks, mstride = s.qsa().masks, 0
+				s.qsaRows(kvli, l, n, func(i int) (*State, int) { return s.rowOwner(i, seq) },
+					func(i int) int { return pos[i] + 1 }, masks)
+			}
 			// The fan-out's arguments are State fields and its function a
 			// method value made once: a closure over these locals escapes,
 			// an allocation per block per step.
@@ -461,7 +502,9 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 			s.batchNorm(s.bh, s.bh, l.postAttnNorm, c.NEmbd, n)
 		}
 		t0 = s.tick()
-		if c.ResAttn() {
+		if c.Q4E() {
+			s.hcPlace(s.bx[:n*c.ResidW()], n, s.bh)
+		} else if c.ResAttn() {
 			s.k3Resid(li, s.bx, s.bh, n)
 		} else {
 			s.addInto(s.bx[:n*c.NEmbd], s.bh[:n*c.NEmbd])
@@ -486,6 +529,11 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 				return nil, err
 			}
 			s.batchNormB(s.bh, in, l.ffnNorm, l.ffnNormB, c.NEmbd, n)
+		} else if c.Q4E() {
+			if err := s.hcMix(s.bx[:n*c.ResidW()], n, &l.q4e.ffn); err != nil {
+				return nil, err
+			}
+			copy(s.bh[:n*c.NEmbd], s.q4.mix[:n*c.NEmbd])
 		} else {
 			s.batchNormB(s.bh, s.bx, l.ffnNorm, l.ffnNormB, c.NEmbd, n)
 		}
@@ -500,6 +548,13 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 			if err := s.k3MoEBatch(li, l, ffnIn, s.bx, n); err != nil {
 				return nil, err
 			}
+		} else if l.router.data != nil && c.Q4E() {
+			out := s.q4.out[:n*c.NEmbd]
+			clear(out)
+			if err := s.moeBatch(li, l, ffnIn, out, n); err != nil {
+				return nil, err
+			}
+			s.hcPlace(s.bx[:n*c.ResidW()], n, out)
 		} else if l.router.data != nil {
 			if err := s.moeBatch(li, l, ffnIn, s.bx, n); err != nil {
 				return nil, err
@@ -564,6 +619,11 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 	}
 	if c.ResAttn() && nlogit > 0 {
 		if err := s.k3Collapse(s.bx[:n*c.ResidW()], n); err != nil {
+			return nil, err
+		}
+	}
+	if c.Q4E() && nlogit > 0 {
+		if err := s.q4eCollapse(s.bx[:n*c.ResidW()], n); err != nil {
 			return nil, err
 		}
 	}

@@ -69,7 +69,7 @@ func (a Arch) XDRope() bool { return a == ArchHunyuanVL }
 // Qwen3.5 (ArchQwen3Next with sections) is Qwen3-VL's split under its own
 // tower; qwen3next itself carries no sections and has no runs.
 func (a Arch) InterleavedMRope() bool {
-	return a == ArchQwen3VL || a == ArchQwen3VLMoE || a == ArchQwen3Next
+	return a == ArchQwen3VL || a == ArchQwen3VLMoE || a == ArchQwen3Next || a == ArchQwen4Exp
 }
 
 const (

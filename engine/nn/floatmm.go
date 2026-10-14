@@ -3,8 +3,6 @@
 package nn
 
 import (
-	"unsafe"
-
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/cpu"
 )
@@ -70,23 +68,19 @@ func (f *JIT) MatMulFloat(out []float32, t quant.Type, w []byte, x []float32, nr
 			return false
 		}
 	}
-	rowBytes := k * es
 	chunk := max(1, nrows/(4*f.pool.N()))
+	j := &f.hot.floatMM
+	j.w, j.k, j.rowBytes, j.nrows = w, k, k*es, nrows
 	for j0 := 0; j0 < ntok; j0 += cpu.MaxFloatTokens {
 		nt := min(cpu.MaxFloatTokens, ntok-j0)
-		c := full
+		j.code = full
 		if nt < min(ntok, cpu.MaxFloatTokens) {
-			c = tail
+			j.code = tail
 		}
-		xs := x[j0*k:]
-		os := out[j0*nrows:]
-		f.pool.DoRange(nrows, chunk, func(lo, hi int) {
-			c.Call(&cpu.Args{
-				Out: &os[lo], W: &w[lo*rowBytes], A: (*int8)(unsafe.Pointer(&xs[0])),
-				Rows: int64(hi - lo), K: int64(k), RowStr: int64(rowBytes), OutStr: int64(4 * nrows),
-			})
-		})
+		j.x, j.out = x[j0*k:], out[j0*nrows:]
+		f.pool.DoRange(nrows, chunk, f.hot.floatMMFn())
 	}
+	j.code, j.w, j.x, j.out = nil, nil, nil, nil
 	f.floatMMCalls.Add(1)
 	return true
 }

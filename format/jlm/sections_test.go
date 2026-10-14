@@ -47,11 +47,14 @@ func TestSectionsRoundTrip(t *testing.T) {
 	}
 	// The optional tail, alone and with the fields before it set.
 	for _, tail := range []Vision{{MinPixels: 65536, MaxPixels: 921600},
-		{MinTiles: 1, MaxTiles: 12, WinPattern: 8, WinSize: 112, MinPixels: 3136, MaxPixels: 313600}} {
+		{MinTiles: 1, MaxTiles: 12, WinPattern: 8, WinSize: 112, MinPixels: 3136, MaxPixels: 313600},
+		{TileSize: 512, Tolerance: 2},
+		{MinTiles: 2, MaxTiles: 10, MinPixels: 65536, MaxPixels: 262144, TileSize: 512, Tolerance: 2}} {
 		v := *vis
 		v.Projector = ProjPhi4
 		v.MinTiles, v.MaxTiles, v.WinPattern, v.WinSize = tail.MinTiles, tail.MaxTiles, tail.WinPattern, tail.WinSize
 		v.MinPixels, v.MaxPixels = tail.MinPixels, tail.MaxPixels
+		v.TileSize, v.Tolerance = tail.TileSize, tail.Tolerance
 		gv, err := decodeVision(encodeVision(&v))
 		if err != nil {
 			t.Fatal(err)

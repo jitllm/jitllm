@@ -326,7 +326,7 @@ const devStagedPlane = 64 << 20
 // Callers hold g.mu.
 func (g *devTier) stagedPassKeys(bs *blockScratch) int {
 	pg := bs.pkv
-	if pg == nil || pg.idx != nil || pg.msa != nil || bs.ds4 != nil {
+	if pg == nil || pg.idx != nil || pg.msa != nil || pg.qsa != nil || bs.ds4 != nil {
 		return 0
 	}
 	kp := g.kvPages()

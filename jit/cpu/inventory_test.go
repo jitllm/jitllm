@@ -46,6 +46,8 @@ var elementwiseInventory = []struct {
 	{"act/silu", func() []byte { return EmitAct(ActSiLU) }},
 	{"act/gelu", func() []byte { return EmitAct(ActGELU) }},
 	{"act/gelu-erf", func() []byte { return EmitAct(ActGELUErf) }},
+	// sigmoid(sign(x)*sqrt(max(|x|, 1e-6))): Qwen3.8-Flash-Next's n-gram gate.
+	{"act/sqrt-sigmoid", func() []byte { return EmitAct(ActSqrtSigmoid) }},
 	// quick-GELU, x*sigma(1.702x): CLIP's tower.
 	{"act/quickgelu", func() []byte { return EmitAct(ActQuickGELU) }},
 	// Squared ReLU, max(x,0)^2: Nemotron's ungated FFN.

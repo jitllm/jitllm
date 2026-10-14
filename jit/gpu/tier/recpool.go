@@ -249,7 +249,8 @@ func (g *devTier) recZero(l *layer, base, rows int) error {
 }
 
 // recZeroLayers is recZero over the pools of ls. The zeros are uploaded once,
-// into a device buffer each half is copied from (Device.Copy): a write from
+// into a device buffer each half is copied from (Device.Copy) and kept with
+// the pools for the next zeroing (recZeros): a write from
 // the host per buffer put one upload of the whole slot -- 2 MiB a delta-rule
 // state on a 4B qwen35 -- on the bus for every half of every block, about 30
 // ms of a reset on a V100, where a copy on the card is microseconds. Callers
@@ -260,11 +261,9 @@ func (g *devTier) recZeroLayers(ls []*layer, base, rows int) error {
 		return nil
 	}
 	var zb backend.Buf
-	defer func() {
-		if zb != nil {
-			zb.Free()
-		}
-	}()
+	if uint64(n) <= g.recZerosBytes {
+		zb = g.recZeros
+	}
 	for _, l := range ls {
 		if l == nil || l.pool == nil {
 			continue
@@ -283,6 +282,8 @@ func (g *devTier) recZeroLayers(ls []*layer, base, rows int) error {
 						return err
 					}
 					g.RecZeroSource += uint64(n)
+					g.dropRecZeros()
+					g.recZeros, g.recZerosBytes = zb, uint64(n)
 				}
 				if err := g.dev.Copy(b.buf, base*b.w*4, zb, 0, rows*b.w*4); err != nil {
 					return err
@@ -509,6 +510,7 @@ func (g *devTier) recTidy() {
 	}
 	if len(g.recPools()) == 0 {
 		g.recSlots, g.recShared = 0, false
+		g.dropRecZeros()
 		if g.recNext != nil {
 			g.recNext.Free()
 			g.refund(g.recNextBytes)
@@ -522,6 +524,14 @@ func (g *devTier) recTidy() {
 			// The pools keep their size: room not given back, nothing lost.
 			g.LastErr = "recurrent pools did not shrink: " + err.Error()
 		}
+	}
+}
+
+// dropRecZeros frees the kept zeros (recZeros). Callers hold g.mu.
+func (g *devTier) dropRecZeros() {
+	if g.recZeros != nil {
+		g.recZeros.Free()
+		g.recZeros, g.recZerosBytes = nil, 0
 	}
 }
 

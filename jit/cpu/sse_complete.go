@@ -108,6 +108,8 @@ var sseProbes = []sseProbe{
 	{"RopeTable", func(em *Emitters) error { _, err := em.RopeTable(32); return err }},
 	{"HCMix", func(em *Emitters) error { _, err := em.HCMix(20, false); return err }},
 	{"ColPool", func(em *Emitters) error { return probe0(em.ColPool) }},
+	{"NGramHash", func(em *Emitters) error { _, err := em.NGramHash(3, 8, true); return err }},
+	{"RowIQ4NL", func(em *Emitters) error { return probe0(em.RowIQ4NL) }},
 	{"PackedRow", func(em *Emitters) error {
 		q, _ := kernels.QuantOf(quant.Q4_K)
 		_, err := em.PackedRow(q)

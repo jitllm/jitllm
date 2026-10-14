@@ -13,7 +13,7 @@ import (
 // which the host takes (Gemma 3n's AltUp, DeepSeek V4's hyper-connections,
 // Kimi-K3's residual attention): a device runs the blocks and hands every
 // stream back, and never folds the head into them.
-func (c *Config) streamHead() bool { return c.AltUp != 0 || c.DSV4() || c.ResAttn() }
+func (c *Config) streamHead() bool { return c.AltUp != 0 || c.DSV4() || c.ResAttn() || c.Q4E() }
 
 // expandStreams fills every stream of n rows of x from its embedding in
 // stream 0.
@@ -26,6 +26,10 @@ func (s *State) expandStreams(x []float32, n int) error {
 		s.k3Expand(x, n)
 		return nil
 	}
+	if s.m.Cfg.Q4E() {
+		s.q4eExpand(x, n)
+		return nil
+	}
 	return s.altExpand(x, n)
 }
 
@@ -36,6 +40,9 @@ func (s *State) collapseStreams(x []float32, n int) error {
 	}
 	if s.m.Cfg.ResAttn() {
 		return s.k3Collapse(x, n)
+	}
+	if s.m.Cfg.Q4E() {
+		return s.q4eCollapse(x, n)
 	}
 	return s.altCollapse(x, n)
 }

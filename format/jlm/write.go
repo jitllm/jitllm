@@ -100,6 +100,11 @@ func verbatimBytes(t Type, n uint64) (uint64, error) {
 		return n * 4, nil
 	case TypeF16, TypeBF16:
 		return n * 2, nil
+	case TypeIQ4NL:
+		if n%32 != 0 {
+			return 0, fmt.Errorf("jlm: %d iq4nl elements is not a whole number of 32-wide blocks", n)
+		}
+		return n / 32 * 18, nil
 	}
 	return 0, fmt.Errorf("jlm: type %v is neither packed nor verbatim", t)
 }
@@ -317,7 +322,19 @@ func StoredBytes(t Type, dims [4]uint64, ndim uint8) (uint64, error) {
 // Role.Expanded: a tensor read into a fresh slice at load may live anywhere,
 // and a tensor a matvec reads in place must stay a page. See Role.Expanded for
 // why the MoE router is not here. The
-func alwaysResident(e *Entry) bool { return e.Block == DenseBlock || e.Role.Expanded() }
+func alwaysResident(e *Entry) bool {
+	return !RowTable(e) && (e.Block == DenseBlock || e.Role.Expanded())
+}
+
+// RowTable says a tensor is a row table: rows read one at a time from the
+// file, never resident whole and never in the dense region or a page. It
+// sits after every page array, verbatim and row-major, so row r is
+// RowBytes(e) bytes at QSOff + r*RowBytes(e). Qwen3.8-Flash-Next's n-gram
+// table is one: 320 million rows, of which a token reads sixteen.
+func RowTable(e *Entry) bool { return e.Role == RoleNGramTable }
+
+// RowBytes is one row of a row table: Dims[0] elements of its type.
+func RowBytes(e *Entry) (uint64, error) { return verbatimBytes(e.Type, e.Dims[0]) }
 
 // Write lays src out as dst, a jlm container.
 //
@@ -392,7 +409,7 @@ func layoutOf(src *Source, fp Fingerprint) (*layout, error) {
 		} else if e.Block > maxBlock {
 			maxBlock = e.Block
 		}
-		if !alwaysResident(&e) && !expertPaged(&e) {
+		if !alwaysResident(&e) && !expertPaged(&e) && !RowTable(&e) {
 			if e.Role.Vision() {
 				perVis[e.Block] += qs + d + sc
 			} else {
@@ -549,7 +566,7 @@ func layoutOf(src *Source, fp Fingerprint) (*layout, error) {
 	for i := range es {
 		// Same predicate as the dense pass above, or this one overwrites the
 		// offsets it just assigned and a norm ends up inside a page again.
-		if alwaysResident(&es[i]) {
+		if alwaysResident(&es[i]) || RowTable(&es[i]) {
 			continue
 		}
 		if po, ok := inner[i]; ok {
@@ -576,6 +593,22 @@ func layoutOf(src *Source, fp Fingerprint) (*layout, error) {
 	total := h.VisDataOff + uint64(nVisBlocks)*visPageSize
 	if nExpPages > 0 {
 		total = h.ExpDataOff + nExpPages*expPageSize
+	}
+	// The row tables, after everything a pager reads.
+	for i := range es {
+		if !RowTable(&es[i]) {
+			continue
+		}
+		if es[i].Block != DenseBlock || es[i].NDim != 2 || Packed(es[i].Type) {
+			return nil, fmt.Errorf("jlm: %s: a row table is a model-level 2-D verbatim tensor", es[i].Name)
+		}
+		qs, _, _, err := spans(es[i].Type, es[i].Dims, es[i].NDim)
+		if err != nil {
+			return nil, fmt.Errorf("jlm: %s: %w", es[i].Name, err)
+		}
+		es[i].QSOff = alignUp(total)
+		es[i].DOff, es[i].SCOff = es[i].QSOff+qs, es[i].QSOff+qs
+		total = es[i].QSOff + qs
 	}
 	return &layout{es: es, h: h, cfgb: cfgb, visb: visb, vocb: vocb, fpb: fpb,
 		expPageSize: expPageSize, total: total}, nil

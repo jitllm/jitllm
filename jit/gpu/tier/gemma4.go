@@ -54,7 +54,7 @@ func geoOf(p *nn.LayerPlan) geoKey {
 	if p.FFNWide {
 		k |= geoWideFFN
 	}
-	if p.MSA() {
+	if p.MSA() || p.QSA() {
 		k |= geoMSA
 	}
 	return k
@@ -203,7 +203,7 @@ func (s *gpuSession) SetLayerInputs(in []float32) { s.ple = in }
 // inputsTo hands the session's per-layer inputs to the devices enter took.
 func (s *gpuSession) inputsTo(ds []*devTier) []*devTier {
 	for _, d := range ds {
-		d.setInputs(s.sid, s.ple, s.ids)
+		d.setInputs(s.sid, s.ple, s.ids, s.ng, s.marks)
 	}
 	return ds
 }

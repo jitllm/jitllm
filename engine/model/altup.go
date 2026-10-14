@@ -68,11 +68,19 @@ func (s *State) resid() []float32 {
 // and the head on the host over the streams' mean, finished as the device's
 // is (the final softcap; the caller adds the rest). With no logits wanted the
 // rows' greedy tokens go to the head's Tokens, as the device's argmax would.
-func (s *State) altRowsStep(rd nn.RowsDevice, pos, slot []int, n int, logits []float32, nlogit int) error {
+func (s *State) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32, n int, logits []float32,
+	nlogit int) error {
 	c := s.m.Cfg
 	x := s.bx[:n*c.ResidW()]
 	if err := s.expandStreams(x, n); err != nil {
 		return err
+	}
+	// Qwen3.8-Flash-Next's n-gram rows, each sequence's in position order.
+	if c.NGramBlock != 0 {
+		s.q4.setStep(s, pos, slot, tokens)
+		if err := s.ngramToDevice(s.lo, s.hi, n, s.causalOrder(pos), s.q4.stepOwner, s.q4.callTok); err != nil {
+			return err
+		}
 	}
 	if !rd.LayersRows(s.lo, s.hi, pos, slot, s.maxSeq, x, s.bcs[:n*c.NRot], s.bswaTable(n, c.NRotSWA), nil) {
 		why := "no reason given"

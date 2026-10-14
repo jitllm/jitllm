@@ -412,7 +412,11 @@ func TestDeviceUnpackedWeightsAreTheHostPackersBytes(t *testing.T) {
 	for _, d := range devs[1:] {
 		d.Close()
 	}
-	g, p := unpackTier(t, 4, devs[0], false)
+	// unpackTier sizes the budget from a fake device's scratch, and a real
+	// device's is its own: a V100's (sm_70) is 16 MB, which paged the block
+	// straight back out of a four-block budget. Room for 64 blocks beside it,
+	// which this test's one block never needs paging for.
+	g, p := unpackTier(t, 64, devs[0], false)
 	ws := q4kBlocks(p, 1, false)
 
 	read := func(li int) [][]byte {
@@ -467,6 +471,12 @@ func TestDeviceUnpackedWeightsAreTheHostPackersBytes(t *testing.T) {
 	if u := g.Stats().Unpacks; u != 7 {
 		t.Fatalf("%d tensors unpacked on the device, want 7: the configuration under test "+
 			"is not the one that ran (RULE 10c)", u)
+	}
+	// Read straight after placement: a block paged out by then (the budget
+	// too small for the device's own scratch) has no bytes to compare.
+	if n := g.devs[0].PageOuts; n != 0 {
+		t.Fatalf("the block was paged out %d time(s) after placement: the budget holds %d bytes, "+
+			"the device's scratch %d", n, g.devs[0].limit, g.devs[0].scratch)
 	}
 	first := read(0)
 

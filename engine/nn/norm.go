@@ -375,15 +375,17 @@ func ClampRange32JIT(x []float32, lo, hi float32) {
 type ActKind = cpu.ActKind
 
 const (
-	ActSiLU      = cpu.ActSiLU
-	ActGELU      = cpu.ActGELU
-	ActGELUErf   = cpu.ActGELUErf
-	ActQuickGELU = cpu.ActQuickGELU
-	ActReLU2     = cpu.ActReLU2
-	ActReLU      = cpu.ActReLU
-	ActIdentity  = cpu.ActIdentity
-	ActSwiGLUOAI = cpu.ActSwiGLUOAI
-	ActXIELU     = cpu.ActXIELU
+	ActSiLU    = cpu.ActSiLU
+	ActGELU    = cpu.ActGELU
+	ActGELUErf = cpu.ActGELUErf
+	// ActSqrtSigmoid is Qwen3.8-Flash-Next's n-gram gate.
+	ActSqrtSigmoid = cpu.ActSqrtSigmoid
+	ActQuickGELU   = cpu.ActQuickGELU
+	ActReLU2       = cpu.ActReLU2
+	ActReLU        = cpu.ActReLU
+	ActIdentity    = cpu.ActIdentity
+	ActSwiGLUOAI   = cpu.ActSwiGLUOAI
+	ActXIELU       = cpu.ActXIELU
 	// ActSwiGLUClamp and ActSqrtSoftplus are DeepSeek V4's expert activation
 	// and router gate.
 	ActSwiGLUClamp  = cpu.ActSwiGLUClamp

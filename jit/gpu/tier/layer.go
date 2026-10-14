@@ -110,7 +110,9 @@ type layer struct {
 	// MiniMax Sparse Attention (nn.LayerPlan.MSA, msa.go): msa says the block
 	// selects its key blocks; idxQ/mvMQ is its indexer query and nIdxQ that
 	// query's per-head norm, the key being idxK/mvIK with nIdxK.
-	msa   bool
+	msa bool
+	// qsa is a Qwen3.8-Flash-Next attention block's QSA selection (qsa.go).
+	qsa   bool
 	idxQ  *resident
 	mvMQ  mv
 	nIdxQ backend.Buf
@@ -128,6 +130,14 @@ type layer struct {
 	mlaGate, routedDown, routedUp *resident
 	mvMG, mvRD, mvRU              mv
 	k3                            *k3Block
+	// Qwen3.8-Flash-Next (nn.LayerPlan.Q4E, q4e.go): the two
+	// hyper-connections' down, up and placement projections (slots 39..44),
+	// the n-gram key and value (45, 46), and the block's vectors.
+	hcAD, hcAU, hcAI, hcFD, hcFU, hcFI       *resident
+	ngKey, ngVal                             *resident
+	mvHAD, mvHAU, mvHAI, mvHFD, mvHFU, mvHFI mv
+	mvNGK, mvNGV                             mv
+	q4e                                      *q4eBlock
 
 	nAttn, nFFN backend.Buf // norm weights, f32
 	// nPostAttn and nPostFFN are gemma2/gemma3's two extra RMSNorms, applied to
@@ -1154,6 +1164,9 @@ type recPair struct {
 // ragLinear is one batch size's linear-block kernels (blockScratch.ragLin).
 type ragLinear struct {
 	conv, shift, delta backend.Kernel
+	// ngConv is Qwen3.8-Flash-Next's n-gram convolution over the step's runs
+	// (q4e.go), nil on every other block.
+	ngConv backend.Kernel
 	// perRun is the scan's threads for one run. The kernels are compiled for
 	// as many runs as rows and launched for the step's runs alone: a run's
 	// state is in registers for all its rows, and the entries past the last
@@ -1478,6 +1491,8 @@ type blockScratch struct {
 	flashChunk, flashForced, flashCap int // flashSplitFor's inputs
 	// ds4 is DeepSeek V4's set (ds4.go), nil on every other model.
 	ds4 *ds4Scratch
+	// q4e is Qwen3.8-Flash-Next's set (q4e.go), nil on every other model.
+	q4e *q4eScratch
 	// k3 is Kimi-K3's set (k3.go), nil on every other model.
 	k3 *k3Scratch
 
@@ -1903,6 +1918,9 @@ func declineReason(p *nn.LayerPlan) string {
 		return r
 	}
 	if r := k3WhyNot(p); r != "" {
+		return r
+	}
+	if r := q4eWhyNot(p); r != "" {
 		return r
 	}
 	switch {
@@ -2668,7 +2686,9 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		// DeepSeek V4's grouped output and compressors.
 		&l.mvWoA, &l.mvCKV, &l.mvCG, &l.mvICKV, &l.mvICG,
 		// Kimi-K3's MLA output gate and latent mixture projections.
-		&l.mvMG, &l.mvRD, &l.mvRU}
+		&l.mvMG, &l.mvRD, &l.mvRU,
+		// Qwen3.8-Flash-Next's hyper-connections and n-gram projections.
+		&l.mvHAD, &l.mvHAU, &l.mvHAI, &l.mvHFD, &l.mvHFU, &l.mvHFI, &l.mvNGK, &l.mvNGV}
 	// Same order as rs/ms. Attention carries biases on every architecture that
 	// has them; a vision block also on up and down. For every text model the
 	// FFN entries stay nil, so their kernels are byte-identical to before
@@ -2683,7 +2703,8 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		nil, nil, nil, nil, nil, nil,
 		nil,
 		nil, nil, nil, nil, nil,
-		nil, nil, nil}
+		nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil}
 	// The latent block's own slots: 0 (q) is the one-step query and is empty
 	// where 13/14 are populated; 1 and 2 are always empty (MLA has no k or v
 	// projection); 15..17 are always there. Each is an absent weight, not a
@@ -2728,9 +2749,20 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		} else if i >= 31 && i <= 35 {
 			continue // DeepSeek V4's slots (31..35), absent everywhere else
 		}
+		// Qwen3.8-Flash-Next's (39..46), on the blocks the plan says carry
+		// them and nowhere else.
+		if i >= 39 {
+			if !q4eSlot(p, i) {
+				continue
+			}
+			if len(x.Data) == 0 {
+				g.LastErr = fmt.Sprintf("block %d: a Qwen3.8-Flash-Next block and %s is empty", li, weightRole(i))
+				return false
+			}
+		}
 		// Kimi-K3's MLA output gate (36) and latent projections (37, 38), on
 		// the blocks the plan says carry them.
-		if i >= 36 {
+		if i >= 36 && i <= 38 {
 			want := i == 36 && p.MLA() && p.Recurrent.Conv == 0 && len(x.Data) != 0 ||
 				i >= 37 && p.K3 != nil && p.K3.Latent != 0
 			if !want {
@@ -2749,7 +2781,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if i >= 24 && i <= 28 && p.DS4 == nil {
 			// MiniMax-M3's indexer has a key (25) and its own query (30),
 			// not DeepSeek V3.2's query latent (24) or weights (26).
-			if (i < 27 && (p.IdxHeads == 0 || p.MSA() && i != 25)) || (i >= 27 && p.AltUp == 0) {
+			if (i < 27 && (p.IdxHeads == 0 || (p.MSA() || p.QSA()) && i != 25)) || (i >= 27 && p.AltUp == 0) {
 				continue
 			}
 			if len(x.Data) == 0 {
@@ -2783,7 +2815,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		// MiniMax-M3's indexer query (30), absent by construction elsewhere.
 		if i == 30 {
-			if !p.MSA() {
+			if !p.MSA() && !p.QSA() {
 				continue
 			}
 			if len(x.Data) == 0 {
@@ -3101,10 +3133,13 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// A post-norm block (OLMo 2, EXAONE 4) has neither pre-norm: the emit
 	// copies the residual where the norm would have written (bs.copyRows).
 	noPre := w.AttnNorm == nil && w.PostAttnNorm != nil && w.PostFFNNorm != nil
+	// Qwen3.8-Flash-Next's sublayers read their hyper-connection's mix, whose
+	// grouped norm stands where the pre-norms would (q4e.go).
+	noPre = noPre || p.Q4E != nil && w.AttnNorm == nil && w.FFNNorm == nil
 	// ModernBERT's first block has no attention norm and keeps its FFN norm:
 	// the attention reads the residual as it is, the same copy.
 	noAttnNorm := w.AttnNorm == nil && w.FFNNorm != nil && p.NoPreNorm && p.NonCausal
-	if noPre && !p.NoPreNorm {
+	if noPre && !p.NoPreNorm && p.Q4E == nil {
 		g.LastErr = fmt.Sprintf("block %d has no pre-norm on a plan that does not say so", li)
 		return false
 	}
@@ -3215,6 +3250,10 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		g.LastErr = why
 		return false
 	}
+	if why := g.prepQ4E(l, li, p, w, up); why != "" {
+		g.LastErr = why
+		return false
+	}
 	// Gemma 4's output scalar, one float, charged with the norms.
 	if p.OutScale != 0 {
 		up(&l.outScale, []float32{p.OutScale})
@@ -3278,7 +3317,8 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		up(&l.nK, w.KNorm)
 	}
 	// MiniMax-M3's indexer norms, each one head wide.
-	if l.msa = p.MSA(); l.msa {
+	l.qsa = p.QSA()
+	if l.msa = p.MSA(); l.msa || l.qsa {
 		if len(w.IdxQNorm) != p.IdxHeadDim || len(w.IdxKNorm) != p.IdxHeadDim {
 			g.LastErr = fmt.Sprintf("block %d: the indexer norms are %d/%d wide, want %d",
 				li, len(w.IdxQNorm), len(w.IdxKNorm), p.IdxHeadDim)
@@ -3826,9 +3866,9 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	}
 	// Every AltUp stream, stream-major (altup.go); one stream elsewhere.
 	al(&bs.x, rows*p.ResidW()*4)
-	// x2 is every stream too where a DeepSeek V4 hyper-connection writes it.
+	// x2 is every stream too where a hyper-connection or Kimi-K3 writes it.
 	x2 := p.NEmbd
-	if p.DS4 != nil || p.K3 != nil {
+	if p.DS4 != nil || p.K3 != nil || p.Q4E != nil {
 		x2 = p.ResidW()
 	}
 	al(&bs.x2, rows*x2*4)
@@ -4292,7 +4332,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		}},
 		{&bs.copyRows, func() (*ir.Kernel, error) {
 			// A block with no pre-norm copies the residual into h instead.
-			if !p.NoPreNorm {
+			if !p.NoPreNorm && p.Q4E == nil {
 				return nil, nil
 			}
 			return kernels.Restride(rows, p.NEmbd, p.NEmbd, p.NEmbd)
@@ -4990,7 +5030,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			return kernels.GatedDeltaStepChan(r.VHeads, r.VDim, r.KDim, r.VHeads/r.KHeads)
 		}},
 		{&bs.outSigMul, func() (*ir.Kernel, error) {
-			if r.Conv == 0 || r.ShortConv || !r.ChanDecay {
+			if r.Conv == 0 || r.ShortConv || !(r.ChanDecay || r.SigmoidGate) {
 				return nil, nil
 			}
 			// SigmoidMul, not ActMul: KimiLinearRMSNormGated applies out*sigma(z)
@@ -5040,6 +5080,9 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		{&bs.deltaStep, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
 				return nil, nil
+			}
+			if r.KeyTiled && r.TailLen > 0 {
+				return kernels.GatedDeltaStepTiledStride(r.VHeads, r.VDim, r.KDim, r.KHeads, r.StateLen)
 			}
 			if r.KeyTiled {
 				return kernels.GatedDeltaStepTiled(r.VHeads, r.VDim, r.KDim, r.KHeads)
@@ -5171,6 +5214,11 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	}
 	if err := g.initK3(bs); err != nil {
 		g.LastErr = "Kimi-K3: " + err.Error()
+		freeScratch(bs)
+		return nil
+	}
+	if err := g.initQ4E(bs); err != nil {
+		g.LastErr = "Qwen3.8-Flash-Next: " + err.Error()
 		freeScratch(bs)
 		return nil
 	}
@@ -5557,14 +5605,22 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		return false
 	}
 	var err error
-	f := make([]float32, len(h.Norm))
-	for i, v := range h.Norm {
-		f[i] = float32(v)
-	}
-	if bs.hNorm, err = g.dev.Alloc(len(f) * 4); err != nil {
-		return false
-	}
-	if bs.hNorm.Write(f32b(f)) != nil {
+	// A head with no norm (Qwen3.8-Flash-Next's reads its mix as it is)
+	// leaves hNorm nil, and the emit copies the row where the norm would
+	// have written.
+	if len(h.Norm) > 0 {
+		f := make([]float32, len(h.Norm))
+		for i, v := range h.Norm {
+			f[i] = float32(v)
+		}
+		if bs.hNorm, err = g.dev.Alloc(len(f) * 4); err != nil {
+			return false
+		}
+		if bs.hNorm.Write(f32b(f)) != nil {
+			return false
+		}
+	} else if bs.copyRows == nil {
+		g.LastErr = "a head with no norm, on a scratch with no copy for it"
 		return false
 	}
 	// A LayerNorm head needs its bias; an RMSNorm one has none.
@@ -5590,7 +5646,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	bs.head, bs.mvHead = r, mv{kern: kern, red: red, rows: h.W.Rows, split: split}
 	g.shapeChanged()
 	g.headSrc, g.headNormHost = &h.W.Data[0], slices.Clone(h.Norm)
-	g.charge(uint64(len(f)*4 + h.W.Rows*4))
+	g.charge(uint64(len(h.Norm)*4 + h.W.Rows*4))
 	bs.headEmbeds, bs.embScale = h.Embeds, h.EmbdScale
 	if bs.embScale == 0 {
 		bs.embScale = 1
@@ -6405,8 +6461,8 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			if pk.st != nil && pk.idx != nil {
 				return refuse("the lightning indexer reads the whole history and part of it is evicted")
 			}
-			// So does MiniMax-M3's block selection (msa.go).
-			if pk.st != nil && pk.msa != nil {
+			// So do MiniMax-M3's and QSA's block selections (msa.go, qsa.go).
+			if pk.st != nil && (pk.msa != nil || pk.qsa != nil) {
 				return refuse("the block selection reads the whole history and part of it is evicted")
 			}
 		}
@@ -6472,6 +6528,12 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	}
 	ropeDev := bs.ropeTable != nil && !g.RopeTableHost && rrows >= 1 &&
 		pos >= 0 && top <= kernels.RopeTabMaxPos
+	// QSA's marks, each row's pictures (qsa.go).
+	if bs.pkv != nil {
+		if e := g.qsaStage(bs.pkv.qsa, R); e != nil {
+			return refuse("QSA: %v", e)
+		}
+	}
 	// DeepSeek V4's entries rotate at positions of their own, which only the
 	// device's table builds; its keys are read through the paged pool.
 	if bs.ds4 != nil && lo < hi {
@@ -7100,7 +7162,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			// Not an AltUp block, whose LAuReL branch quantizes between the norm
 			// and the attention.
 			voltaOnly := R > 1 && rag == nil && g.voltaBlock(l, R, bs.tok) && l.altRouter == nil && l.ds4 == nil &&
-				l.k3 == nil
+				l.k3 == nil && l.q4e == nil
 			// Gemma 3n: every stream's prediction, the block run on the active
 			// one (altup.go).
 			if l.altRouter != nil {
@@ -7152,12 +7214,17 @@ func (g *devTier) layersSession(s backend.Session) {
 				if l.k3 != nil {
 					ain = g.k3AttnIn(lc, bs, l, R)
 				}
+				if l.q4e != nil {
+					// The hyper-connection's mix (q4e.go); an attention
+					// block carries no n-gram embedding, so no state.
+					ain = g.q4eAttnIn(lc, bs, l, R, mvrunAct, nil, nil, nil)
+				}
 				// The operand prologue (fuseActIn): q/k/v normalise and quantize
 				// the block input themselves, and the norm launch goes. Only
 				// where q/k/v run as the fused launch below (qkvIn) or as
 				// their three launches (qkvSep), and nothing else reads the
 				// normed row (bs.h).
-				qkvPro := R == 1 && rag == nil && g.actInOn() && l.k3 == nil && !l.mla && l.clampB == nil &&
+				qkvPro := R == 1 && rag == nil && g.actInOn() && l.k3 == nil && l.q4e == nil && !l.mla && l.clampB == nil &&
 					l.kvSrc == li && !l.vFromK && !g.TableSplit && l.altRouter == nil && bs.normVar == nil &&
 					l.nAttnB == nil && l.nAttn != nil && !voltaOnly && !skip["norm"] && !skip["quant"] && !skip["qkvo"]
 				qkvIn := qkvPro && l.qkv != nil && l.qkvIn != nil &&
@@ -7437,6 +7504,20 @@ func (g *devTier) layersSession(s backend.Session) {
 						}
 						kSrc, kHeads = pk.msa.kAll, kHeads+1
 					}
+					// Qwen3.8-Flash-Next's: the raw key joins the row,
+					// which is copied whole; only k's heads turn (qsa.go).
+					if l.qsa {
+						if pk == nil || pk.qsa == nil {
+							if err == nil {
+								err = fmt.Errorf("tier: block %d selects its keys and has no paged scratch here", li)
+							}
+							return
+						}
+						if err == nil {
+							err = g.qsaKeyQuery(lc, bs, l, R, kSrc, bs.cs, mvrun)
+						}
+						kSrc = pk.qsa.kAll
+					}
 					fusedKV := false
 					if !skip["rope"] {
 						// An unrotated layer still needs K and V in the cache: q is read where
@@ -7459,7 +7540,7 @@ func (g *devTier) layersSession(s backend.Session) {
 							if bs.copyQ != nil {
 								lc.la(bs.copyQ, R*qdim, qSrc, bs.qr, qOff)
 							}
-							if copyK != nil && partialRotary(p) && !shared {
+							if copyK != nil && (partialRotary(p) || l.qsa) && !shared {
 								laKV(copyK, R*kvDim, kSrc, kDst, kOff)
 							}
 							if pk != nil && pk.ropeQKV != nil && !shared && bs.copyQ == nil && kHeads == p.NKVHead &&
@@ -7534,7 +7615,12 @@ func (g *devTier) layersSession(s backend.Session) {
 					// kernel and the softmax, so it takes the three-kernel path.
 					useFlash := g.flashOn() && flash != nil && !skip["scores"] && !skip["softmax"] && !skip["acc"] &&
 						!l.windowed
-					if !skipAttn && l.msa {
+					if !skipAttn && l.qsa {
+						if err == nil {
+							err = g.qsaAttend(s, lc, bs, R, pk, g.kvp.layers[l.kvSrc], l, qAtt, bs.n, bs.xb)
+							g.PagedLaunches++
+						}
+					} else if !skipAttn && l.msa {
 						// Each kv group's kept blocks, gathered, then the decode
 						// plan over them, a chunk's rows included (msa.go).
 						if err == nil {
@@ -7729,7 +7815,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					// carries.
 					oIn := R == 1 && rag == nil && g.actInOn() && l.mvo.resIn != nil && !voltaOnly && l.clampB == nil &&
 						!skip["quant"] && !skip["qkvo"] && l.nPostAttn == nil && !l.withAttn && !resScaled && !skip["add"] &&
-						l.altRouter == nil && l.k3 == nil && !(g.TableSplit && l.mvo.alt != nil) && l.mvo.k == qdim
+						l.altRouter == nil && l.k3 == nil && l.q4e == nil && !(g.TableSplit && l.mvo.alt != nil) && l.mvo.k == qdim
 					if oIn {
 						g.ActInSaved++
 					} else if voltaOnly {
@@ -7748,7 +7834,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					} else if !skip["qkvo"] {
 						// x2 = x + Wo*attn in one launch where nothing sits
 						// between the projection and the residual add.
-						if !(l.nPostAttn == nil && !l.withAttn && !resScaled && !skip["add"] && l.altRouter == nil && l.k3 == nil &&
+						if !(l.nPostAttn == nil && !l.withAttn && !resScaled && !skip["add"] && l.altRouter == nil && l.k3 == nil && l.q4e == nil &&
 							mvres(l.mvo, l.wo, bs.x2, bs.x)) {
 							mvrun(l.mvo, l.wo, bs.mvOut)
 						} else {
@@ -7797,7 +7883,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			ffnIn := R == 1 && rag == nil && g.actInOn() && l.mvg.kernIn != nil && (l.mvu.gatedIn != nil || l.mvu.kernIn != nil) &&
 				!voltaOnly && !skipFFN && !skip["norm"] && !skip["quant"] && !skip["actmul"] && bs.normVar == nil &&
 				l.nFFNB == nil && l.nFFN != nil && l.nResid == nil && l.router == nil && l.clampB == nil &&
-				!l.nonCausal && !l.sparse && l.k3 == nil && l.ds4 == nil && l.altRouter == nil && !p.Parallel &&
+				!l.nonCausal && !l.sparse && l.k3 == nil && l.q4e == nil && l.ds4 == nil && l.altRouter == nil && !p.Parallel &&
 				!ungatedFFN(p) && !(g.TableSplit && (l.mvg.alt != nil || l.mvu.alt != nil))
 			// The FFN norm's fused form where the block runs binary16 GEMMs:
 			// it writes the first FFN projection's operand too.
@@ -7810,6 +7896,11 @@ func (g *devTier) layersSession(s backend.Session) {
 				ffnNorm, ffnConv = g.rmsF16For(bs, first, R, true)
 			}
 			switch {
+			case l.q4e != nil:
+				// Qwen3.8-Flash-Next: the output placed into every stream,
+				// then the mixture's input is the mix over them (q4e.go).
+				g.q4ePostAttn(lc, bs, l, R, aout)
+				norm(g.q4eFFNIn(lc, bs, l, R, mvrunAct), l.nFFN, l.nFFNB)
 			case l.k3 != nil:
 				// Kimi-K3: every stream after the attention, then the FFN's
 				// input is the mix over them (k3.go).
@@ -8265,7 +8356,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				// quantizing act(gate)*up where up wrote it (downIn), or
 				// forming it from gate and up as it quantizes (downAct).
 				downOK := R == 1 && rag == nil && g.actInOn() && !voltaOnly && l.clampB == nil && l.nPostFFN == nil &&
-					!resScaled && !skip["add"] && !skip["quantf"] && !skip["actmul"] && l.k3 == nil && !l.nonCausal &&
+					!resScaled && !skip["add"] && !skip["quantf"] && !skip["actmul"] && l.k3 == nil && l.q4e == nil && !l.nonCausal &&
 					!(g.TableSplit && l.mvd.alt != nil) && l.mvd.k == nffn
 				downIn := downOK && gated && l.mvd.resIn != nil
 				downAct := downOK && ffnIn && !gated && l.mvd.resActIn != nil
@@ -8321,7 +8412,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					// pIn is the gate's row and the norm-weight slot carries up's.
 					mvIn(l.mvd, l.mvd.resActIn, l.down, bs.x, gIn, uIn, bs.x2)
 					ffnFused = true
-				} else if l.clampB == nil && l.nPostFFN == nil && !resScaled && !skip["add"] && l.k3 == nil && mvres(l.mvd, l.down, bs.x, bs.x2) {
+				} else if l.clampB == nil && l.nPostFFN == nil && !resScaled && !skip["add"] && l.k3 == nil && l.q4e == nil && mvres(l.mvd, l.down, bs.x, bs.x2) {
 					ffnFused = true
 				} else {
 					mvrun(l.mvd, l.down, bs.mvOut)
@@ -8341,6 +8432,8 @@ func (g *devTier) layersSession(s backend.Session) {
 			}
 			if l.ds4 != nil {
 				g.ds4Post(lc, bs, R, bs.x2, fout, bs.x)
+			} else if l.q4e != nil {
+				g.q4ePostFFN(lc, bs, R, fout)
 			} else if l.k3 != nil {
 				g.k3PostFFN(lc, bs, R, fout)
 			} else if !skip["add"] && !ffnFused {
@@ -8433,8 +8526,12 @@ func (g *devTier) layersSession(s backend.Session) {
 			// out because mvrun's R is the chunk's.
 			hr := hb.head
 			lc.la(hb.spanK, p.NEmbd, bs.x, hb.x, hb.spanOff)
-			lc.la(hb.normPart, hb.parts, hb.x, hb.part)
-			lc.la(hb.normApply, p.NEmbd, hb.x, hNorm, hb.part, hb.h)
+			if hNorm == nil {
+				lc.la(hb.copyRows, p.NEmbd, hb.x, hb.h)
+			} else {
+				lc.la(hb.normPart, hb.parts, hb.x, hb.part)
+				lc.la(hb.normApply, p.NEmbd, hb.x, hNorm, hb.part, hb.h)
+			}
 			lc.la(hb.quantE, kernels.QuantizeThreads(p.NEmbd/32), hb.h, hb.a, hb.ax)
 			m := hb.mvHead
 			if g.TableSplit && m.alt != nil {
@@ -8462,7 +8559,10 @@ func (g *devTier) layersSession(s backend.Session) {
 		} else if head != nil {
 			// The output norm and the vocabulary projection, in the same
 			// submission: the residual stream never comes home.
-			if bs.normVar != nil {
+			if hNorm == nil {
+				// No output norm: the row as it is.
+				lc.la(bs.copyRows, R*p.NEmbd, bs.x, bs.h)
+			} else if bs.normVar != nil {
 				// A LayerNorm head (C6): its mean, variance and apply, with
 				// the output norm's bias (zeros where the file has none).
 				norm(bs.x, hNorm, bs.hNormB)
@@ -8473,7 +8573,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			// each repeat costs exactly one extra tiny dispatch, which prices whether
 			// the head's fixed per-token cost is dispatch structure or work (see the
 			// Metal entries in AGENTS.md).
-			if bs.normVar == nil {
+			if bs.normVar == nil && hNorm != nil {
 				for r := 0; r < g.HeadNormRepeat; r++ {
 					lc.la(bs.normApply, p.NEmbd, bs.x, hNorm, bs.part, bs.h)
 				}
@@ -8588,7 +8688,8 @@ func (g *devTier) layersSession(s backend.Session) {
 	}
 	if pe != nil {
 		hr := g.bs.head
-		w(g.bs.embIds, embIDs(pe.ids, R, hr.nrows))
+		g.subBytes.embIDs = embIDs(g.subBytes.embIDs, pe.ids, R, hr.nrows)
+		w(g.bs.embIds, g.subBytes.embIDs)
 		if err == nil {
 			err = lc.launch(g.bs.embK, gatherN/128, 128, hr.qs, hr.d, hr.sc, g.bs.embIds, bs.x)
 		}
@@ -8636,6 +8737,10 @@ func (g *devTier) layersSession(s backend.Session) {
 		w(bs.kpos, kposs)
 	}
 	bs.ds4.ds4Writes(w)
+	if bs.pkv != nil {
+		bs.pkv.qsa.qsaWrites(w)
+	}
+	g.q4eWrites(bs.q4e, w)
 	if pk := bs.pkv; pk != nil && pk.cur != nil {
 		w(pk.pRow, u32view(pk.desc))
 		if len(pk.descW) > 0 {
@@ -8768,6 +8873,7 @@ type stagingBytes struct {
 	pn, koffs, kposs, rposs []byte
 	tok                     []byte // a ragged step's tokens, read home
 	mlaPOff                 []byte // a batched latent attention's rotary key slots
+	embIDs                  []byte // a prompt chunk's ids for the gather on the card (embIDs)
 	one                     [4]byte
 }
 
@@ -8837,7 +8943,7 @@ func (l *layer) auxBufs() []backend.Buf {
 		l.xielu,                                            // Apertus's activation numbers
 		l.nFFN2, l.nPost1, l.nPost2, l.nRouter, l.expScale, // Gemma 4's mixture block
 		l.nPLE, l.pleOff, // Gemma 4's per-layer embedding
-	), append(l.ds4.bufs(), l.k3.bufs()...)...) // DeepSeek V4's and Kimi-K3's
+	), append(append(l.ds4.bufs(), l.k3.bufs()...), l.q4e.bufs()...)...) // DeepSeek V4's, Kimi-K3's, Qwen3.8-Flash-Next's
 }
 
 // dropLayerLocal frees the buffers PrepLayer allocates fresh for one block and
@@ -9324,7 +9430,9 @@ func weightList(w *nn.LayerWeights) []nn.Weight {
 		w.LaurelL, w.LaurelR, w.SSM.In,
 		w.IdxQ,
 		w.WoA, w.CompKV, w.CompGate, w.IdxCompKV, w.IdxCompGate,
-		w.MLAGate, w.RoutedDown, w.RoutedUp}
+		w.MLAGate, w.RoutedDown, w.RoutedUp,
+		w.HCAttn.Down, w.HCAttn.Up, w.HCAttn.Inject, w.HCFFN.Down, w.HCFFN.Up, w.HCFFN.Inject,
+		w.NGram.Key, w.NGram.Value}
 }
 
 // errNoBatch is what a block reports when a matvec in it has no batched twin --
@@ -9512,7 +9620,8 @@ func (g *devTier) prepBatch(width int) bool {
 			&l.mvQA, &l.mvQB, &l.mvKVA, &l.mvKB, &l.mvVB,
 			&l.mvFA, &l.mvFB, &l.mvGA, &l.mvGB, &l.mvpg, &l.mvpp,
 			&l.mvIQ, &l.mvIK, &l.mvIW, &l.mvLL, &l.mvLR, &l.mvSI, &l.mvMQ,
-			&l.mvCKV, &l.mvCG, &l.mvICKV, &l.mvICG} {
+			&l.mvCKV, &l.mvCG, &l.mvICKV, &l.mvICG,
+			&l.mvHAD, &l.mvHAU, &l.mvHAI, &l.mvHFD, &l.mvHFU, &l.mvHFI, &l.mvNGK, &l.mvNGV} {
 			if m.kern == nil {
 				continue
 			}
@@ -10179,6 +10288,9 @@ func deltaScanOf(r nn.RecurrentPlan, rows, lanes int) kernels.DeltaScan {
 	if r.KeyTiled {
 		d.TiledK = r.KHeads
 	}
+	if r.TailLen > 0 {
+		d.Stride = r.StateLen
+	}
 	return d
 }
 
@@ -10230,8 +10342,22 @@ func (g *devTier) emitLinear(sid uint64, s backend.Session, bs *blockScratch, l 
 	if l.k3 != nil {
 		in = g.k3AttnIn(lc, bs, l, R)
 	}
-	lc.la(bs.normPart, R*bs.parts, in, bs.part)
-	lc.la(bs.normApply, R*p.NEmbd, in, l.nAttn, bs.part, bs.h)
+	if l.q4e != nil {
+		conv := bs.q4e.ngConv
+		if rag && l.q4e.ngram {
+			if rk := bs.ragLin[len(g.rag.pos)]; rk != nil {
+				conv = rk.ngConv
+			}
+		}
+		in = g.q4eAttnIn(lc, bs, l, R, mvrunAct, inS, outS, conv)
+	}
+	if l.nAttn == nil {
+		// No pre-norm (Qwen3.8-Flash-Next's mix is normed already).
+		lc.la(bs.copyRows, R*p.NEmbd, in, bs.h)
+	} else {
+		lc.la(bs.normPart, R*bs.parts, in, bs.part)
+		lc.la(bs.normApply, R*p.NEmbd, in, l.nAttn, bs.part, bs.h)
+	}
 	lc.la(bs.quantE, kernels.QuantizeThreads(R*p.NEmbd/32), bs.h, bs.a, bs.ax)
 
 	if r.SSD {
@@ -10413,7 +10539,8 @@ func (g *devTier) emitLinear(sid uint64, s backend.Session, bs *blockScratch, l 
 	gated := bs.dAct
 	if r.ChanDecay && l.k3 != nil && l.k3.fault == nn.K3FaultNoKDAGate {
 		gated = bs.dOutN
-	} else if r.ChanDecay {
+	} else if r.ChanDecay || r.SigmoidGate {
+		// KDA's gate and Qwen3.8-Flash-Next's are sigmoid(z).
 		lc.la(bs.outSigMul, R*inner, bs.dZ, bs.dOutN, bs.dAct)
 	} else {
 		lc.la(bs.outActMul, R*inner, bs.dZ, bs.dOutN, bs.dAct)

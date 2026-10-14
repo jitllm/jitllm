@@ -48,6 +48,9 @@ type Embedder struct {
 	// head's, which differ when their head widths do.
 	attnEnc, attnHead *nn.AttnSet
 
+	// rg is the pool regions the host's blocks run (encRegions).
+	rg encRegions
+
 	// afterBlock, when set, sees the residual after every encoder block --
 	// the per-layer bisection hook the correctness gates use.
 	afterBlock func(li int, x []float32)

@@ -190,6 +190,22 @@ func emitActBody(a *Buf, act ActKind, mul bool, ld func(Reg, Reg), st func(Reg, 
 		ld(Y3, RDX)
 		bound(Y3, 112, 116)
 		a.VMULPS(Y0, Y0, Y6)
+	case ActSqrtSigmoid:
+		// sigmoid(sign(x)*sqrt(max(|x|, floor))): the magnitude's root, the
+		// sign put back as a bit, then sigmoid's sequence.
+		a.VBROADCASTSS(Y5, At(RBX, 100)) // the |x| mask
+		a.VPAND(Y4, Y3, Y5)              // |x|
+		a.VBROADCASTSS(Y5, At(RBX, 208)) // the floor
+		a.VMAXPS(Y4, Y4, Y5)
+		a.VSQRTPS(Y4, Y4)
+		a.VBROADCASTSS(Y5, At(RBX, 212)) // the sign bit
+		a.VPAND(Y5, Y3, Y5)
+		a.VPOR(Y0, Y4, Y5) // the signed root
+		a.VPXOR(Y4, Y4, Y4)
+		a.VSUBPS(Y0, Y4, Y0)
+		emitExpPS(a, Y0, Y1, Y2)
+		a.VADDPS(Y0, Y0, Y8)
+		a.VDIVPS(Y0, Y8, Y0)
 	case ActGELUErf:
 		// 0.5*((x + |x|) - |x|*q), q = 1 - erf(|x|/sqrt 2) by Abramowitz and
 		// Stegun 7.1.26 (kernels.ActGELUErf).

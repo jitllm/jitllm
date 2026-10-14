@@ -166,6 +166,20 @@ func pagedCopyBody(b *ir.Builder, n, page, width, col int, f16 bool, pSrc, pDst,
 // rotates, so PagedCopyRowsT runs first for the tail, as the tier does.
 // Parameters: pSrc, pCS, pOff (not read), pDst (the K pool), pTab, pRow.
 func PagedRoPERowsT(nHeads, headDim, nRot int, neox bool, rows, page int) (*ir.Kernel, error) {
+	return pagedRoPERowsT(nHeads, headDim, nHeads*headDim, nRot, neox, rows, page)
+}
+
+// PagedRoPERowsTIn is PagedRoPERowsT turning the first nHeads heads of a
+// wider row, rowW floats in the source and the pool alike (a QSA row, whose
+// last head is the indexer's raw key and does not turn).
+func PagedRoPERowsTIn(nHeads, headDim, rowW, nRot int, neox bool, rows, page int) (*ir.Kernel, error) {
+	if rowW < nHeads*headDim {
+		return nil, fmt.Errorf("kernels: PagedRoPERowsTIn: a row of %d under %d heads of %d", rowW, nHeads, headDim)
+	}
+	return pagedRoPERowsT(nHeads, headDim, rowW, nRot, neox, rows, page)
+}
+
+func pagedRoPERowsT(nHeads, headDim, rowW, nRot int, neox bool, rows, page int) (*ir.Kernel, error) {
 	if err := checkPage("PagedRoPERowsT", page); err != nil {
 		return nil, err
 	}
@@ -182,13 +196,13 @@ func PagedRoPERowsT(nHeads, headDim, nRot int, neox bool, rows, page int) (*ir.K
 	pRow := b.Param("pRow", ir.U32)
 	u := func(x int) ir.Value { return b.Const(ir.U32, int64(x)) }
 	flat := b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID()), u(nHeads*pairs*rows-1))
-	pagedRopeBody(b, nHeads, headDim, nRot, neox, page, pSrc, pCS, pDst, pTab, pRow, flat)
+	pagedRopeBody(b, nHeads, headDim, rowW, nRot, neox, page, pSrc, pCS, pDst, pTab, pRow, flat)
 	return b.Done(), nil
 }
 
 // pagedRopeBody is PagedRoPERowsT after its thread index (clamped by the
 // caller): one rotated pair of k into its position in the transposed pool.
-func pagedRopeBody(b *ir.Builder, nHeads, headDim, nRot int, neox bool, page int,
+func pagedRopeBody(b *ir.Builder, nHeads, headDim, rowW, nRot int, neox bool, page int,
 	pSrc, pCS, pDst, pTab, pRow, flat ir.Value) {
 	pairs := nRot / 2
 	u := func(x int) ir.Value { return b.Const(ir.U32, int64(x)) }
@@ -205,13 +219,13 @@ func pagedRopeBody(b *ir.Builder, nHeads, headDim, nRot int, neox bool, page int
 		base = b.Add(ir.U32, head, b.Mul(ir.U32, p, u(2)))
 	}
 	cs := b.Add(ir.U32, b.Mul(ir.U32, p, u(2)), b.Mul(ir.U32, row, u(nRot)))
-	src := b.Add(ir.U32, base, b.Mul(ir.U32, row, u(nHeads*headDim)))
+	src := b.Add(ir.U32, base, b.Mul(ir.U32, row, u(rowW)))
 	c := b.Load(ir.F32, pCS, cs, 0)
 	s := b.Load(ir.F32, pCS, cs, 1)
 	x0 := b.Load(ir.F32, pSrc, src, 0)
 	x1 := b.Load(ir.F32, pSrc, src, int64(stride))
 	pid, off := pagedWrite(b, pTab, pRow, row, page)
-	out := b.Add(ir.U32, b.Mul(ir.U32, pid, u(page*nHeads*headDim)),
+	out := b.Add(ir.U32, b.Mul(ir.U32, pid, u(page*rowW)),
 		b.Add(ir.U32, b.Mul(ir.U32, base, u(page)), off))
 	b.Store(pDst, out, b.Sub(ir.F32, b.Mul(ir.F32, x0, c), b.Mul(ir.F32, x1, s)), 0)
 	b.Store(pDst, out, b.Add(ir.F32, b.Mul(ir.F32, x0, s), b.Mul(ir.F32, x1, c)), int64(stride*page))

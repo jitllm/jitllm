@@ -100,6 +100,13 @@ type TowerConfig struct {
 	// TokenLimit is Kimi-VL's processor's in_token_limit: a picture of more
 	// whole patches is scaled down to it (kimivit.go).
 	TokenLimit int
+	// TileSize and Tolerance are LFM2-VL's tiling (lfm2vision.go): a picture
+	// past Tolerance times MaxPixels is cut into TileSize squares. Zero for
+	// every other tower.
+	TileSize  int
+	Tolerance float64
+	// Bicubic says the pictures are resampled bicubic (FlagVisionBicubic).
+	Bicubic bool
 	// Deep is the segment-local blocks whose output a deepstack merger reads,
 	// ascending (Qwen3-VL); tap k's rows add into the text model after its
 	// block k.
@@ -227,10 +234,10 @@ func (c TowerConfig) projK() int {
 
 // projEps is the projector norm's epsilon. InternVL's is torch's LayerNorm
 // default, 1e-5, not the tower's 1e-6: the reference constructs it without
-// one, and llama.cpp hardcodes the same. gemma3's soft_emb_norm takes the
-// tower's.
+// one, and llama.cpp hardcodes the same; LFM2-VL's nn.LayerNorm is the same
+// default. gemma3's soft_emb_norm takes the tower's.
 func (c TowerConfig) projEps() float64 {
-	if c.Kind == jlm.ProjInternVL {
+	if c.Kind == jlm.ProjInternVL || c.Kind == jlm.ProjLFM2 {
 		return 1e-5
 	}
 	return c.Eps
@@ -409,11 +416,11 @@ func buildTower(c0 *jlm.File) (*Tower, error) {
 	switch v.Projector {
 	case jlm.ProjIdefics3, jlm.ProjMLP, jlm.ProjQwen2VL, jlm.ProjQwen25VL, jlm.ProjGemma3, jlm.ProjInternVL,
 		jlm.ProjResampler, jlm.ProjJanus, jlm.ProjPixtral, jlm.ProjLlama4, jlm.ProjGemma4V, jlm.ProjPhi4,
-		jlm.ProjQwen3VL, jlm.ProjGLM4V, jlm.ProjGemma3nV, jlm.ProjKimiVL, jlm.ProjHunyuanVL:
+		jlm.ProjQwen3VL, jlm.ProjGLM4V, jlm.ProjGemma3nV, jlm.ProjKimiVL, jlm.ProjHunyuanVL, jlm.ProjLFM2:
 	default:
 		return nil, fmt.Errorf("model: OpenTower: projector %v unsupported "+
 			"(only idefics3, mlp, qwen2vl_merger, qwen2.5vl_merger, qwen3vl_merger, glm4v, kimivl, hunyuanvl, gemma3, "+
-			"internvl, resampler, janus_pro, pixtral, llama4, gemma4v, phi4, gemma3nv)", v.Projector)
+			"internvl, resampler, janus_pro, pixtral, llama4, gemma4v, phi4, gemma3nv, lfm2)", v.Projector)
 	}
 	c.NLayer, c.NEmbd, c.NFFN = int(v.NLayer), int(v.NEmbd), int(v.NFFN)
 	c.NHead, c.ImageSz, c.PatchSz = int(v.NHead), int(v.ImageSize), int(v.PatchSize)
@@ -456,6 +463,10 @@ func buildTower(c0 *jlm.File) (*Tower, error) {
 		// Read at its own size between the two pixel counts the file states,
 		// to whole merge units (smart_resize, ResizeTo).
 		c.MinPixels, c.MaxPixels = int(v.MinPixels), int(v.MaxPixels)
+	case jlm.ProjLFM2:
+		if err := lfm2Pixels(c, v); err != nil {
+			return nil, err
+		}
 	}
 	if v.Projector == jlm.ProjGLM4V {
 		c.MinPixels = min(glmMinPixels, c.MaxPixels)
@@ -619,11 +630,12 @@ func buildTower(c0 *jlm.File) (*Tower, error) {
 			return nil, fmt.Errorf("model: OpenTower: gemma4v's position tables are %d floats, not two tables "+
 				"of %d-wide rows", len(t.posW), c.NEmbd)
 		}
-	} else if side := c.ImageSz / c.PatchSz; v.Projector == jlm.ProjPhi4 {
-		// Phi-4's is a square table resized to each grid (phi4Table).
+	} else if side := c.ImageSz / c.PatchSz; v.Projector == jlm.ProjPhi4 || v.Projector == jlm.ProjLFM2 {
+		// Phi-4's and LFM2-VL's are a square table resized to each grid
+		// (phi4Table).
 		if len(t.posW) != side*side*c.NEmbd {
-			return nil, fmt.Errorf("model: OpenTower: phi4's position table is %d floats, want %dx%d rows of %d",
-				len(t.posW), side, side, c.NEmbd)
+			return nil, fmt.Errorf("model: OpenTower: %s's position table is %d floats, want %dx%d rows of %d",
+				c.Projector, len(t.posW), side, side, c.NEmbd)
 		}
 	} else if n := c.Seq() * c.NEmbd; t.posW != nil && c.PosBuckets == 0 && !resampled && len(t.posW) != n {
 		return nil, fmt.Errorf("model: OpenTower: position embeddings are %d floats, want %d (%d rows x %d)",
@@ -802,7 +814,8 @@ func buildTower(c0 *jlm.File) (*Tower, error) {
 	}
 	// The projector's own norm: gemma3's RMSNorm and InternVL's LayerNorm are
 	// required, every other projector has none.
-	if v.Projector == jlm.ProjGemma3 || v.Projector == jlm.ProjInternVL {
+	if v.Projector == jlm.ProjGemma3 || v.Projector == jlm.ProjInternVL ||
+		v.Projector == jlm.ProjLFM2 && c0.Has(jlm.RoleVProjNorm, jlm.DenseBlock, -1) {
 		if t.projNorm, err = vec(jlm.RoleVProjNorm, jlm.DenseBlock); err != nil {
 			return nil, err
 		}
@@ -815,12 +828,21 @@ func buildTower(c0 *jlm.File) (*Tower, error) {
 				return nil, err
 			}
 		}
+		// LFM2-VL's LayerNorm may come without its bias (llama.cpp reads
+		// each on its own).
+		if v.Projector == jlm.ProjLFM2 {
+			if t.projNormB, err = optVec(jlm.RoleVProjNormBias, jlm.DenseBlock); err != nil {
+				return nil, err
+			}
+		}
+	} else if v.Projector == jlm.ProjLFM2 && c0.Has(jlm.RoleVProjNormBias, jlm.DenseBlock, -1) {
+		return nil, fmt.Errorf("model: OpenTower: lfm2's projector norm has a bias and no weight")
 	}
 	// The MLP projector is two matrices and a GELU; only the last has to emit
 	// ProjDim, since the hidden width may differ.
 	if v.Projector == jlm.ProjMLP || v.Projector == jlm.ProjQwen2VL || v.Projector == jlm.ProjQwen25VL ||
 		v.Projector == jlm.ProjInternVL || v.Projector == jlm.ProjJanus || v.Projector == jlm.ProjPhi4 ||
-		v.Projector == jlm.ProjQwen3VL || v.Projector == jlm.ProjKimiVL {
+		v.Projector == jlm.ProjQwen3VL || v.Projector == jlm.ProjKimiVL || v.Projector == jlm.ProjLFM2 {
 		if t.projW2, err = get(jlm.RoleVProj2, jlm.DenseBlock); err != nil {
 			return nil, err
 		}
@@ -1276,7 +1298,7 @@ func (s *State) encodeBegin(px []float32, gh, gw int) error {
 		}
 		rows := v.posRows[:n]
 		table := t.posW
-		if c.Kind == jlm.ProjPhi4 {
+		if c.Kind == jlm.ProjPhi4 || c.Kind == jlm.ProjLFM2 {
 			table = s.phi4Table(gh, gw)
 		}
 		if c.PosAxis > 0 {
@@ -1722,8 +1744,9 @@ func (s *State) project(patches []float32) ([]float32, error) {
 			}
 		}
 		src = v.grp
-		// InternVL's LayerNorm over the grouped row, before the MLP.
-		if c.Kind == jlm.ProjInternVL {
+		// InternVL's LayerNorm over the grouped row, before the MLP, and
+		// LFM2-VL's where its file carries one.
+		if c.Kind == jlm.ProjInternVL || c.Kind == jlm.ProjLFM2 && t.projNorm != nil {
 			w := c.projK()
 			s.normRows(v.grp, v.grp, t.projNorm, t.projNormB, w, c.Tokens(), true, c.projEps(),
 				s.rowChunk(c.Tokens(), w))
@@ -1748,12 +1771,18 @@ func (s *State) project(patches []float32) ([]float32, error) {
 	//
 	// The activation here is GELU-tanh, not the tower's own: llama.cpp uses
 	// ggml_gelu for the projector. HF's "gelu" is the erf-exact form; the two
-	// differ by <1e-3 and the divergence is deliberate.
+	// differ by <1e-3 and the divergence is deliberate. LFM2-VL's is the erf
+	// form, its reference's (Lfm2VlMultiModalProjector, ACT2FN["gelu"]), where
+	// llama.cpp's lfm2 graph runs the tanh form (RULE 7m).
 	if err := s.mm(v.hid, t.projW, src, nt); err != nil {
 		return nil, err
 	}
 	s.visBiasRows(v.hid, t.projB, nt)
-	s.actAll(v.hid[:nt*t.projW.rows], nn.ActGELU)
+	act := nn.ActGELU
+	if c.Kind == jlm.ProjLFM2 && !lfm2TanhGELU {
+		act = nn.ActGELUErf
+	}
+	s.actAll(v.hid[:nt*t.projW.rows], act)
 	s.jit.NewInput()
 	out := v.out
 	if v.ord != nil {

@@ -18,6 +18,7 @@ func (w *wbuf) u8(v uint8)    { w.b = append(w.b, v) }
 func (w *wbuf) u16(v uint16)  { w.b = binary.LittleEndian.AppendUint16(w.b, v) }
 func (w *wbuf) u32(v uint32)  { w.b = binary.LittleEndian.AppendUint32(w.b, v) }
 func (w *wbuf) i32(v int32)   { w.u32(uint32(v)) }
+func (w *wbuf) u64(v uint64)  { w.b = binary.LittleEndian.AppendUint64(w.b, v) }
 func (w *wbuf) f32(v float32) { w.u32(math.Float32bits(v)) }
 func (w *wbuf) bool(v bool) {
 	if v {
@@ -69,6 +70,10 @@ func (r *rbuf) u32() uint32 {
 	v := binary.LittleEndian.Uint32(r.b)
 	r.b = r.b[4:]
 	return v
+}
+func (r *rbuf) u64() uint64 {
+	lo := uint64(r.u32())
+	return lo | uint64(r.u32())<<32
 }
 func (r *rbuf) i32() int32   { return int32(r.u32()) }
 func (r *rbuf) f32() float32 { return math.Float32frombits(r.u32()) }
@@ -170,7 +175,11 @@ func encodeConfig(c *Config) []byte {
 	// it did before the field existed. The tenth, a decision model's readout
 	// and temperatures, implies the first nine; an older reader drops it and
 	// runs the model as the backbone it is, a model that generates.
-	dec := c.Decision != DecisionNone || c.DecisionBlocks != 0 || c.DecisionHeadTokens != 0 || len(c.DecisionTemps) != 0 ||
+	// The twelfth, Clef's routing blocks and head epsilon, implies the first
+	// eleven; an older reader refuses its decision kind by code.
+	clef := c.DecisionRouting != 0 || c.DecisionEps != 0
+	q4e := clef || c.HCLowRank != 0 || c.QSARatio != 0 || c.NGramBlock != 0
+	dec := q4e || c.Decision != DecisionNone || c.DecisionBlocks != 0 || c.DecisionHeadTokens != 0 || len(c.DecisionTemps) != 0 ||
 		c.DecisionHeads != 0
 	k3 := dec || c.AttnResBlock != 0 || c.ExpertLatent != 0 || c.SituBeta != 0 || c.SituLinearBeta != 0 ||
 		c.KDALowerBound != 0 || c.LatentNormEps != 0
@@ -252,6 +261,24 @@ func encodeConfig(c *Config) []byte {
 			w.u32(d.MaxOptions)
 			w.f32(d.T)
 		}
+	}
+	// The eleventh, Qwen3.8-Flash-Next's, implies the first ten; its only
+	// writer is ArchQwen4Exp.
+	if q4e {
+		for _, v := range []uint32{c.HCLowRank, c.QSARatio, c.NGramBlock, c.NGram, c.NGramHeadsPer,
+			c.NGramRowDim, c.NGramConv, c.NGramEOS, c.NGramImage} {
+			w.u32(v)
+		}
+		for _, a := range [][]uint64{c.NGramMul, c.NGramOff, c.NGramVoc} {
+			w.u32(uint32(len(a)))
+			for _, v := range a {
+				w.u64(v)
+			}
+		}
+	}
+	if clef {
+		w.u32(c.DecisionRouting)
+		w.f32(c.DecisionEps)
 	}
 	return w.b
 }
@@ -374,8 +401,29 @@ func decodeConfig(b []byte) (*Config, error) {
 			}
 		}
 	}
+	if r.err == nil && len(r.b) > 0 {
+		for _, p := range []*uint32{&c.HCLowRank, &c.QSARatio, &c.NGramBlock, &c.NGram, &c.NGramHeadsPer,
+			&c.NGramRowDim, &c.NGramConv, &c.NGramEOS, &c.NGramImage} {
+			*p = r.u32()
+		}
+		for _, a := range []*[]uint64{&c.NGramMul, &c.NGramOff, &c.NGramVoc} {
+			if n := r.count(8); n > 0 {
+				*a = make([]uint64, n)
+				for i := range *a {
+					(*a)[i] = r.u64()
+				}
+			}
+		}
+	}
+	if r.err == nil && len(r.b) > 0 {
+		c.DecisionRouting = r.u32()
+		c.DecisionEps = r.f32()
+	}
 	if r.err != nil {
 		return nil, r.err
+	}
+	if err := ngramValid(c); err != nil {
+		return nil, err
 	}
 	// One kind per layer or none at all: a short array would leave the tail
 	// reading as LayerNone, and the graph would run nothing for those layers.
@@ -513,8 +561,10 @@ func encodeVision(v *Vision) []byte {
 	// The optional tail: a tiling preprocessor's crop count bounds (InternVL),
 	// then Qwen2.5-VL's window attention, each written only when it or a field
 	// after it is set, so every earlier tower's section is byte-identical.
-	// The pixel bounds of a tower read at its own size come third.
-	pix := v.MinPixels != 0 || v.MaxPixels != 0
+	// The pixel bounds of a tower read at its own size come third, and
+	// LFM2-VL's tile size and tolerance fourth.
+	tile := v.TileSize != 0 || v.Tolerance != 0
+	pix := v.MinPixels != 0 || v.MaxPixels != 0 || tile
 	if v.MinTiles != 0 || v.MaxTiles != 0 || v.WinPattern != 0 || v.WinSize != 0 || pix {
 		w.u32(v.MinTiles)
 		w.u32(v.MaxTiles)
@@ -526,6 +576,10 @@ func encodeVision(v *Vision) []byte {
 	if pix {
 		w.u32(v.MinPixels)
 		w.u32(v.MaxPixels)
+	}
+	if tile {
+		w.u32(v.TileSize)
+		w.f32(v.Tolerance)
 	}
 	return w.b
 }
@@ -559,6 +613,9 @@ func decodeVision(b []byte) (*Vision, error) {
 	}
 	if r.err == nil && len(r.b) > 0 {
 		v.MinPixels, v.MaxPixels = r.u32(), r.u32()
+	}
+	if r.err == nil && len(r.b) > 0 {
+		v.TileSize, v.Tolerance = r.u32(), r.f32()
 	}
 	if r.err != nil {
 		return nil, r.err
@@ -755,4 +812,38 @@ func decodeVocab(b []byte) (*Vocab, error) {
 		return nil, fmt.Errorf("jlm: vocab has %d tokens and %d scores", len(v.Tokens), len(v.Scores))
 	}
 	return v, nil
+}
+
+// ngramValid refuses an n-gram description a reader would index out of: the
+// hash's constants one per gram position and one range per head, each range
+// non-empty, and a row width a whole number of the table's blocks is checked
+// against the table where the reader opens it.
+func ngramValid(c *Config) error {
+	if c.NGramBlock == 0 {
+		if c.NGram != 0 || len(c.NGramMul) != 0 || len(c.NGramOff) != 0 || len(c.NGramVoc) != 0 {
+			return fmt.Errorf("jlm: n-gram constants with no n-gram block")
+		}
+		return nil
+	}
+	heads := uint64(c.NGram-1) * uint64(c.NGramHeadsPer)
+	switch {
+	case c.NGramBlock > c.NLayer:
+		return fmt.Errorf("jlm: n-gram block %d of %d", c.NGramBlock, c.NLayer)
+	case c.NGram < 2 || c.NGramHeadsPer == 0 || c.NGramRowDim == 0 || c.NGramConv == 0:
+		return fmt.Errorf("jlm: n-gram %d-grams, %d heads each, rows of %d, %d taps",
+			c.NGram, c.NGramHeadsPer, c.NGramRowDim, c.NGramConv)
+	case uint64(len(c.NGramMul)) != uint64(c.NGram):
+		return fmt.Errorf("jlm: %d n-gram multipliers for %d-grams", len(c.NGramMul), c.NGram)
+	case uint64(len(c.NGramOff)) != heads || uint64(len(c.NGramVoc)) != heads:
+		return fmt.Errorf("jlm: %d offsets and %d vocabularies for %d n-gram heads",
+			len(c.NGramOff), len(c.NGramVoc), heads)
+	case c.HCMult < 2:
+		return fmt.Errorf("jlm: an n-gram block with %d residual streams", c.HCMult)
+	}
+	for h, v := range c.NGramVoc {
+		if v == 0 || c.NGramOff[h]+v < c.NGramOff[h] {
+			return fmt.Errorf("jlm: n-gram head %d range [%d, +%d)", h, c.NGramOff[h], v)
+		}
+	}
+	return nil
 }

@@ -47,6 +47,62 @@ type encoder struct {
 	// zeros is the bias a LayerNorm without one is handed on a device
 	// (encZeros).
 	zeros []float32
+	// pages is each block's matrices and the container spans they read,
+	// listed once at load (planPages): a page-in on every block of every
+	// sequence would otherwise build both lists again.
+	pages []encPage
+}
+
+// encPage is one encoder block's matrices and their spans in the container.
+type encPage struct {
+	ws []*tensor
+	rs []jlm.Range
+}
+
+// planPages lists every block's matrices and spans (encoder.pages).
+func (enc *encoder) planPages(c *jlm.File) {
+	var all [][]*tensor
+	if mb := enc.mb; mb != nil {
+		for i := range mb.blocks {
+			all = append(all, mb.blocks[i].weights())
+		}
+		for i := range mb.head {
+			all = append(all, mb.head[i].weights())
+		}
+	} else {
+		for i := range enc.blocks {
+			all = append(all, enc.blocks[i].weights())
+		}
+	}
+	enc.pages = make([]encPage, len(all))
+	for i, ws := range all {
+		var rs []jlm.Range
+		for _, w := range ws {
+			rs = appendSpans(rs, c, w.e)
+		}
+		enc.pages[i] = encPage{ws: ws, rs: rs}
+	}
+}
+
+// encBlockPageIn is Model.pageIn for an encoder's block li (a decision
+// head's from the encoder's count on): its matrices made readable and bound.
+// It does not short-circuit on Resident for the reason pageIn gives: a
+// claimed frame is not a filled one.
+func (m *Model) encBlockPageIn(li int) error {
+	c := m.container
+	if c == nil || li >= int(c.H.NBlocks) || li >= len(m.enc.pages) {
+		return nil
+	}
+	pg := &m.enc.pages[li]
+	if err := c.EnsureRanges(li, pg.rs); err != nil {
+		return err
+	}
+	m.bind.Lock()
+	defer m.bind.Unlock()
+	for _, w := range pg.ws {
+		bindOne(c, w)
+	}
+	return nil
 }
 
 // buildEncoder loads an encoder container. It touches no block page: every
@@ -113,6 +169,7 @@ func buildEncoder(c *jlm.File, m *Model) error {
 		if err := buildModernBERT(c, m, enc); err != nil {
 			return err
 		}
+		enc.planPages(c)
 		m.enc = enc
 		m.layers = make([]layer, m.encBlocks())
 		return nil
@@ -199,6 +256,7 @@ func buildEncoder(c *jlm.File, m *Model) error {
 	if cfg.NHead*cfg.HeadDim != d {
 		return fmt.Errorf("model: %d heads of %d do not make a %d-wide residual", cfg.NHead, cfg.HeadDim, d)
 	}
+	enc.planPages(c)
 	m.enc = enc
 	// One zero entry a block: the encoder's blocks are encBlock's, and the
 	// segment State a device places them through (encdev.go) indexes the
@@ -213,30 +271,6 @@ func (b *encBlock) weights() []*tensor {
 		ws = append(ws, &b.gate)
 	}
 	return ws
-}
-
-// encPageIn makes block li's matrices readable and binds them. It is
-// Model.pageIn for the encoder, and it does not short-circuit on Resident for
-// the reason pageIn gives: a claimed frame is not a filled one.
-func (m *Model) encPageIn(li int) error {
-	c := m.container
-	if c == nil || li >= int(c.H.NBlocks) {
-		return nil
-	}
-	b := &m.enc.blocks[li]
-	var rs []jlm.Range
-	for _, w := range b.weights() {
-		rs = appendSpans(rs, c, w.e)
-	}
-	if err := c.EnsureRanges(li, rs); err != nil {
-		return err
-	}
-	m.bind.Lock()
-	defer m.bind.Unlock()
-	for _, w := range b.weights() {
-		bindOne(c, w)
-	}
-	return nil
 }
 
 // encode runs the encoder over one sequence and leaves the last block's
@@ -293,7 +327,7 @@ func (e *Embedder) encode(ids []int32) error {
 			}
 			continue
 		}
-		if err := m.encPageIn(li); err != nil {
+		if err := m.encBlockPageIn(li); err != nil {
 			return err
 		}
 		b := &enc.blocks[li]
@@ -355,10 +389,10 @@ func (e *Embedder) encode(ids []int32) error {
 			}
 			// silu(gate) * up, written into g: fc11 is up and fc12 the gate
 			// in nomic's own module, and llama.cpp's LLM_FFN_PAR agrees.
-			e.parallelVec(len(g), func(lo, hi int) { nn.ActMul32JIT(g[lo:hi], ff[lo:hi], nn.ActSiLU) })
+			e.actMul(g, ff, nn.ActSiLU)
 			ff = g
 		} else {
-			e.parallelVec(len(ff), func(lo, hi int) { nn.Act32JIT(ff[lo:hi], nn.ActGELU) })
+			e.actRows(ff, nn.ActGELU)
 		}
 		if err := e.mm(t, b.down, ff, n); err != nil {
 			return err
@@ -403,14 +437,64 @@ func (e *Embedder) mm(out []float32, w tensor, x []float32, n int) error {
 	return nil
 }
 
+// encRegions is an Embedder's pool regions with their arguments in fields and
+// the function each hands the pool built once, as State's regions are: a
+// closure literal over a call's locals escapes into the pool's job, a heap
+// object per region, every block of every sequence.
+type encRegions struct {
+	rows encRowRegion
+	vec  encVecRegion
+	attn encAttnRegion
+}
+
+// encRowOp is which per-row op an encRowRegion runs.
+type encRowOp uint8
+
+const (
+	encRowLN   encRowOp = iota // y[r] = LayerNorm(x[r]; w, b)
+	encRowBias                 // y[r] += b
+)
+
+type encRowRegion struct {
+	op         encRowOp
+	y, x, w, b []float32
+	d          int
+	eps        float64
+	fn         func(lo, hi int)
+}
+
+// encVecOp is which elementwise op an encVecRegion runs.
+type encVecOp uint8
+
+const (
+	encVecAxpy   encVecOp = iota // a += b
+	encVecActMul                 // a = act(a) * b
+	encVecAct                    // a = act(a)
+)
+
+type encVecRegion struct {
+	op      encVecOp
+	a, b    []float32
+	act     nn.ActKind
+	n, vecs int
+	fn      func(lo, hi int)
+}
+
+// encAttnRegion is attention over heads: row i reads keys [i-w, i+w] cut to
+// [0, keys) (attend).
+type encAttnRegion struct {
+	set            *nn.AttnSet
+	out, q, k, v   []float32
+	n, keys, w, hd int
+	scale          float32
+	fn             func(lo, hi int)
+}
+
 // rowsLN is y[r] = LayerNorm(x[r]) for n rows, on the pool.
 func (e *Embedder) rowsLN(y, x, w, b []float32, n int) {
-	d, eps := e.m.Cfg.NEmbd, e.m.Cfg.RMSEps
-	e.jit.Parallel(n, 1, func(lo, hi int) {
-		for r := lo; r < hi; r++ {
-			nn.LayerNorm32JIT(y[r*d:(r+1)*d], x[r*d:(r+1)*d], w, b, eps)
-		}
-	})
+	j := &e.rg.rows
+	j.op, j.y, j.x, j.w, j.b, j.d, j.eps = encRowLN, y, x, w, b, e.m.Cfg.NEmbd, e.m.Cfg.RMSEps
+	e.rowRun(n)
 }
 
 // addBiasRows adds b to each of n rows of width len(b); nil is no bias.
@@ -418,35 +502,78 @@ func (e *Embedder) addBiasRows(out, b []float32, n int) {
 	if b == nil {
 		return
 	}
-	w := len(b)
-	e.jit.Parallel(n, 1, func(lo, hi int) {
-		for r := lo; r < hi; r++ {
-			nn.Axpy32JIT(out[r*w:(r+1)*w], b, 1)
+	j := &e.rg.rows
+	j.op, j.y, j.b, j.d = encRowBias, out, b, len(b)
+	e.rowRun(n)
+}
+
+// rowRun dispatches the row region over n rows, and clears its slices.
+func (e *Embedder) rowRun(n int) {
+	j := &e.rg.rows
+	if j.fn == nil {
+		j.fn = e.rowItems
+	}
+	e.jit.Parallel(n, 1, j.fn)
+	j.y, j.x, j.w, j.b = nil, nil, nil, nil
+}
+
+// rowItems is one chunk of the row region: rows lo..hi-1.
+func (e *Embedder) rowItems(lo, hi int) {
+	j := &e.rg.rows
+	d := j.d
+	for r := lo; r < hi; r++ {
+		switch j.op {
+		case encRowLN:
+			nn.LayerNorm32JIT(j.y[r*d:(r+1)*d], j.x[r*d:(r+1)*d], j.w, j.b, j.eps)
+		case encRowBias:
+			nn.Axpy32JIT(j.y[r*d:(r+1)*d], j.b, 1)
 		}
-	})
+	}
 }
 
 // axpyRows is dst += src over the whole buffer.
-func (e *Embedder) axpyRows(dst, src []float32) {
-	e.parallelVec(len(dst), func(lo, hi int) { nn.Axpy32JIT(dst[lo:hi], src[lo:hi], 1) })
+func (e *Embedder) axpyRows(dst, src []float32) { e.vecRun(encVecAxpy, dst, src, 0) }
+
+// actMul is a = act(a) * b over the whole buffer.
+func (e *Embedder) actMul(a, b []float32, act nn.ActKind) { e.vecRun(encVecActMul, a, b, act) }
+
+// actRows is a = act(a) over the whole buffer.
+func (e *Embedder) actRows(a []float32, act nn.ActKind) { e.vecRun(encVecAct, a, nil, act) }
+
+// vecRun splits the elementwise op over len(a) on vector boundaries across the
+// pool, the ragged remainder with the last chunk.
+func (e *Embedder) vecRun(op encVecOp, a, b []float32, act nn.ActKind) {
+	j := &e.rg.vec
+	if j.fn == nil {
+		j.fn = e.vecItems
+	}
+	n := len(a)
+	vecs, w := n/nn.ElemLanes, e.jit.Workers()
+	j.op, j.a, j.b, j.act, j.n, j.vecs = op, a, b, act, n, vecs
+	if vecs < 2*w || w < 2 {
+		j.vecs = 1
+		j.fn(0, 1)
+	} else {
+		e.jit.Parallel(vecs, elemChunk(vecs, w), j.fn)
+	}
+	j.a, j.b = nil, nil
 }
 
-// parallelVec splits [0,n) on vector boundaries across the pool.
-func (e *Embedder) parallelVec(n int, fn func(lo, hi int)) {
-	lanes := nn.ElemLanes
-	vecs := n / lanes
-	w := e.jit.Workers()
-	if vecs < 2*w || w < 2 {
-		fn(0, n)
-		return
+// vecItems is one chunk of the elementwise region: vectors lo..hi-1.
+func (e *Embedder) vecItems(lo, hi int) {
+	j := &e.rg.vec
+	a, b := lo*nn.ElemLanes, hi*nn.ElemLanes
+	if hi == j.vecs {
+		b = j.n
 	}
-	e.jit.Parallel(vecs, elemChunk(vecs, w), func(lo, hi int) {
-		b := hi * lanes
-		if hi == vecs {
-			b = n
-		}
-		fn(lo*lanes, b)
-	})
+	switch j.op {
+	case encVecAxpy:
+		nn.Axpy32JIT(j.a[a:b], j.b[a:b], 1)
+	case encVecActMul:
+		nn.ActMul32JIT(j.a[a:b], j.b[a:b], j.act)
+	case encVecAct:
+		nn.Act32JIT(j.a[a:b], j.act)
+	}
 }
 
 // buildEncoderModel is build() for an encoder container: the config, the

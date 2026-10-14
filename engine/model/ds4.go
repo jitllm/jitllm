@@ -62,7 +62,7 @@ const (
 )
 
 // DSV4 reports that the model is DeepSeek V4's graph.
-func (c *Config) DSV4() bool { return c.HCMult != 0 }
+func (c *Config) DSV4() bool { return c.HCMult != 0 && c.HCLowRank == 0 }
 
 // CompAt is block li's compression: CompNone on every block of every other
 // model.
@@ -131,7 +131,7 @@ func (c *Config) EntRowAt(li int) int {
 // fields were copied by configFrom.
 func ds4Config(out *Config, c *jlm.Config) error {
 	if c.Arch != jlm.ArchDeepseek4 {
-		if out.HCMult != 0 || len(out.CompKinds) != 0 {
+		if (out.HCMult != 0 && !out.Q4E()) || len(out.CompKinds) != 0 {
 			return fmt.Errorf("model: %s carries DeepSeek V4's hyper-connections", out.Arch)
 		}
 		return nil

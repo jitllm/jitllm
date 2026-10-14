@@ -31,6 +31,7 @@ type Scheduler struct {
 	st   *State
 	live []*Seq // one entry per row; nil is free
 	q    []*Seq
+	qh   int // the first queued sequence of q not yet admitted
 	// budget is the prompt tokens one step may carry; see WithPromptBudget.
 	budget   int
 	admitted int // admissions so far, which orders the prompts
@@ -40,6 +41,12 @@ type Scheduler struct {
 	// gate's violation: it is how the gate shows that a chunk laid out at the
 	// wrong positions fails it.
 	chunkPos func(base, j, k int) int
+	// A step's rows, kept from step to step (stepMixed).
+	tok           []int32
+	seq, pos      []int
+	want, feeding []*Seq
+	chunks        []promptChunk
+	done          []*Seq // what Step returns
 }
 
 // SchedulerStats is what Steps have run: a caller -- or a gate -- sees
@@ -52,6 +59,8 @@ type SchedulerStats struct {
 	// stalled nobody. MaxChunk is the most rows one prompt put into a single
 	// step beside a decoding row.
 	PromptRows, MixedRows, MaxChunk int
+	// MaxSeqs is the most sequences one step carried rows of.
+	MaxSeqs int
 }
 
 // SchedulerOption configures a Scheduler (NewScheduler).
@@ -112,7 +121,7 @@ func NewScheduler(m *Model, nseq, maxSeq int, opts ...SchedulerOption) *Schedule
 func (sc *Scheduler) Submit(s *Seq) { sc.q = append(sc.q, s) }
 
 // Pending is how many sequences are queued but not yet admitted.
-func (sc *Scheduler) Pending() int { return len(sc.q) }
+func (sc *Scheduler) Pending() int { return len(sc.q) - sc.qh }
 
 // Live is how many rows hold a sequence.
 func (sc *Scheduler) Live() int {
@@ -134,16 +143,21 @@ func (sc *Scheduler) Close() { sc.st.Close() }
 // Step admits what it can, runs one batch step, and returns the sequences that
 // retired during it.
 //
-// A step with no live rows and nothing queued does no work and returns nil,
-// so a caller may poll it.
+// A step with no live rows and nothing queued does no work and returns none,
+// so a caller may poll it. The slice is the Scheduler's, good until the next
+// Step.
 func (sc *Scheduler) Step() ([]*Seq, error) {
 	// A sequence whose admission failed has retired too, with Err set: it is
 	// returned here, or a caller waiting for it would wait forever.
-	done := sc.admit()
+	clear(sc.done[:cap(sc.done)])
+	done := sc.admit(sc.done[:0])
 	if sc.Live() == 0 {
+		sc.done = done
 		return done, nil
 	}
-	return sc.stepMixed(done)
+	done, err := sc.stepMixed(done)
+	sc.done = done
+	return done, err
 }
 
 // stepMixed is one step of every decoding row and the budget's prompt rows.
@@ -153,11 +167,13 @@ func (sc *Scheduler) Step() ([]*Seq, error) {
 // position (State.forwardRows).
 func (sc *Scheduler) stepMixed(done []*Seq) ([]*Seq, error) {
 	st := sc.st
-	var (
-		tok      []int32
-		seq, pos []int
-		want     []*Seq // the sequence each logit row samples for
-	)
+	// The step's rows and the sequence each logit row samples for, in the
+	// Scheduler's own slices: a step allocates nothing once they are grown.
+	tok, seq, pos, want := sc.tok[:0], sc.seq[:0], sc.pos[:0], sc.want[:0]
+	defer func() {
+		clear(want)
+		sc.tok, sc.seq, sc.pos, sc.want = tok, seq, pos, want[:0]
+	}()
 	row := func(t int32, q, p int) {
 		tok, seq, pos = append(tok, t), append(seq, q), append(pos, p)
 	}
@@ -178,19 +194,16 @@ func (sc *Scheduler) stepMixed(done []*Seq) ([]*Seq, error) {
 	}
 	// The prompts, oldest admission first, each taking what is left of the
 	// budget.
-	var feeding []*Seq
+	feeding := sc.feeding[:0]
+	defer func() { clear(feeding); sc.feeding = feeding[:0] }()
 	for _, s := range sc.live {
 		if s != nil && s.fed < len(s.Prompt) {
 			feeding = append(feeding, s)
 		}
 	}
-	slices.SortFunc(feeding, func(a, b *Seq) int { return a.adm - b.adm })
-	type chunk struct {
-		s    *Seq
-		k    int
-		ends bool
-	}
-	var chunks []chunk
+	slices.SortFunc(feeding, byAdmission)
+	chunks := sc.chunks[:0]
+	defer func() { clear(chunks); sc.chunks = chunks[:0] }()
 	left := sc.promptBudget()
 	for _, s := range feeding {
 		if left == 0 {
@@ -198,9 +211,9 @@ func (sc *Scheduler) stepMixed(done []*Seq) ([]*Seq, error) {
 		}
 		k := min(len(s.Prompt)-s.fed, left)
 		left -= k
-		chunks = append(chunks, chunk{s, k, s.fed+k == len(s.Prompt)})
+		chunks = append(chunks, promptChunk{s, k, s.fed+k == len(s.Prompt)})
 	}
-	at := func(ch chunk, j int) int {
+	at := func(ch promptChunk, j int) int {
 		base := st.bpos[ch.s.slot]
 		if sc.chunkPos != nil {
 			return sc.chunkPos(base, j, ch.k)
@@ -231,6 +244,7 @@ func (sc *Scheduler) stepMixed(done []*Seq) ([]*Seq, error) {
 		return done, err
 	}
 	sc.stats.Steps++
+	sc.stats.MaxSeqs = max(sc.stats.MaxSeqs, decoding+len(chunks))
 	for _, ch := range chunks {
 		ch.s.fed += ch.k
 		sc.stats.PromptRows += ch.k
@@ -249,6 +263,17 @@ func (sc *Scheduler) stepMixed(done []*Seq) ([]*Seq, error) {
 	return done, nil
 }
 
+// byAdmission orders sequences oldest admission first.
+func byAdmission(a, b *Seq) int { return a.adm - b.adm }
+
+// promptChunk is one prompt's rows in a step: k of them, the last of its
+// prompt when ends is set.
+type promptChunk struct {
+	s    *Seq
+	k    int
+	ends bool
+}
+
 // promptBudget is the prompt tokens a step may carry; see WithPromptBudget.
 func (sc *Scheduler) promptBudget() int {
 	if sc.budget > 0 {
@@ -263,17 +288,21 @@ func (sc *Scheduler) promptBudget() int {
 
 // admit fills free rows from the queue, oldest first, and returns the
 // sequences that failed admission. A prompt runs in the steps that follow.
-func (sc *Scheduler) admit() []*Seq {
-	var done []*Seq
+func (sc *Scheduler) admit(done []*Seq) []*Seq {
 	for i := range sc.live {
-		if len(sc.q) == 0 {
+		if sc.Pending() == 0 {
 			return done
 		}
 		if sc.live[i] != nil {
 			continue
 		}
-		s := sc.q[0]
-		sc.q = sc.q[1:]
+		// Taken from the front by index, and the slice rewound once empty,
+		// so a queue that refills allocates nothing past its widest.
+		s := sc.q[sc.qh]
+		sc.q[sc.qh] = nil
+		if sc.qh++; sc.qh == len(sc.q) {
+			sc.q, sc.qh = sc.q[:0], 0
+		}
 		switch {
 		case len(s.Prompt) == 0:
 			s.Err = errEmptyPrompt{}

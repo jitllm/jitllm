@@ -144,7 +144,7 @@ func (s *State) kvlAt(li int) kvLayout { return s.kvl.atLayer(s.c, li) }
 // head width.
 func (l kvLayout) atLayer(c *Config, li int) kvLayout {
 	switch {
-	case c.MSAAt(li):
+	case c.extraKVHead(li):
 		l.nKV++ // kvlMSA
 	case c.DSV4():
 		// One row a position, as wide as the block's (ds4.go).
@@ -189,14 +189,14 @@ func (s *State) provisionAttn() {
 	// stride is a head wider; its indexer scores are this set's too, the key
 	// being a head of the same width (msa.go).
 	s.attnM = s.attnG
-	if c := s.m.Cfg; c.MSA() {
+	if c := s.m.Cfg; c.MSA() || c.QSARatio != 0 {
 		s.attnM = s.jit.AttnSetFor(c.HeadDim, c.HeadDim, s.kvlMSA().Stride(), s.kvFmt)
 	}
 }
 
 // attnAt is the kernel set layer li attends with.
 func (s *State) attnAt(li int) *nn.AttnSet {
-	if s.c.MSAAt(li) {
+	if s.c.extraKVHead(li) {
 		return s.attnM
 	}
 	if s.c.SWA(li) {

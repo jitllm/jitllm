@@ -299,7 +299,7 @@ func CopySlots(w, rows int) (*ir.Kernel, error) {
 // The arithmetic order is the host's (mul, dot, sub, mul, fma, dot), which
 // keeps engine/model/delta.go's Forward and Prefill in agreement.
 func GatedDeltaStep(vHeads, vDim, kDim, rep int) (*ir.Kernel, error) {
-	return gatedDeltaStep(vHeads, vDim, kDim, rep, false, 0)
+	return gatedDeltaStep(vHeads, vDim, kDim, rep, false, 0, 0)
 }
 
 // GatedDeltaStepTiled is GatedDeltaStep with value head vh reading key head
@@ -310,7 +310,19 @@ func GatedDeltaStepTiled(vHeads, vDim, kDim, kHeads int) (*ir.Kernel, error) {
 	if kHeads <= 0 || vHeads%kHeads != 0 {
 		return nil, fmt.Errorf("kernels: GatedDeltaStepTiled vHeads=%d kHeads=%d", vHeads, kHeads)
 	}
-	return gatedDeltaStep(vHeads, vDim, kDim, vHeads/kHeads, false, kHeads)
+	return gatedDeltaStep(vHeads, vDim, kDim, vHeads/kHeads, false, kHeads, 0)
+}
+
+// GatedDeltaStepTiledStride is GatedDeltaStepTiled over a pool whose slot is
+// stride floats, the state its first VHeads*VDim*KDim (Qwen3.8-Flash-Next,
+// whose every linear block's slot carries its n-gram tail after the state;
+// nn.RecurrentPlan.TailLen).
+func GatedDeltaStepTiledStride(vHeads, vDim, kDim, kHeads, stride int) (*ir.Kernel, error) {
+	if kHeads <= 0 || vHeads%kHeads != 0 || stride < vHeads*vDim*kDim {
+		return nil, fmt.Errorf("kernels: GatedDeltaStepTiledStride vHeads=%d kHeads=%d stride=%d",
+			vHeads, kHeads, stride)
+	}
+	return gatedDeltaStep(vHeads, vDim, kDim, vHeads/kHeads, false, kHeads, stride)
 }
 
 // GatedDeltaStepChan is GatedDeltaStep with a per-channel decay: pDecay is
@@ -322,12 +334,14 @@ func GatedDeltaStepTiled(vHeads, vDim, kDim, kHeads int) (*ir.Kernel, error) {
 // is indexed by the value head, not the key head. See oracle.GatedDeltaChan
 // and jit/cpu/delta.go.
 func GatedDeltaStepChan(vHeads, vDim, kDim, rep int) (*ir.Kernel, error) {
-	return gatedDeltaStep(vHeads, vDim, kDim, rep, true, 0)
+	return gatedDeltaStep(vHeads, vDim, kDim, rep, true, 0, 0)
 }
 
 // gatedDeltaStep builds the step; tiledK > 0 selects the tiled key pairing over
 // that many key heads (GatedDeltaStepTiled).
-func gatedDeltaStep(vHeads, vDim, kDim, rep int, perChan bool, tiledK int) (*ir.Kernel, error) {
+//
+// stride > 0 is the pool's slot width where it is wider than the state.
+func gatedDeltaStep(vHeads, vDim, kDim, rep int, perChan bool, tiledK, stride int) (*ir.Kernel, error) {
 	if vHeads <= 0 || vDim <= 0 || kDim <= 0 || rep <= 0 {
 		return nil, fmt.Errorf("kernels: GatedDeltaStep vHeads=%d vDim=%d kDim=%d rep=%d",
 			vHeads, vDim, kDim, rep)
@@ -370,7 +384,11 @@ func gatedDeltaStep(vHeads, vDim, kDim, rep int, perChan bool, tiledK int) (*ir.
 	sBase := b.Mul(ir.U32, row, b.Const(ir.U32, int64(kDim)))
 	// The state is read at the sequence's in slot and written at its out slot.
 	zero := b.Const(ir.U32, 0)
-	sLen := b.Const(ir.U32, rows*int64(kDim))
+	slotW := rows * int64(kDim)
+	if stride > 0 {
+		slotW = int64(stride)
+	}
+	sLen := b.Const(ir.U32, slotW)
 	inBase := b.Add(ir.U32, sBase, b.Mul(ir.U32, slotIn(b, pN, zero), sLen))
 	outBase := b.Add(ir.U32, sBase, b.Mul(ir.U32, slotOut(b, pN, zero), sLen))
 
@@ -570,6 +588,9 @@ type DeltaScan struct {
 	// once each and a prompt chunk beside them steps once a row. pN's row count
 	// is not read.
 	Runs bool
+	// Stride is the pool's slot width where it is wider than the state
+	// (GatedDeltaStepTiledStride); zero is VHeads*VDim*KDim.
+	Stride int
 }
 
 // ScanLanes is how many lanes cooperate on one state row: the widest power of
@@ -806,7 +827,11 @@ func gatedDeltaScan(d DeltaScan, f *DeltaFuse) (*ir.Kernel, error) {
 	// Every per-lane index is a base plus r*L, and r*L is the load's immediate.
 	// The state is read at the sequence's in slot and written at its out slot.
 	sBase := b.Add(ir.U32, b.Mul(ir.U32, row, b.Const(ir.U32, int64(d.KDim))), lane)
-	sLen := b.Const(ir.U32, nRows*int64(d.KDim))
+	slotW := nRows * int64(d.KDim)
+	if d.Stride > 0 {
+		slotW = int64(d.Stride)
+	}
+	sLen := b.Const(ir.U32, slotW)
 	inBase := b.Add(ir.U32, sBase, b.Mul(ir.U32, slotIn(b, pN, seq), sLen))
 	outBase := b.Add(ir.U32, sBase, b.Mul(ir.U32, slotOut(b, pN, seq), sLen))
 	kBase0 := b.Add(ir.U32, b.Mul(ir.U32, kh, b.Const(ir.U32, int64(d.KDim))), lane)

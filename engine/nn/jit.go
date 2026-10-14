@@ -490,7 +490,7 @@ func NewJIT(maxK, maxRows int, types []quant.Type, opts ...Option) *JIT {
 	// quietly ignore the request.
 	if cs := sched.CoreSet(prefillCoreSet(cfg.PrefillCores)); len(cs) > f.pool.Max() &&
 		f.pool.Max() >= len(sched.DecodeCores()) && len(cs) <= runtime.NumCPU() {
-		f.wide = sched.Shared(cs, cfg.Sched...)
+		f.wide = sched.SharedBeside(cs, f.pool, cfg.Sched...)
 	}
 	f.narrow = f.pool
 	// The narrow quantizer's spill space, one run per worker, sized from the

@@ -92,6 +92,9 @@ func actConsts() []float32 {
 		kernels.GELUErfA[0], kernels.GELUErfA[1], // 188, 192
 		kernels.GELUErfA[2], kernels.GELUErfA[3], // 196, 200
 		kernels.GELUErfA[4], // 204
+		// 208..212: ActSqrtSigmoid's floor on |x| and the sign bit.
+		kernels.SqrtSigmoidFloor,         // 208
+		math.Float32frombits(0x80000000), // 212
 	)
 }
 

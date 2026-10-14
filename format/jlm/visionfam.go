@@ -54,6 +54,15 @@ const (
 	// RMSNorm, one matrix and an unweighted RMSNorm). Rows are positions and
 	// channels are a row; every convolution weight is tap-major, (ky, kx, c).
 	ProjGemma3nV Projector = 65531
+	// ProjLFM2 is llama.cpp's "lfm2": LFM2-VL's and d1's. SigLIP2's NaFlex
+	// tower (Phi-4-reasoning-vision's, with its post-LayerNorm) at each
+	// piece's own grid, its square position table resized to the grid; then
+	// the Scale x Scale pixel unshuffle (InternVL's grouping, dy outer and dx
+	// inner), a LayerNorm over the grouped row when the file carries one
+	// (RoleVProjNorm; d1's does not), and linear, GELU, linear. A picture
+	// past the token budget is cut into between MinTiles and MaxTiles
+	// TileSize squares plus a thumbnail (Vision.TileSize, Vision.Tolerance).
+	ProjLFM2 Projector = 65530
 )
 
 const (
@@ -201,6 +210,7 @@ var visionFamProjNames = map[Projector]string{
 	ProjPhi4:    "phi4",
 
 	ProjGemma3nV: "gemma3nv",
+	ProjLFM2:     "lfm2",
 }
 
 func init() {

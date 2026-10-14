@@ -181,7 +181,7 @@ sweep by name and are never resolved.
 | `JITLLM_ALLOC_MODELS` | `model.TestDecodeDoesNotAllocate` | comma-separated names or paths, each run beside the default | Llama-3.2-1B, olmoe and Qwen3.5-0.8B only |
 | `JITLLM_SLOW` | several `model` sweeps | `1` admits models over 2 GiB | small models only |
 | `JITLLM_STEP_DEVICES` | every `model` gate that sweeps backends (the step, scheduler, MLA, C6, vision, gpt-oss, Llama 4 and hybrid device gates, and the decode allocation gate) | comma-separated device specs, e.g. `cuda:0` | `cuda:0,vulkan:0,metal`; the allocation gate takes each backend's default device |
-| `JITLLM_MOVE_DEVICES` | `model.TestBlocksMoveBetweenDevices`, `model.TestMovePause`, `server.TestBlocksMoveBetweenDevicesThroughThePlacementService`, `server.TestAMoveLandsBetweenTwoTokensOfAReply`, `tui.TestDemoRelocatesAStreamingReplyOnARealService` | the two devices of one tier the blocks move between, e.g. `cuda:0,cuda:1` | `cuda:0,vulkan:1`: one card under two backends |
+| `JITLLM_MOVE_DEVICES` | `model.TestBlocksMoveBetweenDevices`, `model.TestMovePause`, `server.TestBlocksMoveBetweenDevicesThroughThePlacementService`, `server.TestAMoveLandsBetweenTwoTokensOfAReply`, `tui.TestDemoRelocatesAStreamingReplyOnARealService`, `model.TestDecisionMovesBetweenCards`, `model.TestDecisionDistributes` | the two devices of one tier the blocks move between, e.g. `cuda:0,cuda:1` | `cuda:0,vulkan:1`: one card under two backends |
 | `JITLLM_MOVE_REPLY_MODEL` | `server.TestAMoveLandsBetweenTwoTokensOfAReply` | a `.jlm` whose reply outlasts its move's preparation | `Llama-3.2-1B-Instruct-Q4_K_M.jlm` |
 | `JITLLM_MOVE_PAUSE_MODEL` | `model.TestMovePause`, a measurement: the pause of a move between two devices, direct against through the host | a model name; opts in | the test skips |
 | `JITLLM_POSTNORM_MODELS` | `model.TestPostNormDeviceErrorIsAmplification` | comma-separated GGUF names in the directory, any model whose last block has a post-FFN norm | OLMo 2 1B and EXAONE 4.0 1.2B |
@@ -245,7 +245,10 @@ variable it needs and did not find.
 | `L4_TOK` | the directory holding Llama 4's `tokenizer.json` | `llama4gold.py`, `llama4visiongold.py` |
 
 The decision models' goldens: `scripts/decisiongold.sh` (llama-server's
-`/v1/systemone` under `JITLLM_LCPP` on `$JITLLM_MODELS/{d1,lev,laya/gguf}`) and
+`/v1/systemone` under `JITLLM_LCPP` on `$JITLLM_MODELS/{d1,lev,laya/gguf,clef}`; a
+llama.cpp with the clef arch for Clef), `scripts/clefgold.py` (Clef's own code:
+`fixture` builds the random fixture into `$JITLLM_MODELS/clef/fixture` with
+llama.cpp's converter under `LCPP_SRC`, `real` runs the release's safetensors) and
 `scripts/layagold.py` (Laya's own code: `real` on the checkpoint, `fixture`
 builds the random fixture into `$JITLLM_MODELS/laya/fixture` with llama.cpp's
 converter); `docs/design/decision-models.md` names the files.

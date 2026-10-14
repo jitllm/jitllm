@@ -193,6 +193,9 @@ type Pool struct {
 	wake  chan struct{}
 	key   string
 	views int
+	// beside is a view opened beside another of the same caller's
+	// (SharedBeside), which the turn's users do not count.
+	beside bool
 	// fz is an open fused region's state (fuse.go), on the crew.
 	fz fused
 }

@@ -2,6 +2,8 @@ package server
 
 import (
 	"errors"
+	"fmt"
+	"image"
 	"io"
 	"net/http"
 	"strings"
@@ -69,6 +71,21 @@ func (c *compat) systemOne(w http.ResponseWriter, r *http.Request) {
 		s1Fail(w, http.StatusUnprocessableEntity, err.Error(), "questions")
 		return
 	}
+	// The pictures: "files" and "images" data URLs, and the image_url parts
+	// of a chat-message state, as llama.cpp's server reads them.
+	state, urls, err := model.DecisionMedia(req, state)
+	if err != nil {
+		s1Fail(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	pics := newPictures(c.img)
+	for i, u := range urls {
+		err := pics.add(fmt.Sprintf("images[%d]", i), func() (image.Image, error) { return pics.p.decodeDataURL(u) })
+		if err != nil {
+			s1Fail(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+	}
 	name := ""
 	if mv, ok := req.Get("model"); ok && mv.IsString() {
 		name = mv.AsString()
@@ -80,7 +97,7 @@ func (c *compat) systemOne(w http.ResponseWriter, r *http.Request) {
 			name = ls[0].ID
 		}
 	}
-	res, err := c.b.Decide(r.Context(), DecideOptions{Model: name, State: state, Questions: qs})
+	res, err := c.b.Decide(r.Context(), DecideOptions{Model: name, State: state, Questions: qs, Images: pics.imgs})
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrInvalid):

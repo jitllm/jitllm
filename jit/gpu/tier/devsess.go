@@ -83,6 +83,9 @@ type devSess struct {
 	// embPend is the prompt chunk EmbedRows promised and the next submission
 	// gathers (embed.go). Guarded by mu.
 	embPend *embPend
+	// embBuf is what embPend points at, kept so a prompt chunk's promise
+	// allocates nothing past the first.
+	embBuf embPend
 	// bidir is the full key runs the next causal Layers calls honour
 	// (keyruns.go). Guarded by mu.
 	bidir []nn.KeyRun
@@ -98,6 +101,12 @@ type devSess struct {
 	// tokIDs is the rows' token ids for the next call (SetTokenIDs), which a
 	// DeepSeek V4 block routing by token reads (ds4.go).
 	tokIDs []int32
+	// ngHost is the rows' n-gram table rows for the next call (SetNGramRows),
+	// which Qwen3.8-Flash-Next's n-gram block reads (q4e.go).
+	ngHost []float32
+	// qsaMarks is the rows' rotary marks for the next call (SetRopeMarks),
+	// which a QSA block's pooled keys turn by (qsa.go).
+	qsaMarks []int32
 	// recSteps counts the linear blocks whose emitLinear completed with the
 	// submission still good, for the current Layers call: the measured answer
 	// to "may a failed submission be restarted on the host". Positional proxies

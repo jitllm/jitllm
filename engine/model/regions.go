@@ -1,6 +1,10 @@
 package model
 
-import "github.com/jitllm/jitllm/engine/nn"
+import (
+	"sync"
+
+	"github.com/jitllm/jitllm/engine/nn"
+)
 
 // regions is the per-State form of the pool regions a decode token runs every
 // layer, with the function each hands the pool built once -- engine/nn's
@@ -16,6 +20,8 @@ type regions struct {
 	delta  deltaRegion
 	mamba1 mamba1Region
 	rows   rowRegion
+	embed  embedRegion
+	pattn  prefAttnRegion
 }
 
 // mamba1Region is Mamba-1's selective scan fanned out over channels
@@ -301,5 +307,125 @@ func (s *State) rowItems(lo, hi int) {
 		s.visPrepRows(lo, hi)
 	case rowLerp:
 		s.lerpRows(lo, hi)
+	}
+}
+
+// embedRegion is a prompt chunk's embedding rows over the pool (State.embedRun):
+// row base+i of the prompt into row i of s.bx, from src[base+i] or, where src
+// is nil, ids[base+i]'s vocabulary row. err is the first row's failure.
+type embedRegion struct {
+	src  []func(dst []float32) error
+	ids  []int32
+	base int
+	mu   sync.Mutex
+	err  error
+	fn   func(lo, hi int)
+}
+
+// embedRun fills the chunk's n rows from prompt row base on, and returns the
+// first failure.
+func (s *State) embedRun(src []func(dst []float32) error, ids []int32, base, n int) error {
+	j := &s.rg.embed
+	if j.fn == nil {
+		j.fn = s.embedItems
+	}
+	j.src, j.ids, j.base, j.err = src, ids, base, nil
+	s.jit.Parallel(n, max(1, n/(4*s.jit.Workers())), j.fn)
+	err := j.err
+	j.src, j.ids, j.err = nil, nil, nil
+	return err
+}
+
+// embedItems is one chunk of the embedding region: rows lo..hi-1.
+func (s *State) embedItems(lo, hi int) {
+	j, w := &s.rg.embed, s.c.NEmbd
+	for i := lo; i < hi; i++ {
+		if err := s.fillRow(j.src, j.ids, j.base+i, s.bx[i*w:(i+1)*w]); err != nil {
+			j.mu.Lock()
+			if j.err == nil {
+				j.err = err
+			}
+			j.mu.Unlock()
+			return
+		}
+	}
+}
+
+// fillRow writes prompt row i into dst: src[i]'s, or ids[i]'s vocabulary row
+// where src is nil.
+func (s *State) fillRow(src []func(dst []float32) error, ids []int32, i int, dst []float32) error {
+	if src == nil {
+		return s.embedInto(dst, ids[i])
+	}
+	return src[i](dst)
+}
+
+// prefAttnRegion is a prompt chunk's attention fan-out over its rows
+// (State.hostRows): the arguments each row reads, filled before the dispatch.
+type prefAttnRegion struct {
+	l                         *layer
+	li, kvli, slot, p0, n     int
+	qDim, qw, ow, hd, gqa     int
+	astride, mstride          int
+	mla, bidir                bool
+	scale                     float64
+	bq, bxb, qsrc, odst, attf []float32
+	masks                     [][]float32
+	fast                      *nn.AttnSet
+	fn                        func(lo, hi int)
+}
+
+// prefAttnRows is one chunk of a prompt chunk's attention: rows lo..hi-1.
+// Each row owns its own scores buffer, so heads can share it without any
+// coordination, and the causal bound p0+i is what keeps this equal to the
+// decode path.
+func (s *State) prefAttnRows(lo, hi int) {
+	j, c := &s.rg.pattn, s.c
+	l, li, kvli, slot := j.l, j.li, j.kvli, j.slot
+	for i := lo; i < hi; i++ {
+		pos := j.p0 + i
+		out := j.bxb[i*j.qDim : (i+1)*j.qDim]
+		if !j.mla {
+			clear(out)
+		}
+		qfi := j.qsrc[i*c.NHead*j.qw : (i+1)*c.NHead*j.qw]
+		ofi := j.odst[i*c.NHead*j.ow : (i+1)*c.NHead*j.ow]
+		for hh := 0; hh < c.NHead; hh++ {
+			qh := qfi[hh*j.qw : (hh+1)*j.qw]
+			if !j.mla {
+				copy(qh, j.bq[i*j.qDim+hh*j.hd:])
+			}
+			kvh := hh / j.gqa
+			// The same generated kernels and sliding window decode uses, so
+			// Prefill and Forward compute the same attention.
+			w0, an := c.AttnWindow(li, pos)
+			// A row of a bidirectional run sees keys to the run's end; the
+			// window still starts where the row's own position puts it.
+			if e := s.bidirEnd(pos); e > 0 && (!c.BidirSWA || c.SWA(li)) {
+				an = e - w0
+			}
+			if j.bidir {
+				// Every position of the sequence, before this one and after it.
+				w0, an = 0, j.p0+j.n
+				if c.SWA(li) {
+					w0, an = symmetricWindow(pos, j.p0+j.n, c.SWAWindow)
+				}
+			}
+			af := j.attf[i*j.astride : i*j.astride+an]
+			s.kvScores(j.fast, kvli, slot, kvh, qh, af, w0, an)
+			// Llama 4's temperature is per row: it steps with the position.
+			s.scale(af, float32(j.scale*c.AttnTemp(li, pos)))
+			softcap(af, c.AttnSoftcap)
+			if j.masks != nil && j.masks[i] != nil {
+				s.idxApply(af, j.masks[i][kvh*j.mstride:], w0)
+			}
+			s.softmaxSink(af, l.sinks, hh)
+			oh := ofi[hh*j.ow : (hh+1)*j.ow]
+			s.kvAcc(j.fast, kvli, slot, kvh, oh, af, w0, an)
+			// MLA's result stays in bmlaAcc, where the un-absorb reads it.
+			if !j.mla {
+				copy(out[hh*j.hd:], oh)
+			}
+		}
 	}
 }

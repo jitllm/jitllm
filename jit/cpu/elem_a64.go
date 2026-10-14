@@ -329,6 +329,22 @@ func emitA64ActBody(a *A64, act ActKind, mul bool, ld func(VReg, XReg), st func(
 		ld(6, X3)
 		bound(6, 112, 116)
 		a.FMUL4s(0, 0, 4)
+	case ActSqrtSigmoid:
+		// See the amd64 twin: the floored magnitude's root, the sign bit
+		// put back, then sigmoid's sequence.
+		a.FABS4s(4, 3)
+		a.LDRs(5, X5, 208)
+		a.DUPs4(5, 5)
+		a.FMAX4s(4, 4, 5)
+		a.FSQRT4s(4, 4)
+		a.LDRs(5, X5, 212)
+		a.DUPs4(5, 5)
+		a.AND16b(5, 3, 5)
+		a.ORR16b(0, 4, 5)
+		a.FNEG4s(0, 0)
+		emitA64Exp(a, 0, 1, 2)
+		a.FADD4s(0, 0, 23)
+		a.FDIV4s(0, 23, 0)
 	case ActGELUErf:
 		// See the amd64 twin: 0.5*((x + |x|) - |x|*q).
 		cst := func(v VReg, off int32) {

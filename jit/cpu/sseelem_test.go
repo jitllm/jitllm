@@ -158,13 +158,14 @@ func sseElemKerns() []sseElemKern {
 			func() []byte { return EmitActMul(k) }, true, consts, nil, gated[k], false})
 	}
 	ungated := map[ActKind]func(x, _ float64) float64{
-		ActSiLU:      func(x, _ float64) float64 { return oracle.SiLU(x) },
-		ActGELU:      func(x, _ float64) float64 { return oracle.GELUTanh(x) },
-		ActGELUErf:   func(x, _ float64) float64 { return oracle.GELUErf(x) },
-		ActQuickGELU: func(x, _ float64) float64 { return quickGELURef(x) },
-		ActReLU2:     func(x, _ float64) float64 { r := math.Max(x, 0); return r * r },
-		ActReLU:      func(x, _ float64) float64 { return math.Max(x, 0) },
-		actSigmoid:   func(x, _ float64) float64 { return refSigmoid(x) },
+		ActSiLU:        func(x, _ float64) float64 { return oracle.SiLU(x) },
+		ActGELU:        func(x, _ float64) float64 { return oracle.GELUTanh(x) },
+		ActGELUErf:     func(x, _ float64) float64 { return oracle.GELUErf(x) },
+		ActSqrtSigmoid: func(x, _ float64) float64 { return oracle.SqrtSigmoid(x) },
+		ActQuickGELU:   func(x, _ float64) float64 { return quickGELURef(x) },
+		ActReLU2:       func(x, _ float64) float64 { r := math.Max(x, 0); return r * r },
+		ActReLU:        func(x, _ float64) float64 { return math.Max(x, 0) },
+		actSigmoid:     func(x, _ float64) float64 { return refSigmoid(x) },
 		ActSqrtSoftplus: func(x, _ float64) float64 {
 			return oracle.SqrtSoftplus(x)
 		},

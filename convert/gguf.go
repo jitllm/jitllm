@@ -163,7 +163,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		}
 		// Qwen3.5's re-cut of qwen3next's file is undone before the name table
 		// sees it: beta and alpha are fused back into ssm_ba (fuseBetaAlpha).
-		if !tower && s.Config.Arch == jlm.ArchQwen3Next {
+		if !tower && (s.Config.Arch == jlm.ArchQwen3Next || s.Config.Arch == jlm.ArchQwen4Exp) {
 			if splitBetaAlpha(t.Name) && strings.HasSuffix(t.Name, ".ssm_alpha.weight") {
 				alphas++
 				continue // fused into its layer's ssm_beta below

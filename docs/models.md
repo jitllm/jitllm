@@ -7,13 +7,13 @@ a GGUF architecture, Hugging Face class or vision projector that is not here is 
 by name. `internal/srcgate.TestModelsDocIsGenerated` fails when the page and the code part; rerun
 `go run ./scripts/genmodels docs/models.md`.
 
-- **66** GGUF text architecture names (`general.architecture`, `convert.Architectures`) on **58** graphs
+- **68** GGUF text architecture names (`general.architecture`, `convert.Architectures`) on **59** graphs
 - **30** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **23** graphs, **1** of them reached only from safetensors
-- **59** graphs in all (`jlm.Arch`)
-- **17** vision projectors (`clip.projector_type`, `convert.Projectors`)
+- **60** graphs in all (`jlm.Arch`)
+- **18** vision projectors (`clip.projector_type`, `convert.Projectors`)
 - **3** embedding encoders, and pooling on any decoder
-- **12** weight types read (`quant.Dequantable`), **9** of them packed quantizations (`quant.PackedTypes`)
-- **85** models in the download catalogue (`jitllm library`), **9** of them with a vision tower
+- **13** weight types read (`quant.Dequantable`), **9** of them packed quantizations (`quant.PackedTypes`)
+- **86** models in the download catalogue (`jitllm library`), **9** of them with a vision tower
 
 ## Text architectures
 
@@ -73,9 +73,10 @@ further at conversion (a stated sliding window, M-RoPE sections); the Models col
 | `qwen2vl` | `qwen2vl` | -- | the text model of Qwen2-VL and Qwen2.5-VL |
 | `qwen3` | `qwen3` | `Qwen3ForCausalLM` | Qwen3 dense; Qwen3-Embedding (pooled) |
 | `qwen3moe` | `qwen3moe` | `Qwen3MoeForCausalLM` | Qwen3 30B-A3B, 235B-A22B |
-| `qwen3next` | `qwen35`, `qwen35moe`, `qwen3next` | -- | `qwen35`: Qwen3.5 dense; `qwen35moe`: Qwen3.5 and Qwen3.6 mixtures; `qwen3next`: Qwen3-Next 80B-A3B |
+| `qwen3next` | `clef`, `qwen35`, `qwen35moe`, `qwen3next` | -- | `clef`: Clef-Flash (decision model, /v1/systemone); `qwen35`: Qwen3.5 dense; `qwen35moe`: Qwen3.5 and Qwen3.6 mixtures; `qwen3next`: Qwen3-Next 80B-A3B |
 | `qwen3vl` | `qwen3vl` | -- | Qwen3-VL dense text models |
 | `qwen3vlmoe` | `qwen3vlmoe` | -- | Qwen3-VL mixtures |
+| `qwen4exp` | `qwen4exp` | -- | Qwen3.8-Flash-Next (text) |
 | `seed_oss` | `seed_oss` | `SeedOssForCausalLM` | Seed-OSS 36B |
 | `smollm3` | `smollm3` | `SmolLM3ForCausalLM` | SmolLM3 |
 | `stablelm` | `stablelm` | -- | StableLM 2, StableLM 3B |
@@ -137,6 +138,7 @@ convert together, the text model one of the architectures above. The projector i
 | `internvl` | InternVL 2.5 and 3 (InternViT-300M; the 6B tower is refused) |
 | `janus_pro` | Janus-Pro |
 | `kimivl` | Kimi-VL (MoonViT) |
+| `lfm2` | LFM2-VL, LFM2.5-VL and d1-3B (SigLIP2 NaFlex, tiles and a thumbnail) |
 | `llama4` | Llama 4 Scout, Maverick |
 | `mlp` | LLaVA and LLaVA-style models (a CLIP tower and a two-matrix MLP), llava-phi-3 |
 | `phi4` | Phi-4-reasoning-vision-15B |
@@ -160,7 +162,7 @@ Any decoder above also converts as an embedding model when its GGUF states `pool
 
 ## Weight types
 
-Read: F32, F16, Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, BF16, MXFP4.
+Read: F32, F16, Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, BF16, MXFP4.
 
 Packed quantizations: Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, MXFP4. A GGUF's quantization is kept; `-q8` stores a float safetensors model's
 matrices as Q8_0.
@@ -247,6 +249,7 @@ lists above, each entry downloaded, converted and made to generate before it was
 | `laya` | Laya (decision model) | `modern-bert` | 421M | BF16 |  |
 | `d1-3b` | d1-3B (decision model) | `lfm2` | 3B | Q8_0 |  |
 | `lev` | Lev 4B (decision model) | `qwen35` | 4B | Q8_0 |  |
+| `clef-flash` | Clef-Flash (decision model) | `clef` | 9.1B | Q8_0 |  |
 | `qwen3-embedding-0.6b` | Qwen3-Embedding 0.6B (embeddings) | `qwen3` | 0.6B | F16 |  |
 | `smolvlm-256m-instruct` | SmolVLM 256M Instruct | `llama` | 256M | Q8_0 | yes |
 | `smolvlm-500m-instruct` | SmolVLM 500M Instruct | `llama` | 500M | Q8_0 | yes |

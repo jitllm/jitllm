@@ -89,12 +89,32 @@ const (
 	// is set. A code of its own so an older reader, which would run none of
 	// the five, refuses it.
 	ArchKimiK3 Arch = 50
+
+	// ArchQwen4Exp is Qwen3.8-Flash-Next's text model (Qwen4ExpForCausalLM):
+	// ArchQwen3Next's hybrid -- the gated delta rule with its output norm
+	// gated by a sigmoid (Flag2DeltaSigmoidGate), every fourth block qwen3next's
+	// gated attention, a softmax top-k mixture beside a sigmoid-gated shared
+	// expert -- inside Config.HCMult residual streams mixed by low-rank gated
+	// hyper-connections (Config.HCLowRank, RoleHC*Norm/Down/Up/Inject): each
+	// sublayer reads the mean of its streams' grouped-RMSNormed values times a
+	// sigmoid gate, and adds its output into every stream scaled by
+	// 2*sigmoid(inject/HCMult); the head reads the same mix, with no output
+	// norm. The attention blocks select their keys by QSA: an indexer key per
+	// position, cached as one more kv head, scores each complete block of
+	// QSARatio positions by its mean key, normed and rotated at the block's
+	// first position, and attention reads the IdxTopK/QSARatio best blocks and
+	// the incomplete tail. One linear block (NGramBlock) adds an n-gram
+	// embedding: the token and its predecessors hashed per head into a shared
+	// table (RoleNGramTable, read a row at a time), gated per stream and
+	// convolved over the previous positions. A code of its own so an older
+	// reader, which would run one stream, refuses it.
+	ArchQwen4Exp Arch = 51
 )
 
 var flagshipArchNames = map[Arch]string{
 	ArchMiniMaxM2: "minimax-m2", ArchGemma4: "gemma4", ArchDeepseek32: "deepseek32",
 	ArchGemma3n: "gemma3n", ArchMiniMaxM3: "minimax-m3", ArchDeepseek4: "deepseek4",
-	ArchKimiK3: "kimi-k3",
+	ArchKimiK3: "kimi-k3", ArchQwen4Exp: "qwen4exp",
 }
 
 // The flagship group's roles, numbered from 300: 200 and 201 are Qwen2.5-VL's
@@ -237,6 +257,40 @@ const (
 	RoleFFNRoutedDown Role = 353
 	RoleFFNRoutedUp   Role = 354
 	RoleFFNRoutedNorm Role = 355
+
+	// Qwen3.8-Flash-Next (ArchQwen4Exp). Each block's two hyper-connections,
+	// at the attention and at the FFN: RoleHC*Norm is the grouped RMSNorm's
+	// weight (HCMult rows of n_embd, the +1 folded), RoleHC*Down
+	// (HCMult*n_embd -> HCLowRank) and RoleHC*Up (HCLowRank -> HCMult*n_embd)
+	// make the streams' gate, and RoleHC*Inject (HCMult*n_embd -> HCMult) the
+	// sublayer output's placement weights. RoleHCHead* is the head's mix,
+	// which has no placement and stands in for the output norm.
+	RoleHCAttnNorm   Role = 356
+	RoleHCAttnDown   Role = 357
+	RoleHCAttnUp     Role = 358
+	RoleHCAttnInject Role = 359
+	RoleHCFFNNorm    Role = 360
+	RoleHCFFNDown    Role = 361
+	RoleHCFFNUp      Role = 362
+	RoleHCFFNInject  Role = 363
+	RoleHCHeadNorm   Role = 364
+	RoleHCHeadDown   Role = 365
+	RoleHCHeadUp     Role = 366
+	// The n-gram embedding. RoleNGramTable is the table, NGramRowDim wide,
+	// stored row-major in the source's own block format and read a row at a
+	// time (never resident whole). In its block: RoleNGramKey
+	// (NGramHeads*NGramRowDim -> HCMult*n_embd) and RoleNGramValue (-> n_embd)
+	// project the gathered rows; RoleNGramNormKey, RoleNGramNormQuery and
+	// RoleNGramNormConv are grouped RMSNorm weights (HCMult rows of n_embd,
+	// the +1 folded); RoleNGramConv is the depthwise convolution, HCMult*n_embd
+	// channels of NGramConv taps.
+	RoleNGramTable     Role = 367
+	RoleNGramKey       Role = 368
+	RoleNGramValue     Role = 369
+	RoleNGramNormKey   Role = 370
+	RoleNGramNormQuery Role = 371
+	RoleNGramNormConv  Role = 372
+	RoleNGramConv      Role = 373
 )
 
 var flagshipRoleNames = map[Role]string{
@@ -300,6 +354,25 @@ var flagshipRoleNames = map[Role]string{
 	RoleFFNRoutedDown:  "ffn_routed_down",
 	RoleFFNRoutedUp:    "ffn_routed_up",
 	RoleFFNRoutedNorm:  "ffn_routed_norm",
+
+	RoleHCAttnNorm:     "hc_attn_norm",
+	RoleHCAttnDown:     "hc_attn_down",
+	RoleHCAttnUp:       "hc_attn_up",
+	RoleHCAttnInject:   "hc_attn_inject",
+	RoleHCFFNNorm:      "hc_ffn_norm",
+	RoleHCFFNDown:      "hc_ffn_down",
+	RoleHCFFNUp:        "hc_ffn_up",
+	RoleHCFFNInject:    "hc_ffn_inject",
+	RoleHCHeadNorm:     "output_hc_norm",
+	RoleHCHeadDown:     "output_hc_down",
+	RoleHCHeadUp:       "output_hc_up",
+	RoleNGramTable:     "ngram_token_embd",
+	RoleNGramKey:       "ple_key",
+	RoleNGramValue:     "ple_value",
+	RoleNGramNormKey:   "ple_norm_key",
+	RoleNGramNormQuery: "ple_norm_query",
+	RoleNGramNormConv:  "ple_norm_conv",
+	RoleNGramConv:      "ple_conv1d",
 }
 
 func init() {
@@ -322,7 +395,8 @@ func flagshipExpanded(r Role) bool {
 		RoleAltUpRouterNorm, RoleAltUpPredCoef, RoleAltUpCorrCoef, RoleAltUpCorrScale, RoleLaurelPostNorm,
 		RoleIdxQNorm, RoleHCAttnBase, RoleHCAttnScale, RoleHCFFNBase, RoleHCFFNScale, RoleCompAPE,
 		RoleCompNorm, RoleIdxCompAPE, RoleIdxCompNorm, RoleHashExperts, RoleAttnResScore,
-		RoleFFNResScore, RoleOutputResScore, RoleFFNRoutedNorm:
+		RoleFFNResScore, RoleOutputResScore, RoleFFNRoutedNorm, RoleHCAttnNorm, RoleHCFFNNorm,
+		RoleHCHeadNorm, RoleNGramNormKey, RoleNGramNormQuery, RoleNGramNormConv, RoleNGramConv:
 		return true
 	}
 	return false

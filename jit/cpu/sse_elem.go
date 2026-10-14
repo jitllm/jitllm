@@ -271,7 +271,8 @@ func EmitSigmoidMulSSE() ([]byte, error) { return emitActKernelSSE(actSigmoid, t
 // temporaries, XMM4/XMM5 the body's.
 func emitActKernelSSE(k ActKind, mul bool) ([]byte, error) {
 	switch k {
-	case ActSiLU, ActGELU, ActQuickGELU, actSigmoid, ActReLU2, ActReLU, ActSqrtSoftplus, ActGELUErf:
+	case ActSiLU, ActGELU, ActQuickGELU, actSigmoid, ActReLU2, ActReLU, ActSqrtSoftplus, ActGELUErf,
+		ActSqrtSigmoid:
 	case ActSwiGLUOAI, ActIdentity, ActSwiGLUClamp, ActSitu:
 		if !mul {
 			return nil, fmt.Errorf("jit: act/%s: it clamps and offsets `up`, so it exists only gated", k)
@@ -444,6 +445,24 @@ func emitActBodySSE(a *Buf, k ActKind, mul bool, ld func(Reg, Reg), st func(Reg,
 		ld(XMM0, RDX)
 		bound(XMM0, XMM0, 112, 116)
 		a.MULPS(XMM0, XMM0, XMM6)
+	case ActSqrtSigmoid:
+		// The AVX2 body's sequence: the root of the floored magnitude, the
+		// sign bit put back, then sigmoid's.
+		a.MOVAPS(XMM4, XMM0)
+		bcastSS(a, XMM5, At(RBX, 100))
+		a.ANDPS(XMM4, XMM4, XMM5) // |x|
+		bcastSS(a, XMM5, At(RBX, 208))
+		a.MAXPS(XMM4, XMM4, XMM5)
+		a.SQRTPS(XMM4, XMM4)
+		bcastSS(a, XMM5, At(RBX, 212))
+		a.ANDPS(XMM0, XMM0, XMM5) // the sign
+		a.ORPS(XMM0, XMM0, XMM4)  // the signed root
+		a.XORPS(XMM4, XMM4, XMM4)
+		a.SUBPS(XMM4, XMM4, XMM0) // its negation
+		emitExpSSE(a, XMM4, XMM1, XMM2)
+		a.ADDPS(XMM4, XMM4, XMM8)
+		a.MOVAPS(XMM0, XMM8)
+		a.DIVPS(XMM0, XMM0, XMM4)
 	case ActGELUErf:
 		// The AVX2 body's sequence with a multiply and an add for each FMA;
 		// XMM3 and XMM6 carry no hoisted constant for this kind.

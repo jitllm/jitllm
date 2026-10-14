@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"image"
 	"io"
 	"os"
 	"runtime/pprof"
@@ -78,14 +79,20 @@ func decideCmd(args []string) error {
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 	one := func(body []byte) error {
-		_, state, qs, err := model.ParseDecisionRequest(body)
+		_, state, qs, urls, err := model.ParseDecisionRequest(body)
 		if err != nil {
 			return err
+		}
+		imgs := make([]image.Image, len(urls))
+		for i, u := range urls {
+			if imgs[i], err = model.DecodeImageDataURL(u); err != nil {
+				return fmt.Errorf("images[%d]: %w", i, err)
+			}
 		}
 		var ans []model.DecisionAnswer
 		for r := 0; r < max(1, *repeat); r++ {
 			t, reads, read := time.Now(), m.PagerReads(), m.BytesRead()
-			if ans, err = d.Decide(state, qs); err != nil {
+			if ans, err = d.Decide(state, qs, imgs); err != nil {
 				return err
 			}
 			fmt.Fprintf(os.Stderr, "%d questions, %d tokens in %v; %d page reads, %d MiB read\n", len(qs), d.InputTokens(),

@@ -3,6 +3,7 @@
 package model
 
 import (
+	"github.com/jitllm/jitllm/format/jlm"
 	"math"
 	"slices"
 	"testing"
@@ -46,6 +47,15 @@ func TestEveryTowerRunsSSE(t *testing.T) {
 				t.Fatal(err)
 			}
 			ps, err := tw.PicturePieces(photo, lay)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range ps {
+				a.pixels = append(a.pixels, p.Pixels)
+			}
+			first = ps[0]
+		} else if tw.Cfg.Kind == jlm.ProjLFM2 {
+			_, _, ps, err := tw.LFM2Pieces(photo)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -24,7 +24,11 @@ const (
 	Q5_K Type = 13
 	Q6_K Type = 14
 	Q8_K Type = 15
-	BF16 Type = 30
+	// IQ4_NL is Q4_0's block with the nibble an index into a fixed
+	// non-linear table (IQ4NLValues). Qwen3.8-Flash-Next's n-gram table ships
+	// in it, read only by a row gather.
+	IQ4_NL Type = 20
+	BF16   Type = 30
 	// MXFP4 is the OCP microscaling format gpt-oss ships its expert banks in:
 	// 32 e2m1 codes and one E8M0 exponent per block.
 	MXFP4 Type = 39

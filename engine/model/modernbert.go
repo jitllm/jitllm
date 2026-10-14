@@ -240,35 +240,6 @@ func buildLayaHead(c *jlm.File, m *Model, mb *modernBERT,
 	return nil
 }
 
-// mbPageIn makes block li's matrices readable and binds them: an encoder
-// block below NLayer, a head block from it on.
-func (m *Model) mbPageIn(li int) error {
-	c := m.container
-	if c == nil || li >= int(c.H.NBlocks) {
-		return nil
-	}
-	mb := m.enc.mb
-	var ws []*tensor
-	if li < len(mb.blocks) {
-		ws = mb.blocks[li].weights()
-	} else {
-		ws = mb.head[li-len(mb.blocks)].weights()
-	}
-	var rs []jlm.Range
-	for _, w := range ws {
-		rs = appendSpans(rs, c, w.e)
-	}
-	if err := c.EnsureRanges(li, rs); err != nil {
-		return err
-	}
-	m.bind.Lock()
-	defer m.bind.Unlock()
-	for _, w := range ws {
-		bindOne(c, w)
-	}
-	return nil
-}
-
 // mbBind binds the dense-region matrices the head reads (the scorer's), once.
 func (m *Model) mbBind() {
 	c := m.container
@@ -316,7 +287,7 @@ func (e *Embedder) mbEncode(ids []int32) error {
 			}
 			continue
 		}
-		if err := m.mbPageIn(li); err != nil {
+		if err := m.encBlockPageIn(li); err != nil {
 			return err
 		}
 		b := &mb.blocks[li]
@@ -351,9 +322,7 @@ func (e *Embedder) mbEncode(ids []int32) error {
 		if !b.global && e.violation != "no-window" {
 			w = c.SWAWindow / 2
 		}
-		e.attend(e.attnEnc, h, q, k, v, n, c.NHead, c.HeadDim, scale, func(i int) (int, int) {
-			return max(0, i-w), min(n, i+w+1)
-		})
+		e.attend(e.attnEnc, h, q, k, v, n, n, w, c.NHead, c.HeadDim, scale)
 		// 3. x += o(attn).
 		t := e.t[:n*d]
 		if err := e.mm(t, b.wo, h, n); err != nil {
@@ -372,7 +341,7 @@ func (e *Embedder) mbEncode(ids []int32) error {
 		if e.violation == "up-gated" {
 			g, u = u, g
 		}
-		e.parallelVec(len(g), func(lo, hi int) { nn.ActMul32JIT(g[lo:hi], u[lo:hi], e.gelu()) })
+		e.actMul(g, u, e.gelu())
 		if err := e.mm(t, b.down, g, n); err != nil {
 			return err
 		}
@@ -385,27 +354,38 @@ func (e *Embedder) mbEncode(ids []int32) error {
 	return nil
 }
 
-// attend writes softmax(q k^T * scale) v into out for n rows of nh heads of
-// hd, row i reading keys [lo, hi) as span gives them, on set's kernels. k and
-// v are rows of the residual's width.
-func (e *Embedder) attend(set *nn.AttnSet, out, q, k, v []float32, n, nh, hd int, scale float32, span func(int) (int, int)) {
-	d := e.m.Cfg.NEmbd
-	e.jit.Parallel(nh, 1, func(h0, h1 int) {
-		for h := h0; h < h1; h++ {
-			off := h * hd
-			att := e.att[h*e.attStride:]
-			acc := e.acc[h*hd : (h+1)*hd]
-			for i := 0; i < n; i++ {
-				lo, hi := span(i)
-				cnt := hi - lo
-				set.AttnScores(att[:cnt], k[lo*d+off:], q[i*d+off:], cnt)
-				nn.Scale32JIT(att[:cnt], scale)
-				nn.Softmax32JIT(att, cnt)
-				set.AttnAcc(acc, v[lo*d+off:], att[:cnt], cnt)
-				copy(out[i*d+off:i*d+off+hd], acc)
-			}
+// attend writes softmax(q k^T * scale) v into out for n query rows of nh
+// heads of hd, on set's kernels: row i reads keys [i-w, i+w] cut to [0,
+// keys) -- a window, or every key where w is keys. k and v are rows of the
+// residual's width.
+func (e *Embedder) attend(set *nn.AttnSet, out, q, k, v []float32, n, keys, w, nh, hd int, scale float32) {
+	j := &e.rg.attn
+	if j.fn == nil {
+		j.fn = e.attnHeads
+	}
+	j.set, j.out, j.q, j.k, j.v, j.n, j.keys, j.w, j.hd, j.scale = set, out, q, k, v, n, keys, w, hd, scale
+	e.jit.Parallel(nh, 1, j.fn)
+	j.set, j.out, j.q, j.k, j.v = nil, nil, nil, nil, nil
+}
+
+// attnHeads is one chunk of attend: heads h0..h1-1.
+func (e *Embedder) attnHeads(h0, h1 int) {
+	j, d := &e.rg.attn, e.m.Cfg.NEmbd
+	hd := j.hd
+	for h := h0; h < h1; h++ {
+		off := h * hd
+		att := e.att[h*e.attStride:]
+		acc := e.acc[h*hd : (h+1)*hd]
+		for i := 0; i < j.n; i++ {
+			lo, hi := max(0, i-j.w), min(j.keys, i+j.w+1)
+			cnt := hi - lo
+			j.set.AttnScores(att[:cnt], j.k[lo*d+off:], j.q[i*d+off:], cnt)
+			nn.Scale32JIT(att[:cnt], j.scale)
+			nn.Softmax32JIT(att, cnt)
+			j.set.AttnAcc(acc, j.v[lo*d+off:], att[:cnt], cnt)
+			copy(j.out[i*d+off:i*d+off+hd], acc)
 		}
-	})
+	}
 }
 
 // layaScores runs the decision head over e.x (n rows, the encoder's output)
@@ -419,18 +399,13 @@ func (e *Embedder) layaScores(out []float32, n int, qt jlm.QuestionType, markers
 	if e.violation == "type-row-0" {
 		row = mb.types[:d]
 	}
-	e.jit.Parallel(n, 1, func(lo, hi int) {
-		for r := lo; r < hi; r++ {
-			nn.Axpy32JIT(x[r*d:(r+1)*d], row, 1)
-		}
-	})
+	e.addBiasRows(x, row, n)
 	heads := mb.headHeads
 	if e.violation == "encoder-heads" {
 		heads = c.NHead
 	}
 	hd := d / heads
 	scale := float32(1 / math.Sqrt(float64(hd)))
-	all := func(int) (int, int) { return 0, n }
 	nm := len(markers)
 	// The marker rows the scorer reads are x's first nm once the last block
 	// has run: the host's last block runs them alone, and a device's runs
@@ -446,7 +421,7 @@ func (e *Embedder) layaScores(out []float32, n int, qt jlm.QuestionType, markers
 			gather = bi == len(mb.head)-1
 			continue
 		}
-		if err := m.mbPageIn(len(mb.blocks) + bi); err != nil {
+		if err := m.encBlockPageIn(len(mb.blocks) + bi); err != nil {
 			return err
 		}
 		b := &mb.head[bi]
@@ -478,7 +453,7 @@ func (e *Embedder) layaScores(out []float32, n int, qt jlm.QuestionType, markers
 		if heads != mb.headHeads {
 			set = e.attnEnc
 		}
-		e.attend(set, h, q, k, v, rows, heads, hd, scale, all)
+		e.attend(set, h, q, k, v, rows, n, n, heads, hd, scale)
 		t := e.t[:rows*d]
 		if err := e.mm(t, b.wo, h, rows); err != nil {
 			return err
@@ -492,7 +467,7 @@ func (e *Embedder) layaScores(out []float32, n int, qt jlm.QuestionType, markers
 			return err
 		}
 		e.addBiasRows(ff, b.bUp, rows)
-		e.parallelVec(len(ff), func(lo, hi int) { nn.Act32JIT(ff[lo:hi], nn.ActReLU) })
+		e.actRows(ff, nn.ActReLU)
 		if err := e.mm(t, b.down, ff, rows); err != nil {
 			return err
 		}
@@ -512,7 +487,7 @@ func (e *Embedder) layaScores(out []float32, n int, qt jlm.QuestionType, markers
 		return err
 	}
 	e.addBiasRows(t, mb.scB, nm)
-	e.parallelVec(len(t), func(lo, hi int) { nn.Act32JIT(t[lo:hi], e.gelu()) })
+	e.actRows(t, e.gelu())
 	if err := e.mm(out[:nm], mb.scOut, t, nm); err != nil {
 		return err
 	}

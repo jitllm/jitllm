@@ -323,7 +323,7 @@ func (r *rowsOut) snapRow(s *State, li, slot, row int) {
 		return
 	}
 	g := s.dg
-	nc, ns := g.convStateLen(), g.deltaStateLen()
+	nc, ns := g.convStateLen(), g.stateStride()
 	sn := &r.snap[row]
 	copy(sn.conv[li], s.rconv[li][slot*nc:(slot+1)*nc])
 	copy(sn.state[li], s.rstate[li][slot*ns:(slot+1)*ns])
@@ -340,7 +340,7 @@ func (s *State) newRecSnap() recSnap {
 	for li := range s.rconv {
 		if s.rconv[li] != nil {
 			sn.conv[li] = make([]float32, g.convStateLen())
-			sn.state[li] = make([]float32, g.deltaStateLen())
+			sn.state[li] = make([]float32, g.stateStride())
 		}
 	}
 	return sn
@@ -355,7 +355,7 @@ func (s *State) loadRec(sn *recSnap) { s.copyRec(sn, false) }
 
 func (s *State) copyRec(sn *recSnap, save bool) {
 	g := s.dg
-	nc, ns := g.convStateLen(), g.deltaStateLen()
+	nc, ns := g.convStateLen(), g.stateStride()
 	for li := range s.rconv {
 		if s.rconv[li] == nil || !s.c.LayerKind(li).Recurrent() || s.devAt(li) {
 			continue

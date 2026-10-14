@@ -18,7 +18,7 @@ func qwen35Of(f *meta.File, name string, c *jlm.Config) error {
 	// reorders them from HuggingFace's grouped order so its graph can
 	// ggml_repeat the keys. With one value head per key head the permutation is
 	// the identity, so the flag is set only where it changes the pairing.
-	if (name == "qwen35" || name == "qwen35moe") && c.SSM.Groups > 0 && c.SSM.NHeadV > c.SSM.Groups {
+	if (name == "qwen35" || name == "qwen35moe" || name == "qwen4exp" || name == "clef") && c.SSM.Groups > 0 && c.SSM.NHeadV > c.SSM.Groups {
 		if c.SSM.NHeadV%c.SSM.Groups != 0 {
 			return fmt.Errorf("%d value heads over %d key heads is not a whole number per key head",
 				c.SSM.NHeadV, c.SSM.Groups)

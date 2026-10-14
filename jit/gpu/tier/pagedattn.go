@@ -81,6 +81,8 @@ type pagedScratch struct {
 	idx *idxScratch
 	// msa is MiniMax-M3's block selection (msa.go), nil without one.
 	msa *msaScratch
+	// qsa is a QSA block's selection (qsa.go), nil elsewhere.
+	qsa *qsaScratch
 	// stream is what st points at when set, and streamD each descriptor set's
 	// words for every pass, written with the call's staged writes
 	// (pagedStream.writes): both reused call to call, so a decode token that
@@ -179,7 +181,8 @@ func (g *devTier) initPagedScratch(bs *blockScratch) error {
 	if p.DS4 != nil {
 		return g.initPagedDS4(bs)
 	}
-	if partialRotary(p) || p.NoPEGlobal || p.NoPosEnc || p.NRot == 0 || p.RopeSplit {
+	// A QSA row is copied whole, its raw key included, before k's heads turn.
+	if partialRotary(p) || p.NoPEGlobal || p.NoPosEnc || p.NRot == 0 || p.RopeSplit || p.QSA() {
 		k, err := kernels.PagedCopyRowsT(kvDim, rows, P)
 		if err := comp(&pg.copyK, k, err); err != nil {
 			return err
@@ -195,6 +198,10 @@ func (g *devTier) initPagedScratch(bs *blockScratch) error {
 	// XD-RoPE's k reaches the pages through copyK, turned and normed first.
 	if p.NRot > 0 && !p.NoPosEnc && !p.RopeSplit {
 		k, err := kernels.PagedRoPERowsT(kHeads, p.HeadDim, p.NRot, p.RopeNeox, rows, P)
+		if p.QSA() {
+			// k's heads turn in a row that carries the raw key after them.
+			k, err = kernels.PagedRoPERowsTIn(kHeads, p.HeadDim, kvDim, p.NRot, p.RopeNeox, rows, P)
+		}
 		if err := comp(&pg.ropeK, k, err); err != nil {
 			return err
 		}
@@ -203,7 +210,7 @@ func (g *devTier) initPagedScratch(bs *blockScratch) error {
 	if err := comp(&pg.copyV, k, err); err != nil {
 		return err
 	}
-	if pg.ropeK != nil && pg.copyK == nil && !p.MSA() && vw == kvDim && !p.QKNormPost && !g.NoFuse {
+	if pg.ropeK != nil && pg.copyK == nil && !p.MSA() && !p.QSA() && vw == kvDim && !p.QKNormPost && !g.NoFuse {
 		// Built beside the three it fuses, which stay: the per-op path is
 		// the reference and the A/B arm, and a layer the fused form does not
 		// fit (an unrotated one, a KV-sharing one) still takes them.
@@ -244,10 +251,15 @@ func (g *devTier) initPagedScratch(bs *blockScratch) error {
 			return err
 		}
 	}
+	if p.QSA() {
+		if err := g.initQSA(bs, rows, P, comp); err != nil {
+			return err
+		}
+	}
 	if _, err := g.pagedPlanFor(bs, scoreGrain); err != nil {
 		return err
 	}
-	if rows > 1 && !p.MSA() {
+	if rows > 1 && !p.MSA() && !p.QSA() {
 		return g.initPagedPrefill(bs)
 	}
 	return nil
@@ -351,6 +363,7 @@ func freePaged(pg *pagedScratch) {
 	}
 	pg.pf.free()
 	pg.msa.free()
+	pg.qsa.free()
 	pg.idx.free()
 	for _, ss := range pg.streams {
 		ss.close()

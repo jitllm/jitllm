@@ -210,6 +210,30 @@ func (v Value) Int32s() ([]int32, error) {
 	return out, nil
 }
 
+// Uint64s decodes an array of any integer width as uint64, refusing a
+// negative element: the hash constants a converter carries are unsigned.
+func (v Value) Uint64s() ([]uint64, error) {
+	if v.Type != Array {
+		return nil, fmt.Errorf("meta: value is %v, not an array", v.Type)
+	}
+	w, fixed := v.Elem.width()
+	if !fixed || v.Elem == Float32 || v.Elem == Float64 || v.Elem == Bool {
+		return nil, fmt.Errorf("meta: array of %v, not of integers", v.Elem)
+	}
+	if uint64(len(v.Raw)) < v.N*w {
+		return nil, fmt.Errorf("meta: array of %d needs %d bytes, have %d", v.N, v.N*w, len(v.Raw))
+	}
+	out := make([]uint64, v.N)
+	for i := range out {
+		x, _ := Value{Type: v.Elem, Raw: v.Raw[uint64(i)*w : uint64(i+1)*w]}.Int()
+		if x < 0 && v.Elem != Uint64 {
+			return nil, fmt.Errorf("meta: element %d is %d", i, x)
+		}
+		out[i] = uint64(x)
+	}
+	return out, nil
+}
+
 // Short renders a value for human inspection: scalars in full, arrays as their
 // type and length plus the first few elements.
 //

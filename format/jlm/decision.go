@@ -27,12 +27,20 @@ const (
 	// encoder and Config.DecisionBlocks head blocks, the question's type
 	// embedding added to every row before them (convaiinnovations/laya).
 	DecisionLaya
+	// DecisionClef reads Clef's joint schema head over the backbone's final
+	// hidden states: every question and option of a request mean-pooled over
+	// its span of one prompt, Config.DecisionRouting routing blocks and
+	// Config.DecisionBlocks joint blocks, and one logit per option of every
+	// question in one pass (Cloudflare/clef-flash; decisionroles.go has its
+	// tensors).
+	DecisionClef
 )
 
 var decisionNames = map[DecisionKind]string{
 	DecisionLev:    "lev",
 	DecisionLFM2D1: "lfm2-d1",
 	DecisionLaya:   "laya",
+	DecisionClef:   "clef",
 }
 
 // String is the name llama.cpp writes as <arch>.decision.type.

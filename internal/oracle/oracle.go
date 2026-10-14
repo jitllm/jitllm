@@ -160,6 +160,16 @@ func SqrtSoftplus(x float64) float64 {
 	return math.Sqrt(math.Log1p(math.Exp(x)))
 }
 
+// SqrtSigmoid is Qwen3.8-Flash-Next's n-gram gate,
+// sigmoid(sign(x)*sqrt(max(|x|, 1e-6))), as its reference computes it.
+func SqrtSigmoid(x float64) float64 {
+	m := math.Sqrt(math.Max(math.Abs(x), 1e-6))
+	if x < 0 {
+		m = -m
+	}
+	return 1 / (1 + math.Exp(-m))
+}
+
 // GELUErf is GELU as transformers' GELUActivation and torch compute it,
 // 0.5x(1 + erf(x/sqrt 2)), with Go's erf.
 func GELUErf(x float64) float64 { return 0.5 * x * (1 + math.Erf(x/math.Sqrt2)) }

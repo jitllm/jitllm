@@ -78,7 +78,9 @@ func (p *Pool) Moved(tag uint64) bool {
 // Fuse opens a fused region on p and reports whether it did. It does not when
 // p is nil, stopped, NUMA-aware (a phase drains flat, and DoNodes' placement
 // is what such a pool is for), already fused, or a view whose cores another
-// user may want: a fused region holds the crew for its whole length, and a
+// user may want -- another view on its crew, or another caller's view on a
+// crew it takes turns with; the caller's own view beside it (SharedBeside)
+// is not one: a fused region holds the crew for its whole length, and a
 // caller holding it while waiting on a lock another session's region holds
 // would never get it back. Nor with region labels on: a profile attributes
 // generated code by the region's pprof label, which a phase does not carry, so
@@ -100,7 +102,7 @@ func (p *Pool) FuseWith(l Lookahead) bool {
 		// The crew's only user, under the registry's lock: a view opened
 		// after this point waits for the crew's turn like any region does.
 		crews.mu.Lock()
-		alone := c.views == 1 && c.mu.crews == 1
+		alone := c.views == 1 && c.mu.users == 1
 		crews.mu.Unlock()
 		if !alone {
 			return false

@@ -41,6 +41,15 @@ func projectorRole(p jlm.Projector, name string) (jlm.Role, bool) {
 		}[name]
 		return r, ok
 	}
+	if p == jlm.ProjLFM2 {
+		// LFM2-VL's optional LayerNorm over the unshuffled row: InternVL's
+		// norm, in the position InternVL's has.
+		r, ok := map[string]jlm.Role{
+			"mm.input_norm.weight": jlm.RoleVProjNorm,
+			"mm.input_norm.bias":   jlm.RoleVProjNormBias,
+		}[name]
+		return r, ok
+	}
 	if p != jlm.ProjInternVL {
 		return 0, false
 	}

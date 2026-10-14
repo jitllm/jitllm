@@ -24,8 +24,10 @@ type turn struct {
 	state atomic.Int32
 	mu    sync.Mutex // guards q and every move into or out of turnQueued
 	q     []chan struct{}
-	// crews is how many crews take turns on this lock, under crews.mu.
-	crews int
+	// users is how many callers hold views on the crews that take turns on
+	// this lock, under crews.mu: a view opened beside another of the same
+	// caller's (SharedBeside) is not one more.
+	users int
 }
 
 // onTurnQueue, set only by a test, is told under t.mu each time a caller

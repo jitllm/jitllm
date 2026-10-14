@@ -9315,3 +9315,244 @@ layer attended at the wrong width (layer 0 off from its first block); the
 encoder and the head now each hold the set for their own geometry
 (`JIT.AttnSetFor`). The real checkpoint could not have shown it: 1024 wide at
 16 heads, both widths are 64.
+
+## LFM2-VL and d1's pictures
+
+d1-3B (LiquidAI/d1-3B, its GGUF and `mmproj-d1-3B-F16.gguf`) reads
+pictures: llama.cpp's projector type `lfm2`, `jlm.ProjLFM2`. The tower is
+Phi-4-reasoning-vision's SigLIP2 NaFlex with the post-LayerNorm kept
+(transformers' `last_hidden_state`; all 27 blocks, `vision_feature_layer`
+absent), the projector InternVL's shape: the 2x2 unshuffle, a LayerNorm
+when the file has one (d1's has none), linear, GELU, linear.
+
+What the file does not state is the class's: Lfm2VlImageProcessor's 64 to
+256 tokens a piece, 2 to 10 tiles of 512 pixels past twice the budget, a
+thumbnail at the smart-resized size. The converter writes them into the
+container (`Vision.MinPixels/MaxPixels/MinTiles/MaxTiles` and a new tail,
+`TileSize`, `Tolerance`), and the file's `image_resize_algo` as
+`FlagVisionBicubic` (the class default is bilinear; d1's file says bicubic).
+The tile choice is InternVL's `gridOf` unchanged; the resize is torchvision's
+8-bit one (`rgb8.resize`), which differs from Pillow's in a few dozen samples
+a picture (its int16 weights against Pillow's 22-bit ones).
+
+Two places jitllm follows the model's own code and not llama.cpp
+(RULE 7m): the projector's GELU is transformers' erf form (llama.cpp's lfm2
+graph runs the tanh form; d1-omni's runs erf), and a picture over 1024x1024
+is first resized to that many pixels with Pillow BICUBIC, as d1's
+`runner.cap_pixels` does before its processor; llama.cpp hands mtmd the
+picture as it came. The GELU form is under the int8 activations' noise
+(projector alone, 2.443e-3 erf against 2.443e-3 tanh on quad-and-disc).
+
+A decision request carries pictures as llama.cpp's server reads them
+(`model.DecisionMedia`): `files` then `images` data URLs, then every
+`image_url` part of a chat-message state, taken out of its message; at most
+8; `videos` refused. The systemone template writes one marker per picture
+and each becomes its LFM2 run (`<|image_start|>`, `<|img_row_R_col_C|>` and
+the tile, `<|img_thumbnail|>` and the thumbnail, `<|image_end|>`). Every
+question re-prefills the picture's rows from the model's image cache; the
+tower runs once per request.
+
+What the gates measured (laptop i7-12700H, AVX2 host, RTX 3050 Ti 4 GB under
+CUDA and Vulkan; M4 mini, arm64 host and Metal):
+
+| gate | result |
+|---|---|
+| `TestLFM2LayoutMatchesProcessor` | 21 sizes, 11 tiled, every plan the processor's |
+| `TestLFM2RealMatchesTransformers`, pixels | 0 differing values on 4 pictures (1, 1, 5 and 4 pieces) |
+| tower rows against transformers f32 | NMSE 4.4e-5 to 1.3e-4 |
+| projector alone on the reference rows | 2.4e-3 to 5.9e-3; transformers' own projector with int8 inputs reads 2.7e-3 against itself on the photo |
+| violations | bilinear resize moves 2e5-2e6 samples; no thumbnail fails by shape; transposed table NMSE 0.33-1.12; transposed unshuffle 0.10-0.37 |
+| tower, all 27 blocks on CUDA / Vulkan / Metal | 1.6e-3 / 6.6e-4 to 1.9e-3 / 1.7e-3 to 3.7e-3 against the host |
+| `TestD1DecidesOverPicturesAsItsReference` (d1's runner.py, f32, 8 requests of 3 questions) | worst probability 0.0263 (laptop host), 0.0183 (M4 host), 0.0160 (Metal, every text block); another picture's rows read 0.97 |
+| `TestD1PicturesMatchLlamaCpp` (llama-server, same GGUF and mmproj) | positions 978 and 702, llama.cpp's exactly; worst probability 0.0083 and 0.0091 |
+| `TestWarmImageEncodeDoesNotAllocate/lfm2` | 0 allocations |
+| `TestEveryTowerRunsSSE/lfm2` | pixels bit-identical, encode NMSE 9.6e-4 against AVX2 |
+
+Not yet run: the decision gate with every text block on a card (the 4 GB
+laptop card holds 7 of 30 under CUDA and 2 under Vulkan beside the tower;
+the V100s were busy with another agent's measurement), and a randomised
+LFM2-VL fixture through llama.cpp's own converter (the gates above run the
+real checkpoint).
+### Clef-Flash
+
+Clef-Flash is qwen35 with a joint schema head (`jlm.DecisionClef`): one prompt
+per request, every row's final residual kept through the prefill
+(`State.rowTap`, under an embedding mode that pools nothing so no output
+projection runs), and the head over them -- on the host's generated kernels,
+or on the device holding the output projection as a program of
+`kernels.DH*` launches (`jit/gpu/tier/dechead.go`). The random fixture
+(`scripts/clefgold.py fixture`: the release's classes, every parameter and
+persistent buffer random) is held to Clef's own code to 1.7e-6 on a logit,
+and llama.cpp agrees with both to the reference's rounding.
+
+The one bug on the way was in the fixture, not the engine: randomising
+`named_buffers()` included the rotary's `inv_freq`, which is not persistent,
+so the in-memory model the first goldens came from was one no checkpoint can
+hold (0.16 of a logit off, every row but the first matching the reloaded
+backbone to 2e-5). The goldens now come from the checkpoint as written, read
+back as the release is read, and only persistent tensors are randomised.
+
+## qwen4exp: Qwen3.8-Flash-Next (plan, before the code)
+
+The graph, read off llama.cpp's `src/models/qwen4exp.cpp` and its converter
+(`conversion/qwen4exp.py`), transformers' `modeling_qwen4_exp.py` and the
+header of unsloth's UD-Q4_K_XL GGUF, before anything is written. The
+`llama-eval-callback` transcription of a real file replaces this reading once
+a file is converted (RULE 7: read the artefact).
+
+48 blocks, every fourth full attention, the rest qwen35's gated delta rule
+(16 key heads, 48 value heads of 128, conv 4). Per block:
+
+    [PLE, block 2 only]  res += gated + silu(dilated_conv(norm_conv(gated)))
+    in  = HC mix(res)            -> attention or delta rule
+    res = res + 2*sigmoid(inject/H) * out          (each stream its own weight)
+    in  = HC mix(res)            -> 512-expert softmax top-10 renormalised,
+                                    one sigmoid-gated shared expert (640 wide)
+    res = res + 2*sigmoid(inject/H) * out
+
+    HC mix:  xn   = per-stream RMSNorm of the H=4 streams (gamma folded 1+w)
+             gate = sigmoid(up(silu(down(xn)/H)))     low rank 320
+             in   = mean over streams of gate*xn
+    head:    the mix with no inject, then output (untied); no output norm.
+
+- **Delta rule**: qwen35's, but the gated norm's gate is sigmoid, not silu
+  (`output_gate_type`). Value heads grouped as qwen35 (the tiled pairing,
+  `FlagDeltaKeyTiled`, is a question the fixture answers, not an assumption).
+- **Attention**: qwen3next's gated double-width query, per-head q/k norm,
+  interleaved M-RoPE on a quarter of the 256-wide head (sections 11/11/10),
+  24 heads over 2 kv heads; plus QSA: a 4-head indexer of 128 whose raw key
+  per position is cached; per complete block of 4 visible positions the mean
+  key, RMSNormed and rotated at the block's first position; score =
+  sum_h relu(q_h . k_block); the top budget/4 blocks plus the incomplete tail
+  are the only keys the query attends. Under budget+3 visible positions
+  (2051 on the real file) every key is selected and QSA is dense attention.
+- **PLE**: one layer. 16 heads (2-grams and 3-grams, 8 each) hash the token
+  and its two predecessors (`(t0*m0)^(t1*m1)^(t2*m2) mod p_h + off_h`, an EOS
+  in the window or the sequence start reading as EOS), gather 160-wide rows of
+  a 320M-row table into 2560, then key (per stream) and value projections,
+  a signed-sqrt sigmoid gate per stream, and a depthwise causal conv of
+  kernel 4 dilated by 3 over the normed gated value, whose 9-position history
+  is per-sequence recurrent state.
+
+Reuse map:
+
+| feature | jitllm machinery | new |
+|---|---|---|
+| delta rule, conv, shared expert, gated query, M-RoPE | qwen35 / qwen3next (`nn.IMRopeRuns`) | the sigmoid gated-norm gate: a flag and a gate kind on every tier |
+| four streams, stream-major residual, seam/paging/step | deepseek4 and gemma3n (`Config.streamHead`, `rowStreams`) | the mixer is not V4's Sinkhorn: a low-rank sigmoid gate and a mean, and a 2*sigmoid placement with the identity comb -- a kernel per tier beside `cpu.EmitHCMix` |
+| QSA indexer and selection | minimax-m3's block selection (indexer key as one more cached head) and deepseek32/V4's relu-sum scorer | mean-pooled, normed, rotated block keys; the tail rule |
+| per-layer table | gemma3n/gemma4's per-layer embedding (`pleTok`, `State.spanTok`) | the n-gram hash (int64, a generated kernel or setup integer arithmetic -- to be settled against RULE 8 with the user), the token history as recurrent state, the dilated conv state |
+| the 29 GB table | the pager (O_DIRECT, static pages) | a row-granular page array: a token reads 16 rows of 90 bytes, so the table is pages of rows read on demand under the budget, never resident whole and never mapped |
+| vision | qwen3vl_merger (the tower is Qwen3-VL's, per the converter) | the image token id stands in for picture rows in the hash |
+
+Arch code: `ArchQwen4Exp = 51`, the next flagship.
+
+Quant: UD-Q4_K_XL is not K-quant only. Per tensor: experts Q4_K/Q5_K
+(gate, up) and Q5_1/Q8_0 (down), attention and projections Q8_0, the
+indexer BF16, norms and router F32, and `per_layer_token_embd` IQ4_NL
+(160 x 320,001,536, 28.8 GB). IQ4_NL is outside `quant.Dequantable`; only a
+row gather reads it, so the work is the oracle dequantizer, then a gather
+kernel per tier. The other route, repacking IQ4_NL to Q8_0 at conversion
+(exact: IQ4_NL's values are a scale times an int8 table), costs 25 GB more.
+Strata's IQ2_XS/IQ3_XXS/IQ3_S/Q2_0 files are a follow-up, each oracle first.
+
+References that part (RULE 7m), to be decided as the code meets them:
+the indexer's 1/sqrt(head_dim) (transformers scales, llama.cpp does not; a
+positive scale on a relu sum selects the same blocks), the PLE EOS id
+(transformers takes the first of a list, llama.cpp's converter the last; the
+release states one), and MTP (both drop it; unsloth publishes it as a
+separate GGUF).
+
+## qwen4exp: what was built, and what the gates measured
+
+The plan above held, with these settlements.
+
+**The n-gram hash is generated code on every tier** (RULE 8): uint64
+multiply, xor and modulo per head, the reset at an end-of-sequence id, and
+the predecessors moved on (`cpu.EmitNGramHash`, AVX2/SSE/arm64; the only
+setup integer work is the constants). The predecessors are recurrent state
+the host keeps whichever side runs the block: the host hashes and reads the
+table rows, a device gets the gathered rows (`nn.NGramDevice`).
+
+**IQ4_NL is a native type** (`quant.IQ4_NL`, container v29): the oracle
+decoder first, then a row-gather kernel per tier. The 28.8 GB table is a row
+table placed after every page array and read a row at a time with O_DIRECT
+(`jlm.File.ReadRow`); its page size once entered the per-block page sizing
+and laid a 1.5 TB file out, which `TestRowTableIsReadARowAtATime` now holds.
+
+**Every linear block's state slot is [delta rule | tail]**: the n-gram
+block's tail is its predecessors and the dilated convolution's nine
+positions of every stream, and every linear block carries the room so a
+device keeps one slot width (`nn.RecurrentPlan.TailLen`; the delta kernels
+take the stride). It costs the tail on the blocks that leave it unread:
+on the real file 9 x 4 x 2560 floats and two words a sequence a block.
+
+**The fixture's hyper-connection rank is 32**, not 16: a device quantizes
+activations in blocks of 32, and the real rank is 320. The golden was
+regenerated from transformers, not edited.
+
+**The real file's graph**, from `llama-eval-callback` on cato (blocks 0, 2
+and 3 of UD-Q4_K_XL at llama.cpp de7fa0a, `/mnt/models/qwen4exp/evalcb.log`):
+the hyper-connection read is `hc_norm` (2560 x 4) -> `hc_attn_up` (320 x
+10240 after the down) -> `DSV4_HC_PRE`; the placement `hc_attn_inject`
+(10240 -> 4) -> `DSV4_HC_POST`; the delta rule's gate `SIGMOID(z)` times the
+gated norm; 512 experts of 640 by softmax, top-10, renormalised over a
+clamped sum; one 640-wide shared expert behind a sigmoid; block 1 (one-based
+2) carries the PLE (`ple_gate`, `ple_gated_value`, its conv state). Each is
+the transcription the host runs.
+
+Measured, the fixture against transformers' own class:
+
+| arm | worst logit NMSE |
+| --- | --- |
+| host decode, prefill at every length, batch (amd64 AVX2) | 2.4e-10 |
+| host on an SSE4.2 Atom C3558, natively | within the golden's bound |
+| host arm64 (M4) | within the golden's bound |
+| every block and the head on CUDA (RTX 3050 Ti), decode / prefill | 2.1e-10 / 9.5e-12 |
+| the same on Vulkan (RTX 3050 Ti) | 3.3e-10 / 9.8e-12 |
+| the same on Metal (M4) | 3.1e-11 / 7.9e-12 |
+
+Thirteen violations each move the logits 0.06-6.5 NMSE on the host and on
+every device (`TestQwen4ExpFeaturesAreLoadBearing`,
+`TestQwen4ExpOnEveryDevice`). The real checkpoint matched llama.cpp
+teacher-forced 20 of 20 on a short prompt (QSA is dense there).
+
+**Four device bugs the end-to-end gate found and the kernel gates could
+not**, each green at the kernel level (`backend.TestQ4EKernelsMatchTheLoops`)
+and wrong in the tier's wiring (RULE 11c):
+
+- the placement writes every stream into `bs.x2`, which held one stream
+  unless the model was DeepSeek V4 or Kimi-K3: stream 2 landed on whatever
+  followed it. Bisected by reading the scratch after one block: three
+  streams agreed at 1e-13 and one did not.
+- an attention block read `bs.x` where its hyper-connection's mix belonged.
+- QSA's row is k's heads and the raw key, copied whole; the rotary writer
+  took the row's width from the heads it turns and wrote the next heads
+  into the key's place (`kernels.PagedRoPERowsTIn` takes the row's width).
+- the head reads its mix with no norm; the device allocated a zero-length
+  norm and declined it.
+
+**QSA on the device** is MiniMax-M3's select, compact and gather under a
+forced tail (the tail block at end/blk, empty on a block boundary) and a
+scorer of its own (`kernels.QSAScores`): each complete block's raw keys
+pooled, normed and turned at the block's first position, scored by the
+relu sum. A picture moves the positions after it (M-RoPE's marks): the
+scorer composes the block start's turn with the mark's, both from the
+device's rotary table (`TestQwen4ExpQSATurnsByTheMarks`, which fails at
+NMSE 0.45 when the marks are not handed over). The host had the same
+question wrong: `qsaMask` turned another session's blocks by this
+State's slot 0.
+
+**Gates run for it**: the five principles' lists (paging, relocation
+between devices, KV pages with the layer, faulting a batch's blocks in,
+zero-allocation decode on the host and every device), the batch seam
+(`TestBatchSeamMovesCarryEveryRowQwen4Exp`), the prefix cache
+(`TestPrefixCacheRestoresQwen4Exp`: the restored state slot carries the
+hash's predecessors and the convolution's history; clearing the tail on
+restore moves the continuation by 0.30 NMSE), and `TestEveryModelRunsSSE`.
+A q8_0 KV cache is refused by name: QSA pools raw cached keys, which its
+references hold at f32.
+
+**Found on the M4, not this model's**: `TestKVPagesRelocateWithTheLayer`
+opens no fused run there (0 of 624 asked for, and the same for
+synth-kimik3), so its fused-run check is red on arm64 whatever the model.

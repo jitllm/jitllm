@@ -515,6 +515,10 @@ var imageMarkersOf = map[string]imageMarkers{
 	// the rows there, with no markers; mtmd's PHI4 keeps the boundary text
 	// empty too.
 	jlm.ProjPhi4.String(): {placeholder: "<image>"},
+	// LFM2-VL: the template writes "<image>", and Lfm2VlProcessor expands it
+	// to the picture's tiles and thumbnail in their markers, which LFM2Spans
+	// lays out (ChatSpansParts), so there is no single pre and post.
+	jlm.ProjLFM2.String(): {placeholder: "<image>"},
 	jlm.ProjGemma4V.String(): {placeholder: "<|image|>",
 		pre: []string{"<|image>"}, post: []string{"<image|>"}, bidirSWA: true},
 }

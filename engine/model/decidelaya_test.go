@@ -6,12 +6,14 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/tok/jinja"
 )
 
 // Laya against its own code (rl_common.py, rl_agent_api.py), the goldens
@@ -338,4 +340,11 @@ func m0Blocks(t *testing.T) int {
 	m := openDecision(t, "laya/fixture/laya-fixture.gguf", jlm.DecisionLaya)
 	defer m.Close()
 	return m.container.NPages()
+}
+
+// layaRun is one question's scores as the gates keep them: a copy of the
+// Decider's scratch, which the next question overwrites.
+func (d *Decider) layaRun(state jinja.Value, q *DecisionQuestion) ([]float32, error) {
+	s, err := d.run(state, q, 0)
+	return slices.Clone(s), err
 }

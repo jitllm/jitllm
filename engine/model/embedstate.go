@@ -31,6 +31,11 @@ type embedMode struct {
 // prefill chunk, after the last block and before the chunk's residual is
 // dropped, so a causal model longer than one chunk pools every row too.
 func (e *embedMode) collect(s *State, base, n int) {
+	// A mode with no vector pools nothing: a decision head (Clef's) takes
+	// every row through the State's rowTap instead.
+	if e.out == nil {
+		return
+	}
 	c, m := s.c, s.m
 	d := c.NEmbd
 	norm := func(i int) []float32 {

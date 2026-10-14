@@ -25,6 +25,8 @@ const (
 	ActSitu = kernels.ActSitu
 	// ActGELUErf is GELU with erf, transformers' and torch's default.
 	ActGELUErf = kernels.ActGELUErf
+	// ActSqrtSigmoid is Qwen3.8-Flash-Next's n-gram gate.
+	ActSqrtSigmoid = kernels.ActSqrtSigmoid
 )
 
 // Ungated and Gated are kernels.Ungated and kernels.Gated.

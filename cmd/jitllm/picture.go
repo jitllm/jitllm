@@ -19,6 +19,9 @@ type picture struct {
 	// tiles is a Llama 4 picture's canvas, rows and columns of tiles: its
 	// pieces are the tiles and the global one (Tower.Llama4Pieces).
 	tiles *[2]int
+	// lfm2 is an LFM2-VL picture's grid of tiles, columns and rows: its pieces
+	// are the tiles and the thumbnail, or the one piece (Tower.LFM2Pieces).
+	lfm2 *[2]int
 }
 
 // openPicture lays out the picture at path before the State exists, which
@@ -43,6 +46,18 @@ func openPicture(tw *model.Tower, path string) (*picture, error) {
 			return nil, err
 		}
 		p.tiles, p.pieces = &[2]int{rows, cols}, pieces
+		return p, nil
+	}
+	if tw.Cfg.Kind == jlm.ProjLFM2 {
+		img, _, err := image.Decode(f)
+		if err != nil {
+			return nil, err
+		}
+		cols, rows, pieces, err := tw.LFM2Pieces(img)
+		if err != nil {
+			return nil, err
+		}
+		p.lfm2, p.pieces = &[2]int{cols, rows}, pieces
 		return p, nil
 	}
 	if tw.Cfg.PosBuckets > 0 {
@@ -78,7 +93,7 @@ func openPicture(tw *model.Tower, path string) (*picture, error) {
 // preprocess fills a picture sized from its header with its pixels and its
 // name, on st's vision segment.
 func (p *picture) preprocess(st *model.State) error {
-	if p.lay != nil || p.tiles != nil {
+	if p.lay != nil || p.tiles != nil || p.lfm2 != nil {
 		return nil
 	}
 	f, err := os.Open(p.path)

@@ -63,8 +63,12 @@ func decisionOf(f *meta.File, c *jlm.Config) error {
 		if c.DecisionHeads == 0 || c.NEmbd%c.DecisionHeads != 0 {
 			return fmt.Errorf("%d decision heads do not divide a %d-wide residual", c.DecisionHeads, c.NEmbd)
 		}
+	} else if kind == jlm.DecisionClef {
+		if err := clefOf(f, c); err != nil {
+			return err
+		}
 	} else if c.DecisionBlocks != 0 {
-		return fmt.Errorf("decision type %q with %d head blocks: only laya's head is implemented: %w", name, c.DecisionBlocks, ErrNotImplemented)
+		return fmt.Errorf("decision type %q with %d head blocks: only laya's and clef's heads are implemented: %w", name, c.DecisionBlocks, ErrNotImplemented)
 	}
 
 	prefix := f.Arch() + ".decision.temperature."

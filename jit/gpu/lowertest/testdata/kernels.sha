@@ -20,6 +20,16 @@ conv1dshift-runs 4bc085007ec7aff1
 copyat e7ee186a84805c65
 copyslots d548b1a45032582d
 deltagate f0a6832afabf7080
+dh/combine f7ef1411c9a99ac8
+dh/features 6ed6cdaa2487c585
+dh/gatheradd 2e8ea4f46d2c46fb
+dh/l2 b9ebb28de33870ae
+dh/layernorm e1415e1d27c8c133
+dh/matab-heads 00dc0e01fbcb2789
+dh/matabt-bias 751742ae09e352e6
+dh/matabt-heads e384efbaaa112bd3
+dh/rmsnorm 77f365cc69504c9f
+dh/rowdot 1a83064f9149d548
 ds4/apeadd fd45a792568d83dc
 ds4/desc-csa 9740060f2873a6ba
 ds4/entdesc cf0fb335ac5fba5d

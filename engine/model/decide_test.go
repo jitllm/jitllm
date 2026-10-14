@@ -67,6 +67,11 @@ var decisionCases = []struct {
 	{"d1-3B", "d1/d1-3B-Q8_0.gguf", "d1-3B-Q8_0", jlm.DecisionLFM2D1, false, 0.03},
 	{"lev", "lev/lev-Q8_0.gguf", "lev-Q8_0", jlm.DecisionLev, false, 0.10},
 	{"laya", "laya/gguf/Laya-BF16.gguf", "Laya-BF16", jlm.DecisionLaya, true, 0.01},
+	{"clef", "clef/Clef-Flash-Q8_0.gguf", "Clef-Flash-Q8_0", jlm.DecisionClef, true, 0.03},
+	// clefgold.py's random fixture: f32, so llama.cpp, Clef's own code and
+	// jitllm agree to the reference's rounding of its answers (6.5e-5); it
+	// is the Clef every gate can run on a card the release does not fit.
+	{"clef-fixture", "clef/fixture/clef-fixture.gguf", "clef-fixture", jlm.DecisionClef, true, 0.001},
 }
 
 // decisionRequests are the request bodies in testdata/decision: an object
@@ -156,7 +161,7 @@ func TestDecisionMatchesLlamaCpp(t *testing.T) {
 						if d.st != nil && d.st.KVIsF16() != arm.f16 {
 							t.Fatalf("the kv cache is f16=%v, the arm asked for %v", d.st.KVIsF16(), arm.f16)
 						}
-						ans, err := d.Decide(state, qs)
+						ans, err := d.Decide(state, qs, nil)
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -209,7 +214,7 @@ func TestDecisionReadoutIsLoadBearing(t *testing.T) {
 			}
 			defer d.Close()
 			d.violation = c.violation
-			ans, err := d.Decide(state, qs)
+			ans, err := d.Decide(state, qs, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

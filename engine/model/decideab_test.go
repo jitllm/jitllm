@@ -193,7 +193,7 @@ func (a *abArm) sample(t *testing.T, text string) time.Duration {
 	for _, req := range decisionRequests {
 		state, qs := decisionRequest(t, filepath.Join("testdata", "decision", req+".json"))
 		t0 := time.Now()
-		if _, err := a.d.Decide(state, qs); err != nil {
+		if _, err := a.d.Decide(state, qs, nil); err != nil {
 			t.Fatal(err)
 		}
 		total += time.Since(t0)

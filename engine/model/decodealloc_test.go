@@ -517,7 +517,10 @@ func countAllocs(f func()) windowAllocs {
 				strings.HasPrefix(fr.Function, "sync.(*poolChain)."),
 				fr.Function == "runtime.acquireSudog",
 				fr.Function == "runtime.(*timers).addHeap",
-				fr.Function == "runtime.allocm":
+				fr.Function == "runtime.allocm",
+				// A type assertion's per-site cache, grown the first time a
+				// concrete type reaches the site.
+				fr.Function == "runtime.buildTypeAssertCache":
 				cache = true
 			case strings.HasSuffix(fr.Function, ".memRecords"):
 				ours = true

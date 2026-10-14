@@ -105,7 +105,7 @@ func auditRun(t *testing.T, m *Model) {
 			t.Fatalf("NewDecider: %v", err)
 		}
 		state, qs := decisionRequest(t, filepath.Join("testdata", "decision", "support.json"))
-		ans, err := d.Decide(state, qs)
+		ans, err := d.Decide(state, qs, nil)
 		d.Close()
 		if err != nil {
 			t.Fatalf("Decide: %v", err)

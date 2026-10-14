@@ -213,17 +213,16 @@ func pyQuote(s string) string {
 	return b.String()
 }
 
-// layaRun is one question's scores, one per option in the question's order.
-func (d *Decider) layaRun(state jinja.Value, q *DecisionQuestion) ([]float32, error) {
-	ids, markers, err := d.layaSequence(state, q)
-	if err != nil {
-		return nil, err
-	}
+// layaForward is one question's scores, one per option in the question's
+// order, into variant v's scratch: the encoder over ids and the scorer at
+// each option's marker -- the engine's half of a question, which makes no
+// heap allocation once warm (TestDecisionDoesNotAllocate).
+func (d *Decider) layaForward(ids []int32, qt jlm.QuestionType, markers []int, v int) ([]float32, error) {
 	if err := d.emb.mbEncode(ids); err != nil {
 		return nil, err
 	}
-	out := make([]float32, len(markers))
-	if err := d.emb.layaScores(out, len(ids), q.Type, markers); err != nil {
+	out := d.variantScores(v, len(markers))
+	if err := d.emb.layaScores(out, len(ids), qt, markers); err != nil {
 		return nil, err
 	}
 	d.input += len(ids)
