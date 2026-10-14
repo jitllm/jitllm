@@ -22,7 +22,7 @@ func TestFusedKSplitIsBitIdentical(t *testing.T) {
 		if !cpu.PackedFusedSupported(gt) {
 			continue
 		}
-		step := cpu.PackedOuterElems(gt)
+		step := kStep(gt)
 		grp := grpOf(gt)
 		for _, sh := range []struct{ rows, k, bankRow int }{
 			{grp, 3 * step, 0},
@@ -94,7 +94,7 @@ func TestFusedKSplitReachesTheMixturePaths(t *testing.T) {
 		if !cpu.PackedFusedSupported(gt) {
 			continue
 		}
-		step := cpu.PackedOuterElems(gt)
+		step := kStep(gt)
 		grp := grpOf(gt)
 		const m = 3
 		rows, k := 4*grp, 5*step
@@ -164,7 +164,7 @@ func TestFusedKSlicesMatchWholeK(t *testing.T) {
 		if !cpu.PackedFusedSupported(gt) {
 			continue
 		}
-		step := cpu.PackedOuterElems(gt)
+		step := kStep(gt)
 		grp := grpOf(gt)
 		for _, sh := range []struct{ rows, k, bankRow int }{
 			{4 * grp, 7 * step, 0},
@@ -219,4 +219,11 @@ func TestFusedKSlicesMatchWholeK(t *testing.T) {
 		t.Skip("no fused packed kernel on this host")
 	}
 	t.Logf("%d (format, shape) pair(s) within NMSE 1e-10 under 2, 3 and the default slices; worst %.3e", ran, worst)
+}
+
+// kStep is the k granule the shapes here are built from: one outer step of
+// the kernel, widened to the source block when the packer reads whole blocks
+// wider than that step (TQ2_0's 256 against its 32-wide step).
+func kStep(t quant.Type) int {
+	return max(cpu.PackedOuterElems(t), int(t.BlockElems()))
 }

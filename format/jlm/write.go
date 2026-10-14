@@ -72,6 +72,10 @@ func packerOf(t Type) (kernels.Quant, bool) {
 		return kernels.Q5_1, true
 	case TypeMX4:
 		return kernels.MXFP4, true
+	case TypeTQ2:
+		return kernels.TQ2, true
+	case TypeTQ2F:
+		return kernels.TQ2F, true
 	case TypeQ3S:
 		return kernels.Q3_K, true
 	case TypeQ4S:

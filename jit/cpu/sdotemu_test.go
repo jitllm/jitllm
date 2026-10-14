@@ -152,7 +152,8 @@ func TestNoDotProdMatchesDotBitForBit(t *testing.T) {
 			if arm == 2 && !StationaryIntAccA64(f.g, 256) {
 				continue
 			}
-			step := PackedOuterElems(f.g)
+			// A k the packer takes: whole source blocks as well as whole steps.
+			step := max(PackedOuterElems(f.g), int(f.g.BlockElems()))
 			rows := PackedRows
 			if arm > 0 {
 				rows = 16

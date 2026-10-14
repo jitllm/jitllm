@@ -34,6 +34,9 @@ func TestEmitActMulMatchesReference(t *testing.T) {
 			return refSiLU(math.Min(g, 10)) * math.Max(math.Min(u, 10), -10)
 		case ActSitu:
 			return 4 * math.Tanh(g/4) / (1 + math.Exp(-g)) * 25 * math.Tanh(u/25)
+		case ActReLU2:
+			r := math.Max(g, 0)
+			return r * r * u
 		}
 		return refSiLU(g) * u
 	}

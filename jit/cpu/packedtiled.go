@@ -32,7 +32,7 @@ func tiledBudget(q kernels.Quant) (need, payR, tok int) {
 	_, scOff := kernels.ScaleLayout(q)
 	grp := packedFusedGroupK(q) / 8
 	payR = 1
-	if bits == 4 {
+	if bits < 8 {
 		// The lo and hi nibbles are two phases over the SAME payload word, and
 		// the activation registers are reused between them, so the payload has
 		// to survive both for every row group.
@@ -193,8 +193,9 @@ func EmitPackedMatMulTiled(t quant.Type, k, nrows, tok int, dk DotKind) ([]byte,
 	eD, eSC, eS, eO, eC, eT := pool[0], pool[1], pool[2], pool[3], pool[4], pool[5]
 
 	packedArgs(&a, &f)
-	if bits == 4 {
+	if bits < 8 {
 		a.VMOVDQULoad(mask, At(RBX, 0))
+		fieldMask(&a, mask, tmp, bits)
 	} else if signed {
 		a.VMOVDQULoad(mask, At(RBX, 192))
 	}
@@ -243,27 +244,21 @@ func EmitPackedMatMulTiled(t quant.Type, k, nrows, tok int, dk DotKind) ([]byte,
 				}
 			}
 			for w := 0; w < pw; w++ {
-				if bits == 4 {
+				if bits < 8 {
 					for g := 0; g < grp; g++ {
 						a.VMOVDQULoad(payv[g], Idx(RSI, R15, 1, int32(g*vec)))
 					}
-					// lo nibbles, then hi -- the activation registers are
-					// reused between the phases, which is why the payload has
-					// to be the thing that is held.
-					for _, phase := range []struct {
-						off   int32
-						shift bool
-					}{{int32(sub*sn + 4*w), false}, {int32(sub*sn + halfSub + 4*w), true}} {
+					// One phase a field: lo nibbles then hi, or TQ2's four
+					// 2-bit fields -- the activation registers are reused
+					// between the phases, which is why the payload has to be
+					// the thing that is held.
+					for fi := 0; fi < f.fields; fi++ {
+						off := int32(sub*sn + fi*f.run + 4*w)
 						for i := 0; i < tok; i++ {
-							a.VPBROADCASTD(act[i], At(R11, phase.off+int32(i)*aTok))
+							a.VPBROADCASTD(act[i], At(R11, off+int32(i)*aTok))
 						}
 						for g := 0; g < grp; g++ {
-							if phase.shift {
-								a.VPSRLD(tmp, payv[g], 4)
-								a.VPAND(tmp, tmp, mask)
-							} else {
-								a.VPAND(tmp, payv[g], mask)
-							}
+							fieldOf(&a, tmp, payv[g], mask, bits, fi)
 							if codes {
 								a.VPSHUFB(tmp, lut, tmp)
 							}

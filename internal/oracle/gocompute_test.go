@@ -38,8 +38,9 @@ var goComputeAllowed = map[string]string{
 	"engine/model/llama4vision.go:bf16NormLUT": "the bfloat16 normalisation's 256-entry table per channel, from the tower's mean and std",
 	// Geometry of a picture or a grid, from its sizes alone: no pixel and no
 	// activation is read.
-	"engine/model/slices.go:slicedGrid": "MiniCPM-V's slice grid: which cols x rows best matches the picture's aspect, from its width and height",
-	"engine/nn/ropeaxes.go:runFreqs":    "a multi-axis rotary's per-pair frequencies, once per configuration",
+	"engine/model/slices.go:slicedGrid":       "MiniCPM-V's slice grid: which cols x rows best matches the picture's aspect, from its width and height",
+	"engine/nn/ropeaxes.go:runFreqs":          "a multi-axis rotary's per-pair frequencies, once per configuration",
+	"engine/model/videoproc.go:sampleIndices": "a video's sampled frame indices (np.linspace): geometry from the frame count and rate, once per video; no pixel is read",
 }
 
 // TestNoGoComputeOnTheInferencePath is AGENTS.md RULE 8 read off the source:

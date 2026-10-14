@@ -143,6 +143,11 @@ type layer struct {
 	// nPostAttn and nPostFFN are gemma2/gemma3's two extra RMSNorms, applied to
 	// the attention and FFN outputs before their residual adds. nil elsewhere.
 	nPostAttn, nPostFFN backend.Buf
+	// nSubAttn and nSubFFN are BitNet's inner norms (nn.LayerPlan.SubNorm):
+	// over the attention output before wo and over act(gate)*up before down,
+	// each fused with the int8 quantize its projection reads (bs.subQA,
+	// bs.subQF). nil elsewhere.
+	nSubAttn, nSubFFN backend.Buf
 	// clampB is a vision block's clipped-linear bounds (nn.LayerWeights.Clamp,
 	// Gemma 4), 28 floats the clamp kernels read; nil elsewhere.
 	clampB backend.Buf
@@ -1665,7 +1670,12 @@ type blockScratch struct {
 	// activation quantE would (kernels.RMSNormQuantRows): one launch where the
 	// norm and the quantize were two. nil where they cannot be built.
 	rmsQ, addRmsQ backend.Kernel
-	qn, kn        backend.Buf
+	// subQA and subQF are BitNet's inner norms fused with the quantize wo and
+	// down read (kernels.RMSNormQuantRows at qdim and NFFN, the row window),
+	// writing the normed rows to sub. nil elsewhere.
+	subQA, subQF backend.Kernel
+	sub          backend.Buf
+	qn, kn       backend.Buf
 	// krot is XD-RoPE's k turned row-major, before its norm (RopeSplit): the
 	// whole head, since XD-RoPE turns every dimension (model.build refuses a
 	// partial one).
@@ -3190,6 +3200,19 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	if w.PostAttnNorm != nil {
 		up(&l.nPostAttn, w.PostAttnNorm)
 	}
+	// BitNet's inner norms: both, at their widths, on every such block.
+	if p.SubNorm {
+		if len(w.AttnSubNorm) != p.NHead*p.HeadDim || len(w.FFNSubNorm) != p.NFFN {
+			g.LastErr = fmt.Sprintf("block %d: inner norms %d and %d wide, want %d and %d", li,
+				len(w.AttnSubNorm), len(w.FFNSubNorm), p.NHead*p.HeadDim, p.NFFN)
+			return false
+		}
+		up(&l.nSubAttn, w.AttnSubNorm)
+		up(&l.nSubFFN, w.FFNSubNorm)
+	} else if w.AttnSubNorm != nil || w.FFNSubNorm != nil {
+		g.LastErr = fmt.Sprintf("block %d carries inner norms the plan does not name", li)
+		return false
+	}
 	if w.PostFFNNorm != nil {
 		up(&l.nPostFFN, w.PostFFNNorm)
 	}
@@ -3930,6 +3953,10 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		al(&bs.shlogit, rows*4)
 		al(&bs.shsum, rows*p.NEmbd*4)
 	}
+	if p.SubNorm {
+		// BitNet's inner norms write their rows here, out of place (RULE 13).
+		al(&bs.sub, rows*max(qdim, p.NFFN)*4)
+	}
 	if p.AttnOutGate {
 		// Double width: with the gate folded in, l.wq has 2*qdim rows and the
 		// matvec writes all of them.
@@ -4264,14 +4291,36 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		make func() (*ir.Kernel, error)
 	}
 	jobs := []job{
-		{&bs.quantE, func() (*ir.Kernel, error) { return kernels.Quantize(rows*p.NEmbd, actWin) }},
-		{&bs.quantF, func() (*ir.Kernel, error) { return kernels.Quantize(rows*p.NFFN, actWin) }},
+		// Each quantizer's window is clamped to its own row, as the host
+		// clamps it: a session window wider than a row (a per-token model's)
+		// must not take the next row's maximum.
+		{&bs.quantE, func() (*ir.Kernel, error) {
+			return kernels.Quantize(rows*p.NEmbd, kernels.ClampWindow(actWin, p.NEmbd))
+		}},
+		{&bs.quantF, func() (*ir.Kernel, error) {
+			if p.NFFN == 0 {
+				return nil, nil
+			}
+			return kernels.Quantize(rows*p.NFFN, kernels.ClampWindow(actWin, p.NFFN))
+		}},
+		{&bs.subQA, func() (*ir.Kernel, error) {
+			if !p.SubNorm {
+				return nil, nil
+			}
+			return g.rmsQuantRows()(qdim, rows, float32(p.RMSEps), false, false, kernels.ClampWindow(actWin, qdim))
+		}},
+		{&bs.subQF, func() (*ir.Kernel, error) {
+			if !p.SubNorm {
+				return nil, nil
+			}
+			return g.rmsQuantRows()(p.NFFN, rows, float32(p.RMSEps), false, false, kernels.ClampWindow(actWin, p.NFFN))
+		}},
 		{&bs.quantAct, func() (*ir.Kernel, error) {
 			if ungatedFFN(p) || p.NFFN == 0 {
 				return nil, nil
 			}
 			// Optional: an activation with no gated form keeps two launches.
-			if k, err := kernels.QuantizeAct(rows*p.NFFN, actWin, p.Act); err == nil {
+			if k, err := kernels.QuantizeAct(rows*p.NFFN, kernels.ClampWindow(actWin, p.NFFN), p.Act); err == nil {
 				return k, nil
 			}
 			return nil, nil
@@ -4285,9 +4334,9 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if r.Conv == 0 {
 				return nil, nil
 			}
-			return kernels.Quantize(rows*r.VHeads*r.VDim, actWin)
+			return kernels.Quantize(rows*r.VHeads*r.VDim, kernels.ClampWindow(actWin, r.VHeads*r.VDim))
 		}},
-		{&bs.quantQ, func() (*ir.Kernel, error) { return kernels.Quantize(rows*qdim, actWin) }},
+		{&bs.quantQ, func() (*ir.Kernel, error) { return kernels.Quantize(rows*qdim, kernels.ClampWindow(actWin, qdim)) }},
 		// The norm is two kernels (RMSNorm) or three (LayerNorm: mean, variance
 		// about it, apply); see blockScratch.normVar.
 		{&bs.normPart, func() (*ir.Kernel, error) {
@@ -4314,7 +4363,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			// Optional: a width the window does not tile keeps the two
 			// launches rather than failing the scratch.
-			if k, err := g.rmsQuantRows()(p.NEmbd, rows, float32(p.RMSEps), false, false, actWin); err == nil {
+			if k, err := g.rmsQuantRows()(p.NEmbd, rows, float32(p.RMSEps), false, false, kernels.ClampWindow(actWin, p.NEmbd)); err == nil {
 				return k, nil
 			}
 			return nil, nil
@@ -4325,7 +4374,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			// Optional: a width the window does not tile keeps the two
 			// launches rather than failing the scratch.
-			if k, err := g.rmsQuantRows()(p.NEmbd, rows, float32(p.RMSEps), false, true, actWin); err == nil {
+			if k, err := g.rmsQuantRows()(p.NEmbd, rows, float32(p.RMSEps), false, true, kernels.ClampWindow(actWin, p.NEmbd)); err == nil {
 				return k, nil
 			}
 			return nil, nil
@@ -7813,11 +7862,16 @@ func (g *devTier) layersSession(s backend.Session) {
 					// The attention output projection quantizing its own
 					// operand (fuseActIn), with the residual add it already
 					// carries.
-					oIn := R == 1 && rag == nil && g.actInOn() && l.mvo.resIn != nil && !voltaOnly && l.clampB == nil &&
+					oIn := R == 1 && rag == nil && g.actInOn() && l.mvo.resIn != nil && !voltaOnly && l.clampB == nil && l.nSubAttn == nil &&
 						!skip["quant"] && !skip["qkvo"] && l.nPostAttn == nil && !l.withAttn && !resScaled && !skip["add"] &&
 						l.altRouter == nil && l.k3 == nil && l.q4e == nil && !(g.TableSplit && l.mvo.alt != nil) && l.mvo.k == qdim
 					if oIn {
 						g.ActInSaved++
+					} else if l.nSubAttn != nil {
+						// BitNet: the norm over the attention output and the
+						// quantize wo reads, one launch a row.
+						laRows(bs.subQA, aSrc, l.nSubAttn, bs.sub, bs.a, bs.ax)
+						fsrc = bs.sub
 					} else if voltaOnly {
 						fsrc = aSrc
 						g.QuantSkipped++
@@ -8347,7 +8401,9 @@ func (g *devTier) layersSession(s backend.Session) {
 				case ffnIn:
 					mvIn(l.mvu, l.mvu.kernIn, l.up, bs.u, bs.x2, l.nFFN, nil)
 				default:
-					gated = !ungated && l.clampB == nil && !skip["actmul"] && mvgate(l.mvu, l.up, bs.act, gIn)
+					// BitNet normalises the product before down, so up does not
+					// form it in its own store.
+					gated = !ungated && l.clampB == nil && l.nSubFFN == nil && !skip["actmul"] && mvgate(l.mvu, l.up, bs.act, gIn)
 					if !gated && l.clampB == nil {
 						mvrun(l.mvu, l.up, bs.u)
 					}
@@ -8355,7 +8411,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				// The down projection building its own operand (fuseActIn):
 				// quantizing act(gate)*up where up wrote it (downIn), or
 				// forming it from gate and up as it quantizes (downAct).
-				downOK := R == 1 && rag == nil && g.actInOn() && !voltaOnly && l.clampB == nil && l.nPostFFN == nil &&
+				downOK := R == 1 && rag == nil && g.actInOn() && !voltaOnly && l.clampB == nil && l.nPostFFN == nil && l.nSubFFN == nil &&
 					!resScaled && !skip["add"] && !skip["quantf"] && !skip["actmul"] && l.k3 == nil && l.q4e == nil && !l.nonCausal &&
 					!(g.TableSplit && l.mvd.alt != nil) && l.mvd.k == nffn
 				downIn := downOK && gated && l.mvd.resIn != nil
@@ -8371,7 +8427,7 @@ func (g *devTier) layersSession(s backend.Session) {
 							actConv = conv
 							g.ActF16Fused++
 						}
-					} else if bs.quantAct != nil && !skip["quantf"] && !g.NoOperandFuse {
+					} else if bs.quantAct != nil && !skip["quantf"] && !g.NoOperandFuse && l.nSubFFN == nil {
 						lc.la(bs.quantAct, kernels.QuantizeThreads(R*p.NFFN/32), gIn, uIn, bs.act, bs.a, bs.ax)
 						fsrc = bs.act
 						quantDoneF = true
@@ -8402,6 +8458,11 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				if downIn || downAct {
 					g.ActInSaved++
+				} else if l.nSubFFN != nil {
+					// BitNet: the norm over act(gate)*up and the quantize down
+					// reads, one launch a row.
+					laRows(bs.subQF, bs.act, l.nSubFFN, bs.sub, bs.a, bs.ax)
+					fsrc = bs.sub
 				} else if !voltaOnly && l.clampB == nil && !skip["quantf"] && !quantDoneF {
 					lc.la(bs.quantF, kernels.QuantizeThreads(R*nffn/32), bs.act, bs.a, bs.ax)
 				}
@@ -8533,6 +8594,12 @@ func (g *devTier) layersSession(s backend.Session) {
 				lc.la(hb.normApply, p.NEmbd, hb.x, hNorm, hb.part, hb.h)
 			}
 			lc.la(hb.quantE, kernels.QuantizeThreads(p.NEmbd/32), hb.h, hb.a, hb.ax)
+			// The label pick projects the picked rows alone (pickMV).
+			pickOnly := pick && g.pickMV != nil && hb.headCap == nil
+			if pickOnly {
+				lc.la(g.pickMV, pickMax, hr.qs, hr.d, hr.sc, hb.a, hb.ax, g.pickOut, g.pickIDs)
+				g.PickRows++
+			}
 			m := hb.mvHead
 			if g.TableSplit && m.alt != nil {
 				m = *m.alt
@@ -8545,15 +8612,17 @@ func (g *devTier) layersSession(s backend.Session) {
 			if m.rowt > 1 {
 				n /= m.rowt
 			}
-			lamv(m, m.kern, n, hr.qs, hr.d, hr.sc, hb.a, hb.ax, out)
-			if m.split > 1 && !m.group {
-				lc.la(m.red, m.rows, g.partBuf, hb.logits)
-			}
-			if hb.headCap != nil {
-				lc.la(hb.headCap, m.rows, hb.logits, hb.logitsCap)
-			}
-			if pick {
-				lc.la(g.pickK, pickMax, hb.headOut(), g.pickIDs, g.pickOut)
+			if !pickOnly {
+				lamv(m, m.kern, n, hr.qs, hr.d, hr.sc, hb.a, hb.ax, out)
+				if m.split > 1 && !m.group {
+					lc.la(m.red, m.rows, g.partBuf, hb.logits)
+				}
+				if hb.headCap != nil {
+					lc.la(hb.headCap, m.rows, hb.logits, hb.logitsCap)
+				}
+				if pick {
+					lc.la(g.pickK, pickMax, hb.headOut(), g.pickIDs, g.pickOut)
+				}
 			}
 			g.HeadFolds++
 		} else if head != nil {
@@ -8582,10 +8651,17 @@ func (g *devTier) layersSession(s backend.Session) {
 			lc.la(bs.quantE, kernels.QuantizeThreads(R*p.NEmbd/32), bs.h, bs.a, bs.ax)
 			// HeadMatvecRepeat is the same idempotent-repeat probe on the head
 			// matvec, pricing it by repetition.
-			for r := 0; r < g.HeadMatvecRepeat; r++ {
+			pickOnly := pick && g.pickMV != nil && bs.headCap == nil && R == 1
+			if pickOnly {
+				// The label pick projects the picked rows alone (pickMV).
+				lc.la(g.pickMV, pickMax, bs.head.qs, bs.head.d, bs.head.sc, bs.a, bs.ax, g.pickOut, g.pickIDs)
+				g.PickRows++
+			} else {
+				for r := 0; r < g.HeadMatvecRepeat; r++ {
+					mvrun(bs.mvHead, bs.head, bs.logits)
+				}
 				mvrun(bs.mvHead, bs.head, bs.logits)
 			}
-			mvrun(bs.mvHead, bs.head, bs.logits)
 			if bs.headCap != nil {
 				lc.la(bs.headCap, bs.mvHead.rows, bs.logits, bs.logitsCap)
 			}
@@ -8595,7 +8671,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			if sampleK > 0 && err == nil {
 				err = g.launchSample(lc, bs.headOut(), bs.mvHead.rows, sampleK, samplePen)
 			}
-			if pick {
+			if pick && !pickOnly {
 				lc.la(g.pickK, pickMax, bs.headOut(), g.pickIDs, g.pickOut)
 			}
 		}
@@ -8926,6 +9002,7 @@ func (l *layer) auxBufs() []backend.Buf {
 		l.nAttn, l.nFFN, l.nAttnB, l.nFFNB, l.nQ, l.nK,
 		l.nResid, l.nResidB, // BERT's post-norm
 		l.nPostAttn, l.nPostFFN, // gemma2/gemma3
+		l.nSubAttn, l.nSubFFN, // BitNet
 		l.clampB,      // Gemma 4's tower: its clipped linears' bounds
 		l.nQA, l.nKVA, // MLA's two latent norms
 		l.nIdxK, l.nIdxKB, l.nIdxQ, // the indexers' norms (DeepSeek V3.2, MiniMax-M3)

@@ -488,6 +488,11 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 					s.jit.NewInput()
 					asrc = s.ogate
 				}
+				// BitNet's norm over the attention output, before wo.
+				if l.attnSubNorm != nil {
+					s.batchNorm(asrc, asrc, l.attnSubNorm, c.QDimAt(li), n)
+					s.jit.NewInput()
+				}
 				if err := s.mm(s.bh, l.wo, asrc[:n*c.QDimAt(li)], n); err != nil {
 					return nil, err
 				}
@@ -587,6 +592,11 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 				s.actmulAll(gate, up, act)
 				s.jit.NewInput()
 				s.tock(opAct, t0)
+				// BitNet's norm over the product, before down.
+				if l.ffnSubNorm != nil {
+					s.batchNorm(gate, gate, l.ffnSubNorm, c.NFFNAt(li), n)
+					s.jit.NewInput()
+				}
 				if err := s.mm(s.bh, l.down, s.bgate, n); err != nil {
 					return nil, err
 				}

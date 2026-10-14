@@ -369,6 +369,9 @@ func TestPackedRowSSEIsTheAVX2KernelBitForBit(t *testing.T) {
 		if k < 96 {
 			k = 96 // three 32-element super-blocks is too few to see a stride
 		}
+		if be := int(gt.BlockElems()); k%be != 0 {
+			k = (k/be + 1) * be // TQ2_0's source block is 256 wide, its sub-block 32
+		}
 		const nrows = 13
 		src := make([]byte, uint64(nrows*k)/gt.BlockElems()*gt.BlockBytes())
 		rand.New(rand.NewSource(int64(gt) + 7)).Read(src)
@@ -392,7 +395,7 @@ func TestPackedRowSSEIsTheAVX2KernelBitForBit(t *testing.T) {
 				subnormal++
 			}
 		}
-		if subnormal == 0 {
+		if subnormal == 0 && !kernels.D32(q) { // an f32 scale has no f16 to be subnormal
 			t.Fatalf("%s: no subnormal f16 scale in the d plane -- the path this gate exists for was not exercised", gt)
 		}
 		konst := PackedRowConsts(q)

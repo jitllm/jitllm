@@ -72,6 +72,9 @@ func dScale(t kernels.Quant, d []byte, super, nrows, r int) (scale, dmin float32
 	case 2:
 		return half(uint16(dw >> (16 * uint(slot)))), 0
 	}
+	if kernels.D32(t) {
+		return math.Float32frombits(dw), 0
+	}
 	return half(uint16(dw)), half(uint16(dw >> 16))
 }
 
@@ -150,20 +153,23 @@ func MatVecPackedRows(out []float32, t kernels.Quant, qs, d, sc []byte, x []floa
 			}
 
 			base, e0 := si*words*nrows+r, si*qi.sub
-			if qi.bits == 4 {
-				// packSub: byte b holds element b in its low nibble and
-				// element b+sub/2 in its high one, so one byte serves two
-				// activations half a sub-block apart.
-				h := qi.sub / 2
+			if qi.bits < 8 {
+				// packSub: byte b holds element b in its low field and element
+				// b + f*sub/fields in field f, so one byte serves activations a
+				// field-run apart (two nibbles half a sub-block apart, TQ2's
+				// four 2-bit codes a quarter apart).
+				fields := 8 / qi.bits
+				h := qi.sub / fields
+				mask := uint32(1)<<uint(qi.bits) - 1
 				for w := 0; w < pw; w++ {
 					v := u32(qs, base+w*nrows)
 					for b := 0; b < 4; b++ {
 						by := v >> (8 * uint(b))
-						l := w*4 + b
-						q0 := code(qi, by&0xF) | hiPlane(qs, qi, base, nrows, pw, l)<<4
-						q1 := code(qi, (by>>4)&0xF) | hiPlane(qs, qi, base, nrows, pw, l+h)<<4
-						acc += (scale*float32(q0) - bias) * x[e0+l]
-						acc += (scale*float32(q1) - bias) * x[e0+l+h]
+						for f := 0; f < fields; f++ {
+							l := w*4 + b + f*h
+							q := code(qi, (by>>uint(qi.bits*f))&mask) | hiPlane(qs, qi, base, nrows, pw, l)<<4
+							acc += (scale*float32(q) - bias) * x[e0+l]
+						}
 					}
 				}
 				continue
@@ -242,17 +248,19 @@ func RowPacked(dst []float32, t kernels.Quant, qs, d, sc []byte, r, nrows, k int
 		}
 
 		base, e0 := si*words*nrows+r, si*qi.sub
-		if qi.bits == 4 {
-			h := qi.sub / 2
+		if qi.bits < 8 {
+			fields := 8 / qi.bits
+			h := qi.sub / fields
+			mask := uint32(1)<<uint(qi.bits) - 1
 			for w := 0; w < pw; w++ {
 				v := u32(qs, base+w*nrows)
 				for b := 0; b < 4; b++ {
 					by := v >> (8 * uint(b))
-					l := w*4 + b
-					q0 := code(qi, by&0xF) | hiPlane(qs, qi, base, nrows, pw, l)<<4
-					q1 := code(qi, (by>>4)&0xF) | hiPlane(qs, qi, base, nrows, pw, l+h)<<4
-					dst[e0+l] = scale*float32(q0) - bias
-					dst[e0+l+h] = scale*float32(q1) - bias
+					for f := 0; f < fields; f++ {
+						l := w*4 + b + f*h
+						q := code(qi, (by>>uint(qi.bits*f))&mask) | hiPlane(qs, qi, base, nrows, pw, l)<<4
+						dst[e0+l] = scale*float32(q) - bias
+					}
 				}
 			}
 			continue

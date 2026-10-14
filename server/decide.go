@@ -33,8 +33,11 @@ type DecideOptions struct {
 	// Questions are the request's questions in its order.
 	Questions []model.DecisionQuestion
 	// Images are the request's pictures in its order, at most
-	// model.MaxDecisionImages; only a vision decision model (d1) reads them.
+	// model.MaxDecisionImages; only a vision decision model (d1, Clef) reads
+	// them.
 	Images []image.Image
+	// Videos are the request's videos, each its frames (Clef's).
+	Videos []model.VideoFrames
 }
 
 // DecideResult is one answer per question, in question order.
@@ -75,7 +78,8 @@ func (e *Engine) Decide(ctx context.Context, o DecideOptions) (*DecideResult, er
 			"decision readout, so no score of its forward pass is an answer the weights were trained for",
 			ErrInvalid, lm.id, lm.m.Cfg.Arch)
 	}
-	job := &decJob{ctx: ctx, req: model.DecisionRequest{State: o.State, Questions: o.Questions, Images: o.Images},
+	job := &decJob{ctx: ctx, req: model.DecisionRequest{State: o.State, Questions: o.Questions, Images: o.Images,
+		Videos: o.Videos},
 		t0: time.Now(), done: make(chan struct{})}
 	lm.decQMu.Lock()
 	lm.decQ = append(lm.decQ, job)

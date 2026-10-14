@@ -28,7 +28,9 @@ func (g *devTier) fuseActIn(l *layer) {
 	}
 	p := &g.bs.p
 	// The prologue meets its window and sums by subgroup shuffles.
-	if lnBlock(p) || l.mla || l.linear || l.nonCausal || g.pickLanes() != ir.SubgroupLanes {
+	// A window wider than one group (a per-token model's, kernels.WideWindow)
+	// is not one the shuffles meet.
+	if lnBlock(p) || l.mla || l.linear || l.nonCausal || g.pickLanes() != ir.SubgroupLanes || kernels.WideWindow(p.ActWin) {
 		return
 	}
 	win := max(p.ActWin, 32)

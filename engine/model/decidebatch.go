@@ -22,10 +22,13 @@ import (
 type DecisionRequest struct {
 	State     jinja.Value
 	Questions []DecisionQuestion
-	// Images are the request's pictures, in its order (d1's); a request with
-	// pictures runs on its own (Decide), its tower once and its picture rows
-	// from the image cache for every question after the first.
+	// Images are the request's pictures, in its order (d1's, Clef's); a
+	// request with pictures runs on its own (Decide), its tower once and its
+	// picture rows from the image cache for every question after the first.
 	Images []image.Image
+	// Videos are the request's videos (Clef's); a request with one runs on
+	// its own too.
+	Videos []VideoFrames
 }
 
 // decisionBatchRows is the most prompts one batch session runs at once.
@@ -105,8 +108,8 @@ func (d *Decider) DecideBatch(reqs []DecisionRequest) ([]DecisionResult, error) 
 		if res.Err = d.Prepare(rq.State, rq.Questions, len(rq.Images)); res.Err != nil {
 			continue
 		}
-		if len(rq.Images) > 0 {
-			res.Answers, res.Err = d.Decide(rq.State, rq.Questions, rq.Images)
+		if len(rq.Images) > 0 || len(rq.Videos) > 0 {
+			res.Answers, res.Err = d.DecideMedia(rq.State, rq.Questions, rq.Images, rq.Videos)
 			res.InputTokens = d.InputTokens()
 			continue
 		}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/common/crash"
 	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
 // A command that panics mid-reply, counted the way Send counts it, leaves
@@ -17,6 +18,7 @@ import (
 // model again chats. Against the violation (afterPanic not closing the
 // session) the model is still shown loaded on the broken session.
 func TestAPanicMidReplyLeavesTheAppConsistent(t *testing.T) {
+	fresh.Must(t, modelPath)
 	if _, err := os.Stat(modelPath); err != nil {
 		t.Fatalf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proves nothing without it", err)
 	}

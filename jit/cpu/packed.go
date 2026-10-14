@@ -184,6 +184,7 @@ func EmitPackedMatVec(t quant.Type, rows int, dk DotKind) ([]byte, error) {
 	// straight from memory. The cost is only in the addressing (R9 and DStr).
 	narrow := NarrowD(t)
 	e8 := E8M0D(t)
+	d32 := kernels.D32(q)
 	minD := kernels.MinInD(q)
 	perWord, stride := 4, 8
 	if biasArray {
@@ -214,7 +215,7 @@ func EmitPackedMatVec(t quant.Type, rows int, dk DotKind) ([]byte, error) {
 	dot := dotEmitter{kind: dk, flip: mask}
 	if dk == DotVEX {
 		dot.ones = mask
-		if bits == 4 {
+		if bits < 8 {
 			dot.ones = t0
 		}
 	}
@@ -231,8 +232,9 @@ func EmitPackedMatVec(t quant.Type, rows int, dk DotKind) ([]byte, error) {
 		a.SUBQ(R9, R9)
 	}
 	switch {
-	case bits == 4:
+	case bits < 8:
 		a.VMOVDQULoad(mask, At(RBX, 0))
+		fieldMask(&a, mask, t0, bits)
 	case dk == DotVEX:
 		// The ones vector, built rather than loaded; see ones16.
 		ones16(&a, mask)
@@ -298,7 +300,7 @@ func EmitPackedMatVec(t quant.Type, rows int, dk DotKind) ([]byte, error) {
 			for g := 0; g < groups; g++ {
 				a.VPXOR(iac[g], iac[g], iac[g])
 			}
-			if dk == DotVEX && bits == 4 {
+			if dk == DotVEX && bits < 8 {
 				ones16(&a, t0) // dead until the epilogue; see the note above
 			}
 			// The code table rides in t1, which is an epilogue temporary and
@@ -327,6 +329,24 @@ func EmitPackedMatVec(t quant.Type, rows int, dk DotKind) ([]byte, error) {
 							a.VPSHUFB(tmp, t1, tmp)
 						}
 						dot.unsigned(&a, iac[g], tmp, actH)
+					}
+				} else if bits < 8 {
+					// Narrower fields (TQ2's 2-bit codes): field f of a byte is
+					// the element a field-run on, so its activations are the
+					// four at f*run + 4w. Two broadcasts at a time, as above.
+					fields, run := 8/bits, sub/(8/bits)
+					for f0 := 0; f0 < fields; f0 += 2 {
+						a.VPBROADCASTD(actL, At(R11, int32(sub*sn+f0*run+4*w)))
+						a.VPBROADCASTD(actH, At(R11, int32(sub*sn+(f0+1)*run+4*w)))
+						for g := 0; g < groups; g++ {
+							// Reloaded per pair: the four activations would take
+							// two more registers than the tile has.
+							a.VMOVDQULoad(pay, At(RDX, int32(g*vec)))
+							fieldOf(&a, tmp, pay, mask, bits, f0)
+							dot.unsigned(&a, iac[g], tmp, actL)
+							fieldOf(&a, tmp, pay, mask, bits, f0+1)
+							dot.unsigned(&a, iac[g], tmp, actH)
+						}
 					}
 				} else {
 					a.VPBROADCASTD(actL, At(R11, int32(sub*sn+4*w)))
@@ -392,6 +412,9 @@ func EmitPackedMatVec(t quant.Type, rows int, dk DotKind) ([]byte, error) {
 					a.VPSLLD(t1, t1, 23)
 				} else if narrow {
 					a.VCVTPH2PS(t1, At(R8, int32(g*vec/2)))
+				} else if d32 {
+					// TQ2_F32: the word is the scale, a row a word.
+					a.VMOVDQULoad(t1, At(R8, off))
 				} else {
 					a.VMOVDQULoad(t0, At(R8, off))
 					f16x8(t1, t0, hi) // d

@@ -79,20 +79,32 @@ func decideCmd(args []string) error {
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 	one := func(body []byte) error {
-		_, state, qs, urls, err := model.ParseDecisionRequest(body)
+		req, err := model.ParseDecisionRequest(body)
 		if err != nil {
 			return err
 		}
-		imgs := make([]image.Image, len(urls))
-		for i, u := range urls {
+		state, qs := req.State, req.Questions
+		imgs := make([]image.Image, len(req.Images))
+		for i, u := range req.Images {
 			if imgs[i], err = model.DecodeImageDataURL(u); err != nil {
 				return fmt.Errorf("images[%d]: %w", i, err)
+			}
+		}
+		vids := make([]model.VideoFrames, len(req.Videos))
+		for i, v := range req.Videos {
+			vids[i].FPS = v.FPS
+			for j, u := range v.Frames {
+				f, err := model.DecodeImageDataURL(u)
+				if err != nil {
+					return fmt.Errorf("videos[%d] frame %d: %w", i, j, err)
+				}
+				vids[i].Frames = append(vids[i].Frames, f)
 			}
 		}
 		var ans []model.DecisionAnswer
 		for r := 0; r < max(1, *repeat); r++ {
 			t, reads, read := time.Now(), m.PagerReads(), m.BytesRead()
-			if ans, err = d.Decide(state, qs, imgs); err != nil {
+			if ans, err = d.DecideMedia(state, qs, imgs, vids); err != nil {
 				return err
 			}
 			fmt.Fprintf(os.Stderr, "%d questions, %d tokens in %v; %d page reads, %d MiB read\n", len(qs), d.InputTokens(),

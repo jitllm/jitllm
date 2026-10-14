@@ -16,6 +16,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 	"github.com/jitllm/jitllm/server/gen/jitllm/v1/jitllmv1connect"
 )
@@ -41,6 +42,7 @@ const chatModel = "tiny-qwen3moe-f32.jlm"
 func modelPath(t *testing.T, name string) string {
 	t.Helper()
 	p := testmodels.Path(name)
+	fresh.Must(t, p)
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}

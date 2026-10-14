@@ -117,7 +117,7 @@ func stepArchModels() []string {
 		"synth-minimaxm2.gguf", "synth-gemma4.gguf", "synth-gemma4-kv.gguf", "synth-gemma4-moe.gguf", "synth-gemma4-e.gguf",
 		"synth-deepseek32.gguf", "synth-gemma3n.gguf", "synth-minimaxm3.gguf",
 		"synth-bailingmoe2.gguf", "synth-dots1.gguf", "synth-phimoe.gguf", "synth-apertus.gguf", "synth-deepseek4.gguf",
-		"synth-kimik3.gguf",
+		"synth-kimik3.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf",
 	}
 }
 

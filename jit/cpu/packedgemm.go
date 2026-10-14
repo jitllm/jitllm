@@ -87,18 +87,17 @@ func EmitPackedMatMulStationary(t quant.Type, k, nrows, win int, dk DotKind) ([]
 	sub, bits, biasK, biasArray := f.sub, f.bits, f.biasK, f.biasArray
 	perSuper, scOff := f.perSuper, f.scOff
 	signed, hi, codes := f.signed, f.hi, f.codes
-	if bits != 4 && !signed {
+	if bits == 8 && !signed {
 		return nil, fmt.Errorf("jit: EmitPackedMatMulStationary: %s: an unsigned 8-bit payload has no form here", t)
 	}
 	pw, hw := f.pw, f.hw
-	halfSub := f.halfSub
 	const group = 8 // rows per YMM: one lane a row
 	if k <= 0 || k%(sub*perSuper) != 0 || nrows <= 0 || nrows%group != 0 {
 		return nil, fmt.Errorf("jit: EmitPackedMatMulStationary: k=%d nrows=%d", k, nrows)
 	}
 	nW := pw
-	if bits == 4 {
-		nW = 2 * pw
+	if bits < 8 {
+		nW = f.fields * pw // a weight register a field a word
 	}
 	if nW > 8 {
 		return nil, fmt.Errorf("jit: EmitPackedMatMulStationary: %s holds %d weight registers, the budget is 8", t, nW)
@@ -114,7 +113,7 @@ func EmitPackedMatMulStationary(t quant.Type, k, nrows, win int, dk DotKind) ([]
 			umax = max(umax, int(c))
 		}
 	default:
-		umax = 0x0F
+		umax = 1<<bits - 1
 	}
 	if hi != 0 {
 		umax += ((1 << hi) - 1) << 4
@@ -243,6 +242,8 @@ func EmitPackedMatMulStationary(t quant.Type, k, nrows, win int, dk DotKind) ([]
 			a.VPSLLD(tmp, tmp, 23)
 		case narrow:
 			a.VCVTPH2PS(tmp, Idx(R8, R9, 1, 0))
+		case f.d32:
+			a.VMOVDQULoad(tmp, Idx(R8, R15, 1, 0))
 		default:
 			a.VMOVDQULoad(pay, Idx(R8, R15, 1, 0))
 			a.VPSHUFB(tmp, pay, shufLo)
@@ -277,8 +278,9 @@ func EmitPackedMatMulStationary(t quant.Type, k, nrows, win int, dk DotKind) ([]
 
 	// actOff is the activation byte a weight register's four lanes multiply.
 	actOff := func(sn, j int) int32 {
-		if bits == 4 && j >= pw {
-			return int32(sub*sn + halfSub + 4*(j-pw))
+		if bits < 8 && j >= pw {
+			// W[fi*pw+w] is field fi of word w: the activations a field-run on.
+			return int32(sub*sn + (j/pw)*f.run + 4*(j%pw))
 		}
 		return int32(sub*sn + 4*j)
 	}
@@ -300,8 +302,9 @@ func EmitPackedMatMulStationary(t quant.Type, k, nrows, win int, dk DotKind) ([]
 		mask, aux, dtmp, dpay := pool[0], pool[1], pool[2], eT
 		a.MOVLoad(RSI, At(RDI, oScr))
 		switch {
-		case bits == 4:
+		case bits < 8:
 			a.VMOVDQULoad(mask, At(RSI, 0))
+			fieldMask(&a, mask, dtmp, bits)
 		case signed && dk == DotVNNI:
 			a.VMOVDQULoad(mask, At(RSI, 192)) // the 0x80 flip
 		}
@@ -331,6 +334,11 @@ func EmitPackedMatMulStationary(t quant.Type, k, nrows, win int, dk DotKind) ([]
 				if codes {
 					a.VPSHUFB(W[w], aux, W[w])
 					a.VPSHUFB(W[pw+w], aux, W[pw+w])
+				}
+			} else if bits < 8 {
+				a.VMOVDQULoad(dpay, At(RSI, 0))
+				for fi := 0; fi < f.fields; fi++ {
+					fieldOf(&a, W[fi*pw+w], dpay, mask, bits, fi)
 				}
 			} else if dk == DotVNNI {
 				a.VMOVDQULoad(dpay, At(RSI, 0))

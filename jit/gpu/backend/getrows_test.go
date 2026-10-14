@@ -32,7 +32,7 @@ func TestGetRowsPackedMatchesDequant(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 		for _, q := range []kernels.Quant{kernels.Q4_0, kernels.Q5_0, kernels.Q5_1, kernels.Q8_0, kernels.Q3_K,
-			kernels.Q4_K, kernels.Q5_K, kernels.Q6_K} {
+			kernels.Q4_K, kernels.Q5_K, kernels.Q6_K, kernels.TQ2, kernels.TQ2F} {
 			for _, c := range []struct {
 				rows, k int
 				ids     []uint32

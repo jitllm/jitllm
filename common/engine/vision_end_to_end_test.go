@@ -13,6 +13,7 @@ import (
 
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
 // visionModel is the smallest of the three projector families.
@@ -25,6 +26,7 @@ var visionModel = testmodels.Path("SmolVLM-256M-Instruct-Q8_0-vlm.jlm")
 // model.TestChatSpansDescribeAnImage does not cover. A blank picture runs
 // beside it, because a tower wired to nothing still answers fluently.
 func TestAnAttachedPictureReachesTheModel(t *testing.T) {
+	fresh.Must(t, visionModel)
 	if _, err := os.Stat(visionModel); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}

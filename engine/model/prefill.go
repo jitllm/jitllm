@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"time"
 
 	"github.com/jitllm/jitllm/engine/nn"
@@ -936,6 +937,12 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 	}
 	s.norm(s.h, s.x, s.outNorm, m.outNormB)
 	s.jit.NewInput()
+	if s.pickOnHost() {
+		if err := s.kvCheck(); err != nil {
+			return nil, err
+		}
+		return s.logits, nil
+	}
 	if err := s.mv(s.logits, *s.outW, s.h); err != nil {
 		return nil, err
 	}
@@ -1458,6 +1465,13 @@ attend:
 				s.jit.NewInput()
 				asrc = s.ogate
 			}
+			// BitNet's norm over the attention output, before wo.
+			if l.attnSubNorm != nil {
+				tn := s.tick()
+				s.batchNorm(asrc, asrc, l.attnSubNorm, qDim, n)
+				s.jit.NewInput()
+				s.tock(opRMSNorm, tn)
+			}
 			if err := s.mm(s.bh, l.wo, s.clampIn(l, clampO, asrc[:n*qDim]), n); err != nil {
 				return err
 			}
@@ -1567,6 +1581,13 @@ attend:
 			s.gaussTopK(li, gate, c.NFFNAt(li))
 			s.actmulAll(gate, up, act)
 			s.tock(opAct, tac)
+			// BitNet's norm over the product, before down.
+			if l.ffnSubNorm != nil {
+				tn := s.tick()
+				s.batchNorm(gate, gate, l.ffnSubNorm, c.NFFNAt(li), n)
+				s.jit.NewInput()
+				s.tock(opRMSNorm, tn)
+			}
 			if err := s.mm(s.bh, l.down, s.clampIn(l, clampDown, gate), n); err != nil {
 				return err
 			}
@@ -1591,4 +1612,46 @@ attend:
 	}
 	s.layerOutScale(l, s.bx[:n*c.NEmbd])
 	return nil
+}
+
+// pickOnHost is the label pick on the host (State.HostPick): the projection
+// at the picked rows alone, each a one-row view of the packed head through
+// the generated matvec, where the whole vocabulary was projected for a
+// handful of ids -- on Lev, 248320 rows of Q8_0 read for nine. It reads the
+// normed row in s.h and leaves s.logits as it was, so a caller that picked
+// reads HostPickVals. False, with nothing done, where the pick does not
+// apply: no pick asked, a head the generated matvec does not read packed, or
+// a model that adjusts its logits after the head (a bias, a final softcap or a
+// logit scale), which the picked values would have to take too.
+func (s *State) pickOnHost() bool {
+	s.HostPicked = false
+	w := s.outW
+	if len(s.HostPick) == 0 || len(s.HostPickVals) < len(s.HostPick) || w.packed == nil || s.m.outB != nil ||
+		s.c.FinalSoftcap != 0 || s.c.LogitScale != 1 {
+		return false
+	}
+	// A narrow format packs DSlots rows' scales in a word, so a view starts
+	// on a word: the slot's rows are projected and the one asked kept.
+	sl := 1
+	if q, ok := kernels.QuantOf(w.typ); ok {
+		sl = max(kernels.DSlots(q), 1)
+	}
+	var tmp [8]float32
+	if sl > len(tmp) {
+		return false
+	}
+	for j, id := range s.HostPick {
+		lo := int(id) - int(id)%sl
+		if id < 0 || lo+sl > w.rows {
+			return false
+		}
+		v := *w.packed
+		v.Stride, v.Row = max(v.Stride, w.rows), v.Row+lo
+		if !s.jit.MatVecPacked(tmp[:sl], w.typ, &v, s.h, sl, w.k) {
+			return false
+		}
+		s.HostPickVals[j] = tmp[int(id)-lo]
+	}
+	s.HostPicked = true
+	return true
 }

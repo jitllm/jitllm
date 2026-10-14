@@ -24,6 +24,9 @@ type clefGold struct {
 		Options [][2]int `json:"options"`
 	} `json:"questions"`
 	Logits map[string][]float64 `json:"logits"`
+	// LogitsA8 is the tower at the engine's arithmetic (q8 activations), where a
+	// golden carries pictures.
+	LogitsA8 map[string][]float64 `json:"logits_a8"`
 }
 
 const clefFixture = "clef/fixture/clef-fixture.gguf"

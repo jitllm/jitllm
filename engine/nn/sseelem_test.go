@@ -95,6 +95,7 @@ func TestElementwiseEntryPointsComputeOnTheSSETier(t *testing.T) {
 		ActSwiGLUClamp: oracle.SwiGLUClamp,
 		ActSitu:        oracle.Situ,
 		ActIdentity:    func(g, u float64) float64 { return g * u },
+		ActReLU2:       func(g, u float64) float64 { r := math.Max(g, 0); return r * r * u },
 	}
 	for _, k := range cpu.Gated {
 		ops = append(ops, op{"actmul/" + k.String(), func(d []float32) { ActMul32JIT(d[:n], y, k) },

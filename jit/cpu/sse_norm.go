@@ -423,7 +423,7 @@ func EmitPackedRowSSE(q kernels.Quant) ([]byte, error) {
 	perSuper, _ := kernels.ScaleLayout(q)
 	signed := kernels.SignedPayload(q)
 	codes := kernels.Codes(q) != nil
-	if sub%8 != 0 || (bits != 4 && bits != 8) || perSuper < 1 {
+	if sub%8 != 0 || (bits != 2 && bits != 4 && bits != 8) || perSuper < 1 || bits == 2 && (sub != 32 || hi != 0 || codes) {
 		return nil, fmt.Errorf("jit: EmitPackedRowSSE: %v has no row kernel shape", q)
 	}
 	pw, hw := sub*bits/32, sub*hi/32
@@ -479,6 +479,8 @@ func EmitPackedRowSSE(q kernels.Quant) ([]byte, error) {
 			a.PXOR(XMM4, XMM4, XMM4)
 			a.PINSRBLoad(XMM4, XMM4, At(R9, 0), 0)
 			a.PSLLD(XMM6, XMM4, 23)
+		} else if kernels.D32(q) {
+			a.MOVSSLoad(XMM6, At(R9, 0)) // TQ2_F32: the word is the scale
 		} else {
 			a.PINSRWLoad(XMM4, XMM4, At(R9, 0), 0)
 			halfToFloatSSE(&a, XMM6, XMM4, XMM2, XMM3, XMM12)
@@ -560,13 +562,26 @@ func EmitPackedRowSSE(q kernels.Quant) ([]byte, error) {
 			}
 			base = 32
 		}
+		if bits == 2 {
+			// TQ2: eight-element group g is field g of the sub-block's eight
+			// bytes (packSub), so its two halves widen bytes 0..3 and 4..7 and
+			// shift the field down; XMM5 holds 3 in every dword.
+			a.PSRLD(XMM5, XMM9, 6)
+		}
 		for g := 0; g < sub/8; g++ {
 			for h := 0; h < 2; h++ {
 				gq := 2*g + h // this 4-element group's l/4
 				src := At(RAX, base+int32(8*g+4*h))
-				if signed {
+				switch {
+				case bits == 2:
+					a.PMOVZXBDLoad(XMM1, At(RAX, int32(4*h)))
+					if g > 0 {
+						a.PSRLD(XMM1, XMM1, byte(2*g))
+					}
+					a.PAND(XMM1, XMM1, XMM5)
+				case signed:
 					a.PMOVSXBDLoad(XMM1, src)
-				} else {
+				default:
 					a.PMOVZXBDLoad(XMM1, src)
 				}
 				if hi > 0 {

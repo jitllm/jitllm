@@ -7,13 +7,13 @@ a GGUF architecture, Hugging Face class or vision projector that is not here is 
 by name. `internal/srcgate.TestModelsDocIsGenerated` fails when the page and the code part; rerun
 `go run ./scripts/genmodels docs/models.md`.
 
-- **68** GGUF text architecture names (`general.architecture`, `convert.Architectures`) on **59** graphs
-- **30** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **23** graphs, **1** of them reached only from safetensors
-- **60** graphs in all (`jlm.Arch`)
+- **69** GGUF text architecture names (`general.architecture`, `convert.Architectures`) on **60** graphs
+- **31** Hugging Face safetensors classes (`architectures` in `config.json`, `convert.HFClasses`) on **24** graphs, **1** of them reached only from safetensors
+- **61** graphs in all (`jlm.Arch`)
 - **18** vision projectors (`clip.projector_type`, `convert.Projectors`)
 - **3** embedding encoders, and pooling on any decoder
-- **13** weight types read (`quant.Dequantable`), **9** of them packed quantizations (`quant.PackedTypes`)
-- **86** models in the download catalogue (`jitllm library`), **9** of them with a vision tower
+- **15** weight types read (`quant.Dequantable`), **11** of them packed quantizations (`quant.PackedTypes`)
+- **87** models in the download catalogue (`jitllm library`), **9** of them with a vision tower
 
 ## Text architectures
 
@@ -26,6 +26,7 @@ further at conversion (a stated sliding window, M-RoPE sections); the Models col
 | `arcee` | `arcee` | `ArceeForCausalLM` | AFM-4.5B |
 | `bailingmoe2` | `bailingmoe2` | -- | Ling 2.0 and Ring 2.0 |
 | `bert` | `bert` | -- | all-MiniLM, mxbai-embed-large, bge-large, snowflake-arctic-embed (embeddings) |
+| `bitnet` | `bitnet-b1.58` | `BitNetForCausalLM` | BitNet b1.58 2B-4T (bitnet.cpp's I2_S, F16 and F32 conversions) |
 | `command-r` | `cohere2`, `command-r` | -- | `cohere2`: Command R7B, Command A; `command-r`: Command-R, Aya, Aya Expanse |
 | `dbrx` | `dbrx` | -- | DBRX |
 | `deepseek2` | `deepseek2` | `DeepseekV2ForCausalLM`, `DeepseekV3ForCausalLM`, `Glm4MoeLiteForCausalLM` | DeepSeek-V2, V2-Lite, Coder-V2, V3, R1; Kimi-K2; Moonlight; Kimi-VL's text model |
@@ -92,6 +93,7 @@ classes; any other is refused, and `model_type` is not a fallback.
 |---|---|---|
 | `ApertusForCausalLM` | `apertus` | Apertus |
 | `ArceeForCausalLM` | `arcee` | AFM-4.5B |
+| `BitNetForCausalLM` | `bitnet` | BitNet b1.58 2B-4T: the release, and its bf16 master weights |
 | `DeepseekV2ForCausalLM` | `deepseek2` | DeepSeek-V2, V2-Lite, Coder-V2 |
 | `DeepseekV3ForCausalLM` | `deepseek2` | DeepSeek-V3, R1, Kimi-K2, Moonlight |
 | `Dots1ForCausalLM` | `dots1` | dots.llm1 |
@@ -162,9 +164,9 @@ Any decoder above also converts as an embedding model when its GGUF states `pool
 
 ## Weight types
 
-Read: F32, F16, Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, BF16, MXFP4.
+Read: F32, F16, Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, BF16, TQ1_0, TQ2_0, MXFP4.
 
-Packed quantizations: Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, MXFP4. A GGUF's quantization is kept; `-q8` stores a float safetensors model's
+Packed quantizations: Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, MXFP4, TQ2_0, TQ2_F32. A GGUF's quantization is kept; `-q8` stores a float safetensors model's
 matrices as Q8_0.
 
 ## Download catalogue
@@ -207,6 +209,7 @@ lists above, each entry downloaded, converted and made to generate before it was
 | `ling-mini-2.0` | Ling mini 2.0 | `bailingmoe2` | 16B-A1.4B | Q4_K_M |  |
 | `phi-mini-moe-instruct` | Phi mini MoE Instruct | `phimoe` | 7.6B-A2.4B | Q4_K_M |  |
 | `apertus-8b-instruct` | Apertus 8B Instruct | `apertus` | 8B | Q4_K_M |  |
+| `bitnet-b1.58-2b-4t` | BitNet b1.58 2B-4T | `bitnet-b1.58` | 2B | I2_S |  |
 | `granite-4.0-h-350m` | Granite 4.0 H 350M | `granitehybrid` | 350M | Q8_0 |  |
 | `nemotron-nano-9b-v2` | NVIDIA Nemotron Nano 9B v2 | `nemotron_h` | 9B | Q4_K_M |  |
 | `nemotron-3-nano-30b-a3b` | NVIDIA Nemotron 3 Nano 30B-A3B | `nemotron_h_moe` | 30B-A3B | Q4_K_M |  |

@@ -105,6 +105,10 @@ type LayerWeights struct {
 	// the same op as AttnNorm with a different weight. LayerPlan.PostNorm says
 	// the model has them so a tier can decline before uploading anything.
 	PostAttnNorm, PostFFNNorm []float32
+	// AttnSubNorm and FFNSubNorm are BitNet's inner RMSNorms (LayerPlan.SubNorm):
+	// over the attention output (QDim wide) before wo, and over act(gate)*up
+	// (NFFN wide) before down. nil elsewhere.
+	AttnSubNorm, FFNSubNorm []float32
 	// ResidNorm and ResidNormB are a post-norm block's last LayerNorm, over x
 	// + mlp(x) (LayerPlan.PostResidNorm): BERT's output norm. nil elsewhere.
 	ResidNorm, ResidNormB []float32
@@ -760,6 +764,10 @@ type LayerPlan struct {
 	// PostNorm says the block RMSNorms the attention output and the FFN output
 	// before each residual add -- gemma2 and gemma3's two extra norms.
 	PostNorm bool
+	// SubNorm says the block RMSNorms the attention output before wo and the
+	// gated FFN's product before down (LayerWeights.AttnSubNorm/FFNSubNorm) --
+	// BitNet's two inner norms. A tier runs both or declines the block.
+	SubNorm bool
 	// PostResidNorm says the block's norms come after its residual adds, on
 	// the residual itself (BERT's post-norm order): x = LN(x + attn(x)) with
 	// FFNNorm, whose output is both the FFN's input and the residual, then

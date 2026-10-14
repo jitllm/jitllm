@@ -9,6 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
 // reasoningModel is a container whose model reasons, because that is the one
@@ -23,6 +24,7 @@ var reasoningModel = testmodels.Path("Qwen3-1.7B-Q4_K_M.jlm")
 // (Turn.Think), since they come from different call sites and are what the
 // transcript renders.
 func TestAReasoningModelsReasoningReachesTheStore(t *testing.T) {
+	fresh.Must(t, reasoningModel)
 	if _, err := os.Stat(reasoningModel); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}

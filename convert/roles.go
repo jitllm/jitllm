@@ -77,6 +77,10 @@ var roleOf = map[string]jlm.Role{
 	"ffn_gate.weight":            jlm.RoleFFNGate,
 	"ffn_up.weight":              jlm.RoleFFNUp,
 	"ffn_down.weight":            jlm.RoleFFNDown,
+	// BitNet's inner norms, over the attention output and over the gated FFN's
+	// product.
+	"attn_sub_norm.weight": jlm.RoleAttnSubNorm,
+	"ffn_sub_norm.weight":  jlm.RoleFFNSubNorm,
 	// A post-norm encoder block's two LayerNorms and its MLP biases.
 	"attn_output_norm.weight":  jlm.RoleAttnOutNorm,
 	"attn_output_norm.bias":    jlm.RoleAttnOutNormBias,
@@ -332,8 +336,9 @@ func identify(name string) (role jlm.Role, block int32, index int32, err error) 
 		return r, block, index, nil
 	}
 	// The second temporal plane of Qwen2-VL's conv3d patch embedding, which the
-	// GGUF spells as a second 4-D tensor. It is carried as index 1 and folded
-	// into index -1 by prepareTower, so nothing indexed reaches the container.
+	// GGUF spells as a second 4-D tensor. It is carried as index 1, folded into
+	// index -1 by prepareTower (the sum a still image reads), and kept as
+	// itself for a video's second frame (foldPatchPlanes).
 	if rest == "v.patch_embd.weight.1" {
 		return jlm.RoleVPatchEmbd, block, 1, nil
 	}

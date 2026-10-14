@@ -30,6 +30,7 @@ var familiar = map[jlm.Type]string{
 	jlm.TypeF32: "F32", jlm.TypeF16: "F16", jlm.TypeBF16: "BF16",
 	jlm.TypeQ4: "Q4_0", jlm.TypeQ8: "Q8_0", jlm.TypeQ5: "Q5_0", jlm.TypeQ51: "Q5_1", jlm.TypeMX4: "MXFP4",
 	jlm.TypeQ3S: "Q3_K", jlm.TypeQ4S: "Q4_K", jlm.TypeQ5S: "Q5_K", jlm.TypeQ6S: "Q6_K",
+	jlm.TypeTQ2: "TQ2_0", jlm.TypeTQ2F: "TQ2_F32",
 }
 
 // QuantFromTensors is the container's dominant weight type by element count,

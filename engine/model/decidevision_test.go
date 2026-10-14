@@ -177,7 +177,8 @@ func TestD1PicturesMatchLlamaCpp(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, state, qs, urls, err := ParseDecisionRequest(body)
+			parsed, err := ParseDecisionRequest(body)
+			state, qs, urls := parsed.State, parsed.Questions, parsed.Images
 			if err != nil {
 				t.Fatal(err)
 			}

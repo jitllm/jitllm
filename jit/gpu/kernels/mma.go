@@ -221,8 +221,8 @@ func MatVecMMA(s MatVecShape) (*ir.Kernel, error) {
 	// offset into the row.
 	wStride := int64(words) * int64(s.Rows)
 	tn := b.Mul(ir.U32, t, nrows)
-	if qi.bits == 4 && qi.sub == 16 {
-		// This format indexes by word t&1, not t.
+	if qi.bits == 4 && qi.sub == 16 || qi.bits == 2 {
+		// These formats index by word t&1, not t.
 		tn = b.Mul(ir.U32, b.And(ir.U32, t, one), nrows)
 	}
 	// One base register and compile-time immediates: the rows a lane holds
@@ -238,6 +238,16 @@ func MatVecMMA(s MatVecShape) (*ir.Kernel, error) {
 	var nibShift ir.Value
 	if qi.bits == 4 && qi.sub == 16 {
 		nibShift = b.Mul(ir.U32, b.Shr(ir.U32, t, one), four)
+	}
+	// TQ2's 2-bit plane at sub 32: k=4t.. is field t>>1 of word t&1 and
+	// k=16+4t.. field 2+(t>>1) of the same word (packSub), so a lane's two
+	// halves are one load and two shifts.
+	var fieldShift ir.Value
+	if qi.bits == 2 {
+		if qi.sub != 32 {
+			return nil, fmt.Errorf("kernels: MatVecMMA: %v's 2-bit plane at sub %d has no arm", s.T, qi.sub)
+		}
+		fieldShift = b.Mul(ir.U32, b.Shr(ir.U32, t, one), b.Const(ir.U32, 2))
 	}
 	// The secondary plane's base is not the primary's: wBase0 carries the
 	// word-within-sub-block selector, and the hi plane's base is the row alone
@@ -339,6 +349,13 @@ func MatVecMMA(s MatVecShape) (*ir.Kernel, error) {
 					q = b.Xor(ir.U32, q, b.Shl(ir.U32, code, b.Const(ir.U32, int64(qi.bits))))
 				}
 				f[h] = center(q)
+			case qi.bits == 2:
+				w := b.Load(ir.U32, pQS, idx, im)
+				m3 := b.Const(ir.U32, 0x03030303)
+				lo := b.And(ir.U32, b.Shr(ir.U32, w, fieldShift), m3)
+				hi := b.And(ir.U32, b.Shr(ir.U32, w, b.Add(ir.U32, fieldShift, four)), m3)
+				f[h] = center(lo)
+				f[2+h] = center(hi)
 			default:
 				// 8-bit: one word is four quants, so a fragment register is a
 				// load and, for a biased format, its centering. A secondary plane
@@ -422,6 +439,9 @@ func MatVecMMA(s MatVecShape) (*ir.Kernel, error) {
 		}
 		if qi.biasArray {
 			return b.CvtF16H(dw), b.CvtF16H(b.Shr(ir.U32, dw, b.Const(ir.U32, 16)))
+		}
+		if qi.d32 {
+			return b.Bitcast(ir.F32, dw), 0 // TQ2F: the word is the scale
 		}
 		return b.CvtF16H(dw), 0
 	}

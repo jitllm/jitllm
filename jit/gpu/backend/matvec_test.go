@@ -31,7 +31,7 @@ func TestMatVecMatchesReference(t *testing.T) {
 		t.Run(d.API(), func(t *testing.T) {
 			t.Logf("device: %s", d.Name())
 			for _, q := range []kernels.Quant{kernels.Q4_0, kernels.Q8_0, kernels.Q4_K, kernels.MXFP4,
-				kernels.Q5_0, kernels.Q5_1, kernels.Float32, kernels.Float16, kernels.BFloat16} {
+				kernels.Q5_0, kernels.Q5_1, kernels.TQ2, kernels.TQ2F, kernels.Float32, kernels.Float16, kernels.BFloat16} {
 				// Splits are covered explicitly: the end-to-end token check
 				// exercises them too, but a wrong split produces a plausible
 				// number rather than a crash, and this isolates it.
@@ -156,6 +156,23 @@ func matvecCaseFull(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, s
 					exact[r][b*32+j+16] = float64(quant.MXFP4Values[hi]) * sc
 				}
 			}
+		}
+	case q == kernels.TQ2 || q == kernels.TQ2F:
+		// Random 2-bit codes (3 included, which the format reads as 2) under
+		// a sane scale, an f16 or an f32 one, decoded by the reference.
+		rng.Read(raw)
+		ref := make([]float64, 256)
+		for i := 0; i < nrows*nsuper; i++ {
+			blk := raw[i*bb : (i+1)*bb]
+			if q == kernels.TQ2 {
+				binary.LittleEndian.PutUint16(blk[64:], uint16(0x2000|rng.Intn(0x0C00)))
+			} else {
+				binary.LittleEndian.PutUint32(blk[64:], math.Float32bits(0.01+rng.Float32()))
+			}
+			if err := quant.Dequant(ggufOf[q], blk, ref); err != nil {
+				t.Fatal(err)
+			}
+			copy(exact[i/nsuper][(i%nsuper)*256:], ref)
 		}
 	case q == kernels.Q5_0 || q == kernels.Q5_1:
 		// Random planes under a sane scale (and, for Q5_1, a minimum drawn

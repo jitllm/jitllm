@@ -62,9 +62,14 @@ type ssePackedFormat struct {
 	// Q5_1, which has no sc plane (kernels.MinInD).
 	minD            bool
 	pw, hw, halfSub int
+	// fields codes a payload byte, a field-run (sub/fields) apart; see
+	// kernels.Fields.
+	fields, run     int
 	perWord, stride int
 	// stream: container v27's SC stream (kernels.ScStream, scstream.go).
 	stream bool
+	// d32: the d word is the scale as an f32 (TQ2_F32, kernels.D32).
+	d32 bool
 }
 
 func newSSEPackedFormat(t quant.Type, who string) (ssePackedFormat, error) {
@@ -81,7 +86,8 @@ func newSSEPackedFormat(t quant.Type, who string) (ssePackedFormat, error) {
 	if err != nil {
 		return ssePackedFormat{}, err
 	}
-	f := ssePackedFormat{t: t, codes: codes, narrow: NarrowD(t), e8m0: E8M0D(t), stream: kernels.ScStream(q)}
+	f := ssePackedFormat{t: t, codes: codes, narrow: NarrowD(t), e8m0: E8M0D(t), stream: kernels.ScStream(q),
+		d32: kernels.D32(q)}
 	f.sub, f.bits, f.biasK, f.biasArray = kernels.Layout(q)
 	f.perSuper, f.scOff = kernels.ScaleLayout(q)
 	f.signed = kernels.SignedPayload(q)
@@ -89,9 +95,11 @@ func newSSEPackedFormat(t quant.Type, who string) (ssePackedFormat, error) {
 	f.hi = kernels.HiPlane(q)
 	f.pw, f.hw, f.halfSub = f.sub*f.bits/32, f.sub*f.hi/32, f.sub/2
 	f.perWord, f.stride = perWordOf(f.biasArray), strideOf(f.biasArray)
-	if f.bits != 4 && f.bits != 8 {
+	if f.bits != 2 && f.bits != 4 && f.bits != 8 {
 		return ssePackedFormat{}, fmt.Errorf("jit: %s: %s has a %d-bit primary plane", who, t, f.bits)
 	}
+	f.fields = 8 / f.bits
+	f.run = f.sub / f.fields
 	return f, nil
 }
 
@@ -171,16 +179,21 @@ func (u sseUnpack) code(a *Buf, x Reg) Reg {
 
 // primary accumulates one primary word: for a 4-bit plane the low nibbles
 // against actL and the high ones (elements half a sub-block on) against actH;
-// for an 8-bit plane the byte against actL. pay is clobbered only on the
-// signed 8-bit path.
-func (u sseUnpack) primary(a *Buf, acc, pay, actL, actH Reg) {
+// for a 2-bit plane fields f0 and f0+1 (a field-run apart) the same way; for
+// an 8-bit plane the byte against actL. pay is clobbered only on the signed
+// 8-bit path.
+func (u sseUnpack) primary(a *Buf, acc, pay, actL, actH Reg, f0 int) {
 	switch {
-	case u.f.bits == 4:
-		a.PAND(u.tmp, pay, u.mask)
-		u.dot.unsigned(a, acc, u.code(a, u.tmp), actL)
-		a.PSRLD(u.tmp, pay, 4)
-		a.PAND(u.tmp, u.tmp, u.mask)
-		u.dot.unsigned(a, acc, u.code(a, u.tmp), actH)
+	case u.f.bits < 8:
+		for i, act := range []Reg{actL, actH} {
+			if sh := u.f.bits * (f0 + i); sh == 0 {
+				a.PAND(u.tmp, pay, u.mask)
+			} else {
+				a.PSRLD(u.tmp, pay, byte(sh))
+				a.PAND(u.tmp, u.tmp, u.mask)
+			}
+			u.dot.unsigned(a, acc, u.code(a, u.tmp), act)
+		}
 	case u.f.signed:
 		u.dot.signed(a, acc, pay, actL, u.tmp)
 	default:
@@ -227,8 +240,14 @@ func (r *sseRegs) take() Reg {
 // plane, the ones vector in its place), the ones vector, -scOff, the
 // pre-shifted secondary mask and the code table.
 func loadPackedConsts(a *Buf, f ssePackedFormat, base Reg, u sseUnpack) {
-	if f.bits == 4 {
+	if f.bits < 8 {
 		a.MOVDQULoad(u.mask, At(base, 0))
+		if f.bits == 2 {
+			// 0x03 a byte: mask & (mask >> 2), the dword shift's spill across
+			// bytes cleared by the AND (fieldMask).
+			a.PSRLD(u.tmp, u.mask, 2)
+			a.PAND(u.mask, u.mask, u.tmp)
+		}
 		sseOnes16(a, u.dot.ones)
 	} else {
 		// No nibble mask and no 0x80 sign flip on this path (PSIGNB replaces
@@ -260,6 +279,12 @@ func halfPlane(a *Buf, f ssePackedFormat, src, dOut, mOut Mem, pay, x, tmp, t0, 
 		a.PMOVZXBDLoad(pay, src)
 		a.PSLLD(tmp, pay, 23)
 		a.MOVUPSStore(dOut, tmp)
+		return
+	}
+	if f.d32 {
+		// TQ2_F32: the word is the scale, and nothing converts.
+		a.MOVDQULoad(pay, src)
+		a.MOVUPSStore(dOut, pay)
 		return
 	}
 	if f.narrow {
@@ -346,7 +371,7 @@ func EmitPackedMatVecSSE(t quant.Type, rows int) ([]byte, error) {
 	u.f = f
 	u.mask = r.take()
 	corr := r.take()
-	if f.bits == 4 {
+	if f.bits < 8 {
 		u.dot.ones = r.take()
 	} else {
 		u.dot.ones = u.mask
@@ -461,13 +486,17 @@ func EmitPackedMatVecSSE(t quant.Type, rows int) ([]byte, error) {
 			// One prefetch per stride step, as the AVX2 tile does: what the
 			// hardware prefetcher cannot see is the jump of nrows*4.
 			a.PREFETCHT0(Idx(RDX, R13, 8, 0))
-			bcastD(&a, actL, At(R11, int32(f.sub*sn+4*w)))
-			if f.bits == 4 {
-				bcastD(&a, actH, At(R11, int32(f.sub*sn+f.halfSub+4*w)))
-			}
-			for g := 0; g < G; g++ {
-				a.MOVDQULoad(pay, At(RDX, int32(16*g)))
-				u.primary(&a, iac[g], pay, actL, actH)
+			// Two fields at a time, each against the activations a field-run
+			// on: one pair for a 4-bit plane, two for a 2-bit one.
+			for f0 := 0; f0 < f.fields; f0 += 2 {
+				bcastD(&a, actL, At(R11, int32(f.sub*sn+f0*f.run+4*w)))
+				if f.bits < 8 {
+					bcastD(&a, actH, At(R11, int32(f.sub*sn+(f0+1)*f.run+4*w)))
+				}
+				for g := 0; g < G; g++ {
+					a.MOVDQULoad(pay, At(RDX, int32(16*g)))
+					u.primary(&a, iac[g], pay, actL, actH, f0)
+				}
 			}
 			a.ADDQ(RDX, R13)
 		}
@@ -616,7 +645,7 @@ func EmitPackedMatVecFusedSSE(t quant.Type) ([]byte, error) {
 	u.f = f
 	u.mask = r.take()
 	da, bscale := r.take(), r.take()
-	if f.bits == 4 {
+	if f.bits < 8 {
 		u.dot.ones = r.take()
 	} else {
 		u.dot.ones = u.mask
@@ -744,13 +773,15 @@ func EmitPackedMatVecFusedSSE(t quant.Type) ([]byte, error) {
 			for w := 0; w < f.pw; w++ {
 				// Re-broadcast per word: four accumulators and the hoisted
 				// activations of every word do not fit in sixteen XMM.
-				bcastD(&a, actL, At(R11, int32(f.sub*sn+4*w)))
-				if f.bits == 4 {
-					bcastD(&a, actH, At(R11, int32(f.sub*sn+f.halfSub+4*w)))
-				}
-				for g := 0; g < grp; g++ {
-					a.MOVDQULoad(pay, Idx(RSI, R15, 1, int32(16*g)))
-					u.primary(&a, iac[g], pay, actL, actH)
+				for f0 := 0; f0 < f.fields; f0 += 2 {
+					bcastD(&a, actL, At(R11, int32(f.sub*sn+f0*f.run+4*w)))
+					if f.bits < 8 {
+						bcastD(&a, actH, At(R11, int32(f.sub*sn+(f0+1)*f.run+4*w)))
+					}
+					for g := 0; g < grp; g++ {
+						a.MOVDQULoad(pay, Idx(RSI, R15, 1, int32(16*g)))
+						u.primary(&a, iac[g], pay, actL, actH, f0)
+					}
 				}
 				a.ADDQ(RSI, R13)
 			}

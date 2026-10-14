@@ -139,7 +139,10 @@ func TestQuantizeMatchesCPU(t *testing.T) {
 func TestQuantizeWideWindow(t *testing.T) {
 	// Widths that leave the last group part-full, and the batched row counts
 	// the tier quantizes: 2048 alone is one full group.
-	for _, c := range []struct{ k, window int }{{2048, 256}, {5632, 256}, {3 * 2048, 256}, {256, 256}, {5632, 32}, {768, 256}} {
+	for _, c := range []struct{ k, window int }{{2048, 256}, {5632, 256}, {3 * 2048, 256}, {256, 256}, {5632, 32}, {768, 256},
+		// Row windows (BitNet's per-token scale): one row and several, each
+		// wider than one group's tile, so Quantize loops over it.
+		{2560, 2560}, {6912, 6912}, {3 * 2560, 2560}, {7 * 640, 640}, {2 * 6912, 6912}, {16 * 2560, 2560}} {
 		t.Run(fmt.Sprintf("k%d_w%d", c.k, c.window), func(t *testing.T) { quantizeWideCase(t, c.k, c.window) })
 	}
 }

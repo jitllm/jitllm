@@ -56,6 +56,11 @@ func EmitPackedMatVecWide(t quant.Type, dk DotKind) ([]byte, error) {
 	if NarrowD(t) {
 		return nil, fmt.Errorf("jit: EmitPackedMatVecWide: %s packs two rows to a d word; use the fused kernel", t)
 	}
+	if _, bits, _, _ := kernels.Layout(q); bits == 2 {
+		// Unreachable for the same reason; its two activation registers hold
+		// a nibble pair, and a 2-bit plane has four fields a byte.
+		return nil, fmt.Errorf("jit: EmitPackedMatVecWide: %s has a 2-bit plane; use the fused kernel", t)
+	}
 	sub, bits, biasK, biasArray := kernels.Layout(q)
 	perSuper, scOff := kernels.ScaleLayout(q)
 	signed := kernels.SignedPayload(q)
@@ -248,8 +253,12 @@ func EmitPackedMatVecWide(t quant.Type, dk DotKind) ([]byte, error) {
 			rowLoop(func() {
 				for g := 0; g < grp; g++ {
 					off := int32(g * vec)
-					a.VMOVDQULoad(wa, Idx(R8, R15, 1, off)) // the d word
-					f16x8(wb, wa, shuf)                     // d
+					if kernels.D32(q) {
+						a.VMOVDQULoad(wb, Idx(R8, R15, 1, off)) // the d word is the scale
+					} else {
+						a.VMOVDQULoad(wa, Idx(R8, R15, 1, off)) // the d word
+						f16x8(wb, wa, shuf)                     // d
+					}
 					// Container v27's SC stream (scstream.go): a straddling
 					// field's next word is a plane stride on, reached by
 					// stepping the cursor there and back.

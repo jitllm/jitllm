@@ -337,6 +337,10 @@ func NewJIT(maxK, maxRows int, types []quant.Type, opts ...Option) *JIT {
 	// wide. The layout is the same either way; a wider window only makes
 	// consecutive (d, -sum*biasC/8) pairs share a d, which a kernel may hoist.
 	window := cpu.WideActWindow(types)
+	if cfg.ActWindow > 0 {
+		// The graph's own window (BitNet's per-token quantization).
+		window = cfg.ActWindow
+	}
 	tier := cpu.HostTier()
 	f := &JIT{
 		cfg:         cfg,

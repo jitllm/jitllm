@@ -13,6 +13,7 @@ import (
 
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
 // modelPath is a real container, because the one thing this gate exists to
@@ -45,6 +46,7 @@ func pump(t *testing.T, sh *testShell, d time.Duration, what string, want func()
 // It guards the app reaching the engine at all: the window's screen.Engine must be
 // attached, or clicking a model says "No engine wired".
 func TestTheEngineLoadsAModelAndGenerates(t *testing.T) {
+	fresh.Must(t, modelPath)
 	if _, err := os.Stat(modelPath); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
@@ -165,6 +167,7 @@ func TestTheEngineLoadsAModelAndGenerates(t *testing.T) {
 
 // Stop must cancel a generation and keep the model loaded.
 func TestStopCancelsAndKeepsTheModel(t *testing.T) {
+	fresh.Must(t, modelPath)
 	if _, err := os.Stat(modelPath); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
@@ -212,6 +215,7 @@ func trunc(s string, n int) string {
 // assertion is the reuse count (KVRestored), not the time, which on a tiny
 // model measures the harness.
 func TestASecondTurnReusesTheSharedPrefix(t *testing.T) {
+	fresh.Must(t, modelPath)
 	if _, err := os.Stat(modelPath); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}

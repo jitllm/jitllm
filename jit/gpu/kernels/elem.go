@@ -59,7 +59,11 @@ func quantize(k, window int, kind *ActKind) (*ir.Kernel, error) {
 	}
 	const wpb = 8 // words (threads) per 32-element block
 	span := per * wpb
-	if span > quantGroup || quantGroup%span != 0 {
+	if span > quantGroup {
+		// A window wider than one group's tile loops (quantwide.go).
+		return quantizeWide(k, window, kind)
+	}
+	if quantGroup%span != 0 {
 		return nil, fmt.Errorf("kernels: Quantize: window %d does not tile a %d-thread group", window, quantGroup)
 	}
 	name := "quantize"
@@ -232,7 +236,9 @@ func RMSNormQuantRows(k, rows int, eps float32, addOne, add bool, window int) (*
 		return nil, fmt.Errorf("kernels: RMSNormQuantRows: k=%d is not a multiple of 32", k)
 	}
 	per := max(window/32, 1)
-	if span := per * 8; span > RMSNormGroup || RMSNormGroup%span != 0 || (k/4)%span != 0 {
+	// A window of the whole row or wider is one scale a row (quantPhase's row
+	// mode); a narrower one must tile the group.
+	if span := per * 8; window < k && (span > RMSNormGroup || RMSNormGroup%span != 0 || (k/4)%span != 0) {
 		return nil, fmt.Errorf("kernels: RMSNormQuantRows: window %d does not tile k=%d", window, k)
 	}
 	return rmsNormRows(k, rows, eps, addOne, add, max(window, 32), false)
@@ -426,6 +432,23 @@ func quantPhase(b *ir.Builder, k, rows, window, g int, r, tid, pA, pAX, shMax, s
 	half := b.Const(ir.U32, 0x3F000000)
 	signMask := b.Const(ir.U32, 0x80000000)
 	rowW := b.Mul(ir.U32, r, b.Const(ir.U32, int64(nw)))
+	// Row mode: one scale for the whole row (a window at least k wide, the
+	// host clamping it at the row's end), its maximum met by a strided scan
+	// and a tree before any word is quantized.
+	var rowAmax ir.Value
+	if window >= k {
+		acc := b.ConstF32(0)
+		for j := 0; j < (nw+g-1)/g; j++ {
+			word := b.Min(ir.U32, b.Add(ir.U32, tid, b.Const(ir.U32, int64(j*g))), lastW)
+			base := b.Mul(ir.U32, word, b.Const(ir.U32, 4))
+			var v [4]ir.Value
+			for i := range v {
+				v[i] = elem(b.Add(ir.U32, base, b.Const(ir.U32, int64(i))))
+			}
+			acc = b.Max(ir.F32, acc, amaxOf(b, v[:]))
+		}
+		rowAmax = treeMax(b, shMax, tid, acc, g)
+	}
 	for j := 0; j < (nw+g-1)/g; j++ {
 		word := b.Min(ir.U32, b.Add(ir.U32, tid, b.Const(ir.U32, int64(j*g))), lastW)
 		local := b.Sub(ir.U32, word, b.Const(ir.U32, int64(j*g)))
@@ -434,12 +457,15 @@ func quantPhase(b *ir.Builder, k, rows, window, g int, r, tid, pA, pAX, shMax, s
 		for i := range v {
 			v[i] = elem(b.Add(ir.U32, base, b.Const(ir.U32, int64(i))))
 		}
-		b.Store(shMax, tid, amaxOf(b, v[:]), 0)
-		b.Barrier()
-		wbase := b.Mul(ir.U32, b.Div(ir.U32, local, b.Const(ir.U32, int64(span))), b.Const(ir.U32, int64(span)))
-		amax := b.ConstF32(0)
-		for i := 0; i < span; i++ {
-			amax = b.Max(ir.F32, amax, b.Load(ir.F32, shMax, wbase, int64(i)))
+		amax := rowAmax
+		if window < k {
+			b.Store(shMax, tid, amaxOf(b, v[:]), 0)
+			b.Barrier()
+			wbase := b.Mul(ir.U32, b.Div(ir.U32, local, b.Const(ir.U32, int64(span))), b.Const(ir.U32, int64(span)))
+			amax = b.ConstF32(0)
+			for i := 0; i < span; i++ {
+				amax = b.Max(ir.F32, amax, b.Load(ir.F32, shMax, wbase, int64(i)))
+			}
 		}
 		d, inv := quantScales(b, amax)
 		sum := b.Const(ir.I32, 0)
@@ -541,7 +567,7 @@ func ActMul(n int, k ActKind) (*ir.Kernel, error) {
 // actMulKind refuses an activation ActMul has no gated form of.
 func actMulKind(k ActKind) error {
 	switch k {
-	case ActSiLU, ActGELU, ActSwiGLUOAI, ActIdentity, ActSwiGLUClamp, ActSitu, ActGELUErf:
+	case ActSiLU, ActGELU, ActSwiGLUOAI, ActIdentity, ActSwiGLUClamp, ActSitu, ActGELUErf, ActReLU2:
 		return nil
 	}
 	return fmt.Errorf("kernels: ActMul: %v is not a gated activation", k)

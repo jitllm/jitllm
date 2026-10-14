@@ -40,8 +40,8 @@ import (
 // Gates' violations, false in every real run: lfm2TanhGELU runs the
 // projector's GELU in llama.cpp's tanh form; lfm2NoThumb leaves a tiled
 // picture's thumbnail out; lfm2Bilinear resamples bilinear whatever the file
-// says.
-var lfm2TanhGELU, lfm2NoThumb, lfm2Bilinear bool
+// says; lfm2NoProjNorm skips the projector's LayerNorm where the file has one.
+var lfm2TanhGELU, lfm2NoThumb, lfm2Bilinear, lfm2NoProjNorm bool
 
 // lfm2Pixels gives the tower the processor's bounds the container states.
 // MaxPixels is also the most patches a piece holds: a tile is TileSize

@@ -271,6 +271,11 @@ func quantization() Quantization {
 	}
 	for _, t := range quant.PackedTypes {
 		q.Packed = append(q.Packed, t.String())
+		// An engine type (TQ2_F32) sits above the GGUF type space the walk
+		// covers.
+		if t.Engine() && quant.Dequantable(t) {
+			q.Dequantable = append(q.Dequantable, t.String())
+		}
 	}
 	return q
 }

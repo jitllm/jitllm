@@ -76,8 +76,10 @@ func rawWeights(q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
 		switch q {
 		case kernels.Q8_0, kernels.Q4_0, kernels.Q5_0:
 			binary.LittleEndian.PutUint16(b, f16())
-		case kernels.Q6_K, kernels.Q3_K:
+		case kernels.Q6_K, kernels.Q3_K, kernels.TQ2:
 			binary.LittleEndian.PutUint16(b[bb-2:], f16())
+		case kernels.TQ2F:
+			binary.LittleEndian.PutUint32(b[bb-4:], math.Float32bits(0.5+rng.Float32()))
 		case kernels.Q4_K, kernels.Q5_K, kernels.Q5_1:
 			binary.LittleEndian.PutUint16(b, f16())
 			binary.LittleEndian.PutUint16(b[2:], f16())

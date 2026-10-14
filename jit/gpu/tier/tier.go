@@ -494,6 +494,9 @@ type Config struct {
 	// replaying a captured graph: the other arm of that comparison, a field so
 	// both arms can be live in one process.
 	NoGraph bool
+	// NoPickMV runs the label pick as the head's whole matvec and a gather
+	// (the arm before kernels.MatVec's PickOf), for the A/B.
+	NoPickMV bool
 	// ScalarSoftmax runs the thread-per-head softmax instead of the warp
 	// reduction, the other arm of that comparison. It is ignored on a device
 	// that did not pass pickSoftmax's check, where the scalar kernel runs
@@ -975,6 +978,9 @@ type Stats struct {
 	// HeadFolds counts batched chunks that ran the output projection on
 	// their last row inside their own submission.
 	HeadFolds int
+	// PickRows counts label picks the head ran as the picked rows' own
+	// projection (pickMV) instead of the whole head and a gather.
+	PickRows int
 	// FlashPrefills counts batched attention launches of a one-kernel form
 	// (kernels.FlashPrefill70, FlashPrefillTile), paged or not.
 	FlashPrefills int
@@ -1264,6 +1270,7 @@ func (s *Stats) add(o Stats) {
 	s.PagedPrefillPasses += o.PagedPrefillPasses
 	s.EmbedLaunches += o.EmbedLaunches
 	s.HeadFolds += o.HeadFolds
+	s.PickRows += o.PickRows
 	s.FlashPrefills += o.FlashPrefills
 	s.VisionAttnChunks += o.VisionAttnChunks
 	if o.MMAWhy != "" {
@@ -1716,7 +1723,11 @@ type devShared struct {
 	samplePenK backend.Kernel
 	sampleKs   map[int]sampleKerns
 	// pickK is the label pick's gather over the head's rows (pick.go).
-	pickK  backend.Kernel
+	pickK backend.Kernel
+	// pickMV projects the picked rows of the head alone (kernels.MatVec's
+	// PickOf), in place of the head's whole matvec and pickK's gather; nil
+	// where the head's format or a cap needs the whole row.
+	pickMV backend.Kernel
 	hostA  []uint32
 	hostAX []float32
 

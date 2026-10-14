@@ -188,6 +188,66 @@ func dequant[T destination](t Type, src []byte, dst []T) error {
 			}
 		}
 
+	case TQ2_0:
+		// block_tq2_0 { uint8_t qs[64]; ggml_half d; } -- 256 elements in 66
+		// bytes. Each byte holds four 2-bit codes q+1 for elements 32 apart:
+		// element 128*(j/32) + 32*l + j%32 is bits 2l..2l+1 of qs[j]. A code of
+		// 3 is not written by any quantizer and decodes, as ggml's does, to 2d.
+		for b := uint64(0); b < blocks; b++ {
+			blk := src[b*66:]
+			d := f16(binary.LittleEndian.Uint16(blk[64:]))
+			out := dst[b*256:]
+			for j := 0; j < 64; j++ {
+				base := 128*(j/32) + j%32
+				for l := 0; l < 4; l++ {
+					out[base+32*l] = T(float64(int(blk[j]>>(2*l)&3)-1) * d)
+				}
+			}
+		}
+
+	case TQ2_F32:
+		// TQ2_0's codes with an f32 d after them: 256 elements in 68 bytes.
+		for b := uint64(0); b < blocks; b++ {
+			blk := src[b*68:]
+			d := float64(math.Float32frombits(binary.LittleEndian.Uint32(blk[64:])))
+			out := dst[b*256:]
+			for j := 0; j < 64; j++ {
+				base := 128*(j/32) + j%32
+				for l := 0; l < 4; l++ {
+					out[base+32*l] = T(float64(int(blk[j]>>(2*l)&3)-1) * d)
+				}
+			}
+		}
+
+	case TQ1_0:
+		// block_tq1_0 { uint8_t qs[48]; uint8_t qh[4]; ggml_half d; } -- 256
+		// elements in 54 bytes, five base-3 digits a byte (four in qh), each
+		// byte the digits' fixed-point fraction: digit n of byte x is
+		// ((x*3^n mod 256)*3) >> 8. qs[0:32] carry elements 32n+m, qs[32:48]
+		// elements 160+16n+m, and qh elements 240+4n+j.
+		for b := uint64(0); b < blocks; b++ {
+			blk := src[b*54:]
+			d := f16(binary.LittleEndian.Uint16(blk[52:]))
+			out := dst[b*256:]
+			digit := func(x byte, n int) float64 {
+				q := x * tq1Pow3[n] // mod 256, as the format defines it
+				return float64(int(uint16(q)*3>>8) - 1)
+			}
+			for n := 0; n < 5; n++ {
+				for m := 0; m < 32; m++ {
+					out[32*n+m] = T(digit(blk[m], n) * d)
+				}
+				for m := 0; m < 16; m++ {
+					out[160+16*n+m] = T(digit(blk[32+m], n) * d)
+				}
+			}
+			for n := 0; n < 4; n++ {
+				for j := 0; j < 4; j++ {
+					out[240+4*n+j] = T(digit(blk[48+j], n) * d)
+				}
+			}
+		}
+
 	case Q3_K:
 		dequantQ3K(src, dst, blocks)
 	case Q4_K:
@@ -210,10 +270,13 @@ var MXFP4Values = [16]int8{0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -
 // IQ4NLValues is IQ4_NL's code table, ggml's kvalues_iq4nl.
 var IQ4NLValues = [16]int8{-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113}
 
+// tq1Pow3 is TQ1_0's digit multipliers.
+var tq1Pow3 = [5]byte{1, 3, 9, 27, 81}
+
 // Dequantable reports whether Dequant handles type t.
 func Dequantable(t Type) bool {
 	switch t {
-	case F32, F16, BF16, Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, MXFP4, IQ4_NL:
+	case F32, F16, BF16, Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, MXFP4, IQ4_NL, TQ1_0, TQ2_0, TQ2_F32:
 		return true
 	}
 	return false

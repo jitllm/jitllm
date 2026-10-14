@@ -180,10 +180,12 @@ func TestPackedPayloadIsNativeWidth(t *testing.T) {
 	// from this map fails rather than going unchecked.
 	native := map[quant.Type]int{
 		quant.Q4_0: 4, quant.Q5_0: 5, quant.Q5_1: 5, quant.Q8_0: 8, quant.Q4_K: 4,
-		quant.Q3_K:  4, // 3 bits would need a 2-bit primary plane
-		quant.Q5_K:  5, // 4-bit primary + 1-bit secondary, like Q6_K's 4+2
-		quant.Q6_K:  6,
-		quant.MXFP4: 4,
+		quant.Q3_K:    4, // 3 bits would need a 2-bit primary plane
+		quant.Q5_K:    5, // 4-bit primary + 1-bit secondary, like Q6_K's 4+2
+		quant.Q6_K:    6,
+		quant.MXFP4:   4,
+		quant.TQ2_0:   2, // the 2-bit plane: four fields a byte (kernels.Fields)
+		quant.TQ2_F32: 2,
 	}
 	for _, f := range packedRefFormats {
 		bits, ok := native[f.g]

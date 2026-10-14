@@ -150,6 +150,7 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 	lscales := map[int32][2][]float32{}
 	clamps := map[int32]*[28]float32{}
 	var alphas, fused int
+	scales := map[string]float32{}
 	renames := towerNames(f, s.Vision)
 	for i := range f.Tensors {
 		t := &f.Tensors[i]
@@ -242,6 +243,24 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 			s.Tensors = append(s.Tensors, e)
 			continue
 		}
+		// BitNet's optional per-tensor projection scale is folded into its
+		// weight's blocks (bitnetTensors).
+		if w, ok := bitnetScaleOf(t.Name); ok && !tower && s.Config.Arch == jlm.ArchBitNet {
+			e := jlm.Tensor{NDim: uint8(len(t.Dims)), Data: f.Bytes(t), Name: t.Name}
+			copy(e.Dims[:], t.Dims)
+			if e.Type, err = typeOf(t.Type); err != nil {
+				return nil, fmt.Errorf("convert: %s: %w", t.Name, err)
+			}
+			x, err := vecOf(&e)
+			if err != nil {
+				return nil, err
+			}
+			if len(x) != 1 {
+				return nil, fmt.Errorf("convert: %s is %d values, want one scale", t.Name, len(x))
+			}
+			scales[w] = x[0]
+			continue
+		}
 		var role jlm.Role
 		var block, index int32
 		// The newer families' tower tensors: a fused q|k|v split, and the
@@ -282,13 +301,22 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 				}
 			}
 		}
-		ty, err := typeOf(t.Type)
+		data := f.Bytes(t)
+		srcType := t.Type
+		// A ternary type with no code here (TQ1_0, I2_S) is re-packed as
+		// TQ2_0 or TQ2_F32, exactly (convert/bitnet.go).
+		if b, ty, ok, terr := ternaryGGUF(t.Type, data, elemsOf(t.Dims)); terr != nil {
+			return nil, fmt.Errorf("convert: %s (%s): %w", t.Name, t.Type, terr)
+		} else if ok {
+			data, srcType = b, ty
+		}
+		ty, err := typeOf(srcType)
 		if err != nil {
 			return nil, fmt.Errorf("convert: %s: %w", t.Name, err)
 		}
 		e := jlm.Tensor{
 			Role: role, Block: block, Index: index, Type: ty,
-			NDim: uint8(len(t.Dims)), Data: f.Bytes(t), Name: t.Name,
+			NDim: uint8(len(t.Dims)), Data: data, Name: t.Name,
 		}
 		copy(e.Dims[:], t.Dims)
 		// A per-expert matrix (Mixtral-era blk.N.ffn_gate.E.weight) is held back
@@ -373,6 +401,9 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 		if err := apertusXIELU(f, s); err != nil {
 			return nil, err
 		}
+	}
+	if err := bitnetTensors(s, scales); err != nil {
+		return nil, err
 	}
 	if err := ds4Tensors(s); err != nil {
 		return nil, err

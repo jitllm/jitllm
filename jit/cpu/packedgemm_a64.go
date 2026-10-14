@@ -59,7 +59,7 @@ func EmitA64PackedMatMulStationary(t quant.Type, k, nrows, win int) ([]byte, err
 	sub, bits, biasArray := f.sub, f.bits, f.biasArray
 	perSuper, scOff := f.perSuper, f.scOff
 	signed, minD, hi, codes := f.signed, f.minD, f.hi, f.codes
-	if bits != 4 && !signed {
+	if bits == 8 && !signed {
 		return nil, fmt.Errorf("jit: EmitA64PackedMatMulStationary: %s: an unsigned 8-bit payload has no form here", t)
 	}
 	if codes && hi != 0 {
@@ -67,8 +67,8 @@ func EmitA64PackedMatMulStationary(t quant.Type, k, nrows, win int) ([]byte, err
 	}
 	pw, hw := f.pw, f.hw
 	nW := pw
-	if bits == 4 {
-		nW = 2 * pw
+	if bits < 8 {
+		nW = f.fields * pw // W[fi*pw+w] is field fi of word w, chunk fi*pw+w
 	}
 	const group = 8
 	if k <= 0 || k%(sub*perSuper) != 0 || nrows <= 0 || nrows%group != 0 {
@@ -195,6 +195,8 @@ func EmitA64PackedMatMulStationary(t quant.Type, k, nrows, win int) ([]byte, err
 			case narrow:
 				a.LDRd(t0, X8, int32(h*8))
 				a.FCVTL(t0, t0)
+			case f.d32:
+				a.LDRq(t0, X8, int32(h*16)) // TQ2_F32: four rows' f32 scales
 			default:
 				a.LDRq(t1, X8, int32(h*16))
 				if biasArray {
@@ -231,8 +233,8 @@ func EmitA64PackedMatMulStationary(t quant.Type, k, nrows, win int) ([]byte, err
 
 		// --- decode this sub-block of eight rows into W, once -------------
 		vMask, vAux, pay, sec, tmp := r[0], r[1], r[2], r[3], r[4]
-		if bits == 4 {
-			a.MOVI16b(vMask, 0x0F)
+		if bits < 8 {
+			a.MOVI16b(vMask, byte(1<<bits-1))
 		}
 		switch {
 		case codes:
@@ -244,8 +246,20 @@ func EmitA64PackedMatMulStationary(t quant.Type, k, nrows, win int) ([]byte, err
 		a.MOVreg(X24, X2)
 		for w := 0; w < pw; w++ {
 			for h := 0; h < 2; h++ {
-				if bits != 4 {
+				if bits == 8 {
 					a.LDRq(W[h][w], X24, int32(h*16))
+					continue
+				}
+				if bits == 2 {
+					a.LDRq(pay, X24, int32(h*16))
+					for fi := 0; fi < f.fields; fi++ {
+						if fi == 0 {
+							a.AND16b(W[h][w], pay, vMask)
+						} else {
+							a.USHR16b(W[h][fi*pw+w], pay, byte(2*fi))
+							a.AND16b(W[h][fi*pw+w], W[h][fi*pw+w], vMask)
+						}
+					}
 					continue
 				}
 				a.LDRq(pay, X24, int32(h*16))

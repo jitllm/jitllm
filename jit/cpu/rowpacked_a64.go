@@ -18,7 +18,7 @@ func EmitPackedRow(q kernels.Quant) ([]byte, error) {
 	perSuper, _ := kernels.ScaleLayout(q)
 	signed := kernels.SignedPayload(q)
 	codes := kernels.Codes(q) != nil
-	if sub%8 != 0 || (bits != 4 && bits != 8) || perSuper < 1 {
+	if sub%8 != 0 || (bits != 2 && bits != 4 && bits != 8) || perSuper < 1 || bits == 2 && (sub != 32 || hi != 0 || codes) {
 		return nil, fmt.Errorf("jit: EmitPackedRow: %v has no row kernel shape", q)
 	}
 	pw, hw := sub*bits/32, sub*hi/32
@@ -60,6 +60,8 @@ func EmitPackedRow(q kernels.Quant) ([]byte, error) {
 			a.UXTL8h(6, 6)
 			a.UXTL4s(6, 6)
 			a.SHL4s(6, 6, 23)
+		} else if kernels.D32(q) {
+			a.LDRs(6, X9, 0) // TQ2_F32: the word is the scale
 		} else {
 			a.LDRh(6, X9, 0)
 			a.FCVTL(6, 6)
@@ -119,6 +121,23 @@ func EmitPackedRow(q kernels.Quant) ([]byte, error) {
 		}
 		a.MOVreg(X2, XReg(14))
 		base := int32(0)
+		if bits == 2 {
+			// TQ2: the sub-block's eight bytes hold four fields each (packSub);
+			// field f of byte p is element 8f+p, so the four fields go to
+			// scratch as four eight-byte runs, element order.
+			a.LDRd(0, scr, 0)
+			a.MOVI16b(3, 0x03)
+			for fi := 0; fi < 4; fi++ {
+				if fi == 0 {
+					a.AND16b(1, 0, 3)
+				} else {
+					a.USHR16b(1, 0, byte(2*fi))
+					a.AND16b(1, 1, 3)
+				}
+				a.STRd(1, scr, int32(32+8*fi))
+			}
+			base = 32
+		}
 		if bits == 4 {
 			a.LDRq(0, scr, 0)
 			a.AND16b(1, 0, 8)

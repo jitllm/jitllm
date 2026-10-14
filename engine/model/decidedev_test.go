@@ -263,6 +263,11 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 							if picked == 0 {
 								t.Fatalf("no prompt's labels were picked on %s: the head's whole row came home", spec)
 							}
+							// And by the picked rows' own projection, not the whole
+							// head and a gather (tier.Config.NoPickMV's arm).
+							if n := g.Stats().PickRows; n == 0 {
+								t.Fatalf("%d prompts picked on %s, none by the picked rows' projection", picked, spec)
+							}
 							row, _, _, rowPicked := decideOn(t, m, g, -1, all, "no-pick")
 							if rowPicked != 0 {
 								t.Fatalf("the no-pick arm picked %d prompts", rowPicked)

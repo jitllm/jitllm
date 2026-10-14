@@ -18,7 +18,7 @@ var (
 	unpackImplemented = []kernels.Quant{kernels.Q4_K}
 	unpackDeclined    = []kernels.Quant{
 		kernels.Q4_0, kernels.Q5_0, kernels.Q5_1, kernels.Q8_0, kernels.Q3_K, kernels.Q5_K,
-		kernels.Q6_K,
+		kernels.Q6_K, kernels.TQ2, kernels.TQ2F,
 		// MXFP4's 17-byte block straddles words.
 		kernels.MXFP4,
 		// A float format's pack is a copy of its rows.

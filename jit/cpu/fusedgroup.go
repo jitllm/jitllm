@@ -55,8 +55,8 @@ func fusedRegisters(q kernels.Quant, group int) int {
 	_, scOff := kernels.ScaleLayout(q)
 	pw := sub * bits / 32
 	nact := pw
-	if bits == 4 {
-		nact = 2 * pw
+	if bits < 8 {
+		nact = (8 / bits) * pw // one broadcast a field a word
 	}
 	need := 3 + group/8 + 3 + nact // mask, da, bscale + accumulators + pay/tmp/t2
 	if scOff != 0 {

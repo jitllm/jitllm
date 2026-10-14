@@ -135,6 +135,13 @@ var Models = []Model{
 		Repo: "bartowski/swiss-ai_Apertus-8B-Instruct-2509-GGUF",
 		File: "swiss-ai_Apertus-8B-Instruct-2509-Q4_K_M.gguf", Bytes: 5057885568},
 
+	// --- bitnet-b1.58 ---
+	// Microsoft's own conversion; 212 of 214 teacher-forced positions take
+	// transformers' token on the release's golden, the other two ties.
+	{Name: "bitnet-b1.58-2b-4t", Title: "BitNet b1.58 2B-4T", Arch: "bitnet-b1.58", Params: "2B", Quant: "I2_S",
+		Repo: "microsoft/bitnet-b1.58-2B-4T-gguf", File: "ggml-model-i2_s.gguf", Bytes: 1187801280,
+		Note: "Ternary weights: every projection is -1, 0 or 1 times one scale."},
+
 	// --- the state-space hybrids and the short convolutions ---
 	// Each teacher-forced against llama.cpp (TestSSMRealModelsTeacherForced).
 	{Name: "granite-4.0-h-350m", Title: "Granite 4.0 H 350M", Arch: "granitehybrid", Params: "350M",

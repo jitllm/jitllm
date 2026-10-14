@@ -71,7 +71,21 @@ const (
 	// (RoleNGramTable), read a row at a time and gathered, never multiplied.
 	TypeIQ4NL Type = 13
 
-	typeMax = TypeIQ4NL
+	// TypeTQ2 is a ternary weight (GGUF's TQ2_0, into which TQ1_0 and
+	// bitnet.cpp's I2_S convert): a 2-bit plane, four codes a byte a quarter
+	// sub-block apart (kernels.Fields), with a constant bias of one, so the
+	// payload is q in {0, 1, 2} for {-1, 0, 1}, and one f16 scale per 32-wide
+	// sub-block (the source block's, repeated): 2.5 bits a weight. Its
+	// arithmetic is over int8 activations (kernels.TQ2).
+	TypeTQ2 Type = 14
+
+	// TypeTQ2F is TypeTQ2 with its scale an f32: one word a row a sub-block
+	// in the d plane, the scale's bits (quant.TQ2_F32, kernels.TQ2F). A
+	// ternary weight whose scale no f16 holds is carried here rather than
+	// rounded.
+	TypeTQ2F Type = 15
+
+	typeMax = TypeTQ2F
 )
 
 // Valid reports whether t is a code this format defines. A file carrying
@@ -106,6 +120,10 @@ func (t Type) String() string {
 		return "bf16"
 	case TypeIQ4NL:
 		return "iq4nl"
+	case TypeTQ2:
+		return "tq2"
+	case TypeTQ2F:
+		return "tq2f"
 	}
 	return "type(" + itoa(uint64(t)) + ")"
 }
@@ -126,6 +144,8 @@ type TypeLayout struct {
 	// Codes, when set, is what a primary code means: the weight is
 	// scale*(Codes[q] - Bias) rather than scale*(q - Bias).
 	Codes *[16]uint8
+	// D32: the d word is the scale as an f32, one row a word (TypeTQ2F).
+	D32 bool
 }
 
 // Layout returns the on-disk description of a packed type, and ok=false for a
@@ -154,6 +174,10 @@ func Layout(t Type) (TypeLayout, bool) {
 		// HasMin at SuperSub 1: there is no per-sub-block minimum to read, so
 		// the minimum is the d word's high half, stored negated.
 		return TypeLayout{Sub: 32, Planes: [2]int{4, 1}, SuperSub: 1, HasMin: true}, true
+	case TypeTQ2:
+		return TypeLayout{Sub: 32, Planes: [2]int{2, 0}, SuperSub: 1, Bias: 1}, true
+	case TypeTQ2F:
+		return TypeLayout{Sub: 32, Planes: [2]int{2, 0}, SuperSub: 1, Bias: 1, D32: true}, true
 	}
 	return TypeLayout{}, false
 }
@@ -577,6 +601,10 @@ func SourceType(t Type) (quant.Type, bool) {
 		return quant.Q6_K, true
 	case TypeIQ4NL:
 		return quant.IQ4_NL, true
+	case TypeTQ2:
+		return quant.TQ2_0, true
+	case TypeTQ2F:
+		return quant.TQ2_F32, true
 	}
 	return 0, false
 }
@@ -610,6 +638,10 @@ func TypeOf(t quant.Type) (Type, bool) {
 		return TypeQ6S, true
 	case quant.IQ4_NL:
 		return TypeIQ4NL, true
+	case quant.TQ2_0:
+		return TypeTQ2, true
+	case quant.TQ2_F32:
+		return TypeTQ2F, true
 	}
 	return 0, false
 }
@@ -680,5 +712,5 @@ func (r Role) Expanded() bool {
 		RoleNextnENorm, RoleNextnHNorm, RoleNextnHeadNorm:
 		return true
 	}
-	return r == RoleXIELU || flagshipExpanded(r) || visionFamExpanded(r) || visionFamilyExpanded(r)
+	return r == RoleXIELU || r == RoleAttnSubNorm || r == RoleFFNSubNorm || flagshipExpanded(r) || visionFamExpanded(r) || visionFamilyExpanded(r)
 }

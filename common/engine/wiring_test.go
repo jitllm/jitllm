@@ -11,11 +11,13 @@ import (
 
 	"github.com/jitllm/jitllm/common/session"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
 // loadFor opens modelPath on a fresh engine with the given setup applied first.
 func loadFor(t *testing.T, setup func(*testStore)) (*Engine, *testShell) {
 	t.Helper()
+	fresh.Must(t, modelPath)
 	if _, err := os.Stat(modelPath); err != nil {
 		testmodels.Missing(t, "MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proves nothing without it", err)
 	}

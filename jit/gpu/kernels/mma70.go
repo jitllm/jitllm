@@ -90,8 +90,12 @@ func MMAVoltaProbe() *ir.Kernel {
 // MXFP4 needs no table on the f16 path: an e2m1 code placed at bits 9-11 of
 // a binary16 (sign at 15) is its value times 2^-14, subnormals included, so
 // the dequant is a mask, two shifts and two f16 multiplies (voltaDeq.frags).
+//
+// A format whose arithmetic is over int8 activations (qinfo.intAct: TQ2) is
+// declined: these kernels multiply binary16 activations, which for a ternary
+// model is a different function.
 func Volta70OK(q Quant) bool {
-	return volta70Packed(q)
+	return volta70Packed(q) && !qtab[q].intAct
 }
 
 // GemmVoltaOK reports whether GemmVolta (and the ActF16T layout it reads)
@@ -102,7 +106,7 @@ func Volta70OK(q Quant) bool {
 // it loses bits as a subnormal), which no projection of a trained model
 // reaches -- and its sub-block takes the 8-bit formats' step order.
 func GemmVoltaOK(q Quant) bool {
-	return volta70Packed(q) || int(q) < len(qtab) && qtab[q].float == 2
+	return Volta70OK(q) || int(q) < len(qtab) && qtab[q].float == 2
 }
 
 // byteOrder says a sub-block's m8n8k4 steps take consecutive elements
@@ -716,6 +720,8 @@ func (v *voltaDeq) scalesF32X(w []ir.Value, x, subIdx, row ir.Value) (sc, mn ir.
 			return d, v.zeroF
 		}
 		d = b.CvtF16H(b.Shr(ir.U32, w[0], sh))
+	} else if qi.d32 {
+		d = b.Bitcast(ir.F32, w[0]) // TQ2F: the word is the scale
 	} else {
 		d = b.CvtF16H(w[0])
 		if qi.biasArray {

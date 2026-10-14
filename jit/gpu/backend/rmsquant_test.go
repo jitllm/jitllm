@@ -26,7 +26,9 @@ func TestRMSNormQuantIsNormThenQuantize(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 		for _, k := range []int{4096, 2048, 5120, 1024, 512, 256, 128, 64, 1536, 1152, 2304, 2560, 3072, 896} {
-			for _, win := range []int{32, 256} {
+			// k and 8192 are the row windows a per-token model asks for (BitNet):
+			// the fused kernel takes one scale a row, Quantize the clamped window.
+			for _, win := range []int{32, 256, k, 8192} {
 				for _, rows := range []int{1, 3, 8, 16} {
 					for _, add := range []bool{false, true} {
 						for _, one := range []bool{false, true} {
@@ -58,7 +60,7 @@ func rmsQuantCase(t *testing.T, d backend.Device, rng *rand.Rand, name string, k
 	if err != nil {
 		t.Fatal(err)
 	}
-	quant, err := kernels.Quantize(rows*k, win)
+	quant, err := kernels.Quantize(rows*k, kernels.ClampWindow(win, k))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -24,7 +24,11 @@ var f16At = map[kernels.Quant][]int{
 	kernels.Q5_K: {0, 2},
 	kernels.Q3_K: {108},
 	kernels.Q6_K: {208},
+	kernels.TQ2:  {64},
 }
+
+// f32At is where a format with an f32 scale keeps it (TQ2F).
+var f32At = map[kernels.Quant][]int{kernels.TQ2F: {64}}
 
 func randWeights(q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
 	nblk := k / q.Elems()
@@ -44,6 +48,13 @@ func randWeights(q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
 			// An E8M0 exponent the scale plane holds exactly, or the packer
 			// refuses the tensor (random bytes reach 2^127).
 			raw[i*bb] = byte(120 + rng.Intn(10))
+		}
+		if offs, ok := f32At[q]; ok {
+			// An f32 scale near one, of no f16's precision.
+			for _, off := range offs {
+				binary.LittleEndian.PutUint32(raw[i*bb+off:], math.Float32bits(0.5+rng.Float32()))
+			}
+			continue
 		}
 		offs, ok := f16At[q]
 		if !ok && q != kernels.MXFP4 {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
 
@@ -55,6 +56,7 @@ func TestSystemOneBatchesConcurrentRequests(t *testing.T) {
 	for _, c := range decisionServerModels {
 		t.Run(c.name, func(t *testing.T) {
 			path := testmodels.Path(c.path)
+			fresh.Must(t, path)
 			if _, err := os.Stat(path); err != nil {
 				t.Skipf("MODEL MISSING: %s (set JITLLM_MODELS to the model directory) -- this gate proved nothing", path)
 			}

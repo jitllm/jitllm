@@ -130,7 +130,7 @@ var Ungated = [...]ActKind{ActSiLU, ActGELU, ActQuickGELU, ActReLU2, ActReLU, Ac
 
 // Gated is the set a gated kernel (dst = act(dst) combined with up) may bake,
 // for the same reason.
-var Gated = [...]ActKind{ActSiLU, ActGELU, ActSwiGLUOAI, ActIdentity, ActSwiGLUClamp, ActSitu, ActGELUErf}
+var Gated = [...]ActKind{ActSiLU, ActGELU, ActSwiGLUOAI, ActIdentity, ActSwiGLUClamp, ActSitu, ActGELUErf, ActReLU2}
 
 func (k ActKind) String() string {
 	switch k {

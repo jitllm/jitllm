@@ -148,8 +148,11 @@ def decisions(d, out, images, m):
 # not, so the fixture holds that path.
 
 FIX = "synth-lfm2vl"
+# Three tower blocks, not two: llama.cpp's converter names the projector's
+# linear_N by trying block indices below the tower's block count, so
+# linear_2 needs a third block.
 NLOGIT = 512
-VIS = dict(hidden_size=64, intermediate_size=128, num_hidden_layers=2, num_attention_heads=2,
+VIS = dict(hidden_size=64, intermediate_size=128, num_hidden_layers=3, num_attention_heads=2,
            patch_size=16, num_patches=256, vision_use_head=False, layer_norm_eps=1e-6,
            hidden_act="gelu_pytorch_tanh")
 
@@ -267,6 +270,16 @@ def fixture():
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d)
     m.save_pretrained(d, safe_serialization=True)
+    # The published checkpoints (d1-3B, LFM2-VL) name the tower
+    # model.vision_tower.vision_model.*, which llama.cpp's converter maps;
+    # this transformers saves it one level shallower.
+    from safetensors.torch import load_file, save_file
+    st = os.path.join(d, "model.safetensors")
+    sd = load_file(st)
+    pre = "model.vision_tower."
+    sd = {(pre + "vision_model." + k[len(pre):] if k.startswith(pre) and not k.startswith(pre + "vision_model.")
+           else k): v for k, v in sd.items()}
+    save_file(sd, st, metadata={"format": "pt"})
     for f in ("tokenizer.json", "tokenizer_config.json", "chat_template.jinja", "processor_config.json"):
         shutil.copy(os.path.join(d1, f), d)
     # llama.cpp converts LFM2-VL's text model as the Lfm2ForCausalLM it is

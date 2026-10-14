@@ -281,3 +281,55 @@ func checkDecisions(t *testing.T, qs []DecisionQuestion, ans []DecisionAnswer, g
 	}
 	t.Logf("worst difference from llama.cpp: %.5f", worst)
 }
+
+// TestDecisionPicksOnTheHost holds the host's label pick (State.pickOnHost):
+// each decoder readout's prompts project the labels' rows alone on the host
+// (counted, so a pick that never ran is a failure), its answers are the whole
+// head's within the matvec's reduction order, and a pick one row past each
+// label moves them -- the answers are what the pick read.
+func TestDecisionPicksOnTheHost(t *testing.T) {
+	for _, c := range decisionCases {
+		if c.kind == jlm.DecisionLaya || c.kind == jlm.DecisionClef {
+			continue // an encoder's scorer and Clef's span head read no label logits
+		}
+		t.Run(c.name, func(t *testing.T) {
+			m := openDecision(t, c.gguf, c.kind)
+			defer m.Close()
+			run := func(violation string) ([][]DecisionAnswer, int) {
+				d, err := m.NewDecider(4096)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer d.Close()
+				d.violation = violation
+				var out [][]DecisionAnswer
+				for _, req := range decisionRequests {
+					state, qs := decisionRequest(t, filepath.Join("testdata", "decision", req+".json"))
+					ans, err := d.Decide(state, qs, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					out = append(out, ans)
+				}
+				return out, d.picked
+			}
+			got, picked := run("")
+			if picked == 0 {
+				t.Fatal("no prompt's labels were picked on the host: the whole head ran")
+			}
+			whole, wp := run("no-pick")
+			if wp != 0 {
+				t.Fatalf("the no-pick arm picked %d prompts", wp)
+			}
+			w := decisionDiff(t, whole, got)
+			t.Logf("%d prompts picked on the host; against the whole head %.2e", picked, w)
+			if w > 1e-4 {
+				t.Errorf("the picked labels answer %.6f from the whole head's", w)
+			}
+			off, _ := run("pick-off-by-one")
+			if seen := decisionDiff(t, got, off); seen <= c.tol {
+				t.Errorf("a pick one past each label moved the answers %.5f: the gate does not see the pick", seen)
+			}
+		})
+	}
+}

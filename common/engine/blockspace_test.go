@@ -6,12 +6,15 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
 // The memory map draws the model's whole block space. A vision tower's blocks
 // are blocks of the model, placed and paged like the text blocks, so a map
 // that stopped at the text blocks would hide them.
 func TestTheMemoryMapCoversTheTowersBlocks(t *testing.T) {
+	fresh.Must(t, visionModel)
 	if _, err := os.Stat(visionModel); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}

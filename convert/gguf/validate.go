@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/convert/meta"
+	"github.com/jitllm/jitllm/format/quant"
 )
 
 // A GGUF is untrusted input downloaded from the internet, and every field below
@@ -58,6 +59,12 @@ func checkAlignment(a uint64) error {
 
 // sizeTensor validates a tensor's shape and type and fills in NBytes.
 func sizeTensor(t *meta.Tensor) error {
+	if t.Type == quant.I2_S {
+		return sizeI2S(t)
+	}
+	if t.Type.Engine() {
+		return fmt.Errorf("type %d is one of this engine's own formats, which no GGUF carries", uint32(t.Type))
+	}
 	if !t.Type.Known() {
 		return fmt.Errorf("unknown ggml type %d", uint32(t.Type))
 	}
@@ -120,5 +127,29 @@ func validateTensorData(f *meta.File) error {
 		}
 		prevEnd, prevName = t.Off+t.NBytes, t.Name
 	}
+	return nil
+}
+
+// sizeI2S sizes bitnet.cpp's I2_S, which has no block: the codes of the whole
+// tensor, four to a byte in 128-element groups, then a 32-byte tail holding
+// its f32 scale (quant.I2SBytes).
+func sizeI2S(t *meta.Tensor) error {
+	if len(t.Dims) == 0 {
+		return fmt.Errorf("tensor has no dimensions")
+	}
+	elems := uint64(1)
+	for i, d := range t.Dims {
+		if d == 0 {
+			return fmt.Errorf("dimension %d is zero", i)
+		}
+		if elems > ^uint64(0)/d {
+			return fmt.Errorf("shape %v overflows", t.Dims)
+		}
+		elems *= d
+	}
+	if t.Dims[0]%128 != 0 {
+		return fmt.Errorf("ne[0]=%d is not a multiple of I2_S's 128-element groups", t.Dims[0])
+	}
+	t.NBytes = quant.I2SBytes(elems)
 	return nil
 }

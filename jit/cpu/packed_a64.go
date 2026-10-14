@@ -15,7 +15,7 @@ import (
 // it ships.
 func SupportedA64Packed(t quant.Type) bool {
 	switch t {
-	case quant.Q8_0, quant.Q4_0, quant.Q5_0, quant.Q5_1, quant.Q4_K, quant.Q5_K, quant.Q3_K, quant.Q6_K, quant.MXFP4:
+	case quant.Q8_0, quant.Q4_0, quant.Q5_0, quant.Q5_1, quant.Q4_K, quant.Q5_K, quant.Q3_K, quant.Q6_K, quant.MXFP4, quant.TQ2_0, quant.TQ2_F32:
 		return true
 	}
 	return false
@@ -185,8 +185,8 @@ func emitA64Packed(t quant.Type, rows int, fused bool, ahead int, intFold bool, 
 		chain = int(bB) <= 31
 	}
 	pair := false // the two nibbles' dots in one chain
-	if chain && bits == 4 {
-		wmax := 15
+	if chain && bits < 8 {
+		wmax := 1<<bits - 1
 		if combine {
 			wmax = 1<<(bits+hi) - 1
 		} else if codes {
@@ -338,8 +338,10 @@ func emitA64Packed(t quant.Type, rows int, fused bool, ahead int, intFold bool, 
 				a.FADD4s(t2, t2, t2)
 				a.FADD4s(t2, t2, t2) // 8*dmin, exactly
 			}
-			a.UZP1h8(t0, t0, t0)
-			a.FCVTL(t0, t0)
+			if !f.d32 { // TQ2_F32's word is the scale already
+				a.UZP1h8(t0, t0, t0)
+				a.FCVTL(t0, t0)
+			}
 			if !biasArray {
 				a.FADD4s(t2, t0, t0)
 				a.FADD4s(t2, t2, t2) // 4*d, exactly
@@ -372,7 +374,7 @@ func emitA64Packed(t quant.Type, rows int, fused bool, ahead int, intFold bool, 
 			}
 		}
 		for w := 0; w < pw; w++ {
-			if chain {
+			if chain && bits != 2 {
 				bcast(bA, w)
 				if bits == 4 {
 					bcast(bB, pw+w)
@@ -386,6 +388,38 @@ func emitA64Packed(t quant.Type, rows int, fused bool, ahead int, intFold bool, 
 					return
 				}
 				a.SDOTelem(VReg(g), src, vAct(e/4), uint8(e%4))
+			}
+			if bits == 2 {
+				// TQ2's four 2-bit fields a byte, two at a time: field fi of
+				// word w multiplies activation chunk fi*pw+w (packSub), and a
+				// pair shares a chain where the dots are widened.
+				for f0 := 0; f0 < f.fields; f0 += 2 {
+					if chain {
+						bcast(bA, f0*pw+w)
+						bcast(bB, (f0+1)*pw+w)
+					}
+					for g := 0; g < grp; g++ {
+						a.LDRq(vPay, X12, int32(g*16))
+						if f0 == 0 {
+							if pf > 0 && g%8 == 0 {
+								a.PRFM(X12, int32(g*16+pf))
+							}
+							hint(g)
+						}
+						for i := 0; i < 2; i++ {
+							fi := f0 + i
+							if fi == 0 {
+								a.AND16b(t0, vPay, vMask)
+							} else {
+								a.USHR16b(t0, vPay, byte(2*fi))
+								a.AND16b(t0, t0, vMask)
+							}
+							dot(g, t0, fi*pw+w, []VReg{bA, bB}[i], i == 1)
+						}
+					}
+				}
+				step12()
+				continue
 			}
 			for g := 0; g < grp; g++ {
 				a.LDRq(vPay, X12, int32(g*16))
@@ -548,6 +582,8 @@ func emitA64Packed(t quant.Type, rows int, fused bool, ahead int, intFold bool, 
 			} else if narrow {
 				a.LDRd(t0, X13, int32(g*4*2))
 				a.FCVTL(t0, t0)
+			} else if f.d32 {
+				a.LDRq(t0, X13, int32(g*16)) // TQ2_F32: four rows' f32 scales
 			} else {
 				a.LDRq(t0, X13, int32(g*16))
 				if corrK != 0 && biasArray {
@@ -707,8 +743,8 @@ func a64PackedArgs(a *A64) {
 // PRE-SHIFTED by the primary width, so the two planes reach one accumulator
 // (3<<4 is 48, and SDOT takes it).
 func a64PackedConsts(a *A64, f *packedFormat, vMask, vHi, vLut VReg) {
-	if f.bits == 4 {
-		a.MOVI16b(vMask, 0x0F)
+	if f.bits < 8 {
+		a.MOVI16b(vMask, byte(1<<f.bits-1)) // 0x0F a nibble, 0x03 a 2-bit field
 	}
 	if f.codes {
 		a.LDRx(X5, X0, 56) // Scr
@@ -994,6 +1030,17 @@ func EmitA64PackedMatMulTiled(t quant.Type, k, nrows, tok int) ([]byte, error) {
 						a.TBL(t0, vLut, t0)
 					}
 					dot(g, t0, pw+w)
+				case bits == 2:
+					// TQ2: field fi of word w against activation chunk fi*pw+w.
+					for fi := 0; fi < f.fields; fi++ {
+						if fi == 0 {
+							a.AND16b(t0, vPay, vMask)
+						} else {
+							a.USHR16b(t0, vPay, byte(2*fi))
+							a.AND16b(t0, t0, vMask)
+						}
+						dot(g, t0, fi*pw+w)
+					}
 				default:
 					dot(g, vPay, w)
 				}
@@ -1090,6 +1137,8 @@ func EmitA64PackedMatMulTiled(t quant.Type, k, nrows, tok int) ([]byte, error) {
 			} else if narrow {
 				a.LDRd(t0, X13, int32(g*4*2))
 				a.FCVTL(t0, t0)
+			} else if f.d32 {
+				a.LDRq(t0, X13, int32(g*16)) // TQ2_F32: four rows' f32 scales
 			} else {
 				// Four rows' `d | dmin<<16` words in one load, split by UZP
 				// as in the matvec. dmin lands in the payload register,

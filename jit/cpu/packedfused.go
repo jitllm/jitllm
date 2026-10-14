@@ -84,8 +84,8 @@ func EmitPackedMatVecFusedAhead(t quant.Type, dk DotKind, ahead int) ([]byte, er
 	// The register budget is checked: a spilling tile has measured as a large
 	// loss, and the activation set grows with the payload width.
 	nact := pw
-	if bits == 4 {
-		nact = 2 * pw
+	if bits < 8 {
+		nact = f.fields * pw // one broadcast a field a word
 	}
 	need := 3 + grp + 3 + nact // mask, da, bscale + accumulators + pay/tmp/t2
 	if scOff != 0 {
@@ -136,7 +136,7 @@ func EmitPackedMatVecFusedAhead(t quant.Type, dk DotKind, ahead int) ([]byte, er
 	dot := dotEmitter{kind: dk, flip: mask}
 	if dk == DotVEX {
 		dot.ones = mask
-		if bits == 4 {
+		if bits < 8 {
 			dot.ones = t2
 		}
 	}
@@ -157,8 +157,9 @@ func EmitPackedMatVecFusedAhead(t quant.Type, dk DotKind, ahead int) ([]byte, er
 	// what closes the GPR budget at thirteen with R14 unused.
 	packedArgs(&a, &f)
 	switch {
-	case bits == 4:
+	case bits < 8:
 		a.VMOVDQULoad(mask, At(RBX, 0))
+		fieldMask(&a, mask, tmp, bits)
 	case dk == DotVEX:
 		// The ones vector, built rather than loaded; see ones16.
 		ones16(&a, mask)
@@ -204,6 +205,12 @@ func EmitPackedMatVecFusedAhead(t quant.Type, dk DotKind, ahead int) ([]byte, er
 			a.VPBROADCASTD(act[w], At(R11, int32(sub*sn+4*w)))
 			if bits == 4 {
 				a.VPBROADCASTD(act[pw+w], At(R11, int32(sub*sn+halfSub+4*w)))
+			} else if bits < 8 {
+				// Field fi of word w multiplies the four activations a
+				// field-run on (packSub).
+				for fi := 1; fi < f.fields; fi++ {
+					a.VPBROADCASTD(act[fi*pw+w], At(R11, int32(sub*sn+fi*f.run+4*w)))
+				}
 			}
 		}
 		a.VBROADCASTSS(da, At(R12, pairOff))
@@ -234,7 +241,7 @@ func EmitPackedMatVecFusedAhead(t quant.Type, dk DotKind, ahead int) ([]byte, er
 			for g := 0; g < grp; g++ {
 				a.VPXOR(iac[g], iac[g], iac[g])
 			}
-			if dk == DotVEX && bits == 4 {
+			if dk == DotVEX && bits < 8 {
 				ones16(&a, t2) // dead until the epilogue; see the note above
 			}
 			// A word's lines are contiguous across row groups, so the line
@@ -263,6 +270,11 @@ func EmitPackedMatVecFusedAhead(t quant.Type, dk DotKind, ahead int) ([]byte, er
 							a.VPSHUFB(tmp, lut, tmp)
 						}
 						dot.unsigned(&a, iac[g], tmp, act[pw+w])
+					} else if bits < 8 {
+						for fi := 0; fi < f.fields; fi++ {
+							fieldOf(&a, tmp, pay, mask, bits, fi)
+							dot.unsigned(&a, iac[g], tmp, act[fi*pw+w])
+						}
 					} else if signed {
 						dot.signed(&a, iac[g], pay, act[w], tmp)
 					} else {

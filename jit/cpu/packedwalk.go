@@ -109,6 +109,9 @@ func packedScalePass(a *Buf, f *packedFormat, t quant.Type, group, grp int, shuf
 				// instruction, where the wide plane needs a load, a VPSHUFB and
 				// a VPERMQ to gather eight halves out of eight words.
 				a.VCVTPH2PS(tmp, Idx(R8, R9, 1, off/2))
+			} else if f.d32 {
+				// TQ2_F32: the word is the scale.
+				a.VMOVDQULoad(tmp, Idx(R8, R15, 1, off))
 			} else {
 				a.VMOVDQULoad(pay, Idx(R8, R15, 1, off))
 				a.VPSHUFB(tmp, pay, shufLo)

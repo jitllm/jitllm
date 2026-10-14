@@ -25,7 +25,7 @@ func TestFusedMatchesTheTiledKernel(t *testing.T) {
 		if !cpu.PackedFusedSupported(gt) {
 			continue
 		}
-		step := cpu.PackedOuterElems(gt)
+		step := kStep(gt)
 		for _, sh := range []struct{ rows, k, bankRow int }{
 			{64, 2 * step, 0},
 			{192, 5 * step, 0},

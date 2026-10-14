@@ -83,7 +83,7 @@ func (d *Decider) checkImages(n int) error {
 	if n > MaxDecisionImages {
 		return fmt.Errorf("too many images, the maximum is %d", MaxDecisionImages)
 	}
-	if d.kind != jlm.DecisionLFM2D1 {
+	if d.kind != jlm.DecisionLFM2D1 && d.kind != jlm.DecisionClef {
 		return fmt.Errorf("this model reads text only; a request with images needs a vision decision model")
 	}
 	if d.m.Tower() == nil {
@@ -93,7 +93,10 @@ func (d *Decider) checkImages(n int) error {
 	return nil
 }
 
-// cutPictures is each picture's run of the prompt, d1's bound applied first.
+// cutPictures is each picture's run of the prompt: a tower that cuts a
+// picture into pieces lays them out (pictureRun, d1's bound applied first);
+// any other is one Picture between the markers its processor writes
+// (imageMarkersOf), preprocessed on the Decider's vision segment.
 func (d *Decider) cutPictures(imgs []image.Image) ([][]Span, error) {
 	tw := d.m.Tower()
 	out := make([][]Span, len(imgs))
@@ -101,13 +104,53 @@ func (d *Decider) cutPictures(imgs []image.Image) ([][]Span, error) {
 		if img == nil {
 			return nil, fmt.Errorf("images[%d] is empty", i)
 		}
-		sp, err := tw.pictureRun(d.m, i, d1Cap(img))
+		if tw.Cfg.Kind == jlm.ProjLFM2 || tw.Cfg.Kind == jlm.ProjLlama4 || tw.Cfg.PosBuckets > 0 {
+			sp, err := tw.pictureRun(d.m, i, d1Cap(img))
+			if err != nil {
+				return nil, fmt.Errorf("images[%d]: %w", i, err)
+			}
+			out[i] = sp
+			continue
+		}
+		pc, err := d.st.Picture(img)
+		if err != nil {
+			return nil, fmt.Errorf("images[%d]: %w", i, err)
+		}
+		sp, err := d.m.markedPicture(pc)
 		if err != nil {
 			return nil, fmt.Errorf("images[%d]: %w", i, err)
 		}
 		out[i] = sp
 	}
 	return out, nil
+}
+
+// markedPicture is one Picture between its tower's marker pieces.
+func (m *Model) markedPicture(pc *Picture) ([]Span, error) {
+	tw := m.Tower()
+	mk, ok := imageMarkersOf[tw.Cfg.Projector]
+	if !ok || mk.preText != "" || mk.postText != "" {
+		return nil, fmt.Errorf("model: projector %q has no marker pieces a decision prompt can carry", tw.Cfg.Projector)
+	}
+	var out []Span
+	piece := func(names []string) error {
+		for _, s := range names {
+			id, ok := m.Vocab.ID(s)
+			if !ok {
+				return fmt.Errorf("model: the vocabulary has no %q, so the image markers cannot be built", s)
+			}
+			out = append(out, Span{Tokens: []int32{id}})
+		}
+		return nil
+	}
+	if err := piece(mk.pre); err != nil {
+		return nil, err
+	}
+	out = append(out, Span{Picture: pc})
+	if err := piece(mk.post); err != nil {
+		return nil, err
+	}
+	return mergeTokenSpans(out), nil
 }
 
 // pictureSpans is the rendered prompt as spans: the text between the
@@ -146,12 +189,9 @@ func (p rgb8) image() image.Image {
 // "files" and "images" arrays (one is an alias of the other), then every
 // image_url part of a state that is chat messages -- a list of them, or an
 // object holding one under "messages" -- in message order, each part taken
-// out of its message's content. The URLs must be data: URLs; "videos" is
-// refused. The state comes back without the parts.
+// out of its message's content. The URLs must be data: URLs. The state comes
+// back without the parts. "videos" is DecisionVideos'.
 func DecisionMedia(req *jinja.Dict, state jinja.Value) (jinja.Value, []string, error) {
-	if v, ok := req.Get("videos"); ok && !v.IsNone() && !(v.IsList() && v.AsList().Len() == 0) {
-		return state, nil, fmt.Errorf(`"videos" is not supported`)
-	}
 	var urls []string
 	add := func(u jinja.Value) error {
 		if !u.IsString() || !strings.HasPrefix(u.AsString(), "data:") {
@@ -251,4 +291,124 @@ func DecodeImageDataURL(u string) (image.Image, error) {
 	}
 	img, _, err := image.Decode(bytes.NewReader(b))
 	return img, err
+}
+
+// VideoURLs is one video of a request: its frames' data URLs in order, and
+// their rate (zero when the request gave none).
+type VideoURLs struct {
+	Frames []string
+	FPS    float64
+}
+
+// MaxVideoFrames bounds the frames one video of a request carries; the
+// processor samples at most its max_frames (768) of them.
+const MaxVideoFrames = 4096
+
+// DecisionVideos reads a request's "videos": each a video as Clef's code
+// takes one, an array of its frames -- here data URLs -- or an object
+// {"frames": [...], "fps": rate}. Absent or null is none.
+func DecisionVideos(req *jinja.Dict) ([]VideoURLs, error) {
+	v, ok := req.Get("videos")
+	if !ok || v.IsNone() {
+		return nil, nil
+	}
+	if !v.IsList() {
+		return nil, fmt.Errorf(`"videos" must be an array`)
+	}
+	var out []VideoURLs
+	for i, x := range v.AsList().Items {
+		var vu VideoURLs
+		frames := x
+		if x.IsDict() {
+			f, ok := x.AsDict().Get("frames")
+			if !ok {
+				return nil, fmt.Errorf("videos[%d] has no frames", i)
+			}
+			frames = f
+			if r, ok := x.AsDict().Get("fps"); ok && !r.IsNone() {
+				if !r.IsNumber() {
+					return nil, fmt.Errorf("videos[%d].fps must be a number", i)
+				}
+				if r.IsInt() {
+					vu.FPS = float64(r.AsInt())
+				} else {
+					vu.FPS = r.AsFloat()
+				}
+				if !(vu.FPS > 0) {
+					return nil, fmt.Errorf("videos[%d].fps must be positive", i)
+				}
+			}
+		}
+		if !frames.IsList() || frames.AsList().Len() == 0 {
+			return nil, fmt.Errorf("videos[%d] must be a non-empty array of frames", i)
+		}
+		if frames.AsList().Len() > MaxVideoFrames {
+			return nil, fmt.Errorf("videos[%d] has %d frames, the maximum is %d", i, frames.AsList().Len(), MaxVideoFrames)
+		}
+		for _, f := range frames.AsList().Items {
+			if !f.IsString() || !strings.HasPrefix(f.AsString(), "data:") {
+				return nil, fmt.Errorf("videos[%d]: frames must be data URLs (data:image/...;base64,...)", i)
+			}
+			vu.Frames = append(vu.Frames, f.AsString())
+		}
+		out = append(out, vu)
+	}
+	if len(out) > MaxDecisionImages {
+		return nil, fmt.Errorf("too many videos, the maximum is %d", MaxDecisionImages)
+	}
+	return out, nil
+}
+
+// checkVideos refuses videos a readout cannot read: only Clef's prompt has a
+// place for them, and only a tower with both temporal planes reads them.
+func (d *Decider) checkVideos(n, images int) error {
+	if n == 0 {
+		return nil
+	}
+	if d.kind != jlm.DecisionClef {
+		return fmt.Errorf(`"videos" is not supported by this model`)
+	}
+	if n+images > MaxDecisionImages {
+		return fmt.Errorf("too many images and videos, the maximum is %d", MaxDecisionImages)
+	}
+	tw := d.m.Tower()
+	if tw == nil {
+		return fmt.Errorf("this container carries no vision tower; convert the model with its mmproj " +
+			"(jitllm convert model.gguf mmproj.gguf out.jlm)")
+	}
+	if tw.patchW1.e == nil {
+		return fmt.Errorf("this container's tower has no second temporal plane, so it cannot read a video; " +
+			"convert the model again with its mmproj")
+	}
+	return nil
+}
+
+// cutVideos is each video's run of the prompt (Qwen3VLProcessor's
+// replace_video_token): per pair of frames its stamp's text, then the pair's
+// rows between <|vision_start|> and <|vision_end|>.
+func (d *Decider) cutVideos(vids []VideoFrames) ([][]Span, error) {
+	tw := d.m.Tower()
+	vs, ok1 := d.m.Vocab.ID("<|vision_start|>")
+	ve, ok2 := d.m.Vocab.ID("<|vision_end|>")
+	if !ok1 || !ok2 {
+		return nil, fmt.Errorf("the vocabulary has no <|vision_start|> and <|vision_end|>")
+	}
+	out := make([][]Span, len(vids))
+	for i, v := range vids {
+		pics, stamps, err := tw.videoPictures(clefVideo, v)
+		if err != nil {
+			return nil, fmt.Errorf("videos[%d]: %w", i, err)
+		}
+		// The placeholder's own markers stay around the expansion: Clef's
+		// "<|vision_start|><|video_pad|><|vision_end|>" has its pad replaced
+		// by every pair's stamp and run.
+		run := []Span{{Tokens: []int32{vs}}}
+		for j, pc := range pics {
+			run = append(run, Span{Tokens: d.m.Vocab.EncodeSpecial(stampText(stamps[j]), false)})
+			run = append(run, Span{Tokens: []int32{vs}}, Span{Picture: pc}, Span{Tokens: []int32{ve}})
+		}
+		run = append(run, Span{Tokens: []int32{ve}})
+		out[i] = mergeTokenSpans(run)
+	}
+	return out, nil
 }

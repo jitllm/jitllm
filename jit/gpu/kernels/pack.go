@@ -211,14 +211,14 @@ func packSub(qs []uint32, q []int32, qi qinfo, si, nrows, r int) {
 	pw := qi.sub * qi.bits / 32
 	hw := qi.sub * qi.hi / 32
 	var out [32]byte
-	if qi.bits == 4 {
-		h := qi.sub / 2
+	if qi.bits < 8 {
+		// Fields(qi) fields a byte: element l is field l/(sub/fields) of byte
+		// l%(sub/fields), so a byte's fields are elements a field-run apart
+		// -- the 4-bit formats' two nibbles half a sub-block apart, TQ2's four
+		// 2-bit codes a quarter apart.
+		n := qi.sub / Fields(qi)
 		for l := 0; l < qi.sub; l++ {
-			if l < h {
-				out[l] |= byte(q[l]) & 0xF
-			} else {
-				out[l-h] |= byte(q[l]) << 4
-			}
+			out[l%n] |= (byte(q[l]) & byte(1<<uint(qi.bits)-1)) << uint(qi.bits*(l/n))
 		}
 	} else {
 		for l := 0; l < qi.sub; l++ {
@@ -237,6 +237,14 @@ func packSub(qs []uint32, q []int32, qi qinfo, si, nrows, r int) {
 		qs[(si*(pw+hw)+w)*nrows+r] = binary.LittleEndian.Uint32(out[4*w:])
 	}
 }
+
+// Fields is how many primary codes one payload byte holds: two nibbles, four
+// 2-bit codes, or one byte. A field-run, sub/Fields elements, is how far apart
+// a byte's fields are (packSub).
+func Fields(qi qinfo) int { return 8 / qi.bits }
+
+// FieldsOf is Fields for a format, for an emitter.
+func FieldsOf(q Quant) int { return Fields(q.info()) }
 
 // extract pulls one sub-block's integer quants out of a GGUF block, along with
 // the raw f16 bits of its super-scale and the integer per-sub-block scale.
@@ -285,6 +293,19 @@ func extract(t Quant, blk []byte, s int, q []int32) (dBits, dminBits uint16, sc,
 			q[l] = int32(int8(blk[2+l]))
 		}
 		return binary.LittleEndian.Uint16(blk), 0, 0, 0
+
+	case TQ2, TQ2F:
+		// Sub-block s is elements 32s..32s+31: bits 2(s%4) of qs[32(s/4)+l]
+		// (quant's TQ2_0 decoder). Every sub-block carries the block's d;
+		// TQ2F's f32 goes out as the d word's two halves, whole.
+		g, sh := blk[32*(s/4):], uint(2*(s%4))
+		for l := 0; l < 32; l++ {
+			q[l] = int32(g[l] >> sh & 3)
+		}
+		if t == TQ2F {
+			return binary.LittleEndian.Uint16(blk[64:]), binary.LittleEndian.Uint16(blk[66:]), 0, 0
+		}
+		return binary.LittleEndian.Uint16(blk[64:]), 0, 0, 0
 
 	case MXFP4:
 		// Q4_0's nibble order with the raw e2m1 code kept; the kernels translate
@@ -523,9 +544,10 @@ func DSlots(q Quant) int {
 	switch {
 	case qtab[q].e8m0:
 		return 4
-	case qtab[q].biasArray:
+	case qtab[q].biasArray, qtab[q].d32:
 		// A minimum beside the scale needs the whole word, whatever perSuper
-		// is (Q5_1's d and m, a k-quant's d and dmin).
+		// is (Q5_1's d and m, a k-quant's d and dmin), and so does an f32
+		// scale (TQ2F).
 		return 1
 	case qtab[q].perSuper == 1:
 		return 2
@@ -566,8 +588,12 @@ func PackedWords(t Quant, nrows, k int) (qs, d, sc int, err error) {
 		}
 		return nrows * k * qi.float / 4, 0, 0, nil
 	}
-	if qi.blockE == 0 || k%qi.blockE != 0 {
-		return 0, 0, 0, fmt.Errorf("kernels: PackedWords: k=%d is not a multiple of %d", k, qi.blockE)
+	// The layout's granule is a super-block of sub-blocks, which is the source
+	// block for every format but TQ2, whose 256-wide source block is eight
+	// sub-blocks of their own scale: a k-slice of a packed row (superWords)
+	// is whole sub-blocks, and packing checks the source block itself.
+	if unit := qi.sub * qi.perSuper; qi.blockE == 0 || k <= 0 || k%unit != 0 {
+		return 0, 0, 0, fmt.Errorf("kernels: PackedWords: k=%d is not a multiple of %d", k, unit)
 	}
 	nsub := k / qi.sub
 	qs = nrows * nsub * (qi.sub * (qi.bits + qi.hi) / 32)

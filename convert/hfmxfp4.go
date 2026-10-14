@@ -202,12 +202,14 @@ const (
 // one X.weight that reads as MXFP4, its shape checked against both now, from
 // the headers, so a malformed pair fails before the writer has laid anything
 // out. With mx false any packed tensor is refused: its codes would otherwise
-// reach identify as a weight nobody can read.
+// reach identify as a weight nobody can read. A lone weight_scale is only
+// compressed-tensors' when mx is true; otherwise it is the architecture's
+// (BitNet's per-tensor scale) or reaches identify and is refused there.
 func mergeMXFP4(all map[string]hfLoc, mx bool) error {
 	for name, loc := range all {
 		base, ok := strings.CutSuffix(name, ctPacked)
 		if !ok {
-			if s, isScale := strings.CutSuffix(name, ctScale); isScale {
+			if s, isScale := strings.CutSuffix(name, ctScale); isScale && mx {
 				if _, paired := all[s+ctPacked]; !paired {
 					return fmt.Errorf("convert: %s has no %s beside it", name, s+ctPacked)
 				}

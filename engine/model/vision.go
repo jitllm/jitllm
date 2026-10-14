@@ -282,7 +282,12 @@ type Tower struct {
 	// patchW is the conv-as-matmul, 2-D by the time it reaches a container:
 	// [k, NEmbd] with k >= PatchSz*PatchSz*channels, zero-padded up to a whole
 	// quantization block by convert.reshapePatchEmbd.
-	patchW  tensor
+	patchW tensor
+	// patchW1 is a conv3d patch embedding's second temporal plane alone
+	// (convert.foldPatchPlanes), which a video's second frame reads; patchW
+	// is the planes' sum. Absent on every other tower, and on a container
+	// converted before the plane was kept.
+	patchW1 tensor
 	patchB  []float32
 	clsW    []float32 // the class embedding, one NEmbd row, or nil
 	posW    []float32 // learned position embeddings, Seq x NEmbd
@@ -333,6 +338,9 @@ type Tower struct {
 // list rather than two copies of it. The blocks' are the model's layers.
 func (t *Tower) weights() []*tensor {
 	ws := []*tensor{&t.patchW}
+	if t.patchW1.e != nil {
+		ws = append(ws, &t.patchW1)
+	}
 	if t.mergeW.e != nil {
 		ws = append(ws, &t.mergeW)
 	}
@@ -578,6 +586,15 @@ func buildTower(c0 *jlm.File) (*Tower, error) {
 	}
 	if t.patchB, err = optVec(jlm.RoleVPatchBias, jlm.DenseBlock); err != nil {
 		return nil, err
+	}
+	if c0.Has(jlm.RoleVPatchEmbd, jlm.DenseBlock, 1) {
+		if t.patchW1, err = getAt(jlm.RoleVPatchEmbd, jlm.DenseBlock, 1); err != nil {
+			return nil, err
+		}
+		if t.patchW1.rows != t.patchW.rows || t.patchW1.k != t.patchW.k {
+			return nil, fmt.Errorf("model: OpenTower: the second temporal plane is %dx%d, the first %dx%d",
+				t.patchW1.rows, t.patchW1.k, t.patchW.rows, t.patchW.k)
+		}
 	}
 	if c.CLS {
 		if t.clsW, err = vec(jlm.RoleVClassEmbd, jlm.DenseBlock); err != nil {
@@ -939,6 +956,11 @@ type visRun struct {
 	// pair for its run and hands it on (lend, unlend).
 	kp, vp []float32
 	gather []float32
+	// px2 is the encode in progress's second frame (a video's temporal pair,
+	// Picture.Pixels2), nil for a still picture; gather2 and pair are its
+	// gathered difference from the first frame and that difference's rows.
+	px2           []float32
+	gather2, pair []float32
 	// posTab is Phi-4's position table resized to the grid posAt
 	// (phi4Table), nil for every other tower.
 	posTab []float32
@@ -1277,6 +1299,14 @@ func (s *State) encodeBegin(px []float32, gh, gw int) error {
 	s.jit.NewInput()
 	if err := s.mm(x[first*E:], t.patchW, gather, np); err != nil {
 		return err
+	}
+	// A video's temporal pair: the planes' sum read the first frame, and the
+	// second plane reads the second frame's difference from it, so the row is
+	// x0*W0 + x1*W1 (convert.foldPatchPlanes).
+	if v.px2 != nil {
+		if err := s.patchPair(x[first*E:first*E+np*E], gather, pw, np, pk); err != nil {
+			return err
+		}
 	}
 	// 1b. The class token, if there is one: one learned embedding in row 0,
 	// before the position table is added, so it gets position row 0.
@@ -1746,7 +1776,7 @@ func (s *State) project(patches []float32) ([]float32, error) {
 		src = v.grp
 		// InternVL's LayerNorm over the grouped row, before the MLP, and
 		// LFM2-VL's where its file carries one.
-		if c.Kind == jlm.ProjInternVL || c.Kind == jlm.ProjLFM2 && t.projNorm != nil {
+		if c.Kind == jlm.ProjInternVL || c.Kind == jlm.ProjLFM2 && t.projNorm != nil && !lfm2NoProjNorm {
 			w := c.projK()
 			s.normRows(v.grp, v.grp, t.projNorm, t.projNormB, w, c.Tokens(), true, c.projEps(),
 				s.rowChunk(c.Tokens(), w))

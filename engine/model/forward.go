@@ -576,6 +576,13 @@ type State struct {
 	// headReady is what head is set back to by SetHeadOnDevice.
 	head      *nn.Head
 	headReady *nn.Head
+	// HostPick asks a prefill whose head runs on the host to project the
+	// listed vocabulary rows alone into HostPickVals (pickOnHost), the
+	// host's half of the label pick a device head does (nn.Head.Pick);
+	// HostPicked says the last prefill did. A decision readout sets them.
+	HostPick     []int32
+	HostPickVals []float32
+	HostPicked   bool
 	// cs is the rotary table for the current position: NRot floats, filled once
 	// per token and read by every head and by the device blocks.
 	cs []float32
@@ -1111,8 +1118,10 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 		DS4: ds4PlanOf(c),
 		// Read off the loaded weights, not the architecture name: the
 		// post-norms are optional per-layer roles.
-		PostNorm:    s.m.hasPostNorm(),
-		NoPreNorm:   s.m.hasNoPreNorm(),
+		PostNorm:  s.m.hasPostNorm(),
+		NoPreNorm: s.m.hasNoPreNorm(),
+		// BitNet's inner norms, read off the weights as the post-norms are.
+		SubNorm:     s.m.hasSubNorm(),
 		AttnSoftcap: c.AttnSoftcap,
 		ActWin:      s.jit.ActWindow(),
 		// Zero for a dense model, which is what makes every existing plan
@@ -1506,6 +1515,7 @@ func (s *State) layerWeightsAt(li int) nn.LayerWeights {
 	w := nn.LayerWeights{
 		AttnNorm: l.attnNorm, FFNNorm: l.ffnNorm,
 		PostAttnNorm: l.postAttnNorm, PostFFNNorm: l.postFFNNorm,
+		AttnSubNorm: l.attnSubNorm, FFNSubNorm: l.ffnSubNorm,
 		QNorm: qn, KNorm: kn,
 		Bq: l.bq, Bk: l.bk, Bv: l.bv, Bo: l.bo,
 		Wq: wt(l.wq), Wk: wt(l.wk), Wv: wt(l.wv), Wo: wt(l.wo),
@@ -2912,6 +2922,7 @@ func (s *State) PrewarmGPU(n int) <-chan struct{} {
 			w := nn.LayerWeights{
 				AttnNorm: l.attnNorm, FFNNorm: l.ffnNorm,
 				PostAttnNorm: l.postAttnNorm, PostFFNNorm: l.postFFNNorm,
+				AttnSubNorm: l.attnSubNorm, FFNSubNorm: l.ffnSubNorm,
 				QNorm: qn, KNorm: kn,
 				Bq: l.bq, Bk: l.bk, Bv: l.bv, Bo: l.bo,
 				Wq: wt(l.wq), Wk: wt(l.wk), Wv: wt(l.wv), Wo: wt(l.wo),
@@ -3843,6 +3854,13 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 					s.jit.NewInput()
 					src = s.ogate
 				}
+				// BitNet's norm over the attention output, before wo.
+				if l.attnSubNorm != nil {
+					t0 = s.tick()
+					s.rmsnorm(src[:c.QDimAt(li)], src[:c.QDimAt(li)], l.attnSubNorm, c.RMSEps)
+					s.jit.NewInput()
+					s.tock(opRMSNorm, t0)
+				}
 				// With nothing between the projection and the residual, the
 				// add rides the projection's rows (fuse.go).
 				plain := s.residFold && l.bo == nil && !kind.Recurrent() && l.postAttnNorm == nil &&
@@ -3991,13 +4009,25 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 				s.grp.Resid, s.grp.Alpha = s.x, float32(c.ResidualScale)
 			}
 			s.aheadNext(li)
-			grouped := s.groupOf(gate, [nn.MaxGroup]*tensor{&l.down}, [nn.MaxGroup][]float32{s.h}, 1)
+			if l.ffnSubNorm != nil {
+				// BitNet normalises act(gate)*up before down, so the product
+				// is formed whole rather than inside down's group.
+				s.grp.ActUp, s.grp.Act = nil, 0
+			}
+			grouped := l.ffnSubNorm == nil &&
+				s.groupOf(gate, [nn.MaxGroup]*tensor{&l.down}, [nn.MaxGroup][]float32{s.h}, 1)
 			ffnResid = grouped && s.grp.Resid != nil
 			s.grp.ActUp, s.grp.Resid = nil, nil
 			if !grouped {
 				s.actmulAll(gate, up, act)
 				s.jit.NewInput()
 				s.tock(opAct, t0)
+				if l.ffnSubNorm != nil {
+					t0 = s.tick()
+					s.rmsnorm(gate, gate, l.ffnSubNorm, c.RMSEps)
+					s.jit.NewInput()
+					s.tock(opRMSNorm, t0)
+				}
 				if err := s.mv(s.h, l.down, gate); err != nil {
 					return nil, err
 				}

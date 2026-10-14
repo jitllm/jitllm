@@ -152,6 +152,7 @@ func sseElemKerns() []sseElemKern {
 		ActSitu:        oracle.Situ,
 		ActIdentity:    func(g, u float64) float64 { return g * u },
 		ActQuickGELU:   refQuickGELUMul,
+		ActReLU2:       func(g, u float64) float64 { r := math.Max(g, 0); return r * r * u },
 	}
 	for _, k := range append(Gated[:], ActQuickGELU) {
 		ks = append(ks, sseElemKern{"actmul/" + k.String(), func() ([]byte, error) { return sse.ActMul(k) },
@@ -325,6 +326,9 @@ func TestEmitActMulSSEMatchesReference(t *testing.T) {
 			return oracle.Situ(g, u)
 		case ActQuickGELU:
 			return quickGELURef(g) * u
+		case ActReLU2:
+			r := math.Max(g, 0)
+			return r * r * u
 		}
 		return oracle.SiLU(g) * u
 	}

@@ -28,10 +28,15 @@ type packedFormat struct {
 	pw, hw    int  // primary and secondary payload words per sub-block
 	words     int  // pw + hw
 	halfSub   int
-	sub16     bool // a 16-wide sub-block, corrected through AHalf
-	stream    bool // container v27's SC stream (scstream.go)
-	narrow    bool // the d plane is narrower than a word a row (dplane.go)
-	e8        bool // the d plane is an E8M0 byte
+	// fields is how many primary codes a payload byte holds (8/bits: two
+	// nibbles, four 2-bit codes, one byte) and run how far apart in the
+	// sub-block a byte's fields are, sub/fields elements (kernels.Fields).
+	fields, run int
+	sub16       bool // a 16-wide sub-block, corrected through AHalf
+	stream      bool // container v27's SC stream (scstream.go)
+	narrow      bool // the d plane is narrower than a word a row (dplane.go)
+	e8          bool // the d plane is an E8M0 byte
+	d32         bool // the d word is the scale as an f32 (TQ2_F32)
 }
 
 // packedFormatOf decomposes t. who names the emitter in a refusal.
@@ -59,10 +64,13 @@ func packedFormatK(q kernels.Quant, t quant.Type) (packedFormat, error) {
 	f.pw, f.hw = f.sub*f.bits/32, f.sub*f.hi/32
 	f.words = f.pw + f.hw
 	f.halfSub = f.sub / 2
+	f.fields = 8 / f.bits
+	f.run = f.sub / f.fields
 	f.sub16 = f.sub == Q8Block/2
 	f.stream = kernels.ScStream(q)
 	f.narrow = NarrowD(t)
 	f.e8 = E8M0D(t)
+	f.d32 = kernels.D32(q)
 	return f, nil
 }
 
@@ -135,4 +143,27 @@ func strideOf(biasArray bool) int {
 		return 16
 	}
 	return 8
+}
+
+// fieldMask turns the 0x0F byte mask a kernel loads from its constants into a
+// field's mask: 0x0F for a nibble, and for a 2-bit field 0x03, as
+// mask & (mask >> 2) -- a dword shift moves bits across bytes, and the AND
+// keeps only each byte's own. tmp is clobbered.
+func fieldMask(a *Buf, mask, tmp Reg, bits int) {
+	if bits != 2 {
+		return
+	}
+	a.VPSRLD(tmp, mask, 2)
+	a.VPAND(mask, mask, tmp)
+}
+
+// fieldOf leaves field f of every payload byte in dst, unshifted to bit 0 and
+// masked: (pay >> bits*f) & mask.
+func fieldOf(a *Buf, dst, pay, mask Reg, bits, f int) {
+	if f == 0 {
+		a.VPAND(dst, pay, mask)
+		return
+	}
+	a.VPSRLD(dst, pay, byte(bits*f))
+	a.VPAND(dst, dst, mask)
 }

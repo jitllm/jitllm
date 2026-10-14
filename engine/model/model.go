@@ -32,6 +32,12 @@ import (
 // that loads, runs, and produces confident nonsense.
 type Config struct {
 	Arch string
+	// TokenAct says every projection input is quantized to int8 per token
+	// by its absolute maximum, as BitNet's BitLinear does: the session's
+	// activation window is the widest row (nn.WithActWindow), so each 32-wide
+	// block of a row carries the row's one scale. A property of the graph,
+	// read from the arch.
+	TokenAct bool
 	// Pooling is how an EMBEDDING model reads its vector out of the last
 	// residual, and PoolNone for every generator. NonCausal is an encoder's
 	// attention: every position sees every other. Both come off the
@@ -900,6 +906,8 @@ func configFrom(c *jlm.Config) (*Config, error) {
 	case c.Flags.Has(jlm.FlagSwiGLUOAI):
 		out.Act = nn.ActSwiGLUOAI
 	}
+	// BitNet quantizes every projection input per token (jlm.ArchBitNet).
+	out.TokenAct = c.Arch == jlm.ArchBitNet
 	// Apertus's activation is its arch's: a file states it only through the
 	// per-block numbers (jlm.RoleXIELU).
 	if c.Arch == jlm.ArchApertus {
@@ -997,7 +1005,11 @@ type layer struct {
 	// to the attention and FFN outputs before each is folded into the residual.
 	// nil everywhere else.
 	postAttnNorm, postFFNNorm []float32
-	wq, wk, wv, wo            tensor
+	// attnSubNorm and ffnSubNorm are BitNet's inner RMSNorms: over the
+	// attention output before wo, and over act(gate)*up before down. nil
+	// everywhere else.
+	attnSubNorm, ffnSubNorm []float32
+	wq, wk, wv, wo          tensor
 	// vFromK says the block has no v projection and v is k's (Gemma 4's
 	// global layers): wv is unbound and every path copies k's projection
 	// before k's norm and rotary run.
@@ -3264,6 +3276,21 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		if l.postAttnNorm, err = optVec(jlm.RolePostAttnNorm, bi); err != nil {
 			return nil, err
 		}
+		// BitNet's two inner norms: both on every block of a BitNet, and on
+		// no other model, each as wide as what it normalises.
+		if l.attnSubNorm, err = optVec(jlm.RoleAttnSubNorm, bi); err != nil {
+			return nil, err
+		}
+		if l.ffnSubNorm, err = optVec(jlm.RoleFFNSubNorm, bi); err != nil {
+			return nil, err
+		}
+		if (l.attnSubNorm != nil || l.ffnSubNorm != nil) != cfg.TokenAct ||
+			cfg.TokenAct && (len(l.attnSubNorm) != cfg.QDimAt(i) || len(l.ffnSubNorm) != cfg.NFFNAt(i) ||
+				l.gate.e == nil || cfg.MoEAt(i) || cfg.Parallel) {
+			return nil, fmt.Errorf("model: block %d: inner norms %d and %d wide on %s (a gated dense FFN of %d, "+
+				"attention %d wide, per-token activations %v)", bi, len(l.attnSubNorm), len(l.ffnSubNorm),
+				cfg.Arch, cfg.NFFNAt(i), cfg.QDimAt(i), cfg.TokenAct)
+		}
 		// Gemma 4's per-block output scalar, when the file carries one.
 		if sc, err := optVec(jlm.RoleLayerOutScale, bi); err != nil {
 			return nil, err
@@ -4008,6 +4035,16 @@ func (m *Model) hasNoPreNorm() bool {
 	return false
 }
 
+// hasSubNorm reports whether some block carries BitNet's inner norms.
+func (m *Model) hasSubNorm() bool {
+	for i := range m.layers {
+		if l := &m.layers[i]; l.attnSubNorm != nil || l.ffnSubNorm != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // hasPostNorm reports whether some block carries gemma2's post-norms.
 func (m *Model) hasPostNorm() bool {
 	// By index: a copy of each layer would read its bindings, which another
@@ -4048,5 +4085,10 @@ func (m *Model) newJIT() *nn.JIT {
 	if m.tower != nil {
 		add(quant.F32)
 	}
-	return nn.NewJIT(maxK, maxRows, types, m.jit...)
+	opts := m.jit
+	if m.Cfg.TokenAct {
+		// One window over the widest row: each row's blocks share its scale.
+		opts = append(append([]nn.Option(nil), opts...), nn.WithActWindow((maxK+31)/32*32))
+	}
+	return nn.NewJIT(maxK, maxRows, types, opts...)
 }

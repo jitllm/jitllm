@@ -181,9 +181,10 @@ func PreVNNIPacked(t quant.Type) error {
 		if err := check("code table", umax); err != nil {
 			return err
 		}
-	case bits == 4:
-		// The 0x0F mask bounds the primary plane at 15 whatever the file holds.
-		if err := check("nibble", 0x0F); err != nil {
+	case bits < 8:
+		// The field mask bounds the primary plane at 15 (a nibble) or 3 (a
+		// 2-bit field) whatever the file holds.
+		if err := check("field", 1<<bits-1); err != nil {
 			return err
 		}
 	case kernels.SignedPayload(q):

@@ -43,9 +43,11 @@ func GemmInt8Groups(s MatVecShape, t Int8Tile) int {
 }
 
 // Int8OK reports whether GemmInt8 has a decode for q: the formats GemmVolta
-// dequantizes, less those whose code is not an integer (MXFP4).
+// dequantizes, less those whose code is not an integer (MXFP4), plus those
+// GemmVolta declines only for their int8 activations (TQ2), which are this
+// kernel's.
 func Int8OK(q Quant) bool {
-	return Volta70OK(q) && qtab[q].codes == nil
+	return volta70Packed(q) && qtab[q].codes == nil
 }
 
 // int8Pos is where natural word w (k 4w..4w+3) of a row's 32-element trip

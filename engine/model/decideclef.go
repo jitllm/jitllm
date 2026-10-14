@@ -216,7 +216,11 @@ type clefSpan struct{ lo, hi int }
 // clefPrompt is a request's prompt: its ids, each question's span and type
 // row, each option's span and question, in the order the prompt shows them.
 type clefPrompt struct {
+	// ids is the prompt's token per row, a picture's rows standing as its
+	// processor's pad token; spans is the prompt as it is prefilled when it
+	// carries pictures (nil when it does not).
 	ids    []int32
+	spans  []Span
 	qs     []clefSpan
 	qtype  []int32
 	opts   []clefSpan
@@ -380,6 +384,40 @@ func (d *Decider) clefPrompt(state jinja.Value, qs []DecisionQuestion) (*clefPro
 		schema = append(schema, enc("END FIELD\n")...)
 	}
 	prefix := enc("<|im_start|>system\n" + clefSystem + "<|im_end|>\n<|im_start|>user\nSTATE:\n")
+	// The pictures (encode_record's _encode_media): each one's markers and
+	// rows, then a newline, between the prefix and the state.
+	// The pictures, then the videos (each pair of frames a Picture whose
+	// rows stand as <|video_pad|>).
+	var media []Span
+	var mediaIDs []int32
+	if len(d.pics) > 0 || len(d.vids) > 0 {
+		pad, ok1 := d.m.Vocab.ID("<|image_pad|>")
+		vpad, ok2 := d.m.Vocab.ID("<|video_pad|>")
+		if !ok1 || !ok2 {
+			return nil, fmt.Errorf("the vocabulary has no <|image_pad|> and <|video_pad|>")
+		}
+		for _, run := range d.pics {
+			media = append(media, run...)
+		}
+		for _, run := range d.vids {
+			media = append(media, run...)
+		}
+		media = append(media, Span{Tokens: enc("\n")})
+		for _, sp := range media {
+			if sp.Picture != nil {
+				id := pad
+				if sp.Picture.Pixels2 != nil {
+					id = vpad
+				}
+				for range sp.Picture.Rows {
+					mediaIDs = append(mediaIDs, id)
+				}
+				continue
+			}
+			mediaIDs = append(mediaIDs, sp.Tokens...)
+		}
+		prefix = append(prefix[:len(prefix):len(prefix)], mediaIDs...)
+	}
 	suffix := enc("\n<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nJOINT SCHEMA DECISIONS:")
 	st := enc(clefRender(state))
 	fixed := len(prefix) + len(schema) + len(suffix)
@@ -398,6 +436,12 @@ func (d *Decider) clefPrompt(state jinja.Value, qs []DecisionQuestion) (*clefPro
 		p.opts[i].hi += off
 	}
 	p.ids = append(append(append(append(make([]int32, 0, fixed+len(st)), prefix...), st...), schema...), suffix...)
+	if len(media) > 0 {
+		head := len(prefix) - len(mediaIDs)
+		p.spans = append([]Span{{Tokens: p.ids[:head]}}, media...)
+		p.spans = append(p.spans, Span{Tokens: p.ids[len(prefix):]})
+		p.spans = mergeTokenSpans(p.spans)
+	}
 	return p, nil
 }
 
@@ -499,7 +543,12 @@ func (d *Decider) clefForward(p *clefPrompt, out []float32) error {
 	// prefill stops at the residual (no output projection) and hands each
 	// chunk's rows over as they come out.
 	d.clefBegin(p)
-	_, err := d.st.Prefill(p.ids)
+	var err error
+	if p.spans != nil {
+		_, err = d.st.PrefillMixed(p.spans...)
+	} else {
+		_, err = d.st.Prefill(p.ids)
+	}
 	d.clefEnd()
 	if err != nil {
 		return err

@@ -23,6 +23,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 	"github.com/jitllm/jitllm/server/gen/jitllm/v1/jitllmv1connect"
 )
@@ -55,6 +56,7 @@ var embedTexts = []string{
 func embedServer(t *testing.T, name string, cfg Config) (*Engine, *LoadedModel, string) {
 	t.Helper()
 	path := testmodels.Path(filepath.Join("embed", name))
+	fresh.Must(t, path)
 	if _, err := os.Stat(path); err != nil {
 		t.Skipf("MODEL MISSING: %s (set JITLLM_MODELS to the model directory and convert "+
 			"embed/%s.gguf) -- this gate proved nothing", path, strings.TrimSuffix(name, ".jlm"))
@@ -445,6 +447,7 @@ func TestEmbedConcurrentRequestsAreCorrect(t *testing.T) {
 // the server down with NewState's panic.
 func TestEmbedRefusesWhatCannotEmbed(t *testing.T) {
 	gen := testmodels.Path("stories260K.jlm")
+	fresh.Must(t, gen)
 	if _, err := os.Stat(gen); err != nil {
 		t.Skipf("MODEL MISSING: %s (internal/testmodels/fetch.sh copies stories260K and "+
 			"`jitllm convert` makes the container) -- this gate proved nothing", gen)

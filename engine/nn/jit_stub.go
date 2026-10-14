@@ -61,6 +61,7 @@ func WithPrefillChunk(int) Option      { return func(*Config) {} }
 func WithParticipants(int) Option      { return func(*Config) {} }
 func WithPrefillCoreSet(string) Option { return func(*Config) {} }
 func WithoutGEMM(bool) Option          { return func(*Config) {} }
+func WithActWindow(int) Option         { return func(*Config) {} }
 
 // Argmax32JIT declines: there is no code generator on this platform at all.
 func Argmax32JIT(x []float32) (int32, bool) { return 0, false }

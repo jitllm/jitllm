@@ -38,7 +38,7 @@ func TestMatVecMMAMatchesDot4(t *testing.T) {
 	for _, d := range mmaDevices(t, devs, ir.MMAS8Turing) {
 		t.Run(d.API(), func(t *testing.T) {
 			for _, q := range []kernels.Quant{kernels.Q4_0, kernels.Q8_0, kernels.Q4_K,
-				kernels.Q3_K, kernels.Q5_K, kernels.Q6_K, kernels.MXFP4, kernels.Q5_0, kernels.Q5_1} {
+				kernels.Q3_K, kernels.Q5_K, kernels.Q6_K, kernels.MXFP4, kernels.Q5_0, kernels.Q5_1, kernels.TQ2, kernels.TQ2F} {
 				for _, sp := range []struct{ rows, k, ntok, mt, nt int }{
 					{16, 256, 8, 1, 1},
 					{64, 256, 16, 2, 2},
@@ -124,6 +124,10 @@ func mmaMVCaseWin(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 				setF16(blk + 108)
 			case kernels.Q6_K:
 				setF16(blk + 208)
+			case kernels.TQ2:
+				setF16(blk + 64)
+			case kernels.TQ2F:
+				binary.LittleEndian.PutUint32(raw[blk+64:], math.Float32bits(0.5+rng.Float32()))
 			case kernels.MXFP4:
 				// An E8M0 exponent the f16 plane holds exactly, or the packer
 				// refuses the tensor.

@@ -6,6 +6,8 @@
 // reader.
 package quant
 
+import "math"
+
 // Type is a ggml_type. The values are ABI: they appear in every GGUF file.
 type Type uint32
 
@@ -29,6 +31,24 @@ const (
 	// in it, read only by a row gather.
 	IQ4_NL Type = 20
 	BF16   Type = 30
+	// TQ1_0 and TQ2_0 are llama.cpp's ternary formats: 256 weights of {-1, 0,
+	// 1} times one f16 scale, base-3 packed five to a byte (TQ1_0) or as 2-bit
+	// codes q+1 (TQ2_0). TQ2_0 is the engine's ternary weight type; TQ1_0
+	// converts into it exactly.
+	TQ1_0 Type = 34
+	TQ2_0 Type = 35
+	// I2_S is bitnet.cpp's ternary type, the number its fork of ggml gives it
+	// (ggml itself retired 36). It has no block: a tensor is n/4 bytes of
+	// 2-bit codes and then one f32 scale, padded to 32 bytes, so it is sized
+	// by I2SBytes rather than by blockInfo and decoded only by the converter.
+	I2_S Type = 36
+	// TQ2_F32 is TQ2_0's block with its scale an f32: 64 bytes of codes and
+	// then the scale, 68 bytes a 256-block. It is the engine's own, not a
+	// ggml type -- no GGUF carries it (gguf refuses an engine type) -- and it
+	// exists so a ternary weight whose scale is not an f16 (bitnet.cpp's
+	// I2_S, a latent checkpoint ternarized in f32) converts without rounding
+	// its scale: the precision of the scale is the type's, as its grouping is.
+	TQ2_F32 Type = EngineTypes + 35
 	// MXFP4 is the OCP microscaling format gpt-oss ships its expert banks in:
 	// 32 e2m1 codes and one E8M0 exponent per block.
 	MXFP4 Type = 39
@@ -44,23 +64,24 @@ var blockInfo = map[Type][2]uint64{
 	Q8_0: {32, 34}, Q8_1: {32, 36},
 	Q2_K: {256, 84}, Q3_K: {256, 110}, Q4_K: {256, 144},
 	Q5_K: {256, 176}, Q6_K: {256, 210}, Q8_K: {256, 292},
-	16:    {256, 66},  // IQ2_XXS
-	17:    {256, 74},  // IQ2_XS
-	18:    {256, 98},  // IQ3_XXS
-	19:    {256, 50},  // IQ1_S
-	20:    {32, 18},   // IQ4_NL
-	21:    {256, 110}, // IQ3_S
-	22:    {256, 82},  // IQ2_S
-	23:    {256, 136}, // IQ4_XS
-	24:    {1, 1},     // I8
-	25:    {1, 2},     // I16
-	26:    {1, 4},     // I32
-	27:    {1, 8},     // I64
-	28:    {1, 8},     // F64
-	29:    {256, 56},  // IQ1_M
-	34:    {256, 54},  // TQ1_0
-	35:    {256, 66},  // TQ2_0
-	MXFP4: {32, 17},
+	16:      {256, 66},  // IQ2_XXS
+	17:      {256, 74},  // IQ2_XS
+	18:      {256, 98},  // IQ3_XXS
+	19:      {256, 50},  // IQ1_S
+	20:      {32, 18},   // IQ4_NL
+	21:      {256, 110}, // IQ3_S
+	22:      {256, 82},  // IQ2_S
+	23:      {256, 136}, // IQ4_XS
+	24:      {1, 1},     // I8
+	25:      {1, 2},     // I16
+	26:      {1, 4},     // I32
+	27:      {1, 8},     // I64
+	28:      {1, 8},     // F64
+	29:      {256, 56},  // IQ1_M
+	TQ1_0:   {256, 54},
+	TQ2_0:   {256, 66},
+	TQ2_F32: {256, 68},
+	MXFP4:   {32, 17},
 }
 
 var typeNames = map[Type]string{
@@ -68,7 +89,7 @@ var typeNames = map[Type]string{
 	Q8_0: "Q8_0", Q8_1: "Q8_1", Q2_K: "Q2_K", Q3_K: "Q3_K", Q4_K: "Q4_K", Q5_K: "Q5_K",
 	Q6_K: "Q6_K", Q8_K: "Q8_K", 16: "IQ2_XXS", 17: "IQ2_XS", 18: "IQ3_XXS", 19: "IQ1_S",
 	20: "IQ4_NL", 21: "IQ3_S", 22: "IQ2_S", 23: "IQ4_XS", 24: "I8", 25: "I16", 26: "I32",
-	27: "I64", 28: "F64", 29: "IQ1_M", BF16: "BF16", 34: "TQ1_0", 35: "TQ2_0", MXFP4: "MXFP4",
+	27: "I64", 28: "F64", 29: "IQ1_M", BF16: "BF16", TQ1_0: "TQ1_0", TQ2_0: "TQ2_0", I2_S: "I2_S", TQ2_F32: "TQ2_F32", MXFP4: "MXFP4",
 }
 
 func (t Type) String() string {
@@ -77,6 +98,18 @@ func (t Type) String() string {
 	}
 	return "type(" + itoa(uint64(t)) + ")"
 }
+
+// EngineTypes is where the engine's own block formats start: past every ggml
+// type, so a GGUF naming one is refused (Engine) rather than read.
+const EngineTypes Type = 1 << 16
+
+// Engine reports whether t is one of the engine's own block formats, which
+// no GGUF may carry.
+func (t Type) Engine() bool { return t >= EngineTypes }
+
+// I2SBytes is an I2_S tensor's size for n elements: the codes, then the
+// 32-byte tail that holds the scale.
+func I2SBytes(n uint64) uint64 { return n/4 + 32 }
 
 // BlockElems is how many logical elements one block encodes.
 func (t Type) BlockElems() uint64 { return blockInfo[t][0] }
@@ -107,7 +140,7 @@ func itoa(v uint64) string {
 //
 // A gate that sweeps this cannot miss a newly added format, where hand-written
 // lists in each test once did.
-var PackedTypes = []Type{Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, MXFP4}
+var PackedTypes = []Type{Q4_0, Q5_0, Q5_1, Q8_0, Q3_K, Q4_K, Q5_K, Q6_K, MXFP4, TQ2_0, TQ2_F32}
 
 // PlantScales overwrites every block's scale fields in src -- a buffer of whole
 // blocks of t, typically random bytes -- with finite values, drawn in turn from
@@ -127,6 +160,16 @@ func PlantScales(t Type, src []byte, seed int) bool {
 		e8m0 := []byte{127, 128, 126, 129, 104, 108, 113, 114, 120, 135, 143, 131}
 		for b := 0; b+17 <= len(src); b += 17 {
 			src[b] = e8m0[(b/17+seed)%len(e8m0)]
+		}
+		return true
+	}
+	if t == TQ2_F32 {
+		// An f32 scale: the f16 sweep's values widened, and a few no f16
+		// holds, at the 68-byte block's tail.
+		f32 := []float32{1, 0.5, 2, 0.25, 3, 0.1171875, 1.5, 4, 2.0796757, 0.0004213, 0.7310586, 61.47}
+		for b := 0; b+68 <= len(src); b += 68 {
+			u := math.Float32bits(f32[(b/68+seed)%len(f32)])
+			src[b+64], src[b+65], src[b+66], src[b+67] = byte(u), byte(u>>8), byte(u>>16), byte(u>>24)
 		}
 		return true
 	}
@@ -186,6 +229,8 @@ func scaleOffsets(t Type) ([]int, bool) {
 		return []int{208}, true // d, after the quants and scales
 	case Q3_K:
 		return []int{108}, true
+	case TQ2_0:
+		return []int{64}, true // d, after the 64 code bytes
 	}
 	return nil, false
 }

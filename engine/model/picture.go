@@ -24,6 +24,10 @@ type Picture struct {
 	// Pixels is the preprocessed picture, [y][x][channel]: GH*PatchSz x
 	// GW*PatchSz pixels, or a tiling tower's squares back to back.
 	Pixels []float32
+	// Pixels2 is a video's second frame of the temporal pair Pixels starts,
+	// the same size; nil for a still picture, whose one frame both temporal
+	// planes read.
+	Pixels2 []float32
 	// GH and GW are the patch grid one pass of the tower covers.
 	GH, GW int
 	// Rows is how many rows the segment's head emits for the picture: the
@@ -177,6 +181,8 @@ func (t *Tower) PicturePieces(img image.Image, lay Layout) ([]*Picture, error) {
 func (s *State) encodePicture(p *Picture) ([]float32, error) {
 	c := s.vis.t.Cfg
 	rows, _, err := s.encodeNamedKey(p.Key, p.GH, p.GW, func() ([]float32, error) {
+		s.vis.px2 = p.Pixels2
+		defer func() { s.vis.px2 = nil }()
 		if c.Dynamic() || c.PosBuckets > 0 {
 			return s.encodeGrid(p.Pixels, p.GH, p.GW)
 		}

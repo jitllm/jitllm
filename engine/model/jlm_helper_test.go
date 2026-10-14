@@ -19,6 +19,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
 var convertOnce sync.Map
@@ -139,7 +140,9 @@ func jlmOfErr(path string) (string, error) { return convertPair(path, "") }
 // is none.
 func convertPair(path, mmproj string) (string, error) {
 	if strings.HasSuffix(path, jlm.Ext) {
-		return path, nil
+		// A container an earlier build left is reconverted from the GGUF
+		// beside it; one that opens passes straight through.
+		return path, fresh.Container(path)
 	}
 	// A HuggingFace directory converts through the safetensors path to a
 	// container beside its real files, named for the directory.

@@ -381,7 +381,23 @@ func hfSourceOf(dir hfDir, shards []*safetensors.File) (*jlm.Source, error) {
 		}
 		var ty jlm.Type
 		var read func() ([]byte, error)
-		if loc.mx() {
+		var rt *hfRetyped
+		if ha.retype != nil && !loc.mx() {
+			readNamed := func(n string) ([]byte, *safetensors.Tensor, error) {
+				l, ok := all[n]
+				if !ok || l.mx() {
+					return nil, nil, fmt.Errorf("convert: %s: no tensor %q", dir, n)
+				}
+				b, err := l.f.ReadTensor(l.t)
+				return b, l.t, err
+			}
+			if rt, err = ha.retype(hc, role, name, t, readNamed); err != nil {
+				return nil, err
+			}
+		}
+		if rt != nil {
+			ty, shape, read = rt.ty, rt.shape, rt.read
+		} else if loc.mx() {
 			// [rows, cols] of MXFP4 values, read as GGUF's blocks.
 			ty, shape, read = jlm.TypeMX4, []uint64{t.Shape[0], 2 * t.Shape[1]}, loc.readMXFP4
 		} else {
@@ -1027,6 +1043,21 @@ type hfArch struct {
 	// whose weights are already in the container's layout leaves it nil and
 	// setData carries the bytes through.
 	fixup func(*jlm.Tensor, []byte, *jlm.Config) error
+	// retype gives a tensor a container type its source dtype does not map
+	// to, before anything is laid out: the type, the [rows, cols] shape and
+	// the read that produces its bytes (BitNet's ternary projections, from
+	// packed codes or latent weights). nil for a tensor it leaves alone; read
+	// returns any source tensor's bytes. Optional.
+	retype func(hc *hfConfig, role jlm.Role, name string, t *safetensors.Tensor,
+		read func(name string) ([]byte, *safetensors.Tensor, error)) (*hfRetyped, error)
+}
+
+// hfRetyped is a tensor retype gave its own container type: its shape is
+// safetensors' [rows, cols], and read yields the container's bytes.
+type hfRetyped struct {
+	ty    jlm.Type
+	shape []uint64
+	read  func() ([]byte, error)
 }
 
 // hfSplit cuts one source tensor into the container tensors it holds. Each
@@ -1094,6 +1125,8 @@ var hfArchTable = map[string]*hfArch{
 	"HunYuanMoEV1ForCausalLM":   hunyuanHF,
 	// The modern text group (convert/hfmoefamily2.go).
 	"Dots1ForCausalLM": dots1HF,
+	// BitNet b1.58 (convert/hfbitnet.go).
+	"BitNetForCausalLM": bitnetHF,
 	// Phi-3.5-MoE and its smaller siblings name the class as their remote
 	// code did; transformers saves its own spelling (convert/hfphimoe.go).
 	"PhiMoEForCausalLM": phimoeHF,

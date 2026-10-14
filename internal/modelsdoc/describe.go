@@ -12,6 +12,7 @@ var ggufModels = map[string]string{
 	"arcee":          "AFM-4.5B",
 	"bailingmoe2":    "Ling 2.0 and Ring 2.0",
 	"bert":           "all-MiniLM, mxbai-embed-large, bge-large, snowflake-arctic-embed (embeddings)",
+	"bitnet-b1.58":   "BitNet b1.58 2B-4T (bitnet.cpp's I2_S, F16 and F32 conversions)",
 	"clip":           "a vision tower (mmproj), converted into its text model's container",
 	"cohere2":        "Command R7B, Command A",
 	"command-r":      "Command-R, Aya, Aya Expanse",
@@ -83,6 +84,7 @@ var ggufModels = map[string]string{
 var hfModels = map[string]string{
 	"ApertusForCausalLM":             "Apertus",
 	"ArceeForCausalLM":               "AFM-4.5B",
+	"BitNetForCausalLM":              "BitNet b1.58 2B-4T: the release, and its bf16 master weights",
 	"DeepseekV2ForCausalLM":          "DeepSeek-V2, V2-Lite, Coder-V2",
 	"DeepseekV3ForCausalLM":          "DeepSeek-V3, R1, Kimi-K2, Moonlight",
 	"Dots1ForCausalLM":               "dots.llm1",

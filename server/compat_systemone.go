@@ -86,6 +86,27 @@ func (c *compat) systemOne(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A video's frames are pictures under the same byte bounds; they do not
+	// count against the pictures a request carries (MaxImages), a video's own
+	// bound being model.MaxVideoFrames.
+	vurls, err := model.DecisionVideos(req)
+	if err != nil {
+		s1Fail(w, http.StatusUnprocessableEntity, err.Error(), "videos")
+		return
+	}
+	var vids []model.VideoFrames
+	for i, v := range vurls {
+		vf := model.VideoFrames{FPS: v.FPS}
+		for j, u := range v.Frames {
+			f, err := pics.p.decodeDataURL(u)
+			if err != nil {
+				s1Fail(w, http.StatusUnprocessableEntity, fmt.Sprintf("videos[%d] frame %d %v", i, j, err))
+				return
+			}
+			vf.Frames = append(vf.Frames, f)
+		}
+		vids = append(vids, vf)
+	}
 	name := ""
 	if mv, ok := req.Get("model"); ok && mv.IsString() {
 		name = mv.AsString()
@@ -97,7 +118,7 @@ func (c *compat) systemOne(w http.ResponseWriter, r *http.Request) {
 			name = ls[0].ID
 		}
 	}
-	res, err := c.b.Decide(r.Context(), DecideOptions{Model: name, State: state, Questions: qs, Images: pics.imgs})
+	res, err := c.b.Decide(r.Context(), DecideOptions{Model: name, State: state, Questions: qs, Images: pics.imgs, Videos: vids})
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrInvalid):

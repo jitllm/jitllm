@@ -59,6 +59,12 @@ type Config struct {
 	// MatVec loop -- the pre-GEMM engine, kept as the A/B arm it was built as.
 	NoGEMM bool
 
+	// ActWindow, when not zero, is the activation amax window in place of
+	// the one the weight types decide (cpu.WideActWindow): a model whose
+	// graph quantizes every projection input per token (BitNet) asks for a
+	// window at least as wide as its widest row, so every 32-element block
+	// of a row shares the row's one scale. A multiple of 32.
+	ActWindow int
 	// ChunkBytes caps the weight slice one pool chunk of a batched matmul
 	// covers, in bytes, 0 meaning no locality cap (the GC-preemption budget
 	// alone sizes the chunk). Batched path only; see batchedChunk.
@@ -216,3 +222,7 @@ func WithGEMMRows(n int) Option { return func(c *Config) { c.GEMMRows = n } }
 // WithChunkBytes caps the weight slice one pool chunk of a batched matmul
 // covers. Zero is the default: no locality cap, the GC budget alone.
 func WithChunkBytes(n int) Option { return func(c *Config) { c.ChunkBytes = n } }
+
+// WithActWindow sets the activation amax window in place of the one the
+// weight types decide; see Config.ActWindow.
+func WithActWindow(n int) Option { return func(c *Config) { c.ActWindow = n } }
