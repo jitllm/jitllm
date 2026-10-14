@@ -657,6 +657,11 @@ func TestOffCardDecodeDoesNotAllocate(t *testing.T) {
 						t.Fatalf("experts %s: %d hybrid block-steps, %d fills -- the path under test never ran",
 							where, s1.HybridRuns-s0.HybridRuns, s1.StreamFills-s0.StreamFills)
 					}
+					// A packed bank's hybrid blocks keep an expert cache on the
+					// card (tier.Config.NoHybridCache), so the split ran too.
+					if where == "host" && !strings.HasPrefix(name, "synth") && s1.SplitRuns == s0.SplitRuns {
+						t.Fatalf("experts host: no split block-step -- the card's expert cache never ran")
+					}
 				})
 			}
 		})

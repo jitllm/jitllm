@@ -322,6 +322,15 @@ type streamBank struct {
 	li            int  // the block, for the session's host side (hostFor)
 	hin, hw, hout []float32
 	hsel          []uint32
+	// The split (hybrid with a cache): heat counts each expert's selections,
+	// halved every heatHalf tokens; hit marks which of this token's
+	// selection the cache holds; dw is the card's weights (a miss's zeroed),
+	// and msel and mw the misses the host runs.
+	heat []uint32
+	hit  []bool
+	dw   []float32
+	msel []uint32
+	mw   []float32
 	// pred is this block's selection as the previous block's probe predicted
 	// it (Config.StreamProbe), valid while havePred; score compares it with
 	// the real one and clears it.
@@ -562,6 +571,77 @@ type hostSide struct {
 	rows func(sel []uint32, w, in, out []float32, rows, k int) error
 }
 
+// splitIn brings a split step's input and routing weights home and divides
+// the weights between the card and the host. The Sync before the selection
+// was read covers in.
+func (st *streamBank) splitIn(s backend.Session, in, w backend.Buf, n, k int) error {
+	if err := st.home(s, in, w, n, k); err != nil {
+		return err
+	}
+	st.splitWeights(st.hw[:k])
+	return nil
+}
+
+// home reads a hybrid step's expert input and routing weights back.
+func (st *streamBank) home(s backend.Session, in, w backend.Buf, n, k int) error {
+	if cap(st.hin) < n {
+		st.hin = make([]float32, n)
+		st.hout = make([]float32, n)
+	}
+	st.hin, st.hout = st.hin[:n], st.hout[:n]
+	if cap(st.hw) < k+1 {
+		st.hw = make([]float32, k+1)
+	}
+	st.hw = st.hw[:k+1]
+	if err := s.Read(in, f32b(st.hin)); err != nil {
+		return err
+	}
+	return s.Read(w, f32b(st.hw))
+}
+
+// hybridIn is splitIn for a step with no hit: every selected expert is the
+// host's.
+func (st *streamBank) hybridIn(s backend.Session, in, w backend.Buf, n, k int) error {
+	if err := st.home(s, in, w, n, k); err != nil {
+		return err
+	}
+	st.msel = append(st.msel[:0], st.sel...)
+	st.mw = append(st.mw[:0], st.hw[:k]...)
+	return nil
+}
+
+// hostLate runs the host's share of a step -- a split's misses, or a hybrid
+// step's whole selection -- while the card runs what was queued before it,
+// and queues the sum into dst.
+func (st *streamBank) hostLate(sid uint64, g *devTier, s backend.Session, dst backend.Buf, split bool) error {
+	t0 := time.Now()
+	host := g.hostFor(sid, st)
+	if host == nil {
+		return fmt.Errorf("tier: this session offered no host side for a hybrid block")
+	}
+	if len(st.msel) == 0 {
+		clear(st.hout)
+	} else if err := host(st.msel, st.mw, st.hin, st.hout); err != nil {
+		return err
+	}
+	if split {
+		g.TSplitHost += time.Since(t0)
+		g.SplitRuns++
+		g.SplitHits += len(st.sel) - len(st.msel)
+	}
+	err := s.WriteAt(dst, 0, f32b(st.hout))
+	g.THybrid += time.Since(t0)
+	return err
+}
+
+// splitAdmit is Config.SplitAdmit with its default.
+func (g *devTier) splitAdmit() int {
+	if g.SplitAdmit > 0 {
+		return g.SplitAdmit
+	}
+	return 2
+}
+
 // runHost is the hybrid suspension: in (the experts' input, n wide -- the
 // expert width, which is the latent on Kimi-K3) and the k routing weights
 // come home, the host's experts sum into hout, and the sum is
@@ -660,6 +740,134 @@ func (st *streamBank) lookup(g *devTier) {
 		st.items = append(st.items, streamItem{e: e, slot: v})
 		g.StreamCacheMisses++
 	}
+}
+
+// heatHalf is how many tokens a hybrid cache's selection counts last at
+// full weight: every heatHalf tokens they are halved, so the cache follows a
+// shift in what the prompt routes to without chasing a single token.
+const heatHalf = 256
+
+// split maps this token's selection onto a hybrid block's cache without
+// evicting anything: a hit runs on the card from its slot, a miss on the
+// host. It counts the selection's heat and returns the hits. A miss's slot
+// is the first hit's, so the card's kernels read a sheet that holds an
+// expert (its weight is zero in dw); with no hit nothing runs on the card.
+func (st *streamBank) split(g *devTier) int {
+	if st.heat == nil {
+		st.heat = make([]uint32, len(st.slotOf))
+		st.hit = make([]bool, len(st.sel))
+	}
+	st.tick++
+	if st.tick%heatHalf == 0 {
+		for i := range st.heat {
+			st.heat[i] >>= 1
+		}
+	}
+	hits, first := 0, uint32(0)
+	for i, e := range st.sel {
+		st.heat[e]++
+		sl := st.slotOf[e]
+		st.hit[i] = sl >= 0
+		if sl < 0 {
+			continue
+		}
+		st.used[sl] = st.tick
+		st.slotSel[i] = uint32(sl)
+		if hits == 0 {
+			first = uint32(sl)
+		}
+		hits++
+	}
+	for i := range st.sel {
+		if !st.hit[i] {
+			st.slotSel[i] = first
+		}
+	}
+	g.StreamCacheHits += hits
+	g.StreamCacheMisses += len(st.sel) - hits
+	return hits
+}
+
+// splitWeights divides the routing weights w (the selection's order) into
+// the card's, a miss's zeroed, and the host's misses with theirs.
+func (st *streamBank) splitWeights(w []float32) {
+	st.dw = append(st.dw[:0], w...)
+	st.msel, st.mw = st.msel[:0], st.mw[:0]
+	for i, e := range st.sel {
+		if !st.hit[i] {
+			st.dw[i] = 0
+			st.msel = append(st.msel, e)
+			st.mw = append(st.mw, w[i])
+		}
+	}
+}
+
+// admit takes up to max of this token's misses into a hybrid block's cache,
+// each into the coldest slot this token does not read, when the miss has
+// been selected more often than that slot's expert (an empty slot takes
+// any). The uploads are queued behind the launches that read this token's
+// slots, so a slot changes only after its last reader.
+func (st *streamBank) admit(g *devTier, s backend.Session, l *layer, nExpert, max int) error {
+	st.items = st.items[:0]
+	for i, e := range st.sel {
+		if len(st.items) >= max {
+			break
+		}
+		if st.hit[i] || st.slotOf[e] >= 0 {
+			continue
+		}
+		v := -1
+		for sl, o := range st.owner {
+			if st.used[sl] == st.tick {
+				continue
+			}
+			if o < 0 {
+				v = sl
+				break
+			}
+			if v < 0 || st.heat[o] < st.heat[st.owner[v]] {
+				v = sl
+			}
+		}
+		if v < 0 {
+			break
+		}
+		if o := st.owner[v]; o >= 0 {
+			if st.heat[o] >= st.heat[e] {
+				continue
+			}
+			st.slotOf[o] = -1
+		}
+		st.owner[v], st.slotOf[e], st.used[v] = int32(e), int32(v), st.tick
+		st.items = append(st.items, streamItem{e: e, slot: v})
+	}
+	if len(st.items) == 0 {
+		return nil
+	}
+	st.want = st.want[:0]
+	for _, it := range st.items {
+		st.want = append(st.want, it.e)
+	}
+	var err error
+	switch {
+	case st.pre != nil:
+		err = st.pre(st.want)
+	case st.ensure != nil:
+		err = st.ensure(&st.w)
+	}
+	if err == nil && st.sel2 != nil {
+		err = st.sel2(&st.w, st.want)
+	}
+	if err == nil {
+		err = st.put(g, s, l, nExpert, [2]int{0, len(st.items)})
+	}
+	if err != nil {
+		// A sheet half sent is not the expert the map names.
+		st.forget()
+		return err
+	}
+	g.SplitAdmits += len(st.items)
+	return nil
 }
 
 // forget empties the cache, for when the bank's bytes can no longer be
@@ -1853,6 +2061,10 @@ type blockScratch struct {
 	// rwProbe is the cross-layer probe's routing weights, kept off rw, which
 	// holds the block's own until its combine reads them.
 	rwProbe backend.Buf
+	// rwHit, esplit and hsum are the split's (streamBank.split): the card's
+	// routing weights with the misses zeroed, the card's sum of the hits and
+	// the host's of the misses.
+	rwHit, esplit, hsum backend.Buf
 	// The V3 family's grouped selection: gscore writes one score per expert
 	// group into rgs, gmask writes the masked selection plane into rbm, and
 	// rank then counts over rbm instead of over the logits. Both are nil on
@@ -2560,7 +2772,16 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	hostExp := w.HostExperts != nil && (auto && mode == expHost ||
 		g.HybridExperts && !(auto && mode == expCard) || auto && mode == expAuto && !g.NoHybrid)
 	stream := moe && (g.StreamExperts || auto) && slots < bank && (slots > 1 || hostExp)
-	hybrid := stream && hostExp
+	// A hybrid block that can hold an expert cache (Config.NoHybridCache)
+	// is placed as a streamed one -- the compact bank and its kernels on the
+	// card -- marked hybrid, so the cache sized after placement has kernels
+	// to run its experts with (streamBank.split). One whose experts carry
+	// biases or a dense scale keeps no bank, as cacheSlotsFor refuses them,
+	// and so does a float bank, which has no packed sheets to send.
+	cacheable := !g.NoHybridCache && g.StreamCacheSlots >= 0 && slots > 1 && !p.DenseMoE &&
+		w.ExpGateB == nil && w.ExpUpB == nil && w.ExpDownB == nil &&
+		w.Up.Packed != nil && w.Down.Packed != nil && (w.Gate.Packed != nil || len(w.Gate.Data) == 0)
+	hybrid := stream && hostExp && !cacheable
 	// cslots is the streamed bank's size in sheets, decided at the first bank
 	// matrix (cacheSlotsFor): slots without an expert cache, more with one.
 	cslots := -1
@@ -3913,6 +4134,9 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		al(&bs.rtop, (k+1)*4)
 		al(&bs.rw, (k+1)*4) // slot k is ExpertRoute's bin
 		al(&bs.rwProbe, (k+1)*4)
+		al(&bs.rwHit, (k+1)*4)
+		al(&bs.esplit, max(p.ExpWidth(), p.NEmbd)*4)
+		al(&bs.hsum, max(p.ExpWidth(), p.NEmbd)*4)
 		if p.DenseMoE {
 			al(&bs.hr, rows*p.NEmbd*4)
 			al(&bs.rwS, k*4)
@@ -8078,7 +8302,28 @@ func (g *devTier) layersSession(s backend.Session) {
 				if latent {
 					ein, eout = bs.k3.lat, bs.k3.latAcc
 				}
-				hybrid := false
+				hybrid, split := false, false
+				// late is host expert work left to run after the card's next
+				// launches (the hits, the shared expert) are queued, so the
+				// card computes while the host does: the misses' sum goes to
+				// lateDst, and lateAdd adds it to the card's hits into eout.
+				late, lateAdd := false, false
+				var lateDst backend.Buf
+				finishLate := func() {
+					if !late {
+						return
+					}
+					late = false
+					if err == nil {
+						err = l.stream.hostLate(sid, g, s, lateDst, split)
+					}
+					if lateAdd {
+						lc.la(bs.addE, p.ExpWidth(), bs.esplit, bs.hsum, eout)
+					}
+					if err == nil && l.stream.cached() {
+						err = l.stream.admit(g, s, l, p.NExpert, g.splitAdmit())
+					}
+				}
 				if R > 1 {
 					if latent {
 						g.k3LatentIn(lc, bs, l, R, mvrun)
@@ -8192,14 +8437,45 @@ func (g *devTier) layersSession(s backend.Session) {
 							l.stream.score(g, li)
 						}
 						hybrid = l.stream.hybrid && !g.StreamFixedSel
-						if err == nil && hybrid {
+						// The split: a hybrid block with a cache runs the experts the
+						// cache holds on the card and the rest on the host, at once.
+						split = hybrid && l.stream.cached()
+						if err == nil && split {
+							if l.down != l.stream.bank {
+								l.stream.forget()
+								l.stream.bank = l.down
+							}
+							split = l.stream.split(g) > 0
+						}
+						if err == nil && split {
+							if latent {
+								g.k3LatentIn(lc, bs, l, 1, mvrun)
+								err = s.Sync()
+							}
+							if err == nil {
+								err = l.stream.splitIn(s, ein, bs.rw, p.ExpWidth(), bs.nUsed)
+							}
+							if err == nil {
+								err = s.WriteAt(bs.rwHit, 0, f32b(l.stream.dw))
+							}
+						}
+						if err == nil && hybrid && !split {
 							// Hybrid: the experts' input and the routing weights come
 							// home, the host runs the selected experts, and their sum
 							// goes back where the combine would have written it.
 							if latent {
 								g.k3LatentIn(lc, bs, l, 1, mvrun)
+								err = l.stream.runHost(sid, g, s, ein, bs.rw, eout, p.ExpWidth(), bs.nUsed)
+								if err == nil && l.stream.cached() {
+									// No hit: the cache still learns from the selection.
+									err = l.stream.admit(g, s, l, p.NExpert, g.splitAdmit())
+								}
+							} else {
+								// The input and weights come home now; the host runs
+								// the experts once the shared expert is queued.
+								err = l.stream.hybridIn(s, ein, bs.rw, p.ExpWidth(), bs.nUsed)
+								late, lateDst = true, eout
 							}
-							err = l.stream.runHost(sid, g, s, ein, bs.rw, eout, p.ExpWidth(), bs.nUsed)
 						}
 						if err == nil && !hybrid && (g.StreamProbe || g.StreamPrefetch) && li+1 < hi {
 							// The cross-layer probe: the next block's router over this
@@ -8239,16 +8515,16 @@ func (g *devTier) layersSession(s backend.Session) {
 							g.StreamFills++
 						}
 					}
-					if hybrid && latent {
+					if hybrid && !split && latent {
 						// The routed sum is already in eout.
 						g.k3LatentOut(lc, bs, l, 1, mvrun)
 					}
-					if !hybrid {
+					if !hybrid || split {
 						// gate and up read the one normed vector, so they are
 						// indexed on the weight side only. bs.a/bs.ax still hold
 						// its quantization from the launch above -- or, at
 						// Kimi-K3's latent, its projection's.
-						if latent {
+						if latent && !split {
 							g.k3LatentIn(lc, bs, l, 1, mvrun)
 						}
 						ffnW := bs.nUsed * bs.nFFNExp
@@ -8265,6 +8541,9 @@ func (g *devTier) layersSession(s backend.Session) {
 							g.MoEFused++
 						}
 						rw := bs.rw
+						if split {
+							rw = bs.rwHit
+						}
 						if p.DenseMoE {
 							// Each routed weight times its expert's own factor.
 							lc.la(bs.ewScale, bs.nUsed, bs.rw, bs.rsel, l.expScale, bs.rwS)
@@ -8324,11 +8603,28 @@ func (g *devTier) layersSession(s backend.Session) {
 								edown = bs.edownB
 							}
 						}
-						lc.la(bs.combine, p.ExpWidth(), edown, rw, eout)
+						if !split {
+							lc.la(bs.combine, p.ExpWidth(), edown, rw, eout)
+						} else {
+							// The card's hits sum into esplit while the host runs
+							// the misses; the two sums are added in that order.
+							lc.la(bs.combine, p.ExpWidth(), edown, rw, bs.esplit)
+							late, lateAdd, lateDst = true, true, bs.hsum
+							if latent {
+								// The latent's out projection reads the sum: no
+								// shared expert runs between.
+								finishLate()
+							}
+						}
 						if latent {
 							g.k3LatentOut(lc, bs, l, 1, mvrun)
 						}
 					}
+				}
+				shared := bs.shAdd != nil && !p.DenseMoE &&
+					(l.shGate != nil || ungatedFFN(p)) && l.shUp != nil && l.shDown != nil
+				if !shared {
+					finishLate()
 				}
 				if p.DenseMoE {
 					// The experts' post-norm, then the dense MLP's normed output
@@ -8340,8 +8636,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				// The always-on expert is added after the routed sum, not into it: the
 				// routed weights may be renormalised by their own sum (see engine/model/moe.go).
-				if bs.shAdd != nil && !p.DenseMoE &&
-					(l.shGate != nil || ungatedFFN(p)) && l.shUp != nil && l.shDown != nil {
+				if shared {
 					if l.shRouter != nil {
 						lc.la(bs.shRouterK, kernels.SharedRouterThreads(R), l.shRouter, bs.h, bs.shlogit)
 					}
@@ -8370,6 +8665,9 @@ func (g *devTier) layersSession(s backend.Session) {
 					}
 					lc.la(bs.shQuant, kernels.QuantizeThreads(R*bs.nShExp/32), bs.shact, bs.a, bs.ax)
 					mvrun(l.mvsd, l.shDown, bs.shout)
+					// The host's experts run now, the shared expert queued
+					// ahead of them on the card.
+					finishLate()
 					// An ungated shared expert is a plain add: no logit makes sigma()
 					// exactly one, so the multiply goes rather than being neutralised.
 					if l.shRouter != nil {

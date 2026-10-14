@@ -755,7 +755,7 @@ func (g *devTier) sizeAutoCaches() {
 	for _, l := range g.layers {
 		// A block whose experts carry biases keeps its plain bank: see
 		// cacheSlotsFor.
-		if l == nil || l.stream == nil || l.stream.cached() || l.stream.hybrid || l.down == nil ||
+		if l == nil || l.stream == nil || l.stream.cached() || l.stream.hybrid && g.NoHybridCache || l.down == nil ||
 			l.expGateB != nil || l.expUpB != nil || l.expDownB != nil {
 			continue
 		}

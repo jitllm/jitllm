@@ -460,6 +460,9 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		return err
 	}
 	defer m.Close()
+	if err := preloadWait(m); err != nil {
+		return err
+	}
 	goheap.OffHeap(maxmem)
 	c := m.Cfg
 	fmt.Fprintf(os.Stderr, "%s L=%d d=%d heads=%d/%d head_dim=%d ffn=%d vocab=%d\n",
@@ -1006,6 +1009,10 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 			}
 			if ds.HybridRuns > 0 {
 				fmt.Fprintf(os.Stderr, "hybrid experts: %d block-step(s) on the host, %.2f s\n", ds.HybridRuns, sec(ds.THybrid))
+				if ds.SplitRuns > 0 || ds.SplitAdmits > 0 {
+					fmt.Fprintf(os.Stderr, "split experts: %d block-step(s) split, %d expert(s) run on the card, host %.2f s, %d taken into the caches\n",
+						ds.SplitRuns, ds.SplitHits, sec(ds.TSplitHost), ds.SplitAdmits)
+				}
 			}
 			if ds.StreamPrefetched > 0 {
 				fmt.Fprintf(os.Stderr, "cross-layer prefetch: %d expert(s) read ahead, %.2f s joining them\n",
@@ -1577,6 +1584,20 @@ func tokenizerOption(path string) ([]tok.Option, func(), error) {
 // loadOpts turns the tokenizer options into load options and adds the page
 // budget, which has to be known at Open because it decides how many block pages
 // the container may hold. Zero means "ask the process".
+// preloadWait holds the run until the background preload has read every page
+// when JITLLM_PRELOAD_WAIT=1: a warm measurement whose model fits the budget
+// then faults nothing in, as an engine that copies its weights to RAM before
+// its first token does. Unset, the prompt starts beside the reads.
+func preloadWait(m *model.Model) error {
+	if os.Getenv("JITLLM_PRELOAD_WAIT") != "1" {
+		return nil
+	}
+	t0 := time.Now()
+	err := m.WaitPreload()
+	fmt.Fprintf(os.Stderr, "preload   waited %.1fs for every page\n", time.Since(t0).Seconds())
+	return err
+}
+
 func loadOpts(t []tok.Option, budget uint64) []model.Option {
 	o := make([]model.Option, 0, len(t)+2)
 	for _, x := range t {

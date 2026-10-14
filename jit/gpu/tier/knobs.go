@@ -341,6 +341,19 @@ func WithAutoStream(on bool) Option {
 	return WithConfig(func(c *Config) { c.NoAutoStream = !on })
 }
 
+// WithHybridCache sets whether a hybrid block gets an expert cache on the
+// card: its hottest experts run there, beside the host running the rest of
+// each token's selection. On by default.
+func WithHybridCache(on bool) Option {
+	return WithConfig(func(c *Config) { c.NoHybridCache = !on })
+}
+
+// WithSplitAdmit caps how many experts a hybrid block's cache takes in a
+// token (Config.SplitAdmit).
+func WithSplitAdmit(n int) Option {
+	return WithConfig(func(c *Config) { c.SplitAdmit = n })
+}
+
 // WithHybridExperts sets where a streamed block's routed experts run by
 // default: on the host (true, hybrid execution) or sent to the card each token
 // (false). A placement's choice for a block (GPU.PlaceExperts) wins.

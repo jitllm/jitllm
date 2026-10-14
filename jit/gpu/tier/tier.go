@@ -467,6 +467,15 @@ type Config struct {
 	// instead of running its experts on the host, which is that block's
 	// default (GPU.AutoStream).
 	NoHybrid bool
+	// NoHybridCache gives a hybrid block no expert cache on the card. With
+	// one (the default, sized from the room left after placement), the
+	// experts the cache holds run on the card while the host runs the rest
+	// of the selection beside them, and the cache keeps the block's most
+	// selected experts (streamBank.split).
+	NoHybridCache bool
+	// SplitAdmit is how many experts a hybrid block's cache takes in a
+	// token at most; 0 is 2.
+	SplitAdmit int
 	// NoAutoStream leaves a mixture block that no device can hold resident
 	// on the host, as before GPU.AutoStream, instead of streaming it.
 	NoAutoStream bool
@@ -846,6 +855,12 @@ type Stats struct {
 	// HybridRows counts rows of batched chunks whose experts ran on the host.
 	HybridRows int
 	THybrid    time.Duration
+	// SplitRuns counts hybrid block-steps that ran part of their selection
+	// on the card from its expert cache (streamBank.split), SplitHits the
+	// experts run there, SplitAdmits the experts the caches took in, and
+	// TSplitHost the host's share of those steps' wall.
+	SplitRuns, SplitHits, SplitAdmits int
+	TSplitHost                        time.Duration
 	// StreamCacheSize is the largest expert cache a block was given, in
 	// sheets: the check that an auto-sized cache is the size intended.
 	StreamCacheSize int
@@ -1239,6 +1254,10 @@ func (s *Stats) add(o Stats) {
 	s.HybridRuns += o.HybridRuns
 	s.HybridRows += o.HybridRows
 	s.THybrid += o.THybrid
+	s.SplitRuns += o.SplitRuns
+	s.SplitHits += o.SplitHits
+	s.SplitAdmits += o.SplitAdmits
+	s.TSplitHost += o.TSplitHost
 	s.StreamCacheSize = max(s.StreamCacheSize, o.StreamCacheSize)
 	s.StreamGroupsTuned = max(s.StreamGroupsTuned, o.StreamGroupsTuned)
 	s.StreamPinHalfTuned = max(s.StreamPinHalfTuned, o.StreamPinHalfTuned)
