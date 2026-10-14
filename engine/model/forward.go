@@ -240,6 +240,9 @@ type State struct {
 	// device's own submission waits on hostExperts, when offering a matvec to
 	// that device would wait on the session it is inside of.
 	hostOnly bool
+	// hostCalls counts the device's calls into hostExperts, so a token can
+	// tell whether its submission suspended for the host's experts.
+	hostCalls int
 	// autoStreamed counts the blocks the last placement streamed because no
 	// card could hold them resident (nn.AutoStreamer).
 	autoStreamed int
@@ -3435,9 +3438,17 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 	// the pool spinning through a blocking read").
 	if pc := s.m.container; pc != nil {
 		in0, _ := pc.Faults()
+		calls0 := s.hostCalls
 		defer func() {
 			in1, _ := pc.Faults()
 			s.jit.SetSpinning(in1 == in0)
+			// A token whose device suspended for the host's experts waited on
+			// the card between those calls: the workers spin across it.
+			if in1 == in0 && s.hostCalls != calls0 {
+				if d := s.m.opt.hybridSpinFor(); d > 0 {
+					s.jit.SetSpinFor(d)
+				}
+			}
 		}()
 	}
 

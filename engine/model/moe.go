@@ -851,6 +851,7 @@ func (s *State) hostExperts(li int, sel []uint32, w, in, out []float32) error {
 	if l.ungatedExp {
 		return fmt.Errorf("model: block %d: ungated experts do not run split across tiers", li)
 	}
+	s.hostCalls++
 	k := len(sel)
 	s.hyOrd = slices.Grow(s.hyOrd[:0], k)[:k]
 	s.hyW = slices.Grow(s.hyW[:0], k)[:k]
