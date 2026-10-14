@@ -185,3 +185,49 @@ A grid barrier and the dep ops are not mixed in one kernel.
   the per-op kernels and are composed as they are. Fusing across tasks is the
   composer's step after this one.
 - Tile edges for a packed narrow task.
+
+## After the counters: the ceiling, measured
+
+The counters lost (gpu-kernels.md, "The dependency-counter block"), so the next
+lever has to remove work rather than reorder it. Before choosing one, the
+whole-token efficiency: eta = resident weight bytes x tok/s over a read wall
+measured in the same process (`jitllm speed` with `JITLLM_SPEED_WALL=1`,
+`cmd/jitllm/wall.go`: a grid-strided one-word stream over 2 GiB, median of 21).
+V100-SXM2-16GB, CUDA, graph replay, p64 tg256, three runs each:
+
+| model | GB/token | tok/s | GB/s | wall GB/s | eta |
+|---|---|---|---|---|---|
+| Llama-3.2-1B Q4_K_M | 0.975 | 557.1 / 563.8 / 563.8 | 543 | 860.3 | 63.1% |
+| Llama-3.2-3B Q4_K_M | 2.522 | 245.9 / 246.3 / 246.3 | 620 | 858.5 | 72.2% |
+| Llama-3.1-8B Q4_K_M | 5.171 | 139.1 / 138.4 / 139.2 | 719 | 864.5 | 83.2% |
+
+The bytes are the resident weights, each read once a token; KV at 64-320
+positions is under 1% of them. The ceiling with the bytes unchanged is 1.58x
+(1B), 1.39x (3B) and 1.20x (8B).
+
+Per-kernel device time (`JITLLM_CUDA_KERNEL_TIMING=1`, one event pair a
+launch, which adds ~3.9 us to each and so overstates the small kernels): on
+the 1B the matvecs are ~1820 of 2385 us; rmsnormquantw, flashkvpaged,
+ropeqkvpaged and flashmergewide ~550 us over 64 launches, most of it the
+events. On the 8B the matvecs are ~7200 of 8620 us.
+
+What this says about the candidates:
+
+- **k-slice chaining (gate/up into down, heads into o).** At decode each
+  slice of the intermediate feeds every output row, so a chain either re-reads
+  weights, holds all H accumulators per workgroup, or writes 4H(F/S) bytes of
+  f32 partials and reduces them: for the 1B (H 2048, F 8192) at S = 256 that is
+  256 KiB a block written and read again, against the 32 KiB intermediate it
+  removes, and a fixed-order reduction keeps one launch boundary anyway. It does
+  not clear its traffic budget, and its arithmetic would not be bit-identical
+  to the per-op path without that reduction. Not built.
+- **Residual and norm statistics as epilogues** remove one small launch a
+  sublayer (the norm's 16 x 2 on the 1B), a fraction of the ~37% the 1B leaves
+  on the table; exact only if the epilogue keeps RMSNormGroup's reduction tree.
+- **Per-card tuning of the matvec decomposition** (split, group split, row
+  tile, ActIn eligibility) acts on the ~75% of the token that is matvec time,
+  at eta 63-83%: the largest share of what is left, and it changes no
+  arithmetic order the gates pin beyond what the split tuner already chooses.
+
+So the order is: the matvec decomposition per card first, the exact
+norm-statistics epilogue second, chaining not at all at decode.

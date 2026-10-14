@@ -246,6 +246,19 @@ func speedCmd(args []string) error {
 			fmt.Printf("device %s: prompt on %d/%d blocks, decode on %d, %d spill(s), %d relocation(s)+reclaim(s), %s\n", name,
 				ppOn, m.Cfg.NLayer, st2.GPULayers(), spills+st2.Spills(),
 				moves+st2.Relocations()+st2.Reclaims(), deviceStats(d))
+			// JITLLM_SPEED_WALL=1: the decode as a fraction of the card's read
+			// wall, measured here (RULE 1). The bytes are the resident
+			// weights, each read once a token by a dense decode.
+			if g, ok := d.(*tier.GPU); ok && os.Getenv("JITLLM_SPEED_WALL") == "1" {
+				if wall, wname, werr := deviceReadWall("ptx", 2048, 21); werr != nil {
+					fmt.Printf("read wall: %v\n", werr)
+				} else {
+					rate := float64(*n) / tg.Seconds()
+					gb := float64(g.Bytes()) / 1e9
+					fmt.Printf("eta: %s, %.3f GB/token x %.1f tok/s = %.1f GB/s of a %.1f GB/s read wall = %.1f%%\n",
+						wname, gb, rate, gb*rate, wall, 100*gb*rate/wall)
+				}
+			}
 			if tails > 0 {
 				// engine/model/tailrows.go
 				fmt.Printf("prompt: %d few-row chunk(s) ran as a ragged step\n", tails)
