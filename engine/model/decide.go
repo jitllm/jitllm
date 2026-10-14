@@ -109,6 +109,13 @@ type Decider struct {
 	// (cutVideos); nil between requests.
 	vids [][]Span
 
+	// prompts is a request's prompts when its questions share a trunk
+	// (decideTrunk), trunkRec the recurrent summary at the trunk's end, and
+	// trunks how many requests ran that way.
+	prompts  []decidePrompt
+	trunkRec recSnap
+	trunks   int
+
 	// pics is the request in flight's pictures, each its run of the prompt
 	// (cutPictures); nil between requests and for a text request.
 	pics [][]Span
@@ -347,6 +354,16 @@ func (d *Decider) DecideMedia(state jinja.Value, qs []DecisionQuestion, imgs []i
 		}
 		return d.clefAnswers(qs, s)
 	}
+	if d.trunkShared(qs) {
+		ok, err := d.decideTrunk(state, qs, out)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return out, nil
+		}
+		d.input = 0
+	}
 	for i := range qs {
 		q := &qs[i]
 		nv := d.variants(q)
@@ -432,7 +449,16 @@ func (d *Decider) forward(ids []int32, groups [][]int32, v int) ([]float32, erro
 // forwardSpans is forward over a prompt of spans: a request's pictures
 // stand in it as Picture spans (decideimages.go).
 func (d *Decider) forwardSpans(spans []Span, groups [][]int32, v int) ([]float32, error) {
-	d.st.Reset()
+	return d.readSpans(spans, groups, v, true)
+}
+
+// readSpans runs spans -- a whole prompt after a Reset when fresh is set, a
+// tail on from the sequence's position otherwise (decideTrunk) -- and reads
+// the label groups' scores into variant v's scratch.
+func (d *Decider) readSpans(spans []Span, groups [][]int32, v int, fresh bool) ([]float32, error) {
+	if fresh {
+		d.st.Reset()
+	}
 	// The labels' logits: where the head is on a device, gathered there and
 	// those alone read back (nn.Head.Pick) -- not under a head bias or a
 	// logit scale, which the host adds after the head.
@@ -480,7 +506,9 @@ func (d *Decider) forwardSpans(spans []Span, groups [][]int32, v int) ([]float32
 	if err != nil {
 		return nil, err
 	}
-	d.input += SpanPositions(spans, d.m.Cfg.NEmbd)
+	if fresh {
+		d.input += SpanPositions(spans, d.m.Cfg.NEmbd)
+	}
 	if h != nil && h.Picked {
 		d.picked++
 		return d.labelScoresOf(h.PickVals, groups, v)
