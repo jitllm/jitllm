@@ -3726,6 +3726,30 @@ kernel carrying ~3.9 us of event):
   fixed ~100 us (its four or five pool regions) and ~66 us an expert, 2.9 MB
   at 44 GB/s; Strata's pool reads 35.6 GB/s.
 
+**The row** (`scripts/vs-strata.sh`, the build at "model: the pool spins
+across a device's wait", one V100, node 0 for both engines, decode 128
+tokens, speculation off in both, 20 ABBA rounds, each sample a fresh process;
+jitllm with `JITLLM_EXPERTS=host JITLLM_PRELOAD_WAIT=1 JITLLM_WARMUP=2`: the
+preload and two untimed runs of the same prompt and 128 tokens are its
+warm-up, as Strata's page-locked copy and profile fill are its, and neither
+is on the clock):
+
+| pass | jitllm | Strata | median ratio | IQR/median |
+|---|---|---|---|---|
+| A/A (jitllm both arms) | 21.4-22.6 tok/s | -- | 1.0004 | 0.020 |
+| 1 | 21.6-22.6 | 15.3-17.5 | **1.2631** | 0.020 |
+| 2 | 21.6-22.3 | 15.4-17.5 | **1.2645** | 0.020 |
+
+Strata's absolute rate is the 17.5 tok/s recorded for it on this box (three
+of forty samples read 15.3-15.4). Bytes a token: the host reads 48 x 4.6
+misses x 2.9 MB = 0.64 GB of experts in 48 x 405 us = 19.4 ms of `moeFFN`,
+33 GB/s including each call's fixed regions (a read wall for node 0 measured
+in the same process is owed); the card reads its 7.35 GiB base and the hits.
+
+The prompt is not won yet: Strata prefills the first four tokens in 213 ms
+and jitllm's batched chunk of five took 590-612 ms in the same samples, every
+row's experts on the host.
+
 **What a hybrid cache costs elsewhere, and how it gives way.** The cache
 takes the room placement left, so history or a block offered later found
 none. `dropCaches` gives caches back, the last block's first, whenever
