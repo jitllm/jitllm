@@ -861,6 +861,10 @@ type Stats struct {
 	// TSplitHost the host's share of those steps' wall.
 	SplitRuns, SplitHits, SplitAdmits int
 	TSplitHost                        time.Duration
+	// TLateWrite is the wall of writing the host's expert sum back after
+	// the card's queued work (the hits, the shared expert), and TAdmit of
+	// taking experts into the caches.
+	TLateWrite, TAdmit time.Duration
 	// StreamCacheSize is the largest expert cache a block was given, in
 	// sheets: the check that an auto-sized cache is the size intended.
 	StreamCacheSize int
@@ -1258,6 +1262,8 @@ func (s *Stats) add(o Stats) {
 	s.SplitHits += o.SplitHits
 	s.SplitAdmits += o.SplitAdmits
 	s.TSplitHost += o.TSplitHost
+	s.TLateWrite += o.TLateWrite
+	s.TAdmit += o.TAdmit
 	s.StreamCacheSize = max(s.StreamCacheSize, o.StreamCacheSize)
 	s.StreamGroupsTuned = max(s.StreamGroupsTuned, o.StreamGroupsTuned)
 	s.StreamPinHalfTuned = max(s.StreamPinHalfTuned, o.StreamPinHalfTuned)

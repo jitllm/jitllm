@@ -1036,9 +1036,9 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 			}
 			if ds.HybridRuns > 0 {
 				fmt.Fprintf(os.Stderr, "hybrid experts: %d block-step(s) on the host, %.2f s\n", ds.HybridRuns, sec(ds.THybrid))
-				if ds.SplitRuns > 0 || ds.SplitAdmits > 0 {
-					fmt.Fprintf(os.Stderr, "split experts: %d block-step(s) split, %d expert(s) run on the card, host %.2f s, %d taken into the caches\n",
-						ds.SplitRuns, ds.SplitHits, sec(ds.TSplitHost), ds.SplitAdmits)
+				if ds.SplitRuns > 0 || ds.SplitAdmits > 0 || ds.TLateWrite > 0 {
+					fmt.Fprintf(os.Stderr, "split experts: %d block-step(s) split, %d expert(s) run on the card, host %.2f s, %d taken into the caches in %.2f s; host sums written back in %.2f s\n",
+						ds.SplitRuns, ds.SplitHits, sec(ds.TSplitHost), ds.SplitAdmits, sec(ds.TAdmit), sec(ds.TLateWrite))
 				}
 			}
 			if ds.StreamPrefetched > 0 {

@@ -624,13 +624,18 @@ func (st *streamBank) hostLate(sid uint64, g *devTier, s backend.Session, dst ba
 	} else if err := host(st.msel, st.mw, st.hin, st.hout); err != nil {
 		return err
 	}
+	// The host's arithmetic alone: the write after it can wait for the
+	// card to finish what was queued before it.
 	if split {
 		g.TSplitHost += time.Since(t0)
 		g.SplitRuns++
 		g.SplitHits += len(st.sel) - len(st.msel)
+	} else {
+		g.THybrid += time.Since(t0)
 	}
+	tw := time.Now()
 	err := s.WriteAt(dst, 0, f32b(st.hout))
-	g.THybrid += time.Since(t0)
+	g.TLateWrite += time.Since(tw)
 	return err
 }
 
@@ -747,6 +752,10 @@ func (st *streamBank) lookup(g *devTier) {
 // shift in what the prompt routes to without chasing a single token.
 const heatHalf = 256
 
+// heatMargin is the floor of the hysteresis a miss clears to take an occupied
+// slot: twice the slot expert's selections and this many more.
+const heatMargin = 2
+
 // split maps this token's selection onto a hybrid block's cache without
 // evicting anything: a hit runs on the card from its slot, a miss on the
 // host. It counts the selection's heat and returns the hits. A miss's slot
@@ -833,7 +842,10 @@ func (st *streamBank) admit(g *devTier, s backend.Session, l *layer, nExpert, ma
 			break
 		}
 		if o := st.owner[v]; o >= 0 {
-			if st.heat[o] >= st.heat[e] {
+			// A slot changes hands only to an expert selected clearly more
+			// often: a sheet costs a transfer, and two experts trading one
+			// slot back and forth pay it every token.
+			if st.heat[e] < 2*st.heat[o]+heatMargin {
 				continue
 			}
 			st.slotOf[o] = -1
@@ -844,6 +856,7 @@ func (st *streamBank) admit(g *devTier, s backend.Session, l *layer, nExpert, ma
 	if len(st.items) == 0 {
 		return nil
 	}
+	defer func(t0 time.Time) { g.TAdmit += time.Since(t0) }(time.Now())
 	st.want = st.want[:0]
 	for _, it := range st.items {
 		st.want = append(st.want, it.e)
