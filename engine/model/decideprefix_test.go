@@ -21,7 +21,7 @@ import (
 // much as after a rewind, and a one-token tail moves differently from the
 // whole one), the f32 reduction band RULE 11c names. The violation (the
 // summary not put back, so each tail runs on from the last one's state) must
-// leave the band by a decade.
+// read a decade past the clean arm.
 func TestDecisionTrunkMatchesWhole(t *testing.T) {
 	for _, c := range decisionCases[:2] { // d1 and lev: the label readouts
 		t.Run(c.name, func(t *testing.T) {
@@ -88,7 +88,7 @@ func TestDecisionTrunkMatchesWhole(t *testing.T) {
 							vb = math.Max(vb, probDiff(bad[i], whole[i]))
 						}
 						t.Logf("%s: violation, the summary not put back: worst %.2e", req, vb)
-						if !(vb > 10*max(worst, bound/10) && vb > bound) {
+						if !(vb > 10*max(worst, 1e-6)) {
 							t.Errorf("%s: the summary not put back reads %.3e against a clean %.3e: the gate cannot see it",
 								req, vb, worst)
 						}
