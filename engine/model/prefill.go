@@ -388,6 +388,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 	if !s.batched && (total == 1 || total <= s.m.opt.forwardRows && src == nil) && s.emb == nil && len(s.deep) == 0 {
 		var lg []float32
 		var err error
+		s.forwardPrompts++
 		for i := range total {
 			s.tok = -1
 			if rowIDs != nil {
