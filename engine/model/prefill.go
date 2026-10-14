@@ -1636,7 +1636,9 @@ func (s *State) pickOnHost() bool {
 	if q, ok := kernels.QuantOf(w.typ); ok {
 		sl = max(kernels.DSlots(q), 1)
 	}
-	var tmp [8]float32
+	// The view and the slot's rows are the State's: a view made here and
+	// handed to the kernel escaped, one heap object a label.
+	tmp := s.pickTmp[:]
 	if sl > len(tmp) {
 		return false
 	}
@@ -1645,9 +1647,10 @@ func (s *State) pickOnHost() bool {
 		if id < 0 || lo+sl > w.rows {
 			return false
 		}
-		v := *w.packed
+		v := &s.pickView
+		*v = *w.packed
 		v.Stride, v.Row = max(v.Stride, w.rows), v.Row+lo
-		if !s.jit.MatVecPacked(tmp[:sl], w.typ, &v, s.h, sl, w.k) {
+		if !s.jit.MatVecPacked(tmp[:sl], w.typ, v, s.h, sl, w.k) {
 			return false
 		}
 		s.HostPickVals[j] = tmp[int(id)-lo]
