@@ -108,7 +108,10 @@ func (d *Decider) DecideBatch(reqs []DecisionRequest) ([]DecisionResult, error) 
 		if res.Err = d.Prepare(rq.State, rq.Questions, len(rq.Images)); res.Err != nil {
 			continue
 		}
-		if len(rq.Images) > 0 || len(rq.Videos) > 0 {
+		// A request alone in its batch whose questions share a trunk runs
+		// the trunk once (decideTrunk), and one with media runs alone too;
+		// several text requests stay rows of one session, each prompt whole.
+		if len(rq.Images) > 0 || len(rq.Videos) > 0 || len(reqs) == 1 && d.trunkShared(rq.Questions) {
 			res.Answers, res.Err = d.DecideMedia(rq.State, rq.Questions, rq.Images, rq.Videos)
 			res.InputTokens = d.InputTokens()
 			continue
