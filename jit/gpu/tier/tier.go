@@ -496,6 +496,11 @@ type Config struct {
 	// PersistGrid caps a persistent kernel's grid below the co-residency
 	// limit; zero takes the limit, or the widest launch's groups when fewer.
 	PersistGrid int
+	// GateUpFuse runs a dense gated FFN's gate and up as one launch over
+	// their shared operand (kernels.MatVecSegments) and has down form
+	// act(gate)*up and quantize it in its prologue: three launches where there
+	// were four, every row reduced as before. Off by default.
+	GateUpFuse bool
 	// NoGraph issues the token's launches one driver call at a time instead of
 	// replaying a captured graph: the other arm of that comparison, a field so
 	// both arms can be live in one process.
@@ -698,6 +703,11 @@ type Stats struct {
 	// launches that carried decode's fusions over every token: q/k/v in one
 	// launch, the residual added by the projection, and act(gate)*up written
 	// by the up projection.
+	// GateUpFused counts dense gated FFNs whose gate and up ran as one
+	// launch and whose down formed act(gate)*up (Config.GateUpFuse).
+	GateUpFused int
+	// GateUpWhy is why the last block's gate and up could not be fused.
+	GateUpWhy string
 	RagQKVFused, RagResFused, RagGateFused int
 	// PersistLaunches counts persistent kernels launched (Config.Persist),
 	// PersistParts the per-op launches they ran, PersistPhases their
@@ -1155,6 +1165,10 @@ func (s *Stats) add(o Stats) {
 	s.VoltaMV += o.VoltaMV
 	s.SpillRefused += o.SpillRefused
 	s.RagGroupMV += o.RagGroupMV
+	s.GateUpFused += o.GateUpFused
+	if o.GateUpWhy != "" {
+		s.GateUpWhy = o.GateUpWhy
+	}
 	s.RagQKVFused += o.RagQKVFused
 	s.RagResFused += o.RagResFused
 	s.PersistLaunches += o.PersistLaunches

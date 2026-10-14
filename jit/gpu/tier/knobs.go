@@ -334,6 +334,12 @@ func WithPersistDeps(on bool, grid int) Option {
 	return WithConfig(func(c *Config) { c.Persist, c.PersistDeps, c.PersistGrid = on, on, grid })
 }
 
+// WithGateUpFuse sets Config.GateUpFuse: a dense gated FFN's gate and up in
+// one launch, down forming act(gate)*up in its prologue.
+func WithGateUpFuse(on bool) Option {
+	return WithConfig(func(c *Config) { c.GateUpFuse = on })
+}
+
 // WithAutoStream sets whether a mixture block no device can hold resident is
 // streamed onto one (GPU.AutoStream) rather than left on the host. On by
 // default.

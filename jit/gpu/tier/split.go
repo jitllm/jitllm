@@ -1131,6 +1131,7 @@ func (g *devTier) fuseQKV(l *layer) {
 	if l.shGate != nil && l.shUp != nil {
 		l.shGU = g.fuseSegs([]mv{l.mvsg, l.mvsu})
 	}
+	g.fuseGateUp(l)
 	l.qkv = nil
 	if l.mla || l.linear || l.nonCausal || l.wq == nil || l.wk == nil || l.wv == nil {
 		return
@@ -1178,3 +1179,58 @@ func (g *devTier) fuseQKV(l *layer) {
 	// count; it runs this kernel only while these still match.
 	l.qkvBias = [3]bool{segs[0].Bias, segs[1].Bias, segs[2].Bias}
 }
+
+// fuseGateUp builds block l's dense gate/up launch and the down kernel that
+// forms act(gate)*up from their rows (Config.GateUpFuse), or leaves both nil.
+// The two must run at one split and one reduction form, so each row's sum is
+// the one its own launch computed; down's prologue is QuantizeAct's
+// arithmetic, the same element and the same rounding as up's gated store
+// followed by down's quantize.
+func (g *devTier) fuseGateUp(l *layer) {
+	l.gu, l.guDown = nil, nil
+	why := func(w string) { g.GateUpWhy = w }
+	// Built whether or not the launch takes it, so the switch can be thrown
+	// between tokens (an A/B) without a retune.
+	if g.bs == nil || l.router != nil || l.mla || l.linear || l.nonCausal ||
+		l.gate == nil || l.up == nil || l.down == nil || ungatedFFN(&g.bs.p) || lnBlock(&g.bs.p) {
+		return
+	}
+	mg, mu, md := l.mvg, l.mvu, l.mvd
+	switch {
+	case mg.split != mu.split || mg.group != mu.group:
+		why(fmt.Sprintf("gate split %d/%v, up %d/%v", mg.split, mg.group, mu.split, mu.group))
+		return
+	case mg.bias != nil || mu.bias != nil:
+		why("a biased gate or up")
+		return
+	case md.res == nil || md.bias != nil || md.slots > 0 || md.groups > 0 || md.threads > 0 || md.act != nil:
+		why("down is not a plain residual matvec")
+		return
+	case g.pickLanes() != ir.SubgroupLanes || kernels.WideWindow(g.bs.p.ActWin):
+		why("no 32-lane subgroup, or a wide quantization window")
+		return
+	}
+	gu := g.fuseSegs([]mv{mg, mu})
+	if gu == nil {
+		why(fmt.Sprintf("gate and up cannot share a launch at split %d/%v (rowt %d/%d)", mg.split, mg.group, mg.rowt, mu.rowt))
+		return
+	}
+	in := kernels.ActIn{On: true, Gated: true, Act: g.bs.p.Act, Window: max(g.bs.p.ActWin, 32), Prefetch: 8}
+	if g.ActInPrefetch != 0 {
+		in.Prefetch = max(g.ActInPrefetch, 0)
+	}
+	s := kernels.MatVecShape{Center: g.center, T: md.q, K: md.k, Rows: md.rows, Split: md.split,
+		GroupSplit: md.group, Rowt: max(md.rowt, 1), Bias: true, In: in}
+	down, err := g.idKernel(s)
+	if err != nil {
+		why("down's gated prologue: " + err.Error())
+		return
+	}
+	l.gu, l.guDown = gu, down
+	g.GateUpWhy = ""
+}
+
+// gateUpSwapped hands down's prologue up's row as the gate and the gate's as
+// up: the violation the fused FFN's gate must see (SwapGateUpForTest,
+// jitllmtest builds only).
+var gateUpSwapped bool
