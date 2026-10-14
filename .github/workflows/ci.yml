@@ -23,13 +23,14 @@ env:
   # scripts/vet's allowlist is written against go1.27's vet (go1.26's does not
   # report the finding it allows, and the script fails when it is absent).
   GO_VERSION: "1.27.x"
-  # Five modules: the engine, server/, common/, ui/ and tui/.
+  # Six modules: the engine, server/, common/, ui/, tui/ and examples/jivman/.
   GO_SUMS: |
     go.sum
     server/go.sum
     common/go.sum
     ui/go.sum
     tui/go.sum
+    examples/jivman/go.sum
   # What the release builds with (.goreleaser.yaml), and what goffi needs
   # (ui/README.md). Set for every job, so a runner that has a C compiler on its
   # PATH -- Linux's gcc, the Windows image's MinGW -- tests what ships.
@@ -52,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64 windows/arm64; do
-            for mod in . server common ui tui; do
+            for mod in . server common ui tui examples/jivman; do
               echo "::group::$target $mod"
               (cd "$mod" && GOOS=${target%/*} GOARCH=${target#*/} go build ./...)
               echo "::endgroup::"
@@ -106,7 +107,7 @@ jobs:
           fi
       - name: go mod tidy
         run: |
-          for mod in . server common ui tui; do
+          for mod in . server common ui tui examples/jivman; do
             (cd "$mod" && go mod tidy -diff) || { echo "::error::$mod/go.mod is not tidy"; exit 1; }
           done
       - uses: bufbuild/buf-action@v1
@@ -191,7 +192,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           set -euo pipefail
-          for mod in . server common ui tui; do (cd "$mod" && go build ./...); done
+          for mod in . server common ui tui examples/jivman; do (cd "$mod" && go build ./...); done
           go build -o jitllm.exe ./cmd/jitllm
           (cd server && go build -o jitllmd.exe ./cmd/jitllmd)
           ./jitllm.exe hardware
@@ -201,6 +202,7 @@ jobs:
           ./scripts/vet server
           ./scripts/vet common
           ./scripts/vet tui
+          ./scripts/vet examples/jivman
       - name: model-free tests
         run: ./.github/scripts/test-model-free.sh
 
