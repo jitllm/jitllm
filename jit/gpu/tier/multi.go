@@ -739,12 +739,41 @@ func (g *devTier) cacheBlock(l *layer, n, k int) bool {
 	}
 	for m, dst := range [3]**resident{&l.gate, &l.up, &l.down} {
 		if got[m] != nil {
+			l.stream.plain[m] = *dst
 			*dst = got[m]
 		}
 	}
 	l.stream.initCache(n, l.stream.nExpert)
 	g.StreamCacheSize = max(g.StreamCacheSize, n)
 	return true
+}
+
+// dropCaches gives back expert caches sized after placement (cacheBlock),
+// one block at a time from the last, until n more bytes fit: a cache holds
+// copies of host pages and is the first thing to go when history or a block
+// needs the card. A block without its cache runs on the plain bank it was
+// placed on. It reports whether n fits. Callers hold g.mu, outside a
+// submission.
+func (g *devTier) dropCaches(n uint64) bool {
+	for li := len(g.layers) - 1; li >= 0 && !g.room(n); li-- {
+		l := g.layers[li]
+		if l == nil || l.stream == nil || !l.stream.cached() || l.stream.plain[2] == nil {
+			continue
+		}
+		g.quiesce()
+		for m, dst := range [3]**resident{&l.gate, &l.up, &l.down} {
+			if l.stream.plain[m] == nil {
+				continue
+			}
+			g.refund((*dst).bytes())
+			g.freeResident(*dst)
+			*dst, l.stream.plain[m] = l.stream.plain[m], nil
+		}
+		l.stream.uncache()
+		g.dropGraph()
+		g.CachesDropped++
+	}
+	return g.room(n)
 }
 
 // sizeAutoCaches is GPU.sizeAutoCaches on one device. Callers hold g.mu.

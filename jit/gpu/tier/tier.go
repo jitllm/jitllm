@@ -859,6 +859,8 @@ type Stats struct {
 	// on the card from its expert cache (streamBank.split), SplitHits the
 	// experts run there, SplitAdmits the experts the caches took in, and
 	// TSplitHost the host's share of those steps' wall.
+	// CachesDropped counts expert caches given back for room (dropCaches).
+	CachesDropped                     int
 	SplitRuns, SplitHits, SplitAdmits int
 	TSplitHost                        time.Duration
 	// TLateWrite is the wall of writing the host's expert sum back after
@@ -1259,6 +1261,7 @@ func (s *Stats) add(o Stats) {
 	s.HybridRows += o.HybridRows
 	s.THybrid += o.THybrid
 	s.SplitRuns += o.SplitRuns
+	s.CachesDropped += o.CachesDropped
 	s.SplitHits += o.SplitHits
 	s.SplitAdmits += o.SplitAdmits
 	s.TSplitHost += o.TSplitHost

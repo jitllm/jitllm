@@ -793,6 +793,12 @@ func (s *State) hostExpertsRowsFor(li int) func(sel []uint32, w, in, out []float
 	}
 }
 
+// hostRowsByRow is the most rows a chunk's host experts run a row at a time
+// (hostExperts per row) rather than expert-major: a short prompt's rows share
+// few experts, so the expert-major pass reads about the same bytes in a
+// region or more per expert.
+const hostRowsByRow = 8
+
 // hostExpertsRows is moeBatch's expert-major pass with the device's
 // selections and weights: each expert the chunk chose is read once and run
 // over its rows as one batch (moeBatchExpert), summed into out in ascending
@@ -802,6 +808,19 @@ func (s *State) hostExpertsRows(li int, sel []uint32, w, in, out []float32, rows
 	l := &s.m.layers[li]
 	if k != c.NExpertUsed {
 		return fmt.Errorf("model: block %d: %d routed experts a row, the model routes %d", li, k, c.NExpertUsed)
+	}
+	if rows <= hostRowsByRow {
+		// A few rows read nearly every expert they choose once each anyway,
+		// and the decode path runs a row's selection as a handful of grouped
+		// regions where the expert-major pass runs regions per expert.
+		D := c.ExpWidth()
+		for i := 0; i < rows; i++ {
+			if err := s.hostExperts(li, sel[i*(k+1):i*(k+1)+k], w[i*k:(i+1)*k],
+				in[i*D:(i+1)*D], out[i*D:(i+1)*D]); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	s.hostOnly = true
 	defer func() { s.hostOnly = false }()

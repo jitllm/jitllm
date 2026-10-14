@@ -306,6 +306,9 @@ type streamBank struct {
 	tick    uint64
 	slotSel []uint32
 	bank    *resident
+	// plain is the bank a cache sized after placement replaced (cacheBlock),
+	// kept so dropCaches can give the cache back.
+	plain [3]*resident
 	// nExpert is the bank's expert count, so a cache can be set up after
 	// placement (GPU.sizeAutoCaches).
 	nExpert int
@@ -707,6 +710,12 @@ func (st *streamBank) initCache(n, nExpert int) {
 	}
 	st.used = make([]uint64, n)
 	st.slotSel = make([]uint32, len(st.sel))
+}
+
+// uncache returns a block to its plain bank: no cache, nothing held.
+func (st *streamBank) uncache() {
+	st.slotOf, st.owner, st.used, st.slotSel = nil, nil, nil, nil
+	st.heat, st.hit, st.bank = nil, nil, nil
 }
 
 // cached reports whether this block's bank is an expert cache.
