@@ -67,13 +67,28 @@ primitives here), and the speed slider.
 
 ## Scores measured here
 
-Pending: the M4 (Metal) measurement, warm calls after the first, n >= 20
-per model, and a real-time recording.
+M4 under load (load average 2-12, another project's test suite running);
+Metal decisions, every block on the GPU. One headless game per model against
+the classic ghosts, up to 3600 ticks (a minute of play); the latency is the
+model's time per request, the warm calls being every call after the first.
 
-What is counted rather than timed: one Pac-Man question with the board in
-its state is 770 prompt tokens to Laya, 970 to d1-3B and 1830 to Lev (Lev
-asks every choice twice, options forward and reversed). A Pac-Man request is
-one question (two when the escape question is open).
+| model | prompt tokens a call | warm calls | p50 (p10-p90) | score |
+|---|---|---|---|---|
+| Laya BF16 | 771 | 21 | 1382 ms (1358-1403) | 250 (game over) |
+| d1-3B Q8_0 | 959 | 26 | 1610 ms (1546-1619) | 400 (game over) |
+| Lev Q8_0 | 1759 (each choice asked twice) | 91 | 4751 ms (4424-5089) | 3110 |
+| Clef-Flash Q4_K_M | 836 | 94 | 4863 ms (4374-5418) | 2990 |
+| greedy rule (no model) | -- | -- | -- | 2810 (game over) |
+
+One game each, so a score is one sample, not a mean. At these latencies a
+real-time game spends most junctions waiting ("thinking...") and takes the
+greedy rule's way after `-timeout`. jevman's hosted models answer in a few
+hundred milliseconds; here every question is one prefill of the whole board
+(770-1760 tokens), and that prefill is the cost.
+
+[demo.mp4](demo.mp4) is a real-time recording on the M4 (`-record`, the
+window's own loop drawn offscreen): d1-3B playing for 60 seconds, the game
+clock not stopped.
 
 ## Layout
 
