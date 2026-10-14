@@ -87,6 +87,8 @@ type Brain struct {
 	Device string
 	// Blocks is how many blocks the device holds.
 	Blocks int
+	// Total is the model's blocks, placed or not.
+	Total int
 
 	m        *model.Model
 	d        *model.Decider
@@ -111,7 +113,7 @@ func Open(e Entry, devices string) (*Brain, error) {
 		m.Close()
 		return nil, err
 	}
-	b := &Brain{Entry: e, Device: "cpu", m: m, d: d, closeDev: func() {}}
+	b := &Brain{Entry: e, Device: "cpu", Total: m.Blocks(), m: m, d: d, closeDev: func() {}}
 	if devices != "" && devices != "cpu" {
 		g, err := tier.OpenWith(tier.WithDevices(devices), tier.WithHostBudget(sched.MemBudget()))
 		switch {
@@ -138,6 +140,37 @@ func Open(e Entry, devices string) (*Brain, error) {
 		}
 	}
 	return b, nil
+}
+
+// backends names a device API the way a person reads it.
+var backends = map[string]string{"ptx": "CUDA", "cuda": "CUDA", "msl": "Metal", "metal": "Metal",
+	"spirv": "Vulkan", "vulkan": "Vulkan", "amdgpu": "ROCm", "rocm": "ROCm"}
+
+// Placement says where the model runs, from the tier's own placement:
+// "Metal · Apple M4 · 30/30 blocks on the GPU", or the host when no block is
+// on a device.
+func (b *Brain) Placement() string {
+	if b.Blocks == 0 {
+		return fmt.Sprintf("CPU · %d/%d blocks on the host", b.Total, b.Total)
+	}
+	var parts []string
+	for _, d := range strings.Split(b.Device, " + ") {
+		name, api := d, ""
+		if i := strings.LastIndex(d, " ["); i >= 0 && strings.HasSuffix(d, "]") {
+			name, api = d[:i], d[i+2:len(d)-1]
+		}
+		if i := strings.Index(name, " "); strings.HasPrefix(name, "#") && i > 0 {
+			name = name[i+1:]
+		}
+		if i := strings.Index(name, " (sm_"); i > 0 {
+			name = name[:i]
+		}
+		if n, ok := backends[strings.ToLower(api)]; ok {
+			api = n
+		}
+		parts = append(parts, strings.TrimSpace(api+" · "+name))
+	}
+	return fmt.Sprintf("%s · %d/%d blocks on the GPU", strings.Join(parts, " + "), b.Blocks, b.Total)
 }
 
 // Close releases the decider, the device and the model.

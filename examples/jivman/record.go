@@ -52,7 +52,8 @@ func record(o options) error {
 	g := game.New(true, false)
 	p := &view.Painter{F: f}
 	dc := gg.NewContext(view.W, view.H)
-	sc := &view.Scene{G: g, Stats: &a.Stats, PacmanBy: e.Name, GhostsBy: "Classic", Device: b.Device, Board: board}
+	sc := &view.Scene{G: g, Stats: &a.Stats, PacmanBy: e.Name, GhostsBy: "Classic", Device: b.Device, Board: board,
+		Model: e.Name, Placement: b.Placement()}
 	for _, r := range board {
 		sc.High = max(sc.High, r.Best)
 	}

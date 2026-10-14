@@ -76,6 +76,9 @@ func (s *shooter) finish(r *headlessRun) error {
 		return nil
 	}
 	sc := s.scene(r.Game, r.Stats, r.Device)
+	if r.Who != Greedy {
+		sc.Model, sc.Placement = r.Who, r.Placement
+	}
 	sc.Summary = fmt.Sprintf("%s scored %d in %d ticks: %d decisions, mean %.0f ms, p50 %.0f ms",
 		r.Who, r.Game.Score, r.Game.Ticks, r.Stats.Decisions, ms(r.Stats.Mean()), ms(r.Stats.P50()))
 	s.p.Draw(s.dc, sc)

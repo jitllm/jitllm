@@ -115,10 +115,13 @@ type Scene struct {
 	// or "Classic".
 	PacmanBy, GhostsBy string
 	Device             string
-	Board              []scores.Row
-	High               int
-	Tab                Tab
-	Paused             bool
+	// Model and Placement name the model playing and where it runs
+	// (brain.Brain.Placement), shown in the header whenever a model plays.
+	Model, Placement string
+	Board            []scores.Row
+	High             int
+	Tab              Tab
+	Paused           bool
 	// Thinking marks the actors stopped at a junction for their answer.
 	Thinking [game.NActors]bool
 	// Driven marks the actors a model plays.
@@ -248,8 +251,8 @@ func (p *Painter) appbar(dc *gg.Context, s *Scene) {
 	p.rect(dc, 0, 56, W, 1, 0, cBorder)
 	p.pacman(dc, 54, 28, 14, 0, 0.3*math.Pi, cAccent)
 	p.text(dc, "jivman", 78, 20, p.F.bold, 19, cText, 0)
-	p.text(dc, "Watch a decision model play Pac-Man in this process, or try to beat it", 78, 40, p.F.sans, 12, cMuted, 0)
-	x := 560.0
+	p.text(dc, "Decision models play Pac-Man, in process", 78, 40, p.F.sans, 12, cMuted, 0)
+	x := 330.0
 	for i, name := range []string{"Play", "Leaderboard"} {
 		w := p.measure(dc, name, p.F.bold, 14) + 24
 		if Tab(i) == s.Tab {
@@ -263,11 +266,17 @@ func (p *Painter) appbar(dc *gg.Context, s *Scene) {
 		s.hit(x, 14, w, 30, Action{ActTab, i})
 		x += w + 4
 	}
-	right := "jitllm"
-	if s.Device != "" {
-		right = "jitllm · " + s.Device
+	if s.Model == "" {
+		p.text(dc, "jitllm", W-40, 28, p.F.sans, 13, cMuted, 1)
+		return
 	}
-	p.text(dc, right, W-40, 28, p.F.sans, 13, cMuted, 1)
+	// Who is playing and where it runs, always in view.
+	p.text(dc, s.Model, W-40, 19, p.F.bold, 15, cAccent, 1)
+	line := s.Placement
+	if s.Stats != nil && len(s.Stats.Latencies) > 0 {
+		line += fmt.Sprintf(" · last decision %.0f ms", float64(s.Stats.Latencies[len(s.Stats.Latencies)-1])/1e6)
+	}
+	p.text(dc, line, W-40, 39, p.F.sans, 12, cText, 1)
 }
 
 func (p *Painter) hud(dc *gg.Context, s *Scene) {

@@ -284,7 +284,7 @@ func (w *win) newGame(pac, ghosts int) {
 	w.g = game.New(pb != nil, gb != nil)
 	w.sc.G = w.g
 	w.sc.Summary = ""
-	w.sc.PacmanBy, w.sc.GhostsBy, w.sc.Device = "You", "Classic", "cpu"
+	w.sc.PacmanBy, w.sc.GhostsBy, w.sc.Device, w.sc.Model, w.sc.Placement = "You", "Classic", "cpu", "", ""
 	const ghostMask = 1<<game.Blinky | 1<<game.Pinky | 1<<game.Inky | 1<<game.Clyde
 	switch {
 	case pb != nil && pb == gb:
@@ -299,10 +299,10 @@ func (w *win) newGame(pac, ghosts int) {
 		}
 	}
 	if pb != nil {
-		w.sc.PacmanBy, w.sc.Device = pb.Name, pb.Device
+		w.sc.PacmanBy, w.sc.Device, w.sc.Model, w.sc.Placement = pb.Name, pb.Device, pb.Name, pb.Placement()
 	}
 	if gb != nil {
-		w.sc.GhostsBy, w.sc.Device = gb.Name, gb.Device
+		w.sc.GhostsBy, w.sc.Device, w.sc.Model, w.sc.Placement = gb.Name, gb.Device, gb.Name, gb.Placement()
 	}
 	w.tainted, w.recorded, w.paused = false, false, false
 	w.sc.Dialog = nil
@@ -417,7 +417,7 @@ func (w *win) takeOver() {
 		}
 	}
 	w.g.PacmanAI = true
-	w.sc.PacmanBy = b.Name
+	w.sc.PacmanBy, w.sc.Model, w.sc.Placement = b.Name, b.Name, b.Placement()
 }
 
 func (w *win) click(x, y float64) {

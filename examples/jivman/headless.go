@@ -43,18 +43,20 @@ func findModel(dir, name string) (brain.Entry, error) {
 // headlessRun is one game played without a window: the model plays Pac-Man
 // against the classic ghosts, the clock stopping while it thinks.
 type headlessRun struct {
-	Game    *game.Game
-	Stats   *play.Stats
-	Who     string
-	Device  string
-	Elapsed time.Duration
+	Game   *game.Game
+	Stats  *play.Stats
+	Who    string
+	Device string
+	// Placement is where the model ran (brain.Brain.Placement).
+	Placement string
+	Elapsed   time.Duration
 }
 
 func runHeadless(o options, w io.Writer, frame func(*game.Game, *play.Stats)) (*headlessRun, error) {
 	g := game.New(true, false)
 	var c game.Controls = game.GreedyControls{}
 	st := &play.Stats{}
-	who, device := Greedy, "cpu"
+	who, device, placement := Greedy, "cpu", ""
 	if o.model != Greedy {
 		e, err := findModel(o.models, o.model)
 		if err != nil {
@@ -66,10 +68,10 @@ func runHeadless(o options, w io.Writer, frame func(*game.Game, *play.Stats)) (*
 			return nil, err
 		}
 		defer b.Close()
-		fmt.Fprintf(w, "%s (%s readout) on %s, %d blocks placed, opened in %v\n", e.Name, e.Readout, b.Device, b.Blocks,
+		fmt.Fprintf(w, "%s (%s readout) on %s (%s), opened in %v\n", e.Name, e.Readout, b.Device, b.Placement(),
 			time.Since(t).Round(time.Millisecond))
 		s := &play.Sync{B: b}
-		c, st, who, device = s, &s.Stats, e.Name, b.Device
+		c, st, who, device, placement = s, &s.Stats, e.Name, b.Device, b.Placement()
 	}
 	t := time.Now()
 	for g.Ticks < o.ticks && g.Status != game.GameOver {
@@ -78,7 +80,7 @@ func runHeadless(o options, w io.Writer, frame func(*game.Game, *play.Stats)) (*
 			frame(g, st)
 		}
 	}
-	return &headlessRun{Game: g, Stats: st, Who: who, Device: device, Elapsed: time.Since(t)}, nil
+	return &headlessRun{Game: g, Stats: st, Who: who, Device: device, Placement: placement, Elapsed: time.Since(t)}, nil
 }
 
 func ms(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
