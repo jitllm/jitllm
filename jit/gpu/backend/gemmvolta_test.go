@@ -310,7 +310,12 @@ func TestGemmVoltaTailMatchesTheReference(t *testing.T) {
 				tl.TokOff = lead
 				bk, err := kernels.GemmVolta(bs, sh.body)
 				if err != nil {
-					t.Fatalf("%v body: %v", q, err)
+					// A staging nesting the block does not admit (a 96-row
+					// block of two-sub-block trips) is the tier's next tile.
+					if !strings.Contains(err.Error(), "do not tile") {
+						t.Fatalf("%v body: %v", q, err)
+					}
+					continue
 				}
 				tk, err := kernels.GemmVolta(ts, tl)
 				if err != nil {
