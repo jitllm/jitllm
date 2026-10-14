@@ -592,14 +592,43 @@ func (p *Painter) panel(dc *gg.Context, s *Scene) {
 	cy := y + 58
 	p.card(dc, s, game.Pacman, x, cy, panelW-28, 112)
 	cy += 120
-	for i, id := range []int{game.Blinky, game.Pinky, game.Inky, game.Clyde} {
-		p.card(dc, s, id, x+float64(i%2)*(cw+8), cy+float64(i/2)*120, cw, 112)
+	ghostsAI := false
+	for id := game.Blinky; id < game.NActors; id++ {
+		ghostsAI = ghostsAI || s.Driven[id]
 	}
-	cy += 240
+	if ghostsAI {
+		for i, id := range []int{game.Blinky, game.Pinky, game.Inky, game.Clyde} {
+			p.card(dc, s, id, x+float64(i%2)*(cw+8), cy+float64(i/2)*120, cw, 112)
+		}
+		cy += 240
+		p.totals(dc, s, x, cy)
+		cy += 78
+		p.text(dc, "Leaderboard", x, cy+8, p.F.bold, 13, cMuted, 0)
+		p.miniBoard(dc, s, x, cy+20, panelW-28, panelY+panelH-cy-30)
+		return
+	}
+	// The classic ghosts decide nothing: one line for the four, and the room
+	// goes to the leaderboard, drawn as on its own tab.
+	p.rect(dc, x, cy, panelW-28, 28, 6, cCard)
+	gx := x + 10
+	for id := game.Blinky; id < game.NActors; id++ {
+		gx += p.text(dc, game.Names[id], gx, cy+14, p.F.bold, 12, Actors[id], 0) + 14
+	}
+	p.text(dc, "classic ghosts", x+panelW-36, cy+14, p.F.sans, 11, cMuted, 1)
+	cy += 36
 	p.totals(dc, s, x, cy)
-	cy += 78
-	p.text(dc, "Leaderboard", x, cy+8, p.F.bold, 13, cMuted, 0)
-	p.miniBoard(dc, s, x, cy+20, panelW-28, panelY+panelH-cy-30)
+	cy += 76
+	p.text(dc, "Leaderboard", x, cy+8, p.F.bold, 14, cText, 0)
+	p.text(dc, "mean score ± 2 SE · best · runs · mean latency", x+panelW-28, cy+8, p.F.sans, 11, cMuted, 1)
+	cy += 22
+	if len(s.Board) == 0 {
+		p.text(dc, "No finished runs yet. Every game played here is kept.", x, cy+14, p.F.sans, 12, cMuted, 0)
+		return
+	}
+	rows := min(len(s.Board), int((panelY+panelH-10-cy)/50))
+	for i := 0; i < rows; i++ {
+		p.barRow(dc, s.Board, i, x, cy+float64(i)*50, panelW-28, 44, s.Board[0].Mean, false)
+	}
 }
 
 func (p *Painter) card(dc *gg.Context, s *Scene, id int, x, y, w, h float64) {
