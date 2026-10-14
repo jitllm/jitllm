@@ -172,10 +172,11 @@ type Call struct {
 // Decide answers a System One request body, as /v1/systemone would. The
 // answers are copies: the Decider reuses its own buffers on the next call.
 func (b *Brain) Decide(body []byte, out []Answer) ([]Answer, Call, error) {
-	_, state, qs, _, err := model.ParseDecisionRequest(body)
+	req, err := model.ParseDecisionRequest(body)
 	if err != nil {
 		return out, Call{}, err
 	}
+	state, qs := req.State, req.Questions
 	t := time.Now()
 	ans, err := b.d.Decide(state, qs, nil)
 	c := Call{Took: time.Since(t), Tokens: b.d.InputTokens()}
