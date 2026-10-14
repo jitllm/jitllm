@@ -1714,6 +1714,13 @@ func modelOptions() []model.Option {
 	if os.Getenv("JITLLM_PROFILE") != "" {
 		o = append(o, model.WithProfile(true))
 	}
+	// JITLLM_PREFILL_FORWARD=n runs a prompt of up to n tokens a token at a
+	// time (model.WithPrefillForwardRows).
+	if v := os.Getenv("JITLLM_PREFILL_FORWARD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			o = append(o, model.WithPrefillForwardRows(n))
+		}
+	}
 	// JITLLM_HYBRID_SPIN_US sets how long the workers spin between a
 	// device's host expert calls (model.WithHybridSpin); 0 keeps the pool's.
 	if v := os.Getenv("JITLLM_HYBRID_SPIN_US"); v != "" {

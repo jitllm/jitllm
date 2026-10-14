@@ -37,6 +37,9 @@ type modelOpts struct {
 	// noShOverlap runs a mixture's shared expert after its routed read
 	// rather than behind it; see WithSharedOverlap.
 	noShOverlap bool
+	// forwardRows is the longest prompt run a token at a time; see
+	// WithPrefillForwardRows.
+	forwardRows int
 	// hybridSpin is how long the pool's workers spin between a token's
 	// host expert calls inside a device's submission; see WithHybridSpin.
 	hybridSpin    time.Duration
@@ -169,6 +172,13 @@ func (s *State) SetResidualFold(on bool) { s.residFold = on }
 func WithHybridSpin(d time.Duration) Option {
 	return func(l *loadOpts) { l.opt.hybridSpin, l.opt.hybridSpinSet = d, true }
 }
+
+// WithPrefillForwardRows runs a prompt of up to n tokens a token at a time,
+// through the decode path, rather than as one batched chunk. One token always
+// is. A placement whose blocks suspend for host experts runs decode's split
+// (the card's cached experts beside the host's) where the batched chunk runs
+// every row's experts on the host.
+func WithPrefillForwardRows(n int) Option { return func(l *loadOpts) { l.opt.forwardRows = n } }
 
 func WithSharedOverlap(on bool) Option { return func(l *loadOpts) { l.opt.noShOverlap = !on } }
 

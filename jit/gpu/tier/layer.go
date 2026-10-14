@@ -642,6 +642,14 @@ func (st *streamBank) hostLate(sid uint64, g *devTier, s backend.Session, dst ba
 	return err
 }
 
+// splitSwaps is Config.SplitSwaps with its default.
+func (g *devTier) splitSwaps() int {
+	if g.SplitSwaps != 0 {
+		return max(g.SplitSwaps, 0)
+	}
+	return 2
+}
+
 // splitAdmit is Config.SplitAdmit with its default.
 func (g *devTier) splitAdmit() int {
 	if g.SplitAdmit > 0 {
@@ -827,6 +835,13 @@ func (st *streamBank) splitWeights(w []float32) {
 // slots, so a slot changes only after its last reader.
 func (st *streamBank) admit(g *devTier, s backend.Session, l *layer, nExpert, max int) error {
 	st.items = st.items[:0]
+	// The swaps -- a slot changing hands -- share a budget per token across
+	// the blocks (Config.SplitSwaps); filling an empty slot does not spend it.
+	// A block at or before the last one that admitted starts a new token.
+	if st.li <= g.swapLi {
+		g.swapsLeft = g.splitSwaps()
+	}
+	g.swapLi = st.li
 	for i, e := range st.sel {
 		if len(st.items) >= max {
 			break
@@ -854,9 +869,10 @@ func (st *streamBank) admit(g *devTier, s backend.Session, l *layer, nExpert, ma
 			// A slot changes hands only to an expert selected clearly more
 			// often: a sheet costs a transfer, and two experts trading one
 			// slot back and forth pay it every token.
-			if st.heat[e] < 2*st.heat[o]+heatMargin {
+			if st.heat[e] < 2*st.heat[o]+heatMargin || g.swapsLeft <= 0 {
 				continue
 			}
+			g.swapsLeft--
 			st.slotOf[o] = -1
 		}
 		st.owner[v], st.slotOf[e], st.used[v] = int32(e), int32(v), st.tick

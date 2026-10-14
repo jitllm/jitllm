@@ -385,14 +385,14 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 	// One token is decode; the batched path would allocate megabytes to beat
 	// it by nothing. Single-sequence only, because Forward writes row 0; a
 	// batch slot takes the chunked path at any length.
-	if !s.batched && total == 1 && s.emb == nil && len(s.deep) == 0 {
+	if !s.batched && (total == 1 || total <= s.m.opt.forwardRows && src == nil) && s.emb == nil && len(s.deep) == 0 {
 		var lg []float32
 		var err error
-		s.tok = -1
-		if rowIDs != nil {
-			s.tok = rowIDs[0]
-		}
 		for i := range total {
+			s.tok = -1
+			if rowIDs != nil {
+				s.tok = rowIDs[i]
+			}
 			if lg, err = s.forward(func() error {
 				if err := s.fillRow(src, ids, i, s.x); err != nil {
 					return err
@@ -401,7 +401,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 				if c.PLEDim != 0 {
 					tok := int32(0) // a row with no id takes token 0's; see ple.go
 					if rowIDs != nil {
-						tok = max(rowIDs[0], 0)
+						tok = max(rowIDs[i], 0)
 					}
 					return s.pleInputs(s.ple, tok, s.x)
 				}

@@ -476,6 +476,10 @@ type Config struct {
 	// SplitAdmit is how many experts a hybrid block's cache takes in a
 	// token at most; 0 is 2.
 	SplitAdmit int
+	// SplitSwaps is how many occupied cache slots change hands in a token,
+	// over every block; 0 is 2, negative none. A sheet sent is a host copy
+	// and a transfer on the token's path.
+	SplitSwaps int
 	// NoAutoStream leaves a mixture block that no device can hold resident
 	// on the host, as before GPU.AutoStream, instead of streaming it.
 	NoAutoStream bool
@@ -1552,12 +1556,15 @@ type devShared struct {
 	// direct sheet or on a device with no page-locked memory; pieces is
 	// put's list of direct sheets, kept so a token allocates none. See
 	// sendPieces.
-	pin     [2][]byte
-	noPin   bool
-	pieces  []sheetPiece
-	packWG  sync.WaitGroup
-	copyWG  sync.WaitGroup
-	packEnd int
+	pin    [2][]byte
+	noPin  bool
+	pieces []sheetPiece
+	// swapsLeft is this token's Config.SplitSwaps still to spend, and swapLi
+	// the block that last admitted (streamBank.admit).
+	swapsLeft, swapLi int
+	packWG            sync.WaitGroup
+	copyWG            sync.WaitGroup
+	packEnd           int
 	*Config
 	mu sync.Mutex
 	// tot is the device's counters (Stats). A view names them through its
