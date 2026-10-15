@@ -613,7 +613,11 @@ func (d *Decider) promptText(state jinja.Value, q *DecisionQuestion, v int) (str
 		}
 	case jlm.DecisionPplxDecider:
 		labels = d.labelTexts
-		for _, id := range d.labels[:len(opts)] {
+		ids := d.labels[:len(opts)]
+		if d.violation == "codes-shifted" {
+			ids = d.labels[1 : len(opts)+1] // a gate's: each option read at the next code
+		}
+		for _, id := range ids {
 			groups = append(groups, []int32{id})
 		}
 	case jlm.DecisionOpenJev:

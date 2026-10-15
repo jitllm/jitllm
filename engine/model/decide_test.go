@@ -205,7 +205,7 @@ func TestDecisionReadoutIsLoadBearing(t *testing.T) {
 		{"lev-one-order", "lev/lev-Q8_0.gguf", "lev-Q8_0", "support", jlm.DecisionLev, "one-order", []string{"intent", "team"}},
 		{"lev-unsorted", "lev/lev-Q8_0.gguf", "lev-Q8_0", "support", jlm.DecisionLev, "unsorted", []string{"intent", "urgent", "frustration", "refund", "team"}},
 		{"lev-uncalibrated", "lev/lev-Q8_0.gguf", "lev-Q8_0", "support", jlm.DecisionLev, "uncalibrated", []string{"intent", "urgent"}},
-		{"pplx-decider-uncalibrated", "pplx-decider/pplx-decider-v1.1-27b-Q8_0.gguf", "pplx-decider-v1.1-27b-Q8_0", "ambiguous", jlm.DecisionPplxDecider, "uncalibrated", []string{"compensate", "churn", "damage", "tone", "issue"}},
+		{"pplx-decider-codes-shifted", "pplx-decider/pplx-decider-v1.1-27b-Q8_0.gguf", "pplx-decider-v1.1-27b-Q8_0", "support", jlm.DecisionPplxDecider, "codes-shifted", []string{"intent", "team"}},
 		{"openjev-false-first", "openjev/tinyopenjev-for-testing-Q8_0.gguf", "tinyopenjev-for-testing-Q8_0", "ambiguous", jlm.DecisionOpenJev, "false-first", []string{"compensate", "churn", "damage"}},
 		{"openjev-uncalibrated", "openjev/tinyopenjev-for-testing-Q8_0.gguf", "tinyopenjev-for-testing-Q8_0", "ambiguous", jlm.DecisionOpenJev, "uncalibrated", []string{"compensate", "churn", "damage"}},
 	} {
