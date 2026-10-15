@@ -3770,6 +3770,22 @@ primed by the text being measured, and every sample decodes all 128 tokens
 (`JITLLM_IGNORE_EOS`; Strata's runs do not stop at an end of generation
 either).
 
+**Another mixture: Mixtral-8x7B-Instruct Q4_K_M** (24.5 GiB, eight
+experts of ~99 MB a block, top-2) on the same card and node, 128 tokens,
+two warm-ups, runs alternating, two of each:
+
+| placement | decode tok/s | prompt (6 tokens) |
+|---|---|---|
+| default: 18 of 32 blocks resident, 14 on the host | 13.35, 13.97 | 410-438 ms |
+| every block hybrid, no cache (`JITLLM_EXPERTS=host JITLLM_GPU_HYBRID_CACHE=0`) | 6.91, 6.91 | 868-871 ms |
+| every block hybrid with the cache (`JITLLM_EXPERTS=host`) | **14.77, 14.65** | 370-385 ms |
+
+Four sheets a block fit (of eight); 59.7% of the selections hit. The cache
+is what makes the hybrid placement pay on this model at all (2.1x), and it
+then edges past the resident-prefix placement; whether the default placement
+should be hybrid when the cache holds half a block's bank is the stream
+trial's question (`initStreamTrial`), not yet asked of it.
+
 **What a hybrid cache costs elsewhere, and how it gives way.** The cache
 takes the room placement left, so history or a block offered later found
 none. `dropCaches` gives caches back, the last block's first, whenever
