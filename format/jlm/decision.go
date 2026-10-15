@@ -8,6 +8,9 @@ import "fmt"
 // read out and calibrated, which the reference hardcodes per model and the
 // container therefore states.
 
+// A kind's code is written into every container, so codes never move: a new
+// kind takes a number of its own, stated, past the iota run that ends at
+// DecisionOpenJev (6). Taken: 7 vllm-d3, 8 nimble, 9 pplx-decider, 10 kev.
 // DecisionKind is a decision model's readout: which prompt shape and which
 // scores the answer is read from. Zero is not a decision model.
 type DecisionKind uint8
@@ -43,12 +46,12 @@ const (
 	// DecisionOpenJev reads the next-token logits of one letter per option
 	// (A..Z then a..z, each one token) at the prompt's last row, a noul
 	// shown true first (openjev/openjev).
-	DecisionOpenJev
+	DecisionOpenJev // 6
 	// DecisionPplxDecider is lev's codes (A..Z then AA..ZZ, each one token)
 	// read at the prompt's last row, one prompt per question
 	// (perplexity-ai/pplx-decider); its output projection is the readout,
 	// zero but at the codes' rows.
-	DecisionPplxDecider
+	DecisionPplxDecider DecisionKind = 9
 )
 
 var decisionNames = map[DecisionKind]string{
