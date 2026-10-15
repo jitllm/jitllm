@@ -699,6 +699,9 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 			if hits == 0 {
 				// Nothing on the card: the host's sum is the output.
 				*errp = st.hostRowsLate(sid, g, s, eout, m.k, valid)
+				if *errp == nil {
+					*errp = st.admitRows(g, s, l, p.NExpert, g.splitAdmit(), m.k, valid)
+				}
 				return
 			}
 			defer func() {
@@ -708,6 +711,10 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 				// The violation: the host's share dropped, the card's hits alone.
 				if *errp == nil && !moeFaulted("splitrowshost") {
 					lc.la(bs.addE, valid*ew, eout, m.hsum, eout)
+				}
+				// Behind the launches that read this step's slots.
+				if *errp == nil {
+					*errp = st.admitRows(g, s, l, p.NExpert, g.splitAdmit(), m.k, valid)
 				}
 			}()
 		} else {
