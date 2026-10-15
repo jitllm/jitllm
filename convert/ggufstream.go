@@ -48,6 +48,9 @@ func StreamGGUFs(src, mmproj Remote, dst string, fp jlm.Fingerprint, opts ...Opt
 	if o.q8 {
 		return nil, fmt.Errorf("convert: WithQ8 quantizes a safetensors model; %s is a GGUF", src.Name())
 	}
+	if o.head != "" {
+		return nil, fmt.Errorf("convert: WithHead reads a downloaded head; %s is streamed", src.Name())
+	}
 	var files []*streamFile
 	defer func() {
 		for _, sf := range files {

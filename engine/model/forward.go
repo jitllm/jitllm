@@ -625,6 +625,10 @@ type State struct {
 	// rowsPos is a stream model's speculation step's positions and slots
 	// (stepRowsStreams).
 	rowsPos []int
+	// q4In is a Qwen3.8-Flash-Next prediction block's draft rows, every
+	// stream, row-major: laid into the residual in place of the embedding's
+	// copies (q4eExpandAt). nil on every other State.
+	q4In []float32
 
 	// emb is set for the length of one Embedder.Embed on a decoder embedding
 	// model: prefill then pools the final residual instead of projecting it
@@ -4141,7 +4145,9 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 	done := false
 	if s.head != nil && !folded {
 		s.unfuse()
-		defer s.rows.hiddenOf(s.head)()
+		if !c.Q4E() { // its hidden state is the residual, taken in q4eCollapse
+			defer s.rows.hiddenOf(s.head)()
+		}
 		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.NRotSWA), s.head) {
 			done = true
 		} else if !s.devFallback {
@@ -4155,7 +4161,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 		if err := s.mv(s.logits, *s.outW, s.h); err != nil {
 			return nil, err
 		}
-		if s.rows != nil {
+		if s.rows != nil && !c.Q4E() {
 			copy(s.rows.hidden, s.h)
 		}
 	}

@@ -95,6 +95,9 @@ func FromShards(meta fs.FS, name string, open []*safetensors.File, dst string, f
 	for _, fn := range opts {
 		fn(&o)
 	}
+	if o.head != "" {
+		return nil, fmt.Errorf("convert: WithHead joins a GGUF head to a GGUF; %s is safetensors", name)
+	}
 	if o.q8 {
 		quantizeMatrices(s.Tensors)
 	}
@@ -130,7 +133,14 @@ type Option func(*options)
 type options struct {
 	q8           bool   // WithQ8, safetensors only
 	chatTemplate string // WithChatTemplate
+	head         string // WithHead, GGUF only
 }
+
+// WithHead converts a GGUF together with its multi-token-prediction head,
+// published as a GGUF of its own: the head's blocks become the model's
+// prediction blocks after the trunk (withHead), exactly as if the trunk's
+// file had carried them.
+func WithHead(path string) Option { return func(o *options) { o.head = path } }
 
 // WithQ8 stores every weight matrix as Q8_0 instead of carrying its float
 // bytes. It is the only lossy step this path takes and it is opt-in: the

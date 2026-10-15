@@ -34,6 +34,8 @@ func convertCmd(args []string) error {
 	chatTpl := fs.String("chat-template", "", "store this file's chat template(s) in place of "+
 		"the source's: a tokenizer_config.json, a chat_template.json, a .jinja file or a "+
 		"model directory")
+	head := fs.String("head", "", "a GGUF of the model's multi-token-prediction head, published "+
+		"apart from it (unsloth's MTP/mtp-*.gguf): converted as the model's prediction block")
 	plan := fs.Bool("plan", false, "safetensors only: read the shards' headers (by range, for a "+
 		"repository) and print the container the conversion would write -- its size, tensor count "+
 		"and anything it would refuse -- without converting")
@@ -116,6 +118,9 @@ func convertCmd(args []string) error {
 	var opts []convert.Option
 	if *chatTpl != "" {
 		opts = append(opts, convert.WithChatTemplate(*chatTpl))
+	}
+	if *head != "" {
+		opts = append(opts, convert.WithHead(*head))
 	}
 	if st {
 		if *q8 {

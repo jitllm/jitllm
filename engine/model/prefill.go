@@ -635,7 +635,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 				if err := fill(); err != nil {
 					return err
 				}
-				s.q4eExpand(s.bx[:n*c.ResidW()], n)
+				s.q4eExpandAt(s.bx[:n*c.ResidW()], n, base)
 				return nil
 			}
 		}
@@ -903,7 +903,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 			s.emb.collect(s, base, n)
 		}
 		if s.rowTap != nil {
-			s.rowTap(p0, s.bx[:n*c.NEmbd])
+			s.rowTap(p0, s.bx[:n*c.ResidW()])
 		}
 		s.advance(slot, n)
 		// The last chunk's last row is the only one the caller can use, so it
@@ -935,6 +935,9 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 			copy(s.x, s.bx[(n-1)*c.NEmbd:n*c.NEmbd])
 		}
 		if c.Q4E() && base+n == total {
+			if s.rows != nil {
+				s.rows.resBase = base
+			}
 			if err := s.q4eCollapse(s.bx[:n*c.ResidW()], n); err != nil {
 				return nil, err
 			}

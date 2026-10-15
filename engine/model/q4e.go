@@ -69,9 +69,11 @@ const (
 // hyper-connections.
 func (c *Config) Q4E() bool { return c.HCLowRank != 0 }
 
-// QSAAt reports that block li selects its keys by QSA.
+// QSAAt reports that block li selects its keys by QSA: every attention
+// block, the prediction blocks after the trunk too (the release's is a QSA
+// block, as its compress ratio states).
 func (c *Config) QSAAt(li int) bool {
-	return c.QSARatio != 0 && li >= 0 && li < c.NLayer && !c.LayerKind(li).Recurrent()
+	return c.QSARatio != 0 && li >= 0 && li < c.NLayer+c.NMTP && !c.LayerKind(li).Recurrent()
 }
 
 // NGramAt reports that block li adds the n-gram embedding.
@@ -142,6 +144,9 @@ type q4eHC struct {
 // n-gram embedding's weights.
 type q4eLayer struct {
 	attn, ffn q4eHC
+	// head is a prediction block's own head mix, which its draft's logits
+	// and nothing else read (q4eCollapse); empty on a trunk block.
+	head q4eHC
 	// The n-gram block: the key and value projections of the gathered rows,
 	// the three grouped norms and the convolution (HCMult*n_embd channels of
 	// NGramConv taps, tap-major once loaded: tap t's channels at t*hcd).
@@ -153,9 +158,9 @@ func (h *q4eHC) tensors() [3]*tensor { return [3]*tensor{&h.down, &h.up, &h.inj}
 
 // tensors is every matrix of the block's, an array so binding them on the
 // decode path allocates nothing.
-func (d *q4eLayer) tensors() [8]*tensor {
-	return [8]*tensor{&d.attn.down, &d.attn.up, &d.attn.inj, &d.ffn.down, &d.ffn.up, &d.ffn.inj,
-		&d.ngKey, &d.ngVal}
+func (d *q4eLayer) tensors() [10]*tensor {
+	return [10]*tensor{&d.attn.down, &d.attn.up, &d.attn.inj, &d.ffn.down, &d.ffn.up, &d.ffn.inj,
+		&d.ngKey, &d.ngVal, &d.head.down, &d.head.up}
 }
 
 // loadQ4EHC reads one hyper-connection's weights and checks their shapes.
@@ -206,6 +211,15 @@ func loadQ4E(l *layer, bi int32, cfg *Config,
 	if err := loadQ4EHC(&d.ffn, bi, cfg, jlm.RoleHCFFNNorm, jlm.RoleHCFFNDown, jlm.RoleHCFFNUp,
 		jlm.RoleHCFFNInject, get, vec); err != nil {
 		return err
+	}
+	if int(bi) >= cfg.NLayer {
+		// A prediction block: its own head mix, the trunk's roles at its
+		// index (llama.cpp's nextn.hc_head_*).
+		if err := loadQ4EHC(&d.head, bi, cfg, jlm.RoleHCHeadNorm, jlm.RoleHCHeadDown, jlm.RoleHCHeadUp,
+			0, get, vec); err != nil {
+			return err
+		}
+		d.head.head = true
 	}
 	if !cfg.NGramAt(int(bi)) {
 		return nil
@@ -370,8 +384,24 @@ func (s *State) growQ4E(n int) {
 
 // q4eExpand copies each row's embedding (stream 0) into the other streams:
 // the residual starts as HCMult copies of it.
-func (s *State) q4eExpand(x []float32, rows int) {
+func (s *State) q4eExpand(x []float32, rows int) { s.q4eExpandAt(x, rows, 0) }
+
+// q4eExpandAt is q4eExpand for a chunk whose first row is row base of the
+// call. A prediction block's draft does not start from copies: its rows
+// arrive with every stream (s.q4In, row-major, eh_proj's per-stream output),
+// and those are laid into the chunk instead.
+func (s *State) q4eExpandAt(x []float32, rows, base int) {
 	c := s.m.Cfg
+	if s.q4In != nil {
+		w, d := c.ResidW(), c.NEmbd
+		for r := 0; r < rows; r++ {
+			in := s.q4In[(base+r)*w : (base+r+1)*w]
+			for k := 0; k < c.HCMult; k++ {
+				copy(c.stream(x, k, rows, r), in[k*d:(k+1)*d])
+			}
+		}
+		return
+	}
 	for r := 0; r < rows; r++ {
 		x0 := c.stream(x, 0, rows, r)
 		for k := 1; k < c.HCMult; k++ {
@@ -467,9 +497,22 @@ func (s *State) hcPlace(x []float32, n int, y []float32) {
 
 // q4eCollapse is the head's mix for n rows of x, written into stream 0 of
 // each row, which the projection reads with no norm.
+//
+// The rows' residual, every stream, is a speculation step's hidden state on
+// this model (rowsOut.tapStreams): what a prediction block reads, and what a
+// draft chains to its next step. A prediction block's draft mixes through the
+// block's own head mix.
 func (s *State) q4eCollapse(x []float32, n int) error {
+	// A chunk whose every block ran on a device grew nothing on the host; a
+	// trunk's n-gram rows did, a prediction block's draft has none.
+	s.growQ4E(n)
 	c, g := s.m.Cfg, s.q4
-	if err := s.hcMix(x, n, &s.m.q4eHead.hc); err != nil {
+	s.rows.tapStreams(s, x, n)
+	hc := &s.m.q4eHead.hc
+	if s.lo >= c.NLayer {
+		hc = &s.m.layers[s.lo].q4e.head
+	}
+	if err := s.hcMix(x, n, hc); err != nil {
 		return err
 	}
 	for r := 0; r < n; r++ {

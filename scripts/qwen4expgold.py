@@ -54,6 +54,10 @@ HFDIR = refenv.under("CV_HF", "hf")
 LCPP = refenv.need("LCPP_SRC", "a llama.cpp source checkout")
 PY = sys.executable
 OUT = os.path.join(HERE, "..", "testdata", "golden", "qwen4exp")
+MTPOUT = os.path.join(HERE, "..", "testdata", "golden", "mtp")  # TestMTPMatchesReference's
+# Sixteen positions: QSA's budget of 8 at a ratio of 4 selects from position
+# 12, so the block's own attention reads a subset of its keys at the last four.
+MTPIDS = [(i * 7919 + 13) % 50000 for i in range(16)]
 NPOS, NLOGIT = 32, 512
 EOS, EOSPOS = 248044, 10
 PARTS = 4
@@ -97,9 +101,14 @@ def q4e_ragged():
     return Qwen4ExpForCausalLM, cfg
 
 
+def q4e_mtp():
+    return q4e()
+
+
 SPECS = {
     "synth-qwen4exp": q4e,
     "synth-qwen4exp-ragged": q4e_ragged,
+    "synth-qwen4exp-mtp": q4e_mtp,
 }
 
 
@@ -180,7 +189,7 @@ def build(name):
     print("wrote", dst, "argmax", [r["argmax"] for r in rows])
 
 
-def convert(d, dst):
+def convert(d, dst, *mtp):
     """llama.cpp's own converter, reading config.json as published.
 
     The converter loads the config through AutoConfig, and this transformers
@@ -201,13 +210,108 @@ def convert(d, dst):
             return json.load(f)
 
     ModelBase.load_hparams = staticmethod(published)
-    sys.argv = ["convert_hf_to_gguf.py", d, "--outtype", "f32", "--no-mtp", "--outfile", dst]
+    # --mtp-full: the model with its prediction block, the converter's default.
+    mtp = [a for a in mtp if a != "--mtp-full"]
+    sys.argv = ["convert_hf_to_gguf.py", d, "--outtype", "f32", *mtp, "--outfile", dst]
     lcpp.main()
+
+
+class MTP(torch.nn.Module):
+    """The prediction block of the release (mtp.* in its checkpoint, which
+    transformers drops on load and Qwen ships no code for), from transformers'
+    own Qwen4Exp pieces, wired as llama.cpp's graph_mtp (src/models/
+    qwen4exp.cpp) wires it -- RULE 7m: llama.cpp is the oracle of the wiring,
+    transformers of every module in it:
+
+        z_s    = fc_embedding(pre_fc_norm_embedding(embed(x_q)))
+                 + fc_hidden(pre_fc_norm_hidden(h_{q-1})_s)       for each stream s
+        z      = Qwen4ExpTextDecoderLayer(full attention, QSA)(z)  -- mtp.layers.0
+        logits = lm_head(hyper_connection_mixer(z))
+
+    h is the trunk's residual before its final mixer, every stream (the hc-wide
+    h llama.cpp hands the block); pre_fc_norm_hidden is a grouped norm over the
+    streams, as the release's [hc*hidden] weight says."""
+
+    def __init__(self, cfg):
+        from transformers.models.qwen4_exp import modeling_qwen4_exp as q
+        super().__init__()
+        h, hc = cfg.hidden_size, cfg.hc_count
+        self.fc_embedding = torch.nn.Linear(h, h, bias=False)
+        self.fc_hidden = torch.nn.Linear(h, h, bias=False)
+        self.pre_fc_norm_embedding = q.Qwen4ExpTextRMSNorm(h, eps=cfg.rms_norm_eps)
+        self.pre_fc_norm_hidden = q.Qwen4ExpTextRMSNorm(hc * h, group_size=h, eps=cfg.rms_norm_eps)
+        d = cfg.to_dict()
+        n = cfg.num_hidden_layers
+        d["num_hidden_layers"] = n + 1
+        d["layer_types"] = list(cfg.layer_types) + [
+            next(t for t in cfg.layer_types if t != "linear_attention")]
+        lc = type(cfg)(**{k: v for k, v in d.items() if k in type(cfg).__dataclass_fields__})
+        lc._attn_implementation = "eager"
+        self.layers = torch.nn.ModuleList([q.Qwen4ExpTextDecoderLayer(lc, n)])
+        self.hyper_connection_mixer = q.Qwen4ExpTextGatedResidual(cfg, use_combine=False)
+
+
+def build_mtp(name):
+    """synth-qwen4exp with the prediction block: three GGUFs from llama.cpp's
+    own converter -- the model with its block, the trunk alone (--no-mtp) and
+    the block alone (--mtp, the shape the release's head is published in) --
+    and the golden of the trunk's and the block's logits."""
+    from transformers.masking_utils import create_causal_mask
+    cls, cfg = SPECS[name]()
+    cfg._attn_implementation = "eager"
+    torch.manual_seed(20261015)
+    m = cls(cfg).float().eval()
+    mtp = MTP(cfg).float().eval()
+    perturb(m, cfg)
+    perturb(mtp, cfg)
+    d = os.path.join(HFDIR, name)
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
+    save_published(m, cfg, d)
+    from safetensors.torch import load_file
+    sd = load_file(os.path.join(d, "model.safetensors"))
+    for k, v in mtp.state_dict().items():
+        sd["mtp." + k] = v.contiguous()
+    save_file(sd, os.path.join(d, "model.safetensors"), metadata={"format": "pt"})
+    c = json.load(open(os.path.join(d, "config.json")))
+    c["mtp_num_hidden_layers"] = 1
+    json.dump(c, open(os.path.join(d, "config.json"), "w"), indent=2)
+    for f in ("tokenizer.json", "tokenizer_config.json"):
+        shutil.copy(os.path.join(TOKDIR, "qwen4exp", f), d)
+    for suffix, mode in (("", []), ("-trunk", ["--no-mtp"]), ("-head", ["--mtp"])):
+        dst = os.path.join(MODELS, name + suffix + ".gguf")
+        subprocess.run([PY, os.path.abspath(__file__), "--convert", d, dst, *(mode or ["--mtp-full"])],
+                       check=True)
+    ids = MTPIDS
+    hs = {}
+    hook = m.model.layers[-1].register_forward_hook(lambda mod, a, out: hs.__setitem__("h", out))
+    with torch.no_grad():
+        trunk = m(torch.tensor([ids]), use_cache=False).logits[0]
+        hook.remove()
+        h = hs["h"]  # [1, n, hc*hidden]: the residual before the final mixer
+        hprev = torch.cat([torch.zeros_like(h[:, :1]), h[:, :-1]], dim=1)
+        e = mtp.pre_fc_norm_embedding(m.model.embed_tokens(torch.tensor([ids])))
+        hn = mtp.pre_fc_norm_hidden(hprev).unflatten(-1, (cfg.hc_count, cfg.hidden_size))
+        z = (mtp.fc_embedding(e).unsqueeze(-2) + mtp.fc_hidden(hn)).flatten(-2)
+        n = len(ids)
+        pos = torch.arange(n).view(1, 1, -1).expand(3, 1, -1)
+        pe = m.model.rotary_emb(z, pos)
+        mask = torch.full((n, n), float("-inf")).triu(1).view(1, 1, n, n)
+        z = mtp.layers[0](z, position_embeddings=pe, attention_mask=mask)
+        logits = m.lm_head(mtp.hyper_connection_mixer(z))[0]
+    os.makedirs(MTPOUT, exist_ok=True)
+    rec = {"ids": ids, "nlogit": NLOGIT,
+           "trunk": [[round(float(x), 7) for x in r[:NLOGIT]] for r in trunk],
+           "mtp": [[round(float(x), 7) for x in r[:NLOGIT]] for r in logits],
+           "mtp_argmax": [int(r.argmax()) for r in logits],
+           "trunk_argmax": [int(r.argmax()) for r in trunk]}
+    json.dump(rec, open(os.path.join(MTPOUT, name + ".json"), "w"))
+    print("wrote", name, "mtp argmax", rec["mtp_argmax"])
 
 
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--convert"]:
-        convert(sys.argv[2], sys.argv[3])
+        convert(sys.argv[2], sys.argv[3], *(sys.argv[4:] or ["--no-mtp"]))
     else:
         for n in sys.argv[1:] or list(SPECS):
-            build(n)
+            (build_mtp if n == "synth-qwen4exp-mtp" else build)(n)

@@ -40,6 +40,7 @@ func specModels(t *testing.T) map[string]string {
 		"synth-hybrid":   "synth-qwen35-hybrid-mtp.gguf",
 		"synth-moe":      "synth-qwen35moe-hybrid-mtp.gguf",
 		"synth-deepseek": "synth-deepseek-mtp",
+		"synth-q4e":      "synth-qwen4exp-mtp.gguf",
 	}
 	if v := os.Getenv("JITLLM_SPEC_MODEL"); v != "" {
 		if os.Getenv("JITLLM_SPEC_ONLY") == "1" {

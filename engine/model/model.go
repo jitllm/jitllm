@@ -3725,12 +3725,20 @@ func buildMTP(c *jlm.File, m *Model,
 		} else if hn != nil {
 			w.headNorm = hn
 		}
+		// Qwen3.8-Flash-Next's block reads the trunk's residual, every stream,
+		// each normed against its own row of hnorm, and its head is the block's
+		// own mix (q4eLayer.head), not a norm.
+		hw, hn := cfg.NEmbd, cfg.NEmbd
+		if cfg.Q4E() {
+			hw, hn = cfg.ResidW(), len(w.headNorm)
+		}
 		for _, v := range []struct {
-			name string
-			n    int
-		}{{"enorm", len(w.enorm)}, {"hnorm", len(w.hnorm)}, {"shared_head_norm", len(w.headNorm)}} {
-			if v.n != cfg.NEmbd {
-				return fmt.Errorf("model: prediction block %d %s is %d wide, want %d", i, v.name, v.n, cfg.NEmbd)
+			name    string
+			n, want int
+		}{{"enorm", len(w.enorm), cfg.NEmbd}, {"hnorm", len(w.hnorm), hw},
+			{"shared_head_norm", len(w.headNorm), hn}} {
+			if v.n != v.want {
+				return fmt.Errorf("model: prediction block %d %s is %d wide, want %d", i, v.name, v.n, v.want)
 			}
 		}
 		// The block's own head and embedding exist only where they differed

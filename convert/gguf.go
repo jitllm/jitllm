@@ -40,6 +40,16 @@ func FromGGUFs(src, mmproj, dst string, fp jlm.Fingerprint, opts ...Option) (*jl
 		return nil, err
 	}
 	defer f.Close()
+	if o.head != "" {
+		h, err := gguf.Open(o.head)
+		if err != nil {
+			return nil, err
+		}
+		defer h.Close()
+		if f, err = withHead(f, h, src, o.head); err != nil {
+			return nil, err
+		}
+	}
 	var vf *meta.File
 	if mmproj != "" {
 		if vf, err = gguf.Open(mmproj); err != nil {

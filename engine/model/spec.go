@@ -319,12 +319,6 @@ func (s *State) Speculate(opts ...SpecOption) (*Speculator, error) {
 		// in as they arrive, which State.rewind does not take back. Not
 		// built, so refused by name, whoever drafts.
 		return nil, fmt.Errorf("model: speculation on %s is not built", c.Arch)
-	case c.Q4E() && mtp:
-		// Its prediction block is hyper-connected as its trunk is, which the
-		// draft path's ordinary block does not run. Not built, so refused by
-		// name; prompt lookup drafts for it (a device n-gram block's host
-		// predecessors are part of what a rewind restores, copyRec).
-		return nil, fmt.Errorf("model: multi-token prediction on %s is not built", c.Arch)
 	case s.batched || s.nseq != 1:
 		return nil, fmt.Errorf("model: speculation drives a single sequence, not a batch")
 	case s.pos != 0:
@@ -362,9 +356,9 @@ func (s *State) Speculate(opts ...SpecOption) (*Speculator, error) {
 			"a device keeps its own state and rewinds it one step (SpecRollbackReplay)")
 	}
 	sp.stats.Rollback = sp.mode
-	sp.h = make([]float32, c.NEmbd)
+	sp.h = make([]float32, c.specHidW())
 	sp.dlog = make([]float32, c.NVocab)
-	sp.dhid = make([]float32, c.NEmbd)
+	sp.dhid = make([]float32, c.specHidW())
 	if s.recurrent() {
 		sp.pre = s.newRecSnap()
 	}
@@ -414,24 +408,25 @@ func (sp *Speculator) Start(prompt []int32, sm *Sampler) (int32, error) {
 	y := sm.Sample(logits)
 	sm.Observe(y)
 	sp.stats.Emitted++
+	hw := c.specHidW()
 	if sp.d == nil {
 		sp.hist = append(append(sp.hist[:0], prompt...), y)
 		sp.next = y
-		copy(sp.h, hid[(n-1)*c.NEmbd:])
+		copy(sp.h, hid[(n-1)*hw:])
 		sp.started = true
 		return y, nil
 	}
 	// The draft over the prompt and the first token: row q is (x_q, h_{q-1}),
 	// and the last row, (y, h_{n-1}), proposes the first draft.
 	toks := append(append([]int32(nil), prompt...), y)
-	hs := make([]float32, (n+1)*c.NEmbd)
-	copy(hs[c.NEmbd:], hid)
+	hs := make([]float32, (n+1)*hw)
+	copy(hs[hw:], hid)
 	sp.dout = rowsOut{from: n, logits: sp.dlog, hidden: sp.dhid, prompt: true}
 	if err := sp.draftRows(toks, hs, &sp.dout); err != nil {
 		return 0, err
 	}
 	sp.next = y
-	copy(sp.h, hid[(n-1)*c.NEmbd:])
+	copy(sp.h, hid[(n-1)*hw:])
 	sp.started = true
 	return y, nil
 }
@@ -444,7 +439,7 @@ func (sp *Speculator) trunkPrompt(prompt []int32) ([]float32, []float32, error) 
 	t, c := sp.t, sp.t.m.Cfg
 	n := len(prompt)
 	t.kv.note(t.seqPos(0), prompt...)
-	hid := make([]float32, n*c.NEmbd)
+	hid := make([]float32, n*c.specHidW())
 	logits := make([]float32, c.NVocab)
 	if n == 1 {
 		if err := t.stepRows(embedSrc(t, prompt), prompt, &rowsOut{logits: logits, hidden: hid}); err != nil {
@@ -454,8 +449,20 @@ func (sp *Speculator) trunkPrompt(prompt []int32) ([]float32, []float32, error) 
 	}
 	// The residual rows of every chunk, normed here: the folded head would
 	// keep the last chunk's on the device, so the tail projects instead.
-	resid := make([]float32, 0, n*c.NEmbd)
+	resid := make([]float32, 0, n*c.ResidW())
 	t.rowTap = func(_ int, rows []float32) { resid = append(resid, rows...) }
+	if c.Q4E() {
+		// A chunk's rows stream-major; the hidden state is each row's every
+		// stream together, unnormed (q4eCollapse).
+		t.rowTap = func(_ int, rows []float32) {
+			nc := len(rows) / c.ResidW()
+			for i := 0; i < nc; i++ {
+				for k := 0; k < c.HCMult; k++ {
+					resid = append(resid, c.stream(rows, k, nc, i)...)
+				}
+			}
+		}
+	}
 	t.noHeadFold = true
 	lg, err := t.prefillSrc(0, embedSrc(t, prompt), prompt, nil)
 	t.rowTap, t.noHeadFold = nil, false
@@ -466,8 +473,23 @@ func (sp *Speculator) trunkPrompt(prompt []int32) ([]float32, []float32, error) 
 	if len(resid) != len(hid) {
 		return nil, nil, fmt.Errorf("model: the prompt's %d rows gave %d hidden values", n, len(resid))
 	}
+	if c.Q4E() {
+		copy(hid, resid)
+		return logits, hid, nil
+	}
 	t.batchNormB(hid, resid, t.outNorm, t.m.outNormB, c.NEmbd, n)
 	return logits, hid, nil
+}
+
+// specHidW is a speculation step's hidden state per row: what a prediction
+// block reads of the trunk's. The output norm's result, n_embd wide; on
+// Qwen3.8-Flash-Next the residual before the head's mix, every stream
+// (llama.cpp's h_nextn).
+func (c *Config) specHidW() int {
+	if c.Q4E() {
+		return c.ResidW()
+	}
+	return c.NEmbd
 }
 
 // embedSrc is a prompt's rows as the trunk's prefill reads them.
@@ -493,22 +515,40 @@ func (sp *Speculator) draftRows(toks []int32, hs []float32, out *rowsOut) error 
 	}
 	// [enorm(embed(x)) ; hnorm(h)] per row, then eh_proj over every row at
 	// once: one read of the matrix for the whole step.
-	sp.eh = grow32(sp.eh, n*2*c.NEmbd)
-	sp.ze = grow32(sp.ze, n*c.NEmbd)
+	// Qwen3.8-Flash-Next's block takes the trunk's residual, every stream:
+	// eh_proj runs once per (row, stream) over [enorm(e) ; hnorm(h_s)], and
+	// its rows are the draft's residual streams (llama.cpp's graph_mtp).
+	st := 1
+	if c.Q4E() {
+		st = c.HCMult
+	}
+	d0 := c.NEmbd
+	sp.eh = grow32(sp.eh, n*st*2*d0)
+	sp.ze = grow32(sp.ze, n*st*d0)
 	e := sp.ze // the embeddings, before eh_proj overwrites them
 	for i, x := range toks {
-		if err := d.embedMTP(e[i*c.NEmbd:(i+1)*c.NEmbd], x); err != nil {
+		if err := d.embedMTP(e[i*d0:(i+1)*d0], x); err != nil {
 			return err
 		}
 	}
-	for i := 0; i < n; i++ {
-		row := sp.eh[i*2*c.NEmbd : (i+1)*2*c.NEmbd]
-		d.rmsnorm(row[:c.NEmbd], e[i*c.NEmbd:(i+1)*c.NEmbd], w.enorm, c.RMSEps)
-		d.rmsnorm(row[c.NEmbd:], hs[i*c.NEmbd:(i+1)*c.NEmbd], w.hnorm, c.RMSEps)
+	for i := n - 1; i >= 0; i-- {
+		for k := 0; k < st; k++ {
+			row := sp.eh[(i*st+k)*2*d0 : (i*st+k+1)*2*d0]
+			if k == 0 {
+				d.rmsnorm(row[:d0], e[i*d0:(i+1)*d0], w.enorm, c.RMSEps)
+			} else {
+				copy(row[:d0], sp.eh[i*st*2*d0:i*st*2*d0+d0])
+			}
+			d.rmsnorm(row[d0:], hs[(i*st+k)*d0:(i*st+k+1)*d0], w.hnorm[k*d0:(k+1)*d0], c.RMSEps)
+		}
 	}
 	d.jit.NewInput()
-	if err := d.mm(sp.ze, w.ehProj, sp.eh, n); err != nil {
+	if err := d.mm(sp.ze[:n*st*d0], w.ehProj, sp.eh[:n*st*2*d0], n*st); err != nil {
 		return err
+	}
+	if st > 1 {
+		d.q4In = sp.ze[:n*st*d0]
+		defer func() { d.q4In = nil }()
 	}
 	src := make([]func(dst []float32) error, n)
 	for i := range src {
@@ -644,7 +684,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	from := r
 	sp.tout.from = from
 	sp.tout.logits = grow32(sp.tout.logits, (nr-from)*c.NVocab)
-	sp.tout.hidden = grow32(sp.tout.hidden, (nr-from)*c.NEmbd)
+	sp.tout.hidden = grow32(sp.tout.hidden, (nr-from)*c.specHidW())
 	sp.tout.snap = nil
 	sp.tout.argmax = greedy
 	rr, devRec := t.ld.(nn.RecRewinder)
@@ -778,7 +818,7 @@ func (sp *Speculator) Next(sm *Sampler) ([]int32, error) {
 	// owed) and runs the accepted drafts and y against the trunk's own hidden
 	// states, its last row proposing the next round's first draft. A round
 	// that drafted nothing leaves them owed (Speculator.owedTok).
-	hid := func(j int) []float32 { return sp.tout.hidden[j*c.NEmbd : (j+1)*c.NEmbd] }
+	hid := func(j int) []float32 { return sp.tout.hidden[j*c.specHidW() : (j+1)*c.specHidW()] }
 	if sp.d != nil && !sp.retired {
 		back := P + r + 1 - len(sp.owedTok)
 		if sp.fault == faultKeepRejectedKV {

@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"strings"
@@ -67,6 +68,9 @@ func PlanShards(meta fs.FS, name string, shards []*safetensors.File, opts ...Opt
 	var o options
 	for _, fn := range opts {
 		fn(&o)
+	}
+	if o.head != "" {
+		return nil, fmt.Errorf("convert: WithHead joins a GGUF head to a GGUF; %s is safetensors", name)
 	}
 	if o.q8 {
 		quantizeMatrices(s.Tensors)

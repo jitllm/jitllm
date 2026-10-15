@@ -168,7 +168,7 @@ func usage() {
   jitllm batch [-devices SPEC] [-batch N] [-n N] <model.jlm> <prompt...>
   jitllm verify [flags] <model.jlm>
   jitllm upgrade <model.jlm>...   bring containers from an older jitllm to this build's version, in place
-  jitllm convert [-o DIR] [-chat-template FILE] <model.gguf|model-dir|URL|NAME> [mmproj.gguf|URL] [out.jlm]
+  jitllm convert [-o DIR] [-chat-template FILE] [-head mtp.gguf] <model.gguf|model-dir|URL|NAME> [mmproj.gguf|URL] [out.jlm]
   jitllm library [-refs]   the models convert fetches by NAME
   jitllm asm <Q4_0|Q8_0|Q4_K>[x4]
 

@@ -48,8 +48,9 @@ type rowsOut struct {
 	// it back (recSnap). Device blocks keep their own (nn.RecRewinder).
 	snap []recSnap
 	// ngBase is the step's row the chunk the n-gram block is running begins
-	// at, for snapTail.
-	ngBase int
+	// at, for snapTail; resBase the same for the chunk being collapsed, for
+	// tapStreams.
+	ngBase, resBase int
 	// noCap is a gate's break (TestSpecOverAFinalSoftcap): the host's head
 	// over the step's rows skips the final softcap. false in every step a
 	// session makes.
@@ -101,7 +102,7 @@ func (r *rowsOut) foldHead(h *nn.Head, base, n int) (func(), bool) {
 // The caller holds the pager (enterPager), as every inner path assumes.
 func (s *State) stepRows(src []func(dst []float32) error, ids []int32, out *rowsOut) error {
 	c := s.c
-	out.token, out.tokens = -1, nil
+	out.token, out.tokens, out.resBase, out.ngBase = -1, nil, 0, 0
 	switch {
 	case len(src) == 0:
 		return errEmptyPrompt{}
@@ -313,7 +314,9 @@ func (s *State) finishRows(headDone bool, lastBase, total int) error {
 	if err := s.mm(r.logits, *s.outW, s.bh, cnt); err != nil {
 		return err
 	}
-	copy(r.hidden, s.bh[:cnt*c.NEmbd])
+	if !c.Q4E() { // its hidden state is the residual, taken in q4eCollapse
+		copy(r.hidden, s.bh[:cnt*c.NEmbd])
+	}
 	if r.noCap {
 		s.headBias(r.logits[:cnt*c.NVocab])
 		s.scaleLogits(r.logits[:cnt*c.NVocab])
@@ -358,6 +361,27 @@ func (r *rowsOut) snapTail(s *State, li, row, off int, v []float32) {
 	copy(r.snap[row].state[li][s.dg.deltaStateLen()+off:], v)
 }
 
+// tapStreams copies the residual of the wanted rows among n rows of a chunk
+// x (stream-major) into the step's hidden rows, every stream of a row
+// together: on Qwen3.8-Flash-Next a step's hidden state is the residual
+// before the head's mix (q4eCollapse), ResidW a row, not the head's input.
+func (r *rowsOut) tapStreams(s *State, x []float32, n int) {
+	if r == nil || r.noHead {
+		return
+	}
+	c := s.c
+	w, d := c.ResidW(), c.NEmbd
+	for i := 0; i < n; i++ {
+		g := r.resBase + i - r.from
+		if g < 0 || (g+1)*w > len(r.hidden) {
+			continue
+		}
+		for k := 0; k < c.HCMult; k++ {
+			copy(r.hidden[g*w+k*d:g*w+(k+1)*d], c.stream(x, k, n, i))
+		}
+	}
+}
+
 // stepRowsStreams is stepRowsDevice for Qwen3.8-Flash-Next: its rows are
 // hyper-connected streams with n-gram rows beside them, which the batched
 // step's altRowsStep builds -- the streams expanded, the n-gram rows hashed
@@ -397,7 +421,12 @@ func (s *State) stepRowsStreams(src []func(dst []float32) error, ids []int32, ou
 	}
 	s.rowsLog = grow32(s.rowsLog, n*c.NVocab)
 	logits := s.rowsLog[:n*c.NVocab]
-	if err := s.altRowsStep(rd, pos, slot, ids, n, logits, nlogit); err != nil {
+	// The collapse inside takes the wanted rows' residual (tapStreams), which
+	// is this model's hidden state.
+	s.rows, out.resBase = out, 0
+	err := s.altRowsStep(rd, pos, slot, ids, n, logits, nlogit)
+	s.rows = nil
+	if err != nil {
 		return err
 	}
 	s.advance(0, n)
@@ -405,7 +434,6 @@ func (s *State) stepRowsStreams(src []func(dst []float32) error, ids []int32, ou
 		from := out.from
 		s.finishDevLogits(logits[from*c.NVocab:])
 		copy(out.logits[:(n-from)*c.NVocab], logits[from*c.NVocab:])
-		copy(out.hidden[:(n-from)*c.NEmbd], s.bh[from*c.NEmbd:n*c.NEmbd])
 	}
 	return s.kvCheck()
 }

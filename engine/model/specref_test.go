@@ -42,6 +42,9 @@ func TestMTPMatchesReference(t *testing.T) {
 		{"synth-qwen35-hybrid-mtp", "synth-qwen35-hybrid-mtp.gguf", true},
 		{"synth-qwen35moe-hybrid-mtp", "synth-qwen35moe-hybrid-mtp.gguf", true},
 		{"synth-deepseek-mtp", "synth-deepseek-mtp", true},
+		// scripts/qwen4expgold.py: the hyper-connected block, held to
+		// transformers' modules wired as llama.cpp's graph_mtp.
+		{"synth-qwen4exp-mtp", "synth-qwen4exp-mtp.gguf", true},
 		{"Qwen3.5-0.8B", "qwen35/Qwen3.5-0.8B-MTP-Q8_0.gguf", false},
 	} {
 		t.Run(tc.golden, func(t *testing.T) {
@@ -97,18 +100,19 @@ func mtpLogits(t *testing.T, m *Model, ids []int32, fault int) [][]float32 {
 	}
 	n := len(ids)
 	toks := append([]int32(nil), ids...)
-	hs := make([]float32, n*c.NEmbd)
+	hw := c.specHidW()
+	hs := make([]float32, n*hw)
 	lag := 1
 	if fault == 1 {
 		lag = 2
 	}
 	for q := lag; q < n; q++ {
-		copy(hs[q*c.NEmbd:], hid[(q-lag)*c.NEmbd:(q-lag+1)*c.NEmbd])
+		copy(hs[q*hw:], hid[(q-lag)*hw:(q-lag+1)*hw])
 	}
 	if fault == 2 {
 		copy(toks, ids[1:])
 	}
-	out := &rowsOut{from: 0, logits: make([]float32, n*c.NVocab), hidden: make([]float32, n*c.NEmbd)}
+	out := &rowsOut{from: 0, logits: make([]float32, n*c.NVocab), hidden: make([]float32, n*hw)}
 	if err := sp.draftRows(toks, hs, out); err != nil {
 		t.Fatal(err)
 	}
