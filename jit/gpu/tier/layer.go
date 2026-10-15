@@ -8697,7 +8697,9 @@ func (g *devTier) layersSession(s backend.Session) {
 							l.stream.score(g, li)
 						}
 						hybrid = l.stream.hybrid && !g.StreamFixedSel
-						if hybrid {
+						// Every selection the card routes is the session's
+						// count, a hybrid block's or a streamed one's.
+						if !g.StreamFixedSel {
 							l.stream.count(g.hostFns[sid][li].uses)
 						}
 						// The split: a hybrid block with a cache runs the experts the
