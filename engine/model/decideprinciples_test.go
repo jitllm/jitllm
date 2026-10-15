@@ -179,7 +179,7 @@ func TestDecisionRelocatesMidPrompt(t *testing.T) {
 // state lost 0.082-0.095 (three taps of history: a thin but clean margin);
 // lev above 0.3 on CUDA, with its delta-rule state lost 3.2; the openjev test
 // model 0.0008 on the laptop, its state lost 0.028.
-var decisionRelocTol = map[string]float64{"d1-3B": 0.06, "openjev": 0.005, "lev": 1.0, "clef": 1.0, "clef-fixture": 0.01}
+var decisionRelocTol = map[string]float64{"d1-3B": 0.06, "openjev": 0.005, "lev": 1.0, "pplx-decider": 1.0, "clef": 1.0, "clef-fixture": 0.01}
 
 // TestDecisionRelocatesBetweenDevices moves one Decider's blocks from the host
 // onto each device in turn and home, answering the same request at every

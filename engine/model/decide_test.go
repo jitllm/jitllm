@@ -80,6 +80,10 @@ var decisionCases = []struct {
 	// llama.cpp's own openjev test model (ggml-org/tinyopenjev-for-testing-gguf):
 	// a random qwen35 whose answers sit far from saturation.
 	{"openjev", "openjev/tinyopenjev-for-testing-Q8_0.gguf", "tinyopenjev-for-testing-Q8_0", jlm.DecisionOpenJev, false, 0.01},
+	// perplexity-ai's pplx-decider v1.1 27B through llama.cpp's own converter
+	// (Q8_0; no published GGUF states its readout): lev's codes, its output
+	// projection the readout.
+	{"pplx-decider", "pplx-decider/pplx-decider-v1.1-27b-Q8_0.gguf", "pplx-decider-v1.1-27b-Q8_0", jlm.DecisionPplxDecider, false, 0.05},
 }
 
 // decisionRequests are the request bodies in testdata/decision: an object
@@ -201,6 +205,7 @@ func TestDecisionReadoutIsLoadBearing(t *testing.T) {
 		{"lev-one-order", "lev/lev-Q8_0.gguf", "lev-Q8_0", "support", jlm.DecisionLev, "one-order", []string{"intent", "team"}},
 		{"lev-unsorted", "lev/lev-Q8_0.gguf", "lev-Q8_0", "support", jlm.DecisionLev, "unsorted", []string{"intent", "urgent", "frustration", "refund", "team"}},
 		{"lev-uncalibrated", "lev/lev-Q8_0.gguf", "lev-Q8_0", "support", jlm.DecisionLev, "uncalibrated", []string{"intent", "urgent"}},
+		{"pplx-decider-uncalibrated", "pplx-decider/pplx-decider-v1.1-27b-Q8_0.gguf", "pplx-decider-v1.1-27b-Q8_0", "ambiguous", jlm.DecisionPplxDecider, "uncalibrated", []string{"compensate", "churn", "damage", "tone", "issue"}},
 		{"openjev-false-first", "openjev/tinyopenjev-for-testing-Q8_0.gguf", "tinyopenjev-for-testing-Q8_0", "ambiguous", jlm.DecisionOpenJev, "false-first", []string{"compensate", "churn", "damage"}},
 		{"openjev-uncalibrated", "openjev/tinyopenjev-for-testing-Q8_0.gguf", "tinyopenjev-for-testing-Q8_0", "ambiguous", jlm.DecisionOpenJev, "uncalibrated", []string{"compensate", "churn", "damage"}},
 	} {
