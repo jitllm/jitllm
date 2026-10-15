@@ -3746,9 +3746,29 @@ misses x 2.9 MB = 0.64 GB of experts in 48 x 405 us = 19.4 ms of `moeFFN`,
 33 GB/s including each call's fixed regions (a read wall for node 0 measured
 in the same process is owed); the card reads its 7.35 GiB base and the hits.
 
-The prompt is not won yet: Strata prefills the first four tokens in 213 ms
-and jitllm's batched chunk of five took 590-612 ms in the same samples, every
-row's experts on the host.
+**The prompt.** Strata prefills the first four tokens in 213 ms; jitllm's
+batched chunk of five took 590-612 ms in the same samples, every row's experts
+on the host, one expert-major region set per expert. Two changes: a chunk of
+up to eight rows runs its host experts a row at a time through the decode
+path's grouped regions (474-482 ms), and once a device has run a model's
+experts on the host, a prompt of up to eight tokens runs through the decode
+path itself, where each token splits between the card's cache and the host
+(`WithPrefillForwardRows`, unset: 210-248 ms; alternating runs of one build,
+`JITLLM_PREFILL_FORWARD=0` against the default).
+
+**The rate depends on the text, and a sample is one text.** With the tune
+cache frozen, every process decodes the same tokens and the samples agree to
+2%; but the tuners' per-shape picks (the split of three Q8_0 shapes, a few
+microseconds each) move the rounding, the greedy path parts, and the hit rate
+with it: six tune states of one build read 20.1-27.5 tok/s, the fastest at a
+62.3% hit rate and the slowest at 47.5%, and the slowest and fastest states
+differ in three cache entries (Q8_0 10240x2560 split 8 or 10, 2560x6144 32 or
+24, 2560x640 10 or 5). A row taken over one prompt is one text's row. The rows
+below the campaign's are therefore taken over three prompts, with the
+warm-ups on a fourth text (`JITLLM_WARMUP_PROMPT`) so the caches are not
+primed by the text being measured, and every sample decodes all 128 tokens
+(`JITLLM_IGNORE_EOS`; Strata's runs do not stop at an end of generation
+either).
 
 **What a hybrid cache costs elsewhere, and how it gives way.** The cache
 takes the room placement left, so history or a block offered later found
