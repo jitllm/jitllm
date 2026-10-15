@@ -595,10 +595,6 @@ func (g *devTier) retuneDecode() {
 	g.tuneGemm()
 }
 
-// splitCands is every split up to max that divides nb activation blocks,
-// ascending. Divisors, not powers of two: gpt-oss's k of 2880 is 90 blocks,
-// which only 2 of the powers of two divide. For a power-of-two nb the lists
-// are the same.
 // splitMax is the widest split the tuner offers a shape of rows output rows.
 // 32 covers a matrix whose rows fill the card; a matrix of a few rows over a
 // long k (a hyper-connection's mix: 4 rows of 10240) runs 4*32 threads at 32,
@@ -611,6 +607,10 @@ func splitMax(rows int) int {
 	return 32
 }
 
+// splitCands is every split up to max that divides nb activation blocks,
+// ascending. Divisors, not powers of two: gpt-oss's k of 2880 is 90 blocks,
+// which only 2 of the powers of two divide. For a power-of-two nb the lists
+// are the same.
 func splitCands(nb, max int) []int {
 	var out []int
 	for s := 1; s <= max && s <= nb; s++ {
