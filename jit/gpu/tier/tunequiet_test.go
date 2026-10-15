@@ -76,3 +76,71 @@ func TestBackgroundTrialWaitsForSubmissionsInFlight(t *testing.T) {
 		t.Fatalf("no background trial ran after the submission completed")
 	}
 }
+
+// TestBackgroundTrialYieldsBetweenRounds: the background tuner takes g.mu a
+// ROUND at a time, never for a whole trial, and waits for the device to be
+// quiet again before every round. A whole trial on an output head held g.mu
+// for 21 ms, and a prompt arriving behind it waited that long. Here a
+// submission lands after the third round of the first candidate; the fourth
+// must wait tuneQuiet past it, and every candidate must be timed in
+// splitRounds+1 separate calls.
+func TestBackgroundTrialYieldsBetweenRounds(t *testing.T) {
+	const rows, k = 4096, 4096
+	var mu sync.Mutex
+	calls := map[[2]int]int{}
+	total := 0
+	var subAt, nextAt time.Time
+	oldBG, oldID := bgTrial, binaryID
+	t.Cleanup(func() { bgTrial, binaryID = oldBG, oldID })
+	bgTrial = func(g *devTier, _, _ backend.Kernel, _ *resident, _, _, _ backend.Buf, _, split int, grp bool) (float64, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		c := [2]int{split, 0}
+		if grp {
+			c[1] = 1
+		}
+		calls[c]++
+		total++
+		switch total {
+		case 3:
+			subAt = time.Now()
+			g.lastSub.Store(subAt.UnixNano()) // a prompt's submission ends
+		case 4:
+			nextAt = time.Now()
+		}
+		return float64(split), true
+	}
+	binaryID = func() string { return "revA" }
+	g, err := New([]Slot{{Dev: idDev{&fakeDev{name: "card"}, "aa", "cuda12040"}, Bytes: 1 << 30}},
+		WithTuneCache(t.TempDir()), WithLazyTune(true))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer g.Close()
+	d := g.devs[0]
+	d.mu.Lock()
+	d.tuneSplit(kernels.Q4_0, rows, k, &resident{ok: true})
+	running := d.tuneRunning
+	d.mu.Unlock()
+	if !running {
+		t.Fatalf("the shape queued no background tune; the gate cannot see a trial")
+	}
+	d.tuneWG.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) < 2 {
+		t.Fatalf("%d candidates timed; the gate needs two", len(calls))
+	}
+	for c, n := range calls {
+		if n != splitRounds+1 {
+			t.Errorf("candidate %v timed in %d calls, want one a round (%d)", c, n, splitRounds+1)
+		}
+	}
+	if subAt.IsZero() || nextAt.IsZero() {
+		t.Fatalf("the submission between rounds was never placed")
+	}
+	if w := nextAt.Sub(subAt); w < tuneQuiet {
+		t.Errorf("the round after a submission ran %v after it, inside tuneQuiet (%v)", w, tuneQuiet)
+	}
+}

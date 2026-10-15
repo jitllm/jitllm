@@ -73,6 +73,10 @@ type clefHead struct {
 	blocks                      []clefBlock
 	routing, width, heads, ffn  int
 	eps                         float64
+	// outLN and outNormB are the backbone's output norm as the head reads
+	// it: a LayerNorm with its bias, or (outLN false) an RMSNorm.
+	outLN    bool
+	outNormB []float32
 }
 
 func (h *clefHead) weights() []*tensor {
@@ -145,7 +149,8 @@ func (m *Model) clefLoad() (*clefHead, error) {
 		}
 		return out
 	}
-	h := &clefHead{routing: int(jc.DecisionRouting), heads: int(jc.DecisionHeads), eps: float64(jc.DecisionEps)}
+	h := &clefHead{routing: int(jc.DecisionRouting), heads: int(jc.DecisionHeads), eps: float64(jc.DecisionEps),
+		outLN: m.Cfg.LayerNorm, outNormB: m.outNormB}
 	h.pMem = get(jlm.RoleDecProjMemory, -1, 0, d)
 	w := h.pMem.rows
 	if err != nil {
@@ -597,7 +602,8 @@ func (d *Decider) clefHead(p *clefPrompt, out []float32) error {
 	}
 	hid := r.hid[:n*D]
 	// The backbone's output norm, then the head's LayerNorm over it.
-	s.batchNormB(r.tmp[:n*D], hid, s.outNorm, d.m.outNormB, D, n)
+	s.normRows(r.tmp[:n*D], hid, s.outNorm, h.outNormB, D, n, h.outLN, s.c.RMSEps, 1)
+	s.jit.NewInput()
 	s.normRows(hid, r.tmp[:n*D], h.hidW, h.hidB, D, n, true, h.eps, 1)
 	if d.violation == "no-hidden-norm" {
 		copy(hid, r.tmp[:n*D])

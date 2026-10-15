@@ -90,7 +90,7 @@ func (s *State) audWeights(li int) nn.LayerWeights {
 		FF1Norm: b.ff1N, FF1NormB: b.ff1NB, FF1UpB: b.ff1UB, FF1DownB: b.ff1DB,
 		AttnNorm: b.attN, AttnNormB: b.attNB, QB: b.qB, KB: b.kB, VB: b.vB, OB: b.oB, U: b.u, V: b.vbias,
 		ConvNorm: b.convN, ConvNormB: b.convNB, GLUValB: b.gluVB, GLUGateB: b.gluGB,
-		DW: b.dw, BNScale: b.bnS, BNShift: b.bnShift, PW2B: b.pw2B,
+		DW: b.dw, BNScale: b.bnS, BNShift: b.bnB, PW2B: b.pw2B,
 		FF2Norm: b.ff2N, FF2NormB: b.ff2NB, FF2UpB: b.ff2UB, FF2DownB: b.ff2DB,
 		OutNorm: b.outN, OutNormB: b.outNB, PE: a.audioPE(a.audioMaxRows()),
 	}}

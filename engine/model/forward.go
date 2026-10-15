@@ -77,7 +77,9 @@ func ResetProfile() {
 // State is one generation session: the KV cache plus the scratch buffers the
 // forward pass reuses. One State is one conversation; it is not safe to share.
 type State struct {
-	m *Model
+	// rlBases and rlEnds are relocateRows' per-sequence spans.
+	rlBases, rlEnds []int
+	m               *Model
 	// pending is the move between devices PrepareMove started and no Commit
 	// or Cancel has ended (moveblocks.go).
 	pending *PendingMove
@@ -596,12 +598,11 @@ type State struct {
 	// HostPicked says the last prefill did. A decision readout sets them.
 	HostPick     []int32
 	HostPickVals []float32
-	HostPicked   bool
-	// pickView is pickOnHost's view of the output matrix at a label's rows,
-	// kept on the State: a view made per label escaped to the heap, an
-	// allocation a label (TestDecisionDoesNotAllocate).
-	pickView nn.Packed
-	pickTmp  [8]float32
+	// pickView and pickTmp are pickOnHost's view of a slot's rows and their
+	// projections, kept here so a warm pick allocates nothing.
+	pickView   nn.Packed
+	pickTmp    [8]float32
+	HostPicked bool
 	// cs is the rotary table for the current position: NRot floats, filled once
 	// per token and read by every head and by the device blocks.
 	cs []float32

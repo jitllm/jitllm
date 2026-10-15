@@ -42,7 +42,6 @@ var goComputeAllowed = map[string]string{
 	"engine/nn/ropeaxes.go:runFreqs":          "a multi-axis rotary's per-pair frequencies, once per configuration",
 	"engine/model/audio.go:encodeAudio":       "a log-mel feature's normalising scale: one scalar per feature from the generated sums, as a tuner's statistics are; every frame's arithmetic is a kernel",
 	"engine/model/audio.go:audioBlocks":       "the relative positions' sinusoids: a table of the clip's row count, geometry as the rotary tables are; no activation is read",
-	"engine/model/audio.go:buildAudio":        "the depthwise bias folded into the BatchNorm's shift, once at load: a load-time constant of the weights",
 	"engine/model/audiodev.go:audioPE":        "the relative positions' sinusoids for a device's scratch: a table of its sizes, built once",
 	"engine/model/audio.go:tables":            "the windowed DFT bases: load-time constant tables of the tower's framing",
 	"engine/model/audio.go:slaneyFilterbank":  "the Slaney mel filterbank: a load-time constant table of the tower's framing",

@@ -78,19 +78,23 @@ const (
 	RoleAGLUGate   Role = 1033 // its second half, the GLU's gate
 	RoleAGLUGateB  Role = 1034
 	RoleADW        Role = 1035 // the depthwise convolution, tap-major [tap][chan]
-	RoleADWB       Role = 1036
-	RoleABNScale   Role = 1037 // BatchNorm folded: x*scale + shift
-	RoleABNShift   Role = 1038
-	RoleAPW2       Role = 1039
-	RoleAPW2B      Role = 1040
-	RoleAFF2Norm   Role = 1041
-	RoleAFF2NormB  Role = 1042
-	RoleAFF2Up     Role = 1043
-	RoleAFF2UpB    Role = 1044
-	RoleAFF2Down   Role = 1045
-	RoleAFF2DownB  Role = 1046
-	RoleAOutNorm   Role = 1047
-	RoleAOutNormB  Role = 1048
+	// RoleADWB is the depthwise convolution's bias as the converter reads
+	// it; it is folded into RoleABNShift and never written to a container.
+	RoleADWB     Role = 1036
+	RoleABNScale Role = 1037 // BatchNorm folded: x*scale + shift
+	// RoleABNShift is the BatchNorm's shift with the depthwise bias folded
+	// in at conversion, dwB*scale + shift, so the module is one affine.
+	RoleABNShift  Role = 1038
+	RoleAPW2      Role = 1039
+	RoleAPW2B     Role = 1040
+	RoleAFF2Norm  Role = 1041
+	RoleAFF2NormB Role = 1042
+	RoleAFF2Up    Role = 1043
+	RoleAFF2UpB   Role = 1044
+	RoleAFF2Down  Role = 1045
+	RoleAFF2DownB Role = 1046
+	RoleAOutNorm  Role = 1047
+	RoleAOutNormB Role = 1048
 
 	// The adapter and the residual correction (dense).
 	RoleAAdNorm  Role = 1060
@@ -120,8 +124,8 @@ var audioRoleNames = map[Role]string{
 	RoleAConvNorm: "a.norm_conv", RoleAConvNormB: "a.norm_conv.bias",
 	RoleAGLUVal: "a.conv_pw1.value", RoleAGLUValB: "a.conv_pw1.value.bias",
 	RoleAGLUGate: "a.conv_pw1.gate", RoleAGLUGateB: "a.conv_pw1.gate.bias",
-	RoleADW: "a.conv_dw", RoleADWB: "a.conv_dw.bias",
-	RoleABNScale: "a.conv_norm", RoleABNShift: "a.conv_norm.bias",
+	RoleADW:      "a.conv_dw",
+	RoleABNScale: "a.conv_norm", RoleABNShift: "a.conv_norm.bias+conv_dw.bias",
 	RoleAPW2: "a.conv_pw2", RoleAPW2B: "a.conv_pw2.bias",
 	RoleAFF2Norm: "a.ffn_norm_1", RoleAFF2NormB: "a.ffn_norm_1.bias",
 	RoleAFF2Up: "a.ffn_up_1", RoleAFF2UpB: "a.ffn_up_1.bias",

@@ -37,3 +37,11 @@ func SwapGateUpForTest(on bool) bool {
 	gateUpSwapped = on
 	return old
 }
+
+// SwapGateUp2ForTest makes every Gate2 FFN (Config.GateUp2) read the two
+// weights the wrong way round, and returns the setting it replaced.
+func SwapGateUp2ForTest(on bool) bool {
+	old := gateUp2Swapped
+	gateUp2Swapped = on
+	return old
+}

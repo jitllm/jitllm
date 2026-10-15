@@ -1641,7 +1641,7 @@ func (s *State) pickOnHost() bool {
 	if q, ok := kernels.QuantOf(w.typ); ok {
 		sl = max(kernels.DSlots(q), 1)
 	}
-	tmp := &s.pickTmp
+	tmp := s.pickTmp[:]
 	if sl > len(tmp) {
 		return false
 	}

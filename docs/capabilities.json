@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "container": {
-    "version": 29,
+    "version": 30,
     "note": "the engine reads only .jlm containers of exactly this version; anything else is converted with `jitllm convert`"
   },
   "input_formats": [

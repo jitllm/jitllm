@@ -327,6 +327,10 @@ func WithPersist(on bool, grid int) Option {
 	return WithConfig(func(c *Config) { c.Persist, c.PersistDeps, c.PersistGrid = on, false, grid })
 }
 
+// WithGateUp2 sets Config.GateUp2: a dense gated FFN's gate and up as one
+// Gate2 matvec writing act(gate)*up. On by default.
+func WithGateUp2(on bool) Option { return WithConfig(func(c *Config) { c.GateUp2 = on }) }
+
 // WithPersistDeps is WithPersist with the persistent kernels' tasks ordered
 // by dependency counters rather than grid barriers (Config.PersistDeps,
 // docs/design/dep-block.md). Off by default.

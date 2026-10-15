@@ -5,6 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"math"
+	"math/rand/v2"
 	"path/filepath"
 	"testing"
 
@@ -334,5 +335,93 @@ func clefDevGateOff(m *Model) func() {
 		m.bind.Lock()
 		m.clefDev = h
 		m.bind.Unlock()
+	}
+}
+
+// TestClefHeadLayerNormOnEveryDevice runs Clef's head on the device over a
+// backbone whose output norm is a LayerNorm with a bias (RULE 8a): the
+// fixture's config turned to a LayerNorm and given a random norm bias, every
+// block placed, the device's head against the host's over the same rows. The
+// violation hands the device the head without its norm bias.
+func TestClefHeadLayerNormOnEveryDevice(t *testing.T) {
+	m := openDecision(t, "clef/fixture/clef-fixture.gguf", jlm.DecisionClef)
+	defer m.Close()
+	m.SetKVF16(false)
+	h, err := m.clefLoad()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.outLN || h.outNormB != nil {
+		t.Fatal("the fixture's output norm is already a LayerNorm: this gate would prove nothing new")
+	}
+	rng := rand.New(rand.NewPCG(7, 8))
+	bias := make([]float32, m.Cfg.NEmbd)
+	for i := range bias {
+		bias[i] = float32(rng.NormFloat64())
+	}
+	// The head's own view of the output norm: the backbone stays as it is.
+	m.bind.Lock()
+	h.outLN, h.outNormB = true, bias
+	m.clefDev = nil // rebuilt with the LayerNorm
+	m.bind.Unlock()
+	defer func() {
+		m.bind.Lock()
+		h.outLN, h.outNormB, m.clefDev = false, nil, nil
+		m.bind.Unlock()
+	}()
+	tol := decisionDevTol["clef-fixture"]
+	nb := decisionBlocks(m)
+	all := func(n int) bool { return n == nb }
+	ran := 0
+	for _, spec := range stepDevices() {
+		probe, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		if err != nil || probe == nil {
+			t.Logf("%s: not present (%v)", spec, err)
+			continue
+		}
+		probe.Close()
+		ran++
+		t.Run(spec, func(t *testing.T) {
+			g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+				tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer g.Close()
+			got, placed, why, runs := decideOn(t, m, g, -1, all)
+			if placed != nb {
+				t.Fatalf("%s held %d of %d blocks (%s)", spec, placed, nb, why)
+			}
+			if runs != len(decisionRequests) {
+				t.Fatalf("the LayerNorm head ran on %s for %d of %d requests", spec, runs, len(decisionRequests))
+			}
+			home, _, _, hp := decideOn(t, m, g, -1, all, "host-head")
+			if hp != 0 {
+				t.Fatalf("the host-head arm ran the head on the device %d times", hp)
+			}
+			w := decisionDiff(t, home, got)
+			t.Logf("the LayerNorm head on %s against the host's over the same rows: %.5f", spec, w)
+			if w > tol {
+				t.Errorf("the device's LayerNorm head answers %.5f from the host's", w)
+			}
+			dh := m.clefDevHead()
+			cp := *dh
+			cp.OutNormB = nil
+			m.bind.Lock()
+			m.clefDev = &cp
+			m.bind.Unlock()
+			bad, _, _, _ := decideOn(t, m, g, -1, all)
+			m.bind.Lock()
+			m.clefDev = dh
+			m.bind.Unlock()
+			seen := decisionDiff(t, home, bad)
+			t.Logf("the head without its norm bias moves the answers %.5f", seen)
+			if seen <= tol {
+				t.Errorf("dropping the norm bias moved the answers %.5f: the gate does not see it", seen)
+			}
+		})
+	}
+	if ran == 0 {
+		noDevice(t, "device", nil)
 	}
 }

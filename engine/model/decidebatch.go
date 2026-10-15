@@ -106,7 +106,7 @@ func (d *Decider) job(i int) *batchJob {
 // (out[i].Err); an error running the batch fails it whole.
 func (d *Decider) DecideBatch(reqs []DecisionRequest) ([]DecisionResult, error) {
 	out := make([]DecisionResult, len(reqs))
-	n := 0
+	n, alone := 0, 0
 	for r := range reqs {
 		rq, res := &reqs[r], &out[r]
 		if res.Err = d.Prepare(rq.State, rq.Questions, len(rq.Images)); res.Err != nil {
@@ -130,6 +130,7 @@ func (d *Decider) DecideBatch(reqs []DecisionRequest) ([]DecisionResult, error) 
 			len(reqs) == 1 && d.trunkShared(rq.Questions) {
 			res.Answers, res.Err = d.DecideMedia(rq.State, rq.Questions, rq.Images, rq.Videos)
 			res.InputTokens = d.InputTokens()
+			alone += res.InputTokens
 			continue
 		}
 		first := n
@@ -173,6 +174,8 @@ func (d *Decider) DecideBatch(reqs []DecisionRequest) ([]DecisionResult, error) 
 	if err := d.runJobs(jobs); err != nil {
 		return nil, err
 	}
+	// InputTokens counts the requests that ran alone too.
+	d.input += alone
 	// The answers, each from its question's variants, in the request's order.
 	at := 0
 	for r := range reqs {
@@ -284,10 +287,11 @@ func (d *Decider) runJobs(jobs []*batchJob) error {
 
 // batchAlone reports whether DecideBatch runs each request alone: a decoder
 // readout whose blocks sit on a device. A gate turns it off to hold the
-// device's batch session to the requests alone.
+// device's batch session to the requests alone, and "batch-alone", which
+// puts a batch of one into the batch session, turns it off with the rest.
 func (d *Decider) batchAlone() bool {
 	return d.kind != jlm.DecisionLaya && d.kind != jlm.DecisionClef && d.st != nil &&
-		d.st.GPULayers() > 0 && d.violation != "device-batch"
+		d.st.GPULayers() > 0 && d.violation != "device-batch" && d.violation != "batch-alone"
 }
 
 // layaPackRows is the most rows a packed encoder pass holds: a device's

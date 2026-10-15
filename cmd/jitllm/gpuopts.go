@@ -222,6 +222,7 @@ func gpuOptions() []tier.Option {
 		{"JITLLM_NO_GPU_MMA", set("JITLLM_NO_GPU_MMA"), func(c *tier.Config) { c.NoMMA = true }},
 		{"JITLLM_GPU_NO_FUSE", set("JITLLM_GPU_NO_FUSE"), func(c *tier.Config) { c.NoFuse = true }},
 		{"JITLLM_GPU_NO_ACTFUSE", set("JITLLM_GPU_NO_ACTFUSE"), func(c *tier.Config) { c.NoActFuse = true }},
+		{"JITLLM_GPU_GATEUP2", os.Getenv("JITLLM_GPU_GATEUP2") == "0", func(c *tier.Config) { c.GateUp2 = false }},
 		{"JITLLM_GPU_ACTIN_SITES", set("JITLLM_GPU_ACTIN_SITES"),
 			func(c *tier.Config) { c.ActInSites = num("JITLLM_GPU_ACTIN_SITES") }},
 		{"JITLLM_GPU_ACTIN_PREFETCH", set("JITLLM_GPU_ACTIN_PREFETCH"),

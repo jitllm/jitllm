@@ -118,12 +118,14 @@ func (s *State) relocateRows(took []int, rows int) {
 		s.relocateUntil(end, room)
 		return
 	}
-	var bases, ends []int
+	// The State's own slices, so a warm step allocates nothing.
+	bases, ends := s.rlBases[:0], s.rlEnds[:0]
 	for q, k := range took {
 		if k > 0 {
 			bases, ends = append(bases, q*s.maxSeq), append(ends, s.bpos[q]+k)
 		}
 	}
+	s.rlBases, s.rlEnds = bases, ends
 	s.relocateUntil(end, func() bool { return room() && sd.ReserveKVSeqs(bases, ends) })
 }
 

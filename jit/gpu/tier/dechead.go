@@ -73,7 +73,7 @@ func (g *devTier) dhUpload(h *nn.ClefHead) (*dhHead, bool) {
 			}
 		}
 	}
-	add(h.OutNorm, h.HidW, h.HidB, h.PMem, h.PQ, h.POQ, h.PG, h.POC, h.POL, h.SumW, h.SumB, h.FieldW, h.FieldB,
+	add(h.OutNorm, h.OutNormB, h.HidW, h.HidB, h.PMem, h.PQ, h.POQ, h.PG, h.POC, h.POL, h.SumW, h.SumB, h.FieldW, h.FieldB,
 		h.OptW, h.OptB, h.Types, h.Sc, h.ScB, h.ScOut, h.ScOutB)
 	for i := range h.Blocks {
 		b := &h.Blocks[i]
@@ -414,7 +414,11 @@ func (g *devTier) dhBuild(h *nn.ClefHead, hd *dhHead, n, nq, no int) (*dhProg, e
 	owner, qtype, zero, mask := buf("owner", no), buf("qtype", nq), buf("zero", max(nq, no)), buf("mask", nq*no)
 	// 1. The output norm, the head's norm, the memory, the pooled rows.
 	hn, hid, mem := buf("hn", n*D), buf("hid", n*D), buf("mem", n*W)
-	norm(hn, resid, n, D, h.OutNorm, nil, h.RMSEps, true)
+	if h.OutLayerNorm {
+		norm(hn, resid, n, D, h.OutNorm, h.OutNormB, h.RMSEps, false)
+	} else {
+		norm(hn, resid, n, D, h.OutNorm, nil, h.RMSEps, true)
+	}
 	norm(hid, hn, n, D, h.HidW, h.HidB, h.Eps, false)
 	linear(mem, hid, n, D, W, h.PMem, nil)
 	pooled := buf("pooled", (nq+1+no)*D)

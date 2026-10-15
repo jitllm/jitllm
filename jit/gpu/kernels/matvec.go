@@ -280,6 +280,14 @@ type MatVecShape struct {
 	// (Tok == NTok), whose token t reads pGate at t*Rows; pGate follows pOut.
 	Gate    bool
 	GateAct ActKind
+	// Gate2 is Gate with the gate's row computed in this launch rather than
+	// read: a second weight stream (pQS2, pD2, pSC2, the gate's weight in up's
+	// format and shape) summed beside up's over the one operand, reduced in
+	// the same order as the gate's own launch, so the row written is the bits
+	// act(gate)*up the separate launches write. One launch where there were
+	// two, and each workgroup reads its rows of both matrices. Decode only:
+	// one token, Rowt 1, no experts, a quantized format, a final-row split.
+	Gate2 bool
 	// NTok is how many token columns this launch computes and Tok how many one
 	// thread carries. Both default to the decode form, which is then unchanged.
 	//
@@ -356,6 +364,13 @@ type MatVecShape struct {
 	// parameters pIn [pNW] in place of pA and pAX.
 	In ActIn
 }
+
+// Gate2Exact reports whether a Gate2 matvec writes the bits of the two
+// launches it replaces on a backend: true where the lowering fixes every
+// rounding (PTX's .rn arithmetic). SPIR-V lowers an Fma as an unfused pair
+// with no NoContraction decoration and MSL compiles with fast math, so a
+// driver may contract the one kernel's sums differently from the other's.
+func Gate2Exact(api string) bool { return api == "ptx" }
 
 // MatVec builds the decode matvec.
 //
@@ -448,6 +463,16 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 			return nil, fmt.Errorf("kernels: MatVec: Gate needs a final-row decode shape and "+
 				"SiLU or GELU (split=%d group=%v experts=%d slots=%d ntok=%d rowt=%d bias=%v act=%v)",
 				s.Split, s.GroupSplit, s.Experts, s.Slots, s.NTok, s.Rowt, s.Bias, s.GateAct)
+		}
+	}
+	if s.Gate2 {
+		ok := (s.GateAct == ActSiLU || s.GateAct == ActGELU) && !s.Gate && s.NTok <= 1 && s.Rowt <= 1 &&
+			s.Experts <= 1 && s.Slots <= 1 && !s.Bias && (s.Split <= 1 || s.GroupSplit) && s.T.info().float == 0 &&
+			s.PickOf == 0 && s.ActRows <= 1 && into == nil
+		if !ok {
+			return nil, fmt.Errorf("kernels: MatVec: Gate2 needs a one-token dense quantized decode shape "+
+				"writing its final row, SiLU or GELU (split=%d group=%v experts=%d ntok=%d rowt=%d bias=%v act=%v)",
+				s.Split, s.GroupSplit, s.Experts, s.NTok, s.Rowt, s.Bias, s.GateAct)
 		}
 	}
 	if s.BiasRows && (!s.Bias || s.NTok < 2 || s.Tok != s.NTok || s.Experts > 1) {
@@ -564,6 +589,9 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 	if s.Gate {
 		name += "_act"
 	}
+	if s.Gate2 {
+		name += "_gu"
+	}
 	if s.BiasRows {
 		name += "_res"
 	}
@@ -628,6 +656,13 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 	if s.Gate {
 		pGate = b.Param("pGate"+suffix, ir.F32)
 	}
+	// Gate2: the gate's weight, the same format and shape as up's (pQS).
+	var pQS2, pD2, pSC2 ir.Value
+	if s.Gate2 {
+		pQS2 = b.Param("pQS2"+suffix, ir.U32)
+		pD2 = b.Param("pD2"+suffix, ir.U32)
+		pSC2 = b.Param("pSC2"+suffix, ir.U32)
+	}
 
 	var pSel ir.Value
 	if experts > 1 {
@@ -660,7 +695,11 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 		if into != nil && into.hasSh {
 			shPart = into.shPart
 		} else {
-			shPart = b.Shared("part", ir.F32, group*max(s.Tok, 1))
+			n := group * max(s.Tok, 1)
+			if s.Gate2 {
+				n = 2 * group
+			}
+			shPart = b.Shared("part", ir.F32, n)
 		}
 	}
 	flat := b.Add(ir.U32, b.Mul(ir.U32, cta(), b.NTID()), b.TID())
@@ -877,18 +916,22 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 	for t := range iaccs {
 		iaccs[t] = b.Const(ir.I32, 0)
 	}
+	// Gate2's second stream: the gate row's own accumulators.
+	var gaccs, giaccs []ir.Value
+	if s.Gate2 {
+		gaccs, giaccs = []ir.Value{b.Phi(ir.F32, zeroF)}, []ir.Value{b.Const(ir.I32, 0)}
+	}
 
 	// aTok is the element stride between one token's activations and the next,
 	// in the u32 words Load counts. It is a compile-time constant, so a token
 	// offset is an IMMEDIATE on the load rather than address arithmetic.
 	aTok := s.K / 4
-	w := wIdx
 	// The activation word is loaded once and reused by every row of the tile.
 	// The memo emits on first use, so at Rowt == 1 the load sits exactly where it
 	// always did and the decode kernels are byte-identical.
 	var amemo map[int64]ir.Value
 	aload := func(off int64) ir.Value {
-		if s.Rowt == 1 {
+		if s.Rowt == 1 && !s.Gate2 {
 			return b.Load(ir.U32, pA, aIdx, off)
 		}
 		if v, ok := amemo[off]; ok {
@@ -898,147 +941,9 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 		amemo[off] = v
 		return v
 	}
-	// The secondary plane is loaded first because it must be combined before
-	// center(): center is affine per byte, so centering the planes separately
-	// would subtract the offset twice. packSub's pairing puts each hi code in
-	// the same byte lane as its nibble, so the combine is one Xor.
-	var hiw [][]ir.Value
-	var hiMask ir.Value
-	lanes := 0
-	if hw > 0 {
-		lanes = 8 / qi.hi
-		hiMask = b.Const(ir.U32, int64(rep4(uint32(1<<uint(qi.hi)-1))))
-		hiw = make([][]ir.Value, s.Rowt)
-		wh := b.Add(ir.U32, w, b.Mul(ir.U32, b.Const(ir.U32, int64(pw)), bankRows))
-		for hwi := 0; hwi < hw; hwi++ {
-			for j := 0; j < s.Rowt; j++ {
-				hiw[j] = append(hiw[j], b.Load(ir.U32, pQS, wh, tileOff(j)))
-			}
-			wh = b.Add(ir.U32, wh, bankRows)
-		}
-	}
-	// hiOf is element group gi's secondary code, already shifted into the
-	// nibble position it occupies in the full weight.
-	hiOf := func(j, gi int) ir.Value {
-		v := hiw[j][gi/lanes]
-		if sh := qi.hi * (gi % lanes); sh > 0 {
-			v = b.Shr(ir.U32, v, b.Const(ir.U32, int64(sh)))
-		}
-		return b.Shl(ir.U32, b.And(ir.U32, v, hiMask), b.Const(ir.U32, int64(qi.bits)))
-	}
-	for u := 0; u < pw; u++ {
-		amemo = map[int64]ir.Value{}
-		for j := 0; j < s.Rowt; j++ {
-			x := b.Load(ir.U32, pQS, w, tileOff(j))
-			if qi.bits == 4 {
-				// Low nibbles are the first half of the sub-block and high nibbles the
-				// second, not interleaved, so word u feeds activation words u and
-				// u + awords/2.
-				loQ := b.And(ir.U32, x, mask)
-				hiQ := b.And(ir.U32, b.Shr(ir.U32, x, four), mask)
-				if qi.codes != nil {
-					loQ, hiQ = decodeE2M1(b, loQ), decodeE2M1(b, hiQ)
-				}
-				if hw > 0 {
-					// Xor, not Or: the planes occupy disjoint bits, and the IR
-					// has no Or.
-					loQ = b.Xor(ir.U32, loQ, hiOf(j, u))
-					hiQ = b.Xor(ir.U32, hiQ, hiOf(j, u+pw))
-				}
-				lo := center(loQ)
-				hi := center(hiQ)
-				for t := 0; t < s.Tok; t++ {
-					o := int64(t * aTok)
-					n := j*s.Tok + t
-					iaccs[n] = dot4(lo, aload(int64(u)+o), iaccs[n])
-					iaccs[n] = dot4(hi, aload(int64(u+awords/2)+o), iaccs[n])
-				}
-			} else if qi.bits == 2 {
-				// TQ2's four 2-bit fields: field fi of word u is the elements
-				// a field-run on, activation word u + fi*pw (packSub).
-				m3 := b.Const(ir.U32, 0x03030303)
-				for fi := 0; fi < 4; fi++ {
-					q := x
-					if fi > 0 {
-						q = b.Shr(ir.U32, x, b.Const(ir.U32, int64(2*fi)))
-					}
-					qc := center(b.And(ir.U32, q, m3))
-					for t := 0; t < s.Tok; t++ {
-						n := j*s.Tok + t
-						iaccs[n] = dot4(qc, aload(int64(u+fi*pw)+int64(t*aTok)), iaccs[n])
-					}
-				}
-			} else {
-				xc := center(x)
-				for t := 0; t < s.Tok; t++ {
-					n := j*s.Tok + t
-					iaccs[n] = dot4(xc, aload(int64(u)+int64(t*aTok)), iaccs[n])
-				}
-			}
-		}
-		w = b.Add(ir.U32, w, bankRows)
-	}
-	for hwi := 0; hwi < hw; hwi++ {
-		w = b.Add(ir.U32, w, bankRows) // the secondary words were read above
-	}
-	// fdots are a float format's per-(row, token) dot products over this
-	// sub-block: the raw weight times the float activation.
-	var fdots []ir.Value
-	if qi.float > 0 {
-		fdots = make([]ir.Value, s.Rowt*s.Tok)
-		for n := range fdots {
-			fdots[n] = zeroF
-		}
-		// aIdx counts int8 activation words, four elements each.
-		xi := b.Mul(ir.U32, aIdx, four)
-		// weight is element i of tile row j's sub-block.
-		weight := func(j, i int) ir.Value {
-			off := int64(j*fw + i*qi.float/4)
-			x := b.Load(ir.U32, pQS, w, off)
-			switch {
-			case qi.float == 4:
-				return b.Bitcast(ir.F32, x)
-			case qi.bf16 && i%2 == 0:
-				return b.Bitcast(ir.F32, b.Shl(ir.U32, x, b.Const(ir.U32, 16)))
-			case qi.bf16:
-				return b.Bitcast(ir.F32, b.And(ir.U32, x, b.Const(ir.U32, 0xFFFF0000)))
-			case i%2 == 0:
-				return b.CvtF16H(x)
-			default:
-				return b.CvtF16H(b.Shr(ir.U32, x, b.Const(ir.U32, 16)))
-			}
-		}
-		for u := 0; u < awords; u++ {
-			acts := make([][4]ir.Value, s.Tok)
-			for t := range acts {
-				for i := range acts[t] {
-					acts[t][i] = b.Load(ir.F32, pX, xi, int64(4*u+i+t*s.K))
-				}
-			}
-			for j := 0; j < s.Rowt; j++ {
-				for i := 0; i < 4; i++ {
-					wv := weight(j, 4*u+i)
-					for t := 0; t < s.Tok; t++ {
-						n := j*s.Tok + t
-						fdots[n] = b.Fma(wv, acts[t][i], fdots[n])
-					}
-				}
-			}
-		}
-		w = b.Add(ir.U32, w, b.Const(ir.U32, int64(fsub)))
-	}
-
-	// value = d_a * (scale*dot - bias*sum(a)).
-	//
-	// The scale is rebuilt from a super-block f16 and a per-sub-block integer,
-	// which is both exact and smaller than a folded f32 -- see qtab.
-	super := subIdx
-	if qi.perSuper > 1 {
-		super = b.Shr(ir.U32, subIdx, b.Const(ir.U32, int64(log2(qi.perSuper))))
-	}
 	// The tile's rows share everything on the activation side (scale, per-16
 	// sums and their addressing), so that half is emitted on the first pass and
-	// reused, which also keeps Rowt == 1 emitting its original sequence.
+	// reused (by the second weight stream too, Gate2), which also keeps Rowt == 1 emitting its original sequence.
 	var das []ir.Value
 	var da, aBlk, axIdx ir.Value
 	var sumAFor func(int) ir.Value
@@ -1053,151 +958,303 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 		sumMemo[t] = v
 		return v
 	}
-	for j := 0; j < s.Rowt; j++ {
+	// stream emits one weight stream's sums into accs: the payload, scales and
+	// minima at pQS, pD and pSC against the shared activation. It returns the
+	// payload index past this sub-block. Gate2 runs it twice, the gate's weights
+	// beside up's, so both rows are read in one pass over the operand.
+	stream := func(pQS, pD, pSC ir.Value, accs, iaccs []ir.Value) ir.Value {
+		w := wIdx
+		// The secondary plane is loaded first because it must be combined before
+		// center(): center is affine per byte, so centering the planes separately
+		// would subtract the offset twice. packSub's pairing puts each hi code in
+		// the same byte lane as its nibble, so the combine is one Xor.
+		var hiw [][]ir.Value
+		var hiMask ir.Value
+		lanes := 0
+		if hw > 0 {
+			lanes = 8 / qi.hi
+			hiMask = b.Const(ir.U32, int64(rep4(uint32(1<<uint(qi.hi)-1))))
+			hiw = make([][]ir.Value, s.Rowt)
+			wh := b.Add(ir.U32, w, b.Mul(ir.U32, b.Const(ir.U32, int64(pw)), bankRows))
+			for hwi := 0; hwi < hw; hwi++ {
+				for j := 0; j < s.Rowt; j++ {
+					hiw[j] = append(hiw[j], b.Load(ir.U32, pQS, wh, tileOff(j)))
+				}
+				wh = b.Add(ir.U32, wh, bankRows)
+			}
+		}
+		// hiOf is element group gi's secondary code, already shifted into the
+		// nibble position it occupies in the full weight.
+		hiOf := func(j, gi int) ir.Value {
+			v := hiw[j][gi/lanes]
+			if sh := qi.hi * (gi % lanes); sh > 0 {
+				v = b.Shr(ir.U32, v, b.Const(ir.U32, int64(sh)))
+			}
+			return b.Shl(ir.U32, b.And(ir.U32, v, hiMask), b.Const(ir.U32, int64(qi.bits)))
+		}
+		for u := 0; u < pw; u++ {
+			if amemo == nil || !s.Gate2 {
+				amemo = map[int64]ir.Value{}
+			}
+			for j := 0; j < s.Rowt; j++ {
+				x := b.Load(ir.U32, pQS, w, tileOff(j))
+				if qi.bits == 4 {
+					// Low nibbles are the first half of the sub-block and high nibbles the
+					// second, not interleaved, so word u feeds activation words u and
+					// u + awords/2.
+					loQ := b.And(ir.U32, x, mask)
+					hiQ := b.And(ir.U32, b.Shr(ir.U32, x, four), mask)
+					if qi.codes != nil {
+						loQ, hiQ = decodeE2M1(b, loQ), decodeE2M1(b, hiQ)
+					}
+					if hw > 0 {
+						// Xor, not Or: the planes occupy disjoint bits, and the IR
+						// has no Or.
+						loQ = b.Xor(ir.U32, loQ, hiOf(j, u))
+						hiQ = b.Xor(ir.U32, hiQ, hiOf(j, u+pw))
+					}
+					lo := center(loQ)
+					hi := center(hiQ)
+					for t := 0; t < s.Tok; t++ {
+						o := int64(t * aTok)
+						n := j*s.Tok + t
+						iaccs[n] = dot4(lo, aload(int64(u)+o), iaccs[n])
+						iaccs[n] = dot4(hi, aload(int64(u+awords/2)+o), iaccs[n])
+					}
+				} else if qi.bits == 2 {
+					// TQ2's four 2-bit fields: field fi of word u is the elements
+					// a field-run on, activation word u + fi*pw (packSub).
+					m3 := b.Const(ir.U32, 0x03030303)
+					for fi := 0; fi < 4; fi++ {
+						q := x
+						if fi > 0 {
+							q = b.Shr(ir.U32, x, b.Const(ir.U32, int64(2*fi)))
+						}
+						qc := center(b.And(ir.U32, q, m3))
+						for t := 0; t < s.Tok; t++ {
+							n := j*s.Tok + t
+							iaccs[n] = dot4(qc, aload(int64(u+fi*pw)+int64(t*aTok)), iaccs[n])
+						}
+					}
+				} else {
+					xc := center(x)
+					for t := 0; t < s.Tok; t++ {
+						n := j*s.Tok + t
+						iaccs[n] = dot4(xc, aload(int64(u)+int64(t*aTok)), iaccs[n])
+					}
+				}
+			}
+			w = b.Add(ir.U32, w, bankRows)
+		}
+		for hwi := 0; hwi < hw; hwi++ {
+			w = b.Add(ir.U32, w, bankRows) // the secondary words were read above
+		}
+		// fdots are a float format's per-(row, token) dot products over this
+		// sub-block: the raw weight times the float activation.
+		var fdots []ir.Value
 		if qi.float > 0 {
-			// No scale on either side: the dot is the value.
-			for t := 0; t < s.Tok; t++ {
-				n := j*s.Tok + t
-				b.SetPhi(accs[n], b.Add(ir.F32, accs[n], fdots[n]))
+			fdots = make([]ir.Value, s.Rowt*s.Tok)
+			for n := range fdots {
+				fdots[n] = zeroF
 			}
-			continue
-		}
-		// One d word per super-block: d in the low half, dmin in the high (zero
-		// without a minimum array). On a narrow format several rows share a word
-		// (kernels.DIndex pairs rows), and the slot is a runtime shift here. MXFP4
-		// packs four E8M0 bytes, and a byte shifted left 23 is the f32 scale.
-		var dw ir.Value
-		var d ir.Value
-		if n := DSlots(s.T); n > 1 {
-			rowj := b.Add(ir.U32, wsel, b.Const(ir.U32, tileOff(j)))
-			idx := dExpAdd(b.Add(ir.U32,
-				b.Mul(ir.U32, super, b.Const(ir.U32, int64((wrows+n-1)/n))),
-				b.Shr(ir.U32, rowj, b.Const(ir.U32, int64(log2(n))))))
-			w := b.Load(ir.U32, pD, idx, 0)
-			// Shift and mask, not Div and Rem: DSlots is a power of two, and this
-			// form keeps the two-slot IR identical to the lowertest goldens.
-			slot := b.And(ir.U32, rowj, b.Const(ir.U32, int64(n-1)))
-			dw = b.Shr(ir.U32, w, b.Mul(ir.U32, slot, b.Const(ir.U32, int64(32/n))))
-		} else {
-			dw = b.Load(ir.U32, pD, b.Add(ir.U32, wrowD, b.Mul(ir.U32, super, bankRows)), tileOff(j))
-		}
-		switch {
-		case qi.e8m0:
-			d = b.Bitcast(ir.F32, b.Shl(ir.U32,
-				b.And(ir.U32, dw, b.Const(ir.U32, 0xFF)), b.Const(ir.U32, 23)))
-		case qi.d32:
-			d = b.Bitcast(ir.F32, dw) // TQ2F: the word is the scale
-		default:
-			d = b.CvtF16H(dw)
-		}
-		var dmin ir.Value
-		if qi.biasArray {
-			dmin = b.CvtF16H(b.Shr(ir.U32, dw, b.Const(ir.U32, 16)))
-		}
-		scale := d
-		var mInt ir.Value
-		if ScStream(s.T) {
-			// Container v27's 96-bit stream (scstream.go).
-			lo, hi, bit := scStreamAt(b, subIdx)
-			ld := func(w ir.Value) ir.Value {
-				return b.Load(ir.U32, pSC, b.Add(ir.U32, wrowSC, b.Mul(ir.U32, w, bankRows)), tileOff(j))
-			}
-			sc, m := scStreamPair(b, ld(lo), ld(hi), bit)
-			scale, mInt = b.Mul(ir.F32, d, b.CvtF32(sc)), m
-		} else if qi.perSuper > 1 {
-			// Integer scales packed into bytes: two per sub-block when the format
-			// carries a minimum, one otherwise.
-			perWord := 4
-			if qi.biasArray {
-				perWord = 2
-			}
-			wi := b.Shr(ir.U32, subIdx, b.Const(ir.U32, int64(log2(perWord))))
-			sw := b.Load(ir.U32, pSC, b.Add(ir.U32, wrowSC, b.Mul(ir.U32, wi, bankRows)), tileOff(j))
-			lane := b.And(ir.U32, subIdx, b.Const(ir.U32, int64(perWord-1)))
-			stride := 8
-			if qi.biasArray {
-				stride = 16
-			}
-			base := b.Mul(ir.U32, lane, b.Const(ir.U32, int64(stride)))
-			sc := b.And(ir.U32, b.Shr(ir.U32, sw, base), b.Const(ir.U32, 0xFF))
-			scI := sc
-			if qi.scOff != 0 {
-				scI = b.Sub(ir.I32, sc, b.Const(ir.I32, int64(-qi.scOff)))
-			}
-			scale = b.Mul(ir.F32, d, b.CvtF32(scI))
-			if qi.biasArray {
-				m := b.And(ir.U32, b.Shr(ir.U32, sw, b.Add(ir.U32, base, b.Const(ir.U32, 8))),
-					b.Const(ir.U32, 0xFF))
-				mInt = m
-			}
-		}
-		// The activation scale is per 32 elements; a 16-element sub-block shares one
-		// with its neighbour, which is what the divide by 32/sub selects.
-		if j == 0 {
-			aBlk = subIdx
-			if qi.sub == 16 {
-				aBlk = b.Shr(ir.U32, subIdx, one)
-			}
-			// Shift first, then add the base: adding the slot base before halving
-			// lands on another slot's scale.
-			axIdx = subIdx
-			if slotAct {
-				aBlk = b.Add(ir.U32, aBlk, axS)
-				axIdx = b.Add(ir.U32, subIdx, axU)
-			}
-			// Each token column has its own activation scale and sums, one nb and
-			// one K/16 apart. Emitted once each rather than per use, which keeps the
-			// Tok == 1 kernel byte-identical.
-			das = make([]ir.Value, s.Tok)
-			for t := range das {
-				das[t] = b.Load(ir.F32, pAX, aBlk, int64(t*nb))
-			}
-			da = das[0]
-			// sum(a) over this sub-block, from the per-16 array. Only loaded where
-			// the bias term survives (not Q8_0, whose zero point is 0).
-			sumAFor = func(t int) ir.Value {
-				o := int64(t * (s.K / 16))
-				if qi.sub == 16 {
-					return b.Load(ir.F32, pAX, axIdx, sumOff+o)
+			// aIdx counts int8 activation words, four elements each.
+			xi := b.Mul(ir.U32, aIdx, four)
+			// weight is element i of tile row j's sub-block.
+			weight := func(j, i int) ir.Value {
+				off := int64(j*fw + i*qi.float/4)
+				x := b.Load(ir.U32, pQS, w, off)
+				switch {
+				case qi.float == 4:
+					return b.Bitcast(ir.F32, x)
+				case qi.bf16 && i%2 == 0:
+					return b.Bitcast(ir.F32, b.Shl(ir.U32, x, b.Const(ir.U32, 16)))
+				case qi.bf16:
+					return b.Bitcast(ir.F32, b.And(ir.U32, x, b.Const(ir.U32, 0xFFFF0000)))
+				case i%2 == 0:
+					return b.CvtF16H(x)
+				default:
+					return b.CvtF16H(b.Shr(ir.U32, x, b.Const(ir.U32, 16)))
 				}
-				i0 := b.Mul(ir.U32, subIdx, b.Const(ir.U32, 2))
-				if slotAct {
-					i0 = b.Add(ir.U32, i0, axU)
-				}
-				return b.Add(ir.F32, b.Load(ir.F32, pAX, i0, sumOff+o),
-					b.Load(ir.F32, pAX, i0, sumOff+o+1))
 			}
+			for u := 0; u < awords; u++ {
+				acts := make([][4]ir.Value, s.Tok)
+				for t := range acts {
+					for i := range acts[t] {
+						acts[t][i] = b.Load(ir.F32, pX, xi, int64(4*u+i+t*s.K))
+					}
+				}
+				for j := 0; j < s.Rowt; j++ {
+					for i := 0; i < 4; i++ {
+						wv := weight(j, 4*u+i)
+						for t := 0; t < s.Tok; t++ {
+							n := j*s.Tok + t
+							fdots[n] = b.Fma(wv, acts[t][i], fdots[n])
+						}
+					}
+				}
+			}
+			w = b.Add(ir.U32, w, b.Const(ir.U32, int64(fsub)))
 		}
-		// The scale is factored out of the bias term for a constant zero point:
+
+		// value = d_a * (scale*dot - bias*sum(a)).
 		//
-		//	scale*dot - (biasK*scale)*sum   ==   scale*(dot - biasK*sum)
-		//
-		// dot and biasK*sum are integers below 2^24 for every shipped format, so the
-		// subtraction is exact and the multiply is the only rounding. It is neutral
-		// on Metal (MSL's default fast math already reassociates) and strictly less
-		// IR on PTX and SPIR-V. Q4_K and Q5_K keep the expanded form: their bias is
-		// an independent array value, with nothing to factor.
-		for t := 0; t < s.Tok; t++ {
-			var v ir.Value
+		// The scale is rebuilt from a super-block f16 and a per-sub-block integer,
+		// which is both exact and smaller than a folded f32 -- see qtab.
+		super := subIdx
+		if qi.perSuper > 1 {
+			super = b.Shr(ir.U32, subIdx, b.Const(ir.U32, int64(log2(qi.perSuper))))
+		}
+		for j := 0; j < s.Rowt; j++ {
+			if qi.float > 0 {
+				// No scale on either side: the dot is the value.
+				for t := 0; t < s.Tok; t++ {
+					n := j*s.Tok + t
+					b.SetPhi(accs[n], b.Add(ir.F32, accs[n], fdots[n]))
+				}
+				continue
+			}
+			// One d word per super-block: d in the low half, dmin in the high (zero
+			// without a minimum array). On a narrow format several rows share a word
+			// (kernels.DIndex pairs rows), and the slot is a runtime shift here. MXFP4
+			// packs four E8M0 bytes, and a byte shifted left 23 is the f32 scale.
+			var dw ir.Value
+			var d ir.Value
+			if n := DSlots(s.T); n > 1 {
+				rowj := b.Add(ir.U32, wsel, b.Const(ir.U32, tileOff(j)))
+				idx := dExpAdd(b.Add(ir.U32,
+					b.Mul(ir.U32, super, b.Const(ir.U32, int64((wrows+n-1)/n))),
+					b.Shr(ir.U32, rowj, b.Const(ir.U32, int64(log2(n))))))
+				w := b.Load(ir.U32, pD, idx, 0)
+				// Shift and mask, not Div and Rem: DSlots is a power of two, and this
+				// form keeps the two-slot IR identical to the lowertest goldens.
+				slot := b.And(ir.U32, rowj, b.Const(ir.U32, int64(n-1)))
+				dw = b.Shr(ir.U32, w, b.Mul(ir.U32, slot, b.Const(ir.U32, int64(32/n))))
+			} else {
+				dw = b.Load(ir.U32, pD, b.Add(ir.U32, wrowD, b.Mul(ir.U32, super, bankRows)), tileOff(j))
+			}
 			switch {
-			case qi.biasArray:
-				bias := dmin // Q5_1: no sc plane and m is one (MinInD)
-				if qi.perSuper > 1 {
-					bias = b.Mul(ir.F32, dmin, b.CvtF32(mInt))
-				}
-				v = b.Sub(ir.F32, b.Mul(ir.F32, b.CvtF32(iaccs[j*s.Tok+t]), scale), b.Mul(ir.F32, sumOf(t), bias))
-			case qi.biasK == 0 || centered:
-				// centered: the weights already carry -biasK, so the integer
-				// dot is the corrected dot and sumOf(t) is never referenced.
-				v = b.Mul(ir.F32, b.CvtF32(iaccs[j*s.Tok+t]), scale)
+			case qi.e8m0:
+				d = b.Bitcast(ir.F32, b.Shl(ir.U32,
+					b.And(ir.U32, dw, b.Const(ir.U32, 0xFF)), b.Const(ir.U32, 23)))
+			case qi.d32:
+				d = b.Bitcast(ir.F32, dw) // TQ2F: the word is the scale
 			default:
-				v = b.Mul(ir.F32, scale, b.Fma(negBiasK, sumOf(t), b.CvtF32(iaccs[j*s.Tok+t])))
+				d = b.CvtF16H(dw)
 			}
-			n := j*s.Tok + t
-			b.SetPhi(accs[n], b.Fma(v, das[t], accs[n]))
+			var dmin ir.Value
+			if qi.biasArray {
+				dmin = b.CvtF16H(b.Shr(ir.U32, dw, b.Const(ir.U32, 16)))
+			}
+			scale := d
+			var mInt ir.Value
+			if ScStream(s.T) {
+				// Container v27's 96-bit stream (scstream.go).
+				lo, hi, bit := scStreamAt(b, subIdx)
+				ld := func(w ir.Value) ir.Value {
+					return b.Load(ir.U32, pSC, b.Add(ir.U32, wrowSC, b.Mul(ir.U32, w, bankRows)), tileOff(j))
+				}
+				sc, m := scStreamPair(b, ld(lo), ld(hi), bit)
+				scale, mInt = b.Mul(ir.F32, d, b.CvtF32(sc)), m
+			} else if qi.perSuper > 1 {
+				// Integer scales packed into bytes: two per sub-block when the format
+				// carries a minimum, one otherwise.
+				perWord := 4
+				if qi.biasArray {
+					perWord = 2
+				}
+				wi := b.Shr(ir.U32, subIdx, b.Const(ir.U32, int64(log2(perWord))))
+				sw := b.Load(ir.U32, pSC, b.Add(ir.U32, wrowSC, b.Mul(ir.U32, wi, bankRows)), tileOff(j))
+				lane := b.And(ir.U32, subIdx, b.Const(ir.U32, int64(perWord-1)))
+				stride := 8
+				if qi.biasArray {
+					stride = 16
+				}
+				base := b.Mul(ir.U32, lane, b.Const(ir.U32, int64(stride)))
+				sc := b.And(ir.U32, b.Shr(ir.U32, sw, base), b.Const(ir.U32, 0xFF))
+				scI := sc
+				if qi.scOff != 0 {
+					scI = b.Sub(ir.I32, sc, b.Const(ir.I32, int64(-qi.scOff)))
+				}
+				scale = b.Mul(ir.F32, d, b.CvtF32(scI))
+				if qi.biasArray {
+					m := b.And(ir.U32, b.Shr(ir.U32, sw, b.Add(ir.U32, base, b.Const(ir.U32, 8))),
+						b.Const(ir.U32, 0xFF))
+					mInt = m
+				}
+			}
+			// The activation scale is per 32 elements; a 16-element sub-block shares one
+			// with its neighbour, which is what the divide by 32/sub selects.
+			if das == nil {
+				aBlk = subIdx
+				if qi.sub == 16 {
+					aBlk = b.Shr(ir.U32, subIdx, one)
+				}
+				// Shift first, then add the base: adding the slot base before halving
+				// lands on another slot's scale.
+				axIdx = subIdx
+				if slotAct {
+					aBlk = b.Add(ir.U32, aBlk, axS)
+					axIdx = b.Add(ir.U32, subIdx, axU)
+				}
+				// Each token column has its own activation scale and sums, one nb and
+				// one K/16 apart. Emitted once each rather than per use, which keeps the
+				// Tok == 1 kernel byte-identical.
+				das = make([]ir.Value, s.Tok)
+				for t := range das {
+					das[t] = b.Load(ir.F32, pAX, aBlk, int64(t*nb))
+				}
+				da = das[0]
+				// sum(a) over this sub-block, from the per-16 array. Only loaded where
+				// the bias term survives (not Q8_0, whose zero point is 0).
+				sumAFor = func(t int) ir.Value {
+					o := int64(t * (s.K / 16))
+					if qi.sub == 16 {
+						return b.Load(ir.F32, pAX, axIdx, sumOff+o)
+					}
+					i0 := b.Mul(ir.U32, subIdx, b.Const(ir.U32, 2))
+					if slotAct {
+						i0 = b.Add(ir.U32, i0, axU)
+					}
+					return b.Add(ir.F32, b.Load(ir.F32, pAX, i0, sumOff+o),
+						b.Load(ir.F32, pAX, i0, sumOff+o+1))
+				}
+			}
+			// The scale is factored out of the bias term for a constant zero point:
+			//
+			//	scale*dot - (biasK*scale)*sum   ==   scale*(dot - biasK*sum)
+			//
+			// dot and biasK*sum are integers below 2^24 for every shipped format, so the
+			// subtraction is exact and the multiply is the only rounding. It is neutral
+			// on Metal (MSL's default fast math already reassociates) and strictly less
+			// IR on PTX and SPIR-V. Q4_K and Q5_K keep the expanded form: their bias is
+			// an independent array value, with nothing to factor.
+			for t := 0; t < s.Tok; t++ {
+				var v ir.Value
+				switch {
+				case qi.biasArray:
+					bias := dmin // Q5_1: no sc plane and m is one (MinInD)
+					if qi.perSuper > 1 {
+						bias = b.Mul(ir.F32, dmin, b.CvtF32(mInt))
+					}
+					v = b.Sub(ir.F32, b.Mul(ir.F32, b.CvtF32(iaccs[j*s.Tok+t]), scale), b.Mul(ir.F32, sumOf(t), bias))
+				case qi.biasK == 0 || centered:
+					// centered: the weights already carry -biasK, so the integer
+					// dot is the corrected dot and sumOf(t) is never referenced.
+					v = b.Mul(ir.F32, b.CvtF32(iaccs[j*s.Tok+t]), scale)
+				default:
+					v = b.Mul(ir.F32, scale, b.Fma(negBiasK, sumOf(t), b.CvtF32(iaccs[j*s.Tok+t])))
+				}
+				n := j*s.Tok + t
+				b.SetPhi(accs[n], b.Fma(v, das[t], accs[n]))
+			}
 		}
+		_ = da
+		return w
 	}
-	_ = da
+	w := stream(pQS, pD, pSC, accs, iaccs)
+	if s.Gate2 {
+		stream(pQS2, pD2, pSC2, gaccs, giaccs)
+	}
 
 	b.SetPhi(wIdx, w)
 	b.SetPhi(aIdx, b.Add(ir.U32, aIdx, b.Const(ir.U32, int64(awords))))
@@ -1237,12 +1294,17 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 		}
 		return b.Load(ir.F32, pBias, orow, off)
 	}
-	gateMul := func(j, t int, u ir.Value) ir.Value {
+	gateMul := func(j, t int, u ir.Value, own bool, gv ir.Value) ir.Value {
 		gi := orow
 		if experts > 1 {
 			gi = b.Add(ir.U32, b.Mul(ir.U32, slot, orows), orow)
 		}
-		g := b.Load(ir.F32, pGate, gi, tileOff(j)+int64(t*s.Rows))
+		var g ir.Value
+		if own {
+			g = gv
+		} else {
+			g = b.Load(ir.F32, pGate, gi, tileOff(j)+int64(t*s.Rows))
+		}
 		if s.GateAct == ActSwiGLUOAI {
 			// ActMul's swiglu-oai, element for element: the gate clamped at
 			// 7 through QuickGELU, the up clamped to [-7, 7] and offset by 1.
@@ -1258,6 +1320,11 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 		for t := 0; t < s.Tok; t++ {
 			b.Store(shPart, b.TID(), accs[t], int64(t*group))
 		}
+		if s.Gate2 {
+			// The gate's partials one group further along: shared memory is
+			// sized 2*group for it.
+			b.Store(shPart, b.TID(), gaccs[0], int64(group))
+		}
 		b.Barrier()
 		for t := 0; t < s.Tok; t++ {
 			sum := b.Load(ir.F32, shPart, rowLocal, int64(t*group))
@@ -1270,7 +1337,16 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 				sum = b.Add(ir.F32, sum, biasAt(0, t))
 			}
 			if s.Gate {
-				sum = gateMul(0, t, sum)
+				sum = gateMul(0, t, sum, false, 0)
+			}
+			if s.Gate2 {
+				// The gate's row reduced in the same order as up's, which is
+				// the order the gate's own launch reduces it in.
+				gs := b.Load(ir.F32, shPart, rowLocal, int64(group))
+				for sg := 1; sg < split; sg++ {
+					gs = b.Add(ir.F32, gs, b.Load(ir.F32, shPart, rowLocal, int64(group+sg*rpg)))
+				}
+				sum = gateMul(0, t, sum, true, gs)
 			}
 			if experts > 1 {
 				// The slot's output rows at the launch's own stride.
@@ -1296,7 +1372,10 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 				a = b.Add(ir.F32, a, bv)
 			}
 			if s.Gate {
-				a = gateMul(j, t, a)
+				a = gateMul(j, t, a, false, 0)
+			}
+			if s.Gate2 {
+				a = gateMul(j, t, a, true, gaccs[0])
 			}
 			// Token t is t*Rows further along the output; tile row j is the next
 			// row, so the tile's outputs are contiguous like its inputs.

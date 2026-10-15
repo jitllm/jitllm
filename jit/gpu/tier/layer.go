@@ -1107,6 +1107,9 @@ type mv struct {
 	// ActMul launch goes. nil elsewhere, and on a split whose last pass is a
 	// reduce (which would have to apply it instead).
 	gated backend.Kernel
+	// gate2 is gated summing the gate's row itself (kernels.MatVecShape.Gate2):
+	// gate and up in one launch (Config.GateUp2). Built beside gated.
+	gate2 backend.Kernel
 	// resIn, gatedIn and kernIn are res, gated and kern building their own
 	// operand (kernels.ActIn) from the float row: pIn [pNW] in pA/pAX's
 	// place. Built by fuseActIn; nil where the block cannot take them.
@@ -3092,6 +3095,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if i == 5 && e <= 1 && bias[i] == nil && !ungatedFFN(p) && k.kern != nil && k.rowt <= 1 &&
 			(p.Act == kernels.ActSiLU || p.Act == kernels.ActGELU) {
 			k.gated = g.gatedKernel(k.q, k.k, k.rows, k.split, k.group, p.Act)
+			k.gate2 = g.gate2Kernel(k.q, k.k, k.rows, k.split, k.group, p.Act)
 			// nil at a partial-writing split; the retune builds it once the
 			// split it picks has a final-row form.
 			k.wantGated = true
@@ -6215,6 +6219,9 @@ type graphKey struct {
 	// gateUp says the dense FFNs ran gate and up as one launch
 	// (Config.GateUpFuse).
 	gateUp bool
+	// gateUp2 says the dense FFNs ran gate and up as one Gate2 launch
+	// (Config.GateUp2).
+	gateUp2 bool
 	// sid is the session the recording was made for: it bakes that session's
 	// page descriptors and recurrent seats, so another session never replays
 	// it. Keying on it, rather than dropping every recording when the current
@@ -6717,7 +6724,13 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// home, whose uploads sit between launches.
 	persistOn := R == 1 && rag == nil && !(bs.pkv != nil && bs.pkv.st != nil) && g.ensurePersist()
 	key := graphKey{lo, hi, nCap, R, head != nil, g.TableSplit, g.ScalarSoftmax, g.flashOn(), g.KVF16,
-		ropeDev, argmax, sampleK, samplePen, pick, ragN, ragRuns, par, pagedVar, ragHead, hNormID, persistOn, persistOn && g.PersistDeps, g.GateUpFuse, sid, g.NoFuse, g.NoActFuse}
+		ropeDev, argmax, sampleK, samplePen, pick, ragN, ragRuns, par, pagedVar, ragHead, hNormID, persistOn, persistOn && g.PersistDeps, g.GateUpFuse, g.GateUp2, sid, g.NoFuse, g.NoActFuse}
+	if lo == hi {
+		// The head alone reads no history, so the capacity is not part of
+		// what it records: keyed by it, prompts on either side of a growth
+		// would retire each other's recording on every call.
+		key.scoreN = 0
+	}
 	if _, live := g.recs[key]; !live {
 		for k, r := range g.recs {
 			older := k
@@ -8440,7 +8453,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					}
 				}
 				gIn, uIn := bs.g, bs.u
-				guDone := false
+				guDone, gu2 := false, false
 				if l.clampB != nil && !ungated {
 					// Gemma 4's clipped linears: gate and up each read their own
 					// clamped copy of the normed rows, and the activation their
@@ -8477,14 +8490,25 @@ func (g *devTier) layersSession(s backend.Session) {
 					g.GateUpFused++
 					ffnFused = true
 					guDone = true
+				} else if gu2 = g.gateUp2On(l, R, rag != nil, voltaOnly, ungated, skip["actmul"]); gu2 {
+					// Gate and up in one launch: up's weight, the operand, the
+					// product's row, then the gate's weight (Gate2).
+					wu, wg := l.up, l.gate
+					if gateUp2Swapped {
+						wu, wg = wg, wu
+					}
+					lamv(l.mvu, l.mvu.gate2, l.mvu.rows*l.mvu.split, wu.qs, wu.d, wu.sc, bs.a, bs.ax, bs.act,
+						wg.qs, wg.d, wg.sc)
+					g.GateUp2Runs++
 				} else if !ungated {
 					mvrun(l.mvg, l.gate, bs.g)
 					// Gemma 3n's sparse lead: the gate's gaussian top-k.
 					gIn = g.emitGauss(lc, bs, l, R)
 				}
 				if !guDone {
-					gated := false
+					gated := gu2
 					switch {
+					case gu2:
 					case ffnIn && l.mvu.gatedIn != nil:
 						mvIn(l.mvu, l.mvu.gatedIn, l.up, bs.act, bs.x2, l.nFFN, gIn)
 						gated = true
@@ -9933,7 +9957,7 @@ func (g *devTier) intBatchMV(m mv, ntok, tok int) (mv, bool) {
 	// A float weight has no tensor-core kernel. Asking would fail, and a
 	// failure here switches MMA off for every other matvec (mmaOff).
 	if mt, nt, ok := g.mmaTile(m.rows, ntok); ok && !kernels.IsFloat(m.q) {
-		kk := kernKey{m.q, m.k, m.rows, -(ntok*100 + mt*10 + nt), m.bias != nil, 1, false, false, 0}
+		kk := kernKey{m.q, m.k, m.rows, -(ntok*100 + mt*10 + nt), m.bias != nil, 1, false, false, 0, false}
 		c, cached := g.kerns[kk]
 		if !cached {
 			ker, err := kernels.MatVecMMA(kernels.MatVecShape{Center: g.center,

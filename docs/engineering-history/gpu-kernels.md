@@ -6428,3 +6428,59 @@ GemmVolta already stages double-buffered (a trip's dequant runs under the
 previous trip's MMAs). At 64 tokens the background tuner's trials
 (WithLazyTune) land among the first prompts' kernels and the first
 prompt's rate is a fraction of the third (8B pp64 535 / 778 / 1850 tok/s).
+
+## Cold TTFT: the background tuner held the lock for a whole trial
+
+A fresh process (empty tune cache) prefilling 64-token prompts dipped to a
+third of its rate on the fourth and fifth prompt. Timestamped trials named the
+cause: the lazy split tuner's trial on the output head (Q6_K 128256x4096) held
+g.mu for ten rounds, 21 ms, and a prompt arriving behind it waited. Each round
+now waits for tuneQuiet and takes the lock alone
+(`TestBackgroundTrialYieldsBetweenRounds`).
+
+V100 (CUDA, GPU 1), `speed -p 64 -n 4 -r 8`, a fresh cache each run, base and
+new interleaved, three pairs. Slowest of the eight prompts, tok/s:
+
+    model                  base               new
+    Llama-3.1-8B Q4_K_M    818 / 526 / 802    1414 / 1472 / 1480
+    Llama-3.2-1B Q4_K_M    1176 / 1892 / 1911 4494 / 4342 / 4516
+
+The base's later prompts read ~1900 on the 8B against the new ~1620: that is
+the clock, not the engine. The V100 idles at 1312 MHz and boosts to 1530 under
+load; the base's dense trials kept it boosted, and a warm cache with no trials
+reads ~1700 on the base binary too (an nvidia-smi trace beside the run showed
+both clocks). A row on this card is not comparable across arms unless its
+clock is reported.
+
+## Gate and up in one launch, each workgroup summing both rows (Gate2)
+
+#167's fusion lost past the 1B (0.95 on 3B, 0.91 on 8B) because every
+workgroup of down redid act(gate)*up and its quantize over the full FFN width.
+Gate2 (`kernels.MatVecShape.Gate2`) moves the fusion the other way: up's
+gated matvec carries the gate's weight as a second stream, sums both rows in
+one pass over the shared operand, reduces the gate's partials in the order the
+gate's own launch reduces them, and writes act(gate)*up. Down keeps its own
+operand, so nothing is recomputed: one launch goes per block.
+
+It is bit-identical on PTX, whose lowering fixes every rounding
+(`backend.TestMatVecGate2IsTheTwoLaunches`, Q8_0/Q4_K/Q6_K at split 1 and the
+in-group splits; `model.TestGateUp2MatchesTwoLaunches` on Llama-3.2-1B with
+every block placed with and without the graph and at a half seam; the swap
+violation `TestGateUp2SeesASwap` moves 384768 of 513024 logits). On SPIR-V it
+is not: Fma lowers to an OpFMul and OpFAdd without NoContraction, and the
+NVIDIA Vulkan driver contracted the two kernels' sums differently (378 of
+1024 Q4_K rows differed in low bits). MSL compiles with fast math. So the tier
+builds it on PTX only (`kernels.Gate2Exact`); elsewhere the backend gate holds
+it to NMSE 1e-10.
+
+V100 (sm_70, CUDA, GPU 1), `verify -ab gateup2`, n=24 interleaved, -n 64,
+`JITLLM_GPU_TUNE=1`, two passes, A/A first in each:
+
+    model                  A/A      Gate2 vs two launches (pass 1 / pass 2)
+    Llama-3.2-1B Q4_K_M    0.9998   1.0222 (IQR 0.8%) / 1.0250 (IQR 0.7%)
+    Llama-3.2-3B Q4_K_M    1.0004   1.0279 (IQR 1.1%) / 1.0202 (IQR 0.9%)
+    Llama-3.1-8B Q4_K_M    1.0011   1.0097 (IQR 0.4%) / 1.0076 (IQR 0.2%)
+
+It is the default (`Config.GateUp2`; `JITLLM_GPU_GATEUP2=0` is the other
+arm). `TestDecodeDoesNotAllocate` holds at zero engine allocations on CUDA
+with it on. No per-shape tuner yet: it won on every shape measured.

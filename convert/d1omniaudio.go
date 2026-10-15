@@ -32,7 +32,7 @@ var d1OmniAudioNames = map[string]jlm.Role{
 	"attn_out.weight": jlm.RoleAOut, "attn_out.bias": jlm.RoleAOutB,
 	"linear_pos.weight": jlm.RoleAPos, "pos_bias_u": jlm.RoleAPosU, "pos_bias_v": jlm.RoleAPosV,
 	"norm_conv.weight": jlm.RoleAConvNorm, "norm_conv.bias": jlm.RoleAConvNormB,
-	"conv_dw.weight": jlm.RoleADW, "conv_dw.bias": jlm.RoleADWB,
+	"conv_dw.weight": jlm.RoleADW, "conv_dw.bias": jlm.RoleADWB, // folded below
 	"conv_norm.weight": jlm.RoleABNScale, "conv_norm.bias": jlm.RoleABNShift,
 	"conv_pw2.weight": jlm.RoleAPW2, "conv_pw2.bias": jlm.RoleAPW2B,
 	"ffn_norm_1.weight": jlm.RoleAFF2Norm, "ffn_norm_1.bias": jlm.RoleAFF2NormB,
@@ -183,10 +183,73 @@ func audioOf(f *meta.File, nVis uint32) (*jlm.Audio, []jlm.Tensor, error) {
 		return nil, nil, fmt.Errorf("convert: clip: the audio encoder carries no depthwise convolution, "+
 			"subsampling or residual correction (%d taps, %d channels, width %d)", a.ConvKernel, a.SubChannels, a.ResWidth)
 	}
+	out, err := d1OmniFoldDWBias(out)
+	if err != nil {
+		return nil, nil, err
+	}
 	if err := quantizeTower(out); err != nil {
 		return nil, nil, err
 	}
 	return a, out, nil
+}
+
+// d1OmniFoldDWBias folds each block's depthwise bias into its BatchNorm
+// shift, dwB*scale + shift (jlm.RoleABNShift), and drops the bias: the
+// depthwise convolution feeds the BatchNorm alone, so the module is one
+// affine and no load or token folds it again.
+func d1OmniFoldDWBias(out []jlm.Tensor) ([]jlm.Tensor, error) {
+	type trio struct{ dwB, scale, shift int }
+	blocks := map[int32]*trio{}
+	at := func(b int32) *trio {
+		if blocks[b] == nil {
+			blocks[b] = &trio{-1, -1, -1}
+		}
+		return blocks[b]
+	}
+	for i := range out {
+		switch out[i].Role {
+		case jlm.RoleADWB:
+			at(out[i].Block).dwB = i
+		case jlm.RoleABNScale:
+			at(out[i].Block).scale = i
+		case jlm.RoleABNShift:
+			at(out[i].Block).shift = i
+		}
+	}
+	for b, t := range blocks {
+		if t.dwB < 0 || t.scale < 0 || t.shift < 0 {
+			return nil, fmt.Errorf("convert: audio block %d carries the depthwise bias, the BatchNorm scale "+
+				"and its shift only in part", b)
+		}
+		bias, err := normF32(&out[t.dwB])
+		if err != nil {
+			return nil, err
+		}
+		scale, err := normF32(&out[t.scale])
+		if err != nil {
+			return nil, err
+		}
+		shift, err := normF32(&out[t.shift])
+		if err != nil {
+			return nil, err
+		}
+		if len(bias) != len(scale) || len(shift) != len(scale) {
+			return nil, fmt.Errorf("convert: audio block %d: depthwise bias %d, BatchNorm %d and %d wide",
+				b, len(bias), len(scale), len(shift))
+		}
+		folded := make([]float32, len(shift))
+		for c := range folded {
+			folded[c] = bias[c]*scale[c] + shift[c]
+		}
+		setF32Dims(&out[t.shift], folded, uint64(len(folded)))
+	}
+	kept := out[:0]
+	for _, e := range out {
+		if e.Role != jlm.RoleADWB {
+			kept = append(kept, e)
+		}
+	}
+	return kept, nil
 }
 
 // d1OmniAudioLayout is one block tensor in the engine's layout: the GLU's

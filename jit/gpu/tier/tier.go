@@ -105,6 +105,8 @@ type kernKey struct {
 	// one more parameter and a different output, so its own entry.
 	gated bool
 	act   kernels.ActKind
+	// gate2 is a Gate2 matvec: the gate's weight as a second stream.
+	gate2 bool
 }
 
 // chooseSplit picks how many threads share a row: the fallback table when the
@@ -169,6 +171,12 @@ type Config struct {
 	// their prologue (kernels.ActIn): the A/B arm and bisection switch for
 	// the operand prologue alone. NoFuse turns it off too.
 	NoActFuse bool
+	// GateUp2 runs a dense gated FFN's gate and up as one Gate2 matvec
+	// (kernels.MatVecShape.Gate2): each workgroup sums its rows of both
+	// matrices over the one operand and writes act(gate)*up, the bits the
+	// gate's launch and up's gated launch write, where the backend's lowering
+	// makes that exact (kernels.Gate2Exact). On by default.
+	GateUp2 bool
 	// ActInPrefetch is how many weight words each thread of an operand-prologue
 	// matvec prefetches before its prologue (kernels.ActIn.Prefetch): 0 is the
 	// default (8), -1 none.
@@ -709,6 +717,9 @@ type Stats struct {
 	// GateUpWhy is why the last block's gate and up could not be fused.
 	GateUpWhy                              string
 	RagQKVFused, RagResFused, RagGateFused int
+	// GateUp2Runs counts gated FFNs whose gate and up ran as one Gate2
+	// launch (Config.GateUp2).
+	GateUp2Runs int
 	// PersistLaunches counts persistent kernels launched (Config.Persist),
 	// PersistParts the per-op launches they ran, PersistPhases their
 	// grid-barrier-separated phases, PersistCompiles the compositions built
@@ -1185,6 +1196,7 @@ func (s *Stats) add(o Stats) {
 		s.PersistWhy = o.PersistWhy
 	}
 	s.RagGateFused += o.RagGateFused
+	s.GateUp2Runs += o.GateUp2Runs
 	s.RagHeadOne += o.RagHeadOne
 	s.SampleReads += o.SampleReads
 	s.PickReads += o.PickReads
@@ -2053,6 +2065,9 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 	// (PersistByDefaultForTest), so the regression gates run through it.
 	cfg.Persist = persistDefault
 	cfg.PersistDeps = persistDepsDefault
+	// Gate2 is the default where it is exact (kernels.Gate2Exact): on a V100
+	// it read 1.008-1.028 of the two launches on Llama 1B, 3B and 8B.
+	cfg.GateUp2 = true
 	for _, f := range o.cfg {
 		f(cfg)
 	}
@@ -3161,7 +3176,7 @@ func (g *devTier) kernel(q kernels.Quant, k, rows, split, rowt int, bias bool) b
 // launch, which wins on small matvecs and loses on big-k ones, so it is chosen
 // per shape by tuneSplit rather than switched on.
 func (g *devTier) kernelMode(q kernels.Quant, k, rows, split, rowt int, bias, groupSplit bool) backend.Kernel {
-	kk := kernKey{q, k, rows, split, bias, rowt, groupSplit, false, 0}
+	kk := kernKey{q, k, rows, split, bias, rowt, groupSplit, false, 0, false}
 	if c, ok := g.kerns[kk]; ok {
 		return c
 	}
@@ -3219,6 +3234,33 @@ func (g *devTier) gatedKernel(q kernels.Quant, k, rows, split int, groupSplit bo
 	}
 	ker, err := kernels.MatVec(kernels.MatVecShape{Center: g.center, T: q, K: k, Rows: rows, Split: split,
 		GroupSplit: groupSplit, Gate: true, GateAct: act})
+	if err != nil {
+		g.kerns[kk], g.LastErr = nil, err.Error()
+		return nil
+	}
+	c, err := g.dev.Compile(ker)
+	if err != nil {
+		g.kerns[kk], g.LastErr = nil, err.Error()
+		g.Failed++
+		return nil
+	}
+	g.kerns[kk] = c
+	return c
+}
+
+// gate2Kernel is the FFN up projection summing the gate's row beside its own
+// and writing act(gate)*up (kernels.MatVecShape.Gate2), or nil where the
+// backend cannot make it exact or the split writes partials.
+func (g *devTier) gate2Kernel(q kernels.Quant, k, rows, split int, groupSplit bool, act kernels.ActKind) backend.Kernel {
+	if split > 1 && !groupSplit || !kernels.Gate2Exact(g.dev.API()) || kernels.IsFloat(q) {
+		return nil
+	}
+	kk := kernKey{t: q, k: k, rows: rows, split: split, rowt: 1, group: groupSplit, gate2: true, act: act}
+	if c, ok := g.kerns[kk]; ok {
+		return c
+	}
+	ker, err := kernels.MatVec(kernels.MatVecShape{Center: g.center, T: q, K: k, Rows: rows, Split: split,
+		GroupSplit: groupSplit, Gate2: true, GateAct: act})
 	if err != nil {
 		g.kerns[kk], g.LastErr = nil, err.Error()
 		return nil

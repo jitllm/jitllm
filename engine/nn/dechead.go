@@ -6,9 +6,13 @@ package nn
 // them once when the head is first offered, and the device keeps them for the
 // life of the value (keyed by its pointer).
 type ClefHead struct {
-	D, W, Heads, FFN, Routing   int
-	Eps, RMSEps                 float32
-	OutNorm                     []float32 // the backbone's output RMSNorm, D
+	D, W, Heads, FFN, Routing int
+	Eps, RMSEps               float32
+	OutNorm                   []float32 // the backbone's output norm, D
+	// OutLayerNorm: the backbone's output norm is a LayerNorm (with OutNormB
+	// its bias, when it has one) rather than an RMSNorm; eps RMSEps either way.
+	OutLayerNorm                bool
+	OutNormB                    []float32
 	HidW, HidB                  []float32
 	PMem, PQ, POQ, PG, POC, POL []float32 // W x D each
 	SumW, SumB                  []float32

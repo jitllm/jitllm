@@ -76,10 +76,9 @@ type audBlock struct {
 	convN, convNB             []float32
 	gluV, gluG, pw2           tensor
 	gluVB, gluGB, pw2B        []float32
-	dw, dwB, bnS, bnB         []float32
-	// bnShift is the folded BatchNorm's shift with the depthwise bias folded
-	// in, dwB*bnS + bnB: a device's one affine launch.
-	bnShift                   []float32
+	// bnB is the BatchNorm's shift with the depthwise bias folded in at
+	// conversion (jlm.RoleABNShift): the module's one affine.
+	dw, bnS, bnB              []float32
 	ff2N, ff2NB, ff2UB, ff2DB []float32
 	ff2Up, ff2Down            tensor
 	outN, outNB               []float32
@@ -239,7 +238,6 @@ func buildAudio(c *jlm.File, m *Model) (*audioTower, error) {
 		mat(&b.gluG, jlm.RoleAGLUGate, bi, -1, d, d)
 		vec(&b.gluGB, jlm.RoleAGLUGateB, bi, -1, d)
 		vec(&b.dw, jlm.RoleADW, bi, -1, kt*d)
-		vec(&b.dwB, jlm.RoleADWB, bi, -1, d)
 		vec(&b.bnS, jlm.RoleABNScale, bi, -1, d)
 		vec(&b.bnB, jlm.RoleABNShift, bi, -1, d)
 		mat(&b.pw2, jlm.RoleAPW2, bi, -1, d, d)
@@ -255,13 +253,6 @@ func buildAudio(c *jlm.File, m *Model) (*audioTower, error) {
 	}
 	if err != nil {
 		return nil, err
-	}
-	for j := range a.blocks {
-		b := &a.blocks[j]
-		b.bnShift = make([]float32, d)
-		for c := range b.bnShift {
-			b.bnShift[c] = b.dwB[c]*b.bnS[c] + b.bnB[c]
-		}
 	}
 	a.tables()
 	for _, w := range []*tensor{&a.subOut, &a.ad1, &a.ad2, &a.resDown, &a.resUp} {
@@ -708,7 +699,6 @@ func (e *Embedder) audioBlocks(x []float32, t int) error {
 		e.addBiasRows(gg, b.gluGB, t)
 		nn.SigmoidMul32JIT(gg, gv) // gg = sigma(gate) * value
 		e.audioDepthwise(tt, gg, b.dw, t, d, kt)
-		e.addBiasRows(tt, b.dwB, t)
 		e.actMul(tt, e.audioRowsOf(b.bnS, t, d), nn.ActIdentity)
 		e.addBiasRows(tt, b.bnB, t)
 		e.actRows(tt, nn.ActSiLU)

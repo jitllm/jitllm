@@ -38,6 +38,7 @@ func (m *Model) clefDevHead() *nn.ClefHead {
 	}
 	dh := &nn.ClefHead{D: m.Cfg.NEmbd, W: h.width, Heads: h.heads, FFN: h.ffn, Routing: h.routing,
 		Eps: float32(h.eps), RMSEps: float32(m.Cfg.RMSEps), OutNorm: m.outNorm,
+		OutLayerNorm: h.outLN, OutNormB: h.outNormB,
 		HidW: h.hidW, HidB: h.hidB, PMem: mat(h.pMem), PQ: mat(h.pQ), POQ: mat(h.pOQ), PG: mat(h.pG),
 		POC: mat(h.pOC), POL: mat(h.pOL), SumW: h.sumW, SumB: h.sumB, FieldW: h.fieldW, FieldB: h.fieldB,
 		OptW: h.optW, OptB: h.optB, Types: h.types, Sc: mat(h.sc), ScB: h.scB, ScOut: h.scOut, ScOutB: h.scOutB}
@@ -63,7 +64,7 @@ func (m *Model) clefDevHead() *nn.ClefHead {
 func (d *Decider) clefOnDevice(p *clefPrompt, out []float32) (bool, error) {
 	s := d.st
 	dev, isDev := s.ld.(nn.ClefHeadDevice)
-	if !isDev || s.head == nil || d.violation == "host-head" || s.m.outNormB != nil || s.c.LayerNorm {
+	if !isDev || s.head == nil || d.violation == "host-head" {
 		return false, nil
 	}
 	r, c := d.clef, d.m.Cfg

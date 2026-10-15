@@ -181,6 +181,12 @@ func decisionAllocs(t *testing.T, m *Model, g *tier.GPU, n int) {
 			reqs = append(reqs, DecisionRequest{State: state, Questions: qs})
 		}
 	}
+	// On a device DecideBatch runs each request alone (batchAlone); the
+	// batch session it keeps for the host is held here all the same.
+	if placed > 0 {
+		d.violation = "device-batch"
+		defer func() { d.violation = "" }()
+	}
 	for range 2 {
 		if _, err := d.DecideBatch(reqs); err != nil {
 			t.Fatal(err)
