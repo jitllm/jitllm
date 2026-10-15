@@ -342,6 +342,9 @@ type streamBank struct {
 	// rowSel and rowW are a split step's misses for the host (splitRows).
 	rowSel []uint32
 	rowW   []float32
+	// rowHit and rowMiss are admitRows' views of one row.
+	rowHit  []bool
+	rowMiss []uint32
 	// The split (hybrid with a cache): heat counts each expert's selections,
 	// halved every heatHalf tokens; hit marks which of this token's
 	// selection the cache holds; dw is the card's weights (a miss's zeroed),
@@ -650,6 +653,37 @@ func (st *streamBank) splitRows(g *devTier, s backend.Session, sel, w, in backen
 		return 0, err
 	}
 	return hits, s.WriteAt(w, 0, f32b(st.hw))
+}
+
+// admitRows is admit for a split step of several rows: each row's misses
+// may take a slot, as one token's do, so a speculating session's cache warms
+// as a decoding one's does (a verification is most of its steps). The slots
+// this step's hits read were marked with this step's tick and are not
+// taken. admit reads st.sel and st.hit, which are pointed at each row in
+// turn and put back.
+func (st *streamBank) admitRows(g *devTier, s backend.Session, l *layer, nExpert, max, k, valid int) error {
+	sel, hit := st.sel, st.hit
+	defer func() { st.sel, st.hit = sel, hit }()
+	if cap(st.rowHit) < k {
+		st.rowHit = make([]bool, k)
+	}
+	st.hit = st.rowHit[:k]
+	st.rowMiss = growU32(st.rowMiss, k)
+	for r := 0; r < valid; r++ {
+		for j := 0; j < k; j++ {
+			e := st.rowSel[r*(k+1)+j]
+			st.hit[j] = e == noExpert
+			if st.hit[j] {
+				e = 0
+			}
+			st.rowMiss[j] = e
+		}
+		st.sel = st.rowMiss
+		if err := st.admit(g, s, l, nExpert, max); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // noExpert holds a hit's place in the host's share of a split step: an id no
