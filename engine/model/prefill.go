@@ -884,7 +884,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 			}
 			copy(s.x, s.bx[(n-1)*c.NEmbd:n*c.NEmbd])
 		}
-		if c.Q4E() && base+n == len(src) {
+		if c.Q4E() && base+n == total {
 			if err := s.q4eCollapse(s.bx[:n*c.ResidW()], n); err != nil {
 				return nil, err
 			}
