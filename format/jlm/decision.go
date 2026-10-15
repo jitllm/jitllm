@@ -44,15 +44,21 @@ const (
 	// (A..Z then a..z, each one token) at the prompt's last row, a noul
 	// shown true first (openjev/openjev).
 	DecisionOpenJev
+	// DecisionPplxDecider is lev's codes (A..Z then AA..ZZ, each one token)
+	// read at the prompt's last row, one prompt per question
+	// (perplexity-ai/pplx-decider); its output projection is the readout,
+	// zero but at the codes' rows.
+	DecisionPplxDecider
 )
 
 var decisionNames = map[DecisionKind]string{
-	DecisionLev:     "lev",
-	DecisionLFM2D1:  "lfm2-d1",
-	DecisionLaya:    "laya",
-	DecisionClef:    "clef",
-	DecisionD1Omni:  "lfm2-d1-omni",
-	DecisionOpenJev: "openjev",
+	DecisionLev:         "lev",
+	DecisionLFM2D1:      "lfm2-d1",
+	DecisionLaya:        "laya",
+	DecisionClef:        "clef",
+	DecisionD1Omni:      "lfm2-d1-omni",
+	DecisionOpenJev:     "openjev",
+	DecisionPplxDecider: "pplx-decider",
 }
 
 // String is the name llama.cpp writes as <arch>.decision.type.
