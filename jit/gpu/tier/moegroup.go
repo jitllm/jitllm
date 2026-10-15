@@ -762,7 +762,7 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 	gathered := false
 	gather := func() {
 		if !gathered {
-			la(m.gather, m.p*ew, 128, ein, m.perm, m.hg)
+			la(m.gather, cols*ew, 128, ein, m.perm, m.hg)
 			gathered = true
 		}
 	}
@@ -774,7 +774,7 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 	quantized := backend.Buf(nil)
 	quantize := func(q backend.Kernel, n int, src backend.Buf) {
 		if quantized != src {
-			la(q, kernels.QuantizeThreads(m.p*n/32), 128, src, m.ga, m.gax)
+			la(q, kernels.QuantizeThreads(cols*n/32), 128, src, m.ga, m.gax)
 			quantized = src
 		}
 	}
@@ -846,9 +846,9 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 		if vm.act != actK {
 			sub, _, _, _ := kernels.Layout(mv.q)
 			if down {
-				la(vm.act, m.p*mv.k/sub, 128, downSrc, m.h16)
+				la(vm.act, cols*mv.k/sub, 128, downSrc, m.h16)
 			} else {
-				la(vm.act, m.p*mv.k/sub, 128, ein, m.perm, m.h16)
+				la(vm.act, cols*mv.k/sub, 128, ein, m.perm, m.h16)
 			}
 			actK = vm.act
 			g.ActF16Launches++
@@ -868,7 +868,7 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 		// such architecture has expert biases or input weighting.
 		grouped(&l.mvu, l.up, nil, m.eu)
 		actK = nil
-		la(m.actMul, m.p*p.NFFNExp, 128, m.eu, m.eact)
+		la(m.actMul, cols*p.NFFNExp, 128, m.eu, m.eact)
 		grouped(&l.mvd, l.down, nil, m.edown)
 		la(m.combine, rows*ew, 128, m.edown, m.rw, m.pos, eout)
 		g.GroupedMoE++
@@ -882,11 +882,11 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 	actK = nil
 	eg, eu := m.eg, m.eu
 	if l.expGateB != nil && !gateB {
-		la(m.biasFF, m.p*p.NFFNExp, 128, m.eg, m.colE, l.expGateB, m.egB)
+		la(m.biasFF, cols*p.NFFNExp, 128, m.eg, m.colE, l.expGateB, m.egB)
 		eg = m.egB
 	}
 	if l.expUpB != nil && !upB {
-		la(m.biasFF, m.p*p.NFFNExp, 128, m.eu, m.colE, l.expUpB, m.euB)
+		la(m.biasFF, cols*p.NFFNExp, 128, m.eu, m.colE, l.expUpB, m.euB)
 		eu = m.euB
 	}
 	rw := m.rw
@@ -896,15 +896,15 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 		rw = m.rwS
 	}
 	if m.actMulW != nil && !moeFaulted("wout") {
-		la(m.actMulW, m.p*p.NFFNExp, 128, eg, eu, m.rw, m.colPair, m.eact)
+		la(m.actMulW, cols*p.NFFNExp, 128, eg, eu, m.rw, m.colPair, m.eact)
 		rw = m.ones
 	} else {
-		la(m.actMul, m.p*p.NFFNExp, 128, eg, eu, m.eact)
+		la(m.actMul, cols*p.NFFNExp, 128, eg, eu, m.eact)
 	}
 	downB := grouped(&l.mvd, l.down, l.expDownB, m.edown)
 	edown := m.edown
 	if l.expDownB != nil && !downB {
-		la(m.biasD, m.p*ew, 128, m.edown, m.colE, l.expDownB, m.edownB)
+		la(m.biasD, cols*ew, 128, m.edown, m.colE, l.expDownB, m.edownB)
 		edown = m.edownB
 	}
 	la(m.combine, rows*ew, 128, edown, rw, m.pos, eout)
