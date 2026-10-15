@@ -1264,6 +1264,10 @@ type cudaQueue struct {
 // times over.
 const stageMin = 1 << 20
 
+// stageWrites is how many writes of the largest size seen the arena holds
+// before it drains.
+const stageWrites = 8
+
 // room returns n bytes of the staging arena, draining the stream first when
 // they are not free and growing the arena when n is more than all of it.
 func (q *cudaQueue) room(n int) ([]byte, error) {
@@ -1278,7 +1282,11 @@ func (q *cudaQueue) room(n int) ([]byte, error) {
 			cuda.FreeHost(q.stage)
 			q.stage = nil
 		}
-		b, err := cuda.HostAlloc(max(n, stageMin))
+		// Room for stageWrites writes of this size: an arena grown to exactly
+		// n is full after one, and every write after it -- the next sheet, or a
+		// decode token's few words -- drained the stream first. A hybrid
+		// expert cache sending 2.9 MB sheets waited on the card at each.
+		b, err := cuda.HostAlloc(max(n*stageWrites, stageMin))
 		if err != nil {
 			return nil, err
 		}
