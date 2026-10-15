@@ -87,6 +87,8 @@ type moeGroup struct {
 	gscore, gmask backend.Kernel
 	rlog, rlogB, zsel, rsel, rtop, rw, perm, tsel, pos, colE,
 	hg, ga, gax, eg, eu, egB, euB, eact, edown, edownB, rgs, rbm backend.Buf
+	// hsum is a split step's host sum of its rows (streamBank.hostRowsLate).
+	hsum backend.Buf
 	// gcount..gtilesU group the chunk's pairs by expert on the device
 	// (kernels.ExpertGroup*), into cnt and ends; endsH is ends read home, whose
 	// last word is the used column count the grouped launches are sized by.
@@ -216,7 +218,7 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 		{&m.rw, rows * k * 4}, {&m.perm, np * 4}, {&m.tsel, np / groupTok * 4}, {&m.pos, rows * k * 4},
 		{&m.colE, np * 4},
 		{&m.eg, np * p.NFFNExp * 4}, {&m.eu, np * p.NFFNExp * 4}, {&m.eact, np * p.NFFNExp * 4},
-		{&m.edown, np * ew * 4}} {
+		{&m.edown, np * ew * 4}, {&m.hsum, rows * ew * 4}} {
 		buf(b.dst, b.n)
 	}
 	if volta {
@@ -265,7 +267,7 @@ func (m *moeGroup) free() {
 	}
 	for _, b := range []backend.Buf{m.rlog, m.rlogB, m.zsel, m.rsel, m.rtop, m.rw, m.perm, m.tsel,
 		m.pos, m.colE, m.hg, m.ga, m.gax, m.eg, m.eu, m.egB, m.euB, m.eact, m.edown, m.edownB,
-		m.rgs, m.rbm, m.colPair, m.ones, m.tselU, m.h16, m.bc, m.off, m.cnt, m.ends, m.rwS} {
+		m.rgs, m.rbm, m.colPair, m.ones, m.tselU, m.h16, m.bc, m.off, m.cnt, m.ends, m.rwS, m.hsum} {
 		if b != nil {
 			b.Free()
 		}
@@ -677,13 +679,46 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 		if valid <= 0 || valid > rows {
 			valid = rows
 		}
-		if *errp == nil {
-			*errp = l.stream.runHostRows(sid, g, s, m.rsel, m.rw, ein, eout, ew, m.k, valid)
-		}
-		if *errp == nil {
+		// With an expert cache on the card, the rows' cached experts run there
+		// through the grouped kernels below, each read once for every row that
+		// chose it, while the host runs the misses expert-major (splitRows):
+		// a speculation step's verification costs the experts its rows touch,
+		// not a decode token a row.
+		st := l.stream
+		if hs := g.hostFns[sid][st.li]; st.cached() && !g.NoSplitRows && hs.one != nil && *errp == nil {
+			if st.bank != l.down {
+				st.forget()
+				st.bank = l.down
+			}
+			hits := 0
+			hits, *errp = st.splitRows(g, s, m.rsel, m.rw, ein, ew, m.k, rows, valid, hs.uses)
+			if *errp != nil {
+				return
+			}
 			g.HybridRuns++
+			if hits == 0 {
+				// Nothing on the card: the host's sum is the output.
+				*errp = st.hostRowsLate(sid, g, s, eout, m.k, valid)
+				return
+			}
+			defer func() {
+				if *errp == nil {
+					*errp = st.hostRowsLate(sid, g, s, m.hsum, m.k, valid)
+				}
+				// The violation: the host's share dropped, the card's hits alone.
+				if *errp == nil && !moeFaulted("splitrowshost") {
+					lc.la(bs.addE, valid*ew, eout, m.hsum, eout)
+				}
+			}()
+		} else {
+			if *errp == nil {
+				*errp = l.stream.runHostRows(sid, g, s, m.rsel, m.rw, ein, eout, ew, m.k, valid)
+			}
+			if *errp == nil {
+				g.HybridRuns++
+			}
+			return
 		}
-		return
 	}
 	// The grouping runs on the device (kernels.ExpertGroup*) and only the used
 	// column count comes home.

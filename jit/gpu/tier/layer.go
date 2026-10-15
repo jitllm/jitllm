@@ -339,6 +339,9 @@ type streamBank struct {
 	li            int  // the block, for the session's host side (hostFor)
 	hin, hw, hout []float32
 	hsel          []uint32
+	// rowSel and rowW are a split step's misses for the host (splitRows).
+	rowSel []uint32
+	rowW   []float32
 	// The split (hybrid with a cache): heat counts each expert's selections,
 	// halved every heatHalf tokens; hit marks which of this token's
 	// selection the cache holds; dw is the card's weights (a miss's zeroed),
@@ -378,6 +381,14 @@ func (st *streamBank) score(g *devTier, li int) {
 		}
 	}
 	g.ProbeExperts += len(st.sel)
+}
+
+// growF32 returns s resized to n, reusing its array when it is big enough.
+func growF32(s []float32, n int) []float32 {
+	if cap(s) < n {
+		return make([]float32, n)
+	}
+	return s[:n]
 }
 
 // growU32 returns s resized to n, reusing its array when it is big enough.
@@ -574,6 +585,115 @@ func (st *streamBank) runHostRows(sid uint64, g *devTier, s backend.Session, sel
 	err := s.WriteAt(out, 0, f32b(st.hout))
 	g.THybrid += time.Since(t0)
 	g.HybridRows += rows
+	return err
+}
+
+// splitRows is split for a step of several rows (a speculation step's
+// verification, a few-row chunk): every row's selection is mapped onto the
+// block's expert cache as decode's split maps one token's, without evicting
+// or admitting. The rows' input, weights and selections come home; sel and w
+// are written back as the card's share -- each hit's cache slot at its
+// weight, each miss at slot 0 with weight zero -- for the grouped expert
+// kernels over the cache bank, and the misses are kept (st.rowSel, a hit's
+// place holding noExpert) for hostRowsLate, which runs them expert-major
+// while the card runs the hits. rows is the step's padded width, valid its
+// real rows: a padding row is all zero weights at slot 0, since its selection
+// names experts the cache bank does not hold. It returns the hits.
+func (st *streamBank) splitRows(g *devTier, s backend.Session, sel, w, in backend.Buf, n, k, rows, valid int,
+	uses []uint32) (int, error) {
+	if cap(st.hin) < valid*n {
+		st.hin = make([]float32, valid*n)
+		st.hout = make([]float32, valid*n)
+	}
+	st.hin, st.hout = st.hin[:valid*n], st.hout[:valid*n]
+	st.hw = growF32(st.hw, rows*k)
+	st.hsel = growU32(st.hsel, rows*(k+1))
+	st.rowSel = growU32(st.rowSel, valid*(k+1))
+	st.rowW = growF32(st.rowW, valid*k)
+	if err := s.Sync(); err != nil {
+		return 0, err
+	}
+	if err := s.Read(in, f32b(st.hin)); err != nil {
+		return 0, err
+	}
+	if err := s.Read(w, f32b(st.hw)); err != nil {
+		return 0, err
+	}
+	if err := s.Read(sel, u32b(st.hsel)); err != nil {
+		return 0, err
+	}
+	st.tick++
+	hits := 0
+	for r := 0; r < rows; r++ {
+		if r >= valid {
+			for j := 0; j < k; j++ {
+				st.hsel[r*(k+1)+j], st.hw[r*k+j] = 0, 0
+			}
+			continue
+		}
+		// The session's counts learn the rows' selections, as decode's do.
+		st.countSel(st.hsel[r*(k+1):r*(k+1)+k], uses)
+		st.rowSel[r*(k+1)+k] = st.hsel[r*(k+1)+k]
+		for j := 0; j < k; j++ {
+			i := r*(k+1) + j
+			e := st.hsel[i]
+			st.rowW[r*k+j] = st.hw[r*k+j]
+			if sl := st.slotOf[e]; sl >= 0 {
+				st.used[sl] = st.tick
+				st.rowSel[i], st.hsel[i] = noExpert, uint32(sl)
+				hits++
+				continue
+			}
+			st.rowSel[i], st.hsel[i], st.hw[r*k+j] = e, 0, 0
+		}
+	}
+	g.StreamCacheHits += hits
+	g.StreamCacheMisses += valid*k - hits
+	if err := s.WriteAt(sel, 0, u32b(st.hsel)); err != nil {
+		return 0, err
+	}
+	return hits, s.WriteAt(w, 0, f32b(st.hw))
+}
+
+// noExpert holds a hit's place in the host's share of a split step: an id no
+// expert has, which the host's expert-major pass matches to nothing.
+const noExpert = ^uint32(0)
+
+// hostRowsLate runs splitRows' misses on the host, row by row as decode's
+// hostLate runs one token's (a few rows share few of their experts, so the
+// host's bytes are the same either way, and the session's host side picks
+// its own order for a row), while the card runs the hits queued before it,
+// and writes the rows' sum to dst. A row with no miss sums to zero.
+func (st *streamBank) hostRowsLate(sid uint64, g *devTier, s backend.Session, dst backend.Buf, k, valid int) error {
+	t0 := time.Now()
+	host := g.hostFor(sid, st)
+	if host == nil {
+		return fmt.Errorf("tier: this session offered no host side for a hybrid block")
+	}
+	n := len(st.hin) / valid
+	for r := 0; r < valid; r++ {
+		st.msel, st.mw = st.msel[:0], st.mw[:0]
+		for j := 0; j < k; j++ {
+			if e := st.rowSel[r*(k+1)+j]; e != noExpert {
+				st.msel = append(st.msel, e)
+				st.mw = append(st.mw, st.rowW[r*k+j])
+			}
+		}
+		out := st.hout[r*n : (r+1)*n]
+		if len(st.msel) == 0 {
+			clear(out)
+			continue
+		}
+		if err := host(st.msel, st.mw, st.hin[r*n:(r+1)*n], out); err != nil {
+			return err
+		}
+	}
+	g.TSplitHost += time.Since(t0)
+	g.SplitRowSteps++
+	g.HybridRows += valid
+	tw := time.Now()
+	err := s.WriteAt(dst, 0, f32b(st.hout))
+	g.TLateWrite += time.Since(tw)
 	return err
 }
 
@@ -798,7 +918,11 @@ const heatMargin = 2
 // model.Hotness), one source for the model's measure of its experts and for
 // the expert cache -- or to the block's own counts when the session handed
 // none, halved every heatHalf tokens. The cache keeps by st.heat.
-func (st *streamBank) count(uses []uint32) {
+func (st *streamBank) count(uses []uint32) { st.countSel(st.sel, uses) }
+
+// countSel is count for a selection sel other than this token's (a row of a
+// split step, splitRows).
+func (st *streamBank) countSel(sel, uses []uint32) {
 	if len(uses) == st.nExpert && st.nExpert > 0 {
 		st.heat = uses
 	} else {
@@ -813,7 +937,7 @@ func (st *streamBank) count(uses []uint32) {
 			}
 		}
 	}
-	for _, e := range st.sel {
+	for _, e := range sel {
 		if int(e) < len(st.heat) && st.heat[e] != ^uint32(0) {
 			st.heat[e]++
 		}
@@ -10566,9 +10690,19 @@ func (g *devTier) prepBatch(width int) bool {
 				// only the selection.
 				mg := bb.mg
 				// A hybrid block routes the rows on the device and runs their
-				// experts on the host (emitGroupedMoE): the routing scratch is
-				// all it needs, and no grouped expert kernel.
-				if mg != nil && l.stream != nil && l.stream.hybrid {
+				// experts on the host, or, with an expert cache, the cached ones
+				// on the card through the grouped kernels over the cache
+				// (emitGroupedMoE, streamBank.splitRows): built here for every
+				// hybrid block, since a cache may be sized after placement. A
+				// kernel the shape refuses leaves that block's rows on the host.
+				hybrid := mg != nil && l.stream != nil && l.stream.hybrid
+				if hybrid {
+					if mg.volta && !kernels.IsFloat(m.q) {
+						bias, nsrc := moeVoltaArgs(l, m, mg)
+						g.voltaGroupedMV(*m, mg.nExp, mg.p, mg.unit, bias, nsrc)
+					} else if !mg.volta && !kernels.IsFloat(m.q) {
+						g.groupedMV(*m, mg.nExp, mg.p)
+					}
 					continue
 				}
 				if mg == nil || l.stream != nil {
