@@ -54,6 +54,10 @@ func TestHotnessIsAProbability(t *testing.T) {
 		t.Fatalf("got %d entries, want %d", len(uses), c.NExpert*c.NLayer)
 	}
 	for li := 0; li < c.NLayer; li++ {
+		// A dense lead block (Kimi-K3's, DeepSeek's) routes nothing.
+		if !c.MoEAt(li) {
+			continue
+		}
 		var sum float64
 		for e := 0; e < c.NExpert; e++ {
 			u := uses[li*c.NExpert+e]

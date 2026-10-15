@@ -143,6 +143,24 @@ func TestSplitExpertsMatchTheHost(t *testing.T) {
 							got = append(got, append([]float32(nil), l...))
 						}
 						st = g.Stats()
+						// One source of routing counts: the card's selections on
+						// every hybrid block are the session's hotness, so each
+						// placed mixture block's uses sum to the selection.
+						uses, tokens := s.ExpertUses()
+						c := m.Cfg
+						for li := 0; li < placed && st.HybridRuns > 0; li++ {
+							if !c.MoEAt(li) {
+								continue
+							}
+							var sum float64
+							for e := 0; e < c.NExpert; e++ {
+								sum += uses[li*c.NExpert+e]
+							}
+							if math.Abs(sum-float64(c.NExpertUsed)) > 1e-9 {
+								t.Fatalf("block %d's uses sum to %.4f over %d tokens, want %d: the card's selections are not the session's counts",
+									li, sum, tokens, c.NExpertUsed)
+							}
+						}
 					}()
 					t.Logf("%d blocks placed; stats: hybrid %d, split %d, hits %d, cache %d/%d, short %d, size %d",
 						placed, st.HybridRuns, st.SplitRuns, st.SplitHits, st.StreamCacheHits, st.StreamCacheMisses,

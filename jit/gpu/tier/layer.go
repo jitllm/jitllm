@@ -330,10 +330,13 @@ type streamBank struct {
 	// selection the cache holds; dw is the card's weights (a miss's zeroed),
 	// and msel and mw the misses the host runs.
 	heat []uint32
-	hit  []bool
-	dw   []float32
-	msel []uint32
-	mw   []float32
+	own  []uint32
+	// owned counts the tokens st.own has counted, for its halving.
+	owned uint64
+	hit   []bool
+	dw    []float32
+	msel  []uint32
+	mw    []float32
 	// pred is this block's selection as the previous block's probe predicted
 	// it (Config.StreamProbe), valid while havePred; score compares it with
 	// the real one and clears it.
@@ -572,6 +575,9 @@ func (g *devTier) hostFor(sid uint64, st *streamBank) func(sel []uint32, w, in, 
 type hostSide struct {
 	one  func(sel []uint32, w, in, out []float32) error
 	rows func(sel []uint32, w, in, out []float32, rows, k int) error
+	// uses is the session's counts of this block's experts
+	// (nn.LayerWeights.ExpertUses).
+	uses []uint32
 }
 
 // splitIn brings a split step's input and routing weights home and divides
@@ -723,7 +729,7 @@ func (st *streamBank) initCache(n, nExpert int) {
 // uncache returns a block to its plain bank: no cache, nothing held.
 func (st *streamBank) uncache() {
 	st.slotOf, st.owner, st.used, st.slotSel = nil, nil, nil, nil
-	st.heat, st.hit, st.bank = nil, nil, nil
+	st.heat, st.own, st.hit, st.bank = nil, nil, nil, nil
 }
 
 // cached reports whether this block's bank is an expert cache.
@@ -764,34 +770,57 @@ func (st *streamBank) lookup(g *devTier) {
 	}
 }
 
-// heatHalf is how many tokens a hybrid cache's selection counts last at
-// full weight: every heatHalf tokens they are halved, so the cache follows a
-// shift in what the prompt routes to without chasing a single token.
+// heatHalf is how many tokens a block's own selection counts last at full
+// weight, for a session that hands the tier none (nn.LayerWeights.ExpertUses
+// is the model's, which halves its own).
 const heatHalf = 256
 
 // heatMargin is the floor of the hysteresis a miss clears to take an occupied
 // slot: twice the slot expert's selections and this many more.
 const heatMargin = 2
 
+// count adds this token's selection, which the card routed, to uses -- the
+// session's own counts of the block's experts (nn.LayerWeights.ExpertUses,
+// model.Hotness), one source for the model's measure of its experts and for
+// the expert cache -- or to the block's own counts when the session handed
+// none, halved every heatHalf tokens. The cache keeps by st.heat.
+func (st *streamBank) count(uses []uint32) {
+	if len(uses) == st.nExpert && st.nExpert > 0 {
+		st.heat = uses
+	} else {
+		if len(st.own) != st.nExpert {
+			st.own = make([]uint32, st.nExpert)
+		}
+		st.heat = st.own
+		st.owned++
+		if st.owned%heatHalf == 0 {
+			for i := range st.heat {
+				st.heat[i] >>= 1
+			}
+		}
+	}
+	for _, e := range st.sel {
+		if int(e) < len(st.heat) && st.heat[e] != ^uint32(0) {
+			st.heat[e]++
+		}
+	}
+}
+
 // split maps this token's selection onto a hybrid block's cache without
 // evicting anything: a hit runs on the card from its slot, a miss on the
-// host. It counts the selection's heat and returns the hits. A miss's slot
+// host. It counts the selection into uses -- the session's own expert counts
+// (nn.LayerWeights.ExpertUses, model.Hotness), one source for the model's
+// placement and this cache -- or the block's own when the session gave none,
+// and returns the hits. A miss's slot
 // is the first hit's, so the card's kernels read a sheet that holds an
 // expert (its weight is zero in dw); with no hit nothing runs on the card.
 func (st *streamBank) split(g *devTier) int {
-	if st.heat == nil {
-		st.heat = make([]uint32, len(st.slotOf))
+	if st.hit == nil {
 		st.hit = make([]bool, len(st.sel))
 	}
 	st.tick++
-	if st.tick%heatHalf == 0 {
-		for i := range st.heat {
-			st.heat[i] >>= 1
-		}
-	}
 	hits, first := 0, uint32(0)
 	for i, e := range st.sel {
-		st.heat[e]++
 		sl := st.slotOf[e]
 		st.hit[i] = sl >= 0
 		if sl < 0 {
@@ -2468,7 +2497,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if g.hostFns[sid] == nil {
 			g.hostFns[sid] = map[int]hostSide{}
 		}
-		g.hostFns[sid][li] = hostSide{one: w.HostExperts, rows: w.HostExpertsRows}
+		g.hostFns[sid][li] = hostSide{one: w.HostExperts, rows: w.HostExpertsRows, uses: w.ExpertUses}
 		g.mu.Unlock()
 	}
 	// Shapes this tier cannot express are declined first and by name (RULE 8a):
@@ -8475,6 +8504,9 @@ func (g *devTier) layersSession(s backend.Session) {
 							l.stream.score(g, li)
 						}
 						hybrid = l.stream.hybrid && !g.StreamFixedSel
+						if hybrid {
+							l.stream.count(g.hostFns[sid][li].uses)
+						}
 						// The split: a hybrid block with a cache runs the experts the
 						// cache holds on the card and the rest on the host, at once.
 						split = hybrid && l.stream.cached()
