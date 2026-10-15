@@ -828,6 +828,14 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	model.ResetProfile()
 
 	ignoreEOS := os.Getenv("JITLLM_IGNORE_EOS") == "1"
+	var forced []int32
+	for _, f := range strings.FieldsFunc(os.Getenv("JITLLM_FORCE_IDS"), func(r rune) bool { return r == ',' || r == ' ' }) {
+		v, err := strconv.Atoi(f)
+		if err != nil {
+			return fmt.Errorf("JITLLM_FORCE_IDS: %q is not a token id", f)
+		}
+		forced = append(forced, int32(v))
+	}
 	top := 0
 	if v := os.Getenv("JITLLM_TOP"); v != "" {
 		top, _ = strconv.Atoi(v)
@@ -924,6 +932,12 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		next := pending
 		if next < 0 {
 			next = sm.Sample(logits)
+		}
+		// JITLLM_FORCE_IDS decodes the given token ids in place of the
+		// sampled ones (teacher forcing), so two arms of an A/B whose
+		// rounding differs still decode the same text.
+		if i < len(forced) {
+			next = forced[i]
 		}
 		sm.Observe(next)
 		if top > 0 {
