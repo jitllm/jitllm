@@ -85,6 +85,38 @@ func TestHeadJoinsAsIfTheTrunkCarriedIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer hf.Close()
+	// unsloth's published head states a compress ratio of 0 for its block
+	// where llama.cpp's converter writes the model's: the block carries the
+	// indexer, so it is the same QSA block and the same container.
+	cr := hf.Arch() + ".attention.compress_ratios"
+	zero := hf.KV[cr]
+	if zero.N == 0 {
+		t.Fatalf("the head states no %s", cr)
+	}
+	w := len(zero.Raw) / int(zero.N)
+	zraw := append([]byte(nil), zero.Raw...)
+	clear(zraw[len(zraw)-w:])
+	zero.Raw = zraw
+	kept := hf.KV[cr]
+	hf.KV[cr] = zero
+	jm, err := withHead(tf, hf, trunk, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := buildGGUF(jm, nil, trunk, "", options{})
+	if err != nil {
+		t.Fatalf("a head stating ratio 0 for its QSA block: %v", err)
+	}
+	zp := filepath.Join(dir, "zero.jlm")
+	if _, err := jlm.Write(zp, src, fp); err != nil {
+		t.Fatal(err)
+	}
+	if zb, err := os.ReadFile(zp); err != nil {
+		t.Fatal(err)
+	} else if !bytes.Equal(zb, ab) {
+		t.Errorf("a head stating ratio 0 for its QSA block converts to another container")
+	}
+	hf.KV[cr] = kept
 	k := hf.Arch() + ".attention.head_count"
 	v := hf.KV[k]
 	raw := append([]byte(nil), v.Raw...)
