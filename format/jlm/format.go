@@ -37,10 +37,15 @@ const Ext = ".jlm"
 var Magic = [8]byte{'J', 'I', 'T', 'L', 'L', 'M', 0, 0}
 
 // Version is the container revision, stored as a u32 at offset 8. Bump it for
-// any layout change: there is no backward compatibility, because a container
-// is rebuilt from its source in seconds. The version covers where bytes live as
-// well as what they mean: a structure read with the wrong placement rules finds
-// an empty span, not an error (v8/v9 moved tensors into the dense region).
+// any layout change. There is no backward compatibility, with one kind of
+// exception: a revision that changed one section only reads a container of
+// the revision before it that does not carry that section, since every byte
+// it holds means what it meant (ReadsWithout). Anything else is reconverted:
+// a container is rebuilt from its source, and the exception exists for the
+// one that cannot be in practice, a 125 GB container on a full disk. The
+// version covers where bytes live as well as what they mean: a structure read
+// with the wrong placement rules finds an empty span, not an error (v8/v9
+// moved tensors into the dense region).
 //
 // Revisions, newest first, each of which a previous reader would misread:
 //
@@ -70,6 +75,21 @@ var Magic = [8]byte{'J', 'I', 'T', 'L', 'L', 'M', 0, 0}
 //	v3   no tensor is in GGUF layout
 const Version = 30
 
+// ReadsWithout is the previous revision this build reads, and the section
+// that revision lacks the meaning of: v29 differs from v30 only in the audio
+// tower (its depthwise bias unfolded), so a v29 container with no audio tower
+// opens, and one with an audio tower is refused by name.
+var ReadsWithout = struct {
+	Version uint32
+	Section string
+}{29, "an audio tower"}
+
+// ReadsVersion reports whether this build may open a container of version v:
+// Version, or ReadsWithout.Version, whose container Open still refuses when it
+// carries that section. A caller deciding whether a file is stale asks this,
+// never v == Version.
+func ReadsVersion(v uint32) bool { return v == Version || v == ReadsWithout.Version }
+
 // HeaderBytes is the fixed header. Everything after it is located by offset.
 // It is 192 because every offset in this header is u64; squeezing offsets
 // into u32 silently truncates a container over 4 GiB.
@@ -91,6 +111,10 @@ const DenseBlock = -1
 
 // Header is the fixed prefix. All offsets are absolute file offsets.
 type Header struct {
+	// Ver is the revision the file was written at: Version, or
+	// ReadsWithout.Version for a container without that section. It is
+	// read, never written (encodeHeader writes Version).
+	Ver      uint32
 	PageSize uint64 // bytes per block page; block i is at DataOff + i*PageSize
 	NBlocks  uint32
 	NTensors uint32
@@ -253,12 +277,14 @@ func decodeHeader(b []byte, size uint64) (*Header, error) {
 	if [8]byte(b[0:8]) != Magic {
 		return nil, fmt.Errorf("jlm: not a jlm container (magic %q)", b[0:8])
 	}
-	if v := binary.LittleEndian.Uint32(b[8:]); v != Version {
+	v := binary.LittleEndian.Uint32(b[8:])
+	if !ReadsVersion(v) {
 		return nil, fmt.Errorf("jlm: container is version %d and this build reads %d; "+
 			"re-run `jitllm convert` (there is no backward compatibility, on purpose)", v, Version)
 	}
 	le := binary.LittleEndian
 	h := &Header{
+		Ver:      v,
 		PageSize: le.Uint64(b[16:]),
 		NBlocks:  le.Uint32(b[24:]),
 		NTensors: le.Uint32(b[28:]),

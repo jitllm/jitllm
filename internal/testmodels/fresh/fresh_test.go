@@ -30,14 +30,14 @@ func TestAnOldContainerIsReconverted(t *testing.T) {
 			t.Fatal(err)
 		}
 		var v [4]byte
-		binary.LittleEndian.PutUint32(v[:], jlm.Version-1)
+		binary.LittleEndian.PutUint32(v[:], jlm.Version-2)
 		if _, err := f.WriteAt(v[:], 8); err != nil {
 			t.Fatal(err)
 		}
 		f.Close()
 		if c, err := jlm.Open(dst); err == nil {
 			c.Close()
-			t.Fatal("a container stamped with the previous version opened: the gate cannot see a reconversion")
+			t.Fatal("a container stamped with an unread version opened: the gate cannot see a reconversion")
 		}
 		return dst
 	}

@@ -524,7 +524,7 @@ func layoutOf(src *Source, fp Fingerprint) (*layout, error) {
 	// fixed-width -- so it can be encoded once for length and again for content.
 	tabLen := uint64(len(encodeTable(es)))
 
-	h := &Header{PageSize: pageSize, NBlocks: nBlocks, NTensors: uint32(len(es)),
+	h := &Header{Ver: Version, PageSize: pageSize, NBlocks: nBlocks, NTensors: uint32(len(es)),
 		VisPageSize: visPageSize, NVisBlocks: nVisBlocks, Chunk: chunkFor(es),
 		StreamGroups: streamGroupsFor(es, int(src.Config.NExpertUsed))}
 	h.CfgOff = HeaderBytes

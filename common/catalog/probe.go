@@ -81,7 +81,7 @@ func Probe(e *Entry) {
 		return
 	}
 	e.Version = v
-	e.Stale = v != CurrentVersion
+	e.Stale = !Readable(v)
 	if e.Stale {
 		e.ProbeErr = fmt.Sprintf("container is v%d, this build reads v%d -- reconvert", e.Version, CurrentVersion)
 		return
@@ -89,6 +89,9 @@ func Probe(e *Entry) {
 
 	f, err := jlm.Open(e.Path)
 	if err != nil {
+		// A previous version Open refuses (it carries the changed section)
+		// is stale too.
+		e.Stale = v != CurrentVersion
 		e.ProbeErr = err.Error()
 		return
 	}

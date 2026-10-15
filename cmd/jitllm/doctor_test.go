@@ -134,7 +134,7 @@ func TestDoctorNamesWhatIsMissing(t *testing.T) {
 		container string
 		want      string
 	}{
-		{"older container", nil, writeOldContainer(t, jlm.Version-1), "container-version"},
+		{"older container", nil, writeOldContainer(t, jlm.Version-2), "container-version"},
 		{"newer container", nil, writeOldContainer(t, jlm.Version+1), "container-version"},
 		{"no container", nil, filepath.Join(t.TempDir(), "absent.jlm"), "container-missing"},
 		{"a GGUF", nil, notJLM, "not-a-container"},

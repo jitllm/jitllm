@@ -97,5 +97,10 @@ type Entry struct {
 }
 
 // CurrentVersion is the container version this build writes. An entry whose
-// Version differs cannot be opened and has to be reconverted.
+// Version this build does not read (Readable) has to be reconverted.
 const CurrentVersion = jlm.Version
+
+// Readable reports whether this build opens a container of version v
+// (jlm.ReadsVersion): the current one, or the previous one without the one
+// section that changed, which jlm.Open checks.
+func Readable(v uint32) bool { return jlm.ReadsVersion(v) }

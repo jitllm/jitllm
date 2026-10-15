@@ -210,6 +210,12 @@ func Open(path string) (*File, error) {
 		closeDirect(direct)
 		return nil, err
 	}
+	if h.Ver != Version && f.vis != nil && f.vis.Audio != nil {
+		fh.Close()
+		closeDirect(direct)
+		return nil, fmt.Errorf("jlm: %s is version %d with %s, whose bytes changed meaning in version %d; "+
+			"re-run `jitllm convert`", path, h.Ver, ReadsWithout.Section, Version)
+	}
 	if f.voc, err = decodeVocab(f.meta[h.VocOff : h.VocOff+h.VocLen]); err != nil {
 		fh.Close()
 		closeDirect(direct)

@@ -49,7 +49,7 @@ func explain(stage, path string, err error) (title, detail string, f fix) {
 					name, v, catalog.CurrentVersion),
 				fixNone
 		}
-		if v, verr := catalog.ReadVersion(path); verr == nil && v != catalog.CurrentVersion {
+		if v, verr := catalog.ReadVersion(path); verr == nil && v != catalog.CurrentVersion && !catalog.Readable(v) {
 			return "This model was converted by an older jitllm",
 				fmt.Sprintf("%s is container format %d and this build reads %d. Reconvert it from the file it came from.",
 					name, v, catalog.CurrentVersion),

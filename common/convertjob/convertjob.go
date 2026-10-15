@@ -296,7 +296,7 @@ func ReconvertSource(container string) string {
 // its version word -- the same structural read the catalog makes.
 func LoadableAt(path string) bool {
 	v, err := catalog.ReadVersion(path)
-	return err == nil && v == catalog.CurrentVersion
+	return err == nil && catalog.Readable(v)
 }
 
 // ReplaceNote is what converting into dst would replace, as one sentence for
@@ -305,7 +305,7 @@ func ReplaceNote(dst string) string {
 	switch v, err := catalog.ReadVersion(dst); {
 	case err != nil:
 		return ""
-	case v == catalog.CurrentVersion:
+	case catalog.Readable(v):
 		return filepath.Base(dst) + " already exists and loads. Converting again replaces it."
 	default:
 		return filepath.Base(dst) + " exists but will not load in this version of the app. Converting replaces it."
@@ -415,7 +415,7 @@ func SourceContainer(e catalog.Entry) string {
 		return "--" // a tower goes inside its model's container
 	case e.TargetVersion == 0:
 		return "none"
-	case e.TargetVersion == catalog.CurrentVersion:
+	case catalog.Readable(e.TargetVersion):
 		return "converted"
 	case e.TargetVersion > catalog.CurrentVersion:
 		return "newer"

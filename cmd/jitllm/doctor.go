@@ -249,7 +249,7 @@ func checkContainer(path string, archKnown func(jlm.Arch) bool) (*doctorContaine
 		return c, []doctorProblem{{Code: "not-a-container", Message: err.Error(), Next: next}}, nil
 	}
 	c.Version = v
-	if v != jlm.Version {
+	if !jlm.ReadsVersion(v) {
 		return c, []doctorProblem{{Code: "container-version",
 			Message: fmt.Sprintf("%s is container version %d and this build reads %d (there is no backward compatibility, on purpose)", path, v, jlm.Version),
 			Next:    "re-run jitllm convert on the model this container was made from, with this build"}}, nil
