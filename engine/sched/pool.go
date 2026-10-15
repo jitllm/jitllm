@@ -72,6 +72,15 @@ func (p *Pool) SetSpinning(on bool) {
 	}
 }
 
+// SetSpinFor has the workers spin for d before parking, until the next
+// SetSpinning: for a caller whose regions are separated by a wait that uses
+// no core -- a device it is suspended inside of -- longer than the pool's
+// budget, so the workers are spinning when the next region arrives rather
+// than woken one by one for it.
+func (p *Pool) SetSpinFor(d time.Duration) {
+	p.w().spin.Store(int64(max(d, 0)))
+}
+
 // Spinning reports whether the workers spin for the next region rather than
 // park at once.
 func (p *Pool) Spinning() bool { return p.w().spin.Load() > 0 }

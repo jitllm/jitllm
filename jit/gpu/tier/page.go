@@ -382,7 +382,7 @@ func (g *devTier) dropPages(lo, hi int) {
 // slot is left to swap through: a page can come back, the state cannot.
 // Callers hold g.mu.
 func (g *devTier) roomOrReclaim(n uint64) bool {
-	if g.room(n) {
+	if g.room(n) || g.dropCaches(n) {
 		return true
 	}
 	if len(g.stream) == 0 || g.slotsIfPerm(n+g.reserved()) < minSlots || !g.reclaim(n, -1, 0, 0) {
@@ -440,6 +440,11 @@ func (g *devTier) trim() {
 	// (TestAModelThatFitsAdmitsTheSameBlocksEitherWay).
 	if g.over() && len(g.stream) == 0 {
 		g.freeRaw()
+	}
+	// Expert caches before blocks: a cache is copies of host pages, and its
+	// block keeps running on the plain bank without it.
+	if g.over() {
+		g.dropCaches(0)
 	}
 	for g.over() && g.pagesIn > 0 {
 		v := g.victim(-1, 0, 0, false)

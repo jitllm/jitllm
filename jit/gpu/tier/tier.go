@@ -495,6 +495,21 @@ type Config struct {
 	// instead of running its experts on the host, which is that block's
 	// default (GPU.AutoStream).
 	NoHybrid bool
+	// NoHybridCache gives a hybrid block no expert cache on the card. With
+	// one (the default, sized from the room left after placement), the
+	// experts the cache holds run on the card while the host runs the rest
+	// of the selection beside them, and the cache keeps the block's most
+	// selected experts (streamBank.split).
+	NoHybridCache bool
+	// SplitAdmit is how many experts a hybrid block's cache takes in a
+	// token at most; 0 is 2.
+	SplitAdmit int
+	// SplitSwaps is how many occupied cache slots change hands in a token,
+	// over every block; 0 is 8, negative none. A sheet sent is a host copy
+	// and a transfer on the token's path. On Qwen3.8-Flash-Next over a V100,
+	// alternating, warm: 8 read 22.2 and 22.7 tok/s, 2 read 17.1 and 20.2,
+	// none 20.3 and 20.4.
+	SplitSwaps int
 	// NoAutoStream leaves a mixture block that no device can hold resident
 	// on the host, as before GPU.AutoStream, instead of streaming it.
 	NoAutoStream bool
@@ -904,6 +919,23 @@ type Stats struct {
 	// HybridRows counts rows of batched chunks whose experts ran on the host.
 	HybridRows int
 	THybrid    time.Duration
+	// SplitRuns counts hybrid block-steps that ran part of their selection
+	// on the card from its expert cache (streamBank.split), SplitHits the
+	// experts run there, SplitAdmits the experts the caches took in, and
+	// TSplitHost the host's share of those steps' wall.
+	// CachesDropped counts expert caches given back for room (dropCaches),
+	// and CacheBytes is what the caches sized after placement hold now.
+	CachesDropped                     int
+	CacheBytes                        uint64
+	SplitRuns, SplitHits, SplitAdmits int
+	// SplitQueued counts admitted sheets sent on the copy queue beside the
+	// launches (backend.Uploader) rather than in their order.
+	SplitQueued int
+	TSplitHost  time.Duration
+	// TLateWrite is the wall of writing the host's expert sum back after
+	// the card's queued work (the hits, the shared expert), and TAdmit of
+	// taking experts into the caches.
+	TLateWrite, TAdmit time.Duration
 	// StreamCacheSize is the largest expert cache a block was given, in
 	// sheets: the check that an auto-sized cache is the size intended.
 	StreamCacheSize int
@@ -1317,6 +1349,15 @@ func (s *Stats) add(o Stats) {
 	s.HybridRuns += o.HybridRuns
 	s.HybridRows += o.HybridRows
 	s.THybrid += o.THybrid
+	s.SplitRuns += o.SplitRuns
+	s.CachesDropped += o.CachesDropped
+	s.CacheBytes += o.CacheBytes
+	s.SplitHits += o.SplitHits
+	s.SplitAdmits += o.SplitAdmits
+	s.SplitQueued += o.SplitQueued
+	s.TSplitHost += o.TSplitHost
+	s.TLateWrite += o.TLateWrite
+	s.TAdmit += o.TAdmit
 	s.StreamCacheSize = max(s.StreamCacheSize, o.StreamCacheSize)
 	s.StreamGroupsTuned = max(s.StreamGroupsTuned, o.StreamGroupsTuned)
 	s.StreamPinHalfTuned = max(s.StreamPinHalfTuned, o.StreamPinHalfTuned)
@@ -1605,12 +1646,23 @@ type devShared struct {
 	// direct sheet or on a device with no page-locked memory; pieces is
 	// put's list of direct sheets, kept so a token allocates none. See
 	// sendPieces.
-	pin     [2][]byte
-	noPin   bool
-	pieces  []sheetPiece
-	packWG  sync.WaitGroup
-	copyWG  sync.WaitGroup
-	packEnd int
+	pin    [2][]byte
+	noPin  bool
+	pieces []sheetPiece
+	// swapsLeft is this token's Config.SplitSwaps still to spend, and swapLi
+	// the block that last admitted (streamBank.admit).
+	swapsLeft, swapLi int
+	// adm is admissions queued for flushAdmits (their items in admItems),
+	// admPub those sent on the copy queue and not yet taken into use, upRing
+	// the page-locked ring they go through and ringUsed its fill.
+	adm      []admJob
+	admPub   []admJob
+	admItems []streamItem
+	upRing   []byte
+	ringUsed int
+	packWG   sync.WaitGroup
+	copyWG   sync.WaitGroup
+	packEnd  int
 	*Config
 	mu sync.Mutex
 	// tot is the device's counters (Stats). A view names them through its
@@ -2264,6 +2316,15 @@ func (d *devTier) stats() Stats {
 		s.KVPoolBytes = d.kvp.charged()
 	}
 	s.BudgetUsed = d.used
+	for _, l := range d.layers {
+		if l != nil && l.stream != nil && l.stream.cached() && l.stream.plain[2] != nil {
+			for _, r := range [3]*resident{l.gate, l.up, l.down} {
+				if r != nil {
+					s.CacheBytes += r.bytes()
+				}
+			}
+		}
+	}
 	s.ScratchBytes, s.ReservedPrompt, s.ReservedStep = d.scratch, d.promptW, d.stepW
 	s.TowerRows = d.visCap
 	s.Allocated, s.RoundingBytes = uint64(d.allocated()), d.rounding
@@ -2541,6 +2602,10 @@ func (g *devTier) Close() {
 				hp.UnpinHost(b)
 				g.pin[i] = nil
 			}
+		}
+		if g.upRing != nil {
+			hp.UnpinHost(g.upRing)
+			g.upRing = nil
 		}
 	}
 	// nil entries are compile failures, cached so they are not retried; Close

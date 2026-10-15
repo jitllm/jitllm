@@ -93,7 +93,7 @@ func (g *devTier) tuneSplit(q kernels.Quant, rows, k int, r *resident) int {
 		d = xf
 	}
 	best, bestRate, bestGroup := 0, 0.0, false
-	for _, split := range splitCands(nb, 32) {
+	for _, split := range splitCands(nb, splitMax(rows)) {
 		if rows*split > 1<<22 {
 			continue
 		}
@@ -175,7 +175,7 @@ type tuneJob struct {
 // placement, so the background tuner compiles nothing. Callers hold g.mu.
 func (g *devTier) splitCands(q kernels.Quant, rows, k int) []splitCand {
 	var cs []splitCand
-	for _, split := range splitCands(k/32, 32) {
+	for _, split := range splitCands(k/32, splitMax(rows)) {
 		if rows*split > 1<<22 {
 			continue
 		}
@@ -639,6 +639,18 @@ func (g *devTier) retuneDecode() {
 	// form the prologue tuner chose.
 	g.tuneFFN()
 	g.tuneGemm()
+}
+
+// splitMax is the widest split the tuner offers a shape of rows output rows.
+// 32 covers a matrix whose rows fill the card; a matrix of a few rows over a
+// long k (a hyper-connection's mix: 4 rows of 10240) runs 4*32 threads at 32,
+// one multiprocessor of eighty, so it is offered splits up to 512 and the
+// measurement decides.
+func splitMax(rows int) int {
+	if rows < 64 {
+		return 512
+	}
+	return 32
 }
 
 // splitCands is every split up to max that divides nb activation blocks,

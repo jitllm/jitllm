@@ -3662,6 +3662,158 @@ read per token to use 2.56, a 14.8x amplification, because a page is a whole
 block. See the open question on paging granularity, and note that a model which
 FITS reads nothing at all.
 
+## The split: a hybrid block's expert cache, and Qwen3.8-Flash-Next against Strata
+
+Strata (an engine written for Qwen3.8-Flash-Next alone) decoded the real
+UD-Q4_K_XL file at 17.5 tok/s on one V100 where jitllm's hybrid placement
+(`JITLLM_EXPERTS=host`: every block's base on the card, every routed expert on
+the host) read 5.8 (`vs-strata.sh`, 20 ABBA rounds twice, ratio 0.33). The
+measurements below were taken on that box (2x Xeon E5-2680 v4, the run pinned
+to node 0's 14 cores and memory, one V100-SXM2-16GB, CUDA), decode 128 tokens
+after "The capital of France is".
+
+**The 0.33 was a cold engine, not a slow one.** Each sample is a fresh
+process, and the experts are read with O_DIRECT when a token first selects
+them: 273 MB a token of decode page-ins, 17.3 of 21.9 s blocked on expert
+reads. Strata copies 62 GiB of experts into page-locked RAM before its clock
+starts (107 s). `JITLLM_PRELOAD_WAIT=1` holds `run` and `speed` until the
+background preload has read every page (35-41 s here), which is the same
+thing measured the same way: the warm hybrid decode was **13.1 tok/s** (256
+tokens), 0.75 of Strata, with host experts 50 ms of a 76 ms token.
+
+**The split.** A hybrid block whose bank is packed is now placed with the
+compact bank and its indexed kernels (`cacheable` in `prepLayer`), and
+`sizeAutoCaches` gives it an expert cache from the room placement left, as it
+does a streamed block's. Each decode token (`streamBank.split`): the
+selection comes home, the experts the cache holds run on the card from their
+slots (a miss's routing weight zeroed, its slot a hit's so the kernels read a
+sheet that holds an expert), the host runs the misses, and the two sums are
+added in that order (`kernels.Add` into eout). The host's share runs after
+the card's hits AND the shared expert are queued (`finishLate`), so the card
+computes while the host does; a latent mixture (Kimi-K3) finishes at once,
+since its latent out-projection reads the sum. The cache takes in at most
+`Config.SplitAdmit` misses a block a token over the coldest slot this token
+does not read, by selection counts halved every 256 tokens; an occupied slot
+changes hands only to a miss selected at least twice as often plus two, and
+only within a per-token budget over every block (`Config.SplitSwaps`, 8: alternating warm runs read 22.2 and 22.7 tok/s at 8, 17.1 and 20.2 at 2, 20.3 and 20.4 with none). On
+this file 43 sheets a block fit beside the 7.35 GiB base (2064 experts,
+6.4 GiB); the hit rate settles at 53-56%.
+
+Admission is not free: a sheet is a host copy into the page-locked halves and
+a transfer on the token's path, about 1 ms each. Without the hysteresis the
+first run took 5288 sheets in 256 tokens (15.4 GiB uploaded) and the split
+ran SLOWER than the plain hybrid (10.75 against 13.12 tok/s). With it, and
+two untimed warm-up runs (`JITLLM_WARMUP=2`) so the cache is filled before
+the clock starts, as a server's would be: 14.79 against 14.09.
+
+**Three things the profile then named** (`JITLLM_CUDA_KERNEL_TIMING`, each
+kernel carrying ~3.9 us of event):
+
+- *A hyper-connection mix ran on one multiprocessor.* `matvec_f32_4x10240`
+  ran at split 32 -- 4x32 threads on a card of eighty SMs -- 48 us a launch,
+  4.6 ms a token. The split tuner offered no split above 32 (`splitMax`): a
+  shape under 64 rows is now offered splits to 512 and the measurement chose
+  320, 0.88 ms a token. 14.79 -> 16.50 tok/s.
+- *The pool's workers parked between the device's host calls.* Between two
+  host expert calls the host waits on the card with no core busy, past the
+  pool's 250 us spin, so every call woke 13 workers: `moeFFN` took 545 us for
+  4.6 experts with the default budget and 405 us with a 2 ms spin
+  (JITLLM_SPIN_US=2000: 21.5 and 21.7 against 18.1 and 18.7 tok/s,
+  alternating). A token whose device made such calls now has the workers spin
+  2 ms (`model.WithHybridSpin`, `sched.Pool.SetSpinFor`): 21.0 and 21.9
+  against 19.2 and 18.7 with the pool's budget.
+- *The host's experts are at the bandwidth.* With the spin, a call costs a
+  fixed ~100 us (its four or five pool regions) and ~66 us an expert, 2.9 MB
+  at 44 GB/s; Strata's pool reads 35.6 GB/s.
+
+**The row** (`scripts/vs-strata.sh`, the build at "model: the pool spins
+across a device's wait", one V100, node 0 for both engines, decode 128
+tokens, speculation off in both, 20 ABBA rounds, each sample a fresh process;
+jitllm with `JITLLM_EXPERTS=host JITLLM_PRELOAD_WAIT=1 JITLLM_WARMUP=2`: the
+preload and two untimed runs of the same prompt and 128 tokens are its
+warm-up, as Strata's page-locked copy and profile fill are its, and neither
+is on the clock):
+
+| pass | jitllm | Strata | median ratio | IQR/median |
+|---|---|---|---|---|
+| A/A (jitllm both arms) | 21.4-22.6 tok/s | -- | 1.0004 | 0.020 |
+| 1 | 21.6-22.6 | 15.3-17.5 | **1.2631** | 0.020 |
+| 2 | 21.6-22.3 | 15.4-17.5 | **1.2645** | 0.020 |
+
+Strata's absolute rate is the 17.5 tok/s recorded for it on this box (three
+of forty samples read 15.3-15.4). Bytes a token: the host reads 48 x 4.6
+misses x 2.9 MB = 0.64 GB of experts in 48 x 405 us = 19.4 ms of `moeFFN`,
+33 GB/s including each call's fixed regions (a read wall for node 0 measured
+in the same process is owed); the card reads its 7.35 GiB base and the hits.
+
+**The prompt.** Strata prefills the first four tokens in 213 ms; jitllm's
+batched chunk of five took 590-612 ms in the same samples, every row's experts
+on the host, one expert-major region set per expert. Two changes: a chunk of
+up to eight rows runs its host experts a row at a time through the decode
+path's grouped regions (474-482 ms), and once a device has run a model's
+experts on the host, a prompt of up to eight tokens runs through the decode
+path itself, where each token splits between the card's cache and the host
+(`WithPrefillForwardRows`, unset: 210-248 ms; alternating runs of one build,
+`JITLLM_PREFILL_FORWARD=0` against the default).
+
+**The rate depends on the text, and a sample is one text.** With the tune
+cache frozen, every process decodes the same tokens and the samples agree to
+2%; but the tuners' per-shape picks (the split of three Q8_0 shapes, a few
+microseconds each) move the rounding, the greedy path parts, and the hit rate
+with it: six tune states of one build read 20.1-27.5 tok/s, the fastest at a
+62.3% hit rate and the slowest at 47.5%, and the slowest and fastest states
+differ in three cache entries (Q8_0 10240x2560 split 8 or 10, 2560x6144 32 or
+24, 2560x640 10 or 5). A row taken over one prompt is one text's row. The rows
+below the campaign's are therefore taken over three prompts, with the
+warm-ups on a fourth text (`JITLLM_WARMUP_PROMPT`) so the caches are not
+primed by the text being measured, and every sample decodes all 128 tokens
+(`JITLLM_IGNORE_EOS`; Strata's runs do not stop at an end of generation
+either).
+
+**Another mixture: Mixtral-8x7B-Instruct Q4_K_M** (24.5 GiB, eight
+experts of ~99 MB a block, top-2) on the same card and node, 128 tokens,
+two warm-ups, runs alternating, two of each:
+
+| placement | decode tok/s | prompt (6 tokens) |
+|---|---|---|
+| default: 18 of 32 blocks resident, 14 on the host | 13.35, 13.97 | 410-438 ms |
+| every block hybrid, no cache (`JITLLM_EXPERTS=host JITLLM_GPU_HYBRID_CACHE=0`) | 6.91, 6.91 | 868-871 ms |
+| every block hybrid with the cache (`JITLLM_EXPERTS=host`) | **14.77, 14.65** | 370-385 ms |
+
+Four sheets a block fit (of eight); 59.7% of the selections hit. The cache
+is what makes the hybrid placement pay on this model at all (2.1x), and it
+then edges past the resident-prefix placement; whether the default placement
+should be hybrid when the cache holds half a block's bank is the stream
+trial's question (`initStreamTrial`), not yet asked of it.
+
+**What a hybrid cache costs elsewhere, and how it gives way.** The cache
+takes the room placement left, so history or a block offered later found
+none. `dropCaches` gives caches back, the last block's first, whenever
+`roomOrReclaim` is short and before `trim` pages a block out
+(`Stats.CachesDropped`); a block without its cache runs on the plain bank it
+was placed on. A float bank (the qwen4exp fixture's) has no packed sheets and
+keeps the plain hybrid path. `tier.WithHybridCache(false)` /
+`JITLLM_GPU_HYBRID_CACHE=0` keeps the plain hybrid path everywhere.
+
+Gates: `TestSplitExpertsMatchTheHost` (Kimi-K3-0.40B Q8_0, the latent
+mixture; DeepSeek-V2-Lite Q4_K_M at a six-block seam, a shared expert and no
+latent; the qwen4exp fixture, a float bank that must fall back) holds a tight
+cache (k+1 sheets), an auto-sized one, a budget cut halfway that must drop a
+cache with every block still placed, and no cache, each to the host: the same
+greedy token unless the host's own top two are within 0.05, logits within the
+model's device band, and the split counted (split steps, experts run on the
+card, experts admitted). Run against violations: misses' weights left on the
+card's share (NMSE 6.3e-2 at position 2, both cache arms fail); `dropCaches`
+made a no-op (0 caches dropped, the yield arm fails). On the V100 every arm
+passed, DeepSeek-V2-Lite's auto cache holding the whole 64-expert bank.
+`TestOffCardDecodeDoesNotAllocate` now also requires the split to run on a
+packed hybrid model (0 engine allocations over 64 tokens with it). The real
+checkpoint against llama.cpp de7fa0a, teacher-forced on the host: 20 of 20
+positions agree (`TestGreedyMatchesLlamaCpp` with `JITLLM_GREEDY_PAIR` naming
+the existing container, so the test does not reconvert 125 GB); the free-run
+" Lisbon" / "<think>" parting reported earlier is a near tie, and Strata's
+own greedy run says "<think>" there too.
+
 ## The prefix cache: addressing granularity, the hybrid restore point, and sealTail
 
 ★★ **AND THE CACHE'S ADDRESSING GRANULARITY WAS THE COMPUTE PAGE, WHICH IS THE

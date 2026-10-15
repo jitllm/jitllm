@@ -42,6 +42,10 @@ type cudaDev struct {
 	// is capturing, and that session runs on the owner goroutine.
 	cap   *cuda.Stream
 	noCap bool // stream creation failed; do not keep asking
+	// up is the copy queue (backend.Uploader), a non-blocking stream created
+	// on first use; noUp records that it could not be.
+	up   *cuda.Stream
+	noUp bool
 	// tev is a ring of (before, after) event pairs around the last three
 	// replays, and ti counts replays timed; see timeReplay.
 	tev [3][2]*cuda.Event
@@ -893,6 +897,7 @@ func (c *cudaDev) Close() {
 	c.reqs <- func() {
 		// The streams go before the context that owns them.
 		c.cap.Destroy()
+		c.up.Destroy()
 		c.qmu.Lock()
 		for q := range c.queues {
 			q.st.Destroy()
@@ -1274,6 +1279,10 @@ type cudaQueue struct {
 // times over.
 const stageMin = 1 << 20
 
+// stageWrites is how many writes of the largest size seen the arena holds
+// before it drains.
+const stageWrites = 8
+
 // room returns n bytes of the staging arena, draining the stream first when
 // they are not free and growing the arena when n is more than all of it.
 func (q *cudaQueue) room(n int) ([]byte, error) {
@@ -1288,7 +1297,11 @@ func (q *cudaQueue) room(n int) ([]byte, error) {
 			cuda.FreeHost(q.stage)
 			q.stage = nil
 		}
-		b, err := cuda.HostAlloc(max(n, stageMin))
+		// Room for stageWrites writes of this size: an arena grown to exactly
+		// n is full after one, and every write after it -- the next sheet, or a
+		// decode token's few words -- drained the stream first. A hybrid
+		// expert cache sending 2.9 MB sheets waited on the card at each.
+		b, err := cuda.HostAlloc(max(n*stageWrites, stageMin))
 		if err != nil {
 			return nil, err
 		}
@@ -1465,4 +1478,33 @@ func (c *cudaDev) hasQueues() bool {
 	c.qmu.Lock()
 	defer c.qmu.Unlock()
 	return len(c.queues) > 0
+}
+
+// Upload copies p into b at off on the device's copy queue (backend.Uploader).
+// A session runs on a thread with the context current, as the copy needs.
+func (s *cudaSession) Upload(b Buf, off int, p []byte) error {
+	if len(p) == 0 {
+		return nil
+	}
+	c := s.c
+	if c.up == nil {
+		if c.noUp {
+			return s.WriteAt(b, off, p)
+		}
+		st, err := c.d.NewQueue()
+		if err != nil {
+			c.noUp = true
+			return s.WriteAt(b, off, p)
+		}
+		c.up = st
+	}
+	return b.(*cudaBuf).b.WriteAtOn(c.up, off, unsafe.Pointer(&p[0]), len(p))
+}
+
+// UploadWait waits for the copy queue (backend.Uploader).
+func (s *cudaSession) UploadWait() error {
+	if s.c.up == nil {
+		return nil
+	}
+	return s.c.up.Sync()
 }

@@ -49,11 +49,34 @@ func (h *Hotness) add(li int, sel []int32) {
 	}
 }
 
-// endToken is called once per token, after every layer has routed.
+// endToken is called once per token, after every layer has routed. Every
+// hotHalf tokens the counts and the token count are halved together, so a
+// use rate stays a rate (within the halving's rounding) while the old tokens
+// weigh half: the counts follow a
+// shift in what the prompts route to, which a device's expert cache keeps
+// by (nn.LayerWeights.ExpertUses).
 func (h *Hotness) endToken() {
-	if h != nil {
-		h.tokens++
+	if h == nil {
+		return
 	}
+	h.tokens++
+	if h.tokens >= 2*hotHalf {
+		for i := range h.count {
+			h.count[i] >>= 1
+		}
+		h.tokens >>= 1
+	}
+}
+
+// hotHalf is how many tokens the counts weigh at full before halving.
+const hotHalf = 256
+
+// layer is block li's counts, one an expert, nil without a mixture there.
+func (h *Hotness) layer(li int) []uint32 {
+	if h == nil || (li+1)*h.nExpert > len(h.count) {
+		return nil
+	}
+	return h.count[li*h.nExpert : (li+1)*h.nExpert : (li+1)*h.nExpert]
 }
 
 // Uses returns each expert's selection probability, indexed

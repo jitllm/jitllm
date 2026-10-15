@@ -261,6 +261,12 @@ func gpuOptions() []tier.Option {
 		{"JITLLM_GPU_NO_AUTOSTREAM", set("JITLLM_GPU_NO_AUTOSTREAM"), func(c *tier.Config) { c.NoAutoStream = true }},
 		{"JITLLM_GPU_HYBRID", os.Getenv("JITLLM_GPU_HYBRID") == "1", func(c *tier.Config) { c.HybridExperts = true }},
 		{"JITLLM_GPU_HYBRID", os.Getenv("JITLLM_GPU_HYBRID") == "0", func(c *tier.Config) { c.NoHybrid = true }},
+		// =0 gives a hybrid block no expert cache on the card (tier.WithHybridCache).
+		{"JITLLM_GPU_HYBRID_CACHE", os.Getenv("JITLLM_GPU_HYBRID_CACHE") == "0", func(c *tier.Config) { c.NoHybridCache = true }},
+		{"JITLLM_GPU_SPLIT_SWAPS", os.Getenv("JITLLM_GPU_SPLIT_SWAPS") != "",
+			func(c *tier.Config) { c.SplitSwaps = num("JITLLM_GPU_SPLIT_SWAPS") }},
+		{"JITLLM_GPU_SPLIT_ADMIT", num("JITLLM_GPU_SPLIT_ADMIT") > 0,
+			func(c *tier.Config) { c.SplitAdmit = num("JITLLM_GPU_SPLIT_ADMIT") }},
 		{"JITLLM_GPU_STREAM_NOPIN", set("JITLLM_GPU_STREAM_NOPIN"), func(c *tier.Config) { c.StreamNoPin = true }},
 		{"JITLLM_GPU_STREAM_GROUPS", num("JITLLM_GPU_STREAM_GROUPS") > 0,
 			func(c *tier.Config) { c.StreamGroups = num("JITLLM_GPU_STREAM_GROUPS") }},

@@ -78,6 +78,9 @@ func speedCmd(args []string) error {
 		return err
 	}
 	defer m.Close()
+	if err := preloadWait(m); err != nil {
+		return err
+	}
 	tOpen := time.Since(t00)
 	d, closeDev, name, err := openDevices(*dev, *vram, 0, m.StreamGroups())
 	if err != nil {

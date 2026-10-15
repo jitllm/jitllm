@@ -40,6 +40,14 @@ type modelOpts struct {
 	// noShOverlap runs a mixture's shared expert after its routed read
 	// rather than behind it; see WithSharedOverlap.
 	noShOverlap bool
+	// forwardRows is the longest prompt run a token at a time; see
+	// WithPrefillForwardRows.
+	forwardRows    int
+	forwardRowsSet bool
+	// hybridSpin is how long the pool's workers spin between a token's
+	// host expert calls inside a device's submission; see WithHybridSpin.
+	hybridSpin    time.Duration
+	hybridSpinSet bool
 	// linRowByRow runs a prompt's linear blocks one matvec per row
 	// (WithLinearRowByRow).
 	linRowByRow bool
@@ -168,6 +176,31 @@ func (s *State) SetResidualFold(on bool) { s.residFold = on }
 // default: the two read nothing in common and the shared contribution is
 // added where it always was, so the answer is the same float sum
 // (TestSharedOverlapIsTheSameSum); off is the other arm.
+// WithHybridSpin sets how long the host pool's workers spin between the
+// routed-expert calls a device makes from inside its submission (hybrid
+// experts, nn.LayerWeights.HostExperts). Between two such calls the host waits
+// on the card and uses no core, for longer than the pool's own spin budget,
+// so the workers park and each call wakes them one by one: on Qwen3.8-Flash-
+// Next over a V100 that wake was 140 us of a 545 us call, 48 times a token.
+// The default is 2 ms, the measured winner there; 0 keeps the pool's budget.
+func WithHybridSpin(d time.Duration) Option {
+	return func(l *loadOpts) { l.opt.hybridSpin, l.opt.hybridSpinSet = d, true }
+}
+
+// WithPrefillForwardRows runs a prompt of up to n tokens a token at a time,
+// through the decode path, rather than as one batched chunk. One token always
+// is. A placement whose blocks suspend for host experts runs decode's split
+// (the card's cached experts beside the host's) where the batched chunk runs
+// every row's experts on the host.
+//
+// Unset, a model whose device has run host experts takes hostRowsByRow, and
+// any other one token: on Qwen3.8-Flash-Next over a V100 a five-token prompt
+// took 210-236 ms this way and 474-482 ms as a chunk whose experts all ran
+// on the host.
+func WithPrefillForwardRows(n int) Option {
+	return func(l *loadOpts) { l.opt.forwardRows, l.opt.forwardRowsSet = n, true }
+}
+
 func WithSharedOverlap(on bool) Option { return func(l *loadOpts) { l.opt.noShOverlap = !on } }
 
 // WithLinearRowByRow runs a prompt chunk's recurrent blocks (the gated delta
@@ -474,4 +507,12 @@ func ParsePlacement(spec string, strict bool) (Placement, error) {
 		}
 	}
 	return p, nil
+}
+
+// hybridSpinFor is WithHybridSpin's duration with its default.
+func (o *modelOpts) hybridSpinFor() time.Duration {
+	if o.hybridSpinSet {
+		return o.hybridSpin
+	}
+	return 2 * time.Millisecond
 }

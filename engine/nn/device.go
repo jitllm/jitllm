@@ -269,6 +269,11 @@ type LayerWeights struct {
 	// stride of k+1 (ExpertRank's layout), w of k, in and out of the expert
 	// width.
 	HostExpertsRows func(sel []uint32, w, in, out []float32, rows, k int) error
+	// ExpertUses is the session's selection counts for this block's experts,
+	// one a expert (model.Hotness): the host's routing adds to it, a device
+	// routing the block adds its own selections, and a device's expert cache
+	// keeps what it counts most. nil where nothing is counted.
+	ExpertUses []uint32
 }
 
 // HCWeights are one Qwen3.8-Flash-Next hyper-connection's: the grouped

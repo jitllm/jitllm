@@ -568,6 +568,14 @@ func (f *JIT) SetSpinning(on bool) {
 	}
 }
 
+// SetSpinFor has the pool's workers spin for d before parking, until the
+// next SetSpinning (sched.Pool.SetSpinFor).
+func (f *JIT) SetSpinFor(d time.Duration) {
+	if f != nil && f.pool != nil {
+		f.pool.SetSpinFor(d)
+	}
+}
+
 // Spinning reports what SetSpinning last chose.
 func (f *JIT) Spinning() bool { return f != nil && f.pool != nil && f.pool.Spinning() }
 
