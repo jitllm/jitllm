@@ -600,7 +600,14 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 			return fmt.Errorf("the prompt is %d positions and fills the model's context of %d", len(ids)+extra, m.Cfg.NCtx)
 		}
 	}
-	st := m.NewState(len(ids) + extra + n + 1)
+	// JITLLM_WARMUP_PROMPT gives the warm-ups (JITLLM_WARMUP, below) a text
+	// of their own, so what they leave in the caches is not the measured
+	// prompt's; the session is sized for the longer of the two.
+	var wids []int32
+	if wp := os.Getenv("JITLLM_WARMUP_PROMPT"); wp != "" {
+		wids = m.Vocab.Encode(wp, true)
+	}
+	st := m.NewState(max(len(ids)+extra, len(wids)) + n + 1)
 	defer st.Close()
 	var kvStore *model.FileStore
 	// The KV store is attached before the device is chosen. The namespace
@@ -761,8 +768,11 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	// device's counters printed at the end include the warm-ups.
 	if k, _ := strconv.Atoi(os.Getenv("JITLLM_WARMUP")); k > 0 && sp == nil && imgPath == "" && kvCacheDir == "" {
 		t0 := time.Now()
+		if wids == nil {
+			wids = ids
+		}
 		for i := 0; i < k; i++ {
-			lg, err := st.Prefill(ids)
+			lg, err := st.Prefill(wids)
 			if err != nil {
 				return withDeviceErr(err, dev)
 			}
