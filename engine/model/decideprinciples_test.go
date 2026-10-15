@@ -43,7 +43,7 @@ func decisionDevices(t *testing.T) []*tier.GPU {
 // migration, so the device attends over nothing it wrote.
 func TestDecisionRelocatesMidPrompt(t *testing.T) {
 	for _, c := range decisionCases {
-		if c.kind == jlm.DecisionLaya {
+		if c.kind == jlm.DecisionLaya || c.kind == jlm.DecisionD1Omni {
 			continue // an encoder has no history: TestDecisionRelocatesBetweenDevices
 		}
 		t.Run(c.name, func(t *testing.T) {
