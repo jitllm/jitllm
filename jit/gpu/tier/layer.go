@@ -875,7 +875,7 @@ func (st *streamBank) admit(g *devTier, s backend.Session, l *layer, nExpert, ma
 		if len(st.items) >= max {
 			break
 		}
-		if st.hit[i] || st.slotOf[e] >= 0 {
+		if st.hit[i] || st.slotOf[e] != -1 {
 			continue
 		}
 		v := -1
@@ -904,36 +904,214 @@ func (st *streamBank) admit(g *devTier, s backend.Session, l *layer, nExpert, ma
 			g.swapsLeft--
 			st.slotOf[o] = -1
 		}
-		st.owner[v], st.slotOf[e], st.used[v] = int32(e), int32(v), st.tick
+		st.owner[v], st.slotOf[e], st.used[v] = int32(e), slotInFlight, st.tick
 		st.items = append(st.items, streamItem{e: e, slot: v})
 	}
 	if len(st.items) == 0 {
 		return nil
 	}
+	// The sheets are sent later, where the host would wait anyway: at the
+	// next block's wait for its router, or at the call's end (flushAdmits).
+	lo := len(g.admItems)
+	g.admItems = append(g.admItems, st.items...)
+	g.adm = append(g.adm, admJob{st: st, l: l, nExpert: nExpert, lo: lo, hi: len(g.admItems)})
+	return nil
+}
+
+// slotInFlight marks an expert whose sheet is on its way to a slot: a miss
+// until the sheet has landed (finishAdmits), and not admitted again.
+const slotInFlight = -2
+
+// admJob is one block's admissions waiting to be sent: g.admItems[lo:hi].
+type admJob struct {
+	st      *streamBank
+	l       *layer
+	nExpert int
+	lo, hi  int
+}
+
+// flushAdmits sends the admissions admit queued. It runs where the host waits
+// on the card anyway -- before a block's router readback, and at the call's
+// end -- so a sheet's page read and host copy are off the token's path. On a
+// session with a copy queue (backend.Uploader) the sheets are copied into a
+// page-locked ring and sent beside the launches, and the slots are taken
+// into use at the call's end (finishAdmits), once the copies have landed;
+// otherwise they are sent in order with the launches (put) and in use at once.
+func (g *devTier) flushAdmits(s backend.Session) error {
+	if len(g.adm) == 0 {
+		return nil
+	}
 	defer func(t0 time.Time) { g.TAdmit += time.Since(t0) }(time.Now())
-	st.want = st.want[:0]
-	for _, it := range st.items {
-		st.want = append(st.want, it.e)
+	up, _ := s.(backend.Uploader)
+	if up != nil && !g.upRingReady() {
+		up = nil
 	}
 	var err error
-	switch {
-	case st.pre != nil:
-		err = st.pre(st.want)
-	case st.ensure != nil:
-		err = st.ensure(&st.w)
+	for _, j := range g.adm {
+		st := j.st
+		items := g.admItems[j.lo:j.hi]
+		st.want = st.want[:0]
+		for _, it := range items {
+			st.want = append(st.want, it.e)
+		}
+		switch {
+		case st.pre != nil:
+			err = st.pre(st.want)
+		case st.ensure != nil:
+			err = st.ensure(&st.w)
+		}
+		if err == nil && st.sel2 != nil {
+			err = st.sel2(&st.w, st.want)
+		}
+		if err == nil && up != nil {
+			err = st.upload(g, up, j.l, j.nExpert, items)
+			if err == nil {
+				g.admPub = append(g.admPub, j)
+				g.SplitQueued += len(items)
+			}
+		} else if err == nil {
+			st.items = append(st.items[:0], items...)
+			if err = st.put(g, s, j.l, j.nExpert, [2]int{0, len(items)}); err == nil {
+				st.publish(items)
+			}
+		}
+		if err != nil {
+			// A sheet half sent is not the expert the map names.
+			st.forget()
+			break
+		}
+		g.SplitAdmits += len(items)
 	}
-	if err == nil && st.sel2 != nil {
-		err = st.sel2(&st.w, st.want)
+	g.adm = g.adm[:0]
+	return err
+}
+
+// finishAdmits sends what is queued, waits for the copy queue and takes the
+// landed slots into use. It runs at the end of every call that admitted,
+// so no sheet is in flight between calls (dropCaches frees banks there).
+func (g *devTier) finishAdmits(s backend.Session) error {
+	err := g.flushAdmits(s)
+	if len(g.admPub) > 0 {
+		t0 := time.Now()
+		if up, ok := s.(backend.Uploader); ok {
+			if werr := up.UploadWait(); err == nil {
+				err = werr
+			}
+		}
+		for _, j := range g.admPub {
+			if err != nil {
+				j.st.forget()
+				continue
+			}
+			j.st.publish(g.admItems[j.lo:j.hi])
+		}
+		g.admPub = g.admPub[:0]
+		g.TAdmit += time.Since(t0)
 	}
-	if err == nil {
-		err = st.put(g, s, l, nExpert, [2]int{0, len(st.items)})
+	if len(g.adm) == 0 {
+		g.admItems = g.admItems[:0]
 	}
+	g.ringUsed = 0
+	return err
+}
+
+// publish takes landed sheets into use: an expert whose slot is still its own
+// (no forget or later eviction moved it) is a hit from the next token.
+func (st *streamBank) publish(items []streamItem) {
+	for _, it := range items {
+		if st.owner != nil && it.slot < len(st.owner) && st.owner[it.slot] == int32(it.e) &&
+			int(it.e) < len(st.slotOf) && st.slotOf[it.e] == slotInFlight {
+			st.slotOf[it.e] = int32(it.slot)
+		}
+	}
+}
+
+// upRingBytes is the page-locked ring flushAdmits copies sheets through.
+const upRingBytes = 64 << 20
+
+// upRingReady allocates the ring on first use, and reports false where the
+// device has no page-locked memory.
+func (g *devTier) upRingReady() bool {
+	if g.upRing != nil {
+		return true
+	}
+	hp, ok := g.dev.(backend.HostPinner)
+	if !ok || g.noPin || g.StreamNoPin {
+		return false
+	}
+	b, err := hp.PinHost(upRingBytes)
 	if err != nil {
-		// A sheet half sent is not the expert the map names.
-		st.forget()
-		return err
+		return false
 	}
-	g.SplitAdmits += len(st.items)
+	g.upRing = b
+	return true
+}
+
+// upload copies items' sheets through the ring onto the copy queue, at their
+// slots. A sheet plane larger than the ring goes the ordered way.
+func (st *streamBank) upload(g *devTier, up backend.Uploader, l *layer, nExpert int, items []streamItem) error {
+	for m, pair := range [3]struct {
+		r *resident
+		w nn.Weight
+	}{{l.gate, st.w.Gate}, {l.up, st.w.Up}, {l.down, st.w.Down}} {
+		if m == 0 && pair.r == nil && pair.w.Packed == nil && pair.w.Data == nil {
+			continue
+		}
+		if pair.r == nil || !pair.r.ok || pair.w.Packed == nil {
+			return fmt.Errorf("tier: streamed bank %d has no host side", m)
+		}
+		pk := pair.w.Packed
+		for pl := 0; pl < 3; pl++ {
+			n := st.sh[m][pl]
+			if n == 0 {
+				continue
+			}
+			if n > len(g.upRing) {
+				return fmt.Errorf("tier: a %d-byte sheet plane is wider than the upload ring", n)
+			}
+			dst := [3]backend.Buf{pair.r.qs, pair.r.d, pair.r.sc}[pl]
+			for _, it := range items {
+				if int(it.e) >= nExpert {
+					return fmt.Errorf("tier: the router selected expert %d of %d", it.e, nExpert)
+				}
+				if g.ringUsed+n > len(g.upRing) {
+					// Every copy from the ring has landed before it is reused.
+					if err := up.UploadWait(); err != nil {
+						return err
+					}
+					g.ringUsed = 0
+				}
+				buf := g.upRing[g.ringUsed : g.ringUsed+n : g.ringUsed+n]
+				if pk.Sheet != nil {
+					sp, rel, err := pk.Sheet(int(it.e))
+					if err != nil {
+						rel()
+						return err
+					}
+					src := [3][]byte{sp.QS, sp.D, sp.SC}[pl]
+					if len(src) != n {
+						rel()
+						return fmt.Errorf("tier: expert %d plane %d is %d bytes, want %d", it.e, pl, len(src), n)
+					}
+					copy(buf, src)
+					rel()
+				} else {
+					whole := [3][]byte{pk.QS, pk.D, pk.SC}[pl]
+					off := int(it.e) * n
+					if off+n > len(whole) {
+						return fmt.Errorf("tier: expert %d plane %d wants bytes %d..%d of %d",
+							it.e, pl, off, off+n, len(whole))
+					}
+					copy(buf, whole[off:off+n])
+				}
+				g.ringUsed += n
+				if err := up.Upload(dst, it.slot*n, buf); err != nil {
+					return err
+				}
+				g.StreamBytes += int64(n)
+			}
+		}
+	}
 	return nil
 }
 
@@ -7139,6 +7317,14 @@ func (g *devTier) layersSession(s backend.Session) {
 	var err error
 	direct := false
 	defer func() { a.err, a.direct = err, direct }()
+	// Runs first: no admitted sheet is in flight when the call returns.
+	defer func() {
+		if len(g.adm) > 0 || len(g.admPub) > 0 {
+			if aerr := g.finishAdmits(s); err == nil {
+				err = aerr
+			}
+		}
+	}()
 	w := func(b backend.Buf, p []byte) {
 		if err == nil {
 			t := time.Now()
@@ -8493,8 +8679,15 @@ func (g *devTier) layersSession(s backend.Session) {
 								l.stream.sel[i] = uint32((li*31 + i*7) % p.NExpert)
 							}
 						} else if err == nil {
+							// Admissions queued by the blocks before go out
+							// while the card runs this one up to its router.
+							if len(g.adm) > 0 {
+								err = g.flushAdmits(s)
+							}
 							tw := time.Now()
-							err = s.Sync()
+							if err == nil {
+								err = s.Sync()
+							}
 							g.TStreamWait += time.Since(tw)
 						}
 						if err == nil && !g.StreamFixedSel {

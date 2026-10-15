@@ -197,8 +197,8 @@ func TestSplitExpertsMatchTheHost(t *testing.T) {
 								p, nmse, argmaxOf(got[p]), argmaxOf(want[p]))
 						}
 					}
-					t.Logf("%d split steps, %d experts on the card, %d admitted, %d hybrid steps; worst NMSE %.2e",
-						st.SplitRuns, st.SplitHits, st.SplitAdmits, st.HybridRuns, worst)
+					t.Logf("%d split steps, %d experts on the card, %d admitted (%d on the copy queue), %d hybrid steps; worst NMSE %.2e",
+						st.SplitRuns, st.SplitHits, st.SplitAdmits, st.SplitQueued, st.HybridRuns, worst)
 				})
 			}
 		})

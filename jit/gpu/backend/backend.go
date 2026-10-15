@@ -204,6 +204,18 @@ type Queue interface{ Close() }
 // which its transfers read at the link's rate. Pin and Unpin may be called
 // inside a Session. CUDA implements it; on Vulkan and Metal the mapped
 // buffers are already the transfer path and nothing is gained.
+// Uploader is an optional Session that copies host memory to a buffer on a
+// copy queue of the device's own, beside the session's launches: an upload
+// the next launches do not read needs no place in their order. p must stay
+// untouched until UploadWait returns (page-locked memory makes the copy
+// asynchronous; pageable memory is staged by the driver before Upload
+// returns).
+type Uploader interface {
+	Upload(b Buf, off int, p []byte) error
+	// UploadWait returns once every Upload issued before it has landed.
+	UploadWait() error
+}
+
 type HostPinner interface {
 	PinHost(n int) ([]byte, error)
 	UnpinHost(p []byte)
