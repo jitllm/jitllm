@@ -7879,7 +7879,12 @@ func (g *devTier) layersSession(s backend.Session) {
 								tabRag = dec
 							}
 							if pk.ragStaged {
-								err = pk.ragStagedAttend(lc, qAtt, kDst, vDst, bs.n, bs.xb, pgTab, tabRag, sk, win)
+								err = pk.ragStagedAttend(lc, qAtt, kDst, vDst, bs.n, bs.xb, pgTab, tabRag, sk, win, tabRag == desc)
+								g.RagStaged++
+								if pk.pf.mode != prefillTiled {
+									g.RagStagedMMA++
+								}
+								g.RagPasses += pk.ragPasses(win)
 							} else {
 								err = pk.ragAttend(lc, qAtt, kDst, vDst, bs.n, bs.xb, pgTab, tabRag, sk)
 							}

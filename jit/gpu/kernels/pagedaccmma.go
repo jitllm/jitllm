@@ -40,11 +40,12 @@ func PagedAttnAccMMA(s FlashShape, mt, nt int) (*ir.Kernel, error) {
 	P, C, S := s.Page, s.Chunk, splitsOf(s)
 	kvRow, gqa := s.KVHeads*s.Dim, s.Heads/s.KVHeads
 	sh := ir.MMAShape{M: 16, N: 8, K: 8, Kind: ir.MMAF16}
-	b := ir.New(fmt.Sprintf("pagedaccmma_m%dn%d", mt, nt), [3]int{128, 1, 1})
+	b := ir.New(fmt.Sprintf("pagedaccmma_m%dn%d%s", mt, nt, mapSuffix(s)), [3]int{128, 1, 1})
 	pA, pV := b.Param("pA", ir.F32), b.Param("pV", ir.F32)
 	b.Param("pN", ir.U32)
 	pPart := b.Param("pPart", ir.F32)
 	pTab, pRow := b.Param("pTab", ir.U32), b.Param("pRow", ir.U32)
+	rm := newRowMap(b, s)
 	c := func(v int) ir.Value { return b.Const(ir.U32, int64(v)) }
 	add := func(a, x ir.Value) ir.Value { return b.Add(ir.U32, a, x) }
 	mul := func(a, x ir.Value) ir.Value { return b.Mul(ir.U32, a, x) }
@@ -60,7 +61,7 @@ func PagedAttnAccMMA(s FlashShape, mt, nt int) (*ir.Kernel, error) {
 	rest = udiv(b, rest, S)
 	h := urem(b, rest, s.Heads)
 	qryW := mul(udiv(b, rest, s.Heads), c(8*nt))
-	sp := prefillSpanOf(b, pRow, qryW, add(qryW, c(8*nt-1)))
+	sp := rm.span(b, pRow, qryW, add(qryW, c(8*nt-1)))
 	dimW := mul(db, c(16*mt))
 	col := add(dimW, lg) // + 8x + 16i: the lane's A rows, dims of V
 	if s.MLAValueTail {
@@ -237,6 +238,9 @@ func PagedAttnAccMMA(s FlashShape, mt, nt int) (*ir.Kernel, error) {
 				o := add(mul(add(mul(add(mul(q, c(s.Heads)), h), c(S)), spl), c(padded+64)), dim)
 				if s.Splits == 0 {
 					o = add(mul(add(mul(q, c(s.Heads)), h), c(vd)), dim)
+				}
+				if rm.on {
+					o = add(rm.out(b, q, h, spl, s), dim)
 				}
 				b.Store(pPart, o, d[i][j][x], 0)
 			}

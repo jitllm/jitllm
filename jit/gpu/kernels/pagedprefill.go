@@ -85,9 +85,6 @@ func prefillCheck(what string, s FlashShape) error {
 	if s.F16 && (s.Dim%2 != 0 || s.KVHeads*s.Dim%2 != 0) {
 		return fmt.Errorf("kernels: %s: packed f16 V needs an even Dim: %+v", what, s)
 	}
-	if s.Map && s.Splits != 0 {
-		return fmt.Errorf("kernels: %s: a run table (Map) is the direct form's: no splits", what)
-	}
 	return nil
 }
 
@@ -140,6 +137,14 @@ func newRowMap(b *ir.Builder, s FlashShape) rowMap {
 	return rowMap{on: true, pMap: b.Param("pMap", ir.U32), pBase: b.Param("pBase", ir.U32)}
 }
 
+// mapSuffix names a kernel's run-table form.
+func mapSuffix(s FlashShape) string {
+	if s.Map {
+		return "_map"
+	}
+	return ""
+}
+
 // row is slot's row.
 func (m rowMap) row(b *ir.Builder, slot ir.Value) ir.Value {
 	if !m.on {
@@ -154,6 +159,20 @@ func (m rowMap) base(b *ir.Builder, pRow, slot ir.Value) ir.Value {
 		return prefillBase(b, pRow)
 	}
 	return b.Load(ir.U32, m.pBase, slot, 0)
+}
+
+// out is where slot's head h writes in an accumulate: in the direct form
+// the output, [row][head][value]; with splits the partials at split spl,
+// (row*Heads + h)*S + spl items of padded+64 -- both at the slot's row,
+// where the merge reads them.
+func (m rowMap) out(b *ir.Builder, slot, h, spl ir.Value, s FlashShape) ir.Value {
+	u := func(x int) ir.Value { return b.Const(ir.U32, int64(x)) }
+	vd := stagedValue(s)
+	it := b.Add(ir.U32, b.Mul(ir.U32, m.row(b, slot), u(s.Heads)), h)
+	if s.Splits == 0 {
+		return b.Mul(ir.U32, it, u(vd))
+	}
+	return b.Mul(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, it, u(s.Splits)), spl), u((vd+31)/32*32+64))
 }
 
 // span is prefillSpanOf over the slots first..last: their rows' keys and
@@ -509,6 +528,11 @@ func PagedPrefillSoftmax(s FlashShape, lanes, qt int) (*ir.Kernel, error) {
 	}
 	padded := (stagedValue(s) + 31) / 32 * 32
 	pp := b.Mul(ir.U32, item, u(padded+64))
+	if rm.on {
+		// A run table's partials are at the slot's row, where the merge
+		// reads them (FlashShape.Map).
+		pp = b.Mul(ir.U32, add(b.Mul(ir.U32, dr, u(s.Heads*S)), urem(b, item, s.Heads*S)), u(padded+64))
+	}
 	if lanes == 32 {
 		b.Store(pPart, add(pp, lane), m, int64(padded))
 		b.Store(pPart, add(pp, lane), l, int64(padded+32))
@@ -701,8 +725,8 @@ func PagedAttnAccTiled(s FlashShape, qt int) (*ir.Kernel, error) {
 		o := int64(r) * rstep
 		at := pb
 		if rm.on {
-			// The direct form's output, at the slot's row.
-			at, o = mul(add(mul(rm.row(b, add(qrow, u(r))), u(s.Heads)), h), u(vd)), 0
+			// The output, or the partials, at the slot's row.
+			at, o = rm.out(b, add(qrow, u(r)), h, spl, s), 0
 		}
 		if s.F16 {
 			b.Store(pPart, add(at, mul(j, u(2))), acc[2*r], o)
@@ -740,11 +764,12 @@ func PagedAttnScoresMMA(s FlashShape, nt int) (*ir.Kernel, error) {
 	P, kvRow, gqa := s.Page, s.KVHeads*s.Dim, s.Heads/s.KVHeads
 	sh := ir.MMAShape{M: 16, N: 8, K: 16, Kind: ir.MMAF16}
 	na, nb, nc := sh.Frags()
-	b := ir.New("pagedscoresmma", [3]int{128, 1, 1})
+	b := ir.New("pagedscoresmma"+mapSuffix(s), [3]int{128, 1, 1})
 	pQ, pK := b.Param("pQ", ir.F32), b.Param("pK", ir.F32)
 	b.Param("pN", ir.U32)
 	pOut := b.Param("pOut", ir.F32)
 	pTab, pRow := b.Param("pTab", ir.U32), b.Param("pRow", ir.U32)
+	rm := newRowMap(b, s)
 	u := func(x int) ir.Value { return b.Const(ir.U32, int64(x)) }
 	add := func(a, c ir.Value) ir.Value { return b.Add(ir.U32, a, c) }
 	mul := func(a, c ir.Value) ir.Value { return b.Mul(ir.U32, a, c) }
@@ -759,9 +784,16 @@ func PagedAttnScoresMMA(s FlashShape, nt int) (*ir.Kernel, error) {
 	rest := udiv(b, warp, ktiles)
 	h := urem(b, rest, s.Heads)
 	qrow := mul(udiv(b, rest, s.Heads), u(16))
-	sp := prefillSpanOf(b, pRow, qrow, add(qrow, u(15)))
-	// A's rows: query rows qrow+g and qrow+g+8, elements 2t (and +8).
-	qbase := add(mul(add(mul(add(qrow, g), u(s.Heads)), h), u(s.Dim)), two)
+	sp := rm.span(b, pRow, qrow, add(qrow, u(15)))
+	// A's rows: query rows qrow+g and qrow+g+8, elements 2t (and +8); with
+	// a run table each slot's own row.
+	// Without one the second row is an immediate offset from the first.
+	qOf := func(r ir.Value) ir.Value { return add(mul(add(mul(rm.row(b, r), u(s.Heads)), h), u(s.Dim)), two) }
+	qbase, qstep := [2]ir.Value{qOf(add(qrow, g))}, int64(8*s.Heads*s.Dim)
+	qbase[1] = qbase[0]
+	if rm.on {
+		qbase[1], qstep = qOf(add(qrow, add(g, u(8)))), 0
+	}
 	// B's columns: keys T+g (+8j) of the tile at T, elements 2t (and +8).
 	kvh := mul(udiv(b, h, gqa), u(s.Dim))
 	slot0 := mul(kt, u(8*nt))
@@ -772,7 +804,8 @@ func PagedAttnScoresMMA(s FlashShape, nt int) (*ir.Kernel, error) {
 	rows := [2]ir.Value{add(qrow, g), add(qrow, add(g, u(8)))}
 	var ks, ke [2]ir.Value
 	for i, r := range rows {
-		ks[i], ke[i] = pagedDesc(b, pRow, r, PRowStart), pagedDesc(b, pRow, r, PRowEnd)
+		dr := rm.row(b, r)
+		ks[i], ke[i] = pagedDesc(b, pRow, dr, PRowStart), pagedDesc(b, pRow, dr, PRowEnd)
 	}
 	live := b.Select(ir.U32, b.Lt(ir.U32, T, sp.hi), b.Select(ir.U32, b.Lt(ir.U32, sp.lo, add(T, u(8*nt))), u(1), u(0)), u(0))
 	b.LoopN(live)
@@ -791,10 +824,11 @@ func PagedAttnScoresMMA(s FlashShape, nt int) (*ir.Kernel, error) {
 			if i >= 2 {
 				off += 8
 			}
+			qb := qbase[i%2]
 			if i%2 == 1 {
-				off += 8 * int64(s.Heads*s.Dim)
+				off += qstep
 			}
-			af[i] = b.PackF16(b.Load(ir.F32, pQ, qbase, off), b.Load(ir.F32, pQ, qbase, off+1))
+			af[i] = b.PackF16(b.Load(ir.F32, pQ, qb, off), b.Load(ir.F32, pQ, qb, off+1))
 		}
 		for j := 0; j < nt; j++ {
 			bf := make([]ir.Value, nb)

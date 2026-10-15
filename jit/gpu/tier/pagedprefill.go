@@ -63,8 +63,10 @@ type pagedPrefill struct {
 	ragK       map[int]backend.Kernel
 	// ragMerge is the mapped wide merge by slot count, with sinks.
 	ragMerge map[int]backend.Kernel
-	// ragVars is the staged form's run-table variants by chunk and width.
-	ragVars map[[2]int]*prefillVariant
+	// ragVars is the staged form's run-table variants by chunk, splits and
+	// width; ragFin is the mapped merge that finishes its passes, by width.
+	ragVars map[[3]int]*prefillVariant
+	ragFin  map[int]backend.Kernel
 	// flash80 says flash is kernels.FlashPrefill80, the m16n8k16 form, or
 	// its m16n8k8 twin on sm_75 (FlashPrefill80K8).
 	flash80         bool
@@ -197,7 +199,7 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 			}
 		}
 	}
-	if pf.ragBuild != nil || pf.flash == nil && pf.mode == prefillTiled {
+	if pf.ragBuild != nil || pf.flash == nil {
 		g.RagForms++
 	}
 	if pf.flash != nil && p.AttnSinks {
@@ -366,6 +368,17 @@ func (g *devTier) prefillVariantAt(bs *blockScratch, pf *pagedPrefill, chunk, sp
 	s.Rows, s.Chunk, s.Splits = bs.rows, chunk, splits
 	s.Group, s.Warps, s.KImm = 0, 0, false
 	s.Sink = p.AttnSinks && splits == 0
+	v, err := g.buildVariant(pf, s)
+	if err != nil {
+		return nil, fmt.Errorf("paged prefill at %d keys: %w", chunk*max(1, splits), err)
+	}
+	pf.vars[key] = v
+	return v, nil
+}
+
+// buildVariant compiles the staged kernels at s on the set's matrix
+// instruction (pf.mode) and grows the planes to hold them.
+func (g *devTier) buildVariant(pf *pagedPrefill, s kernels.FlashShape) (*prefillVariant, error) {
 	v := &prefillVariant{s: s}
 	var ks, kf, ka *ir.Kernel
 	var err error
@@ -409,7 +422,7 @@ func (g *devTier) prefillVariantAt(bs *blockScratch, pf *pagedPrefill, chunk, sp
 		c, err := g.compileShared(k)
 		if err != nil {
 			v.close()
-			return nil, fmt.Errorf("paged prefill at %d keys: %w", chunk*max(1, splits), err)
+			return nil, err
 		}
 		*cs[i] = c
 	}
@@ -425,7 +438,6 @@ func (g *devTier) prefillVariantAt(bs *blockScratch, pf *pagedPrefill, chunk, sp
 		return nil, err
 	}
 	pf.planeFloats = max(pf.planeFloats, n)
-	pf.vars[key] = v
 	return v, nil
 }
 
@@ -458,6 +470,9 @@ func (pf *pagedPrefill) free() {
 	}
 	for _, v := range pf.ragVars {
 		v.close()
+	}
+	for _, k := range pf.ragFin {
+		closeKern(k)
 	}
 	bufs := []backend.Buf{pf.sc, pf.wt, pf.part, pf.run[0], pf.run[1], pf.buf[0], pf.buf[1]}
 	bufs = append(append(bufs, pf.pass[0]...), pf.pass[1]...)

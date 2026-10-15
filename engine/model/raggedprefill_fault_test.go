@@ -5,6 +5,7 @@ package model
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -35,24 +36,38 @@ func TestRaggedStepAttendsAsAPrefill(t *testing.T) {
 			defer m.Close()
 			vocab := min(m.Cfg.NVocab, 30000)
 			prompts := [][]int32{linPrompt(130, vocab), linPrompt(170, vocab)[3:], linPrompt(90, vocab)[5:]}
-			for _, arm := range []struct {
-				name  string
-				tiles bool
-			}{{"default", false}, {"tiles", true}} {
-				t.Run(arm.name, func(t *testing.T) { raggedAsPrefill(t, m, prompts, arm.tiles) })
+			for _, arm := range []ragArm{
+				{name: "default"}, {name: "tiles", tiles: true},
+				// The staged form (no flash prefill): on its matrix
+				// instruction where the card has one, and with a pass width
+				// under the prompts' spans so the run table runs in passes.
+				{name: "staged", staged: true}, {name: "passes", staged: true, pass: 64},
+			} {
+				t.Run(arm.name, func(t *testing.T) { raggedAsPrefill(t, m, prompts, arm) })
 			}
 		})
 	}
 }
 
-// raggedAsPrefill is TestRaggedStepAttendsAsAPrefill on one form: the
-// device's own choice, or the collective tiles (Config.PreferTiles,
-// FlashPrefillTile's run table) where they lower.
-func raggedAsPrefill(t *testing.T, m *Model, prompts [][]int32, tiles bool) {
+// ragArm is one form TestRaggedStepAttendsAsAPrefill holds: the device's own
+// choice, the collective tiles (Config.PreferTiles, FlashPrefillTile's run
+// table) where they lower, or the staged form (Config.NoFlashPrefill), in
+// passes of pass keys when pass is set (Config.PrefillPass).
+type ragArm struct {
+	name          string
+	tiles, staged bool
+	pass          int
+}
+
+// raggedAsPrefill is TestRaggedStepAttendsAsAPrefill on one form.
+func raggedAsPrefill(t *testing.T, m *Model, prompts [][]int32, arm ragArm) {
 	const seq = 400
 	open := func(t *testing.T, noRag bool) *tier.GPU {
 		o := append(testTierOpts(t), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithConfig(func(c *tier.Config) { c.NoRagPrefill, c.PreferTiles = noRag, tiles }))
+			tier.WithConfig(func(c *tier.Config) {
+				c.NoRagPrefill, c.PreferTiles = noRag, arm.tiles
+				c.NoFlashPrefill, c.PrefillPass = arm.staged, arm.pass
+			}))
 		if v := os.Getenv("JITLLM_TEST_DEVICES"); v != "" {
 			o = append(o, tier.WithDevices(v))
 		}
@@ -116,6 +131,9 @@ func raggedAsPrefill(t *testing.T, m *Model, prompts [][]int32, tiles bool) {
 		}
 		s1 := g.Stats()
 		s1.RagPrefills -= s0.RagPrefills
+		s1.RagStaged -= s0.RagStaged
+		s1.RagStagedMMA -= s0.RagStagedMMA
+		s1.RagPasses -= s0.RagPasses
 		return got, s1
 	}
 	worst := func(got [][]float32) float64 {
@@ -133,8 +151,20 @@ func raggedAsPrefill(t *testing.T, m *Model, prompts [][]int32, tiles bool) {
 	if st.RagPrefills == 0 {
 		t.Fatal("no run-table launch: the ragged step's chunks never attended as a prefill")
 	}
+	// The arm's form must be the one that ran: the staged run table, on
+	// CUDA its matrix instruction, in passes where the arm sets a width.
+	if arm.staged && st.RagStaged == 0 {
+		t.Fatalf("no staged run-table launch on %s with the flash prefill off", g.Name())
+	}
+	if arm.staged && strings.Contains(g.Name(), "[ptx]") && st.RagStagedMMA == 0 {
+		t.Fatalf("the staged run table on %s never took a matrix instruction", g.Name())
+	}
+	if arm.pass > 0 && st.RagPasses == 0 {
+		t.Fatalf("a %d-key pass width and the run table ran no passes", arm.pass)
+	}
 	e := worst(got)
-	t.Logf("run table: %d launches, NMSE %.3g", st.RagPrefills, e)
+	t.Logf("run table: %d launches (%d staged, %d on a matrix instruction, %d passes), NMSE %.3g",
+		st.RagPrefills, st.RagStaged, st.RagStagedMMA, st.RagPasses, e)
 	if e > band {
 		t.Fatalf("the run table's batch against each prompt alone: NMSE %.3g (band %g)", e, band)
 	}

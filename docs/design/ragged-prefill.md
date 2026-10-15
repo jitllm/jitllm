@@ -92,3 +92,36 @@ as a prefill does; the host tables remain for positions past
   batch routed through the Scheduler on the device again (#165's routing
   turned off by its violation), on the M4, n >= 20, twice, A/A first. When it
   holds, #165's device routing comes out.
+
+## The run table's forms
+
+The one-launch form was built (`jit/gpu/tier/raggedprefill.go`): each
+sequence with more than one row in the step gets its rows into a run table,
+padded to whole query tiles with its last row, and the prompt attention's own
+kernels read it -- slot i is row `pMap[i]` of q, the descriptors and the
+output. Every form a prompt alone takes has it:
+
+| form | where | the table |
+|---|---|---|
+| FlashPrefill80 (and its m16n8k8 twin) | sm_75 on | `FlashPrefill70Shape.Map`; with sinks the one split's partials at the rows and a mapped `FlashAttentionMergeWide` |
+| FlashPrefill70 | sm_70, heads of 64 and 128 | as FlashPrefill80 |
+| FlashPrefillTile | Metal, and `PreferTiles` | as FlashPrefill80 |
+| the staged scores, softmax and accumulate | Vulkan, and every shape a flash form refuses | `FlashShape.Map`: `pMap` and each slot's partition base `pBase` (a run's first key, 64-aligned); the score and weight planes stay in slots |
+
+The staged form's table runs on the instruction the staged form chose: the
+FMA tiles, m16n8k16 scores with the FMA or the m16n8k8 accumulate, sm_70's
+m8n8k4 pair. A run whose span passes the pass width runs in passes as the
+sequence alone does: pass j of each slot attends its row's keys from its
+run's base plus j pass widths (`ragPassStage`), the softmax and the
+accumulate write each pass's partials at the rows, `FlashAttentionMergeRun`
+folds them over the scratch's rows, and a mapped `FlashAttentionMergeWide`
+(with the sink) writes the table's rows. A run shorter than the step's
+longest has empty passes at the end, which fold to the same bits.
+
+Gates: `backend.TestStagedPrefillRunTable` (every staged form, direct and in
+passes, bit for bit against each sequence alone; the violation -- one run's
+base a block past its first key -- must part that run and leave the other
+alone) and `TestFlashPrefillRunTable`; `model.TestRaggedStepAttendsAsAPrefill`
+with arms for the device's choice, the tiles, the staged form and the staged
+form in passes, each asserting its own counter (`Stats.RagPrefills`,
+`RagStaged`, `RagStagedMMA`, `RagPasses`).

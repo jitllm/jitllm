@@ -1022,6 +1022,11 @@ type Stats struct {
 	// (raggedprefill.go): the selection check that a step's prompt chunks
 	// attended as a prefill rather than through the decode plan.
 	RagPrefills int
+	// RagStaged counts those launches through the staged form's run table,
+	// RagStagedMMA those on a matrix instruction (m16n8k16 scores, or sm_70's
+	// m8n8k4 pair), and RagPasses the passes they ran over a history past
+	// the pass width.
+	RagStaged, RagStagedMMA, RagPasses int
 	// RagForms counts batched scratches built with a flash prefill that has a
 	// run-table form: where it is 0, ragged steps keep the decode plan.
 	RagForms int
@@ -1337,6 +1342,9 @@ func (s *Stats) add(o Stats) {
 	s.PagedAccMMA += o.PagedAccMMA
 	s.FlashPrefill80 += o.FlashPrefill80
 	s.RagPrefills += o.RagPrefills
+	s.RagStaged += o.RagStaged
+	s.RagStagedMMA += o.RagStagedMMA
+	s.RagPasses += o.RagPasses
 	s.RagForms += o.RagForms
 	s.PagedPrefillPasses += o.PagedPrefillPasses
 	s.EmbedLaunches += o.EmbedLaunches
