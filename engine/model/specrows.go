@@ -424,7 +424,19 @@ func (s *State) stepRowsStreams(src []func(dst []float32) error, ids []int32, ou
 	// The collapse inside takes the wanted rows' residual (tapStreams), which
 	// is this model's hidden state.
 	s.rows, out.resBase = out, 0
-	err := s.altRowsStep(rd, pos, slot, ids, n, logits, nlogit)
+	// The head goes to the device as its own call after the host's collapse,
+	// as decode's does (Forward): the host's projection of the rows reads the
+	// whole output matrix, about 70 ms a verification of qwen4exp on a V100's
+	// host. A refusal leaves the projection to the host.
+	devHead := nlogit > 0
+	hostLogits := nlogit
+	if devHead {
+		hostLogits = 0
+	}
+	err := s.altRowsStep(rd, pos, slot, ids, n, logits, hostLogits)
+	if err == nil && devHead {
+		err = s.rowsHead(rd, pos, slot, n, logits, nlogit)
+	}
 	s.rows = nil
 	if err != nil {
 		return err
@@ -436,6 +448,37 @@ func (s *State) stepRowsStreams(src []func(dst []float32) error, ids []int32, ou
 		copy(out.logits[:(n-from)*c.NVocab], logits[from*c.NVocab:])
 	}
 	return s.kvCheck()
+}
+
+// rowsHead projects n collapsed rows of a hyper-connected model's verification
+// into logits: on the device as a head-only ragged call, or on the host when
+// the device refuses it.
+func (s *State) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []float32, nlogit int) error {
+	c := s.m.Cfg
+	x := s.bx[:n*c.ResidW()]
+	if err := s.collapseStreams(x, n); err != nil {
+		return err
+	}
+	h := s.head
+	if h != nil && !s.hostRowsHead {
+		keep := h.Logits
+		h.RowLogits, h.Logits, h.LogitRows = true, logits[:nlogit*c.NVocab], nlogit
+		ok := rd.LayersRows(s.hi, s.hi, pos, slot, s.maxSeq, x, s.bcs[:n*c.NRot], s.bswaTable(n, c.NRotSWA), h)
+		h.RowLogits, h.Logits, h.LogitRows = false, keep, 0
+		if ok {
+			s.rowsHeads++
+			return nil
+		}
+	}
+	s.growBatch(n)
+	s.altHeadNorm(nlogit)
+	if err := s.mm(logits, *s.outW, s.bh, nlogit); err != nil {
+		return err
+	}
+	for i := 0; i < nlogit; i++ {
+		softcap(logits[i*c.NVocab:(i+1)*c.NVocab], c.FinalSoftcap)
+	}
+	return nil
 }
 
 // newRecSnap allocates one snapshot of every host linear block's state for

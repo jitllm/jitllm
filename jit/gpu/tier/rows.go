@@ -355,6 +355,10 @@ func (g *GPU) layersRows(self uint64, lo, hi int, pos, slot []int, sid []uint64,
 	g.runBuf = nil
 	why := ""
 	switch {
+	case lo == hi && head != nil && g.head != nil:
+		// The head alone (a hyper-connected model's, after the host's
+		// collapse): a step of its own on the head's device.
+		rs = append(rs[:0], run{dev: g.head, lo: hi, hi: hi, split: g.split})
 	case !ok || len(rs) == 0:
 		why = fmt.Sprintf("rows: blocks [%d,%d) are not all on devices", lo, hi)
 	case head != nil && g.head == nil:

@@ -142,6 +142,9 @@ type SpecStats struct {
 	// prediction block proposed and the trunk confirmed; Emitted every token
 	// generated after the prompt's first (Accepted plus one a round).
 	Rounds, Drafted, Accepted, Emitted int64
+	// DeviceHeads is the verifications of a hyper-connected model whose
+	// head ran on the device after the host's collapse (rowsHead).
+	DeviceHeads int
 	// Replayed is the rows run a second time to rebuild a recurrent state
 	// (SpecRollbackReplay); Restored the rejections a per-row copy undid;
 	// Commits the replays that ran as a pass of their own because the pass
@@ -378,7 +381,11 @@ func (sp *Speculator) Limit(n int) { sp.limit = max(n, 0) }
 func (sp *Speculator) Draft() *State { return sp.d }
 
 // Stats is what this Speculator has done so far.
-func (sp *Speculator) Stats() SpecStats { return sp.stats }
+func (sp *Speculator) Stats() SpecStats {
+	st := sp.stats
+	st.DeviceHeads = sp.t.rowsHeads
+	return st
+}
 
 // Close releases the draft session. The trunk session is the caller's.
 func (sp *Speculator) Close() error {

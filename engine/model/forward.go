@@ -627,7 +627,12 @@ type State struct {
 	// a tail of its rows has the head write every row (stepRowsDevice), the
 	// tail then copied out; rowsTok is where a greedy one's tokens land.
 	rowsLog, rowsHid []float32
-	rowsTok          []int32
+	// rowsHeads counts a hyper-connected model's verifications whose head
+	// ran on the device (rowsHead); hostRowsHead, set by tests, is the
+	// control arm that projects them on the host.
+	rowsHeads    int
+	hostRowsHead bool
+	rowsTok      []int32
 	// rowsPos is a stream model's speculation step's positions and slots
 	// (stepRowsStreams).
 	rowsPos []int

@@ -244,6 +244,7 @@ func TestSpecLookupOnDevice(t *testing.T) {
 					defer g.Close()
 					ran++
 					var accepted int64
+					heads := 0
 					for _, text := range lookupPrompts[:2] {
 						prompt := m.Vocab.Encode(text, true)
 						n := lookupTokens(m, prompt, n)
@@ -261,6 +262,7 @@ func TestSpecLookupOnDevice(t *testing.T) {
 						// rollback both keeps and rejects rows.
 						got, ss := lookupGreedy(t, m, prompt, n, g, specFaultNone, oracleFor(name, want))
 						accepted += ss.Accepted
+						heads += ss.DeviceHeads
 						if i := firstDiff(got, want); i >= 0 {
 							gap, pert := devFlip(t, m, g, prompt, want[:i], want[i], got[i])
 							if gap > pert {
@@ -276,6 +278,11 @@ func TestSpecLookupOnDevice(t *testing.T) {
 					}
 					if accepted == 0 {
 						t.Fatalf("nothing accepted on %s: the speculation never ran", spec)
+					}
+					// A hyper-connected model's verifications project on the
+					// device after the host's collapse (rowsHead).
+					if m.Cfg.streamHead() && heads == 0 {
+						t.Fatalf("no verification's head ran on %s: the host projected every one", spec)
 					}
 				})
 			}
