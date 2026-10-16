@@ -19,6 +19,8 @@ import (
 // modelOpts is the resolved set of per-model knobs. It is copied onto the Model
 // at Open and onto the Tower beside it, so two models cannot collide.
 type modelOpts struct {
+	// majorRows is WithHostExpertMajorRows' count, 0 for the default.
+	majorRows int
 	// devSample is WithDeviceSample's setting (devsample.go).
 	devSample DeviceSampleMode
 	// profile arms the per-op nanosecond counters OpProfile reports. The
@@ -199,6 +201,15 @@ func WithHybridSpin(d time.Duration) Option {
 // on the host.
 func WithPrefillForwardRows(n int) Option {
 	return func(l *loadOpts) { l.opt.forwardRows, l.opt.forwardRowsSet = n, true }
+}
+
+// WithHostExpertMajorRows runs a device's host experts expert-major (each
+// expert read once for every row that chose it) from n rows up, and a row
+// at a time below. Unset, hostRowsByRow+1: a short prompt's rows share few
+// experts. A speculation's verification is a few consecutive rows, which may
+// share more; this is the knob that measures it.
+func WithHostExpertMajorRows(n int) Option {
+	return func(l *loadOpts) { l.opt.majorRows = n }
 }
 
 func WithSharedOverlap(on bool) Option { return func(l *loadOpts) { l.opt.noShOverlap = !on } }

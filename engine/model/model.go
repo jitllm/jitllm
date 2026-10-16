@@ -1319,6 +1319,9 @@ type Model struct {
 	jit []nn.Option
 	// opt is this model's resolved load options, a copy; see modelOpts.
 	opt modelOpts
+	// hostMajor counts the host's expert-major passes over a device's rows
+	// (hostExpertsRows); its sessions run on their own goroutines.
+	hostMajor atomic.Int64
 	// states counts the sessions built, so AddJITOptions can refuse to be late.
 	// Sessions are built concurrently (a server's requests), so it is atomic.
 	states atomic.Int64

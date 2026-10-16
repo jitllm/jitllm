@@ -118,12 +118,22 @@ func TestSplitRowsMatchTheHost(t *testing.T) {
 			}
 			defer m.Close()
 			ids := m.Vocab.Encode("The capital of France is Paris, and the capital of Italy is Rome; Spain's", true)
+			// major runs the host's share expert-major from two rows
+			// (WithHostExpertMajorRows), skipping the card's places.
 			for _, arm := range []struct {
-				name    string
-				noSplit bool
-			}{{"split", false}, {"host", true}} {
+				name           string
+				noSplit, major bool
+			}{{"split", false, false}, {"major", false, true}, {"host", true, false}} {
 				t.Run(arm.name, func(t *testing.T) {
+					if arm.major {
+						m.opt.majorRows = 2
+						defer func() { m.opt.majorRows = 0 }()
+					}
+					major := m.hostMajor.Load()
 					worst, st := splitRowsCase(t, m, ids, md.blocks, arm.noSplit)
+					if ran := m.hostMajor.Load() > major; ran != arm.major {
+						t.Fatalf("%s: the host's expert-major pass ran: %v", arm.name, ran)
+					}
 					t.Logf("%s: worst NMSE %.2e (band %.0e); %d split row steps, %d cache hits, %d misses",
 						arm.name, worst, md.band, st.SplitRowSteps, st.StreamCacheHits, st.StreamCacheMisses)
 					if worst > md.band {
