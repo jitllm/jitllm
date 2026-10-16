@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"time"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
@@ -62,6 +63,7 @@ func (g *devTier) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csS
 // layersRows is LayersRows for rs's rows, each of its own session where
 // rs.sid is set and of rs.self's otherwise.
 func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, head *nn.Head) bool {
+	tr := time.Now()
 	fail := func(f string, a ...any) bool {
 		g.mu.Lock()
 		g.LastErr = fmt.Sprintf("rows: "+f, a...)
@@ -183,6 +185,7 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 		return false
 	}
 	g.mu.Lock()
+	g.TDiagRows += time.Since(tr)
 	if rs.sid != nil && !rs.again {
 		g.SessionRows += n
 	}

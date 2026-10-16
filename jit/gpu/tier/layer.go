@@ -610,9 +610,12 @@ func (st *streamBank) splitRows(g *devTier, s backend.Session, sel, w, in backen
 	st.hsel = growU32(st.hsel, rows*(k+1))
 	st.rowSel = growU32(st.rowSel, valid*(k+1))
 	st.rowW = growF32(st.rowW, valid*k)
+	td := time.Now()
 	if err := s.Sync(); err != nil {
 		return 0, err
 	}
+	g.TDiagSync += time.Since(td)
+	defer func() { g.TDiagSplit += time.Since(td) }()
 	if err := s.Read(in, f32b(st.hin)); err != nil {
 		return 0, err
 	}

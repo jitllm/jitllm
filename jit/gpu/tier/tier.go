@@ -939,8 +939,9 @@ type Stats struct {
 	SplitRuns, SplitHits, SplitAdmits int
 	// SplitRowSteps counts the block-steps of several rows whose experts were
 	// split between the cache and the host (streamBank.splitRows).
-	SplitRowSteps int
-	TSplitHost    time.Duration
+	SplitRowSteps                    int
+	TSplitHost                       time.Duration
+	TDiagSync, TDiagSplit, TDiagRows time.Duration
 	// TLateWrite is the wall of writing the host's expert sum back after
 	// the card's queued work (the hits, the shared expert), and TAdmit of
 	// taking experts into the caches.
@@ -1362,6 +1363,9 @@ func (s *Stats) add(o Stats) {
 	s.THybrid += o.THybrid
 	s.SplitRuns += o.SplitRuns
 	s.SplitRowSteps += o.SplitRowSteps
+	s.TDiagSync += o.TDiagSync
+	s.TDiagSplit += o.TDiagSplit
+	s.TDiagRows += o.TDiagRows
 	s.CachesDropped += o.CachesDropped
 	s.CacheBytes += o.CacheBytes
 	s.SplitHits += o.SplitHits

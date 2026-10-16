@@ -1071,6 +1071,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 					ds.StreamCacheSize, ds.StreamCacheHits, ds.StreamCacheMisses,
 					100*float64(ds.StreamCacheHits)/max(float64(ds.StreamCacheHits+ds.StreamCacheMisses), 1), ds.StreamCacheShort, ds.AutoMeanBase)
 			}
+			fmt.Fprintf(os.Stderr, "diag rows: submit %.2f s, split sync %.2f s, split cpu+io %.2f s, host %.2f s\n", sec(ds.TDiagRows), sec(ds.TDiagSync), sec(ds.TDiagSplit), sec(ds.TSplitHost))
 			if ds.HybridRuns > 0 {
 				fmt.Fprintf(os.Stderr, "hybrid experts: %d block-step(s) on the host, %.2f s\n", ds.HybridRuns, sec(ds.THybrid))
 				if ds.SplitRuns > 0 || ds.SplitAdmits > 0 || ds.TLateWrite > 0 {
