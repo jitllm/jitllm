@@ -1185,13 +1185,22 @@ func (g *devTier) f16Gemm(m mv, ntok int) (mv, bool) {
 	if deep == 0 {
 		deep = gemmDeepDefault
 	}
-	if deep > 0 || deep == 0 && g.gemmDeep[splitKey{m.q, m.rows, m.k}] {
+	if deep > 0 || deep == 0 && g.gemmDeepWon(m, ntok) {
 		if bm, ok := g.stagedGemm(m, ntok, f16DeepTiles, k, g.dev.Slots()/16); ok {
 			g.Stats.GemmDeep++
 			return bm, true
 		}
 	}
 	return g.stagedGemm(m, ntok, f16Tiles, k, g.dev.Slots()/16)
+}
+
+// gemmDeepWon is whether tuneGemm's verdict for m's shape applies to a launch
+// of ntok tokens. The verdict was timed at the reserved prompt width, so it
+// speaks for widths of that class (at least half of it); a narrower launch (a
+// speculation's verification, a prompt's tail) was not timed and takes the
+// default blocking.
+func (g *devTier) gemmDeepWon(m mv, ntok int) bool {
+	return ntok*2 >= g.promptW && g.gemmDeep[splitKey{m.q, m.rows, m.k}]
 }
 
 // f16DeepTiles are the m16n8 blockings in llama.cpp MMQ's shape: eight warps

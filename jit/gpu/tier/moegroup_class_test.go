@@ -32,3 +32,21 @@ func TestVoltaMoEDefaultClass(t *testing.T) {
 		t.Error("the default boundary is not the expert count")
 	}
 }
+
+// TestGemmDeepVerdictIsPerWidthClass: the deep-tile verdict was timed at the
+// prompt width and holds for that class only. The violation, a verdict applied
+// at every width, makes the narrow launch win.
+func TestGemmDeepVerdictIsPerWidthClass(t *testing.T) {
+	g := &devTier{devShared: &devShared{}, lane: &lane{}}
+	g.promptW = 256
+	m := mv{rows: 4096, k: 4096}
+	g.gemmDeep = map[splitKey]bool{{m.q, m.rows, m.k}: true}
+	for _, c := range []struct {
+		ntok int
+		want bool
+	}{{256, true}, {128, true}, {127, false}, {3, false}} {
+		if got := g.gemmDeepWon(m, c.ntok); got != c.want {
+			t.Errorf("ntok %d: %v, want %v", c.ntok, got, c.want)
+		}
+	}
+}
