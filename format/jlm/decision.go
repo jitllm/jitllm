@@ -8,6 +8,10 @@ import "fmt"
 // read out and calibrated, which the reference hardcodes per model and the
 // container therefore states.
 
+// A kind's code is written into every container, so codes never move: a new
+// kind takes a number of its own, stated, past the iota run that ends at
+// DecisionVllmD3 (7). Taken: 8 nimble, 9 pplx-decider, 10 kev.
+
 // DecisionKind is a decision model's readout: which prompt shape and which
 // scores the answer is read from. Zero is not a decision model.
 type DecisionKind uint8
@@ -43,12 +47,16 @@ const (
 	// DecisionOpenJev reads the next-token logits of one letter per option
 	// (A..Z then a..z, each one token) at the prompt's last row, a noul
 	// shown true first (openjev/openjev).
-	DecisionOpenJev
+	DecisionOpenJev // 6
 	// DecisionVllmD3 is lev's codes (A..Z then AA..ZZ, each one token) read
 	// at the prompt's last row over a qwen35 whose attention is not causal
 	// (vllm-sr/d3), one prompt per question; its confidence is one minus the
 	// normalised entropy, and it reads a null state and null instructions.
-	DecisionVllmD3
+	DecisionVllmD3 // 7
+	// DecisionNimble is lev's codes (A..Z then AA..ZZ, each one token) read
+	// at the prompt's last row, one prompt per question, the prompt listing
+	// every question of the request as its schema (bespokelabs' Nimble).
+	DecisionNimble DecisionKind = 8
 )
 
 var decisionNames = map[DecisionKind]string{
@@ -59,6 +67,7 @@ var decisionNames = map[DecisionKind]string{
 	DecisionD1Omni:  "lfm2-d1-omni",
 	DecisionOpenJev: "openjev",
 	DecisionVllmD3:  "vllm-d3",
+	DecisionNimble:  "nimble",
 }
 
 // String is the name llama.cpp writes as <arch>.decision.type.

@@ -76,4 +76,5 @@ want tinyopenjev-for-testing-Q8_0 && gold openjev/tinyopenjev-for-testing-Q8_0.g
 want d1-omni-600M-F16 && gold d1-omni/d1-omni-600M-F16.gguf d1-omni-600M-F16 d1-omni/mmproj-d1-omni-600M-F16.gguf pictures voice
 want vllm-d3-edge-Q8_0 && gold vllm-d3/vllm-d3-edge-Q8_0.gguf vllm-d3-edge-Q8_0
 want vllm-d3-edge-Q8_0 && gold vllm-d3/vllm-d3-edge-Q8_0.gguf vllm-d3-edge-Q8_0 vllm-d3/mmproj-vllm-d3-edge-Q8_0.gguf pictures chatpicture
+want Bespoke-Nimble-9B-v3-Q8_0 && gold nimble/Bespoke-Nimble-9B-v3-Q8_0.gguf Bespoke-Nimble-9B-v3-Q8_0
 true

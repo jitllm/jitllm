@@ -88,6 +88,9 @@ var decisionCases = []struct {
 	// here, 0.42 against 0.57 at llama.cpp's f16 cache), where the f32 arm
 	// reads 0.078 off and the f16 arm 0.015.
 	{"vllm-d3", "vllm-d3/vllm-d3-edge-Q8_0.gguf", "vllm-d3-edge-Q8_0", jlm.DecisionVllmD3, false, 0.08},
+	// bespokelabs' Nimble 9B v3 (ggml-org's GGUF): lev's codes, the prompt
+	// listing every question of the request.
+	{"nimble", "nimble/Bespoke-Nimble-9B-v3-Q8_0.gguf", "Bespoke-Nimble-9B-v3-Q8_0", jlm.DecisionNimble, false, 0.05},
 }
 
 // decisionRequests are the request bodies in testdata/decision: an object
@@ -210,6 +213,7 @@ func TestDecisionReadoutIsLoadBearing(t *testing.T) {
 		{"lev-unsorted", "lev/lev-Q8_0.gguf", "lev-Q8_0", "support", jlm.DecisionLev, "unsorted", []string{"intent", "urgent", "frustration", "refund", "team"}},
 		{"lev-uncalibrated", "lev/lev-Q8_0.gguf", "lev-Q8_0", "support", jlm.DecisionLev, "uncalibrated", []string{"intent", "urgent"}},
 		{"vllm-d3-causal", "vllm-d3/vllm-d3-edge-Q8_0.gguf", "vllm-d3-edge-Q8_0", "support", jlm.DecisionVllmD3, "causal", []string{"intent", "team"}},
+		{"nimble-own-schema", "nimble/Bespoke-Nimble-9B-v3-Q8_0.gguf", "Bespoke-Nimble-9B-v3-Q8_0", "ambiguous", jlm.DecisionNimble, "own-schema", []string{"compensate", "churn", "damage", "tone", "issue"}},
 		{"openjev-false-first", "openjev/tinyopenjev-for-testing-Q8_0.gguf", "tinyopenjev-for-testing-Q8_0", "ambiguous", jlm.DecisionOpenJev, "false-first", []string{"compensate", "churn", "damage"}},
 		{"openjev-uncalibrated", "openjev/tinyopenjev-for-testing-Q8_0.gguf", "tinyopenjev-for-testing-Q8_0", "ambiguous", jlm.DecisionOpenJev, "uncalibrated", []string{"compensate", "churn", "damage"}},
 	} {

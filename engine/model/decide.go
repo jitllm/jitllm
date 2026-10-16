@@ -78,11 +78,14 @@ const levRatings = 9
 // Decider asks a decision model questions. It holds one State and is one
 // request at a time; build one per concurrent caller.
 type Decider struct {
-	m    *Model
-	cfg  *jlm.Config
-	kind jlm.DecisionKind
-	st   *State
-	tpl  *jinja.Template
+	// reqQs is the request's questions, which a nimble prompt lists whole
+	// as its schema (Prepare sets it).
+	reqQs []DecisionQuestion
+	m     *Model
+	cfg   *jlm.Config
+	kind  jlm.DecisionKind
+	st    *State
+	tpl   *jinja.Template
 
 	// lev: the single-token codes A..Z, AA..ZZ, in order, and their ids.
 	labels     []int32
@@ -180,7 +183,7 @@ func (m *Model) NewDecider(maxSeq int) (*Decider, error) {
 	}
 	d := &Decider{m: m, cfg: m.container.Config(), kind: kind, tpl: tpl, maxOptions: 255}
 	switch kind {
-	case jlm.DecisionLev, jlm.DecisionVllmD3:
+	case jlm.DecisionLev, jlm.DecisionVllmD3, jlm.DecisionNimble:
 		// Codes A..Z then AA..ZZ; only those that are one token are used, up
 		// to 255 (lev's serving code, ADR-028).
 		var codes []string
@@ -302,6 +305,7 @@ func (d *Decider) InputTokens() int { return d.input }
 // d1. It is called by Decide; a caller that wants the refusal before queueing
 // calls it first.
 func (d *Decider) Prepare(state jinja.Value, qs []DecisionQuestion, images int) error {
+	d.reqQs = qs
 	if err := d.checkImages(images); err != nil {
 		return err
 	}
@@ -631,7 +635,7 @@ func (d *Decider) promptText(state jinja.Value, q *DecisionQuestion, v int) (str
 		for _, id := range d.labels[:n] {
 			groups = append(groups, []int32{id})
 		}
-	case jlm.DecisionVllmD3:
+	case jlm.DecisionVllmD3, jlm.DecisionNimble:
 		labels = d.labelTexts
 		for _, id := range d.labels[:len(opts)] {
 			groups = append(groups, []int32{id})
@@ -692,6 +696,67 @@ func (d *Decider) labelScoresOf(vals []float32, groups [][]int32, v int) ([]floa
 // instructions, state and the options, each with its key, description and
 // label, and an empty image list.
 func (d *Decider) render(state jinja.Value, q *DecisionQuestion, opts []DecisionOption, labels []string, v int) (string, error) {
+	in := jinja.NewDict()
+	dict := in.AsDict()
+	dict.Set("id", jinja.NewString(q.ID))
+	dict.Set("type", jinja.NewString(q.Type.String()))
+	ins := instructionsOf(q)
+	if d.kind == jlm.DecisionVllmD3 && (q.Instructions.IsUndefined() || q.Instructions.IsNone()) {
+		// d3's template asks its own default question for none (d3_format.py).
+		ins = jinja.None()
+	}
+	dict.Set("instructions", ins)
+	dict.Set("state", state)
+	dict.Set("options", optionList(opts, labels, v))
+	if d.kind == jlm.DecisionNimble {
+		// The schema: every question of the request, its options in the
+		// order its own prompt shows them (server-decision.cpp render).
+		all := d.reqQs
+		if d.violation == "own-schema" {
+			all = []DecisionQuestion{*q} // a gate's: the schema the asked question alone
+		}
+		qs := make([]jinja.Value, len(all))
+		for i := range all {
+			o := &all[i]
+			qd := jinja.NewDict()
+			qd.AsDict().Set("id", jinja.NewString(o.ID))
+			qd.AsDict().Set("type", jinja.NewString(o.Type.String()))
+			qd.AsDict().Set("instructions", instructionsOf(o))
+			qd.AsDict().Set("options", optionList(d.order(o), d.labelTexts, 0))
+			qs[i] = qd
+		}
+		dict.Set("questions", jinja.NewList(qs))
+	}
+	if d.kind == jlm.DecisionLev && d.violation != "unsorted" {
+		// lev was trained with every object's keys sorted.
+		in = sortKeys(in)
+		dict = in.AsDict()
+	}
+	// One marker per picture, which prompt turns into the picture's run.
+	marks := make([]jinja.Value, len(d.pics))
+	for i := range marks {
+		marks[i] = jinja.NewString(decisionMarker)
+	}
+	data := map[string]any{"images": jinja.NewList(marks)}
+	for _, k := range dict.Keys {
+		data[k] = dict.Data[k]
+	}
+	return d.tpl.Render(data)
+}
+
+// instructionsOf is q's instructions: optional in TypeSafe's protocol, and the
+// reference models that read an absent one ask by the question's id (Clef's
+// encode_record, lev's template); llama.cpp refuses the request instead.
+func instructionsOf(q *DecisionQuestion) jinja.Value {
+	if ins := q.Instructions; !ins.IsUndefined() && !ins.IsNone() {
+		return ins
+	}
+	return jinja.NewString(q.ID)
+}
+
+// optionList is opts as the template reads them, each with its key, its
+// description and its label where labels is not nil; variant 1 reversed.
+func optionList(opts []DecisionOption, labels []string, v int) jinja.Value {
 	n := len(opts)
 	list := make([]jinja.Value, n)
 	for i := range opts {
@@ -711,39 +776,7 @@ func (d *Decider) render(state jinja.Value, q *DecisionQuestion, opts []Decision
 		}
 		list[i] = od
 	}
-	// Instructions are optional in TypeSafe's protocol, and the reference
-	// models that read an absent one ask by the question's id (Clef's
-	// encode_record, lev's template); llama.cpp refuses the request instead.
-	ins := q.Instructions
-	if ins.IsUndefined() {
-		ins = jinja.None()
-	}
-	// d3's template asks its own default question for none (d3_format.py).
-	if ins.IsNone() && d.kind != jlm.DecisionVllmD3 {
-		ins = jinja.NewString(q.ID)
-	}
-	in := jinja.NewDict()
-	dict := in.AsDict()
-	dict.Set("id", jinja.NewString(q.ID))
-	dict.Set("type", jinja.NewString(q.Type.String()))
-	dict.Set("instructions", ins)
-	dict.Set("state", state)
-	dict.Set("options", jinja.NewList(list))
-	if d.kind == jlm.DecisionLev && d.violation != "unsorted" {
-		// lev was trained with every object's keys sorted.
-		in = sortKeys(in)
-		dict = in.AsDict()
-	}
-	// One marker per picture, which prompt turns into the picture's run.
-	marks := make([]jinja.Value, len(d.pics))
-	for i := range marks {
-		marks[i] = jinja.NewString(decisionMarker)
-	}
-	data := map[string]any{"images": jinja.NewList(marks)}
-	for _, k := range dict.Keys {
-		data[k] = dict.Data[k]
-	}
-	return d.tpl.Render(data)
+	return jinja.NewList(list)
 }
 
 // sortKeys is v with every object's keys in sorted order.
