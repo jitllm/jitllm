@@ -416,7 +416,10 @@ func (pk *pagedScratch) ragStagedAttend(lc *launcher, q, k, v, n, out, tab, desc
 	}
 	vr := rs.v
 	lc.la(vr.scores, vr.scoreT, q, k, n, pf.sc, tab, desc, pk.pMap, rs.buf)
-	args := []backend.Buf{pf.sc, n, pf.wt, pf.part, tab, desc}
+	// Room for every argument up front: the six-element literal this was
+	// grew to nine on each launch.
+	var room [9]backend.Buf
+	args := append(room[:0], pf.sc, n, pf.wt, pf.part, tab, desc)
 	if vr.s.Sink {
 		args = append(args, sink)
 	}
