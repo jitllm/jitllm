@@ -246,6 +246,9 @@ type State struct {
 	// hyOrd and hyW are hostExperts' selection in ascending id and its
 	// weights in that order, kept so a token allocates neither.
 	hyOrd []int32
+	// hySel and hyRW are a row's host share of a split step (hostExpertsRows).
+	hySel []uint32
+	hyRW  []float32
 	hyW   []float32
 	// hostOnly keeps every matvec on the host's kernels: set while the
 	// device's own submission waits on hostExperts, when offering a matvec to

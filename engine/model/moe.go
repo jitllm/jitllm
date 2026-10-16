@@ -793,6 +793,10 @@ func (s *State) hostExpertsRowsFor(li int) func(sel []uint32, w, in, out []float
 	}
 }
 
+// noHostExpert in a selection the device hands the host is a place its
+// card ran (tier's noExpert): no expert has the id, and the host skips it.
+const noHostExpert = ^uint32(0)
+
 // hostRowsByRow is the most rows a chunk's host experts run a row at a time
 // (hostExperts per row) rather than expert-major: a short prompt's rows share
 // few experts, so the expert-major pass reads about the same bytes in a
@@ -809,14 +813,31 @@ func (s *State) hostExpertsRows(li int, sel []uint32, w, in, out []float32, rows
 	if k != c.NExpertUsed {
 		return fmt.Errorf("model: block %d: %d routed experts a row, the model routes %d", li, k, c.NExpertUsed)
 	}
-	if rows <= hostRowsByRow {
+	major := hostRowsByRow + 1
+	if n := s.m.opt.majorRows; n > 0 {
+		major = n
+	}
+	if rows < major {
 		// A few rows read nearly every expert they choose once each anyway,
 		// and the decode path runs a row's selection as a handful of grouped
-		// regions where the expert-major pass runs regions per expert.
+		// regions where the expert-major pass runs regions per expert. A
+		// selection of noHostExpert is a place the card took (a split step's
+		// hit) and is skipped.
 		D := c.ExpWidth()
 		for i := 0; i < rows; i++ {
-			if err := s.hostExperts(li, sel[i*(k+1):i*(k+1)+k], w[i*k:(i+1)*k],
-				in[i*D:(i+1)*D], out[i*D:(i+1)*D]); err != nil {
+			s.hySel, s.hyRW = s.hySel[:0], s.hyRW[:0]
+			for j := 0; j < k; j++ {
+				if e := sel[i*(k+1)+j]; e != noHostExpert {
+					s.hySel = append(s.hySel, e)
+					s.hyRW = append(s.hyRW, w[i*k+j])
+				}
+			}
+			o := out[i*D : (i+1)*D]
+			if len(s.hySel) == 0 {
+				clear(o)
+				continue
+			}
+			if err := s.hostExperts(li, s.hySel, s.hyRW, in[i*D:(i+1)*D], o); err != nil {
 				return err
 			}
 		}

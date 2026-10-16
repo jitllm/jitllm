@@ -1763,6 +1763,13 @@ func modelOptions() []model.Option {
 			o = append(o, model.WithPrefillForwardRows(n))
 		}
 	}
+	// JITLLM_HOST_MAJOR_ROWS=n runs a device's host experts expert-major
+	// from n rows up (model.WithHostExpertMajorRows).
+	if v := os.Getenv("JITLLM_HOST_MAJOR_ROWS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			o = append(o, model.WithHostExpertMajorRows(n))
+		}
+	}
 	// JITLLM_HYBRID_SPIN_US sets how long the workers spin between a
 	// device's host expert calls (model.WithHybridSpin); 0 keeps the pool's.
 	if v := os.Getenv("JITLLM_HYBRID_SPIN_US"); v != "" {

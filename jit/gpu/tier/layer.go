@@ -668,6 +668,14 @@ func (st *streamBank) hostRowsLate(sid uint64, g *devTier, s backend.Session, ds
 		return fmt.Errorf("tier: this session offered no host side for a hybrid block")
 	}
 	n := len(st.hin) / valid
+	if rows := g.hostFns[sid][st.li].rows; rows != nil {
+		// The session's host side picks by row count whether the rows go a
+		// row at a time or expert-major; a hit's place holds noExpert.
+		if err := rows(st.rowSel[:valid*(k+1)], st.rowW[:valid*k], st.hin, st.hout, valid, k); err != nil {
+			return err
+		}
+		return st.rowsLateDone(g, s, dst, valid, t0)
+	}
 	for r := 0; r < valid; r++ {
 		st.msel, st.mw = st.msel[:0], st.mw[:0]
 		for j := 0; j < k; j++ {
@@ -685,6 +693,12 @@ func (st *streamBank) hostRowsLate(sid uint64, g *devTier, s backend.Session, ds
 			return err
 		}
 	}
+	return st.rowsLateDone(g, s, dst, valid, t0)
+}
+
+// rowsLateDone counts a split step's host share, run since t0, and writes
+// its sum to dst.
+func (st *streamBank) rowsLateDone(g *devTier, s backend.Session, dst backend.Buf, valid int, t0 time.Time) error {
 	g.TSplitHost += time.Since(t0)
 	g.SplitRowSteps++
 	g.HybridRows += valid
