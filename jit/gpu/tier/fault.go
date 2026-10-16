@@ -156,6 +156,10 @@ func roomFaulted(f string) bool { return roomFault == f }
 //	            gate's output
 //	"wout"      a grouped mixture that weights the expert's input (Llama 4)
 //	            weights its output instead
+//	"prefillwave"     a prompt chunk's expert waves after the first are not
+//	                  added to the block's output
+//	"prefillunnamed"  a pair whose expert is not in the running wave reads a
+//	                  slot's sheets with its own weight
 var moeFault string
 
 // SetMoEFault arms one violation for the calls after it; "" disarms.

@@ -12537,6 +12537,10 @@ func (st *streamBank) prefillWaves(g *devTier, s backend.Session, l *layer, nExp
 				if r < valid {
 					if sl := st.wslot[st.hsel[r*(k+1)+j]]; sl >= 0 {
 						id, wt = uint32(sl), st.hw[r*k+j]
+					} else if moeFaulted("prefillunnamed") {
+						// The violation: a pair whose expert is not in the wave
+						// reads some slot's sheets with its own weight.
+						id, wt = st.hsel[r*(k+1)+j]%uint32(len(st.owner)), st.hw[r*k+j]
 					}
 				}
 				st.rowSel[r*(k+1)+j], st.rowW[r*k+j] = id, wt

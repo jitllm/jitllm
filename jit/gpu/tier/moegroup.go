@@ -909,7 +909,8 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 					pass(eout)
 				} else {
 					pass(m.hsum)
-					if *errp == nil {
+					// The violation: the later waves' share dropped.
+					if *errp == nil && !moeFaulted("prefillwave") {
 						lc.la(bs.addE, valid*ew, eout, m.hsum, eout)
 					}
 				}

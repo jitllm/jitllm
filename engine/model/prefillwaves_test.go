@@ -25,7 +25,7 @@ var prefillWavesModels = []struct {
 // expert cache, and returns the last row's logits with the device's counters.
 // noWaves is the control arm: the chunk's experts on the host, as before they
 // ran on the card.
-func prefillWavesCase(t *testing.T, m *Model, ids []int32, blocks int, noWaves bool) ([]float32, tier.Stats) {
+func prefillWavesCase(t *testing.T, m *Model, ids []int32, blocks, slots int, noWaves bool) ([]float32, tier.Stats) {
 	t.Helper()
 	c := m.Cfg
 	s := m.NewState(len(ids) + 2)
@@ -34,6 +34,7 @@ func prefillWavesCase(t *testing.T, m *Model, ids []int32, blocks int, noWaves b
 		tier.WithConfig(func(cf *tier.Config) {
 			cf.StreamExperts, cf.HybridExperts = true, true
 			cf.SplitAdmit, cf.NoPrefillExperts = c.NExpertUsed, noWaves
+			cf.StreamCacheSlots = slots
 		}))
 	if err != nil || g == nil {
 		noDevice(t, "gpu:0", err)
@@ -78,35 +79,17 @@ func TestHybridPrefillWavesMatchTheHost(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			base := m.Vocab.Encode("The capital of France is Paris, and the capital of Italy is Rome; Spain's capital is Madrid, Portugal's Lisbon, and Germany's Berlin; ", true)
-			var ids []int32
-			for len(ids) < 64 {
-				ids = append(ids, base...)
-			}
 			band := md.band
-			ids = ids[:prefillWaveRowsForTest]
-			want := func() []float32 {
-				s := m.NewState(len(ids) + 2)
-				defer s.Close()
-				l, err := s.Prefill(ids)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return append([]float32(nil), l...)
-			}()
+			ids := prefillWavesIDs(m)
+			want := prefillWavesHost(t, m, ids)
 			for _, arm := range []struct {
 				name    string
+				slots   int
 				noWaves bool
-			}{{"waves", false}, {"host", true}} {
+			}{{"waves", 0, false}, {"waves-small-cache", 2 * m.Cfg.NExpertUsed, false}, {"host", 0, true}} {
 				t.Run(arm.name, func(t *testing.T) {
-					got, st := prefillWavesCase(t, m, ids, md.blocks, arm.noWaves)
-					var num, den float64
-					for i := range want {
-						d := float64(got[i] - want[i])
-						num += d * d
-						den += float64(want[i]) * float64(want[i])
-					}
-					nmse := num / den
+					got, st := prefillWavesCase(t, m, ids, md.blocks, arm.slots, arm.noWaves)
+					nmse := wavesNMSE(got, want)
 					t.Logf("%s: %d tokens, NMSE %.2e (band %.0e); %d block-chunks in %d waves, %d sheets sent, %d hits; %d hybrid block-steps",
 						arm.name, len(ids), nmse, band, st.PrefillBlocks, st.PrefillWaves, st.PrefillUploaded, st.PrefillHits, st.HybridRuns)
 					if !(nmse <= band) || argmaxOf(got) != argmaxOf(want) {
@@ -118,6 +101,9 @@ func TestHybridPrefillWavesMatchTheHost(t *testing.T) {
 							t.Fatalf("%d block-chunks ran in waves with the waves off", st.PrefillBlocks)
 						}
 						return
+					}
+					if arm.slots > 0 && st.PrefillWaves <= st.PrefillBlocks {
+						t.Fatalf("a %d-slot cache ran %d waves over %d block-chunks: no chunk needed several", arm.slots, st.PrefillWaves, st.PrefillBlocks)
 					}
 					if st.PrefillBlocks == 0 || st.PrefillWaves < st.PrefillBlocks || st.PrefillUploaded == 0 {
 						t.Fatalf("the waves did not run: %d block-chunks, %d waves, %d sheets sent",
@@ -131,3 +117,36 @@ func TestHybridPrefillWavesMatchTheHost(t *testing.T) {
 
 // prefillWaveRowsForTest is the chunk's width: the tier's threshold, the narrowest chunk that takes the waves.
 const prefillWaveRowsForTest = 64
+
+// prefillWavesIDs is a prompt of the tier's threshold width.
+func prefillWavesIDs(m *Model) []int32 {
+	base := m.Vocab.Encode("The capital of France is Paris, and the capital of Italy is Rome; Spain's capital is Madrid, Portugal's Lisbon, and Germany's Berlin; ", true)
+	var ids []int32
+	for len(ids) < prefillWaveRowsForTest {
+		ids = append(ids, base...)
+	}
+	return ids[:prefillWaveRowsForTest]
+}
+
+// prefillWavesHost is the host's prefill of ids: the last row's logits.
+func prefillWavesHost(t *testing.T, m *Model, ids []int32) []float32 {
+	t.Helper()
+	s := m.NewState(len(ids) + 2)
+	defer s.Close()
+	l, err := s.Prefill(ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append([]float32(nil), l...)
+}
+
+// wavesNMSE is got's normalised mean squared error against want.
+func wavesNMSE(got, want []float32) float64 {
+	var num, den float64
+	for i := range want {
+		d := float64(got[i] - want[i])
+		num += d * d
+		den += float64(want[i]) * float64(want[i])
+	}
+	return num / den
+}
