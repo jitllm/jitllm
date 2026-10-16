@@ -670,14 +670,43 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 			}
 			s.ropeRow(i, s.ropeOf(slot, p0+i))
 		}
+		// A KV-sharing tail carries only the rows something consumes
+		// (tailprune.go).
+		tailAt := s.pruneTailAt(base, n, total, chunkBidir)
 		// Device blocks go as runs, not a prefix (see forward.go), each run as
 		// one batch so the weights are read once for n tokens.
 		for li := s.lo; li < s.hi; li++ {
+			if li == tailAt {
+				if base+n < total {
+					// Nothing reads this chunk's tail output.
+					s.tailPrune.Would += n * (s.hi - li)
+					break
+				}
+				done, err := s.prunedTail(li, slot, p0, base, n, chunkRows)
+				if err != nil {
+					return nil, err
+				}
+				if done {
+					break
+				}
+				if !s.devFallback {
+					return nil, errDevice{li, s.devWhy()}
+				}
+				if !s.demoteAll() {
+					return nil, errDevice{li, s.devWhy()}
+				}
+				if err := refill(); err != nil {
+					return nil, err
+				}
+				tailAt = -1
+				li = s.lo - 1
+				continue
+			}
 			if s.devAt(li) {
 				hi := li + 1
 				// A deepstack row adds in after each of the first blocks, so
 				// a chunk holding one runs them one submission each.
-				for hi < s.hi && s.devAt(hi) && !s.deepIn(hi-1, base, n) {
+				for hi < s.hi && hi != tailAt && s.devAt(hi) && !s.deepIn(hi-1, base, n) {
 					hi++
 				}
 				// The last chunk carries the head when the device runs every

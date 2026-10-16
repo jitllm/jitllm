@@ -63,6 +63,9 @@ type modelOpts struct {
 	// noTailRows runs a prompt's few-row chunk batched rather than as a
 	// ragged step (tailrows.go).
 	noTailRows bool
+	// noTailPrune carries every prompt row through a KV-sharing tail rather
+	// than only the rows something consumes (tailprune.go).
+	noTailPrune bool
 	// experts is WithExperts' choice.
 	experts string
 	// trialAA makes the stream trial an A/A self-control (WithStreamTrialAA).
@@ -239,6 +242,12 @@ func WithStreamTrial(on bool) Option { return func(l *loadOpts) { l.opt.noStream
 // (nn.KVPrewarmer), so its first prompt does not grow them inside its own
 // time. On by default; off is the A/B arm.
 func WithKVPrewarm(on bool) Option { return func(l *loadOpts) { l.opt.noKVPrewarm = !on } }
+
+// WithTailPrune sets whether a prompt's final run of KV-sharing blocks, which
+// write no history, carries only the rows something consumes: none of an
+// intermediate chunk's, the last row of the final chunk's (tailprune.go). On by
+// default; off is the A/B arm.
+func WithTailPrune(on bool) Option { return func(l *loadOpts) { l.opt.noTailPrune = !on } }
 
 // WithTailRows sets whether a prompt chunk of at most four rows, every block
 // and the head on one device that runs ragged rows, runs as one ragged step

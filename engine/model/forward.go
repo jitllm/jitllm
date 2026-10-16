@@ -415,6 +415,10 @@ type State struct {
 	// tailRowChunks counts few-row prompt chunks run as one ragged step
 	// (tailrows.go). See TailRowChunks.
 	tailRowChunks int
+	// tailPrune and tailSave are the KV-sharing tail's counters and the
+	// rotary rows it borrows (tailprune.go).
+	tailPrune tailPruneStats
+	tailSave  []float32
 	// tailPos is a ragged tail step's positions, kept so the step allocates
 	// nothing once grown.
 	tailPos []int
