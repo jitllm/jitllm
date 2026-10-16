@@ -45,9 +45,38 @@ func speedCmd(args []string) error {
 	sessions := fs.Int("sessions", 0, "decode N sessions -n tokens, one after another and together "+
 		"(model.Step), interleaved over -r rounds")
 	spec := addSpecFlags(fs)
+	manifestOut := fs.String("manifest", "", "write the run's manifest here: binary, model, options, workload, placement, "+
+		"each site's recipe and why, and the rates (JSON)")
+	from := fs.String("from", "", "repeat the run a manifest records (its arguments and JITLLM_* variables) and "+
+		"report where the variant it selects differs")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	var recorded *runManifest
+	if *from != "" {
+		if fs.NArg() != 0 {
+			return fmt.Errorf("jitllm speed -from takes the model from the manifest, not %q", fs.Arg(0))
+		}
+		var err error
+		if recorded, err = readManifest(*from); err != nil {
+			return err
+		}
+		if err := recorded.replayEnv(); err != nil {
+			return err
+		}
+		if err := fs.Parse(recorded.Args); err != nil {
+			return err
+		}
+	}
+	// The run's own arguments, for its manifest: everything but where the
+	// manifest goes and where it came from.
+	var runArgs []string
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name != "manifest" && f.Name != "from" {
+			runArgs = append(runArgs, "-"+f.Name+"="+f.Value.String())
+		}
+	})
+	runArgs = append(runArgs, fs.Args()...)
 	if err := misplacedFlag(fs); err != nil {
 		return err
 	}
@@ -56,7 +85,7 @@ func speedCmd(args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: jitllm speed [-devices SPEC] [-p N] [-n N] [-r N] [-vram B] <model.jlm>")
+		return fmt.Errorf("usage: jitllm speed [-devices SPEC] [-p N] [-n N] [-r N] [-vram B] [-manifest FILE] <model.jlm>, or jitllm speed -from FILE")
 	}
 	if *memProf != "" {
 		runtime.MemProfileRate = 1
@@ -78,6 +107,13 @@ func speedCmd(args []string) error {
 		return err
 	}
 	defer m.Close()
+	var man *runManifest
+	if *manifestOut != "" || recorded != nil {
+		if man, err = newManifest(runArgs, m, fs.Arg(0)); err != nil {
+			return err
+		}
+		man.Workload = manifestWorkload{Prompt: *p, Gen: *n, Reps: *reps, Devices: *dev, VRAM: uint64(*vram)}
+	}
 	if err := preloadWait(m); err != nil {
 		return err
 	}
@@ -160,6 +196,9 @@ func speedCmd(args []string) error {
 			printKernelTimes("a prompt", 1)
 		}
 		ppOn, spills, fails, tails := st.GPULayers(), st.Spills(), st.DeviceDemotions(), st.TailRowChunks()
+		if timed && man != nil {
+			man.Placed.PromptBlocks = ppOn
+		}
 		moves := st.Relocations() + st.Reclaims()
 		st.Close()
 		if err != nil {
@@ -225,6 +264,12 @@ func speedCmd(args []string) error {
 			}
 		}
 		tg = time.Since(t0)
+		if timed && man != nil {
+			man.Placed.DecodeBlocks, man.Placed.Runs = st2.GPULayers(), st2.DeviceBlocks()
+			if d != nil {
+				man.device(d, name)
+			}
+		}
 		if sp != nil && timed {
 			printSpec(os.Stdout, sp)
 		}
@@ -311,6 +356,29 @@ func speedCmd(args []string) error {
 		"every sample reported; each a fresh State at position 0, all %d rows computed (warmHonest), the "+
 		"last row's logits read back before the timer stops\n", *p, *reps, *p)
 	fmt.Printf("pp%d %s tok/s   tg%d %s tok/s\n", *p, rates(pps), *n, rates(tgs))
+	if man == nil {
+		return nil
+	}
+	man.Results = manifestResults{PP: pps, TG: tgs}
+	for _, c := range man.Recipes {
+		fmt.Printf("recipe %s\n", c)
+	}
+	if *manifestOut != "" {
+		if err := man.write(*manifestOut); err != nil {
+			return err
+		}
+	}
+	if recorded != nil {
+		diff := variantDiff(recorded, man)
+		if len(diff) == 0 {
+			fmt.Printf("variant: the run selected what %s records\n", *from)
+			return nil
+		}
+		for _, l := range diff {
+			fmt.Printf("variant differs: %s\n", l)
+		}
+		return fmt.Errorf("jitllm speed: the run selected a different variant from %s (%d difference(s))", *from, len(diff))
+	}
 	return nil
 }
 

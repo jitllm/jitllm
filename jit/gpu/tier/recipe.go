@@ -204,7 +204,17 @@ func (g *devTier) ffnKey(l *layer) string {
 // the form the prologue tuner chose. A forced Config.FFNForm or GateUpFuse
 // skips it; called holding g.mu, outside any Session.
 func (g *devTier) tuneFFN() {
-	if g.FFNForm != FFNTuned || g.GateUpFuse || !g.GateUp2 || g.GateUp2Force || g.bs == nil || !g.actInOn() {
+	if g.bs == nil {
+		return
+	}
+	g.explainDrop("ffn")
+	if why := g.ffnForced(); why != "" {
+		g.explainSet(RecipeChoice{Site: "ffn", Key: "*", Recipe: g.ffnForcedForm().String(), Source: "forced", Why: why})
+		return
+	}
+	if !g.actInOn() {
+		g.explainSet(RecipeChoice{Site: "ffn", Key: "*", Recipe: g.ffnForcedForm().String(), Source: "untuned",
+			Why: "tuning is off; the device's default recipe runs"})
 		return
 	}
 	if g.gu2Win == nil {
@@ -247,6 +257,8 @@ func (g *devTier) tuneFFN() {
 			if err == nil {
 				g.ffnWin[key] = f
 				g.gu2Win[splitKey{by[key].ls[0].mvu.q, by[key].ls[0].mvu.rows, by[key].ls[0].mvu.k}] = f == FFNGate2 || f == FFNGate2In
+				g.explainSet(RecipeChoice{Site: "ffn", Key: key, Recipe: f.String(), Source: "cache",
+					Why: "a verdict timed earlier on this binary and device", Blocks: len(by[key].ls)})
 				continue
 			}
 		}
@@ -277,6 +289,16 @@ func (g *devTier) tuneFFN() {
 		}
 		g.ffnWin[key] = win
 		g.gu2Win[sk] = win == FFNGate2 || win == FFNGate2In
+		trial := make([]Arm, 0, len(forms)-1)
+		for i, f := range forms[1:] {
+			trial = append(trial, Arm{Recipe: f.String(), Ratio: med[i+1], Resolved: ok[i+1]})
+		}
+		why := fmt.Sprintf("no challenger resolved 1%% faster than the incumbent %v", forms[0])
+		if win != forms[0] {
+			why = fmt.Sprintf("the fastest resolved challenger, %.4f of %v", best, forms[0])
+		}
+		g.explainSet(RecipeChoice{Site: "ffn", Key: key, Recipe: win.String(), Source: "timed", Why: why,
+			Blocks: len(ls), Trial: trial})
 		if backend.Verbose() {
 			fmt.Fprintf(os.Stderr, "tier: FFN recipes %s over %d blocks:", key, len(ls))
 			for i, f := range forms[1:] {
@@ -303,6 +325,37 @@ func (g *devTier) tuneFFN() {
 		}
 	}
 	g.dropGraph()
+}
+
+// ffnForced is why the caller's options decide the FFN recipe rather than
+// the trial, or "".
+func (g *devTier) ffnForced() string {
+	switch {
+	case g.FFNForm != FFNTuned:
+		return "Config.FFNForm (JITLLM_GPU_FFN) names it"
+	case g.GateUpFuse:
+		return "Config.GateUpFuse forces gate and up as one segment launch"
+	case !g.GateUp2:
+		return "Config.GateUp2 is off, so Gate2 is not offered"
+	case g.GateUp2Force:
+		return "Config.GateUp2Force forces Gate2"
+	}
+	return ""
+}
+
+// ffnForcedForm is the recipe a forced or untuned FFN asks for: the
+// caller's, else the device default. A block that cannot express it still
+// falls down the chain at its launch, which the run counters show.
+func (g *devTier) ffnForcedForm() FFNForm {
+	switch {
+	case g.FFNForm != FFNTuned:
+		return g.FFNForm
+	case g.GateUpFuse:
+		return FFNGU
+	case !g.GateUp2 || !kernels.Gate2Exact(g.dev.API()):
+		return FFNTwo
+	}
+	return FFNGate2
 }
 
 // ffnArm is recipe f over the blocks ls: the FFN norm (where the recipe does

@@ -16,7 +16,13 @@ import (
 // shape, as the split tuner's is. A caller that forced sites (ActInSites)
 // skips it. Called from retuneDecode, holding g.mu, outside any Session.
 func (g *devTier) tuneActIn() {
-	if g.ActInSites != 0 || g.bs == nil {
+	if g.bs == nil {
+		return
+	}
+	g.explainDrop("actin")
+	if g.ActInSites != 0 {
+		g.explainSet(RecipeChoice{Site: "actin", Key: "*", Recipe: fmt.Sprintf("sites %#x", g.ActInSites),
+			Source: "forced", Why: "Config.ActInSites names the prologue sites"})
 		return
 	}
 	g.actInTrial = true
@@ -56,13 +62,24 @@ func (g *devTier) tuneActIn() {
 	for _, key := range keys {
 		c := by[key]
 		ck := g.tuneKey("actin-" + key)
+		site := actInSiteName(c.site)
 		if v, ok := lookupCache(g.kb.cacheDir, "gpuactin", ck); ok && g.kb.tune != TuneForce {
 			g.actInWin[key] = v == "1"
+			g.explainSet(RecipeChoice{Site: site, Key: key, Recipe: actInRecipe(v == "1"), Source: "cache",
+				Why: "a verdict timed earlier on this binary and device", Blocks: len(c.ls)})
 			continue
 		}
 		r, ok := g.timeActIn(c.site, c.ls)
 		win := ok && r < actInMargin
 		g.actInWin[key] = win
+		why := "the prologue did not time 1% faster than the two launches"
+		if win {
+			why = "the prologue timed 1% faster than the two launches"
+		} else if !ok {
+			why = "the trial did not resolve; the two launches stay"
+		}
+		g.explainSet(RecipeChoice{Site: site, Key: key, Recipe: actInRecipe(win), Source: "timed", Why: why,
+			Blocks: len(c.ls), Trial: []Arm{{Recipe: "prologue", Ratio: r, Resolved: ok}}})
 		if backend.Verbose() {
 			fmt.Fprintf(os.Stderr, "tier: operand prologue %s: %.4f of the two launches over %d blocks (resolved %v): %v\n",
 				key, r, len(c.ls), ok, win)
@@ -89,6 +106,24 @@ func (g *devTier) tuneActIn() {
 		}
 	}
 	g.dropGraph()
+}
+
+// actInSiteName names an operand-prologue site for a plan explanation.
+func actInSiteName(site int) string {
+	switch site {
+	case actInQKV:
+		return "actin-qkv"
+	case actInO:
+		return "actin-o"
+	}
+	return "actin-down"
+}
+
+func actInRecipe(on bool) string {
+	if on {
+		return "prologue"
+	}
+	return "two"
 }
 
 // actInMargin is how much faster than the two launches the prologue must

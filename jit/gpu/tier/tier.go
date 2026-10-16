@@ -1905,7 +1905,9 @@ type devShared struct {
 	// the two launches.
 	gu2Win map[splitKey]bool
 	// ffnWin is tuneFFN's verdict per FFN shape key (recipe.go).
-	ffnWin     map[string]FFNForm
+	ffnWin map[string]FFNForm
+	// explain is each site's decision in force, with its reason (explain.go).
+	explain    map[string]RecipeChoice
 	actInTrial bool
 	ragKerns   map[moeKernKey]backend.Kernel // a batched mixture's grouped matvecs (moegroup.go)
 	moeVolta   map[moeVoltaKey]moeVoltaMV    // their tensor-core twins; see voltaGroupedMV
