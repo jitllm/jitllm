@@ -127,6 +127,18 @@ func decisionAllocs(t *testing.T, m *Model, g *tier.GPU, n int) {
 			cardTooSmall(t, g.Err(), "%s held %d of %d blocks in the every-block arm", g.Name(), placed, want)
 		}
 	}
+	if g != nil {
+		// A card filled to its budget by the weights has no room for the
+		// batched scratch to stay resident: it is dropped and rebuilt (kernels
+		// recompiled) inside the window, which says the card is too small
+		// for this seam, not that a warm step allocates.
+		for _, b := range g.Budgets() {
+			if b.Limit > 0 && b.Used*100 > b.Limit*97 {
+				t.Skipf("CARD TOO SMALL: %s holds %d of %d blocks with %d of %d budget bytes charged, no room to keep its scratch -- this gate proved nothing here",
+					g.Name(), placed, nb, b.Used, b.Limit)
+			}
+		}
+	}
 	ps := decisionPrompts(t, d)
 	pass := func() {
 		for _, p := range ps {

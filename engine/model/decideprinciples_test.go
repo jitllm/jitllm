@@ -205,9 +205,11 @@ func TestDecisionRelocatesMidPrompt(t *testing.T) {
 // vllm-d3 (V100, CUDA and Vulkan): a label logit moves 0.0235 between cards
 // and 0.0299 with the recurrent summaries lost, a thin margin: its attention
 // sees the whole prompt, so the linear blocks' state carries less of it.
+// pplx-decider (V100, CUDA and Vulkan): a label logit moves 0.027 between
+// cards and 0.59-0.60 with the recurrent summaries lost.
 // Kev (V100, CUDA and Vulkan): a pointer score moves 0.0015 between cards
 // and 0.20 with the recurrent summaries lost.
-var decisionRelocTol = map[string]float64{"d1-3B": 0.06, "openjev": 0.005, "lev": 1.0, "vllm-d3": 0.026, "kev": 0.05, "pplx-decider": 1.0, "clef": 1.0, "clef-fixture": 0.01}
+var decisionRelocTol = map[string]float64{"d1-3B": 0.06, "openjev": 0.005, "lev": 1.0, "vllm-d3": 0.026, "kev": 0.05, "pplx-decider": 0.1, "clef": 1.0, "clef-fixture": 0.01}
 
 // TestDecisionRelocatesBetweenDevices moves one Decider's blocks from the host
 // onto each device in turn and home, answering the same request at every
