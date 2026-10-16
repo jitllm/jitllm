@@ -203,7 +203,7 @@ func ExpertGroupColumns(rows, nExp, np int, pair bool) (*ir.Kernel, error) {
 // pair before it is O((rows*k)^2), and one thread per expert walking the
 // pairs is only nExp threads wide and latency-bound. Here no thread walks
 // more than GroupBlock pairs, and there is a thread per pair.
-func ExpertGroupScatter(rows, k, nExp, unit int, pair bool) (*ir.Kernel, error) {
+func ExpertGroupScatter(rows, k, nExp, unit, np int, pair bool) (*ir.Kernel, error) {
 	if err := groupCheck("ExpertGroupScatter", rows, k, nExp); err != nil {
 		return nil, err
 	}
@@ -232,9 +232,17 @@ func ExpertGroupScatter(rows, k, nExp, unit int, pair bool) (*ir.Kernel, error) 
 	b.SetPhi(acc, b.Add(ir.U32, acc, b.Mul(ir.U32, before, eqU32(b, selAt(b, pSel, b.Min(ir.U32, jj, i), k), e))))
 	b.SetPhi(j, b.Add(ir.U32, j, one))
 	b.EndLoop()
-	start := b.Sub(ir.U32, b.Load(ir.U32, pEnds, e, 0), padTo(b, b.Load(ir.U32, pCnt, e, 0), unit))
-	off := b.Load(ir.U32, pOff, b.Add(ir.U32, b.Mul(ir.U32, blk, b.Const(ir.U32, int64(nExp))), e), 0)
-	col := b.Add(ir.U32, b.Add(ir.U32, start, off), acc)
+	// A selection of nExp or more names no expert and takes no column: its pair
+	// points at the spare column np, which perm and colPair have room for and
+	// the down projection's output keeps zero, so the combine adds nothing for
+	// it. A wave of a prompt chunk's experts (streamBank.prefillWave) runs the
+	// grouped kernels over the experts the card holds now and routes the
+	// chunk's other pairs here.
+	named := b.Lt(ir.U32, e, b.Const(ir.U32, int64(nExp)))
+	ec := b.Min(ir.U32, e, b.Const(ir.U32, int64(nExp-1)))
+	start := b.Sub(ir.U32, b.Load(ir.U32, pEnds, ec, 0), padTo(b, b.Load(ir.U32, pCnt, ec, 0), unit))
+	off := b.Load(ir.U32, pOff, b.Add(ir.U32, b.Mul(ir.U32, blk, b.Const(ir.U32, int64(nExp))), ec), 0)
+	col := b.Select(ir.U32, named, b.Add(ir.U32, b.Add(ir.U32, start, off), acc), b.Const(ir.U32, int64(np)))
 	b.Store(pPerm, col, b.Div(ir.U32, i, b.Const(ir.U32, int64(k))), 0)
 	b.Store(pPos, i, col, 0)
 	if pair {

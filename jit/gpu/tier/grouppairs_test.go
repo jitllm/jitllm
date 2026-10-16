@@ -92,7 +92,9 @@ func groupPairs(sel []uint32, rows, k, nExp, unit int, perm, colE, pos []uint32)
 	count := make([]int, nExp)
 	for r := 0; r < rows; r++ {
 		for s := 0; s < k; s++ {
-			count[sel[r*(k+1)+s]]++
+			if e := sel[r*(k+1)+s]; int(e) < nExp {
+				count[e]++
+			}
 		}
 	}
 	start := make([]int, nExp)
@@ -113,6 +115,11 @@ func groupPairs(sel []uint32, rows, k, nExp, unit int, perm, colE, pos []uint32)
 	for r := 0; r < rows; r++ {
 		for s := 0; s < k; s++ {
 			e := sel[r*(k+1)+s]
+			if int(e) >= nExp {
+				// Names no expert: the spare column past the last (np).
+				pos[r*k+s] = uint32(len(perm))
+				continue
+			}
 			j := next[e]
 			next[e]++
 			perm[j], pos[r*k+s] = uint32(r), uint32(j)
@@ -151,6 +158,12 @@ func TestDeviceGroupingMatchesTheReference(t *testing.T) {
 		{"one-expert", 20, 4, 8, groupTok, func(r, s int) uint32 { return 5 }},
 		{"sparse", 33, 2, 128, 64, func(r, s int) uint32 { return uint32([]int{0, 127, 64}[(r+s)%3]) }},
 		{"k1", 9, 1, 4, groupTok, func(r, s int) uint32 { return uint32(r % 3) }},
+		// A selection past the last expert names none (a prompt chunk's wave
+		// leaves the pairs of experts not on the card there): it takes no
+		// column, and its pair reads the spare one.
+		{"unnamed", 37, 3, 16, groupTok, func(r, s int) uint32 { return uint32(rng.Intn(16 + 12)) }},
+		{"unnamed-volta", 61, 2, 64, 32, func(r, s int) uint32 { return uint32(rng.Intn(64) + 64*(r%2)) }},
+		{"all-unnamed", 9, 2, 8, groupTok, func(r, s int) uint32 { return 8 }},
 		// olmoe's chunk: 4096 pairs over 64 blocks of the two-level scatter.
 		{"olmoe", 512, 8, 64, 32, func(r, s int) uint32 { return uint32(rng.Intn(64)) }},
 	}
@@ -175,7 +188,9 @@ func TestDeviceGroupingMatchesTheReference(t *testing.T) {
 			tselOf(colE, unit, tselU)
 			pair := make([]uint32, np)
 			for i, j := range pos {
-				pair[j] = uint32(i)
+				if int(j) < np {
+					pair[j] = uint32(i)
+				}
 			}
 			got, err := runGrouping(d, sel, rows, k, nExp, unit, np)
 			if err != nil {
@@ -228,7 +243,7 @@ func runGrouping(d backend.Device, sel []uint32, rows, k, nExp, unit, np int) (g
 	count := comp(func() (*ir.Kernel, error) { return kernels.ExpertGroupCount(rows, k, nExp) })
 	ends := comp(func() (*ir.Kernel, error) { return kernels.ExpertGroupEnds(nExp, unit) })
 	cols := comp(func() (*ir.Kernel, error) { return kernels.ExpertGroupColumns(rows, nExp, np, true) })
-	scatter := comp(func() (*ir.Kernel, error) { return kernels.ExpertGroupScatter(rows, k, nExp, unit, true) })
+	scatter := comp(func() (*ir.Kernel, error) { return kernels.ExpertGroupScatter(rows, k, nExp, unit, np, true) })
 	tiles := comp(func() (*ir.Kernel, error) { return kernels.ExpertGroupTiles(nExp, np/groupTok, groupTok) })
 	tilesU := comp(func() (*ir.Kernel, error) { return kernels.ExpertGroupTiles(nExp, np/unit, unit) })
 	if err != nil {
@@ -251,7 +266,7 @@ func runGrouping(d backend.Device, sel []uint32, rows, k, nExp, unit, np int) (g
 	}
 	nbe := kernels.GroupBlocks(rows, k) * nExp
 	bSel, bCnt, bEnds, bBC, bOff := buf(len(sel)), buf(2*nExp), buf(nExp), buf(nbe), buf(nbe)
-	bPerm, bColE, bPos, bPair := buf(np), buf(np), buf(rows*k), buf(np)
+	bPerm, bColE, bPos, bPair := buf(np+1), buf(np), buf(rows*k), buf(np+1)
 	bTsel, bTselU := buf(np/groupTok), buf(np/unit)
 	if err != nil {
 		return out, err

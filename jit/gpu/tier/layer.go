@@ -359,6 +359,11 @@ type streamBank struct {
 	// the real one and clears it.
 	pred     []uint32
 	havePred bool
+	// prefillWaves' scratch: wslot is an expert's slot while its wave runs
+	// (-1 unseen), waveHit and waveMiss the chunk's experts the cache held
+	// and did not.
+	wslot             []int32
+	waveHit, waveMiss []uint32
 }
 
 // score charges this token's selection to the probe's counters and hands it
@@ -12433,3 +12438,180 @@ func (g *devTier) spanKernel(hb *blockScratch) error {
 	hb.spanK, hb.spanOff = k, ob
 	return nil
 }
+
+// prefillWaveRows is the fewest valid rows of a chunk whose hybrid block runs
+// its experts on the card in waves (streamBank.prefillWaves); fewer go through
+// splitRows, whose host share is a few experts' reads. A first cut, to be set
+// from a paired measurement.
+const prefillWaveRows = 64
+
+// prefillWaves runs a prompt chunk's routed experts of a hybrid block on the
+// card, through the block's expert cache, instead of reading every chosen
+// expert on the host. The chunk's selection comes home; the experts the cache
+// holds run first (wave 0), then the rest are admitted into the least
+// recently used slots, as many as the cache has slots at a time, and each
+// wave runs the grouped kernels over what the card holds then. A pair whose
+// expert is not in the wave names none (nExpert, which the grouping routes to
+// its spare column) with a zero weight, so run's weighted sum is that wave's
+// share and the caller accumulates the waves. run(first) executes one wave:
+// its first call writes the sum, the others add to it.
+//
+// The sheets travel the admission path (queued on admItems, sent through the
+// upload ring and the copy queue, taken into use after UploadWait), so the
+// pager, the ring and the cache map are the decode path's. A wave starts after
+// a Sync, which is also what makes its slots free: the previous wave's
+// kernels have read them.
+func (st *streamBank) prefillWaves(g *devTier, s backend.Session, l *layer, nExpert int, sel, w backend.Buf, k, rows, valid int, run func(first bool) error) error {
+	if len(st.owner) > nExpert {
+		return fmt.Errorf("tier: a cache of %d slots over a bank of %d experts", len(st.owner), nExpert)
+	}
+	if st.bank != l.down {
+		st.forget()
+		st.bank = l.down
+	}
+	st.hsel = growU32(st.hsel, rows*(k+1))
+	st.hw = growF32(st.hw, rows*k)
+	st.rowSel = growU32(st.rowSel, rows*(k+1))
+	st.rowW = growF32(st.rowW, rows*k)
+	if err := s.Sync(); err != nil {
+		return err
+	}
+	if err := s.Read(w, f32b(st.hw)); err != nil {
+		return err
+	}
+	if err := s.Read(sel, u32b(st.hsel)); err != nil {
+		return err
+	}
+	if len(st.wslot) != nExpert {
+		st.wslot = make([]int32, nExpert)
+		for i := range st.wslot {
+			st.wslot[i] = -1
+		}
+	}
+	// The chunk's experts, each once: those the cache holds, then the rest.
+	// wslot marks an expert seen (waveSeen) and holds a running wave's
+	// expert's slot.
+	st.waveHit, st.waveMiss = st.waveHit[:0], st.waveMiss[:0]
+	defer func() {
+		for _, e := range st.waveHit {
+			st.wslot[e] = -1
+		}
+		for _, e := range st.waveMiss {
+			st.wslot[e] = -1
+		}
+		if len(g.adm) == 0 && len(g.admPub) == 0 {
+			g.admItems = g.admItems[:0]
+		}
+	}()
+	for r := 0; r < valid; r++ {
+		for j := 0; j < k; j++ {
+			e := st.hsel[r*(k+1)+j]
+			if int(e) >= nExpert {
+				return fmt.Errorf("tier: the router selected expert %d of %d", e, nExpert)
+			}
+			if st.wslot[e] != -1 {
+				continue
+			}
+			st.wslot[e] = waveSeen
+			if st.slotOf[e] >= 0 {
+				st.waveHit = append(st.waveHit, e)
+			} else {
+				st.waveMiss = append(st.waveMiss, e)
+			}
+		}
+	}
+	g.PrefillBlocks++
+	g.PrefillHits += len(st.waveHit)
+	first := true
+	// wave runs the grouped kernels over the experts whose wslot is a slot.
+	wave := func() error {
+		if !first {
+			// The previous wave's kernels have read their slots and hsum.
+			if err := s.Sync(); err != nil {
+				return err
+			}
+		}
+		for r := 0; r < rows; r++ {
+			for j := 0; j < k; j++ {
+				id, wt := uint32(nExpert), float32(0)
+				if r < valid {
+					if sl := st.wslot[st.hsel[r*(k+1)+j]]; sl >= 0 {
+						id, wt = uint32(sl), st.hw[r*k+j]
+					}
+				}
+				st.rowSel[r*(k+1)+j], st.rowW[r*k+j] = id, wt
+			}
+			st.rowSel[r*(k+1)+k] = st.hsel[r*(k+1)+k]
+		}
+		if err := s.WriteAt(sel, 0, u32b(st.rowSel)); err != nil {
+			return err
+		}
+		if err := s.WriteAt(w, 0, f32b(st.rowW)); err != nil {
+			return err
+		}
+		g.PrefillWaves++
+		err := run(first)
+		first = false
+		return err
+	}
+	st.tick++
+	if len(st.waveHit) > 0 {
+		for _, e := range st.waveHit {
+			sl := st.slotOf[e]
+			st.used[sl] = st.tick
+			st.wslot[e] = sl
+		}
+		if err := wave(); err != nil {
+			return err
+		}
+		for _, e := range st.waveHit {
+			st.wslot[e] = waveSeen
+		}
+	}
+	for lo := 0; lo < len(st.waveMiss); lo += len(st.owner) {
+		exps := st.waveMiss[lo:min(lo+len(st.owner), len(st.waveMiss))]
+		if !first {
+			if err := s.Sync(); err != nil {
+				return err
+			}
+		}
+		st.tick++
+		st.items = st.items[:0]
+		for _, e := range exps {
+			v := -1
+			for sl := range st.owner {
+				if st.used[sl] != st.tick && (v < 0 || st.used[sl] < st.used[v]) {
+					v = sl
+				}
+			}
+			if o := st.owner[v]; o >= 0 {
+				st.slotOf[o] = -1
+			}
+			st.owner[v], st.slotOf[e], st.used[v] = int32(e), slotInFlight, st.tick
+			st.items = append(st.items, streamItem{e: e, slot: v})
+		}
+		jlo := len(g.admItems)
+		g.admItems = append(g.admItems, st.items...)
+		g.adm = append(g.adm, admJob{st: st, l: l, nExpert: nExpert, lo: jlo, hi: len(g.admItems)})
+		if err := g.flushAdmits(s); err != nil {
+			return err
+		}
+		if err := g.publishAdmits(s); err != nil {
+			return err
+		}
+		g.PrefillUploaded += len(exps)
+		for _, it := range st.items {
+			st.wslot[it.e] = int32(it.slot)
+		}
+		if err := wave(); err != nil {
+			return err
+		}
+		for _, e := range exps {
+			st.wslot[e] = waveSeen
+		}
+	}
+	return nil
+}
+
+// waveSeen marks an expert of the chunk that is not in the running wave.
+const waveSeen = -3

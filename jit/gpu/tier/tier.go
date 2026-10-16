@@ -499,6 +499,11 @@ type Config struct {
 	// on the host, as before the split covered them: the control arm of
 	// streamBank.splitRows, which runs the rows' cached experts on the card.
 	NoSplitRows bool
+	// NoPrefillExperts keeps a prompt chunk's experts of a hybrid block on the
+	// host, as before they ran on the card: the control arm of
+	// streamBank.prefillWaves, which runs them there through the block's
+	// expert cache.
+	NoPrefillExperts bool
 	// NoHybridCache gives a hybrid block no expert cache on the card. With
 	// one (the default, sized from the room left after placement), the
 	// experts the cache holds run on the card while the host runs the rest
@@ -944,6 +949,11 @@ type Stats struct {
 	// SplitRowSteps counts the block-steps of several rows whose experts were
 	// split between the cache and the host (streamBank.splitRows).
 	SplitRowSteps int
+	// PrefillBlocks counts the block-chunks whose experts ran on the card in
+	// waves through the cache (streamBank.prefillWaves), PrefillWaves the
+	// waves, PrefillUploaded the sheets those waves sent and PrefillHits the
+	// experts a chunk found already cached.
+	PrefillBlocks, PrefillWaves, PrefillUploaded, PrefillHits int
 	// SplitQueued counts admitted sheets sent on the copy queue beside the
 	// launches (backend.Uploader) rather than in their order.
 	SplitQueued int
@@ -1371,6 +1381,10 @@ func (s *Stats) add(o Stats) {
 	s.THybrid += o.THybrid
 	s.SplitRuns += o.SplitRuns
 	s.SplitRowSteps += o.SplitRowSteps
+	s.PrefillBlocks += o.PrefillBlocks
+	s.PrefillWaves += o.PrefillWaves
+	s.PrefillUploaded += o.PrefillUploaded
+	s.PrefillHits += o.PrefillHits
 	s.CachesDropped += o.CachesDropped
 	s.CacheBytes += o.CacheBytes
 	s.SplitHits += o.SplitHits
