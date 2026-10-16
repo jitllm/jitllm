@@ -1,0 +1,23 @@
+:root{--bg-deep:#13141c;--bg:#1a1b26;--surface:#1f2230;--surface-2:#24283b;--line:#24283b;--line-strong:#414868;--text:#c0caf5;--text-2:#a9b1d6;--muted:#8b93b8;--brand:#9ece6a;--brand-ink:#0c0e10;--err:#f7768e;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 Geist,ui-sans-serif,system-ui,sans-serif;height:100vh;display:flex;flex-direction:column}
+header{display:flex;gap:1rem;align-items:baseline;padding:.6rem 1rem;background:var(--bg-deep);border-bottom:1px solid var(--line-strong)}
+header b{color:var(--brand);font-size:1.1rem}
+main{flex:1;display:flex;min-height:0}
+aside{width:24rem;padding:1rem;background:var(--surface);border-right:1px solid var(--line-strong);overflow:auto}
+h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:1rem 0 .4rem;font-weight:500}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td{padding:.25rem .3rem;border-top:1px solid var(--line)}
+td.n,td:first-child{font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:12px}
+.dim{color:var(--muted)}.err{color:var(--err)}
+section{flex:1;display:flex;flex-direction:column;min-width:0}
+#log{flex:1;overflow:auto;padding:1rem;display:flex;flex-direction:column;gap:.7rem}
+.msg{max-width:48rem;padding:.6rem .8rem;border:1px solid var(--line-strong);white-space:pre-wrap}
+.user{background:var(--surface-2);align-self:flex-end}.bot{background:var(--bg-deep)}
+.bar{display:flex;gap:.5rem;padding:.8rem;border-top:1px solid var(--line-strong);background:var(--bg-deep)}
+textarea,select{background:var(--bg);color:var(--text);border:1px solid var(--line-strong);font:inherit;padding:.4rem}
+textarea{flex:1;resize:none}
+button{font:inherit;padding:.4rem 1rem;border:1px solid var(--line-strong);background:var(--surface-2);color:var(--text);cursor:pointer}
+#send{background:var(--brand);color:var(--brand-ink);border-color:var(--brand)}
+:focus-visible{outline:2px solid var(--brand);outline-offset:1px}
+@media (max-width:700px){main{flex-direction:column}aside{width:auto;max-height:35vh;border-right:0}}

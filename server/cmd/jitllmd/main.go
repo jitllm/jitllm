@@ -149,6 +149,7 @@ func serve(args []string) {
 	allowOrigin := fs.String("allow-origin", "",
 		"comma-separated browser origins (https://app.example.com) that may call the server cross-origin; "+
 			"loopback pages and clients that send no Origin are unaffected, any other origin is refused")
+	webui := fs.Bool("webui", false, "serve the built-in web UI at /ui/ (off by default)")
 	models := fs.String("models", defaultModels(),
 		"directory scanned by ListModels and used to resolve a bare model name (JITLLM_MODELS sets the default)")
 	load := fs.String("load", "",
@@ -375,9 +376,13 @@ func serve(args []string) {
 		fmt.Fprintln(os.Stderr, w)
 	}
 
+	handler := e.Handler()
+	if *webui {
+		handler = server.WithWebUI(handler)
+	}
 	srv := &http.Server{
 		Addr:    *addr,
-		Handler: guard.Wrap(e.Handler()),
+		Handler: guard.Wrap(handler),
 		// No WriteTimeout: a streaming generate on an over-committed model
 		// can run for minutes. The write side is bounded by the client's
 		// context.

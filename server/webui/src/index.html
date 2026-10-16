@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>jitllm</title><link rel="stylesheet" href="app.css"></head>
+<body>
+<header><b>jitllm</b><span id="status" class="dim">connecting</span></header>
+<main>
+  <aside>
+    <h2>Devices</h2><table id="devices"></table>
+    <h2>Loaded models</h2><table id="loaded"></table>
+  </aside>
+  <section>
+    <div id="log"></div>
+    <div class="bar"><select id="model"></select>
+      <textarea id="prompt" rows="2" placeholder="Message"></textarea>
+      <button id="send">Send</button><button id="stop">Stop</button></div>
+  </section>
+</main>
+<script src="app.js"></script></body></html>
