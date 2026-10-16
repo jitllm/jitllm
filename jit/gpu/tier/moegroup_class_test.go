@@ -1,0 +1,34 @@
+package tier
+
+import "testing"
+
+// TestVoltaMoEWidthClass holds the class boundary: a scratch below the pair
+// count builds the dp4a half, at or above it the staged GEMM. The violation is
+// the boundary moved: the same shape must change class with it.
+func TestVoltaMoEWidthClass(t *testing.T) {
+	g := &devTier{devShared: &devShared{}}
+	g.Config = &Config{}
+	g.VoltaMoEMinPairs = 64
+	for _, c := range []struct {
+		rows, k int
+		wide    bool
+	}{{3, 10, false}, {6, 10, false}, {7, 10, true}, {128, 10, true}} {
+		if got := g.voltaMoEWide(c.rows, c.k, 512); got != c.wide {
+			t.Errorf("rows %d k %d: wide %v, want %v", c.rows, c.k, got, c.wide)
+		}
+	}
+	g.VoltaMoEMinPairs = 1 << 30
+	if g.voltaMoEWide(128, 10, 512) {
+		t.Error("a raised boundary left a 128-row scratch wide: the gate cannot fire")
+	}
+}
+
+// TestVoltaMoEDefaultClass: with no boundary stated a scratch is wide once its
+// pairs reach the bank's expert count.
+func TestVoltaMoEDefaultClass(t *testing.T) {
+	g := &devTier{devShared: &devShared{}}
+	g.Config = &Config{}
+	if g.voltaMoEWide(8, 10, 512) || !g.voltaMoEWide(52, 10, 512) {
+		t.Error("the default boundary is not the expert count")
+	}
+}

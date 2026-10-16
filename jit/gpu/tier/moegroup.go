@@ -122,7 +122,7 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 	// token block from ActF16T(Gather) and add the expert bias themselves, so
 	// the scratch, the padding and the launch are the same and only the
 	// kernel differs (voltaGroupedMV picks it).
-	unit, volta := groupTok, g.voltaOn() || g.tileMoE()
+	unit, volta := groupTok, (g.voltaOn() || g.tileMoE()) && g.voltaMoEWide(rows, k, e)
 	if volta {
 		unit = voltaUnit(rows, k, e)
 	}
@@ -278,6 +278,23 @@ func (m *moeGroup) free() {
 			b.Free()
 		}
 	}
+}
+
+// voltaMoEWide is whether a scratch of rows rows picks the staged f16 GEMM for
+// its experts: a few-row step (a speculation's verification) routes rows*k
+// pairs over the bank, so most experts hold one column and the GEMM pads each
+// to a 32-column block, where the dp4a grouped matvec pads to groupTok and reads
+// the same weights. The class is the scratch's executed width, not the prompt's:
+// VoltaMoEMinPairs is the pair count below which the dp4a half is built
+// instead; 0 takes the bank's expert count (an expert averages a column), and
+// 1 is the old behaviour, the staged GEMM at every width.
+func (g *devTier) voltaMoEWide(rows, k, nExp int) bool {
+	min := g.VoltaMoEMinPairs
+	if min == 0 {
+		// An expert averages a column or more.
+		min = nExp
+	}
+	return rows*k >= min
 }
 
 // voltaOn is whether a batched mixture's experts take sm_70's f16 tensor

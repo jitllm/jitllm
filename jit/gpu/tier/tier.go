@@ -254,6 +254,10 @@ type Config struct {
 	// would run them (moegroup.go): the A/B arm for that, and its bisection
 	// switch.
 	NoVoltaMoE bool
+	// VoltaMoEMinPairs is the routed pair count (rows times experts used) a
+	// batched scratch needs before its experts take the staged f16 GEMM; below
+	// it the dp4a grouped matvec runs them (voltaMoEWide). 0 takes the default.
+	VoltaMoEMinPairs int
 	// NoRagGroup keeps a decode step of a few sequences off the decode matvec
 	// that carries every token in one thread (groupMV), on the tiled twins it
 	// replaced: the A/B arm for it, and its bisection switch.

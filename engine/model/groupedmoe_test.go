@@ -92,6 +92,13 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 				// And the A/B for the experts alone: the dp4a grouped matvec
 				// where sm_70's grouped GemmVolta would run them.
 				c.NoVoltaMoE = os.Getenv("JITLLM_MOE_NOVOLTAMOE") != ""
+				// The width class: a scratch below this many routed pairs
+				// builds the dp4a half on sm_70 (a speculation's few-row
+				// verification); a prompt chunk is never that narrow, so a
+				// large value is the narrow class's arm.
+				if v, err := strconv.Atoi(os.Getenv("JITLLM_GPU_VOLTA_MOE_MIN_PAIRS")); err == nil {
+					c.VoltaMoEMinPairs = v
+				}
 			}))...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
@@ -171,7 +178,11 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 	// On sm_70 the experts must have taken the tensor cores, or a device whose
 	// dense batched matvecs did is testing the dp4a grouped matvec while
 	// believing it tests GemmVolta.
-	if batSt.VoltaMV > 0 && os.Getenv("JITLLM_MOE_NOVOLTAMOE") == "" && batSt.GroupedVolta == 0 {
+	narrow := os.Getenv("JITLLM_GPU_VOLTA_MOE_MIN_PAIRS") != ""
+	if narrow && batSt.GroupedVolta != 0 {
+		t.Fatalf("the narrow class was forced and %d expert matvecs still ran on sm_70 tensor cores (%s)", batSt.GroupedVolta, batErr)
+	}
+	if batSt.VoltaMV > 0 && os.Getenv("JITLLM_MOE_NOVOLTAMOE") == "" && !narrow && batSt.GroupedVolta == 0 {
 		t.Fatalf("%d sm_70 tensor-core matvecs and 0 of the experts on them (%s)", batSt.VoltaMV, batErr)
 	}
 	// And the same for a latent block's attention: on sm_70 it runs on

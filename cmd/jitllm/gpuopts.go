@@ -243,6 +243,8 @@ func gpuOptions() []tier.Option {
 		{"JITLLM_GPU_NO_TILE_TAIL", set("JITLLM_GPU_NO_TILE_TAIL"), func(c *tier.Config) { c.NoTileTail = true }},
 		{"JITLLM_GPU_NO_EXACT_PROMPT", set("JITLLM_GPU_NO_EXACT_PROMPT"), func(c *tier.Config) { c.NoExactPrompt = true }},
 		{"JITLLM_GPU_NO_VOLTA_MOE", set("JITLLM_GPU_NO_VOLTA_MOE"), func(c *tier.Config) { c.NoVoltaMoE = true }},
+		{"JITLLM_GPU_VOLTA_MOE_MIN_PAIRS", set("JITLLM_GPU_VOLTA_MOE_MIN_PAIRS"),
+			func(c *tier.Config) { c.VoltaMoEMinPairs = num("JITLLM_GPU_VOLTA_MOE_MIN_PAIRS") }},
 		{"JITLLM_GPU_GEMM_INT8", set("JITLLM_GPU_GEMM_INT8"), func(c *tier.Config) { c.PreferGemmInt8 = true }},
 		{"JITLLM_GPU_GEMM_DEEP", set("JITLLM_GPU_GEMM_DEEP"), func(c *tier.Config) { c.GemmDeep = num("JITLLM_GPU_GEMM_DEEP") }},
 		{"JITLLM_GPU_PREFER_TILES", set("JITLLM_GPU_PREFER_TILES"), func(c *tier.Config) { c.PreferTiles = true }},
