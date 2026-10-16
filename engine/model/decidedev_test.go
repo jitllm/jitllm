@@ -36,7 +36,7 @@ import (
 // vllm-d3's 0.10: the ambiguous request's issue question is a near-tie
 // (0.50 against 0.50 on the host), where the device's reduction order reads
 // 0.085 off on the V100 and the laptop alike.
-var decisionDevTol = map[string]float64{"d1-3B": 0.03, "lev": 0.08, "laya": 0.01, "clef": 0.05, "clef-fixture": 0.002, "d1-omni": 0.01, "openjev": 0.005, "vllm-d3": 0.10, "kev": 0.15}
+var decisionDevTol = map[string]float64{"d1-3B": 0.03, "lev": 0.08, "laya": 0.01, "clef": 0.05, "clef-fixture": 0.002, "d1-omni": 0.01, "openjev": 0.005, "vllm-d3": 0.10, "kev": 0.15, "pplx-decider": 0.08}
 
 // decisionBlocks is how many blocks a Decider's readout runs: the decoder's,
 // or the encoder segment's (a decision head's blocks with it).
@@ -176,6 +176,9 @@ var decisionDevViolations = map[string]decisionDevViolation{
 		return cfgMut(m, func(c *Config) { c.RMSEps = 1 })
 	}},
 	"vllm-d3": {"a norm epsilon of 1", func(m *Model) func() {
+		return cfgMut(m, func(c *Config) { c.RMSEps = 1 })
+	}},
+	"pplx-decider": {"a norm epsilon of 1", func(m *Model) func() {
 		return cfgMut(m, func(c *Config) { c.RMSEps = 1 })
 	}},
 	"lev": {"a norm epsilon of 1", func(m *Model) func() {

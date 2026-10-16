@@ -190,7 +190,7 @@ func (m *Model) NewDecider(maxSeq int) (*Decider, error) {
 	}
 	d := &Decider{m: m, cfg: m.container.Config(), kind: kind, tpl: tpl, maxOptions: 255}
 	switch kind {
-	case jlm.DecisionLev, jlm.DecisionVllmD3:
+	case jlm.DecisionLev, jlm.DecisionVllmD3, jlm.DecisionPplxDecider:
 		// Codes A..Z then AA..ZZ; only those that are one token are used, up
 		// to 255 (lev's serving code, ADR-028).
 		var codes []string
@@ -653,6 +653,15 @@ func (d *Decider) promptText(state jinja.Value, q *DecisionQuestion, v int) (str
 	case jlm.DecisionVllmD3:
 		labels = d.labelTexts
 		for _, id := range d.labels[:len(opts)] {
+			groups = append(groups, []int32{id})
+		}
+	case jlm.DecisionPplxDecider:
+		labels = d.labelTexts
+		ids := d.labels[:len(opts)]
+		if d.violation == "codes-shifted" {
+			ids = d.labels[1 : len(opts)+1] // a gate's: each option read at the next code
+		}
+		for _, id := range ids {
 			groups = append(groups, []int32{id})
 		}
 	case jlm.DecisionOpenJev:

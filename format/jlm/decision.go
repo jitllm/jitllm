@@ -53,6 +53,11 @@ const (
 	// (vllm-sr/d3), one prompt per question; its confidence is one minus the
 	// normalised entropy, and it reads a null state and null instructions.
 	DecisionVllmD3 // 7
+	// DecisionPplxDecider is lev's codes (A..Z then AA..ZZ, each one token)
+	// read at the prompt's last row, one prompt per question
+	// (perplexity-ai/pplx-decider); its output projection is the readout,
+	// zero but at the codes' rows.
+	DecisionPplxDecider DecisionKind = 9
 	// DecisionKev is Kev's pointer head (jaredpalmer/kev): cls.output over
 	// the normed final hidden state, the prompt's last row's first half
 	// dotted with each option's <|box_end|> row's second half.
@@ -60,14 +65,15 @@ const (
 )
 
 var decisionNames = map[DecisionKind]string{
-	DecisionLev:     "lev",
-	DecisionLFM2D1:  "lfm2-d1",
-	DecisionLaya:    "laya",
-	DecisionClef:    "clef",
-	DecisionD1Omni:  "lfm2-d1-omni",
-	DecisionOpenJev: "openjev",
-	DecisionVllmD3:  "vllm-d3",
-	DecisionKev:     "kev",
+	DecisionLev:         "lev",
+	DecisionLFM2D1:      "lfm2-d1",
+	DecisionLaya:        "laya",
+	DecisionClef:        "clef",
+	DecisionD1Omni:      "lfm2-d1-omni",
+	DecisionOpenJev:     "openjev",
+	DecisionVllmD3:      "vllm-d3",
+	DecisionPplxDecider: "pplx-decider",
+	DecisionKev:         "kev",
 }
 
 // String is the name llama.cpp writes as <arch>.decision.type.

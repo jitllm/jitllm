@@ -94,6 +94,10 @@ var decisionCases = []struct {
 	// engines' projections sit 5.6% from the BF16 ones and 2% from each
 	// other, a band as wide as some of the readout's own violations.
 	{"kev", "kev/Kev-4B-BF16.gguf", "Kev-4B-BF16", jlm.DecisionKev, false, 0.01},
+	// perplexity-ai's pplx-decider v1.1 27B through llama.cpp's own converter
+	// (Q8_0; no published GGUF states its readout): lev's codes, its output
+	// projection the readout.
+	{"pplx-decider", "pplx-decider/pplx-decider-v1.1-27b-Q8_0.gguf", "pplx-decider-v1.1-27b-Q8_0", jlm.DecisionPplxDecider, false, 0.05},
 }
 
 // decisionRequests are the request bodies in testdata/decision: an object
@@ -219,6 +223,7 @@ func TestDecisionReadoutIsLoadBearing(t *testing.T) {
 		{"kev-same-half", "kev/Kev-4B-BF16.gguf", "Kev-4B-BF16", "support", jlm.DecisionKev, "same-half", []string{"intent", "team"}},
 		{"kev-key-before-end", "kev/Kev-4B-BF16.gguf", "Kev-4B-BF16", "support", jlm.DecisionKev, "key-before-end", []string{"intent", "team"}},
 		{"kev-uncalibrated", "kev/Kev-4B-BF16.gguf", "Kev-4B-BF16", "support", jlm.DecisionKev, "uncalibrated", []string{"intent", "team"}},
+		{"pplx-decider-codes-shifted", "pplx-decider/pplx-decider-v1.1-27b-Q8_0.gguf", "pplx-decider-v1.1-27b-Q8_0", "support", jlm.DecisionPplxDecider, "codes-shifted", []string{"intent", "team"}},
 		{"openjev-false-first", "openjev/tinyopenjev-for-testing-Q8_0.gguf", "tinyopenjev-for-testing-Q8_0", "ambiguous", jlm.DecisionOpenJev, "false-first", []string{"compensate", "churn", "damage"}},
 		{"openjev-uncalibrated", "openjev/tinyopenjev-for-testing-Q8_0.gguf", "tinyopenjev-for-testing-Q8_0", "ambiguous", jlm.DecisionOpenJev, "uncalibrated", []string{"compensate", "churn", "damage"}},
 	} {
