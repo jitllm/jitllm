@@ -66,6 +66,12 @@ func decideOn(t *testing.T, m *Model, dev nn.Device, n int, ok func(placed int) 
 	gpu, _ := dev.(*tier.GPU)
 	if dev != nil {
 		if err := d.SetDevice(dev, n); err != nil {
+			// A strict placement a card has no room for is the card's size,
+			// not the engine's answer (pplx-decider's half and head on one
+			// 16 GB card).
+			if gpu != nil {
+				cardTooSmall(t, gpu.Err(), "%v", err)
+			}
 			t.Fatal(err)
 		}
 		if gpu != nil {

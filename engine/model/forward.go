@@ -1255,7 +1255,18 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 			if !s.migrateKV(li, s.pos, true) || !s.migrateRec(li, true) {
 				// Resident weights with no history would attend over an empty
 				// cache. Give the block straight back, and every placed block
-				// after it, exactly as the grow path does.
+				// after it, exactly as the grow path does -- saying why, or a
+				// placement that took nothing reads as one never offered.
+				why := "the device refused it"
+				if e, ok := s.ld.(nn.ErrReporter); ok && e.Err() != "" {
+					why = e.Err()
+				}
+				if s.kv.layers[li].anyShared() {
+					why = "its pages are shared with another sequence"
+				}
+				for range placed[i:] {
+					s.noteDecline(fmt.Sprintf("block %d's history (%d positions) did not move to the device: %s", li, s.pos, why))
+				}
 				for _, lj := range placed[i:] {
 					s.ld.ReleaseLayers(lj, lj+1)
 					s.unmarkOnDev(lj)
