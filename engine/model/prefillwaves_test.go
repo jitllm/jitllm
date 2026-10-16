@@ -18,6 +18,7 @@ var prefillWavesModels = []struct {
 	band       float64
 }{
 	{"deepseek-v2-lite", "DeepSeek-V2-Lite.Q4_K_M.jlm", 6, 2e-3},
+	{"kimik3", "kimik3/Kimi-K3-0.40B.Q8_0.gguf", 0, 3e-3},
 }
 
 // prefillWavesCase runs ids as one step of rows (the batched chunk a prompt's
