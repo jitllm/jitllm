@@ -94,6 +94,9 @@ var decisionCases = []struct {
 	// engines' projections sit 5.6% from the BF16 ones and 2% from each
 	// other, a band as wide as some of the readout's own violations.
 	{"kev", "kev/Kev-4B-BF16.gguf", "Kev-4B-BF16", jlm.DecisionKev, false, 0.01},
+	// bespokelabs' Nimble 9B v3 (ggml-org's GGUF): lev's codes, the prompt
+	// listing every question of the request.
+	{"nimble", "nimble/Bespoke-Nimble-9B-v3-Q8_0.gguf", "Bespoke-Nimble-9B-v3-Q8_0", jlm.DecisionNimble, false, 0.05},
 }
 
 // decisionRequests are the request bodies in testdata/decision: an object
@@ -219,6 +222,7 @@ func TestDecisionReadoutIsLoadBearing(t *testing.T) {
 		{"kev-same-half", "kev/Kev-4B-BF16.gguf", "Kev-4B-BF16", "support", jlm.DecisionKev, "same-half", []string{"intent", "team"}},
 		{"kev-key-before-end", "kev/Kev-4B-BF16.gguf", "Kev-4B-BF16", "support", jlm.DecisionKev, "key-before-end", []string{"intent", "team"}},
 		{"kev-uncalibrated", "kev/Kev-4B-BF16.gguf", "Kev-4B-BF16", "support", jlm.DecisionKev, "uncalibrated", []string{"intent", "team"}},
+		{"nimble-own-schema", "nimble/Bespoke-Nimble-9B-v3-Q8_0.gguf", "Bespoke-Nimble-9B-v3-Q8_0", "ambiguous", jlm.DecisionNimble, "own-schema", []string{"compensate", "churn", "damage", "tone", "issue"}},
 		{"openjev-false-first", "openjev/tinyopenjev-for-testing-Q8_0.gguf", "tinyopenjev-for-testing-Q8_0", "ambiguous", jlm.DecisionOpenJev, "false-first", []string{"compensate", "churn", "damage"}},
 		{"openjev-uncalibrated", "openjev/tinyopenjev-for-testing-Q8_0.gguf", "tinyopenjev-for-testing-Q8_0", "ambiguous", jlm.DecisionOpenJev, "uncalibrated", []string{"compensate", "churn", "damage"}},
 	} {

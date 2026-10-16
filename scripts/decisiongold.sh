@@ -78,4 +78,5 @@ want d1-omni-600M-F16 && gold d1-omni/d1-omni-600M-F16.gguf d1-omni-600M-F16 d1-
 want vllm-d3-edge-Q8_0 && gold vllm-d3/vllm-d3-edge-Q8_0.gguf vllm-d3-edge-Q8_0
 want vllm-d3-edge-Q8_0 && gold vllm-d3/vllm-d3-edge-Q8_0.gguf vllm-d3-edge-Q8_0 vllm-d3/mmproj-vllm-d3-edge-Q8_0.gguf pictures chatpicture
 want Kev-4B-BF16 && gold kev/Kev-4B-BF16.gguf Kev-4B-BF16
+want Bespoke-Nimble-9B-v3-Q8_0 && gold nimble/Bespoke-Nimble-9B-v3-Q8_0.gguf Bespoke-Nimble-9B-v3-Q8_0
 true

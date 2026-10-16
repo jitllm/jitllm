@@ -57,6 +57,10 @@ const (
 	// the normed final hidden state, the prompt's last row's first half
 	// dotted with each option's <|box_end|> row's second half.
 	DecisionKev DecisionKind = 10
+	// DecisionNimble is lev's codes (A..Z then AA..ZZ, each one token) read
+	// at the prompt's last row, one prompt per question, the prompt listing
+	// every question of the request as its schema (bespokelabs' Nimble).
+	DecisionNimble DecisionKind = 8
 )
 
 var decisionNames = map[DecisionKind]string{
@@ -68,6 +72,7 @@ var decisionNames = map[DecisionKind]string{
 	DecisionOpenJev: "openjev",
 	DecisionVllmD3:  "vllm-d3",
 	DecisionKev:     "kev",
+	DecisionNimble:  "nimble",
 }
 
 // String is the name llama.cpp writes as <arch>.decision.type.
