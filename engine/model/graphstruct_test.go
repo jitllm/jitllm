@@ -74,8 +74,16 @@ func TestEveryGraphOpHasALowering(t *testing.T) {
 			if l.Host == "" {
 				t.Fatalf("block %d %s: no lowering", li, l)
 			}
-			if l.Kind == graph.OpRoute && l.Composed {
-				t.Fatalf("block %d: the route is recorded as composed", li)
+			// The route is its own routine of generated kernels; the
+			// experts still run as one grouped region.
+			if l.Kind == graph.OpRoute && !l.Composed {
+				t.Fatalf("block %d: the route is recorded as monolithic", li)
+			}
+			if (l.Kind == graph.OpExpertMatVec || l.Kind == graph.OpCombine) && l.Composed {
+				t.Fatalf("block %d: %s is recorded as composed", li, l)
+			}
+			if l.Kind == graph.OpActMul && strings.HasPrefix(l.Host, "moeExperts") == l.Composed {
+				t.Fatalf("block %d: %s", li, l)
 			}
 			if !l.Composed {
 				mono++

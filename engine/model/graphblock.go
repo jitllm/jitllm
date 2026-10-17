@@ -705,9 +705,18 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 	}
 	s.jit.NewInput()
 	if lw.mix {
-		// route -> gather -> experts -> combine [+ shared], added into the
-		// residual by the mixture itself, as the hand-written body does.
-		if err := s.moe(li, l, ffnIn, ffnIn, s.x); err != nil {
+		// The mixture's ops, each its own routine, added into the residual
+		// as the hand-written body's moe adds them: route (the router's
+		// matvec and the route kernel); gather, the experts' gate, up,
+		// act_mul and down, and combine (one grouped region); [the shared
+		// expert's matvecs, act_mul and gate_scalar, and its add].
+		if err := s.moeRoute(li, l, ffnIn, ffnIn); err != nil {
+			return err
+		}
+		if err := s.moeExperts(li, l, ffnIn, s.x); err != nil {
+			return err
+		}
+		if err := s.sharedExpert(l, ffnIn, s.x); err != nil {
 			return err
 		}
 		s.layerOutScale(l, s.x)
@@ -920,9 +929,17 @@ func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged 
 	}
 	s.tock(opRMSNorm, tn)
 	if lw.mix {
-		// The mixture over the rows, expert-major (moeBatch), into the
-		// residual; on a ragged step each row its own sequence's experts.
-		if err := s.moeBatch(li, l, ffnIn, s.bx, n); err != nil {
+		// The mixture over the rows, op by op as moeBatch runs them: every
+		// row's route, then the experts expert-major, then the shared
+		// expert per row, into the residual; on a ragged step each row its
+		// own sequence's experts.
+		if err := s.moeRouteRows(li, l, ffnIn, n); err != nil {
+			return err
+		}
+		if err := s.moeExpertsRows(li, l, ffnIn, s.bx, n); err != nil {
+			return err
+		}
+		if err := s.sharedExpertRows(l, ffnIn, s.bx, n); err != nil {
 			return err
 		}
 		s.layerOutScale(l, s.bx[:n*ne])
@@ -1105,11 +1122,11 @@ var hostLowering = map[graph.OpKind]struct {
 	graph.OpRope:         {"attnPrep: q/k norm, rotary and cache append as one routine", false},
 	graph.OpKVAppend:     {"attnPrep: q/k norm, rotary and cache append as one routine", false},
 	graph.OpAttend:       {"attendRow / the chunk's attention: one routine per row class", false},
-	graph.OpRoute:        {"moe / moeBatch: the routed mixture as one routine", false},
-	graph.OpGather:       {"moe / moeBatch: the routed mixture as one routine", false},
-	graph.OpExpertMatVec: {"moe / moeBatch: the routed mixture as one routine", false},
-	graph.OpCombine:      {"moe / moeBatch: the routed mixture as one routine", false},
-	graph.OpGateScalar:   {"moe / moeBatch: the routed mixture as one routine", false},
+	graph.OpRoute:        {"moeRoute / moeRouteRows: the router's matvec (generated) and the route kernel (generated, by experts, top-k, router and groups)", true},
+	graph.OpGather:       {moeExpertsRoutine, false},
+	graph.OpExpertMatVec: {moeExpertsRoutine, false},
+	graph.OpCombine:      {moeExpertsRoutine, false},
+	graph.OpGateScalar:   {"sharedExpert: the gate's matvec and sigmoid-multiply (generated)", true},
 	graph.OpLayerNorm:    {"nn LayerNorm (generated, by width)", true},
 	graph.OpAct:          {"nn activation (generated, by kind)", true},
 	graph.OpClamp:        {"attnPrep: q/k norm, rotary and cache append as one routine", false},
@@ -1117,6 +1134,11 @@ var hostLowering = map[graph.OpKind]struct {
 	graph.OpLatentAppend: {mlaProjectRoutine, false},
 	graph.OpAttendLatent: {"absorbed (mla-absorb): attendRow / the chunk's attention over the latent rows, then mlaOutProject's un-absorb", false},
 }
+
+// moeExpertsRoutine is the host routine a routed mixture's gather, expert
+// matvecs, their act_mul and the combine run in: moeExperts (one grouped
+// region per stage) and moeExpertsRows (expert-major over the rows).
+const moeExpertsRoutine = "moeExperts / moeExpertsRows: gather, the experts' matvecs and act_mul, and combine as one grouped region"
 
 // mlaProjectRoutine is the host routine every op of a latent attention runs
 // in before the attention: the projections, the latent norms, the rotary,
@@ -1135,6 +1157,7 @@ func (m *Model) BlockLowering(li int) []OpLowering {
 	// A latent attention's projections and norms before its attention run
 	// inside mlaProject, not as the generated op their kind names.
 	mlaFrom, mlaTo := -1, -1
+	_, producer := graphProducers(g)
 	for i, o := range g.Ops {
 		if o.Kind == graph.OpMatVec && (o.Weight[0].Role == jlm.RoleAttnQA || o.Weight[0].Role == jlm.RoleAttnQ) && mlaFrom < 0 {
 			mlaFrom = i
@@ -1147,6 +1170,10 @@ func (m *Model) BlockLowering(li int) []OpLowering {
 		h := hostLowering[o.Kind]
 		if mlaTo >= 0 && i >= mlaFrom && i < mlaTo {
 			h.routine, h.composed = mlaProjectRoutine, false
+		}
+		// The experts' act_mul runs inside their grouped region.
+		if o.Kind == graph.OpActMul && producer[o.In[0]] >= 0 && g.Ops[producer[o.In[0]]].Kind == graph.OpExpertMatVec {
+			h.routine, h.composed = moeExpertsRoutine, false
 		}
 		out[i] = OpLowering{Op: i, Kind: o.Kind, Host: h.routine, Composed: h.composed,
 			Device: "the block's plan, lowered from the graph (lowerPlan) and run by the tier as one block"}

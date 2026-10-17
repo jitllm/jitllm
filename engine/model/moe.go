@@ -47,6 +47,25 @@ import (
 // A post-FFN norm cannot be expressed this way; forward.go refuses a mixture
 // that has one.
 func (s *State) moe(li int, l *layer, rin, h, out []float32) error {
+	if err := s.moeRoute(li, l, rin, h); err != nil {
+		return err
+	}
+	if err := s.moeExperts(li, l, h, out); err != nil {
+		return err
+	}
+	// Gemma 4's dense MLP is not a shared expert's addition (see denseMoE),
+	// and a latent mixture's shared expert reads the full-width input and adds
+	// after the routed sum leaves the latent (k3MoE).
+	if s.c.DenseMoE || s.c.ExpertLatent != 0 {
+		return nil
+	}
+	return s.sharedExpert(l, h, out)
+}
+
+// moeRoute is the mixture's route op for one row: the router's logits over
+// rin (a generated matvec), their bias, and the selection (s.route, one
+// generated kernel). h is the row the experts read after it.
+func (s *State) moeRoute(li int, l *layer, rin, h []float32) error {
 	c := s.c
 	s.traceLayer = li
 	t0 := s.tick()
@@ -72,9 +91,15 @@ func (s *State) moe(li int, l *layer, rin, h, out []float32) error {
 	// descending-probability order (lowest id wins a tie), the same ids
 	// ascending, both orders' renormalised weights and the divisor. There is
 	// no fallback.
-	if err := s.routeExperts(l); err != nil {
-		return err
-	}
+	return s.routeExperts(l)
+}
+
+// moeExperts is the mixture's gather, expert matvecs, act_mul and combine
+// for one row under the selection moeRoute left in s.route: the selected
+// experts paged in, then one grouped region (moeFFN) adding each expert's
+// contribution into out in ascending expert id.
+func (s *State) moeExperts(li int, l *layer, h, out []float32) error {
+	c := s.c
 	sel := s.route.Sel
 	// The selected experts are read here, the first moment anyone knows which.
 	// pageIn deliberately skipped the banks, since a token touches only a few.
@@ -136,21 +161,10 @@ func (s *State) moe(li int, l *layer, rin, h, out []float32) error {
 	// The k experts go out in one region per stage; the loop below is the
 	// fallback. See moeFFN.
 	done, err := s.moeFFN(l, ord, h, out, ow)
-	if err != nil {
+	if err != nil || done {
 		return err
 	}
-	if !done {
-		if err := s.moeLoop(l, ord, ow, h, out); err != nil {
-			return err
-		}
-	}
-	// Gemma 4's dense MLP is not a shared expert's addition (see denseMoE),
-	// and a latent mixture's shared expert reads the full-width input and adds
-	// after the routed sum leaves the latent (k3MoE).
-	if c.DenseMoE || c.ExpertLatent != 0 {
-		return nil
-	}
-	return s.sharedExpert(l, h, out)
+	return s.moeLoop(l, ord, ow, h, out)
 }
 
 // denseMoERows is denseMoE over the n rows of a batched chunk -- prefill's
@@ -508,6 +522,21 @@ func (s *State) moeBatch(li int, l *layer, h, resid []float32, n int) error {
 // expert width: a latent mixture's routed half (k3MoEBatch), which adds its
 // shared expert itself.
 func (s *State) moeBatchFrom(li int, l *layer, rin, h, resid []float32, n int) error {
+	if err := s.moeRouteRows(li, l, rin, n); err != nil {
+		return err
+	}
+	if err := s.moeExpertsRows(li, l, h, resid, n); err != nil {
+		return err
+	}
+	if s.c.ExpertLatent != 0 {
+		return nil
+	}
+	return s.sharedExpertRows(l, h, resid, n)
+}
+
+// moeRouteRows is the route op over n rows of rin: every row's selection
+// and weights, in s.bsel and s.bw, before any expert runs.
+func (s *State) moeRouteRows(li int, l *layer, rin []float32, n int) error {
 	c := s.c
 	k := c.NExpertUsed
 
@@ -543,7 +572,15 @@ func (s *State) moeBatchFrom(li int, l *layer, rin, h, resid []float32, n int) e
 			s.bw[i*k+j] = s.route.Wt[j]
 		}
 	}
+	return nil
+}
 
+// moeExpertsRows is the gather, expert matvecs, act_mul and combine over n
+// rows under moeRouteRows' selections, expert-major: each selected expert
+// paged in once and run over every row that chose it, into resid.
+func (s *State) moeExpertsRows(li int, l *layer, h, resid []float32, n int) error {
+	c := s.c
+	k := c.NExpertUsed
 	s.growMoEBatch(n)
 	for e := 0; e < c.NExpert; e++ {
 		// One expert held at a time: a chunk routes to most of a layer's
@@ -566,11 +603,13 @@ func (s *State) moeBatchFrom(li int, l *layer, rin, h, resid []float32, n int) e
 			return err
 		}
 	}
-	if c.ExpertLatent != 0 {
-		return nil
-	}
-	// The shared expert runs per row here too, so prefill and decode compute
-	// the same function.
+	return nil
+}
+
+// sharedExpertRows is the shared expert over n rows, one row at a time, so
+// prefill and decode compute the same function.
+func (s *State) sharedExpertRows(l *layer, h, resid []float32, n int) error {
+	c := s.c
 	for i := 0; i < n; i++ {
 		row := h[i*c.NEmbd : (i+1)*c.NEmbd]
 		out := resid[i*c.NEmbd : (i+1)*c.NEmbd]
