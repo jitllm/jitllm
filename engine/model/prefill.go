@@ -1291,6 +1291,9 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 		return err
 	}
 	l := &m.layers[li]
+	if li < len(m.graphs) && m.graphs[li] != nil {
+		return s.graphRows(li, l, m.graphs[li], slot, p0, n, bidir)
+	}
 	// DeepSeek V4's block is its own (ds4.go): the chunk's rows are
 	// successive positions of this slot, their tokens set by the caller.
 	if c.DSV4() {
@@ -1482,60 +1485,7 @@ attend:
 			s.visAttend(li, n)
 			s.tock(opAttn, ta)
 		} else {
-			// Attention, parallel over tokens. Each token owns its own scores
-			// buffer, so heads can share it without any coordination, and the
-			// causal bound p0+i is what keeps this equal to the decode path.
-			ta := s.tick()
-			bq, bxb, bqf, bxbf := s.bq, s.bxb, s.bqf, s.bxbf
-			// A row reaches keys below p0+n, or to the end of the
-			// bidirectional run it is in.
-			reach := p0 + n
-			for i := 0; i < n; i++ {
-				reach = max(reach, s.bidirEnd(p0+i))
-			}
-			astride := s.rowsStride(reach)
-			s.battf = scratch(s.battf, n*astride, 0)
-			attf, fast := s.battf, s.attnAt(li)
-			hd, gqa := c.HeadDimAt(li), c.GQAAt(li)
-			// MLA reads a wider query than it writes an output, and every
-			// head reads the same cached row: qw is the whole row, ow its
-			// latent prefix, and gqa becomes NHead so hh/gqa is 0. The
-			// absorbed query is read directly, without the bqf staging.
-			qw, ow := hd, hd
-			qsrc, odst := bqf, bxbf
-			gqaN := gqa
-			if mla {
-				qw, ow = c.KVLoraRank+c.NRot, c.KVLoraRank
-				qsrc, odst, gqaN = s.bmlaAbs, s.bmlaAcc, c.NHead
-			}
-			// Residency before the fan-out; see kvEnsureWindow. [0, p0+n) is
-			// a superset of every row's window, which is always safe.
-			kvli := c.KVSource(li)
-			s.kvEnsureWindow(kvli, 0, p0+n)
-			masks, mstride := s.idxMasks, 0
-			if c.Indexer() {
-				s.idxRows(kvli, n, func(int) int { return slot }, func(i int) int { return p0 + i + 1 }, masks)
-			}
-			if c.MSAAt(li) {
-				// The masks are laid out at the State's own stride (msa.go).
-				masks, mstride = s.msaMasks, s.attStride
-				s.msaRows(kvli, n, func(int) int { return slot }, func(i int) int { return p0 + i + 1 }, masks)
-			}
-			if c.QSAAt(li) {
-				masks, mstride = s.qsa().masks, 0
-				s.qsaRows(kvli, l, n, func(int) (*State, int) { return s, slot }, func(i int) int { return p0 + i + 1 }, masks)
-			}
-			s.rg.pattn = prefAttnRegion{l: l, li: li, kvli: kvli, slot: slot, p0: p0, n: n,
-				qDim: qDim, qw: qw, ow: ow, hd: hd, gqa: gqaN, astride: astride, mstride: mstride,
-				mla: mla, bidir: bidir, scale: scale, bq: bq, bxb: bxb, qsrc: qsrc, odst: odst,
-				attf: attf, masks: masks, fast: fast, fn: s.rg.pattn.fn}
-			if s.rg.pattn.fn == nil {
-				s.rg.pattn.fn = s.prefAttnRows
-			}
-			s.jit.Parallel(n, 1, s.rg.pattn.fn)
-			s.rg.pattn = prefAttnRegion{fn: s.rg.pattn.fn}
-
-			s.tock(opAttn, ta)
+			s.attendRows(li, l, slot, p0, n, qDim, scale, bidir, mla)
 		}
 
 		// The output gate goes before the projection; see forward.go.
@@ -1755,4 +1705,67 @@ func (s *State) forwardRowsFor() int {
 		return hostRowsByRow
 	}
 	return 1
+}
+
+// attendRows is a prompt chunk's attention for block li, rows p0..p0+n-1 of
+// slot, parallel over the rows: each row's query in s.bq (or the absorbed
+// latent query under MLA) against the cache attnPrep wrote, into s.bxb. One
+// function so the hand-written chunk body and the block graph's lowering
+// (graphRows) run the same region.
+func (s *State) attendRows(li int, l *layer, slot, p0, n, qDim int, scale float64, bidir, mla bool) {
+	c := s.c
+	// Attention, parallel over tokens. Each token owns its own scores
+	// buffer, so heads can share it without any coordination, and the
+	// causal bound p0+i is what keeps this equal to the decode path.
+	ta := s.tick()
+	bq, bxb, bqf, bxbf := s.bq, s.bxb, s.bqf, s.bxbf
+	// A row reaches keys below p0+n, or to the end of the
+	// bidirectional run it is in.
+	reach := p0 + n
+	for i := 0; i < n; i++ {
+		reach = max(reach, s.bidirEnd(p0+i))
+	}
+	astride := s.rowsStride(reach)
+	s.battf = scratch(s.battf, n*astride, 0)
+	attf, fast := s.battf, s.attnAt(li)
+	hd, gqa := c.HeadDimAt(li), c.GQAAt(li)
+	// MLA reads a wider query than it writes an output, and every
+	// head reads the same cached row: qw is the whole row, ow its
+	// latent prefix, and gqa becomes NHead so hh/gqa is 0. The
+	// absorbed query is read directly, without the bqf staging.
+	qw, ow := hd, hd
+	qsrc, odst := bqf, bxbf
+	gqaN := gqa
+	if mla {
+		qw, ow = c.KVLoraRank+c.NRot, c.KVLoraRank
+		qsrc, odst, gqaN = s.bmlaAbs, s.bmlaAcc, c.NHead
+	}
+	// Residency before the fan-out; see kvEnsureWindow. [0, p0+n) is
+	// a superset of every row's window, which is always safe.
+	kvli := c.KVSource(li)
+	s.kvEnsureWindow(kvli, 0, p0+n)
+	masks, mstride := s.idxMasks, 0
+	if c.Indexer() {
+		s.idxRows(kvli, n, func(int) int { return slot }, func(i int) int { return p0 + i + 1 }, masks)
+	}
+	if c.MSAAt(li) {
+		// The masks are laid out at the State's own stride (msa.go).
+		masks, mstride = s.msaMasks, s.attStride
+		s.msaRows(kvli, n, func(int) int { return slot }, func(i int) int { return p0 + i + 1 }, masks)
+	}
+	if c.QSAAt(li) {
+		masks, mstride = s.qsa().masks, 0
+		s.qsaRows(kvli, l, n, func(int) (*State, int) { return s, slot }, func(i int) int { return p0 + i + 1 }, masks)
+	}
+	s.rg.pattn = prefAttnRegion{l: l, li: li, kvli: kvli, slot: slot, p0: p0, n: n,
+		qDim: qDim, qw: qw, ow: ow, hd: hd, gqa: gqaN, astride: astride, mstride: mstride,
+		mla: mla, bidir: bidir, scale: scale, bq: bq, bxb: bxb, qsrc: qsrc, odst: odst,
+		attf: attf, masks: masks, fast: fast, fn: s.rg.pattn.fn}
+	if s.rg.pattn.fn == nil {
+		s.rg.pattn.fn = s.prefAttnRows
+	}
+	s.jit.Parallel(n, 1, s.rg.pattn.fn)
+	s.rg.pattn = prefAttnRegion{fn: s.rg.pattn.fn}
+
+	s.tock(opAttn, ta)
 }

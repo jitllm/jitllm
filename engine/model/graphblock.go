@@ -182,6 +182,11 @@ func (m *Model) BlockGraph(li int) *graph.Graph {
 // lowering: the forced path's evidence (RULE 10).
 func (s *State) GraphBlocks() int { return s.graphRuns }
 
+// GraphChunks counts the block-chunks a State ran through the block graph's
+// prompt-row lowering (graphRows): a prompt's evidence, as GraphBlocks is a
+// decode's.
+func (s *State) GraphChunks() int { return s.graphChunkRuns }
+
 // graphBlock runs block li's host decode through its lowering: the calls the
 // hand-written body makes for a dense block, in its order, so the kernels and
 // their order are the control's.
@@ -274,5 +279,74 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 	}
 	s.layerOutScale(l, s.x)
 	m.trace(li, "ffn_resid", s.x)
+	return nil
+}
+
+// graphRows runs block li over a host prompt chunk -- rows p0..p0+n-1 of slot,
+// in s.bx -- through the graph's lowering: the dense subset of hostRows'
+// calls, in its order, so the kernels and their order are the hand-written
+// chunk's. The graph is the one the decode lowering matched (lowerDense):
+// norm, q/k/v, [the per-head q/k norms,] the rotary and the cache write for
+// every row before any row attends, attention, o, the residual add, then the
+// FFN norm, gate and up, act_mul, down and the second add.
+func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, p0, n int, bidir bool) error {
+	c := s.c
+	s.graphChunkRuns++
+	ne := c.NEmbd
+	// norm(x) -> attn_in, every row
+	tn := s.tick()
+	s.batchNormB(s.bh, s.bx, l.attnNorm, l.attnNormB, ne, n)
+	s.tock(opRMSNorm, tn)
+	// matvec q, k, v over the chunk
+	kvDim, qDim := c.KVDimAt(li), c.QDimAt(li)
+	if _, err := s.projectQ(l, s.bq, s.ogate, s.bh[:n*ne], n, true); err != nil {
+		return err
+	}
+	if err := s.mm(s.bk, l.wk, s.bh[:n*ne], n); err != nil {
+		return err
+	}
+	s.addBiasRows(s.bk, l.bk, n)
+	if err := s.mm(s.bv, l.wv, s.bh[:n*ne], n); err != nil {
+		return err
+	}
+	s.addBiasRows(s.bv, l.bv, n)
+	// [head_norm q, head_norm k,] rope q, rope k, kv_append: every row's,
+	// before any row attends (a row attends to the chunk's earlier rows).
+	for i := 0; i < n; i++ {
+		s.attnPrep(l, s.bq[i*qDim:(i+1)*qDim], s.bk[i*kvDim:(i+1)*kvDim], s.bv[i*kvDim:(i+1)*kvDim],
+			s.ropeTable(li, s.bcs, s.bcsSWA, i), li, slot, p0+i)
+	}
+	// attend
+	s.attendRows(li, l, slot, p0, n, qDim, c.AttnScale, bidir, false)
+	// matvec o, add into the residual
+	if err := s.mm(s.bh, l.wo, s.bxb[:n*qDim], n); err != nil {
+		return err
+	}
+	s.addBiasRows(s.bh, l.bo, n)
+	tr := s.tick()
+	s.addInto(s.bx[:n*ne], s.bh[:n*ne])
+	s.tock(opResid, tr)
+	// norm -> gate, up -> act_mul -> down, add into the residual
+	tn = s.tick()
+	s.batchNormB(s.bh, s.bx, l.ffnNorm, l.ffnNormB, ne, n)
+	s.tock(opRMSNorm, tn)
+	ff := c.NFFNAt(li)
+	if err := s.mm(s.bgate, l.gate, s.bh[:n*ne], n); err != nil {
+		return err
+	}
+	if err := s.mm(s.bup, l.up, s.bh[:n*ne], n); err != nil {
+		return err
+	}
+	gate, up := s.bgate[:n*ff], s.bup[:n*ff]
+	tac := s.tick()
+	s.actmulAll(gate, up, c.Act)
+	s.tock(opAct, tac)
+	if err := s.mm(s.bh, l.down, gate, n); err != nil {
+		return err
+	}
+	tr = s.tick()
+	s.addInto(s.bx[:n*ne], s.bh[:n*ne])
+	s.tock(opResid, tr)
+	s.layerOutScale(l, s.bx[:n*ne])
 	return nil
 }

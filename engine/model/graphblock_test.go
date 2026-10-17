@@ -166,3 +166,96 @@ func TestBlockGraphOfTheRealContainersVerifies(t *testing.T) {
 		t.Fatalf("a graph without qwen3's q/k norm: %v", err)
 	}
 }
+
+// graphPrompt prefills a prompt of n tokens on a fresh State over a page
+// budget of frames (0 keeps the model's), decodes after it, and returns the
+// logits after the prompt and after each decoded token, the block-chunks the
+// graph ran and the allocations of a warm second prompt on another slot.
+func graphPrompt(t *testing.T, m *Model, n, frames int) ([][]float32, int) {
+	t.Helper()
+	if frames != 0 {
+		m.SetPageBudget(uint64(frames) * m.PageSize())
+	}
+	s := m.NewState(n + 16)
+	defer s.Close()
+	ids := make([]int32, n)
+	for i := range ids {
+		ids[i] = int32(100 + (i*7919)%3000)
+	}
+	lg, err := s.Prefill(ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := [][]float32{append([]float32(nil), lg...)}
+	for i := 0; i < 4; i++ {
+		if lg, err = s.Forward(Greedy(lg)); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, append([]float32(nil), lg...))
+	}
+	return out, s.GraphChunks()
+}
+
+// TestBlockGraphPromptMatchesTheHandPath is Slice B's host half: a prompt's
+// chunks run through the block graph's row lowering (graphRows) give the
+// hand-written chunk body's logits bit for bit after the prompt and at the
+// decoded positions after it, every block of every chunk ran through the
+// graph, a page budget below the model gives the same answer, and the
+// comparison fires on a different computation (an f16 cache).
+func TestBlockGraphPromptMatchesTheHandPath(t *testing.T) {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0"} {
+		t.Run(name, func(t *testing.T) {
+			p := graphModel(t, name)
+			ctl, err := Open(p, noTune, WithKVF16(false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ctl.Close()
+			gm, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(true))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer gm.Close()
+			// Several chunks: past the widest chunk the host tuner offers.
+			const n = 700
+			nl := gm.Cfg.NLayer
+			var want [][]float32
+			for _, budget := range []int{0, nl / 3} {
+				ref, ran := graphPrompt(t, ctl, n, budget)
+				if ran != 0 {
+					t.Fatalf("the control ran %d graph chunks", ran)
+				}
+				if budget == 0 {
+					want = ref
+				}
+				got, ran := graphPrompt(t, gm, n, budget)
+				if ran == 0 || ran%nl != 0 || ran/nl < 2 {
+					t.Fatalf("budget %d: %d block-chunks ran through the graph: want every block of two or more chunks", budget, ran)
+				}
+				t.Logf("budget %d frames: %d chunks of %d blocks through the graph", budget, ran/nl, nl)
+				for i := range want {
+					for j := range want[i] {
+						if got[i][j] != want[i][j] {
+							t.Fatalf("budget %d: position %d logit %d: graph %v, hand-written %v", budget, i, j, got[i][j], want[i][j])
+						}
+					}
+				}
+			}
+			f16, err := Open(p, noTune, WithKVF16(true), WithBlockGraph(true))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f16.Close()
+			other, _ := graphPrompt(t, f16, n, 0)
+			differ := false
+			for i := range want {
+				for j := range want[i] {
+					differ = differ || other[i][j] != want[i][j]
+				}
+			}
+			if !differ {
+				t.Fatal("an f16 cache gave the f32 cache's logits bit for bit: the comparison cannot see a change")
+			}
+		})
+	}
+}

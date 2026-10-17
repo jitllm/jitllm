@@ -152,7 +152,9 @@ type State struct {
 	residFold bool
 	// graphRuns counts blocks run through the block graph (GraphBlocks).
 	graphRuns int
-	Grouped   int64
+	// graphChunkRuns counts prompt block-chunks run through it (GraphChunks).
+	graphChunkRuns int
+	Grouped        int64
 
 	// kv is the paged KV history (see engine/model/kvpage.go). Pages are committed as
 	// the sequence reaches them rather than reserved for the whole context.
