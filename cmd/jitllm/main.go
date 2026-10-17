@@ -1097,7 +1097,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 					ds.StreamCacheHits, ds.StreamCacheMisses, ds.StreamCacheShort, 100*float64(ds.StreamCacheHits)/float64(n))
 			}
 			if c := os.Getenv("JITLLM_EXPERT_CARD"); c != "" && ds.PeerBlocks == 0 {
-				fmt.Fprintf(os.Stderr, "expert card %s: no block holds a bank there (%d declined): the card backs blocks that have an expert cache, and this placement has none, so it holds nothing\n",
+				fmt.Fprintf(os.Stderr, "expert card %s: no block holds a bank there (%d declined): the card backs blocks that have an expert cache, and this placement has none, so it holds nothing (-placement N=DEV~%%card streams a block with its experts backed by the card)\n",
 					c, ds.PeerDeclined)
 			}
 			if ds.PeerBlocks > 0 || ds.PeerDeclined > 0 || ds.PeerSheets > 0 {
