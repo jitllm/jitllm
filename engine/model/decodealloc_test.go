@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -45,6 +46,10 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 	if v := os.Getenv("JITLLM_ALLOC_MODELS"); v != "" {
 		names = append(names, strings.Split(v, ",")...)
 	}
+	// A model on two lists (olmoe is both a named real model and a principle
+	// mixture) runs once.
+	seen := map[string]bool{}
+	names = slices.DeleteFunc(names, func(n string) bool { dup := seen[n]; seen[n] = true; return dup })
 	// The backends, by kind unless JITLLM_TEST_DEVICES names the devices: a
 	// box whose default index is not the card under test pins them there.
 	specs := testdevices.Specs("cuda", "vulkan", "metal")
