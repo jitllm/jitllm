@@ -274,7 +274,7 @@ func (f *File) claim(b int) error {
 	if !f.expertPage(b) {
 		f.recent = b
 	}
-	f.filled[b] = f.takeFilled(f.chunksFor(b))
+	f.filled[b] = f.filledMap(b)
 	return nil
 }
 

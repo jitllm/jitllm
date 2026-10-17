@@ -108,9 +108,13 @@ type File struct {
 	// recycledSpare is the array flushRecycled handed back, kept for the next
 	// retire so a page-in does not grow a fresh one. Guarded by mu.
 	recycledSpare [][]byte
-	// freeFilled holds the validity maps of evicted pages for claim to reuse:
-	// a paged decode claims a frame per block per token. Guarded by mu.
-	freeFilled [][]bool
+	// fillSlab is every page's validity map, carved once per chunk size
+	// (fillOff[i] is page i's start, fillChunk the size it was cut at): a
+	// paged decode claims a frame per block per token and a mixture one per
+	// cold expert, and a map per claim was an allocation. Guarded by mu.
+	fillSlab  []bool
+	fillOff   []int
+	fillChunk uint64
 	// io is the page reader's worker pool (pageio.go), started on the first
 	// page-in and stopped at Close.
 	io pageIO
@@ -791,31 +795,27 @@ func (f *File) DropPage(i int) {
 	}
 }
 
-// dropFilled forgets page i's validity map, keeping it for takeFilled.
-// Callers hold f.mu.
+// dropFilled forgets page i's validity map; its slab span is page i's for
+// the next claim. Callers hold f.mu.
 func (f *File) dropFilled(i int) {
-	if f.filled == nil || f.filled[i] == nil {
-		return
+	if f.filled != nil {
+		f.filled[i] = nil
 	}
-	f.freeFilled = append(f.freeFilled, f.filled[i])
-	f.filled[i] = nil
 }
 
-// takeFilled is a cleared validity map of n chunks, reused from an evicted
-// page where one is long enough. Callers hold f.mu.
-func (f *File) takeFilled(n int) []bool {
-	for k := len(f.freeFilled) - 1; k >= 0; k-- {
-		if m := f.freeFilled[k]; cap(m) >= n {
-			last := len(f.freeFilled) - 1
-			f.freeFilled[k] = f.freeFilled[last]
-			f.freeFilled[last] = nil
-			f.freeFilled = f.freeFilled[:last]
-			m = m[:n]
-			clear(m)
-			return m
+// filledMap is page b's cleared validity map, a span of the File's slab,
+// cut again where the chunk size changed since. Callers hold f.mu.
+func (f *File) filledMap(b int) []bool {
+	if cs := f.chunkSize(); f.fillSlab == nil || f.fillChunk != cs {
+		f.fillOff = make([]int, len(f.pages)+1)
+		for i := range f.pages {
+			f.fillOff[i+1] = f.fillOff[i] + f.chunksFor(i)
 		}
+		f.fillSlab, f.fillChunk = make([]bool, f.fillOff[len(f.pages)]), cs
 	}
-	return make([]bool, n)
+	m := f.fillSlab[f.fillOff[b]:f.fillOff[b+1]:f.fillOff[b+1]]
+	clear(m)
+	return m
 }
 
 // unhold moves page i's frame to the free list and refunds what it was

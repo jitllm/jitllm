@@ -130,14 +130,14 @@ func (f *File) trimFree(keep uint64) {
 	for size, l := range f.free {
 		for len(l) > 0 && f.freeBytes > keep {
 			f.release(l[len(l)-1])
+			l[len(l)-1] = nil
 			l = l[:len(l)-1]
 			f.freeBytes -= size
 		}
-		if len(l) == 0 {
-			delete(f.free, size)
-		} else {
-			f.free[size] = l
-		}
+		// An emptied list keeps its array: page sizes are few and fixed at
+		// conversion, and dropping it made the next putFree of that size
+		// allocate one again (a paged mixture token, every eviction).
+		f.free[size] = l
 	}
 }
 

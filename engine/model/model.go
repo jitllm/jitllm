@@ -2383,26 +2383,30 @@ func (m *Model) ensureExperts(li int, sel []int32, h *expertHold) error {
 		}
 		h.pages = append(h.pages, p)
 	}
-	// A page already resident is pinned inline. Only a cold one goes out as a
-	// read of its own: on a model whose experts stay resident that is none of
-	// them, and a goroutine per selected expert per layer was most of a
+	// A page already resident is pinned inline. The cold ones are read
+	// together, every page's chunks in flight at once through the File's
+	// page readers (HoldPages): a goroutine per cold expert page was a paged
 	// mixture token's allocations.
 	h.held = slices.Grow(h.held[:0], len(sel))[:len(sel)]
 	h.errs = slices.Grow(h.errs[:0], len(sel))[:len(sel)]
+	h.cold = h.cold[:0]
 	for i, p := range h.pages {
 		h.errs[i] = nil
 		if lp, ok := c.HoldFilled(p); ok {
 			h.held[i] = lp
 			continue
 		}
-		off, size := c.PageBounds(p)
-		h.wg.Add(1)
-		go func() {
-			defer h.wg.Done()
-			h.held[i], h.errs[i] = c.Hold(p, []jlm.Range{{Off: off, N: size}})
-		}()
+		h.cold = append(h.cold, p)
+		h.coldAt = append(h.coldAt[:len(h.cold)-1], i)
 	}
-	h.wg.Wait()
+	if len(h.cold) > 0 {
+		h.coldHeld = slices.Grow(h.coldHeld[:0], len(h.cold))[:len(h.cold)]
+		h.coldErrs = slices.Grow(h.coldErrs[:0], len(h.cold))[:len(h.cold)]
+		c.HoldPages(h.cold, h.coldHeld, h.coldErrs)
+		for k, i := range h.coldAt[:len(h.cold)] {
+			h.held[i], h.errs[i] = h.coldHeld[k], h.coldErrs[k]
+		}
+	}
 	for i := range h.held {
 		if h.errs[i] == nil {
 			h.leases = append(h.leases, h.held[i])
@@ -2432,8 +2436,11 @@ type expertHold struct {
 	pages  []int
 	held   []jlm.Lease
 	errs   []error
-	// wg is here and not on the stack because the reads capture it.
-	wg sync.WaitGroup
+	// cold are the pages not resident, read together (File.HoldPages);
+	// coldAt their index in pages, coldHeld and coldErrs what the read gave.
+	cold, coldAt []int
+	coldHeld     []jlm.Lease
+	coldErrs     []error
 }
 
 // release drops every pin taken since the last release.

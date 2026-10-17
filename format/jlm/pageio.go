@@ -45,8 +45,17 @@ type ioPlan struct {
 	runs   []run
 	pieces []ioPiece
 	errs   []error
+	runLen []int // bytes per run, in order: the pieces are attributed back by it
 	wg     sync.WaitGroup
+	// HoldPages' scratch: one entry per page with reads, and the one range
+	// planRuns is asked for.
+	held []heldRuns
+	rng  [1]Range
 }
+
+// heldRuns is one page of a HoldPages plan: its runs are runs[r0:r1] of the
+// plan, its errors errs[r0:r1].
+type heldRuns struct{ i, b, r0, r1 int }
 
 func (f *File) getPlan() *ioPlan {
 	f.io.mu.Lock()
@@ -63,7 +72,7 @@ func (f *File) getPlan() *ioPlan {
 func (f *File) putPlan(p *ioPlan) {
 	clear(p.pieces[:cap(p.pieces)])
 	clear(p.errs[:cap(p.errs)])
-	p.pieces, p.errs = p.pieces[:0], p.errs[:0]
+	p.runs, p.pieces, p.errs, p.runLen, p.held = p.runs[:0], p.pieces[:0], p.errs[:0], p.runLen[:0], p.held[:0]
 	f.io.mu.Lock()
 	defer f.io.mu.Unlock()
 	f.io.plans = append(f.io.plans, p)
@@ -99,6 +108,13 @@ func (f *File) stopIO() {
 // one, and returns an error per run.
 func (f *File) readRuns(pl *ioPlan, page []byte, base, psize uint64, runs []run) []error {
 	f.io.once.Do(f.startIO)
+	f.cutRuns(pl, page, base, psize, runs)
+	return f.sendRuns(pl)
+}
+
+// cutRuns appends one page's runs to the plan as pieces, each run split as
+// readAt splits one, with an error slot and its length per run.
+func (f *File) cutRuns(pl *ioPlan, page []byte, base, psize uint64, runs []run) {
 	cs := f.chunkSize()
 	for _, r := range runs {
 		cl, ch := uint64(r.lo)*cs, min(uint64(r.hi)*cs, psize)
@@ -123,7 +139,13 @@ func (f *File) readRuns(pl *ioPlan, page []byte, base, psize uint64, runs []run)
 			pl.pieces = append(pl.pieces, ioPiece{f: f, h: h, dst: dst[lo:hi], off: off + int64(lo), wg: &pl.wg})
 		}
 		pl.errs = append(pl.errs, nil)
+		pl.runLen = append(pl.runLen, len(dst))
 	}
+}
+
+// sendRuns puts every piece of the plan in flight at once, waits for them,
+// and returns an error per run, in the order cutRuns appended them.
+func (f *File) sendRuns(pl *ioPlan) []error {
 	pl.wg.Add(len(pl.pieces))
 	for i := range pl.pieces {
 		f.io.q <- &pl.pieces[i]
@@ -131,9 +153,8 @@ func (f *File) readRuns(pl *ioPlan, page []byte, base, psize uint64, runs []run)
 	pl.wg.Wait()
 	// Each piece is attributed back to its run in the order they were cut.
 	k := 0
-	for ri, r := range runs {
-		cl, ch := uint64(r.lo)*cs, min(uint64(r.hi)*cs, psize)
-		for n := 0; n < int(ch-cl); k++ {
+	for ri, rl := range pl.runLen {
+		for n := 0; n < rl; k++ {
 			if pl.errs[ri] == nil {
 				pl.errs[ri] = pl.pieces[k].err
 			}
