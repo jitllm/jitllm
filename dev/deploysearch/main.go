@@ -56,8 +56,8 @@ func (l *list) Set(v string) error { *l = append(*l, v); return nil }
 // prompt plus max_tokens (about 1.4 tokens a word).
 var mixes = map[string]hb.Config{
 	"mixed": {
-		Levels: []int{8}, Requests: 32, PromptLens: []int{64, 256, 1024}, MaxTokens: 128,
-		SLOTTFT: 5 * time.Second, SLOTPOT: 150 * time.Millisecond,
+		Levels: []int{4}, Requests: 16, PromptLens: []int{32, 128, 512}, MaxTokens: 64,
+		SLOTTFT: 3 * time.Second, SLOTPOT: 100 * time.Millisecond,
 	},
 	"long": {
 		Levels: []int{4}, Requests: 16, PromptLens: []int{1024, 2048}, MaxTokens: 64,
