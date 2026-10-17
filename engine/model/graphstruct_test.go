@@ -16,7 +16,10 @@ import (
 // put back into the decision would make the renamed model hand-written.
 func TestCoverageIsStructural(t *testing.T) {
 	for _, name := range []string{"Qwen3-0.6B-Q8_0", "Qwen3-MOE-4x0.6B-Q4_K_M", "synth-qwen2moe", "synth-glm4moe",
-		"synth-ernie45moe", "synth-bailingmoe2", "synth-dots1", "synth-minimaxm2"} {
+		"synth-ernie45moe", "synth-bailingmoe2", "synth-dots1", "synth-minimaxm2",
+		"synth-phi2", "synth-starcoder", "synth-starcoder2", "synth-commandr", "synth-cohere2", "synth-stablelm",
+		"synth-stablelm-par", "synth-falcon", "synth-falcon40", "synth-nemotron", "synth-dbrx", "synth-apertus", "synth-glm4",
+		"synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			named, err := Open(p, noTune, WithKVF16(false))

@@ -39,7 +39,8 @@ const (
 	OpKVAppend
 	// OpAttend is causal attention of q (In[0]) over the KV version it reads,
 	// GQA by the head counts, scaled by Scale, over a Window (0: the whole
-	// history), scores capped by Softcap (0: none).
+	// history), scores capped by Softcap (0: none); an optional Weight[0]
+	// (RoleAttnSinks) is a per-head logit in the softmax's denominator.
 	OpAttend
 	// OpAdd is In[0] + In[1].
 	OpAdd
@@ -73,10 +74,18 @@ const (
 	// OpGateScalar is sigma(dot(Weight[0], In[0])) * In[1]: a shared
 	// expert's output scaled by its gate's sigmoid.
 	OpGateScalar
+	// OpLayerNorm is LayerNorm over a row: (x - mean) * rsqrt(var + Eps) * w,
+	// plus an optional bias Weight[1] (the classic block's, C6).
+	OpLayerNorm
+	// OpAct is Act(In[0]) elementwise: an ungated FFN's activation. ActXIELU
+	// binds its four numbers as Weight[0].
+	OpAct
+	// OpClamp is In[0] clamped to [-Bound, Bound] (DBRX's clip_qkv).
+	OpClamp
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -113,6 +122,17 @@ const (
 	ActGELUTanh
 	// ActSigmoid is sigma(In[0]) * In[1]: a gated norm's sigmoid gate.
 	ActSigmoid
+	// ActGELUErf is the exact (erf) GELU.
+	ActGELUErf
+	// ActReLU2 is relu(x)^2.
+	ActReLU2
+	// ActReLU is max(x, 0).
+	ActReLU
+	// ActXIELU is Apertus's xIELU, its four numbers a bound weight.
+	ActXIELU
+	// ActSwiGLUOAI is gpt-oss's clamped gate: In[0]*sigma(1.702*In[0]) with
+	// In[0] clamped above at 7, times (In[1] clamped to [-7, 7]) + 1.
+	ActSwiGLUOAI
 )
 
 // ValueID names a value in a Graph's Values.
@@ -148,6 +168,9 @@ type Attrs struct {
 	Base    float64
 	Layout  RopeLayout
 	Freqs   bool // the rotary divides each pair's theta by stored factors (rope_freqs, YaRN)
+	// Mscale multiplies the rotary's cos and sin (YaRN's or LongRoPE's
+	// magnitude); 0 is one.
+	Mscale  float64
 	NHead   int
 	NKVHead int
 	Scale   float64
@@ -159,6 +182,8 @@ type Attrs struct {
 	Router             Router
 	RouteNorm          bool
 	Groups, GroupsUsed int
+	// Bound is OpClamp's.
+	Bound float64
 }
 
 // Op is one operation.

@@ -110,3 +110,63 @@ func TestVerifierRefusesWrongGraphs(t *testing.T) {
 		})
 	}
 }
+
+// classic is a parallel C6 block with a biased LayerNorm, biased projections,
+// an ungated GELU FFN, a clamp, sinks and a window, stated role by role.
+func classic() Facts {
+	d := Dense{Block: 1, NEmbd: 64, NHead: 4, NKVHead: 2, HeadDim: 16, NFFN: 96, Eps: 1e-5, NRot: 8,
+		Base: 1e4, Layout: RopeNeox, Scale: 0.25, Act: ActGELUTanh, LayerNorm: true, NormBias: true,
+		Parallel: true, SharedNorm: true, OutBias: true, UpBias: true, DownBias: true, Ungated: true,
+		Clamp: 8, Sinks: true, Window: 32, RopeFreqs: true, Mscale: 1.25}
+	inv := map[jlm.Role]Shape{
+		jlm.RoleAttnNorm: {64, 0, 0}, jlm.RoleAttnNormBias: {64, 0, 0}, jlm.RoleAttnQ: {64, 64, 0},
+		jlm.RoleAttnK: {64, 32, 0}, jlm.RoleAttnV: {64, 32, 0}, jlm.RoleAttnOut: {64, 64, 0},
+		jlm.RoleAttnOutBias: {64, 0, 0}, jlm.RoleFFNUp: {64, 96, 0}, jlm.RoleFFNUpBias: {96, 0, 0},
+		jlm.RoleFFNDown: {96, 64, 0}, jlm.RoleFFNDownBias: {64, 0, 0}, jlm.RoleAttnSinks: {4, 0, 0},
+	}
+	return Facts{Config: d, Inventory: inv}
+}
+
+// The classic block's ops verify, and each of its facts misstated fails.
+func TestClassicBlockVerifies(t *testing.T) {
+	f := classic()
+	if err := Verify(f.Config.Build(), f); err != nil {
+		t.Fatalf("%v\n%s", err, f.Config.Build())
+	}
+	for _, c := range []struct {
+		name string
+		mut  func(d *Dense)
+		want string
+	}{
+		{"no norm bias", func(d *Dense) { d.NormBias = false }, "attn_norm.bias, which no op binds"},
+		{"no sinks", func(d *Dense) { d.Sinks = false }, "attn_sinks, which no op binds"},
+		{"gated", func(d *Dense) { d.Ungated = false }, "ffn_gate"},
+		{"no out bias", func(d *Dense) { d.OutBias = false }, "attn_out.bias, which no op binds"},
+	} {
+		d := f.Config
+		c.mut(&d)
+		err := Verify(d.Build(), f)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+	// The graph Build wrote, held to facts that state another bound, window
+	// or scale.
+	for _, c := range []struct {
+		name string
+		mut  func(d *Dense)
+		want string
+	}{
+		{"clamp", func(d *Dense) { d.Clamp = 4 }, "bound 8"},
+		{"window", func(d *Dense) { d.Window = 0 }, "window 32"},
+		{"mscale", func(d *Dense) { d.Mscale = 0 }, "pairs over"},
+	} {
+		g := f.Config.Build()
+		ff := f
+		c.mut(&ff.Config)
+		err := Verify(g, ff)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+}

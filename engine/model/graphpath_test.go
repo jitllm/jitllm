@@ -49,6 +49,10 @@ func pathsRun(t *testing.T, m *Model, g *tier.GPU) []BlockPath {
 		out[li].Graph += p.Graph
 		out[li].Hand += p.Hand
 		out[li].Device += p.Device
+		// The second session may place blocks the first ran at home (a card
+		// with room for one session's history): the merged record's device
+		// runs are graphed by the same rule BlockPaths applies to one.
+		out[li].DeviceGraphed = out[li].Device > 0 && m.BlockGraph(li) != nil
 	}
 	return out
 }
@@ -100,7 +104,10 @@ func legacyBlocks(paths []BlockPath, device bool) error {
 func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "Qwen3-MOE-4x0.6B-Q4_K_M",
 		"olmoe-1b-7b-0924-instruct-Q4_K_M", "synth-qwen2moe", "synth-glm4moe", "synth-ernie45moe", "synth-bailingmoe2",
-		"synth-dots1", "synth-minimaxm2", "synth-seedoss", "synth-smollm3", "synth-lfm2"} {
+		"synth-dots1", "synth-minimaxm2", "synth-seedoss", "synth-smollm3", "synth-lfm2",
+		"synth-phi2", "synth-starcoder", "synth-starcoder2", "synth-commandr", "synth-cohere2", "synth-stablelm",
+		"synth-stablelm-par", "synth-falcon", "synth-falcon40", "synth-nemotron", "synth-dbrx", "synth-apertus", "synth-glm4",
+		"synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			m, err := Open(p, noTune)
@@ -148,7 +155,7 @@ func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
 			t.Logf("violation fires: %v", err)
 		})
 	}
-	for _, name := range []string{"gemma-3-1b-it-Q4_K_M"} {
+	for _, name := range []string{"synth-gemma3n"} {
 		t.Run(name, func(t *testing.T) {
 			m, err := Open(graphModel(t, name), noTune)
 			if err != nil {

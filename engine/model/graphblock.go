@@ -47,12 +47,10 @@ const (
 // Shrinking this list is the graph's work list.
 const (
 	UncoveredMixDense      = "a mixture: every expert on every row (a dense mixture)"
-	UncoveredMixRouter     = "a mixture: a router the op language does not state (sqrt-softplus, hash routing or a router norm)"
+	UncoveredMixRouter     = "a mixture: a router the op language does not state (sqrt-softplus, sparsemixer, hash routing or a router norm)"
 	UncoveredMixExperts    = "a mixture: experts the op language does not state (ungated, unbanked or latent)"
 	UncoveredMixWeightIn   = "a mixture: the router's weight scales the experts' input"
-	UncoveredUngated       = "an ungated or non-SiLU FFN"
-	UncoveredLayerNorm     = "LayerNorm with biases"
-	UncoveredParallel      = "a parallel residual"
+	UncoveredUngated       = "an activation the op language does not state"
 	UncoveredOutGate       = "an attention output gate"
 	UncoveredMLA           = "MLA"
 	UncoveredValueWidth    = "a value head wider or narrower than the key head"
@@ -61,14 +59,11 @@ const (
 	UncoveredStreams       = "several residual streams"
 	UncoveredPLE           = "per-layer embeddings"
 	UncoveredResidScale    = "a residual scale"
-	UncoveredNoPE          = "a block without the rotary"
 	UncoveredRopeAxes      = "a multi-axis or interleaved rotary"
-	UncoveredRopeScaled    = "a scaled rotary (YaRN, linear, an attention factor)"
 	UncoveredQKNormKind    = "a q/k norm after the rotary or without a weight"
 	UncoveredVNorm         = "a norm over v"
-	UncoveredClamp         = "clamped q, k and v"
 	UncoveredTemperature   = "an attention temperature"
-	UncoveredWindow        = "an attention window or chunk"
+	UncoveredWindow        = "a chunked attention"
 	UncoveredNonCausal     = "non-causal attention"
 	UncoveredSparseAct     = "a gaussian top-k activation"
 	UncoveredDoubleFFN     = "a double-width FFN"
@@ -79,9 +74,9 @@ const (
 
 // UncoveredReasons is the named list, in order.
 var UncoveredReasons = []string{UncoveredMixDense, UncoveredMixRouter, UncoveredMixExperts, UncoveredMixWeightIn,
-	UncoveredUngated, UncoveredLayerNorm, UncoveredParallel, UncoveredOutGate, UncoveredMLA, UncoveredValueWidth,
-	UncoveredKVShared, UncoveredIndexer, UncoveredStreams, UncoveredPLE, UncoveredResidScale, UncoveredNoPE,
-	UncoveredRopeAxes, UncoveredRopeScaled, UncoveredQKNormKind, UncoveredVNorm, UncoveredClamp, UncoveredTemperature,
+	UncoveredUngated, UncoveredOutGate, UncoveredMLA, UncoveredValueWidth,
+	UncoveredKVShared, UncoveredIndexer, UncoveredStreams, UncoveredPLE, UncoveredResidScale,
+	UncoveredRopeAxes, UncoveredQKNormKind, UncoveredVNorm, UncoveredTemperature,
 	UncoveredWindow, UncoveredNonCausal, UncoveredSparseAct, UncoveredDoubleFFN, UncoveredCompressed,
 	UncoveredRecurrent, UncoveredUnboundTensor}
 
@@ -93,7 +88,7 @@ var UncoveredReasons = []string{UncoveredMixDense, UncoveredMixRouter, Uncovered
 // file calls its family (TestCoverageIsStructural).
 func (m *Model) uncovered(li int) string {
 	c := m.Cfg
-	w0, an := c.AttnWindow(li, 1<<20)
+	roles := m.blockRoles(li)
 	if c.MoEAt(li) {
 		if _, why := m.mixtureWhy(li); why != "" {
 			return why
@@ -102,19 +97,15 @@ func (m *Model) uncovered(li int) string {
 	switch {
 	case c.LayerKind(li).Recurrent() || c.NGram != 0:
 		return UncoveredRecurrent
-	case c.Act != nn.ActSiLU:
+	case m.blockAct(roles) == 0:
 		return UncoveredUngated
-	case c.LayerNorm:
-		return UncoveredLayerNorm
-	case c.Parallel:
-		return UncoveredParallel
 	case c.AttnOutGate:
 		return UncoveredOutGate
 	case c.MLA() || c.QLoraRank != 0:
 		return UncoveredMLA
 	case c.HeadDimV != 0 && c.HeadDimV != c.HeadDimAt(li):
 		return UncoveredValueWidth
-	case c.KVShared(li) || c.extraKVHead(li):
+	case c.KVShared(li) || c.extraKVHead(li) || !hasRole(roles, jlm.RoleAttnV):
 		return UncoveredKVShared
 	case c.Indexer() || c.MSA() || c.IdxHeads != 0 || c.QSARatio != 0:
 		return UncoveredIndexer
@@ -124,21 +115,17 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredPLE
 	case c.ResidualScale != 1:
 		return UncoveredResidScale
-	case !c.RopeAt(li):
-		return UncoveredNoPE
 	case c.RopeInterleaved || c.RopeXD || len(m.rope.Runs) > 0:
 		return UncoveredRopeAxes
-	case c.YarnFactor > 0 || (c.RopeLinear != 0 && c.RopeLinear != 1) || (c.AttnFactor != 0 && c.AttnFactor != 1):
-		return UncoveredRopeScaled
 	case c.QKNormPost || c.QKL2Norm:
 		return UncoveredQKNormKind
 	case c.VNorm:
 		return UncoveredVNorm
-	case c.ClampKQV != 0:
-		return UncoveredClamp
-	case c.AttnTemp(li, 1) != 1:
+	case c.AttnTempScale != 0 && !(c.NoPEGlobal && c.RopeAt(li)):
+		// AttnTemp's own condition: the factor is 1 at the first positions
+		// and grows later, so asking it at one position misses the block.
 		return UncoveredTemperature
-	case w0 != 0 || an != 1<<20+1:
+	case c.SWA(li) && c.SWAChunked:
 		return UncoveredWindow
 	case c.NonCausal || c.BidirSWA:
 		return UncoveredNonCausal
@@ -150,6 +137,53 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredCompressed
 	}
 	return ""
+}
+
+// blockRoles is every tensor the container stores for text block li, by
+// role, with its shape.
+func (m *Model) blockRoles(li int) map[jlm.Role]graph.Shape {
+	inv := map[jlm.Role]graph.Shape{}
+	for i := range m.container.Entries() {
+		e := &m.container.Entries()[i]
+		if int(e.Block) != li {
+			continue
+		}
+		s := graph.Shape{K: int(e.Dims[0])}
+		if e.NDim >= 2 {
+			s.Rows = int(e.Dims[1])
+		}
+		if e.NDim >= 3 {
+			s.Sheets = int(e.Dims[2])
+		}
+		inv[e.Role] = s
+	}
+	return inv
+}
+
+func hasRole(roles map[jlm.Role]graph.Shape, r jlm.Role) bool {
+	_, ok := roles[r]
+	return ok
+}
+
+// blockAct is the op language's name for the block's FFN activation: the
+// stored xIELU numbers where the block carries them, else the configuration's
+// kind; 0 where the op language does not state it.
+func (m *Model) blockAct(roles map[jlm.Role]graph.Shape) graph.Act {
+	if hasRole(roles, jlm.RoleXIELU) {
+		return graph.ActXIELU
+	}
+	return graphAct(m.Cfg.Act)
+}
+
+// graphAct is the op language's name for a generated kernel's activation, 0
+// where it states none.
+func graphAct(a nn.ActKind) graph.Act {
+	for g, n := range nnAct {
+		if n == a {
+			return g
+		}
+	}
+	return 0
 }
 
 // mixLowered is whether block li's FFN is a mixture the block graph lowers: a
@@ -174,26 +208,33 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 	if c.RopeNeox {
 		layout = graph.RopeNeox
 	}
+	inv := m.blockRoles(li)
+	has := func(r jlm.Role) bool { return hasRole(inv, r) }
 	d := graph.Dense{Block: li, NEmbd: c.NEmbd, NHead: c.NHead, NKVHead: c.NKVHeadAt(li), HeadDim: c.HeadDimAt(li),
 		NFFN: c.NFFNAt(li), Eps: c.RMSEps, NRot: c.NRot, Base: c.RopeBase, Layout: layout, RopeFreqs: m.rope.Freqs != nil,
-		Scale: c.AttnScale, Softcap: float64(c.AttnSoftcap), Act: graph.ActSiLU,
-		QKNorm: c.QKNormAt(li) && !c.QKNormWide, QKNormWhole: c.QKNormAt(li) && c.QKNormWide}
-	inv := map[jlm.Role]graph.Shape{}
-	for i := range m.container.Entries() {
-		e := &m.container.Entries()[i]
-		if int(e.Block) != li {
-			continue
+		Scale: c.AttnScale, Softcap: float64(c.AttnSoftcap), Act: m.blockAct(inv),
+		QKNorm: c.QKNormAt(li) && !c.QKNormWide, QKNormWhole: c.QKNormAt(li) && c.QKNormWide,
+		LayerNorm: c.LayerNorm, NormBias: has(jlm.RoleAttnNormBias), FFNNormBias: has(jlm.RoleFFNNormBias),
+		Parallel: c.Parallel, SharedNorm: c.Parallel && !has(jlm.RoleFFNNorm),
+		OutBias: has(jlm.RoleAttnOutBias), UpBias: has(jlm.RoleFFNUpBias), DownBias: has(jlm.RoleFFNDownBias),
+		Ungated: !c.MoEAt(li) && !has(jlm.RoleFFNGate), Clamp: float64(c.ClampKQV),
+		PostNorm: has(jlm.RolePostAttnNorm), NoPreNorm: !has(jlm.RoleAttnNorm), NoRope: !c.RopeAt(li)}
+	d.QKVBias, d.Sinks = has(jlm.RoleAttnQBias), has(jlm.RoleAttnSinks)
+	// A sliding block attends over its window and turns by the local
+	// rotary where the model carries one (gemma3's second base); either
+	// table's scaling (linear, YaRN, LongRoPE) is its per-pair factors and
+	// its cos/sin magnitude.
+	tab := &m.rope
+	if c.SWA(li) && c.SWAWindow > 0 {
+		d.Window = c.SWAWindow
+		if m.ropeSWA != nil {
+			tab = m.ropeSWA
 		}
-		s := graph.Shape{K: int(e.Dims[0])}
-		if e.NDim >= 2 {
-			s.Rows = int(e.Dims[1])
-		}
-		if e.NDim >= 3 {
-			s.Sheets = int(e.Dims[2])
-		}
-		inv[e.Role] = s
 	}
-	_, d.QKVBias = inv[jlm.RoleAttnQBias]
+	d.NRot, d.Base, d.RopeFreqs = tab.NRot, tab.Base, tab.Freqs != nil
+	if tab.Scale != 1 {
+		d.Mscale = tab.Scale
+	}
 	f := graph.Facts{Config: d, Inventory: inv}
 	if c.MoEAt(li) {
 		mf, ok := m.mixtureFacts(li)
@@ -215,6 +256,12 @@ type denseLowering struct {
 	// mix says the block's FFN is a routed mixture (graph.Dense.Mixture),
 	// which the host runs through the mixture's operations (moe, moeBatch).
 	mix bool
+	// The classic block's switches, as the matched ops state them: par, the
+	// FFN reads the block input (normed before attention, by its own norm
+	// or, with shared, the attention's); ungated, an FFN of up, act and
+	// down; postAttn and postFFN, an RMSNorm over each sublayer's output
+	// before its residual add.
+	par, shared, ungated, postAttn, postFFN bool
 	// offered is every rewrite matched on the block (nn.LayerPlan.Rewrites),
 	// which the device asks at its own Target, and rewrites every one's
 	// target-free decision, for the plan explanation.
@@ -240,26 +287,9 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		}
 		return false
 	}
-	seq := []struct {
-		k    graph.OpKind
-		role jlm.Role
-	}{{graph.OpNorm, jlm.RoleAttnNorm}, {graph.OpMatVec, jlm.RoleAttnQ}, {graph.OpMatVec, jlm.RoleAttnK}, {graph.OpMatVec, jlm.RoleAttnV}}
-	for _, s := range seq {
-		if !take(s.k, s.role) {
-			return nil, fail(fmt.Sprintf("%s of %v", s.k, s.role))
-		}
-	}
-	lw := &denseLowering{g: g}
-	// The q/k norms, per head (qwen3) or over each whole projection
-	// (OLMoE): attnPrep applies either, by QKNormShapeAt.
-	for _, k := range []graph.OpKind{graph.OpHeadNorm, graph.OpNorm} {
-		if !lw.qk && take(k, jlm.RoleAttnQNorm) {
-			if !take(k, jlm.RoleAttnKNorm) {
-				return nil, fail(k.String() + " of attn_k_norm")
-			}
-			lw.qk = true
-		}
-	}
+	// preNorm takes a sublayer's input norm: an RMSNorm or a LayerNorm, or
+	// none (OLMo 2's block reads its input as it is).
+	preNorm := func(role jlm.Role) bool { return take(graph.OpNorm, role) || take(graph.OpLayerNorm, role) }
 	type step struct {
 		k    graph.OpKind
 		role jlm.Role
@@ -272,9 +302,70 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		}
 		return nil
 	}
-	if err := run([]step{{graph.OpRope, 0}, {graph.OpRope, 0}, {graph.OpKVAppend, 0}, {graph.OpAttend, 0},
-		{graph.OpMatVec, jlm.RoleAttnOut}, {graph.OpAdd, 0}, {graph.OpNorm, jlm.RoleFFNNorm}}); err != nil {
+	// last is the value the op just taken writes.
+	last := func() graph.ValueID { return ops[i-1].Out[0] }
+	lw := &denseLowering{g: g}
+	attnIn, ffnPre := g.In[0], graph.ValueID(-1)
+	if preNorm(jlm.RoleAttnNorm) {
+		attnIn = last()
+	}
+	// A parallel block's FFN norm, over the block input, before attention.
+	if preNorm(jlm.RoleFFNNorm) {
+		ffnPre = last()
+	}
+	if err := run([]step{{graph.OpMatVec, jlm.RoleAttnQ}, {graph.OpMatVec, jlm.RoleAttnK}, {graph.OpMatVec, jlm.RoleAttnV}}); err != nil {
 		return nil, err
+	}
+	// DBRX's clamps: attnPrep applies them first.
+	if take(graph.OpClamp, 0) {
+		if err := run([]step{{graph.OpClamp, 0}, {graph.OpClamp, 0}}); err != nil {
+			return nil, err
+		}
+	}
+	// The q/k norms, per head (qwen3) or over each whole projection
+	// (OLMoE): attnPrep applies either, by QKNormShapeAt.
+	for _, k := range []graph.OpKind{graph.OpHeadNorm, graph.OpNorm} {
+		if !lw.qk && take(k, jlm.RoleAttnQNorm) {
+			if !take(k, jlm.RoleAttnKNorm) {
+				return nil, fail(k.String() + " of attn_k_norm")
+			}
+			lw.qk = true
+		}
+	}
+	// The rotary, absent on a block without one.
+	if take(graph.OpRope, 0) {
+		if err := run([]step{{graph.OpRope, 0}}); err != nil {
+			return nil, err
+		}
+	}
+	if err := run([]step{{graph.OpKVAppend, 0}, {graph.OpAttend, 0}, {graph.OpMatVec, jlm.RoleAttnOut}}); err != nil {
+		return nil, err
+	}
+	lw.postAttn = take(graph.OpNorm, jlm.RolePostAttnNorm)
+	if err := run([]step{{graph.OpAdd, 0}}); err != nil {
+		return nil, err
+	}
+	// The FFN's input, by the value its first op reads: its own norm over
+	// the residual (or the residual itself, with no pre-norm), or a parallel
+	// block's -- its own norm of the block input, or the attention's.
+	ffnIn := last()
+	if ffnPre < 0 && preNorm(jlm.RoleFFNNorm) {
+		ffnIn = last()
+	}
+	if i >= len(ops) || len(ops[i].In) == 0 {
+		return nil, fail("the FFN")
+	}
+	switch ops[i].In[0] {
+	case ffnIn:
+	case ffnPre:
+		lw.par = true
+	case attnIn:
+		lw.par, lw.shared = true, true
+	default:
+		return nil, fail("an FFN over the residual, its norm or a parallel block's input")
+	}
+	if ffnPre >= 0 && !lw.par {
+		return nil, fail("an FFN that reads the norm taken before attention")
 	}
 	if i < len(ops) && ops[i].Kind == graph.OpRoute {
 		// The routed mixture, as moe() computes it: route, gather, the
@@ -296,11 +387,21 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 				return nil, err
 			}
 		}
-		if err := run([]step{{graph.OpAdd, 0}}); err != nil {
+	} else if take(graph.OpMatVec, jlm.RoleFFNUp) {
+		// The ungated FFN: up, its activation alone, down.
+		lw.ungated = true
+		if err := run([]step{{graph.OpAct, 0}, {graph.OpMatVec, jlm.RoleFFNDown}}); err != nil {
 			return nil, err
 		}
 	} else if err := run([]step{{graph.OpMatVec, jlm.RoleFFNGate}, {graph.OpMatVec, jlm.RoleFFNUp}, {graph.OpActMul, 0},
-		{graph.OpMatVec, jlm.RoleFFNDown}, {graph.OpAdd, 0}}); err != nil {
+		{graph.OpMatVec, jlm.RoleFFNDown}}); err != nil {
+		return nil, err
+	}
+	lw.postFFN = take(graph.OpNorm, jlm.RolePostFFNNorm)
+	if lw.mix && lw.postFFN {
+		return nil, fail("a mixture with no norm after it (moe adds into the residual itself)")
+	}
+	if err := run([]step{{graph.OpAdd, 0}}); err != nil {
 		return nil, err
 	}
 	if i != len(ops) {
@@ -463,8 +564,15 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 	c, m := s.c, s.m
 	s.graphRuns++
 	s.pathOf(li).Graph++
-	// norm(x) -> attn_in
+	// norm(x) -> attn_in [, a parallel block's FFN input]
 	s.norm(s.h, s.x, l.attnNorm, l.attnNormB)
+	if lw.par {
+		if lw.shared {
+			copy(s.hf, s.h)
+		} else {
+			s.norm(s.hf, s.x, l.ffnNorm, l.ffnNormB)
+		}
+	}
 	s.jit.NewInput()
 	m.trace(li, "attn_norm", s.h)
 	// matvec q, k, v (one region inside a fused run, as the body groups them)
@@ -497,7 +605,7 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 	// fuses it)
 	qd := c.QDimAt(li)
 	src := s.xb
-	plain := s.residFold && l.bo == nil
+	plain := s.residFold && l.bo == nil && !lw.postAttn
 	if plain {
 		s.grp.Resid, s.grp.Alpha = s.x, float32(c.ResidualScale)
 	}
@@ -510,19 +618,49 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 		}
 	}
 	s.addBias(s.h, l.bo)
+	// [norm(o)] before the residual add
+	if lw.postAttn {
+		s.rmsnorm(s.h, s.h, l.postAttnNorm, c.RMSEps)
+	}
 	if !attnResid {
 		s.addInto(s.x, s.h)
 	}
 	m.trace(li, "attn_resid", s.x)
-	// norm -> gate, up -> act_mul -> down, add into the residual
-	s.norm(s.h, s.x, l.ffnNorm, l.ffnNormB)
+	// norm -> gate, up -> act_mul -> down, add into the residual; a
+	// parallel block's FFN reads the input normed above.
+	ffnIn := s.h
+	if lw.par {
+		ffnIn = s.hf
+	} else {
+		s.norm(s.h, s.x, l.ffnNorm, l.ffnNormB)
+	}
 	s.jit.NewInput()
 	if lw.mix {
 		// route -> gather -> experts -> combine [+ shared], added into the
 		// residual by the mixture itself, as the hand-written body does.
-		if err := s.moe(li, l, s.h, s.h, s.x); err != nil {
+		if err := s.moe(li, l, ffnIn, ffnIn, s.x); err != nil {
 			return err
 		}
+		s.layerOutScale(l, s.x)
+		m.trace(li, "ffn_resid", s.x)
+		return nil
+	}
+	if lw.ungated {
+		// up [+ bias] -> act -> down [+ bias]
+		if err := s.mv(s.up, l.up, ffnIn); err != nil {
+			return err
+		}
+		s.addBias(s.up, l.upB)
+		s.ungatedAct(l, s.up)
+		s.jit.NewInput()
+		if err := s.mv(s.h, l.down, s.up); err != nil {
+			return err
+		}
+		s.addBias(s.h, l.downB)
+		if lw.postFFN {
+			s.rmsnorm(s.h, s.h, l.postFFNNorm, c.RMSEps)
+		}
+		s.addInto(s.x, s.h)
 		s.layerOutScale(l, s.x)
 		m.trace(li, "ffn_resid", s.x)
 		return nil
@@ -530,17 +668,17 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 	ff := c.NFFNAt(li)
 	gate, up, act := s.gate[:ff], s.up[:ff], c.Act
 	s.aheadOf(li, 2, [nn.MaxGroup]*tensor{&l.down})
-	if !s.groupOf(s.h, [nn.MaxGroup]*tensor{&l.gate, &l.up}, [nn.MaxGroup][]float32{gate, up}, 2) {
-		if err := s.mv(gate, l.gate, s.h); err != nil {
+	if !s.groupOf(ffnIn, [nn.MaxGroup]*tensor{&l.gate, &l.up}, [nn.MaxGroup][]float32{gate, up}, 2) {
+		if err := s.mv(gate, l.gate, ffnIn); err != nil {
 			return err
 		}
-		if err := s.mv(up, l.up, s.h); err != nil {
+		if err := s.mv(up, l.up, ffnIn); err != nil {
 			return err
 		}
 	}
 	s.gaussTopK(li, gate, ff)
 	s.grp.ActUp, s.grp.Act = up, act
-	if s.residFold {
+	if s.residFold && !lw.postFFN {
 		s.grp.Resid, s.grp.Alpha = s.x, float32(c.ResidualScale)
 	}
 	s.aheadNext(li)
@@ -553,6 +691,9 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 		if err := s.mv(s.h, l.down, gate); err != nil {
 			return err
 		}
+	}
+	if lw.postFFN {
+		s.rmsnorm(s.h, s.h, l.postFFNNorm, c.RMSEps)
 	}
 	if !ffnResid {
 		s.addInto(s.x, s.h)
@@ -577,6 +718,7 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, p0, n int, 
 	// norm(x) -> attn_in, every row
 	tn := s.tick()
 	s.batchNormB(s.bh, s.bx, l.attnNorm, l.attnNormB, ne, n)
+	s.parallelIn(l, lw, n)
 	s.tock(opRMSNorm, tn)
 	// matvec q, k, v over the chunk
 	kvDim, qDim := c.KVDimAt(li), c.QDimAt(li)
@@ -604,41 +746,7 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, p0, n int, 
 		return err
 	}
 	s.addBiasRows(s.bh, l.bo, n)
-	tr := s.tick()
-	s.addInto(s.bx[:n*ne], s.bh[:n*ne])
-	s.tock(opResid, tr)
-	// norm -> gate, up -> act_mul -> down, add into the residual
-	tn = s.tick()
-	s.batchNormB(s.bh, s.bx, l.ffnNorm, l.ffnNormB, ne, n)
-	s.tock(opRMSNorm, tn)
-	if lw.mix {
-		// The mixture over the chunk, expert-major (moeBatch), into the
-		// residual.
-		if err := s.moeBatch(li, l, s.bh, s.bx, n); err != nil {
-			return err
-		}
-		s.layerOutScale(l, s.bx[:n*ne])
-		return nil
-	}
-	ff := c.NFFNAt(li)
-	if err := s.mm(s.bgate, l.gate, s.bh[:n*ne], n); err != nil {
-		return err
-	}
-	if err := s.mm(s.bup, l.up, s.bh[:n*ne], n); err != nil {
-		return err
-	}
-	gate, up := s.bgate[:n*ff], s.bup[:n*ff]
-	tac := s.tick()
-	s.actmulAll(gate, up, c.Act)
-	s.tock(opAct, tac)
-	if err := s.mm(s.bh, l.down, gate, n); err != nil {
-		return err
-	}
-	tr = s.tick()
-	s.addInto(s.bx[:n*ne], s.bh[:n*ne])
-	s.tock(opResid, tr)
-	s.layerOutScale(l, s.bx[:n*ne])
-	return nil
+	return s.rowsResidFFN(li, l, lw, n, false)
 }
 
 // graphRagged runs block li over a ragged step's rows -- each row its own
@@ -654,6 +762,7 @@ func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, seq, pos
 	// norm(x) -> attn_in, every row
 	t0 := s.tick()
 	s.batchNormB(s.bh, s.bx, l.attnNorm, l.attnNormB, ne, n)
+	s.parallelIn(l, lw, n)
 	s.tock(opRMSNorm, t0)
 	// matvec q, k, v over the step's rows
 	kvDim, qDim := c.KVDimAt(li), c.QDimAt(li)
@@ -682,42 +791,103 @@ func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, seq, pos
 		return err
 	}
 	s.addBiasRows(s.bh, l.bo, n)
-	t0 = s.tick()
+	return s.rowsResidFFN(li, l, lw, n, true)
+}
+
+// rowsResidFFN is the second half of a block over n rows in s.bx (a prompt
+// chunk, or with ragged a batch step's rows), from the attention output in
+// s.bh: [its norm,] the residual add, then the FFN -- its norm or a parallel
+// block's input, the mixture, the ungated or the gated FFN, [its norm,] and
+// the second add -- as hostRows and rowsHost run them.
+func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged bool) error {
+	c := s.c
+	ne := c.NEmbd
+	if lw.postAttn {
+		tn := s.tick()
+		s.batchNorm(s.bh, s.bh, l.postAttnNorm, ne, n)
+		s.tock(opRMSNorm, tn)
+	}
+	tr := s.tick()
 	s.addInto(s.bx[:n*ne], s.bh[:n*ne])
-	s.tock(opResid, t0)
+	s.tock(opResid, tr)
 	// norm -> gate, up -> act_mul -> down, add into the residual
-	t0 = s.tick()
-	s.batchNormB(s.bh, s.bx, l.ffnNorm, l.ffnNormB, ne, n)
-	s.tock(opRMSNorm, t0)
+	tn := s.tick()
+	ffnIn := s.bh
+	if lw.par {
+		ffnIn = s.bhf
+		s.jit.NewInput()
+	} else {
+		s.batchNormB(s.bh, s.bx, l.ffnNorm, l.ffnNormB, ne, n)
+	}
+	s.tock(opRMSNorm, tn)
 	if lw.mix {
-		// Each row its own sequence's experts (moeBatch), into the residual.
-		if err := s.moeBatch(li, l, s.bh, s.bx, n); err != nil {
+		// The mixture over the rows, expert-major (moeBatch), into the
+		// residual; on a ragged step each row its own sequence's experts.
+		if err := s.moeBatch(li, l, ffnIn, s.bx, n); err != nil {
 			return err
 		}
 		s.layerOutScale(l, s.bx[:n*ne])
 		return nil
 	}
-	if err := s.mm(s.bgate, l.gate, s.bh, n); err != nil {
-		return err
+	if lw.ungated {
+		// up [+ bias] -> act -> down [+ bias]
+		if err := s.mm(s.bup, l.up, ffnIn, n); err != nil {
+			return err
+		}
+		s.addBiasRows(s.bup, l.upB, n)
+		tac := s.tick()
+		s.ungatedAct(l, s.bup[:n*c.NFFN])
+		s.jit.NewInput()
+		s.tock(opAct, tac)
+		if err := s.mm(s.bh, l.down, s.bup, n); err != nil {
+			return err
+		}
+		s.addBiasRows(s.bh, l.downB, n)
+	} else {
+		ff := c.NFFNAt(li)
+		if err := s.mm(s.bgate, l.gate, ffnIn[:n*ne], n); err != nil {
+			return err
+		}
+		if err := s.mm(s.bup, l.up, ffnIn[:n*ne], n); err != nil {
+			return err
+		}
+		gate, up := s.bgate[:n*ff], s.bup[:n*ff]
+		tac := s.tick()
+		s.gaussTopK(li, gate, ff)
+		s.actmulAll(gate, up, c.Act)
+		if ragged {
+			s.jit.NewInput()
+		}
+		s.tock(opAct, tac)
+		if err := s.mm(s.bh, l.down, gate, n); err != nil {
+			return err
+		}
 	}
-	if err := s.mm(s.bup, l.up, s.bh, n); err != nil {
-		return err
+	if lw.postFFN {
+		tn := s.tick()
+		s.batchNorm(s.bh, s.bh, l.postFFNNorm, ne, n)
+		s.tock(opRMSNorm, tn)
 	}
-	t0 = s.tick()
-	ff := c.NFFNAt(li)
-	gate, up := s.bgate[:n*ff], s.bup[:n*ff]
-	s.gaussTopK(li, gate, ff)
-	s.actmulAll(gate, up, c.Act)
-	s.jit.NewInput()
-	s.tock(opAct, t0)
-	if err := s.mm(s.bh, l.down, s.bgate, n); err != nil {
-		return err
-	}
-	t0 = s.tick()
+	tr = s.tick()
 	s.addInto(s.bx[:n*ne], s.bh[:n*ne])
-	s.tock(opResid, t0)
+	s.tock(opResid, tr)
 	s.layerOutScale(l, s.bx[:n*ne])
 	return nil
+}
+
+// parallelIn is a parallel block's FFN input over n rows, taken from the
+// block input before attention adds into it: its own norm, or a copy of the
+// attention's.
+func (s *State) parallelIn(l *layer, lw *denseLowering, n int) {
+	if !lw.par {
+		return
+	}
+	ne := s.c.NEmbd
+	if lw.shared {
+		copy(s.bhf[:n*ne], s.bh[:n*ne])
+		return
+	}
+	s.batchNormB(s.bhf, s.bx, l.ffnNorm, l.ffnNormB, ne, n)
 }
 
 // lowerPlan writes what the block's graph states into a device plan: the
@@ -730,10 +900,21 @@ func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, seq, pos
 func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
 	g := lw.g
 	p.NEmbd = g.Values[g.In[0]].Width
-	p.QKNorm = false
+	p.QKNorm, p.LayerNorm, p.Parallel = false, false, lw.par
 	_, producer := graphProducers(g)
+	windowed := false
+	for _, o := range g.Ops {
+		windowed = windowed || o.Kind == graph.OpAttend && o.Attr.Window != 0
+	}
 	for _, o := range g.Ops {
 		switch o.Kind {
+		case graph.OpLayerNorm:
+			p.RMSEps, p.LayerNorm = o.Attr.Eps, true
+		case graph.OpAct:
+			p.NFFN = g.Values[o.Out[0]].Width
+			if a, ok := nnAct[o.Attr.Act]; ok && o.Attr.Act != graph.ActXIELU {
+				p.Act = a
+			}
 		case graph.OpNorm:
 			p.RMSEps = o.Attr.Eps
 			if len(o.Weight) == 1 && o.Weight[0].Role == jlm.RoleAttnQNorm {
@@ -742,7 +923,12 @@ func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
 		case graph.OpHeadNorm:
 			p.QKNorm = true
 		case graph.OpRope:
-			p.NRot, p.RopeBase, p.RopeNeox = o.Attr.NRot, o.Attr.Base, o.Attr.Layout == graph.RopeNeox
+			p.RopeNeox = o.Attr.Layout == graph.RopeNeox
+			// A sliding block's rotary is the local table the plan carries
+			// model-wide (RopeTabSWA); the plan's own is the global's.
+			if !windowed {
+				p.NRot, p.RopeBase = o.Attr.NRot, o.Attr.Base
+			}
 		case graph.OpAttend:
 			p.NHead, p.NKVHead, p.HeadDim = o.Attr.NHead, o.Attr.NKVHead, o.Attr.HeadDim
 			p.AttnScale, p.AttnSoftcap = o.Attr.Scale, float32(o.Attr.Softcap)
@@ -754,15 +940,17 @@ func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
 				break
 			}
 			p.NFFN = g.Values[o.Out[0]].Width
-			switch o.Attr.Act {
-			case graph.ActSiLU:
-				p.Act = nn.ActSiLU
-			case graph.ActGELUTanh:
-				p.Act = nn.ActGELU
+			if a, ok := nnAct[o.Attr.Act]; ok {
+				p.Act = a
 			}
 		}
 	}
 }
+
+// nnAct is the generated kernels' activation per op-language activation.
+var nnAct = map[graph.Act]nn.ActKind{graph.ActSiLU: nn.ActSiLU, graph.ActGELUTanh: nn.ActGELU,
+	graph.ActGELUErf: nn.ActGELUErf, graph.ActReLU2: nn.ActReLU2, graph.ActReLU: nn.ActReLU,
+	graph.ActSwiGLUOAI: nn.ActSwiGLUOAI}
 
 // graphProducers is, per value of g, the op that writes it (-1 for a block
 // input), and how many ops read it.
@@ -816,6 +1004,9 @@ var hostLowering = map[graph.OpKind]struct {
 	graph.OpExpertMatVec: {"moe / moeBatch: the routed mixture as one routine", false},
 	graph.OpCombine:      {"moe / moeBatch: the routed mixture as one routine", false},
 	graph.OpGateScalar:   {"moe / moeBatch: the routed mixture as one routine", false},
+	graph.OpLayerNorm:    {"nn LayerNorm (generated, by width)", true},
+	graph.OpAct:          {"nn activation (generated, by kind)", true},
+	graph.OpClamp:        {"attnPrep: q/k norm, rotary and cache append as one routine", false},
 }
 
 // BlockLowering is every op of text block li's graph with its lowering, nil

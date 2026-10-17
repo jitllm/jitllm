@@ -16,16 +16,32 @@ type Dense struct {
 	Base                           float64
 	Layout                         RopeLayout
 	RopeFreqs                      bool
+	Mscale                         float64 // the rotary's cos/sin multiplier; 0 is one
 	Scale                          float64
 	Window                         int
 	Softcap                        float64
+	Sinks                          bool // RoleAttnSinks: a per-head logit in every softmax's denominator
 	Act                            Act
 	QKNorm                         bool // RoleAttnQNorm and RoleAttnKNorm, over each head before the rotary
 	PostNorm                       bool // RolePostAttnNorm and RolePostFFNNorm, over each sublayer's output
-	QKVBias                        bool // RoleAttnQBias/KBias/VBias
+	// NoPreNorm is a block whose sublayers read their input unnormed (OLMo
+	// 2's, its post-norms standing in), NoRope one with no rotary.
+	NoPreNorm, NoRope bool
+	QKVBias           bool // RoleAttnQBias/KBias/VBias
 	// QKNormWhole norms q and k each over its whole projection at once
 	// (OLMoE's), an OpNorm on each, where QKNorm norms each head.
 	QKNormWhole bool
+	// The classic block (C6). LayerNorm makes the attention and FFN norms
+	// LayerNorms (OpLayerNorm); NormBias and FFNNormBias bind their biases
+	// (RoleAttnNormBias, RoleFFNNormBias). Parallel feeds the FFN the block
+	// input, normed by its own norm or, with SharedNorm (no RoleFFNNorm), by
+	// the attention's. OutBias, UpBias and DownBias are the projections'
+	// biases; Ungated is an FFN of up, Act and down with no gate. Clamp,
+	// where not 0, clamps q, k and v to [-Clamp, Clamp] after their
+	// projections.
+	LayerNorm, NormBias, FFNNormBias, Parallel, SharedNorm bool
+	OutBias, UpBias, DownBias, Ungated                     bool
+	Clamp                                                  float64
 	// Mixture, where set, is the block's FFN: a routed mixture over the FFN
 	// norm's row in place of gate, up and down (NFFN is then unused).
 	Mixture *Mixture
@@ -45,6 +61,37 @@ func (d *Dense) Build() *Graph {
 			Attr: Attrs{Eps: d.Eps}})
 		return out
 	}
+	// preNorm is a sublayer's input norm: an RMSNorm, or the classic block's
+	// LayerNorm with its bias where the block stores one.
+	preNorm := func(name string, in ValueID, w, b jlm.Role) ValueID {
+		if d.NoPreNorm {
+			return in
+		}
+		if !d.LayerNorm {
+			return norm(name, in, w)
+		}
+		out := g.value(name, g.Values[in].Width)
+		ws := []Binding{vec(w, g.Values[in].Width)}
+		if b == jlm.RoleAttnNormBias && d.NormBias || b == jlm.RoleFFNNormBias && d.FFNNormBias {
+			ws = append(ws, vec(b, g.Values[in].Width))
+		}
+		g.op(Op{Kind: OpLayerNorm, In: []ValueID{in}, Out: []ValueID{out}, Weight: ws, Attr: Attrs{Eps: d.Eps}})
+		return out
+	}
+	opt := func(on bool, r jlm.Role) jlm.Role {
+		if on {
+			return r
+		}
+		return 0
+	}
+	clamp := func(name string, in ValueID) ValueID {
+		if d.Clamp == 0 {
+			return in
+		}
+		out := g.value(name, g.Values[in].Width)
+		g.op(Op{Kind: OpClamp, In: []ValueID{in}, Out: []ValueID{out}, Attr: Attrs{Bound: d.Clamp}})
+		return out
+	}
 	mv := func(name string, in ValueID, w jlm.Role, rows int, bias jlm.Role) ValueID {
 		out := g.value(name, rows)
 		ws := []Binding{mat(w, g.Values[in].Width, rows)}
@@ -61,10 +108,17 @@ func (d *Dense) Build() *Graph {
 		return 0
 	}
 
-	h := norm("attn_in", x, jlm.RoleAttnNorm)
+	h := preNorm("attn_in", x, jlm.RoleAttnNorm, jlm.RoleAttnNormBias)
+	// A parallel block's FFN reads the block input: its norm is the
+	// attention's (SharedNorm) or its own over x.
+	hf := h
+	if d.Parallel && !d.SharedNorm {
+		hf = preNorm("ffn_in", x, jlm.RoleFFNNorm, jlm.RoleFFNNormBias)
+	}
 	q := mv("q", h, jlm.RoleAttnQ, qd, bias(jlm.RoleAttnQBias))
 	k := mv("k", h, jlm.RoleAttnK, kvd, bias(jlm.RoleAttnKBias))
 	v := mv("v", h, jlm.RoleAttnV, kvd, bias(jlm.RoleAttnVBias))
+	q, k, v = clamp("q_clamped", q), clamp("k_clamped", k), clamp("v_clamped", v)
 	if d.QKNorm {
 		hn := func(name string, in ValueID, w jlm.Role) ValueID {
 			out := g.value(name, g.Values[in].Width)
@@ -81,25 +135,44 @@ func (d *Dense) Build() *Graph {
 	rope := func(name string, in ValueID) ValueID {
 		out := g.value(name, g.Values[in].Width)
 		g.op(Op{Kind: OpRope, In: []ValueID{in}, Out: []ValueID{out},
-			Attr: Attrs{HeadDim: d.HeadDim, NRot: d.NRot, Base: d.Base, Layout: d.Layout, Freqs: d.RopeFreqs}})
+			Attr: Attrs{HeadDim: d.HeadDim, NRot: d.NRot, Base: d.Base, Layout: d.Layout, Freqs: d.RopeFreqs, Mscale: d.Mscale}})
 		return out
 	}
-	qr, kr := rope("q_rot", q), rope("k_rot", k)
+	qr, kr := q, k
+	if !d.NoRope {
+		qr, kr = rope("q_rot", q), rope("k_rot", k)
+	}
 	g.op(Op{Kind: OpKVAppend, In: []ValueID{kr, v}, Reads: []StateRef{{"kv", 0}}, Writes: []StateRef{{"kv", 1}}})
 	a := g.value("attn", qd)
-	g.op(Op{Kind: OpAttend, In: []ValueID{qr}, Out: []ValueID{a}, Reads: []StateRef{{"kv", 1}},
+	var sinks []Binding
+	if d.Sinks {
+		sinks = []Binding{vec(jlm.RoleAttnSinks, d.NHead)}
+	}
+	g.op(Op{Kind: OpAttend, In: []ValueID{qr}, Out: []ValueID{a}, Reads: []StateRef{{"kv", 1}}, Weight: sinks,
 		Attr: Attrs{HeadDim: d.HeadDim, NHead: d.NHead, NKVHead: d.NKVHead, Scale: d.Scale, Window: d.Window, Softcap: d.Softcap}})
-	o := mv("attn_out", a, jlm.RoleAttnOut, d.NEmbd, 0)
+	o := mv("attn_out", a, jlm.RoleAttnOut, d.NEmbd, opt(d.OutBias, jlm.RoleAttnOutBias))
 	if d.PostNorm {
 		o = norm("attn_post", o, jlm.RolePostAttnNorm)
 	}
 	x1 := g.value("x_attn", d.NEmbd)
 	g.op(Op{Kind: OpAdd, In: []ValueID{x, o}, Out: []ValueID{x1}})
 
-	f := norm("ffn_in", x1, jlm.RoleFFNNorm)
+	f := hf
+	if !d.Parallel {
+		f = preNorm("ffn_in", x1, jlm.RoleFFNNorm, jlm.RoleFFNNormBias)
+	}
 	var dn ValueID
 	if d.Mixture != nil {
 		dn = d.Mixture.emit(g, f)
+	} else if d.Ungated {
+		up := mv("up", f, jlm.RoleFFNUp, d.NFFN, opt(d.UpBias, jlm.RoleFFNUpBias))
+		p := g.value("act", d.NFFN)
+		var ws []Binding
+		if d.Act == ActXIELU {
+			ws = []Binding{vec(jlm.RoleXIELU, 4)}
+		}
+		g.op(Op{Kind: OpAct, In: []ValueID{up}, Out: []ValueID{p}, Weight: ws, Attr: Attrs{Act: d.Act}})
+		dn = mv("ffn_out", p, jlm.RoleFFNDown, d.NEmbd, opt(d.DownBias, jlm.RoleFFNDownBias))
 	} else {
 		gt := mv("gate", f, jlm.RoleFFNGate, d.NFFN, 0)
 		up := mv("up", f, jlm.RoleFFNUp, d.NFFN, 0)

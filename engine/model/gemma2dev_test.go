@@ -32,6 +32,11 @@ func TestGemma2SoftcapOnDevice(t *testing.T) {
 	// config, so capping at 2, which bends nearly every score, is still
 	// like-for-like: working ~5e-3, the cap skipped ~6e-2, the bound between.
 	m.Cfg.AttnSoftcap = 2
+	// The block graph states the cap its attend op carries, and the device
+	// plan is lowered from it: rebuilt, the graph states the cap of 2.
+	if err := m.buildGraphs(); err != nil {
+		t.Fatal(err)
+	}
 	ids := m.Vocab.Encode("The capital of France is Paris, and the capital of Germany is", true)
 	run := func(st *State) [][]float32 {
 		var out [][]float32

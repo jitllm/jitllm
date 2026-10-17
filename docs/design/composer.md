@@ -250,6 +250,22 @@ the mixture's own operations (`moe`, `moeBatch`), so the kernels and their
 order are the hand-written body's: `TestBlockGraphMatchesTheHandPath` holds
 every covered model bit for bit, resident and paged, at zero warm allocations.
 
+The classic block (C6) and the windowed, capped and sunk attentions are stated
+the same way. `OpLayerNorm` is a LayerNorm with its bias where the block stores
+one; `OpAct` is an ungated FFN's activation alone (GELU, erf GELU, squared
+ReLU, ReLU, Apertus's xIELU with its four numbers bound); `OpClamp` is DBRX's
+clip on q, k and v. A parallel block's FFN reads the block input -- its own
+norm, or the attention's where it stores none -- and the host lowering tells
+which by the value the FFN's first op reads, never by a flag beside the graph.
+Projection biases, the post-norms over each sublayer's output (gemma2/3,
+glm4, OLMo 2), a block with no pre-norm, a block without the rotary, a sliding
+window with its local rotary, a rotary's scaling (its per-pair factors and its
+cos/sin magnitude: linear, YaRN, LongRoPE), the attention softcap and the sinks
+(a bound per-head vector on `attend`) are attributes or bindings of the ops
+that carry them. That puts phi2, starcoder, starcoder2, command-r, cohere2,
+stablelm, falcon, nemotron, dbrx, apertus, glm4, OLMo 2, EXAONE 4, arcee,
+gemma2, gemma3 and gpt-oss on the graph, every block.
+
 **Coverage is structural.** Whether a block is on the graph is decided from
 what the container states about the block -- the configuration's fields
 (`model.uncovered`), the mixture's router, experts and shared expert
@@ -269,7 +285,7 @@ composer's work list:
 
 | ops | routine today | to compose |
 |---|---|---|
-| `head_norm`, `rope`, `kv_append` | `attnPrep` (one routine) | a kernel per op, the fused form a rewrite |
+| `clamp`, `head_norm`, `rope`, `kv_append` | `attnPrep` (one routine) | a kernel per op, the fused form a rewrite |
 | `attend` | `attendRow` and the chunk's attention, one per row class | the attention kernels chosen by row class and Target |
 | `route`, `gather`, `expert_matvec`, `combine`, `gate_scalar` | `moe` / `moeBatch` | route and combine as generated kernels, the experts as grouped matvecs chosen by the routed pairs, fusions (`moe-few-row`, `moe-waves`) as rewrites over these ops |
 | every op, on a device | the block's `nn.LayerPlan`, lowered from the graph and run whole by the tier | per-op device kernels selected from the plan's ops |

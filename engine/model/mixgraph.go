@@ -2,7 +2,6 @@ package model
 
 import (
 	"github.com/jitllm/jitllm/engine/graph"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -39,18 +38,15 @@ func (m *Model) mixtureWhy(li int) (graph.Facts, string) {
 		return graph.Facts{}, ""
 	case c.DenseMoE:
 		return graph.Facts{}, UncoveredMixDense
-	case c.ExpertSqrtSoftplus:
+	case c.ExpertSqrtSoftplus || c.SparseMixer != 0:
 		return graph.Facts{}, UncoveredMixRouter
 	case l.ungatedExp || c.ExpertLatent != 0:
 		return graph.Facts{}, UncoveredMixExperts
 	case c.ExpertWeightIn:
 		return graph.Facts{}, UncoveredMixWeightIn
 	}
-	var act graph.Act
-	switch c.Act {
-	case nn.ActSiLU:
-		act = graph.ActSiLU
-	default:
+	act := graphAct(c.Act)
+	if act == 0 {
 		return graph.Facts{}, UncoveredUngated
 	}
 	want := map[jlm.Role]bool{}

@@ -281,6 +281,22 @@ func eachLayer(m *Model, f func(l *layer)) func() {
 	return func() { copy(m.layers, was) }
 }
 
+// mutatedLowering re-derives each graph-lowered block's residual and
+// post-norms from the (possibly mutated) configuration and norms, so a
+// violation that turns a block parallel or serial, or takes a post-norm away,
+// reaches the graph's lowering as it reaches the hand-written body: parallel
+// with its own FFN norm, or the attention's shared where the block has none.
+func mutatedLowering(m *Model) {
+	for li, lw := range m.graphs {
+		if lw != nil {
+			l := &m.layers[li]
+			lw.par = m.Cfg.Parallel
+			lw.shared = lw.par && l.ffnNorm == nil
+			lw.postAttn, lw.postFFN = l.postAttnNorm != nil, l.postFFNNorm != nil
+		}
+	}
+}
+
 func cfgMut(m *Model, f func(c *Config)) func() {
 	was := m.Cfg
 	c := *was
@@ -410,7 +426,8 @@ func TestC6FeaturesAreLoadBearing(t *testing.T) {
 			for _, v := range vs {
 				t.Run(v.name, func(t *testing.T) {
 					undo := v.mut(m)
-					defer undo()
+					mutatedLowering(m)
+					defer func() { undo(); mutatedLowering(m) }()
 					st := m.NewState(len(g.IDs) + 1)
 					defer st.Close()
 					worst := 0.0

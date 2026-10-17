@@ -169,7 +169,8 @@ func Verify(g *Graph, f Facts) error {
 				break
 			}
 			a := o.Attr
-			if a.Layout != c.Layout || a.Freqs != c.RopeFreqs || a.NRot != c.NRot || a.Base != c.Base || a.HeadDim != c.HeadDim {
+			if a.Layout != c.Layout || a.Freqs != c.RopeFreqs || a.NRot != c.NRot || a.Base != c.Base || a.HeadDim != c.HeadDim ||
+				a.Mscale != c.Mscale {
 				bad("%s: %v pairs over %d of %d at base %g; the configuration states %v over %d of %d at %g",
 					at, a.Layout, a.NRot, a.HeadDim, a.Base, c.Layout, c.NRot, c.HeadDim, c.Base)
 			}
@@ -200,6 +201,10 @@ func Verify(g *Graph, f Facts) error {
 					at, a.NHead, a.NKVHead, a.HeadDim, a.Scale, a.Window, a.Softcap,
 					c.NHead, c.NKVHead, c.HeadDim, c.Scale, c.Window, c.Softcap)
 			}
+			if sk := len(o.Weight) == 1 && o.Weight[0].Role == jlm.RoleAttnSinks && o.Weight[0].K == c.NHead &&
+				o.Weight[0].Rows == 0; sk != c.Sinks || len(o.Weight) > 1 {
+				bad("%s: %d weights; the configuration states sinks %v", at, len(o.Weight), c.Sinks)
+			}
 			if width(o.In[0]) != c.NHead*c.HeadDim || width(o.Out[0]) != c.NHead*c.HeadDim {
 				bad("%s: q of %d, out of %d", at, width(o.In[0]), width(o.Out[0]))
 			}
@@ -212,6 +217,40 @@ func Verify(g *Graph, f Facts) error {
 			}
 			if o.Kind == OpActMul && o.Attr.Act != act {
 				bad("%s: activation %d, the configuration states %d", at, o.Attr.Act, act)
+			}
+		case OpLayerNorm:
+			if !ins(1) || !outs(1) || len(o.Weight) == 0 || len(o.Weight) > 2 {
+				bad("%s: wants one input, one output, a scale and at most a bias", at)
+				break
+			}
+			if o.Attr.Eps != eps {
+				bad("%s: epsilon %g, the configuration states %g", at, o.Attr.Eps, eps)
+			}
+			for _, w := range o.Weight {
+				if w.K != width(o.In[0]) || w.Rows != 0 || width(o.Out[0]) != width(o.In[0]) {
+					bad("%s: %v of %d over a row of %d into %d", at, w.Role, w.K, width(o.In[0]), width(o.Out[0]))
+				}
+			}
+		case OpAct:
+			if !ins(1) || !outs(1) {
+				break
+			}
+			if width(o.Out[0]) != width(o.In[0]) {
+				bad("%s: width %d into %d", at, width(o.In[0]), width(o.Out[0]))
+			}
+			if o.Attr.Act != act {
+				bad("%s: activation %d, the configuration states %d", at, o.Attr.Act, act)
+			}
+			if xi := o.Attr.Act == ActXIELU; xi != (len(o.Weight) == 1) || len(o.Weight) > 1 ||
+				xi && (o.Weight[0].Role != jlm.RoleXIELU || o.Weight[0].K != 4) {
+				bad("%s: activation %d binds %d weights", at, o.Attr.Act, len(o.Weight))
+			}
+		case OpClamp:
+			if !ins(1) || !outs(1) {
+				break
+			}
+			if o.Attr.Bound <= 0 || o.Attr.Bound != c.Clamp || width(o.Out[0]) != width(o.In[0]) {
+				bad("%s: bound %g, the configuration states %g", at, o.Attr.Bound, c.Clamp)
 			}
 		case OpRoute, OpGather, OpExpertMatVec, OpCombine, OpGateScalar:
 			verifyMixtureOp(o, at, f.Mixture, width, ins, outs, bad)
