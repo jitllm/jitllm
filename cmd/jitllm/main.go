@@ -1092,6 +1092,18 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 						ds.SplitRowSteps, ds.HybridRows)
 				}
 			}
+			if n := ds.StreamCacheHits + ds.StreamCacheMisses; n > 0 {
+				fmt.Fprintf(os.Stderr, "expert cache: %d hit(s), %d miss(es), %d short (%.1f%% hit rate)\n",
+					ds.StreamCacheHits, ds.StreamCacheMisses, ds.StreamCacheShort, 100*float64(ds.StreamCacheHits)/float64(n))
+			}
+			if c := os.Getenv("JITLLM_EXPERT_CARD"); c != "" && ds.PeerBlocks == 0 {
+				fmt.Fprintf(os.Stderr, "expert card %s: no block holds a bank there (%d declined): the card backs blocks that have an expert cache, and this placement has none, so it holds nothing\n",
+					c, ds.PeerDeclined)
+			}
+			if ds.PeerBlocks > 0 || ds.PeerDeclined > 0 || ds.PeerSheets > 0 {
+				fmt.Fprintf(os.Stderr, "expert card: %d block(s) hold a bank there, %d declined; %d sheet(s) taken from it, %.2f GiB, %d plane(s) staged through the host\n",
+					ds.PeerBlocks, ds.PeerDeclined, ds.PeerSheets, float64(ds.PeerBytes)/(1<<30), ds.PeerStaged)
+			}
 			if ds.StreamPrefetched > 0 {
 				fmt.Fprintf(os.Stderr, "cross-layer prefetch: %d expert(s) read ahead, %.2f s joining them\n",
 					ds.StreamPrefetched, sec(ds.TStreamPrefetchWait))
