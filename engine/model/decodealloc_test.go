@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -539,7 +540,13 @@ func countAllocs(f func()) windowAllocs {
 				ours = true
 			}
 			if len(top) < 6 {
-				top = append(top, fr.Function)
+				// The line of the first frame past the runtime's: the call
+				// that asked for the memory.
+				f := fr.Function
+				if len(top) == 0 || strings.HasPrefix(top[len(top)-1], "runtime.") {
+					f = fmt.Sprintf("%s (%s:%d)", f, filepath.Base(fr.File), fr.Line)
+				}
+				top = append(top, f)
 			}
 			if !more {
 				break
