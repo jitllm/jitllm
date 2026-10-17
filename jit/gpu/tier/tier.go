@@ -485,6 +485,12 @@ type Config struct {
 	// block's stated cache gives that block the plain bank
 	// (Stats.StreamCacheShort).
 	StreamCacheSlots int
+	// ExpertCard names a device (as -devices spelled it: "cuda:1") that holds no
+	// blocks and keeps whole expert banks for the mixture blocks the other
+	// devices run: an expert cache miss is then copied card to card from it
+	// instead of read from the host's pages and sent (peerbank.go). Empty is no
+	// expert card.
+	ExpertCard string
 	// StreamPrefetch runs the cross-layer probe (StreamProbe's launches) at
 	// each streamed block's suspension and starts reading the next block's
 	// predicted experts into host frames behind this block's transfers. Host
@@ -931,6 +937,12 @@ type Stats struct {
 	// StreamBytes.
 	TStreamSheet, TStreamCopy, TStreamH2D time.Duration
 	StreamBytes                           int64
+	// PeerBlocks counts blocks given a bank on the expert card
+	// (Config.ExpertCard), PeerDeclined those it had no room for; PeerSheets
+	// the sheets a cache miss took from it and PeerBytes their bytes, of which
+	// PeerStaged planes went through the host rather than card to card.
+	PeerBlocks, PeerDeclined, PeerSheets, PeerStaged int
+	PeerBytes                                        int64
 	// StreamDirect counts sheet planes sent straight from a host frame, and
 	// StreamGathered the gathered transfers: the selection check for put.
 	// StreamPinned counts the direct planes that went through the page-locked
@@ -1379,6 +1391,11 @@ func (s *Stats) add(o Stats) {
 	s.TStreamCopy += o.TStreamCopy
 	s.TStreamH2D += o.TStreamH2D
 	s.StreamBytes += o.StreamBytes
+	s.PeerBlocks += o.PeerBlocks
+	s.PeerDeclined += o.PeerDeclined
+	s.PeerSheets += o.PeerSheets
+	s.PeerStaged += o.PeerStaged
+	s.PeerBytes += o.PeerBytes
 	s.StreamDirect += o.StreamDirect
 	s.StreamGathered += o.StreamGathered
 	s.StreamPinned += o.StreamPinned
@@ -2078,6 +2095,9 @@ type GPU struct {
 	held  bool
 	// devs is every device, fastest first; see order().
 	devs []*devTier
+	// xdev is the expert card (Config.ExpertCard): opened and budgeted like
+	// the others, but in no placement's candidates.
+	xdev *devTier
 	// spreadAll steers a plan over every device rather than the fewest that
 	// hold it: streamed blocks, whose caches take what the bases leave
 	// (planShares). Under mu.
@@ -2299,7 +2319,34 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 			g.hostPool = pool
 		}
 	}
+	if cfg.ExpertCard != "" {
+		if err := g.takeExpertCard(); err != nil {
+			g.Close()
+			return nil, err
+		}
+	}
 	return g, nil
+}
+
+// takeExpertCard moves the device Config.ExpertCard names out of the
+// placement candidates. It must be one of several devices, and the others
+// must be able to copy from it.
+func (g *GPU) takeExpertCard() error {
+	at := -1
+	for i, d := range g.devs {
+		if string(d.name) == g.ExpertCard {
+			at = i
+		}
+	}
+	switch {
+	case at < 0:
+		return fmt.Errorf("tier: the expert card %q is none of the devices opened", g.ExpertCard)
+	case len(g.devs) < 2:
+		return fmt.Errorf("tier: the expert card %q is the only device: the blocks need another", g.ExpertCard)
+	}
+	g.xdev = g.devs[at]
+	g.devs = append(g.devs[:at:at], g.devs[at+1:]...)
+	return nil
 }
 
 // label names a device the way a report should: its ordinal in the tier, the

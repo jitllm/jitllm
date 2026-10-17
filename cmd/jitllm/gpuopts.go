@@ -272,6 +272,10 @@ func gpuOptions() []tier.Option {
 		{"JITLLM_GPU_SPLIT_ADMIT", num("JITLLM_GPU_SPLIT_ADMIT") > 0,
 			func(c *tier.Config) { c.SplitAdmit = num("JITLLM_GPU_SPLIT_ADMIT") }},
 		{"JITLLM_GPU_STREAM_NOPIN", set("JITLLM_GPU_STREAM_NOPIN"), func(c *tier.Config) { c.StreamNoPin = true }},
+		// A device in -devices that holds no blocks and keeps whole expert banks
+		// for the others: a cache miss is copied card to card from it.
+		{"JITLLM_EXPERT_CARD", os.Getenv("JITLLM_EXPERT_CARD") != "",
+			func(c *tier.Config) { c.ExpertCard = os.Getenv("JITLLM_EXPERT_CARD") }},
 		{"JITLLM_GPU_STREAM_GROUPS", num("JITLLM_GPU_STREAM_GROUPS") > 0,
 			func(c *tier.Config) { c.StreamGroups = num("JITLLM_GPU_STREAM_GROUPS") }},
 		// =0 uploads the host's rotary table instead of building it on the

@@ -156,6 +156,9 @@ func (g *GPU) Close() {
 	for _, d := range g.devs {
 		d.Close()
 	}
+	if g.xdev != nil {
+		g.xdev.Close()
+	}
 	// The arena last: releasing it unmaps the host memory the device buffers
 	// were uploaded from, and a queued transfer out of those pages would fault
 	// inside the driver. Closing the devices first drains them.

@@ -71,6 +71,7 @@ func (s *gpuSession) EndPlacement() {
 	// Auto-streamed blocks get their expert caches from the room placement
 	// left (GPU.sizeAutoCaches), before another session can place.
 	s.g.sizeAutoCaches()
+	s.g.attachExpertCard()
 	s.g.prewarmPromptWidths()
 	s.g.place.Unlock()
 }

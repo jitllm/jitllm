@@ -380,6 +380,9 @@ type streamBank struct {
 	// and did not.
 	wslot             []int32
 	waveHit, waveMiss []uint32
+	// peer is this block's banks on the expert card, nil without one
+	// (peerbank.go).
+	peer *peerBank
 }
 
 // score charges this token's selection to the probe's counters and hands it
@@ -1147,14 +1150,17 @@ func (g *devTier) flushAdmits(s backend.Session) error {
 		for _, it := range items {
 			st.want = append(st.want, it.e)
 		}
-		switch {
-		case st.pre != nil:
-			err = st.pre(st.want)
-		case st.ensure != nil:
-			err = st.ensure(&st.w)
-		}
-		if err == nil && st.sel2 != nil {
-			err = st.sel2(&st.w, st.want)
+		// Sheets the expert card serves are not read on the host at all.
+		if !st.peerAll(g) {
+			switch {
+			case st.pre != nil:
+				err = st.pre(st.want)
+			case st.ensure != nil:
+				err = st.ensure(&st.w)
+			}
+			if err == nil && st.sel2 != nil {
+				err = st.sel2(&st.w, st.want)
+			}
 		}
 		if err == nil && up != nil {
 			err = st.upload(g, up, j.l, j.nExpert, items)
@@ -1341,6 +1347,11 @@ func (st *streamBank) upload(g *devTier, up backend.Uploader, l *layer, nExpert 
 			for _, it := range items {
 				if int(it.e) >= nExpert {
 					return fmt.Errorf("tier: the router selected expert %d of %d", it.e, nExpert)
+				}
+				if ok, err := st.peerSheet(g, m, pl, int(it.e), it.slot, n, dst); err != nil {
+					return err
+				} else if ok {
+					continue
 				}
 				if g.ringUsed+n > len(g.upRing) {
 					// Every copy from the ring has landed before it is reused.
@@ -1530,6 +1541,14 @@ func (st *streamBank) put(g *devTier, s backend.Session, l *layer, nExpert int, 
 				// a garbage word would otherwise be a panic mid-token.
 				if int(e) >= nExpert {
 					return fmt.Errorf("tier: the router selected expert %d of %d", e, nExpert)
+				}
+				// A cache's miss the expert card holds is copied card to card.
+				if !contiguous {
+					if ok, err := st.peerSheet(g, m, pl, int(e), i, n, dst); err != nil {
+						return err
+					} else if ok {
+						continue
+					}
 				}
 				// A bank in expert pages hands over one sheet at a time; a
 				// contiguous one is sliced at e*n.
@@ -10263,6 +10282,11 @@ func (g *devTier) releaseBlock(li int) {
 	l := g.layers[li]
 	if l == nil {
 		return
+	}
+	// The expert card's banks are the block's: they go with it.
+	if l.stream != nil && l.stream.peer != nil {
+		l.stream.peer.free()
+		l.stream.peer = nil
 	}
 	// The same free path as a page-out (layer.tensors()); a release also
 	// gives up the KV cache and the block itself.

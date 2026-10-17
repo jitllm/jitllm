@@ -172,3 +172,14 @@ var moeFault string
 func SetMoEFault(f string) { moeFault = f }
 
 func moeFaulted(f string) bool { return moeFault == f }
+
+// peerFault names a deliberate error in the expert card's sheets, so its gate
+// can run the violation and demand it fails (RULE 10):
+//
+//	"wrong"  a sheet copied from the expert card is the next expert's
+var peerFault string
+
+// SetPeerFault arms one violation for the calls after it; "" disarms.
+func SetPeerFault(f string) { peerFault = f }
+
+func peerFaulted(f string) bool { return peerFault == f }
