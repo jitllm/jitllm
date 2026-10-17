@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 func graphModel(t *testing.T, name string) string {
@@ -258,4 +260,131 @@ func TestBlockGraphPromptMatchesTheHandPath(t *testing.T) {
 			}
 		})
 	}
+}
+
+// planFields is the part of a device plan a dense block's operations state.
+type planFields struct {
+	NEmbd, NHead, NKVHead, HeadDim, NRot, NFFN int
+	RMSEps, RopeBase, AttnScale                float64
+	AttnSoftcap                                float32
+	RopeNeox, QKNorm                           bool
+	Act                                        nn.ActKind
+}
+
+func fieldsOf(p *nn.LayerPlan) planFields {
+	return planFields{p.NEmbd, p.NHead, p.NKVHead, p.HeadDim, p.NRot, p.NFFN, p.RMSEps, p.RopeBase, p.AttnScale,
+		p.AttnSoftcap, p.RopeNeox, p.QKNorm, p.Act}
+}
+
+// flipRope swaps every rotary op of g to the other pair layout.
+func flipRope(g *graph.Graph) {
+	for i := range g.Ops {
+		if g.Ops[i].Kind != graph.OpRope {
+			continue
+		}
+		if g.Ops[i].Attr.Layout == graph.RopeNeox {
+			g.Ops[i].Attr.Layout = graph.RopeNorm
+		} else {
+			g.Ops[i].Attr.Layout = graph.RopeNeox
+		}
+	}
+}
+
+// TestBlockGraphLowersTheDevicePlan is Slice B's device half: a graphed
+// block's device plan takes its operations' fields from the graph
+// (lowerPlan), and they equal what the hand-written planFor derives from the
+// configuration for every block; a graph whose rotary layout is the other one
+// gives another plan (the lowering reads the graph, not the config). On a
+// CUDA device the graphed model decodes bit for bit as the model without the
+// graph with every block placed and at a partial seam.
+func TestBlockGraphLowersTheDevicePlan(t *testing.T) {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0"} {
+		t.Run(name, func(t *testing.T) {
+			p := graphModel(t, name)
+			ctl, err := Open(p, noTune)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ctl.Close()
+			gm, err := Open(p, noTune, WithBlockGraph(true))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer gm.Close()
+			sc, sg := ctl.NewState(8), gm.NewState(8)
+			defer sc.Close()
+			defer sg.Close()
+			sc.plan, sg.plan = sc.basePlan(), sg.basePlan()
+			for li := 0; li < gm.Cfg.NLayer; li++ {
+				hp, gp := sc.planFor(li), sg.planFor(li)
+				if !gp.Graphed || hp.Graphed {
+					t.Fatalf("block %d: graphed %v, control graphed %v", li, gp.Graphed, hp.Graphed)
+				}
+				if fieldsOf(hp) != fieldsOf(gp) {
+					t.Fatalf("block %d: the graph's plan %+v, the configuration's %+v", li, fieldsOf(gp), fieldsOf(hp))
+				}
+			}
+			// The violation: the other rotary layout in the graph reaches the plan.
+			flipRope(gm.graphs[0].g)
+			if fieldsOf(sg.planFor(0)) == fieldsOf(sc.planFor(0)) {
+				t.Fatal("a graph with the other rotary layout lowered to the configuration's plan: the plan does not read the graph")
+			}
+			flipRope(gm.graphs[0].g)
+			ids := gm.Vocab.Encode("The capital of France is", true)
+			toks := []int32{ids[1], ids[2], ids[3], ids[1], ids[2], ids[3]}
+			for _, seam := range []int{-1, gm.Cfg.NLayer / 2} {
+				// The tuners pinned (RULE 11c): an equality gate pins every
+				// knob its equality depends on, and the split and prologue
+				// tuners pick a reduction order per tier.
+				want := planDecode(t, ctl, ids, toks, seam)
+				if want == nil {
+					t.Skip("NO CUDA DEVICE: the device half proved nothing")
+				}
+				got := planDecode(t, gm, ids, toks, seam)
+				for i := range want {
+					for j := range want[i] {
+						if got[i][j] != want[i][j] {
+							t.Fatalf("seam %d step %d logit %d: graph %v, without %v", seam, i, j, got[i][j], want[i][j])
+						}
+					}
+				}
+				t.Logf("seam %d: device decode bit-identical over %d steps", seam, len(toks))
+			}
+		})
+	}
+}
+
+// planDecode decodes toks teacher-forced after ids on a fresh CUDA tier with
+// its tuners off, seam blocks placed (-1 every block); nil without CUDA.
+func planDecode(t *testing.T, m *Model, ids, toks []int32, seam int) [][]float32 {
+	t.Helper()
+	g, err := tier.OpenWith(tier.WithDevices("cuda"), tier.WithDeviceTune(tier.TuneOff),
+		tier.WithConfig(func(c *tier.Config) { c.NoFuse = true }))
+	if err != nil || g == nil {
+		return nil
+	}
+	defer g.Close()
+	s := m.NewState(len(ids) + len(toks) + 4)
+	defer s.Close()
+	if err := s.SetDevice(g); err != nil {
+		t.Fatal(err)
+	}
+	if seam >= 0 {
+		s.SetGPULayers(seam)
+	}
+	if want := seam; want >= 0 && s.GPULayers() != want || want < 0 && s.GPULayers() != m.Cfg.NLayer {
+		t.Fatalf("%d blocks placed, want seam %d", s.GPULayers(), seam)
+	}
+	l, err := s.Prefill(ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out [][]float32
+	for _, tok := range toks {
+		out = append(out, append([]float32(nil), l...))
+		if l, err = s.Forward(tok); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return out
 }

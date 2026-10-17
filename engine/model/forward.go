@@ -1147,57 +1147,7 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 	// Mixture blocks are offered too: Gate/Up/Down carry the bank and
 	// LayerWeights.Router carries ffn_gate_inp; PrepLayer declines by name if
 	// it cannot run one.
-	c := s.c
-	p := nn.LayerPlan{
-		// Whose blocks these are: a device holds one model's at a time.
-		Model: s.m.id,
-		NEmbd: c.NEmbd, NHead: c.NHead, NKVHead: c.NKVHead, HeadDim: c.HeadDim,
-		NRot: c.NRot, NFFN: c.NFFN, MaxSeq: s.maxSeq, Vocab: c.NVocab, FinalSoftcap: c.FinalSoftcap,
-		RMSEps: c.RMSEps, RopeBase: c.RopeBase, Act: c.Act, RopeNeox: c.RopeNeox,
-		NoPosEnc: c.NoPosEnc,
-		QKNorm:   c.QKNorm, QKNormWide: c.QKNormWide, QKNormPost: c.QKNormPost, NoExpertNorm: c.NoExpertNorm,
-		// The tier picks the local or global rotary table per block from
-		// this; zero means one kind of layer.
-		SWAPeriod: swaPeriodFor(c),
-		// The folded constants the host's rotary kernel reads, so the device
-		// builds its own table and the two tiers agree by construction.
-		RopeTab:    ropeTabPlanes(&s.m.rope, c.NRot),
-		RopeTabSWA: ropeTabPlanes(s.m.ropeSWA, c.NRotSWA),
-		RopeSplit:  c.RopeXD,
-		// The sliding window itself (TestSlidingWindowRunsOnTheDevice).
-		SWAWindow: windowFor(c, s.maxSeq),
-		SWALocal:  c.periodLocal,
-		// DeepSeek V4's model-wide geometry (ds4dev.go).
-		DS4: ds4PlanOf(c),
-		// Read off the loaded weights, not the architecture name: the
-		// post-norms are optional per-layer roles.
-		PostNorm:  s.m.hasPostNorm(),
-		NoPreNorm: s.m.hasNoPreNorm(),
-		// BitNet's inner norms, read off the weights as the post-norms are.
-		SubNorm:     s.m.hasSubNorm(),
-		AttnSoftcap: c.AttnSoftcap,
-		ActWin:      s.jit.ActWindow(),
-		// Zero for a dense model, which is what makes every existing plan
-		// unchanged.
-		NExpert: c.NExpert, NExpertUsed: c.NExpertUsed, NFFNExp: c.NFFNExp,
-		// The hybrid's shared expert and output gate, which a device must see
-		// to run or decline.
-		NFFNShExp: c.NFFNShExp, AttnOutGate: c.AttnOutGate,
-		// Llama 4's, each of which a device either runs or declines by name.
-		SWAChunked: c.SWAChunked, NoPEGlobal: c.NoPEGlobal, QKL2Norm: c.QKL2Norm,
-		AttnTempScale: float32(c.AttnTempScale), AttnTempFloor: float32(c.AttnTempFloor),
-		AttnTempOffset: float32(c.AttnTempOffs), ExpertWeightIn: c.ExpertWeightIn,
-		// Granite's: a device scales each block output at its residual add.
-		ResidualScale: c.ResidualScale,
-		// The classic block's (C6); UngatedFFN is per block, in planFor.
-		LayerNorm: c.LayerNorm, Parallel: c.Parallel,
-		// DBRX's clamp on q, k and v.
-		ClampKQV: c.ClampKQV,
-		// Gemma 4's; the block's own geometry is planFor's.
-		GeomSplit: c.GeomSplit(), HeadDimSWA: c.HeadDimSWA, NKVHeadSWA: c.NKVHeadSWA,
-		NRotSWA: c.NRotSWA, VNorm: c.VNorm,
-	}
-	s.plan, s.ldCand = p, ld
+	s.plan, s.ldCand = s.basePlan(), ld
 	hi := s.hi
 	if max >= 0 && s.lo+max < hi {
 		hi = s.lo + max
@@ -2010,6 +1960,61 @@ func (s *State) planExtra(hi int) uint64 {
 	return n*perPos*uint64(s.maxSeq)*uint64(max(s.nseq, 1)) + s.m.headReadBytes()
 }
 
+// basePlan is the model-wide device plan SetDevice offers blocks from, which
+// planFor adjusts per block.
+func (s *State) basePlan() nn.LayerPlan {
+	c := s.c
+	return nn.LayerPlan{
+		// Whose blocks these are: a device holds one model's at a time.
+		Model: s.m.id,
+		NEmbd: c.NEmbd, NHead: c.NHead, NKVHead: c.NKVHead, HeadDim: c.HeadDim,
+		NRot: c.NRot, NFFN: c.NFFN, MaxSeq: s.maxSeq, Vocab: c.NVocab, FinalSoftcap: c.FinalSoftcap,
+		RMSEps: c.RMSEps, RopeBase: c.RopeBase, Act: c.Act, RopeNeox: c.RopeNeox,
+		NoPosEnc: c.NoPosEnc,
+		QKNorm:   c.QKNorm, QKNormWide: c.QKNormWide, QKNormPost: c.QKNormPost, NoExpertNorm: c.NoExpertNorm,
+		// The tier picks the local or global rotary table per block from
+		// this; zero means one kind of layer.
+		SWAPeriod: swaPeriodFor(c),
+		// The folded constants the host's rotary kernel reads, so the device
+		// builds its own table and the two tiers agree by construction.
+		RopeTab:    ropeTabPlanes(&s.m.rope, c.NRot),
+		RopeTabSWA: ropeTabPlanes(s.m.ropeSWA, c.NRotSWA),
+		RopeSplit:  c.RopeXD,
+		// The sliding window itself (TestSlidingWindowRunsOnTheDevice).
+		SWAWindow: windowFor(c, s.maxSeq),
+		SWALocal:  c.periodLocal,
+		// DeepSeek V4's model-wide geometry (ds4dev.go).
+		DS4: ds4PlanOf(c),
+		// Read off the loaded weights, not the architecture name: the
+		// post-norms are optional per-layer roles.
+		PostNorm:  s.m.hasPostNorm(),
+		NoPreNorm: s.m.hasNoPreNorm(),
+		// BitNet's inner norms, read off the weights as the post-norms are.
+		SubNorm:     s.m.hasSubNorm(),
+		AttnSoftcap: c.AttnSoftcap,
+		ActWin:      s.jit.ActWindow(),
+		// Zero for a dense model, which is what makes every existing plan
+		// unchanged.
+		NExpert: c.NExpert, NExpertUsed: c.NExpertUsed, NFFNExp: c.NFFNExp,
+		// The hybrid's shared expert and output gate, which a device must see
+		// to run or decline.
+		NFFNShExp: c.NFFNShExp, AttnOutGate: c.AttnOutGate,
+		// Llama 4's, each of which a device either runs or declines by name.
+		SWAChunked: c.SWAChunked, NoPEGlobal: c.NoPEGlobal, QKL2Norm: c.QKL2Norm,
+		AttnTempScale: float32(c.AttnTempScale), AttnTempFloor: float32(c.AttnTempFloor),
+		AttnTempOffset: float32(c.AttnTempOffs), ExpertWeightIn: c.ExpertWeightIn,
+		// Granite's: a device scales each block output at its residual add.
+		ResidualScale: c.ResidualScale,
+		// The classic block's (C6); UngatedFFN is per block, in planFor.
+		LayerNorm: c.LayerNorm, Parallel: c.Parallel,
+		// DBRX's clamp on q, k and v.
+		ClampKQV: c.ClampKQV,
+		// Gemma 4's; the block's own geometry is planFor's.
+		GeomSplit: c.GeomSplit(), HeadDimSWA: c.HeadDimSWA, NKVHeadSWA: c.NKVHeadSWA,
+		NRotSWA: c.NRotSWA, VNorm: c.VNorm,
+	}
+}
+
 // planFor is the block's plan with no weights in it: s.plan adjusted for what
 // this block is. Nothing here reads the block's page, so nn.PlanDecliner can
 // answer before the page-in.
@@ -2106,6 +2111,11 @@ func (s *State) planFor(li int) *nn.LayerPlan {
 		plan.NonCausal = true
 		plan.Windowed = c.SWA(li)
 		plan.SWAWindow = 0
+	}
+	// A graphed block's device plan is lowered from its graph: the fields its
+	// operations state are the graph's, not the configuration's.
+	if plan.Graphed {
+		s.m.graphs[li].lowerPlan(&plan)
 	}
 	return &plan
 }

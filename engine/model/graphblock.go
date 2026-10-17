@@ -350,3 +350,37 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, p0, n int, 
 	s.layerOutScale(l, s.bx[:n*ne])
 	return nil
 }
+
+// lowerPlan writes what the block's graph states into a device plan: the
+// residual and head widths, the norm epsilon, the rotary (rotated width, base,
+// pair layout), the attention scale and softcap, the per-head q/k norm, the
+// activation and the FFN width -- each read from the op that carries it, so
+// the device runs the graph's block rather than the configuration's. The
+// plan's other fields (paging, placement, the model-wide head) are not
+// block operations and keep planFor's values.
+func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
+	g := lw.g
+	p.NEmbd = g.Values[g.In[0]].Width
+	p.QKNorm = false
+	for _, o := range g.Ops {
+		switch o.Kind {
+		case graph.OpNorm:
+			p.RMSEps = o.Attr.Eps
+		case graph.OpHeadNorm:
+			p.QKNorm = true
+		case graph.OpRope:
+			p.NRot, p.RopeBase, p.RopeNeox = o.Attr.NRot, o.Attr.Base, o.Attr.Layout == graph.RopeNeox
+		case graph.OpAttend:
+			p.NHead, p.NKVHead, p.HeadDim = o.Attr.NHead, o.Attr.NKVHead, o.Attr.HeadDim
+			p.AttnScale, p.AttnSoftcap = o.Attr.Scale, float32(o.Attr.Softcap)
+		case graph.OpActMul:
+			p.NFFN = g.Values[o.Out[0]].Width
+			switch o.Attr.Act {
+			case graph.ActSiLU:
+				p.Act = nn.ActSiLU
+			case graph.ActGELUTanh:
+				p.Act = nn.ActGELU
+			}
+		}
+	}
+}
