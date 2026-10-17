@@ -221,6 +221,9 @@ type devTier struct {
 	// subFn and mvcFn are layersSession and matVecSession bound to this view,
 	// built once (layersOnce, matVec).
 	subFn, mvcFn func(backend.Session)
+	// cutBuf is the gathered rows of a stream-major chunk a fallback runs in
+	// parts (streamcut.go), kept between chunks.
+	cutBuf []float32
 }
 
 // newDevice builds the device's view over sh: lane0, the zero session, and

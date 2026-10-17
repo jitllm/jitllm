@@ -6641,6 +6641,12 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			w = ww
 		}
 		bbs, dbs, sub := g.bbs[w], g.bs, max(g.promptW, nn.MaxPrefillChunk)
+		if roomFaulted("noscratch") || roomFaulted("noscratch-split") {
+			ok, bbs = false, nil
+		}
+		if roomFaulted("noscratch-split") {
+			sub = 32 // the width a starved device reserved: a chunk goes in 32-row parts
+		}
 		// A head over every row (a speculative verification) runs only in
 		// the one-submission path, with the per-row head built for it: every
 		// fallback below splits the chunk and projects the last row alone.
@@ -6667,14 +6673,9 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			}
 			return false
 		}
-		// Every fallback below cuts x by rows, which a stream-major residual
-		// (AltUp's, DeepSeek V4's) is not: such a chunk is refused whole, and
-		// the State runs it on the host.
-		if dbs != nil && dbs.p.Streams() > 1 && (head != nil && noFold || !ok || bbs == nil) {
-			g.LastErr = fmt.Sprintf("a %d-row chunk of %d streams this device would have to cut by rows", n,
-				dbs.p.Streams())
-			return false
-		}
+		// Every fallback below cuts x by rows. A stream-major residual (AltUp's,
+		// DeepSeek V4's, Kimi-K3's) holds a row's streams n rows apart, so its
+		// cut is rows [a, b) of every stream (cutRows), not a slice.
 		// A head rides only the one-submission path. Every fallback splits the
 		// chunk, so there the head runs on the last row as its own submission;
 		// so does a head the fold cannot take, rather than the whole chunk
@@ -6689,7 +6690,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			if dbs == nil || lo < hi && !g.layersFor(sid, lo, hi, pos, n, x, cs, csSWA, nil) {
 				return false
 			}
-			e, nr := dbs.p.NEmbd, dbs.p.RopeW()
+			e, nr, ns := dbs.p.NEmbd, dbs.p.RopeW(), dbs.p.Streams()
 			var rcs, rswa []float32
 			if nr > 0 {
 				rcs = cs[(n-1)*nr : n*nr]
@@ -6697,6 +6698,10 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 					rswa = csSWA[(n-1)*nr : n*nr]
 				}
 			}
+			last := g.cutRows(x, ns, e, n, n-1, 1)
+			defer g.uncutRows(x, last, ns, e, n, n-1, 1)
+			was := g.cutInputs(sid, n, n-1, 1)
+			defer g.restoreInputs(sid, was)
 			// The head's call resets recSteps (layersCall), and the chunk's
 			// blocks have advanced by then: a head that fails must still
 			// report them, or the caller restarts a hybrid from the embeddings
@@ -6704,7 +6709,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			g.mu.Lock()
 			adv := g.recSteps
 			g.mu.Unlock()
-			if !g.layersFor(sid, hi, hi, pos+n-1, 1, x[(n-1)*e:n*e], rcs, rswa, head) {
+			if !g.layersFor(sid, hi, hi, pos+n-1, 1, last, rcs, rswa, head) {
 				g.mu.Lock()
 				g.recSteps += adv
 				g.mu.Unlock()
@@ -6718,7 +6723,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			// consecutive sub-chunks being what the caller's own chunk loop would
 			// have issued.
 			sw := sub
-			nr := dbs.p.RopeW()
+			nr, ns := dbs.p.RopeW(), dbs.p.Streams()
 			g.mu.Lock()
 			g.PromptSplits++
 			g.mu.Unlock()
@@ -6732,7 +6737,12 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 					}
 				}
 				e := dbs.p.NEmbd
-				if !g.layersFor(sid, lo, hi, pos+off, m, x[off*e:(off+m)*e], rcs, rswa, nil) {
+				part := g.cutRows(x, ns, e, n, off, m)
+				was := g.cutInputs(sid, n, off, m)
+				ran := g.layersFor(sid, lo, hi, pos+off, m, part, rcs, rswa, nil)
+				g.restoreInputs(sid, was)
+				g.uncutRows(x, part, ns, e, n, off, m)
+				if !ran {
 					return false
 				}
 			}
@@ -6757,8 +6767,9 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			// refuses before submitting anything, so x is untouched and the rows go
 			// one at a time. Returning false would restart the chunk on the host,
 			// which on a hybrid re-runs linear blocks whose state already advanced.
+			ns := dbs.p.Streams()
 			for i := 0; i < n; i++ {
-				row := x[i*dbs.p.NEmbd : (i+1)*dbs.p.NEmbd]
+				row := g.cutRows(x, ns, dbs.p.NEmbd, n, i, 1)
 				var rcs, rswa []float32
 				if nr := dbs.p.RopeW(); nr > 0 {
 					rcs = cs[i*nr : (i+1)*nr]
@@ -6769,7 +6780,11 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 				// Each row is a token of the recurrence, and each linear block's
 				// halves flip with it, so row 1's recording is keyed apart from
 				// row 0's (rangeParity).
-				if !g.submit(sid, dbs, lo, hi, pos+i, row, rcs, rswa, nil) {
+				was := g.cutInputs(sid, n, i, 1)
+				ran := g.submit(sid, dbs, lo, hi, pos+i, row, rcs, rswa, nil)
+				g.restoreInputs(sid, was)
+				g.uncutRows(x, row, ns, dbs.p.NEmbd, n, i, 1)
+				if !ran {
 					return false
 				}
 			}

@@ -119,6 +119,8 @@ func recFaulted(f string) bool { return recFault == f }
 //	"nowin"    a ragged step's windowed or chunked layers attend every key
 //	"ragtab"   a ragged step's run-table prefill reads its rows' keys through
 //	          the decode descriptors, where those rows are empty
+//	"streamcutrows"  a fallback that runs a stream-major chunk in parts cuts
+//	          the streams after the first one row on
 var rowsFault string
 
 // SetRowsFault arms one violation for the calls after it; "" disarms.
@@ -136,6 +138,10 @@ func rowsFaulted(f string) bool { return rowsFault == f }
 //	"narrow"          no batched scratch wider than 64 rows fits: RowsWidth
 //	                  clamps the Scheduler's steps to it
 //	"narrow-lie"      the same, and RowsWidth says the requested width fits
+//	"noscratch"       no batched scratch fits a prompt chunk of any width: the
+//	                  layers' fallbacks run it a row at a time
+//	"noscratch-split" the same, and the width the device reserved is 32 rows:
+//	                  the fallback runs the chunk in 32-row parts
 //	"noseat"          no recurrent seat for a batch fits: RowsRoom says so,
 //	                  and the blocks come home before the step
 //	"noseat-lie"      the same, and RowsRoom says there is room
