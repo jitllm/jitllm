@@ -162,6 +162,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 					defer g.Close()
 					t.Logf("%s is %s", spec, g.Name())
 					t.Run("decode", func(t *testing.T) { decodeAllocs(t, m, g) })
+					t.Run("decode-deep", func(t *testing.T) { deepDecodeAllocs(t, m, g) })
 					t.Run("step", func(t *testing.T) { stepAllocs(t, m, g, stepAll) })
 					t.Run("step-one-head", func(t *testing.T) { stepAllocs(t, m, g, stepOneHead) })
 					t.Run("step-chunk", func(t *testing.T) { stepAllocs(t, m, g, stepChunk) })
@@ -413,6 +414,52 @@ func decodeAllocs(t *testing.T, m *Model, g *tier.GPU) decodeWindow {
 	return dw
 }
 
+// deepDecodeAllocs is decodeAllocs at depth: a prompt of several KV pages is
+// prefilled first, then warm tokens, then the window -- inside one page, so
+// no growth is paid in it. decodeAllocs' window sits under 256 positions, and
+// what a long context adds (more page-table rows, a longer staged plan, more
+// passes) was never in it: a 4096-token Qwen3.8-Flash-Next prompt decoded at
+// 14,500 allocations a token before a pass-per-page stream was found to be
+// the cause. A device arm only; the host's is TestLongDecodeDoesNotAllocate.
+func deepDecodeAllocs(t *testing.T, m *Model, g *tier.GPU) {
+	const page, warm, n = 128, 16, 32
+	ctx := 5*page + 16
+	s := m.NewState(ctx + warm + n + 8)
+	defer s.Close()
+	if err := s.SetDevice(g); err != nil {
+		t.Fatal(err)
+	}
+	if s.GPULayers() == 0 {
+		t.Skipf("no block placed on the device -- this arm proved nothing")
+	}
+	ids := make([]int32, ctx)
+	for i := range ids {
+		ids[i] = int32(5 + i%500)
+	}
+	if _, err := s.Prefill(ids); err != nil {
+		t.Fatal(err)
+	}
+	for i := range warm {
+		if _, err := s.Forward(int32(7 + i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := prefaultExperts(m); err != nil {
+		t.Fatal(err)
+	}
+	c0 := g.Stats()
+	r0 := m.container.Reads()
+	w := countAllocs(func() {
+		for i := range n {
+			if _, err := s.Forward(int32(3 + i%64)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	allocVerdict(t, fmt.Sprintf("%d of %d blocks placed, positions %d..%d", s.GPULayers(), m.Cfg.NLayer, s.pos-n, s.pos),
+		w, n, m.container.Reads()-r0, g.Stats().Captures-c0.Captures)
+}
+
 // decodeWindow is what the host ran over decodeAllocs' window: matvecs split
 // over k (nn.JIT.KSliced) and regions dispatched node-affine (nn.JIT.NUMA).
 type decodeWindow struct{ ksliced, affine int64 }
@@ -646,6 +693,7 @@ func TestOffCardDecodeDoesNotAllocate(t *testing.T) {
 					}
 					defer g.Close()
 					t.Run("decode", func(t *testing.T) { decodeAllocs(t, m, g) })
+					t.Run("decode-deep", func(t *testing.T) { deepDecodeAllocs(t, m, g) })
 					if where == "host" {
 						t.Run("step", func(t *testing.T) { stepAllocs(t, m, g, stepAll) })
 					}
