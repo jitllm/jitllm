@@ -90,16 +90,6 @@ func TestExpertPlacementIsHonoured(t *testing.T) {
 	}
 }
 
-func argmaxOf(v []float32) int {
-	b := 0
-	for i := range v {
-		if v[i] > v[b] {
-			b = i
-		}
-	}
-	return b
-}
-
 // TestOffCardExpertsRelocate holds a block whose experts run off the card to
 // the relocation principle: after the first token the sequence hops to a
 // second tier (blocks, KV pages and all), and later the blocks go home and come

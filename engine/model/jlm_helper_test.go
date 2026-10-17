@@ -463,3 +463,14 @@ func TestAServedCopyOpens(t *testing.T) {
 	}
 	m.Close()
 }
+
+// argmaxOf is the index of v's largest value, the first on a tie.
+func argmaxOf(v []float32) int {
+	b := 0
+	for i := range v {
+		if v[i] > v[b] {
+			b = i
+		}
+	}
+	return b
+}
