@@ -1053,10 +1053,13 @@ func (st *streamBank) splitWeights(w []float32) {
 	}
 }
 
-// admit takes up to max of this token's misses into a hybrid block's cache,
-// each into the coldest slot this token does not read, when the miss has
-// been selected more often than that slot's expert (an empty slot takes
-// any). The uploads are queued behind the launches that read this token's
+// admit takes this token's misses into a hybrid block's cache, each into the
+// coldest slot this token does not read, when the miss has been selected more
+// often than that slot's expert (an empty slot takes any). At most max of
+// them change a slot's expert; filling an empty slot spends neither max nor
+// the swap budget, since the only cost is the sheet, once, and a cache left
+// empty is all misses. The misses are the token's own, so a fill is bounded by
+// its selection. The uploads are queued behind the launches that read this token's
 // slots, so a slot changes only after its last reader.
 func (st *streamBank) admit(g *devTier, s backend.Session, l *layer, nExpert, max int) error {
 	st.items = st.items[:0]
@@ -1067,10 +1070,8 @@ func (st *streamBank) admit(g *devTier, s backend.Session, l *layer, nExpert, ma
 		g.swapsLeft = g.splitSwaps()
 	}
 	g.swapLi = st.li
+	nswap := 0
 	for i, e := range st.sel {
-		if len(st.items) >= max {
-			break
-		}
 		if st.hit[i] || st.slotOf[e] != -1 {
 			continue
 		}
@@ -1094,9 +1095,10 @@ func (st *streamBank) admit(g *devTier, s backend.Session, l *layer, nExpert, ma
 			// A slot changes hands only to an expert selected clearly more
 			// often: a sheet costs a transfer, and two experts trading one
 			// slot back and forth pay it every token.
-			if st.heat[e] < 2*st.heat[o]+heatMargin || g.swapsLeft <= 0 {
+			if st.heat[e] < 2*st.heat[o]+heatMargin || g.swapsLeft <= 0 || nswap >= max {
 				continue
 			}
+			nswap++
 			g.swapsLeft--
 			st.slotOf[o] = -1
 		}
