@@ -4621,3 +4621,22 @@ only 4+4 pages per model with 32 tiles per plane.
 **Reproduce:** `./scripts/cap 8G -- taskset -c 0,2,4,6,8,10 go run
 ./dev/tools/pagecomp -pages 4 -tiles 32 model.jlm` (`-tile`, `-disk`, `-pcie`
 and `-hbm` set the tile size and the link figures).
+
+## The read service: demand beats a wrong guess
+
+The streamed bank's cross-layer prefetch used to be one goroutine reading the
+whole predicted batch, and the next fill joined all of it before its own reads
+began, so one slow wrong prediction delayed experts the token needed. The
+join was also the lifetime guard: concurrent `EnsureRanges` calls could read
+the same chunk twice.
+
+Now `jlm.File` marks the chunks a caller is reading (`busy`), so a second
+caller waits for those chunks alone and never reads them twice; a frame being
+read is pinned, so eviction cannot hand it to another page. Guesses go through
+`Speculate` to a fixed set of workers; a demanded read never queues behind
+them, a demanded page still queued is read by its demander and the queued
+record finds it filled, and the fill drops guesses nobody started
+(`Speculate(nil)`). Frames held by guesses nobody has demanded are capped
+(`SetSpeculation`); a wrong guess stays charged until demanded or evicted.
+Gates: `format/jlm/readsvc_test.go`, each run against a violation. No timing
+claim is made here.

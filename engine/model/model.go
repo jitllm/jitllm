@@ -2208,35 +2208,11 @@ func (m *Model) ensureBlockSelected(li int, sel []uint32, base bool) error {
 	// that stay cached across tokens, which is the point of splitting them.
 	if m.container != nil && li < len(m.layers) && m.layers[li].expBank().e != nil &&
 		m.container.ExpertPaged(m.layers[li].expBank().e) {
-		bank := m.layers[li].expBank().e
-		// Pages already filled need no read, and the common warm case is that
-		// all are: the goroutines and their bookkeeping are for the cold ones.
-		var cold []int
-		for _, x := range sel {
-			p := m.container.ExpertPage(bank, int(x))
-			if p < 0 {
-				return fmt.Errorf("model: block %d: expert %d has no expert page", li, x)
-			}
-			if !m.container.Filled(p) {
-				cold = append(cold, p)
-			}
-		}
-		if len(cold) > 0 {
-			var wg sync.WaitGroup
-			errs := make([]error, len(cold))
-			for i, p := range cold {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					errs[i] = m.container.EnsurePage(p)
-				}()
-			}
-			wg.Wait()
-			for _, err := range errs {
-				if err != nil {
-					return err
-				}
-			}
+		// The cold pages are read together and a page a guess is already
+		// reading is joined (jlm.File.EnsureExperts); a warm selection
+		// allocates nothing.
+		if err := m.container.EnsureExperts(m.layers[li].expBank().e, sel); err != nil {
+			return fmt.Errorf("model: block %d: %w", li, err)
 		}
 		if base {
 			return m.ensureBlock(li)
@@ -2251,6 +2227,17 @@ func (m *Model) ensureBlockSelected(li int, sel []uint32, base bool) error {
 		return nil
 	}
 	return m.container.EnsureRanges(li, rs)
+}
+
+// speculateExperts queues the experts sel of block li's bank for the
+// container's background readers, replacing the guesses not yet started.
+func (m *Model) speculateExperts(li int, sel []uint32) {
+	if m.container == nil || li >= len(m.layers) {
+		return
+	}
+	if bank := m.layers[li].expBank().e; bank != nil && m.container.ExpertPaged(bank) {
+		m.container.Speculate(bank, sel)
+	}
 }
 
 // selectedRanges is ensureBlockSelected's plan over the block page: the base

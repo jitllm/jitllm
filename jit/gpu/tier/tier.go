@@ -970,10 +970,8 @@ type Stats struct {
 	StreamPinHalfTuned, StreamDirectTuned int
 	// AutoMeanBase is the model's mean mixture base GPU.AutoStream was told.
 	AutoMeanBase uint64
-	// StreamPrefetched counts experts the cross-layer prefetch read, and
-	// TStreamPrefetchWait the wall a fill spent joining it.
-	StreamPrefetched    int
-	TStreamPrefetchWait time.Duration
+	// StreamPrefetched counts experts the cross-layer prefetch guessed.
+	StreamPrefetched int
 	// ProbeHits of ProbeExperts routed experts were in the previous block's
 	// cross-layer prediction (Config.StreamProbe); ProbeFused counts probes
 	// skipped because the route fuses the rank with the weights.
@@ -1401,7 +1399,6 @@ func (s *Stats) add(o Stats) {
 	s.StreamDirectTuned = max(s.StreamDirectTuned, o.StreamDirectTuned)
 	s.AutoMeanBase = max(s.AutoMeanBase, o.AutoMeanBase)
 	s.StreamPrefetched += o.StreamPrefetched
-	s.TStreamPrefetchWait += o.TStreamPrefetchWait
 	s.ProbeHits += o.ProbeHits
 	s.ProbeExperts += o.ProbeExperts
 	s.ProbeFused += o.ProbeFused

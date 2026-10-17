@@ -77,7 +77,11 @@ func (f *File) startIO() {
 			defer f.io.done.Done()
 			for p := range f.io.q {
 				p.f.ioStart(len(p.dst))
-				_, p.err = p.h.ReadAt(p.dst, p.off)
+				if p.f.readHook != nil {
+					p.err = p.f.readHook(p.dst, p.off)
+				} else {
+					_, p.err = p.h.ReadAt(p.dst, p.off)
+				}
 				p.f.ioEnd()
 				p.wg.Done()
 			}

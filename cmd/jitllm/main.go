@@ -1091,8 +1091,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 				}
 			}
 			if ds.StreamPrefetched > 0 {
-				fmt.Fprintf(os.Stderr, "cross-layer prefetch: %d expert(s) read ahead, %.2f s joining them\n",
-					ds.StreamPrefetched, sec(ds.TStreamPrefetchWait))
+				fmt.Fprintf(os.Stderr, "cross-layer prefetch: %d expert(s) guessed\n", ds.StreamPrefetched)
 			}
 			if ds.ProbeExperts > 0 || ds.ProbeFused > 0 {
 				fmt.Fprintf(os.Stderr, "cross-layer probe: %d of %d routed experts predicted (%.1f%%), %d probe(s) skipped on a fused route\n",

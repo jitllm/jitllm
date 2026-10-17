@@ -1690,6 +1690,7 @@ func (s *State) ensureLayer(li int) func(*nn.LayerWeights) error {
 		w.Ensure, w.EnsureExperts = dst.Ensure, dst.EnsureExperts
 		w.PrefetchExperts, w.HostExperts, w.HostExpertsRows = dst.PrefetchExperts, dst.HostExperts, dst.HostExpertsRows
 		w.ExpertUses = dst.ExpertUses
+		w.SpeculateExperts = dst.SpeculateExperts
 		*dst = w
 		return nil
 	}
@@ -1714,6 +1715,7 @@ func (s *State) ensureSelected(li int) func(*nn.LayerWeights, []uint32) error {
 		w.Ensure, w.EnsureExperts = dst.Ensure, dst.EnsureExperts
 		w.PrefetchExperts, w.HostExperts = dst.PrefetchExperts, dst.HostExperts
 		w.ExpertUses = dst.ExpertUses
+		w.SpeculateExperts = dst.SpeculateExperts
 		*dst = w
 		return nil
 	}
@@ -1731,6 +1733,18 @@ func (s *State) prefetchSelected(li int) func([]uint32) error {
 			return nil
 		}
 		return s.m.ensureBlockSelected(li, sel, false)
+	}
+}
+
+// speculateSelected is the guess half of the read service for block li: the
+// sheets the previous block predicted, read in the background by the
+// container's workers and never waited for (jlm.File.Speculate). A bank that
+// is not in expert pages has nothing to guess at.
+func (s *State) speculateSelected(li int) func([]uint32) {
+	return func(sel []uint32) {
+		if s.c.MoE() {
+			s.m.speculateExperts(li, sel)
+		}
 	}
 }
 
@@ -1837,7 +1851,8 @@ func (s *State) offerRange(lo, hi int) {
 		// "Measurements once cited in engine/model's comments").
 		if bh, ok := ld.(nn.BlockHolder); ok && !named && bh.HoldsBlock(li) {
 			w := nn.LayerWeights{Ensure: s.ensureLayer(li), EnsureExperts: s.ensureSelected(li),
-				PrefetchExperts: s.prefetchSelected(li), HostExperts: s.hostExpertsFor(li),
+				PrefetchExperts: s.prefetchSelected(li), SpeculateExperts: s.speculateSelected(li),
+				HostExperts:     s.hostExpertsFor(li),
 				HostExpertsRows: s.hostExpertsRowsFor(li), ExpertUses: s.hot.layer(li)}
 			plan := *s.planFor(li)
 			if adm.PrepLayer(li, &plan, &w) {
@@ -1978,7 +1993,7 @@ func (s *State) blockWeights(li int) (nn.LayerWeights, error) {
 	// Every block, not only a mixture's: a device pager needs the host
 	// page re-read on every swap.
 	w.Ensure, w.EnsureExperts = s.ensureLayer(li), s.ensureSelected(li)
-	w.PrefetchExperts = s.prefetchSelected(li)
+	w.PrefetchExperts, w.SpeculateExperts = s.prefetchSelected(li), s.speculateSelected(li)
 	w.HostExperts, w.HostExpertsRows = s.hostExpertsFor(li), s.hostExpertsRowsFor(li)
 	w.ExpertUses = s.hot.layer(li)
 	if c.MoE() {
@@ -3103,6 +3118,7 @@ func (s *State) PrewarmGPU(n int) <-chan struct{} {
 				// the upload path ensures it.
 				w.Ensure, w.EnsureExperts = s.ensureLayer(li), s.ensureSelected(li)
 				w.PrefetchExperts, w.HostExperts = s.prefetchSelected(li), s.hostExpertsFor(li)
+				w.SpeculateExperts = s.speculateSelected(li)
 				w.HostExpertsRows = s.hostExpertsRowsFor(li)
 				w.ExpertUses = s.hot.layer(li)
 			}

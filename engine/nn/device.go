@@ -257,6 +257,14 @@ type LayerWeights struct {
 	// goroutine while the caller uploads sheets it already has (EnsureExperts
 	// writes through w and is not). nil means the caller must not overlap.
 	PrefetchExperts func(sel []uint32) error
+	// SpeculateExperts hands the host's read service a guess: sel's sheets
+	// are read ahead in the background, never waited for, and replace any
+	// earlier guess not yet started. A nil sel abandons the unstarted ones.
+	// A demanded read (PrefetchExperts, EnsureExperts) of a guessed sheet
+	// joins the guess's read and one that is not under way takes over its
+	// place, so a wrong guess never delays the experts a token needs. nil
+	// means the host does not speculate.
+	SpeculateExperts func(sel []uint32)
 	// HostExperts runs this block's routed experts on the host, for a device
 	// that keeps the rest of the block (hybrid execution): out = sum over i
 	// of w[i] * expert sel[i] applied to in, sel and w in selection order, in
