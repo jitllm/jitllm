@@ -3,6 +3,7 @@ package backend
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -75,4 +76,61 @@ func TestCopyPeerMovesTheBytes(t *testing.T) {
 	el := time.Since(t0)
 	t.Logf("%s -> %s: direct=%v, %d MiB x %d in %v = %.2f GiB/s per copy call", specs[0], specs[1], direct, n>>20, reps, el,
 		float64(n)*reps/el.Seconds()/(1<<30))
+}
+
+// TestCopyPeerCrossingLatency times the crossing a two-card MLP channel split
+// pays per block per token: the normed row to the second card and its partial
+// sum back, two CopyPeer calls of one row each, at the row widths of the
+// models the split was counted on. It logs the median and the 90th
+// percentile of the pair over many rounds; no latency is asserted (RULE 4).
+func TestCopyPeerCrossingLatency(t *testing.T) {
+	specs := testdevices.Take(t, 2, "cuda:0,cuda:1")
+	var devs [2]Device
+	for i := range devs {
+		ord := 0
+		if _, err := fmt.Sscanf(specs[i], "cuda:%d", &ord); err != nil {
+			t.Fatalf("%q is not a cuda:N spec", specs[i])
+		}
+		d, err := OpenCUDA(ord)
+		if err != nil {
+			t.Skipf("%s: %v", specs[i], err)
+		}
+		defer d.Close()
+		devs[i] = d
+	}
+	there, ok1 := devs[1].(PeerCopier)
+	back, ok0 := devs[0].(PeerCopier)
+	if !ok0 || !ok1 {
+		t.Skip("this backend has no PeerCopier")
+	}
+	for _, n := range []int{8 << 10, 16 << 10, 64 << 10} {
+		a, err := devs[0].Alloc(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := devs[1].Alloc(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const warm, reps = 50, 2000
+		lat := make([]time.Duration, 0, reps)
+		var direct bool
+		for i := 0; i < warm+reps; i++ {
+			t0 := time.Now()
+			if direct, err = there.CopyPeer(b, 0, devs[0], a, 0, n); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = back.CopyPeer(a, 0, devs[1], b, 0, n); err != nil {
+				t.Fatal(err)
+			}
+			if i >= warm {
+				lat = append(lat, time.Since(t0))
+			}
+		}
+		slices.Sort(lat)
+		t.Logf("%s <-> %s, %d KiB each way, direct=%v: crossing pair median %v, p90 %v, min %v over %d",
+			specs[0], specs[1], n>>10, direct, lat[len(lat)/2], lat[len(lat)*9/10], lat[0], reps)
+		a.Free()
+		b.Free()
+	}
 }
