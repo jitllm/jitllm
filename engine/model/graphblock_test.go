@@ -56,8 +56,8 @@ func graphDecode(t *testing.T, m *Model, n, frames int) ([][]float32, int, float
 // TestBlockGraphMatchesTheHandPath: llama's block and qwen3's (per-head q/k
 // norm) run through the block graph's lowering give the hand-written body's
 // logits bit for bit at every position, the graph path is the one that ran
-// (every block, every token), a warm token allocates nothing, a page budget
-// below the model gives the same answer, and the comparison can tell two
+// (every block, every token), a warm token allocates nothing resident or
+// paged, a page budget below the model gives the same answer, and the comparison can tell two
 // different computations apart (an f16 cache against f32).
 func TestBlockGraphMatchesTheHandPath(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0"} {
@@ -100,8 +100,11 @@ func TestBlockGraphMatchesTheHandPath(t *testing.T) {
 				if allocs > refAllocs {
 					t.Errorf("budget %d: a warm graph token allocates %.1f times, the hand-written %.1f", budget, allocs, refAllocs)
 				}
-				if budget == 0 && allocs != 0 {
-					t.Errorf("a warm resident graph token allocates %.1f times", allocs)
+				// Zero at every budget: a paged token faults its blocks in
+				// through the File's page readers (format/jlm/pageio.go),
+				// which allocate nothing warm.
+				if allocs != 0 || refAllocs != 0 {
+					t.Errorf("budget %d: a warm token allocates %.1f times on the graph, %.1f hand-written", budget, allocs, refAllocs)
 				}
 				for i := range want {
 					for j := range want[i] {
