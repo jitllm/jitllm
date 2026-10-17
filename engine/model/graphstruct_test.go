@@ -19,7 +19,8 @@ func TestCoverageIsStructural(t *testing.T) {
 		"synth-ernie45moe", "synth-bailingmoe2", "synth-dots1", "synth-minimaxm2",
 		"synth-phi2", "synth-starcoder", "synth-starcoder2", "synth-commandr", "synth-cohere2", "synth-stablelm",
 		"synth-stablelm-par", "synth-falcon", "synth-falcon40", "synth-nemotron", "synth-dbrx", "synth-apertus", "synth-glm4",
-		"synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss"} {
+		"synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-deepseek", "synth-deepseek-lite", "synth-deepseek-dense", "synth-deepseek-yarn", "synth-deepseek-yarn-af",
+		"synth-glm4moelite", "synth-kimilinear"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			named, err := Open(p, noTune, WithKVF16(false))
@@ -83,6 +84,20 @@ func TestEveryGraphOpHasALowering(t *testing.T) {
 	}
 	if mono == 0 {
 		t.Fatal("no op recorded as monolithic on a mixture model")
+	}
+	// A latent attention's projections run inside mlaProject.
+	dm, err := Open(graphModel(t, "synth-deepseek"), noTune)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dm.Close()
+	for _, l := range dm.BlockLowering(dm.Cfg.NLayer - 1) {
+		if l.Kind == graph.OpMatVec && l.Composed != !strings.HasPrefix(l.Host, "mlaProject") {
+			t.Fatalf("%s", l)
+		}
+		if l.Kind == graph.OpSlice && l.Composed {
+			t.Fatalf("%s is recorded as composed", l)
+		}
 	}
 	t.Logf("block 0:\n%v", m.BlockLowering(0))
 	saved := hostLowering[graph.OpRoute]

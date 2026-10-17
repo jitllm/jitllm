@@ -137,4 +137,4 @@ const actInChooser = "the tier's trial (tuneActIn), or Config.ActInSites / tier.
 
 // Rewrites is every rewrite a block graph is matched against, in the order a
 // plan explanation lists them.
-var Rewrites = []*Rewrite{Gate2In, ActInQKV, ActInO, ActInDown, NormGate, MLPPartition, MoEFewRow, MoEWaves}
+var Rewrites = []*Rewrite{Gate2In, ActInQKV, ActInO, ActInDown, NormGate, MLPPartition, MoEFewRow, MoEWaves, MLAAbsorb}

@@ -21,7 +21,7 @@ var graphMixtures = []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "olmoe-1b-7b-0924-i
 func init() { principleMixtures = append(principleMixtures, graphMixtures...) }
 
 func TestGraphMixturesPageWithTheSameAnswer(t *testing.T) {
-	for _, name := range []string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "tiny-random-OlmoeForCausalLM.jlm"} {
+	for _, name := range append([]string{"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "tiny-random-OlmoeForCausalLM.jlm"}, graphMLAMixtures...) {
 		t.Run(name, func(t *testing.T) {
 			src := jlmOf(t, testmodels.Path(name))
 			m, err := Open(src, noTune)

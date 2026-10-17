@@ -287,6 +287,8 @@ composer's work list:
 |---|---|---|
 | `clamp`, `head_norm`, `rope`, `kv_append` | `attnPrep` (one routine) | a kernel per op, the fused form a rewrite |
 | `attend` | `attendRow` and the chunk's attention, one per row class | the attention kernels chosen by row class and Target |
+| a latent attention's `matvec`s, `norm`s, `slice`s, `rope`s and `latent_append` | `mlaProject` / `mlaProjectRows` (one routine: both projections, the latent norms, the rotary, the absorb and the cache write) | a kernel per op; the absorb (`mla-absorb`) as the rewrite it is |
+| `attend_latent` | absorbed: the attention over the latent rows, then `mlaOutProject` / `mlaOutRows`' un-absorb | the absorbed and reference forms as two lowerings, chosen by row class |
 | `route`, `gather`, `expert_matvec`, `combine`, `gate_scalar` | `moe` / `moeBatch` | route and combine as generated kernels, the experts as grouped matvecs chosen by the routed pairs, fusions (`moe-few-row`, `moe-waves`) as rewrites over these ops |
 | every op, on a device | the block's `nn.LayerPlan`, lowered from the graph and run whole by the tier | per-op device kernels selected from the plan's ops |
 
@@ -360,7 +362,7 @@ it leaves the choice to whoever can. Every rewrite states three things:
 
 | when | who decides | rewrites |
 |---|---|---|
-| compile (`WhenCompile`) | a static guard: `Pays` at the executed row class and residency | `moe-few-row`, `moe-waves` |
+| compile (`WhenCompile`) | a static guard: `Pays` at the executed row class and residency | `moe-few-row`, `moe-waves`, `mla-absorb` |
 | load (`WhenLoad`) | the tier times the legal forms on this device and records a verdict keyed by the shape, `Target.Key` and the row class | `gate2in`, `actin-*`, `normgate`, `deep-tile` |
 | run (`WhenRun`) | an orchestrator, for its own objective (a server fitting more models wants capacity, not speed) | `mlp-partition` |
 
@@ -507,6 +509,50 @@ residency (`prepMixture`), so the site picks an entry and allocates nothing
 in each gate: with `MoEFewRow`'s guard refusing every target the narrow class
 puts the experts back on the f16 GEMM (`TestFewRowFormIsTheMixtureRewrite`),
 and with `MoEWaves`' refusing, no block-chunk runs in waves.
+
+### Latent attention in the op language
+
+An MLA block (DeepSeek-V2/V3/R1, Kimi-K2, Moonlight, Glm4MoeLite, and
+Kimi-Linear's NoPE attention blocks) is a dense block whose attention is
+`graph.MLA` (`Dense.MLA`), chosen by what the container states (a KV latent
+rank), never by the family's name. The graph states the reference form:
+
+    q              = matvec(attn_in, attn_q) | matvec(norm(matvec(attn_in, attn_q_a)), attn_q_b)
+    q_nope, q_pe   = slice(q, per head)                    HeadDim-NRot and NRot of each head
+    kv_a           = matvec(attn_in, attn_kv_a)            KVLoraRank + NRot
+    latent, k_pe   = norm(slice(kv_a)), slice(kv_a)        the latent's norm at its own epsilon
+    latent_append(latent, rope(k_pe))                      kv@0 -> kv@1: one row per position, the value its latent prefix
+    attn           = attend_latent(q_nope, rope(q_pe), attn_k_b, attn_v_b)   reads kv@1
+
+`attend_latent` turns the cached latent into each head's key (through the
+transpose of `attn_k_b`'s sheet) and value (`attn_v_b`'s) and attends. The
+verifier holds the latent norms to `LatentNormEps`, the rotary parts to heads
+of `NRot` (both turned, or neither on a NoPE block), the latent and rotary
+widths to the configuration, and the up-projections to banks of a sheet per
+head.
+
+`mla-absorb` is the algebra every tier runs: `attn_k_b` folded into the query
+and `attn_v_b` applied after the softmax, so the cache is read as one shared
+key head and no per-head key or value exists. It is decided at compile time,
+by the static guard, at every row class: it is the one form a tier lowers, and
+a block whose absorb is not legal refuses the model (its reference form has no
+lowering). Whether the reference form pays for a compute-bound prompt chunk,
+where the decompressed keys are read by every row, is open and unlowered.
+
+The router behind MLA is the mixture's: DeepSeek-V3's grouped sigmoid with
+its selection bias and routed scale, an ungated shared expert, and a dense lead
+of blocks with a dense FFN, all stated by the mixture ops above. Coverage is
+held by `TestBlockGraphMatchesTheHandPath`, the prompt and ragged-step gates
+(synth-deepseek, -lite, -dense, -yarn, -yarn-af, -glm4moelite, -kimilinear)
+and the MLA fixtures in the five principles' lists
+(`engine/model/graphmla_principles_test.go`). A ragged step of MLA States is
+not taken by `Step` (its cached rows are read per batch slot,
+`State.HostRefusal`); each runs alone.
+
+Still uncovered behind MLA, by structure: an indexer (DeepSeek-V3.2's
+lightning indexer, `UncoveredIndexer`), Kimi-K3's residual attention streams
+(`UncoveredStreams`) and its MLA output gate (`RoleAttnGate`, an unbound
+tensor).
 
 ### Task contract: Slice A
 

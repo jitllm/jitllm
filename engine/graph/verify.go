@@ -140,8 +140,8 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: wants one input, one output and one scale", at)
 				break
 			}
-			if o.Attr.Eps != eps {
-				bad("%s: epsilon %g, the configuration states %g", at, o.Attr.Eps, eps)
+			if e := normEps(c, o, eps); o.Attr.Eps != e {
+				bad("%s: epsilon %g, the configuration states %g", at, o.Attr.Eps, e)
 			}
 			if width(o.Out[0]) != width(o.In[0]) {
 				bad("%s: width %d into %d", at, width(o.In[0]), width(o.Out[0]))
@@ -169,13 +169,18 @@ func Verify(g *Graph, f Facts) error {
 				break
 			}
 			a := o.Attr
-			if a.Layout != c.Layout || a.Freqs != c.RopeFreqs || a.NRot != c.NRot || a.Base != c.Base || a.HeadDim != c.HeadDim ||
+			// A latent attention turns its rotary parts alone: heads of NRot.
+			hd := c.HeadDim
+			if c.MLA != nil {
+				hd = c.NRot
+			}
+			if a.Layout != c.Layout || a.Freqs != c.RopeFreqs || a.NRot != c.NRot || a.Base != c.Base || a.HeadDim != hd ||
 				a.Mscale != c.Mscale {
 				bad("%s: %v pairs over %d of %d at base %g; the configuration states %v over %d of %d at %g",
-					at, a.Layout, a.NRot, a.HeadDim, a.Base, c.Layout, c.NRot, c.HeadDim, c.Base)
+					at, a.Layout, a.NRot, a.HeadDim, a.Base, c.Layout, c.NRot, hd, c.Base)
 			}
-			if width(o.In[0])%c.HeadDim != 0 || width(o.Out[0]) != width(o.In[0]) {
-				bad("%s: a row of %d is not whole heads of %d", at, width(o.In[0]), c.HeadDim)
+			if width(o.In[0])%hd != 0 || width(o.Out[0]) != width(o.In[0]) {
+				bad("%s: a row of %d is not whole heads of %d", at, width(o.In[0]), hd)
 			}
 		case OpKVAppend:
 			if !ins(2) || !outs(0) {
@@ -253,6 +258,8 @@ func Verify(g *Graph, f Facts) error {
 			if o.Attr.Bound <= 0 || o.Attr.Bound != c.Clamp || width(o.Out[0]) != width(o.In[0]) {
 				bad("%s: bound %g, the configuration states %g", at, o.Attr.Bound, c.Clamp)
 			}
+		case OpSlice, OpLatentAppend, OpAttendLatent:
+			verifyMLAOp(o, at, c, width, ins, outs, bad)
 		case OpRoute, OpGather, OpExpertMatVec, OpCombine, OpGateScalar:
 			verifyMixtureOp(o, at, f.Mixture, width, ins, outs, bad)
 		case OpGatedDelta:
@@ -271,6 +278,18 @@ func Verify(g *Graph, f Facts) error {
 			if len(o.Reads) != 1 || o.Reads[0].Name != "rec" || len(o.Writes) != 1 || o.Writes[0].Name != "rec" {
 				bad("%s: reads and writes no recurrence version", at)
 			}
+		}
+	}
+	// A latent attention turns both its rotary parts, or neither (NoPE).
+	if c.MLA != nil {
+		ropes := 0
+		for _, o := range g.Ops {
+			if o.Kind == OpRope {
+				ropes++
+			}
+		}
+		if want := map[bool]int{false: 2, true: 0}[c.MLA.NoRope]; ropes != want {
+			bad("graph: block %d turns %d rotary parts; the configuration states %d", g.Block, ropes, want)
 		}
 	}
 	for _, id := range g.Out {
@@ -387,4 +406,13 @@ func Unbound(g *Graph, f Facts) []jlm.Role {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
+}
+
+// normEps is the epsilon an RMSNorm is held to: a latent attention's norms
+// over its q and kv latents state their own (Config.LatentNormEps).
+func normEps(c *Dense, o Op, eps float64) float64 {
+	if c.MLA != nil && len(o.Weight) == 1 && (o.Weight[0].Role == jlm.RoleAttnQANorm || o.Weight[0].Role == jlm.RoleAttnKVANorm) {
+		return c.MLA.LatentEps
+	}
+	return eps
 }

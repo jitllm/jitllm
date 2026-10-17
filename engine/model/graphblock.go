@@ -52,7 +52,7 @@ const (
 	UncoveredMixWeightIn   = "a mixture: the router's weight scales the experts' input"
 	UncoveredUngated       = "an activation the op language does not state"
 	UncoveredOutGate       = "an attention output gate"
-	UncoveredMLA           = "MLA"
+	UncoveredMLA           = "a q latent without the latent KV cache"
 	UncoveredValueWidth    = "a value head wider or narrower than the key head"
 	UncoveredKVShared      = "KV sharing or an extra cached head"
 	UncoveredIndexer       = "an attention indexer or sparse key selection"
@@ -100,11 +100,11 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredUngated
 	case c.AttnOutGate:
 		return UncoveredOutGate
-	case c.MLA() || c.QLoraRank != 0:
+	case !c.MLA() && c.QLoraRank != 0:
 		return UncoveredMLA
-	case c.HeadDimV != 0 && c.HeadDimV != c.HeadDimAt(li):
+	case !c.MLA() && c.HeadDimV != 0 && c.HeadDimV != c.HeadDimAt(li):
 		return UncoveredValueWidth
-	case c.KVShared(li) || c.extraKVHead(li) || !hasRole(roles, jlm.RoleAttnV):
+	case c.KVShared(li) || c.extraKVHead(li) || !c.MLA() && !hasRole(roles, jlm.RoleAttnV):
 		return UncoveredKVShared
 	case c.Indexer() || c.MSA() || c.IdxHeads != 0 || c.QSARatio != 0:
 		return UncoveredIndexer
@@ -240,6 +240,11 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 	if tab.Scale != 1 {
 		d.Mscale = tab.Scale
 	}
+	if c.MLA() {
+		d.MLA = &graph.MLA{NHead: c.NHead, HeadDim: c.HeadDimAt(li), NRot: d.NRot, KVLoraRank: c.KVLoraRank,
+			QLoraRank: c.QLoraRank, HeadDimV: c.HeadDimV, LatentEps: float64(c.LatentNormEps),
+			NoRope: c.NoPosEnc || !c.RopeAt(li)}
+	}
 	f := graph.Facts{Config: d, Inventory: inv}
 	if c.MoEAt(li) {
 		mf, ok := m.mixtureFacts(li)
@@ -267,6 +272,10 @@ type denseLowering struct {
 	// down; postAttn and postFFN, an RMSNorm over each sublayer's output
 	// before its residual add.
 	par, shared, ungated, postAttn, postFFN bool
+	// mla says the block's attention is latent (graph.Dense.MLA), run
+	// absorbed (graph.MLAAbsorb) through mlaProject, the attention over the
+	// latent rows and the un-absorb.
+	mla bool
 	// offered is every rewrite matched on the block (nn.LayerPlan.Rewrites),
 	// which the device asks at its own Target, and rewrites every one's
 	// target-free decision, for the plan explanation.
@@ -318,32 +327,62 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 	if preNorm(jlm.RoleFFNNorm) {
 		ffnPre = last()
 	}
-	if err := run([]step{{graph.OpMatVec, jlm.RoleAttnQ}, {graph.OpMatVec, jlm.RoleAttnK}, {graph.OpMatVec, jlm.RoleAttnV}}); err != nil {
-		return nil, err
-	}
-	// DBRX's clamps: attnPrep applies them first.
-	if take(graph.OpClamp, 0) {
-		if err := run([]step{{graph.OpClamp, 0}, {graph.OpClamp, 0}}); err != nil {
-			return nil, err
-		}
-	}
-	// The q/k norms, per head (qwen3) or over each whole projection
-	// (OLMoE): attnPrep applies either, by QKNormShapeAt.
-	for _, k := range []graph.OpKind{graph.OpHeadNorm, graph.OpNorm} {
-		if !lw.qk && take(k, jlm.RoleAttnQNorm) {
-			if !take(k, jlm.RoleAttnKNorm) {
-				return nil, fail(k.String() + " of attn_k_norm")
+	qa := take(graph.OpMatVec, jlm.RoleAttnQA)
+	if qa || (i+1 < len(ops) && ops[i].Kind == graph.OpMatVec && ops[i+1].Kind == graph.OpSlice) {
+		// The latent attention, as mlaProject computes it.
+		lw.mla = true
+		if qa {
+			if err := run([]step{{graph.OpNorm, jlm.RoleAttnQANorm}, {graph.OpMatVec, jlm.RoleAttnQB}}); err != nil {
+				return nil, err
 			}
-			lw.qk = true
+		} else if err := run([]step{{graph.OpMatVec, jlm.RoleAttnQ}}); err != nil {
+			return nil, err
 		}
-	}
-	// The rotary, absent on a block without one.
-	if take(graph.OpRope, 0) {
-		if err := run([]step{{graph.OpRope, 0}}); err != nil {
+		if err := run([]step{{graph.OpSlice, 0}, {graph.OpSlice, 0}}); err != nil {
+			return nil, err
+		}
+		rot := take(graph.OpRope, 0)
+		if err := run([]step{{graph.OpMatVec, jlm.RoleAttnKVA}, {graph.OpSlice, 0}, {graph.OpNorm, jlm.RoleAttnKVANorm},
+			{graph.OpSlice, 0}}); err != nil {
+			return nil, err
+		}
+		if rot != take(graph.OpRope, 0) {
+			return nil, fail("both rotary parts turned, or neither")
+		}
+		if err := run([]step{{graph.OpLatentAppend, 0}, {graph.OpAttendLatent, 0}}); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := run([]step{{graph.OpMatVec, jlm.RoleAttnQ}, {graph.OpMatVec, jlm.RoleAttnK}, {graph.OpMatVec, jlm.RoleAttnV}}); err != nil {
+			return nil, err
+		}
+		// DBRX's clamps: attnPrep applies them first.
+		if take(graph.OpClamp, 0) {
+			if err := run([]step{{graph.OpClamp, 0}, {graph.OpClamp, 0}}); err != nil {
+				return nil, err
+			}
+		}
+		// The q/k norms, per head (qwen3) or over each whole projection
+		// (OLMoE): attnPrep applies either, by QKNormShapeAt.
+		for _, k := range []graph.OpKind{graph.OpHeadNorm, graph.OpNorm} {
+			if !lw.qk && take(k, jlm.RoleAttnQNorm) {
+				if !take(k, jlm.RoleAttnKNorm) {
+					return nil, fail(k.String() + " of attn_k_norm")
+				}
+				lw.qk = true
+			}
+		}
+		// The rotary, absent on a block without one.
+		if take(graph.OpRope, 0) {
+			if err := run([]step{{graph.OpRope, 0}}); err != nil {
+				return nil, err
+			}
+		}
+		if err := run([]step{{graph.OpKVAppend, 0}, {graph.OpAttend, 0}}); err != nil {
 			return nil, err
 		}
 	}
-	if err := run([]step{{graph.OpKVAppend, 0}, {graph.OpAttend, 0}, {graph.OpMatVec, jlm.RoleAttnOut}}); err != nil {
+	if err := run([]step{{graph.OpMatVec, jlm.RoleAttnOut}}); err != nil {
 		return nil, err
 	}
 	lw.postAttn = take(graph.OpNorm, jlm.RolePostAttnNorm)
@@ -470,6 +509,9 @@ func (m *Model) buildGraphs() error {
 			return fmt.Errorf("model: block %d graph's q/k norm is %v and attnPrep's %v", li, lw.qk, m.Cfg.QKNormAt(li))
 		}
 		lw.rewrites = graph.Apply(g, graph.Rewrites...)
+		if lw.mla && !rewriteLegal(lw.rewrites, graph.MLAAbsorb.Name) {
+			return fmt.Errorf("model: block %d: the latent attention is not absorbed (%s), and its reference form has no lowering", li, graph.MLAAbsorb.Name)
+		}
 		lw.offered = graph.Match(g, graph.Rewrites...)
 		m.graphs[li] = lw
 	}
@@ -585,49 +627,66 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 	}
 	s.jit.NewInput()
 	m.trace(li, "attn_norm", s.h)
-	// matvec q, k, v (one region inside a fused run, as the body groups them)
-	kvd := c.KVDimAt(li)
-	s.aheadOf(li, 0, [nn.MaxGroup]*tensor{&l.wo})
-	grouped := s.groupOf(s.h, [nn.MaxGroup]*tensor{&l.wq, &l.wk, &l.wv}, [nn.MaxGroup][]float32{s.q, s.kc, s.vc}, 3)
-	if grouped {
-		s.addBiasRows(s.q, l.bq, 1)
+	attnResid := false
+	if lw.mla {
+		// [matvec q_a, norm,] matvec q, the slices, [rope,] matvec kv_a, the
+		// latent's norm, [rope,] latent_append: mlaProject; attend_latent,
+		// absorbed (graph.MLAAbsorb): attendRow over the latent rows, then
+		// mlaOutProject's un-absorb and o.
+		if err := s.mlaProject(li, l, s.h, s.ropeTable(li, s.cs, s.csSWA, 0), 0, s.pos); err != nil {
+			return err
+		}
+		m.trace(li, "k", s.kc[:c.KVDim()])
+		s.attendRow(li, l)
+		if err := s.mlaOutProject(s.h, l); err != nil {
+			return err
+		}
+		s.addBias(s.h, l.bo)
 	} else {
-		if _, err := s.projectQ(l, s.q, s.ogate, s.h, 1, false); err != nil {
-			return err
+		// matvec q, k, v (one region inside a fused run, as the body groups them)
+		kvd := c.KVDimAt(li)
+		s.aheadOf(li, 0, [nn.MaxGroup]*tensor{&l.wo})
+		grouped := s.groupOf(s.h, [nn.MaxGroup]*tensor{&l.wq, &l.wk, &l.wv}, [nn.MaxGroup][]float32{s.q, s.kc, s.vc}, 3)
+		if grouped {
+			s.addBiasRows(s.q, l.bq, 1)
+		} else {
+			if _, err := s.projectQ(l, s.q, s.ogate, s.h, 1, false); err != nil {
+				return err
+			}
+			if err := s.mv(s.kc, l.wk, s.h); err != nil {
+				return err
+			}
 		}
-		if err := s.mv(s.kc, l.wk, s.h); err != nil {
-			return err
+		s.addBias(s.kc, l.bk)
+		if !grouped {
+			if err := s.mv(s.vc, l.wv, s.h); err != nil {
+				return err
+			}
 		}
-	}
-	s.addBias(s.kc, l.bk)
-	if !grouped {
-		if err := s.mv(s.vc, l.wv, s.h); err != nil {
-			return err
+		s.addBias(s.vc, l.bv)
+		// [head_norm q, head_norm k,] rope q, rope k, kv_append: attnPrep
+		s.attnPrep(l, s.q, s.kc[:kvd], s.vc[:kvd], s.ropeTable(li, s.cs, s.csSWA, 0), li, 0, s.pos)
+		m.trace(li, "k", s.kc[:kvd])
+		// attend
+		s.attendRow(li, l)
+		// matvec o, add into the residual (folded into o's rows where the run
+		// fuses it)
+		qd := c.QDimAt(li)
+		src := s.xb
+		plain := s.residFold && l.bo == nil && !lw.postAttn
+		if plain {
+			s.grp.Resid, s.grp.Alpha = s.x, float32(c.ResidualScale)
 		}
-	}
-	s.addBias(s.vc, l.bv)
-	// [head_norm q, head_norm k,] rope q, rope k, kv_append: attnPrep
-	s.attnPrep(l, s.q, s.kc[:kvd], s.vc[:kvd], s.ropeTable(li, s.cs, s.csSWA, 0), li, 0, s.pos)
-	m.trace(li, "k", s.kc[:kvd])
-	// attend
-	s.attendRow(li, l)
-	// matvec o, add into the residual (folded into o's rows where the run
-	// fuses it)
-	qd := c.QDimAt(li)
-	src := s.xb
-	plain := s.residFold && l.bo == nil && !lw.postAttn
-	if plain {
-		s.grp.Resid, s.grp.Alpha = s.x, float32(c.ResidualScale)
-	}
-	s.aheadOf(li, 1, [nn.MaxGroup]*tensor{&l.gate, &l.up})
-	attnResid := plain && s.groupOf(src[:qd], [nn.MaxGroup]*tensor{&l.wo}, [nn.MaxGroup][]float32{s.h}, 1)
-	s.grp.Resid = nil
-	if !attnResid && !s.groupOf(src[:qd], [nn.MaxGroup]*tensor{&l.wo}, [nn.MaxGroup][]float32{s.h}, 1) {
-		if err := s.mv(s.h, l.wo, src[:qd]); err != nil {
-			return err
+		s.aheadOf(li, 1, [nn.MaxGroup]*tensor{&l.gate, &l.up})
+		attnResid = plain && s.groupOf(src[:qd], [nn.MaxGroup]*tensor{&l.wo}, [nn.MaxGroup][]float32{s.h}, 1)
+		s.grp.Resid = nil
+		if !attnResid && !s.groupOf(src[:qd], [nn.MaxGroup]*tensor{&l.wo}, [nn.MaxGroup][]float32{s.h}, 1) {
+			if err := s.mv(s.h, l.wo, src[:qd]); err != nil {
+				return err
+			}
 		}
+		s.addBias(s.h, l.bo)
 	}
-	s.addBias(s.h, l.bo)
 	// [norm(o)] before the residual add
 	if lw.postAttn {
 		s.rmsnorm(s.h, s.h, l.postAttnNorm, c.RMSEps)
@@ -692,7 +751,7 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 		s.grp.Resid, s.grp.Alpha = s.x, float32(c.ResidualScale)
 	}
 	s.aheadNext(li)
-	grouped = s.groupOf(gate, [nn.MaxGroup]*tensor{&l.down}, [nn.MaxGroup][]float32{s.h}, 1)
+	grouped := s.groupOf(gate, [nn.MaxGroup]*tensor{&l.down}, [nn.MaxGroup][]float32{s.h}, 1)
 	ffnResid := grouped && s.grp.Resid != nil
 	s.grp.ActUp, s.grp.Resid = nil, nil
 	if !grouped {
@@ -730,6 +789,21 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, p0, n int, 
 	s.batchNormB(s.bh, s.bx, l.attnNorm, l.attnNormB, ne, n)
 	s.parallelIn(l, lw, n)
 	s.tock(opRMSNorm, tn)
+	if lw.mla {
+		// The latent attention over the chunk: every row's projections,
+		// rotary and latent append (mlaProjectRows) before any row attends,
+		// then the absorbed attention and mlaOutRows' un-absorb and o.
+		if err := s.mlaProjectRows(li, l, n, s.bcs, s.bcsSWA,
+			func(i int) (int, int) { return slot, p0 + i }); err != nil {
+			return err
+		}
+		s.attendRows(li, l, slot, p0, n, c.QDimAt(li), c.AttnScale, bidir, true)
+		if err := s.mlaOutRows(l, n); err != nil {
+			return err
+		}
+		s.addBiasRows(s.bh, l.bo, n)
+		return s.rowsResidFFN(li, l, lw, n, false)
+	}
 	// matvec q, k, v over the chunk
 	kvDim, qDim := c.KVDimAt(li), c.QDimAt(li)
 	if _, err := s.projectQ(l, s.bq, s.ogate, s.bh[:n*ne], n, true); err != nil {
@@ -774,6 +848,21 @@ func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, seq, pos
 	s.batchNormB(s.bh, s.bx, l.attnNorm, l.attnNormB, ne, n)
 	s.parallelIn(l, lw, n)
 	s.tock(opRMSNorm, t0)
+	if lw.mla {
+		// The latent attention over the step: each row its own sequence's
+		// slot and position (mlaProjectRows), the absorbed attention, then
+		// mlaOutRows' un-absorb and o.
+		if err := s.mlaProjectRows(li, l, n, cs, csSWA,
+			func(i int) (int, int) { return seq[i], pos[i] }); err != nil {
+			return err
+		}
+		s.rowsAttend(li, l, n, seq, pos, unitHeads, units, astride, scale)
+		if err := s.mlaOutRows(l, n); err != nil {
+			return err
+		}
+		s.addBiasRows(s.bh, l.bo, n)
+		return s.rowsResidFFN(li, l, lw, n, true)
+	}
 	// matvec q, k, v over the step's rows
 	kvDim, qDim := c.KVDimAt(li), c.QDimAt(li)
 	if _, err := s.projectQ(l, s.bq, s.ogate, s.bh, n, true); err != nil {
@@ -926,6 +1015,11 @@ func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
 				p.Act = a
 			}
 		case graph.OpNorm:
+			// A latent attention's q and kv latent norms carry their own
+			// epsilon, which the plan states apart (planFor's).
+			if r := o.Weight[0].Role; r == jlm.RoleAttnQANorm || r == jlm.RoleAttnKVANorm {
+				break
+			}
 			p.RMSEps = o.Attr.Eps
 			if len(o.Weight) == 1 && o.Weight[0].Role == jlm.RoleAttnQNorm {
 				p.QKNorm = true
@@ -939,6 +1033,8 @@ func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
 			if !windowed {
 				p.NRot, p.RopeBase = o.Attr.NRot, o.Attr.Base
 			}
+		case graph.OpAttendLatent:
+			p.NHead, p.HeadDim, p.AttnScale = o.Attr.NHead, o.Attr.HeadDim, o.Attr.Scale
 		case graph.OpAttend:
 			p.NHead, p.NKVHead, p.HeadDim = o.Attr.NHead, o.Attr.NKVHead, o.Attr.HeadDim
 			p.AttnScale, p.AttnSoftcap = o.Attr.Scale, float32(o.Attr.Softcap)
@@ -1017,7 +1113,16 @@ var hostLowering = map[graph.OpKind]struct {
 	graph.OpLayerNorm:    {"nn LayerNorm (generated, by width)", true},
 	graph.OpAct:          {"nn activation (generated, by kind)", true},
 	graph.OpClamp:        {"attnPrep: q/k norm, rotary and cache append as one routine", false},
+	graph.OpSlice:        {mlaProjectRoutine, false},
+	graph.OpLatentAppend: {mlaProjectRoutine, false},
+	graph.OpAttendLatent: {"absorbed (mla-absorb): attendRow / the chunk's attention over the latent rows, then mlaOutProject's un-absorb", false},
 }
+
+// mlaProjectRoutine is the host routine every op of a latent attention runs
+// in before the attention: the projections, the latent norms, the rotary,
+// the absorb into the query and the latent append (mlaProject,
+// mlaProjectRows).
+const mlaProjectRoutine = "mlaProject: the q and kv projections, latent norms, rotary, absorb and latent append as one routine"
 
 // BlockLowering is every op of text block li's graph with its lowering, nil
 // where the block is not on the graph.
@@ -1027,8 +1132,22 @@ func (m *Model) BlockLowering(li int) []OpLowering {
 		return nil
 	}
 	out := make([]OpLowering, len(g.Ops))
+	// A latent attention's projections and norms before its attention run
+	// inside mlaProject, not as the generated op their kind names.
+	mlaFrom, mlaTo := -1, -1
+	for i, o := range g.Ops {
+		if o.Kind == graph.OpMatVec && (o.Weight[0].Role == jlm.RoleAttnQA || o.Weight[0].Role == jlm.RoleAttnQ) && mlaFrom < 0 {
+			mlaFrom = i
+		}
+		if o.Kind == graph.OpAttendLatent {
+			mlaTo = i
+		}
+	}
 	for i, o := range g.Ops {
 		h := hostLowering[o.Kind]
+		if mlaTo >= 0 && i >= mlaFrom && i < mlaTo {
+			h.routine, h.composed = mlaProjectRoutine, false
+		}
 		out[i] = OpLowering{Op: i, Kind: o.Kind, Host: h.routine, Composed: h.composed,
 			Device: "the block's plan, lowered from the graph (lowerPlan) and run by the tier as one block"}
 	}
@@ -1042,4 +1161,15 @@ func (l OpLowering) String() string {
 		how = "composed"
 	}
 	return fmt.Sprintf("op %d %s: host %s [%s]", l.Op, l.Kind, l.Host, how)
+}
+
+// rewriteLegal is whether decisions holds a legal decision of the rewrite
+// named name.
+func rewriteLegal(decisions []graph.Decision, name string) bool {
+	for _, d := range decisions {
+		if d.Rewrite == name && d.Err == nil {
+			return true
+		}
+	}
+	return false
 }

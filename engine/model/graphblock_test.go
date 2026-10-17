@@ -70,7 +70,8 @@ func TestBlockGraphMatchesTheHandPath(t *testing.T) {
 		"olmoe-1b-7b-0924-instruct-Q4_K_M", "synth-qwen2moe", "synth-glm4moe", "synth-ernie45moe", "synth-bailingmoe2",
 		"synth-dots1", "synth-minimaxm2", "synth-seedoss", "synth-smollm3", "synth-lfm2",
 		"synth-starcoder", "synth-starcoder2", "synth-stablelm", "synth-nemotron", "synth-dbrx", "synth-apertus", "synth-glm4",
-		"synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af"} {
+		"synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-deepseek", "synth-deepseek-lite",
+		"synth-deepseek-dense", "synth-deepseek-yarn", "synth-deepseek-yarn-af", "synth-glm4moelite", "synth-kimilinear"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
@@ -153,15 +154,16 @@ func TestBlockGraphMatchesTheHandPath(t *testing.T) {
 	}
 }
 
-// TestBlockGraphRefusesWhatItDoesNotCover: a near miss (gemma-3's block has
-// post-norms, a sliding window and GELU) is refused at Open, naming why,
-// rather than run through a lowering that would drop them.
+// TestBlockGraphRefusesWhatItDoesNotCover: a model with blocks the op
+// language does not state (gemma3n's AltUp streams, LAuReL and gaussian
+// top-k) is refused at Open under WithBlockGraph(true), naming why, rather
+// than run through a lowering that would drop them.
 func TestBlockGraphRefusesWhatItDoesNotCover(t *testing.T) {
-	p := graphModel(t, "gemma-3-1b-it-Q4_K_M")
+	p := graphModel(t, "synth-gemma3n")
 	m, err := Open(p, noTune, WithBlockGraph(true))
 	if err == nil {
 		m.Close()
-		t.Fatal("gemma-3 opened under WithBlockGraph")
+		t.Fatal("gemma3n opened under WithBlockGraph")
 	}
 	named := false
 	for _, r := range UncoveredReasons {
@@ -192,6 +194,44 @@ func TestBlockGraphOfTheRealContainersVerifies(t *testing.T) {
 	d.QKNorm = false
 	if err := graph.Verify(d.Build(), f); err == nil || !strings.Contains(err.Error(), "attn_q_norm") {
 		t.Fatalf("a graph without qwen3's q/k norm: %v", err)
+	}
+	// A latent attention: its graph verifies, and the violations fire -- the
+	// latent norms held to the model's epsilon, the rotary parts at the
+	// head's width, the reference form without its up-projections.
+	dm, err := Open(graphModel(t, "synth-deepseek"), noTune)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dm.Close()
+	li := dm.Cfg.NLayer - 1
+	mf, err := dm.blockFacts(li)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mf.Config.MLA == nil {
+		t.Fatal("synth-deepseek's block states no latent attention")
+	}
+	if err := graph.Verify(mf.Config.Build(), mf); err != nil {
+		t.Fatal(err)
+	}
+	for name, mut := range map[string]func(*graph.MLA){
+		"epsilon":   func(a *graph.MLA) { a.LatentEps *= 2 },
+		"rotary":    func(a *graph.MLA) { a.NRot /= 2 },
+		"latent":    func(a *graph.MLA) { a.KVLoraRank-- },
+		"no rotary": func(a *graph.MLA) { a.NoRope = !a.NoRope },
+	} {
+		d := mf.Config
+		a := *d.MLA
+		mut(&a)
+		d.MLA = &a
+		if err := graph.Verify(d.Build(), mf); err == nil {
+			t.Errorf("a latent attention with its %s changed verified", name)
+		}
+	}
+	d = mf.Config
+	d.MLA = nil
+	if u := graph.Unbound(d.Build(), mf); len(u) == 0 {
+		t.Error("a dense attention over an MLA block's tensors left none of them unbound")
 	}
 }
 
@@ -231,7 +271,7 @@ func graphPrompt(t *testing.T, m *Model, n, frames int) ([][]float32, int) {
 // graph, a page budget below the model gives the same answer, and the
 // comparison fires on a different computation (an f16 cache).
 func TestBlockGraphPromptMatchesTheHandPath(t *testing.T) {
-	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0"} {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "synth-deepseek", "synth-deepseek-lite", "synth-glm4moelite"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
@@ -245,7 +285,8 @@ func TestBlockGraphPromptMatchesTheHandPath(t *testing.T) {
 			}
 			defer gm.Close()
 			// Several chunks: past the widest chunk the host tuner offers.
-			const n = 700
+			// A synthetic fixture's context is shorter: the prompt fills it.
+			n := min(700, gm.Cfg.NCtx-16)
 			nl := gm.Cfg.NLayer
 			var want [][]float32
 			for _, budget := range []int{0, nl / 3} {
@@ -469,7 +510,7 @@ func graphBatch(t *testing.T, m *Model, frames int) ([][]float32, int) {
 // graph, a page budget below the model gives the same answer, and the
 // comparison fires on a different computation (an f16 cache).
 func TestBlockGraphRaggedStepMatchesTheHandPath(t *testing.T) {
-	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0"} {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "synth-deepseek", "synth-deepseek-lite", "synth-glm4moelite"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
@@ -493,8 +534,16 @@ func TestBlockGraphRaggedStepMatchesTheHandPath(t *testing.T) {
 					want = ref
 				}
 				got, ran := graphBatch(t, gm, budget)
-				if ran != 2*6*nl {
-					t.Fatalf("budget %d: %d ragged-step blocks ran through the graph, want %d", budget, ran, 2*6*nl)
+				// Step runs a State whose cached rows are read per batch slot
+				// (MLA) alone, a decode, not a ragged step (HostRefusal).
+				arms := 2
+				probe := gm.NewState(8)
+				if probe.HostRefusal() != nil {
+					arms = 1
+				}
+				probe.Close()
+				if ran != arms*6*nl {
+					t.Fatalf("budget %d: %d ragged-step blocks ran through the graph, want %d", budget, ran, arms*6*nl)
 				}
 				for i := range want {
 					for j := range want[i] {

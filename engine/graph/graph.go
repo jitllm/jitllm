@@ -82,10 +82,29 @@ const (
 	OpAct
 	// OpClamp is In[0] clamped to [-Bound, Bound] (DBRX's clip_qkv).
 	OpClamp
+	// OpSlice is Width elements of In[0] from Offset: of each head of
+	// HeadDim where HeadDim is set (Out is the heads' slices in head
+	// order), of the whole row where it is 0.
+	OpSlice
+	// OpLatentAppend writes a latent row as this position's row of the
+	// block's KV (MLA): the cached key is the latent In[0] then the shared
+	// rotary key In[1], and the value is the key's latent prefix. It reads
+	// state version n and writes n+1.
+	OpLatentAppend
+	// OpAttendLatent is causal attention of NHead query heads over the
+	// latent rows of the KV version it reads, in the reference (naive)
+	// form: head h's key is the transpose of Weight[0]'s sheet h (the k
+	// up-projection, stored absorbed-side) over the latent, then the row's
+	// shared rotary key; its value is Weight[1]'s sheet h over the latent.
+	// In[0] is the queries' unrotated parts (NHead heads of HeadDim-NRot),
+	// In[1] their rotary parts (NHead heads of NRot); scaled by Scale. Out is
+	// NHead values of Weight[1]'s rows. mla-absorb is the rewrite that folds
+	// both up-projections into the query and the output.
+	OpAttendLatent
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -188,6 +207,8 @@ type Attrs struct {
 	TempScale, TempFloor, TempOffs float64
 	// Bound is OpClamp's.
 	Bound float64
+	// Offset and Width are OpSlice's.
+	Offset, Width int
 }
 
 // Op is one operation.
