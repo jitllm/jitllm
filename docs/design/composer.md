@@ -295,7 +295,8 @@ candidates, not a tuner.
 | norm -> gate/up -> act -> down (the FFN site; `gate2in`) | a `norm` whose only consumers are two `matvec`s on its output, feeding one `act_mul`, feeding a `matvec` added into the residual | gate and up one format, one shape, one split (`gateUp2Shape`); the norm's input materialized by the previous add; exact on PTX | it removes a launch, and the outcome is per card and per shape (GK "The FFN's recipes, timed per card") |
 | q/k/v operand prologue | `norm` -> the q/k/v `matvec` group | the norm's single consumer group; exact | already timed by `tuneActIn`; its sites become matched |
 | residual + next norm's statistics in down's epilogue | an `add` into the residual whose consumer across the boundary is a `norm` | spans two blocks, so conditional on co-placement and dropped at a move; exact only with `RMSNormGroup`'s reduction tree | dep-block.md ranks it after the decomposition |
-| hidden-channel MLP partition | the FFN site, with a partition count S on the intermediate | band contract (down's sum is reassociated); Bounds: 4*H*S bytes of partials against the 4*F intermediate removed | at decode it fails its traffic budget (dep-block.md, "k-slice chaining": 256 KiB of partials against 32 KiB on the 1B) and is refused statically; at prefill widths and across devices the arithmetic differs, so it stays a candidate there |
+| hidden-channel MLP partition (`graph.MLPPartition`) | gate and up `matvec`s on one row feeding an `act_mul`, feeding a `matvec` | no bias inside a slice, no reader outside it; no contract (no recipe built); Bounds: 8*F bytes a row removed, 8*H*ceil(F/256) added, no launch removed | refused by its bound at every row class wherever H > 256 (both sides scale with the rows, so a prompt chunk does not rescue it): on Llama-3.2-1B 512 KiB of partials a row against 64 KiB. Across devices it is a placement candidate, priced by crossings, not by this bound |
+| gated output norm (`graph.NormGate`, built) | a `head_norm` whose only reader is an `act_mul` gating it as the second operand | SiLU or sigmoid; exact on PTX and SPIR-V | one launch and 8*VHeads*VDim bytes a row removed at every row class; timed per card at decode |
 | producer/consumer tile alignment | a `matvec` whose output tiles a following `matvec` reduces over | a parameter of a region's candidates (gate/up row tile = down's split chunk), timed jointly with the split | scheduling alone lost: the persistent block 11% and the dependency-counter block 14-18% on the V100 (GK "A persistent decode block", "The dependency-counter block"), because every matvec reads its whole input; alignment has to remove traffic or a launch to be worth a trial |
 
 **A block split across devices** (attention on one card, the FFN or some
@@ -311,6 +312,57 @@ Joint fusion and partitioning are one search, not two passes: a partition is a
 parameter of a fused region's candidates, so the trial times the complete
 region in each form, and a partition that loses alone is still timed under the
 fusion it enables (the harness's complete plans).
+
+### The first recipe through the interface: the gated output norm
+
+The two candidates for the first recipe written as a rewrite were the gated
+delta rule's output norm and gate (external-optimization-ideas.md, #6) and the
+hidden-channel MLP partition. They were chosen between by counts, not timing:
+
+| workload | gated output norm | MLP partition |
+|---|---|---|
+| dense decode (Llama-3.2-1B: H 2048, F 8192) | no match: a dense block has no gated norm | 0 launches removed; +448 KiB a row of traffic (512 KiB of partials for 64 KiB of intermediate); refused |
+| prompt chunk, R rows | -1 launch per gated delta block per chunk; 8*R*VHeads*VDim bytes not written or read | the same ratio per row; refused |
+| Qwen3-Next-80B decode (36 of 48 blocks gated delta, 32 heads of 128) | -36 launches a token; 1.125 MiB a token not written or read | the FFN is a mixture, unmatched |
+| Qwen3.8-Flash-Next's recurrent output | -1 launch per recurrent block per call, sigmoid gate, under the hyper-connections (the sublayer's rows are one row each) | unmatched |
+
+So the gated norm is built and the partition is a rewrite refused by its
+bound, which `Offer` now reads (a region that removes no launch and adds
+traffic is refused on every target, before the contract is asked).
+
+**What was built.** The gated delta sublayer has a graph of its own
+(`graph.Delta`): the rule as one opaque op (`gated_delta`, reading `rec@0`,
+writing `rec@1`, binding the rule's tensors), the gate projection (one
+matrix or KDA's two factors), the per-head `head_norm` against `ssm_norm`, the
+`act_mul` (`ActSiLU` or the new `ActSigmoid`) and the output projection. It is
+the sublayer's, not the block's: its input is the row the rule reads, so the
+hyper-connections and the block's FFN or mixture are outside it, and its
+Facts hold only the sublayer's tensors (`graph.DeltaRoles`), every one of
+which an op binds. `engine/model/deltagraph.go` builds and verifies it at
+every Open for each gated delta block (not Mamba's scans, not a short
+convolution, not a block that also attends) and hands its matches to the tier
+as the plan's `Rewrites`, with `Graphed` false: there is no host lowering,
+since the host's hand-written sublayer runs the same ops in the same order.
+
+`graph.NormGate` matches the `head_norm` whose only reader gates it, and is
+refused with the reason where the normalised row has another reader or the
+activation has no epilogue. Its recipe is `kernels.HeadNormGated`, HeadNorm
+with the gate as an epilogue at either lane width, whose element is the same
+builder calls on the same value as the two launches (`gateValue`), so the
+contract is exact per backend. The tier builds it beside `outNorm`, asks the
+rewrite per block at both row classes outside a token (`prepNormGate`), and
+`Config.NormGate` (`JITLLM_GPU_NORMGATE`: two, fused) forces it; untuned, the
+trial (`tuneNormGate`, the same `timeRecipes`) decides each key at decode, and
+a prompt chunk runs the two launches, where nothing was timed. Gates:
+`backend.TestHeadNormGatedIsTheTwoLaunches` (bits on PTX and SPIR-V, every
+lane width, a guard after the output; the other gate and a weight one ulp off
+must differ), `graph.TestNormGateIsFoundByPattern`,
+`model.TestNormGateMatchesTwoLaunches` (qwen3next's SiLU, KDA's low-rank
+sigmoid and Qwen3.8-Flash-Next's sigmoid, every block placed, a prompt chunk
+and a decode, bit for bit; the fused launch counted once per gated delta block
+per call, none in the reference arm; the tuned tier against its own two
+launches; the rule's output and z swapped must move the logits). Metal has no
+contract until the kernel gate runs there.
 
 ### Task contract: Slice A
 

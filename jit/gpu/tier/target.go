@@ -53,10 +53,11 @@ func (g *devTier) mmaShape() string {
 // not offered. A block without a graph decides from the tier's own facts,
 // which the caller checks; ok reports whether the graph decided.
 func (g *devTier) offer(l *layer, name string, rows graph.RowClass) (ok bool, key string, err error) {
-	if !l.graphed {
+	o, found := graph.Find(l.rewrites, name)
+	if !found && !l.graphed {
+		// No graph, or a sublayer's that does not name this site.
 		return false, "", nil
 	}
-	o, found := graph.Find(l.rewrites, name)
 	if !found {
 		return true, "", errNoMatch(name)
 	}

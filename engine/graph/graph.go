@@ -45,10 +45,17 @@ const (
 	OpAdd
 	// OpActMul is Act(In[0]) * In[1], elementwise.
 	OpActMul
+	// OpGatedDelta is a gated delta rule over its input row (In[0], the
+	// sublayer's normed input): the projections, causal convolution, decay
+	// and scan that turn it into one output row per value head (Out[0],
+	// VHeads*VDim), reading the recurrence's version n and writing n+1. It is
+	// opaque in this version: the rule's own internals are one op, its
+	// weights all bound by it, and only what follows it is matched.
+	OpGatedDelta
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -83,6 +90,8 @@ type Act uint8
 const (
 	ActSiLU Act = iota + 1
 	ActGELUTanh
+	// ActSigmoid is sigma(In[0]) * In[1]: a gated norm's sigmoid gate.
+	ActSigmoid
 )
 
 // ValueID names a value in a Graph's Values.

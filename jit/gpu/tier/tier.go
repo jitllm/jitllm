@@ -577,6 +577,12 @@ type Config struct {
 	// this card, or Gate2 where nothing was timed. A forced recipe a block
 	// cannot express runs the next one down the chain (gate2in, gate2, two).
 	FFNForm FFNForm
+	// NormGate forces the gated output norm's recipe (normgate.go):
+	// NormGateTuned, the zero value, takes the per-shape verdict
+	// tuneNormGate timed on this card at decode and the two launches at a
+	// prompt chunk's rows; a block the rewrite is not offered on runs the two
+	// launches whatever this says.
+	NormGate NormGateForm
 	// NoGraph issues the token's launches one driver call at a time instead of
 	// replaying a captured graph: the other arm of that comparison, a field so
 	// both arms can be live in one process.
@@ -799,6 +805,10 @@ type Stats struct {
 	// FFNTimed and FFNKept count the FFN shape keys tuneFFN decided on this
 	// card and those whose verdict is not the device's default recipe.
 	FFNTimed, FFNKept int
+	// NormGateRuns counts gated output norms run as one launch (graph.NormGate,
+	// kernels.HeadNormGated); NormGateTimed and NormGateKept the shape keys
+	// tuneNormGate decided and those it kept the fused launch on.
+	NormGateRuns, NormGateTimed, NormGateKept int
 	// PersistLaunches counts persistent kernels launched (Config.Persist),
 	// PersistParts the per-op launches they ran, PersistPhases their
 	// grid-barrier-separated phases, PersistCompiles the compositions built
@@ -1330,6 +1340,9 @@ func (s *Stats) add(o Stats) {
 	s.Gate2InRuns += o.Gate2InRuns
 	s.FFNTimed += o.FFNTimed
 	s.FFNKept += o.FFNKept
+	s.NormGateRuns += o.NormGateRuns
+	s.NormGateTimed += o.NormGateTimed
+	s.NormGateKept += o.NormGateKept
 	s.RagHeadOne += o.RagHeadOne
 	s.SampleReads += o.SampleReads
 	s.PickReads += o.PickReads
@@ -1933,6 +1946,8 @@ type devShared struct {
 	gu2Win map[splitKey]bool
 	// ffnWin is tuneFFN's verdict per FFN shape key (recipe.go).
 	ffnWin map[string]FFNForm
+	// normGateWin is tuneNormGate's verdict per gated-norm key (normgate.go).
+	normGateWin map[string]bool
 	// explain is each site's decision in force, with its reason (explain.go).
 	explain    map[string]RecipeChoice
 	actInTrial bool

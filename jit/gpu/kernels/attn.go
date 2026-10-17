@@ -743,6 +743,51 @@ func AttnAcc(nHeads, headDim, kvDim, gqa, maxSeq int) (*ir.Kernel, error) {
 // Out of place, because ir.Validate refuses in-place kernels: clamped surplus
 // threads would scale the last head twice.
 func HeadNorm(nHeads, headDim int, eps float64, lanes int) (*ir.Kernel, error) {
+	return headNorm(nHeads, headDim, eps, lanes, GateNone)
+}
+
+// NormGate is the gate HeadNormGated multiplies each normalised element by:
+// a function of the element of z at the same index.
+type NormGate uint8
+
+const (
+	GateNone NormGate = iota
+	// GateSiLU is out*SiLU(z), ActMul's element (qwen3next's gated norm).
+	GateSiLU
+	// GateSigmoid is out*sigma(z), SigmoidMul's element (Kimi Delta
+	// Attention's, Qwen3.8-Flash-Next's).
+	GateSigmoid
+)
+
+// HeadNormGated is HeadNormRows followed by the gate, out = HeadNorm(in)*g(z)
+// elementwise with z laid out as the output, in one launch: the normalised
+// row never reaches memory. Each element is the bits of the two launches it
+// replaces -- HeadNormRows writing the norm, then ActMul (GateSiLU) or
+// SigmoidMul (GateSigmoid) reading it -- because the gate is built by the
+// same builder calls on the same f32 value, with nothing between the norm's
+// last multiply and the gate's to contract. Parameters: pIn, pW, pZ, pOut.
+func HeadNormGated(nHeads, headDim int, eps float64, rows, lanes int, gate NormGate) (*ir.Kernel, error) {
+	if gate != GateSiLU && gate != GateSigmoid {
+		return nil, fmt.Errorf("kernels: HeadNormGated: gate %d", gate)
+	}
+	return headNorm(nHeads*max(rows, 1), headDim, eps, lanes, gate)
+}
+
+// gateValue is the gated element g(z)*n, in ActMul's and SigmoidMul's
+// operand order.
+func gateValue(b *ir.Builder, gate NormGate, z, n ir.Value) ir.Value {
+	switch gate {
+	case GateSiLU:
+		return actMulValue(b, ActSiLU, z, func() ir.Value { return n })
+	case GateSigmoid:
+		one := b.ConstF32(1)
+		sig := b.Div(ir.F32, one, b.Add(ir.F32, one, b.Exp(b.Sub(ir.F32, b.ConstF32(0), z))))
+		return b.Mul(ir.F32, sig, n)
+	}
+	return n
+}
+
+func headNorm(nHeads, headDim int, eps float64, lanes int, gate NormGate) (*ir.Kernel, error) {
 	if headDim <= 0 {
 		return nil, fmt.Errorf("kernels: HeadNorm: headDim=%d", headDim)
 	}
@@ -751,7 +796,7 @@ func HeadNorm(nHeads, headDim int, eps float64, lanes int) (*ir.Kernel, error) {
 	}
 	switch lanes {
 	case 1:
-		return headNormScalar(nHeads, headDim, eps)
+		return headNormScalar(nHeads, headDim, eps, gate)
 	case 32:
 	default:
 		return nil, fmt.Errorf("kernels: HeadNorm: lanes=%d, want 32 (one subgroup per head) "+
@@ -762,9 +807,17 @@ func HeadNorm(nHeads, headDim int, eps float64, lanes int) (*ir.Kernel, error) {
 			"lanes=32; lanes=1 takes any width", headDim)
 	}
 	per := headDim / 32
-	b := ir.New("headnorm", [3]int{32, 1, 1})
+	name := "headnorm"
+	if gate != GateNone {
+		name = "headnormgated"
+	}
+	b := ir.New(name, [3]int{32, 1, 1})
 	pIn := b.Param("pIn", ir.F32)
 	pW := b.Param("pW", ir.F32)
+	var pZ ir.Value
+	if gate != GateNone {
+		pZ = b.Param("pZ", ir.F32)
+	}
 	pOut := b.Param("pOut", ir.F32)
 
 	h := b.Min(ir.U32, b.CTAID(), b.Const(ir.U32, int64(nHeads-1)))
@@ -787,7 +840,11 @@ func HeadNorm(nHeads, headDim int, eps float64, lanes int) (*ir.Kernel, error) {
 	for k := 0; k < per; k++ {
 		v := b.Load(ir.F32, pIn, base, int64(k*32))
 		w := b.Load(ir.F32, pW, lane, int64(k*32))
-		b.Store(pOut, base, b.Mul(ir.F32, b.Mul(ir.F32, v, inv), w), int64(k*32))
+		y := b.Mul(ir.F32, b.Mul(ir.F32, v, inv), w)
+		if gate != GateNone {
+			y = gateValue(b, gate, b.Load(ir.F32, pZ, base, int64(k*32)), y)
+		}
+		b.Store(pOut, base, y, int64(k*32))
 	}
 	return b.Done(), nil
 }
@@ -796,10 +853,18 @@ func HeadNorm(nHeads, headDim int, eps float64, lanes int) (*ir.Kernel, error) {
 // HeadNorm for a device that will not guarantee a 32-lane subgroup, needing no
 // cross-lane communication at all. The passes are compile-time loops rather
 // than an unroll because headDim can be 2048 (olmoe's whole-projection norm).
-func headNormScalar(nHeads, headDim int, eps float64) (*ir.Kernel, error) {
-	b := ir.New("headnormscalar", [3]int{64, 1, 1})
+func headNormScalar(nHeads, headDim int, eps float64, gate NormGate) (*ir.Kernel, error) {
+	name := "headnormscalar"
+	if gate != GateNone {
+		name = "headnormgatedscalar"
+	}
+	b := ir.New(name, [3]int{64, 1, 1})
 	pIn := b.Param("pIn", ir.F32)
 	pW := b.Param("pW", ir.F32)
+	var pZ ir.Value
+	if gate != GateNone {
+		pZ = b.Param("pZ", ir.F32)
+	}
 	pOut := b.Param("pOut", ir.F32)
 
 	h := b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID()),
@@ -827,7 +892,11 @@ func headNormScalar(nHeads, headDim int, eps float64) (*ir.Kernel, error) {
 	wi := b.Phi(ir.U32, izero)
 	x := b.Load(ir.F32, pIn, oi, 0)
 	w := b.Load(ir.F32, pW, wi, 0)
-	b.Store(pOut, oi, b.Mul(ir.F32, b.Mul(ir.F32, x, inv), w), 0)
+	y := b.Mul(ir.F32, b.Mul(ir.F32, x, inv), w)
+	if gate != GateNone {
+		y = gateValue(b, gate, b.Load(ir.F32, pZ, oi, 0), y)
+	}
+	b.Store(pOut, oi, y, 0)
 	b.SetPhi(oi, b.Add(ir.U32, oi, one))
 	b.SetPhi(wi, b.Add(ir.U32, wi, one))
 	b.EndLoop()

@@ -85,6 +85,13 @@ func (rw *Rewrite) Offer(g *Graph, r Region, t Target) error {
 	if err := rw.Legal(g, r); err != nil {
 		return err
 	}
+	// The static bound refuses, never accepts: a region that removes no
+	// launch and adds traffic cannot win on any target.
+	if rw.Bounds != nil {
+		if b := rw.Bounds(g, r); b.Launches <= 0 && b.TrafficBytes < 0 {
+			return fmt.Errorf("the static bound: no launch removed and %d bytes a row added", -b.TrafficBytes)
+		}
+	}
 	if _, ok := rw.Contract[t.API]; !ok {
 		return fmt.Errorf("no numerical contract on %s", t.API)
 	}
@@ -112,6 +119,7 @@ type Contract struct {
 type Resources struct {
 	Launches     int   // launches removed (negative: added)
 	ScratchBytes int64 // scratch added per row
+	TrafficBytes int64 // intermediate bytes per row no longer written and read (negative: partials added)
 }
 
 // Decision is one rewrite's verdict on one region, for a plan explanation.

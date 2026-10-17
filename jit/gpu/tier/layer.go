@@ -245,6 +245,13 @@ type layer struct {
 	// at this device's Target (offer), nil where it was or the block has no
 	// graph: the plan explanation's reason.
 	ffnWhy error
+	// normGateOffer is whether graph.NormGate is offered on this block at
+	// decode ([0]) and at a prompt chunk's rows ([1]), decided outside a token
+	// (prepNormGate); normGateKey the decode verdict's key, normGateWhy the
+	// decode refusal.
+	normGateOffer [2]bool
+	normGateKey   string
+	normGateWhy   error
 	// actInWhy is ffnWhy for the q/k/v, o and down prologue sites.
 	actInWhy      [3]error
 	mvo, mvg, mvu mv
@@ -2493,8 +2500,11 @@ type blockScratch struct {
 	splitGates, deltaGate        backend.Kernel
 	qkNorm, qkScale, deltaStep   backend.Kernel
 	outNorm, outActMul           backend.Kernel
-	sliceQ, sliceK, sliceV       backend.Kernel
-	dMixed, dConv, dZ, dBA       backend.Buf
+	// outNormGate is outNorm and its gate (outActMul or outSigMul) in one
+	// launch (kernels.HeadNormGated, graph.NormGate).
+	outNormGate            backend.Kernel
+	sliceQ, sliceK, sliceV backend.Kernel
+	dMixed, dConv, dZ, dBA backend.Buf
 	// quantD quantizes the gated delta output for the SSM output projection.
 	// It is a separate kernel from quantF because Quantize bakes its element
 	// count and VHeads*VDim is not NFFN.
@@ -6004,6 +6014,19 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				return nil, nil
 			}
 			return kernels.ActMul(rows*r.VHeads*r.VDim, kernels.ActSiLU)
+		}},
+		{&bs.outNormGate, func() (*ir.Kernel, error) {
+			// graph.NormGate's recipe: the output norm and its gate in one
+			// launch, at outNorm's lanes. Built wherever outNorm is; each
+			// block's plan decides whether it runs (prepNormGate).
+			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
+				return nil, nil
+			}
+			gate := kernels.GateSiLU
+			if r.ChanDecay || r.SigmoidGate {
+				gate = kernels.GateSigmoid
+			}
+			return kernels.HeadNormGated(r.VHeads, r.VDim, p.RMSEps, rows, headLanes(r.VDim), gate)
 		}},
 	}
 	for _, j := range altJobs(bs, p, rows, actWin) {
@@ -11857,16 +11880,31 @@ func (g *devTier) emitLinear(sid uint64, s backend.Session, bs *blockScratch, l 
 	// The gated output norm: RMSNorm per value head against ssm_norm, times
 	// SiLU of the z projection.
 	vg, vwid := headNormGeom(bs.outNormL, R*r.VHeads)
-	if *errp == nil {
+	gated := bs.dAct
+	noGate := r.ChanDecay && l.k3 != nil && l.k3.fault == nn.K3FaultNoKDAGate
+	fused := !noGate && bs.outNormGate != nil && g.normGateOn(l, R == 1)
+	if fused {
+		// graph.NormGate: the norm's epilogue gates it, and the normalised
+		// row is never written.
+		in, z := bs.dOut, bs.dZ
+		if normGateBroken {
+			in, z = z, in
+		}
+		if *errp == nil {
+			*errp = lc.launch(bs.outNormGate, vg, vwid, in, l.ssmNorm, z, bs.dAct)
+		}
+		g.NormGateRuns++
+	} else if *errp == nil {
 		*errp = lc.launch(bs.outNorm, vg, vwid, bs.dOut, l.ssmNorm, bs.dOutN)
 	}
-	gated := bs.dAct
-	if r.ChanDecay && l.k3 != nil && l.k3.fault == nn.K3FaultNoKDAGate {
+	switch {
+	case fused:
+	case noGate:
 		gated = bs.dOutN
-	} else if r.ChanDecay || r.SigmoidGate {
+	case r.ChanDecay || r.SigmoidGate:
 		// KDA's gate and Qwen3.8-Flash-Next's are sigmoid(z).
 		lc.la(bs.outSigMul, R*inner, bs.dZ, bs.dOutN, bs.dAct)
-	} else {
+	default:
 		lc.la(bs.outActMul, R*inner, bs.dZ, bs.dOutN, bs.dAct)
 	}
 	lc.la(bs.quantD, kernels.QuantizeThreads(R*pad32(inner)/32), gated, bs.a, bs.ax)

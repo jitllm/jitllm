@@ -19,6 +19,10 @@ type Shape struct{ K, Rows int }
 type Facts struct {
 	Config    Dense
 	Inventory map[jlm.Role]Shape
+	// Delta, where set, is the gated delta sublayer the graph describes
+	// instead of a dense block: its epsilon, value head width and gate are
+	// what the norms and the act_mul are held to.
+	Delta *Delta
 }
 
 // Verify checks g before anything is allocated or emitted and returns every
@@ -61,6 +65,10 @@ func Verify(g *Graph, f Facts) error {
 	state := map[string]int{}
 	bound := map[jlm.Role]bool{}
 	c := &f.Config
+	eps, headDim, act := c.Eps, c.HeadDim, c.Act
+	if f.Delta != nil {
+		eps, headDim, act = f.Delta.Eps, f.Delta.VDim, f.Delta.Gate
+	}
 	for i, o := range g.Ops {
 		at := fmt.Sprintf("graph: block %d op %d (%s)", g.Block, i, o.Kind)
 		if o.Kind <= OpInvalid || o.Kind >= numOps {
@@ -124,8 +132,8 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: wants one input, one output and one scale", at)
 				break
 			}
-			if o.Attr.Eps != c.Eps {
-				bad("%s: epsilon %g, the configuration states %g", at, o.Attr.Eps, c.Eps)
+			if o.Attr.Eps != eps {
+				bad("%s: epsilon %g, the configuration states %g", at, o.Attr.Eps, eps)
 			}
 			if width(o.Out[0]) != width(o.In[0]) {
 				bad("%s: width %d into %d", at, width(o.In[0]), width(o.Out[0]))
@@ -133,9 +141,9 @@ func Verify(g *Graph, f Facts) error {
 			if o.Kind == OpNorm && o.Weight[0].K != width(o.In[0]) {
 				bad("%s: scale of %d over a row of %d", at, o.Weight[0].K, width(o.In[0]))
 			}
-			if o.Kind == OpHeadNorm && (o.Attr.HeadDim != c.HeadDim || o.Weight[0].K != c.HeadDim || width(o.In[0])%c.HeadDim != 0) {
+			if o.Kind == OpHeadNorm && (headDim <= 0 || o.Attr.HeadDim != headDim || o.Weight[0].K != headDim || width(o.In[0])%headDim != 0) {
 				bad("%s: heads of %d with a scale of %d over a row of %d; the configuration states heads of %d",
-					at, o.Attr.HeadDim, o.Weight[0].K, width(o.In[0]), c.HeadDim)
+					at, o.Attr.HeadDim, o.Weight[0].K, width(o.In[0]), headDim)
 			}
 		case OpMatVec:
 			if !ins(1) || !outs(1) || len(o.Weight) == 0 || len(o.Weight) > 2 {
@@ -194,8 +202,24 @@ func Verify(g *Graph, f Facts) error {
 			if width(o.In[0]) != width(o.In[1]) || width(o.Out[0]) != width(o.In[0]) {
 				bad("%s: widths %d and %d into %d", at, width(o.In[0]), width(o.In[1]), width(o.Out[0]))
 			}
-			if o.Kind == OpActMul && o.Attr.Act != c.Act {
-				bad("%s: activation %d, the configuration states %d", at, o.Attr.Act, c.Act)
+			if o.Kind == OpActMul && o.Attr.Act != act {
+				bad("%s: activation %d, the configuration states %d", at, o.Attr.Act, act)
+			}
+		case OpGatedDelta:
+			if !ins(1) || !outs(1) {
+				break
+			}
+			d := f.Delta
+			if d == nil {
+				bad("%s: a gated delta rule in a graph whose facts state none", at)
+				break
+			}
+			if width(o.In[0]) != d.NEmbd || width(o.Out[0]) != d.VHeads*d.VDim {
+				bad("%s: a row of %d into %d; the configuration states %d into %d value heads of %d",
+					at, width(o.In[0]), width(o.Out[0]), d.NEmbd, d.VHeads, d.VDim)
+			}
+			if len(o.Reads) != 1 || o.Reads[0].Name != "rec" || len(o.Writes) != 1 || o.Writes[0].Name != "rec" {
+				bad("%s: reads and writes no recurrence version", at)
 			}
 		}
 	}

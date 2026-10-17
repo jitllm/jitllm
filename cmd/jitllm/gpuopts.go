@@ -208,6 +208,15 @@ func gpuOptions() []tier.Option {
 		}
 		o = append(o, tier.WithFFNForm(f))
 	}
+	// JITLLM_GPU_NORMGATE forces the gated output norm's recipe
+	// (tier.WithNormGate): two or fused; unset leaves it to the trial.
+	if set("JITLLM_GPU_NORMGATE") {
+		f, err := tier.ParseNormGateForm(str("JITLLM_GPU_NORMGATE"))
+		if err != nil {
+			panic(err)
+		}
+		o = append(o, tier.WithNormGate(f))
+	}
 	if str("JITLLM_GPU_PERSIST") == "deps" {
 		o = append(o, tier.WithPersistDeps(true, int(num("JITLLM_GPU_PERSIST_GRID"))))
 	} else if set("JITLLM_GPU_PERSIST") {

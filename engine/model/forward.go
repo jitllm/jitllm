@@ -2039,6 +2039,10 @@ func (s *State) planFor(li int) *nn.LayerPlan {
 	plan.Graphed, plan.Rewrites = false, nil
 	if li < len(s.m.graphs) && s.m.graphs[li] != nil {
 		plan.Graphed, plan.Rewrites = true, s.m.graphs[li].offered
+	} else if li < len(s.m.deltaGraphs) && s.m.deltaGraphs[li] != nil {
+		// A gated delta sublayer's graph offers its rewrites; the plan is
+		// not lowered from it (Graphed stays false).
+		plan.Rewrites = s.m.deltaGraphs[li].offered
 	}
 	// AttnScale is carried for every architecture: it includes YaRN's
 	// magnitude correction (DeepSeek), and under MLA HeadDim is the wrong

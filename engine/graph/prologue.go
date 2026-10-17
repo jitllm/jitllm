@@ -128,4 +128,4 @@ var ActInDown = &Rewrite{
 
 // Rewrites is every rewrite a block graph is matched against, in the order a
 // plan explanation lists them.
-var Rewrites = []*Rewrite{Gate2In, ActInQKV, ActInO, ActInDown}
+var Rewrites = []*Rewrite{Gate2In, ActInQKV, ActInO, ActInDown, NormGate, MLPPartition}

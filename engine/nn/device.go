@@ -1011,7 +1011,10 @@ type LayerPlan struct {
 	// decides a site from its own facts.
 	Graphed bool
 	// Rewrites are the rewrites matched on the block's graph, legal or not;
-	// the tier asks each one's Offer with the Target it runs at.
+	// the tier asks each one's Offer with the Target it runs at. A block
+	// that is not Graphed may still carry a sublayer's (a gated delta rule's,
+	// graph.Delta): a rewrite found there is offered by it, and a site no
+	// rewrite in it names is decided from the tier's own facts.
 	Rewrites []graph.Offered
 }
 

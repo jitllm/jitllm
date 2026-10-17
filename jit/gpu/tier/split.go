@@ -638,6 +638,7 @@ func (g *devTier) retuneDecode() {
 	// After the prologue's verdicts: the FFN's recipes run down in the
 	// form the prologue tuner chose.
 	g.tuneFFN()
+	g.tuneNormGate()
 	g.tuneGemm()
 }
 
@@ -1177,6 +1178,7 @@ func groupsOf(threads, split int, grp bool) int {
 // and vision blocks never reach it with three plain decode matvecs.
 func (g *devTier) fuseQKV(l *layer) {
 	defer g.fuseActIn(l)
+	defer g.prepNormGate(l)
 	g.fuseMoE(l)
 	l.mlaQK, l.shGU = nil, nil
 	if l.mla {

@@ -64,6 +64,8 @@ gateddeltachan/small d9f28f8342ccab1e
 grid/probe 8cf05962321b8260
 headnorm fe0605e3ba30ffb6
 headnorm-scalar f9f7476646541b9f
+headnormgated-sigmoid-scalar 898204e986e4e26d
+headnormgated-silu 2c76577b47342967
 indexedbiasadd 245018fae102ce5a
 k3/decaybound cd41f5fd8746cf10
 k3/post-restart 5f699642de7d5e4b

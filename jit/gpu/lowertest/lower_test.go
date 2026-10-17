@@ -238,6 +238,13 @@ func all(t *testing.T) map[string]*ir.Kernel {
 	// softmax pair's reason.
 	add("headnorm", func() (*ir.Kernel, error) { return kernels.HeadNorm(16, 128, 1e-5, 32) })
 	add("headnorm-scalar", func() (*ir.Kernel, error) { return kernels.HeadNorm(16, 128, 1e-5, 1) })
+	// The gated output norm's recipe (graph.NormGate), at both widths and gates.
+	add("headnormgated-silu", func() (*ir.Kernel, error) {
+		return kernels.HeadNormGated(16, 128, 1e-6, 1, 32, kernels.GateSiLU)
+	})
+	add("headnormgated-sigmoid-scalar", func() (*ir.Kernel, error) {
+		return kernels.HeadNormGated(16, 128, 1e-6, 3, 1, kernels.GateSigmoid)
+	})
 	add("attnacc", func() (*ir.Kernel, error) { return kernels.AttnAcc(8, 256, 256, 8, 2048) })
 	// The recurrent pair a hybrid block needs. They are shaped kernels, so
 	// they live here rather than in the elementwise inventory.
@@ -287,15 +294,16 @@ func all(t *testing.T) map[string]*ir.Kernel {
 // (ir.Validate already refuses an undeclared width-dependent op); this list is
 // the other half, so a kernel that loses its shuffle by accident is also red.
 var widthDependent = map[string]int{
-	"flash/split1":      32,
-	"flash/split8":      32,
-	"softmax":           32, // the butterfly max and sum
-	"softmax-sink-warp": 32, // the same, with the sink folded in after
-	"softmax-sink-rows": 32,
-	"headnorm":          32, // the butterfly sum of squares
-	"subgroup/f32":      32, // every subgroup collective
-	"subgroup/i32":      32,
-	"subgroup/u32":      32,
+	"flash/split1":       32,
+	"flash/split8":       32,
+	"softmax":            32, // the butterfly max and sum
+	"softmax-sink-warp":  32, // the same, with the sink folded in after
+	"softmax-sink-rows":  32,
+	"headnorm":           32, // the butterfly sum of squares
+	"headnormgated-silu": 32, // the same, with the gate as its epilogue
+	"subgroup/f32":       32, // every subgroup collective
+	"subgroup/i32":       32,
+	"subgroup/u32":       32,
 	// The matvec-mma and mmaprobe entries are added by the sweep itself: they
 	// are built by mmaKernels and are PTX-only.
 }

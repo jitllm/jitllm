@@ -61,3 +61,12 @@ func SwapQKVGemmForTest(on bool) bool {
 	qkvGemmSwapped = on
 	return old
 }
+
+// BreakNormGateForTest makes every fused gated output norm (graph.NormGate)
+// read the gate and the rule's output the wrong way round, and returns the
+// setting it replaced.
+func BreakNormGateForTest(on bool) bool {
+	old := normGateBroken
+	normGateBroken = on
+	return old
+}

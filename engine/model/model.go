@@ -1241,6 +1241,10 @@ type Model struct {
 	// graphs is each text block's lowered block graph under WithBlockGraph
 	// (graphblock.go), nil without it.
 	graphs []*denseLowering
+	// deltaGraphs is each gated delta block's sublayer graph (deltagraph.go),
+	// built at every Open; deltaGraphErr the verifier's refusals.
+	deltaGraphs   []*deltaGraph
+	deltaGraphErr []error
 
 	// basePlans is ensureBlock's read plan for every text block -- the block's
 	// own weights, without its routed banks -- built once. The entries are
@@ -1623,6 +1627,7 @@ func openContainer(path string, options ...Option) (*Model, error) {
 			return nil, err
 		}
 	}
+	m.buildDeltaGraphs()
 	if m.opt.blockGraph {
 		if err := m.buildGraphs(); err != nil {
 			c.Close()
