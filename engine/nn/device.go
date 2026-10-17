@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -1004,12 +1005,14 @@ type LayerPlan struct {
 	// mixer layer): it ends at the first residual add, and its FFN weights,
 	// norm and kernels are absent.
 	NoFFN bool
-	// FFNChain is the block graph's verdict on the FFN chain the gate2in recipe
-	// runs as one launch (graph.Gate2In, docs/design/composer.md): +1 where
-	// the pattern matched and is legal, -1 where it matched and was refused or
-	// did not match, 0 where the model has no block graph and a tier decides
-	// from its own facts.
-	FFNChain int8
+	// Graphed says the model built this block's graph (docs/design/composer.md):
+	// a site a rewrite names is offered only where Rewrites holds a match
+	// whose Offer passes at the tier's own Target. Without a graph a tier
+	// decides a site from its own facts.
+	Graphed bool
+	// Rewrites are the rewrites matched on the block's graph, legal or not;
+	// the tier asks each one's Offer with the Target it runs at.
+	Rewrites []graph.Offered
 }
 
 // RecurrentPlan is a linear-attention block's geometry. Every field is zero for

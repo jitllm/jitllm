@@ -74,9 +74,10 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 type denseLowering struct {
 	g  *graph.Graph
 	qk bool
-	// ffnChain is graph.Gate2In's verdict on the block (nn.LayerPlan.FFNChain),
-	// and rewrites every rewrite's decision, for the plan explanation.
-	ffnChain int8
+	// offered is every rewrite matched on the block (nn.LayerPlan.Rewrites),
+	// which the device asks at its own Target, and rewrites every one's
+	// target-free decision, for the plan explanation.
+	offered  []graph.Offered
 	rewrites []graph.Decision
 }
 
@@ -153,12 +154,7 @@ func (m *Model) buildGraphs() error {
 			return fmt.Errorf("model: block %d graph's q/k norm is %v and attnPrep's %v", li, lw.qk, m.Cfg.QKNormAt(li))
 		}
 		lw.rewrites = graph.Apply(g, graph.Gate2In)
-		lw.ffnChain = -1
-		for _, d := range lw.rewrites {
-			if d.Rewrite == graph.Gate2In.Name && d.Err == nil {
-				lw.ffnChain = 1
-			}
-		}
+		lw.offered = graph.Match(g, graph.Gate2In)
 		m.graphs[li] = lw
 	}
 	return nil

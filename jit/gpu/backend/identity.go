@@ -155,3 +155,20 @@ func (c *cudaDev) DriverVersion() string {
 }
 
 func (v *vkDev) DriverVersion() string { return fmt.Sprintf("vk%08x", v.c.DriverVersion()) }
+
+// Targeted is the optional interface a backend implements when its code
+// generator compiles for a named instruction-set tier of the device (CUDA's
+// PTX target, "sm_86"). A verdict that depends on the ISA (graph.Target)
+// names it.
+type Targeted interface{ ISA() string }
+
+// ISAOf names a device's code-generation tier, or "" when the backend cannot
+// say.
+func ISAOf(d Device) string {
+	if v, ok := d.(Targeted); ok {
+		return v.ISA()
+	}
+	return ""
+}
+
+func (c *cudaDev) ISA() string { return c.d.Target }

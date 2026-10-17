@@ -11,6 +11,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
@@ -183,9 +184,11 @@ type layer struct {
 	// keep no history (nn.LayerPlan.NonCausal): a call over it is one whole
 	// run, submitted in its geometry's scratch set (geoNonCausal).
 	nonCausal bool
-	// ffnChain is nn.LayerPlan.FFNChain: the block graph's verdict on the FFN
-	// site, which decides it in place of the structural checks in ffnKey.
-	ffnChain int8
+	// graphed and rewrites are nn.LayerPlan.Graphed and Rewrites: the block
+	// graph's matched rewrites, each asked at this device's Target (offer),
+	// which decide a site in place of the structural checks in ffnKey.
+	graphed  bool
+	rewrites []graph.Offered
 	// windowed says the block attends inside the windowed runs its call was
 	// handed (nn.LayerPlan.Windowed, SetKeyRuns). Per block: the scratch's
 	// plan is its first block's, and Qwen2.5-VL's blocks alternate.
@@ -236,8 +239,12 @@ type layer struct {
 	// ffnForm is the recipe this block's dense gated FFN runs where
 	// Config.FFNForm leaves it to the tuner (tuneFFN; recipe.go), and ffnKey
 	// the shape key it was decided under.
-	ffnForm       FFNForm
-	ffnKey        string
+	ffnForm FFNForm
+	ffnKey  string
+	// ffnWhy is why the block graph's gate2in rewrite was not offered here
+	// at this device's Target (offer), nil where it was or the block has no
+	// graph: the plan explanation's reason.
+	ffnWhy        error
 	mvo, mvg, mvu mv
 	mvd           mv
 	// MoE only: the F32 router matrix and its matvec. gate/up/down above hold
@@ -3086,7 +3093,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	if g.layers == nil {
 		g.layers = map[int]*layer{}
 	}
-	l := &layer{nonCausal: p.NonCausal, windowed: p.Windowed, geo: geoOf(p), vFromK: p.VFromK, ffnChain: p.FFNChain}
+	l := &layer{nonCausal: p.NonCausal, windowed: p.Windowed, geo: geoOf(p), vFromK: p.VFromK, graphed: p.Graphed, rewrites: p.Rewrites}
 	if p.NonCausal {
 		l.nffn, l.ungated, l.act = p.NFFN, ungatedFFN(p), p.Act
 		l.noRope = p.NRot == 0 || p.NoPosEnc

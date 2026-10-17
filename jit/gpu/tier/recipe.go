@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
@@ -183,10 +184,12 @@ func (g *devTier) ffnKey(l *layer) string {
 	// The block graph's verdict, where the model has one, decides whether the
 	// block's FFN is the chain the recipes compute (graph.Gate2In, matched by
 	// its operations); without one, the structural checks stand in for it.
+	graphed, tkey, why := g.offer(l, graph.Gate2In.Name, graph.RowsDecode)
+	l.ffnWhy = why
 	switch {
-	case l.ffnChain < 0:
+	case why != nil:
 		return ""
-	case l.ffnChain == 0 && (l.router != nil || l.mla || l.linear || l.nonCausal || l.sparse || l.clampB != nil ||
+	case !graphed && (l.router != nil || l.mla || l.linear || l.nonCausal || l.sparse || l.clampB != nil ||
 		l.nSubFFN != nil || l.nPostFFN != nil || l.nFFNB != nil || l.nResid != nil || l.k3 != nil || l.q4e != nil ||
 		l.ds4 != nil || l.altRouter != nil || p.Parallel || ungatedFFN(p) || lnBlock(p)):
 		return ""
@@ -201,7 +204,18 @@ func (g *devTier) ffnKey(l *layer) string {
 	mg, md := l.mvg, l.mvd
 	return fmt.Sprintf("ffn/%v/%d/%d/%d/%v/%v/%d/%d/%d/%v/act%v/w%d/warp%v/in%v",
 		mg.q, mg.k, mg.rows, mg.split, mg.group, md.q, md.rows, md.split, md.rowt, md.group,
-		p.Act, max(p.ActWin, 32), g.warpNorm(), md.resIn != nil)
+		p.Act, max(p.ActWin, 32), g.warpNorm(), md.resIn != nil) + targetSuffix(tkey)
+}
+
+// targetSuffix is a site key's target part: the graph.Target key a graphed
+// block's verdict is persisted under, so evidence at one row class or on one
+// ISA is never read at another. Empty for a block without a graph, whose key
+// stays what it was.
+func targetSuffix(tkey string) string {
+	if tkey == "" {
+		return ""
+	}
+	return "/t:" + tkey
 }
 
 // tuneFFN decides, on this card, the recipe each dense gated FFN shape runs:
@@ -242,6 +256,12 @@ func (g *devTier) tuneFFN() {
 			continue
 		}
 		key := g.ffnKey(l)
+		if l.ffnWhy != nil {
+			// The rewrite refused at this device's Target: a recorded
+			// rejection, so the explanation and a gate can name it.
+			g.explainSet(RecipeChoice{Site: "ffn", Key: "refused", Recipe: FFNTwo.String(), Source: "refused",
+				Why: l.ffnWhy.Error()})
+		}
 		if key == "" {
 			continue
 		}

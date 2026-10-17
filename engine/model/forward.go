@@ -2029,9 +2029,9 @@ func (s *State) planFor(li int) *nn.LayerPlan {
 	// page-in: the entry is bound at load whether or not the block is resident.
 	plan.UngatedFFN = l.gate.e == nil && (l.router.e == nil || l.ungatedExp)
 	plan.NoFFN = l.noFFN
-	plan.FFNChain = 0
-	if li < len(s.m.graphs) {
-		plan.FFNChain = s.m.graphs[li].ffnChain
+	plan.Graphed, plan.Rewrites = false, nil
+	if li < len(s.m.graphs) && s.m.graphs[li] != nil {
+		plan.Graphed, plan.Rewrites = true, s.m.graphs[li].offered
 	}
 	// AttnScale is carried for every architecture: it includes YaRN's
 	// magnitude correction (DeepSeek), and under MLA HeadDim is the wrong

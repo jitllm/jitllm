@@ -1,8 +1,11 @@
 package model
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
@@ -58,12 +61,46 @@ func TestGraphFindsTheFFNSite(t *testing.T) {
 			t.Logf("gate2in in %d FFNs; %d keys timed, %d kept", sts[0].Gate2InRuns, sts[1].FFNTimed, sts[1].FFNKept)
 			// The violation: the graph refuses the site, and the tier offers
 			// no recipe there although its structural checks would.
-			for _, lw := range gm.graphs {
-				lw.ffnChain = -1
+			// Two refusals: no gate2in region in the graph, and a region
+			// whose Pays guard refuses at the device's Target -- which only
+			// the tier, building that Target, can ask.
+			saved := make([][]graph.Offered, len(gm.graphs))
+			for li, lw := range gm.graphs {
+				saved[li] = lw.offered
 			}
-			_, sts = ffnRecipeDecode(t, gm, ids, toks, false, -1, t.TempDir(), []tier.FFNForm{tier.FFNTuned})
-			if sts[0].FFNTimed != 0 || sts[0].Gate2InRuns != 0 {
-				t.Fatalf("with the site refused, %d keys timed and gate2in ran in %d FFNs", sts[0].FFNTimed, sts[0].Gate2InRuns)
+			refuseAt := *graph.Gate2In
+			var asked []graph.Target
+			refuseAt.Pays = func(_ *graph.Graph, _ graph.Region, tg graph.Target) error {
+				asked = append(asked, tg)
+				return fmt.Errorf("refused at %s", tg.Key())
+			}
+			for _, arm := range []string{"no-region", "target-refuses"} {
+				for li, lw := range gm.graphs {
+					lw.offered = nil
+					if arm == "target-refuses" {
+						for _, o := range saved[li] {
+							o.Rewrite = &refuseAt
+							lw.offered = append(lw.offered, o)
+						}
+					}
+				}
+				_, sts = ffnRecipeDecode(t, gm, ids, toks, false, -1, t.TempDir(), []tier.FFNForm{tier.FFNTuned})
+				if sts[0].FFNTimed != 0 || sts[0].Gate2InRuns != 0 {
+					t.Fatalf("%s: with the site refused, %d keys timed and gate2in ran in %d FFNs", arm, sts[0].FFNTimed, sts[0].Gate2InRuns)
+				}
+			}
+			// The Target the tier built is the device's: its backend, an ISA
+			// tier the code generator names, and the one-row decode class.
+			if len(asked) == 0 {
+				t.Fatal("the tier never asked the rewrite's Pays guard: no Target was built")
+			}
+			tg := asked[0]
+			if tg.API != "ptx" || !strings.HasPrefix(tg.ISA, "sm_") || tg.Rows != graph.RowsDecode || tg.Subgroup != 32 || tg.SharedMem == 0 {
+				t.Fatalf("the tier's Target %+v is not a CUDA device's at the decode row class", tg)
+			}
+			t.Logf("the tier's Target: %s", tg.Key())
+			for li, lw := range gm.graphs {
+				lw.offered = saved[li]
 			}
 		})
 	}

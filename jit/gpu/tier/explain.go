@@ -15,7 +15,7 @@ type RecipeChoice struct {
 	Site   string `json:"site"`            // "ffn", "actin-qkv", "actin-o", "actin-down"
 	Key    string `json:"key"`             // the shape key; "*" where a forced choice covers every key
 	Recipe string `json:"recipe"`          // the recipe the key runs
-	Source string `json:"source"`          // "forced", "cache", "timed", "untuned"
+	Source string `json:"source"`          // "forced", "cache", "timed", "untuned", "refused" (a rewrite's guard at this Target)
 	Why    string `json:"why"`             // the reason in words
 	Blocks int    `json:"blocks"`          // placed blocks with this key at the decision
 	Trial  []Arm  `json:"trial,omitempty"` // the timed challengers, where Source is "timed"

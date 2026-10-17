@@ -257,3 +257,55 @@ var Gate2In = &Rewrite{
 	Bounds: func(g *Graph, r Region) Resources { return Resources{Launches: 1} },
 	Keys:   func(g *Graph, r Region) string { return "" },
 }
+
+// Offered is a rewrite matched on one block's graph, carried to the tier
+// that runs the block (nn.LayerPlan.Rewrites): the tier knows its device and
+// the row class it is about to run, so it builds the Target and asks Offer
+// there, for every recipe it considers. The graph and region travel with it;
+// a block that relocates takes them to the next device, which asks again
+// with its own Target.
+type Offered struct {
+	Rewrite *Rewrite
+	Graph   *Graph
+	Region  Region
+}
+
+// Offer is the rewrite's decision on this region at target t: Legal, the
+// backend's contract, and the Pays guard, each refusal with its reason.
+func (o Offered) Offer(t Target) error { return o.Rewrite.Offer(o.Graph, o.Region, t) }
+
+// Key is what a timed verdict on this region at t is persisted under beyond
+// the tier's shape key: the target's key and whatever the rewrite's Keys
+// names.
+func (o Offered) Key(t Target) string {
+	k := t.Key()
+	if o.Rewrite.Keys != nil {
+		if s := o.Rewrite.Keys(o.Graph, o.Region); s != "" {
+			k += "/" + s
+		}
+	}
+	return k
+}
+
+// Match is every region each rewrite matches in g, legal or not: a tier asks
+// each one's Offer at its own target, and a near miss refuses there with the
+// reason Legal gives.
+func Match(g *Graph, rws ...*Rewrite) []Offered {
+	out := []Offered{}
+	for _, rw := range rws {
+		for _, r := range rw.Match(g) {
+			out = append(out, Offered{Rewrite: rw, Graph: g, Region: r})
+		}
+	}
+	return out
+}
+
+// Find is the first of os made by the rewrite named name, or false.
+func Find(os []Offered, name string) (Offered, bool) {
+	for _, o := range os {
+		if o.Rewrite.Name == name {
+			return o, true
+		}
+	}
+	return Offered{}, false
+}
