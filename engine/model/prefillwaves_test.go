@@ -68,16 +68,33 @@ func prefillWavesAllocs(t *testing.T, m *Model, ids []int32, blocks, slots int, 
 	}
 	t.Logf("device: %v", g.Err())
 	last := append([]float32(nil), out.logits[(len(ids)-1)*c.NVocab:len(ids)*c.NVocab]...)
-	// The same chunk again from the same position: the second run is warm
-	// (the cache is filled, the scratch grown), and counts what it allocates.
+	// The same chunk again from the same position: warm (the cache is filled,
+	// the scratch grown). Two collections empty the pools the ffi layer keeps
+	// (a sync.Pool refills with an allocation), one unmeasured run refills
+	// them, and the next run is the one that counts: a warm step makes no
+	// engine heap allocation at all.
+	runtime.GC()
+	runtime.GC()
 	s.Reset()
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	if err := s.stepRows(embedSrc(s, ids), ids, &out); err != nil {
+	if err := warmWavesStep(s, embedSrc(s, ids), ids, &out); err != nil {
 		t.Fatal(err)
 	}
-	runtime.ReadMemStats(&after)
-	return last, g.Stats(), after.Mallocs - before.Mallocs
+	// The fewest of three runs: a systematic allocation shows in all three,
+	// while a pool of the ffi layer that a goroutine migrating to another
+	// processor finds empty allocates once, in one.
+	fewest := ^uint64(0)
+	for range 3 {
+		s.Reset()
+		src := embedSrc(s, ids)
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		if err := warmWavesStep(s, src, ids, &out); err != nil {
+			t.Fatal(err)
+		}
+		runtime.ReadMemStats(&after)
+		fewest = min(fewest, after.Mallocs-before.Mallocs)
+	}
+	return last, g.Stats(), fewest
 }
 
 // TestHybridPrefillWavesMatchTheHost holds a prompt chunk of a hybrid block,
@@ -132,13 +149,14 @@ func TestHybridPrefillWavesMatchTheHost(t *testing.T) {
 					}
 				})
 			}
-			// Warm (the cache holds the chunk's experts, so no sheet moves), a wave
-			// is the grouped pass's own launches: a few allocations per block-chunk
-			// over the host's share, not one per expert. A small cache churns
-			// sheets through the pager's Sheet path on every wave, which the
-			// decode admission shares; it is logged, not held to this.
-			if a, h := armAllocs["waves"], armAllocs["host"]; a > h+8*uint64(blockChunks["waves"]) {
-				t.Errorf("waves allocated %d times warm, the host arm %d, over %d block-chunks", a, h, blockChunks["waves"])
+			// Warm, a chunk on the waves makes no heap allocation, whether the cache
+			// holds its experts or churns sheets through the pager's Sheet path on
+			// every wave (the admission path decode shares). The host arm is the
+			// control: it is logged.
+			for _, name := range []string{"waves", "waves-small-cache"} {
+				if a := armAllocs[name]; a != 0 {
+					t.Errorf("%s allocated %d times warm over %d block-chunks; a warm step allocates nothing", name, a, blockChunks[name])
+				}
 			}
 		})
 	}
@@ -178,4 +196,9 @@ func wavesNMSE(got, want []float32) float64 {
 		den += float64(want[i]) * float64(want[i])
 	}
 	return num / den
+}
+
+//go:noinline
+func warmWavesStep(s *State, src []func(dst []float32) error, ids []int32, out *rowsOut) error {
+	return s.stepRows(src, ids, out)
 }

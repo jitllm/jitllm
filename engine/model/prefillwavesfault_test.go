@@ -44,3 +44,27 @@ func TestPrefillWavesGateDiscriminates(t *testing.T) {
 		}
 	}
 }
+
+// TestPrefillWavesAllocGateDiscriminates arms an allocation in the waves'
+// chunk loop: the warm count TestHybridPrefillWavesMatchTheHost holds at zero
+// must see it.
+func TestPrefillWavesAllocGateDiscriminates(t *testing.T) {
+	md := prefillWavesModels[1]
+	path, ok := existingModel(testmodels.Path(md.path))
+	if !ok {
+		t.Skipf("MODEL MISSING: %s -- this gate proved nothing", md.path)
+	}
+	m, err := Open(jlmOf(t, path), noTune, WithKVF16(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	ids := prefillWavesIDs(m)
+	tier.SetMoEFault("prefillalloc")
+	defer tier.SetMoEFault("")
+	_, st, allocs := prefillWavesAllocs(t, m, ids, md.blocks, 0, false)
+	t.Logf("prefillalloc: %d warm allocations over %d block-chunks", allocs, st.PrefillBlocks)
+	if st.PrefillBlocks == 0 || allocs == 0 {
+		t.Fatalf("with prefillalloc armed the warm chunk made %d allocations over %d block-chunks: the gate cannot see it", allocs, st.PrefillBlocks)
+	}
+}

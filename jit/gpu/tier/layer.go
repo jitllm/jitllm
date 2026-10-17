@@ -12497,6 +12497,10 @@ func (st *streamBank) prefillWaves(g *devTier, s backend.Session, l *layer, nExp
 		for i := range st.wslot {
 			st.wslot[i] = -1
 		}
+		// The wave lists hold at most every expert once: sized here, they
+		// never grow in a step.
+		st.waveHit = make([]uint32, 0, nExpert)
+		st.waveMiss = make([]uint32, 0, nExpert)
 	}
 	// The chunk's experts, each once: those the cache holds, then the rest.
 	// wslot marks an expert seen (waveSeen) and holds a running wave's
@@ -12529,6 +12533,11 @@ func (st *streamBank) prefillWaves(g *devTier, s backend.Session, l *layer, nExp
 				st.waveMiss = append(st.waveMiss, e)
 			}
 		}
+	}
+	if moeFaulted("prefillalloc") {
+		// The violation: the lists are rebuilt per chunk, a heap allocation a
+		// warm step must not make.
+		st.waveHit = append([]uint32(nil), st.waveHit...)
 	}
 	g.PrefillBlocks++
 	g.PrefillHits += len(st.waveHit)
@@ -12590,6 +12599,9 @@ func (st *streamBank) prefillWaves(g *devTier, s backend.Session, l *layer, nExp
 			}
 		}
 		st.tick++
+		if cap(st.items) < len(st.owner) {
+			st.items = make([]streamItem, 0, len(st.owner))
+		}
 		st.items = st.items[:0]
 		for _, e := range exps {
 			v := -1
