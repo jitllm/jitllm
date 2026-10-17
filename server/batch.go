@@ -159,6 +159,10 @@ type batchCounters struct {
 	// parkRefusals counts time-slice parks the session refused: the row
 	// kept its place and its request ran on.
 	parkRefusals atomic.Int64
+	// prefixHolds counts rows held back from admission while an admitted row
+	// computed the prefix they share (stepLoop.holdsForPrefix), and
+	// prefixHoldTimeouts those released because the producer took too long.
+	prefixHolds, prefixHoldTimeouts atomic.Int64
 	// promptRowsFed counts, per step, the prompting rows it fed: a gate reads
 	// it against the prompting rows the step had.
 	promptRowsFed, promptRowsHad atomic.Int64
@@ -242,6 +246,11 @@ type row struct {
 	// has the row's prompt offered to the store once it has run.
 	restored int
 	seal     bool
+	// heldSince is when the row was first held back for a producer of its
+	// prefix (holdsForPrefix), and holdSpent says that wait ran out; the
+	// loop's own.
+	heldSince time.Time
+	holdSpent bool
 	// fresh says the row's sequence starts with its prompt (no
 	// continue_session), so a prompt cut short is reset rather than kept.
 	fresh bool
@@ -468,7 +477,15 @@ func (lp *stepLoop) admit() {
 	}
 	if len(lp.waiting) > 0 {
 		for len(lp.waiting) > 0 {
-			r := lp.waiting[0]
+			// The first waiter that is not a follower held for a producer.
+			wi := 0
+			for wi < len(lp.waiting) && lp.holdsForPrefix(lp.waiting[wi]) {
+				wi++
+			}
+			if wi == len(lp.waiting) {
+				break
+			}
+			r := lp.waiting[wi]
 			need := rowPages(r, 0, page) * page
 			if blocked(need) {
 				// A time slice: rows past their quantum make way (batchfair.go).
@@ -496,7 +513,7 @@ func (lp *stepLoop) admit() {
 				lp.stats.kvWaits.Add(1)
 				break
 			}
-			lp.waiting = lp.waiting[1:]
+			lp.waiting = append(lp.waiting[:wi], lp.waiting[wi+1:]...)
 			r.s.queuePos.Store(0)
 			if r.parked {
 				if err := lp.resumeRow(r); err != nil {
@@ -521,6 +538,7 @@ func (lp *stepLoop) admit() {
 					lp.stats.parkRefusals.Add(1)
 				}
 			} else {
+				lp.recheckPrefix(r)
 				r.waited = time.Since(r.enqueued)
 				lp.stats.admissions.Add(1)
 				lp.stats.admitWait.Add(int64(r.waited))
@@ -537,6 +555,76 @@ func (lp *stepLoop) admit() {
 	if page > 0 {
 		lp.lm.gpu.PromiseKV(promised)
 	}
+}
+
+// minSharedPrefix is the fewest prompt positions two requests must share
+// for the later to wait for the earlier's prompt (prefixHoldMax bounds the
+// wait): below it the recompute is cheaper than the queue.
+const minSharedPrefix = 16
+
+// prefixHoldMax is the longest a row waits for a producer of its prefix; past
+// it the row is admitted and computes its own.
+const prefixHoldMax = 2 * time.Second
+
+// holdsForPrefix reports whether waiting row r is held back: a fresh row that
+// missed the cache, that no priority exempts, while an admitted row is still
+// computing a prompt that starts as r's does, so that r restores that prefix
+// instead of starting a second producer of it. The hold is bounded
+// (prefixHoldMax) and ends when the producer's prompt is in (it sealed it),
+// leaves (cancelled or failed: r is promoted to compute it itself), or r
+// would gain under minSharedPrefix positions. Rows that share nothing are
+// never held, and one held row does not stop the rows behind it. Callers
+// hold lp.mu.
+func (lp *stepLoop) holdsForPrefix(r *row) bool {
+	if !r.seal || !r.fresh || r.begun || r.parked || r.restored != 0 || r.prio > 0 || r.holdSpent {
+		return false
+	}
+	for _, q := range lp.rows {
+		if !q.seal || !q.prompting() || q.s == r.s {
+			continue
+		}
+		if sharedPrefix(q.ids, r.ids)-q.restored < minSharedPrefix {
+			continue
+		}
+		if r.heldSince.IsZero() {
+			r.heldSince = time.Now()
+			lp.stats.prefixHolds.Add(1)
+		} else if time.Since(r.heldSince) > prefixHoldMax {
+			r.holdSpent = true
+			lp.stats.prefixHoldTimeouts.Add(1)
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// sharedPrefix is how many leading tokens a and b have in common.
+func sharedPrefix(a, b []int32) int {
+	n := min(len(a), len(b))
+	for i := 0; i < n; i++ {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return n
+}
+
+// recheckPrefix looks the memory cache up again for a row that missed it
+// before it was queued and has not run: requests for one prefix that arrive
+// together all miss, and the one admitted first leaves the prefix for the
+// rest while they wait. Only a row still at position zero can restore
+// (State.RestorePrefix), so a row that has begun, was parked, or continues a
+// session keeps what it has. A failed restore leaves it a miss.
+func (lp *stepLoop) recheckPrefix(r *row) {
+	if !r.seal || !r.fresh || r.begun || r.parked || r.restored != 0 || r.s.st.Pos() != 0 {
+		return
+	}
+	n, err := r.s.st.RestorePrefix(r.ids)
+	if err != nil || n == 0 {
+		return
+	}
+	r.restored, r.fed, r.reset = n, n, false
 }
 
 // admitLookahead is the most generated positions admission promises a row
