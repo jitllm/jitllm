@@ -3,6 +3,7 @@
 package model
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -27,6 +28,13 @@ var prefillWavesModels = []struct {
 // noWaves is the control arm: the chunk's experts on the host, as before they
 // ran on the card.
 func prefillWavesCase(t *testing.T, m *Model, ids []int32, blocks, slots int, noWaves bool) ([]float32, tier.Stats) {
+	last, st, _ := prefillWavesAllocs(t, m, ids, blocks, slots, noWaves)
+	return last, st
+}
+
+// prefillWavesAllocs is prefillWavesCase that also runs the chunk a second,
+// warm time and returns the heap allocations that second run made.
+func prefillWavesAllocs(t *testing.T, m *Model, ids []int32, blocks, slots int, noWaves bool) ([]float32, tier.Stats, uint64) {
 	t.Helper()
 	c := m.Cfg
 	s := m.NewState(len(ids) + 2)
@@ -59,8 +67,17 @@ func prefillWavesCase(t *testing.T, m *Model, ids []int32, blocks, slots int, no
 		t.Fatal(err)
 	}
 	t.Logf("device: %v", g.Err())
-	last := out.logits[(len(ids)-1)*c.NVocab : len(ids)*c.NVocab]
-	return append([]float32(nil), last...), g.Stats()
+	last := append([]float32(nil), out.logits[(len(ids)-1)*c.NVocab:len(ids)*c.NVocab]...)
+	// The same chunk again from the same position: the second run is warm
+	// (the cache is filled, the scratch grown), and counts what it allocates.
+	s.Reset()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	if err := s.stepRows(embedSrc(s, ids), ids, &out); err != nil {
+		t.Fatal(err)
+	}
+	runtime.ReadMemStats(&after)
+	return last, g.Stats(), after.Mallocs - before.Mallocs
 }
 
 // TestHybridPrefillWavesMatchTheHost holds a prompt chunk of a hybrid block,
@@ -83,13 +100,16 @@ func TestHybridPrefillWavesMatchTheHost(t *testing.T) {
 			band := md.band
 			ids := prefillWavesIDs(m)
 			want := prefillWavesHost(t, m, ids)
+			armAllocs, blockChunks := map[string]uint64{}, map[string]int{}
 			for _, arm := range []struct {
 				name    string
 				slots   int
 				noWaves bool
 			}{{"waves", 0, false}, {"waves-small-cache", 2 * m.Cfg.NExpertUsed, false}, {"host", 0, true}} {
 				t.Run(arm.name, func(t *testing.T) {
-					got, st := prefillWavesCase(t, m, ids, md.blocks, arm.slots, arm.noWaves)
+					got, st, allocs := prefillWavesAllocs(t, m, ids, md.blocks, arm.slots, arm.noWaves)
+					armAllocs[arm.name], blockChunks[arm.name] = allocs, st.PrefillBlocks
+					t.Logf("%s: %d heap allocations in the warm run", arm.name, allocs)
 					nmse := wavesNMSE(got, want)
 					t.Logf("%s: %d tokens, NMSE %.2e (band %.0e); %d block-chunks in %d waves, %d sheets sent, %d hits; %d hybrid block-steps",
 						arm.name, len(ids), nmse, band, st.PrefillBlocks, st.PrefillWaves, st.PrefillUploaded, st.PrefillHits, st.HybridRuns)
@@ -111,6 +131,14 @@ func TestHybridPrefillWavesMatchTheHost(t *testing.T) {
 							st.PrefillBlocks, st.PrefillWaves, st.PrefillUploaded)
 					}
 				})
+			}
+			// Warm (the cache holds the chunk's experts, so no sheet moves), a wave
+			// is the grouped pass's own launches: a few allocations per block-chunk
+			// over the host's share, not one per expert. A small cache churns
+			// sheets through the pager's Sheet path on every wave, which the
+			// decode admission shares; it is logged, not held to this.
+			if a, h := armAllocs["waves"], armAllocs["host"]; a > h+8*uint64(blockChunks["waves"]) {
+				t.Errorf("waves allocated %d times warm, the host arm %d, over %d block-chunks", a, h, blockChunks["waves"])
 			}
 		})
 	}
