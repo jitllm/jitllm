@@ -937,7 +937,7 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	// So does a selection over the whole history (the lightning indexer,
 	// MiniMax-M3's and QSA's block selections): a streamed pass cannot serve
 	// it, so its pages cannot go home either.
-	kp.layers[li].noEvict = p.DS4 != nil || selectsHistory(p)
+	kp.layers[li].noEvict = p.DS4 != nil || keepsHistory(p)
 	if d := p.DS4; d != nil && p.Comp != nn.DS4CompNone {
 		ek := entKey(li)
 		geom := kvGeom{kvRow: d.EntRowAt(p.Comp, p.HeadDim), mla: true}
@@ -966,7 +966,7 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	// A history that cannot leave the card is held at the context asked for,
 	// charged here with the block, so the budget declines the block at
 	// placement rather than a call failing for want of a page mid-prompt.
-	if selectsHistory(p) {
+	if keepsHistory(p) {
 		if want := contextPages(kp, g.capped(p).MaxSeq, seats); kp.layers[li].n < want {
 			if err := g.growKVLayer(kp, kp.layers[li], want); err != nil {
 				if fresh {
@@ -982,6 +982,13 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 // selectsHistory reports a block whose attention selects from its whole
 // history: the lightning indexer, MiniMax-M3's and QSA's block selections.
 func selectsHistory(p *nn.LayerPlan) bool { return p.IdxHeads != 0 || p.QSA() }
+
+// keepsHistory is selectsHistory as the pool acts on it: such a block's pages
+// never leave the card and its context is charged with it. The row fault
+// evictselection withdraws both, the violation the gates demand fail.
+func keepsHistory(p *nn.LayerPlan) bool {
+	return selectsHistory(p) && !rowsFaulted("evictselection")
+}
 
 // contextPages is the pages a block that holds its context needs for seats
 // sequences of the plan's longest context, and the dummy.
@@ -1015,7 +1022,7 @@ func (g *devTier) pagedLayerBytes(p *nn.LayerPlan) uint64 {
 		words = g.kvp.tabWords
 	}
 	pages := uint64(1 + g.sessions())
-	if selectsHistory(p) && g.kvp != nil {
+	if keepsHistory(p) && g.kvp != nil {
 		// Held at the context asked for (pagedLayer).
 		pages = uint64(contextPages(g.kvp, g.capped(p).MaxSeq, int(g.sessions())))
 	}

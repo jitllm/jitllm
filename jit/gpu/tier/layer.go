@@ -6614,6 +6614,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 	if g.injectedFail() {
 		return false
 	}
+	allocFault()
 	// A tower's range runs in lane0, whose tower set is the device's own
 	// (visrows.go): a call holding a clone borrows lane0 for it.
 	g.mu.Lock()

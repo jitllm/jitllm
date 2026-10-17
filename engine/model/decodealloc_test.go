@@ -422,7 +422,17 @@ func decodeAllocs(t *testing.T, m *Model, g *tier.GPU) decodeWindow {
 // 14,500 allocations a token before a pass-per-page stream was found to be
 // the cause. A device arm only; the host's is TestLongDecodeDoesNotAllocate.
 func deepDecodeAllocs(t *testing.T, m *Model, g *tier.GPU) {
-	const page, warm, n = 128, 16, 32
+	t.Helper()
+	w, what, n, reads, captures := deepDecodeWindow(t, m, g)
+	allocVerdict(t, what, w, n, reads, captures)
+}
+
+// deepDecodeWindow runs deepDecodeAllocs' window and returns what the verdict
+// reads, so a gate can run it under a deliberate violation.
+func deepDecodeWindow(t *testing.T, m *Model, g *tier.GPU) (w windowAllocs, what string, n int, reads int64, captures int) {
+	t.Helper()
+	const page, warm = 128, 16
+	n = 32
 	ctx := 5*page + 16
 	s := m.NewState(ctx + warm + n + 8)
 	defer s.Close()
@@ -449,15 +459,15 @@ func deepDecodeAllocs(t *testing.T, m *Model, g *tier.GPU) {
 	}
 	c0 := g.Stats()
 	r0 := m.container.Reads()
-	w := countAllocs(func() {
+	w = countAllocs(func() {
 		for i := range n {
 			if _, err := s.Forward(int32(3 + i%64)); err != nil {
 				t.Fatal(err)
 			}
 		}
 	})
-	allocVerdict(t, fmt.Sprintf("%d of %d blocks placed, positions %d..%d", s.GPULayers(), m.Cfg.NLayer, s.pos-n, s.pos),
-		w, n, m.container.Reads()-r0, g.Stats().Captures-c0.Captures)
+	return w, fmt.Sprintf("%d of %d blocks placed, positions %d..%d", s.GPULayers(), m.Cfg.NLayer, s.pos-n, s.pos),
+		n, m.container.Reads() - r0, g.Stats().Captures - c0.Captures
 }
 
 // decodeWindow is what the host ran over decodeAllocs' window: matvecs split

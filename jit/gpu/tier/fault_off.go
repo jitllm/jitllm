@@ -21,3 +21,5 @@ func moeFaulted(string) bool { return false }
 func roomFaulted(string) bool { return false }
 
 func peerFaulted(string) bool { return false }
+
+func allocFault() {}

@@ -121,6 +121,12 @@ func recFaulted(f string) bool { return recFault == f }
 //	          the decode descriptors, where those rows are empty
 //	"streamcutrows"  a fallback that runs a stream-major chunk in parts cuts
 //	          the streams after the first one row on
+//	"evictselection"  a block that selects from its whole history may have its
+//	          pages sent home, and its context is not charged with it
+//	"decodealloc"  every device call allocates a small buffer: the allocation
+//	          gates must read it
+//	"pieceouter"  a layered chunk goes pieces outer, block groups inner, so
+//	          every piece pages the run in again
 var rowsFault string
 
 // SetRowsFault arms one violation for the calls after it; "" disarms.
@@ -183,3 +189,14 @@ var peerFault string
 func SetPeerFault(f string) { peerFault = f }
 
 func peerFaulted(f string) bool { return peerFault == f }
+
+// faultSink keeps the allocation the decodealloc fault makes alive past
+// escape analysis.
+var faultSink []byte
+
+// allocFault makes the decodealloc violation: one small heap allocation.
+func allocFault() {
+	if rowsFault == "decodealloc" {
+		faultSink = make([]byte, 32)
+	}
+}
