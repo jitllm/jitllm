@@ -27,7 +27,7 @@ func TestSplitRowsGateDiscriminates(t *testing.T) {
 			ids := m.Vocab.Encode("The capital of France is Paris, and the capital of Italy is Rome; Spain's", true)
 			tier.SetMoEFault("splitrowshost")
 			defer tier.SetMoEFault("")
-			worst, st := splitRowsCase(t, m, ids, md.blocks, false)
+			worst, st, _ := splitRowsCase(t, m, ids, md.blocks, false, false)
 			t.Logf("splitrowshost: worst NMSE %.2e over %d split row steps", worst, st.SplitRowSteps)
 			if st.SplitRowSteps == 0 || worst <= md.band {
 				t.Fatalf("with the host's share dropped the rows read NMSE %.2e over %d split row steps: the gate cannot see it",

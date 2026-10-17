@@ -932,15 +932,22 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 				return
 			}
 			g.HybridRuns++
+			learn := func() {
+				if *errp == nil && !g.NoRowAdmits {
+					*errp = st.learnRows(g, s, l, g.hostFns[sid][st.li].uses, p.NExpert, m.k, valid)
+				}
+			}
 			if hits == 0 {
 				// Nothing on the card: the host's sum is the output.
 				*errp = st.hostRowsLate(sid, g, s, eout, m.k, valid)
+				learn()
 				return
 			}
 			defer func() {
 				if *errp == nil {
 					*errp = st.hostRowsLate(sid, g, s, m.hsum, m.k, valid)
 				}
+				learn()
 				// The violation: the host's share dropped, the card's hits alone.
 				if *errp == nil && !moeFaulted("splitrowshost") {
 					lc.la(bs.addE, valid*ew, eout, m.hsum, eout)

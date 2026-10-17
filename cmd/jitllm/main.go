@@ -1088,6 +1088,8 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 				if ds.SplitRuns > 0 || ds.SplitAdmits > 0 || ds.TLateWrite > 0 {
 					fmt.Fprintf(os.Stderr, "split experts: %d block-step(s) split, %d expert(s) run on the card, host %.2f s, %d taken into the caches in %.2f s; host sums written back in %.2f s\n",
 						ds.SplitRuns, ds.SplitHits, sec(ds.TSplitHost), ds.SplitAdmits, sec(ds.TAdmit), sec(ds.TLateWrite))
+					fmt.Fprintf(os.Stderr, "split rows: %d multi-row block-step(s), %d row(s) in them, host time in both shapes above\n",
+						ds.SplitRowSteps, ds.HybridRows)
 				}
 			}
 			if ds.StreamPrefetched > 0 {

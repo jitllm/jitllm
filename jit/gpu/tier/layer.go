@@ -354,6 +354,10 @@ type streamBank struct {
 	// rowSel and rowW are a split step's misses for the host (splitRows).
 	rowSel []uint32
 	rowW   []float32
+	// rowOrig is the step's selections as the router chose them (splitRows
+	// rewrites the rows to slots), rowMiss the experts learnRows offers.
+	rowOrig, rowMiss []uint32
+	rowHit           []bool
 	// The split (hybrid with a cache): heat counts each expert's selections,
 	// halved every heatHalf tokens; hit marks which of this token's
 	// selection the cache holds; dw is the card's weights (a miss's zeroed),
@@ -627,6 +631,7 @@ func (st *streamBank) splitRows(g *devTier, s backend.Session, sel, w, in backen
 	st.hsel = growU32(st.hsel, rows*(k+1))
 	st.rowSel = growU32(st.rowSel, valid*(k+1))
 	st.rowW = growF32(st.rowW, valid*k)
+	st.rowOrig = growU32(st.rowOrig, valid*k)
 	if err := s.Sync(); err != nil {
 		return 0, err
 	}
@@ -658,6 +663,7 @@ func (st *streamBank) splitRows(g *devTier, s backend.Session, sel, w, in backen
 		st.rowSel[r*(k+1)+k] = st.hsel[r*(k+1)+k]
 		for j := 0; j < k; j++ {
 			st.rowW[r*k+j] = st.hw[r*k+j]
+			st.rowOrig[r*k+j] = row[j]
 			st.rowSel[r*(k+1)+j] = row[j]
 			if st.hit[j] {
 				st.rowSel[r*(k+1)+j] = noExpert
@@ -675,6 +681,42 @@ func (st *streamBank) splitRows(g *devTier, s backend.Session, sel, w, in backen
 // noExpert holds a hit's place in the host's share of a split step: an id no
 // expert has, which the host's expert-major pass matches to nothing.
 const noExpert = ^uint32(0)
+
+// learnRows is what decode's count and admit do for a token, for the valid
+// rows of a split step: every row's selection counts into the session's
+// expert counts, the slots the step's hits read are held, and the misses are
+// queued for the cache (admit's rules: an empty slot takes any, an occupied
+// one only an expert selected clearly more often, within the token's swap
+// budget). The sheets go out beside the card's launches and are in use from
+// the next step (finishAdmits). Without it a speculating run, whose every
+// step has several rows, never fills the cache it split against.
+func (st *streamBank) learnRows(g *devTier, s backend.Session, l *layer, uses []uint32, nExpert, k, valid int) error {
+	tok, hit := st.sel, st.hit
+	defer func() { st.sel, st.hit = tok, hit }()
+	st.rowMiss = st.rowMiss[:0]
+	for r := 0; r < valid; r++ {
+		st.sel = st.rowOrig[r*k : (r+1)*k]
+		st.count(uses)
+	}
+	st.tick++
+	for _, e := range st.rowOrig[:valid*k] {
+		if sl := st.slotOf[e]; sl >= 0 {
+			st.used[sl] = st.tick
+		} else {
+			st.rowMiss = append(st.rowMiss, e)
+		}
+	}
+	if len(st.rowMiss) == 0 {
+		return nil
+	}
+	if cap(st.rowHit) < len(st.rowMiss) {
+		st.rowHit = make([]bool, len(st.rowMiss))
+	}
+	st.rowHit = st.rowHit[:len(st.rowMiss)]
+	clear(st.rowHit)
+	st.sel, st.hit = st.rowMiss, st.rowHit
+	return st.admit(g, s, l, nExpert, g.splitAdmit()*valid)
+}
 
 // hostRowsLate runs splitRows' misses on the host, row by row as decode's
 // hostLate runs one token's (a few rows share few of their experts, so the

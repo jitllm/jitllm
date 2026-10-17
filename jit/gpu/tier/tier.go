@@ -503,6 +503,11 @@ type Config struct {
 	// on the host, as before the split covered them: the control arm of
 	// streamBank.splitRows, which runs the rows' cached experts on the card.
 	NoSplitRows bool
+	// NoRowAdmits keeps a step of several rows from teaching the expert
+	// cache: its selections are not counted and none of its misses is
+	// admitted, as before rows admitted. The control arm of the gate that
+	// holds row steps to admit.
+	NoRowAdmits bool
 	// NoPrefillExperts keeps a prompt chunk's experts of a hybrid block on the
 	// host, as before they ran on the card: the control arm of
 	// streamBank.prefillWaves, which runs them there through the block's
