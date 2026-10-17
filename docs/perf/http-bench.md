@@ -237,3 +237,50 @@ integration branch): each build's default joins the sweep. It changes no
 default and prints "candidate" only for a gated win without a gated
 regression; that is a reason to repeat, not to change a default. A timing row
 on the shared GPU box runs under that card's lock, both arms on one card.
+
+### First deployment search: Tesla V100-SXM2-16GB, dense and mixture
+
+Host: the shared 2x Xeon E5-2680 v4 box, one V100 (CUDA, `-devices cuda`,
+`-max-seq 3072 -kv-f16`), taken under that card's lock with both arms on the
+card in one pass. Host load was not quiet: load average 19.7 at the start of
+the dense pass and 6.0 at its end, 20.7 at the end of the mixture pass (other
+projects' jobs; the box has 56 logical CPUs, the servers were not pinned).
+Build: main at the commit the tool landed on. Mix `mixed`: concurrency 4, 16
+requests, prompts of 32, 128 and 512 words, 64 tokens, goodput SLO TTFT 3 s and
+mean inter-token gap 100 ms. Six interleaved rounds (A B C ... then reversed),
+every sample a fresh server and 2 warm-up requests, the unchanged default as
+control, an identical copy of it as the A/A. Models: Llama-3.1-8B-Instruct
+Q4_K_M (dense) and OLMoE-1B-7B-0924-Instruct Q4_K_M (mixture). Candidates:
+`-max-batch 8`, `-prompt-chunk 128/512`, `-step-cost 2/4`, `-fairness 0/50`,
+`-sessions 4`, `-mem-cache-max 256M`.
+
+**Result: nothing resolved, on either model.** Every candidate's every ratio
+was refused by the gate (IQR/median above 0.10). The A/A is the reason: the
+identical copy of the control read TTFT p99 1.10 [IQR/median 0.20] and
+inter-token p99 1.12 [0.86] on the dense model, and 0.86 [0.34] and 1.40
+[0.54] on the mixture. This harness at this mix cannot resolve a ratio on this
+box, so no setting is a candidate and no default has a reason to change.
+
+| median over 6 rounds, V100 | TTFT p99 (ms) | inter-token p99 (ms) | goodput (req/s) | host+device MiB |
+|---|---|---|---|---|
+| dense, default | 20088 | 1997 | 0.01 | 12718 |
+| dense, `-sessions 4` | 20906 | 2457 | 0.01 | 12862 |
+| mixture, default | 18605 | 2444 | 0.01 | 10512 |
+| mixture, `-sessions 4` | 18992 | 2075 | 0.04 | 10142 |
+
+The priority question, whether `-sessions 4` beats the default `-sessions 1`
+under concurrency 4: on the dense model its TTFT p99 ratio was 0.99
+[0.24], inter-token p99 1.17 [0.45], goodput 0.19 [0.00] (every one refused);
+on the mixture 0.92 [0.50], 0.85 [0.36], 1.99 [0.00] (refused). Not
+answered at this mix.
+
+What the numbers do say, unpaired: at concurrency 4 every configuration, the
+default included, had a TTFT p99 near 20 s and a goodput near 0.01 requests
+per second against a 3 s SLO, and aggregate throughput of 12-17 tok/s, where
+one stream of the same dense model on the same card decodes at about 138 tok/s
+(`jitllm run`). The SLO is unreachable in this regime, so goodput is a count of
+a handful of requests and carries no information; a sweep that is going to
+resolve anything needs a mix the default meets its SLO on, and a warm-up that
+takes a restarted server past its first-use tuning and compilation (two
+requests do not). That is the next step, not a conclusion about any setting.
+Per-sample logs and `results.json` were kept on the box.
