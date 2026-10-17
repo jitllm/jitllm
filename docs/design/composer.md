@@ -296,7 +296,7 @@ candidates, not a tuner.
 | q/k/v operand prologue | `norm` -> the q/k/v `matvec` group | the norm's single consumer group; exact | already timed by `tuneActIn`; its sites become matched |
 | residual + next norm's statistics in down's epilogue | an `add` into the residual whose consumer across the boundary is a `norm` | spans two blocks, so conditional on co-placement and dropped at a move; exact only with `RMSNormGroup`'s reduction tree | dep-block.md ranks it after the decomposition |
 | hidden-channel MLP partition (`graph.MLPPartition`) | gate and up `matvec`s on one row feeding an `act_mul`, feeding a `matvec` | no bias inside a slice, no reader outside it; no contract (no recipe built); Bounds: 8*F bytes a row removed, 8*H*ceil(F/256) added, no launch removed | refused by its bound at every row class wherever H > 256 (both sides scale with the rows, so a prompt chunk does not rescue it): on Llama-3.2-1B 512 KiB of partials a row against 64 KiB. Across devices it is a placement candidate, priced by crossings, not by this bound |
-| gated output norm (`graph.NormGate`, built) | a `head_norm` whose only reader is an `act_mul` gating it as the second operand | SiLU or sigmoid; exact on PTX and SPIR-V | one launch and 8*VHeads*VDim bytes a row removed at every row class; timed per card at decode |
+| gated output norm (`graph.NormGate`, built) | a `head_norm` whose only reader is an `act_mul` gating it as the second operand | SiLU or sigmoid; exact on PTX, SPIR-V and MSL | one launch and 8*VHeads*VDim bytes a row removed at every row class; timed per card at decode |
 | producer/consumer tile alignment | a `matvec` whose output tiles a following `matvec` reduces over | a parameter of a region's candidates (gate/up row tile = down's split chunk), timed jointly with the split | scheduling alone lost: the persistent block 11% and the dependency-counter block 14-18% on the V100 (GK "A persistent decode block", "The dependency-counter block"), because every matvec reads its whole input; alignment has to remove traffic or a launch to be worth a trial |
 
 **A block split across devices** (attention on one card, the FFN or some
@@ -354,15 +354,16 @@ rewrite per block at both row classes outside a token (`prepNormGate`), and
 `Config.NormGate` (`JITLLM_GPU_NORMGATE`: two, fused) forces it; untuned, the
 trial (`tuneNormGate`, the same `timeRecipes`) decides each key at decode, and
 a prompt chunk runs the two launches, where nothing was timed. Gates:
-`backend.TestHeadNormGatedIsTheTwoLaunches` (bits on PTX and SPIR-V, every
+`backend.TestHeadNormGatedIsTheTwoLaunches` (bits on PTX, SPIR-V and MSL, every
 lane width, a guard after the output; the other gate and a weight one ulp off
 must differ), `graph.TestNormGateIsFoundByPattern`,
 `model.TestNormGateMatchesTwoLaunches` (qwen3next's SiLU, KDA's low-rank
 sigmoid and Qwen3.8-Flash-Next's sigmoid, every block placed, a prompt chunk
 and a decode, bit for bit; the fused launch counted once per gated delta block
 per call, none in the reference arm; the tuned tier against its own two
-launches; the rule's output and z swapped must move the logits). Metal has no
-contract until the kernel gate runs there.
+launches; the rule's output and z swapped must move the logits). Both gates
+ran on CUDA and Vulkan (an RTX 3050 Ti), CUDA on a V100 (sm_70) and Metal on
+an M4, where the run set its Metal contract.
 
 ### Task contract: Slice A
 

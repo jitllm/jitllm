@@ -129,6 +129,7 @@ var NormGate = &Rewrite{
 	Contract: map[string]Contract{
 		"ptx":   {Exact: true, Gate: "backend.TestHeadNormGatedIsTheTwoLaunches, model.TestNormGateMatchesTwoLaunches"},
 		"spirv": {Exact: true, Gate: "backend.TestHeadNormGatedIsTheTwoLaunches, model.TestNormGateMatchesTwoLaunches"},
+		"msl":   {Exact: true, Gate: "backend.TestHeadNormGatedIsTheTwoLaunches, model.TestNormGateMatchesTwoLaunches"},
 	},
 	// One launch fewer at every row class, and the normalised row's write and
 	// read: four bytes each per element.
