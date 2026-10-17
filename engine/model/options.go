@@ -38,7 +38,7 @@ type modelOpts struct {
 	// their groups; see WithResidualFold.
 	residFold bool
 	// blockGraph is WithBlockGraph.
-	blockGraph bool
+	blockGraph graphMode
 	// noShOverlap runs a mixture's shared expert after its routed read
 	// rather than behind it; see WithSharedOverlap.
 	noShOverlap bool

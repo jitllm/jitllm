@@ -8,41 +8,120 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// The block graph's first slice (docs/design/composer.md, "Above the
-// recipes"): each covered block's graph is built from what the container
-// states, verified against the container's tensors and configuration, and
-// lowered to the operations the hand-written block body runs. Under
-// WithBlockGraph a host decode runs covered blocks through that lowering; the
-// hand-written body is the control and stays the default until the graph
-// covers decode, batch and the device for the dense family.
+// The block graph (docs/design/composer.md, "Above the recipes"): each
+// covered block's graph is built from what the container states, verified
+// against the container's tensors and configuration, and lowered to the
+// operations the block body runs, on the host (decode, prompt chunks, ragged
+// steps) and on the device (the plan). A text block the graph does not cover
+// runs the hand-written body, and only for a reason on the named list below
+// (uncoveredReasons): a block never falls back silently, and the list is the
+// work list.
 
-// WithBlockGraph runs the host decode of every block the block graph covers
-// through the graph's lowering instead of the hand-written block body, and
-// refuses to open a model with a text block the graph does not cover. The
-// two compute the same values with the same kernels in the same order; the
-// option exists so a gate can compare them.
-func WithBlockGraph(on bool) Option { return func(l *loadOpts) { l.opt.blockGraph = on } }
+// WithBlockGraph chooses how blocks are lowered. The default runs every
+// covered block through the graph and every other block through the
+// hand-written body for its named reason. true does the same and refuses to
+// open a model with any block the graph does not cover; false runs every
+// block through the hand-written body, the control arm the graph's gates
+// compare against.
+func WithBlockGraph(on bool) Option {
+	return func(l *loadOpts) {
+		if on {
+			l.opt.blockGraph = graphStrict
+		} else {
+			l.opt.blockGraph = graphOff
+		}
+	}
+}
+
+// graphMode is WithBlockGraph's setting.
+type graphMode uint8
+
+const (
+	graphAuto graphMode = iota
+	graphStrict
+	graphOff
+)
 
 // graphCovered is the frontend: the architectures whose classes are known to
 // be the dense block graph.Dense describes. A trusted adapter by name, as the
 // converter's are; the runtime below it never asks for an architecture.
 func graphCovered(a string) bool { return a == "llama" || a == "qwen2" || a == "qwen3" }
 
+// Every reason a text block runs the hand-written body. A block's reason is
+// one of these, by name; TestCoveredBlocksTakeTheGraphPath asserts it.
+// Shrinking this list is the graph's work list.
+const (
+	UncoveredArch        = "architecture outside the graph's frontend" // DeepSeek V4, Kimi-K3, Gemma 4, the mixtures, ...
+	UncoveredMixture     = "a mixture FFN (the graph's mixture op is a sublayer graph, not lowered)"
+	UncoveredUngated     = "an ungated or non-SiLU FFN"
+	UncoveredLayerNorm   = "LayerNorm with biases"
+	UncoveredParallel    = "a parallel residual"
+	UncoveredOutGate     = "an attention output gate"
+	UncoveredMLA         = "MLA"
+	UncoveredKVShared    = "KV sharing or an extra cached head"
+	UncoveredIndexer     = "an attention indexer"
+	UncoveredStreams     = "several residual streams"
+	UncoveredPLE         = "per-layer embeddings"
+	UncoveredResidScale  = "a residual scale"
+	UncoveredNoPE        = "a block without the rotary"
+	UncoveredTemperature = "an attention temperature"
+	UncoveredWindow      = "an attention window or chunk"
+	UncoveredRecurrent   = "a recurrent layer"
+)
+
+// UncoveredReasons is the named list, in order.
+var UncoveredReasons = []string{UncoveredArch, UncoveredMixture, UncoveredUngated, UncoveredLayerNorm,
+	UncoveredParallel, UncoveredOutGate, UncoveredMLA, UncoveredKVShared, UncoveredIndexer, UncoveredStreams,
+	UncoveredPLE, UncoveredResidScale, UncoveredNoPE, UncoveredTemperature, UncoveredWindow, UncoveredRecurrent}
+
+// uncovered is why the block graph does not cover text block li, by name, or
+// "" where it does.
+func (m *Model) uncovered(li int) string {
+	c := m.Cfg
+	w0, an := c.AttnWindow(li, 1<<20)
+	switch {
+	case !graphCovered(c.Arch):
+		return UncoveredArch
+	case c.MoE():
+		return UncoveredMixture
+	case c.Act != nn.ActSiLU:
+		return UncoveredUngated
+	case c.LayerNorm:
+		return UncoveredLayerNorm
+	case c.Parallel:
+		return UncoveredParallel
+	case c.AttnOutGate:
+		return UncoveredOutGate
+	case c.MLA():
+		return UncoveredMLA
+	case c.KVShared(li) || c.extraKVHead(li):
+		return UncoveredKVShared
+	case c.Indexer():
+		return UncoveredIndexer
+	case c.streamHead():
+		return UncoveredStreams
+	case c.PLEDim != 0:
+		return UncoveredPLE
+	case c.ResidualScale != 1:
+		return UncoveredResidScale
+	case !c.RopeAt(li):
+		return UncoveredNoPE
+	case c.AttnTemp(li, 1) != 1:
+		return UncoveredTemperature
+	case w0 != 0 || an != 1<<20+1:
+		return UncoveredWindow
+	case c.LayerKind(li).Recurrent():
+		return UncoveredRecurrent
+	}
+	return ""
+}
+
 // blockFacts is what the container states about text block li: the dense
 // configuration and the tensors stored for the block by role.
 func (m *Model) blockFacts(li int) (graph.Facts, error) {
 	c := m.Cfg
-	if !graphCovered(c.Arch) {
-		return graph.Facts{}, fmt.Errorf("model: the block graph does not cover %s", c.Arch)
-	}
-	// Configuration the op language does not express yet: each is a missing
-	// op or attribute, refused rather than dropped.
-	w0, an := c.AttnWindow(li, 1<<20)
-	switch {
-	case c.LayerNorm || c.Parallel || c.AttnOutGate || c.MLA() || c.KVShared(li) || c.extraKVHead(li) ||
-		c.Indexer() || c.streamHead() || c.PLEDim != 0 || c.ResidualScale != 1 || !c.RopeAt(li) ||
-		c.AttnTemp(li, 1) != 1 || w0 != 0 || an != 1<<20+1 || c.LayerKind(li).Recurrent() || c.Act != nn.ActSiLU:
-		return graph.Facts{}, fmt.Errorf("model: block %d of %s has configuration the block graph does not express", li, c.Arch)
+	if why := m.uncovered(li); why != "" {
+		return graph.Facts{}, fmt.Errorf("model: block %d of %s is not covered by the block graph: %s", li, c.Arch, why)
 	}
 	layout := graph.RopeNorm
 	if c.RopeNeox {
@@ -133,11 +212,21 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 	return lw, nil
 }
 
-// buildGraphs builds, verifies and lowers every text block's graph
-// (WithBlockGraph), refusing the model where any one fails.
+// buildGraphs builds, verifies and lowers every covered text block's graph,
+// and records every other block's named reason (m.graphWhy). A covered block
+// whose graph fails to verify or lower refuses the model: that is a bug, never
+// a fallback. Under WithBlockGraph(true) an uncovered block refuses it too.
 func (m *Model) buildGraphs() error {
 	m.graphs = make([]*denseLowering, m.Cfg.NLayer)
+	m.graphWhy = make([]string, m.Cfg.NLayer)
 	for li := range m.graphs {
+		if why := m.uncovered(li); why != "" {
+			if m.opt.blockGraph == graphStrict {
+				return fmt.Errorf("model: block %d of %s is not covered by the block graph: %s", li, m.Cfg.Arch, why)
+			}
+			m.graphWhy[li] = why
+			continue
+		}
 		f, err := m.blockFacts(li)
 		if err != nil {
 			return err
@@ -158,6 +247,19 @@ func (m *Model) buildGraphs() error {
 		m.graphs[li] = lw
 	}
 	return nil
+}
+
+// GraphUncovered is why text block li runs the hand-written body: one of
+// UncoveredReasons, "control" under WithBlockGraph(false), or "" where the
+// graph covers it.
+func (m *Model) GraphUncovered(li int) string {
+	if m.opt.blockGraph == graphOff {
+		return "control"
+	}
+	if li < 0 || li >= len(m.graphWhy) {
+		return ""
+	}
+	return m.graphWhy[li]
 }
 
 // BlockRewrites is every rewrite's decision on text block li's graph, legal
@@ -187,12 +289,64 @@ func (s *State) GraphBlocks() int { return s.graphRuns }
 // decode's.
 func (s *State) GraphChunks() int { return s.graphChunkRuns }
 
+// GraphRaggedBlocks counts the blocks a State ran through the block graph's
+// ragged-step lowering (graphRagged): a batch step's evidence.
+func (s *State) GraphRaggedBlocks() int { return s.graphRaggedRuns }
+
+// BlockPath is which path ran text block li in a State, counted per run of
+// the block (a decoded token, a prompt chunk, a ragged step): Graph through
+// the block graph's host lowering, Hand through the hand-written body, and
+// Device on a device, whose plan is lowered from the graph exactly where the
+// model holds one (Model.BlockGraph). Why is the block's named reason for the
+// hand-written body (Model.GraphUncovered), "" where the graph covers it.
+type BlockPath struct {
+	Graph, Hand, Device int
+	DeviceGraphed       bool
+	Why                 string
+}
+
+// BlockPaths is every text block's path record in the State.
+func (s *State) BlockPaths() []BlockPath {
+	out := make([]BlockPath, s.m.Cfg.NLayer)
+	for li := range out {
+		if li < len(s.paths) {
+			out[li] = s.paths[li]
+		}
+		out[li].DeviceGraphed = out[li].Device > 0 && s.m.BlockGraph(li) != nil
+		out[li].Why = s.m.GraphUncovered(li)
+	}
+	return out
+}
+
+// pathOf is text block li's path record; a block past the text blocks (the
+// vision tower's) shares a scratch record nobody reads.
+func (s *State) pathOf(li int) *BlockPath {
+	if s.paths == nil {
+		s.paths = make([]BlockPath, s.m.Cfg.NLayer+1)
+	}
+	if li < 0 || li >= s.m.Cfg.NLayer {
+		return &s.paths[s.m.Cfg.NLayer]
+	}
+	return &s.paths[li]
+}
+
+// handRan records that text block li ran through the hand-written body.
+func (s *State) handRan(li int) { s.pathOf(li).Hand++ }
+
+// devRan records that blocks lo..hi-1 ran on a device.
+func (s *State) devRan(lo, hi int) {
+	for li := lo; li < hi; li++ {
+		s.pathOf(li).Device++
+	}
+}
+
 // graphBlock runs block li's host decode through its lowering: the calls the
 // hand-written body makes for a dense block, in its order, so the kernels and
 // their order are the control's.
 func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 	c, m := s.c, s.m
 	s.graphRuns++
+	s.pathOf(li).Graph++
 	// norm(x) -> attn_in
 	s.norm(s.h, s.x, l.attnNorm, l.attnNormB)
 	s.jit.NewInput()
@@ -292,6 +446,7 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, p0, n int, bidir bool) error {
 	c := s.c
 	s.graphChunkRuns++
+	s.pathOf(li).Graph++
 	ne := c.NEmbd
 	// norm(x) -> attn_in, every row
 	tn := s.tick()
@@ -347,6 +502,77 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, p0, n int, 
 	tr = s.tick()
 	s.addInto(s.bx[:n*ne], s.bh[:n*ne])
 	s.tock(opResid, tr)
+	s.layerOutScale(l, s.bx[:n*ne])
+	return nil
+}
+
+// graphRagged runs block li over a ragged step's rows -- each row its own
+// sequence's slot and position, in s.bx -- through the graph's lowering: the
+// dense subset of rowsHost's block body, in its order, so the kernels and
+// their order are the hand-written step's. Every row's rotary and cache write
+// lands before any row attends, as in graphRows.
+func (s *State) graphRagged(li int, l *layer, n int, seq, pos []int, cs, csSWA []float32, unitHeads, units, astride int, scale float64) error {
+	c := s.c
+	s.graphRaggedRuns++
+	s.pathOf(li).Graph++
+	ne := c.NEmbd
+	// norm(x) -> attn_in, every row
+	t0 := s.tick()
+	s.batchNormB(s.bh, s.bx, l.attnNorm, l.attnNormB, ne, n)
+	s.tock(opRMSNorm, t0)
+	// matvec q, k, v over the step's rows
+	kvDim, qDim := c.KVDimAt(li), c.QDimAt(li)
+	if _, err := s.projectQ(l, s.bq, s.ogate, s.bh, n, true); err != nil {
+		return err
+	}
+	if err := s.mm(s.bk, l.wk, s.bh, n); err != nil {
+		return err
+	}
+	s.addBiasRows(s.bk, l.bk, n)
+	if err := s.mm(s.bv, l.wv, s.bh, n); err != nil {
+		return err
+	}
+	s.addBiasRows(s.bv, l.bv, n)
+	// [head_norm q, head_norm k,] rope q, rope k, kv_append: each row at its
+	// owner's slot and position
+	for i := 0; i < n; i++ {
+		o, slot := s.rowOwner(i, seq)
+		o.attnPrep(l, s.bq[i*qDim:(i+1)*qDim], s.bk[i*kvDim:(i+1)*kvDim], s.bv[i*kvDim:(i+1)*kvDim],
+			s.ropeTable(li, cs, csSWA, i), li, slot, pos[i])
+	}
+	// attend
+	s.rowsAttend(li, l, n, seq, pos, unitHeads, units, astride, scale)
+	// matvec o, add into the residual
+	if err := s.mm(s.bh, l.wo, s.bxb[:n*qDim], n); err != nil {
+		return err
+	}
+	s.addBiasRows(s.bh, l.bo, n)
+	t0 = s.tick()
+	s.addInto(s.bx[:n*ne], s.bh[:n*ne])
+	s.tock(opResid, t0)
+	// norm -> gate, up -> act_mul -> down, add into the residual
+	t0 = s.tick()
+	s.batchNormB(s.bh, s.bx, l.ffnNorm, l.ffnNormB, ne, n)
+	s.tock(opRMSNorm, t0)
+	if err := s.mm(s.bgate, l.gate, s.bh, n); err != nil {
+		return err
+	}
+	if err := s.mm(s.bup, l.up, s.bh, n); err != nil {
+		return err
+	}
+	t0 = s.tick()
+	ff := c.NFFNAt(li)
+	gate, up := s.bgate[:n*ff], s.bup[:n*ff]
+	s.gaussTopK(li, gate, ff)
+	s.actmulAll(gate, up, c.Act)
+	s.jit.NewInput()
+	s.tock(opAct, t0)
+	if err := s.mm(s.bh, l.down, s.bgate, n); err != nil {
+		return err
+	}
+	t0 = s.tick()
+	s.addInto(s.bx[:n*ne], s.bh[:n*ne])
+	s.tock(opResid, t0)
 	s.layerOutScale(l, s.bx[:n*ne])
 	return nil
 }

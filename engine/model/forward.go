@@ -154,7 +154,12 @@ type State struct {
 	graphRuns int
 	// graphChunkRuns counts prompt block-chunks run through it (GraphChunks).
 	graphChunkRuns int
-	Grouped        int64
+	// graphRaggedRuns counts ragged-step blocks run through it
+	// (GraphRaggedBlocks).
+	graphRaggedRuns int
+	// paths is each text block's path record (BlockPaths).
+	paths   []BlockPath
+	Grouped int64
 
 	// kv is the paged KV history (see engine/model/kvpage.go). Pages are committed as
 	// the sequence reaches them rather than reserved for the whole context.
@@ -3791,6 +3796,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 				continue
 			}
 			m.trace(hi-1, "ffn_resid", s.x)
+			s.devRan(li, hi)
 			if fold != nil {
 				// The device ran the output norm and the projection too, so the
 				// token is finished and the residual never came home.
@@ -3825,12 +3831,13 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 		}
 		s.fuseRun()
 		l := &m.layers[li]
-		if li < len(m.graphs) {
+		if li < len(m.graphs) && m.graphs[li] != nil {
 			if err := s.graphBlock(li, l, m.graphs[li]); err != nil {
 				return nil, err
 			}
 			continue
 		}
+		s.handRan(li)
 		if c.DSV4() {
 			s.ds.rslot[0], s.ds.rpos[0], s.ds.rid[0] = 0, s.pos, s.tok
 			if err := s.ds4Block(li, l, s.xa, 1); err != nil {

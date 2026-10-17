@@ -19,7 +19,7 @@ func TestGraphFindsTheFFNSite(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
-			ctl, err := Open(p, noTune)
+			ctl, err := Open(p, noTune, WithBlockGraph(false))
 			if err != nil {
 				t.Fatal(err)
 			}

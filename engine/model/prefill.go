@@ -743,6 +743,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 						return nil, err
 					}
 					s.addDeep(hi-1, base, n)
+					s.devRan(li, hi)
 					li = hi - 1
 					continue
 				}
@@ -777,6 +778,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 						s.bswaTable(n, c.NRotSWA), false, nil, 0) == nil {
 						s.tailRowChunks++
 						s.addDeep(hi-1, base, n)
+						s.devRan(li, hi)
 						li = hi - 1
 						continue
 					}
@@ -794,6 +796,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 					s.bswaTable(n, c.NRotSWA), fh) {
 					headDone = fh != nil
 					s.addDeep(hi-1, base, n)
+					s.devRan(li, hi)
 					li = hi - 1
 					continue
 				}
@@ -878,6 +881,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 					}
 					if done {
 						s.addDeep(hi-1, base, n)
+						s.devRan(li, hi)
 						li = hi - 1
 						continue
 					}
@@ -1298,6 +1302,7 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 	if li < len(m.graphs) && m.graphs[li] != nil {
 		return s.graphRows(li, l, m.graphs[li], slot, p0, n, bidir)
 	}
+	s.handRan(li)
 	// DeepSeek V4's block is its own (ds4.go): the chunk's rows are
 	// successive positions of this slot, their tokens set by the caller.
 	if c.DSV4() {

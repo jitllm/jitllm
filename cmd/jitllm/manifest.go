@@ -35,7 +35,12 @@ type runManifest struct {
 	Recipes  []tier.RecipeChoice `json:"recipes,omitempty"`
 	// Ran counts the recipes' launches over the run (tier.Stats): a recipe
 	// chosen and never run is a RULE 10 failure a reader can see.
-	Ran     map[string]int  `json:"ran,omitempty"`
+	Ran map[string]int `json:"ran,omitempty"`
+	// Blocks is each text block's path in the timed run: through the block
+	// graph or the hand-written body (with its named reason), on the host or
+	// the device, and every rewrite matched on its graph, legal or refused
+	// with its reason. A block that fell back is visible here by name.
+	Blocks  []manifestBlock `json:"blocks,omitempty"`
 	Results manifestResults `json:"results"`
 }
 
@@ -78,6 +83,42 @@ type manifestPlacement struct {
 	PromptBlocks int      `json:"prompt_blocks"`
 	DecodeBlocks int      `json:"decode_blocks"`
 	Runs         [][2]int `json:"runs"`
+}
+
+type manifestBlock struct {
+	Block    int               `json:"block"`
+	Path     map[string]string `json:"path"` // phase ("prompt", "decode") -> "graph", "hand", "device-graph", "device-hand", mixed with "+"
+	Why      string            `json:"uncovered,omitempty"`
+	Rewrites []string          `json:"rewrites,omitempty"`
+}
+
+// paths records the State's per-block path for phase.
+func (r *runManifest) paths(m *model.Model, phase string, ps []model.BlockPath) {
+	if r.Blocks == nil {
+		r.Blocks = make([]manifestBlock, len(ps))
+		for li := range r.Blocks {
+			b := &r.Blocks[li]
+			b.Block, b.Path, b.Why = li, map[string]string{}, ps[li].Why
+			for _, d := range m.BlockRewrites(li) {
+				b.Rewrites = append(b.Rewrites, d.String())
+			}
+		}
+	}
+	for li, p := range ps {
+		var on []string
+		if p.Graph > 0 {
+			on = append(on, "graph")
+		}
+		if p.Hand > 0 {
+			on = append(on, "hand")
+		}
+		if p.Device > 0 && p.DeviceGraphed {
+			on = append(on, "device-graph")
+		} else if p.Device > 0 {
+			on = append(on, "device-hand")
+		}
+		r.Blocks[li].Path[phase] = strings.Join(on, "+")
+	}
 }
 
 type manifestResults struct {

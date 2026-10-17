@@ -1,0 +1,152 @@
+package model
+
+import (
+	"fmt"
+	"slices"
+	"testing"
+
+	"github.com/jitllm/jitllm/internal/testdevices"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
+)
+
+// pathsRun runs a prompt, a few decoded tokens and a ragged step across two
+// sessions on m (on the device g when it is not nil, every block placed) and
+// returns the first State's path record, the ragged step's merged in. On a
+// card too small for the model the blocks past the seam run on the host.
+func pathsRun(t *testing.T, m *Model, g *tier.GPU) []BlockPath {
+	t.Helper()
+	states := []*State{m.NewState(96), m.NewState(96)}
+	for _, s := range states {
+		defer s.Close()
+		if g != nil {
+			if err := s.SetDevice(g); err != nil {
+				t.Fatal(err)
+			}
+			if s.GPULayers() == 0 {
+				t.Skipf("no block placed on the device: the device arm proved nothing")
+			}
+		}
+	}
+	ids := m.Vocab.Encode("The capital of France is Paris, and the capital of Spain is", true)
+	for _, s := range states {
+		lg, err := s.Prefill(ids)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 3; i++ {
+			if lg, err = s.Forward(Greedy(lg)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := Step(states, []int32{ids[1], ids[2]}); err != nil {
+		t.Fatal(err)
+	}
+	out := states[0].BlockPaths()
+	for li, p := range states[1].BlockPaths() {
+		out[li].Graph += p.Graph
+		out[li].Hand += p.Hand
+		out[li].Device += p.Device
+	}
+	return out
+}
+
+// legacyBlocks is the gate's check on a covered model: an error naming every
+// text block that ran the hand-written body, or that ran on neither the
+// graph's host lowering nor a device with a graphed plan; a device arm must
+// have run some block on the device.
+func legacyBlocks(paths []BlockPath, device bool) error {
+	var bad []string
+	onDev := 0
+	for li, p := range paths {
+		switch {
+		case p.Hand != 0:
+			bad = append(bad, fmt.Sprintf("block %d ran the hand-written body %d times (%q)", li, p.Hand, p.Why))
+		case p.Device > 0 && !p.DeviceGraphed:
+			bad = append(bad, fmt.Sprintf("block %d ran on the device with a plan not lowered from the graph", li))
+		case p.Device == 0 && p.Graph == 0:
+			bad = append(bad, fmt.Sprintf("block %d never ran through the graph", li))
+		}
+		if p.Device > 0 {
+			onDev++
+		}
+	}
+	if device && onDev == 0 {
+		bad = append(bad, "no block ran on the device")
+	}
+	if bad != nil {
+		return fmt.Errorf("%d blocks off the graph path: %v", len(bad), bad)
+	}
+	return nil
+}
+
+// TestCoveredBlocksTakeTheGraphPath: on every model the block graph covers,
+// by default, every text block runs through the graph on the host (prompt,
+// decode, a ragged step across sessions) and with a graph-lowered plan on
+// every device arm -- zero blocks through the hand-written body. Forcing one
+// block off the graph fires the check. On models it does not cover, every
+// block that runs the hand-written body does so for a reason on the named
+// list (UncoveredReasons), never silently.
+func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0"} {
+		t.Run(name, func(t *testing.T) {
+			p := graphModel(t, name)
+			m, err := Open(p, noTune)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			for li := 0; li < m.Cfg.NLayer; li++ {
+				if why := m.GraphUncovered(li); why != "" || m.BlockGraph(li) == nil {
+					t.Fatalf("block %d is not covered by default: %q", li, why)
+				}
+			}
+			paths := pathsRun(t, m, nil)
+			if err := legacyBlocks(paths, false); err != nil {
+				t.Fatal("host: ", err)
+			}
+			t.Logf("host: block 0 %+v", paths[0])
+			for _, spec := range testdevices.Specs("cuda", "vulkan", "metal") {
+				t.Run(spec, func(t *testing.T) {
+					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
+					if err != nil || g == nil {
+						noDevice(t, spec, err)
+					}
+					defer g.Close()
+					paths := pathsRun(t, m, g)
+					if err := legacyBlocks(paths, true); err != nil {
+						t.Fatal(spec, ": ", err)
+					}
+					t.Logf("%s: block 0 %+v", spec, paths[0])
+				})
+			}
+			// The violation: block 2 forced off the graph.
+			saved := m.graphs[2]
+			m.graphs[2] = nil
+			err = legacyBlocks(pathsRun(t, m, nil), false)
+			m.graphs[2] = saved
+			if err == nil {
+				t.Fatal("a block forced to the hand-written body passed the check")
+			}
+			t.Logf("violation fires: %v", err)
+		})
+	}
+	for _, name := range []string{"gemma-3-1b-it-Q4_K_M", "Qwen3-MOE-4x0.6B-Q4_K_M"} {
+		t.Run(name, func(t *testing.T) {
+			m, err := Open(graphModel(t, name), noTune)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			for li, p := range pathsRun(t, m, nil) {
+				if p.Hand == 0 || p.Graph != 0 {
+					t.Fatalf("block %d: %+v", li, p)
+				}
+				if !slices.Contains(UncoveredReasons, p.Why) {
+					t.Fatalf("block %d ran the hand-written body for %q, not a named reason", li, p.Why)
+				}
+			}
+			t.Logf("every block on the hand-written body: %q", m.GraphUncovered(0))
+		})
+	}
+}

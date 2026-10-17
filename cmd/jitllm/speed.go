@@ -198,6 +198,7 @@ func speedCmd(args []string) error {
 		ppOn, spills, fails, tails := st.GPULayers(), st.Spills(), st.DeviceDemotions(), st.TailRowChunks()
 		if timed && man != nil {
 			man.Placed.PromptBlocks = ppOn
+			man.paths(m, "prompt", st.BlockPaths())
 		}
 		moves := st.Relocations() + st.Reclaims()
 		st.Close()
@@ -266,6 +267,7 @@ func speedCmd(args []string) error {
 		tg = time.Since(t0)
 		if timed && man != nil {
 			man.Placed.DecodeBlocks, man.Placed.Runs = st2.GPULayers(), st2.DeviceBlocks()
+			man.paths(m, "decode", st2.BlockPaths())
 			if d != nil {
 				man.device(d, name)
 			}

@@ -63,7 +63,7 @@ func TestBlockGraphMatchesTheHandPath(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
-			ctl, err := Open(p, noTune, WithKVF16(false))
+			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -142,7 +142,7 @@ func TestBlockGraphRefusesWhatItDoesNotCover(t *testing.T) {
 		m.Close()
 		t.Fatal("gemma-3 opened under WithBlockGraph")
 	}
-	if !strings.Contains(err.Error(), "does not cover gemma3") {
+	if !strings.Contains(err.Error(), UncoveredArch) {
 		t.Fatalf("refused for the wrong reason: %v", err)
 	}
 }
@@ -208,7 +208,7 @@ func TestBlockGraphPromptMatchesTheHandPath(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
-			ctl, err := Open(p, noTune, WithKVF16(false))
+			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -301,7 +301,7 @@ func TestBlockGraphLowersTheDevicePlan(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
-			ctl, err := Open(p, noTune)
+			ctl, err := Open(p, noTune, WithBlockGraph(false))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -387,4 +387,112 @@ func planDecode(t *testing.T, m *Model, ids, toks []int32, seam int) [][]float32
 		}
 	}
 	return out
+}
+
+// graphBatch runs steps batch steps of nseq sequences (ForwardBatch) and then
+// steps more through Step over nseq single-sequence States, the rows owned by
+// different sessions, returning every step's logits and the ragged-step
+// graph block count of both.
+func graphBatch(t *testing.T, m *Model, frames int) ([][]float32, int) {
+	if frames != 0 {
+		m.SetPageBudget(uint64(frames) * m.PageSize())
+	}
+	const nseq, steps = 3, 6
+	b := m.NewBatch(nseq, 64)
+	defer b.Close()
+	var out [][]float32
+	tok := make([]int32, nseq)
+	for j := 0; j < steps; j++ {
+		for i := range tok {
+			tok[i] = int32((7 + i*101 + j*13) % m.Cfg.NVocab)
+		}
+		lg, err := b.ForwardBatch(tok)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, append([]float32(nil), lg...))
+	}
+	ran := b.GraphRaggedBlocks()
+	states := make([]*State, nseq)
+	for i := range states {
+		states[i] = m.NewState(64)
+		defer states[i].Close()
+	}
+	for j := 0; j < steps; j++ {
+		for i := range tok {
+			tok[i] = int32((11 + i*37 + j*29) % m.Cfg.NVocab)
+		}
+		lgs, err := Step(states, tok)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, lg := range lgs {
+			out = append(out, append([]float32(nil), lg...))
+		}
+	}
+	for _, s := range states {
+		ran += s.GraphRaggedBlocks()
+	}
+	return out, ran
+}
+
+// TestBlockGraphRaggedStepMatchesTheHandPath is Slice B's batch half: a
+// ragged step's blocks run through the block graph's lowering (graphRagged)
+// give the hand-written step body's logits bit for bit, for a batch State
+// and for a step across sessions, every block of every step ran through the
+// graph, a page budget below the model gives the same answer, and the
+// comparison fires on a different computation (an f16 cache).
+func TestBlockGraphRaggedStepMatchesTheHandPath(t *testing.T) {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0"} {
+		t.Run(name, func(t *testing.T) {
+			p := graphModel(t, name)
+			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ctl.Close()
+			gm, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(true))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer gm.Close()
+			nl := gm.Cfg.NLayer
+			var want [][]float32
+			for _, budget := range []int{0, nl / 3} {
+				ref, ran := graphBatch(t, ctl, budget)
+				if ran != 0 {
+					t.Fatalf("the control ran %d ragged graph blocks", ran)
+				}
+				if budget == 0 {
+					want = ref
+				}
+				got, ran := graphBatch(t, gm, budget)
+				if ran != 2*6*nl {
+					t.Fatalf("budget %d: %d ragged-step blocks ran through the graph, want %d", budget, ran, 2*6*nl)
+				}
+				for i := range want {
+					for j := range want[i] {
+						if got[i][j] != want[i][j] {
+							t.Fatalf("budget %d: step row %d logit %d: graph %v, hand-written %v", budget, i, j, got[i][j], want[i][j])
+						}
+					}
+				}
+			}
+			f16, err := Open(p, noTune, WithKVF16(true), WithBlockGraph(true))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f16.Close()
+			other, _ := graphBatch(t, f16, 0)
+			differ := false
+			for i := range want {
+				for j := range want[i] {
+					differ = differ || other[i][j] != want[i][j]
+				}
+			}
+			if !differ {
+				t.Fatal("an f16 cache gave the f32 cache's logits bit for bit: the comparison cannot see a change")
+			}
+		})
+	}
 }

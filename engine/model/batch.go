@@ -177,7 +177,6 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 	// c.AttnScale rather than 1/sqrt(hd): they differ under YaRN (DeepSeek).
 	// The widths are per layer (HeadDimAt).
 	scale := c.AttnScale
-	nh := c.NHead
 	nrot := c.RopeW()
 	// One rotary table per row, rows being at different positions: the prompt
 	// chunk's tables, since a step may carry more rows than there are slots.
@@ -265,6 +264,7 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 				withHead, s.blogits[:nlogit*c.NVocab], nlogit); err != nil {
 				return nil, err
 			}
+			s.devRan(li, hi)
 			li = hi - 1
 			continue
 		}
@@ -275,6 +275,13 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 			return nil, err
 		}
 		l := &m.layers[li]
+		if li < len(m.graphs) && m.graphs[li] != nil {
+			if err := s.graphRagged(li, l, n, seq, pos, cs, csSWA, unitHeads, units, astride, scale); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		s.handRan(li)
 		// DeepSeek V4's block is its own (ds4.go): each row its sequence's
 		// slot, position and token.
 		if c.DSV4() {
@@ -441,66 +448,8 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 			}
 		attend:
 
-			// Across sequences and heads: at n=2 a split over sequences alone would
-			// leave four of six cores idle, and attention is the op that takes over
-			// as the context grows. A step with a chunk has rows enough.
-			t0 = s.tick()
-			bq, bxb, bqf, bxbf := s.bq, s.bxb, s.bqf, s.bxbf
-			bathf := s.bathf
-			hd, qDim, gqa := c.HeadDimAt(li), c.QDimAt(li), c.GQAAt(li)
-			// MLA reads a wider query than it writes, and every head reads the
-			// same cached row: qw is the whole row, ow its latent prefix, and
-			// gqaN = NHead makes hh/gqaN 0 for every head.
-			qw, ow, mla := hd, hd, c.MLA()
-			qsrc, odst, gqaN := bqf, bxbf, gqa
-			if mla {
-				qw, ow = c.KVLoraRank+c.NRot, c.KVLoraRank
-				qsrc, odst, gqaN = s.bmlaAbs, s.bmlaAcc, nh
-			}
-			// Residency before the fan-out; see kvEnsureWindow. Rows share the
-			// layer's pages, so the widest row decides.
-			maxNp := 0
-			for i := 0; i < n; i++ {
-				maxNp = max(maxNp, pos[i]+1)
-			}
-			kvli := c.KVSource(li)
-			if len(s.rowOwn) == 0 {
-				s.kvEnsureWindow(kvli, 0, maxNp)
-			} else {
-				for i, o := range s.rowOwn {
-					if s.rowWin[i] {
-						o.kvEnsureWindow(kvli, 0, pos[i]+1)
-					}
-				}
-			}
-			masks, mstride := s.idxMasks, 0
-			if c.Indexer() {
-				s.idxRows(kvli, n, func(i int) int { return seq[i] }, func(i int) int { return pos[i] + 1 }, masks)
-			}
-			if c.MSAAt(li) {
-				// The masks are laid out at the State's own stride (msa.go).
-				masks, mstride = s.msaMasks, s.attStride
-				s.msaRows(kvli, n, func(i int) int { return seq[i] }, func(i int) int { return pos[i] + 1 }, masks)
-			}
-			if c.QSAAt(li) {
-				masks, mstride = s.qsa().masks, 0
-				s.qsaRows(kvli, l, n, func(i int) (*State, int) { return s.rowOwner(i, seq) },
-					func(i int) int { return pos[i] + 1 }, masks)
-			}
-			// The fan-out's arguments are State fields and its function a
-			// method value made once: a closure over these locals escapes,
-			// an allocation per block per step.
-			s.ra = rowsAttn{s: s, l: l, li: li, kvli: kvli, unitHeads: unitHeads, nh: nh,
-				seq: seq, pos: pos, qsrc: qsrc, odst: odst, bq: bq, bxb: bxb, bathf: bathf,
-				astride: astride, qw: qw, ow: ow, hd: hd, qDim: qDim, gqaN: gqaN, mla: mla,
-				scale: scale, masks: masks, mstride: mstride}
-			if s.raRun == nil {
-				s.raRun = s.ra.run
-			}
-			s.jit.Parallel(units, 1, s.raRun)
-			s.ra = rowsAttn{}
-			s.tock(opAttn, t0)
-			s.jit.NewInput()
+			s.rowsAttend(li, l, n, seq, pos, unitHeads, units, astride, scale)
+			mla := c.MLA()
 
 			if mla {
 				// W_v un-absorbs out of the latent and wo follows, both inside
@@ -715,6 +664,74 @@ type errBatchDevice struct{}
 func (errBatchDevice) Error() string {
 	return "model: a batch runs on a device only with every block and the head on one device " +
 		"that runs ragged rows; this placement splits the model, and a split device holds one sequence's KV cache"
+}
+
+// rowsAttend is a ragged step's attention over block li's history: every
+// row's heads fanned out over the pool, each row at its own slot and position,
+// into s.bxb (s.bmlaAcc under MLA). The hand-written block body and the
+// block graph's ragged lowering (graphRagged) both call it.
+func (s *State) rowsAttend(li int, l *layer, n int, seq, pos []int, unitHeads, units, astride int, scale float64) {
+	c, nh := s.c, s.c.NHead
+	// Across sequences and heads: at n=2 a split over sequences alone would
+	// leave four of six cores idle, and attention is the op that takes over
+	// as the context grows. A step with a chunk has rows enough.
+	t0 := s.tick()
+	bq, bxb, bqf, bxbf := s.bq, s.bxb, s.bqf, s.bxbf
+	bathf := s.bathf
+	hd, qDim, gqa := c.HeadDimAt(li), c.QDimAt(li), c.GQAAt(li)
+	// MLA reads a wider query than it writes, and every head reads the
+	// same cached row: qw is the whole row, ow its latent prefix, and
+	// gqaN = NHead makes hh/gqaN 0 for every head.
+	qw, ow, mla := hd, hd, c.MLA()
+	qsrc, odst, gqaN := bqf, bxbf, gqa
+	if mla {
+		qw, ow = c.KVLoraRank+c.NRot, c.KVLoraRank
+		qsrc, odst, gqaN = s.bmlaAbs, s.bmlaAcc, nh
+	}
+	// Residency before the fan-out; see kvEnsureWindow. Rows share the
+	// layer's pages, so the widest row decides.
+	maxNp := 0
+	for i := 0; i < n; i++ {
+		maxNp = max(maxNp, pos[i]+1)
+	}
+	kvli := c.KVSource(li)
+	if len(s.rowOwn) == 0 {
+		s.kvEnsureWindow(kvli, 0, maxNp)
+	} else {
+		for i, o := range s.rowOwn {
+			if s.rowWin[i] {
+				o.kvEnsureWindow(kvli, 0, pos[i]+1)
+			}
+		}
+	}
+	masks, mstride := s.idxMasks, 0
+	if c.Indexer() {
+		s.idxRows(kvli, n, func(i int) int { return seq[i] }, func(i int) int { return pos[i] + 1 }, masks)
+	}
+	if c.MSAAt(li) {
+		// The masks are laid out at the State's own stride (msa.go).
+		masks, mstride = s.msaMasks, s.attStride
+		s.msaRows(kvli, n, func(i int) int { return seq[i] }, func(i int) int { return pos[i] + 1 }, masks)
+	}
+	if c.QSAAt(li) {
+		masks, mstride = s.qsa().masks, 0
+		s.qsaRows(kvli, l, n, func(i int) (*State, int) { return s.rowOwner(i, seq) },
+			func(i int) int { return pos[i] + 1 }, masks)
+	}
+	// The fan-out's arguments are State fields and its function a
+	// method value made once: a closure over these locals escapes,
+	// an allocation per block per step.
+	s.ra = rowsAttn{s: s, l: l, li: li, kvli: kvli, unitHeads: unitHeads, nh: nh,
+		seq: seq, pos: pos, qsrc: qsrc, odst: odst, bq: bq, bxb: bxb, bathf: bathf,
+		astride: astride, qw: qw, ow: ow, hd: hd, qDim: qDim, gqaN: gqaN, mla: mla,
+		scale: scale, masks: masks, mstride: mstride}
+	if s.raRun == nil {
+		s.raRun = s.ra.run
+	}
+	s.jit.Parallel(units, 1, s.raRun)
+	s.ra = rowsAttn{}
+	s.tock(opAttn, t0)
+	s.jit.NewInput()
 }
 
 // rowsAttn is a ragged step's attention fan-out over (row, head) units, one

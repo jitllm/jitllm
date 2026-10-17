@@ -229,12 +229,16 @@ the host, the `State` helpers `forward.go` calls (`s.norm`, `s.mv`,
 `attnPrep`, the attention) and through them the generated kernels; on the
 device, `nn.LayerPlan` and `nn.LayerWeights`, which the tier already consumes.
 There is no new kernel and no second family switch: the walker dispatches an op
-kind to the helper that runs it today. While a graph covers fewer blocks than
-`forward.go`, the hand-written path is the control and the default; a covered
-block runs the graph only when the caller forces it, and the gate compares the
-two. The walker replaces the hand-written dense path once it covers decode,
-batch and device for the dense family (Slice B), not before: it is a migration
-under test, not a second executor to keep.
+kind to the helper that runs it today. The graph covers decode, prompt chunks,
+ragged batch steps and the device plan for the dense family, and it is the
+default there: a covered block runs the graph's lowering everywhere, and
+`WithBlockGraph(false)` is the control arm the graph's gates compare against.
+Every other block runs the hand-written body for a reason on a named list
+(`model.UncoveredReasons`), never silently; each State records per block
+which path ran (`State.BlockPaths`, the `blocks` of `jitllm speed -manifest`),
+and `TestCoveredBlocksTakeTheGraphPath` holds a covered model to zero blocks
+off the graph on the host and every device arm. The hand-written body loses
+lines only as that list shrinks: it still runs every uncovered family.
 
 ### The rewrite interface
 
@@ -295,7 +299,7 @@ candidates, not a tuner.
 | norm -> gate/up -> act -> down (the FFN site; `gate2in`) | a `norm` whose only consumers are two `matvec`s on its output, feeding one `act_mul`, feeding a `matvec` added into the residual | gate and up one format, one shape, one split (`gateUp2Shape`); the norm's input materialized by the previous add; exact on PTX | it removes a launch, and the outcome is per card and per shape (GK "The FFN's recipes, timed per card") |
 | q/k/v operand prologue | `norm` -> the q/k/v `matvec` group | the norm's single consumer group; exact | already timed by `tuneActIn`; its sites become matched |
 | residual + next norm's statistics in down's epilogue | an `add` into the residual whose consumer across the boundary is a `norm` | spans two blocks, so conditional on co-placement and dropped at a move; exact only with `RMSNormGroup`'s reduction tree | dep-block.md ranks it after the decomposition |
-| hidden-channel MLP partition (`graph.MLPPartition`) | gate and up `matvec`s on one row feeding an `act_mul`, feeding a `matvec` | no bias inside a slice, no reader outside it; no contract (no recipe built); Bounds: 8*F bytes a row removed, 8*H*ceil(F/256) added, no launch removed | refused by its bound at every row class wherever H > 256 (both sides scale with the rows, so a prompt chunk does not rescue it): on Llama-3.2-1B 512 KiB of partials a row against 64 KiB. Across devices it is a placement candidate, priced by crossings, not by this bound |
+| hidden-channel MLP partition (`graph.MLPPartition`) | gate and up `matvec`s on one row feeding an `act_mul`, feeding a `matvec` | no bias inside a slice, no reader outside it; no contract (no recipe built); Bounds: 8*F bytes a row removed, 8*H*ceil(F/256) added, no launch removed | refused by its bound at every row class wherever H > 256 (both sides scale with the rows, so a prompt chunk does not rescue it): on Llama-3.2-1B 512 KiB of partials a row against 64 KiB. Across two cards it is not built: the crossings were measured and lose. Split by channels over two V100s, each card reads half of gate, up and down (about 14 MiB less per card per Llama-3.2-1B block, about 18 us at the card's ~800 GB/s) and pays two crossings per block per token, the normed row out and the partial sum back. `backend.TestCopyPeerCrossingLatency` times that pair with `cuMemcpyPeer`: over NVLink (cuda:2<->cuda:3) the median is 56-63 us for 8, 16 and 64 KiB rows (p90 67-75 us, minimum 53 us); over PCIe (cuda:2<->cuda:6, direct) it is 98.6 ms. The crossing costs three times the read it saves on the best link, so the split waits for a crossing that does not synchronise the host (a device-side flag or a peer write inside the kernel) |
 | gated output norm (`graph.NormGate`, built) | a `head_norm` whose only reader is an `act_mul` gating it as the second operand | SiLU or sigmoid; exact on PTX, SPIR-V and MSL | one launch and 8*VHeads*VDim bytes a row removed at every row class; timed per card at decode |
 | producer/consumer tile alignment | a `matvec` whose output tiles a following `matvec` reduces over | a parameter of a region's candidates (gate/up row tile = down's split chunk), timed jointly with the split | scheduling alone lost: the persistent block 11% and the dependency-counter block 14-18% on the V100 (GK "A persistent decode block", "The dependency-counter block"), because every matvec reads its whole input; alignment has to remove traffic or a launch to be worth a trial |
 

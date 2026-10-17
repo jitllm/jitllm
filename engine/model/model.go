@@ -1241,6 +1241,9 @@ type Model struct {
 	// graphs is each text block's lowered block graph under WithBlockGraph
 	// (graphblock.go), nil without it.
 	graphs []*denseLowering
+	// graphWhy is each text block's named reason for the hand-written body
+	// (GraphUncovered), "" where the graph covers it.
+	graphWhy []string
 	// deltaGraphs is each gated delta block's sublayer graph (deltagraph.go),
 	// built at every Open; deltaGraphErr the verifier's refusals.
 	deltaGraphs []*deltaGraph
@@ -1633,7 +1636,7 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	}
 	m.buildDeltaGraphs()
 	m.buildMixGraphs()
-	if m.opt.blockGraph {
+	if m.opt.blockGraph != graphOff {
 		if err := m.buildGraphs(); err != nil {
 			c.Close()
 			return nil, err
