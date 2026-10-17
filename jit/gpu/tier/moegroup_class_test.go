@@ -1,6 +1,10 @@
 package tier
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/jitllm/jitllm/engine/graph"
+)
 
 // TestVoltaMoEWidthClass holds the class boundary: a scratch below the pair
 // count builds the dp4a half, at or above it the staged GEMM. The violation is
@@ -48,5 +52,13 @@ func TestGemmDeepVerdictIsPerWidthClass(t *testing.T) {
 		if got := g.gemmDeepWon(m, c.ntok); got != c.want {
 			t.Errorf("ntok %d: %v, want %v", c.ntok, got, c.want)
 		}
+	}
+	// The class is the rewrite's guard (graph.DeepTile.Pays), not a test at
+	// the launch: with the guard taken away the narrow launch wins.
+	pays := graph.DeepTile.Pays
+	defer func() { graph.DeepTile.Pays = pays }()
+	graph.DeepTile.Pays = func(*graph.Graph, graph.Region, graph.Target) error { return nil }
+	if !g.gemmDeepWon(m, 3) {
+		t.Error("with DeepTile's guard removed a 3-row launch still refused: the class is decided elsewhere")
 	}
 }

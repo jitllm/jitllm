@@ -5,6 +5,7 @@ import (
 	"math"
 	"slices"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
@@ -1200,7 +1201,23 @@ func (g *devTier) f16Gemm(m mv, ntok int) (mv, bool) {
 // speculation's verification, a prompt's tail) was not timed and takes the
 // default blocking.
 func (g *devTier) gemmDeepWon(m mv, ntok int) bool {
-	return ntok*2 >= g.promptW && g.gemmDeep[splitKey{m.q, m.rows, m.k}]
+	t := graph.Target{Rows: g.rowClass(ntok)}
+	return graph.DeepTile.Pays(nil, graph.Region{}, t) == nil && g.gemmDeep[splitKey{m.q, m.rows, m.k}]
+}
+
+// rowClass is the executed row-width class (graph.RowClass) of a launch of
+// ntok rows: one row is a decode; a prompt chunk is at least half the
+// reserved prompt width, the width the prompt's verdicts were timed at; and
+// anything between (a speculation's verification, a ragged step, a prompt's
+// tail) is the few-row class.
+func (g *devTier) rowClass(ntok int) graph.RowClass {
+	switch {
+	case ntok <= 1:
+		return graph.RowsDecode
+	case ntok*2 >= g.promptW:
+		return graph.RowsChunk
+	}
+	return graph.RowsFew
 }
 
 // f16DeepTiles are the m16n8 blockings in llama.cpp MMQ's shape: eight warps
