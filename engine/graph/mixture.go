@@ -73,6 +73,14 @@ func (m *Mixture) Build() *Graph {
 	g := &Graph{Version: Version, Block: m.Block}
 	x := g.value("x", m.NEmbd)
 	g.In = []ValueID{x}
+	g.Out = []ValueID{m.emit(g, x)}
+	return g
+}
+
+// emit writes the sublayer's ops into g over its input row x (the normed
+// row the router and the experts read) and returns its output row: in a
+// sublayer graph of its own (Build), or as a block's FFN (Dense.Mixture).
+func (m *Mixture) emit(g *Graph, x ValueID) ValueID {
 	sel := g.value("sel", m.K)
 	rw := []Binding{m.bind(jlm.RoleRouter)}
 	for _, r := range []jlm.Role{jlm.RoleRouterBias, jlm.RoleExpProbsB} {
@@ -123,12 +131,11 @@ func (m *Mixture) Build() *Graph {
 				Weight: []Binding{m.bind(jlm.RoleShRouter)}})
 			sd = s
 		}
-		out := g.value("out", m.NEmbd)
+		out := g.value("moe_out", m.NEmbd)
 		g.op(Op{Kind: OpAdd, In: []ValueID{y, sd}, Out: []ValueID{out}})
 		y = out
 	}
-	g.Out = []ValueID{y}
-	return g
+	return y
 }
 
 // matchExperts is the routed experts' region in any graph that has one: a

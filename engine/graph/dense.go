@@ -23,6 +23,12 @@ type Dense struct {
 	QKNorm                         bool // RoleAttnQNorm and RoleAttnKNorm, over each head before the rotary
 	PostNorm                       bool // RolePostAttnNorm and RolePostFFNNorm, over each sublayer's output
 	QKVBias                        bool // RoleAttnQBias/KBias/VBias
+	// QKNormWhole norms q and k each over its whole projection at once
+	// (OLMoE's), an OpNorm on each, where QKNorm norms each head.
+	QKNormWhole bool
+	// Mixture, where set, is the block's FFN: a routed mixture over the FFN
+	// norm's row in place of gate, up and down (NFFN is then unused).
+	Mixture *Mixture
 }
 
 // Build is the block's graph.
@@ -68,6 +74,9 @@ func (d *Dense) Build() *Graph {
 		}
 		q = hn("q_normed", q, jlm.RoleAttnQNorm)
 		k = hn("k_normed", k, jlm.RoleAttnKNorm)
+	} else if d.QKNormWhole {
+		q = norm("q_normed", q, jlm.RoleAttnQNorm)
+		k = norm("k_normed", k, jlm.RoleAttnKNorm)
 	}
 	rope := func(name string, in ValueID) ValueID {
 		out := g.value(name, g.Values[in].Width)
@@ -88,11 +97,16 @@ func (d *Dense) Build() *Graph {
 	g.op(Op{Kind: OpAdd, In: []ValueID{x, o}, Out: []ValueID{x1}})
 
 	f := norm("ffn_in", x1, jlm.RoleFFNNorm)
-	gt := mv("gate", f, jlm.RoleFFNGate, d.NFFN, 0)
-	up := mv("up", f, jlm.RoleFFNUp, d.NFFN, 0)
-	p := g.value("act", d.NFFN)
-	g.op(Op{Kind: OpActMul, In: []ValueID{gt, up}, Out: []ValueID{p}, Attr: Attrs{Act: d.Act}})
-	dn := mv("ffn_out", p, jlm.RoleFFNDown, d.NEmbd, 0)
+	var dn ValueID
+	if d.Mixture != nil {
+		dn = d.Mixture.emit(g, f)
+	} else {
+		gt := mv("gate", f, jlm.RoleFFNGate, d.NFFN, 0)
+		up := mv("up", f, jlm.RoleFFNUp, d.NFFN, 0)
+		p := g.value("act", d.NFFN)
+		g.op(Op{Kind: OpActMul, In: []ValueID{gt, up}, Out: []ValueID{p}, Attr: Attrs{Act: d.Act}})
+		dn = mv("ffn_out", p, jlm.RoleFFNDown, d.NEmbd, 0)
+	}
 	if d.PostNorm {
 		dn = norm("ffn_post", dn, jlm.RolePostFFNNorm)
 	}

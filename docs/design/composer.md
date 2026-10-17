@@ -240,6 +240,18 @@ and `TestCoveredBlocksTakeTheGraphPath` holds a covered model to zero blocks
 off the graph on the host and every device arm. The hand-written body loses
 lines only as that list shrinks: it still runs every uncovered family.
 
+The mixture is lowered too, for the families whose whole block the language
+states (qwen3moe, olmoe): `graph.Dense.Mixture` puts the mixture's ops in
+place of the FFN, OLMoE's q/k norm over each whole projection is an `OpNorm`
+(`Dense.QKNormWhole`), and the host lowering runs the route-to-combine run as
+the mixture's own operations (`moe`, `moeBatch`), so the kernels and their
+order are the hand-written body's: `TestBlockGraphMatchesTheHandPath` holds
+both models bit for bit, resident and paged, at zero warm allocations. The
+plan's rewrites come from the block graph alone there (the sublayer graph's
+are not appended twice). A mixture model whose blocks the language does not
+state stays on the hand-written body under `UncoveredMixture` or its
+architecture's reason.
+
 ### The rewrite interface
 
 A rewrite is the unit an optimization is written as. It is data the composer

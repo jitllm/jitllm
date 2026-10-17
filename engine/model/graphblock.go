@@ -45,14 +45,20 @@ const (
 // graphCovered is the frontend: the architectures whose classes are known to
 // be the dense block graph.Dense describes. A trusted adapter by name, as the
 // converter's are; the runtime below it never asks for an architecture.
-func graphCovered(a string) bool { return a == "llama" || a == "qwen2" || a == "qwen3" }
+func graphCovered(a string) bool {
+	switch a {
+	case "llama", "qwen2", "qwen3", "qwen3moe", "olmoe":
+		return true
+	}
+	return false
+}
 
 // Every reason a text block runs the hand-written body. A block's reason is
 // one of these, by name; TestCoveredBlocksTakeTheGraphPath asserts it.
 // Shrinking this list is the graph's work list.
 const (
 	UncoveredArch        = "architecture outside the graph's frontend" // DeepSeek V4, Kimi-K3, Gemma 4, the mixtures, ...
-	UncoveredMixture     = "a mixture FFN (the graph's mixture op is a sublayer graph, not lowered)"
+	UncoveredMixture     = "a mixture FFN the op language does not state (mixtureFacts)"
 	UncoveredUngated     = "an ungated or non-SiLU FFN"
 	UncoveredLayerNorm   = "LayerNorm with biases"
 	UncoveredParallel    = "a parallel residual"
@@ -82,7 +88,7 @@ func (m *Model) uncovered(li int) string {
 	switch {
 	case !graphCovered(c.Arch):
 		return UncoveredArch
-	case c.MoE():
+	case c.MoE() && !m.mixLowered(li):
 		return UncoveredMixture
 	case c.Act != nn.ActSiLU:
 		return UncoveredUngated
@@ -116,6 +122,18 @@ func (m *Model) uncovered(li int) string {
 	return ""
 }
 
+// mixLowered is whether block li's FFN is a mixture the block graph lowers:
+// every block of the model a routed mixture the op language states
+// (mixtureFacts), so a dense lead or an unstated mixture keeps the model's
+// blocks on the hand-written body.
+func (m *Model) mixLowered(li int) bool {
+	if !m.Cfg.MoEAt(li) {
+		return false
+	}
+	_, ok := m.mixtureFacts(li)
+	return ok
+}
+
 // blockFacts is what the container states about text block li: the dense
 // configuration and the tensors stored for the block by role.
 func (m *Model) blockFacts(li int) (graph.Facts, error) {
@@ -129,7 +147,8 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 	}
 	d := graph.Dense{Block: li, NEmbd: c.NEmbd, NHead: c.NHead, NKVHead: c.NKVHeadAt(li), HeadDim: c.HeadDimAt(li),
 		NFFN: c.NFFNAt(li), Eps: c.RMSEps, NRot: c.NRot, Base: c.RopeBase, Layout: layout, RopeFreqs: m.rope.Freqs != nil,
-		Scale: c.AttnScale, Softcap: float64(c.AttnSoftcap), Act: graph.ActSiLU, QKNorm: c.QKNormAt(li)}
+		Scale: c.AttnScale, Softcap: float64(c.AttnSoftcap), Act: graph.ActSiLU,
+		QKNorm: c.QKNormAt(li) && !c.QKNormWide, QKNormWhole: c.QKNormAt(li) && c.QKNormWide}
 	inv := map[jlm.Role]graph.Shape{}
 	for i := range m.container.Entries() {
 		e := &m.container.Entries()[i]
@@ -140,10 +159,21 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		if e.NDim >= 2 {
 			s.Rows = int(e.Dims[1])
 		}
+		if e.NDim >= 3 {
+			s.Sheets = int(e.Dims[2])
+		}
 		inv[e.Role] = s
 	}
 	_, d.QKVBias = inv[jlm.RoleAttnQBias]
-	return graph.Facts{Config: d, Inventory: inv}, nil
+	f := graph.Facts{Config: d, Inventory: inv}
+	if c.MoE() {
+		mf, ok := m.mixtureFacts(li)
+		if !ok {
+			return graph.Facts{}, fmt.Errorf("model: block %d of %s: %s", li, c.Arch, UncoveredMixture)
+		}
+		f.Config.Mixture, f.Mixture = mf.Mixture, mf.Mixture
+	}
+	return f, nil
 }
 
 // denseLowering is a verified graph lowered for the host decode: the dense
@@ -153,6 +183,9 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 type denseLowering struct {
 	g  *graph.Graph
 	qk bool
+	// mix says the block's FFN is a routed mixture (graph.Dense.Mixture),
+	// which the host runs through the mixture's operations (moe, moeBatch).
+	mix bool
 	// offered is every rewrite matched on the block (nn.LayerPlan.Rewrites),
 	// which the device asks at its own Target, and rewrites every one's
 	// target-free decision, for the plan explanation.
@@ -188,23 +221,58 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		}
 	}
 	lw := &denseLowering{g: g}
-	if take(graph.OpHeadNorm, jlm.RoleAttnQNorm) {
-		if !take(graph.OpHeadNorm, jlm.RoleAttnKNorm) {
-			return nil, fail("head_norm of attn_k_norm")
+	// The q/k norms, per head (qwen3) or over each whole projection
+	// (OLMoE): attnPrep applies either, by QKNormShapeAt.
+	for _, k := range []graph.OpKind{graph.OpHeadNorm, graph.OpNorm} {
+		if !lw.qk && take(k, jlm.RoleAttnQNorm) {
+			if !take(k, jlm.RoleAttnKNorm) {
+				return nil, fail(k.String() + " of attn_k_norm")
+			}
+			lw.qk = true
 		}
-		lw.qk = true
 	}
-	seq = []struct {
+	type step struct {
 		k    graph.OpKind
 		role jlm.Role
-	}{{graph.OpRope, 0}, {graph.OpRope, 0}, {graph.OpKVAppend, 0}, {graph.OpAttend, 0},
-		{graph.OpMatVec, jlm.RoleAttnOut}, {graph.OpAdd, 0}, {graph.OpNorm, jlm.RoleFFNNorm},
-		{graph.OpMatVec, jlm.RoleFFNGate}, {graph.OpMatVec, jlm.RoleFFNUp}, {graph.OpActMul, 0},
-		{graph.OpMatVec, jlm.RoleFFNDown}, {graph.OpAdd, 0}}
-	for _, s := range seq {
-		if !take(s.k, s.role) {
-			return nil, fail(s.k.String())
+	}
+	run := func(seq []step) error {
+		for _, s := range seq {
+			if !take(s.k, s.role) {
+				return fail(fmt.Sprintf("%s of %v", s.k, s.role))
+			}
 		}
+		return nil
+	}
+	if err := run([]step{{graph.OpRope, 0}, {graph.OpRope, 0}, {graph.OpKVAppend, 0}, {graph.OpAttend, 0},
+		{graph.OpMatVec, jlm.RoleAttnOut}, {graph.OpAdd, 0}, {graph.OpNorm, jlm.RoleFFNNorm}}); err != nil {
+		return nil, err
+	}
+	if i < len(ops) && ops[i].Kind == graph.OpRoute {
+		// The routed mixture, as moe() computes it: route, gather, the
+		// experts' gate, up, act_mul and down, the combine, then the shared
+		// expert [gate scalar] added, then the residual add.
+		lw.mix = true
+		if err := run([]step{{graph.OpRoute, jlm.RoleRouter}, {graph.OpGather, 0},
+			{graph.OpExpertMatVec, jlm.RoleExpGateBank}, {graph.OpExpertMatVec, jlm.RoleExpUpBank},
+			{graph.OpActMul, 0}, {graph.OpExpertMatVec, jlm.RoleExpDownBank}, {graph.OpCombine, 0}}); err != nil {
+			return nil, err
+		}
+		if take(graph.OpMatVec, jlm.RoleShExpGate) {
+			if err := run([]step{{graph.OpMatVec, jlm.RoleShExpUp}, {graph.OpActMul, 0},
+				{graph.OpMatVec, jlm.RoleShExpDown}}); err != nil {
+				return nil, err
+			}
+			take(graph.OpGateScalar, jlm.RoleShRouter)
+			if err := run([]step{{graph.OpAdd, 0}}); err != nil {
+				return nil, err
+			}
+		}
+		if err := run([]step{{graph.OpAdd, 0}}); err != nil {
+			return nil, err
+		}
+	} else if err := run([]step{{graph.OpMatVec, jlm.RoleFFNGate}, {graph.OpMatVec, jlm.RoleFFNUp}, {graph.OpActMul, 0},
+		{graph.OpMatVec, jlm.RoleFFNDown}, {graph.OpAdd, 0}}); err != nil {
+		return nil, err
 	}
 	if i != len(ops) {
 		return nil, fail("the end of the block")
@@ -401,6 +469,16 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 	// norm -> gate, up -> act_mul -> down, add into the residual
 	s.norm(s.h, s.x, l.ffnNorm, l.ffnNormB)
 	s.jit.NewInput()
+	if lw.mix {
+		// route -> gather -> experts -> combine [+ shared], added into the
+		// residual by the mixture itself, as the hand-written body does.
+		if err := s.moe(li, l, s.h, s.h, s.x); err != nil {
+			return err
+		}
+		s.layerOutScale(l, s.x)
+		m.trace(li, "ffn_resid", s.x)
+		return nil
+	}
 	ff := c.NFFNAt(li)
 	gate, up, act := s.gate[:ff], s.up[:ff], c.Act
 	s.aheadOf(li, 2, [nn.MaxGroup]*tensor{&l.down})
@@ -485,6 +563,15 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, p0, n int, 
 	tn = s.tick()
 	s.batchNormB(s.bh, s.bx, l.ffnNorm, l.ffnNormB, ne, n)
 	s.tock(opRMSNorm, tn)
+	if lw.mix {
+		// The mixture over the chunk, expert-major (moeBatch), into the
+		// residual.
+		if err := s.moeBatch(li, l, s.bh, s.bx, n); err != nil {
+			return err
+		}
+		s.layerOutScale(l, s.bx[:n*ne])
+		return nil
+	}
 	ff := c.NFFNAt(li)
 	if err := s.mm(s.bgate, l.gate, s.bh[:n*ne], n); err != nil {
 		return err
@@ -511,7 +598,7 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, p0, n int, 
 // dense subset of rowsHost's block body, in its order, so the kernels and
 // their order are the hand-written step's. Every row's rotary and cache write
 // lands before any row attends, as in graphRows.
-func (s *State) graphRagged(li int, l *layer, n int, seq, pos []int, cs, csSWA []float32, unitHeads, units, astride int, scale float64) error {
+func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, seq, pos []int, cs, csSWA []float32, unitHeads, units, astride int, scale float64) error {
 	c := s.c
 	s.graphRaggedRuns++
 	s.pathOf(li).Graph++
@@ -554,6 +641,14 @@ func (s *State) graphRagged(li int, l *layer, n int, seq, pos []int, cs, csSWA [
 	t0 = s.tick()
 	s.batchNormB(s.bh, s.bx, l.ffnNorm, l.ffnNormB, ne, n)
 	s.tock(opRMSNorm, t0)
+	if lw.mix {
+		// Each row its own sequence's experts (moeBatch), into the residual.
+		if err := s.moeBatch(li, l, s.bh, s.bx, n); err != nil {
+			return err
+		}
+		s.layerOutScale(l, s.bx[:n*ne])
+		return nil
+	}
 	if err := s.mm(s.bgate, l.gate, s.bh, n); err != nil {
 		return err
 	}
@@ -588,10 +683,14 @@ func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
 	g := lw.g
 	p.NEmbd = g.Values[g.In[0]].Width
 	p.QKNorm = false
+	_, producer := graphProducers(g)
 	for _, o := range g.Ops {
 		switch o.Kind {
 		case graph.OpNorm:
 			p.RMSEps = o.Attr.Eps
+			if len(o.Weight) == 1 && o.Weight[0].Role == jlm.RoleAttnQNorm {
+				p.QKNorm = true
+			}
 		case graph.OpHeadNorm:
 			p.QKNorm = true
 		case graph.OpRope:
@@ -600,6 +699,12 @@ func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
 			p.NHead, p.NKVHead, p.HeadDim = o.Attr.NHead, o.Attr.NKVHead, o.Attr.HeadDim
 			p.AttnScale, p.AttnSoftcap = o.Attr.Scale, float32(o.Attr.Softcap)
 		case graph.OpActMul:
+			// A mixture's act_muls (the experts' pairs, the shared expert)
+			// are not the dense FFN's width: the plan keeps planFor's.
+			if pr := producer[o.In[0]]; lw.mix || pr < 0 || g.Ops[pr].Kind != graph.OpMatVec ||
+				g.Ops[pr].Weight[0].Role != jlm.RoleFFNGate {
+				break
+			}
 			p.NFFN = g.Values[o.Out[0]].Width
 			switch o.Attr.Act {
 			case graph.ActSiLU:
@@ -609,4 +714,22 @@ func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
 			}
 		}
 	}
+}
+
+// graphProducers is, per value of g, the op that writes it (-1 for a block
+// input), and how many ops read it.
+func graphProducers(g *graph.Graph) (readers []int, producer []int) {
+	readers, producer = make([]int, len(g.Values)), make([]int, len(g.Values))
+	for i := range producer {
+		producer[i] = -1
+	}
+	for i, o := range g.Ops {
+		for _, v := range o.In {
+			readers[v]++
+		}
+		for _, v := range o.Out {
+			producer[v] = i
+		}
+	}
+	return readers, producer
 }

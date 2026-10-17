@@ -90,7 +90,8 @@ func legacyBlocks(paths []BlockPath, device bool) error {
 // block that runs the hand-written body does so for a reason on the named
 // list (UncoveredReasons), never silently.
 func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
-	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0"} {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "Qwen3-MOE-4x0.6B-Q4_K_M",
+		"olmoe-1b-7b-0924-instruct-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			m, err := Open(p, noTune)
@@ -133,7 +134,7 @@ func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
 			t.Logf("violation fires: %v", err)
 		})
 	}
-	for _, name := range []string{"gemma-3-1b-it-Q4_K_M", "Qwen3-MOE-4x0.6B-Q4_K_M"} {
+	for _, name := range []string{"gemma-3-1b-it-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) {
 			m, err := Open(graphModel(t, name), noTune)
 			if err != nil {

@@ -60,7 +60,8 @@ func graphDecode(t *testing.T, m *Model, n, frames int) ([][]float32, int, float
 // paged, a page budget below the model gives the same answer, and the comparison can tell two
 // different computations apart (an f16 cache against f32).
 func TestBlockGraphMatchesTheHandPath(t *testing.T) {
-	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0"} {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "Qwen3-MOE-4x0.6B-Q4_K_M",
+		"olmoe-1b-7b-0924-instruct-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))

@@ -2049,7 +2049,7 @@ func (s *State) planFor(li int) *nn.LayerPlan {
 		// not lowered from it (Graphed stays false).
 		plan.Rewrites = s.m.deltaGraphs[li].offered
 	}
-	if li < len(s.m.mixGraphs) && s.m.mixGraphs[li] != nil {
+	if li < len(s.m.mixGraphs) && s.m.mixGraphs[li] != nil && !plan.Graphed {
 		// A mixture sublayer's graph offers its rewrites beside whatever
 		// the block's other graph offers; it is not lowered either.
 		plan.Rewrites = append(plan.Rewrites[:len(plan.Rewrites):len(plan.Rewrites)], s.m.mixGraphs[li].offered...)
