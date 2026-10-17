@@ -316,8 +316,9 @@ func (e *Engine) load(path string) {
 	if spec == "" {
 		spec = "auto"
 	}
+	placement := strings.TrimSpace(e.st.Placement.Get())
 	if en := e.find(path); en != nil {
-		if en.spec == spec {
+		if en.spec == spec && en.placement == placement {
 			if err := e.activate(en); err != nil {
 				e.report(stageDevice, path, err)
 			}
@@ -326,7 +327,12 @@ func (e *Engine) load(path string) {
 		e.unload(en)
 	}
 
-	lm, err := e.srv.LoadModel(server.LoadOptions{Path: path, DeviceIDs: strings.Split(spec, ",")})
+	lm, err := e.srv.LoadModel(server.LoadOptions{
+		Path: path, DeviceIDs: strings.Split(spec, ","),
+		// Strict: a block named for a device that cannot take it is an error
+		// the person reads, not a quiet placement somewhere else.
+		Placement: placement, PlacementStrict: placement != "",
+	})
 	if err != nil {
 		// A GGUF or a stale container is the commonest wrong file; report turns
 		// both into the button that fixes them.
@@ -341,7 +347,7 @@ func (e *Engine) load(path string) {
 		}
 		return
 	}
-	en := &entry{path: path, lm: lm, m: lm.Model(), spec: spec}
+	en := &entry{path: path, lm: lm, m: lm.Model(), spec: spec, placement: placement}
 	e.models = append(e.models, en)
 
 	if err := e.activate(en); err != nil {

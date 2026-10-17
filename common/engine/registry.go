@@ -16,6 +16,9 @@ type entry struct {
 	lm   *server.LoadedModel
 	path string
 	spec string
+	// placement is the -placement map the model was opened under; a load under
+	// another re-opens it, as another spec does.
+	placement string
 }
 
 // find returns the open entry for path, or nil.

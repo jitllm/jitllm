@@ -90,6 +90,8 @@ type Store struct {
 
 	// --- placement ---
 	DeviceSpec state.Signal[string]
+	// Placement is the -placement map for the next load.
+	Placement state.Signal[string]
 	// Sampling is how the next reply is drawn from the logits, and MaxSeq the
 	// context window the next load allocates.
 	Sampling      state.Signal[Sampling]
@@ -209,6 +211,7 @@ func NewStore() *Store {
 		ProgressLabel: state.NewSignal(""),
 
 		DeviceSpec:    state.NewSignal("auto"),
+		Placement:     state.NewSignal(""),
 		Sampling:      state.NewSignal(DefaultConfig().Sampling),
 		MaxSeq:        state.NewSignal(DefaultConfig().MaxSeq),
 		DeviceReport:  state.NewSignal(""),

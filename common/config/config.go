@@ -48,6 +48,10 @@ type Config struct {
 
 	LastModel  string `json:"last_model"`
 	DeviceSpec string `json:"device_spec"`
+	// Placement pins blocks to the devices DeviceSpec names, in the CLI's
+	// -placement grammar ("0-15=cuda:0,16-31=vulkan:0"); empty leaves every
+	// block to the engine.
+	Placement string `json:"placement,omitempty"`
 	// MaxMem is the host weight budget as the CLI spells it ("24G"), or empty
 	// for sched.MemBudget().
 	MaxMem string `json:"max_mem"`

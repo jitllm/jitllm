@@ -205,7 +205,7 @@ func (f *front) snapshot() ([]session.Turn, map[int]bool, string) {
 
 // newState is the engine's State over locked values, each naming the field
 // a change to it marks.
-func newState(fr *front, deviceSpec string, maxSeq int, chat, kvCache bool) engine.State {
+func newState(fr *front, deviceSpec, placement string, maxSeq int, chat, kvCache bool) engine.State {
 	return engine.State{
 		Status:       newValue(fr, fStatus, ""),
 		Problem:      newValue(fr, fProblem, session.Problem{}),
@@ -229,6 +229,7 @@ func newState(fr *front, deviceSpec string, maxSeq int, chat, kvCache bool) engi
 		BytesPerTok:  newValue(fr, fRates, 0.0),
 		GBs:          newValue(fr, fRates, 0.0),
 		DeviceSpec:   newValue(fr, fOther, deviceSpec),
+		Placement:    newValue(fr, fOther, placement),
 		MaxSeq:       newValue(fr, fOther, maxSeq),
 		DeviceReport: newValue(fr, fSummary, ""),
 		BlockMap:     newValue[[]byte](fr, fBlocks, nil),

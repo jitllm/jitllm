@@ -86,3 +86,28 @@ func TestSettingsSaveTheKeysPrivately(t *testing.T) {
 		t.Errorf("a typed address was dropped: %q", cfg.APIAddr)
 	}
 }
+
+// The block placement typed in Settings reaches the config and the engine's
+// state, and clearing it leaves the engine to place.
+func TestSettingsCarryTheBlockPlacement(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("HOME", dir)
+	t.Setenv("AppData", dir)
+	r := newTestRoot(t)
+	p := newSettingsPage(r.env)
+	p.d.spec, p.d.placement = "cuda:0,vulkan:0", " 0-15=cuda:0,16-31=vulkan:0 "
+	p.apply()
+	const want = "0-15=cuda:0,16-31=vulkan:0"
+	if got := r.env.cfg.Placement; got != want {
+		t.Fatalf("config placement %q, want %q", got, want)
+	}
+	if got := r.env.f.st.Placement.Get(); got != want {
+		t.Fatalf("engine state placement %q, want %q", got, want)
+	}
+	p.d.placement = ""
+	p.apply()
+	if r.env.cfg.Placement != "" || r.env.f.st.Placement.Get() != "" {
+		t.Fatal("clearing the field left a placement behind")
+	}
+}

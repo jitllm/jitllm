@@ -61,6 +61,7 @@ type State struct {
 	GBs         session.Value[float64]
 
 	DeviceSpec   session.Value[string]
+	Placement    session.Value[string]
 	MaxSeq       session.Value[int]
 	DeviceReport session.Value[string]
 	// BlockMap is one session.Placement per block.

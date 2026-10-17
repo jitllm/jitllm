@@ -365,6 +365,7 @@ func ResetSettings(sh *app.Shell) {
 	st.Chat.Set(d.Chat)
 	st.System.Set(d.System)
 	st.DeviceSpec.Set(d.DeviceSpec)
+	st.Placement.Set(d.Placement)
 	st.Sampling.Set(d.Sampling)
 	st.MaxSeq.Set(d.MaxSeq)
 	st.ShowTuning.Set(!d.HideTuning)

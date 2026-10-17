@@ -607,12 +607,25 @@ func nextLoad(sh *app.Shell) widget.Widget {
 			budgetNote.Set(got)
 		}
 	}
+	// The block map is validated against the spec it names devices from, so a
+	// change to either re-checks it.
+	place := sh.Store.Placement
+	placeErr := state.NewSignal("")
+	checkPlace := func(string) {
+		if err := hardware.ValidatePlacement(place.Get(), spec.Get()); err != nil {
+			placeErr.Set(err.Error())
+		} else {
+			placeErr.Set("")
+		}
+	}
 	checkSpec(spec.Get())
 	checkBudget(budget.Get())
+	checkPlace("")
 
 	set := func(s string) {
 		spec.Set(s)
 		checkSpec(s)
+		checkPlace("")
 	}
 
 	presets := []string{"auto", "all", "cpu", "gpu", "gpu:0", "cuda:0", "vulkan:0", "vulkan:1", "metal"}
@@ -634,7 +647,16 @@ func nextLoad(sh *app.Shell) widget.Widget {
 	specField := textfield.New(
 		textfield.ValueSignal(spec),
 		textfield.Placeholder("auto"),
-		textfield.OnChange(checkSpec),
+		textfield.OnChange(func(s string) {
+			checkSpec(s)
+			checkPlace("")
+		}),
+		textfield.PainterOpt(sh.P.TextField),
+	)
+	placeField := textfield.New(
+		textfield.ValueSignal(place),
+		textfield.Placeholder("0-15=cuda:0,16-31=vulkan:0"),
+		textfield.OnChange(checkPlace),
 		textfield.PainterOpt(sh.P.TextField),
 	)
 	budgetField := textfield.New(
@@ -655,6 +677,14 @@ func nextLoad(sh *app.Shell) widget.Widget {
 		sh.P.Field(specField).Width(360),
 		line(sh, specNote.AsReadonly()),
 		line(sh, specErr.AsReadonly()).Color(sh.P.Colors.Error),
+		primitives.Box().Height(8),
+		sh.P.Role(primitives.Text("Block placement (optional)").Color(sh.P.Muted()), sh.P.Type.LabelMedium),
+		sh.P.Field(placeField).Width(360),
+		line(sh, placeErr.AsReadonly()).Color(sh.P.Colors.Error),
+		note(sh,
+			"Blocks to devices: 0-15=cuda:0,16-31=vulkan:0, head=cuda:0, host for the CPU.",
+			"Name each device in Run models on. Empty lets jitllm place the blocks.",
+		),
 		primitives.Box().Height(8),
 		sh.P.Role(primitives.Text("Memory for model weights").Color(sh.P.Muted()), sh.P.Type.LabelMedium),
 		sh.P.Field(budgetField).Width(360),

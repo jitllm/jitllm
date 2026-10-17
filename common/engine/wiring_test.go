@@ -118,3 +118,22 @@ func TestALoadThatWorksClearsTheProblem(t *testing.T) {
 		t.Errorf("a successful load left the banner up: %q", p.Title)
 	}
 }
+
+// The placement setting reaches the load: a map naming a device the load did
+// not open is a device problem (so the setting is read), and a map that names
+// only the host loads (so a valid one is not refused).
+func TestThePlacementSettingReachesTheLoad(t *testing.T) {
+	_, sh := loadFor(t, func(st *testStore) { st.DeviceSpec.Set("cpu"); st.Placement.Set("*=host") })
+	if !sh.Store.Loaded.Get() {
+		t.Fatal("a host-only placement did not load")
+	}
+	e, sh := loadFor(t, func(st *testStore) { st.DeviceSpec.Set("cpu") })
+	sh.Store.Placement.Set("0=cuda:0")
+	e.Load(modelPath)
+	pump(t, sh, 90*time.Second, "the placement to be refused", func() bool {
+		return !sh.Store.Busy.Get() && sh.Store.Problem.Get().Seq != 0
+	})
+	if sh.Store.Loaded.Get() {
+		t.Error("a placement naming an unopened device loaded")
+	}
+}

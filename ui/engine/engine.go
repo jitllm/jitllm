@@ -65,6 +65,7 @@ func StateOf(st *app.Store) core.State {
 		GBs:         st.GBs,
 
 		DeviceSpec:   st.DeviceSpec,
+		Placement:    st.Placement,
 		MaxSeq:       st.MaxSeq,
 		DeviceReport: st.DeviceReport,
 		BlockMap:     st.BlockMap,

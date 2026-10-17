@@ -87,6 +87,7 @@ type testStore struct {
 	GBs         *val[float64]
 
 	DeviceSpec   *val[string]
+	Placement    *val[string]
 	MaxSeq       *val[int]
 	DeviceReport *val[string]
 	BlockMap     *val[[]byte]
@@ -123,6 +124,7 @@ func newTestStore() *testStore {
 		BytesPerTok:  newVal(0.0),
 		GBs:          newVal(0.0),
 		DeviceSpec:   newVal("auto"),
+		Placement:    newVal(""),
 		MaxSeq:       newVal(4096),
 		DeviceReport: newVal(""),
 		BlockMap:     newVal([]byte(nil)),
@@ -209,7 +211,7 @@ func (sh *testShell) state() State {
 		ChatCapable: st.ChatCapable,
 		PromptTokS:  st.PromptTokS, DecodeTokS: st.DecodeTokS,
 		BytesPerTok: st.BytesPerTok, GBs: st.GBs,
-		DeviceSpec: st.DeviceSpec, MaxSeq: st.MaxSeq, DeviceReport: st.DeviceReport,
+		DeviceSpec: st.DeviceSpec, Placement: st.Placement, MaxSeq: st.MaxSeq, DeviceReport: st.DeviceReport,
 		BlockMap: st.BlockMap, Pager: st.Pager, Alloc: st.Alloc,
 		KVCache: st.KVCache,
 	}

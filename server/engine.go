@@ -439,6 +439,13 @@ type LoadOptions struct {
 	// DeviceSample forces where a sampled token's candidates are selected
 	// (model.WithDeviceSample); the zero value, auto, measures.
 	DeviceSample model.DeviceSampleMode
+	// Placement pins blocks and the head to named devices, in the grammar of
+	// model.ParsePlacement ("0-15=cuda:0,16-31=vulkan:0"); the names are the
+	// DeviceIDs entries. Empty leaves every block to the engine.
+	Placement string
+	// PlacementStrict fails the load when a Placement entry cannot be met,
+	// instead of placing that block where the engine would have.
+	PlacementStrict bool
 	// Sessions is how many concurrent sessions every placed linear block
 	// reserves a recurrent pair for (tier.Config.Sessions); attention history
 	// is paged and reserves nothing. 0 and 1 are one: a second session then
@@ -591,6 +598,18 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		opts = append(opts, model.WithKVF16(*kv))
 	}
 	opts = append(opts, model.WithDeviceSample(o.DeviceSample))
+	if o.Placement != "" {
+		pl, err := model.ParsePlacement(o.Placement, o.PlacementStrict)
+		if err != nil {
+			closeDev()
+			return nil, &DeviceError{err}
+		}
+		if err := namedDevicesOpen(pl, gpu); err != nil {
+			closeDev()
+			return nil, &DeviceError{err}
+		}
+		opts = append(opts, model.WithPlacement(pl))
+	}
 	// A host model the step loop runs steps its sessions' rows as one pass
 	// (model.StepRuns' host arm, a matmul over the rows) or one session after
 	// another (a matvec each), as the joint choice decides per step. Its
@@ -2469,4 +2488,32 @@ func (e *Engine) defaultMaxSeq(lm *LoadedModel) int {
 		return e.cfg.DefaultMaxSeq
 	}
 	return lm.m.Cfg.NCtx
+}
+
+// namedDevicesOpen refuses a placement that names a device the load did not
+// open: it would otherwise load and fail at the first session, far from the
+// setting that caused it.
+func namedDevicesOpen(pl model.Placement, g *tier.GPU) error {
+	open := map[string]bool{"host": true}
+	if g != nil {
+		for _, h := range g.Hardware() {
+			open[nn.DeviceName(h.Name)] = true
+		}
+	}
+	named := make([]model.Place, 0, len(pl.Blocks)+2)
+	for _, b := range pl.Blocks {
+		named = append(named, b)
+	}
+	for _, x := range []*model.Place{pl.Rest, pl.Head} {
+		if x != nil {
+			named = append(named, *x)
+		}
+	}
+	for _, x := range named {
+		if !open[x.On] {
+			return fmt.Errorf("placement names %q, which this load did not open (it opened %d device(s); "+
+				"name each in the device list, e.g. cuda:0,vulkan:0)", x.On, len(open)-1)
+		}
+	}
+	return nil
 }
