@@ -419,6 +419,11 @@ func (m *Model) buildGraphs() error {
 	m.graphWhy = make([]string, m.Cfg.NLayer)
 	for li := range m.graphs {
 		refuse := func(why string) error {
+			if m.Cfg.Parallel {
+				// Only the graph's lowering runs a parallel residual.
+				return fmt.Errorf("model: block %d of %s is parallel and not covered by the block graph (%s); "+
+					"the hand-written body has no parallel residual", li, m.Cfg.Arch, why)
+			}
 			if m.opt.blockGraph == graphStrict {
 				return fmt.Errorf("model: block %d of %s is not covered by the block graph: %s", li, m.Cfg.Arch, why)
 			}

@@ -3876,16 +3876,6 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 			}
 		}
 		s.norm(s.h, attnIn, l.attnNorm, l.attnNormB)
-		// A parallel block's FFN reads the block input, so its norm is taken
-		// here, before attention adds into s.x. With one shared norm (phi-2) it
-		// is a copy of s.h, which attention reuses for its output.
-		if c.Parallel {
-			if l.ffnNorm != nil {
-				s.norm(s.hf, s.x, l.ffnNorm, l.ffnNormB)
-			} else {
-				copy(s.hf, s.h)
-			}
-		}
 		s.jit.NewInput()
 		s.tock(opRMSNorm, t0)
 		m.trace(li, "attn_norm", s.h)
@@ -4071,9 +4061,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 
 		t0 = s.tick()
 		ffnIn := s.h
-		if c.Parallel {
-			ffnIn = s.hf
-		} else if c.ResAttn() {
+		if c.ResAttn() {
 			in, err := s.k3FFNIn(li, l, s.xa, 1)
 			if err != nil {
 				return nil, err

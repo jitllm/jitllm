@@ -1355,15 +1355,6 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 			}
 		}
 	}
-	// A parallel block's FFN input, taken before attention adds into
-	// the residual; see forward.go.
-	if c.Parallel {
-		if l.ffnNorm != nil {
-			s.batchNormB(s.bhf, s.bx, l.ffnNorm, l.ffnNormB, c.NEmbd, n)
-		} else {
-			copy(s.bhf[:n*c.NEmbd], s.bh[:n*c.NEmbd])
-		}
-	}
 	s.tock(opRMSNorm, tn)
 	// The linear layer's recurrence is a per-row loop: each row's state
 	// depends on the row before it, and a batched recurrence would be a
@@ -1555,10 +1546,7 @@ attend:
 
 	tn = s.tick()
 	ffnIn := s.bh
-	if c.Parallel {
-		ffnIn = s.bhf
-		s.jit.NewInput()
-	} else if c.ResAttn() {
+	if c.ResAttn() {
 		in, err := s.k3FFNIn(li, l, s.bx[:n*c.ResidW()], n)
 		if err != nil {
 			return err

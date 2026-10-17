@@ -59,12 +59,17 @@ func graphDecode(t *testing.T, m *Model, n, frames int) ([][]float32, int, float
 // (every block, every token), a warm token allocates nothing resident or
 // paged, a page budget below the model gives the same answer, and the comparison can tell two
 // different computations apart (an f16 cache against f32).
+//
+// The parallel-residual models (phi2, stablelm-par, falcon, command-r,
+// cohere2) are not in the list: the hand-written body no longer has a
+// parallel residual, so their control arm refuses to open
+// (TestParallelModelsHaveNoHandWrittenBody); they matched it bit for bit on
+// this gate before it was deleted, and TestC6MatchesTransformers holds them.
 func TestBlockGraphMatchesTheHandPath(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "Qwen3-MOE-4x0.6B-Q4_K_M",
 		"olmoe-1b-7b-0924-instruct-Q4_K_M", "synth-qwen2moe", "synth-glm4moe", "synth-ernie45moe", "synth-bailingmoe2",
 		"synth-dots1", "synth-minimaxm2", "synth-seedoss", "synth-smollm3", "synth-lfm2",
-		"synth-phi2", "synth-starcoder", "synth-starcoder2", "synth-commandr", "synth-cohere2", "synth-stablelm",
-		"synth-stablelm-par", "synth-falcon", "synth-falcon40", "synth-nemotron", "synth-dbrx", "synth-apertus", "synth-glm4",
+		"synth-starcoder", "synth-starcoder2", "synth-stablelm", "synth-nemotron", "synth-dbrx", "synth-apertus", "synth-glm4",
 		"synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
@@ -513,6 +518,37 @@ func TestBlockGraphRaggedStepMatchesTheHandPath(t *testing.T) {
 			}
 			if !differ {
 				t.Fatal("an f16 cache gave the f32 cache's logits bit for bit: the comparison cannot see a change")
+			}
+		})
+	}
+}
+
+// TestParallelModelsHaveNoHandWrittenBody: a parallel-residual model runs
+// through the block graph alone. The control arm refuses to open it rather
+// than computing a serial block, and by default every block is on the graph.
+func TestParallelModelsHaveNoHandWrittenBody(t *testing.T) {
+	for _, name := range []string{"synth-phi2", "synth-stablelm-par", "synth-falcon", "synth-falcon40", "synth-commandr",
+		"synth-cohere2"} {
+		t.Run(name, func(t *testing.T) {
+			p := graphModel(t, name)
+			if ctl, err := Open(p, noTune, WithBlockGraph(false)); err == nil {
+				ctl.Close()
+				t.Fatal("the control arm opened a parallel model: a hand-written body would run it")
+			} else if !strings.Contains(err.Error(), "parallel") {
+				t.Fatalf("refused for another reason: %v", err)
+			}
+			m, err := Open(p, noTune)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			if !m.Cfg.Parallel {
+				t.Fatal("the fixture is not parallel: this gate proved nothing")
+			}
+			for li := range m.Cfg.NLayer {
+				if m.BlockGraph(li) == nil {
+					t.Fatalf("block %d is off the graph: %q", li, m.GraphUncovered(li))
+				}
 			}
 		})
 	}

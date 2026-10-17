@@ -333,14 +333,6 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 				}
 			}
 		}
-		// A parallel block's FFN input; see forward.go.
-		if c.Parallel {
-			if l.ffnNorm != nil {
-				s.batchNormB(s.bhf, s.bx, l.ffnNorm, l.ffnNormB, c.NEmbd, n)
-			} else {
-				copy(s.bhf[:n*c.NEmbd], s.bh[:n*c.NEmbd])
-			}
-		}
 		s.tock(opRMSNorm, t0)
 		// Each row passes its sequence's slot as the recurrent-state slot;
 		// sharing one state would give every row slot 0's history.
@@ -501,10 +493,7 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 
 		t0 = s.tick()
 		ffnIn := s.bh
-		if c.Parallel {
-			ffnIn = s.bhf
-			s.jit.NewInput()
-		} else if c.ResAttn() {
+		if c.ResAttn() {
 			in, err := s.k3FFNIn(li, l, s.bx[:n*c.ResidW()], n)
 			if err != nil {
 				return nil, err

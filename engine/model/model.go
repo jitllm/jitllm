@@ -1636,6 +1636,13 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	}
 	m.buildDeltaGraphs()
 	m.buildMixGraphs()
+	if m.opt.blockGraph == graphOff && m.Cfg.Parallel {
+		// The hand-written body no longer runs a parallel residual: only the
+		// block graph's lowering does (graphblock.go).
+		c.Close()
+		return nil, fmt.Errorf("model: %s is a parallel-residual model, which only the block graph runs; "+
+			"WithBlockGraph(false) has no body for it", m.Cfg.Arch)
+	}
 	if m.opt.blockGraph != graphOff {
 		if err := m.buildGraphs(); err != nil {
 			c.Close()
