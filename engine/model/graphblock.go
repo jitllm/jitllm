@@ -153,8 +153,8 @@ func (m *Model) buildGraphs() error {
 		if lw.qk != m.Cfg.QKNormAt(li) {
 			return fmt.Errorf("model: block %d graph's q/k norm is %v and attnPrep's %v", li, lw.qk, m.Cfg.QKNormAt(li))
 		}
-		lw.rewrites = graph.Apply(g, graph.Gate2In)
-		lw.offered = graph.Match(g, graph.Gate2In)
+		lw.rewrites = graph.Apply(g, graph.Rewrites...)
+		lw.offered = graph.Match(g, graph.Rewrites...)
 		m.graphs[li] = lw
 	}
 	return nil

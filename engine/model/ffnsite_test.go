@@ -30,9 +30,15 @@ func TestGraphFindsTheFFNSite(t *testing.T) {
 			}
 			defer gm.Close()
 			for li := 0; li < gm.Cfg.NLayer; li++ {
+				// Every rewrite matches once and is legal on a dense block.
 				ds := gm.BlockRewrites(li)
-				if len(ds) != 1 || ds[0].Err != nil {
+				if len(ds) != len(graph.Rewrites) {
 					t.Fatalf("block %d: %v", li, ds)
+				}
+				for _, d := range ds {
+					if d.Err != nil {
+						t.Fatalf("block %d: %v", li, d)
+					}
 				}
 			}
 			ids := gm.Vocab.Encode("The capital of France is", true)
@@ -78,8 +84,12 @@ func TestGraphFindsTheFFNSite(t *testing.T) {
 				for li, lw := range gm.graphs {
 					lw.offered = nil
 					if arm == "target-refuses" {
+						// gate2in's region under the refusing guard; the
+						// prologue sites keep their own rewrites.
 						for _, o := range saved[li] {
-							o.Rewrite = &refuseAt
+							if o.Rewrite == graph.Gate2In {
+								o.Rewrite = &refuseAt
+							}
 							lw.offered = append(lw.offered, o)
 						}
 					}
@@ -87,6 +97,11 @@ func TestGraphFindsTheFFNSite(t *testing.T) {
 				_, sts = ffnRecipeDecode(t, gm, ids, toks, false, -1, t.TempDir(), []tier.FFNForm{tier.FFNTuned})
 				if sts[0].FFNTimed != 0 || sts[0].Gate2InRuns != 0 {
 					t.Fatalf("%s: with the site refused, %d keys timed and gate2in ran in %d FFNs", arm, sts[0].FFNTimed, sts[0].Gate2InRuns)
+				}
+				// The prologue sites: refused with no region, offered (and
+				// so timed) where only gate2in's guard refuses.
+				if prologue := sts[0].ActInTimed != 0; prologue != (arm == "target-refuses") {
+					t.Fatalf("%s: the prologue tuner timed %d sites", arm, sts[0].ActInTimed)
 				}
 			}
 			// The Target the tier built is the device's: its backend, an ISA

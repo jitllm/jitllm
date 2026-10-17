@@ -244,7 +244,9 @@ type layer struct {
 	// ffnWhy is why the block graph's gate2in rewrite was not offered here
 	// at this device's Target (offer), nil where it was or the block has no
 	// graph: the plan explanation's reason.
-	ffnWhy        error
+	ffnWhy error
+	// actInWhy is ffnWhy for the q/k/v, o and down prologue sites.
+	actInWhy      [3]error
 	mvo, mvg, mvu mv
 	mvd           mv
 	// MoE only: the F32 router matrix and its matvec. gate/up/down above hold

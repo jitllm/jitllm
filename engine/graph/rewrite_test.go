@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -55,5 +56,42 @@ func TestGate2InIsFoundByPattern(t *testing.T) {
 	ds = Apply(g, Gate2In)
 	if len(ds) != 1 || ds[0].Err == nil || !strings.Contains(ds[0].Err.Error(), "reader besides") {
 		t.Fatalf("second reader of gate: %v", ds)
+	}
+}
+
+// The operand-prologue sites are found by their edges in both covered
+// graphs, once each; a second reader of the attention norm's output is a near
+// miss refused with its reason; and each is refused at the chunk row class,
+// on a subgroup that is not 32 lanes and on a backend with no contract.
+func TestPrologueSitesAreFoundByPattern(t *testing.T) {
+	dec := Target{API: "ptx", Subgroup: 32, Rows: RowsDecode}
+	for _, qk := range []bool{false, true} {
+		f := stated(qk)
+		g := f.Config.Build()
+		for _, rw := range []*Rewrite{ActInQKV, ActInO, ActInDown} {
+			os := Match(g, rw)
+			if len(os) != 1 {
+				t.Fatalf("qk=%v %s: %d regions", qk, rw.Name, len(os))
+			}
+			if err := os[0].Offer(dec); err != nil {
+				t.Fatalf("qk=%v %s at decode: %v", qk, rw.Name, err)
+			}
+			for _, bad := range []Target{{API: "ptx", Subgroup: 32, Rows: RowsChunk},
+				{API: "ptx", Subgroup: 64, Rows: RowsDecode}, {API: "host", Subgroup: 32, Rows: RowsDecode}} {
+				if os[0].Offer(bad) == nil {
+					t.Fatalf("qk=%v %s offered at %s", qk, rw.Name, bad.Key())
+				}
+			}
+		}
+	}
+	f := stated(false)
+	g := f.Config.Build()
+	// A second reader of the attention norm: a probe of the normed row.
+	h := g.Ops[0].Out[0]
+	out := g.value("probe", g.Values[h].Width)
+	g.Ops = append(g.Ops[:1], append([]Op{{Kind: OpAdd, In: []ValueID{h, h}, Out: []ValueID{out}}}, g.Ops[1:]...)...)
+	os := Match(g, ActInQKV)
+	if len(os) != 1 || !strings.Contains(fmt.Sprint(os[0].Offer(dec)), "readers") {
+		t.Fatalf("second reader of the attention norm: %v", os)
 	}
 }

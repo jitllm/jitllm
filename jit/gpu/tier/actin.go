@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
@@ -73,12 +74,23 @@ func (g *devTier) fuseActIn(l *layer) {
 			GroupSplit: m.group, Rowt: max(m.rowt, 1), Bias: m.bias != nil, In: in}
 	}
 	l.actInKeys = [4]string{}
-	if l.qkv != nil {
+	// A graphed block offers a site only where its rewrite matched, is
+	// legal and pays at this device's Target (graph.ActInQKV, ActInO,
+	// ActInDown); its key carries the Target's. A block without a graph
+	// takes the structural checks below alone.
+	sfx := [3]string{}
+	offered := [3]bool{true, true, true}
+	for i, rw := range []*graph.Rewrite{graph.ActInQKV, graph.ActInO, graph.ActInDown} {
+		graphed, tkey, why := g.offer(l, rw.Name, graph.RowsDecode)
+		l.actInWhy[i] = why
+		offered[i], sfx[i] = !graphed || why == nil, targetSuffix(tkey)
+	}
+	if l.qkv != nil && offered[0] {
 		var segs []kernels.MatVecShape
 		for _, m := range []mv{l.mvq, l.mvk, l.mvv} {
 			segs = append(segs, kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Bias: m.bias != nil})
 		}
-		key := fmt.Sprintf("qkv/%v/%d/%v", segs, l.mvq.split, l.mvq.group)
+		key := fmt.Sprintf("qkv/%v/%d/%v", segs, l.mvq.split, l.mvq.group) + sfx[0]
 		if on(actInQKV, key) {
 			// A key only beside a kernel: tuneActIn times every keyed site's
 			// prologue, and a declined one (ErrGroupTooWide) has none.
@@ -88,8 +100,8 @@ func (g *devTier) fuseActIn(l *layer) {
 		}
 	}
 	// q, k and v one launch each, where they are not one launch together.
-	if l.qkv == nil && plain(l.mvq) && plain(l.mvk) && plain(l.mvv) {
-		key := fmt.Sprintf("qkvs/%v/%v/%v", shape(l.mvq, norm), shape(l.mvk, norm), shape(l.mvv, norm))
+	if l.qkv == nil && offered[0] && plain(l.mvq) && plain(l.mvk) && plain(l.mvv) {
+		key := fmt.Sprintf("qkvs/%v/%v/%v", shape(l.mvq, norm), shape(l.mvk, norm), shape(l.mvv, norm)) + sfx[0]
 		if on(actInQKV, key) {
 			l.mvq.kernIn, l.mvk.kernIn, l.mvv.kernIn = g.inKernel(shape(l.mvq, norm)), g.inKernel(shape(l.mvk, norm)),
 				g.inKernel(shape(l.mvv, norm))
@@ -107,15 +119,15 @@ func (g *devTier) fuseActIn(l *layer) {
 		s.Bias = true
 		return s, true
 	}
-	if s, ok := res(l.mvo, quant); ok {
-		if key := fmt.Sprintf("o/%v", s); on(actInO, key) {
+	if s, ok := res(l.mvo, quant); ok && offered[1] {
+		if key := fmt.Sprintf("o/%v", s) + sfx[1]; on(actInO, key) {
 			if l.mvo.resIn = g.inKernel(s); l.mvo.resIn != nil {
 				l.actInKeys[1] = key
 			}
 		}
 	}
-	if s, ok := res(l.mvd, quant); ok && l.mvu.gated != nil {
-		if key := fmt.Sprintf("d/%v", s); on(actInDown, key) {
+	if s, ok := res(l.mvd, quant); ok && l.mvu.gated != nil && offered[2] {
+		if key := fmt.Sprintf("d/%v", s) + sfx[2]; on(actInDown, key) {
 			if l.mvd.resIn = g.inKernel(s); l.mvd.resIn != nil {
 				l.actInKeys[2] = key
 			}
