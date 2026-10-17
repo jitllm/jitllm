@@ -1068,8 +1068,8 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 					ds.StreamDirect, ds.StreamPinned, ds.StreamGathered, ds.StreamGroupsTuned)
 			}
 			if ds.StreamCacheHits+ds.StreamCacheMisses > 0 || ds.StreamCacheShort > 0 {
-				fmt.Fprintf(os.Stderr, "expert cache: %d sheet(s) a block, %d hit(s), %d miss(es) (%.1f%% hit), %d block(s) without room for one (mean base %d B)\n",
-					ds.StreamCacheSize, ds.StreamCacheHits, ds.StreamCacheMisses,
+				fmt.Fprintf(os.Stderr, "expert cache: %d sheet(s) a block on average (%d at most), %d hit(s), %d miss(es) (%.1f%% hit), %d block(s) without room for one (mean base %d B)\n",
+					ds.StreamCacheSlots/max(ds.StreamCacheBlocks, 1), ds.StreamCacheSize, ds.StreamCacheHits, ds.StreamCacheMisses,
 					100*float64(ds.StreamCacheHits)/max(float64(ds.StreamCacheHits+ds.StreamCacheMisses), 1), ds.StreamCacheShort, ds.AutoMeanBase)
 			}
 			if ds.HybridRuns > 0 {

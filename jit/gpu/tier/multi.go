@@ -748,6 +748,8 @@ func (g *devTier) cacheBlock(l *layer, n, k int) bool {
 	}
 	l.stream.initCache(n, l.stream.nExpert)
 	g.StreamCacheSize = max(g.StreamCacheSize, n)
+	g.StreamCacheSlots += n
+	g.StreamCacheBlocks++
 	return true
 }
 

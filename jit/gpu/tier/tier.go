@@ -988,6 +988,9 @@ type Stats struct {
 	// StreamCacheSize is the largest expert cache a block was given, in
 	// sheets: the check that an auto-sized cache is the size intended.
 	StreamCacheSize int
+	// StreamCacheSlots is the sheets of every block's cache together, over
+	// StreamCacheBlocks blocks: their mean is the size a block really got.
+	StreamCacheSlots, StreamCacheBlocks int
 	// StreamGroupsTuned is the group count the fill tuner holds (0: not
 	// tuning, a stated Config.StreamGroups).
 	StreamGroupsTuned int
@@ -1421,6 +1424,8 @@ func (s *Stats) add(o Stats) {
 	s.TLateWrite += o.TLateWrite
 	s.TAdmit += o.TAdmit
 	s.StreamCacheSize = max(s.StreamCacheSize, o.StreamCacheSize)
+	s.StreamCacheSlots += o.StreamCacheSlots
+	s.StreamCacheBlocks += o.StreamCacheBlocks
 	s.StreamGroupsTuned = max(s.StreamGroupsTuned, o.StreamGroupsTuned)
 	s.StreamPinHalfTuned = max(s.StreamPinHalfTuned, o.StreamPinHalfTuned)
 	s.StreamDirectTuned = max(s.StreamDirectTuned, o.StreamDirectTuned)

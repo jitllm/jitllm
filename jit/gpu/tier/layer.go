@@ -1445,6 +1445,8 @@ func (g *devTier) cacheSlotsFor(p *nn.LayerPlan, ws []nn.Weight, want, slots, ba
 		return slots
 	}
 	g.StreamCacheSize = max(g.StreamCacheSize, n)
+	g.StreamCacheSlots += n
+	g.StreamCacheBlocks++
 	return n
 }
 
@@ -7271,6 +7273,15 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	kst := g.kStride(p)
 	koffs := g.subBytes.koffs[:0]
 	kposs := g.subBytes.kposs[:0]
+	// A refusal returns before the submission below keeps these; a call that
+	// refuses every time would otherwise regrow all of them every time.
+	var rposs []byte
+	defer func() {
+		g.subBytes.pn, g.subBytes.koffs, g.subBytes.kposs = pn, koffs, kposs
+		if rposs != nil {
+			g.subBytes.rposs = rposs
+		}
+	}()
 	for r := 0; r < R; r++ {
 		at := pos + r
 		if r >= nrow {
@@ -7478,7 +7489,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			return refuse("%v", e)
 		}
 	}
-	var rposs []byte
 	if ropeDev {
 		rposs = append(g.subBytes.rposs[:0], u32one(uint32(rrows))...)
 		for r := 0; r < R; r++ {
