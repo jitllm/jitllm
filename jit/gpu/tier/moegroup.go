@@ -122,7 +122,7 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 	// token block from ActF16T(Gather) and add the expert bias themselves, so
 	// the scratch, the padding and the launch are the same and only the
 	// kernel differs (voltaGroupedMV picks it).
-	unit, volta := groupTok, (g.voltaOn() || g.tileMoE()) && g.voltaMoEWide(rows, k, e)
+	unit, volta := groupTok, (g.voltaOn() || g.tileMoE()) && !g.moeNarrow(p, rows, k, e)
 	if volta {
 		unit = voltaUnit(rows, k, e)
 	}
@@ -899,11 +899,11 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 		// not a decode token a row.
 		st := l.stream
 		// A prompt-sized chunk runs its experts on the card in waves through
-		// the cache (prefillWaves) rather than reading every one on the host.
-		// The per-expert biases and Gemma 4's scale index by expert id, which
-		// a wave's slot ids are not.
-		if st.cached() && !g.NoPrefillExperts && valid >= prefillWaveRows && m.ewScale == nil &&
-			l.expGateB == nil && l.expUpB == nil && l.expDownB == nil && *errp == nil {
+		// the cache (prefillWaves) rather than reading every one on the host,
+		// where graph.MoEWaves offers it (wavesRun): a prompt chunk's rows, a
+		// bank streamed through the cache, and no per-expert bias or scale,
+		// which index by expert id where a wave's slot ids are not.
+		if !g.NoPrefillExperts && *errp == nil && g.wavesRun(l, m, valid) {
 			*errp = st.prefillWaves(g, s, l, e, m.rsel, m.rw, m.k, rows, valid, func(first bool) error {
 				if first {
 					pass(eout)

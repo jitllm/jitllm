@@ -2044,6 +2044,11 @@ func (s *State) planFor(li int) *nn.LayerPlan {
 		// not lowered from it (Graphed stays false).
 		plan.Rewrites = s.m.deltaGraphs[li].offered
 	}
+	if li < len(s.m.mixGraphs) && s.m.mixGraphs[li] != nil {
+		// A mixture sublayer's graph offers its rewrites beside whatever
+		// the block's other graph offers; it is not lowered either.
+		plan.Rewrites = append(plan.Rewrites[:len(plan.Rewrites):len(plan.Rewrites)], s.m.mixGraphs[li].offered...)
+	}
 	// AttnScale is carried for every architecture: it includes YaRN's
 	// magnitude correction (DeepSeek), and under MLA HeadDim is the wrong
 	// width to derive it from. MLA's geometry is here so a tier can decline.

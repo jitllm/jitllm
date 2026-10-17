@@ -3,8 +3,11 @@
 package model
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
@@ -38,14 +41,16 @@ func prefillWavesAllocs(t *testing.T, m *Model, ids []int32, blocks, slots int, 
 	c := m.Cfg
 	s := m.NewState(len(ids) + 2)
 	defer s.Close()
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
+	// The selected device where JITLLM_TEST_DEVICES names one: the waves run
+	// on every backend.
+	g, err := tier.OpenWith(tier.WithDevices(testdevices.One("gpu:0")), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(cf *tier.Config) {
 			cf.StreamExperts, cf.HybridExperts = true, true
 			cf.SplitAdmit, cf.NoPrefillExperts = c.NExpertUsed, noWaves
 			cf.StreamCacheSlots = slots
 		}))
 	if err != nil || g == nil {
-		noDevice(t, "gpu:0", err)
+		noDevice(t, testdevices.One("gpu:0"), err)
 	}
 	defer g.Close()
 	placed := c.NLayer
@@ -139,6 +144,30 @@ func TestHybridPrefillWavesMatchTheHost(t *testing.T) {
 					if st.PrefillBlocks == 0 || st.PrefillWaves < st.PrefillBlocks || st.PrefillUploaded == 0 {
 						t.Fatalf("the waves did not run: %d block-chunks, %d waves, %d sheets sent",
 							st.PrefillBlocks, st.PrefillWaves, st.PrefillUploaded)
+					}
+				})
+			}
+			// Where the blocks have a mixture graph, the waves are graph.MoEWaves'
+			// decision, not the call site's (RULE 10): with its guard refusing every
+			// target, no block-chunk runs in waves. A model the op language does
+			// not state (Kimi-K3's latent mixture) is decided by the tier's facts.
+			graphed := 0
+			for li := 0; li < m.Cfg.NLayer; li++ {
+				if m.MixGraph(li) != nil {
+					graphed++
+				}
+			}
+			t.Logf("%d of %d blocks carry a mixture graph", graphed, m.Cfg.NLayer)
+			if graphed > 0 {
+				t.Run("rewrite-refused", func(t *testing.T) {
+					pays := graph.MoEWaves.Pays
+					defer func() { graph.MoEWaves.Pays = pays }()
+					graph.MoEWaves.Pays = func(*graph.Graph, graph.Region, graph.Target) error {
+						return errors.New("refused for the gate")
+					}
+					_, st := prefillWavesCase(t, m, ids, md.blocks, 0, false)
+					if st.PrefillBlocks != 0 {
+						t.Fatalf("the rewrite refused every target and %d block-chunks ran in waves: the site decided", st.PrefillBlocks)
 					}
 				})
 			}

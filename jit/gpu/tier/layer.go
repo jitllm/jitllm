@@ -252,6 +252,9 @@ type layer struct {
 	normGateOffer [2]bool
 	normGateKey   string
 	normGateWhy   error
+	// mix is the mixture graph's rewrites decided per row class and
+	// residency (prepMixture).
+	mix mixOffer
 	// actInWhy is ffnWhy for the q/k/v, o and down prologue sites.
 	actInWhy      [3]error
 	mvo, mvg, mvu mv

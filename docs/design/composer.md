@@ -365,6 +365,51 @@ launches; the rule's output and z swapped must move the logits). Both gates
 ran on CUDA and Vulkan (an RTX 3050 Ti), CUDA on a V100 (sm_70) and Metal on
 an M4, where the run set its Metal contract.
 
+### The mixture in the op language
+
+A routed mixture is a sublayer graph of its own (`graph.Mixture`), built,
+verified and matched at every Open for each mixture block the language states
+(`engine/model/mixgraph.go`), its matches carried to the tier beside a gated
+delta sublayer's in `nn.LayerPlan.Rewrites`. Four ops, each with fixed
+semantics:
+
+    sel   = route(x, router[, router.bias][, exp_probs_b])  experts, top-k, softmax|sigmoid|sparsemixer, norm, scale, groups
+    pairs = gather(x, sel)                                  the row once per selected pair
+    h     = expert_matvec(pairs, sel, bank[, bank.bias])    per pair, the sheet the selection names
+    y     = combine(down, sel[, exp_scale])                 the weighted sum in the selection's order
+
+with `act_mul` between gate and up as in a dense FFN, and a shared expert as
+matvecs, `act_mul` and an optional `gate_scalar` (the sigmoid of a dot product
+scaling its output) added after. The verifier holds the route to the
+configuration's expert count, top-k, router, renormalisation, scale and
+groups, every bank to the expert count, and every stored mixture tensor to an
+op that binds it. A block the language does not yet state keeps no graph and
+the tier decides from its own facts as before: DeepSeek V4's per-row
+selection and hash blocks, Kimi-K3's latent mixture, Gemma 4's router norm
+beside a dense FFN, experts stored one matrix each, ungated experts, and an
+activation other than SiLU. `model.TestMixtureGraphsOfTheModelsVerify` holds
+ten mixtures (qwen3moe, olmoe, DeepSeek-V2-Lite, glm4moe, qwen2moe, ernie4.5,
+minimax-m2, bailingmoe2, dots1, phimoe) to one verified graph per mixture
+block, and a graph of another top-k must not verify.
+
+`graph.Target` gained `Residency`: the bank whole on the card, streamed
+through an expert cache there, or on the host. Two existing levers became
+rewrites found by the experts' edges (route, gather, gate, up, act_mul, down,
+combine) and guarded by the row class and the residency:
+
+| rewrite | guard (`Pays`) | legality | contract |
+|---|---|---|---|
+| `moe-few-row` (the dp4a grouped matvec where the staged f16 GEMM pads each expert to a 32-column block) | `RowsFew` (the scratch's routed pairs fewer than `VoltaMoEMinPairs`, by default the bank's experts), experts not on the host | the grouped mixture's shape | band 1e-2 on PTX and MSL (`TestBatchedMixturePrefillMatchesRowByRow`); a backend with no f16 expert GEMM has one form |
+| `moe-waves` (a prompt chunk's experts on the card in waves through the expert cache) | `RowsChunk` (at least `prefillWaveRows`), `ResidencyCached` | no bank bias and no per-expert scale: a wave's slot ids index neither | band 3e-3 (`TestHybridPrefillWavesMatchTheHost`) |
+
+The tier asks the waves once per block outside a token, at every row class and
+residency (`prepMixture`), so the site picks an entry and allocates nothing
+(the gate's warm run counts zero heap allocations); a matched region's
+`Legal` is decided once at `Match`. Selection is asserted against a violation
+in each gate: with `MoEFewRow`'s guard refusing every target the narrow class
+puts the experts back on the f16 GEMM (`TestFewRowFormIsTheMixtureRewrite`),
+and with `MoEWaves`' refusing, no block-chunk runs in waves.
+
 ### Task contract: Slice A
 
 ```yaml

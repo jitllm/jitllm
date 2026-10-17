@@ -1,11 +1,13 @@
 package model
 
 import (
+	"errors"
 	"os"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
@@ -39,6 +41,40 @@ var floatMoEModels = []string{"synth-qwen35moe-hybrid-mtp.gguf", "synth-qwen35mo
 	"synth-qwen35moe-hybrid-mtp-bf16.gguf", "synth-glm4moe.gguf",
 	"synth-qwen2moe.gguf", "synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf", "synth-minimaxm2.gguf",
 	"synth-gemma4-moe.gguf", "synth-minimaxm3.gguf", "synth-deepseek4.gguf", "synth-kimik3.gguf"}
+
+// lastGroupedVolta is the batched arm's expert matvecs on the f16 GEMM in the
+// last batchedMixtureCase, for a caller that armed a violation.
+var lastGroupedVolta int
+
+// TestFewRowFormIsTheMixtureRewrite holds the few-row mixture form (the dp4a
+// grouped matvec where the staged f16 GEMM would pad each expert to a
+// 32-column block) to graph.MoEFewRow: with the narrow class forced, the
+// experts leave the tensor cores (batchedMixtureCase demands it); with the
+// rewrite's guard refusing every target, they take them again, so the class
+// is the rewrite's decision and not the call site's. Only a card whose
+// batched experts take the f16 GEMM (sm_70, or the 8x8 tiles) has the two
+// forms.
+func TestFewRowFormIsTheMixtureRewrite(t *testing.T) {
+	name := os.Getenv("JITLLM_MOE_MODEL")
+	if name == "" {
+		name = "Qwen3-MOE-4x0.6B-Q4_K_M.jlm"
+	}
+	batchedMixtureCase(t, name, false, false)
+	if lastGroupedVolta == 0 {
+		t.Skip("this card's batched experts take no f16 GEMM: it has one expert form -- this gate proved nothing")
+	}
+	wide := lastGroupedVolta
+	t.Setenv("JITLLM_GPU_VOLTA_MOE_MIN_PAIRS", "1000000")
+	batchedMixtureCase(t, name, false, false)
+	pays := graph.MoEFewRow.Pays
+	defer func() { graph.MoEFewRow.Pays = pays }()
+	graph.MoEFewRow.Pays = func(*graph.Graph, graph.Region, graph.Target) error { return errors.New("refused for the gate") }
+	batchedMixtureCase(t, name, false, true)
+	if lastGroupedVolta == 0 {
+		t.Fatal("with the few-row rewrite refused the experts still left the tensor cores: the class is decided elsewhere")
+	}
+	t.Logf("wide: %d expert matvecs on the f16 GEMM; narrow: none; narrow with the rewrite refused: %d", wide, lastGroupedVolta)
+}
 
 // TestBatchedMixturePrefillFloatBanks is the batched-mixture gate on float
 // expert banks, which every card ran one row at a time until the grouped
@@ -179,7 +215,8 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 	// dense batched matvecs did is testing the dp4a grouped matvec while
 	// believing it tests GemmVolta.
 	narrow := os.Getenv("JITLLM_GPU_VOLTA_MOE_MIN_PAIRS") != ""
-	if narrow && batSt.GroupedVolta != 0 {
+	lastGroupedVolta = batSt.GroupedVolta
+	if narrow && !violate && batSt.GroupedVolta != 0 {
 		t.Fatalf("the narrow class was forced and %d expert matvecs still ran on sm_70 tensor cores (%s)", batSt.GroupedVolta, batErr)
 	}
 	if batSt.VoltaMV > 0 && os.Getenv("JITLLM_MOE_NOVOLTAMOE") == "" && !narrow && batSt.GroupedVolta == 0 {

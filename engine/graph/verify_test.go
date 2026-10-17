@@ -14,13 +14,13 @@ func stated(qk bool) Facts {
 	d := Dense{Block: 3, NEmbd: 64, NHead: 4, NKVHead: 2, HeadDim: 16, NFFN: 96, Eps: 1e-6, NRot: 16,
 		Base: 1e6, Layout: RopeNorm, Scale: 0.25, Act: ActSiLU}
 	inv := map[jlm.Role]Shape{
-		jlm.RoleAttnNorm: {64, 0}, jlm.RoleAttnQ: {64, 64}, jlm.RoleAttnK: {64, 32}, jlm.RoleAttnV: {64, 32},
-		jlm.RoleAttnOut: {64, 64}, jlm.RoleFFNNorm: {64, 0}, jlm.RoleFFNGate: {64, 96}, jlm.RoleFFNUp: {64, 96},
-		jlm.RoleFFNDown: {96, 64},
+		jlm.RoleAttnNorm: {64, 0, 0}, jlm.RoleAttnQ: {64, 64, 0}, jlm.RoleAttnK: {64, 32, 0}, jlm.RoleAttnV: {64, 32, 0},
+		jlm.RoleAttnOut: {64, 64, 0}, jlm.RoleFFNNorm: {64, 0, 0}, jlm.RoleFFNGate: {64, 96, 0}, jlm.RoleFFNUp: {64, 96, 0},
+		jlm.RoleFFNDown: {96, 64, 0},
 	}
 	if qk {
 		d.QKNorm, d.Layout = true, RopeNeox
-		inv[jlm.RoleAttnQNorm], inv[jlm.RoleAttnKNorm] = Shape{16, 0}, Shape{16, 0}
+		inv[jlm.RoleAttnQNorm], inv[jlm.RoleAttnKNorm] = Shape{16, 0, 0}, Shape{16, 0, 0}
 	}
 	return Facts{Config: d, Inventory: inv}
 }
@@ -88,7 +88,7 @@ func TestVerifierRefusesWrongGraphs(t *testing.T) {
 			}
 		}, "ffn_gate, which no op binds"},
 		{"binding of the wrong shape", false, func(g *Graph, f *Facts) {
-			f.Inventory[jlm.RoleAttnK] = Shape{64, 64}
+			f.Inventory[jlm.RoleAttnK] = Shape{64, 64, 0}
 		}, "stored 64x64"},
 		{"epsilon not the stated one", false, func(g *Graph, f *Facts) {
 			g.Ops[0].Attr.Eps = 1e-5

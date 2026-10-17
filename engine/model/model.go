@@ -1243,7 +1243,11 @@ type Model struct {
 	graphs []*denseLowering
 	// deltaGraphs is each gated delta block's sublayer graph (deltagraph.go),
 	// built at every Open; deltaGraphErr the verifier's refusals.
-	deltaGraphs   []*deltaGraph
+	deltaGraphs []*deltaGraph
+	// mixGraphs is each mixture block's sublayer graph (mixgraph.go),
+	// nil where a block has none; mixGraphErr the verifier's refusals.
+	mixGraphs     []*mixGraph
+	mixGraphErr   []error
 	deltaGraphErr []error
 
 	// basePlans is ensureBlock's read plan for every text block -- the block's
@@ -1628,6 +1632,7 @@ func openContainer(path string, options ...Option) (*Model, error) {
 		}
 	}
 	m.buildDeltaGraphs()
+	m.buildMixGraphs()
 	if m.opt.blockGraph {
 		if err := m.buildGraphs(); err != nil {
 			c.Close()

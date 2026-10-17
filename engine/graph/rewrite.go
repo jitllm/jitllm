@@ -53,7 +53,20 @@ type Target struct {
 	SharedMem int    // bytes of shared memory a workgroup may hold
 	Rows      RowClass
 	Layout    Layout
+	Residency Residency
 }
+
+// Residency is where the weights a region reads are when it runs: a
+// mixture's bank whole on the card, streamed through an expert cache there
+// (a subset of the experts resident, the rest admitted on demand), or on the
+// host. 0 is unstated, which a guard that needs it refuses.
+type Residency uint8
+
+const (
+	ResidencyCard   Residency = iota + 1 // every weight the region reads is on the card
+	ResidencyCached                      // the bank streams through an expert cache on the card
+	ResidencyHost                        // the experts run on the host
+)
 
 // RowClass is the executed row-width class a region runs at: a lever's
 // arithmetic changes form across these, so a verdict at one is no evidence
@@ -76,14 +89,21 @@ type Layout struct {
 
 // Key is the target's part of a persisted verdict key.
 func (t Target) Key() string {
-	return fmt.Sprintf("%s/%s/%s/sg%d/sh%d/r%d/s%d", t.API, t.ISA, t.MMA, t.Subgroup, t.SharedMem, t.Rows, t.Layout.Streams)
+	return fmt.Sprintf("%s/%s/%s/sg%d/sh%d/r%d/s%d/x%d", t.API, t.ISA, t.MMA, t.Subgroup, t.SharedMem, t.Rows, t.Layout.Streams, t.Residency)
 }
 
 // Offer is a legal region's decision on target t: refused where the backend
 // has no contract or the rewrite's Pays guard says it cannot win there.
 func (rw *Rewrite) Offer(g *Graph, r Region, t Target) error {
-	if err := rw.Legal(g, r); err != nil {
-		return err
+	return rw.offer(rw.Legal(g, r), g, r, t)
+}
+
+// offer is Offer with the region's legality already decided: a graph does
+// not change after it is built, so a matched region's Legal is asked once
+// (Match), and the per-target part allocates nothing where it offers.
+func (rw *Rewrite) offer(legal error, g *Graph, r Region, t Target) error {
+	if legal != nil {
+		return legal
 	}
 	// The static bound refuses, never accepts: a region that removes no
 	// launch and adds traffic cannot win on any target.
@@ -276,11 +296,19 @@ type Offered struct {
 	Rewrite *Rewrite
 	Graph   *Graph
 	Region  Region
+	// legal is the region's Legal, decided when Match found it.
+	legal   error
+	matched bool
 }
 
 // Offer is the rewrite's decision on this region at target t: Legal, the
 // backend's contract, and the Pays guard, each refusal with its reason.
-func (o Offered) Offer(t Target) error { return o.Rewrite.Offer(o.Graph, o.Region, t) }
+func (o Offered) Offer(t Target) error {
+	if !o.matched {
+		return o.Rewrite.Offer(o.Graph, o.Region, t)
+	}
+	return o.Rewrite.offer(o.legal, o.Graph, o.Region, t)
+}
 
 // Key is what a timed verdict on this region at t is persisted under beyond
 // the tier's shape key: the target's key and whatever the rewrite's Keys
@@ -302,7 +330,7 @@ func Match(g *Graph, rws ...*Rewrite) []Offered {
 	out := []Offered{}
 	for _, rw := range rws {
 		for _, r := range rw.Match(g) {
-			out = append(out, Offered{Rewrite: rw, Graph: g, Region: r})
+			out = append(out, Offered{Rewrite: rw, Graph: g, Region: r, legal: rw.Legal(g, r), matched: true})
 		}
 	}
 	return out

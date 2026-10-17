@@ -52,10 +52,31 @@ const (
 	// opaque in this version: the rule's own internals are one op, its
 	// weights all bound by it, and only what follows it is matched.
 	OpGatedDelta
+	// OpRoute is a mixture's router over its input row (In[0]): the logits
+	// against Weight[0] (Experts rows), an optional bias on them and a
+	// selection bias on the choice (Weight[1:], by role), scored by Router,
+	// within Groups, the top TopK kept, divided by their sum where RouteNorm,
+	// times Scale. Out[0] is the selection: TopK (expert, weight) pairs in
+	// the router's order.
+	OpRoute
+	// OpGather is the row In[0] once per pair of the selection In[1]: Out[0]
+	// is TopK rows of the input's width.
+	OpGather
+	// OpExpertMatVec is OpMatVec per pair: row j of In[0] against the sheet
+	// of Weight[0]'s bank the selection In[1] names at pair j, an optional
+	// Weight[1] the bank's bias (one row per expert) added after.
+	OpExpertMatVec
+	// OpCombine is the selection's (In[1]) weighted sum of the pairs In[0],
+	// in the selection's order: Out[0] is one row of a pair's width. An
+	// optional Weight[0] is a per-expert scale on each pair's weight.
+	OpCombine
+	// OpGateScalar is sigma(dot(Weight[0], In[0])) * In[1]: a shared
+	// expert's output scaled by its gate's sigmoid.
+	OpGateScalar
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -109,6 +130,7 @@ type Value struct {
 type Binding struct {
 	Role    jlm.Role
 	K, Rows int
+	Sheets  int // a bank's experts, each a K x Rows sheet; 0 for one matrix
 }
 
 // StateRef is a version of the block's persistent state.
@@ -132,6 +154,11 @@ type Attrs struct {
 	Window  int
 	Softcap float64
 	Act     Act
+	// A mixture's router and combine (OpRoute, OpCombine).
+	Experts, TopK      int
+	Router             Router
+	RouteNorm          bool
+	Groups, GroupsUsed int
 }
 
 // Op is one operation.

@@ -9,8 +9,9 @@ import (
 )
 
 // Shape is a stored tensor's shape: K its input width (a vector's length),
-// Rows its output rows (0 for a vector).
-type Shape struct{ K, Rows int }
+// Rows its output rows (0 for a vector), Sheets a bank's experts (0 for one
+// matrix).
+type Shape struct{ K, Rows, Sheets int }
 
 // Facts is what the container states about a block, independently of any
 // graph built for it: the configuration (the rotary, the epsilon, the head
@@ -23,6 +24,10 @@ type Facts struct {
 	// instead of a dense block: its epsilon, value head width and gate are
 	// what the norms and the act_mul are held to.
 	Delta *Delta
+	// Mixture, where set, is the routed mixture sublayer the graph
+	// describes: its expert counts, router and activation are what the
+	// route, the experts and the act_muls are held to.
+	Mixture *Mixture
 }
 
 // Verify checks g before anything is allocated or emitted and returns every
@@ -69,6 +74,9 @@ func Verify(g *Graph, f Facts) error {
 	if f.Delta != nil {
 		eps, headDim, act = f.Delta.Eps, f.Delta.VDim, f.Delta.Gate
 	}
+	if f.Mixture != nil {
+		act = f.Mixture.Act
+	}
 	for i, o := range g.Ops {
 		at := fmt.Sprintf("graph: block %d op %d (%s)", g.Block, i, o.Kind)
 		if o.Kind <= OpInvalid || o.Kind >= numOps {
@@ -108,8 +116,8 @@ func Verify(g *Graph, f Facts) error {
 			switch {
 			case !ok:
 				bad("%s: binds %v, which the container does not store for the block", at, w.Role)
-			case s.K != w.K || s.Rows != w.Rows:
-				bad("%s: binds %v as %dx%d, stored %dx%d", at, w.Role, w.K, w.Rows, s.K, s.Rows)
+			case s.K != w.K || s.Rows != w.Rows || s.Sheets != w.Sheets:
+				bad("%s: binds %v as %dx%dx%d, stored %dx%dx%d", at, w.Role, w.K, w.Rows, w.Sheets, s.K, s.Rows, s.Sheets)
 			}
 		}
 		ins := func(k int) bool {
@@ -205,6 +213,8 @@ func Verify(g *Graph, f Facts) error {
 			if o.Kind == OpActMul && o.Attr.Act != act {
 				bad("%s: activation %d, the configuration states %d", at, o.Attr.Act, act)
 			}
+		case OpRoute, OpGather, OpExpertMatVec, OpCombine, OpGateScalar:
+			verifyMixtureOp(o, at, f.Mixture, width, ins, outs, bad)
 		case OpGatedDelta:
 			if !ins(1) || !outs(1) {
 				break
@@ -242,4 +252,78 @@ func Verify(g *Graph, f Facts) error {
 		bad("graph: block %d stores %s, which no op binds: the graph does not compute what the container holds", g.Block, r)
 	}
 	return errors.Join(errs...)
+}
+
+// verifyMixtureOp holds a mixture op to the sublayer's facts: the expert
+// counts and the router the configuration states, banks of the bank's
+// experts, and the pairs' widths.
+func verifyMixtureOp(o Op, at string, m *Mixture, width func(ValueID) int, ins, outs func(int) bool,
+	bad func(string, ...any)) {
+	if m == nil {
+		bad("%s: a mixture op in a graph whose facts state no mixture", at)
+		return
+	}
+	switch o.Kind {
+	case OpRoute:
+		if !ins(1) || !outs(1) || len(o.Weight) == 0 {
+			return
+		}
+		a := o.Attr
+		if a.Experts != m.NExpert || a.TopK != m.K || a.Router != m.Router || a.RouteNorm != m.Norm ||
+			a.Scale != m.Scale || a.Groups != m.Groups || a.GroupsUsed != m.GroupsUsed {
+			bad("%s: top %d of %d by router %d (norm %v, scale %g, groups %d/%d); the configuration states top %d of %d by %d (%v, %g, %d/%d)",
+				at, a.TopK, a.Experts, a.Router, a.RouteNorm, a.Scale, a.GroupsUsed, a.Groups,
+				m.K, m.NExpert, m.Router, m.Norm, m.Scale, m.GroupsUsed, m.Groups)
+		}
+		if w := o.Weight[0]; w.Role != jlm.RoleRouter || w.K != width(o.In[0]) || w.Rows != m.NExpert {
+			bad("%s: router %v of %dx%d over a row of %d and %d experts", at, w.Role, w.K, w.Rows, width(o.In[0]), m.NExpert)
+		}
+		for _, w := range o.Weight[1:] {
+			// A vector, stored with no second dimension or as one row.
+			if (w.Role != jlm.RoleRouterBias && w.Role != jlm.RoleExpProbsB) || w.K != m.NExpert || w.Rows > 1 {
+				bad("%s: %v of %d is not a bias on %d experts' logits", at, w.Role, w.K, m.NExpert)
+			}
+		}
+		if width(o.Out[0]) != m.K {
+			bad("%s: a selection of %d pairs, top %d", at, width(o.Out[0]), m.K)
+		}
+	case OpGather:
+		if ins(2) && outs(1) && width(o.Out[0]) != m.K*width(o.In[0]) {
+			bad("%s: %d pairs of a row of %d into %d", at, m.K, width(o.In[0]), width(o.Out[0]))
+		}
+	case OpExpertMatVec:
+		if !ins(2) || !outs(1) || len(o.Weight) == 0 || len(o.Weight) > 2 {
+			bad("%s: wants pairs, a selection, a bank and at most its bias", at)
+			return
+		}
+		w := o.Weight[0]
+		if w.Sheets != m.NExpert || m.K*w.K != width(o.In[0]) || m.K*w.Rows != width(o.Out[0]) {
+			bad("%s: bank %v of %d sheets of %dx%d between %d pairs of %d and %d; the configuration states %d experts",
+				at, w.Role, w.Sheets, w.K, w.Rows, m.K, width(o.In[0]), width(o.Out[0]), m.NExpert)
+		}
+		if len(o.Weight) == 2 && (o.Weight[1].K != w.Rows || o.Weight[1].Rows != m.NExpert) {
+			bad("%s: bias %v of %dx%d on a bank of %d rows and %d experts", at, o.Weight[1].Role,
+				o.Weight[1].K, o.Weight[1].Rows, w.Rows, m.NExpert)
+		}
+	case OpCombine:
+		if !ins(2) || !outs(1) {
+			return
+		}
+		if o.Attr.Experts != m.NExpert || o.Attr.TopK != m.K || width(o.In[0]) != m.K*width(o.Out[0]) {
+			bad("%s: %d pairs of %d experts from %d into %d", at, o.Attr.TopK, o.Attr.Experts, width(o.In[0]), width(o.Out[0]))
+		}
+		for _, w := range o.Weight {
+			if w.Role != jlm.RoleExpScale || w.K != m.NExpert {
+				bad("%s: %v of %d is not a scale per expert", at, w.Role, w.K)
+			}
+		}
+	case OpGateScalar:
+		if !ins(2) || !outs(1) || len(o.Weight) != 1 {
+			return
+		}
+		// The gate is a vector, stored with no second dimension or as one row.
+		if w := o.Weight[0]; w.K != width(o.In[0]) || w.Rows > 1 || width(o.In[1]) != width(o.Out[0]) {
+			bad("%s: a gate of %d over a row of %d scaling %d into %d", at, w.K, width(o.In[0]), width(o.In[1]), width(o.Out[0]))
+		}
+	}
 }

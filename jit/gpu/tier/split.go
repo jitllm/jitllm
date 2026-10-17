@@ -1179,6 +1179,7 @@ func groupsOf(threads, split int, grp bool) int {
 func (g *devTier) fuseQKV(l *layer) {
 	defer g.fuseActIn(l)
 	defer g.prepNormGate(l)
+	defer g.prepMixture(l)
 	g.fuseMoE(l)
 	l.mlaQK, l.shGU = nil, nil
 	if l.mla {
