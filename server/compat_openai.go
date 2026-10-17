@@ -935,6 +935,13 @@ func oaFail(w http.ResponseWriter, status int, msg, typ string) {
 }
 
 func oaFailErr(w http.ResponseWriter, err error) {
+	status, typ := errClass(w, err)
+	oaFail(w, status, err.Error(), typ)
+}
+
+// errClass is the HTTP status and error type an engine error answers with,
+// for every API that reports one.
+func errClass(w http.ResponseWriter, err error) (int, string) {
 	status, typ := http.StatusInternalServerError, "server_error"
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -950,7 +957,7 @@ func oaFailErr(w http.ResponseWriter, err error) {
 		retryAfter(w, err)
 		status, typ = http.StatusTooManyRequests, "rate_limit_error"
 	}
-	oaFail(w, status, err.Error(), typ)
+	return status, typ
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

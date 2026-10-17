@@ -370,6 +370,71 @@
       "note": "a decision model's answers: a JSON object with state and questions, at most 16 MiB"
     },
     {
+      "path": "/completion",
+      "methods": [
+        "POST"
+      ],
+      "surface": "llamacpp",
+      "note": "llama.cpp's /completion: prompt as a string, token ids or both mixed; streams with stream:true; fields the sampler lacks are refused by name"
+    },
+    {
+      "path": "/infill",
+      "methods": [
+        "POST"
+      ],
+      "surface": "llamacpp",
+      "note": "llama.cpp's /infill, for a model with fill-in-the-middle tokens"
+    },
+    {
+      "path": "/tokenize",
+      "methods": [
+        "POST"
+      ],
+      "surface": "llamacpp",
+      "note": "content, add_special, parse_special, with_pieces"
+    },
+    {
+      "path": "/detokenize",
+      "methods": [
+        "POST"
+      ],
+      "surface": "llamacpp",
+      "note": "tokens to content"
+    },
+    {
+      "path": "/apply-template",
+      "methods": [
+        "POST"
+      ],
+      "surface": "llamacpp",
+      "note": "messages through the model's chat template, to a prompt string"
+    },
+    {
+      "path": "/embedding",
+      "methods": [
+        "POST"
+      ],
+      "surface": "llamacpp",
+      "note": "an embedding model only; llama.cpp's reply shape, L2-normalised"
+    },
+    {
+      "path": "/props",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "surface": "llamacpp",
+      "note": "read only; POST answers 501 as llama-server does without --props"
+    },
+    {
+      "path": "/slots",
+      "methods": [
+        "GET"
+      ],
+      "surface": "llamacpp",
+      "note": "the model's sessions, read only"
+    },
+    {
       "path": "/v1/messages",
       "methods": [
         "POST"
@@ -466,7 +531,15 @@
         "GET"
       ],
       "surface": "jitllm",
-      "note": "as /healthz"
+      "note": "llama-server's shape: {\"status\": \"ok\"}"
+    },
+    {
+      "path": "/v1/health",
+      "methods": [
+        "GET"
+      ],
+      "surface": "jitllm",
+      "note": "as /health"
     },
     {
       "path": "/v1/capabilities",
