@@ -51,9 +51,13 @@ func (g *GPU) attachExpertCard() {
 // attachPeers attaches the expert card's banks for the blocks this device
 // holds, in block order.
 func (g *devTier) attachPeers(xd *devTier) {
-	if _, ok := g.dev.(backend.PeerCopier); !ok || g.dev.API() != xd.dev.API() {
+	pc, ok := g.dev.(backend.PeerCopier)
+	if !ok || g.dev.API() != xd.dev.API() {
 		return
 	}
+	// Peer access is enabled here, outside any session, where the backend says
+	// to ask ahead: the first copy from inside a session found it refused.
+	pc.PeerAccess(xd.dev)
 	g.mu.Lock()
 	var todo []*layer
 	for _, l := range g.layers {
