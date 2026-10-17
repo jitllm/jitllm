@@ -37,5 +37,7 @@ var DeepTile = &Rewrite{
 		}
 		return nil
 	},
-	Bounds: func(*Graph, Region) Resources { return Resources{} },
+	Bounds:  func(*Graph, Region) Resources { return Resources{} },
+	When:    WhenLoad,
+	Chooser: "the tier's GEMM trial (tuneGemm)",
 }

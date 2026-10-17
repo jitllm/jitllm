@@ -65,6 +65,12 @@ func (g *devTier) normGateOn(l *layer, decode bool) bool {
 	if !l.normGateOffer[i] {
 		return false
 	}
+	switch g.Rewrites[graph.NormGate.Name] {
+	case graph.ChoiceTake:
+		return true
+	case graph.ChoiceRefuse:
+		return false
+	}
 	switch g.NormGate {
 	case NormGateFused:
 		return true

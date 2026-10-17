@@ -256,7 +256,9 @@ var MoEFewRow = &Rewrite{
 		"ptx": {Band: 1e-2, Gate: "model.TestBatchedMixturePrefillMatchesRowByRow (the narrow class forced; last-row logit NMSE)"},
 		"msl": {Band: 1e-2, Gate: "model.TestBatchedMixturePrefillMatchesRowByRow (the narrow class forced; last-row logit NMSE)"},
 	},
-	Keys: func(*Graph, Region) string { return "" },
+	Keys:    func(*Graph, Region) string { return "" },
+	When:    WhenCompile,
+	Chooser: "its guard at the executed row class and residency, or tier.WithRewrite",
 }
 
 // MoEWaves is a prompt chunk's routed experts run on the card in waves
@@ -294,5 +296,7 @@ var MoEWaves = &Rewrite{
 		"spirv": {Band: 3e-3, Gate: "model.TestHybridPrefillWavesMatchTheHost (prefill logit NMSE against the host's, the widest model band)"},
 		"msl":   {Band: 3e-3, Gate: "model.TestHybridPrefillWavesMatchTheHost (prefill logit NMSE against the host's, the widest model band)"},
 	},
-	Keys: func(*Graph, Region) string { return "" },
+	Keys:    func(*Graph, Region) string { return "" },
+	When:    WhenCompile,
+	Chooser: "its guard at the executed row class and residency, or tier.WithRewrite",
 }

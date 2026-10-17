@@ -137,5 +137,7 @@ var NormGate = &Rewrite{
 		w := int64(g.Values[g.Ops[r.Ops[0]].Out[0]].Width)
 		return Resources{Launches: 1, TrafficBytes: 8 * w}
 	},
-	Keys: func(g *Graph, r Region) string { return fmt.Sprintf("g%d", g.Ops[r.Ops[1]].Attr.Act) },
+	Keys:    func(g *Graph, r Region) string { return fmt.Sprintf("g%d", g.Ops[r.Ops[1]].Attr.Act) },
+	When:    WhenLoad,
+	Chooser: "the tier's trial (tuneNormGate), or tier.WithNormGate / tier.WithRewrite",
 }

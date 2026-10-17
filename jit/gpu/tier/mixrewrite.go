@@ -1,6 +1,9 @@
 package tier
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 )
@@ -29,6 +32,9 @@ func (g *devTier) prepMixture(l *layer) {
 		for res := graph.ResidencyCard; res <= graph.ResidencyHost; res++ {
 			t.Residency = res
 			l.mix.waves[rows][res] = o.Offer(t)
+			if g.Rewrites[graph.MoEWaves.Name] == graph.ChoiceRefuse && l.mix.waves[rows][res] == nil {
+				l.mix.waves[rows][res] = errRefusedByCaller
+			}
 		}
 	}
 }
@@ -83,5 +89,48 @@ func (g *devTier) moeNarrow(p *nn.LayerPlan, rows, k, nExp int) bool {
 	defer g.subUnlock(g.subLock())
 	t := g.target(class)
 	t.Residency = graph.ResidencyCard
-	return o.Offer(t) == nil
+	taken, _ := o.Chosen(t, g.Rewrites[graph.MoEFewRow.Name])
+	return taken
+}
+
+// errRefusedByCaller is a rewrite's decision where the caller's choice
+// (Config.Rewrites) refuses it.
+var errRefusedByCaller = errors.New("the caller refused it (tier.WithRewrite)")
+
+// prepChoices checks the caller's Takes (Config.Rewrites) against block l's
+// graph on this device: a Take whose rewrite matched the block but is
+// offered at no row class and residency here is unmet, counted and
+// explained, so a choice the device cannot honour is never dropped
+// silently. A run-time alternative (graph.WhenRun) is taken nowhere else:
+// with no executor for it the Take is unmet by construction. Outside a token.
+func (g *devTier) prepChoices(l *layer) {
+	for _, o := range l.rewrites {
+		if g.Rewrites[o.Rewrite.Name] != graph.ChoiceTake {
+			continue
+		}
+		var why error
+		met := false
+		for rows := graph.RowsDecode; rows <= graph.RowsChunk && !met; rows++ {
+			t := g.target(rows)
+			for res := graph.ResidencyCard; res <= graph.ResidencyHost && !met; res++ {
+				t.Residency = res
+				var taken bool
+				taken, met = o.Chosen(t, graph.ChoiceTake)
+				if !taken {
+					why = o.Offer(t)
+				}
+			}
+		}
+		// Taking a run-time alternative needs its executor, which this tier
+		// does not have for any of them yet.
+		if met && o.Rewrite.When == graph.WhenRun {
+			met, why = false, errors.New("no executor for a run-time alternative on this tier")
+		}
+		if !met {
+			g.RewritesUnmet++
+			g.RewritesUnmetWhy = fmt.Sprintf("%s asked for: %v", o.Rewrite.Name, why)
+			g.explainSet(RecipeChoice{Site: o.Rewrite.Name, Key: "unmet", Recipe: "reference", Source: "asked",
+				Why: g.RewritesUnmetWhy})
+		}
+	}
 }

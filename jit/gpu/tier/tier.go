@@ -23,6 +23,7 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
@@ -583,6 +584,14 @@ type Config struct {
 	// prompt chunk's rows; a block the rewrite is not offered on runs the two
 	// launches whatever this says.
 	NormGate NormGateForm
+	// Rewrites is the caller's choice per block-graph rewrite
+	// (graph.Choice, WithRewrite): Take asks for one wherever its block's
+	// graph offers it on this device, Refuse keeps the reference recipe,
+	// and a name absent leaves it to its When (graph.When): the static
+	// guard, the trial, or for a run-time alternative not taken. A Take the
+	// device cannot meet is counted (RewritesUnmet) and explained, never
+	// dropped silently.
+	Rewrites graph.Choices
 	// NoGraph issues the token's launches one driver call at a time instead of
 	// replaying a captured graph: the other arm of that comparison, a field so
 	// both arms can be live in one process.
@@ -809,6 +818,13 @@ type Stats struct {
 	// kernels.HeadNormGated); NormGateTimed and NormGateKept the shape keys
 	// tuneNormGate decided and those it kept the fused launch on.
 	NormGateRuns, NormGateTimed, NormGateKept int
+	// MoENarrowScratches counts batched mixture scratches built with the
+	// few-row form (graph.MoEFewRow) where the staged f16 GEMM would run.
+	MoENarrowScratches int
+	// RewritesUnmet counts blocks where a caller's Take (Config.Rewrites)
+	// was not met on this device, RewritesUnmetWhy the last refusal.
+	RewritesUnmet    int
+	RewritesUnmetWhy string
 	// PersistLaunches counts persistent kernels launched (Config.Persist),
 	// PersistParts the per-op launches they ran, PersistPhases their
 	// grid-barrier-separated phases, PersistCompiles the compositions built
@@ -1347,6 +1363,11 @@ func (s *Stats) add(o Stats) {
 	s.NormGateRuns += o.NormGateRuns
 	s.NormGateTimed += o.NormGateTimed
 	s.NormGateKept += o.NormGateKept
+	s.MoENarrowScratches += o.MoENarrowScratches
+	s.RewritesUnmet += o.RewritesUnmet
+	if o.RewritesUnmetWhy != "" {
+		s.RewritesUnmetWhy = o.RewritesUnmetWhy
+	}
 	s.RagHeadOne += o.RagHeadOne
 	s.SampleReads += o.SampleReads
 	s.PickReads += o.PickReads
@@ -2289,6 +2310,10 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 	}
 	if len(slots) == 0 {
 		return nil, fmt.Errorf("tier: no devices")
+	}
+	if err := cfg.Rewrites.Check(); err != nil {
+		closeAll()
+		return nil, fmt.Errorf("tier: WithRewrite: %w", err)
 	}
 	g := &GPU{Config: cfg, own: map[int]*devTier{}, geo: map[int]geoKey{}}
 	for i, s := range slots {

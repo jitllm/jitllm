@@ -122,7 +122,11 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 	// token block from ActF16T(Gather) and add the expert bias themselves, so
 	// the scratch, the padding and the launch are the same and only the
 	// kernel differs (voltaGroupedMV picks it).
-	unit, volta := groupTok, (g.voltaOn() || g.tileMoE()) && !g.moeNarrow(p, rows, k, e)
+	staged := g.voltaOn() || g.tileMoE()
+	unit, volta := groupTok, staged && !g.moeNarrow(p, rows, k, e)
+	if staged && !volta {
+		g.MoENarrowScratches++
+	}
 	if volta {
 		unit = voltaUnit(rows, k, e)
 	}

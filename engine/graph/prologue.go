@@ -68,6 +68,8 @@ var ActInQKV = &Rewrite{
 	Contract: actInContract,
 	Pays:     actInPays,
 	Bounds:   func(*Graph, Region) Resources { return Resources{Launches: 1} },
+	When:     WhenLoad,
+	Chooser:  actInChooser,
 }
 
 // singleReader is the region {producer of m's input, m} where m is a matvec
@@ -114,6 +116,8 @@ var ActInO = &Rewrite{
 	Contract: actInContract,
 	Pays:     actInPays,
 	Bounds:   func(*Graph, Region) Resources { return Resources{Launches: 1} },
+	When:     WhenLoad,
+	Chooser:  actInChooser,
 }
 
 // ActInDown is down quantizing act_mul's product inside its launch.
@@ -124,7 +128,12 @@ var ActInDown = &Rewrite{
 	Contract: actInContract,
 	Pays:     actInPays,
 	Bounds:   func(*Graph, Region) Resources { return Resources{Launches: 1} },
+	When:     WhenLoad,
+	Chooser:  actInChooser,
 }
+
+// actInChooser is who chooses the activation-in-launch forms.
+const actInChooser = "the tier's trial (tuneActIn), or Config.ActInSites / tier.WithRewrite"
 
 // Rewrites is every rewrite a block graph is matched against, in the order a
 // plan explanation lists them.

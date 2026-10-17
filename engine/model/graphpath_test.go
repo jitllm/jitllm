@@ -3,8 +3,10 @@ package model
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
@@ -148,5 +150,71 @@ func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
 			}
 			t.Logf("every block on the hand-written body: %q", m.GraphUncovered(0))
 		})
+	}
+}
+
+// TestRunTimeAlternativeIsNeverTakenUnasked holds the decision-time plumbing
+// to its one run-time alternative, graph.MLPPartition: every covered block
+// lists it as an open alternative with its cost and its chooser, a device
+// tier never takes it unasked (no unmet choice, no refusal recorded), and a
+// caller's Take on a tier with no split executor is counted as unmet with
+// the reason, never dropped silently. The violation: the Take's count is
+// what fires.
+func TestRunTimeAlternativeIsNeverTakenUnasked(t *testing.T) {
+	m, err := Open(graphModel(t, "Llama-3.2-1B-Instruct-Q4_K_M"), noTune)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	for li := 0; li < m.Cfg.NLayer; li++ {
+		open := 0
+		for _, d := range m.BlockRewrites(li) {
+			if d.Rewrite == graph.MLPPartition.Name {
+				s := d.String()
+				if d.Err != nil || d.When != graph.WhenRun || d.Cost == nil || !strings.Contains(s, "open alternative") ||
+					!strings.Contains(s, "capacity") || !strings.Contains(s, "tier.WithRewrite") {
+					t.Fatalf("block %d: %s", li, s)
+				}
+				open++
+			}
+		}
+		if open != 1 {
+			t.Fatalf("block %d lists %d MLP partitions", li, open)
+		}
+	}
+	t.Logf("block 0: %s", m.BlockRewrites(0)[len(m.BlockRewrites(0))-1])
+	ran := 0
+	for _, spec := range testdevices.Specs("cuda", "vulkan", "metal") {
+		t.Run(spec, func(t *testing.T) {
+			auto, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
+			if err != nil || auto == nil {
+				noDevice(t, spec, err)
+			}
+			pathsRun(t, m, auto)
+			sa := auto.Stats()
+			auto.Close()
+			if sa.RewritesUnmet != 0 {
+				t.Fatalf("unasked: %d unmet (%s)", sa.RewritesUnmet, sa.RewritesUnmetWhy)
+			}
+			take, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+				tier.WithRewrite(graph.MLPPartition.Name, graph.ChoiceTake)}, testTierOpts(t)...)...)
+			if err != nil || take == nil {
+				t.Fatalf("%s opened once and not twice: %v", spec, err)
+			}
+			pathsRun(t, m, take)
+			st := take.Stats()
+			take.Close()
+			if st.RewritesUnmet < m.Cfg.NLayer || !strings.Contains(st.RewritesUnmetWhy, "split executor") {
+				t.Fatalf("a Take with no split executor: %d unmet over %d blocks (%q)", st.RewritesUnmet, m.Cfg.NLayer, st.RewritesUnmetWhy)
+			}
+			t.Logf("%s: the Take is unmet on %d block preparations: %s", spec, st.RewritesUnmet, st.RewritesUnmetWhy)
+			ran++
+		})
+	}
+	if _, _, err := tier.ParseRewriteChoice("mlp-partitoin=take"); err == nil {
+		t.Fatal("a misspelt rewrite choice was accepted")
+	}
+	if ran == 0 {
+		t.Skip("no device on this host: only the plan's listing was checked")
 	}
 }

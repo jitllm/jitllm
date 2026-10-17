@@ -217,6 +217,18 @@ func gpuOptions() []tier.Option {
 		}
 		o = append(o, tier.WithNormGate(f))
 	}
+	// JITLLM_GPU_REWRITES is the caller's choice per block-graph rewrite
+	// (tier.WithRewrite): "name=take,name=refuse"; unset leaves each to its
+	// guard or trial, and a run-time alternative untaken.
+	if set("JITLLM_GPU_REWRITES") {
+		for _, kv := range strings.Split(str("JITLLM_GPU_REWRITES"), ",") {
+			name, c, err := tier.ParseRewriteChoice(kv)
+			if err != nil {
+				panic(err)
+			}
+			o = append(o, tier.WithRewrite(name, c))
+		}
+	}
 	if str("JITLLM_GPU_PERSIST") == "deps" {
 		o = append(o, tier.WithPersistDeps(true, int(num("JITLLM_GPU_PERSIST_GRID"))))
 	} else if set("JITLLM_GPU_PERSIST") {

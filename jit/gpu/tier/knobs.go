@@ -1,8 +1,11 @@
 package tier
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 )
 
@@ -349,6 +352,37 @@ func WithFFNForm(f FFNForm) Option { return WithConfig(func(c *Config) { c.FFNFo
 // WithNormGate sets Config.NormGate: the recipe every gated output norm
 // runs, NormGateTuned (the default) leaving it to the per-card trial.
 func WithNormGate(f NormGateForm) Option { return WithConfig(func(c *Config) { c.NormGate = f }) }
+
+// WithRewrite sets Config.Rewrites[name]: a caller's choice over one
+// block-graph rewrite (graph.Rewrites names them). It copies the map, so two
+// tiers built from one option set keep their own.
+func WithRewrite(name string, c graph.Choice) Option {
+	return WithConfig(func(cfg *Config) {
+		m := make(graph.Choices, len(cfg.Rewrites)+1)
+		for k, v := range cfg.Rewrites {
+			m[k] = v
+		}
+		m[name] = c
+		cfg.Rewrites = m
+	})
+}
+
+// ParseRewriteChoice reads "name=take", "name=refuse" or "name=auto" as a
+// WithRewrite pair.
+func ParseRewriteChoice(s string) (string, graph.Choice, error) {
+	name, v, ok := strings.Cut(s, "=")
+	if !ok {
+		return "", 0, fmt.Errorf("tier: rewrite choice %q: want name=take, name=refuse or name=auto", s)
+	}
+	c, ok := map[string]graph.Choice{"auto": graph.ChoiceAuto, "take": graph.ChoiceTake, "refuse": graph.ChoiceRefuse}[v]
+	if !ok {
+		return "", 0, fmt.Errorf("tier: rewrite choice %q: want take, refuse or auto", s)
+	}
+	if err := (graph.Choices{name: c}).Check(); err != nil {
+		return "", 0, fmt.Errorf("tier: rewrite choice %q: %w", s, err)
+	}
+	return name, c, nil
+}
 
 // WithGateUpFuse sets Config.GateUpFuse: a dense gated FFN's gate and up in
 // one launch, down forming act(gate)*up in its prologue.

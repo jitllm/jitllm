@@ -36,6 +36,93 @@ type Rewrite struct {
 	// Keys names what a timed verdict depends on beyond the tier's shape key
 	// and Target.Key, which every verdict carries.
 	Keys func(g *Graph, r Region) string
+	// When is the time a legal, offered region's choice is made, and so who
+	// makes it (Chooser). A rewrite whose When is WhenRun is an open
+	// alternative: it stays in the plan, listed with its cost, and runs only
+	// where a caller asks for it (Choice).
+	When When
+	// Objective is what a WhenRun rewrite buys its chooser, where it is not
+	// speed ("capacity": weights a card no longer holds).
+	Objective string
+	// Chooser names who may choose it: the static guard, the tier's trial,
+	// or the With...() option a caller passes.
+	Chooser string
+	// Evidence is where the cost Bounds states was measured or derived.
+	Evidence string
+}
+
+// When is the time a rewrite's choice is made (docs/design/composer.md,
+// "When a rewrite is decided"). Legality is always decided at compile time,
+// when the graph is matched; When is about the choice among legal forms.
+type When uint8
+
+const (
+	// WhenCompile: a static guard decides (Pays at the executed row class,
+	// the residency, the bound): no measurement is needed.
+	WhenCompile When = iota + 1
+	// WhenLoad: the tier times the legal forms on the device in front of it
+	// and records a verdict keyed by the shape, Target.Key and the row class.
+	WhenLoad
+	// WhenRun: an orchestrator (a server, a placement policy) proposes it for
+	// its own objective. Never taken unasked.
+	WhenRun
+)
+
+var whenNames = [...]string{"unstated", "compile time", "load time", "run time"}
+
+func (w When) String() string {
+	if int(w) < len(whenNames) {
+		return whenNames[w]
+	}
+	return fmt.Sprintf("when(%d)", w)
+}
+
+// Choice is a caller's say over one rewrite, by name (Choices): Auto leaves
+// it to its When (the static guard, the trial, or for a run-time alternative
+// not taken), Take asks for it wherever it is offered, Refuse keeps the
+// reference recipe. A Take where the rewrite is not offered is not met, and
+// the caller sees that (the tier's unmet count and its explanation), never a
+// silent reference recipe.
+type Choice uint8
+
+const (
+	ChoiceAuto Choice = iota
+	ChoiceTake
+	ChoiceRefuse
+)
+
+// Choices is a caller's Choice per rewrite name.
+type Choices map[string]Choice
+
+// Check refuses a name no rewrite in Rewrites carries: a misspelt choice
+// would otherwise select nothing and look like a choice made.
+func (c Choices) Check() error {
+	for name := range c {
+		known := false
+		for _, rw := range Rewrites {
+			known = known || rw.Name == name
+		}
+		if !known {
+			return fmt.Errorf("no rewrite is named %q", name)
+		}
+	}
+	return nil
+}
+
+// Chosen is the decision on a region at target t under choice c: taken, or
+// not; met is false only where c is Take and the rewrite is not offered at
+// t. A WhenRun rewrite under Auto is not taken. A WhenLoad one under Auto is
+// a candidate: taken means the tier may time it, its trial decides.
+// Allocates nothing.
+func (o Offered) Chosen(t Target, c Choice) (taken, met bool) {
+	why := o.Offer(t)
+	switch c {
+	case ChoiceRefuse:
+		return false, true
+	case ChoiceTake:
+		return why == nil, why == nil
+	}
+	return why == nil && o.Rewrite.When != WhenRun, true
 }
 
 // Target is what a rewrite's guards and its verdicts are keyed by: the
@@ -54,6 +141,10 @@ type Target struct {
 	Rows      RowClass
 	Layout    Layout
 	Residency Residency
+	// PeerCards is the cards beyond this one a split executor can run a
+	// block's other part on (MLPPartition). It is not part of Key: no timed
+	// verdict depends on it.
+	PeerCards int
 }
 
 // Residency is where the weights a region reads are when it runs: a
@@ -106,16 +197,25 @@ func (rw *Rewrite) offer(legal error, g *Graph, r Region, t Target) error {
 		return legal
 	}
 	// The static bound refuses, never accepts: a region that removes no
-	// launch and adds traffic cannot win on any target.
-	if rw.Bounds != nil {
+	// launch and adds traffic cannot win on any target. A run-time
+	// alternative's objective is not speed, so its bound is its cost, stated
+	// and not a refusal.
+	if rw.Bounds != nil && rw.When != WhenRun {
 		if b := rw.Bounds(g, r); b.Launches <= 0 && b.TrafficBytes < 0 {
 			return fmt.Errorf("the static bound: no launch removed and %d bytes a row added", -b.TrafficBytes)
+		}
+	}
+	// A run-time alternative's target guard first: whether the target can
+	// execute it at all is what its chooser needs to hear.
+	if rw.When == WhenRun && rw.Pays != nil {
+		if err := rw.Pays(g, r, t); err != nil {
+			return err
 		}
 	}
 	if _, ok := rw.Contract[t.API]; !ok {
 		return fmt.Errorf("no numerical contract on %s", t.API)
 	}
-	if rw.Pays != nil {
+	if rw.Pays != nil && rw.When != WhenRun {
 		return rw.Pays(g, r, t)
 	}
 	return nil
@@ -140,29 +240,65 @@ type Resources struct {
 	Launches     int   // launches removed (negative: added)
 	ScratchBytes int64 // scratch added per row
 	TrafficBytes int64 // intermediate bytes per row no longer written and read (negative: partials added)
+	// WeightElems is weight elements a card no longer holds (a split's
+	// capacity), and Crossings the copies between cards it adds per row.
+	WeightElems int64
+	Crossings   int
 }
 
-// Decision is one rewrite's verdict on one region, for a plan explanation.
+func (r Resources) String() string {
+	s := fmt.Sprintf("launches %+d, scratch %+d B/row, traffic %+d B/row", r.Launches, r.ScratchBytes, r.TrafficBytes)
+	if r.WeightElems != 0 || r.Crossings != 0 {
+		s += fmt.Sprintf(", %d weight elements off each card, %d crossings/row", r.WeightElems, r.Crossings)
+	}
+	return s
+}
+
+// Decision is one rewrite's verdict on one region, for a plan explanation:
+// legal or refused, and for a legal one when it is chosen, by whom, and the
+// cost its bound states.
 type Decision struct {
 	Rewrite string
 	Region  Region
 	Err     error // nil where legal
+	When    When
+	Chooser string
+	Cost    *Resources // the static bound, where the rewrite states one
+	Why     string     // the objective and the cost's evidence, for an open alternative
 }
 
 func (d Decision) String() string {
-	if d.Err == nil {
-		return fmt.Sprintf("%s at ops %v: legal", d.Rewrite, d.Region.Ops)
+	if d.Err != nil {
+		return fmt.Sprintf("%s at ops %v: refused: %v", d.Rewrite, d.Region.Ops, d.Err)
 	}
-	return fmt.Sprintf("%s at ops %v: refused: %v", d.Rewrite, d.Region.Ops, d.Err)
+	s := fmt.Sprintf("%s at ops %v: legal, decided at %s by %s", d.Rewrite, d.Region.Ops, d.When, d.Chooser)
+	if d.When == WhenRun {
+		s = fmt.Sprintf("%s at ops %v: open alternative (%s), chosen only by %s", d.Rewrite, d.Region.Ops, d.When, d.Chooser)
+	}
+	if d.Cost != nil {
+		s += "; cost: " + d.Cost.String()
+	}
+	if d.Why != "" {
+		s += "; " + d.Why
+	}
+	return s
 }
 
 // Apply runs every rewrite over g and returns each match's decision, legal
-// or refused with its reason.
+// or refused with its reason, and for a legal one its When, chooser and cost.
 func Apply(g *Graph, rws ...*Rewrite) []Decision {
 	var out []Decision
 	for _, rw := range rws {
 		for _, r := range rw.Match(g) {
-			out = append(out, Decision{Rewrite: rw.Name, Region: r, Err: rw.Legal(g, r)})
+			d := Decision{Rewrite: rw.Name, Region: r, Err: rw.Legal(g, r), When: rw.When, Chooser: rw.Chooser}
+			if d.Err == nil && rw.Bounds != nil {
+				b := rw.Bounds(g, r)
+				d.Cost = &b
+			}
+			if d.Err == nil && rw.When == WhenRun {
+				d.Why = "objective " + rw.Objective + "; " + rw.Evidence
+			}
+			out = append(out, d)
 		}
 	}
 	return out
@@ -282,8 +418,10 @@ var Gate2In = &Rewrite{
 		}
 		return nil
 	},
-	Bounds: func(g *Graph, r Region) Resources { return Resources{Launches: 1} },
-	Keys:   func(g *Graph, r Region) string { return "" },
+	Bounds:  func(g *Graph, r Region) Resources { return Resources{Launches: 1} },
+	Keys:    func(g *Graph, r Region) string { return "" },
+	When:    WhenLoad,
+	Chooser: "the tier's FFN trial (tuneFFN), or tier.WithFFNForm / tier.WithRewrite",
 }
 
 // Offered is a rewrite matched on one block's graph, carried to the tier

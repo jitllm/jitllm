@@ -128,6 +128,16 @@ func TestNormGateMatchesTwoLaunches(t *testing.T) {
 						t.Fatalf("the fused arm ran %d fused launches; %d gated delta blocks over %d calls want %d",
 							n1, blocks, 1+len(toks), want)
 					}
+					// A caller's choice outranks the form: Take runs the fused
+					// launch under NormGateTwo, Refuse the two under Fused.
+					gpu.Rewrites = graph.Choices{graph.NormGate.Name: graph.ChoiceTake}
+					_, nt := normGateDecode(t, m, gpu, tier.NormGateTwo, ids, toks)
+					gpu.Rewrites = graph.Choices{graph.NormGate.Name: graph.ChoiceRefuse}
+					_, nr := normGateDecode(t, m, gpu, tier.NormGateFused, ids, toks)
+					gpu.Rewrites = nil
+					if nt != n1 || nr != 0 {
+						t.Fatalf("WithRewrite: Take ran %d fused launches (want %d), Refuse %d (want 0)", nt, n1, nr)
+					}
 					for s := range two {
 						for i := range two[s] {
 							if math.Float32bits(two[s][i]) != math.Float32bits(one[s][i]) {

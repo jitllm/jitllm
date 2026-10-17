@@ -292,6 +292,46 @@ The search is the existing one: `timeRecipes` over the matched region's
 candidates, interleaved, with the margin and IQR gates above. A rewrite adds
 candidates, not a tuner.
 
+### When a rewrite is decided
+
+The compiler finds what works best, and where it cannot know at compile time
+it leaves the choice to whoever can. Every rewrite states three things:
+
+- **Legality, at compile time, hard.** `Legal` and the backend's contract
+  decide whether a form may run at all; nothing later overrides a refusal.
+- **A cost with its evidence.** `Bounds` states the static change (launches,
+  scratch, traffic, and for a split the weight elements off each card and the
+  crossings a row) and `Evidence` names where it was measured or derived.
+- **A decision time** (`graph.When`), and so a chooser (`Chooser`):
+
+| when | who decides | rewrites |
+|---|---|---|
+| compile (`WhenCompile`) | a static guard: `Pays` at the executed row class and residency | `moe-few-row`, `moe-waves` |
+| load (`WhenLoad`) | the tier times the legal forms on this device and records a verdict keyed by the shape, `Target.Key` and the row class | `gate2in`, `actin-*`, `normgate`, `deep-tile` |
+| run (`WhenRun`) | an orchestrator, for its own objective (a server fitting more models wants capacity, not speed) | `mlp-partition` |
+
+A legal form nobody has chosen stays in the plan as an open alternative:
+`Model.BlockRewrites` and `jitllm speed -manifest` list it with its cost, its
+objective and who may choose it. It is taken by its chooser, or by a caller
+through `tier.WithRewrite(name, graph.ChoiceTake|ChoiceRefuse)`
+(`JITLLM_GPU_REWRITES=name=take,...`), never silently: a Take the device
+cannot meet is counted (`Stats.RewritesUnmet`, with the reason) and explained,
+and a misspelt name is refused at open. A choice outranks a form knob
+(`WithNormGate`); `Choices` are validated against `graph.Rewrites`.
+
+The MLP partition is the first run-time alternative. On one card it cannot
+pay (its partials outweigh the intermediate wherever H > 256); across two
+cards it is a capacity lever, half of gate, up and down off each card for two
+crossings a row, and the crossings lose on speed (56-63 us a pair over NVLink
+by synchronous `cuMemcpyPeer` against about 18 us of read saved, below). It is
+offered only on a `Target` that states a peer card a split executor reaches
+(`Target.PeerCards`); no tier states one until that executor exists, so today
+a caller's Take is an unmet choice by construction. Gates:
+`graph.TestMLPPartitionIsARunTimeAlternative`,
+`graph.TestEveryRewriteStatesItsDecisionTime`,
+`model.TestRunTimeAlternativeIsNeverTakenUnasked`, and the Take and Refuse
+arms of `model.TestNormGateMatchesTwoLaunches`.
+
 ### How the candidates plug in
 
 | candidate | match | legality and contract | why it is a candidate and not a default |
@@ -299,7 +339,7 @@ candidates, not a tuner.
 | norm -> gate/up -> act -> down (the FFN site; `gate2in`) | a `norm` whose only consumers are two `matvec`s on its output, feeding one `act_mul`, feeding a `matvec` added into the residual | gate and up one format, one shape, one split (`gateUp2Shape`); the norm's input materialized by the previous add; exact on PTX | it removes a launch, and the outcome is per card and per shape (GK "The FFN's recipes, timed per card") |
 | q/k/v operand prologue | `norm` -> the q/k/v `matvec` group | the norm's single consumer group; exact | already timed by `tuneActIn`; its sites become matched |
 | residual + next norm's statistics in down's epilogue | an `add` into the residual whose consumer across the boundary is a `norm` | spans two blocks, so conditional on co-placement and dropped at a move; exact only with `RMSNormGroup`'s reduction tree | dep-block.md ranks it after the decomposition |
-| hidden-channel MLP partition (`graph.MLPPartition`) | gate and up `matvec`s on one row feeding an `act_mul`, feeding a `matvec` | no bias inside a slice, no reader outside it; no contract (no recipe built); Bounds: 8*F bytes a row removed, 8*H*ceil(F/256) added, no launch removed | refused by its bound at every row class wherever H > 256 (both sides scale with the rows, so a prompt chunk does not rescue it): on Llama-3.2-1B 512 KiB of partials a row against 64 KiB. Across two cards it is a capacity lever, not a speed lever: it halves a block's FFN weights on each card, and the speed policy never picks it; it is for a caller that asks (a placement objective of capacity), and it is not built yet. The crossings were measured and lose on speed. Split by channels over two V100s, each card reads half of gate, up and down (about 14 MiB less per card per Llama-3.2-1B block, about 18 us at the card's ~800 GB/s) and pays two crossings per block per token, the normed row out and the partial sum back. `backend.TestCopyPeerCrossingLatency` times that pair with `cuMemcpyPeer`: over NVLink (cuda:2<->cuda:3) the median is 56-63 us for 8, 16 and 64 KiB rows (p90 67-75 us, minimum 53 us); over PCIe (cuda:2<->cuda:6, direct) it is 98.6 ms. The crossing costs three times the read it saves on the best link: as a speed lever the split waits for a crossing that does not synchronise the host (a device-side flag or a peer write inside the kernel); as a capacity lever that cost is what its bound reports |
+| hidden-channel MLP partition (`graph.MLPPartition`) | gate and up `matvec`s on one row feeding an `act_mul`, feeding a `matvec` | no bias inside a slice, no reader outside it; no contract (no executor built); a run-time alternative (`WhenRun`, "When a rewrite is decided"), its Bounds the cross-card cost: 3*H*F/2 weight elements off each card, two crossings a row | on one card its partials (8*H*ceil(F/256) bytes a row) outweigh the intermediate (8*F) at every row class wherever H > 256 (both sides scale with the rows, so a prompt chunk does not rescue it): on Llama-3.2-1B 512 KiB of partials a row against 64 KiB. Across two cards it is a capacity lever, not a speed lever: it halves a block's FFN weights on each card, and the speed policy never picks it; it is for a caller that asks (a placement objective of capacity), and it is not built yet. The crossings were measured and lose on speed. Split by channels over two V100s, each card reads half of gate, up and down (about 14 MiB less per card per Llama-3.2-1B block, about 18 us at the card's ~800 GB/s) and pays two crossings per block per token, the normed row out and the partial sum back. `backend.TestCopyPeerCrossingLatency` times that pair with `cuMemcpyPeer`: over NVLink (cuda:2<->cuda:3) the median is 56-63 us for 8, 16 and 64 KiB rows (p90 67-75 us, minimum 53 us); over PCIe (cuda:2<->cuda:6, direct) it is 98.6 ms. The crossing costs three times the read it saves on the best link: as a speed lever the split waits for a crossing that does not synchronise the host (a device-side flag or a peer write inside the kernel); as a capacity lever that cost is what its bound reports |
 | gated output norm (`graph.NormGate`, built) | a `head_norm` whose only reader is an `act_mul` gating it as the second operand | SiLU or sigmoid; exact on PTX, SPIR-V and MSL | one launch and 8*VHeads*VDim bytes a row removed at every row class; timed per card at decode |
 | producer/consumer tile alignment | a `matvec` whose output tiles a following `matvec` reduces over | a parameter of a region's candidates (gate/up row tile = down's split chunk), timed jointly with the split | scheduling alone lost: the persistent block 11% and the dependency-counter block 14-18% on the V100 (GK "A persistent decode block", "The dependency-counter block"), because every matvec reads its whole input; alignment has to remove traffic or a launch to be worth a trial |
 

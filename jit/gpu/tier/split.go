@@ -1178,6 +1178,7 @@ func groupsOf(threads, split int, grp bool) int {
 // and vision blocks never reach it with three plain decode matvecs.
 func (g *devTier) fuseQKV(l *layer) {
 	defer g.fuseActIn(l)
+	defer g.prepChoices(l)
 	defer g.prepNormGate(l)
 	defer g.prepMixture(l)
 	g.fuseMoE(l)

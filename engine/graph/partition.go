@@ -1,6 +1,9 @@
 package graph
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // PartitionSlice is the hidden channels one slice of the MLP partition
 // owns: one workgroup's share of the gate and up rows, whose partial of down
@@ -11,16 +14,20 @@ const PartitionSlice = 256
 
 // MLPPartition is the hidden-channel MLP partition (docs/design/
 // external-optimization-ideas.md, "Joint fusion and partitioning"): gate and
-// up's rows cut into slices of PartitionSlice channels, each slice running
-// its gate and up rows, the activation and its columns of down, and the
-// slices' partial outputs summed. It is matched by the FFN's edges wherever
-// they occur and refused by its static bound wherever the partials it writes
-// outweigh the intermediate it removes: every graph whose output row is
-// wider than PartitionSlice (Bounds). It removes no launch (one fused slice
-// launch and a reduction where Gate2 and down were two), so only traffic
-// could pay for it, at decode and at a chunk's rows alike (both sides scale
-// with the rows). No recipe is built for it and no backend has a contract: a
-// graph where Bounds passes is where one would be built.
+// up's rows cut by channel, each part running its gate and up rows, the
+// activation and its columns of down, the parts' partial outputs summed. It
+// is matched by the FFN's edges wherever they occur.
+//
+// On one card it cannot pay: it removes no launch and its partials (8*H per
+// slice of PartitionSlice channels) outweigh the intermediate it removes
+// (8*F) wherever H > PartitionSlice, every residual in the model list. Across
+// two cards it is a capacity lever, not a speed lever: each card holds half
+// of gate, up and down, and each row crosses twice (the normed row out, the
+// partial sum back). So it is a run-time alternative (WhenRun): never taken
+// by the speed policy, listed with its cost, and chosen only by a caller
+// whose objective is capacity, on a Target that can execute it (PeerCards,
+// a split executor reaching a second card). No executor is built yet, so no
+// Target offers it.
 var MLPPartition = &Rewrite{
 	Name: "mlp-partition",
 	Match: func(g *Graph) []Region {
@@ -59,15 +66,28 @@ var MLPPartition = &Rewrite{
 		}
 		return nil
 	},
-	// The partials are H f32 per slice, written and read once; the
-	// intermediate they replace is F f32, written and read once. Per row:
-	// 8*F removed, 8*H*ceil(F/PartitionSlice) added, so the bound passes only
-	// where H < PartitionSlice: narrower than every residual in the model list.
+	// The cross-card form: half of gate, up and down's elements off each
+	// card, two crossings of an H-wide f32 row (out and back) a row, and the
+	// two copies as launches added.
 	Bounds: func(g *Graph, r Region) Resources {
 		f := int64(g.Values[g.Ops[r.Ops[2]].Out[0]].Width)
 		h := int64(g.Values[g.Ops[r.Ops[3]].Out[0]].Width)
-		s := (f + PartitionSlice - 1) / PartitionSlice
-		return Resources{Launches: 0, TrafficBytes: 8*f - 8*h*s}
+		return Resources{Launches: -2, TrafficBytes: -8 * h, WeightElems: 3 * h * f / 2, Crossings: 2}
 	},
+	Pays: func(_ *Graph, _ Region, t Target) error {
+		if t.PeerCards < 1 {
+			return errNoSplit
+		}
+		return nil
+	},
+	When:      WhenRun,
+	Objective: "capacity",
+	Chooser:   "a caller (tier.WithRewrite(\"mlp-partition\", graph.ChoiceTake))",
+	Evidence: "backend.TestCopyPeerCrossingLatency: a crossing pair over NVLink (cuMemcpyPeer, synchronous) 56-63 us " +
+		"against ~18 us of weight read saved per Llama-3.2-1B block; executable only where Target.PeerCards > 0, " +
+		"which no tier states until a split executor exists",
 	Keys: func(g *Graph, r Region) string { return "" },
 }
+
+// errNoSplit is MLPPartition's refusal on a Target with no split executor.
+var errNoSplit = errors.New("no split executor reaches a second card from this target")
