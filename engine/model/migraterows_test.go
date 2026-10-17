@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -218,7 +219,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			continue
 		}
 		t.Run(arm.name, func(t *testing.T) {
-			gr0 := runtime.NumGoroutine()
+			gr0 := movedGoroutines()
 			// Retires put the rows at different positions: row 1 restarts at
 			// step 3, row 2 at step 6, so at the first move they sit at 8, 5
 			// and 2.
@@ -419,10 +420,10 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			g.Close()
 			// Nothing the moves started is left running.
 			deadline := time.Now().Add(3 * time.Second)
-			for runtime.NumGoroutine() > gr0 && time.Now().Before(deadline) {
+			for movedGoroutines() > gr0 && time.Now().Before(deadline) {
 				time.Sleep(20 * time.Millisecond)
 			}
-			if n := runtime.NumGoroutine(); n > gr0 {
+			if n := movedGoroutines(); n > gr0 {
 				buf := make([]byte, 1<<16)
 				t.Errorf("%d goroutine(s) before the arm, %d after:\n%s", gr0, n, buf[:runtime.Stack(buf, true)])
 			}
@@ -488,4 +489,28 @@ func TestBatchSeamMovesCarryEveryRowSSM(t *testing.T) {
 			batchSeamMoves(t, p, 1e-4, false)
 		})
 	}
+}
+
+// movedGoroutines counts the goroutines a move could have left behind: every
+// goroutine but the container's page readers, which the File starts at its
+// first page-in and ends at its Close (format/jlm/pageio.go). A move that
+// pages a block back in starts them for the model, not for itself, and the
+// model outlives the arm.
+func movedGoroutines() int {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	count := 0
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.HasPrefix(g, "goroutine ") && !strings.Contains(g, "format/jlm.(*File).startIO") {
+			count++
+		}
+	}
+	return count
 }
