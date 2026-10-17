@@ -433,7 +433,12 @@ func deepDecodeWindow(t *testing.T, m *Model, g *tier.GPU) (w windowAllocs, what
 	t.Helper()
 	const page, warm = 128, 16
 	n = 32
-	ctx := 5*page + 16
+	// Five pages and a part, or what the model's context holds (a fixture
+	// trained at 512 positions): still several pages deep.
+	ctx := min(5*page+16, m.Cfg.NCtx-warm-n-8)
+	if ctx < 2*page {
+		t.Skipf("a %d-position context holds no prompt two pages deep -- this arm proved nothing", m.Cfg.NCtx)
+	}
 	s := m.NewState(ctx + warm + n + 8)
 	defer s.Close()
 	if err := s.SetDevice(g); err != nil {
