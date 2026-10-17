@@ -1004,6 +1004,12 @@ type LayerPlan struct {
 	// mixer layer): it ends at the first residual add, and its FFN weights,
 	// norm and kernels are absent.
 	NoFFN bool
+	// FFNChain is the block graph's verdict on the FFN chain the gate2in recipe
+	// runs as one launch (graph.Gate2In, docs/design/composer.md): +1 where
+	// the pattern matched and is legal, -1 where it matched and was refused or
+	// did not match, 0 where the model has no block graph and a tier decides
+	// from its own facts.
+	FFNChain int8
 }
 
 // RecurrentPlan is a linear-attention block's geometry. Every field is zero for

@@ -183,6 +183,9 @@ type layer struct {
 	// keep no history (nn.LayerPlan.NonCausal): a call over it is one whole
 	// run, submitted in its geometry's scratch set (geoNonCausal).
 	nonCausal bool
+	// ffnChain is nn.LayerPlan.FFNChain: the block graph's verdict on the FFN
+	// site, which decides it in place of the structural checks in ffnKey.
+	ffnChain int8
 	// windowed says the block attends inside the windowed runs its call was
 	// handed (nn.LayerPlan.Windowed, SetKeyRuns). Per block: the scratch's
 	// plan is its first block's, and Qwen2.5-VL's blocks alternate.
@@ -3083,7 +3086,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	if g.layers == nil {
 		g.layers = map[int]*layer{}
 	}
-	l := &layer{nonCausal: p.NonCausal, windowed: p.Windowed, geo: geoOf(p), vFromK: p.VFromK}
+	l := &layer{nonCausal: p.NonCausal, windowed: p.Windowed, geo: geoOf(p), vFromK: p.VFromK, ffnChain: p.FFNChain}
 	if p.NonCausal {
 		l.nffn, l.ungated, l.act = p.NFFN, ungatedFFN(p), p.Act
 		l.noRope = p.NRot == 0 || p.NoPosEnc

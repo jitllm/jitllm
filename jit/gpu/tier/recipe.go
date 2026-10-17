@@ -180,9 +180,19 @@ func (g *devTier) mvLaunch(s backend.Session, m mv, k backend.Kernel, r *residen
 // recipes or its FFN is not the plain dense gated one the arms run.
 func (g *devTier) ffnKey(l *layer) string {
 	p := &g.bs.p
-	if l.router != nil || l.mla || l.linear || l.nonCausal || l.sparse || l.clampB != nil || l.nSubFFN != nil ||
-		l.nPostFFN != nil || l.nFFNB != nil || l.nResid != nil || l.k3 != nil || l.q4e != nil || l.ds4 != nil ||
-		l.altRouter != nil || p.Parallel || ungatedFFN(p) || lnBlock(p) || l.nFFN == nil ||
+	// The block graph's verdict, where the model has one, decides whether the
+	// block's FFN is the chain the recipes compute (graph.Gate2In, matched by
+	// its operations); without one, the structural checks stand in for it.
+	switch {
+	case l.ffnChain < 0:
+		return ""
+	case l.ffnChain == 0 && (l.router != nil || l.mla || l.linear || l.nonCausal || l.sparse || l.clampB != nil ||
+		l.nSubFFN != nil || l.nPostFFN != nil || l.nFFNB != nil || l.nResid != nil || l.k3 != nil || l.q4e != nil ||
+		l.ds4 != nil || l.altRouter != nil || p.Parallel || ungatedFFN(p) || lnBlock(p)):
+		return ""
+	}
+	// What the device holds for the recipes: their kernels and buffers.
+	if l.nFFN == nil ||
 		l.gate == nil || l.up == nil || l.down == nil || l.mvd.res == nil || l.mvu.gated == nil ||
 		g.bs.rmsQ == nil || g.bs.quantF == nil || l.mvd.k != p.NFFN || !g.GateUp2 || !g.gateUp2Shape(l) {
 		return ""
