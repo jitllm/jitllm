@@ -37,6 +37,8 @@ type modelOpts struct {
 	// residFold adds the o and down projections into the residual inside
 	// their groups; see WithResidualFold.
 	residFold bool
+	// blockGraph is WithBlockGraph.
+	blockGraph bool
 	// noShOverlap runs a mixture's shared expert after its routed read
 	// rather than behind it; see WithSharedOverlap.
 	noShOverlap bool

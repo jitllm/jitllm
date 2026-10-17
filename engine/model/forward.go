@@ -150,6 +150,8 @@ type State struct {
 	// residFold lets the o and down groups add their rows into the
 	// residual (WithResidualFold).
 	residFold bool
+	// graphRuns counts blocks run through the block graph (GraphBlocks).
+	graphRuns int
 	Grouped   int64
 
 	// kv is the paged KV history (see engine/model/kvpage.go). Pages are committed as
@@ -3798,6 +3800,12 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 		}
 		s.fuseRun()
 		l := &m.layers[li]
+		if li < len(m.graphs) {
+			if err := s.graphBlock(li, l, m.graphs[li]); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if c.DSV4() {
 			s.ds.rslot[0], s.ds.rpos[0], s.ds.rid[0] = 0, s.pos, s.tok
 			if err := s.ds4Block(li, l, s.xa, 1); err != nil {
@@ -3955,66 +3963,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 			// also runs and is wrong). Heads are independent -- each writes its
 			// own slice of xb and its own scores row -- so the split needs no
 			// coordination.
-			t0 = s.tick()
-			// Config.AttnScale is 1/sqrt(HeadDim) times YaRN's magnitude
-			// correction squared (DeepSeek), computed once at load.
-			scale := c.AttnScale
-			// MLA reads a wider query than it writes, and every head reads the
-			// same cached row: qw is the whole row, ow its latent prefix, and
-			// gqa = NHead makes hh/gqa 0 for every head.
-			j := &s.rg.attn
-			hd := c.HeadDimAt(li)
-			// j.li is the history read: a KV-sharing block's source's.
-			kvli := c.KVSource(li)
-			j.l, j.li, j.gqa, j.hd, j.mla = l, kvli, c.GQAAt(li), hd, c.MLA()
-			j.qw, j.ow, j.qbuf, j.obuf = hd, hd, s.q, s.xbf
-			j.xb, j.atf, j.fast, j.astride = s.xb, s.attf, s.attnAt(li), s.attStride
-			if j.mla {
-				j.qw, j.ow = c.KVLoraRank+c.NRot, c.KVLoraRank
-				j.qbuf, j.obuf, j.gqa = s.mlaAbs, s.mlaAcc, c.NHead
-			}
-			// Heads in pairs when they share a kv head: the paired kernels load
-			// each K/V vector once for two queries. That needs hh and hh+1 on
-			// the same kvh (even gqa, even hh) and in the same pool task, so
-			// pairing forces a chunk of at least two. An A/B of pairing must
-			// compare at the same chunk.
-			j.pair = s.AttnPair()
-			chunk := s.AttnChunk()
-			if j.pair != 0 && chunk < 2 {
-				chunk = 2
-			}
-			// A sliding or chunked window (gemma3, Llama 4) is a base w0 and a
-			// count an, not a different kernel; without a window it is 0 and
-			// pos+1. Config.AttnWindow is the one derivation for all paths.
-			j.w0, j.an = c.AttnWindow(li, s.pos)
-			// Llama 4's attention temperature scales q on its NoPE layers, and
-			// the scores are linear in q, so it rides the softmax scale.
-			scale *= c.AttnTemp(li, s.pos)
-			j.scale, j.softcap = float32(scale), c.AttnSoftcap
-			// Residency is decided before the fan-out; see kvEnsureWindow.
-			s.kvEnsureWindow(kvli, j.w0, j.an)
-			j.bias, j.bstride = nil, 0
-			if c.Indexer() {
-				j.bias = s.idxMask(kvli, 0, j.w0+j.an, s.idxQ, s.idxW, s.idxTmp, s.idxScore,
-					s.idxBias, &s.idxOrd)
-			}
-			if c.MSAAt(li) {
-				j.bias = s.msaMask(kvli, 0, j.w0+j.an, s.attStride, s.msaQ, s.msaTmp, s.msaBias,
-					s.msaKept, &s.msaOrd)
-				j.bstride = s.attStride
-			}
-			if c.QSAAt(li) {
-				g := s.qsa()
-				j.bias = s.qsaMask(s, kvli, 0, j.w0+j.an, g.q, g.bias, l)
-			}
-			if j.fn == nil {
-				j.fn = s.attnHeads
-			}
-			s.jit.Parallel(c.NHead, chunk, j.fn)
-			j.l, j.qbuf, j.obuf, j.xb, j.atf, j.bias = nil, nil, nil, nil, nil, nil
-			s.tock(opAttn, t0)
-			s.jit.NewInput()
-			m.trace(li, "attn", s.xb)
+			s.attendRow(li, l)
 
 			// The output gate goes before the projection (after wo would scale
 			// the residual contribution instead).
@@ -4638,4 +4587,72 @@ func (s *State) layerInputs(in []float32) {
 	if s.ldInputs != nil && s.c.PLEDim != 0 {
 		s.ldInputs.SetLayerInputs(in)
 	}
+}
+
+// attendRow is one decode row's attention for block li: the window, the
+// scale and any score bias decided, then every head across the pool, into
+// s.xb. The hand-written block body and the block graph's lowering
+// (graphblock.go) both run it.
+func (s *State) attendRow(li int, l *layer) {
+	c, m := s.c, s.m
+	t0 := s.tick()
+	// Config.AttnScale is 1/sqrt(HeadDim) times YaRN's magnitude
+	// correction squared (DeepSeek), computed once at load.
+	scale := c.AttnScale
+	// MLA reads a wider query than it writes, and every head reads the
+	// same cached row: qw is the whole row, ow its latent prefix, and
+	// gqa = NHead makes hh/gqa 0 for every head.
+	j := &s.rg.attn
+	hd := c.HeadDimAt(li)
+	// j.li is the history read: a KV-sharing block's source's.
+	kvli := c.KVSource(li)
+	j.l, j.li, j.gqa, j.hd, j.mla = l, kvli, c.GQAAt(li), hd, c.MLA()
+	j.qw, j.ow, j.qbuf, j.obuf = hd, hd, s.q, s.xbf
+	j.xb, j.atf, j.fast, j.astride = s.xb, s.attf, s.attnAt(li), s.attStride
+	if j.mla {
+		j.qw, j.ow = c.KVLoraRank+c.NRot, c.KVLoraRank
+		j.qbuf, j.obuf, j.gqa = s.mlaAbs, s.mlaAcc, c.NHead
+	}
+	// Heads in pairs when they share a kv head: the paired kernels load
+	// each K/V vector once for two queries. That needs hh and hh+1 on
+	// the same kvh (even gqa, even hh) and in the same pool task, so
+	// pairing forces a chunk of at least two. An A/B of pairing must
+	// compare at the same chunk.
+	j.pair = s.AttnPair()
+	chunk := s.AttnChunk()
+	if j.pair != 0 && chunk < 2 {
+		chunk = 2
+	}
+	// A sliding or chunked window (gemma3, Llama 4) is a base w0 and a
+	// count an, not a different kernel; without a window it is 0 and
+	// pos+1. Config.AttnWindow is the one derivation for all paths.
+	j.w0, j.an = c.AttnWindow(li, s.pos)
+	// Llama 4's attention temperature scales q on its NoPE layers, and
+	// the scores are linear in q, so it rides the softmax scale.
+	scale *= c.AttnTemp(li, s.pos)
+	j.scale, j.softcap = float32(scale), c.AttnSoftcap
+	// Residency is decided before the fan-out; see kvEnsureWindow.
+	s.kvEnsureWindow(kvli, j.w0, j.an)
+	j.bias, j.bstride = nil, 0
+	if c.Indexer() {
+		j.bias = s.idxMask(kvli, 0, j.w0+j.an, s.idxQ, s.idxW, s.idxTmp, s.idxScore,
+			s.idxBias, &s.idxOrd)
+	}
+	if c.MSAAt(li) {
+		j.bias = s.msaMask(kvli, 0, j.w0+j.an, s.attStride, s.msaQ, s.msaTmp, s.msaBias,
+			s.msaKept, &s.msaOrd)
+		j.bstride = s.attStride
+	}
+	if c.QSAAt(li) {
+		g := s.qsa()
+		j.bias = s.qsaMask(s, kvli, 0, j.w0+j.an, g.q, g.bias, l)
+	}
+	if j.fn == nil {
+		j.fn = s.attnHeads
+	}
+	s.jit.Parallel(c.NHead, chunk, j.fn)
+	j.l, j.qbuf, j.obuf, j.xb, j.atf, j.bias = nil, nil, nil, nil, nil, nil
+	s.tock(opAttn, t0)
+	s.jit.NewInput()
+	m.trace(li, "attn", s.xb)
 }

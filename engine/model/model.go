@@ -1238,6 +1238,9 @@ type Model struct {
 	Container bool
 
 	container *jlm.File
+	// graphs is each text block's lowered block graph under WithBlockGraph
+	// (graphblock.go), nil without it.
+	graphs []*denseLowering
 
 	// basePlans is ensureBlock's read plan for every text block -- the block's
 	// own weights, without its routed banks -- built once. The entries are
@@ -1616,6 +1619,12 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	c.OnRecycle(m.forgetCopies)
 	for i := range m.layers {
 		if err := bindPacked(c, m.Cfg, &m.layers[i]); err != nil {
+			c.Close()
+			return nil, err
+		}
+	}
+	if m.opt.blockGraph {
+		if err := m.buildGraphs(); err != nil {
 			c.Close()
 			return nil, err
 		}
