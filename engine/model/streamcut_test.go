@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
@@ -24,8 +25,8 @@ func TestStreamResidualsAreCutByStream(t *testing.T) {
 		name string
 		open func(t *testing.T) *Model
 	}{
-		{"deepseek4", func(t *testing.T) *Model { m, _ := openDS4(t, "synth-deepseek4"); return m }},
-		{"kimik3", func(t *testing.T) *Model { m, _ := openK3(t, "synth-kimik3"); return m }},
+		{"deepseek4", func(t *testing.T) *Model { return openSynth(t, "synth-deepseek4") }},
+		{"kimik3", func(t *testing.T) *Model { return openSynth(t, "synth-kimik3") }},
 	} {
 		t.Run(md.name, func(t *testing.T) {
 			m := md.open(t)
@@ -95,4 +96,19 @@ func TestStreamResidualsAreCutByStream(t *testing.T) {
 			}
 		})
 	}
+}
+
+// openSynth opens a synthetic fixture without its golden: this gate compares
+// the device with the host, not with transformers.
+func openSynth(t *testing.T, name string) *Model {
+	t.Helper()
+	path, ok := existingModel(testmodels.Path(name + ".gguf"))
+	if !ok {
+		testmodels.Missing(t, "%s", "MODEL MISSING: "+testmodels.Path(name+".gguf"))
+	}
+	m, err := Open(jlmOf(t, path), noTune, WithKVF16(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
 }

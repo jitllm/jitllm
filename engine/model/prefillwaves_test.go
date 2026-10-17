@@ -3,7 +3,6 @@
 package model
 
 import (
-	"runtime"
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -69,31 +68,25 @@ func prefillWavesAllocs(t *testing.T, m *Model, ids []int32, blocks, slots int, 
 	t.Logf("device: %v", g.Err())
 	last := append([]float32(nil), out.logits[(len(ids)-1)*c.NVocab:len(ids)*c.NVocab]...)
 	// The same chunk again from the same position: warm (the cache is filled,
-	// the scratch grown). Two collections empty the pools the ffi layer keeps
-	// (a sync.Pool refills with an allocation), one unmeasured run refills
-	// them, and the next run is the one that counts: a warm step makes no
-	// engine heap allocation at all.
-	runtime.GC()
-	runtime.GC()
+	// the scratch grown). One unmeasured run first; the measured one counts the
+	// engine's own allocations (countAllocs sets the runtime's per-P caches
+	// apart, which refill at random under every device call): a warm step makes
+	// none.
 	s.Reset()
 	if err := warmWavesStep(s, embedSrc(s, ids), ids, &out); err != nil {
 		t.Fatal(err)
 	}
-	// The fewest of three runs: a systematic allocation shows in all three,
-	// while a pool of the ffi layer that a goroutine migrating to another
-	// processor finds empty allocates once, in one.
-	fewest := ^uint64(0)
-	for range 3 {
-		s.Reset()
-		src := embedSrc(s, ids)
-		var before, after runtime.MemStats
-		runtime.ReadMemStats(&before)
-		if err := warmWavesStep(s, src, ids, &out); err != nil {
-			t.Fatal(err)
-		}
-		runtime.ReadMemStats(&after)
-		fewest = min(fewest, after.Mallocs-before.Mallocs)
+	s.Reset()
+	src := embedSrc(s, ids)
+	var stepErr error
+	w := countAllocs(func() { stepErr = warmWavesStep(s, src, ids, &out) })
+	if stepErr != nil {
+		t.Fatal(stepErr)
 	}
+	if w.engine > 0 {
+		t.Logf("engine allocations at: %s", w.where)
+	}
+	fewest := uint64(w.engine)
 	return last, g.Stats(), fewest
 }
 
