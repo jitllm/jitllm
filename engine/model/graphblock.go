@@ -42,54 +42,66 @@ const (
 	graphOff
 )
 
-// graphCovered is the frontend: the architectures whose classes are known to
-// be the dense block graph.Dense describes. A trusted adapter by name, as the
-// converter's are; the runtime below it never asks for an architecture.
-func graphCovered(a string) bool {
-	switch a {
-	case "llama", "qwen2", "qwen3", "qwen3moe", "olmoe":
-		return true
-	}
-	return false
-}
-
 // Every reason a text block runs the hand-written body. A block's reason is
 // one of these, by name; TestCoveredBlocksTakeTheGraphPath asserts it.
 // Shrinking this list is the graph's work list.
 const (
-	UncoveredArch        = "architecture outside the graph's frontend" // DeepSeek V4, Kimi-K3, Gemma 4, the mixtures, ...
-	UncoveredMixture     = "a mixture FFN the op language does not state (mixtureFacts)"
-	UncoveredUngated     = "an ungated or non-SiLU FFN"
-	UncoveredLayerNorm   = "LayerNorm with biases"
-	UncoveredParallel    = "a parallel residual"
-	UncoveredOutGate     = "an attention output gate"
-	UncoveredMLA         = "MLA"
-	UncoveredKVShared    = "KV sharing or an extra cached head"
-	UncoveredIndexer     = "an attention indexer"
-	UncoveredStreams     = "several residual streams"
-	UncoveredPLE         = "per-layer embeddings"
-	UncoveredResidScale  = "a residual scale"
-	UncoveredNoPE        = "a block without the rotary"
-	UncoveredTemperature = "an attention temperature"
-	UncoveredWindow      = "an attention window or chunk"
-	UncoveredRecurrent   = "a recurrent layer"
+	UncoveredMixDense      = "a mixture: every expert on every row (a dense mixture)"
+	UncoveredMixRouter     = "a mixture: a router the op language does not state (sqrt-softplus, hash routing or a router norm)"
+	UncoveredMixExperts    = "a mixture: experts the op language does not state (ungated, unbanked or latent)"
+	UncoveredMixWeightIn   = "a mixture: the router's weight scales the experts' input"
+	UncoveredUngated       = "an ungated or non-SiLU FFN"
+	UncoveredLayerNorm     = "LayerNorm with biases"
+	UncoveredParallel      = "a parallel residual"
+	UncoveredOutGate       = "an attention output gate"
+	UncoveredMLA           = "MLA"
+	UncoveredValueWidth    = "a value head wider or narrower than the key head"
+	UncoveredKVShared      = "KV sharing or an extra cached head"
+	UncoveredIndexer       = "an attention indexer or sparse key selection"
+	UncoveredStreams       = "several residual streams"
+	UncoveredPLE           = "per-layer embeddings"
+	UncoveredResidScale    = "a residual scale"
+	UncoveredNoPE          = "a block without the rotary"
+	UncoveredRopeAxes      = "a multi-axis or interleaved rotary"
+	UncoveredRopeScaled    = "a scaled rotary (YaRN, linear, an attention factor)"
+	UncoveredQKNormKind    = "a q/k norm after the rotary or without a weight"
+	UncoveredVNorm         = "a norm over v"
+	UncoveredClamp         = "clamped q, k and v"
+	UncoveredTemperature   = "an attention temperature"
+	UncoveredWindow        = "an attention window or chunk"
+	UncoveredNonCausal     = "non-causal attention"
+	UncoveredSparseAct     = "a gaussian top-k activation"
+	UncoveredDoubleFFN     = "a double-width FFN"
+	UncoveredCompressed    = "compressed or grouped attention output"
+	UncoveredRecurrent     = "a recurrent layer"
+	UncoveredUnboundTensor = "a stored tensor no op of the graph binds"
 )
 
 // UncoveredReasons is the named list, in order.
-var UncoveredReasons = []string{UncoveredArch, UncoveredMixture, UncoveredUngated, UncoveredLayerNorm,
-	UncoveredParallel, UncoveredOutGate, UncoveredMLA, UncoveredKVShared, UncoveredIndexer, UncoveredStreams,
-	UncoveredPLE, UncoveredResidScale, UncoveredNoPE, UncoveredTemperature, UncoveredWindow, UncoveredRecurrent}
+var UncoveredReasons = []string{UncoveredMixDense, UncoveredMixRouter, UncoveredMixExperts, UncoveredMixWeightIn,
+	UncoveredUngated, UncoveredLayerNorm, UncoveredParallel, UncoveredOutGate, UncoveredMLA, UncoveredValueWidth,
+	UncoveredKVShared, UncoveredIndexer, UncoveredStreams, UncoveredPLE, UncoveredResidScale, UncoveredNoPE,
+	UncoveredRopeAxes, UncoveredRopeScaled, UncoveredQKNormKind, UncoveredVNorm, UncoveredClamp, UncoveredTemperature,
+	UncoveredWindow, UncoveredNonCausal, UncoveredSparseAct, UncoveredDoubleFFN, UncoveredCompressed,
+	UncoveredRecurrent, UncoveredUnboundTensor}
 
 // uncovered is why the block graph does not cover text block li, by name, or
-// "" where it does.
+// "" where it does. It is decided from the block's structure alone -- the
+// configuration's fields and, after it, the tensors the container stores
+// (UncoveredUnboundTensor, in buildGraphs) -- never from the architecture's
+// name: a block the op language states runs through the graph whatever the
+// file calls its family (TestCoverageIsStructural).
 func (m *Model) uncovered(li int) string {
 	c := m.Cfg
 	w0, an := c.AttnWindow(li, 1<<20)
+	if c.MoEAt(li) {
+		if _, why := m.mixtureWhy(li); why != "" {
+			return why
+		}
+	}
 	switch {
-	case !graphCovered(c.Arch):
-		return UncoveredArch
-	case c.MoE() && !m.mixLowered(li):
-		return UncoveredMixture
+	case c.LayerKind(li).Recurrent() || c.NGram != 0:
+		return UncoveredRecurrent
 	case c.Act != nn.ActSiLU:
 		return UncoveredUngated
 	case c.LayerNorm:
@@ -98,11 +110,13 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredParallel
 	case c.AttnOutGate:
 		return UncoveredOutGate
-	case c.MLA():
+	case c.MLA() || c.QLoraRank != 0:
 		return UncoveredMLA
+	case c.HeadDimV != 0 && c.HeadDimV != c.HeadDimAt(li):
+		return UncoveredValueWidth
 	case c.KVShared(li) || c.extraKVHead(li):
 		return UncoveredKVShared
-	case c.Indexer():
+	case c.Indexer() || c.MSA() || c.IdxHeads != 0 || c.QSARatio != 0:
 		return UncoveredIndexer
 	case c.streamHead():
 		return UncoveredStreams
@@ -112,26 +126,41 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredResidScale
 	case !c.RopeAt(li):
 		return UncoveredNoPE
+	case c.RopeInterleaved || c.RopeXD || len(m.rope.Runs) > 0:
+		return UncoveredRopeAxes
+	case c.YarnFactor > 0 || (c.RopeLinear != 0 && c.RopeLinear != 1) || (c.AttnFactor != 0 && c.AttnFactor != 1):
+		return UncoveredRopeScaled
+	case c.QKNormPost || c.QKL2Norm:
+		return UncoveredQKNormKind
+	case c.VNorm:
+		return UncoveredVNorm
+	case c.ClampKQV != 0:
+		return UncoveredClamp
 	case c.AttnTemp(li, 1) != 1:
 		return UncoveredTemperature
 	case w0 != 0 || an != 1<<20+1:
 		return UncoveredWindow
-	case c.LayerKind(li).Recurrent():
-		return UncoveredRecurrent
+	case c.NonCausal || c.BidirSWA:
+		return UncoveredNonCausal
+	case c.NSparse != 0:
+		return UncoveredSparseAct
+	case c.DoubleFFN:
+		return UncoveredDoubleFFN
+	case len(c.CompKinds) > 0 || c.CompRateCSA != 0 || c.CompRateHCA != 0 || c.OGroups != 0 || c.OLoraRank != 0:
+		return UncoveredCompressed
 	}
 	return ""
 }
 
-// mixLowered is whether block li's FFN is a mixture the block graph lowers:
-// every block of the model a routed mixture the op language states
-// (mixtureFacts), so a dense lead or an unstated mixture keeps the model's
-// blocks on the hand-written body.
+// mixLowered is whether block li's FFN is a mixture the block graph lowers: a
+// routed mixture the op language states (mixtureFacts). A dense block beside
+// mixtures (a dense lead, ERNIE's interleave) is a dense FFN, not this.
 func (m *Model) mixLowered(li int) bool {
 	if !m.Cfg.MoEAt(li) {
 		return false
 	}
-	_, ok := m.mixtureFacts(li)
-	return ok
+	_, why := m.mixtureWhy(li)
+	return why == ""
 }
 
 // blockFacts is what the container states about text block li: the dense
@@ -166,10 +195,10 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 	}
 	_, d.QKVBias = inv[jlm.RoleAttnQBias]
 	f := graph.Facts{Config: d, Inventory: inv}
-	if c.MoE() {
+	if c.MoEAt(li) {
 		mf, ok := m.mixtureFacts(li)
 		if !ok {
-			return graph.Facts{}, fmt.Errorf("model: block %d of %s: %s", li, c.Arch, UncoveredMixture)
+			return graph.Facts{}, fmt.Errorf("model: block %d: a mixture the op language does not state", li)
 		}
 		f.Config.Mixture, f.Mixture = mf.Mixture, mf.Mixture
 	}
@@ -288,11 +317,17 @@ func (m *Model) buildGraphs() error {
 	m.graphs = make([]*denseLowering, m.Cfg.NLayer)
 	m.graphWhy = make([]string, m.Cfg.NLayer)
 	for li := range m.graphs {
-		if why := m.uncovered(li); why != "" {
+		refuse := func(why string) error {
 			if m.opt.blockGraph == graphStrict {
 				return fmt.Errorf("model: block %d of %s is not covered by the block graph: %s", li, m.Cfg.Arch, why)
 			}
 			m.graphWhy[li] = why
+			return nil
+		}
+		if why := m.uncovered(li); why != "" {
+			if err := refuse(why); err != nil {
+				return err
+			}
 			continue
 		}
 		f, err := m.blockFacts(li)
@@ -300,8 +335,21 @@ func (m *Model) buildGraphs() error {
 			return err
 		}
 		g := f.Config.Build()
+		// The container holds a tensor the stated block does not read: the
+		// block computes something the op language does not state.
+		if u := graph.Unbound(g, f); len(u) > 0 {
+			if err := refuse(UncoveredUnboundTensor); err != nil {
+				return fmt.Errorf("%w (%v)", err, u)
+			}
+			continue
+		}
 		if err := graph.Verify(g, f); err != nil {
 			return err
+		}
+		for i, o := range g.Ops {
+			if _, ok := hostLowering[o.Kind]; !ok {
+				return fmt.Errorf("model: block %d op %d (%s) has no host lowering", li, i, o.Kind)
+			}
 		}
 		lw, err := lowerDense(g)
 		if err != nil {
@@ -732,4 +780,65 @@ func graphProducers(g *graph.Graph) (readers []int, producer []int) {
 		}
 	}
 	return readers, producer
+}
+
+// OpLowering is how one op of a block's graph is lowered on the host: the
+// routine that runs it and whether that routine is composed from the op (a
+// generated kernel chosen by the op's shape and the target) or monolithic (a
+// hand-written routine that runs this op together with its neighbours, the
+// composer's work list in docs/design/composer.md). On a device the whole
+// block is one plan (nn.LayerPlan) the tier lowers, which Device says.
+type OpLowering struct {
+	Op       int
+	Kind     graph.OpKind
+	Host     string
+	Composed bool
+	Device   string
+}
+
+// hostLowering is the host routine per op kind. It is data, not a branch per
+// family: a new op kind with no entry is unlowered and refused at build
+// (TestEveryGraphOpHasALowering).
+var hostLowering = map[graph.OpKind]struct {
+	routine  string
+	composed bool
+}{
+	graph.OpNorm:         {"nn RMSNorm (generated, by width)", true},
+	graph.OpMatVec:       {"nn matvec (generated by quant and shape; grouped where a run fuses)", true},
+	graph.OpAdd:          {"residual add (generated, or folded into the matvec's rows)", true},
+	graph.OpActMul:       {"nn activation-multiply (generated, or fused into down's matvec)", true},
+	graph.OpHeadNorm:     {"attnPrep: q/k norm, rotary and cache append as one routine", false},
+	graph.OpRope:         {"attnPrep: q/k norm, rotary and cache append as one routine", false},
+	graph.OpKVAppend:     {"attnPrep: q/k norm, rotary and cache append as one routine", false},
+	graph.OpAttend:       {"attendRow / the chunk's attention: one routine per row class", false},
+	graph.OpRoute:        {"moe / moeBatch: the routed mixture as one routine", false},
+	graph.OpGather:       {"moe / moeBatch: the routed mixture as one routine", false},
+	graph.OpExpertMatVec: {"moe / moeBatch: the routed mixture as one routine", false},
+	graph.OpCombine:      {"moe / moeBatch: the routed mixture as one routine", false},
+	graph.OpGateScalar:   {"moe / moeBatch: the routed mixture as one routine", false},
+}
+
+// BlockLowering is every op of text block li's graph with its lowering, nil
+// where the block is not on the graph.
+func (m *Model) BlockLowering(li int) []OpLowering {
+	g := m.BlockGraph(li)
+	if g == nil {
+		return nil
+	}
+	out := make([]OpLowering, len(g.Ops))
+	for i, o := range g.Ops {
+		h := hostLowering[o.Kind]
+		out[i] = OpLowering{Op: i, Kind: o.Kind, Host: h.routine, Composed: h.composed,
+			Device: "the block's plan, lowered from the graph (lowerPlan) and run by the tier as one block"}
+	}
+	return out
+}
+
+// String is the lowering as the manifest prints it.
+func (l OpLowering) String() string {
+	how := "monolithic"
+	if l.Composed {
+		how = "composed"
+	}
+	return fmt.Sprintf("op %d %s: host %s [%s]", l.Op, l.Kind, l.Host, how)
 }

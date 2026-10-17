@@ -240,17 +240,43 @@ and `TestCoveredBlocksTakeTheGraphPath` holds a covered model to zero blocks
 off the graph on the host and every device arm. The hand-written body loses
 lines only as that list shrinks: it still runs every uncovered family.
 
-The mixture is lowered too, for the families whose whole block the language
-states (qwen3moe, olmoe): `graph.Dense.Mixture` puts the mixture's ops in
-place of the FFN, OLMoE's q/k norm over each whole projection is an `OpNorm`
+The mixture is lowered too, wherever the language states the block:
+`graph.Dense.Mixture` puts the mixture's ops in place of the FFN (softmax or
+sigmoid routers, renormalised or not, a selection bias, grouped top-k, a routed
+scale, a shared expert gated or not; a dense FFN beside mixture blocks is a
+dense block), OLMoE's q/k norm over each whole projection is an `OpNorm`
 (`Dense.QKNormWhole`), and the host lowering runs the route-to-combine run as
 the mixture's own operations (`moe`, `moeBatch`), so the kernels and their
 order are the hand-written body's: `TestBlockGraphMatchesTheHandPath` holds
-both models bit for bit, resident and paged, at zero warm allocations. The
-plan's rewrites come from the block graph alone there (the sublayer graph's
-are not appended twice). A mixture model whose blocks the language does not
-state stays on the hand-written body under `UncoveredMixture` or its
-architecture's reason.
+every covered model bit for bit, resident and paged, at zero warm allocations.
+
+**Coverage is structural.** Whether a block is on the graph is decided from
+what the container states about the block -- the configuration's fields
+(`model.uncovered`), the mixture's router, experts and shared expert
+(`mixtureWhy`), and the tensors stored for it (`graph.Unbound`: a tensor no op
+binds names the block `UncoveredUnboundTensor`) -- never from the
+architecture's name. A family the runtime has never heard of whose blocks the
+language states runs through the graph, and a renamed architecture changes
+nothing (`TestCoverageIsStructural`, which fires when a name check is put
+back). The names the converter reads stay in the converter.
+
+**What still lowers through a monolithic routine.** Each op's host lowering
+is recorded as data (`model.OpLowering`, the `lowering` of each block in
+`jitllm speed -manifest`) and is either composed -- a generated kernel the
+lowering picks by the op's shape and quant -- or a hand-written routine that
+runs the op together with its neighbours. The monolithic ones are the
+composer's work list:
+
+| ops | routine today | to compose |
+|---|---|---|
+| `head_norm`, `rope`, `kv_append` | `attnPrep` (one routine) | a kernel per op, the fused form a rewrite |
+| `attend` | `attendRow` and the chunk's attention, one per row class | the attention kernels chosen by row class and Target |
+| `route`, `gather`, `expert_matvec`, `combine`, `gate_scalar` | `moe` / `moeBatch` | route and combine as generated kernels, the experts as grouped matvecs chosen by the routed pairs, fusions (`moe-few-row`, `moe-waves`) as rewrites over these ops |
+| every op, on a device | the block's `nn.LayerPlan`, lowered from the graph and run whole by the tier | per-op device kernels selected from the plan's ops |
+
+`TestEveryGraphOpHasALowering` holds every op of a covered block to an entry
+(an op kind with none refuses the model at build) and the mixture's ops to
+"monolithic" until they are not.
 
 ### The rewrite interface
 

@@ -282,9 +282,22 @@ func fixtureOnEveryDeviceWithin(t *testing.T, m *Model, g *c6Golden, vs []c6Viol
 				worst = math.Max(worst, w)
 			}
 			for _, v := range vs {
+				// The graph is built at open from the configuration, and a
+				// covered block's device plan is lowered from it: the
+				// violation rebuilds it, as a container stating the mutation
+				// would have. A mutation the stored tensors contradict (SiLU
+				// where no gate is stored) has no graph; it runs as the
+				// control arm does, every block hand-written.
 				undo := v.mut(m)
+				if err := m.buildGraphs(); err != nil {
+					t.Logf("%s: no graph states it (%v); every block hand-written", v.name, err)
+					clear(m.graphs)
+				}
 				got, why := onDevice(decode)
 				undo()
+				if err := m.buildGraphs(); err != nil {
+					t.Fatal(err)
+				}
 				if why != "" {
 					t.Errorf("%s: the device declined the violation rather than running it: %s", v.name, why)
 					continue

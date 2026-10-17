@@ -25,17 +25,33 @@ type mixGraph struct {
 // an activation the graph has no name for. Such a block's device decides
 // from the tier's own facts, as before the graph.
 func (m *Model) mixtureFacts(li int) (graph.Facts, bool) {
+	f, why := m.mixtureWhy(li)
+	return f, why == "" && f.Mixture != nil
+}
+
+// mixtureWhy is mixtureFacts with the structural reason a mixture block's
+// facts are not stated ("" where they are, and for a block with no mixture).
+func (m *Model) mixtureWhy(li int) (graph.Facts, string) {
 	c := m.Cfg
 	l := &m.layers[li]
-	if !c.MoEAt(li) || c.DenseMoE || c.ExpertSqrtSoftplus || l.ungatedExp {
-		return graph.Facts{}, false
+	switch {
+	case !c.MoEAt(li):
+		return graph.Facts{}, ""
+	case c.DenseMoE:
+		return graph.Facts{}, UncoveredMixDense
+	case c.ExpertSqrtSoftplus:
+		return graph.Facts{}, UncoveredMixRouter
+	case l.ungatedExp || c.ExpertLatent != 0:
+		return graph.Facts{}, UncoveredMixExperts
+	case c.ExpertWeightIn:
+		return graph.Facts{}, UncoveredMixWeightIn
 	}
 	var act graph.Act
 	switch c.Act {
 	case nn.ActSiLU:
 		act = graph.ActSiLU
 	default:
-		return graph.Facts{}, false
+		return graph.Facts{}, UncoveredUngated
 	}
 	want := map[jlm.Role]bool{}
 	for _, r := range graph.MixtureRoles {
@@ -48,9 +64,11 @@ func (m *Model) mixtureFacts(li int) (graph.Facts, bool) {
 			continue
 		}
 		switch e.Role {
-		case jlm.RoleExpGate, jlm.RoleExpUp, jlm.RoleExpDown, jlm.RoleRouterNorm, jlm.RoleHashExperts,
-			jlm.RoleFFNRoutedDown, jlm.RoleFFNRoutedUp, jlm.RoleFFNRoutedNorm:
-			return graph.Facts{}, false
+		case jlm.RoleRouterNorm, jlm.RoleHashExperts:
+			return graph.Facts{}, UncoveredMixRouter
+		case jlm.RoleExpGate, jlm.RoleExpUp, jlm.RoleExpDown, jlm.RoleFFNRoutedDown, jlm.RoleFFNRoutedUp,
+			jlm.RoleFFNRoutedNorm:
+			return graph.Facts{}, UncoveredMixExperts
 		}
 		if !want[e.Role] {
 			continue
@@ -66,7 +84,7 @@ func (m *Model) mixtureFacts(li int) (graph.Facts, bool) {
 	}
 	for _, r := range []jlm.Role{jlm.RoleRouter, jlm.RoleExpGateBank, jlm.RoleExpUpBank, jlm.RoleExpDownBank} {
 		if _, ok := inv[r]; !ok {
-			return graph.Facts{}, false
+			return graph.Facts{}, UncoveredMixExperts
 		}
 	}
 	mx := graph.Mixture{Block: li, NEmbd: c.NEmbd, NExpert: c.NExpert, K: c.NExpertUsed, NFF: c.NFFNExp, Act: act,
@@ -81,12 +99,12 @@ func (m *Model) mixtureFacts(li int) (graph.Facts, bool) {
 	if mx.SharedFF > 0 {
 		for _, r := range []jlm.Role{jlm.RoleShExpGate, jlm.RoleShExpUp, jlm.RoleShExpDown} {
 			if _, ok := inv[r]; !ok {
-				return graph.Facts{}, false
+				return graph.Facts{}, UncoveredMixExperts
 			}
 		}
 		_, mx.SharedGated = inv[jlm.RoleShRouter]
 	}
-	return graph.Facts{Mixture: &mx, Inventory: inv}, true
+	return graph.Facts{Mixture: &mx, Inventory: inv}, ""
 }
 
 // buildMixGraphs builds, verifies and matches every mixture block's sublayer

@@ -327,3 +327,24 @@ func verifyMixtureOp(o Op, at string, m *Mixture, width func(ValueID) int, ins, 
 		}
 	}
 }
+
+// Unbound is every tensor role f's inventory stores that no op of g binds,
+// sorted. Verify refuses such a graph; a frontend asks first, so a block
+// whose container holds what the op language does not state is named as such
+// (the structural reason) rather than refused as a bug.
+func Unbound(g *Graph, f Facts) []jlm.Role {
+	bound := map[jlm.Role]bool{}
+	for _, o := range g.Ops {
+		for _, w := range o.Weight {
+			bound[w.Role] = true
+		}
+	}
+	var out []jlm.Role
+	for r := range f.Inventory {
+		if !bound[r] {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}

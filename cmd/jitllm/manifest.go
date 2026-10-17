@@ -90,6 +90,8 @@ type manifestBlock struct {
 	Path     map[string]string `json:"path"` // phase ("prompt", "decode") -> "graph", "hand", "device-graph", "device-hand", mixed with "+"
 	Why      string            `json:"uncovered,omitempty"`
 	Rewrites []string          `json:"rewrites,omitempty"`
+	// Lowering is each graph op's lowering choice (model.OpLowering).
+	Lowering []string `json:"lowering,omitempty"`
 }
 
 // paths records the State's per-block path for phase.
@@ -101,6 +103,9 @@ func (r *runManifest) paths(m *model.Model, phase string, ps []model.BlockPath) 
 			b.Block, b.Path, b.Why = li, map[string]string{}, ps[li].Why
 			for _, d := range m.BlockRewrites(li) {
 				b.Rewrites = append(b.Rewrites, d.String())
+			}
+			for _, l := range m.BlockLowering(li) {
+				b.Lowering = append(b.Lowering, l.String())
 			}
 		}
 	}

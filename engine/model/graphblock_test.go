@@ -61,7 +61,8 @@ func graphDecode(t *testing.T, m *Model, n, frames int) ([][]float32, int, float
 // different computations apart (an f16 cache against f32).
 func TestBlockGraphMatchesTheHandPath(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "Qwen3-MOE-4x0.6B-Q4_K_M",
-		"olmoe-1b-7b-0924-instruct-Q4_K_M"} {
+		"olmoe-1b-7b-0924-instruct-Q4_K_M", "synth-qwen2moe", "synth-glm4moe", "synth-ernie45moe", "synth-bailingmoe2",
+		"synth-dots1", "synth-minimaxm2", "synth-seedoss", "synth-smollm3", "synth-lfm2"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
@@ -69,20 +70,28 @@ func TestBlockGraphMatchesTheHandPath(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer ctl.Close()
-			gm, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(true))
+			// The default mode: a model whose blocks the graph states only in
+			// part (smollm3's NoPE block, lfm2's recurrent ones) runs the rest
+			// hand-written, each for its named reason.
+			gm, err := Open(p, noTune, WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer gm.Close()
-			if g := gm.BlockGraph(0); g == nil {
-				t.Fatal("no graph for block 0")
-			} else {
-				t.Logf("block 0:\n%s", g)
+			nl := 0
+			for li := range gm.Cfg.NLayer {
+				if gm.BlockGraph(li) != nil {
+					nl++
+				} else {
+					t.Logf("block %d hand-written: %s", li, gm.GraphUncovered(li))
+				}
+			}
+			if nl == 0 {
+				t.Fatal("no block of the model is on the graph: this gate proved nothing")
 			}
 			const n = 16
-			nl := gm.Cfg.NLayer
 			var want [][]float32
-			for _, budget := range []int{0, nl / 3} {
+			for _, budget := range []int{0, max(1, gm.Cfg.NLayer/3)} {
 				ref, ran, refAllocs := graphDecode(t, ctl, n, budget)
 				if ran != 0 {
 					t.Fatalf("the control ran %d graph blocks", ran)
@@ -117,7 +126,7 @@ func TestBlockGraphMatchesTheHandPath(t *testing.T) {
 			}
 			// The violation: the same comparison over a different computation
 			// must fire.
-			f16, err := Open(p, noTune, WithKVF16(true), WithBlockGraph(true))
+			f16, err := Open(p, noTune, WithKVF16(true))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -146,9 +155,14 @@ func TestBlockGraphRefusesWhatItDoesNotCover(t *testing.T) {
 		m.Close()
 		t.Fatal("gemma-3 opened under WithBlockGraph")
 	}
-	if !strings.Contains(err.Error(), UncoveredArch) {
-		t.Fatalf("refused for the wrong reason: %v", err)
+	named := false
+	for _, r := range UncoveredReasons {
+		named = named || strings.HasSuffix(err.Error(), r)
 	}
+	if !named {
+		t.Fatalf("refused without a named structural reason: %v", err)
+	}
+	t.Logf("refused: %v", err)
 }
 
 // TestBlockGraphOfTheRealContainersVerifies: the facts are read from the

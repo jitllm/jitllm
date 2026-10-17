@@ -59,9 +59,13 @@ func pathsRun(t *testing.T, m *Model, g *tier.GPU) []BlockPath {
 // have run some block on the device.
 func legacyBlocks(paths []BlockPath, device bool) error {
 	var bad []string
-	onDev := 0
+	onDev, graphed := 0, 0
 	for li, p := range paths {
 		switch {
+		case p.Why != "" && slices.Contains(UncoveredReasons, p.Why) && p.Graph == 0 && !p.DeviceGraphed:
+			// A block the op language does not state, by its named reason
+			// (smollm3's NoPE block beside its covered ones).
+			continue
 		case p.Hand != 0:
 			bad = append(bad, fmt.Sprintf("block %d ran the hand-written body %d times (%q)", li, p.Hand, p.Why))
 		case p.Device > 0 && !p.DeviceGraphed:
@@ -72,6 +76,10 @@ func legacyBlocks(paths []BlockPath, device bool) error {
 		if p.Device > 0 {
 			onDev++
 		}
+		graphed++
+	}
+	if graphed == 0 {
+		bad = append(bad, "no block of the model is on the graph")
 	}
 	if device && onDev == 0 {
 		bad = append(bad, "no block ran on the device")
@@ -91,7 +99,8 @@ func legacyBlocks(paths []BlockPath, device bool) error {
 // list (UncoveredReasons), never silently.
 func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "Qwen3-MOE-4x0.6B-Q4_K_M",
-		"olmoe-1b-7b-0924-instruct-Q4_K_M"} {
+		"olmoe-1b-7b-0924-instruct-Q4_K_M", "synth-qwen2moe", "synth-glm4moe", "synth-ernie45moe", "synth-bailingmoe2",
+		"synth-dots1", "synth-minimaxm2", "synth-seedoss", "synth-smollm3", "synth-lfm2"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			m, err := Open(p, noTune)
@@ -100,8 +109,9 @@ func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
 			}
 			defer m.Close()
 			for li := 0; li < m.Cfg.NLayer; li++ {
-				if why := m.GraphUncovered(li); why != "" || m.BlockGraph(li) == nil {
-					t.Fatalf("block %d is not covered by default: %q", li, why)
+				why := m.GraphUncovered(li)
+				if why == "" && m.BlockGraph(li) == nil || why != "" && !slices.Contains(UncoveredReasons, why) {
+					t.Fatalf("block %d is neither covered by default nor named: %q", li, why)
 				}
 			}
 			paths := pathsRun(t, m, nil)
@@ -123,11 +133,15 @@ func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
 					t.Logf("%s: block 0 %+v", spec, paths[0])
 				})
 			}
-			// The violation: block 2 forced off the graph.
-			saved := m.graphs[2]
-			m.graphs[2] = nil
+			// The violation: a covered block forced off the graph.
+			vb := 0
+			for m.graphs[vb] == nil {
+				vb++
+			}
+			saved := m.graphs[vb]
+			m.graphs[vb] = nil
 			err = legacyBlocks(pathsRun(t, m, nil), false)
-			m.graphs[2] = saved
+			m.graphs[vb] = saved
 			if err == nil {
 				t.Fatal("a block forced to the hand-written body passed the check")
 			}
