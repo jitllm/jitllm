@@ -1622,6 +1622,12 @@ type SessionStepper interface {
 // work at once instead of in turn.
 type Pipeliner interface{ PipelineDepth() int }
 
+// LayerGrouper says a device pages its blocks, and how many device chunks a
+// prompt chunk may then hold: the device runs the wide chunk one block group at
+// a time, every piece through a group before the next pages in, so a block's
+// weights cross once per wide chunk. 1 when no device pages.
+type LayerGrouper interface{ LayeredChunks() int }
+
 // ExpertHolder says whether the device holding block li holds its routed
 // bank, so the host may give the bank's expert pages back with the block's
 // page. A block whose experts run off the card (streamed, hybrid) does not.

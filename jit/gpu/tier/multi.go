@@ -1205,6 +1205,124 @@ func (g *GPU) pieces(sid uint64, rs []run, pos, n int, x, cs, csSWA []float32, t
 	return true
 }
 
+// LayeredChunks is how many device chunks a prompt chunk holds when a device
+// pages its blocks (nn.LayerGrouper): the wider the chunk, the fewer times
+// each block's weights cross per prompt. 1 when no device pages.
+func (g *GPU) LayeredChunks() int {
+	g.mu.Lock()
+	seen := map[*devTier]int{}
+	for _, d := range g.own {
+		if d != nil {
+			seen[d]++
+		}
+	}
+	g.mu.Unlock()
+	for d, owned := range seen {
+		d.mu.Lock()
+		sl := d.slots()
+		d.mu.Unlock()
+		if owned > sl {
+			return layeredChunks
+		}
+	}
+	return 1
+}
+
+// layeredChunks is how many device chunks a layered prompt chunk holds.
+const layeredChunks = 4
+
+// blockGroups cuts the runs into groups of consecutive blocks on one device,
+// none holding more blocks than the device has slots: what a device pages in
+// together. A run wider than the slots is cut; runs of different geometries
+// that fit together stay one group.
+func blockGroups(rs []run) [][]run {
+	var out [][]run
+	var cur []run
+	held := 0
+	for _, rn := range rs {
+		step := rn.dev.slotCount()
+		for lo := rn.lo; lo < rn.hi; {
+			if len(cur) > 0 && (cur[0].dev != rn.dev || held >= step) {
+				out, cur, held = append(out, cur), nil, 0
+			}
+			hi := min(rn.hi, lo+step-held)
+			sub := rn
+			sub.lo, sub.hi = lo, hi
+			cur, held, lo = append(cur, sub), held+hi-lo, hi
+		}
+	}
+	if len(cur) > 0 {
+		out = append(out, cur)
+	}
+	return out
+}
+
+// slotCount is slots() under the device's lock, at least 1.
+func (d *devTier) slotCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return max(1, d.slots())
+}
+
+// layered runs a wide chunk block group by block group: a group is as many
+// blocks as the device has slots, and every batchWidth piece of the chunk goes
+// through it before the next group pages in. Pieces of a stream-major residual
+// are cut by streams (cutRows), and each piece's per-row inputs with them.
+func (g *GPU) layered(sid uint64, groups [][]run, pos, n int, x, cs, csSWA []float32) bool {
+	r := len(cs) / n
+	rw := 0
+	if len(csSWA) > 0 {
+		rw = len(csSWA) / n
+	}
+	piece := func(grp []run, lo int) bool {
+		d := grp[0].dev
+		ns := max(1, d.streams())
+		e := len(x) / (n * ns)
+		cnt := min(batchWidth, n-lo)
+		var sw []float32
+		if rw > 0 {
+			sw = csSWA[lo*rw : (lo+cnt)*rw]
+		}
+		part := d.cutRows(x, ns, e, n, lo, cnt)
+		was := d.cutInputs(sid, n, lo, cnt)
+		ok := true
+		for _, rn := range grp {
+			c0, c1 := rn.tables(cs[lo*r:(lo+cnt)*r], sw)
+			if ok = d.layersFor(sid, rn.lo, rn.hi, pos+lo, cnt, part, c0, c1, nil); !ok {
+				break
+			}
+		}
+		d.restoreInputs(sid, was)
+		d.uncutRows(x, part, ns, e, n, lo, cnt)
+		if ok {
+			d.mu.Lock()
+			d.Stats.LayeredPieces++
+			d.mu.Unlock()
+		}
+		return ok
+	}
+	if rowsFaulted("pieceouter") {
+		// The violation: the pieces outer and the groups inner, as the chunked
+		// path pages, so every piece pages every group in again.
+		for lo := 0; lo < n; lo += batchWidth {
+			for _, grp := range groups {
+				if !piece(grp, lo) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	for _, grp := range groups {
+		for lo := 0; lo < n; lo += batchWidth {
+			if !piece(grp, lo) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
 	// The runs slice is g.runBuf, taken for the call so a decode token
 	// allocates none; a concurrent call finds it taken and makes its own.
@@ -1236,6 +1354,22 @@ func (g *GPU) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32,
 		// sliding layers' scratch set, not the one holding the head -- and
 		// gets its own submission.
 		tail = nil
+	}
+	var groups [][]run
+	if n > batchWidth && !rs[0].dev.nonCausalAt(lo) {
+		groups = blockGroups(rs) // a decode token never reaches it
+	}
+	if len(groups) > 1 {
+		// A run that pages its blocks reads every block's weights once per
+		// call, so the chunk's pieces go through one block group at a time
+		// instead of each piece paging the whole run.
+		if !g.layered(sid, groups, pos, n, x, cs, csSWA) {
+			return false
+		}
+		if head != nil {
+			return hd.layersFor(sid, hi, hi, pos, n, x, cs, csSWA, head)
+		}
+		return true
 	}
 	// The pieces cut x by rows, which AltUp's stream-major residual is not
 	// (altup.go): such a chunk is refused whole.

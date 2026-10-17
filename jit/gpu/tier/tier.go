@@ -1066,6 +1066,10 @@ type Stats struct {
 	// PipelinePieces counts the pieces of pipelined prompt chunks this device
 	// ran (GPU.pipeline).
 	PipelinePieces int
+	// LayeredPieces counts the (block group, piece) calls of layered prompt
+	// chunks: every piece of a wide chunk through one group of paged blocks
+	// before the next group pages in.
+	LayeredPieces int
 	// SubsBeside counts submissions that started while another was in flight
 	// on the device (beginSub): the selection check that sessions stepped at
 	// once rather than one after another.
@@ -1467,6 +1471,7 @@ func (s *Stats) add(o Stats) {
 	s.KVStreamPasses += o.KVStreamPasses
 	s.StagedPasses += o.StagedPasses
 	s.PipelinePieces += o.PipelinePieces
+	s.LayeredPieces += o.LayeredPieces
 	s.SubsBeside += o.SubsBeside
 	s.RanBeside += o.RanBeside
 	s.LanesWaited += o.LanesWaited
