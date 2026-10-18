@@ -342,11 +342,10 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		return nil, "XD-RoPE"
 	case !actHasKernel(p):
 		return nil, "an activation with no kernel"
-	case p.DenseMoE || bindsRole(g, jlm.RoleFFNRoutedDown):
-		// Read off the plan and the graph, not the architecture: a dense MLP
-		// beside the mixture, or experts run in a latent (the row taken down
-		// before them).
-		return nil, "a dense MLP beside the mixture, or latent experts"
+	case bindsRole(g, jlm.RoleFFNRoutedDown):
+		// Read off the graph, not the architecture: experts run in a latent
+		// (the row taken down before them).
+		return nil, "latent experts"
 	case l.withAttn:
 		return nil, "attention beside a recurrent mixer"
 	}
@@ -465,6 +464,30 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			vals[o.Out[0]] = out
 		case graph.OpMatVec:
 			role := o.Weight[0].Role
+			if role == jlm.RoleShExpGate && p.DenseMoE {
+				// A dense MLP beside the mixture: from its gate to the add of
+				// the two branches, lowered whole with the mixture (mixFFN
+				// runs both, from the normed row and the attention's sum).
+				a := -1
+				for k := i + 1; k < len(g.Ops) && a < 0; k++ {
+					if g.Ops[k].Kind == graph.OpAdd && readsRoleOut(g, g.Ops[k], jlm.RolePostFFNNorm1) {
+						a = k
+					}
+				}
+				if a < 0 {
+					return nil, "a dense MLP beside the mixture with no sum"
+				}
+				src := make([]int, 0, a+1-i)
+				for k := i; k <= a; k++ {
+					src = append(src, k)
+				}
+				q := operand(in(0), i)
+				out := prog.val(g.Values[g.Ops[a].Out[0]].Name, f32(ne), slotMix)
+				prog.ops = append(prog.ops, devOp{Kind: dkMixture, Src: src, In: []devVal{in(0), q}, Out: []devVal{out}})
+				vals[g.Ops[a].Out[0]] = out
+				skipTo = a + 1
+				continue
+			}
 			if role == jlm.RolePLEGate {
 				// The per-layer embedding: its gate to the add that brings
 				// it into the row, lowered whole (perLayerEmbed).
@@ -819,6 +842,23 @@ func isValue(g *graph.Graph, v graph.ValueID) bool {
 	for _, o := range g.Ops {
 		if o.Kind == graph.OpKVAppend && len(o.In) > 1 && o.In[1] == v {
 			return true
+		}
+	}
+	return false
+}
+
+// readsRoleOut reports that op o reads the output of an op binding role r.
+func readsRoleOut(g *graph.Graph, o graph.Op, r jlm.Role) bool {
+	for _, p := range g.Ops {
+		if len(p.Weight) == 0 || p.Weight[0].Role != r {
+			continue
+		}
+		for _, x := range o.In {
+			for _, y := range p.Out {
+				if x == y {
+					return true
+				}
+			}
 		}
 	}
 	return false
