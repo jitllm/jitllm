@@ -61,6 +61,8 @@ func (k devKind) String() string {
 		return "head_norm"
 	case dkPostNorm:
 		return "post_norm"
+	case dkMixture:
+		return "mixture"
 	case dkNormQuant:
 		return "norm_quant"
 	case dkAddNorm:
@@ -846,11 +848,14 @@ func rwQKVGemm(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq in
 }
 
 // forms is the op-span forms a fused program runs, under the encoder's names
-// (BlockForms): q/k/v, gate/up and down.
-func (p *devProgram) forms() (qkv qkvForm, gu ffnGateUpForm, down ffnDownForm) {
-	qkv, gu, down = qkvThree, gateUpTwo, downFormPlain
+// (BlockForms): q/k/v, and gate/up and down where the block has a dense FFN
+// (dense false for a mixture's, which runs whole).
+func (p *devProgram) forms() (qkv qkvForm, gu ffnGateUpForm, down ffnDownForm, dense bool) {
+	qkv, gu, down, dense = qkvThree, gateUpTwo, downFormPlain, true
 	for _, o := range p.ops {
 		switch o.Kind {
+		case dkMixture:
+			dense = false
 		case dkQKV, dkQKVIn:
 			qkv = qkvGrouped
 		case dkQKVSep:
@@ -871,5 +876,5 @@ func (p *devProgram) forms() (qkv qkvForm, gu ffnGateUpForm, down ffnDownForm) {
 			}
 		}
 	}
-	return qkv, gu, down
+	return qkv, gu, down, dense
 }

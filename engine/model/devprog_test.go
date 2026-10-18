@@ -20,8 +20,10 @@ import (
 // first token parts; let the hook skip the program and ProgBlocks reads 0.
 func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 	// synth-qwen2 carries q/k/v biases; synth-glm4 post-norms, a partial
-	// rotary and biases; synth-olmo2 post-norms.
-	for _, name := range []string{"stories15M-q8_0", "synth-qwen2", "synth-glm4", "synth-olmo2", "Qwen3-0.6B-Q8_0",
+	// rotary and biases; synth-olmo2 post-norms; tiny-qwen3moe and
+	// synth-qwen2moe a routed mixture, the latter with a gated shared expert.
+	for _, name := range []string{"stories15M-q8_0", "synth-qwen2", "synth-glm4", "synth-olmo2", "tiny-qwen3moe-f32",
+		"synth-qwen2moe", "Qwen3-0.6B-Q8_0",
 		"Llama-3.2-1B-Instruct-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) {
 			m, err := Open(graphModel(t, name), noTune)
@@ -58,7 +60,7 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 					t.Fatal(err)
 				}
 				if s.GPULayers() != m.Cfg.NLayer {
-					t.Skipf("CARD TOO SMALL: %d of %d blocks placed", s.GPULayers(), m.Cfg.NLayer)
+					t.Skipf("the device took %d of %d blocks: %v", s.GPULayers(), m.Cfg.NLayer, s.DeviceDeclines())
 				}
 				lg, err := s.Prefill(m.Vocab.Encode("Once upon a time", true))
 				if err != nil {

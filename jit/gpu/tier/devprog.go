@@ -67,6 +67,7 @@ const (
 	dkActMul                    // act(gate) * up
 	dkHeadNorm                  // each head's RMSNorm (q's or k's)
 	dkPostNorm                  // a sublayer's output normed before its residual add (post-norm)
+	dkMixture                   // a routed mixture and its shared expert, from route to its sum (mixFFN)
 	numBaseKinds                // the fused kinds (devrewrite.go) count on from here
 )
 
@@ -95,6 +96,7 @@ const (
 	slotQN                 // bs.qn: q's heads normed
 	slotKN                 // bs.kn: k's heads normed
 	slotF16                // g.f16Buf: a GEMM's binary16 operand
+	slotMix                // the mixture's output: whichever buffer mixFFN returns
 	numSlots
 )
 
@@ -134,6 +136,8 @@ func (s devSlot) String() string {
 		return "kn"
 	case slotF16:
 		return "f16"
+	case slotMix:
+		return "mix"
 	}
 	return ""
 }
@@ -208,6 +212,11 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	}
 	switch o.Kind {
+	case dkMixture:
+		if i == 1 {
+			return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
+		}
+		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkMatVec, dkQKV, dkGate2:
 		return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
 	case dkMatVecRes, dkMatVecGate:
@@ -250,7 +259,9 @@ func (p *devProgram) check() error {
 func lowersOp(k graph.OpKind) bool {
 	switch k {
 	case graph.OpNorm, graph.OpMatVec, graph.OpRope, graph.OpKVAppend, graph.OpAttend, graph.OpAdd,
-		graph.OpActMul, graph.OpHeadNorm:
+		graph.OpActMul, graph.OpHeadNorm,
+		// The mixture's ops, lowered whole as one op (dkMixture) for now.
+		graph.OpRoute, graph.OpGather, graph.OpExpertMatVec, graph.OpCombine, graph.OpGateScalar:
 		return true
 	}
 	return false
@@ -274,6 +285,8 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		return nil, "a biased norm"
 	case !actHasKernel(p):
 		return nil, "an activation with no kernel"
+	case p.DenseMoE || l.k3 != nil:
+		return nil, "a dense MLP beside the mixture, or latent experts"
 	}
 	for _, o := range g.Ops {
 		if !lowersOp(o.Kind) {
@@ -305,7 +318,11 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 	}
 	adds := 0
 	var kRot graph.ValueID = -1
+	skipTo := 0
 	for i, o := range g.Ops {
+		if i < skipTo {
+			continue // inside a region lowered whole (the mixture)
+		}
 		in := func(j int) devVal { return vals[o.In[j]] }
 		name := func(j int) string { return g.Values[o.Out[j]].Name }
 		switch o.Kind {
@@ -349,6 +366,28 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			out := prog.val(name(0), f32(w), s)
 			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{a}, Out: []devVal{out}, Role: role})
 			vals[o.Out[0]] = out
+		case graph.OpRoute:
+			// The mixture: from the router to the value the block's last
+			// residual add reads, lowered whole (mixFFN) over the normed row
+			// and its quantize.
+			last := len(g.Ops) - 1
+			fin := g.Ops[last]
+			if fin.Kind != graph.OpAdd || len(fin.Out) != 1 || fin.Out[0] != g.Out[0] {
+				return nil, "a mixture not ended by the block's residual add"
+			}
+			mixOut := fin.In[1]
+			if _, ok := vals[fin.In[0]]; !ok {
+				mixOut = fin.In[0]
+			}
+			src := make([]int, 0, last-i)
+			for k := i; k < last; k++ {
+				src = append(src, k)
+			}
+			q := operand(in(0), i)
+			out := prog.val(g.Values[mixOut].Name, f32(ne), slotMix)
+			prog.ops = append(prog.ops, devOp{Kind: dkMixture, Src: src, In: []devVal{in(0), q}, Out: []devVal{out}})
+			vals[mixOut] = out
+			skipTo = last
 		case graph.OpHeadNorm:
 			s := slotQN
 			if prog.slots[in(0)] == slotK {

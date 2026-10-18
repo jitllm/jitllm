@@ -306,7 +306,8 @@ type progFused struct {
 	took rwSet
 	err  error // the type error that refused every rewrite, if one did
 	// The op-span forms the program runs (BlockForms), noted each step.
-	qkv  qkvForm
-	gu   ffnGateUpForm
-	down ffnDownForm
+	qkv   qkvForm
+	gu    ffnGateUpForm
+	down  ffnDownForm
+	dense bool // a dense FFN, whose gate/up and down forms are noted
 }

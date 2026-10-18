@@ -395,6 +395,455 @@ func (g *devTier) layersSession(s backend.Session) {
 		}
 		lc.la(bs.addE, R*p.NEmbd, x, y, out)
 	}
+	// mixFFN runs block li's routed mixture (and its shared expert) over the
+	// normed row in bs.h and its quantize, and returns the buffer holding the
+	// FFN's output: the block encoder and the device program's mixture op
+	// (devprog.go) both call it.
+	mixFFN := func(l *layer, li int) backend.Buf {
+		ffnOut := bs.mvOut
+		// Gemma 4's block runs its dense MLP first, on the ffn_norm row
+		// in bs.h, and then the mixture on two norms of its own of x2:
+		// the router's into bs.hr, the experts' into bs.h. See
+		// emitDenseMLP.
+		rin := bs.h
+		if p.DenseMoE {
+			g.emitDenseMLP(lc, bs, l, R, bs.x2, mvrun, &err)
+			rin = bs.hr
+		}
+		// The whole mixture with nothing crossing the bus: the router reads
+		// the normed f32 vector (the block's one unquantized matrix) and its
+		// output feeds ExpertRank, whose output indexes the expert matvecs.
+		// Kimi-K3's experts run at the latent (k3.go): read from its
+		// projection of the normed row, summed in x.latAcc and taken
+		// out of the latent below.
+		ein, eout := bs.h, bs.mvOut
+		latent := l.k3 != nil && l.k3.latent != 0
+		if latent {
+			ein, eout = bs.k3.lat, bs.k3.latAcc
+		}
+		hybrid, split := false, false
+		// late is host expert work left to run after the card's next
+		// launches (the hits, the shared expert) are queued, so the
+		// card computes while the host does: the misses' sum goes to
+		// lateDst, and lateAdd adds it to the card's hits into eout.
+		late, lateAdd := false, false
+		var lateDst backend.Buf
+		finishLate := func() {
+			if !late {
+				return
+			}
+			late = false
+			if err == nil {
+				err = l.stream.hostLate(sid, g, s, lateDst, split)
+			}
+			if lateAdd {
+				lc.la(bs.addE, p.ExpWidth(), bs.esplit, bs.hsum, eout)
+			}
+			if err == nil && l.stream.cached() {
+				err = l.stream.admit(g, s, l, p.NExpert, g.splitAdmit())
+			}
+		}
+		if R > 1 {
+			if latent {
+				g.k3LatentIn(lc, bs, l, R, mvrun)
+			}
+			g.emitGroupedMoE(sid, s, lc, bs, l, R, nrow, rin, ein, eout, &err)
+			if latent {
+				g.k3LatentOut(lc, bs, l, R, mvrun)
+			}
+		} else {
+			// route ranks one block's router over rin into bs.rsel, bs.rtop and,
+			// with weights, bs.rw. It is a closure so the streamed path's
+			// cross-layer probe can run the NEXT block's router over this block's
+			// row through exactly the launches that block will run itself.
+			route := func(l *layer, weights bool) bool {
+				// A prediction writes its selection apart (rselPred), so the
+				// block's own can be read after it.
+				selDst := bs.rsel
+				if !weights && g.splitPredict() > 0 {
+					selDst = bs.rselPred
+				}
+				lc.la(l.mvRouter, kernels.RouterThreads(bs.nExpert), l.router, rin, bs.rlogits)
+				logits := bs.rlogits
+				if l.routerB != nil {
+					// gpt-oss biases the logits before the rank, so the
+					// bias decides which experts are chosen.
+					lc.la(bs.rbias, bs.nExpert, bs.rlogits, l.routerB, bs.rlogitsB)
+					logits = bs.rlogitsB
+				}
+				// The V3 family's two extra passes exist because the IR has no nested
+				// loops: ranking needs each group's mask, which needs the group's rank
+				// among all groups, which needs a sum over members. Materialising the
+				// group scores and then the masked plane keeps each pass flat.
+				plane := logits
+				if bs.gscore != nil {
+					if l.expSelB != nil {
+						lc.la(bs.gscore, p.ExpertGroups, logits, bs.rgs, l.expSelB)
+						lc.la(bs.gmask, bs.nExpert, logits, bs.rgs, bs.rbm, l.expSelB)
+					} else {
+						lc.la(bs.gscore, p.ExpertGroups, logits, bs.rgs)
+						lc.la(bs.gmask, bs.nExpert, logits, bs.rgs, bs.rbm)
+					}
+					plane = bs.rbm
+				}
+				// The arity follows the route. Vulkan refuses an undeclared buffer count;
+				// CUDA ignores a surplus pointer and silently never reads the plane.
+				// DeepSeek V4 selects through a plane per row (ds4.go).
+				selB := l.expSelB
+				if l.ds4 != nil {
+					selB = g.ds4RouteBias(lc, bs, l, 1)
+				}
+				fusedRoute := bs.route != nil && bs.gscore == nil && selB == nil
+				switch {
+				case fusedRoute:
+					// Rank and weights in one workgroup (kernels.ExpertRoute).
+					// The probe's weights go to a scratch of their own:
+					// this block's are already in bs.rw and still to
+					// be read.
+					rwDst := bs.rw
+					if !weights {
+						rwDst = bs.rwProbe
+					}
+					if err == nil {
+						err = lc.launch(bs.route, 1, bs.routeWidth,
+							logits, selDst, bs.rtop, rwDst)
+					}
+				case bs.gscore != nil:
+					lc.la(bs.rank, bs.nExpert, logits, selDst, bs.rtop, plane)
+				case selB != nil:
+					lc.la(bs.rank, bs.nExpert, logits, selDst, bs.rtop, selB)
+				default:
+					lc.la(bs.rank, bs.nExpert, logits, selDst, bs.rtop)
+				}
+				if err == nil && !fusedRoute && weights {
+					// One thread: k is 2 to 8 and this is three short loops.
+					// The un-renormalised softmax kernel reads the full
+					// logit array; the renormalised one does not declare
+					// it, and the sigmoid one reads neither -- sigma()
+					// already ran inside the rank.
+					if p.NoExpertNorm && !p.ExpertSigmoid {
+						err = lc.launch(bs.weights, 1, 1, bs.rtop, bs.rw, logits)
+					} else {
+						err = lc.launch(bs.weights, 1, 1, bs.rtop, bs.rw)
+					}
+				}
+				return false
+			}
+			route(l, true)
+			// The next hybrid block's router over this block's row, queued
+			// before the wait so its selection comes home with this one's:
+			// a prediction, which only moves sheets (predictAdmit).
+			var predNx *layer
+			if g.splitPredict() > 0 && l.stream != nil && l.stream.hybrid && li+1 < hi {
+				if nx := g.layers[li+1]; nx != nil && nx.stream != nil && nx.stream.hybrid &&
+					nx.stream.cached() && nx.router != nil {
+					route(nx, false)
+					predNx = nx
+				}
+			}
+			// The suspension, for a streamed bank: the selection comes home, k
+			// sheets of gate/up/down are uploaded at their compact offsets, and the
+			// submission resumes indexing 0..k-1, because the bank it reads is the
+			// selection. The Sync is required: Launch does not wait, and the uploads
+			// that follow must precede the launches that read them.
+			sel := bs.rsel
+			if l.stream != nil {
+				sel = bs.ident
+				if l.stream.cached() {
+					// fill writes each selected expert's cache slot over
+					// the selection, in selection order.
+					sel = bs.rsel
+				}
+				if g.StreamFixedSel {
+					// The probe spreads per block on purpose: a fixed 0..k-1 would keep
+					// one small working set resident and measure that along with the
+					// round trip. A block-dependent stride removes only the readback.
+					for i := range l.stream.sel {
+						l.stream.sel[i] = uint32((li*31 + i*7) % p.NExpert)
+					}
+				} else if err == nil {
+					// Admissions queued by the blocks before go out
+					// while the card runs this one up to its router.
+					if len(g.adm) > 0 {
+						err = g.flushAdmits(s)
+					}
+					tw := time.Now()
+					if err == nil {
+						err = s.Sync()
+					}
+					g.TStreamWait += time.Since(tw)
+				}
+				if err == nil && !g.StreamFixedSel {
+					err = s.Read(bs.rsel, u32b(l.stream.sel))
+				}
+				// Sheets sent while the card ran up to this router
+				// (flushAdmits) have landed or are about to: in use from
+				// this block on, a predicted one for this very block.
+				if err == nil && len(g.admPub) > 0 {
+					err = g.publishAdmits(s)
+				}
+				if err == nil && predNx != nil {
+					predNx.stream.pred = growU32(predNx.stream.pred, len(predNx.stream.sel))
+					if err = s.Read(bs.rselPred, u32b(predNx.stream.pred)); err == nil {
+						predNx.stream.havePred = true
+						predNx.stream.predictAdmit(g, predNx, p.NExpert, g.splitPredict())
+					}
+				}
+				if err == nil && !g.StreamFixedSel {
+					l.stream.score(g, li)
+				}
+				hybrid = l.stream.hybrid && !g.StreamFixedSel
+				// Every selection the card routes is the session's
+				// count, a hybrid block's or a streamed one's.
+				if !g.StreamFixedSel {
+					l.stream.count(g.hostFns[sid][li].uses)
+				}
+				// The split: a hybrid block with a cache runs the experts the
+				// cache holds on the card and the rest on the host, at once.
+				split = hybrid && l.stream.cached()
+				if err == nil && split {
+					if l.down != l.stream.bank {
+						l.stream.forget()
+						l.stream.bank = l.down
+					}
+					split = l.stream.split(g) > 0
+				}
+				if err == nil && split {
+					if latent {
+						g.k3LatentIn(lc, bs, l, 1, mvrun)
+						err = s.Sync()
+					}
+					if err == nil {
+						err = l.stream.splitIn(s, ein, bs.rw, p.ExpWidth(), bs.nUsed)
+					}
+					if err == nil {
+						err = s.WriteAt(bs.rwHit, 0, f32b(l.stream.dw))
+					}
+				}
+				if err == nil && hybrid && !split {
+					// Hybrid: the experts' input and the routing weights come
+					// home, the host runs the selected experts, and their sum
+					// goes back where the combine would have written it.
+					if latent {
+						g.k3LatentIn(lc, bs, l, 1, mvrun)
+						err = l.stream.runHost(sid, g, s, ein, bs.rw, eout, p.ExpWidth(), bs.nUsed)
+						if err == nil && l.stream.cached() {
+							// No hit: the cache still learns from the selection.
+							err = l.stream.admit(g, s, l, p.NExpert, g.splitAdmit())
+						}
+					} else {
+						// The input and weights come home now; the host runs
+						// the experts once the shared expert is queued.
+						err = l.stream.hybridIn(s, ein, bs.rw, p.ExpWidth(), bs.nUsed)
+						late, lateDst = true, eout
+					}
+				}
+				// A hybrid block runs the probe too when asked (its recall
+				// is the measure a predicted upload is priced on), and
+				// never the host-page prefetch, which its warm pages need
+				// not.
+				if err == nil && (g.StreamProbe || !hybrid && g.StreamPrefetch) && li+1 < hi {
+					// The cross-layer probe: the next block's router over this
+					// block's normed row, ranked by that block's own launches.
+					// It clobbers rsel and rtop, which nothing below reads on a
+					// streamed block (it indexes bs.ident and the weights are
+					// already in bs.rw).
+					if nx := g.layers[li+1]; nx != nil && nx.stream != nil && nx.router != nil {
+						if route(nx, false) {
+							g.ProbeFused++
+						} else if err = s.Sync(); err == nil {
+							nx.stream.pred = growU32(nx.stream.pred, len(nx.stream.sel))
+							err = s.Read(bs.rsel, u32b(nx.stream.pred))
+							nx.stream.havePred = err == nil
+							if err == nil && g.StreamPrefetch && !hybrid {
+								nx.stream.prefetch(g)
+							}
+						}
+					}
+				}
+				if err == nil && !hybrid {
+					tf := time.Now()
+					if err = l.stream.fill(g, s, l, p.NExpert); err != nil && l.stream.cached() {
+						l.stream.forget()
+					}
+					g.fillDone(time.Since(tf))
+				}
+				if err == nil && l.stream.cached() {
+					err = s.WriteAt(bs.rsel, 0, u32b(l.stream.slotSel))
+				}
+				if err != nil {
+					return ffnOut
+				}
+				if hybrid {
+					g.HybridRuns++
+				} else {
+					g.StreamFills++
+				}
+			}
+			if hybrid && !split && latent {
+				// The routed sum is already in eout.
+				g.k3LatentOut(lc, bs, l, 1, mvrun)
+			}
+			if !hybrid || split {
+				// gate and up read the one normed vector, so they are
+				// indexed on the weight side only. bs.a/bs.ax still hold
+				// its quantization from the launch above -- or, at
+				// Kimi-K3's latent, its projection's.
+				if latent && !split {
+					g.k3LatentIn(lc, bs, l, 1, mvrun)
+				}
+				ffnW := bs.nUsed * bs.nFFNExp
+				// mvidE launches an expert matvec with fused epilogue
+				// operands between its output and the selection -- the
+				// kernel's parameter order (pOut, [pBias], [pGate], pSel).
+				mvidE := func(k backend.Kernel, m mv, r *resident, dst backend.Buf, extra ...backend.Buf) {
+					// Joined in a stack array: appending to a literal of
+					// its own length grew it on the heap every launch.
+					var all [12]backend.Buf
+					args := append(all[:0], r.qs, dOf(r), r.sc, bs.a, bs.ax, dst)
+					args = append(append(args, extra...), sel)
+					lamv(m, k, m.rows*m.slots*m.split, args...)
+					g.MoEFused++
+				}
+				rw := bs.rw
+				if split {
+					rw = bs.rwHit
+				}
+				if p.DenseMoE {
+					// Each routed weight times its expert's own factor.
+					lc.la(bs.ewScale, bs.nUsed, bs.rw, bs.rsel, l.expScale, bs.rwS)
+					rw = bs.rwS
+				}
+				if ungatedFFN(p) {
+					// Ungated experts (Nemotron 3): up, then the activation
+					// alone. No bias exists on any such architecture.
+					mvid(l.mvu, l.up, bs.eu, sel)
+					lc.la(bs.actMulE, ffnW, bs.eu, bs.eact)
+				} else if l.moeUp != nil {
+					// act(gate)*up in the up projection's own epilogue, the
+					// biases in each matvec's (fuseMoE).
+					if l.moeGate != nil {
+						mvidE(l.moeGate, l.mvg, l.gate, bs.eg, l.expGateB)
+					} else {
+						mvid(l.mvg, l.gate, bs.eg, sel)
+					}
+					if l.expUpB != nil {
+						mvidE(l.moeUp, l.mvu, l.up, bs.eact, l.expUpB, bs.eg)
+					} else {
+						mvidE(l.moeUp, l.mvu, l.up, bs.eact, bs.eg)
+					}
+				} else {
+					mvid(l.mvg, l.gate, bs.eg, sel)
+					mvid(l.mvu, l.up, bs.eu, sel)
+					eg, eu := bs.eg, bs.eu
+					// The experts' biases are indexed by the true ids in rsel,
+					// even where the weights are a compacted bank read 0..k-1.
+					if l.expGateB != nil {
+						lc.la(bs.ebiasFF, ffnW, bs.eg, bs.rsel, l.expGateB, bs.egB)
+						eg = bs.egB
+					}
+					if l.expUpB != nil {
+						lc.la(bs.ebiasFF, ffnW, bs.eu, bs.rsel, l.expUpB, bs.euB)
+						eu = bs.euB
+					}
+					if bs.actMulW != nil {
+						// Llama 4: the weight scales gate and up, and the
+						// downs are summed at one.
+						lc.la(bs.actMulW, ffnW, eg, eu, bs.rw, bs.eact)
+						rw = bs.wOnes
+					} else {
+						lc.la(bs.actMulE, ffnW, eg, eu, bs.eact)
+					}
+				}
+				// One Quantize over all the slots, writing a flat [scales][sums] pAX,
+				// which is the layout down's SlotAct per-slot bases expect.
+				lc.la(bs.quantX, kernels.QuantizeThreads(ffnW/32), bs.eact, bs.a, bs.ax)
+				edown := bs.edown
+				if l.moeDown != nil {
+					mvidE(l.moeDown, l.mvd, l.down, bs.edown, l.expDownB)
+				} else {
+					mvid(l.mvd, l.down, bs.edown, sel)
+					if l.expDownB != nil {
+						lc.la(bs.ebiasD, bs.nUsed*p.NEmbd, bs.edown, bs.rsel, l.expDownB, bs.edownB)
+						edown = bs.edownB
+					}
+				}
+				if !split {
+					lc.la(bs.combine, p.ExpWidth(), edown, rw, eout)
+				} else {
+					// The card's hits sum into esplit while the host runs
+					// the misses; the two sums are added in that order.
+					lc.la(bs.combine, p.ExpWidth(), edown, rw, bs.esplit)
+					late, lateAdd, lateDst = true, true, bs.hsum
+					if latent {
+						// The latent's out projection reads the sum: no
+						// shared expert runs between.
+						finishLate()
+					}
+				}
+				if latent {
+					g.k3LatentOut(lc, bs, l, 1, mvrun)
+				}
+			}
+		}
+		shared := bs.shAdd != nil && !p.DenseMoE &&
+			(l.shGate != nil || ungatedFFN(p)) && l.shUp != nil && l.shDown != nil
+		if !shared {
+			finishLate()
+		}
+		if p.DenseMoE {
+			// The experts' post-norm, then the dense MLP's normed output
+			// (bs.shsum) added: the two branches' sum, which the post-FFN
+			// norm below takes like any block's FFN output.
+			lc.la(bs.normPart, R*bs.parts, bs.mvOut, bs.part)
+			lc.la(bs.normApply, R*p.NEmbd, bs.mvOut, l.nPost2, bs.part, bs.h)
+			lc.la(bs.addE, R*p.NEmbd, bs.shsum, bs.h, bs.mvOut)
+		}
+		// The always-on expert is added after the routed sum, not into it: the
+		// routed weights may be renormalised by their own sum (see engine/model/moe.go).
+		if shared {
+			if l.shRouter != nil {
+				lc.la(bs.shRouterK, kernels.SharedRouterThreads(R), l.shRouter, bs.h, bs.shlogit)
+			}
+			// Re-quantize h: quantX overwrote bs.a/bs.ax with the expert
+			// activations.
+			lc.la(bs.quantE, kernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
+			switch {
+			case ungatedFFN(p):
+				// Ungated (Nemotron 3): up and the activation alone.
+				mvrun(l.mvsu, l.shUp, bs.shu)
+				lc.la(bs.shActMul, R*bs.nShExp, bs.shu, bs.shact)
+			case l.shGU != nil && R == 1 && !g.TableSplit:
+				// gate and up in one launch (fuseSegs).
+				if err == nil {
+					err = lc.launch(l.shGU.kern, l.shGU.blocks, l.shGU.w, bs.a, bs.ax,
+						l.shGate.qs, l.shGate.d, l.shGate.sc, bs.shg,
+						l.shUp.qs, l.shUp.d, l.shUp.sc, bs.shu)
+				}
+				g.SegFused++
+			default:
+				mvrun(l.mvsg, l.shGate, bs.shg)
+				mvrun(l.mvsu, l.shUp, bs.shu)
+			}
+			if !ungatedFFN(p) {
+				lc.la(bs.shActMul, R*bs.nShExp, bs.shg, bs.shu, bs.shact)
+			}
+			lc.la(bs.shQuant, kernels.QuantizeThreads(R*bs.nShExp/32), bs.shact, bs.a, bs.ax)
+			mvrun(l.mvsd, l.shDown, bs.shout)
+			// The host's experts run now, the shared expert queued
+			// ahead of them on the card.
+			finishLate()
+			// An ungated shared expert is a plain add: no logit makes sigma()
+			// exactly one, so the multiply goes rather than being neutralised.
+			if l.shRouter != nil {
+				lc.la(bs.shAdd, R*p.NEmbd, bs.mvOut, bs.shout, bs.shlogit, bs.shsum)
+			} else {
+				lc.la(bs.addE, R*p.NEmbd, bs.mvOut, bs.shout, bs.shsum)
+			}
+			ffnOut = bs.shsum
+		}
+		return ffnOut
+	}
 	// A block-end residual add held for the next block's attention norm to do
 	// in its own launch (foldAddNorm): x = pendX + pendY. The encoder and
 	// the device program (runProg) both hold and take it.
@@ -435,13 +884,15 @@ func (g *devTier) layersSession(s backend.Session) {
 				nseq = len(rag.pos)
 			}
 			fc.prog, fc.took, fc.err = prog.fused(l, bs, g, R, nseq)
-			fc.qkv, fc.gu, fc.down = fc.prog.forms()
+			fc.qkv, fc.gu, fc.down, fc.dense = fc.prog.forms()
 			fc.bs = bs
 		}
 		prog = fc.prog
 		l.ran.note(formQKV, uint8(fc.qkv))
-		l.ran.note(formGateUp, uint8(fc.gu))
-		l.ran.note(formDown, uint8(fc.down))
+		if fc.dense {
+			l.ran.note(formGateUp, uint8(fc.gu))
+			l.ran.note(formDown, uint8(fc.down))
+		}
 		// A residual add the previous block held (the fold, below) runs in
 		// this block's first launch where that is the attention norm writing
 		// the first GEMM's operand: the kernel foldAddNorm built for it.
@@ -618,6 +1069,13 @@ func (g *devTier) layersSession(s backend.Session) {
 				addRes(at(o.In[0]), at(o.In[1]), at(o.Out[0]))
 			case dkActMul:
 				lc.la(bs.actMul, R*p.NFFN, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+			case dkMixture:
+				// The routed mixture, as the encoder runs it; its output is
+				// whichever buffer it summed into.
+				buf[slotMix] = mixFFN(l, li)
+				if err != nil {
+					return
+				}
 			case dkPostNorm:
 				// Out of place, as the encoder writes it: the norm's two
 				// passes over the sublayer's output into bs.h.
@@ -1792,446 +2250,9 @@ func (g *devTier) layersSession(s backend.Session) {
 			// the shared-expert sum where one exists.
 			ffnOut := bs.mvOut
 			if l.router != nil {
-				// Gemma 4's block runs its dense MLP first, on the ffn_norm row
-				// in bs.h, and then the mixture on two norms of its own of x2:
-				// the router's into bs.hr, the experts' into bs.h. See
-				// emitDenseMLP.
-				rin := bs.h
-				if p.DenseMoE {
-					g.emitDenseMLP(lc, bs, l, R, bs.x2, mvrun, &err)
-					rin = bs.hr
-				}
-				// The whole mixture with nothing crossing the bus: the router reads
-				// the normed f32 vector (the block's one unquantized matrix) and its
-				// output feeds ExpertRank, whose output indexes the expert matvecs.
-				// Kimi-K3's experts run at the latent (k3.go): read from its
-				// projection of the normed row, summed in x.latAcc and taken
-				// out of the latent below.
-				ein, eout := bs.h, bs.mvOut
-				latent := l.k3 != nil && l.k3.latent != 0
-				if latent {
-					ein, eout = bs.k3.lat, bs.k3.latAcc
-				}
-				hybrid, split := false, false
-				// late is host expert work left to run after the card's next
-				// launches (the hits, the shared expert) are queued, so the
-				// card computes while the host does: the misses' sum goes to
-				// lateDst, and lateAdd adds it to the card's hits into eout.
-				late, lateAdd := false, false
-				var lateDst backend.Buf
-				finishLate := func() {
-					if !late {
-						return
-					}
-					late = false
-					if err == nil {
-						err = l.stream.hostLate(sid, g, s, lateDst, split)
-					}
-					if lateAdd {
-						lc.la(bs.addE, p.ExpWidth(), bs.esplit, bs.hsum, eout)
-					}
-					if err == nil && l.stream.cached() {
-						err = l.stream.admit(g, s, l, p.NExpert, g.splitAdmit())
-					}
-				}
-				if R > 1 {
-					if latent {
-						g.k3LatentIn(lc, bs, l, R, mvrun)
-					}
-					g.emitGroupedMoE(sid, s, lc, bs, l, R, nrow, rin, ein, eout, &err)
-					if latent {
-						g.k3LatentOut(lc, bs, l, R, mvrun)
-					}
-				} else {
-					// route ranks one block's router over rin into bs.rsel, bs.rtop and,
-					// with weights, bs.rw. It is a closure so the streamed path's
-					// cross-layer probe can run the NEXT block's router over this block's
-					// row through exactly the launches that block will run itself.
-					route := func(l *layer, weights bool) bool {
-						// A prediction writes its selection apart (rselPred), so the
-						// block's own can be read after it.
-						selDst := bs.rsel
-						if !weights && g.splitPredict() > 0 {
-							selDst = bs.rselPred
-						}
-						lc.la(l.mvRouter, kernels.RouterThreads(bs.nExpert), l.router, rin, bs.rlogits)
-						logits := bs.rlogits
-						if l.routerB != nil {
-							// gpt-oss biases the logits before the rank, so the
-							// bias decides which experts are chosen.
-							lc.la(bs.rbias, bs.nExpert, bs.rlogits, l.routerB, bs.rlogitsB)
-							logits = bs.rlogitsB
-						}
-						// The V3 family's two extra passes exist because the IR has no nested
-						// loops: ranking needs each group's mask, which needs the group's rank
-						// among all groups, which needs a sum over members. Materialising the
-						// group scores and then the masked plane keeps each pass flat.
-						plane := logits
-						if bs.gscore != nil {
-							if l.expSelB != nil {
-								lc.la(bs.gscore, p.ExpertGroups, logits, bs.rgs, l.expSelB)
-								lc.la(bs.gmask, bs.nExpert, logits, bs.rgs, bs.rbm, l.expSelB)
-							} else {
-								lc.la(bs.gscore, p.ExpertGroups, logits, bs.rgs)
-								lc.la(bs.gmask, bs.nExpert, logits, bs.rgs, bs.rbm)
-							}
-							plane = bs.rbm
-						}
-						// The arity follows the route. Vulkan refuses an undeclared buffer count;
-						// CUDA ignores a surplus pointer and silently never reads the plane.
-						// DeepSeek V4 selects through a plane per row (ds4.go).
-						selB := l.expSelB
-						if l.ds4 != nil {
-							selB = g.ds4RouteBias(lc, bs, l, 1)
-						}
-						fusedRoute := bs.route != nil && bs.gscore == nil && selB == nil
-						switch {
-						case fusedRoute:
-							// Rank and weights in one workgroup (kernels.ExpertRoute).
-							// The probe's weights go to a scratch of their own:
-							// this block's are already in bs.rw and still to
-							// be read.
-							rwDst := bs.rw
-							if !weights {
-								rwDst = bs.rwProbe
-							}
-							if err == nil {
-								err = lc.launch(bs.route, 1, bs.routeWidth,
-									logits, selDst, bs.rtop, rwDst)
-							}
-						case bs.gscore != nil:
-							lc.la(bs.rank, bs.nExpert, logits, selDst, bs.rtop, plane)
-						case selB != nil:
-							lc.la(bs.rank, bs.nExpert, logits, selDst, bs.rtop, selB)
-						default:
-							lc.la(bs.rank, bs.nExpert, logits, selDst, bs.rtop)
-						}
-						if err == nil && !fusedRoute && weights {
-							// One thread: k is 2 to 8 and this is three short loops.
-							// The un-renormalised softmax kernel reads the full
-							// logit array; the renormalised one does not declare
-							// it, and the sigmoid one reads neither -- sigma()
-							// already ran inside the rank.
-							if p.NoExpertNorm && !p.ExpertSigmoid {
-								err = lc.launch(bs.weights, 1, 1, bs.rtop, bs.rw, logits)
-							} else {
-								err = lc.launch(bs.weights, 1, 1, bs.rtop, bs.rw)
-							}
-						}
-						return false
-					}
-					route(l, true)
-					// The next hybrid block's router over this block's row, queued
-					// before the wait so its selection comes home with this one's:
-					// a prediction, which only moves sheets (predictAdmit).
-					var predNx *layer
-					if g.splitPredict() > 0 && l.stream != nil && l.stream.hybrid && li+1 < hi {
-						if nx := g.layers[li+1]; nx != nil && nx.stream != nil && nx.stream.hybrid &&
-							nx.stream.cached() && nx.router != nil {
-							route(nx, false)
-							predNx = nx
-						}
-					}
-					// The suspension, for a streamed bank: the selection comes home, k
-					// sheets of gate/up/down are uploaded at their compact offsets, and the
-					// submission resumes indexing 0..k-1, because the bank it reads is the
-					// selection. The Sync is required: Launch does not wait, and the uploads
-					// that follow must precede the launches that read them.
-					sel := bs.rsel
-					if l.stream != nil {
-						sel = bs.ident
-						if l.stream.cached() {
-							// fill writes each selected expert's cache slot over
-							// the selection, in selection order.
-							sel = bs.rsel
-						}
-						if g.StreamFixedSel {
-							// The probe spreads per block on purpose: a fixed 0..k-1 would keep
-							// one small working set resident and measure that along with the
-							// round trip. A block-dependent stride removes only the readback.
-							for i := range l.stream.sel {
-								l.stream.sel[i] = uint32((li*31 + i*7) % p.NExpert)
-							}
-						} else if err == nil {
-							// Admissions queued by the blocks before go out
-							// while the card runs this one up to its router.
-							if len(g.adm) > 0 {
-								err = g.flushAdmits(s)
-							}
-							tw := time.Now()
-							if err == nil {
-								err = s.Sync()
-							}
-							g.TStreamWait += time.Since(tw)
-						}
-						if err == nil && !g.StreamFixedSel {
-							err = s.Read(bs.rsel, u32b(l.stream.sel))
-						}
-						// Sheets sent while the card ran up to this router
-						// (flushAdmits) have landed or are about to: in use from
-						// this block on, a predicted one for this very block.
-						if err == nil && len(g.admPub) > 0 {
-							err = g.publishAdmits(s)
-						}
-						if err == nil && predNx != nil {
-							predNx.stream.pred = growU32(predNx.stream.pred, len(predNx.stream.sel))
-							if err = s.Read(bs.rselPred, u32b(predNx.stream.pred)); err == nil {
-								predNx.stream.havePred = true
-								predNx.stream.predictAdmit(g, predNx, p.NExpert, g.splitPredict())
-							}
-						}
-						if err == nil && !g.StreamFixedSel {
-							l.stream.score(g, li)
-						}
-						hybrid = l.stream.hybrid && !g.StreamFixedSel
-						// Every selection the card routes is the session's
-						// count, a hybrid block's or a streamed one's.
-						if !g.StreamFixedSel {
-							l.stream.count(g.hostFns[sid][li].uses)
-						}
-						// The split: a hybrid block with a cache runs the experts the
-						// cache holds on the card and the rest on the host, at once.
-						split = hybrid && l.stream.cached()
-						if err == nil && split {
-							if l.down != l.stream.bank {
-								l.stream.forget()
-								l.stream.bank = l.down
-							}
-							split = l.stream.split(g) > 0
-						}
-						if err == nil && split {
-							if latent {
-								g.k3LatentIn(lc, bs, l, 1, mvrun)
-								err = s.Sync()
-							}
-							if err == nil {
-								err = l.stream.splitIn(s, ein, bs.rw, p.ExpWidth(), bs.nUsed)
-							}
-							if err == nil {
-								err = s.WriteAt(bs.rwHit, 0, f32b(l.stream.dw))
-							}
-						}
-						if err == nil && hybrid && !split {
-							// Hybrid: the experts' input and the routing weights come
-							// home, the host runs the selected experts, and their sum
-							// goes back where the combine would have written it.
-							if latent {
-								g.k3LatentIn(lc, bs, l, 1, mvrun)
-								err = l.stream.runHost(sid, g, s, ein, bs.rw, eout, p.ExpWidth(), bs.nUsed)
-								if err == nil && l.stream.cached() {
-									// No hit: the cache still learns from the selection.
-									err = l.stream.admit(g, s, l, p.NExpert, g.splitAdmit())
-								}
-							} else {
-								// The input and weights come home now; the host runs
-								// the experts once the shared expert is queued.
-								err = l.stream.hybridIn(s, ein, bs.rw, p.ExpWidth(), bs.nUsed)
-								late, lateDst = true, eout
-							}
-						}
-						// A hybrid block runs the probe too when asked (its recall
-						// is the measure a predicted upload is priced on), and
-						// never the host-page prefetch, which its warm pages need
-						// not.
-						if err == nil && (g.StreamProbe || !hybrid && g.StreamPrefetch) && li+1 < hi {
-							// The cross-layer probe: the next block's router over this
-							// block's normed row, ranked by that block's own launches.
-							// It clobbers rsel and rtop, which nothing below reads on a
-							// streamed block (it indexes bs.ident and the weights are
-							// already in bs.rw).
-							if nx := g.layers[li+1]; nx != nil && nx.stream != nil && nx.router != nil {
-								if route(nx, false) {
-									g.ProbeFused++
-								} else if err = s.Sync(); err == nil {
-									nx.stream.pred = growU32(nx.stream.pred, len(nx.stream.sel))
-									err = s.Read(bs.rsel, u32b(nx.stream.pred))
-									nx.stream.havePred = err == nil
-									if err == nil && g.StreamPrefetch && !hybrid {
-										nx.stream.prefetch(g)
-									}
-								}
-							}
-						}
-						if err == nil && !hybrid {
-							tf := time.Now()
-							if err = l.stream.fill(g, s, l, p.NExpert); err != nil && l.stream.cached() {
-								l.stream.forget()
-							}
-							g.fillDone(time.Since(tf))
-						}
-						if err == nil && l.stream.cached() {
-							err = s.WriteAt(bs.rsel, 0, u32b(l.stream.slotSel))
-						}
-						if err != nil {
-							return
-						}
-						if hybrid {
-							g.HybridRuns++
-						} else {
-							g.StreamFills++
-						}
-					}
-					if hybrid && !split && latent {
-						// The routed sum is already in eout.
-						g.k3LatentOut(lc, bs, l, 1, mvrun)
-					}
-					if !hybrid || split {
-						// gate and up read the one normed vector, so they are
-						// indexed on the weight side only. bs.a/bs.ax still hold
-						// its quantization from the launch above -- or, at
-						// Kimi-K3's latent, its projection's.
-						if latent && !split {
-							g.k3LatentIn(lc, bs, l, 1, mvrun)
-						}
-						ffnW := bs.nUsed * bs.nFFNExp
-						// mvidE launches an expert matvec with fused epilogue
-						// operands between its output and the selection -- the
-						// kernel's parameter order (pOut, [pBias], [pGate], pSel).
-						mvidE := func(k backend.Kernel, m mv, r *resident, dst backend.Buf, extra ...backend.Buf) {
-							// Joined in a stack array: appending to a literal of
-							// its own length grew it on the heap every launch.
-							var all [12]backend.Buf
-							args := append(all[:0], r.qs, dOf(r), r.sc, bs.a, bs.ax, dst)
-							args = append(append(args, extra...), sel)
-							lamv(m, k, m.rows*m.slots*m.split, args...)
-							g.MoEFused++
-						}
-						rw := bs.rw
-						if split {
-							rw = bs.rwHit
-						}
-						if p.DenseMoE {
-							// Each routed weight times its expert's own factor.
-							lc.la(bs.ewScale, bs.nUsed, bs.rw, bs.rsel, l.expScale, bs.rwS)
-							rw = bs.rwS
-						}
-						if ungatedFFN(p) {
-							// Ungated experts (Nemotron 3): up, then the activation
-							// alone. No bias exists on any such architecture.
-							mvid(l.mvu, l.up, bs.eu, sel)
-							lc.la(bs.actMulE, ffnW, bs.eu, bs.eact)
-						} else if l.moeUp != nil {
-							// act(gate)*up in the up projection's own epilogue, the
-							// biases in each matvec's (fuseMoE).
-							if l.moeGate != nil {
-								mvidE(l.moeGate, l.mvg, l.gate, bs.eg, l.expGateB)
-							} else {
-								mvid(l.mvg, l.gate, bs.eg, sel)
-							}
-							if l.expUpB != nil {
-								mvidE(l.moeUp, l.mvu, l.up, bs.eact, l.expUpB, bs.eg)
-							} else {
-								mvidE(l.moeUp, l.mvu, l.up, bs.eact, bs.eg)
-							}
-						} else {
-							mvid(l.mvg, l.gate, bs.eg, sel)
-							mvid(l.mvu, l.up, bs.eu, sel)
-							eg, eu := bs.eg, bs.eu
-							// The experts' biases are indexed by the true ids in rsel,
-							// even where the weights are a compacted bank read 0..k-1.
-							if l.expGateB != nil {
-								lc.la(bs.ebiasFF, ffnW, bs.eg, bs.rsel, l.expGateB, bs.egB)
-								eg = bs.egB
-							}
-							if l.expUpB != nil {
-								lc.la(bs.ebiasFF, ffnW, bs.eu, bs.rsel, l.expUpB, bs.euB)
-								eu = bs.euB
-							}
-							if bs.actMulW != nil {
-								// Llama 4: the weight scales gate and up, and the
-								// downs are summed at one.
-								lc.la(bs.actMulW, ffnW, eg, eu, bs.rw, bs.eact)
-								rw = bs.wOnes
-							} else {
-								lc.la(bs.actMulE, ffnW, eg, eu, bs.eact)
-							}
-						}
-						// One Quantize over all the slots, writing a flat [scales][sums] pAX,
-						// which is the layout down's SlotAct per-slot bases expect.
-						lc.la(bs.quantX, kernels.QuantizeThreads(ffnW/32), bs.eact, bs.a, bs.ax)
-						edown := bs.edown
-						if l.moeDown != nil {
-							mvidE(l.moeDown, l.mvd, l.down, bs.edown, l.expDownB)
-						} else {
-							mvid(l.mvd, l.down, bs.edown, sel)
-							if l.expDownB != nil {
-								lc.la(bs.ebiasD, bs.nUsed*p.NEmbd, bs.edown, bs.rsel, l.expDownB, bs.edownB)
-								edown = bs.edownB
-							}
-						}
-						if !split {
-							lc.la(bs.combine, p.ExpWidth(), edown, rw, eout)
-						} else {
-							// The card's hits sum into esplit while the host runs
-							// the misses; the two sums are added in that order.
-							lc.la(bs.combine, p.ExpWidth(), edown, rw, bs.esplit)
-							late, lateAdd, lateDst = true, true, bs.hsum
-							if latent {
-								// The latent's out projection reads the sum: no
-								// shared expert runs between.
-								finishLate()
-							}
-						}
-						if latent {
-							g.k3LatentOut(lc, bs, l, 1, mvrun)
-						}
-					}
-				}
-				shared := bs.shAdd != nil && !p.DenseMoE &&
-					(l.shGate != nil || ungatedFFN(p)) && l.shUp != nil && l.shDown != nil
-				if !shared {
-					finishLate()
-				}
-				if p.DenseMoE {
-					// The experts' post-norm, then the dense MLP's normed output
-					// (bs.shsum) added: the two branches' sum, which the post-FFN
-					// norm below takes like any block's FFN output.
-					lc.la(bs.normPart, R*bs.parts, bs.mvOut, bs.part)
-					lc.la(bs.normApply, R*p.NEmbd, bs.mvOut, l.nPost2, bs.part, bs.h)
-					lc.la(bs.addE, R*p.NEmbd, bs.shsum, bs.h, bs.mvOut)
-				}
-				// The always-on expert is added after the routed sum, not into it: the
-				// routed weights may be renormalised by their own sum (see engine/model/moe.go).
-				if shared {
-					if l.shRouter != nil {
-						lc.la(bs.shRouterK, kernels.SharedRouterThreads(R), l.shRouter, bs.h, bs.shlogit)
-					}
-					// Re-quantize h: quantX overwrote bs.a/bs.ax with the expert
-					// activations.
-					lc.la(bs.quantE, kernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
-					switch {
-					case ungatedFFN(p):
-						// Ungated (Nemotron 3): up and the activation alone.
-						mvrun(l.mvsu, l.shUp, bs.shu)
-						lc.la(bs.shActMul, R*bs.nShExp, bs.shu, bs.shact)
-					case l.shGU != nil && R == 1 && !g.TableSplit:
-						// gate and up in one launch (fuseSegs).
-						if err == nil {
-							err = lc.launch(l.shGU.kern, l.shGU.blocks, l.shGU.w, bs.a, bs.ax,
-								l.shGate.qs, l.shGate.d, l.shGate.sc, bs.shg,
-								l.shUp.qs, l.shUp.d, l.shUp.sc, bs.shu)
-						}
-						g.SegFused++
-					default:
-						mvrun(l.mvsg, l.shGate, bs.shg)
-						mvrun(l.mvsu, l.shUp, bs.shu)
-					}
-					if !ungatedFFN(p) {
-						lc.la(bs.shActMul, R*bs.nShExp, bs.shg, bs.shu, bs.shact)
-					}
-					lc.la(bs.shQuant, kernels.QuantizeThreads(R*bs.nShExp/32), bs.shact, bs.a, bs.ax)
-					mvrun(l.mvsd, l.shDown, bs.shout)
-					// The host's experts run now, the shared expert queued
-					// ahead of them on the card.
-					finishLate()
-					// An ungated shared expert is a plain add: no logit makes sigma()
-					// exactly one, so the multiply goes rather than being neutralised.
-					if l.shRouter != nil {
-						lc.la(bs.shAdd, R*p.NEmbd, bs.mvOut, bs.shout, bs.shlogit, bs.shsum)
-					} else {
-						lc.la(bs.addE, R*p.NEmbd, bs.mvOut, bs.shout, bs.shsum)
-					}
-					ffnOut = bs.shsum
+				ffnOut = mixFFN(l, li)
+				if err != nil {
+					return
 				}
 			} else if !skipFFN {
 				// A non-causal block's own MLP, which may not be the set's
