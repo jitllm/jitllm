@@ -520,27 +520,6 @@ func (s *State) ds4Expand(x []float32, rows int) {
 	}
 }
 
-// ds4Layers runs blocks [lo, hi) on the host for n rows of x, whose slots,
-// positions and tokens the caller put in s.ds.rslot/rpos/rid.
-func (s *State) ds4Block(li int, l *layer, x []float32, n int) error {
-	g, d := s.ds, l.ds4
-	if err := s.hcPre(x, n, d.attnFn, d.attnScale, d.attnBase, l.attnNorm); err != nil {
-		return err
-	}
-	if err := s.ds4Attn(li, l, n); err != nil {
-		return err
-	}
-	s.hcPost(x, n, g.out)
-	if err := s.hcPre(x, n, d.ffnFn, d.ffnScale, d.ffnBase, l.ffnNorm); err != nil {
-		return err
-	}
-	if err := s.ds4FFN(li, l, n); err != nil {
-		return err
-	}
-	s.hcPost(x, n, g.out)
-	return nil
-}
-
 // hcPre is a hyper-connection's mix for n rows of x: each row's streams into
 // g.flat, the mixer's pre/post/comb into g.hc, and the collapsed row normed
 // by norm into g.hn.

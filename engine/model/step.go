@@ -342,7 +342,7 @@ func (s *State) HostRefusal() error {
 		return errHostPartial
 	case c.MLA() || c.Indexer() || c.MSA() || c.DSV4():
 		// Their cached rows and selections are read through the batch's own
-		// slots (mlaProjectRows, idxRows, msaRows, ds4Block); a row of
+		// slots (mlaProjectRows, idxRows, msaRows, ds4Graph); a row of
 		// another session there would read the wrong history.
 		return errHostCache
 	}

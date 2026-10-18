@@ -340,7 +340,7 @@ type denseLowering struct {
 	// the attention; sparse: the FFN gate's gaussian top-k (gaussTopK).
 	alt, laurel, sparse bool
 	// ds4: the compressed attention over Sinkhorn-mixed streams; the block
-	// runs as ds4Block does (hcPre, ds4Attn, hcPost, ds4FFN).
+	// runs op by op as ds4Graph (hcPre, ds4Attn, hcPost, ds4FFN).
 	ds4 bool
 	// bank: the residual attention's checkpoint streams (k3AttnIn,
 	// k3Resid, k3FFNIn); latent: the latent mixture (k3MoE).
@@ -962,9 +962,9 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 	s.pathOf(li).Graph++
 	if lw.ds4 {
 		// stream_mix, norm, compressed_attend, stream_place, then the FFN's
-		// stream_mix, norm, the mixture and stream_place: ds4Block.
+		// stream_mix, norm, the mixture and stream_place: ds4Graph.
 		s.ds.rslot[0], s.ds.rpos[0], s.ds.rid[0] = 0, s.pos, s.tok
-		if err := s.ds4Block(li, l, s.xa, 1); err != nil {
+		if err := s.ds4Graph(li, l, s.xa, 1); err != nil {
 			return err
 		}
 		m.trace(li, "ffn_resid", s.x)
@@ -1150,6 +1150,29 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 	}
 	m.trace(li, "attn_resid", s.x)
 	return s.graphFFN(li, l, lw)
+}
+
+// ds4Graph is DeepSeek V4's block over n rows of x, its graph's ops in
+// order: each sublayer's Sinkhorn mix and norm (hcPre), the compressed
+// attention (ds4Attn) or the mixture (ds4FFN), and the placement (hcPost).
+// The rows' slots, positions and tokens are the caller's (s.ds).
+func (s *State) ds4Graph(li int, l *layer, x []float32, n int) error {
+	g, d := s.ds, l.ds4
+	if err := s.hcPre(x, n, d.attnFn, d.attnScale, d.attnBase, l.attnNorm); err != nil {
+		return err
+	}
+	if err := s.ds4Attn(li, l, n); err != nil {
+		return err
+	}
+	s.hcPost(x, n, g.out)
+	if err := s.hcPre(x, n, d.ffnFn, d.ffnScale, d.ffnBase, l.ffnNorm); err != nil {
+		return err
+	}
+	if err := s.ds4FFN(li, l, n); err != nil {
+		return err
+	}
+	s.hcPost(x, n, g.out)
+	return nil
 }
 
 // selectRows projects every row's indexer key and query for a selecting
@@ -1415,11 +1438,11 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, base, p0, n
 	s.pathOf(li).Graph++
 	ne := c.NEmbd
 	if lw.ds4 {
-		// ds4Block over the chunk, each row its slot and position.
+		// ds4Graph over the chunk, each row its slot and position.
 		for i := 0; i < n; i++ {
 			s.ds.rslot[i], s.ds.rpos[i] = slot, p0+i
 		}
-		return s.ds4Block(li, l, s.bx[:n*c.ResidW()], n)
+		return s.ds4Graph(li, l, s.bx[:n*c.ResidW()], n)
 	}
 	// [ngram,] [stream_mix,] norm(x) -> attn_in, every row
 	tn := s.tick()
@@ -1535,13 +1558,13 @@ func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, tokens [
 	s.pathOf(li).Graph++
 	ne := c.NEmbd
 	if lw.ds4 {
-		// ds4Block over the step, each row its sequence's slot, position
+		// ds4Graph over the step, each row its sequence's slot, position
 		// and token.
 		s.growDS4(n)
 		for i := 0; i < n; i++ {
 			s.ds.rslot[i], s.ds.rpos[i], s.ds.rid[i] = seq[i], pos[i], tokens[i]
 		}
-		return s.ds4Block(li, l, s.bx[:n*c.ResidW()], n)
+		return s.ds4Graph(li, l, s.bx[:n*c.ResidW()], n)
 	}
 	// [ngram,] [stream_mix,] norm(x) -> attn_in, every row: the n-gram in
 	// each sequence's position order.
@@ -2009,7 +2032,18 @@ func (m *Model) BlockLowering(li int) []OpLowering {
 	for i, o := range g.Ops {
 		h := hostLowering[o.Kind]
 		if ds4 {
-			h.routine, h.composed = "ds4Block: hcPre, ds4Attn, hcPost and ds4FFN (the mixture through moe)", false
+			// DeepSeek V4's block, op by op (ds4Graph): the Sinkhorn mix and
+			// its norm (hcPre), the compressed attention (ds4Attn), the
+			// placement (hcPost), the mixture through moe (ds4FFN).
+			switch o.Kind {
+			case graph.OpStreamMix, graph.OpNorm:
+				h.routine = "hcPre: the streams' Sinkhorn mix (generated) and the norm of the collapsed row"
+			case graph.OpStreamPlace:
+				h.routine, h.composed = "hcPost: the output scaled into each stream and the streams recombined (generated)", true
+			case graph.OpCompressedAttend:
+			default:
+				h.routine += " (ds4FFN's moe)"
+			}
 		}
 		if o.Kind == graph.OpIndex && mlaTo < 0 {
 			h.routine = "msaKey and msaQuery (the key one more head of the appended row), then attendRow's block mask (msaMask)"
