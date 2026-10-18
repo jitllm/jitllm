@@ -19,8 +19,10 @@ type prepStep struct {
 	arg int
 	// unit is a norm's width: HeadDim for a per-head norm, the projection's
 	// width for a whole one.
-	unit  int
-	neox  bool
+	unit int
+	neox bool
+	// xd turns each element by its own coordinate (RoPESplit, XD-RoPE).
+	xd    bool
 	bound float32
 	// ones is a norm with no weight (Llama 4's after the rotary): the
 	// generated RMSNorm against a ones vector.
@@ -67,7 +69,7 @@ func lowerPrep(g *graph.Graph, from, to int, qkv [3]graph.ValueID) ([]prepStep, 
 		case graph.OpNorm:
 			st.unit = g.Values[o.In[0]].Width
 		case graph.OpRope:
-			st.neox = o.Attr.Layout == graph.RopeNeox
+			st.neox, st.xd = o.Attr.Layout == graph.RopeNeox, o.Attr.Layout == graph.RopeXD
 		case graph.OpKVAppend:
 			b, ok := prepArg(of, o.In[1])
 			if vFromK && o.In[1] == qkv[1] {
@@ -116,7 +118,11 @@ func (s *State) runPrep(l *layer, steps []prepStep, q, k, v, cs []float32, li, k
 			}
 		case graph.OpRope:
 			t0 := s.tick()
-			nn.RoPE32JIT(x, hd, cs, st.neox)
+			if st.xd {
+				nn.RoPESplit32JIT(x, hd, cs)
+			} else {
+				nn.RoPE32JIT(x, hd, cs, st.neox)
+			}
 			s.tock(opRoPE, t0)
 		case graph.OpKVAppend:
 			s.kvWritable(li, kvPos)

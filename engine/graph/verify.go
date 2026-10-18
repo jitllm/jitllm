@@ -13,6 +13,14 @@ import (
 // matrix).
 type Shape struct{ K, Rows, Sheets int }
 
+// altOuts is an AltUp op's output count.
+func (k OpKind) altOuts() int {
+	if k == OpAltPredict {
+		return 2
+	}
+	return 1
+}
+
 // Facts is what the container states about a block, independently of any
 // graph built for it: the configuration (the rotary, the epsilon, the head
 // counts) and the tensors stored for the block by role. The verifier holds a
@@ -234,6 +242,85 @@ func Verify(g *Graph, f Facts) error {
 			if width(o.In[0]) != c.NHead*c.HeadDim || width(o.Out[0]) != c.NHead*c.HeadDim {
 				bad("%s: q of %d, out of %d", at, width(o.In[0]), width(o.Out[0]))
 			}
+		case OpStreamMix:
+			x := c.Streams
+			if x == nil {
+				bad("%s: a stream mix in a graph whose facts state one residual", at)
+				break
+			}
+			if !ins(1) || !outs(2) {
+				break
+			}
+			if o.Attr.Streams != x.N || o.Attr.Eps != c.Eps || width(o.In[0]) != x.N*c.NEmbd || width(o.Out[0]) != c.NEmbd ||
+				width(o.Out[1]) != x.N || len(o.Weight) != 4 {
+				bad("%s: %d streams of a row of %d into %d (eps %g, %d weights); the configuration states %d of %d",
+					at, o.Attr.Streams, width(o.In[0]), width(o.Out[0]), o.Attr.Eps, len(o.Weight), x.N, c.NEmbd)
+			}
+		case OpStreamPlace:
+			x := c.Streams
+			if x == nil {
+				bad("%s: a stream placement in a graph whose facts state one residual", at)
+				break
+			}
+			if !ins(3) || !outs(1) {
+				break
+			}
+			if o.Attr.Streams != x.N || width(o.In[0]) != x.N*c.NEmbd || width(o.In[1]) != c.NEmbd || width(o.In[2]) != x.N ||
+				width(o.Out[0]) != width(o.In[0]) {
+				bad("%s: a row of %d placed into %d at %d weights; the configuration states %d streams of %d",
+					at, width(o.In[1]), width(o.In[0]), width(o.In[2]), x.N, c.NEmbd)
+			}
+		case OpNGram:
+			if !c.NGram || c.Streams == nil {
+				bad("%s: an n-gram embedding the configuration does not state", at)
+				break
+			}
+			if !ins(1) || !outs(1) {
+				break
+			}
+			if width(o.Out[0]) != width(o.In[0]) || width(o.In[0]) != c.Streams.N*c.NEmbd || len(o.Weight) != len(c.NGramW) {
+				bad("%s: a residual of %d into %d binding %d weights", at, width(o.In[0]), width(o.Out[0]), len(o.Weight))
+			}
+			if len(o.Reads) != 1 || o.Reads[0].Name != "ngram" || len(o.Writes) != 1 || o.Writes[0].Name != "ngram" {
+				bad("%s: reads and writes no ngram version", at)
+			}
+		case OpAltPredict, OpAltCorrect:
+			a := c.AltUp
+			if a == nil {
+				bad("%s: AltUp in a graph whose facts state one residual", at)
+				break
+			}
+			k, w := 1, 3
+			if o.Kind == OpAltCorrect {
+				k, w = 3, 7
+			}
+			if !ins(k) || !outs(o.Kind.altOuts()) {
+				break
+			}
+			if o.Attr.Streams != a.N || o.Attr.Eps != c.Eps || width(o.In[0]) != a.N*c.NEmbd || width(o.Out[0]) != a.N*c.NEmbd ||
+				len(o.Weight) != w || o.Kind == OpAltPredict && width(o.Out[1]) != c.NEmbd ||
+				o.Kind == OpAltCorrect && (width(o.In[1]) != c.NEmbd || width(o.In[2]) != c.PLEDim || o.Attr.Act != act) {
+				bad("%s: %d streams of a row of %d (eps %g, %d weights); the configuration states %d of %d",
+					at, o.Attr.Streams, width(o.In[0]), o.Attr.Eps, len(o.Weight), a.N, c.NEmbd)
+			}
+		case OpLaurel:
+			if c.AltUp == nil {
+				bad("%s: LAuReL the configuration does not state", at)
+				break
+			}
+			if !ins(1) || !outs(1) {
+				break
+			}
+			if width(o.In[0]) != c.NEmbd || width(o.Out[0]) != c.NEmbd || len(o.Weight) != 3 || o.Attr.Eps != c.Eps {
+				bad("%s: a row of %d into %d binding %d weights", at, width(o.In[0]), width(o.Out[0]), len(o.Weight))
+			}
+		case OpGaussTopK:
+			if !ins(1) || !outs(1) {
+				break
+			}
+			if o.Attr.Bound == 0 || o.Attr.Bound != c.SparseStd || width(o.Out[0]) != width(o.In[0]) {
+				bad("%s: %g standard deviations; the configuration states %g", at, o.Attr.Bound, c.SparseStd)
+			}
 		case OpAdd, OpActMul:
 			if !ins(2) || !outs(1) {
 				break
@@ -244,6 +331,9 @@ func Verify(g *Graph, f Facts) error {
 			// A residual add (into the block's stream) carries the
 			// configuration's scale; the mixture's own add of its shared
 			// expert carries none.
+			if o.Kind == OpAdd && o.Attr.Scale != 0 && (o.Attr.Scale != LaurelJoin || c.AltUp == nil) {
+				bad("%s: an output scale %g the configuration does not state", at, o.Attr.Scale)
+			}
 			if o.Kind == OpAdd && o.Attr.Alpha != 0 && o.Attr.Alpha != c.ResidScale {
 				bad("%s: residual scale %g, the configuration states %g", at, o.Attr.Alpha, c.ResidScale)
 			}
@@ -314,7 +404,7 @@ func Verify(g *Graph, f Facts) error {
 				break
 			}
 			a := o.Attr
-			if a.NHead != x.Heads || a.HeadDim != x.HeadDim || a.TopK != x.TopK || a.Block != x.Block || a.Local != x.Local ||
+			if a.NHead != x.Heads || a.HeadDim != x.HeadDim || a.TopK != x.TopK || a.Block != x.Block || a.Local != x.Local || a.Pooled != x.Pooled ||
 				width(o.In[0]) != c.NEmbd || width(o.Out[0]) != x.TopK || len(o.Weight) != 4 {
 				bad("%s: %d heads of %d keeping %d blocks of %d (%d local); the configuration states %d of %d keeping %d of %d (%d)",
 					at, a.NHead, a.HeadDim, a.TopK, a.Block, a.Local, x.Heads, x.HeadDim, x.TopK, x.Block, x.Local)

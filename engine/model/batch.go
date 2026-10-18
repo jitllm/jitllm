@@ -276,7 +276,7 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 		}
 		l := &m.layers[li]
 		if li < len(m.graphs) && m.graphs[li] != nil {
-			if err := s.graphRagged(li, l, m.graphs[li], n, seq, pos, cs, csSWA, unitHeads, units, astride, scale); err != nil {
+			if err := s.graphRagged(li, l, m.graphs[li], n, tokens, seq, pos, cs, csSWA, unitHeads, units, astride, scale); err != nil {
 				return nil, err
 			}
 			continue

@@ -85,8 +85,6 @@ func (m *Model) uncovered(li int) string {
 		}
 	}
 	switch {
-	case c.NGram != 0:
-		return UncoveredRecurrent
 	case m.blockAct(roles) == 0:
 		return UncoveredUngated
 	case !c.MLA() && c.QLoraRank != 0:
@@ -97,19 +95,15 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredValueWidth
 	// A KV-sharing block and Gemma 4's v-is-k blocks are the graph's
 	// (Dense.KVShared, VFromK); an absent v anywhere else is not.
-	case c.QSAAt(li) || c.LayerKind(li).Attends() && !c.MLA() && !c.KVShared(li) && !hasRole(roles, jlm.RoleAttnV) &&
+	case c.LayerKind(li).Attends() && !c.MLA() && !c.KVShared(li) && !hasRole(roles, jlm.RoleAttnV) &&
 		!(c.VNorm && hasRole(roles, jlm.RoleAttnK)):
 		return UncoveredKVShared
-	case c.QSAAt(li) || c.IdxHeads != 0 && !c.MSA() && !(c.MLA() && c.Indexer()):
+	case c.IdxHeads != 0 && !c.MSA() && !c.Q4E() && !(c.MLA() && c.Indexer()):
 		return UncoveredIndexer
-	case c.streamHead():
+	case c.streamHead() && !c.Q4E() && c.AltUp == 0:
 		return UncoveredStreams
-	case c.RopeXD:
-		return UncoveredRopeAxes
 	case c.NonCausal:
 		return UncoveredNonCausal
-	case c.NSparse != 0:
-		return UncoveredSparseAct
 	case len(c.CompKinds) > 0 || c.CompRateCSA != 0 || c.CompRateHCA != 0 || c.OGroups != 0 || c.OLoraRank != 0:
 		return UncoveredCompressed
 	}
@@ -182,7 +176,10 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		return graph.Facts{}, fmt.Errorf("model: block %d of %s is not covered by the block graph: %s", li, c.Arch, why)
 	}
 	layout := graph.RopeNorm
-	if c.RopeNeox {
+	switch {
+	case c.RopeXD:
+		layout = graph.RopeXD
+	case c.RopeNeox:
 		layout = graph.RopeNeox
 	}
 	inv := m.blockRoles(li)
@@ -261,6 +258,26 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 	if c.MSAAt(li) {
 		d.Select = &graph.Select{Heads: c.IdxHeads, HeadDim: c.IdxHeadDim, TopK: c.IdxTopK, Block: c.IdxBlock, Local: c.IdxLocal}
 	}
+	if c.QSAAt(li) {
+		d.Select = &graph.Select{Heads: c.IdxHeads, HeadDim: c.IdxHeadDim, TopK: c.IdxTopK, Block: c.QSARatio, Pooled: true}
+	}
+	if c.AltUp != 0 {
+		d.AltUp = &graph.AltUp{N: c.Streams(), LaurelRank: inv[jlm.RoleLaurelL].Rows}
+	}
+	if li < c.NSparse {
+		d.SparseStd = float64(c.SparseStd)
+	}
+	if c.Q4E() {
+		d.Streams = &graph.Streams{N: c.HCMult, LowRank: c.HCLowRank}
+		if c.NGramAt(li) {
+			d.NGram = true
+			for _, r := range []jlm.Role{jlm.RoleNGramKey, jlm.RoleNGramValue, jlm.RoleNGramNormKey,
+				jlm.RoleNGramNormQuery, jlm.RoleNGramNormConv, jlm.RoleNGramConv} {
+				sh := inv[r]
+				d.NGramW = append(d.NGramW, graph.Binding{Role: r, K: sh.K, Rows: sh.Rows, Sheets: sh.Sheets})
+			}
+		}
+	}
 	f := graph.Facts{Config: d, Inventory: inv}
 	if c.MoEAt(li) {
 		mf, ok := m.mixtureFacts(li)
@@ -317,7 +334,15 @@ type denseLowering struct {
 	// index: an attention indexer selects the positions attended (OpIndex);
 	// msa: over a GQA row, its key one more cached head (msaKey, msaQuery,
 	// and attendRow's block mask, msaMask).
-	index, msa bool
+	// pooled: QSA's selection (qsaProject, qsaMask) in place of MSA's.
+	index, msa, pooled bool
+	// ngram: the n-gram embedding added into the streams (ngramApply);
+	// hc: the residual is several streams, each sublayer reading its mix
+	// (hcMix) and adding through its placement (hcPlace).
+	ngram, hc bool
+	// alt: AltUp's streams (altPredict, altCorrect); laurel: LAuReL beside
+	// the attention; sparse: the FFN gate's gaussian top-k (gaussTopK).
+	alt, laurel, sparse bool
 	// mixer: a recurrent mixer (linearAttn) in place of the attention;
 	// noFFN: the block ends at the mixer's residual add.
 	mixer, noFFN bool
@@ -364,10 +389,33 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 	// last is the value the op just taken writes.
 	last := func() graph.ValueID { return ops[i-1].Out[0] }
 	lw := &denseLowering{g: g}
+	// The n-gram embedding into the streams, then the attention's read of
+	// them (ngramApply, hcMix).
+	lw.ngram = take(graph.OpNGram, 0)
+	lw.hc = take(graph.OpStreamMix, jlm.RoleHCAttnNorm)
+	// AltUp's prediction: the block runs on the active stream (altPredict).
+	lw.alt = take(graph.OpAltPredict, jlm.RoleAltUpRouterNorm)
+	// resid takes a sublayer's residual add: an add, or with streams the
+	// placement (hcPlace).
+	resid := func() error {
+		if lw.hc {
+			return run([]step{{graph.OpStreamPlace, 0}})
+		}
+		return run([]step{{graph.OpAdd, 0}})
+	}
 	attnIn, ffnPre := g.In[0], graph.ValueID(-1)
+	switch {
+	case lw.hc:
+		attnIn = last()
+	case lw.alt:
+		attnIn = ops[i-1].Out[1]
+	}
 	if preNorm(jlm.RoleAttnNorm) {
 		attnIn = last()
 	}
+	// LAuReL's branch of the normed row (laurel), joined after the
+	// attention's add (laurelJoin).
+	lw.laurel = take(graph.OpLaurel, jlm.RoleLaurelL)
 	// A parallel block's FFN norm, over the block input, before attention.
 	if preNorm(jlm.RoleFFNNorm) {
 		ffnPre = last()
@@ -375,7 +423,8 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 	qa := false
 	// A recurrent mixer beside the attention (Falcon-H1's): the mixer, then
 	// the attention below, the two summed before the residual add.
-	if i+1 < len(ops) && ops[i].Kind == graph.OpRecurrent && ops[i+1].Kind != graph.OpAdd {
+	if i+1 < len(ops) && ops[i].Kind == graph.OpRecurrent && ops[i+1].Kind != graph.OpAdd &&
+		ops[i+1].Kind != graph.OpStreamPlace {
 		i++
 		lw.mixAttn = true
 	}
@@ -383,7 +432,7 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		// A recurrent mixer in place of the attention (linearAttn), added
 		// into the residual; a mixer-only layer ends there.
 		lw.mixer = true
-		if err := run([]step{{graph.OpAdd, 0}}); err != nil {
+		if err := resid(); err != nil {
 			return nil, err
 		}
 		if i == len(ops) {
@@ -487,8 +536,15 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 				lw.qkL2 = true
 			}
 		}
-		if lw.qkPost && !take(graph.OpHeadNorm, jlm.RoleAttnQNorm) {
+		switch {
+		case lw.qkPost && !take(graph.OpHeadNorm, jlm.RoleAttnQNorm):
 			return nil, fail("head_norm of attn_q_norm after the rotary")
+		case !lw.qk && take(graph.OpHeadNorm, jlm.RoleAttnQNorm):
+			// XD-RoPE's: both norms after the rotary.
+			if !lw.kvShared && !take(graph.OpHeadNorm, jlm.RoleAttnKNorm) {
+				return nil, fail("head_norm of attn_k_norm after the rotary")
+			}
+			lw.qk, lw.qkPost = true, true
 		}
 		// Gemma 4's weightless norm over v.
 		if i < len(ops) && ops[i].Kind == graph.OpHeadNorm && len(ops[i].Weight) == 0 {
@@ -504,7 +560,9 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 			return nil, err
 		}
 		lw.prep = prep
-		lw.msa = take(graph.OpIndex, jlm.RoleIdxQ)
+		if lw.msa = take(graph.OpIndex, jlm.RoleIdxQ); lw.msa {
+			lw.pooled = ops[i-1].Attr.Pooled
+		}
 		if err := run([]step{{graph.OpAttend, 0}}); err != nil {
 			return nil, err
 		}
@@ -522,15 +580,24 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 			}
 		}
 		lw.postAttn = take(graph.OpNorm, jlm.RolePostAttnNorm)
-		if err := run([]step{{graph.OpAdd, 0}}); err != nil {
+		if err := resid(); err != nil {
 			return nil, err
+		}
+		if lw.laurel && !take(graph.OpAdd, 0) {
+			return nil, fail("add of LAuReL's join")
 		}
 	}
 	// The FFN's input, by the value its first op reads: its own norm over
 	// the residual (or the residual itself, with no pre-norm), or a parallel
 	// block's -- its own norm of the block input, or the attention's.
 	ffnIn := last()
-	if ffnPre < 0 && preNorm(jlm.RoleFFNNorm) {
+	switch {
+	case lw.hc:
+		if !take(graph.OpStreamMix, jlm.RoleHCFFNNorm) {
+			return nil, fail("the FFN's stream mix")
+		}
+		ffnIn = last()
+	case ffnPre < 0 && preNorm(jlm.RoleFFNNorm):
 		ffnIn = last()
 	}
 	if i >= len(ops) || len(ops[i].In) == 0 {
@@ -608,16 +675,28 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		if err := run([]step{{graph.OpAct, 0}, {graph.OpMatVec, jlm.RoleFFNDown}}); err != nil {
 			return nil, err
 		}
-	} else if err := run([]step{{graph.OpMatVec, jlm.RoleFFNGate}, {graph.OpMatVec, jlm.RoleFFNUp}, {graph.OpActMul, 0},
-		{graph.OpMatVec, jlm.RoleFFNDown}}); err != nil {
-		return nil, err
+	} else {
+		// gate, up, [gauss_top_k of the gate (gaussTopK),] act_mul, down
+		if err := run([]step{{graph.OpMatVec, jlm.RoleFFNGate}, {graph.OpMatVec, jlm.RoleFFNUp}}); err != nil {
+			return nil, err
+		}
+		lw.sparse = take(graph.OpGaussTopK, 0)
+		if err := run([]step{{graph.OpActMul, 0}, {graph.OpMatVec, jlm.RoleFFNDown}}); err != nil {
+			return nil, err
+		}
 	}
 	lw.postFFN = take(graph.OpNorm, jlm.RolePostFFNNorm)
 	if lw.mix && lw.postFFN {
 		return nil, fail("a mixture with no norm after it (moe adds into the residual itself)")
 	}
-	if err := run([]step{{graph.OpAdd, 0}}); err != nil {
+	if err := resid(); err != nil {
 		return nil, err
+	}
+	// AltUp's correction, the per-layer input inside it (altCorrect).
+	if lw.alt {
+		if len(g.In) != 2 || !take(graph.OpAltCorrect, jlm.RoleAltUpRouterNorm) {
+			return nil, fail("alt_correct of the block's output and the per-layer input")
+		}
 	}
 	// Gemma 4's per-layer embedding (pleApply): gate, act_mul with the
 	// block's second input, projection, norm, add.
@@ -730,7 +809,14 @@ func (m *Model) buildGraphs() error {
 		if lw.index != (lw.mla && m.Cfg.Indexer()) {
 			return fmt.Errorf("model: block %d graph's indexer is %v, the configuration's is not", li, lw.index)
 		}
-		if lw.msa != m.Cfg.MSAAt(li) {
+		if lw.alt != (m.Cfg.AltUp != 0) || lw.laurel != lw.alt || lw.sparse != (li < m.Cfg.NSparse) {
+			return fmt.Errorf("model: block %d graph's AltUp (%v, LAuReL %v, sparse %v) is not the configuration's",
+				li, lw.alt, lw.laurel, lw.sparse)
+		}
+		if lw.hc != m.Cfg.Q4E() || lw.ngram != m.Cfg.NGramAt(li) {
+			return fmt.Errorf("model: block %d graph's streams (%v, n-gram %v) are not the configuration's", li, lw.hc, lw.ngram)
+		}
+		if lw.msa != (m.Cfg.MSAAt(li) || m.Cfg.QSAAt(li)) {
 			return fmt.Errorf("model: block %d graph's block selection is %v, the configuration's is not", li, lw.msa)
 		}
 		if lw.ple != (m.Cfg.PLEDim != 0 && m.Cfg.AltUp == 0) {
@@ -847,8 +933,34 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 	c, m := s.c, s.m
 	s.graphRuns++
 	s.pathOf(li).Graph++
-	// norm(x) -> attn_in [, a parallel block's FFN input]
-	s.norm(s.h, s.x, l.attnNorm, l.attnNormB)
+	// [ngram,] [stream_mix,] norm(x) -> attn_in [, a parallel block's FFN
+	// input]
+	attnIn := s.x
+	if lw.ngram {
+		tok := s.tok
+		if err := s.ngramApply(li, l, s.xa, 1, nil, func(int) (*State, int) { return s, 0 },
+			func(int) int32 { return tok }); err != nil {
+			return err
+		}
+	}
+	if lw.hc {
+		if err := s.hcMix(s.xa, 1, &l.q4e.attn); err != nil {
+			return err
+		}
+		attnIn = s.q4.mix[:c.NEmbd]
+	}
+	// alt_predict: the active stream into stream 0, s.x.
+	if lw.alt {
+		if err := s.altPredict(l, s.xa, s.altPred, 1); err != nil {
+			return err
+		}
+	}
+	s.norm(s.h, attnIn, l.attnNorm, l.attnNormB)
+	if lw.laurel {
+		if err := s.laurel(l, s.h, s.altLaur); err != nil {
+			return err
+		}
+	}
 	if lw.par {
 		if lw.shared {
 			copy(s.hf, s.h)
@@ -871,7 +983,7 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 			return err
 		}
 		m.trace(li, "ssm_out", s.h)
-		s.addInto(s.x, s.h)
+		s.graphResid(lw, s.h)
 		m.trace(li, "attn_resid", s.x)
 		if lw.noFFN {
 			return nil
@@ -923,19 +1035,26 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 			}
 			s.addBias(s.vc, l.bv)
 		}
-		// index's key and query (MiniMax Sparse Attention): the key rides
-		// the appended row as one more kv head, its value zero (msa.go).
+		// index's key and query (MiniMax Sparse Attention's, or QSA's raw
+		// key padded to a head): the key rides the appended row as one more
+		// kv head, its value zero (msa.go, qsa.go).
 		kvr := kvd
 		if lw.msa {
 			kvr = c.KVRowAt(li)
 			cs := s.ropeTable(li, s.cs, s.csSWA, 0)
-			if err := s.msaKey(s.kc[kvd:kvr], l, s.h, cs); err != nil {
-				return err
+			if lw.pooled {
+				if err := s.qsaProject(s.kc[kvd:kvr], s.qsa().q, l, s.h, cs); err != nil {
+					return err
+				}
+			} else {
+				if err := s.msaKey(s.kc[kvd:kvr], l, s.h, cs); err != nil {
+					return err
+				}
+				if err := s.msaQuery(s.msaQ, l, s.h, cs); err != nil {
+					return err
+				}
 			}
 			clear(s.vc[kvd:kvr])
-			if err := s.msaQuery(s.msaQ, l, s.h, cs); err != nil {
-				return err
-			}
 		}
 		// [head_norm q, head_norm k,] rope q, rope k, kv_append: attnPrep
 		s.runPrep(l, lw.prep, s.q[:c.QDimAt(li)], s.kc[:kvr], s.vc[:kvr], s.ropeTable(li, s.cs, s.csSWA, 0), li, 0, s.pos)
@@ -951,7 +1070,7 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 			s.jit.NewInput()
 			src = s.ogate
 		}
-		plain := s.residFold && l.bo == nil && !lw.postAttn && !lw.mixAttn
+		plain := s.residFold && l.bo == nil && !lw.postAttn && !lw.mixAttn && !lw.hc && !lw.laurel
 		if plain {
 			s.grp.Resid, s.grp.Alpha = s.x, float32(c.ResidualScale)
 		}
@@ -973,10 +1092,89 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 		s.rmsnorm(s.h, s.h, l.postAttnNorm, c.RMSEps)
 	}
 	if !attnResid {
-		s.addInto(s.x, s.h)
+		s.graphResid(lw, s.h)
+	}
+	if lw.laurel {
+		s.laurelJoin(s.x, s.altLaur)
 	}
 	m.trace(li, "attn_resid", s.x)
 	return s.graphFFN(li, l, lw)
+}
+
+// selectRows projects every row's indexer key and query for a selecting
+// block: MSA's (msaProjectRows) or QSA's (qsaProjectRows).
+func (s *State) selectRows(lw *denseLowering, l *layer, n int, cs, csSWA []float32, li int) error {
+	switch {
+	case !lw.msa:
+		return nil
+	case lw.pooled:
+		return s.qsaProjectRows(l, n, cs, csSWA, li)
+	}
+	return s.msaProjectRows(l, n, cs, csSWA, li)
+}
+
+// selectRowOf is row i's cache vectors for a selecting block, its indexer
+// key one more head (msaRowOf, qsaRowOf).
+func (s *State) selectRowOf(lw *denseLowering, li, i int, k, v []float32) ([]float32, []float32) {
+	if lw.pooled {
+		return s.qsaRowOf(li, i, k, v)
+	}
+	return s.msaRowOf(li, i, k, v)
+}
+
+// altPredictRows is AltUp's prologue over n rows in s.bx: the active stream
+// into stream 0, where the block runs (altPredict).
+func (s *State) altPredictRows(l *layer, lw *denseLowering, n int) error {
+	if !lw.alt {
+		return nil
+	}
+	return s.altPredict(l, s.bx[:n*s.c.ResidW()], s.baltPred, n)
+}
+
+// laurelRows is LAuReL's branch of each of n rows' normed input in s.bh,
+// into baltLaur (laurel).
+func (s *State) laurelRows(l *layer, lw *denseLowering, n int) error {
+	if !lw.laurel {
+		return nil
+	}
+	ne := s.c.NEmbd
+	for r := 0; r < n; r++ {
+		if err := s.laurel(l, s.bh[r*ne:(r+1)*ne], s.baltLaur[r*ne:(r+1)*ne]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// rowsResid adds n rows' sublayer output y into the residual rows in s.bx:
+// an add, or with streams the placement (hcPlace).
+func (s *State) rowsResid(lw *denseLowering, y []float32, n int) {
+	if lw.hc {
+		s.hcPlace(s.bx[:n*s.c.ResidW()], n, y)
+		return
+	}
+	ne := s.c.NEmbd
+	s.addInto(s.bx[:n*ne], y[:n*ne])
+}
+
+// mixOp is the index of the block's first stream mix.
+func (lw *denseLowering) mixOp() int {
+	for i, o := range lw.g.Ops {
+		if o.Kind == graph.OpStreamMix || o.Kind == graph.OpAltPredict {
+			return i
+		}
+	}
+	return -1
+}
+
+// graphResid adds a decode sublayer's output y into the residual: an add,
+// or with streams the placement at the weights its mix left (hcPlace).
+func (s *State) graphResid(lw *denseLowering, y []float32) {
+	if lw.hc {
+		s.hcPlace(s.xa, 1, y)
+		return
+	}
+	s.addInto(s.x, y)
 }
 
 // graphFFN is the second half of block li's host decode through its
@@ -988,9 +1186,16 @@ func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
 	// norm -> gate, up -> act_mul -> down, add into the residual; a
 	// parallel block's FFN reads the input normed above.
 	ffnIn := s.h
-	if lw.par {
+	switch {
+	case lw.par:
 		ffnIn = s.hf
-	} else {
+	case lw.hc:
+		// stream_mix: the FFN reads the mix with no norm.
+		if err := s.hcMix(s.xa, 1, &l.q4e.ffn); err != nil {
+			return err
+		}
+		copy(s.h, s.q4.mix[:c.NEmbd])
+	default:
 		s.norm(s.h, s.x, l.ffnNorm, l.ffnNormB)
 	}
 	s.jit.NewInput()
@@ -1015,14 +1220,23 @@ func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
 		// matvec and the route kernel); gather, the experts' gate, up,
 		// act_mul and down, and combine (one grouped region); [the shared
 		// expert's matvecs, act_mul and gate_scalar, and its add].
+		// With streams the mixture's sum is placed (stream_place).
+		dst := s.x
+		if lw.hc {
+			dst = s.q4.out[:c.NEmbd]
+			clear(dst)
+		}
 		if err := s.moeRoute(li, l, ffnIn, ffnIn); err != nil {
 			return err
 		}
-		if err := s.moeExperts(li, l, ffnIn, s.x); err != nil {
+		if err := s.moeExperts(li, l, ffnIn, dst); err != nil {
 			return err
 		}
-		if err := s.sharedExpert(l, ffnIn, s.x); err != nil {
+		if err := s.sharedExpert(l, ffnIn, dst); err != nil {
 			return err
+		}
+		if lw.hc {
+			s.hcPlace(s.xa, 1, dst)
 		}
 		s.layerOutScale(l, s.x)
 		m.trace(li, "ffn_resid", s.x)
@@ -1043,7 +1257,7 @@ func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
 		if lw.postFFN {
 			s.rmsnorm(s.h, s.h, l.postFFNNorm, c.RMSEps)
 		}
-		s.addInto(s.x, s.h)
+		s.graphResid(lw, s.h)
 		s.layerOutScale(l, s.x)
 		m.trace(li, "ffn_resid", s.x)
 		return nil
@@ -1061,7 +1275,7 @@ func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
 	}
 	s.gaussTopK(li, gate, ff)
 	s.grp.ActUp, s.grp.Act = up, act
-	if s.residFold && !lw.postFFN {
+	if s.residFold && !lw.postFFN && !lw.hc {
 		s.grp.Resid, s.grp.Alpha = s.x, float32(c.ResidualScale)
 	}
 	s.aheadNext(li)
@@ -1079,10 +1293,16 @@ func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
 		s.rmsnorm(s.h, s.h, l.postFFNNorm, c.RMSEps)
 	}
 	if !ffnResid {
-		s.addInto(s.x, s.h)
+		s.graphResid(lw, s.h)
 	}
 	if lw.ple {
 		if err := s.pleApply(li, l, s.x, s.ple); err != nil {
+			return err
+		}
+	}
+	// alt_correct, the per-layer input inside it.
+	if lw.alt {
+		if err := s.altCorrect(li, l, s.xa, s.altPred, s.ple, 1); err != nil {
 			return err
 		}
 	}
@@ -1103,9 +1323,33 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, base, p0, n
 	s.graphChunkRuns++
 	s.pathOf(li).Graph++
 	ne := c.NEmbd
-	// norm(x) -> attn_in, every row
+	// [ngram,] [stream_mix,] norm(x) -> attn_in, every row
 	tn := s.tick()
-	s.batchNormB(s.bh, s.bx, l.attnNorm, l.attnNormB, ne, n)
+	attnIn := s.bx
+	if lw.hc {
+		s.growQ4E(n)
+		x := s.bx[:n*c.ResidW()]
+		if lw.ngram {
+			if s.rows != nil {
+				s.rows.ngBase = base
+			}
+			if err := s.ngramApply(li, l, x, n, nil, func(int) (*State, int) { return s, slot },
+				func(i int) int32 { return s.q4.rid[i] }); err != nil {
+				return err
+			}
+		}
+		if err := s.hcMix(x, n, &l.q4e.attn); err != nil {
+			return err
+		}
+		attnIn = s.q4.mix
+	}
+	if err := s.altPredictRows(l, lw, n); err != nil {
+		return err
+	}
+	s.batchNormB(s.bh, attnIn, l.attnNorm, l.attnNormB, ne, n)
+	if err := s.laurelRows(l, lw, n); err != nil {
+		return err
+	}
 	s.parallelIn(l, lw, n)
 	s.tock(opRMSNorm, tn)
 	if lw.mixer {
@@ -1144,18 +1388,16 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, base, p0, n
 	if err := s.kvRows(l, lw, s.bh[:n*ne], n, kvDim); err != nil {
 		return err
 	}
-	// index's keys and queries, every row's (msa.go).
-	if lw.msa {
-		if err := s.msaProjectRows(l, n, s.bcs, s.bcsSWA, li); err != nil {
-			return err
-		}
+	// index's keys and queries, every row's (msa.go, qsa.go).
+	if err := s.selectRows(lw, l, n, s.bcs, s.bcsSWA, li); err != nil {
+		return err
 	}
 	// [head_norm q, head_norm k,] rope q, rope k, kv_append: every row's,
 	// before any row attends (a row attends to the chunk's earlier rows).
 	for i := 0; i < n; i++ {
 		k, v := s.bk[i*kvDim:(i+1)*kvDim], s.bv[i*kvDim:(i+1)*kvDim]
 		if lw.msa {
-			k, v = s.msaRowOf(li, i, k, v)
+			k, v = s.selectRowOf(lw, li, i, k, v)
 		}
 		s.runPrep(l, lw.prep, s.bq[i*qDim:(i+1)*qDim], k, v, s.ropeTable(li, s.bcs, s.bcsSWA, i), li, slot, p0+i)
 	}
@@ -1180,14 +1422,35 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, base, p0, n
 // dense subset of rowsHost's block body, in its order, so the kernels and
 // their order are the hand-written step's. Every row's rotary and cache write
 // lands before any row attends, as in graphRows.
-func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, seq, pos []int, cs, csSWA []float32, unitHeads, units, astride int, scale float64) error {
+func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, tokens []int32, seq, pos []int, cs, csSWA []float32, unitHeads, units, astride int, scale float64) error {
 	c := s.c
 	s.graphRaggedRuns++
 	s.pathOf(li).Graph++
 	ne := c.NEmbd
-	// norm(x) -> attn_in, every row
+	// [ngram,] [stream_mix,] norm(x) -> attn_in, every row: the n-gram in
+	// each sequence's position order.
 	t0 := s.tick()
-	s.batchNormB(s.bh, s.bx, l.attnNorm, l.attnNormB, ne, n)
+	attnIn := s.bx
+	if lw.hc {
+		x := s.bx[:n*c.ResidW()]
+		if lw.ngram {
+			if err := s.ngramApply(li, l, x, n, s.rowCausal[:n], func(i int) (*State, int) { return s.rowOwner(i, seq) },
+				func(i int) int32 { return tokens[i] }); err != nil {
+				return err
+			}
+		}
+		if err := s.hcMix(x, n, &l.q4e.attn); err != nil {
+			return err
+		}
+		attnIn = s.q4.mix
+	}
+	if err := s.altPredictRows(l, lw, n); err != nil {
+		return err
+	}
+	s.batchNormB(s.bh, attnIn, l.attnNorm, l.attnNormB, ne, n)
+	if err := s.laurelRows(l, lw, n); err != nil {
+		return err
+	}
 	s.parallelIn(l, lw, n)
 	s.tock(opRMSNorm, t0)
 	if lw.mixer {
@@ -1225,18 +1488,16 @@ func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, seq, pos
 	if err := s.kvRows(l, lw, s.bh, n, kvDim); err != nil {
 		return err
 	}
-	// index's keys and queries, every row's (msa.go).
-	if lw.msa {
-		if err := s.msaProjectRows(l, n, cs, csSWA, li); err != nil {
-			return err
-		}
+	// index's keys and queries, every row's (msa.go, qsa.go).
+	if err := s.selectRows(lw, l, n, cs, csSWA, li); err != nil {
+		return err
 	}
 	// [head_norm q, head_norm k,] rope q, rope k, kv_append: each row at its
 	// owner's slot and position
 	for i := 0; i < n; i++ {
 		k, v := s.bk[i*kvDim:(i+1)*kvDim], s.bv[i*kvDim:(i+1)*kvDim]
 		if lw.msa {
-			k, v = s.msaRowOf(li, i, k, v)
+			k, v = s.selectRowOf(lw, li, i, k, v)
 		}
 		o, slot := s.rowOwner(i, seq)
 		o.runPrep(l, lw.prep, s.bq[i*qDim:(i+1)*qDim], k, v, s.ropeTable(li, cs, csSWA, i), li, slot, pos[i])
@@ -1274,7 +1535,10 @@ func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged 
 		s.tock(opRMSNorm, tn)
 	}
 	tr := s.tick()
-	s.addInto(s.bx[:n*ne], s.bh[:n*ne])
+	s.rowsResid(lw, s.bh, n)
+	if lw.laurel {
+		s.laurelJoin(s.bx[:n*ne], s.baltLaur[:n*ne])
+	}
 	s.tock(opResid, tr)
 	// A mixer-only layer ends at the first residual.
 	if lw.noFFN {
@@ -1283,10 +1547,17 @@ func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged 
 	// norm -> gate, up -> act_mul -> down, add into the residual
 	tn := s.tick()
 	ffnIn := s.bh
-	if lw.par {
+	switch {
+	case lw.par:
 		ffnIn = s.bhf
 		s.jit.NewInput()
-	} else {
+	case lw.hc:
+		// stream_mix: the FFN reads the mix with no norm.
+		if err := s.hcMix(s.bx[:n*c.ResidW()], n, &l.q4e.ffn); err != nil {
+			return err
+		}
+		copy(s.bh[:n*ne], s.q4.mix[:n*ne])
+	default:
 		s.batchNormB(s.bh, s.bx, l.ffnNorm, l.ffnNormB, ne, n)
 	}
 	s.tock(opRMSNorm, tn)
@@ -1307,14 +1578,23 @@ func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged 
 		// row's route, then the experts expert-major, then the shared
 		// expert per row, into the residual; on a ragged step each row its
 		// own sequence's experts.
+		// With streams the mixture's sum is placed (stream_place).
+		dst := s.bx
+		if lw.hc {
+			dst = s.q4.out[:n*ne]
+			clear(dst)
+		}
 		if err := s.moeRouteRows(li, l, ffnIn, n); err != nil {
 			return err
 		}
-		if err := s.moeExpertsRows(li, l, ffnIn, s.bx, n); err != nil {
+		if err := s.moeExpertsRows(li, l, ffnIn, dst, n); err != nil {
 			return err
 		}
-		if err := s.sharedExpertRows(l, ffnIn, s.bx, n); err != nil {
+		if err := s.sharedExpertRows(l, ffnIn, dst, n); err != nil {
 			return err
+		}
+		if lw.hc {
+			s.hcPlace(s.bx[:n*c.ResidW()], n, dst)
 		}
 		s.layerOutScale(l, s.bx[:n*ne])
 		return nil
@@ -1359,10 +1639,15 @@ func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged 
 		s.tock(opRMSNorm, tn)
 	}
 	tr = s.tick()
-	s.addInto(s.bx[:n*ne], s.bh[:n*ne])
+	s.rowsResid(lw, s.bh, n)
 	s.tock(opResid, tr)
 	if lw.ple {
 		if err := s.pleRows(li, l, s.bx, n); err != nil {
+			return err
+		}
+	}
+	if lw.alt {
+		if err := s.altCorrect(li, l, s.bx[:n*c.ResidW()], s.baltPred, s.bple, n); err != nil {
 			return err
 		}
 	}
@@ -1394,7 +1679,11 @@ func (s *State) parallelIn(l *layer, lw *denseLowering, n int) {
 // block operations and keep planFor's values.
 func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
 	g := lw.g
+	// The block's row: the input, or a stream's of a residual of several.
 	p.NEmbd = g.Values[g.In[0]].Width
+	if lw.hc || lw.alt {
+		p.NEmbd /= lw.g.Ops[lw.mixOp()].Attr.Streams
+	}
 	// A recurrent block runs no q/k norm, but the tier bakes one shape per
 	// model, so a mixer block keeps planFor's: the attention blocks' shape.
 	if !lw.mixer {
@@ -1529,6 +1818,13 @@ var hostLowering = map[graph.OpKind]struct {
 	graph.OpAttendLatent: {"absorbed (mla-absorb): attendRow / the chunk's attention over the latent rows, then mlaOutProject's un-absorb", false},
 	graph.OpScale:        {"the generated scale kernel (layerOutScale)", true},
 	graph.OpIndex:        {"mlaProject's indexer key and query (idxKey, idxQuery), then attendRow's top-k mask over the scores (idxMask)", false},
+	graph.OpStreamMix:    {"hcMix: the streams' norm, the low-rank sigmoid gate, the mean and the placement weights (generated kernels)", false},
+	graph.OpStreamPlace:  {"hcPlace: the output added into every stream at its weight (generated axpy)", true},
+	graph.OpNGram:        {"ngramApply: the hashed rows read from the table, the projections, the gate and the convolution", false},
+	graph.OpAltPredict:   {"altPredict: the router over the active stream's norm and the predictions (generated kernels)", false},
+	graph.OpAltCorrect:   {"altCorrect: the correction and the per-layer input into the streams (generated kernels)", false},
+	graph.OpLaurel:       {"laurel: the low-rank pair, its norm and the add (generated)", false},
+	graph.OpGaussTopK:    {"gaussTopK: the generated gaussian top-k over each gate row", true},
 	graph.OpRecurrent:    {"linearAttn: the recurrent mixer as one routine (mixerChunk, mixerRagged over rows)", false},
 }
 

@@ -127,10 +127,45 @@ const (
 	// positions by their best score with the Local ending at the query's
 	// forced in.
 	OpIndex
+	// OpStreamMix is a sublayer's read of a residual of Streams streams
+	// (In[0], stream-major): Out[0] the sublayer's input row and, with a
+	// placement, Out[1] the Streams weights OpStreamPlace adds its output
+	// into each stream at (Qwen3.8-Flash-Next's low-rank gated
+	// hyper-connection: the streams normed, gated by a low-rank sigmoid and
+	// averaged; the placement 2*sigmoid of a projection). Opaque in this
+	// version, its weights all bound by it.
+	OpStreamMix
+	// OpStreamPlace adds a sublayer's output row (In[1]) into every stream
+	// of the residual (In[0]) at the weights In[2]: Out[0].
+	OpStreamPlace
+	// OpNGram adds the n-gram embedding into every stream of the residual
+	// (In[0]): the row's token and the NGram-1 before it, hashed into table
+	// rows, projected, gated per stream and convolved over the stream's
+	// history. It reads and writes the ngram state (the earlier tokens and
+	// the convolution's history). Opaque in this version.
+	OpNGram
+	// OpAltPredict is AltUp's block prologue over Streams streams (In[0],
+	// stream-major; Gemma 3n's): a router over the active stream's norm
+	// weighs the stored coefficients into each stream's prediction, Out[0]
+	// every stream's, Out[1] the active one the block runs on. Opaque in
+	// this version.
+	OpAltPredict
+	// OpAltCorrect is AltUp's epilogue: every prediction (In[0]) corrected
+	// by what the block did to the active stream (In[1], its output), and
+	// the per-layer input (In[2]) gated from the corrected active stream into
+	// the others: Out[0] the streams. Opaque in this version.
+	OpAltCorrect
+	// OpLaurel is LAuReL's branch of the attention's normed input (In[0]):
+	// In[0] + norm(R(L(In[0]))), joined to the attention's residual by an
+	// add scaled by 1/sqrt(2).
+	OpLaurel
+	// OpGaussTopK keeps the FFN gate's values above its mean plus Bound
+	// standard deviations, the rest zero (Gemma 3n's activation sparsity).
+	OpGaussTopK
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -147,6 +182,10 @@ const (
 	RopeNorm RopeLayout = iota + 1
 	// RopeNeox pairs (i, i+NRot/2).
 	RopeNeox
+	// RopeXD pairs as NEOX does, each ELEMENT turned by its own coordinate
+	// (HunyuanVL's XD-RoPE: sequence, column, row and picture), so a pair's
+	// halves may turn by different angles.
+	RopeXD
 )
 
 func (l RopeLayout) String() string {
@@ -155,6 +194,8 @@ func (l RopeLayout) String() string {
 		return "norm"
 	case RopeNeox:
 		return "neox"
+	case RopeXD:
+		return "xd"
 	}
 	return fmt.Sprintf("layout%d", l)
 }
@@ -259,8 +300,13 @@ type Attrs struct {
 	Bound float64
 	// Offset and Width are OpSlice's.
 	Offset, Width int
-	// Block and Local are a block-selecting OpIndex's (Dense.Select).
+	// Block and Local are a block-selecting OpIndex's (Dense.Select);
+	// Pooled is QSA's (the key the raw projection, each complete block
+	// pooled).
 	Block, Local int
+	Pooled       bool
+	// Streams is OpStreamMix's and OpStreamPlace's stream count.
+	Streams int
 }
 
 // Op is one operation.

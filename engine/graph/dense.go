@@ -118,13 +118,54 @@ type Dense struct {
 	// Select, where set, is the attention's block selection (OpIndex over a
 	// GQA row: MiniMax Sparse Attention).
 	Select *Select
+	// Streams, where set, makes the residual several streams (In[0]
+	// Streams.N rows of NEmbd, stream-major): each sublayer reads its
+	// OpStreamMix in place of its input norm's input (the FFN reads the mix
+	// with no norm) and adds through OpStreamPlace.
+	Streams *Streams
+	// NGram, where set, adds the n-gram embedding into the streams first
+	// (OpNGram), binding NGramW.
+	NGram  bool
+	NGramW []Binding
+	// AltUp, where set, is Gemma 3n's residual of AltUp streams: the block
+	// runs on the active stream OpAltPredict reads out, with LAuReL beside
+	// its attention, and OpAltCorrect (carrying the per-layer input, PLEDim
+	// wide) writes the streams back.
+	AltUp *AltUp
+	// SparseStd, where not 0, sparsifies the FFN's gate (OpGaussTopK).
+	SparseStd float64
 }
+
+// AltUp is the stream count and LAuReL's rank.
+type AltUp struct {
+	N, LaurelRank int
+}
+
+// Streams is a residual of N streams mixed per sublayer by a low-rank gated
+// hyper-connection of rank LowRank.
+type Streams struct {
+	N, LowRank int
+}
+
+// mix binds a hyper-connection's weights: its norm, the low-rank pair and
+// the placement.
+func (x *Streams) mix(nEmbd int, norm, down, up, inj jlm.Role) []Binding {
+	hd := x.N * nEmbd
+	return []Binding{{Role: norm, K: hd}, {Role: down, K: hd, Rows: x.LowRank}, {Role: up, K: x.LowRank, Rows: hd},
+		{Role: inj, K: hd, Rows: x.N}}
+}
+
+// LaurelJoin is the scale of LAuReL's join: (x + laurel) / sqrt(2).
+const LaurelJoin = 0.7071067811865476
 
 // Select is a block-selecting indexer's geometry: Heads heads (one a kv
 // group) of HeadDim, the TopK best blocks of Block positions kept with the
 // Local ending at the query's forced in.
 type Select struct {
 	Heads, HeadDim, TopK, Block, Local int
+	// Pooled is QSA's selection: the key the raw projection, each complete
+	// block's keys pooled, normed and turned at its start.
+	Pooled bool
 }
 
 // bindings are the selection's weights over a row of nEmbd.
@@ -137,8 +178,50 @@ func (x *Select) bindings(nEmbd int) []Binding {
 func (d *Dense) Build() *Graph {
 	g := &Graph{Version: Version, Block: d.Block}
 	qd, kvd := d.NHead*d.HeadDim, d.NKVHead*d.HeadDim
-	x := g.value("x", d.NEmbd)
+	rw := d.NEmbd
+	if d.Streams != nil {
+		rw = d.Streams.N * d.NEmbd
+	}
+	if d.AltUp != nil {
+		rw = d.AltUp.N * d.NEmbd
+	}
+	x := g.value("x", rw)
 	g.In = []ValueID{x}
+	pred := ValueID(-1)
+	if a := d.AltUp; a != nil {
+		pred, x = g.value("alt_pred", rw), g.value("alt_active", d.NEmbd)
+		g.op(Op{Kind: OpAltPredict, In: []ValueID{g.In[0]}, Out: []ValueID{pred, x},
+			Weight: []Binding{{Role: jlm.RoleAltUpRouterNorm, K: d.NEmbd}, {Role: jlm.RoleAltUpRouter, K: d.NEmbd, Rows: a.N},
+				{Role: jlm.RoleAltUpPredCoef, K: a.N * a.N, Rows: a.N}}, Attr: Attrs{Streams: a.N, Eps: d.Eps}})
+	}
+	if d.NGram {
+		xn := g.value("x_ngram", rw)
+		g.op(Op{Kind: OpNGram, In: []ValueID{x}, Out: []ValueID{xn}, Weight: d.NGramW,
+			Reads: []StateRef{{"ngram", 0}}, Writes: []StateRef{{"ngram", 1}}, Attr: Attrs{Streams: d.Streams.N}})
+		x = xn
+	}
+	// mixOf is a sublayer's read of the streams (OpStreamMix): its row and
+	// its placement weights; without streams the residual itself.
+	mixOf := func(name string, in ValueID, norm, down, up, inj jlm.Role) (ValueID, ValueID) {
+		if d.Streams == nil {
+			return in, -1
+		}
+		row, w := g.value(name, d.NEmbd), g.value(name+"_place", d.Streams.N)
+		g.op(Op{Kind: OpStreamMix, In: []ValueID{in}, Out: []ValueID{row, w},
+			Weight: d.Streams.mix(d.NEmbd, norm, down, up, inj), Attr: Attrs{Streams: d.Streams.N, Eps: d.Eps}})
+		return row, w
+	}
+	// resid adds a sublayer's output y into the residual in: an add, or
+	// with streams a placement at w.
+	resid := func(name string, in, y, w ValueID) ValueID {
+		out := g.value(name, g.Values[in].Width)
+		if d.Streams != nil {
+			g.op(Op{Kind: OpStreamPlace, In: []ValueID{in, y, w}, Out: []ValueID{out}, Attr: Attrs{Streams: d.Streams.N}})
+		} else {
+			g.op(Op{Kind: OpAdd, In: []ValueID{in, y}, Out: []ValueID{out}, Attr: Attrs{Alpha: d.ResidScale}})
+		}
+		return out
+	}
 	vec := func(r jlm.Role, n int) Binding { return Binding{Role: r, K: n} }
 	mat := func(r jlm.Role, k, rows int) Binding { return Binding{Role: r, K: k, Rows: rows} }
 	norm := func(name string, in ValueID, w jlm.Role) ValueID {
@@ -194,7 +277,15 @@ func (d *Dense) Build() *Graph {
 		return 0
 	}
 
-	h := preNorm("attn_in", x, jlm.RoleAttnNorm, jlm.RoleAttnNormBias)
+	xa, wa := mixOf("attn_mix", x, jlm.RoleHCAttnNorm, jlm.RoleHCAttnDown, jlm.RoleHCAttnUp, jlm.RoleHCAttnInject)
+	h := preNorm("attn_in", xa, jlm.RoleAttnNorm, jlm.RoleAttnNormBias)
+	lr := ValueID(-1)
+	if a := d.AltUp; a != nil {
+		lr = g.value("laurel", d.NEmbd)
+		g.op(Op{Kind: OpLaurel, In: []ValueID{h}, Out: []ValueID{lr}, Weight: []Binding{
+			{Role: jlm.RoleLaurelL, K: d.NEmbd, Rows: a.LaurelRank}, {Role: jlm.RoleLaurelR, K: a.LaurelRank, Rows: d.NEmbd},
+			{Role: jlm.RoleLaurelPostNorm, K: d.NEmbd}}, Attr: Attrs{Eps: d.Eps}})
+	}
 	hf := h
 	var x1 ValueID
 	// A recurrent mixer, in place of the attention or (MixerAttends)
@@ -207,9 +298,7 @@ func (d *Dense) Build() *Graph {
 			Reads: []StateRef{{"rec", 0}}, Writes: []StateRef{{"rec", 1}}, Attr: Attrs{Mixer: d.Mixer}})
 	}
 	if d.Mixer != 0 && !d.MixerAttends {
-		r := mixer
-		x1 = g.value("x_mixer", d.NEmbd)
-		g.op(Op{Kind: OpAdd, In: []ValueID{x, r}, Out: []ValueID{x1}, Attr: Attrs{Alpha: d.ResidScale}})
+		x1 = resid("x_mixer", x, mixer, wa)
 		if d.NoFFN {
 			g.Out = []ValueID{x1}
 			return g
@@ -264,8 +353,11 @@ func (d *Dense) Build() *Graph {
 				return out
 			}
 			kn := !d.KVShared
+			// Under XD-RoPE k's norm follows the rotary too: that rotation
+			// does not keep a head's RMS.
+			xd := d.Layout == RopeXD
 			if d.QKNorm && d.QKNormPost {
-				if kn {
+				if kn && !xd {
 					k = hn("k_normed", k, jlm.RoleAttnKNorm)
 				}
 			} else if d.QKNorm {
@@ -301,6 +393,9 @@ func (d *Dense) Build() *Graph {
 			}
 			if d.QKNorm && d.QKNormPost {
 				qr = hn("q_normed", qr, jlm.RoleAttnQNorm)
+				if kn && xd {
+					kr = hn("k_normed", kr, jlm.RoleAttnKNorm)
+				}
 			}
 			kv := StateRef{"kv", 1}
 			if d.KVShared {
@@ -316,7 +411,7 @@ func (d *Dense) Build() *Graph {
 				sel := g.value("idx_sel", x.TopK)
 				g.op(Op{Kind: OpIndex, In: []ValueID{h}, Out: []ValueID{sel}, Weight: x.bindings(d.NEmbd),
 					Reads: []StateRef{{"kv", 1}}, Writes: []StateRef{{"kv", 2}},
-					Attr: Attrs{NHead: x.Heads, HeadDim: x.HeadDim, TopK: x.TopK, Block: x.Block, Local: x.Local}})
+					Attr: Attrs{NHead: x.Heads, HeadDim: x.HeadDim, TopK: x.TopK, Block: x.Block, Local: x.Local, Pooled: x.Pooled}})
 				kv = StateRef{"kv", 2}
 				ain = append(ain, sel)
 			}
@@ -343,12 +438,20 @@ func (d *Dense) Build() *Graph {
 		if d.PostNorm {
 			o = norm("attn_post", o, jlm.RolePostAttnNorm)
 		}
-		x1 = g.value("x_attn", d.NEmbd)
-		g.op(Op{Kind: OpAdd, In: []ValueID{x, o}, Out: []ValueID{x1}, Attr: Attrs{Alpha: d.ResidScale}})
+		x1 = resid("x_attn", x, o, wa)
+		if lr >= 0 {
+			xl := g.value("x_laurel", d.NEmbd)
+			g.op(Op{Kind: OpAdd, In: []ValueID{x1, lr}, Out: []ValueID{xl}, Attr: Attrs{Scale: LaurelJoin}})
+			x1 = xl
+		}
 	}
 
 	f := hf
-	if !d.Parallel {
+	var wf ValueID = -1
+	switch {
+	case d.Streams != nil:
+		f, wf = mixOf("ffn_mix", x1, jlm.RoleHCFFNNorm, jlm.RoleHCFFNDown, jlm.RoleHCFFNUp, jlm.RoleHCFFNInject)
+	case !d.Parallel:
 		f = preNorm("ffn_in", x1, jlm.RoleFFNNorm, jlm.RoleFFNNormBias)
 	}
 	var dn ValueID
@@ -379,6 +482,11 @@ func (d *Dense) Build() *Graph {
 	} else {
 		gt := mv("gate", f, jlm.RoleFFNGate, d.NFFN, 0)
 		up := mv("up", f, jlm.RoleFFNUp, d.NFFN, 0)
+		if d.SparseStd != 0 {
+			gs := g.value("gate_sparse", d.NFFN)
+			g.op(Op{Kind: OpGaussTopK, In: []ValueID{gt}, Out: []ValueID{gs}, Attr: Attrs{Bound: d.SparseStd}})
+			gt = gs
+		}
 		p := g.value("act", d.NFFN)
 		g.op(Op{Kind: OpActMul, In: []ValueID{gt, up}, Out: []ValueID{p}, Attr: Attrs{Act: d.Act}})
 		dn = mv("ffn_out", p, jlm.RoleFFNDown, d.NEmbd, 0)
@@ -386,21 +494,30 @@ func (d *Dense) Build() *Graph {
 	if d.PostNorm {
 		dn = norm("ffn_post", dn, jlm.RolePostFFNNorm)
 	}
-	x2 := g.value("x_out", d.NEmbd)
-	g.op(Op{Kind: OpAdd, In: []ValueID{x1, dn}, Out: []ValueID{x2}, Attr: Attrs{Alpha: d.ResidScale}})
-	if d.PLEDim != 0 {
+	x2 := resid("x_out", x1, dn, wf)
+	if a := d.AltUp; a != nil {
+		pl := g.value("ple_in", d.PLEDim)
+		g.In = append(g.In, pl)
+		xs := g.value("x_streams", rw)
+		g.op(Op{Kind: OpAltCorrect, In: []ValueID{pred, x2, pl}, Out: []ValueID{xs}, Weight: []Binding{
+			{Role: jlm.RoleAltUpRouterNorm, K: d.NEmbd}, {Role: jlm.RoleAltUpRouter, K: d.NEmbd, Rows: a.N},
+			{Role: jlm.RoleAltUpCorrCoef, K: a.N, Rows: a.N}, {Role: jlm.RoleAltUpCorrScale, K: d.NEmbd},
+			{Role: jlm.RolePLEGate, K: d.NEmbd, Rows: d.PLEDim}, {Role: jlm.RolePLEProj, K: d.PLEDim, Rows: d.NEmbd},
+			{Role: jlm.RolePLEPostNorm, K: d.NEmbd}}, Attr: Attrs{Streams: a.N, Eps: d.Eps, Act: d.Act}})
+		x2 = xs
+	} else if d.PLEDim != 0 {
 		pl := g.value("ple_in", d.PLEDim)
 		g.In = append(g.In, pl)
 		gp := mv("ple_gate", x2, jlm.RolePLEGate, d.PLEDim, 0)
 		a := g.value("ple_act", d.PLEDim)
 		g.op(Op{Kind: OpActMul, In: []ValueID{gp, pl}, Out: []ValueID{a}, Attr: Attrs{Act: d.Act}})
 		o := norm("ple_post", mv("ple_out", a, jlm.RolePLEProj, d.NEmbd, 0), jlm.RolePLEPostNorm)
-		x3 := g.value("x_ple", d.NEmbd)
+		x3 := g.value("x_ple", g.Values[x2].Width)
 		g.op(Op{Kind: OpAdd, In: []ValueID{x2, o}, Out: []ValueID{x3}})
 		x2 = x3
 	}
 	if d.OutScale {
-		y := g.value("x_scaled", d.NEmbd)
+		y := g.value("x_scaled", g.Values[x2].Width)
 		g.op(Op{Kind: OpScale, In: []ValueID{x2}, Out: []ValueID{y}, Weight: []Binding{vec(jlm.RoleLayerOutScale, 1)}})
 		x2 = y
 	}
