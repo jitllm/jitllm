@@ -229,26 +229,30 @@ the host, the `State` helpers `forward.go` calls (`s.norm`, `s.mv`,
 `attnPrep`, the attention) and through them the generated kernels; on the
 device, `nn.LayerPlan` and `nn.LayerWeights`, which the tier already consumes.
 There is no new kernel and no second family switch: the walker dispatches an op
-kind to the helper that runs it today. The graph covers decode, prompt chunks,
-ragged batch steps and the device plan for the dense family, and it is the
-default there: a covered block runs the graph's lowering everywhere, and
-`WithBlockGraph(false)` is the control arm the graph's gates compare against.
-Every other block runs the hand-written body for a reason on a named list
-(`model.UncoveredReasons`), never silently; each State records per block
-which path ran (`State.BlockPaths`, the `blocks` of `jitllm speed -manifest`),
-and `TestCoveredBlocksTakeTheGraphPath` holds a covered model to zero blocks
-off the graph on the host and every device arm. The hand-written body loses
-lines only as that list shrinks: it still runs every uncovered family.
+kind to the helper that runs it today. The graph is every text block's only
+body -- the trunk's and the prediction blocks', on decode, prompt chunks,
+ragged batch steps and the device plan. A block the language does not state
+refuses the model at Open by a reason on a named list
+(`model.UncoveredReasons`); no model the gates run hits one
+(`TestEveryTextBlockIsCovered`). Each State records per block which path ran
+(`State.BlockPaths`, the `blocks` of `jitllm speed -manifest`), and
+`TestCoveredBlocksTakeTheGraphPath` holds every model to every block on the
+graph on the host and every device arm.
 
-The mixture is lowered too, wherever the language states the block:
-`graph.Dense.Mixture` puts the mixture's ops in place of the FFN (softmax or
-sigmoid routers, renormalised or not, a selection bias, grouped top-k, a routed
-scale, a shared expert gated or not; a dense FFN beside mixture blocks is a
-dense block), OLMoE's q/k norm over each whole projection is an `OpNorm`
-(`Dense.QKNormWhole`), and the host lowering runs the route-to-combine run as
-the mixture's own operations (`moe`, `moeBatch`), so the kernels and their
-order are the hand-written body's: `TestBlockGraphMatchesTheHandPath` holds
-every covered model bit for bit, resident and paged, at zero warm allocations.
+The hand-written body this replaced was the control arm while coverage grew
+(`WithBlockGraph(false)`): every family matched it bit for bit, resident and
+paged, at zero warm allocations, decode, prompt and ragged step, before it was
+deleted. What is left of it is the vision tower's own block (`towerRows`),
+which the tower runs through the text runner until its blocks are stated too.
+
+The mixture is lowered wherever the language states the block:
+`graph.Dense.Mixture` puts the mixture's ops in place of the FFN (softmax,
+sigmoid, sparsemixer or sqrt-softplus routers, renormalised or not, a
+selection bias, grouped top-k, hash routing, a routed scale, a shared expert
+gated or not, experts in a latent), OLMoE's q/k norm over each whole
+projection is an `OpNorm` (`Dense.QKNormWhole`), and the host lowering runs
+the route-to-combine run as the mixture's own operations (`moe`,
+`moeExpertsRows`).
 
 The classic block (C6) and the windowed, capped and sunk attentions are stated
 the same way. `OpLayerNorm` is a LayerNorm with its bias where the block stores
@@ -265,6 +269,30 @@ cos/sin magnitude: linear, YaRN, LongRoPE), the attention softcap and the sinks
 that carry them. That puts phi2, starcoder, starcoder2, command-r, cohere2,
 stablelm, falcon, nemotron, dbrx, apertus, glm4, OLMo 2, EXAONE 4, arcee,
 gemma2, gemma3 and gpt-oss on the graph, every block.
+
+The flagships' forms are stated as ops too, most of them opaque in this
+version (one op, its weights all bound by it, its host routine named):
+
+- **Several residual streams.** The block's input is the stream-major
+  residual. `stream_mix` is a sublayer's read of it -- Qwen3.8-Flash-Next's
+  low-rank gated hyper-connection, DeepSeek V4's Sinkhorn mix, Kimi-K3's
+  softmax over its bank of checkpoints -- and `stream_place` adds the
+  sublayer's output back (a checkpoint block banking its input and restarting
+  the running residual). Gemma 3n's AltUp is `alt_predict` and `alt_correct`
+  around a block that runs on the active stream, with `laurel` beside its
+  attention and the per-layer input inside the correction.
+- **Selected attention.** `index` is an indexer: DeepSeek V3.2's over the
+  latent cache, and over a GQA row MiniMax-M3's and QSA's block selections,
+  whose key is one more cached head the attention reads past.
+  `compressed_attend` is DeepSeek V4's attention with its pooled second
+  history and grouped output.
+- **The rest.** `ngram` (the n-gram embedding into the streams),
+  `gauss_top_k` (Gemma 3n's activation sparsity), XD-RoPE as a rotary layout,
+  a bidirectional `attend` (an embedding model's pass), a latent mixture,
+  Kimi-K3's MLA output gate, Gemma 4's KV sharing, its v-from-k, its
+  per-layer embeddings and its dense MLP beside the mixture, ungated experts,
+  a recurrent mixer beside the attention, and `predict`, a prediction block's
+  prologue, which the draft runs before the block.
 
 **Coverage is structural.** Whether a block is on the graph is decided from
 what the container states about the block -- the configuration's fields
@@ -285,11 +313,12 @@ composer's work list:
 
 | ops | routine today | to compose |
 |---|---|---|
-| `clamp`, `head_norm`, `rope`, `kv_append` | `attnPrep` (one routine) | a kernel per op, the fused form a rewrite |
 | `attend` | `attendRow` and the chunk's attention, one per row class | the attention kernels chosen by row class and Target |
 | a latent attention's `matvec`s, `norm`s, `slice`s, `rope`s and `latent_append` | `mlaProject` / `mlaProjectRows` (one routine: both projections, the latent norms, the rotary, the absorb and the cache write) | a kernel per op; the absorb (`mla-absorb`) as the rewrite it is |
 | `attend_latent` | absorbed: the attention over the latent rows, then `mlaOutProject` / `mlaOutRows`' un-absorb | the absorbed and reference forms as two lowerings, chosen by row class |
-| `route`, `gather`, `expert_matvec`, `combine`, `gate_scalar` | `moe` / `moeBatch` | route and combine as generated kernels, the experts as grouped matvecs chosen by the routed pairs, fusions (`moe-few-row`, `moe-waves`) as rewrites over these ops |
+| `route`, `gather`, `expert_matvec`, `combine`, `gate_scalar` | `moe` / `moeExpertsRows` | route and combine as generated kernels, the experts as grouped matvecs chosen by the routed pairs, fusions (`moe-few-row`, `moe-waves`) as rewrites over these ops |
+| `index`, `stream_mix`, `alt_predict`, `alt_correct`, `laurel`, `ngram`, `recurrent` | their routines (`msaKey`/`qsaProject`, `hcMix`, `altPredict`, `altCorrect`, `laurel`, `ngramApply`, `linearAttn`) | a kernel per inner op, as the prologue's are |
+| `compressed_attend`, and every op of its block | `ds4Block` (the block whole) | the block's ops stated one by one |
 | every op, on a device | the block's `nn.LayerPlan`, lowered from the graph and run whole by the tier | per-op device kernels selected from the plan's ops |
 
 `TestEveryGraphOpHasALowering` holds every op of a covered block to an entry
