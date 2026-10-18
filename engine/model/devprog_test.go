@@ -87,6 +87,11 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 					}
 					logits = append(logits, slices.Clone(lg))
 				}
+				// A device failure the State survived on the host is not a
+				// program that ran: every block must still be on the device.
+				if s.GPULayers() != m.Cfg.NLayer {
+					t.Fatalf("the device ended holding %d of %d blocks%s", s.GPULayers(), m.Cfg.NLayer, s.devWhy())
+				}
 				a := arm{st: g.Stats()}
 				for li := 0; li < m.Cfg.NLayer; li++ {
 					a.forms = append(a.forms, g.BlockForms(li)["block"])
@@ -132,7 +137,7 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 			}
 			for li, f := range pa.forms {
 				if f != "program" {
-					t.Fatalf("block %d ran as %q, not the program: %s", li, f, pa.whys[li])
+					t.Fatalf("block %d ran as %q, not the program: %s (forms %v)", li, f, pa.whys[li], pa.forms)
 				}
 			}
 			worst := 0.0

@@ -150,12 +150,16 @@ func (g *devTier) emitAltPredict(lc *launcher, bs *blockScratch, l *layer, R int
 }
 
 // emitLaurel writes LAuReL's branch of bs.h into bs.altLaur and leaves bs.a
-// holding bs.h's quantization again, as the attention expects.
+// holding bs.h's quantization again, as the attention expects. fsrc is the
+// float row a float weight's matvec reads in place of the int8 one: set
+// before each of the branch's two, and left at bs.h.
 func (g *devTier) emitLaurel(lc *launcher, bs *blockScratch, l *layer, R int,
-	mvrun func(mv, *resident, backend.Buf), norm func(src, w, wb backend.Buf)) {
+	mvrun func(mv, *resident, backend.Buf), norm func(src, w, wb backend.Buf), fsrc *backend.Buf) {
 	p := &bs.p
+	*fsrc = bs.h
 	mvrun(l.mvLL, l.laurelL, bs.altLT)
 	lc.la(bs.laurelQuant, kernels.QuantizeThreads(R*p.LaurelRank/32), bs.altLT, bs.a, bs.ax)
+	*fsrc = bs.altLT
 	mvrun(l.mvLR, l.laurelR, bs.mvOut)
 	// norm writes bs.h, which the attention reads: the branch's norm goes
 	// through bs.altB's first plane and comes back after.
@@ -164,6 +168,7 @@ func (g *devTier) emitLaurel(lc *launcher, bs *blockScratch, l *layer, R int,
 	lc.la(bs.addE, R*p.NEmbd, bs.h, bs.altB, bs.altLaur)
 	lc.la(bs.altCopy, R*p.NEmbd, bs.altB, bs.h)
 	lc.la(bs.quantE, kernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
+	*fsrc = bs.h
 }
 
 // emitGauss runs a sparse block's gaussian top-k on its gate bs.g, into
@@ -183,17 +188,19 @@ func (g *devTier) emitGauss(lc *launcher, bs *blockScratch, l *layer, R int) bac
 // of bs.x: every stream corrected, and the per-layer input gated into the
 // others, back into bs.x.
 func (g *devTier) emitAltCorrect(lc *launcher, bs *blockScratch, l *layer, R int,
-	mvrun func(mv, *resident, backend.Buf), norm func(src, w, wb backend.Buf)) {
+	mvrun func(mv, *resident, backend.Buf), norm func(src, w, wb backend.Buf), fsrc *backend.Buf) {
 	p := &bs.p
 	norm(bs.x, l.altRouterNorm, nil)
 	lc.la(bs.altRoute, R*p.AltUp, bs.h, l.altRouter, bs.altM)
 	lc.la(bs.altCorrectK, R*p.AltUp*p.NEmbd, bs.altPred, bs.x, bs.altM, l.altCorrT, bs.altB)
 	lc.la(bs.altMul, R*p.NEmbd, bs.altB, l.altCorrScale, bs.h)
 	lc.la(bs.quantE, kernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
+	*fsrc = bs.h
 	mvrun(l.mvpg, l.pleGate, bs.pleG)
 	lc.la(bs.pleSlice, R*p.PLEDim, bs.pleIn, l.pleOff, bs.pleS)
 	lc.la(bs.pleAct, R*p.PLEDim, bs.pleG, bs.pleS, bs.pleA)
 	lc.la(bs.pleQuant, kernels.QuantizeThreads(R*pad32(p.PLEDim)/32), bs.pleA, bs.a, bs.ax)
+	*fsrc = bs.pleA
 	mvrun(l.mvpp, l.pleProj, bs.pleO)
 	norm(bs.pleO, l.nPLE, nil)
 	lc.la(bs.altFinish, R*p.AltUp*p.NEmbd, bs.altB, bs.h, bs.x)

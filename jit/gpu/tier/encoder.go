@@ -1403,7 +1403,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		// whatever bs.rpos holds this token.
 		if ropeDev {
 			lc.la(bs.ropeTable, rrows*bs.ropeNPairs, bs.cs, bs.ropeTab, bs.ropeConst, bs.rpos)
-			if bs.csSWA != nil {
+			if p.SWAPeriod > 0 && bs.csSWA != nil {
 				lc.la(bs.ropeTable, rrows*bs.ropeNPairs, bs.csSWA, bs.ropeTabSWA, bs.ropeConst, bs.rpos)
 			}
 			g.ds4Tables(lc, bs, R)
@@ -1575,7 +1575,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						lc.la(bs.quantE, kernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
 					}
 					if l.altRouter != nil {
-						g.emitLaurel(lc, bs, l, R, mvrun, norm)
+						g.emitLaurel(lc, bs, l, R, mvrun, norm, &fsrc)
 					}
 				}
 				// MLA takes the rest of the attention half and ends in bs.mvOut, the
@@ -2583,7 +2583,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			if l.altRouter != nil {
 				// Gemma 3n: every stream corrected and the per-layer input
 				// gated into the rest (altup.go).
-				g.emitAltCorrect(lc, bs, l, R, mvrun, norm)
+				g.emitAltCorrect(lc, bs, l, R, mvrun, norm, &fsrc)
 			} else if l.pleGate != nil && bs.pleIn != nil {
 				perLayerEmbed(l, bs.x)
 			}
@@ -2852,7 +2852,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			// no buffer to write into.
 			w(bs.cs, f32b(hcs))
 		}
-		if bs.csSWA != nil {
+		if p.SWAPeriod > 0 && bs.csSWA != nil {
 			w(bs.csSWA, f32b(hcsSWA))
 		}
 	}
