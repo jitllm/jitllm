@@ -75,6 +75,10 @@ func (k devKind) String() string {
 		return "attend_latent"
 	case dkQTemp:
 		return "q_temp"
+	case dkSplitQG:
+		return "split_qg"
+	case dkGateOut:
+		return "gate_out"
 	case dkNormQuant:
 		return "norm_quant"
 	case dkAddNorm:

@@ -74,6 +74,8 @@ const (
 	dkAct                         // an ungated FFN's activation of up's row
 	dkAttendLatent                // latent attention, from the normed row to its output projection (emitMLA)
 	dkQTemp                       // the query's temperature, a factor of each row's position
+	dkSplitQG                     // a double-width query split into its heads and its output gate
+	dkGateOut                     // the attention's output times the sigmoid of the gate
 	numBaseKinds                  // the fused kinds (devrewrite.go) count on from here
 )
 
@@ -85,25 +87,28 @@ type devVal int
 type devSlot uint8
 
 const (
-	slotX   devSlot = iota // bs.x: the block's input and output
-	slotX2                 // bs.x2: the residual after attention
-	slotH                  // bs.h: a normed row
-	slotQ8                 // bs.a / bs.ax: the int8 operand
-	slotQ                  // bs.q
-	slotK                  // bs.k
-	slotV                  // bs.v
-	slotQR                 // bs.qr: q rotated
-	slotKV                 // the history
-	slotXB                 // bs.xb: the attention's output
-	slotOut                // bs.mvOut: a projection's output
-	slotG                  // bs.g: the gate
-	slotU                  // bs.u: up
-	slotAct                // bs.act: act(gate)*up
-	slotQN                 // bs.qn: q's heads normed
-	slotKN                 // bs.kn: k's heads normed
-	slotF16                // g.f16Buf: a GEMM's binary16 operand
-	slotMix                // the mixture's output: whichever buffer mixFFN returns
-	slotQT                 // bs.qt: a rotated query scaled by its temperature
+	slotX      devSlot = iota // bs.x: the block's input and output
+	slotX2                    // bs.x2: the residual after attention
+	slotH                     // bs.h: a normed row
+	slotQ8                    // bs.a / bs.ax: the int8 operand
+	slotQ                     // bs.q
+	slotK                     // bs.k
+	slotV                     // bs.v
+	slotQR                    // bs.qr: q rotated
+	slotKV                    // the history
+	slotXB                    // bs.xb: the attention's output
+	slotOut                   // bs.mvOut: a projection's output
+	slotG                     // bs.g: the gate
+	slotU                     // bs.u: up
+	slotAct                   // bs.act: act(gate)*up
+	slotQN                    // bs.qn: q's heads normed
+	slotKN                    // bs.kn: k's heads normed
+	slotF16                   // g.f16Buf: a GEMM's binary16 operand
+	slotMix                   // the mixture's output: whichever buffer mixFFN returns
+	slotQT                    // bs.qt: a rotated query scaled by its temperature
+	slotQG                    // bs.qg: the query's heads, split from a gated query
+	slotOGate                 // bs.ogate: the output gate
+	slotOGated                // bs.ogated: the attention's output, gated
 	numSlots
 )
 
@@ -147,6 +152,12 @@ func (s devSlot) String() string {
 		return "mix"
 	case slotQT:
 		return "qt"
+	case slotQG:
+		return "qg"
+	case slotOGate:
+		return "ogate"
+	case slotOGated:
+		return "ogated"
 	}
 	return ""
 }
@@ -224,7 +235,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	}
 	switch o.Kind {
-	case dkRecurrent, dkCopy, dkKVCopy, dkAct, dkQTemp:
+	case dkRecurrent, dkCopy, dkKVCopy, dkAct, dkQTemp, dkSplitQG, dkGateOut:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkMixture, dkAttendLatent:
 		if i == 1 {
@@ -428,7 +439,10 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			if !ok {
 				return nil, "a matvec over " + role.String()
 			}
-			w := map[devSlot]int{slotQ: qd, slotK: kv, slotV: kv, slotOut: ne, slotG: nf, slotU: nf}[s]
+			w := o.Weight[0].Rows
+			if w == 0 {
+				return nil, "a matvec with no stated width"
+			}
 			a := operand(in(0), i)
 			out := prog.val(name(0), f32(w), s)
 			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{a}, Out: []devVal{out}, Role: role})
@@ -472,6 +486,28 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkMixture, Src: src, In: []devVal{in(0), q}, Out: []devVal{out}})
 			vals[mixOut] = out
 			skipTo = last
+		case graph.OpSlice:
+			// A gated query's split: two slices of q's projection, its heads
+			// and its gate, lowered as one launch at the first.
+			if prog.slots[in(0)] != slotQ || o.Attr.HeadDim != 2*p.HeadDim || o.Attr.Width != p.HeadDim {
+				return nil, "a slice the program does not lower"
+			}
+			if o.Attr.Offset != 0 {
+				continue // the second half, written with the first
+			}
+			gate := graph.ValueID(-1)
+			for k := i + 1; k < len(g.Ops); k++ {
+				if n := g.Ops[k]; n.Kind == graph.OpSlice && n.In[0] == o.In[0] && n.Attr.Offset == p.HeadDim {
+					gate = n.Out[0]
+				}
+			}
+			if gate < 0 {
+				return nil, "a gated query without its gate"
+			}
+			qh := prog.val(name(0), f32(qd), slotQG)
+			gv := prog.val(g.Values[gate].Name, f32(qd), slotOGate)
+			prog.ops = append(prog.ops, devOp{Kind: dkSplitQG, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{qh, gv}})
+			vals[o.Out[0]], vals[gate] = qh, gv
 		case graph.OpHeadNorm:
 			var role jlm.Role
 			if len(o.Weight) > 0 {
@@ -508,7 +544,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			switch prog.slots[src] {
 			case slotK:
 				s = slotKN
-			case slotQ, slotQR:
+			case slotQ, slotQG, slotQR:
 				// q's norm, before its rotary or after it (a weighted norm
 				// after the rotary does not commute with it).
 			default:
@@ -518,7 +554,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{src}, Out: []devVal{out}, Role: role})
 			vals[o.Out[0]] = out
 		case graph.OpRope:
-			if s := prog.slots[in(0)]; s == slotQ || s == slotQN {
+			if s := prog.slots[in(0)]; s == slotQ || s == slotQG || s == slotQN {
 				out := prog.val(name(0), f32(qd), slotQR)
 				prog.ops = append(prog.ops, devOp{Kind: dkRopeQ, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}})
 				vals[o.Out[0]] = out
@@ -579,6 +615,13 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkAct, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}})
 			vals[o.Out[0]] = out
 		case graph.OpActMul:
+			if o.Attr.Act == graph.ActSigmoid && prog.slots[in(0)] == slotOGate {
+				// The attention's output gate: sigmoid(gate) * attention.
+				out := prog.val(name(0), f32(qd), slotOGated)
+				prog.ops = append(prog.ops, devOp{Kind: dkGateOut, Src: []int{i}, In: []devVal{in(0), in(1)}, Out: []devVal{out}})
+				vals[o.Out[0]] = out
+				continue
+			}
 			out := prog.val(name(0), f32(nf), slotAct)
 			prog.ops = append(prog.ops, devOp{Kind: dkActMul, Src: []int{i}, In: []devVal{in(0), in(1)}, Out: []devVal{out}})
 			vals[o.Out[0]] = out
