@@ -102,8 +102,6 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredIndexer
 	case c.streamHead() && !c.Q4E() && c.AltUp == 0 && !c.DSV4() && !c.ResAttn():
 		return UncoveredStreams
-	case c.NonCausal:
-		return UncoveredNonCausal
 	case !c.DSV4() && (len(c.CompKinds) > 0 || c.CompRateCSA != 0 || c.CompRateHCA != 0 || c.OGroups != 0 || c.OLoraRank != 0):
 		return UncoveredCompressed
 	}
@@ -256,6 +254,7 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		}
 		d.MLA.Gate = has(jlm.RoleAttnGate)
 	}
+	d.NonCausal = c.NonCausal
 	if c.MSAAt(li) {
 		d.Select = &graph.Select{Heads: c.IdxHeads, HeadDim: c.IdxHeadDim, TopK: c.IdxTopK, Block: c.IdxBlock, Local: c.IdxLocal}
 	}

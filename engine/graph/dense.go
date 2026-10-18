@@ -118,6 +118,8 @@ type Dense struct {
 	// Compressed, where set, is the attention: OpCompressedAttend binding
 	// W, the output projection inside it.
 	Compressed *Compressed
+	// NonCausal makes the attention bidirectional (OpAttend's Bidir).
+	NonCausal bool
 	// Select, where set, is the attention's block selection (OpIndex over a
 	// GQA row: MiniMax Sparse Attention).
 	Select *Select
@@ -485,7 +487,7 @@ func (d *Dense) Build() *Graph {
 				sinks = []Binding{vec(jlm.RoleAttnSinks, d.NHead)}
 			}
 			g.op(Op{Kind: OpAttend, In: ain, Out: []ValueID{a}, Reads: []StateRef{kv}, Weight: sinks,
-				Attr: Attrs{HeadDim: d.HeadDim, NHead: d.NHead, NKVHead: d.NKVHead, Scale: d.Scale, Window: d.Window, Chunked: d.Chunked, BidirOff: d.BidirOff, Softcap: d.Softcap,
+				Attr: Attrs{HeadDim: d.HeadDim, NHead: d.NHead, NKVHead: d.NKVHead, Scale: d.Scale, Window: d.Window, Chunked: d.Chunked, BidirOff: d.BidirOff, Bidir: d.NonCausal, Softcap: d.Softcap,
 					TempScale: d.TempScale, TempFloor: d.TempFloor, TempOffs: d.TempOffs}})
 			if d.OutGate {
 				gated := g.value("attn_gated", qd)

@@ -98,16 +98,15 @@ func legacyBlocks(paths []BlockPath, device bool) error {
 // by default, every text block runs through the graph on the host (prompt,
 // decode, a ragged step across sessions) and with a graph-lowered plan on
 // every device arm -- zero blocks through the hand-written body. Forcing one
-// block off the graph fires the check. On models it does not cover, every
-// block that runs the hand-written body does so for a reason on the named
-// list (UncoveredReasons), never silently.
+// block off the graph fires the check. TestEveryTextBlockIsCovered holds that
+// no model is left that the graph does not cover.
 func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "Qwen3-MOE-4x0.6B-Q4_K_M",
 		"olmoe-1b-7b-0924-instruct-Q4_K_M", "synth-qwen2moe", "synth-glm4moe", "synth-ernie45moe", "synth-bailingmoe2",
 		"synth-dots1", "synth-minimaxm2", "synth-seedoss", "synth-smollm3", "synth-lfm2",
 		"synth-phi2", "synth-starcoder", "synth-starcoder2", "synth-commandr", "synth-cohere2", "synth-stablelm",
 		"synth-stablelm-par", "synth-falcon", "synth-falcon40", "synth-nemotron", "synth-dbrx", "synth-apertus", "synth-glm4",
-		"synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-deepseek", "synth-deepseek-lite", "synth-deepseek-dense", "synth-deepseek-yarn", "synth-deepseek-yarn-af", "synth-glm4moelite", "synth-kimilinear", "synth-gemma4", "synth-gemma4-kv", "synth-gemma4-e", "synth-gemma4-moe", "synth-hunyuan", "synth-hunyuanmoe", "synth-llama4", "synth-llama4-q8", "synth-qwen2vl", "synth-qwen25vl", "synth-qwen3vl", "synth-glm4vmoe", "synth-granitehybrid", "synth-granitehybridmoe", "synth-lfm2moe", "synth-nemotronh", "synth-nemotronhmoe", "synth-falconh1", "synth-deepseek32", "synth-minimaxm3", "synth-qwen4exp", "synth-hunyuanvl", "synth-gemma3n", "synth-deepseek4", "synth-mamba2", "synth-falconmamba", "synth-mamba1", "synth-jamba", "synth-lfm2moe", "synth-qwen35-hybrid-mtp", "synth-qwen35moe-hybrid-mtp", "Qwen3.5-0.8B-Q4_K_M"} {
+		"synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-deepseek", "synth-deepseek-lite", "synth-deepseek-dense", "synth-deepseek-yarn", "synth-deepseek-yarn-af", "synth-glm4moelite", "synth-kimilinear", "synth-gemma4", "synth-gemma4-kv", "synth-gemma4-e", "synth-gemma4-moe", "synth-hunyuan", "synth-hunyuanmoe", "synth-llama4", "synth-llama4-q8", "synth-qwen2vl", "synth-qwen25vl", "synth-qwen3vl", "synth-glm4vmoe", "synth-granitehybrid", "synth-granitehybridmoe", "synth-lfm2moe", "synth-nemotronh", "synth-nemotronhmoe", "synth-falconh1", "synth-deepseek32", "synth-minimaxm3", "synth-qwen4exp", "synth-hunyuanvl", "synth-gemma3n", "synth-deepseek4", "synth-kimik3", "synth-mamba2", "synth-falconmamba", "synth-mamba1", "synth-jamba", "synth-lfm2moe", "synth-qwen35-hybrid-mtp", "synth-qwen35moe-hybrid-mtp", "Qwen3.5-0.8B-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			m, err := Open(p, noTune)
@@ -161,22 +160,26 @@ func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
 			t.Logf("violation fires: %v", err)
 		})
 	}
-	for _, name := range []string{"synth-kimik3"} {
+}
+
+// TestEveryTextBlockIsCovered: every model the graph's gates run opens with
+// the graph strict (WithBlockGraph(true)), which refuses a model with any text
+// block the op language does not state. The named list of reasons
+// (UncoveredReasons) has no model behind it: a block that falls to the
+// hand-written body is an open error here, not a counted fallback.
+func TestEveryTextBlockIsCovered(t *testing.T) {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "Qwen3-MOE-4x0.6B-Q4_K_M", "olmoe-1b-7b-0924-instruct-Q4_K_M", "synth-qwen2moe", "synth-glm4moe", "synth-ernie45moe", "synth-bailingmoe2", "synth-dots1", "synth-minimaxm2", "synth-seedoss", "synth-smollm3", "synth-lfm2", "synth-phi2", "synth-starcoder", "synth-starcoder2", "synth-commandr", "synth-cohere2", "synth-stablelm", "synth-stablelm-par", "synth-falcon", "synth-falcon40", "synth-nemotron", "synth-dbrx", "synth-apertus", "synth-glm4", "synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-deepseek", "synth-deepseek-lite", "synth-deepseek-dense", "synth-deepseek-yarn", "synth-deepseek-yarn-af", "synth-glm4moelite", "synth-kimilinear", "synth-gemma4", "synth-gemma4-kv", "synth-gemma4-e", "synth-gemma4-moe", "synth-hunyuan", "synth-hunyuanmoe", "synth-llama4", "synth-llama4-q8", "synth-qwen2vl", "synth-qwen25vl", "synth-qwen3vl", "synth-glm4vmoe", "synth-granitehybrid", "synth-granitehybridmoe", "synth-lfm2moe", "synth-nemotronh", "synth-nemotronhmoe", "synth-falconh1", "synth-deepseek32", "synth-minimaxm3", "synth-qwen4exp", "synth-hunyuanvl", "synth-gemma3n", "synth-deepseek4", "synth-mamba2", "synth-falconmamba", "synth-mamba1", "synth-jamba", "synth-qwen35-hybrid-mtp", "synth-qwen35moe-hybrid-mtp", "Qwen3.5-0.8B-Q4_K_M", "synth-qwen35vl", "synth-kimik3", "synth-mixtral", "synth-mistral3", "synth-phi3", "synth-qwen2", "synth-ernie45", "synth-olmo3", "synth-kimivl", "synth-pixtral"} {
 		t.Run(name, func(t *testing.T) {
-			m, err := Open(graphModel(t, name), noTune)
+			m, err := Open(graphModel(t, name), noTune, WithBlockGraph(true))
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer m.Close()
-			for li, p := range pathsRun(t, m, nil) {
-				if p.Hand == 0 || p.Graph != 0 {
-					t.Fatalf("block %d: %+v", li, p)
-				}
-				if !slices.Contains(UncoveredReasons, p.Why) {
-					t.Fatalf("block %d ran the hand-written body for %q, not a named reason", li, p.Why)
+			for li := range m.Cfg.NLayer {
+				if why := m.GraphUncovered(li); why != "" {
+					t.Errorf("block %d is not covered: %s", li, why)
 				}
 			}
-			t.Logf("every block on the hand-written body: %q", m.GraphUncovered(0))
+			m.Close()
 		})
 	}
 }

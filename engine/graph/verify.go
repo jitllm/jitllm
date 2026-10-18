@@ -229,7 +229,7 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: %d inputs reading %v; the configuration states a selection %v", at, len(o.In), o.Reads, sel)
 			}
 			if a.NHead != c.NHead || a.NKVHead != c.NKVHead || a.HeadDim != c.HeadDim || a.Scale != c.Scale ||
-				a.Window != c.Window || a.Chunked != c.Chunked || a.BidirOff != c.BidirOff || a.Softcap != c.Softcap || a.TempScale != c.TempScale ||
+				a.Window != c.Window || a.Chunked != c.Chunked || a.BidirOff != c.BidirOff || a.Bidir != c.NonCausal || a.Softcap != c.Softcap || a.TempScale != c.TempScale ||
 				a.TempFloor != c.TempFloor || a.TempOffs != c.TempOffs {
 				bad("%s: %d/%d heads of %d, scale %g, window %d, softcap %g; the configuration states %d/%d of %d, %g, %d, %g",
 					at, a.NHead, a.NKVHead, a.HeadDim, a.Scale, a.Window, a.Softcap,

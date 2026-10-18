@@ -291,8 +291,11 @@ type Attrs struct {
 	// the prompt's spans mark them bidirectional (Gemma 4's global layers;
 	// its sliding layers and every other model's honour the spans).
 	BidirOff bool
-	Softcap  float64
-	Act      Act
+	// Bidir makes the attention non-causal over the whole sequence: every
+	// position attends to every other (an embedding model's encoder pass).
+	Bidir   bool
+	Softcap float64
+	Act     Act
 	// A mixture's router and combine (OpRoute, OpCombine).
 	Experts, TopK      int
 	Router             Router
