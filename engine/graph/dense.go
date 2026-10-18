@@ -8,7 +8,7 @@ import "github.com/jitllm/jitllm/format/jlm"
 var MixerRoles = []jlm.Role{jlm.RoleAttnQKV, jlm.RoleAttnGate, jlm.RoleSSMInProj, jlm.RoleSSMBA, jlm.RoleSSMConv1d,
 	jlm.RoleSSMConvBias, jlm.RoleSSMA, jlm.RoleSSMD, jlm.RoleSSMDtBias, jlm.RoleSSMNorm, jlm.RoleSSMOut,
 	jlm.RoleSSMXDt, jlm.RoleSSMXB, jlm.RoleSSMXC, jlm.RoleSSMDtProj, jlm.RoleSSMDtNorm, jlm.RoleSSMBNorm,
-	jlm.RoleSSMCNorm}
+	jlm.RoleSSMCNorm, jlm.RoleSCB, jlm.RoleSCC, jlm.RoleSCX}
 
 // Dense describes a dense pre-norm attention block: llama's, with the
 // switches the covered variants turn (qwen3's per-head q/k norm before the
