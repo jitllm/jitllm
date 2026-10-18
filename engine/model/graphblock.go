@@ -1848,6 +1848,7 @@ func (s *State) parallelIn(l *layer, lw *denseLowering, n int) {
 // block operations and keep planFor's values.
 func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
 	g := lw.g
+	p.Graph = g
 	// The block's row: the input, or a stream's of a residual of several.
 	p.NEmbd = g.Values[g.In[0]].Width
 	if lw.hc || lw.alt || lw.bank {

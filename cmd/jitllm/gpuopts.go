@@ -260,6 +260,7 @@ func gpuOptions() []tier.Option {
 		{"JITLLM_GPU_ACTIN_PREFETCH", set("JITLLM_GPU_ACTIN_PREFETCH"),
 			func(c *tier.Config) { c.ActInPrefetch = num("JITLLM_GPU_ACTIN_PREFETCH") }},
 		{"JITLLM_GPU_NO_VOLTA", set("JITLLM_GPU_NO_VOLTA"), func(c *tier.Config) { c.NoVolta = true }},
+		{"JITLLM_GPU_NO_PROGRAM", set("JITLLM_GPU_NO_PROGRAM"), func(c *tier.Config) { c.NoProgram = true }},
 		{"JITLLM_GPU_NO_FLASH_PREFILL", set("JITLLM_GPU_NO_FLASH_PREFILL"), func(c *tier.Config) { c.NoFlashPrefill = true }},
 		{"JITLLM_GPU_NO_TILE_TAIL", set("JITLLM_GPU_NO_TILE_TAIL"), func(c *tier.Config) { c.NoTileTail = true }},
 		{"JITLLM_GPU_NO_EXACT_PROMPT", set("JITLLM_GPU_NO_EXACT_PROMPT"), func(c *tier.Config) { c.NoExactPrompt = true }},

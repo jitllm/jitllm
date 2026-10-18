@@ -13,6 +13,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
@@ -29,7 +30,14 @@ import (
 // layer is one block's device-resident state.
 type layer struct {
 	// ran is the forms the block's last step took (ffnform.go, BlockForms).
-	ran            blockForms
+	ran blockForms
+	// prog is the block's device program (devprog.go), nil where the program
+	// does not lower the block yet; progWhy says why.
+	prog    *devProgram
+	progWhy string
+	// progRun is why the last step ran the block through the encoder, empty
+	// where it ran the program (set under the submission, read by BlockProgram).
+	progRun        string
 	wq, wk, wv, wo *resident
 	gate, up, down *resident
 	// conv is a convolutional tower block's program and vectors (conv.go),
@@ -4395,6 +4403,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	if old := g.layers[li]; old != nil && old != l {
 		g.dropLayerLocal(old)
 	}
+	l.prog, l.progWhy = buildDevProgram(p, l)
 	g.layers[li] = l
 	g.layerGen++
 	// A non-causal block's batched twins are built here, not lazily: every
@@ -8113,6 +8122,86 @@ func (g *devTier) layersSession(s backend.Session) {
 		}
 		lc.la(bs.addE, R*p.NEmbd, x, y, out)
 	}
+	// runProg runs block li's device program (devprog.go): each op one launch
+	// of the kernel the encoder's unfused path takes for it, over the scratch
+	// slot the program assigned its values. Decode, one row, paged history.
+	runProg := func(l *layer, li int, prog *devProgram) {
+		pk := bs.pkv
+		pl := g.kvp.layers[l.kvSrc]
+		if pl == nil {
+			if err == nil {
+				err = fmt.Errorf("tier: block %d has no pages in this device's pool", li)
+			}
+			return
+		}
+		qdim := p.NHead * p.HeadDim
+		rcs := bs.cs
+		if bs.csSWA != nil && p.LocalRope(li) {
+			rcs = bs.csSWA
+		}
+		buf := [numSlots]backend.Buf{slotX: bs.x, slotX2: bs.x2, slotH: bs.h, slotQ8: bs.a, slotQ: bs.q, slotK: bs.k,
+			slotV: bs.v, slotQR: bs.qr, slotKV: pl.k, slotXB: bs.xb, slotOut: bs.mvOut, slotG: bs.g, slotU: bs.u, slotAct: bs.act}
+		at := func(v devVal) backend.Buf { return buf[prog.slots[v]] }
+		for _, o := range prog.ops {
+			switch o.Kind {
+			case dkNorm:
+				w := l.nAttn
+				if o.Role == jlm.RoleFFNNorm {
+					w = l.nFFN
+				}
+				norm(at(o.In[0]), w, nil)
+			case dkQuant:
+				src := at(o.In[0])
+				switch prog.vals[o.In[0]].Width {
+				case p.NEmbd:
+					lc.la(bs.quantE, kernels.QuantizeThreads(R*ePad(p)/32), src, bs.a, bs.ax)
+				case qdim:
+					lc.la(bs.quantQ, kernels.QuantizeThreads(R*qPad(p, qdim)/32), src, bs.a, bs.ax)
+				default:
+					lc.la(bs.quantF, kernels.QuantizeThreads(R*p.NFFN/32), src, bs.a, bs.ax)
+				}
+			case dkMatVec:
+				m, r := l.mvq, l.wq
+				switch o.Role {
+				case jlm.RoleAttnK:
+					m, r = l.mvk, l.wk
+				case jlm.RoleAttnV:
+					m, r = l.mvv, l.wv
+				case jlm.RoleAttnOut:
+					m, r = l.mvo, l.wo
+				case jlm.RoleFFNGate:
+					m, r = l.mvg, l.gate
+				case jlm.RoleFFNUp:
+					m, r = l.mvu, l.up
+				case jlm.RoleFFNDown:
+					m, r = l.mvd, l.down
+				}
+				mvrun(m, r, at(o.Out[0]))
+			case dkRopeQ:
+				lc.la(bs.ropeQ, R*p.NHead*p.NRot/2, at(o.In[0]), rcs, bs.zero, at(o.Out[0]))
+			case dkKVWrite:
+				lc.la(pk.ropeK, R*p.NKVHead*p.NRot/2, at(o.In[0]), rcs, bs.zero, pl.k, pl.tab, pk.pRow)
+				lc.la(pk.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), pl.v, bs.zero, pl.tab, pk.pRow)
+			case dkAttend:
+				desc := pk.pRow
+				if p.Window(li) > 0 {
+					desc = pk.pRowW
+				}
+				if err == nil {
+					err = pk.attend(s, lc, pl, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, desc, nil)
+					g.PagedLaunches++
+					if pk.cur.plan.Path == kernels.PathStaged {
+						g.PagedStagedLaunches++
+					}
+				}
+			case dkAdd:
+				addRes(at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+			case dkActMul:
+				lc.la(bs.actMul, R*p.NFFN, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+			}
+		}
+		g.ProgBlocks++
+	}
 	// emit issues the whole token's launches. It is a closure so the same code
 	// both runs the sequence and records it: one source for both means a graph
 	// cannot differ from the launches it replaces.
@@ -8149,6 +8238,41 @@ func (g *devTier) layersSession(s backend.Session) {
 				addRes(pendX, pendY, bs.x)
 				pendX, pendY = nil, nil
 			}
+			// The device program, where it lowers the block and the step is
+			// one decode row over the paged history (devprog.go).
+			progWhy := l.progWhy
+			switch {
+			case l.prog == nil:
+			case g.NoProgram:
+				progWhy = "NoProgram"
+			case R != 1 || rag != nil:
+				progWhy = "more than one row"
+			case voltaOnly:
+				progWhy = "binary16 GEMMs (sm_70)"
+			case len(skip) != 0:
+				progWhy = "a fault skips a kernel"
+			case bs.pkv == nil || bs.pkv.cur == nil || bs.pkv.prefill:
+				progWhy = "not a paged decode"
+			case bs.ropeQ == nil || l.noRope || bs.copyQ != nil || bs.qTemp != nil:
+				progWhy = "a rotary the program does not lower"
+			case bs.clampQ != nil || bs.splitQG != nil || bs.sigMul != nil:
+				progWhy = "a q/k/v clamp, split or gate"
+			case bs.normVar != nil || scaled || l.pleGate != nil || l.outScale != nil || l.nResid != nil || p.VNorm:
+				progWhy = "a norm or residual the program does not lower"
+			case g.TableSplit:
+				progWhy = "TableSplit"
+			}
+			l.progRun = progWhy
+			if l.prog != nil && progWhy == "" {
+				if pendX != nil {
+					addRes(pendX, pendY, bs.x)
+					pendX, pendY = nil, nil
+				}
+				runProg(l, li, l.prog)
+				l.ran.note(formBlock, uint8(blockProgram))
+				continue
+			}
+			l.ran.note(formBlock, uint8(blockEncoder))
 			// Gemma 3n: every stream's prediction, the block run on the active
 			// one (altup.go).
 			if l.altRouter != nil {

@@ -731,6 +731,10 @@ func (d *DS4Plan) EntRowAt(comp, hd int) int {
 // wrong text when ignored, so a tier that cannot apply one must decline the
 // block by name (see RULE 8a in AGENTS.md).
 type LayerPlan struct {
+	// Graph is the block's operation graph (engine/graph) when the plan was
+	// lowered from one: the device program (tier's devprog.go) is built from
+	// its ops. Nil for a plan nothing lowered.
+	Graph *graph.Graph
 	// KPad is the width the block's matrices that read the residual or the
 	// attention's output were packed at, when NEmbd is not a whole number of
 	// 32-element blocks (a tower 144 wide, packed at 160 with zero columns

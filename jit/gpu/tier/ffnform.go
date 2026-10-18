@@ -141,8 +141,20 @@ const (
 	formQKV = iota
 	formGateUp
 	formDown
+	formBlock
 	numForms
 )
+
+// blockForm is whether a block-step ran as its device program (devprog.go)
+// or through the block encoder.
+type blockForm uint8
+
+const (
+	blockEncoder blockForm = iota
+	blockProgram
+)
+
+func (f blockForm) String() string { return [...]string{"encoder", "program"}[f] }
 
 // blockForms is the forms a block's last step took, one byte a span (one
 // past the form, zero for none yet), packed so a reader never races a step.
@@ -177,7 +189,7 @@ func (g *GPU) BlockForms(li int) map[string]string {
 	}
 	v := l.ran.v.Load()
 	out := map[string]string{}
-	for span, name := range [numForms]string{"qkv", "gate_up", "down"} {
+	for span, name := range [numForms]string{"qkv", "gate_up", "down", "block"} {
 		f := uint8(v >> (8 * span))
 		if f == 0 {
 			continue
@@ -189,6 +201,8 @@ func (g *GPU) BlockForms(li int) map[string]string {
 			out[name] = ffnGateUpForm(f - 1).String()
 		case formDown:
 			out[name] = ffnDownForm(f - 1).String()
+		case formBlock:
+			out[name] = blockForm(f - 1).String()
 		}
 	}
 	return out

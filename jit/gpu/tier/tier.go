@@ -222,6 +222,9 @@ type Config struct {
 	// QuantizeAct (the same bits in one launch). The A/B arm and the
 	// bisection switch.
 	NoOperandFuse bool
+	// NoProgram runs every block through the block encoder, none through its
+	// device program (devprog.go): the A/B arm and the bisection switch.
+	NoProgram bool
 	// PreferGemmInt8 puts a prompt chunk's matvecs on the staged int8 GEMM
 	// (kernels.GemmInt8, sm_80 on) ahead of the m16n8 binary16 GEMM. Off by
 	// default: on an L4 and an A100 the binary16 GEMM read Llama-3.2-1B's
@@ -1066,6 +1069,10 @@ type Stats struct {
 	// PagedLaunches counts encoded paged-attention launches: the check that a
 	// paged run read its history through the pool.
 	PagedLaunches int
+	// ProgBlocks counts block-steps encoded as the device program
+	// (devprog.go) rather than through the block encoder; a replayed
+	// recording encodes none, so a decode counts its recording's blocks once.
+	ProgBlocks int
 	// PagedPrefillLaunches counts layer attentions of a prefill chunk that ran
 	// the paged prefill kernels (pagedprefill.go) rather than FlashDecodeKV.
 	PagedPrefillLaunches int
@@ -1496,6 +1503,7 @@ func (s *Stats) add(o Stats) {
 	s.ActInTimed += o.ActInTimed
 	s.ActInKept += o.ActInKept
 	s.PagedLaunches += o.PagedLaunches
+	s.ProgBlocks += o.ProgBlocks
 	s.PagedPrefillLaunches += o.PagedPrefillLaunches
 	s.PagedStagedLaunches += o.PagedStagedLaunches
 	s.KVEvictions += o.KVEvictions
