@@ -434,7 +434,7 @@ func TestPrewarmOverlapsLayers(t *testing.T) {
 // API per card -- not backend.Open's, which is one device per backend and saw
 // one of a 2xT4 box's two cards. The first two after ordering run the gate.
 func TestRealDevicesBothTakeBlocks(t *testing.T) {
-	devs, err := allDevices(backend.Opts{})
+	devs, err := opener{}.allDevices(backend.Opts{})
 	if len(devs) < 2 {
 		for _, d := range devs {
 			d.Close()

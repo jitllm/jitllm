@@ -96,7 +96,7 @@ func (g *devTier) initFlash(bs *blockScratch) (err error) {
 		if err == nil {
 			return
 		}
-		freeFlash(bs)
+		freeFlash(bs, g.devShared)
 	}()
 	compile := func(k *ir.Kernel, e error) (backend.Kernel, error) {
 		if e != nil {
@@ -143,11 +143,11 @@ func (g *devTier) initFlash(bs *blockScratch) (err error) {
 
 // freeFlash releases initFlash's kernels and partials; the scratch walk in
 // freeScratch does not follow a slice.
-func freeFlash(bs *blockScratch) {
+func freeFlash(bs *blockScratch, g *devShared) {
 	for _, v := range bs.flashV {
 		for _, k := range []backend.Kernel{v.k, v.kW, v.merge} {
 			if k != nil {
-				closeKern(k)
+				g.closeKern(k)
 			}
 		}
 	}

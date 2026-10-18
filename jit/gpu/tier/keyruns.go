@@ -280,7 +280,7 @@ func (g *devTier) winMaskLocked(bs *blockScratch) bool {
 	}
 	att, err := g.dev.Alloc(ar * bs.p.NHead * bs.sstride * 4)
 	if err != nil {
-		closeKern(c)
+		g.closeKern(c)
 		g.LastErr = "windowed runs: " + err.Error()
 		return false
 	}

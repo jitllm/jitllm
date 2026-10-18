@@ -42,7 +42,7 @@ func TestFreeScratchClosesEveryKernel(t *testing.T) {
 			"proved nothing, and the walk it is checking would too", want)
 	}
 
-	freeScratch(bs)
+	freeScratch(bs, &devShared{})
 
 	if closed != want {
 		t.Errorf("freeScratch closed %d of %d kernels; the rest leak, and it runs on "+
@@ -60,12 +60,30 @@ func TestFreeScratchLeavesCachedKernelsOpen(t *testing.T) {
 	shared := &countKern{closed: &closed}
 	bs := &blockScratch{mvHead: mv{kern: shared, red: shared}}
 
-	freeScratch(bs)
+	freeScratch(bs, &devShared{})
 
 	if closed != 0 {
 		t.Errorf("freeScratch closed a kernel reached through mv %d time(s). Those come "+
 			"from g.kerns, which is keyed by SHAPE and shared across every scratch on "+
 			"the device -- closing one here leaves the cache handing a closed kernel to "+
 			"the next block of that shape", closed)
+	}
+}
+
+// TestSharedKernelMarkBelongsToTheDevice: a kernel compileShared handed out is
+// left open by closeKern on its own device, and closed by any other, since the
+// mark is the device's and not the process's.
+func TestSharedKernelMarkBelongsToTheDevice(t *testing.T) {
+	closed := 0
+	k := &countKern{closed: &closed}
+	a, b := &devShared{}, &devShared{}
+	a.kshared = map[backend.Kernel]struct{}{k: {}}
+	a.closeKern(k)
+	if closed != 0 {
+		t.Fatalf("closeKern closed a kernel its device shares")
+	}
+	b.closeKern(k)
+	if closed != 1 {
+		t.Fatalf("another device's closeKern left the kernel open (closed %d): the mark is process-wide", closed)
 	}
 }

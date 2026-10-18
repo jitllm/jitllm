@@ -211,10 +211,10 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 	if pf.flash != nil && p.AttnSinks {
 		ms := kernels.FlashShape{Heads: p.NHead, KVHeads: p.NKVHead, Dim: hd, Rows: rows, Splits: 1, Sink: true}
 		if pf.fmerge = comp(kernels.FlashAttentionMergeWide(ms)); pf.fmerge == nil {
-			closeKern(pf.flash)
+			g.closeKern(pf.flash)
 			pf.flash = nil
 		} else if err := g.prefillBuf(&pf.part, &pf.partFloats, kernels.FlashPartialFloats(ms)); err != nil {
-			pf.free()
+			pf.free(g.devShared)
 			return err
 		}
 		pf.fRows = rows * p.NHead * hd
@@ -289,7 +289,7 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 			}
 		}
 		if v == nil {
-			pf.free()
+			pf.free(g.devShared)
 			return nil // no staged form on this device: FlashDecodeKV serves
 		}
 		ms := mergeShape(kernels.FlashShape{Heads: p.NHead, KVHeads: pg.shape.KVHeads, Dim: hd, MLA: pg.shape.MLA,
@@ -298,7 +298,7 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 			// The softmax binds the partials in every form, so they exist at
 			// one pass's width.
 			if err := g.prefillBuf(&pf.part, &pf.partFloats, kernels.FlashPartialFloats(ms)); err != nil {
-				pf.free()
+				pf.free(g.devShared)
 				return err
 			}
 		} else {
@@ -309,17 +309,17 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 			pf.mFold = comp(kernels.FlashAttentionMergeRun(ms, false))
 			pf.mFin = comp(kernels.FlashAttentionMergeWide(one))
 			if pf.mFirst == nil || pf.mFold == nil || pf.mFin == nil {
-				pf.free()
+				pf.free(g.devShared)
 				return nil
 			}
 			if err := g.prefillBuf(&pf.part, &pf.partFloats, kernels.FlashPartialFloats(ms)); err != nil {
-				pf.free()
+				pf.free(g.devShared)
 				return err
 			}
 			for i := range pf.run {
 				var have int
 				if err := g.prefillBuf(&pf.run[i], &have, kernels.FlashPartialFloats(one)); err != nil {
-					pf.free()
+					pf.free(g.devShared)
 					return err
 				}
 			}
@@ -331,7 +331,7 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 		}
 		b, err := g.dev.Alloc(rows * kernels.PRowWords * 4)
 		if err != nil {
-			pf.free()
+			pf.free(g.devShared)
 			return err
 		}
 		pf.buf[i] = b
@@ -422,7 +422,7 @@ func (g *devTier) prefillVariantAt(bs *blockScratch, pf *pagedPrefill, chunk, sp
 	for i, k := range []*ir.Kernel{ks, kf, ka} {
 		c, err := g.compileShared(k)
 		if err != nil {
-			v.close()
+			v.close(g.devShared)
 			if g.prefillRefused == nil {
 				g.prefillRefused = map[prefillRefusal]struct{}{}
 			}
@@ -434,12 +434,12 @@ func (g *devTier) prefillVariantAt(bs *blockScratch, pf *pagedPrefill, chunk, sp
 	n := kernels.PagedPrefillPlane(s)
 	have := pf.planeFloats
 	if err := g.prefillBuf(&pf.sc, &have, n); err != nil {
-		v.close()
+		v.close(g.devShared)
 		return nil, err
 	}
 	have = pf.planeFloats
 	if err := g.prefillBuf(&pf.wt, &have, n); err != nil {
-		v.close()
+		v.close(g.devShared)
 		return nil, err
 	}
 	pf.planeFloats = max(pf.planeFloats, n)
@@ -447,35 +447,35 @@ func (g *devTier) prefillVariantAt(bs *blockScratch, pf *pagedPrefill, chunk, sp
 	return v, nil
 }
 
-func (v *prefillVariant) close() {
+func (v *prefillVariant) close(g *devShared) {
 	for _, k := range []backend.Kernel{v.scores, v.soft, v.acc} {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 }
 
 // free releases a prefill set.
-func (pf *pagedPrefill) free() {
+func (pf *pagedPrefill) free(g *devShared) {
 	if pf == nil {
 		return
 	}
 	for _, v := range pf.vars {
-		v.close()
+		v.close(g)
 	}
 	for _, k := range []backend.Kernel{pf.flash, pf.fmerge, pf.mFirst, pf.mFold, pf.mFin} {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	for _, k := range pf.ragK {
-		closeKern(k)
+		g.closeKern(k)
 	}
 	for _, k := range pf.ragMerge {
-		closeKern(k)
+		g.closeKern(k)
 	}
 	for _, v := range pf.ragVars {
-		v.close()
+		v.close(g)
 	}
 	bufs := []backend.Buf{pf.sc, pf.wt, pf.part, pf.run[0], pf.run[1], pf.buf[0], pf.buf[1]}
 	bufs = append(append(bufs, pf.pass[0]...), pf.pass[1]...)

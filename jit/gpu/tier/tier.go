@@ -2034,7 +2034,8 @@ type devShared struct {
 	ragK       map[ragKey]backend.Kernel     // a ragged step's matvecs; see ragMV
 	tailK      map[ragKey]*mvTail            // tileMV's second launches, one per shape
 	qkvK       map[string]*qkvSeg            // a prompt chunk's q/k/v grids; see qkvGemm
-	kshared    map[string]backend.Kernel     // scratch kernels by content; see compileShared
+	kshareKey  map[string]backend.Kernel     // scratch kernels by content; see compileShared
+	kshared    map[backend.Kernel]struct{}   // the same kernels, by identity: closeKern leaves them open
 	pcache     *persistCache                 // composed persistent kernels; see persist.go
 	// convK, conv and convN are the convolutional blocks' kernels, their
 	// shared scratch and how many hold it (conv.go).
@@ -2192,6 +2193,9 @@ type GPU struct {
 	ownMu sync.Mutex
 	model uint64
 	held  bool
+	// lastSID is the last session id Attach handed out (under mu): ids are
+	// unique per tier.
+	lastSID uint64
 	// devs is every device, in the order they were opened (AddDevices
 	// appends).
 	devs []*devTier
@@ -2648,12 +2652,12 @@ func (g *devTier) Bytes() uint64 {
 // fell behind every field added since; reflection is affordable once per grow.
 // Duplicates are freed once: two fields may alias one buffer, and a double Free
 // is a driver error.
-func freeScratch(bs *blockScratch) {
+func freeScratch(bs *blockScratch, g *devShared) {
 	if bs == nil {
 		return
 	}
-	bs.mg.free()  // a pointer, which the field walk below does not follow
-	freeFlash(bs) // a slice, likewise
+	bs.mg.free(g)    // a pointer, which the field walk below does not follow
+	freeFlash(bs, g) // a slice, likewise
 	// Both slices may hold nil where an allocation failed part-way, which is
 	// how a card too small for a tower's planes reaches here.
 	for _, b := range bs.qoffs {
@@ -2674,15 +2678,15 @@ func freeScratch(bs *blockScratch) {
 		}
 	}
 	bs.vsegs = nil
-	freePaged(bs.pkv)
-	bs.mlab.free()
-	bs.ds4.free()
-	bs.k3.free()
-	bs.q4e.free()
+	freePaged(bs.pkv, g)
+	bs.mlab.free(g)
+	bs.ds4.free(g)
+	bs.k3.free(g)
+	bs.q4e.free(g)
 	for n, rk := range bs.ragLin { // a map, which the walk does not follow either
 		for _, k := range []backend.Kernel{rk.conv, rk.shift, rk.delta, rk.ngConv} {
 			if k != nil {
-				closeKern(k)
+				g.closeKern(k)
 			}
 		}
 		delete(bs.ragLin, n)
@@ -2705,7 +2709,7 @@ func freeScratch(bs *blockScratch) {
 				Elem().Interface().(backend.Kernel)
 			if ok && k != nil && !seenK[k] {
 				seenK[k] = true
-				closeKern(k)
+				g.closeKern(k)
 			}
 			continue
 		}
@@ -2821,11 +2825,11 @@ func (g *devTier) Close() {
 	// on one would panic.
 	for _, k := range g.kerns {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	for _, k := range g.idKerns {
-		closeKern(k)
+		g.closeKern(k)
 	}
 	for _, r := range g.res {
 		if r.ok {
@@ -2838,11 +2842,11 @@ func (g *devTier) Close() {
 	}
 	for _, k := range g.reduce {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	for _, k := range g.restrides {
-		closeKern(k)
+		g.closeKern(k)
 	}
 	// Every layer left the pool with its block; what remains is the pool
 	// itself and its charge.
@@ -2857,7 +2861,7 @@ func (g *devTier) Close() {
 	g.closePick()
 	g.lane0.freePick()
 	for _, k := range g.recCopies {
-		closeKern(k)
+		g.closeKern(k)
 	}
 	g.freeAltNorms()
 	if g.recNext != nil {
@@ -2865,32 +2869,32 @@ func (g *devTier) Close() {
 	}
 	for _, k := range g.segKerns {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	for _, k := range g.ragKerns {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	for _, k := range g.ragK {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	for _, k := range g.convK {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	for _, s := range g.qkvK {
 		if s != nil {
-			closeKern(s.kern)
+			g.closeKern(s.kern)
 		}
 	}
 	for _, k := range g.unks {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	g.dropGraph()

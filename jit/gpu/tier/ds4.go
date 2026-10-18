@@ -481,7 +481,7 @@ func (g *devTier) initDS4(bs *blockScratch) error {
 }
 
 // free releases the set's kernels and buffers.
-func (x *ds4Scratch) free() {
+func (x *ds4Scratch) free(g *devShared) {
 	if x == nil {
 		return
 	}
@@ -502,7 +502,7 @@ func (x *ds4Scratch) free() {
 	}
 	for _, k := range ks {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	for _, b := range bs {

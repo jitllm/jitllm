@@ -3,24 +3,20 @@ package tier
 import (
 	"crypto/sha256"
 	"encoding/gob"
-	"sync"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
-// sharedKerns is every kernel compileShared handed out, across devices: a
-// scratch's free (freeScratch, freePaged, freeFlash) leaves them open, since
-// the next scratch of the same shape takes the same compiled kernel. They are
-// closed with their device (closeShared).
-var sharedKerns sync.Map // backend.Kernel -> struct{}
-
-// closeKern closes a scratch's kernel unless it is shared.
-func closeKern(k backend.Kernel) {
+// closeKern closes a scratch's kernel unless it is shared: a kernel
+// compileShared handed out stays open when a scratch frees it, since the next
+// scratch of the same shape takes the same compiled kernel, and is closed with
+// its device (closeShared). Callers hold g.mu, which guards g.kshared.
+func (g *devShared) closeKern(k backend.Kernel) {
 	if k == nil {
 		return
 	}
-	if _, ok := sharedKerns.Load(k); ok {
+	if _, ok := g.kshared[k]; ok {
 		return
 	}
 	k.Close()
@@ -47,26 +43,26 @@ func (g *devTier) compileShared(k *ir.Kernel) (backend.Kernel, error) {
 	if err != nil {
 		return g.dev.Compile(k)
 	}
-	if c, ok := g.kshared[key]; ok {
+	if c, ok := g.kshareKey[key]; ok {
 		return c, nil
 	}
 	c, err := g.dev.Compile(k)
 	if err != nil {
 		return nil, err
 	}
-	if g.kshared == nil {
-		g.kshared = map[string]backend.Kernel{}
+	if g.kshareKey == nil {
+		g.kshareKey, g.kshared = map[string]backend.Kernel{}, map[backend.Kernel]struct{}{}
 	}
-	g.kshared[key] = c
-	sharedKerns.Store(c, struct{}{})
+	g.kshareKey[key] = c
+	g.kshared[c] = struct{}{}
 	return c, nil
 }
 
 // closeShared closes the device's cached scratch kernels. Callers hold g.mu.
 func (g *devTier) closeShared() {
-	for key, c := range g.kshared {
-		sharedKerns.Delete(c)
+	for key, c := range g.kshareKey {
+		delete(g.kshared, c)
 		c.Close()
-		delete(g.kshared, key)
+		delete(g.kshareKey, key)
 	}
 }

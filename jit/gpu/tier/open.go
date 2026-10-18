@@ -55,6 +55,8 @@ type openOpts struct {
 	// pools is the registry the tier's discrete cards take their pools from
 	// (WithPoolRegistry); nil, each tier its own.
 	pools *PoolRegistry
+	// op reaches the backends' constructors; the zero value is the real ones.
+	op opener
 }
 
 // WithDevices names the devices to place blocks on, in the grammar the -devices
@@ -422,14 +424,14 @@ func openEntries(es []Entry, o openOpts) ([]backend.Device, []uint64, []string, 
 			}
 			took(e, choose(devs, o.kb))
 		case "all":
-			devs, err := allDevices(do)
+			devs, err := o.op.allDevices(do)
 			if err != nil {
 				return fail(err)
 			}
 			took(e, order(devs, o.kb.tune)...)
 		case "ptx":
 			if !e.HasSel {
-				devs, err := everyCUDA(do)
+				devs, err := o.op.everyCUDA(do)
 				if err != nil {
 					return fail(fmt.Errorf("tier: -devices %q: %w", e.Text, err))
 				}
@@ -437,28 +439,28 @@ func openEntries(es []Entry, o openOpts) ([]backend.Device, []uint64, []string, 
 				continue
 			}
 			ord, _ := strconv.Atoi(e.Sel)
-			d, err := openCUDA(ord, do)
+			d, err := o.op.newCUDA(ord, do)
 			if err != nil {
 				return fail(fmt.Errorf("tier: -devices %q: %w", e.Text, err))
 			}
 			took(e, d)
 		case "spirv":
 			if !e.HasSel && do.Vulkan.Device == "" {
-				devs, err := everyVulkan(do)
+				devs, err := o.op.everyVulkan(do)
 				if err != nil {
 					return fail(fmt.Errorf("tier: -devices %q: %w", e.Text, err))
 				}
 				took(e, order(devs, o.kb.tune)...)
 				continue
 			}
-			d, err := openVulkan(e.Sel, do)
+			d, err := o.op.newVulkan(e.Sel, do)
 			if err != nil {
 				return fail(fmt.Errorf("tier: -devices %q: %w", e.Text, err))
 			}
 			took(e, d)
 		case "amdgcn":
 			if !e.HasSel {
-				devs, err := everyHIP(do)
+				devs, err := o.op.everyHIP(do)
 				if err != nil {
 					return fail(fmt.Errorf("tier: -devices %q: %w", e.Text, err))
 				}
@@ -466,13 +468,13 @@ func openEntries(es []Entry, o openOpts) ([]backend.Device, []uint64, []string, 
 				continue
 			}
 			ord, _ := strconv.Atoi(e.Sel)
-			d, err := openHIP(ord, do)
+			d, err := o.op.newHIP(ord, do)
 			if err != nil {
 				return fail(fmt.Errorf("tier: -devices %q: %w", e.Text, err))
 			}
 			took(e, d)
 		case "msl":
-			d, err := openMetal(do)
+			d, err := o.op.newMetal(do)
 			if err != nil {
 				return fail(fmt.Errorf("tier: -devices %q: %w", e.Text, err))
 			}
@@ -509,17 +511,71 @@ func ordinalOf(d backend.Device) int {
 	return -1
 }
 
-// The backends' device constructors, as variables so a gate can put a fake
-// host behind a spec and count what the spec resolves to.
-var (
-	cudaCount     = backend.CUDACount
-	openCUDA      = backend.OpenCUDAWith
-	vulkanDevices = backend.VulkanDevices
-	openVulkan    = backend.OpenVulkanWith
-	openMetal     = backend.OpenMetalWith
-	hipCount      = backend.HIPCount
-	openHIP       = backend.OpenHIPWith
-)
+// opener is how the tier reaches the backends' device constructors: its zero
+// value is the real backends, and a gate puts a fake host behind a spec, and
+// counts what the spec resolves to, by setting fields through withOpener. It
+// rides in openOpts, so one tier's fake host is no other tier's.
+type opener struct {
+	cudaCount     func() (int, error)
+	openCUDA      func(int, backend.Opts) (backend.Device, error)
+	vulkanDevices func() ([]vulkan.Info, error)
+	openVulkan    func(string, backend.Opts) (backend.Device, error)
+	openMetal     func(backend.Opts) (backend.Device, error)
+	hipCount      func(backend.HIPConfig) int
+	openHIP       func(int, backend.Opts) (backend.Device, error)
+}
+
+func (p opener) countCUDA() (int, error) {
+	if p.cudaCount != nil {
+		return p.cudaCount()
+	}
+	return backend.CUDACount()
+}
+
+func (p opener) newCUDA(ord int, do backend.Opts) (backend.Device, error) {
+	if p.openCUDA != nil {
+		return p.openCUDA(ord, do)
+	}
+	return backend.OpenCUDAWith(ord, do)
+}
+
+func (p opener) listVulkan() ([]vulkan.Info, error) {
+	if p.vulkanDevices != nil {
+		return p.vulkanDevices()
+	}
+	return backend.VulkanDevices()
+}
+
+func (p opener) newVulkan(sel string, do backend.Opts) (backend.Device, error) {
+	if p.openVulkan != nil {
+		return p.openVulkan(sel, do)
+	}
+	return backend.OpenVulkanWith(sel, do)
+}
+
+func (p opener) newMetal(do backend.Opts) (backend.Device, error) {
+	if p.openMetal != nil {
+		return p.openMetal(do)
+	}
+	return backend.OpenMetalWith(do)
+}
+
+func (p opener) countHIP(c backend.HIPConfig) int {
+	if p.hipCount != nil {
+		return p.hipCount(c)
+	}
+	return backend.HIPCount(c)
+}
+
+func (p opener) newHIP(ord int, do backend.Opts) (backend.Device, error) {
+	if p.openHIP != nil {
+		return p.openHIP(ord, do)
+	}
+	return backend.OpenHIPWith(ord, do)
+}
+
+// withOpener replaces the backends' constructors on the tier this option opens.
+func withOpener(p opener) Option { return func(o *openOpts) { o.op = p } }
 
 // allDevices opens every distinct device on this host. It enumerates rather
 // than calling backend.Open, which returns one device per backend.
@@ -527,10 +583,10 @@ var (
 // Software rasterisers are skipped, as backend.openVulkan skips them: they are
 // strictly worse than the CPU tier. Naming one explicitly still works
 // (`-devices vulkan:llvmpipe`).
-func allDevices(do backend.Opts) ([]backend.Device, error) {
-	out := append(cudaDevices(do), hipDevices(do)...)
-	out = append(out, vulkanGPUs(do)...)
-	if d, err := openMetal(enumerating(do)); err == nil {
+func (p opener) allDevices(do backend.Opts) ([]backend.Device, error) {
+	out := append(p.cudaDevices(do), p.hipDevices(do)...)
+	out = append(out, p.vulkanGPUs(do)...)
+	if d, err := p.newMetal(enumerating(do)); err == nil {
 		out = append(out, d)
 	}
 	out = dropSecondAPI(out)
@@ -541,12 +597,12 @@ func allDevices(do backend.Opts) ([]backend.Device, error) {
 }
 
 // cudaDevices opens every CUDA device that opens, by ordinal.
-func cudaDevices(do backend.Opts) []backend.Device {
+func (p opener) cudaDevices(do backend.Opts) []backend.Device {
 	do.Enumerating = true
 	var out []backend.Device
-	if n, err := cudaCount(); err == nil {
+	if n, err := p.countCUDA(); err == nil {
 		for i := 0; i < n; i++ {
-			if d, err := openCUDA(i, do); err == nil {
+			if d, err := p.newCUDA(i, do); err == nil {
 				out = append(out, d)
 			}
 		}
@@ -555,11 +611,11 @@ func cudaDevices(do backend.Opts) []backend.Device {
 }
 
 // hipDevices opens every HIP device that opens, by ordinal. No ROCm is none.
-func hipDevices(do backend.Opts) []backend.Device {
+func (p opener) hipDevices(do backend.Opts) []backend.Device {
 	do.Enumerating = true
 	var out []backend.Device
-	for i := 0; i < hipCount(do.HIP); i++ {
-		if d, err := openHIP(i, do); err == nil {
+	for i := 0; i < p.countHIP(do.HIP); i++ {
+		if d, err := p.newHIP(i, do); err == nil {
 			out = append(out, d)
 		}
 	}
@@ -569,12 +625,12 @@ func hipDevices(do backend.Opts) []backend.Device {
 // everyHIP is a bare `hip`: every HIP device. With none, the error is the one
 // ordinal 0 gives, which names why (no ROCm and where it was looked for, or no
 // device).
-func everyHIP(do backend.Opts) ([]backend.Device, error) {
-	if out := hipDevices(do); len(out) > 0 {
+func (p opener) everyHIP(do backend.Opts) ([]backend.Device, error) {
+	if out := p.hipDevices(do); len(out) > 0 {
 		return out, nil
 	}
 	do.Enumerating = true
-	d, err := openHIP(0, do)
+	d, err := p.newHIP(0, do)
 	if err != nil {
 		return nil, err
 	}
@@ -583,15 +639,15 @@ func everyHIP(do backend.Opts) ([]backend.Device, error) {
 
 // vulkanGPUs opens every Vulkan device that computes and is not a software
 // rasteriser.
-func vulkanGPUs(do backend.Opts) []backend.Device {
+func (p opener) vulkanGPUs(do backend.Opts) []backend.Device {
 	do.Enumerating = true
 	var out []backend.Device
-	if infos, err := vulkanDevices(); err == nil {
+	if infos, err := p.listVulkan(); err == nil {
 		for _, in := range infos {
 			if !in.Compute || in.Software {
 				continue
 			}
-			if d, err := openVulkan(strconv.Itoa(in.Index), do); err == nil {
+			if d, err := p.newVulkan(strconv.Itoa(in.Index), do); err == nil {
 				out = append(out, d)
 			}
 		}
@@ -601,12 +657,12 @@ func vulkanGPUs(do backend.Opts) []backend.Device {
 
 // everyCUDA is a bare `cuda`: every CUDA device. With none open, the error is
 // the one ordinal 0 gives, which says why (no driver, no device).
-func everyCUDA(do backend.Opts) ([]backend.Device, error) {
-	if out := cudaDevices(do); len(out) > 0 {
+func (p opener) everyCUDA(do backend.Opts) ([]backend.Device, error) {
+	if out := p.cudaDevices(do); len(out) > 0 {
 		return out, nil
 	}
 	do.Enumerating = true
-	d, err := openCUDA(0, do)
+	d, err := p.newCUDA(0, do)
 	if err != nil {
 		return nil, err
 	}
@@ -616,12 +672,12 @@ func everyCUDA(do backend.Opts) ([]backend.Device, error) {
 // everyVulkan is a bare `vulkan`: every Vulkan GPU. With none, it is the
 // device the Vulkan backend picks on its own, or the error saying why there is
 // none.
-func everyVulkan(do backend.Opts) ([]backend.Device, error) {
-	if out := vulkanGPUs(do); len(out) > 0 {
+func (p opener) everyVulkan(do backend.Opts) ([]backend.Device, error) {
+	if out := p.vulkanGPUs(do); len(out) > 0 {
 		return out, nil
 	}
 	do.Enumerating = true
-	d, err := openVulkan("", do)
+	d, err := p.newVulkan("", do)
 	if err != nil {
 		return nil, err
 	}

@@ -235,14 +235,14 @@ func (g *devTier) initQ4E(bs *blockScratch) error {
 }
 
 // free releases the set's kernels and buffers.
-func (x *q4eScratch) free() {
+func (x *q4eScratch) free(g *devShared) {
 	if x == nil {
 		return
 	}
 	for _, k := range []backend.Kernel{x.normS, x.quantHD, x.quantLR, x.silu, x.gateMix, x.injK, x.place,
 		x.quantW, x.normR, x.streamDot, x.gatedVal, x.ngConv, x.ngAdd} {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	for _, b := range []backend.Buf{x.xn, x.gate, x.lo, x.lo2, x.mix, x.inj, x.w, x.aHD, x.axHD, x.aLR, x.axLR,

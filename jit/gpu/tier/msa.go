@@ -163,14 +163,14 @@ func (g *devTier) initMSA(bs *blockScratch, rows, P int,
 }
 
 // free releases the selection's kernels and buffers.
-func (m *msaScratch) free() {
+func (m *msaScratch) free(g *devShared) {
 	if m == nil {
 		return
 	}
 	for _, k := range []backend.Kernel{m.normQ, m.normK, m.copyQ, m.ropeQ, m.asmK, m.asmI, m.scores,
 		m.bmax, m.sel, m.compact, m.gatherK, m.gatherV, m.desc} {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	for _, b := range []backend.Buf{m.qRaw, m.qn, m.qRot, m.kRaw, m.kn, m.kAll, m.qOff, m.allOff,

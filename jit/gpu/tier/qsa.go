@@ -264,14 +264,14 @@ func (m *qsaScratch) qsaWrites(w func(backend.Buf, []byte)) {
 }
 
 // free releases the selection's kernels and buffers.
-func (m *qsaScratch) free() {
+func (m *qsaScratch) free(g *devShared) {
 	if m == nil {
 		return
 	}
 	for _, k := range []backend.Kernel{m.normQ, m.normK, m.copyQ, m.ropeQ, m.asmK, m.asmI, m.csTab, m.dTab, m.scores,
 		m.sel, m.compact, m.gatherK, m.gatherV, m.desc} {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	for _, b := range []backend.Buf{m.qRaw, m.qn, m.qRot, m.kRaw, m.kAll, m.qOff, m.allOff, m.idxOff, m.cs,

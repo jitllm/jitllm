@@ -63,24 +63,24 @@ func (g *devTier) initRopeTable(bs *blockScratch, p *nn.LayerPlan, rows int) err
 		return b.Write(f32b(v))
 	}
 	if err := up(&bs.ropeTab, p.RopeTab); err != nil {
-		closeKern(c)
+		g.closeKern(c)
 		return err
 	}
 	if p.SWAPeriod > 0 {
 		if err := up(&bs.ropeTabSWA, p.RopeTabSWA); err != nil {
-			closeKern(c)
+			g.closeKern(c)
 			return err
 		}
 	}
 	if err := up(&bs.ropeConst, kernels.RopeTabConsts()); err != nil {
-		closeKern(c)
+		g.closeKern(c)
 		return err
 	}
 	// (rows+1) words, the first being the valid row count as in bs.n, so a
 	// ragged chunk's per-token staging is one small write (see kernels.RopeTable).
 	b, err := g.dev.Alloc((rows + 1) * 4)
 	if err != nil {
-		closeKern(c)
+		g.closeKern(c)
 		return err
 	}
 	// The table is zeroed once: the kernel writes only valid rows, so the padded
@@ -93,7 +93,7 @@ func (g *devTier) initRopeTable(bs *blockScratch, p *nn.LayerPlan, rows int) err
 			continue
 		}
 		if err := t.Write(z); err != nil {
-			closeKern(c)
+			g.closeKern(c)
 			b.Free()
 			return err
 		}
@@ -125,7 +125,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	// what it leaked was what the next build needed.
 	defer func() {
 		if out == nil {
-			freeScratch(bs)
+			freeScratch(bs, g.devShared)
 		}
 	}()
 	// What the build allocated, by the device's own count: a tower's set is
@@ -1615,12 +1615,12 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	if paged {
 		if err := g.initPagedScratch(bs); err != nil {
 			g.LastErr = "paged attention: " + err.Error()
-			freeScratch(bs)
+			freeScratch(bs, g.devShared)
 			return nil
 		}
 		if err := g.initDS4(bs); err != nil {
 			g.LastErr = "DeepSeek V4: " + err.Error()
-			freeScratch(bs)
+			freeScratch(bs, g.devShared)
 			return nil
 		}
 	} else {
@@ -1644,12 +1644,12 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	}
 	if err := g.initK3(bs); err != nil {
 		g.LastErr = "Kimi-K3: " + err.Error()
-		freeScratch(bs)
+		freeScratch(bs, g.devShared)
 		return nil
 	}
 	if err := g.initQ4E(bs); err != nil {
 		g.LastErr = "Qwen3.8-Flash-Next: " + err.Error()
-		freeScratch(bs)
+		freeScratch(bs, g.devShared)
 		return nil
 	}
 	if rows > 1 && p.MLA() {
@@ -1760,9 +1760,9 @@ func (g *devTier) pickSoftmax(bs *blockScratch) bool {
 			bs.smAltGroups, bs.smAltWidth = scalarGroups, scalarWidth
 			return true
 		}
-		closeKern(c)
+		g.closeKern(c)
 	} else if c != nil {
-		closeKern(c)
+		g.closeKern(c)
 	}
 	c := build(1)
 	if c == nil {
