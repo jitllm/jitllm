@@ -34,6 +34,11 @@ type Dense struct {
 	// QKNormWhole norms q and k each over its whole projection at once
 	// (OLMoE's), an OpNorm on each, where QKNorm norms each head.
 	QKNormWhole bool
+	// QKNormPost moves QKNorm's q norm after the rotary, k's staying before
+	// it (Hunyuan's, its k weight folded into q's at conversion:
+	// jlm.FlagQKNormPostRope). QKL2Norm norms each head of q and k with no
+	// weight after the rotary, on the rotating blocks only (Llama 4's).
+	QKNormPost, QKL2Norm bool
 	// The classic block (C6). LayerNorm makes the attention and FFN norms
 	// LayerNorms (OpLayerNorm); NormBias and FFNNormBias bind their biases
 	// (RoleAttnNormBias, RoleFFNNormBias). Parallel feeds the FFN the block
@@ -130,13 +135,20 @@ func (d *Dense) Build() *Graph {
 		k := mv("k", h, jlm.RoleAttnK, kvd, bias(jlm.RoleAttnKBias))
 		v := mv("v", h, jlm.RoleAttnV, kvd, bias(jlm.RoleAttnVBias))
 		q, k, v = clamp("q_clamped", q), clamp("k_clamped", k), clamp("v_clamped", v)
-		if d.QKNorm {
-			hn := func(name string, in ValueID, w jlm.Role) ValueID {
-				out := g.value(name, g.Values[in].Width)
-				g.op(Op{Kind: OpHeadNorm, In: []ValueID{in}, Out: []ValueID{out}, Weight: []Binding{vec(w, d.HeadDim)},
-					Attr: Attrs{Eps: d.Eps, HeadDim: d.HeadDim}})
-				return out
+		// hn norms each head of in; w 0 is a weightless norm (a scale of ones).
+		hn := func(name string, in ValueID, w jlm.Role) ValueID {
+			out := g.value(name, g.Values[in].Width)
+			var ws []Binding
+			if w != 0 {
+				ws = []Binding{vec(w, d.HeadDim)}
 			}
+			g.op(Op{Kind: OpHeadNorm, In: []ValueID{in}, Out: []ValueID{out}, Weight: ws,
+				Attr: Attrs{Eps: d.Eps, HeadDim: d.HeadDim}})
+			return out
+		}
+		if d.QKNorm && d.QKNormPost {
+			k = hn("k_normed", k, jlm.RoleAttnKNorm)
+		} else if d.QKNorm {
 			q = hn("q_normed", q, jlm.RoleAttnQNorm)
 			k = hn("k_normed", k, jlm.RoleAttnKNorm)
 		} else if d.QKNormWhole {
@@ -152,6 +164,12 @@ func (d *Dense) Build() *Graph {
 		qr, kr := q, k
 		if !d.NoRope {
 			qr, kr = rope("q_rot", q), rope("k_rot", k)
+			if d.QKL2Norm {
+				qr, kr = hn("q_l2", qr, 0), hn("k_l2", kr, 0)
+			}
+		}
+		if d.QKNorm && d.QKNormPost {
+			qr = hn("q_normed", qr, jlm.RoleAttnQNorm)
 		}
 		g.op(Op{Kind: OpKVAppend, In: []ValueID{kr, v}, Reads: []StateRef{{"kv", 0}}, Writes: []StateRef{{"kv", 1}}})
 		a = g.value("attn", qd)

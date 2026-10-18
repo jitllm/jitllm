@@ -136,6 +136,15 @@ func Verify(g *Graph, f Facts) error {
 		}
 		switch o.Kind {
 		case OpNorm, OpHeadNorm:
+			// A weightless head norm is Llama 4's, and only where the
+			// configuration states it.
+			if o.Kind == OpHeadNorm && len(o.Weight) == 0 && ins(1) && outs(1) {
+				if !c.QKL2Norm || o.Attr.Eps != eps || o.Attr.HeadDim != headDim || headDim <= 0 ||
+					width(o.In[0])%headDim != 0 || width(o.Out[0]) != width(o.In[0]) {
+					bad("%s: a weightless head norm the configuration does not state", at)
+				}
+				break
+			}
 			if !ins(1) || !outs(1) || len(o.Weight) != 1 {
 				bad("%s: wants one input, one output and one scale", at)
 				break

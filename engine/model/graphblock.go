@@ -60,7 +60,6 @@ const (
 	UncoveredPLE           = "per-layer embeddings"
 	UncoveredResidScale    = "a residual scale"
 	UncoveredRopeAxes      = "a multi-axis or interleaved rotary"
-	UncoveredQKNormKind    = "a q/k norm after the rotary or without a weight"
 	UncoveredVNorm         = "a norm over v"
 	UncoveredWindow        = "a chunked attention"
 	UncoveredNonCausal     = "non-causal attention"
@@ -75,7 +74,7 @@ const (
 var UncoveredReasons = []string{UncoveredMixDense, UncoveredMixRouter, UncoveredMixExperts, UncoveredMixWeightIn,
 	UncoveredUngated, UncoveredOutGate, UncoveredMLA, UncoveredValueWidth,
 	UncoveredKVShared, UncoveredIndexer, UncoveredStreams, UncoveredPLE, UncoveredResidScale,
-	UncoveredRopeAxes, UncoveredQKNormKind, UncoveredVNorm,
+	UncoveredRopeAxes, UncoveredVNorm,
 	UncoveredWindow, UncoveredNonCausal, UncoveredSparseAct, UncoveredDoubleFFN, UncoveredCompressed,
 	UncoveredRecurrent, UncoveredUnboundTensor}
 
@@ -116,8 +115,6 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredResidScale
 	case c.RopeInterleaved || c.RopeXD || len(m.rope.Runs) > 0:
 		return UncoveredRopeAxes
-	case c.QKNormPost || c.QKL2Norm:
-		return UncoveredQKNormKind
 	case c.VNorm:
 		return UncoveredVNorm
 	case c.SWA(li) && c.SWAChunked:
@@ -215,6 +212,7 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		Ungated: !c.MoEAt(li) && !has(jlm.RoleFFNGate), Clamp: float64(c.ClampKQV),
 		PostNorm: has(jlm.RolePostAttnNorm), NoPreNorm: !has(jlm.RoleAttnNorm), NoRope: !c.RopeAt(li)}
 	d.QKVBias, d.Sinks = has(jlm.RoleAttnQBias), has(jlm.RoleAttnSinks)
+	d.QKNormPost, d.QKL2Norm = c.QKNormPost, c.QKL2Norm && c.RopeAt(li)
 	// The query temperature, where AttnTemp applies it to this block.
 	if c.AttnTempScale != 0 && !(c.NoPEGlobal && c.RopeAt(li)) {
 		d.TempScale, d.TempFloor, d.TempOffs = c.AttnTempScale, c.AttnTempFloor, c.AttnTempOffs
@@ -263,6 +261,9 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 type denseLowering struct {
 	g  *graph.Graph
 	qk bool
+	// qkPost: q's norm after the rotary (Hunyuan's); qkL2: weightless head
+	// norms on q and k after it (Llama 4's). attnPrep applies both.
+	qkPost, qkL2 bool
 	// mix says the block's FFN is a routed mixture (graph.Dense.Mixture),
 	// which the host runs through the mixture's operations (moe, moeBatch).
 	mix bool
@@ -372,11 +373,27 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 				lw.qk = true
 			}
 		}
-		// The rotary, absent on a block without one.
+		// Hunyuan's post-rotary form: k's norm before the rotary, q's after.
+		if !lw.qk && take(graph.OpHeadNorm, jlm.RoleAttnKNorm) {
+			lw.qk, lw.qkPost = true, true
+		}
+		// The rotary, absent on a block without one; Llama 4's weightless
+		// norms after it.
 		if take(graph.OpRope, 0) {
 			if err := run([]step{{graph.OpRope, 0}}); err != nil {
 				return nil, err
 			}
+			if i < len(ops) && ops[i].Kind == graph.OpHeadNorm && len(ops[i].Weight) == 0 {
+				i++
+				if i >= len(ops) || ops[i].Kind != graph.OpHeadNorm || len(ops[i].Weight) != 0 {
+					return nil, fail("head_norm of k with no weight")
+				}
+				i++
+				lw.qkL2 = true
+			}
+		}
+		if lw.qkPost && !take(graph.OpHeadNorm, jlm.RoleAttnQNorm) {
+			return nil, fail("head_norm of attn_q_norm after the rotary")
 		}
 		if err := run([]step{{graph.OpKVAppend, 0}, {graph.OpAttend, 0}}); err != nil {
 			return nil, err
@@ -505,8 +522,10 @@ func (m *Model) buildGraphs() error {
 		if err != nil {
 			return err
 		}
-		if lw.qk != m.Cfg.QKNormAt(li) {
-			return fmt.Errorf("model: block %d graph's q/k norm is %v and attnPrep's %v", li, lw.qk, m.Cfg.QKNormAt(li))
+		if lw.qk != m.Cfg.QKNormAt(li) || lw.qkPost != (lw.qk && m.Cfg.QKNormPost) ||
+			lw.qkL2 != (m.Cfg.QKL2Norm && m.Cfg.RopeAt(li)) {
+			return fmt.Errorf("model: block %d graph's q/k norms (%v, post %v, weightless %v) are not attnPrep's",
+				li, lw.qk, lw.qkPost, lw.qkL2)
 		}
 		lw.rewrites = graph.Apply(g, graph.Rewrites...)
 		if lw.mla && !rewriteLegal(lw.rewrites, graph.MLAAbsorb.Name) {
@@ -1016,7 +1035,7 @@ func (s *State) parallelIn(l *layer, lw *denseLowering, n int) {
 func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
 	g := lw.g
 	p.NEmbd = g.Values[g.In[0]].Width
-	p.QKNorm, p.LayerNorm, p.Parallel = false, false, lw.par
+	p.QKNorm, p.QKNormPost, p.LayerNorm, p.Parallel = false, false, false, lw.par
 	_, producer := graphProducers(g)
 	windowed := false
 	for _, o := range g.Ops {
@@ -1042,7 +1061,12 @@ func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
 				p.QKNorm = true
 			}
 		case graph.OpHeadNorm:
-			p.QKNorm = true
+			// A weightless head norm is Llama 4's, which the plan carries
+			// model-wide (QKL2Norm); a weighted one is the q/k norm.
+			if len(o.Weight) == 1 {
+				p.QKNorm = true
+				p.QKNormPost = lw.qkPost
+			}
 		case graph.OpRope:
 			p.RopeNeox = o.Attr.Layout == graph.RopeNeox
 			// A sliding block's rotary is the local table the plan carries

@@ -26,7 +26,8 @@ const (
 	// epsilon inside the root, accumulated in f32. Weight[0] is the scale.
 	OpNorm
 	// OpHeadNorm is OpNorm over each head of HeadDim within the row, one
-	// scale of HeadDim shared by every head (qwen3's q/k norm).
+	// scale of HeadDim shared by every head (qwen3's q/k norm); with no
+	// Weight the scale is ones (Llama 4's L2 norm).
 	OpHeadNorm
 	// OpMatVec is out = W x, W's rows the output; Weight[0] is W, an
 	// optional Weight[1] its bias added after.
