@@ -501,7 +501,7 @@ func TestTwoModelsShareACardThroughTheRegistry(t *testing.T) {
 	for _, shared := range []bool{true, false} {
 		t.Run(fmt.Sprintf("shared=%v", shared), func(t *testing.T) {
 			var reg *tier.PoolRegistry
-			opts := []tier.Option{tier.WithDevices(a + "=1G"), tier.WithDeviceTune(tier.TuneOff)}
+			opts := []tier.Option{tier.WithDevices(a + "=400M"), tier.WithDeviceTune(tier.TuneOff)}
 			if shared {
 				reg = tier.NewPoolRegistry()
 				opts = append(opts, tier.WithPoolRegistry(reg))
@@ -516,7 +516,7 @@ func TestTwoModelsShareACardThroughTheRegistry(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer gb.Close()
-			ma, err := Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")))
+			ma, err := Open(graphModel(t, "Qwen3-0.6B-Q8_0"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -540,7 +540,7 @@ func TestTwoModelsShareACardThroughTheRegistry(t *testing.T) {
 				t.Skipf("the first model took no block of %s: %s", a, ga.Err())
 			}
 			if shared && nb == mb.Cfg.NLayer {
-				t.Fatalf("both models fit a shared 1G card whole (%d+%d blocks): the gate cannot see the pool", na, nb)
+				t.Fatalf("both models fit a shared 400M card whole (%d+%d blocks): the gate cannot see the pool", na, nb)
 			}
 			if _, err := sa.ReleaseBlocks(0, ma.Cfg.NLayer); err != nil || sa.GPULayers() != 0 {
 				t.Fatalf("the first model kept %d blocks: %v", sa.GPULayers(), err)
