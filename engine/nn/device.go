@@ -258,6 +258,14 @@ type LayerWeights struct {
 	// goroutine while the caller uploads sheets it already has (EnsureExperts
 	// writes through w and is not). nil means the caller must not overlap.
 	PrefetchExperts func(sel []uint32) error
+	// SpeculateExperts hands the host's read service a guess: sel's sheets
+	// are read ahead in the background, never waited for, and replace any
+	// earlier guess not yet started. A nil sel abandons the unstarted ones.
+	// A demanded read (PrefetchExperts, EnsureExperts) of a guessed sheet
+	// joins the guess's read and one that is not under way takes over its
+	// place, so a wrong guess never delays the experts a token needs. nil
+	// means the host does not speculate.
+	SpeculateExperts func(sel []uint32)
 	// HostExperts runs this block's routed experts on the host, for a device
 	// that keeps the rest of the block (hybrid execution): out = sum over i
 	// of w[i] * expert sel[i] applied to in, sel and w in selection order, in
@@ -1437,6 +1445,32 @@ type RowsWidther interface {
 // and brings its blocks home rather than fail the step.
 type RowsRoomer interface {
 	RowsRoom(rows, seqs int) bool
+}
+
+// KVShareDevice is a device whose KV pages the prefix cache can name and map
+// (jit/gpu/tier/kvshare.go): PublishKV names the session's page of block li
+// by key, held by the session; MapKV puts the page key names into the
+// session's page, the sequence then written to end at least, no byte moved,
+// and is false when no page answers to key. A write into a named page copies
+// it first.
+type KVShareDevice interface {
+	PublishKV(li, page int, key string) bool
+	MapKV(li, page int, key string, end int) bool
+	// PublishKVs is PublishKV for many names in one call: name i is block
+	// lis[i]'s page pages[i] by keys[i]. False when any was refused.
+	PublishKVs(lis, pages []int32, keys []string) bool
+}
+
+// RecShareDevice is a device that keeps a linear block's restore points where
+// its state lives (jit/gpu/tier/recshare.go): SnapRec copies the session's
+// state of block li into the snapshot named key, HasRec says one is kept, and
+// LoadRec copies it into the session's state. Nothing crosses the bus.
+type RecShareDevice interface {
+	SnapRec(li int, key string) bool
+	// SnapRecs is SnapRec for every block of lis at one point, in one call.
+	SnapRecs(lis []int32, key string) bool
+	HasRec(li int, key string) bool
+	LoadRec(li int, key string) bool
 }
 
 // SeqKVDevice is a LayerDevice that keeps attention history per sequence --

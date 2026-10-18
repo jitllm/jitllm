@@ -228,7 +228,10 @@ run flags:
                          trailing ~ streams it: its weights swap through the device's slots, so a
                          card smaller than the blocks it is given runs all of them, moving a
                          block's weights per token. Unnamed blocks are the engine's: resident on
-                         the device while they fit, the host after
+                         the device while they fit, the host after. A block is the unit: its
+                         attention and FFN run on one device. Name every device in -devices:
+                           -devices cuda:0,vulkan:0 -placement 0-15=cuda:0,16-31=vulkan:0
+                         Default empty: the engine places. A bad map or an unopened device is an error.
   -placement-strict      fail when an entry cannot be met, instead of placing that block elsewhere
   -kv-budget BYTES       KV history this session may hold in memory; older pages spill to
                          the -kv-cache directory and come back when attention reads them
@@ -1105,8 +1108,7 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 					ds.PeerBlocks, ds.PeerDeclined, ds.PeerSheets, float64(ds.PeerBytes)/(1<<30), ds.PeerStaged)
 			}
 			if ds.StreamPrefetched > 0 {
-				fmt.Fprintf(os.Stderr, "cross-layer prefetch: %d expert(s) read ahead, %.2f s joining them\n",
-					ds.StreamPrefetched, sec(ds.TStreamPrefetchWait))
+				fmt.Fprintf(os.Stderr, "cross-layer prefetch: %d expert(s) guessed\n", ds.StreamPrefetched)
 			}
 			if ds.ProbeExperts > 0 || ds.ProbeFused > 0 {
 				fmt.Fprintf(os.Stderr, "cross-layer probe: %d of %d routed experts predicted (%.1f%%), %d probe(s) skipped on a fused route\n",

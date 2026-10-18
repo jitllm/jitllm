@@ -73,27 +73,54 @@ type Range struct{ Off, N uint64 }
 // finding: planning once per layer rather than per projection removed
 // nearly all of its stall.
 func (f *File) EnsureRanges(b int, rs []Range) error {
+	return f.ensureRanges(b, rs, false)
+}
+
+// ensureRanges is EnsureRanges for a demanded read (spec false) and for a
+// speculative one (spec true, see readsvc.go).
+func (f *File) ensureRanges(b int, rs []Range, spec bool) error {
 	if len(rs) == 0 {
 		return nil
 	}
 	// The lock covers the decision, not the I/O: holding it across a page read
 	// would serialise sessions' file I/O. So the frame is claimed and pinned
 	// under the lock, the reads run unlocked, and the validity map is marked at
-	// the end; a pinned page is never a victim. Two callers may read the same
-	// chunk twice, which is idempotent and cheaper than an in-flight map.
+	// the end; a pinned page is never a victim. A chunk another caller is
+	// reading is marked busy: this caller reads the rest, then waits for those
+	// chunks alone and never reads one twice.
 	//
 	// The two locked halves are their own functions so every Lock has a
 	// deferred Unlock: a mutex left held hangs the next token with no error.
 	pl := f.getPlan()
 	defer f.putPlan(pl)
-	page, base, runs, err := f.planRuns(b, rs, pl.runs[:0])
-	pl.runs = runs[:0]
-	// Before the read: a copy of the frame's old bytes must be gone before
-	// its new ones can be handed out.
-	f.flushRecycled()
-	if err != nil || len(runs) == 0 {
-		return err
+	for {
+		page, base, runs, waits, err := f.planRunsBusy(b, rs, spec, pl.runs[:0])
+		pl.runs = runs[:0]
+		// Before the read: a copy of the frame's old bytes must be gone before
+		// its new ones can be handed out.
+		f.flushRecycled()
+		if err != nil {
+			return err
+		}
+		if len(runs) == 0 {
+			if !waits {
+				return nil
+			}
+			f.awaitLanded()
+			continue
+		}
+		if err := f.readPlanned(b, pl, page, base, runs); err != nil {
+			return err
+		}
+		if !waits {
+			return nil
+		}
 	}
+}
+
+// readPlanned reads the runs planRunsBusy returned into page and marks them,
+// releasing the pin the plan took.
+func (f *File) readPlanned(b int, pl *ioPlan, page []byte, base uint64, runs []run) error {
 	// The pin is released by a defer, not by markFilled, so a panic in the
 	// reads cannot leave the block unevictable (which reads as a budget too
 	// small, not as an error).
@@ -106,6 +133,17 @@ func (f *File) EnsureRanges(b int, rs []Range) error {
 
 	errs := f.readRuns(pl, page, base, psize, runs)
 	return f.markFilled(b, runs, errs)
+}
+
+// awaitLanded blocks until some in-flight read lands (or fails), which is
+// when a caller that joined it re-plans.
+func (f *File) awaitLanded() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.landed.L == nil {
+		f.landed.L = &f.mu
+	}
+	f.landed.Wait()
 }
 
 // run is a contiguous stretch of missing chunks, which is one read request.
@@ -128,17 +166,32 @@ func (f *File) chunkSpan(r Range, base uint64, nc int) (lo, hi int) {
 //
 // runs is the caller's scratch, appended to and returned.
 func (f *File) planRuns(b int, rs []Range, runs []run) (page []byte, base uint64, _ []run, err error) {
+	page, base, runs, _, err = f.planRunsBusy(b, rs, false, runs)
+	// A plan taken for inspection reads nothing, so it must not leave its
+	// chunks marked as being read.
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.clearBusy(b, runs)
+	return page, base, runs, err
+}
+
+// planRunsBusy is planRuns for a caller that will read the runs: it marks
+// them busy so a second caller joins instead of reading them again, and
+// reports in waits that some wanted chunk is being read by someone else.
+// runs is the caller's scratch, appended to and returned.
+func (f *File) planRunsBusy(b int, rs []Range, spec bool, runs []run) (page []byte, base uint64, _ []run, waits bool, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if b < 0 || b >= len(f.pages) {
-		return nil, 0, runs[:0], fmt.Errorf("jlm: block %d of %d", b, len(f.pages))
+		return nil, 0, runs[:0], false, fmt.Errorf("jlm: block %d of %d", b, len(f.pages))
 	}
-	if err := f.claim(b); err != nil {
-		return nil, 0, runs[:0], err
+	if err := f.claimFor(b, spec); err != nil {
+		return nil, 0, runs[:0], false, err
 	}
 	base, psize := f.pageAt(b)
 	have := f.filled[b]
 	nc := len(have)
+	busy := f.busyOf(b, nc)
 
 	// The plan is built from the requested spans, never by sweeping the page: a
 	// routed expert selection is scattered across the banks, so its bracketing
@@ -156,7 +209,7 @@ func (f *File) planRuns(b int, rs []Range, runs []run) (page []byte, base uint64
 			continue
 		}
 		if r.Off < base || r.Off+r.N > base+psize {
-			return nil, 0, runs[:0], fmt.Errorf("jlm: [%d,%d) is outside block %d's page",
+			return nil, 0, runs[:0], false, fmt.Errorf("jlm: [%d,%d) is outside block %d's page",
 				r.Off, r.Off+r.N, b)
 		}
 		if lo, hi := f.chunkSpan(r, base, nc); lo < hi {
@@ -165,7 +218,7 @@ func (f *File) planRuns(b int, rs []Range, runs []run) (page []byte, base uint64
 	}
 	f.spanBuf = sp[:0] // keep the grown array whatever this call found
 	if len(sp) == 0 {
-		return nil, 0, runs[:0], nil
+		return nil, 0, runs[:0], false, nil
 	}
 	// Insertion sort, not sort.Slice: a plan is a couple of dozen nearly
 	// sorted spans (bank by bank, ascending expert), and sort.Slice's
@@ -193,8 +246,13 @@ func (f *File) planRuns(b int, rs []Range, runs []run) (page []byte, base uint64
 				i++
 				continue
 			}
+			if busy[i] {
+				waits = true
+				i++
+				continue
+			}
 			j := i
-			for j < cur.hi && !have[j] {
+			for j < cur.hi && !have[j] && !busy[j] {
 				j++
 			}
 			runs = append(runs, run{i, j})
@@ -205,10 +263,15 @@ func (f *File) planRuns(b int, rs []Range, runs []run) (page []byte, base uint64
 		}
 	}
 	if len(runs) == 0 {
-		return nil, 0, runs[:0], nil
+		return nil, 0, runs[:0], waits, nil
+	}
+	for _, r := range runs {
+		for k := r.lo; k < r.hi; k++ {
+			busy[k] = true
+		}
 	}
 	f.hold(b)
-	return f.pages[b], base, runs, nil
+	return f.pages[b], base, runs, waits, nil
 }
 
 // unpin releases the pin planRuns took.
@@ -218,13 +281,23 @@ func (f *File) unpin(b int) {
 	f.drop(b)
 }
 
-// markFilled records the runs that landed.
+// markFilled records the runs that landed, clears their busy marks whatever
+// happened, and wakes the callers that joined them.
 func (f *File) markFilled(b int, runs []run, errs []error) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.clearBusy(b, runs)
+	if f.landed.L == nil {
+		f.landed.L = &f.mu
+	}
+	defer f.landed.Broadcast()
+	var first error
 	for ri, err := range errs {
 		if err != nil {
-			return fmt.Errorf("jlm: block %d run %d: %w", b, ri, err)
+			if first == nil {
+				first = fmt.Errorf("jlm: block %d run %d: %w", b, ri, err)
+			}
+			continue
 		}
 		// Through f.filled rather than a captured slice header: DropPage and
 		// ReleasePages do not consult the pin, and marking a freed map would
@@ -237,22 +310,61 @@ func (f *File) markFilled(b int, runs []run, errs []error) error {
 		}
 		f.chunkIn += int64(runs[ri].hi - runs[ri].lo)
 	}
-	return nil
+	return first
+}
+
+// busyOf is block b's in-flight map, sized to its chunks. Callers hold f.mu.
+func (f *File) busyOf(b, nc int) []bool {
+	if f.busy == nil {
+		f.busy = make([][]bool, len(f.pages))
+	}
+	if len(f.busy[b]) != nc {
+		f.busy[b] = make([]bool, nc)
+	}
+	return f.busy[b]
+}
+
+// clearBusy unmarks runs. Callers hold f.mu.
+func (f *File) clearBusy(b int, runs []run) {
+	if f.busy == nil || f.busy[b] == nil {
+		return
+	}
+	for _, r := range runs {
+		for k := r.lo; k < r.hi && k < len(f.busy[b]); k++ {
+			f.busy[b][k] = false
+		}
+	}
 }
 
 // claim gives block b a frame without reading anything into it, evicting
 // another block if the pool is full. It is EnsurePage's residency half with
 // the read left out. Callers hold f.mu.
-func (f *File) claim(b int) error {
+func (f *File) claim(b int) error { return f.claimFor(b, false) }
+
+// claimFor is claim for a demanded page (spec false) or a speculative one.
+// A speculative claim of a page that is not resident is charged to the
+// speculative occupancy (specHeld) and refused with errSpecFull past
+// specLimit; a demanded claim takes the charge off, the page now being the
+// working set's.
+func (f *File) claimFor(b int, spec bool) error {
+	if spec && f.pages[b] == nil && f.specHeld >= f.specLimit() {
+		return errSpecFull
+	}
 	f.tick++
 	if f.used != nil {
 		f.used[b] = f.tick
 	}
 	if f.pages[b] != nil {
+		if !spec {
+			f.unspec(b)
+		}
 		if !f.expertPage(b) {
 			f.recent = b
 		}
 		return nil
+	}
+	if spec {
+		f.markSpec(b)
 	}
 	f.faults++
 	if f.filled == nil {

@@ -233,7 +233,9 @@ func TestChatLogprobsShape(t *testing.T) {
 		t.Fatalf("%d logprob entries for %d completion tokens", len(content), whole.Usage.CompletionTokens)
 	}
 	for i, x := range content {
-		if len(x.TopLogprobs) != 2 || len(x.Bytes) != len(x.Token) || x.Logprob > 0 {
+		// A token that is part of a UTF-8 sequence shows as U+FFFD, and its bytes are
+		// the raw ones, so the two lengths agree only for a whole character.
+		if len(x.TopLogprobs) != 2 || (len(x.Bytes) != len(x.Token) && !strings.ContainsRune(x.Token, '\uFFFD')) || x.Logprob > 0 {
 			t.Fatalf("entry %d: %+v", i, x)
 		}
 	}

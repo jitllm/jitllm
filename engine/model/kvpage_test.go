@@ -229,3 +229,30 @@ func TestPageKeySeparatesAliasingGeometries(t *testing.T) {
 		t.Error("a different last token produced the same key")
 	}
 }
+
+// TestChunkKeysAreTheirDigests holds chunkKey's one-pass keys to the digest
+// each names, across a growing sequence, a rollback and a rewritten tail.
+func TestChunkKeysAreTheirDigests(t *testing.T) {
+	kc := &kvCache{ns: "t", geom: []byte("g"), bh: map[int][]string{}}
+	check := func() {
+		t.Helper()
+		for e := kvChunk; e <= len(kc.seq); e += kvChunk {
+			if got, want := kc.chunkKey(e), kc.digest(-kvChunk, 0, e); got != want {
+				t.Fatalf("chunk ending at %d of %d: %q, its digest %q", e, len(kc.seq), got, want)
+			}
+		}
+	}
+	ids := make([]int32, 100)
+	for i := range ids {
+		ids[i] = int32(i * 7)
+	}
+	kc.note(0, ids[:40]...)
+	check()
+	kc.note(40, ids[40:]...)
+	check()
+	kc.note(33, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9) // a rollback rewrites the tail
+	check()
+	if len(kc.ck) != len(kc.seq)/kvChunk {
+		t.Fatalf("%d chunk keys kept for %d positions", len(kc.ck), len(kc.seq))
+	}
+}

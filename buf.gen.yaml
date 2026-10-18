@@ -18,3 +18,8 @@ plugins:
   - local: protoc-gen-connect-go
     out: server/gen
     opt: paths=source_relative
+  # The browser client (server/webui). protoc-gen-es is a devDependency of
+  # that package; `npm ci` in server/webui puts it where this path points.
+  - local: server/webui/node_modules/.bin/protoc-gen-es
+    out: server/webui/src/gen
+    opt: target=ts

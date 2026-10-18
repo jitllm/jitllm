@@ -135,6 +135,12 @@ jobs:
           for mod in . server common ui tui; do
             (cd "$mod" && go mod tidy -diff) || { echo "::error::$mod/go.mod is not tidy"; exit 1; }
           done
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: web UI dependencies
+        # protoc-gen-es is a devDependency of the UI; buf.gen.yaml finds it by path.
+        run: npm ci --prefix server/webui
       - uses: bufbuild/buf-action@v1
         with:
           version: 1.62.1
@@ -152,6 +158,19 @@ jobs:
           buf generate
           if ! git diff --exit-code -- server/gen || [ -n "$(git status --porcelain -- server/gen)" ]; then
             echo "::error::server/gen is stale: run 'buf generate' and commit the result"
+            exit 1
+          fi
+          if ! git diff --exit-code -- server/webui/src/gen || [ -n "$(git status --porcelain -- server/webui/src/gen)" ]; then
+            echo "::error::server/webui/src/gen is stale: run 'buf generate' and commit the result"
+            exit 1
+          fi
+      - name: web UI typecheck, tests, and bundle is current
+        run: |
+          npm run --prefix server/webui typecheck
+          npm run --prefix server/webui test
+          npm run --prefix server/webui build
+          if ! git diff --exit-code -- server/webui/dist; then
+            echo "::error::server/webui/dist is stale: run 'npm run build' in server/webui and commit the result"
             exit 1
           fi
 

@@ -78,6 +78,8 @@ type kvLayerPool struct {
 	// the read is refused (a 4 GiB card whose budget the server set past
 	// what the driver had free).
 	stage, stageTab backend.Buf
+	// sh is the layer's pages the prefix cache names (kvshare.go).
+	sh sharedIDs
 	// floor is the fewest pages a shrink leaves: the dummy and a page for each
 	// session attached to the layer (its working set).
 	floor int
@@ -194,6 +196,7 @@ func (g *devTier) addKVLayer(kp *kvPool, li int, geom kvGeom, n int) error {
 	for id := n - 1; id >= 1; id-- {
 		l.free = append(l.free, uint32(id))
 	}
+	l.reserveFences()
 	need := kp.pageBytes(l)*uint64(n) + uint64(kp.tabWords)*4 + kvStageBytes(geom, kp.p)
 	if !g.kvCompact(need, nil) && !g.roomOrReclaim(need) {
 		return fmt.Errorf("%w: a layer's %d page(s) and table need %d bytes", ErrKVCapacity, n, need)
@@ -296,6 +299,11 @@ func (g *devTier) allocPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, co
 	if err := g.ensureRange(kp, s, have+count); err != nil {
 		return err
 	}
+	// The prefix cache's unheld pages first: they are a cache, and room for
+	// them is the first a sequence takes back (kvshare.go).
+	if len(l.free) < count {
+		l.reclaimNamed(count - len(l.free))
+	}
 	if len(l.free) < count {
 		// Growth first -- a page-out of streamed weights or more pool -- and
 		// when nothing can grow, cold history goes home (kvevict.go). A
@@ -339,14 +347,21 @@ func (g *devTier) flushTabs() error {
 	if len(g.tabPend) == 0 {
 		return nil
 	}
-	var err error
-	g.dev.Session(func(s backend.Session) {
-		for _, w := range g.tabPend {
-			if err = s.WriteAt(w.tab, w.off*4, u32view(w.ids)); err != nil {
-				return
+	// The session's body is made once and kept: a prompt that maps or
+	// copies pages writes tables every call, and a closure a call is an
+	// allocation a call.
+	if g.flushFn == nil {
+		g.flushFn = func(s backend.Session) {
+			for _, w := range g.tabPend {
+				if g.flushErr = s.WriteAt(w.tab, w.off*4, u32view(w.ids)); g.flushErr != nil {
+					return
+				}
 			}
 		}
-	})
+	}
+	g.flushErr = nil
+	g.dev.Session(g.flushFn)
+	err := g.flushErr
 	clear(g.tabPend)
 	g.tabPend = g.tabPend[:0]
 	return err
@@ -414,6 +429,7 @@ func (g *devTier) growKVLayer(kp *kvPool, l *kvLayerPool, want int) error {
 		g.charge(delta)
 		l.charged += delta
 		l.n = n
+		l.reserveFences()
 		g.KVGrows++
 		return nil
 	}
@@ -515,12 +531,19 @@ func (l *kvLayerPool) releasePages(s seqID) {
 	delete(l.rel, s)
 }
 
+// reserveFences sizes the fence lists for every page of the layer, so
+// releasing pages never grows them on a warm path.
+func (l *kvLayerPool) reserveFences() {
+	l.fenced = slices.Grow(l.fenced, l.n-len(l.fenced))
+	l.fencedAt = slices.Grow(l.fencedAt, l.n-len(l.fencedAt))
+}
+
 // fenceIDs fences every id of ids that is a page on the card (0 is one at
 // home), at the ticket the next submission takes.
 func (l *kvLayerPool) fenceIDs(ids []uint32) {
 	for _, id := range ids {
 		if id != 0 {
-			l.fenceID(id)
+			l.releaseID(id) // a named page is held, not fenced (kvshare.go)
 		}
 	}
 }
@@ -592,6 +615,13 @@ func (g *devTier) shrinkKVLayer(kp *kvPool, l *kvLayerPool) error {
 				live++
 			}
 		}
+	}
+	// Named pages: the unheld ones go first, and a layer whose named pages a
+	// sequence holds is not compacted (an id held twice would be gathered
+	// twice).
+	l.reclaimNamed(l.n)
+	if l.heldNamed() {
+		return nil
 	}
 	// A layer with history at home keeps one id free to stream it through.
 	// streamRoom ensured it; a compaction forced by another layer's growth
@@ -824,6 +854,7 @@ func freeLayerBufs(l *kvLayerPool) {
 		l.stageTab.Free()
 	}
 	l.k, l.v, l.tab, l.stage, l.stageTab = nil, nil, nil, nil, nil
+	l.sh = sharedIDs{}
 }
 
 // freeKV2 frees a K buffer and, when there is one, its V buffer.

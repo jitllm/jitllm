@@ -209,8 +209,13 @@ func (s *Sampler) drawBounded(have int, u float32) int32 {
 // Bounded reports whether a draw over n logits is a top-k draw, the one a
 // device can select for (nn.Head.SampleK): sampled, with 0 < TopK < n.
 func (s *Sampler) Bounded(n int) bool {
-	return s != nil && s.Temp > 0 && s.TopK > 0 && s.TopK < n
+	return s != nil && s.Temp > 0 && s.TopK > 0 && s.TopK < n && s.TopK <= MaxTopK
 }
+
+// MaxTopK is above every vocabulary a container states, so a top-k past it is
+// no top-k at all. TopK comes from a request; the candidate buffers a bounded
+// draw sizes from it are held to this where they are sized.
+const MaxTopK = 1 << 20
 
 // DeviceArgs is the device sampler's argument block (kernels.SampleArgsWords):
 // the history's length, the penalty's bits and the history, which the device

@@ -176,7 +176,11 @@ func (g *devTier) evictPage(kp *kvPool, s seqID) error {
 		}
 		l.home[s] = append(l.home[s], page)
 		l.owned[s][j] = 0
-		l.free = append(l.free, id)
+		if l.isNamed(id) {
+			l.releaseID(id) // others may hold it: this sequence's view went home
+		} else {
+			l.free = append(l.free, id)
+		}
 		if err := l.tab.WriteAt((off+j)*4, u32view([]uint32{0})); err != nil {
 			return err
 		}

@@ -30,3 +30,12 @@ func (o Opts) spin() time.Duration {
 	}
 	return o.Spin
 }
+
+// CopyOp is one copy of a Ctx.CopyList: N bytes of Src at SrcOff into Dst at
+// DstOff.
+type CopyOp struct {
+	Dst       *Buf
+	DstOff    int
+	Src       *Buf
+	SrcOff, N int
+}

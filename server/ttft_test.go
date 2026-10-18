@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -145,8 +146,16 @@ func TestTheMemCacheRestoresAndAnswersAsAColdPrefill(t *testing.T) {
 					sc, sw := *o.Sampling, *o.Sampling
 					oc.Sampling, ow.Sampling = &sc, &sw
 				}
+				var tapC, tapW sampleTrace
+				if a.device && o.Sampling != nil {
+					sampleTap = tapC.add
+				}
 				want := generate(t, cold, oc)
+				if a.device && o.Sampling != nil {
+					sampleTap = tapW.add
+				}
 				got := generate(t, warm, ow)
+				sampleTap = nil
 				if want.started != 0 {
 					t.Fatalf("request %d: the engine with no store restored %d positions", i, want.started)
 				}
@@ -168,7 +177,20 @@ func TestTheMemCacheRestoresAndAnswersAsAColdPrefill(t *testing.T) {
 				if got.started > got.promptTokens || got.batched && got.started == got.promptTokens {
 					t.Fatalf("request %d restored %d of %d positions", i, got.started, got.promptTokens)
 				}
-				if !slices.Equal(want.ids, got.ids) {
+				if a.device && o.Sampling != nil {
+					// Sampled tokens are not the bar on a device (RULE 11c).
+					// The restored history is bit-identical to the cold one
+					// (the first 63 positions' K and V hash equal going out
+					// and coming back), but the warm arm runs the prompt's
+					// tail as a few rows and the cold arm as part of one wide
+					// prefill, and the two reduce in different orders: logits
+					// part by ~0.2 on a V100. A seeded draw lands in the sliver
+					// between two near-tied candidates and picks a different
+					// one, deterministically. What must hold is that the
+					// distributions the draws were made from agree and that
+					// the sampler drew once per token in both arms.
+					tapC.compare(t, &tapW, want.ids, got.ids)
+				} else if !slices.Equal(want.ids, got.ids) {
 					t.Fatalf("request %d: with the store %v, without %v", i, got.ids, want.ids)
 				}
 				t.Logf("request %d: %d of %d prompt positions restored; %d tokens identical",
@@ -591,5 +613,70 @@ func TestGrammarAndSpeculationMeetTheMemCache(t *testing.T) {
 		Speculation: &Speculation{Enabled: true}})
 	if sp.started != 0 {
 		t.Fatalf("a speculative generate restored %d positions through a Speculator that does not restore", sp.started)
+	}
+}
+
+// sampleTrace is the distributions one generate sampled from: the softmax at
+// the sampler's temperature of each step's logits.
+type sampleTrace struct {
+	mu    sync.Mutex
+	probs [][]float64
+}
+
+func (s *sampleTrace) add(temp float64, lg []float32, next int32) {
+	if temp <= 0 {
+		return
+	}
+	mx := lg[0]
+	for _, v := range lg {
+		mx = max(mx, v)
+	}
+	p := make([]float64, len(lg))
+	var sum float64
+	for i, v := range lg {
+		p[i] = math.Exp(float64(v-mx) / temp)
+		sum += p[i]
+	}
+	for i := range p {
+		p[i] /= sum
+	}
+	s.mu.Lock()
+	s.probs = append(s.probs, p)
+	s.mu.Unlock()
+}
+
+// maxSampledTV is the most two engines' distributions may part by at a step
+// where they drew the same number: a seeded draw with the same u picks a
+// different token only inside that much probability mass. The V100 shows
+// 0.001 to 0.01 between a restored and a cold prefix (a KV scaled by 1.15 gives 0.17).
+const maxSampledTV = 0.05
+
+// compare holds the warm trace to the cold one, up to the first step their
+// tokens part: one draw per token in both arms, and at each step the total
+// variation distance between the two distributions below maxSampledTV.
+func (c *sampleTrace) compare(t *testing.T, w *sampleTrace, cold, warm []int32) {
+	t.Helper()
+	// One Sample per token, and one more when the last was an end of
+	// generation, which the answer leaves out.
+	for name, tr := range map[string]struct {
+		n, ids int
+	}{"cold": {len(c.probs), len(cold)}, "warm": {len(w.probs), len(warm)}} {
+		if tr.n == 0 || tr.n < tr.ids || tr.n > tr.ids+1 {
+			t.Fatalf("the %s arm sampled %d times for %d tokens: a restored prefix must draw once per token", name, tr.n, tr.ids)
+		}
+	}
+	for s := range min(len(cold), len(warm), len(c.probs), len(w.probs)) {
+		var tv float64
+		for i := range c.probs[s] {
+			tv += math.Abs(c.probs[s][i] - w.probs[s][i])
+		}
+		tv /= 2
+		t.Logf("sampled step %d: total variation %.4f, tokens %d / %d", s, tv, cold[s], warm[s])
+		if tv > maxSampledTV {
+			t.Fatalf("sampled step %d: the restored prefix's distribution is %.4f away from the cold one (bound %v)", s, tv, maxSampledTV)
+		}
+		if cold[s] != warm[s] {
+			return // the draws part here, inside the mass the distributions disagree by; later steps condition on different tokens
+		}
 	}
 }

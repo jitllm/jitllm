@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/jitllm/jitllm/engine/model"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/cpu"
@@ -343,6 +345,48 @@ func ValidateSpec(spec string) (string, error) {
 		return s + " -- no device: the host runs every block", nil
 	}
 	return s, nil
+}
+
+// ValidatePlacement parses a block placement (the CLI's -placement) and checks
+// that every device it names is one the device spec opens, so the picker cannot
+// accept a map the load then refuses. Empty is valid: the engine places.
+//
+// It is model.ParsePlacement, not a grammar of this app's own.
+func ValidatePlacement(placement, spec string) error {
+	if strings.TrimSpace(placement) == "" {
+		return nil
+	}
+	pl, err := model.ParsePlacement(placement, true)
+	if err != nil {
+		return err
+	}
+	es, err := tier.ParseDevices(spec)
+	if err != nil {
+		return err
+	}
+	opened := map[string]bool{"host": true}
+	for _, e := range es {
+		if !e.Device() || !e.HasSel {
+			continue
+		}
+		opened[nn.DeviceName(e.API+":"+e.Sel)] = true
+	}
+	named := []model.Place{}
+	for _, b := range pl.Blocks {
+		named = append(named, b)
+	}
+	for _, x := range []*model.Place{pl.Rest, pl.Head} {
+		if x != nil {
+			named = append(named, *x)
+		}
+	}
+	for _, x := range named {
+		if !opened[x.On] {
+			return fmt.Errorf("placement names %q, which the device spec %q does not open "+
+				"(name each device there: cuda:0,vulkan:0)", x.On, spec)
+		}
+	}
+	return nil
 }
 
 // ValidateBudget parses the host weight budget and says what it will mean.

@@ -288,7 +288,6 @@ func TestSharedPageIsNeverWrittenInPlace(t *testing.T) {
 func TestShareKVRefusesByName(t *testing.T) {
 	st := NewSharedStore()
 	for _, c := range []struct{ name, why string }{
-		{"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "recurrent layers"},
 		{"synth-deepseek4.gguf", "compressed entries"},
 	} {
 		t.Run(c.name, func(t *testing.T) {

@@ -622,6 +622,12 @@ func (d *Decider) clefHead(p *clefPrompt, out []float32) error {
 		return fmt.Errorf("model: the prompt's %d rows gave %d hidden rows", n, r.rows)
 	}
 	d.input += n
+	// The head reads every row's final residual: a prefill that kept fewer
+	// (a restored prefix, a chunk the tap missed) would leave the rest of the
+	// buffer to whatever the last request wrote.
+	if r.rows != n {
+		return fmt.Errorf("model: the prefill kept the final residual of %d of the prompt's %d rows", r.rows, n)
+	}
 	// Where the backbone's head is on a device, the decision head runs there
 	// over the rows (decideclefdev.go); a device that declines leaves them
 	// for the host below.

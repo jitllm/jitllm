@@ -237,6 +237,37 @@ type PeerCopier interface {
 	PeerAccess(from Device) bool
 }
 
+// CopyRange is one device-to-device copy of a CopyLister's list: N bytes of
+// Src at SrcOff into Dst at DstOff, both buffers of the one device.
+type CopyRange struct {
+	Dst       Buf
+	DstOff    int
+	Src       Buf
+	SrcOff, N int
+}
+
+// CopyLister is an optional Device that runs a list of copies as one call:
+// one ownership hop and one wait for the lot, where Copy pays both per copy.
+// A restore point's snapshot of every recurrent block is such a list. CUDA
+// implements it; CopyAll runs a list on any Device.
+type CopyLister interface {
+	CopyList(cs []CopyRange) error
+}
+
+// CopyAll runs cs on d: as one CopyList where d implements it, one Copy at a
+// time otherwise, stopping at the first error.
+func CopyAll(d Device, cs []CopyRange) error {
+	if l, ok := d.(CopyLister); ok {
+		return l.CopyList(cs)
+	}
+	for _, c := range cs {
+		if err := d.Copy(c.Dst, c.DstOff, c.Src, c.SrcOff, c.N); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Session is a batch of device calls that runs under one ownership hop. The
 // methods mirror Buf and Kernel but skip the hop, so they are only valid inside
 // the closure Device.Session was given.

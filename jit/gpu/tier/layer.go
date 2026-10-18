@@ -353,9 +353,9 @@ type streamBank struct {
 	// The cross-layer prefetch (prefetch): the experts it reads, whether a
 	// read is in flight, its join and its error.
 	pfWant []uint32
-	pfOn   bool
-	pfWG   sync.WaitGroup
-	pfErr  error
+	// spec hands the host's read service a guess and nil abandons the
+	// unstarted ones (nn.LayerWeights.SpeculateExperts).
+	spec func(sel []uint32)
 	// host is the block's routed experts on the host (hybrid execution), and
 	// hin, hw and hout its input, weights and output, reused every token.
 	host          func(sel []uint32, w, in, out []float32) error
@@ -481,14 +481,12 @@ func (st *streamBank) fill(g *devTier, s backend.Session, l *layer, nExpert int)
 	}
 	grp := st.groups(g, len(st.items))
 	t0 := time.Now()
-	// The previous block's prefetch of this one is joined first: its reads
-	// are this fill's reads when the prediction was right, and a frame still
-	// being read is the eviction hazard above.
-	if st.pfOn {
-		tw := time.Now()
-		st.pfWG.Wait()
-		st.pfOn = false
-		g.TStreamPrefetchWait += time.Since(tw)
+	// The previous block's guesses that no reader has started are dropped:
+	// whatever this fill needs, it reads itself below, and a guess already
+	// being read is joined by the read of the same page rather than waited
+	// for (jlm.File.Speculate), so a wrong guess delays nothing.
+	if st.spec != nil {
+		st.spec(nil)
 	}
 	if st.pre != nil {
 		if cap(st.rd) < len(grp) {
@@ -542,7 +540,7 @@ func (st *streamBank) fill(g *devTier, s backend.Session, l *layer, nExpert int)
 // slots, and the fill that follows still reads, maps and sends exactly the
 // experts the router chose. An expert the cache already holds is not read.
 func (st *streamBank) prefetch(g *devTier) {
-	if st.pre == nil || st.pfOn {
+	if st.pre == nil || st.spec == nil {
 		return
 	}
 	st.pfWant = st.pfWant[:0]
@@ -556,17 +554,7 @@ func (st *streamBank) prefetch(g *devTier) {
 		return
 	}
 	g.StreamPrefetched += len(st.pfWant)
-	st.pfOn = true
-	st.pfWG.Add(1)
-	go st.prefetchRun()
-}
-
-// prefetchRun is prefetch's read on its own goroutine. Its error is kept
-// and not returned: a failed guess is not a failed token, and the fill's own
-// read of anything it needs reports a real failure.
-func (st *streamBank) prefetchRun() {
-	defer st.pfWG.Done()
-	st.pfErr = st.pre(st.pfWant)
+	st.spec(st.pfWant)
 }
 
 // runHostRows is runHost for a chunk of rows: the selections (row stride
@@ -3777,7 +3765,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			if l.stream == nil {
 				l.stream = &streamBank{sel: make([]uint32, slots),
 					ensure: w.Ensure, sel2: w.EnsureExperts,
-					pre: w.PrefetchExperts, host: w.HostExperts, w: *w, hybrid: true, nExpert: bank, li: li}
+					pre: w.PrefetchExperts, spec: w.SpeculateExperts, host: w.HostExperts, w: *w, hybrid: true, nExpert: bank, li: li}
 				g.StreamBlocks++
 			}
 			continue
@@ -3816,7 +3804,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				// contributes zeros.
 				l.stream = &streamBank{sel: make([]uint32, slots),
 					ensure: w.Ensure, sel2: w.EnsureExperts,
-					pre: w.PrefetchExperts, host: w.HostExperts, w: *w, li: li}
+					pre: w.PrefetchExperts, spec: w.SpeculateExperts, host: w.HostExperts, w: *w, li: li}
 				l.stream.nExpert = bank
 				// An auto-streamed block runs its experts on the host unless
 				// told otherwise: on Kimi-K3 over the V100s that decoded 1.43x
@@ -10325,6 +10313,7 @@ func (g *devTier) leaveLayers(sid uint64, lo, hi int) []int {
 // hold g.mu and drop the graph.
 func (g *devTier) releaseBlock(li int) {
 	l := g.layers[li]
+	g.freeRecSnaps(li)
 	if l == nil {
 		return
 	}
@@ -10606,6 +10595,12 @@ func (g *devTier) migrateRec(sid uint64, li int, conv, state []float32, toDevice
 			// directly would bring every other session's state below it home
 			// too.
 			err := func() error {
+				if len(v) == 0 {
+					// A block with no state of this kind (a short
+					// convolution has no delta-rule half): nothing to read,
+					// and a zero-byte buffer is no allocation a driver takes.
+					return nil
+				}
 				if st.base == 0 {
 					return b.Read(f32b(v))
 				}
@@ -10635,7 +10630,7 @@ func (g *devTier) migrateRec(sid uint64, li int, conv, state []float32, toDevice
 			g.LastErr = fmt.Sprintf("MigrateRec: block %d conv half %d: %v", li, i, err)
 			return false
 		}
-		if l.pool.s[i] == nil {
+		if l.pool.s[i] == nil || len(state) == 0 {
 			continue // a shared pool's second half is the device's scratch
 		}
 		if err := l.pool.s[i].WriteAt(st.base*g.recS*4, f32b(state)); err != nil {

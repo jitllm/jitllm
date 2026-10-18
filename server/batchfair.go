@@ -237,10 +237,10 @@ func (lp *stepLoop) parkRow(r *row) error {
 // room is the card's room for history in positions (tier.GPU.KVRoom), 0 on
 // the host.
 func (lp *stepLoop) room() int {
-	if lp.lm.gpu == nil {
+	if lp.lm.gpuTier() == nil {
 		return 0
 	}
-	n, _ := lp.lm.gpu.KVRoom()
+	n, _ := lp.lm.gpuTier().KVRoom()
 	return n
 }
 

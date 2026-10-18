@@ -21,26 +21,52 @@ var procs struct {
 // runs. Concurrent requests get their maximum; when the last is released the
 // value the first one found is restored. release is safe to call twice.
 func RaiseProcs(n int) (release func()) {
+	h := new(ProcsHold)
+	h.Raise(n)
+	return h.Release
+}
+
+// ProcsHold is one GOMAXPROCS request held by its owner, RaiseProcs without
+// the release closure: a JIT raises and releases one every prefill, so it
+// keeps the hold and the pair allocates nothing. The zero value holds
+// nothing.
+type ProcsHold struct{ n int }
+
+// Raise asks for GOMAXPROCS of at least n until Release; a hold already live
+// keeps its request.
+func (h *ProcsHold) Raise(n int) {
+	if h.n != 0 || n <= 0 {
+		return
+	}
 	procs.mu.Lock()
 	defer procs.mu.Unlock()
 	if len(procs.live) == 0 {
 		procs.base = runtime.GOMAXPROCS(0)
+	}
+	if procs.live == nil {
 		procs.live = map[int]int{}
 	}
 	procs.live[n]++
+	h.n = n
 	setProcsLocked()
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			procs.mu.Lock()
-			defer procs.mu.Unlock()
-			if procs.live[n]--; procs.live[n] == 0 {
-				delete(procs.live, n)
-			}
-			setProcsLocked()
-		})
-	}
 }
+
+// Release ends the request; it is safe to call on a hold that is not live.
+func (h *ProcsHold) Release() {
+	if h.n == 0 {
+		return
+	}
+	procs.mu.Lock()
+	defer procs.mu.Unlock()
+	if procs.live[h.n]--; procs.live[h.n] == 0 {
+		delete(procs.live, h.n)
+	}
+	h.n = 0
+	setProcsLocked()
+}
+
+// Held reports whether the hold's request is live.
+func (h *ProcsHold) Held() bool { return h.n != 0 }
 
 // setProcsLocked sets GOMAXPROCS to the widest live request, or the base when
 // none is wider or none is live.

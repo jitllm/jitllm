@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark"><meta name="theme-color" content="#16161e">
+<title>jitllm</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="app.css"></head>
+<body>
+<div id="app">
+  <aside id="chats" aria-label="Conversations"></aside>
+  <main id="main">
+    <header id="top"></header>
+    <div id="log" aria-live="polite" tabindex="-1"></div>
+    <button id="latest" hidden>Jump to latest</button>
+    <footer id="composer"></footer>
+  </main>
+  <aside id="panel" aria-label="Engine"></aside>
+</div>
+<div id="scrim" hidden></div>
+<div id="overlay" hidden></div>
+<div id="toasts" aria-live="assertive"></div>
+<script src="app.js"></script></body></html>

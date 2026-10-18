@@ -151,6 +151,9 @@ type MemCacheStats struct {
 // ttft is a LoadedModel's share of the above.
 type ttft struct {
 	store *model.MemStore // nil with Config.NoMemCache
+	// shared is the model's pages held once (model.SharedStore), which its
+	// Deciders share through: nil with Config.NoMemCache.
+	shared *model.SharedStore
 	// kv is what a State is pointed at: the memory cache, or the memory cache
 	// over Config.PromptStore (layered) when the server has one.
 	kv model.KVStore
@@ -175,6 +178,7 @@ func (e *Engine) initTTFT(lm *LoadedModel, o LoadOptions) {
 	t := &lm.ttft
 	if !e.cfg.NoMemCache && !lm.m.IsEncoder() {
 		t.store = model.NewBoundedMemStore(1)
+		t.shared = model.NewSharedStore()
 		// The namespace names this load: the store is the model's own, and
 		// the KV width and page geometry are fixed for its life.
 		t.ns = fmt.Sprintf("jitllmd/%s/%d", lm.id, lm.loadedAt.UnixNano())

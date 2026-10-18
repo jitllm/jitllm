@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -34,30 +35,83 @@ func (s *ModelService) ListModels(ctx context.Context, req *connect.Request[v1.L
 		for _, f := range files {
 			mf := pbModelFile(f)
 			if f.IsContainer {
-				// jlm.Open refuses any version but this build's, so a
-				// successful open proves the version. A container that fails
-				// is still listed, with the re-convert fix.
-				if h, err := jlm.Open(f.Path); err == nil {
-					mf.ContainerVersion = uint32(jlm.Version)
-					if c := h.Config(); c != nil {
-						chat := false
-						if v := h.Vocab(); v != nil {
-							_, chat = v.Template("")
-						}
-						mf.ContextLength = int32(c.NCtx)
-						mf.Capabilities = modelCapabilities(chat, h.VisionBlocks() > 0,
-							c.Flags.Pooling() != jlm.PoolNone, c.Arch.Encoder())
-					}
-					h.Close()
-				} else {
-					mf.ConvertCommand = fmt.Sprintf(
-						"jitllm convert <source> %s   # %v", f.Path, err)
-				}
+				d := containerDetails.get(f.Path, probeContainer)
+				mf.ContainerVersion = d.version
+				mf.ContextLength = d.ctx
+				mf.Capabilities = d.caps
+				mf.ConvertCommand = d.convert
 			}
 			out.Files = append(out.Files, mf)
 		}
 	}
 	return connect.NewResponse(out), nil
+}
+
+// details is what opening a container shows a listing. jlm.Open refuses any
+// version but this build's, so a successful open proves the version; a
+// container that fails is still listed, with the re-convert fix.
+type details struct {
+	version uint32
+	ctx     int32
+	caps    []string
+	convert string
+}
+
+func probeContainer(path string) details {
+	h, err := jlm.Open(path)
+	if err != nil {
+		return details{convert: fmt.Sprintf("jitllm convert <source> %s   # %v", path, err)}
+	}
+	defer h.Close()
+	d := details{version: uint32(jlm.Version)}
+	if c := h.Config(); c != nil {
+		chat := false
+		if v := h.Vocab(); v != nil {
+			_, chat = v.Template("")
+		}
+		d.ctx = int32(c.NCtx)
+		d.caps = modelCapabilities(chat, h.VisionBlocks() > 0, c.Flags.Pooling() != jlm.PoolNone, c.Arch.Encoder())
+	}
+	return d
+}
+
+// detailsCache remembers each container's details by path, size and
+// modification time, so a listing re-reads only files that changed. A
+// directory listing stays per call. The probe runs outside the lock, so a
+// slow file does not hold up a listing of the others; two racing calls may
+// both probe one file, and the last write wins with an identical value.
+type detailsCache struct {
+	mu sync.Mutex
+	m  map[string]cachedDetails
+}
+
+type cachedDetails struct {
+	size  int64
+	mtime time.Time
+	d     details
+}
+
+var containerDetails detailsCache
+
+func (c *detailsCache) get(path string, probe func(string) details) details {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return probe(path)
+	}
+	c.mu.Lock()
+	e, ok := c.m[path]
+	c.mu.Unlock()
+	if ok && e.size == fi.Size() && e.mtime.Equal(fi.ModTime()) {
+		return e.d
+	}
+	d := probe(path)
+	c.mu.Lock()
+	if c.m == nil {
+		c.m = map[string]cachedDetails{}
+	}
+	c.m[path] = cachedDetails{fi.Size(), fi.ModTime(), d}
+	c.mu.Unlock()
+	return d
 }
 
 // modelCapabilities names what a model can be asked to do, from what its
@@ -128,7 +182,7 @@ func (s *ModelService) LoadModel(ctx context.Context, req *connect.Request[v1.Lo
 		Path:            m.Path,
 		ModelID:         m.ModelId,
 		PageBudgetBytes: m.PageBudgetBytes,
-		DeviceIDs:       m.DeviceIds,
+		DeviceIDs:       DefaultDevices(m.DeviceIds),
 		MaxDeviceBlocks: -1,
 	}
 	if m.MaxDeviceBlocks != nil {

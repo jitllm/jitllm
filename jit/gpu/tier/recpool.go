@@ -310,15 +310,24 @@ func (g *devTier) recZeroLayers(ls []*layer, base, rows int) error {
 					g.RecZeroHost++
 					continue
 				}
-				if err := g.dev.Copy(b.buf, base*b.w*4, zb, 0, rows*b.w*4); err != nil {
-					return err
-				}
-				g.RecZeroBytes += uint64(rows * b.w * 4)
-				g.RecZeroCopies++
+				// Run with every other block's as one list, below.
+				g.zeroList = append(g.zeroList, backend.CopyRange{Dst: b.buf, DstOff: base * b.w * 4, Src: zb, N: rows * b.w * 4})
 			}
 		}
 	}
-	return nil
+	if len(g.zeroList) == 0 {
+		return nil
+	}
+	err := backend.CopyAll(g.dev, g.zeroList)
+	if err == nil {
+		for _, c := range g.zeroList {
+			g.RecZeroBytes += uint64(c.N)
+		}
+		g.RecZeroCopies += uint64(len(g.zeroList))
+	}
+	clear(g.zeroList)
+	g.zeroList = g.zeroList[:0]
+	return err
 }
 
 // growSeat gives session sid a seat of at least rows slots: a batch

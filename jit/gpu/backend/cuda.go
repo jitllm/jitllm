@@ -1176,6 +1176,62 @@ func (c *cudaDev) Copy(dst Buf, dstOff int, src Buf, srcOff, n int) error {
 	return err
 }
 
+// CopyList is Copy for every range of cs, under one ownership hop and one
+// wait: the context is synchronised once before the list (as Copy does with
+// queues open) and once after it, not around each copy.
+func (c *cudaDev) CopyList(cs []CopyRange) error {
+	for _, r := range cs {
+		db, ok := r.Dst.(*cudaBuf)
+		sb, ok2 := r.Src.(*cudaBuf)
+		if !ok || !ok2 || db == nil || sb == nil || db.dev != c || sb.dev != c {
+			return fmt.Errorf("backend: cuda: a copy between buffers this device did not allocate")
+		}
+		if err := copyRange(db.b.Len(), r.DstOff, sb.b.Len(), r.SrcOff, r.N, db.b == sb.b); err != nil {
+			return err
+		}
+	}
+	l := cudaCopyLists.Get().(*cudaCopyList)
+	l.c, l.cs, l.err = c, cs, errCUDAClosed
+	c.do(l.fn)
+	err := l.err
+	l.c, l.cs, l.err = nil, nil, nil
+	cudaCopyLists.Put(l)
+	return err
+}
+
+// cudaCopyList is CopyList's request, kept like cudaCopy's so a list makes no
+// heap object per call.
+type cudaCopyList struct {
+	c   *cudaDev
+	cs  []CopyRange
+	err error
+	fn  func()
+}
+
+var cudaCopyLists = sync.Pool{New: func() any {
+	l := &cudaCopyList{}
+	l.fn = l.run
+	return l
+}}
+
+func (l *cudaCopyList) run() {
+	c := l.c
+	if c.hasQueues() {
+		if l.err = c.syncAll(); l.err != nil {
+			return
+		}
+	}
+	for _, r := range l.cs {
+		if r.N == 0 {
+			continue
+		}
+		if l.err = cuda.CopyDtoD(r.Dst.(*cudaBuf).b, r.DstOff, r.Src.(*cudaBuf).b, r.SrcOff, r.N); l.err != nil {
+			return
+		}
+	}
+	l.err = c.syncAll()
+}
+
 // cudaCopy is one Copy's arguments with the function the owner goroutine runs
 // for it, made once a request and the requests kept (cudaCopies): a closure
 // over Copy's locals was a heap object per copy, and a recurrent block's

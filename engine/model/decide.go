@@ -108,6 +108,9 @@ type Decider struct {
 	pick     []int32
 	pickVals []float32
 	picked   int
+	// restored counts the prompt positions the prefix cache gave back
+	// rather than the prefill computing them (SetPromptCache).
+	restored int
 
 	// The answer's scratch: the averaged probabilities, one variant's, a
 	// working row, and the ramp 0..n-1 (answer).
@@ -253,6 +256,41 @@ func (m *Model) NewDecider(maxSeq int) (*Decider, error) {
 	}
 	return d, nil
 }
+
+// SetPromptCache has the Decider's prompts share their KV pages through st,
+// under the namespace ns (State.SetCacheKey, State.ShareKV): what a prompt
+// seals is held once in st, and a prompt that starts as an earlier one did --
+// the same system prompt, the same state up to where it changed -- aliases
+// those pages, its recurrent summaries restored beside them, and prefills only
+// the rest. A server hands every Decider and session of a model the same st.
+//
+// An encoder readout (Laya, d1-omni) and a decoder whose attention sees the
+// whole prompt (vllm-d3) attend both ways, so no row's history is a prefix's;
+// Clef keeps every row's final residual, which the cache does not hold. Each
+// runs as before, uncached, and SetPromptCache says so with false: a State
+// left naming its pages would publish them for nothing, and keep the names
+// queued. A block on a device shares its pages there (nn.KVShareDevice). A
+// nil st turns sharing off.
+func (d *Decider) SetPromptCache(st *SharedStore, ns string) (bool, error) {
+	if d.st == nil || d.kind == jlm.DecisionClef || d.nonCausal() {
+		return false, nil
+	}
+	d.st.Reset()
+	if st == nil {
+		return false, d.st.SetCacheKey("")
+	}
+	if err := d.st.SetCacheKey(ns); err != nil {
+		return false, err
+	}
+	if err := d.st.ShareKV(st); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// PromptRestored is how many prompt positions the prefix cache has given
+// back to this Decider's prompts in all, instead of prefilling them.
+func (d *Decider) PromptRestored() int { return d.restored }
 
 // Close releases the Decider's State.
 func (d *Decider) Close() error {
@@ -556,11 +594,22 @@ func (d *Decider) forwardSpans(spans []Span, groups [][]int32, v int) ([]float32
 	}
 	var lg []float32
 	var err error
-	if len(spans) == 1 && spans[0].Picture == nil && spans[0].Embd == nil && !spans[0].Bidir {
+	text := len(spans) == 1 && spans[0].Picture == nil && spans[0].Embd == nil
+	// The prefix cache, when the Decider shares through it: the longest
+	// prefix an earlier prompt left is restored and the rest prefilled
+	// (State.PrefillCached). Not for a readout that attends both ways over the
+	// whole prompt: no prefix of it is a prefix's history.
+	cached := d.st.CacheNamespace() != "" && !d.nonCausal()
+	switch {
+	case cached && text && !spans[0].Bidir:
+		lg, err = d.st.PrefillCached(spans[0].Tokens)
+	case cached:
+		lg, err = d.st.PrefillCachedMixed(spans...)
+	case text && !spans[0].Bidir:
 		lg, err = d.st.Prefill(spans[0].Tokens)
-	} else if len(spans) == 1 && spans[0].Picture == nil && spans[0].Embd == nil {
+	case text:
 		lg, err = d.st.prefillBidir(spans[0].Tokens)
-	} else {
+	default:
 		d.st.bidirAll = d.nonCausal()
 		lg, err = d.st.PrefillMixed(spans...)
 		d.st.bidirAll = false
@@ -568,6 +617,7 @@ func (d *Decider) forwardSpans(spans []Span, groups [][]int32, v int) ([]float32
 	if err != nil {
 		return nil, err
 	}
+	d.restored += d.st.KVRestored()
 	d.input += SpanPositions(spans, d.m.Cfg.NEmbd)
 	if h != nil && h.Picked {
 		d.picked++

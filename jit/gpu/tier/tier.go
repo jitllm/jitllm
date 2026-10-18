@@ -618,6 +618,11 @@ type Config struct {
 	// of releasing them (devTier.windowPages): the other arm of that
 	// comparison, which must give the same logits bit for bit.
 	KVKeepWindow bool
+	// KVCowFault is the shared-page gate's violation
+	// (model.TestDecisionReusesThePrefix): a write into a page the prefix
+	// cache names lands in it in place, under every sequence holding it.
+	// False in every real run.
+	KVCowFault bool
 	// StageLimit bounds the host memory held by packs that are prepared and not
 	// yet uploaded. Zero means defaultStageLimit. It is shared because the
 	// memory is the host's: two devices under their own copy of the limit would
@@ -1025,10 +1030,8 @@ type Stats struct {
 	StreamPinHalfTuned, StreamDirectTuned int
 	// AutoMeanBase is the model's mean mixture base GPU.AutoStream was told.
 	AutoMeanBase uint64
-	// StreamPrefetched counts experts the cross-layer prefetch read, and
-	// TStreamPrefetchWait the wall a fill spent joining it.
-	StreamPrefetched    int
-	TStreamPrefetchWait time.Duration
+	// StreamPrefetched counts experts the cross-layer prefetch guessed.
+	StreamPrefetched int
 	// ProbeHits of ProbeExperts routed experts were in the previous block's
 	// cross-layer prediction (Config.StreamProbe); ProbeFused counts probes
 	// skipped because the route fuses the rank with the weights.
@@ -1074,6 +1077,16 @@ type Stats struct {
 	// KVWindowReleased counts a windowed layer's pages released behind its
 	// window (devTier.windowPages), one per layer-page.
 	KVWindowReleased int
+	// KVPagesMapped counts the named pages a prefix cache restore put into a
+	// sequence's table on the card, no byte moved (kvshare.go), and
+	// KVPagesCopied the named pages a write copied first.
+	KVPagesMapped, KVPagesCopied int
+	// KVPositionsMigrated counts the positions of history a migration moved
+	// between the host and this device (pagedMigrate), each layer's apart.
+	KVPositionsMigrated int
+	// RecPointsKept and RecPointsLoaded count a linear block's restore
+	// points copied into a snapshot on the card and back (recshare.go).
+	RecPointsKept, RecPointsLoaded int
 	// KVStreamPasses counts attention passes over evicted history.
 	KVStreamPasses int
 	// StagedPasses counts attention passes of streamed calls: those over
@@ -1469,7 +1482,6 @@ func (s *Stats) add(o Stats) {
 	s.StreamDirectTuned = max(s.StreamDirectTuned, o.StreamDirectTuned)
 	s.AutoMeanBase = max(s.AutoMeanBase, o.AutoMeanBase)
 	s.StreamPrefetched += o.StreamPrefetched
-	s.TStreamPrefetchWait += o.TStreamPrefetchWait
 	s.ProbeHits += o.ProbeHits
 	s.ProbeExperts += o.ProbeExperts
 	s.ProbeFused += o.ProbeFused
@@ -1489,6 +1501,11 @@ func (s *Stats) add(o Stats) {
 	s.KVEvictions += o.KVEvictions
 	s.KVStageReads += o.KVStageReads
 	s.KVWindowReleased += o.KVWindowReleased
+	s.KVPagesMapped += o.KVPagesMapped
+	s.KVPagesCopied += o.KVPagesCopied
+	s.KVPositionsMigrated += o.KVPositionsMigrated
+	s.RecPointsKept += o.RecPointsKept
+	s.RecPointsLoaded += o.RecPointsLoaded
 	s.KVStreamPasses += o.KVStreamPasses
 	s.StagedPasses += o.StagedPasses
 	s.PipelinePieces += o.PipelinePieces
@@ -1865,16 +1882,29 @@ type devShared struct {
 	// recurrent pool (recpool.go), recSlots the slots every pool holds, and
 	// recShared the pools' form. recS and recC are one slot of the delta
 	// state and of the convolution's window, in floats.
-	recSeats   map[uint64]recSeat
-	recSlots   int
-	recShared  bool
-	recS, recC int
+	recSeats map[uint64]recSeat
+	// recSnaps are the prefix cache's restore points of the linear blocks,
+	// by block and name, and recSnapOrder them oldest first (recshare.go).
+	recSnaps map[recSnapKey]*recSnap
+	// flushFn and flushErr are flushTabs' session body and its error, kept.
+	flushFn      func(backend.Session)
+	flushErr     error
+	recSnapOrder []recSnapKey
+	recSlots     int
+	recShared    bool
+	recS, recC   int
 	// recNext is the one "next state" buffer the shared form writes, sized
 	// for the widest step that needed it; recCopies holds the CopySlots
 	// kernels that move it home, by slot width and sequence count.
 	recNext      backend.Buf
 	recNextBytes uint64
 	recCopies    map[[2]int]backend.Kernel
+	// snapList is the copies snapRec queued for flushSnaps, and snapCount
+	// the points they keep: kept, so a snapshot allocates nothing.
+	snapList  []backend.CopyRange
+	snapCount int
+	// zeroList is recZeroLayers' copies, run as one list.
+	zeroList []backend.CopyRange
 	// recZeros is the zeros a seat's zeroing copies from (recZeroLayers),
 	// uploaded at the widest zeroing and kept while there are pools: a
 	// prompt that resets its sequence's state made and freed it each time.
@@ -1980,6 +2010,7 @@ type devShared struct {
 	ragKerns   map[moeKernKey]backend.Kernel // a batched mixture's grouped matvecs (moegroup.go)
 	moeVolta   map[moeVoltaKey]moeVoltaMV    // their tensor-core twins; see voltaGroupedMV
 	ragK       map[ragKey]backend.Kernel     // a ragged step's matvecs; see ragMV
+	tailK      map[ragKey]*mvTail            // tileMV's second launches, one per shape
 	qkvK       map[string]*qkvSeg            // a prompt chunk's q/k/v grids; see qkvGemm
 	kshared    map[string]backend.Kernel     // scratch kernels by content; see compileShared
 	pcache     *persistCache                 // composed persistent kernels; see persist.go

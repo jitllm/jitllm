@@ -135,6 +135,45 @@ func (s *gpuSession) PrewarmLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) b
 	return s.g.PrewarmLayer(li, p, w)
 }
 
+// PublishKV and MapKV are the tier's for this session's sequence
+// (nn.KVShareDevice, kvshare.go).
+func (s *gpuSession) PublishKV(li, page int, key string) bool {
+	defer s.leave(s.enter())
+	return s.g.publishKV(s.sid, li, page, key)
+}
+
+func (s *gpuSession) MapKV(li, page int, key string, end int) bool {
+	defer s.leave(s.enter())
+	return s.g.mapKV(s.sid, li, page, key, end)
+}
+
+// SnapRec, HasRec and LoadRec are the tier's for this session's state
+// (nn.RecShareDevice, recshare.go).
+func (s *gpuSession) SnapRec(li int, key string) bool {
+	defer s.leave(s.enter())
+	return s.g.recShare(s.sid, li, key, 0)
+}
+
+func (s *gpuSession) SnapRecs(lis []int32, key string) bool {
+	defer s.leave(s.enter())
+	return s.g.snapRecs(s.sid, lis, key)
+}
+
+func (s *gpuSession) PublishKVs(lis, pages []int32, keys []string) bool {
+	defer s.leave(s.enter())
+	return s.g.publishKVsBatch(s.sid, lis, pages, keys)
+}
+
+func (s *gpuSession) HasRec(li int, key string) bool {
+	defer s.leave(s.enter())
+	return s.g.recShare(s.sid, li, key, 1)
+}
+
+func (s *gpuSession) LoadRec(li int, key string) bool {
+	defer s.leave(s.enter())
+	return s.g.recShare(s.sid, li, key, 2)
+}
+
 func (s *gpuSession) MigrateKV(li int, k, v []float32, pos int, toDevice bool) bool {
 	defer s.leave(s.enter())
 	return s.g.migrateKV(s.sid, li, k, v, pos, toDevice)

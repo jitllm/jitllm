@@ -463,6 +463,8 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 	if s.seqPos(slot)+total > s.maxSeq {
 		return nil, errFull{s.maxSeq, s.reqSeq}
 	}
+	s.recPrefill = true
+	defer func() { s.recPrefill = false }()
 	// A bidirectional embedding run is one chunk: no row's attention exists
 	// until every row's k and v are in the cache.
 	bidir := s.emb != nil && s.emb.bidir
@@ -538,9 +540,11 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 				}
 			}
 		}
-		// The device runs one fixed grid (kernels bake their element count), so
-		// a narrower chunk runs the same work with surplus rows zeroed; it
-		// always gets the full width, not the host tuner's.
+		// The device gets the full width, not the host tuner's. A chunk's
+		// kernels are built for that width, and what it costs follows the
+		// rows it carries, not the width: measured, d1-3B every block placed,
+		// 64 rows 13.3 ms and 512 57.4 ms on the V100 (CUDA), 116 ms and
+		// 834 ms on the M4 (Metal).
 		if s.devCount() > 0 && !bidir && !spanAll {
 			width = s.deviceChunk()
 			// One submission's width when a run is in the prompt: a pipelined
@@ -939,6 +943,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 		if s.rowTap != nil {
 			s.rowTap(p0, s.bx[:n*c.ResidW()])
 		}
+		s.recChunkPoint(slot, p0+n)
 		s.advance(slot, n)
 		// The last chunk's last row is the only one the caller can use, so it
 		// becomes the decode path's residual stream and the session continues

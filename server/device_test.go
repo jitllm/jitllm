@@ -92,17 +92,8 @@ func TestTheSeamMovesThroughThePlacementService(t *testing.T) {
 		says string
 	}
 	refusals := []refusal{
-		{"a hole at the head of the device set", &v1.RelocateBlocksRequest{SessionId: "d", FirstBlock: 0, LastBlock: 0, ToHost: true},
-			connect.CodeUnimplemented, "COUNT"},
-		{"a device the tier does not hold", &v1.RelocateBlocksRequest{SessionId: "d", FirstBlock: 0, LastBlock: 0, ToDeviceId: "cuda:7"},
-			connect.CodeFailedPrecondition, "opened at load"},
-	}
-	// A range wholly on the devices moves between them; one reaching past the
-	// device set from inside it is a hole.
-	if n < 6 {
-		refusals = append(refusals, refusal{"a range that does not extend the set",
-			&v1.RelocateBlocksRequest{SessionId: "d", FirstBlock: n - 1, LastBlock: n, ToDeviceId: "gpu:0"},
-			connect.CodeUnimplemented, "EXTENDS"})
+		{"a device the server does not have", &v1.RelocateBlocksRequest{SessionId: "d", FirstBlock: 0, LastBlock: 0, ToDeviceId: "cuda:7"},
+			connect.CodeFailedPrecondition, "tier:"},
 	}
 	for _, tc := range refusals {
 		_, err := c.placement.RelocateBlocks(ctx, req(tc.m))

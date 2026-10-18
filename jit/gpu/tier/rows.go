@@ -1062,7 +1062,17 @@ func (g *devTier) tileMV(m mv, ntok int) (mv, bool) {
 				if !ok {
 					return mv{}, false
 				}
-				tail = &mvTail{kern: tk, threads: kernels.GemmTileGroups(ts, tt) * tt.Threads()}
+				// One tail per shape, kept: a ragged prompt asks for it on
+				// every call, and a fresh one each time allocates.
+				tkey := ragKey{kind: "gemmtail", q: m.q, k: m.k, rows: m.rows, ntok: rest, off: lead,
+					tile: [5]int{tt.MT, tt.NT, tt.WM, tt.WN, tt.KB}, bias: m.bias != nil}
+				if tail = g.tailK[tkey]; tail == nil {
+					tail = &mvTail{kern: tk, threads: kernels.GemmTileGroups(ts, tt) * tt.Threads()}
+					if g.tailK == nil {
+						g.tailK = map[ragKey]*mvTail{}
+					}
+					g.tailK[tkey] = tail
+				}
 				break
 			}
 			if tail == nil {

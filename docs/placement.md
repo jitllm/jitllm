@@ -20,6 +20,12 @@ needed resident and re-reads what it evicted from the container.
 # Stream every block (*) through cuda:0's slots (~); ! would pin it instead.
 ./jitllm run -devices cuda:0=2G -placement '*=cuda:0~' models/model.jlm "Hello"
 
+# Two devices, each holding a range of blocks. Name both in -devices; a block
+# (its attention, KV history and FFN) runs on one device. The terminal chat
+# (Settings, "Block placement") and the desktop app (Devices, "Block
+# placement") take the same map.
+./jitllm run -devices cuda:0,vulkan:0 -placement 0-15=cuda:0,16-31=vulkan:0 models/model.jlm "Hello"
+
 # Reuse the KV cache of earlier prompts that share a prefix.
 ./jitllm run -chat -kv-cache models/kv-cache -n 128 models/smollm2.jlm "Explain a solar panel."
 ```

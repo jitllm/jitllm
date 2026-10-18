@@ -291,10 +291,22 @@ type LoadedModel struct {
 	// model's tokenizer (grammar.go).
 	grammars grammars
 
+	// The tier fields are read through device, gpuTier, devIDs and gateIDs and
+	// written only by attachDevice, under devMu: a model loaded host-only gets
+	// its tier when a session first asks to move to a device.
+	devMu     sync.RWMutex
 	dev       nn.Device
 	gpu       *tier.GPU
 	closeDev  func()
 	deviceIDs []string
+	// hwIDs are the devices the tier opened, by their own ids, whatever the
+	// load called them (auto, gpu:0): what a new device is listed beside.
+	hwIDs []string
+	// attachMu is held for writing by attachDevice and for reading by a
+	// session being placed on the tier; open is the load's own options, which
+	// a tier opened later takes the session count and config from.
+	attachMu sync.RWMutex
+	open     LoadOptions
 	// gateKeys is the physical devices the tier opened, one gate key each
 	// (deviceGateKeys): what a session of this model serialises on. deviceIDs
 	// is the spec as written and keys nothing, since `cuda` and `cuda:1` are
@@ -366,7 +378,42 @@ func (lm *LoadedModel) finished(n int, prefill, decode time.Duration) {
 // physical device its tier opened, keyed on the device and not on the spec
 // text, so models loaded with `cuda` and `cuda:1` share card 1's gate and no
 // other. A model with no device runs on the host and queues there.
+func (lm *LoadedModel) device() nn.Device {
+	lm.devMu.RLock()
+	defer lm.devMu.RUnlock()
+	return lm.dev
+}
+
+func (lm *LoadedModel) gpuTier() *tier.GPU {
+	lm.devMu.RLock()
+	defer lm.devMu.RUnlock()
+	return lm.gpu
+}
+
+func (lm *LoadedModel) devIDs() []string {
+	lm.devMu.RLock()
+	defer lm.devMu.RUnlock()
+	return lm.deviceIDs
+}
+
+// holds is true when the tier has the device id named: by the id it opened
+// (cuda:0), or as the load wrote it (gpu:0, a bare backend).
+func (lm *LoadedModel) holds(id string) bool {
+	lm.devMu.RLock()
+	defer lm.devMu.RUnlock()
+	return hasString(lm.deviceIDs, id) || hasString(lm.hwIDs, id) || hasString(normaliseDeviceIDs(lm.open.DeviceIDs), id)
+}
+
+// closeTiers closes the model's tier.
+func (lm *LoadedModel) closeTiers() {
+	lm.devMu.Lock()
+	defer lm.devMu.Unlock()
+	lm.closeDev()
+}
+
 func (lm *LoadedModel) gateIDs() []string {
+	lm.devMu.RLock()
+	defer lm.devMu.RUnlock()
 	if len(lm.gateKeys) == 0 {
 		return []string{HostGateID}
 	}
@@ -439,6 +486,13 @@ type LoadOptions struct {
 	// DeviceSample forces where a sampled token's candidates are selected
 	// (model.WithDeviceSample); the zero value, auto, measures.
 	DeviceSample model.DeviceSampleMode
+	// Placement pins blocks and the head to named devices, in the grammar of
+	// model.ParsePlacement ("0-15=cuda:0,16-31=vulkan:0"); the names are the
+	// DeviceIDs entries. Empty leaves every block to the engine.
+	Placement string
+	// PlacementStrict fails the load when a Placement entry cannot be met,
+	// instead of placing that block where the engine would have.
+	PlacementStrict bool
 	// Sessions is how many concurrent sessions every placed linear block
 	// reserves a recurrent pair for (tier.Config.Sessions); attention history
 	// is paged and reserves nothing. 0 and 1 are one: a second session then
@@ -540,57 +594,36 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		gpu      *tier.GPU
 		closeDev = func() {}
 		devIDs   []string
+		hwIDs    []string
 		gateKeys []string
 	)
-	if spec := strings.Join(o.DeviceIDs, ","); spec != "" && spec != HostGateID {
-		es, err := tier.ParseDevices(spec)
-		if err != nil {
-			return nil, &DeviceError{err}
-		}
-		wantsDevice := false
-		for _, x := range es {
-			wantsDevice = wantsDevice || x.Device()
-		}
-		if wantsDevice {
-			g, err := tier.OpenWith(
-				tier.WithDevices(spec),
-				tier.WithROCm(e.cfg.ROCm),
-				tier.WithTuneCache(e.cfg.TuneCache),
-				tier.WithLazyTune(e.cfg.TuneCache != ""),
-				tier.WithHostBudget(hostBudget),
-				tier.WithConfig(func(c *tier.Config) {
-					c.Sessions = o.Sessions
-					// The step loop (newStepLoop below) runs steps of up to
-					// MaxStepRows rows: the device reserves their scratch at
-					// placement, or a card the blocks filled refuses the step.
-					if e.cfg.MaxBatchRows != 1 {
-						c.StepRows = model.MaxStepRows
-					}
-					if o.tierConfig != nil {
-						o.tierConfig(c)
-					}
-				}),
-			)
-			if err != nil {
-				// Only "auto" degrades to the host. A spec that names a
-				// device asked for that device; silently answering on the
-				// CPU would be a wrong answer with a right shape.
-				if len(es) != 1 || es[0].API != "auto" {
-					return nil, &DeviceError{err}
-				}
-			} else {
-				dev, gpu, closeDev = g, g, g.Close
-				devIDs = normaliseDeviceIDs(o.DeviceIDs)
-				gateKeys = e.deviceGateKeys(g)
-			}
-		}
+	if g, err := e.openTier(o.DeviceIDs, o.Sessions, o.tierConfig, hostBudget); err != nil {
+		return nil, err
+	} else if g != nil {
+		dev, gpu, closeDev = g, g, g.Close
+		devIDs = normaliseDeviceIDs(o.DeviceIDs)
+		hwIDs = resolveDeviceIDs(devIDs, g.Hardware())
+		gateKeys = e.deviceGateKeys(g)
 	}
 
 	opts := []model.Option{model.WithPageBudget(hostBudget), model.WithPreload(preloadDepth)}
-	if kv := cmp.Or(o.KVF16, e.cfg.KVF16); kv != nil {
+	kv := cmp.Or(o.KVF16, e.cfg.KVF16)
+	if kv != nil {
 		opts = append(opts, model.WithKVF16(*kv))
 	}
 	opts = append(opts, model.WithDeviceSample(o.DeviceSample))
+	if o.Placement != "" {
+		pl, err := model.ParsePlacement(o.Placement, o.PlacementStrict)
+		if err != nil {
+			closeDev()
+			return nil, &DeviceError{err}
+		}
+		if err := namedDevicesOpen(pl, gpu); err != nil {
+			closeDev()
+			return nil, &DeviceError{err}
+		}
+		opts = append(opts, model.WithPlacement(pl))
+	}
 	// A host model the step loop runs steps its sessions' rows as one pass
 	// (model.StepRuns' host arm, a matmul over the rows) or one session after
 	// another (a matvec each), as the joint choice decides per step. Its
@@ -620,9 +653,11 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		gpu:       gpu,
 		closeDev:  closeDev,
 		deviceIDs: devIDs,
+		hwIDs:     hwIDs,
 		gateKeys:  gateKeys,
 		budget:    hostBudget,
 		pin:       o.PageBudgetBytes,
+		open:      o,
 		maxBlocks: o.MaxDeviceBlocks,
 		sessions:  map[string]*Session{},
 	}
@@ -653,6 +688,86 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		}
 	}
 	return lm, nil
+}
+
+// tierOptions are the options every tier of this server opens with, whether it
+// opens (openTier) or takes a device later (attachDevice).
+func (e *Engine) tierOptions(sessions int, tierConfig func(*tier.Config), hostBudget uint64) []tier.Option {
+	return []tier.Option{
+		tier.WithROCm(e.cfg.ROCm),
+		tier.WithTuneCache(e.cfg.TuneCache),
+		tier.WithLazyTune(e.cfg.TuneCache != ""),
+		tier.WithHostBudget(hostBudget),
+		tier.WithConfig(func(c *tier.Config) {
+			c.Sessions = sessions
+			// The step loop (newStepLoop) runs steps of up to MaxStepRows
+			// rows: the device reserves their scratch at placement, or a card
+			// the blocks filled refuses the step.
+			if e.cfg.MaxBatchRows != 1 {
+				c.StepRows = model.MaxStepRows
+			}
+			if tierConfig != nil {
+				tierConfig(c)
+			}
+		}),
+	}
+}
+
+// openTier opens the tier for the devices named, or returns nil when they name
+// none (the host alone). Only "auto" degrades to the host when it cannot open:
+// a spec that names a device asked for that device, and silently answering on
+// the CPU would be a wrong answer with a right shape. LoadModel opens the
+// model's tier with it, and attachDevice opens one for a model that had none.
+func (e *Engine) openTier(ids []string, sessions int, tierConfig func(*tier.Config), hostBudget uint64) (*tier.GPU, error) {
+	spec := strings.Join(ids, ",")
+	if spec == "" || spec == HostGateID {
+		return nil, nil
+	}
+	es, err := tier.ParseDevices(spec)
+	if err != nil {
+		return nil, &DeviceError{err}
+	}
+	wantsDevice := false
+	for _, x := range es {
+		wantsDevice = wantsDevice || x.Device()
+	}
+	if !wantsDevice {
+		return nil, nil
+	}
+	g, err := tier.OpenWith(append(e.tierOptions(sessions, tierConfig, hostBudget), tier.WithDevices(spec))...)
+	if err != nil {
+		if len(es) != 1 || es[0].API != "auto" {
+			return nil, &DeviceError{err}
+		}
+		return nil, nil
+	}
+	return g, nil
+}
+
+// DefaultDevices is the placement a load takes when the caller names none:
+// every available device, as many blocks as fit, and the host when the machine
+// has no device. The host alone is asked for by name, as ["cpu"].
+func DefaultDevices(ids []string) []string {
+	if len(ids) == 0 {
+		return []string{"auto"}
+	}
+	return ids
+}
+
+// resolveDeviceIDs names the devices a tier opened, so a session of the model
+// can be moved between them by id.
+func resolveDeviceIDs(ids []string, hw []tier.Hardware) []string {
+	// The ids the tier opened, by name, whatever was asked: a selector, a
+	// "gpu:0" ordinal or a bare backend. attachDevice joins a new device to
+	// this list, and a selector cannot be listed beside another device.
+	if len(hw) == 0 {
+		return ids
+	}
+	out := make([]string, 0, len(hw))
+	for _, h := range hw {
+		out = append(out, h.Ref)
+	}
+	return out
 }
 
 // normaliseDeviceIDs drops the specs that name no device, so gateIDs does not
@@ -735,7 +850,7 @@ func (e *Engine) UnloadModel(id string, force bool) (closed int, err error) {
 	if cerr := lm.m.Close(); cerr != nil {
 		err = cerr
 	}
-	lm.closeDev()
+	lm.closeTiers()
 	// The remaining models grow into what this one held.
 	e.rebudget()
 	return closed, err
@@ -776,7 +891,7 @@ func (e *Engine) Close() {
 		lm.closeEmbedders()
 		lm.closeDecider()
 		lm.m.Close()
-		lm.closeDev()
+		lm.closeTiers()
 	}
 }
 
@@ -806,6 +921,10 @@ type Session struct {
 	// tokens, and an idle session where it was asked.
 	moveMu sync.Mutex
 	move   *moveReq
+	// tier is the model's tier this session's State was attached to, or nil
+	// for a State still on the host alone. Read without mu (a move must not
+	// wait for a generate to finish), so it is a box behind an atomic.
+	tier atomic.Pointer[tierBox]
 
 	sampling model.Sampler
 	created  time.Time
@@ -977,7 +1096,10 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 		st = lm.m.NewState(maxSeq)
 		lm.ttft.statesCreated.Add(1)
 	}
-	if lm.dev != nil && !reused {
+	lm.attachMu.RLock()
+	defer lm.attachMu.RUnlock()
+	tierDev := lm.device()
+	if tierDev != nil && !reused {
 		max := o.MaxDeviceBlocks
 		if max == 0 {
 			max = lm.maxBlocks
@@ -985,7 +1107,7 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 		if max == 0 {
 			max = -1
 		}
-		if err := st.SetDeviceLayers(lm.dev, max); err != nil {
+		if err := st.SetDeviceLayers(tierDev, max); err != nil {
 			st.Close()
 			return nil, err
 		}
@@ -1018,6 +1140,7 @@ func (e *Engine) CreateSession(o SessionOptions) (*Session, error) {
 		spec:     o.Speculation,
 	}
 	s.lastUsed.Store(time.Now().UnixMilli())
+	s.tier.Store(&tierBox{tierDev})
 	s.mu.Lock()
 	s.refresh()
 	s.mu.Unlock()
@@ -1708,7 +1831,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 		QueueDepth:   depth,
 		DeviceBlocks: devBlocks,
 		HostBlocks:   lm.m.Cfg.NLayer - devBlocks,
-		DeviceIDs:    lm.deviceIDs,
+		DeviceIDs:    lm.devIDs(),
 		Prefill:      prefill,
 		Execution:    ExecutionParallel,
 		Restored:     restored,
@@ -2205,7 +2328,7 @@ func (lm *LoadedModel) Path() string { return lm.path }
 // DeviceIDs is the tier this model's blocks are offered to. Empty means the
 // model is host-only and has no tier at all.
 func (lm *LoadedModel) DeviceIDs() []string {
-	return append([]string(nil), lm.deviceIDs...)
+	return append([]string(nil), lm.devIDs()...)
 }
 
 // ID is the stable id this session was created under.
@@ -2219,7 +2342,7 @@ func (s *Session) ModelID() string { return s.modelID }
 func (lm *LoadedModel) Model() *model.Model { return lm.m }
 
 // GPU is the model's device tier, nil for a host-only model.
-func (lm *LoadedModel) GPU() *tier.GPU { return lm.gpu }
+func (lm *LoadedModel) GPU() *tier.GPU { return lm.gpuTier() }
 
 // Inspect runs f with the session's State under the session's lock, so it
 // never overlaps a generate: what a front end reads between turns (placement,
@@ -2314,6 +2437,108 @@ func (s *Session) finishMove(r *moveReq, res moveRes) {
 	r.done <- res
 }
 
+// attachDevice makes the device named part of the model's tier. A model that
+// has a tier takes the device with tier.GPU.AddDevices, so its weights are not
+// held twice; one loaded host-only gets a tier opened for it (openTier, as
+// LoadModel does). Either way the tier's device list is read without a lock
+// by every placement and step, so every session of the model is held off it
+// (each session's lock) for the change, and a session is not created across
+// it (attachMu). Sessions of a host-only model bind to the new tier when they
+// ask to move (bindSession).
+func (e *Engine) attachDevice(lm *LoadedModel, to string) error {
+	lm.attachMu.Lock()
+	defer lm.attachMu.Unlock()
+	if lm.holds(to) {
+		return nil
+	}
+	lm.mu.Lock()
+	hostBudget := lm.budget
+	lm.mu.Unlock()
+
+	e.mu.RLock()
+	held := make([]*Session, 0, len(lm.sessions))
+	for _, s := range lm.sessions {
+		held = append(held, s)
+	}
+	e.mu.RUnlock()
+	sort.Slice(held, func(i, j int) bool { return held[i].id < held[j].id })
+	for _, s := range held {
+		s.mu.Lock()
+	}
+	defer func() {
+		for _, s := range held {
+			s.mu.Unlock()
+		}
+	}()
+
+	if g := lm.gpuTier(); g != nil {
+		if _, err := g.AddDevices(to, e.tierOptions(lm.open.Sessions, lm.open.tierConfig, hostBudget)...); err != nil {
+			return &DeviceError{err}
+		}
+		ids := tierNames(g)
+		keys := e.deviceGateKeys(g)
+		lm.devMu.Lock()
+		lm.deviceIDs, lm.hwIDs, lm.gateKeys = ids, ids, keys
+		lm.devMu.Unlock()
+	} else {
+		g, err := e.openTier([]string{to}, lm.open.Sessions, lm.open.tierConfig, hostBudget)
+		if err != nil {
+			return err
+		}
+		if g == nil {
+			return fmt.Errorf("%w: %q names no device this server can open", ErrPlacement, to)
+		}
+		ids := tierNames(g)
+		keys := e.deviceGateKeys(g)
+		lm.devMu.Lock()
+		lm.dev, lm.gpu, lm.closeDev = g, g, g.Close
+		lm.deviceIDs, lm.hwIDs, lm.gateKeys = ids, ids, keys
+		lm.devMu.Unlock()
+	}
+	if !lm.holds(to) {
+		return fmt.Errorf("%w: %q is not a device of this server (the tier holds %v)", ErrPlacement, to, lm.devIDs())
+	}
+	// The pool's States were placed before the tier changed.
+	e.dropIdle(lm)
+	return nil
+}
+
+// tierNames is the devices a tier holds, by their own ids.
+func tierNames(g *tier.GPU) []string {
+	hw := g.Hardware()
+	out := make([]string, 0, len(hw))
+	for _, h := range hw {
+		out = append(out, h.Ref)
+	}
+	return out
+}
+
+// tierBox holds a tier behind an atomic pointer.
+type tierBox struct{ d nn.Device }
+
+// bindSession attaches the session's State to the model's current tier when it
+// is on another (or on none), keeping as many blocks on a device as it had.
+// model.State.SetDeviceLayers brings the history home before it changes tier,
+// so the answer does not change; the blocks go back up after.
+func (e *Engine) bindSession(s *Session) error {
+	dev := s.lm.device()
+	if b := s.tier.Load(); dev == nil || (b != nil && b.d == dev) {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prev := s.st.GPULayers()
+	if err := s.st.SetDeviceLayers(dev, 0); err != nil {
+		return fmt.Errorf("%w: %v", ErrPlacement, err)
+	}
+	s.tier.Store(&tierBox{dev})
+	if prev > 0 {
+		s.st.SetGPULayers(prev)
+	}
+	s.refresh()
+	return nil
+}
+
 // MoveBlocks moves blocks first..last of a session from the devices they are
 // on to the device named to, history and all. The device must be one of the
 // session's tier: the tier owns the devices and is opened at load.
@@ -2325,14 +2550,13 @@ func (s *Session) finishMove(r *moveReq, res moveRes) {
 // idle session is moved here. A move asked while another is pending is
 // refused.
 func (e *Engine) MoveBlocks(ctx context.Context, s *Session, first, last int, to string) (model.BlockMove, error) {
-	if s.lm.dev == nil {
+	if s.lm.device() == nil {
 		return model.BlockMove{}, fmt.Errorf("%w: session %q was loaded host-only; there is no "+
 			"device to move blocks to", ErrPlacement, s.id)
 	}
-	if !hasString(s.lm.deviceIDs, to) {
-		return model.BlockMove{}, fmt.Errorf("%w: session %q is on %v and %q is not one of them: "+
-			"the TIER owns the devices and is opened at load. Load the model with every device "+
-			"you want to move between", ErrPlacement, s.id, s.lm.deviceIDs, to)
+	if !s.lm.holds(to) {
+		return model.BlockMove{}, fmt.Errorf("%w: session %q is on %v and %q is not one of them",
+			ErrPlacement, s.id, s.lm.devIDs(), to)
 	}
 	r := &moveReq{first: first, last: last, to: to, done: make(chan moveRes, 1)}
 	s.moveMu.Lock()
@@ -2450,6 +2674,10 @@ func (e *Engine) applyPageBudget(lm *LoadedModel, newest *model.State) {
 		st.SetLimit(e.storeLimit(avail, st.Bytes()))
 		kv += st.Bytes()
 	}
+	if sh := lm.ttft.shared; sh != nil {
+		sh.Trim(e.storeLimit(avail, sh.Bytes()))
+		kv += sh.Bytes()
+	}
 	if kv < avail {
 		avail -= kv
 	} else {
@@ -2469,4 +2697,32 @@ func (e *Engine) defaultMaxSeq(lm *LoadedModel) int {
 		return e.cfg.DefaultMaxSeq
 	}
 	return lm.m.Cfg.NCtx
+}
+
+// namedDevicesOpen refuses a placement that names a device the load did not
+// open: it would otherwise load and fail at the first session, far from the
+// setting that caused it.
+func namedDevicesOpen(pl model.Placement, g *tier.GPU) error {
+	open := map[string]bool{"host": true}
+	if g != nil {
+		for _, h := range g.Hardware() {
+			open[nn.DeviceName(h.Name)] = true
+		}
+	}
+	named := make([]model.Place, 0, len(pl.Blocks)+2)
+	for _, b := range pl.Blocks {
+		named = append(named, b)
+	}
+	for _, x := range []*model.Place{pl.Rest, pl.Head} {
+		if x != nil {
+			named = append(named, *x)
+		}
+	}
+	for _, x := range named {
+		if !open[x.On] {
+			return fmt.Errorf("placement names %q, which this load did not open (it opened %d device(s); "+
+				"name each in the device list, e.g. cuda:0,vulkan:0)", x.On, len(open)-1)
+		}
+	}
+	return nil
 }

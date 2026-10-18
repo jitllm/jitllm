@@ -36,6 +36,7 @@ type draft struct {
 	serviceKey, apiKey string
 	showKeys           bool
 	system, spec, ctx  string
+	placement          string
 	knobs              []string
 	seed, folders      string
 }
@@ -73,7 +74,7 @@ func (p *settingsPage) rebuild() {
 	d := &draft{
 		chat: cfg.Chat, kvCache: !cfg.NoKVCache, api: cfg.API, apiAddr: cfg.APIAddr,
 		serviceKey: cfg.ServiceKey, apiKey: cfg.APIKey,
-		system: cfg.System, spec: cfg.DeviceSpec, ctx: strconv.Itoa(cfg.MaxSeq),
+		system: cfg.System, spec: cfg.DeviceSpec, placement: cfg.Placement, ctx: strconv.Itoa(cfg.MaxSeq),
 		seed: strconv.FormatInt(cfg.Sampling.Seed, 10), folders: strings.Join(cfg.ModelDirs, "\n"),
 	}
 	knobs := make([]huh.Field, len(session.SamplingKnobs))
@@ -116,6 +117,14 @@ func (p *settingsPage) rebuild() {
 				}
 				_, err := hardware.ValidateSpec(strings.TrimSpace(s))
 				return err
+			}),
+			huh.NewInput().Title("Block placement").
+				Description("blocks to devices, e.g. 0-15=cuda:0,16-31=vulkan:0 · names must be in Run models on · empty lets jitllm place · the next load").
+				Value(&d.placement).Validate(func(s string) error {
+				if strings.TrimSpace(s) == "" {
+					return nil
+				}
+				return hardware.ValidatePlacement(s, d.spec)
 			}),
 			huh.NewInput().Title("Context").Description("tokens · the next load").Value(&d.ctx).
 				Validate(func(s string) error {
@@ -175,6 +184,8 @@ func (p *settingsPage) apply() tea.Cmd {
 		cfg.DeviceSpec = "auto"
 	}
 	st.DeviceSpec.Set(cfg.DeviceSpec)
+	cfg.Placement = strings.TrimSpace(d.placement)
+	st.Placement.Set(cfg.Placement)
 	if n, err := strconv.Atoi(strings.TrimSpace(d.ctx)); err == nil {
 		cfg.MaxSeq = n
 		st.MaxSeq.Set(n)

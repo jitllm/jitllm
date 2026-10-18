@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"runtime"
@@ -680,6 +681,27 @@ type State struct {
 	// first. Nil in every session but a gate's: it is how a comparison sees
 	// every position of a prompt rather than only the last row's logits.
 	rowTap func(base int, rows []float32)
+	// recEv is the spacing of this hybrid's restore points (recEvery; 0 not
+	// yet asked, -1 none), and recBuf and recRd the buffer and reader a point
+	// is stored through, kept so a warm prompt makes none.
+	recEv  int
+	recBuf []float32
+	recRd  bytes.Reader
+	// endWord is the one word noteEnd and endsAt move a boundary's prompt
+	// ends through.
+	endWord [1]float32
+	// recMark is where the cached prompt in flight parts from the one before
+	// it (markParting), a restore point beside the spaced ones; recLast is
+	// that one's key.
+	recMark int
+	recLast []int32
+	// recBatch is sealRecOnDevice's block list, kept.
+	recBatch []int32
+	// recPrefill says a chunked prefill is running, which keeps its restore
+	// points itself (recRowPoint).
+	recPrefill bool
+	// recStage is faultRecurrentAt's staging, a buffer a linear block.
+	recStage [][]float32
 
 	// ranAt is when this State last started a decode token, in nanoseconds
 	// past servingEpoch plus one (0: never); see serving.go.
@@ -1629,6 +1651,7 @@ func (s *State) ensureLayer(li int) func(*nn.LayerWeights) error {
 		w.Ensure, w.EnsureExperts = dst.Ensure, dst.EnsureExperts
 		w.PrefetchExperts, w.HostExperts, w.HostExpertsRows = dst.PrefetchExperts, dst.HostExperts, dst.HostExpertsRows
 		w.ExpertUses = dst.ExpertUses
+		w.SpeculateExperts = dst.SpeculateExperts
 		*dst = w
 		return nil
 	}
@@ -1653,6 +1676,7 @@ func (s *State) ensureSelected(li int) func(*nn.LayerWeights, []uint32) error {
 		w.Ensure, w.EnsureExperts = dst.Ensure, dst.EnsureExperts
 		w.PrefetchExperts, w.HostExperts = dst.PrefetchExperts, dst.HostExperts
 		w.ExpertUses = dst.ExpertUses
+		w.SpeculateExperts = dst.SpeculateExperts
 		*dst = w
 		return nil
 	}
@@ -1670,6 +1694,18 @@ func (s *State) prefetchSelected(li int) func([]uint32) error {
 			return nil
 		}
 		return s.m.ensureBlockSelected(li, sel, false)
+	}
+}
+
+// speculateSelected is the guess half of the read service for block li: the
+// sheets the previous block predicted, read in the background by the
+// container's workers and never waited for (jlm.File.Speculate). A bank that
+// is not in expert pages has nothing to guess at.
+func (s *State) speculateSelected(li int) func([]uint32) {
+	return func(sel []uint32) {
+		if s.c.MoE() {
+			s.m.speculateExperts(li, sel)
+		}
 	}
 }
 
@@ -1776,7 +1812,8 @@ func (s *State) offerRange(lo, hi int) {
 		// "Measurements once cited in engine/model's comments").
 		if bh, ok := ld.(nn.BlockHolder); ok && !named && bh.HoldsBlock(li) {
 			w := nn.LayerWeights{Ensure: s.ensureLayer(li), EnsureExperts: s.ensureSelected(li),
-				PrefetchExperts: s.prefetchSelected(li), HostExperts: s.hostExpertsFor(li),
+				PrefetchExperts: s.prefetchSelected(li), SpeculateExperts: s.speculateSelected(li),
+				HostExperts:     s.hostExpertsFor(li),
 				HostExpertsRows: s.hostExpertsRowsFor(li), ExpertUses: s.hot.layer(li)}
 			plan := *s.planFor(li)
 			if adm.PrepLayer(li, &plan, &w) {
@@ -1917,7 +1954,7 @@ func (s *State) blockWeights(li int) (nn.LayerWeights, error) {
 	// Every block, not only a mixture's: a device pager needs the host
 	// page re-read on every swap.
 	w.Ensure, w.EnsureExperts = s.ensureLayer(li), s.ensureSelected(li)
-	w.PrefetchExperts = s.prefetchSelected(li)
+	w.PrefetchExperts, w.SpeculateExperts = s.prefetchSelected(li), s.speculateSelected(li)
 	w.HostExperts, w.HostExpertsRows = s.hostExpertsFor(li), s.hostExpertsRowsFor(li)
 	w.ExpertUses = s.hot.layer(li)
 	if c.MoE() {
@@ -3115,6 +3152,7 @@ func (s *State) PrewarmGPU(n int) <-chan struct{} {
 				// the upload path ensures it.
 				w.Ensure, w.EnsureExperts = s.ensureLayer(li), s.ensureSelected(li)
 				w.PrefetchExperts, w.HostExperts = s.prefetchSelected(li), s.hostExpertsFor(li)
+				w.SpeculateExperts = s.speculateSelected(li)
 				w.HostExpertsRows = s.hostExpertsRowsFor(li)
 				w.ExpertUses = s.hot.layer(li)
 			}
@@ -3406,6 +3444,8 @@ func (s *State) Reset() {
 			s.retireErr = fmt.Errorf("model: the recurrent state on the device could not be reset%s", why)
 		}
 	}
+	s.aliasMark(0, s.pos+1)
+	s.kv.retireTail(s.pos)
 	s.kv.reset()
 	s.kvErr.Store(nil)
 	s.kvSkipped = 0
@@ -3554,7 +3594,7 @@ func (s *State) ForwardSample(token int32, smp *Sampler) (int32, error) {
 		onDev, probe = choice.arm()
 		cs.mu.Unlock()
 	}
-	if onDev {
+	if onDev && smp.TopK > 0 && smp.TopK <= MaxTopK {
 		k := smp.TopK
 		s.sampleArgs = smp.DeviceArgs(s.sampleArgs)
 		s.sampleVals = grow32(s.sampleVals, k)

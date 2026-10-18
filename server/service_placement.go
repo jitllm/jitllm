@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,6 +26,29 @@ func (s *PlacementService) GetPlacement(ctx context.Context, req *connect.Reques
 
 // SetPlacement moves the seam. It takes the session's lock, so it waits for
 // a generate to finish rather than mutating the State mid-Forward.
+// reach makes every device named part of the session's model's tier and puts
+// the session's State on it: how a model loaded host-only, or without the
+// device asked for, is moved there later (Engine.attachDevice).
+func (s *PlacementService) reach(sess *Session, ids ...string) error {
+	for _, id := range ids {
+		if err := s.E.attachDevice(sess.lm, id); err != nil {
+			// A device that does not exist, or that will not open, is a
+			// precondition the caller can change, not a server fault.
+			var de *DeviceError
+			if errors.As(err, &de) {
+				return connect.NewError(connect.CodeFailedPrecondition, err)
+			}
+			return connectErr(err)
+		}
+	}
+	if len(ids) > 0 {
+		if err := s.E.bindSession(sess); err != nil {
+			return connectErr(err)
+		}
+	}
+	return nil
+}
+
 func (s *PlacementService) SetPlacement(ctx context.Context, req *connect.Request[v1.SetPlacementRequest]) (*connect.Response[v1.SetPlacementResponse], error) {
 	sess, err := s.E.Session(req.Msg.SessionId)
 	if err != nil {
@@ -32,19 +56,8 @@ func (s *PlacementService) SetPlacement(ctx context.Context, req *connect.Reques
 	}
 	m := req.Msg
 	want := normaliseDeviceIDs(m.DeviceIds)
-	if len(want) > 0 && sess.lm.dev == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf(
-			"session %q was loaded host-only: its model holds no tier, so there is no device "+
-				"to offer blocks to. Load the model with device_ids to make placement reachable",
-			sess.id))
-	}
-	if len(want) > 0 && !sameSet(want, sess.lm.deviceIDs) {
-		// The tier is opened at LOAD and owns the model; a session cannot
-		// re-choose the hardware under it.
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf(
-			"session %q is on tier %v and cannot be moved to %v: the TIER owns the model and is "+
-				"opened at load. Load the model again with the devices you want",
-			sess.id, sess.lm.deviceIDs, want))
+	if err := s.reach(sess, want...); err != nil {
+		return nil, err
 	}
 
 	start := time.Now()
@@ -58,7 +71,7 @@ func (s *PlacementService) SetPlacement(ctx context.Context, req *connect.Reques
 			max = int(*m.MaxDeviceBlocks)
 		}
 		if max < 0 {
-			if err := sess.st.SetDeviceLayers(sess.lm.dev, -1); err != nil {
+			if err := sess.st.SetDeviceLayers(sess.lm.device(), -1); err != nil {
 				sess.mu.Unlock()
 				return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 			}
@@ -89,8 +102,9 @@ func (s *PlacementService) SetPlacement(ctx context.Context, req *connect.Reques
 //
 //	a hole in the middle   the seam is a count; there is no "blocks 3..7 on
 //	                       the card and 8..12 at home" to set.
-//	a device not loaded    the tier owns the devices and is opened at load.
-//	a host-only model      there is no tier to move to.
+//
+// A device the model's tier was not opened with, and a model loaded host-only,
+// are not refused: the device joins the model's tier (Engine.attachDevice).
 func (s *PlacementService) RelocateBlocks(ctx context.Context, req *connect.Request[v1.RelocateBlocksRequest]) (*connect.Response[v1.RelocateBlocksResponse], error) {
 	sess, err := s.E.Session(req.Msg.SessionId)
 	if err != nil {
@@ -105,15 +119,10 @@ func (s *PlacementService) RelocateBlocks(ctx context.Context, req *connect.Requ
 	if !m.ToHost && m.ToDeviceId == "" {
 		return nil, invalid("relocate: set to_host, or name a to_device_id")
 	}
-	if m.ToDeviceId != "" && sess.lm.dev == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf(
-			"session %q was loaded host-only; there is no device to move blocks to", sess.id))
-	}
-	if m.ToDeviceId != "" && !hasString(sess.lm.deviceIDs, m.ToDeviceId) {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf(
-			"relocate: session %q is on %v and %q is not one of them: the tier owns the "+
-				"devices and is opened at load. Load the model with every device you want "+
-				"to move between", sess.id, sess.lm.deviceIDs, m.ToDeviceId))
+	if m.ToDeviceId != "" {
+		if err := s.reach(sess, m.ToDeviceId); err != nil {
+			return nil, err
+		}
 	}
 	if m.ToDeviceId != "" && sess.onDevices(first, last) {
 		return s.moveBetweenDevices(ctx, sess, first, last, m.ToDeviceId)
@@ -121,37 +130,24 @@ func (s *PlacementService) RelocateBlocks(ctx context.Context, req *connect.Requ
 
 	start := time.Now()
 	sess.mu.Lock()
-	cur := sess.st.GPULayers()
 	var moved int
 	var declined []*v1.PlacementDecline
-	switch {
-	case m.ToHost:
-		if last != cur-1 {
-			sess.mu.Unlock()
-			return nil, unimplemented(
-				"relocate: the seam is a COUNT -- blocks 0..%d are on the device -- so bringing "+
-					"%d..%d home would leave a hole. Only the TAIL of the device set can be "+
-					"brought home; ask for %d..%d",
-				cur-1, first, last, first, cur-1)
+	if m.ToHost {
+		n, err := sess.st.ReleaseBlocks(first, last+1)
+		moved = n
+		if err != nil {
+			declined = append(declined, &v1.PlacementDecline{BlockIndex: int32(first), Reason: err.Error()})
 		}
-		got := sess.st.SetGPULayers(first)
-		moved = cur - got
-	default:
-		if first != cur {
-			sess.mu.Unlock()
-			return nil, unimplemented(
-				"relocate: the seam is a COUNT -- blocks 0..%d are on the device -- so placing "+
-					"%d..%d would leave a hole. Only a range that EXTENDS the device set can be "+
-					"placed; ask for %d..%d",
-				cur-1, first, last, cur, last)
-		}
-		got := sess.st.SetGPULayers(last + 1)
-		moved = got - cur
-		if got < last+1 {
+	} else {
+		n, err := sess.st.PlaceBlocks(first, last+1)
+		moved = n
+		if err != nil {
+			declined = append(declined, &v1.PlacementDecline{BlockIndex: int32(first), DeviceId: m.ToDeviceId, Reason: err.Error()})
+		} else if want := last + 1 - first; n < want && !s.allOnDevices(sess, first, last) {
 			declined = append(declined, &v1.PlacementDecline{
-				BlockIndex:  int32(got),
+				BlockIndex:  int32(first),
 				DeviceId:    m.ToDeviceId,
-				Reason:      fmt.Sprintf("the device took %d of the %d block(s) asked for", moved, last+1-cur),
+				Reason:      fmt.Sprintf("the device took %d of the %d block(s) asked for", n, want),
 				OutOfMemory: true,
 			})
 		}
@@ -159,12 +155,47 @@ func (s *PlacementService) RelocateBlocks(ctx context.Context, req *connect.Requ
 	sess.refresh()
 	sess.mu.Unlock()
 
+	// The tier chose a card for what it placed; a named card gets the blocks
+	// that landed elsewhere, moved there with their history.
+	if !m.ToHost && moved > 0 && m.ToDeviceId != "" {
+		if lo, hi, ok := s.elsewhere(sess, first, last, m.ToDeviceId); ok {
+			if _, err := s.moveBetweenDevices(ctx, sess, lo, hi, m.ToDeviceId); err != nil {
+				declined = append(declined, &v1.PlacementDecline{BlockIndex: int32(lo), DeviceId: m.ToDeviceId, Reason: err.Error()})
+			}
+		}
+	}
+
 	return connect.NewResponse(&v1.RelocateBlocksResponse{
 		Placement:   s.E.pbPlacement(sess),
 		BlocksMoved: int32(moved),
 		Declined:    declined,
 		Millis:      millis(time.Since(start)),
 	}), nil
+}
+
+// allOnDevices reports whether blocks first..last are all on a device now.
+func (s *PlacementService) allOnDevices(sess *Session, first, last int) bool {
+	return sess.onDevices(first, last)
+}
+
+// elsewhere is the hull of the blocks in first..last that sit on a device
+// other than want, when that hull is wholly on devices.
+func (s *PlacementService) elsewhere(sess *Session, first, last int, want string) (lo, hi int, ok bool) {
+	on := sess.placement().on
+	lo, hi = -1, -1
+	for li := first; li <= last && li < len(on); li++ {
+		if on[li] == "" || s.E.gateKey(on[li]) == s.E.gateKey(want) {
+			continue
+		}
+		if lo < 0 {
+			lo = li
+		}
+		hi = li
+	}
+	if lo < 0 || !sess.onDevices(lo, hi) {
+		return 0, 0, false
+	}
+	return lo, hi, true
 }
 
 func (s *PlacementService) SetRelocation(ctx context.Context, req *connect.Request[v1.SetRelocationRequest]) (*connect.Response[v1.SetRelocationResponse], error) {
@@ -188,7 +219,7 @@ func (s *PlacementService) TuneSeam(ctx context.Context, req *connect.Request[v1
 	if err != nil {
 		return connectErr(err)
 	}
-	if sess.lm.dev == nil {
+	if sess.lm.device() == nil {
 		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf(
 			"session %q is host-only: there is no seam to tune", sess.id))
 	}

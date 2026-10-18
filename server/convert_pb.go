@@ -187,7 +187,7 @@ func (e *Engine) pbModelInfo(lm *LoadedModel) *v1.ModelInfo {
 		PageSize:          pbBytes(lm.m.PageSize()),
 		WeightBytes:       pbBytes(lm.m.WeightBytes()),
 		SessionCount:      int32(sessions),
-		DefaultDeviceIds:  lm.deviceIDs,
+		DefaultDeviceIds:  lm.devIDs(),
 		Pooling:           pooling,
 		Encoder:           lm.m.IsEncoder(),
 		Aliases:           e.aliasesOf(lm.path),
@@ -207,7 +207,7 @@ func (e *Engine) pbSession(s *Session) *v1.Session {
 		ModelId:            s.modelID,
 		MaxSeq:             int32(s.maxSeq),
 		Position:           s.snapPos.Load(),
-		DeviceIds:          s.lm.deviceIDs,
+		DeviceIds:          s.lm.devIDs(),
 		DeviceBlocks:       devBlocks,
 		HostBlocks:         int32(s.lm.m.Cfg.NLayer) - devBlocks,
 		KvBytes:            pbBytes(s.snapKV.Load()),
@@ -266,8 +266,8 @@ func (e *Engine) pbPlacement(s *Session) *v1.Placement {
 	// with one device the id is the one the model was loaded with, which
 	// is also what an unnamed device reports.
 	single := ""
-	if len(lm.deviceIDs) == 1 {
-		single = lm.deviceIDs[0]
+	if len(lm.devIDs()) == 1 {
+		single = lm.devIDs()[0]
 	}
 
 	blocks := make([]*v1.BlockPlacement, 0, c.NLayer)

@@ -313,10 +313,32 @@ safetensors adapter merge (the GGUF path reads ggml-org's merged file); the
 label pick on the device (section 10: the head's logits come home whole and
 the readout's gather, group max and answer arithmetic run on the host's
 generated kernels); a decision head of another geometry than its encoder on
-the same device (declined by name, section 10); prefix reuse of a request's
-state across its questions (a hybrid's recurrent state is sealed only at a
-prompt's end, so the qwen35 and lfm2 backbones restore nothing shorter); the
-Connect RPC beside the JSON endpoint; images and video in a decision request.
+the same device (declined by name, section 10); prefix reuse on Clef (its
+head reads every row's final residual, which the prefix cache does not hold)
+and on the encoder readouts (Laya, d1-omni: bidirectional, so no prefix of
+their rows is a prefix's history); the Connect RPC beside the JSON endpoint;
+images and video in a decision request.
+
+Prefix reuse on every other decoder readout (d1, Lev, OpenJev) is the
+engine's shared prefix cache, not a path of its own: `Decider.SetPromptCache`
+shares the Decider's pages through a `SharedStore` under a namespace (the
+server hands every Decider of a model the model's), and each prompt runs
+through `State.PrefillCached` -- the longest prefix an earlier prompt left
+aliased, its recurrent summaries restored beside it (placement.md, "the hybrid
+restore point"), the rest prefilled. A request's questions share their state
+through it, and consecutive requests share what did not change. A Decider with
+a cache runs a batch's requests alone (a batch session's page has no single
+sequence to name it). On a device the pages are named where they live: the
+card's pool names a page by the cache's key and maps it into another
+sequence's table (`jit/gpu/tier/kvshare.go`), and a linear block's restore
+points are snapshots on the card (`recshare.go`), so a warm prompt moves no
+history across the bus. Gates:
+`TestDecisionReusesThePrefix` (warm answers bit for bit a cold Decider's; the
+restore counter and the aliased bytes are non-zero, and on every device no
+position migrated and pages mapped; the violation restores a board of ghosts
+in place of each board on the host, and writes into a mapped page in place
+on a device, and must move an answer) and
+`TestDecisionWithAPrefixDoesNotAllocate` (host and every device).
 
 ## 10. On the device
 

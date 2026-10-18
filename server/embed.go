@@ -176,8 +176,8 @@ func (lm *LoadedModel) takeEmbedder() (*model.Embedder, error) {
 	}
 	// Its blocks go where a session's would: an encoder's through its
 	// segment, a decoder's through its State.
-	if lm.dev != nil {
-		if err := x.SetDeviceLayers(lm.dev, lm.deviceBlocks()); err != nil {
+	if lm.device() != nil {
+		if err := x.SetDeviceLayers(lm.device(), lm.deviceBlocks()); err != nil {
 			x.Close()
 			lm.giveEmbedder(nil)
 			return nil, err

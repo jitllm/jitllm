@@ -1572,6 +1572,88 @@ func (g *GPU) migrateRec(sid uint64, li int, conv, state []float32, toDevice boo
 	return d.migrateRec(sid, li, conv, state, toDevice)
 }
 
+// PublishKV names block li's page of the zero session by key, on the device
+// holding the block (nn.KVShareDevice).
+func (g *GPU) PublishKV(li, page int, key string) bool { return g.publishKV(0, li, page, key) }
+
+// MapKV puts the page key names into the zero session's page of block li.
+func (g *GPU) MapKV(li, page int, key string, end int) bool { return g.mapKV(0, li, page, key, end) }
+
+// SnapRec, HasRec and LoadRec are the zero session's restore points of
+// block li, on the device holding it (nn.RecShareDevice).
+func (g *GPU) SnapRec(li int, key string) bool { return g.recShare(0, li, key, 0) }
+func (g *GPU) HasRec(li int, key string) bool  { return g.recShare(0, li, key, 1) }
+func (g *GPU) LoadRec(li int, key string) bool { return g.recShare(0, li, key, 2) }
+
+// SnapRecs and PublishKVs are the zero session's batches (nn.RecShareDevice,
+// nn.KVShareDevice).
+func (g *GPU) SnapRecs(lis []int32, key string) bool { return g.snapRecs(0, lis, key) }
+func (g *GPU) PublishKVs(lis, pages []int32, keys []string) bool {
+	return g.publishKVsBatch(0, lis, pages, keys)
+}
+
+// ownerOf is the device holding every block of lis, nil when they are
+// spread over more than one (or one is on the host).
+func (g *GPU) ownerOf(lis []int32) *devTier {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	var d *devTier
+	for _, li := range lis {
+		o := g.own[int(li)]
+		if o == nil || d != nil && o != d {
+			return nil
+		}
+		d = o
+	}
+	return d
+}
+
+func (g *GPU) snapRecs(sid uint64, lis []int32, key string) bool {
+	if d := g.ownerOf(lis); d != nil {
+		return d.snapRecs(sid, lis, key)
+	}
+	for _, li := range lis {
+		if !g.recShare(sid, int(li), key, 0) {
+			return false
+		}
+	}
+	return true
+}
+
+func (g *GPU) publishKVsBatch(sid uint64, lis, pages []int32, keys []string) bool {
+	if d := g.ownerOf(lis); d != nil {
+		return d.publishKVsBatch(sid, lis, pages, keys)
+	}
+	ok := true
+	for i := range lis {
+		if !g.publishKV(sid, int(lis[i]), int(pages[i]), keys[i]) {
+			ok = false
+		}
+	}
+	return ok
+}
+
+func (g *GPU) recShare(sid uint64, li int, key string, op int) bool {
+	g.mu.Lock()
+	d := g.own[li]
+	g.mu.Unlock()
+	return d != nil && d.recShareCall(sid, li, key, op)
+}
+
+func (g *GPU) publishKV(sid uint64, li, page int, key string) bool {
+	g.mu.Lock()
+	d := g.own[li]
+	g.mu.Unlock()
+	return d != nil && d.publishKVs(sid, li, page, key)
+}
+
+func (g *GPU) mapKV(sid uint64, li, page int, key string, end int) bool {
+	g.mu.Lock()
+	d := g.own[li]
+	g.mu.Unlock()
+	return d != nil && d.mapKVs(sid, li, page, key, end)
+}
+
 // MigrateKV is migrateKV for the zero session: a caller that never attached.
 func (g *GPU) MigrateKV(li int, k, v []float32, pos int, toDevice bool) bool {
 	return g.migrateKV(0, li, k, v, pos, toDevice)

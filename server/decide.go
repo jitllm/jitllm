@@ -137,8 +137,15 @@ func (e *Engine) decideQueued(lm *LoadedModel) {
 	defer gs.release()
 	if lm.dec == nil {
 		d, err := lm.m.NewDecider(e.defaultMaxSeq(lm))
-		if err == nil && lm.dev != nil {
-			if err = d.SetDevice(lm.dev, lm.deviceBlocks()); err != nil {
+		if err == nil && lm.device() != nil {
+			if err = d.SetDevice(lm.device(), lm.deviceBlocks()); err != nil {
+				d.Close()
+			}
+		}
+		// The model's shared pages: a question whose prompt starts as an
+		// earlier one did aliases that prefix's pages and prefills the rest.
+		if err == nil && lm.ttft.shared != nil {
+			if _, err = d.SetPromptCache(lm.ttft.shared, lm.ttft.ns); err != nil {
 				d.Close()
 			}
 		}
@@ -155,8 +162,12 @@ func (e *Engine) decideQueued(lm *LoadedModel) {
 		reqs[i] = j.req
 	}
 	t1 := time.Now()
+	r0 := lm.dec.PromptRestored()
 	out, err := lm.dec.DecideBatch(reqs)
 	took := time.Since(t1)
+	restored := int64(lm.dec.PromptRestored() - r0)
+	lm.ttft.restored.Add(restored)
+	lm.ttft.computed.Add(-restored)
 	lm.decBatchMax.Store(max(lm.decBatchMax.Load(), int64(len(jobs))))
 	for i, j := range jobs {
 		if err != nil {
@@ -169,6 +180,7 @@ func (e *Engine) decideQueued(lm *LoadedModel) {
 			continue
 		}
 		lm.tokensPrefilled.Add(int64(r.InputTokens))
+		lm.ttft.computed.Add(int64(r.InputTokens))
 		j.res = DecideResult{ModelID: lm.id, Answers: r.Answers, InputTokens: r.InputTokens,
 			QueuedFor: t1.Sub(j.t0), Took: took, Batched: len(jobs)}
 		finish(j, nil)

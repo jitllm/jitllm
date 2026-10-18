@@ -257,7 +257,6 @@ func (d *Decider) runJobs(jobs []*batchJob) error {
 				return err
 			}
 			j.scores = append(j.scores[:0], s...)
-			d.input += len(j.ids)
 		}
 		return nil
 	}
@@ -292,9 +291,17 @@ func (d *Decider) runJobs(jobs []*batchJob) error {
 // readout whose blocks sit on a device. A gate turns it off to hold the
 // device's batch session to the requests alone, and "batch-alone", which
 // puts a batch of one into the batch session, turns it off with the rest.
+//
+// A Decider with a prompt cache (SetPromptCache) runs its requests alone
+// as well: a batch session's page holds every row's slots, so no row's
+// tokens name it (State.SetCacheKey), and alone each prompt restores what it
+// shares with the last and prefills the rest.
 func (d *Decider) batchAlone() bool {
-	return d.kind != jlm.DecisionLaya && d.kind != jlm.DecisionClef && d.st != nil &&
-		(d.st.GPULayers() > 0 || d.nonCausal() || d.kind == jlm.DecisionKev) && d.violation != "device-batch" && d.violation != "batch-alone"
+	if d.kind == jlm.DecisionLaya || d.kind == jlm.DecisionClef || d.st == nil || d.violation == "batch-alone" {
+		return false
+	}
+	return ((d.st.GPULayers() > 0 || d.nonCausal() || d.kind == jlm.DecisionKev) && d.violation != "device-batch") ||
+		d.st.CacheNamespace() != ""
 }
 
 // layaPackRows is the most rows a packed encoder pass holds: a device's

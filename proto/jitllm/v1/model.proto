@@ -187,7 +187,8 @@ message LoadModelRequest {
   uint64 page_budget_bytes = 3;
 
   // Devices to offer blocks to, in preference order, as DeviceRef ids.
-  // Empty means host only.
+  // Empty means every available device, as many blocks as fit (`auto`: host
+  // only when the machine has none). ["cpu"] asks for the host alone.
   repeated string device_ids = 4;
 
   // Maximum blocks to place on a device. -1 (the default when unset) means

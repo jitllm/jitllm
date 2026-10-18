@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"sync"
+
+	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // Prefix sharing: sessions whose prompts share a prefix hold its KV pages
@@ -33,9 +35,13 @@ import (
 //     KVSharedRefusals). A device page shared between sessions is not
 //     implemented; a session with blocks on a device does not share
 //     (State.ShareKV).
-//   - A recurrent layer's summary is not paged by position, so sharing is
-//     refused on a model that has one (State.ShareKV), as it is for a batch,
-//     whose pages hold every row.
+//   - A recurrent layer's summary is not paged by position: it is kept as a
+//     restore point beside the pages (recpoint.go), a copy of a state that
+//     moves on, through the store's Get and Set. A batch is refused: its
+//     pages hold every row.
+//   - A page a prompt ends inside is held too, named by its fill, and every
+//     page answers to the chunks of history it holds (alias): a prompt that
+//     shares only part of a page aliases it and copies it on its first write.
 //
 // SharedStore is also an ordinary KVStore: Get and Set copy, so a session that
 // does not share (SetKVStore alone) reads and writes it as it would a
@@ -45,16 +51,28 @@ type SharedStore struct {
 	pages map[kvStoreKey]*sharedPage
 	held  map[*float32]*sharedPage
 	bytes uint64
+	// order is the held pages oldest first, for Trim; a forgotten one is
+	// passed over there.
+	order []*sharedPage
 }
 
-// sharedPage is one page's single copy: refs sessions alias it.
+// sharedPage is one page's single copy: refs sessions alias it. key is the
+// name it was published under; aka are the other names it answers to (the
+// shorter prefixes it holds, alias), forgotten with it.
 type sharedPage struct {
 	key  kvStoreKey
+	aka  []kvStoreKey
 	b    []float32
 	refs int
 	// gone means Drop or Prune took it out of the index: no session can
 	// acquire it again, and it is forgotten once the last holder lets go.
 	gone bool
+}
+
+// lenReader is a page whose size is known before it is read (bytes.Reader).
+type lenReader interface {
+	io.Reader
+	Len() int
 }
 
 // NewSharedStore returns an empty SharedStore.
@@ -79,6 +97,19 @@ func (m *SharedStore) Get(cacheId string, layer, index int, page io.Writer) erro
 // Set holds a copy of the page under its key, replacing one no session holds.
 // A key a session aliases keeps its page: those bytes are what it reads.
 func (m *SharedStore) Set(cacheId string, layer, index int, page io.Reader) error {
+	// A page offered again at its size and held by no session is read in
+	// place: a hybrid's restore points, re-stored every prompt, allocate
+	// nothing.
+	if r, ok := page.(lenReader); ok {
+		m.mu.Lock()
+		e := m.pages[kvStoreKey{cacheId, layer, index}]
+		if e != nil && e.refs == 0 && len(e.b)*4 == r.Len() && e.key == (kvStoreKey{cacheId, layer, index}) {
+			defer m.mu.Unlock()
+			_, err := io.ReadFull(r, kvBytesOf(e.b))
+			return err
+		}
+		m.mu.Unlock()
+	}
 	b, err := io.ReadAll(page)
 	if err != nil {
 		return err
@@ -199,11 +230,53 @@ func (m *SharedStore) release(b []float32) {
 	}
 }
 
+// alias makes the held page b answer to k as well: the page a prefix ends
+// inside, named by that shorter prefix (a chunk or a fill key, kvpage.go),
+// so a prompt sharing only that much aliases it and copies it on its first
+// write (kvPages.cow). A name already held is left as it is.
+func (m *SharedStore) alias(k kvStoreKey, b []float32) {
+	if len(b) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.held[&b[0]]
+	if e == nil || e.gone {
+		return
+	}
+	if _, ok := m.pages[k]; ok {
+		return
+	}
+	m.pages[k] = e
+	e.aka = append(e.aka, k)
+}
+
+// Trim forgets pages no session holds, oldest first, until the store holds
+// at most limit bytes: a bound for a store a server keeps for a model.
+func (m *SharedStore) Trim(limit uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	keep := m.order[:0]
+	for _, e := range m.order {
+		if m.held[&e.b[0]] != e {
+			continue // forgotten already
+		}
+		if e.refs == 0 && m.bytes > limit {
+			m.retire(e)
+			continue
+		}
+		keep = append(keep, e)
+	}
+	clear(m.order[len(keep):])
+	m.order = keep
+}
+
 // add indexes a new held page. Callers hold m.mu.
 func (m *SharedStore) add(k kvStoreKey, b []float32) *sharedPage {
 	e := &sharedPage{key: k, b: b}
 	m.pages[k] = e
 	m.held[&b[0]] = e
+	m.order = append(m.order, e)
 	m.bytes += 4 * uint64(len(b))
 	return e
 }
@@ -211,20 +284,26 @@ func (m *SharedStore) add(k kvStoreKey, b []float32) *sharedPage {
 // retire takes e out of the index, forgetting it now if nobody holds it.
 // Callers hold m.mu.
 func (m *SharedStore) retire(e *sharedPage) {
-	if m.pages[e.key] == e {
-		delete(m.pages, e.key)
-	}
+	m.unindex(e)
 	e.gone = true
 	if e.refs == 0 {
 		m.forget(e)
 	}
 }
 
+// unindex takes every name of e out of the index. Callers hold m.mu.
+func (m *SharedStore) unindex(e *sharedPage) {
+	for _, k := range append(e.aka, e.key) {
+		if m.pages[k] == e {
+			delete(m.pages, k)
+		}
+	}
+	e.aka = e.aka[:0]
+}
+
 // forget drops e entirely. Callers hold m.mu.
 func (m *SharedStore) forget(e *sharedPage) {
-	if m.pages[e.key] == e {
-		delete(m.pages, e.key)
-	}
+	m.unindex(e)
 	if m.held[&e.b[0]] == e {
 		delete(m.held, &e.b[0])
 		m.bytes -= 4 * uint64(len(e.b))
@@ -237,31 +316,45 @@ func (m *SharedStore) forget(e *sharedPage) {
 // the rules). It sets st as the session's store; SetCacheKey must name the
 // namespace first, since a page is named by its tokens only inside one.
 //
-// Refused by name: a batch (its pages hold every row's slots), a model with a
-// recurrent layer (its summary is not paged by position), DeepSeek V4 (its
+// Refused by name: a batch (its pages hold every row's slots), DeepSeek V4 (its
 // compressed entries are a second history keyed by entry), and a session with
 // blocks on a device (a device page shared between sessions is not
 // implemented).
+// UnshareKV ends ShareKV: the session's references go, and it keeps no store
+// and no namespace. The sequence starts over (Reset).
+func (s *State) UnshareKV() {
+	if s.kv.share == nil {
+		return
+	}
+	s.Reset()
+	s.kv.unshareAll()
+	s.kv.store, s.kv.share = NoStore{}, nil
+	for li := s.kv.lo; li < len(s.kv.layers); li++ {
+		s.kv.layers[li].sh = nil
+	}
+	s.kv.ns = ""
+}
+
 func (s *State) ShareKV(st *SharedStore) error {
 	switch {
 	case st == nil:
 		return fmt.Errorf("model: ShareKV wants a store")
 	case s.nseq > 1:
 		return fmt.Errorf("model: a %d-row batch cannot share kv pages: one page holds every row's slots", s.nseq)
-	case s.kv.recurrent:
-		return fmt.Errorf("model: %s has recurrent layers, whose summary is not paged by position: "+
-			"kv page sharing is refused on it", s.c.Arch)
 	case len(s.kv.ent) > 0:
 		return fmt.Errorf("model: %s keeps compressed entries beside its pages: kv page sharing is refused on it", s.c.Arch)
 	case s.kv.ns == "":
 		return fmt.Errorf("model: ShareKV wants a namespace (SetCacheKey): a page is named by its tokens only inside one")
-	case s.ld != nil && s.devCount() > 0:
-		return fmt.Errorf("model: %d block(s) of this session are on a device: a device kv page shared "+
-			"between sessions is not implemented", s.devCount())
+	case s.ld != nil && s.devCount() > 0 && !s.kvShareDevice():
+		return fmt.Errorf("model: %d block(s) of this session are on a device that does not name its kv "+
+			"pages (nn.KVShareDevice)", s.devCount())
 	case s.pos > 0:
 		return fmt.Errorf("model: ShareKV wants a fresh sequence, this one is at position %d", s.pos)
 	}
 	s.kv.store, s.kv.share = st, st
+	if s.kv.devAt == nil {
+		s.kv.devAt = s.kvDevAt
+	}
 	for li := s.kv.lo; li < len(s.kv.layers); li++ {
 		s.kv.layers[li].sh = st
 	}
@@ -327,11 +420,13 @@ func (s *kvPages) cow(n int) {
 	if s.cowFault {
 		return // the violation: write into the shared page in place
 	}
-	k := s.pool.get(s.pp)
+	// From the layer's spare first, as a fresh page is (page0): the copy
+	// overwrites it whole.
+	k := s.page0()
 	copy(k, s.k[n])
 	v := k
 	if !s.latent {
-		v = s.pool.get(s.pp)
+		v = s.page0()
 		copy(v, s.v[n])
 	}
 	s.unshare(n)
@@ -357,18 +452,25 @@ func (s *kvPages) sharedBytes() uint64 {
 // back to its pool.
 func (kc *kvCache) publishSealed(li, n int, key string) {
 	s := &kc.layers[li]
+	if kc.devAt(li) != nil {
+		kc.queuePublish(li, n, key) // named where it lives, on the card
+		return
+	}
 	if s.isShared(n) {
 		return // restored from the store: already the held copy
 	}
+	// A page the store holds already: the session reads the held copy, and
+	// its own memory goes to its spare, where the next page it needs is taken
+	// from (page0).
 	k := kc.share.publish(kvStoreKey{key, li * 2, n}, s.k[n])
 	if &k[0] != &s.k[n][0] {
-		s.pool.give(s.k[n])
+		s.spare = append(s.spare, s.k[n])
 	}
 	v := k
 	if !s.latent {
 		v = kc.share.publish(kvStoreKey{key, li*2 + 1, n}, s.v[n])
 		if &v[0] != &s.v[n][0] {
-			s.pool.give(s.v[n])
+			s.spare = append(s.spare, s.v[n])
 		}
 	}
 	s.k[n], s.v[n] = k, v
@@ -378,6 +480,16 @@ func (kc *kvCache) publishSealed(li, n int, key string) {
 // faultShared aliases page n of layer li from the store, or reports a miss.
 func (kc *kvCache) faultShared(li, n int, key string) error {
 	s := &kc.layers[li]
+	// A block on a device holds its history there: the page key names is
+	// put into the session's table on the card (nn.KVShareDevice.MapKV), no
+	// byte moved.
+	if d := kc.devAt(li); d != nil {
+		if !d.MapKV(li, n, key, kc.mapEnd) {
+			return ErrNoPage
+		}
+		kc.mapped += 2
+		return nil
+	}
 	k := kc.share.acquire(kvStoreKey{key, li * 2, n}, s.pp)
 	if k == nil {
 		return ErrNoPage
@@ -408,4 +520,20 @@ func (kc *kvCache) unshareAll() {
 			}
 		}
 	}
+}
+
+// kvShareDevice says the session's device names and maps its kv pages.
+func (s *State) kvShareDevice() bool {
+	_, ok := s.ld.(nn.KVShareDevice)
+	return ok
+}
+
+// kvDevAt is the device holding block li's history when it names its pages
+// (nn.KVShareDevice), nil when the block is on the host.
+func (s *State) kvDevAt(li int) nn.KVShareDevice {
+	if !s.devAt(li) {
+		return nil
+	}
+	d, _ := s.ld.(nn.KVShareDevice)
+	return d
 }

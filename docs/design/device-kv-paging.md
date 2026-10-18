@@ -495,7 +495,9 @@ measured against is deleted.
    sinks, on every backend, asserting the paged kernel ran.
 3. **Tier integration**: the pool, page tables, growth by append; delete the
    capacity machinery. Gate: a growing sequence allocates only appended pages
-   and copies nothing; two sessions' pages never alias. BUILT, MLA
+   and copies nothing; two sessions' pages never alias, but for a page the
+   prefix cache names, which every sequence that maps it holds and none
+   writes in place (kvshare.go: a write copies it on the card). BUILT, MLA
    included, and the capacity machinery deleted; gated by
    `model.TestPagedKVMatchesTheHost` / `TestPagedKVBatchMatchesHost` and their
    violations (`TestPagedKVGateDiscriminates`, jitllmfault).

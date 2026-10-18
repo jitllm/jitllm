@@ -89,17 +89,20 @@ var (
 // Hot selectors are resolved once: sel() allocates and calls sel_registerName
 // on every use, and the encode path sends about nine messages per dispatch.
 var (
-	selSetPSO                        SEL
-	selSetBuffers                    SEL
-	selSetBuffer                     SEL
-	selDispatchTG                    SEL
-	selEndEncoding                   SEL
-	selCommit                        SEL
-	selWaitDone                      SEL
-	selStatus                        SEL
-	selError                         SEL
-	selCmdBuf                        SEL
-	selCmdBufUnret                   SEL
+	selSetPSO      SEL
+	selSetBuffers  SEL
+	selSetBuffer   SEL
+	selDispatchTG  SEL
+	selEndEncoding SEL
+	selCommit      SEL
+	selWaitDone    SEL
+	selStatus      SEL
+	selError       SEL
+	selCmdBuf      SEL
+	selCmdBufUnret SEL
+	// selBlitEnc and selCopyBuf are a blit's, looked up once: sel copies
+	// its name into a C string each call, a heap object per copy.
+	selBlitEnc, selCopyBuf           SEL
 	selComputeEnc                    SEL
 	selComputeEncType, selMemBarrier SEL
 	selRetain                        SEL
@@ -163,6 +166,8 @@ func load() error {
 	selError = sel("error")
 	selCmdBuf = sel("commandBuffer")
 	selCmdBufUnret = sel("commandBufferWithUnretainedReferences")
+	selBlitEnc = sel("blitCommandEncoder")
+	selCopyBuf = sel("copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:")
 	selComputeEnc = sel("computeCommandEncoder")
 	selComputeEncType = sel("computeCommandEncoderWithDispatchType:")
 	selMemBarrier = sel("memoryBarrierWithScope:")
@@ -963,12 +968,51 @@ func (c *Ctx) Copy(dst *Buf, dstOff int, src *Buf, srcOff, n int) error {
 	if cb == 0 {
 		return fmt.Errorf("metal: commandBuffer returned nil")
 	}
-	enc := send0(cb, sel("blitCommandEncoder"))
+	enc := send0(cb, selBlitEnc)
 	if enc == 0 {
 		return fmt.Errorf("metal: blitCommandEncoder returned nil")
 	}
-	sendCopy(enc, sel("copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:"),
+	sendCopy(enc, selCopyBuf,
 		src.id, uint64(srcOff), dst.id, uint64(dstOff), uint64(n))
+	send0(enc, selEndEncoding)
+	send0(cb, selCommit)
+	send0(cb, selWaitDone)
+	if e := send0(cb, selError); e != 0 {
+		return nserr(e, "blit command buffer")
+	}
+	return nil
+}
+
+// CopyList is Copy for every op of ops, as one blit encoder in one command
+// buffer and one wait: a list of small copies (a restore point's snapshot of
+// every recurrent block) pays the commit and the wait once.
+func (c *Ctx) CopyList(ops []CopyOp) error {
+	for _, o := range ops {
+		if o.Dst.c != c || o.Src.c != c {
+			return fmt.Errorf("metal: a copy between buffers of another device")
+		}
+	}
+	if len(ops) == 0 {
+		return nil
+	}
+	if err := c.Wait(); err != nil {
+		return err
+	}
+	cb := send0(c.queue, selCmdBuf)
+	if cb == 0 {
+		return fmt.Errorf("metal: commandBuffer returned nil")
+	}
+	enc := send0(cb, selBlitEnc)
+	if enc == 0 {
+		return fmt.Errorf("metal: blitCommandEncoder returned nil")
+	}
+	for _, o := range ops {
+		if o.N == 0 {
+			continue
+		}
+		sendCopy(enc, selCopyBuf,
+			o.Src.id, uint64(o.SrcOff), o.Dst.id, uint64(o.DstOff), uint64(o.N))
+	}
 	send0(enc, selEndEncoding)
 	send0(cb, selCommit)
 	send0(cb, selWaitDone)

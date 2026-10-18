@@ -24,7 +24,7 @@ func newTestRoot(t *testing.T) *root {
 	cfg := config.DefaultConfig()
 	cfg.ModelDirs = []string{dir}
 	f := newFront()
-	f.st = newState(f, "cpu", 1024, false, false)
+	f.st = newState(f, "cpu", "", 1024, false, false)
 	e := engine.New(f, f.st)
 	t.Cleanup(e.Close)
 	// Nothing drains the queue in a test but the test itself.

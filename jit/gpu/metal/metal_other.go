@@ -47,6 +47,7 @@ func HostGap() (ns, n uint64)                           { return 0, 0 }
 func RoundTrip() (ns, n uint64)                         { return 0, 0 }
 func (c *Ctx) Alloc(int) (*Buf, error)                  { return nil, errNoMetal }
 func (c *Ctx) Copy(*Buf, int, *Buf, int, int) error     { return errNoMetal }
+func (c *Ctx) CopyList([]CopyOp) error                  { return errNoMetal }
 func (c *Ctx) ImportAlign() int                         { return 0 }
 func (c *Ctx) Import(unsafe.Pointer, int) (*Buf, error) { return nil, errNoMetal }
 func (b *Buf) Imported() bool                           { return false }

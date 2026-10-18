@@ -77,8 +77,21 @@ type File struct {
 	waitNs int64
 	// filled[b][c] says chunk c of block b's page holds real bytes. A resident
 	// page is not necessarily a FILLED page: see EnsureRanges.
-	filled  [][]bool
-	chunkIn int64
+	filled [][]bool
+	// busy[b][c] says chunk c of block b is being read by a caller that
+	// planned it (planRunsBusy); landed wakes the callers that joined it.
+	busy   [][]bool
+	landed sync.Cond
+	// specOn, specHeld and specCap are the speculative occupancy (readsvc.go),
+	// guarded by mu; spec is the queue and its workers.
+	specOn   []bool
+	specHeld int
+	specCap  int
+	spec     specSvc
+	// readHook stands in for the file read, for a gate that holds or counts
+	// reads; nil reads the file.
+	readHook func(dst []byte, off int64) error
+	chunkIn  int64
 	// spanBuf is planRuns' scratch for the chunk spans it sorts. Guarded by
 	// f.mu, which planRuns holds for its whole body, so one array serves every
 	// caller and a mixture's 24-range plan allocates nothing per token.
@@ -683,6 +696,9 @@ func (f *File) readAt(dst []byte, off int64) error {
 	// pread is priced per call, not per byte: a chunk dose that cut the bytes
 	// 16x left the decode rate unchanged.
 	f.countRead()
+	if f.readHook != nil {
+		return f.readHook(dst, off)
+	}
 	h := f.f
 	if f.direct != nil && directOK(off, len(dst)) && aligned(dst) {
 		h = f.direct
@@ -776,6 +792,7 @@ func (f *File) ReleasePages() {
 		f.dropFilled(i)
 	}
 	f.resident, f.recent = 0, -1
+	f.specOn, f.specHeld, f.busy = nil, 0, nil
 	f.trimFree(0)
 }
 
@@ -824,6 +841,7 @@ func (f *File) filledMap(b int) []bool {
 func (f *File) unhold(i int) {
 	b := f.pages[i]
 	n := uint64(cap(b))
+	f.unspec(i)
 	f.putFree(n, b[:n])
 	f.pages[i] = nil
 	f.dropFilled(i)
@@ -1029,6 +1047,7 @@ func (f *File) Close() error {
 	// Close is not concurrent with use. The slice header of f.pages is read
 	// without the lock on the hot path (NPages, PageBytes, pageAt), so the
 	// elements are cleared and the header left immutable for the File's life.
+	f.stopSpec()
 	defer f.flushRecycled()
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1054,6 +1073,10 @@ func (f *File) Close() error {
 	// free is emptied rather than nilled: evictOne writes to it, and a write
 	// to a nil map panics.
 	f.filled, f.resident, f.recent = nil, 0, -1
+	f.specOn, f.specHeld, f.busy = nil, 0, nil
+	if f.landed.L != nil {
+		f.landed.Broadcast()
+	}
 	f.free, f.freeBytes = map[uint64][][]byte{}, 0
 	f.f, f.direct, f.dense = nil, nil, nil
 	f.unmapAll()

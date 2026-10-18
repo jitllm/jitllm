@@ -695,6 +695,12 @@ func (g *devTier) pagedAppend(sid uint64, seqs []seqEnd) error {
 	err := g.heldLayers(sid, func(li int, l *kvLayerPool) error {
 		for _, se := range seqs {
 			need := (l.positions(se.end) + kp.p - 1) / kp.p
+			// A named page this call writes into is copied first (kvshare.go).
+			if l.rate == 0 {
+				if err := g.cowPages(sid, kp, l, se.s, se.start, se.end); err != nil {
+					return err
+				}
+			}
 			if have := len(l.owned[se.s]); need > have {
 				if err := g.allocPages(sid, kp, l, se.s, need-have); err != nil {
 					return err
@@ -752,7 +758,7 @@ func (g *devTier) windowPages(sid uint64, kp *kvPool, li int, l *kvLayerPool, se
 	}
 	for j := l.rel[s]; j < first; j++ {
 		if id := l.owned[s][j]; id != 0 {
-			l.fenceID(id)
+			l.releaseID(id)
 			l.owned[s][j] = 0
 			g.tabPend = append(g.tabPend, tabWrite{l.tab, kp.ranges[s].off + j, l.owned[s][j : j+1]})
 			g.KVWindowReleased++
@@ -769,6 +775,9 @@ func (g *devTier) windowPages(sid uint64, kp *kvPool, li int, l *kvLayerPool, se
 // none (it was released behind a window). Callers hold g.mu, outside any
 // submission.
 func (g *devTier) allocAt(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, j int) error {
+	if len(l.free) < 1 {
+		l.reclaimNamed(1)
+	}
 	if len(l.free) < 1 {
 		if err := g.growKVLayer(kp, l, l.n+1-len(l.free)); err != nil && !g.evictForRoom(sid, kp, l, 1) {
 			return err
@@ -1163,6 +1172,7 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 	}
 	s := seqID{sid, base}
 	kvRow, P := pl.geom.kvRow, kp.p
+	g.KVPositionsMigrated += pos
 	if pos*kvRow > len(k) || pos*kvRow > len(v) {
 		return fmt.Errorf("%d positions of %d floats do not fit the host's %d/%d", pos, kvRow, len(k), len(v))
 	}

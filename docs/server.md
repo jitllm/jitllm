@@ -4,7 +4,7 @@
 
 ## The server
 
-`jitllmd serve` serves three surfaces on one address.
+`jitllmd serve` serves these surfaces on one address.
 
 | Surface | Endpoints |
 |---|---|
@@ -12,7 +12,47 @@
 | Anthropic-compatible | `POST /v1/messages` (named SSE events) |
 | Connect RPC | `ModelService`, `InferenceService` (`Generate`, `Complete`, `Cancel`, `Embed`), `SessionService`, `PlacementService`, `DeviceService`, `TelemetryService` |
 | jitllm | `POST /v1/systemone` (a decision model's answers), `GET /v1/capabilities` (the manifest, [capabilities.md](capabilities.md)), `GET /metrics` (Prometheus) |
-| Health | `GET /healthz`, `GET /health` |
+| llama.cpp-compatible | `POST /completion`, `/infill`, `/tokenize`, `/detokenize`, `/apply-template`, `/embedding`; `GET /props`, `/slots` (see below) |
+| Health | `GET /healthz` (plain text), `GET /health` and `GET /v1/health` (`{"status": "ok"}`, as llama-server answers) |
+
+### llama.cpp's native API
+
+The routes above are llama-server's own, so its clients run unmodified.
+`/completion` and `/infill` build the same `GenerateOptions` as the OpenAI
+routes and call the one generate path; `/embedding` calls the one embed path.
+Responses carry llama-server's names: `content`, `tokens` (with
+`return_tokens`, always in a stream), `stop`, `stop_type` (`eos`, `word`,
+`limit`), `stopping_word`, `tokens_predicted`, `tokens_evaluated`,
+`tokens_cached`, `timings`, `generation_settings`, `truncated`. A stream is
+`data: {json}` frames with no `[DONE]`, the last carrying `stop: true`. Errors
+are `{"error": {"code", "message", "type"}}`.
+
+llama-server serves one model, so a request names none: it is the loaded model.
+With several loaded, add a `model` field (an extension) holding an id from
+`/v1/models`. Absent sampling fields take llama-server's defaults (temperature
+0.8, top_k 40, top_p 0.95, min_p 0.05), not the OpenAI routes'. `prompt` is a
+string, token ids, or strings and ids mixed; `grammar` and `json_schema`
+constrain the output; `n_probs` reports the raw distribution (at most 20).
+`/infill` needs a model with fill-in-the-middle tokens. `cache_prompt` is
+accepted either way: the prefix cache is automatic and never changes the
+output. `POST /props` answers 501, as llama-server does without `--props`.
+
+A field the engine cannot honour is refused by name with a 400, at any value
+but its neutral one: `mirostat`, `dry_multiplier`, `xtc_probability`,
+`typical_p`, `dynatemp_range`, `presence_penalty`, `frequency_penalty`,
+`logit_bias`, `samplers` beyond penalties/top_k/top_p/min_p/temperature,
+`n_cmpl` above 1, `id_slot` other than -1 and 0, `n_predict` 0, `n_keep`,
+`n_cache_reuse`, `t_max_predict_ms`, `timings_per_token`, `return_progress`,
+`post_sampling_probs`, `response_fields`, `lora`, `repeat_last_n` other than
+64 or 0, `embd_normalize` other than 2, a list of prompts, and multimodal
+prompts. A field llama.cpp does not define is refused as unknown. On a
+byte-level BPE vocabulary `/tokenize` with `parse_special: false` is refused
+when the text contains a control token, because the tokenizer matches it either
+way.
+
+Not served: `/reranking`, `/embeddings`, `/lora-adapters`, `/models`, slot
+save/restore/erase, and llama-server's own `/metrics` names (`/metrics` stays
+jitllm's).
 
 A client checks what it is talking to before it relies on it:
 `TelemetryService.GetServerInfo` returns the version and revision, the
@@ -184,7 +224,7 @@ The server is for the machine it runs on until told otherwise.
   with no host (`:4242`) or a non-loopback one opens the server to the network;
   `serve` then prints a warning unless an API key is set.
 - **API key.** `-api-key KEY` (or `JITLLM_API_KEY`, which only the command
-  reads) makes every route but `/healthz` and `/health` require
+  reads) makes every route but `/healthz`, `/health` and `/v1/health` require
   `Authorization: Bearer KEY`; `/v1/messages` also takes `x-api-key: KEY`, as
   the Anthropic SDKs send it. The key is compared in constant time. A refusal
   is a 401 in each API's own error shape: `{"error": {"code": "invalid_api_key",

@@ -284,9 +284,9 @@ type JIT struct {
 	// (BeginPrefillE), and onE is whether one is running on it now.
 	eview *sched.Pool
 	onE   bool
-	// procs releases the GOMAXPROCS request BeginPrefill made, nil when none
-	// is live; see sched.RaiseProcs.
-	procs func()
+	// procs is the GOMAXPROCS request BeginPrefill made, live until
+	// EndPrefill; see sched.RaiseProcs.
+	procs sched.ProcsHold
 }
 
 var jitOnce sync.Once
@@ -845,10 +845,7 @@ func (f *JIT) Close() error {
 		f.eview.Close()
 	}
 	f.pool, f.narrow, f.wide, f.eview = nil, nil, nil, nil
-	if f.procs != nil {
-		f.procs()
-		f.procs = nil
-	}
+	f.procs.Release()
 	return nil
 }
 
@@ -867,9 +864,7 @@ func (f *JIT) BeginPrefill() {
 		return
 	}
 	f.pool = f.wide
-	if f.procs == nil {
-		f.procs = sched.RaiseProcs(f.wide.Max())
-	}
+	f.procs.Raise(f.wide.Max())
 }
 
 // EndPrefill returns to the decode pool and GOMAXPROCS; see BeginPrefill.
@@ -878,10 +873,7 @@ func (f *JIT) EndPrefill() {
 		return
 	}
 	f.pool = f.narrow
-	if f.procs != nil {
-		f.procs()
-		f.procs = nil
-	}
+	f.procs.Release()
 }
 
 // BeginPrefillE runs every region until EndPrefillE on the E-cores' pool, and
@@ -902,9 +894,7 @@ func (f *JIT) BeginPrefillE() bool {
 	f.narrow.Park()
 	f.pool = f.eview
 	f.onE = true
-	if f.procs == nil {
-		f.procs = sched.RaiseProcs(f.eview.Max())
-	}
+	f.procs.Raise(f.eview.Max())
 	return true
 }
 
@@ -917,10 +907,7 @@ func (f *JIT) EndPrefillE() {
 	f.onE = false
 	f.pool = f.narrow
 	f.narrow.Unpark()
-	if f.procs != nil {
-		f.procs()
-		f.procs = nil
-	}
+	f.procs.Release()
 }
 
 // MatVec computes out[r] = dot(row r of w, x) with generated code, reporting

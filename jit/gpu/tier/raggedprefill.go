@@ -423,7 +423,9 @@ func (pk *pagedScratch) ragStagedAttend(lc *launcher, q, k, v, n, out, tab, desc
 		args = append(args, sink)
 	}
 	args = append(args, pk.pMap, rs.buf)
-	if err := lc.launch(vr.soft, vr.softG, vr.softW, args...); err != nil {
+	err := lc.launch(vr.soft, vr.softG, vr.softW, args...)
+	clear(args)
+	if err != nil {
 		return err
 	}
 	lc.la(vr.acc, vr.accT, pf.wt, v, n, out, tab, desc, pk.pMap, rs.buf)

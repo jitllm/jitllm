@@ -1,9 +1,11 @@
 # The web UI: our own client of the ConnectRPC API
 
-**Status: design, with a spike behind it.** The spike (branch `webui-spike`)
-generates a TypeScript client from `proto/jitllm/v1`, lists devices and models
-and streams a chat through `InferenceService.Generate`, embedded in `jitllmd`
-behind `-webui`. Nothing here is a rule; AGENTS.md governs.
+**Status: built for chat, models and devices.** `jitllmd -webui` serves a
+TypeScript client generated from `proto/jitllm/v1`: devices, loaded models and
+model files with Load and Unload, and a multi-turn chat through
+`InferenceService.Generate` with Stop, sampling controls, stop strings and
+pictures. The placement, residency and telemetry views, decision models and
+the RPCs listed below as missing are not built. Nothing here is a rule; AGENTS.md governs.
 
 jitllm does not embed llama.cpp's web UI behind a compatibility layer. It
 builds its own, and the UI is a client of the same `jitllm.v1` services the
@@ -42,8 +44,10 @@ that does.
   through. `jitllmd -webui` turns it on; the default is off, so a headless
   server exposes no extra surface and the binary grows by the bundle only
   (~180 KB uncompressed at this size).
-- The UI is served by the same listener as the API, behind the same `Guard`,
-  so it is same-origin by default and a key or host check covers it too.
+- The UI is served by the same listener as the API, behind the same `Guard`:
+  same-origin by default and the Host check covers it. The `/ui/` files are the
+  one exception to the API key (`openRoute`): the page holds no data and has to
+  load before it can ask for the key, and every RPC it makes carries one.
 - `dist/` is committed while the bundle is small, so `go build ./server/...`
   works from a clean checkout with no Node. When it grows, or churns diffs,
   switch to building it in CI and in the release job before `go build`, with
@@ -51,7 +55,8 @@ that does.
 
 ## CI
 
-A `webui` job: `npm ci`, `npm run typecheck`, `npm run build`, then the same
+The `check` job: `npm ci`, `npm run typecheck`, `npm test` (node's runner over
+`src/chat.test.ts`), `npm run build`, then the same
 diff check as `server/gen` (`git diff --exit-code server/webui/dist
 server/webui/src/gen`) so a stale bundle or stale generated client fails the
 build. The existing buf step gains `npm ci` first, because the plugin is a
@@ -80,8 +85,9 @@ listed in `-allow-origin`, listed origins get CORS headers and preflights are
 answered, and `-api-key` is `Authorization: Bearer`. The spike's
 `?server=URL&key=KEY` uses exactly that. Open points:
 
-- A key in the URL leaks into history and Referer. Move it to a login box
-  held in `sessionStorage`, never `localStorage`.
+- `?key=` is read once, kept in `sessionStorage` (never `localStorage`) and
+  removed from the address bar; an `Unauthenticated` answer shows a key box.
+  A key typed there never enters a URL.
 - `Access-Control-Expose-Headers` is not set. Connect's unary and streaming
   error details ride in the body, so nothing breaks today; the Connect
   protocol's trailer headers (`Connect-` prefixed) would need exposing for a
@@ -94,8 +100,8 @@ answered, and `-api-key` is `Authorization: Bearer`. The spike's
 
 | view | RPCs | state |
 |---|---|---|
-| Chat with streaming, stop, sampling controls, stop strings | `Generate` (`ChatPrompt`, `SamplingParams`), `Cancel` | in the protos; spike streams text |
-| Pictures in a turn | `ChatMessage.images` (`ChatImage`) | in the protos; needs a file picker and a sha preview |
+| Chat with streaming, stop, sampling controls, stop strings | `Generate` (`ChatPrompt`, `SamplingParams`), `Cancel` | built, except that the history is in memory and lost on reload |
+| Pictures in a turn | `ChatMessage.images` (`ChatImage`) | built: a file picker; a model with no vision tower answers with the server's refusal, shown in the turn |
 | Tool calls, structured output | `GenerateToolCalls`, `grammar`, JSON schema | in the protos |
 | Models: files on disk, loaded, load and unload with options | `ListModels`, `LoadModel`, `UnloadModel`, `SetModelOptions`, `Convert` (stream) | in the protos; load progress is not streamed |
 | Devices and memory | `ListDevices`, `GetMemoryTopology` | in the protos; spike lists devices |

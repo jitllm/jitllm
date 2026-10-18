@@ -759,7 +759,8 @@ type LoadModelRequest struct {
 	// a cliff and not a gradient, so this is worth setting deliberately.
 	PageBudgetBytes uint64 `protobuf:"varint,3,opt,name=page_budget_bytes,json=pageBudgetBytes,proto3" json:"page_budget_bytes,omitempty"`
 	// Devices to offer blocks to, in preference order, as DeviceRef ids.
-	// Empty means host only.
+	// Empty means every available device, as many blocks as fit (`auto`: host
+	// only when the machine has none). ["cpu"] asks for the host alone.
 	DeviceIds []string `protobuf:"bytes,4,rep,name=device_ids,json=deviceIds,proto3" json:"device_ids,omitempty"`
 	// Maximum blocks to place on a device. -1 (the default when unset) means
 	// "as many as fit". This is the seam.

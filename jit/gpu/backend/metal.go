@@ -20,6 +20,32 @@ type mtlDev struct {
 	// sessions take one each.
 	mu   sync.Mutex
 	free []*mtlSession
+	// ops is CopyList's scratch, under mu: kept, so a list allocates
+	// nothing.
+	ops []metal.CopyOp
+}
+
+// CopyList is Copy for every range of cs in one blit command buffer
+// (CopyLister).
+func (m *mtlDev) CopyList(cs []CopyRange) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ops := m.ops[:0]
+	for _, r := range cs {
+		db, ok := r.Dst.(*mtlBuf)
+		sb, ok2 := r.Src.(*mtlBuf)
+		if !ok || !ok2 || db == nil || sb == nil {
+			return fmt.Errorf("backend: msl: a copy between buffers this backend did not allocate")
+		}
+		if err := copyRange(len(db.b.Bytes()), r.DstOff, len(sb.b.Bytes()), r.SrcOff, r.N, db.b == sb.b); err != nil {
+			return err
+		}
+		ops = append(ops, metal.CopyOp{Dst: db.b, DstOff: r.DstOff, Src: sb.b, SrcOff: r.SrcOff, N: r.N})
+	}
+	err := m.c.CopyList(ops)
+	clear(ops)
+	m.ops = ops[:0]
+	return err
 }
 
 var _ BufferLimited = (*mtlDev)(nil)

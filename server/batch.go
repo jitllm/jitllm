@@ -553,7 +553,7 @@ func (lp *stepLoop) admit() {
 		lp.renumber()
 	}
 	if page > 0 {
-		lp.lm.gpu.PromiseKV(promised)
+		lp.lm.gpuTier().PromiseKV(promised)
 	}
 }
 
@@ -667,7 +667,7 @@ func rowPages(r *row, pos, page int) int {
 // goes to the tier too (tier.GPU.PromiseKV), so a batched scratch built
 // after admission does not take the pages it was made on.
 func (lp *stepLoop) kvRoom() (room, page, promised int) {
-	g := lp.lm.gpu
+	g := lp.lm.gpuTier()
 	if g == nil {
 		return 0, 0, 0
 	}
@@ -699,7 +699,7 @@ func (r *row) started() {
 		QueueDepth:   r.depth,
 		DeviceBlocks: devBlocks,
 		HostBlocks:   lm.m.Cfg.NLayer - devBlocks,
-		DeviceIDs:    lm.deviceIDs,
+		DeviceIDs:    lm.devIDs(),
 		Prefill:      r.prefill,
 		Execution:    ExecutionParallel,
 		Batched:      true,
@@ -836,6 +836,9 @@ func (lp *stepLoop) decodeUnits() []unit {
 			continue
 		}
 		next := r.sampler.Sample(r.logits)
+		if sampleTap != nil {
+			sampleTap(r.sampler.Temp, r.logits, next)
+		}
 		r.sampler.Observe(next)
 		tlp := takeLogprob(r.logprobs, vocab, r.logits, next)
 		if !r.ignoreEOS && vocab.IsEOG(next) {
@@ -1082,7 +1085,7 @@ func (lp *stepLoop) stepJoint(units []unit) bool {
 		runs = append(runs, model.Run{State: u.r.s.st, Tokens: u.tokens, Logits: u.logits})
 		rows += len(u.tokens)
 	}
-	gpu := lp.lm.gpu
+	gpu := lp.lm.gpuTier()
 	if gpu == nil {
 		return lp.stepHost(units, runs, rows)
 	}
@@ -1480,3 +1483,9 @@ func (c *batchCounters) noteBudget(b int) {
 	c.budgetMax.Store(max(c.budgetMax.Load(), n))
 	c.budgetSum.Add(n)
 }
+
+// sampleTap, when a test sets it, sees the logits a row sampled from and the
+// token that came out, for every row of the step loop. It exists so a gate can
+// compare two engines' distributions where their sampled tokens may part
+// (nothing sets it outside tests; it costs one nil check per token).
+var sampleTap func(temp float64, logits []float32, next int32)

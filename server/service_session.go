@@ -72,7 +72,7 @@ func (s *SessionService) ListSessions(ctx context.Context, req *connect.Request[
 		if id := req.Msg.ModelId; id != "" && sess.modelID != id {
 			continue
 		}
-		if dev != "" && !hasString(sess.lm.deviceIDs, dev) && !hasString(sess.lm.gateIDs(), key) {
+		if dev != "" && !hasString(sess.lm.devIDs(), dev) && !hasString(sess.lm.gateIDs(), key) {
 			continue
 		}
 		out.Sessions = append(out.Sessions, s.E.pbSession(sess))

@@ -461,7 +461,7 @@ func mRopePrefixCacheKeysOnPositions(t *testing.T, name string) {
 		k := probe.spanKey(0, sp, rp)
 		probe.kv.seq = k
 		h := sha256.New()
-		probe.kv.writeSeq(h, len(k))
+		probe.kv.writeSeq(h, 0, len(k))
 		return string(h.Sum(nil))
 	}
 	// Without positions the two prompts are the same rows under the same

@@ -60,7 +60,7 @@ func main() {
 	cfg.Chat, cfg.DeviceSpec, cfg.MaxSeq = *chat, *device, *ctx
 
 	f := newFront()
-	f.st = newState(f, cfg.DeviceSpec, cfg.MaxSeq, cfg.Chat, !cfg.NoKVCache)
+	f.st = newState(f, cfg.DeviceSpec, cfg.Placement, cfg.MaxSeq, cfg.Chat, !cfg.NoKVCache)
 	// Service first: under Auto a jitllmd that answers is used, and this app
 	// runs its own engine only when none does. Asked before the API starts
 	// (root.Init), or Auto would find this app.

@@ -149,6 +149,7 @@ func serve(args []string) {
 	allowOrigin := fs.String("allow-origin", "",
 		"comma-separated browser origins (https://app.example.com) that may call the server cross-origin; "+
 			"loopback pages and clients that send no Origin are unaffected, any other origin is refused")
+	webui := fs.Bool("webui", false, "serve the built-in web UI at /ui/ (off by default)")
 	models := fs.String("models", defaultModels(),
 		"directory scanned by ListModels and used to resolve a bare model name (JITLLM_MODELS sets the default)")
 	load := fs.String("load", "",
@@ -158,7 +159,7 @@ func serve(args []string) {
 		"load a model of -models a request names (by file name or alias) that is not loaded, unless it is disabled; "+
 			"it takes -devices (default auto), -gpu-layers and -sessions")
 	devices := fs.String("devices", "",
-		"devices for -load: auto|all|cpu|gpu[:N]|(cuda|vulkan|metal)[:DEVICE][=BYTES], comma-separated; "+
+		"devices for -load: auto (the default: every device, as many blocks as fit)|all|cpu (the host alone)|gpu[:N]|(cuda|vulkan|metal)[:DEVICE][=BYTES], comma-separated; "+
 			"a bare gpu, cuda or vulkan is every such device, a :DEVICE selector pins one")
 	maxmem := fs.String("maxmem", "",
 		"page budget for -load, e.g. 8G (default: the engine's own budget)")
@@ -348,6 +349,7 @@ func serve(args []string) {
 			MaxDeviceBlocks: *gpuLayers,
 			Sessions:        *sessions,
 		}
+		o.DeviceIDs = server.DefaultDevices(nil)
 		if *devices != "" {
 			o.DeviceIDs = strings.Split(*devices, ",")
 		}
@@ -375,9 +377,13 @@ func serve(args []string) {
 		fmt.Fprintln(os.Stderr, w)
 	}
 
+	handler := e.Handler()
+	if *webui {
+		handler = server.WithWebUI(handler)
+	}
 	srv := &http.Server{
 		Addr:    *addr,
-		Handler: guard.Wrap(e.Handler()),
+		Handler: guard.Wrap(handler),
 		// No WriteTimeout: a streaming generate on an over-committed model
 		// can run for minutes. The write side is bounded by the client's
 		// context.

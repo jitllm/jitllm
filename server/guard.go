@@ -20,7 +20,7 @@ import (
 // the Host header. Origin is always checked: a request without one is not a
 // browser's and passes.
 type Guard struct {
-	// APIKey, when set, is required on every route but /healthz and /health,
+	// APIKey, when set, is required on every route but /healthz, /health, /v1/health and the web UI's /ui/ files,
 	// as `Authorization: Bearer KEY` (and `x-api-key: KEY` on the Anthropic
 	// API's /v1/messages routes).
 	APIKey string
@@ -152,8 +152,12 @@ func corsHeaders(w http.ResponseWriter, r *http.Request, origin string) {
 	}
 }
 
-// openRoute is a route that needs no key: the liveness probes.
-func openRoute(path string) bool { return path == "/healthz" || path == "/health" }
+// openRoute is a route that needs no key: the liveness probes and the web UI's
+// static files. The page is public code that holds no data; it has to load
+// before it can ask for the key, and every RPC it makes still carries one.
+func openRoute(path string) bool {
+	return path == "/healthz" || path == "/health" || path == "/v1/health" || path == "/ui" || strings.HasPrefix(path, "/ui/")
+}
 
 func anthropicRoute(path string) bool {
 	return path == "/v1/messages" || strings.HasPrefix(path, "/v1/messages/")
