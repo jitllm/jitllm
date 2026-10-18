@@ -52,6 +52,9 @@ type openOpts struct {
 	cfg        []func(*Config)
 	verbose    bool
 	verboseSet bool
+	// pools is the registry the tier's discrete cards take their pools from
+	// (WithPoolRegistry); nil, each tier its own.
+	pools *PoolRegistry
 }
 
 // WithDevices names the devices to place blocks on, in the grammar the -devices
@@ -814,6 +817,26 @@ func planSlots(devs []backend.Device, asks []uint64, o openOpts) []Slot {
 		// A later member with a bigger budget raises the heap's ceiling.
 		if !pools[g].Host() && pools[g].Limit() < slots[i].Bytes {
 			pools[g] = NewPool(pools[g].Name(), slots[i].Bytes)
+		}
+	}
+	if r := o.pools; r != nil {
+		// One pool per physical card across every tier opened with the
+		// registry: what one model gives back, another takes. The card's
+		// device limit is the pool's, so the pool is the gate.
+		for g, p := range pools {
+			if p == nil || p.Host() {
+				continue
+			}
+			id := backend.IdentityOf(devs[g])
+			if !id.Known() {
+				continue
+			}
+			pools[g] = r.poolFor(id.Key, p)
+		}
+		for i := range devs {
+			if p := pools[group[i]]; p != nil && !p.Host() && slots[i].Bytes < p.Limit() {
+				slots[i].Bytes = p.Limit()
+			}
 		}
 	}
 	for i := range devs {

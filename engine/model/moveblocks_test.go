@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"github.com/jitllm/jitllm/jit/cpu"
 	"math"
 	"strings"
@@ -486,5 +487,72 @@ func TestAnyRangeMovesWithItsHistory(t *testing.T) {
 		case worst > 2.5:
 			t.Fatalf("token %d: %g from the host control, outside the band", i, worst)
 		}
+	}
+}
+
+// TestTwoModelsShareACardThroughTheRegistry: two models, each with its own
+// tier, on one card whose shared pool (tier.WithPoolRegistry) cannot hold
+// both: the second places what the card has left; when the first brings its
+// blocks home the second takes the room. Without the registry each tier keeps
+// the budget it opened with and the room the first gave back stays out of the
+// second's reach -- the orchestrator's room to make.
+func TestTwoModelsShareACardThroughTheRegistry(t *testing.T) {
+	a, _ := moveDevices(t)
+	for _, shared := range []bool{true, false} {
+		t.Run(fmt.Sprintf("shared=%v", shared), func(t *testing.T) {
+			var reg *tier.PoolRegistry
+			opts := []tier.Option{tier.WithDevices(a + "=1G"), tier.WithDeviceTune(tier.TuneOff)}
+			if shared {
+				reg = tier.NewPoolRegistry()
+				opts = append(opts, tier.WithPoolRegistry(reg))
+			}
+			ga, err := tier.OpenWith(opts...)
+			if err != nil || ga == nil {
+				noDevice(t, a, err)
+			}
+			defer ga.Close()
+			gb, err := tier.OpenWith(opts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer gb.Close()
+			ma, err := Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ma.Close()
+			mb, err := Open(graphModel(t, "Qwen3-0.6B-Q8_0"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer mb.Close()
+			sa, sb := ma.NewState(64), mb.NewState(64)
+			defer sa.Close()
+			defer sb.Close()
+			if err := sa.SetDevice(ga); err != nil {
+				t.Fatal(err)
+			}
+			if err := sb.SetDevice(gb); err != nil {
+				t.Fatal(err)
+			}
+			na, nb := sa.GPULayers(), sb.GPULayers()
+			if na == 0 {
+				t.Skipf("the first model took no block of %s: %s", a, ga.Err())
+			}
+			if shared && nb == mb.Cfg.NLayer {
+				t.Fatalf("both models fit a shared 1G card whole (%d+%d blocks): the gate cannot see the pool", na, nb)
+			}
+			if _, err := sa.ReleaseBlocks(0, ma.Cfg.NLayer); err != nil || sa.GPULayers() != 0 {
+				t.Fatalf("the first model kept %d blocks: %v", sa.GPULayers(), err)
+			}
+			if _, err := sb.PlaceBlocks(0, mb.Cfg.NLayer); err != nil {
+				t.Fatal(err)
+			}
+			grew := sb.GPULayers() > nb
+			t.Logf("shared=%v: first model %d blocks, second %d, then %d once the first went home (%s)", shared, na, nb, sb.GPULayers(), gb.Err())
+			if shared && !grew {
+				t.Fatalf("the second model took no room the first gave back (%d blocks before and after)", nb)
+			}
+		})
 	}
 }
