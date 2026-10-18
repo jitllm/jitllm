@@ -260,6 +260,17 @@ func Verify(g *Graph, f Facts) error {
 				xi && (o.Weight[0].Role != jlm.RoleXIELU || o.Weight[0].K != 4) {
 				bad("%s: activation %d binds %d weights", at, o.Attr.Act, len(o.Weight))
 			}
+		case OpRecurrent:
+			if !ins(1) || !outs(1) {
+				break
+			}
+			if o.Attr.Mixer == 0 || o.Attr.Mixer != c.Mixer || width(o.Out[0]) != width(o.In[0]) {
+				bad("%s: mixer %d over %d into %d; the configuration states mixer %d", at, o.Attr.Mixer,
+					width(o.In[0]), width(o.Out[0]), c.Mixer)
+			}
+			if len(o.Reads) != 1 || o.Reads[0].Name != "rec" || len(o.Writes) != 1 || o.Writes[0].Name != "rec" {
+				bad("%s: reads and writes no recurrence version", at)
+			}
 		case OpClamp:
 			if !ins(1) || !outs(1) {
 				break

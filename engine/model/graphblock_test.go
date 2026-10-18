@@ -2,6 +2,7 @@ package model
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -70,8 +71,7 @@ func TestBlockGraphMatchesTheHandPath(t *testing.T) {
 		"olmoe-1b-7b-0924-instruct-Q4_K_M", "synth-qwen2moe", "synth-glm4moe", "synth-ernie45moe", "synth-bailingmoe2",
 		"synth-dots1", "synth-minimaxm2", "synth-seedoss", "synth-smollm3", "synth-lfm2",
 		"synth-starcoder", "synth-starcoder2", "synth-stablelm", "synth-nemotron", "synth-dbrx", "synth-apertus", "synth-glm4",
-		"synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-deepseek", "synth-deepseek-lite",
-		"synth-deepseek-dense", "synth-deepseek-yarn", "synth-deepseek-yarn-af", "synth-glm4moelite", "synth-kimilinear", "synth-hunyuan", "synth-hunyuanmoe"} {
+		"synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-deepseek", "synth-deepseek-lite", "synth-deepseek-dense", "synth-deepseek-yarn", "synth-deepseek-yarn-af", "synth-glm4moelite", "synth-kimilinear", "synth-hunyuan", "synth-hunyuanmoe", "synth-nemotronh", "synth-mamba2", "synth-falconmamba", "synth-mamba1", "synth-jamba", "synth-lfm2moe"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
@@ -147,8 +147,27 @@ func TestBlockGraphMatchesTheHandPath(t *testing.T) {
 					differ = differ || other[i][j] != want[i][j]
 				}
 			}
+			hasKV := false
+			for li := range gm.Cfg.NLayer {
+				hasKV = hasKV || gm.Cfg.LayerKind(li).Attends()
+			}
+			if !differ && !hasKV {
+				// A model with no KV cache: the different computation is a
+				// first block's norm scaled by two.
+				w := slices.Clone(f16.layers[0].attnNorm)
+				for i := range w {
+					w[i] *= 2
+				}
+				f16.layers[0].attnNorm = w
+				other, _, _ = graphDecode(t, f16, n, 0)
+				for i := range want {
+					for j := range want[i] {
+						differ = differ || other[i][j] != want[i][j]
+					}
+				}
+			}
 			if !differ {
-				t.Fatal("an f16 cache gave the f32 cache's logits bit for bit: the comparison cannot see a change")
+				t.Fatal("a different computation gave the same logits bit for bit: the comparison cannot see a change")
 			}
 		})
 	}
@@ -248,7 +267,7 @@ func graphPrompt(t *testing.T, m *Model, n, frames int) ([][]float32, int) {
 	defer s.Close()
 	ids := make([]int32, n)
 	for i := range ids {
-		ids[i] = int32(100 + (i*7919)%3000)
+		ids[i] = int32((100 + (i*7919)%3000) % m.Cfg.NVocab)
 	}
 	lg, err := s.Prefill(ids)
 	if err != nil {
@@ -271,7 +290,7 @@ func graphPrompt(t *testing.T, m *Model, n, frames int) ([][]float32, int) {
 // graph, a page budget below the model gives the same answer, and the
 // comparison fires on a different computation (an f16 cache).
 func TestBlockGraphPromptMatchesTheHandPath(t *testing.T) {
-	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "synth-deepseek", "synth-deepseek-lite", "synth-glm4moelite"} {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "synth-deepseek", "synth-deepseek-lite", "synth-glm4moelite", "Qwen3-MOE-4x0.6B-Q4_K_M", "synth-glm4moe", "synth-starcoder2", "synth-stablelm", "synth-nemotron", "synth-dbrx", "synth-apertus", "synth-glm4", "synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-nemotronh", "synth-mamba2", "synth-falconmamba", "synth-jamba", "synth-lfm2"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
@@ -279,15 +298,25 @@ func TestBlockGraphPromptMatchesTheHandPath(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer ctl.Close()
-			gm, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(true))
+			gm, err := Open(p, noTune, WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer gm.Close()
-			// Several chunks: past the widest chunk the host tuner offers.
-			// A synthetic fixture's context is shorter: the prompt fills it.
+			// Several chunks: past the widest chunk the host tuner offers,
+			// within the model's context.
 			n := min(700, gm.Cfg.NCtx-16)
-			nl := gm.Cfg.NLayer
+			// The blocks on the graph; the rest run the hand-written body for
+			// their named reasons in both arms.
+			nl := 0
+			for li := range gm.Cfg.NLayer {
+				if gm.BlockGraph(li) != nil {
+					nl++
+				}
+			}
+			if nl == 0 {
+				t.Fatal("no block of the model is on the graph: this gate proved nothing")
+			}
 			var want [][]float32
 			for _, budget := range []int{0, nl / 3} {
 				ref, ran := graphPrompt(t, ctl, n, budget)
@@ -310,7 +339,7 @@ func TestBlockGraphPromptMatchesTheHandPath(t *testing.T) {
 					}
 				}
 			}
-			f16, err := Open(p, noTune, WithKVF16(true), WithBlockGraph(true))
+			f16, err := Open(p, noTune, WithKVF16(true))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -322,8 +351,27 @@ func TestBlockGraphPromptMatchesTheHandPath(t *testing.T) {
 					differ = differ || other[i][j] != want[i][j]
 				}
 			}
+			hasKV := false
+			for li := range gm.Cfg.NLayer {
+				hasKV = hasKV || gm.Cfg.LayerKind(li).Attends()
+			}
+			if !differ && !hasKV {
+				// A model with no KV cache: the different computation is a
+				// first block's norm scaled by two.
+				w := slices.Clone(f16.layers[0].attnNorm)
+				for i := range w {
+					w[i] *= 2
+				}
+				f16.layers[0].attnNorm = w
+				other, _ = graphPrompt(t, f16, n, 0)
+				for i := range want {
+					for j := range want[i] {
+						differ = differ || other[i][j] != want[i][j]
+					}
+				}
+			}
 			if !differ {
-				t.Fatal("an f16 cache gave the f32 cache's logits bit for bit: the comparison cannot see a change")
+				t.Fatal("a different computation gave the same logits bit for bit: the comparison cannot see a change")
 			}
 		})
 	}
@@ -365,7 +413,8 @@ func flipRope(g *graph.Graph) {
 // CUDA device the graphed model decodes bit for bit as the model without the
 // graph with every block placed and at a partial seam.
 func TestBlockGraphLowersTheDevicePlan(t *testing.T) {
-	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0"} {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "synth-starcoder2", "synth-stablelm",
+		"synth-nemotron", "synth-dbrx", "synth-glm4", "synth-olmo2", "synth-gptoss", "synth-gemma", "gemma-3-1b-it-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			ctl, err := Open(p, noTune, WithBlockGraph(false))
@@ -510,7 +559,7 @@ func graphBatch(t *testing.T, m *Model, frames int) ([][]float32, int) {
 // graph, a page budget below the model gives the same answer, and the
 // comparison fires on a different computation (an f16 cache).
 func TestBlockGraphRaggedStepMatchesTheHandPath(t *testing.T) {
-	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "synth-deepseek", "synth-deepseek-lite", "synth-glm4moelite"} {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "synth-deepseek", "synth-deepseek-lite", "synth-glm4moelite", "Qwen3-MOE-4x0.6B-Q4_K_M", "synth-glm4moe", "synth-starcoder", "synth-starcoder2", "synth-stablelm", "synth-nemotron", "synth-dbrx", "synth-apertus", "synth-glm4", "synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-nemotronh", "synth-mamba2", "synth-falconmamba", "synth-jamba", "synth-lfm2"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
@@ -518,12 +567,22 @@ func TestBlockGraphRaggedStepMatchesTheHandPath(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer ctl.Close()
-			gm, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(true))
+			gm, err := Open(p, noTune, WithKVF16(false))
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer gm.Close()
-			nl := gm.Cfg.NLayer
+			// The blocks on the graph; the rest run the hand-written body for
+			// their named reasons in both arms.
+			nl := 0
+			for li := range gm.Cfg.NLayer {
+				if gm.BlockGraph(li) != nil {
+					nl++
+				}
+			}
+			if nl == 0 {
+				t.Fatal("no block of the model is on the graph: this gate proved nothing")
+			}
 			var want [][]float32
 			for _, budget := range []int{0, nl / 3} {
 				ref, ran := graphBatch(t, ctl, budget)
@@ -553,7 +612,7 @@ func TestBlockGraphRaggedStepMatchesTheHandPath(t *testing.T) {
 					}
 				}
 			}
-			f16, err := Open(p, noTune, WithKVF16(true), WithBlockGraph(true))
+			f16, err := Open(p, noTune, WithKVF16(true))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -565,8 +624,27 @@ func TestBlockGraphRaggedStepMatchesTheHandPath(t *testing.T) {
 					differ = differ || other[i][j] != want[i][j]
 				}
 			}
+			hasKV := false
+			for li := range gm.Cfg.NLayer {
+				hasKV = hasKV || gm.Cfg.LayerKind(li).Attends()
+			}
+			if !differ && !hasKV {
+				// A model with no KV cache: the different computation is a
+				// first block's norm scaled by two.
+				w := slices.Clone(f16.layers[0].attnNorm)
+				for i := range w {
+					w[i] *= 2
+				}
+				f16.layers[0].attnNorm = w
+				other, _ = graphBatch(t, f16, 0)
+				for i := range want {
+					for j := range want[i] {
+						differ = differ || other[i][j] != want[i][j]
+					}
+				}
+			}
 			if !differ {
-				t.Fatal("an f16 cache gave the f32 cache's logits bit for bit: the comparison cannot see a change")
+				t.Fatal("a different computation gave the same logits bit for bit: the comparison cannot see a change")
 			}
 		})
 	}

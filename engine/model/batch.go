@@ -349,29 +349,8 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 			// sequential, and a matvec per row reads the block's weights once
 			// a row. Rows owned by other sessions (stepHost) keep the matvec,
 			// the projections being this State's scratch.
-			batched := s.linearBatched() && len(s.rowOwn) == 0
-			if batched {
-				if err := s.linearPre(l, s.bh, n); err != nil {
-					return nil, err
-				}
-			}
-			t0 = s.tick()
-			for _, r := range causal {
-				h := s.bh[r*c.NEmbd : (r+1)*c.NEmbd]
-				out := outRows[r*c.NEmbd : (r+1)*c.NEmbd]
-				o, slot := s.rowOwner(r, seq)
-				o.lin.r = r
-				o.jit.NewInput()
-				if err := o.linearAttn(li, l, slot, h, out); err != nil {
-					s.lin.on = false
-					return nil, err
-				}
-			}
-			s.tock(opAttn, t0)
-			if batched {
-				if err := s.linearPost(li, l, outRows, n); err != nil {
-					return nil, err
-				}
+			if err := s.mixerRagged(li, l, seq, causal, outRows, n); err != nil {
+				return nil, err
 			}
 		}
 		if kind.Attends() {

@@ -1300,7 +1300,7 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 	}
 	l := &m.layers[li]
 	if li < len(m.graphs) && m.graphs[li] != nil {
-		return s.graphRows(li, l, m.graphs[li], slot, p0, n, bidir)
+		return s.graphRows(li, l, m.graphs[li], slot, base, p0, n, bidir)
 	}
 	s.handRan(li)
 	// DeepSeek V4's block is its own (ds4.go): the chunk's rows are
@@ -1371,29 +1371,8 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 		if kind.Attends() {
 			outRows = s.bhf
 		}
-		batched := s.linearBatched()
-		if batched {
-			if err := s.linearPre(l, s.bh, n); err != nil {
-				return err
-			}
-		}
-		ta := s.tick()
-		for r := 0; r < n; r++ {
-			h := s.bh[r*c.NEmbd : (r+1)*c.NEmbd]
-			out := outRows[r*c.NEmbd : (r+1)*c.NEmbd]
-			s.lin.r = r
-			s.jit.NewInput()
-			if err := s.linearAttn(li, l, slot, h, out); err != nil {
-				s.lin.on = false
-				return err
-			}
-			s.rows.snapRow(s, li, slot, base+r)
-		}
-		s.tock(opAttn, ta)
-		if batched {
-			if err := s.linearPost(li, l, outRows, n); err != nil {
-				return err
-			}
+		if err := s.mixerChunk(li, l, slot, base, outRows, n); err != nil {
+			return err
 		}
 	}
 	if !kind.Attends() {

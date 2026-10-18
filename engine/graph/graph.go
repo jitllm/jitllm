@@ -102,10 +102,17 @@ const (
 	// NHead values of Weight[1]'s rows. mla-absorb is the rewrite that folds
 	// both up-projections into the query and the output.
 	OpAttendLatent
+	// OpRecurrent is a recurrent mixer over its normed input row (In[0]):
+	// Mixer names the kind (the container's layer kind: a state-space scan,
+	// a short convolution, Mamba-1's selective scan), Out[0] the mixer's
+	// output row at the residual's width, reading the recurrence's version n
+	// and writing n+1. It is opaque in this version, as OpGatedDelta is: its
+	// weights all bound by it.
+	OpRecurrent
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -206,6 +213,8 @@ type Attrs struct {
 	// the scores scaled by 1 + TempScale*ln(1 + floor((pos+TempOffs)/TempFloor))
 	// (Llama 4's and Mistral 3's); TempScale 0 is none.
 	TempScale, TempFloor, TempOffs float64
+	// Mixer is OpRecurrent's kind (jlm.LayerKind's value).
+	Mixer uint8
 	// Bound is OpClamp's.
 	Bound float64
 	// Offset and Width are OpSlice's.

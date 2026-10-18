@@ -93,7 +93,7 @@ func (m *Model) uncovered(li int) string {
 		}
 	}
 	switch {
-	case c.LayerKind(li).Recurrent() || c.NGram != 0:
+	case c.NGram != 0 || c.LayerKind(li).Recurrent() && (c.LayerKind(li).Attends() || c.LayerKind(li) == jlm.LayerLinearAttn):
 		return UncoveredRecurrent
 	case m.blockAct(roles) == 0:
 		return UncoveredUngated
@@ -103,7 +103,7 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredMLA
 	case !c.MLA() && c.HeadDimV != 0 && c.HeadDimV != c.HeadDimAt(li):
 		return UncoveredValueWidth
-	case c.KVShared(li) || c.extraKVHead(li) || !c.MLA() && !hasRole(roles, jlm.RoleAttnV):
+	case c.KVShared(li) || c.extraKVHead(li) || c.LayerKind(li).Attends() && !c.MLA() && !hasRole(roles, jlm.RoleAttnV):
 		return UncoveredKVShared
 	case c.Indexer() || c.MSA() || c.IdxHeads != 0 || c.QSARatio != 0:
 		return UncoveredIndexer
@@ -213,6 +213,16 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		PostNorm: has(jlm.RolePostAttnNorm), NoPreNorm: !has(jlm.RoleAttnNorm), NoRope: !c.RopeAt(li)}
 	d.QKVBias, d.Sinks = has(jlm.RoleAttnQBias), has(jlm.RoleAttnSinks)
 	d.QKNormPost, d.QKL2Norm = c.QKNormPost, c.QKL2Norm && c.RopeAt(li)
+	// A recurrent mixer in place of the attention, binding the mixer's
+	// tensors the block stores.
+	if k := c.LayerKind(li); k.Recurrent() {
+		d.Mixer, d.NoFFN = uint8(k), m.layers[li].noFFN
+		for _, r := range graph.MixerRoles {
+			if s, ok := inv[r]; ok {
+				d.MixerW = append(d.MixerW, graph.Binding{Role: r, K: s.K, Rows: s.Rows, Sheets: s.Sheets})
+			}
+		}
+	}
 	// The query temperature, where AttnTemp applies it to this block.
 	if c.AttnTempScale != 0 && !(c.NoPEGlobal && c.RopeAt(li)) {
 		d.TempScale, d.TempFloor, d.TempOffs = c.AttnTempScale, c.AttnTempFloor, c.AttnTempOffs
@@ -277,6 +287,9 @@ type denseLowering struct {
 	// absorbed (graph.MLAAbsorb) through mlaProject, the attention over the
 	// latent rows and the un-absorb.
 	mla bool
+	// mixer: a recurrent mixer (linearAttn) in place of the attention;
+	// noFFN: the block ends at the mixer's residual add.
+	mixer, noFFN bool
 	// offered is every rewrite matched on the block (nn.LayerPlan.Rewrites),
 	// which the device asks at its own Target, and rewrites every one's
 	// target-free decision, for the plan explanation.
@@ -328,8 +341,19 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 	if preNorm(jlm.RoleFFNNorm) {
 		ffnPre = last()
 	}
-	qa := take(graph.OpMatVec, jlm.RoleAttnQA)
-	if qa || (i+1 < len(ops) && ops[i].Kind == graph.OpMatVec && ops[i+1].Kind == graph.OpSlice) {
+	qa := false
+	if take(graph.OpRecurrent, 0) {
+		// A recurrent mixer in place of the attention (linearAttn), added
+		// into the residual; a mixer-only layer ends there.
+		lw.mixer = true
+		if err := run([]step{{graph.OpAdd, 0}}); err != nil {
+			return nil, err
+		}
+		if i == len(ops) {
+			lw.noFFN = true
+			return lw, nil
+		}
+	} else if qa = take(graph.OpMatVec, jlm.RoleAttnQA); qa || (i+1 < len(ops) && ops[i].Kind == graph.OpMatVec && ops[i+1].Kind == graph.OpSlice) {
 		// The latent attention, as mlaProject computes it.
 		lw.mla = true
 		if qa {
@@ -399,12 +423,14 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 			return nil, err
 		}
 	}
-	if err := run([]step{{graph.OpMatVec, jlm.RoleAttnOut}}); err != nil {
-		return nil, err
-	}
-	lw.postAttn = take(graph.OpNorm, jlm.RolePostAttnNorm)
-	if err := run([]step{{graph.OpAdd, 0}}); err != nil {
-		return nil, err
+	if !lw.mixer {
+		if err := run([]step{{graph.OpMatVec, jlm.RoleAttnOut}}); err != nil {
+			return nil, err
+		}
+		lw.postAttn = take(graph.OpNorm, jlm.RolePostAttnNorm)
+		if err := run([]step{{graph.OpAdd, 0}}); err != nil {
+			return nil, err
+		}
 	}
 	// The FFN's input, by the value its first op reads: its own norm over
 	// the residual (or the residual itself, with no pre-norm), or a parallel
@@ -646,6 +672,20 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 	}
 	s.jit.NewInput()
 	m.trace(li, "attn_norm", s.h)
+	if lw.mixer {
+		// The recurrent mixer in place of the attention, added into the
+		// residual; a mixer-only layer ends there.
+		if err := s.linearAttn(li, l, 0, s.h, s.h); err != nil {
+			return err
+		}
+		m.trace(li, "ssm_out", s.h)
+		s.addInto(s.x, s.h)
+		m.trace(li, "attn_resid", s.x)
+		if lw.noFFN {
+			return nil
+		}
+		return s.graphFFN(li, l, lw)
+	}
 	attnResid := false
 	if lw.mla {
 		// [matvec q_a, norm,] matvec q, the slices, [rope,] matvec kv_a, the
@@ -714,6 +754,15 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 		s.addInto(s.x, s.h)
 	}
 	m.trace(li, "attn_resid", s.x)
+	return s.graphFFN(li, l, lw)
+}
+
+// graphFFN is the second half of block li's host decode through its
+// lowering, from the residual the first half added into: the FFN's norm (or a
+// parallel block's input), the mixture, the ungated or the gated FFN, [its
+// norm,] and the residual add.
+func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
+	c, m := s.c, s.m
 	// norm -> gate, up -> act_mul -> down, add into the residual; a
 	// parallel block's FFN reads the input normed above.
 	ffnIn := s.h
@@ -807,7 +856,7 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 // norm, q/k/v, [the per-head q/k norms,] the rotary and the cache write for
 // every row before any row attends, attention, o, the residual add, then the
 // FFN norm, gate and up, act_mul, down and the second add.
-func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, p0, n int, bidir bool) error {
+func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, base, p0, n int, bidir bool) error {
 	c := s.c
 	s.graphChunkRuns++
 	s.pathOf(li).Graph++
@@ -817,6 +866,13 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, p0, n int, 
 	s.batchNormB(s.bh, s.bx, l.attnNorm, l.attnNormB, ne, n)
 	s.parallelIn(l, lw, n)
 	s.tock(opRMSNorm, tn)
+	if lw.mixer {
+		// The recurrent mixer over the chunk, row by row, into bh.
+		if err := s.mixerChunk(li, l, slot, base, s.bh, n); err != nil {
+			return err
+		}
+		return s.rowsResidFFN(li, l, lw, n, false)
+	}
 	if lw.mla {
 		// The latent attention over the chunk: every row's projections,
 		// rotary and latent append (mlaProjectRows) before any row attends,
@@ -876,6 +932,13 @@ func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, seq, pos
 	s.batchNormB(s.bh, s.bx, l.attnNorm, l.attnNormB, ne, n)
 	s.parallelIn(l, lw, n)
 	s.tock(opRMSNorm, t0)
+	if lw.mixer {
+		// Each row steps its own sequence's state, in position order.
+		if err := s.mixerRagged(li, l, seq, s.rowCausal[:n], s.bh, n); err != nil {
+			return err
+		}
+		return s.rowsResidFFN(li, l, lw, n, true)
+	}
 	if lw.mla {
 		// The latent attention over the step: each row its own sequence's
 		// slot and position (mlaProjectRows), the absorbed attention, then
@@ -937,6 +1000,10 @@ func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged 
 	tr := s.tick()
 	s.addInto(s.bx[:n*ne], s.bh[:n*ne])
 	s.tock(opResid, tr)
+	// A mixer-only layer ends at the first residual.
+	if lw.noFFN {
+		return nil
+	}
 	// norm -> gate, up -> act_mul -> down, add into the residual
 	tn := s.tick()
 	ffnIn := s.bh
@@ -1157,6 +1224,7 @@ var hostLowering = map[graph.OpKind]struct {
 	graph.OpSlice:        {mlaProjectRoutine, false},
 	graph.OpLatentAppend: {mlaProjectRoutine, false},
 	graph.OpAttendLatent: {"absorbed (mla-absorb): attendRow / the chunk's attention over the latent rows, then mlaOutProject's un-absorb", false},
+	graph.OpRecurrent:    {"linearAttn: the recurrent mixer as one routine (mixerChunk, mixerRagged over rows)", false},
 }
 
 // moeExpertsRoutine is the host routine a routed mixture's gather, expert
