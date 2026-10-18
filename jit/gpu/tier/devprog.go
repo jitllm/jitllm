@@ -73,6 +73,7 @@ const (
 	dkKVCopy                      // an unrotated key and its value copied into the history (NoPE)
 	dkAct                         // an ungated FFN's activation of up's row
 	dkAttendLatent                // latent attention, from the normed row to its output projection (emitMLA)
+	dkQTemp                       // the query's temperature, a factor of each row's position
 	numBaseKinds                  // the fused kinds (devrewrite.go) count on from here
 )
 
@@ -102,6 +103,7 @@ const (
 	slotKN                 // bs.kn: k's heads normed
 	slotF16                // g.f16Buf: a GEMM's binary16 operand
 	slotMix                // the mixture's output: whichever buffer mixFFN returns
+	slotQT                 // bs.qt: a rotated query scaled by its temperature
 	numSlots
 )
 
@@ -143,6 +145,8 @@ func (s devSlot) String() string {
 		return "f16"
 	case slotMix:
 		return "mix"
+	case slotQT:
+		return "qt"
 	}
 	return ""
 }
@@ -220,7 +224,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	}
 	switch o.Kind {
-	case dkRecurrent, dkCopy, dkKVCopy, dkAct:
+	case dkRecurrent, dkCopy, dkKVCopy, dkAct, dkQTemp:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkMixture, dkAttendLatent:
 		if i == 1 {
@@ -291,8 +295,8 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		return nil, "no graph"
 	case p.NonCausal:
 		return nil, "non-causal attention"
-	case p.NoPEGlobal || p.QKL2Norm || p.QKNormPost || p.RopeSplit:
-		return nil, "a q/k feature (L2 or post-rotary norm, NoPE, XD-RoPE)"
+	case p.RopeSplit:
+		return nil, "XD-RoPE"
 	case l.vFromK || l.kvSrc != g.Block:
 		return nil, "a shared or derived history"
 	case !actHasKernel(p):
@@ -309,8 +313,11 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		if !lowersOp(o.Kind) {
 			return nil, "op " + o.Kind.String()
 		}
-		if o.Kind == graph.OpAttend && (o.Attr.Chunked || o.Attr.Bidir) {
-			return nil, "an attention attribute"
+		// A window or an aligned chunk is the plan's per-row key start (the
+		// descriptors); a bidirectional sequence is an encoder's, not a
+		// paged history's.
+		if o.Kind == graph.OpAttend && o.Attr.Bidir {
+			return nil, "a bidirectional attention"
 		}
 	}
 	prog := &devProgram{}
@@ -466,14 +473,49 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			vals[mixOut] = out
 			skipTo = last
 		case graph.OpHeadNorm:
+			var role jlm.Role
+			if len(o.Weight) > 0 {
+				role = o.Weight[0].Role
+			}
+			src := in(0)
+			switch {
+			case role == 0 && o.In[0] == kRot:
+				// A weightless (L2) norm of k after its rotary: a rotation
+				// keeps a head's norm, so it norms k before, and the rotary
+				// still writes the history (the norm then the rotation).
+				out := prog.val(name(0), prog.vals[src], slotKN)
+				prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{src}, Out: []devVal{out}})
+				kRot = o.Out[0]
+				vals[o.Out[0]] = out
+				continue
+			case role == 0 && prog.slots[src] == slotQR:
+				// The same for q: its rotary's input is normed first.
+				r := len(prog.ops) - 1
+				for r >= 0 && prog.ops[r].Kind != dkRopeQ {
+					r--
+				}
+				if r < 0 || prog.ops[r].Out[0] != src {
+					return nil, "an L2 norm of q not after its rotary"
+				}
+				qn := prog.val(name(0)+".pre", prog.vals[prog.ops[r].In[0]], slotQN)
+				norm := devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{prog.ops[r].In[0]}, Out: []devVal{qn}}
+				prog.ops = append(prog.ops[:r], append([]devOp{norm}, prog.ops[r:]...)...)
+				prog.ops[r+1].In[0] = qn
+				vals[o.Out[0]] = src
+				continue
+			}
 			s := slotQN
-			if prog.slots[in(0)] == slotK {
+			switch prog.slots[src] {
+			case slotK:
 				s = slotKN
-			} else if prog.slots[in(0)] != slotQ {
+			case slotQ, slotQR:
+				// q's norm, before its rotary or after it (a weighted norm
+				// after the rotary does not commute with it).
+			default:
 				return nil, "a head norm of neither q nor k"
 			}
-			out := prog.val(name(0), prog.vals[in(0)], s)
-			prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Role: o.Weight[0].Role})
+			out := prog.val(name(0), prog.vals[src], s)
+			prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{src}, Out: []devVal{out}, Role: role})
 			vals[o.Out[0]] = out
 		case graph.OpRope:
 			if s := prog.slots[in(0)]; s == slotQ || s == slotQN {
@@ -496,8 +538,20 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			hist := prog.val("kv", devType{Elem: elemF32, Layout: layoutKV, Width: kv}, slotKV)
 			prog.ops = append(prog.ops, devOp{Kind: dkKVWrite, Src: []int{i - 1, i}, In: []devVal{in(0), in(1)}, Out: []devVal{hist}})
 		case graph.OpAttend:
+			q := in(0)
+			if o.Attr.TempScale != 0 {
+				// The query's temperature, a scalar a row: it commutes with
+				// the rotary, so it scales whichever q the attention reads.
+				ts := slotQR
+				if prog.slots[q] == slotQR {
+					ts = slotQT
+				}
+				qt := prog.val(prog.names[q]+".temp", prog.vals[q], ts)
+				prog.ops = append(prog.ops, devOp{Kind: dkQTemp, Src: []int{i}, In: []devVal{q}, Out: []devVal{qt}})
+				q = qt
+			}
 			out := prog.val(name(0), f32(qd), slotXB)
-			prog.ops = append(prog.ops, devOp{Kind: dkAttend, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}})
+			prog.ops = append(prog.ops, devOp{Kind: dkAttend, Src: []int{i}, In: []devVal{q}, Out: []devVal{out}})
 			vals[o.Out[0]] = out
 		case graph.OpAdd:
 			// The add that is the block's output writes its row; another

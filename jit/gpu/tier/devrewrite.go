@@ -73,6 +73,8 @@ func (k devKind) String() string {
 		return "act"
 	case dkAttendLatent:
 		return "attend_latent"
+	case dkQTemp:
+		return "q_temp"
 	case dkNormQuant:
 		return "norm_quant"
 	case dkAddNorm:

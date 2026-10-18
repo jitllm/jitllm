@@ -876,7 +876,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		}
 		buf := [numSlots]backend.Buf{slotX: bs.x, slotX2: bs.x2, slotH: bs.h, slotQ8: bs.a, slotQ: bs.q, slotK: bs.k,
 			slotV: bs.v, slotQR: bs.qr, slotKV: kvBuf, slotXB: bs.xb, slotOut: bs.mvOut, slotG: bs.g, slotU: bs.u, slotAct: bs.act,
-			slotQN: bs.qn, slotKN: bs.kn, slotF16: g.f16Buf}
+			slotQN: bs.qn, slotKN: bs.kn, slotF16: g.f16Buf, slotQT: bs.qt}
 		// The rewrites legal at one row, on a prompt chunk and on a ragged
 		// step differ: each class keeps its own fused program.
 		fc := &l.progOne
@@ -1086,6 +1086,14 @@ func (g *devTier) layersSession(s backend.Session) {
 				if err != nil {
 					return
 				}
+			case dkQTemp:
+				if at(o.Out[0]) == nil {
+					if err == nil {
+						err = fmt.Errorf("tier: block %d: no buffer for a scaled rotated query", li)
+					}
+					return
+				}
+				lc.la(bs.qTemp, R*qdim, at(o.In[0]), bs.n, bs.tempTab, at(o.Out[0]))
 			case dkAttendLatent:
 				// Latent attention over the normed row and its quantize, as
 				// the encoder runs it, ending in bs.mvOut.
@@ -1153,8 +1161,12 @@ func (g *devTier) layersSession(s backend.Session) {
 				// The form the encoder takes: one whole-row norm, the norm's
 				// two passes, or the per-head kernel at its lanes' geometry.
 				w, nk, lanes, heads := l.nQ, bs.qNorm, bs.qNormL, R*p.NHead
-				if o.Role == jlm.RoleAttnKNorm {
+				if prog.slots[o.Out[0]] == slotKN {
 					w, nk, lanes, heads = l.nK, bs.kNorm, bs.kNormL, R*p.NKVHead
+				}
+				if o.Role == 0 {
+					// A weightless (L2) norm: against ones.
+					w = bs.l4Ones
 				}
 				if p.QKNormWide {
 					heads = R
@@ -1374,7 +1386,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			case l.prog.attends && (bs.pkv == nil || (R == 1 || rag != nil) && (bs.pkv.cur == nil || bs.pkv.prefill) ||
 				R > 1 && rag == nil && bs.pkv.pf == nil):
 				why = progNotPaged
-			case l.prog.ropes && (bs.ropeQ == nil || l.noRope) || l.prog.attends && bs.qTemp != nil:
+			case l.prog.ropes && (bs.ropeQ == nil || l.noRope):
 				why = progRotary
 			case bs.clampQ != nil || bs.splitQG != nil || bs.sigMul != nil:
 				why = progQKVExtra
