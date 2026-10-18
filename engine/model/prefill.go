@@ -1300,6 +1300,10 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 	}
 	l := &m.layers[li]
 	if li < len(m.graphs) && m.graphs[li] != nil {
+		// A graphed block's stream buffers, sized for the chunk as the
+		// hand-written body sizes them.
+		s.growAltUpRows(chunkRows)
+		s.growQ4E(chunkRows)
 		return s.graphRows(li, l, m.graphs[li], slot, base, p0, n, bidir)
 	}
 	s.handRan(li)

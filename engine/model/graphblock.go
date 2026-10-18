@@ -1128,6 +1128,7 @@ func (s *State) altPredictRows(l *layer, lw *denseLowering, n int) error {
 	if !lw.alt {
 		return nil
 	}
+	s.growAltUpRows(n)
 	return s.altPredict(l, s.bx[:n*s.c.ResidW()], s.baltPred, n)
 }
 
@@ -1327,7 +1328,6 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, base, p0, n
 	tn := s.tick()
 	attnIn := s.bx
 	if lw.hc {
-		s.growQ4E(n)
 		x := s.bx[:n*c.ResidW()]
 		if lw.ngram {
 			if s.rows != nil {

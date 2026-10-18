@@ -161,7 +161,7 @@ func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
 			t.Logf("violation fires: %v", err)
 		})
 	}
-	for _, name := range []string{"synth-gemma3n"} {
+	for _, name := range []string{"synth-deepseek4"} {
 		t.Run(name, func(t *testing.T) {
 			m, err := Open(graphModel(t, name), noTune)
 			if err != nil {
