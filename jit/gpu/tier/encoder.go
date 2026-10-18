@@ -413,7 +413,8 @@ func (g *devTier) layersSession(s backend.Session) {
 			rcs = bs.csSWA
 		}
 		buf := [numSlots]backend.Buf{slotX: bs.x, slotX2: bs.x2, slotH: bs.h, slotQ8: bs.a, slotQ: bs.q, slotK: bs.k,
-			slotV: bs.v, slotQR: bs.qr, slotKV: pl.k, slotXB: bs.xb, slotOut: bs.mvOut, slotG: bs.g, slotU: bs.u, slotAct: bs.act}
+			slotV: bs.v, slotQR: bs.qr, slotKV: pl.k, slotXB: bs.xb, slotOut: bs.mvOut, slotG: bs.g, slotU: bs.u, slotAct: bs.act,
+			slotQN: bs.qn, slotKN: bs.kn}
 		if l.progBS != bs {
 			l.progF, l.progTook = prog.fused(l, bs, g)
 			l.progBS = bs
@@ -499,6 +500,29 @@ func (g *devTier) layersSession(s backend.Session) {
 				addRes(at(o.In[0]), at(o.In[1]), at(o.Out[0]))
 			case dkActMul:
 				lc.la(bs.actMul, R*p.NFFN, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+			case dkHeadNorm:
+				// The form the encoder takes: one whole-row norm, the norm's
+				// two passes, or the per-head kernel at its lanes' geometry.
+				w, nk, lanes, heads := l.nQ, bs.qNorm, bs.qNormL, R*p.NHead
+				if o.Role == jlm.RoleAttnKNorm {
+					w, nk, lanes, heads = l.nK, bs.kNorm, bs.kNormL, R*p.NKVHead
+				}
+				if p.QKNormWide {
+					heads = R
+				}
+				switch {
+				case bs.qkRms != nil:
+					laRows(bs.qkRms, at(o.In[0]), w, at(o.Out[0]))
+					g.QKRms++
+				case bs.qkPart != nil && bs.qkApply != nil:
+					lc.la(bs.qkPart, R*bs.parts, at(o.In[0]), bs.part)
+					lc.la(bs.qkApply, R*p.NHead*p.HeadDim, at(o.In[0]), w, bs.part, at(o.Out[0]))
+				default:
+					gr, gw := headNormGeom(lanes, heads)
+					if err == nil {
+						err = lc.launch(nk, gr, gw, at(o.In[0]), w, at(o.Out[0]))
+					}
+				}
 			case dkNormQuant:
 				laRows(bs.rmsQ, at(o.In[0]), normW(o.Role), at(o.Out[0]), bs.a, bs.ax)
 			case dkAddNorm:
@@ -531,6 +555,20 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				if err == nil {
 					err = lc.launch(l.qkv, l.qkvBlocks, l.qkvW, bufs...)
+				}
+			case dkGate2, dkGate2In:
+				wu, wg := l.up, l.gate
+				if gateUp2Swapped {
+					wu, wg = wg, wu
+				}
+				n := l.mvu.rows * l.mvu.split
+				if o.Kind == dkGate2In {
+					lamv(l.mvu, l.mvu.gate2In, n, wu.qs, wu.d, wu.sc, at(o.In[0]), l.nFFN, at(o.Out[0]), wg.qs, wg.d, wg.sc)
+					g.Gate2InRuns++
+					g.ActInLaunches++
+				} else {
+					lamv(l.mvu, l.mvu.gate2, n, wu.qs, wu.d, wu.sc, bs.a, bs.ax, at(o.Out[0]), wg.qs, wg.d, wg.sc)
+					g.GateUp2Runs++
 				}
 			case dkRopeQKV:
 				lc.la(pk.ropeQKV, kernels.RoPEQKVPagedThreads(p.NHead, p.NKVHead, p.HeadDim, p.NRot, R, g.KVF16),

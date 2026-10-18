@@ -52,17 +52,19 @@ func (t devType) String() string {
 type devKind uint8
 
 const (
-	dkNorm    devKind = iota // RMSNorm of a row by a weight
-	dkQuant                  // a float row to the int8 operand a matvec reads
-	dkMatVec                 // an integer matvec over a weight
-	dkRopeQ                  // q's rotary
-	dkKVWrite                // k's rotary into the history, and v's copy
-	dkAttend                 // the paged decode attention
-	dkAdd                    // a residual add
-	dkActMul                 // act(gate) * up
+	dkNorm       devKind = iota // RMSNorm of a row by a weight
+	dkQuant                     // a float row to the int8 operand a matvec reads
+	dkMatVec                    // an integer matvec over a weight
+	dkRopeQ                     // q's rotary
+	dkKVWrite                   // k's rotary into the history, and v's copy
+	dkAttend                    // the paged decode attention
+	dkAdd                       // a residual add
+	dkActMul                    // act(gate) * up
+	dkHeadNorm                  // each head's RMSNorm (q's or k's)
+	numBaseKinds                // the fused kinds (devrewrite.go) count on from here
 )
 
-var devKindName = []string{"norm", "quant", "matvec", "rope_q", "kv_write", "attend", "add", "act_mul"}
+var devKindName = []string{"norm", "quant", "matvec", "rope_q", "kv_write", "attend", "add", "act_mul", "head_norm"}
 
 func (k devKind) String() string { return devKindName[k] }
 
@@ -88,10 +90,12 @@ const (
 	slotG                  // bs.g: the gate
 	slotU                  // bs.u: up
 	slotAct                // bs.act: act(gate)*up
+	slotQN                 // bs.qn: q's heads normed
+	slotKN                 // bs.kn: k's heads normed
 	numSlots
 )
 
-var slotName = [...]string{"x", "x2", "h", "q8", "q", "k", "v", "qr", "kv", "xb", "out", "g", "u", "act"}
+var slotName = [...]string{"x", "x2", "h", "q8", "q", "k", "v", "qr", "kv", "xb", "out", "g", "u", "act", "qn", "kn"}
 
 // devOp is one launch of the program.
 type devOp struct {
@@ -145,15 +149,15 @@ func (p *devProgram) String() string {
 func (o devOp) wants(p *devProgram, i int) devType {
 	in := p.vals[o.In[i]]
 	switch o.Kind {
-	case dkMatVec, dkQKV:
+	case dkMatVec, dkQKV, dkGate2:
 		return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
 	case dkMatVecRes, dkMatVecGate:
 		if i == 0 {
 			return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
 		}
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
-	case dkQuant, dkNorm, dkRopeQ, dkAdd, dkActMul, dkKVWrite, dkAttend,
-		dkNormQuant, dkAddNorm, dkAddNormQuant, dkActQuant, dkRopeQKV:
+	case dkQuant, dkNorm, dkRopeQ, dkAdd, dkActMul, dkKVWrite, dkAttend, dkHeadNorm,
+		dkNormQuant, dkAddNorm, dkAddNormQuant, dkActQuant, dkRopeQKV, dkGate2In:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	}
 	return in
@@ -177,7 +181,7 @@ func (p *devProgram) check() error {
 // d1Kinds is the graph ops the first slice of the program lowers.
 var d1Kinds = map[graph.OpKind]bool{
 	graph.OpNorm: true, graph.OpMatVec: true, graph.OpRope: true, graph.OpKVAppend: true,
-	graph.OpAttend: true, graph.OpAdd: true, graph.OpActMul: true,
+	graph.OpAttend: true, graph.OpAdd: true, graph.OpActMul: true, graph.OpHeadNorm: true,
 }
 
 // buildDevProgram lowers p's graph to a device program, or says why it does
@@ -192,8 +196,8 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		return nil, "non-causal attention"
 	case p.AttnSinks:
 		return nil, "attention sinks"
-	case p.NoPEGlobal || p.QKL2Norm || p.QKNorm || p.QKNormPost || p.RopeSplit:
-		return nil, "a q/k feature (norm, NoPE, XD-RoPE)"
+	case p.NoPEGlobal || p.QKL2Norm || p.QKNormPost || p.RopeSplit:
+		return nil, "a q/k feature (L2 or post-rotary norm, NoPE, XD-RoPE)"
 	case partialRotary(p):
 		return nil, "a partial rotary"
 	case l.vFromK || l.kvSrc != g.Block:
@@ -259,8 +263,18 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			out := prog.val(name(0), f32(w), s)
 			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{a}, Out: []devVal{out}, Role: role})
 			vals[o.Out[0]] = out
+		case graph.OpHeadNorm:
+			s := slotQN
+			if prog.slots[in(0)] == slotK {
+				s = slotKN
+			} else if prog.slots[in(0)] != slotQ {
+				return nil, "a head norm of neither q nor k"
+			}
+			out := prog.val(name(0), prog.vals[in(0)], s)
+			prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Role: o.Weight[0].Role})
+			vals[o.Out[0]] = out
 		case graph.OpRope:
-			if prog.slots[in(0)] == slotQ {
+			if s := prog.slots[in(0)]; s == slotQ || s == slotQN {
 				out := prog.val(name(0), f32(qd), slotQR)
 				prog.ops = append(prog.ops, devOp{Kind: dkRopeQ, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}})
 				vals[o.Out[0]] = out

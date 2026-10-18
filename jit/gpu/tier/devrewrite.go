@@ -10,7 +10,7 @@ import "github.com/jitllm/jitllm/format/jlm"
 
 // Fused kinds, past the program's base kinds.
 const (
-	dkNormQuant    devKind = iota + dkActMul + 1 // norm and the quantize of its row (bs.rmsQ)
+	dkNormQuant    devKind = iota + numBaseKinds // norm and the quantize of its row (bs.rmsQ)
 	dkAddNorm                                    // residual add and the norm of the sum (bs.addRms)
 	dkAddNormQuant                               // the two, and the quantize (bs.addRmsQ)
 	dkMatVecRes                                  // a matvec carrying the residual add (mv.res)
@@ -18,11 +18,14 @@ const (
 	dkActQuant                                   // act(gate)*up and its quantize (bs.quantAct)
 	dkQKV                                        // q, k and v in one launch (layer.qkv)
 	dkRopeQKV                                    // q's rotary, k's into its page and v's copy (ropeQKV)
+	dkGate2                                      // gate and up in one launch writing act(gate)*up (mv.gate2)
+	dkGate2In                                    // the FFN norm, gate and up in one launch (mv.gate2In)
 )
 
 func init() {
-	devKindName = append(devKindName[:dkActMul+1:dkActMul+1],
-		"norm_quant", "add_norm", "add_norm_quant", "matvec_res", "matvec_gate", "act_quant", "qkv", "rope_qkv")
+	devKindName = append(devKindName[:numBaseKinds:numBaseKinds],
+		"norm_quant", "add_norm", "add_norm_quant", "matvec_res", "matvec_gate", "act_quant", "qkv", "rope_qkv",
+		"gate2", "gate2_in")
 }
 
 // devRewrite is one rewrite: its name and whether it pays and is legal for
@@ -38,6 +41,8 @@ var devRewrites = []devRewrite{
 	{"qkv-grouped", rwQKV},
 	{"rope-qkv-paged", rwRopeQKV},
 	{"matvec-residual", rwMatVecRes},
+	{"gate2in", rwGate2In},
+	{"gate2", rwGate2},
 	{"matvec-gate", rwMatVecGate},
 	{"act-quant", rwActQuant},
 	{"add-norm-quant", rwAddNormQuant},
@@ -277,4 +282,72 @@ func rwNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier) bool {
 		}
 	}
 	return false
+}
+
+// gateUp finds gate's matvec followed by up's over the same operand, and the
+// act_mul reading them; -1s where the program has none.
+func gateUp(p *devProgram) (gi, ui, ai int) {
+	for i := 0; i+2 < len(p.ops); i++ {
+		g, u, a := p.ops[i], p.ops[i+1], p.ops[i+2]
+		if g.Kind == dkMatVec && g.Role == jlm.RoleFFNGate && u.Kind == dkMatVec && u.Role == jlm.RoleFFNUp &&
+			g.In[0] == u.In[0] && a.Kind == dkActMul && a.In[0] == g.Out[0] && a.In[1] == u.Out[0] &&
+			p.uses(g.Out[0]) == 1 && p.uses(u.Out[0]) == 1 {
+			return i, i + 1, i + 2
+		}
+	}
+	return -1, -1, -1
+}
+
+// rwGate2In: the FFN norm of a residual a fused matvec wrote, its quantize,
+// gate and up, as one launch building its own operand (the gate2in recipe,
+// where the card's recipe chose it).
+func rwGate2In(p *devProgram, l *layer, bs *blockScratch, g *devTier) bool {
+	if !g.actInOn() || g.ffnFormOf(l) != FFNGate2In || l.mvu.gate2In == nil ||
+		!g.gateUp2On(l, 1, false, false, false, false) {
+		return false
+	}
+	gi, _, ai := gateUp(p)
+	if gi < 2 {
+		return false
+	}
+	n, q := p.ops[gi-2], p.ops[gi-1]
+	if n.Kind != dkNorm || n.Role != jlm.RoleFFNNorm || q.Kind != dkQuant || q.In[0] != n.Out[0] ||
+		p.uses(n.Out[0]) != 1 || p.uses(q.Out[0]) != 2 {
+		return false
+	}
+	// Behind a fused residual only: otherwise the norm's launch is the add.
+	src := -1
+	for k := 0; k < gi-2; k++ {
+		for _, x := range p.ops[k].Out {
+			if x == n.In[0] {
+				src = k
+			}
+		}
+	}
+	if src < 0 || p.ops[src].Kind != dkMatVecRes {
+		return false
+	}
+	a := p.ops[ai]
+	o := devOp{Kind: dkGate2In, Src: cat(cat(cat(n.Src, q.Src), cat(p.ops[gi].Src, p.ops[gi+1].Src)), a.Src),
+		In: []devVal{n.In[0]}, Out: a.Out, Role: jlm.RoleFFNUp}
+	p.ops[gi-2] = o
+	p.ops = append(p.ops[:gi-1], p.ops[ai+1:]...)
+	return true
+}
+
+// rwGate2: gate and up over one operand and their act_mul, one launch (Gate2,
+// where the card picked it).
+func rwGate2(p *devProgram, l *layer, bs *blockScratch, g *devTier) bool {
+	if !g.gateUp2On(l, 1, false, false, false, false) {
+		return false
+	}
+	gi, ui, ai := gateUp(p)
+	if gi < 0 {
+		return false
+	}
+	a := p.ops[ai]
+	o := devOp{Kind: dkGate2, Src: cat(cat(p.ops[gi].Src, p.ops[ui].Src), a.Src), In: p.ops[gi].In, Out: a.Out, Role: jlm.RoleFFNUp}
+	p.ops[gi] = o
+	p.ops = append(p.ops[:gi+1], p.ops[ai+1:]...)
+	return true
 }
