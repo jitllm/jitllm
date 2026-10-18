@@ -64,6 +64,10 @@ type Dense struct {
 	// ResidScale scales each sublayer's output into the residual (Alpha on
 	// the two residual adds); 0 is one.
 	ResidScale float64
+	// OutGate is a query projection of twice the width, each head's q then
+	// its gate (Qwen3-Next's), sliced apart per head; the attention's output
+	// is sigmoid(gate)*attn (an act_mul of ActSigmoid) before attn_out.
+	OutGate bool
 	// MLA, where set, is the block's attention: latent attention in place of
 	// q, k, v and the attention over per-head keys (the output projection,
 	// the residual and the FFN are the block's).
@@ -164,9 +168,21 @@ func (d *Dense) Build() *Graph {
 		if d.MLA != nil {
 			a = d.MLA.emit(g, d, h)
 		} else {
-			q := mv("q", h, jlm.RoleAttnQ, qd, bias(jlm.RoleAttnQBias))
+			qw := qd
+			if d.OutGate {
+				qw = 2 * qd
+			}
+			q := mv("q", h, jlm.RoleAttnQ, qw, bias(jlm.RoleAttnQBias))
 			k := mv("k", h, jlm.RoleAttnK, kvd, bias(jlm.RoleAttnKBias))
 			v := mv("v", h, jlm.RoleAttnV, kvd, bias(jlm.RoleAttnVBias))
+			var gate ValueID
+			if d.OutGate {
+				qg := q
+				q, gate = g.value("q_heads", qd), g.value("gate", qd)
+				g.op(Op{Kind: OpSlice, In: []ValueID{qg}, Out: []ValueID{q}, Attr: Attrs{HeadDim: 2 * d.HeadDim, Width: d.HeadDim}})
+				g.op(Op{Kind: OpSlice, In: []ValueID{qg}, Out: []ValueID{gate},
+					Attr: Attrs{HeadDim: 2 * d.HeadDim, Offset: d.HeadDim, Width: d.HeadDim}})
+			}
 			q, k, v = clamp("q_clamped", q), clamp("k_clamped", k), clamp("v_clamped", v)
 			// hn norms each head of in; w 0 is a weightless norm (a scale of ones).
 			hn := func(name string, in ValueID, w jlm.Role) ValueID {
@@ -214,6 +230,11 @@ func (d *Dense) Build() *Graph {
 			g.op(Op{Kind: OpAttend, In: []ValueID{qr}, Out: []ValueID{a}, Reads: []StateRef{{"kv", 1}}, Weight: sinks,
 				Attr: Attrs{HeadDim: d.HeadDim, NHead: d.NHead, NKVHead: d.NKVHead, Scale: d.Scale, Window: d.Window, Chunked: d.Chunked, Softcap: d.Softcap,
 					TempScale: d.TempScale, TempFloor: d.TempFloor, TempOffs: d.TempOffs}})
+			if d.OutGate {
+				gated := g.value("attn_gated", qd)
+				g.op(Op{Kind: OpActMul, In: []ValueID{gate, a}, Out: []ValueID{gated}, Attr: Attrs{Act: ActSigmoid}})
+				a = gated
+			}
 		}
 		o := mv("attn_out", a, jlm.RoleAttnOut, d.NEmbd, opt(d.OutBias, jlm.RoleAttnOutBias))
 		if d.PostNorm {

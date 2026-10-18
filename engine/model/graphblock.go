@@ -50,7 +50,6 @@ const (
 	UncoveredMixRouter     = "a mixture: a router the op language does not state (sqrt-softplus, hash routing or a router norm)"
 	UncoveredMixExperts    = "a mixture: experts the op language does not state (ungated, unbanked or latent)"
 	UncoveredUngated       = "an activation the op language does not state"
-	UncoveredOutGate       = "an attention output gate"
 	UncoveredMLA           = "a q latent without the latent KV cache"
 	UncoveredValueWidth    = "a value head wider or narrower than the key head"
 	UncoveredKVShared      = "KV sharing or an extra cached head"
@@ -69,7 +68,7 @@ const (
 
 // UncoveredReasons is the named list, in order.
 var UncoveredReasons = []string{UncoveredMixDense, UncoveredMixRouter, UncoveredMixExperts,
-	UncoveredUngated, UncoveredOutGate, UncoveredMLA, UncoveredValueWidth,
+	UncoveredUngated, UncoveredMLA, UncoveredValueWidth,
 	UncoveredKVShared, UncoveredIndexer, UncoveredStreams, UncoveredPLE,
 	UncoveredRopeAxes, UncoveredVNorm,
 	UncoveredNonCausal, UncoveredSparseAct, UncoveredDoubleFFN, UncoveredCompressed,
@@ -94,8 +93,6 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredRecurrent
 	case m.blockAct(roles) == 0:
 		return UncoveredUngated
-	case c.AttnOutGate:
-		return UncoveredOutGate
 	case !c.MLA() && c.QLoraRank != 0:
 		return UncoveredMLA
 	case !c.MLA() && c.HeadDimV != 0 && c.HeadDimV != c.HeadDimAt(li):
@@ -205,6 +202,7 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		Ungated: !c.MoEAt(li) && !has(jlm.RoleFFNGate), Clamp: float64(c.ClampKQV),
 		PostNorm: has(jlm.RolePostAttnNorm), NoPreNorm: !has(jlm.RoleAttnNorm), NoRope: !c.RopeAt(li)}
 	d.QKVBias, d.Sinks = has(jlm.RoleAttnQBias), has(jlm.RoleAttnSinks)
+	d.OutGate = c.AttnOutGate
 	if c.ResidualScale != 1 {
 		d.ResidScale = c.ResidualScale
 	}
@@ -289,6 +287,9 @@ type denseLowering struct {
 	// absorbed (graph.MLAAbsorb) through mlaProject, the attention over the
 	// latent rows and the un-absorb.
 	mla bool
+	// outGate: q's projection carries each head's output gate (projectQ
+	// splits it; applyOutGate after the attention).
+	outGate bool
 	// mixer: a recurrent mixer (linearAttn) in place of the attention;
 	// noFFN: the block ends at the mixer's residual add.
 	mixer, noFFN bool
@@ -383,7 +384,15 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		if err := run([]step{{graph.OpMatVec, jlm.RoleAttnQ}, {graph.OpMatVec, jlm.RoleAttnK}, {graph.OpMatVec, jlm.RoleAttnV}}); err != nil {
 			return nil, err
 		}
-		qkv, prep0 := [3]graph.ValueID{ops[i-3].Out[0], ops[i-2].Out[0], ops[i-1].Out[0]}, i
+		qkv := [3]graph.ValueID{ops[i-3].Out[0], ops[i-2].Out[0], ops[i-1].Out[0]}
+		// The output gate: q's heads and the gate sliced apart (projectQ).
+		if take(graph.OpSlice, 0) {
+			if err := run([]step{{graph.OpSlice, 0}}); err != nil {
+				return nil, err
+			}
+			lw.outGate, qkv[0] = true, ops[i-2].Out[0]
+		}
+		prep0 := i
 		// DBRX's clamps, first.
 		if take(graph.OpClamp, 0) {
 			if err := run([]step{{graph.OpClamp, 0}, {graph.OpClamp, 0}}); err != nil {
@@ -432,6 +441,9 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		lw.prep = prep
 		if err := run([]step{{graph.OpAttend, 0}}); err != nil {
 			return nil, err
+		}
+		if lw.outGate && !take(graph.OpActMul, 0) {
+			return nil, fail("act_mul of the output gate")
 		}
 	}
 	if !lw.mixer {
@@ -733,7 +745,7 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 		// matvec q, k, v (one region inside a fused run, as the body groups them)
 		kvd := c.KVDimAt(li)
 		s.aheadOf(li, 0, [nn.MaxGroup]*tensor{&l.wo})
-		grouped := s.groupOf(s.h, [nn.MaxGroup]*tensor{&l.wq, &l.wk, &l.wv}, [nn.MaxGroup][]float32{s.q, s.kc, s.vc}, 3)
+		grouped := !lw.outGate && s.groupOf(s.h, [nn.MaxGroup]*tensor{&l.wq, &l.wk, &l.wv}, [nn.MaxGroup][]float32{s.q, s.kc, s.vc}, 3)
 		if grouped {
 			s.addBiasRows(s.q, l.bq, 1)
 		} else {
@@ -760,6 +772,11 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 		// fuses it)
 		qd := c.QDimAt(li)
 		src := s.xb
+		if lw.outGate {
+			s.applyOutGate(s.ogate, s.xb, 1)
+			s.jit.NewInput()
+			src = s.ogate
+		}
 		plain := s.residFold && l.bo == nil && !lw.postAttn
 		if plain {
 			s.grp.Resid, s.grp.Alpha = s.x, float32(c.ResidualScale)
@@ -937,8 +954,14 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, base, p0, n
 	}
 	// attend
 	s.attendRows(li, l, slot, p0, n, qDim, c.AttnScale, bidir, false)
-	// matvec o, add into the residual
-	if err := s.mm(s.bh, l.wo, s.bxb[:n*qDim], n); err != nil {
+	// [the output gate,] matvec o, add into the residual
+	asrc := s.bxb
+	if lw.outGate {
+		s.applyOutGate(s.ogate, s.bxb, n)
+		s.jit.NewInput()
+		asrc = s.ogate
+	}
+	if err := s.mm(s.bh, l.wo, asrc[:n*qDim], n); err != nil {
 		return err
 	}
 	s.addBiasRows(s.bh, l.bo, n)
@@ -1004,8 +1027,14 @@ func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, seq, pos
 	}
 	// attend
 	s.rowsAttend(li, l, n, seq, pos, unitHeads, units, astride, scale)
-	// matvec o, add into the residual
-	if err := s.mm(s.bh, l.wo, s.bxb[:n*qDim], n); err != nil {
+	// [the output gate,] matvec o, add into the residual
+	asrc := s.bxb
+	if lw.outGate {
+		s.applyOutGate(s.ogate, s.bxb, n)
+		s.jit.NewInput()
+		asrc = s.ogate
+	}
+	if err := s.mm(s.bh, l.wo, asrc[:n*qDim], n); err != nil {
 		return err
 	}
 	s.addBiasRows(s.bh, l.bo, n)

@@ -236,7 +236,7 @@ func Verify(g *Graph, f Facts) error {
 			if o.Kind == OpAdd && o.Attr.Alpha != 0 && o.Attr.Alpha != c.ResidScale {
 				bad("%s: residual scale %g, the configuration states %g", at, o.Attr.Alpha, c.ResidScale)
 			}
-			if o.Kind == OpActMul && o.Attr.Act != act {
+			if o.Kind == OpActMul && o.Attr.Act != act && !(c.OutGate && o.Attr.Act == ActSigmoid) {
 				bad("%s: activation %d, the configuration states %d", at, o.Attr.Act, act)
 			}
 		case OpLayerNorm:

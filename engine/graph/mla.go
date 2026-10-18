@@ -90,12 +90,14 @@ func (a *MLA) emit(g *Graph, d *Dense, h ValueID) ValueID {
 // verifyMLAOp holds an MLA op to the block's facts.
 func verifyMLAOp(o Op, at string, c *Dense, width func(ValueID) int, ins, outs func(int) bool, bad func(string, ...any)) {
 	a := c.MLA
-	if a == nil {
+	if a == nil && o.Kind != OpSlice {
 		bad("%s: a latent attention op in a graph whose facts state no MLA", at)
 		return
 	}
 	switch o.Kind {
 	case OpSlice:
+		// A slice is the op language's own, not MLA's alone (an output
+		// gate's heads too): its shape is all it is held to.
 		if !ins(1) || !outs(1) {
 			return
 		}
