@@ -36,10 +36,6 @@ func (m *Model) mixtureWhy(li int) (graph.Facts, string) {
 	switch {
 	case !c.MoEAt(li):
 		return graph.Facts{}, ""
-	case c.ExpertSqrtSoftplus:
-		return graph.Facts{}, UncoveredMixRouter
-	case c.ExpertLatent != 0:
-		return graph.Facts{}, UncoveredMixExperts
 	}
 	act := graphAct(c.Act)
 	if act == 0 {
@@ -56,13 +52,12 @@ func (m *Model) mixtureWhy(li int) (graph.Facts, string) {
 			continue
 		}
 		switch e.Role {
-		case jlm.RoleRouterNorm, jlm.RoleHashExperts:
+		case jlm.RoleRouterNorm:
 			// Gemma 4's router norm is its block's (Dense.DenseMix).
 			if !(c.DenseMoE && e.Role == jlm.RoleRouterNorm) {
 				return graph.Facts{}, UncoveredMixRouter
 			}
-		case jlm.RoleExpGate, jlm.RoleExpUp, jlm.RoleExpDown, jlm.RoleFFNRoutedDown, jlm.RoleFFNRoutedUp,
-			jlm.RoleFFNRoutedNorm:
+		case jlm.RoleExpGate, jlm.RoleExpUp, jlm.RoleExpDown:
 			return graph.Facts{}, UncoveredMixExperts
 		}
 		if !want[e.Role] {
@@ -85,12 +80,14 @@ func (m *Model) mixtureWhy(li int) (graph.Facts, string) {
 	mx := graph.Mixture{Block: li, NEmbd: c.NEmbd, NExpert: c.NExpert, K: c.NExpertUsed, NFF: c.NFFNExp, Act: act,
 		Router: graph.RouterSoftmax, Norm: !c.NoExpertNorm, Scale: c.ExpertScale,
 		Groups: c.NExpertGroup, GroupsUsed: c.NExpertGroupUsed, SharedFF: c.NFFNShExp, WeightIn: c.ExpertWeightIn,
-		Ungated: l.ungatedExp, Inv: inv}
+		Ungated: l.ungatedExp, Latent: c.ExpertLatent, Eps: c.RMSEps, Inv: inv}
 	switch {
 	case c.SparseMixer != 0:
 		mx.Router = graph.RouterSparseMixer
 	case c.ExpertSigmoid:
 		mx.Router = graph.RouterSigmoid
+	case c.ExpertSqrtSoftplus:
+		mx.Router = graph.RouterSqrtSoftplus
 	}
 	// Gemma 4's dense MLP is the shared expert's tensors, its width theirs.
 	if c.DenseMoE {

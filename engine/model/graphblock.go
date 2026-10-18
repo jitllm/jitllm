@@ -87,7 +87,7 @@ func (m *Model) uncovered(li int) string {
 	switch {
 	case m.blockAct(roles) == 0:
 		return UncoveredUngated
-	case !c.MLA() && c.QLoraRank != 0:
+	case !c.MLA() && c.QLoraRank != 0 && !c.DSV4():
 		return UncoveredMLA
 	// A value head of its own width: HeadDimV against the model's head
 	// width (a sliding layer's narrower heads narrow k and v alike, KVDimAt).
@@ -95,16 +95,16 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredValueWidth
 	// A KV-sharing block and Gemma 4's v-is-k blocks are the graph's
 	// (Dense.KVShared, VFromK); an absent v anywhere else is not.
-	case c.LayerKind(li).Attends() && !c.MLA() && !c.KVShared(li) && !hasRole(roles, jlm.RoleAttnV) &&
+	case c.LayerKind(li).Attends() && !c.MLA() && !c.DSV4() && !c.KVShared(li) && !hasRole(roles, jlm.RoleAttnV) &&
 		!(c.VNorm && hasRole(roles, jlm.RoleAttnK)):
 		return UncoveredKVShared
-	case c.IdxHeads != 0 && !c.MSA() && !c.Q4E() && !(c.MLA() && c.Indexer()):
+	case c.IdxHeads != 0 && !c.MSA() && !c.Q4E() && !c.DSV4() && !(c.MLA() && c.Indexer()):
 		return UncoveredIndexer
-	case c.streamHead() && !c.Q4E() && c.AltUp == 0:
+	case c.streamHead() && !c.Q4E() && c.AltUp == 0 && !c.DSV4() && !c.ResAttn():
 		return UncoveredStreams
 	case c.NonCausal:
 		return UncoveredNonCausal
-	case len(c.CompKinds) > 0 || c.CompRateCSA != 0 || c.CompRateHCA != 0 || c.OGroups != 0 || c.OLoraRank != 0:
+	case !c.DSV4() && (len(c.CompKinds) > 0 || c.CompRateCSA != 0 || c.CompRateHCA != 0 || c.OGroups != 0 || c.OLoraRank != 0):
 		return UncoveredCompressed
 	}
 	return ""
@@ -254,6 +254,7 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		if c.Indexer() {
 			d.MLA.Index = &graph.Index{Heads: c.IdxHeads, HeadDim: c.IdxHeadDim, TopK: c.IdxTopK}
 		}
+		d.MLA.Gate = has(jlm.RoleAttnGate)
 	}
 	if c.MSAAt(li) {
 		d.Select = &graph.Select{Heads: c.IdxHeads, HeadDim: c.IdxHeadDim, TopK: c.IdxTopK, Block: c.IdxBlock, Local: c.IdxLocal}
@@ -266,6 +267,30 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 	}
 	if li < c.NSparse {
 		d.SparseStd = float64(c.SparseStd)
+	}
+	if c.DSV4() {
+		bind := func(rs ...jlm.Role) []graph.Binding {
+			var ws []graph.Binding
+			for _, r := range rs {
+				if sh, ok := inv[r]; ok {
+					ws = append(ws, graph.Binding{Role: r, K: sh.K, Rows: sh.Rows, Sheets: sh.Sheets})
+				}
+			}
+			return ws
+		}
+		d.Streams = &graph.Streams{N: c.HCMult, Sinkhorn: true, Iters: c.HCIters,
+			AttnW: bind(jlm.RoleHCAttnFn, jlm.RoleHCAttnBase, jlm.RoleHCAttnScale),
+			FFNW:  bind(jlm.RoleHCFFNFn, jlm.RoleHCFFNBase, jlm.RoleHCFFNScale)}
+		d.Compressed = &graph.Compressed{Kind: uint8(c.CompAt(li)), Rate: c.CompRateAt(li), OGroups: c.OGroups,
+			W: bind(jlm.RoleAttnQA, jlm.RoleAttnQANorm, jlm.RoleAttnQB, jlm.RoleAttnK, jlm.RoleAttnKVA, jlm.RoleAttnKVANorm,
+				jlm.RoleAttnSinks, jlm.RoleAttnOutA, jlm.RoleAttnOut, jlm.RoleCompKV, jlm.RoleCompGate, jlm.RoleCompAPE,
+				jlm.RoleCompNorm, jlm.RoleIdxQB, jlm.RoleIdxProj, jlm.RoleIdxCompKV, jlm.RoleIdxCompGate,
+				jlm.RoleIdxCompAPE, jlm.RoleIdxCompNorm)}
+	}
+	if c.ResAttn() {
+		k, _ := c.resCheckpoint(li)
+		d.Streams = &graph.Streams{N: c.Streams(), Bank: true, BankAttn: c.resBank(li, false), BankFFN: c.resBank(li, true),
+			Checkpoint: k}
 	}
 	if c.Q4E() {
 		d.Streams = &graph.Streams{N: c.HCMult, LowRank: c.HCLowRank}
@@ -343,6 +368,14 @@ type denseLowering struct {
 	// alt: AltUp's streams (altPredict, altCorrect); laurel: LAuReL beside
 	// the attention; sparse: the FFN gate's gaussian top-k (gaussTopK).
 	alt, laurel, sparse bool
+	// ds4: the compressed attention over Sinkhorn-mixed streams; the block
+	// runs as ds4Block does (hcPre, ds4Attn, hcPost, ds4FFN).
+	ds4 bool
+	// bank: the residual attention's checkpoint streams (k3AttnIn,
+	// k3Resid, k3FFNIn); latent: the latent mixture (k3MoE).
+	bank, latent bool
+	// mlaGate: Kimi-K3's MLA output gate.
+	mlaGate bool
 	// mixer: a recurrent mixer (linearAttn) in place of the attention;
 	// noFFN: the block ends at the mixer's residual add.
 	mixer, noFFN bool
@@ -392,20 +425,22 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 	// The n-gram embedding into the streams, then the attention's read of
 	// them (ngramApply, hcMix).
 	lw.ngram = take(graph.OpNGram, 0)
-	lw.hc = take(graph.OpStreamMix, jlm.RoleHCAttnNorm)
+	lw.hc = take(graph.OpStreamMix, jlm.RoleHCAttnNorm) || take(graph.OpStreamMix, jlm.RoleHCAttnFn)
+	// The residual attention's read of the bank (k3AttnIn).
+	lw.bank = take(graph.OpStreamMix, jlm.RoleAttnResScore)
 	// AltUp's prediction: the block runs on the active stream (altPredict).
 	lw.alt = take(graph.OpAltPredict, jlm.RoleAltUpRouterNorm)
 	// resid takes a sublayer's residual add: an add, or with streams the
 	// placement (hcPlace).
 	resid := func() error {
-		if lw.hc {
+		if lw.hc || lw.bank {
 			return run([]step{{graph.OpStreamPlace, 0}})
 		}
 		return run([]step{{graph.OpAdd, 0}})
 	}
 	attnIn, ffnPre := g.In[0], graph.ValueID(-1)
 	switch {
-	case lw.hc:
+	case lw.hc, lw.bank:
 		attnIn = last()
 	case lw.alt:
 		attnIn = ops[i-1].Out[1]
@@ -428,7 +463,14 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		i++
 		lw.mixAttn = true
 	}
-	if take(graph.OpRecurrent, 0) {
+	if take(graph.OpCompressedAttend, 0) {
+		// The compressed attention and its output projection (ds4Attn),
+		// placed into the streams.
+		lw.ds4 = true
+		if err := resid(); err != nil {
+			return nil, err
+		}
+	} else if take(graph.OpRecurrent, 0) {
 		// A recurrent mixer in place of the attention (linearAttn), added
 		// into the residual; a mixer-only layer ends there.
 		lw.mixer = true
@@ -468,6 +510,11 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		lw.index = take(graph.OpIndex, jlm.RoleIdxQB)
 		if err := run([]step{{graph.OpAttendLatent, 0}}); err != nil {
 			return nil, err
+		}
+		// Kimi-K3's output gate (mlaProject takes it, mlaOutProject applies
+		// it).
+		if lw.mlaGate = take(graph.OpMatVec, jlm.RoleAttnGate); lw.mlaGate && !take(graph.OpActMul, 0) {
+			return nil, fail("act_mul of the MLA output gate")
 		}
 	} else {
 		// q, then k and v; k alone where v is k's projection (VFromK);
@@ -570,7 +617,7 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 			return nil, fail("act_mul of the output gate")
 		}
 	}
-	if !lw.mixer {
+	if !lw.mixer && !lw.ds4 {
 		if err := run([]step{{graph.OpMatVec, jlm.RoleAttnOut}}); err != nil {
 			return nil, err
 		}
@@ -592,11 +639,23 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 	// block's -- its own norm of the block input, or the attention's.
 	ffnIn := last()
 	switch {
+	case lw.bank:
+		if !take(graph.OpStreamMix, jlm.RoleFFNResScore) || !take(graph.OpNorm, jlm.RoleFFNNorm) {
+			return nil, fail("the FFN's read of the bank and its norm")
+		}
+		ffnIn = last()
 	case lw.hc:
-		if !take(graph.OpStreamMix, jlm.RoleHCFFNNorm) {
+		if !take(graph.OpStreamMix, jlm.RoleHCFFNNorm) && !take(graph.OpStreamMix, jlm.RoleHCFFNFn) {
 			return nil, fail("the FFN's stream mix")
 		}
 		ffnIn = last()
+		// The Sinkhorn form's norm after the mix (hcPre).
+		if ops[i-1].Attr.Sinkhorn {
+			if !take(graph.OpNorm, jlm.RoleFFNNorm) {
+				return nil, fail("norm of the FFN's mixed row")
+			}
+			ffnIn = last()
+		}
 	case ffnPre < 0 && preNorm(jlm.RoleFFNNorm):
 		ffnIn = last()
 	}
@@ -638,7 +697,12 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		// Ungated experts (Nemotron 3's): up, act, down, the shared
 		// expert's alike.
 		lw.mix = true
-		if err := run([]step{{graph.OpRoute, jlm.RoleRouter}, {graph.OpGather, 0}}); err != nil {
+		if err := run([]step{{graph.OpRoute, jlm.RoleRouter}}); err != nil {
+			return nil, err
+		}
+		// A latent mixture's routed_down (k3MoE).
+		lw.latent = take(graph.OpMatVec, jlm.RoleFFNRoutedDown)
+		if err := run([]step{{graph.OpGather, 0}}); err != nil {
 			return nil, err
 		}
 		ffn := []step{{graph.OpExpertMatVec, jlm.RoleExpGateBank}, {graph.OpExpertMatVec, jlm.RoleExpUpBank}, {graph.OpActMul, 0}}
@@ -649,6 +713,12 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		}
 		if err := run(append(ffn, step{graph.OpExpertMatVec, jlm.RoleExpDownBank}, step{graph.OpCombine, 0})); err != nil {
 			return nil, err
+		}
+		if lw.latent {
+			take(graph.OpNorm, jlm.RoleFFNRoutedNorm)
+			if err := run([]step{{graph.OpMatVec, jlm.RoleFFNRoutedUp}}); err != nil {
+				return nil, err
+			}
 		}
 		sh := take(graph.OpMatVec, jlm.RoleShExpGate)
 		if sh {
@@ -813,7 +883,17 @@ func (m *Model) buildGraphs() error {
 			return fmt.Errorf("model: block %d graph's AltUp (%v, LAuReL %v, sparse %v) is not the configuration's",
 				li, lw.alt, lw.laurel, lw.sparse)
 		}
-		if lw.hc != m.Cfg.Q4E() || lw.ngram != m.Cfg.NGramAt(li) {
+		if lw.bank != m.Cfg.ResAttn() || lw.latent != (lw.mix && m.Cfg.ExpertLatent != 0) {
+			return fmt.Errorf("model: block %d graph's residual attention (%v) or latent mixture (%v) is not the configuration's",
+				li, lw.bank, lw.latent)
+		}
+		if lw.mlaGate != (m.layers[li].mlaGate.rows != 0) {
+			return fmt.Errorf("model: block %d graph's MLA output gate is %v, the layer's is not", li, lw.mlaGate)
+		}
+		if lw.ds4 != m.Cfg.DSV4() {
+			return fmt.Errorf("model: block %d graph's compressed attention is %v, the configuration's is not", li, lw.ds4)
+		}
+		if lw.hc != (m.Cfg.Q4E() || m.Cfg.DSV4()) || lw.ngram != m.Cfg.NGramAt(li) {
 			return fmt.Errorf("model: block %d graph's streams (%v, n-gram %v) are not the configuration's", li, lw.hc, lw.ngram)
 		}
 		if lw.msa != (m.Cfg.MSAAt(li) || m.Cfg.QSAAt(li)) {
@@ -933,6 +1013,16 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 	c, m := s.c, s.m
 	s.graphRuns++
 	s.pathOf(li).Graph++
+	if lw.ds4 {
+		// stream_mix, norm, compressed_attend, stream_place, then the FFN's
+		// stream_mix, norm, the mixture and stream_place: ds4Block.
+		s.ds.rslot[0], s.ds.rpos[0], s.ds.rid[0] = 0, s.pos, s.tok
+		if err := s.ds4Block(li, l, s.xa, 1); err != nil {
+			return err
+		}
+		m.trace(li, "ffn_resid", s.x)
+		return nil
+	}
 	// [ngram,] [stream_mix,] norm(x) -> attn_in [, a parallel block's FFN
 	// input]
 	attnIn := s.x
@@ -948,6 +1038,15 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 			return err
 		}
 		attnIn = s.q4.mix[:c.NEmbd]
+	}
+	// stream_mix over the bank (k3AttnIn): the checkpoints banked so far
+	// and the running residual, a checkpoint block banking its input.
+	if lw.bank {
+		in, err := s.k3AttnIn(li, l, s.xa, 1)
+		if err != nil {
+			return err
+		}
+		attnIn = in
 	}
 	// alt_predict: the active stream into stream 0, s.x.
 	if lw.alt {
@@ -983,7 +1082,7 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 			return err
 		}
 		m.trace(li, "ssm_out", s.h)
-		s.graphResid(lw, s.h)
+		s.graphResid(lw, li, s.h, true)
 		m.trace(li, "attn_resid", s.x)
 		if lw.noFFN {
 			return nil
@@ -1092,7 +1191,7 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 		s.rmsnorm(s.h, s.h, l.postAttnNorm, c.RMSEps)
 	}
 	if !attnResid {
-		s.graphResid(lw, s.h)
+		s.graphResid(lw, li, s.h, true)
 	}
 	if lw.laurel {
 		s.laurelJoin(s.x, s.altLaur)
@@ -1149,8 +1248,13 @@ func (s *State) laurelRows(l *layer, lw *denseLowering, n int) error {
 
 // rowsResid adds n rows' sublayer output y into the residual rows in s.bx:
 // an add, or with streams the placement (hcPlace).
-func (s *State) rowsResid(lw *denseLowering, y []float32, n int) {
-	if lw.hc {
+func (s *State) rowsResid(lw *denseLowering, li int, y []float32, n int, attn bool) {
+	if lw.bank && attn {
+		// A checkpoint block restarts the running residual (k3Resid).
+		s.k3Resid(li, s.bx, y, n)
+		return
+	}
+	if lw.hc && !lw.bank {
 		s.hcPlace(s.bx[:n*s.c.ResidW()], n, y)
 		return
 	}
@@ -1170,8 +1274,13 @@ func (lw *denseLowering) mixOp() int {
 
 // graphResid adds a decode sublayer's output y into the residual: an add,
 // or with streams the placement at the weights its mix left (hcPlace).
-func (s *State) graphResid(lw *denseLowering, y []float32) {
-	if lw.hc {
+func (s *State) graphResid(lw *denseLowering, li int, y []float32, attn bool) {
+	if lw.bank && attn {
+		// A checkpoint block restarts the running residual (k3Resid).
+		s.k3Resid(li, s.x, y, 1)
+		return
+	}
+	if lw.hc && !lw.bank {
 		s.hcPlace(s.xa, 1, y)
 		return
 	}
@@ -1190,6 +1299,14 @@ func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
 	switch {
 	case lw.par:
 		ffnIn = s.hf
+	case lw.bank:
+		// stream_mix over the bank, its own checkpoint included, then the
+		// norm (k3FFNIn).
+		in, err := s.k3FFNIn(li, l, s.xa, 1)
+		if err != nil {
+			return err
+		}
+		s.norm(s.h, in, l.ffnNorm, l.ffnNormB)
 	case lw.hc:
 		// stream_mix: the FFN reads the mix with no norm.
 		if err := s.hcMix(s.xa, 1, &l.q4e.ffn); err != nil {
@@ -1221,9 +1338,19 @@ func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
 		// matvec and the route kernel); gather, the experts' gate, up,
 		// act_mul and down, and combine (one grouped region); [the shared
 		// expert's matvecs, act_mul and gate_scalar, and its add].
+		if lw.latent {
+			// The latent mixture: routed_down, the experts in the latent,
+			// the norm and routed_up, the shared experts (k3MoE).
+			if err := s.k3MoE(li, l, ffnIn, s.x); err != nil {
+				return err
+			}
+			s.layerOutScale(l, s.x)
+			m.trace(li, "ffn_resid", s.x)
+			return nil
+		}
 		// With streams the mixture's sum is placed (stream_place).
 		dst := s.x
-		if lw.hc {
+		if lw.hc && !lw.bank {
 			dst = s.q4.out[:c.NEmbd]
 			clear(dst)
 		}
@@ -1236,7 +1363,7 @@ func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
 		if err := s.sharedExpert(l, ffnIn, dst); err != nil {
 			return err
 		}
-		if lw.hc {
+		if lw.hc && !lw.bank {
 			s.hcPlace(s.xa, 1, dst)
 		}
 		s.layerOutScale(l, s.x)
@@ -1258,7 +1385,7 @@ func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
 		if lw.postFFN {
 			s.rmsnorm(s.h, s.h, l.postFFNNorm, c.RMSEps)
 		}
-		s.graphResid(lw, s.h)
+		s.graphResid(lw, li, s.h, false)
 		s.layerOutScale(l, s.x)
 		m.trace(li, "ffn_resid", s.x)
 		return nil
@@ -1294,7 +1421,7 @@ func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
 		s.rmsnorm(s.h, s.h, l.postFFNNorm, c.RMSEps)
 	}
 	if !ffnResid {
-		s.graphResid(lw, s.h)
+		s.graphResid(lw, li, s.h, false)
 	}
 	if lw.ple {
 		if err := s.pleApply(li, l, s.x, s.ple); err != nil {
@@ -1324,6 +1451,13 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, base, p0, n
 	s.graphChunkRuns++
 	s.pathOf(li).Graph++
 	ne := c.NEmbd
+	if lw.ds4 {
+		// ds4Block over the chunk, each row its slot and position.
+		for i := 0; i < n; i++ {
+			s.ds.rslot[i], s.ds.rpos[i] = slot, p0+i
+		}
+		return s.ds4Block(li, l, s.bx[:n*c.ResidW()], n)
+	}
 	// [ngram,] [stream_mix,] norm(x) -> attn_in, every row
 	tn := s.tick()
 	attnIn := s.bx
@@ -1342,6 +1476,13 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, base, p0, n
 			return err
 		}
 		attnIn = s.q4.mix
+	}
+	if lw.bank {
+		in, err := s.k3AttnIn(li, l, s.bx[:n*c.ResidW()], n)
+		if err != nil {
+			return err
+		}
+		attnIn = in
 	}
 	if err := s.altPredictRows(l, lw, n); err != nil {
 		return err
@@ -1427,6 +1568,15 @@ func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, tokens [
 	s.graphRaggedRuns++
 	s.pathOf(li).Graph++
 	ne := c.NEmbd
+	if lw.ds4 {
+		// ds4Block over the step, each row its sequence's slot, position
+		// and token.
+		s.growDS4(n)
+		for i := 0; i < n; i++ {
+			s.ds.rslot[i], s.ds.rpos[i], s.ds.rid[i] = seq[i], pos[i], tokens[i]
+		}
+		return s.ds4Block(li, l, s.bx[:n*c.ResidW()], n)
+	}
 	// [ngram,] [stream_mix,] norm(x) -> attn_in, every row: the n-gram in
 	// each sequence's position order.
 	t0 := s.tick()
@@ -1443,6 +1593,13 @@ func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, tokens [
 			return err
 		}
 		attnIn = s.q4.mix
+	}
+	if lw.bank {
+		in, err := s.k3AttnIn(li, l, s.bx[:n*c.ResidW()], n)
+		if err != nil {
+			return err
+		}
+		attnIn = in
 	}
 	if err := s.altPredictRows(l, lw, n); err != nil {
 		return err
@@ -1535,7 +1692,7 @@ func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged 
 		s.tock(opRMSNorm, tn)
 	}
 	tr := s.tick()
-	s.rowsResid(lw, s.bh, n)
+	s.rowsResid(lw, li, s.bh, n, true)
 	if lw.laurel {
 		s.laurelJoin(s.bx[:n*ne], s.baltLaur[:n*ne])
 	}
@@ -1551,6 +1708,12 @@ func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged 
 	case lw.par:
 		ffnIn = s.bhf
 		s.jit.NewInput()
+	case lw.bank:
+		in, err := s.k3FFNIn(li, l, s.bx[:n*c.ResidW()], n)
+		if err != nil {
+			return err
+		}
+		s.batchNormB(s.bh, in, l.ffnNorm, l.ffnNormB, ne, n)
 	case lw.hc:
 		// stream_mix: the FFN reads the mix with no norm.
 		if err := s.hcMix(s.bx[:n*c.ResidW()], n, &l.q4e.ffn); err != nil {
@@ -1578,9 +1741,16 @@ func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged 
 		// row's route, then the experts expert-major, then the shared
 		// expert per row, into the residual; on a ragged step each row its
 		// own sequence's experts.
+		if lw.latent {
+			if err := s.k3MoEBatch(li, l, ffnIn, s.bx, n); err != nil {
+				return err
+			}
+			s.layerOutScale(l, s.bx[:n*ne])
+			return nil
+		}
 		// With streams the mixture's sum is placed (stream_place).
 		dst := s.bx
-		if lw.hc {
+		if lw.hc && !lw.bank {
 			dst = s.q4.out[:n*ne]
 			clear(dst)
 		}
@@ -1593,7 +1763,7 @@ func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged 
 		if err := s.sharedExpertRows(l, ffnIn, dst, n); err != nil {
 			return err
 		}
-		if lw.hc {
+		if lw.hc && !lw.bank {
 			s.hcPlace(s.bx[:n*c.ResidW()], n, dst)
 		}
 		s.layerOutScale(l, s.bx[:n*ne])
@@ -1639,7 +1809,7 @@ func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged 
 		s.tock(opRMSNorm, tn)
 	}
 	tr = s.tick()
-	s.rowsResid(lw, s.bh, n)
+	s.rowsResid(lw, li, s.bh, n, false)
 	s.tock(opResid, tr)
 	if lw.ple {
 		if err := s.pleRows(li, l, s.bx, n); err != nil {
@@ -1681,7 +1851,7 @@ func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
 	g := lw.g
 	// The block's row: the input, or a stream's of a residual of several.
 	p.NEmbd = g.Values[g.In[0]].Width
-	if lw.hc || lw.alt {
+	if lw.hc || lw.alt || lw.bank {
 		p.NEmbd /= lw.g.Ops[lw.mixOp()].Attr.Streams
 	}
 	// A recurrent block runs no q/k norm, but the tier bakes one shape per
@@ -1756,7 +1926,7 @@ func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
 // nnAct is the generated kernels' activation per op-language activation.
 var nnAct = map[graph.Act]nn.ActKind{graph.ActSiLU: nn.ActSiLU, graph.ActGELUTanh: nn.ActGELU,
 	graph.ActGELUErf: nn.ActGELUErf, graph.ActReLU2: nn.ActReLU2, graph.ActReLU: nn.ActReLU,
-	graph.ActSwiGLUOAI: nn.ActSwiGLUOAI}
+	graph.ActSwiGLUOAI: nn.ActSwiGLUOAI, graph.ActSwiGLUClamp: nn.ActSwiGLUClamp, graph.ActSitu: nn.ActSitu}
 
 // graphProducers is, per value of g, the op that writes it (-1 for a block
 // input), and how many ops read it.
@@ -1797,35 +1967,36 @@ var hostLowering = map[graph.OpKind]struct {
 	routine  string
 	composed bool
 }{
-	graph.OpNorm:         {"nn RMSNorm (generated, by width)", true},
-	graph.OpMatVec:       {"nn matvec (generated by quant and shape; grouped where a run fuses)", true},
-	graph.OpAdd:          {"residual add (generated, or folded into the matvec's rows)", true},
-	graph.OpActMul:       {"nn activation-multiply (generated, or fused into down's matvec)", true},
-	graph.OpHeadNorm:     {"nn RMSNorm per head or over the projection (generated, by width; runPrep)", true},
-	graph.OpRope:         {"nn rotary (generated, by layout; runPrep)", true},
-	graph.OpKVAppend:     {"KV page store (the cache layout's writer, by precision; runPrep)", true},
-	graph.OpAttend:       {"attendRow / the chunk's attention: one routine per row class", false},
-	graph.OpRoute:        {"moeRoute / moeRouteRows: the router's matvec (generated) and the route kernel (generated, by experts, top-k, router and groups)", true},
-	graph.OpGather:       {moeExpertsRoutine, false},
-	graph.OpExpertMatVec: {moeExpertsRoutine, false},
-	graph.OpCombine:      {moeExpertsRoutine, false},
-	graph.OpGateScalar:   {"sharedExpert: the gate's matvec and sigmoid-multiply (generated)", true},
-	graph.OpLayerNorm:    {"nn LayerNorm (generated, by width)", true},
-	graph.OpAct:          {"nn activation (generated, by kind)", true},
-	graph.OpClamp:        {"nn clamp (generated; runPrep)", true},
-	graph.OpSlice:        {mlaProjectRoutine, false},
-	graph.OpLatentAppend: {mlaProjectRoutine, false},
-	graph.OpAttendLatent: {"absorbed (mla-absorb): attendRow / the chunk's attention over the latent rows, then mlaOutProject's un-absorb", false},
-	graph.OpScale:        {"the generated scale kernel (layerOutScale)", true},
-	graph.OpIndex:        {"mlaProject's indexer key and query (idxKey, idxQuery), then attendRow's top-k mask over the scores (idxMask)", false},
-	graph.OpStreamMix:    {"hcMix: the streams' norm, the low-rank sigmoid gate, the mean and the placement weights (generated kernels)", false},
-	graph.OpStreamPlace:  {"hcPlace: the output added into every stream at its weight (generated axpy)", true},
-	graph.OpNGram:        {"ngramApply: the hashed rows read from the table, the projections, the gate and the convolution", false},
-	graph.OpAltPredict:   {"altPredict: the router over the active stream's norm and the predictions (generated kernels)", false},
-	graph.OpAltCorrect:   {"altCorrect: the correction and the per-layer input into the streams (generated kernels)", false},
-	graph.OpLaurel:       {"laurel: the low-rank pair, its norm and the add (generated)", false},
-	graph.OpGaussTopK:    {"gaussTopK: the generated gaussian top-k over each gate row", true},
-	graph.OpRecurrent:    {"linearAttn: the recurrent mixer as one routine (mixerChunk, mixerRagged over rows)", false},
+	graph.OpNorm:             {"nn RMSNorm (generated, by width)", true},
+	graph.OpMatVec:           {"nn matvec (generated by quant and shape; grouped where a run fuses)", true},
+	graph.OpAdd:              {"residual add (generated, or folded into the matvec's rows)", true},
+	graph.OpActMul:           {"nn activation-multiply (generated, or fused into down's matvec)", true},
+	graph.OpHeadNorm:         {"nn RMSNorm per head or over the projection (generated, by width; runPrep)", true},
+	graph.OpRope:             {"nn rotary (generated, by layout; runPrep)", true},
+	graph.OpKVAppend:         {"KV page store (the cache layout's writer, by precision; runPrep)", true},
+	graph.OpAttend:           {"attendRow / the chunk's attention: one routine per row class", false},
+	graph.OpRoute:            {"moeRoute / moeRouteRows: the router's matvec (generated) and the route kernel (generated, by experts, top-k, router and groups)", true},
+	graph.OpGather:           {moeExpertsRoutine, false},
+	graph.OpExpertMatVec:     {moeExpertsRoutine, false},
+	graph.OpCombine:          {moeExpertsRoutine, false},
+	graph.OpGateScalar:       {"sharedExpert: the gate's matvec and sigmoid-multiply (generated)", true},
+	graph.OpLayerNorm:        {"nn LayerNorm (generated, by width)", true},
+	graph.OpAct:              {"nn activation (generated, by kind)", true},
+	graph.OpClamp:            {"nn clamp (generated; runPrep)", true},
+	graph.OpSlice:            {mlaProjectRoutine, false},
+	graph.OpLatentAppend:     {mlaProjectRoutine, false},
+	graph.OpAttendLatent:     {"absorbed (mla-absorb): attendRow / the chunk's attention over the latent rows, then mlaOutProject's un-absorb", false},
+	graph.OpScale:            {"the generated scale kernel (layerOutScale)", true},
+	graph.OpIndex:            {"mlaProject's indexer key and query (idxKey, idxQuery), then attendRow's top-k mask over the scores (idxMask)", false},
+	graph.OpStreamMix:        {"hcMix: the streams' norm, the low-rank sigmoid gate, the mean and the placement weights (generated kernels)", false},
+	graph.OpStreamPlace:      {"hcPlace: the output added into every stream at its weight (generated axpy)", true},
+	graph.OpNGram:            {"ngramApply: the hashed rows read from the table, the projections, the gate and the convolution", false},
+	graph.OpAltPredict:       {"altPredict: the router over the active stream's norm and the predictions (generated kernels)", false},
+	graph.OpAltCorrect:       {"altCorrect: the correction and the per-layer input into the streams (generated kernels)", false},
+	graph.OpLaurel:           {"laurel: the low-rank pair, its norm and the add (generated)", false},
+	graph.OpGaussTopK:        {"gaussTopK: the generated gaussian top-k over each gate row", true},
+	graph.OpCompressedAttend: {"ds4Attn: the projections, the compressor and indexer, the attention and the grouped output", false},
+	graph.OpRecurrent:        {"linearAttn: the recurrent mixer as one routine (mixerChunk, mixerRagged over rows)", false},
 }
 
 // moeExpertsRoutine is the host routine a routed mixture's gather, expert
@@ -1859,8 +2030,15 @@ func (m *Model) BlockLowering(li int) []OpLowering {
 			mlaTo = i
 		}
 	}
+	ds4 := false
+	for _, o := range g.Ops {
+		ds4 = ds4 || o.Kind == graph.OpCompressedAttend
+	}
 	for i, o := range g.Ops {
 		h := hostLowering[o.Kind]
+		if ds4 {
+			h.routine, h.composed = "ds4Block: hcPre, ds4Attn, hcPost and ds4FFN (the mixture through moe)", false
+		}
 		if o.Kind == graph.OpIndex && mlaTo < 0 {
 			h.routine = "msaKey and msaQuery (the key one more head of the appended row), then attendRow's block mask (msaMask)"
 		}

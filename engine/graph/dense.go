@@ -115,6 +115,9 @@ type Dense struct {
 	// Mixture, where set, is the block's FFN: a routed mixture over the FFN
 	// norm's row in place of gate, up and down (NFFN is then unused).
 	Mixture *Mixture
+	// Compressed, where set, is the attention: OpCompressedAttend binding
+	// W, the output projection inside it.
+	Compressed *Compressed
 	// Select, where set, is the attention's block selection (OpIndex over a
 	// GQA row: MiniMax Sparse Attention).
 	Select *Select
@@ -145,6 +148,23 @@ type AltUp struct {
 // hyper-connection of rank LowRank.
 type Streams struct {
 	N, LowRank int
+	// Sinkhorn is DeepSeek V4's form: each sublayer's mix (bound by
+	// AttnW/FFNW) weighs the streams into its row, Sinkhorn-normalises the
+	// combination over Iters rounds, and a norm follows the mix; the
+	// placement scales the output per stream and recombines the streams.
+	Sinkhorn    bool
+	Iters       int
+	AttnW, FFNW []Binding
+	// Bank is Kimi-K3's residual attention: stream 0 the running residual,
+	// the others checkpoints of block inputs. Each sublayer reads a softmax
+	// over its normed scores of the running residual and the BankAttn
+	// (BankFFN) checkpoints banked so far (RoleAttnResScore,
+	// RoleFFNResScore), a norm following; a checkpoint block banks its input
+	// into stream Checkpoint and restarts the residual from its attention's
+	// output.
+	Bank              bool
+	BankAttn, BankFFN int
+	Checkpoint        int
 }
 
 // mix binds a hyper-connection's weights: its norm, the low-rank pair and
@@ -153,6 +173,14 @@ func (x *Streams) mix(nEmbd int, norm, down, up, inj jlm.Role) []Binding {
 	hd := x.N * nEmbd
 	return []Binding{{Role: norm, K: hd}, {Role: down, K: hd, Rows: x.LowRank}, {Role: up, K: x.LowRank, Rows: hd},
 		{Role: inj, K: hd, Rows: x.N}}
+}
+
+// Compressed is a compressed attention's form: Kind (0 none, else the
+// history's pooling kind), its Rate, the output's OGroups and its weights.
+type Compressed struct {
+	Kind          uint8
+	Rate, OGroups int
+	W             []Binding
 }
 
 // LaurelJoin is the scale of LAuReL's join: (x + laurel) / sqrt(2).
@@ -203,20 +231,49 @@ func (d *Dense) Build() *Graph {
 	// mixOf is a sublayer's read of the streams (OpStreamMix): its row and
 	// its placement weights; without streams the residual itself.
 	mixOf := func(name string, in ValueID, norm, down, up, inj jlm.Role) (ValueID, ValueID) {
-		if d.Streams == nil {
+		x := d.Streams
+		if x == nil {
 			return in, -1
 		}
-		row, w := g.value(name, d.NEmbd), g.value(name+"_place", d.Streams.N)
+		if x.Bank {
+			r, nb := jlm.RoleAttnResScore, x.BankAttn
+			if norm == jlm.RoleHCFFNNorm {
+				r, nb = jlm.RoleFFNResScore, x.BankFFN
+			}
+			row := g.value(name, d.NEmbd)
+			g.op(Op{Kind: OpStreamMix, In: []ValueID{in}, Out: []ValueID{row}, Weight: []Binding{{Role: r, K: d.NEmbd}},
+				Attr: Attrs{Streams: x.N, Eps: d.Eps, Groups: nb}})
+			return row, -1
+		}
+		if x.Sinkhorn {
+			ws := x.AttnW
+			if norm == jlm.RoleHCFFNNorm {
+				ws = x.FFNW
+			}
+			row, w := g.value(name, d.NEmbd), g.value(name+"_place", (2+x.N)*x.N)
+			g.op(Op{Kind: OpStreamMix, In: []ValueID{in}, Out: []ValueID{row, w}, Weight: ws,
+				Attr: Attrs{Streams: x.N, Eps: d.Eps, Sinkhorn: true, Groups: x.Iters}})
+			return row, w
+		}
+		row, w := g.value(name, d.NEmbd), g.value(name+"_place", x.N)
 		g.op(Op{Kind: OpStreamMix, In: []ValueID{in}, Out: []ValueID{row, w},
-			Weight: d.Streams.mix(d.NEmbd, norm, down, up, inj), Attr: Attrs{Streams: d.Streams.N, Eps: d.Eps}})
+			Weight: x.mix(d.NEmbd, norm, down, up, inj), Attr: Attrs{Streams: x.N, Eps: d.Eps}})
 		return row, w
 	}
 	// resid adds a sublayer's output y into the residual in: an add, or
 	// with streams a placement at w.
 	resid := func(name string, in, y, w ValueID) ValueID {
 		out := g.value(name, g.Values[in].Width)
-		if d.Streams != nil {
-			g.op(Op{Kind: OpStreamPlace, In: []ValueID{in, y, w}, Out: []ValueID{out}, Attr: Attrs{Streams: d.Streams.N}})
+		if x := d.Streams; x != nil && x.Bank {
+			// The attention's placement banks a checkpoint block's input.
+			k := 0
+			if name == "x_attn" || name == "x_mixer" {
+				k = x.Checkpoint
+			}
+			g.op(Op{Kind: OpStreamPlace, In: []ValueID{in, y}, Out: []ValueID{out}, Attr: Attrs{Streams: x.N, Block: k}})
+		} else if d.Streams != nil {
+			g.op(Op{Kind: OpStreamPlace, In: []ValueID{in, y, w}, Out: []ValueID{out},
+				Attr: Attrs{Streams: d.Streams.N, Sinkhorn: d.Streams.Sinkhorn}})
 		} else {
 			g.op(Op{Kind: OpAdd, In: []ValueID{in, y}, Out: []ValueID{out}, Attr: Attrs{Alpha: d.ResidScale}})
 		}
@@ -303,6 +360,13 @@ func (d *Dense) Build() *Graph {
 			g.Out = []ValueID{x1}
 			return g
 		}
+	} else if cx := d.Compressed; cx != nil {
+		o := g.value("attn_out", d.NEmbd)
+		g.op(Op{Kind: OpCompressedAttend, In: []ValueID{h}, Out: []ValueID{o}, Weight: cx.W,
+			Reads: []StateRef{{"kv", 0}}, Writes: []StateRef{{"kv", 1}},
+			Attr: Attrs{NHead: d.NHead, HeadDim: d.HeadDim, NRot: d.NRot, Window: d.Window, Mixer: cx.Kind, Block: cx.Rate,
+				Groups: cx.OGroups}})
+		x1 = resid("x_attn", x, o, wa)
 	} else {
 		// A parallel block's FFN reads the block input: its norm is the
 		// attention's (SharedNorm) or its own over x.
@@ -451,6 +515,9 @@ func (d *Dense) Build() *Graph {
 	switch {
 	case d.Streams != nil:
 		f, wf = mixOf("ffn_mix", x1, jlm.RoleHCFFNNorm, jlm.RoleHCFFNDown, jlm.RoleHCFFNUp, jlm.RoleHCFFNInject)
+		if d.Streams.Sinkhorn || d.Streams.Bank {
+			f = norm("ffn_in", f, jlm.RoleFFNNorm)
+		}
 	case !d.Parallel:
 		f = preNorm("ffn_in", x1, jlm.RoleFFNNorm, jlm.RoleFFNNormBias)
 	}

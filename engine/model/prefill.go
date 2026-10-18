@@ -1304,6 +1304,7 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 		// hand-written body sizes them.
 		s.growAltUpRows(chunkRows)
 		s.growQ4E(chunkRows)
+		s.growDS4(chunkRows)
 		return s.graphRows(li, l, m.graphs[li], slot, base, p0, n, bidir)
 	}
 	s.handRan(li)

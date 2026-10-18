@@ -31,6 +31,10 @@ type MLA struct {
 	// Index, where set, is the block's indexer (OpIndex): the attention
 	// reads only the positions it selects.
 	Index *Index
+	// Gate is Kimi-K3's output gate: the heads' output times the sigmoid of
+	// RoleAttnGate's projection of the normed row, before the output
+	// projection.
+	Gate bool
 }
 
 // Index is an attention indexer's geometry: Heads heads of HeadDim, the
@@ -107,6 +111,12 @@ func (a *MLA) emit(g *Graph, d *Dense, h ValueID) ValueID {
 		Weight: []Binding{{Role: jlm.RoleAttnKB, K: nope, Rows: lat, Sheets: a.NHead},
 			{Role: jlm.RoleAttnVB, K: lat, Rows: a.HeadDimV, Sheets: a.NHead}},
 		Attr: Attrs{NHead: a.NHead, HeadDim: a.HeadDim, NRot: a.NRot, Scale: d.Scale}})
+	if a.Gate {
+		gt := mv("attn_gate", h, jlm.RoleAttnGate, a.NHead*a.HeadDimV)
+		gated := g.value("attn_gated", a.NHead*a.HeadDimV)
+		g.op(Op{Kind: OpActMul, In: []ValueID{gt, out}, Out: []ValueID{gated}, Attr: Attrs{Act: ActSigmoid}})
+		out = gated
+	}
 	return out
 }
 

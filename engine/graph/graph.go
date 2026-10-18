@@ -162,10 +162,20 @@ const (
 	// OpGaussTopK keeps the FFN gate's values above its mean plus Bound
 	// standard deviations, the rest zero (Gemma 3n's activation sparsity).
 	OpGaussTopK
+	// OpCompressedAttend is an attention whose history keeps pooled entries
+	// beside its rows (DeepSeek V4's): over the normed row (In[0]) a
+	// low-rank query, one key head that is also the value (turned on its
+	// last NRot dimensions, and back after the softmax), sinks and a window;
+	// on a compressing block every Block positions pooled into an entry of
+	// its second history (Mixer the kind: every visible entry, or the
+	// indexer's top-k of them); the heads' output through a grouped low-rank
+	// projection: Out[0] the sublayer's output row. It reads and writes the
+	// kv state. Opaque in this version, its weights all bound by it.
+	OpCompressedAttend
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -219,6 +229,11 @@ const (
 	// ActSwiGLUOAI is gpt-oss's clamped gate: In[0]*sigma(1.702*In[0]) with
 	// In[0] clamped above at 7, times (In[1] clamped to [-7, 7]) + 1.
 	ActSwiGLUOAI
+	// ActSwiGLUClamp is DeepSeek V4's and MiniMax-M3's: SiLU of In[0]
+	// clamped above at 10, times In[1] clamped to [-10, 10].
+	ActSwiGLUClamp
+	// ActSitu is Kimi-K3's: both operands bounded by a scaled tanh.
+	ActSitu
 )
 
 // ValueID names a value in a Graph's Values.
@@ -305,8 +320,11 @@ type Attrs struct {
 	// pooled).
 	Block, Local int
 	Pooled       bool
-	// Streams is OpStreamMix's and OpStreamPlace's stream count.
-	Streams int
+	// Streams is OpStreamMix's and OpStreamPlace's stream count; Sinkhorn
+	// their DeepSeek V4 form (OpStreamMix's Out[1] the pre, post and
+	// combination weights, Sinkhorn-normalised over Iters rounds).
+	Streams  int
+	Sinkhorn bool
 }
 
 // Op is one operation.

@@ -21,6 +21,10 @@ const (
 	// RouterSparseMixer is phimoe's sparsemixer: each of the K picks is a
 	// softmax over the experts within its jitter band of the running maximum.
 	RouterSparseMixer
+	// RouterSqrtSoftplus scores each expert by sqrt(softplus(logit))
+	// (DeepSeek V4's), the top K kept; on a hash-routed block the K are the
+	// table's for the row's token (RoleHashExperts, bound by the route).
+	RouterSqrtSoftplus
 )
 
 // Mixture describes a routed mixture-of-experts sublayer: a router selects
@@ -55,6 +59,13 @@ type Mixture struct {
 	// bank (Nemotron 3's): an OpAct between up and down in place of the
 	// act_mul.
 	Ungated bool
+	// Latent, where not 0, runs the routed experts in a latent of that
+	// width (Kimi-K3's): the row taken down by RoleFFNRoutedDown, the
+	// experts and the combine at the latent width, the sum normed by
+	// RoleFFNRoutedNorm where stored (at Eps) and taken back up by
+	// RoleFFNRoutedUp; the router and the shared experts read the row.
+	Latent int
+	Eps    float64
 	// Inv is the sublayer's stored tensors by role, as Facts.Inventory: the
 	// graph binds what is there (a router bias, a selection bias, the banks'
 	// biases, a per-expert output scale) and nothing else.
@@ -63,10 +74,11 @@ type Mixture struct {
 
 // MixtureRoles are every tensor a mixture sublayer graph binds. A Facts
 // inventory for a Mixture holds the block's tensors of these roles.
-var MixtureRoles = []jlm.Role{jlm.RoleRouter, jlm.RoleRouterBias, jlm.RoleExpProbsB,
+var MixtureRoles = []jlm.Role{jlm.RoleRouter, jlm.RoleRouterBias, jlm.RoleExpProbsB, jlm.RoleHashExperts,
 	jlm.RoleExpGateBank, jlm.RoleExpUpBank, jlm.RoleExpDownBank,
 	jlm.RoleExpGateBias, jlm.RoleExpUpBias, jlm.RoleExpDownBias, jlm.RoleExpScale,
-	jlm.RoleShRouter, jlm.RoleShExpGate, jlm.RoleShExpUp, jlm.RoleShExpDown}
+	jlm.RoleShRouter, jlm.RoleShExpGate, jlm.RoleShExpUp, jlm.RoleShExpDown,
+	jlm.RoleFFNRoutedDown, jlm.RoleFFNRoutedUp, jlm.RoleFFNRoutedNorm}
 
 func (m *Mixture) bind(r jlm.Role) Binding {
 	s := m.Inv[r]
@@ -95,7 +107,7 @@ func (m *Mixture) emit(g *Graph, x ValueID) ValueID { return m.emitFrom(g, x, x)
 func (m *Mixture) emitFrom(g *Graph, r, x ValueID) ValueID {
 	sel := g.value("sel", m.K)
 	rw := []Binding{m.bind(jlm.RoleRouter)}
-	for _, r := range []jlm.Role{jlm.RoleRouterBias, jlm.RoleExpProbsB} {
+	for _, r := range []jlm.Role{jlm.RoleRouterBias, jlm.RoleExpProbsB, jlm.RoleHashExperts} {
 		if m.has(r) {
 			rw = append(rw, m.bind(r))
 		}
@@ -103,8 +115,14 @@ func (m *Mixture) emitFrom(g *Graph, r, x ValueID) ValueID {
 	g.op(Op{Kind: OpRoute, In: []ValueID{r}, Out: []ValueID{sel}, Weight: rw,
 		Attr: Attrs{Experts: m.NExpert, TopK: m.K, Router: m.Router, RouteNorm: m.Norm, Scale: m.Scale,
 			Groups: m.Groups, GroupsUsed: m.GroupsUsed}})
-	pairs := g.value("pairs", m.K*m.NEmbd)
-	g.op(Op{Kind: OpGather, In: []ValueID{x, sel}, Out: []ValueID{pairs}, Attr: Attrs{WeightIn: m.WeightIn}})
+	// ew is the experts' width: the row's, or the latent's.
+	ew, ex := m.NEmbd, x
+	if m.Latent != 0 {
+		ew, ex = m.Latent, g.value("latent", m.Latent)
+		g.op(Op{Kind: OpMatVec, In: []ValueID{x}, Out: []ValueID{ex}, Weight: []Binding{m.bind(jlm.RoleFFNRoutedDown)}})
+	}
+	pairs := g.value("pairs", m.K*ew)
+	g.op(Op{Kind: OpGather, In: []ValueID{ex, sel}, Out: []ValueID{pairs}, Attr: Attrs{WeightIn: m.WeightIn}})
 	expert := func(name string, in ValueID, bank, bias jlm.Role) ValueID {
 		w := []Binding{m.bind(bank)}
 		if m.has(bias) {
@@ -124,13 +142,24 @@ func (m *Mixture) emitFrom(g *Graph, r, x ValueID) ValueID {
 		g.op(Op{Kind: OpActMul, In: []ValueID{gate, up}, Out: []ValueID{h}, Attr: Attrs{Act: m.Act}})
 	}
 	down := expert("exp_down", h, jlm.RoleExpDownBank, jlm.RoleExpDownBias)
-	y := g.value("routed", m.NEmbd)
+	y := g.value("routed", ew)
 	var cw []Binding
 	if m.has(jlm.RoleExpScale) {
 		cw = []Binding{m.bind(jlm.RoleExpScale)}
 	}
 	g.op(Op{Kind: OpCombine, In: []ValueID{down, sel}, Out: []ValueID{y}, Weight: cw,
 		Attr: Attrs{Experts: m.NExpert, TopK: m.K, WeightIn: m.WeightIn}})
+	if m.Latent != 0 {
+		if m.has(jlm.RoleFFNRoutedNorm) {
+			yn := g.value("routed_normed", ew)
+			g.op(Op{Kind: OpNorm, In: []ValueID{y}, Out: []ValueID{yn}, Weight: []Binding{m.bind(jlm.RoleFFNRoutedNorm)},
+				Attr: Attrs{Eps: m.Eps}})
+			y = yn
+		}
+		yu := g.value("routed_up", m.NEmbd)
+		g.op(Op{Kind: OpMatVec, In: []ValueID{y}, Out: []ValueID{yu}, Weight: []Binding{m.bind(jlm.RoleFFNRoutedUp)}})
+		y = yu
+	}
 	if m.SharedFF > 0 {
 		mv := func(name string, in ValueID, r jlm.Role, w int) ValueID {
 			out := g.value(name, w)

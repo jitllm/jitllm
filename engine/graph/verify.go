@@ -248,11 +248,30 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: a stream mix in a graph whose facts state one residual", at)
 				break
 			}
+			if x.Bank {
+				nb := x.BankAttn
+				if len(o.Weight) == 1 && o.Weight[0].Role == jlm.RoleFFNResScore {
+					nb = x.BankFFN
+				}
+				if !ins(1) || !outs(1) {
+					break
+				}
+				if o.Attr.Streams != x.N || o.Attr.Groups != nb || o.Attr.Eps != c.Eps || width(o.In[0]) != x.N*c.NEmbd ||
+					width(o.Out[0]) != c.NEmbd || len(o.Weight) != 1 || o.Weight[0].K != c.NEmbd {
+					bad("%s: a bank of %d over %d streams; the configuration states %d of %d", at, o.Attr.Groups, o.Attr.Streams, nb, x.N)
+				}
+				break
+			}
 			if !ins(1) || !outs(2) {
 				break
 			}
-			if o.Attr.Streams != x.N || o.Attr.Eps != c.Eps || width(o.In[0]) != x.N*c.NEmbd || width(o.Out[0]) != c.NEmbd ||
-				width(o.Out[1]) != x.N || len(o.Weight) != 4 {
+			pw, nw := x.N, 4
+			if x.Sinkhorn {
+				pw, nw = (2+x.N)*x.N, len(x.AttnW)
+			}
+			if o.Attr.Streams != x.N || o.Attr.Sinkhorn != x.Sinkhorn || o.Attr.Eps != c.Eps || width(o.In[0]) != x.N*c.NEmbd ||
+				width(o.Out[0]) != c.NEmbd || width(o.Out[1]) != pw || len(o.Weight) != nw ||
+				x.Sinkhorn && o.Attr.Groups != x.Iters {
 				bad("%s: %d streams of a row of %d into %d (eps %g, %d weights); the configuration states %d of %d",
 					at, o.Attr.Streams, width(o.In[0]), width(o.Out[0]), o.Attr.Eps, len(o.Weight), x.N, c.NEmbd)
 			}
@@ -262,11 +281,26 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: a stream placement in a graph whose facts state one residual", at)
 				break
 			}
+			if x.Bank {
+				if !ins(2) || !outs(1) {
+					break
+				}
+				if o.Attr.Streams != x.N || o.Attr.Block != 0 && o.Attr.Block != x.Checkpoint || width(o.In[0]) != x.N*c.NEmbd ||
+					width(o.In[1]) != c.NEmbd || width(o.Out[0]) != width(o.In[0]) {
+					bad("%s: a row of %d placed into %d banking stream %d; the configuration states %d streams of %d, checkpoint %d",
+						at, width(o.In[1]), width(o.In[0]), o.Attr.Block, x.N, c.NEmbd, x.Checkpoint)
+				}
+				break
+			}
 			if !ins(3) || !outs(1) {
 				break
 			}
-			if o.Attr.Streams != x.N || width(o.In[0]) != x.N*c.NEmbd || width(o.In[1]) != c.NEmbd || width(o.In[2]) != x.N ||
-				width(o.Out[0]) != width(o.In[0]) {
+			pw := x.N
+			if x.Sinkhorn {
+				pw = (2 + x.N) * x.N
+			}
+			if o.Attr.Streams != x.N || o.Attr.Sinkhorn != x.Sinkhorn || width(o.In[0]) != x.N*c.NEmbd ||
+				width(o.In[1]) != c.NEmbd || width(o.In[2]) != pw || width(o.Out[0]) != width(o.In[0]) {
 				bad("%s: a row of %d placed into %d at %d weights; the configuration states %d streams of %d",
 					at, width(o.In[1]), width(o.In[0]), width(o.In[2]), x.N, c.NEmbd)
 			}
@@ -303,6 +337,26 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: %d streams of a row of %d (eps %g, %d weights); the configuration states %d of %d",
 					at, o.Attr.Streams, width(o.In[0]), o.Attr.Eps, len(o.Weight), a.N, c.NEmbd)
 			}
+		case OpCompressedAttend:
+			cx := c.Compressed
+			if cx == nil {
+				bad("%s: a compressed attention the configuration does not state", at)
+				break
+			}
+			if !ins(1) || !outs(1) {
+				break
+			}
+			a := o.Attr
+			if a.NHead != c.NHead || a.HeadDim != c.HeadDim || a.NRot != c.NRot || a.Window != c.Window || a.Mixer != cx.Kind ||
+				a.Block != cx.Rate || a.Groups != cx.OGroups || len(o.Weight) != len(cx.W) ||
+				width(o.In[0]) != c.NEmbd || width(o.Out[0]) != c.NEmbd {
+				bad("%s: %d heads of %d (rotary %d, window %d, kind %d at %d, %d groups, %d weights); "+
+					"the configuration states %d of %d (%d, %d, %d at %d, %d, %d)", at, a.NHead, a.HeadDim, a.NRot, a.Window,
+					a.Mixer, a.Block, a.Groups, len(o.Weight), c.NHead, c.HeadDim, c.NRot, c.Window, cx.Kind, cx.Rate, cx.OGroups, len(cx.W))
+			}
+			if len(o.Reads) != 1 || o.Reads[0] != (StateRef{"kv", 0}) || len(o.Writes) != 1 || o.Writes[0] != (StateRef{"kv", 1}) {
+				bad("%s: reads and writes no kv version", at)
+			}
 		case OpLaurel:
 			if c.AltUp == nil {
 				bad("%s: LAuReL the configuration does not state", at)
@@ -337,7 +391,7 @@ func Verify(g *Graph, f Facts) error {
 			if o.Kind == OpAdd && o.Attr.Alpha != 0 && o.Attr.Alpha != c.ResidScale {
 				bad("%s: residual scale %g, the configuration states %g", at, o.Attr.Alpha, c.ResidScale)
 			}
-			if o.Kind == OpActMul && o.Attr.Act != act && !(c.OutGate && o.Attr.Act == ActSigmoid) {
+			if o.Kind == OpActMul && o.Attr.Act != act && !((c.OutGate || c.MLA != nil && c.MLA.Gate) && o.Attr.Act == ActSigmoid) {
 				bad("%s: activation %d, the configuration states %d", at, o.Attr.Act, act)
 			}
 		case OpScale:
@@ -493,6 +547,13 @@ func verifyMixtureOp(o Op, at string, m *Mixture, width func(ValueID) int, ins, 
 		}
 		for _, w := range o.Weight[1:] {
 			// A vector, stored with no second dimension or as one row.
+			if w.Role == jlm.RoleHashExperts {
+				// A hash-routed block's table: K experts for every token.
+				if m.Router != RouterSqrtSoftplus || w.K%m.K != 0 {
+					bad("%s: a hash table of %d under router %d", at, w.K, m.Router)
+				}
+				continue
+			}
 			if (w.Role != jlm.RoleRouterBias && w.Role != jlm.RoleExpProbsB) || w.K != m.NExpert || w.Rows > 1 {
 				bad("%s: %v of %d is not a bias on %d experts' logits", at, w.Role, w.K, m.NExpert)
 			}
