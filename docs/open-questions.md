@@ -179,3 +179,13 @@ after it ("THE DECODE ROW TILE, RE-BUILT AS ADJACENT ROWS").
   a wider budget (a smaller tile) or the masks folded into the unpack's existing
   constants. `TestGEMMUnpackKonstsAreHoisted` prices them: they are the entire
   gap between its bound and the pool size.
+- **A tier keeps its scratch on a card it holds no blocks on.** With one pool
+  per card across tiers (`tier.PoolRegistry`), two models on one 400 MiB pool:
+  the first holds 8 blocks; once it brings them all home, the second takes 5,
+  not 8, because the first tier still holds about 230 MiB of the pool in its
+  block scratch (`tier.TestTwoModelsShareACardThroughTheRegistry` logs the
+  ledger). The server's orchestrator makes room by demoting sessions, and that
+  room is what the scratch takes. A tier that holds no block on a card could
+  give its scratch back, or the tiers sharing a card could share one scratch
+  set sized to the widest; each is a measurement against the cost of
+  re-reserving it on the next promotion.
