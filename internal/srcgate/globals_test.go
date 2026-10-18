@@ -540,19 +540,7 @@ var globalAllowlist = map[string]string{
 	"jit/gpu/metal.*":  "process: the Metal framework's selectors and entry points, bound once at load; the stat counters and kernel timing are debt, to move onto the device",
 
 	// jit/gpu/tier: the tier is being refactored elsewhere; narrow this to its caches when that lands
-	"jit/gpu/tier.sharedKerns":     "cache: generated kernels shared between tiers on one device",
-	"jit/gpu/tier.bgTuneTrials":    "debt: owned by the tier refactor",
-	"jit/gpu/tier.binaryID":        "debt: owned by the tier refactor",
-	"jit/gpu/tier.nextSession":     "debt: owned by the tier refactor",
-	"jit/gpu/tier.persistDepTotal": "debt: owned by the tier refactor",
-	"jit/gpu/tier.persistTotal":    "debt: owned by the tier refactor",
-	"jit/gpu/tier.bgTrial":         "debt: owned by the tier refactor (test seams)",
-	"jit/gpu/tier.splitTrial":      "debt: owned by the tier refactor (test seams)",
-	"jit/gpu/tier.cudaCount":       "debt: owned by the tier refactor (test seams)",
-	"jit/gpu/tier.hipCount":        "debt: owned by the tier refactor (test seams)",
-	"jit/gpu/tier.open*":           "debt: owned by the tier refactor (test seams)",
-	"jit/gpu/tier.vulkanDevices":   "debt: owned by the tier refactor (test seams)",
-	"jit/gpu/tier.tuneTrials":      "debt: owned by the tier refactor",
+	"jit/gpu/tier.binaryIDOnce": "process: a memoised hash of the running executable, the same for every tier",
 
 	// tables exported as data: nothing writes them after init, but any importer could
 	"common/discover.BalanceSteps":   "table: exported list, written once",
