@@ -76,6 +76,8 @@ const (
 	dkQTemp                       // the query's temperature, a factor of each row's position
 	dkSplitQG                     // a double-width query split into its heads and its output gate
 	dkGateOut                     // the attention's output times the sigmoid of the gate
+	dkPerLayer                    // the per-layer embedding added to the block's row (perLayerEmbed)
+	dkScale                       // the block's row times the layer's output scale
 	numBaseKinds                  // the fused kinds (devrewrite.go) count on from here
 )
 
@@ -109,6 +111,7 @@ const (
 	slotQG                    // bs.qg: the query's heads, split from a gated query
 	slotOGate                 // bs.ogate: the output gate
 	slotOGated                // bs.ogated: the attention's output, gated
+	slotVN                    // bs.vn: v's heads normed
 	numSlots
 )
 
@@ -158,6 +161,8 @@ func (s devSlot) String() string {
 		return "ogate"
 	case slotOGated:
 		return "ogated"
+	case slotVN:
+		return "vn"
 	}
 	return ""
 }
@@ -177,8 +182,11 @@ type devOp struct {
 	// K and Conv are a binary16 writer's kernel and the conversion it
 	// stands in for (rmsF16For, actF16For), chosen when it was rewritten.
 	K, Conv backend.Kernel
-	N       int     // K's thread count, where it is not the rows'
-	QS      *qkvSeg // the q/k/v grid's segments (qkv-gemm)
+	// Staged says the op is several launches that pass through scratch, so
+	// reading and writing one slot is safe: no single launch does both.
+	Staged bool
+	N      int     // K's thread count, where it is not the rows'
+	QS     *qkvSeg // the q/k/v grid's segments (qkv-gemm)
 }
 
 // devProgram is a block's device program.
@@ -235,7 +243,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	}
 	switch o.Kind {
-	case dkRecurrent, dkCopy, dkKVCopy, dkAct, dkQTemp, dkSplitQG, dkGateOut:
+	case dkRecurrent, dkCopy, dkKVCopy, dkAct, dkQTemp, dkSplitQG, dkGateOut, dkPerLayer, dkScale:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkMixture, dkAttendLatent:
 		if i == 1 {
@@ -260,9 +268,33 @@ func (o devOp) wants(p *devProgram, i int) devType {
 // check holds every op's inputs to the types the op reads: a value in a
 // layout or element type its consumer does not read refuses the program.
 func (p *devProgram) check() error {
+	// Every value an op reads is written by an earlier op or is the block's
+	// input: a rewrite that moves a launch above what it reads is refused.
+	written := make([]int, len(p.vals))
+	for i := range written {
+		written[i] = -1
+	}
 	for i, o := range p.ops {
-		// RULE 13: no launch reads a buffer it writes.
+		for _, y := range o.Out {
+			if written[y] < 0 {
+				written[y] = i
+			}
+		}
+	}
+	for i, o := range p.ops {
 		for _, x := range o.In {
+			if w := written[x]; w >= i {
+				return fmt.Errorf("device program: op %d (%s) reads %%%s, which op %d writes after it", i, o.Kind, p.names[x], w)
+			}
+		}
+	}
+	for i, o := range p.ops {
+		// RULE 13: no launch reads a buffer it writes (a staged op's
+		// launches go through scratch).
+		for _, x := range o.In {
+			if o.Staged {
+				break
+			}
 			for _, y := range o.Out {
 				if p.slots[x] == p.slots[y] && p.slots[x] != slotKV {
 					return fmt.Errorf("device program: op %d (%s) reads and writes %s", i, o.Kind, p.slots[x])
@@ -284,7 +316,7 @@ func (p *devProgram) check() error {
 func lowersOp(k graph.OpKind) bool {
 	switch k {
 	case graph.OpNorm, graph.OpMatVec, graph.OpRope, graph.OpKVAppend, graph.OpAttend, graph.OpAdd,
-		graph.OpActMul, graph.OpAct, graph.OpHeadNorm, graph.OpLayerNorm,
+		graph.OpActMul, graph.OpAct, graph.OpHeadNorm, graph.OpLayerNorm, graph.OpScale,
 		// The mixture's ops, lowered whole as one op (dkMixture) for now.
 		graph.OpRoute, graph.OpGather, graph.OpExpertMatVec, graph.OpCombine, graph.OpGateScalar,
 		// A recurrent mixer, lowered whole with its pre-norm (emitLinear).
@@ -308,8 +340,6 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		return nil, "non-causal attention"
 	case p.RopeSplit:
 		return nil, "XD-RoPE"
-	case l.vFromK || l.kvSrc != g.Block:
-		return nil, "a shared or derived history"
 	case !actHasKernel(p):
 		return nil, "an activation with no kernel"
 	case p.DenseMoE || bindsRole(g, jlm.RoleFFNRoutedDown):
@@ -435,6 +465,28 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			vals[o.Out[0]] = out
 		case graph.OpMatVec:
 			role := o.Weight[0].Role
+			if role == jlm.RolePLEGate {
+				// The per-layer embedding: its gate to the add that brings
+				// it into the row, lowered whole (perLayerEmbed).
+				a := -1
+				for k := i + 1; k < len(g.Ops) && a < 0; k++ {
+					if g.Ops[k].Kind == graph.OpAdd && (g.Ops[k].In[0] == o.In[0] || g.Ops[k].In[1] == o.In[0]) {
+						a = k
+					}
+				}
+				if a < 0 {
+					return nil, "a per-layer embedding with no add"
+				}
+				src := make([]int, 0, a+1-i)
+				for k := i; k <= a; k++ {
+					src = append(src, k)
+				}
+				out := prog.val(g.Values[g.Ops[a].Out[0]].Name, f32(ne), slotX)
+				prog.ops = append(prog.ops, devOp{Kind: dkPerLayer, Src: src, In: []devVal{in(0)}, Out: []devVal{out}, Staged: true})
+				vals[g.Ops[a].Out[0]] = out
+				skipTo = a + 1
+				continue
+			}
 			s, ok := matvecSlot[role]
 			if !ok {
 				return nil, "a matvec over " + role.String()
@@ -486,6 +538,14 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkMixture, Src: src, In: []devVal{in(0), q}, Out: []devVal{out}})
 			vals[mixOut] = out
 			skipTo = last
+		case graph.OpScale:
+			// The layer's output scale over the block's row.
+			if len(o.Weight) != 1 || o.Weight[0].Role != jlm.RoleLayerOutScale {
+				return nil, "a scale the program does not lower"
+			}
+			out := prog.val(name(0), f32(ne), slotX)
+			prog.ops = append(prog.ops, devOp{Kind: dkScale, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Staged: true})
+			vals[o.Out[0]] = out
 		case graph.OpSlice:
 			// A gated query's split: two slices of q's projection, its heads
 			// and its gate, lowered as one launch at the first.
@@ -542,8 +602,13 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			}
 			s := slotQN
 			switch prog.slots[src] {
-			case slotK:
+			case slotK, slotV:
+				// k's norm; or v's (weightless, on k's heads), which reads
+				// the projection k's norm does not overwrite where v is k's.
 				s = slotKN
+				if role == 0 && o.Out[0] != kRot && isValue(g, o.Out[0]) {
+					s = slotVN
+				}
 			case slotQ, slotQG, slotQR:
 				// q's norm, before its rotary or after it (a weighted norm
 				// after the rotary does not commute with it).
@@ -594,8 +659,14 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			// (the attention's residual, a mixture's sum) the residual's
 			// second slot.
 			home := len(g.Out) == 1 && o.Out[0] == g.Out[0]
+			reads := func(sl devSlot) bool { return prog.slots[in(0)] == sl || prog.slots[in(1)] == sl }
 			s := slotX2
-			if home && prog.slots[in(0)] != slotX && prog.slots[in(1)] != slotX {
+			switch {
+			case home && !reads(slotX):
+				s = slotX
+			case !home && reads(slotX2):
+				// An add a later op ends the block after (a per-layer
+				// embedding, a scale) writes the slot it does not read.
 				s = slotX
 			}
 			out := prog.val(name(0), f32(ne), s)
@@ -737,6 +808,17 @@ func bindsRole(g *graph.Graph, r jlm.Role) bool {
 			if w.Role == r {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// isValue reports that v is the value a history append stores (its second
+// input): a norm writing it is v's.
+func isValue(g *graph.Graph, v graph.ValueID) bool {
+	for _, o := range g.Ops {
+		if o.Kind == graph.OpKVAppend && len(o.In) > 1 && o.In[1] == v {
+			return true
 		}
 	}
 	return false

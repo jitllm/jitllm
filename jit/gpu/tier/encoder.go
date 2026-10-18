@@ -844,6 +844,22 @@ func (g *devTier) layersSession(s backend.Session) {
 		}
 		return ffnOut
 	}
+	// perLayerEmbed adds block l's per-layer embedding to the row src, into
+	// bs.x: x = src + post_norm(W_out . (act(W_gate . src) * pl[li])), the
+	// sum through x2 and moved home. The encoder and the device program's
+	// op (devprog.go) both call it.
+	perLayerEmbed := func(l *layer, src backend.Buf) {
+		lc.la(bs.quantE, kernels.QuantizeThreads(R*ePad(p)/32), src, bs.a, bs.ax)
+		mvrun(l.mvpg, l.pleGate, bs.pleG)
+		lc.la(bs.pleSlice, R*p.PLEDim, bs.pleIn, l.pleOff, bs.pleS)
+		lc.la(bs.pleAct, R*p.PLEDim, bs.pleG, bs.pleS, bs.pleA)
+		lc.la(bs.pleQuant, kernels.QuantizeThreads(R*pad32(p.PLEDim)/32), bs.pleA, bs.a, bs.ax)
+		mvrun(l.mvpp, l.pleProj, bs.pleO)
+		lc.la(bs.normPart, R*bs.parts, bs.pleO, bs.part)
+		lc.la(bs.normApply, R*p.NEmbd, bs.pleO, l.nPLE, bs.part, bs.h)
+		addRes(src, bs.h, bs.x2)
+		lc.la(bs.scaleX, R*p.NEmbd, bs.x2, bs.one, bs.x)
+	}
 	// A block-end residual add held for the next block's attention norm to do
 	// in its own launch (foldAddNorm): x = pendX + pendY. The encoder and
 	// the device program (runProg) both hold and take it.
@@ -877,7 +893,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		buf := [numSlots]backend.Buf{slotX: bs.x, slotX2: bs.x2, slotH: bs.h, slotQ8: bs.a, slotQ: bs.q, slotK: bs.k,
 			slotV: bs.v, slotQR: bs.qr, slotKV: kvBuf, slotXB: bs.xb, slotOut: bs.mvOut, slotG: bs.g, slotU: bs.u, slotAct: bs.act,
 			slotQN: bs.qn, slotKN: bs.kn, slotF16: g.f16Buf, slotQT: bs.qt, slotQG: bs.qg, slotOGate: bs.ogate,
-			slotOGated: bs.ogated}
+			slotOGated: bs.ogated, slotVN: bs.vn}
 		// The rewrites legal at one row, on a prompt chunk and on a ragged
 		// step differ: each class keeps its own fused program.
 		fc := &l.progOne
@@ -1091,6 +1107,18 @@ func (g *devTier) layersSession(s backend.Session) {
 				lc.la(bs.splitQG, R*qdim, at(o.In[0]), at(o.Out[0]), at(o.Out[1]))
 			case dkGateOut:
 				lc.la(bs.sigMul, R*qdim, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+			case dkPerLayer:
+				if bs.pleIn == nil {
+					if err == nil {
+						err = fmt.Errorf("tier: block %d: no per-layer inputs on this step", li)
+					}
+					return
+				}
+				perLayerEmbed(l, at(o.In[0]))
+			case dkScale:
+				// The layer's output scale, out of place through bs.h and back.
+				lc.la(bs.scaleX, R*p.NEmbd, at(o.In[0]), l.outScale, bs.h)
+				lc.la(bs.scaleX, R*p.NEmbd, bs.h, bs.one, at(o.Out[0]))
 			case dkQTemp:
 				if at(o.Out[0]) == nil {
 					if err == nil {
@@ -1166,10 +1194,14 @@ func (g *devTier) layersSession(s backend.Session) {
 				// The form the encoder takes: one whole-row norm, the norm's
 				// two passes, or the per-head kernel at its lanes' geometry.
 				w, nk, lanes, heads := l.nQ, bs.qNorm, bs.qNormL, R*p.NHead
-				if prog.slots[o.Out[0]] == slotKN {
+				switch prog.slots[o.Out[0]] {
+				case slotKN:
 					w, nk, lanes, heads = l.nK, bs.kNorm, bs.kNormL, R*p.NKVHead
+				case slotVN:
+					// v's heads on k's kernel, weightless, against ones.
+					w, nk, lanes, heads = bs.hdOnes, bs.kNorm, bs.kNormL, R*p.NKVHead
 				}
-				if o.Role == 0 {
+				if o.Role == 0 && prog.slots[o.Out[0]] != slotVN {
 					// A weightless (L2) norm: against ones.
 					w = bs.l4Ones
 				}
@@ -1395,7 +1427,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				why = progRotary
 			case bs.clampQ != nil:
 				why = progQKVExtra
-			case l.pleGate != nil || l.outScale != nil || l.nResid != nil || p.VNorm:
+			case l.nResid != nil:
 				why = progNormResid
 			case g.TableSplit:
 				why = progTableSplit
@@ -2535,16 +2567,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				// gated into the rest (altup.go).
 				g.emitAltCorrect(lc, bs, l, R, mvrun, norm)
 			} else if l.pleGate != nil && bs.pleIn != nil {
-				lc.la(bs.quantE, kernels.QuantizeThreads(R*ePad(p)/32), bs.x, bs.a, bs.ax)
-				mvrun(l.mvpg, l.pleGate, bs.pleG)
-				lc.la(bs.pleSlice, R*p.PLEDim, bs.pleIn, l.pleOff, bs.pleS)
-				lc.la(bs.pleAct, R*p.PLEDim, bs.pleG, bs.pleS, bs.pleA)
-				lc.la(bs.pleQuant, kernels.QuantizeThreads(R*pad32(p.PLEDim)/32), bs.pleA, bs.a, bs.ax)
-				mvrun(l.mvpp, l.pleProj, bs.pleO)
-				lc.la(bs.normPart, R*bs.parts, bs.pleO, bs.part)
-				lc.la(bs.normApply, R*p.NEmbd, bs.pleO, l.nPLE, bs.part, bs.h)
-				addRes(bs.x, bs.h, bs.x2)
-				lc.la(bs.scaleX, R*p.NEmbd, bs.x2, bs.one, bs.x)
+				perLayerEmbed(l, bs.x)
 			}
 			// Gemma 4's layer_scalar on the whole output row, out of place:
 			// x times the block's scalar into h (dead past the add), and back.

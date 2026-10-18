@@ -79,6 +79,10 @@ func (k devKind) String() string {
 		return "split_qg"
 	case dkGateOut:
 		return "gate_out"
+	case dkPerLayer:
+		return "per_layer"
+	case dkScale:
+		return "scale"
 	case dkNormQuant:
 		return "norm_quant"
 	case dkAddNorm:
@@ -302,11 +306,20 @@ func rwRopeQKV(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq in
 			continue
 		}
 		for j := i + 1; j < len(p.ops); j++ {
-			if w := p.ops[j]; w.Kind == dkKVWrite {
-				p.replace(i, j, devOp{Kind: dkRopeQKV, Src: cat(o.Src, w.Src), In: []devVal{o.In[0], w.In[0], w.In[1]},
-					Out: []devVal{o.Out[0], w.Out[0]}})
-				return true
+			w := p.ops[j]
+			if w.Kind != dkKVWrite {
+				continue
 			}
+			// The fused launch goes where the history write was, after
+			// every op its key and value come from; nothing between may
+			// read the rotated q it now writes later.
+			if p.next(i, o.Out[0]) < j {
+				return false
+			}
+			p.ops[j] = devOp{Kind: dkRopeQKV, Src: cat(o.Src, w.Src), In: []devVal{o.In[0], w.In[0], w.In[1]},
+				Out: []devVal{o.Out[0], w.Out[0]}}
+			p.ops = append(p.ops[:i], p.ops[i+1:]...)
+			return true
 		}
 	}
 	return false
