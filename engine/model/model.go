@@ -1238,12 +1238,9 @@ type Model struct {
 	Container bool
 
 	container *jlm.File
-	// graphs is each text block's lowered block graph under WithBlockGraph
-	// (graphblock.go), nil without it.
+	// graphs is each text block's lowered block graph (graphblock.go): the
+	// trunk's and the prediction blocks'.
 	graphs []*denseLowering
-	// graphWhy is each text block's named reason for the hand-written body
-	// (GraphUncovered), "" where the graph covers it.
-	graphWhy []string
 	// laxUnbound lets buildGraphs compile a block whose stored tensors its
 	// graph does not all bind: a test's violation that drops an op (regraph),
 	// never set on a model that runs.
@@ -1640,18 +1637,9 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	}
 	m.buildDeltaGraphs()
 	m.buildMixGraphs()
-	if m.opt.blockGraph == graphOff && m.handless() != "" {
-		// The hand-written body no longer runs a parallel residual: only the
-		// block graph's lowering does (graphblock.go).
+	if err := m.buildGraphs(); err != nil {
 		c.Close()
-		return nil, fmt.Errorf("model: %s has %s, which only the block graph runs; "+
-			"WithBlockGraph(false) has no body for it", m.Cfg.Arch, m.handless())
-	}
-	if m.opt.blockGraph != graphOff {
-		if err := m.buildGraphs(); err != nil {
-			c.Close()
-			return nil, err
-		}
+		return nil, err
 	}
 	bindOne(c, &m.embd)
 	bindOne(c, &m.posEmbd)

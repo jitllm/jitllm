@@ -12,38 +12,12 @@ import (
 // covered block's graph is built from what the container states, verified
 // against the container's tensors and configuration, and lowered to the
 // operations the block body runs, on the host (decode, prompt chunks, ragged
-// steps) and on the device (the plan). A text block the graph does not cover
-// runs the hand-written body, and only for a reason on the named list below
-// (uncoveredReasons): a block never falls back silently, and the list is the
-// work list.
+// steps) and on the device (the plan). The graph is every text block's only
+// body: a block the op language does not state refuses the model at Open, by
+// a reason on the named list below.
 
-// WithBlockGraph chooses how blocks are lowered. The default runs every
-// covered block through the graph and every other block through the
-// hand-written body for its named reason. true does the same and refuses to
-// open a model with any block the graph does not cover; false runs every
-// block through the hand-written body, the control arm the graph's gates
-// compare against.
-func WithBlockGraph(on bool) Option {
-	return func(l *loadOpts) {
-		if on {
-			l.opt.blockGraph = graphStrict
-		} else {
-			l.opt.blockGraph = graphOff
-		}
-	}
-}
-
-// graphMode is WithBlockGraph's setting.
-type graphMode uint8
-
-const (
-	graphAuto graphMode = iota
-	graphStrict
-	graphOff
-)
-
-// Every reason a text block runs the hand-written body. A block's reason is
-// one of these, by name; TestCoveredBlocksTakeTheGraphPath asserts it.
+// Every reason a text block is refused: what the op language does not state,
+// by name.
 // Shrinking this list is the graph's work list.
 const (
 	UncoveredMixRouter     = "a mixture: a router the op language does not state (sqrt-softplus, hash routing or a router norm)"
@@ -806,38 +780,16 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 	return lw, nil
 }
 
-// buildGraphs builds, verifies and lowers every covered text block's graph,
-// and records every other block's named reason (m.graphWhy). A covered block
-// whose graph fails to verify or lower refuses the model: that is a bug, never
-// a fallback. Under WithBlockGraph(true) an uncovered block refuses it too.
+// buildGraphs builds, verifies and lowers every text block's graph, the
+// trunk's and the prediction blocks'. A block the op language does not state
+// refuses the model by its named reason, and a graph that fails to verify or
+// lower refuses it as the bug it is: the graph is the only body.
 func (m *Model) buildGraphs() error {
 	// The trunk's blocks and the prediction blocks after it.
 	m.graphs = make([]*denseLowering, m.Cfg.NLayer+m.Cfg.NMTP)
-	m.graphWhy = make([]string, m.Cfg.NLayer+m.Cfg.NMTP)
 	for li := range m.graphs {
-		refuse := func(why string) error {
-			if l := &m.layers[li]; !m.Cfg.NonCausal && l.gate.e == nil && l.router.e == nil && !l.noFFN {
-				// Only the graph's lowering runs an ungated FFN (an encoder
-				// runs its own body, encoder.go).
-				return fmt.Errorf("model: block %d of %s has an ungated FFN and is not covered by the block graph (%s); "+
-					"the hand-written body has no ungated FFN", li, m.Cfg.Arch, why)
-			}
-			if m.Cfg.Parallel {
-				// Only the graph's lowering runs a parallel residual.
-				return fmt.Errorf("model: block %d of %s is parallel and not covered by the block graph (%s); "+
-					"the hand-written body has no parallel residual", li, m.Cfg.Arch, why)
-			}
-			if m.opt.blockGraph == graphStrict {
-				return fmt.Errorf("model: block %d of %s is not covered by the block graph: %s", li, m.Cfg.Arch, why)
-			}
-			m.graphWhy[li] = why
-			return nil
-		}
 		if why := m.uncovered(li); why != "" {
-			if err := refuse(why); err != nil {
-				return err
-			}
-			continue
+			return fmt.Errorf("model: block %d of %s is not covered by the block graph: %s", li, m.Cfg.Arch, why)
 		}
 		f, err := m.blockFacts(li)
 		if err != nil {
@@ -853,10 +805,8 @@ func (m *Model) buildGraphs() error {
 				delete(f.Inventory, r)
 			}
 		} else if len(u) > 0 {
-			if err := refuse(UncoveredUnboundTensor); err != nil {
-				return fmt.Errorf("%w (%v)", err, u)
-			}
-			continue
+			return fmt.Errorf("model: block %d of %s is not covered by the block graph: %s (%v)", li, m.Cfg.Arch,
+				UncoveredUnboundTensor, u)
 		}
 		if err := graph.Verify(g, f); err != nil {
 			return err
@@ -934,21 +884,8 @@ func (m *Model) buildGraphs() error {
 	return nil
 }
 
-// GraphUncovered is why text block li runs the hand-written body: one of
-// UncoveredReasons, "control" under WithBlockGraph(false), or "" where the
-// graph covers it.
-func (m *Model) GraphUncovered(li int) string {
-	if m.opt.blockGraph == graphOff {
-		return "control"
-	}
-	if li < 0 || li >= len(m.graphWhy) {
-		return ""
-	}
-	return m.graphWhy[li]
-}
-
 // BlockRewrites is every rewrite's decision on text block li's graph, legal
-// or refused with its reason (nil without WithBlockGraph).
+// or refused with its reason.
 func (m *Model) BlockRewrites(li int) []graph.Decision {
 	if li < 0 || li >= len(m.graphs) || m.graphs[li] == nil {
 		return nil
@@ -956,8 +893,7 @@ func (m *Model) BlockRewrites(li int) []graph.Decision {
 	return m.graphs[li].rewrites
 }
 
-// BlockGraph is text block li's verified graph, or nil where the model was
-// opened without WithBlockGraph.
+// BlockGraph is text block li's verified graph (nil past the text blocks).
 func (m *Model) BlockGraph(li int) *graph.Graph {
 	if li < 0 || li >= len(m.graphs) || m.graphs[li] == nil {
 		return nil
@@ -980,14 +916,11 @@ func (s *State) GraphRaggedBlocks() int { return s.graphRaggedRuns }
 
 // BlockPath is which path ran text block li in a State, counted per run of
 // the block (a decoded token, a prompt chunk, a ragged step): Graph through
-// the block graph's host lowering, Hand through the hand-written body, and
-// Device on a device, whose plan is lowered from the graph exactly where the
-// model holds one (Model.BlockGraph). Why is the block's named reason for the
-// hand-written body (Model.GraphUncovered), "" where the graph covers it.
+// the block graph's host lowering, Device on a device, whose plan is lowered
+// from the graph (DeviceGraphed).
 type BlockPath struct {
-	Graph, Hand, Device int
-	DeviceGraphed       bool
-	Why                 string
+	Graph, Device int
+	DeviceGraphed bool
 }
 
 // BlockPaths is every text block's path record in the State.
@@ -998,7 +931,6 @@ func (s *State) BlockPaths() []BlockPath {
 			out[li] = s.paths[li]
 		}
 		out[li].DeviceGraphed = out[li].Device > 0 && s.m.BlockGraph(li) != nil
-		out[li].Why = s.m.GraphUncovered(li)
 	}
 	return out
 }
@@ -1014,9 +946,6 @@ func (s *State) pathOf(li int) *BlockPath {
 	}
 	return &s.paths[li]
 }
-
-// handRan records that text block li ran through the hand-written body.
-func (s *State) handRan(li int) { s.pathOf(li).Hand++ }
 
 // devRan records that blocks lo..hi-1 ran on a device.
 func (s *State) devRan(lo, hi int) {
@@ -2093,25 +2022,6 @@ func rewriteLegal(decisions []graph.Decision, name string) bool {
 		}
 	}
 	return false
-}
-
-// handless is what the model has that the hand-written body no longer runs
-// (a parallel residual, an ungated FFN), "" where it has neither: such a
-// model runs through the block graph alone.
-func (m *Model) handless() string {
-	if m.Cfg.Parallel {
-		return "a parallel residual"
-	}
-	if m.Cfg.NonCausal {
-		// An encoder runs its own body (encoder.go).
-		return ""
-	}
-	for li := range m.Cfg.NLayer {
-		if l := &m.layers[li]; l.gate.e == nil && l.router.e == nil && !l.noFFN {
-			return "an ungated FFN"
-		}
-	}
-	return ""
 }
 
 // kvRows projects a prompt's k and v rows into bk and bv as the lowering

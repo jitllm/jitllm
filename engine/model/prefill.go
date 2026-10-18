@@ -1288,10 +1288,6 @@ func (s *State) bswaTableAt(i, nrot int) []float32 {
 // chunk is sized for.
 func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error {
 	m, c := s.m, s.c
-	// c.AttnScale, not 1/sqrt(HeadDim): they differ under YaRN's magnitude
-	// correction (DeepSeek-V2-Lite). The widths are per layer (HeadDimAt).
-	scale := c.AttnScale
-	act := c.Act
 	s.growBatch(chunkRows)
 	// Same fault as decode: a block is a page and visiting it brings
 	// it in. One nil compare when the budget holds the model.
@@ -1307,312 +1303,99 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 		s.growDS4(chunkRows)
 		return s.graphRows(li, l, m.graphs[li], slot, base, p0, n, bidir)
 	}
-	s.handRan(li)
-	// DeepSeek V4's block is its own (ds4.go): the chunk's rows are
-	// successive positions of this slot, their tokens set by the caller.
-	if c.DSV4() {
-		s.growDS4(chunkRows)
-		for i := 0; i < n; i++ {
-			s.ds.rslot[i], s.ds.rpos[i] = slot, p0+i
-		}
-		return s.ds4Block(li, l, s.bx[:n*c.ResidW()], n)
+	// The text blocks are the graph's; a vision segment's block runs the
+	// tower's own body.
+	if s.vis == nil {
+		return fmt.Errorf("model: block %d of %s has no graph", li, c.Arch)
 	}
-	if c.AltUp != 0 {
-		s.growAltUpRows(chunkRows)
-		if err := s.altPredict(l, s.bx[:n*c.ResidW()], s.baltPred, n); err != nil {
-			return err
-		}
-	}
+	return s.towerRows(li, l, n)
+}
 
+// towerRows is vision block li (Model.layers[NBlocks:], vision.go) over the
+// picture's n rows in s.bx: its norm, biased q, k and v [each clamped], the
+// q/k and v norms, the rotary and the page write (visPrep), the attention over
+// its key runs (visAttend), o, [its post-norm,] the residual; the MLP's norm,
+// the gated MLP or the ungated one with their biases [each matrix clamped],
+// [its post-norm,] and the residual.
+func (s *State) towerRows(li int, l *layer, n int) error {
+	c := s.c
+	ne, kvDim, qDim := c.NEmbd, c.KVDimAt(li), c.QDimAt(li)
 	tn := s.tick()
-	// Kimi-K3's attention reads its mix over the bank (k3.go).
-	attnIn := s.bx
-	if c.Q4E() {
-		// The n-gram embedding, then the attention's hyper-connection mix
-		// (q4e.go).
-		s.growQ4E(chunkRows)
-		x := s.bx[:n*c.ResidW()]
-		if c.NGramAt(li) {
-			if s.rows != nil {
-				s.rows.ngBase = base
-			}
-			if err := s.ngramApply(li, l, x, n, nil, func(int) (*State, int) { return s, slot },
-				func(i int) int32 { return s.q4.rid[i] }); err != nil {
-				return err
-			}
-		}
-		if err := s.hcMix(x, n, &l.q4e.attn); err != nil {
-			return err
-		}
-		attnIn = s.q4.mix
-	}
-	if c.ResAttn() {
-		var err error
-		if attnIn, err = s.k3AttnIn(li, l, s.bx[:n*c.ResidW()], n); err != nil {
-			return err
-		}
-	}
-	s.batchNormB(s.bh, attnIn, l.attnNorm, l.attnNormB, c.NEmbd, n)
-	if c.AltUp != 0 {
-		for r := 0; r < n; r++ {
-			if err := s.laurel(l, s.bh[r*c.NEmbd:(r+1)*c.NEmbd], s.baltLaur[r*c.NEmbd:(r+1)*c.NEmbd]); err != nil {
-				return err
-			}
-		}
-	}
+	s.batchNormB(s.bh, s.bx, l.attnNorm, l.attnNormB, ne, n)
 	s.tock(opRMSNorm, tn)
-	// The linear layer's recurrence is a per-row loop: each row's state
-	// depends on the row before it, and a batched recurrence would be a
-	// different algorithm (a chunked scan). Its projections are not
-	// sequential and run as GEMMs over the chunk (linrows.go).
-	// A block that attends as well (Falcon-H1) leaves its mixer's rows in bhf
-	// and runs attention from the same bh.
-	kind := c.LayerKind(li)
-	if kind.Recurrent() {
-		// The projections as GEMMs over the chunk around the row loop
-		// (linrows.go); the rows overwrite bh, so the output projection
-		// waits for the loop to finish.
-		outRows := s.bh
-		if kind.Attends() {
-			outRows = s.bhf
-		}
-		if err := s.mixerChunk(li, l, slot, base, outRows, n); err != nil {
-			return err
-		}
+	if _, err := s.projectQ(l, s.bq, s.ogate, s.clampIn(l, clampQ, s.bh[:n*ne]), n, true); err != nil {
+		return err
 	}
-	if !kind.Attends() {
-	} else if c.MLA() {
-		// One call replaces q, k, v and the attnPrep loop: it leaves
-		// every row's absorbed query in s.bmlaAbs and every row's
-		// latent in the cache.
-		if err := s.mlaProjectRows(li, l, n, s.bcs, s.bcsSWA,
-			func(i int) (int, int) { return slot, p0 + i }); err != nil {
-			return err
-		}
-	} else {
-		kvDim, qDim := c.KVDimAt(li), c.QDimAt(li)
-		if _, err := s.projectQ(l, s.bq, s.ogate, s.clampIn(l, clampQ, s.bh[:n*c.NEmbd]), n, true); err != nil {
-			return err
-		}
-		s.clampOut(l, clampQ, s.bq[:n*qDim])
-		// A KV-sharing block: q alone, then its source's history.
-		if c.KVShared(li) {
-			for i := 0; i < n; i++ {
-				s.attnPrep(l, s.bq[i*qDim:(i+1)*qDim], nil, nil,
-					s.ropeTable(li, s.bcs, s.bcsSWA, i), li, slot, p0+i)
-			}
-			goto attend
-		}
-		if err := s.mm(s.bk, l.wk, s.clampIn(l, clampK, s.bh[:n*c.NEmbd]), n); err != nil {
-			return err
-		}
-		s.addBiasRows(s.bk, l.bk, n)
-		s.clampOut(l, clampK, s.bk[:n*kvDim])
-		if l.vFromK {
-			// v is k's projection (Gemma 4's global layers), copied
-			// before attnPrep norms and rotates k.
-			copy(s.bv[:n*kvDim], s.bk[:n*kvDim])
-		} else if err := s.mm(s.bv, l.wv, s.clampIn(l, clampV, s.bh[:n*c.NEmbd]), n); err != nil {
-			return err
-		}
-		s.addBiasRows(s.bv, l.bv, n)
-		if !l.vFromK {
-			s.clampOut(l, clampV, s.bv[:n*kvDim])
-		}
-		// MiniMax Sparse Attention's indexer key and query, every row's
-		// (msa.go).
-		msa := c.MSAAt(li)
-		if msa {
-			if err := s.msaProjectRows(l, n, s.bcs, s.bcsSWA, li); err != nil {
-				return err
-			}
-		}
-		qsa := c.QSAAt(li)
-		if qsa {
-			if err := s.qsaProjectRows(l, n, s.bcs, s.bcsSWA, li); err != nil {
-				return err
-			}
-		}
-
-		// RoPE and the cache write must both finish for the WHOLE chunk
-		// before any attention runs: token i attends to earlier tokens of
-		// this same chunk, whose K and V are only valid once written.
-		if s.vis != nil {
-			// A picture's rows, on the pool: the one page the block was lent
-			// holds every row, so no row grows or faults it (visPrepRows).
-			s.visPrep(li, n)
-			goto attend
-		}
-		for i := 0; i < n; i++ {
-			pos := p0 + i
-			k, v := s.bk[i*kvDim:(i+1)*kvDim], s.bv[i*kvDim:(i+1)*kvDim]
-			if msa {
-				k, v = s.msaRowOf(li, i, k, v)
-			}
-			if qsa {
-				k, v = s.qsaRowOf(li, i, k, v)
-			}
-			// This row's rotary table, built once above and exactly NRot
-			// wide, shared by all heads of this token.
-			s.attnPrep(l, s.bq[i*qDim:(i+1)*qDim], k, v,
-				s.ropeTable(li, s.bcs, s.bcsSWA, i), li, slot, pos)
-		}
+	s.clampOut(l, clampQ, s.bq[:n*qDim])
+	if err := s.mm(s.bk, l.wk, s.clampIn(l, clampK, s.bh[:n*ne]), n); err != nil {
+		return err
 	}
-attend:
-	if kind.Attends() {
-
-		qDim, mla := c.QDimAt(li), c.MLA()
-		if s.vis != nil {
-			// A vision segment's rows attend over their key runs, the whole
-			// image or a window, from the page this block wrote (vision.go).
-			ta := s.tick()
-			s.visAttend(li, n)
-			s.tock(opAttn, ta)
-		} else {
-			s.attendRows(li, l, slot, p0, n, qDim, scale, bidir, mla)
-		}
-
-		// The output gate goes before the projection; see forward.go.
-		if mla {
-			// W_v un-absorbs out of the latent and wo follows, both
-			// inside mlaOutRows, with Kimi-K3's output gate between them.
-			if err := s.mlaOutRows(l, n); err != nil {
-				return err
-			}
-		} else {
-			asrc := s.bxb
-			if c.AttnOutGate {
-				s.applyOutGate(s.ogate, s.bxb, n)
-				s.jit.NewInput()
-				asrc = s.ogate
-			}
-			// BitNet's norm over the attention output, before wo.
-			if l.attnSubNorm != nil {
-				tn := s.tick()
-				s.batchNorm(asrc, asrc, l.attnSubNorm, qDim, n)
-				s.jit.NewInput()
-				s.tock(opRMSNorm, tn)
-			}
-			if err := s.mm(s.bh, l.wo, s.clampIn(l, clampO, asrc[:n*qDim]), n); err != nil {
-				return err
-			}
-			s.clampOut(l, clampO, s.bh[:n*c.NEmbd])
-		}
-		// Before the residual, for every architecture.
-		s.addBiasRows(s.bh, l.bo, n)
-		if kind.Recurrent() {
-			s.addInto(s.bh[:n*c.NEmbd], s.bhf[:n*c.NEmbd])
-		}
+	s.addBiasRows(s.bk, l.bk, n)
+	s.clampOut(l, clampK, s.bk[:n*kvDim])
+	if err := s.mm(s.bv, l.wv, s.clampIn(l, clampV, s.bh[:n*ne]), n); err != nil {
+		return err
 	}
-	// gemma2/gemma3 normalise the attention output before the residual,
-	// as forward.go does; TestPrefillMatchesForward catches a miss.
+	s.addBiasRows(s.bv, l.bv, n)
+	s.clampOut(l, clampV, s.bv[:n*kvDim])
+	// A picture's rows, on the pool: the one page the block was lent holds
+	// every row, so no row grows or faults it (visPrepRows).
+	s.visPrep(li, n)
+	ta := s.tick()
+	s.visAttend(li, n)
+	s.tock(opAttn, ta)
+	if err := s.mm(s.bh, l.wo, s.clampIn(l, clampO, s.bxb[:n*qDim]), n); err != nil {
+		return err
+	}
+	s.clampOut(l, clampO, s.bh[:n*ne])
+	s.addBiasRows(s.bh, l.bo, n)
 	if l.postAttnNorm != nil {
 		tn := s.tick()
-		s.batchNorm(s.bh, s.bh, l.postAttnNorm, c.NEmbd, n)
+		s.batchNorm(s.bh, s.bh, l.postAttnNorm, ne, n)
 		s.tock(opRMSNorm, tn)
 	}
 	tr := s.tick()
-	if c.Q4E() {
-		s.hcPlace(s.bx[:n*c.ResidW()], n, s.bh)
-	} else if c.ResAttn() {
-		s.k3Resid(li, s.bx, s.bh, n)
-	} else {
-		s.addInto(s.bx[:n*c.NEmbd], s.bh[:n*c.NEmbd])
-	}
-	if c.AltUp != 0 {
-		s.laurelJoin(s.bx[:n*c.NEmbd], s.baltLaur[:n*c.NEmbd])
-	}
+	s.addInto(s.bx[:n*ne], s.bh[:n*ne])
 	s.tock(opResid, tr)
-	// A block with no FFN ends at the first residual; see forward.go.
-	if l.noFFN {
-		return nil
-	}
 
 	tn = s.tick()
-	ffnIn := s.bh
-	if c.ResAttn() {
-		in, err := s.k3FFNIn(li, l, s.bx[:n*c.ResidW()], n)
-		if err != nil {
-			return err
-		}
-		s.batchNormB(s.bh, in, l.ffnNorm, l.ffnNormB, c.NEmbd, n)
-	} else if c.Q4E() {
-		if err := s.hcMix(s.bx[:n*c.ResidW()], n, &l.q4e.ffn); err != nil {
-			return err
-		}
-		copy(s.bh[:n*c.NEmbd], s.q4.mix[:n*c.NEmbd])
-	} else {
-		s.batchNormB(s.bh, s.bx, l.ffnNorm, l.ffnNormB, c.NEmbd, n)
-	}
+	s.batchNormB(s.bh, s.bx, l.ffnNorm, l.ffnNormB, ne, n)
 	s.tock(opRMSNorm, tn)
-	// A mixture visits the bank expert-major over the chunk; see
-	// moeBatch. Gemma 4's block runs row by row; see denseMoERows.
-	if l.router.data != nil && c.DenseMoE {
-		if err := s.denseMoERows(li, l, ffnIn, s.bx, n); err != nil {
-			return err
-		}
-	} else if l.router.data != nil && c.ExpertLatent != 0 {
-		if err := s.k3MoEBatch(li, l, ffnIn, s.bx, n); err != nil {
-			return err
-		}
-	} else if l.router.data != nil && c.Q4E() {
-		out := s.q4.out[:n*c.NEmbd]
-		clear(out)
-		if err := s.moeBatch(li, l, ffnIn, out, n); err != nil {
-			return err
-		}
-		s.hcPlace(s.bx[:n*c.ResidW()], n, out)
-	} else if l.router.data != nil {
-		if err := s.moeBatch(li, l, ffnIn, s.bx, n); err != nil {
-			return err
-		}
-	} else {
-		if err := s.mm(s.bgate, l.gate, s.clampIn(l, clampGate, ffnIn[:n*c.NEmbd]), n); err != nil {
-			return err
-		}
-		s.clampOut(l, clampGate, s.bgate[:n*c.NFFNAt(li)])
-		if err := s.mm(s.bup, l.up, s.clampIn(l, clampUp, ffnIn[:n*c.NEmbd]), n); err != nil {
-			return err
-		}
-		s.clampOut(l, clampUp, s.bup[:n*c.NFFNAt(li)])
-		// A gated MLP with biases (Qwen2.5-VL's vision blocks); nil and
-		// skipped on every text block.
-		s.addBiasRows(s.bgate, l.gateB, n)
-		s.addBiasRows(s.bup, l.upB, n)
-		gate, up := s.bgate[:n*c.NFFNAt(li)], s.bup[:n*c.NFFNAt(li)]
-		tac := s.tick()
-		s.gaussTopK(li, gate, c.NFFNAt(li))
-		s.actmulAll(gate, up, act)
-		s.tock(opAct, tac)
-		// BitNet's norm over the product, before down.
-		if l.ffnSubNorm != nil {
-			tn := s.tick()
-			s.batchNorm(gate, gate, l.ffnSubNorm, c.NFFNAt(li), n)
-			s.jit.NewInput()
-			s.tock(opRMSNorm, tn)
-		}
-		if err := s.mm(s.bh, l.down, s.clampIn(l, clampDown, gate), n); err != nil {
-			return err
-		}
-		s.clampOut(l, clampDown, s.bh[:n*c.NEmbd])
-		s.addBiasRows(s.bh, l.downB, n)
-		if l.postFFNNorm != nil {
-			tn := s.tick()
-			s.batchNorm(s.bh, s.bh, l.postFFNNorm, c.NEmbd, n)
-			s.tock(opRMSNorm, tn)
-		}
-		tr = s.tick()
-		s.addInto(s.bx[:n*c.NEmbd], s.bh[:n*c.NEmbd])
-		s.tock(opResid, tr)
-	}
-	if c.AltUp != 0 {
-		if err := s.altCorrect(li, l, s.bx[:n*c.ResidW()], s.baltPred, s.bple, n); err != nil {
-			return err
-		}
-	} else if err := s.pleRows(li, l, s.bx, n); err != nil {
+	ff := c.NFFNAt(li)
+	if err := s.mm(s.bup, l.up, s.clampIn(l, clampUp, s.bh[:n*ne]), n); err != nil {
 		return err
 	}
-	s.layerOutScale(l, s.bx[:n*c.NEmbd])
+	s.clampOut(l, clampUp, s.bup[:n*ff])
+	s.addBiasRows(s.bup, l.upB, n)
+	hid := s.bup[:n*ff]
+	tac := s.tick()
+	if l.gate.e != nil {
+		// Qwen2.5-VL's and Pixtral's gated MLP, Qwen2.5-VL's with biases.
+		if err := s.mm(s.bgate, l.gate, s.clampIn(l, clampGate, s.bh[:n*ne]), n); err != nil {
+			return err
+		}
+		s.clampOut(l, clampGate, s.bgate[:n*ff])
+		s.addBiasRows(s.bgate, l.gateB, n)
+		hid = s.bgate[:n*ff]
+		s.actmulAll(hid, s.bup[:n*ff], c.Act)
+	} else {
+		s.ungatedAct(l, hid)
+	}
+	s.jit.NewInput()
+	s.tock(opAct, tac)
+	if err := s.mm(s.bh, l.down, s.clampIn(l, clampDown, hid), n); err != nil {
+		return err
+	}
+	s.clampOut(l, clampDown, s.bh[:n*ne])
+	s.addBiasRows(s.bh, l.downB, n)
+	if l.postFFNNorm != nil {
+		tn := s.tick()
+		s.batchNorm(s.bh, s.bh, l.postFFNNorm, ne, n)
+		s.tock(opRMSNorm, tn)
+	}
+	tr = s.tick()
+	s.addInto(s.bx[:n*ne], s.bh[:n*ne])
+	s.tock(opResid, tr)
+	s.layerOutScale(l, s.bx[:n*ne])
 	return nil
 }
 

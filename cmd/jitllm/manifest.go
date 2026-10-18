@@ -87,8 +87,7 @@ type manifestPlacement struct {
 
 type manifestBlock struct {
 	Block    int               `json:"block"`
-	Path     map[string]string `json:"path"` // phase ("prompt", "decode") -> "graph", "hand", "device-graph", "device-hand", mixed with "+"
-	Why      string            `json:"uncovered,omitempty"`
+	Path     map[string]string `json:"path"` // phase ("prompt", "decode") -> "graph", "device-graph", mixed with "+"
 	Rewrites []string          `json:"rewrites,omitempty"`
 	// Lowering is each graph op's lowering choice (model.OpLowering).
 	Lowering []string `json:"lowering,omitempty"`
@@ -100,7 +99,7 @@ func (r *runManifest) paths(m *model.Model, phase string, ps []model.BlockPath) 
 		r.Blocks = make([]manifestBlock, len(ps))
 		for li := range r.Blocks {
 			b := &r.Blocks[li]
-			b.Block, b.Path, b.Why = li, map[string]string{}, ps[li].Why
+			b.Block, b.Path = li, map[string]string{}
 			for _, d := range m.BlockRewrites(li) {
 				b.Rewrites = append(b.Rewrites, d.String())
 			}
@@ -114,13 +113,8 @@ func (r *runManifest) paths(m *model.Model, phase string, ps []model.BlockPath) 
 		if p.Graph > 0 {
 			on = append(on, "graph")
 		}
-		if p.Hand > 0 {
-			on = append(on, "hand")
-		}
-		if p.Device > 0 && p.DeviceGraphed {
+		if p.Device > 0 {
 			on = append(on, "device-graph")
-		} else if p.Device > 0 {
-			on = append(on, "device-hand")
 		}
 		r.Blocks[li].Path[phase] = strings.Join(on, "+")
 	}

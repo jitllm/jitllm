@@ -312,13 +312,13 @@ func cfgMut(m *Model, f func(c *Config)) func() {
 // place of a LayerNorm that stores a bias) leaves the graphs as Open compiled
 // them, and the violation reaches the lowering through mutatedLowering.
 func regraph(m *Model) {
-	was, why := m.graphs, m.graphWhy
+	was := m.graphs
 	// A violation that drops an op leaves its tensor stored: the graph
 	// without the op is the violation, not an uncovered block.
 	m.laxUnbound = true
 	defer func() { m.laxUnbound = false }()
 	if m.buildGraphs() != nil {
-		m.graphs, m.graphWhy = was, why
+		m.graphs = was
 	}
 }
 

@@ -2,7 +2,6 @@ package model
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"testing"
 
@@ -47,7 +46,6 @@ func pathsRun(t *testing.T, m *Model, g *tier.GPU) []BlockPath {
 	out := states[0].BlockPaths()
 	for li, p := range states[1].BlockPaths() {
 		out[li].Graph += p.Graph
-		out[li].Hand += p.Hand
 		out[li].Device += p.Device
 		// The second session may place blocks the first ran at home (a card
 		// with room for one session's history): the merged record's device
@@ -57,21 +55,14 @@ func pathsRun(t *testing.T, m *Model, g *tier.GPU) []BlockPath {
 	return out
 }
 
-// legacyBlocks is the gate's check on a covered model: an error naming every
-// text block that ran the hand-written body, or that ran on neither the
-// graph's host lowering nor a device with a graphed plan; a device arm must
-// have run some block on the device.
+// legacyBlocks is the gate's check: an error naming every text block that
+// ran on neither the graph's host lowering nor a device with a graphed plan;
+// a device arm must have run some block on the device.
 func legacyBlocks(paths []BlockPath, device bool) error {
 	var bad []string
 	onDev, graphed := 0, 0
 	for li, p := range paths {
 		switch {
-		case p.Why != "" && slices.Contains(UncoveredReasons, p.Why) && p.Graph == 0 && !p.DeviceGraphed:
-			// A block the op language does not state, by its named reason
-			// (smollm3's NoPE block beside its covered ones).
-			continue
-		case p.Hand != 0:
-			bad = append(bad, fmt.Sprintf("block %d ran the hand-written body %d times (%q)", li, p.Hand, p.Why))
 		case p.Device > 0 && !p.DeviceGraphed:
 			bad = append(bad, fmt.Sprintf("block %d ran on the device with a plan not lowered from the graph", li))
 		case p.Device == 0 && p.Graph == 0:
@@ -115,9 +106,8 @@ func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
 			}
 			defer m.Close()
 			for li := 0; li < m.Cfg.NLayer; li++ {
-				why := m.GraphUncovered(li)
-				if why == "" && m.BlockGraph(li) == nil || why != "" && !slices.Contains(UncoveredReasons, why) {
-					t.Fatalf("block %d is neither covered by default nor named: %q", li, why)
+				if m.BlockGraph(li) == nil {
+					t.Fatalf("block %d opened with no graph", li)
 				}
 			}
 			paths := pathsRun(t, m, nil)
@@ -139,44 +129,32 @@ func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
 					t.Logf("%s: block 0 %+v", spec, paths[0])
 				})
 			}
-			// The violation: a covered block forced off the graph. A model
-			// with no hand-written body has nothing to force it onto; its
-			// violation is TestHandlessModelsHaveNoHandWrittenBody's.
-			if why := m.handless(); why != "" {
-				t.Logf("no violation arm: %s", why)
-				return
-			}
-			vb := 0
-			for m.graphs[vb] == nil {
-				vb++
-			}
-			saved := m.graphs[vb]
-			m.graphs[vb] = nil
-			err = legacyBlocks(pathsRun(t, m, nil), false)
-			m.graphs[vb] = saved
+			// The violation: the graph is every block's only body, so a
+			// block that ran nowhere is the record the check must refuse.
+			paths[len(paths)-1] = BlockPath{}
+			err = legacyBlocks(paths, false)
 			if err == nil {
-				t.Fatal("a block forced to the hand-written body passed the check")
+				t.Fatal("a block that ran through no graph passed the check")
 			}
 			t.Logf("violation fires: %v", err)
 		})
 	}
 }
 
-// TestEveryTextBlockIsCovered: every model the graph's gates run opens with
-// the graph strict (WithBlockGraph(true)), which refuses a model with any text
-// block the op language does not state. The named list of reasons
-// (UncoveredReasons) has no model behind it: a block that falls to the
-// hand-written body is an open error here, not a counted fallback.
+// TestEveryTextBlockIsCovered: every model the graph's gates run opens, every
+// text block (the trunk's and the prediction blocks') with its graph. A block
+// the op language does not state refuses the model at Open by its reason on
+// the named list (UncoveredReasons), so an open is the coverage.
 func TestEveryTextBlockIsCovered(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "Qwen3-MOE-4x0.6B-Q4_K_M", "olmoe-1b-7b-0924-instruct-Q4_K_M", "synth-qwen2moe", "synth-glm4moe", "synth-ernie45moe", "synth-bailingmoe2", "synth-dots1", "synth-minimaxm2", "synth-seedoss", "synth-smollm3", "synth-lfm2", "synth-phi2", "synth-starcoder", "synth-starcoder2", "synth-commandr", "synth-cohere2", "synth-stablelm", "synth-stablelm-par", "synth-falcon", "synth-falcon40", "synth-nemotron", "synth-dbrx", "synth-apertus", "synth-glm4", "synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-deepseek", "synth-deepseek-lite", "synth-deepseek-dense", "synth-deepseek-yarn", "synth-deepseek-yarn-af", "synth-glm4moelite", "synth-kimilinear", "synth-gemma4", "synth-gemma4-kv", "synth-gemma4-e", "synth-gemma4-moe", "synth-hunyuan", "synth-hunyuanmoe", "synth-llama4", "synth-llama4-q8", "synth-qwen2vl", "synth-qwen25vl", "synth-qwen3vl", "synth-glm4vmoe", "synth-granitehybrid", "synth-granitehybridmoe", "synth-lfm2moe", "synth-nemotronh", "synth-nemotronhmoe", "synth-falconh1", "synth-deepseek32", "synth-minimaxm3", "synth-qwen4exp", "synth-hunyuanvl", "synth-gemma3n", "synth-deepseek4", "synth-mamba2", "synth-falconmamba", "synth-mamba1", "synth-jamba", "synth-qwen35-hybrid-mtp", "synth-qwen35moe-hybrid-mtp", "Qwen3.5-0.8B-Q4_K_M", "synth-qwen35vl", "synth-kimik3", "synth-mixtral", "synth-mistral3", "synth-phi3", "synth-qwen2", "synth-ernie45", "synth-olmo3", "synth-kimivl", "synth-pixtral"} {
 		t.Run(name, func(t *testing.T) {
-			m, err := Open(graphModel(t, name), noTune, WithBlockGraph(true))
+			m, err := Open(graphModel(t, name), noTune)
 			if err != nil {
 				t.Fatal(err)
 			}
 			for li := range m.Cfg.NLayer + m.Cfg.NMTP {
-				if why := m.GraphUncovered(li); why != "" {
-					t.Errorf("block %d is not covered: %s", li, why)
+				if m.BlockGraph(li) == nil {
+					t.Errorf("block %d opened with no graph", li)
 				}
 			}
 			m.Close()

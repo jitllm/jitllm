@@ -2,7 +2,6 @@ package model
 
 import (
 	"os"
-	"slices"
 	"strings"
 	"testing"
 
@@ -54,143 +53,22 @@ func graphDecode(t *testing.T, m *Model, n, frames int) ([][]float32, int, float
 	return out, s.GraphBlocks(), allocs
 }
 
-// TestBlockGraphMatchesTheHandPath: llama's block and qwen3's (per-head q/k
-// norm) run through the block graph's lowering give the hand-written body's
-// logits bit for bit at every position, the graph path is the one that ran
-// (every block, every token), a warm token allocates nothing resident or
-// paged, a page budget below the model gives the same answer, and the comparison can tell two
-// different computations apart (an f16 cache against f32).
-//
-// The models with a parallel residual or an ungated FFN (phi2, stablelm-par,
-// falcon, command-r, cohere2, starcoder, starcoder2, nemotron, apertus, arcee,
-// Nemotron-H) are not in the list: the hand-written body no longer has
-// either, so their control arm refuses to open
-// (TestHandlessModelsHaveNoHandWrittenBody); they matched it bit for bit on
-// this gate before it was deleted, and their transformers gates hold them.
-func TestBlockGraphMatchesTheHandPath(t *testing.T) {
-	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "Qwen3-MOE-4x0.6B-Q4_K_M", "olmoe-1b-7b-0924-instruct-Q4_K_M", "synth-qwen2moe", "synth-glm4moe", "synth-ernie45moe", "synth-bailingmoe2", "synth-dots1", "synth-minimaxm2", "synth-seedoss", "synth-smollm3", "synth-lfm2", "synth-stablelm", "synth-dbrx", "synth-glm4", "synth-olmo2", "synth-exaone4", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-deepseek", "synth-deepseek-lite", "synth-deepseek-dense", "synth-deepseek-yarn", "synth-deepseek-yarn-af", "synth-glm4moelite", "synth-kimilinear", "synth-gemma4", "synth-gemma4-kv", "synth-gemma4-e", "synth-gemma4-moe", "synth-gemma3n", "synth-qwen4exp", "synth-deepseek32", "synth-minimaxm3", "synth-deepseek4", "synth-kimik3", "synth-falconh1", "synth-hunyuanvl", "synth-hunyuan", "synth-hunyuanmoe", "synth-llama4", "synth-llama4-q8", "synth-qwen2vl", "synth-qwen25vl", "synth-qwen3vl", "synth-glm4vmoe", "synth-granitehybrid", "synth-granitehybridmoe", "synth-lfm2moe", "synth-mamba2", "synth-falconmamba", "synth-mamba1", "synth-jamba", "synth-qwen35-hybrid-mtp", "synth-qwen35moe-hybrid-mtp", "Qwen3.5-0.8B-Q4_K_M"} {
-		t.Run(name, func(t *testing.T) {
-			p := graphModel(t, name)
-			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer ctl.Close()
-			// The default mode: a model whose blocks the graph states only in
-			// part (smollm3's NoPE block, lfm2's recurrent ones) runs the rest
-			// hand-written, each for its named reason.
-			gm, err := Open(p, noTune, WithKVF16(false))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer gm.Close()
-			nl := 0
-			for li := range gm.Cfg.NLayer {
-				if gm.BlockGraph(li) != nil {
-					nl++
-				} else {
-					t.Logf("block %d hand-written: %s", li, gm.GraphUncovered(li))
-				}
-			}
-			if nl == 0 {
-				t.Fatal("no block of the model is on the graph: this gate proved nothing")
-			}
-			const n = 16
-			var want [][]float32
-			for _, budget := range []int{0, max(1, gm.Cfg.NLayer/3)} {
-				ref, ran, refAllocs := graphDecode(t, ctl, n, budget)
-				if ran != 0 {
-					t.Fatalf("the control ran %d graph blocks", ran)
-				}
-				if budget == 0 {
-					want = ref
-				}
-				got, ran, allocs := graphDecode(t, gm, n, budget)
-				t.Logf("budget %d frames: warm allocations, graph %.0f, hand-written %.0f", budget, allocs, refAllocs)
-				if want := nl * (len(got) + 5); ran != want { // AllocsPerRun runs once more than asked
-					t.Fatalf("budget %d: %d blocks ran through the graph, want %d", budget, ran, want)
-				}
-				// The graph adds no allocation: zero where the hand-written path
-				// makes none, and no more than it where a budget below the
-				// model pages.
-				if allocs > refAllocs {
-					t.Errorf("budget %d: a warm graph token allocates %.1f times, the hand-written %.1f", budget, allocs, refAllocs)
-				}
-				// Zero at every budget: a paged token faults its blocks in
-				// through the File's page readers (format/jlm/pageio.go),
-				// which allocate nothing warm.
-				if allocs != 0 || refAllocs != 0 {
-					t.Errorf("budget %d: a warm token allocates %.1f times on the graph, %.1f hand-written", budget, allocs, refAllocs)
-				}
-				for i := range want {
-					for j := range want[i] {
-						if got[i][j] != want[i][j] {
-							t.Fatalf("budget %d: position %d logit %d: graph %v, hand-written %v", budget, i, j, got[i][j], want[i][j])
-						}
-					}
-				}
-			}
-			// The violation: the same comparison over a different computation
-			// must fire.
-			f16, err := Open(p, noTune, WithKVF16(true))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer f16.Close()
-			other, _, _ := graphDecode(t, f16, n, 0)
-			differ := false
-			for i := range want {
-				for j := range want[i] {
-					differ = differ || other[i][j] != want[i][j]
-				}
-			}
-			if !differ {
-				// A model with no KV cache, or whose cache is f32 whatever is
-				// asked (QSA's pooled keys, DeepSeek V4's rows): the different
-				// computation is the first attending block's norm scaled by
-				// two (a recurrent block's own norms can absorb a scale of its
-				// input), or the first block's where none attends.
-				li := 0
-				for i := gm.Cfg.NLayer - 1; i >= 0; i-- {
-					if gm.Cfg.LayerKind(i).Attends() {
-						li = i
-					}
-				}
-				// A block with no attention norm (Qwen3.8-Flash-Next's) has its
-				// stream mix's.
-				dst := &f16.layers[li].attnNorm
-				if len(*dst) == 0 && f16.layers[li].q4e != nil {
-					dst = &f16.layers[li].q4e.attn.norm
-				}
-				w := slices.Clone(*dst)
-				for i := range w {
-					w[i] *= 2
-				}
-				*dst = w
-				other, _, _ = graphDecode(t, f16, n, 0)
-				for i := range want {
-					for j := range want[i] {
-						differ = differ || other[i][j] != want[i][j]
-					}
-				}
-			}
-			if !differ {
-				t.Fatal("a different computation gave the same logits bit for bit: the comparison cannot see a change")
-			}
-		})
-	}
-}
-
-// TestBlockGraphRefusesWhatItDoesNotCover: a model with blocks the op
-// language does not state (gemma3n's AltUp streams, LAuReL and gaussian
-// top-k) is refused at Open under WithBlockGraph(true), naming why, rather
-// than run through a lowering that would drop them.
+// TestBlockGraphRefusesWhatItDoesNotCover: a block whose configuration states
+// what the op language does not (a value head of its own width beside a GQA
+// attention) refuses the model at Open, naming why, rather than run through a
+// lowering that would drop it -- there is no other body to run it.
 func TestBlockGraphRefusesWhatItDoesNotCover(t *testing.T) {
-	p := graphModel(t, "synth-gemma3n")
-	m, err := Open(p, noTune, WithBlockGraph(true))
+	m, err := Open(graphModel(t, "Qwen3-0.6B-Q8_0"), noTune)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	was := m.Cfg.HeadDimV
+	m.Cfg.HeadDimV = m.Cfg.HeadDim + 2
+	err = m.buildGraphs()
+	m.Cfg.HeadDimV = was
 	if err == nil {
-		m.Close()
-		t.Fatal("gemma3n opened under WithBlockGraph")
+		t.Fatal("a value head the op language does not state built a graph")
 	}
 	named := false
 	for _, r := range UncoveredReasons {
@@ -291,111 +169,6 @@ func graphPrompt(t *testing.T, m *Model, n, frames int) ([][]float32, int) {
 	return out, s.GraphChunks()
 }
 
-// TestBlockGraphPromptMatchesTheHandPath is Slice B's host half: a prompt's
-// chunks run through the block graph's row lowering (graphRows) give the
-// hand-written chunk body's logits bit for bit after the prompt and at the
-// decoded positions after it, every block of every chunk ran through the
-// graph, a page budget below the model gives the same answer, and the
-// comparison fires on a different computation (an f16 cache).
-func TestBlockGraphPromptMatchesTheHandPath(t *testing.T) {
-	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "synth-deepseek", "synth-deepseek-lite", "synth-glm4moelite", "Qwen3-MOE-4x0.6B-Q4_K_M", "synth-glm4moe", "synth-stablelm", "synth-dbrx", "synth-glm4", "synth-olmo2", "synth-exaone4", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-mamba2", "synth-falconmamba", "synth-jamba", "synth-lfm2"} {
-		t.Run(name, func(t *testing.T) {
-			p := graphModel(t, name)
-			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer ctl.Close()
-			gm, err := Open(p, noTune, WithKVF16(false))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer gm.Close()
-			// Several chunks: past the widest chunk the host tuner offers,
-			// within the model's context.
-			n := min(700, gm.Cfg.NCtx-16)
-			// The blocks on the graph; the rest run the hand-written body for
-			// their named reasons in both arms.
-			nl := 0
-			for li := range gm.Cfg.NLayer {
-				if gm.BlockGraph(li) != nil {
-					nl++
-				}
-			}
-			if nl == 0 {
-				t.Fatal("no block of the model is on the graph: this gate proved nothing")
-			}
-			var want [][]float32
-			for _, budget := range []int{0, nl / 3} {
-				ref, ran := graphPrompt(t, ctl, n, budget)
-				if ran != 0 {
-					t.Fatalf("the control ran %d graph chunks", ran)
-				}
-				if budget == 0 {
-					want = ref
-				}
-				got, ran := graphPrompt(t, gm, n, budget)
-				if ran == 0 || ran%nl != 0 || ran/nl < 2 {
-					t.Fatalf("budget %d: %d block-chunks ran through the graph: want every block of two or more chunks", budget, ran)
-				}
-				t.Logf("budget %d frames: %d chunks of %d blocks through the graph", budget, ran/nl, nl)
-				for i := range want {
-					for j := range want[i] {
-						if got[i][j] != want[i][j] {
-							t.Fatalf("budget %d: position %d logit %d: graph %v, hand-written %v", budget, i, j, got[i][j], want[i][j])
-						}
-					}
-				}
-			}
-			f16, err := Open(p, noTune, WithKVF16(true))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer f16.Close()
-			other, _ := graphPrompt(t, f16, n, 0)
-			differ := false
-			for i := range want {
-				for j := range want[i] {
-					differ = differ || other[i][j] != want[i][j]
-				}
-			}
-			if !differ {
-				// A model with no KV cache, or whose cache is f32 whatever is
-				// asked (QSA's pooled keys, DeepSeek V4's rows): the different
-				// computation is the first attending block's norm scaled by
-				// two (a recurrent block's own norms can absorb a scale of its
-				// input), or the first block's where none attends.
-				li := 0
-				for i := gm.Cfg.NLayer - 1; i >= 0; i-- {
-					if gm.Cfg.LayerKind(i).Attends() {
-						li = i
-					}
-				}
-				// A block with no attention norm (Qwen3.8-Flash-Next's) has its
-				// stream mix's.
-				dst := &f16.layers[li].attnNorm
-				if len(*dst) == 0 && f16.layers[li].q4e != nil {
-					dst = &f16.layers[li].q4e.attn.norm
-				}
-				w := slices.Clone(*dst)
-				for i := range w {
-					w[i] *= 2
-				}
-				*dst = w
-				other, _ = graphPrompt(t, f16, n, 0)
-				for i := range want {
-					for j := range want[i] {
-						differ = differ || other[i][j] != want[i][j]
-					}
-				}
-			}
-			if !differ {
-				t.Fatal("a different computation gave the same logits bit for bit: the comparison cannot see a change")
-			}
-		})
-	}
-}
-
 // planFields is the part of a device plan a dense block's operations state.
 type planFields struct {
 	NEmbd, NHead, NKVHead, HeadDim, NRot, NFFN int
@@ -435,12 +208,16 @@ func TestBlockGraphLowersTheDevicePlan(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "synth-stablelm", "synth-dbrx", "synth-glm4", "synth-olmo2", "synth-gptoss", "synth-gemma", "gemma-3-1b-it-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
-			ctl, err := Open(p, noTune, WithBlockGraph(false))
+			// The configuration's plan: the same model with no graph to lower
+			// it from, every block on the device (a host block would need its
+			// graph).
+			ctl, err := Open(p, noTune)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer ctl.Close()
-			gm, err := Open(p, noTune, WithBlockGraph(true))
+			ctl.graphs = make([]*denseLowering, len(ctl.graphs))
+			gm, err := Open(p, noTune)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -466,7 +243,7 @@ func TestBlockGraphLowersTheDevicePlan(t *testing.T) {
 			flipRope(gm.graphs[0].g)
 			ids := gm.Vocab.Encode("The capital of France is", true)
 			toks := []int32{ids[1], ids[2], ids[3], ids[1], ids[2], ids[3]}
-			for _, seam := range []int{-1, gm.Cfg.NLayer / 2} {
+			for _, seam := range []int{-1} {
 				// The tuners pinned (RULE 11c): an equality gate pins every
 				// knob its equality depends on, and the split and prologue
 				// tuners pick a reduction order per tier.
@@ -568,144 +345,4 @@ func graphBatch(t *testing.T, m *Model, frames int) ([][]float32, int) {
 		ran += s.GraphRaggedBlocks()
 	}
 	return out, ran
-}
-
-// TestBlockGraphRaggedStepMatchesTheHandPath is Slice B's batch half: a
-// ragged step's blocks run through the block graph's lowering (graphRagged)
-// give the hand-written step body's logits bit for bit, for a batch State
-// and for a step across sessions, every block of every step ran through the
-// graph, a page budget below the model gives the same answer, and the
-// comparison fires on a different computation (an f16 cache).
-func TestBlockGraphRaggedStepMatchesTheHandPath(t *testing.T) {
-	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "synth-deepseek", "synth-deepseek-lite", "synth-glm4moelite", "Qwen3-MOE-4x0.6B-Q4_K_M", "synth-glm4moe", "synth-stablelm", "synth-dbrx", "synth-glm4", "synth-olmo2", "synth-exaone4", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-mamba2", "synth-falconmamba", "synth-jamba", "synth-lfm2"} {
-		t.Run(name, func(t *testing.T) {
-			p := graphModel(t, name)
-			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer ctl.Close()
-			gm, err := Open(p, noTune, WithKVF16(false))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer gm.Close()
-			// The blocks on the graph; the rest run the hand-written body for
-			// their named reasons in both arms.
-			nl := 0
-			for li := range gm.Cfg.NLayer {
-				if gm.BlockGraph(li) != nil {
-					nl++
-				}
-			}
-			if nl == 0 {
-				t.Fatal("no block of the model is on the graph: this gate proved nothing")
-			}
-			var want [][]float32
-			for _, budget := range []int{0, nl / 3} {
-				ref, ran := graphBatch(t, ctl, budget)
-				if ran != 0 {
-					t.Fatalf("the control ran %d ragged graph blocks", ran)
-				}
-				if budget == 0 {
-					want = ref
-				}
-				got, ran := graphBatch(t, gm, budget)
-				// Step runs a State whose cached rows are read per batch slot
-				// (MLA) alone, a decode, not a ragged step (HostRefusal).
-				arms := 2
-				probe := gm.NewState(8)
-				if probe.HostRefusal() != nil {
-					arms = 1
-				}
-				probe.Close()
-				if ran != arms*6*nl {
-					t.Fatalf("budget %d: %d ragged-step blocks ran through the graph, want %d", budget, ran, arms*6*nl)
-				}
-				for i := range want {
-					for j := range want[i] {
-						if got[i][j] != want[i][j] {
-							t.Fatalf("budget %d: step row %d logit %d: graph %v, hand-written %v", budget, i, j, got[i][j], want[i][j])
-						}
-					}
-				}
-			}
-			f16, err := Open(p, noTune, WithKVF16(true))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer f16.Close()
-			other, _ := graphBatch(t, f16, 0)
-			differ := false
-			for i := range want {
-				for j := range want[i] {
-					differ = differ || other[i][j] != want[i][j]
-				}
-			}
-			if !differ {
-				// A model with no KV cache, or whose cache is f32 whatever is
-				// asked (QSA's pooled keys, DeepSeek V4's rows): the different
-				// computation is the first attending block's norm scaled by
-				// two (a recurrent block's own norms can absorb a scale of its
-				// input), or the first block's where none attends.
-				li := 0
-				for i := gm.Cfg.NLayer - 1; i >= 0; i-- {
-					if gm.Cfg.LayerKind(i).Attends() {
-						li = i
-					}
-				}
-				// A block with no attention norm (Qwen3.8-Flash-Next's) has its
-				// stream mix's.
-				dst := &f16.layers[li].attnNorm
-				if len(*dst) == 0 && f16.layers[li].q4e != nil {
-					dst = &f16.layers[li].q4e.attn.norm
-				}
-				w := slices.Clone(*dst)
-				for i := range w {
-					w[i] *= 2
-				}
-				*dst = w
-				other, _ = graphBatch(t, f16, 0)
-				for i := range want {
-					for j := range want[i] {
-						differ = differ || other[i][j] != want[i][j]
-					}
-				}
-			}
-			if !differ {
-				t.Fatal("a different computation gave the same logits bit for bit: the comparison cannot see a change")
-			}
-		})
-	}
-}
-
-// TestHandlessModelsHaveNoHandWrittenBody: a model with a parallel residual
-// or an ungated FFN runs through the block graph alone. The control arm
-// refuses to open it rather than computing another block, and by default
-// every block is on the graph.
-func TestHandlessModelsHaveNoHandWrittenBody(t *testing.T) {
-	for _, name := range []string{"synth-phi2", "synth-stablelm-par", "synth-falcon", "synth-falcon40", "synth-commandr", "synth-cohere2", "synth-starcoder", "synth-starcoder2", "synth-nemotron", "synth-apertus", "synth-nemotronh"} {
-		t.Run(name, func(t *testing.T) {
-			p := graphModel(t, name)
-			if ctl, err := Open(p, noTune, WithBlockGraph(false)); err == nil {
-				ctl.Close()
-				t.Fatal("the control arm opened a parallel model: a hand-written body would run it")
-			} else if !strings.Contains(err.Error(), "only the block graph runs") {
-				t.Fatalf("refused for another reason: %v", err)
-			}
-			m, err := Open(p, noTune)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer m.Close()
-			if m.handless() == "" {
-				t.Fatal("the fixture has a hand-written body: this gate proved nothing")
-			}
-			for li := range m.Cfg.NLayer {
-				if m.BlockGraph(li) == nil {
-					t.Fatalf("block %d is off the graph: %q", li, m.GraphUncovered(li))
-				}
-			}
-		})
-	}
 }

@@ -1720,16 +1720,6 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 	if os.Getenv("JITLLM_STREAM_TRIAL") == "0" {
 		o = append(o, model.WithStreamTrial(false))
 	}
-	// JITLLM_BLOCK_GRAPH=0 runs every block through the hand-written body
-	// (model.WithBlockGraph(false), the graph's control arm); 1, the default,
-	// runs every covered block through the graph; strict refuses a model with
-	// any block the graph does not cover.
-	switch os.Getenv("JITLLM_BLOCK_GRAPH") {
-	case "0":
-		o = append(o, model.WithBlockGraph(false))
-	case "strict":
-		o = append(o, model.WithBlockGraph(true))
-	}
 	// JITLLM_FUSE=0 runs decode one pool region per op (model.WithBlockFusion).
 	if os.Getenv("JITLLM_FUSE") == "0" {
 		o = append(o, model.WithBlockFusion(false))

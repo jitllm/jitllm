@@ -37,9 +37,10 @@ func TestCoverageIsStructural(t *testing.T) {
 			if err := renamed.buildGraphs(); err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Equal(named.graphWhy, renamed.graphWhy) {
-				t.Fatalf("renaming the architecture moved the blocks' reasons: %q against %q",
-					renamed.graphWhy, named.graphWhy)
+			for li := range named.graphs {
+				if a, b := named.BlockGraph(li), renamed.BlockGraph(li); (a == nil) != (b == nil) || a != nil && len(a.Ops) != len(b.Ops) {
+					t.Fatalf("renaming the architecture moved block %d's graph", li)
+				}
 			}
 			const n = 6
 			want, ranA, _ := graphDecode(t, named, n, 0)
