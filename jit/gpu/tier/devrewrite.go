@@ -63,6 +63,12 @@ func (k devKind) String() string {
 		return "post_norm"
 	case dkMixture:
 		return "mixture"
+	case dkRecurrent:
+		return "recurrent"
+	case dkCopy:
+		return "copy"
+	case dkKVCopy:
+		return "kv_copy"
 	case dkNormQuant:
 		return "norm_quant"
 	case dkAddNorm:
@@ -200,7 +206,7 @@ func (p *devProgram) fused(l *layer, bs *blockScratch, g *devTier, R, nseq int) 
 }
 
 func (p *devProgram) clone() *devProgram {
-	q := &devProgram{f16: p.f16, vals: append([]devType(nil), p.vals...), slots: append([]devSlot(nil), p.slots...),
+	q := &devProgram{f16: p.f16, attends: p.attends, ropes: p.ropes, vals: append([]devType(nil), p.vals...), slots: append([]devSlot(nil), p.slots...),
 		names: append([]string(nil), p.names...)}
 	for _, o := range p.ops {
 		o.Src = append([]int(nil), o.Src...)
@@ -299,6 +305,9 @@ func rwRopeQKV(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq in
 // rwMatVecRes: a matvec whose output only a residual add reads, as the
 // matvec carrying the add.
 func rwMatVecRes(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
+	if residScaled(&bs.p) {
+		return false // a scaled residual: the fused kernel carries no scale
+	}
 	if R != 1 && nseq == 0 {
 		return false // a one-row variant, or a ragged step's grouped one
 	}
@@ -399,6 +408,9 @@ func addNorm(p *devProgram) (int, int, bool) {
 
 // rwAddNormQuant: the add, the norm of the sum and its quantize, one launch.
 func rwAddNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
+	if residScaled(&bs.p) {
+		return false // a scaled residual: the fused kernel carries no scale
+	}
 	if bs.addRmsQ == nil || bs.normVar != nil {
 		return false
 	}
@@ -415,6 +427,9 @@ func rwAddNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, ns
 
 // rwAddNorm: the add and the norm of the sum, one launch.
 func rwAddNorm(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
+	if residScaled(&bs.p) {
+		return false // a scaled residual: the fused kernel carries no scale
+	}
 	if bs.addRms == nil || bs.normVar != nil {
 		return false
 	}
@@ -597,6 +612,9 @@ func resIn(p *devProgram, role jlm.Role, ok func(src devVal) bool) bool {
 // rwOIn: the attention output's quantize and its matvec with the residual,
 // as the matvec quantizing its own operand.
 func rwOIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
+	if residScaled(&bs.p) {
+		return false // a scaled residual: the fused kernel carries no scale
+	}
 	if R != 1 {
 		return false // a one-row variant
 	}
@@ -653,6 +671,9 @@ func downOK(l *layer, bs *blockScratch, g *devTier) bool {
 // rwDownIn: the quantize of a gated product and down with the residual, as
 // down quantizing its own operand.
 func rwDownIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
+	if residScaled(&bs.p) {
+		return false // a scaled residual: the fused kernel carries no scale
+	}
 	if R != 1 {
 		return false // a one-row variant
 	}
@@ -665,6 +686,9 @@ func rwDownIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int
 // rwDownAct: act_mul over a prologue's gate and up, its quantize and down
 // with the residual, as down forming the product as it quantizes.
 func rwDownAct(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
+	if residScaled(&bs.p) {
+		return false // a scaled residual: the fused kernel carries no scale
+	}
 	if R != 1 {
 		return false // a one-row variant
 	}
@@ -762,6 +786,9 @@ func rwNormF16(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq in
 // rwAddNormF16: a residual add, the norm of the sum and the next GEMM's
 // binary16 operand, one launch (kernels.RMSNormF16TRows with add).
 func rwAddNormF16(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
+	if residScaled(&bs.p) {
+		return false // a scaled residual: the fused kernel carries no scale
+	}
 	i, n, ok := addNorm(p)
 	if !ok {
 		return false

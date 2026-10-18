@@ -23,7 +23,7 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 	// rotary and biases; synth-olmo2 post-norms; tiny-qwen3moe and
 	// synth-qwen2moe a routed mixture, the latter with a gated shared expert.
 	for _, name := range []string{"stories15M-q8_0", "synth-qwen2", "synth-glm4", "synth-olmo2", "tiny-qwen3moe-f32",
-		"synth-qwen2moe", "Qwen3-0.6B-Q8_0",
+		"synth-qwen2moe", "synth-mamba2", "synth-lfm2", "synth-granitehybrid", "synth-falconmamba", "Qwen3-0.6B-Q8_0",
 		"Llama-3.2-1B-Instruct-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) {
 			m, err := Open(graphModel(t, name), noTune)
@@ -36,6 +36,7 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 				forms []string
 				prog  string
 				why   string
+				whys  []string
 				first map[string]string
 			}
 			// forced, where given, is fed in place of the arm's own greedy
@@ -84,6 +85,8 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 				a := arm{st: g.Stats()}
 				for li := 0; li < m.Cfg.NLayer; li++ {
 					a.forms = append(a.forms, g.BlockForms(li)["block"])
+					_, why := g.BlockProgram(li)
+					a.whys = append(a.whys, why)
 				}
 				a.prog, a.why = g.BlockProgram(0)
 				a.first = g.BlockForms(0)
@@ -124,7 +127,7 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 			}
 			for li, f := range pa.forms {
 				if f != "program" {
-					t.Fatalf("block %d ran as %q, not the program", li, f)
+					t.Fatalf("block %d ran as %q, not the program: %s", li, f, pa.whys[li])
 				}
 			}
 			worst := 0.0
@@ -139,7 +142,9 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 			prog := pa.prog
 			t.Logf("%d block-steps as programs; worst logit difference from the encoder %.4g over %d tokens\n%s",
 				ps.ProgBlocks, worst, len(pt), prog)
-			if !strings.HasPrefix(prog, "rewrites: ") || strings.HasPrefix(prog, "rewrites: \n") {
+			// A block with an attention or a dense FFN has fusions to take; a
+			// recurrent mixer alone, lowered whole, has none.
+			if strings.Contains(prog, "attend(") && strings.HasPrefix(prog, "rewrites: \n") {
 				t.Fatalf("block 0's program took no rewrite:\n%s", prog)
 			}
 			if strings.Count(prog, "rewrites:") != 2 {

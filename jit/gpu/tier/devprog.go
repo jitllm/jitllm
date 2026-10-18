@@ -68,6 +68,9 @@ const (
 	dkHeadNorm                  // each head's RMSNorm (q's or k's)
 	dkPostNorm                  // a sublayer's output normed before its residual add (post-norm)
 	dkMixture                   // a routed mixture and its shared expert, from route to its sum (mixFFN)
+	dkRecurrent                 // a recurrent mixer with its pre-norm, from the block's row (emitLinear)
+	dkCopy                      // a row moved to another slot (the sum home to the block's row)
+	dkKVCopy                    // an unrotated key and its value copied into the history (NoPE)
 	numBaseKinds                // the fused kinds (devrewrite.go) count on from here
 )
 
@@ -166,11 +169,14 @@ type devProgram struct {
 	// f16 says the program's matvecs are binary16 GEMMs reading the float
 	// rows (a prompt chunk on a card whose twins are all binary16): no
 	// int8 operand, each GEMM converting its row or finding it written.
-	f16   bool
-	vals  []devType
-	slots []devSlot
-	names []string
-	ops   []devOp
+	f16 bool
+	// attends says the program runs an attention: it reads the paged history;
+	// ropes that it rotates q and k.
+	attends, ropes bool
+	vals           []devType
+	slots          []devSlot
+	names          []string
+	ops            []devOp
 }
 
 func (p *devProgram) val(name string, t devType, s devSlot) devVal {
@@ -212,6 +218,8 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	}
 	switch o.Kind {
+	case dkRecurrent, dkCopy, dkKVCopy:
+		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkMixture:
 		if i == 1 {
 			return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
@@ -261,7 +269,9 @@ func lowersOp(k graph.OpKind) bool {
 	case graph.OpNorm, graph.OpMatVec, graph.OpRope, graph.OpKVAppend, graph.OpAttend, graph.OpAdd,
 		graph.OpActMul, graph.OpHeadNorm,
 		// The mixture's ops, lowered whole as one op (dkMixture) for now.
-		graph.OpRoute, graph.OpGather, graph.OpExpertMatVec, graph.OpCombine, graph.OpGateScalar:
+		graph.OpRoute, graph.OpGather, graph.OpExpertMatVec, graph.OpCombine, graph.OpGateScalar,
+		// A recurrent mixer, lowered whole with its pre-norm (emitLinear).
+		graph.OpRecurrent:
 		return true
 	}
 	return false
@@ -285,8 +295,13 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		return nil, "a biased norm"
 	case !actHasKernel(p):
 		return nil, "an activation with no kernel"
-	case p.DenseMoE || l.k3 != nil:
+	case p.DenseMoE || bindsRole(g, jlm.RoleFFNRoutedDown):
+		// Read off the plan and the graph, not the architecture: a dense MLP
+		// beside the mixture, or experts run in a latent (the row taken down
+		// before them).
 		return nil, "a dense MLP beside the mixture, or latent experts"
+	case l.withAttn:
+		return nil, "attention beside a recurrent mixer"
 	}
 	for _, o := range g.Ops {
 		if !lowersOp(o.Kind) {
@@ -366,6 +381,23 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			out := prog.val(name(0), f32(w), s)
 			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{a}, Out: []devVal{out}, Role: role})
 			vals[o.Out[0]] = out
+		case graph.OpRecurrent:
+			// emitLinear runs the block's pre-norm and quantize itself, from
+			// the block's row, and writes the mixer's output: the norm the
+			// graph states before it goes into this op.
+			src := []int{i}
+			x := in(0)
+			if n := len(prog.ops); n > 0 && prog.ops[n-1].Kind == dkNorm && prog.ops[n-1].Out[0] == x {
+				src = append(prog.ops[n-1].Src, i)
+				x = prog.ops[n-1].In[0]
+				prog.ops = prog.ops[:n-1]
+			}
+			if prog.slots[x] != slotX {
+				return nil, "a recurrent mixer not over the block's row"
+			}
+			out := prog.val(name(0), f32(ne), slotOut)
+			prog.ops = append(prog.ops, devOp{Kind: dkRecurrent, Src: src, In: []devVal{x}, Out: []devVal{out}})
+			vals[o.Out[0]] = out
 		case graph.OpRoute:
 			// The mixture: from the router to the value the block's last
 			// residual add reads, lowered whole (mixFFN) over the normed row
@@ -411,7 +443,10 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			}
 		case graph.OpKVAppend:
 			if o.In[0] != kRot {
-				return nil, "a history append of an unrotated key"
+				// A layer without a rotary (NoPE): k and v copied in.
+				hist := prog.val("kv", devType{Elem: elemF32, Layout: layoutKV, Width: kv}, slotKV)
+				prog.ops = append(prog.ops, devOp{Kind: dkKVCopy, Src: []int{i}, In: []devVal{in(0), in(1)}, Out: []devVal{hist}})
+				continue
 			}
 			hist := prog.val("kv", devType{Elem: elemF32, Layout: layoutKV, Width: kv}, slotKV)
 			prog.ops = append(prog.ops, devOp{Kind: dkKVWrite, Src: []int{i - 1, i}, In: []devVal{in(0), in(1)}, Out: []devVal{hist}})
@@ -420,12 +455,23 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkAttend, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}})
 			vals[o.Out[0]] = out
 		case graph.OpAdd:
+			// The add that is the block's output writes its row; another
+			// (the attention's residual, a mixture's sum) the residual's
+			// second slot.
+			home := len(g.Out) == 1 && o.Out[0] == g.Out[0]
 			s := slotX2
-			if adds > 0 {
+			if home && prog.slots[in(0)] != slotX && prog.slots[in(1)] != slotX {
 				s = slotX
 			}
 			out := prog.val(name(0), f32(ne), s)
 			prog.ops = append(prog.ops, devOp{Kind: dkAdd, Src: []int{i}, In: []devVal{in(0), in(1)}, Out: []devVal{out}})
+			if home && s != slotX {
+				// The block's only add reads its row: the sum goes to x2 and
+				// is moved home, as no launch reads what it writes (RULE 13).
+				row := prog.val(name(0)+".home", f32(ne), slotX)
+				prog.ops = append(prog.ops, devOp{Kind: dkCopy, Src: []int{i}, In: []devVal{out}, Out: []devVal{row}})
+				out = row
+			}
 			vals[o.Out[0]] = out
 			adds++
 		case graph.OpActMul:
@@ -435,9 +481,18 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		}
 	}
 	// Pre-norms, post-norms or both (OLMo 2 has no pre-norm: its sublayers
-	// read the residual), but two residual adds ending in the block's row.
-	if adds != 2 || len(g.Out) != 1 || prog.slots[vals[g.Out[0]]] != slotX {
-		return nil, "not a block of two residual adds"
+	// read the residual), one residual add a sublayer (a recurrent mixer
+	// alone has one), ending in the block's row.
+	if adds == 0 || adds > 2 || len(g.Out) != 1 || prog.slots[vals[g.Out[0]]] != slotX {
+		return nil, "not a block of one or two residual adds"
+	}
+	for _, o := range prog.ops {
+		switch o.Kind {
+		case dkAttend:
+			prog.attends = true
+		case dkRopeQ, dkKVWrite:
+			prog.ropes = true
+		}
 	}
 	if err := prog.check(); err != nil {
 		return nil, err.Error()
@@ -526,4 +581,16 @@ func (r progReason) String() string {
 		return "TableSplit"
 	}
 	return ""
+}
+
+// bindsRole reports that some op of g reads a weight of role r.
+func bindsRole(g *graph.Graph, r jlm.Role) bool {
+	for _, o := range g.Ops {
+		for _, w := range o.Weight {
+			if w.Role == r {
+				return true
+			}
+		}
+	}
+	return false
 }

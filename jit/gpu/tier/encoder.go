@@ -851,15 +851,23 @@ func (g *devTier) layersSession(s backend.Session) {
 	var pendNorm, pendConv backend.Kernel
 	// runProg runs block li's device program (devprog.go): each op one launch
 	// of the kernel the encoder's unfused path takes for it, over the scratch
-	// slot the program assigned its values. Decode, one row, paged history.
+	// slot the program assigned its values. A program that attends reads its
+	// history through the block's pages in the device's pool.
 	runProg := func(l *layer, li int, prog *devProgram) {
 		pk := bs.pkv
-		pl := g.kvp.layers[l.kvSrc]
-		if pl == nil {
-			if err == nil {
-				err = fmt.Errorf("tier: block %d has no pages in this device's pool", li)
+		var pl *kvLayerPool
+		var kvBuf backend.Buf
+		if prog.attends {
+			if g.kvp != nil {
+				pl = g.kvp.layers[l.kvSrc]
 			}
-			return
+			if pl == nil {
+				if err == nil {
+					err = fmt.Errorf("tier: block %d has no pages in this device's pool", li)
+				}
+				return
+			}
+			kvBuf = pl.k
 		}
 		qdim := p.NHead * p.HeadDim
 		rcs := bs.cs
@@ -867,7 +875,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			rcs = bs.csSWA
 		}
 		buf := [numSlots]backend.Buf{slotX: bs.x, slotX2: bs.x2, slotH: bs.h, slotQ8: bs.a, slotQ: bs.q, slotK: bs.k,
-			slotV: bs.v, slotQR: bs.qr, slotKV: pl.k, slotXB: bs.xb, slotOut: bs.mvOut, slotG: bs.g, slotU: bs.u, slotAct: bs.act,
+			slotV: bs.v, slotQR: bs.qr, slotKV: kvBuf, slotXB: bs.xb, slotOut: bs.mvOut, slotG: bs.g, slotU: bs.u, slotAct: bs.act,
 			slotQN: bs.qn, slotKN: bs.kn, slotF16: g.f16Buf}
 		// The rewrites legal at one row, on a prompt chunk and on a ragged
 		// step differ: each class keeps its own fused program.
@@ -1073,6 +1081,18 @@ func (g *devTier) layersSession(s backend.Session) {
 				// The routed mixture, as the encoder runs it; its output is
 				// whichever buffer it summed into.
 				buf[slotMix] = mixFFN(l, li)
+				if err != nil {
+					return
+				}
+			case dkKVCopy:
+				lc.la(pk.copyK, R*p.KVRow(), at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
+				lc.la(pk.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), pl.v, bs.zero, pl.tab, pk.pRow)
+			case dkCopy:
+				lc.la(bs.copyRes, R*p.NEmbd, at(o.In[0]), at(o.Out[0]))
+			case dkRecurrent:
+				// The recurrent mixer with its pre-norm and quantize, as the
+				// encoder runs it, ending in bs.mvOut (emitLinear).
+				g.emitLinear(sid, s, bs, l, li, R, rag != nil, p, &err, lc, mvrun, mvrunAct)
 				if err != nil {
 					return
 				}
@@ -1303,18 +1323,18 @@ func (g *devTier) layersSession(s backend.Session) {
 				why = progNotLowered
 			case g.NoProgram:
 				why = progNoProgram
-			case R > 1 && rag == nil && (bs.pkv == nil || !bs.pkv.prefill):
+			case l.prog.attends && R > 1 && rag == nil && (bs.pkv == nil || !bs.pkv.prefill):
 				why = progRowsNotPrefill
 			case len(skip) != 0 || g.blockFaulted():
 				why = progFault
-			case bs.pkv == nil || (R == 1 || rag != nil) && (bs.pkv.cur == nil || bs.pkv.prefill) ||
-				R > 1 && rag == nil && bs.pkv.pf == nil:
+			case l.prog.attends && (bs.pkv == nil || (R == 1 || rag != nil) && (bs.pkv.cur == nil || bs.pkv.prefill) ||
+				R > 1 && rag == nil && bs.pkv.pf == nil):
 				why = progNotPaged
-			case bs.ropeQ == nil || l.noRope || bs.qTemp != nil:
+			case l.prog.ropes && (bs.ropeQ == nil || l.noRope) || l.prog.attends && bs.qTemp != nil:
 				why = progRotary
 			case bs.clampQ != nil || bs.splitQG != nil || bs.sigMul != nil:
 				why = progQKVExtra
-			case bs.normVar != nil || scaled || l.pleGate != nil || l.outScale != nil || l.nResid != nil || p.VNorm:
+			case bs.normVar != nil || l.pleGate != nil || l.outScale != nil || l.nResid != nil || p.VNorm:
 				why = progNormResid
 			case g.TableSplit:
 				why = progTableSplit
