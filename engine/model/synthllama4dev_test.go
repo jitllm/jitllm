@@ -95,7 +95,8 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 				}
 				defer gpu.Close()
 				m.Cfg = c
-				defer func() { m.Cfg = &cfg }()
+				regraph(m)
+				defer func() { m.Cfg = &cfg; regraph(m) }()
 				st := m.NewState(len(g.IDs) + 1)
 				defer st.Close()
 				st.SetDeviceLayers(gpu, -1)

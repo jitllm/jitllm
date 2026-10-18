@@ -1,6 +1,7 @@
 package model
 
 import (
+	"github.com/jitllm/jitllm/engine/graph"
 	"math"
 	"slices"
 
@@ -225,7 +226,33 @@ func perHeadQK(m *Model) func() {
 	undoC := cfgMut(m, func(c *Config) { c.QKNormWide = false })
 	hd := m.Cfg.HeadDim
 	undoL := eachLayer(m, func(l *layer) { l.qNorm, l.kNorm = l.qNorm[:hd], l.kNorm[:hd] })
-	return func() { undoL(); undoC() }
+	// The stored norms are a whole projection wide, so no graph states a
+	// per-head norm over them: the violation is the lowering's, each q/k norm
+	// step of the prologue run per head.
+	type was struct {
+		st   *prepStep
+		unit int
+	}
+	var undo []was
+	for _, lw := range m.graphs {
+		if lw == nil {
+			continue
+		}
+		for i := range lw.prep {
+			st := &lw.prep[i]
+			if (st.kind == graph.OpNorm || st.kind == graph.OpHeadNorm) && st.arg < 2 {
+				undo = append(undo, was{st, st.unit})
+				st.unit = hd
+			}
+		}
+	}
+	return func() {
+		for _, w := range undo {
+			w.st.unit = w.unit
+		}
+		undoL()
+		undoC()
+	}
 }
 
 // postAsPre moves each post-norm to the pre-norm slot of its branch, which is

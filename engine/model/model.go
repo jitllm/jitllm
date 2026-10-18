@@ -1244,6 +1244,10 @@ type Model struct {
 	// graphWhy is each text block's named reason for the hand-written body
 	// (GraphUncovered), "" where the graph covers it.
 	graphWhy []string
+	// laxUnbound lets buildGraphs compile a block whose stored tensors its
+	// graph does not all bind: a test's violation that drops an op (regraph),
+	// never set on a model that runs.
+	laxUnbound bool
 	// deltaGraphs is each gated delta block's sublayer graph (deltagraph.go),
 	// built at every Open; deltaGraphErr the verifier's refusals.
 	deltaGraphs []*deltaGraph

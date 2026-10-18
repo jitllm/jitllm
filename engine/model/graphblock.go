@@ -57,7 +57,6 @@ const (
 	UncoveredStreams       = "several residual streams"
 	UncoveredPLE           = "per-layer embeddings"
 	UncoveredRopeAxes      = "a multi-axis or interleaved rotary"
-	UncoveredVNorm         = "a norm over v"
 	UncoveredNonCausal     = "non-causal attention"
 	UncoveredSparseAct     = "a gaussian top-k activation"
 	UncoveredDoubleFFN     = "a double-width FFN"
@@ -70,7 +69,7 @@ const (
 var UncoveredReasons = []string{UncoveredMixDense, UncoveredMixRouter, UncoveredMixExperts,
 	UncoveredUngated, UncoveredMLA, UncoveredValueWidth,
 	UncoveredKVShared, UncoveredIndexer, UncoveredStreams, UncoveredPLE,
-	UncoveredRopeAxes, UncoveredVNorm,
+	UncoveredRopeAxes,
 	UncoveredNonCausal, UncoveredSparseAct, UncoveredDoubleFFN, UncoveredCompressed,
 	UncoveredRecurrent, UncoveredUnboundTensor}
 
@@ -95,7 +94,9 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredUngated
 	case !c.MLA() && c.QLoraRank != 0:
 		return UncoveredMLA
-	case !c.MLA() && c.HeadDimV != 0 && c.HeadDimV != c.HeadDimAt(li):
+	// A value head of its own width: HeadDimV against the model's head
+	// width (a sliding layer's narrower heads narrow k and v alike, KVDimAt).
+	case !c.MLA() && c.HeadDimV != 0 && c.HeadDimV != c.HeadDim:
 		return UncoveredValueWidth
 	case c.KVShared(li) || c.extraKVHead(li) || c.LayerKind(li).Attends() && !c.MLA() && !hasRole(roles, jlm.RoleAttnV):
 		return UncoveredKVShared
@@ -107,9 +108,7 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredPLE
 	case c.RopeXD:
 		return UncoveredRopeAxes
-	case c.VNorm:
-		return UncoveredVNorm
-	case c.NonCausal || c.BidirSWA:
+	case c.NonCausal:
 		return UncoveredNonCausal
 	case c.NSparse != 0:
 		return UncoveredSparseAct
@@ -202,7 +201,9 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		Ungated: !c.MoEAt(li) && !has(jlm.RoleFFNGate), Clamp: float64(c.ClampKQV),
 		PostNorm: has(jlm.RolePostAttnNorm), NoPreNorm: !has(jlm.RoleAttnNorm), NoRope: !c.RopeAt(li)}
 	d.QKVBias, d.Sinks = has(jlm.RoleAttnQBias), has(jlm.RoleAttnSinks)
-	d.OutGate = c.AttnOutGate
+	d.OutGate, d.VNorm = c.AttnOutGate, c.VNorm
+	d.BidirOff = c.BidirSWA && !c.SWA(li)
+	d.OutScale = has(jlm.RoleLayerOutScale)
 	if c.ResidualScale != 1 {
 		d.ResidScale = c.ResidualScale
 	}
@@ -287,6 +288,8 @@ type denseLowering struct {
 	// absorbed (graph.MLAAbsorb) through mlaProject, the attention over the
 	// latent rows and the un-absorb.
 	mla bool
+	// outScale: the block's output times its stored scalar (layerOutScale).
+	outScale bool
 	// outGate: q's projection carries each head's output gate (projectQ
 	// splits it; applyOutGate after the attention).
 	outGate bool
@@ -419,7 +422,9 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 			if err := run([]step{{graph.OpRope, 0}}); err != nil {
 				return nil, err
 			}
-			if i < len(ops) && ops[i].Kind == graph.OpHeadNorm && len(ops[i].Weight) == 0 {
+			// Llama 4's weightless norm reads the rotated q (Gemma 4's over v
+			// reads v, below).
+			if i < len(ops) && ops[i].Kind == graph.OpHeadNorm && len(ops[i].Weight) == 0 && ops[i].In[0] == ops[i-2].Out[0] {
 				i++
 				if i >= len(ops) || ops[i].Kind != graph.OpHeadNorm || len(ops[i].Weight) != 0 {
 					return nil, fail("head_norm of k with no weight")
@@ -430,6 +435,10 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		}
 		if lw.qkPost && !take(graph.OpHeadNorm, jlm.RoleAttnQNorm) {
 			return nil, fail("head_norm of attn_q_norm after the rotary")
+		}
+		// Gemma 4's weightless norm over v.
+		if i < len(ops) && ops[i].Kind == graph.OpHeadNorm && len(ops[i].Weight) == 0 {
+			i++
 		}
 		if err := run([]step{{graph.OpKVAppend, 0}}); err != nil {
 			return nil, err
@@ -514,6 +523,8 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 	if err := run([]step{{graph.OpAdd, 0}}); err != nil {
 		return nil, err
 	}
+	// Gemma 4's output scalar (layerOutScale).
+	lw.outScale = take(graph.OpScale, jlm.RoleLayerOutScale)
 	if i != len(ops) {
 		return nil, fail("the end of the block")
 	}
@@ -559,7 +570,13 @@ func (m *Model) buildGraphs() error {
 		g := f.Config.Build()
 		// The container holds a tensor the stated block does not read: the
 		// block computes something the op language does not state.
-		if u := graph.Unbound(g, f); len(u) > 0 {
+		if u := graph.Unbound(g, f); len(u) > 0 && m.laxUnbound {
+			// A violation's graph without an op: its tensors stay stored,
+			// unread.
+			for _, r := range u {
+				delete(f.Inventory, r)
+			}
+		} else if len(u) > 0 {
 			if err := refuse(UncoveredUnboundTensor); err != nil {
 				return fmt.Errorf("%w (%v)", err, u)
 			}
@@ -584,9 +601,15 @@ func (m *Model) buildGraphs() error {
 			if o.Kind == graph.OpAttend && o.Attr.Chunked != (m.Cfg.SWA(li) && m.Cfg.SWAChunked) {
 				return fmt.Errorf("model: block %d graph's chunked window is %v, the KV layer's is not", li, o.Attr.Chunked)
 			}
+			if o.Kind == graph.OpAttend && o.Attr.BidirOff != (m.Cfg.BidirSWA && !m.Cfg.SWA(li)) {
+				return fmt.Errorf("model: block %d graph's bidirectional runs off is %v, the attention's is not", li, o.Attr.BidirOff)
+			}
 			if o.Kind == graph.OpGather && o.Attr.WeightIn != m.Cfg.ExpertWeightIn {
 				return fmt.Errorf("model: block %d graph's weight-in is %v and moe's %v", li, o.Attr.WeightIn, m.Cfg.ExpertWeightIn)
 			}
+		}
+		if lw.outScale != (m.layers[li].outScale != 0) {
+			return fmt.Errorf("model: block %d graph's output scale is %v, the layer's is not", li, lw.outScale)
 		}
 		if lw.qk != m.Cfg.QKNormAt(li) || lw.qkPost != (lw.qk && m.Cfg.QKNormPost) ||
 			lw.qkL2 != (m.Cfg.QKL2Norm && m.Cfg.RopeAt(li)) {
@@ -1281,6 +1304,7 @@ var hostLowering = map[graph.OpKind]struct {
 	graph.OpSlice:        {mlaProjectRoutine, false},
 	graph.OpLatentAppend: {mlaProjectRoutine, false},
 	graph.OpAttendLatent: {"absorbed (mla-absorb): attendRow / the chunk's attention over the latent rows, then mlaOutProject's un-absorb", false},
+	graph.OpScale:        {"the generated scale kernel (layerOutScale)", true},
 	graph.OpRecurrent:    {"linearAttn: the recurrent mixer as one routine (mixerChunk, mixerRagged over rows)", false},
 }
 

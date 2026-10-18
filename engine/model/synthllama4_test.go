@@ -178,7 +178,8 @@ func TestSynthLlama4FeaturesAreLoadBearing(t *testing.T) {
 			c := cfg
 			v.mut(&c)
 			m.Cfg = &c
-			defer func() { m.Cfg = &cfg }()
+			regraph(m)
+			defer func() { m.Cfg = &cfg; regraph(m) }()
 			st := m.NewState(len(g.IDs) + 1)
 			defer st.Close()
 			worst := 0.0

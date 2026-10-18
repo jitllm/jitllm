@@ -136,10 +136,10 @@ func Verify(g *Graph, f Facts) error {
 		}
 		switch o.Kind {
 		case OpNorm, OpHeadNorm:
-			// A weightless head norm is Llama 4's, and only where the
-			// configuration states it.
+			// A weightless head norm is Llama 4's over q and k or Gemma 4's
+			// over v, and only where the configuration states one.
 			if o.Kind == OpHeadNorm && len(o.Weight) == 0 && ins(1) && outs(1) {
-				if !c.QKL2Norm || o.Attr.Eps != eps || o.Attr.HeadDim != headDim || headDim <= 0 ||
+				if !c.QKL2Norm && !c.VNorm || o.Attr.Eps != eps || o.Attr.HeadDim != headDim || headDim <= 0 ||
 					width(o.In[0])%headDim != 0 || width(o.Out[0]) != width(o.In[0]) {
 					bad("%s: a weightless head norm the configuration does not state", at)
 				}
@@ -154,6 +154,9 @@ func Verify(g *Graph, f Facts) error {
 			}
 			if width(o.Out[0]) != width(o.In[0]) {
 				bad("%s: width %d into %d", at, width(o.In[0]), width(o.Out[0]))
+			}
+			if o.Kind == OpHeadNorm && (o.Attr.HeadDim <= 0 || o.Weight[0].K != o.Attr.HeadDim || width(o.In[0])%o.Attr.HeadDim != 0) {
+				bad("%s: a scale of %d over heads of %d in a row of %d", at, o.Weight[0].K, o.Attr.HeadDim, width(o.In[0]))
 			}
 			if o.Kind == OpNorm && o.Weight[0].K != width(o.In[0]) {
 				bad("%s: scale of %d over a row of %d", at, o.Weight[0].K, width(o.In[0]))
@@ -210,7 +213,7 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: reads no kv version this block wrote: this position's row is never in the history", at)
 			}
 			if a.NHead != c.NHead || a.NKVHead != c.NKVHead || a.HeadDim != c.HeadDim || a.Scale != c.Scale ||
-				a.Window != c.Window || a.Chunked != c.Chunked || a.Softcap != c.Softcap || a.TempScale != c.TempScale ||
+				a.Window != c.Window || a.Chunked != c.Chunked || a.BidirOff != c.BidirOff || a.Softcap != c.Softcap || a.TempScale != c.TempScale ||
 				a.TempFloor != c.TempFloor || a.TempOffs != c.TempOffs {
 				bad("%s: %d/%d heads of %d, scale %g, window %d, softcap %g; the configuration states %d/%d of %d, %g, %d, %g",
 					at, a.NHead, a.NKVHead, a.HeadDim, a.Scale, a.Window, a.Softcap,
@@ -238,6 +241,11 @@ func Verify(g *Graph, f Facts) error {
 			}
 			if o.Kind == OpActMul && o.Attr.Act != act && !(c.OutGate && o.Attr.Act == ActSigmoid) {
 				bad("%s: activation %d, the configuration states %d", at, o.Attr.Act, act)
+			}
+		case OpScale:
+			if !ins(1) || !outs(1) || len(o.Weight) != 1 || o.Weight[0].K != 1 || o.Weight[0].Rows > 1 ||
+				width(o.Out[0]) != width(o.In[0]) {
+				bad("%s: wants one row, one scalar and one output of its width", at)
 			}
 		case OpLayerNorm:
 			if !ins(1) || !outs(1) || len(o.Weight) == 0 || len(o.Weight) > 2 {

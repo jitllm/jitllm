@@ -302,7 +302,24 @@ func cfgMut(m *Model, f func(c *Config)) func() {
 	c := *was
 	f(&c)
 	m.Cfg = &c
-	return func() { m.Cfg = was }
+	regraph(m)
+	return func() { m.Cfg = was; regraph(m) }
+}
+
+// regraph recompiles m's block graphs from its configuration: they are built
+// at Open, so a violation that mutates the configuration reaches the graph
+// path only through this. A mutation the graph cannot state (C6's RMSNorm in
+// place of a LayerNorm that stores a bias) leaves the graphs as Open compiled
+// them, and the violation reaches the lowering through mutatedLowering.
+func regraph(m *Model) {
+	was, why := m.graphs, m.graphWhy
+	// A violation that drops an op leaves its tensor stored: the graph
+	// without the op is the violation, not an uncovered block.
+	m.laxUnbound = true
+	defer func() { m.laxUnbound = false }()
+	if m.buildGraphs() != nil {
+		m.graphs, m.graphWhy = was, why
+	}
 }
 
 // c6Violations are the violation runs for the kit, kept as a gate: each feature

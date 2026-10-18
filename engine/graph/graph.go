@@ -109,10 +109,13 @@ const (
 	// and writing n+1. It is opaque in this version, as OpGatedDelta is: its
 	// weights all bound by it.
 	OpRecurrent
+	// OpScale multiplies In[0] by the stored scalar Weight[0] (Gemma 4's
+	// layer_output_scale on the block's output).
+	OpScale
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -213,8 +216,12 @@ type Attrs struct {
 	// to the earlier positions of its own chunk of Window, not the Window
 	// before it.
 	Chunked bool
-	Softcap float64
-	Act     Act
+	// BidirOff makes the attention causal over a picture's rows too, where
+	// the prompt's spans mark them bidirectional (Gemma 4's global layers;
+	// its sliding layers and every other model's honour the spans).
+	BidirOff bool
+	Softcap  float64
+	Act      Act
 	// A mixture's router and combine (OpRoute, OpCombine).
 	Experts, TopK      int
 	Router             Router

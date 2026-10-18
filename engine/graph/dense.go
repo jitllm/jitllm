@@ -30,6 +30,7 @@ type Dense struct {
 	Scale                          float64
 	Window                         int
 	Chunked                        bool // Window is an aligned chunk (Attrs.Chunked)
+	BidirOff                       bool // Attrs.BidirOff
 	Softcap                        float64
 	Sinks                          bool
 	// TempScale, TempFloor, TempOffs: the attention's query temperature
@@ -50,6 +51,12 @@ type Dense struct {
 	// jlm.FlagQKNormPostRope). QKL2Norm norms each head of q and k with no
 	// weight after the rotary, on the rotating blocks only (Llama 4's).
 	QKNormPost, QKL2Norm bool
+	// VNorm norms each head of v with no weight (Gemma 4's) before the
+	// cache append.
+	VNorm bool
+	// OutScale multiplies the block's output by its stored scalar
+	// (RoleLayerOutScale, an OpScale after the second residual add).
+	OutScale bool
 	// The classic block (C6). LayerNorm makes the attention and FFN norms
 	// LayerNorms (OpLayerNorm); NormBias and FFNNormBias bind their biases
 	// (RoleAttnNormBias, RoleFFNNormBias). Parallel feeds the FFN the block
@@ -221,6 +228,9 @@ func (d *Dense) Build() *Graph {
 			if d.QKNorm && d.QKNormPost {
 				qr = hn("q_normed", qr, jlm.RoleAttnQNorm)
 			}
+			if d.VNorm {
+				v = hn("v_normed", v, 0)
+			}
 			g.op(Op{Kind: OpKVAppend, In: []ValueID{kr, v}, Reads: []StateRef{{"kv", 0}}, Writes: []StateRef{{"kv", 1}}})
 			a = g.value("attn", qd)
 			var sinks []Binding
@@ -228,7 +238,7 @@ func (d *Dense) Build() *Graph {
 				sinks = []Binding{vec(jlm.RoleAttnSinks, d.NHead)}
 			}
 			g.op(Op{Kind: OpAttend, In: []ValueID{qr}, Out: []ValueID{a}, Reads: []StateRef{{"kv", 1}}, Weight: sinks,
-				Attr: Attrs{HeadDim: d.HeadDim, NHead: d.NHead, NKVHead: d.NKVHead, Scale: d.Scale, Window: d.Window, Chunked: d.Chunked, Softcap: d.Softcap,
+				Attr: Attrs{HeadDim: d.HeadDim, NHead: d.NHead, NKVHead: d.NKVHead, Scale: d.Scale, Window: d.Window, Chunked: d.Chunked, BidirOff: d.BidirOff, Softcap: d.Softcap,
 					TempScale: d.TempScale, TempFloor: d.TempFloor, TempOffs: d.TempOffs}})
 			if d.OutGate {
 				gated := g.value("attn_gated", qd)
@@ -272,6 +282,11 @@ func (d *Dense) Build() *Graph {
 	}
 	x2 := g.value("x_out", d.NEmbd)
 	g.op(Op{Kind: OpAdd, In: []ValueID{x1, dn}, Out: []ValueID{x2}, Attr: Attrs{Alpha: d.ResidScale}})
+	if d.OutScale {
+		y := g.value("x_scaled", d.NEmbd)
+		g.op(Op{Kind: OpScale, In: []ValueID{x2}, Out: []ValueID{y}, Weight: []Binding{vec(jlm.RoleLayerOutScale, 1)}})
+		x2 = y
+	}
 	g.Out = []ValueID{x2}
 	return g
 }
