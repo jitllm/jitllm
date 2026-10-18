@@ -78,6 +78,8 @@ const (
 	dkGateOut                     // the attention's output times the sigmoid of the gate
 	dkPerLayer                    // the per-layer embedding added to the block's row (perLayerEmbed)
 	dkScale                       // the block's row times the layer's output scale
+	dkClamp                       // q, k or v clamped to the plan's bound
+	dkSubNorm                     // an inner norm before wo or down, with the quantize it feeds
 	numBaseKinds                  // the fused kinds (devrewrite.go) count on from here
 )
 
@@ -112,6 +114,10 @@ const (
 	slotOGate                 // bs.ogate: the output gate
 	slotOGated                // bs.ogated: the attention's output, gated
 	slotVN                    // bs.vn: v's heads normed
+	slotQC                    // bs.qClamp
+	slotKC                    // bs.kClamp
+	slotVC                    // bs.vClamp
+	slotSub                   // bs.sub: an inner norm's row
 	numSlots
 )
 
@@ -163,6 +169,14 @@ func (s devSlot) String() string {
 		return "ogated"
 	case slotVN:
 		return "vn"
+	case slotQC:
+		return "qc"
+	case slotKC:
+		return "kc"
+	case slotVC:
+		return "vc"
+	case slotSub:
+		return "sub"
 	}
 	return ""
 }
@@ -243,7 +257,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	}
 	switch o.Kind {
-	case dkRecurrent, dkCopy, dkKVCopy, dkAct, dkQTemp, dkSplitQG, dkGateOut, dkPerLayer, dkScale:
+	case dkRecurrent, dkCopy, dkKVCopy, dkAct, dkQTemp, dkSplitQG, dkGateOut, dkPerLayer, dkScale, dkClamp, dkSubNorm:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkMixture, dkAttendLatent:
 		if i == 1 {
@@ -316,7 +330,7 @@ func (p *devProgram) check() error {
 func lowersOp(k graph.OpKind) bool {
 	switch k {
 	case graph.OpNorm, graph.OpMatVec, graph.OpRope, graph.OpKVAppend, graph.OpAttend, graph.OpAdd,
-		graph.OpActMul, graph.OpAct, graph.OpHeadNorm, graph.OpLayerNorm, graph.OpScale,
+		graph.OpActMul, graph.OpAct, graph.OpHeadNorm, graph.OpLayerNorm, graph.OpScale, graph.OpClamp,
 		// The mixture's ops, lowered whole as one op (dkMixture) for now.
 		graph.OpRoute, graph.OpGather, graph.OpExpertMatVec, graph.OpCombine, graph.OpGateScalar,
 		// A recurrent mixer, lowered whole with its pre-norm (emitLinear).
@@ -439,6 +453,16 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			}
 			k := dkNorm
 			switch o.Weight[0].Role {
+			case jlm.RoleAttnSubNorm, jlm.RoleFFNSubNorm:
+				// BitNet's inner norm, fused with the quantize its
+				// projection reads: that projection takes the int8 row
+				// written here.
+				sub := prog.val(name(0), prog.vals[in(0)], slotSub)
+				q := prog.val(name(0)+".q8", devType{Elem: elemQ8, Layout: layoutRow, Width: prog.vals[in(0)].Width}, slotQ8)
+				prog.ops = append(prog.ops, devOp{Kind: dkSubNorm, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{sub, q}, Role: o.Weight[0].Role})
+				quantOf = map[devVal]devVal{sub: q}
+				vals[o.Out[0]] = sub
+				continue
 			case jlm.RoleAttnNorm, jlm.RoleFFNNorm:
 			case jlm.RolePostAttnNorm, jlm.RolePostFFNNorm:
 				k = dkPostNorm
@@ -561,6 +585,21 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkMixture, Src: src, In: []devVal{in(0), q}, Out: []devVal{out}})
 			vals[mixOut] = out
 			skipTo = last
+		case graph.OpClamp:
+			var cs devSlot
+			switch prog.slots[in(0)] {
+			case slotQ:
+				cs = slotQC
+			case slotK:
+				cs = slotKC
+			case slotV:
+				cs = slotVC
+			default:
+				return nil, "a clamp of neither q, k nor v"
+			}
+			out := prog.val(name(0), prog.vals[in(0)], cs)
+			prog.ops = append(prog.ops, devOp{Kind: dkClamp, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}})
+			vals[o.Out[0]] = out
 		case graph.OpScale:
 			// The layer's output scale over the block's row.
 			if len(o.Weight) != 1 || o.Weight[0].Role != jlm.RoleLayerOutScale {
@@ -625,14 +664,14 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			}
 			s := slotQN
 			switch prog.slots[src] {
-			case slotK, slotV:
+			case slotK, slotV, slotKC, slotVC:
 				// k's norm; or v's (weightless, on k's heads), which reads
 				// the projection k's norm does not overwrite where v is k's.
 				s = slotKN
 				if role == 0 && o.Out[0] != kRot && isValue(g, o.Out[0]) {
 					s = slotVN
 				}
-			case slotQ, slotQG, slotQR:
+			case slotQ, slotQG, slotQR, slotQC:
 				// q's norm, before its rotary or after it (a weighted norm
 				// after the rotary does not commute with it).
 			default:
@@ -642,7 +681,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{src}, Out: []devVal{out}, Role: role})
 			vals[o.Out[0]] = out
 		case graph.OpRope:
-			if s := prog.slots[in(0)]; s == slotQ || s == slotQG || s == slotQN {
+			if s := prog.slots[in(0)]; s == slotQ || s == slotQG || s == slotQN || s == slotQC {
 				out := prog.val(name(0), f32(qd), slotQR)
 				prog.ops = append(prog.ops, devOp{Kind: dkRopeQ, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}})
 				vals[o.Out[0]] = out
@@ -794,7 +833,6 @@ const (
 	progFault                     // a fault skips a kernel
 	progNotPaged                  // not a paged decode or prefill
 	progRotary                    // a rotary the program does not lower
-	progQKVExtra                  // a q/k/v clamp, split or gate
 	progNormResid                 // a norm or residual the program does not lower
 	progTableSplit                // TableSplit
 	numProgReasons
@@ -814,8 +852,6 @@ func (r progReason) String() string {
 		return "not a paged decode or prefill"
 	case progRotary:
 		return "a rotary the program does not lower"
-	case progQKVExtra:
-		return "a q/k/v clamp, split or gate"
 	case progNormResid:
 		return "a norm or residual the program does not lower"
 	case progTableSplit:

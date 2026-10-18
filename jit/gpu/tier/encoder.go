@@ -893,7 +893,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		buf := [numSlots]backend.Buf{slotX: bs.x, slotX2: bs.x2, slotH: bs.h, slotQ8: bs.a, slotQ: bs.q, slotK: bs.k,
 			slotV: bs.v, slotQR: bs.qr, slotKV: kvBuf, slotXB: bs.xb, slotOut: bs.mvOut, slotG: bs.g, slotU: bs.u, slotAct: bs.act,
 			slotQN: bs.qn, slotKN: bs.kn, slotF16: g.f16Buf, slotQT: bs.qt, slotQG: bs.qg, slotOGate: bs.ogate,
-			slotOGated: bs.ogated, slotVN: bs.vn}
+			slotOGated: bs.ogated, slotVN: bs.vn, slotQC: bs.qClamp, slotKC: bs.kClamp, slotVC: bs.vClamp, slotSub: bs.sub}
 		// The rewrites legal at one row, on a prompt chunk and on a ragged
 		// step differ: each class keeps its own fused program.
 		fc := &l.progOne
@@ -1107,6 +1107,19 @@ func (g *devTier) layersSession(s backend.Session) {
 				lc.la(bs.splitQG, R*qdim, at(o.In[0]), at(o.Out[0]), at(o.Out[1]))
 			case dkGateOut:
 				lc.la(bs.sigMul, R*qdim, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+			case dkClamp:
+				if prog.slots[o.Out[0]] == slotQC {
+					lc.la(bs.clampQ, R*qdim, at(o.In[0]), at(o.Out[0]))
+				} else {
+					lc.la(bs.clampKV, R*p.KVRow(), at(o.In[0]), at(o.Out[0]))
+				}
+			case dkSubNorm:
+				k, w := bs.subQA, l.nSubAttn
+				if o.Role == jlm.RoleFFNSubNorm {
+					k, w = bs.subQF, l.nSubFFN
+				}
+				laRows(k, at(o.In[0]), w, at(o.Out[0]), bs.a, bs.ax)
+				fsrc = at(o.Out[0])
 			case dkPerLayer:
 				if bs.pleIn == nil {
 					if err == nil {
@@ -1425,8 +1438,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				why = progNotPaged
 			case l.prog.ropes && (bs.ropeQ == nil || l.noRope):
 				why = progRotary
-			case bs.clampQ != nil:
-				why = progQKVExtra
 			case l.nResid != nil:
 				why = progNormResid
 			case g.TableSplit:

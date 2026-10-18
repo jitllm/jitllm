@@ -83,6 +83,10 @@ func (k devKind) String() string {
 		return "per_layer"
 	case dkScale:
 		return "scale"
+	case dkClamp:
+		return "clamp"
+	case dkSubNorm:
+		return "sub_norm"
 	case dkNormQuant:
 		return "norm_quant"
 	case dkAddNorm:
