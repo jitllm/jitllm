@@ -66,10 +66,9 @@ const (
 	dkAdd                       // a residual add
 	dkActMul                    // act(gate) * up
 	dkHeadNorm                  // each head's RMSNorm (q's or k's)
+	dkPostNorm                  // a sublayer's output normed before its residual add (post-norm)
 	numBaseKinds                // the fused kinds (devrewrite.go) count on from here
 )
-
-func (k devKind) String() string { return devKindName[k] }
 
 // devVal names a value of the program; its buffer is the scratch slot the
 // lowering assigns (devSlot).
@@ -99,7 +98,45 @@ const (
 	numSlots
 )
 
-var slotName = [...]string{"x", "x2", "h", "q8", "q", "k", "v", "qr", "kv", "xb", "out", "g", "u", "act", "qn", "kn", "f16"}
+func (s devSlot) String() string {
+	switch s {
+	case slotX:
+		return "x"
+	case slotX2:
+		return "x2"
+	case slotH:
+		return "h"
+	case slotQ8:
+		return "q8"
+	case slotQ:
+		return "q"
+	case slotK:
+		return "k"
+	case slotV:
+		return "v"
+	case slotQR:
+		return "qr"
+	case slotKV:
+		return "kv"
+	case slotXB:
+		return "xb"
+	case slotOut:
+		return "out"
+	case slotG:
+		return "g"
+	case slotU:
+		return "u"
+	case slotAct:
+		return "act"
+	case slotQN:
+		return "qn"
+	case slotKN:
+		return "kn"
+	case slotF16:
+		return "f16"
+	}
+	return ""
+}
 
 // devOp is one launch of the program.
 type devOp struct {
@@ -142,7 +179,7 @@ func (p *devProgram) val(name string, t devType, s devSlot) devVal {
 // String is the program, one op a line, each value with its type and slot.
 func (p *devProgram) String() string {
 	var b strings.Builder
-	v := func(x devVal) string { return fmt.Sprintf("%%%s:%s@%s", p.names[x], p.vals[x], slotName[p.slots[x]]) }
+	v := func(x devVal) string { return fmt.Sprintf("%%%s:%s@%s", p.names[x], p.vals[x], p.slots[x]) }
 	for _, o := range p.ops {
 		var outs, ins []string
 		for _, x := range o.Out {
@@ -178,7 +215,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 			return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
 		}
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
-	case dkQuant, dkNorm, dkRopeQ, dkAdd, dkActMul, dkKVWrite, dkAttend, dkHeadNorm,
+	case dkQuant, dkNorm, dkRopeQ, dkAdd, dkActMul, dkKVWrite, dkAttend, dkHeadNorm, dkPostNorm,
 		dkNormQuant, dkAddNorm, dkAddNormQuant, dkActQuant, dkRopeQKV, dkGate2In,
 		dkQKVIn, dkQKVSep, dkResIn, dkFFNIn, dkDownAct, dkNormF16, dkAddNormF16, dkActF16:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
@@ -190,6 +227,14 @@ func (o devOp) wants(p *devProgram, i int) devType {
 // layout or element type its consumer does not read refuses the program.
 func (p *devProgram) check() error {
 	for i, o := range p.ops {
+		// RULE 13: no launch reads a buffer it writes.
+		for _, x := range o.In {
+			for _, y := range o.Out {
+				if p.slots[x] == p.slots[y] && p.slots[x] != slotKV {
+					return fmt.Errorf("device program: op %d (%s) reads and writes %s", i, o.Kind, p.slots[x])
+				}
+			}
+		}
 		for j := range o.In {
 			got, want := p.vals[o.In[j]], o.wants(p, j)
 			if got != want {
@@ -201,10 +246,14 @@ func (p *devProgram) check() error {
 	return nil
 }
 
-// d1Kinds is the graph ops the first slice of the program lowers.
-var d1Kinds = map[graph.OpKind]bool{
-	graph.OpNorm: true, graph.OpMatVec: true, graph.OpRope: true, graph.OpKVAppend: true,
-	graph.OpAttend: true, graph.OpAdd: true, graph.OpActMul: true, graph.OpHeadNorm: true,
+// lowersOp reports the program lowers graph ops of kind k.
+func lowersOp(k graph.OpKind) bool {
+	switch k {
+	case graph.OpNorm, graph.OpMatVec, graph.OpRope, graph.OpKVAppend, graph.OpAttend, graph.OpAdd,
+		graph.OpActMul, graph.OpHeadNorm:
+		return true
+	}
+	return false
 }
 
 // buildDevProgram lowers p's graph to a device program, or says why it does
@@ -223,11 +272,11 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		return nil, "a shared or derived history"
 	case l.nAttnB != nil || l.nFFNB != nil:
 		return nil, "a biased norm"
-	case p.Act != nn.ActSiLU:
-		return nil, "an activation other than SiLU"
+	case !actHasKernel(p):
+		return nil, "an activation with no kernel"
 	}
 	for _, o := range g.Ops {
-		if !d1Kinds[o.Kind] {
+		if !lowersOp(o.Kind) {
 			return nil, "op " + o.Kind.String()
 		}
 		if o.Kind == graph.OpAttend && (o.Attr.Chunked || o.Attr.Bidir) {
@@ -254,7 +303,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		jlm.RoleAttnQ: slotQ, jlm.RoleAttnK: slotK, jlm.RoleAttnV: slotV, jlm.RoleAttnOut: slotOut,
 		jlm.RoleFFNGate: slotG, jlm.RoleFFNUp: slotU, jlm.RoleFFNDown: slotOut,
 	}
-	adds, norms := 0, 0
+	adds := 0
 	var kRot graph.ValueID = -1
 	for i, o := range g.Ops {
 		in := func(j int) devVal { return vals[o.In[j]] }
@@ -264,10 +313,31 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			if len(o.Weight) != 1 {
 				return nil, "a norm without one weight"
 			}
+			k := dkNorm
+			switch o.Weight[0].Role {
+			case jlm.RoleAttnNorm, jlm.RoleFFNNorm:
+			case jlm.RolePostAttnNorm, jlm.RolePostFFNNorm:
+				k = dkPostNorm
+			case jlm.RoleAttnQNorm, jlm.RoleAttnKNorm:
+				// A whole-projection q/k norm (OLMo 2's, OLMoE's): the head
+				// norm's lowering at the plan's wide geometry.
+				if !p.QKNormWide {
+					return nil, "a row norm of q or k on a plan that is not wide"
+				}
+				s := slotQN
+				if prog.slots[in(0)] == slotK {
+					s = slotKN
+				}
+				out := prog.val(name(0), prog.vals[in(0)], s)
+				prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Role: o.Weight[0].Role})
+				vals[o.Out[0]] = out
+				continue
+			default:
+				return nil, "a norm over " + o.Weight[0].Role.String()
+			}
 			out := prog.val(name(0), f32(ne), slotH)
-			prog.ops = append(prog.ops, devOp{Kind: dkNorm, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Role: o.Weight[0].Role})
+			prog.ops = append(prog.ops, devOp{Kind: k, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Role: o.Weight[0].Role})
 			vals[o.Out[0]] = out
-			norms++
 		case graph.OpMatVec:
 			role := o.Weight[0].Role
 			s, ok := matvecSlot[role]
@@ -325,8 +395,10 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			vals[o.Out[0]] = out
 		}
 	}
-	if adds != 2 || norms != 2 || len(g.Out) != 1 || prog.slots[vals[g.Out[0]]] != slotX {
-		return nil, "not a pre-norm block of two residual adds"
+	// Pre-norms, post-norms or both (OLMo 2 has no pre-norm: its sublayers
+	// read the residual), but two residual adds ending in the block's row.
+	if adds != 2 || len(g.Out) != 1 || prog.slots[vals[g.Out[0]]] != slotX {
+		return nil, "not a block of two residual adds"
 	}
 	if err := prog.check(); err != nil {
 		return nil, err.Error()
@@ -356,9 +428,9 @@ func (g *GPU) BlockProgram(li int) (prog, why string) {
 	var out []string
 	for _, f := range [3]progFused{l.progOne, l.progRows, l.progRag} {
 		if f.prog != nil {
-			head := "rewrites: " + f.took.String()
+			head := "rewrites: " + f.took.names(d.rewrites)
 			if f.err != nil {
-				head = "rewrites refused: " + f.err.Error()
+				head += " (refused: " + f.err.Error() + ")"
 			}
 			out = append(out, head+"\n"+f.prog.String())
 		}
@@ -393,12 +465,26 @@ const (
 	numProgReasons
 )
 
-var progReasonName = [numProgReasons]string{
-	progRanProgram: "", progNotLowered: "not lowered", progNoProgram: "NoProgram",
-	progRowsNotPrefill: "rows that are not a prefill chunk", progFault: "a fault skips a kernel",
-	progNotPaged: "not a paged decode or prefill", progRotary: "a rotary the program does not lower",
-	progQKVExtra: "a q/k/v clamp, split or gate", progNormResid: "a norm or residual the program does not lower",
-	progTableSplit: "TableSplit",
+func (r progReason) String() string {
+	switch r {
+	case progNotLowered:
+		return "not lowered"
+	case progNoProgram:
+		return "NoProgram"
+	case progRowsNotPrefill:
+		return "rows that are not a prefill chunk"
+	case progFault:
+		return "a fault skips a kernel"
+	case progNotPaged:
+		return "not a paged decode or prefill"
+	case progRotary:
+		return "a rotary the program does not lower"
+	case progQKVExtra:
+		return "a q/k/v clamp, split or gate"
+	case progNormResid:
+		return "a norm or residual the program does not lower"
+	case progTableSplit:
+		return "TableSplit"
+	}
+	return ""
 }
-
-func (r progReason) String() string { return progReasonName[r] }

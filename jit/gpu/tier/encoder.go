@@ -618,6 +618,15 @@ func (g *devTier) layersSession(s backend.Session) {
 				addRes(at(o.In[0]), at(o.In[1]), at(o.Out[0]))
 			case dkActMul:
 				lc.la(bs.actMul, R*p.NFFN, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+			case dkPostNorm:
+				// Out of place, as the encoder writes it: the norm's two
+				// passes over the sublayer's output into bs.h.
+				w := l.nPostAttn
+				if o.Role == jlm.RolePostFFNNorm {
+					w = l.nPostFFN
+				}
+				lc.la(bs.normPart, R*bs.parts, at(o.In[0]), bs.part)
+				lc.la(bs.normApply, R*p.NEmbd, at(o.In[0]), w, bs.part, at(o.Out[0]))
 			case dkHeadNorm:
 				// The form the encoder takes: one whole-row norm, the norm's
 				// two passes, or the per-head kernel at its lanes' geometry.

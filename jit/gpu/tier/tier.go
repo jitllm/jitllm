@@ -1748,6 +1748,10 @@ func (g *devTier) refund(n uint64) {
 // scratch they run in is a lane (devsess.go); a devTier is the three seen
 // together.
 type devShared struct {
+	// rewrites is the device program's rewrites this device tries, in order
+	// (devrewrite.go): the device's own list, which a caller's choice or the
+	// device's capability may narrow.
+	rewrites []devRewrite
 	// onDev is how many submissions are inside the backend's session on this
 	// device right now, and ranBeside how many began while another was
 	// (Stats.RanBeside); see runSub.
@@ -2398,6 +2402,7 @@ func (g *GPU) addSlot(i int, s Slot) {
 		ord:        i,
 		name:       DeviceName(s.Name),
 		kerns:      map[kernKey]backend.Kernel{},
+		rewrites:   newDevRewrites(),
 		res:        map[resKey]*resident{},
 		splits:     map[splitKey]int{},
 		groupSplit: map[splitKey]bool{},

@@ -36,17 +36,71 @@ const (
 	numKinds
 )
 
-// devKindName names every kind, base and fused, for the program's dump; the
-// executor and the rewrites switch on the kinds themselves.
-// TestEveryDevKindHasAName holds the table to the enum.
-var devKindName = [numKinds]string{
-	dkNorm: "norm", dkQuant: "quant", dkMatVec: "matvec", dkRopeQ: "rope_q", dkKVWrite: "kv_write",
-	dkAttend: "attend", dkAdd: "add", dkActMul: "act_mul", dkHeadNorm: "head_norm",
-	dkNormQuant: "norm_quant", dkAddNorm: "add_norm", dkAddNormQuant: "add_norm_quant", dkMatVecRes: "matvec_res",
-	dkMatVecGate: "matvec_gate", dkActQuant: "act_quant", dkQKV: "qkv", dkRopeQKV: "rope_qkv", dkGate2: "gate2",
-	dkGate2In: "gate2_in", dkQKVIn: "qkv_in", dkQKVSep: "qkv_sep", dkResIn: "matvec_res_in", dkFFNIn: "ffn_in",
-	dkDownAct: "down_act", dkNormF16: "norm_f16", dkAddNormF16: "add_norm_f16", dkActF16: "act_f16",
-	dkQKVGemm: "qkv_gemm",
+// String names a kind for the program's dump; the executor and the rewrites
+// switch on the kinds themselves. TestEveryDevKindHasAName holds it to the
+// enum.
+func (k devKind) String() string {
+	switch k {
+	case dkNorm:
+		return "norm"
+	case dkQuant:
+		return "quant"
+	case dkMatVec:
+		return "matvec"
+	case dkRopeQ:
+		return "rope_q"
+	case dkKVWrite:
+		return "kv_write"
+	case dkAttend:
+		return "attend"
+	case dkAdd:
+		return "add"
+	case dkActMul:
+		return "act_mul"
+	case dkHeadNorm:
+		return "head_norm"
+	case dkPostNorm:
+		return "post_norm"
+	case dkNormQuant:
+		return "norm_quant"
+	case dkAddNorm:
+		return "add_norm"
+	case dkAddNormQuant:
+		return "add_norm_quant"
+	case dkMatVecRes:
+		return "matvec_res"
+	case dkMatVecGate:
+		return "matvec_gate"
+	case dkActQuant:
+		return "act_quant"
+	case dkQKV:
+		return "qkv"
+	case dkRopeQKV:
+		return "rope_qkv"
+	case dkGate2:
+		return "gate2"
+	case dkGate2In:
+		return "gate2_in"
+	case dkQKVIn:
+		return "qkv_in"
+	case dkQKVSep:
+		return "qkv_sep"
+	case dkResIn:
+		return "matvec_res_in"
+	case dkFFNIn:
+		return "ffn_in"
+	case dkDownAct:
+		return "down_act"
+	case dkNormF16:
+		return "norm_f16"
+	case dkAddNormF16:
+		return "add_norm_f16"
+	case dkActF16:
+		return "act_f16"
+	case dkQKVGemm:
+		return "qkv_gemm"
+	}
+	return ""
 }
 
 // devRewrite is one rewrite: its name and whether it pays and is legal for
@@ -57,33 +111,35 @@ type devRewrite struct {
 	apply func(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool
 }
 
-// devRewrites is every rewrite, in the order they are tried: each to a fixed
-// point before the next, the order the encoder takes them in. A program's
-// rewrites taken are a bit each (rwSet), by position here: the f16 lowering
-// first (a prompt chunk of binary16 GEMMs takes it and its writers alone),
-// then the rest.
-var devRewrites = []devRewrite{
-	{"f16-operands", nil},
-	{"qkv-gemm", rwQKVGemm},
-	{"add-norm-f16", rwAddNormF16},
-	{"norm-f16", rwNormF16},
-	{"act-f16", rwActF16},
-	{"qkv-grouped", rwQKV},
-	{"qkv-in", rwQKVIn},
-	{"qkv-sep", rwQKVSep},
-	{"rope-qkv-paged", rwRopeQKV},
-	{"matvec-residual", rwMatVecRes},
-	{"o-in", rwOIn},
-	{"ffn-in", rwFFNIn},
-	{"gate2in", rwGate2In},
-	{"gate2", rwGate2},
-	{"matvec-gate", rwMatVecGate},
-	{"down-in", rwDownIn},
-	{"down-act", rwDownAct},
-	{"act-quant", rwActQuant},
-	{"add-norm-quant", rwAddNormQuant},
-	{"add-norm", rwAddNorm},
-	{"norm-quant", rwNormQuant},
+// newDevRewrites is a device's rewrites, in the order they are tried: each
+// to a fixed point before the next, the order the encoder takes them in. A
+// program's rewrites taken are a bit each (rwSet), by position here: the
+// f16 lowering first (a prompt chunk of binary16 GEMMs takes it and its
+// writers alone), then the rest. Each device holds its own list (devShared).
+func newDevRewrites() []devRewrite {
+	return []devRewrite{
+		{"f16-operands", nil},
+		{"qkv-gemm", rwQKVGemm},
+		{"add-norm-f16", rwAddNormF16},
+		{"norm-f16", rwNormF16},
+		{"act-f16", rwActF16},
+		{"qkv-grouped", rwQKV},
+		{"qkv-in", rwQKVIn},
+		{"qkv-sep", rwQKVSep},
+		{"rope-qkv-paged", rwRopeQKV},
+		{"matvec-residual", rwMatVecRes},
+		{"o-in", rwOIn},
+		{"ffn-in", rwFFNIn},
+		{"gate2in", rwGate2In},
+		{"gate2", rwGate2},
+		{"matvec-gate", rwMatVecGate},
+		{"down-in", rwDownIn},
+		{"down-act", rwDownAct},
+		{"act-quant", rwActQuant},
+		{"add-norm-quant", rwAddNormQuant},
+		{"add-norm", rwAddNorm},
+		{"norm-quant", rwNormQuant},
+	}
 }
 
 // rwF16End is where the f16 lowering's rewrites end in devRewrites.
@@ -92,9 +148,10 @@ const rwF16End = 5
 // rwSet is the rewrites a program took, a bit each by devRewrites' order.
 type rwSet uint64
 
-func (s rwSet) String() string {
+// names is s by the names of rws, the list it was taken from.
+func (s rwSet) names(rws []devRewrite) string {
 	var b strings.Builder
-	for i, rw := range devRewrites {
+	for i, rw := range rws {
 		if s&(1<<i) != 0 {
 			if b.Len() > 0 {
 				b.WriteString(", ")
@@ -110,23 +167,34 @@ func (s rwSet) String() string {
 func (p *devProgram) fused(l *layer, bs *blockScratch, g *devTier, R, nseq int) (*devProgram, rwSet, error) {
 	q := p.clone()
 	var took rwSet
-	lo, hi := rwF16End, len(devRewrites)
+	rws := g.rewrites
+	lo, hi := rwF16End, len(rws)
 	if R > 1 && nseq == 0 && g.voltaBlock(l, R, bs.tok) {
 		q.toF16()
 		took |= 1
 		lo, hi = 1, rwF16End
 	}
+	if err := q.check(); err != nil {
+		return p, 0, err
+	}
+	// Each application is held to the check on its own: one that breaks a
+	// type or reads what it writes (RULE 13) is undone, and that rewrite
+	// stops; the others still apply.
+	var refused error
 	for i := lo; i < hi; i++ {
-		for devRewrites[i].apply(q, l, bs, g, R, nseq) {
+		for {
+			prev := q.clone()
+			if !rws[i].apply(q, l, bs, g, R, nseq) {
+				break
+			}
+			if err := q.check(); err != nil {
+				q, refused = prev, err
+				break
+			}
 			took |= 1 << i
 		}
 	}
-	if err := q.check(); err != nil {
-		// A rewrite that broke a type is a bug in the rewrite; the unfused
-		// program is still right.
-		return p, 0, err
-	}
-	return q, took, nil
+	return q, took, refused
 }
 
 func (p *devProgram) clone() *devProgram {

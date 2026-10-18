@@ -19,8 +19,10 @@ import (
 // the first parts from the encoder's; point a matvec at the wrong slot and the
 // first token parts; let the hook skip the program and ProgBlocks reads 0.
 func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
-	// synth-qwen2 carries q/k/v biases.
-	for _, name := range []string{"stories15M-q8_0", "synth-qwen2", "Qwen3-0.6B-Q8_0", "Llama-3.2-1B-Instruct-Q4_K_M"} {
+	// synth-qwen2 carries q/k/v biases; synth-glm4 post-norms, a partial
+	// rotary and biases; synth-olmo2 post-norms.
+	for _, name := range []string{"stories15M-q8_0", "synth-qwen2", "synth-glm4", "synth-olmo2", "Qwen3-0.6B-Q8_0",
+		"Llama-3.2-1B-Instruct-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) {
 			m, err := Open(graphModel(t, name), noTune)
 			if err != nil {
@@ -113,7 +115,7 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 			}
 			ps, es := pa.st, ea.st
 			if ps.ProgBlocks == 0 {
-				t.Fatalf("the program arm ran no block-step as a device program (forms %v)\n%s", pa.forms, pa.prog)
+				t.Fatalf("the program arm ran no block-step as a device program (forms %v; %s)\n%s", pa.forms, pa.why, pa.prog)
 			}
 			if es.ProgBlocks != 0 {
 				t.Fatalf("the encoder arm ran %d block-steps as a device program", es.ProgBlocks)
