@@ -23,7 +23,12 @@ type layer struct {
 	progWhy string
 	// progRun is why the last step ran the block through the encoder, empty
 	// where it ran the program (set under the submission, read by BlockProgram).
-	progRun        string
+	progRun string
+	// progF is prog with the rewrites that apply on the scratch progBS
+	// (devrewrite.go), and progTook their names.
+	progF          *devProgram
+	progBS         *blockScratch
+	progTook       []string
 	wq, wk, wv, wo *resident
 	gate, up, down *resident
 	// conv is a convolutional tower block's program and vectors (conv.go),

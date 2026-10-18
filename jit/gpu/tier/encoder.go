@@ -414,7 +414,35 @@ func (g *devTier) layersSession(s backend.Session) {
 		}
 		buf := [numSlots]backend.Buf{slotX: bs.x, slotX2: bs.x2, slotH: bs.h, slotQ8: bs.a, slotQ: bs.q, slotK: bs.k,
 			slotV: bs.v, slotQR: bs.qr, slotKV: pl.k, slotXB: bs.xb, slotOut: bs.mvOut, slotG: bs.g, slotU: bs.u, slotAct: bs.act}
+		if l.progBS != bs {
+			l.progF, l.progTook = prog.fused(l, bs, g)
+			l.progBS = bs
+		}
+		prog = l.progF
 		at := func(v devVal) backend.Buf { return buf[prog.slots[v]] }
+		mvOf := func(role jlm.Role) (mv, *resident) {
+			switch role {
+			case jlm.RoleAttnK:
+				return l.mvk, l.wk
+			case jlm.RoleAttnV:
+				return l.mvv, l.wv
+			case jlm.RoleAttnOut:
+				return l.mvo, l.wo
+			case jlm.RoleFFNGate:
+				return l.mvg, l.gate
+			case jlm.RoleFFNUp:
+				return l.mvu, l.up
+			case jlm.RoleFFNDown:
+				return l.mvd, l.down
+			}
+			return l.mvq, l.wq
+		}
+		normW := func(role jlm.Role) backend.Buf {
+			if role == jlm.RoleFFNNorm {
+				return l.nFFN
+			}
+			return l.nAttn
+		}
 		for _, o := range prog.ops {
 			switch o.Kind {
 			case dkNorm:
@@ -471,6 +499,42 @@ func (g *devTier) layersSession(s backend.Session) {
 				addRes(at(o.In[0]), at(o.In[1]), at(o.Out[0]))
 			case dkActMul:
 				lc.la(bs.actMul, R*p.NFFN, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+			case dkNormQuant:
+				laRows(bs.rmsQ, at(o.In[0]), normW(o.Role), at(o.Out[0]), bs.a, bs.ax)
+			case dkAddNorm:
+				laRows(bs.addRms, at(o.In[0]), at(o.In[1]), normW(o.Role), at(o.Out[0]), at(o.Out[1]))
+			case dkAddNormQuant:
+				laRows(bs.addRmsQ, at(o.In[0]), at(o.In[1]), normW(o.Role), at(o.Out[0]), at(o.Out[1]), bs.a, bs.ax)
+			case dkMatVecRes:
+				m, r := mvOf(o.Role)
+				if !mvres(m, r, at(o.Out[0]), at(o.In[1])) && err == nil {
+					err = fmt.Errorf("tier: block %d: matvec-residual has no variant for %s", li, o.Role)
+				}
+			case dkMatVecGate:
+				m, r := mvOf(o.Role)
+				if !mvgate(m, r, at(o.Out[0]), at(o.In[1])) && err == nil {
+					err = fmt.Errorf("tier: block %d: matvec-gate has no variant for %s", li, o.Role)
+				}
+			case dkActQuant:
+				lc.la(bs.quantAct, kernels.QuantizeThreads(R*p.NFFN/32), at(o.In[0]), at(o.In[1]), at(o.Out[0]), bs.a, bs.ax)
+			case dkQKV:
+				var bufArr [17]backend.Buf
+				bufs := append(bufArr[:0], bs.a, bs.ax)
+				for i, sg := range [3]struct {
+					m mv
+					r *resident
+				}{{l.mvq, l.wq}, {l.mvk, l.wk}, {l.mvv, l.wv}} {
+					bufs = append(bufs, sg.r.qs, sg.r.d, sg.r.sc, at(o.Out[i]))
+					if sg.m.bias != nil {
+						bufs = append(bufs, sg.m.bias)
+					}
+				}
+				if err == nil {
+					err = lc.launch(l.qkv, l.qkvBlocks, l.qkvW, bufs...)
+				}
+			case dkRopeQKV:
+				lc.la(pk.ropeQKV, kernels.RoPEQKVPagedThreads(p.NHead, p.NKVHead, p.HeadDim, p.NRot, R, g.KVF16),
+					at(o.In[0]), rcs, bs.zero, at(o.Out[0]), at(o.In[1]), pl.k, at(o.In[2]), pl.v, pl.tab, pk.pRow)
 			}
 		}
 		g.ProgBlocks++

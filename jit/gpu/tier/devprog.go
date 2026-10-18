@@ -62,7 +62,7 @@ const (
 	dkActMul                 // act(gate) * up
 )
 
-var devKindName = [...]string{"norm", "quant", "matvec", "rope_q", "kv_write", "attend", "add", "act_mul"}
+var devKindName = []string{"norm", "quant", "matvec", "rope_q", "kv_write", "attend", "add", "act_mul"}
 
 func (k devKind) String() string { return devKindName[k] }
 
@@ -145,9 +145,15 @@ func (p *devProgram) String() string {
 func (o devOp) wants(p *devProgram, i int) devType {
 	in := p.vals[o.In[i]]
 	switch o.Kind {
-	case dkMatVec:
+	case dkMatVec, dkQKV:
 		return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
-	case dkQuant, dkNorm, dkRopeQ, dkAdd, dkActMul, dkKVWrite, dkAttend:
+	case dkMatVecRes, dkMatVecGate:
+		if i == 0 {
+			return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
+		}
+		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
+	case dkQuant, dkNorm, dkRopeQ, dkAdd, dkActMul, dkKVWrite, dkAttend,
+		dkNormQuant, dkAddNorm, dkAddNormQuant, dkActQuant, dkRopeQKV:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	}
 	return in
@@ -316,6 +322,9 @@ func (g *GPU) BlockProgram(li int) (prog, why string) {
 	}
 	if l.prog == nil {
 		return "", l.progWhy
+	}
+	if l.progF != nil {
+		return "rewrites: " + strings.Join(l.progTook, ", ") + "\n" + l.progF.String(), l.progRun
 	}
 	return l.prog.String(), l.progRun
 }

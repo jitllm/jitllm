@@ -3,6 +3,7 @@ package model
 import (
 	"math"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -83,8 +84,12 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 					worst = math.Max(worst, math.Abs(float64(pl[i][j]-el[i][j])))
 				}
 			}
-			t.Logf("%d block-steps as programs; worst logit difference from the encoder %.4g over %d tokens",
-				ps.ProgBlocks, worst, len(pt))
+			prog, _ := pg.BlockProgram(0)
+			t.Logf("%d block-steps as programs; worst logit difference from the encoder %.4g over %d tokens\n%s",
+				ps.ProgBlocks, worst, len(pt), prog)
+			if !strings.HasPrefix(prog, "rewrites: ") || strings.HasPrefix(prog, "rewrites: \n") {
+				t.Fatalf("block 0's program took no rewrite:\n%s", prog)
+			}
 			if !slices.Equal(pt, et) {
 				t.Fatalf("the program's tokens %v part from the encoder's %v", pt, et)
 			}
