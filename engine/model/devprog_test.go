@@ -21,7 +21,7 @@ import (
 func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 	// synth-qwen2 carries q/k/v biases; synth-glm4 post-norms, a partial
 	// rotary and biases; synth-olmo2 post-norms.
-	for _, name := range []string{"stories15M-q8_0", "synth-qwen2", "synth-glm4", "synth-olmo2", "Qwen3-0.6B-Q8_0",
+	for _, name := range []string{"stories15M-q8_0", "synth-qwen2", "synth-glm4", "synth-olmo2", "tiny-qwen3moe-f32", "Qwen3-0.6B-Q8_0",
 		"Llama-3.2-1B-Instruct-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) {
 			m, err := Open(graphModel(t, name), noTune)
