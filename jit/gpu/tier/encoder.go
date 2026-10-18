@@ -1086,6 +1086,39 @@ func (g *devTier) layersSession(s backend.Session) {
 				if err != nil {
 					return
 				}
+			case dkMLA:
+				// Latent attention over the normed row and its quantize, as
+				// the encoder runs it, ending in bs.mvOut.
+				kvp := g.layers[l.kvSrc].kvOf(sid)
+				if kvp == nil {
+					if err == nil {
+						err = fmt.Errorf("tier: block %d has no KV cache for session %d", li, sid)
+					}
+					return
+				}
+				var pc *pagedCall
+				if bs.pkv != nil {
+					mpl := g.kvp.layers[li]
+					if mpl == nil {
+						if err == nil {
+							err = fmt.Errorf("tier: block %d has no pages in this device's pool", li)
+						}
+						return
+					}
+					pc = &pagedCall{pk: bs.pkv, pl: mpl, k: mpl.k, tab: mpl.tab, desc: bs.pkv.pRow}
+					g.PagedLaunches++
+					if !bs.pkv.prefill && bs.pkv.cur.plan.Path == kernels.PathStaged {
+						g.PagedStagedLaunches++
+					}
+				}
+				if R > 1 {
+					g.emitMLARows(s, bs, l, kvp, p, &err, lc, mvrun, sm, smG, smW, nCap, pc)
+				} else {
+					g.emitMLA(s, bs, l, kvp, p, &err, lc, mvrun, mvid, sm, smG, smW, nCap, skip, pc)
+				}
+				if err != nil {
+					return
+				}
 			case dkAct:
 				// An ungated FFN's activation; Apertus' xIELU reads its four
 				// numbers as a buffer.

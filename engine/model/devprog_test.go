@@ -24,7 +24,8 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 	// synth-qwen2moe a routed mixture, the latter with a gated shared expert.
 	for _, name := range []string{"stories15M-q8_0", "synth-qwen2", "synth-glm4", "synth-olmo2", "tiny-qwen3moe-f32",
 		"synth-qwen2moe", "synth-mamba2", "synth-lfm2", "synth-granitehybrid", "synth-falconmamba", "synth-falcon", "synth-phi2", "synth-starcoder", "synth-starcoder2",
-		"synth-stablelm", "synth-commandr", "synth-nemotron", "Qwen3-0.6B-Q8_0",
+		"synth-stablelm", "synth-commandr", "synth-nemotron", "synth-deepseek", "synth-deepseek-lite",
+		"synth-deepseek-dense", "synth-glm4moelite", "Qwen3-0.6B-Q8_0",
 		"Llama-3.2-1B-Instruct-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) {
 			m, err := Open(graphModel(t, name), noTune)

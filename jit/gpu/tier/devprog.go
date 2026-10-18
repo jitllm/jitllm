@@ -72,6 +72,7 @@ const (
 	dkCopy                      // a row moved to another slot (the sum home to the block's row)
 	dkKVCopy                    // an unrotated key and its value copied into the history (NoPE)
 	dkAct                       // an ungated FFN's activation of up's row
+	dkMLA                       // latent attention, from the normed row to its output projection (emitMLA)
 	numBaseKinds                // the fused kinds (devrewrite.go) count on from here
 )
 
@@ -221,7 +222,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 	switch o.Kind {
 	case dkRecurrent, dkCopy, dkKVCopy, dkAct:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
-	case dkMixture:
+	case dkMixture, dkMLA:
 		if i == 1 {
 			return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
 		}
@@ -272,7 +273,9 @@ func lowersOp(k graph.OpKind) bool {
 		// The mixture's ops, lowered whole as one op (dkMixture) for now.
 		graph.OpRoute, graph.OpGather, graph.OpExpertMatVec, graph.OpCombine, graph.OpGateScalar,
 		// A recurrent mixer, lowered whole with its pre-norm (emitLinear).
-		graph.OpRecurrent:
+		graph.OpRecurrent,
+		// Latent attention's own ops, lowered whole (emitMLA).
+		graph.OpSlice, graph.OpLatentAppend, graph.OpAttendLatent:
 		return true
 	}
 	return false
@@ -332,12 +335,53 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 	}
 	adds := 0
 	var kRot graph.ValueID = -1
+	// Latent attention lowers whole: the region from the first op that reads
+	// the attention norm's row to the value the attention's residual add
+	// reads.
+	mla, attnRow := false, graph.ValueID(-1)
+	for _, o := range g.Ops {
+		switch {
+		case o.Kind == graph.OpAttendLatent:
+			mla = true
+		case (o.Kind == graph.OpNorm || o.Kind == graph.OpLayerNorm) && len(o.Weight) > 0 && o.Weight[0].Role == jlm.RoleAttnNorm:
+			attnRow = o.Out[0]
+		}
+	}
+	if mla && bindsRole(g, jlm.RoleAttnGate) {
+		return nil, "an output gate on latent attention"
+	}
 	skipTo := 0
 	for i, o := range g.Ops {
 		if i < skipTo {
-			continue // inside a region lowered whole (the mixture)
+			continue // inside a region lowered whole (the mixture, latent attention)
 		}
 		in := func(j int) devVal { return vals[o.In[j]] }
+		if mla && skipTo <= i && len(o.In) > 0 && o.In[0] == attnRow && o.Kind != graph.OpNorm && o.Kind != graph.OpLayerNorm {
+			a := -1
+			for k := i; k < len(g.Ops) && a < 0; k++ {
+				if g.Ops[k].Kind == graph.OpAdd && (g.Ops[k].In[0] == g.In[0] || g.Ops[k].In[1] == g.In[0]) {
+					a = k
+				}
+			}
+			if a < 0 {
+				return nil, "latent attention with no residual add"
+			}
+			res := g.Ops[a].In[1]
+			if res == g.In[0] {
+				res = g.Ops[a].In[0]
+			}
+			src := make([]int, 0, a-i)
+			for k := i; k < a; k++ {
+				src = append(src, k)
+			}
+			q := operand(in(0), i)
+			out := prog.val(g.Values[res].Name, f32(ne), slotOut)
+			prog.ops = append(prog.ops, devOp{Kind: dkMLA, Src: src, In: []devVal{in(0), q}, Out: []devVal{out}})
+			vals[res] = out
+			skipTo = a
+			mla = false
+			continue
+		}
 		name := func(j int) string { return g.Values[o.Out[j]].Name }
 		switch o.Kind {
 		case graph.OpNorm, graph.OpLayerNorm:
