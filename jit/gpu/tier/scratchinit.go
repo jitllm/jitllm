@@ -649,16 +649,13 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		// clamps it: a session window wider than a row (a per-token model's)
 		// must not take the next row's maximum.
 		{&bs.quantE, func() (*ir.Kernel, error) {
-			if p.KPad > 0 {
-				return kernels.QuantizePadded(rows, p.NEmbd, p.KPad, kernels.ClampWindow(actWin, p.KPad))
-			}
-			return kernels.Quantize(rows*p.NEmbd, kernels.ClampWindow(actWin, p.NEmbd))
+			return quantizeRowsAt(rows, p.NEmbd, ePad(p), actWin)
 		}},
 		{&bs.quantF, func() (*ir.Kernel, error) {
 			if p.NFFN == 0 {
 				return nil, nil
 			}
-			return kernels.Quantize(rows*p.NFFN, kernels.ClampWindow(actWin, p.NFFN))
+			return quantizeRows(rows, p.NFFN, actWin)
 		}},
 		{&bs.subQA, func() (*ir.Kernel, error) {
 			if !p.SubNorm {
@@ -694,10 +691,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			return quantizeRows(rows, r.VHeads*r.VDim, kernels.ClampWindow(actWin, pad32(r.VHeads*r.VDim)))
 		}},
 		{&bs.quantQ, func() (*ir.Kernel, error) {
-			if w := qPad(p, qdim); w != qdim {
-				return kernels.QuantizePadded(rows, qdim, w, kernels.ClampWindow(actWin, w))
-			}
-			return kernels.Quantize(rows*qdim, kernels.ClampWindow(actWin, qdim))
+			return quantizeRowsAt(rows, qdim, qPad(p, qdim), actWin)
 		}},
 		// The norm is two kernels (RMSNorm) or three (LayerNorm: mean, variance
 		// about it, apply); see blockScratch.normVar.
@@ -1302,7 +1296,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			// The SwiGLU product, quantized per slot: Slots independent
 			// vectors of NFFNExp, laid out contiguously, which is exactly what
 			// MatVecShape.SlotAct then reads.
-			return kernels.Quantize(p.NExpertUsed*p.NFFNExp, actWin)
+			return quantizeRows(p.NExpertUsed, p.NFFNExp, actWin)
 		}},
 		{&bs.addE, func() (*ir.Kernel, error) { return kernels.Add(rows * p.NEmbd) }},
 		{&bs.addS, func() (*ir.Kernel, error) {

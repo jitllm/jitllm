@@ -329,20 +329,27 @@ func pad32(n int) int { return (n + 31) / 32 * 32 }
 // where it is not (launch QuantizeThreads(rows*pad32(n)/32)). The window is
 // clamped to the padded row, as the host's ragged quantizer clamps it.
 func quantizeRows(rows, n, win int) (*ir.Kernel, error) {
-	if n%32 == 0 {
-		return kernels.Quantize(rows*n, win)
+	return quantizeRowsAt(rows, n, pad32(n), win)
+}
+
+// quantizeRowsAt is quantizeRows with the stored row kp wide, a whole number
+// of blocks and n or more (a ragged tower's padded width, nn.LayerPlan.KPad).
+func quantizeRowsAt(rows, n, kp, win int) (*ir.Kernel, error) {
+	if n == kp {
+		return kernels.Quantize(rows*n, kernels.ClampWindow(win, n))
 	}
-	return kernels.QuantizePadded(rows, n, pad32(n), kernels.ClampWindow(win, pad32(n)))
+	return kernels.QuantizePadded(rows, n, kp, kernels.ClampWindow(win, kp))
 }
 
 // ePad is the width a block's residual-reading matrices quantize their
-// activation at: NEmbd, or the padded width of a ragged tower
-// (nn.LayerPlan.KPad).
+// activation at: NEmbd rounded up to a whole quantizer block, or the padded
+// width of a ragged tower (nn.LayerPlan.KPad). A ragged width only reaches a
+// float-weight matrix, which reads the float rows and ignores the int8 ones.
 func ePad(p *nn.LayerPlan) int {
 	if p.KPad > 0 {
 		return p.KPad
 	}
-	return p.NEmbd
+	return pad32(p.NEmbd)
 }
 
 // qPad is ePad for the attention's output, qdim wide: padded where the
@@ -351,7 +358,7 @@ func qPad(p *nn.LayerPlan, qdim int) int {
 	if p.KPad > 0 && qdim == p.NEmbd {
 		return p.KPad
 	}
-	return qdim
+	return pad32(qdim)
 }
 
 // attendsIn reports whether a block of [lo, hi) on this device attends: not

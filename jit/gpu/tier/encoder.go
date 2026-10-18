@@ -757,7 +757,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				// One Quantize over all the slots, writing a flat [scales][sums] pAX,
 				// which is the layout down's SlotAct per-slot bases expect.
-				lc.la(bs.quantX, kernels.QuantizeThreads(ffnW/32), bs.eact, bs.a, bs.ax)
+				lc.la(bs.quantX, kernels.QuantizeThreads(bs.nUsed*pad32(p.NFFNExp)/32), bs.eact, bs.a, bs.ax)
 				edown := bs.edown
 				if l.moeDown != nil {
 					mvidE(l.moeDown, l.mvd, l.down, bs.edown, l.expDownB)
