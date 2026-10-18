@@ -255,6 +255,14 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		d.MLA.Gate = has(jlm.RoleAttnGate)
 	}
 	d.NonCausal = c.NonCausal
+	if li >= c.NLayer {
+		for _, r := range []jlm.Role{jlm.RoleNextnEHProj, jlm.RoleNextnENorm, jlm.RoleNextnHNorm, jlm.RoleNextnHeadNorm,
+			jlm.RoleNextnHead, jlm.RoleNextnEmbd, jlm.RoleHCHeadNorm, jlm.RoleHCHeadDown, jlm.RoleHCHeadUp} {
+			if sh, ok := inv[r]; ok {
+				d.PredictW = append(d.PredictW, graph.Binding{Role: r, K: sh.K, Rows: sh.Rows, Sheets: sh.Sheets})
+			}
+		}
+	}
 	if c.MSAAt(li) {
 		d.Select = &graph.Select{Heads: c.IdxHeads, HeadDim: c.IdxHeadDim, TopK: c.IdxTopK, Block: c.IdxBlock, Local: c.IdxLocal}
 	}
@@ -375,6 +383,8 @@ type denseLowering struct {
 	bank, latent bool
 	// mlaGate: Kimi-K3's MLA output gate.
 	mlaGate bool
+	// predict: a prediction block, its prologue the draft's (draftRows).
+	predict bool
 	// mixer: a recurrent mixer (linearAttn) in place of the attention;
 	// noFFN: the block ends at the mixer's residual add.
 	mixer, noFFN bool
@@ -421,6 +431,9 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 	// last is the value the op just taken writes.
 	last := func() graph.ValueID { return ops[i-1].Out[0] }
 	lw := &denseLowering{g: g}
+	// A prediction block's prologue, which the draft runs before the step
+	// (draftRows): the block's input is its output.
+	lw.predict = take(graph.OpPredict, 0)
 	// The n-gram embedding into the streams, then the attention's read of
 	// them (ngramApply, hcMix).
 	lw.ngram = take(graph.OpNGram, 0)
@@ -438,6 +451,9 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		return run([]step{{graph.OpAdd, 0}})
 	}
 	attnIn, ffnPre := g.In[0], graph.ValueID(-1)
+	if lw.predict {
+		attnIn = ops[0].Out[0]
+	}
 	switch {
 	case lw.hc, lw.bank:
 		attnIn = last()
@@ -795,8 +811,9 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 // whose graph fails to verify or lower refuses the model: that is a bug, never
 // a fallback. Under WithBlockGraph(true) an uncovered block refuses it too.
 func (m *Model) buildGraphs() error {
-	m.graphs = make([]*denseLowering, m.Cfg.NLayer)
-	m.graphWhy = make([]string, m.Cfg.NLayer)
+	// The trunk's blocks and the prediction blocks after it.
+	m.graphs = make([]*denseLowering, m.Cfg.NLayer+m.Cfg.NMTP)
+	m.graphWhy = make([]string, m.Cfg.NLayer+m.Cfg.NMTP)
 	for li := range m.graphs {
 		refuse := func(why string) error {
 			if l := &m.layers[li]; !m.Cfg.NonCausal && l.gate.e == nil && l.router.e == nil && !l.noFFN {
@@ -885,6 +902,9 @@ func (m *Model) buildGraphs() error {
 		if lw.bank != m.Cfg.ResAttn() || lw.latent != (lw.mix && m.Cfg.ExpertLatent != 0) {
 			return fmt.Errorf("model: block %d graph's residual attention (%v) or latent mixture (%v) is not the configuration's",
 				li, lw.bank, lw.latent)
+		}
+		if lw.predict != (li >= m.Cfg.NLayer) {
+			return fmt.Errorf("model: block %d graph's prediction prologue is %v, the block's place is not", li, lw.predict)
 		}
 		if lw.mlaGate != (m.layers[li].mlaGate.rows != 0) {
 			return fmt.Errorf("model: block %d graph's MLA output gate is %v, the layer's is not", li, lw.mlaGate)
@@ -1994,6 +2014,7 @@ var hostLowering = map[graph.OpKind]struct {
 	graph.OpAltCorrect:       {"altCorrect: the correction and the per-layer input into the streams (generated kernels)", false},
 	graph.OpLaurel:           {"laurel: the low-rank pair, its norm and the add (generated)", false},
 	graph.OpGaussTopK:        {"gaussTopK: the generated gaussian top-k over each gate row", true},
+	graph.OpPredict:          {"draftRows (spec.go): enorm, hnorm and eh_proj before the step; the block's own head after it", false},
 	graph.OpCompressedAttend: {"ds4Attn: the projections, the compressor and indexer, the attention and the grouped output", false},
 	graph.OpRecurrent:        {"linearAttn: the recurrent mixer as one routine (mixerChunk, mixerRagged over rows)", false},
 }

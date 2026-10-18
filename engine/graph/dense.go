@@ -118,6 +118,10 @@ type Dense struct {
 	// Compressed, where set, is the attention: OpCompressedAttend binding
 	// W, the output projection inside it.
 	Compressed *Compressed
+	// PredictW, where set, makes the block a prediction block: OpPredict
+	// first, binding these, over the block input and a second input, the
+	// next token's embedding row.
+	PredictW []Binding
 	// NonCausal makes the attention bidirectional (OpAttend's Bidir).
 	NonCausal bool
 	// Select, where set, is the attention's block selection (OpIndex over a
@@ -217,6 +221,12 @@ func (d *Dense) Build() *Graph {
 	}
 	x := g.value("x", rw)
 	g.In = []ValueID{x}
+	if d.PredictW != nil {
+		e, xp := g.value("next_embd", d.NEmbd), g.value("x_predict", rw)
+		g.In = append(g.In, e)
+		g.op(Op{Kind: OpPredict, In: []ValueID{x, e}, Out: []ValueID{xp}, Weight: d.PredictW, Attr: Attrs{Eps: d.Eps}})
+		x = xp
+	}
 	pred := ValueID(-1)
 	if a := d.AltUp; a != nil {
 		pred, x = g.value("alt_pred", rw), g.value("alt_active", d.NEmbd)

@@ -357,6 +357,18 @@ func Verify(g *Graph, f Facts) error {
 			if len(o.Reads) != 1 || o.Reads[0] != (StateRef{"kv", 0}) || len(o.Writes) != 1 || o.Writes[0] != (StateRef{"kv", 1}) {
 				bad("%s: reads and writes no kv version", at)
 			}
+		case OpPredict:
+			if c.PredictW == nil {
+				bad("%s: a prediction prologue in a block the configuration states is the trunk's", at)
+				break
+			}
+			if !ins(2) || !outs(1) {
+				break
+			}
+			if width(o.Out[0]) != width(o.In[0]) || width(o.In[1]) != c.NEmbd || len(o.Weight) != len(c.PredictW) || o.Attr.Eps != c.Eps {
+				bad("%s: a residual of %d and an embedding of %d into %d binding %d weights", at, width(o.In[0]), width(o.In[1]),
+					width(o.Out[0]), len(o.Weight))
+			}
 		case OpLaurel:
 			if c.AltUp == nil {
 				bad("%s: LAuReL the configuration does not state", at)

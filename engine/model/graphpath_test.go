@@ -174,7 +174,7 @@ func TestEveryTextBlockIsCovered(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for li := range m.Cfg.NLayer {
+			for li := range m.Cfg.NLayer + m.Cfg.NMTP {
 				if why := m.GraphUncovered(li); why != "" {
 					t.Errorf("block %d is not covered: %s", li, why)
 				}

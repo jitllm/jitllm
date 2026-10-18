@@ -172,10 +172,17 @@ const (
 	// projection: Out[0] the sublayer's output row. It reads and writes the
 	// kv state. Opaque in this version, its weights all bound by it.
 	OpCompressedAttend
+	// OpPredict is a prediction block's prologue: In[0] the trunk's hidden
+	// row (every stream of a residual of several), In[1] the next token's
+	// embedding row; Out[0] the block's input, eh_proj([enorm(e) ; hnorm(h)])
+	// (per stream). Its weights bind the block's own head too (its norm,
+	// projection, embedding table and stream mix), which the draft reads
+	// after the block. Opaque in this version.
+	OpPredict
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
