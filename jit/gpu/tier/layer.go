@@ -1885,6 +1885,11 @@ type mv struct {
 	// actN threads.
 	act  backend.Kernel
 	actN int
+	// actT says act writes the token-major layout (kernels.ActF16T) the
+	// fused operand writers produce (rmsF16For, actF16For). The MMA twin's
+	// act writes the m16n8 fragment layout (kernels.ActF16) instead, and a
+	// fused writer standing in for it hands the GEMM a scrambled operand.
+	actT bool
 	// vt is the GemmVolta tile a binary16 twin was built at (stagedGemm), so
 	// a block's q, k and v can be put in one grid (qkvGemm); zero elsewhere.
 	vt kernels.VoltaTile

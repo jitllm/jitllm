@@ -1081,7 +1081,7 @@ func (g *devTier) tileMV(m mv, ntok int) (mv, bool) {
 		if tail != nil {
 			g.TileTail++
 		}
-		return mv{kern: c, act: a, actN: ntok * m.k / sub, rows: m.rows, split: 1, bias: m.bias,
+		return mv{kern: c, act: a, actT: true, actN: ntok * m.k / sub, rows: m.rows, split: 1, bias: m.bias,
 			q: m.q, k: m.k, threads: kernels.GemmTileGroups(s, tl) * tl.Threads(), redN: m.rows * ntok, tail: tail}, true
 	}
 	return mv{}, false
@@ -1267,14 +1267,15 @@ func (g *devTier) fusedKern(key ragKey, build func() (*ir.Kernel, error)) backen
 // (kernels.RMSNormF16TRows; with add, x+y and its norm as bs.addRms), and
 // the conversion it stands in for: m's batched twin's ActF16T kernel, which
 // the caller names in the conversion memo so the GEMM finds its operand
-// written. nil where m's twin reads int8 (no conversion to save), where the
+// written. nil where m's twin reads int8 (no conversion to save) or the MMA
+// twin's fragment layout (kernels.ActF16, not this kernel's), where the
 // norm is not RMSNorm's one launch, or NoOperandFuse.
 func (g *devTier) rmsF16For(bs *blockScratch, m mv, ntok int, add bool) (norm, conv backend.Kernel) {
 	if g.NoOperandFuse || m.kern == nil || bs.rms == nil || bs.normVar != nil {
 		return nil, nil
 	}
 	bm, ok := g.batchMV(m, ntok, bs.tok)
-	if !ok || bm.act == nil || m.k != bs.p.NEmbd {
+	if !ok || bm.act == nil || !bm.actT || m.k != bs.p.NEmbd {
 		return nil, nil
 	}
 	kind := "rmsf16t"
@@ -1299,7 +1300,7 @@ func (g *devTier) actF16For(bs *blockScratch, m mv, ntok int) (act, conv backend
 		return nil, nil, 0
 	}
 	bm, ok := g.batchMV(m, ntok, bs.tok)
-	if !ok || bm.act == nil {
+	if !ok || bm.act == nil || !bm.actT {
 		return nil, nil, 0
 	}
 	// ntok only clamps the last thread (RULE 13). Where a token's words are
@@ -1577,7 +1578,7 @@ func (g *devTier) stagedGemm(m mv, ntok int, tiles []kernels.VoltaTile, f16k, fi
 		if a == nil || !g.sizeF16(ntok*m.k*2) {
 			return mv{}, false
 		}
-		out := mv{kern: c, act: a, actN: ntok * m.k / sub, rows: m.rows, split: split, bias: m.bias,
+		out := mv{kern: c, act: a, actT: true, actN: ntok * m.k / sub, rows: m.rows, split: split, bias: m.bias,
 			q: m.q, k: m.k, threads: kernels.GemmVoltaGroups(s, tl) * tl.Threads(), width: tl.Threads(), redN: m.rows * ntok, vt: tl}
 		if split > 1 {
 			if out.red = g.reduceKernel(m.rows*ntok, split); out.red == nil ||
