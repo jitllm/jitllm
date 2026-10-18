@@ -69,8 +69,6 @@ const (
 	numBaseKinds                // the fused kinds (devrewrite.go) count on from here
 )
 
-var devKindName = []string{"norm", "quant", "matvec", "rope_q", "kv_write", "attend", "add", "act_mul", "head_norm"}
-
 func (k devKind) String() string { return devKindName[k] }
 
 // devVal names a value of the program; its buffer is the scratch slot the
@@ -364,15 +362,50 @@ func (g *GPU) BlockProgram(li int) (prog, why string) {
 	var out []string
 	for _, f := range [2]progFused{l.progOne, l.progRows} {
 		if f.prog != nil {
-			out = append(out, "rewrites: "+strings.Join(f.took, ", ")+"\n"+f.prog.String())
+			head := "rewrites: " + f.took.String()
+			if f.err != nil {
+				head = "rewrites refused: " + f.err.Error()
+			}
+			out = append(out, head+"\n"+f.prog.String())
 		}
 	}
-	why = l.progRun
-	if l.progRunRows != "" {
-		why += "; rows: " + l.progRunRows
+	if l.progRun != progRanProgram {
+		why = l.progRun.String()
+	}
+	if l.progRunRows != progRanProgram {
+		why += "; rows: " + l.progRunRows.String()
 	}
 	if out != nil {
 		return strings.Join(out, ""), why
 	}
-	return l.prog.String(), l.progRun
+	return l.prog.String(), why
 }
+
+// progReason is why a step ran a block through the encoder rather than its
+// program: a byte the step writes, named only when reported.
+type progReason uint8
+
+const (
+	progRanProgram     progReason = iota
+	progNotLowered                // the program does not lower the block (progWhy)
+	progNoProgram                 // Config.NoProgram
+	progRagged                    // a ragged step
+	progRowsNotPrefill            // rows that are not a prefill chunk
+	progFault                     // a fault skips a kernel
+	progNotPaged                  // not a paged decode or prefill
+	progRotary                    // a rotary the program does not lower
+	progQKVExtra                  // a q/k/v clamp, split or gate
+	progNormResid                 // a norm or residual the program does not lower
+	progTableSplit                // TableSplit
+	numProgReasons
+)
+
+var progReasonName = [numProgReasons]string{
+	progRanProgram: "", progNotLowered: "not lowered", progNoProgram: "NoProgram", progRagged: "a ragged step",
+	progRowsNotPrefill: "rows that are not a prefill chunk", progFault: "a fault skips a kernel",
+	progNotPaged: "not a paged decode or prefill", progRotary: "a rotary the program does not lower",
+	progQKVExtra: "a q/k/v clamp, split or gate", progNormResid: "a norm or residual the program does not lower",
+	progTableSplit: "TableSplit",
+}
+
+func (r progReason) String() string { return progReasonName[r] }

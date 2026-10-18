@@ -21,11 +21,10 @@ type layer struct {
 	// does not lower the block yet; progWhy says why.
 	prog    *devProgram
 	progWhy string
-	// progRun is why the last step ran the block through the encoder, empty
-	// where it ran the program (set under the submission, read by BlockProgram).
-	progRun string
-	// progRunRows is progRun for the last step of many rows (a prefill chunk).
-	progRunRows string
+	// progRun and progRunRows are why the last step of one row and of many
+	// ran the block through the encoder, progRanProgram where it ran the
+	// program.
+	progRun, progRunRows progReason
 	// progOne and progRows are prog with the rewrites that apply on a
 	// scratch at one row and at many (devrewrite.go).
 	progOne, progRows progFused
@@ -303,5 +302,6 @@ type layer struct {
 type progFused struct {
 	bs   *blockScratch
 	prog *devProgram
-	took []string
+	took rwSet
+	err  error // the type error that refused every rewrite, if one did
 }

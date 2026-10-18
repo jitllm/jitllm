@@ -1,6 +1,10 @@
 package tier
 
-import "github.com/jitllm/jitllm/format/jlm"
+import (
+	"strings"
+
+	"github.com/jitllm/jitllm/format/jlm"
+)
 
 // The device program's rewrites (docs/design/composer.md, "The device
 // program"): each replaces a pattern of device ops with one launch of a
@@ -28,25 +32,39 @@ const (
 	dkNormF16                                    // a norm writing its row and the next GEMM's binary16 operand (rmsF16For)
 	dkAddNormF16                                 // the residual add, its norm and the operand (rmsF16For, add)
 	dkActF16                                     // act(gate)*up written as down's binary16 operand only (actF16For)
+	numKinds
 )
 
-func init() {
-	devKindName = append(devKindName[:numBaseKinds:numBaseKinds],
-		"norm_quant", "add_norm", "add_norm_quant", "matvec_res", "matvec_gate", "act_quant", "qkv", "rope_qkv",
-		"gate2", "gate2_in", "qkv_in", "qkv_sep", "matvec_res_in", "ffn_in", "down_act",
-		"norm_f16", "add_norm_f16", "act_f16")
+// devKindName names every kind, base and fused, for the program's dump; the
+// executor and the rewrites switch on the kinds themselves.
+// TestEveryDevKindHasAName holds the table to the enum.
+var devKindName = [numKinds]string{
+	dkNorm: "norm", dkQuant: "quant", dkMatVec: "matvec", dkRopeQ: "rope_q", dkKVWrite: "kv_write",
+	dkAttend: "attend", dkAdd: "add", dkActMul: "act_mul", dkHeadNorm: "head_norm",
+	dkNormQuant: "norm_quant", dkAddNorm: "add_norm", dkAddNormQuant: "add_norm_quant", dkMatVecRes: "matvec_res",
+	dkMatVecGate: "matvec_gate", dkActQuant: "act_quant", dkQKV: "qkv", dkRopeQKV: "rope_qkv", dkGate2: "gate2",
+	dkGate2In: "gate2_in", dkQKVIn: "qkv_in", dkQKVSep: "qkv_sep", dkResIn: "matvec_res_in", dkFFNIn: "ffn_in",
+	dkDownAct: "down_act", dkNormF16: "norm_f16", dkAddNormF16: "add_norm_f16", dkActF16: "act_f16",
 }
 
 // devRewrite is one rewrite: its name and whether it pays and is legal for
-// a block on a scratch at R rows (the fused kernel exists for that shape).
+// a block on a scratch at R rows, of nseq sequences on a ragged step (0
+// otherwise): the fused kernel exists for that shape.
 type devRewrite struct {
 	name  string
-	apply func(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool
+	apply func(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool
 }
 
-// devRewrites is the order they are tried: each to a fixed point before the
-// next, the order the encoder's decode takes them in.
+// devRewrites is every rewrite, in the order they are tried: each to a fixed
+// point before the next, the order the encoder takes them in. A program's
+// rewrites taken are a bit each (rwSet), by position here: the f16 lowering
+// first (a prompt chunk of binary16 GEMMs takes it and its writers alone),
+// then the rest.
 var devRewrites = []devRewrite{
+	{"f16-operands", nil},
+	{"add-norm-f16", rwAddNormF16},
+	{"norm-f16", rwNormF16},
+	{"act-f16", rwActF16},
 	{"qkv-grouped", rwQKV},
 	{"qkv-in", rwQKVIn},
 	{"qkv-sep", rwQKVSep},
@@ -65,43 +83,47 @@ var devRewrites = []devRewrite{
 	{"norm-quant", rwNormQuant},
 }
 
-// fused is a block's program with every rewrite that applies on bs, and the
-// names of those that did.
-func (p *devProgram) fused(l *layer, bs *blockScratch, g *devTier, R int) (*devProgram, []string) {
-	q := p.clone()
-	var took []string
-	if R > 1 && g.voltaBlock(l, R, bs.tok) {
-		q.toF16()
-		took = append(took, "f16-operands")
-		for _, rw := range [...]devRewrite{{"add-norm-f16", rwAddNormF16}, {"norm-f16", rwNormF16}, {"act-f16", rwActF16}} {
-			n := 0
-			for rw.apply(q, l, bs, g, R) {
-				n++
+// rwF16End is where the f16 lowering's rewrites end in devRewrites.
+const rwF16End = 4
+
+// rwSet is the rewrites a program took, a bit each by devRewrites' order.
+type rwSet uint64
+
+func (s rwSet) String() string {
+	var b strings.Builder
+	for i, rw := range devRewrites {
+		if s&(1<<i) != 0 {
+			if b.Len() > 0 {
+				b.WriteString(", ")
 			}
-			if n > 0 {
-				took = append(took, rw.name)
-			}
+			b.WriteString(rw.name)
 		}
-		if err := q.check(); err != nil {
-			return p, []string{"refused: " + err.Error()}
-		}
-		return q, took
 	}
-	for _, rw := range devRewrites {
-		n := 0
-		for rw.apply(q, l, bs, g, R) {
-			n++
-		}
-		if n > 0 {
-			took = append(took, rw.name)
+	return b.String()
+}
+
+// fused is a block's program with every rewrite that applies on bs, the
+// rewrites it took, and the type error that refused them all, if one did.
+func (p *devProgram) fused(l *layer, bs *blockScratch, g *devTier, R, nseq int) (*devProgram, rwSet, error) {
+	q := p.clone()
+	var took rwSet
+	lo, hi := rwF16End, len(devRewrites)
+	if R > 1 && nseq == 0 && g.voltaBlock(l, R, bs.tok) {
+		q.toF16()
+		took |= 1
+		lo, hi = 1, rwF16End
+	}
+	for i := lo; i < hi; i++ {
+		for devRewrites[i].apply(q, l, bs, g, R, nseq) {
+			took |= 1 << i
 		}
 	}
 	if err := q.check(); err != nil {
 		// A rewrite that broke a type is a bug in the rewrite; the unfused
 		// program is still right.
-		return p, []string{"refused: " + err.Error()}
+		return p, 0, err
 	}
-	return q, took
+	return q, took, nil
 }
 
 func (p *devProgram) clone() *devProgram {
@@ -151,11 +173,19 @@ func (p *devProgram) replace(i, j int, o devOp) {
 func cat(a, b []int) []int { return append(append([]int(nil), a...), b...) }
 
 // rwQKV: q, k and v's matvecs over one operand, as the grouped launch.
-func rwQKV(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
-	if R != 1 {
+func rwQKV(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
+	switch {
+	case nseq > 0:
+		// A ragged step's segments: q, k and v grouped over its rows.
+		if g.TableSplit || l.vFromK {
+			return false
+		}
+		if _, ok := g.groupQKV(l, nseq, R); !ok {
+			return false
+		}
+	case R != 1:
 		return false // a one-row variant
-	}
-	if l.qkv == nil || g.NoFuse {
+	case l.qkv == nil || g.NoFuse:
 		return false
 	}
 	for i := 0; i+2 < len(p.ops); i++ {
@@ -172,7 +202,7 @@ func rwQKV(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
 }
 
 // rwRopeQKV: q's rotary and the history write, one paged launch.
-func rwRopeQKV(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
+func rwRopeQKV(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	pk := bs.pkv
 	if pk == nil || pk.ropeQKV == nil || g.NoFuse || bs.copyQ != nil {
 		return false
@@ -194,9 +224,9 @@ func rwRopeQKV(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) boo
 
 // rwMatVecRes: a matvec whose output only a residual add reads, as the
 // matvec carrying the add.
-func rwMatVecRes(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
-	if R != 1 {
-		return false // a one-row variant
+func rwMatVecRes(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
+	if R != 1 && nseq == 0 {
+		return false // a one-row variant, or a ragged step's grouped one
 	}
 	for i, o := range p.ops {
 		if o.Kind != dkMatVec || (o.Role != jlm.RoleAttnOut && o.Role != jlm.RoleFFNDown) {
@@ -206,7 +236,14 @@ func rwMatVecRes(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) b
 		if o.Role == jlm.RoleFFNDown {
 			m = l.mvd
 		}
-		if m.res == nil || g.TableSplit && m.alt != nil || p.uses(o.Out[0]) != 1 {
+		if nseq > 0 {
+			if _, ok := g.groupKern(m, nseq, R, groupRes, 0); !ok {
+				continue
+			}
+		} else if m.res == nil || g.TableSplit && m.alt != nil {
+			continue
+		}
+		if p.uses(o.Out[0]) != 1 {
 			continue
 		}
 		j := p.next(i, o.Out[0])
@@ -226,11 +263,15 @@ func rwMatVecRes(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) b
 
 // rwMatVecGate: up's matvec and the act_mul over the gate, as up's Gate
 // variant writing the product.
-func rwMatVecGate(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
-	if R != 1 {
-		return false // a one-row variant
-	}
-	if l.mvu.gated == nil || g.TableSplit && l.mvu.alt != nil {
+func rwMatVecGate(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
+	switch {
+	case nseq > 0:
+		if _, ok := g.groupKern(l.mvu, nseq, R, groupGate, bs.p.Act); !ok {
+			return false
+		}
+	case R != 1:
+		return false // a one-row variant, or a ragged step's grouped one
+	case l.mvu.gated == nil || g.TableSplit && l.mvu.alt != nil:
 		return false
 	}
 	for i, o := range p.ops {
@@ -249,7 +290,7 @@ func rwMatVecGate(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) 
 }
 
 // rwActQuant: act_mul and the quantize of its product, one launch.
-func rwActQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
+func rwActQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	if bs.quantAct == nil || g.NoOperandFuse {
 		return false
 	}
@@ -280,7 +321,7 @@ func addNorm(p *devProgram) (int, int, bool) {
 }
 
 // rwAddNormQuant: the add, the norm of the sum and its quantize, one launch.
-func rwAddNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
+func rwAddNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	if bs.addRmsQ == nil || bs.normVar != nil {
 		return false
 	}
@@ -296,7 +337,7 @@ func rwAddNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int
 }
 
 // rwAddNorm: the add and the norm of the sum, one launch.
-func rwAddNorm(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
+func rwAddNorm(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	if bs.addRms == nil || bs.normVar != nil {
 		return false
 	}
@@ -310,7 +351,7 @@ func rwAddNorm(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) boo
 }
 
 // rwNormQuant: a norm and the quantize of its row, one launch.
-func rwNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
+func rwNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	if bs.rmsQ == nil || bs.normVar != nil {
 		return false
 	}
@@ -343,7 +384,7 @@ func gateUp(p *devProgram) (gi, ui, ai int) {
 // rwGate2In: the FFN norm of a residual a fused matvec wrote, its quantize,
 // gate and up, as one launch building its own operand (the gate2in recipe,
 // where the card's recipe chose it).
-func rwGate2In(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
+func rwGate2In(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	if R != 1 {
 		return false // a one-row variant
 	}
@@ -382,7 +423,7 @@ func rwGate2In(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) boo
 
 // rwGate2: gate and up over one operand and their act_mul, one launch (Gate2,
 // where the card picked it).
-func rwGate2(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
+func rwGate2(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	if R != 1 {
 		return false // a one-row variant
 	}
@@ -419,7 +460,7 @@ func normQuantBefore(p *devProgram, i int, role jlm.Role, uses int) bool {
 
 // rwQKVIn: the attention norm, its quantize and the grouped q/k/v, as the
 // grouped launch normalising and quantizing the block input itself.
-func rwQKVIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
+func rwQKVIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	if R != 1 {
 		return false // a one-row variant
 	}
@@ -440,7 +481,7 @@ func rwQKVIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool 
 
 // rwQKVSep: the attention norm, its quantize and three q/k/v matvecs, as
 // three launches each normalising and quantizing the block input.
-func rwQKVSep(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
+func rwQKVSep(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	if R != 1 {
 		return false // a one-row variant
 	}
@@ -478,7 +519,7 @@ func resIn(p *devProgram, role jlm.Role, ok func(src devVal) bool) bool {
 
 // rwOIn: the attention output's quantize and its matvec with the residual,
 // as the matvec quantizing its own operand.
-func rwOIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
+func rwOIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	if R != 1 {
 		return false // a one-row variant
 	}
@@ -490,7 +531,7 @@ func rwOIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
 
 // rwFFNIn: the FFN norm, its quantize, gate and up (gated or not), as gate
 // and up normalising and quantizing the residual themselves.
-func rwFFNIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
+func rwFFNIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	if R != 1 {
 		return false // a one-row variant
 	}
@@ -534,7 +575,7 @@ func downOK(l *layer, bs *blockScratch, g *devTier) bool {
 
 // rwDownIn: the quantize of a gated product and down with the residual, as
 // down quantizing its own operand.
-func rwDownIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
+func rwDownIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	if R != 1 {
 		return false // a one-row variant
 	}
@@ -546,7 +587,7 @@ func rwDownIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool
 
 // rwDownAct: act_mul over a prologue's gate and up, its quantize and down
 // with the residual, as down forming the product as it quantizes.
-func rwDownAct(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
+func rwDownAct(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	if R != 1 {
 		return false // a one-row variant
 	}
@@ -617,7 +658,7 @@ func readsOperand(p *devProgram, g *devTier, bs *blockScratch, j int, m mv, R in
 
 // rwNormF16: a norm whose first reader is a GEMM, writing that GEMM's
 // binary16 operand too (kernels.RMSNormF16TRows, token-major).
-func rwNormF16(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
+func rwNormF16(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	for i, o := range p.ops {
 		if o.Kind != dkNorm || len(o.Out) != 1 {
 			continue
@@ -643,7 +684,7 @@ func rwNormF16(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) boo
 
 // rwAddNormF16: a residual add, the norm of the sum and the next GEMM's
 // binary16 operand, one launch (kernels.RMSNormF16TRows with add).
-func rwAddNormF16(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
+func rwAddNormF16(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	i, n, ok := addNorm(p)
 	if !ok {
 		return false
@@ -666,7 +707,7 @@ func rwAddNormF16(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) 
 
 // rwActF16: act_mul whose one reader is down's GEMM, written as down's
 // binary16 operand alone (kernels.ActMulF16T): its float row is never written.
-func rwActF16(p *devProgram, l *layer, bs *blockScratch, g *devTier, R int) bool {
+func rwActF16(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	for i, o := range p.ops {
 		if o.Kind != dkActMul || p.uses(o.Out[0]) != 1 {
 			continue

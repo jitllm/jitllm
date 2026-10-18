@@ -422,7 +422,11 @@ func (g *devTier) layersSession(s backend.Session) {
 			fc = &l.progRows
 		}
 		if fc.bs != bs {
-			fc.prog, fc.took = prog.fused(l, bs, g, R)
+			nseq := 0
+			if rag != nil {
+				nseq = len(rag.pos)
+			}
+			fc.prog, fc.took, fc.err = prog.fused(l, bs, g, R, nseq)
 			fc.bs = bs
 		}
 		prog = fc.prog
@@ -713,34 +717,35 @@ func (g *devTier) layersSession(s backend.Session) {
 			}
 			// The device program, where it lowers the block and the step is
 			// one decode row over the paged history (devprog.go).
-			progWhy := l.progWhy
+			why := progRanProgram
 			switch {
 			case l.prog == nil:
+				why = progNotLowered
 			case g.NoProgram:
-				progWhy = "NoProgram"
+				why = progNoProgram
 			case rag != nil:
-				progWhy = "a ragged step"
+				why = progRagged
 			case R > 1 && (bs.pkv == nil || !bs.pkv.prefill):
-				progWhy = "rows that are not a prefill chunk"
+				why = progRowsNotPrefill
 			case len(skip) != 0:
-				progWhy = "a fault skips a kernel"
+				why = progFault
 			case bs.pkv == nil || R == 1 && (bs.pkv.cur == nil || bs.pkv.prefill) || R > 1 && bs.pkv.pf == nil:
-				progWhy = "not a paged decode or prefill"
+				why = progNotPaged
 			case bs.ropeQ == nil || l.noRope || bs.copyQ != nil || bs.qTemp != nil:
-				progWhy = "a rotary the program does not lower"
+				why = progRotary
 			case bs.clampQ != nil || bs.splitQG != nil || bs.sigMul != nil:
-				progWhy = "a q/k/v clamp, split or gate"
+				why = progQKVExtra
 			case bs.normVar != nil || scaled || l.pleGate != nil || l.outScale != nil || l.nResid != nil || p.VNorm:
-				progWhy = "a norm or residual the program does not lower"
+				why = progNormResid
 			case g.TableSplit:
-				progWhy = "TableSplit"
+				why = progTableSplit
 			}
 			if R > 1 {
-				l.progRunRows = progWhy
+				l.progRunRows = why
 			} else {
-				l.progRun = progWhy
+				l.progRun = why
 			}
-			if l.prog != nil && progWhy == "" {
+			if why == progRanProgram {
 				if pendX != nil {
 					addRes(pendX, pendY, bs.x)
 					pendX, pendY = nil, nil
