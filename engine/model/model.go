@@ -1637,9 +1637,13 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	}
 	m.buildDeltaGraphs()
 	m.buildMixGraphs()
-	if err := m.buildGraphs(); err != nil {
-		c.Close()
-		return nil, err
+	// An encoder's blocks are its own, their graphs built with them
+	// (encgraph.go).
+	if !m.IsEncoder() {
+		if err := m.buildGraphs(); err != nil {
+			c.Close()
+			return nil, err
+		}
 	}
 	bindOne(c, &m.embd)
 	bindOne(c, &m.posEmbd)

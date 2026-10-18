@@ -44,6 +44,9 @@ type encoder struct {
 	rope     *nn.Rope // nomic-bert's rotary, nil for BERT
 	swiglu   bool
 	mb       *modernBERT // ModernBERT's own graph; nil for BERT and nomic-bert
+	// graphs is each BERT-family block's verified graph and lowering
+	// (encgraph.go); encode runs the blocks as they state.
+	graphs []*encLowering
 	// lf is an LFM2 encoder's trunk (lfm2enc.go); its decision head is mb's.
 	lf *lfm2Enc
 	// zeros is the bias a LayerNorm without one is handed on a device
@@ -267,6 +270,9 @@ func buildEncoder(c *jlm.File, m *Model) error {
 	if cfg.NHead*cfg.HeadDim != d {
 		return fmt.Errorf("model: %d heads of %d do not make a %d-wide residual", cfg.NHead, cfg.HeadDim, d)
 	}
+	if err := m.buildEncGraphs(c, enc); err != nil {
+		return err
+	}
 	enc.planPages(c)
 	m.enc = enc
 	// One zero entry a block: the encoder's blocks are encBlock's, and the
@@ -341,7 +347,8 @@ func (e *Embedder) encode(ids []int32) error {
 		if err := m.encBlockPageIn(li); err != nil {
 			return err
 		}
-		b := &enc.blocks[li]
+		// The block as its graph's lowering states it (encgraph.go).
+		b, lw := &enc.blocks[li], enc.graphs[li]
 		q, k, v := e.q[:n*d], e.k[:n*d], e.v[:n*d]
 		for _, p := range []struct {
 			w   tensor
@@ -353,7 +360,7 @@ func (e *Embedder) encode(ids []int32) error {
 			}
 			e.addBiasRows(p.dst, p.b, n)
 		}
-		if enc.rope != nil {
+		if lw.rope {
 			for i := 0; i < n; i++ {
 				cs := e.cs[i*c.NRot : (i+1)*c.NRot]
 				nn.RoPE32JIT(q[i*d:(i+1)*d], c.HeadDim, cs, enc.rope.Neox)
@@ -393,7 +400,7 @@ func (e *Embedder) encode(ids []int32) error {
 			return err
 		}
 		e.addBiasRows(ff, b.bUp, n)
-		if enc.swiglu {
+		if lw.gated {
 			g := e.gg[:n*c.NFFN]
 			if err := e.mm(g, b.gate, x, n); err != nil {
 				return err

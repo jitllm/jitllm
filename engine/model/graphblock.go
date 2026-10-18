@@ -153,7 +153,8 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		Parallel: c.Parallel, SharedNorm: c.Parallel && !has(jlm.RoleFFNNorm),
 		OutBias: has(jlm.RoleAttnOutBias), UpBias: has(jlm.RoleFFNUpBias), DownBias: has(jlm.RoleFFNDownBias),
 		Ungated: !c.MoEAt(li) && !has(jlm.RoleFFNGate), Clamp: float64(c.ClampKQV),
-		PostNorm: has(jlm.RolePostAttnNorm), NoPreNorm: !has(jlm.RoleAttnNorm), NoRope: !c.RopeAt(li)}
+		PostNorm: has(jlm.RolePostAttnNorm), NoPreNorm: !has(jlm.RoleAttnNorm),
+		NoFFNNorm: !has(jlm.RoleFFNNorm), NoRope: !c.RopeAt(li)}
 	d.QKVBias, d.Sinks = has(jlm.RoleAttnQBias), has(jlm.RoleAttnSinks)
 	d.OutGate, d.VNorm = c.AttnOutGate, c.VNorm
 	d.VFromK = c.VNorm && has(jlm.RoleAttnK) && !has(jlm.RoleAttnV)

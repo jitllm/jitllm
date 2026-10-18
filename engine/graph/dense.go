@@ -43,10 +43,11 @@ type Dense struct {
 	Act                            Act
 	QKNorm                         bool // RoleAttnQNorm and RoleAttnKNorm, over each head before the rotary
 	PostNorm                       bool // RolePostAttnNorm and RolePostFFNNorm, over each sublayer's output
-	// NoPreNorm is a block whose sublayers read their input unnormed (OLMo
-	// 2's, its post-norms standing in), NoRope one with no rotary.
-	NoPreNorm, NoRope bool
-	QKVBias           bool // RoleAttnQBias/KBias/VBias
+	// NoPreNorm is a block whose attention reads its input unnormed (OLMo
+	// 2's, its post-norms standing in; ModernBERT's first block), NoFFNNorm
+	// one whose FFN does (OLMo 2's), NoRope one with no rotary.
+	NoPreNorm, NoFFNNorm, NoRope bool
+	QKVBias                      bool // RoleAttnQBias/KBias/VBias
 	// QKNormWhole norms q and k each over its whole projection at once
 	// (OLMoE's), an OpNorm on each, where QKNorm norms each head.
 	QKNormWhole bool
@@ -124,6 +125,10 @@ type Dense struct {
 	PredictW []Binding
 	// NonCausal makes the attention bidirectional (OpAttend's Bidir).
 	NonCausal bool
+	// PostResid is BERT's post-norm: each sublayer's residual add is followed
+	// by a LayerNorm of the sum (RoleAttnOutNorm, RoleLayerOutNorm, each with
+	// its bias), the block's sublayers reading their input unnormed.
+	PostResid bool
 	// Select, where set, is the attention's block selection (OpIndex over a
 	// GQA row: MiniMax Sparse Attention).
 	Select *Select
@@ -302,7 +307,7 @@ func (d *Dense) Build() *Graph {
 	// preNorm is a sublayer's input norm: an RMSNorm, or the classic block's
 	// LayerNorm with its bias where the block stores one.
 	preNorm := func(name string, in ValueID, w, b jlm.Role) ValueID {
-		if d.NoPreNorm {
+		if w == jlm.RoleAttnNorm && d.NoPreNorm || w == jlm.RoleFFNNorm && d.NoFFNNorm {
 			return in
 		}
 		if !d.LayerNorm {
@@ -314,6 +319,13 @@ func (d *Dense) Build() *Graph {
 			ws = append(ws, vec(b, g.Values[in].Width))
 		}
 		g.op(Op{Kind: OpLayerNorm, In: []ValueID{in}, Out: []ValueID{out}, Weight: ws, Attr: Attrs{Eps: d.Eps}})
+		return out
+	}
+	// layerNorm is a LayerNorm with its bias (a post-norm's).
+	layerNorm := func(name string, in ValueID, w, b jlm.Role) ValueID {
+		out := g.value(name, g.Values[in].Width)
+		g.op(Op{Kind: OpLayerNorm, In: []ValueID{in}, Out: []ValueID{out},
+			Weight: []Binding{vec(w, g.Values[in].Width), vec(b, g.Values[in].Width)}, Attr: Attrs{Eps: d.Eps}})
 		return out
 	}
 	opt := func(on bool, r jlm.Role) jlm.Role {
@@ -515,6 +527,9 @@ func (d *Dense) Build() *Graph {
 			o = norm("attn_post", o, jlm.RolePostAttnNorm)
 		}
 		x1 = resid("x_attn", x, o, wa)
+		if d.PostResid {
+			x1 = layerNorm("x_attn_normed", x1, jlm.RoleAttnOutNorm, jlm.RoleAttnOutNormBias)
+		}
 		if lr >= 0 {
 			xl := g.value("x_laurel", d.NEmbd)
 			g.op(Op{Kind: OpAdd, In: []ValueID{x1, lr}, Out: []ValueID{xl}, Attr: Attrs{Scale: LaurelJoin}})
@@ -574,6 +589,9 @@ func (d *Dense) Build() *Graph {
 		dn = norm("ffn_post", dn, jlm.RolePostFFNNorm)
 	}
 	x2 := resid("x_out", x1, dn, wf)
+	if d.PostResid {
+		x2 = layerNorm("x_out_normed", x2, jlm.RoleLayerOutNorm, jlm.RoleLayerOutNormBias)
+	}
 	if a := d.AltUp; a != nil {
 		pl := g.value("ple_in", d.PLEDim)
 		g.In = append(g.In, pl)
