@@ -28,6 +28,8 @@ import (
 
 // layer is one block's device-resident state.
 type layer struct {
+	// ran is the forms the block's last step took (ffnform.go, BlockForms).
+	ran            blockForms
 	wq, wk, wv, wo *resident
 	gate, up, down *resident
 	// conv is a convolutional tower block's program and vectors (conv.go),
@@ -8308,15 +8310,16 @@ func (g *devTier) layersSession(s backend.Session) {
 					if rag != nil && !g.TableSplit && !vFromK && !shared {
 						seg, segOK = g.groupQKV(l, len(rag.pos), R)
 					}
+					qf, qs := g.qkvLowering(l, R, rag != nil, shared, vFromK, segOK, qkvSep)
+					l.ran.note(formQKV, uint8(qf))
 					if !skip["qkvo"] {
-						if shared {
+						if qf == qkvQOnly {
 							// q alone: k and v are the source's, already cached.
 							mvrun(l.mvq, l.wq, bs.q)
-						} else if vFromK {
+						} else if qf == qkvQK {
 							mvrun(l.mvq, l.wq, bs.q)
 							mvrun(l.mvk, l.wk, bs.k)
-						} else if segOK || R == 1 && l.qkv != nil && !g.TableSplit &&
-							l.qkvBias == [3]bool{l.mvq.bias != nil, l.mvk.bias != nil, l.mvv.bias != nil} {
+						} else if qf == qkvGrouped {
 							kern, blocks, w := l.qkv, l.qkvBlocks, l.qkvW
 							if segOK {
 								kern, blocks, w = seg.kern, seg.blocks, seg.w
@@ -8344,7 +8347,7 @@ func (g *devTier) layersSession(s backend.Session) {
 							if err == nil {
 								err = lc.launch(kern, blocks, w, bufs...)
 							}
-						} else if l.clampB != nil {
+						} else if qf == qkvClamped {
 							// Gemma 4's clipped linears: each projection reads its
 							// own clamped copy of the normed rows, quantized for it,
 							// and writes into a buffer its output clamp reads.
@@ -8359,11 +8362,11 @@ func (g *devTier) layersSession(s backend.Session) {
 								fsrc = bs.cin
 								mvrun(pr.m, pr.r, pr.out)
 							}
-						} else if qkvSep {
+						} else if qf == qkvSeparate {
 							mvIn(l.mvq, l.mvq.kernIn, l.wq, bs.q, ain, l.nAttn, l.mvq.bias)
 							mvIn(l.mvk, l.mvk.kernIn, l.wk, bs.k, ain, l.nAttn, l.mvk.bias)
 							mvIn(l.mvv, l.mvv.kernIn, l.wv, bs.v, ain, l.nAttn, l.mvv.bias)
-						} else if qs, ok := g.qkvGemm(l, R, rag != nil); ok {
+						} else if qf == qkvGEMM {
 							// q, k and v as one grid over one binary16 operand
 							// (GemmVoltaSegments); a projection left out runs alone.
 							if qs.act != actMemoK || fsrc != actMemoSrc {
@@ -9527,6 +9530,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				gIn, uIn := bs.g, bs.u
 				guDone, gu2 := false, false
 				form := g.ffnGateUp(l, R, rag != nil, voltaOnly, ungated, resScaled, skip, g2in, ffnIn, nffn)
+				l.ran.note(formGateUp, uint8(form))
 				if form == gateUpClamped {
 					// Gemma 4's clipped linears: gate and up each read their own
 					// clamped copy of the normed rows, and the activation their
@@ -9610,6 +9614,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					// quantizing act(gate)*up where up wrote it (downIn), or
 					// forming it from gate and up as it quantizes (downAct).
 					down := g.ffnDown(l, R, rag != nil, voltaOnly, resScaled, skip, gated, ffnIn, nffn)
+					l.ran.note(formDown, uint8(down))
 					downIn, downAct := down == downFormIn, down == downFormAct
 					// The activation writes the down projection's operand where it
 					// can: binary16 for a binary16 GEMM, int8 for the rest.

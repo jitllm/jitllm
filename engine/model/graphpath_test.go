@@ -227,3 +227,46 @@ func TestRunTimeAlternativeIsNeverTakenUnasked(t *testing.T) {
 		t.Skip("no device on this host: only the plan's listing was checked")
 	}
 }
+
+// TestDeviceRecordsTheFormsItRan: a block decoded on a device records, per op
+// span, the lowering its step took (tier.GPU.BlockForms) -- the device's half
+// of a block's per-op lowering, read back rather than assumed.
+func TestDeviceRecordsTheFormsItRan(t *testing.T) {
+	m, err := Open(graphModel(t, "Qwen3-0.6B-Q8_0"), noTune)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("cuda")}, testTierOpts(t)...)...)
+	if err != nil || g == nil {
+		noDevice(t, "cuda", err)
+	}
+	defer g.Close()
+	if f := g.BlockForms(0); f != nil {
+		t.Fatalf("forms before any block was placed: %v", f)
+	}
+	s := m.NewState(32)
+	defer s.Close()
+	if err := s.SetDevice(g); err != nil {
+		t.Fatal(err)
+	}
+	if s.GPULayers() == 0 {
+		t.Skip("CARD TOO SMALL: no block placed -- this gate proved nothing")
+	}
+	lg, err := s.Prefill(m.Vocab.Encode("The capital of France is", true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if lg, err = s.Forward(Greedy(lg)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := g.BlockForms(0)
+	for _, span := range []string{"qkv", "gate_up", "down"} {
+		if f[span] == "" {
+			t.Fatalf("block 0 recorded no %s form: %v", span, f)
+		}
+	}
+	t.Logf("block 0 on cuda: %v", f)
+}

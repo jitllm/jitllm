@@ -91,6 +91,9 @@ type manifestBlock struct {
 	Rewrites []string          `json:"rewrites,omitempty"`
 	// Lowering is each graph op's lowering choice (model.OpLowering).
 	Lowering []string `json:"lowering,omitempty"`
+	// DeviceForms is the forms the block's op spans took on the device in
+	// its last step (tier.GPU.BlockForms): "qkv", "gate_up", "down".
+	DeviceForms map[string]string `json:"device_forms,omitempty"`
 }
 
 // paths records the State's per-block path for phase.
@@ -175,6 +178,9 @@ func (r *runManifest) device(d nn.Device, name string) {
 	r.Ran = map[string]int{"gate2in": st.Gate2InRuns, "gate2": st.GateUp2Runs, "gu": st.GateUpFused,
 		"ffn_keys_timed": st.FFNTimed, "ffn_keys_kept": st.FFNKept,
 		"actin_keys_timed": st.ActInTimed, "actin_keys_kept": st.ActInKept}
+	for li := range r.Blocks {
+		r.Blocks[li].DeviceForms = g.BlockForms(r.Blocks[li].Block)
+	}
 }
 
 func (r *runManifest) write(path string) error {
