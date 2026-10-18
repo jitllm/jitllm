@@ -658,6 +658,27 @@ softcap, gpt-oss's sinks and mixture biases, and every activation kind followed;
 a feature the device lacks is declined BY NAME until its
 kernel exists (RULE 8), and gated end to end once it does (RULE 11c).
 
+## RULE 8c: the compiler names mechanisms, not models.
+
+Stated by the user: *"no switch cases based on model name or family in
+compiler v2"*. The device program and the tier decide every lowering and
+rewrite from the block's structure -- the graph's op kinds, weight roles and
+attributes, the plan's fields, whether a kernel exists for the shape --
+never from which model or family the block came from.
+
+- **A family-named field is a family switch in disguise.** `l.k3 != nil`
+  tests Kimi-K3; the structure is "experts in a latent" (the graph binds
+  `RoleFFNRoutedDown`). Name the mechanism by what it does: an op is
+  `attend_latent`, not `mla`.
+- **No new identifier in the compiler's packages (jit/gpu/tier, engine/graph,
+  engine/nn) names a family or one family's mechanism** (k3, q4e, ds4,
+  altRouter, mla, msa, qsa, gemma, qwen, ...).
+  `srcgate.TestNoFamilyNamedMechanisms` fails on one, and on a ratchet-list
+  name that no longer exists, so `internal/srcgate/testdata/family_names.txt`
+  -- the block encoder's family-named fields, waiting for their features to
+  move into the device program -- only shrinks. Never add a line to it.
+- Model names belong in comments, as examples of a mechanism.
+
 ## RULE 9: fuzz with an exec budget, never a time budget.
 
     ./scripts/cap 4G -- go test ./convert/gguf -run=XXX -fuzz=FuzzParse -fuzztime=1000000x -parallel=2

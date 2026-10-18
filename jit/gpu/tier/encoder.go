@@ -1086,7 +1086,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				if err != nil {
 					return
 				}
-			case dkMLA:
+			case dkAttendLatent:
 				// Latent attention over the normed row and its quantize, as
 				// the encoder runs it, ending in bs.mvOut.
 				kvp := g.layers[l.kvSrc].kvOf(sid)

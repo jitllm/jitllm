@@ -71,8 +71,8 @@ func (k devKind) String() string {
 		return "kv_copy"
 	case dkAct:
 		return "act"
-	case dkMLA:
-		return "mla"
+	case dkAttendLatent:
+		return "attend_latent"
 	case dkNormQuant:
 		return "norm_quant"
 	case dkAddNorm:

@@ -57,23 +57,23 @@ func (t devType) String() string {
 type devKind uint8
 
 const (
-	dkNorm       devKind = iota // RMSNorm of a row by a weight
-	dkQuant                     // a float row to the int8 operand a matvec reads
-	dkMatVec                    // an integer matvec over a weight
-	dkRopeQ                     // q's rotary
-	dkKVWrite                   // k's rotary into the history, and v's copy
-	dkAttend                    // the paged decode attention
-	dkAdd                       // a residual add
-	dkActMul                    // act(gate) * up
-	dkHeadNorm                  // each head's RMSNorm (q's or k's)
-	dkPostNorm                  // a sublayer's output normed before its residual add (post-norm)
-	dkMixture                   // a routed mixture and its shared expert, from route to its sum (mixFFN)
-	dkRecurrent                 // a recurrent mixer with its pre-norm, from the block's row (emitLinear)
-	dkCopy                      // a row moved to another slot (the sum home to the block's row)
-	dkKVCopy                    // an unrotated key and its value copied into the history (NoPE)
-	dkAct                       // an ungated FFN's activation of up's row
-	dkMLA                       // latent attention, from the normed row to its output projection (emitMLA)
-	numBaseKinds                // the fused kinds (devrewrite.go) count on from here
+	dkNorm         devKind = iota // RMSNorm of a row by a weight
+	dkQuant                       // a float row to the int8 operand a matvec reads
+	dkMatVec                      // an integer matvec over a weight
+	dkRopeQ                       // q's rotary
+	dkKVWrite                     // k's rotary into the history, and v's copy
+	dkAttend                      // the paged decode attention
+	dkAdd                         // a residual add
+	dkActMul                      // act(gate) * up
+	dkHeadNorm                    // each head's RMSNorm (q's or k's)
+	dkPostNorm                    // a sublayer's output normed before its residual add (post-norm)
+	dkMixture                     // a routed mixture and its shared expert, from route to its sum (mixFFN)
+	dkRecurrent                   // a recurrent mixer with its pre-norm, from the block's row (emitLinear)
+	dkCopy                        // a row moved to another slot (the sum home to the block's row)
+	dkKVCopy                      // an unrotated key and its value copied into the history (NoPE)
+	dkAct                         // an ungated FFN's activation of up's row
+	dkAttendLatent                // latent attention, from the normed row to its output projection (emitMLA)
+	numBaseKinds                  // the fused kinds (devrewrite.go) count on from here
 )
 
 // devVal names a value of the program; its buffer is the scratch slot the
@@ -222,7 +222,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 	switch o.Kind {
 	case dkRecurrent, dkCopy, dkKVCopy, dkAct:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
-	case dkMixture, dkMLA:
+	case dkMixture, dkAttendLatent:
 		if i == 1 {
 			return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
 		}
@@ -376,7 +376,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			}
 			q := operand(in(0), i)
 			out := prog.val(g.Values[res].Name, f32(ne), slotOut)
-			prog.ops = append(prog.ops, devOp{Kind: dkMLA, Src: src, In: []devVal{in(0), q}, Out: []devVal{out}})
+			prog.ops = append(prog.ops, devOp{Kind: dkAttendLatent, Src: src, In: []devVal{in(0), q}, Out: []devVal{out}})
 			vals[res] = out
 			skipTo = a
 			mla = false
