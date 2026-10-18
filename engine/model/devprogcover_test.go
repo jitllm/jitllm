@@ -12,7 +12,7 @@ import (
 )
 
 // TestDeviceProgramCoverage reports, for every synthetic fixture whose
-// blocks a device takes, whether block 0 runs as its device program, and
+// blocks a device takes, whether its first device block runs as its device program, and
 // where it does not, why: the work list the block encoder's deletion (D5)
 // drives to empty. A report until then; at D5 it fails while any fixture
 // still runs the encoder.
@@ -49,7 +49,13 @@ func TestDeviceProgramCoverage(t *testing.T) {
 				reasons["prefill: "+err.Error()] = append(reasons["prefill: "+err.Error()], name)
 				return
 			}
-			prog, why := g.BlockProgram(0)
+			// The first block the device holds (a sliding or shared layer
+			// may leave block 0 home).
+			first := 0
+			if runs := s.DeviceBlocks(); len(runs) > 0 {
+				first = runs[0][0]
+			}
+			prog, why := g.BlockProgram(first)
 			if prog != "" && why == "" {
 				covered++
 				return
@@ -66,7 +72,7 @@ func TestDeviceProgramCoverage(t *testing.T) {
 		keys = append(keys, k)
 	}
 	slices.SortFunc(keys, func(a, b string) int { return cmp.Compare(len(reasons[b]), len(reasons[a])) })
-	t.Logf("%d of %d fixtures run block 0 as a device program", covered, tried)
+	t.Logf("%d of %d fixtures run their first device block as a device program", covered, tried)
 	for _, k := range keys {
 		t.Logf("%3d  %s: %s", len(reasons[k]), k, strings.Join(reasons[k], " "))
 	}
