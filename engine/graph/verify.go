@@ -209,7 +209,11 @@ func Verify(g *Graph, f Facts) error {
 				break
 			}
 			a := o.Attr
-			if len(o.Reads) != 1 || o.Reads[0].Name != "kv" || o.Reads[0].Version == 0 {
+			if c.KVShared {
+				if len(o.Reads) != 1 || o.Reads[0] != (StateRef{fmt.Sprintf("kv@%d", c.KVFrom), 0}) {
+					bad("%s: a KV-sharing block reads %v, not block %d's history", at, o.Reads, c.KVFrom)
+				}
+			} else if len(o.Reads) != 1 || o.Reads[0].Name != "kv" || o.Reads[0].Version == 0 {
 				bad("%s: reads no kv version this block wrote: this position's row is never in the history", at)
 			}
 			if a.NHead != c.NHead || a.NKVHead != c.NKVHead || a.HeadDim != c.HeadDim || a.Scale != c.Scale ||
@@ -292,7 +296,7 @@ func Verify(g *Graph, f Facts) error {
 			if o.Attr.Bound <= 0 || o.Attr.Bound != c.Clamp || width(o.Out[0]) != width(o.In[0]) {
 				bad("%s: bound %g, the configuration states %g", at, o.Attr.Bound, c.Clamp)
 			}
-		case OpSlice, OpLatentAppend, OpAttendLatent:
+		case OpSlice, OpLatentAppend, OpAttendLatent, OpIndex:
 			verifyMLAOp(o, at, c, width, ins, outs, bad)
 		case OpRoute, OpGather, OpExpertMatVec, OpCombine, OpGateScalar:
 			verifyMixtureOp(o, at, f.Mixture, width, ins, outs, bad)

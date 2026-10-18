@@ -51,6 +51,10 @@ type Mixture struct {
 	// WeightIn scales each pair's input by its routed weight and sums the
 	// experts unweighted (Attrs.WeightIn).
 	WeightIn bool
+	// Ungated experts (and shared expert) are down(Act(up(x))) with no gate
+	// bank (Nemotron 3's): an OpAct between up and down in place of the
+	// act_mul.
+	Ungated bool
 	// Inv is the sublayer's stored tensors by role, as Facts.Inventory: the
 	// graph binds what is there (a router bias, a selection bias, the banks'
 	// biases, a per-expert output scale) and nothing else.
@@ -83,7 +87,12 @@ func (m *Mixture) Build() *Graph {
 // emit writes the sublayer's ops into g over its input row x (the normed
 // row the router and the experts read) and returns its output row: in a
 // sublayer graph of its own (Build), or as a block's FFN (Dense.Mixture).
-func (m *Mixture) emit(g *Graph, x ValueID) ValueID {
+func (m *Mixture) emit(g *Graph, x ValueID) ValueID { return m.emitFrom(g, x, x) }
+
+// emitFrom is emit with the router reading r and the experts (and a shared
+// expert) reading x: Gemma 4's mixture routes a norm of the residual and
+// feeds the experts another.
+func (m *Mixture) emitFrom(g *Graph, r, x ValueID) ValueID {
 	sel := g.value("sel", m.K)
 	rw := []Binding{m.bind(jlm.RoleRouter)}
 	for _, r := range []jlm.Role{jlm.RoleRouterBias, jlm.RoleExpProbsB} {
@@ -91,7 +100,7 @@ func (m *Mixture) emit(g *Graph, x ValueID) ValueID {
 			rw = append(rw, m.bind(r))
 		}
 	}
-	g.op(Op{Kind: OpRoute, In: []ValueID{x}, Out: []ValueID{sel}, Weight: rw,
+	g.op(Op{Kind: OpRoute, In: []ValueID{r}, Out: []ValueID{sel}, Weight: rw,
 		Attr: Attrs{Experts: m.NExpert, TopK: m.K, Router: m.Router, RouteNorm: m.Norm, Scale: m.Scale,
 			Groups: m.Groups, GroupsUsed: m.GroupsUsed}})
 	pairs := g.value("pairs", m.K*m.NEmbd)
@@ -105,10 +114,15 @@ func (m *Mixture) emit(g *Graph, x ValueID) ValueID {
 		g.op(Op{Kind: OpExpertMatVec, In: []ValueID{in, sel}, Out: []ValueID{out}, Weight: w})
 		return out
 	}
-	gate := expert("exp_gate", pairs, jlm.RoleExpGateBank, jlm.RoleExpGateBias)
-	up := expert("exp_up", pairs, jlm.RoleExpUpBank, jlm.RoleExpUpBias)
 	h := g.value("exp_act", m.K*m.NFF)
-	g.op(Op{Kind: OpActMul, In: []ValueID{gate, up}, Out: []ValueID{h}, Attr: Attrs{Act: m.Act}})
+	if m.Ungated {
+		up := expert("exp_up", pairs, jlm.RoleExpUpBank, jlm.RoleExpUpBias)
+		g.op(Op{Kind: OpAct, In: []ValueID{up}, Out: []ValueID{h}, Attr: Attrs{Act: m.Act}})
+	} else {
+		gate := expert("exp_gate", pairs, jlm.RoleExpGateBank, jlm.RoleExpGateBias)
+		up := expert("exp_up", pairs, jlm.RoleExpUpBank, jlm.RoleExpUpBias)
+		g.op(Op{Kind: OpActMul, In: []ValueID{gate, up}, Out: []ValueID{h}, Attr: Attrs{Act: m.Act}})
+	}
 	down := expert("exp_down", h, jlm.RoleExpDownBank, jlm.RoleExpDownBias)
 	y := g.value("routed", m.NEmbd)
 	var cw []Binding
@@ -123,10 +137,15 @@ func (m *Mixture) emit(g *Graph, x ValueID) ValueID {
 			g.op(Op{Kind: OpMatVec, In: []ValueID{in}, Out: []ValueID{out}, Weight: []Binding{m.bind(r)}})
 			return out
 		}
-		sg := mv("sh_gate", x, jlm.RoleShExpGate, m.SharedFF)
-		su := mv("sh_up", x, jlm.RoleShExpUp, m.SharedFF)
 		sh := g.value("sh_act", m.SharedFF)
-		g.op(Op{Kind: OpActMul, In: []ValueID{sg, su}, Out: []ValueID{sh}, Attr: Attrs{Act: m.Act}})
+		if m.Ungated {
+			su := mv("sh_up", x, jlm.RoleShExpUp, m.SharedFF)
+			g.op(Op{Kind: OpAct, In: []ValueID{su}, Out: []ValueID{sh}, Attr: Attrs{Act: m.Act}})
+		} else {
+			sg := mv("sh_gate", x, jlm.RoleShExpGate, m.SharedFF)
+			su := mv("sh_up", x, jlm.RoleShExpUp, m.SharedFF)
+			g.op(Op{Kind: OpActMul, In: []ValueID{sg, su}, Out: []ValueID{sh}, Attr: Attrs{Act: m.Act}})
+		}
 		sd := mv("sh_down", sh, jlm.RoleShExpDown, m.NEmbd)
 		if m.SharedGated {
 			s := g.value("sh_scaled", m.NEmbd)

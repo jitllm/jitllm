@@ -46,7 +46,6 @@ const (
 // one of these, by name; TestCoveredBlocksTakeTheGraphPath asserts it.
 // Shrinking this list is the graph's work list.
 const (
-	UncoveredMixDense      = "a mixture: every expert on every row (a dense mixture)"
 	UncoveredMixRouter     = "a mixture: a router the op language does not state (sqrt-softplus, hash routing or a router norm)"
 	UncoveredMixExperts    = "a mixture: experts the op language does not state (ungated, unbanked or latent)"
 	UncoveredUngated       = "an activation the op language does not state"
@@ -55,22 +54,20 @@ const (
 	UncoveredKVShared      = "KV sharing or an extra cached head"
 	UncoveredIndexer       = "an attention indexer or sparse key selection"
 	UncoveredStreams       = "several residual streams"
-	UncoveredPLE           = "per-layer embeddings"
 	UncoveredRopeAxes      = "a multi-axis or interleaved rotary"
 	UncoveredNonCausal     = "non-causal attention"
 	UncoveredSparseAct     = "a gaussian top-k activation"
-	UncoveredDoubleFFN     = "a double-width FFN"
 	UncoveredCompressed    = "compressed or grouped attention output"
 	UncoveredRecurrent     = "a recurrent layer"
 	UncoveredUnboundTensor = "a stored tensor no op of the graph binds"
 )
 
 // UncoveredReasons is the named list, in order.
-var UncoveredReasons = []string{UncoveredMixDense, UncoveredMixRouter, UncoveredMixExperts,
+var UncoveredReasons = []string{UncoveredMixRouter, UncoveredMixExperts,
 	UncoveredUngated, UncoveredMLA, UncoveredValueWidth,
-	UncoveredKVShared, UncoveredIndexer, UncoveredStreams, UncoveredPLE,
+	UncoveredKVShared, UncoveredIndexer, UncoveredStreams,
 	UncoveredRopeAxes,
-	UncoveredNonCausal, UncoveredSparseAct, UncoveredDoubleFFN, UncoveredCompressed,
+	UncoveredNonCausal, UncoveredSparseAct, UncoveredCompressed,
 	UncoveredRecurrent, UncoveredUnboundTensor}
 
 // uncovered is why the block graph does not cover text block li, by name, or
@@ -88,7 +85,7 @@ func (m *Model) uncovered(li int) string {
 		}
 	}
 	switch {
-	case c.NGram != 0 || c.LayerKind(li).Recurrent() && c.LayerKind(li).Attends():
+	case c.NGram != 0:
 		return UncoveredRecurrent
 	case m.blockAct(roles) == 0:
 		return UncoveredUngated
@@ -98,22 +95,21 @@ func (m *Model) uncovered(li int) string {
 	// width (a sliding layer's narrower heads narrow k and v alike, KVDimAt).
 	case !c.MLA() && c.HeadDimV != 0 && c.HeadDimV != c.HeadDim:
 		return UncoveredValueWidth
-	case c.KVShared(li) || c.extraKVHead(li) || c.LayerKind(li).Attends() && !c.MLA() && !hasRole(roles, jlm.RoleAttnV):
+	// A KV-sharing block and Gemma 4's v-is-k blocks are the graph's
+	// (Dense.KVShared, VFromK); an absent v anywhere else is not.
+	case c.extraKVHead(li) || c.LayerKind(li).Attends() && !c.MLA() && !c.KVShared(li) && !hasRole(roles, jlm.RoleAttnV) &&
+		!(c.VNorm && hasRole(roles, jlm.RoleAttnK)):
 		return UncoveredKVShared
-	case c.Indexer() || c.MSA() || c.IdxHeads != 0 || c.QSARatio != 0:
+	case c.MSAAt(li) || c.QSAAt(li) || c.IdxHeads != 0 && !c.MSA() && !(c.MLA() && c.Indexer()):
 		return UncoveredIndexer
 	case c.streamHead():
 		return UncoveredStreams
-	case c.PLEDim != 0:
-		return UncoveredPLE
 	case c.RopeXD:
 		return UncoveredRopeAxes
 	case c.NonCausal:
 		return UncoveredNonCausal
 	case c.NSparse != 0:
 		return UncoveredSparseAct
-	case c.DoubleFFN:
-		return UncoveredDoubleFFN
 	case len(c.CompKinds) > 0 || c.CompRateCSA != 0 || c.CompRateHCA != 0 || c.OGroups != 0 || c.OLoraRank != 0:
 		return UncoveredCompressed
 	}
@@ -202,8 +198,16 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		PostNorm: has(jlm.RolePostAttnNorm), NoPreNorm: !has(jlm.RoleAttnNorm), NoRope: !c.RopeAt(li)}
 	d.QKVBias, d.Sinks = has(jlm.RoleAttnQBias), has(jlm.RoleAttnSinks)
 	d.OutGate, d.VNorm = c.AttnOutGate, c.VNorm
+	d.VFromK = c.VNorm && has(jlm.RoleAttnK) && !has(jlm.RoleAttnV)
+	if c.KVShared(li) {
+		d.KVShared, d.KVFrom = true, c.KVSource(li)
+	}
 	d.BidirOff = c.BidirSWA && !c.SWA(li)
 	d.OutScale = has(jlm.RoleLayerOutScale)
+	d.DenseMix = c.DenseMoE && c.MoEAt(li)
+	if has(jlm.RolePLEGate) {
+		d.PLEDim = c.PLEDim
+	}
 	if c.ResidualScale != 1 {
 		d.ResidScale = c.ResidualScale
 	}
@@ -211,7 +215,7 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 	// A recurrent mixer in place of the attention, binding the mixer's
 	// tensors the block stores.
 	if k := c.LayerKind(li); k.Recurrent() {
-		d.Mixer, d.NoFFN = uint8(k), m.layers[li].noFFN
+		d.Mixer, d.NoFFN, d.MixerAttends = uint8(k), m.layers[li].noFFN, k.Attends()
 		for _, r := range graph.MixerRoles {
 			if s, ok := inv[r]; ok {
 				d.MixerW = append(d.MixerW, graph.Binding{Role: r, K: s.K, Rows: s.Rows, Sheets: s.Sheets})
@@ -250,6 +254,9 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		d.MLA = &graph.MLA{NHead: c.NHead, HeadDim: c.HeadDimAt(li), NRot: d.NRot, KVLoraRank: c.KVLoraRank,
 			QLoraRank: c.QLoraRank, HeadDimV: c.HeadDimV, LatentEps: float64(c.LatentNormEps),
 			NoRope: c.NoPosEnc || !c.RopeAt(li)}
+		if c.Indexer() {
+			d.MLA.Index = &graph.Index{Heads: c.IdxHeads, HeadDim: c.IdxHeadDim, TopK: c.IdxTopK}
+		}
 	}
 	f := graph.Facts{Config: d, Inventory: inv}
 	if c.MoEAt(li) {
@@ -293,6 +300,19 @@ type denseLowering struct {
 	// outGate: q's projection carries each head's output gate (projectQ
 	// splits it; applyOutGate after the attention).
 	outGate bool
+	// vFromK: v is a copy of k's projection (graph.Dense.VFromK);
+	// kvShared: no k or v, the attention reads another block's history.
+	vFromK, kvShared bool
+	// ple: a per-layer embedding after the FFN's add (pleApply).
+	ple bool
+	// denseMix: Gemma 4's mixture block (denseMoE), its post-FFN norm
+	// inside it.
+	denseMix bool
+	// mixAttn: a recurrent mixer beside the attention over the same normed
+	// row (Falcon-H1's), its output (in hf/bhf) added to the attention's.
+	mixAttn bool
+	// index: an attention indexer selects the positions attended (OpIndex).
+	index bool
 	// mixer: a recurrent mixer (linearAttn) in place of the attention;
 	// noFFN: the block ends at the mixer's residual add.
 	mixer, noFFN bool
@@ -348,6 +368,12 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		ffnPre = last()
 	}
 	qa := false
+	// A recurrent mixer beside the attention (Falcon-H1's): the mixer, then
+	// the attention below, the two summed before the residual add.
+	if i+1 < len(ops) && ops[i].Kind == graph.OpRecurrent && ops[i+1].Kind != graph.OpAdd {
+		i++
+		lw.mixAttn = true
+	}
 	if take(graph.OpRecurrent, 0) {
 		// A recurrent mixer in place of the attention (linearAttn), added
 		// into the residual; a mixer-only layer ends there.
@@ -380,14 +406,33 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		if rot != take(graph.OpRope, 0) {
 			return nil, fail("both rotary parts turned, or neither")
 		}
-		if err := run([]step{{graph.OpLatentAppend, 0}, {graph.OpAttendLatent, 0}}); err != nil {
+		if err := run([]step{{graph.OpLatentAppend, 0}}); err != nil {
+			return nil, err
+		}
+		// DeepSeek V3.2's indexer: mlaProject computes its key and query,
+		// attendRow masks the scores to its selection.
+		lw.index = take(graph.OpIndex, jlm.RoleIdxQB)
+		if err := run([]step{{graph.OpAttendLatent, 0}}); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := run([]step{{graph.OpMatVec, jlm.RoleAttnQ}, {graph.OpMatVec, jlm.RoleAttnK}, {graph.OpMatVec, jlm.RoleAttnV}}); err != nil {
+		// q, then k and v; k alone where v is k's projection (VFromK);
+		// neither on a KV-sharing block, which attends to another block's
+		// history.
+		if err := run([]step{{graph.OpMatVec, jlm.RoleAttnQ}}); err != nil {
 			return nil, err
 		}
-		qkv := [3]graph.ValueID{ops[i-3].Out[0], ops[i-2].Out[0], ops[i-1].Out[0]}
+		qkv := [3]graph.ValueID{ops[i-1].Out[0], -1, -1}
+		if take(graph.OpMatVec, jlm.RoleAttnK) {
+			qkv[1], qkv[2] = ops[i-1].Out[0], ops[i-1].Out[0]
+			if take(graph.OpMatVec, jlm.RoleAttnV) {
+				qkv[2] = ops[i-1].Out[0]
+			} else {
+				lw.vFromK = true
+			}
+		} else {
+			lw.kvShared = true
+		}
 		// The output gate: q's heads and the gate sliced apart (projectQ).
 		if take(graph.OpSlice, 0) {
 			if err := run([]step{{graph.OpSlice, 0}}); err != nil {
@@ -406,7 +451,7 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		// (OLMoE): attnPrep applies either, by QKNormShapeAt.
 		for _, k := range []graph.OpKind{graph.OpHeadNorm, graph.OpNorm} {
 			if !lw.qk && take(k, jlm.RoleAttnQNorm) {
-				if !take(k, jlm.RoleAttnKNorm) {
+				if !lw.kvShared && !take(k, jlm.RoleAttnKNorm) {
 					return nil, fail(k.String() + " of attn_k_norm")
 				}
 				lw.qk = true
@@ -419,8 +464,12 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		// The rotary, absent on a block without one; Llama 4's weightless
 		// norms after it.
 		if take(graph.OpRope, 0) {
-			if err := run([]step{{graph.OpRope, 0}}); err != nil {
-				return nil, err
+			// k's after q's; a KV-sharing block turns q alone, the history's
+			// keys turned by their own block.
+			if !lw.kvShared {
+				if err := run([]step{{graph.OpRope, 0}}); err != nil {
+					return nil, err
+				}
 			}
 			// Llama 4's weightless norm reads the rotated q (Gemma 4's over v
 			// reads v, below).
@@ -440,8 +489,10 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		if i < len(ops) && ops[i].Kind == graph.OpHeadNorm && len(ops[i].Weight) == 0 {
 			i++
 		}
-		if err := run([]step{{graph.OpKVAppend, 0}}); err != nil {
-			return nil, err
+		if !lw.kvShared {
+			if err := run([]step{{graph.OpKVAppend, 0}}); err != nil {
+				return nil, err
+			}
 		}
 		prep, err := lowerPrep(g, prep0, i, qkv)
 		if err != nil {
@@ -458,6 +509,11 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 	if !lw.mixer {
 		if err := run([]step{{graph.OpMatVec, jlm.RoleAttnOut}}); err != nil {
 			return nil, err
+		}
+		if lw.mixAttn {
+			if err := run([]step{{graph.OpAdd, 0}}); err != nil {
+				return nil, err
+			}
 		}
 		lw.postAttn = take(graph.OpNorm, jlm.RolePostAttnNorm)
 		if err := run([]step{{graph.OpAdd, 0}}); err != nil {
@@ -486,19 +542,53 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 	if ffnPre >= 0 && !lw.par {
 		return nil, fail("an FFN that reads the norm taken before attention")
 	}
-	if i < len(ops) && ops[i].Kind == graph.OpRoute {
+	if take(graph.OpMatVec, jlm.RoleShExpGate) {
+		// Gemma 4's mixture block, as denseMoE computes it: the dense MLP
+		// and its post-norm, the router's and the experts' norms of the
+		// residual, the mixture, its post-norm, and the two summed.
+		lw.denseMix = true
+		if err := run([]step{{graph.OpMatVec, jlm.RoleShExpUp}, {graph.OpActMul, 0}, {graph.OpMatVec, jlm.RoleShExpDown},
+			{graph.OpNorm, jlm.RolePostFFNNorm1}, {graph.OpNorm, jlm.RoleRouterNorm}, {graph.OpNorm, jlm.RoleFFNNorm2},
+			{graph.OpRoute, jlm.RoleRouter}, {graph.OpGather, 0},
+			{graph.OpExpertMatVec, jlm.RoleExpGateBank}, {graph.OpExpertMatVec, jlm.RoleExpUpBank},
+			{graph.OpActMul, 0}, {graph.OpExpertMatVec, jlm.RoleExpDownBank}, {graph.OpCombine, 0},
+			{graph.OpNorm, jlm.RolePostFFNNorm2}, {graph.OpAdd, 0}}); err != nil {
+			return nil, err
+		}
+		if !take(graph.OpNorm, jlm.RolePostFFNNorm) {
+			return nil, fail("norm of the dense mixture's sum")
+		}
+	} else if i < len(ops) && ops[i].Kind == graph.OpRoute {
 		// The routed mixture, as moe() computes it: route, gather, the
 		// experts' gate, up, act_mul and down, the combine, then the shared
 		// expert [gate scalar] added, then the residual add.
+		// Ungated experts (Nemotron 3's): up, act, down, the shared
+		// expert's alike.
 		lw.mix = true
-		if err := run([]step{{graph.OpRoute, jlm.RoleRouter}, {graph.OpGather, 0},
-			{graph.OpExpertMatVec, jlm.RoleExpGateBank}, {graph.OpExpertMatVec, jlm.RoleExpUpBank},
-			{graph.OpActMul, 0}, {graph.OpExpertMatVec, jlm.RoleExpDownBank}, {graph.OpCombine, 0}}); err != nil {
+		if err := run([]step{{graph.OpRoute, jlm.RoleRouter}, {graph.OpGather, 0}}); err != nil {
 			return nil, err
 		}
-		if take(graph.OpMatVec, jlm.RoleShExpGate) {
-			if err := run([]step{{graph.OpMatVec, jlm.RoleShExpUp}, {graph.OpActMul, 0},
-				{graph.OpMatVec, jlm.RoleShExpDown}}); err != nil {
+		ffn := []step{{graph.OpExpertMatVec, jlm.RoleExpGateBank}, {graph.OpExpertMatVec, jlm.RoleExpUpBank}, {graph.OpActMul, 0}}
+		if !take(graph.OpExpertMatVec, jlm.RoleExpGateBank) {
+			ffn = []step{{graph.OpExpertMatVec, jlm.RoleExpUpBank}, {graph.OpAct, 0}}
+		} else {
+			ffn = ffn[1:]
+		}
+		if err := run(append(ffn, step{graph.OpExpertMatVec, jlm.RoleExpDownBank}, step{graph.OpCombine, 0})); err != nil {
+			return nil, err
+		}
+		sh := take(graph.OpMatVec, jlm.RoleShExpGate)
+		if sh {
+			if err := run([]step{{graph.OpMatVec, jlm.RoleShExpUp}, {graph.OpActMul, 0}}); err != nil {
+				return nil, err
+			}
+		} else if sh = take(graph.OpMatVec, jlm.RoleShExpUp); sh {
+			if err := run([]step{{graph.OpAct, 0}}); err != nil {
+				return nil, err
+			}
+		}
+		if sh {
+			if err := run([]step{{graph.OpMatVec, jlm.RoleShExpDown}}); err != nil {
 				return nil, err
 			}
 			take(graph.OpGateScalar, jlm.RoleShRouter)
@@ -522,6 +612,21 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 	}
 	if err := run([]step{{graph.OpAdd, 0}}); err != nil {
 		return nil, err
+	}
+	// Gemma 4's per-layer embedding (pleApply): gate, act_mul with the
+	// block's second input, projection, norm, add.
+	if take(graph.OpMatVec, jlm.RolePLEGate) {
+		if len(g.In) != 2 || ops[i].Kind != graph.OpActMul || ops[i].In[1] != g.In[1] {
+			return nil, fail("act_mul of the per-layer input")
+		}
+		if err := run([]step{{graph.OpActMul, 0}, {graph.OpMatVec, jlm.RolePLEProj}, {graph.OpNorm, jlm.RolePLEPostNorm},
+			{graph.OpAdd, 0}}); err != nil {
+			return nil, err
+		}
+		if lw.mix {
+			return nil, fail("a per-layer embedding after a mixture (moe adds into the residual itself)")
+		}
+		lw.ple = true
 	}
 	// Gemma 4's output scalar (layerOutScale).
 	lw.outScale = take(graph.OpScale, jlm.RoleLayerOutScale)
@@ -615,6 +720,15 @@ func (m *Model) buildGraphs() error {
 			lw.qkL2 != (m.Cfg.QKL2Norm && m.Cfg.RopeAt(li)) {
 			return fmt.Errorf("model: block %d graph's q/k norms (%v, post %v, weightless %v) are not attnPrep's",
 				li, lw.qk, lw.qkPost, lw.qkL2)
+		}
+		if lw.index != (lw.mla && m.Cfg.Indexer()) {
+			return fmt.Errorf("model: block %d graph's indexer is %v, the configuration's is not", li, lw.index)
+		}
+		if lw.ple != (m.Cfg.PLEDim != 0 && m.Cfg.AltUp == 0) {
+			return fmt.Errorf("model: block %d graph's per-layer embedding is %v, the configuration's is not", li, lw.ple)
+		}
+		if !lw.mixer && !lw.mla && (lw.vFromK != m.layers[li].vFromK || lw.kvShared != m.Cfg.KVShared(li)) {
+			return fmt.Errorf("model: block %d graph's v-from-k %v and KV sharing %v are not the layer's", li, lw.vFromK, lw.kvShared)
 		}
 		lw.rewrites = graph.Apply(g, graph.Rewrites...)
 		if lw.mla && !rewriteLegal(lw.rewrites, graph.MLAAbsorb.Name) {
@@ -735,6 +849,12 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 	}
 	s.jit.NewInput()
 	m.trace(li, "attn_norm", s.h)
+	if lw.mixAttn {
+		if err := s.linearAttn(li, l, 0, s.h, s.hf); err != nil {
+			return err
+		}
+		m.trace(li, "ssm_out", s.hf)
+	}
 	if lw.mixer {
 		// The recurrent mixer in place of the attention, added into the
 		// residual; a mixer-only layer ends there.
@@ -768,24 +888,32 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 		// matvec q, k, v (one region inside a fused run, as the body groups them)
 		kvd := c.KVDimAt(li)
 		s.aheadOf(li, 0, [nn.MaxGroup]*tensor{&l.wo})
-		grouped := !lw.outGate && s.groupOf(s.h, [nn.MaxGroup]*tensor{&l.wq, &l.wk, &l.wv}, [nn.MaxGroup][]float32{s.q, s.kc, s.vc}, 3)
+		grouped := !lw.outGate && !lw.vFromK && !lw.kvShared &&
+			s.groupOf(s.h, [nn.MaxGroup]*tensor{&l.wq, &l.wk, &l.wv}, [nn.MaxGroup][]float32{s.q, s.kc, s.vc}, 3)
 		if grouped {
 			s.addBiasRows(s.q, l.bq, 1)
 		} else {
 			if _, err := s.projectQ(l, s.q, s.ogate, s.h, 1, false); err != nil {
 				return err
 			}
-			if err := s.mv(s.kc, l.wk, s.h); err != nil {
-				return err
+			if !lw.kvShared {
+				if err := s.mv(s.kc, l.wk, s.h); err != nil {
+					return err
+				}
 			}
 		}
-		s.addBias(s.kc, l.bk)
-		if !grouped {
-			if err := s.mv(s.vc, l.wv, s.h); err != nil {
-				return err
+		if !lw.kvShared {
+			s.addBias(s.kc, l.bk)
+			switch {
+			case lw.vFromK:
+				copy(s.vc[:kvd], s.kc[:kvd])
+			case !grouped:
+				if err := s.mv(s.vc, l.wv, s.h); err != nil {
+					return err
+				}
 			}
+			s.addBias(s.vc, l.bv)
 		}
-		s.addBias(s.vc, l.bv)
 		// [head_norm q, head_norm k,] rope q, rope k, kv_append: attnPrep
 		s.runPrep(l, lw.prep, s.q[:c.QDimAt(li)], s.kc[:kvd], s.vc[:kvd], s.ropeTable(li, s.cs, s.csSWA, 0), li, 0, s.pos)
 		m.trace(li, "k", s.kc[:kvd])
@@ -800,7 +928,7 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 			s.jit.NewInput()
 			src = s.ogate
 		}
-		plain := s.residFold && l.bo == nil && !lw.postAttn
+		plain := s.residFold && l.bo == nil && !lw.postAttn && !lw.mixAttn
 		if plain {
 			s.grp.Resid, s.grp.Alpha = s.x, float32(c.ResidualScale)
 		}
@@ -813,6 +941,9 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 			}
 		}
 		s.addBias(s.h, l.bo)
+		if lw.mixAttn {
+			s.addInto(s.h, s.hf)
+		}
 	}
 	// [norm(o)] before the residual add
 	if lw.postAttn {
@@ -840,6 +971,21 @@ func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
 		s.norm(s.h, s.x, l.ffnNorm, l.ffnNormB)
 	}
 	s.jit.NewInput()
+	if lw.denseMix {
+		// dense MLP, router and expert norms, the mixture, the norms and
+		// the sum, added into the residual: denseMoE.
+		if err := s.denseMoE(li, l, s.h, s.x); err != nil {
+			return err
+		}
+		if lw.ple {
+			if err := s.pleApply(li, l, s.x, s.ple); err != nil {
+				return err
+			}
+		}
+		s.layerOutScale(l, s.x)
+		m.trace(li, "ffn_resid", s.x)
+		return nil
+	}
 	if lw.mix {
 		// The mixture's ops, each its own routine, added into the residual
 		// as the hand-written body's moe adds them: route (the router's
@@ -912,6 +1058,11 @@ func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
 	if !ffnResid {
 		s.addInto(s.x, s.h)
 	}
+	if lw.ple {
+		if err := s.pleApply(li, l, s.x, s.ple); err != nil {
+			return err
+		}
+	}
 	s.layerOutScale(l, s.x)
 	m.trace(li, "ffn_resid", s.x)
 	return nil
@@ -941,6 +1092,12 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, base, p0, n
 		}
 		return s.rowsResidFFN(li, l, lw, n, false)
 	}
+	if lw.mixAttn {
+		// The mixer beside the attention, into bhf; rowsResidFFN adds it.
+		if err := s.mixerChunk(li, l, slot, base, s.bhf, n); err != nil {
+			return err
+		}
+	}
 	if lw.mla {
 		// The latent attention over the chunk: every row's projections,
 		// rotary and latent append (mlaProjectRows) before any row attends,
@@ -961,14 +1118,9 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, base, p0, n
 	if _, err := s.projectQ(l, s.bq, s.ogate, s.bh[:n*ne], n, true); err != nil {
 		return err
 	}
-	if err := s.mm(s.bk, l.wk, s.bh[:n*ne], n); err != nil {
+	if err := s.kvRows(l, lw, s.bh[:n*ne], n, kvDim); err != nil {
 		return err
 	}
-	s.addBiasRows(s.bk, l.bk, n)
-	if err := s.mm(s.bv, l.wv, s.bh[:n*ne], n); err != nil {
-		return err
-	}
-	s.addBiasRows(s.bv, l.bv, n)
 	// [head_norm q, head_norm k,] rope q, rope k, kv_append: every row's,
 	// before any row attends (a row attends to the chunk's earlier rows).
 	for i := 0; i < n; i++ {
@@ -1013,6 +1165,11 @@ func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, seq, pos
 		}
 		return s.rowsResidFFN(li, l, lw, n, true)
 	}
+	if lw.mixAttn {
+		if err := s.mixerRagged(li, l, seq, s.rowCausal[:n], s.bhf, n); err != nil {
+			return err
+		}
+	}
 	if lw.mla {
 		// The latent attention over the step: each row its own sequence's
 		// slot and position (mlaProjectRows), the absorbed attention, then
@@ -1033,14 +1190,9 @@ func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, seq, pos
 	if _, err := s.projectQ(l, s.bq, s.ogate, s.bh, n, true); err != nil {
 		return err
 	}
-	if err := s.mm(s.bk, l.wk, s.bh, n); err != nil {
+	if err := s.kvRows(l, lw, s.bh, n, kvDim); err != nil {
 		return err
 	}
-	s.addBiasRows(s.bk, l.bk, n)
-	if err := s.mm(s.bv, l.wv, s.bh, n); err != nil {
-		return err
-	}
-	s.addBiasRows(s.bv, l.bv, n)
 	// [head_norm q, head_norm k,] rope q, rope k, kv_append: each row at its
 	// owner's slot and position
 	for i := 0; i < n; i++ {
@@ -1072,6 +1224,9 @@ func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, seq, pos
 func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged bool) error {
 	c := s.c
 	ne := c.NEmbd
+	if lw.mixAttn {
+		s.addInto(s.bh[:n*ne], s.bhf[:n*ne])
+	}
 	if lw.postAttn {
 		tn := s.tick()
 		s.batchNorm(s.bh, s.bh, l.postAttnNorm, ne, n)
@@ -1094,6 +1249,18 @@ func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged 
 		s.batchNormB(s.bh, s.bx, l.ffnNorm, l.ffnNormB, ne, n)
 	}
 	s.tock(opRMSNorm, tn)
+	if lw.denseMix {
+		if err := s.denseMoERows(li, l, s.bh, s.bx, n); err != nil {
+			return err
+		}
+		if lw.ple {
+			if err := s.pleRows(li, l, s.bx, n); err != nil {
+				return err
+			}
+		}
+		s.layerOutScale(l, s.bx[:n*ne])
+		return nil
+	}
 	if lw.mix {
 		// The mixture over the rows, op by op as moeBatch runs them: every
 		// row's route, then the experts expert-major, then the shared
@@ -1153,6 +1320,11 @@ func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged 
 	tr = s.tick()
 	s.addInto(s.bx[:n*ne], s.bh[:n*ne])
 	s.tock(opResid, tr)
+	if lw.ple {
+		if err := s.pleRows(li, l, s.bx, n); err != nil {
+			return err
+		}
+	}
 	s.layerOutScale(l, s.bx[:n*ne])
 	return nil
 }
@@ -1182,7 +1354,12 @@ func (s *State) parallelIn(l *layer, lw *denseLowering, n int) {
 func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
 	g := lw.g
 	p.NEmbd = g.Values[g.In[0]].Width
-	p.QKNorm, p.QKNormPost, p.LayerNorm, p.Parallel = false, false, false, lw.par
+	// A recurrent block runs no q/k norm, but the tier bakes one shape per
+	// model, so a mixer block keeps planFor's: the attention blocks' shape.
+	if !lw.mixer {
+		p.QKNorm, p.QKNormPost = false, false
+	}
+	p.LayerNorm, p.Parallel = false, lw.par
 	_, producer := graphProducers(g)
 	windowed := false
 	for _, o := range g.Ops {
@@ -1193,6 +1370,11 @@ func (lw *denseLowering) lowerPlan(p *nn.LayerPlan) {
 		case graph.OpLayerNorm:
 			p.RMSEps, p.LayerNorm = o.Attr.Eps, true
 		case graph.OpAct:
+			// An ungated mixture's experts' (and shared expert's) act is not
+			// the dense FFN's width: the plan keeps planFor's.
+			if lw.mix {
+				break
+			}
 			p.NFFN = g.Values[o.Out[0]].Width
 			if a, ok := nnAct[o.Attr.Act]; ok && o.Attr.Act != graph.ActXIELU {
 				p.Act = a
@@ -1305,6 +1487,7 @@ var hostLowering = map[graph.OpKind]struct {
 	graph.OpLatentAppend: {mlaProjectRoutine, false},
 	graph.OpAttendLatent: {"absorbed (mla-absorb): attendRow / the chunk's attention over the latent rows, then mlaOutProject's un-absorb", false},
 	graph.OpScale:        {"the generated scale kernel (layerOutScale)", true},
+	graph.OpIndex:        {"mlaProject's indexer key and query (idxKey, idxQuery), then attendRow's top-k mask over the scores (idxMask)", false},
 	graph.OpRecurrent:    {"linearAttn: the recurrent mixer as one routine (mixerChunk, mixerRagged over rows)", false},
 }
 
@@ -1345,7 +1528,7 @@ func (m *Model) BlockLowering(li int) []OpLowering {
 			h.routine, h.composed = mlaProjectRoutine, false
 		}
 		// The experts' act_mul runs inside their grouped region.
-		if o.Kind == graph.OpActMul && producer[o.In[0]] >= 0 && g.Ops[producer[o.In[0]]].Kind == graph.OpExpertMatVec {
+		if (o.Kind == graph.OpActMul || o.Kind == graph.OpAct) && producer[o.In[0]] >= 0 && g.Ops[producer[o.In[0]]].Kind == graph.OpExpertMatVec {
 			h.routine, h.composed = moeExpertsRoutine, false
 		}
 		out[i] = OpLowering{Op: i, Kind: o.Kind, Host: h.routine, Composed: h.composed,
@@ -1391,4 +1574,25 @@ func (m *Model) handless() string {
 		}
 	}
 	return ""
+}
+
+// kvRows projects a prompt's k and v rows into bk and bv as the lowering
+// states them: both, v a copy of k (vFromK), or neither (kvShared).
+func (s *State) kvRows(l *layer, lw *denseLowering, h []float32, n, kvDim int) error {
+	if lw.kvShared {
+		return nil
+	}
+	if err := s.mm(s.bk, l.wk, h, n); err != nil {
+		return err
+	}
+	s.addBiasRows(s.bk, l.bk, n)
+	if lw.vFromK {
+		copy(s.bv[:n*kvDim], s.bk[:n*kvDim])
+		return nil
+	}
+	if err := s.mm(s.bv, l.wv, h, n); err != nil {
+		return err
+	}
+	s.addBiasRows(s.bv, l.bv, n)
+	return nil
 }

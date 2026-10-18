@@ -28,6 +28,22 @@ type MLA struct {
 	HeadDimV             int
 	LatentEps            float64
 	NoRope               bool
+	// Index, where set, is the block's indexer (OpIndex): the attention
+	// reads only the positions it selects.
+	Index *Index
+}
+
+// Index is an attention indexer's geometry: Heads heads of HeadDim, the
+// TopK best positions kept.
+type Index struct {
+	Heads, HeadDim, TopK int
+}
+
+// bindings are the indexer's weights over a row of nEmbd and a query
+// latent of qLora.
+func (x *Index) bindings(nEmbd, qLora int) []Binding {
+	return []Binding{{Role: jlm.RoleIdxQB, K: qLora, Rows: x.Heads * x.HeadDim}, {Role: jlm.RoleIdxK, K: nEmbd, Rows: x.HeadDim},
+		{Role: jlm.RoleIdxProj, K: nEmbd, Rows: x.Heads}, {Role: jlm.RoleIdxKNorm, K: x.HeadDim}, {Role: jlm.RoleIdxKNormB, K: x.HeadDim}}
 }
 
 // emit writes the attention sublayer over the normed row h into g, from the
@@ -66,9 +82,9 @@ func (a *MLA) emit(g *Graph, d *Dense, h ValueID) ValueID {
 		return out
 	}
 	qd, nope, lat := a.NHead*a.HeadDim, a.HeadDim-a.NRot, a.KVLoraRank
-	var q ValueID
+	var q, qa ValueID
 	if a.QLoraRank != 0 {
-		qa := norm("q_latent", mv("q_a", h, jlm.RoleAttnQA, a.QLoraRank), jlm.RoleAttnQANorm)
+		qa = norm("q_latent", mv("q_a", h, jlm.RoleAttnQA, a.QLoraRank), jlm.RoleAttnQANorm)
 		q = mv("q", qa, jlm.RoleAttnQB, qd)
 	} else {
 		q = mv("q", h, jlm.RoleAttnQ, qd)
@@ -79,8 +95,15 @@ func (a *MLA) emit(g *Graph, d *Dense, h ValueID) ValueID {
 	kl := norm("kv_latent", slice("kv_a_latent", kva, 0, 0, lat), jlm.RoleAttnKVANorm)
 	kp := rope("k_rot", slice("k_pe", kva, 0, lat, a.NRot))
 	g.op(Op{Kind: OpLatentAppend, In: []ValueID{kl, kp}, Reads: []StateRef{{"kv", 0}}, Writes: []StateRef{{"kv", 1}}})
+	in := []ValueID{qn, qp}
+	if x := a.Index; x != nil {
+		sel := g.value("idx_sel", x.TopK)
+		g.op(Op{Kind: OpIndex, In: []ValueID{h, qa}, Out: []ValueID{sel}, Weight: x.bindings(g.Values[h].Width, a.QLoraRank),
+			Reads: []StateRef{{"idx", 0}}, Writes: []StateRef{{"idx", 1}}, Attr: Attrs{NHead: x.Heads, HeadDim: x.HeadDim, TopK: x.TopK}})
+		in = append(in, sel)
+	}
 	out := g.value("attn", a.NHead*a.HeadDimV)
-	g.op(Op{Kind: OpAttendLatent, In: []ValueID{qn, qp}, Out: []ValueID{out}, Reads: []StateRef{{"kv", 1}},
+	g.op(Op{Kind: OpAttendLatent, In: in, Out: []ValueID{out}, Reads: []StateRef{{"kv", 1}},
 		Weight: []Binding{{Role: jlm.RoleAttnKB, K: nope, Rows: lat, Sheets: a.NHead},
 			{Role: jlm.RoleAttnVB, K: lat, Rows: a.HeadDimV, Sheets: a.NHead}},
 		Attr: Attrs{NHead: a.NHead, HeadDim: a.HeadDim, NRot: a.NRot, Scale: d.Scale}})
@@ -120,8 +143,30 @@ func verifyMLAOp(o Op, at string, c *Dense, width func(ValueID) int, ins, outs f
 			bad("%s: a latent of %d and a rotary key of %d; the configuration states %d and %d",
 				at, width(o.In[0]), width(o.In[1]), a.KVLoraRank, a.NRot)
 		}
+	case OpIndex:
+		x := a.Index
+		if x == nil || a.QLoraRank == 0 {
+			bad("%s: an indexer in a graph whose facts state none, or no query latent", at)
+			return
+		}
+		if !ins(2) || !outs(1) {
+			return
+		}
+		at2 := o.Attr
+		if at2.NHead != x.Heads || at2.HeadDim != x.HeadDim || at2.TopK != x.TopK || width(o.Out[0]) != x.TopK ||
+			width(o.In[1]) != a.QLoraRank || len(o.Weight) != 5 {
+			bad("%s: %d heads of %d keeping %d over a latent of %d; the configuration states %d of %d keeping %d over %d",
+				at, at2.NHead, at2.HeadDim, at2.TopK, width(o.In[1]), x.Heads, x.HeadDim, x.TopK, a.QLoraRank)
+		}
+		if len(o.Reads) != 1 || o.Reads[0].Name != "idx" || len(o.Writes) != 1 || o.Writes[0].Name != "idx" {
+			bad("%s: reads and writes no idx version", at)
+		}
 	case OpAttendLatent:
-		if !ins(2) || !outs(1) || len(o.Weight) != 2 {
+		k := 2
+		if a.Index != nil {
+			k = 3
+		}
+		if !ins(k) || !outs(1) || len(o.Weight) != 2 {
 			bad("%s: wants two query parts, one output and the two up-projections", at)
 			return
 		}

@@ -112,10 +112,18 @@ const (
 	// OpScale multiplies In[0] by the stored scalar Weight[0] (Gemma 4's
 	// layer_output_scale on the block's output).
 	OpScale
+	// OpIndex is an attention indexer (DeepSeek V3.2's lightning indexer)
+	// over the normed row (In[0]) and the query latent (In[1]): NHead heads
+	// of HeadDim score every cached position against this row's query, and
+	// Out[0] is the TopK positions the attention reads. Its key joins its
+	// own history: it reads the idx state's version n and writes n+1. It is
+	// opaque in this version: the projections, norm, rotary and scoring are
+	// one op, its weights all bound by it.
+	OpIndex
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {

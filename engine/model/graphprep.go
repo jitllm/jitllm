@@ -37,11 +37,24 @@ func prepArg(of map[graph.ValueID]int, v graph.ValueID) (int, bool) {
 // ops lowerDense has matched in [from, to), into steps. qkv are the three
 // projections' values.
 func lowerPrep(g *graph.Graph, from, to int, qkv [3]graph.ValueID) ([]prepStep, error) {
-	of := map[graph.ValueID]int{qkv[0]: 0, qkv[1]: 1, qkv[2]: 2}
+	of := map[graph.ValueID]int{qkv[0]: 0}
+	if qkv[1] >= 0 {
+		of[qkv[1]] = 1
+	}
+	// v as k's projection (VFromK): the row is copied before the prologue,
+	// so the ops on v's chain read the copy -- v's weightless norm, or the
+	// append's v, where either reads k's raw projection.
+	vFromK := qkv[2] >= 0 && qkv[2] == qkv[1]
+	if qkv[2] >= 0 && !vFromK {
+		of[qkv[2]] = 2
+	}
 	var out []prepStep
 	for i := from; i < to; i++ {
 		o := g.Ops[i]
 		a, ok := prepArg(of, o.In[0])
+		if vFromK && o.In[0] == qkv[1] && o.Kind == graph.OpHeadNorm && len(o.Weight) == 0 {
+			a = 2
+		}
 		if !ok {
 			return nil, fmt.Errorf("model: block %d op %d (%s) reads no projection", g.Block, i, o.Kind)
 		}
@@ -56,7 +69,11 @@ func lowerPrep(g *graph.Graph, from, to int, qkv [3]graph.ValueID) ([]prepStep, 
 		case graph.OpRope:
 			st.neox = o.Attr.Layout == graph.RopeNeox
 		case graph.OpKVAppend:
-			if b, ok := prepArg(of, o.In[1]); a != 1 || !ok || b != 2 {
+			b, ok := prepArg(of, o.In[1])
+			if vFromK && o.In[1] == qkv[1] {
+				b = 2
+			}
+			if a != 1 || !ok || b != 2 {
 				return nil, fmt.Errorf("model: block %d op %d appends no k and v", g.Block, i)
 			}
 		default:

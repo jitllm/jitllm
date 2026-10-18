@@ -36,11 +36,9 @@ func (m *Model) mixtureWhy(li int) (graph.Facts, string) {
 	switch {
 	case !c.MoEAt(li):
 		return graph.Facts{}, ""
-	case c.DenseMoE:
-		return graph.Facts{}, UncoveredMixDense
 	case c.ExpertSqrtSoftplus:
 		return graph.Facts{}, UncoveredMixRouter
-	case l.ungatedExp || c.ExpertLatent != 0:
+	case c.ExpertLatent != 0:
 		return graph.Facts{}, UncoveredMixExperts
 	}
 	act := graphAct(c.Act)
@@ -59,7 +57,10 @@ func (m *Model) mixtureWhy(li int) (graph.Facts, string) {
 		}
 		switch e.Role {
 		case jlm.RoleRouterNorm, jlm.RoleHashExperts:
-			return graph.Facts{}, UncoveredMixRouter
+			// Gemma 4's router norm is its block's (Dense.DenseMix).
+			if !(c.DenseMoE && e.Role == jlm.RoleRouterNorm) {
+				return graph.Facts{}, UncoveredMixRouter
+			}
 		case jlm.RoleExpGate, jlm.RoleExpUp, jlm.RoleExpDown, jlm.RoleFFNRoutedDown, jlm.RoleFFNRoutedUp,
 			jlm.RoleFFNRoutedNorm:
 			return graph.Facts{}, UncoveredMixExperts
@@ -77,22 +78,30 @@ func (m *Model) mixtureWhy(li int) (graph.Facts, string) {
 		inv[e.Role] = s
 	}
 	for _, r := range []jlm.Role{jlm.RoleRouter, jlm.RoleExpGateBank, jlm.RoleExpUpBank, jlm.RoleExpDownBank} {
-		if _, ok := inv[r]; !ok {
+		if _, ok := inv[r]; !ok && !(l.ungatedExp && r == jlm.RoleExpGateBank) {
 			return graph.Facts{}, UncoveredMixExperts
 		}
 	}
 	mx := graph.Mixture{Block: li, NEmbd: c.NEmbd, NExpert: c.NExpert, K: c.NExpertUsed, NFF: c.NFFNExp, Act: act,
 		Router: graph.RouterSoftmax, Norm: !c.NoExpertNorm, Scale: c.ExpertScale,
-		Groups: c.NExpertGroup, GroupsUsed: c.NExpertGroupUsed, SharedFF: c.NFFNShExp, WeightIn: c.ExpertWeightIn, Inv: inv}
+		Groups: c.NExpertGroup, GroupsUsed: c.NExpertGroupUsed, SharedFF: c.NFFNShExp, WeightIn: c.ExpertWeightIn,
+		Ungated: l.ungatedExp, Inv: inv}
 	switch {
 	case c.SparseMixer != 0:
 		mx.Router = graph.RouterSparseMixer
 	case c.ExpertSigmoid:
 		mx.Router = graph.RouterSigmoid
 	}
+	// Gemma 4's dense MLP is the shared expert's tensors, its width theirs.
+	if c.DenseMoE {
+		mx.SharedFF = inv[jlm.RoleShExpGate].Rows
+		if mx.SharedFF == 0 {
+			return graph.Facts{}, UncoveredMixExperts
+		}
+	}
 	if mx.SharedFF > 0 {
 		for _, r := range []jlm.Role{jlm.RoleShExpGate, jlm.RoleShExpUp, jlm.RoleShExpDown} {
-			if _, ok := inv[r]; !ok {
+			if _, ok := inv[r]; !ok && !(mx.Ungated && r == jlm.RoleShExpGate) {
 				return graph.Facts{}, UncoveredMixExperts
 			}
 		}
@@ -109,7 +118,10 @@ func (m *Model) buildMixGraphs() {
 	m.mixGraphErr = nil
 	for li := range m.mixGraphs {
 		f, ok := m.mixtureFacts(li)
-		if !ok {
+		// Gemma 4's mixture is its block's FFN (Dense.DenseMix), not a
+		// mixture sublayer with a shared expert added: the tier keeps its
+		// own decisions for it.
+		if !ok || m.Cfg.DenseMoE {
 			continue
 		}
 		g := f.Mixture.Build()

@@ -1,6 +1,10 @@
 package graph
 
-import "github.com/jitllm/jitllm/format/jlm"
+import (
+	"fmt"
+
+	"github.com/jitllm/jitllm/format/jlm"
+)
 
 // MixerRoles are every tensor an OpRecurrent binds: a recurrent mixer's
 // projections, convolution, decay, skip, norms and output, whichever the
@@ -54,9 +58,23 @@ type Dense struct {
 	// VNorm norms each head of v with no weight (Gemma 4's) before the
 	// cache append.
 	VNorm bool
+	// VFromK makes v k's projection, taken before k's norm and rotary
+	// (Gemma 4's global layers, attention_k_eq_v): no RoleAttnV.
+	VFromK bool
+	// KVShared is a block that computes no k and v: its attention reads
+	// block KVFrom's history as that block left it (the state "kv@KVFrom"
+	// at version 0), Gemma 4's E-models' last layers.
+	KVShared bool
+	KVFrom   int
 	// OutScale multiplies the block's output by its stored scalar
 	// (RoleLayerOutScale, an OpScale after the second residual add).
 	OutScale bool
+	// PLEDim, where not 0, is a per-layer embedding after the FFN's add
+	// (Gemma 4's E-models): the block's second input is this layer's
+	// PLEDim-wide slice of the row's per-layer inputs, and the block adds
+	// norm(W_proj (Act(W_gate x) * slice)) into the residual
+	// (RolePLEGate, RolePLEProj, RolePLEPostNorm).
+	PLEDim int
 	// The classic block (C6). LayerNorm makes the attention and FFN norms
 	// LayerNorms (OpLayerNorm); NormBias and FFNNormBias bind their biases
 	// (RoleAttnNormBias, RoleFFNNormBias). Parallel feeds the FFN the block
@@ -84,7 +102,16 @@ type Dense struct {
 	// mixer's residual add (a mixer-only layer).
 	Mixer  uint8
 	MixerW []Binding
-	NoFFN  bool
+	// MixerAttends keeps the attention beside the mixer (Falcon-H1's).
+	MixerAttends bool
+	NoFFN        bool
+	// DenseMix is Gemma 4's mixture block: a gated dense MLP over the FFN
+	// norm (the shared expert's tensors, Mixture.SharedFF wide) post-normed
+	// by RolePostFFNNorm1, beside the Mixture routed over a norm of the
+	// residual (RoleRouterNorm) with its experts reading another
+	// (RoleFFNNorm2), post-normed by RolePostFFNNorm2; their sum is the
+	// FFN's output (PostNorm's norm and the residual add follow).
+	DenseMix bool
 	// Mixture, where set, is the block's FFN: a routed mixture over the FFN
 	// norm's row in place of gate, up and down (NFFN is then unused).
 	Mixture *Mixture
@@ -154,11 +181,17 @@ func (d *Dense) Build() *Graph {
 	h := preNorm("attn_in", x, jlm.RoleAttnNorm, jlm.RoleAttnNormBias)
 	hf := h
 	var x1 ValueID
+	// A recurrent mixer, in place of the attention or (MixerAttends)
+	// beside it over the same normed row, its output added to the
+	// attention's before the residual (Falcon-H1's).
+	mixer := ValueID(-1)
 	if d.Mixer != 0 {
-		// A recurrent mixer in place of the attention.
-		r := g.value("mixer", d.NEmbd)
-		g.op(Op{Kind: OpRecurrent, In: []ValueID{h}, Out: []ValueID{r}, Weight: d.MixerW,
+		mixer = g.value("mixer", d.NEmbd)
+		g.op(Op{Kind: OpRecurrent, In: []ValueID{h}, Out: []ValueID{mixer}, Weight: d.MixerW,
 			Reads: []StateRef{{"rec", 0}}, Writes: []StateRef{{"rec", 1}}, Attr: Attrs{Mixer: d.Mixer}})
+	}
+	if d.Mixer != 0 && !d.MixerAttends {
+		r := mixer
 		x1 = g.value("x_mixer", d.NEmbd)
 		g.op(Op{Kind: OpAdd, In: []ValueID{x, r}, Out: []ValueID{x1}, Attr: Attrs{Alpha: d.ResidScale}})
 		if d.NoFFN {
@@ -180,8 +213,16 @@ func (d *Dense) Build() *Graph {
 				qw = 2 * qd
 			}
 			q := mv("q", h, jlm.RoleAttnQ, qw, bias(jlm.RoleAttnQBias))
-			k := mv("k", h, jlm.RoleAttnK, kvd, bias(jlm.RoleAttnKBias))
-			v := mv("v", h, jlm.RoleAttnV, kvd, bias(jlm.RoleAttnVBias))
+			var k, v ValueID
+			switch {
+			case d.KVShared:
+			case d.VFromK:
+				k = mv("k", h, jlm.RoleAttnK, kvd, bias(jlm.RoleAttnKBias))
+				v = k
+			default:
+				k = mv("k", h, jlm.RoleAttnK, kvd, bias(jlm.RoleAttnKBias))
+				v = mv("v", h, jlm.RoleAttnV, kvd, bias(jlm.RoleAttnVBias))
+			}
 			var gate ValueID
 			if d.OutGate {
 				qg := q
@@ -190,7 +231,11 @@ func (d *Dense) Build() *Graph {
 				g.op(Op{Kind: OpSlice, In: []ValueID{qg}, Out: []ValueID{gate},
 					Attr: Attrs{HeadDim: 2 * d.HeadDim, Offset: d.HeadDim, Width: d.HeadDim}})
 			}
-			q, k, v = clamp("q_clamped", q), clamp("k_clamped", k), clamp("v_clamped", v)
+			if d.KVShared {
+				q = clamp("q_clamped", q)
+			} else {
+				q, k, v = clamp("q_clamped", q), clamp("k_clamped", k), clamp("v_clamped", v)
+			}
 			// hn norms each head of in; w 0 is a weightless norm (a scale of ones).
 			hn := func(name string, in ValueID, w jlm.Role) ValueID {
 				out := g.value(name, g.Values[in].Width)
@@ -202,14 +247,21 @@ func (d *Dense) Build() *Graph {
 					Attr: Attrs{Eps: d.Eps, HeadDim: d.HeadDim}})
 				return out
 			}
+			kn := !d.KVShared
 			if d.QKNorm && d.QKNormPost {
-				k = hn("k_normed", k, jlm.RoleAttnKNorm)
+				if kn {
+					k = hn("k_normed", k, jlm.RoleAttnKNorm)
+				}
 			} else if d.QKNorm {
 				q = hn("q_normed", q, jlm.RoleAttnQNorm)
-				k = hn("k_normed", k, jlm.RoleAttnKNorm)
+				if kn {
+					k = hn("k_normed", k, jlm.RoleAttnKNorm)
+				}
 			} else if d.QKNormWhole {
 				q = norm("q_normed", q, jlm.RoleAttnQNorm)
-				k = norm("k_normed", k, jlm.RoleAttnKNorm)
+				if kn {
+					k = norm("k_normed", k, jlm.RoleAttnKNorm)
+				}
 			}
 			rope := func(name string, in ValueID) ValueID {
 				out := g.value(name, g.Values[in].Width)
@@ -220,24 +272,35 @@ func (d *Dense) Build() *Graph {
 			}
 			qr, kr := q, k
 			if !d.NoRope {
-				qr, kr = rope("q_rot", q), rope("k_rot", k)
+				qr = rope("q_rot", q)
+				if kn {
+					kr = rope("k_rot", k)
+				}
 				if d.QKL2Norm {
-					qr, kr = hn("q_l2", qr, 0), hn("k_l2", kr, 0)
+					qr = hn("q_l2", qr, 0)
+					if kn {
+						kr = hn("k_l2", kr, 0)
+					}
 				}
 			}
 			if d.QKNorm && d.QKNormPost {
 				qr = hn("q_normed", qr, jlm.RoleAttnQNorm)
 			}
-			if d.VNorm {
-				v = hn("v_normed", v, 0)
+			kv := StateRef{"kv", 1}
+			if d.KVShared {
+				kv = StateRef{fmt.Sprintf("kv@%d", d.KVFrom), 0}
+			} else {
+				if d.VNorm {
+					v = hn("v_normed", v, 0)
+				}
+				g.op(Op{Kind: OpKVAppend, In: []ValueID{kr, v}, Reads: []StateRef{{"kv", 0}}, Writes: []StateRef{{"kv", 1}}})
 			}
-			g.op(Op{Kind: OpKVAppend, In: []ValueID{kr, v}, Reads: []StateRef{{"kv", 0}}, Writes: []StateRef{{"kv", 1}}})
 			a = g.value("attn", qd)
 			var sinks []Binding
 			if d.Sinks {
 				sinks = []Binding{vec(jlm.RoleAttnSinks, d.NHead)}
 			}
-			g.op(Op{Kind: OpAttend, In: []ValueID{qr}, Out: []ValueID{a}, Reads: []StateRef{{"kv", 1}}, Weight: sinks,
+			g.op(Op{Kind: OpAttend, In: []ValueID{qr}, Out: []ValueID{a}, Reads: []StateRef{kv}, Weight: sinks,
 				Attr: Attrs{HeadDim: d.HeadDim, NHead: d.NHead, NKVHead: d.NKVHead, Scale: d.Scale, Window: d.Window, Chunked: d.Chunked, BidirOff: d.BidirOff, Softcap: d.Softcap,
 					TempScale: d.TempScale, TempFloor: d.TempFloor, TempOffs: d.TempOffs}})
 			if d.OutGate {
@@ -247,6 +310,11 @@ func (d *Dense) Build() *Graph {
 			}
 		}
 		o := mv("attn_out", a, jlm.RoleAttnOut, d.NEmbd, opt(d.OutBias, jlm.RoleAttnOutBias))
+		if mixer >= 0 {
+			om := g.value("attn_mixer", d.NEmbd)
+			g.op(Op{Kind: OpAdd, In: []ValueID{o, mixer}, Out: []ValueID{om}})
+			o = om
+		}
 		if d.PostNorm {
 			o = norm("attn_post", o, jlm.RolePostAttnNorm)
 		}
@@ -259,7 +327,20 @@ func (d *Dense) Build() *Graph {
 		f = preNorm("ffn_in", x1, jlm.RoleFFNNorm, jlm.RoleFFNNormBias)
 	}
 	var dn ValueID
-	if d.Mixture != nil {
+	if d.DenseMix && d.Mixture != nil {
+		mx := *d.Mixture
+		mx.SharedFF = 0
+		sg := mv("dense_gate", f, jlm.RoleShExpGate, d.Mixture.SharedFF, 0)
+		su := mv("dense_up", f, jlm.RoleShExpUp, d.Mixture.SharedFF, 0)
+		sa := g.value("dense_act", d.Mixture.SharedFF)
+		g.op(Op{Kind: OpActMul, In: []ValueID{sg, su}, Out: []ValueID{sa}, Attr: Attrs{Act: mx.Act}})
+		dd := norm("dense_post", mv("dense_out", sa, jlm.RoleShExpDown, d.NEmbd, 0), jlm.RolePostFFNNorm1)
+		rin := norm("route_in", x1, jlm.RoleRouterNorm)
+		ein := norm("experts_in", x1, jlm.RoleFFNNorm2)
+		e := norm("experts_post", mx.emitFrom(g, rin, ein), jlm.RolePostFFNNorm2)
+		dn = g.value("dense_mix", d.NEmbd)
+		g.op(Op{Kind: OpAdd, In: []ValueID{dd, e}, Out: []ValueID{dn}})
+	} else if d.Mixture != nil {
 		dn = d.Mixture.emit(g, f)
 	} else if d.Ungated {
 		up := mv("up", f, jlm.RoleFFNUp, d.NFFN, opt(d.UpBias, jlm.RoleFFNUpBias))
@@ -282,6 +363,17 @@ func (d *Dense) Build() *Graph {
 	}
 	x2 := g.value("x_out", d.NEmbd)
 	g.op(Op{Kind: OpAdd, In: []ValueID{x1, dn}, Out: []ValueID{x2}, Attr: Attrs{Alpha: d.ResidScale}})
+	if d.PLEDim != 0 {
+		pl := g.value("ple_in", d.PLEDim)
+		g.In = append(g.In, pl)
+		gp := mv("ple_gate", x2, jlm.RolePLEGate, d.PLEDim, 0)
+		a := g.value("ple_act", d.PLEDim)
+		g.op(Op{Kind: OpActMul, In: []ValueID{gp, pl}, Out: []ValueID{a}, Attr: Attrs{Act: d.Act}})
+		o := norm("ple_post", mv("ple_out", a, jlm.RolePLEProj, d.NEmbd, 0), jlm.RolePLEPostNorm)
+		x3 := g.value("x_ple", d.NEmbd)
+		g.op(Op{Kind: OpAdd, In: []ValueID{x2, o}, Out: []ValueID{x3}})
+		x2 = x3
+	}
 	if d.OutScale {
 		y := g.value("x_scaled", d.NEmbd)
 		g.op(Op{Kind: OpScale, In: []ValueID{x2}, Out: []ValueID{y}, Weight: []Binding{vec(jlm.RoleLayerOutScale, 1)}})

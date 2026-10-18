@@ -107,7 +107,7 @@ func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
 		"synth-dots1", "synth-minimaxm2", "synth-seedoss", "synth-smollm3", "synth-lfm2",
 		"synth-phi2", "synth-starcoder", "synth-starcoder2", "synth-commandr", "synth-cohere2", "synth-stablelm",
 		"synth-stablelm-par", "synth-falcon", "synth-falcon40", "synth-nemotron", "synth-dbrx", "synth-apertus", "synth-glm4",
-		"synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-deepseek", "synth-deepseek-lite", "synth-deepseek-dense", "synth-deepseek-yarn", "synth-deepseek-yarn-af", "synth-glm4moelite", "synth-kimilinear", "synth-gemma4", "synth-hunyuan", "synth-hunyuanmoe", "synth-llama4", "synth-llama4-q8", "synth-qwen2vl", "synth-qwen25vl", "synth-qwen3vl", "synth-glm4vmoe", "synth-granitehybrid", "synth-granitehybridmoe", "synth-lfm2moe", "synth-nemotronh", "synth-mamba2", "synth-falconmamba", "synth-mamba1", "synth-jamba", "synth-lfm2moe", "synth-qwen35-hybrid-mtp", "synth-qwen35moe-hybrid-mtp", "Qwen3.5-0.8B-Q4_K_M"} {
+		"synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-deepseek", "synth-deepseek-lite", "synth-deepseek-dense", "synth-deepseek-yarn", "synth-deepseek-yarn-af", "synth-glm4moelite", "synth-kimilinear", "synth-gemma4", "synth-gemma4-kv", "synth-gemma4-e", "synth-gemma4-moe", "synth-hunyuan", "synth-hunyuanmoe", "synth-llama4", "synth-llama4-q8", "synth-qwen2vl", "synth-qwen25vl", "synth-qwen3vl", "synth-glm4vmoe", "synth-granitehybrid", "synth-granitehybridmoe", "synth-lfm2moe", "synth-nemotronh", "synth-nemotronhmoe", "synth-falconh1", "synth-deepseek32", "synth-minimaxm3", "synth-mamba2", "synth-falconmamba", "synth-mamba1", "synth-jamba", "synth-lfm2moe", "synth-qwen35-hybrid-mtp", "synth-qwen35moe-hybrid-mtp", "Qwen3.5-0.8B-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			m, err := Open(p, noTune)
@@ -140,7 +140,13 @@ func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
 					t.Logf("%s: block 0 %+v", spec, paths[0])
 				})
 			}
-			// The violation: a covered block forced off the graph.
+			// The violation: a covered block forced off the graph. A model
+			// with no hand-written body has nothing to force it onto; its
+			// violation is TestHandlessModelsHaveNoHandWrittenBody's.
+			if why := m.handless(); why != "" {
+				t.Logf("no violation arm: %s", why)
+				return
+			}
 			vb := 0
 			for m.graphs[vb] == nil {
 				vb++
