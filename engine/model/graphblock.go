@@ -49,7 +49,6 @@ const (
 	UncoveredMixDense      = "a mixture: every expert on every row (a dense mixture)"
 	UncoveredMixRouter     = "a mixture: a router the op language does not state (sqrt-softplus, hash routing or a router norm)"
 	UncoveredMixExperts    = "a mixture: experts the op language does not state (ungated, unbanked or latent)"
-	UncoveredMixWeightIn   = "a mixture: the router's weight scales the experts' input"
 	UncoveredUngated       = "an activation the op language does not state"
 	UncoveredOutGate       = "an attention output gate"
 	UncoveredMLA           = "a q latent without the latent KV cache"
@@ -61,7 +60,6 @@ const (
 	UncoveredResidScale    = "a residual scale"
 	UncoveredRopeAxes      = "a multi-axis or interleaved rotary"
 	UncoveredVNorm         = "a norm over v"
-	UncoveredWindow        = "a chunked attention"
 	UncoveredNonCausal     = "non-causal attention"
 	UncoveredSparseAct     = "a gaussian top-k activation"
 	UncoveredDoubleFFN     = "a double-width FFN"
@@ -71,11 +69,11 @@ const (
 )
 
 // UncoveredReasons is the named list, in order.
-var UncoveredReasons = []string{UncoveredMixDense, UncoveredMixRouter, UncoveredMixExperts, UncoveredMixWeightIn,
+var UncoveredReasons = []string{UncoveredMixDense, UncoveredMixRouter, UncoveredMixExperts,
 	UncoveredUngated, UncoveredOutGate, UncoveredMLA, UncoveredValueWidth,
 	UncoveredKVShared, UncoveredIndexer, UncoveredStreams, UncoveredPLE, UncoveredResidScale,
 	UncoveredRopeAxes, UncoveredVNorm,
-	UncoveredWindow, UncoveredNonCausal, UncoveredSparseAct, UncoveredDoubleFFN, UncoveredCompressed,
+	UncoveredNonCausal, UncoveredSparseAct, UncoveredDoubleFFN, UncoveredCompressed,
 	UncoveredRecurrent, UncoveredUnboundTensor}
 
 // uncovered is why the block graph does not cover text block li, by name, or
@@ -117,8 +115,6 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredRopeAxes
 	case c.VNorm:
 		return UncoveredVNorm
-	case c.SWA(li) && c.SWAChunked:
-		return UncoveredWindow
 	case c.NonCausal || c.BidirSWA:
 		return UncoveredNonCausal
 	case c.NSparse != 0:
@@ -235,7 +231,7 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 	// built from.
 	tab := &m.rope
 	if c.SWA(li) && c.SWAWindow > 0 {
-		d.Window = c.SWAWindow
+		d.Window, d.Chunked = c.SWAWindow, c.SWAChunked
 		if m.ropeSWA != nil {
 			tab = m.ropeSWA
 			d.NRot = c.NRotSWA
@@ -565,6 +561,17 @@ func (m *Model) buildGraphs() error {
 		lw, err := lowerDense(g)
 		if err != nil {
 			return err
+		}
+		// What the host routines read from the configuration, held to the
+		// graph's ops: a chunked window (the KV layer's) and a weight-in
+		// mixture (moe's).
+		for _, o := range g.Ops {
+			if o.Kind == graph.OpAttend && o.Attr.Chunked != (m.Cfg.SWA(li) && m.Cfg.SWAChunked) {
+				return fmt.Errorf("model: block %d graph's chunked window is %v, the KV layer's is not", li, o.Attr.Chunked)
+			}
+			if o.Kind == graph.OpGather && o.Attr.WeightIn != m.Cfg.ExpertWeightIn {
+				return fmt.Errorf("model: block %d graph's weight-in is %v and moe's %v", li, o.Attr.WeightIn, m.Cfg.ExpertWeightIn)
+			}
 		}
 		if lw.qk != m.Cfg.QKNormAt(li) || lw.qkPost != (lw.qk && m.Cfg.QKNormPost) ||
 			lw.qkL2 != (m.Cfg.QKL2Norm && m.Cfg.RopeAt(li)) {

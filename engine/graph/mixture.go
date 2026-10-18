@@ -48,6 +48,9 @@ type Mixture struct {
 	GroupsUsed  int
 	SharedFF    int // the shared expert's hidden width; 0 for none
 	SharedGated bool
+	// WeightIn scales each pair's input by its routed weight and sums the
+	// experts unweighted (Attrs.WeightIn).
+	WeightIn bool
 	// Inv is the sublayer's stored tensors by role, as Facts.Inventory: the
 	// graph binds what is there (a router bias, a selection bias, the banks'
 	// biases, a per-expert output scale) and nothing else.
@@ -92,7 +95,7 @@ func (m *Mixture) emit(g *Graph, x ValueID) ValueID {
 		Attr: Attrs{Experts: m.NExpert, TopK: m.K, Router: m.Router, RouteNorm: m.Norm, Scale: m.Scale,
 			Groups: m.Groups, GroupsUsed: m.GroupsUsed}})
 	pairs := g.value("pairs", m.K*m.NEmbd)
-	g.op(Op{Kind: OpGather, In: []ValueID{x, sel}, Out: []ValueID{pairs}})
+	g.op(Op{Kind: OpGather, In: []ValueID{x, sel}, Out: []ValueID{pairs}, Attr: Attrs{WeightIn: m.WeightIn}})
 	expert := func(name string, in ValueID, bank, bias jlm.Role) ValueID {
 		w := []Binding{m.bind(bank)}
 		if m.has(bias) {
@@ -113,7 +116,7 @@ func (m *Mixture) emit(g *Graph, x ValueID) ValueID {
 		cw = []Binding{m.bind(jlm.RoleExpScale)}
 	}
 	g.op(Op{Kind: OpCombine, In: []ValueID{down, sel}, Out: []ValueID{y}, Weight: cw,
-		Attr: Attrs{Experts: m.NExpert, TopK: m.K}})
+		Attr: Attrs{Experts: m.NExpert, TopK: m.K, WeightIn: m.WeightIn}})
 	if m.SharedFF > 0 {
 		mv := func(name string, in ValueID, r jlm.Role, w int) ValueID {
 			out := g.value(name, w)

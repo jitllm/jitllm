@@ -42,8 +42,6 @@ func (m *Model) mixtureWhy(li int) (graph.Facts, string) {
 		return graph.Facts{}, UncoveredMixRouter
 	case l.ungatedExp || c.ExpertLatent != 0:
 		return graph.Facts{}, UncoveredMixExperts
-	case c.ExpertWeightIn:
-		return graph.Facts{}, UncoveredMixWeightIn
 	}
 	act := graphAct(c.Act)
 	if act == 0 {
@@ -85,7 +83,7 @@ func (m *Model) mixtureWhy(li int) (graph.Facts, string) {
 	}
 	mx := graph.Mixture{Block: li, NEmbd: c.NEmbd, NExpert: c.NExpert, K: c.NExpertUsed, NFF: c.NFFNExp, Act: act,
 		Router: graph.RouterSoftmax, Norm: !c.NoExpertNorm, Scale: c.routedScale(),
-		Groups: c.NExpertGroup, GroupsUsed: c.NExpertGroupUsed, SharedFF: c.NFFNShExp, Inv: inv}
+		Groups: c.NExpertGroup, GroupsUsed: c.NExpertGroupUsed, SharedFF: c.NFFNShExp, WeightIn: c.ExpertWeightIn, Inv: inv}
 	switch {
 	case c.SparseMixer != 0:
 		mx.Router = graph.RouterSparseMixer

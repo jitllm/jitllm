@@ -210,7 +210,7 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: reads no kv version this block wrote: this position's row is never in the history", at)
 			}
 			if a.NHead != c.NHead || a.NKVHead != c.NKVHead || a.HeadDim != c.HeadDim || a.Scale != c.Scale ||
-				a.Window != c.Window || a.Softcap != c.Softcap || a.TempScale != c.TempScale ||
+				a.Window != c.Window || a.Chunked != c.Chunked || a.Softcap != c.Softcap || a.TempScale != c.TempScale ||
 				a.TempFloor != c.TempFloor || a.TempOffs != c.TempOffs {
 				bad("%s: %d/%d heads of %d, scale %g, window %d, softcap %g; the configuration states %d/%d of %d, %g, %d, %g",
 					at, a.NHead, a.NKVHead, a.HeadDim, a.Scale, a.Window, a.Softcap,
@@ -370,6 +370,9 @@ func verifyMixtureOp(o Op, at string, m *Mixture, width func(ValueID) int, ins, 
 		if ins(2) && outs(1) && width(o.Out[0]) != m.K*width(o.In[0]) {
 			bad("%s: %d pairs of a row of %d into %d", at, m.K, width(o.In[0]), width(o.Out[0]))
 		}
+		if o.Attr.WeightIn != m.WeightIn {
+			bad("%s: weight-in %v; the configuration states %v", at, o.Attr.WeightIn, m.WeightIn)
+		}
 	case OpExpertMatVec:
 		if !ins(2) || !outs(1) || len(o.Weight) == 0 || len(o.Weight) > 2 {
 			bad("%s: wants pairs, a selection, a bank and at most its bias", at)
@@ -387,6 +390,9 @@ func verifyMixtureOp(o Op, at string, m *Mixture, width func(ValueID) int, ins, 
 	case OpCombine:
 		if !ins(2) || !outs(1) {
 			return
+		}
+		if o.Attr.WeightIn != m.WeightIn {
+			bad("%s: weight-in %v; the configuration states %v", at, o.Attr.WeightIn, m.WeightIn)
 		}
 		if o.Attr.Experts != m.NExpert || o.Attr.TopK != m.K || width(o.In[0]) != m.K*width(o.Out[0]) {
 			bad("%s: %d pairs of %d experts from %d into %d", at, o.Attr.TopK, o.Attr.Experts, width(o.In[0]), width(o.Out[0]))

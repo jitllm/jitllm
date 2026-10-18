@@ -202,6 +202,10 @@ type Attrs struct {
 	NKVHead int
 	Scale   float64
 	Window  int
+	// Chunked makes Window an aligned chunk (Llama 4's): a position attends
+	// to the earlier positions of its own chunk of Window, not the Window
+	// before it.
+	Chunked bool
 	Softcap float64
 	Act     Act
 	// A mixture's router and combine (OpRoute, OpCombine).
@@ -215,6 +219,10 @@ type Attrs struct {
 	TempScale, TempFloor, TempOffs float64
 	// Mixer is OpRecurrent's kind (jlm.LayerKind's value).
 	Mixer uint8
+	// WeightIn is OpGather's and OpCombine's (Llama 4's): each pair's row is
+	// scaled by its routed weight before its expert, and the combine sums
+	// the experts' outputs unweighted.
+	WeightIn bool
 	// Bound is OpClamp's.
 	Bound float64
 	// Offset and Width are OpSlice's.
