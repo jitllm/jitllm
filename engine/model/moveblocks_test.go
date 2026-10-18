@@ -1,6 +1,7 @@
 package model
 
 import (
+	"github.com/jitllm/jitllm/jit/cpu"
 	"math"
 	"strings"
 	"testing"
@@ -315,6 +316,83 @@ func TestBlocksMoveToADeviceAddedLater(t *testing.T) {
 			t.Fatalf("token %d is before any move and differs by %g", i, worst)
 		case worst > 2.5:
 			t.Fatalf("token %d: %g from the control, outside the band", i, worst)
+		}
+	}
+}
+
+// TestABinary16HistoryMovesToTheDevice: a session that built its history on
+// the host in the f16 cache moves onto a device and back mid-sequence -- its
+// rows widened on the way up and narrowed home (migrateKVAs) -- and the logits
+// stay in the band of a host run that never moved. A host-loaded model need not
+// give up the f16 cache to keep its plasticity.
+func TestABinary16HistoryMovesToTheDevice(t *testing.T) {
+	a, _ := moveDevices(t)
+	g, err := tier.OpenWith(tier.WithDevices(a), tier.WithDeviceTune(tier.TuneOff))
+	if err != nil || g == nil {
+		noDevice(t, a, err)
+	}
+	defer g.Close()
+	m, err := Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")), WithKVF16(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	const ntok, upAt, homeAt = 10, 3, 7
+	prompt := m.Vocab.Encode("The capital of France is a city that", true)
+	run := func(ids []int32, move bool) [][]float32 {
+		st := m.NewState(len(prompt) + ntok + 1)
+		defer st.Close()
+		if st.kvFmt != cpu.KVF16 {
+			t.Skipf("the host cache is %v, not binary16: this gate proved nothing", st.kvFmt)
+		}
+		logits, err := st.Prefill(prompt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var lg [][]float32
+		for i := 0; i < ntok; i++ {
+			lg = append(lg, append([]float32(nil), logits...))
+			next := Greedy(logits)
+			if ids != nil {
+				next = ids[i]
+			}
+			if move && i == upAt {
+				if err := st.SetDevice(g); err != nil {
+					t.Fatalf("a binary16 history with %d positions could not attach: %v", st.pos, err)
+				}
+				if st.SetGPULayers(m.Cfg.NLayer); st.GPULayers() == 0 {
+					t.Skipf("%s took no block: %s", a, g.Err())
+				}
+			}
+			if move && i == homeAt {
+				if st.SetGPULayers(0); st.GPULayers() != 0 {
+					t.Fatalf("%d blocks stayed on the device", st.GPULayers())
+				}
+			}
+			if logits, err = st.Forward(next); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return lg
+	}
+	ctl := run(nil, false)
+	var ids []int32
+	for _, l := range ctl {
+		ids = append(ids, Greedy(l))
+	}
+	moved := run(ids, true)
+	for i := range ctl {
+		var worst float64
+		for j, v := range ctl[i] {
+			worst = max(worst, math.Abs(float64(v-moved[i][j])))
+		}
+		switch {
+		case math.IsNaN(worst):
+			t.Fatalf("token %d: a non-finite logit", i)
+		case i <= upAt && worst != 0:
+			t.Fatalf("token %d is before the move and differs by %g", i, worst)
+		case worst > 2.5:
+			t.Fatalf("token %d: %g from the host control, outside the band", i, worst)
 		}
 	}
 }

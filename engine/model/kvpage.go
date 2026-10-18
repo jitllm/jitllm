@@ -729,7 +729,7 @@ func (s *State) migrateKV(li, pos int, toDevice bool) bool {
 func kvMigBufs(kvl kvLayout, n int) (k, v, fk, fv []float32) {
 	k = make([]float32, kvl.slots(n*kvl.kvDim()))
 	v = make([]float32, len(k))
-	if kvl.fmt != cpu.KVQ8 {
+	if kvl.fmt == cpu.KVF32 {
 		return k, v, k, v
 	}
 	fk = make([]float32, n*kvl.kvDim())
@@ -747,16 +747,33 @@ func kvMigBufs(kvl kvLayout, n int) (k, v, fk, fv []float32) {
 // implemented (kvtype.go).
 func (s *State) migrateKVAs(kvl kvLayout, n int, k, v, fk, fv []float32, toDevice bool, move func() bool) bool {
 	rows := n * kvl.nKV
-	if kvl.fmt == cpu.KVQ8 && toDevice {
-		s.jit.WidenKVRows(fk, k, kvl.headDim, rows)
-		s.jit.WidenKVRows(fv, v, kvl.headDim, rows)
+	// A binary16 history's rows are halves two to a slot.
+	halves := func(x []float32) []uint16 {
+		return unsafe.Slice((*uint16)(unsafe.Pointer(&x[0])), rows*kvl.headDim)
+	}
+	if toDevice && rows > 0 {
+		switch kvl.fmt {
+		case cpu.KVQ8:
+			s.jit.WidenKVRows(fk, k, kvl.headDim, rows)
+			s.jit.WidenKVRows(fv, v, kvl.headDim, rows)
+		case cpu.KVF16:
+			nn.WidenF16(fk[:rows*kvl.headDim], halves(k))
+			nn.WidenF16(fv[:rows*kvl.headDim], halves(v))
+		}
 	}
 	if !move() {
 		return false
 	}
-	if kvl.fmt == cpu.KVQ8 && !toDevice {
-		s.jit.QuantizeKVRows(k, fk, kvl.headDim, rows)
-		s.jit.QuantizeKVRows(v, fv, kvl.headDim, rows)
+	if !toDevice && rows > 0 {
+		switch kvl.fmt {
+		case cpu.KVQ8:
+			s.jit.QuantizeKVRows(k, fk, kvl.headDim, rows)
+			s.jit.QuantizeKVRows(v, fv, kvl.headDim, rows)
+		case cpu.KVF16:
+			// Rounded as the host's own store rounds what it writes.
+			nn.NarrowF16(halves(k), fk[:rows*kvl.headDim])
+			nn.NarrowF16(halves(v), fv[:rows*kvl.headDim])
+		}
 	}
 	return true
 }

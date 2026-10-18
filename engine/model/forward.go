@@ -1095,14 +1095,12 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 	if s.kvl.headMajor && d != nil {
 		return fmt.Errorf("model: a head-major KV cache cannot move to a device")
 	}
-	// A binary16 cache cannot migrate either (MigrateKV moves float32, and
-	// packed halves would be reinterpreted). The device wins the tie: the
-	// cache steps down to f32, which is only possible while the history is
-	// empty. A q8_0 cache migrates converted (State.migrateKVAs).
-	if s.kvFmt == cpu.KVF16 && d != nil {
-		if s.pos != 0 {
-			return fmt.Errorf("model: a binary16 KV cache with history cannot move to a device")
-		}
+	// MigrateKV moves float32: a binary16 or q8_0 history travels converted
+	// (State.migrateKVAs).
+	// An empty binary16 cache steps down to the f32 the device holds; one
+	// with history keeps its format and travels converted, widened on its way
+	// to the device and narrowed home (migrateKVAs), as a q8_0 one does.
+	if s.kvFmt == cpu.KVF16 && d != nil && s.pos == 0 {
 		s.stepDownKVToF32()
 	}
 	// The history comes home before the device changes (or detaches), or the
