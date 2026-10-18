@@ -13,8 +13,8 @@ import "github.com/jitllm/jitllm/format/quant"
 func SupportedNative(t quant.Type) bool { return SupportedA64(t) }
 func EmitNative(s Spec) ([]byte, error) { return EmitA64(s) }
 
-// rowMajorPF is EmitNative: the amd64 prefetch has no arm64 form.
-func rowMajorPF(s Spec, _ int) ([]byte, error) { return EmitA64(s) }
+// rowMajorPF is EmitNative with the probes: the amd64 prefetch has no arm64 form.
+func rowMajorPF(s Spec, o EmitOpts) ([]byte, error) { return EmitA64Probed(s, o.Probes) }
 
 // primaryTier is the tier the primary emitter table generates for on arm64:
 // the A64 emitters, which answer to the same names as the AVX2 tier's.

@@ -23,6 +23,10 @@ type Source struct {
 	Vision  *Vision // a tower only
 	Vocab   *Vocab
 	Tensors []Tensor
+	// JournalEvery is how many bytes a resumable write puts down between
+	// journal points: the most a resumed write does twice. Zero is the default,
+	// a gigabyte; a gate sets 1 to journal every tensor.
+	JournalEvery uint64
 	// Origin names the bytes the tensors come from, immutably: a pinned
 	// repository commit and its files, or local files with their sizes and
 	// times. A write of a named origin can be resumed (see Write); "" is a
@@ -725,7 +729,7 @@ func (l *layout) write(dst string, src *Source) (*Header, error) {
 		go fetch(start)
 	}
 	var dirty uint64
-	every := journalSpacing(total)
+	every := journalSpacing(src.JournalEvery, total)
 	for i := start; i < len(es); i++ {
 		e := &es[i]
 		got := <-next
@@ -840,17 +844,15 @@ func writeTensor(out *os.File, e *Entry, raw []byte, expPageSize uint64, stored 
 	return n, nil
 }
 
-// journalEvery is how many bytes are written between journal points: the
-// most a resumed write does twice. A variable so a gate can journal every
-// tensor.
-var journalEvery uint64 = 1 << 30
-
-// journalSpacing is journalEvery for a container of total bytes, closer for
-// a small one: a write journalled only at its end is never resumed, and a
-// model of a few hundred MB is still minutes of a slow link. A thirty-second
-// of the container keeps the syncs few.
-func journalSpacing(total uint64) uint64 {
-	return min(journalEvery, max(total/32, 64<<10))
+// journalSpacing is every (the Source's JournalEvery, a gigabyte at zero) for
+// a container of total bytes, closer for a small one: a write journalled only
+// at its end is never resumed, and a model of a few hundred MB is still
+// minutes of a slow link. A thirty-second of the container keeps the syncs few.
+func journalSpacing(every, total uint64) uint64 {
+	if every == 0 {
+		every = 1 << 30
+	}
+	return min(every, max(total/32, 64<<10))
 }
 
 // journalSuffix follows the part's name: out.jlm.part.resume.

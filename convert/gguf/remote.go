@@ -78,10 +78,9 @@ func probe() bool {
 		return false
 	}
 	defer unreserve(b)
-	probeSink = b[ps+1]
+	// The read is what makes page 1 resident; its value joins the answer (b|1 is
+	// never zero) so the load cannot be optimised away.
+	read := b[ps+1]
 	in, err := Resident(b)
-	return err == nil && len(in) == 4 && !in[0] && in[1] && !in[2] && !in[3]
+	return err == nil && len(in) == 4 && !in[0] && in[1] && !in[2] && !in[3] && read|1 != 0
 }
-
-// probeSink keeps the probe's read from being optimised away.
-var probeSink byte

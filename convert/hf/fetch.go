@@ -31,6 +31,8 @@ type Client struct {
 	// Conns bounds the range requests in flight at once over every Remote
 	// this client opened; 0 is DefaultConns.
 	Conns int
+	// Tuning sizes and times the range reader; zero is the shipping value.
+	Tuning Tuning
 
 	connsOnce sync.Once
 	conns     chan struct{}
@@ -398,7 +400,7 @@ func (c *Client) bodyRetrying(r Ref, have *int64, h io.Writer, f io.Writer, in I
 			return err
 		}
 		c.notef("retry    %s at %s: %v\n", filepath.Base(r.File), size(*have), t.error)
-		time.Sleep(backoff(attempt))
+		time.Sleep(c.backoff(attempt))
 	}
 }
 

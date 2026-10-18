@@ -168,9 +168,9 @@ func TestPhi4PreprocessMatchesTheProcessor(t *testing.T) {
 	if math.IsNaN(nm) || nm > 1e-10 || worst > 1e-5 {
 		t.Fatalf("the picture is not the processor's: NMSE %.3e, max|d| %.2e", nm, worst)
 	}
-	phi4Bicubic = true
+	tw.Cfg.fault = faultPhi4Bicubic
 	bad, _ := enc()
-	phi4Bicubic = false
+	tw.Cfg.fault = towerFaultNone
 	nb, _ := nmse32(g.Image.PX, bad)
 	t.Logf("violation: BICUBIC, NMSE %.3e", nb)
 	if !(nb > 1e-6) {
@@ -239,12 +239,12 @@ func TestPhi4TowerMatchesTransformers(t *testing.T) {
 		set  func() func()
 	}{
 		{"the table at the grid's transpose", func() func() {
-			phi4PosTransposed = true
-			return func() { phi4PosTransposed = false }
+			tw.Cfg.fault = faultPhi4PosTransposed
+			return func() { tw.Cfg.fault = towerFaultNone }
 		}},
 		{"the table's first rows, not resized", func() func() {
-			phi4NoResize = true
-			return func() { phi4NoResize = false }
+			tw.Cfg.fault = faultPhi4NoResize
+			return func() { tw.Cfg.fault = towerFaultNone }
 		}},
 	} {
 		undo := v.set()

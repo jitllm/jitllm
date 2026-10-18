@@ -289,8 +289,6 @@ type JIT struct {
 	procs sched.ProcsHold
 }
 
-var jitOnce sync.Once
-
 // Available reports whether this build has a code generator. It does: amd64
 // and arm64 are the architectures with an emitter (jit_stub.go is the rest).
 func Available() bool { return true }
@@ -326,29 +324,14 @@ func (f *JIT) quantSince(t0 int64) {
 	}
 }
 
-// ResetForTest clears what is still process-wide, so a test that built a JIT
-// with non-default options does not leave anything set for the next one.
-// Options live on the JIT, so only two things remain that are not per-JIT:
-//
-//	jitOnce      package initialisation, once per process
-//	cpu.SetWidths  the print-only reporter `jitllm hardware` pins; nn no longer
-//	               writes it, so this is belt and braces for a test that called
-//	               cpu.SetWidths itself
-func ResetForTest() {
-	jitOnce = sync.Once{}
-	cpu.SetWidths(0, 0)
-}
-
 // NewJIT builds the kernels a model needs, with a worker pool of its own. maxK
 // is the widest matvec input and maxRows the tallest output. A model's segments
 // -- its text blocks and its vision tower -- share one: a JIT holds an attention
 // set per geometry (AttnSetFor), so nothing about a tower needs a second.
 func NewJIT(maxK, maxRows int, types []quant.Type, opts ...Option) *JIT {
 	cfg := newConfig(opts)
-	jitOnce.Do(func() {
-		// There is deliberately no switch to turn the JIT off: there is no
-		// tier to fall back to (jit_stub.go covers hosts without an emitter).
-	})
+	// There is deliberately no switch to turn the JIT off: there is no tier to
+	// fall back to (jit_stub.go covers hosts without an emitter).
 	// The activation amax window is a codegen input decided once: 256 when
 	// every matvec type is a k-quant (one scale per super-block, like
 	// llama.cpp's block_q8_K), 32 otherwise, since Q4_0/Q8_0 blocks are 32
@@ -363,7 +346,7 @@ func NewJIT(maxK, maxRows int, types []quant.Type, opts ...Option) *JIT {
 	f := &JIT{
 		cfg:         cfg,
 		tier:        tier,
-		em:          cpu.EmittersWith(tier, cpu.EmitOpts{Prefetch: cfg.Prefetch, A64Prefetch: cfg.A64Prefetch}),
+		em:          cpu.EmittersWith(tier, cpu.EmitOpts{Prefetch: cfg.Prefetch, A64Prefetch: cfg.A64Prefetch, Probes: cfg.Probes}),
 		actWindow:   window,
 		tilePin:     cfg.TileTok,
 		chunkBytes:  cfg.ChunkBytes,

@@ -153,9 +153,9 @@ func TestGemma3nTowerMatchesTransformers(t *testing.T) {
 		{"the coarser stage upsampled transposed", mnFaultUpsampleT},
 		{"each pooling window's first row", mnFaultPoolFirst},
 	} {
-		mnFault = v.f
+		tw.Cfg.fault = v.f
 		bad := g3nvEncode(t, tw, g, nil)
-		mnFault = mnFaultNone
+		tw.Cfg.fault = towerFaultNone
 		nb, _ := nmse32(g.Image.EmbdA8, bad)
 		t.Logf("violation %q: NMSE %.3e", v.name, nb)
 		if !(nb > 10*clean && nb > towerBound) {

@@ -785,9 +785,10 @@ const Pack8 = 8
 // stream competing for the prefetchers and the dTLB, and two wins end to end
 // (see docs/engineering-history/cpu-kernels.md).
 //
-// Config.Pack overrides, for re-measuring. This is the host-default reporter
-// (`jitllm hardware`); nn calls PackWidth with its own per-JIT pin.
-func BestPack(t quant.Type) int { return PackWidth(cfg.Pack, t) }
+// PackWidth takes a pin for re-measuring. This is the host-default reporter
+// (`jitllm hardware` pins through PackWidthNative); nn calls PackWidth with its
+// own per-JIT pin.
+func BestPack(t quant.Type) int { return PackWidth(0, t) }
 
 // PackWidth is BestPack with the pin passed in rather than read from a package
 // variable, which is what makes the width a property of ONE JIT.
@@ -808,9 +809,9 @@ func PackWidth(pin int, t quant.Type) int {
 // latency-bound, and two chains take most of the gain (TestABKQuantAccs;
 // docs/engineering-history/cpu-kernels.md).
 //
-// Config.Accs overrides, for re-measuring rather than for tuning. See BestPack:
+// AccChains takes a pin, for re-measuring rather than for tuning. See BestPack:
 // this is the host-default reporter and nn calls AccChains with its own pin.
-func BestAccs(t quant.Type) int8 { return AccChains(cfg.Accs, t) }
+func BestAccs(t quant.Type) int8 { return AccChains(0, t) }
 
 // AccChains is BestAccs with the pin passed in rather than read from a package
 // variable.

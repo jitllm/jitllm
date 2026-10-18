@@ -225,8 +225,3 @@ func (s *State) ropeTableRow(j int, at [4]int) {
 		s.jit.RopeTableAt(*s.m.ropeSWA, s.bcsSWA[j*nrotSWA:(j+1)*nrotSWA], at[:])
 	}
 }
-
-// xdKNormFirst norms k before XD-RoPE's rotary, as every other q/k-normed
-// model does. False but in a gate's violation: the rotation does not keep a
-// head's RMS, so HunyuanVL's post-rotary norm is load-bearing.
-var xdKNormFirst bool

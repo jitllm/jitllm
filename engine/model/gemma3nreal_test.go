@@ -63,11 +63,11 @@ func TestGemma3nRealMatchesTransformers(t *testing.T) {
 		t.Fatalf("the real tower's rows read NMSE %.3e against transformers", nm)
 	}
 	// The violation on the real weights: PyTorch's symmetric padding.
-	mnFault = mnFaultSymmetric
+	tw.Cfg.fault = mnFaultSymmetric
 	hv := tw.testState()
 	_, bad := encode(hv)
 	hv.Close()
-	mnFault = mnFaultNone
+	tw.Cfg.fault = towerFaultNone
 	bn, _ := nmse32(want, bad)
 	t.Logf("with symmetric padding: NMSE %.3e", bn)
 	if !(bn > 10*nm) {

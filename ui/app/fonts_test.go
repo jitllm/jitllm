@@ -137,14 +137,13 @@ func TestAnUnparseableFileIsNotRegistered(t *testing.T) {
 	}
 	f.Close()
 
-	fontCandidates = []struct{ family, file string }{{"Bogus", f.Name()}}
-	if got := LoadFonts(); len(got) != 0 {
+	if got := loadFonts([]fontCandidate{{"Bogus", f.Name()}}); len(got) != 0 {
 		t.Errorf("an unparseable file was registered as %v", got)
 	}
 }
 
 func restore(t *testing.T) {
 	t.Helper()
-	fonts, parsed, cands := UIFonts, parsedFonts, fontCandidates
-	t.Cleanup(func() { UIFonts, parsedFonts, fontCandidates = fonts, parsed, cands })
+	fonts, parsed := UIFonts, parsedFonts
+	t.Cleanup(func() { UIFonts, parsedFonts = fonts, parsed })
 }

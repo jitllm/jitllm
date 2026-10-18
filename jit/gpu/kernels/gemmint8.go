@@ -486,7 +486,7 @@ func GemmInt8(s MatVecShape, t Int8Tile) (*ir.Kernel, error) {
 	daBase := b.Add(ir.U32, b.Mul(ir.U32, cur, c(int64(D*BN))), tokE)
 	sumBase := b.Add(ir.U32, b.Mul(ir.U32, cur, c(int64(KB*BN))), tokE)
 	m8 := func(a, bw ir.Value, c2 []ir.Value) []ir.Value {
-		return b.MMA(ir.MMAS8Turing, []ir.Value{a}, []ir.Value{bw}, c2)
+		return b.MMA(ir.MMAS8Turing(), []ir.Value{a}, []ir.Value{bw}, c2)
 	}
 	for st := 0; st < D; st++ {
 		af := make([][2][]ir.Value, t.MT) // [m-tile][row g, g+8] -> (word q, word q+4)

@@ -4,8 +4,6 @@ import (
 	"math"
 	"os"
 	"testing"
-
-	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestPairedAttentionIsBitIdentical holds decode with the paired attention
@@ -25,7 +23,6 @@ func TestPairedAttentionIsBitIdentical(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
 				t.Skipf("model not present: %s", path)
 			}
-			nn.ResetForTest()
 			m, err := Open(jlmOf(t, path), noTune)
 			if err != nil {
 				t.Fatal(err)

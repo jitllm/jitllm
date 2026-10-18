@@ -19,12 +19,8 @@ import (
 // AHalf is never read: SDOT is signed x signed, so Q6_K and Q3_K subtract their
 // zero point from the weight bytes and need no correction array.
 //
-// The probes are Config fields, measurement scaffolding; 0 disables.
-func scalarProbe() int { return cfg.ScalarProbe }
-func loadProbe() int   { return cfg.LoadProbe }
-func vectorProbe() int { return cfg.VectorProbe }
-
-func emitA64KMatVec(t quant.Type, actWin int) ([]byte, error) {
+// The probes are EmitOpts.Probes, measurement scaffolding; 0 disables.
+func emitA64KMatVec(t quant.Type, actWin int, pr Probes) ([]byte, error) {
 	var (
 		bb, qsBase, scBase, dOff int32
 		sub                      int32
@@ -296,11 +292,11 @@ func emitA64KMatVec(t quant.Type, actWin int) ([]byte, error) {
 		a.FMLAelem(faccs[0], taccs[0], dax, 0)
 		a.FMLAelem(faccs[0], taccs[1], dax, 0)
 	}
-	// Probe (Config.ScalarProbe): N dummy scalar adds per block, to price
+	// Probe (Probes.Scalar): N dummy scalar adds per block, to price
 	// spare integer issue capacity against the NEON pipes. Three registers
 	// round-robin so this measures throughput, not a dependency chain. X11-X13
 	// are caller-saved and dead here.
-	if n := scalarProbe(); n > 0 {
+	if n := pr.Scalar; n > 0 {
 		for i := 0; i < n; i++ {
 			a.ADDimm(XReg(11+i%3), XReg(11+i%3), 1)
 		}
@@ -309,12 +305,12 @@ func emitA64KMatVec(t quant.Type, actWin int) ([]byte, error) {
 	// (X6, always valid and L1-hot), pricing the load/store units. v29-v31 are
 	// outside every allocation above, so this and the vector probe below
 	// clobber nothing.
-	if n := loadProbe(); n > 0 {
+	if n := pr.Load; n > 0 {
 		for i := 0; i < n; i++ {
 			a.LDRq(VReg(29+i%3), X6, 0)
 		}
 	}
-	if n := vectorProbe(); n > 0 {
+	if n := pr.Vector; n > 0 {
 		for i := 0; i < n; i++ {
 			v := VReg(29 + i%3)
 			a.ADD4s(v, v, v)

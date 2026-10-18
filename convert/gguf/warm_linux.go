@@ -10,14 +10,14 @@ import (
 	"github.com/jitllm/jitllm/engine/sched"
 )
 
-// sink keeps the touch loop from being optimised away.
-var sink atomic.Uint64
-
 // touch faults every page of b in, on the calling goroutine, and stops early
 // when stopped reports true. Reading one byte per page is the whole job: each
 // goroutine is a queue of one I/O. The stop is checked per page, since each
 // fault may take milliseconds.
-func touch(b []byte, stopped func() bool) {
+//
+// It returns the bytes' xor, which the caller stores where the compiler cannot
+// see it unused, so the loads are not optimised away.
+func touch(b []byte, stopped func() bool) byte {
 	var acc byte
 	for off := 0; off < len(b); off += 4096 {
 		if stopped() {
@@ -25,7 +25,7 @@ func touch(b []byte, stopped func() bool) {
 		}
 		acc ^= b[off]
 	}
-	sink.Add(uint64(acc))
+	return acc
 }
 
 // touchParallel faults b in from n goroutines at once, in the background, and
@@ -46,6 +46,9 @@ func touchParallel(b []byte, n int) func() {
 	var stop atomic.Bool
 	var wg sync.WaitGroup
 	stopped := stop.Load
+	// One slot per goroutine for touch's result; they escape into the
+	// goroutines, so the stores stay.
+	sums := make([]byte, n)
 	per := (len(b) + n - 1) / n
 	for w := 0; w < n; w++ {
 		lo, hi := w*per, min(w*per+per, len(b))
@@ -53,14 +56,15 @@ func touchParallel(b []byte, n int) func() {
 			continue
 		}
 		wg.Add(1)
-		go func(part []byte) {
+		go func(w int, part []byte) {
 			defer wg.Done()
-			touch(part, stopped)
-		}(b[lo:hi])
+			sums[w] = touch(part, stopped)
+		}(w, b[lo:hi])
 	}
 	return func() {
 		stop.Store(true)
 		wg.Wait()
+		runtime.KeepAlive(sums)
 	}
 }
 

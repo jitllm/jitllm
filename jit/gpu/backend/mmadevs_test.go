@@ -66,7 +66,7 @@ func mmaDevices(t *testing.T, devs []backend.Device, sh ir.MMAShape) []backend.D
 // m16n8k32 tiles at sm_80.
 func mmaMinSM(sh ir.MMAShape) int {
 	switch {
-	case sh == ir.MMAVolta:
+	case sh == ir.MMAVolta():
 		return 70
 	case sh.Kind == ir.MMAF16 && sh.K == 8:
 		return 75

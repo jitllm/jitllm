@@ -68,9 +68,9 @@ func TestStepRunsAdmitsAPromptBesideDecoding(t *testing.T) {
 					}
 
 					// The violation: the late prompt's chunks back to front.
-					stepPos = func(base, j, k int) int { return base + k - 1 - j }
+					m.faults.stepPos = func(base, j, k int) int { return base + k - 1 - j }
 					bad, _ := plan.together(t, m, g)
-					stepPos = nil
+					m.faults.stepPos = nil
 					bw, bat := worstStep(bad, want)
 					if bw < mlaDeviceNMSE {
 						t.Fatalf("chunks at mirrored positions still matched each session alone (NMSE %.3e): "+

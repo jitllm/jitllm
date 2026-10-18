@@ -33,12 +33,20 @@ func tailPrompt(m *Model, n int) []int32 {
 // the host alone); tap installs a row tap that records every row's residual.
 func tailExec(t *testing.T, path string, prune bool, chunk, rows, dev int, spec string, tap bool) tailRun {
 	t.Helper()
+	return tailExecWith(t, path, prune, chunk, rows, dev, spec, tap, false)
+}
+
+// tailExecWith is tailExec with the gate's violation switched on or off for
+// this model alone.
+func tailExecWith(t *testing.T, path string, prune bool, chunk, rows, dev int, spec string, tap, violate bool) tailRun {
+	t.Helper()
 	m, err := Open(jlmOf(t, path), noTune, WithKVF16(false), WithTailPrune(prune),
 		WithJITOptions(nn.WithPrefillChunk(chunk), nn.WithTune(nn.TuneOff)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
+	m.faults.tailPruneIgnoresDemand = violate
 	st := m.NewState(rows + 16)
 	defer st.Close()
 	if spec != "" {
@@ -155,9 +163,7 @@ func TestTailPruneKeepsWhatIsConsumed(t *testing.T) {
 	if len(a.tap) == 0 || !slices.Equal(a.tap, b.tap) {
 		t.Errorf("the tapped rows differ (%d, %d values)", len(a.tap), len(b.tap))
 	}
-	tailPruneIgnoresDemand = true
-	v := tailExec(t, path, true, 7, 40, 0, "", true)
-	tailPruneIgnoresDemand = false
+	v := tailExecWith(t, path, true, 7, 40, 0, "", true, true)
 	if v.ran == 0 || slices.Equal(a.tap, v.tap) {
 		t.Errorf("the violation went unseen (ran %d): a pruned row that is needed is not detected", v.ran)
 	}

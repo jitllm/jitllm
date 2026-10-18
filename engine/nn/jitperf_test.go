@@ -37,7 +37,6 @@ func TestMatVecScaling(t *testing.T) {
 	out := make([]float32, rows)
 
 	for _, n := range []int{1, 2, 4, 6} {
-		ResetForTest()
 		f := NewJIT(k, rows, []quant.Type{quant.Q4_0}, WithSched(sched.WithCores(n)))
 		if f == nil {
 			t.Skip("no fast tier")
@@ -70,7 +69,6 @@ func TestMatVecShapeSensitivity(t *testing.T) {
 	}
 	rng := rand.New(rand.NewSource(5))
 	os.Unsetenv("JITLLM_CORES")
-	ResetForTest()
 
 	// gemma's actual per-layer mix, plus two controls.
 	for _, sh := range []struct {

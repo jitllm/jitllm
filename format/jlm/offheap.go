@@ -21,18 +21,23 @@ import (
 // The cost is the collector's safety net: a span into a frame that outlives
 // its File's Close faults instead of keeping the frame alive. Where the
 // platform has no anonymous mmap, buf falls back to the heap.
-var offHeap atomic.Bool
 
-func init() { offHeap.Store(true) }
+// OpenOption configures one File at Open.
+type OpenOption func(*openOpts)
 
-// SetOffHeap sets whether Files opened after the call keep their weight memory
-// off the Go heap (the default), and reports the previous setting. Off is the
-// control arm for a measurement; a caller turning it off should also call
-// sched.SetWeightsOffHeap(false), so the weight budget keeps its reserve
-// against the collector's goal.
-func SetOffHeap(on bool) bool { return offHeap.Swap(on) }
+type openOpts struct{ heapWeights bool }
 
-// offHeapBytes is every live off-heap mapping in the process, all Files.
+// WithHeapWeights keeps this File's weight memory on the Go heap instead of
+// off it (the default). Heap is the control arm for a measurement; a caller
+// using it should also tell the budget's collector reserve
+// (sched.SetWeightsOffHeap), so the weight budget keeps its reserve against
+// the collector's goal.
+func WithHeapWeights() OpenOption { return func(o *openOpts) { o.heapWeights = true } }
+
+// offHeapBytes is every live off-heap mapping in the process, all Files. It is
+// process-wide on purpose: the Go collector is one per process, and the memory
+// limit handed to it has to subtract everything mapped outside its heap
+// (internal/cmd/goheap).
 var offHeapBytes atomic.Int64
 
 // OffHeapBytes is how much weight memory this process holds outside the Go

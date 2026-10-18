@@ -14,7 +14,7 @@ import (
 // with and without more busy goroutines than there are Ps, and every view
 // must finish -- a lost wake-up leaves a waiter queued forever and the test
 // hangs until go test's own deadline names the goroutine. The lock reports
-// each queue and each handoff (onTurnQueue, onTurnGrant), and a queued view
+// each queue and each handoff (turn.onQueue, turn.onGrant), and a queued view
 // must be granted after at most one grant per view queued ahead of it. A
 // count, not a clock. Every region must also cover its range exactly once.
 //
@@ -48,18 +48,18 @@ func turnStress(t *testing.T, procs int, busy bool) {
 		worst  int64
 		queued int64
 	)
-	onTurnQueue = func(w chan struct{}) {
+	tn := vs[0].w().mu
+	tn.onQueue = func(w chan struct{}) {
 		at[w] = grants
 		queued++
 	}
-	onTurnGrant = func(w chan struct{}) {
+	tn.onGrant = func(w chan struct{}) {
 		if d := grants - at[w]; d > worst {
 			worst = d
 		}
 		delete(at, w)
 		grants++
 	}
-	defer func() { onTurnQueue, onTurnGrant = nil, nil }()
 
 	stop := make(chan struct{})
 	var spin sync.WaitGroup

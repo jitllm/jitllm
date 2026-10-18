@@ -41,7 +41,7 @@ func TestFlashPrefill70MatchesReference(t *testing.T) {
 		defer d.Close()
 	}
 	ran := 0
-	for _, d := range mmaDevices(t, devs, ir.MMAVolta) {
+	for _, d := range mmaDevices(t, devs, ir.MMAVolta()) {
 		for _, c := range flash70Cases {
 			t.Run(fmt.Sprintf("%s/h%d/d%d/kv%d/rows%d/cap%d/w%d/cap%g", d.API(), c.heads, c.dim, c.kv, c.rows, c.cap, c.window, c.softcap),
 				func(t *testing.T) { flash70Run(t, d, c, false) })
@@ -65,7 +65,7 @@ func TestFlashPrefill70IsGated(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 	}
-	for _, d := range mmaDevices(t, devs, ir.MMAVolta) {
+	for _, d := range mmaDevices(t, devs, ir.MMAVolta()) {
 		t.Run(d.API(), func(t *testing.T) { flash70Run(t, d, flash70Cases[1], true) })
 	}
 }

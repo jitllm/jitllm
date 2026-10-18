@@ -14,8 +14,6 @@ import (
 // reports the cached count.
 func TestDecodeHonoursAPinnedParticipantCount(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	ResetForTest()
-	defer ResetForTest()
 	probe := NewJIT(2048, 4096, []quant.Type{quant.Q4_K})
 	if probe == nil {
 		t.Skip("no generated tier")

@@ -65,7 +65,7 @@ func TestAttnScoresMMA70MatchesFMA(t *testing.T) {
 		defer d.Close()
 	}
 	ran := 0
-	for _, d := range mmaDevices(t, devs, ir.MMAVolta) {
+	for _, d := range mmaDevices(t, devs, ir.MMAVolta()) {
 		for _, c := range append(append([]attn70Case{}, attn70Cases...), attn70RowMajorCases...) {
 			t.Run(fmt.Sprintf("%s/h%d/d%d/kv%d/rows%d/cap%d/w%d/rm%v", d.API(), c.nHeads, c.headDim, c.nKV, c.rows,
 				c.cap, c.window, c.rowMajor),
@@ -204,7 +204,7 @@ func TestAttnAccMMA70MatchesFMA(t *testing.T) {
 		defer d.Close()
 	}
 	ran := 0
-	for _, d := range mmaDevices(t, devs, ir.MMAVolta) {
+	for _, d := range mmaDevices(t, devs, ir.MMAVolta()) {
 		for _, c := range append(append([]attn70Case{}, attn70Cases...), attn70LatentAccCases...) {
 			if c.window > 0 {
 				continue // the accumulate has no window; its zeros are the softmax's

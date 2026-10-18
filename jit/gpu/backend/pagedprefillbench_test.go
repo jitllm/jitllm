@@ -70,7 +70,7 @@ func TestPagedPrefillAB(t *testing.T) {
 		if dn := os.Getenv("JITLLM_PAGED_DEV"); dn != "" && !strings.Contains(d.Name(), dn) {
 			continue
 		}
-		volta := len(mmaDevices(t, []backend.Device{d}, ir.MMAVolta)) > 0 && strings.Contains(d.Name(), "sm_70")
+		volta := len(mmaDevices(t, []backend.Device{d}, ir.MMAVolta())) > 0 && strings.Contains(d.Name(), "sm_70")
 		mma16 := len(mmaDevices(t, []backend.Device{d}, ir.MMAShape{M: 16, N: 8, K: 16, Kind: ir.MMAF16})) > 0
 		tiles, _ := backend.LowersTile(d, tile8f32)
 		for _, kern := range []string{"staged", "flash", "vs"} {

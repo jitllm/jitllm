@@ -45,7 +45,7 @@ func TestPagedFlashPrefill80(t *testing.T) {
 			sink bool
 		}{kernels.FlashPrefill70Shape{Heads: 8, KVHeads: 1, Dim: 256, Scale: .0625, Softcap: 50, F16: true}, true})
 	ran := 0
-	vdevs := mmaDevices(t, devs, ir.MMAVolta)
+	vdevs := mmaDevices(t, devs, ir.MMAVolta())
 	for _, fk := range []struct {
 		form flashForm
 		k    int

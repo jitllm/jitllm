@@ -534,12 +534,12 @@ func parseTile(s string) (gemmTile, bool) {
 // later requests.
 const PrefillChunkRounds = 3
 
-// PrefillChunks are the batch widths Prefill may use. Every one is a multiple
+// prefillChunks are the batch widths Prefill may use. Every one is a multiple
 // of 32, the largest tile width the GEMM candidates offer, so the no-padding
 // invariant holds at any of them. The wide ones pay with the weight-stationary
 // GEMM, which reads each weight once per chunk; a mixture's expert sees only
 // chunk*used/experts rows of it.
-var PrefillChunks = []int{32, 64, 128, 256, 512}
+var prefillChunks = []int{32, 64, 128, 256, 512}
 
 // MaxHostPrefillChunk sizes the batched scratch in model: the largest
 // candidate, not the tuned value, because the tuner may still be cycling.
@@ -611,9 +611,9 @@ func sharedDuel(key string, mk func() *duelTuner) *duelTuner {
 	return d
 }
 
-// RowChunkKiB are the batched row chunk caps the duel tries, in KiB of a
+// rowChunkKiB are the batched row chunk caps the duel tries, in KiB of a
 // worker's weight slice; the first is no cap at all.
-var RowChunkKiB = []int{1 << 20, 256, 64, 16}
+var rowChunkKiB = []int{1 << 20, 256, 64, 16}
 
 // newRowChunkDuel measures the cap on a batched matmul's row chunk
 // (Config.ChunkBytes) on whole prefill chunks, after the participants and the
@@ -629,15 +629,15 @@ func (f *JIT) newRowChunkDuel(shapes []shapeKey, cores int) *duelTuner {
 		pin = max(1, f.cfg.ChunkBytes>>10)
 	}
 	d := newDuelTuner("prefill row chunk KiB", pin, tuneKey("rowchunk", shapes, cores),
-		RowChunkKiB, f.cfg.Tune, f.cfg.Quiet)
+		rowChunkKiB, f.cfg.Tune, f.cfg.Quiet)
 	d.sweep = true
 	return d
 }
 
-// GEMMRowsCands are the weight-stationary GEMM's rows a call the gemmrows duel
+// gemmRowsCands are the weight-stationary GEMM's rows a call the gemmrows duel
 // tries; gemmOff is "no GEMM, the tiled path". Candidates are >= 1 because
 // that is how the duel encodes a pin and the cache an answer.
-var GEMMRowsCands = []int{gemmRows, 32, 64, gemmOff}
+var gemmRowsCands = []int{gemmRows, 32, 64, gemmOff}
 
 const gemmOff = 1
 
@@ -654,7 +654,7 @@ func (f *JIT) newGEMMRowsDuel(shapes []shapeKey, cores int) *duelTuner {
 		pin = gemmRows // the GEMM cannot run, so there is nothing to measure
 	}
 	d := newDuelTuner("prefill GEMM rows", pin, tuneKey("gemmrows", shapes, cores),
-		GEMMRowsCands, f.cfg.Tune, f.cfg.Quiet)
+		gemmRowsCands, f.cfg.Tune, f.cfg.Quiet)
 	d.sweep = true
 	return d
 }
@@ -666,7 +666,7 @@ func (f *JIT) newGEMMRowsDuel(shapes []shapeKey, cores int) *duelTuner {
 // the cache hierarchy, so it is measured.
 func (f *JIT) PrefillChunk() int {
 	if f == nil {
-		return PrefillChunks[0]
+		return prefillChunks[0]
 	}
 	prefillDuels.Lock()
 	defer prefillDuels.Unlock()
@@ -773,7 +773,7 @@ func newDuelTuner(label string, pin int, key string, cands []int, mode TuneMode,
 // newChunkDuel climbs the prefill batch width from the narrowest candidate.
 func (f *JIT) newChunkDuel(shapes []shapeKey, cores int) *duelTuner {
 	return newDuelTuner("prefill chunk", f.cfg.Chunk, tuneKey("chunk", shapes, cores),
-		PrefillChunks, f.cfg.Tune, f.cfg.Quiet)
+		prefillChunks, f.cfg.Tune, f.cfg.Quiet)
 }
 
 // newPartDuel climbs the participant count downward from every core. Using

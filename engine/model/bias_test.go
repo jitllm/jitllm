@@ -4,8 +4,6 @@ import (
 	"math"
 	"os"
 	"testing"
-
-	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // TestAttentionBiasesReachTheModel injects each attention bias (a bias is just a
@@ -161,8 +159,6 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 			// And prefill, the third copy. With the GEMM pinned out this is bit
 			// equality, not a bar.
 			t.Run("prefill", func(t *testing.T) {
-				nn.ResetForTest()
-				defer nn.ResetForTest()
 				pm, err := Open(jlmOf(t, path), noTune, noGEMM)
 				if err != nil {
 					t.Fatal(err)
@@ -208,7 +204,6 @@ func TestBiasedBatchMatchesForward(t *testing.T) {
 // logitsOf prefills ids on a fresh state and returns the last-token logits.
 func logitsOf(t *testing.T, m *Model, ids []int32) []float32 {
 	t.Helper()
-	nn.ResetForTest()
 	st := m.NewState(len(ids) + 8)
 	defer st.Close()
 	var out []float32
@@ -236,8 +231,6 @@ func TestPrefillAfterForwardContinues(t *testing.T) {
 			if _, err := os.Stat(path); err != nil {
 				t.Skipf("model not present: %s", path)
 			}
-			nn.ResetForTest()
-			defer nn.ResetForTest()
 			// noGEMM so the comparison is bit equality.
 			m, err := Open(jlmOf(t, path), noTune, noGEMM)
 			if err != nil {

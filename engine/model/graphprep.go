@@ -122,7 +122,7 @@ func (s *State) runPrep(l *layer, steps []prepStep, q, k, v, cs []float32, li, k
 	// writes the whole row.
 	kvd := c.KVDimAt(li)
 	rows := [3][]float32{q, k[:min(len(k), kvd)], v[:min(len(v), kvd)]}
-	if xdKNormFirst {
+	if s.m.faults.xdKNormFirst {
 		steps = kNormFirst(steps)
 	}
 	for _, st := range steps {

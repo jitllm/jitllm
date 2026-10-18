@@ -207,9 +207,9 @@ func TestLFM2RealMatchesTransformers(t *testing.T) {
 				return out
 			}
 			pn, _ := nmse32(wantEmb, proj())
-			lfm2TanhGELU = true
+			tw.Cfg.fault = faultLFM2TanhGELU
 			pt, _ := nmse32(wantEmb, proj())
-			lfm2TanhGELU = false
+			tw.Cfg.fault = towerFaultNone
 			was := tw.Cfg.fault
 			tw.Cfg.fault = towerFaultShuffleSwap
 			ps, _ := nmse32(wantEmb, proj())
@@ -229,12 +229,12 @@ func TestLFM2RealMatchesTransformers(t *testing.T) {
 			}
 
 			// The violations, from the pixels.
-			vio := func(name string, set *bool) {
-				*set = true
+			vio := func(name string, set towerFault) {
+				tw.Cfg.fault = set
 				s := tw.testState()
 				vpx, _, vemb, _ := lfm2Encode(t, tw, s, path)
 				s.Close()
-				*set = false
+				tw.Cfg.fault = towerFaultNone
 				if len(vpx) != len(wantPx) || len(vemb) != len(wantEmb) {
 					t.Logf("violation %q: %d values against %d -- caught by shape", name, len(vemb), len(wantEmb))
 					return
@@ -249,17 +249,17 @@ func TestLFM2RealMatchesTransformers(t *testing.T) {
 			// filter is not in it.
 			if b := decodeImage(t, path).Bounds(); g.Cols*g.Rows > 1 ||
 				b.Dy() != g.Pieces[0][0]*c.PatchSz || b.Dx() != g.Pieces[0][1]*c.PatchSz {
-				vio("the bilinear resize", &lfm2Bilinear)
+				vio("the bilinear resize", faultLFM2Bilinear)
 			}
 			if g.Cols*g.Rows > 1 {
-				vio("no thumbnail", &lfm2NoThumb)
+				vio("no thumbnail", faultLFM2NoThumb)
 			}
 			if p := g.Pieces[len(g.Pieces)-1]; p[0] != p[1] {
-				phi4PosTransposed = true
+				tw.Cfg.fault = faultPhi4PosTransposed
 				s := tw.testState()
 				_, _, bad, _ := lfm2Encode(t, tw, s, path)
 				s.Close()
-				phi4PosTransposed = false
+				tw.Cfg.fault = towerFaultNone
 				nb, _ := nmse32(wantEmb, bad)
 				t.Logf("violation, the table resized to the grid's transpose: NMSE %.3e", nb)
 				if !(nb > 10*ne) {

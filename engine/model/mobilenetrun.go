@@ -10,25 +10,11 @@ import (
 
 // The MobileNet-V5 tower's encode on the host (mobilenet.go has the tower).
 
-// mnFault breaks one step of the tower on purpose, for the gates that must
-// be seen to fail (RULE 10); zero in every real run.
-var mnFault mnFaultKind
+// mnFaultKind is a MobileNet-V5 gate's violation, one of the towerFault values
+// (vision.go) set on the tower's configuration; none in every real run.
+type mnFaultKind = towerFault
 
-type mnFaultKind uint8
-
-const (
-	mnFaultNone mnFaultKind = iota
-	// mnFaultSymmetric pads every window k/2 on both sides, PyTorch's
-	// static padding, in place of TF SAME's smaller half first.
-	mnFaultSymmetric
-	// mnFaultNoResidual drops every block's residual add.
-	mnFaultNoResidual
-	// mnFaultUpsampleT reads the coarser stage's row at the transposed
-	// position when the fusion adapter upsamples it.
-	mnFaultUpsampleT
-	// mnFaultPoolFirst takes each pooling window's first row for its mean.
-	mnFaultPoolFirst
-)
+const mnFaultNone = towerFaultNone
 
 // mnColRows is how many output positions one im2col tile holds: a full
 // convolution is a matmul over the tile, so the tile bounds the unfolded
@@ -140,7 +126,7 @@ func (s *State) mnPad(src []float32, h, w, c, k, st int) (wp int, sh cpu.DWShape
 	r := s.vis.mn
 	ho, top, _ := mnSame(h, k, st)
 	wo, left, _ := mnSame(w, k, st)
-	if mnFault == mnFaultSymmetric {
+	if s.tfault() == mnFaultSymmetric {
 		top, left = k/2, k/2
 	}
 	hp, wp := (ho-1)*st+k, (wo-1)*st+k
@@ -332,7 +318,7 @@ func (s *State) mnBlockRun(li int) error {
 			return err
 		}
 	}
-	if b.residual && mnFault != mnFaultNoResidual {
+	if b.residual && s.tfault() != mnFaultNoResidual {
 		s.addInto(y, x)
 	}
 	r.cur = 1 - r.cur
@@ -395,7 +381,7 @@ func (s *State) mnFinish() ([]float32, error) {
 			p := y*wa + x
 			copy(cat[p*ccat:p*ccat+a.cout], r.tapA[p*a.cout:(p+1)*a.cout])
 			q := (y/fy)*b.wout + x/fx
-			if mnFault == mnFaultUpsampleT {
+			if s.tfault() == mnFaultUpsampleT {
 				q = (x/fx)*b.wout + y/fy
 			}
 			copy(cat[p*ccat+a.cout:(p+1)*ccat], fin[q*b.cout:(q+1)*b.cout])
@@ -428,7 +414,7 @@ func (s *State) mnFinish() ([]float32, error) {
 			for dy := 0; dy < k; dy++ {
 				for dx := 0; dx < k; dx++ {
 					p := (gy*k+dy)*wa + gx*k + dx
-					if mnFault == mnFaultPoolFirst {
+					if s.tfault() == mnFaultPoolFirst {
 						p = (gy*k)*wa + gx*k
 					}
 					nn.Axpy32JIT(dst, f[p*E:(p+1)*E], 1)

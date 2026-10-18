@@ -148,14 +148,15 @@ func TestTheMemCacheRestoresAndAnswersAsAColdPrefill(t *testing.T) {
 				}
 				var tapC, tapW sampleTrace
 				if a.device && o.Sampling != nil {
-					sampleTap = tapC.add
+					cold.sampleTap = tapC.add
 				}
 				want := generate(t, cold, oc)
+				cold.sampleTap = nil
 				if a.device && o.Sampling != nil {
-					sampleTap = tapW.add
+					warm.sampleTap = tapW.add
 				}
 				got := generate(t, warm, ow)
-				sampleTap = nil
+				warm.sampleTap = nil
 				if want.started != 0 {
 					t.Fatalf("request %d: the engine with no store restored %d positions", i, want.started)
 				}

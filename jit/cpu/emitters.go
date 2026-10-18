@@ -266,7 +266,15 @@ type EmitOpts struct {
 	// packed matvec issues a PRFM: 0 takes the default, one tile (rows*4
 	// bytes), and a negative value emits none. See EmitA64PackedMatVecPF.
 	A64Prefetch int
+	// Probes is arm64 measurement scaffolding: it injects dead operations into
+	// the k-quant decode kernel so one class can be priced against another.
+	// Never set outside a measurement; it makes the kernel deliberately slower.
+	Probes Probes
 }
+
+// Probes counts the dead scalar adds, 128-bit loads and vector adds injected
+// per block into the arm64 k-quant decode matvec. 0 disables each.
+type Probes struct{ Scalar, Load, Vector int }
 
 // EmittersWith is EmittersFor(t) with o applied to the emitters it reaches: a
 // copy of the table, so two JITs in one process emit with their own choices.
@@ -276,7 +284,7 @@ func EmittersWith(t Tier, o EmitOpts) *Emitters {
 		return base
 	}
 	e := *base
-	e.RowMajor = func(s Spec) ([]byte, error) { return rowMajorPF(s, o.Prefetch) }
+	e.RowMajor = func(s Spec) ([]byte, error) { return rowMajorPF(s, o) }
 	e.PackedMatVec = func(q quant.Type, rows int) ([]byte, error) { return packedMatVecPF(q, rows, o.A64Prefetch) }
 	return &e
 }

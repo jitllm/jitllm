@@ -6,12 +6,9 @@ import (
 	"testing"
 )
 
-// One binary, one knob, both arms live and interleaved. scopeSlots=0 is the
-// map-only scope; 4 is the inline slots.
-func benchScopeArm(b *testing.B, slots int) {
-	old := scopeSlots
-	scopeSlots = slots
-	defer func() { scopeSlots = old }()
+// BenchmarkScope renders a real template through the inline-slot scope. The
+// map-only arm it was once measured against is gone with its package switch.
+func BenchmarkScope(b *testing.B) {
 	src, err := os.ReadFile(filepath.Join("testdata", "templates", "qwen3.jinja"))
 	if err != nil {
 		b.Fatal(err)
@@ -34,6 +31,3 @@ func benchScopeArm(b *testing.B, slots int) {
 		}
 	}
 }
-
-func BenchmarkScopeA_Map(b *testing.B)    { benchScopeArm(b, 0) }
-func BenchmarkScopeB_Inline(b *testing.B) { benchScopeArm(b, scopeInline) }

@@ -130,8 +130,8 @@ func TestQwenTowerMatchesTransformers(t *testing.T) {
 					return func() { c.WinSize = was }
 				}},
 				{"the merged rows left in window order", nil, func(c *TowerConfig) func() {
-					qwenNoUnwindow = true
-					return func() { qwenNoUnwindow = false }
+					c.fault = faultQwenNoUnwindow
+					return func() { c.fault = towerFaultNone }
 				}},
 			} {
 				undo := func() {}

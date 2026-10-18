@@ -35,8 +35,8 @@ func primaryRowMajorSupported(t quant.Type) bool {
 func EmitNative(s Spec) ([]byte, error) { return Emit(s) }
 
 // rowMajorPF is EmitNative with EmitOpts.Prefetch.
-func rowMajorPF(s Spec, pf int) ([]byte, error) { return emitPF(s, pf) }
-func BestPackNative(t quant.Type) int           { return BestPack(t) }
+func rowMajorPF(s Spec, o EmitOpts) ([]byte, error) { return emitPF(s, o.Prefetch) }
+func BestPackNative(t quant.Type) int               { return PackWidth(0, t) }
 
 // PackWidthNative is BestPackNative with the pin passed in rather than read
 // from the package Config, so a JIT's width is its own.

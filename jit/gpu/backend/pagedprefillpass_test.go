@@ -167,7 +167,7 @@ func TestPagedPrefillPasses(t *testing.T) {
 		defer d.Close()
 	}
 	volta := map[backend.Device]bool{}
-	for _, d := range mmaDevices(t, devs, ir.MMAVolta) {
+	for _, d := range mmaDevices(t, devs, ir.MMAVolta()) {
 		volta[d] = true
 	}
 	ran := 0

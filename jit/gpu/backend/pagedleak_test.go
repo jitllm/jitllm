@@ -36,7 +36,7 @@ func TestPagedGatesLeakNothing(t *testing.T) {
 	const page = 64
 	rows := pagedCases(page)["rows"]
 	volta := map[backend.Device]bool{}
-	for _, d := range mmaDevices(t, devs, ir.MMAVolta) {
+	for _, d := range mmaDevices(t, devs, ir.MMAVolta()) {
 		volta[d] = true
 	}
 	pass := func(d backend.Device) {

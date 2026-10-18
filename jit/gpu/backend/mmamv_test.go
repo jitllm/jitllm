@@ -35,7 +35,7 @@ func TestMatVecMMAMatchesDot4(t *testing.T) {
 	// mmaDevices and lowertest's TestMMACoversExactlyWhatItClaims.
 	// sm_75's m8n8k16 is the widest net: there MatVecMMA declines and only
 	// GemmInt8's M8 tiles run (int8M8Tiles); from sm_80 every arm runs.
-	for _, d := range mmaDevices(t, devs, ir.MMAS8Turing) {
+	for _, d := range mmaDevices(t, devs, ir.MMAS8Turing()) {
 		t.Run(d.API(), func(t *testing.T) {
 			for _, q := range []kernels.Quant{kernels.Q4_0, kernels.Q8_0, kernels.Q4_K,
 				kernels.Q3_K, kernels.Q5_K, kernels.Q6_K, kernels.MXFP4, kernels.Q5_0, kernels.Q5_1, kernels.TQ2, kernels.TQ2F} {

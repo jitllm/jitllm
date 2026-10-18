@@ -366,7 +366,7 @@ func FlashPrefill70(s FlashPrefill70Shape) (*ir.Kernel, error) {
 		af := []ir.Value{b.Load(ir.U32, shK, kRow, int64(2*st)), b.Load(ir.U32, shK, kRow, int64(2*st+1))}
 		for j := 0; j < 2; j++ {
 			bf := []ir.Value{b.Load(ir.U32, shQ, qRow[j], int64(2*st)), b.Load(ir.U32, shQ, qRow[j], int64(2*st+1))}
-			sacc[j] = b.MMA(ir.MMAVolta, af, bf, sacc[j])
+			sacc[j] = b.MMA(ir.MMAVolta(), af, bf, sacc[j])
 		}
 	}
 
@@ -454,7 +454,7 @@ func FlashPrefill70(s FlashPrefill70Shape) (*ir.Kernel, error) {
 		for dt := 0; dt < dts; dt++ {
 			af := []ir.Value{b.Load(ir.U32, shV, dRowV[dt], int64(2*st)), b.Load(ir.U32, shV, dRowV[dt], int64(2*st+1))}
 			for j := 0; j < 2; j++ {
-				od[dt][j] = b.MMA(ir.MMAVolta, af, bf[j], od[dt][j])
+				od[dt][j] = b.MMA(ir.MMAVolta(), af, bf[j], od[dt][j])
 			}
 		}
 	}

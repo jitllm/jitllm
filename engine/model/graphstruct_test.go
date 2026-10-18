@@ -106,10 +106,10 @@ func TestEveryGraphOpHasALowering(t *testing.T) {
 		}
 	}
 	t.Logf("block 0:\n%v", m.BlockLowering(0))
-	saved := hostLowering[graph.OpRoute]
-	delete(hostLowering, graph.OpRoute)
+	route := graph.OpRoute
+	m.faults.noLowering = &route
 	err = m.buildGraphs()
-	hostLowering[graph.OpRoute] = saved
+	m.faults.noLowering = nil
 	if err == nil || !strings.Contains(err.Error(), "no host lowering") {
 		t.Fatalf("a route with no lowering built: %v", err)
 	}

@@ -15,14 +15,10 @@ import (
 
 // fastFailures shrinks every wait in the range reader so a gate can inject a
 // failure of each kind many times over without sleeping through them.
-func fastFailures(t *testing.T, chunk int) {
+func fastFailures(t *testing.T, c *Client, chunk int) {
 	t.Helper()
-	ob, os, od, oc, of, or := backoffBase, stallAfter, attemptDeadline, rangeChunk, cdnFresh, maxRetryAfter
-	backoffBase, stallAfter, attemptDeadline, rangeChunk = time.Millisecond, 50*time.Millisecond, 300*time.Millisecond, chunk
-	maxRetryAfter = 20 * time.Millisecond
-	t.Cleanup(func() {
-		backoffBase, stallAfter, attemptDeadline, rangeChunk, cdnFresh, maxRetryAfter = ob, os, od, oc, of, or
-	})
+	c.Tuning = Tuning{BackoffBase: time.Millisecond, StallAfter: 50 * time.Millisecond,
+		AttemptDeadline: 300 * time.Millisecond, RangeChunk: chunk, MaxRetryAfter: 20 * time.Millisecond}
 }
 
 // readWithin is ReadAt under a watchdog of its own: a reader with no timeout
@@ -150,7 +146,7 @@ func TestRemoteReadsTheRangesItIsAskedFor(t *testing.T) {
 	var log bytes.Buffer
 	var logMu sync.Mutex
 	c := &Client{Endpoint: srv.URL, Progress: lockedWriter{&log, &logMu}}
-	fastFailures(t, 16<<10)
+	fastFailures(t, c, 16<<10)
 	rm, err := c.OpenRemote(Ref{Repo: "o/r", Rev: "abc", File: "m.safetensors"})
 	if err != nil {
 		t.Fatal(err)
@@ -218,7 +214,7 @@ func TestARangeThatKeepsFailingErrorsOut(t *testing.T) {
 	var log bytes.Buffer
 	var mu sync.Mutex
 	c := &Client{Endpoint: srv.URL, Progress: lockedWriter{&log, &mu}}
-	fastFailures(t, 64<<10)
+	fastFailures(t, c, 64<<10)
 	rm, err := c.OpenRemote(Ref{Repo: "o/r", Rev: "abc", File: "m.safetensors"})
 	if err != nil {
 		t.Fatal(err)
@@ -292,7 +288,7 @@ func TestRemoteKeepsTheCDNAddress(t *testing.T) {
 	defer hub.Close()
 
 	c := &Client{Endpoint: hub.URL, Token: "tok", Conns: 4}
-	fastFailures(t, 16<<10)
+	fastFailures(t, c, 16<<10)
 	rm, err := c.OpenRemote(Ref{Repo: "o/r", Rev: "abc", File: "m.safetensors"})
 	if err != nil {
 		t.Fatal(err)
@@ -363,12 +359,10 @@ func TestRangesSpreadOverConnections(t *testing.T) {
 	// them itself passed while the real config offered h2 and every range
 	// came back as HTTP/2 frames read as a malformed response.
 	tr.TLSClientConfig.RootCAs = srv.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
-	old := ranges
-	ranges = &http.Client{Transport: tr}
-	defer func() { ranges = old; tr.CloseIdleConnections() }()
-	fastFailures(t, 16<<10)
+	defer tr.CloseIdleConnections()
 
-	c := &Client{Endpoint: srv.URL, Conns: 8}
+	c := &Client{Endpoint: srv.URL, Conns: 8, HTTP: &http.Client{Transport: tr}}
+	fastFailures(t, c, 16<<10)
 	rm := &Remote{c: c, r: Ref{Repo: "o/r", Rev: "abc", File: "m.safetensors"},
 		url: srv.URL + "/m.safetensors", size: int64(len(data))}
 	p := make([]byte, len(data))
@@ -408,7 +402,7 @@ func TestRetryAfterIsRead(t *testing.T) {
 		{h("Retry-After", "-3"), 0},
 		{h("Retry-After", "Wed, 21 Oct 2015 07:28:00 GMT"), 0},
 	} {
-		if got := retryAfterOf(c.h); got != c.want {
+		if got := retryAfterOf(c.h, 5*time.Minute); got != c.want {
 			t.Errorf("%v: %v, want %v", c.h, got, c.want)
 		}
 	}
