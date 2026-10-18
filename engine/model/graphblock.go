@@ -506,6 +506,12 @@ func (m *Model) buildGraphs() error {
 	m.graphWhy = make([]string, m.Cfg.NLayer)
 	for li := range m.graphs {
 		refuse := func(why string) error {
+			if l := &m.layers[li]; !m.Cfg.NonCausal && l.gate.e == nil && l.router.e == nil && !l.noFFN {
+				// Only the graph's lowering runs an ungated FFN (an encoder
+				// runs its own body, encoder.go).
+				return fmt.Errorf("model: block %d of %s has an ungated FFN and is not covered by the block graph (%s); "+
+					"the hand-written body has no ungated FFN", li, m.Cfg.Arch, why)
+			}
 			if m.Cfg.Parallel {
 				// Only the graph's lowering runs a parallel residual.
 				return fmt.Errorf("model: block %d of %s is parallel and not covered by the block graph (%s); "+
@@ -1291,4 +1297,23 @@ func rewriteLegal(decisions []graph.Decision, name string) bool {
 		}
 	}
 	return false
+}
+
+// handless is what the model has that the hand-written body no longer runs
+// (a parallel residual, an ungated FFN), "" where it has neither: such a
+// model runs through the block graph alone.
+func (m *Model) handless() string {
+	if m.Cfg.Parallel {
+		return "a parallel residual"
+	}
+	if m.Cfg.NonCausal {
+		// An encoder runs its own body (encoder.go).
+		return ""
+	}
+	for li := range m.Cfg.NLayer {
+		if l := &m.layers[li]; l.gate.e == nil && l.router.e == nil && !l.noFFN {
+			return "an ungated FFN"
+		}
+	}
+	return ""
 }

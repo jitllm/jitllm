@@ -509,41 +509,25 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 				return nil, err
 			}
 		} else {
-			if l.gate.e == nil {
-				// The ungated FFN (C6); see forward.go.
-				if err := s.mm(s.bup, l.up, ffnIn, n); err != nil {
-					return nil, err
-				}
-				s.addBiasRows(s.bup, l.upB, n)
-				t0 = s.tick()
-				s.ungatedAct(l, s.bup[:n*c.NFFN])
+			if err := s.mm(s.bgate, l.gate, ffnIn, n); err != nil {
+				return nil, err
+			}
+			if err := s.mm(s.bup, l.up, ffnIn, n); err != nil {
+				return nil, err
+			}
+			t0 = s.tick()
+			gate, up, act := s.bgate[:n*c.NFFNAt(li)], s.bup[:n*c.NFFNAt(li)], c.Act
+			s.gaussTopK(li, gate, c.NFFNAt(li))
+			s.actmulAll(gate, up, act)
+			s.jit.NewInput()
+			s.tock(opAct, t0)
+			// BitNet's norm over the product, before down.
+			if l.ffnSubNorm != nil {
+				s.batchNorm(gate, gate, l.ffnSubNorm, c.NFFNAt(li), n)
 				s.jit.NewInput()
-				s.tock(opAct, t0)
-				if err := s.mm(s.bh, l.down, s.bup, n); err != nil {
-					return nil, err
-				}
-				s.addBiasRows(s.bh, l.downB, n)
-			} else {
-				if err := s.mm(s.bgate, l.gate, ffnIn, n); err != nil {
-					return nil, err
-				}
-				if err := s.mm(s.bup, l.up, ffnIn, n); err != nil {
-					return nil, err
-				}
-				t0 = s.tick()
-				gate, up, act := s.bgate[:n*c.NFFNAt(li)], s.bup[:n*c.NFFNAt(li)], c.Act
-				s.gaussTopK(li, gate, c.NFFNAt(li))
-				s.actmulAll(gate, up, act)
-				s.jit.NewInput()
-				s.tock(opAct, t0)
-				// BitNet's norm over the product, before down.
-				if l.ffnSubNorm != nil {
-					s.batchNorm(gate, gate, l.ffnSubNorm, c.NFFNAt(li), n)
-					s.jit.NewInput()
-				}
-				if err := s.mm(s.bh, l.down, s.bgate, n); err != nil {
-					return nil, err
-				}
+			}
+			if err := s.mm(s.bh, l.down, s.bgate, n); err != nil {
+				return nil, err
 			}
 			if l.postFFNNorm != nil {
 				s.batchNorm(s.bh, s.bh, l.postFFNNorm, c.NEmbd, n)

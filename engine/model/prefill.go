@@ -1562,51 +1562,35 @@ attend:
 			return err
 		}
 	} else {
-		if l.gate.e == nil {
-			// The ungated FFN (C6); see forward.go.
-			if err := s.mm(s.bup, l.up, ffnIn, n); err != nil {
-				return err
-			}
-			s.addBiasRows(s.bup, l.upB, n)
-			tac := s.tick()
-			s.ungatedAct(l, s.bup[:n*c.NFFN])
-			s.jit.NewInput()
-			s.tock(opAct, tac)
-			if err := s.mm(s.bh, l.down, s.bup, n); err != nil {
-				return err
-			}
-			s.addBiasRows(s.bh, l.downB, n)
-		} else {
-			if err := s.mm(s.bgate, l.gate, s.clampIn(l, clampGate, ffnIn[:n*c.NEmbd]), n); err != nil {
-				return err
-			}
-			s.clampOut(l, clampGate, s.bgate[:n*c.NFFNAt(li)])
-			if err := s.mm(s.bup, l.up, s.clampIn(l, clampUp, ffnIn[:n*c.NEmbd]), n); err != nil {
-				return err
-			}
-			s.clampOut(l, clampUp, s.bup[:n*c.NFFNAt(li)])
-			// A gated MLP with biases (Qwen2.5-VL's vision blocks); nil and
-			// skipped on every text block.
-			s.addBiasRows(s.bgate, l.gateB, n)
-			s.addBiasRows(s.bup, l.upB, n)
-			gate, up := s.bgate[:n*c.NFFNAt(li)], s.bup[:n*c.NFFNAt(li)]
-			tac := s.tick()
-			s.gaussTopK(li, gate, c.NFFNAt(li))
-			s.actmulAll(gate, up, act)
-			s.tock(opAct, tac)
-			// BitNet's norm over the product, before down.
-			if l.ffnSubNorm != nil {
-				tn := s.tick()
-				s.batchNorm(gate, gate, l.ffnSubNorm, c.NFFNAt(li), n)
-				s.jit.NewInput()
-				s.tock(opRMSNorm, tn)
-			}
-			if err := s.mm(s.bh, l.down, s.clampIn(l, clampDown, gate), n); err != nil {
-				return err
-			}
-			s.clampOut(l, clampDown, s.bh[:n*c.NEmbd])
-			s.addBiasRows(s.bh, l.downB, n)
+		if err := s.mm(s.bgate, l.gate, s.clampIn(l, clampGate, ffnIn[:n*c.NEmbd]), n); err != nil {
+			return err
 		}
+		s.clampOut(l, clampGate, s.bgate[:n*c.NFFNAt(li)])
+		if err := s.mm(s.bup, l.up, s.clampIn(l, clampUp, ffnIn[:n*c.NEmbd]), n); err != nil {
+			return err
+		}
+		s.clampOut(l, clampUp, s.bup[:n*c.NFFNAt(li)])
+		// A gated MLP with biases (Qwen2.5-VL's vision blocks); nil and
+		// skipped on every text block.
+		s.addBiasRows(s.bgate, l.gateB, n)
+		s.addBiasRows(s.bup, l.upB, n)
+		gate, up := s.bgate[:n*c.NFFNAt(li)], s.bup[:n*c.NFFNAt(li)]
+		tac := s.tick()
+		s.gaussTopK(li, gate, c.NFFNAt(li))
+		s.actmulAll(gate, up, act)
+		s.tock(opAct, tac)
+		// BitNet's norm over the product, before down.
+		if l.ffnSubNorm != nil {
+			tn := s.tick()
+			s.batchNorm(gate, gate, l.ffnSubNorm, c.NFFNAt(li), n)
+			s.jit.NewInput()
+			s.tock(opRMSNorm, tn)
+		}
+		if err := s.mm(s.bh, l.down, s.clampIn(l, clampDown, gate), n); err != nil {
+			return err
+		}
+		s.clampOut(l, clampDown, s.bh[:n*c.NEmbd])
+		s.addBiasRows(s.bh, l.downB, n)
 		if l.postFFNNorm != nil {
 			tn := s.tick()
 			s.batchNorm(s.bh, s.bh, l.postFFNNorm, c.NEmbd, n)

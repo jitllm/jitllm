@@ -4116,21 +4116,6 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 			s.layerOutScale(l, s.x)
 			m.trace(li, "ffn_resid", s.x)
 			continue
-		} else if l.gate.e == nil {
-			// The ungated FFN (C6): up, its bias, the activation alone, down
-			// and its bias. No gate matrix exists to multiply by.
-			if err := s.mv(s.up, l.up, ffnIn); err != nil {
-				return nil, err
-			}
-			s.addBias(s.up, l.upB)
-			t0 = s.tick()
-			s.ungatedAct(l, s.up)
-			s.jit.NewInput()
-			s.tock(opAct, t0)
-			if err := s.mv(s.h, l.down, s.up); err != nil {
-				return nil, err
-			}
-			s.addBias(s.h, l.downB)
 		} else {
 			// The block's own width: Gemma 4's KV-sharing blocks are twice
 			// NFFN (Config.NFFNAt).

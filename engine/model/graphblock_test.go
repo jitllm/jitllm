@@ -61,17 +61,17 @@ func graphDecode(t *testing.T, m *Model, n, frames int) ([][]float32, int, float
 // paged, a page budget below the model gives the same answer, and the comparison can tell two
 // different computations apart (an f16 cache against f32).
 //
-// The parallel-residual models (phi2, stablelm-par, falcon, command-r,
-// cohere2) are not in the list: the hand-written body no longer has a
-// parallel residual, so their control arm refuses to open
-// (TestParallelModelsHaveNoHandWrittenBody); they matched it bit for bit on
-// this gate before it was deleted, and TestC6MatchesTransformers holds them.
+// The models with a parallel residual or an ungated FFN (phi2, stablelm-par,
+// falcon, command-r, cohere2, starcoder, starcoder2, nemotron, apertus,
+// Nemotron-H) are not in the list: the hand-written body no longer has
+// either, so their control arm refuses to open
+// (TestHandlessModelsHaveNoHandWrittenBody); they matched it bit for bit on
+// this gate before it was deleted, and their transformers gates hold them.
 func TestBlockGraphMatchesTheHandPath(t *testing.T) {
 	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "Qwen3-MOE-4x0.6B-Q4_K_M",
 		"olmoe-1b-7b-0924-instruct-Q4_K_M", "synth-qwen2moe", "synth-glm4moe", "synth-ernie45moe", "synth-bailingmoe2",
 		"synth-dots1", "synth-minimaxm2", "synth-seedoss", "synth-smollm3", "synth-lfm2",
-		"synth-starcoder", "synth-starcoder2", "synth-stablelm", "synth-nemotron", "synth-dbrx", "synth-apertus", "synth-glm4",
-		"synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-deepseek", "synth-deepseek-lite", "synth-deepseek-dense", "synth-deepseek-yarn", "synth-deepseek-yarn-af", "synth-glm4moelite", "synth-kimilinear", "synth-hunyuan", "synth-hunyuanmoe", "synth-nemotronh", "synth-mamba2", "synth-falconmamba", "synth-mamba1", "synth-jamba", "synth-lfm2moe"} {
+		"synth-stablelm", "synth-dbrx", "synth-glm4", "synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-deepseek", "synth-deepseek-lite", "synth-deepseek-dense", "synth-deepseek-yarn", "synth-deepseek-yarn-af", "synth-glm4moelite", "synth-kimilinear", "synth-hunyuan", "synth-hunyuanmoe", "synth-mamba2", "synth-falconmamba", "synth-mamba1", "synth-jamba", "synth-lfm2moe"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
@@ -290,7 +290,7 @@ func graphPrompt(t *testing.T, m *Model, n, frames int) ([][]float32, int) {
 // graph, a page budget below the model gives the same answer, and the
 // comparison fires on a different computation (an f16 cache).
 func TestBlockGraphPromptMatchesTheHandPath(t *testing.T) {
-	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "synth-deepseek", "synth-deepseek-lite", "synth-glm4moelite", "Qwen3-MOE-4x0.6B-Q4_K_M", "synth-glm4moe", "synth-starcoder2", "synth-stablelm", "synth-nemotron", "synth-dbrx", "synth-apertus", "synth-glm4", "synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-nemotronh", "synth-mamba2", "synth-falconmamba", "synth-jamba", "synth-lfm2"} {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "synth-deepseek", "synth-deepseek-lite", "synth-glm4moelite", "Qwen3-MOE-4x0.6B-Q4_K_M", "synth-glm4moe", "synth-stablelm", "synth-dbrx", "synth-glm4", "synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-mamba2", "synth-falconmamba", "synth-jamba", "synth-lfm2"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
@@ -413,8 +413,8 @@ func flipRope(g *graph.Graph) {
 // CUDA device the graphed model decodes bit for bit as the model without the
 // graph with every block placed and at a partial seam.
 func TestBlockGraphLowersTheDevicePlan(t *testing.T) {
-	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "synth-starcoder2", "synth-stablelm",
-		"synth-nemotron", "synth-dbrx", "synth-glm4", "synth-olmo2", "synth-gptoss", "synth-gemma", "gemma-3-1b-it-Q4_K_M"} {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "synth-stablelm",
+		"synth-dbrx", "synth-glm4", "synth-olmo2", "synth-gptoss", "synth-gemma", "gemma-3-1b-it-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			ctl, err := Open(p, noTune, WithBlockGraph(false))
@@ -559,7 +559,7 @@ func graphBatch(t *testing.T, m *Model, frames int) ([][]float32, int) {
 // graph, a page budget below the model gives the same answer, and the
 // comparison fires on a different computation (an f16 cache).
 func TestBlockGraphRaggedStepMatchesTheHandPath(t *testing.T) {
-	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "synth-deepseek", "synth-deepseek-lite", "synth-glm4moelite", "Qwen3-MOE-4x0.6B-Q4_K_M", "synth-glm4moe", "synth-starcoder", "synth-starcoder2", "synth-stablelm", "synth-nemotron", "synth-dbrx", "synth-apertus", "synth-glm4", "synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-nemotronh", "synth-mamba2", "synth-falconmamba", "synth-jamba", "synth-lfm2"} {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "synth-deepseek", "synth-deepseek-lite", "synth-glm4moelite", "Qwen3-MOE-4x0.6B-Q4_K_M", "synth-glm4moe", "synth-stablelm", "synth-dbrx", "synth-glm4", "synth-olmo2", "synth-exaone4", "synth-arcee", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-mamba2", "synth-falconmamba", "synth-jamba", "synth-lfm2"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
@@ -650,18 +650,19 @@ func TestBlockGraphRaggedStepMatchesTheHandPath(t *testing.T) {
 	}
 }
 
-// TestParallelModelsHaveNoHandWrittenBody: a parallel-residual model runs
-// through the block graph alone. The control arm refuses to open it rather
-// than computing a serial block, and by default every block is on the graph.
-func TestParallelModelsHaveNoHandWrittenBody(t *testing.T) {
+// TestHandlessModelsHaveNoHandWrittenBody: a model with a parallel residual
+// or an ungated FFN runs through the block graph alone. The control arm
+// refuses to open it rather than computing another block, and by default
+// every block is on the graph.
+func TestHandlessModelsHaveNoHandWrittenBody(t *testing.T) {
 	for _, name := range []string{"synth-phi2", "synth-stablelm-par", "synth-falcon", "synth-falcon40", "synth-commandr",
-		"synth-cohere2"} {
+		"synth-cohere2", "synth-starcoder", "synth-starcoder2", "synth-nemotron", "synth-apertus", "synth-nemotronh"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			if ctl, err := Open(p, noTune, WithBlockGraph(false)); err == nil {
 				ctl.Close()
 				t.Fatal("the control arm opened a parallel model: a hand-written body would run it")
-			} else if !strings.Contains(err.Error(), "parallel") {
+			} else if !strings.Contains(err.Error(), "only the block graph runs") {
 				t.Fatalf("refused for another reason: %v", err)
 			}
 			m, err := Open(p, noTune)
@@ -669,8 +670,8 @@ func TestParallelModelsHaveNoHandWrittenBody(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			if !m.Cfg.Parallel {
-				t.Fatal("the fixture is not parallel: this gate proved nothing")
+			if m.handless() == "" {
+				t.Fatal("the fixture has a hand-written body: this gate proved nothing")
 			}
 			for li := range m.Cfg.NLayer {
 				if m.BlockGraph(li) == nil {
