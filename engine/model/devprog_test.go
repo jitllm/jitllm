@@ -23,7 +23,8 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 	// rotary and biases; synth-olmo2 post-norms; tiny-qwen3moe and
 	// synth-qwen2moe a routed mixture, the latter with a gated shared expert.
 	for _, name := range []string{"stories15M-q8_0", "synth-qwen2", "synth-glm4", "synth-olmo2", "tiny-qwen3moe-f32",
-		"synth-qwen2moe", "synth-mamba2", "synth-lfm2", "synth-granitehybrid", "synth-falconmamba", "Qwen3-0.6B-Q8_0",
+		"synth-qwen2moe", "synth-mamba2", "synth-lfm2", "synth-granitehybrid", "synth-falconmamba", "synth-falcon", "synth-phi2", "synth-starcoder", "synth-starcoder2",
+		"synth-stablelm", "synth-commandr", "synth-nemotron", "Qwen3-0.6B-Q8_0",
 		"Llama-3.2-1B-Instruct-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) {
 			m, err := Open(graphModel(t, name), noTune)
@@ -142,10 +143,19 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 			prog := pa.prog
 			t.Logf("%d block-steps as programs; worst logit difference from the encoder %.4g over %d tokens\n%s",
 				ps.ProgBlocks, worst, len(pt), prog)
-			// A block with an attention or a dense FFN has fusions to take; a
-			// recurrent mixer alone, lowered whole, has none.
-			if strings.Contains(prog, "attend(") && strings.HasPrefix(prog, "rewrites: \n") {
-				t.Fatalf("block 0's program took no rewrite:\n%s", prog)
+			// Where the encoder fuses on this block the program takes a
+			// rewrite too; a block with nothing to fuse (biased projections
+			// beside no rotary, a recurrent mixer alone) takes none in either.
+			fused := false
+			for span, f := range ea.first {
+				switch span + ":" + f {
+				case "qkv:grouped", "qkv:actin", "qkv:gemm", "gate_up:gate2in", "gate_up:actin", "gate_up:gu",
+					"gate_up:gate2", "down:actin", "down:act":
+					fused = true
+				}
+			}
+			if fused && strings.HasPrefix(prog, "rewrites: \n") {
+				t.Fatalf("the encoder fuses block 0 (%v) and its program took no rewrite:\n%s", ea.first, prog)
 			}
 			if strings.Count(prog, "rewrites:") != 2 {
 				t.Fatalf("block 0 did not run both its decode and its prefill-chunk program (%s):\n%s", pa.why, prog)

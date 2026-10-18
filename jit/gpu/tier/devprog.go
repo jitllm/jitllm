@@ -71,6 +71,7 @@ const (
 	dkRecurrent                 // a recurrent mixer with its pre-norm, from the block's row (emitLinear)
 	dkCopy                      // a row moved to another slot (the sum home to the block's row)
 	dkKVCopy                    // an unrotated key and its value copied into the history (NoPE)
+	dkAct                       // an ungated FFN's activation of up's row
 	numBaseKinds                // the fused kinds (devrewrite.go) count on from here
 )
 
@@ -218,7 +219,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	}
 	switch o.Kind {
-	case dkRecurrent, dkCopy, dkKVCopy:
+	case dkRecurrent, dkCopy, dkKVCopy, dkAct:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkMixture:
 		if i == 1 {
@@ -267,7 +268,7 @@ func (p *devProgram) check() error {
 func lowersOp(k graph.OpKind) bool {
 	switch k {
 	case graph.OpNorm, graph.OpMatVec, graph.OpRope, graph.OpKVAppend, graph.OpAttend, graph.OpAdd,
-		graph.OpActMul, graph.OpHeadNorm,
+		graph.OpActMul, graph.OpAct, graph.OpHeadNorm, graph.OpLayerNorm,
 		// The mixture's ops, lowered whole as one op (dkMixture) for now.
 		graph.OpRoute, graph.OpGather, graph.OpExpertMatVec, graph.OpCombine, graph.OpGateScalar,
 		// A recurrent mixer, lowered whole with its pre-norm (emitLinear).
@@ -291,8 +292,6 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		return nil, "a q/k feature (L2 or post-rotary norm, NoPE, XD-RoPE)"
 	case l.vFromK || l.kvSrc != g.Block:
 		return nil, "a shared or derived history"
-	case l.nAttnB != nil || l.nFFNB != nil:
-		return nil, "a biased norm"
 	case !actHasKernel(p):
 		return nil, "an activation with no kernel"
 	case p.DenseMoE || bindsRole(g, jlm.RoleFFNRoutedDown):
@@ -341,9 +340,11 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		in := func(j int) devVal { return vals[o.In[j]] }
 		name := func(j int) string { return g.Values[o.Out[j]].Name }
 		switch o.Kind {
-		case graph.OpNorm:
-			if len(o.Weight) != 1 {
-				return nil, "a norm without one weight"
+		case graph.OpNorm, graph.OpLayerNorm:
+			// A LayerNorm binds its bias second; the block's norm (norm) is
+			// the form its plan was built with, and reads the bias.
+			if len(o.Weight) == 0 || o.Kind == graph.OpNorm && len(o.Weight) != 1 {
+				return nil, "a norm without its weight"
 			}
 			k := dkNorm
 			switch o.Weight[0].Role {
@@ -474,6 +475,11 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			}
 			vals[o.Out[0]] = out
 			adds++
+		case graph.OpAct:
+			// An ungated FFN: the activation of up's row alone.
+			out := prog.val(name(0), f32(prog.vals[in(0)].Width), slotAct)
+			prog.ops = append(prog.ops, devOp{Kind: dkAct, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}})
+			vals[o.Out[0]] = out
 		case graph.OpActMul:
 			out := prog.val(name(0), f32(nf), slotAct)
 			prog.ops = append(prog.ops, devOp{Kind: dkActMul, Src: []int{i}, In: []devVal{in(0), in(1)}, Out: []devVal{out}})

@@ -958,11 +958,13 @@ func (g *devTier) layersSession(s backend.Session) {
 		for oi, o := range prog.ops[first:] {
 			switch o.Kind {
 			case dkNorm:
-				w := l.nAttn
+				// RMSNorm, or LayerNorm with its bias: the norm the block was
+				// built with (norm picks the form).
+				w, wb := l.nAttn, l.nAttnB
 				if o.Role == jlm.RoleFFNNorm {
-					w = l.nFFN
+					w, wb = l.nFFN, l.nFFNB
 				}
-				norm(at(o.In[0]), w, nil)
+				norm(at(o.In[0]), w, wb)
 			case dkQuant:
 				src := at(o.In[0])
 				fsrc = src
@@ -1083,6 +1085,15 @@ func (g *devTier) layersSession(s backend.Session) {
 				buf[slotMix] = mixFFN(l, li)
 				if err != nil {
 					return
+				}
+			case dkAct:
+				// An ungated FFN's activation; Apertus' xIELU reads its four
+				// numbers as a buffer.
+				nf := prog.vals[o.In[0]].Width
+				if l.xielu != nil {
+					lc.la(bs.actMul, R*nf, at(o.In[0]), l.xielu, at(o.Out[0]))
+				} else {
+					lc.la(bs.actMul, R*nf, at(o.In[0]), at(o.Out[0]))
 				}
 			case dkKVCopy:
 				lc.la(pk.copyK, R*p.KVRow(), at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
@@ -1334,7 +1345,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				why = progRotary
 			case bs.clampQ != nil || bs.splitQG != nil || bs.sigMul != nil:
 				why = progQKVExtra
-			case bs.normVar != nil || l.pleGate != nil || l.outScale != nil || l.nResid != nil || p.VNorm:
+			case l.pleGate != nil || l.outScale != nil || l.nResid != nil || p.VNorm:
 				why = progNormResid
 			case g.TableSplit:
 				why = progTableSplit
