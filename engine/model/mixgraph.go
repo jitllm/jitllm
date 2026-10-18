@@ -38,7 +38,7 @@ func (m *Model) mixtureWhy(li int) (graph.Facts, string) {
 		return graph.Facts{}, ""
 	case c.DenseMoE:
 		return graph.Facts{}, UncoveredMixDense
-	case c.ExpertSqrtSoftplus || c.SparseMixer != 0:
+	case c.ExpertSqrtSoftplus:
 		return graph.Facts{}, UncoveredMixRouter
 	case l.ungatedExp || c.ExpertLatent != 0:
 		return graph.Facts{}, UncoveredMixExperts

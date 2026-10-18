@@ -182,6 +182,10 @@ type Attrs struct {
 	Router             Router
 	RouteNorm          bool
 	Groups, GroupsUsed int
+	// TempScale, TempFloor and TempOffs are OpAttend's query temperature:
+	// the scores scaled by 1 + TempScale*ln(1 + floor((pos+TempOffs)/TempFloor))
+	// (Llama 4's and Mistral 3's); TempScale 0 is none.
+	TempScale, TempFloor, TempOffs float64
 	// Bound is OpClamp's.
 	Bound float64
 }

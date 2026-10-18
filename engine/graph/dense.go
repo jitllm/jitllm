@@ -20,7 +20,10 @@ type Dense struct {
 	Scale                          float64
 	Window                         int
 	Softcap                        float64
-	Sinks                          bool // RoleAttnSinks: a per-head logit in every softmax's denominator
+	Sinks                          bool
+	// TempScale, TempFloor, TempOffs: the attention's query temperature
+	// (Attrs); TempScale 0 is none.
+	TempScale, TempFloor, TempOffs float64 // RoleAttnSinks: a per-head logit in every softmax's denominator
 	Act                            Act
 	QKNorm                         bool // RoleAttnQNorm and RoleAttnKNorm, over each head before the rotary
 	PostNorm                       bool // RolePostAttnNorm and RolePostFFNNorm, over each sublayer's output
@@ -149,7 +152,8 @@ func (d *Dense) Build() *Graph {
 		sinks = []Binding{vec(jlm.RoleAttnSinks, d.NHead)}
 	}
 	g.op(Op{Kind: OpAttend, In: []ValueID{qr}, Out: []ValueID{a}, Reads: []StateRef{{"kv", 1}}, Weight: sinks,
-		Attr: Attrs{HeadDim: d.HeadDim, NHead: d.NHead, NKVHead: d.NKVHead, Scale: d.Scale, Window: d.Window, Softcap: d.Softcap}})
+		Attr: Attrs{HeadDim: d.HeadDim, NHead: d.NHead, NKVHead: d.NKVHead, Scale: d.Scale, Window: d.Window, Softcap: d.Softcap,
+			TempScale: d.TempScale, TempFloor: d.TempFloor, TempOffs: d.TempOffs}})
 	o := mv("attn_out", a, jlm.RoleAttnOut, d.NEmbd, opt(d.OutBias, jlm.RoleAttnOutBias))
 	if d.PostNorm {
 		o = norm("attn_post", o, jlm.RolePostAttnNorm)

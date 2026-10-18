@@ -117,7 +117,7 @@ func classic() Facts {
 	d := Dense{Block: 1, NEmbd: 64, NHead: 4, NKVHead: 2, HeadDim: 16, NFFN: 96, Eps: 1e-5, NRot: 8,
 		Base: 1e4, Layout: RopeNeox, Scale: 0.25, Act: ActGELUTanh, LayerNorm: true, NormBias: true,
 		Parallel: true, SharedNorm: true, OutBias: true, UpBias: true, DownBias: true, Ungated: true,
-		Clamp: 8, Sinks: true, Window: 32, RopeFreqs: true, Mscale: 1.25}
+		Clamp: 8, Sinks: true, Window: 32, RopeFreqs: true, Mscale: 1.25, TempScale: 0.1, TempFloor: 8192}
 	inv := map[jlm.Role]Shape{
 		jlm.RoleAttnNorm: {64, 0, 0}, jlm.RoleAttnNormBias: {64, 0, 0}, jlm.RoleAttnQ: {64, 64, 0},
 		jlm.RoleAttnK: {64, 32, 0}, jlm.RoleAttnV: {64, 32, 0}, jlm.RoleAttnOut: {64, 64, 0},
@@ -159,6 +159,7 @@ func TestClassicBlockVerifies(t *testing.T) {
 	}{
 		{"clamp", func(d *Dense) { d.Clamp = 4 }, "bound 8"},
 		{"window", func(d *Dense) { d.Window = 0 }, "window 32"},
+		{"temperature", func(d *Dense) { d.TempScale = 0 }, "window 32"},
 		{"mscale", func(d *Dense) { d.Mscale = 0 }, "pairs over"},
 	} {
 		g := f.Config.Build()

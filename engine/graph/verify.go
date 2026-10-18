@@ -196,7 +196,8 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: reads no kv version this block wrote: this position's row is never in the history", at)
 			}
 			if a.NHead != c.NHead || a.NKVHead != c.NKVHead || a.HeadDim != c.HeadDim || a.Scale != c.Scale ||
-				a.Window != c.Window || a.Softcap != c.Softcap {
+				a.Window != c.Window || a.Softcap != c.Softcap || a.TempScale != c.TempScale ||
+				a.TempFloor != c.TempFloor || a.TempOffs != c.TempOffs {
 				bad("%s: %d/%d heads of %d, scale %g, window %d, softcap %g; the configuration states %d/%d of %d, %g, %d, %g",
 					at, a.NHead, a.NKVHead, a.HeadDim, a.Scale, a.Window, a.Softcap,
 					c.NHead, c.NKVHead, c.HeadDim, c.Scale, c.Window, c.Softcap)

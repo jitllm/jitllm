@@ -47,7 +47,7 @@ const (
 // Shrinking this list is the graph's work list.
 const (
 	UncoveredMixDense      = "a mixture: every expert on every row (a dense mixture)"
-	UncoveredMixRouter     = "a mixture: a router the op language does not state (sqrt-softplus, sparsemixer, hash routing or a router norm)"
+	UncoveredMixRouter     = "a mixture: a router the op language does not state (sqrt-softplus, hash routing or a router norm)"
 	UncoveredMixExperts    = "a mixture: experts the op language does not state (ungated, unbanked or latent)"
 	UncoveredMixWeightIn   = "a mixture: the router's weight scales the experts' input"
 	UncoveredUngated       = "an activation the op language does not state"
@@ -62,7 +62,6 @@ const (
 	UncoveredRopeAxes      = "a multi-axis or interleaved rotary"
 	UncoveredQKNormKind    = "a q/k norm after the rotary or without a weight"
 	UncoveredVNorm         = "a norm over v"
-	UncoveredTemperature   = "an attention temperature"
 	UncoveredWindow        = "a chunked attention"
 	UncoveredNonCausal     = "non-causal attention"
 	UncoveredSparseAct     = "a gaussian top-k activation"
@@ -76,7 +75,7 @@ const (
 var UncoveredReasons = []string{UncoveredMixDense, UncoveredMixRouter, UncoveredMixExperts, UncoveredMixWeightIn,
 	UncoveredUngated, UncoveredOutGate, UncoveredMLA, UncoveredValueWidth,
 	UncoveredKVShared, UncoveredIndexer, UncoveredStreams, UncoveredPLE, UncoveredResidScale,
-	UncoveredRopeAxes, UncoveredQKNormKind, UncoveredVNorm, UncoveredTemperature,
+	UncoveredRopeAxes, UncoveredQKNormKind, UncoveredVNorm,
 	UncoveredWindow, UncoveredNonCausal, UncoveredSparseAct, UncoveredDoubleFFN, UncoveredCompressed,
 	UncoveredRecurrent, UncoveredUnboundTensor}
 
@@ -121,10 +120,6 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredQKNormKind
 	case c.VNorm:
 		return UncoveredVNorm
-	case c.AttnTempScale != 0 && !(c.NoPEGlobal && c.RopeAt(li)):
-		// AttnTemp's own condition: the factor is 1 at the first positions
-		// and grows later, so asking it at one position misses the block.
-		return UncoveredTemperature
 	case c.SWA(li) && c.SWAChunked:
 		return UncoveredWindow
 	case c.NonCausal || c.BidirSWA:
@@ -220,18 +215,28 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		Ungated: !c.MoEAt(li) && !has(jlm.RoleFFNGate), Clamp: float64(c.ClampKQV),
 		PostNorm: has(jlm.RolePostAttnNorm), NoPreNorm: !has(jlm.RoleAttnNorm), NoRope: !c.RopeAt(li)}
 	d.QKVBias, d.Sinks = has(jlm.RoleAttnQBias), has(jlm.RoleAttnSinks)
+	// The query temperature, where AttnTemp applies it to this block.
+	if c.AttnTempScale != 0 && !(c.NoPEGlobal && c.RopeAt(li)) {
+		d.TempScale, d.TempFloor, d.TempOffs = c.AttnTempScale, c.AttnTempFloor, c.AttnTempOffs
+	}
 	// A sliding block attends over its window and turns by the local
 	// rotary where the model carries one (gemma3's second base); either
 	// table's scaling (linear, YaRN, LongRoPE) is its per-pair factors and
 	// its cos/sin magnitude.
+	// The widths and bases are the configuration's, which the tables are
+	// built from.
 	tab := &m.rope
 	if c.SWA(li) && c.SWAWindow > 0 {
 		d.Window = c.SWAWindow
 		if m.ropeSWA != nil {
 			tab = m.ropeSWA
+			d.NRot = c.NRotSWA
+			if c.RopeBaseSWA != 0 {
+				d.Base = c.RopeBaseSWA
+			}
 		}
 	}
-	d.NRot, d.Base, d.RopeFreqs = tab.NRot, tab.Base, tab.Freqs != nil
+	d.RopeFreqs = tab.Freqs != nil
 	if tab.Scale != 1 {
 		d.Mscale = tab.Scale
 	}
