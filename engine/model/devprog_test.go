@@ -31,6 +31,7 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 				st    tier.Stats
 				forms []string
 				prog  string
+				why   string
 				first map[string]string
 			}
 			run := func(noProg bool) ([]int32, [][]float32, arm) {
@@ -60,7 +61,9 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 					t.Fatal(err)
 				}
 				var toks []int32
-				var logits [][]float32
+				// The prefill's logits first: the chunk runs as the program's
+				// rows form.
+				logits := [][]float32{slices.Clone(lg)}
 				for i := 0; i < 12; i++ {
 					tok := Greedy(lg)
 					toks = append(toks, tok)
@@ -73,7 +76,7 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 				for li := 0; li < m.Cfg.NLayer; li++ {
 					a.forms = append(a.forms, g.BlockForms(li)["block"])
 				}
-				a.prog, _ = g.BlockProgram(0)
+				a.prog, a.why = g.BlockProgram(0)
 				a.first = g.BlockForms(0)
 				return toks, logits, a
 			}
@@ -87,7 +90,7 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var host [][]float32
+			host := [][]float32{slices.Clone(hl)}
 			for _, tok := range et {
 				if hl, err = hs.Forward(tok); err != nil {
 					t.Fatal(err)
@@ -129,6 +132,9 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 				ps.ProgBlocks, worst, len(pt), prog)
 			if !strings.HasPrefix(prog, "rewrites: ") || strings.HasPrefix(prog, "rewrites: \n") {
 				t.Fatalf("block 0's program took no rewrite:\n%s", prog)
+			}
+			if strings.Count(prog, "rewrites:") != 2 {
+				t.Fatalf("block 0 did not run both its decode and its prefill-chunk program (%s):\n%s", pa.why, prog)
 			}
 			if !slices.Equal(pt, et) {
 				t.Fatalf("the program's tokens %v part from the encoder's %v", pt, et)

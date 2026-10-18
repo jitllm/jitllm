@@ -24,13 +24,13 @@ type layer struct {
 	// progRun is why the last step ran the block through the encoder, empty
 	// where it ran the program (set under the submission, read by BlockProgram).
 	progRun string
-	// progF is prog with the rewrites that apply on the scratch progBS
-	// (devrewrite.go), and progTook their names.
-	progF          *devProgram
-	progBS         *blockScratch
-	progTook       []string
-	wq, wk, wv, wo *resident
-	gate, up, down *resident
+	// progRunRows is progRun for the last step of many rows (a prefill chunk).
+	progRunRows string
+	// progOne and progRows are prog with the rewrites that apply on a
+	// scratch at one row and at many (devrewrite.go).
+	progOne, progRows progFused
+	wq, wk, wv, wo    *resident
+	gate, up, down    *resident
 	// conv is a convolutional tower block's program and vectors (conv.go),
 	// nil for every other block.
 	conv *convLayer
@@ -296,4 +296,12 @@ type layer struct {
 	// sits on the card and nothing crosses the bus inside a token.
 	stream *streamBank
 	ok     bool
+}
+
+// progFused is a block's program with the rewrites that apply on one
+// scratch, and their names.
+type progFused struct {
+	bs   *blockScratch
+	prog *devProgram
+	took []string
 }

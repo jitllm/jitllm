@@ -7,6 +7,7 @@ import (
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/jit/gpu/backend"
 )
 
 // The device program (docs/design/composer.md, "The device program"): a
@@ -24,6 +25,8 @@ const (
 	// elemQ8 is the int8 activation with its per-32 scales (bs.a, bs.ax),
 	// what an integer matvec reads.
 	elemQ8
+	// elemF16 is the binary16 operand a GEMM reads, in its layout.
+	elemF16
 )
 
 // devLayout is a value's memory layout. A consumer reads one layout; a
@@ -31,8 +34,10 @@ const (
 type devLayout uint8
 
 const (
-	layoutRow devLayout = iota // row-major, one row a token
-	layoutKV                   // the paged KV history
+	layoutRow    devLayout = iota // row-major, one row a token
+	layoutKV                      // the paged KV history
+	layoutTokF16                  // token-major binary16 (kernels.ActF16T)
+	layoutFrag                    // the MMA's m16n8 fragments (kernels.ActF16)
 )
 
 // devType is a value's type: element, layout and width a row.
@@ -43,8 +48,8 @@ type devType struct {
 }
 
 func (t devType) String() string {
-	e := [...]string{"f32", "q8"}[t.Elem]
-	l := [...]string{"row", "kv"}[t.Layout]
+	e := [...]string{"f32", "q8", "f16"}[t.Elem]
+	l := [...]string{"row", "kv", "tok", "frag"}[t.Layout]
 	return fmt.Sprintf("%s.%s[%d]", e, l, t.Width)
 }
 
@@ -92,10 +97,11 @@ const (
 	slotAct                // bs.act: act(gate)*up
 	slotQN                 // bs.qn: q's heads normed
 	slotKN                 // bs.kn: k's heads normed
+	slotF16                // g.f16Buf: a GEMM's binary16 operand
 	numSlots
 )
 
-var slotName = [...]string{"x", "x2", "h", "q8", "q", "k", "v", "qr", "kv", "xb", "out", "g", "u", "act", "qn", "kn"}
+var slotName = [...]string{"x", "x2", "h", "q8", "q", "k", "v", "qr", "kv", "xb", "out", "g", "u", "act", "qn", "kn", "f16"}
 
 // devOp is one launch of the program.
 type devOp struct {
@@ -106,10 +112,21 @@ type devOp struct {
 	In   []devVal
 	Out  []devVal
 	Role jlm.Role // the weight a norm or matvec reads
+	// Need overrides what the op reads on an input: a GEMM's binary16
+	// operand is the layout its batched twin reads.
+	Need []devType
+	// K and Conv are a binary16 writer's kernel and the conversion it
+	// stands in for (rmsF16For, actF16For), chosen when it was rewritten.
+	K, Conv backend.Kernel
+	N       int // K's thread count, where it is not the rows'
 }
 
 // devProgram is a block's device program.
 type devProgram struct {
+	// f16 says the program's matvecs are binary16 GEMMs reading the float
+	// rows (a prompt chunk on a card whose twins are all binary16): no
+	// int8 operand, each GEMM converting its row or finding it written.
+	f16   bool
 	vals  []devType
 	slots []devSlot
 	names []string
@@ -148,6 +165,12 @@ func (p *devProgram) String() string {
 // check holds every edge to it.
 func (o devOp) wants(p *devProgram, i int) devType {
 	in := p.vals[o.In[i]]
+	if i < len(o.Need) && o.Need[i] != (devType{}) {
+		return o.Need[i]
+	}
+	if p.f16 && (o.Kind == dkMatVec || o.Kind == dkQKV) {
+		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
+	}
 	switch o.Kind {
 	case dkMatVec, dkQKV, dkGate2:
 		return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
@@ -158,7 +181,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkQuant, dkNorm, dkRopeQ, dkAdd, dkActMul, dkKVWrite, dkAttend, dkHeadNorm,
 		dkNormQuant, dkAddNorm, dkAddNormQuant, dkActQuant, dkRopeQKV, dkGate2In,
-		dkQKVIn, dkQKVSep, dkResIn, dkFFNIn, dkDownAct:
+		dkQKVIn, dkQKVSep, dkResIn, dkFFNIn, dkDownAct, dkNormF16, dkAddNormF16, dkActF16:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	}
 	return in
@@ -338,8 +361,18 @@ func (g *GPU) BlockProgram(li int) (prog, why string) {
 	if l.prog == nil {
 		return "", l.progWhy
 	}
-	if l.progF != nil {
-		return "rewrites: " + strings.Join(l.progTook, ", ") + "\n" + l.progF.String(), l.progRun
+	var out []string
+	for _, f := range [2]progFused{l.progOne, l.progRows} {
+		if f.prog != nil {
+			out = append(out, "rewrites: "+strings.Join(f.took, ", ")+"\n"+f.prog.String())
+		}
+	}
+	why = l.progRun
+	if l.progRunRows != "" {
+		why += "; rows: " + l.progRunRows
+	}
+	if out != nil {
+		return strings.Join(out, ""), why
 	}
 	return l.prog.String(), l.progRun
 }

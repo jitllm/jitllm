@@ -414,12 +414,22 @@ func (g *devTier) layersSession(s backend.Session) {
 		}
 		buf := [numSlots]backend.Buf{slotX: bs.x, slotX2: bs.x2, slotH: bs.h, slotQ8: bs.a, slotQ: bs.q, slotK: bs.k,
 			slotV: bs.v, slotQR: bs.qr, slotKV: pl.k, slotXB: bs.xb, slotOut: bs.mvOut, slotG: bs.g, slotU: bs.u, slotAct: bs.act,
-			slotQN: bs.qn, slotKN: bs.kn}
-		if l.progBS != bs {
-			l.progF, l.progTook = prog.fused(l, bs, g)
-			l.progBS = bs
+			slotQN: bs.qn, slotKN: bs.kn, slotF16: g.f16Buf}
+		// The rewrites legal at one row and at many differ: each class
+		// keeps its own fused program.
+		fc := &l.progOne
+		if R > 1 {
+			fc = &l.progRows
 		}
-		prog = l.progF
+		if fc.bs != bs {
+			fc.prog, fc.took = prog.fused(l, bs, g, R)
+			fc.bs = bs
+		}
+		prog = fc.prog
+		qOff := bs.zero
+		if R > 1 {
+			qOff = bs.roff
+		}
 		at := func(v devVal) backend.Buf { return buf[prog.slots[v]] }
 		mvOf := func(role jlm.Role) (mv, *resident) {
 			switch role {
@@ -454,6 +464,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				norm(at(o.In[0]), w, nil)
 			case dkQuant:
 				src := at(o.In[0])
+				fsrc = src
 				switch prog.vals[o.In[0]].Width {
 				case p.NEmbd:
 					lc.la(bs.quantE, kernels.QuantizeThreads(R*ePad(p)/32), src, bs.a, bs.ax)
@@ -478,13 +489,40 @@ func (g *devTier) layersSession(s backend.Session) {
 				case jlm.RoleFFNDown:
 					m, r = l.mvd, l.down
 				}
+				if prog.f16 {
+					// The GEMM converts this row, or finds it written.
+					fsrc = at(o.In[0])
+				}
 				mvrun(m, r, at(o.Out[0]))
 			case dkRopeQ:
-				lc.la(bs.ropeQ, R*p.NHead*p.NRot/2, at(o.In[0]), rcs, bs.zero, at(o.Out[0]))
+				lc.la(bs.ropeQ, R*p.NHead*p.NRot/2, at(o.In[0]), rcs, qOff, at(o.Out[0]))
 			case dkKVWrite:
 				lc.la(pk.ropeK, R*p.NKVHead*p.NRot/2, at(o.In[0]), rcs, bs.zero, pl.k, pl.tab, pk.pRow)
 				lc.la(pk.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), pl.v, bs.zero, pl.tab, pk.pRow)
 			case dkAttend:
+				if pk.prefill {
+					// A prefill chunk: one sequence's rows in order, a K or V
+					// load serving a whole query tile.
+					win := p.Window(li) > 0
+					if err == nil {
+						err = pk.pf.prefillAttn(s, lc, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, win, nil)
+						g.PagedPrefillLaunches++
+						if pk.pf.flash != nil {
+							g.FlashPrefills++
+						}
+						g.PagedPrefillPasses += pk.pf.passes(win)
+						if pk.pf.on70() {
+							g.PagedPrefill70++
+						}
+						if pk.pf.accOnMMA() {
+							g.PagedAccMMA++
+						}
+						if pk.pf.on80() {
+							g.FlashPrefill80++
+						}
+					}
+					continue
+				}
 				desc := pk.pRow
 				if p.Window(li) > 0 {
 					desc = pk.pRowW
@@ -525,10 +563,12 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 			case dkNormQuant:
 				laRows(bs.rmsQ, at(o.In[0]), normW(o.Role), at(o.Out[0]), bs.a, bs.ax)
+				fsrc = at(o.Out[0])
 			case dkAddNorm:
 				laRows(bs.addRms, at(o.In[0]), at(o.In[1]), normW(o.Role), at(o.Out[0]), at(o.Out[1]))
 			case dkAddNormQuant:
 				laRows(bs.addRmsQ, at(o.In[0]), at(o.In[1]), normW(o.Role), at(o.Out[0]), at(o.Out[1]), bs.a, bs.ax)
+				fsrc = at(o.Out[1])
 			case dkMatVecRes:
 				m, r := mvOf(o.Role)
 				if !mvres(m, r, at(o.Out[0]), at(o.In[1])) && err == nil {
@@ -541,6 +581,8 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 			case dkActQuant:
 				lc.la(bs.quantAct, kernels.QuantizeThreads(R*p.NFFN/32), at(o.In[0]), at(o.In[1]), at(o.Out[0]), bs.a, bs.ax)
+				fsrc = at(o.Out[0])
+				g.QuantActs++
 			case dkQKV:
 				var bufArr [17]backend.Buf
 				bufs := append(bufArr[:0], bs.a, bs.ax)
@@ -610,9 +652,25 @@ func (g *devTier) layersSession(s backend.Session) {
 			case dkDownAct:
 				mvIn(l.mvd, l.mvd.resActIn, l.down, at(o.Out[0]), at(o.In[0]), at(o.In[1]), at(o.In[2]))
 				g.ActInSaved++
+			case dkNormF16:
+				laRows(o.K, at(o.In[0]), normW(o.Role), at(o.Out[0]), g.f16Buf)
+				actMemoK, actMemoSrc = o.Conv, at(o.Out[0])
+				g.NormF16++
+			case dkAddNormF16:
+				laRows(o.K, at(o.In[0]), at(o.In[1]), normW(o.Role), at(o.Out[0]), at(o.Out[1]), g.f16Buf)
+				actMemoK, actMemoSrc = o.Conv, at(o.Out[1])
+				g.NormF16++
+				g.AddNormFolded++
+			case dkActF16:
+				// The product goes to down's operand only; its float row is
+				// named in the memo, which down's GEMM finds written.
+				lc.la(o.K, o.N, at(o.In[0]), at(o.In[1]), g.f16Buf)
+				actMemoK, actMemoSrc = o.Conv, at(o.Out[0])
+				g.ActF16Fused++
 			case dkRopeQKV:
 				lc.la(pk.ropeQKV, kernels.RoPEQKVPagedThreads(p.NHead, p.NKVHead, p.HeadDim, p.NRot, R, g.KVF16),
-					at(o.In[0]), rcs, bs.zero, at(o.Out[0]), at(o.In[1]), pl.k, at(o.In[2]), pl.v, pl.tab, pk.pRow)
+					at(o.In[0]), rcs, qOff, at(o.Out[0]), at(o.In[1]), pl.k, at(o.In[2]), pl.v, pl.tab, pk.pRow)
+				g.FusedLaunches++
 			}
 		}
 		g.ProgBlocks++
@@ -660,14 +718,14 @@ func (g *devTier) layersSession(s backend.Session) {
 			case l.prog == nil:
 			case g.NoProgram:
 				progWhy = "NoProgram"
-			case R != 1 || rag != nil:
-				progWhy = "more than one row"
-			case voltaOnly:
-				progWhy = "binary16 GEMMs (sm_70)"
+			case rag != nil:
+				progWhy = "a ragged step"
+			case R > 1 && (bs.pkv == nil || !bs.pkv.prefill):
+				progWhy = "rows that are not a prefill chunk"
 			case len(skip) != 0:
 				progWhy = "a fault skips a kernel"
-			case bs.pkv == nil || bs.pkv.cur == nil || bs.pkv.prefill:
-				progWhy = "not a paged decode"
+			case bs.pkv == nil || R == 1 && (bs.pkv.cur == nil || bs.pkv.prefill) || R > 1 && bs.pkv.pf == nil:
+				progWhy = "not a paged decode or prefill"
 			case bs.ropeQ == nil || l.noRope || bs.copyQ != nil || bs.qTemp != nil:
 				progWhy = "a rotary the program does not lower"
 			case bs.clampQ != nil || bs.splitQG != nil || bs.sigMul != nil:
@@ -677,7 +735,11 @@ func (g *devTier) layersSession(s backend.Session) {
 			case g.TableSplit:
 				progWhy = "TableSplit"
 			}
-			l.progRun = progWhy
+			if R > 1 {
+				l.progRunRows = progWhy
+			} else {
+				l.progRun = progWhy
+			}
 			if l.prog != nil && progWhy == "" {
 				if pendX != nil {
 					addRes(pendX, pendY, bs.x)
