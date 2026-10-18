@@ -9526,7 +9526,8 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				gIn, uIn := bs.g, bs.u
 				guDone, gu2 := false, false
-				if l.clampB != nil && !ungated {
+				form := g.ffnGateUp(l, R, rag != nil, voltaOnly, ungated, resScaled, skip, g2in, ffnIn, nffn)
+				if form == gateUpClamped {
 					// Gemma 4's clipped linears: gate and up each read their own
 					// clamped copy of the normed rows, and the activation their
 					// clamped outputs.
@@ -9542,7 +9543,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						lc.la(bs.clampK[9+2*s], R*p.NFFN, pr.out, l.clampB, pr.cl)
 					}
 					gIn, uIn = bs.gClamp, bs.uClamp
-				} else if g2in {
+				} else if form == gateUpGate2In {
 					// The norm, gate and up in one launch: up's weight, the
 					// residual and the norm weight, the product's row, then the
 					// gate's weight (Gate2 with ActIn's norm).
@@ -9555,11 +9556,9 @@ func (g *devTier) layersSession(s backend.Session) {
 					g.Gate2InRuns++
 					g.ActInLaunches++
 					gu2 = true
-				} else if ffnIn {
+				} else if form == gateUpIn {
 					mvIn(l.mvg, l.mvg.kernIn, l.gate, bs.g, bs.x2, l.nFFN, nil)
-				} else if guOK := (g.GateUpFuse || g.ffnFormOf(l) == FFNGU) && l.gu != nil && l.guDown != nil && R == 1 && rag == nil && !voltaOnly && !ungated &&
-					l.nSubFFN == nil && l.nPostFFN == nil && !resScaled && !skip["add"] && !skip["actmul"] && !skip["quantf"] &&
-					!g.TableSplit && l.mvd.k == nffn && l.k3 == nil && l.q4e == nil && !l.nonCausal && !l.sparse; guOK {
+				} else if form == gateUpGU {
 					// Gate and up in one launch over one operand, and down
 					// forming act(gate)*up as it quantizes, with the residual
 					// add (fuseGateUp). Every row keeps its own reduction.
@@ -9575,7 +9574,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					g.GateUpFused++
 					ffnFused = true
 					guDone = true
-				} else if gu2 = g.ffnFormOf(l) != FFNTwo && g.gateUp2On(l, R, rag != nil, voltaOnly, ungated, skip["actmul"]); gu2 {
+				} else if gu2 = form == gateUpGate2; gu2 {
 					// Gate and up in one launch: up's weight, the operand, the
 					// product's row, then the gate's weight (Gate2).
 					wu, wg := l.up, l.gate
@@ -9585,7 +9584,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					lamv(l.mvu, l.mvu.gate2, l.mvu.rows*l.mvu.split, wu.qs, wu.d, wu.sc, bs.a, bs.ax, bs.act,
 						wg.qs, wg.d, wg.sc)
 					g.GateUp2Runs++
-				} else if !ungated {
+				} else if form == gateUpTwo {
 					mvrun(l.mvg, l.gate, bs.g)
 					// Gemma 3n's sparse lead: the gate's gaussian top-k.
 					gIn = g.emitGauss(lc, bs, l, R)
@@ -9610,11 +9609,8 @@ func (g *devTier) layersSession(s backend.Session) {
 					// The down projection building its own operand (fuseActIn):
 					// quantizing act(gate)*up where up wrote it (downIn), or
 					// forming it from gate and up as it quantizes (downAct).
-					downOK := R == 1 && rag == nil && g.actInOn() && !voltaOnly && l.clampB == nil && l.nPostFFN == nil && l.nSubFFN == nil &&
-						!resScaled && !skip["add"] && !skip["quantf"] && !skip["actmul"] && l.k3 == nil && l.q4e == nil && !l.nonCausal &&
-						!(g.TableSplit && l.mvd.alt != nil) && l.mvd.k == nffn
-					downIn := downOK && gated && l.mvd.resIn != nil
-					downAct := downOK && ffnIn && !gated && l.mvd.resActIn != nil
+					down := g.ffnDown(l, R, rag != nil, voltaOnly, resScaled, skip, gated, ffnIn, nffn)
+					downIn, downAct := down == downFormIn, down == downFormAct
 					// The activation writes the down projection's operand where it
 					// can: binary16 for a binary16 GEMM, int8 for the rest.
 					var actConv backend.Kernel

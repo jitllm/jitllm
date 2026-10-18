@@ -25,10 +25,20 @@ func TestGraphFindsTheFFNSite(t *testing.T) {
 			}
 			defer gm.Close()
 			for li := 0; li < gm.Cfg.NLayer; li++ {
-				// Every rewrite matches once and is legal on a dense block.
+				// The dense block's rewrites each match once and are legal
+				// (the mixture's, the gated norm's and the latent
+				// attention's have nothing to match here).
 				ds := gm.BlockRewrites(li)
-				if len(ds) != len(graph.Rewrites) {
-					t.Fatalf("block %d: %v", li, ds)
+				for _, rw := range []*graph.Rewrite{graph.Gate2In, graph.ActInQKV, graph.ActInO, graph.ActInDown} {
+					n := 0
+					for _, d := range ds {
+						if d.Rewrite == rw.Name {
+							n++
+						}
+					}
+					if n != 1 {
+						t.Fatalf("block %d: %s matched %d times: %v", li, rw.Name, n, ds)
+					}
 				}
 				for _, d := range ds {
 					if d.Err != nil {
