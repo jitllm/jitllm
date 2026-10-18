@@ -24,7 +24,7 @@ var gateUpModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen2-1.5B-Ins
 // logits can be compared bit for bit.
 func gateUpDecode(t *testing.T, m *Model, ids, toks []int32, fuse, noGraph bool, layers int, cache string, extra ...tier.Option) ([][]float32, tier.Stats, int) {
 	t.Helper()
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithTuneCache(cache), tier.WithGateUpFuse(fuse),
+	g, err := openTier(t, append([]tier.Option{tier.WithTuneCache(cache), tier.WithGateUpFuse(fuse),
 		tier.WithConfig(func(c *tier.Config) { c.NoGraph = noGraph })}, extra...)...)
 	if err != nil || g == nil {
 		t.Skipf("no GPU: %v", err)

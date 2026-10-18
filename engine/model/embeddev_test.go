@@ -70,7 +70,7 @@ func embedsOnTheDevice(t *testing.T, name string, opts ...tier.Option) {
 	if !m.Cfg.TiedEmbd {
 		t.Fatalf("%s is not tied: the gather has no head to read from", name)
 	}
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDeviceTune(tier.TuneOff)}, opts...)...)
+	g, err := openTier(t, append([]tier.Option{tier.WithDeviceTune(tier.TuneOff)}, opts...)...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

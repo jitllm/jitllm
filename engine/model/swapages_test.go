@@ -180,7 +180,7 @@ func windowOnDevice(t *testing.T, m *Model, spec string, run windowRun, win []in
 	open := func(keep bool) *tier.GPU {
 		o := append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
 			tier.WithConfig(func(c *tier.Config) { c.KVKeepWindow = keep })}, testTierOpts(t)...)
-		g, err := tier.OpenWith(o...)
+		g, err := openTier(t, o...)
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}

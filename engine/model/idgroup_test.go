@@ -42,7 +42,7 @@ func TestIndexedGroupSplitOnDevice(t *testing.T) {
 				if group {
 					opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.ForceIndexedGroup = true }))
 				}
-				gpu, err := tier.OpenWith(opts...)
+				gpu, err := openTier(t, opts...)
 				if err != nil || gpu == nil {
 					t.Skipf("no cuda device (%v)", err)
 				}

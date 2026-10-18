@@ -45,7 +45,7 @@ func TestWindowReleaseGateDiscriminates(t *testing.T) {
 	for _, spec := range specs {
 		t.Run(spec, func(t *testing.T) {
 			open := func(extra ...tier.Option) *tier.GPU {
-				g, err := tier.OpenWith(append(append([]tier.Option{tier.WithDevices(spec),
+				g, err := openTier(t, append(append([]tier.Option{tier.WithDevices(spec),
 					tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...), extra...)...)
 				if err != nil || g == nil {
 					noDevice(t, spec, err)

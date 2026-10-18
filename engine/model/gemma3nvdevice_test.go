@@ -50,7 +50,7 @@ type g3nvDevice struct {
 func g3nvOnDevice(t *testing.T, tw *Tower, g *g3nvGolden, spec string, stem []float32, host [][]float32,
 	opts ...tier.Option) (r g3nvDevice, ok bool) {
 	t.Helper()
-	gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, opts...)...)
+	gpu, err := openTier(t, append([]tier.Option{tier.WithDevices(spec)}, opts...)...)
 	if err != nil || gpu == nil {
 		return r, false
 	}
@@ -223,7 +223,7 @@ func g3nvStreamed(t *testing.T, spec string, g *g3nvGolden, budget uint64, encod
 	if budget > 0 {
 		opts = append(opts, tier.WithBudget(budget))
 	}
-	gpu, err := tier.OpenWith(append(opts, extra...)...)
+	gpu, err := openTier(t, append(opts, extra...)...)
 	if err != nil || gpu == nil {
 		return r, false
 	}

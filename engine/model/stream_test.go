@@ -44,7 +44,7 @@ func TestStreamedExpertBankMatchesTheResidentOne(t *testing.T) {
 		if stream != nil {
 			opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.StreamExperts = true; stream(c) }))
 		}
-		g, err := tier.OpenWith(opts...)
+		g, err := openTier(t, opts...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}
@@ -213,7 +213,7 @@ func noPin(cfg func(*tier.Config)) bool {
 // pinsHost reports whether the gate's device can page-lock host memory, which
 // is CUDA's alone (backend.HostPinner).
 func pinsHost(t *testing.T) bool {
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"))
+	g, err := openTier(t, tier.WithDevices("gpu:0"))
 	if err != nil || g == nil {
 		return false
 	}
@@ -248,7 +248,7 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 	run := func(opts ...tier.Option) ([][]float32, tier.Stats, int) {
 		t.Helper()
 		opts = append([]tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff)}, opts...)
-		g, err := tier.OpenWith(opts...)
+		g, err := openTier(t, opts...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}
@@ -316,7 +316,7 @@ func TestAutoStreamPlacesWhatCannotFit(t *testing.T) {
 	// The trial runs through to a decision: the blocks go home and come back
 	// streamed between its runs, and every token stays finite.
 	{
-		g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), budget)
+		g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), budget)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

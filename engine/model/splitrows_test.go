@@ -49,7 +49,7 @@ func splitRowsCase(t *testing.T, m *Model, ids []int32, blocks int, noSplit, noA
 	}()
 	s := m.NewState(n + 10)
 	defer s.Close()
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
+	g, err := openTier(t, append([]tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(cf *tier.Config) {
 			cf.StreamExperts, cf.HybridExperts = true, true
 			cf.SplitAdmit, cf.NoSplitRows, cf.NoRowAdmits = c.NExpertUsed, noSplit, noAdmit

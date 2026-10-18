@@ -2,11 +2,7 @@
 
 package tier
 
-import (
-	"fmt"
-	"os"
-	"strconv"
-)
+import "fmt"
 
 // hooks is a tier's deliberate-violation state, compiled in only under the
 // jitllmfault or jitllmtest build tag (the release build's is an empty struct,
@@ -104,24 +100,6 @@ func (h *hooks) setViolation(name string, on bool) bool {
 	old := *p
 	*p = on
 	return old
-}
-
-// applyEnv gives a tier opened in this build the test defaults the process
-// asks for: JITLLM_TEST_PERSIST (any value: the persistent decode path, "deps":
-// ordered by dependency counters as well) and JITLLM_TEST_GEMM_DEEP (1 forces
-// the deep m16n8 tiles on, -1 off). They are read at open, per tier, so no
-// state outlives the tier that took them.
-func (c *Config) applyEnv() {
-	switch v := os.Getenv("JITLLM_TEST_PERSIST"); v {
-	case "":
-	case "deps":
-		c.Persist, c.PersistDeps = true, true
-	default:
-		c.Persist = true
-	}
-	if n, err := strconv.Atoi(os.Getenv("JITLLM_TEST_GEMM_DEEP")); err == nil && c.GemmDeep == 0 {
-		c.GemmDeep = n
-	}
 }
 
 // WithFault arms one named violation of a family ("paged", "rec", "rows",

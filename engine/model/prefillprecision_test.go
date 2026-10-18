@@ -65,7 +65,7 @@ func TestPrefillPrecisionArms(t *testing.T) {
 	}
 	dev := func(noBatch bool, opts ...tier.Option) [][]float32 {
 		opts = append(opts, tier.WithDeviceTune(tier.TuneOff), tier.WithSplit(1), tier.WithAttnAccSplit(1))
-		g, err := tier.OpenWith(opts...)
+		g, err := openTier(t, opts...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

@@ -97,7 +97,7 @@ func (g *devTier) tuneGemm() {
 // Each arm is its GEMM launch and, split, its Reduce, over the resident
 // weights and the prompt operand buffer.
 func (g *devTier) timeGemm(a, b mv, r *resident, ntok int) (float64, bool) {
-	tuneTrials.Add(1)
+	g.Stats.TuneTrials++
 	out, err := g.dev.Alloc(a.rows * ntok * 4)
 	if err != nil {
 		return 0, false

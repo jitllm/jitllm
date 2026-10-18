@@ -284,12 +284,12 @@ func layerRelocatesToAnotherDevice(t *testing.T, path string) {
 	// part at a knife-edge argmax whatever the relocation did (it read token
 	// 7 of tinyllama either way on a V100, on main and on a branch alike).
 	// An equality gate pins every knob its equality depends on (RULE 11c).
-	a, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff))
+	a, err := openTier(t, tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || a == nil {
 		noDevice(t, "device", err)
 	}
 	defer a.Close()
-	b, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff))
+	b, err := openTier(t, tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || b == nil {
 		noDevice(t, "second tier", err)
 	}

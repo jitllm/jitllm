@@ -202,7 +202,7 @@ func TestBitNetRealMatchesReference(t *testing.T) {
 			})
 			for _, spec := range stepDevices() {
 				t.Run(spec, func(t *testing.T) {
-					gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+					gpu, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 						tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 					if err != nil || gpu == nil {
 						t.Skipf("%s: not present (%v)", spec, err)

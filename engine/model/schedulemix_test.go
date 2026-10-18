@@ -191,7 +191,7 @@ func (c *mixedCase) open() *tier.GPU {
 	if c.spec == "" {
 		return nil
 	}
-	g, err := tier.OpenWith(append(append([]tier.Option{tier.WithDevices(c.spec), tier.WithDeviceTune(tier.TuneOff)},
+	g, err := openTier(c.t, append(append([]tier.Option{tier.WithDevices(c.spec), tier.WithDeviceTune(tier.TuneOff)},
 		testTierOpts(c.t)...), c.extra...)...)
 	if err != nil || g == nil {
 		noDevice(c.t, c.spec, err)

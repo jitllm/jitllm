@@ -14,7 +14,7 @@ import (
 // every block.
 func addNormPrefill(t *testing.T, m *Model, ids, toks []int32, noFold, noGraph bool, layers int, cache string, extra ...tier.Option) ([][]float32, tier.Stats, int) {
 	t.Helper()
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithTuneCache(cache), tier.WithConfig(func(c *tier.Config) {
+	g, err := openTier(t, append([]tier.Option{tier.WithTuneCache(cache), tier.WithConfig(func(c *tier.Config) {
 		c.NoAddNormFold, c.NoGraph = noFold, noGraph
 	})}, extra...)...)
 	if err != nil || g == nil {

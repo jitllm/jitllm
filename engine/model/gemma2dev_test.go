@@ -53,7 +53,7 @@ func TestGemma2SoftcapOnDevice(t *testing.T) {
 	want := run(host)
 	host.Close()
 
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+	g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

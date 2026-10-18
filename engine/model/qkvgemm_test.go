@@ -21,7 +21,7 @@ func qkvGemmPrefill(t *testing.T, m *Model, ids, toks []int32, unsplit, noGraph 
 	if unsplit {
 		opts = append(opts, tier.WithBatchShape(tier.BatchShape{Split: 1}))
 	}
-	g, err := tier.OpenWith(append(opts, extra...)...)
+	g, err := openTier(t, append(opts, extra...)...)
 	if err != nil || g == nil {
 		return nil, nil, tier.Stats{}, 0
 	}

@@ -82,7 +82,7 @@ func TestMiniCPMVTowerRelocates(t *testing.T) {
 	tw := m.Tower()
 	ran := 0
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(tier.WithDevices(spec))
+		g, err := openTier(t, tier.WithDevices(spec))
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -190,7 +190,7 @@ func TestMiniCPMVDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 	t.Run("host", func(t *testing.T) { run(t, nil) })
 	for _, spec := range testdevices.Specs("cuda", "vulkan", "metal") {
 		t.Run(spec, func(t *testing.T) {
-			g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
+			g, err := openTier(t, append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
 			if err != nil || g == nil {
 				noDevice(t, spec, err)
 			}

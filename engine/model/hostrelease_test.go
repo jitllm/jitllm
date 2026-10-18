@@ -33,7 +33,7 @@ func TestPlacedBlocksGiveTheirHostPagesBack(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff))
+			g, err := openTier(t, tier.WithDeviceTune(tier.TuneOff))
 			if err != nil || g == nil {
 				noDevice(t, "device", err)
 			}

@@ -93,7 +93,7 @@ func TestF16RouterOnTheDevice(t *testing.T) {
 			return out
 		}
 		want := host()
-		g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+		g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

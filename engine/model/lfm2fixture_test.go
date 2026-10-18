@@ -149,7 +149,7 @@ func TestLFM2FixtureMatchesTransformers(t *testing.T) {
 		t.Fatalf("end to end: worst NMSE %.3e", w)
 	}
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
+		gpu, err := openTier(t, tier.WithDevices(spec))
 		if err != nil || gpu == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

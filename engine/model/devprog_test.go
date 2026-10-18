@@ -44,7 +44,7 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 						// take the same one.
 						c.FFNForm = tier.FFNGate2In
 					})}, testTierOpts(t)...)
-				g, err := tier.OpenWith(opts...)
+				g, err := openTier(t, opts...)
 				if err != nil || g == nil {
 					noDevice(t, "cuda", err)
 				}

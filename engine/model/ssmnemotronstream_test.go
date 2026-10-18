@@ -36,7 +36,7 @@ func TestUngatedStreamedBankMatchesTheResidentOne(t *testing.T) {
 		if stream {
 			opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.StreamExperts = true }))
 		}
-		g, err := tier.OpenWith(opts...)
+		g, err := openTier(t, opts...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

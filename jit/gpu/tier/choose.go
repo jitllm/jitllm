@@ -93,7 +93,6 @@ func choose(devs []backend.Device, kb knobs) backend.Device {
 // probe costs a few milliseconds. It measures the kernel, not the bandwidth
 // ceiling, because the kernel is what will run.
 func probe(devs []backend.Device) (best int, rates []float64) {
-	tuneTrials.Add(1)
 	const rows, k = 2048, 2048
 	rates = make([]float64, len(devs))
 	nb := k / 32

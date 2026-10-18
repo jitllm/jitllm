@@ -3,9 +3,11 @@ package model
 import (
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testdevices"
@@ -121,6 +123,47 @@ func testTierOpts(t *testing.T) []tier.Option {
 	}
 	return append(o, tier.WithVulkanMaxGroups(uint32(n)))
 }
+
+// openTier is tier.OpenWith with the test-wide defaults every gate in this
+// binary opens its tier with: JITLLM_TEST_PERSIST (any value: the persistent
+// decode path; "deps": ordered by dependency counters as well) and
+// JITLLM_TEST_GEMM_DEEP (1 forces the deep m16n8 tiles, -1 off). They are
+// defaults: a gate that states Config.Persist or GemmDeep itself keeps its own
+// when that option comes first, and the tier carries them per instance.
+func openTier(t testing.TB, opts ...tier.Option) (*tier.GPU, error) {
+	t.Helper()
+	opts = slices.Clip(opts)
+	if v := os.Getenv("JITLLM_TEST_PERSIST"); v != "" {
+		opts = append(opts, tier.WithConfig(func(c *tier.Config) {
+			if !c.Persist {
+				c.Persist, c.PersistDeps = true, v == "deps"
+			}
+		}))
+	}
+	if n, err := strconv.Atoi(os.Getenv("JITLLM_TEST_GEMM_DEEP")); err == nil {
+		opts = append(opts, tier.WithConfig(func(c *tier.Config) {
+			if c.GemmDeep == 0 {
+				c.GemmDeep = n
+			}
+		}))
+	}
+	g, err := tier.OpenWith(opts...)
+	if g != nil && os.Getenv("JITLLM_TEST_PERSIST") != "" {
+		// The tier's own counters, read when the test ends: persistRan holds the
+		// binary to having launched persistent kernels at all.
+		t.Cleanup(func() {
+			st := g.Stats()
+			persistSeen.Add(int64(st.PersistLaunches))
+			persistDepSeen.Add(int64(st.PersistDepLaunches))
+		})
+	}
+	return g, err
+}
+
+// persistSeen and persistDepSeen total the launches of every tier this test
+// binary opened through openTier. They are harness bookkeeping for persistRan,
+// not engine state.
+var persistSeen, persistDepSeen atomic.Int64
 
 // scalarLinearRows reports JITLLM_SCALAR_LINEAR_ROWS, which puts a hybrid's
 // ragged linear steps on the scan's one-thread form on a device that has the

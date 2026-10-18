@@ -150,7 +150,7 @@ var lastBatchName string
 // a single State on the same card, and the count of sm_70 tensor-core matvecs.
 func batchGreedy(t *testing.T, m *Model, ids [][]int32, gen, seq int, opt []tier.Option) (got [][]int32, after []int32, volta int) {
 	t.Helper()
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDeviceTune(tier.TuneOff)}, opt...)...)
+	g, err := openTier(t, append([]tier.Option{tier.WithDeviceTune(tier.TuneOff)}, opt...)...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

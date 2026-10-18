@@ -76,7 +76,7 @@ func TestAFullCardSpillsABlockOntoTheNextOne(t *testing.T) {
 			}
 			// Fill-first: the proportional plan leaves every card room for the
 			// batched prefill's scratch, far more than this history grows by.
-			d, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
+			d, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
 				tier.WithConfig(func(c *tier.Config) { c.FillFirst = true }))
 			if err == nil && d != nil && len(d.Placed()) == 2 {
 				return d

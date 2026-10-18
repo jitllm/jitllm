@@ -38,7 +38,7 @@ func prefillAgainstHost(t *testing.T, lengths []int, opts ...tier.Option) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	g, err := tier.OpenWith(opts...)
+	g, err := openTier(t, opts...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

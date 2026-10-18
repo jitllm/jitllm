@@ -268,7 +268,7 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		gpu, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || gpu == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -525,7 +525,7 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 	t.Run("relocation", func(t *testing.T) {
 		ran := 0
 		for _, spec := range stepDevices() {
-			gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+			gpu, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 			if err != nil || gpu == nil {
 				continue
 			}
@@ -636,7 +636,7 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 		t.Run("host", func(t *testing.T) { arm(t, nil) })
 		for _, spec := range testdevices.Specs("cuda", "vulkan", "metal") {
 			t.Run(spec, func(t *testing.T) {
-				gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
+				gpu, err := openTier(t, append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
 				if err != nil || gpu == nil {
 					t.Skipf("%s: not present (%v)", spec, err)
 				}

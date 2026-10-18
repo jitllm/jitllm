@@ -43,7 +43,7 @@ func TestSegFusedPairsOnDevice(t *testing.T) {
 				if !fuse {
 					opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.NoSegFuse = true }))
 				}
-				gpu, err := tier.OpenWith(opts...)
+				gpu, err := openTier(t, opts...)
 				if err != nil || gpu == nil {
 					t.Skipf("no cuda device (%v)", err)
 				}

@@ -31,7 +31,7 @@ func TestABatchLeavesAnotherSessionAlone(t *testing.T) {
 	defer m.Close()
 	const seq, rows, before, after = 256, 3, 3, 5
 	open := func(t *testing.T, spec string) *tier.GPU {
-		g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		g, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}

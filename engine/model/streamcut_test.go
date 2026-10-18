@@ -38,7 +38,7 @@ func TestStreamResidualsAreCutByStream(t *testing.T) {
 			nl := m.Cfg.NLayer
 			ran := 0
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+				gpu, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 					tier.WithDeviceTune(tier.TuneOff),
 					tier.WithConfig(func(c *tier.Config) { c.NoExactPrompt = true })}, testTierOpts(t)...)...)
 				if err != nil || gpu == nil {

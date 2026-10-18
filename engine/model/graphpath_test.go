@@ -117,7 +117,7 @@ func TestCoveredBlocksTakeTheGraphPath(t *testing.T) {
 			t.Logf("host: block 0 %+v", paths[0])
 			for _, spec := range testdevices.Specs("cuda", "vulkan", "metal") {
 				t.Run(spec, func(t *testing.T) {
-					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
+					g, err := openTier(t, append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, spec, err)
 					}
@@ -195,7 +195,7 @@ func TestRunTimeAlternativeIsNeverTakenUnasked(t *testing.T) {
 	ran := 0
 	for _, spec := range testdevices.Specs("cuda", "vulkan", "metal") {
 		t.Run(spec, func(t *testing.T) {
-			auto, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
+			auto, err := openTier(t, append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
 			if err != nil || auto == nil {
 				noDevice(t, spec, err)
 			}
@@ -205,7 +205,7 @@ func TestRunTimeAlternativeIsNeverTakenUnasked(t *testing.T) {
 			if sa.RewritesUnmet != 0 {
 				t.Fatalf("unasked: %d unmet (%s)", sa.RewritesUnmet, sa.RewritesUnmetWhy)
 			}
-			take, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+			take, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 				tier.WithRewrite(graph.MLPPartition.Name, graph.ChoiceTake)}, testTierOpts(t)...)...)
 			if err != nil || take == nil {
 				t.Fatalf("%s opened once and not twice: %v", spec, err)
@@ -237,7 +237,7 @@ func TestDeviceRecordsTheFormsItRan(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("cuda")}, testTierOpts(t)...)...)
+	g, err := openTier(t, append([]tier.Option{tier.WithDevices("cuda")}, testTierOpts(t)...)...)
 	if err != nil || g == nil {
 		noDevice(t, "cuda", err)
 	}

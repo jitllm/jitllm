@@ -118,7 +118,7 @@ func TestC6GreedyOnDeviceHonoursTheHeadBias(t *testing.T) {
 		want[p] = Greedy(lg)
 	}
 	host.Close()
-	gpu, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff))
+	gpu, err := openTier(t, tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || gpu == nil {
 		noDevice(t, "device", err)
 	}
@@ -221,7 +221,7 @@ func fixtureOnEveryDeviceWithin(t *testing.T, m *Model, g *c6Golden, vs []c6Viol
 
 	ran := 0
 	for _, spec := range stepDevices() {
-		probe, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		probe, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || probe == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -230,7 +230,7 @@ func fixtureOnEveryDeviceWithin(t *testing.T, m *Model, g *c6Golden, vs []c6Viol
 		ran++
 		t.Run(spec, func(t *testing.T) {
 			onDevice := func(run func(*State) [][]float32) ([][]float32, string) {
-				gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+				gpu, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 					tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 				if err != nil {
 					t.Fatal(err)

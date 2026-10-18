@@ -82,7 +82,7 @@ func TestFusedDecodeMatchesPerOp(t *testing.T) {
 				var arms [2][][]float32
 				exact := false
 				for i, noFuse := range []bool{false, true} {
-					g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff),
+					g, err := openTier(t, tier.WithDeviceTune(tier.TuneOff),
 						tier.WithConfig(func(c *tier.Config) {
 							// In-group splits in both arms: the operand prologue is
 							// built only where few workgroups share a row (actInPays).

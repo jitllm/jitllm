@@ -169,7 +169,7 @@ func TestClefMediaMatchesReference(t *testing.T) {
 				}
 			}
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+				gpu, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 				if err != nil || gpu == nil {
 					t.Logf("%s: not present (%v)", spec, err)
 					continue

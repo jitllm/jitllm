@@ -57,7 +57,7 @@ func TestDecisionDeviceAB(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			g, err := tier.OpenWith(tier.WithDevices(spec))
+			g, err := openTier(t, tier.WithDevices(spec))
 			if err != nil || g == nil {
 				t.Fatalf("%s: %v", spec, err)
 			}

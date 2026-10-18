@@ -872,6 +872,9 @@ type Stats struct {
 	GemmF16 int
 	// GemmDeep counts those built on the deep tiles (f16DeepTiles).
 	GemmDeep int
+	// TuneTrials counts the timed trials of the tuners on the device's path,
+	// and BgTuneTrials those WithLazyTune's background tuner timed beside it.
+	TuneTrials, BgTuneTrials int64
 	// GemmInt8 counts batched matvecs built as kernels.GemmInt8, the staged
 	// int8 GEMM (sm_80 on, devTier.int8Gemm).
 	GemmInt8 int
@@ -1416,6 +1419,8 @@ func (s *Stats) add(o Stats) {
 	s.VoltaGemm += o.VoltaGemm
 	s.GemmF16 += o.GemmF16
 	s.GemmDeep += o.GemmDeep
+	s.TuneTrials += o.TuneTrials
+	s.BgTuneTrials += o.BgTuneTrials
 	s.GemmInt8 += o.GemmInt8
 	s.NormF16 += o.NormF16
 	s.AddNormFolded += o.AddNormFolded
@@ -2335,9 +2340,6 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 		// default) Pack declines immediately.
 		arena: kernels.NewArena(o.kb.arena),
 	}
-	// A jitllmtest build can make the persistent path every tier's default
-	// (JITLLM_TEST_PERSIST, read at open), so the regression gates run through it.
-	cfg.applyEnv()
 	// Gate2 is allowed by default; tuneFFN takes it per shape where it
 	// measures faster. On a V100 it read 1.008-1.028 of the two launches on
 	// Llama 1B, 3B and 8B.

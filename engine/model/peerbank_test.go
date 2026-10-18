@@ -23,7 +23,7 @@ const peerTokens = 6
 func peerRun(t *testing.T, m *Model, ids []int32, specs []string, card string, extra ...tier.Option) ([][]float32, tier.Stats) {
 	t.Helper()
 	c := m.Cfg
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(strings.Join(specs, ",")), tier.WithDeviceTune(tier.TuneOff),
+	g, err := openTier(t, append([]tier.Option{tier.WithDevices(strings.Join(specs, ",")), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(cf *tier.Config) {
 			cf.StreamExperts, cf.HybridExperts = true, true
 			cf.SplitAdmit = c.NExpertUsed

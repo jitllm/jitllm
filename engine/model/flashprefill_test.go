@@ -54,7 +54,7 @@ func flashPrefillMatches(t *testing.T, name string) {
 	host.Close()
 
 	run := func(noFlash bool) ([]float32, int, int) {
-		g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(func(c *tier.Config) { c.NoFlashPrefill = noFlash }))
+		g, err := openTier(t, tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(func(c *tier.Config) { c.NoFlashPrefill = noFlash }))
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

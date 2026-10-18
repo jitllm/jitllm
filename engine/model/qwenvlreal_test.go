@@ -201,7 +201,7 @@ func TestQwenVLRealMatchesTransformers(t *testing.T) {
 			t.Run("host", func(t *testing.T) { whole(t, nil, nil) })
 			for _, spec := range stepDevices() {
 				t.Run(spec, func(t *testing.T) {
-					gpu, err := tier.OpenWith(tier.WithDevices(spec))
+					gpu, err := openTier(t, tier.WithDevices(spec))
 					if err != nil || gpu == nil {
 						t.Skipf("%s: not present (%v)", spec, err)
 					}
@@ -212,7 +212,7 @@ func TestQwenVLRealMatchesTransformers(t *testing.T) {
 					}
 					// A card of its own: the text model's weights are the
 					// model's on the tier, and stay there after its State.
-					alone, err := tier.OpenWith(tier.WithDevices(spec))
+					alone, err := openTier(t, tier.WithDevices(spec))
 					if err != nil || alone == nil {
 						t.Fatalf("%s: reopening: %v", spec, err)
 					}
@@ -272,7 +272,7 @@ func TestQwenVLWindowsSurviveQueryChunks(t *testing.T) {
 	ran := 0
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			gpu, err := tier.OpenWith(tier.WithDevices(spec))
+			gpu, err := openTier(t, tier.WithDevices(spec))
 			if err != nil || gpu == nil {
 				t.Skipf("%s: not present (%v)", spec, err)
 			}

@@ -18,7 +18,7 @@ type pagedFaultCase struct {
 	repeat      int
 	// arm sets a fault of the kernels package (a package switch of its own);
 	// nil says the fault is the tier's and rides on the arm's tier options.
-	arm         func(string)
+	arm func(string)
 	// prefill runs the paged arm's prompt batched, through the paged prefill
 	// kernels, at pass keys a launch (0 the default).
 	prefill bool

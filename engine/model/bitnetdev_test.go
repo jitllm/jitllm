@@ -110,7 +110,7 @@ func bitnetOnEveryDevice(t *testing.T, m *Model, g *c6Golden) {
 
 	ran := 0
 	for _, spec := range stepDevices() {
-		probe, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		probe, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || probe == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -128,7 +128,7 @@ func bitnetOnEveryDevice(t *testing.T, m *Model, g *c6Golden) {
 						c.NoMMA, c.NoVolta, c.NoFlashPrefill = true, true, true
 					}))
 				}
-				gpu, err := tier.OpenWith(opts...)
+				gpu, err := openTier(t, opts...)
 				if err != nil {
 					t.Fatal(err)
 				}

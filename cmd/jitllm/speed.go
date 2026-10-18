@@ -323,7 +323,14 @@ func speedCmd(args []string) error {
 		return pp, tg, nil
 	}
 	if *ttft {
-		return ttftRun(m, attach, *p, *reps, t00, tOpen, tDev)
+		trials := func() (hot, bg int64) {
+			if g, ok := d.(*tier.GPU); ok {
+				st := g.Stats()
+				return st.TuneTrials, st.BgTuneTrials
+			}
+			return 0, 0
+		}
+		return ttftRun(m, attach, trials, *p, *reps, t00, tOpen, tDev)
 	}
 	if *sessions > 0 {
 		return sessionsRun(attach, prompt, *sessions, *n, *reps)
@@ -547,7 +554,7 @@ func ttftText(m *model.Model, p int) string {
 // the process's -- the container opened, the blocks placed and uploaded, the
 // kernels compiled -- and each after it is a fresh session on the loaded
 // model: tokenize, take pages, prefill, sample.
-func ttftRun(m *model.Model, attach func(int) (*model.State, error), p, reps int, t00 time.Time, tOpen, tDev time.Duration) error {
+func ttftRun(m *model.Model, attach func(int) (*model.State, error), trials func() (hot, bg int64), p, reps int, t00 time.Time, tOpen, tDev time.Duration) error {
 	text := ttftText(m, p)
 	var tAttach time.Duration
 	var compiled, tuned int64
@@ -562,13 +569,15 @@ func ttftRun(m *model.Model, attach func(int) (*model.State, error), p, reps int
 		defer st.Close()
 		// Ready: the blocks are placed, every kernel compiled and the tuners
 		// done. What follows, to the first token, must do none of either.
-		c0, u0 := backend.Compiles(), tier.TuneTrials()
+		c0 := backend.Compiles()
+		u0, _ := trials()
 		lg, err := st.Prefill(ids)
 		if err != nil {
 			return 0, 0, err
 		}
 		model.Greedy(lg)
-		compiled, tuned = backend.Compiles()-c0, tier.TuneTrials()-u0
+		u1, _ := trials()
+		compiled, tuned = backend.Compiles()-c0, u1-u0
 		return time.Since(t0), len(ids), nil
 	}
 	el, _, err := first()
@@ -585,12 +594,13 @@ func ttftRun(m *model.Model, attach func(int) (*model.State, error), p, reps int
 	// placed and uploaded); ttft (model loaded) is ready to the first token of
 	// the process's first prompt, tokenizing excluded as llama.cpp's prompt
 	// eval excludes it.
+	_, bgTrials := trials()
 	if err := readyHonest(compiled, tuned); err != nil {
 		return err
 	}
 	tStart := t00.Sub(procStart)
 	fmt.Printf("load %.1f ms (start %.0f + open %.0f + devices %.0f + attach %.0f)   ttft-loaded %.1f ms (ready to the first token; %d compiles, %d tuner trials after ready; %d background tuner trials so far)\n",
-		ms(tStart+tOpen+tDev+tAttach), ms(tStart), ms(tOpen), ms(tDev), ms(tAttach), ms(el-tAttach), compiled, tuned, tier.BackgroundTuneTrials())
+		ms(tStart+tOpen+tDev+tAttach), ms(tStart), ms(tOpen), ms(tDev), ms(tAttach), ms(el-tAttach), compiled, tuned, bgTrials)
 	var warm []float64
 	ntok := 0
 	for r := 0; r < reps; r++ {

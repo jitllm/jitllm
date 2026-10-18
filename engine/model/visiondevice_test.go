@@ -52,7 +52,7 @@ func towerOnDevices(t *testing.T, open func(testing.TB, ...Option) (*Model, *Tow
 
 	ran := 0
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(tier.WithDevices(spec))
+		g, err := openTier(t, tier.WithDevices(spec))
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -156,7 +156,7 @@ func TestGemma3TowerPagesThroughTheDevice(t *testing.T) {
 			if budget > 0 {
 				opts = append(opts, tier.WithBudget(budget))
 			}
-			g, err := tier.OpenWith(opts...)
+			g, err := openTier(t, opts...)
 			if err != nil || g == nil {
 				return nil, 0, 0, 0, false
 			}
@@ -235,7 +235,7 @@ func TestTowerChunksUnderABudget(t *testing.T) {
 			if budget > 0 {
 				opts = append(opts, tier.WithBudget(budget))
 			}
-			g, err := tier.OpenWith(opts...)
+			g, err := openTier(t, opts...)
 			if err != nil || g == nil {
 				return
 			}

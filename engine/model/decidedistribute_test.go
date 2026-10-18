@@ -25,7 +25,7 @@ import (
 func moveTier(t *testing.T) (*tier.GPU, string, string) {
 	t.Helper()
 	a, b := moveDevices(t)
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(a + "," + b),
+	g, err := openTier(t, append([]tier.Option{tier.WithDevices(a + "," + b),
 		tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 	if err != nil || g == nil {
 		noDevice(t, a+","+b, err)

@@ -60,7 +60,7 @@ func TestRaggedTowerOnDeviceMatchesHost(t *testing.T) {
 	defer func(was int) { tw.opt.towerGPULayers = was }(tw.opt.towerGPULayers)
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		gpu, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || gpu == nil {
 			t.Logf("%s: not present", spec)
 			continue
@@ -88,7 +88,7 @@ func TestRaggedTowerOnDeviceMatchesHost(t *testing.T) {
 			tw.opt.towerGPULayers = -1
 			m.kpadViolation = true
 			defer func() { m.kpadViolation = false }()
-			gv, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+			gv, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 			if err != nil || gv == nil {
 				t.Fatalf("%s: a second tier: %v", spec, err)
 			}

@@ -73,7 +73,7 @@ func TestStagedGemmPrefillMatchesTheHost(t *testing.T) {
 				deep   int
 			}{{"int8", false, -1}, {"binary16", true, -1}, {"binary16-deep", true, 1}} {
 				t.Run(arm.name, func(t *testing.T) {
-					g, err := tier.OpenWith(tier.WithAPI("ptx"), tier.WithDeviceTune(tier.TuneOff),
+					g, err := openTier(t, tier.WithAPI("ptx"), tier.WithDeviceTune(tier.TuneOff),
 						tier.WithConfig(func(c *tier.Config) { c.PreferGemmInt8, c.GemmDeep = !arm.noInt8, arm.deep }))
 					if err != nil || g == nil {
 						noDevice(t, "cuda", err)

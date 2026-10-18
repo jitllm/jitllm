@@ -7,7 +7,6 @@ import (
 	"os"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
@@ -153,13 +152,6 @@ func (g *devTier) tuneSplit(q kernels.Quant, rows, k int, r *resident) int {
 	return best
 }
 
-var tuneTrials, bgTuneTrials atomic.Int64
-
-// BackgroundTuneTrials counts the trials WithLazyTune's background tuner has
-// timed in this process, which TuneTrials does not: they run beside the
-// device's work, not on its path.
-func BackgroundTuneTrials() int64 { return bgTuneTrials.Load() }
-
 // tuneJob is one shape the background tuner measures.
 type tuneJob struct {
 	key   splitKey
@@ -292,7 +284,7 @@ func (g *devTier) runTuneJob(j tuneJob) {
 				d = xf
 			}
 			if round == 0 {
-				bgTuneTrials.Add(1)
+				g.Stats.BgTuneTrials++
 			}
 			var rate float64
 			rate, ok = g.bgTrial(c.kern, c.red, j.r, d, out, part, rows, c.split, c.grp)
@@ -376,11 +368,6 @@ func (g *devTier) stopTune() {
 	g.tuneWG.Wait()
 }
 
-// TuneTrials counts the timed trials the device tuners have run in this
-// process (the split tuner, the sequence retunes, the backend probe): what a
-// benchmark reads to show its timed span tuned nothing.
-func TuneTrials() int64 { return tuneTrials.Load() }
-
 // nb32ok reports that split divides a k-wide row's 32-element blocks the way
 // splitCands offers it.
 func nb32ok(k, split int) bool { return split <= k/32 && (k/32)%split == 0 }
@@ -397,7 +384,7 @@ func (g *devTier) tuneKey(shape string) string {
 }
 
 func (g *devTier) timeSplitMode(kern, red backend.Kernel, r *resident, d, out backend.Buf, rows, split int, grp bool) (float64, bool) {
-	tuneTrials.Add(1)
+	g.Stats.TuneTrials++
 	return g.timeSplitOn(kern, red, r, d, out, g.partBuf, rows, split, grp)
 }
 
@@ -853,7 +840,7 @@ type splitCand struct {
 // sel is the expert selection an INDEXED matvec reads after its output, or nil
 // for a dense one; rows is then the launch's output rows, Rows*Slots.
 func (g *devTier) timeSequences(cs []splitCand, rs []*resident, rows int, sel backend.Buf) []splitCand {
-	tuneTrials.Add(1)
+	g.Stats.TuneTrials++
 	// Three replays a sample so a Sync's jitter is small against the work, and
 	// seven rounds; the differences being decided are ~1 us a launch.
 	const rounds, reps = 7, 3
@@ -979,7 +966,8 @@ func (g *devTier) timeSequences(cs []splitCand, rs []*resident, rows int, sel ba
 	return cs
 }
 
-// binaryIDOnce fingerprints the running executable, so a cached split does not
+// binaryIDOnce is a memoised constant of the running executable, so it is
+// shared by every tier on purpose. It fingerprints the running executable, so a cached split does not
 // outlive the kernels it was measured on: any rebuild tunes once again. Empty
 // when the executable cannot be read, and then nothing is cached.
 var binaryIDOnce = sync.OnceValue(func() string {

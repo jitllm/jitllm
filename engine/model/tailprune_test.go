@@ -42,7 +42,7 @@ func tailExec(t *testing.T, path string, prune bool, chunk, rows, dev int, spec 
 	st := m.NewState(rows + 16)
 	defer st.Close()
 	if spec != "" {
-		g, err := tier.OpenWith(tier.WithDevices(spec))
+		g, err := openTier(t, tier.WithDevices(spec))
 		if err != nil || g == nil {
 			t.Fatalf("%s: %v", spec, err)
 		}

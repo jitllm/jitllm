@@ -59,7 +59,7 @@ func TestPrefillStreamsHostBlocks(t *testing.T) {
 	probe.Close()
 
 	run := func(t *testing.T, mode PrefillStream) (*State, *tier.GPU, int, [][]float32) {
-		g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		g, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}

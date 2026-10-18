@@ -120,7 +120,7 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool, extra ..
 			opts = append(opts, tier.WithDevices(testdevices.Spec(""))) // a model bigger than one card
 		}
 		opts = append(opts, extra...)
-		g, err := tier.OpenWith(append(opts,
+		g, err := openTier(t, append(opts,
 			tier.WithConfig(func(c *tier.Config) {
 				c.NoBatch = noBatch
 				// The A/B for sm_70: its batched matvecs read f16 activations

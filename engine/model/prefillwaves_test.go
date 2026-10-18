@@ -43,7 +43,7 @@ func prefillWavesAllocs(t *testing.T, m *Model, ids []int32, blocks, slots int, 
 	defer s.Close()
 	// The selected device where JITLLM_TEST_DEVICES names one: the waves run
 	// on every backend.
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(testdevices.One("gpu:0")), tier.WithDeviceTune(tier.TuneOff),
+	g, err := openTier(t, append([]tier.Option{tier.WithDevices(testdevices.One("gpu:0")), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(cf *tier.Config) {
 			cf.StreamExperts, cf.HybridExperts = true, true
 			cf.SplitAdmit, cf.NoPrefillExperts = c.NExpertUsed, noWaves

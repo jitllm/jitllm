@@ -19,7 +19,7 @@ func TestDeepDecodeArmFailsOnAViolation(t *testing.T) {
 	defer m.Close()
 	ran := 0
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
+		g, err := openTier(t, append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

@@ -57,7 +57,7 @@ func raggedAsPrefill(t *testing.T, m *Model, prompts [][]int32, tiles bool) {
 		if testdevices.Selected() {
 			o = append(o, tier.WithDevices(testdevices.One("")))
 		}
-		g, err := tier.OpenWith(o...)
+		g, err := openTier(t, o...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

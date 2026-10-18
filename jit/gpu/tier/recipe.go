@@ -93,7 +93,7 @@ const recipeRounds = 20
 // whether that median resolved (IQR/median within splitTuneIQR). An arm that
 // fails to launch resolves as false.
 func (g *devTier) timeRecipes(arms []func(s backend.Session) error) (med []float64, ok []bool) {
-	tuneTrials.Add(1)
+	g.Stats.TuneTrials++
 	n := len(arms)
 	med, ok = make([]float64, n), make([]bool, n)
 	failed := make([]bool, n)

@@ -12,7 +12,7 @@ import (
 // default, wider than the whole history), and the eviction gate's prompt
 // and teacher-forced decode.
 func (eg *evictGate) stagedPassRun(t *testing.T, dev string, pass int) ([][]float32, tier.Stats) {
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+	g, err := openTier(t, append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(c *tier.Config) {
 			c.KVPage = 64
 			c.StagedDecode = true

@@ -20,7 +20,6 @@ func (*Config) qkvGemmSwapped() bool           { return false }
 func (*Config) gateUpSwapped() bool            { return false }
 func (*Config) gateUp2Swapped() bool           { return false }
 func (*Config) allocFault()                    {}
-func (*Config) applyEnv()                      {}
 
 // WithFault and WithViolation are no-ops in a release build.
 func WithFault(family, name string) Option { return func(*openOpts) {} }

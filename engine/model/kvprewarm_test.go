@@ -45,7 +45,7 @@ func TestFirstPromptDoesNotGrowTheKVPool(t *testing.T) {
 		if budget > 0 {
 			opts = append(opts, tier.WithBudget(budget))
 		}
-		g, err := tier.OpenWith(opts...)
+		g, err := openTier(t, opts...)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

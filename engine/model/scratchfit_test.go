@@ -120,7 +120,7 @@ func fitTier(t *testing.T, spec string, limit uint64, cfg func(*tier.Config)) *t
 	if limit > 0 {
 		spec = fmt.Sprintf("%s=%d", spec, limit)
 	}
-	g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(cfg))
+	g, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(cfg))
 	if err != nil || g == nil {
 		noDevice(t, spec, err)
 	}

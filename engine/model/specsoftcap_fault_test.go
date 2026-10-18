@@ -27,7 +27,7 @@ func TestSpecSoftcapGateDiscriminates(t *testing.T) {
 			for _, spec := range stepDevices() {
 				t.Run(spec, func(t *testing.T) {
 					bound := specCapBound(t, m, spec, prompt, want)
-					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+					g, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 						tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, spec, err)

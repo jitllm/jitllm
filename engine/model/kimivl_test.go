@@ -112,7 +112,7 @@ func TestKimiVLTextMatchesTransformers(t *testing.T) {
 				t.Fatalf("the rows reversed read %.3e against %.3e: the gate cannot see their order", bad, host)
 			}
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+				gpu, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 				if err != nil || gpu == nil {
 					t.Logf("%s: not present", spec)
 					continue
@@ -246,7 +246,7 @@ func TestKimiVLRealTowerMatchesMoonshot(t *testing.T) {
 		t.Fatalf("the violation reads %.3e against %.3e: the gate cannot see it", bad, a8)
 	}
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
+		gpu, err := openTier(t, tier.WithDevices(spec))
 		if err != nil || gpu == nil {
 			t.Logf("%s: not present", spec)
 			continue

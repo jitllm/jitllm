@@ -242,7 +242,7 @@ func TestStagedPagedPrefillGateDiscriminates(t *testing.T) {
 	ids := m.Vocab.Encode("The clerk counted barrels of salt on the upper floor, and", true)
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
-			g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff))
+			g, err := openTier(t, tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff))
 			if err != nil || g == nil {
 				noDevice(t, dev, err)
 			}
@@ -303,7 +303,7 @@ func TestStepAcrossSessionsLocalRopeGateDiscriminates(t *testing.T) {
 		for _, fault := range []string{"", "swatab"} {
 			t.Run(fmt.Sprintf("%s/%q", dev, fault), func(t *testing.T) {
 				bound := denseStepBand * orderControl(t, m, dev)
-				g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+				g, err := openTier(t, append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 					tier.WithConfig(func(c *tier.Config) { c.RopeTableHost = true })}, testTierOpts(t)...)...)
 				if err != nil || g == nil {
 					noDevice(t, dev, err)
