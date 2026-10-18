@@ -1,6 +1,7 @@
 package tier
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -144,11 +145,19 @@ func (g *devTier) timeRecipes(arms []func(s backend.Session) error) (med []float
 	return med, ok
 }
 
+// errNoArmKernel is a tuner arm with no kernel to launch.
+var errNoArmKernel = errors.New("tier: the arm's kernel was not built")
+
 // mvLaunch launches matvec m's kernel k over weight r: pre is the operand (a
 // and ax, or a prologue's float row and its second input), extra the bias,
 // residual or gate (Gate2's gate weight, three buffers). A split writing partials reduces after. It is the
 // launch encodeLayer's mvrun, mvres and mvIn make, for the tuners' arms.
 func (g *devTier) mvLaunch(s backend.Session, m mv, k backend.Kernel, r *resident, pre []backend.Buf, out backend.Buf, extra ...backend.Buf) error {
+	// An arm whose kernel was never built (a compile the device refused, as
+	// under memory pressure) is a refused arm, not a launch of nothing.
+	if k == nil {
+		return errNoArmKernel
+	}
 	w := 128
 	if m.group {
 		w = kernels.GroupSplitWidth(m.split)
