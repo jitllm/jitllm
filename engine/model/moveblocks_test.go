@@ -396,3 +396,95 @@ func TestABinary16HistoryMovesToTheDevice(t *testing.T) {
 		}
 	}
 }
+
+// TestAnyRangeMovesWithItsHistory: placement is a set. A middle range of
+// blocks goes to the device mid-sequence (PlaceBlocks), part of it comes home
+// leaving a hole between two device runs (ReleaseBlocks), the rest after it,
+// and every token stays in the band of a host run that never moved.
+func TestAnyRangeMovesWithItsHistory(t *testing.T) {
+	a, _ := moveDevices(t)
+	g, err := tier.OpenWith(tier.WithDevices(a), tier.WithDeviceTune(tier.TuneOff))
+	if err != nil || g == nil {
+		noDevice(t, a, err)
+	}
+	defer g.Close()
+	m, err := Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")), WithKVF16(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	n := m.Cfg.NLayer
+	const ntok, placeAt, holeAt, homeAt = 12, 3, 6, 9
+	prompt := m.Vocab.Encode("The capital of France is a city that", true)
+	run := func(ids []int32, move bool) [][]float32 {
+		st := m.NewState(len(prompt) + ntok + 1)
+		defer st.Close()
+		if move {
+			if err := st.SetDevice(g); err != nil {
+				t.Fatal(err)
+			}
+			st.SetGPULayers(0)
+		}
+		logits, err := st.Prefill(prompt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var lg [][]float32
+		for i := 0; i < ntok; i++ {
+			lg = append(lg, append([]float32(nil), logits...))
+			next := Greedy(logits)
+			if ids != nil {
+				next = ids[i]
+			}
+			switch {
+			case move && i == placeAt:
+				got, err := st.PlaceBlocks(n/4, 3*n/4)
+				if err != nil || got != n/2 {
+					t.Fatalf("placed %d of blocks %d..%d: %v (%s)", got, n/4, 3*n/4-1, err, g.Err())
+				}
+				if st.devAt(0) || st.devAt(n-1) || !st.devAt(n/4) {
+					t.Fatalf("the placement is not the range asked")
+				}
+			case move && i == holeAt:
+				got, err := st.ReleaseBlocks(n/4+1, n/4+3)
+				if err != nil || got != 2 {
+					t.Fatalf("released %d: %v", got, err)
+				}
+				if !st.devAt(n/4) || st.devAt(n/4+1) || !st.devAt(n/4+3) {
+					t.Fatalf("no hole between two device runs")
+				}
+			case move && i == homeAt:
+				if _, err := st.ReleaseBlocks(0, n); err != nil {
+					t.Fatal(err)
+				}
+				if st.devCount() != 0 {
+					t.Fatalf("%d blocks stayed on the device", st.devCount())
+				}
+			}
+			if logits, err = st.Forward(next); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return lg
+	}
+	ctl := run(nil, false)
+	var ids []int32
+	for _, l := range ctl {
+		ids = append(ids, Greedy(l))
+	}
+	moved := run(ids, true)
+	for i := range ctl {
+		var worst float64
+		for j, v := range ctl[i] {
+			worst = max(worst, math.Abs(float64(v-moved[i][j])))
+		}
+		switch {
+		case math.IsNaN(worst):
+			t.Fatalf("token %d: a non-finite logit", i)
+		case i <= placeAt && worst != 0:
+			t.Fatalf("token %d is before the move and differs by %g", i, worst)
+		case worst > 2.5:
+			t.Fatalf("token %d: %g from the host control, outside the band", i, worst)
+		}
+	}
+}
