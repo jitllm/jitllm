@@ -33,8 +33,7 @@ func TestSpecSoftcapGateDiscriminates(t *testing.T) {
 						noDevice(t, spec, err)
 					}
 					defer g.Close()
-					tier.SetRowsFault("nocap")
-					defer tier.SetRowsFault("")
+					g.SetFault("rows", "nocap")
 					bad := specVerifyCapped(t, m, g, prompt, want, false)
 					t.Logf("nocap on %s: verify rows against decode, worst logit NMSE %.3e, %.0fx the bound %.3e",
 						spec, bad, bad/bound, bound)

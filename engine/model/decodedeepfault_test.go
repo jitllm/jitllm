@@ -31,9 +31,9 @@ func TestDeepDecodeArmFailsOnAViolation(t *testing.T) {
 			// decode arm before it does.
 			deepDecodeWindow(t, m, g)
 			clean, _, n, _, _ := deepDecodeWindow(t, m, g)
-			tier.SetRowsFault("decodealloc")
+			g.SetFault("rows", "decodealloc")
 			bad, _, _, _, _ := deepDecodeWindow(t, m, g)
-			tier.SetRowsFault("")
+			g.SetFault("rows", "")
 			t.Logf("%s: %d engine allocation(s) over %d clean, %d under the violation", spec, clean.engine, n, bad.engine)
 			if clean.engine != 0 {
 				t.Errorf("the clean window reads %d engine allocation(s)", clean.engine)

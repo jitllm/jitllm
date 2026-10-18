@@ -11,7 +11,7 @@ import (
 
 // TestQKVGemmSeesASwap is TestQKVGemmMatchesThreeGemms' violation (RULE 10):
 // with the grid's k and v segments reading each other's weights
-// (tier.SwapQKVGemmForTest), the unsplit arms' logits must part.
+// (tier.WithViolation("qkvgemm")), the unsplit arms' logits must part.
 func TestQKVGemmSeesASwap(t *testing.T) {
 	m := gateUp2Model(t, "Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	if m == nil {
@@ -22,8 +22,7 @@ func TestQKVGemmSeesASwap(t *testing.T) {
 	for i := range ids {
 		ids[i] = int32(1 + (i*7919)%(m.Cfg.NVocab-1))
 	}
-	defer tier.SwapQKVGemmForTest(tier.SwapQKVGemmForTest(true))
-	off, on, st, _ := qkvGemmPrefill(t, m, ids, nil, true, true, -1)
+	off, on, st, _ := qkvGemmPrefill(t, m, ids, nil, true, true, -1, tier.WithViolation("qkvgemm"))
 	if off == nil {
 		t.Skip("no CUDA device")
 	}

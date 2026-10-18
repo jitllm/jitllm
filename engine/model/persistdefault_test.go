@@ -15,15 +15,6 @@ import (
 // binary invocation and the check is that gate's. JITLLM_TEST_PERSIST=deps
 // orders those kernels with dependency counters (tier.PersistDepsByDefaultForTest)
 // and fails the binary when none of them launched.
-func init() {
-	if os.Getenv("JITLLM_TEST_PERSIST") != "" {
-		tier.PersistByDefaultForTest(true)
-	}
-	if os.Getenv("JITLLM_TEST_PERSIST") == "deps" {
-		tier.PersistDepsByDefaultForTest(true)
-	}
-}
-
 func persistRan(code int) int {
 	if os.Getenv("JITLLM_TEST_PERSIST") == "" || code != 0 {
 		return code

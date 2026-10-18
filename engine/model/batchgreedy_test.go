@@ -119,7 +119,7 @@ func TestForwardBatchGreedyMatchesEachSequenceAlone(t *testing.T) {
 // come out either way. At 0.05 the gate failed on a 0.157 flip that a change
 // to the activation quantizer's last bit moved onto row 0, with the two arms
 // still 0.47 apart a step on average either side of it. A row reading another
-// row's history (tier.SetPagedFault "alias") parts by far more.
+// row's history (tier.WithFault "paged", "alias") parts by far more.
 const batchTie = 1.0
 
 // hostGap is |logit(a) - logit(b)| on the host after the prompt and prefix.

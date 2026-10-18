@@ -90,7 +90,7 @@ func TestBatchedMixturePrefillFloatBanks(t *testing.T) {
 // first); float demands the float form ran. It returns the last-row logit
 // NMSE between the arms; violate (a fault armed) returns it before the bounds,
 // for the caller to demand it broke them.
-func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 {
+func batchedMixtureCase(t *testing.T, name string, float, violate bool, extra ...tier.Option) float64 {
 	p := testmodels.Path(name)
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
@@ -119,6 +119,7 @@ func batchedMixtureCase(t *testing.T, name string, float, violate bool) float64 
 		if testdevices.Selected() {
 			opts = append(opts, tier.WithDevices(testdevices.Spec(""))) // a model bigger than one card
 		}
+		opts = append(opts, extra...)
 		g, err := tier.OpenWith(append(opts,
 			tier.WithConfig(func(c *tier.Config) {
 				c.NoBatch = noBatch

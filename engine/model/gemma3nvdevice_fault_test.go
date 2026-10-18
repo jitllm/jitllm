@@ -24,9 +24,7 @@ func TestGemma3nTowerPagesThroughTheDeviceStale(t *testing.T) {
 				t.Skipf("%s: not present", spec)
 			}
 			ran++
-			tier.SetPagedFault("stale")
-			defer tier.SetPagedFault("")
-			got, budget := g3nvPaged(t, spec, g, ref)
+			got, budget := g3nvPaged(t, spec, g, ref, tier.WithFault("paged", "stale"))
 			if got.err != "" {
 				t.Logf("%s, %d bytes, stale page-ins: the encode failed: %s", spec, budget, got.err)
 				return

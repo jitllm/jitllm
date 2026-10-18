@@ -12,7 +12,7 @@ import (
 
 // TestAddNormFoldSeesABrokenAdd is TestAddNormFoldMatchesTheAdd's violation
 // (RULE 10): with the folded add summing the wrong row
-// (tier.BreakAddNormForTest), the prompt's logits must leave the unfolded
+// (tier.WithViolation("addnorm")), the prompt's logits must leave the unfolded
 // arm's.
 func TestAddNormFoldSeesABrokenAdd(t *testing.T) {
 	m := gateUp2Model(t, "Llama-3.2-1B-Instruct-Q4_K_M.gguf")
@@ -26,8 +26,7 @@ func TestAddNormFoldSeesABrokenAdd(t *testing.T) {
 	}
 	cache := t.TempDir()
 	off, _, _ := addNormPrefill(t, m, ids, nil, true, true, -1, cache)
-	defer tier.BreakAddNormForTest(tier.BreakAddNormForTest(true))
-	on, st, _ := addNormPrefill(t, m, ids, nil, false, true, -1, cache)
+	on, st, _ := addNormPrefill(t, m, ids, nil, false, true, -1, cache, tier.WithViolation("addnorm"))
 	if st.AddNormFolded == 0 {
 		t.Fatal("no add folded: the violation reached nothing")
 	}

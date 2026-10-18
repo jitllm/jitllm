@@ -101,8 +101,8 @@ func raggedAsPrefill(t *testing.T, m *Model, prompts [][]int32, tiles bool) {
 			}}
 			sc.Submit(&seqs[i])
 		}
-		tier.SetRowsFault(fault)
-		defer tier.SetRowsFault("")
+		g.SetFault("rows", fault)
+		defer g.SetFault("rows", "")
 		s0 := g.Stats()
 		for sc.Pending() > 0 || sc.Live() > 0 {
 			done, err := sc.Step()

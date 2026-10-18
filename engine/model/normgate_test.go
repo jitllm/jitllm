@@ -170,7 +170,7 @@ func TestNormGateMatchesTwoLaunches(t *testing.T) {
 						}
 					}
 					t.Logf("the trial timed %d keys and kept the fused launch on %d", st.NormGateTimed, st.NormGateKept)
-					defer tier.BreakNormGateForTest(tier.BreakNormGateForTest(true))
+					defer gpu.SetViolation("normgate", gpu.SetViolation("normgate", true))
 					bad, nb := normGateDecode(t, m, gpu, tier.NormGateFused, ids, toks)
 					if nb == 0 {
 						t.Fatal("the violation reached no fused launch")

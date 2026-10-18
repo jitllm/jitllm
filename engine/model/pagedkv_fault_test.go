@@ -16,6 +16,8 @@ import (
 type pagedFaultCase struct {
 	file, fault string
 	repeat      int
+	// arm sets a fault of the kernels package (a package switch of its own);
+	// nil says the fault is the tier's and rides on the arm's tier options.
 	arm         func(string)
 	// prefill runs the paged arm's prompt batched, through the paged prefill
 	// kernels, at pass keys a launch (0 the default).
@@ -38,11 +40,11 @@ func TestPagedKVGateDiscriminates(t *testing.T) {
 	cases := []pagedFaultCase{
 		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "(t-1)/P", 6, kernels.SetPagedFault, false, 0, false},
 		{gemma, "unaligned", 60, kernels.SetPagedFault, false, 0, false},
-		{gemma, "window", 60, tier.SetPagedFault, false, 0, false},
+		{gemma, "window", 60, nil, false, 0, false},
 		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "(t-1)/P", 6, kernels.SetPagedFault, true, 0, false},
 		{gemma, "unaligned", 60, kernels.SetPagedFault, true, 0, false},
-		{gemma, "window", 60, tier.SetPagedFault, true, 0, false},
-		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "passclip", 6, tier.SetPagedFault, true, 64, false},
+		{gemma, "window", 60, nil, true, 0, false},
+		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "passclip", 6, nil, true, 64, false},
 		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "normpart", 6, kernels.SetPagedFault, false, 0, true},
 		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "(t-1)/P", 6, kernels.SetPagedFault, false, 0, true},
 	}
@@ -96,9 +98,15 @@ func TestPagedKVGateDiscriminates(t *testing.T) {
 					t.Fatalf("the clean prefill arm sits %.3e from the clean row-at-a-time one, outside its %.3e band", ec, pagedBand*bo)
 				}
 			}
-			c.arm(c.fault)
+			if c.arm != nil {
+				c.arm(c.fault)
+			} else {
+				arm = append(arm[:len(arm):len(arm)], tier.WithFault("paged", c.fault))
+			}
 			got, _ := pagedRun(t, m, seq, prompt, forced, arm)
-			c.arm("")
+			if c.arm != nil {
+				c.arm("")
+			}
 			var wo, e float64
 			for i := range want {
 				wo = max(wo, logitNMSE(ctl[i], want[i]))
@@ -123,9 +131,7 @@ func TestPagedKVGateDiscriminates(t *testing.T) {
 		defer m.Close()
 		ids := [][]int32{m.Vocab.Encode("Once upon a time, in a small village by the sea, there lived", true),
 			m.Vocab.Encode("1, 2, 3,", true), m.Vocab.Encode("Water boils at", true)}
-		tier.SetPagedFault("alias")
-		got, _, _ := batchGreedy(t, m, ids, 8, 256, append([]tier.Option{tier.WithDevices("gpu:0")}, pagedOpts(pagedKVPage)...))
-		tier.SetPagedFault("")
+		got, _, _ := batchGreedy(t, m, ids, 8, 256, append([]tier.Option{tier.WithDevices("gpu:0"), tier.WithFault("paged", "alias")}, pagedOpts(pagedKVPage)...))
 		for i := 1; i < len(ids); i++ {
 			want := hostGreedy(t, m, ids[i], 8)
 			for j := range want {

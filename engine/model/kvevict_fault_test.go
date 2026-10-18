@@ -15,8 +15,7 @@ import (
 func TestKVEvictionGateDiscriminates(t *testing.T) {
 	eg := newEvictGate(t)
 	free := eg.run(t, false)
-	tier.SetPagedFault("stream")
-	defer tier.SetPagedFault("")
+	eg.extra = []tier.Option{tier.WithFault("paged", "stream")}
 	got := eg.run(t, true)
 	if got.st.KVStreamPasses == 0 {
 		t.Fatal("no streamed pass ran: the violation was never exercised")
@@ -33,8 +32,7 @@ func TestKVEvictionGateDiscriminates(t *testing.T) {
 func TestStagedPassGateDiscriminates(t *testing.T) {
 	eg := newEvictGate(t)
 	wide, _ := eg.stagedPassRun(t, testdevices.Like(t, "cuda:0"), 0)
-	tier.SetPagedFault("passfold")
-	defer tier.SetPagedFault("")
+	eg.extra = []tier.Option{tier.WithFault("paged", "passfold")}
 	narrow, ns := eg.stagedPassRun(t, testdevices.Like(t, "cuda:0"), 128)
 	if ns.StagedPasses == 0 {
 		t.Fatal("no staged pass ran: the violation was never exercised")

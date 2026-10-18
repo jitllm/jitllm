@@ -11,7 +11,7 @@ import (
 
 // TestGate2InSeesASwap is TestFFNRecipesMatchTwoLaunches' violation for the
 // gate2in recipe (RULE 10): with the launch handed up's weight as the gate's
-// (tier.SwapGateUp2ForTest), its logits must leave the two-launch arm's.
+// (tier.WithViolation("gateup2")), its logits must leave the two-launch arm's.
 func TestGate2InSeesASwap(t *testing.T) {
 	m := gateUp2Model(t, gateUp2Models[0])
 	if m == nil {
@@ -20,8 +20,7 @@ func TestGate2InSeesASwap(t *testing.T) {
 	defer m.Close()
 	ids := m.Vocab.Encode("The river rose every spring until the bridges were islands, and", true)
 	toks := []int32{100, 137, 174, 211}
-	defer tier.SwapGateUp2ForTest(tier.SwapGateUp2ForTest(true))
-	outs, sts := ffnRecipeDecode(t, m, ids, toks, true, -1, t.TempDir(), []tier.FFNForm{tier.FFNTwo, tier.FFNGate2In})
+	outs, sts := ffnRecipeDecode(t, m, ids, toks, true, -1, t.TempDir(), []tier.FFNForm{tier.FFNTwo, tier.FFNGate2In}, tier.WithViolation("gateup2"))
 	if outs == nil {
 		t.Skip("no CUDA device here")
 	}

@@ -67,8 +67,8 @@ func TestStreamResidualsAreCutByStream(t *testing.T) {
 					want, _ := run(false)
 					for _, room := range []string{"noscratch", "noscratch-split"} {
 						t.Run(room, func(t *testing.T) {
-							tier.SetRoomFault(room)
-							defer tier.SetRoomFault("")
+							gpu.SetFault("room", room)
+							defer gpu.SetFault("room", "")
 							got, splits := run(true)
 							nm, _ := nmse32(want, got)
 							t.Logf("%d rows, %s: %d split chunk(s), NMSE %.3e against the host, argmax %d / %d",
@@ -79,9 +79,9 @@ func TestStreamResidualsAreCutByStream(t *testing.T) {
 							if math.IsNaN(nm) || nm > 1e-5 || Greedy(got) != Greedy(want) {
 								t.Errorf("NMSE %.3e against the host, argmax %d, want %d", nm, Greedy(got), Greedy(want))
 							}
-							tier.SetRowsFault("streamcutrows")
+							gpu.SetFault("rows", "streamcutrows")
 							bad, _ := run(true)
-							tier.SetRowsFault("")
+							gpu.SetFault("rows", "")
 							nmBad, _ := nmse32(want, bad)
 							t.Logf("with the later streams cut one row on: NMSE %.3e", nmBad)
 							if nmBad <= 1e-5 && Greedy(bad) == Greedy(want) {

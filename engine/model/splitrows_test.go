@@ -31,7 +31,7 @@ var splitRowsModels = []struct {
 // worst logit NMSE of those rows against the host's decode of the same ids,
 // with the device's counters. noSplit is the control arm: every expert of the
 // step on the host.
-func splitRowsCase(t *testing.T, m *Model, ids []int32, blocks int, noSplit, noAdmit bool) (float64, tier.Stats, rowLearning) {
+func splitRowsCase(t *testing.T, m *Model, ids []int32, blocks int, noSplit, noAdmit bool, extra ...tier.Option) (float64, tier.Stats, rowLearning) {
 	t.Helper()
 	c := m.Cfg
 	n := len(ids)
@@ -49,11 +49,11 @@ func splitRowsCase(t *testing.T, m *Model, ids []int32, blocks int, noSplit, noA
 	}()
 	s := m.NewState(n + 10)
 	defer s.Close()
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
+	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(cf *tier.Config) {
 			cf.StreamExperts, cf.HybridExperts = true, true
 			cf.SplitAdmit, cf.NoSplitRows, cf.NoRowAdmits = c.NExpertUsed, noSplit, noAdmit
-		}))
+		})}, extra...)...)
 	if err != nil || g == nil {
 		noDevice(t, "gpu:0", err)
 	}
