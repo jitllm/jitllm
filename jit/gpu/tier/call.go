@@ -873,11 +873,12 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		pagedVar = pk.cur
 	}
 
-	// A scratch with a local rotary table (two bases, gemma3) needs it for
-	// every row the global one has: short, the local layers would rotate by
-	// whatever the buffer last held -- a table of other positions -- and stay
-	// fluent.
-	if bs.csSWA != nil && len(csSWA) < len(cs) {
+	// A plan with a local rotary table (two bases, gemma3) needs it for every
+	// row the global one has: short, the local layers would rotate by whatever
+	// the buffer last held -- a table of other positions -- and stay fluent.
+	// The plan decides, not the scratch: a card's scratch outlives the model
+	// that sized it, and one base's model must not be held to another's table.
+	if p.SWAPeriod > 0 && len(csSWA) < len(cs) {
 		return refuse("the local layers' rotary table has %d floats against the global one's %d",
 			len(csSWA), len(cs))
 	}

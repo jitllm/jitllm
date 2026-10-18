@@ -1870,6 +1870,13 @@ func (g *GPU) releaseLayers(sid uint64, lo, hi int) {
 	g.mu.Lock()
 	for _, li := range gone {
 		delete(g.own, li)
+		delete(g.geo, li)
+	}
+	// Split is a property of the blocks held: with none left it goes, or the
+	// next model's runs are cut as a geometry-split model's and lose their
+	// local rotary table (run.tables).
+	if len(g.own) == 0 {
+		g.split = false
 	}
 	g.cur = 0
 	if d := g.tail(); d != nil {

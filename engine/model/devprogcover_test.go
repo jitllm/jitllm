@@ -2,6 +2,7 @@ package model
 
 import (
 	"cmp"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -61,7 +62,7 @@ func TestDeviceProgramCoverage(t *testing.T) {
 				return
 			}
 			if why == "" {
-				why = "(no program, no reason)"
+				why = fmt.Sprintf("(no program, no reason: block %d of runs %v, %d device blocks; declines %v; device %q)", first, s.DeviceBlocks(), s.GPULayers(), s.DeviceDeclines(), s.devWhy())
 			}
 			reasons[why] = append(reasons[why], name)
 		}()

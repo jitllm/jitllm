@@ -541,6 +541,59 @@ a fusion removed takes no buffer.
    graph features, each moving one encoder branch into the program.
 5. D5. The encoder's block body deleted; the program is the only path.
 
+**What to take from MLIR and IREE next.** Read against the sparse checkouts of
+`llvm-project/mlir` and IREE's `DispatchCreation`, `Dialect/Flow` and
+`Codegen/Common`, with the program as built (`jit/gpu/tier/devprog.go`,
+`devrewrite.go`): twenty-odd rewrites, each a Go function that matches op
+indices and decides legality itself, run in list order to a fixed point,
+each application cloned, checked and undone on refusal. In the order to
+adopt:
+
+1. **A kind table instead of kind switches** (MLIR's op interfaces and
+   traits). One row per `devKind`: elementwise, row-reducing, cheap to
+   recompute, the epilogues and prologues it offers. `check()`, `String` and
+   every rewrite's legality read it; a new kind is a row, not five switch
+   arms.
+2. **One producer/consumer legality** (IREE's `isFusableWithProducer`,
+   `areAllFusionGroupUsesFusableWithProducer`, `wouldExceedOperandLimit`,
+   `hasTransitiveDependencyOnFusionGroup` in `FormDispatchRegions.cpp`). A
+   single `canFold(producer, consumer) error`: every use inside the group,
+   the producer offers the consumer's class, types agree, the operand count
+   stays under the launch's limit, nothing between them touches the slot.
+   matvec-residual, o-in, down-in and add-norm re-expressed over it first, the
+   program gate holding them to their old products.
+3. **A worklist with benefits** (`GreedyPatternRewriteDriver.cpp`): patterns
+   indexed by root kind, tried per op by benefit from the pay model, only
+   changed ops re-queued, an iteration cap, a refusal reason per attempt for
+   the dump. Removes the list order as an encoded priority (gate2in before
+   gate2, add-norm-quant before add-norm), which nothing checks today.
+4. **Slots assigned after rewriting** (bufferization's in-place analysis,
+   reduced to interval colouring over a straight-line list): values carry no
+   slot until the last pass, RULE 13 becomes the colouring's constraint
+   (`Staged` the one permitted alias), and a rewrite no longer fails because
+   two colours collided -- several of the refusals the gate has printed were
+   exactly that.
+5. **Multi-use producers** (`FuseMultiUseElementwiseProducer.cpp`): a cheap
+   producer (a norm's scale, a convert) duplicated into each consumer's
+   prologue, so the norm feeding q, k and v, or gate and up, is one rule
+   instead of the per-pattern use counts in `rwQKV` and `normQuantBefore`.
+6. **Iterator types as the shape** (linalg's `getIteratorTypesArray`,
+   `FusionGroup::getRootParallelLoopToOpMap`): rows, heads, width and which
+   dimension reduces, per kind; a fold is legal when the consumer's parallel
+   dimensions map onto the root's. Not affine maps -- the program has one
+   domain. Taken when rows-versus-ragged checks start repeating across
+   rewrites.
+7. **The tuner's choice as data** (the transform dialect, narrowly): a
+   recipe set (`rwSet`) is already a schedule; a `Choice{name, alternatives}`
+   the fused build takes as input lets the tuner pick and a `With...()`
+   option force one, with the applied trace in the dump.
+
+Not taken: PDL and declarative patterns (a pattern language for about thirty
+kinds that Go closures over a typed table already express); tiling interfaces
+and split-reduction (the kernel IR's tuner owns tiling, below this level); full
+one-shot bufferization (no regions, no deallocation to plan); dispatch-to-
+workgroup conversion (the kernel IR's job here).
+
 ### The first recipe through the interface: the gated output norm
 
 The two candidates for the first recipe written as a rewrite were the gated
