@@ -20,12 +20,17 @@ const (
 	dkRopeQKV                                    // q's rotary, k's into its page and v's copy (ropeQKV)
 	dkGate2                                      // gate and up in one launch writing act(gate)*up (mv.gate2)
 	dkGate2In                                    // the FFN norm, gate and up in one launch (mv.gate2In)
+	dkQKVIn                                      // the norm, its quantize and q, k and v, one launch (layer.qkvIn)
+	dkQKVSep                                     // q, k and v each normalising and quantizing (mv.kernIn)
+	dkResIn                                      // a matvec quantizing its own operand, with the residual (mv.resIn)
+	dkFFNIn                                      // gate and up normalising and quantizing the residual (mv.kernIn, gatedIn)
+	dkDownAct                                    // down forming act(gate)*up as it quantizes, with the residual (mv.resActIn)
 )
 
 func init() {
 	devKindName = append(devKindName[:numBaseKinds:numBaseKinds],
 		"norm_quant", "add_norm", "add_norm_quant", "matvec_res", "matvec_gate", "act_quant", "qkv", "rope_qkv",
-		"gate2", "gate2_in")
+		"gate2", "gate2_in", "qkv_in", "qkv_sep", "matvec_res_in", "ffn_in", "down_act")
 }
 
 // devRewrite is one rewrite: its name and whether it pays and is legal for
@@ -39,11 +44,17 @@ type devRewrite struct {
 // next, the order the encoder's decode takes them in.
 var devRewrites = []devRewrite{
 	{"qkv-grouped", rwQKV},
+	{"qkv-in", rwQKVIn},
+	{"qkv-sep", rwQKVSep},
 	{"rope-qkv-paged", rwRopeQKV},
 	{"matvec-residual", rwMatVecRes},
+	{"o-in", rwOIn},
+	{"ffn-in", rwFFNIn},
 	{"gate2in", rwGate2In},
 	{"gate2", rwGate2},
 	{"matvec-gate", rwMatVecGate},
+	{"down-in", rwDownIn},
+	{"down-act", rwDownAct},
 	{"act-quant", rwActQuant},
 	{"add-norm-quant", rwAddNormQuant},
 	{"add-norm", rwAddNorm},
@@ -324,7 +335,7 @@ func rwGate2In(p *devProgram, l *layer, bs *blockScratch, g *devTier) bool {
 			}
 		}
 	}
-	if src < 0 || p.ops[src].Kind != dkMatVecRes {
+	if src < 0 || p.ops[src].Kind != dkMatVecRes && p.ops[src].Kind != dkResIn {
 		return false
 	}
 	a := p.ops[ai]
@@ -350,4 +361,152 @@ func rwGate2(p *devProgram, l *layer, bs *blockScratch, g *devTier) bool {
 	p.ops[gi] = o
 	p.ops = append(p.ops[:gi+1], p.ops[ai+1:]...)
 	return true
+}
+
+// attnPro reports that the attention half's operand prologue may run: the
+// norm and quantize of the block input fold into what reads them.
+func attnPro(l *layer, bs *blockScratch, g *devTier) bool {
+	return g.actInOn() && l.nAttnB == nil && l.nAttn != nil && bs.normVar == nil && !g.TableSplit
+}
+
+// normQuantBefore reports that ops i-2 and i-1 are a norm of role and the
+// quantize of its row, read by nothing but the ops from i on.
+func normQuantBefore(p *devProgram, i int, role jlm.Role, uses int) bool {
+	if i < 2 {
+		return false
+	}
+	n, q := p.ops[i-2], p.ops[i-1]
+	return n.Kind == dkNorm && n.Role == role && q.Kind == dkQuant && q.In[0] == n.Out[0] &&
+		p.uses(n.Out[0]) == 1 && p.uses(q.Out[0]) == uses
+}
+
+// rwQKVIn: the attention norm, its quantize and the grouped q/k/v, as the
+// grouped launch normalising and quantizing the block input itself.
+func rwQKVIn(p *devProgram, l *layer, bs *blockScratch, g *devTier) bool {
+	if l.qkvIn == nil || !attnPro(l, bs, g) ||
+		l.qkvBias != [3]bool{l.mvq.bias != nil, l.mvk.bias != nil, l.mvv.bias != nil} {
+		return false
+	}
+	for i, o := range p.ops {
+		if o.Kind == dkQKV && normQuantBefore(p, i, jlm.RoleAttnNorm, 1) {
+			n := p.ops[i-2]
+			p.ops[i-2] = devOp{Kind: dkQKVIn, Src: cat(cat(n.Src, p.ops[i-1].Src), o.Src), In: n.In, Out: o.Out}
+			p.ops = append(p.ops[:i-1], p.ops[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// rwQKVSep: the attention norm, its quantize and three q/k/v matvecs, as
+// three launches each normalising and quantizing the block input.
+func rwQKVSep(p *devProgram, l *layer, bs *blockScratch, g *devTier) bool {
+	if l.qkv != nil || l.mvq.kernIn == nil || l.mvk.kernIn == nil || l.mvv.kernIn == nil || !attnPro(l, bs, g) {
+		return false
+	}
+	for i := 2; i+2 < len(p.ops); i++ {
+		a, b, c := p.ops[i], p.ops[i+1], p.ops[i+2]
+		if a.Kind == dkMatVec && a.Role == jlm.RoleAttnQ && b.Kind == dkMatVec && b.Role == jlm.RoleAttnK &&
+			c.Kind == dkMatVec && c.Role == jlm.RoleAttnV && normQuantBefore(p, i, jlm.RoleAttnNorm, 3) {
+			n := p.ops[i-2]
+			p.ops[i-2] = devOp{Kind: dkQKVSep, Src: cat(cat(n.Src, p.ops[i-1].Src), cat(cat(a.Src, b.Src), c.Src)),
+				In: n.In, Out: []devVal{a.Out[0], b.Out[0], c.Out[0]}}
+			p.ops = append(p.ops[:i-1], p.ops[i+3:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// resIn rewrites quantize + matvec_res of role into the matvec quantizing
+// its own operand, where m's prologue variant exists.
+func resIn(p *devProgram, role jlm.Role, ok func(src devVal) bool) bool {
+	for i := 1; i < len(p.ops); i++ {
+		o, q := p.ops[i], p.ops[i-1]
+		if o.Kind == dkMatVecRes && o.Role == role && q.Kind == dkQuant && o.In[0] == q.Out[0] &&
+			p.uses(q.Out[0]) == 1 && ok(q.In[0]) {
+			p.ops[i-1] = devOp{Kind: dkResIn, Src: cat(q.Src, o.Src), In: []devVal{q.In[0], o.In[1]}, Out: o.Out, Role: role}
+			p.ops = append(p.ops[:i], p.ops[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// rwOIn: the attention output's quantize and its matvec with the residual,
+// as the matvec quantizing its own operand.
+func rwOIn(p *devProgram, l *layer, bs *blockScratch, g *devTier) bool {
+	if !g.actInOn() || l.mvo.resIn == nil || l.mvo.k != bs.p.NHead*bs.p.HeadDim || g.TableSplit && l.mvo.alt != nil {
+		return false
+	}
+	return resIn(p, jlm.RoleAttnOut, func(devVal) bool { return true })
+}
+
+// rwFFNIn: the FFN norm, its quantize, gate and up (gated or not), as gate
+// and up normalising and quantizing the residual themselves.
+func rwFFNIn(p *devProgram, l *layer, bs *blockScratch, g *devTier) bool {
+	if !g.actInOn() || l.mvg.kernIn == nil || (l.mvu.gatedIn == nil && l.mvu.kernIn == nil) ||
+		l.nFFNB != nil || l.nFFN == nil || bs.normVar != nil || g.TableSplit && (l.mvg.alt != nil || l.mvu.alt != nil) {
+		return false
+	}
+	gi, ui, ai := gateUp(p)
+	if gi < 0 || !normQuantBefore(p, gi, jlm.RoleFFNNorm, 2) {
+		return false
+	}
+	n, gt, up, am := p.ops[gi-2], p.ops[gi], p.ops[ui], p.ops[ai]
+	src := cat(cat(n.Src, p.ops[gi-1].Src), cat(gt.Src, up.Src))
+	if l.mvu.gatedIn != nil {
+		// Up forms act(gate)*up in its own store: the act_mul goes too.
+		p.ops[gi-2] = devOp{Kind: dkFFNIn, Src: cat(src, am.Src), In: n.In, Out: []devVal{gt.Out[0], am.Out[0]}, Role: jlm.RoleFFNUp}
+		p.ops = append(p.ops[:gi-1], p.ops[ai+1:]...)
+		return true
+	}
+	p.ops[gi-2] = devOp{Kind: dkFFNIn, Src: src, In: n.In, Out: []devVal{gt.Out[0], up.Out[0]}}
+	p.ops = append(p.ops[:gi-1], p.ops[ui+1:]...)
+	return true
+}
+
+// gatedProduct says v is act(gate)*up written by a gated launch.
+func gatedProduct(p *devProgram, v devVal) bool {
+	for _, o := range p.ops {
+		for _, x := range o.Out {
+			if x == v {
+				return o.Kind == dkMatVecGate || o.Kind == dkGate2 || o.Kind == dkGate2In ||
+					o.Kind == dkFFNIn && o.Role == jlm.RoleFFNUp
+			}
+		}
+	}
+	return false
+}
+
+func downOK(l *layer, bs *blockScratch, g *devTier) bool {
+	return g.actInOn() && l.mvd.k == bs.p.NFFN && !(g.TableSplit && l.mvd.alt != nil)
+}
+
+// rwDownIn: the quantize of a gated product and down with the residual, as
+// down quantizing its own operand.
+func rwDownIn(p *devProgram, l *layer, bs *blockScratch, g *devTier) bool {
+	if l.mvd.resIn == nil || !downOK(l, bs, g) {
+		return false
+	}
+	return resIn(p, jlm.RoleFFNDown, func(src devVal) bool { return gatedProduct(p, src) })
+}
+
+// rwDownAct: act_mul over a prologue's gate and up, its quantize and down
+// with the residual, as down forming the product as it quantizes.
+func rwDownAct(p *devProgram, l *layer, bs *blockScratch, g *devTier) bool {
+	if l.mvd.resActIn == nil || !downOK(l, bs, g) {
+		return false
+	}
+	for i := 2; i < len(p.ops); i++ {
+		am, q, d := p.ops[i-2], p.ops[i-1], p.ops[i]
+		if am.Kind == dkActMul && q.Kind == dkQuant && q.In[0] == am.Out[0] && d.Kind == dkMatVecRes &&
+			d.Role == jlm.RoleFFNDown && d.In[0] == q.Out[0] && p.uses(am.Out[0]) == 1 && p.uses(q.Out[0]) == 1 {
+			p.ops[i-2] = devOp{Kind: dkDownAct, Src: cat(cat(am.Src, q.Src), d.Src), In: []devVal{am.In[0], am.In[1], d.In[1]},
+				Out: d.Out, Role: jlm.RoleFFNDown}
+			p.ops = append(p.ops[:i-1], p.ops[i+1:]...)
+			return true
+		}
+	}
+	return false
 }

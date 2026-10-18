@@ -570,6 +570,46 @@ func (g *devTier) layersSession(s backend.Session) {
 					lamv(l.mvu, l.mvu.gate2, n, wu.qs, wu.d, wu.sc, bs.a, bs.ax, at(o.Out[0]), wg.qs, wg.d, wg.sc)
 					g.GateUp2Runs++
 				}
+			case dkQKVIn:
+				var bufArr [17]backend.Buf
+				bufs := append(bufArr[:0], at(o.In[0]), l.nAttn)
+				for i, sg := range [3]struct {
+					m mv
+					r *resident
+				}{{l.mvq, l.wq}, {l.mvk, l.wk}, {l.mvv, l.wv}} {
+					bufs = append(bufs, sg.r.qs, sg.r.d, sg.r.sc, at(o.Out[i]))
+					if sg.m.bias != nil {
+						bufs = append(bufs, sg.m.bias)
+					}
+				}
+				if err == nil {
+					err = lc.launch(l.qkvIn, l.qkvBlocks, l.qkvW, bufs...)
+				}
+				g.ActInLaunches++
+				g.ActInSaved++
+			case dkQKVSep:
+				for i, sg := range [3]struct {
+					m mv
+					r *resident
+				}{{l.mvq, l.wq}, {l.mvk, l.wk}, {l.mvv, l.wv}} {
+					mvIn(sg.m, sg.m.kernIn, sg.r, at(o.Out[i]), at(o.In[0]), l.nAttn, sg.m.bias)
+				}
+				g.ActInSaved++
+			case dkResIn:
+				m, r := mvOf(o.Role)
+				mvIn(m, m.resIn, r, at(o.Out[0]), at(o.In[0]), nil, at(o.In[1]))
+				g.ActInSaved++
+			case dkFFNIn:
+				mvIn(l.mvg, l.mvg.kernIn, l.gate, at(o.Out[0]), at(o.In[0]), l.nFFN, nil)
+				if o.Role == jlm.RoleFFNUp {
+					mvIn(l.mvu, l.mvu.gatedIn, l.up, at(o.Out[1]), at(o.In[0]), l.nFFN, at(o.Out[0]))
+				} else {
+					mvIn(l.mvu, l.mvu.kernIn, l.up, at(o.Out[1]), at(o.In[0]), l.nFFN, nil)
+				}
+				g.ActInSaved++
+			case dkDownAct:
+				mvIn(l.mvd, l.mvd.resActIn, l.down, at(o.Out[0]), at(o.In[0]), at(o.In[1]), at(o.In[2]))
+				g.ActInSaved++
 			case dkRopeQKV:
 				lc.la(pk.ropeQKV, kernels.RoPEQKVPagedThreads(p.NHead, p.NKVHead, p.HeadDim, p.NRot, R, g.KVF16),
 					at(o.In[0]), rcs, bs.zero, at(o.Out[0]), at(o.In[1]), pl.k, at(o.In[2]), pl.v, pl.tab, pk.pRow)
