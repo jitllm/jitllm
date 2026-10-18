@@ -2139,7 +2139,8 @@ type GPU struct {
 	ownMu sync.Mutex
 	model uint64
 	held  bool
-	// devs is every device, fastest first; see order().
+	// devs is every device, in the order they were opened (AddDevices
+	// appends).
 	devs []*devTier
 	// xdev is the expert card (Config.ExpertCard): opened and budgeted like
 	// the others, but in no placement's candidates.
@@ -2321,53 +2322,7 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 			closeAll()
 			return nil, fmt.Errorf("tier: device %d is nil", i)
 		}
-		limit := s.Bytes
-		if limit == 0 {
-			limit = defaultBudget
-		}
-		pool := s.Pool
-		if pool == nil {
-			pool = NewPool(s.Dev.Name(), limit)
-		}
-		why := s.Why
-		if why == "" {
-			why = "the caller set it"
-		}
-		cnt, _ := s.Dev.(backend.AllocCounter)
-		g.devs = append(g.devs, newDevice(&devShared{
-			Config:     cfg,
-			tot:        Stats{Device: label(s.Dev, i)},
-			dev:        s.Dev,
-			cnt:        cnt,
-			pool:       pool,
-			why:        why,
-			ord:        i,
-			name:       DeviceName(s.Name),
-			kerns:      map[kernKey]backend.Kernel{},
-			res:        map[resKey]*resident{},
-			splits:     map[splitKey]int{},
-			groupSplit: map[splitKey]bool{},
-			reduce:     map[[2]int]backend.Kernel{},
-			limit:      limit,
-		}))
-		// The zero-copy path is guarded on UnifiedMemory, not on the extension:
-		// a discrete card may also advertise VK_EXT_external_memory_host, and
-		// importing there would leave the weights behind PCIe for every matvec
-		// to re-read. Only a device whose memory is the host's wraps for free.
-		if a := backend.ImportAlign(s.Dev); a > 0 && unified(s.Dev) {
-			d := g.devs[len(g.devs)-1]
-			d.imp, d.impAlign = s.Dev.(backend.HostImport), uint64(a)
-		}
-		known := false
-		for _, p := range g.pools {
-			known = known || p == pool
-		}
-		if !known {
-			g.pools = append(g.pools, pool)
-		}
-		if pool.Host() {
-			g.hostPool = pool
-		}
+		g.addSlot(i, s)
 	}
 	if cfg.ExpertCard != "" {
 		if err := g.takeExpertCard(); err != nil {
@@ -2376,6 +2331,58 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 		}
 	}
 	return g, nil
+}
+
+// addSlot builds the tier's device for slot s at ordinal i and pools it.
+func (g *GPU) addSlot(i int, s Slot) {
+	cfg := g.Config
+	limit := s.Bytes
+	if limit == 0 {
+		limit = defaultBudget
+	}
+	pool := s.Pool
+	if pool == nil {
+		pool = NewPool(s.Dev.Name(), limit)
+	}
+	why := s.Why
+	if why == "" {
+		why = "the caller set it"
+	}
+	cnt, _ := s.Dev.(backend.AllocCounter)
+	g.devs = append(g.devs, newDevice(&devShared{
+		Config:     cfg,
+		tot:        Stats{Device: label(s.Dev, i)},
+		dev:        s.Dev,
+		cnt:        cnt,
+		pool:       pool,
+		why:        why,
+		ord:        i,
+		name:       DeviceName(s.Name),
+		kerns:      map[kernKey]backend.Kernel{},
+		res:        map[resKey]*resident{},
+		splits:     map[splitKey]int{},
+		groupSplit: map[splitKey]bool{},
+		reduce:     map[[2]int]backend.Kernel{},
+		limit:      limit,
+	}))
+	// The zero-copy path is guarded on UnifiedMemory, not on the extension:
+	// a discrete card may also advertise VK_EXT_external_memory_host, and
+	// importing there would leave the weights behind PCIe for every matvec
+	// to re-read. Only a device whose memory is the host's wraps for free.
+	if a := backend.ImportAlign(s.Dev); a > 0 && unified(s.Dev) {
+		d := g.devs[len(g.devs)-1]
+		d.imp, d.impAlign = s.Dev.(backend.HostImport), uint64(a)
+	}
+	known := false
+	for _, p := range g.pools {
+		known = known || p == pool
+	}
+	if !known {
+		g.pools = append(g.pools, pool)
+	}
+	if pool.Host() {
+		g.hostPool = pool
+	}
 }
 
 // takeExpertCard moves the device Config.ExpertCard names out of the
