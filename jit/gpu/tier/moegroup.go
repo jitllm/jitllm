@@ -99,11 +99,8 @@ type moeGroup struct {
 
 // moeGroupWhyNot names a plan the grouped path does not run, or "".
 func moeGroupWhyNot(p *nn.LayerPlan) string {
-	switch {
-	case p.NExpert == 0:
+	if p.NExpert == 0 {
 		return "not a mixture"
-	case p.NFFNExp%32 != 0 || p.NEmbd%32 != 0:
-		return "an expert width that is not a multiple of 32"
 	}
 	return kernels.MoERouteWhyNot(routeOf(p))
 }
@@ -140,7 +137,7 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 	// ew is the experts' own width: n_embd, or Kimi-K3's latent, where the
 	// gather reads and the combine writes; the router reads n_embd always.
 	ew := p.ExpWidth()
-	wide := max(ew, p.NFFNExp)
+	wide := pad32(max(ew, p.NFFNExp))
 	route := routeOf(p)
 	route.Rows = rows
 	var err error
@@ -177,8 +174,8 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 	// rather than falling back when a bank has no Volta form.
 	if !volta {
 		kern(&m.gather, func() (*ir.Kernel, error) { return kernels.GatherRows(ew, np, rows) })
-		kern(&m.quantH, func() (*ir.Kernel, error) { return kernels.Quantize(np*ew, actWin) })
-		kern(&m.quantX, func() (*ir.Kernel, error) { return kernels.Quantize(np*p.NFFNExp, actWin) })
+		kern(&m.quantH, func() (*ir.Kernel, error) { return quantizeRows(np, ew, actWin) })
+		kern(&m.quantX, func() (*ir.Kernel, error) { return quantizeRows(np, p.NFFNExp, actWin) })
 	}
 	pair := p.ExpertWeightIn
 	kern(&m.gbcount, func() (*ir.Kernel, error) { return kernels.ExpertGroupBlockCount(rows, k, e) })
@@ -749,7 +746,7 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 		quantized := backend.Buf(nil)
 		quantize := func(q backend.Kernel, n int, src backend.Buf) {
 			if quantized != src {
-				la(q, kernels.QuantizeThreads(cols*n/32), 128, src, m.ga, m.gax)
+				la(q, kernels.QuantizeThreads(cols*pad32(n)/32), 128, src, m.ga, m.gax)
 				quantized = src
 			}
 		}
