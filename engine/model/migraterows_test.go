@@ -265,7 +265,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			// The squeezed budget is measured: every block and half the rows'
 			// history, from an attach with room for all of it.
 			var squeezed, limit uint64
-			paged := false
+			paged, holds := false, false
 			if arm.squeeze {
 				pg := open()
 				ps := m.NewBatch(rows, arm.seq)
@@ -273,12 +273,33 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 					t.Fatal(err)
 				}
 				squeezed, limit = pg.Bytes()-pg.Stats().KVBytes/2, pg.Budgets()[0].Limit
+				// A block whose selection reads its whole history holds its
+				// context from the attach (the tier never sends its pages
+				// home), so a model with such blocks grows little or nothing
+				// during a step: its squeeze bites at the attach, as a
+				// contiguous cache's does -- every block and half the context
+				// the attach held, measured against an attach of one position.
+				for li := 0; li < c.NLayer; li++ {
+					holds = holds || c.extraKVHead(li) || c.LayerKind(li).Attends() && c.Indexer()
+				}
 				if sd, ok := ps.ld.(nn.SeqKVDevice); ok && sd.PerSequenceKV() {
-					// Paged: nothing is reserved at attach, so the squeeze is the
-					// attach exactly -- every block and the pool's working set --
-					// and the rows' first pages do not fit. The relocation then
-					// happens during a step, not at the attach.
-					squeezed, paged = pg.Bytes(), true
+					if holds {
+						p1 := open()
+						s1 := m.NewBatch(rows, 1)
+						if err := s1.SetDeviceLayers(p1, arm.start); err != nil {
+							t.Fatal(err)
+						}
+						squeezed = pg.Bytes() - (pg.Bytes()-p1.Bytes())/2
+						s1.Close()
+						p1.Close()
+					} else {
+						// Paged: nothing is reserved at attach, so the squeeze is
+						// the attach exactly -- every block and the pool's working
+						// set -- and the rows' first pages do not fit. The
+						// relocation then happens during a step, not at the
+						// attach.
+						squeezed, paged = pg.Bytes(), true
+					}
 				}
 				ps.Close()
 				pg.Close()
@@ -303,7 +324,18 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			if err := st.SetDeviceLayers(g, arm.start); err != nil {
 				t.Fatal(err)
 			}
-			if arm.squeeze && !paged {
+			if arm.squeeze && holds {
+				// Nothing such a model holds grows during a step, so no step
+				// relocates: the context is charged at placement, and the
+				// squeezed attach declines what does not fit (a block, or the
+				// head) rather than failing mid-prompt. The run below is held
+				// to the host all the same.
+				if st.devCount() == c.NLayer && st.HeadOnDevice() {
+					t.Fatalf("the squeezed attach placed every block and the head: the arm tested no "+
+						"decline (%q)", g.Err())
+				}
+				t.Logf("attach: %d of %d placed, head on a device %v", st.devCount(), c.NLayer, st.HeadOnDevice())
+			} else if arm.squeeze && !paged {
 				// Relocation is the configuration under test: the attach must
 				// have handed blocks home, and the rest of the rows' history
 				// must then fit.
@@ -371,7 +403,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			if check != nil {
 				check(t, g.Stats())
 			}
-			if arm.squeeze {
+			if arm.squeeze && !holds {
 				// The step after the budget came back reclaimed the blocks it
 				// could, sending the rows' history up with them.
 				if st.Reclaims() == 0 {
