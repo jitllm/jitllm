@@ -1,4 +1,4 @@
-//go:build jitllmfault
+//go:build jitllmfault || jitllmtest
 
 package tier
 
@@ -18,17 +18,17 @@ func TestSelectionHistoryViolationIsSeen(t *testing.T) {
 	qsa := &nn.LayerPlan{MaxSeq: 4096, Q4E: &nn.Q4EPlan{QSARatio: 4}}
 	msa := &nn.LayerPlan{MaxSeq: 4096, IdxHeads: 4, IdxBlock: 8}
 	idx := &nn.LayerPlan{MaxSeq: 4096, IdxHeads: 4}
+	// Two bare Configs: the violation armed on one leaves the other alone.
+	cfg, armed := &Config{}, &Config{}
+	armed.hook.setFault("rows", "evictselection")
 	for name, c := range map[string]struct {
 		p    *nn.LayerPlan
 		want bool
 	}{"plain": {plain, false}, "qsa": {qsa, true}, "msa": {msa, true}, "indexer": {idx, true}} {
-		if got := keepsHistory(c.p); got != c.want {
+		if got := cfg.keepsHistory(c.p); got != c.want {
 			t.Fatalf("%s: keepsHistory = %v, want %v", name, got, c.want)
 		}
-		SetRowsFault("evictselection")
-		got := keepsHistory(c.p)
-		SetRowsFault("")
-		if got {
+		if got := armed.keepsHistory(c.p); got {
 			t.Fatalf("%s: the violation left keepsHistory true: the gate cannot see it", name)
 		}
 	}

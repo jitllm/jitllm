@@ -42,7 +42,7 @@ func foldsTheHead(t *testing.T, name, spec string) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+	g, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, spec, err)
 	}

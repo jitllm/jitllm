@@ -53,7 +53,7 @@ func TestPrefixCacheRestoresAWindowedLayer(t *testing.T) {
 					var g *tier.GPU
 					if spec != "" {
 						var err error
-						g, err = tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
+						g, err = openTier(t, append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
 						if err != nil || g == nil {
 							noDevice(t, spec, err)
 						}

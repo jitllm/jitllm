@@ -50,7 +50,7 @@ type g3nvDevice struct {
 func g3nvOnDevice(t *testing.T, tw *Tower, g *g3nvGolden, spec string, stem []float32, host [][]float32,
 	opts ...tier.Option) (r g3nvDevice, ok bool) {
 	t.Helper()
-	gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, opts...)...)
+	gpu, err := openTier(t, append([]tier.Option{tier.WithDevices(spec)}, opts...)...)
 	if err != nil || gpu == nil {
 		return r, false
 	}
@@ -214,7 +214,7 @@ type g3nvStream struct {
 // every page-in re-reads a host page the host pager has reused. ok is false
 // when spec is not present; a budget that places fewer than every block
 // returns with placed short and nothing encoded, as does encode false.
-func g3nvStreamed(t *testing.T, spec string, g *g3nvGolden, budget uint64, encode bool) (r g3nvStream, ok bool) {
+func g3nvStreamed(t *testing.T, spec string, g *g3nvGolden, budget uint64, encode bool, extra ...tier.Option) (r g3nvStream, ok bool) {
 	t.Helper()
 	probe, _ := openGemma3nV(t)
 	host := 2 * probe.container.PageBytes(int(probe.container.H.NBlocks))
@@ -223,7 +223,7 @@ func g3nvStreamed(t *testing.T, spec string, g *g3nvGolden, budget uint64, encod
 	if budget > 0 {
 		opts = append(opts, tier.WithBudget(budget))
 	}
-	gpu, err := tier.OpenWith(opts...)
+	gpu, err := openTier(t, append(opts, extra...)...)
 	if err != nil || gpu == nil {
 		return r, false
 	}
@@ -272,20 +272,20 @@ func g3nvStreamed(t *testing.T, spec string, g *g3nvGolden, budget uint64, encod
 // every block, found by bisection to a MiB, plus a MiB: room for a few of
 // the tower's blocks at once beside its scratch, and not a budget on the
 // knife edge of admission.
-func g3nvPaged(t *testing.T, spec string, g *g3nvGolden, ref g3nvStream) (g3nvStream, uint64) {
+func g3nvPaged(t *testing.T, spec string, g *g3nvGolden, ref g3nvStream, extra ...tier.Option) (g3nvStream, uint64) {
 	t.Helper()
 	full := ref.placedUsed - ref.before
 	lo, hi := uint64(0), full // lo places short, hi places every block
 	for hi-lo > 1<<20 {
 		mid := lo + (hi-lo)/2
-		if r, _ := g3nvStreamed(t, spec, g, mid, false); r.placed == ref.placed {
+		if r, _ := g3nvStreamed(t, spec, g, mid, false, extra...); r.placed == ref.placed {
 			hi = mid
 		} else {
 			lo = mid
 		}
 	}
 	hi += 1 << 20
-	got, _ := g3nvStreamed(t, spec, g, hi, true)
+	got, _ := g3nvStreamed(t, spec, g, hi, true, extra...)
 	if got.err == "" && (got.placed != ref.placed || got.outs == 0 || got.ins == 0) {
 		t.Fatalf("%s: under %d bytes the tower placed %d blocks and paged %d in and %d out",
 			spec, hi, got.placed, got.ins, got.outs)

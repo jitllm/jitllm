@@ -3,7 +3,6 @@ package tier
 import (
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
@@ -34,14 +33,6 @@ const (
 	persistMaxPend = 128 // launches one block may issue
 	persistMaxArgs = 24  // buffers one launch binds
 	persistMaxBufs = 63  // distinct buffers one block binds (one more is the sync buffer)
-)
-
-// persistDefault is Config.Persist's default, false outside a jitllmtest
-// build (PersistByDefaultForTest), and persistTotal every persistent kernel
-// launched in the process, which that build's gates read.
-var (
-	persistDefault, persistDepsDefault bool
-	persistTotal, persistDepTotal      atomic.Int64
 )
 
 // depWords is a session's dep buffer, in u32 words: every composed kernel's
@@ -310,13 +301,11 @@ func (g *devTier) persistIssue(t *launchTo, ps *persister, n int) error {
 			return err
 		}
 		g.PersistLaunches++
-		persistTotal.Add(1)
 		g.PersistParts += s.hi - s.lo
 		g.PersistPhases += s.phases
 		if s.dep {
 			g.PersistDepLaunches++
 			g.PersistDepTiles += s.tiles
-			persistDepTotal.Add(1)
 		}
 	}
 	return nil

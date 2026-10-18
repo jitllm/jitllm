@@ -110,7 +110,7 @@ func TestNormGateMatchesTwoLaunches(t *testing.T) {
 				t.Fatal("no block has a gated delta sublayer graph")
 			}
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+				gpu, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 					tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(func(c *tier.Config) { c.NoGraph = true })},
 					testTierOpts(t)...)...)
 				if err != nil || gpu == nil {
@@ -149,7 +149,7 @@ func TestNormGateMatchesTwoLaunches(t *testing.T) {
 					// whatever it keeps is the bits of the two launches on that
 					// tier (the other tuners' verdicts are its own, so the
 					// reference is taken there too).
-					tuned, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+					tuned, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 						tier.WithTuneCache(t.TempDir()), tier.WithConfig(func(c *tier.Config) { c.NoGraph = true })},
 						testTierOpts(t)...)...)
 					if err != nil || tuned == nil {
@@ -170,7 +170,7 @@ func TestNormGateMatchesTwoLaunches(t *testing.T) {
 						}
 					}
 					t.Logf("the trial timed %d keys and kept the fused launch on %d", st.NormGateTimed, st.NormGateKept)
-					defer tier.BreakNormGateForTest(tier.BreakNormGateForTest(true))
+					defer gpu.SetViolation("normgate", gpu.SetViolation("normgate", true))
 					bad, nb := normGateDecode(t, m, gpu, tier.NormGateFused, ids, toks)
 					if nb == 0 {
 						t.Fatal("the violation reached no fused launch")

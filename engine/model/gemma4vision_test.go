@@ -284,7 +284,7 @@ func TestGemma4MatchesTransformersEndToEnd(t *testing.T) {
 	// too (LayerPlan.BidirOff), held to the host's logits, and the violation
 	// -- every layer bidirectional -- far from them.
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
+		gpu, err := openTier(t, tier.WithDevices(spec))
 		if err != nil || gpu == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -303,7 +303,7 @@ func TestGemma4MatchesTransformersEndToEnd(t *testing.T) {
 			// The violation on a device of its own, the first closed so the
 			// two do not split the card's budget: the blocks the first
 			// placement prepared carry the plan they were prepared with.
-			gpu2, err := tier.OpenWith(tier.WithDevices(spec))
+			gpu2, err := openTier(t, tier.WithDevices(spec))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -333,7 +333,7 @@ func TestGemma4OnDeviceMatchesHost(t *testing.T) {
 	want := g4vEncode(t, tw, g)
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
+		gpu, err := openTier(t, tier.WithDevices(spec))
 		if err != nil || gpu == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

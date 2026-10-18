@@ -114,13 +114,13 @@ const oneRowHeadNMSE = 1e-3
 // oneRowHeadGap runs one session decoding beside another's prompt chunks
 // twice on dev, the one-row head on and off, and returns the worst logit NMSE
 // between the arms and how many one-row heads the first ran.
-func oneRowHeadGap(t *testing.T, m *Model, dev string) (float64, int, int) {
+func oneRowHeadGap(t *testing.T, m *Model, dev string, extra ...tier.Option) (float64, int, int) {
 	t.Helper()
 	plan := runsPlan{early: []string{"The capital of France is"},
 		late: "The clerk counted barrels of salt on the upper floor, and", chunk: 3, steps: 2}
 	run := func(off bool) ([][]float32, int) {
-		g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithConfig(func(c *tier.Config) { c.NoRagHeadOne = off }))
+		g, err := openTier(t, append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+			tier.WithConfig(func(c *tier.Config) { c.NoRagHeadOne = off })}, extra...)...)
 		if err != nil || g == nil {
 			noDevice(t, dev, err)
 		}

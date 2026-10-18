@@ -30,7 +30,7 @@ func TestDecisionDoesNotAllocate(t *testing.T) {
 			}
 			t.Run("host", func(t *testing.T) { decisionAllocs(t, m, nil, 0) })
 			for _, spec := range stepDevices() {
-				g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+				g, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 					tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 				if err != nil || g == nil {
 					t.Logf("%s: not present (%v)", spec, err)

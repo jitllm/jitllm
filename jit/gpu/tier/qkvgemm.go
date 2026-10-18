@@ -107,7 +107,6 @@ func (g *devTier) qkvGemm(l *layer, R int, ragged bool) (*qkvSeg, bool) {
 // qkvSpillMax is the local-memory spill a q/k/v grid may carry.
 const qkvSpillMax = 16
 
-// qkvGemmSwapped hands the grid's k segment v's weights and v's k's (where
+// qkvGemmSwapped (the wrong-answer switch of a gate, Config.hook; WithViolation) hands the grid's k segment v's weights and v's k's (where
 // they are one format and shape): the violation the q/k/v gate must see
 // (SwapQKVGemmForTest, jitllmtest builds only).
-var qkvGemmSwapped bool

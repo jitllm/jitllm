@@ -72,7 +72,7 @@ func rotaryTowerOnDevice(t *testing.T, name string) {
 			cfg = func(cf *tier.Config) { cf.VisionPlaneBudget = 1 }
 		}
 		open := func() *tier.GPU {
-			gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(cfg))
+			gpu, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(cfg))
 			if err != nil || gpu == nil {
 				return nil
 			}
@@ -209,7 +209,7 @@ func TestTextHeadBesideItsTowerOnTheDevice(t *testing.T) {
 			host.Close()
 			ran := 0
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+				gpu, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 				if err != nil || gpu == nil {
 					t.Logf("%s: not present", spec)
 					continue

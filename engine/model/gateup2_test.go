@@ -31,10 +31,10 @@ var gateUp2Devices = testdevices.Specs("cuda", "vulkan", "metal")
 // its tuner chose once and reduce in one order. It returns each arm's
 // logits for every step, the Gate2 arm's stats and the blocks placed; nil
 // where the host has no such device. layers < 0 places every block.
-func gateUp2Decode(t *testing.T, m *Model, devs string, ids, toks []int32, noGraph bool, layers int, cache string) (off, on [][]float32, st tier.Stats, placed int) {
+func gateUp2Decode(t *testing.T, m *Model, devs string, ids, toks []int32, noGraph bool, layers int, cache string, extra ...tier.Option) (off, on [][]float32, st tier.Stats, placed int) {
 	t.Helper()
-	g, err := tier.OpenWith(tier.WithDevices(devs), tier.WithTuneCache(cache),
-		tier.WithConfig(func(c *tier.Config) { c.NoGraph = noGraph }))
+	g, err := openTier(t, append([]tier.Option{tier.WithDevices(devs), tier.WithTuneCache(cache),
+		tier.WithConfig(func(c *tier.Config) { c.NoGraph = noGraph })}, extra...)...)
 	if err != nil || g == nil {
 		return nil, nil, tier.Stats{}, 0
 	}

@@ -48,6 +48,8 @@ func (g *devTier) prefillPass() (width, chunk int) {
 
 // pagedPrefill is a batched scratch's prefill attention set.
 type pagedPrefill struct {
+	// cfg is the tier's Config, which the build's fault state lives on.
+	cfg *Config
 	// flash is the one-kernel form, and fmerge its merge where the plan has
 	// sinks (the kernel's one split writes partials; the merge adds the sink).
 	flash, fmerge backend.Kernel
@@ -141,7 +143,7 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 	// The attention's width: a head, or MLA's whole latent row.
 	rows, hd := bs.rows, pg.shape.Dim
 	gqa := p.NHead / p.NKVHead
-	pf := &pagedPrefill{vars: map[int]*prefillVariant{}}
+	pf := &pagedPrefill{cfg: g.Config, vars: map[int]*prefillVariant{}}
 	comp := func(k *ir.Kernel, err error) backend.Kernel {
 		if err != nil {
 			return nil
@@ -537,7 +539,7 @@ func (g *devTier) prefillPrep(bs *blockScratch, nrow int) error {
 			lo, hi := uint32(base+j*pw), uint32(base+(j+1)*pw)
 			at := len(pl.passD)
 			pl.passD = append(pl.passD, pl.desc...)
-			for o := at; o < at+n && !pagedFaulted("passclip"); o += kernels.PRowWords {
+			for o := at; o < at+n && !g.pagedFaulted(pagedPassclip); o += kernels.PRowWords {
 				for _, f := range []int{kernels.PRowStart, kernels.PRowEnd} {
 					pl.passD[o+f] = min(max(pl.passD[o+f], lo), hi)
 				}
@@ -617,7 +619,7 @@ func (pf *pagedPrefill) prefillAttn(s backend.Session, lc *launcher,
 			args = append(args, sink)
 		}
 		w := vr.softW
-		if pagedFaulted("softwidth") {
+		if pf.cfg.pagedFaulted(pagedSoftwidth) {
 			w = 64
 		}
 		if err := lc.launch(vr.soft, vr.softG, w, args...); err != nil {

@@ -626,7 +626,7 @@ func hybridDeviceNMSEOn(t *testing.T, o hyOpt, spec string) (float64, int) {
 	// k-split per placement and a split is the f32 reduction order, so two
 	// unpinned placements disagree in the last bits, which a deep hybrid
 	// amplifies (TestHybridDeviceErrorIsAmplification).
-	g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+	g, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, spec, err)
 	}
@@ -699,7 +699,7 @@ func TestHybridDeviceErrorIsAmplification(t *testing.T) {
 		// index and its lone matvecs by pointer, so the second arm on the
 		// first's tier ran against the first model's state.
 		// Pinned: see hybridDeviceNMSEOn.
-		g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+		g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}
@@ -784,7 +784,7 @@ func TestPagedWeightsAreNeverServedStale(t *testing.T) {
 			}
 		}
 		// Pinned: see hybridDeviceNMSEOn.
-		g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+		g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}
@@ -857,7 +857,7 @@ func hybridPrefillOnDevice(t *testing.T, o hyOpt) {
 	defer m.Close()
 
 	// Pinned: see hybridDeviceNMSEOn.
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+	g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}
@@ -925,7 +925,7 @@ func hybridSecondSession(t *testing.T, offered int) {
 	defer m.Close()
 
 	// Pinned: see hybridDeviceNMSEOn.
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+	g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}
@@ -1011,7 +1011,7 @@ func TestHybridSecondSessionOnAFullCard(t *testing.T) {
 	}
 
 	// What one session costs, measured rather than guessed.
-	probe, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+	probe, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || probe == nil {
 		noDevice(t, "device", err)
 	}
@@ -1025,7 +1025,7 @@ func TestHybridSecondSessionOnAFullCard(t *testing.T) {
 		t.Skipf("the device took no block of this fixture: %d placed, %d bytes", placed, used)
 	}
 
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithBudget(used),
+	g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithBudget(used),
 		tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
@@ -1085,7 +1085,7 @@ func TestHybridDeviceErrorGrowsWithPosition(t *testing.T) {
 
 func hybridGrowth(t *testing.T, o hyOpt, want int) {
 	// Pinned: see hybridDeviceNMSEOn.
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+	g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}
@@ -1167,7 +1167,7 @@ func TestHybridSecondSessionMatchesTheFirst(t *testing.T) {
 	run := func(sessions int) [][]float32 {
 		// The tuner is pinned: the k-split is the f32 reduction order, the one
 		// knob this equality depends on.
-		g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+		g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}
@@ -1236,7 +1236,7 @@ func TestHybridSecondSessionMatchesTheFirst(t *testing.T) {
 // reused one (NaN). So the gate runs a host decode first under a page budget
 // tight enough to evict, and attaches the device afterwards.
 func TestMoEDeviceUploadReadsTheWholeBank(t *testing.T) {
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+	g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}
@@ -1330,7 +1330,7 @@ func TestMoEDeviceReadsOnlyTheBanksItTakes(t *testing.T) {
 	// Measure what n blocks cost rather than relying on what the default budget
 	// happens to admit.
 	cost := func(n int) (int, uint64) {
-		g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), noReserve)
+		g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), noReserve)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}
@@ -1354,7 +1354,7 @@ func TestMoEDeviceReadsOnlyTheBanksItTakes(t *testing.T) {
 	chunks := func(budget uint64) (int64, int) {
 		m := hybridModelOpt(t, opt)
 		defer m.Close()
-		g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithBudget(budget),
+		g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithBudget(budget),
 			tier.WithDeviceTune(tier.TuneOff), noReserve)
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
@@ -1423,7 +1423,7 @@ func devicePagingUnderHostPager(t *testing.T, o hyOpt) {
 		want[i] = append([]float32(nil), l...)
 	}
 
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+	g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}
@@ -1529,7 +1529,7 @@ func TestPlacedBlockSurvivesAKVCacheRoundTrip(t *testing.T) {
 				t.Fatal(err)
 			}
 			run := func(cached bool) ([]int32, int) {
-				g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+				g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 				if err != nil || g == nil {
 					noDevice(t, "device", err)
 				}

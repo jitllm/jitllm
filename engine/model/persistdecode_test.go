@@ -89,7 +89,7 @@ func TestPersistentDecodeMatchesPerOp(t *testing.T) {
 				var arms [3][][]float32
 				for i, mode := range []int{1, 2, 0} {
 					persist, deps := mode > 0, mode == 2
-					g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff),
+					g, err := openTier(t, tier.WithDeviceTune(tier.TuneOff),
 						tier.WithConfig(func(cf *tier.Config) {
 							cf.Persist, cf.PersistDeps, cf.NoGraph = persist, deps, c.noGraph
 						}))

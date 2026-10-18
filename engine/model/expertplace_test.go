@@ -69,7 +69,7 @@ func TestExpertPlacementIsHonoured(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer m.Close()
-			g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+			g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 			if err != nil || g == nil {
 				noDevice(t, "gpu:0", err)
 			}
@@ -110,7 +110,7 @@ func TestOffCardExpertsRelocate(t *testing.T) {
 			}
 			defer m.Close()
 			open := func() *tier.GPU {
-				g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+				g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 				if err != nil || g == nil {
 					noDevice(t, "gpu:0", err)
 				}
@@ -224,7 +224,7 @@ func TestHybridPrefillMatchesTheHost(t *testing.T) {
 			defer m.Close()
 			// Streamed, so the card arm's bank is a token's sheets even where
 			// the whole bank would fit.
-			g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
+			g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
 				tier.WithConfig(func(c *tier.Config) { c.StreamExperts = true }))
 			if err != nil || g == nil {
 				noDevice(t, "gpu:0", err)
@@ -281,7 +281,7 @@ func TestTopOneRouterRunsHybrid(t *testing.T) {
 	if m.Cfg.NExpertUsed != 1 {
 		t.Fatalf("the fixture routes %d experts; this gate is about a top-1 router", m.Cfg.NExpertUsed)
 	}
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+	g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, "gpu:0", err)
 	}

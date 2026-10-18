@@ -12,7 +12,7 @@ import (
 
 // TestWindowReleaseGateDiscriminates runs the device arm of
 // TestWindowedLayersHoldTheirWindow with the page each window starts in
-// released too (tier.SetPagedFault "winrelease"), and demands that the logits
+// released too (tier.WithFault "paged", "winrelease"), and demands that the logits
 // move or the decode fail: a gate that passes it cannot tell a window read
 // from a released page.
 func TestWindowReleaseGateDiscriminates(t *testing.T) {
@@ -44,9 +44,9 @@ func TestWindowReleaseGateDiscriminates(t *testing.T) {
 	}
 	for _, spec := range specs {
 		t.Run(spec, func(t *testing.T) {
-			open := func() *tier.GPU {
-				g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-					tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+			open := func(extra ...tier.Option) *tier.GPU {
+				g, err := openTier(t, append(append([]tier.Option{tier.WithDevices(spec),
+					tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...), extra...)...)
 				if err != nil || g == nil {
 					noDevice(t, spec, err)
 				}
@@ -58,9 +58,7 @@ func TestWindowReleaseGateDiscriminates(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			tier.SetPagedFault("winrelease")
-			defer tier.SetPagedFault("")
-			g = open()
+			g = open(tier.WithFault("paged", "winrelease"))
 			defer g.Close()
 			got, err := decode(g)
 			if g.Stats().KVWindowReleased == 0 {

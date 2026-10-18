@@ -247,7 +247,7 @@ func TestGemma3nMatchesTransformersEndToEnd(t *testing.T) {
 	}
 	// Both halves on each device: the tower's blocks and the text model's.
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
+		gpu, err := openTier(t, tier.WithDevices(spec))
 		if err != nil || gpu == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

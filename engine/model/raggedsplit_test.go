@@ -45,7 +45,7 @@ func TestRaggedStepKernelSplit(t *testing.T) {
 	// No recordings: a replayed graph's kernels are timed one replay late,
 	// and a ragged step's shapes rarely repeat, so a recorded arm's split
 	// would miss most of its launches. Both arms issue every launch.
-	g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
+	g, err := openTier(t, tier.WithDevices(spec), tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
 	if err != nil || g == nil {
 		t.Fatalf("%s: %v", spec, err)
 	}

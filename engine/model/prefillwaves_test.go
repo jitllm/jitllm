@@ -29,26 +29,26 @@ var prefillWavesModels = []struct {
 // expert cache, and returns the last row's logits with the device's counters.
 // noWaves is the control arm: the chunk's experts on the host, as before they
 // ran on the card.
-func prefillWavesCase(t *testing.T, m *Model, ids []int32, blocks, slots int, noWaves bool) ([]float32, tier.Stats) {
-	last, st, _ := prefillWavesAllocs(t, m, ids, blocks, slots, noWaves)
+func prefillWavesCase(t *testing.T, m *Model, ids []int32, blocks, slots int, noWaves bool, extra ...tier.Option) ([]float32, tier.Stats) {
+	last, st, _ := prefillWavesAllocs(t, m, ids, blocks, slots, noWaves, extra...)
 	return last, st
 }
 
 // prefillWavesAllocs is prefillWavesCase that also runs the chunk a second,
 // warm time and returns the heap allocations that second run made.
-func prefillWavesAllocs(t *testing.T, m *Model, ids []int32, blocks, slots int, noWaves bool) ([]float32, tier.Stats, uint64) {
+func prefillWavesAllocs(t *testing.T, m *Model, ids []int32, blocks, slots int, noWaves bool, extra ...tier.Option) ([]float32, tier.Stats, uint64) {
 	t.Helper()
 	c := m.Cfg
 	s := m.NewState(len(ids) + 2)
 	defer s.Close()
 	// The selected device where JITLLM_TEST_DEVICES names one: the waves run
 	// on every backend.
-	g, err := tier.OpenWith(tier.WithDevices(testdevices.One("gpu:0")), tier.WithDeviceTune(tier.TuneOff),
+	g, err := openTier(t, append([]tier.Option{tier.WithDevices(testdevices.One("gpu:0")), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(cf *tier.Config) {
 			cf.StreamExperts, cf.HybridExperts = true, true
 			cf.SplitAdmit, cf.NoPrefillExperts = c.NExpertUsed, noWaves
 			cf.StreamCacheSlots = slots
-		}))
+		})}, extra...)...)
 	if err != nil || g == nil {
 		noDevice(t, testdevices.One("gpu:0"), err)
 	}

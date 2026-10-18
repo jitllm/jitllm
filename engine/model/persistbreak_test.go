@@ -59,7 +59,7 @@ func persistBroken(t *testing.T, deps bool, brk func() func()) {
 		if deps {
 			mode = tier.WithPersistDeps(persist, 0)
 		}
-		g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), mode,
+		g, err := openTier(t, tier.WithDeviceTune(tier.TuneOff), mode,
 			tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
 		if err != nil || g == nil {
 			t.Skipf("no GPU: %v", err)

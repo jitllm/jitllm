@@ -43,7 +43,7 @@ func TestStepAcrossSessionsLatentMatchesEachAlone(t *testing.T) {
 				// wrote must not reach a real row (RULE 13).
 				for _, poison := range []bool{false, true} {
 					t.Run(fmt.Sprintf("%s/poisoned=%v", dev, poison), func(t *testing.T) {
-						g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+						g, err := openTier(t, append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 							tier.WithPoisonKV(poison), tier.WithPoisonScratch(poison)}, testTierOpts(t)...)...)
 						if err != nil || g == nil {
 							noDevice(t, dev, err)
@@ -303,7 +303,7 @@ func latentPrefillArms(t *testing.T, m *Model, dev string, opt ...tier.Option) p
 		err    string
 	}
 	run := func(noBatch bool) (a arm) {
-		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+		g, err := openTier(t, append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 			tier.WithPoisonScratch(true), tier.WithConfig(func(cf *tier.Config) { cf.NoBatch = noBatch })}, opt...)...)
 		if err != nil || g == nil {
 			noDevice(t, dev, err)
@@ -382,7 +382,7 @@ func TestStepAcrossSessionsNoPELatentGateDiscriminates(t *testing.T) {
 	}
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
-			g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+			g, err := openTier(t, append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 				tier.WithMLAFault(tier.MLAFaultRotateNoPE)}, testTierOpts(t)...)...)
 			if err != nil || g == nil {
 				noDevice(t, dev, err)

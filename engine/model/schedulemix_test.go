@@ -127,6 +127,9 @@ type mixedCase struct {
 	gens []int
 	spec string
 	want [][]int32
+	// extra is added to every tier open() makes: a violation gate arms its
+	// fault here, after want was taken clean.
+	extra []tier.Option
 	// tie is how far apart on the host the first difference may be: none on
 	// the host, whose batched rows compute exactly what one sequence does.
 	tie float64
@@ -188,8 +191,8 @@ func (c *mixedCase) open() *tier.GPU {
 	if c.spec == "" {
 		return nil
 	}
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(c.spec), tier.WithDeviceTune(tier.TuneOff)},
-		testTierOpts(c.t)...)...)
+	g, err := openTier(c.t, append(append([]tier.Option{tier.WithDevices(c.spec), tier.WithDeviceTune(tier.TuneOff)},
+		testTierOpts(c.t)...), c.extra...)...)
 	if err != nil || g == nil {
 		noDevice(c.t, c.spec, err)
 	}

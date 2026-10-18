@@ -38,7 +38,7 @@ func TestStagedPagedPrefillMatchesDecode(t *testing.T) {
 func stagedPrefillGap(t *testing.T, m *Model, dev string) float64 {
 	t.Helper()
 	ids := m.Vocab.Encode("The clerk counted barrels of salt on the upper floor, and", true)
-	g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff))
+	g, err := openTier(t, tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
 	}

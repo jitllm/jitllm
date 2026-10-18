@@ -740,7 +740,7 @@ func (g *devTier) windowPages(sid uint64, kp *kvPool, li int, l *kvLayerPool, se
 			}
 		}
 	}
-	fault := pagedFaulted("winrelease")
+	fault := g.pagedFaulted(pagedWinrelease)
 	for j := l.keyStart(se.start) / P; j < se.start/P && !fault; j++ {
 		if l.owned[s][j] == 0 && (j >= ev || l.home[s][j] == nil) {
 			return fmt.Errorf("block %d: sequence %v reads position %d's window from page %d, released "+
@@ -893,11 +893,11 @@ func (g *devTier) pagedRows(sid uint64, dst []pagedRow, R, nrow, pos int, rag *r
 		switch {
 		case rag != nil && r < len(rag.pos):
 			base := rag.slot[r] - rag.pos[r]
-			if pagedFaulted("alias") {
+			if g.pagedFaulted(pagedAlias) {
 				base = rag.slot[0] - rag.pos[0]
 			}
 			s := sid
-			if rag.sid != nil && !pagedFaulted("session") {
+			if rag.sid != nil && !g.pagedFaulted(pagedSession) {
 				s = rag.sid[r]
 			}
 			rows[r] = pagedRow{s: seqID{s, base}, pos: rag.pos[r]}
@@ -946,7 +946,7 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	// So does a selection over the whole history (the lightning indexer,
 	// MiniMax-M3's and QSA's block selections): a streamed pass cannot serve
 	// it, so its pages cannot go home either.
-	kp.layers[li].noEvict = p.DS4 != nil || keepsHistory(p)
+	kp.layers[li].noEvict = p.DS4 != nil || g.keepsHistory(p)
 	if d := p.DS4; d != nil && p.Comp != nn.DS4CompNone {
 		ek := entKey(li)
 		geom := kvGeom{kvRow: d.EntRowAt(p.Comp, p.HeadDim), mla: true}
@@ -975,7 +975,7 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	// A history that cannot leave the card is held at the context asked for,
 	// charged here with the block, so the budget declines the block at
 	// placement rather than a call failing for want of a page mid-prompt.
-	if keepsHistory(p) {
+	if g.keepsHistory(p) {
 		if want := contextPages(kp, g.capped(p).MaxSeq, seats); kp.layers[li].n < want {
 			if err := g.growKVLayer(kp, kp.layers[li], want); err != nil {
 				if fresh {
@@ -995,8 +995,8 @@ func selectsHistory(p *nn.LayerPlan) bool { return p.IdxHeads != 0 || p.QSA() }
 // keepsHistory is selectsHistory as the pool acts on it: such a block's pages
 // never leave the card and its context is charged with it. The row fault
 // evictselection withdraws both, the violation the gates demand fail.
-func keepsHistory(p *nn.LayerPlan) bool {
-	return selectsHistory(p) && !rowsFaulted("evictselection")
+func (c *Config) keepsHistory(p *nn.LayerPlan) bool {
+	return selectsHistory(p) && !c.rowsFaulted(rowsEvictselection)
 }
 
 // contextPages is the pages a block that holds its context needs for seats
@@ -1031,7 +1031,7 @@ func (g *devTier) pagedLayerBytes(p *nn.LayerPlan) uint64 {
 		words = g.kvp.tabWords
 	}
 	pages := uint64(1 + g.sessions())
-	if keepsHistory(p) && g.kvp != nil {
+	if g.keepsHistory(p) && g.kvp != nil {
 		// Held at the context asked for (pagedLayer).
 		pages = uint64(contextPages(g.kvp, g.capped(p).MaxSeq, int(g.sessions())))
 	}

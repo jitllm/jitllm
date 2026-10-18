@@ -183,7 +183,7 @@ func TestHunyuanVLTowerOnDeviceMatchesHost(t *testing.T) {
 			tw.opt.towerGPULayers = -1
 			ran := 0
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+				gpu, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 				if err != nil || gpu == nil {
 					t.Logf("%s: not present", spec)
 					continue
@@ -262,7 +262,7 @@ func TestHunyuanVLRealTowerOnDevice(t *testing.T) {
 	tw.opt.towerGPULayers = -1
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec))
+		gpu, err := openTier(t, tier.WithDevices(spec))
 		if err != nil || gpu == nil {
 			t.Logf("%s: not present", spec)
 			continue

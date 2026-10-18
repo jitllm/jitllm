@@ -63,7 +63,7 @@ func schedulerOnSplit(t *testing.T, p string) {
 		ids[i] = m.Vocab.Encode(pr, true)
 	}
 	open := func(t *testing.T, spec string, paging bool) *tier.GPU {
-		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)},
+		g, err := openTier(t, append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)},
 			testTierOpts(t)...)...)
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
@@ -83,7 +83,7 @@ func schedulerOnSplit(t *testing.T, p string) {
 	// that share of the weights plus what the whole model costs a card beside
 	// its weights.
 	var sc uint64
-	if g, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff)); err == nil && g != nil {
+	if g, err := openTier(t, tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff)); err == nil && g != nil {
 		sz := NewScheduler(m, rows, seq)
 		if err := sz.st.SetDeviceLayers(g, -1); err == nil && g.Stats().BudgetUsed > m.WeightBytes() {
 			sc = g.Stats().BudgetUsed - m.WeightBytes()

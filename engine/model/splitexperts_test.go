@@ -107,7 +107,7 @@ func TestSplitExpertsMatchTheHost(t *testing.T) {
 					func() {
 						s := m.NewState(len(ids) + 2)
 						defer s.Close()
-						g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
+						g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
 							tier.WithConfig(func(c *tier.Config) {
 								c.StreamExperts, c.HybridExperts, c.StreamCacheSlots = true, true, arm.slots
 								c.SplitAdmit = k
@@ -230,7 +230,7 @@ func TestHybridShortPromptTakesTheDecodePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
+	g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(c *tier.Config) { c.StreamExperts, c.HybridExperts = true, true }))
 	if err != nil || g == nil {
 		noDevice(t, "gpu:0", err)

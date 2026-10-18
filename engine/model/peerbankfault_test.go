@@ -27,9 +27,7 @@ func TestExpertCardGateDiscriminates(t *testing.T) {
 	defer m.Close()
 	ids := prefillWavesIDs(m)
 	want, _ := peerRun(t, m, ids, specs[:1], "")
-	tier.SetPeerFault("wrong")
-	defer tier.SetPeerFault("")
-	got, st := peerRun(t, m, ids, specs, specs[1])
+	got, st := peerRun(t, m, ids, specs, specs[1], tier.WithFault("peer", "wrong"))
 	worst := 0.0
 	for i := range want {
 		nm, _ := nmse32(want[i], got[i])

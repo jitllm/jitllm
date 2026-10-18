@@ -21,7 +21,7 @@ func (g *devTier) cutRows(x []float32, streams, d, n, off, m int) []float32 {
 	buf = growF32(buf, streams*m*d)
 	for k := 0; k < streams; k++ {
 		at := off
-		if k > 0 && rowsFaulted("streamcutrows") {
+		if k > 0 && g.rowsFaulted(rowsStreamcutrows) {
 			// The violation: the streams after the first are cut one row on.
 			at = (off + 1) % (n - m + 1)
 		}
@@ -40,7 +40,7 @@ func (g *devTier) uncutRows(x, v []float32, streams, d, n, off, m int) {
 	}
 	for k := 0; k < streams; k++ {
 		at := off
-		if k > 0 && rowsFaulted("streamcutrows") {
+		if k > 0 && g.rowsFaulted(rowsStreamcutrows) {
 			at = (off + 1) % (n - m + 1)
 		}
 		copy(x[(k*n+at)*d:(k*n+at+m)*d], v[k*m*d:(k+1)*m*d])

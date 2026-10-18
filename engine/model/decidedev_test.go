@@ -218,7 +218,7 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 			nb := decisionBlocks(m)
 			ran := 0
 			for _, spec := range stepDevices() {
-				probe, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+				probe, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 				if err != nil || probe == nil {
 					t.Logf("%s: not present (%v)", spec, err)
 					continue
@@ -227,7 +227,7 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 				ran++
 				t.Run(spec, func(t *testing.T) {
 					open := func() *tier.GPU {
-						g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+						g, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 							tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 						if err != nil {
 							t.Fatal(err)
@@ -401,7 +401,7 @@ func TestClefHeadLayerNormOnEveryDevice(t *testing.T) {
 	all := func(n int) bool { return n == nb }
 	ran := 0
 	for _, spec := range stepDevices() {
-		probe, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		probe, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || probe == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -409,7 +409,7 @@ func TestClefHeadLayerNormOnEveryDevice(t *testing.T) {
 		probe.Close()
 		ran++
 		t.Run(spec, func(t *testing.T) {
-			g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+			g, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 				tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 			if err != nil {
 				t.Fatal(err)

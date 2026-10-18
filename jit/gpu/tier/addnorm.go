@@ -32,7 +32,6 @@ func (g *devTier) foldAddNorm(bs *blockScratch, l *layer, li, hi, R int, voltaOn
 	return g.rmsF16For(bs, nl.mvq, R, true)
 }
 
-// addNormBroken makes a folded add sum x2 with itself instead of with the
+// addNormBroken (the wrong-answer switch of a gate, Config.hook; WithViolation) makes a folded add sum x2 with itself instead of with the
 // FFN's output: the violation the fold's gate must see (BreakAddNormForTest,
 // jitllmtest builds only).
-var addNormBroken bool

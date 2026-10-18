@@ -37,7 +37,7 @@ func TestShortChunkRunsAsRaggedStep(t *testing.T) {
 		}
 		defer m.Close()
 		ids := m.Vocab.Encode(strings.Repeat("The quick brown fox jumps over the lazy dog. ", 80), true)[:n]
-		g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff))
+		g, err := openTier(t, tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, "device", err)
 		}

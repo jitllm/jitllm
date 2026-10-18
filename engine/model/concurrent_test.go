@@ -38,7 +38,7 @@ func TestConcurrentMultiDeviceDoesNotLeak(t *testing.T) {
 		defer m.Close()
 
 		// Every device the host reports, not just the fastest.
-		g, err := tier.OpenWith(tier.WithDevices("all"), tier.WithDeviceTune(tier.TuneOff))
+		g, err := openTier(t, tier.WithDevices("all"), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || g == nil {
 			noDevice(t, "devices", err)
 		}

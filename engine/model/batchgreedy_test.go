@@ -119,7 +119,7 @@ func TestForwardBatchGreedyMatchesEachSequenceAlone(t *testing.T) {
 // come out either way. At 0.05 the gate failed on a 0.157 flip that a change
 // to the activation quantizer's last bit moved onto row 0, with the two arms
 // still 0.47 apart a step on average either side of it. A row reading another
-// row's history (tier.SetPagedFault "alias") parts by far more.
+// row's history (tier.WithFault "paged", "alias") parts by far more.
 const batchTie = 1.0
 
 // hostGap is |logit(a) - logit(b)| on the host after the prompt and prefix.
@@ -150,7 +150,7 @@ var lastBatchName string
 // a single State on the same card, and the count of sm_70 tensor-core matvecs.
 func batchGreedy(t *testing.T, m *Model, ids [][]int32, gen, seq int, opt []tier.Option) (got [][]int32, after []int32, volta int) {
 	t.Helper()
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDeviceTune(tier.TuneOff)}, opt...)...)
+	g, err := openTier(t, append([]tier.Option{tier.WithDeviceTune(tier.TuneOff)}, opt...)...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

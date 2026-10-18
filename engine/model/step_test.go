@@ -43,7 +43,7 @@ func TestStepAcrossSessionsMatchesEachAlone(t *testing.T) {
 
 func stepAcrossSessions(t *testing.T, m *Model, spec string) {
 	ctl := orderControl(t, m, spec)
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)},
+	g, err := openTier(t, append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)},
 		testTierOpts(t)...)...)
 	if err != nil || g == nil {
 		noDevice(t, spec, err)
@@ -196,10 +196,10 @@ func mixtureStepChecks(t *testing.T, m *Model, r stepResult) {
 
 // stepTier opens dev for a step gate on m, its recurrent pools in the shared
 // form when asked, or skips naming the device.
-func stepTier(t *testing.T, m *Model, dev string, shared bool) *tier.GPU {
+func stepTier(t *testing.T, m *Model, dev string, shared bool, extra ...tier.Option) *tier.GPU {
 	t.Helper()
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithConfig(func(c *tier.Config) { c.SharedRec = shared })}, testTierOpts(t)...)...)
+	g, err := openTier(t, append(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+		tier.WithConfig(func(c *tier.Config) { c.SharedRec = shared })}, testTierOpts(t)...), extra...)...)
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
 	}
@@ -490,7 +490,7 @@ func orderControl(t *testing.T, m *Model, dev string) float64 {
 	const steps = 8 // stepGate's
 	var fed [][]int32
 	arm := func(split int) [][]float32 {
-		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+		g, err := openTier(t, append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 			tier.WithSplit(split)}, testTierOpts(t)...)...)
 		if err != nil || g == nil {
 			noDevice(t, dev, err)

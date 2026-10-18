@@ -49,7 +49,7 @@ func TestMLAOnEveryDevice(t *testing.T) {
 				t.Fatalf("%s places no block at all -- this gate would prove nothing", name)
 			}
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+				gpu, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 				if err != nil || gpu == nil {
 					t.Logf("%s: not present (%v)", spec, err)
 					continue
@@ -109,7 +109,7 @@ func TestMLADeviceFaultsAreCaught(t *testing.T) {
 	want := teacherForce(t, m, ids)
 	ran := 0
 	for _, spec := range stepDevices() {
-		if g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)); err == nil && g != nil {
+		if g, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)); err == nil && g != nil {
 			g.Close()
 		} else {
 			t.Logf("%s: not present (%v)", spec, err)
@@ -125,7 +125,7 @@ func TestMLADeviceFaultsAreCaught(t *testing.T) {
 			{"per-head-sheet-off-by-one", tier.MLAFaultSheetOff},
 		} {
 			t.Run(spec+"/"+f.name, func(t *testing.T) {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec),
+				gpu, err := openTier(t, tier.WithDevices(spec),
 					tier.WithDeviceTune(tier.TuneOff), tier.WithMLAFault(f.kind))
 				if err != nil || gpu == nil {
 					t.Fatalf("%s: %v", spec, err)
@@ -227,7 +227,7 @@ func TestMLASeamMovesWithItsHistory(t *testing.T) {
 	want := teacherForce(t, m, ids)
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		gpu, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || gpu == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -288,7 +288,7 @@ func TestMLAOnADeviceWithPoisonedBuffers(t *testing.T) {
 	want := teacherForce(t, m, ids)
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
+		gpu, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
 			tier.WithPoisonKV(true), tier.WithPoisonScratch(true))
 		if err != nil || gpu == nil {
 			t.Logf("%s: not present (%v)", spec, err)
@@ -344,7 +344,7 @@ func TestMLAStepsTheKVDownAtTheRightWidths(t *testing.T) {
 			}
 			want := teacherForce(t, m, ids)
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+				gpu, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 				if err != nil || gpu == nil {
 					continue
 				}
@@ -422,7 +422,7 @@ func TestNoPEMLAOnEveryDevice(t *testing.T) {
 	want := teacherForce(t, m, ids)
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		gpu, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || gpu == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

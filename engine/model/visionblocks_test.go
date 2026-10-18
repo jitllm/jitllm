@@ -402,7 +402,7 @@ func TestImageEncodeStepsBesideDecode(t *testing.T) {
 	t.Run("host", func(t *testing.T) { check(t, nil) })
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			g, err := tier.OpenWith(tier.WithDevices(spec))
+			g, err := openTier(t, tier.WithDevices(spec))
 			if err != nil || g == nil {
 				t.Skipf("%s: not present (%v)", spec, err)
 			}
@@ -448,7 +448,7 @@ func towerResumesAcrossARelocation(t *testing.T, openTower func(t testing.TB, op
 	m0.Close()
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			g, err := tier.OpenWith(tier.WithDevices(spec))
+			g, err := openTier(t, tier.WithDevices(spec))
 			if err != nil || g == nil {
 				t.Skipf("%s: not present (%v)", spec, err)
 			}

@@ -207,7 +207,7 @@ func TestKimiK3DeviceRunsTheChunkWhole(t *testing.T) {
 	}
 	ran := 0
 	for _, spec := range stepDevices() {
-		gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+		gpu, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 			tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 		if err != nil || gpu == nil {
 			t.Logf("%s: not present (%v)", spec, err)

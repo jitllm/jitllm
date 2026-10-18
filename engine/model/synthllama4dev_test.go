@@ -78,7 +78,7 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 
 	ran := 0
 	for _, spec := range stepDevices() {
-		probe, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		probe, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 		if err != nil || probe == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue
@@ -89,7 +89,7 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 			// A fresh tier per arm: a warm tier's scratch is the first plan's,
 			// so planConflict would refuse a violation instead of running it.
 			onDevice := func(c *Config, run func(*State) [][]float32) ([][]float32, string) {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+				gpu, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -130,7 +130,7 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 			// chunk, temperature table and kernels (planUnion widens none), so
 			// a second session with another Llama 4 shape must be refused.
 			func() {
-				gpu, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+				gpu, err := openTier(t, tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
 				if err != nil {
 					t.Fatal(err)
 				}

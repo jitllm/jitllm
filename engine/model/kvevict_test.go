@@ -37,6 +37,9 @@ type evictGate struct {
 	turn     []int32
 	hostTurn [][]float32
 	host     [][]float32
+	// extra is added to every tier the gate opens: a violation gate arms its
+	// fault here, on the gate instance.
+	extra []tier.Option
 }
 
 const evictDecode = 320
@@ -103,11 +106,11 @@ func (eg *evictGate) second(t *testing.T, st *State) [][]float32 {
 // open is an arm's device and State, the model wholly placed and the prompt
 // in; squeeze then holds the budget at a few pages of slack.
 func (eg *evictGate) open(t *testing.T, squeeze bool) (*tier.GPU, *State, int) {
-	g, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff),
+	g, err := openTier(t, append([]tier.Option{tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(c *tier.Config) {
 			c.KVPage = 64 // the smallest page: several over a short history
 			c.StagedDecode = true
-		}))
+		})}, eg.extra...)...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

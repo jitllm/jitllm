@@ -14,7 +14,7 @@ import (
 
 // TestGateUpFuseSeesASwap is TestGateUpFuseMatchesThreeLaunches' violation
 // (RULE 10): with down's prologue handed up's row as the gate
-// (tier.SwapGateUpForTest), the fused arm's logits must leave the
+// (tier.WithViolation("gateup")), the fused arm's logits must leave the
 // three-launch arm's. If they do not, the bit-identity says nothing about
 // which rows the fused down reads.
 func TestGateUpFuseSeesASwap(t *testing.T) {
@@ -34,8 +34,7 @@ func TestGateUpFuseSeesASwap(t *testing.T) {
 	toks := []int32{100, 137, 174, 211}
 	cache := t.TempDir()
 	off, _, _ := gateUpDecode(t, m, ids, toks, false, true, -1, cache)
-	defer tier.SwapGateUpForTest(tier.SwapGateUpForTest(true))
-	on, st, _ := gateUpDecode(t, m, ids, toks, true, true, -1, cache)
+	on, st, _ := gateUpDecode(t, m, ids, toks, true, true, -1, cache, tier.WithViolation("gateup"))
 	if st.GateUpFused == 0 {
 		t.Fatal("no FFN fused: the violation reached nothing")
 	}

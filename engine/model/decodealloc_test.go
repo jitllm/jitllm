@@ -160,7 +160,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 			})
 			for _, spec := range specs {
 				t.Run(spec, func(t *testing.T) {
-					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
+					g, err := openTier(t, append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, spec, err)
 					}
@@ -707,7 +707,7 @@ func TestOffCardDecodeDoesNotAllocate(t *testing.T) {
 						t.Fatal(err)
 					}
 					defer m.Close()
-					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("gpu:0")}, testTierOpts(t)...)...)
+					g, err := openTier(t, append([]tier.Option{tier.WithDevices("gpu:0")}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, "gpu:0", err)
 					}
@@ -762,7 +762,7 @@ func TestStepAllocsUnderABudget(t *testing.T) {
 	spec := testdevices.One("vulkan")
 	for _, mib := range []uint64{112, 128} {
 		t.Run(fmt.Sprint(mib, "MiB"), func(t *testing.T) {
-			g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec), tier.WithBudget(mib << 20)},
+			g, err := openTier(t, append([]tier.Option{tier.WithDevices(spec), tier.WithBudget(mib << 20)},
 				testTierOpts(t)...)...)
 			if err != nil || g == nil {
 				noDevice(t, spec, err)

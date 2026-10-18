@@ -33,7 +33,7 @@ func TestTilePrefillMatchesTheHost(t *testing.T) {
 	// One tier per model: a tier's block scratch is built from the first
 	// model offered to it.
 	open := func(t *testing.T) *tier.GPU {
-		g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff),
+		g, err := openTier(t, tier.WithDeviceTune(tier.TuneOff),
 			tier.WithConfig(func(c *tier.Config) { c.PreferTiles = true }))
 		if err != nil || g == nil {
 			t.Skipf("no GPU: %v", err)

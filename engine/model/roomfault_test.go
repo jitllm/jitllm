@@ -11,7 +11,7 @@ import (
 )
 
 // The paths a device short of room takes rather than failing a step, each
-// forced by tier.SetRoomFault and each held to a violation it must not
+// forced by tier.WithFault and each held to a violation it must not
 // survive (RULE 10): a recurrent seat reset from host-written zeros, a
 // Scheduler clamped to the batched scratch the device holds (nn.RowsWidther),
 // and a step whose recurrent seats do not fit run with the blocks home
@@ -73,7 +73,6 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 			}
 		}
 	}
-	defer tier.SetRoomFault("")
 
 	t.Run("reset-zeros-from-host", func(t *testing.T) {
 		// Each arm on a fresh device: a kept zeros buffer from an earlier
@@ -90,9 +89,9 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 			if _, err := st.Prefill(prompt); err != nil {
 				t.Fatal(err)
 			}
-			tier.SetRoomFault(fault)
+			g.SetFault("room", fault)
 			st.Reset()
-			tier.SetRoomFault("")
+			g.SetFault("room", "")
 			_, err := st.Prefill(prompt)
 			return err, g.Stats().RecZeroHost
 		}
@@ -111,9 +110,9 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 	t.Run("width-clamped", func(t *testing.T) {
 		g := swaTier(t)
 		defer g.Close()
-		tier.SetRoomFault("narrow")
+		g.SetFault("room", "narrow")
 		got, st, err := roomBatch(t, m, g, 0)
-		tier.SetRoomFault("")
+		g.SetFault("room", "")
 		if err != nil {
 			t.Fatalf("a device holding only 64-row scratch: %v", err)
 		}
@@ -132,9 +131,9 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 				t.Fatalf("sequence %d: %v clamped, %v at a stated 64-row budget", i, got[i], ref[i])
 			}
 		}
-		tier.SetRoomFault("narrow-lie")
+		g.SetFault("room", "narrow-lie")
 		_, _, err = roomBatch(t, m, g, 0)
-		tier.SetRoomFault("")
+		g.SetFault("room", "")
 		if err == nil {
 			t.Fatal("the violation (RowsWidth ignoring the scratch) ran: the clamp is untested")
 		}
@@ -143,9 +142,9 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 	t.Run("seats-home", func(t *testing.T) {
 		g := swaTier(t)
 		defer g.Close()
-		tier.SetRoomFault("noseat")
+		g.SetFault("room", "noseat")
 		got, st, err := roomBatch(t, m, g, 0)
-		tier.SetRoomFault("")
+		g.SetFault("room", "")
 		if err != nil {
 			t.Fatalf("a device with no room for the batch's seats: %v", err)
 		}
@@ -153,9 +152,9 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 			t.Fatal("no step came home: the forced path never ran")
 		}
 		same(t, got)
-		tier.SetRoomFault("noseat-lie")
+		g.SetFault("room", "noseat-lie")
 		_, _, err = roomBatch(t, m, g, 0)
-		tier.SetRoomFault("")
+		g.SetFault("room", "")
 		if err == nil {
 			t.Fatal("the violation (RowsRoom saying there is room) ran: the fallback is untested")
 		}

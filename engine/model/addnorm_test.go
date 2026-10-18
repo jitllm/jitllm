@@ -12,11 +12,11 @@ import (
 // to noFold, then decodes toks, and returns the prompt's logits followed by
 // every step's, the tier's stats and the blocks placed. layers < 0 places
 // every block.
-func addNormPrefill(t *testing.T, m *Model, ids, toks []int32, noFold, noGraph bool, layers int, cache string) ([][]float32, tier.Stats, int) {
+func addNormPrefill(t *testing.T, m *Model, ids, toks []int32, noFold, noGraph bool, layers int, cache string, extra ...tier.Option) ([][]float32, tier.Stats, int) {
 	t.Helper()
-	g, err := tier.OpenWith(tier.WithTuneCache(cache), tier.WithConfig(func(c *tier.Config) {
+	g, err := openTier(t, append([]tier.Option{tier.WithTuneCache(cache), tier.WithConfig(func(c *tier.Config) {
 		c.NoAddNormFold, c.NoGraph = noFold, noGraph
-	}))
+	})}, extra...)...)
 	if err != nil || g == nil {
 		t.Skipf("no GPU: %v", err)
 	}

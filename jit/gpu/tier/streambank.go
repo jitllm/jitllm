@@ -1578,7 +1578,7 @@ func (st *streamBank) prefillWaves(g *devTier, s backend.Session, l *layer, nExp
 			}
 		}
 	}
-	if moeFaulted("prefillalloc") {
+	if g.moeFaulted(moePrefillalloc) {
 		// The violation: the lists are rebuilt per chunk, a heap allocation a
 		// warm step must not make.
 		st.waveHit = append([]uint32(nil), st.waveHit...)
@@ -1600,7 +1600,7 @@ func (st *streamBank) prefillWaves(g *devTier, s backend.Session, l *layer, nExp
 				if r < valid {
 					if sl := st.wslot[st.hsel[r*(k+1)+j]]; sl >= 0 {
 						id, wt = uint32(sl), st.hw[r*k+j]
-					} else if moeFaulted("prefillunnamed") {
+					} else if g.moeFaulted(moePrefillunnamed) {
 						// The violation: a pair whose expert is not in the wave
 						// reads some slot's sheets with its own weight.
 						id, wt = st.hsel[r*(k+1)+j]%uint32(len(st.owner)), st.hw[r*k+j]

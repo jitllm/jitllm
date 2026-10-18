@@ -32,8 +32,8 @@ func TestStepAcrossSessionsHybridGateDiscriminates(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%s/shared=%v", dev, fault, c.shared), func(t *testing.T) {
 				g := stepTier(t, m, dev, c.shared)
 				defer g.Close()
-				tier.SetRecFault(fault)
-				defer tier.SetRecFault("")
+				g.SetFault("rec", fault)
+				defer g.SetFault("rec", "")
 				r := stepGate(t, m, g, true)
 				t.Logf("%s: worst logit NMSE %.3e (row %d), %d linear block(s) across sessions",
 					fault, r.worst, r.at, r.linear)
@@ -64,8 +64,8 @@ func TestStepAcrossSessionsMixtureGateDiscriminates(t *testing.T) {
 					g := stepTier(t, m, dev, false)
 					defer g.Close()
 					fault := downFault(t, m)
-					tier.SetMoEFault(fault)
-					defer tier.SetMoEFault("")
+					g.SetFault("moe", fault)
+					defer g.SetFault("moe", "")
 					r := stepGate(t, m, g, false)
 					mixtureStepChecks(t, m, r)
 					t.Logf("%s: worst logit NMSE %.3e (row %d)", fault, r.worst, r.at)
@@ -129,8 +129,8 @@ func TestStepAcrossSessionsLatentGateDiscriminates(t *testing.T) {
 				t.Run(dev, func(t *testing.T) {
 					g := stepTier(t, m, dev, false)
 					defer g.Close()
-					tier.SetPagedFault("session")
-					defer tier.SetPagedFault("")
+					g.SetFault("paged", "session")
+					defer g.SetFault("paged", "")
 					r := latentStepGate(t, m, g)
 					t.Logf("session: worst logit NMSE %.3e (row %d)", r.worst, r.at)
 					if r.worst < mlaDeviceNMSE {
@@ -156,9 +156,7 @@ func TestRecurrentPoolGateDiscriminates(t *testing.T) {
 	for _, dev := range stepDevices() {
 		for _, shared := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/shared=%v", dev, shared), func(t *testing.T) {
-				tier.SetRecFault("resize")
-				defer tier.SetRecFault("")
-				r := recPoolCase(t, m, dev, shared, ids, 6)
+				r := recPoolCase(t, m, dev, shared, ids, 6, tier.WithFault("rec", "resize"))
 				if r.p < 0 {
 					t.Fatal("the gate passed with every rebuilt pool empty: it cannot see a lost state")
 				}
@@ -185,8 +183,8 @@ func TestStepRunsChainGateDiscriminates(t *testing.T) {
 			plan := runsPlan{early: []string{"The capital of France is", "Water boils at a temperature of"},
 				late: "The clerk counted barrels of salt on the upper floor, and", chunk: 3, steps: 4}
 			want := plan.alone(t, m, g)
-			tier.SetRecFault("chain")
-			defer tier.SetRecFault("")
+			g.SetFault("rec", "chain")
+			defer g.SetFault("rec", "")
 			got, _ := plan.together(t, m, g)
 			w, at := worstStep(got, want)
 			t.Logf("chain: worst logit NMSE %.3e (row %d)", w, at)
@@ -199,8 +197,7 @@ func TestStepRunsChainGateDiscriminates(t *testing.T) {
 				m.Vocab.Encode("Once upon a time, in a small village by the sea, there lived", true),
 				m.Vocab.Encode("1, 2, 3,", true)}
 			c := newMixedCase(t, m, ids, []int{8, 8, 8}, dev)
-			tier.SetRecFault("chain")
-			defer tier.SetRecFault("")
+			c.extra = []tier.Option{tier.WithFault("rec", "chain")}
 			got, _, _, _ := c.run(nil)
 			w, i, j := c.worst(got)
 			t.Logf("chain: row %d parts at token %d, %.4f apart on the host", i, j, w)
@@ -221,9 +218,7 @@ func TestStepRunsOneRowHeadGateDiscriminates(t *testing.T) {
 	defer m.Close()
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
-			tier.SetRowsFault("headone")
-			defer tier.SetRowsFault("")
-			w, at, ones := oneRowHeadGap(t, m, dev)
+			w, at, ones := oneRowHeadGap(t, m, dev, tier.WithFault("rows", "headone"))
 			t.Logf("headone: %d one-row heads, worst logit NMSE %.3e (row %d)", ones, w, at)
 			if w < oneRowHeadNMSE {
 				t.Fatalf("the gate passed with the one-row head misreading its row, at NMSE %.3e", w)
@@ -247,13 +242,13 @@ func TestStagedPagedPrefillGateDiscriminates(t *testing.T) {
 	ids := m.Vocab.Encode("The clerk counted barrels of salt on the upper floor, and", true)
 	for _, dev := range stepDevices() {
 		t.Run(dev, func(t *testing.T) {
-			g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff))
+			g, err := openTier(t, tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff))
 			if err != nil || g == nil {
 				noDevice(t, dev, err)
 			}
 			defer g.Close()
-			tier.SetPagedFault("softwidth")
-			defer tier.SetPagedFault("")
+			g.SetFault("paged", "softwidth")
+			defer g.SetFault("paged", "")
 			plan := runsPlan{}
 			chunk := plan.placed(t, m, g, len(ids)+1)
 			defer chunk.Close()
@@ -280,8 +275,8 @@ func TestStepAcrossSessionsSoftcapGateDiscriminates(t *testing.T) {
 			bound := denseStepBand * orderControl(t, m, dev)
 			g := stepTier(t, m, dev, false)
 			defer g.Close()
-			tier.SetRowsFault("nocap")
-			defer tier.SetRowsFault("")
+			g.SetFault("rows", "nocap")
+			defer g.SetFault("rows", "")
 			r := stepGate(t, m, g, false)
 			t.Logf("nocap: worst logit NMSE %.3e (row %d), %.0fx the bound %.3e", r.worst, r.at, r.worst/bound, bound)
 			if r.worst < bound {
@@ -308,14 +303,14 @@ func TestStepAcrossSessionsLocalRopeGateDiscriminates(t *testing.T) {
 		for _, fault := range []string{"", "swatab"} {
 			t.Run(fmt.Sprintf("%s/%q", dev, fault), func(t *testing.T) {
 				bound := denseStepBand * orderControl(t, m, dev)
-				g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+				g, err := openTier(t, append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 					tier.WithConfig(func(c *tier.Config) { c.RopeTableHost = true })}, testTierOpts(t)...)...)
 				if err != nil || g == nil {
 					noDevice(t, dev, err)
 				}
 				defer g.Close()
-				tier.SetRowsFault(fault)
-				defer tier.SetRowsFault("")
+				g.SetFault("rows", fault)
+				defer g.SetFault("rows", "")
 				r := stepGate(t, m, g, false)
 				t.Logf("%q, host tables: worst logit NMSE %.3e (row %d), %.2gx the bound %.3e", fault, r.worst, r.at,
 					r.worst/bound, bound)
@@ -354,12 +349,11 @@ func TestStepAcrossSessionsLlama4GateDiscriminates(t *testing.T) {
 			}
 			defer m.Close()
 			for _, dev := range stepDevices() {
-				run := func(fault string, set func(string)) {
+				run := func(fault, family string) {
 					t.Run(dev+"/"+fault, func(t *testing.T) {
 						g := stepTier(t, m, dev, false)
 						defer g.Close()
-						set(fault)
-						defer set("")
+						g.SetFault(family, fault)
 						r := stepGate(t, m, g, false)
 						t.Logf("%s: worst logit NMSE %.3e (row %d)", fault, r.worst, r.at)
 						if r.worst < stepBound(m, c.name, r, 0) {
@@ -368,10 +362,10 @@ func TestStepAcrossSessionsLlama4GateDiscriminates(t *testing.T) {
 					})
 				}
 				for _, f := range c.rows {
-					run(f, tier.SetRowsFault)
+					run(f, "rows")
 				}
 				for _, f := range c.moe {
-					run(f, tier.SetMoEFault)
+					run(f, "moe")
 				}
 			}
 		})
@@ -394,8 +388,8 @@ func TestStepAcrossSessionsDenseGateDiscriminates(t *testing.T) {
 			bound := denseStepBand * orderControl(t, m, dev)
 			g := stepTier(t, m, dev, false)
 			defer g.Close()
-			tier.SetPagedFault("session")
-			defer tier.SetPagedFault("")
+			g.SetFault("paged", "session")
+			defer g.SetFault("paged", "")
 			r := stepGate(t, m, g, false)
 			t.Logf("session: worst logit NMSE %.3e (row %d), %.0fx the bound %.3e", r.worst, r.at, r.worst/bound, bound)
 			if r.worst < bound {

@@ -29,7 +29,7 @@ func relocationModel(t *testing.T) (*Model, []int32, uint64) {
 	}
 	t.Cleanup(func() { m.Close() })
 	ids := m.Vocab.Encode(strings.Repeat("The quick brown fox jumps over the lazy dog. ", 200), true)[:relocN]
-	probe, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), onePage)
+	probe, err := openTier(t, tier.WithDeviceTune(tier.TuneOff), onePage)
 	if err != nil || probe == nil {
 		noDevice(t, "device", err)
 	}
@@ -59,7 +59,7 @@ const relocN, relocPage, relocTail = 336, 256, 16
 // doubling (~1 MiB a block on this model) does not fit.
 func relocTier(t *testing.T, used uint64) *tier.GPU {
 	t.Helper()
-	g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), tier.WithBudget(used+2<<20), onePage)
+	g, err := openTier(t, tier.WithDeviceTune(tier.TuneOff), tier.WithBudget(used+2<<20), onePage)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

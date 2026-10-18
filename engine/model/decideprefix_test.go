@@ -128,7 +128,7 @@ func TestDecisionReusesThePrefix(t *testing.T) {
 			reqs := boardsFor(t, m, 4)
 			t.Run("host", func(t *testing.T) { decisionPrefixGate(t, m, nil, "", 0, reqs, 0) })
 			for _, spec := range stepDevices() {
-				g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+				g, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 					tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 				if err != nil || g == nil {
 					t.Logf("%s: not present (%v)", spec, err)
@@ -294,7 +294,7 @@ func decisionPrefixGate(t *testing.T, m *Model, g *tier.GPU, spec string, n int,
 // The prompts are ids rather than boards so the parting lands inside a page
 // on every device, whatever its page size and chunk.
 func devicePrefixViolation(t *testing.T, m *Model, g *tier.GPU, spec string, n int) {
-	gv, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
+	gv, err := openTier(t, append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(c *tier.Config) { c.KVCowFault = true })}, testTierOpts(t)...)...)
 	if err != nil || gv == nil {
 		t.Fatalf("%s: the violation's tier: %v", spec, err)
@@ -425,7 +425,7 @@ func TestDecisionWithAPrefixDoesNotAllocate(t *testing.T) {
 			reqs := boardsFor(t, m, 3)
 			t.Run("host", func(t *testing.T) { prefixAllocs(t, m, nil, reqs) })
 			for _, spec := range stepDevices() {
-				g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+				g, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 					tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 				if err != nil || g == nil {
 					t.Logf("%s: not present (%v)", spec, err)

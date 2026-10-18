@@ -135,7 +135,7 @@ func TestPageBudgetFollowsARealIntegratedGPU(t *testing.T) {
 	}
 	defer m.Close()
 	const budget = 8 << 30
-	g, err := tier.OpenWith(tier.WithDevices("vulkan:"+strconv.Itoa(sel)),
+	g, err := openTier(t, tier.WithDevices("vulkan:"+strconv.Itoa(sel)),
 		tier.WithHostBudget(budget), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil {
 		t.Fatalf("open the integrated GPU: %v", err)

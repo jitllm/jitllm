@@ -521,7 +521,7 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 	// since have reused that frame for another block, which would upload the
 	// wrong weights. This is the one place that re-reads, in weightList order
 	// so the refreshed set matches what tensors() frees.
-	if l.pg.ensure != nil && !pagedFaulted("stale") {
+	if l.pg.ensure != nil && !g.pagedFaulted(pagedStale) {
 		var w nn.LayerWeights
 		w.Ensure = l.pg.ensure
 		if err := l.pg.ensure(&w); err != nil {

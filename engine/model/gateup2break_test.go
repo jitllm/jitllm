@@ -11,7 +11,7 @@ import (
 
 // TestGateUp2SeesASwap is TestGateUp2MatchesTwoLaunches' violation (RULE
 // 10), on every backend this host has: with the Gate2 launch handed up's
-// weight as the gate's (tier.SwapGateUp2ForTest), its logits must leave the
+// weight as the gate's (tier.WithViolation("gateup2")), its logits must leave the
 // two-launch arm's by more than the bound the gate allows off PTX
 // (the bound on gateUp2Devices).
 func TestGateUp2SeesASwap(t *testing.T) {
@@ -25,9 +25,7 @@ func TestGateUp2SeesASwap(t *testing.T) {
 	ran := 0
 	for _, dev := range gateUp2Devices {
 		cache := t.TempDir()
-		old := tier.SwapGateUp2ForTest(true)
-		off, on, st, _ := gateUp2Decode(t, m, dev, ids, toks, true, -1, cache)
-		tier.SwapGateUp2ForTest(old)
+		off, on, st, _ := gateUp2Decode(t, m, dev, ids, toks, true, -1, cache, tier.WithViolation("gateup2"))
 		if off == nil {
 			t.Logf("%s: no such device here", dev)
 			continue

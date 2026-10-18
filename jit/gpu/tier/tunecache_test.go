@@ -37,9 +37,8 @@ func TestSplitTunerPersistsPerDeviceDriverAndRevision(t *testing.T) {
 		win = 16
 	}
 	trials := 0
-	oldTrial, oldID := splitTrial, binaryID
-	t.Cleanup(func() { splitTrial, binaryID = oldTrial, oldID })
-	splitTrial = func(_ *devTier, _, _ backend.Kernel, _ *resident, _, _ backend.Buf, _, split int, grp bool) (float64, bool) {
+	var hooks trialHooks
+	hooks.split = func(_ *devTier, _, _ backend.Kernel, _ *resident, _, _ backend.Buf, _, split int, grp bool) (float64, bool) {
 		trials++
 		if split == win && !grp {
 			return 2, true
@@ -47,12 +46,12 @@ func TestSplitTunerPersistsPerDeviceDriverAndRevision(t *testing.T) {
 		return 1, true
 	}
 	rev := "revA"
-	binaryID = func() string { return rev }
+	hooks.binaryID = func() string { return rev }
 
 	dir := t.TempDir()
 	tune := func(dev backend.Device, opts ...Option) (int, int) {
 		t.Helper()
-		g, err := New([]Slot{{Dev: dev, Bytes: 1 << 30}}, append([]Option{WithTuneCache(dir)}, opts...)...)
+		g, err := New([]Slot{{Dev: dev, Bytes: 1 << 30}}, append([]Option{WithTuneCache(dir), withTrialHooks(hooks)}, opts...)...)
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -128,27 +127,26 @@ func TestLazyTunerRunsOffThePlacementPath(t *testing.T) {
 		win = 16
 	}
 	hot, bg := 0, 0
-	oldTrial, oldBG, oldID := splitTrial, bgTrial, binaryID
-	t.Cleanup(func() { splitTrial, bgTrial, binaryID = oldTrial, oldBG, oldID })
-	splitTrial = func(_ *devTier, _, _ backend.Kernel, _ *resident, _, _ backend.Buf, _, split int, grp bool) (float64, bool) {
+	var hooks trialHooks
+	hooks.split = func(_ *devTier, _, _ backend.Kernel, _ *resident, _, _ backend.Buf, _, split int, grp bool) (float64, bool) {
 		hot++
 		if split == win && !grp {
 			return 2, true
 		}
 		return 1, true
 	}
-	bgTrial = func(_ *devTier, _, _ backend.Kernel, _ *resident, _, _, _ backend.Buf, _, split int, grp bool) (float64, bool) {
+	hooks.bg = func(_ *devTier, _, _ backend.Kernel, _ *resident, _, _, _ backend.Buf, _, split int, grp bool) (float64, bool) {
 		bg++
 		if split == win && !grp {
 			return 2, true
 		}
 		return 1, true
 	}
-	binaryID = func() string { return "revA" }
+	hooks.binaryID = func() string { return "revA" }
 	dir := t.TempDir()
 	open := func(opts ...Option) (*GPU, *devTier) {
 		g, err := New([]Slot{{Dev: idDev{&fakeDev{name: "card"}, "aa", "cuda12040"}, Bytes: 1 << 30}},
-			append([]Option{WithTuneCache(dir)}, opts...)...)
+			append([]Option{WithTuneCache(dir), withTrialHooks(hooks)}, opts...)...)
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}

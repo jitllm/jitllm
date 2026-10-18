@@ -249,7 +249,7 @@ func TestVisionFamDecodeAfterAPictureDoesNotAllocate(t *testing.T) {
 			t.Run("host", func(t *testing.T) { run(t, nil) })
 			for _, spec := range testdevices.Specs("cuda", "vulkan", "metal") {
 				t.Run(spec, func(t *testing.T) {
-					gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
+					gpu, err := openTier(t, append([]tier.Option{tier.WithDevices(spec)}, testTierOpts(t)...)...)
 					if err != nil || gpu == nil {
 						noDevice(t, spec, err)
 					}

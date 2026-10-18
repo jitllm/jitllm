@@ -26,7 +26,7 @@ func pagedOpts(page int) []tier.Option {
 // position by position rather than only while the greedy chains agree.
 func pagedRun(t *testing.T, m *Model, seq int, prompt, forced []int32, opt []tier.Option) ([][]float32, tier.Stats) {
 	t.Helper()
-	g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff)}, opt...)...)
+	g, err := openTier(t, append([]tier.Option{tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff)}, opt...)...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

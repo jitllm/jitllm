@@ -31,7 +31,7 @@ func TestActInKeepsThePrinciples(t *testing.T) {
 	defer m.Close()
 	ids := m.Vocab.Encode("The lighthouse keeper counted the ships that never came back, and", true)
 	open := func(noAct bool) *tier.GPU {
-		g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(func(c *tier.Config) {
+		g, err := openTier(t, tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(func(c *tier.Config) {
 			c.NoActFuse, c.ForceGroupSplit = noAct, true
 			c.ActInSites = 11 // forced: TuneOff runs no prologue tuner
 		}))
@@ -132,7 +132,7 @@ func TestActInKeepsThePrinciples(t *testing.T) {
 		// key it found, the prologue must run exactly where it kept one, and
 		// the two arms -- one tier, so one set of splits, NoActFuse toggled
 		// between two fresh States -- must agree as the forced arms do.
-		g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneAuto))
+		g, err := openTier(t, tier.WithDeviceTune(tier.TuneAuto))
 		if err != nil || g == nil {
 			t.Skipf("no GPU: %v", err)
 		}

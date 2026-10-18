@@ -255,7 +255,7 @@ func TestLlavaTowerRunsOnTheDevice(t *testing.T) {
 
 	ran := 0
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(tier.WithDevices(spec))
+		g, err := openTier(t, tier.WithDevices(spec))
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)
 			continue

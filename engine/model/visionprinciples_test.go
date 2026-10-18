@@ -93,7 +93,7 @@ func TestVisionDecodeDoesNotAllocate(t *testing.T) {
 				t.Run(spec, func(t *testing.T) {
 					var g *tier.GPU
 					if spec != "host" {
-						if g, err = tier.OpenWith(tier.WithDevices(spec)); err != nil || g == nil {
+						if g, err = openTier(t, tier.WithDevices(spec)); err != nil || g == nil {
 							t.Skipf("%s: not present (%v)", spec, err)
 						}
 						defer g.Close()

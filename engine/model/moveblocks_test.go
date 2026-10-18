@@ -58,7 +58,7 @@ const (
 
 func blocksMoveBetweenDevices(t *testing.T, path string, arm int, opts ...Option) {
 	a, b := moveDevices(t)
-	g, err := tier.OpenWith(tier.WithDevices(a+","+b), tier.WithDeviceTune(tier.TuneOff))
+	g, err := openTier(t, tier.WithDevices(a+","+b), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, a+","+b, err)
 	}
@@ -236,7 +236,7 @@ func (s *State) moveAll(t *testing.T, from, to string, blocks []int) BlockMove {
 // without a second tier holding its weights twice.
 func TestBlocksMoveToADeviceAddedLater(t *testing.T) {
 	a, b := moveDevices(t)
-	g, err := tier.OpenWith(tier.WithDevices(a), tier.WithDeviceTune(tier.TuneOff))
+	g, err := openTier(t, tier.WithDevices(a), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, a, err)
 	}
@@ -328,7 +328,7 @@ func TestBlocksMoveToADeviceAddedLater(t *testing.T) {
 // give up the f16 cache to keep its plasticity.
 func TestABinary16HistoryMovesToTheDevice(t *testing.T) {
 	a, _ := moveDevices(t)
-	g, err := tier.OpenWith(tier.WithDevices(a), tier.WithDeviceTune(tier.TuneOff))
+	g, err := openTier(t, tier.WithDevices(a), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, a, err)
 	}
@@ -404,7 +404,7 @@ func TestABinary16HistoryMovesToTheDevice(t *testing.T) {
 // and every token stays in the band of a host run that never moved.
 func TestAnyRangeMovesWithItsHistory(t *testing.T) {
 	a, _ := moveDevices(t)
-	g, err := tier.OpenWith(tier.WithDevices(a), tier.WithDeviceTune(tier.TuneOff))
+	g, err := openTier(t, tier.WithDevices(a), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, a, err)
 	}
@@ -506,12 +506,12 @@ func TestTwoModelsShareACardThroughTheRegistry(t *testing.T) {
 				reg = tier.NewPoolRegistry()
 				opts = append(opts, tier.WithPoolRegistry(reg))
 			}
-			ga, err := tier.OpenWith(opts...)
+			ga, err := openTier(t, opts...)
 			if err != nil || ga == nil {
 				noDevice(t, a, err)
 			}
 			defer ga.Close()
-			gb, err := tier.OpenWith(opts...)
+			gb, err := openTier(t, opts...)
 			if err != nil {
 				t.Fatal(err)
 			}

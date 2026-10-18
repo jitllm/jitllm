@@ -156,7 +156,7 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 					// quantized weights, which is why this arm is here and not
 					// on the f32 fixtures.
 					step := func(opts ...tier.Option) (stepResult, int) {
-						g, err := tier.OpenWith(slices.Concat([]tier.Option{tier.WithDevices(dev),
+						g, err := openTier(t, slices.Concat([]tier.Option{tier.WithDevices(dev),
 							tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t), opts)...)
 						if err != nil || g == nil {
 							t.Fatalf("no %s for the step: %v", dev, err)
@@ -257,7 +257,7 @@ func openGranite(t *testing.T, name string) *Model {
 func graniteRun(t *testing.T, m *Model, dev string, seq int, prompt, forced []int32,
 	opts []tier.Option) ([][]float32, tier.Stats, string) {
 	t.Helper()
-	g, err := tier.OpenWith(slices.Concat([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff)},
+	g, err := openTier(t, slices.Concat([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff)},
 		testTierOpts(t), opts)...)
 	if err != nil || g == nil {
 		return nil, tier.Stats{}, "no " + dev + " here"
@@ -365,7 +365,7 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
 					onDevice := func(run func(*State) [][]float32, opts ...tier.Option) ([][]float32, tier.Stats) {
-						g, err := tier.OpenWith(slices.Concat([]tier.Option{tier.WithDevices(dev),
+						g, err := openTier(t, slices.Concat([]tier.Option{tier.WithDevices(dev),
 							tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t), opts)...)
 						if err != nil || g == nil {
 							noDevice(t, dev, err)
@@ -406,7 +406,7 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 						worst = max(worst, w)
 					}
 					// Three sessions stepping as rows, against each alone.
-					g, err := tier.OpenWith(slices.Concat([]tier.Option{tier.WithDevices(dev),
+					g, err := openTier(t, slices.Concat([]tier.Option{tier.WithDevices(dev),
 						tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t))...)
 					if err != nil || g == nil {
 						noDevice(t, dev, err)

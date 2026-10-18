@@ -1301,7 +1301,7 @@ func (g *GPU) layered(sid uint64, groups [][]run, pos, n int, x, cs, csSWA []flo
 		}
 		return ok
 	}
-	if rowsFaulted("pieceouter") {
+	if g.rowsFaulted(rowsPieceouter) {
 		// The violation: the pieces outer and the groups inner, as the chunked
 		// path pages, so every piece pages every group in again.
 		for lo := 0; lo < n; lo += batchWidth {

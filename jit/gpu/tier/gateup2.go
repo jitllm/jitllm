@@ -38,7 +38,6 @@ func (g *devTier) gateUp2Pick(key splitKey) bool {
 	return kernels.Gate2Exact(g.dev.API())
 }
 
-// gateUp2Swapped hands the Gate2 launch up's weight as the gate's and the
+// gateUp2Swapped (the wrong-answer switch of a gate, Config.hook; WithViolation) hands the Gate2 launch up's weight as the gate's and the
 // gate's as up's: the violation the gate/up gate must see
 // (SwapGateUp2ForTest, jitllmtest builds only).
-var gateUp2Swapped bool

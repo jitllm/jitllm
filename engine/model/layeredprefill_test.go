@@ -50,7 +50,7 @@ func TestLayeredPrefillPagesEachBlockOncePerChunk(t *testing.T) {
 					if budget > 0 {
 						opts = append(opts, tier.WithBudget(budget))
 					}
-					g, err := tier.OpenWith(opts...)
+					g, err := openTier(t, opts...)
 					if err != nil || g == nil {
 						return nil, nil
 					}
@@ -91,8 +91,8 @@ func TestLayeredPrefillPagesEachBlockOncePerChunk(t *testing.T) {
 				}
 				ran++
 				run := func(fault string) ([]float32, tier.Stats) {
-					tier.SetRowsFault(fault)
-					defer tier.SetRowsFault("")
+					g.SetFault("rows", fault)
+					defer g.SetFault("rows", "")
 					s := m.NewState(len(ids) + 4)
 					defer s.Close()
 					s.SetDeviceLayers(g, -1)

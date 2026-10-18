@@ -14,14 +14,14 @@ import (
 // arms' logits (the prompt's, then each step's) and the on arm's stats. With
 // unsplit the three GEMMs are held to one k each (BatchShape.Split 1), which
 // is the grid's arithmetic. layers < 0 places every block.
-func qkvGemmPrefill(t *testing.T, m *Model, ids, toks []int32, unsplit, noGraph bool, layers int) (off, on [][]float32, st tier.Stats, placed int) {
+func qkvGemmPrefill(t *testing.T, m *Model, ids, toks []int32, unsplit, noGraph bool, layers int, extra ...tier.Option) (off, on [][]float32, st tier.Stats, placed int) {
 	t.Helper()
 	opts := []tier.Option{tier.WithDevices("cuda"), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(c *tier.Config) { c.NoGraph = noGraph })}
 	if unsplit {
 		opts = append(opts, tier.WithBatchShape(tier.BatchShape{Split: 1}))
 	}
-	g, err := tier.OpenWith(opts...)
+	g, err := openTier(t, append(opts, extra...)...)
 	if err != nil || g == nil {
 		return nil, nil, tier.Stats{}, 0
 	}

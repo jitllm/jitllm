@@ -20,16 +20,16 @@ const peerTokens = 6
 // specs, whose experts run hybrid through a cache too small for a chunk (so
 // every wave and every token misses). card names the expert card ("" for
 // none). It returns every step's logits and the device's counters.
-func peerRun(t *testing.T, m *Model, ids []int32, specs []string, card string) ([][]float32, tier.Stats) {
+func peerRun(t *testing.T, m *Model, ids []int32, specs []string, card string, extra ...tier.Option) ([][]float32, tier.Stats) {
 	t.Helper()
 	c := m.Cfg
-	g, err := tier.OpenWith(tier.WithDevices(strings.Join(specs, ",")), tier.WithDeviceTune(tier.TuneOff),
+	g, err := openTier(t, append([]tier.Option{tier.WithDevices(strings.Join(specs, ",")), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(cf *tier.Config) {
 			cf.StreamExperts, cf.HybridExperts = true, true
 			cf.SplitAdmit = c.NExpertUsed
 			cf.StreamCacheSlots = 2 * c.NExpertUsed
 			cf.ExpertCard = card
-		}))
+		})}, extra...)...)
 	if err != nil || g == nil {
 		noDevice(t, strings.Join(specs, ","), err)
 	}

@@ -269,7 +269,7 @@ func TestBlockGraphLowersTheDevicePlan(t *testing.T) {
 // its tuners off, seam blocks placed (-1 every block); nil without CUDA.
 func planDecode(t *testing.T, m *Model, ids, toks []int32, seam int) [][]float32 {
 	t.Helper()
-	g, err := tier.OpenWith(tier.WithDevices("cuda"), tier.WithDeviceTune(tier.TuneOff),
+	g, err := openTier(t, tier.WithDevices("cuda"), tier.WithDeviceTune(tier.TuneOff),
 		tier.WithConfig(func(c *tier.Config) { c.NoFuse = true }))
 	if err != nil || g == nil {
 		return nil

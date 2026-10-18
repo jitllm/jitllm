@@ -277,7 +277,7 @@ func TestPostNormDeviceErrorIsAmplification(t *testing.T) {
 			onHost := &Place{On: "host"}
 			for _, spec := range specs {
 				t.Run(spec, func(t *testing.T) {
-					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+					g, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 						tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 					if err != nil || g == nil {
 						noDevice(t, spec, err)

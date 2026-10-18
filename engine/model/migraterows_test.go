@@ -255,7 +255,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			host.Close()
 
 			open := func(opts ...tier.Option) *tier.GPU {
-				g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices("gpu:0"),
+				g, err := openTier(t, append([]tier.Option{tier.WithDevices("gpu:0"),
 					tier.WithDeviceTune(tier.TuneOff)}, opts...)...)
 				if err != nil || g == nil {
 					noDevice(t, "device", err)

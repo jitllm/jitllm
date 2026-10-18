@@ -18,7 +18,7 @@ func isoSetup(t *testing.T) (*Model, *tier.GPU) {
 	if err != nil {
 		t.Skip(err)
 	}
-	g, err := tier.OpenWith(tier.WithDevices("all"), tier.WithDeviceTune(tier.TuneOff))
+	g, err := openTier(t, tier.WithDevices("all"), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		m.Close()
 		noDevice(t, "devices", err)
@@ -41,7 +41,7 @@ func TestTwoStatesOnOneTierShareAKVCache(t *testing.T) {
 	seqA := []int32{101, 202, 303, 404, 505, 606}
 	seqB := []int32{909, 808, 707, 606, 505, 404}
 
-	g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
+	g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}

@@ -80,9 +80,9 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 	g.mu.Unlock()
 	defer g.restoreGeom(prev)
 	switch {
-	case rowsFaulted("swatab") && csSWA != nil:
+	case g.rowsFaulted(rowsSwatab) && csSWA != nil:
 		csSWA = cs
-	case rowsFaulted("noswa"):
+	case g.rowsFaulted(rowsNoswa):
 		csSWA = nil
 	}
 	if n < 1 || len(slot) != n || lo < 0 || lo > hi || (lo == hi && head == nil) {
@@ -425,7 +425,7 @@ func (g *GPU) layersRows(self uint64, lo, hi int, pos, slot []int, sid []uint64,
 // does, or no device holds a block.
 func (g *GPU) RowsWidth(want int) int {
 	w := min(want, batchWidth)
-	if roomFaulted("narrow-lie") {
+	if g.roomFaulted(roomNarrowLie) {
 		return w
 	}
 	for _, d := range g.devs {
@@ -458,7 +458,7 @@ func (g *GPU) RowsWidth(want int) int {
 // batched scratch for rows rows (batchFor) and, where a linear block is
 // placed, the session's recurrent seat for seqs sequences (growSeat).
 func (g *GPU) rowsRoom(sid uint64, rows, seqs int) bool {
-	if roomFaulted("noseat-lie") || roomFaulted("narrow-lie") {
+	if g.roomFaulted(roomNoseatLie) || g.roomFaulted(roomNarrowLie) {
 		return true
 	}
 	r := (rows + 7) / 8 * 8
@@ -1193,9 +1193,6 @@ func (g *devTier) f16Gemm(m mv, ntok int) (mv, bool) {
 	// unsplit from 64 workgroups on 80 SMs), not full residency: a staged
 	// block's shared memory holds an SM to a few of them anyway.
 	deep := g.Config.GemmDeep
-	if deep == 0 {
-		deep = gemmDeepDefault
-	}
 	if deep > 0 || deep == 0 && g.gemmDeepWon(m, ntok) {
 		if bm, ok := g.stagedGemm(m, ntok, f16DeepTiles, k, g.dev.Slots()/16); ok {
 			g.Stats.GemmDeep++
@@ -1238,10 +1235,6 @@ func (g *devTier) rowClass(ntok int) graph.RowClass {
 var f16DeepTiles = []kernels.VoltaTile{
 	{MT: 4, NT: 4, WM: 2, WN: 4, KB: 2, Single: true}, {MT: 4, NT: 2, WM: 2, WN: 4, KB: 2, Single: true},
 }
-
-// gemmDeepDefault stands in for a Config.GemmDeep of 0; only a jitllmtest
-// build changes it (ForceGemmDeepForTest).
-var gemmDeepDefault int
 
 func b2i(b bool) int {
 	if b {

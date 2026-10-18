@@ -48,7 +48,7 @@ func TestHybridExpertsMatchTheHost(t *testing.T) {
 		func() {
 			s := m.NewState(32)
 			defer s.Close()
-			g, err := tier.OpenWith(tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(cfg))
+			g, err := openTier(t, tier.WithDevices("gpu:0"), tier.WithDeviceTune(tier.TuneOff), tier.WithConfig(cfg))
 			if err != nil || g == nil {
 				noDevice(t, "gpu:0", err)
 			}

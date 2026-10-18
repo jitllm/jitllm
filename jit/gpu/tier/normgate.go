@@ -16,9 +16,8 @@ import (
 // at all (the sublayer graph's edges and the backend's numerical contract);
 // a forced form or the per-card trial decides where it runs.
 
-// normGateBroken hands the fused launch z as the rule's output and the
+// normGateBroken (the wrong-answer switch of a gate, Config.hook; WithViolation) hands the fused launch z as the rule's output and the
 // output as z: a test's violation (BreakNormGateForTest).
-var normGateBroken bool
 
 // NormGateForm is the recipe a gated output norm runs (Config.NormGate).
 type NormGateForm int

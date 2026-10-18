@@ -167,7 +167,7 @@ func TestDeviceDecodeRate(t *testing.T) {
 		opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.ForceGroupSplit = true }))
 		t.Logf("  in-group split reduction FORCED on every eligible shape")
 	}
-	g, err := tier.OpenWith(opts...)
+	g, err := openTier(t, opts...)
 	if err != nil || g == nil {
 		t.Logf("%s: not present (%v)", spec, err)
 		t.Logf("host %.2f tok/s = %.1f GB/s%s over %.0f MiB of weights",

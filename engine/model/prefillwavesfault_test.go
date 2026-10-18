@@ -32,9 +32,7 @@ func TestPrefillWavesGateDiscriminates(t *testing.T) {
 		want := prefillWavesHost(t, m, ids)
 		for _, fault := range []string{"prefillwave", "prefillunnamed"} {
 			t.Run(md.name+"/"+fault, func(t *testing.T) {
-				tier.SetMoEFault(fault)
-				defer tier.SetMoEFault("")
-				got, st := prefillWavesCase(t, m, ids, md.blocks, 2*m.Cfg.NExpertUsed, false)
+				got, st := prefillWavesCase(t, m, ids, md.blocks, 2*m.Cfg.NExpertUsed, false, tier.WithFault("moe", fault))
 				nmse := wavesNMSE(got, want)
 				t.Logf("%s: NMSE %.2e (band %.0e), %d waves", fault, nmse, md.band, st.PrefillWaves)
 				if st.PrefillWaves <= st.PrefillBlocks || nmse <= md.band {
@@ -60,9 +58,7 @@ func TestPrefillWavesAllocGateDiscriminates(t *testing.T) {
 	}
 	defer m.Close()
 	ids := prefillWavesIDs(m)
-	tier.SetMoEFault("prefillalloc")
-	defer tier.SetMoEFault("")
-	_, st, allocs := prefillWavesAllocs(t, m, ids, md.blocks, 0, false)
+	_, st, allocs := prefillWavesAllocs(t, m, ids, md.blocks, 0, false, tier.WithFault("moe", "prefillalloc"))
 	t.Logf("prefillalloc: %d warm allocations over %d block-chunks", allocs, st.PrefillBlocks)
 	if st.PrefillBlocks == 0 || allocs == 0 {
 		t.Fatalf("with prefillalloc armed the warm chunk made %d allocations over %d block-chunks: the gate cannot see it", allocs, st.PrefillBlocks)

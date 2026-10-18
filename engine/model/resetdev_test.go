@@ -21,7 +21,7 @@ func TestResetZeroesTheDeviceRecurrentState(t *testing.T) {
 			first, second := g.IDs[:half], g.IDs[half:]
 			ran := 0
 			for _, spec := range stepDevices() {
-				gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+				gpu, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 					tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 				if err != nil || gpu == nil {
 					continue

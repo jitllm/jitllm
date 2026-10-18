@@ -647,6 +647,11 @@ type Config struct {
 	// failAt and the per-device calls counter are always zero unless built with
 	// -tags jitllmfault.
 	failAt []int
+	// hook is the tier's fault and violation state (empty in a release
+	// build) and trial the tuner seams a gate replaces; both belong to the
+	// tier, never the process.
+	hook  hooks
+	trial trialHooks
 	// FillFirst places blocks on the first device until it is full, then the
 	// next, instead of spreading a model that fits across the devices in
 	// proportion to their budgets (GPU.PlanBlocks). The spread leaves each card
@@ -867,6 +872,9 @@ type Stats struct {
 	GemmF16 int
 	// GemmDeep counts those built on the deep tiles (f16DeepTiles).
 	GemmDeep int
+	// TuneTrials counts the timed trials of the tuners on the device's path,
+	// and BgTuneTrials those WithLazyTune's background tuner timed beside it.
+	TuneTrials, BgTuneTrials int64
 	// GemmInt8 counts batched matvecs built as kernels.GemmInt8, the staged
 	// int8 GEMM (sm_80 on, devTier.int8Gemm).
 	GemmInt8 int
@@ -1411,6 +1419,8 @@ func (s *Stats) add(o Stats) {
 	s.VoltaGemm += o.VoltaGemm
 	s.GemmF16 += o.GemmF16
 	s.GemmDeep += o.GemmDeep
+	s.TuneTrials += o.TuneTrials
+	s.BgTuneTrials += o.BgTuneTrials
 	s.GemmInt8 += o.GemmInt8
 	s.NormF16 += o.NormF16
 	s.AddNormFolded += o.AddNormFolded
@@ -2334,10 +2344,6 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 		// default) Pack declines immediately.
 		arena: kernels.NewArena(o.kb.arena),
 	}
-	// A jitllmtest build can make the persistent path every tier's default
-	// (PersistByDefaultForTest), so the regression gates run through it.
-	cfg.Persist = persistDefault
-	cfg.PersistDeps = persistDepsDefault
 	// Gate2 is allowed by default; tuneFFN takes it per shape where it
 	// measures faster. On a V100 it read 1.008-1.028 of the two launches on
 	// Llama 1B, 3B and 8B.

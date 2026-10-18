@@ -22,10 +22,10 @@ var gateUpModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen2-1.5B-Ins
 // reads its answers from one cache directory: the first arm measures, the
 // rest run the same splits, so the reduction orders are the same and the
 // logits can be compared bit for bit.
-func gateUpDecode(t *testing.T, m *Model, ids, toks []int32, fuse, noGraph bool, layers int, cache string) ([][]float32, tier.Stats, int) {
+func gateUpDecode(t *testing.T, m *Model, ids, toks []int32, fuse, noGraph bool, layers int, cache string, extra ...tier.Option) ([][]float32, tier.Stats, int) {
 	t.Helper()
-	g, err := tier.OpenWith(tier.WithTuneCache(cache), tier.WithGateUpFuse(fuse),
-		tier.WithConfig(func(c *tier.Config) { c.NoGraph = noGraph }))
+	g, err := openTier(t, append([]tier.Option{tier.WithTuneCache(cache), tier.WithGateUpFuse(fuse),
+		tier.WithConfig(func(c *tier.Config) { c.NoGraph = noGraph })}, extra...)...)
 	if err != nil || g == nil {
 		t.Skipf("no GPU: %v", err)
 	}

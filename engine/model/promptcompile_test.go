@@ -35,7 +35,7 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 		}
 		for _, tune := range []tier.TuneMode{tier.TuneOff, tier.TuneAuto} {
 			t.Run(fmt.Sprintf("%s/tune%d", name, tune), func(t *testing.T) {
-				g, err := tier.OpenWith(tier.WithDeviceTune(tune),
+				g, err := openTier(t, tier.WithDeviceTune(tune),
 					tier.WithConfig(func(c *tier.Config) { c.NoPromptPrewarm = violate }))
 				if err != nil || g == nil {
 					t.Skipf("no GPU device: %v", err)

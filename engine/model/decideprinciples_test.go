@@ -23,7 +23,7 @@ func decisionDevices(t *testing.T) []*tier.GPU {
 	t.Helper()
 	var out []*tier.GPU
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+		g, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 			tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 		if err != nil || g == nil {
 			continue
@@ -147,7 +147,7 @@ func TestDecisionRelocatesMidPrompt(t *testing.T) {
 			// The small budgets are the test models' (openjev's is 45 MB).
 			budgeted := 0
 			for _, mb := range []uint64{16, 32, 64, 128, 500, 700, 900, 1200, 1600, 2400} {
-				g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(stepDevices()[0]),
+				g, err := openTier(t, append([]tier.Option{tier.WithDevices(stepDevices()[0]),
 					tier.WithDeviceTune(tier.TuneOff), tier.WithBudget(mb << 20)}, testTierOpts(t)...)...)
 				if err != nil {
 					t.Fatal(err)

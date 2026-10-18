@@ -56,7 +56,7 @@ func layaArms(t *testing.T) []layaArm {
 	t.Helper()
 	arms := []layaArm{{name: "host"}}
 	for _, spec := range stepDevices() {
-		g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+		g, err := openTier(t, append([]tier.Option{tier.WithDevices(spec),
 			tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 		if err != nil || g == nil {
 			t.Logf("%s: not present (%v)", spec, err)

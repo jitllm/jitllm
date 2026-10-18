@@ -152,7 +152,7 @@ func qvlTeacherForce(t *testing.T, m *Model, prompt, image, replyText, realFirst
 	t.Run("host", func(t *testing.T) { arm(t, nil) })
 	for _, spec := range stepDevices() {
 		t.Run(spec, func(t *testing.T) {
-			gpu, err := tier.OpenWith(tier.WithDevices(spec))
+			gpu, err := openTier(t, tier.WithDevices(spec))
 			if err != nil || gpu == nil {
 				t.Skipf("%s: not present (%v)", spec, err)
 			}

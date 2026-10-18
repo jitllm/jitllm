@@ -17,9 +17,7 @@ import (
 func TestBatchedMixtureFloatBanksDiscriminate(t *testing.T) {
 	for _, name := range floatMoEModels {
 		t.Run(name, func(t *testing.T) {
-			tier.SetMoEFault("floatsrc")
-			defer tier.SetMoEFault("")
-			nmse := batchedMixtureCase(t, name, true, true)
+			nmse := batchedMixtureCase(t, name, true, true, tier.WithFault("moe", "floatsrc"))
 			t.Logf("floatsrc: last-row logit NMSE %.3e between batched and row-by-row", nmse)
 			if math.IsNaN(nmse) || nmse < 1e-2 {
 				t.Fatalf("floatsrc reads NMSE %.3e, inside the gate's 1e-2 or not finite: the gate cannot see "+

@@ -35,7 +35,7 @@ func TestMoEFusedEpiloguesOnDevice(t *testing.T) {
 						c.ForceIndexedGroup = true
 						c.NoMoEFuse = !fuse
 					})}
-				gpu, err := tier.OpenWith(opts...)
+				gpu, err := openTier(t, opts...)
 				if err != nil || gpu == nil {
 					t.Skipf("no cuda device (%v)", err)
 				}
