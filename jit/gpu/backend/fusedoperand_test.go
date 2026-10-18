@@ -125,9 +125,12 @@ func TestFusedOperandsAreTheirTwoKernels(t *testing.T) {
 						if warp && d.API() != "ptx" {
 							continue
 						}
-						for _, rows := range []int{1, 5, 16} {
+						// The last shape is Qwen2.5-VL's tower FFN norm: a picture's
+						// rows at its width, where the V100 read a wrong operand.
+						for _, sh := range [][2]int{{k, 1}, {k, 5}, {k, 16}, {1280, 1024}} {
+							k, rows := sh[0], sh[1]
 							nr := rows * k
-							name := fmt.Sprintf("%s/rmsf16t/%v/r%d/add%v/warp%v", d.API(), q, rows, add, warp)
+							name := fmt.Sprintf("%s/rmsf16t/%v/k%d/r%d/add%v/warp%v", d.API(), q, k, rows, add, warp)
 							g := newGPU(t, d)
 							mkn := kernels.RMSNormRows
 							if warp {
