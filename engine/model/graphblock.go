@@ -89,7 +89,7 @@ func (m *Model) uncovered(li int) string {
 		}
 	}
 	switch {
-	case c.NGram != 0 || c.LayerKind(li).Recurrent() && (c.LayerKind(li).Attends() || c.LayerKind(li) == jlm.LayerLinearAttn):
+	case c.NGram != 0 || c.LayerKind(li).Recurrent() && c.LayerKind(li).Attends():
 		return UncoveredRecurrent
 	case m.blockAct(roles) == 0:
 		return UncoveredUngated
