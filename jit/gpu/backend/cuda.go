@@ -366,7 +366,7 @@ func (s *cudaSession) Launch(k Kernel, groups, width int, bufs ...Buf) error {
 		// the host, and a panic here would take a server down.
 		cb, ok := b.(*cudaBuf)
 		if !ok || cb == nil {
-			return fmt.Errorf("backend: cuda: kernel argument %d of %d is nil", i, len(bufs))
+			return fmt.Errorf("backend: cuda: %s: kernel argument %d of %d is nil", ck.name, i, len(bufs))
 		}
 		args[i] = cb.b.Arg()
 	}

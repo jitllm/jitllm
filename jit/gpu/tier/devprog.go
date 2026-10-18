@@ -118,6 +118,7 @@ const (
 	slotKC                    // bs.kClamp
 	slotVC                    // bs.vClamp
 	slotSub                   // bs.sub: an inner norm's row
+	slotSide                  // bs.side: a recurrent mixer's output beside the attention
 	numSlots
 )
 
@@ -177,6 +178,8 @@ func (s devSlot) String() string {
 		return "vc"
 	case slotSub:
 		return "sub"
+	case slotSide:
+		return "side"
 	}
 	return ""
 }
@@ -360,8 +363,6 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		// Read off the graph, not the architecture: experts run in a latent
 		// (the row taken down before them).
 		return nil, "latent experts"
-	case l.withAttn:
-		return nil, "attention beside a recurrent mixer"
 	}
 	for _, o := range g.Ops {
 		if !lowersOp(o.Kind) {
@@ -551,17 +552,28 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			// the block's row, and writes the mixer's output: the norm the
 			// graph states before it goes into this op.
 			src := []int{i}
-			x := in(0)
+			x, normed := in(0), devVal(-1)
 			if n := len(prog.ops); n > 0 && prog.ops[n-1].Kind == dkNorm && prog.ops[n-1].Out[0] == x {
 				src = append(prog.ops[n-1].Src, i)
-				x = prog.ops[n-1].In[0]
+				normed, x = x, prog.ops[n-1].In[0]
 				prog.ops = prog.ops[:n-1]
 			}
 			if prog.slots[x] != slotX {
 				return nil, "a recurrent mixer not over the block's row"
 			}
-			out := prog.val(name(0), f32(ne), slotOut)
-			prog.ops = append(prog.ops, devOp{Kind: dkRecurrent, Src: src, In: []devVal{x}, Out: []devVal{out}})
+			// Beside an attention (the graph has both) the mixer leaves its
+			// output in bs.side for the sum, and the normed row it wrote is
+			// the attention's.
+			s := slotOut
+			if hasOp(g, graph.OpAttend) {
+				s = slotSide
+			}
+			out := prog.val(name(0), f32(ne), s)
+			outs := []devVal{out}
+			if normed >= 0 {
+				outs = append(outs, normed)
+			}
+			prog.ops = append(prog.ops, devOp{Kind: dkRecurrent, Src: src, In: []devVal{x}, Out: outs})
 			vals[o.Out[0]] = out
 		case graph.OpRoute:
 			// The mixture: from the router to the value the block's last
@@ -722,6 +734,14 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			// second slot.
 			home := len(g.Out) == 1 && o.Out[0] == g.Out[0]
 			reads := func(sl devSlot) bool { return prog.slots[in(0)] == sl || prog.slots[in(1)] == sl }
+			if !reads(slotX) && !reads(slotX2) {
+				// A sum of two branches (an attention's and a mixer's beside
+				// it), not a residual add: into bs.h, as the encoder sums.
+				out := prog.val(name(0), f32(ne), slotH)
+				prog.ops = append(prog.ops, devOp{Kind: dkAdd, Src: []int{i}, In: []devVal{in(0), in(1)}, Out: []devVal{out}})
+				vals[o.Out[0]] = out
+				continue
+			}
 			s := slotX2
 			switch {
 			case home && !reads(slotX):
@@ -895,6 +915,16 @@ func readsRoleOut(g *graph.Graph, o graph.Op, r jlm.Role) bool {
 					return true
 				}
 			}
+		}
+	}
+	return false
+}
+
+// hasOp reports that g has an op of kind k.
+func hasOp(g *graph.Graph, k graph.OpKind) bool {
+	for _, o := range g.Ops {
+		if o.Kind == k {
+			return true
 		}
 	}
 	return false

@@ -893,7 +893,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		buf := [numSlots]backend.Buf{slotX: bs.x, slotX2: bs.x2, slotH: bs.h, slotQ8: bs.a, slotQ: bs.q, slotK: bs.k,
 			slotV: bs.v, slotQR: bs.qr, slotKV: kvBuf, slotXB: bs.xb, slotOut: bs.mvOut, slotG: bs.g, slotU: bs.u, slotAct: bs.act,
 			slotQN: bs.qn, slotKN: bs.kn, slotF16: g.f16Buf, slotQT: bs.qt, slotQG: bs.qg, slotOGate: bs.ogate,
-			slotOGated: bs.ogated, slotVN: bs.vn, slotQC: bs.qClamp, slotKC: bs.kClamp, slotVC: bs.vClamp, slotSub: bs.sub}
+			slotOGated: bs.ogated, slotVN: bs.vn, slotQC: bs.qClamp, slotKC: bs.kClamp, slotVC: bs.vClamp, slotSub: bs.sub, slotSide: bs.side}
 		// The rewrites legal at one row, on a prompt chunk and on a ragged
 		// step differ: each class keeps its own fused program.
 		fc := &l.progOne
@@ -1092,6 +1092,13 @@ func (g *devTier) layersSession(s backend.Session) {
 						pendX, pendY, pendNorm, pendConv = at(o.In[0]), at(o.In[1]), nk, conv
 						break
 					}
+				}
+				// A residual add reads the block's stream and takes its scale;
+				// a sum of two branches (the attention's and a mixer's beside
+				// it) is a plain add.
+				if r0, r1 := prog.slots[o.In[0]], prog.slots[o.In[1]]; r0 != slotX && r0 != slotX2 && r1 != slotX && r1 != slotX2 {
+					lc.la(bs.addE, R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+					break
 				}
 				addRes(at(o.In[0]), at(o.In[1]), at(o.Out[0]))
 			case dkActMul:
