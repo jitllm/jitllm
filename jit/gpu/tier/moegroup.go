@@ -755,7 +755,7 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 		}
 		// downSrc is what a quantized down reads: the activated product.
 		downSrc := m.eact
-		if moeFaulted("downsrc") {
+		if g.moeFaulted(moeDownsrc) {
 			downSrc = m.eg
 		}
 		// grouped runs one bank and reports whether it added the bias itself.
@@ -773,7 +773,7 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 					return false
 				}
 				src := m.eact
-				if moeFaulted("floatsrc") {
+				if g.moeFaulted(moeFloatsrc) {
 					src = m.eg
 				}
 				if !down {
@@ -870,7 +870,7 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 			la(m.ewScale, rows*m.k, 128, m.rw, m.rsel, l.expScale, m.rwS)
 			rw = m.rwS
 		}
-		if m.actMulW != nil && !moeFaulted("wout") {
+		if m.actMulW != nil && !g.moeFaulted(moeWout) {
 			la(m.actMulW, cols*p.NFFNExp, 128, eg, eu, m.rw, m.colPair, m.eact)
 			rw = m.ones
 		} else {
@@ -914,7 +914,7 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 				} else {
 					pass(m.hsum)
 					// The violation: the later waves' share dropped.
-					if *errp == nil && !moeFaulted("prefillwave") {
+					if *errp == nil && !g.moeFaulted(moePrefillwave) {
 						lc.la(bs.addE, valid*ew, eout, m.hsum, eout)
 					}
 				}
@@ -953,7 +953,7 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 				}
 				learn()
 				// The violation: the host's share dropped, the card's hits alone.
-				if *errp == nil && !moeFaulted("splitrowshost") {
+				if *errp == nil && !g.moeFaulted(moeSplitrowshost) {
 					lc.la(bs.addE, valid*ew, eout, m.hsum, eout)
 				}
 			}()

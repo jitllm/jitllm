@@ -268,7 +268,7 @@ func (pg *pagedScratch) streamDecode(s backend.Session, lc *launcher,
 			}
 			st.ids = append(st.ids[:0], l.free[:p1-p0]...)
 			for i, id := range st.ids {
-				if pagedFaulted("stream") {
+				if g.pagedFaulted(pagedStreamed) {
 					break // the violation: the pass reads whatever the ids held
 				}
 				page := home[p0+i]
@@ -300,7 +300,7 @@ func (pg *pagedScratch) streamDecode(s backend.Session, lc *launcher,
 		lc.la(vr.acc, vr.accT, pg.wt, v, n, pg.part, tab, desc)
 		if j == 0 {
 			lc.la(ss.first, ss.foldT, pg.part, ss.run[0])
-		} else if !pagedFaulted("passfold") {
+		} else if !g.pagedFaulted(pagedPassfold) {
 			lc.la(ss.fold, ss.foldT, pg.part, ss.run[(j+1)%2], ss.run[j%2])
 		}
 	}

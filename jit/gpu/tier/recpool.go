@@ -184,7 +184,7 @@ func (g *devTier) recResize(slots int, shared bool) error {
 		// shared form's one state, from whichever half the seat reads -- so
 		// that is what the host need not zero.
 		filled := carried(every)
-		if recFaulted("resize") {
+		if g.recFaulted(recResize) {
 			filled = nil
 		}
 		np, err := g.newRecPool(slots, shared, filled)
@@ -194,7 +194,7 @@ func (g *devTier) recResize(slots int, shared bool) error {
 		// move copies the seats whose session passes pick from src to dst, at
 		// the same slots.
 		move := func(src, dst backend.Buf, w int, pick func(*recPair) bool) error {
-			if src == nil || dst == nil || w == 0 || recFaulted("resize") {
+			if src == nil || dst == nil || w == 0 || g.recFaulted(recResize) {
 				return nil
 			}
 			for _, r := range carried(pick) {
@@ -280,12 +280,12 @@ func (g *devTier) recZeroLayers(ls []*layer, base, rows int) error {
 				}
 				if zb == nil && !hostZeros {
 					var err error
-					if roomFaulted("nozeros") || roomFaulted("nozeros-nohost") {
+					if g.roomFaulted(roomNozeros) || g.roomFaulted(roomNozerosNohost) {
 						err = fmt.Errorf("no room for the kept zeros (roomFault)")
 					} else {
 						zb, err = g.allocBytes(make([]byte, n))
 					}
-					if err != nil && roomFaulted("nozeros-nohost") {
+					if err != nil && g.roomFaulted(roomNozerosNohost) {
 						return err
 					}
 					if err != nil {
@@ -339,7 +339,7 @@ func (g *devTier) recZeroLayers(ls []*layer, base, rows int) error {
 // (or Config.SharedRec asks), every pool takes the shared form. Callers hold
 // g.mu, outside a session.
 func (g *devTier) growSeat(sid uint64, rows int) bool {
-	if rows > 1 && (roomFaulted("noseat") || roomFaulted("noseat-lie")) {
+	if rows > 1 && (g.roomFaulted(roomNoseat) || g.roomFaulted(roomNoseatLie)) {
 		g.LastErr = "rows: a batch's recurrent states do not fit in this device's budget (roomFault)"
 		return false
 	}
@@ -419,7 +419,7 @@ func (g *devTier) growSeat(sid uint64, rows int) bool {
 		g.LastErr = "rows: " + err.Error()
 		return false
 	}
-	if had && !recFaulted("resize") {
+	if had && !g.recFaulted(recResize) {
 		if err := g.writeSeat(sid, kept, base, old.rows, wasShared); err != nil {
 			g.LastErr = "rows: " + err.Error()
 			return false
@@ -660,7 +660,7 @@ func (g *devTier) groupRuns(sid uint64, rs *ragStep) error {
 			}
 		}
 	}
-	if recFaulted("chain") {
+	if g.recFaulted(recChain) {
 		// Every row its own run at its sequence's seat: a chunk's rows each
 		// read the state from before the step.
 		var runs [][]int
@@ -774,7 +774,7 @@ type runKey struct {
 func (g *devTier) recDesc(sid uint64, nrow int) []byte {
 	rag := g.rag
 	slots := func(sid uint64, seat, j int) (uint32, uint32) {
-		if recFaulted("slot") && rag != nil && rag.sid != nil {
+		if g.recFaulted(recSlot) && rag != nil && rag.sid != nil {
 			sid = rag.sid[0]
 		}
 		in := g.recSeats[sid].base + seat
@@ -920,7 +920,7 @@ func (g *devTier) alignRec(lo, hi int, sid []uint64) bool {
 			if rp.cur == want {
 				continue
 			}
-			if !recFaulted("parity") && !g.moveHalf(l, g.recSeats[s], rp.cur, want) {
+			if !g.recFaulted(recParity) && !g.moveHalf(l, g.recSeats[s], rp.cur, want) {
 				return false
 			}
 			rp.cur = want

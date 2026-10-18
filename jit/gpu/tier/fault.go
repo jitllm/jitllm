@@ -56,6 +56,10 @@ func (g *devTier) injectedFail() bool {
 	return false
 }
 
+// The named violations below are enums (faultids.go) held per tier in
+// Config.hook (hooks_on.go), armed with WithFault or GPU.SetFault by family
+// and name, and read as g.pagedFaulted(pagedAlias) and the like.
+//
 // pagedFault names a deliberate error in the paged history's wiring, so a gate
 // can run each violation and demand it fails (RULE 10); the kernels' own are
 // kernels.SetPagedFault.
@@ -74,14 +78,9 @@ func (g *devTier) injectedFail() bool {
 //	"stale"   a page-in uploads the bytes the block's host slices held at
 //	          admission, without asking the host for them again: whatever
 //	          block the host pager has since put in that frame
+//	"stream"  a streamed history is read as if resident (pagedstream.go)
 //	"passfold" a staged decode over passes folds none after the first:
 //	          the finish reads a partial nothing wrote
-var pagedFault string
-
-// SetPagedFault arms one violation for the calls after it; "" disarms.
-func SetPagedFault(f string) { pagedFault = f; blockFault = pagedFault != "" || rowsFault != "" }
-
-func pagedFaulted(f string) bool { return pagedFault == f }
 
 // recFault names a deliberate error in a step across sessions' recurrent
 // wiring (recpool.go), so the hybrid step gate can run each violation and
@@ -95,12 +94,6 @@ func pagedFaulted(f string) bool { return pagedFault == f }
 //	          no session's state
 //	"chain"   every row of a ragged step is its own run: a prompt chunk's
 //	          rows each read their sequence's state from before the step
-var recFault string
-
-// SetRecFault arms one violation for the calls after it; "" disarms.
-func SetRecFault(f string) { recFault = f }
-
-func recFaulted(f string) bool { return recFault == f }
 
 // rowsFault names a deliberate error in a ragged step's head, so its gate can
 // run the violation and demand it fails (RULE 10):
@@ -127,12 +120,6 @@ func recFaulted(f string) bool { return recFault == f }
 //	          gates must read it
 //	"pieceouter"  a layered chunk goes pieces outer, block groups inner, so
 //	          every piece pages the run in again
-var rowsFault string
-
-// SetRowsFault arms one violation for the calls after it; "" disarms.
-func SetRowsFault(f string) { rowsFault = f; blockFault = pagedFault != "" || rowsFault != "" }
-
-func rowsFaulted(f string) bool { return rowsFault == f }
 
 // roomFault makes a device short of room in one place, so the gate of the
 // path that copes can force it to fire, and names the violation that path
@@ -151,12 +138,6 @@ func rowsFaulted(f string) bool { return rowsFault == f }
 //	"noseat"          no recurrent seat for a batch fits: RowsRoom says so,
 //	                  and the blocks come home before the step
 //	"noseat-lie"      the same, and RowsRoom says there is room
-var roomFault string
-
-// SetRoomFault arms one shortage for the calls after it; "" disarms.
-func SetRoomFault(f string) { roomFault = f }
-
-func roomFaulted(f string) bool { return roomFault == f }
 
 // moeFault names a deliberate error in a batched mixture's wiring, so its gate
 // can run the violation and demand it fails (RULE 10):
@@ -172,39 +153,10 @@ func roomFaulted(f string) bool { return roomFault == f }
 //	                  added to the block's output
 //	"prefillunnamed"  a pair whose expert is not in the running wave reads a
 //	                  slot's sheets with its own weight
-var moeFault string
-
-// SetMoEFault arms one violation for the calls after it; "" disarms.
-func SetMoEFault(f string) { moeFault = f }
-
-func moeFaulted(f string) bool { return moeFault == f }
+//	"prefillalloc"    a prompt chunk's expert waves allocate on the host
+//	"splitrowshost"   a split-rows mixture runs its rows on the host
 
 // peerFault names a deliberate error in the expert card's sheets, so its gate
 // can run the violation and demand it fails (RULE 10):
 //
 //	"wrong"  a sheet copied from the expert card is the next expert's
-var peerFault string
-
-// SetPeerFault arms one violation for the calls after it; "" disarms.
-func SetPeerFault(f string) { peerFault = f }
-
-func peerFaulted(f string) bool { return peerFault == f }
-
-// faultSink keeps the allocation the decodealloc fault makes alive past
-// escape analysis.
-var faultSink []byte
-
-// allocFault makes the decodealloc violation: one small heap allocation.
-func allocFault() {
-	if rowsFault == "decodealloc" {
-		faultSink = make([]byte, 32)
-	}
-}
-
-// blockFault is set while a fault the block encoder reads (paged,
-// ragged-step) is armed: such a step runs the encoder, which the fault is
-// written against, not the device program. The setters keep it; a step reads
-// the bool.
-var blockFault bool
-
-func blockFaulted() bool { return blockFault }

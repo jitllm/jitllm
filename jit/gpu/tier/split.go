@@ -125,7 +125,7 @@ func (g *devTier) tuneSplit(q kernels.Quant, rows, k int, r *resident) int {
 			// The in-group kernel writes the final row, so it needs no partial
 			// plane, but it launches the same grid as the arm it is compared
 			// against: `grp` says the output contract, `split` the grid.
-			rate, ok := splitTrial(g, kern, red, r, d, out, rows, split, grp)
+			rate, ok := g.splitTrial(kern, red, r, d, out, rows, split, grp)
 			// A later candidate (a wider split, or the in-group form) must
 			// beat the best by splitTieBand: within it the trial cannot tell
 			// them apart, and the pick went by noise. Ministral-3-3B's Q6_K head
@@ -159,9 +159,6 @@ var tuneTrials, bgTuneTrials atomic.Int64
 // timed in this process, which TuneTrials does not: they run beside the
 // device's work, not on its path.
 func BackgroundTuneTrials() int64 { return bgTuneTrials.Load() }
-
-// bgTrial is one round of a background candidate's trial; a gate swaps it.
-var bgTrial = (*devTier).timeSplitRound
 
 // tuneJob is one shape the background tuner measures.
 type tuneJob struct {
@@ -298,7 +295,7 @@ func (g *devTier) runTuneJob(j tuneJob) {
 				bgTuneTrials.Add(1)
 			}
 			var rate float64
-			rate, ok = bgTrial(g, c.kern, c.red, j.r, d, out, part, rows, c.split, c.grp)
+			rate, ok = g.bgTrial(c.kern, c.red, j.r, d, out, part, rows, c.split, c.grp)
 			g.mu.Unlock()
 			if ok && round > 0 { // the first round pays first-touch
 				rates = append(rates, rate)
@@ -384,10 +381,6 @@ func (g *devTier) stopTune() {
 // benchmark reads to show its timed span tuned nothing.
 func TuneTrials() int64 { return tuneTrials.Load() }
 
-// splitTrial is one timed candidate of tuneSplit; a gate swaps it to count
-// trials and fix the winner.
-var splitTrial = (*devTier).timeSplitMode
-
 // nb32ok reports that split divides a k-wide row's 32-element blocks the way
 // splitCands offers it.
 func nb32ok(k, split int) bool { return split <= k/32 && (k/32)%split == 0 }
@@ -396,7 +389,7 @@ func nb32ok(k, split int) bool { return split <= k/32 && (k/32)%split == 0 }
 // executable's fingerprint, the device's UUID and driver, and the shape. ""
 // when any part is unknown, and then nothing is read or written.
 func (g *devTier) tuneKey(shape string) string {
-	id, dk := binaryID(), deviceKey([]backend.Device{g.dev})
+	id, dk := g.binaryID(), deviceKey([]backend.Device{g.dev})
 	if id == "" || dk == "" {
 		return ""
 	}
@@ -986,10 +979,10 @@ func (g *devTier) timeSequences(cs []splitCand, rs []*resident, rows int, sel ba
 	return cs
 }
 
-// binaryID fingerprints the running executable, so a cached split does not
+// binaryIDOnce fingerprints the running executable, so a cached split does not
 // outlive the kernels it was measured on: any rebuild tunes once again. Empty
 // when the executable cannot be read, and then nothing is cached.
-var binaryID = sync.OnceValue(func() string {
+var binaryIDOnce = sync.OnceValue(func() string {
 	p, err := os.Executable()
 	if err != nil {
 		return ""
@@ -1294,7 +1287,6 @@ func (g *devTier) fuseGateUp(l *layer) {
 	g.GateUpWhy = ""
 }
 
-// gateUpSwapped hands down's prologue up's row as the gate and the gate's as
+// gateUpSwapped (the wrong-answer switch of a gate, Config.hook; WithViolation) hands down's prologue up's row as the gate and the gate's as
 // up: the violation the fused FFN's gate must see (SwapGateUpForTest,
 // jitllmtest builds only).
-var gateUpSwapped bool

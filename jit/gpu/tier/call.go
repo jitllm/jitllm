@@ -48,7 +48,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 	if g.injectedFail() {
 		return false
 	}
-	allocFault()
+	g.allocFault()
 	// A tower's range runs in lane0, whose tower set is the device's own
 	// (visrows.go): a call holding a clone borrows lane0 for it.
 	g.mu.Lock()
@@ -169,10 +169,10 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			w = ww
 		}
 		bbs, dbs, sub := g.bbs[w], g.bs, max(g.promptW, nn.MaxPrefillChunk)
-		if roomFaulted("noscratch") || roomFaulted("noscratch-split") {
+		if g.roomFaulted(roomNoscratch) || g.roomFaulted(roomNoscratchSplit) {
 			ok, bbs = false, nil
 		}
-		if roomFaulted("noscratch-split") {
+		if g.roomFaulted(roomNoscratchSplit) {
 			sub = 32 // the width a starved device reserved: a chunk goes in 32-row parts
 		}
 		// A head over every row (a speculative verification) runs only in

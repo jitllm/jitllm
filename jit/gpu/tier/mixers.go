@@ -273,7 +273,7 @@ func (g *devTier) emitLinear(sid uint64, s backend.Session, bs *blockScratch, l 
 		// graph.NormGate: the norm's epilogue gates it, and the normalised
 		// row is never written.
 		in, z := bs.dOut, bs.dZ
-		if normGateBroken {
+		if g.normGateBroken() {
 			in, z = z, in
 		}
 		if *errp == nil {

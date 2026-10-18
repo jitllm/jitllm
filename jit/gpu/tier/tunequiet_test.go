@@ -23,9 +23,8 @@ func TestBackgroundTrialWaitsForSubmissionsInFlight(t *testing.T) {
 	const rows, k = 4096, 4096
 	var mu sync.Mutex
 	trials, busy := 0, 0
-	oldBG, oldID := bgTrial, binaryID
-	t.Cleanup(func() { bgTrial, binaryID = oldBG, oldID })
-	bgTrial = func(g *devTier, _, _ backend.Kernel, _ *resident, _, _, _ backend.Buf, _, split int, grp bool) (float64, bool) {
+	var hooks trialHooks
+	hooks.bg = func(g *devTier, _, _ backend.Kernel, _ *resident, _, _, _ backend.Buf, _, split int, grp bool) (float64, bool) {
 		// Called with g.mu held: the tickets are what is in flight.
 		mu.Lock()
 		defer mu.Unlock()
@@ -35,9 +34,9 @@ func TestBackgroundTrialWaitsForSubmissionsInFlight(t *testing.T) {
 		}
 		return float64(split), true
 	}
-	binaryID = func() string { return "revA" }
+	hooks.binaryID = func() string { return "revA" }
 	g, err := New([]Slot{{Dev: idDev{&fakeDev{name: "card"}, "aa", "cuda12040"}, Bytes: 1 << 30}},
-		WithTuneCache(t.TempDir()), WithLazyTune(true))
+		WithTuneCache(t.TempDir()), WithLazyTune(true), withTrialHooks(hooks))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -90,9 +89,8 @@ func TestBackgroundTrialYieldsBetweenRounds(t *testing.T) {
 	calls := map[[2]int]int{}
 	total := 0
 	var subAt, nextAt time.Time
-	oldBG, oldID := bgTrial, binaryID
-	t.Cleanup(func() { bgTrial, binaryID = oldBG, oldID })
-	bgTrial = func(g *devTier, _, _ backend.Kernel, _ *resident, _, _, _ backend.Buf, _, split int, grp bool) (float64, bool) {
+	var hooks trialHooks
+	hooks.bg = func(g *devTier, _, _ backend.Kernel, _ *resident, _, _, _ backend.Buf, _, split int, grp bool) (float64, bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		c := [2]int{split, 0}
@@ -110,9 +108,9 @@ func TestBackgroundTrialYieldsBetweenRounds(t *testing.T) {
 		}
 		return float64(split), true
 	}
-	binaryID = func() string { return "revA" }
+	hooks.binaryID = func() string { return "revA" }
 	g, err := New([]Slot{{Dev: idDev{&fakeDev{name: "card"}, "aa", "cuda12040"}, Bytes: 1 << 30}},
-		WithTuneCache(t.TempDir()), WithLazyTune(true))
+		WithTuneCache(t.TempDir()), WithLazyTune(true), withTrialHooks(hooks))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

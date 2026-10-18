@@ -209,7 +209,7 @@ func (st *streamBank) peerSheet(g *devTier, m, pl, e, slot, n int, dst backend.B
 	r := st.peer.r[m]
 	src := [3]backend.Buf{r.qs, r.d, r.sc}[pl]
 	e2 := e
-	if peerFaulted("wrong") {
+	if g.peerFaulted(peerWrong) {
 		// The violation: the neighbour's sheet.
 		e2 = (e + 1) % st.nExpert
 	}

@@ -36,13 +36,10 @@ const (
 	persistMaxBufs = 63  // distinct buffers one block binds (one more is the sync buffer)
 )
 
-// persistDefault is Config.Persist's default, false outside a jitllmtest
-// build (PersistByDefaultForTest), and persistTotal every persistent kernel
-// launched in the process, which that build's gates read.
-var (
-	persistDefault, persistDepsDefault bool
-	persistTotal, persistDepTotal      atomic.Int64
-)
+// persistTotal is every persistent kernel launched in the process, which a
+// jitllmtest build's gates read as a counter (the tiers' default is
+// Config.applyEnv's).
+var persistTotal, persistDepTotal atomic.Int64
 
 // depWords is a session's dep buffer, in u32 words: every composed kernel's
 // counter region is carved from it at plan time (persistCache.depNext), at

@@ -1900,8 +1900,8 @@ func (bs *blockScratch) headOut() backend.Buf {
 
 // ragOut is headOut for the per-row head: the rows' capped logits where the
 // model has a final softcap, the projection's own otherwise.
-func (bs *blockScratch) ragOut() backend.Buf {
-	if bs.ragCapK != nil && !rowsFaulted("nocap") {
+func (bs *blockScratch) ragOut(g *Config) backend.Buf {
+	if bs.ragCapK != nil && !g.rowsFaulted(rowsNocap) {
 		return bs.ragCap
 	}
 	return bs.ragLogits

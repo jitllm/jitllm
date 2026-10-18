@@ -449,7 +449,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		if pendX != nil {
 			if o := prog.ops[0]; o.Kind == dkNormF16 && o.Role == jlm.RoleAttnNorm && prog.slots[o.In[0]] == slotX {
 				y := pendY
-				if addNormBroken {
+				if g.addNormBroken() {
 					y = pendX
 				}
 				laRows(pendNorm, pendX, y, l.nAttn, bs.x, bs.h, g.f16Buf)
@@ -687,7 +687,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 			case dkGate2, dkGate2In:
 				wu, wg := l.up, l.gate
-				if gateUp2Swapped {
+				if g.gateUp2Swapped() {
 					wu, wg = wg, wu
 				}
 				n := l.mvu.rows * l.mvu.split
@@ -771,7 +771,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				for _, i := range qs.segs {
 					sg := all[i]
 					w := sg.r
-					if qkvGemmSwapped && i > 0 && qs.has(3-i) && all[3-i].r.t == w.t && all[3-i].m.rows == sg.m.rows {
+					if g.qkvGemmSwapped() && i > 0 && qs.has(3-i) && all[3-i].r.t == w.t && all[3-i].m.rows == sg.m.rows {
 						w = all[3-i].r
 					}
 					bufs = append(bufs, w.qs, w.d, w.sc, at(o.Out[i]))
@@ -838,7 +838,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				why = progNoProgram
 			case R > 1 && rag == nil && (bs.pkv == nil || !bs.pkv.prefill):
 				why = progRowsNotPrefill
-			case len(skip) != 0 || blockFaulted():
+			case len(skip) != 0 || g.blockFaulted():
 				why = progFault
 			case bs.pkv == nil || (R == 1 || rag != nil) && (bs.pkv.cur == nil || bs.pkv.prefill) ||
 				R > 1 && rag == nil && bs.pkv.pf == nil:
@@ -942,7 +942,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						// The previous block's residual add and this norm, one
 						// launch: x = pendX + pendY and h = RMSNorm(x).
 						y := pendY
-						if addNormBroken {
+						if g.addNormBroken() {
 							y = pendX
 						}
 						laRows(pendNorm, pendX, y, l.nAttn, bs.x, bs.h, g.f16Buf)
@@ -1091,7 +1091,7 @@ func (g *devTier) layersSession(s backend.Session) {
 							for _, i := range qs.segs {
 								sg := all[i]
 								w := sg.r
-								if qkvGemmSwapped && i > 0 && qs.has(3-i) && all[3-i].r.t == w.t && all[3-i].m.rows == sg.m.rows {
+								if g.qkvGemmSwapped() && i > 0 && qs.has(3-i) && all[3-i].r.t == w.t && all[3-i].m.rows == sg.m.rows {
 									w = all[3-i].r
 								}
 								bufs = append(bufs, w.qs, w.d, w.sc, sg.out)
@@ -1203,12 +1203,12 @@ func (g *devTier) layersSession(s backend.Session) {
 						}
 					}
 					// Per layer: Llama 4 leaves every SWAPeriod'th layer unrotated.
-					roped := bs.ropeQ != nil && !l.noRope && (p.RopeAt(li) || rag != nil && rowsFaulted("nope"))
+					roped := bs.ropeQ != nil && !l.noRope && (p.RopeAt(li) || rag != nil && g.rowsFaulted(rowsNope))
 					// mistral3's temperature reaches the rotated layers too. A row's
 					// factor and its rotation are both linear in q, so q is scaled
 					// first, into qt, and rotated from there.
 					if roped && !p.NoPEGlobal && bs.qTemp != nil && bs.qt != nil &&
-						!(rag != nil && rowsFaulted("notemp")) {
+						!(rag != nil && g.rowsFaulted(rowsNotemp)) {
 						lc.la(bs.qTemp, R*qdim, qSrc, bs.n, bs.tempTab, bs.qt)
 						qSrc = bs.qt
 					}
@@ -1337,7 +1337,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						// Llama 4's temperature, on exactly these layers:
 						// q times a factor of its position. bs.qr is free
 						// here, since nothing rotated into it.
-						if bs.qTemp != nil && !(rag != nil && rowsFaulted("notemp")) {
+						if bs.qTemp != nil && !(rag != nil && g.rowsFaulted(rowsNotemp)) {
 							lc.la(bs.qTemp, R*qdim, qSrc, bs.n, bs.tempTab, bs.qr)
 							qAtt = bs.qr
 						}
@@ -1393,7 +1393,7 @@ func (g *devTier) layersSession(s backend.Session) {
 								sk = bs.noSink
 							}
 						}
-						win := p.Window(li) > 0 && !pagedFaulted("window")
+						win := p.Window(li) > 0 && !g.pagedFaulted(pagedWindow)
 						if err == nil {
 							err = pk.pf.prefillAttn(s, lc, qAtt, kDst, vDst, bs.n, bs.xb, pgTab, win, sk)
 							g.PagedPrefillLaunches++
@@ -1416,7 +1416,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						// window its keyStart (pRowW), through the decode plan
 						// chosen before the submission (pagedPlanFor).
 						desc := pk.pRow
-						win := p.Window(li) > 0 && !pagedFaulted("window") && !(rag != nil && rowsFaulted("nowin"))
+						win := p.Window(li) > 0 && !g.pagedFaulted(pagedWindow) && !(rag != nil && g.rowsFaulted(rowsNowin))
 						if win {
 							desc = pk.pRowW
 						}
@@ -1447,7 +1447,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						}
 						if ragOn && err == nil {
 							tabRag := desc
-							if rowsFaulted("ragtab") {
+							if g.rowsFaulted(rowsRagtab) {
 								// The violation: the table's rows read their
 								// keys through the emptied set, so they attend
 								// nothing of their own.
@@ -2259,7 +2259,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					// residual and the norm weight, the product's row, then the
 					// gate's weight (Gate2 with ActIn's norm).
 					wu, wg := l.up, l.gate
-					if gateUp2Swapped {
+					if g.gateUp2Swapped() {
 						wu, wg = wg, wu
 					}
 					lamv(l.mvu, l.mvu.gate2In, l.mvu.rows*l.mvu.split, wu.qs, wu.d, wu.sc, bs.x2, l.nFFN, bs.act,
@@ -2277,7 +2277,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						err = lc.launch(l.gu.kern, l.gu.blocks, l.gu.w, bs.a, bs.ax,
 							l.gate.qs, l.gate.d, l.gate.sc, bs.g, l.up.qs, l.up.d, l.up.sc, bs.u)
 					}
-					if gateUpSwapped {
+					if g.gateUpSwapped() {
 						mvIn(l.mvd, l.guDown, l.down, bs.x, bs.u, bs.g, bs.x2)
 					} else {
 						mvIn(l.mvd, l.guDown, l.down, bs.x, bs.g, bs.u, bs.x2)
@@ -2289,7 +2289,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					// Gate and up in one launch: up's weight, the operand, the
 					// product's row, then the gate's weight (Gate2).
 					wu, wg := l.up, l.gate
-					if gateUp2Swapped {
+					if g.gateUp2Swapped() {
 						wu, wg = wg, wu
 					}
 					lamv(l.mvu, l.mvu.gate2, l.mvu.rows*l.mvu.split, wu.qs, wu.d, wu.sc, bs.a, bs.ax, bs.act,
@@ -2463,7 +2463,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				// writing that row's logits, the first of ragLogits. A
 				// batched twin would project every row of the step to read
 				// back one.
-				if rowsFaulted("headone") {
+				if g.rowsFaulted(rowsHeadone) {
 					// Decode's own kernel, which takes the sums to follow
 					// the first row's scales: they follow all R rows'.
 					m.kern = g.bs.mvHead.kern
@@ -2490,11 +2490,11 @@ func (g *devTier) layersSession(s backend.Session) {
 			// The final softcap, then the argmax over the capped rows: over
 			// the wanted rows only, as the one-row and few-row heads project
 			// nothing past them, and no row past them is read.
-			if bs.ragCapK != nil && !rowsFaulted("nocap") {
+			if bs.ragCapK != nil && !g.rowsFaulted(rowsNocap) {
 				lc.la(bs.ragCapK, ragHead*hr.nrows, bs.ragLogits, bs.ragCap)
 			}
 			if err == nil {
-				err = lc.launch(bs.ragArgmax, ragHead, kernels.ArgmaxGroup, bs.ragOut(), bs.ragTok)
+				err = lc.launch(bs.ragArgmax, ragHead, kernels.ArgmaxGroup, bs.ragOut(g.Config), bs.ragTok)
 			}
 		} else if fold {
 			// The chunk's last row, into the decode scratch, and the decode
@@ -2804,7 +2804,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			if len(head.Logits) < need {
 				err = fmt.Errorf("rows: %d logits for %d rows of %d", len(head.Logits), ragHead, g.bs.head.nrows)
 			} else {
-				err = s.Read(bs.ragOut(), f32b(head.Logits[:need]))
+				err = s.Read(bs.ragOut(g.Config), f32b(head.Logits[:need]))
 			}
 		}
 		direct = true
