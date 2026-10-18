@@ -205,7 +205,8 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: k of %d and v of %d into rows of %d", at, width(o.In[0]), width(o.In[1]), kvd)
 			}
 		case OpAttend:
-			if !ins(1) || !outs(1) {
+			if len(o.In) == 0 || !outs(1) {
+				bad("%s: no query", at)
 				break
 			}
 			a := o.Attr
@@ -215,6 +216,9 @@ func Verify(g *Graph, f Facts) error {
 				}
 			} else if len(o.Reads) != 1 || o.Reads[0].Name != "kv" || o.Reads[0].Version == 0 {
 				bad("%s: reads no kv version this block wrote: this position's row is never in the history", at)
+			}
+			if sel := c.Select != nil; sel != (len(o.In) == 2) || sel && len(o.Reads) == 1 && o.Reads[0].Version != 2 {
+				bad("%s: %d inputs reading %v; the configuration states a selection %v", at, len(o.In), o.Reads, sel)
 			}
 			if a.NHead != c.NHead || a.NKVHead != c.NKVHead || a.HeadDim != c.HeadDim || a.Scale != c.Scale ||
 				a.Window != c.Window || a.Chunked != c.Chunked || a.BidirOff != c.BidirOff || a.Softcap != c.Softcap || a.TempScale != c.TempScale ||
@@ -296,7 +300,29 @@ func Verify(g *Graph, f Facts) error {
 			if o.Attr.Bound <= 0 || o.Attr.Bound != c.Clamp || width(o.Out[0]) != width(o.In[0]) {
 				bad("%s: bound %g, the configuration states %g", at, o.Attr.Bound, c.Clamp)
 			}
-		case OpSlice, OpLatentAppend, OpAttendLatent, OpIndex:
+		case OpIndex:
+			if c.MLA != nil {
+				verifyMLAOp(o, at, c, width, ins, outs, bad)
+				break
+			}
+			x := c.Select
+			if x == nil {
+				bad("%s: a selection in a graph whose facts state none", at)
+				break
+			}
+			if !ins(1) || !outs(1) {
+				break
+			}
+			a := o.Attr
+			if a.NHead != x.Heads || a.HeadDim != x.HeadDim || a.TopK != x.TopK || a.Block != x.Block || a.Local != x.Local ||
+				width(o.In[0]) != c.NEmbd || width(o.Out[0]) != x.TopK || len(o.Weight) != 4 {
+				bad("%s: %d heads of %d keeping %d blocks of %d (%d local); the configuration states %d of %d keeping %d of %d (%d)",
+					at, a.NHead, a.HeadDim, a.TopK, a.Block, a.Local, x.Heads, x.HeadDim, x.TopK, x.Block, x.Local)
+			}
+			if len(o.Reads) != 1 || o.Reads[0] != (StateRef{"kv", 1}) || len(o.Writes) != 1 || o.Writes[0] != (StateRef{"kv", 2}) {
+				bad("%s: its key does not join the row this block appended", at)
+			}
+		case OpSlice, OpLatentAppend, OpAttendLatent:
 			verifyMLAOp(o, at, c, width, ins, outs, bad)
 		case OpRoute, OpGather, OpExpertMatVec, OpCombine, OpGateScalar:
 			verifyMixtureOp(o, at, f.Mixture, width, ins, outs, bad)

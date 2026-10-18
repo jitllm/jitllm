@@ -115,6 +115,22 @@ type Dense struct {
 	// Mixture, where set, is the block's FFN: a routed mixture over the FFN
 	// norm's row in place of gate, up and down (NFFN is then unused).
 	Mixture *Mixture
+	// Select, where set, is the attention's block selection (OpIndex over a
+	// GQA row: MiniMax Sparse Attention).
+	Select *Select
+}
+
+// Select is a block-selecting indexer's geometry: Heads heads (one a kv
+// group) of HeadDim, the TopK best blocks of Block positions kept with the
+// Local ending at the query's forced in.
+type Select struct {
+	Heads, HeadDim, TopK, Block, Local int
+}
+
+// bindings are the selection's weights over a row of nEmbd.
+func (x *Select) bindings(nEmbd int) []Binding {
+	return []Binding{{Role: jlm.RoleIdxQ, K: nEmbd, Rows: x.Heads * x.HeadDim}, {Role: jlm.RoleIdxK, K: nEmbd, Rows: x.HeadDim},
+		{Role: jlm.RoleIdxQNorm, K: x.HeadDim}, {Role: jlm.RoleIdxKNorm, K: x.HeadDim}}
 }
 
 // Build is the block's graph.
@@ -295,12 +311,21 @@ func (d *Dense) Build() *Graph {
 				}
 				g.op(Op{Kind: OpKVAppend, In: []ValueID{kr, v}, Reads: []StateRef{{"kv", 0}}, Writes: []StateRef{{"kv", 1}}})
 			}
+			ain := []ValueID{qr}
+			if x := d.Select; x != nil {
+				sel := g.value("idx_sel", x.TopK)
+				g.op(Op{Kind: OpIndex, In: []ValueID{h}, Out: []ValueID{sel}, Weight: x.bindings(d.NEmbd),
+					Reads: []StateRef{{"kv", 1}}, Writes: []StateRef{{"kv", 2}},
+					Attr: Attrs{NHead: x.Heads, HeadDim: x.HeadDim, TopK: x.TopK, Block: x.Block, Local: x.Local}})
+				kv = StateRef{"kv", 2}
+				ain = append(ain, sel)
+			}
 			a = g.value("attn", qd)
 			var sinks []Binding
 			if d.Sinks {
 				sinks = []Binding{vec(jlm.RoleAttnSinks, d.NHead)}
 			}
-			g.op(Op{Kind: OpAttend, In: []ValueID{qr}, Out: []ValueID{a}, Reads: []StateRef{kv}, Weight: sinks,
+			g.op(Op{Kind: OpAttend, In: ain, Out: []ValueID{a}, Reads: []StateRef{kv}, Weight: sinks,
 				Attr: Attrs{HeadDim: d.HeadDim, NHead: d.NHead, NKVHead: d.NKVHead, Scale: d.Scale, Window: d.Window, Chunked: d.Chunked, BidirOff: d.BidirOff, Softcap: d.Softcap,
 					TempScale: d.TempScale, TempFloor: d.TempFloor, TempOffs: d.TempOffs}})
 			if d.OutGate {

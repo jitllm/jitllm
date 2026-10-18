@@ -97,10 +97,10 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredValueWidth
 	// A KV-sharing block and Gemma 4's v-is-k blocks are the graph's
 	// (Dense.KVShared, VFromK); an absent v anywhere else is not.
-	case c.extraKVHead(li) || c.LayerKind(li).Attends() && !c.MLA() && !c.KVShared(li) && !hasRole(roles, jlm.RoleAttnV) &&
+	case c.QSAAt(li) || c.LayerKind(li).Attends() && !c.MLA() && !c.KVShared(li) && !hasRole(roles, jlm.RoleAttnV) &&
 		!(c.VNorm && hasRole(roles, jlm.RoleAttnK)):
 		return UncoveredKVShared
-	case c.MSAAt(li) || c.QSAAt(li) || c.IdxHeads != 0 && !c.MSA() && !(c.MLA() && c.Indexer()):
+	case c.QSAAt(li) || c.IdxHeads != 0 && !c.MSA() && !(c.MLA() && c.Indexer()):
 		return UncoveredIndexer
 	case c.streamHead():
 		return UncoveredStreams
@@ -258,6 +258,9 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 			d.MLA.Index = &graph.Index{Heads: c.IdxHeads, HeadDim: c.IdxHeadDim, TopK: c.IdxTopK}
 		}
 	}
+	if c.MSAAt(li) {
+		d.Select = &graph.Select{Heads: c.IdxHeads, HeadDim: c.IdxHeadDim, TopK: c.IdxTopK, Block: c.IdxBlock, Local: c.IdxLocal}
+	}
 	f := graph.Facts{Config: d, Inventory: inv}
 	if c.MoEAt(li) {
 		mf, ok := m.mixtureFacts(li)
@@ -311,8 +314,10 @@ type denseLowering struct {
 	// mixAttn: a recurrent mixer beside the attention over the same normed
 	// row (Falcon-H1's), its output (in hf/bhf) added to the attention's.
 	mixAttn bool
-	// index: an attention indexer selects the positions attended (OpIndex).
-	index bool
+	// index: an attention indexer selects the positions attended (OpIndex);
+	// msa: over a GQA row, its key one more cached head (msaKey, msaQuery,
+	// and attendRow's block mask, msaMask).
+	index, msa bool
 	// mixer: a recurrent mixer (linearAttn) in place of the attention;
 	// noFFN: the block ends at the mixer's residual add.
 	mixer, noFFN bool
@@ -499,6 +504,7 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 			return nil, err
 		}
 		lw.prep = prep
+		lw.msa = take(graph.OpIndex, jlm.RoleIdxQ)
 		if err := run([]step{{graph.OpAttend, 0}}); err != nil {
 			return nil, err
 		}
@@ -724,6 +730,9 @@ func (m *Model) buildGraphs() error {
 		if lw.index != (lw.mla && m.Cfg.Indexer()) {
 			return fmt.Errorf("model: block %d graph's indexer is %v, the configuration's is not", li, lw.index)
 		}
+		if lw.msa != m.Cfg.MSAAt(li) {
+			return fmt.Errorf("model: block %d graph's block selection is %v, the configuration's is not", li, lw.msa)
+		}
 		if lw.ple != (m.Cfg.PLEDim != 0 && m.Cfg.AltUp == 0) {
 			return fmt.Errorf("model: block %d graph's per-layer embedding is %v, the configuration's is not", li, lw.ple)
 		}
@@ -914,8 +923,22 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 			}
 			s.addBias(s.vc, l.bv)
 		}
+		// index's key and query (MiniMax Sparse Attention): the key rides
+		// the appended row as one more kv head, its value zero (msa.go).
+		kvr := kvd
+		if lw.msa {
+			kvr = c.KVRowAt(li)
+			cs := s.ropeTable(li, s.cs, s.csSWA, 0)
+			if err := s.msaKey(s.kc[kvd:kvr], l, s.h, cs); err != nil {
+				return err
+			}
+			clear(s.vc[kvd:kvr])
+			if err := s.msaQuery(s.msaQ, l, s.h, cs); err != nil {
+				return err
+			}
+		}
 		// [head_norm q, head_norm k,] rope q, rope k, kv_append: attnPrep
-		s.runPrep(l, lw.prep, s.q[:c.QDimAt(li)], s.kc[:kvd], s.vc[:kvd], s.ropeTable(li, s.cs, s.csSWA, 0), li, 0, s.pos)
+		s.runPrep(l, lw.prep, s.q[:c.QDimAt(li)], s.kc[:kvr], s.vc[:kvr], s.ropeTable(li, s.cs, s.csSWA, 0), li, 0, s.pos)
 		m.trace(li, "k", s.kc[:kvd])
 		// attend
 		s.attendRow(li, l)
@@ -1121,11 +1144,20 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, base, p0, n
 	if err := s.kvRows(l, lw, s.bh[:n*ne], n, kvDim); err != nil {
 		return err
 	}
+	// index's keys and queries, every row's (msa.go).
+	if lw.msa {
+		if err := s.msaProjectRows(l, n, s.bcs, s.bcsSWA, li); err != nil {
+			return err
+		}
+	}
 	// [head_norm q, head_norm k,] rope q, rope k, kv_append: every row's,
 	// before any row attends (a row attends to the chunk's earlier rows).
 	for i := 0; i < n; i++ {
-		s.runPrep(l, lw.prep, s.bq[i*qDim:(i+1)*qDim], s.bk[i*kvDim:(i+1)*kvDim], s.bv[i*kvDim:(i+1)*kvDim],
-			s.ropeTable(li, s.bcs, s.bcsSWA, i), li, slot, p0+i)
+		k, v := s.bk[i*kvDim:(i+1)*kvDim], s.bv[i*kvDim:(i+1)*kvDim]
+		if lw.msa {
+			k, v = s.msaRowOf(li, i, k, v)
+		}
+		s.runPrep(l, lw.prep, s.bq[i*qDim:(i+1)*qDim], k, v, s.ropeTable(li, s.bcs, s.bcsSWA, i), li, slot, p0+i)
 	}
 	// attend
 	s.attendRows(li, l, slot, p0, n, qDim, c.AttnScale, bidir, false)
@@ -1193,12 +1225,21 @@ func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, seq, pos
 	if err := s.kvRows(l, lw, s.bh, n, kvDim); err != nil {
 		return err
 	}
+	// index's keys and queries, every row's (msa.go).
+	if lw.msa {
+		if err := s.msaProjectRows(l, n, cs, csSWA, li); err != nil {
+			return err
+		}
+	}
 	// [head_norm q, head_norm k,] rope q, rope k, kv_append: each row at its
 	// owner's slot and position
 	for i := 0; i < n; i++ {
+		k, v := s.bk[i*kvDim:(i+1)*kvDim], s.bv[i*kvDim:(i+1)*kvDim]
+		if lw.msa {
+			k, v = s.msaRowOf(li, i, k, v)
+		}
 		o, slot := s.rowOwner(i, seq)
-		o.runPrep(l, lw.prep, s.bq[i*qDim:(i+1)*qDim], s.bk[i*kvDim:(i+1)*kvDim], s.bv[i*kvDim:(i+1)*kvDim],
-			s.ropeTable(li, cs, csSWA, i), li, slot, pos[i])
+		o.runPrep(l, lw.prep, s.bq[i*qDim:(i+1)*qDim], k, v, s.ropeTable(li, cs, csSWA, i), li, slot, pos[i])
 	}
 	// attend
 	s.rowsAttend(li, l, n, seq, pos, unitHeads, units, astride, scale)
@@ -1524,6 +1565,9 @@ func (m *Model) BlockLowering(li int) []OpLowering {
 	}
 	for i, o := range g.Ops {
 		h := hostLowering[o.Kind]
+		if o.Kind == graph.OpIndex && mlaTo < 0 {
+			h.routine = "msaKey and msaQuery (the key one more head of the appended row), then attendRow's block mask (msaMask)"
+		}
 		if mlaTo >= 0 && i >= mlaFrom && i < mlaTo {
 			h.routine, h.composed = mlaProjectRoutine, false
 		}

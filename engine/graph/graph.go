@@ -119,6 +119,13 @@ const (
 	// own history: it reads the idx state's version n and writes n+1. It is
 	// opaque in this version: the projections, norm, rotary and scoring are
 	// one op, its weights all bound by it.
+	//
+	// Over a GQA attention (MiniMax Sparse Attention, Dense.Select) it has
+	// the normed row alone (In[0]): its key is one more kv head of the row
+	// the block just appended (it reads kv's version n and writes n+1), and
+	// Out[0] is the selection, per kv group the TopK blocks of Block
+	// positions by their best score with the Local ending at the query's
+	// forced in.
 	OpIndex
 	numOps
 )
@@ -252,6 +259,8 @@ type Attrs struct {
 	Bound float64
 	// Offset and Width are OpSlice's.
 	Offset, Width int
+	// Block and Local are a block-selecting OpIndex's (Dense.Select).
+	Block, Local int
 }
 
 // Op is one operation.

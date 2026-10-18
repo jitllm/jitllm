@@ -94,7 +94,11 @@ func lowerPrep(g *graph.Graph, from, to int, qkv [3]graph.ValueID) ([]prepStep, 
 func (s *State) runPrep(l *layer, steps []prepStep, q, k, v, cs []float32, li, kvSlot, kvPos int) {
 	c := s.c
 	hd := c.HeadDimAt(li)
-	rows := [3][]float32{q, k, v}
+	// A selecting block's row carries the indexer's key past the attention's
+	// heads (msaRow): the norms and the rotary turn the heads, the append
+	// writes the whole row.
+	kvd := c.KVDimAt(li)
+	rows := [3][]float32{q, k[:min(len(k), kvd)], v[:min(len(v), kvd)]}
 	for _, st := range steps {
 		x := rows[st.arg]
 		switch st.kind {
