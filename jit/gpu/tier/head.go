@@ -135,7 +135,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		}
 		b, e := g.dev.Alloc(h.W.Rows * 4)
 		if e != nil {
-			closeKern(c)
+			g.closeKern(c)
 			return false
 		}
 		bs.headCap, bs.logitsCap = c, b
@@ -150,7 +150,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 				if b, e := g.dev.Alloc(4); e == nil {
 					g.argmaxK, g.argmaxOut = c, b
 				} else {
-					closeKern(c)
+					g.closeKern(c)
 				}
 				w.close()
 			}

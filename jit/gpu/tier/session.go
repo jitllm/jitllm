@@ -1,8 +1,6 @@
 package tier
 
 import (
-	"sync/atomic"
-
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/quant"
 )
@@ -26,8 +24,6 @@ import (
 // head -- changes what every step reads, takes the call lock exclusively
 // (enter) and so runs with no step on the device.
 
-var nextSession atomic.Uint64
-
 // Attach returns a device view bound to a fresh session. Every State that wants
 // its own attention history calls it; two views on one GPU share the model's
 // weights and kernels and nothing else.
@@ -35,7 +31,13 @@ var nextSession atomic.Uint64
 // The zero session -- a caller that uses *GPU directly -- still works and is
 // exactly the single-State behaviour every existing gate measures.
 func (g *GPU) Attach() nn.LayerDevice {
-	return &gpuSession{g: g, sid: nextSession.Add(1)}
+	// Ids only need to be unique on this tier; the counter is the GPU's, under
+	// the routing lock Attach has to take for it.
+	g.mu.Lock()
+	g.lastSID++
+	sid := g.lastSID
+	g.mu.Unlock()
+	return &gpuSession{g: g, sid: sid}
 }
 
 type gpuSession struct {

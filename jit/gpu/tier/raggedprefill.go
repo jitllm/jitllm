@@ -381,7 +381,7 @@ func (g *devTier) ragStagedVariant(bs *blockScratch, pf *pagedPrefill, chunk, n 
 	for i, k := range []*ir.Kernel{ks, kf, ka} {
 		c, err := g.compileShared(k)
 		if err != nil {
-			v.close()
+			v.close(g.devShared)
 			return nil, err
 		}
 		*[]*backend.Kernel{&v.scores, &v.soft, &v.acc}[i] = c
@@ -389,12 +389,12 @@ func (g *devTier) ragStagedVariant(bs *blockScratch, pf *pagedPrefill, chunk, n 
 	np := kernels.PagedPrefillPlane(s)
 	have := pf.planeFloats
 	if err := g.prefillBuf(&pf.sc, &have, np); err != nil {
-		v.close()
+		v.close(g.devShared)
 		return nil, err
 	}
 	have = pf.planeFloats
 	if err := g.prefillBuf(&pf.wt, &have, np); err != nil {
-		v.close()
+		v.close(g.devShared)
 		return nil, err
 	}
 	pf.planeFloats = max(pf.planeFloats, np)

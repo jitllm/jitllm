@@ -42,10 +42,10 @@ type streamSet struct {
 	foldT, finT         int
 }
 
-func (ss *streamSet) close() {
+func (ss *streamSet) close(g *devShared) {
 	for _, k := range []backend.Kernel{ss.first, ss.fold, ss.finish} {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	for _, b := range ss.run {
@@ -211,13 +211,13 @@ func (g *devTier) streamSetFor(bs *blockScratch, w int) (*streamSet, error) {
 	ss.fold = comp(kernels.FlashAttentionMergeRun(ms, false))
 	ss.finish = comp(kernels.FlashAttentionMergeWide(one))
 	if ss.first == nil || ss.fold == nil || ss.finish == nil {
-		ss.close()
+		ss.close(g.devShared)
 		return nil, fmt.Errorf("streamed attention's folds: %s", g.LastErr)
 	}
 	for i := range ss.run {
 		b, err := g.dev.Alloc(kernels.FlashPartialFloats(one) * 4)
 		if err != nil {
-			ss.close()
+			ss.close(g.devShared)
 			return nil, err
 		}
 		ss.run[i] = b

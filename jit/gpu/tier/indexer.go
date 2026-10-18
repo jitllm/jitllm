@@ -132,14 +132,14 @@ func (g *devTier) initIdx(bs *blockScratch, rows, P, row, w int,
 }
 
 // free releases the indexer's kernels and buffers.
-func (ix *idxScratch) free() {
+func (ix *idxScratch) free(g *devShared) {
 	if ix == nil {
 		return
 	}
 	for _, k := range []backend.Kernel{ix.lnPart, ix.lnVar, ix.lnApply, ix.copyK, ix.ropeK, ix.writeK,
 		ix.copyQ, ix.ropeQ, ix.scores, ix.sel, ix.gather, ix.desc} {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	for _, b := range []backend.Buf{ix.kRaw, ix.kPart, ix.kVar, ix.kn, ix.kRot, ix.qRaw, ix.qRot, ix.wts,

@@ -124,10 +124,10 @@ type pagedVariant struct {
 	mergeItems                  int // > 0: the group-per-item merge, 32 lanes an item (DecodePlanOff)
 }
 
-func (v *pagedVariant) close() {
+func (v *pagedVariant) close(g *devShared) {
 	for _, k := range []backend.Kernel{v.k, v.scores, v.soft, v.acc, v.merge} {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 }
@@ -366,24 +366,24 @@ func (g *devTier) initPagedDS4(bs *blockScratch) error {
 }
 
 // freePaged releases a scratch's paged set.
-func freePaged(pg *pagedScratch) {
+func freePaged(pg *pagedScratch, g *devShared) {
 	if pg == nil {
 		return
 	}
 	for _, k := range []backend.Kernel{pg.copyK, pg.ropeK, pg.copyV, pg.copyLat, pg.copyPE, pg.ropeQKV} {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	for _, v := range pg.vars {
-		v.close()
+		v.close(g)
 	}
-	pg.pf.free()
-	pg.msa.free()
-	pg.qsa.free()
-	pg.idx.free()
+	pg.pf.free(g)
+	pg.msa.free(g)
+	pg.qsa.free(g)
+	pg.idx.free(g)
 	for _, ss := range pg.streams {
-		ss.close()
+		ss.close(g)
 	}
 	for _, bufs := range pg.streamDesc {
 		for _, b := range bufs {
@@ -484,7 +484,7 @@ func (g *devTier) pagedBuild(bs *blockScratch, plan kernels.DecodePlan) (*pagedV
 	s := plan.Shape
 	v := &pagedVariant{plan: plan}
 	fail := func(err error) (*pagedVariant, error) {
-		v.close()
+		v.close(g.devShared)
 		return nil, fmt.Errorf("paged attention (%s, %d split(s)): %w", plan.Path, s.Splits, err)
 	}
 	comp := func(dst *backend.Kernel, k *ir.Kernel, err error) error {

@@ -217,13 +217,13 @@ func (g *devTier) newMLABatch(bs *blockScratch, p *nn.LayerPlan, rows int) *mlaB
 	}
 	if err != nil {
 		g.LastErr = "tier: batched latent attention: " + err.Error()
-		m.free()
+		m.free(g.devShared)
 		return nil
 	}
 	return m
 }
 
-func (m *mlaBatch) free() {
+func (m *mlaBatch) free(g *devShared) {
 	if m == nil {
 		return
 	}
@@ -232,7 +232,7 @@ func (m *mlaBatch) free() {
 		m.gatherNope, m.quantNope, m.copyAbs, m.copyPE, m.acc, m.gatherAcc, m.quantAcc,
 		m.gatherOut, m.quantOut, m.scores70, m.acc70} {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	for _, b := range []backend.Buf{m.kv, m.kvLat, m.kvn, m.kvPart, m.kpe, m.pOff, m.qa, m.qan,

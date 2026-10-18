@@ -139,7 +139,7 @@ func (g *devTier) settleScratch(d int64) {
 // dropScratch frees bs and refunds what it held. Callers hold g.mu.
 func (g *devTier) dropScratch(bs *blockScratch) {
 	defer g.scratchWin().close()
-	freeScratch(bs)
+	freeScratch(bs, g.devShared)
 }
 
 // dropBatch frees the batched scratch of one width.
@@ -250,7 +250,7 @@ func (g *devTier) dropLaneScratch() {
 	for w := range g.bbs {
 		g.dropBatch(w)
 	}
-	freeScratch(g.bs)
+	freeScratch(g.bs, g.devShared)
 	g.bs = nil
 	for _, b := range []*backend.Buf{&g.partBuf, &g.f16Buf} {
 		if *b != nil {

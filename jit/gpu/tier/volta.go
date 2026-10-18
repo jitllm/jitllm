@@ -67,7 +67,7 @@ func (g *devTier) volta70Attn(bs *blockScratch, kvDim, gqa int, scale float32) b
 	if sk == nil || ak == nil || (p.SWAWindow > 0 && sw == nil) {
 		for _, k := range []backend.Kernel{sk, ak, sw} {
 			if k != nil {
-				closeKern(k)
+				g.closeKern(k)
 			}
 		}
 		return false
@@ -86,7 +86,7 @@ func (g *devTier) volta70Attn(bs *blockScratch, kvDim, gqa int, scale float32) b
 		if fk != nil && p.SWAWindow > 0 {
 			fs.Window = p.SWAWindow
 			if fw = comp(kernels.FlashPrefill70(fs)); fw == nil {
-				closeKern(fk)
+				g.closeKern(fk)
 				fk = nil
 			}
 		}
@@ -166,7 +166,7 @@ func (g *devTier) flashTileAttn(bs *blockScratch, kvDim, gqa int, scale float32)
 	if fk != nil && p.SWAWindow > 0 {
 		fs.Window = p.SWAWindow
 		if fw = comp(kernels.FlashPrefillTile(fs, t)); fw == nil {
-			closeKern(fk)
+			g.closeKern(fk)
 			fk = nil
 		}
 	}
@@ -188,7 +188,7 @@ func (g *devTier) spanKernel(hb *blockScratch) error {
 	if e == nil {
 		w := g.scratchWin() // the scratch's own word (scratch.go)
 		if ob, e = g.dev.Alloc(4); e != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 		w.close()
 	}

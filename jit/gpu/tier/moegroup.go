@@ -258,13 +258,13 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 	}
 	if err != nil {
 		g.LastErr = "tier: batched mixture: " + err.Error()
-		m.free()
+		m.free(g.devShared)
 		return nil
 	}
 	return m
 }
 
-func (m *moeGroup) free() {
+func (m *moeGroup) free(g *devShared) {
 	if m == nil {
 		return
 	}
@@ -272,7 +272,7 @@ func (m *moeGroup) free() {
 		m.quantX, m.combine, m.biasR, m.biasFF, m.biasD, m.gscore, m.gmask, m.actMulW,
 		m.gbcount, m.gcount, m.gends, m.gcols, m.gscatter, m.gtiles, m.gtilesU, m.ewScale} {
 		if k != nil {
-			closeKern(k)
+			g.closeKern(k)
 		}
 	}
 	for _, b := range []backend.Buf{m.rlog, m.rlogB, m.zsel, m.rsel, m.rtop, m.rw, m.perm, m.tsel,
@@ -329,7 +329,7 @@ func (g *devTier) sm70() bool {
 			if err != nil {
 				return false
 			}
-			closeKern(c)
+			g.closeKern(c)
 			return true
 		}
 		if !g.mmaOff && !g.NoMMA {
@@ -340,7 +340,7 @@ func (g *devTier) sm70() bool {
 				if c, err := g.dev.Compile(ker); err != nil {
 					g.mmaOff, g.MMAWhy = true, err.Error()
 				} else {
-					closeKern(c)
+					g.closeKern(c)
 				}
 			}
 		}
