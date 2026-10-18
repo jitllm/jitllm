@@ -129,17 +129,6 @@ func graphAct(a nn.ActKind) graph.Act {
 	return 0
 }
 
-// mixLowered is whether block li's FFN is a mixture the block graph lowers: a
-// routed mixture the op language states (mixtureFacts). A dense block beside
-// mixtures (a dense lead, ERNIE's interleave) is a dense FFN, not this.
-func (m *Model) mixLowered(li int) bool {
-	if !m.Cfg.MoEAt(li) {
-		return false
-	}
-	_, why := m.mixtureWhy(li)
-	return why == ""
-}
-
 // blockFacts is what the container states about text block li: the dense
 // configuration and the tensors stored for the block by role.
 func (m *Model) blockFacts(li int) (graph.Facts, error) {
@@ -295,21 +284,20 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 	return f, nil
 }
 
-// denseLowering is a verified graph lowered for the host decode: the dense
-// block's op sequence matched against the operations the hand-written body
-// runs. qk says the matched sequence holds the per-head q/k norms, which
-// attnPrep applies with the rotary and the cache write.
+// denseLowering is a verified graph lowered for the host: the block's op
+// sequence matched against the host operations each op runs in. qk says the matched sequence holds the per-head q/k norms, which
+// runPrep applies with the rotary and the cache write.
 type denseLowering struct {
 	g  *graph.Graph
 	qk bool
 	// qkPost: q's norm after the rotary (Hunyuan's); qkL2: weightless head
-	// norms on q and k after it (Llama 4's). attnPrep applies both.
+	// norms on q and k after it (Llama 4's). runPrep applies both.
 	qkPost, qkL2 bool
 	// prep is the block's attention prologue, its ops from the projections
 	// to the attention lowered one by one (lowerPrep).
 	prep []prepStep
 	// mix says the block's FFN is a routed mixture (graph.Dense.Mixture),
-	// which the host runs through the mixture's operations (moe, moeBatch).
+	// which the host runs through the mixture's operations (moe, moeExpertsRows).
 	mix bool
 	// The classic block's switches, as the matched ops state them: par, the
 	// FFN reads the block input (normed before attention, by its own norm
@@ -538,7 +526,7 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 			}
 		}
 		// The q/k norms, per head (qwen3) or over each whole projection
-		// (OLMoE): attnPrep applies either, by QKNormShapeAt.
+		// (OLMoE): runPrep applies either, by QKNormShapeAt.
 		for _, k := range []graph.OpKind{graph.OpHeadNorm, graph.OpNorm} {
 			if !lw.qk && take(k, jlm.RoleAttnQNorm) {
 				if !lw.kvShared && !take(k, jlm.RoleAttnKNorm) {
@@ -839,7 +827,7 @@ func (m *Model) buildGraphs() error {
 		}
 		if lw.qk != m.Cfg.QKNormAt(li) || lw.qkPost != (lw.qk && m.Cfg.QKNormPost) ||
 			lw.qkL2 != (m.Cfg.QKL2Norm && m.Cfg.RopeAt(li)) {
-			return fmt.Errorf("model: block %d graph's q/k norms (%v, post %v, weightless %v) are not attnPrep's",
+			return fmt.Errorf("model: block %d graph's q/k norms (%v, post %v, weightless %v) are not the configuration's",
 				li, lw.qk, lw.qkPost, lw.qkL2)
 		}
 		if lw.index != (lw.mla && m.Cfg.Indexer()) {
@@ -954,9 +942,8 @@ func (s *State) devRan(lo, hi int) {
 	}
 }
 
-// graphBlock runs block li's host decode through its lowering: the calls the
-// hand-written body makes for a dense block, in its order, so the kernels and
-// their order are the control's.
+// graphBlock runs block li's host decode through its lowering: each op's
+// host routine, in the graph's order.
 func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 	c, m := s.c, s.m
 	s.graphRuns++
@@ -1103,7 +1090,7 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 			}
 			clear(s.vc[kvd:kvr])
 		}
-		// [head_norm q, head_norm k,] rope q, rope k, kv_append: attnPrep
+		// [head_norm q, head_norm k,] rope q, rope k, kv_append: runPrep
 		s.runPrep(l, lw.prep, s.q[:c.QDimAt(li)], s.kc[:kvr], s.vc[:kvr], s.ropeTable(li, s.cs, s.csSWA, 0), li, 0, s.pos)
 		m.trace(li, "k", s.kc[:kvd])
 		// attend
@@ -1282,7 +1269,7 @@ func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
 	}
 	if lw.mix {
 		// The mixture's ops, each its own routine, added into the residual
-		// as the hand-written body's moe adds them: route (the router's
+		// as moe adds them: route (the router's
 		// matvec and the route kernel); gather, the experts' gate, up,
 		// act_mul and down, and combine (one grouped region); [the shared
 		// expert's matvecs, act_mul and gate_scalar, and its add].
@@ -1388,9 +1375,8 @@ func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
 }
 
 // graphRows runs block li over a host prompt chunk -- rows p0..p0+n-1 of slot,
-// in s.bx -- through the graph's lowering: the dense subset of hostRows'
-// calls, in its order, so the kernels and their order are the hand-written
-// chunk's. The graph is the one the decode lowering matched (lowerDense):
+// in s.bx -- through the graph's lowering. The graph is the one the decode
+// lowering matched (lowerDense):
 // norm, q/k/v, [the per-head q/k norms,] the rotary and the cache write for
 // every row before any row attends, attention, o, the residual add, then the
 // FFN norm, gate and up, act_mul, down and the second add.
@@ -1507,9 +1493,8 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, base, p0, n
 }
 
 // graphRagged runs block li over a ragged step's rows -- each row its own
-// sequence's slot and position, in s.bx -- through the graph's lowering: the
-// dense subset of rowsHost's block body, in its order, so the kernels and
-// their order are the hand-written step's. Every row's rotary and cache write
+// sequence's slot and position, in s.bx -- through the graph's lowering. Every
+// row's rotary and cache write
 // lands before any row attends, as in graphRows.
 func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, tokens []int32, seq, pos []int, cs, csSWA []float32, unitHeads, units, astride int, scale float64) error {
 	c := s.c
@@ -1685,7 +1670,7 @@ func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged 
 		return nil
 	}
 	if lw.mix {
-		// The mixture over the rows, op by op as moeBatch runs them: every
+		// The mixture over the rows, op by op as moeExpertsRows runs them: every
 		// row's route, then the experts expert-major, then the shared
 		// expert per row, into the residual; on a ragged step each row its
 		// own sequence's experts.

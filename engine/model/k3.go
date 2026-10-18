@@ -403,7 +403,7 @@ func (s *State) k3MoE(li int, l *layer, h, out []float32) error {
 }
 
 // k3MoEBatch is k3MoE over n rows of h, added into n rows of resid, the
-// experts visited expert-major as moeBatch visits them.
+// experts visited expert-major as moeExpertsRows visits them.
 func (s *State) k3MoEBatch(li int, l *layer, h, resid []float32, n int) error {
 	c := s.c
 	s.growK3(n)

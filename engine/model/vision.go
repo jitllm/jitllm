@@ -1595,12 +1595,12 @@ func (s *State) growVision(n int) {
 	s.growBatch(n)
 }
 
-// visPrep is attnPrep over a picture's n rows of block li, on the pool: each
+// visPrep is the prologue (runPrep's steps) over a picture's n rows of block li, on the pool: each
 // row's q and k turned by its rotary row where the tower has one, and its k
 // and v written to the page the block was lent (lend), which holds every row
 // of the picture -- so no row grows the page or faults it, and the rows are
 // independent. A tower block has no clamp, q/k norm or v norm, which is all
-// attnPrep would add.
+// runPrep would add.
 func (s *State) visPrep(li, n int) {
 	pg := &s.kv.layers[li]
 	pg.grow(0)
@@ -1973,7 +1973,7 @@ func (c TowerConfig) towerRope() nn.Rope {
 // visRope is every row's {cos, sin} row -- HeadDim floats, the row's patch's
 // (grid row, grid column) on towerRope's two axes -- built once per grid by
 // the generated table kernel. The text block's rotation turns q and k by it
-// (attnPrep) on the host, and the device by the same rows (Layers' cs).
+// (visPrep) on the host, and the device by the same rows (Layers' cs).
 func (s *State) visRope(n int) []float32 {
 	v := s.vis
 	c := v.t.Cfg

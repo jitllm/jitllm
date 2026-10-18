@@ -41,7 +41,7 @@ import (
 // rin.
 //
 // out is added to, not written: the caller passes the residual and each
-// expert's contribution goes straight in, as moeBatch does, so the two produce
+// expert's contribution goes straight in, as moeExpertsRows does, so the two produce
 // the same float sum.
 //
 // A post-FFN norm cannot be expressed this way; forward.go refuses a mixture
@@ -133,7 +133,7 @@ func (s *State) moeExperts(li int, l *layer, h, out []float32) error {
 		return err
 	}
 	s.res.touch(li, c.NExpert, sel)
-	// Hotness is counted here and not in moeBatch: endToken() advances once
+	// Hotness is counted here and not in moeExpertsRows: endToken() advances once
 	// per Forward, so counting a prefill chunk's rows would push Uses, a
 	// per-token probability tier.Place ranks by, above 1.
 	if !s.rowsOfChunk {
@@ -153,7 +153,7 @@ func (s *State) moeExperts(li int, l *layer, h, out []float32) error {
 	// olmoe does not); without it the kernel divides by one.
 	//
 	// Contributions are summed in ascending expert id, not selection order,
-	// because moeBatch visits the bank expert-major. A different order makes
+	// because moeExpertsRows visits the bank expert-major. A different order makes
 	// Forward and Prefill/ForwardBatch different float sums, which in a mixture
 	// can flip a near-tied top-k in the next layer. Selection order is still
 	// what the trace, the counters and the divisor see.
@@ -171,7 +171,7 @@ func (s *State) moeExperts(li int, l *layer, h, out []float32) error {
 // successive positions or a batch's sequences -- one row at a time, so every
 // entry point computes Gemma 4's block as decode does, bit for bit.
 //
-// It runs row by row, where moeBatch visits a chunk's experts once each;
+// It runs row by row, where moeExpertsRows visits a chunk's experts once each;
 // batching the experts here is the lever if a Gemma 4 prompt's mixture shows in
 // a profile.
 func (s *State) denseMoERows(li int, l *layer, h, x []float32, n int) error {
@@ -363,7 +363,7 @@ func (s *State) moeFFN(l *layer, ord []int32, h, out []float32, dw []float32) (b
 	}
 	s.moeDownBatched.Add(1)
 	// The down bias joins each expert's projection BEFORE its weight, as the
-	// looped arm and moeBatch add it, so the three stay the same float sum.
+	// looped arm and moeExpertsRows add it, so the three stay the same float sum.
 	if l.expDownB != nil {
 		for j, e := range ord {
 			s.addBias(s.moeDown[j*ew:(j+1)*ew], expBias(l.expDownB, int(e), ew))
@@ -500,21 +500,6 @@ func (s *State) sharedExpertOut(l *layer, h []float32) (float32, error) {
 	w *= float32(s.c.ResidualScale)
 	s.jit.NewInput()
 	return w, nil
-}
-
-// moeBatch runs the mixture-of-experts FFN for a whole chunk of rows, visiting
-// each EXPERT once instead of each ROW once, and accumulating straight into the
-// residual.
-//
-// The win is locality as much as width: a short prompt spreads its selections
-// so thinly that most experts serve one row, but expert-major order reads each
-// expert's weights at most once per chunk instead of scattering across the
-// whole file row by row.
-//
-// The membership scan is O(NExpert * n * NExpertUsed), cheap against the
-// matvecs it orders, so it needs no index.
-func (s *State) moeBatch(li int, l *layer, h, resid []float32, n int) error {
-	return s.moeBatchFrom(li, l, h, h, resid, n)
 }
 
 // moeBatchFrom is moeBatch with the router reading rin (n rows of n_embd)
@@ -851,7 +836,7 @@ func (s *State) hostExpertsRowsFor(li int) func(sel []uint32, w, in, out []float
 // region or more per expert.
 const hostRowsByRow = 8
 
-// hostExpertsRows is moeBatch's expert-major pass with the device's
+// hostExpertsRows is moeExpertsRows' expert-major pass with the device's
 // selections and weights: each expert the chunk chose is read once and run
 // over its rows as one batch (moeBatchExpert), summed into out in ascending
 // expert id, rows ascending -- the order the host's own batched mixture sums.

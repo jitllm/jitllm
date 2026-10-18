@@ -89,6 +89,27 @@ func lowerPrep(g *graph.Graph, from, to int, qkv [3]graph.ValueID) ([]prepStep, 
 	return out, nil
 }
 
+// kNormFirst is steps with k's head norm moved before k's rotary: the
+// violation xdKNormFirst runs.
+func kNormFirst(steps []prepStep) []prepStep {
+	r, n := -1, -1
+	for i, st := range steps {
+		switch {
+		case st.kind == graph.OpRope && st.arg == 1 && r < 0:
+			r = i
+		case st.kind == graph.OpHeadNorm && st.arg == 1 && r >= 0 && n < 0:
+			n = i
+		}
+	}
+	if r < 0 || n < 0 {
+		return steps
+	}
+	out := append([]prepStep(nil), steps[:r]...)
+	out = append(out, steps[n])
+	out = append(out, steps[r:n]...)
+	return append(out, steps[n+1:]...)
+}
+
 // runPrep runs a block's lowered prologue over one row: q, k and v are the
 // row's projections, cs its rotary table, kvSlot and kvPos where its k and v
 // are cached. Each step is one generated kernel (per head for a per-head
@@ -101,6 +122,9 @@ func (s *State) runPrep(l *layer, steps []prepStep, q, k, v, cs []float32, li, k
 	// writes the whole row.
 	kvd := c.KVDimAt(li)
 	rows := [3][]float32{q, k[:min(len(k), kvd)], v[:min(len(v), kvd)]}
+	if xdKNormFirst {
+		steps = kNormFirst(steps)
+	}
 	for _, st := range steps {
 		x := rows[st.arg]
 		switch st.kind {

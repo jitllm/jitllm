@@ -6,8 +6,7 @@ package model
 // row's state depends on the row before it, and a batched recurrence would
 // be a different algorithm (a chunked scan) -- while its projections run as
 // GEMMs over the chunk around the loop (linrows.go); the rows overwrite bh,
-// so the output projection waits for the loop to finish. The hand-written
-// chunk and the block graph's lowering both call it.
+// so the output projection waits for the loop to finish.
 func (s *State) mixerChunk(li int, l *layer, slot, base int, outRows []float32, n int) error {
 	ne := s.c.NEmbd
 	batched := s.linearBatched()

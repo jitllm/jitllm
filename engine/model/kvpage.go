@@ -1581,7 +1581,7 @@ func (s *State) restoreKey(key []int32, rows int, logits bool) (int, []float32, 
 // syncKVFromDevice brings a placed block's history down into the host pages so
 // that seal has something to store.
 //
-// attnPrep writes host pages only for host blocks, so without this a fully
+// runPrep writes host pages only for host blocks, so without this a fully
 // offloaded model would store nothing. It runs once, after the prompt, not per
 // token, to keep device round trips off decode; positions generated after it
 // are not stored for placed blocks.

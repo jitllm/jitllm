@@ -328,7 +328,7 @@ type State struct {
 	spareHost hostBatch
 	// traceLayer is the block moe() is running, for traceExperts.
 	traceLayer int
-	// Per-row selection and weight for a batched chunk, so moeBatch can visit
+	// Per-row selection and weight for a batched chunk, so moeExpertsRows can visit
 	// experts in order rather than rows.
 	bsel []int32
 	bw   []float32
@@ -4009,112 +4009,6 @@ func (s *State) ropeTable(li int, global, local []float32, tok int) []float32 {
 	return global[tok*c.RopeW() : (tok+1)*c.RopeW()]
 }
 
-// attnPrep is the tail of one token's attention projections, shared by decode,
-// prefill and batch so the three cannot drift: the clamp, the optional q/k
-// norm, RoPE on q and k (never v), and the write into the KV cache. cs is the
-// cos/sin table for this token's position; kvSlot and kvPos say which sequence
-// row and position its k and v belong at.
-//
-// k and v nil is a KV-sharing block (Config.KVShared): q alone is normed and
-// rotated, and nothing is cached.
-func (s *State) attnPrep(l *layer, q, k, v []float32, cs []float32, li, kvSlot, kvPos int) {
-	c := s.c
-	hd, nkv := c.HeadDimAt(li), c.NKVHeadAt(li)
-	if k == nil {
-		if c.QKNormAt(li) {
-			nq, _, wq, _ := c.QKNormShapeAt(li)
-			for hh := 0; hh < nq; hh++ {
-				t := q[hh*wq : (hh+1)*wq]
-				s.rmsnorm(t, t, l.qNorm, c.RMSEps)
-			}
-		}
-		if c.RopeAt(li) {
-			t0 := s.tick()
-			nn.RoPE32JIT(q[:c.NHead*hd], hd, cs, c.RopeNeox)
-			s.tock(opRoPE, t0)
-		}
-		return
-	}
-	// DBRX's clip_qkv, first: after the projections and their biases, before
-	// any norm or rotary.
-	if cl := c.ClampKQV; cl != 0 {
-		nn.Clamp32JIT(q[:c.NHead*c.HeadDim], cl)
-		nn.Clamp32JIT(k[:c.NKVHead*c.HeadDim], cl)
-		nn.Clamp32JIT(v[:c.NKVHead*c.HeadDimV], cl)
-	}
-	qkNorm := c.QKNormAt(li)
-	if qkNorm {
-		// qwen3 norms each head over HeadDim, olmoe the whole projection at
-		// once; QKNormShape is the one place that decides which. Whether to
-		// norm at all is QKNormAt, the derivation the device's offer reads.
-		nq, nk, wq, wk := c.QKNormShapeAt(li)
-		if !c.QKNormPost {
-			for hh := 0; hh < nq; hh++ {
-				t := q[hh*wq : (hh+1)*wq]
-				s.rmsnorm(t, t, l.qNorm, c.RMSEps)
-			}
-		}
-		// Under XD-RoPE k's norm follows the rotary too (below): that rotation
-		// does not keep a head's RMS.
-		for hh := 0; hh < nk && (!c.RopeXD || xdKNormFirst); hh++ {
-			t := k[hh*wk : (hh+1)*wk]
-			s.rmsnorm(t, t, l.kNorm, c.RMSEps)
-		}
-	}
-	// Per layer: Llama 4's NoPE layers (and a NoPE model) carry no rotary.
-	if c.RopeAt(li) {
-		t0 := s.tick()
-		if c.RopeXD {
-			nn.RoPESplit32JIT(q[:c.NHead*hd], hd, cs)
-			nn.RoPESplit32JIT(k[:nkv*hd], hd, cs)
-		} else {
-			nn.RoPE32JIT(q[:c.NHead*hd], hd, cs, c.RopeNeox)
-			nn.RoPE32JIT(k[:nkv*hd], hd, cs, c.RopeNeox)
-		}
-		s.tock(opRoPE, t0)
-		// Llama 4's L2 norm goes after the rotary and has no weight: the same
-		// generated RMSNorm against a ones vector.
-		if c.QKL2Norm {
-			hd := c.HeadDim
-			for hh := 0; hh < c.NHead; hh++ {
-				t := q[hh*hd : (hh+1)*hd]
-				s.rmsnorm(t, t, s.m.onesHD, c.RMSEps)
-			}
-			for hh := 0; hh < c.NKVHead; hh++ {
-				t := k[hh*hd : (hh+1)*hd]
-				s.rmsnorm(t, t, s.m.onesHD, c.RMSEps)
-			}
-		}
-	}
-	// Hunyuan's q norm, after the rotary (or where it would be), weighted by
-	// w_q*w_k (jlm.FlagQKNormPostRope): k's weight is folded into it, so the
-	// scores are the model's while k, normed before, carries ones.
-	if qkNorm && c.QKNormPost {
-		for hh := 0; hh < c.NHead; hh++ {
-			t := q[hh*hd : (hh+1)*hd]
-			s.rmsnorm(t, t, l.qNorm, c.RMSEps)
-		}
-		if c.RopeXD && !xdKNormFirst {
-			for hh := 0; hh < nkv; hh++ {
-				t := k[hh*hd : (hh+1)*hd]
-				s.rmsnorm(t, t, l.kNorm, c.RMSEps)
-			}
-		}
-	}
-	// Gemma 4 norms each head of v with no weight: the generated RMSNorm
-	// against a ones vector, as Llama 4's L2 norm is.
-	if c.VNorm {
-		for hh := 0; hh < nkv; hh++ {
-			t := v[hh*hd : (hh+1)*hd]
-			s.rmsnorm(t, t, s.m.onesHD[:hd], c.RMSEps)
-		}
-	}
-	// The page is allocated here, not faulted: growth is known, not
-	// discovered -- unless trim evicted it with other history in it.
-	s.kvWritable(li, kvPos)
-	s.kv.layers[li].write(s.kvlAt(li), kvSlot, kvPos, k, v)
-}
-
 // layerOutScale multiplies the block's output row by its scalar (Gemma 4's
 // layer_scalar), on the generated scale kernel; a block without one is
 // untouched.
@@ -4242,8 +4136,7 @@ func (s *State) layerInputs(in []float32) {
 
 // attendRow is one decode row's attention for block li: the window, the
 // scale and any score bias decided, then every head across the pool, into
-// s.xb. The hand-written block body and the block graph's lowering
-// (graphblock.go) both run it.
+// s.xb.
 func (s *State) attendRow(li int, l *layer) {
 	c, m := s.c, s.m
 	t0 := s.tick()

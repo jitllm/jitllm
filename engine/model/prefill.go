@@ -1296,8 +1296,7 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 	}
 	l := &m.layers[li]
 	if li < len(m.graphs) && m.graphs[li] != nil {
-		// A graphed block's stream buffers, sized for the chunk as the
-		// hand-written body sizes them.
+		// A block's stream buffers, sized for the whole chunk.
 		s.growAltUpRows(chunkRows)
 		s.growQ4E(chunkRows)
 		s.growDS4(chunkRows)
@@ -1457,9 +1456,7 @@ func (s *State) forwardRowsFor() int {
 
 // attendRows is a prompt chunk's attention for block li, rows p0..p0+n-1 of
 // slot, parallel over the rows: each row's query in s.bq (or the absorbed
-// latent query under MLA) against the cache attnPrep wrote, into s.bxb. One
-// function so the hand-written chunk body and the block graph's lowering
-// (graphRows) run the same region.
+// latent query under MLA) against the cache runPrep wrote, into s.bxb.
 func (s *State) attendRows(li int, l *layer, slot, p0, n, qDim int, scale float64, bidir, mla bool) {
 	c := s.c
 	// Attention, parallel over tokens. Each token owns its own scores

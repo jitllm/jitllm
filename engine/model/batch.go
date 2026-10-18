@@ -354,8 +354,7 @@ func (errBatchDevice) Error() string {
 
 // rowsAttend is a ragged step's attention over block li's history: every
 // row's heads fanned out over the pool, each row at its own slot and position,
-// into s.bxb (s.bmlaAcc under MLA). The hand-written block body and the
-// block graph's ragged lowering (graphRagged) both call it.
+// into s.bxb (s.bmlaAcc under MLA).
 func (s *State) rowsAttend(li int, l *layer, n int, seq, pos []int, unitHeads, units, astride int, scale float64) {
 	c, nh := s.c, s.c.NHead
 	// Across sequences and heads: at n=2 a split over sequences alone would
