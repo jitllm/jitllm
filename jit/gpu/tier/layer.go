@@ -25,11 +25,12 @@ type layer struct {
 	// ran the block through the encoder, progRanProgram where it ran the
 	// program.
 	progRun, progRunRows progReason
-	// progOne and progRows are prog with the rewrites that apply on a
-	// scratch at one row and at many (devrewrite.go).
-	progOne, progRows progFused
-	wq, wk, wv, wo    *resident
-	gate, up, down    *resident
+	// progOne, progRows and progRag are prog with the rewrites that apply on
+	// a scratch at one row, on a prompt chunk and on a ragged step
+	// (devrewrite.go).
+	progOne, progRows, progRag progFused
+	wq, wk, wv, wo             *resident
+	gate, up, down             *resident
 	// conv is a convolutional tower block's program and vectors (conv.go),
 	// nil for every other block.
 	conv *convLayer

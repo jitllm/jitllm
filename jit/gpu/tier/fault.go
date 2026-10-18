@@ -79,7 +79,7 @@ func (g *devTier) injectedFail() bool {
 var pagedFault string
 
 // SetPagedFault arms one violation for the calls after it; "" disarms.
-func SetPagedFault(f string) { pagedFault = f }
+func SetPagedFault(f string) { pagedFault = f; blockFault = pagedFault != "" || rowsFault != "" }
 
 func pagedFaulted(f string) bool { return pagedFault == f }
 
@@ -130,7 +130,7 @@ func recFaulted(f string) bool { return recFault == f }
 var rowsFault string
 
 // SetRowsFault arms one violation for the calls after it; "" disarms.
-func SetRowsFault(f string) { rowsFault = f }
+func SetRowsFault(f string) { rowsFault = f; blockFault = pagedFault != "" || rowsFault != "" }
 
 func rowsFaulted(f string) bool { return rowsFault == f }
 
@@ -200,3 +200,11 @@ func allocFault() {
 		faultSink = make([]byte, 32)
 	}
 }
+
+// blockFault is set while a fault the block encoder reads (paged,
+// ragged-step) is armed: such a step runs the encoder, which the fault is
+// written against, not the device program. The setters keep it; a step reads
+// the bool.
+var blockFault bool
+
+func blockFaulted() bool { return blockFault }

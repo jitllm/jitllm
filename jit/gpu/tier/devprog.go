@@ -354,7 +354,7 @@ func (g *GPU) BlockProgram(li int) (prog, why string) {
 		return "", l.progWhy
 	}
 	var out []string
-	for _, f := range [2]progFused{l.progOne, l.progRows} {
+	for _, f := range [3]progFused{l.progOne, l.progRows, l.progRag} {
 		if f.prog != nil {
 			head := "rewrites: " + f.took.String()
 			if f.err != nil {
@@ -383,7 +383,6 @@ const (
 	progRanProgram     progReason = iota
 	progNotLowered                // the program does not lower the block (progWhy)
 	progNoProgram                 // Config.NoProgram
-	progRagged                    // a ragged step
 	progRowsNotPrefill            // rows that are not a prefill chunk
 	progFault                     // a fault skips a kernel
 	progNotPaged                  // not a paged decode or prefill
@@ -395,7 +394,7 @@ const (
 )
 
 var progReasonName = [numProgReasons]string{
-	progRanProgram: "", progNotLowered: "not lowered", progNoProgram: "NoProgram", progRagged: "a ragged step",
+	progRanProgram: "", progNotLowered: "not lowered", progNoProgram: "NoProgram",
 	progRowsNotPrefill: "rows that are not a prefill chunk", progFault: "a fault skips a kernel",
 	progNotPaged: "not a paged decode or prefill", progRotary: "a rotary the program does not lower",
 	progQKVExtra: "a q/k/v clamp, split or gate", progNormResid: "a norm or residual the program does not lower",

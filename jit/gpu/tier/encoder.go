@@ -420,10 +420,13 @@ func (g *devTier) layersSession(s backend.Session) {
 		buf := [numSlots]backend.Buf{slotX: bs.x, slotX2: bs.x2, slotH: bs.h, slotQ8: bs.a, slotQ: bs.q, slotK: bs.k,
 			slotV: bs.v, slotQR: bs.qr, slotKV: pl.k, slotXB: bs.xb, slotOut: bs.mvOut, slotG: bs.g, slotU: bs.u, slotAct: bs.act,
 			slotQN: bs.qn, slotKN: bs.kn, slotF16: g.f16Buf}
-		// The rewrites legal at one row and at many differ: each class
-		// keeps its own fused program.
+		// The rewrites legal at one row, on a prompt chunk and on a ragged
+		// step differ: each class keeps its own fused program.
 		fc := &l.progOne
-		if R > 1 {
+		switch {
+		case rag != nil:
+			fc = &l.progRag
+		case R > 1:
 			fc = &l.progRows
 		}
 		if fc.bs != bs {
@@ -570,16 +573,37 @@ func (g *devTier) layersSession(s backend.Session) {
 					}
 					continue
 				}
+				// A decode row or a step's rows: each a descriptor, a window
+				// its keyStart, through the decode plan. A ragged step with a
+				// run table empties the table's rows from the decode plan and
+				// attends them with the table's prefill (raggedprefill.go).
+				win := p.Window(li) > 0
 				desc := pk.pRow
-				if p.Window(li) > 0 {
+				if win {
 					desc = pk.pRowW
 				}
-				if err == nil {
-					err = pk.attend(s, lc, pl, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, desc, sk)
+				ragOn := rag != nil && pk.ragRows > 0
+				dec := desc
+				if ragOn {
+					dec = pk.pRowDec
+					if win {
+						dec = pk.pRowDecW
+					}
+				}
+				if err == nil && !(ragOn && pk.ragAlone) {
+					err = pk.attend(s, lc, pl, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, dec, sk)
 					g.PagedLaunches++
 					if pk.cur.plan.Path == kernels.PathStaged {
 						g.PagedStagedLaunches++
 					}
+				}
+				if ragOn && err == nil {
+					if pk.ragStaged {
+						err = pk.ragStagedAttend(lc, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, desc, sk, win)
+					} else {
+						err = pk.ragAttend(lc, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, desc, sk)
+					}
+					g.RagPrefills++
 				}
 			case dkAdd:
 				// The block's last add, held for the next block's attention
@@ -640,6 +664,13 @@ func (g *devTier) layersSession(s backend.Session) {
 				fsrc = at(o.Out[0])
 				g.QuantActs++
 			case dkQKV:
+				kern, blocks, w := l.qkv, l.qkvBlocks, l.qkvW
+				if rag != nil {
+					// A ragged step's segments (groupQKV).
+					seg, _ := g.groupQKV(l, len(rag.pos), R)
+					kern, blocks, w = seg.kern, seg.blocks, seg.w
+					g.RagQKVFused++
+				}
 				var bufArr [17]backend.Buf
 				bufs := append(bufArr[:0], bs.a, bs.ax)
 				for i, sg := range [3]struct {
@@ -652,7 +683,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					}
 				}
 				if err == nil {
-					err = lc.launch(l.qkv, l.qkvBlocks, l.qkvW, bufs...)
+					err = lc.launch(kern, blocks, w, bufs...)
 				}
 			case dkGate2, dkGate2In:
 				wu, wg := l.up, l.gate
@@ -805,13 +836,12 @@ func (g *devTier) layersSession(s backend.Session) {
 				why = progNotLowered
 			case g.NoProgram:
 				why = progNoProgram
-			case rag != nil:
-				why = progRagged
-			case R > 1 && (bs.pkv == nil || !bs.pkv.prefill):
+			case R > 1 && rag == nil && (bs.pkv == nil || !bs.pkv.prefill):
 				why = progRowsNotPrefill
-			case len(skip) != 0:
+			case len(skip) != 0 || blockFaulted():
 				why = progFault
-			case bs.pkv == nil || R == 1 && (bs.pkv.cur == nil || bs.pkv.prefill) || R > 1 && bs.pkv.pf == nil:
+			case bs.pkv == nil || (R == 1 || rag != nil) && (bs.pkv.cur == nil || bs.pkv.prefill) ||
+				R > 1 && rag == nil && bs.pkv.pf == nil:
 				why = progNotPaged
 			case bs.ropeQ == nil || l.noRope || bs.qTemp != nil:
 				why = progRotary
