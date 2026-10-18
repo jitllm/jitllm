@@ -395,6 +395,11 @@ func (g *devTier) layersSession(s backend.Session) {
 		}
 		lc.la(bs.addE, R*p.NEmbd, x, y, out)
 	}
+	// A block-end residual add held for the next block's attention norm to do
+	// in its own launch (foldAddNorm): x = pendX + pendY. The encoder and
+	// the device program (runProg) both hold and take it.
+	var pendX, pendY backend.Buf
+	var pendNorm, pendConv backend.Kernel
 	// runProg runs block li's device program (devprog.go): each op one launch
 	// of the kernel the encoder's unfused path takes for it, over the scratch
 	// slot the program assigned its values. Decode, one row, paged history.
@@ -427,12 +432,42 @@ func (g *devTier) layersSession(s backend.Session) {
 				nseq = len(rag.pos)
 			}
 			fc.prog, fc.took, fc.err = prog.fused(l, bs, g, R, nseq)
+			fc.qkv, fc.gu, fc.down = fc.prog.forms()
 			fc.bs = bs
 		}
 		prog = fc.prog
+		l.ran.note(formQKV, uint8(fc.qkv))
+		l.ran.note(formGateUp, uint8(fc.gu))
+		l.ran.note(formDown, uint8(fc.down))
+		// A residual add the previous block held (the fold, below) runs in
+		// this block's first launch where that is the attention norm writing
+		// the first GEMM's operand: the kernel foldAddNorm built for it.
+		first := 0
+		if pendX != nil {
+			if o := prog.ops[0]; o.Kind == dkNormF16 && o.Role == jlm.RoleAttnNorm && prog.slots[o.In[0]] == slotX {
+				y := pendY
+				if addNormBroken {
+					y = pendX
+				}
+				laRows(pendNorm, pendX, y, l.nAttn, bs.x, bs.h, g.f16Buf)
+				actMemoK, actMemoSrc = pendConv, bs.h
+				g.NormF16++
+				g.AddNormFolded++
+				first = 1
+			} else {
+				addRes(pendX, pendY, bs.x)
+			}
+			pendX, pendY = nil, nil
+		}
 		qOff := bs.zero
 		if R > 1 {
 			qOff = bs.roff
+		}
+		var sk backend.Buf
+		if p.AttnSinks {
+			if sk = l.sinks; sk == nil {
+				sk = bs.noSink
+			}
 		}
 		at := func(v devVal) backend.Buf { return buf[prog.slots[v]] }
 		mvOf := func(role jlm.Role) (mv, *resident) {
@@ -458,7 +493,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			}
 			return l.nAttn
 		}
-		for _, o := range prog.ops {
+		for oi, o := range prog.ops[first:] {
 			switch o.Kind {
 			case dkNorm:
 				w := l.nAttn
@@ -499,8 +534,16 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				mvrun(m, r, at(o.Out[0]))
 			case dkRopeQ:
+				// The unrotated tail first: the rotary writes only the NRot
+				// dimensions it turns, and the scores read the whole head.
+				if bs.copyQ != nil {
+					lc.la(bs.copyQ, R*qdim, at(o.In[0]), at(o.Out[0]), qOff)
+				}
 				lc.la(bs.ropeQ, R*p.NHead*p.NRot/2, at(o.In[0]), rcs, qOff, at(o.Out[0]))
 			case dkKVWrite:
+				if partialRotary(p) {
+					lc.la(pk.copyK, R*p.KVRow(), at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
+				}
 				lc.la(pk.ropeK, R*p.NKVHead*p.NRot/2, at(o.In[0]), rcs, bs.zero, pl.k, pl.tab, pk.pRow)
 				lc.la(pk.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), pl.v, bs.zero, pl.tab, pk.pRow)
 			case dkAttend:
@@ -509,7 +552,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					// load serving a whole query tile.
 					win := p.Window(li) > 0
 					if err == nil {
-						err = pk.pf.prefillAttn(s, lc, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, win, nil)
+						err = pk.pf.prefillAttn(s, lc, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, win, sk)
 						g.PagedPrefillLaunches++
 						if pk.pf.flash != nil {
 							g.FlashPrefills++
@@ -532,13 +575,22 @@ func (g *devTier) layersSession(s backend.Session) {
 					desc = pk.pRowW
 				}
 				if err == nil {
-					err = pk.attend(s, lc, pl, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, desc, nil)
+					err = pk.attend(s, lc, pl, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, desc, sk)
 					g.PagedLaunches++
 					if pk.cur.plan.Path == kernels.PathStaged {
 						g.PagedStagedLaunches++
 					}
 				}
 			case dkAdd:
+				// The block's last add, held for the next block's attention
+				// norm to do where its program or the encoder folds it in
+				// (foldAddNorm): one launch where a prompt chunk took two.
+				if first+oi == len(prog.ops)-1 && prog.f16 && prog.slots[o.Out[0]] == slotX {
+					if nk, conv := g.foldAddNorm(bs, l, li, hi, R, true, scaled, persist, at(o.In[1]), skip); nk != nil {
+						pendX, pendY, pendNorm, pendConv = at(o.In[0]), at(o.In[1]), nk, conv
+						break
+					}
+				}
 				addRes(at(o.In[0]), at(o.In[1]), at(o.Out[0]))
 			case dkActMul:
 				lc.la(bs.actMul, R*p.NFFN, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
@@ -671,6 +723,38 @@ func (g *devTier) layersSession(s backend.Session) {
 				lc.la(o.K, o.N, at(o.In[0]), at(o.In[1]), g.f16Buf)
 				actMemoK, actMemoSrc = o.Conv, at(o.Out[0])
 				g.ActF16Fused++
+			case dkQKVGemm:
+				qs := o.QS
+				fsrc = at(o.In[0])
+				if qs.act != actMemoK || fsrc != actMemoSrc {
+					lc.la(qs.act, qs.actN, fsrc, g.f16Buf)
+					g.ActF16Launches++
+				}
+				actMemoK, actMemoSrc = qs.act, fsrc
+				all := [3]struct {
+					m mv
+					r *resident
+				}{{l.mvq, l.wq}, {l.mvk, l.wk}, {l.mvv, l.wv}}
+				var arr [16]backend.Buf
+				bufs := append(arr[:0], g.f16Buf)
+				for _, i := range qs.segs {
+					sg := all[i]
+					w := sg.r
+					if qkvGemmSwapped && i > 0 && qs.has(3-i) && all[3-i].r.t == w.t && all[3-i].m.rows == sg.m.rows {
+						w = all[3-i].r
+					}
+					bufs = append(bufs, w.qs, w.d, w.sc, at(o.Out[i]))
+					if sg.m.bias != nil {
+						bufs = append(bufs, sg.m.bias)
+					}
+				}
+				lc.law(qs.kern, qs.threads, qs.width, bufs...)
+				g.QKVGemmRuns++
+				for i, sg := range all {
+					if !qs.has(i) {
+						mvrun(sg.m, sg.r, at(o.Out[i]))
+					}
+				}
 			case dkRopeQKV:
 				lc.la(pk.ropeQKV, kernels.RoPEQKVPagedThreads(p.NHead, p.NKVHead, p.HeadDim, p.NRot, R, g.KVF16),
 					at(o.In[0]), rcs, qOff, at(o.Out[0]), at(o.In[1]), pl.k, at(o.In[2]), pl.v, pl.tab, pk.pRow)
@@ -693,10 +777,8 @@ func (g *devTier) layersSession(s backend.Session) {
 			}
 			g.ds4Tables(lc, bs, R)
 		}
-		// A block-end residual add held for the next block's attention norm
-		// to do in its own launch (foldAddNorm): x = pendX + pendY.
-		var pendX, pendY backend.Buf
-		var pendNorm, pendConv backend.Kernel
+		// No add is held across submissions: each emit starts clean.
+		pendX, pendY, pendNorm, pendConv = nil, nil, nil, nil
 		for li := lo; li < hi; li++ {
 			attnFused, ffnFused := false, false
 			l := g.layers[li]
@@ -731,7 +813,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				why = progFault
 			case bs.pkv == nil || R == 1 && (bs.pkv.cur == nil || bs.pkv.prefill) || R > 1 && bs.pkv.pf == nil:
 				why = progNotPaged
-			case bs.ropeQ == nil || l.noRope || bs.copyQ != nil || bs.qTemp != nil:
+			case bs.ropeQ == nil || l.noRope || bs.qTemp != nil:
 				why = progRotary
 			case bs.clampQ != nil || bs.splitQG != nil || bs.sigMul != nil:
 				why = progQKVExtra
@@ -746,10 +828,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				l.progRun = why
 			}
 			if why == progRanProgram {
-				if pendX != nil {
-					addRes(pendX, pendY, bs.x)
-					pendX, pendY = nil, nil
-				}
 				runProg(l, li, l.prog)
 				l.ran.note(formBlock, uint8(blockProgram))
 				continue

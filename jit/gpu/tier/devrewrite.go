@@ -32,6 +32,7 @@ const (
 	dkNormF16                                    // a norm writing its row and the next GEMM's binary16 operand (rmsF16For)
 	dkAddNormF16                                 // the residual add, its norm and the operand (rmsF16For, add)
 	dkActF16                                     // act(gate)*up written as down's binary16 operand only (actF16For)
+	dkQKVGemm                                    // q, k and v as one binary16 grid over one operand (qkvGemm)
 	numKinds
 )
 
@@ -45,6 +46,7 @@ var devKindName = [numKinds]string{
 	dkMatVecGate: "matvec_gate", dkActQuant: "act_quant", dkQKV: "qkv", dkRopeQKV: "rope_qkv", dkGate2: "gate2",
 	dkGate2In: "gate2_in", dkQKVIn: "qkv_in", dkQKVSep: "qkv_sep", dkResIn: "matvec_res_in", dkFFNIn: "ffn_in",
 	dkDownAct: "down_act", dkNormF16: "norm_f16", dkAddNormF16: "add_norm_f16", dkActF16: "act_f16",
+	dkQKVGemm: "qkv_gemm",
 }
 
 // devRewrite is one rewrite: its name and whether it pays and is legal for
@@ -62,6 +64,7 @@ type devRewrite struct {
 // then the rest.
 var devRewrites = []devRewrite{
 	{"f16-operands", nil},
+	{"qkv-gemm", rwQKVGemm},
 	{"add-norm-f16", rwAddNormF16},
 	{"norm-f16", rwNormF16},
 	{"act-f16", rwActF16},
@@ -84,7 +87,7 @@ var devRewrites = []devRewrite{
 }
 
 // rwF16End is where the f16 lowering's rewrites end in devRewrites.
-const rwF16End = 4
+const rwF16End = 5
 
 // rwSet is the rewrites a program took, a bit each by devRewrites' order.
 type rwSet uint64
@@ -185,7 +188,8 @@ func rwQKV(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) b
 		}
 	case R != 1:
 		return false // a one-row variant
-	case l.qkv == nil || g.NoFuse:
+	case l.qkv == nil || g.NoFuse || g.TableSplit ||
+		l.qkvBias != [3]bool{l.mvq.bias != nil, l.mvk.bias != nil, l.mvv.bias != nil}:
 		return false
 	}
 	for i := 0; i+2 < len(p.ops); i++ {
@@ -243,8 +247,8 @@ func rwMatVecRes(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq 
 		} else if m.res == nil || g.TableSplit && m.alt != nil {
 			continue
 		}
-		if p.uses(o.Out[0]) != 1 {
-			continue
+		if p.uses(o.Out[0]) != 1 || m.bias != nil {
+			continue // the residual rides the bias slot
 		}
 		j := p.next(i, o.Out[0])
 		if j < 0 || p.ops[j].Kind != dkAdd {
@@ -273,6 +277,9 @@ func rwMatVecGate(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq
 		return false // a one-row variant, or a ragged step's grouped one
 	case l.mvu.gated == nil || g.TableSplit && l.mvu.alt != nil:
 		return false
+	}
+	if l.mvu.bias != nil || l.mvg.bias != nil {
+		return false // the gated launch carries neither bias
 	}
 	for i, o := range p.ops {
 		if o.Kind != dkMatVec || o.Role != jlm.RoleFFNUp || p.uses(o.Out[0]) != 1 {
@@ -523,7 +530,7 @@ func rwOIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) b
 	if R != 1 {
 		return false // a one-row variant
 	}
-	if !g.actInOn() || l.mvo.resIn == nil || l.mvo.k != bs.p.NHead*bs.p.HeadDim || g.TableSplit && l.mvo.alt != nil {
+	if !g.actInOn() || l.mvo.resIn == nil || l.mvo.bias != nil || l.mvo.k != bs.p.NHead*bs.p.HeadDim || g.TableSplit && l.mvo.alt != nil {
 		return false
 	}
 	return resIn(p, jlm.RoleAttnOut, func(devVal) bool { return true })
@@ -535,7 +542,7 @@ func rwFFNIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int)
 	if R != 1 {
 		return false // a one-row variant
 	}
-	if !g.actInOn() || l.mvg.kernIn == nil || (l.mvu.gatedIn == nil && l.mvu.kernIn == nil) ||
+	if !g.actInOn() || l.mvg.kernIn == nil || (l.mvu.gatedIn == nil && l.mvu.kernIn == nil) || l.mvg.bias != nil || l.mvu.bias != nil ||
 		l.nFFNB != nil || l.nFFN == nil || bs.normVar != nil || g.TableSplit && (l.mvg.alt != nil || l.mvu.alt != nil) {
 		return false
 	}
@@ -570,7 +577,7 @@ func gatedProduct(p *devProgram, v devVal) bool {
 }
 
 func downOK(l *layer, bs *blockScratch, g *devTier) bool {
-	return g.actInOn() && l.mvd.k == bs.p.NFFN && !(g.TableSplit && l.mvd.alt != nil)
+	return g.actInOn() && l.mvd.bias == nil && l.mvd.k == bs.p.NFFN && !(g.TableSplit && l.mvd.alt != nil)
 }
 
 // rwDownIn: the quantize of a gated product and down with the residual, as
@@ -664,10 +671,10 @@ func rwNormF16(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq in
 			continue
 		}
 		j := p.next(i, o.Out[0])
-		if j < 0 || p.ops[j].Kind != dkMatVec {
+		if j < 0 || p.ops[j].Kind != dkMatVec && p.ops[j].Kind != dkQKVGemm {
 			continue
 		}
-		m, _ := mvOfLayer(l, p.ops[j].Role)
+		m, _ := mvOfLayer(l, p.ops[j].Role) // q's for the grid, whose operand is q's
 		nk, conv := g.rmsF16For(bs, m, R, false)
 		if nk == nil {
 			continue
@@ -744,4 +751,57 @@ func mvOfLayer(l *layer, role jlm.Role) (mv, *resident) {
 		return l.mvd, l.down
 	}
 	return l.mvq, l.wq
+}
+
+// rwQKVGemm: q, k and v's GEMMs over one float row, as one binary16 grid
+// (GemmVoltaSegments) reading one token-major operand.
+func rwQKVGemm(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
+	if nseq > 0 || l.vFromK {
+		return false
+	}
+	for i := 0; i+2 < len(p.ops); i++ {
+		a, b, c := p.ops[i], p.ops[i+1], p.ops[i+2]
+		if a.Kind != dkMatVec || b.Kind != dkMatVec || c.Kind != dkMatVec || a.Role != jlm.RoleAttnQ ||
+			b.Role != jlm.RoleAttnK || c.Role != jlm.RoleAttnV || a.In[0] != b.In[0] || b.In[0] != c.In[0] {
+			continue
+		}
+		qs, ok := g.qkvGemm(l, R, false)
+		if !ok {
+			return false
+		}
+		p.ops[i] = devOp{Kind: dkQKVGemm, Src: cat(cat(a.Src, b.Src), c.Src), In: a.In,
+			Out: []devVal{a.Out[0], b.Out[0], c.Out[0]}, Role: jlm.RoleAttnQ, QS: qs}
+		p.ops = append(p.ops[:i+1], p.ops[i+3:]...)
+		return true
+	}
+	return false
+}
+
+// forms is the op-span forms a fused program runs, under the encoder's names
+// (BlockForms): q/k/v, gate/up and down.
+func (p *devProgram) forms() (qkv qkvForm, gu ffnGateUpForm, down ffnDownForm) {
+	qkv, gu, down = qkvThree, gateUpTwo, downFormPlain
+	for _, o := range p.ops {
+		switch o.Kind {
+		case dkQKV, dkQKVIn:
+			qkv = qkvGrouped
+		case dkQKVSep:
+			qkv = qkvSeparate
+		case dkQKVGemm:
+			qkv = qkvGEMM
+		case dkGate2In:
+			gu = gateUpGate2In
+		case dkGate2:
+			gu = gateUpGate2
+		case dkFFNIn:
+			gu = gateUpIn
+		case dkDownAct:
+			down = downFormAct
+		case dkResIn:
+			if o.Role == jlm.RoleFFNDown {
+				down = downFormIn
+			}
+		}
+	}
+	return qkv, gu, down
 }

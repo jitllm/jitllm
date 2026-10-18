@@ -304,4 +304,8 @@ type progFused struct {
 	prog *devProgram
 	took rwSet
 	err  error // the type error that refused every rewrite, if one did
+	// The op-span forms the program runs (BlockForms), noted each step.
+	qkv  qkvForm
+	gu   ffnGateUpForm
+	down ffnDownForm
 }

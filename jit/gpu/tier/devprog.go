@@ -116,7 +116,8 @@ type devOp struct {
 	// K and Conv are a binary16 writer's kernel and the conversion it
 	// stands in for (rmsF16For, actF16For), chosen when it was rewritten.
 	K, Conv backend.Kernel
-	N       int // K's thread count, where it is not the rows'
+	N       int     // K's thread count, where it is not the rows'
+	QS      *qkvSeg // the q/k/v grid's segments (qkv-gemm)
 }
 
 // devProgram is a block's device program.
@@ -166,7 +167,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 	if i < len(o.Need) && o.Need[i] != (devType{}) {
 		return o.Need[i]
 	}
-	if p.f16 && (o.Kind == dkMatVec || o.Kind == dkQKV) {
+	if p.f16 && (o.Kind == dkMatVec || o.Kind == dkQKV || o.Kind == dkQKVGemm) {
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	}
 	switch o.Kind {
@@ -216,19 +217,12 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		return nil, "no graph"
 	case p.NonCausal:
 		return nil, "non-causal attention"
-	case p.AttnSinks:
-		return nil, "attention sinks"
 	case p.NoPEGlobal || p.QKL2Norm || p.QKNormPost || p.RopeSplit:
 		return nil, "a q/k feature (L2 or post-rotary norm, NoPE, XD-RoPE)"
-	case partialRotary(p):
-		return nil, "a partial rotary"
 	case l.vFromK || l.kvSrc != g.Block:
 		return nil, "a shared or derived history"
 	case l.nAttnB != nil || l.nFFNB != nil:
 		return nil, "a biased norm"
-	case l.mvq.bias != nil || l.mvk.bias != nil || l.mvv.bias != nil || l.mvo.bias != nil ||
-		l.mvg.bias != nil || l.mvu.bias != nil || l.mvd.bias != nil:
-		return nil, "a projection bias"
 	case p.Act != nn.ActSiLU:
 		return nil, "an activation other than SiLU"
 	}
