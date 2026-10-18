@@ -75,18 +75,18 @@ func TestStepRunsOnTheHostSharesOnePass(t *testing.T) {
 				t.Fatalf("a host step across sessions disagrees with each session alone: NMSE %.3e at row %d", w, at)
 			}
 
-			stepPos = func(base, j, k int) int { return base + k - 1 - j }
+			m.faults.stepPos = func(base, j, k int) int { return base + k - 1 - j }
 			bad, _ := plan.together(t, m, nil)
-			stepPos = nil
+			m.faults.stepPos = nil
 			if bw, bat := worstStep(bad, want); bw < hostStepNMSE {
 				t.Fatalf("chunks at mirrored positions still matched (NMSE %.3e): this gate cannot see positions", bw)
 			} else {
 				t.Logf("violation: mirrored chunks read NMSE %.3e at row %d", bw, bat)
 			}
 
-			stepShare = true
+			m.faults.stepShare = true
 			bad, _ = plan.together(t, m, nil)
-			stepShare = false
+			m.faults.stepShare = false
 			if bw, bat := worstStep(bad, want); bw < hostStepNMSE {
 				t.Fatalf("rows sharing one session's history still matched (NMSE %.3e): this gate cannot see a row's state", bw)
 			} else {

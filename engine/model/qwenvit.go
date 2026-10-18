@@ -188,18 +188,13 @@ func (s *State) windowOrder(gh, gw int) {
 	}
 }
 
-// qwenNoUnwindow leaves the merged rows in window order. False but in a
-// gate's violation: it is how TestQwenTowerMatchesTransformers shows that a
-// merger which skipped the put-back fails it.
-var qwenNoUnwindow bool
-
 // unwindow puts the merged rows, emitted in window order, back into raster
 // order of the merged grid: transformers' reverse_indices, llama.cpp's
 // get_rows(window_idx). Merged row i of the window order is merge unit
 // ord[i*Scale^2]'s, whose raster unit is its patch's (y/Scale, x/Scale).
 func (s *State) unwindow(dst, src []float32, nt int) {
 	c := s.vis.t.Cfg
-	if qwenNoUnwindow {
+	if s.tfault() == faultQwenNoUnwindow {
 		copy(dst[:nt*c.ProjDim], src[:nt*c.ProjDim])
 		return
 	}

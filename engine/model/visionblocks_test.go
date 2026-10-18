@@ -152,19 +152,21 @@ func TestImageCacheSkipsTheTower(t *testing.T) {
 
 // TestImageKeyCoversTheLayout: the name covers what the tower reads -- the
 // pixels, the grid they are patched on and the preprocessing -- so one pixel
-// buffer on two grids is two pictures. Against the violation (keyFault: the
+// buffer on two grids is two pictures. Against the violation (faultKeyAliases: the
 // pixels alone) the two alias.
 func TestImageKeyCoversTheLayout(t *testing.T) {
 	c := TowerConfig{Projector: "qwen2vl_merger", ImageSz: 56, PatchSz: 14, Scale: 2,
 		Mean: [3]float64{0.5, 0.5, 0.5}, Std: [3]float64{0.5, 0.5, 0.5}}
 	px := rainbow(56)
 	for _, fault := range []bool{false, true} {
-		keyFault = fault
+		if fault {
+			c.fault = faultKeyAliases
+		}
 		a, b := c.imageKey(px, 2, 8), c.imageKey(px, 8, 2)
 		other := c
 		other.Mean[0] = 0.48
 		d := other.imageKey(px, 2, 8)
-		keyFault = false
+		c.fault = towerFaultNone
 		if !fault && (a == b || a == d) {
 			t.Fatal("one pixel buffer under another grid or another normalisation keys the same")
 		}

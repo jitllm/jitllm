@@ -168,6 +168,7 @@ func TestPagedPrefillMatchesContiguous(t *testing.T) {
 	}
 	ran := 0
 	sh16 := ir.MMAShape{M: 16, N: 8, K: 16, Kind: ir.MMAF16}
+	shVolta := ir.MMAVolta()
 	for _, pass := range []struct {
 		sh    *ir.MMAShape
 		bound float64
@@ -178,7 +179,7 @@ func TestPagedPrefillMatchesContiguous(t *testing.T) {
 			{name: "q4k2", scoresQT: 4, scoresKT: 2, accQT: 4, smLanes: 32},
 		}},
 		{&sh16, 1e-5, []prefillForm{{name: "mma2", mmaNT: 2, accQT: 4, smLanes: 32}}},
-		{&ir.MMAVolta, 1e-5, []prefillForm{{name: "v1x2", voltaMT: 1, voltaNT: 2, smLanes: 32},
+		{&shVolta, 1e-5, []prefillForm{{name: "v1x2", voltaMT: 1, voltaNT: 2, smLanes: 32},
 			{name: "v2x4", voltaMT: 2, voltaNT: 4, voltaAccMT: 1, smLanes: 32}}},
 	} {
 		pdevs := devs

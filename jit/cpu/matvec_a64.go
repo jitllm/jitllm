@@ -36,7 +36,11 @@ func SupportedA64(t quant.Type) bool {
 // Host-pure, like Emit. It takes the same Spec and Args as the x86 kernels and
 // consumes the same QuantizeQ8 output, but never reads the bias half of the
 // AScale pairs (see emitA64MatVec).
-func EmitA64(s Spec) ([]byte, error) {
+func EmitA64(s Spec) ([]byte, error) { return EmitA64Probed(s, Probes{}) }
+
+// EmitA64Probed is EmitA64 with the measurement probes injected into the
+// k-quant decode kernel; the zero Probes is EmitA64.
+func EmitA64Probed(s Spec, pr Probes) ([]byte, error) {
 	if !SupportedA64(s.W) {
 		return nil, fmt.Errorf("jit: EmitA64: %s has no arm64 kernel", s.W)
 	}
@@ -71,7 +75,7 @@ func EmitA64(s Spec) ([]byte, error) {
 	}
 	if s.W.BlockElems() == 256 {
 		var err error
-		if code, err = emitA64KMatVec(s.W, int(s.ActWin)); err != nil {
+		if code, err = emitA64KMatVec(s.W, int(s.ActWin), pr); err != nil {
 			return nil, err
 		}
 	} else {

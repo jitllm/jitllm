@@ -80,18 +80,17 @@ func (c TowerConfig) ropeNeox() bool {
 	return c.Kind != jlm.ProjPixtral && c.Kind != jlm.ProjLlama4 && c.Kind != jlm.ProjKimiVL
 }
 
-// The gates' violations, false in every real run: Qwen-VL's frequencies
+// The gates' violations (towerFault values faultPixtralFreq and faultPixtralMerge): Qwen-VL's frequencies
 // (each half from the first) where Pixtral's take the even and the odd, and
 // the merger handed the unfold's channel-major order its columns no longer
 // are in.
-var pixtralFreqFault, pixtralMergeFault bool
 
 // pixtralRope is Pixtral's 2-D rotary as a multi-axis table: the first
 // HeadDim/4 pairs turned by the grid row at the even frequency indices of
 // base^(-2i/HeadDim), the next HeadDim/4 by the column at the odd ones.
 func (c TowerConfig) pixtralRope() nn.Rope {
 	q := c.HeadDim / 4
-	if pixtralFreqFault {
+	if c.fault == faultPixtralFreq {
 		return nn.Rope{NRot: c.HeadDim / 2, Base: 10000,
 			Runs: []nn.RopeRun{{Pairs: q, Axis: 0}, {Pairs: q, Axis: 1}}}
 	}
@@ -158,10 +157,6 @@ func optVecOf(f *jlm.File, vec func(jlm.Role, int32) ([]float32, error), r jlm.R
 	return vec(r, jlm.DenseBlock)
 }
 
-// pixtralNoBreaks leaves the break rows out of the head's output. False but
-// in a gate's violation.
-var pixtralNoBreaks bool
-
 // projectPixtral is the head over a picture's patch rows (the post-norm has
 // run): the shuffle and the merger when the tower merges, llava's MLP, and the
 // merged grid's rows written out with a break row after each grid row but the
@@ -183,7 +178,7 @@ func (s *State) projectPixtral(patches []float32) ([]float32, error) {
 					for dx := 0; dx < sc; dx++ {
 						p := (gy*sc+dy)*gw + gx*sc + dx
 						slot := dy*sc + dx
-						if pixtralMergeFault {
+						if s.tfault() == faultPixtralMerge {
 							for ch := 0; ch < c.NEmbd; ch++ {
 								dst[ch*sc*sc+slot] = patches[p*c.NEmbd+ch]
 							}
@@ -214,7 +209,7 @@ func (s *State) projectPixtral(patches []float32) ([]float32, error) {
 	}
 	s.visBiasRows(v.grp, t.projB2, nt)
 	d := c.ProjDim
-	if pixtralNoBreaks {
+	if s.tfault() == faultPixtralNoBreaks {
 		copy(v.out, v.grp[:nt*d])
 		v.stage("out", v.out[:nt*d])
 		return v.out[:nt*d], nil

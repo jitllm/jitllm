@@ -22,10 +22,6 @@ var (
 // key that reached the inline slots stays there, so it is never in both halves.
 const scopeInline = 4
 
-// scopeSlots is scopeInline, as a var so a benchmark can set it to 0 and get
-// the map-only scope back in the same binary. Only a benchmark writes it.
-var scopeSlots = scopeInline
-
 type scope struct {
 	n      int
 	keys   [scopeInline]string
@@ -35,9 +31,6 @@ type scope struct {
 }
 
 func newScope(parent *scope) *scope {
-	if scopeSlots == 0 { // the A/B arm: the eager map, no inline slots
-		return &scope{spill: make(map[string]Value, 4), parent: parent}
-	}
 	return &scope{parent: parent}
 }
 
@@ -65,7 +58,7 @@ func (s *scope) set(name string, val Value) {
 			return
 		}
 	}
-	if s.n < scopeSlots {
+	if s.n < scopeInline {
 		s.keys[s.n] = name
 		s.vals[s.n] = val
 		s.n++

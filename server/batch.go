@@ -836,8 +836,8 @@ func (lp *stepLoop) decodeUnits() []unit {
 			continue
 		}
 		next := r.sampler.Sample(r.logits)
-		if sampleTap != nil {
-			sampleTap(r.sampler.Temp, r.logits, next)
+		if lp.e.sampleTap != nil {
+			lp.e.sampleTap(r.sampler.Temp, r.logits, next)
 		}
 		r.sampler.Observe(next)
 		tlp := takeLogprob(r.logprobs, vocab, r.logits, next)
@@ -1483,9 +1483,3 @@ func (c *batchCounters) noteBudget(b int) {
 	c.budgetMax.Store(max(c.budgetMax.Load(), n))
 	c.budgetSum.Add(n)
 }
-
-// sampleTap, when a test sets it, sees the logits a row sampled from and the
-// token that came out, for every row of the step loop. It exists so a gate can
-// compare two engines' distributions where their sampled tokens may part
-// (nothing sets it outside tests; it costs one nil check per token).
-var sampleTap func(temp float64, logits []float32, next int32)

@@ -1572,7 +1572,7 @@ func (s *State) spanKey(p0 int, spans []Span, rp [][4]int) []int32 {
 			if rp != nil {
 				at = rp[len(key)]
 			}
-			key = append(key, s.kv.nameRow(*sp.Key, i, at, p0+len(key)))
+			key = append(key, s.kv.nameRow(*sp.Key, i, at, p0+len(key), s.m.faults.namePos))
 		}
 	}
 	return key
@@ -1672,8 +1672,8 @@ func (s *State) restoreKey(key []int32, rows int, logits bool) (int, []float32, 
 		s.kv.endsAt = s.endsAt
 	}
 	s.kv.mark = s.recMark
-	if staleKeyFault != nil {
-		tokens = staleKeyFault(key)
+	if s.m.faults.staleKey != nil {
+		tokens = s.m.faults.staleKey(key)
 	}
 	// The tokens come first: restore() names the pages by H(tokens[0:boundary]).
 	s.kv.seq = append(s.kv.seq[:0], tokens...)
@@ -1760,11 +1760,6 @@ func (s *State) restoreKey(key []int32, rows int, logits bool) (int, []float32, 
 	s.kvSkipped = n
 	return n, full, nil
 }
-
-// staleKeyFault is the decision prefix gate's violation
-// (TestDecisionReusesThePrefix): the key a restore names its pages by, in
-// place of the prompt's. Nil in every real run.
-var staleKeyFault func(key []int32) []int32
 
 // syncKVFromDevice brings a placed block's history down into the host pages so
 // that seal has something to store.
@@ -3069,17 +3064,13 @@ type namedRow struct {
 	at  [4]int32
 }
 
-// namePosFault is a gate's violation: an image row's rotary position left
-// out of its name. False in every real run.
-var namePosFault bool
-
 // nameRow records image row row of the picture named k, at rotary position
 // at, as the row at cache position pos, and returns the id seq holds for it:
 // negative, so no vocabulary id is one. A row named again at the same position
 // reuses its entry; the table never grows past the rows the sequence holds.
-func (kc *kvCache) nameRow(k ImageKey, row int, at [4]int, pos int) int32 {
+func (kc *kvCache) nameRow(k ImageKey, row int, at [4]int, pos int, dropPos bool) int32 {
 	r := namedRow{key: k, row: int32(row)}
-	if !namePosFault {
+	if !dropPos {
 		r.at = [4]int32{int32(at[0]), int32(at[1]), int32(at[2]), int32(at[3])}
 	}
 	if pos < len(kc.seq) && kc.seq[pos] < 0 {

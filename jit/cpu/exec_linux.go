@@ -14,7 +14,7 @@ import (
 // perfMap writes /tmp/perf-<pid>.map, the JIT symbol format Linux perf reads:
 // one "<hex addr> <hex size> <name>" line per generated region, so samples
 // resolve to a kernel name and offset instead of runtime._ExternalCode.
-// Enabled by Config.PerfMap (JITLLM_PERFMAP=1 in cmd/jitllm), because it
+// Enabled by EnablePerfMap (JITLLM_PERFMAP=1 in cmd/jitllm), because it
 // writes a world-readable file into /tmp.
 var (
 	perfMapOnce sync.Once
@@ -23,7 +23,7 @@ var (
 )
 
 func perfMapAdd(addr uintptr, size int, name string) {
-	if !cfg.PerfMap {
+	if !perfMapOn {
 		return
 	}
 	perfMapOnce.Do(func() {

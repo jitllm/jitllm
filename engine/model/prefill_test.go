@@ -26,21 +26,15 @@ func TestPrefillMatchesForward(t *testing.T) {
 	// Forward loop, so this mode demands equality; an NMSE bar would hide a
 	// prefill path computing the same op by different arithmetic.
 	t.Run("no-gemm", func(t *testing.T) {
-		nn.ResetForTest()
-		defer nn.ResetForTest()
 		prefillVsForward(t, path, true)
 	})
 	// The GEMM's exact (float-epilogue) form sums what the matvec sums in the
 	// same order, so it is held to equality too. Only the integer-accumulating
 	// form is left to the NMSE tripwire.
 	t.Run("exact-gemm", func(t *testing.T) {
-		nn.ResetForTest()
-		defer nn.ResetForTest()
 		prefillVsForwardOpts(t, path, true, WithJITOptions(nn.WithGEMMExact(true)))
 	})
 	t.Run("shipped", func(t *testing.T) {
-		nn.ResetForTest()
-		defer nn.ResetForTest()
 		prefillVsForward(t, path, false)
 	})
 }

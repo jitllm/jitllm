@@ -211,12 +211,12 @@ func TestPixtralTowerMatchesTransformers(t *testing.T) {
 			return func() { tw.cfg.RopeNeox = false }
 		}},
 		{"Qwen-VL's frequencies (each half from the first)", nil, func() func() {
-			pixtralFreqFault = true
-			return func() { pixtralFreqFault = false }
+			tw.Cfg.fault = faultPixtralFreq
+			return func() { tw.Cfg.fault = towerFaultNone }
 		}},
 		{"the merger read channel-major", nil, func() func() {
-			pixtralMergeFault = true
-			return func() { pixtralMergeFault = false }
+			tw.Cfg.fault = faultPixtralMerge
+			return func() { tw.Cfg.fault = towerFaultNone }
 		}},
 	} {
 		undo := func() {}
@@ -314,18 +314,18 @@ func TestPixtralMatchesTransformersEndToEnd(t *testing.T) {
 	}
 	// The violation: the break rows left out, so every grid row after the
 	// first sits one position early.
-	pixtralNoBreaks = true
+	m.Tower().Cfg.fault = faultPixtralNoBreaks
 	vs := m.NewState(8)
 	bad, err := vs.Picture(goldenImage(g.Image.W, g.Image.H, g.Image.RGB))
 	vs.Close()
 	if err != nil {
-		pixtralNoBreaks = false
+		m.Tower().Cfg.fault = towerFaultNone
 		t.Fatal(err)
 	}
 	m.imgCache.clearForTest()
 	bad.Rows = mh * mw
 	nb, _ := pixWorst(g.LogitsA8, pixRun(t, m, g, Span{Picture: bad}, bad.Rows))
-	pixtralNoBreaks = false
+	m.Tower().Cfg.fault = towerFaultNone
 	m.imgCache.clearForTest()
 	t.Logf("no break rows (the violation): %.3e", nb)
 	if !(nb > 20*w) {

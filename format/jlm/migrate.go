@@ -59,7 +59,7 @@ func ReadVersion(path string) (uint32, error) {
 	if _, err := f.ReadAt(b[:], 0); err != nil {
 		return 0, fmt.Errorf("jlm: reading %s: %w", path, err)
 	}
-	if [8]byte(b[0:8]) != Magic {
+	if string(b[0:8]) != Magic {
 		return 0, fmt.Errorf("jlm: %s is not a jlm container", path)
 	}
 	return binary.LittleEndian.Uint32(b[8:]), nil

@@ -154,12 +154,12 @@ func TestGemma4TowerMatchesTransformers(t *testing.T) {
 		weak bool
 	}{
 		{"no clamps", func() func() {
-			gemma4ClampFault = true
-			return func() { gemma4ClampFault = false }
+			tw.Cfg.fault = faultGemma4NoClamp
+			return func() { tw.Cfg.fault = towerFaultNone }
 		}, false},
 		{"no pool (each group's first patch)", func() func() {
-			gemma4NoPool = true
-			return func() { gemma4NoPool = false }
+			tw.Cfg.fault = faultGemma4NoPool
+			return func() { tw.Cfg.fault = towerFaultNone }
 		}, false},
 		{"no standardisation", func() func() {
 			b, s := tw.g4.bias, tw.g4.std
@@ -171,8 +171,8 @@ func TestGemma4TowerMatchesTransformers(t *testing.T) {
 			return func() { tw.cfg.VNorm = true }
 		}, true},
 		{"the row turning the first half", func() func() {
-			gemma4RowFirst = true
-			return func() { gemma4RowFirst = false }
+			tw.Cfg.fault = faultGemma4RowFirst
+			return func() { tw.Cfg.fault = towerFaultNone }
 		}, false},
 		{"scores at 1/sqrt(head_dim)", func() func() {
 			tw.cfg.AttnScale = 1 / math.Sqrt(float64(tw.Cfg.HeadDim))

@@ -112,7 +112,9 @@ type File struct {
 	// each unmapped when the File lets go of it (release) and the rest at
 	// Close.
 	offHeap bool
-	mapped  map[*byte][]byte
+	// rowReads counts ReadRow's preads, apart from the pager's reads.
+	rowReads atomic.Int64
+	mapped   map[*byte][]byte
 	// recycle is told the address range of every buffer whose bytes stop being
 	// the ones a caller may have copied (OnRecycle), and recycled holds those
 	// buffers until f.mu is dropped: the callback is not run under the lock.
@@ -180,11 +182,15 @@ type File struct {
 // Open reads and validates a container's metadata. No page is read.
 //
 // Every offset in the file is checked before it slices anything (RULE 9).
-func Open(path string) (*File, error) { return openAt(path, Version) }
+func Open(path string, opts ...OpenOption) (*File, error) { return openAt(path, Version, opts...) }
 
 // openAt is Open for a container of version want: the current one, or an
 // older one a migration reads (migrate.go).
-func openAt(path string, want uint32) (*File, error) {
+func openAt(path string, want uint32, opts ...OpenOption) (*File, error) {
+	var oo openOpts
+	for _, o := range opts {
+		o(&oo)
+	}
 	fh, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -203,7 +209,7 @@ func openAt(path string, want uint32) (*File, error) {
 		closeDirect(direct)
 		return nil, fmt.Errorf("jlm: %s is %d bytes, shorter than a header", path, size)
 	}
-	f := &File{Path: path, f: fh, direct: direct, offHeap: offHeap.Load()}
+	f := &File{Path: path, f: fh, direct: direct, offHeap: !oo.heapWeights}
 
 	hb := make([]byte, HeaderBytes)
 	if _, err := fh.ReadAt(hb, 0); err != nil {

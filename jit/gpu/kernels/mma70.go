@@ -76,7 +76,7 @@ func MMAVoltaProbe() *ir.Kernel {
 	for i := range c {
 		c[i] = zero
 	}
-	d := b.MMA(ir.MMAVolta, a, bb, c)
+	d := b.MMA(ir.MMAVolta(), a, bb, c)
 	for i, x := range d {
 		row := b.Add(ir.U32, q8, v.dRow(i))
 		b.Store(pOut, b.Add(ir.U32, b.Shl(ir.U32, row, b.Const(ir.U32, 3)), v.dCol(i)), x, 0)
@@ -464,7 +464,7 @@ func MatVecMMA70(s MatVecShape) (*ir.Kernel, error) {
 		}
 		for i := 0; i < mt; i++ {
 			for j := 0; j < nt; j++ {
-				d[i][j] = b.MMA(ir.MMAVolta, af[i][st], bf[j], d[i][j])
+				d[i][j] = b.MMA(ir.MMAVolta(), af[i][st], bf[j], d[i][j])
 			}
 		}
 	}

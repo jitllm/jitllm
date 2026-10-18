@@ -5,30 +5,15 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 )
 
 // hostTotal and hostAvailable read /proc/meminfo directly rather than adding a
 // dependency. On a host with no /proc they return 0, which callers treat as
 // "not reported"; nothing divides by these.
-var meminfoOnce struct {
-	sync.Mutex
-	read  bool
-	total uint64
-}
+func hostTotal() uint64 { return meminfoField("MemTotal:") }
 
-func hostTotal() uint64 {
-	meminfoOnce.Lock()
-	defer meminfoOnce.Unlock()
-	if meminfoOnce.read {
-		return meminfoOnce.total
-	}
-	meminfoOnce.read = true
-	meminfoOnce.total = meminfoField("MemTotal:")
-	return meminfoOnce.total
-}
-
-// hostAvailable is not cached: it is the quantity that moves.
+// hostAvailable is the quantity that moves; hostTotal is read each time too,
+// since neither is on a hot path.
 func hostAvailable() uint64 { return meminfoField("MemAvailable:") }
 
 func meminfoField(key string) uint64 {

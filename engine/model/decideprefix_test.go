@@ -253,14 +253,14 @@ func decisionPrefixGate(t *testing.T, m *Model, g *tier.GPU, spec string, n int,
 	stale := open(NewSharedStore())
 	defer stale.Close()
 	var first []int32
-	staleKeyFault = func(key []int32) []int32 {
+	m.faults.staleKey = func(key []int32) []int32 {
 		if first == nil {
 			first = append([]int32(nil), key...)
 			return key
 		}
 		return first[:min(len(first), len(key))]
 	}
-	defer func() { staleKeyFault = nil }()
+	defer func() { m.faults.staleKey = nil }()
 	// The first prompts it names are a board of ghosts', which every later
 	// board then restores in place of its own.
 	state, qs := parseRequest(t, ghostsOf(reqs[0]))

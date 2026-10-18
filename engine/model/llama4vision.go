@@ -53,30 +53,20 @@ func (c TowerConfig) llama4Rope() nn.Rope {
 // llama4Coords is the rotary position of residual row i of a tile of np
 // patches, gw a side: (column+1, row+1) for a patch, (0, 0) -- no turn -- for
 // the class token, which is the last row.
-func llama4Coords(i, np, gw int, dst []int) {
+func llama4Coords(f towerFault, i, np, gw int, dst []int) {
 	if i >= np {
 		dst[0], dst[1] = 0, 0
 		return
 	}
-	switch llama4Fault {
-	case llama4FaultFromZero:
+	switch f {
+	case faultLlama4FromZero:
 		dst[0], dst[1] = i%gw, i/gw
-	case llama4FaultRowFirst:
+	case faultLlama4RowFirst:
 		dst[0], dst[1] = i/gw+1, i%gw+1
 	default:
 		dst[0], dst[1] = i%gw+1, i/gw+1
 	}
 }
-
-// llama4Fault is a gate's violation, zero in every real run: positions from
-// zero where the reference starts them at one, or the row's turning the first
-// half where the column's does.
-var llama4Fault int
-
-const (
-	llama4FaultFromZero = 1 + iota
-	llama4FaultRowFirst
-)
 
 // llama4Canvases is find_supported_resolutions: every (rows, columns) of up
 // to max tiles, in the reference's order -- tile counts from max down, each

@@ -2,7 +2,10 @@
 
 package nn
 
-import "github.com/jitllm/jitllm/engine/sched"
+import (
+	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/jit/cpu"
+)
 
 // Option configures a JIT. The package reads no environment: cmd/jitllm reads
 // the JITLLM_* names and passes them here, so every knob is settable by an
@@ -54,6 +57,8 @@ type Config struct {
 	// super-blocks and A64Prefetch the arm64 packed matvec's PRFM distance in
 	// bytes; see cpu.EmitOpts.
 	Prefetch, A64Prefetch int
+	// Probes is the arm64 measurement scaffolding; see cpu.Probes.
+	Probes cpu.Probes
 
 	// Accs pins how many independent accumulator chains a k-quant matvec
 	// carries (1..4); 0 takes cpu.BestAccs. A measurement instrument, per JIT
@@ -175,6 +180,13 @@ func WithPrefetch(n int) Option { return func(c *Config) { c.Prefetch = n } }
 // WithA64Prefetch sets the arm64 packed matvec's PRFM distance in bytes: 0
 // takes one tile, negative emits none. See cpu.EmitOpts.
 func WithA64Prefetch(n int) Option { return func(c *Config) { c.A64Prefetch = n } }
+
+// WithProbes injects n dead scalar adds, 128-bit loads and vector adds per
+// block into the arm64 k-quant decode matvec, to price one class of operation
+// against another. A measurement instrument: it makes the kernel slower.
+func WithProbes(scalar, load, vector int) Option {
+	return func(c *Config) { c.Probes = cpu.Probes{Scalar: scalar, Load: load, Vector: vector} }
+}
 
 // WithAccs pins the accumulator-chain count of the k-quant matvec; 0 measures.
 func WithAccs(n int) Option { return func(c *Config) { c.Accs = n } }

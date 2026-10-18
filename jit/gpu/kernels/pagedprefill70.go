@@ -98,7 +98,7 @@ func PagedAttnScoresMMA70(s FlashShape, mt, nt int) (*ir.Kernel, error) {
 		}
 		for i := 0; i < mt; i++ {
 			for j := 0; j < nt; j++ {
-				acc[i][j] = b.MMA(ir.MMAVolta, af[i], bf[j], acc[i][j])
+				acc[i][j] = b.MMA(ir.MMAVolta(), af[i], bf[j], acc[i][j])
 			}
 		}
 	}
@@ -269,7 +269,7 @@ func PagedAttnAccMMA70(s FlashShape, mt, nt int) (*ir.Kernel, error) {
 		}
 		for i := 0; i < mt; i++ {
 			for j := 0; j < nt; j++ {
-				d[i][j] = b.MMA(ir.MMAVolta, af[i], bf[j], d[i][j])
+				d[i][j] = b.MMA(ir.MMAVolta(), af[i], bf[j], d[i][j])
 			}
 		}
 	}

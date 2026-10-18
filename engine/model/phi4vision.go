@@ -72,12 +72,6 @@ func naflexSize(w, h, patch, lo, hi int) (int, int) {
 	return scaled(smin, w), scaled(smin, h)
 }
 
-// Gates' violations, false in every real run: phi4PosTransposed resizes the
-// table to the grid's transpose, so every patch reads another's position;
-// phi4NoResize reads the square table's first rows as a fixed-grid tower
-// would; phi4Bicubic resamples the picture with Pillow's BICUBIC.
-var phi4PosTransposed, phi4NoResize, phi4Bicubic bool
-
 // phi4Table is the tower's square position table resized to a gh x gw grid,
 // as Siglip2VisionEmbeddings.resize_positional_embeddings resizes it:
 // separable, PyTorch's antialiasing taps in float, each sum a generated axpy
@@ -85,10 +79,10 @@ var phi4PosTransposed, phi4NoResize, phi4Bicubic bool
 // of the same size allocates nothing.
 func (s *State) phi4Table(gh, gw int) []float32 {
 	v := s.vis
-	if phi4NoResize {
+	if s.tfault() == faultPhi4NoResize {
 		return v.t.posW
 	}
-	if phi4PosTransposed {
+	if s.tfault() == faultPhi4PosTransposed {
 		gh, gw = gw, gh
 	}
 	if v.posTab != nil && v.posAt == [2]int{gh, gw} {

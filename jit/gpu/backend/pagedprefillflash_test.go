@@ -195,7 +195,7 @@ func TestPagedFlashPrefill(t *testing.T) {
 				}
 			}
 		} else {
-			tdevs = mmaDevices(t, devs, ir.MMAVolta)
+			tdevs = mmaDevices(t, devs, ir.MMAVolta())
 		}
 		for _, d := range tdevs {
 			t.Run(fmt.Sprintf("tile%v/%s/%s", tile, d.API(), d.Name()), func(t *testing.T) {

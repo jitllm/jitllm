@@ -109,11 +109,11 @@ func TestPhi4RealMatchesTransformers(t *testing.T) {
 				t.Fatalf("pixels %.3e (max %.2e), tower %.3e, projector %.3e", pn, pw, nv, ne)
 			}
 			if gh != gw {
-				phi4PosTransposed = true
+				tw.Cfg.fault = faultPhi4PosTransposed
 				s := tw.testState()
 				_, bad := encode(s)
 				s.Close()
-				phi4PosTransposed = false
+				tw.Cfg.fault = towerFaultNone
 				nb, _ := nmse32(wantEmb, bad)
 				t.Logf("violation, the table resized to the grid's transpose: NMSE %.3e", nb)
 				if !(nb > 10*ne) {

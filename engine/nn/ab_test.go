@@ -44,7 +44,6 @@ func TestABInterleave(t *testing.T) {
 	}
 	out := make([]float32, rows)
 	os.Unsetenv("JITLLM_CORES")
-	ResetForTest()
 
 	f := NewJIT(k, rows, []quant.Type{quant.Q4_0})
 	if f == nil {

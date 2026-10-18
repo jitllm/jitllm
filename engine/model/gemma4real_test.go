@@ -85,11 +85,11 @@ func TestGemma4RealMatchesTransformers(t *testing.T) {
 		t.Fatalf("the real tower's rows read NMSE %.3e against transformers", nm)
 	}
 	// The violation on the real weights: the clamps off.
-	gemma4ClampFault = true
+	tw.Cfg.fault = faultGemma4NoClamp
 	hv := tw.testState()
 	_, bad := encode(hv)
 	hv.Close()
-	gemma4ClampFault = false
+	tw.Cfg.fault = towerFaultNone
 	bn, _ := nmse32(want, bad)
 	t.Logf("without the checkpoint's clamps: NMSE %.3e", bn)
 	if !(bn > 10*nm) {

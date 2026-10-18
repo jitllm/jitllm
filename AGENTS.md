@@ -918,6 +918,16 @@ device-side paging. Not done, named rather than implied: concurrent sessions on
 one device (a session's calls are serialised there) and the sessions-per-device
 budget.
 
+- **No mutable package-level state.** A switch, counter, hook or cache written
+  at package level makes two instances in one process interfere, so state lives
+  on the instance that owns it (the JIT, the device, the pool, the model, the
+  File) and is set by a `With...()` option; a lock around a wider scope is not
+  the fix. A gate violation is a field on the instance under test (a model's
+  `faults`, a tower's `fault`), never a package var. What stays shared is a
+  cache of deterministic results, a table written once, or a process resource,
+  each on `globalAllowlist` in `internal/srcgate/globals_test.go` with its
+  reason; `TestNoMutablePackageState` fails on anything else, and
+  `TestMutablePackageStateGateFires` runs the detector against each kind.
 - **The libraries read no environment.** Every knob is a `With...()` option;
   `cmd/jitllm` reads the `JITLLM_*` names and passes them through. The one file
   that reads an environment variable is device fault injection under the

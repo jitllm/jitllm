@@ -46,7 +46,7 @@ func TestPagedPrefillMMA(t *testing.T) {
 			{name: "mma2acc4x2", mmaNT: 2, accMMA: [2]int{4, 2}, smLanes: 32},
 			{name: "mma1acc1x1", mmaNT: 1, accMMA: [2]int{1, 1}, smLanes: 1, groupMerge: true},
 		}},
-		{ir.MMAVolta, []prefillForm{
+		{ir.MMAVolta(), []prefillForm{
 			{name: "v1x2", voltaMT: 1, voltaNT: 2, smLanes: 32},
 			{name: "v2x1", voltaMT: 2, voltaNT: 1, smLanes: 32, groupMerge: true},
 			{name: "v2x4", voltaMT: 2, voltaNT: 4, voltaAccMT: 1, smLanes: 1}, // the tier's

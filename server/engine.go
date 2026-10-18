@@ -178,6 +178,13 @@ func (c *Config) withDefaults() {
 // record which sessions run on which hardware (they never queue one). It is the whole of the server's state; the six
 // Connect services and the two HTTP shims are projections of it.
 type Engine struct {
+	// sampleTap, when a test sets it, sees the logits a row sampled from and
+	// the token that came out, for every row of the step loop. It exists so a
+	// gate can compare two engines' distributions where their sampled tokens
+	// may part (nothing sets it outside tests; it costs one nil check per
+	// token).
+	sampleTap func(temp float64, logits []float32, next int32)
+
 	cfg     Config
 	started time.Time
 

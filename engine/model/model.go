@@ -1181,6 +1181,9 @@ type expert struct{ gate, up, down tensor }
 
 // Model is a loaded transformer.
 type Model struct {
+	// faults are the gates' deliberate violations of this model's steps; zero
+	// in a real run (faults.go).
+	faults faults
 	// bankWts caches bankWeight's Weight per bank entry; holdFree is the
 	// recycled sheet holds (sheetOf).
 	bankWts  sync.Map
@@ -1463,6 +1466,9 @@ type loadOpts struct {
 	// preload is how many pages Open keeps in flight behind it; see
 	// WithPreload.
 	preload int
+	// heapWeights keeps the container's frames on the Go heap; see
+	// WithHeapWeights.
+	heapWeights bool
 }
 
 // WithPreload has Open start reading every page in the background, depth
@@ -1473,6 +1479,13 @@ type loadOpts struct {
 // decides residency.
 func WithPreload(depth int) Option {
 	return func(l *loadOpts) { l.preload = depth }
+}
+
+// WithHeapWeights keeps this model's page frames and dense region on the Go
+// heap instead of off it (jlm.WithHeapWeights): the control arm for a
+// measurement. A caller using it also tells the budget so (sched.SetWeightsOffHeap).
+func WithHeapWeights() Option {
+	return func(l *loadOpts) { l.heapWeights = true }
 }
 
 // WithTokenizerOption carries a tok.Option through Open, for a caller that
@@ -1580,7 +1593,11 @@ func openContainer(path string, options ...Option) (*Model, error) {
 	for _, o := range options {
 		o(&lo)
 	}
-	c, err := jlm.Open(path)
+	var jo []jlm.OpenOption
+	if lo.heapWeights {
+		jo = append(jo, jlm.WithHeapWeights())
+	}
+	c, err := jlm.Open(path, jo...)
 	if err != nil {
 		return nil, err
 	}

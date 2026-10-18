@@ -44,7 +44,7 @@ type bpeState struct {
 
 // gpt2 byte<->rune tables; pretok.ByteToRune is the definition.
 var (
-	byteToRune = pretok.ByteToRune
+	byteToRune = pretok.ByteToRune()
 	runeToByte = map[rune]byte{}
 )
 

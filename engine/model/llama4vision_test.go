@@ -159,12 +159,12 @@ func TestLlama4TowerMatchesTransformers(t *testing.T) {
 			return func() { tw.Cfg.CLSLast = true }
 		}, false},
 		{"rotary positions from zero", func() func() {
-			llama4Fault = llama4FaultFromZero
-			return func() { llama4Fault = 0 }
+			tw.Cfg.fault = faultLlama4FromZero
+			return func() { tw.Cfg.fault = towerFaultNone }
 		}, true},
 		{"the row before the column", func() func() {
-			llama4Fault = llama4FaultRowFirst
-			return func() { llama4Fault = 0 }
+			tw.Cfg.fault = faultLlama4RowFirst
+			return func() { tw.Cfg.fault = towerFaultNone }
 		}, false},
 		{"the shuffle transposed", func() func() {
 			tw.Cfg.fault = towerFaultShuffleSwap

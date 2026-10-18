@@ -130,7 +130,7 @@ func AttnScoresMMA70(nHeads, headDim, kvDim, gqa, maxSeq int, scale float32, row
 		}
 		for i := 0; i < mt; i++ {
 			for j := 0; j < nt; j++ {
-				acc[i][j] = b.MMA(ir.MMAVolta, af[i], bf[j], acc[i][j])
+				acc[i][j] = b.MMA(ir.MMAVolta(), af[i], bf[j], acc[i][j])
 			}
 		}
 	}
@@ -250,7 +250,7 @@ func AttnAccMMA70(nHeads, headDim, kvDim, gqa, maxSeq, rows, mt, nt int) (*ir.Ke
 		}
 		for i := 0; i < mt; i++ {
 			for j := 0; j < nt; j++ {
-				d[i][j] = b.MMA(ir.MMAVolta, af[i], bf[j], d[i][j])
+				d[i][j] = b.MMA(ir.MMAVolta(), af[i], bf[j], d[i][j])
 			}
 		}
 	}

@@ -13,10 +13,6 @@ package model
 // other multi-stream residuals are laid out stream-major per chunk, so they
 // are declined by name rather than compacted.
 
-// tailPruneIgnoresDemand is true only in a gate's violation: it prunes
-// although a row tap wants every row.
-var tailPruneIgnoresDemand bool
-
 // tailPruneStats counts, over a State's prompts, the row-blocks a KV-sharing
 // tail would have run unpruned (Would) and those it ran (Ran).
 type tailPruneStats struct{ Would, Ran int }
@@ -32,7 +28,7 @@ func (s *State) pruneTailAt(base, n, total int, chunkBidir bool) int {
 	c := s.c
 	if s.m.opt.noTailPrune || c.NKVShared == 0 || c.AltUp != 0 || c.Streams() > 1 ||
 		c.DSV4() || c.Q4E() || c.ResAttn() || s.emb != nil || s.rows != nil ||
-		(s.rowTap != nil && !tailPruneIgnoresDemand) || s.batched || s.recurrent() ||
+		(s.rowTap != nil && !s.m.faults.tailPruneIgnoresDemand) || s.batched || s.recurrent() ||
 		chunkBidir || len(s.bidir) > 0 || s.hi != int(c.NLayer) {
 		return -1
 	}

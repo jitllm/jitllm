@@ -156,9 +156,9 @@ func TestGemma3nTowerOnDeviceMatchesHost(t *testing.T) {
 				name string
 				f    mnFaultKind
 			}{{"symmetric padding", mnFaultSymmetric}, {"no residual adds", mnFaultNoResidual}} {
-				mnFault = v.f
+				tw.Cfg.fault = v.f
 				bad := g3nvEncode(t, tw, g, nil)
-				mnFault = mnFaultNone
+				tw.Cfg.fault = towerFaultNone
 				nb, _ := nmse32(bad, a.out)
 				t.Logf("%s against a host with %s: NMSE %.3e", spec, v.name, nb)
 				if !(nb > 10*nm && nb > 1e-3) {

@@ -37,11 +37,8 @@ import (
 //	              <|image_end|>; a one-piece picture is its rows between the
 //	              first and last marker alone
 
-// Gates' violations, false in every real run: lfm2TanhGELU runs the
-// projector's GELU in llama.cpp's tanh form; lfm2NoThumb leaves a tiled
-// picture's thumbnail out; lfm2Bilinear resamples bilinear whatever the file
-// says; lfm2NoProjNorm skips the projector's LayerNorm where the file has one.
-var lfm2TanhGELU, lfm2NoThumb, lfm2Bilinear, lfm2NoProjNorm bool
+// Gates' violations are towerFault values (faultLFM2TanhGELU, faultLFM2NoThumb,
+// faultLFM2Bilinear, faultLFM2NoProjNorm), set on the tower's configuration.
 
 // lfm2Pixels gives the tower the processor's bounds the container states.
 // MaxPixels is also the most patches a piece holds: a tile is TileSize
@@ -120,7 +117,7 @@ func (c TowerConfig) lfm2Smart(w, h int) (int, int) {
 
 // lfm2Filter is the resampling filter the container states.
 func (c TowerConfig) lfm2Filter() aaFilter {
-	if c.Bicubic && !lfm2Bilinear {
+	if c.Bicubic && c.fault != faultLFM2Bilinear {
 		return aaBicubic
 	}
 	return aaBilinear
@@ -149,7 +146,7 @@ func (c TowerConfig) lfm2Preprocess(p rgb8) (px [][]float32, sizes [][2]int, col
 		px = append(px, norm(big.crop((i%cols)*n, (i/cols)*n, n, n)))
 		sizes = append(sizes, [2]int{n, n})
 	}
-	if lfm2NoThumb {
+	if c.fault == faultLFM2NoThumb {
 		return px, sizes, cols, rows, nil
 	}
 	px = append(px, norm(p.resize(tw, th, f)))

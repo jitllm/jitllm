@@ -624,7 +624,7 @@ func gemmVolta(s MatVecShape, t VoltaTile, into *gemmCtx) (*ir.Kernel, error) {
 		for x := 0; x < 2; x++ {
 			for i := 0; i < t.MT; i++ {
 				for j := 0; j < t.NT; j++ {
-					d[i][j] = b.MMA(ir.MMAVolta, af[i][2*x:2*x+2], bf[j][2*x:2*x+2], d[i][j])
+					d[i][j] = b.MMA(ir.MMAVolta(), af[i][2*x:2*x+2], bf[j][2*x:2*x+2], d[i][j])
 				}
 			}
 		}

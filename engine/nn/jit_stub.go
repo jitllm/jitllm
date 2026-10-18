@@ -56,6 +56,7 @@ func WithPackWidth(int) Option         { return func(*Config) {} }
 func WithAccs(int) Option              { return func(*Config) {} }
 func WithPrefetch(int) Option          { return func(*Config) {} }
 func WithA64Prefetch(int) Option       { return func(*Config) {} }
+func WithProbes(int, int, int) Option  { return func(*Config) {} }
 func WithGEMMTile(string) Option       { return func(*Config) {} }
 func WithPrefillChunk(int) Option      { return func(*Config) {} }
 func WithParticipants(int) Option      { return func(*Config) {} }
@@ -69,9 +70,6 @@ func Argmax32JIT(x []float32) (int32, bool) { return 0, false }
 
 // ProfileNanos has nothing to report: no generated code runs on this platform.
 func ProfileNanos() (quantize, kernel, out int64) { return 0, 0, 0 }
-
-// ResetForTest is a no-op without an emitter.
-func ResetForTest() {}
 
 func (f *JIT) Types() []quant.Type { return nil }
 func (f *JIT) Close() error        { return nil }

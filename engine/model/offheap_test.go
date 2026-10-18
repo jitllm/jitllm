@@ -28,10 +28,12 @@ func TestOffHeapFramesMatchTheHeap(t *testing.T) {
 
 func offHeapGate(t *testing.T, path string) {
 	decode := func(off bool) [][]float32 {
-		was := jlm.SetOffHeap(off)
-		defer jlm.SetOffHeap(was)
 		base := jlm.OffHeapBytes()
-		m, err := Open(path, noTune, WithPageBudget(1))
+		opts := []Option{noTune, WithPageBudget(1)}
+		if !off {
+			opts = append(opts, WithHeapWeights())
+		}
+		m, err := Open(path, opts...)
 		if err != nil {
 			t.Fatal(err)
 		}

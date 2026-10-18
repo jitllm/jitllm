@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // The download path, gated against a fake Hub: a gate that needs the network
@@ -182,7 +183,7 @@ func TestFetchDoesNotDownloadWhatIsAlreadyHere(t *testing.T) {
 func TestFetchResumesInsteadOfStartingOver(t *testing.T) {
 	h, cl, r := fake(t, 120_000)
 	h.cut, h.down = 40_000, true // a link that stays down: in-process retries give up
-	noBackoff(t)
+	noBackoff(t, cl)
 	dir := t.TempDir()
 	if _, err := cl.Fetch(r, dir); err == nil {
 		t.Fatal("a dropped connection was reported as a successful download")
@@ -224,7 +225,7 @@ func TestFetchResumesInsteadOfStartingOver(t *testing.T) {
 func TestFetchRetriesADroppedConnectionInProcess(t *testing.T) {
 	h, cl, r := fake(t, 120_000)
 	h.cut = 40_000
-	noBackoff(t)
+	noBackoff(t, cl)
 	got, err := cl.Fetch(r, t.TempDir())
 	if err != nil {
 		t.Fatalf("three drops, each after progress, failed the fetch: %v", err)
@@ -237,10 +238,11 @@ func TestFetchRetriesADroppedConnectionInProcess(t *testing.T) {
 	}
 }
 
-func noBackoff(t *testing.T) {
-	old := backoffBase
-	backoffBase = 0
-	t.Cleanup(func() { backoffBase = old })
+// noBackoff has cl retry at once. (Tuning's zero is the shipping second, so the
+// least a test can ask for is a nanosecond.)
+func noBackoff(t *testing.T, cl *Client) {
+	t.Helper()
+	cl.Tuning.BackoffBase = time.Nanosecond
 }
 
 // TestFetchRefusesToSpliceADifferentRevision is the resume's real hazard. A
@@ -324,7 +326,7 @@ func TestFetchRefusesAServerThatOverruns(t *testing.T) {
 func TestFetchStartsOverWhenTheServerIgnoresARange(t *testing.T) {
 	h, cl, r := fake(t, 80_000)
 	h.cut, h.down = 25_000, true
-	noBackoff(t)
+	noBackoff(t, cl)
 	dir := t.TempDir()
 	if _, err := cl.Fetch(r, dir); err == nil {
 		t.Fatal("a dropped connection was reported as a success")

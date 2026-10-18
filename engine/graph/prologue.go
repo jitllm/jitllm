@@ -14,10 +14,12 @@ import "fmt"
 
 // actInContract is the prologue's promise: the bits of the two launches it
 // replaces, on every backend its kernel gate runs.
-var actInContract = map[string]Contract{
-	"ptx":   {Exact: true, Gate: "backend.TestActInIsTheTwoLaunches"},
-	"spirv": {Exact: true, Gate: "backend.TestActInIsTheTwoLaunches"},
-	"msl":   {Exact: true, Gate: "backend.TestActInIsTheTwoLaunches"},
+func actInContract() map[string]Contract {
+	return map[string]Contract{
+		"ptx":   {Exact: true, Gate: "backend.TestActInIsTheTwoLaunches"},
+		"spirv": {Exact: true, Gate: "backend.TestActInIsTheTwoLaunches"},
+		"msl":   {Exact: true, Gate: "backend.TestActInIsTheTwoLaunches"},
+	}
 }
 
 // actInPays is the prologue's target guard: it removes a launch only on a
@@ -65,7 +67,7 @@ var ActInQKV = &Rewrite{
 		}
 		return nil
 	},
-	Contract: actInContract,
+	Contract: actInContract(),
 	Pays:     actInPays,
 	Bounds:   func(*Graph, Region) Resources { return Resources{Launches: 1} },
 	When:     WhenLoad,
@@ -113,7 +115,7 @@ var ActInO = &Rewrite{
 	Name:     "actin-o",
 	Match:    func(g *Graph) []Region { return singleReader(g, OpAttend) },
 	Legal:    singleLegal,
-	Contract: actInContract,
+	Contract: actInContract(),
 	Pays:     actInPays,
 	Bounds:   func(*Graph, Region) Resources { return Resources{Launches: 1} },
 	When:     WhenLoad,
@@ -125,7 +127,7 @@ var ActInDown = &Rewrite{
 	Name:     "actin-down",
 	Match:    func(g *Graph) []Region { return singleReader(g, OpActMul) },
 	Legal:    singleLegal,
-	Contract: actInContract,
+	Contract: actInContract(),
 	Pays:     actInPays,
 	Bounds:   func(*Graph, Region) Resources { return Resources{Launches: 1} },
 	When:     WhenLoad,

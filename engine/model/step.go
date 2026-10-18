@@ -83,7 +83,7 @@ func (e *Encode) step(st *State) error {
 	defer vs.m.enterPager()()
 	v, p := vs.vis, e.Picture
 	c := v.t.Cfg
-	clean := v.fault == towerFaultNone && c.fault == towerFaultNone && !qwenNoUnwindow
+	clean := v.fault == towerFaultNone && c.fault == towerFaultNone
 	if !e.begun {
 		if clean {
 			if hit, ok := vs.m.imgCache.get(p.Key); ok {
@@ -392,8 +392,8 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 	addRow := func(r Run, j int) error {
 		st, tok := r.State, r.Tokens[j]
 		p := st.bpos[0] + j
-		if stepPos != nil {
-			p = stepPos(st.bpos[0], j, len(r.Tokens))
+		if s0.m.faults.stepPos != nil {
+			p = s0.m.faults.stepPos(st.bpos[0], j, len(r.Tokens))
 		}
 		if int(tok) < 0 || int(tok) >= c.NVocab {
 			return errToken{tok, c.NVocab}
@@ -401,7 +401,7 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 		if p >= st.maxSeq {
 			return errFull{st.maxSeq, st.reqSeq}
 		}
-		if stepShare {
+		if s0.m.faults.stepShare {
 			st = runs[0].State
 		}
 		toks, pos, own = append(toks, tok), append(pos, p), append(own, st)
@@ -464,16 +464,6 @@ func stepHost(runs []Run, rows int) ([][]float32, error) {
 	return out, nil
 }
 
-// stepShare, when set, gives every row of a host step the first run's State
-// as its history. False but in a gate's violation: it is how the gate shows
-// that rows reading one session's history fail it.
-var stepShare bool
-
-// stepPos, when set, is where a run's row j goes, given the State's next
-// position and the run's length. Nil but in a gate's violation: it is how the
-// gate shows that a chunk laid out at the wrong positions fails it.
-var stepPos func(base, j, k int) int
-
 // stepTogether is StepRuns' joint arm: each row embedded and rotated at its
 // own position, one device step, and each State's logits and position moved on
 // as Prefill and Forward move them. The rows whose logits are wanted -- each
@@ -493,8 +483,8 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	addRow := func(r Run, j int) error {
 		st, i := r.State, len(pos)
 		tok, p := r.Tokens[j], st.bpos[0]+j
-		if stepPos != nil {
-			p = stepPos(st.bpos[0], j, len(r.Tokens))
+		if s0.m.faults.stepPos != nil {
+			p = s0.m.faults.stepPos(st.bpos[0], j, len(r.Tokens))
 		}
 		if int(tok) < 0 || int(tok) >= c.NVocab {
 			return errToken{tok, c.NVocab}

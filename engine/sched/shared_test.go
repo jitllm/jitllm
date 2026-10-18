@@ -137,7 +137,7 @@ func TestECoresAreTheirOwnCrew(t *testing.T) {
 // again: on a three-core runner one session once ran a whole reply while
 // another's generate produced no token. View a loops regions back to back on
 // GOMAXPROCS 1, 2 and 3 under a three-worker crew while b runs regions too, and the
-// lock reports each time b queues (onTurnQueue). From b queuing to b's region
+// lock reports each time b queues (turn.onQueue). From b queuing to b's region
 // starting, a may finish the one region it already held and start none: a
 // count, not a timing, so a runner too loaded to schedule b promptly changes
 // how often b queues and never the bound. (Counting a's regions between two
@@ -161,7 +161,7 @@ func alternate(t *testing.T, procs int) {
 
 	var bQueued, aIn atomic.Bool
 	var queued, worst, cur, aRuns atomic.Int64
-	onTurnQueue = func(w chan struct{}) {
+	b.w().mu.onQueue = func(w chan struct{}) {
 		if w == b.wake {
 			// The count restarts before the flag goes up, or a region of a
 			// reading the new flag adds to the last wait's count.
@@ -170,7 +170,6 @@ func alternate(t *testing.T, procs int) {
 			bQueued.Store(true)
 		}
 	}
-	defer func() { onTurnQueue = nil }()
 
 	stop := make(chan struct{})
 	done := make(chan struct{})

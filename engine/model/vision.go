@@ -157,7 +157,44 @@ const (
 	// faultHyNoNewline puts each merged row's last unit where HunyuanVL's
 	// newline row goes.
 	faultHyNoNewline
+	// The remaining faults are gates' violations of one family's step, each
+	// false in every real run: what the name says is what the tower does wrong.
+	faultKeyAliases        // imageKey leaves the configuration and the grid out of the name
+	faultVideoFirstFrame   // each video pair's second frame is its first
+	faultQwenNoUnwindow    // qwen's merged rows stay in window order
+	faultGemma4NoClamp     // gemma4 skips every clamp
+	faultGemma4NoPool      // gemma4 takes each group's first patch
+	faultGemma4RowFirst    // gemma4's row turns the first half of the head
+	faultLFM2NoProjNorm    // LFM2-VL skips the projector's LayerNorm
+	faultLFM2TanhGELU      // LFM2-VL's projector GELU in llama.cpp's tanh form
+	faultLFM2NoThumb       // LFM2-VL leaves a tiled picture's thumbnail out
+	faultLFM2Bilinear      // LFM2-VL resamples bilinear whatever the file says
+	faultLlama4FromZero    // llama4's positions start at zero
+	faultLlama4RowFirst    // llama4's row turns the first half
+	faultPhi4Bicubic       // phi4 resamples with Pillow's BICUBIC
+	faultPhi4NoResize      // phi4 reads the square table's first rows
+	faultPhi4PosTransposed // phi4 resizes the table with the grid transposed
+	faultPixtralFreq       // pixtral's rotary frequencies wrong
+	faultPixtralMerge      // pixtral's merge wrong
+	faultPixtralNoBreaks   // pixtral leaves the break rows out
+	// MobileNet-V5's (mobilenetrun.go).
+	mnFaultSymmetric  // pads every window k/2 on both sides, PyTorch's static padding, in place of TF SAME's smaller half first
+	mnFaultNoResidual // drops every block's residual add
+	mnFaultUpsampleT  // reads the coarser stage's row at the transposed position when the fusion adapter upsamples it
+	mnFaultPoolFirst  // takes each pooling window's first row for its mean
 )
+
+// tfault is the fault of the tower this State runs or encodes for: the
+// tower's configuration is the instance a gate sets it on.
+func (s *State) tfault() towerFault {
+	if s.vis != nil && s.vis.t != nil {
+		return s.vis.t.Cfg.fault
+	}
+	if s.m != nil && s.m.tower != nil {
+		return s.m.tower.Cfg.fault
+	}
+	return towerFaultNone
+}
 
 // Patches is how many patch embeddings one image produces before the
 // projector -- the most a dynamic-resolution tower's grid may hold, which is
@@ -1799,7 +1836,7 @@ func (s *State) project(patches []float32) ([]float32, error) {
 		src = v.grp
 		// InternVL's LayerNorm over the grouped row, before the MLP, and
 		// LFM2-VL's where its file carries one.
-		if c.Kind == jlm.ProjInternVL || c.Kind == jlm.ProjLFM2 && t.projNorm != nil && !lfm2NoProjNorm {
+		if c.Kind == jlm.ProjInternVL || c.Kind == jlm.ProjLFM2 && t.projNorm != nil && s.tfault() != faultLFM2NoProjNorm {
 			w := c.projK()
 			s.normRows(v.grp, v.grp, t.projNorm, t.projNormB, w, c.Tokens(), true, c.projEps(),
 				s.rowChunk(c.Tokens(), w))
@@ -1832,7 +1869,7 @@ func (s *State) project(patches []float32) ([]float32, error) {
 	}
 	s.visBiasRows(v.hid, t.projB, nt)
 	act := nn.ActGELU
-	if c.Kind == jlm.ProjLFM2 && !lfm2TanhGELU {
+	if c.Kind == jlm.ProjLFM2 && s.tfault() != faultLFM2TanhGELU {
 		act = nn.ActGELUErf
 	}
 	s.actAll(v.hid[:nt*t.projW.rows], act)
@@ -1989,7 +2026,7 @@ func (s *State) visRope(n int) []float32 {
 	for i := 0; i < n; i++ {
 		if c.Kind == jlm.ProjLlama4 {
 			var pos [2]int
-			llama4Coords(i, gh*gw, gw, pos[:])
+			llama4Coords(s.tfault(), i, gh*gw, gw, pos[:])
 			s.jit.RopeTableAt(r, v.ropeSC[i*c.HeadDim:(i+1)*c.HeadDim], pos[:])
 			continue
 		}
@@ -1997,7 +2034,7 @@ func (s *State) visRope(n int) []float32 {
 			// (column, row): the column turns the first half.
 			p := s.patchAt(i)
 			pos := []int{p % gw, p / gw}
-			if gemma4RowFirst {
+			if s.tfault() == faultGemma4RowFirst {
 				pos[0], pos[1] = pos[1], pos[0]
 			}
 			s.jit.RopeTableAt(r, v.ropeSC[i*c.HeadDim:(i+1)*c.HeadDim], pos)

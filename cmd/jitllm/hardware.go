@@ -95,7 +95,7 @@ func reportJIT() {
 		n, _ := strconv.Atoi(os.Getenv(k))
 		return n
 	}
-	cpu.SetWidths(num("JITLLM_PACK"), num("JITLLM_ACCS"))
+	pack, accs := num("JITLLM_PACK"), num("JITLLM_ACCS")
 	cpuConfigure()
 	// The window is the emitter's answer, not the model's: 256 only where the
 	// native k-quant kernel hoists the activation scale out of its sub-block
@@ -110,7 +110,7 @@ func reportJIT() {
 			ks = append(ks, fmt.Sprintf("%s none", t))
 			continue
 		}
-		ks = append(ks, fmt.Sprintf("%s pack%d accs%d", t, cpu.BestPackNative(t), cpu.BestAccs(t)))
+		ks = append(ks, fmt.Sprintf("%s pack%d accs%d", t, cpu.PackWidthNative(pack, t), cpu.AccChains(accs, t)))
 	}
 	fmt.Printf("          kernels   %s\n", strings.Join(ks, "  "))
 	// Two families, two lines. The line above is the GGUF row-major emitters,

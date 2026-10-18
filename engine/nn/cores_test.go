@@ -37,7 +37,6 @@ func TestABCoreSets(t *testing.T) {
 	out := make([]float32, rows)
 
 	mk := func(set string) *JIT {
-		ResetForTest()
 		return NewJIT(k, rows, []quant.Type{quant.Q4_0}, WithSched(sched.WithCoreSet(set)))
 	}
 	base := mk("p")
@@ -71,5 +70,4 @@ func TestABCoreSets(t *testing.T) {
 		other.Close()
 	}
 	os.Unsetenv("JITLLM_CORESET")
-	ResetForTest()
 }

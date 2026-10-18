@@ -769,7 +769,7 @@ const (
 var mmaShapes = []MMAShape{
 	{16, 8, 16, MMAS8}, {16, 8, 32, MMAS8},
 	{16, 8, 8, MMAF16}, {16, 8, 16, MMAF16},
-	MMAVolta, MMAS8Turing,
+	MMAVolta(), MMAS8Turing(),
 }
 
 // MMAS8Turing is m8n8k16 int8 -> int32, the integer matrix instruction sm_75
@@ -778,7 +778,7 @@ var mmaShapes = []MMAShape{
 // columns 2q and 2q+1. A kernel asks for it by name: it is not how the m16n8
 // shapes lower, so a device without them still refuses those (and the tier's
 // integer-matvec probe keeps its answer).
-var MMAS8Turing = MMAShape{8, 8, 16, MMAS8}
+func MMAS8Turing() MMAShape { return MMAShape{8, 8, 16, MMAS8} }
 
 // MMAVolta is sm_70's only matrix instruction, mma.sync m8n8k4 f16 -> f32. It
 // is not a warp-wide tile: the warp is four quad-pairs (lanes 4q..4q+3 with
@@ -790,13 +790,13 @@ var MMAS8Turing = MMAShape{8, 8, 16, MMAS8}
 //	D[i]   row (l&1) + 2*((i>>1)&1) + 4*(l>>4), column (i&1) + 2*((l>>1)&1) + 4*(i>>2)
 //
 // sm_70 has no integer mma.sync. Only PTX lowers it.
-var MMAVolta = MMAShape{8, 8, 4, MMAF16}
+func MMAVolta() MMAShape { return MMAShape{8, 8, 4, MMAF16} }
 
 // Frags is how many u32 registers one lane holds of A, B and C for this shape.
 // A lane holds M*K/32 operands of A and K*N/32 of B, packed four int8 or two
 // binary16 to a register, and M*N/32 accumulators.
 func (s MMAShape) Frags() (a, bb, c int) {
-	if s == MMAVolta {
+	if s == MMAVolta() {
 		// Per quad-pair, not per warp: a lane's row of four halves, its column
 		// of four, and eight of the quad-pair's sixty-four accumulators.
 		return 2, 2, 8

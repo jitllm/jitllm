@@ -39,12 +39,16 @@ const MonoFamily = "JetBrainsMono Nerd Font"
 // whether it has a glyph for the rune and takes the first that does. Adding
 // coverage is adding a file to this list, never code. The Nerd Font comes
 // first for its programming glyphs; it adds no script coverage.
-var fontCandidates = []struct{ family, file string }{
-	{MonoFamily, home(".local/share/fonts/JetBrainsMonoNerdFont-Regular.ttf")},
-	{"DejaVu Sans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"},
-	{"FreeSerif", "/usr/share/fonts/truetype/freefont/FreeSerif.ttf"},
-	{"Noto Sans CJK", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"},
+func fontCandidates() []fontCandidate {
+	return []fontCandidate{
+		{MonoFamily, home(".local/share/fonts/JetBrainsMonoNerdFont-Regular.ttf")},
+		{"DejaVu Sans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"},
+		{"FreeSerif", "/usr/share/fonts/truetype/freefont/FreeSerif.ttf"},
+		{"Noto Sans CJK", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"},
+	}
 }
+
+type fontCandidate struct{ family, file string }
 
 func home(rel string) string {
 	h, err := os.UserHomeDir()
@@ -61,13 +65,16 @@ func home(rel string) string {
 // route to the global font registry. It parses with gg/text.NewFontSource, the
 // parser render.FontRegistry uses, and skips a font that parser rejects: a
 // family that registers but fails to resolve draws nothing at all.
-func LoadFonts() []string {
+func LoadFonts() []string { return loadFonts(fontCandidates()) }
+
+// loadFonts is LoadFonts over the given candidates.
+func loadFonts(cands []fontCandidate) []string {
 	ctx := plugin.NewDefaultPluginContext()
 	if ctx == nil || ctx.Assets == nil {
 		return nil
 	}
 	UIFonts, parsedFonts = nil, map[string]text.ParsedFont{}
-	for _, c := range fontCandidates {
+	for _, c := range cands {
 		if c.file == "" {
 			continue
 		}

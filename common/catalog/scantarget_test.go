@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"encoding/binary"
+	"github.com/jitllm/jitllm/format/jlm"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,7 +18,7 @@ func TestScanFindsAContainerInAnotherModelDir(t *testing.T) {
 	}
 	// A container beside it, with this build's version word.
 	hdr := make([]byte, 16)
-	copy(hdr, Magic[:])
+	copy(hdr, jlm.Magic)
 	binary.LittleEndian.PutUint32(hdr[8:], CurrentVersion)
 	if err := os.WriteFile(filepath.Join(d2, "tiny.jlm"), hdr, 0o600); err != nil {
 		t.Fatal(err)

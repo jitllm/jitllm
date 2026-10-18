@@ -39,10 +39,9 @@ func (k ImageKey) zero() bool { return k == ImageKey{} }
 // written under one definition is never read under another.
 const imageKeyVersion = "jitllm/image/1"
 
-// keyFault is a gate's violation: the configuration and the grid left out of
-// the name, so two pictures with the same pixels and another layout alias.
-// False in every real run.
-var keyFault bool
+// faultKeyAliases is a gate's violation: the configuration and the grid left
+// out of the name, so two pictures with the same pixels and another layout
+// alias. False in every real run.
 
 // imageKey is the name of the pixels px laid out as a gh x gw patch grid,
 // preprocessed by c's family.
@@ -58,7 +57,7 @@ func (c TowerConfig) imageKey(px []float32, gh, gw int) ImageKey {
 		h.Write(b[:])
 	}
 	h.Write([]byte(imageKeyVersion))
-	if !keyFault {
+	if c.fault != faultKeyAliases {
 		h.Write([]byte(c.Projector))
 		for _, v := range []int{int(c.Kind), c.NLayer, c.NEmbd, c.ImageSz, c.PatchSz, c.Scale,
 			c.MinTiles, c.MaxTiles, c.PosBuckets, c.Queries, c.MinPixels, c.MaxPixels,
@@ -193,7 +192,7 @@ func (s *State) encodeNamed(px []float32, gh, gw int, encode func() ([]float32, 
 func (s *State) encodeNamedKey(k ImageKey, gh, gw int, encode func() ([]float32, error)) ([]float32, ImageKey, error) {
 	// A gate's violation breaks the tower on purpose and must run it: the
 	// cache would answer with the clean rows.
-	if s.vis.fault != towerFaultNone || s.vis.t.Cfg.fault != towerFaultNone || qwenNoUnwindow || mnFault != mnFaultNone {
+	if s.vis.fault != towerFaultNone || s.vis.t.Cfg.fault != towerFaultNone {
 		rows, err := encode()
 		return append([]float32(nil), rows...), k, err
 	}

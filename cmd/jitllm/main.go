@@ -92,11 +92,10 @@ var procStart = time.Now()
 
 func main() {
 	alignGOMAXPROCS()
-	// Page frames and the dense region live off the Go heap (jlm.SetOffHeap).
-	// JITLLM_OFFHEAP=0 puts them back on it, with the budget's collector
-	// reserve: the control arm for a measurement.
+	// Page frames and the dense region live off the Go heap. JITLLM_OFFHEAP=0
+	// puts them back on it (model.WithHeapWeights, in loadOpts), with the
+	// budget's collector reserve: the control arm for a measurement.
 	if os.Getenv("JITLLM_OFFHEAP") == "0" {
-		jlm.SetOffHeap(false)
 		sched.SetWeightsOffHeap(false)
 	}
 	if os.Getenv("JITLLM_GCSTATS") == "1" {
@@ -1704,6 +1703,9 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 	if j := jitOptions(); len(j) > 0 {
 		o = append(o, model.WithJITOptions(j...))
 	}
+	if os.Getenv("JITLLM_OFFHEAP") == "0" {
+		o = append(o, model.WithHeapWeights())
+	}
 	// JITLLM_HUGEPAGES=0 leaves the frames on the kernel's default page size.
 	if os.Getenv("JITLLM_HUGEPAGES") == "0" {
 		o = append(o, model.WithHugePages(false))
@@ -1976,23 +1978,23 @@ func jitOptions() []nn.Option {
 		o = append(o, nn.WithoutGEMM(true))
 	}
 	cpuConfigure()
-	return o
-}
-
-// cpuConfigure hands jit/cpu the process-wide knobs that are not per-JIT: a
-// perf map for the profiler, and the probes that deliberately slow a kernel so
-// one class of operation can be priced against another.
-func cpuConfigure() {
-	n := func(k string) int {
+	// The arm64 measurement probes (jit/cpu Probes), per JIT.
+	pr := func(k string) int {
 		v, _ := strconv.Atoi(os.Getenv(k))
 		return v
 	}
-	cpu.Configure(cpu.Config{
-		PerfMap:     os.Getenv("JITLLM_PERFMAP") != "",
-		ScalarProbe: n("JITLLM_SCALAR_PROBE"),
-		LoadProbe:   n("JITLLM_LOAD_PROBE"),
-		VectorProbe: n("JITLLM_VECTOR_PROBE"),
-	})
+	if s, l, v := pr("JITLLM_SCALAR_PROBE"), pr("JITLLM_LOAD_PROBE"), pr("JITLLM_VECTOR_PROBE"); s != 0 || l != 0 || v != 0 {
+		o = append(o, nn.WithProbes(s, l, v))
+	}
+	return o
+}
+
+// cpuConfigure hands jit/cpu its one process-wide knob: the perf map for the
+// profiler, a single file named for the process.
+func cpuConfigure() {
+	if os.Getenv("JITLLM_PERFMAP") != "" {
+		cpu.EnablePerfMap()
+	}
 }
 
 // benchCmd parses bench's flags. It takes -tokenizer for the same reason run

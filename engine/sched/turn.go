@@ -28,16 +28,14 @@ type turn struct {
 	// this lock, under crews.mu: a view opened beside another of the same
 	// caller's (SharedBeside) is not one more.
 	users int
+	// onQueue, set only by a test before the turn is contended, is told under
+	// mu each time a caller queues behind the holder. It is on the contended
+	// path alone, so the uncontended turn pays nothing for it.
+	onQueue func(wake chan struct{})
+	// onGrant, set only by a test, is told under mu each time Unlock hands the
+	// turn to a queued caller.
+	onGrant func(wake chan struct{})
 }
-
-// onTurnQueue, set only by a test, is told under t.mu each time a caller
-// queues behind the holder. It is on the contended path alone, so the
-// uncontended turn pays nothing for it.
-var onTurnQueue func(wake chan struct{})
-
-// onTurnGrant, set only by a test, is told under t.mu each time Unlock hands
-// the turn to a queued caller.
-var onTurnGrant func(wake chan struct{})
 
 const (
 	turnFree int32 = iota
@@ -66,8 +64,8 @@ func (t *turn) Lock(wake chan struct{}) {
 			fallthrough
 		case turnQueued:
 			t.q = append(t.q, wake)
-			if onTurnQueue != nil {
-				onTurnQueue(wake)
+			if t.onQueue != nil {
+				t.onQueue(wake)
 			}
 			t.mu.Unlock()
 			<-wake // the holder handed the turn over; it is ours
@@ -89,8 +87,8 @@ func (t *turn) Unlock() {
 	if n == 0 {
 		t.state.Store(turnHeld)
 	}
-	if onTurnGrant != nil {
-		onTurnGrant(next)
+	if t.onGrant != nil {
+		t.onGrant(next)
 	}
 	t.mu.Unlock()
 	next <- struct{}{}

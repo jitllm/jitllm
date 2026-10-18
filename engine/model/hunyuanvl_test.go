@@ -41,9 +41,9 @@ func TestHunyuanVLTextMatchesTransformers(t *testing.T) {
 			m.ropeB.Runs = m.rope.Runs
 			perPair := run()
 			m.ropeB.Runs = was
-			xdKNormFirst = true
+			m.faults.xdKNormFirst = true
 			kFirst := run()
-			xdKNormFirst = false
+			m.faults.xdKNormFirst = false
 			t.Logf("clean %.3e; axes per pair (llama.cpp) %.3e; k normed before the rotary %.3e", clean, perPair, kFirst)
 			for what, bad := range map[string]float64{"axes per pair": perPair, "k normed first": kFirst} {
 				if !(bad > 1000*math.Max(clean, 1e-12)) {

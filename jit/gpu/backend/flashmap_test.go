@@ -63,7 +63,7 @@ func TestFlashPrefillRunTable(t *testing.T) {
 			ran++
 		}
 	}
-	for _, d := range mmaDevices(t, devs, ir.MMAVolta) {
+	for _, d := range mmaDevices(t, devs, ir.MMAVolta()) {
 		for _, fs := range []kernels.FlashPrefill70Shape{
 			{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: 64},
 			{Heads: 8, KVHeads: 4, Dim: 128, Scale: .088, Page: 64, F16: true, Softcap: 50},

@@ -2,7 +2,6 @@ package jlm
 
 import (
 	"fmt"
-	"sync/atomic"
 )
 
 // RowScratch is a buffer ReadRow reads through: two Align'd blocks, enough for
@@ -38,18 +37,15 @@ func (f *File) ReadRow(e *Entry, r uint64, dst, scratch []byte) error {
 	return nil
 }
 
-// rowReads counts ReadRow's preads, apart from the pager's reads: a row is
-// not a page, and a decode that reads rows by design is still a resident
-// model's decode.
-var rowReads atomic.Int64
-
-// RowReads is how many row-table reads this process has issued.
-func RowReads() int64 { return rowReads.Load() }
+// RowReads is how many row-table reads this File has issued, apart from the
+// pager's reads: a row is not a page, and a decode that reads rows by design is
+// still a resident model's decode.
+func (f *File) RowReads() int64 { return f.rowReads.Load() }
 
 // readRowSpan is one pread of a row's Align'd span: no fan-out, so nothing
 // escapes and a warm read allocates nothing.
 func (f *File) readRowSpan(dst []byte, off int64) error {
-	rowReads.Add(1)
+	f.rowReads.Add(1)
 	h := f.f
 	if f.direct != nil && directOK(off, len(dst)) && aligned(dst) {
 		h = f.direct
