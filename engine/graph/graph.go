@@ -399,3 +399,15 @@ func (g *Graph) String() string {
 	}
 	return b.String()
 }
+
+// Opaque reports an op kind stated whole in this version of the language:
+// its weights are bound and its effects versioned, but its inner arithmetic
+// is one op, not ops of the graph's.
+func Opaque(k OpKind) bool {
+	switch k {
+	case OpRecurrent, OpIndex, OpStreamMix, OpNGram, OpAltPredict, OpAltCorrect, OpLaurel, OpCompressedAttend,
+		OpPredict, OpCrossAttend:
+		return true
+	}
+	return false
+}

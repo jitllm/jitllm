@@ -1309,7 +1309,14 @@ func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
 		if err := s.moeRoute(li, l, ffnIn, ffnIn); err != nil {
 			return err
 		}
-		if err := s.moeExperts(li, l, ffnIn, dst); err != nil {
+		// gather: the selected experts' pages; then the experts' matvecs,
+		// act_mul (fused into down's quantize) and combine.
+		if err := s.moeGather(li, l); err != nil {
+			return err
+		}
+		err := s.moeRun(l, ffnIn, dst)
+		s.expHold.release()
+		if err != nil {
 			return err
 		}
 		if err := s.sharedExpert(l, ffnIn, dst); err != nil {
@@ -1924,7 +1931,10 @@ type OpLowering struct {
 	Kind     graph.OpKind
 	Host     string
 	Composed bool
-	Device   string
+	// Opaque is an op the language states whole (graph.Opaque): its inner
+	// operations are its routine's, not the graph's, until they are stated.
+	Opaque bool
+	Device string
 }
 
 // hostLowering is the host routine per op kind. It is data, not a branch per
@@ -1941,18 +1951,18 @@ var hostLowering = map[graph.OpKind]struct {
 	graph.OpHeadNorm:         {"nn RMSNorm per head or over the projection (generated, by width; runPrep)", true},
 	graph.OpRope:             {"nn rotary (generated, by layout; runPrep)", true},
 	graph.OpKVAppend:         {"KV page store (the cache layout's writer, by precision; runPrep)", true},
-	graph.OpAttend:           {"attendRow / the chunk's attention: one routine per row class", false},
+	graph.OpAttend:           {"the generated attention kernels (scores, softmax, accumulate), chosen by row class: attendRow, attendRows, rowsAttend", true},
 	graph.OpRoute:            {"moeRoute / moeRouteRows: the router's matvec (generated) and the route kernel (generated, by experts, top-k, router and groups)", true},
-	graph.OpGather:           {moeExpertsRoutine, false},
-	graph.OpExpertMatVec:     {moeExpertsRoutine, false},
-	graph.OpCombine:          {moeExpertsRoutine, false},
+	graph.OpGather:           {"moeGather: the selected experts' pages read (no arithmetic); the rows' gather inside moeExpertsRows", true},
+	graph.OpExpertMatVec:     {"the grouped generated matvec over the k experts (MatVecPackedMulti for gate and up, MatVecPackedGather for down)", true},
+	graph.OpCombine:          {"moeReduce: the weighted sum in ascending expert id (generated axpy)", true},
 	graph.OpGateScalar:       {"sharedExpert: the gate's matvec and sigmoid-multiply (generated)", true},
 	graph.OpLayerNorm:        {"nn LayerNorm (generated, by width)", true},
 	graph.OpAct:              {"nn activation (generated, by kind)", true},
 	graph.OpClamp:            {"nn clamp (generated; runPrep)", true},
-	graph.OpSlice:            {mlaProjectRoutine, false},
-	graph.OpLatentAppend:     {mlaProjectRoutine, false},
-	graph.OpAttendLatent:     {"absorbed (mla-absorb): attendRow / the chunk's attention over the latent rows, then mlaOutProject's un-absorb", false},
+	graph.OpSlice:            {"a view of the projection's heads (no arithmetic); compacted where the next kernel reads it whole", true},
+	graph.OpLatentAppend:     {"KV page store of the latent row (the cache layout's writer)", true},
+	graph.OpAttendLatent:     {"absorbed (the mla-absorb rewrite): the generated attention kernels over the latent rows, then W_v's un-absorb (mlaOutProject's gathered matvec)", true},
 	graph.OpScale:            {"the generated scale kernel (layerOutScale)", true},
 	graph.OpIndex:            {"mlaProject's indexer key and query (idxKey, idxQuery), then attendRow's top-k mask over the scores (idxMask)", false},
 	graph.OpStreamMix:        {"hcMix: the streams' norm, the low-rank sigmoid gate, the mean and the placement weights (generated kernels)", false},
@@ -1967,16 +1977,10 @@ var hostLowering = map[graph.OpKind]struct {
 	graph.OpRecurrent:        {"linearAttn: the recurrent mixer as one routine (mixerChunk, mixerRagged over rows)", false},
 }
 
-// moeExpertsRoutine is the host routine a routed mixture's gather, expert
-// matvecs, their act_mul and the combine run in: moeExperts (one grouped
-// region per stage) and moeExpertsRows (expert-major over the rows).
-const moeExpertsRoutine = "moeExperts / moeExpertsRows: gather, the experts' matvecs and act_mul, and combine as one grouped region"
-
-// mlaProjectRoutine is the host routine every op of a latent attention runs
-// in before the attention: the projections, the latent norms, the rotary,
-// the absorb into the query and the latent append (mlaProject,
-// mlaProjectRows).
-const mlaProjectRoutine = "mlaProject: the q and kv projections, latent norms, rotary, absorb and latent append as one routine"
+// moeActFused is the experts' act_mul's lowering: fused into down's quantize
+// (MatVecPackedGatherAct), a fusion decided at compile time -- its own
+// generated kernel while a tracer reads the activation between.
+const moeActFused = "fused into down's quantize (MatVecPackedGatherAct); its own generated kernel under a tracer"
 
 // BlockLowering is every op of text block li's graph with its lowering, nil
 // where the block is not on the graph.
@@ -2010,14 +2014,16 @@ func (m *Model) BlockLowering(li int) []OpLowering {
 		if o.Kind == graph.OpIndex && mlaTo < 0 {
 			h.routine = "msaKey and msaQuery (the key one more head of the appended row), then attendRow's block mask (msaMask)"
 		}
-		if mlaTo >= 0 && i >= mlaFrom && i < mlaTo {
-			h.routine, h.composed = mlaProjectRoutine, false
+		if mlaTo >= 0 && i >= mlaFrom && i < mlaTo && o.Kind != graph.OpIndex {
+			// Each op's own generated kernel, called in the graph's order
+			// by mlaProject (mlaProjectRows over a chunk's rows).
+			h.routine += " (in mlaProject's sequence)"
 		}
 		// The experts' act_mul runs inside their grouped region.
 		if (o.Kind == graph.OpActMul || o.Kind == graph.OpAct) && producer[o.In[0]] >= 0 && g.Ops[producer[o.In[0]]].Kind == graph.OpExpertMatVec {
-			h.routine, h.composed = moeExpertsRoutine, false
+			h.routine, h.composed = moeActFused, true
 		}
-		out[i] = OpLowering{Op: i, Kind: o.Kind, Host: h.routine, Composed: h.composed,
+		out[i] = OpLowering{Op: i, Kind: o.Kind, Host: h.routine, Composed: h.composed, Opaque: graph.Opaque(o.Kind),
 			Device: "the block's plan, lowered from the graph (lowerPlan) and run by the tier as one block"}
 	}
 	return out

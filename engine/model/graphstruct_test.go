@@ -75,15 +75,14 @@ func TestEveryGraphOpHasALowering(t *testing.T) {
 			if l.Host == "" {
 				t.Fatalf("block %d %s: no lowering", li, l)
 			}
-			// The route is its own routine of generated kernels; the
-			// experts still run as one grouped region.
-			if l.Kind == graph.OpRoute && !l.Composed {
-				t.Fatalf("block %d: the route is recorded as monolithic", li)
+			// The route and every op of the expert region are each their
+			// own generated kernel call; the experts' act_mul is fused into
+			// down's quantize, by name.
+			if (l.Kind == graph.OpRoute || l.Kind == graph.OpGather || l.Kind == graph.OpExpertMatVec ||
+				l.Kind == graph.OpCombine) && !l.Composed {
+				t.Fatalf("block %d: %s is recorded as monolithic", li, l)
 			}
-			if (l.Kind == graph.OpExpertMatVec || l.Kind == graph.OpCombine) && l.Composed {
-				t.Fatalf("block %d: %s is recorded as composed", li, l)
-			}
-			if l.Kind == graph.OpActMul && strings.HasPrefix(l.Host, "moeExperts") == l.Composed {
+			if l.Kind == graph.OpActMul && strings.HasPrefix(l.Host, "fused") != !strings.Contains(l.Host, "nn activation") {
 				t.Fatalf("block %d: %s", li, l)
 			}
 			if !l.Composed {
@@ -91,21 +90,19 @@ func TestEveryGraphOpHasALowering(t *testing.T) {
 			}
 		}
 	}
-	if mono == 0 {
-		t.Fatal("no op recorded as monolithic on a mixture model")
+	if mono != 0 {
+		t.Fatalf("%d ops recorded as monolithic on a mixture model", mono)
 	}
-	// A latent attention's projections run inside mlaProject.
+	// A latent attention's ops are each their own kernel in mlaProject's
+	// sequence; only the opaque ops stay whole.
 	dm, err := Open(graphModel(t, "synth-deepseek"), noTune)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer dm.Close()
 	for _, l := range dm.BlockLowering(dm.Cfg.NLayer - 1) {
-		if l.Kind == graph.OpMatVec && l.Composed != !strings.HasPrefix(l.Host, "mlaProject") {
-			t.Fatalf("%s", l)
-		}
-		if l.Kind == graph.OpSlice && l.Composed {
-			t.Fatalf("%s is recorded as composed", l)
+		if l.Composed == l.Opaque {
+			t.Fatalf("%s: composed %v, opaque %v", l, l.Composed, l.Opaque)
 		}
 	}
 	t.Logf("block 0:\n%v", m.BlockLowering(0))

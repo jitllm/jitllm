@@ -99,6 +99,19 @@ func (s *State) moeRoute(li int, l *layer, rin, h []float32) error {
 // experts paged in, then one grouped region (moeFFN) adding each expert's
 // contribution into out in ascending expert id.
 func (s *State) moeExperts(li int, l *layer, h, out []float32) error {
+	if err := s.moeGather(li, l); err != nil {
+		return err
+	}
+	defer s.expHold.release()
+	return s.moeRun(l, h, out)
+}
+
+// moeGather is a mixture's gather (graph.OpGather) on a decode row: the
+// selected experts' pages read -- the first moment anyone knows which -- with
+// the shared expert behind the read where the block has one, and the
+// selection's hotness and trace. The caller releases the hold (expHold) once
+// the experts have run.
+func (s *State) moeGather(li int, l *layer) error {
 	c := s.c
 	sel := s.route.Sel
 	// The selected experts are read here, the first moment anyone knows which.
@@ -128,8 +141,8 @@ func (s *State) moeExperts(li int, l *layer, h, out []float32) error {
 	} else {
 		err = s.m.ensureExperts(li, sel, &s.expHold)
 	}
-	defer s.expHold.release()
 	if err != nil {
+		s.expHold.release()
 		return err
 	}
 	s.res.touch(li, c.NExpert, sel)
@@ -148,7 +161,15 @@ func (s *State) moeExperts(li int, l *layer, h, out []float32) error {
 		}
 		s.m.trace(li, "moe_topk", v)
 	}
+	return nil
+}
 
+// moeRun is a mixture's experts and combine on a decode row, after
+// moeGather: the gate and up of the k experts (one generated region), their
+// act_mul fused into down's quantize, down (another), and the weighted
+// combine into out (moeFFN); a bank the grouped kernels do not take runs
+// expert by expert, bit for bit the same (moeLoop).
+func (s *State) moeRun(l *layer, h, out []float32) error {
 	// Renormalisation is the architecture's choice (llama and qwen3moe do,
 	// olmoe does not); without it the kernel divides by one.
 	//
