@@ -133,7 +133,7 @@ The computation layer is assembled from the loaded model's structure, weights, a
 5. `Layers` / `layersOnce` issue the prepared operations for a run of resident blocks. Compatible CUDA sequences are captured into a runtime graph and replayed. Paging, placement, buffer moves, session switches, or relevant shape changes invalidate affected recordings.
 6. On the CPU, `model.Forward`, prefill, batch, MoE, MLA, recurrence, and vision code orchestrate generated operation calls. The Go orchestration is part of the compiled program; the numerical kernels it invokes are emitted at runtime.
 
-Sources: [`engine/nn/device.go`](../engine/nn/device.go), [`engine/model/forward.go`](../engine/model/forward.go), [`engine/model/prefill.go`](../engine/model/prefill.go), [`engine/model/vision.go`](../engine/model/vision.go), [`tier/layer.go:1067`](../jit/gpu/tier/layer.go#L1067), [`tier/layer.go:2299`](../jit/gpu/tier/layer.go#L2299), [`tier/layer.go:3417`](../jit/gpu/tier/layer.go#L3417), [`tier/session.go`](../jit/gpu/tier/session.go).
+Sources: [`engine/nn/device.go`](../engine/nn/device.go), [`engine/model/forward.go`](../engine/model/forward.go), [`engine/model/prefill.go`](../engine/model/prefill.go), [`engine/model/vision.go`](../engine/model/vision.go), [`tier/prep.go`](../jit/gpu/tier/prep.go), [`tier/scratchinit.go`](../jit/gpu/tier/scratchinit.go), [`tier/encoder.go`](../jit/gpu/tier/encoder.go), [`tier/session.go`](../jit/gpu/tier/session.go).
 
 ## What happens without the optimized kernel
 
@@ -146,11 +146,11 @@ This is where “build computation at runtime” needs concrete examples. A spec
 | CPU fused or wide packed matvec | Use generated packed row tiles and tails. | [`engine/nn/packed.go`](../engine/nn/packed.go) |
 | Requested CPU token tile cannot be emitted | Try smaller token widths and cache a successful generated variant. | [`engine/nn/packedmm.go:309`](../engine/nn/packedmm.go#L309) |
 | CPU multi-token matmul unavailable | Run generated fused kernels per token, a one-token tiled kernel, or the per-token generated matvec composition. | [`engine/nn/packedmm.go:111`](../engine/nn/packedmm.go#L111), [`engine/model/prefill.go:700`](../engine/model/prefill.go#L700), [`engine/model/vision.go:744`](../engine/model/vision.go#L744) |
-| GPU matrix-instruction projection unavailable | Build and compile the dot-product `MatVec` batch variant. | [`tier/layer.go:6367`](../jit/gpu/tier/layer.go#L6367), [`tier/layer.go:6429`](../jit/gpu/tier/layer.go#L6429) |
-| GPU tensor-core attention unavailable | Build and compile tiled attention-score compute kernels, including the sliding-window variant. | [`tier/layer.go:2969`](../jit/gpu/tier/layer.go#L2969) |
-| GPU subgroup width unavailable or softmax check fails | Build and compile the scalar GPU softmax; head normalization also has scalar/subgroup variants. “Scalar” here is still device code. | [`tier/layer.go:3501`](../jit/gpu/tier/layer.go#L3501), [`kernels/attn.go`](../jit/gpu/kernels/attn.go) |
+| GPU matrix-instruction projection unavailable | Build and compile the dot-product `MatVec` batch variant. | [`tier/batchprep.go`](../jit/gpu/tier/batchprep.go) (`batchMV`, `batchMVDot4`) |
+| GPU tensor-core attention unavailable | Build and compile tiled attention-score compute kernels, including the sliding-window variant. | [`tier/scratchinit.go`](../jit/gpu/tier/scratchinit.go) (`initScratch`) |
+| GPU subgroup width unavailable or softmax check fails | Build and compile the scalar GPU softmax; head normalization also has scalar/subgroup variants. “Scalar” here is still device code. | [`tier/scratchinit.go`](../jit/gpu/tier/scratchinit.go) (`pickSoftmax`), [`kernels/attn.go`](../jit/gpu/kernels/attn.go) |
 | Device block admission fails | Leave that block for the CPU execution path and its generated kernels. | [`engine/model/forward.go:960`](../engine/model/forward.go#L960) |
-| GPU rotary-table path is unsuitable | Use/upload the host-generated rotary table. | [`tier/layer.go:4423`](../jit/gpu/tier/layer.go#L4423), [`engine/nn/ropetable.go`](../engine/nn/ropetable.go) |
+| GPU rotary-table path is unsuitable | Use/upload the host-generated rotary table. | [`tier/scratchinit.go`](../jit/gpu/tier/scratchinit.go) (`initRopeTable`), [`engine/nn/ropetable.go`](../engine/nn/ropetable.go) |
 
 These are implemented alternatives for known operations. An unknown weight representation, unsupported plan feature, invalid shape, or missing mandatory host generator can still be refused. The code does not synthesize arbitrary new model semantics from an unrecognized operation name.
 

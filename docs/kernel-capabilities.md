@@ -39,12 +39,12 @@ Sources by family: [CPU dispatch](../jit/cpu/emitters.go), [CPU orchestration](.
 | AVX2 host tier, but the SSE floor is available | Independent legacy SSE machine code for the supported operation set | [`EmittersFor` and SSE table](../jit/cpu/emitters.go) |
 | CPU wide/fused packed sweep | Row-tile and tail machine-code kernels | [`MatVecPacked`](../engine/nn/packed.go) |
 | Requested CPU token tile | A smaller successful generated tile; applicable per-token composition | [`packedmm.go`](../engine/nn/packedmm.go), [`State.mm`](../engine/model/prefill.go) |
-| GPU integer tensor-core kernel / lowering | Ordinary batched dot-product kernel generated from IR | `batchMV` → `batchMVDot4` in [layer.go](../jit/gpu/tier/layer.go) |
-| GPU attention matrix-instruction path | Tiled FMA score kernel, including sliding-window form | `initScratch` in [layer.go](../jit/gpu/tier/layer.go) |
-| Suitable GPU subgroup softmax | Scalar device kernel generated and compiled for the row shape | `pickSoftmax` in [layer.go](../jit/gpu/tier/layer.go) |
+| GPU integer tensor-core kernel / lowering | Ordinary batched dot-product kernel generated from IR | `batchMV` → `batchMVDot4` in [batchprep.go](../jit/gpu/tier/batchprep.go) |
+| GPU attention matrix-instruction path | Tiled FMA score kernel, including sliding-window form | `initScratch` in [scratchinit.go](../jit/gpu/tier/scratchinit.go) |
+| Suitable GPU subgroup softmax | Scalar device kernel generated and compiled for the row shape | `pickSoftmax` in [scratchinit.go](../jit/gpu/tier/scratchinit.go) |
 | Native packed-dot instruction in Metal's exposed compute model | Generated MSL helper arithmetic for IR `Dot4`, including bounded-input variants | [MSL lowerer](../jit/gpu/msl/msl.go) |
-| A single fused attention kernel | Generated score + softmax + value-accumulation kernels, assembled into layer execution | `initScratch` and `layersOnce` in [layer.go](../jit/gpu/tier/layer.go) |
-| A single fused dense / MoE / recurrent / MLA block kernel | The model-specific sequence of generated primitives, with buffers, shapes and state bindings prepared at runtime | [`LayerPlan`](../engine/nn/device.go), [`planFor`](../engine/model/forward.go), `PrepLayer`, `emitLinear`, `emitMLA` in [layer.go](../jit/gpu/tier/layer.go) |
+| A single fused attention kernel | Generated score + softmax + value-accumulation kernels, assembled into layer execution | `initScratch` in [scratchinit.go](../jit/gpu/tier/scratchinit.go) and `layersOnce` in [call.go](../jit/gpu/tier/call.go) |
+| A single fused dense / MoE / recurrent / MLA block kernel | The model-specific sequence of generated primitives, with buffers, shapes and state bindings prepared at runtime | [`LayerPlan`](../engine/nn/device.go), [`planFor`](../engine/model/forward.go), `PrepLayer` in [prep.go](../jit/gpu/tier/prep.go), `emitLinear` in [mixers.go](../jit/gpu/tier/mixers.go), `emitMLA` in [mladecode.go](../jit/gpu/tier/mladecode.go) |
 | Device admission for a supported block | Host execution using generated CPU kernels | `offerRange` in [forward.go](../engine/model/forward.go) |
 | An unknown quant format or new model operation | **No automatic semantic fallback.** Add the format/operation definition and its generator or composition before it can run. | [Packed formats](../format/quant/types.go), [GPU format mapping](../jit/gpu/kernels/quantof.go), [activation definitions](../jit/gpu/kernels/actkind.go) |
 
