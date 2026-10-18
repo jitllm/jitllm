@@ -68,7 +68,7 @@ func graphDecode(t *testing.T, m *Model, n, frames int) ([][]float32, int, float
 // (TestHandlessModelsHaveNoHandWrittenBody); they matched it bit for bit on
 // this gate before it was deleted, and their transformers gates hold them.
 func TestBlockGraphMatchesTheHandPath(t *testing.T) {
-	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "Qwen3-MOE-4x0.6B-Q4_K_M", "olmoe-1b-7b-0924-instruct-Q4_K_M", "synth-qwen2moe", "synth-glm4moe", "synth-ernie45moe", "synth-bailingmoe2", "synth-dots1", "synth-minimaxm2", "synth-seedoss", "synth-smollm3", "synth-lfm2", "synth-stablelm", "synth-dbrx", "synth-glm4", "synth-olmo2", "synth-exaone4", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-deepseek", "synth-deepseek-lite", "synth-deepseek-dense", "synth-deepseek-yarn", "synth-deepseek-yarn-af", "synth-glm4moelite", "synth-kimilinear", "synth-gemma4", "synth-gemma4-kv", "synth-gemma4-e", "synth-gemma4-moe", "synth-hunyuan", "synth-hunyuanmoe", "synth-llama4", "synth-llama4-q8", "synth-qwen2vl", "synth-qwen25vl", "synth-qwen3vl", "synth-glm4vmoe", "synth-granitehybrid", "synth-granitehybridmoe", "synth-lfm2moe", "synth-mamba2", "synth-falconmamba", "synth-mamba1", "synth-jamba", "synth-qwen35-hybrid-mtp", "synth-qwen35moe-hybrid-mtp", "Qwen3.5-0.8B-Q4_K_M"} {
+	for _, name := range []string{"Llama-3.2-1B-Instruct-Q4_K_M", "Qwen3-0.6B-Q8_0", "Qwen3-MOE-4x0.6B-Q4_K_M", "olmoe-1b-7b-0924-instruct-Q4_K_M", "synth-qwen2moe", "synth-glm4moe", "synth-ernie45moe", "synth-bailingmoe2", "synth-dots1", "synth-minimaxm2", "synth-seedoss", "synth-smollm3", "synth-lfm2", "synth-stablelm", "synth-dbrx", "synth-glm4", "synth-olmo2", "synth-exaone4", "gemma-2-2b-it-Q4_K_M", "gemma-3-1b-it-Q4_K_M", "synth-gptoss", "synth-gemma", "synth-phimoe", "synth-mistral3-af", "synth-deepseek", "synth-deepseek-lite", "synth-deepseek-dense", "synth-deepseek-yarn", "synth-deepseek-yarn-af", "synth-glm4moelite", "synth-kimilinear", "synth-gemma4", "synth-gemma4-kv", "synth-gemma4-e", "synth-gemma4-moe", "synth-gemma3n", "synth-qwen4exp", "synth-deepseek32", "synth-minimaxm3", "synth-deepseek4", "synth-kimik3", "synth-falconh1", "synth-hunyuanvl", "synth-hunyuan", "synth-hunyuanmoe", "synth-llama4", "synth-llama4-q8", "synth-qwen2vl", "synth-qwen25vl", "synth-qwen3vl", "synth-glm4vmoe", "synth-granitehybrid", "synth-granitehybridmoe", "synth-lfm2moe", "synth-mamba2", "synth-falconmamba", "synth-mamba1", "synth-jamba", "synth-qwen35-hybrid-mtp", "synth-qwen35moe-hybrid-mtp", "Qwen3.5-0.8B-Q4_K_M"} {
 		t.Run(name, func(t *testing.T) {
 			p := graphModel(t, name)
 			ctl, err := Open(p, noTune, WithKVF16(false), WithBlockGraph(false))
@@ -144,18 +144,29 @@ func TestBlockGraphMatchesTheHandPath(t *testing.T) {
 					differ = differ || other[i][j] != want[i][j]
 				}
 			}
-			hasKV := false
-			for li := range gm.Cfg.NLayer {
-				hasKV = hasKV || gm.Cfg.LayerKind(li).Attends()
-			}
-			if !differ && !hasKV {
-				// A model with no KV cache: the different computation is a
-				// first block's norm scaled by two.
-				w := slices.Clone(f16.layers[0].attnNorm)
+			if !differ {
+				// A model with no KV cache, or whose cache is f32 whatever is
+				// asked (QSA's pooled keys, DeepSeek V4's rows): the different
+				// computation is the first attending block's norm scaled by
+				// two (a recurrent block's own norms can absorb a scale of its
+				// input), or the first block's where none attends.
+				li := 0
+				for i := gm.Cfg.NLayer - 1; i >= 0; i-- {
+					if gm.Cfg.LayerKind(i).Attends() {
+						li = i
+					}
+				}
+				// A block with no attention norm (Qwen3.8-Flash-Next's) has its
+				// stream mix's.
+				dst := &f16.layers[li].attnNorm
+				if len(*dst) == 0 && f16.layers[li].q4e != nil {
+					dst = &f16.layers[li].q4e.attn.norm
+				}
+				w := slices.Clone(*dst)
 				for i := range w {
 					w[i] *= 2
 				}
-				f16.layers[0].attnNorm = w
+				*dst = w
 				other, _, _ = graphDecode(t, f16, n, 0)
 				for i := range want {
 					for j := range want[i] {
@@ -348,18 +359,29 @@ func TestBlockGraphPromptMatchesTheHandPath(t *testing.T) {
 					differ = differ || other[i][j] != want[i][j]
 				}
 			}
-			hasKV := false
-			for li := range gm.Cfg.NLayer {
-				hasKV = hasKV || gm.Cfg.LayerKind(li).Attends()
-			}
-			if !differ && !hasKV {
-				// A model with no KV cache: the different computation is a
-				// first block's norm scaled by two.
-				w := slices.Clone(f16.layers[0].attnNorm)
+			if !differ {
+				// A model with no KV cache, or whose cache is f32 whatever is
+				// asked (QSA's pooled keys, DeepSeek V4's rows): the different
+				// computation is the first attending block's norm scaled by
+				// two (a recurrent block's own norms can absorb a scale of its
+				// input), or the first block's where none attends.
+				li := 0
+				for i := gm.Cfg.NLayer - 1; i >= 0; i-- {
+					if gm.Cfg.LayerKind(i).Attends() {
+						li = i
+					}
+				}
+				// A block with no attention norm (Qwen3.8-Flash-Next's) has its
+				// stream mix's.
+				dst := &f16.layers[li].attnNorm
+				if len(*dst) == 0 && f16.layers[li].q4e != nil {
+					dst = &f16.layers[li].q4e.attn.norm
+				}
+				w := slices.Clone(*dst)
 				for i := range w {
 					w[i] *= 2
 				}
-				f16.layers[0].attnNorm = w
+				*dst = w
 				other, _ = graphPrompt(t, f16, n, 0)
 				for i := range want {
 					for j := range want[i] {
@@ -620,18 +642,29 @@ func TestBlockGraphRaggedStepMatchesTheHandPath(t *testing.T) {
 					differ = differ || other[i][j] != want[i][j]
 				}
 			}
-			hasKV := false
-			for li := range gm.Cfg.NLayer {
-				hasKV = hasKV || gm.Cfg.LayerKind(li).Attends()
-			}
-			if !differ && !hasKV {
-				// A model with no KV cache: the different computation is a
-				// first block's norm scaled by two.
-				w := slices.Clone(f16.layers[0].attnNorm)
+			if !differ {
+				// A model with no KV cache, or whose cache is f32 whatever is
+				// asked (QSA's pooled keys, DeepSeek V4's rows): the different
+				// computation is the first attending block's norm scaled by
+				// two (a recurrent block's own norms can absorb a scale of its
+				// input), or the first block's where none attends.
+				li := 0
+				for i := gm.Cfg.NLayer - 1; i >= 0; i-- {
+					if gm.Cfg.LayerKind(i).Attends() {
+						li = i
+					}
+				}
+				// A block with no attention norm (Qwen3.8-Flash-Next's) has its
+				// stream mix's.
+				dst := &f16.layers[li].attnNorm
+				if len(*dst) == 0 && f16.layers[li].q4e != nil {
+					dst = &f16.layers[li].q4e.attn.norm
+				}
+				w := slices.Clone(*dst)
 				for i := range w {
 					w[i] *= 2
 				}
-				f16.layers[0].attnNorm = w
+				*dst = w
 				other, _ = graphBatch(t, f16, 0)
 				for i := range want {
 					for j := range want[i] {
