@@ -24,6 +24,8 @@ type Dense struct {
 	Base                           float64
 	Layout                         RopeLayout
 	RopeFreqs                      bool
+	RopeSections                   [4]int  // Attrs.Sections
+	RopeInterleaved                bool    // Attrs.Interleaved
 	Mscale                         float64 // the rotary's cos/sin multiplier; 0 is one
 	Scale                          float64
 	Window                         int
@@ -186,7 +188,8 @@ func (d *Dense) Build() *Graph {
 			rope := func(name string, in ValueID) ValueID {
 				out := g.value(name, g.Values[in].Width)
 				g.op(Op{Kind: OpRope, In: []ValueID{in}, Out: []ValueID{out},
-					Attr: Attrs{HeadDim: d.HeadDim, NRot: d.NRot, Base: d.Base, Layout: d.Layout, Freqs: d.RopeFreqs, Mscale: d.Mscale}})
+					Attr: Attrs{HeadDim: d.HeadDim, NRot: d.NRot, Base: d.Base, Layout: d.Layout, Freqs: d.RopeFreqs, Mscale: d.Mscale,
+						Sections: d.RopeSections, Interleaved: d.RopeInterleaved}})
 				return out
 			}
 			qr, kr := q, k

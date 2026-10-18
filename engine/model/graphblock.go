@@ -111,7 +111,7 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredPLE
 	case c.ResidualScale != 1:
 		return UncoveredResidScale
-	case c.RopeInterleaved || c.RopeXD || len(m.rope.Runs) > 0:
+	case c.RopeXD:
 		return UncoveredRopeAxes
 	case c.VNorm:
 		return UncoveredVNorm
@@ -241,6 +241,9 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		}
 	}
 	d.RopeFreqs = tab.Freqs != nil
+	if len(m.rope.Runs) > 0 {
+		d.RopeSections, d.RopeInterleaved = c.RopeSections, c.RopeInterleaved
+	}
 	if tab.Scale != 1 {
 		d.Mscale = tab.Scale
 	}

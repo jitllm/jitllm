@@ -195,6 +195,13 @@ type Attrs struct {
 	Base    float64
 	Layout  RopeLayout
 	Freqs   bool // the rotary divides each pair's theta by stored factors (rope_freqs, YaRN)
+	// Sections splits the rotary's pairs between a row's position axes
+	// (M-RoPE: time, height, width and a fourth); all zero is one axis.
+	// Interleaved assigns the axes pair by pair (Qwen3-VL's) rather than in
+	// contiguous runs. The row's positions on each axis are the row's, so
+	// the op is the same rotation over a table built per row.
+	Sections    [4]int
+	Interleaved bool
 	// Mscale multiplies the rotary's cos and sin (YaRN's or LongRoPE's
 	// magnitude); 0 is one.
 	Mscale  float64

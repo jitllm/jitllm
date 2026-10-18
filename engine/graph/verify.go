@@ -184,7 +184,7 @@ func Verify(g *Graph, f Facts) error {
 				hd = c.NRot
 			}
 			if a.Layout != c.Layout || a.Freqs != c.RopeFreqs || a.NRot != c.NRot || a.Base != c.Base || a.HeadDim != hd ||
-				a.Mscale != c.Mscale {
+				a.Mscale != c.Mscale || a.Sections != c.RopeSections || a.Interleaved != c.RopeInterleaved {
 				bad("%s: %v pairs over %d of %d at base %g; the configuration states %v over %d of %d at %g",
 					at, a.Layout, a.NRot, a.HeadDim, a.Base, c.Layout, c.NRot, hd, c.Base)
 			}
