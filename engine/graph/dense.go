@@ -129,6 +129,10 @@ type Dense struct {
 	// by a LayerNorm of the sum (RoleAttnOutNorm, RoleLayerOutNorm, each with
 	// its bias), the block's sublayers reading their input unnormed.
 	PostResid bool
+	// SubNorm is BitNet's: an RMSNorm over the attention's output before
+	// its projection (RoleAttnSubNorm) and over the FFN's product before
+	// down (RoleFFNSubNorm).
+	SubNorm bool
 	// Select, where set, is the attention's block selection (OpIndex over a
 	// GQA row: MiniMax Sparse Attention).
 	Select *Select
@@ -517,6 +521,9 @@ func (d *Dense) Build() *Graph {
 				a = gated
 			}
 		}
+		if d.SubNorm {
+			a = norm("attn_sub", a, jlm.RoleAttnSubNorm)
+		}
 		o := mv("attn_out", a, jlm.RoleAttnOut, d.NEmbd, opt(d.OutBias, jlm.RoleAttnOutBias))
 		if mixer >= 0 {
 			om := g.value("attn_mixer", d.NEmbd)
@@ -583,6 +590,9 @@ func (d *Dense) Build() *Graph {
 		}
 		p := g.value("act", d.NFFN)
 		g.op(Op{Kind: OpActMul, In: []ValueID{gt, up}, Out: []ValueID{p}, Attr: Attrs{Act: d.Act}})
+		if d.SubNorm {
+			p = norm("ffn_sub", p, jlm.RoleFFNSubNorm)
+		}
 		dn = mv("ffn_out", p, jlm.RoleFFNDown, d.NEmbd, 0)
 	}
 	if d.PostNorm {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
@@ -35,6 +36,8 @@ type lfBlock struct {
 	wq, wk, wv, wo tensor
 	qNorm, kNorm   []float32
 	gate, up, down tensor
+	// g is the block's verified graph (encgraph.go).
+	g *graph.Graph
 }
 
 func (b *lfBlock) weights() []*tensor {
@@ -161,6 +164,9 @@ func buildLFM2Enc(c *jlm.File, m *Model, enc *encoder) error {
 				return err
 			}
 		}
+	}
+	if err := m.buildLFGraphs(c, lf); err != nil {
+		return err
 	}
 	mb := &modernBERT{trunk: len(lf.blocks)}
 	if err := buildLayaHead(c, m, mb, get, vec); err != nil {

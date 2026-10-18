@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
@@ -34,6 +35,8 @@ type mbBlock struct {
 	wq, wk, wv, wo, gate, up, down tensor
 	attnNorm, ffnNorm              []float32 // attnNorm is nil on block 0
 	global                         bool
+	// g is the block's verified graph (encgraph.go).
+	g *graph.Graph
 }
 
 // headBlock is one of the decision head's pre-norm blocks.
@@ -164,6 +167,9 @@ func buildModernBERT(c *jlm.File, m *Model, enc *encoder) error {
 		if b.ffnNorm, err = vec(jlm.RoleFFNNorm, bi, d); err != nil {
 			return err
 		}
+	}
+	if err := m.buildMBGraphs(c, mb); err != nil {
+		return err
 	}
 	if jc.Decision == jlm.DecisionLaya {
 		if err := buildLayaHead(c, m, mb, get, vec); err != nil {

@@ -31,21 +31,7 @@ func (m *Model) buildEncGraphs(c *jlm.File, enc *encoder) error {
 	cfg := m.Cfg
 	enc.graphs = make([]*encLowering, len(enc.blocks))
 	for li := range enc.blocks {
-		inv := map[jlm.Role]graph.Shape{}
-		for i := range c.Entries() {
-			e := &c.Entries()[i]
-			if int(e.Block) != li {
-				continue
-			}
-			s := graph.Shape{K: int(e.Dims[0])}
-			if e.NDim >= 2 {
-				s.Rows = int(e.Dims[1])
-			}
-			if e.NDim >= 3 {
-				s.Sheets = int(e.Dims[2])
-			}
-			inv[e.Role] = s
-		}
+		inv := entryRoles(c, li)
 		has := func(r jlm.Role) bool { _, ok := inv[r]; return ok }
 		act := graph.ActGELUTanh
 		if has(jlm.RoleFFNGate) {
@@ -165,4 +151,111 @@ func lowerEncoder(g *graph.Graph) (*encLowering, error) {
 		return nil, fail("the end of the block")
 	}
 	return lw, nil
+}
+
+// entryRoles is every tensor the container stores for block li, by role.
+func entryRoles(c *jlm.File, li int) map[jlm.Role]graph.Shape {
+	inv := map[jlm.Role]graph.Shape{}
+	for i := range c.Entries() {
+		e := &c.Entries()[i]
+		if int(e.Block) != li || e.Role.Vision() {
+			continue
+		}
+		s := graph.Shape{K: int(e.Dims[0])}
+		if e.NDim >= 2 {
+			s.Rows = int(e.Dims[1])
+		}
+		if e.NDim >= 3 {
+			s.Sheets = int(e.Dims[2])
+		}
+		inv[e.Role] = s
+	}
+	return inv
+}
+
+// buildMBGraphs builds and verifies ModernBERT's blocks as graphs: a pre-norm
+// LayerNorm block with no biases (block 0 reading its input unnormed), NEOX
+// rotary at the global or the local base, a bidirectional attention (a local
+// block's inside its symmetric window) and a GeGLU MLP; then matches each
+// against mbEncode's operations through the decoder's lowering, which states
+// the same sequence. A block the language does not state refuses the model.
+func (m *Model) buildMBGraphs(c *jlm.File, mb *modernBERT) error {
+	cfg := m.Cfg
+	for li := range mb.blocks {
+		b := &mb.blocks[li]
+		inv := entryRoles(c, li)
+		_, hasNorm := inv[jlm.RoleAttnNorm]
+		d := graph.Dense{Block: li, NEmbd: cfg.NEmbd, NHead: cfg.NHead, NKVHead: cfg.NHead, HeadDim: cfg.HeadDim,
+			NFFN: cfg.NFFN, Eps: cfg.RMSEps, Scale: 1 / math.Sqrt(float64(cfg.HeadDim)), Act: graph.ActGELUErf,
+			LayerNorm: true, NoPreNorm: !hasNorm, NonCausal: true, NRot: cfg.NRot, Base: mb.ropeG.Base,
+			Layout: graph.RopeNeox}
+		if !b.global {
+			// The local blocks: the window is a radius on a bidirectional
+			// attention, half the stated width each side.
+			d.Window, d.Base = cfg.SWAWindow/2, mb.ropeL.Base
+		}
+		g := d.Build()
+		f := graph.Facts{Config: d, Inventory: inv}
+		if u := graph.Unbound(g, f); len(u) > 0 {
+			return fmt.Errorf("model: encoder block %d of %s is not covered by the block graph: %s (%v)",
+				li, cfg.Arch, UncoveredUnboundTensor, u)
+		}
+		if err := graph.Verify(g, f); err != nil {
+			return err
+		}
+		lw, err := lowerDense(g)
+		if err != nil {
+			return err
+		}
+		if lw.mix || lw.ungated || lw.qk || lw.par || lw.postAttn || lw.postFFN {
+			return fmt.Errorf("model: encoder block %d graph states what mbEncode does not run", li)
+		}
+		b.g = g
+	}
+	return nil
+}
+
+// buildLFGraphs builds and verifies an LFM2 encoder's trunk as graphs: RMSNorm
+// pre-norm blocks, each a centred short convolution (the recurrent mixer op,
+// LayerShortConv, over the whole sequence) or a bidirectional attention with
+// a per-head q/k norm and the rotary, then a SwiGLU MLP. lfm2Encode runs the
+// matched sequence.
+func (m *Model) buildLFGraphs(c *jlm.File, lf *lfm2Enc) error {
+	cfg := m.Cfg
+	for li := range lf.blocks {
+		b := &lf.blocks[li]
+		inv := entryRoles(c, li)
+		d := graph.Dense{Block: li, NEmbd: cfg.NEmbd, NHead: cfg.NHead, NKVHead: cfg.NKVHead, HeadDim: cfg.HeadDim,
+			NFFN: cfg.NFFN, Eps: cfg.RMSEps, Scale: 1 / math.Sqrt(float64(cfg.HeadDim)), Act: graph.ActSiLU,
+			NonCausal: true, NRot: lf.rope.NRot, Base: lf.rope.Base, Layout: graph.RopeNorm, QKNorm: b.attn}
+		if lf.rope.Neox {
+			d.Layout = graph.RopeNeox
+		}
+		if !b.attn {
+			d.Mixer = uint8(jlm.LayerShortConv)
+			for _, r := range graph.MixerRoles {
+				if s, ok := inv[r]; ok {
+					d.MixerW = append(d.MixerW, graph.Binding{Role: r, K: s.K, Rows: s.Rows, Sheets: s.Sheets})
+				}
+			}
+		}
+		g := d.Build()
+		f := graph.Facts{Config: d, Inventory: inv}
+		if u := graph.Unbound(g, f); len(u) > 0 {
+			return fmt.Errorf("model: encoder block %d of %s is not covered by the block graph: %s (%v)",
+				li, cfg.Arch, UncoveredUnboundTensor, u)
+		}
+		if err := graph.Verify(g, f); err != nil {
+			return err
+		}
+		lw, err := lowerDense(g)
+		if err != nil {
+			return err
+		}
+		if lw.mixer == b.attn || lw.qk != b.attn || lw.mix || lw.ungated {
+			return fmt.Errorf("model: encoder block %d graph states what lfm2Encode does not run", li)
+		}
+		b.g = g
+	}
+	return nil
 }

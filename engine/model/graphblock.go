@@ -88,7 +88,7 @@ func (m *Model) blockRoles(li int) map[jlm.Role]graph.Shape {
 	inv := map[jlm.Role]graph.Shape{}
 	for i := range m.container.Entries() {
 		e := &m.container.Entries()[i]
-		if int(e.Block) != li {
+		if int(e.Block) != li || e.Role.Vision() {
 			continue
 		}
 		s := graph.Shape{K: int(e.Dims[0])}
@@ -219,6 +219,7 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		d.MLA.Gate = has(jlm.RoleAttnGate)
 	}
 	d.NonCausal = c.NonCausal
+	d.SubNorm = has(jlm.RoleAttnSubNorm)
 	if li >= c.NLayer {
 		for _, r := range []jlm.Role{jlm.RoleNextnEHProj, jlm.RoleNextnENorm, jlm.RoleNextnHNorm, jlm.RoleNextnHeadNorm,
 			jlm.RoleNextnHead, jlm.RoleNextnEmbd, jlm.RoleHCHeadNorm, jlm.RoleHCHeadDown, jlm.RoleHCHeadUp} {
@@ -348,6 +349,8 @@ type denseLowering struct {
 	mlaGate bool
 	// predict: a prediction block, its prologue the draft's (draftRows).
 	predict bool
+	// subNorm: BitNet's norms before wo and before down.
+	subNorm bool
 	// mixer: a recurrent mixer (linearAttn) in place of the attention;
 	// noFFN: the block ends at the mixer's residual add.
 	mixer, noFFN bool
@@ -596,6 +599,8 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 		}
 	}
 	if !lw.mixer && !lw.ds4 {
+		// BitNet's norm over the attention output, before wo.
+		lw.subNorm = take(graph.OpNorm, jlm.RoleAttnSubNorm)
 		if err := run([]step{{graph.OpMatVec, jlm.RoleAttnOut}}); err != nil {
 			return nil, err
 		}
@@ -729,7 +734,13 @@ func lowerDense(g *graph.Graph) (*denseLowering, error) {
 			return nil, err
 		}
 		lw.sparse = take(graph.OpGaussTopK, 0)
-		if err := run([]step{{graph.OpActMul, 0}, {graph.OpMatVec, jlm.RoleFFNDown}}); err != nil {
+		if err := run([]step{{graph.OpActMul, 0}}); err != nil {
+			return nil, err
+		}
+		if lw.subNorm != take(graph.OpNorm, jlm.RoleFFNSubNorm) {
+			return nil, fail("BitNet's two sub-norms, or neither")
+		}
+		if err := run([]step{{graph.OpMatVec, jlm.RoleFFNDown}}); err != nil {
 			return nil, err
 		}
 	}
@@ -1105,6 +1116,11 @@ func (s *State) graphBlock(li int, l *layer, lw *denseLowering) error {
 			s.jit.NewInput()
 			src = s.ogate
 		}
+		// BitNet's norm over the attention output, before wo.
+		if lw.subNorm && l.attnSubNorm != nil {
+			s.rmsnorm(src[:qd], src[:qd], l.attnSubNorm, c.RMSEps)
+			s.jit.NewInput()
+		}
 		plain := s.residFold && l.bo == nil && !lw.postAttn && !lw.mixAttn && !lw.hc && !lw.laurel
 		if plain {
 			s.grp.Resid, s.grp.Alpha = s.x, float32(c.ResidualScale)
@@ -1343,11 +1359,16 @@ func (s *State) graphFFN(li int, l *layer, lw *denseLowering) error {
 		s.grp.Resid, s.grp.Alpha = s.x, float32(c.ResidualScale)
 	}
 	s.aheadNext(li)
-	grouped := s.groupOf(gate, [nn.MaxGroup]*tensor{&l.down}, [nn.MaxGroup][]float32{s.h}, 1)
+	// BitNet's norm over the product sits between act_mul and down, which a
+	// group would fuse.
+	grouped := !lw.subNorm && s.groupOf(gate, [nn.MaxGroup]*tensor{&l.down}, [nn.MaxGroup][]float32{s.h}, 1)
 	ffnResid := grouped && s.grp.Resid != nil
 	s.grp.ActUp, s.grp.Resid = nil, nil
 	if !grouped {
 		s.actmulAll(gate, up, act)
+		if lw.subNorm && l.ffnSubNorm != nil {
+			s.rmsnorm(gate, gate, l.ffnSubNorm, c.RMSEps)
+		}
 		s.jit.NewInput()
 		if err := s.mv(s.h, l.down, gate); err != nil {
 			return err
@@ -1486,6 +1507,10 @@ func (s *State) graphRows(li int, l *layer, lw *denseLowering, slot, base, p0, n
 		s.jit.NewInput()
 		asrc = s.ogate
 	}
+	if lw.subNorm && l.attnSubNorm != nil {
+		s.batchNorm(asrc, asrc, l.attnSubNorm, qDim, n)
+		s.jit.NewInput()
+	}
 	if err := s.mm(s.bh, l.wo, asrc[:n*qDim], n); err != nil {
 		return err
 	}
@@ -1601,6 +1626,10 @@ func (s *State) graphRagged(li int, l *layer, lw *denseLowering, n int, tokens [
 		s.applyOutGate(s.ogate, s.bxb, n)
 		s.jit.NewInput()
 		asrc = s.ogate
+	}
+	if lw.subNorm && l.attnSubNorm != nil {
+		s.batchNorm(asrc, asrc, l.attnSubNorm, qDim, n)
+		s.jit.NewInput()
 	}
 	if err := s.mm(s.bh, l.wo, asrc[:n*qDim], n); err != nil {
 		return err
@@ -1729,6 +1758,10 @@ func (s *State) rowsResidFFN(li int, l *layer, lw *denseLowering, n int, ragged 
 		tac := s.tick()
 		s.gaussTopK(li, gate, ff)
 		s.actmulAll(gate, up, c.Act)
+		if lw.subNorm && l.ffnSubNorm != nil {
+			s.batchNorm(gate, gate, l.ffnSubNorm, ff, n)
+			s.jit.NewInput()
+		}
 		if ragged {
 			s.jit.NewInput()
 		}
