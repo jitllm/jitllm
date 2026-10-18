@@ -230,6 +230,12 @@ func Verify(g *Graph, f Facts) error {
 			if width(o.In[0]) != width(o.In[1]) || width(o.Out[0]) != width(o.In[0]) {
 				bad("%s: widths %d and %d into %d", at, width(o.In[0]), width(o.In[1]), width(o.Out[0]))
 			}
+			// A residual add (into the block's stream) carries the
+			// configuration's scale; the mixture's own add of its shared
+			// expert carries none.
+			if o.Kind == OpAdd && o.Attr.Alpha != 0 && o.Attr.Alpha != c.ResidScale {
+				bad("%s: residual scale %g, the configuration states %g", at, o.Attr.Alpha, c.ResidScale)
+			}
 			if o.Kind == OpActMul && o.Attr.Act != act {
 				bad("%s: activation %d, the configuration states %d", at, o.Attr.Act, act)
 			}

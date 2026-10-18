@@ -61,6 +61,9 @@ type Dense struct {
 	LayerNorm, NormBias, FFNNormBias, Parallel, SharedNorm bool
 	OutBias, UpBias, DownBias, Ungated                     bool
 	Clamp                                                  float64
+	// ResidScale scales each sublayer's output into the residual (Alpha on
+	// the two residual adds); 0 is one.
+	ResidScale float64
 	// MLA, where set, is the block's attention: latent attention in place of
 	// q, k, v and the attention over per-head keys (the output projection,
 	// the residual and the FFN are the block's).
@@ -146,7 +149,7 @@ func (d *Dense) Build() *Graph {
 		g.op(Op{Kind: OpRecurrent, In: []ValueID{h}, Out: []ValueID{r}, Weight: d.MixerW,
 			Reads: []StateRef{{"rec", 0}}, Writes: []StateRef{{"rec", 1}}, Attr: Attrs{Mixer: d.Mixer}})
 		x1 = g.value("x_mixer", d.NEmbd)
-		g.op(Op{Kind: OpAdd, In: []ValueID{x, r}, Out: []ValueID{x1}})
+		g.op(Op{Kind: OpAdd, In: []ValueID{x, r}, Out: []ValueID{x1}, Attr: Attrs{Alpha: d.ResidScale}})
 		if d.NoFFN {
 			g.Out = []ValueID{x1}
 			return g
@@ -217,7 +220,7 @@ func (d *Dense) Build() *Graph {
 			o = norm("attn_post", o, jlm.RolePostAttnNorm)
 		}
 		x1 = g.value("x_attn", d.NEmbd)
-		g.op(Op{Kind: OpAdd, In: []ValueID{x, o}, Out: []ValueID{x1}})
+		g.op(Op{Kind: OpAdd, In: []ValueID{x, o}, Out: []ValueID{x1}, Attr: Attrs{Alpha: d.ResidScale}})
 	}
 
 	f := hf
@@ -247,7 +250,7 @@ func (d *Dense) Build() *Graph {
 		dn = norm("ffn_post", dn, jlm.RolePostFFNNorm)
 	}
 	x2 := g.value("x_out", d.NEmbd)
-	g.op(Op{Kind: OpAdd, In: []ValueID{x1, dn}, Out: []ValueID{x2}})
+	g.op(Op{Kind: OpAdd, In: []ValueID{x1, dn}, Out: []ValueID{x2}, Attr: Attrs{Alpha: d.ResidScale}})
 	g.Out = []ValueID{x2}
 	return g
 }

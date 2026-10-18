@@ -320,6 +320,11 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 			// Granite's own configs state it.
 			c.ResidualScale, c.LogitScale, c.EmbdScale = 0.22, 8, 12
 			c.AttnScale = 1 / float64(c.HeadDim)
+			// The block graphs are compiled at Open from the configuration:
+			// rebuild them, or the device runs the graph's stale scales.
+			if err := m.buildGraphs(); err != nil {
+				t.Fatal(err)
+			}
 			ids := m.Vocab.Encode("The capital of France is a city on the river", true)
 			decode := func(st *State) [][]float32 {
 				var out [][]float32

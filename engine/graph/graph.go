@@ -230,6 +230,9 @@ type Attrs struct {
 	// scaled by its routed weight before its expert, and the combine sums
 	// the experts' outputs unweighted.
 	WeightIn bool
+	// Alpha is a residual OpAdd's scale on its second input (Granite's
+	// residual_scale: x + Alpha*y); 0 is one.
+	Alpha float64
 	// Bound is OpClamp's.
 	Bound float64
 	// Offset and Width are OpSlice's.

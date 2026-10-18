@@ -57,7 +57,6 @@ const (
 	UncoveredIndexer       = "an attention indexer or sparse key selection"
 	UncoveredStreams       = "several residual streams"
 	UncoveredPLE           = "per-layer embeddings"
-	UncoveredResidScale    = "a residual scale"
 	UncoveredRopeAxes      = "a multi-axis or interleaved rotary"
 	UncoveredVNorm         = "a norm over v"
 	UncoveredNonCausal     = "non-causal attention"
@@ -71,7 +70,7 @@ const (
 // UncoveredReasons is the named list, in order.
 var UncoveredReasons = []string{UncoveredMixDense, UncoveredMixRouter, UncoveredMixExperts,
 	UncoveredUngated, UncoveredOutGate, UncoveredMLA, UncoveredValueWidth,
-	UncoveredKVShared, UncoveredIndexer, UncoveredStreams, UncoveredPLE, UncoveredResidScale,
+	UncoveredKVShared, UncoveredIndexer, UncoveredStreams, UncoveredPLE,
 	UncoveredRopeAxes, UncoveredVNorm,
 	UncoveredNonCausal, UncoveredSparseAct, UncoveredDoubleFFN, UncoveredCompressed,
 	UncoveredRecurrent, UncoveredUnboundTensor}
@@ -109,8 +108,6 @@ func (m *Model) uncovered(li int) string {
 		return UncoveredStreams
 	case c.PLEDim != 0:
 		return UncoveredPLE
-	case c.ResidualScale != 1:
-		return UncoveredResidScale
 	case c.RopeXD:
 		return UncoveredRopeAxes
 	case c.VNorm:
@@ -208,6 +205,9 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		Ungated: !c.MoEAt(li) && !has(jlm.RoleFFNGate), Clamp: float64(c.ClampKQV),
 		PostNorm: has(jlm.RolePostAttnNorm), NoPreNorm: !has(jlm.RoleAttnNorm), NoRope: !c.RopeAt(li)}
 	d.QKVBias, d.Sinks = has(jlm.RoleAttnQBias), has(jlm.RoleAttnSinks)
+	if c.ResidualScale != 1 {
+		d.ResidScale = c.ResidualScale
+	}
 	d.QKNormPost, d.QKL2Norm = c.QKNormPost, c.QKL2Norm && c.RopeAt(li)
 	// A recurrent mixer in place of the attention, binding the mixer's
 	// tensors the block stores.

@@ -82,7 +82,7 @@ func (m *Model) mixtureWhy(li int) (graph.Facts, string) {
 		}
 	}
 	mx := graph.Mixture{Block: li, NEmbd: c.NEmbd, NExpert: c.NExpert, K: c.NExpertUsed, NFF: c.NFFNExp, Act: act,
-		Router: graph.RouterSoftmax, Norm: !c.NoExpertNorm, Scale: c.routedScale(),
+		Router: graph.RouterSoftmax, Norm: !c.NoExpertNorm, Scale: c.ExpertScale,
 		Groups: c.NExpertGroup, GroupsUsed: c.NExpertGroupUsed, SharedFF: c.NFFNShExp, WeightIn: c.ExpertWeightIn, Inv: inv}
 	switch {
 	case c.SparseMixer != 0:
