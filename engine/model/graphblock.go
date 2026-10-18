@@ -70,7 +70,7 @@ func (m *Model) uncovered(li int) string {
 	// A KV-sharing block and Gemma 4's v-is-k blocks are the graph's
 	// (Dense.KVShared, VFromK); an absent v anywhere else is not.
 	case c.LayerKind(li).Attends() && !c.MLA() && !c.DSV4() && !c.KVShared(li) && !hasRole(roles, jlm.RoleAttnV) &&
-		!(c.VNorm && hasRole(roles, jlm.RoleAttnK)):
+		!m.layers[li].vFromK:
 		return UncoveredKVShared
 	case c.IdxHeads != 0 && !c.MSA() && !c.Q4E() && !c.DSV4() && !(c.MLA() && c.Indexer()):
 		return UncoveredIndexer
@@ -157,7 +157,9 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 		NoFFNNorm: !has(jlm.RoleFFNNorm), NoRope: !c.RopeAt(li)}
 	d.QKVBias, d.Sinks = has(jlm.RoleAttnQBias), has(jlm.RoleAttnSinks)
 	d.OutGate, d.VNorm = c.AttnOutGate, c.VNorm
-	d.VFromK = c.VNorm && has(jlm.RoleAttnK) && !has(jlm.RoleAttnV)
+	// v is k's projection where the load found the block so (layer.vFromK):
+	// a fact of the file, not of the v norm a violation may turn off.
+	d.VFromK = m.layers[li].vFromK
 	if c.KVShared(li) {
 		d.KVShared, d.KVFrom = true, c.KVSource(li)
 	}
