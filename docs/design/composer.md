@@ -442,6 +442,105 @@ parameter of a fused region's candidates, so the trial times the complete
 region in each form, and a partition that loses alone is still timed under the
 fusion it enables (the harness's complete plans).
 
+### The device program: the level between the block graph and the kernel IR
+
+The host lowers most of a block's ops one kernel each. The device does not: a
+block reaches the tier as its `nn.LayerPlan` and runs through one encoder
+(`layersSession`'s `emit`, about 2,400 lines). That encoder holds a branch per
+graph feature (AltUp, a recurrent mixer, DeepSeek V4, post-norms, a per-layer
+embedding, ...) and every device fusion written inline. A fusion's contract
+with its neighbours is implicit there, and that is the failure it produced:
+`rmsF16For` wrote kernels.ActF16T's token-major operand into a memo the MMA
+twin read as kernels.ActF16's m16n8 fragments, and Qwen2.5-VL-3B's tower read
+NMSE 4.4 on sm_70 with every kernel gate green (PR #255).
+
+The device program is the level that encoder skips. The graph says what a
+block computes; the kernel IR (`jit/gpu/ir`) says how one kernel runs. Between
+them sits a list of device ops, each one kernel, over typed values, that
+rewrites fuse and the tier launches.
+
+**Taken from MLIR and IREE.** Four ideas, adapted to one domain and a few
+dozen op kinds:
+
+- *A middle level of progressive lowering.* MLIR lowers through dialects one
+  step at a time and fuses at the structured level (`linalg`), not at the
+  kernel level. Here: graph -> device program -> kernel IR, and every fusion is
+  a rewrite of the device program.
+- *Layout in the type.* An MLIR value's type carries its memory layout (a
+  memref's layout map, a tensor's encoding; Triton's layout encodings). Here a
+  value is a `Type`: element type, layout and width. A rewrite that hands a
+  consumer a value in a layout it does not read is illegal and refused when
+  the program is built, not wrong output at run time.
+- *Structured ops.* `linalg` states each op's iteration space (which
+  dimensions are parallel, which reduce) and how each operand is indexed, and
+  fusion and tiling are written once over that description. Here an op states
+  its `Shape` (rows, heads, width, a reduced width) and its kind
+  (elementwise, rowwise reduction, matvec, attention, gather/scatter), and a
+  rewrite such as "fold an elementwise consumer into its producer's epilogue"
+  is written once for every producer that offers an epilogue. IREE's
+  dispatch-region formation (which ops share one kernel) is this problem
+  exactly, and its heuristics are the prior art to read.
+- *Legality and a dump after every pass.* MLIR's dialect conversion declares
+  which ops are legal on a target and fails on any illegal op left over. Here a
+  `Target` states the device ops it lowers; an op none of its lowerings takes
+  refuses the block by name (the visible-fallback rule, enforced by the
+  builder, not by a test). The program prints after every rewrite.
+
+**Not taken.** MLIR itself (C++ inside LLVM: jitllm is Go with no cgo and
+emits its own code), its general dialect machinery, a generic pass manager,
+nested regions, and op traits beyond the few kinds above. One domain and a
+fixed op list are plain Go structs and a list of rewrites.
+
+**The data model.**
+
+    type Type struct {
+        Elem   Elem   // F32, F16, Int8 with its scale, Q8 blocks
+        Layout Layout // RowMajor, TokenMajorF16 (ActF16T), FragM16N8 (ActF16), Q8Blocks, KVPaged
+        Width  int    // elements a row
+    }
+    type DevOp struct {
+        Kind    DevKind   // Elementwise, RowReduce, MatVec, Rope, KVWrite, Attend, Gather, Scatter, ...
+        Src     graph.OpKind // the graph op it lowers (or the fused ops, for a rewrite's product)
+        In, Out []ValID      // values, each with a Type
+        Shape   Shape        // rows, heads, width, reduced width
+        Epi     []Epilogue   // ops a rewrite folded into this one's output (bias, act, residual add, convert)
+        Pro     []Prologue   // ops folded into its operand load (norm scale, dequant, convert)
+    }
+
+A rewrite matches a pattern over `DevOp` kinds and value types, checks
+legality (types agree, the producer offers the epilogue, the Target lowers the
+product), and replaces the ops with their fused form, recording its name. It
+is the rewrite interface above (`Pays`, `Keys`, the When-it-is-decided
+classes), applied to the device program instead of inside the encoder.
+Buffers are assigned after rewriting, by liveness over the program, so a value
+a fusion removed takes no buffer.
+
+**Gates.**
+
+- The device program with no rewrite applied against the encoder with its
+  fusions off, same device, `JITLLM_GPU_TUNE=0`: token-identical and logit
+  bit-equal, because the two launch the same kernels in the same order.
+- Each rewrite against the unfused program on every device it pays on,
+  within the gated band, past position 0, and run against a violation.
+- A type mismatch is refused at build: the PR #255 fault restated as a
+  program (a TokenMajorF16 producer feeding a FragM16N8 reader) must not build.
+- The count of blocks still on the encoder is reported per model
+  (`jitllm speed -manifest`) and gated to zero on the covered models.
+
+**Order.**
+
+1. D1. Dense decode (norm, matvec, rope, KV write, attend, add, act_mul) as a
+   device program with no rewrites, beside the encoder, under the equality
+   gate above.
+2. D2. The encoder's dense fusions as rewrites: the add+norm fold, the
+   binary16 operand writers (`rmsF16For`, `actF16For`), gate2in, the
+   activation-in prologue, the residual epilogue.
+3. D3. Rows: prompt chunks and ragged steps, the Volta and MMA GEMM forms
+   chosen per value type.
+4. D4. The mixture, latent attention, the recurrent mixers and the remaining
+   graph features, each moving one encoder branch into the program.
+5. D5. The encoder's block body deleted; the program is the only path.
+
 ### The first recipe through the interface: the gated output norm
 
 The two candidates for the first recipe written as a rewrite were the gated
