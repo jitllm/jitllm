@@ -179,10 +179,15 @@ const (
 	// projection, embedding table and stream mix), which the draft reads
 	// after the block. Opaque in this version.
 	OpPredict
+	// OpCrossAttend is the rows' (In[0], normed) attention over another
+	// sequence's rows (In[1], the memory): q from the rows, k and v from the
+	// memory, every row over every memory row, then the output projection,
+	// each with its bias: Out[0]. Opaque in this version.
+	OpCrossAttend
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {

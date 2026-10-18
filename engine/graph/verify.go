@@ -369,6 +369,19 @@ func Verify(g *Graph, f Facts) error {
 				bad("%s: a residual of %d and an embedding of %d into %d binding %d weights", at, width(o.In[0]), width(o.In[1]),
 					width(o.Out[0]), len(o.Weight))
 			}
+		case OpCrossAttend:
+			if !c.Cross {
+				bad("%s: a cross attention outside a decision head's block", at)
+				break
+			}
+			if !ins(2) || !outs(1) {
+				break
+			}
+			if width(o.In[0]) != c.NEmbd || width(o.In[1]) != c.NEmbd || width(o.Out[0]) != c.NEmbd || len(o.Weight) != 8 ||
+				o.Attr.NHead != c.NHead || o.Attr.HeadDim != c.HeadDim {
+				bad("%s: rows of %d over memory of %d into %d, %d heads of %d, %d weights", at, width(o.In[0]), width(o.In[1]),
+					width(o.Out[0]), o.Attr.NHead, o.Attr.HeadDim, len(o.Weight))
+			}
 		case OpLaurel:
 			if c.AltUp == nil {
 				bad("%s: LAuReL the configuration does not state", at)

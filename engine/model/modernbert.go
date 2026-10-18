@@ -44,6 +44,8 @@ type headBlock struct {
 	wq, wk, wv, wo, up, down   tensor
 	bq, bk, bv, bo, bUp, bDown []float32
 	ln1W, ln1B, ln2W, ln2B     []float32
+	// g is the block's verified graph (encgraph.go).
+	g *graph.Graph
 }
 
 // modernBERT is the part of an encoder only ModernBERT has.
@@ -247,7 +249,7 @@ func buildLayaHead(c *jlm.File, m *Model, mb *modernBERT,
 	if mb.scOut, err = get(jlm.RoleScorerOut, jlm.DenseBlock, 1, d); err != nil {
 		return err
 	}
-	return nil
+	return m.buildHeadGraphs(c, mb)
 }
 
 // mbBind binds the dense-region matrices the head reads (the scorer's), once.

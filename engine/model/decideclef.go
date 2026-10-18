@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"github.com/jitllm/jitllm/engine/graph"
 	"math"
 	"sort"
 	"strconv"
@@ -54,6 +55,8 @@ type clefBlock struct {
 	ffnW, ffnB         []float32
 	up, down           tensor
 	bUp, bDown         []float32
+	// g is the block's verified graph.
+	g *graph.Graph
 }
 
 func (b *clefBlock) weights() []*tensor {
@@ -210,6 +213,31 @@ func (m *Model) clefLoad() (*clefHead, error) {
 	}
 	if m.output.e == nil || m.output.k != d {
 		return nil, fmt.Errorf("model: clef head reads the output embedding, and the model has none %d wide", d)
+	}
+	// Each block as its graph, verified against what the container stores
+	// for it: a routing block's or a joint block's (graph.CrossBlock).
+	for i := range h.blocks {
+		cb := graph.CrossBlock{Index: i, Width: h.width, Heads: h.heads, NFFN: h.ffn, Eps: h.eps, Routing: i < h.routing}
+		inv := map[jlm.Role]graph.Shape{}
+		for j := range c.Entries() {
+			e := &c.Entries()[j]
+			if e.Block != jlm.DenseBlock || int(e.Index) != i || !clefBlockRole(e.Role) {
+				continue
+			}
+			sh := graph.Shape{K: int(e.Dims[0])}
+			if e.NDim >= 2 {
+				sh.Rows = int(e.Dims[1])
+			}
+			inv[e.Role] = sh
+		}
+		g, f := cb.Build(), cb.Facts(inv)
+		if u := graph.Unbound(g, f); len(u) > 0 {
+			return nil, fmt.Errorf("model: clef head block %d is not covered by the block graph: %s (%v)", i, UncoveredUnboundTensor, u)
+		}
+		if err := graph.Verify(g, f); err != nil {
+			return nil, err
+		}
+		h.blocks[i].g = g
 	}
 	m.clef = h
 	return h, nil
@@ -951,4 +979,19 @@ func (d *Decider) clefFFN(x []float32, b *clefBlock, n int) error {
 	s.axpyRows(dn, b.bDown, nil, W, n, 1, 1)
 	nn.Axpy32JIT(x, dn, 1)
 	return nil
+}
+
+// clefBlockRole reports a role of a Clef head block (stored per block index),
+// not of the head around them.
+func clefBlockRole(r jlm.Role) bool {
+	switch r {
+	case jlm.RoleDecSelfNorm, jlm.RoleDecSelfNormBias, jlm.RoleDecSelfQ, jlm.RoleDecSelfK, jlm.RoleDecSelfV,
+		jlm.RoleDecSelfOut, jlm.RoleDecSelfQBias, jlm.RoleDecSelfKBias, jlm.RoleDecSelfVBias, jlm.RoleDecSelfOutBias,
+		jlm.RoleDecCrossKVNorm, jlm.RoleDecCrossKVNormBias, jlm.RoleDecCrossNorm, jlm.RoleDecCrossNormBias,
+		jlm.RoleDecCrossQ, jlm.RoleDecCrossK, jlm.RoleDecCrossV, jlm.RoleDecCrossOut, jlm.RoleDecCrossQBias,
+		jlm.RoleDecCrossKBias, jlm.RoleDecCrossVBias, jlm.RoleDecCrossOutBias, jlm.RoleDecFFNNorm,
+		jlm.RoleDecFFNNormBias, jlm.RoleDecFFNUp, jlm.RoleDecFFNDown, jlm.RoleDecFFNUpBias, jlm.RoleDecFFNDownBias:
+		return true
+	}
+	return false
 }

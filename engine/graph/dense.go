@@ -129,6 +129,8 @@ type Dense struct {
 	// by a LayerNorm of the sum (RoleAttnOutNorm, RoleLayerOutNorm, each with
 	// its bias), the block's sublayers reading their input unnormed.
 	PostResid bool
+	// Cross permits OpCrossAttend: a decision head's block (CrossBlock).
+	Cross bool
 	// SubNorm is BitNet's: an RMSNorm over the attention's output before
 	// its projection (RoleAttnSubNorm) and over the FFN's product before
 	// down (RoleFFNSubNorm).

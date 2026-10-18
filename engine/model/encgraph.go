@@ -259,3 +259,38 @@ func (m *Model) buildLFGraphs(c *jlm.File, lf *lfm2Enc) error {
 	}
 	return nil
 }
+
+// buildHeadGraphs builds and verifies Laya's decision head blocks (blocks
+// NLayer.. of the container) as graphs: pre-norm LayerNorm blocks with every
+// bias, no rotary, a bidirectional attention at the head's own head count and
+// an ungated erf-GELU MLP. layaScores runs the matched sequence.
+func (m *Model) buildHeadGraphs(c *jlm.File, mb *modernBERT) error {
+	cfg := m.Cfg
+	d, heads := cfg.NEmbd, mb.headHeads
+	for i := range mb.head {
+		bi := cfg.NLayer + i
+		inv := entryRoles(c, bi)
+		dn := graph.Dense{Block: bi, NEmbd: d, NHead: heads, NKVHead: heads, HeadDim: d / heads,
+			NFFN: inv[jlm.RoleFFNUp].Rows, Eps: cfg.RMSEps, Scale: 1 / math.Sqrt(float64(d/heads)), Act: graph.ActGELUErf,
+			LayerNorm: true, NormBias: true, FFNNormBias: true, QKVBias: true, OutBias: true, UpBias: true,
+			DownBias: true, Ungated: true, NoRope: true, NonCausal: true}
+		g := dn.Build()
+		f := graph.Facts{Config: dn, Inventory: inv}
+		if u := graph.Unbound(g, f); len(u) > 0 {
+			return fmt.Errorf("model: decision head block %d of %s is not covered by the block graph: %s (%v)",
+				i, cfg.Arch, UncoveredUnboundTensor, u)
+		}
+		if err := graph.Verify(g, f); err != nil {
+			return err
+		}
+		lw, err := lowerDense(g)
+		if err != nil {
+			return err
+		}
+		if !lw.ungated || lw.mix || lw.qk || lw.par {
+			return fmt.Errorf("model: decision head block %d graph states what layaScores does not run", i)
+		}
+		mb.head[i].g = g
+	}
+	return nil
+}
