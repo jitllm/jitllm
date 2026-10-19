@@ -2584,6 +2584,29 @@ func faultSig(l *layer, plan *nn.LayerPlan) uint32 {
 	return s
 }
 
+// swapLatentBanks is MLAFaultSwapBanks as a rewrite of the program: each
+// latent attention absorbs its query through the value bank and un-absorbs
+// through the key bank, the two bank steps (a selected matvec over the
+// heads, the first before the attention and the second after it, from one
+// graph op) exchanging their weights.
+func swapLatentBanks(p *devProgram) {
+	first := -1
+	for i := range p.ops {
+		o := &p.ops[i]
+		if o.Kind != dkExpertMatVec || o.Heads == 0 {
+			continue
+		}
+		if first < 0 || p.ops[first].Src[0] != o.Src[0] {
+			first = i
+			continue
+		}
+		a := &p.ops[first]
+		a.W, o.W = o.W, a.W
+		a.Role, o.Role = o.Role, a.Role
+		first = -1
+	}
+}
+
 // faultRewrite applies block l's fault switches to its program.
 func faultRewrite(p *devProgram, l *layer, plan *nn.LayerPlan) {
 	for i := 0; i < len(p.ops); i++ {

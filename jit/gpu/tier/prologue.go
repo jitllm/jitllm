@@ -35,6 +35,9 @@ func (g *devTier) ensureFusedLocked(l *layer, prog *devProgram, bs *blockScratch
 		fc.prog = prog.clone() // a refused fusion hands back the base program, which the rewrite must not change
 	}
 	faultRewrite(fc.prog, l, &bs.p)
+	if g.kb.mlaFault == MLAFaultSwapBanks {
+		swapLatentBanks(fc.prog)
+	}
 	fc.fault = faultSig(l, &bs.p)
 	fc.qkv, fc.gu, fc.down, fc.dense = fc.prog.forms()
 	fc.bs = bs
