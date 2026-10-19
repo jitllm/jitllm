@@ -652,6 +652,56 @@ and split-reduction (the kernel IR's tuner owns tiling, below this level); full
 one-shot bufferization (no regions, no deallocation to plan); dispatch-to-
 workgroup conversion (the kernel IR's job here).
 
+### Decomposition: every composite op as primitives
+
+The graph states several mechanisms whole: `route`, the recurrences, the
+latent row and its attention, the indexer, the streams (`stream_mix`,
+`stream_place`, AltUp's `alt_predict` and `alt_correct`), the n-gram block,
+`laurel`, `gauss_topk`, the compressed attention, the draft head. A device
+program that lowers such an op to a kind of its own, and a generator written
+for that kind, is a family's code moved, not removed: it encodes one family's
+arithmetic and layout, a model arranging the same pieces differently does
+not build, and nothing can fuse or re-tile across it. That shape was built
+and reverted (the router's variant fragments, AltUp's and the hyper-
+connections' stream kinds, the paged attention transliterated into compose).
+
+**Where decomposition lives.** `graph.Decompose` rewrites each composite op
+into a subgraph of primitives, written once, in `engine/graph`, from the op's
+attributes and bindings alone. The device builder lowers only primitives;
+`TestCompositeKindsOnlyShrink` counts the program kinds that are not
+(`primitiveKind`) and only falls. The host keeps its own routines until it
+lowers the same subgraphs; a decomposition is held to the host's composite
+routine, which is the oracle for it, and to the equality gate on the device.
+
+**The primitives a decomposition may use**, each by structure, so an unseen
+model whose graph uses them runs with no new code:
+
+| primitive | what it is |
+|---|---|
+| `map` | an elementwise expression over one or two rows and bound vectors or scalars, with broadcast: add, sub, mul, div, max, min, select on a comparison, and every `Act`; the expression is the op's attributes |
+| `reduce` | sum, max or min over a row, or over each group of `Width` in it (a row view), in tree or sequential order: the order is an attribute, since it is part of the arithmetic |
+| `topk` | the k largest of a row (or of each group), ties to the lower index, as indices and values |
+| `gather`, `scatter` | a row's elements (or rows) read or written at an index row: selection, experts, streams, embeddings |
+| `matvec` | over any weight format, per row, per pair of a selection, grouped |
+| `norm` | RMS, Layer, per head |
+| `rope` | the rotary over a row's heads by a table, any pair layout and split |
+| `attend` | over a paged history: dense, windowed, latent, over gathered keys |
+| `fold` | a state carried across steps or positions and updated by a map: the recurrences' scan |
+| `conv` | depthwise or full over a row grid, and `affine` |
+
+A value gains an element type: `f32` rows as before, and `u32` index rows
+(a selection's experts, a top-k's positions). A selection is two values, its
+indices and its weights, which `gather`, `expert_matvec` and `combine` read.
+
+**The order.** Route first (logits a float `matvec`; the bias and the
+selection bias `map`; the score a `map`; groups a `topk` and `reduce` over a
+row view, a `topk` of the groups and a `map` that masks the rest; the top k a
+`topk`; the weights a `gather`, `reduce` and `map`), then the scans, the
+streams, the latent row and attention, the indexer, the n-gram block, then
+D5. Each lands with its decomposition held to the host routine on every
+fixture that has it and the equality gate clean, and each removes its kinds
+from the composite list.
+
 ### The first recipe through the interface: the gated output norm
 
 The two candidates for the first recipe written as a rewrite were the gated
