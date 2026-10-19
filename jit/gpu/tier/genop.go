@@ -34,17 +34,18 @@ const (
 	gaOut0
 	gaOut1
 	gaOut2
-	gaV     // the op's bound vector
-	gaVB    // its bias
-	gaPart  // the scratch's partial plane (a norm's sums)
-	gaPart2 // the second (a LayerNorm's variance)
-	gaConst // the op's own constant (a residual scale)
-	gaOnes  // a ones row of the head width (a weightless norm's scale)
-	gaCS    // the call's cos/sin table for this block (genEnv)
-	gaQOff  // the rows' offsets into q's table rows
-	gaKOff  // the rows' offsets into k's
-	gaQ8A   // an int8 output's values
-	gaQ8X   // its scales and sums
+	gaV       // the op's bound vector
+	gaVB      // its bias
+	gaPart    // the scratch's partial plane (a norm's sums)
+	gaPart2   // the second (a LayerNorm's variance)
+	gaConst   // the op's own constant (a residual scale)
+	gaOnes    // a ones row of the head width (a weightless norm's scale)
+	gaCS      // the call's cos/sin table for this block (genEnv)
+	gaQOff    // the rows' offsets into q's table rows
+	gaKOff    // the rows' offsets into k's
+	gaColPair // over rows, each sorted column's (token, slot) pair
+	gaQ8A     // an int8 output's values
+	gaQ8X     // its scales and sums
 )
 
 // genLaunch is one generated launch: threads for a flat launch, or groups of
@@ -60,6 +61,9 @@ type genLaunch struct {
 	// former, where set, runs the launch through a kernel former's own
 	// launcher (genEnv.form) rather than one kernel: the matvec's.
 	former uint8
+	// pairs launches a group a (token, expert) pair of the step, not a
+	// group a token.
+	pairs bool
 }
 
 // The formers whose launchers run an op: the matvec's (the op's weight's
@@ -219,6 +223,9 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		// The scan former: a recurrence's kernels emitted from its plan's
 		// shape (RecurrentPlan).
 		return []genLaunch{{former: formScan}}
+	}
+	if l := g.genPairs(o, prog, bs, rows); l != nil {
+		return l
 	}
 	for _, v := range o.In {
 		if prog.vals[v].Layout != layoutRow {
@@ -521,6 +528,10 @@ type genEnv struct {
 	// idx is the op's place in its program, which a former may read ahead
 	// of (an expert matvec folding the bias after it).
 	idx int
+	// moe says the step's expert pairs are the grouped run's sorted
+	// columns (gr), not the selection's (bs.nUsed a row).
+	moe bool
+	gr  *groupRun
 }
 
 func runGen(lc *launcher, o *devOp, R, rows int, at func(devVal) backend.Buf, q8 func(devVal) (backend.Buf, backend.Buf), env *genEnv) {
@@ -556,6 +567,8 @@ func runGen(lc *launcher, o *devOp, R, rows int, at func(devVal) backend.Buf, q8
 				bufs[j] = env.qOff
 			case gaKOff:
 				bufs[j] = env.kOff
+			case gaColPair:
+				bufs[j] = env.gr.m.colPair
 			case gaQ8A:
 				bufs[j], _ = q8(o.Out[l.q8])
 			case gaQ8X:
@@ -568,7 +581,12 @@ func runGen(lc *launcher, o *devOp, R, rows int, at func(devVal) backend.Buf, q8
 		}
 		if l.width != 0 {
 			groups := l.groups
-			if rows > 0 && R < rows {
+			switch {
+			case l.pairs && env.moe:
+				groups = env.gr.cols
+			case l.pairs:
+				groups = bs.nUsed * R
+			case rows > 0 && R < rows:
 				groups = (groups*R + rows - 1) / rows
 			}
 			if *lc.err == nil {
@@ -591,4 +609,64 @@ func (g *devTier) normParts(w, rows int) int {
 		parts /= 2
 	}
 	return parts
+}
+
+// genPairs is an op over (token, expert) pairs as a composed row group, a
+// row a pair: an activation, a gated activation (or one weighted at its
+// input by the pair's routed weight, Llama 4's), or the int8 operand the down
+// bank's slots read. Its rows are the step's pairs, counted at launch: the
+// selection's at a token, the grouped run's sorted columns over rows. nil
+// where the op is not over pairs.
+func (g *devTier) genPairs(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
+	if len(o.Out) == 0 || len(o.In) == 0 || prog.vals[o.Out[0]].Layout != layoutPairs && prog.vals[o.In[0]].Layout != layoutPairs {
+		return nil
+	}
+	p := &bs.p
+	moe := rows > 1 && prog.experts
+	w := prog.vals[o.In[0]].Width
+	rb := &rowBuild{r: compose.Row{Width: w, Rows: max(rows*p.NExpertUsed, 1)}}
+	var q8 uint8
+	switch o.Kind {
+	case dkAct:
+		a, ok := kernAct(o.Act)
+		if !ok {
+			return nil
+		}
+		rb.store(rb.r.Act(a, rb.load(compose.BufRow, gaIn0)), gaOut0)
+	case dkActMul:
+		a, ok := kernAct(o.Act)
+		if !ok || kernels.ActMulOK(a) != nil {
+			return nil
+		}
+		gt, up := rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1)
+		if len(o.In) > 2 {
+			// act(w*gate) * (w*up), w the pair's routed weight.
+			wb := rb.buf(compose.BufVec, gaIn2)
+			at := rb.r.RowIdx()
+			if moe {
+				at = rb.r.LoadAt(rb.buf(compose.BufU32, gaColPair), at)
+			}
+			wt := rb.r.LoadAt(wb, at)
+			gw, uw := rb.bin(compose.OpMul, wt, gt), rb.bin(compose.OpMul, wt, up)
+			rb.store(rb.bin(compose.OpMul, rb.r.Act(a, gw), uw), gaOut0)
+			break
+		}
+		rb.store(rb.node(compose.Node{Kind: compose.NBinary, Op: compose.OpActMul, Act: a, A: gt, B: up}), gaOut0)
+	case dkQuant:
+		if moe {
+			return nil // over rows the grouped matvec quantizes what it reads
+		}
+		x := rb.load(compose.BufRow, gaIn0)
+		rb.r.Q8 = &compose.Q8{Val: x, A: rb.buf(compose.BufQ8, gaQ8A), X: rb.buf(compose.BufQ8X, gaQ8X),
+			Window: kernels.ClampWindow(max(p.ActWin, 32), pad32(w)), Pad: pad32(w)}
+	default:
+		return nil
+	}
+	k := g.rowKern(&rb.r)
+	if k.k == nil {
+		return nil
+	}
+	l := genLaunch{k: k.k, groups: rb.r.Rows, width: k.group, n: uint8(len(rb.args)), q8: q8, pairs: true}
+	copy(l.args[:], rb.args)
+	return []genLaunch{l}
 }

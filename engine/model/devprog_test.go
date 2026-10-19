@@ -138,7 +138,8 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 			// The program's ops run kernels generated from the ops
 			// themselves (genop.go): a program that ran none compiled
 			// nothing.
-			t.Logf("%d of %d op-steps ran generated launches", ps.GenOps, ps.ProgOps)
+			t.Logf("%d of %d op-steps ran generated launches (composed from the op; %d more through formers over the old kernels)",
+				ps.GenOps, ps.ProgOps, ps.FormerOps)
 			if ps.GenOps != ps.ProgOps {
 				t.Errorf("%d of %d op-steps ran a kernel not generated from the op", ps.ProgOps-ps.GenOps, ps.ProgOps)
 			}

@@ -986,9 +986,13 @@ func (g *devTier) layersSession(s backend.Session) {
 			fc.bs = bs
 			// Each op's kernels generated from the op, for the scratch's rows;
 			// a build reached from inside a submission takes g.mu (subLock).
-			took := g.subLock()
-			g.genProgram(fc.prog, bs, bs.rows)
-			g.subUnlock(took)
+			// Released by defer: a generator that panics must surface, not
+			// leave g.mu held for the next lock on the way out to deadlock on.
+			func() {
+				took := g.subLock()
+				defer g.subUnlock(took)
+				g.genProgram(fc.prog, bs, bs.rows)
+			}()
 		}
 		prog = fc.prog
 		l.ran.note(formQKV, uint8(fc.qkv))
@@ -1745,6 +1749,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			// block's norm may fold it (foldAddNorm).
 			if len(o.Gen) != 0 && !(o.Kind == dkAdd && first+oi == len(prog.ops)-1 && prog.f16 && prog.slots[o.Out[0]] == slotX) {
 				genv.cs, genv.qOff, genv.kOff, genv.idx = rcs, qOff, kro, first+oi
+				genv.moe, genv.gr = rowsMoE, &gr
 				runGen(lc, &o, R, bs.rows, at, q8At, &genv)
 				switch o.Kind {
 				case dkQuant:
@@ -1755,7 +1760,11 @@ func (g *devTier) layersSession(s backend.Session) {
 				case dkAddNormQuant:
 					fsrc = at(o.Out[1])
 				}
-				g.GenOps++
+				if o.Gen[0].former != 0 {
+					g.FormerOps++
+				} else {
+					g.GenOps++
+				}
 				continue
 			}
 			if R > 1 && o.OneRow {

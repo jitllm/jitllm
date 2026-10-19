@@ -1082,9 +1082,11 @@ type Stats struct {
 	// (devprog.go) rather than through the block encoder; a replayed
 	// recording encodes none, so a decode counts its recording's blocks once.
 	ProgBlocks int
-	// GenOps counts program ops that ran their generated launches
-	// (genop.go) rather than an executor case.
-	GenOps int
+	// GenOps counts program ops that ran a kernel composed from the op
+	// (genop.go's row groups); FormerOps those that ran through a former's
+	// launcher, which still launches the old encoder's kernels and is not
+	// generated.
+	GenOps, FormerOps int
 	// ProgOps counts every program op a step ran: GenOps reaching it is
 	// every op compiled.
 	ProgOps int
@@ -1522,6 +1524,7 @@ func (s *Stats) add(o Stats) {
 	s.PagedLaunches += o.PagedLaunches
 	s.ProgBlocks += o.ProgBlocks
 	s.GenOps += o.GenOps
+	s.FormerOps += o.FormerOps
 	s.ProgOps += o.ProgOps
 	s.PagedPrefillLaunches += o.PagedPrefillLaunches
 	s.PagedStagedLaunches += o.PagedStagedLaunches
