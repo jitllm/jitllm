@@ -178,6 +178,10 @@ type lane struct {
 	planeCap        int
 	partBuf, f16Buf backend.Buf
 	partCap, f16Cap int
+	// valBufs hold the programs' values coloured by liveness (colour.go),
+	// valCaps their sizes in elements.
+	valBufs [numVals]backend.Buf
+	valCaps [numVals]int
 	// argmaxOut is the device argmax's one word (PrepHead).
 	argmaxOut backend.Buf
 	// The device sampler's buffers (sample.go), made the first time a call
@@ -596,6 +600,11 @@ func (g *devTier) cloneLane() (*lane, bool) {
 	}
 	if l0.f16Cap > 0 && !v.sizeF16(l0.f16Cap) {
 		return fail()
+	}
+	for c, n := range l0.valCaps {
+		if n > 0 && !v.regrow(&v.valBufs[c], &v.valCaps[c], n, 4, true, true) {
+			return fail()
+		}
 	}
 	if l0.argmaxOut != nil {
 		b, err := g.dev.Alloc(4)

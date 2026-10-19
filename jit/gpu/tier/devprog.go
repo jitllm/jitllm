@@ -344,6 +344,25 @@ const (
 	slotPool9
 	slotPool10
 	slotPool11
+	// slotVal0.. hold the values the builder gives no slot of their own
+	// (slotAuto): coloured by liveness once the program's rewrites are done
+	// (colourVals), their buffers the lane's, grown in the prologue.
+	slotVal0
+	slotVal1
+	slotVal2
+	slotVal3
+	slotVal4
+	slotVal5
+	slotVal6
+	slotVal7
+	slotVal8
+	slotVal9
+	slotVal10
+	slotVal11
+	slotVal12
+	slotVal13
+	slotVal14
+	slotVal15
 	slotConvIn  // a convolution-path block's input
 	slotConvOut // its output
 	slotConvPos // its positions' table (a second input)
@@ -353,6 +372,12 @@ const (
 func (s devSlot) String() string {
 	if s >= slotPool0 && s < slotPool0+numPool {
 		return fmt.Sprintf("pool%d", s-slotPool0)
+	}
+	if s >= slotVal0 && s < slotVal0+numVals {
+		return fmt.Sprintf("val%d", s-slotVal0)
+	}
+	if s == slotAuto {
+		return "auto"
 	}
 	switch s {
 	case slotX:
@@ -778,6 +803,13 @@ type devProgram struct {
 	ops    []devOp
 }
 
+// numVals is how many values a program colours by liveness at once.
+const numVals = 16
+
+// slotAuto marks a value the builder gives no slot: colourVals assigns it
+// one of slotVal0.. by liveness once the rewrites are done.
+const slotAuto = numSlots
+
 func (p *devProgram) val(name string, t devType, s devSlot) devVal {
 	p.vals = append(p.vals, t)
 	p.slots = append(p.slots, s)
@@ -939,7 +971,7 @@ func (p *devProgram) check() error {
 				break
 			}
 			for _, y := range o.Out {
-				if p.slots[x] == p.slots[y] && p.slots[x] != slotKV {
+				if p.slots[x] == p.slots[y] && p.slots[x] != slotKV && p.slots[x] != slotAuto {
 					return fmt.Errorf("device program: op %d (%s) reads and writes %s", i, o.Kind, p.slots[x])
 				}
 			}

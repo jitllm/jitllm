@@ -262,6 +262,13 @@ func (g *devTier) dropLaneScratch() {
 		}
 	}
 	g.partCap, g.f16Cap = 0, 0
+	for c := range g.valBufs {
+		if g.valBufs[c] != nil {
+			g.valBufs[c].Free()
+			g.valBufs[c] = nil
+		}
+		g.valCaps[c] = 0
+	}
 }
 
 // overBudget reports whether what is charged has passed the budget, the

@@ -955,6 +955,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			buf[slotNDot], buf[slotNGv], buf[slotNGvn], buf[slotNConv], buf[slotNXg] = x.dot, x.gv, x.gvn, x.conv, x.xg
 		}
 		buf[slotCIn], buf[slotCOut], buf[slotGC], buf[slotUC] = bs.cin, bs.cout, bs.gClamp, bs.uClamp
+		copy(buf[slotVal0:slotVal0+numVals], g.valBufs[:])
 		if x := bs.ds4; x != nil {
 			buf[slotRBias], buf[slotHFlat], buf[slotHFlatN], buf[slotHMix], buf[slotHC], buf[slotHColl] = x.rbias, x.flat, x.flatn, x.mix, x.hc, x.coll
 			buf[slotCQA], buf[slotCQAN], buf[slotCQ], buf[slotCQN], buf[slotCQR] = x.qa, x.qan, x.q, x.qn, x.qr
@@ -986,6 +987,12 @@ func (g *devTier) layersSession(s backend.Session) {
 			}()
 		}
 		prog = fc.prog
+		if fc.valErr != nil {
+			if err == nil {
+				err = fmt.Errorf("block %d: %w", li, fc.valErr)
+			}
+			return
+		}
 		l.ran.note(formQKV, uint8(fc.qkv))
 		if fc.dense {
 			l.ran.note(formGateUp, uint8(fc.gu))

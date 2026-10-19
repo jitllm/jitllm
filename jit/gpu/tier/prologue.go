@@ -1,5 +1,7 @@
 package tier
 
+import "fmt"
+
 // The device program's prologue: what a submission builds before it runs,
 // under g.mu and outside the submission -- each block's fused variant for the
 // step's row class, its kernels generated from its ops, and the tables they
@@ -39,6 +41,20 @@ func (g *devTier) ensureFusedLocked(l *layer, prog *devProgram, bs *blockScratch
 		swapLatentBanks(fc.prog)
 	}
 	fc.fault = faultSig(l, &bs.p)
+	// The values the builder left unslotted, coloured by liveness now the
+	// rewrites are done, and their buffers grown to this step's rows.
+	// Inside a submission they are never grown: a launch already recorded
+	// may read the buffers a growth would free.
+	fc.valErr = nil
+	need, err := colourVals(fc.prog)
+	switch {
+	case err != nil:
+		fc.valErr = err
+	case g.genInSub && !g.valsFit(need, max(R, bs.rows)):
+		fc.valErr = fmt.Errorf("tier: a block's program values outgrow their buffers inside a submission")
+	case !g.genInSub && !g.sizeVals(need, max(R, bs.rows)):
+		fc.valErr = fmt.Errorf("tier: a block's program values do not fit")
+	}
 	fc.qkv, fc.gu, fc.down, fc.dense = fc.prog.forms()
 	fc.bs = bs
 	g.curLayer = l

@@ -326,6 +326,9 @@ type progFused struct {
 	prog  *devProgram
 	took  rwSet
 	err   error // the type error that refused every rewrite, if one did
+	// valErr refuses the variant: its values could not be coloured, or
+	// their buffers could not grow (colour.go). The step fails by it.
+	valErr error
 	// The op-span forms the program runs (BlockForms), noted each step.
 	qkv   qkvForm
 	gu    ffnGateUpForm
