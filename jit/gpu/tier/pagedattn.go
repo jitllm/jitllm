@@ -113,13 +113,23 @@ type pagedScratch struct {
 	streamDesc [2][]backend.Buf
 }
 
-// pagedVariant is one decode plan's attention (kernels.ChooseDecodePlan),
-// formed in compose (gen_attend.go): FlashDecodeKV's schedule, or the staged
-// scores, softmax and accumulate, and the merge of their partials where there
-// are any. Its kernels are the generated-kernel cache's, closed with it.
+// pagedVariant is one decode plan's attention (kernels.ChooseDecodePlan):
+// FlashDecodeKV, or the staged scores, softmax and accumulate, and the wide
+// merge of their partials where there are any.
 type pagedVariant struct {
-	plan kernels.DecodePlan
-	gen  []genLaunch
+	plan                        kernels.DecodePlan
+	k, scores, soft, acc, merge backend.Kernel
+	groups, width               int // FlashDecodeKV's launch
+	scoreT, softG, accT, mergeT int // the staged launches, and the merge's threads
+	mergeItems                  int // > 0: the group-per-item merge, 32 lanes an item (DecodePlanOff)
+}
+
+func (v *pagedVariant) close(g *devShared) {
+	for _, k := range []backend.Kernel{v.k, v.scores, v.soft, v.acc, v.merge} {
+		if k != nil {
+			g.closeKern(k)
+		}
+	}
 }
 
 // kvPage is the pool's page size, decided when the pool is made and fixed for
@@ -365,6 +375,9 @@ func freePaged(pg *pagedScratch, g *devShared) {
 			g.closeKern(k)
 		}
 	}
+	for _, v := range pg.vars {
+		v.close(g)
+	}
 	pg.pf.free(g)
 	pg.msa.free(g)
 	pg.qsa.free(g)
@@ -469,18 +482,53 @@ func (g *devTier) pagedBuild(bs *blockScratch, plan kernels.DecodePlan) (*pagedV
 		return v, nil
 	}
 	s := plan.Shape
+	v := &pagedVariant{plan: plan}
 	fail := func(err error) (*pagedVariant, error) {
+		v.close(g.devShared)
 		return nil, fmt.Errorf("paged attention (%s, %d split(s)): %w", plan.Path, s.Splits, err)
 	}
-	lanes := g.pickLanes()
-	if lanes != ir.SubgroupLanes {
-		lanes = 1
+	comp := func(dst *backend.Kernel, k *ir.Kernel, err error) error {
+		if err == nil {
+			*dst, err = g.compileShared(k)
+		}
+		return err
 	}
-	gen, err := g.formAttendPlan(plan, lanes, g.DecodePlanOff&2 != 0)
-	if err != nil {
-		return fail(err)
+	vd := s.Dim
+	if s.MLA > 0 {
+		vd = s.MLA
 	}
+	v.mergeT = s.Rows * s.Heads * vd
+	merged := s.Splits > 1
 	if plan.Path == kernels.PathStaged {
+		merged = true
+		lanes := g.pickLanes()
+		if lanes != ir.SubgroupLanes {
+			lanes = 1
+		}
+		// A row-major MLA row is hundreds of floats a key: a warp across its
+		// dimensions: one thread walking all of them was several times slower
+		// than a warp-wide score. Head rows of 64-256 keep a thread a slot.
+		scoreLanes := 1
+		if s.MLA > 0 && lanes == ir.SubgroupLanes {
+			scoreLanes = ir.SubgroupLanes
+		}
+		k, err := kernels.PagedStagedScores(s, scoreLanes)
+		if err = comp(&v.scores, k, err); err == nil {
+			k, err = kernels.PagedStagedSoftmax(s, lanes)
+			err = comp(&v.soft, k, err)
+		}
+		if err == nil {
+			k, err = kernels.PagedStagedAcc(s)
+			err = comp(&v.acc, k, err)
+		}
+		if err != nil {
+			return fail(err)
+		}
+		items := s.Rows * s.Heads * s.Splits
+		v.scoreT, v.accT, v.softG = kernels.PagedStagedScoreItems(s)*scoreLanes, kernels.PagedStagedAccThreads(s), (items+63)/64
+		if lanes == ir.SubgroupLanes {
+			v.softG = (items + 1) / 2
+		}
 		n, have := kernels.PagedStagedPlane(s), pg.planeFloats
 		if err := g.prefillBuf(&pg.sc, &have, n); err != nil {
 			return fail(err)
@@ -490,15 +538,35 @@ func (g *devTier) pagedBuild(bs *blockScratch, plan kernels.DecodePlan) (*pagedV
 			return fail(err)
 		}
 		pg.planeFloats = max(pg.planeFloats, n)
+	} else {
+		k, err := kernels.FlashDecodeKV(s)
+		if err := comp(&v.k, k, err); err != nil {
+			return fail(err)
+		}
+		v.groups, v.width = kernels.FlashKVGroups(s), kernels.FlashKVWidth(s)
 	}
-	// The merge's partials, at the value's width: a head, or MLA's latent
-	// (the row's prefix), not the whole row the scores read.
-	if plan.Path == kernels.PathStaged || s.Splits > 1 {
-		if err := g.prefillBuf(&pg.part, &pg.partFloats, kernels.FlashPartialFloats(mergeShape(s))); err != nil {
+	// The merge and its partials run at the value's width: a head, or MLA's
+	// latent (the row's prefix), not the whole row the scores read.
+	ms := mergeShape(s)
+	if merged && g.DecodePlanOff&2 != 0 {
+		// The group-per-item merge: a 32-lane group per (row, head).
+		k, err := kernels.FlashAttentionMerge(ms)
+		if err := comp(&v.merge, k, err); err != nil {
+			return fail(err)
+		}
+		v.mergeItems = s.Rows * s.Heads
+		if err := g.prefillBuf(&pg.part, &pg.partFloats, kernels.FlashPartialFloats(ms)); err != nil {
+			return fail(err)
+		}
+	} else if merged {
+		k, err := kernels.FlashAttentionMergeWide(ms)
+		if err := comp(&v.merge, k, err); err != nil {
+			return fail(err)
+		}
+		if err := g.prefillBuf(&pg.part, &pg.partFloats, kernels.FlashPartialFloats(ms)); err != nil {
 			return fail(err)
 		}
 	}
-	v := &pagedVariant{plan: plan, gen: gen}
 	pg.vars[plan] = v
 	return v, nil
 }
@@ -515,12 +583,45 @@ func mergeShape(s kernels.FlashShape) kernels.FlashShape {
 
 // pagedDecode launches one layer's attention through the call's variant: q,
 // the layer's pools and table, the descriptors desc, into out; sink is the
-// layer's sinks (nil without).
+// layer's sinks (nil without). la launches at a thread count in groups of 128.
 func (pg *pagedScratch) pagedDecode(s backend.Session, lc *launcher,
 	q, k, v, n, out, tab, desc, sink backend.Buf) error {
-	ab := attendBufs{q: q, k: k, v: v, n: n, out: out, tab: tab, desc: desc, sink: sink, part: pg.part, sc: pg.sc, wt: pg.wt}
-	runPlan(lc, pg.cur.gen, &ab)
-	return *lc.err
+	vr := pg.cur
+	dst := out
+	if vr.merge != nil {
+		dst = pg.part
+	}
+	// The argument lists are arrays on the stack, sliced to the arity: a
+	// slice literal grown by append for the sinks was a heap object per layer
+	// of every gpt-oss token.
+	if vr.k != nil {
+		all := [8]backend.Buf{q, k, v, n, dst, tab, desc, sink}
+		args := all[:7]
+		if sink != nil {
+			args = all[:8]
+		}
+		if err := lc.launch(vr.k, vr.groups, vr.width, args...); err != nil {
+			return err
+		}
+	} else {
+		lc.la(vr.scores, vr.scoreT, q, k, n, pg.sc, tab, desc)
+		if err := lc.launch(vr.soft, vr.softG, 64, pg.sc, n, pg.wt, pg.part, tab, desc); err != nil {
+			return err
+		}
+		lc.la(vr.acc, vr.accT, pg.wt, v, n, pg.part, tab, desc)
+	}
+	if vr.merge != nil {
+		all := [3]backend.Buf{pg.part, out, sink}
+		ma := all[:2]
+		if sink != nil {
+			ma = all[:3]
+		}
+		if vr.mergeItems > 0 {
+			return lc.launch(vr.merge, vr.mergeItems, 32, ma...)
+		}
+		lc.la(vr.merge, vr.mergeT, ma...)
+	}
+	return nil
 }
 
 // seqEnd is one sequence a call writes and reads: every position below end

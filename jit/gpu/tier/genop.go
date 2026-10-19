@@ -59,15 +59,6 @@ const (
 	gaVPool // its paged V pool
 	gaTab   // its page table
 	gaPRow  // the step's row descriptors (kernels.PRowWords a row)
-	// An attention plan's (gen_attend.go, bound by runPlan): the scratch's
-	// causal count, the layer's descriptor set (its window's), its sinks,
-	// the plan's partials and the staged score and weight planes.
-	gaN
-	gaADesc
-	gaSink
-	gaAPart
-	gaPlane
-	gaPlane2
 )
 
 // genLaunch is one generated launch: threads for a flat launch, or groups of
@@ -95,10 +86,6 @@ type genLaunch struct {
 	// keeps. Rows past the step's compute what nothing reads. (A kernel
 	// built for the step's own rows in the prologue is the faster form.)
 	whole bool
-	// plan runs the call's decode plan in its place: the launches the
-	// prologue formed for the step's key count (pagedScratch.cur), bound to
-	// the op's query and output and the layer's history (gen_attend.go).
-	plan bool
 }
 
 // The formers whose launchers run an op: the matvec's (the op's weight's
@@ -302,11 +289,6 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		return []genLaunch{{former: formMatVec}}
 	case dkAttend, dkLatentAttend, dkKVWrite, dkKVCopy, dkRopeQKV, dkSlice, dkView, dkConcatHeads, dkRopeTail, dkLatentWrite:
 		switch o.Kind {
-		case dkAttend:
-			if l := g.genAttend(o, bs, rows); l != nil {
-				return l
-			}
-			o.Why = whyHistory
 		case dkKVWrite, dkKVCopy:
 			if l := g.genPagedWrite(o, prog, bs, rows, o.Kind == dkKVWrite, gaIn0, gaIn1); l != nil {
 				return l
@@ -669,9 +651,6 @@ type genState struct {
 	// The block's paged history: its K and V pools, page table, and the
 	// step's row descriptors.
 	kpool, vpool, tab, prow backend.Buf
-	// The layer's attention reads: its descriptor set (the window's where it
-	// slides) and its sinks.
-	adesc, sink backend.Buf
 	// The step's binary16 operand: its plane, and the conversion the step
 	// last made, by kernel and source (shared with the executor, so a
 	// conversion either one made is not made again).
@@ -691,13 +670,6 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 	var bufs [8]backend.Buf
 	for i := range o.Gen {
 		l := &o.Gen[i]
-		if l.plan {
-			pk := bs.pkv
-			ab := attendBufs{q: at(o.In[0]), k: st.kpool, v: st.vpool, n: bs.n, out: at(o.Out[0]), tab: st.tab,
-				desc: st.adesc, sink: st.sink, part: pk.part, sc: pk.sc, wt: pk.wt}
-			runPlan(lc, pk.cur.gen, &ab)
-			continue
-		}
 		for j := 0; j < int(l.n); j++ {
 			switch a := l.args[j]; a {
 			case gaIn0, gaIn1, gaIn2, gaIn3:
