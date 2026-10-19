@@ -2059,6 +2059,11 @@ type devShared struct {
 	// genK is the one cache of generated kernels, by encoded structure and
 	// schedule (genop.go genKern).
 	genK map[compose.Key][]genEntry
+	// genInSub is set while a block's program is generated inside a
+	// submission, where nothing may allocate.
+	genInSub bool
+	// consts is the generated ops' constants by bit pattern (constBuf).
+	consts map[uint32]backend.Buf
 	// curLayer is the block whose program is being generated.
 	curLayer *layer
 	conv     convScratch
@@ -2903,6 +2908,10 @@ func (g *devTier) Close() {
 			g.closeKern(k)
 		}
 	}
+	for _, b := range g.consts {
+		b.Free()
+	}
+	g.consts = nil
 	for _, es := range g.genK {
 		for _, e := range es {
 			if e.k != nil {

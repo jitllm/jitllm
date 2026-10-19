@@ -980,6 +980,8 @@ func (g *devTier) layersSession(s backend.Session) {
 			func() {
 				took := g.subLock()
 				defer g.subUnlock(took)
+				g.genInSub = true
+				defer func() { g.genInSub = false }()
 				g.ensureFusedLocked(l, prog, bs, R, rag)
 			}()
 		}
@@ -1726,6 +1728,9 @@ func (g *devTier) layersSession(s backend.Session) {
 			if skipNext {
 				skipNext = false
 				continue
+			}
+			if R > 1 && o.OneRow {
+				continue // what reads it over rows produces it itself
 			}
 			g.ProgOps++
 			// An op with generated launches runs them and nothing else; the

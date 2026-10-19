@@ -103,6 +103,12 @@ func kernAct(a graph.Act) (kernels.ActKind, bool) {
 		return kernels.ActReLU2, true
 	case graph.ActReLU:
 		return kernels.ActReLU, true
+	case graph.ActSwiGLUOAI:
+		return kernels.ActSwiGLUOAI, true
+	case graph.ActSwiGLUClamp:
+		return kernels.ActSwiGLUClamp, true
+	case graph.ActSitu:
+		return kernels.ActSitu, true
 	}
 	return 0, false
 }
@@ -112,8 +118,40 @@ func kernAct(a graph.Act) (kernels.ActKind, bool) {
 func (g *devTier) genProgram(prog *devProgram, bs *blockScratch, rows int) {
 	for i := range prog.ops {
 		o := &prog.ops[i]
+		if o.Act == 0 {
+			o.Act = o.A.Act // an activation its emit site did not record
+		}
+		if o.Kind == dkAdd && o.Alpha != 0 && o.Alpha != 1 && o.GC == nil {
+			o.GC = g.constBuf(float32(o.Alpha))
+		}
 		o.Gen = g.genOp(o, prog, bs, rows)
 	}
+}
+
+// constBuf is a one-float device buffer holding v, uploaded once a device
+// and value: an add's scale, read by its kernel rather than baked so the
+// kernel's key carries no float. Callers hold g.mu, outside a submission.
+func (g *devTier) constBuf(v float32) backend.Buf {
+	bits := math.Float32bits(v)
+	if b, ok := g.consts[bits]; ok {
+		return b
+	}
+	if g.genInSub {
+		return nil // inside a submission nothing may allocate: the executor's case runs it
+	}
+	b, err := g.dev.Alloc(4)
+	if err == nil {
+		err = b.Write(f32b([]float32{v}))
+	}
+	if err != nil {
+		g.LastErr = fmt.Sprintf("a constant %g: %v", v, err)
+		return nil
+	}
+	if g.consts == nil {
+		g.consts = map[uint32]backend.Buf{}
+	}
+	g.consts[bits] = b
+	return b
 }
 
 // rowBuild is a composed row group being built from one op: the group and,

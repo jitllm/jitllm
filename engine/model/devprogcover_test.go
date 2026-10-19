@@ -235,6 +235,9 @@ func TestDeviceProgramCoverageBeyondText(t *testing.T) {
 	}
 }
 
+// whyNot counts the shapes the generators declined, for the report.
+var whyNot = map[string]int{}
+
 // countKinds adds a block program's ops to kinds by kind: generated (a
 // kernel composed from the op, genop.go) or not.
 func countKinds(prog string, kinds map[string]*[2]int) {
@@ -253,6 +256,10 @@ func countKinds(prog string, kinds map[string]*[2]int) {
 			c[0]++
 		} else {
 			c[1]++
+			if i := strings.Index(line, "not generated ["); i >= 0 {
+				why := k + " " + line[i+14:]
+				whyNot[why]++
+			}
 		}
 	}
 }
@@ -269,6 +276,11 @@ func reportKinds(t *testing.T, kinds map[string]*[2]int) {
 	}
 	slices.SortFunc(names, func(a, b string) int { return cmp.Compare(kinds[b][1], kinds[a][1]) })
 	t.Logf("program ops generated: %d of %d", gen, all)
+	for w, n := range whyNot {
+		if n >= 2 {
+			t.Logf("  declined %4d x %s", n, w)
+		}
+	}
 	for _, k := range names {
 		if c := kinds[k]; c[1] > 0 {
 			t.Logf("  %-22s %4d not generated, %4d generated", k, c[1], c[0])

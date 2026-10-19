@@ -796,6 +796,13 @@ func (p *devProgram) String() string {
 			gen = ", former (old kernels)"
 		case len(o.Gen) != 0:
 			gen = fmt.Sprintf(", generated: %d launch(es)", len(o.Gen))
+		default:
+			// What a generator saw: the shape it declined.
+			lay := ""
+			for _, x := range o.In {
+				lay += p.vals[x].String() + " "
+			}
+			gen = fmt.Sprintf(", not generated [%sact %d v %v]", lay, o.Act, o.V != nil)
 		}
 		fmt.Fprintf(&b, ")  ; graph ops %v%s\n", o.Src, gen)
 	}
