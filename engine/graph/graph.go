@@ -201,10 +201,33 @@ const (
 	// positions (In[3]) at each pair's distance, softmaxed over the rows,
 	// against the values (In[2]); NHead heads of HeadDim.
 	OpRelAttend
+	// OpMap is an elementwise function Fn of its operands: In[0], In[1] and
+	// In[2] in order, then Weight[0] (a bound vector), then Const, as many as
+	// Fn takes. An operand narrower than Out[0] is broadcast: element i reads
+	// its element i/(w/n), w the output's width and n the operand's (one
+	// element a group of w/n; width 1 is a scalar). A primitive
+	// (docs/design/composer.md, "Decomposition").
+	OpMap
+	// OpReduce combines each group of Span elements of In[0] (the whole row
+	// where Span is 0) by Fn (MapAdd, MapMax or MapMin) in Order: Out[0] one
+	// element a group. A primitive.
+	OpReduce
+	// OpTopK is the TopK largest elements of each group of Span of In[0]
+	// (the whole row where Span is 0), largest first, equal values to the
+	// lower index: Out[0] their indices within the group (u32), Out[1] their
+	// values. A primitive.
+	OpTopK
+	// OpTake is In[0]'s element at each index of In[1] (u32): Out[0] one
+	// element an index. A primitive.
+	OpTake
+	// OpRank is each element's place among its group of Span of In[0] (the
+	// whole row where Span is 0), largest first, equal values to the lower
+	// index (u32): OpTopK's order, for every element. A primitive.
+	OpRank
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -268,11 +291,75 @@ const (
 // ValueID names a value in a Graph's Values.
 type ValueID int32
 
-// Value is one SSA value: a row of Width f32 elements per token.
+// Value is one SSA value: a row of Width elements per token, f32 unless
+// Elem says otherwise.
 type Value struct {
 	Name  string
 	Width int
+	Elem  Elem
 }
+
+// Elem is a value's element type.
+type Elem uint8
+
+const (
+	// ElemF32 is a float row, every value's before decomposition.
+	ElemF32 Elem = iota
+	// ElemU32 is an index row: a selection's experts, a top-k's positions.
+	ElemU32
+)
+
+// MapFn is an OpMap's function, or an OpReduce's combiner.
+type MapFn uint8
+
+const (
+	MapAdd MapFn = iota + 1 // a + b
+	MapSub                  // a - b
+	MapMul                  // a * b
+	MapDiv                  // a / b
+	MapMax                  // max(a, b)
+	MapMin                  // min(a, b)
+	MapExp                  // exp(a)
+	MapSigmoid              // 1 / (1 + exp(-a))
+	MapSoftplus             // log(1 + exp(a))
+	MapSqrt                 // sqrt(a)
+	MapWhere                // b where a > 0, else c
+	MapLess                 // 1 where a < b, else 0
+)
+
+// Arity is how many operands f takes.
+func (f MapFn) Arity() int {
+	switch f {
+	case MapExp, MapSigmoid, MapSoftplus, MapSqrt:
+		return 1
+	case MapWhere:
+		return 3
+	case MapAdd, MapSub, MapMul, MapDiv, MapMax, MapMin, MapLess:
+		return 2
+	}
+	return 0
+}
+
+var mapFnNames = [...]string{"?", "add", "sub", "mul", "div", "max", "min", "exp", "sigmoid", "softplus", "sqrt", "where", "less"}
+
+func (f MapFn) String() string {
+	if int(f) < len(mapFnNames) {
+		return mapFnNames[f]
+	}
+	return fmt.Sprintf("fn%d", f)
+}
+
+// Order is an OpReduce's: the order its additions run in is part of its
+// arithmetic, so it is stated.
+type Order uint8
+
+const (
+	// OrderSeq combines a group's elements one at a time from its first.
+	OrderSeq Order = iota
+	// OrderTree combines them pairwise, the first half with the second, down
+	// to one.
+	OrderTree
+)
 
 // Binding is a weight an op reads: its container role in the graph's block,
 // with the shape the op requires (K the input width, Rows the output; Rows 0
@@ -362,6 +449,14 @@ type Attrs struct {
 	// combination weights, Sinkhorn-normalised over Iters rounds).
 	Streams  int
 	Sinkhorn bool
+	// Fn, Order, Span and Const are the primitives' (OpMap, OpReduce,
+	// OpTopK, OpRank): the function, the order a reduction runs in, the
+	// group a reduction, top-k or rank runs over (0: the row), a constant
+	// operand.
+	Fn    MapFn
+	Order Order
+	Span  int
+	Const float64
 }
 
 // Op is one operation.
