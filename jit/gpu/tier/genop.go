@@ -551,6 +551,7 @@ const (
 	encRow = 1 + iota
 	encEpi
 	encTemplate
+	encMatVec
 )
 
 // genTemplate is a rotary's or the query/gate split's launches from their
@@ -900,10 +901,13 @@ func (g *devTier) genMatVec(o *devOp, prog *devProgram, bs *blockScratch) []genL
 	return []genLaunch{gl}
 }
 
-// mvEpiKern is the matvec of shape s composed with epilogue e, formed once a
+// mvEpiKern is the matvec of shape s with epilogue e, formed by the matvec
+// former (compose.MatVec: the loop nest around the format's SubDot) once a
 // device and structure, and its workgroup width. Callers hold g.mu.
 func (g *devTier) mvEpiKern(s kernels.MatVecShape, e *compose.Epi) (backend.Kernel, int) {
-	return g.epiKern(s, e.Encode(), func() (*ir.Kernel, error) { return kernels.MatVecEpi(s, e) })
+	mv := &compose.MatVec{T: s.T, K: s.K, Rows: s.Rows, Split: s.Split, Group: s.GroupSplit, Rowt: s.Rowt,
+		Center: s.Center, Epi: e}
+	return g.genKern(append([]uint32{encMatVec}, mv.Encode()...), mv.Emit)
 }
 
 // epiKern is a former's kernel of shape s with an epilogue, its structure

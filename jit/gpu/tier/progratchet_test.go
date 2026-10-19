@@ -39,7 +39,7 @@ var genFiles = []string{"genop.go", "conv.go", "convgraph.go", "kernid.go", "dev
 // former over the old kernels. Each only falls.
 var genCeilings = map[string]int{
 	"named kernel ids":           36,
-	"menu kernels in generators": 41,
+	"menu kernels in generators": 40,
 	"family activations":         0,
 	"formers over old kernels":   5,
 }

@@ -1,6 +1,10 @@
 package kernels
 
-import "github.com/jitllm/jitllm/jit/gpu/ir"
+import (
+	"fmt"
+
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+)
 
 // SubDotEnv is what a matvec's sub-block arithmetic (SubDot) reads of the
 // launch around it: the shape (format, k, rows and tokens a thread, the
@@ -372,4 +376,57 @@ func SubDot(b *ir.Builder, e *SubDotEnv, wIdx, aIdx, subIdx ir.Value) func(pQS, 
 		return w
 	}
 	return stream
+}
+
+// NewSubDotEnv is the SubDotEnv of a dense matvec over s (one expert, one
+// token a thread, no pick) in b, with the sizes, constants and policies its
+// sub-block arithmetic shares, derived from the format as MatVec derives
+// them: the sub-block (a float format's narrowed one, FloatSub), payload and
+// operand words a sub-block, the centering policy at one token a thread, the
+// dot instruction. The caller sets the operand planes and the weights'
+// addressing (PA, PAX, PX, BankRows, WSel, WRowD, WRowSC, WRows), which are
+// its loop nest's. It returns the sub-block count a row walks.
+func NewSubDotEnv(b *ir.Builder, s MatVecShape) (*SubDotEnv, int, error) {
+	qi := s.T.info()
+	if why := DeviceWhyNot(s.T); why != "" {
+		return nil, 0, fmt.Errorf("kernels: SubDot: %s", why)
+	}
+	if s.NTok > 1 || s.Experts > 1 || s.Slots > 1 || s.PickOf > 0 || s.Gate2 || s.In.On {
+		return nil, 0, fmt.Errorf("kernels: SubDot: NewSubDotEnv takes a dense one-token shape")
+	}
+	s.Tok = 1
+	s.Rowt = max(s.Rowt, 1)
+	sub := qi.sub
+	if s.Sub == 0 {
+		s.Sub = FloatSub(s.T, s.K)
+	}
+	if s.Sub > 0 {
+		if qi.float == 0 || s.Sub%4 != 0 || s.Sub > qi.sub || s.K%s.Sub != 0 {
+			return nil, 0, fmt.Errorf("kernels: SubDot: a sub-block of %d over %v at K=%d", s.Sub, s.T, s.K)
+		}
+		sub = s.Sub
+	}
+	if s.K <= 0 || (s.Sub == 0 && s.K%qi.blockE != 0) || s.Rows <= 0 {
+		return nil, 0, fmt.Errorf("kernels: SubDot: K=%d, Rows=%d over %v", s.K, s.Rows, s.T)
+	}
+	nb := s.K / 32
+	e := &SubDotEnv{S: s,
+		Mask: b.Const(ir.U32, 0x0F0F0F0F), Four: b.Const(ir.U32, 4), ZeroF: b.ConstF32(0), One: b.Const(ir.U32, 1),
+		NegBK: b.ConstF32(-qi.biasK), Dot4: b.Dot4Bounded,
+		PW: sub * qi.bits / 32, HW: sub * qi.hi / 32, AWords: sub / 4, NB: nb, SumOff: int64(nb),
+		DExpAdd: func(v ir.Value) ir.Value { return v }, TileOff: func(j int) int64 { return int64(j) }}
+	if qi.signedQ {
+		e.Dot4 = b.Dot4
+	}
+	if qi.float > 0 {
+		e.FW, e.FSub = s.K*qi.float/4, sub*qi.float/4
+	}
+	e.Centered = !s.Center.NoCenter && qi.biasK != 0 && !qi.biasArray && s.Tok >= s.Center.minTok()
+	e.Center = func(v ir.Value) ir.Value { return v }
+	if e.Centered {
+		c := (0x80 - int64(qi.biasK)) & 0xFF
+		cAdd, cXor := b.Const(ir.U32, c|c<<8|c<<16|c<<24), b.Const(ir.U32, int64(0x80808080))
+		e.Center = func(v ir.Value) ir.Value { return b.Xor(ir.U32, b.Add(ir.U32, v, cAdd), cXor) }
+	}
+	return e, s.K / sub, nil
 }
