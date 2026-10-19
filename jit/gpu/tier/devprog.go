@@ -100,6 +100,12 @@ const (
 	dkConcatHeads                  // per-head parts assembled into one query row
 	dkLatentAttend                 // attention over latent rows: the key the row, the value its prefix
 	dkExpertMatVecE                // an expert matvec with its epilogue: its bias, or act(gate)*up (the bank's fused kernel)
+	dkConv1d                       // a causal convolution over the session's convolution state, and its shift
+	dkScan                         // a recurrence's state update over the session's state, by the plan's rule
+	dkGatedNorm                    // a recurrence's output: each head normed, gated by z
+	dkMul                          // an elementwise product of two rows
+	dkConvBias                     // the convolved row plus its bias, activated (Mamba-1's)
+	dkSSMNorm                      // a selective scan's dt, B or C row normed (Mamba-1's)
 	numBaseKinds                   // the fused kinds (devrewrite.go) count on from here
 )
 
@@ -175,6 +181,25 @@ const (
 	slotMIdent                  // bs.mlaIdent: the identity selection 0..NHead-1
 	slotMKVLat                  // the kv latent's prefix: bs.mlaKV read in place, copied out over rows
 	slotHR                      // bs.hr: a router's own norm of the row
+	slotDMixed                  // bs.dMixed: a recurrence's in-projection
+	slotDZ                      // bs.dZ: its output gate
+	slotDBA                     // bs.dBA: its b and a streams (the delta rule's)
+	slotDBRaw                   // bs.dBRaw: its dt stream (Mamba-2's)
+	slotDConv                   // bs.dConv: the in-projection convolved
+	slotDOut                    // bs.dOut: the recurrence's output
+	slotDAct                    // bs.dAct: it normed and gated
+	slotScB                     // bs.scB: a short convolution's input gate
+	slotScC                     // bs.scC: its output gate
+	slotScBx                    // bs.scBx: the gated input
+	slotScY                     // bs.scY: the gated output
+	slotLRQ8                    // bs.dLRa, bs.dLRax: the low-rank projections' own int8 operand
+	slotDLow                    // bs.dLowRank: a low-rank projection's rank-wide middle
+	slotDAlpha                  // bs.dAlpha: the per-channel decay's logits (KDA's)
+	slotM1B                     // bs.m1B: a selective scan's B
+	slotM1C                     // bs.m1C: its C
+	slotM1LowN                  // bs.m1LowN: its dt row normed
+	slotM1BN                    // bs.m1BN: B normed
+	slotM1CN                    // bs.m1CN: C normed
 	numSlots
 )
 
@@ -308,6 +333,44 @@ func (s devSlot) String() string {
 		return "mla_kv_lat"
 	case slotHR:
 		return "hr"
+	case slotDMixed:
+		return "d_mixed"
+	case slotDZ:
+		return "d_z"
+	case slotDBA:
+		return "d_ba"
+	case slotDBRaw:
+		return "d_braw"
+	case slotDConv:
+		return "d_conv"
+	case slotDOut:
+		return "d_out"
+	case slotDAct:
+		return "d_act"
+	case slotScB:
+		return "sc_b"
+	case slotScC:
+		return "sc_c"
+	case slotScBx:
+		return "sc_bx"
+	case slotScY:
+		return "sc_y"
+	case slotLRQ8:
+		return "lr_q8"
+	case slotDLow:
+		return "d_low"
+	case slotDAlpha:
+		return "d_alpha"
+	case slotM1B:
+		return "m1_b"
+	case slotM1C:
+		return "m1_c"
+	case slotM1LowN:
+		return "m1_low_n"
+	case slotM1BN:
+		return "m1_b_n"
+	case slotM1CN:
+		return "m1_c_n"
 	}
 	return ""
 }
@@ -359,6 +422,9 @@ type devProgram struct {
 	experts bool
 	// streamed says an expert bank is paged in per token (dkExpertFetch).
 	streamed bool
+	// scans says the program steps a recurrence: its state's parity flips
+	// once the block's launches are queued (devTier.stepFlip).
+	scans bool
 	// latent says the program attends over latent rows, which it lowers for
 	// one row: rows take the encoder until latent prefill is lowered.
 	latent bool
@@ -432,13 +498,16 @@ func (o devOp) wants(p *devProgram, i int) devType {
 			return devType{Elem: elemU32, Layout: layoutRow, Width: in.Width}
 		}
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
-	case dkSlice, dkView, dkRopeTail, dkLatentWrite, dkConcatHeads, dkLatentAttend:
+	case dkSlice, dkView, dkRopeTail, dkLatentWrite, dkConcatHeads, dkLatentAttend, dkConv1d, dkScan, dkGatedNorm, dkMul, dkConvBias, dkSSMNorm:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkExpertFetch, dkGroupByExpert:
 		return devType{Elem: elemU32, Layout: layoutRow, Width: in.Width}
 	case dkRouterLogits, dkRouterBias, dkGroupMask, dkTopK, dkRouteWeights, dkCombine, dkGateLogit, dkGatedAdd:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkMatVec, dkQKV, dkGate2:
+		if i > 0 {
+			return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width} // a low-rank operand's float source
+		}
 		return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
 	case dkMatVecRes, dkMatVecGate:
 		if i == 0 {
@@ -714,6 +783,166 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{a}, Out: []devVal{out}, Role: role, W: wi})
 			vals[o.Out[0]] = out
 		case graph.OpRecurrent:
+			if rr := p.Recurrent; prog.slots[in(0)] == slotH && rr.ShortConv && !l.centred && l.k3 == nil && l.q4e == nil {
+				// A short convolution (LFM2's): x, B and C projected, B*x
+				// convolved over the session's state, gated by C, projected
+				// out.
+				for _, w := range [...]int{posSSMInProj, posSSMGate, posSSMBA, posSSMOut} {
+					if w >= len(l.rs) || *l.rs[w] == nil {
+						return nil, "a short convolution whose projections the block's device copy does not hold"
+					}
+				}
+				ch := f32(rr.Chans)
+				q := operand(in(0), i, false)
+				mv := func(nm string, w int, s devSlot) devVal {
+					v := prog.val(name(0)+nm, ch, s)
+					prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{q}, Out: []devVal{v}, W: w})
+					return v
+				}
+				x, b, c := mv(".x", posSSMInProj, slotDMixed), mv(".b", posSSMGate, slotScB), mv(".c", posSSMBA, slotScC)
+				bx := prog.val(name(0)+".bx", ch, slotScBx)
+				prog.ops = append(prog.ops, devOp{Kind: dkMul, Src: []int{i}, In: []devVal{b, x}, Out: []devVal{bx}})
+				conv := prog.val(name(0)+".conv", ch, slotDConv)
+				prog.ops = append(prog.ops, devOp{Kind: dkConv1d, Src: []int{i}, In: []devVal{bx}, Out: []devVal{conv}})
+				y := prog.val(name(0)+".y", ch, slotScY)
+				prog.ops = append(prog.ops, devOp{Kind: dkMul, Src: []int{i}, In: []devVal{c, conv}, Out: []devVal{y}})
+				qy := operand(y, i, false)
+				out := prog.val(name(0), f32(ne), slotOut)
+				prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{qy}, Out: []devVal{out}, W: posSSMOut})
+				vals[o.Out[0]] = out
+				prog.scans = true
+				continue
+			}
+			if rr := p.Recurrent; prog.slots[in(0)] == slotH && rr.Mamba1 && !l.centred && l.k3 == nil && l.q4e == nil {
+				// Mamba-1's selective scan: x and z projected, x convolved
+				// over the session's state and biased, dt, B and C off x (dt
+				// through its own low-rank operand), each optionally normed,
+				// the scan, y*silu(z), projected out.
+				for _, w := range [...]int{posSSMInProj, posSSMGate, posSSMOut, posLowA, posLowB, posGateA, posGateB} {
+					if w >= len(l.rs) || *l.rs[w] == nil {
+						return nil, "a selective scan whose projections the block's device copy does not hold"
+					}
+				}
+				inner := rr.VHeads * rr.VDim
+				mv := func(nm string, q devVal, w int, s devSlot, width int, extra ...devVal) devVal {
+					v := prog.val(name(0)+nm, f32(width), s)
+					prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: append([]devVal{q}, extra...), Out: []devVal{v}, W: w})
+					return v
+				}
+				q := operand(in(0), i, false)
+				x, z := mv(".x", q, posSSMInProj, slotDMixed, rr.Chans), mv(".z", q, posSSMGate, slotDZ, inner)
+				conv := prog.val(name(0)+".conv", f32(rr.Chans), slotDConv)
+				prog.ops = append(prog.ops, devOp{Kind: dkConv1d, Src: []int{i}, In: []devVal{x}, Out: []devVal{conv}})
+				xa := prog.val(name(0)+".xa", f32(rr.Chans), slotDMixed)
+				prog.ops = append(prog.ops, devOp{Kind: dkConvBias, Src: []int{i}, In: []devVal{conv}, Out: []devVal{xa}})
+				qx := operand(xa, i, false)
+				low := mv(".dt_low", qx, posLowA, slotDLow, l.ms[posLowA].rows)
+				b, c := mv(".b", qx, posGateA, slotM1B, l.ms[posGateA].rows), mv(".c", qx, posGateB, slotM1C, l.ms[posGateB].rows)
+				if l.m1DtN != nil {
+					norm := func(v devVal, s devSlot) devVal {
+						n := prog.val(prog.names[v]+".n", prog.vals[v], s)
+						prog.ops = append(prog.ops, devOp{Kind: dkSSMNorm, Src: []int{i}, In: []devVal{v}, Out: []devVal{n}})
+						return n
+					}
+					low, b, c = norm(low, slotM1LowN), norm(b, slotM1BN), norm(c, slotM1CN)
+				}
+				lq := prog.val(prog.names[low]+".q8", devType{Elem: elemQ8, Layout: layoutRow, Width: prog.vals[low].Width}, slotLRQ8)
+				prog.ops = append(prog.ops, devOp{Kind: dkQuant, Src: []int{i}, In: []devVal{low}, Out: []devVal{lq}})
+				dt := mv(".dt", lq, posLowB, slotDBRaw, l.ms[posLowB].rows, low)
+				st := prog.val(name(0)+".out", f32(inner), slotDOut)
+				prog.ops = append(prog.ops, devOp{Kind: dkScan, Src: []int{i}, In: []devVal{xa, b, c, dt}, Out: []devVal{st}})
+				act := prog.val(name(0)+".act", f32(inner), slotDAct)
+				prog.ops = append(prog.ops, devOp{Kind: dkGatedNorm, Src: []int{i}, In: []devVal{st, z}, Out: []devVal{act}, Staged: true})
+				qa := operand(act, i, false)
+				out := prog.val(name(0), f32(ne), slotOut)
+				prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{qa}, Out: []devVal{out}, W: posSSMOut})
+				vals[o.Out[0]] = out
+				prog.scans = true
+				continue
+			}
+			if rr := p.Recurrent; prog.slots[in(0)] == slotH && rr.ChanDecay && !l.centred && l.k3 == nil && l.q4e == nil {
+				// Kimi Delta Attention: the fused in-projection, the output
+				// and decay gates each through a low-rank pair (the second
+				// matvec reading its own int8 operand), beta's logits, the
+				// convolution and the per-channel scan over the session's
+				// state, the sigmoid-gated norm, projected out.
+				for _, w := range [...]int{posSSMInProj, posSSMBA, posSSMOut, posLowA, posLowB, posGateA, posGateB} {
+					if w >= len(l.rs) || *l.rs[w] == nil {
+						return nil, "a delta rule whose projections the block's device copy does not hold"
+					}
+				}
+				inner := rr.VHeads * rr.VDim
+				q := operand(in(0), i, false)
+				mv := func(nm string, q devVal, w int, s devSlot, width int, extra ...devVal) devVal {
+					v := prog.val(name(0)+nm, f32(width), s)
+					prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: append([]devVal{q}, extra...), Out: []devVal{v}, W: w})
+					return v
+				}
+				lowRank := func(nm string, wa, wb int, s devSlot, width int) devVal {
+					low := mv(nm+"_low", q, wa, slotDLow, l.ms[wa].rows)
+					lq := prog.val(prog.names[low]+".q8", devType{Elem: elemQ8, Layout: layoutRow, Width: prog.vals[low].Width}, slotLRQ8)
+					prog.ops = append(prog.ops, devOp{Kind: dkQuant, Src: []int{i}, In: []devVal{low}, Out: []devVal{lq}})
+					return mv(nm, lq, wb, s, width, low)
+				}
+				mixed := mv(".mixed", q, posSSMInProj, slotDMixed, rr.Chans)
+				z := lowRank(".z", posGateA, posGateB, slotDZ, inner)
+				alpha := lowRank(".alpha", posLowA, posLowB, slotDAlpha, l.ms[posLowB].rows)
+				beta := mv(".beta", q, posSSMBA, slotDBRaw, l.ms[posSSMBA].rows)
+				conv := prog.val(name(0)+".conv", f32(rr.Chans), slotDConv)
+				prog.ops = append(prog.ops, devOp{Kind: dkConv1d, Src: []int{i}, In: []devVal{mixed}, Out: []devVal{conv}})
+				st := prog.val(name(0)+".out", f32(inner), slotDOut)
+				prog.ops = append(prog.ops, devOp{Kind: dkScan, Src: []int{i}, In: []devVal{conv, alpha, beta}, Out: []devVal{st}})
+				act := prog.val(name(0)+".act", f32(inner), slotDAct)
+				prog.ops = append(prog.ops, devOp{Kind: dkGatedNorm, Src: []int{i}, In: []devVal{st, z}, Out: []devVal{act}, Staged: true})
+				qa := operand(act, i, false)
+				out := prog.val(name(0), f32(ne), slotOut)
+				prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{qa}, Out: []devVal{out}, W: posSSMOut})
+				vals[o.Out[0]] = out
+				prog.scans = true
+				continue
+			}
+			if rr := p.Recurrent; prog.slots[in(0)] == slotH && !l.centred && l.k3 == nil && l.q4e == nil &&
+				!rr.ShortConv && !rr.Mamba1 && !rr.ChanDecay {
+				// The delta rule or Mamba-2's SSD as primitives: the
+				// projections by role (a mixer beside an attention has its own
+				// in-projection), the convolution and the scan over the
+				// session's state, the gated norm, the out projection.
+				// The tier's own slots for a recurrence's four projections
+				// (layer.tensors' order), until the positional list goes.
+				inW, zW, baW, oW, outSlot := posSSMInProj, posSSMGate, posSSMBA, posSSMOut, slotOut
+				if rr.WithAttn {
+					inW, outSlot = posSSMIn, slotSide
+				}
+				for _, w := range [...]int{inW, zW, baW, oW} {
+					if w >= len(l.rs) || *l.rs[w] == nil {
+						return nil, "a recurrence whose projections the block's device copy does not hold"
+					}
+				}
+				inner := rr.VHeads * rr.VDim
+				q := operand(in(0), i, false)
+				mixed := prog.val(name(0)+".mixed", f32(rr.Chans), slotDMixed)
+				prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{q}, Out: []devVal{mixed}, W: inW})
+				z := prog.val(name(0)+".z", f32(inner), slotDZ)
+				prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{q}, Out: []devVal{z}, W: zW})
+				gs := slotDBA
+				if rr.SSD {
+					gs = slotDBRaw
+				}
+				gates := prog.val(name(0)+".gates", f32(l.ms[baW].rows), gs)
+				prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{q}, Out: []devVal{gates}, W: baW})
+				conv := prog.val(name(0)+".conv", f32(rr.Chans), slotDConv)
+				prog.ops = append(prog.ops, devOp{Kind: dkConv1d, Src: []int{i}, In: []devVal{mixed}, Out: []devVal{conv}})
+				st := prog.val(name(0)+".out", f32(inner), slotDOut)
+				prog.ops = append(prog.ops, devOp{Kind: dkScan, Src: []int{i}, In: []devVal{conv, gates}, Out: []devVal{st}})
+				act := prog.val(name(0)+".act", f32(inner), slotDAct)
+				prog.ops = append(prog.ops, devOp{Kind: dkGatedNorm, Src: []int{i}, In: []devVal{st, z}, Out: []devVal{act}, Staged: true})
+				qa := operand(act, i, false)
+				out := prog.val(name(0), f32(ne), outSlot)
+				prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{qa}, Out: []devVal{out}, W: oW})
+				vals[o.Out[0]] = out
+				prog.scans = true
+				continue
+			}
 			// emitLinear runs the block's pre-norm and quantize itself, from
 			// the block's row, and writes the mixer's output: the norm the
 			// graph states before it goes into this op.
@@ -1401,3 +1630,21 @@ func actSlot(s devSlot) devSlot {
 // constSlot reports that slot s holds a constant the block's scratch is
 // built with: read without a writer.
 func constSlot(s devSlot) bool { return s == slotOnes || s == slotMIdent }
+
+// A recurrence's projections in the tier's positional list (layer.tensors'
+// order): the in-projection (the fused q|k|v, or x|B|C), the output gate,
+// the gate streams, the out projection, and a mixer's own in-projection
+// beside an attention.
+const (
+	posSSMInProj = 0
+	posSSMGate   = 10
+	posSSMBA     = 11
+	posSSMOut    = 12
+	posSSMIn     = 29
+	// The low-rank pairs (KDA's decay and output gates; Mamba-1's dt, B
+	// and C off x ride the same four).
+	posLowA  = 18
+	posLowB  = 19
+	posGateA = 20
+	posGateB = 21
+)

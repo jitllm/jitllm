@@ -901,7 +901,11 @@ func (g *devTier) layersSession(s backend.Session) {
 			slotSelW: bs.ident, slotOnes: bs.wOnes,
 			slotMQA: bs.mlaQA, slotMQAn: bs.mlaQAn, slotMKV: bs.mlaKV, slotMKVn: bs.mlaKVn, slotMNope: bs.mlaNope,
 			slotMPE: bs.mlaPE, slotMPErot: bs.mlaPErot, slotMKPE: bs.mlaKPE, slotMAbsRaw: bs.mlaAbsRaw, slotMAbs: bs.mlaAbs,
-			slotMAcc: bs.mlaAcc, slotMOut: bs.mlaOut, slotMIdent: bs.mlaIdent, slotMKVLat: bs.mlaKV, slotHR: bs.hr}
+			slotMAcc: bs.mlaAcc, slotMOut: bs.mlaOut, slotMIdent: bs.mlaIdent, slotMKVLat: bs.mlaKV, slotHR: bs.hr,
+			slotDMixed: bs.dMixed, slotDZ: bs.dZ, slotDBA: bs.dBA, slotDBRaw: bs.dBRaw, slotDConv: bs.dConv,
+			slotDOut: bs.dOut, slotDAct: bs.dAct, slotScB: bs.scB, slotScC: bs.scC, slotScBx: bs.scBx, slotScY: bs.scY,
+			slotLRQ8: bs.dLRa, slotDLow: bs.dLowRank, slotDAlpha: bs.dAlpha, slotM1B: bs.m1B, slotM1C: bs.m1C,
+			slotM1LowN: bs.m1LowN, slotM1BN: bs.m1BN, slotM1CN: bs.m1CN}
 		// The rewrites legal at one row, on a prompt chunk and on a ragged
 		// step differ: each class keeps its own fused program.
 		fc := &l.progOne
@@ -1035,6 +1039,15 @@ func (g *devTier) layersSession(s backend.Session) {
 					norm(at(o.In[0]), o.V, o.VB)
 				}
 			case dkQuant:
+				if prog.slots[o.Out[0]] == slotLRQ8 {
+					// The low-rank projections' own operand (bs.dLRa, dLRax).
+					k, n := bs.quantLR, bs.rec.KDim
+					if bs.rec.Mamba1 {
+						k, n = bs.m1Quant, bs.rec.Rank
+					}
+					lc.la(k, kernels.QuantizeThreads(R*pad32(n)/32), at(o.In[0]), bs.dLRa, bs.dLRax)
+					break
+				}
 				src := at(o.In[0])
 				fsrc = src
 				switch w := prog.vals[o.In[0]].Width; {
@@ -1044,6 +1057,8 @@ func (g *devTier) layersSession(s backend.Session) {
 					lc.la(bs.quantX, kernels.QuantizeThreads(bs.nUsed*pad32(p.NFFNExp)/32), src, bs.a, bs.ax)
 				case prog.slots[o.In[0]] == slotShAct:
 					lc.la(bs.shQuant, kernels.QuantizeThreads(R*bs.nShExp/32), src, bs.a, bs.ax)
+				case prog.slots[o.In[0]] == slotDAct || prog.slots[o.In[0]] == slotDMixed:
+					lc.la(bs.quantD, kernels.QuantizeThreads(R*pad32(bs.rec.VHeads*bs.rec.VDim)/32), src, bs.a, bs.ax)
 				case rowsMLA && prog.slots[o.In[0]] == slotMQAn:
 					lc.la(ml.qaQuant, kernels.QuantizeThreads(R*ml.qlr/32), src, bs.a, bs.ax)
 				case rowsMLA && prog.slots[o.In[0]] == slotMNope:
@@ -1072,6 +1087,10 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 			case dkMatVec:
 				m, r := *l.ms[o.W], *l.rs[o.W]
+				if prog.slots[o.In[0]] == slotLRQ8 {
+					mvrunAct(m, r, at(o.Out[0]), bs.dLRa, bs.dLRax, at(o.In[1]))
+					break
+				}
 				if prog.f16 {
 					// The GEMM converts this row, or finds it written.
 					fsrc = at(o.In[0])
@@ -1690,7 +1709,177 @@ func (g *devTier) layersSession(s backend.Session) {
 				lc.la(pk.ropeQKV, kernels.RoPEQKVPagedThreads(p.NHead, p.NKVHead, p.HeadDim, p.NRot, R, g.KVF16),
 					at(o.In[0]), rcs, qOff, at(o.Out[0]), at(o.In[1]), pl.k, at(o.In[2]), pl.v, pl.tab, pk.pRow)
 				g.FusedLaunches++
+			case dkConv1d, dkScan:
+				// The session's state, double-buffered: this step reads one
+				// half and writes the other (the shared-state mode writes the
+				// device's scratch and copies it home).
+				par, has := g.stepPar(sid, l)
+				pool := l.pool
+				if !has || pool == nil {
+					if err == nil {
+						err = fmt.Errorf("tier: block %d has no recurrent state for session %d", li, sid)
+					}
+					return
+				}
+				rr := bs.rec
+				var rk *ragLinear
+				if rag != nil {
+					if rk = bs.ragLin[len(rag.pos)]; rk == nil {
+						if err == nil {
+							err = fmt.Errorf("tier: block %d: no batched recurrent step for %d sequences", li, len(rag.pos))
+						}
+						return
+					}
+				}
+				if o.Kind == dkConv1d {
+					inC, outC := pool.c[par], pool.c[1-par]
+					if rk != nil {
+						lc.la(rk.conv, len(rag.pos)*rr.Chans, inC, at(o.In[0]), l.ssmConv1d, at(o.Out[0]), bs.dRows)
+						lc.la(rk.shift, len(rag.runs)*(rr.Conv-1)*rr.Chans, inC, at(o.In[0]), outC, bs.dRows)
+					} else {
+						lc.la(bs.convRows, R*rr.Chans, inC, at(o.In[0]), l.ssmConv1d, at(o.Out[0]), bs.dRows)
+						lc.la(bs.convShift, (rr.Conv-1)*rr.Chans, inC, at(o.In[0]), outC, bs.dRows)
+					}
+					break
+				}
+				inS, outS := pool.s[par], pool.s[1-par]
+				if g.recShared {
+					inS, outS = pool.s[0], g.recNext
+				}
+				seqs := 1
+				switch {
+				case rr.Mamba1 && rk != nil:
+					seqs = len(rag.pos)
+					lc.la(rk.delta, len(rag.runs)*rk.perRun, inS, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.In[3]),
+						l.ssmDt, l.ssmA, l.ssmD, at(o.Out[0]), outS, bs.dRows)
+					g.LinearFused++
+				case rr.Mamba1:
+					lc.la(bs.m1Scan, bs.scanThreads, inS, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.In[3]),
+						l.ssmDt, l.ssmA, l.ssmD, at(o.Out[0]), outS, bs.dRows)
+					g.LinearFused++
+				case rr.ChanDecay && rk != nil:
+					seqs = len(rag.pos)
+					lc.la(rk.delta, len(rag.runs)*rk.perRun, inS, at(o.In[0]), at(o.In[1]), at(o.In[2]),
+						l.ssmDt, l.ssmA, at(o.Out[0]), outS, bs.dRows)
+					g.LinearFused++
+				case rr.ChanDecay && bs.deltaFused != nil:
+					lc.la(bs.deltaFused, bs.scanThreads, inS, at(o.In[0]), at(o.In[1]), at(o.In[2]),
+						l.ssmDt, l.ssmA, at(o.Out[0]), outS, bs.dRows)
+					g.LinearFused++
+				case rk != nil:
+					seqs = len(rag.pos)
+					if rr.SSD {
+						lc.la(rk.delta, len(rag.runs)*rk.perRun, inS, at(o.In[0]), at(o.In[1]), l.ssmDt, l.ssmA, l.ssmCB, l.ssmD,
+							at(o.Out[0]), outS, bs.dRows)
+					} else {
+						lc.la(rk.delta, len(rag.runs)*rk.perRun, inS, at(o.In[0]), at(o.In[1]), l.ssmDt, l.ssmA,
+							at(o.Out[0]), outS, bs.dRows)
+					}
+					g.LinearFused++
+					if rk.lanes == 1 {
+						g.LinearRowsScalar++
+					}
+					if g.rag.sid != nil {
+						g.SessionLinear++
+					}
+				case rr.SSD:
+					lc.la(bs.ssdScan, bs.scanThreads, inS, at(o.In[0]), at(o.In[1]), l.ssmDt, l.ssmA, l.ssmCB, l.ssmD,
+						at(o.Out[0]), outS, bs.dRows)
+					g.LinearFused++
+				case bs.deltaFused != nil:
+					lc.la(bs.deltaFused, bs.scanThreads, inS, at(o.In[0]), at(o.In[1]), l.ssmDt, l.ssmA,
+						at(o.Out[0]), outS, bs.dRows)
+					g.LinearFused++
+				default:
+					g.deltaUnfused(lc, bs, l, li, R, inS, outS, &err)
+				}
+				if rk == nil && R > 1 {
+					g.LinearBatched++
+				}
+				if g.recShared {
+					cp := g.recCopies[[2]int{rr.StateLen, seqs}]
+					if cp == nil && err == nil {
+						err = fmt.Errorf("tier: block %d: no copy home for %d shared recurrent state(s)", li, seqs)
+					}
+					lc.la(cp, seqs*rr.StateLen, g.recNext, pool.s[0], bs.dRows)
+				}
+			case dkConvBias:
+				lc.la(bs.m1Bias, R*bs.rec.Chans, at(o.In[0]), l.ssmCB, at(o.Out[0]))
+			case dkSSMNorm:
+				switch prog.slots[o.Out[0]] {
+				case slotM1LowN:
+					dg, dw := headNormGeom(bs.m1NormDtL, R)
+					if err == nil {
+						err = lc.launch(bs.m1NormDt, dg, dw, at(o.In[0]), l.m1DtN, at(o.Out[0]))
+					}
+				default:
+					w := l.m1BN
+					if prog.slots[o.Out[0]] == slotM1CN {
+						w = l.m1CN
+					}
+					cg, cw := headNormGeom(bs.m1NormBCL, R)
+					if err == nil {
+						err = lc.launch(bs.m1NormBC, cg, cw, at(o.In[0]), w, at(o.Out[0]))
+					}
+				}
+			case dkMul:
+				lc.la(bs.scMul, R*bs.rec.Chans, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+			case dkGatedNorm:
+				rr := bs.rec
+				inner := rr.VHeads * rr.VDim
+				if rr.Mamba1 {
+					// y*silu(z): the selective scan has no output norm.
+					lc.la(bs.outActMul, R*inner, at(o.In[1]), at(o.In[0]), at(o.Out[0]))
+					break
+				}
+				if rr.SSD {
+					ng, nwid := headNormGeom(bs.ssdNormL, R*rr.NormGroups)
+					switch {
+					case rr.NoNorm:
+						lc.la(bs.outActMul, R*inner, at(o.In[1]), at(o.In[0]), at(o.Out[0]))
+					case rr.NormBeforeGate:
+						if err == nil {
+							err = lc.launch(bs.ssdNorm, ng, nwid, at(o.In[0]), l.ssmNorm, bs.dOutN)
+						}
+						lc.la(bs.outActMul, R*inner, at(o.In[1]), bs.dOutN, at(o.Out[0]))
+					default:
+						lc.la(bs.outActMul, R*inner, at(o.In[1]), at(o.In[0]), bs.dOutN)
+						if err == nil {
+							err = lc.launch(bs.ssdNorm, ng, nwid, bs.dOutN, l.ssmNorm, at(o.Out[0]))
+						}
+					}
+					break
+				}
+				vg, vwid := headNormGeom(bs.outNormL, R*rr.VHeads)
+				if bs.outNormGate != nil && g.normGateOn(l, R == 1) {
+					// The norm's epilogue gates it: the normalised row is never
+					// written.
+					in, z := at(o.In[0]), at(o.In[1])
+					if g.normGateBroken() {
+						in, z = z, in
+					}
+					if err == nil {
+						err = lc.launch(bs.outNormGate, vg, vwid, in, l.ssmNorm, z, at(o.Out[0]))
+					}
+					g.NormGateRuns++
+					break
+				}
+				if err == nil {
+					err = lc.launch(bs.outNorm, vg, vwid, at(o.In[0]), l.ssmNorm, bs.dOutN)
+				}
+				if rr.ChanDecay || rr.SigmoidGate {
+					lc.la(bs.outSigMul, R*inner, at(o.In[1]), bs.dOutN, at(o.Out[0]))
+				} else {
+					lc.la(bs.outActMul, R*inner, at(o.In[1]), bs.dOutN, at(o.Out[0]))
+				}
 			}
+		}
+		// A recurrence's state parity flips once its launches are queued, and
+		// only while the submission is good: a block past a failure must not
+		// flip, or the next token reads a half nothing wrote.
+		if prog.scans && err == nil {
+			g.stepFlip(sid, l)
+			g.recSteps++
 		}
 		g.ProgBlocks++
 	}

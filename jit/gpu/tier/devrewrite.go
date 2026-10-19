@@ -124,6 +124,18 @@ func (k devKind) String() string {
 		return "latent_attend"
 	case dkExpertMatVecE:
 		return "expert_matvec_e"
+	case dkConv1d:
+		return "conv1d"
+	case dkScan:
+		return "scan"
+	case dkGatedNorm:
+		return "gated_norm"
+	case dkMul:
+		return "mul"
+	case dkConvBias:
+		return "conv_bias"
+	case dkSSMNorm:
+		return "ssm_norm"
 	case dkNormQuant:
 		return "norm_quant"
 	case dkAddNorm:
