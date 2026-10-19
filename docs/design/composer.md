@@ -541,6 +541,42 @@ a fusion removed takes no buffer.
    graph features, each moving one encoder branch into the program.
 5. D5. The encoder's block body deleted; the program is the only path.
 
+**Primitives only: the program is a compiler, not a wrapper.** A program op
+that calls one of the encoder's sequences (`mixFFN`, `emitLinear`, `emitMLA`,
+the per-layer embedding) compiles nothing: it cannot be fused, reordered or
+re-tiled, a new model that arranges the same mechanisms differently does not
+build, and the encoder cannot be deleted while the program calls into it. The
+coverage those ops reported counted wrapped blocks. The program is held to
+four things instead:
+
+1. **A primitive set**, which every graph op decomposes into, in
+   `engine/graph`, each composition held to the host oracle: matvec over any
+   weight format (per row, per pair of a selection, grouped); norm (RMS,
+   Layer, per head); elementwise maps with any activation and any arity;
+   reductions (sum, max, mean and variance); softmax and top-k; gather and
+   scatter (routing, experts, embeddings, streams); attention over a paged
+   history (dense, windowed, latent, selecting); scan (the recurrences);
+   convolution (the towers, audio's and vision's). A vision tower, an audio
+   encoder and a text block are compositions of the same set.
+2. **Weights by role, end to end.** The graph's bindings name roles; the
+   model hands the device a block's tensors by role, as the container
+   names them; the tier uploads what the graph binds; a program op resolves
+   its weight to an index at build. No per-mechanism field on either side.
+3. **Runtime ops the lowering inserts, by property.** An expert matvec over
+   a paged bank is preceded by a fetch (the selection home, the sheets
+   filled, the selection rewritten to cache slots), whatever model it is:
+   the paging principle as an op, not as a branch of one model's sequence.
+4. **Buffers by liveness.** Values carry no slot until rewriting is done;
+   slots are coloured over the straight-line program with RULE 13 as the
+   constraint, so a new composition needs no new scratch name.
+
+Fusions stay rules over shapes, as every compiler's are. The gate: the
+coverage report counts a block only when its program holds primitives alone,
+and a ratchet of the composite kinds still in the program only shrinks.
+Order: weights by role; the mixture's primitives (route, top-k, per-pair
+matvec, combine, the fetch); latent attention; the scans; streams; the
+per-layer embedding; convolution; then D5.
+
 **What to take from MLIR and IREE next.** Read against the sparse checkouts of
 `llvm-project/mlir` and IREE's `DispatchCreation`, `Dialect/Flow` and
 `Codegen/Common`, with the program as built (`jit/gpu/tier/devprog.go`,

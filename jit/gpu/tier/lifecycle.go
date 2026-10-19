@@ -3,6 +3,9 @@ package tier
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/format/jlm"
+	"slices"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
@@ -96,7 +99,7 @@ func (l *layer) auxBufs() []backend.Buf {
 		l.xielu,                                            // Apertus's activation numbers
 		l.nFFN2, l.nPost1, l.nPost2, l.nRouter, l.expScale, // Gemma 4's mixture block
 		l.nPLE, l.pleOff, // Gemma 4's per-layer embedding
-	), append(append(l.ds4.bufs(), l.k3.bufs()...), l.q4e.bufs()...)...) // DeepSeek V4's, Kimi-K3's, Qwen3.8-Flash-Next's
+	), append(append(append(l.ds4.bufs(), l.k3.bufs()...), l.q4e.bufs()...), l.vecOwned...)...) // DeepSeek V4's, Kimi-K3's, Qwen3.8-Flash-Next's, the program's vectors
 }
 
 // dropLayerLocal frees the buffers PrepLayer allocates fresh for one block and
@@ -566,7 +569,7 @@ func (g *devTier) PrewarmLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool
 	any := false
 	// weightList, not a second copy of it: a matrix left off would silently
 	// never prewarm.
-	for _, x := range weightList(w) {
+	for _, x := range weightList(nil, w, nil) {
 		q, ok := quantOf(x.T)
 		if !ok || x.Rows <= 0 || x.K <= 0 || len(x.Data) == 0 ||
 			(x.K%q.Elems() != 0 && subFor(q, x.K) == 0) {
@@ -584,8 +587,11 @@ func (g *devTier) PrewarmLayer(li int, p *nn.LayerPlan, w *nn.LayerWeights) bool
 // One list, for tensors()' reason: prepLayer builds it to decide and upload,
 // and pageIn rebuilds it after Ensure re-points the slices. Two copies of the
 // order could upload one matrix into another's slot with every size right.
-func weightList(w *nn.LayerWeights) []nn.Weight {
-	return []nn.Weight{w.Wq, w.Wk, w.Wv, w.Wo, w.Gate, w.Up, w.Down,
+//
+// It appends into dst[:0], so a caller holding a buffer of the block's
+// length (a page-in, page.got) allocates nothing.
+func weightList(dst []nn.Weight, w *nn.LayerWeights, bound []jlm.Role) []nn.Weight {
+	ws := append(dst[:0], w.Wq, w.Wk, w.Wv, w.Wo, w.Gate, w.Up, w.Down,
 		w.ShGate, w.ShUp, w.ShDown,
 		w.SSM.Gate, w.SSM.BA, w.SSM.Out,
 		w.Wqa, w.Wqb, w.Wkva, w.Wkb, w.Wvb,
@@ -597,5 +603,124 @@ func weightList(w *nn.LayerWeights) []nn.Weight {
 		w.WoA, w.CompKV, w.CompGate, w.IdxCompKV, w.IdxCompGate,
 		w.MLAGate, w.RoutedDown, w.RoutedUp,
 		w.HCAttn.Down, w.HCAttn.Up, w.HCAttn.Inject, w.HCFFN.Down, w.HCFFN.Up, w.HCFFN.Inject,
-		w.NGram.Key, w.NGram.Value}
+		w.NGram.Key, w.NGram.Value)
+	// Then the matrices the block's program binds that the positions do not
+	// hold (boundRoles), in All's order, which the model keeps fixed for a
+	// block. A matrix nothing binds is not uploaded twice.
+	for _, a := range w.All {
+		if slices.Contains(bound, a.Role) && !holds(ws[:numPositional], a) {
+			ws = append(ws, a)
+		}
+	}
+	return ws
+}
+
+// boundRoles is every role a matvec of block graph g binds: what the device
+// program reads by role. nil without a graph.
+func boundRoles(g *graph.Graph) []jlm.Role {
+	if g == nil {
+		return nil
+	}
+	var out []jlm.Role
+	for _, o := range g.Ops {
+		if (o.Kind == graph.OpMatVec || o.Kind == graph.OpExpertMatVec) && len(o.Weight) > 0 &&
+			!slices.Contains(out, o.Weight[0].Role) {
+			out = append(out, o.Weight[0].Role)
+		}
+	}
+	return out
+}
+
+// holds reports whether ws has a weight over a's memory.
+func holds(ws []nn.Weight, a nn.Weight) bool {
+	for _, x := range ws {
+		if sameWeight(x, a) {
+			return true
+		}
+	}
+	return false
+}
+
+// sameWeight reports whether two weights are one tensor's: the same first
+// byte of their payload, or of their packed planes.
+func sameWeight(x, a nn.Weight) bool {
+	switch {
+	case len(x.Data) != 0 && len(a.Data) != 0:
+		return &x.Data[0] == &a.Data[0] && x.Rows == a.Rows
+	case x.Packed != nil && a.Packed != nil && len(x.Packed.QS) != 0 && len(a.Packed.QS) != 0:
+		return &x.Packed.QS[0] == &a.Packed.QS[0] && x.Rows == a.Rows
+	}
+	return false
+}
+
+// roleBuf is a vector of the block by role, on the device.
+type roleBuf struct {
+	role jlm.Role
+	b    backend.Buf
+}
+
+// upload is a host vector and the buffer it was uploaded into.
+type upload struct {
+	p *float32
+	n int
+	b backend.Buf
+}
+
+// boundVecRoles is every role a binding of block graph g names that could be
+// a vector -- a norm's weight and bias, a projection's bias, a scale, a
+// gate stored as one row -- of which prep uploads those the block holds as
+// vectors (nn.LayerWeights.Vecs).
+func boundVecRoles(g *graph.Graph) []jlm.Role {
+	if g == nil {
+		return nil
+	}
+	var out []jlm.Role
+	for _, o := range g.Ops {
+		for _, b := range o.Weight {
+			if b.Sheets == 0 && !slices.Contains(out, b.Role) {
+				out = append(out, b.Role)
+			}
+		}
+	}
+	return out
+}
+
+// vecOf is block l's vector of role r on the device, or nil.
+func (l *layer) vecOf(r jlm.Role) backend.Buf {
+	for _, v := range l.vecs {
+		if v.role == r {
+			return v.b
+		}
+	}
+	return nil
+}
+
+// roleAt is a matrix of the block by role: its index in the block's list.
+type roleAt struct {
+	role jlm.Role
+	i    int
+}
+
+// rolesOf names every matrix of ws: its own role where it carries one, else
+// the role of the All entry over the same memory.
+func rolesOf(ws, all []nn.Weight) []roleAt {
+	out := make([]roleAt, 0, len(all))
+	for i, x := range ws {
+		if len(x.Data) == 0 && x.Packed == nil {
+			continue
+		}
+		r := x.Role
+		if r == jlm.RoleNone {
+			for _, a := range all {
+				if sameWeight(x, a) {
+					r = a.Role
+					break
+				}
+			}
+		}
+		if r != jlm.RoleNone {
+			out = append(out, roleAt{r, i})
+		}
+	}
+	return out
 }

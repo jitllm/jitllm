@@ -209,8 +209,9 @@ type ds4Layer struct {
 
 // tensors is every matrix the block holds beyond the common ones, for
 // bindPacked and releaseLayer.
-func (d *ds4Layer) tensors() []*tensor {
-	return []*tensor{&d.attnFn, &d.ffnFn, &d.woA, &d.compKV, &d.compGate, &d.idxCompKV, &d.idxCompGate}
+// An array, so binding them on the decode path allocates nothing.
+func (d *ds4Layer) tensors() [7]*tensor {
+	return [7]*tensor{&d.attnFn, &d.ffnFn, &d.woA, &d.compKV, &d.compGate, &d.idxCompKV, &d.idxCompGate}
 }
 
 // ds4Head is the model-level stream collapse before the output norm.

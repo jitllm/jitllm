@@ -2,6 +2,7 @@ package tier
 
 import (
 	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
@@ -30,7 +31,25 @@ type layer struct {
 	// (devrewrite.go).
 	progOne, progRows, progRag progFused
 	wq, wk, wv, wo             *resident
-	gate, up, down             *resident
+	// extra and mvExtra are the matrices the block holds beyond the
+	// positional list (nn.LayerWeights.All, matched by memory), uploaded and
+	// paged with it; roles names every uploaded matrix of the block, the
+	// positional ones too, for the device program's binding by role.
+	extra   []*resident
+	mvExtra []mv
+	roles   []roleAt
+	bound   []jlm.Role // the roles the block's program binds (boundRoles)
+	// rs and ms are the block's matrices and their matvecs in list order
+	// (tensors, prep's ms): pointers to the layer's own fields, so a program
+	// op indexes them without a switch.
+	rs []**resident
+	ms []*mv
+	// vecs is every vector the program binds by role (prep: a positional
+	// upload's buffer where it is the same host floats); vecOwned is those
+	// uploaded for it alone, freed with the layer (auxBufs).
+	vecs           []roleBuf
+	vecOwned       []backend.Buf
+	gate, up, down *resident
 	// conv is a convolutional tower block's program and vectors (conv.go),
 	// nil for every other block.
 	conv *convLayer

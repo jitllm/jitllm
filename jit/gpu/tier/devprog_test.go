@@ -27,3 +27,23 @@ func TestEveryDevKindHasAName(t *testing.T) {
 		t.Errorf("%d rewrites: rwSet holds 64", n)
 	}
 }
+
+// TestCompositeKindsOnlyShrink pins the kinds that still run an encoder
+// sequence whole (compositeKind): the device program is a compiler of
+// primitives, and each of these goes as its mechanism is decomposed. A kind
+// added to the set fails here, and so does a list entry no longer composite.
+//
+// VIOLATION SIGNATURE. Mark a new kind composite, or lower a mechanism to
+// a wrapper of mixFFN again, and this names it.
+func TestCompositeKindsOnlyShrink(t *testing.T) {
+	allowed := map[string]bool{"recurrent": true, "per_layer": true}
+	for k := devKind(0); k < numKinds; k++ {
+		name := k.String()
+		switch {
+		case compositeKind(k) && !allowed[name]:
+			t.Errorf("%s is composite and not on the list: lower it to primitives", name)
+		case !compositeKind(k) && allowed[name]:
+			t.Errorf("%s is on the list and no longer composite: remove it from the list", name)
+		}
+	}
+}

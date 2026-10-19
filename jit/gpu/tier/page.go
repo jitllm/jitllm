@@ -42,8 +42,11 @@ const minSlots = 1
 // frees, and nothing else. ws is the shape, not a copy of the bytes; ensure
 // refreshes where the host holds them.
 type page struct {
-	ws    []nn.Weight // the seven matrices, in layer.tensors() order
-	bytes uint64      // what the set costs on the device while it is resident
+	ws []nn.Weight // the block's matrices, in layer.tensors() order
+	// got is a page-in's refreshed list, reused so a page-in allocates no
+	// slice for it.
+	got   []nn.Weight
+	bytes uint64 // what the set costs on the device while it is resident
 	// round is the driver's page rounding of those buffers beyond bytes, which
 	// a page-in also has to find room for (scratch.go).
 	round uint64
@@ -63,8 +66,9 @@ type page struct {
 // a tensor missing from this list leaks on release and is never priced.
 func (l *layer) tensors() []**resident {
 	// The order matches weightList and prepLayer's ws/ms/bias order: the dense
-	// seven, then the shared expert, the linear block, MLA and KDA's gates.
-	return []**resident{&l.wq, &l.wk, &l.wv, &l.wo, &l.gate, &l.up, &l.down,
+	// seven, then the shared expert, the linear block, MLA and KDA's gates,
+	// then the block's extra matrices (layer.extra).
+	ts := []**resident{&l.wq, &l.wk, &l.wv, &l.wo, &l.gate, &l.up, &l.down,
 		&l.shGate, &l.shUp, &l.shDown, &l.ssmGate, &l.ssmBA, &l.ssmOut,
 		&l.wqa, &l.wqb, &l.wkva, &l.wkb, &l.wvb,
 		&l.ssmFA, &l.ssmFB, &l.ssmGA, &l.ssmGB,
@@ -75,7 +79,15 @@ func (l *layer) tensors() []**resident {
 		&l.woA, &l.compKV, &l.compGate, &l.idxCompKV, &l.idxCompGate,
 		&l.mlaGate, &l.routedDown, &l.routedUp,
 		&l.hcAD, &l.hcAU, &l.hcAI, &l.hcFD, &l.hcFU, &l.hcFI, &l.ngKey, &l.ngVal}
+	for i := range l.extra {
+		ts = append(ts, &l.extra[i])
+	}
+	return ts
 }
+
+// numPositional is the length of the positional list (weightList,
+// layer.tensors); the block's extra matrices follow it.
+const numPositional = 47
 
 // pageSizeWhy is pageSize with the reason, naming the tensor and its format.
 func (g *devTier) pageSizeWhy(ws []nn.Weight) (uint64, string, bool) {
@@ -528,7 +540,8 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 			g.LastErr = fmt.Sprintf("block %d page-in: %v", li, err)
 			return false
 		}
-		got := weightList(&w)
+		l.pg.got = weightList(l.pg.got, &w, l.bound)
+		got := l.pg.got
 		if len(got) != len(l.pg.ws) {
 			g.LastErr = fmt.Sprintf("block %d page-in: the refreshed weight list is "+
 				"%d long and the page's is %d", li, len(got), len(l.pg.ws))
@@ -547,7 +560,12 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 		}
 		copy(l.pg.ws, got)
 	}
-	ts := l.tensors()
+	// The pointers prep kept (layer.rs), not a fresh list: a page-in during
+	// decode allocates nothing here.
+	ts := l.rs
+	if ts == nil {
+		ts = l.tensors()
+	}
 	// What a failed upload reports is this page-in's reason, not one an
 	// earlier call left (a placement's first, refused pass sets LastErr).
 	g.LastErr = ""

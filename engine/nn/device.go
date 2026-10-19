@@ -9,6 +9,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -52,12 +53,23 @@ type Weight struct {
 	Data []byte
 	Rows int // output features
 	K    int // input features
+	// Role is what the container calls the tensor, which a graph's binding
+	// names: how the device program finds a block's weight without a field
+	// per mechanism. RoleNone where nothing named it.
+	Role jlm.Role
 
 	// Packed is this weight already in the device layout, or nil. When set the
 	// device writes the spans straight to a buffer and skips the repack, which
 	// dominates upload cost on a model that streams blocks every token. The
 	// spans are read-only and not owned here.
 	Packed *Packed
+}
+
+// Vector is a block's vector (a norm's weight, a bias, a scale) with its
+// role.
+type Vector struct {
+	Role jlm.Role
+	V    []float32
 }
 
 // Packed is a weight already in the device layout: three spans of a jlm
@@ -86,6 +98,15 @@ type Packed struct {
 // one must decline the block rather than skip it: skipping runs and produces
 // fluent, wrong text.
 type LayerWeights struct {
+	// All is every matrix the block holds, each with its role: the named
+	// fields below are views a hand-written path reads, All is what a
+	// consumer binding by role (the device program) reads. Its backing
+	// array is the caller's and is reused: a device copies what it keeps.
+	All []Weight
+	// Vecs is every vector the block holds (norms, biases, scales), each
+	// with its role, for the same consumer. Read-only.
+	Vecs []Vector
+
 	AttnNorm, FFNNorm []float32 // tiny, always F32 in the file, kept expanded
 	// QNorm and KNorm are head_dim wide and nil unless the architecture
 	// RMSNorms each head of q and k before RoPE (qwen3).

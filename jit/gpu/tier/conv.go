@@ -436,7 +436,7 @@ func (g *devTier) prepConv(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage 
 		aux += uint64(4 * n)
 	}
 	g.dropGraph()
-	ws := weightList(w)
+	ws := weightList(nil, w, nil)
 	cl := &convLayer{p: *c}
 	sz, why := g.convProgram(cl, ws)
 	if why != "" {
@@ -474,7 +474,7 @@ func (g *devTier) prepConv(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage 
 			g.LastErr = fmt.Sprintf("block %d: %v", li, err)
 			return false
 		}
-		ws = weightList(w)
+		ws = weightList(nil, w, nil)
 	}
 	if !g.convGrow(sz) {
 		return false

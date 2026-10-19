@@ -1,6 +1,7 @@
 package tier
 
 import (
+	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"strings"
 
 	"github.com/jitllm/jitllm/format/jlm"
@@ -61,8 +62,6 @@ func (k devKind) String() string {
 		return "head_norm"
 	case dkPostNorm:
 		return "post_norm"
-	case dkMixture:
-		return "mixture"
 	case dkRecurrent:
 		return "recurrent"
 	case dkCopy:
@@ -71,8 +70,6 @@ func (k devKind) String() string {
 		return "kv_copy"
 	case dkAct:
 		return "act"
-	case dkAttendLatent:
-		return "attend_latent"
 	case dkQTemp:
 		return "q_temp"
 	case dkSplitQG:
@@ -87,6 +84,46 @@ func (k devKind) String() string {
 		return "clamp"
 	case dkSubNorm:
 		return "sub_norm"
+	case dkRouterLogits:
+		return "router_logits"
+	case dkRouterBias:
+		return "router_bias"
+	case dkGroupMask:
+		return "group_mask"
+	case dkTopK:
+		return "topk"
+	case dkRouteWeights:
+		return "route_weights"
+	case dkExpertMatVec:
+		return "expert_matvec"
+	case dkExpertBias:
+		return "expert_bias"
+	case dkScaleWeights:
+		return "scale_weights"
+	case dkCombine:
+		return "combine"
+	case dkGateLogit:
+		return "gate_logit"
+	case dkGatedAdd:
+		return "gated_add"
+	case dkExpertFetch:
+		return "expert_fetch"
+	case dkGroupByExpert:
+		return "group_by_expert"
+	case dkSlice:
+		return "slice"
+	case dkView:
+		return "view"
+	case dkRopeTail:
+		return "rope_tail"
+	case dkLatentWrite:
+		return "latent_write"
+	case dkConcatHeads:
+		return "concat_heads"
+	case dkLatentAttend:
+		return "latent_attend"
+	case dkExpertMatVecE:
+		return "expert_matvec_e"
 	case dkNormQuant:
 		return "norm_quant"
 	case dkAddNorm:
@@ -161,6 +198,7 @@ func newDevRewrites() []devRewrite {
 		{"matvec-gate", rwMatVecGate},
 		{"down-in", rwDownIn},
 		{"down-act", rwDownAct},
+		{"expert-epilogue", rwExpertEpilogue},
 		{"act-quant", rwActQuant},
 		{"add-norm-quant", rwAddNormQuant},
 		{"add-norm", rwAddNorm},
@@ -224,8 +262,15 @@ func (p *devProgram) fused(l *layer, bs *blockScratch, g *devTier, R, nseq int) 
 }
 
 func (p *devProgram) clone() *devProgram {
-	q := &devProgram{f16: p.f16, attends: p.attends, ropes: p.ropes, vals: append([]devType(nil), p.vals...), slots: append([]devSlot(nil), p.slots...),
-		names: append([]string(nil), p.names...)}
+	// The whole value, then its slices: a flag added to the program is
+	// carried without a line here (a clone that dropped experts ran a
+	// mixture's rows on one row's kernels).
+	q := new(devProgram)
+	*q = *p
+	q.vals = append([]devType(nil), p.vals...)
+	q.slots = append([]devSlot(nil), p.slots...)
+	q.names = append([]string(nil), p.names...)
+	q.ops = make([]devOp, 0, len(p.ops))
 	for _, o := range p.ops {
 		o.Src = append([]int(nil), o.Src...)
 		o.In = append([]devVal(nil), o.In...)
@@ -365,7 +410,7 @@ func rwMatVecRes(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq 
 		if resid == o.Out[0] {
 			resid = add.In[1]
 		}
-		p.replace(i, j, devOp{Kind: dkMatVecRes, Src: cat(o.Src, add.Src), In: []devVal{o.In[0], resid}, Out: add.Out, Role: o.Role})
+		p.replace(i, j, devOp{Kind: dkMatVecRes, Src: cat(o.Src, add.Src), In: []devVal{o.In[0], resid}, Out: add.Out, Role: o.Role, W: o.W})
 		return true
 	}
 	return false
@@ -396,7 +441,7 @@ func rwMatVecGate(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq
 			continue
 		}
 		am := p.ops[j]
-		p.replace(i, j, devOp{Kind: dkMatVecGate, Src: cat(o.Src, am.Src), In: []devVal{o.In[0], am.In[0]}, Out: am.Out, Role: o.Role})
+		p.replace(i, j, devOp{Kind: dkMatVecGate, Src: cat(o.Src, am.Src), In: []devVal{o.In[0], am.In[0]}, Out: am.Out, Role: o.Role, W: o.W})
 		return true
 	}
 	return false
@@ -408,7 +453,9 @@ func rwActQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq i
 		return false
 	}
 	for i, o := range p.ops {
-		if o.Kind != dkActMul || i+1 >= len(p.ops) {
+		// The dense FFN's activation: an expert's or a shared expert's has
+		// its own width and quantize layout.
+		if o.Kind != dkActMul || p.slots[o.Out[0]] != slotAct || i+1 >= len(p.ops) {
 			continue
 		}
 		q := p.ops[i+1]
@@ -426,7 +473,7 @@ func addNorm(p *devProgram) (int, int, bool) {
 		if o.Kind != dkAdd || i+1 >= len(p.ops) {
 			continue
 		}
-		if n := p.ops[i+1]; n.Kind == dkNorm && n.In[0] == o.Out[0] {
+		if n := p.ops[i+1]; n.Kind == dkNorm && p.slots[n.Out[0]] == slotH && n.In[0] == o.Out[0] {
 			return i, i + 1, true
 		}
 	}
@@ -447,7 +494,7 @@ func rwAddNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, ns
 	}
 	a, n, q := p.ops[i], p.ops[j], p.ops[j+1]
 	p.ops[i] = devOp{Kind: dkAddNormQuant, Src: cat(cat(a.Src, n.Src), q.Src), In: a.In,
-		Out: []devVal{a.Out[0], n.Out[0], q.Out[0]}, Role: n.Role}
+		Out: []devVal{a.Out[0], n.Out[0], q.Out[0]}, Role: n.Role, V: n.V, VB: n.VB}
 	p.ops = append(p.ops[:i+1], p.ops[j+2:]...)
 	return true
 }
@@ -465,7 +512,7 @@ func rwAddNorm(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq in
 		return false
 	}
 	a, n := p.ops[i], p.ops[j]
-	p.replace(i, j, devOp{Kind: dkAddNorm, Src: cat(a.Src, n.Src), In: a.In, Out: []devVal{a.Out[0], n.Out[0]}, Role: n.Role})
+	p.replace(i, j, devOp{Kind: dkAddNorm, Src: cat(a.Src, n.Src), In: a.In, Out: []devVal{a.Out[0], n.Out[0]}, Role: n.Role, V: n.V, VB: n.VB})
 	return true
 }
 
@@ -475,11 +522,12 @@ func rwNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq 
 		return false
 	}
 	for i, o := range p.ops {
-		if o.Kind != dkNorm || i+1 >= len(p.ops) {
+		// The block row's norm: a latent's has its own width and kernels.
+		if o.Kind != dkNorm || p.slots[o.Out[0]] != slotH || i+1 >= len(p.ops) {
 			continue
 		}
 		if q := p.ops[i+1]; q.Kind == dkQuant && q.In[0] == o.Out[0] {
-			p.replace(i, i+1, devOp{Kind: dkNormQuant, Src: cat(o.Src, q.Src), In: o.In, Out: []devVal{o.Out[0], q.Out[0]}, Role: o.Role})
+			p.replace(i, i+1, devOp{Kind: dkNormQuant, Src: cat(o.Src, q.Src), In: o.In, Out: []devVal{o.Out[0], q.Out[0]}, Role: o.Role, V: o.V, VB: o.VB})
 			return true
 		}
 	}
@@ -534,7 +582,7 @@ func rwGate2In(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq in
 	}
 	a := p.ops[ai]
 	o := devOp{Kind: dkGate2In, Src: cat(cat(cat(n.Src, q.Src), cat(p.ops[gi].Src, p.ops[gi+1].Src)), a.Src),
-		In: []devVal{n.In[0]}, Out: a.Out, Role: jlm.RoleFFNUp}
+		In: []devVal{n.In[0]}, Out: a.Out, Role: jlm.RoleFFNUp, V: n.V}
 	p.ops[gi-2] = o
 	p.ops = append(p.ops[:gi-1], p.ops[ai+1:]...)
 	return true
@@ -590,7 +638,7 @@ func rwQKVIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int)
 	for i, o := range p.ops {
 		if o.Kind == dkQKV && normQuantBefore(p, i, jlm.RoleAttnNorm, 1) {
 			n := p.ops[i-2]
-			p.ops[i-2] = devOp{Kind: dkQKVIn, Src: cat(cat(n.Src, p.ops[i-1].Src), o.Src), In: n.In, Out: o.Out}
+			p.ops[i-2] = devOp{Kind: dkQKVIn, Src: cat(cat(n.Src, p.ops[i-1].Src), o.Src), In: n.In, Out: o.Out, V: n.V}
 			p.ops = append(p.ops[:i-1], p.ops[i+1:]...)
 			return true
 		}
@@ -613,7 +661,7 @@ func rwQKVSep(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int
 			c.Kind == dkMatVec && c.Role == jlm.RoleAttnV && normQuantBefore(p, i, jlm.RoleAttnNorm, 3) {
 			n := p.ops[i-2]
 			p.ops[i-2] = devOp{Kind: dkQKVSep, Src: cat(cat(n.Src, p.ops[i-1].Src), cat(cat(a.Src, b.Src), c.Src)),
-				In: n.In, Out: []devVal{a.Out[0], b.Out[0], c.Out[0]}}
+				In: n.In, Out: []devVal{a.Out[0], b.Out[0], c.Out[0]}, V: n.V}
 			p.ops = append(p.ops[:i-1], p.ops[i+3:]...)
 			return true
 		}
@@ -628,7 +676,7 @@ func resIn(p *devProgram, role jlm.Role, ok func(src devVal) bool) bool {
 		o, q := p.ops[i], p.ops[i-1]
 		if o.Kind == dkMatVecRes && o.Role == role && q.Kind == dkQuant && o.In[0] == q.Out[0] &&
 			p.uses(q.Out[0]) == 1 && ok(q.In[0]) {
-			p.ops[i-1] = devOp{Kind: dkResIn, Src: cat(q.Src, o.Src), In: []devVal{q.In[0], o.In[1]}, Out: o.Out, Role: role}
+			p.ops[i-1] = devOp{Kind: dkResIn, Src: cat(q.Src, o.Src), In: []devVal{q.In[0], o.In[1]}, Out: o.Out, Role: role, W: o.W}
 			p.ops = append(p.ops[:i], p.ops[i+1:]...)
 			return true
 		}
@@ -669,11 +717,11 @@ func rwFFNIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int)
 	src := cat(cat(n.Src, p.ops[gi-1].Src), cat(gt.Src, up.Src))
 	if l.mvu.gatedIn != nil {
 		// Up forms act(gate)*up in its own store: the act_mul goes too.
-		p.ops[gi-2] = devOp{Kind: dkFFNIn, Src: cat(src, am.Src), In: n.In, Out: []devVal{gt.Out[0], am.Out[0]}, Role: jlm.RoleFFNUp}
+		p.ops[gi-2] = devOp{Kind: dkFFNIn, Src: cat(src, am.Src), In: n.In, Out: []devVal{gt.Out[0], am.Out[0]}, Role: jlm.RoleFFNUp, V: n.V}
 		p.ops = append(p.ops[:gi-1], p.ops[ai+1:]...)
 		return true
 	}
-	p.ops[gi-2] = devOp{Kind: dkFFNIn, Src: src, In: n.In, Out: []devVal{gt.Out[0], up.Out[0]}}
+	p.ops[gi-2] = devOp{Kind: dkFFNIn, Src: src, In: n.In, Out: []devVal{gt.Out[0], up.Out[0]}, V: n.V}
 	p.ops = append(p.ops[:gi-1], p.ops[ui+1:]...)
 	return true
 }
@@ -724,7 +772,7 @@ func rwDownAct(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq in
 	}
 	for i := 2; i < len(p.ops); i++ {
 		am, q, d := p.ops[i-2], p.ops[i-1], p.ops[i]
-		if am.Kind == dkActMul && q.Kind == dkQuant && q.In[0] == am.Out[0] && d.Kind == dkMatVecRes &&
+		if am.Kind == dkActMul && p.slots[am.Out[0]] == slotAct && q.Kind == dkQuant && q.In[0] == am.Out[0] && d.Kind == dkMatVecRes &&
 			d.Role == jlm.RoleFFNDown && d.In[0] == q.Out[0] && p.uses(am.Out[0]) == 1 && p.uses(q.Out[0]) == 1 {
 			p.ops[i-2] = devOp{Kind: dkDownAct, Src: cat(cat(am.Src, q.Src), d.Src), In: []devVal{am.In[0], am.In[1], d.In[1]},
 				Out: d.Out, Role: jlm.RoleFFNDown}
@@ -788,7 +836,7 @@ func readsOperand(p *devProgram, g *devTier, bs *blockScratch, j int, m mv, R in
 // binary16 operand too (kernels.RMSNormF16TRows, token-major).
 func rwNormF16(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	for i, o := range p.ops {
-		if o.Kind != dkNorm || len(o.Out) != 1 {
+		if o.Kind != dkNorm || p.slots[o.Out[0]] != slotH || len(o.Out) != 1 {
 			continue
 		}
 		j := p.next(i, o.Out[0])
@@ -801,7 +849,7 @@ func rwNormF16(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq in
 			continue
 		}
 		op := p.val(p.names[o.Out[0]]+".f16", devType{Elem: elemF16, Layout: layoutTokF16, Width: p.vals[o.Out[0]].Width}, slotF16)
-		p.ops[i] = devOp{Kind: dkNormF16, Src: o.Src, In: o.In, Out: []devVal{o.Out[0], op}, Role: o.Role, K: nk, Conv: conv}
+		p.ops[i] = devOp{Kind: dkNormF16, Src: o.Src, In: o.In, Out: []devVal{o.Out[0], op}, Role: o.Role, V: o.V, VB: o.VB, K: nk, Conv: conv}
 		if !readsOperand(p, g, bs, j, m, R, op) {
 			return false
 		}
@@ -832,7 +880,7 @@ func rwAddNormF16(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq
 	}
 	op := p.val(p.names[no.Out[0]]+".f16", devType{Elem: elemF16, Layout: layoutTokF16, Width: p.vals[no.Out[0]].Width}, slotF16)
 	p.replace(i, n, devOp{Kind: dkAddNormF16, Src: cat(a.Src, no.Src), In: a.In, Out: []devVal{a.Out[0], no.Out[0], op},
-		Role: no.Role, K: nk, Conv: conv})
+		Role: no.Role, V: no.V, VB: no.VB, K: nk, Conv: conv})
 	return readsOperand(p, g, bs, j-1, m, R, op)
 }
 
@@ -840,7 +888,7 @@ func rwAddNormF16(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq
 // binary16 operand alone (kernels.ActMulF16T): its float row is never written.
 func rwActF16(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	for i, o := range p.ops {
-		if o.Kind != dkActMul || p.uses(o.Out[0]) != 1 {
+		if o.Kind != dkActMul || p.slots[o.Out[0]] != slotAct || p.uses(o.Out[0]) != 1 {
 			continue
 		}
 		j := p.next(i, o.Out[0])
@@ -908,7 +956,7 @@ func (p *devProgram) forms() (qkv qkvForm, gu ffnGateUpForm, down ffnDownForm, d
 	qkv, gu, down, dense = qkvThree, gateUpTwo, downFormPlain, true
 	for _, o := range p.ops {
 		switch o.Kind {
-		case dkMixture:
+		case dkExpertMatVec:
 			dense = false
 		case dkQKV, dkQKVIn:
 			qkv = qkvGrouped
@@ -931,4 +979,72 @@ func (p *devProgram) forms() (qkv qkvForm, gu ffnGateUpForm, down ffnDownForm, d
 		}
 	}
 	return qkv, gu, down, dense
+}
+
+// rwExpertEpilogue: an expert bank's matvec and the op that follows it in
+// its own epilogue, where prep built the bank's fused kernel (fuseMoE) --
+// its bias, and on up the activation act(gate)*up, which reads the gate rows
+// and writes the activations. One row: rows run the grouped kernels.
+func rwExpertEpilogue(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
+	if R != 1 {
+		return false
+	}
+	for i, o := range p.ops {
+		if o.Kind != dkExpertMatVec {
+			continue
+		}
+		var k backend.Kernel
+		switch o.Role {
+		case jlm.RoleExpGateBank:
+			k = l.moeGate
+		case jlm.RoleExpUpBank:
+			k = l.moeUp
+		case jlm.RoleExpDownBank:
+			k = l.moeDown
+		}
+		if k == nil || p.uses(o.Out[0]) != 1 {
+			continue
+		}
+		j := p.next(i, o.Out[0])
+		if j < 0 {
+			continue
+		}
+		f := devOp{Kind: dkExpertMatVecE, Src: o.Src, In: []devVal{o.In[0], o.In[1]}, Out: o.Out, Role: o.Role, W: o.W, K: k}
+		b := p.ops[j]
+		if b.Kind == dkExpertBias && b.In[0] == o.Out[0] {
+			f.Src, f.Out, f.V = cat(f.Src, b.Src), b.Out, b.V
+			if o.Role != jlm.RoleExpUpBank {
+				p.replace(i, j, f)
+				return true
+			}
+			if p.uses(b.Out[0]) != 1 {
+				continue
+			}
+			if j = p.next(j, b.Out[0]); j < 0 {
+				continue
+			}
+		}
+		if o.Role != jlm.RoleExpUpBank {
+			continue // only up's kernel carries the activation without a bias
+		}
+		a := p.ops[j]
+		if a.Kind != dkActMul || len(a.In) != 2 || a.In[1] != f.Out[0] {
+			continue
+		}
+		// up's activation: act(gate)*up into the activations, the gate rows
+		// read in the epilogue.
+		f.Src, f.In, f.Out = cat(f.Src, a.Src), append(f.In, a.In[0]), a.Out
+		p.ops[i] = f
+		drop := []int{j}
+		if b.Kind == dkExpertBias && b.In[0] == o.Out[0] {
+			drop = []int{p.next(i, o.Out[0]), j}
+		}
+		for n := len(drop) - 1; n >= 0; n-- {
+			if d := drop[n]; d > i {
+				p.ops = append(p.ops[:d], p.ops[d+1:]...)
+			}
+		}
+		return true
+	}
+	return false
 }

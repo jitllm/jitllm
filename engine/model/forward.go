@@ -632,7 +632,11 @@ type State struct {
 	// csSWA is the local layers' rotary table, allocated only for an
 	// architecture with two bases. nil everywhere else, which is what keeps
 	// ropeTable a pointer compare for every other model.
-	csSWA  []float32
+	csSWA []float32
+	// allW is the backing array of the matrices a device is handed by role
+	// (allMatrices), reused across page-ins.
+	allW   []nn.Weight
+	vecW   []nn.Vector
 	bcsSWA []float32
 	// bcs is cs for a whole prefill chunk: one nRot-wide rotary table per row,
 	// which is what the device's batched RoPE reads.
@@ -1564,6 +1568,8 @@ func (s *State) layerWeightsAt(li int) nn.LayerWeights {
 		Gate: s.m.bankWeight(l.gate), Up: s.m.bankWeight(l.up), Down: s.m.bankWeight(l.down),
 	}
 	w.Sinks = l.sinks
+	w.All = s.allMatrices(l)
+	w.Vecs = s.vectors(l)
 	// The classic block's vectors (C6). A LayerNorm always hands the device
 	// a bias -- zeros where the file has none (command-r) -- because the apply
 	// kernel takes one; an ungated FFN's biases ride up and down.
@@ -2618,7 +2624,9 @@ func (m *Model) bankWeight(t tensor) nn.Weight {
 		return wt(t)
 	}
 	if t.packed == nil {
-		return m.gatheredBank(t)
+		w := m.gatheredBank(t)
+		w.Role = t.e.Role
+		return w
 	}
 	// The bank's Weight is a function of the entry alone, so it is built once
 	// (its sheet closure and Packed with it) and every later call -- one per
@@ -2628,7 +2636,7 @@ func (m *Model) bankWeight(t tensor) nn.Weight {
 	}
 	sheets := int(t.e.Dims[2])
 	nrow := t.rows / max(sheets, 1)
-	w := nn.Weight{T: t.typ, Data: splitBankData, Rows: t.rows, K: t.k,
+	w := nn.Weight{T: t.typ, Data: splitBankData, Rows: t.rows, K: t.k, Role: t.e.Role,
 		Packed: &nn.Packed{Sheet: func(x int) (nn.Packed, func(), error) { return m.sheetOf(t.e, x, nrow) }, Sheets: sheets}}
 	got, _ := m.bankWts.LoadOrStore(t.e, w)
 	return got.(nn.Weight)
@@ -2727,6 +2735,42 @@ func (m *Model) sheetOf(e *jlm.Entry, x, nrow int) (nn.Packed, func(), error) {
 
 func noRelease() {}
 
+// vectors is every vector block l holds, by role, as its fields hold them
+// now (nn.LayerWeights.Vecs). The backing array is s's, refilled per call.
+func (s *State) vectors(l *layer) []nn.Vector {
+	out := s.vecW[:0]
+	for _, r := range l.vecs {
+		out = append(out, nn.Vector{Role: r.role, V: r.get()})
+	}
+	s.vecW = out
+	return out
+}
+
+// allMatrices is every matrix block l holds, by role, for a device binding
+// by role (nn.LayerWeights.All): the banks as bankWeight hands them, the
+// rest as wt does. The backing array is s's, refilled per call, so a page-in
+// allocates nothing once it has grown.
+func (s *State) allMatrices(l *layer) []nn.Weight {
+	var buf [maxMatrices]*tensor
+	out := s.allW[:0]
+	for _, t := range l.appendMatrices(buf[:0]) {
+		if t.e == nil || len(t.data) == 0 && t.packed == nil {
+			continue
+		}
+		var w nn.Weight
+		switch t.e.Role {
+		case jlm.RoleExpGateBank, jlm.RoleExpUpBank, jlm.RoleExpDownBank:
+			w = s.m.bankWeight(*t)
+		default:
+			w = wt(*t)
+		}
+		w.Role = t.e.Role
+		out = append(out, w)
+	}
+	s.allW = out
+	return out
+}
+
 // wt is t for a device: K is the width it was packed at, which is k but for
 // a ragged tower's matrices (tensor.kp; nn.LayerPlan.KPad).
 func wt(t tensor) nn.Weight {
@@ -2734,7 +2778,11 @@ func wt(t tensor) nn.Weight {
 	if t.kp != 0 {
 		k = t.kp
 	}
-	return nn.Weight{T: t.typ, Data: t.data, Rows: t.rows, K: k, Packed: t.packed}
+	w := nn.Weight{T: t.typ, Data: t.data, Rows: t.rows, K: k, Packed: t.packed}
+	if t.e != nil {
+		w.Role = t.e.Role
+	}
+	return w
 }
 
 // SetHeadOnDevice chooses whether the output norm and the vocabulary projection

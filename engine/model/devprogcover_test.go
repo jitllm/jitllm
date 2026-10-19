@@ -57,6 +57,11 @@ func TestDeviceProgramCoverage(t *testing.T) {
 				first = runs[0][0]
 			}
 			prog, why := g.BlockProgram(first)
+			// Compiled means primitives only: a block whose program still
+			// runs an encoder sequence whole is listed by that op.
+			if c := g.BlockComposite(first); prog != "" && c != "" {
+				why = "composite op " + c
+			}
 			if prog != "" && why == "" {
 				covered++
 				return
@@ -73,7 +78,7 @@ func TestDeviceProgramCoverage(t *testing.T) {
 		keys = append(keys, k)
 	}
 	slices.SortFunc(keys, func(a, b string) int { return cmp.Compare(len(reasons[b]), len(reasons[a])) })
-	t.Logf("%d of %d fixtures run their first device block as a device program", covered, tried)
+	t.Logf("%d of %d fixtures run their first device block as a device program of primitives", covered, tried)
 	for _, k := range keys {
 		t.Logf("%3d  %s: %s", len(reasons[k]), k, strings.Join(reasons[k], " "))
 	}

@@ -27,6 +27,8 @@ const (
 	elemQ8
 	// elemF16 is the binary16 operand a GEMM reads, in its layout.
 	elemF16
+	// elemU32 is an index: a router's selection of experts.
+	elemU32
 )
 
 // devLayout is a value's memory layout. A consumer reads one layout; a
@@ -48,7 +50,7 @@ type devType struct {
 }
 
 func (t devType) String() string {
-	e := [...]string{"f32", "q8", "f16"}[t.Elem]
+	e := [...]string{"f32", "q8", "f16", "u32"}[t.Elem]
 	l := [...]string{"row", "kv", "tok", "frag"}[t.Layout]
 	return fmt.Sprintf("%s.%s[%d]", e, l, t.Width)
 }
@@ -57,30 +59,48 @@ func (t devType) String() string {
 type devKind uint8
 
 const (
-	dkNorm         devKind = iota // RMSNorm of a row by a weight
-	dkQuant                       // a float row to the int8 operand a matvec reads
-	dkMatVec                      // an integer matvec over a weight
-	dkRopeQ                       // q's rotary
-	dkKVWrite                     // k's rotary into the history, and v's copy
-	dkAttend                      // the paged decode attention
-	dkAdd                         // a residual add
-	dkActMul                      // act(gate) * up
-	dkHeadNorm                    // each head's RMSNorm (q's or k's)
-	dkPostNorm                    // a sublayer's output normed before its residual add (post-norm)
-	dkMixture                     // a routed mixture and its shared expert, from route to its sum (mixFFN)
-	dkRecurrent                   // a recurrent mixer with its pre-norm, from the block's row (emitLinear)
-	dkCopy                        // a row moved to another slot (the sum home to the block's row)
-	dkKVCopy                      // an unrotated key and its value copied into the history (NoPE)
-	dkAct                         // an ungated FFN's activation of up's row
-	dkAttendLatent                // latent attention, from the normed row to its output projection (emitMLA)
-	dkQTemp                       // the query's temperature, a factor of each row's position
-	dkSplitQG                     // a double-width query split into its heads and its output gate
-	dkGateOut                     // the attention's output times the sigmoid of the gate
-	dkPerLayer                    // the per-layer embedding added to the block's row (perLayerEmbed)
-	dkScale                       // the block's row times the layer's output scale
-	dkClamp                       // q, k or v clamped to the plan's bound
-	dkSubNorm                     // an inner norm before wo or down, with the quantize it feeds
-	numBaseKinds                  // the fused kinds (devrewrite.go) count on from here
+	dkNorm          devKind = iota // RMSNorm of a row by a weight
+	dkQuant                        // a float row to the int8 operand a matvec reads
+	dkMatVec                       // an integer matvec over a weight
+	dkRopeQ                        // q's rotary
+	dkKVWrite                      // k's rotary into the history, and v's copy
+	dkAttend                       // the paged decode attention
+	dkAdd                          // a residual add
+	dkActMul                       // act(gate) * up
+	dkHeadNorm                     // each head's RMSNorm (q's or k's)
+	dkPostNorm                     // a sublayer's output normed before its residual add (post-norm)
+	dkRecurrent                    // a recurrent mixer with its pre-norm, from the block's row (emitLinear)
+	dkCopy                         // a row moved to another slot (the sum home to the block's row)
+	dkKVCopy                       // an unrotated key and its value copied into the history (NoPE)
+	dkAct                          // an ungated FFN's activation of up's row
+	dkQTemp                        // the query's temperature, a factor of each row's position
+	dkSplitQG                      // a double-width query split into its heads and its output gate
+	dkGateOut                      // the attention's output times the sigmoid of the gate
+	dkPerLayer                     // the per-layer embedding added to the block's row (perLayerEmbed)
+	dkScale                        // the block's row times the layer's output scale
+	dkClamp                        // q, k or v clamped to the plan's bound
+	dkSubNorm                      // an inner norm before wo or down, with the quantize it feeds
+	dkRouterLogits                 // a router's logits over the normed row (the router read as floats)
+	dkRouterBias                   // a bias added to the router's logits before the choice
+	dkGroupMask                    // the experts of the best-scoring groups kept, the rest masked
+	dkTopK                         // the top k of the logits (or a masked or biased plane): the selection
+	dkRouteWeights                 // the selection's weights: softmax, sigmoid or renormalised, per the plan
+	dkExpertMatVec                 // a matvec per selected expert over a bank, indexed by the selection
+	dkExpertBias                   // each selected expert's bias, indexed by its id
+	dkScaleWeights                 // each routed weight times its expert's own factor
+	dkCombine                      // the selection's weighted sum of the experts' outputs
+	dkGateLogit                    // a shared expert's gate: one logit over the normed row
+	dkGatedAdd                     // a branch added in, scaled by the sigmoid of its gate's logit
+	dkExpertFetch                  // a paged bank's selected sheets brought to the card, and the index its matvecs read
+	dkGroupByExpert                // over rows, the selection sorted by expert: the order the grouped matvecs read
+	dkSlice                        // a strided copy: each head's slice, or a row's tail
+	dkView                         // a row's prefix read in place (no launch)
+	dkRopeTail                     // the rotary over each head's tail, compacted
+	dkLatentWrite                  // a latent row and its rotated key into this position's paged row
+	dkConcatHeads                  // per-head parts assembled into one query row
+	dkLatentAttend                 // attention over latent rows: the key the row, the value its prefix
+	dkExpertMatVecE                // an expert matvec with its epilogue: its bias, or act(gate)*up (the bank's fused kernel)
+	numBaseKinds                   // the fused kinds (devrewrite.go) count on from here
 )
 
 // devVal names a value of the program; its buffer is the scratch slot the
@@ -91,34 +111,69 @@ type devVal int
 type devSlot uint8
 
 const (
-	slotX      devSlot = iota // bs.x: the block's input and output
-	slotX2                    // bs.x2: the residual after attention
-	slotH                     // bs.h: a normed row
-	slotQ8                    // bs.a / bs.ax: the int8 operand
-	slotQ                     // bs.q
-	slotK                     // bs.k
-	slotV                     // bs.v
-	slotQR                    // bs.qr: q rotated
-	slotKV                    // the history
-	slotXB                    // bs.xb: the attention's output
-	slotOut                   // bs.mvOut: a projection's output
-	slotG                     // bs.g: the gate
-	slotU                     // bs.u: up
-	slotAct                   // bs.act: act(gate)*up
-	slotQN                    // bs.qn: q's heads normed
-	slotKN                    // bs.kn: k's heads normed
-	slotF16                   // g.f16Buf: a GEMM's binary16 operand
-	slotMix                   // the mixture's output: whichever buffer mixFFN returns
-	slotQT                    // bs.qt: a rotated query scaled by its temperature
-	slotQG                    // bs.qg: the query's heads, split from a gated query
-	slotOGate                 // bs.ogate: the output gate
-	slotOGated                // bs.ogated: the attention's output, gated
-	slotVN                    // bs.vn: v's heads normed
-	slotQC                    // bs.qClamp
-	slotKC                    // bs.kClamp
-	slotVC                    // bs.vClamp
-	slotSub                   // bs.sub: an inner norm's row
-	slotSide                  // bs.side: a recurrent mixer's output beside the attention
+	slotX        devSlot = iota // bs.x: the block's input and output
+	slotX2                      // bs.x2: the residual after attention
+	slotH                       // bs.h: a normed row
+	slotQ8                      // bs.a / bs.ax: the int8 operand
+	slotQ                       // bs.q
+	slotK                       // bs.k
+	slotV                       // bs.v
+	slotQR                      // bs.qr: q rotated
+	slotKV                      // the history
+	slotXB                      // bs.xb: the attention's output
+	slotOut                     // bs.mvOut: a projection's output
+	slotG                       // bs.g: the gate
+	slotU                       // bs.u: up
+	slotAct                     // bs.act: act(gate)*up
+	slotQN                      // bs.qn: q's heads normed
+	slotKN                      // bs.kn: k's heads normed
+	slotF16                     // g.f16Buf: a GEMM's binary16 operand
+	slotQT                      // bs.qt: a rotated query scaled by its temperature
+	slotQG                      // bs.qg: the query's heads, split from a gated query
+	slotOGate                   // bs.ogate: the output gate
+	slotOGated                  // bs.ogated: the attention's output, gated
+	slotVN                      // bs.vn: v's heads normed
+	slotQC                      // bs.qClamp
+	slotKC                      // bs.kClamp
+	slotVC                      // bs.vClamp
+	slotSub                     // bs.sub: an inner norm's row
+	slotSide                    // bs.side: a recurrent mixer's output beside the attention
+	slotRLogits                 // bs.rlogits: a router's logits
+	slotRLogitsB                // bs.rlogitsB: the logits biased
+	slotRBM                     // bs.rbm: the group-masked selection plane
+	slotSel                     // bs.rsel: the selection
+	slotTop                     // bs.rtop: the selection's logits
+	slotRW                      // bs.rw: the routed weights
+	slotRWS                     // bs.rwS: the routed weights times the experts' factors
+	slotEG                      // bs.eg: the experts' gate rows
+	slotEU                      // bs.eu: the experts' up rows
+	slotEGB                     // bs.egB: the gate rows biased
+	slotEUB                     // bs.euB: the up rows biased
+	slotEAct                    // bs.eact: the experts' activations
+	slotEDown                   // bs.edown: the experts' down rows
+	slotEDownB                  // bs.edownB: the down rows biased
+	slotShG                     // bs.shg: a shared expert's gate row
+	slotShU                     // bs.shu: its up row
+	slotShAct                   // bs.shact: its activation
+	slotShOut                   // bs.shout: its output
+	slotShLogit                 // bs.shlogit: its gate's logit
+	slotShSum                   // bs.shsum: the routed and shared sum
+	slotSelW                    // the index the expert matvecs read: the selection, its cache slots, or the identity
+	slotOnes                    // bs.wOnes: unit weights (a combine of experts weighted at their input)
+	slotMQA                     // bs.mlaQA: the query latent
+	slotMQAn                    // bs.mlaQAn: it normed
+	slotMKV                     // bs.mlaKV: the kv latent and its rotary key
+	slotMKVn                    // bs.mlaKVn: the latent normed
+	slotMNope                   // bs.mlaNope: the query's unrotated parts, compacted
+	slotMPE                     // bs.mlaPE: its rotary parts, compacted
+	slotMPErot                  // bs.mlaPErot: them rotated
+	slotMKPE                    // bs.mlaKPE: the shared rotary key
+	slotMAbsRaw                 // bs.mlaAbsRaw: the absorbed query, head-major
+	slotMAbs                    // bs.mlaAbs: the query row the latent attention reads
+	slotMAcc                    // bs.mlaAcc: the attention over the latent
+	slotMOut                    // bs.mlaOut: it un-absorbed
+	slotMIdent                  // bs.mlaIdent: the identity selection 0..NHead-1
+	slotMKVLat                  // the kv latent's prefix: bs.mlaKV read in place, copied out over rows
 	numSlots
 )
 
@@ -158,8 +213,6 @@ func (s devSlot) String() string {
 		return "kn"
 	case slotF16:
 		return "f16"
-	case slotMix:
-		return "mix"
 	case slotQT:
 		return "qt"
 	case slotQG:
@@ -180,6 +233,78 @@ func (s devSlot) String() string {
 		return "sub"
 	case slotSide:
 		return "side"
+	case slotRLogits:
+		return "rlogits"
+	case slotRLogitsB:
+		return "rlogits_b"
+	case slotRBM:
+		return "rbm"
+	case slotSel:
+		return "sel"
+	case slotTop:
+		return "top"
+	case slotRW:
+		return "rw"
+	case slotRWS:
+		return "rw_s"
+	case slotEG:
+		return "eg"
+	case slotEU:
+		return "eu"
+	case slotEGB:
+		return "eg_b"
+	case slotEUB:
+		return "eu_b"
+	case slotEAct:
+		return "eact"
+	case slotEDown:
+		return "edown"
+	case slotEDownB:
+		return "edown_b"
+	case slotShG:
+		return "shg"
+	case slotShU:
+		return "shu"
+	case slotShAct:
+		return "shact"
+	case slotShOut:
+		return "shout"
+	case slotShLogit:
+		return "shlogit"
+	case slotShSum:
+		return "shsum"
+	case slotSelW:
+		return "sel_w"
+	case slotOnes:
+		return "ones"
+	case slotMQA:
+		return "mla_qa"
+	case slotMQAn:
+		return "mla_qa_n"
+	case slotMKV:
+		return "mla_kv"
+	case slotMKVn:
+		return "mla_kv_n"
+	case slotMNope:
+		return "mla_nope"
+	case slotMPE:
+		return "mla_pe"
+	case slotMPErot:
+		return "mla_pe_rot"
+	case slotMKPE:
+		return "mla_kpe"
+	case slotMAbsRaw:
+		return "mla_abs_raw"
+	case slotMAbs:
+		return "mla_abs"
+	case slotMAcc:
+		return "mla_acc"
+	case slotMOut:
+		return "mla_out"
+	case slotMIdent:
+		return "mla_ident"
+	case slotMKVLat:
+		return "mla_kv_lat"
 	}
 	return ""
 }
@@ -193,6 +318,17 @@ type devOp struct {
 	In   []devVal
 	Out  []devVal
 	Role jlm.Role // the weight a norm or matvec reads
+	// W is a matvec's weight as the block holds it: its index in the
+	// block's matrix list (layer.rs, layer.ms), resolved from Role once
+	// when the program is built.
+	W int
+	// V and VB are a norm's weight and bias on the device, bound by role
+	// when the program is built (layer.vecOf); a fused op carries the norm
+	// it absorbed. nil for a weightless norm.
+	V, VB backend.Buf
+	// OneRow says the op runs for one row only: over rows, what reads it
+	// produces it itself (an expert matvec's quantize).
+	OneRow bool
 	// Need overrides what the op reads on an input: a GEMM's binary16
 	// operand is the layout its batched twin reads.
 	Need []devType
@@ -215,10 +351,18 @@ type devProgram struct {
 	// attends says the program runs an attention: it reads the paged history;
 	// ropes that it rotates q and k.
 	attends, ropes bool
-	vals           []devType
-	slots          []devSlot
-	names          []string
-	ops            []devOp
+	// experts says the program runs routed experts, which it lowers for one
+	// row: rows take the encoder until the grouped kernels are lowered.
+	experts bool
+	// streamed says an expert bank is paged in per token (dkExpertFetch).
+	streamed bool
+	// latent says the program attends over latent rows, which it lowers for
+	// one row: rows take the encoder until latent prefill is lowered.
+	latent bool
+	vals   []devType
+	slots  []devSlot
+	names  []string
+	ops    []devOp
 }
 
 func (p *devProgram) val(name string, t devType, s devSlot) devVal {
@@ -262,10 +406,34 @@ func (o devOp) wants(p *devProgram, i int) devType {
 	switch o.Kind {
 	case dkRecurrent, dkCopy, dkKVCopy, dkAct, dkQTemp, dkSplitQG, dkGateOut, dkPerLayer, dkScale, dkClamp, dkSubNorm:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
-	case dkMixture, dkAttendLatent:
-		if i == 1 {
-			return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
+	case dkExpertMatVec:
+		// The activation, int8; the selection, indices; the float rows the
+		// grouped form sorts and quantizes itself.
+		switch i {
+		case 1:
+			return devType{Elem: elemU32, Layout: layoutRow, Width: in.Width}
+		case 2:
+			return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 		}
+		return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
+	case dkExpertMatVecE:
+		switch i {
+		case 0:
+			return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
+		case 1:
+			return devType{Elem: elemU32, Layout: layoutRow, Width: in.Width}
+		}
+		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
+	case dkExpertBias, dkScaleWeights:
+		if i == 1 {
+			return devType{Elem: elemU32, Layout: layoutRow, Width: in.Width}
+		}
+		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
+	case dkSlice, dkView, dkRopeTail, dkLatentWrite, dkConcatHeads, dkLatentAttend:
+		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
+	case dkExpertFetch, dkGroupByExpert:
+		return devType{Elem: elemU32, Layout: layoutRow, Width: in.Width}
+	case dkRouterLogits, dkRouterBias, dkGroupMask, dkTopK, dkRouteWeights, dkCombine, dkGateLogit, dkGatedAdd:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkMatVec, dkQKV, dkGate2:
 		return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
@@ -285,8 +453,9 @@ func (o devOp) wants(p *devProgram, i int) devType {
 // check holds every op's inputs to the types the op reads: a value in a
 // layout or element type its consumer does not read refuses the program.
 func (p *devProgram) check() error {
-	// Every value an op reads is written by an earlier op or is the block's
-	// input: a rewrite that moves a launch above what it reads is refused.
+	// Every value an op reads is written by an earlier op, is the block's
+	// input or is a constant (constSlot): a rewrite that moves a launch above
+	// what it reads is refused.
 	written := make([]int, len(p.vals))
 	for i := range written {
 		written[i] = -1
@@ -300,6 +469,9 @@ func (p *devProgram) check() error {
 	}
 	for i, o := range p.ops {
 		for _, x := range o.In {
+			if constSlot(p.slots[x]) {
+				continue
+			}
 			if w := written[x]; w >= i {
 				return fmt.Errorf("device program: op %d (%s) reads %%%s, which op %d writes after it", i, o.Kind, p.names[x], w)
 			}
@@ -334,7 +506,7 @@ func lowersOp(k graph.OpKind) bool {
 	switch k {
 	case graph.OpNorm, graph.OpMatVec, graph.OpRope, graph.OpKVAppend, graph.OpAttend, graph.OpAdd,
 		graph.OpActMul, graph.OpAct, graph.OpHeadNorm, graph.OpLayerNorm, graph.OpScale, graph.OpClamp,
-		// The mixture's ops, lowered whole as one op (dkMixture) for now.
+		// The mixture's ops.
 		graph.OpRoute, graph.OpGather, graph.OpExpertMatVec, graph.OpCombine, graph.OpGateScalar,
 		// A recurrent mixer, lowered whole with its pre-norm (emitLinear).
 		graph.OpRecurrent,
@@ -376,37 +548,49 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		}
 	}
 	prog := &devProgram{}
-	ne, qd, kv, nf := p.NEmbd, p.NHead*p.HeadDim, p.KVRow(), p.NFFN
+	ne, qd, kv := p.NEmbd, p.NHead*p.HeadDim, p.KVRow()
 	f32 := func(w int) devType { return devType{Elem: elemF32, Layout: layoutRow, Width: w} }
 	vals := map[graph.ValueID]devVal{g.In[0]: prog.val("x", f32(ne), slotX)}
 	// The int8 operand of a matvec: the float row it reads, quantized once
 	// per source (q, k and v read one quantize of the normed row).
-	quantOf := map[devVal]devVal{}
-	operand := func(src devVal, op int) devVal {
-		if q, ok := quantOf[src]; ok {
-			return q
+	//
+	// One int8 operand buffer: the last quantize wins, so the cache is the
+	// last source, its quantize and that op. A quantize only expert matvecs
+	// read is one row's (OneRow): over rows they quantize their own sorted
+	// operand.
+	lastSrc, lastQ, lastOp := devVal(-1), devVal(-1), -1
+	operand := func(src devVal, op int, expert bool) devVal {
+		if src == lastSrc {
+			if !expert && lastOp >= 0 {
+				prog.ops[lastOp].OneRow = false
+			}
+			return lastQ
 		}
 		q := prog.val(prog.names[src]+".q8", devType{Elem: elemQ8, Layout: layoutRow, Width: prog.vals[src].Width}, slotQ8)
-		prog.ops = append(prog.ops, devOp{Kind: dkQuant, Src: []int{op}, In: []devVal{src}, Out: []devVal{q}})
-		quantOf = map[devVal]devVal{src: q} // one int8 operand buffer: the last quantize wins
+		prog.ops = append(prog.ops, devOp{Kind: dkQuant, Src: []int{op}, In: []devVal{src}, Out: []devVal{q}, OneRow: expert})
+		lastSrc, lastQ, lastOp = src, q, len(prog.ops)-1
 		return q
 	}
 	matvecSlot := map[jlm.Role]devSlot{
 		jlm.RoleAttnQ: slotQ, jlm.RoleAttnK: slotK, jlm.RoleAttnV: slotV, jlm.RoleAttnOut: slotOut,
 		jlm.RoleFFNGate: slotG, jlm.RoleFFNUp: slotU, jlm.RoleFFNDown: slotOut,
+		jlm.RoleShExpGate: slotShG, jlm.RoleShExpUp: slotShU, jlm.RoleShExpDown: slotShOut,
+		jlm.RoleAttnQA: slotMQA, jlm.RoleAttnQB: slotQ, jlm.RoleAttnKVA: slotMKV,
 	}
 	adds := 0
+	// routeW is each selection's routed weights; gated is a shared expert's
+	// output (by graph value) and its gate's logit.
+	routeW := map[devVal]devVal{}
+	// weightSel is a paged bank's weight-side index for a selection, and
+	// weightIn marks a selection whose weights scale the experts' input.
+	weightSel := map[devVal]devVal{}
+	weightIn := map[devVal]bool{}
+	gated := map[graph.ValueID]devVal{}
 	var kRot graph.ValueID = -1
-	// Latent attention lowers whole: the region from the first op that reads
-	// the attention norm's row to the value the attention's residual add
-	// reads.
-	mla, attnRow := false, graph.ValueID(-1)
+	mla := false
 	for _, o := range g.Ops {
-		switch {
-		case o.Kind == graph.OpAttendLatent:
+		if o.Kind == graph.OpAttendLatent {
 			mla = true
-		case (o.Kind == graph.OpNorm || o.Kind == graph.OpLayerNorm) && len(o.Weight) > 0 && o.Weight[0].Role == jlm.RoleAttnNorm:
-			attnRow = o.Out[0]
 		}
 	}
 	if mla && bindsRole(g, jlm.RoleAttnGate) {
@@ -418,32 +602,6 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			continue // inside a region lowered whole (the mixture, latent attention)
 		}
 		in := func(j int) devVal { return vals[o.In[j]] }
-		if mla && skipTo <= i && len(o.In) > 0 && o.In[0] == attnRow && o.Kind != graph.OpNorm && o.Kind != graph.OpLayerNorm {
-			a := -1
-			for k := i; k < len(g.Ops) && a < 0; k++ {
-				if g.Ops[k].Kind == graph.OpAdd && (g.Ops[k].In[0] == g.In[0] || g.Ops[k].In[1] == g.In[0]) {
-					a = k
-				}
-			}
-			if a < 0 {
-				return nil, "latent attention with no residual add"
-			}
-			res := g.Ops[a].In[1]
-			if res == g.In[0] {
-				res = g.Ops[a].In[0]
-			}
-			src := make([]int, 0, a-i)
-			for k := i; k < a; k++ {
-				src = append(src, k)
-			}
-			q := operand(in(0), i)
-			out := prog.val(g.Values[res].Name, f32(ne), slotOut)
-			prog.ops = append(prog.ops, devOp{Kind: dkAttendLatent, Src: src, In: []devVal{in(0), q}, Out: []devVal{out}})
-			vals[res] = out
-			skipTo = a
-			mla = false
-			continue
-		}
 		name := func(j int) string { return g.Values[o.Out[j]].Name }
 		switch o.Kind {
 		case graph.OpNorm, graph.OpLayerNorm:
@@ -461,12 +619,22 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				sub := prog.val(name(0), prog.vals[in(0)], slotSub)
 				q := prog.val(name(0)+".q8", devType{Elem: elemQ8, Layout: layoutRow, Width: prog.vals[in(0)].Width}, slotQ8)
 				prog.ops = append(prog.ops, devOp{Kind: dkSubNorm, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{sub, q}, Role: o.Weight[0].Role})
-				quantOf = map[devVal]devVal{sub: q}
+				lastSrc, lastQ, lastOp = sub, q, -1
 				vals[o.Out[0]] = sub
 				continue
 			case jlm.RoleAttnNorm, jlm.RoleFFNNorm:
 			case jlm.RolePostAttnNorm, jlm.RolePostFFNNorm:
 				k = dkPostNorm
+			case jlm.RoleAttnQANorm, jlm.RoleAttnKVANorm:
+				// A latent's norm, at the latent's width, into its own buffer.
+				ls := slotMQAn
+				if o.Weight[0].Role == jlm.RoleAttnKVANorm {
+					ls = slotMKVn
+				}
+				out := prog.val(name(0), prog.vals[in(0)], ls)
+				prog.ops = append(prog.ops, devOp{Kind: dkNorm, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Role: o.Weight[0].Role})
+				vals[o.Out[0]] = out
+				continue
 			case jlm.RoleAttnQNorm, jlm.RoleAttnKNorm:
 				// A whole-projection q/k norm (OLMo 2's, OLMoE's): the head
 				// norm's lowering at the plan's wide geometry.
@@ -490,28 +658,8 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		case graph.OpMatVec:
 			role := o.Weight[0].Role
 			if role == jlm.RoleShExpGate && p.DenseMoE {
-				// A dense MLP beside the mixture: from its gate to the add of
-				// the two branches, lowered whole with the mixture (mixFFN
-				// runs both, from the normed row and the attention's sum).
-				a := -1
-				for k := i + 1; k < len(g.Ops) && a < 0; k++ {
-					if g.Ops[k].Kind == graph.OpAdd && readsRoleOut(g, g.Ops[k], jlm.RolePostFFNNorm1) {
-						a = k
-					}
-				}
-				if a < 0 {
-					return nil, "a dense MLP beside the mixture with no sum"
-				}
-				src := make([]int, 0, a+1-i)
-				for k := i; k <= a; k++ {
-					src = append(src, k)
-				}
-				q := operand(in(0), i)
-				out := prog.val(g.Values[g.Ops[a].Out[0]].Name, f32(ne), slotMix)
-				prog.ops = append(prog.ops, devOp{Kind: dkMixture, Src: src, In: []devVal{in(0), q}, Out: []devVal{out}})
-				vals[g.Ops[a].Out[0]] = out
-				skipTo = a + 1
-				continue
+				// Its own norms and sum need buffers by liveness.
+				return nil, "a dense MLP beside the mixture"
 			}
 			if role == jlm.RolePLEGate {
 				// The per-layer embedding: its gate to the add that brings
@@ -543,9 +691,13 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			if w == 0 {
 				return nil, "a matvec with no stated width"
 			}
-			a := operand(in(0), i)
+			wi := l.matIndex(role)
+			if wi < 0 {
+				return nil, "a matvec over " + role.String() + ", which the block's device copy does not hold"
+			}
+			a := operand(in(0), i, false)
 			out := prog.val(name(0), f32(w), s)
-			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{a}, Out: []devVal{out}, Role: role})
+			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{a}, Out: []devVal{out}, Role: role, W: wi})
 			vals[o.Out[0]] = out
 		case graph.OpRecurrent:
 			// emitLinear runs the block's pre-norm and quantize itself, from
@@ -576,27 +728,158 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkRecurrent, Src: src, In: []devVal{x}, Out: outs})
 			vals[o.Out[0]] = out
 		case graph.OpRoute:
-			// The mixture: from the router to the value the block's last
-			// residual add reads, lowered whole (mixFFN) over the normed row
-			// and its quantize.
-			last := len(g.Ops) - 1
-			fin := g.Ops[last]
-			if fin.Kind != graph.OpAdd || len(fin.Out) != 1 || fin.Out[0] != g.Out[0] {
-				return nil, "a mixture not ended by the block's residual add"
+			// The router as primitives: logits, a bias, a group mask, the
+			// top k and their weights, each from the op's attributes and
+			// bindings.
+			switch {
+			case l.stream != nil && l.stream.hybrid:
+				return nil, "experts run on the host beside the card"
+			case l.router == nil:
+				return nil, "a router the block's device copy does not hold"
 			}
-			mixOut := fin.In[1]
-			if _, ok := vals[fin.In[0]]; !ok {
-				mixOut = fin.In[0]
+			var selBias, hash jlm.Role
+			for _, w := range o.Weight[1:] {
+				switch w.Role {
+				case jlm.RoleExpProbsB:
+					selBias = w.Role
+				case jlm.RoleHashExperts:
+					hash = w.Role
+				}
 			}
-			src := make([]int, 0, last-i)
-			for k := i; k < last; k++ {
-				src = append(src, k)
+			if hash != 0 {
+				return nil, "hash routing"
 			}
-			q := operand(in(0), i)
-			out := prog.val(g.Values[mixOut].Name, f32(ne), slotMix)
-			prog.ops = append(prog.ops, devOp{Kind: dkMixture, Src: src, In: []devVal{in(0), q}, Out: []devVal{out}})
-			vals[mixOut] = out
-			skipTo = last
+			ex, k := o.Attr.Experts, o.Attr.TopK
+			logits := prog.val(name(0)+".logits", f32(ex), slotRLogits)
+			prog.ops = append(prog.ops, devOp{Kind: dkRouterLogits, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{logits}})
+			for _, w := range o.Weight[1:] {
+				if w.Role != jlm.RoleRouterBias {
+					continue
+				}
+				lb := prog.val(name(0)+".logits_b", f32(ex), slotRLogitsB)
+				prog.ops = append(prog.ops, devOp{Kind: dkRouterBias, Src: []int{i}, In: []devVal{logits}, Out: []devVal{lb}, Role: w.Role})
+				logits = lb
+			}
+			rank := []devVal{logits}
+			if o.Attr.Groups > 1 {
+				plane := prog.val(name(0)+".plane", f32(ex), slotRBM)
+				prog.ops = append(prog.ops, devOp{Kind: dkGroupMask, Src: []int{i}, In: []devVal{logits}, Out: []devVal{plane}, Role: selBias})
+				rank = append(rank, plane)
+			}
+			sel := prog.val(name(0), devType{Elem: elemU32, Layout: layoutRow, Width: k}, slotSel)
+			top := prog.val(name(0)+".top", f32(k), slotTop)
+			prog.ops = append(prog.ops, devOp{Kind: dkTopK, Src: []int{i}, In: rank, Out: []devVal{sel, top}, Role: selBias})
+			rw := prog.val(name(0)+".weights", f32(k), slotRW)
+			prog.ops = append(prog.ops, devOp{Kind: dkRouteWeights, Src: []int{i}, In: []devVal{top, logits}, Out: []devVal{rw}})
+			vals[o.Out[0]] = sel
+			routeW[sel] = rw
+			prog.ops = append(prog.ops, devOp{Kind: dkGroupByExpert, Src: []int{i}, In: []devVal{sel}})
+			if l.stream != nil {
+				// A paged bank: the selected sheets come to the card here,
+				// and the matvecs index what they landed in.
+				sw := prog.val(name(0)+".slots", devType{Elem: elemU32, Layout: layoutRow, Width: k}, slotSelW)
+				prog.ops = append(prog.ops, devOp{Kind: dkExpertFetch, Src: []int{i}, In: []devVal{sel}, Out: []devVal{sw}, Staged: true})
+				weightSel[sel] = sw
+				prog.streamed = true
+			}
+		case graph.OpGather:
+			// One row: the selection indexes the weight side, so the
+			// experts read the row itself.
+			// Weighted at their input (Llama 4's): the weight scales the
+			// activation, and the combine sums at one.
+			if o.Attr.WeightIn {
+				weightIn[in(1)] = true
+			}
+			vals[o.Out[0]] = in(0)
+		case graph.OpExpertMatVec:
+			role := o.Weight[0].Role
+			wi := l.matIndex(role)
+			if wi < 0 {
+				return nil, "an expert bank " + role.String() + ", which the block's device copy does not hold"
+			}
+			var s, sb devSlot
+			switch role {
+			case jlm.RoleExpGateBank:
+				s, sb = slotEG, slotEGB
+			case jlm.RoleExpUpBank:
+				s, sb = slotEU, slotEUB
+			case jlm.RoleExpDownBank:
+				s, sb = slotEDown, slotEDownB
+			default:
+				return nil, "an expert matvec over " + role.String()
+			}
+			width := g.Values[o.Out[0]].Width
+			a := operand(in(0), i, true)
+			out := prog.val(name(0), f32(width), s)
+			prog.experts = true
+			ix := in(1)
+			if w, ok := weightSel[ix]; ok {
+				ix = w
+			}
+			prog.ops = append(prog.ops, devOp{Kind: dkExpertMatVec, Src: []int{i}, In: []devVal{a, ix, in(0)}, Out: []devVal{out}, Role: role, W: wi})
+			if len(o.Weight) > 1 {
+				b := prog.val(name(0)+".biased", f32(width), sb)
+				prog.ops = append(prog.ops, devOp{Kind: dkExpertBias, Src: []int{i}, In: []devVal{out, in(1)}, Out: []devVal{b}, Role: o.Weight[1].Role})
+				out = b
+			}
+			vals[o.Out[0]] = out
+		case graph.OpCombine:
+			rw, ok := routeW[in(1)]
+			if !ok {
+				return nil, "a combine of no selection"
+			}
+			if weightIn[in(1)] {
+				rw = prog.val("ones", prog.vals[rw], slotOnes)
+			}
+			if len(o.Weight) > 0 {
+				ws := prog.val(name(0)+".weights", prog.vals[rw], slotRWS)
+				prog.ops = append(prog.ops, devOp{Kind: dkScaleWeights, Src: []int{i}, In: []devVal{rw, in(1)}, Out: []devVal{ws}, Role: o.Weight[0].Role})
+				rw = ws
+			}
+			out := prog.val(name(0), f32(g.Values[o.Out[0]].Width), slotOut)
+			prog.ops = append(prog.ops, devOp{Kind: dkCombine, Src: []int{i}, In: []devVal{in(0), rw}, Out: []devVal{out}})
+			vals[o.Out[0]] = out
+		case graph.OpGateScalar:
+			// The gate's logit now; the scale rides the add that brings the
+			// branch in (dkGatedAdd).
+			lg := prog.val(name(0)+".logit", f32(1), slotShLogit)
+			prog.ops = append(prog.ops, devOp{Kind: dkGateLogit, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{lg}, Role: o.Weight[0].Role})
+			vals[o.Out[0]] = in(1)
+			gated[o.Out[0]] = lg
+		case graph.OpLatentAppend:
+			hist := prog.val("kv", devType{Elem: elemF32, Layout: layoutKV, Width: prog.vals[in(0)].Width + prog.vals[in(1)].Width}, slotKV)
+			k := devOp{Kind: dkLatentWrite, Src: []int{i}, In: []devVal{in(0), in(1)}, Out: []devVal{hist}}
+			if o.In[1] == kRot {
+				k.N = 1 // rotate the key as it is stored
+			}
+			prog.ops = append(prog.ops, k)
+		case graph.OpAttendLatent:
+			if len(o.In) > 2 {
+				return nil, "an attention indexer"
+			}
+			kb, vb := l.matIndex(o.Weight[0].Role), l.matIndex(o.Weight[1].Role)
+			if kb < 0 || vb < 0 {
+				return nil, "a latent attention whose banks the block's device copy does not hold"
+			}
+			nh := o.Attr.NHead
+			lat := o.Weight[0].Rows
+			ident := prog.val("ident", devType{Elem: elemU32, Layout: layoutRow, Width: nh}, slotMIdent)
+			// Absorb: each head's unrotated query against its sheet of the k
+			// up-projection, one selected matvec over the heads.
+			qa := operand(in(0), i, false)
+			raw := prog.val(name(0)+".abs_raw", f32(nh*lat), slotMAbsRaw)
+			prog.ops = append(prog.ops, devOp{Kind: dkExpertMatVec, Src: []int{i}, In: []devVal{qa, ident, in(0)}, Out: []devVal{raw}, Role: o.Weight[0].Role, W: kb})
+			abs := prog.val(name(0)+".query", f32(nh*(lat+o.Attr.NRot)), slotMAbs)
+			prog.ops = append(prog.ops, devOp{Kind: dkConcatHeads, Src: []int{i}, In: []devVal{raw, in(1)}, Out: []devVal{abs}})
+			acc := prog.val(name(0)+".acc", f32(nh*lat), slotMAcc)
+			prog.ops = append(prog.ops, devOp{Kind: dkLatentAttend, Src: []int{i}, In: []devVal{abs}, Out: []devVal{acc}})
+			// Un-absorb: each head's attention through its sheet of the v
+			// up-projection.
+			qc := operand(acc, i, false)
+			out := prog.val(name(0), f32(g.Values[o.Out[0]].Width), slotMOut)
+			prog.ops = append(prog.ops, devOp{Kind: dkExpertMatVec, Src: []int{i}, In: []devVal{qc, ident, acc}, Out: []devVal{out}, Role: o.Weight[1].Role, W: vb})
+			vals[o.Out[0]] = out
+			prog.latent = true
 		case graph.OpClamp:
 			var cs devSlot
 			switch prog.slots[in(0)] {
@@ -621,6 +904,30 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkScale, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Staged: true})
 			vals[o.Out[0]] = out
 		case graph.OpSlice:
+			if mla {
+				// Latent attention's slices: each head's unrotated and
+				// rotary parts of q, compacted; the kv latent's prefix, read
+				// in place; its rotary key.
+				src, w := prog.slots[in(0)], g.Values[o.Out[0]].Width
+				var k devKind
+				var ss devSlot
+				switch {
+				case src == slotQ && o.Attr.HeadDim == p.HeadDim && o.Attr.Offset == 0:
+					k, ss = dkSlice, slotMNope
+				case src == slotQ && o.Attr.HeadDim == p.HeadDim:
+					k, ss = dkSlice, slotMPE
+				case src == slotMKV && o.Attr.HeadDim == 0 && o.Attr.Offset == 0:
+					k, ss = dkView, slotMKVLat
+				case src == slotMKV && o.Attr.HeadDim == 0:
+					k, ss = dkSlice, slotMKPE
+				default:
+					return nil, "a latent slice the program does not lower"
+				}
+				out := prog.val(name(0), f32(w), ss)
+				prog.ops = append(prog.ops, devOp{Kind: k, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Staged: k == dkView})
+				vals[o.Out[0]] = out
+				continue
+			}
 			// A gated query's split: two slices of q's projection, its heads
 			// and its gate, lowered as one launch at the first.
 			if prog.slots[in(0)] != slotQ || o.Attr.HeadDim != 2*p.HeadDim || o.Attr.Width != p.HeadDim {
@@ -693,6 +1000,19 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{src}, Out: []devVal{out}, Role: role})
 			vals[o.Out[0]] = out
 		case graph.OpRope:
+			switch prog.slots[in(0)] {
+			case slotMPE:
+				// The query's rotary parts, compacted.
+				out := prog.val(name(0), prog.vals[in(0)], slotMPErot)
+				prog.ops = append(prog.ops, devOp{Kind: dkRopeTail, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}})
+				vals[o.Out[0]] = out
+				continue
+			case slotMKPE:
+				// The shared rotary key: rotated as the latent write stores it.
+				kRot = o.Out[0]
+				vals[o.Out[0]] = in(0)
+				continue
+			}
 			if s := prog.slots[in(0)]; s == slotQ || s == slotQG || s == slotQN || s == slotQC {
 				out := prog.val(name(0), f32(qd), slotQR)
 				prog.ops = append(prog.ops, devOp{Kind: dkRopeQ, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}})
@@ -729,6 +1049,13 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkAttend, Src: []int{i}, In: []devVal{q}, Out: []devVal{out}})
 			vals[o.Out[0]] = out
 		case graph.OpAdd:
+			if lg, ok := gated[o.In[1]]; ok {
+				// The routed sum and a gated shared expert: one launch.
+				out := prog.val(name(0), f32(ne), slotShSum)
+				prog.ops = append(prog.ops, devOp{Kind: dkGatedAdd, Src: []int{i}, In: []devVal{in(0), in(1), lg}, Out: []devVal{out}})
+				vals[o.Out[0]] = out
+				continue
+			}
 			// The add that is the block's output writes its row; another
 			// (the attention's residual, a mixture's sum) the residual's
 			// second slot.
@@ -764,7 +1091,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			adds++
 		case graph.OpAct:
 			// An ungated FFN: the activation of up's row alone.
-			out := prog.val(name(0), f32(prog.vals[in(0)].Width), slotAct)
+			out := prog.val(name(0), f32(prog.vals[in(0)].Width), actSlot(prog.slots[in(0)]))
 			prog.ops = append(prog.ops, devOp{Kind: dkAct, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}})
 			vals[o.Out[0]] = out
 		case graph.OpActMul:
@@ -775,20 +1102,70 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				vals[o.Out[0]] = out
 				continue
 			}
-			out := prog.val(name(0), f32(nf), slotAct)
-			prog.ops = append(prog.ops, devOp{Kind: dkActMul, Src: []int{i}, In: []devVal{in(0), in(1)}, Out: []devVal{out}})
+			out := prog.val(name(0), f32(prog.vals[in(0)].Width), actSlot(prog.slots[in(0)]))
+			ins := []devVal{in(0), in(1)}
+			if s := actSlot(prog.slots[in(0)]); s == slotEAct {
+				for sel := range weightIn {
+					ins = append(ins, routeW[sel])
+				}
+			}
+			prog.ops = append(prog.ops, devOp{Kind: dkActMul, Src: []int{i}, In: ins, Out: []devVal{out}})
 			vals[o.Out[0]] = out
 		}
 	}
 	// Pre-norms, post-norms or both (OLMo 2 has no pre-norm: its sublayers
 	// read the residual), one residual add a sublayer (a recurrent mixer
 	// alone has one), ending in the block's row.
+	// Every norm binds its weight and bias by role, from the graph op it
+	// lowers: the device copy prep uploaded (layer.vecs).
+	for i := range prog.ops {
+		o := &prog.ops[i]
+		switch o.Kind {
+		case dkNorm, dkPostNorm, dkHeadNorm, dkSubNorm:
+		case dkRouterBias, dkGroupMask, dkTopK, dkExpertBias, dkScaleWeights, dkGateLogit:
+			// A vector operand of the mixture's, by its role.
+			if o.Role != jlm.RoleNone {
+				if o.V = l.vecOf(o.Role); o.V == nil {
+					return nil, "a vector " + o.Role.String() + ", which the block's device copy does not hold"
+				}
+			}
+			continue
+		default:
+			continue
+		}
+		if o.Role == jlm.RoleNone {
+			continue // a weightless norm
+		}
+		ws := g.Ops[o.Src[0]].Weight
+		if o.V = l.vecOf(ws[0].Role); o.V == nil {
+			return nil, "a norm over " + ws[0].Role.String() + ", which the block's device copy does not hold"
+		}
+		if len(ws) > 1 {
+			if o.VB = l.vecOf(ws[1].Role); o.VB == nil {
+				return nil, "a norm bias " + ws[1].Role.String() + ", which the block's device copy does not hold"
+			}
+		}
+		if g.Ops[o.Src[0]].Kind == graph.OpLayerNorm && o.VB == nil {
+			// A LayerNorm kernel always reads a bias, and a file without
+			// one gives the block zeros (the model's lnBias): until vectors
+			// the model synthesises carry roles, the block's own.
+			switch ws[0].Role {
+			case jlm.RoleAttnNorm:
+				o.VB = l.nAttnB
+			case jlm.RoleFFNNorm:
+				o.VB = l.nFFNB
+			}
+			if o.VB == nil {
+				return nil, "a layer norm over " + ws[0].Role.String() + " with no bias on the device"
+			}
+		}
+	}
 	if adds == 0 || adds > 2 || len(g.Out) != 1 || prog.slots[vals[g.Out[0]]] != slotX {
 		return nil, "not a block of one or two residual adds"
 	}
 	for _, o := range prog.ops {
 		switch o.Kind {
-		case dkAttend:
+		case dkAttend, dkLatentAttend:
 			prog.attends = true
 		case dkRopeQ, dkKVWrite:
 			prog.ropes = true
@@ -798,6 +1175,43 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		return nil, err.Error()
 	}
 	return prog, ""
+}
+
+// compositeKind reports that kind k runs one of the block encoder's
+// sequences whole rather than primitives the program compiles: it cannot be
+// fused, reordered or re-tiled, so a block holding one does not count as
+// compiled (GPU.BlockComposite). The set only shrinks
+// (TestCompositeKindsOnlyShrink), to empty at the encoder's deletion.
+func compositeKind(k devKind) bool {
+	switch k {
+	case dkRecurrent, dkPerLayer:
+		return true
+	}
+	return false
+}
+
+// BlockComposite is the first composite op (compositeKind) in block li's
+// program, by name, or "" where every op is a primitive or the device holds
+// no program for it.
+func (g *GPU) BlockComposite(li int) string {
+	g.mu.Lock()
+	d := g.own[li]
+	g.mu.Unlock()
+	if d == nil {
+		return ""
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	l := d.layers[li]
+	if l == nil || l.prog == nil {
+		return ""
+	}
+	for _, o := range l.prog.ops {
+		if compositeKind(o.Kind) {
+			return o.Kind.String()
+		}
+	}
+	return ""
 }
 
 // BlockProgram is block li's device program as text and, where its last step
@@ -855,6 +1269,9 @@ const (
 	progRotary                    // a rotary the program does not lower
 	progNormResid                 // a norm or residual the program does not lower
 	progTableSplit                // TableSplit
+	progRowsExperts               // experts over several rows (grouped expert kernels not yet lowered)
+	progStreamTuning              // a paged bank under a probe, prefetch or fixed selection
+	progRowsLatent                // latent attention over several rows (latent prefill not yet lowered)
 	numProgReasons
 )
 
@@ -864,6 +1281,12 @@ func (r progReason) String() string {
 		return "not lowered"
 	case progNoProgram:
 		return "NoProgram"
+	case progRowsExperts:
+		return "experts over several rows"
+	case progRowsLatent:
+		return "latent attention over several rows"
+	case progStreamTuning:
+		return "a paged bank under a probe, prefetch or fixed selection"
 	case progRowsNotPrefill:
 		return "rows that are not a prefill chunk"
 	case progFault:
@@ -929,3 +1352,30 @@ func hasOp(g *graph.Graph, k graph.OpKind) bool {
 	}
 	return false
 }
+
+// matIndex is the index of block l's matrix of role r in its list (layer.rs,
+// layer.ms), or -1 where the block holds none.
+func (l *layer) matIndex(r jlm.Role) int {
+	for _, a := range l.roles {
+		if a.role == r {
+			return a.i
+		}
+	}
+	return -1
+}
+
+// actSlot is where an activation of a row in slot s goes: the experts' rows'
+// to theirs, a shared expert's to its own, a dense FFN's to bs.act.
+func actSlot(s devSlot) devSlot {
+	switch s {
+	case slotEG, slotEU, slotEGB, slotEUB:
+		return slotEAct
+	case slotShG, slotShU:
+		return slotShAct
+	}
+	return slotAct
+}
+
+// constSlot reports that slot s holds a constant the block's scratch is
+// built with: read without a writer.
+func constSlot(s devSlot) bool { return s == slotOnes || s == slotMIdent }

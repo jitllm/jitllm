@@ -986,6 +986,12 @@ type tensor struct {
 }
 
 type layer struct {
+	// vecs is every vector the block's loader read, by role (build's vec):
+	// norms, biases, scales, each through the field that holds it where one
+	// does, so what a device binding by role reads is what the host reads
+	// now (State.vectors).
+	vecs []vecRef
+
 	attnNorm, ffnNorm []float32 // norms are tiny and always F32; kept expanded
 	// attnNormB and ffnNormB are a LayerNorm's biases (C6), nil for RMSNorm
 	// and for a bias-free LayerNorm. ffnNorm itself is nil on a parallel block
@@ -2589,7 +2595,8 @@ func releaseLayer(c *jlm.File, li int, l *layer, keepExperts bool) {
 		}
 	}
 	if l.ds4 != nil {
-		for _, t := range append(l.ds4.tensors(), &l.wqa, &l.wqb) {
+		ts := l.ds4.tensors()
+		for _, t := range append(ts[:], &l.wqa, &l.wqb) {
 			t.data = nil
 			if t.packed != nil {
 				t.packed.QS, t.packed.D, t.packed.SC = nil, nil, nil
@@ -2700,41 +2707,96 @@ func (m *Model) embedRow(dst []float32, token int) error {
 // An expert of a bank is a view, and binding it with bindOne would overwrite it
 // with the whole bank, making every expert expert 0 on an unpacked bank. The
 // views are rebuilt from the freshly bound bank instead.
-func bindPacked(c *jlm.File, cfg *Config, l *layer) error {
-	// Every matrix a block holds. A tensor missing from this list keeps a stale
-	// or empty span after a page-in and no host reader will accept it. This
-	// list, the build() bindings and releaseLayer must agree about a new
-	// matrix.
-	for _, t := range []*tensor{
+// vecRef is a block vector by role: the layer's field that holds it, or
+// the vector itself where no field of the layer's does.
+type vecRef struct {
+	role  jlm.Role
+	field *[]float32
+	v     []float32
+}
+
+// get is the vector now: the field's current value where there is one.
+func (r vecRef) get() []float32 {
+	if r.field != nil {
+		return *r.field
+	}
+	return r.v
+}
+
+// appendVectors appends every vector field block l has to dst: the one
+// list bindVectors matches the loader's reads against, so a vector the
+// model later swaps (a fault, a fold) reaches a device binding by role.
+func (l *layer) appendVectors(dst []*[]float32) []*[]float32 {
+	return append(dst,
+		&l.attnNorm, &l.ffnNorm, &l.attnNormB, &l.ffnNormB, &l.upB, &l.downB, &l.gateB, &l.clamp,
+		&l.qNorm, &l.kNorm, &l.postAttnNorm, &l.postFFNNorm, &l.attnSubNorm, &l.ffnSubNorm, &l.xielu,
+		&l.ffnNorm2, &l.postFFNNorm1, &l.postFFNNorm2, &l.routerNorm, &l.expScale, &l.plePost,
+		&l.altRouterNorm, &l.altPredT, &l.altCorrT, &l.altCorrScale, &l.laurelPost, &l.qaNorm, &l.kvaNorm,
+		&l.idxKNorm, &l.idxKNormB, &l.idxQNorm, &l.resAttn, &l.resFFN, &l.routedNorm,
+		&l.bq, &l.bk, &l.bv, &l.bo, &l.sinks, &l.routerB, &l.expGateB, &l.expUpB, &l.expDownB, &l.expProbsB,
+		&l.shRouter, &l.ssmConv1d, &l.ssmA, &l.ssmDtBias, &l.ssmNorm, &l.ssmD, &l.ssmConvB,
+		&l.ssmDtNorm, &l.ssmBNorm, &l.ssmCNorm)
+}
+
+// bindVectors records the loader's reads of block l (build's vec), each
+// through the field that holds it.
+func (l *layer) bindVectors(read []nn.Vector) {
+	var buf [64]*[]float32
+	fields := l.appendVectors(buf[:0])
+	l.vecs = make([]vecRef, 0, len(read))
+	for _, x := range read {
+		r := vecRef{role: x.Role, v: x.V}
+		for _, f := range fields {
+			if len(*f) != 0 && len(x.V) != 0 && &(*f)[0] == &x.V[0] {
+				r.field, r.v = f, nil
+				break
+			}
+		}
+		l.vecs = append(l.vecs, r)
+	}
+}
+
+// maxMatrices bounds appendMatrices: a caller's stack array of this many
+// holds every block's list without growing onto the heap.
+const maxMatrices = 64
+
+// appendMatrices appends every matrix block l holds to dst, each once: the
+// one list a page-in rebinds (bindPacked) and the device binds by role
+// (layerWeightsAt's All). A tensor missing from it keeps a stale or empty
+// span after a page-in and never reaches a device; this list, the build()
+// bindings and releaseLayer must agree about a new matrix.
+func (l *layer) appendMatrices(dst []*tensor) []*tensor {
+	dst = append(dst,
 		&l.wq, &l.wk, &l.wv, &l.wo, &l.gate, &l.up, &l.down, &l.router,
 		&l.shGate, &l.shUp, &l.shDown,
 		&l.ssmGate, &l.ssmBA, &l.ssmOut, &l.ssmIn,
-		// MLA's five.
 		&l.wqa, &l.wqb, &l.wkva, &l.wkb, &l.wvb,
-		// Kimi-K3's MLA output gate and latent mixture projections.
 		&l.mlaGate, &l.routedDown, &l.routedUp,
-		// Kimi Delta Attention's four.
 		&l.ssmFA, &l.ssmFB, &l.ssmGA, &l.ssmGB, &l.ssmXDt, &l.ssmXB, &l.ssmXC, &l.ssmDtProj,
-		// Gemma 4's per-layer embedding gate and projection.
 		&l.pleGate, &l.pleProj,
-		// DeepSeek V3.2's indexer, and MiniMax-M3's query.
 		&l.idxQB, &l.idxK, &l.idxProj, &l.idxQ,
-		// Gemma 3n's AltUp router and LAuReL.
-		&l.altRouter, &l.laurelL, &l.laurelR,
-	} {
-		bindOne(c, t)
-	}
-	// DeepSeek V4's matrices, and the grouped projection's per-group views,
-	// re-cut when the bank moved as the heads below are.
+		&l.altRouter, &l.laurelL, &l.laurelR)
 	if d := l.q4e; d != nil {
 		for _, t := range d.tensors() {
-			bindOne(c, t)
+			dst = append(dst, t)
 		}
 	}
 	if d := l.ds4; d != nil {
 		for _, t := range d.tensors() {
-			bindOne(c, t)
+			dst = append(dst, t)
 		}
+	}
+	return dst
+}
+
+func bindPacked(c *jlm.File, cfg *Config, l *layer) error {
+	var buf [maxMatrices]*tensor
+	for _, t := range l.appendMatrices(buf[:0]) {
+		bindOne(c, t)
+	}
+	// DeepSeek V4's grouped projection's per-group views, re-cut when the
+	// bank moved as the heads below are.
+	if d := l.ds4; d != nil {
 		if from := spansOf(d.woA); from != d.woAFrom {
 			gw := cfg.NHead / cfg.OGroups * cfg.HeadDim
 			for g := range d.woAG {
@@ -2916,6 +2978,10 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		}
 		return tn, nil
 	}
+	// vecs records every block vector as it is read, by block and role:
+	// what a device binding by role is handed (nn.LayerWeights.Vecs), for
+	// every family's loader without a list of fields.
+	vecs := map[int32][]nn.Vector{}
 	vec := func(role jlm.Role, block int32) ([]float32, error) {
 		e, ok := c.Find(role, block, -1)
 		if !ok {
@@ -2933,6 +2999,9 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		out := make([]float32, n)
 		if err := quant.Dequant32(typ, qs, out); err != nil {
 			return nil, fmt.Errorf("model: %v: %w", role, err)
+		}
+		if block >= 0 {
+			vecs[block] = append(vecs[block], nn.Vector{Role: role, V: out})
 		}
 		return out, nil
 	}
@@ -3750,6 +3819,9 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 	}
 	if err := buildMTP(c, m, get, vec, optVec); err != nil {
 		return nil, err
+	}
+	for i := range m.layers {
+		m.layers[i].bindVectors(vecs[int32(i)])
 	}
 	return m, nil
 }

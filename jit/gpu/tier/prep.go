@@ -672,7 +672,8 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// nor charged. A linear block leaves 1..3 empty (Wq carries its fused q|k|v),
 	// an attention block leaves 10..12 empty, and pageSizeWhy skips zero-length
 	// weights.
-	ws := weightList(w)
+	l.bound = boundRoles(p.Graph)
+	ws := weightList(make([]nn.Weight, 0, numPositional+len(l.bound)), w, l.bound)
 	// A streamed bank is priced at its compact size by scaling the three bank
 	// rows from NExpert sheets to NExpertUsed; every size derives from
 	// Weight.Rows, so the charge and the refund cannot disagree. slots > 1 is a
@@ -814,6 +815,10 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 	}
 	g.ensureRaw(ws, need)
+	// The block's matrices past the positional list: each uploaded and paged
+	// with the block, and bound by role (layer.roles).
+	l.extra = make([]*resident, len(ws)-numPositional)
+	l.mvExtra = make([]mv, len(ws)-numPositional)
 	rs := l.tensors()
 	ms := []*mv{&l.mvq, &l.mvk, &l.mvv, &l.mvo, &l.mvg, &l.mvu, &l.mvd,
 		&l.mvsg, &l.mvsu, &l.mvsd, &l.mvSG, &l.mvBA, &l.mvSO,
@@ -835,6 +840,9 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		&l.mvMG, &l.mvRD, &l.mvRU,
 		// Qwen3.8-Flash-Next's hyper-connections and n-gram projections.
 		&l.mvHAD, &l.mvHAU, &l.mvHAI, &l.mvHFD, &l.mvHFU, &l.mvHFI, &l.mvNGK, &l.mvNGV}
+	for j := range l.mvExtra {
+		ms = append(ms, &l.mvExtra[j])
+	}
 	// Same order as rs/ms. Attention carries biases on every architecture that
 	// has them; a vision block also on up and down. For every text model the
 	// FFN entries stay nil, so their kernels are byte-identical to before
@@ -881,6 +889,24 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		return false
 	}
 	for i, x := range ws {
+		if i >= numPositional {
+			// A matrix only the device program binds: one expert, no bias,
+			// its own activation, uploaded as any other.
+			r := mkw(i, x)
+			if r == nil || !r.ok {
+				if g.LastErr == "" {
+					g.LastErr = fmt.Sprintf("block %d: %v (%s %dx%d) not resident", li, x.Role, x.T, x.Rows, x.K)
+				}
+				return false
+			}
+			*rs[i] = r
+			k, ok := mkkID(x, r, 1, 0, false, false)
+			if !ok {
+				return false
+			}
+			*ms[i] = k
+			continue
+		}
 		// A DeepSeek V4 block names its own slots (ds4Slot): the generic
 		// skips below are for every other architecture.
 		if p.DS4 != nil {
@@ -1252,6 +1278,9 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	}
 	var err error
 	// Norms and biases arrive as f32, which is what the device reads.
+	// upped is every host vector uploaded below and its buffer, so a vector
+	// the program binds by role (layer.vecs) reuses the upload.
+	upped := make([]upload, 0, 32)
 	up := func(dst *backend.Buf, v []float32) {
 		// A KV-sharing block's k norm is absent: it caches nothing.
 		if err != nil || len(v) == 0 {
@@ -1264,6 +1293,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		err = b.Write(f32b(f))
 		*dst = b
+		upped = append(upped, upload{&v[0], len(v), b})
 	}
 	if p.NFFNShExp > 0 && w.ShRouter != nil {
 		// The shared gate is a vector producing one logit, uploaded as plain
@@ -1712,6 +1742,45 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			}
 		}
 	}
+	l.roles = rolesOf(ws, w.All)
+	// The vectors the block's program binds, by role: the buffer an upload
+	// above made from the same host floats, else one of their own.
+	l.vecs, l.vecOwned = l.vecs[:0], l.vecOwned[:0]
+	for _, r := range boundVecRoles(p.Graph) {
+		var v []float32
+		for _, x := range w.Vecs {
+			if x.Role == r {
+				v = x.V
+				break
+			}
+		}
+		if len(v) == 0 {
+			continue
+		}
+		var b backend.Buf
+		for _, u := range upped {
+			if u.p == &v[0] && u.n == len(v) {
+				b = u.b
+				break
+			}
+		}
+		if b == nil {
+			if b, err = g.dev.Alloc(len(v) * 4); err == nil {
+				err = b.Write(f32b(v))
+			}
+			if err != nil {
+				g.LastErr = fmt.Sprintf("block %d: %v: %v", li, r, err)
+				return false
+			}
+			// Counted with the block's other vectors, which its release
+			// refunds; charged here, past where prep charged the rest.
+			l.auxBytes += uint64(len(v) * 4)
+			g.charge(uint64(len(v) * 4))
+			l.vecOwned = append(l.vecOwned, b)
+		}
+		l.vecs = append(l.vecs, roleBuf{r, b})
+	}
+	l.rs, l.ms = rs, ms
 	if stream {
 		// A streamed block is pinned (pg == nil, which every pager path reads as
 		// "resident, never a victim"): its base is small and its bank is not
