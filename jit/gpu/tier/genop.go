@@ -682,9 +682,11 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 			case gaWSC:
 				bufs[j] = st.sc
 			case gaOpA:
-				bufs[j] = st.a
+				// The int8 operand the op reads: its input's own pair where
+				// the value has one, else the block's (int8Of).
+				bufs[j], _ = int8Of(st, o.In[0])
 			case gaOpAX:
-				bufs[j] = st.ax
+				_, bufs[j] = int8Of(st, o.In[0])
 			case gaMBias:
 				bufs[j] = st.mbias
 			case gaF16:
@@ -864,10 +866,6 @@ func (g *devTier) genMatVec(o *devOp, prog *devProgram, bs *blockScratch) []genL
 		o.Why = whyTable
 	}
 	if o.Why != 0 {
-		return nil
-	}
-	if _, _, own := q8Pair(bs, prog.slots[o.In[0]]); own {
-		o.Why = whyOwnOperand
 		return nil
 	}
 	e, args := matEpi(o, m, m.rows)
@@ -1189,7 +1187,6 @@ const (
 	whyBank
 	whyPadded
 	whyTable
-	whyOwnOperand
 	whyEpilogue
 	whyNoBatch
 	whyNotStaged
@@ -1201,7 +1198,7 @@ const (
 
 func (w genWhy) String() string {
 	return [...]string{"", "no resident weight", "no decode kernel", "a k split", "a bank's sheets",
-		"padded rows", "a table split", "an operand of its own", "an epilogue it cannot compose",
+		"padded rows", "a table split", "an epilogue it cannot compose",
 		"no batched form", "a prompt form other than the staged GEMM", "a tail launch",
 		"no float row stated", "a history that is not paged, or a row wider than its heads",
 		"rows whose head-major layout the program does not state"}[w]
@@ -1250,10 +1247,6 @@ func (g *devTier) genSplitMatVec(o *devOp, s kernels.MatVecShape, e *compose.Epi
 // row tiles by token groups by segments, which no proportional cut keeps.
 // Callers hold g.mu.
 func (g *devTier) genChunkMatVec(o *devOp, prog *devProgram, bs *blockScratch, m, bm mv, rows int) []genLaunch {
-	if _, _, own := q8Pair(bs, prog.slots[o.In[0]]); own {
-		o.Why = whyOwnOperand
-		return nil
-	}
 	e, eargs := matEpi(o, m, m.rows)
 	if e == nil {
 		o.Why = whyEpilogue
@@ -1456,10 +1449,6 @@ func (g *devTier) genBankMatVec(o *devOp, prog *devProgram, bs *blockScratch) []
 		o.Why = whyBank
 	}
 	if o.Why != 0 {
-		return nil
-	}
-	if _, _, own := q8Pair(bs, prog.slots[o.In[0]]); own {
-		o.Why = whyOwnOperand
 		return nil
 	}
 	split := max(m.split, 1)
