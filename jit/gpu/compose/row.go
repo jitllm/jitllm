@@ -28,6 +28,9 @@ type Row struct {
 	// Q8, where set, writes node Q8.Val as the int8 operand a matvec reads:
 	// into buffers Q8.A and Q8.X at Q8.Window, the row padded to Q8.Pad.
 	Q8 *Q8
+	// Loops are the trip counts of the group's folds' loops (Loop): loop c
+	// runs Loops[c] times.
+	Loops []int
 }
 
 // BufKind is how a group reads a buffer.
@@ -52,6 +55,10 @@ const (
 	// BufOutU32 is a 32-bit word per element of every row, written (a pair
 	// of binary16 values, OpPackF16).
 	BufOutU32
+	// BufRowF16 is BufRow stored as binary16, two elements a 32-bit word
+	// (the low half first): a load decodes the element's half. A buffer of
+	// an odd element count is padded to a whole word.
+	BufRowF16
 )
 
 // Buf is one of a group's buffers, a kernel parameter in order.
@@ -73,6 +80,19 @@ const (
 	NLess                    // A < B, of indices: a condition
 	NSelect                  // C ? A : B, of floats or of indices
 	NInput                   // a former's own output at the element (a matvec's), in an epilogue
+	// NIter is loop At's iterator (an index, 0 up to its trip): what a
+	// fold's body reads its element by.
+	NIter
+	// NFold is a value carried by loop At: B before the first trip, then
+	// A each trip, where A (any node, a later one too: the loop's back
+	// edge) reads the loop's iterator and the values its folds carry at
+	// the trip's start. Inside its loop's body a fold reads as its value at
+	// the trip's start, elsewhere as its value after the last trip. Folds
+	// of one loop run in one loop, each reading the others' values: a
+	// count, a sum, a maximum or several carried together, in the order
+	// the body states. A loop nested in another's body (a fold whose body
+	// reads another loop's iterator) runs inside that body.
+	NFold
 )
 
 // Op is a unary or binary map.
@@ -166,6 +186,12 @@ func (g *Row) Encode(s Schedule) []uint32 {
 	if q := g.Q8; q != nil {
 		e = append(e, uint32(q.Val), uint32(q.A), uint32(q.X), uint32(q.Window), uint32(q.Pad))
 	}
+	if len(g.Loops) > 0 {
+		e = append(e, 0xF01D, uint32(len(g.Loops)))
+		for _, t := range g.Loops {
+			e = append(e, uint32(t))
+		}
+	}
 	return e
 }
 
@@ -180,29 +206,44 @@ func KeyOf(enc []uint32) Key {
 	return Key{Hash: h.Sum64()}
 }
 
-// depth is a node's pass: the reductions under it, nested.
-func (g *Row) depth() []int {
+// depth is a node's pass: the reductions under it, nested. A fold reads
+// later nodes (its loop's back edge), so the passes are swept to their
+// fixed point; false where they have none (a reduction a fold's own body
+// reads through the fold).
+func (g *Row) depth() ([]int, bool) {
 	d := make([]int, len(g.Nodes))
-	for i, n := range g.Nodes {
-		switch n.Kind {
-		case NUnary:
-			d[i] = d[n.A]
-		case NBinary, NUBinary, NLess:
-			d[i] = max(d[n.A], d[n.B])
-			if n.Op == OpFma && n.Kind == NBinary {
-				d[i] = max(d[i], d[n.C])
+	for sweep := 0; sweep <= len(g.Nodes)+1; sweep++ {
+		changed := false
+		for i, n := range g.Nodes {
+			v := 0
+			switch n.Kind {
+			case NUnary:
+				v = d[n.A]
+			case NBinary, NUBinary, NLess:
+				v = max(d[n.A], d[n.B])
+				if n.Op == OpFma && n.Kind == NBinary {
+					v = max(v, d[n.C])
+				}
+			case NSelect:
+				v = max(d[n.A], d[n.B], d[n.C])
+			case NReduce:
+				v = d[n.A] + 1
+			case NLoad:
+				if n.Indexed {
+					v = d[n.Ix]
+				}
+			case NFold:
+				v = max(d[n.A], d[n.B])
 			}
-		case NSelect:
-			d[i] = max(d[n.A], d[n.B], d[n.C])
-		case NReduce:
-			d[i] = d[n.A] + 1
-		case NLoad:
-			if n.Indexed {
-				d[i] = d[n.Ix]
+			if v != d[i] {
+				d[i], changed = v, true
 			}
 		}
+		if !changed {
+			return d, true
+		}
 	}
-	return d
+	return d, false
 }
 
 // Check refuses a group the former cannot emit: a node reading a later one,
@@ -223,7 +264,7 @@ func (g *Row) Check() error {
 			if n.Buf < 0 || n.Buf >= len(g.Bufs) {
 				return fmt.Errorf("compose: node %d loads buffer %d of %d", i, n.Buf, len(g.Bufs))
 			}
-			if k := g.Bufs[n.Buf].Kind; k != BufRow && k != BufVec && k != BufScalar && k != BufRowScalar && k != BufU32 {
+			if k := g.Bufs[n.Buf].Kind; k != BufRow && k != BufVec && k != BufScalar && k != BufRowScalar && k != BufU32 && k != BufRowF16 {
 				return fmt.Errorf("compose: node %d loads an output buffer", i)
 			}
 		case NUnary, NReduce:
@@ -235,6 +276,22 @@ func (g *Row) Check() error {
 			}
 		case NSelect:
 			in = []int{n.A, n.B, n.C}
+		case NIter:
+			if n.At < 0 || n.At >= len(g.Loops) {
+				return fmt.Errorf("compose: node %d iterates loop %d of %d", i, n.At, len(g.Loops))
+			}
+		case NFold:
+			if n.At < 0 || n.At >= len(g.Loops) || g.Loops[n.At] < 1 {
+				return fmt.Errorf("compose: node %d folds over loop %d of %d", i, n.At, len(g.Loops))
+			}
+			// Its step may be any node, a later one too: the back edge.
+			if n.A < 0 || n.A >= len(g.Nodes) {
+				return fmt.Errorf("compose: fold %d steps to node %d", i, n.A)
+			}
+			if g.isIndex(n.A) != g.isIndex(n.B) {
+				return fmt.Errorf("compose: fold %d steps to a value of another type than its start", i)
+			}
+			in = []int{n.B}
 		}
 		if n.Kind == NLoad && n.Indexed {
 			in = append(in, n.Ix)
@@ -257,7 +314,91 @@ func (g *Row) Check() error {
 			return fmt.Errorf("compose: an int8 epilogue of node %d at %d", q.Val, q.Pad)
 		}
 	}
+	if _, ok := g.depth(); !ok {
+		return fmt.Errorf("compose: a reduction read through a fold of its own")
+	}
 	return nil
+}
+
+// env is the values emitted so far in a scope: the pass's element, and
+// each fold loop's body inside it (a body sees what its enclosing scope
+// emitted, and nothing it emits outlives it but its folds).
+type env struct {
+	m  map[int]ir.Value
+	up *env
+}
+
+func (e *env) get(n int) (ir.Value, bool) {
+	for x := e; x != nil; x = x.up {
+		if v, ok := x.m[n]; ok {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
+func newEnv(up *env) *env { return &env{m: map[int]ir.Value{}, up: up} }
+
+// operands are the nodes node n reads where it is emitted: not a fold's
+// step (its loop's body), and not a reduction's operand (an earlier pass).
+func (g *Row) operands(n int) []int {
+	nd := g.Nodes[n]
+	switch nd.Kind {
+	case NUnary:
+		return []int{nd.A}
+	case NBinary:
+		if nd.Op == OpFma {
+			return []int{nd.A, nd.B, nd.C}
+		}
+		return []int{nd.A, nd.B}
+	case NUBinary, NLess:
+		return []int{nd.A, nd.B}
+	case NSelect:
+		return []int{nd.A, nd.B, nd.C}
+	case NLoad:
+		if nd.Indexed {
+			return []int{nd.Ix}
+		}
+	case NFold:
+		return []int{nd.B}
+	}
+	return nil
+}
+
+// varies is which nodes change from trip to trip of loop c: its iterator,
+// its folds, and whatever reads them -- a fold of another loop whose start
+// or step does is a loop nested in c's body. A fixed point, since a fold
+// reads later nodes.
+func (g *Row) varies(c int) []bool {
+	v := make([]bool, len(g.Nodes))
+	for changed := true; changed; {
+		changed = false
+		for i, nd := range g.Nodes {
+			if v[i] {
+				continue
+			}
+			x := false
+			switch nd.Kind {
+			case NIter:
+				x = nd.At == c
+			case NFold:
+				x = nd.At == c
+				for _, f := range g.Nodes {
+					if f.Kind == NFold && f.At == nd.At && (v[f.B] || v[f.A]) {
+						x = true
+					}
+				}
+			default:
+				for _, o := range g.operands(i) {
+					x = x || v[o]
+				}
+			}
+			if x {
+				v[i], changed = true, true
+			}
+		}
+	}
+	return v
 }
 
 // Emit forms the group's kernel under schedule s.
@@ -273,7 +414,7 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 	params := make([]ir.Value, len(g.Bufs))
 	for i, bf := range g.Bufs {
 		t := ir.F32
-		if bf.Kind == BufQ8 || bf.Kind == BufU32 || bf.Kind == BufOutU32 {
+		if bf.Kind == BufQ8 || bf.Kind == BufU32 || bf.Kind == BufOutU32 || bf.Kind == BufRowF16 {
 			t = ir.U32
 		}
 		params[i] = b.Param(fmt.Sprintf("p%d", i), t)
@@ -284,12 +425,111 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 	tid := b.TID()
 	width := b.Const(ir.U32, int64(g.Width))
 	last := b.Const(ir.U32, int64(g.Width-1))
-	depth := g.depth()
+	depth, _ := g.depth()
 	rowVal := make([]ir.Value, len(g.Nodes)) // a reduction's result, once its pass ran
-	// elem emits node n at column idx, its loads and maps in this pass.
-	var elem func(n int, idx ir.Value, memo map[int]ir.Value) ir.Value
-	elem = func(n int, idx ir.Value, memo map[int]ir.Value) ir.Value {
-		if v, ok := memo[n]; ok {
+	var emitErr error
+	// half is the binary16 element at e of a BufRowF16 buffer: its word,
+	// and the half of it the element sits in.
+	half := func(p, e ir.Value) ir.Value {
+		one := b.Const(ir.U32, 1)
+		word := b.Load(ir.U32, p, b.Shr(ir.U32, e, one), 0)
+		sh := b.Shl(ir.U32, b.And(ir.U32, e, one), b.Const(ir.U32, 4))
+		return b.CvtF16H(b.Shr(ir.U32, word, sh))
+	}
+	// elem emits node n at column idx, its loads and maps, in scope e.
+	var elem func(n int, idx ir.Value, e *env) ir.Value
+	// loop emits fold loop c in scope e: first what its body reads that
+	// does not change from trip to trip, then the loop, its folds' values
+	// after it left in e.
+	loop := func(c int, idx ir.Value, e *env) {
+		var folds []int
+		for i, nd := range g.Nodes {
+			if nd.Kind == NFold && nd.At == c {
+				folds = append(folds, i)
+			}
+		}
+		vary := g.varies(c)
+		// closed is a node reading the iterator of a loop not open here: a
+		// loop nested in c's body, so the node is too.
+		var closed func(n int) bool
+		closed = func(n int) bool {
+			if g.Nodes[n].Kind == NIter {
+				_, ok := e.get(n)
+				return !ok
+			}
+			for _, o := range g.operands(n) {
+				if closed(o) {
+					return true
+				}
+			}
+			return false
+		}
+		seen := make([]bool, len(g.Nodes))
+		var hoist func(n int)
+		hoist = func(n int) {
+			if seen[n] {
+				return
+			}
+			seen[n] = true
+			if !vary[n] && !closed(n) {
+				elem(n, idx, e)
+				return
+			}
+			nd := g.Nodes[n]
+			if nd.Kind == NFold && nd.At != c {
+				// A loop nested in c's body: what its starts and steps read.
+				for _, f := range g.Nodes {
+					if f.Kind == NFold && f.At == nd.At {
+						hoist(f.B)
+						hoist(f.A)
+					}
+				}
+				return
+			}
+			for _, o := range g.operands(n) {
+				hoist(o)
+			}
+		}
+		inits := make([]ir.Value, len(folds))
+		for j, f := range folds {
+			inits[j] = elem(g.Nodes[f].B, idx, e)
+		}
+		for _, f := range folds {
+			hoist(g.Nodes[f].A)
+		}
+		zero, one := b.Const(ir.U32, 0), b.Const(ir.U32, 1)
+		b.Loop(int64(g.Loops[c]))
+		in := newEnv(e)
+		it := b.Phi(ir.U32, zero)
+		for i, nd := range g.Nodes {
+			if nd.Kind == NIter && nd.At == c {
+				in.m[i] = it
+			}
+		}
+		phis := make([]ir.Value, len(folds))
+		for j, f := range folds {
+			t := ir.F32
+			if g.isIndex(f) {
+				t = ir.U32
+			}
+			phis[j] = b.Phi(t, inits[j])
+			in.m[f] = phis[j]
+		}
+		next := make([]ir.Value, len(folds))
+		for j, f := range folds {
+			next[j] = elem(g.Nodes[f].A, idx, in)
+		}
+		for j := range folds {
+			b.SetPhi(phis[j], next[j])
+		}
+		b.SetPhi(it, b.Add(ir.U32, it, one))
+		b.EndLoop()
+		for j, f := range folds {
+			e.m[f] = phis[j]
+		}
+	}
+	elem = func(n int, idx ir.Value, e *env) ir.Value {
+		if v, ok := e.get(n); ok {
 			return v
 		}
 		nd := g.Nodes[n]
@@ -297,12 +537,15 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		switch nd.Kind {
 		case NLoad:
 			if nd.Indexed {
-				at := elem(nd.Ix, idx, memo)
-				t := ir.F32
-				if g.Bufs[nd.Buf].Kind == BufU32 {
-					t = ir.U32
+				at := elem(nd.Ix, idx, e)
+				switch g.Bufs[nd.Buf].Kind {
+				case BufU32:
+					v = b.Load(ir.U32, params[nd.Buf], at, 0)
+				case BufRowF16:
+					v = half(params[nd.Buf], at)
+				default:
+					v = b.Load(ir.F32, params[nd.Buf], at, 0)
 				}
-				v = b.Load(t, params[nd.Buf], at, 0)
 				break
 			}
 			switch g.Bufs[nd.Buf].Kind {
@@ -310,6 +553,8 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 				v = b.Load(ir.U32, params[nd.Buf], r, 0)
 			case BufRow:
 				v = b.Load(ir.F32, params[nd.Buf], b.Add(ir.U32, rowBase, idx), 0)
+			case BufRowF16:
+				v = half(params[nd.Buf], b.Add(ir.U32, rowBase, idx))
 			case BufVec:
 				v = b.Load(ir.F32, params[nd.Buf], idx, 0)
 			case BufRowScalar:
@@ -325,8 +570,18 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			v = r
 		case NUConst:
 			v = b.Const(ir.U32, int64(nd.At))
+		case NIter:
+			// Its loop's body binds it; read anywhere else it has no value.
+			if emitErr == nil {
+				emitErr = fmt.Errorf("compose: node %d reads loop %d's iterator outside its body", n, nd.At)
+			}
+			v = b.Const(ir.U32, 0)
+		case NFold:
+			loop(nd.At, idx, e)
+			v, _ = e.get(n)
+			return v
 		case NUBinary:
-			x, y := elem(nd.A, idx, memo), elem(nd.B, idx, memo)
+			x, y := elem(nd.A, idx, e), elem(nd.B, idx, e)
 			switch nd.Op {
 			case OpAdd:
 				v = b.Add(ir.U32, x, y)
@@ -342,17 +597,21 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 				v = b.Min(ir.U32, x, y)
 			}
 		case NLess:
-			v = b.Lt(ir.U32, elem(nd.A, idx, memo), elem(nd.B, idx, memo))
+			t := ir.U32
+			if !g.isIndex(nd.A) {
+				t = ir.F32 // of floats
+			}
+			v = b.Lt(t, elem(nd.A, idx, e), elem(nd.B, idx, e))
 		case NSelect:
 			t := ir.F32
 			if g.isIndex(nd.A) {
 				t = ir.U32
 			}
-			v = b.Select(t, elem(nd.C, idx, memo), elem(nd.A, idx, memo), elem(nd.B, idx, memo))
+			v = b.Select(t, elem(nd.C, idx, e), elem(nd.A, idx, e), elem(nd.B, idx, e))
 		case NReduce:
 			v = rowVal[n]
 		case NUnary:
-			a := elem(nd.A, idx, memo)
+			a := elem(nd.A, idx, e)
 			switch nd.Op {
 			case OpAct:
 				v = kernels.ActFragment(b, a, nd.Act)
@@ -364,16 +623,16 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 				v = b.Max(ir.F32, a, b.Sub(ir.F32, b.ConstF32(0), a))
 			}
 		case NBinary:
-			a := elem(nd.A, idx, memo)
+			a := elem(nd.A, idx, e)
 			switch nd.Op {
 			case OpActMul:
-				v = kernels.ActMulFragment(b, nd.Act, a, func() ir.Value { return elem(nd.B, idx, memo) })
+				v = kernels.ActMulFragment(b, nd.Act, a, func() ir.Value { return elem(nd.B, idx, e) })
 			case OpPackF16:
-				v = b.PackF16(a, elem(nd.B, idx, memo))
+				v = b.PackF16(a, elem(nd.B, idx, e))
 			case OpFma:
-				v = b.Fma(a, elem(nd.B, idx, memo), elem(nd.C, idx, memo))
+				v = b.Fma(a, elem(nd.B, idx, e), elem(nd.C, idx, e))
 			default:
-				c := elem(nd.B, idx, memo)
+				c := elem(nd.B, idx, e)
 				switch nd.Op {
 				case OpAdd:
 					v = b.Add(ir.F32, a, c)
@@ -390,7 +649,7 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 				}
 			}
 		}
-		memo[n] = v
+		e.m[n] = v
 		return v
 	}
 	passes := 0
@@ -436,9 +695,9 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		}
 		idx := b.Min(ir.U32, i, last)
 		in := b.Lt(ir.U32, i, width)
-		memo := map[int]ir.Value{}
+		e := newEnv(nil)
 		for j, n := range reds {
-			x := elem(g.Nodes[n].A, idx, memo)
+			x := elem(g.Nodes[n].A, idx, e)
 			if g.Nodes[n].Red == RedMax {
 				b.SetPhi(accs[j], b.Select(ir.F32, in, b.Max(ir.F32, accs[j], x), accs[j]))
 			} else {
@@ -448,9 +707,9 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		for _, st := range stores {
 			at := b.Add(ir.U32, rowBase, idx)
 			if st.Indexed {
-				at = elem(st.Ix, idx, memo)
+				at = elem(st.Ix, idx, e)
 			}
-			b.Store(params[st.Buf], at, elem(st.Val, idx, memo), 0)
+			b.Store(params[st.Buf], at, elem(st.Val, idx, e), 0)
 		}
 		b.SetPhi(i, b.Add(ir.U32, i, step))
 		b.EndLoop()
@@ -469,9 +728,12 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		kernels.QuantFragment(b, q.Pad, g.Rows, q.Window, G, r, tid, params[q.A], params[q.X], shMax, shSum,
 			func(at ir.Value) ir.Value {
 				// Past the row's width, the zero pad.
-				v := elem(q.Val, b.Min(ir.U32, at, last), map[int]ir.Value{})
+				v := elem(q.Val, b.Min(ir.U32, at, last), newEnv(nil))
 				return b.Select(ir.F32, b.Lt(ir.U32, at, width), v, zero)
 			})
+	}
+	if emitErr != nil {
+		return nil, emitErr
 	}
 	return b.Done(), nil
 }
@@ -489,8 +751,10 @@ func f2u(f float32) uint32 { return math.Float32bits(f) }
 func (g *Row) isIndex(n int) bool {
 	nd := g.Nodes[n]
 	switch nd.Kind {
-	case NColumn, NRowIdx, NUConst, NUBinary:
+	case NColumn, NRowIdx, NUConst, NUBinary, NIter:
 		return true
+	case NFold:
+		return g.isIndex(nd.B)
 	case NLoad:
 		return g.Bufs[nd.Buf].Kind == BufU32
 	case NSelect:
