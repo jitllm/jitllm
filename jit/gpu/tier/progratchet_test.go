@@ -38,8 +38,8 @@ var genFiles = []string{"genop.go", "conv.go", "convgraph.go", "kernid.go", "dev
 // fragments, a family's mechanism as an activation, and an op handed to a
 // former over the old kernels. Each only falls.
 var genCeilings = map[string]int{
-	"named kernel ids":           36,
-	"menu kernels in generators": 40,
+	"named kernel ids":           21,
+	"menu kernels in generators": 35,
 	"family activations":         0,
 	"formers over old kernels":   5,
 }
@@ -56,6 +56,7 @@ var (
 	kidLine   = regexp.MustCompile(`(?m)^\s+kid[A-Z][A-Za-z0-9]*\b`)
 	familyAct = regexp.MustCompile(`\b(kernels|graph)\.Act(SwiGLUOAI|SwiGLUClamp|Situ)\b`)
 	formerUse = regexp.MustCompile(`former: form[A-Z]`)
+	twinKern  = regexp.MustCompile(`\bk: bm\.(act|kern|red)\b`)
 )
 
 func TestGeneratorsComposeFromFragments(t *testing.T) {
@@ -66,6 +67,12 @@ func TestGeneratorsComposeFromFragments(t *testing.T) {
 			t.Fatal(err)
 		}
 		src := string(b)
+		// A batched twin's own kernels launched by a generator are menu
+		// kernels too, though no kernels.X call names them.
+		for _, m := range twinKern.FindAllString(src, -1) {
+			got["menu kernels in generators"]++
+			t.Logf("%s: menu kernel %s", f, m)
+		}
 		for _, m := range kernCall.FindAllStringSubmatch(src, -1) {
 			if !fragments[m[1]] {
 				got["menu kernels in generators"]++

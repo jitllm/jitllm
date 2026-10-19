@@ -179,15 +179,19 @@ func TestComposedRotaryMatchesRoPERows(t *testing.T) {
 			g := newGPU(t, d)
 			defer g.free()
 			for _, c := range []struct {
-				nrot int
-				neox bool
-			}{{64, false}, {64, true}, {32, false}, {32, true}} {
+				nrot        int
+				neox, split bool
+			}{{64, false, false}, {64, true, false}, {32, false, false}, {32, true, false}, {64, true, true}, {32, true, true}} {
 				src := make([]float32, rows*width)
 				for i := range src {
 					src[i] = float32(math.Sin(float64(i) * 0.13))
 				}
-				cs := make([]float32, rows*c.nrot)
-				for i := 0; i < rows*c.nrot; i += 2 {
+				tabW := c.nrot
+				if c.split {
+					tabW = 2 * c.nrot // XD-RoPE: table A then table B a row
+				}
+				cs := make([]float32, rows*tabW)
+				for i := 0; i < rows*tabW; i += 2 {
 					th := float64(i) * 0.07
 					cs[i], cs[i+1] = float32(math.Cos(th)), float32(math.Sin(th))
 				}
@@ -196,12 +200,15 @@ func TestComposedRotaryMatchesRoPERows(t *testing.T) {
 					binary.LittleEndian.PutUint32(off[r*4:], uint32(r*width))
 				}
 				tk, err := kernels.RoPERows(heads, hd, c.nrot, c.neox, rows)
+				if c.split {
+					tk, err = kernels.RoPERowsSplit(heads, hd, c.nrot, rows, 0)
+				}
 				if err != nil {
 					t.Fatal(err)
 				}
 				gr := &compose.Row{Width: width, Rows: rows}
 				in, tab, out := gr.Buf(compose.BufRow), gr.Buf(compose.BufVec), gr.Buf(compose.BufOut)
-				gr.Store(out, gr.Rotary(in, tab, hd, c.nrot, c.neox))
+				gr.Store(out, gr.Rotary(in, tab, hd, c.nrot, c.neox, c.split))
 				ck, err := gr.Emit(compose.Schedule{Group: 256})
 				if err != nil {
 					t.Fatal(err)
@@ -244,9 +251,10 @@ func TestComposedRotaryMatchesRoPERows(t *testing.T) {
 					// moves a result by an ulp of 1, about 1.2e-7.
 					worst = math.Max(worst, math.Abs(float64(a-b)))
 				}
-				t.Logf("nrot %d neox %v: worst difference %.3g", c.nrot, c.neox, worst)
+				t.Logf("nrot %d neox %v split %v: worst difference %.3g", c.nrot, c.neox, c.split, worst)
 				if d.API() == "ptx" && !bytes.Equal(w, gb) || worst > 4.8e-7 {
-					t.Errorf("nrot %d neox %v: the composed rotary parts from RoPERows (worst %.3g)", c.nrot, c.neox, worst)
+					t.Errorf("nrot %d neox %v split %v: the composed rotary parts from the template (worst %.3g)",
+						c.nrot, c.neox, c.split, worst)
 				}
 				tc.Close()
 				cc.Close()
@@ -447,6 +455,75 @@ func TestComposedGatesMatchTheTemplates(t *testing.T) {
 			}
 			if bad := run(emit(gatedAdd(kernels.ActSiLU)), rows, acc, br, logit); bytes.Equal(bad, want) {
 				t.Errorf("a SiLU gate matched SharedExpertAdd: the gate cannot see the activation")
+			}
+		})
+	}
+}
+
+// TestComposedSplitQGMatchesSplitHeadGate holds the composed query/gate split
+// (two indexed loads and two stores a column) to SplitHeadGate bit for bit; a
+// gate read from the wrong half is its violation.
+func TestComposedSplitQGMatchesSplitHeadGate(t *testing.T) {
+	gpuLock(t)
+	devs := backend.Open()
+	if len(devs) == 0 {
+		t.Skip("no GPU backend on this host")
+	}
+	const heads, hd, rows = 4, 32, 3
+	const w = heads * hd
+	src := make([]float32, rows*2*w)
+	for i := range src {
+		src[i] = float32(math.Sin(float64(i) * 0.19))
+	}
+	build := func(gateOff int) *ir.Kernel {
+		gr := &compose.Row{Width: w, Rows: rows}
+		in, q, gt := gr.Buf(compose.BufRow), gr.Buf(compose.BufOut), gr.Buf(compose.BufOut)
+		col := gr.Column()
+		head, j := gr.UBin(compose.OpDiv, col, gr.UConst(hd)), gr.UBin(compose.OpRem, col, gr.UConst(hd))
+		at := gr.UBin(compose.OpAdd, gr.UBin(compose.OpAdd, gr.UBin(compose.OpMul, gr.RowIdx(), gr.UConst(2*w)),
+			gr.UBin(compose.OpMul, head, gr.UConst(2*hd))), j)
+		gr.Store(q, gr.LoadAt(in, at))
+		gr.Store(gt, gr.LoadAt(in, gr.UBin(compose.OpAdd, at, gr.UConst(gateOff))))
+		k, err := gr.Emit(compose.Schedule{Group: 128})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	for _, d := range devs {
+		defer d.Close()
+		t.Run(d.API(), func(t *testing.T) {
+			g := newGPU(t, d)
+			defer g.free()
+			run := func(ker *ir.Kernel, groups int) []byte {
+				c, err := d.Compile(ker)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				q, gt := g.up(make([]byte, rows*w*4)), g.up(make([]byte, rows*w*4))
+				if err := c.Launch(groups, 128, g.up(f32bytes(src)), q, gt); err != nil {
+					t.Fatal(err)
+				}
+				a, b := make([]byte, rows*w*4), make([]byte, rows*w*4)
+				if err := q.Read(a); err != nil {
+					t.Fatal(err)
+				}
+				if err := gt.Read(b); err != nil {
+					t.Fatal(err)
+				}
+				return append(a, b...)
+			}
+			tk, err := kernels.SplitHeadGate(heads, hd, rows)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := run(tk, (rows*w+127)/128)
+			if got := run(build(hd), rows); !bytes.Equal(got, want) {
+				t.Errorf("the composed split parts from SplitHeadGate")
+			}
+			if got := run(build(0), rows); bytes.Equal(got, want) {
+				t.Errorf("a gate read from the query's half matched")
 			}
 		})
 	}

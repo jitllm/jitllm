@@ -1778,6 +1778,9 @@ func (g *devTier) layersSession(s backend.Session) {
 					gst.a, gst.ax = bs.a, bs.ax
 					gst.f16, gst.memoK, gst.memoSrc = g.f16Buf, actMemoK, actMemoSrc
 					gst.split = g.partBuf
+					if pl != nil && pk != nil {
+						gst.kpool, gst.vpool, gst.tab, gst.prow = pl.k, pl.v, pl.tab, pk.pRow
+					}
 					if o.Kind == dkGatherHeads {
 						gst.perm = g.perms[[2]int{o.Heads, R}]
 					}

@@ -10,43 +10,28 @@ type kernID uint16
 const (
 	kidNone kernID = iota
 	kidAct
-	kidActMul
 	kidAdd
-	kidAddScaled
 	kidAddhalf
 	kidAffinerows
 	kidAttnaccrows
 	kidBiasAct
-	kidClamp
-	kidClampat
 	kidDwconv
 	kidDwconv1drows
 	kidIm2col
-	kidLaureljoin
-	kidHeadnorm
-	kidCopyat
-	kidRope
-	kidRopesplit
 	kidLnapply
 	kidLnpart
 	kidLnvar
 	kidMqaacc
 	kidMqascores
-	kidNormapply
-	kidNormpart
 	kidPadrows
 	kidQuantize
 	kidRelposscores
-	kidRestride
 	kidRmsnormrows
 	kidRowsoftmax
-	kidScale
-	kidSharedexpertadd
 	kidSigmoidmul
-	kidSplitheadgate
 )
 
-var kernNames = [...]string{"none", "act", "actmul", "add", "add_scaled", "addhalf", "affinerows", "attnaccrows", "biasact", "clamp", "clampat", "dwconv", "dwconv1drows", "im2col", "laureljoin", "headnorm", "copyat", "rope", "ropesplit", "lnapply", "lnpart", "lnvar", "mqaacc", "mqascores", "normapply", "normpart", "padrows", "quantize", "relposscores", "restride", "rmsnormrows", "rowsoftmax", "scale", "sharedexpertadd", "sigmoidmul", "splitheadgate"}
+var kernNames = [...]string{"none", "act", "add", "addhalf", "affinerows", "attnaccrows", "biasact", "dwconv", "dwconv1drows", "im2col", "lnapply", "lnpart", "lnvar", "mqaacc", "mqascores", "padrows", "quantize", "relposscores", "rmsnormrows", "rowsoftmax", "sigmoidmul"}
 
 func (k kernID) String() string {
 	if int(k) < len(kernNames) {

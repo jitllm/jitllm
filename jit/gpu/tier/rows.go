@@ -851,7 +851,7 @@ func (g *devTier) dot4Split(m mv, ntok, tok, rowt, split int) (mv, bool) {
 		}
 		return mv{}, false
 	}
-	out := mv{kern: c, rows: m.rows / rowt, split: split, groups: ntok / tok, bias: m.bias,
+	out := mv{kern: c, rows: m.rows / rowt, split: split, groups: ntok / tok, bias: m.bias, form: mvFormDot4,
 		q: m.q, k: m.k, redN: m.rows * ntok}
 	if split > 1 {
 		if out.red = g.reduceKernel(m.rows*ntok, split); out.red == nil ||

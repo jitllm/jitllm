@@ -49,6 +49,9 @@ const (
 	BufQ8X
 	// BufU32 is a table of indices (a row's offset), read at an index.
 	BufU32
+	// BufOutU32 is a 32-bit word per element of every row, written (a pair
+	// of binary16 values, OpPackF16).
+	BufOutU32
 )
 
 // Buf is one of a group's buffers, a kernel parameter in order.
@@ -89,6 +92,9 @@ const (
 	OpFma // A*B + C, one rounding (C in Node.C)
 	OpRem // the remainder of indices
 	OpExp // e to the A
+	// OpPackF16 is A and B as two binary16 halves of one 32-bit word, A low:
+	// a value only a BufOutU32 store takes.
+	OpPackF16
 )
 
 // Red is a row reduction.
@@ -240,7 +246,7 @@ func (g *Row) Check() error {
 		}
 	}
 	for _, s := range g.Stores {
-		if s.Buf < 0 || s.Buf >= len(g.Bufs) || g.Bufs[s.Buf].Kind != BufOut || s.Val < 0 || s.Val >= len(g.Nodes) ||
+		if s.Buf < 0 || s.Buf >= len(g.Bufs) || g.Bufs[s.Buf].Kind != BufOut && g.Bufs[s.Buf].Kind != BufOutU32 || s.Val < 0 || s.Val >= len(g.Nodes) ||
 			s.Indexed && (s.Ix < 0 || s.Ix >= len(g.Nodes)) {
 			return fmt.Errorf("compose: a store of node %d into buffer %d", s.Val, s.Buf)
 		}
@@ -267,7 +273,7 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 	params := make([]ir.Value, len(g.Bufs))
 	for i, bf := range g.Bufs {
 		t := ir.F32
-		if bf.Kind == BufQ8 || bf.Kind == BufU32 {
+		if bf.Kind == BufQ8 || bf.Kind == BufU32 || bf.Kind == BufOutU32 {
 			t = ir.U32
 		}
 		params[i] = b.Param(fmt.Sprintf("p%d", i), t)
@@ -362,6 +368,8 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			switch nd.Op {
 			case OpActMul:
 				v = kernels.ActMulFragment(b, nd.Act, a, func() ir.Value { return elem(nd.B, idx, memo) })
+			case OpPackF16:
+				v = b.PackF16(a, elem(nd.B, idx, memo))
 			case OpFma:
 				v = b.Fma(a, elem(nd.B, idx, memo), elem(nd.C, idx, memo))
 			default:

@@ -17,6 +17,9 @@ type mvTail struct {
 }
 
 type mv struct {
+	// form is which batched form batchMV chose, where a generator forms that
+	// schedule in compose (mvForm); zero for one none does yet.
+	form mvForm
 	// pad is set on a matvec over a ragged tower's padded width
 	// (nn.LayerPlan.KPad): its activation is the padded int8 rows, so a
 	// batched twin that reads the float rows instead (an f16 conversion
@@ -105,3 +108,12 @@ type mv struct {
 	// a block's q, k and v can be put in one grid (qkvGemm); zero elsewhere.
 	vt kernels.VoltaTile
 }
+
+// mvForm is a batched twin's form, for the generator that forms its schedule
+// in compose.
+type mvForm uint8
+
+const (
+	mvFormNone mvForm = iota
+	mvFormDot4        // MatVec over a chunk: Tok tokens and rows a thread, k split (dot4Split)
+)

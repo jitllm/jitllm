@@ -81,8 +81,9 @@ func (g *Row) LayerNormed(x, wt, bias, w int, eps float32) int {
 // turned by the table cs (one row of nrot floats, cos then sin a pair, for
 // each of the group's rows) in NORM pairs (2p, 2p+1) or NEOX (p, p+nrot/2),
 // the rest of each head as it is: the element's value, read from src (a
-// row of the group's width), as RoPERows computes it.
-func (g *Row) Rotary(src, cs, hd, nrot int, neox bool) int {
+// row of the group's width), as RoPERows computes it; split is XD-RoPE's two
+// tables a row (RoPERowsSplit), NEOX pairs whose halves turn by their own.
+func (g *Row) Rotary(src, cs, hd, nrot int, neox, split bool) int {
 	col := g.Column()
 	j := g.UBin(OpRem, col, g.UConst(hd)) // the place in the head
 	half := nrot / 2
@@ -99,7 +100,16 @@ func (g *Row) Rotary(src, cs, hd, nrot int, neox bool) int {
 	// A tail element's pair index is clamped into the table's row: its
 	// value is the element as it is, but its loads must stay in bounds.
 	p = g.UBin(OpMin, p, g.UConst(half-1))
-	tab := g.UBin(OpAdd, g.UBin(OpMul, g.RowIdx(), g.UConst(nrot)), g.UBin(OpMul, p, g.UConst(2)))
+	// A row's table is nrot floats, (cos, sin) a pair; split (XD-RoPE) is two
+	// tables a row, a pair's second element turning by the second's.
+	tabW := nrot
+	if split {
+		tabW = 2 * nrot
+	}
+	tab := g.UBin(OpAdd, g.UBin(OpMul, g.RowIdx(), g.UConst(tabW)), g.UBin(OpMul, p, g.UConst(2)))
+	if split {
+		tab = g.Select(first, tab, g.UBin(OpAdd, tab, g.UConst(nrot)))
+	}
 	c := g.LoadAt(cs, tab)
 	s := g.LoadAt(cs, g.UBin(OpAdd, tab, g.UConst(1)))
 	row := g.UBin(OpMul, g.RowIdx(), g.UConst(g.Width))
@@ -109,4 +119,34 @@ func (g *Row) Rotary(src, cs, hd, nrot int, neox bool) int {
 	turned := g.Select(first, g.Bin(OpSub, g.Bin(OpMul, x, c), g.Bin(OpMul, other, s)),
 		g.Bin(OpAdd, g.Bin(OpMul, other, s), g.Bin(OpMul, x, c)))
 	return g.Select(g.Less(j, g.UConst(nrot)), turned, x)
+}
+
+// PagedPos is where the group's row lands in a paged history (the ABI of
+// kernels/paged.go): the page id and the offset in the page of the position
+// its descriptor names for the write, the descriptors at desc (PRowWords
+// words a row) and the page ids at tab, page positions a page. Two loads of
+// the descriptor, one of the table, and their arithmetic.
+func (g *Row) PagedPos(desc, tab, page int) (pid, off int) {
+	base := g.UBin(OpMul, g.RowIdx(), g.UConst(kernels.PRowWords))
+	first := g.LoadAt(desc, g.UBin(OpAdd, base, g.UConst(kernels.PRowTab)))
+	pos := g.LoadAt(desc, g.UBin(OpAdd, base, g.UConst(kernels.PRowWrite)))
+	pid = g.LoadAt(tab, g.UBin(OpAdd, first, g.UBin(OpDiv, pos, g.UConst(page))))
+	return pid, g.UBin(OpRem, pos, g.UConst(page))
+}
+
+// PagedK is element column of the group's row in a paged K pool, which is
+// transposed: [width][page] a page, so a position's elements are page apart.
+func (g *Row) PagedK(pid, off, width, page int) int {
+	return g.UBin(OpAdd, g.UBin(OpMul, pid, g.UConst(page*width)),
+		g.UBin(OpAdd, g.UBin(OpMul, g.Column(), g.UConst(page)), off))
+}
+
+// PagedRow is the place of the group's row in a paged V pool, [page][width]
+// a page: (pid*page + off)*width + col, col its first column there.
+func (g *Row) PagedRow(pid, off, page, width, col int) int {
+	at := g.UBin(OpMul, g.UBin(OpAdd, g.UBin(OpMul, pid, g.UConst(page)), off), g.UConst(width))
+	if col != 0 {
+		at = g.UBin(OpAdd, at, g.UConst(col))
+	}
+	return at
 }
