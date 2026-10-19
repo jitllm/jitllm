@@ -1087,6 +1087,10 @@ type Stats struct {
 	// launcher, which still launches the old encoder's kernels and is not
 	// generated.
 	GenOps, FormerOps int
+	// GenInStep counts block programs generated inside a submission (a
+	// variant the prologue did not build): zero where every kernel is
+	// compiled outside one.
+	GenInStep int
 	// ProgOps counts every program op a step ran: GenOps reaching it is
 	// every op compiled.
 	ProgOps int
@@ -1525,6 +1529,7 @@ func (s *Stats) add(o Stats) {
 	s.ProgBlocks += o.ProgBlocks
 	s.GenOps += o.GenOps
 	s.FormerOps += o.FormerOps
+	s.GenInStep += o.GenInStep
 	s.ProgOps += o.ProgOps
 	s.PagedPrefillLaunches += o.PagedPrefillLaunches
 	s.PagedStagedLaunches += o.PagedStagedLaunches

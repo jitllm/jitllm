@@ -140,6 +140,9 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 			// nothing.
 			t.Logf("%d of %d op-steps ran generated launches (composed from the op; %d more through formers over the old kernels)",
 				ps.GenOps, ps.ProgOps, ps.FormerOps)
+			if ps.GenInStep != 0 {
+				t.Errorf("%d block programs were generated inside a submission, not in its prologue", ps.GenInStep)
+			}
 			if ps.GenOps != ps.ProgOps {
 				t.Errorf("%d of %d op-steps ran a kernel not generated from the op", ps.ProgOps-ps.GenOps, ps.ProgOps)
 			}

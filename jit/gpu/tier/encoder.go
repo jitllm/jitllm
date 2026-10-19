@@ -969,31 +969,18 @@ func (g *devTier) layersSession(s backend.Session) {
 		}
 		// The rewrites legal at one row, on a prompt chunk and on a ragged
 		// step differ: each class keeps its own fused program.
-		fc := &l.progOne
-		switch {
-		case rag != nil:
-			fc = &l.progRag
-		case R > 1:
-			fc = &l.progRows
-		}
+		fc := l.fusedFor(R, rag)
 		if fc.bs != bs {
-			nseq := 0
-			if rag != nil {
-				nseq = len(rag.pos)
-			}
-			fc.prog, fc.took, fc.err = prog.fused(l, bs, g, R, nseq)
-			fc.qkv, fc.gu, fc.down, fc.dense = fc.prog.forms()
-			fc.bs = bs
-			// Each op's kernels generated from the op, for the scratch's rows;
-			// a build reached from inside a submission takes g.mu (subLock).
-			// Released by defer: a generator that panics must surface, not
-			// leave g.mu held for the next lock on the way out to deadlock on.
+			// The prologue builds every block's variant before the
+			// submission (ensureFused); one built here is a step that
+			// compiled inside a submission, counted so a gate holds it to
+			// zero. Released by defer: a generator that panics must surface,
+			// not leave g.mu held for the next lock to deadlock on.
+			g.GenInStep++
 			func() {
 				took := g.subLock()
 				defer g.subUnlock(took)
-				g.curLayer = l
-				g.genProgram(fc.prog, bs, bs.rows)
-				g.curLayer = nil
+				g.ensureFusedLocked(l, prog, bs, R, rag)
 			}()
 		}
 		prog = fc.prog
@@ -4150,4 +4137,48 @@ func blockAct(bs *blockScratch, l *layer) backend.Kernel {
 		return l.actK
 	}
 	return bs.actMul
+}
+
+// fusedFor is the block's fused variant for a step of R rows: the rewrites
+// legal at one row, on a prompt chunk and on a ragged step differ, so each
+// class keeps its own.
+func (l *layer) fusedFor(R int, rag *ragStep) *progFused {
+	switch {
+	case rag != nil:
+		return &l.progRag
+	case R > 1:
+		return &l.progRows
+	}
+	return &l.progOne
+}
+
+// ensureFusedLocked builds block l's variant of program prog for a step of R
+// rows over scratch bs -- its rewrites, then every op's kernels generated
+// from the op -- where it is not built for bs already. Callers hold g.mu.
+func (g *devTier) ensureFusedLocked(l *layer, prog *devProgram, bs *blockScratch, R int, rag *ragStep) {
+	fc := l.fusedFor(R, rag)
+	if fc.bs == bs {
+		return
+	}
+	nseq := 0
+	if rag != nil {
+		nseq = len(rag.pos)
+	}
+	fc.prog, fc.took, fc.err = prog.fused(l, bs, g, R, nseq)
+	fc.qkv, fc.gu, fc.down, fc.dense = fc.prog.forms()
+	fc.bs = bs
+	g.curLayer = l
+	g.genProgram(fc.prog, bs, bs.rows)
+	g.curLayer = nil
+}
+
+// ensureFused builds, in the prologue and outside any submission, the fused
+// variant and generated kernels of every block of [lo, hi) that runs its
+// program on a step of R rows over bs. Callers hold g.mu.
+func (g *devTier) ensureFused(lo, hi, R int, bs *blockScratch, rag *ragStep) {
+	for li := lo; li < hi && li < len(g.layers); li++ {
+		if l := g.layers[li]; l != nil && l.ok && l.prog != nil && l.conv == nil {
+			g.ensureFusedLocked(l, l.prog, bs, R, rag)
+		}
+	}
 }

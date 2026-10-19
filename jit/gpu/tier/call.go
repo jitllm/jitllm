@@ -1059,6 +1059,9 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	if rposs != nil {
 		g.subBytes.rposs = rposs
 	}
+	// Every block's program for this step, its kernels generated from its
+	// ops: here, outside the submission, where compiling is allowed.
+	g.ensureFused(lo, hi, R, bs, rag)
 	t0 := time.Now()
 	g.sub = submitArgs{
 		bs: bs, hb: hb, head: head, lo: lo, hi: hi, pos: pos, x: x,
