@@ -279,6 +279,11 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 				return l
 			}
 		}
+		if o.Kind == dkRouterLogits {
+			if l := g.genRoute(o, prog, rows); l != nil {
+				return l
+			}
+		}
 		// The matvec former: the weight's (or bank's, or the fused q/k/v
 		// grid's) kernel, emitted from its shape.
 		return []genLaunch{{former: formMatVec}}
@@ -315,6 +320,9 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 			if l := g.genCombine(o, prog, bs); l != nil {
 				return l
 			}
+		}
+		if l := g.genRoute(o, prog, rows); l != nil {
+			return l
 		}
 		// The router former: the selection's kernels emitted from the route's
 		// shape (MoERoute), the bank's fetch, and the combine.
@@ -1204,6 +1212,7 @@ const (
 	whyNoFloat
 	whyHistory
 	whyLayout
+	whyRoute
 )
 
 func (w genWhy) String() string {
@@ -1211,7 +1220,8 @@ func (w genWhy) String() string {
 		"padded rows", "a table split", "an epilogue it cannot compose",
 		"no batched form", "a prompt form other than the staged GEMM", "a tail launch",
 		"no float row stated", "a history that is not paged, or a row wider than its heads",
-		"rows whose head-major layout the program does not state"}[w]
+		"rows whose head-major layout the program does not state",
+		"a route its op's attributes do not state"}[w]
 }
 
 // genSplitMatVec is a decode matvec whose k is split across threads: the
