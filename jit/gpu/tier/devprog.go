@@ -1397,7 +1397,8 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			}
 			ex, k := o.Attr.Experts, o.Attr.TopK
 			logits := prog.val(name(0)+".logits", f32(ex), slotRLogits)
-			prog.ops = append(prog.ops, devOp{Kind: dkRouterLogits, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{logits}})
+			// The router's rows bound as the op's vector: what its dot reads.
+			prog.ops = append(prog.ops, devOp{Kind: dkRouterLogits, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{logits}, V: l.router})
 			for _, w := range o.Weight[1:] {
 				if w.Role != jlm.RoleRouterBias {
 					continue
@@ -1423,7 +1424,13 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			top := prog.val(name(0)+".top", f32(k), slotTop)
 			prog.ops = append(prog.ops, devOp{Kind: dkTopK, Src: []int{i}, In: rank, Out: []devVal{sel, top}, Role: selBias})
 			rw := prog.val(name(0)+".weights", f32(k), slotRW)
-			prog.ops = append(prog.ops, devOp{Kind: dkRouteWeights, Src: []int{i}, In: []devVal{top, logits}, Out: []devVal{rw}})
+			// sparsemixer's weights need its jitter, a number of the plan's
+			// the graph's route does not carry: stated as the op's Alpha.
+			wop := devOp{Kind: dkRouteWeights, Src: []int{i}, In: []devVal{top, logits}, Out: []devVal{rw}}
+			if o.Attr.Router == graph.RouterSparseMixer {
+				wop.Alpha = float64(p.ExpertSparseMixer)
+			}
+			prog.ops = append(prog.ops, wop)
 			vals[o.Out[0]] = sel
 			routeW[sel] = rw
 			prog.ops = append(prog.ops, devOp{Kind: dkGroupByExpert, Src: []int{i}, In: []devVal{sel}})
