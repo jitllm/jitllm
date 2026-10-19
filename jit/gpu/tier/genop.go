@@ -274,6 +274,11 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		}
 		return []genLaunch{{former: formMatVec}}
 	case dkExpertMatVec, dkExpertMatVecE, dkQKV, dkQKVGemm, dkRouterLogits, dkResIn, dkQKVSep:
+		if o.Kind == dkExpertMatVec && rows == 1 {
+			if l := g.genBankMatVec(o, prog, bs); l != nil {
+				return l
+			}
+		}
 		// The matvec former: the weight's (or bank's, or the fused q/k/v
 		// grid's) kernel, emitted from its shape.
 		return []genLaunch{{former: formMatVec}}
@@ -1419,4 +1424,69 @@ func (g *devTier) genHeadCopy(o *devOp, prog *devProgram, bs *blockScratch, rows
 	l := genLaunch{k: k.k, groups: rows, width: k.group, n: uint8(len(rb.args))}
 	copy(l.args[:], rb.args)
 	return []genLaunch{l}
+}
+
+// genBankMatVec is a decode step's matvec over a bank's selected sheets
+// (an expert bank, or a latent attention's heads), formed by the matvec
+// former at the bank's schedule: its slots, an operand vector a slot where
+// the bank reads one, its k split in the group or into planes summed by the
+// reduction former. The selection is the op's second input; a float bank
+// reads the float rows, its third. Callers hold g.mu.
+func (g *devTier) genBankMatVec(o *devOp, prog *devProgram, bs *blockScratch) []genLaunch {
+	l := g.curLayer
+	if l == nil || o.W < 0 || o.W >= len(l.ms) || *l.rs[o.W] == nil || len(o.In) < 2 {
+		o.Why = whyNoWeight
+		return nil
+	}
+	m := *l.ms[o.W]
+	switch {
+	case m.kern == nil:
+		o.Why = whyNoKernel
+	case m.experts < 2 || m.rowt > 1 || m.pad || g.TableSplit && m.alt != nil:
+		o.Why = whyBank
+	}
+	if o.Why != 0 {
+		return nil
+	}
+	if _, _, own := q8Pair(bs, prog.slots[o.In[0]]); own {
+		o.Why = whyOwnOperand
+		return nil
+	}
+	split := max(m.split, 1)
+	mv := &compose.MatVec{T: m.q, K: m.k, Rows: m.rows, Experts: m.experts, Slots: max(m.slots, 1), SlotAct: m.slotAct,
+		Split: split, Group: m.group, Center: g.center}
+	n := m.rows * mv.Slots
+	out := gaOut0
+	if split > 1 && !m.group {
+		need := n * split
+		if g.genInSub && g.partCap < need || !g.genInSub && !g.sizePart(need) {
+			o.Why = whySplit
+			return nil
+		}
+		out = gaSplit
+	}
+	k, width := g.genKern(append([]uint32{encMatVec}, mv.Encode()...), mv.Emit)
+	if k == nil {
+		o.Why = whyNoKernel
+		return nil
+	}
+	gl := genLaunch{k: k, groups: (mv.Threads() + width - 1) / width, width: width,
+		args: [8]genArg{gaWQS, gaWD, gaWSC, gaOpA, gaOpAX, out, gaIn1}, n: 7}
+	if kernels.IsFloat(m.q) {
+		if len(o.In) < 3 {
+			o.Why = whyNoFloat
+			return nil
+		}
+		gl.args[1] = gaIn2
+	}
+	if out == gaOut0 {
+		return []genLaunch{gl}
+	}
+	ss := &compose.SplitSum{Rows: n, Split: split}
+	rk, rwidth := g.genKern(append([]uint32{encMatVec}, ss.Encode()...), ss.Emit)
+	if rk == nil {
+		o.Why = whyNoKernel
+		return nil
+	}
+	return []genLaunch{gl, {k: rk, groups: (n + rwidth - 1) / rwidth, width: rwidth, args: [8]genArg{gaSplit, gaOut0}, n: 2}}
 }

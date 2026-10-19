@@ -1765,7 +1765,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					}
 					// Only a matvec reads a weight (devOp.W is 0, a real index,
 					// on every other op).
-					isMat := o.Kind == dkMatVec || o.Kind == dkMatVecRes || o.Kind == dkMatVecGate
+					isMat := o.Kind == dkMatVec || o.Kind == dkMatVecRes || o.Kind == dkMatVecGate || o.Kind == dkExpertMatVec
 					if isMat && prog.f16 && len(o.In) > 0 {
 						// A binary16 GEMM reads the float row (a float weight
 						// through the scale slot).
