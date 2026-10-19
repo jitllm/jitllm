@@ -81,7 +81,10 @@ const (
 	// OpAct is Act(In[0]) elementwise: an ungated FFN's activation. ActXIELU
 	// binds its four numbers as Weight[0].
 	OpAct
-	// OpClamp is In[0] clamped to [-Bound, Bound] (DBRX's clip_qkv).
+	// OpClamp is In[0] clamped to [-Bound, Bound] (DBRX's clip_qkv), or
+	// with a bounds table bound (Weight[0]) to [t[Offset], t[Offset+1]]:
+	// Gemma 4's clipped linears, each matrix's input and output bounded by
+	// the block's own, not necessarily symmetric, values.
 	OpClamp
 	// OpSlice is Width elements of In[0] from Offset: of each head of
 	// HeadDim where HeadDim is set (Out is the heads' slices in head
@@ -184,10 +187,24 @@ const (
 	// memory, every row over every memory row, then the output projection,
 	// each with its bias: Out[0]. Opaque in this version.
 	OpCrossAttend
+	// OpConv is a depthwise convolution of In[0] over the call's rows: each
+	// channel's Taps taps (Weight[0], Taps rows of the width: tap-major),
+	// centred, the rows past
+	// either end zero.
+	OpConv
+	// OpAffine is In[0] times a per-channel scale plus a shift (Weight[0],
+	// Weight[1]): a BatchNorm folded at conversion.
+	OpAffine
+	// OpRelAttend is self-attention over the call's rows with relative
+	// positions (Transformer-XL's): q (In[0]) plus u (Weight[0]) against
+	// the keys (In[1]), plus q plus v (Weight[1]) against the projected
+	// positions (In[3]) at each pair's distance, softmaxed over the rows,
+	// against the values (In[2]); NHead heads of HeadDim.
+	OpRelAttend
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -326,6 +343,8 @@ type Attrs struct {
 	// Alpha is a residual OpAdd's scale on its second input (Granite's
 	// residual_scale: x + Alpha*y); 0 is one.
 	Alpha float64
+	// Taps is OpConv's kernel.
+	Taps int
 	// Bound is OpClamp's.
 	Bound float64
 	// Offset and Width are OpSlice's.

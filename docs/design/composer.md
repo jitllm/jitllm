@@ -577,6 +577,28 @@ Order: weights by role; the mixture's primitives (route, top-k, per-pair
 matvec, combine, the fetch); latent attention; the scans; streams; the
 per-layer embedding; convolution; then D5.
 
+**Convolution, as the program takes it.** A convolutional block (Gemma
+3n's MobileNet-V5) and a FastConformer block (the audio tower) run today as
+the tier's own launch lists (`conv.go`'s `convProgram` and
+`conformerProgram`), one hand-built list per block kind: the per-model shape
+this program replaces. They become graphs of the same primitive set, the few
+it lacks added as ops:
+
+- `OpConv`: a convolution over a row grid (1-D or 2-D, depthwise or full,
+  kernel, stride, dilation and padding as attributes), lowered to the
+  depthwise kernels or to im2col and the matvec;
+- `OpAffine`: a per-channel scale and shift, which a BatchNorm becomes at
+  conversion (precomputed, as every offline step is);
+- GLU as an `act_mul` of a sigmoid, the macaron FFN's half step as a residual
+  add's `Alpha`, and relative-position attention as the attention with a
+  positional score term (its sinusoid table and the u and v biases bound by
+  role) over the call's rows.
+
+A block of either kind then lowers like a text block and its coverage is
+counted the same way (`TestDeviceProgramCoverageBeyondText`, which reports
+every merged tower's and encoder's blocks and today names the convolution
+blocks as the gap).
+
 **What to take from MLIR and IREE next.** Read against the sparse checkouts of
 `llvm-project/mlir` and IREE's `DispatchCreation`, `Dialect/Flow` and
 `Codegen/Common`, with the program as built (`jit/gpu/tier/devprog.go`,

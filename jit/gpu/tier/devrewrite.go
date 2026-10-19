@@ -102,6 +102,66 @@ func (k devKind) String() string {
 		return "place_weights"
 	case dkStreamPlace:
 		return "stream_place"
+	case dkIdxNorm:
+		return "idx_norm"
+	case dkIdxRope:
+		return "idx_rope"
+	case dkIdxAssemble:
+		return "idx_assemble"
+	case dkIdxScore:
+		return "idx_score"
+	case dkSelectBlocks:
+		return "select_blocks"
+	case dkGatherKV:
+		return "gather_kv"
+	case dkAttendGathered:
+		return "attend_gathered"
+	case dkStreamDot:
+		return "stream_dot"
+	case dkGatedVal:
+		return "gated_val"
+	case dkNGramConv:
+		return "ngram_conv"
+	case dkNGramAdd:
+		return "ngram_add"
+	case dkStreamScore:
+		return "stream_score"
+	case dkStreamWeighted:
+		return "stream_weighted"
+	case dkIdxWrite:
+		return "idx_write"
+	case dkIdxAttendLatent:
+		return "idx_attend_latent"
+	case dkRowBias:
+		return "row_bias"
+	case dkStreamFlatten:
+		return "stream_flatten"
+	case dkFlatNorm:
+		return "flat_norm"
+	case dkMixLogits:
+		return "mix_logits"
+	case dkSinkhorn:
+		return "sinkhorn"
+	case dkStreamCollect:
+		return "stream_collect"
+	case dkRowRMS:
+		return "row_r_m_s"
+	case dkTurn:
+		return "turn"
+	case dkCacheWrite:
+		return "cache_write"
+	case dkPoolEntries:
+		return "pool_entries"
+	case dkEntryWrite:
+		return "entry_write"
+	case dkEntrySelect:
+		return "entry_select"
+	case dkGatherEntries:
+		return "gather_entries"
+	case dkGroupedMatVec:
+		return "grouped_mat_vec"
+	case dkClampAt:
+		return "clamp_at"
 	case dkScale:
 		return "scale"
 	case dkClamp:
@@ -392,8 +452,8 @@ func rwRopeQKV(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq in
 		}
 		for j := i + 1; j < len(p.ops); j++ {
 			w := p.ops[j]
-			if w.Kind != dkKVWrite {
-				continue
+			if w.Kind != dkKVWrite || p.slots[w.In[0]] == slotKAll {
+				continue // an assembled row (an indexer's key in it) writes alone
 			}
 			// The fused launch goes where the history write was, after
 			// every op its key and value come from; nothing between may

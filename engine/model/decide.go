@@ -86,6 +86,8 @@ type Decider struct {
 	kevDevRuns int
 	// kevDevWhy is why a device last declined Kev's head.
 	kevDevWhy string
+	// clefDevWhy is why a device last declined Clef's head.
+	clefDevWhy string
 	// kevRuns counts Kev's forwards, for the gates.
 	kevRuns int
 	m       *Model

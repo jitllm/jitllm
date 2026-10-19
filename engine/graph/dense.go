@@ -87,6 +87,11 @@ type Dense struct {
 	LayerNorm, NormBias, FFNNormBias, Parallel, SharedNorm bool
 	OutBias, UpBias, DownBias, Ungated                     bool
 	Clamp                                                  float64
+	// ClampTable, where set, is the role of a bounds table every linear's
+	// input and output is clamped by (Gemma 4's clipped linears): matrix s
+	// of q, k, v, o, gate, up, down reads its input bounds at 4s and its
+	// output bounds at 4s+2.
+	ClampTable jlm.Role
 	// ResidScale scales each sublayer's output into the residual (Alpha on
 	// the two residual adds); 0 is one.
 	ResidScale float64
@@ -348,13 +353,26 @@ func (d *Dense) Build() *Graph {
 		g.op(Op{Kind: OpClamp, In: []ValueID{in}, Out: []ValueID{out}, Attr: Attrs{Bound: d.Clamp}})
 		return out
 	}
+	clampAt := func(name string, in ValueID, off int) ValueID {
+		out := g.value(name, g.Values[in].Width)
+		g.op(Op{Kind: OpClamp, In: []ValueID{in}, Out: []ValueID{out}, Weight: []Binding{vec(d.ClampTable, clampTableLen)},
+			Attr: Attrs{Offset: off}})
+		return out
+	}
 	mv := func(name string, in ValueID, w jlm.Role, rows int, bias jlm.Role) ValueID {
+		s := clampedLinear(w)
+		if d.ClampTable != 0 && s >= 0 {
+			in = clampAt(name+"_in", in, 4*s)
+		}
 		out := g.value(name, rows)
 		ws := []Binding{mat(w, g.Values[in].Width, rows)}
 		if bias != 0 {
 			ws = append(ws, vec(bias, rows))
 		}
 		g.op(Op{Kind: OpMatVec, In: []ValueID{in}, Out: []ValueID{out}, Weight: ws})
+		if d.ClampTable != 0 && s >= 0 {
+			out = clampAt(name+"_clamped", out, 4*s+2)
+		}
 		return out
 	}
 	bias := func(r jlm.Role) jlm.Role {
@@ -632,4 +650,30 @@ func (d *Dense) Build() *Graph {
 	}
 	g.Out = []ValueID{x2}
 	return g
+}
+
+// clampTableLen is a clipped-linear bounds table's length: a lower and upper
+// bound on the input and on the output of each of seven matrices.
+const clampTableLen = 28
+
+// clampedLinear is matrix w's place among the clipped linears (q, k, v, o,
+// gate, up, down), or -1.
+func clampedLinear(w jlm.Role) int {
+	switch w {
+	case jlm.RoleAttnQ:
+		return 0
+	case jlm.RoleAttnK:
+		return 1
+	case jlm.RoleAttnV:
+		return 2
+	case jlm.RoleAttnOut:
+		return 3
+	case jlm.RoleFFNGate:
+		return 4
+	case jlm.RoleFFNUp:
+		return 5
+	case jlm.RoleFFNDown:
+		return 6
+	}
+	return -1
 }

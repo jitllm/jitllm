@@ -5,6 +5,7 @@ import (
 	"math"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
@@ -39,6 +40,9 @@ import (
 type audioTower struct {
 	cfg  jlm.Audio
 	base int // the tower block of audio block 0, past the vision blocks
+	// graphs is each block's verified graph (graph.Conformer), what the
+	// device's compiler reads.
+	graphs []*graph.Graph
 
 	// The front end's tables, rows of F32: the windowed DFT bases (NFFT/2+1
 	// rows of NFFT) and the filterbank (MelBins rows of NFFT/2+1).
@@ -254,6 +258,9 @@ func buildAudio(c *jlm.File, m *Model) (*audioTower, error) {
 		vec(&b.outNB, jlm.RoleAOutNormB, bi, -1, d)
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err := a.buildGraphs(c); err != nil {
 		return nil, err
 	}
 	a.tables()
@@ -779,4 +786,40 @@ func (e *Embedder) audioAttnHeads(h0, h1 int) {
 type audAttnRegion struct {
 	out []float32
 	fn  func(lo, hi int)
+}
+
+// buildGraphs states every audio block as a conformer graph, checked against
+// the container's tensors: a block the language does not state refuses the
+// model, as an encoder's does (encgraph.go).
+func (a *audioTower) buildGraphs(c *jlm.File) error {
+	cf := &a.cfg
+	d, heads := int(cf.NEmbd), int(cf.NHead)
+	a.graphs = make([]*graph.Graph, len(a.blocks))
+	for j := range a.blocks {
+		bi := a.base + j
+		inv := map[jlm.Role]graph.Shape{}
+		for i := range c.Entries() {
+			e := &c.Entries()[i]
+			if int(e.Block) != bi || !jlm.AudioRole(e.Role) {
+				continue
+			}
+			s := graph.Shape{K: int(e.Dims[0])}
+			if e.NDim >= 2 {
+				s.Rows = int(e.Dims[1])
+			}
+			inv[e.Role] = s
+		}
+		cc := graph.Conformer{Block: bi, NEmbd: d, NFFN: int(cf.NFFN), NHead: heads, HeadDim: d / heads,
+			Taps: int(cf.ConvKernel), Eps: float64(cf.Eps)}
+		g := cc.Build()
+		f := graph.Facts{Inventory: inv, Conformer: &cc}
+		if u := graph.Unbound(g, f); len(u) > 0 {
+			return fmt.Errorf("model: audio block %d is not covered by the block graph: %s (%v)", j, UncoveredUnboundTensor, u)
+		}
+		if err := graph.Verify(g, f); err != nil {
+			return fmt.Errorf("model: audio block %d: %w", j, err)
+		}
+		a.graphs[j] = g
+	}
+	return nil
 }

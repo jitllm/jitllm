@@ -19,6 +19,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/tok"
@@ -1719,6 +1720,11 @@ func openContainer(path string, options ...Option) (*Model, error) {
 				c.Close()
 				return nil, err
 			}
+		}
+		// Each block's graph, for the device's compiler (towergraph.go).
+		tw.graphs = make([]*graph.Graph, len(m.layers)-tw.base)
+		for i := range tw.graphs {
+			tw.graphs[i] = towerGraph(tw.cfg, &m.layers[tw.base+i], tw.base+i)
 		}
 		m.tower = tw
 		m.imgCache.budget = defaultImageCache

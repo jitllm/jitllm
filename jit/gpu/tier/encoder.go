@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
@@ -931,9 +932,39 @@ func (g *devTier) layersSession(s backend.Session) {
 			slotM1LowN: bs.m1LowN, slotM1BN: bs.m1BN, slotM1CN: bs.m1CN,
 			slotPLEG: bs.pleG, slotPLES: bs.pleS, slotPLEA: bs.pleA, slotPLEO: bs.pleO, slotKRot: bs.krot,
 			slotPred: bs.altPred, slotAltM: bs.altM, slotAltB: bs.altB, slotLT: bs.altLT, slotLaur: bs.altLaur, slotGG: bs.gg}
+		// A block-selecting indexer's buffers (msa.go, qsa.go).
+		var ms *msaScratch
+		var qs *qsaScratch
+		var ix *idxScratch
+		if pk != nil {
+			ms, qs, ix = pk.msa, pk.qsa, pk.idx
+		}
+		switch {
+		case ix != nil:
+			buf[slotIKRaw], buf[slotIdxW], buf[slotIKn], buf[slotIKRot], buf[slotIQRaw], buf[slotIQRot] = ix.kRaw, ix.wts, ix.kn, ix.kRot, ix.qRaw, ix.qRot
+		case ms != nil:
+			buf[slotIKRaw], buf[slotIQRaw], buf[slotIQn], buf[slotIKn], buf[slotIQRot], buf[slotKAll] = ms.kRaw, ms.qRaw, ms.qn, ms.kn, ms.qRot, ms.kAll
+		case qs != nil:
+			buf[slotIKRaw], buf[slotIQRaw], buf[slotIQn], buf[slotIQRot], buf[slotKAll] = qs.kRaw, qs.qRaw, qs.qn, qs.qRot, qs.kAll
+		}
 		if x := bs.q4e; x != nil {
 			buf[slotSXN], buf[slotSQ8], buf[slotSQ8LR], buf[slotSLo], buf[slotSLo2] = x.xn, x.aHD, x.aLR, x.lo, x.lo2
 			buf[slotSGate], buf[slotSMix], buf[slotSInj], buf[slotSW] = x.gate, x.mix, x.inj, x.w
+			buf[slotNEmb], buf[slotSQ8W], buf[slotNKey], buf[slotNVal], buf[slotNKn], buf[slotNQn] = x.emb, x.aW, x.key, x.val, x.kn, x.qn
+			buf[slotNDot], buf[slotNGv], buf[slotNGvn], buf[slotNConv], buf[slotNXg] = x.dot, x.gv, x.gvn, x.conv, x.xg
+		}
+		buf[slotCIn], buf[slotCOut], buf[slotGC], buf[slotUC] = bs.cin, bs.cout, bs.gClamp, bs.uClamp
+		if x := bs.ds4; x != nil {
+			buf[slotRBias], buf[slotHFlat], buf[slotHFlatN], buf[slotHMix], buf[slotHC], buf[slotHColl] = x.rbias, x.flat, x.flatn, x.mix, x.hc, x.coll
+			buf[slotCQA], buf[slotCQAN], buf[slotCQ], buf[slotCQN], buf[slotCQR] = x.qa, x.qan, x.q, x.qn, x.qr
+			buf[slotCKRaw], buf[slotCKN], buf[slotCKR], buf[slotCKV], buf[slotCG] = x.kraw, x.kn, x.kr, x.ckv, x.cg
+			buf[slotCIKV], buf[slotCIG], buf[slotCIW], buf[slotCIQ], buf[slotCIQR] = x.ikv, x.ig, x.iw, x.iq, x.iqr
+			buf[slotCPE], buf[slotCPEN], buf[slotCPER], buf[slotCIPE], buf[slotCIPEN], buf[slotCIPER] = x.pe, x.pen, x.per, x.ipe, x.ipen, x.iper
+			buf[slotCSel], buf[slotCGK], buf[slotCAO], buf[slotCAOR], buf[slotCOA] = x.sel, x.gk, x.ao, x.aor, x.oa
+		}
+		if x := bs.k3; x != nil {
+			buf[slotBScores], buf[slotBMix], buf[slotMGate], buf[slotMGated] = x.scores, x.mix, x.mgate, x.mgated
+			buf[slotLat], buf[slotLatAcc], buf[slotLatN] = x.lat, x.latAcc, x.latN
 		}
 		// The rewrites legal at one row, on a prompt chunk and on a ragged
 		// step differ: each class keeps its own fused program.
@@ -1068,6 +1099,10 @@ func (g *devTier) layersSession(s backend.Session) {
 					norm(at(o.In[0]), o.V, o.VB)
 				}
 			case dkQuant:
+				if x := bs.q4e; x != nil && prog.slots[o.Out[0]] == slotSQ8W {
+					lc.la(x.quantW, kernels.QuantizeThreads(R*pad32(x.width)/32), at(o.In[0]), x.aW, x.axW)
+					break
+				}
 				if x := bs.q4e; x != nil && (prog.slots[o.Out[0]] == slotSQ8 || prog.slots[o.Out[0]] == slotSQ8LR) {
 					k, n, a, ax := x.quantHD, x.h*p.NEmbd, x.aHD, x.axHD
 					if prog.slots[o.Out[0]] == slotSQ8LR {
@@ -1098,6 +1133,18 @@ func (g *devTier) layersSession(s backend.Session) {
 					lc.la(bs.laurelQuant, kernels.QuantizeThreads(R*p.LaurelRank/32), src, bs.a, bs.ax)
 				case prog.slots[o.In[0]] == slotPLEA:
 					lc.la(bs.pleQuant, kernels.QuantizeThreads(R*pad32(p.PLEDim)/32), src, bs.a, bs.ax)
+				case prog.slots[o.In[0]] == slotCQAN:
+					lc.la(bs.ds4.quantQA, kernels.QuantizeThreads(R*p.QLoraRank/32), src, bs.a, bs.ax)
+				case prog.slots[o.In[0]] == slotCAOR || prog.slots[o.In[0]] == slotCAO:
+					lc.la(bs.quantQ, kernels.QuantizeThreads(R*p.NHead*p.HeadDim/32), src, bs.a, bs.ax)
+				case prog.slots[o.In[0]] == slotCOA:
+					lc.la(bs.ds4.quantOA, kernels.QuantizeThreads(R*p.DS4.OGroups*p.DS4.OLoraRank/32), src, bs.a, bs.ax)
+				case prog.slots[o.In[0]] == slotLat || prog.slots[o.In[0]] == slotLatN || prog.slots[o.In[0]] == slotLatAcc:
+					lc.la(bs.k3.quantL, kernels.QuantizeThreads(R*pad32(bs.k3.latent)/32), src, bs.a, bs.ax)
+				case prog.slots[o.In[0]] == slotMGated && rowsMLA:
+					lc.la(ml.quantOut, kernels.QuantizeThreads(R*ml.nh*ml.hdv/32), src, bs.a, bs.ax)
+				case prog.slots[o.In[0]] == slotMGated:
+					lc.la(bs.mlaQuantOut, kernels.QuantizeThreads(p.NHead*p.HeadDimV/32), src, bs.a, bs.ax)
 				case prog.slots[o.In[0]] == slotDAct || prog.slots[o.In[0]] == slotDMixed:
 					lc.la(bs.quantD, kernels.QuantizeThreads(R*pad32(bs.rec.VHeads*bs.rec.VDim)/32), src, bs.a, bs.ax)
 				case rowsMLA && prog.slots[o.In[0]] == slotMQAn:
@@ -1147,6 +1194,21 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				lc.la(bs.ropeQ, R*p.NHead*p.NRot/2, at(o.In[0]), rcs, qOff, at(o.Out[0]))
 			case dkKVWrite:
+				if pk != nil && prog.slots[o.In[0]] == slotKAll {
+					// The assembled row: the selecting form turns the
+					// indexer's head with k's; the pooled form keeps it raw,
+					// copied whole first.
+					kHeads := p.NKVHead
+					if ms != nil {
+						kHeads++
+					}
+					if partialRotary(p) || qs != nil {
+						lc.la(pk.copyK, R*kvDim, at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
+					}
+					lc.la(pk.ropeK, R*kHeads*p.NRot/2, at(o.In[0]), rcs, bs.zero, pl.k, pl.tab, pk.pRow)
+					lc.la(pk.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), pl.v, bs.zero, pl.tab, pk.pRow)
+					break
+				}
 				if pk == nil {
 					if ncWrite {
 						if partialRotary(p) {
@@ -1271,7 +1333,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				case prog.slots[o.Out[0]] == slotPLEA:
 					lc.la(bs.pleAct, R*p.PLEDim, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
 				default:
-					lc.la(bs.actMul, R*p.NFFN, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+					lc.la(blockAct(bs, l), R*prog.vals[o.In[0]].Width, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
 				}
 			case dkRouterLogits:
 				if rowsMoE {
@@ -1315,6 +1377,10 @@ func (g *devTier) layersSession(s backend.Session) {
 				// carries one. Vulkan refuses a surplus buffer.
 				rt := routeOf(p)
 				plane, sb := rt.NGroup > 1 && len(o.In) > 1, !(rt.NGroup > 1) && rt.Bias && o.V != nil
+				if rt.RowBias && !(rt.NGroup > 1) && len(o.In) > 1 {
+					// A bias per row (dkRowBias's), read where the block's would be.
+					o.V, sb = at(o.In[len(o.In)-1]), true
+				}
 				switch {
 				case rowsMoE && plane:
 					lg(mg.rank, R*mg.nExp, 128, at(o.In[0]), at(o.Out[0]), at(o.Out[1]), at(o.In[1]))
@@ -1399,6 +1465,9 @@ func (g *devTier) layersSession(s backend.Session) {
 				// prefill chunk through the paged prefill kernels, a step's
 				// rows through the decode plan.
 				g.PagedLaunches++
+				if rowsMLA {
+					g.MLABatched++
+				}
 				if !pk.prefill && pk.cur != nil && pk.cur.plan.Path == kernels.PathStaged {
 					g.PagedStagedLaunches++
 				}
@@ -1482,6 +1551,9 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				lc.la(bs.ewScale, bs.nUsed, at(o.In[0]), at(o.In[1]), o.V, at(o.Out[0]))
 			case dkCombine:
+				if prog.slots[o.Out[0]] == slotLatAcc {
+					g.K3Latent++ // experts in a latent
+				}
 				if rowsMoE {
 					lg(mg.combine, R*p.ExpWidth(), 128, at(o.In[0]), at(o.In[1]), mg.pos, at(o.Out[0]))
 					g.GroupedMoE++
@@ -1533,6 +1605,14 @@ func (g *devTier) layersSession(s backend.Session) {
 			case dkSplitQG:
 				lc.la(bs.splitQG, R*qdim, at(o.In[0]), at(o.Out[0]), at(o.Out[1]))
 			case dkGateOut:
+				if prog.slots[o.Out[0]] == slotMGated && l.k3 != nil && l.k3.fault == nn.K3FaultNoMLAGate {
+					buf[slotMGated] = at(o.In[1]) // the gate left out
+					break
+				}
+				if prog.slots[o.Out[0]] == slotMGated {
+					lc.la(bs.k3.sigMG, R*bs.k3.mgateW, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+					break
+				}
 				lc.la(bs.sigMul, R*qdim, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
 			case dkClamp:
 				if prog.slots[o.Out[0]] == slotQC {
@@ -1553,14 +1633,322 @@ func (g *devTier) layersSession(s backend.Session) {
 					kro = bs.kroff
 				}
 				lc.la(bs.ropeKRow, R*p.NKVHead*p.NRot/2, at(o.In[0]), rcs, kro, at(o.Out[0]))
+			case dkIdxNorm:
+				switch {
+				case ix != nil:
+					// The lightning indexer's key: a LayerNorm with its bias.
+					lc.la(ix.lnPart, R*ix.parts, at(o.In[0]), ix.kPart)
+					lc.la(ix.lnVar, R*ix.parts, at(o.In[0]), ix.kPart, ix.kVar)
+					lc.la(ix.lnApply, R*ix.d, at(o.In[0]), l.nIdxK, ix.kPart, ix.kVar, l.nIdxKB, at(o.Out[0]))
+				case prog.slots[o.Out[0]] == slotIKn && ms != nil:
+					kg, kw := headNormGeom(ms.kLanes, R)
+					if err == nil {
+						err = lc.launch(ms.normK, kg, kw, at(o.In[0]), l.nIdxK, at(o.Out[0]))
+					}
+				case ms != nil:
+					qg, qw := headNormGeom(ms.qLanes, R*ms.h)
+					if err == nil {
+						err = lc.launch(ms.normQ, qg, qw, at(o.In[0]), l.nIdxQ, at(o.Out[0]))
+					}
+				case qs != nil:
+					qg, qw := headNormGeom(qs.qLanes, R*qs.h)
+					if err == nil {
+						err = lc.launch(qs.normQ, qg, qw, at(o.In[0]), l.nIdxQ, at(o.Out[0]))
+					}
+				}
+			case dkIdxRope:
+				if ix != nil {
+					if prog.slots[o.Out[0]] == slotIKRot {
+						lc.la(ix.copyK, R*ix.d, at(o.In[0]), at(o.Out[0]), ix.kOff)
+						lc.la(ix.ropeK, R*p.NRot/2, at(o.In[0]), bs.cs, ix.kOff, at(o.Out[0]))
+					} else {
+						lc.la(ix.copyQ, R*ix.h*ix.d, at(o.In[0]), at(o.Out[0]), ix.qOff)
+						lc.la(ix.ropeQ, R*ix.h*p.NRot/2, at(o.In[0]), bs.cs, ix.qOff, at(o.Out[0]))
+					}
+				} else if ms != nil {
+					lc.la(ms.copyQ, R*ms.h*ms.d, at(o.In[0]), at(o.Out[0]), ms.qOff)
+					lc.la(ms.ropeQ, R*ms.h*p.NRot/2, at(o.In[0]), bs.cs, ms.qOff, at(o.Out[0]))
+				} else if qs != nil {
+					lc.la(qs.copyQ, R*qs.h*qs.d, at(o.In[0]), at(o.Out[0]), qs.qOff)
+					lc.la(qs.ropeQ, R*qs.h*p.NRot/2, at(o.In[0]), bs.cs, qs.qOff, at(o.Out[0]))
+				}
+			case dkIdxAssemble:
+				if ms != nil {
+					lc.la(ms.asmK, R*ms.attnW, at(o.In[0]), at(o.Out[0]), ms.allOff)
+					lc.la(ms.asmI, R*ms.d, at(o.In[1]), at(o.Out[0]), ms.idxOff)
+				} else if qs != nil {
+					lc.la(qs.asmK, R*qs.attnW, at(o.In[0]), at(o.Out[0]), qs.allOff)
+					lc.la(qs.asmI, R*qs.d, at(o.In[1]), at(o.Out[0]), qs.idxOff)
+				}
+			case dkIdxScore:
+				if ms != nil {
+					lc.la(ms.scores, R*ms.h*ms.tcap, at(o.In[0]), pl.k, pl.tab, pk.pRow, ms.score)
+					lc.la(ms.bmax, R*ms.h*ms.nb, ms.score, pk.pRow, ms.bmx)
+				} else if qs != nil {
+					lc.la(qs.csTab, qs.nb*p.NRot/2, qs.cs, qs.planes, qs.consts, qs.csPos)
+					lc.la(qs.dTab, qsaMarkCap*p.NRot/2, qs.dcs, qs.planes, qs.consts, qs.dpos)
+					lc.la(qs.scores, R*qs.nb, at(o.In[0]), pl.k, pl.tab, pk.pRow, qs.cs, l.nIdxK, qs.marks, qs.dcs, qs.score)
+				}
+			case dkSelectBlocks:
+				if ms != nil {
+					lc.la(ms.sel, R*ms.h*ms.nb, ms.bmx, pk.pRow, ms.flag)
+					lc.la(ms.compact, R*ms.h*ms.nb, ms.flag, ms.list)
+				} else if qs != nil {
+					lc.la(qs.sel, R*qs.groups*qs.nb, qs.score, pk.pRow, qs.flag)
+					lc.la(qs.compact, R*qs.groups*qs.nb, qs.flag, qs.list)
+				}
+			case dkGatherKV:
+				vw := 0
+				switch {
+				case ms != nil:
+					if vw = ms.attnW; g.KVF16 {
+						vw /= 2
+					}
+					lc.la(ms.gatherK, R*ms.attnW*ms.k*ms.blk, pl.k, pl.tab, pk.pRow, ms.list, ms.gk)
+					lc.la(ms.gatherV, R*ms.k*ms.blk*vw, pl.v, pl.tab, pk.pRow, ms.list, ms.gv)
+					lc.la(ms.desc, R*kernels.PRowWords, pk.pRow, ms.gdesc)
+					g.MSASelects++
+				case qs != nil:
+					if vw = qs.attnW; g.KVF16 {
+						vw /= 2
+					}
+					lc.la(qs.gatherK, R*qs.attnW*qs.k*qs.blk, pl.k, pl.tab, pk.pRow, qs.list, qs.gk)
+					lc.la(qs.gatherV, R*qs.k*qs.blk*vw, pl.v, pl.tab, pk.pRow, qs.list, qs.gv)
+					lc.la(qs.desc, R*kernels.PRowWords, pk.pRow, qs.gdesc)
+					g.QSASelects++
+				}
+			case dkAttendGathered:
+				var gk, gv, gtab, gdesc, sink backend.Buf
+				switch {
+				case l.ds4 != nil:
+					// One key head that is the value, with sinks.
+					x := bs.ds4
+					gk, gv, gtab, gdesc, sink = x.gk, x.gk, x.gtab, x.gdesc, l.sinks
+					if p.DS4.Fault == nn.DS4FaultNoSinks {
+						sink = x.noSink
+					}
+				case ms != nil:
+					gk, gv, gtab, gdesc = ms.gk, ms.gv, ms.gtab, ms.gdesc
+				case qs != nil:
+					gk, gv, gtab, gdesc = qs.gk, qs.gv, qs.gtab, qs.gdesc
+				default:
+					if err == nil {
+						err = fmt.Errorf("tier: block %d selects its keys and has no selecting scratch here", li)
+					}
+					return
+				}
+				if err == nil {
+					err = pk.pagedDecode(s, lc, at(o.In[0]), gk, gv, bs.n, at(o.Out[0]), gtab, gdesc, sink)
+					g.PagedLaunches++
+				}
 			case dkStreamNorm:
-				ds4Rows(lc, bs.q4e.normS, R*bs.q4e.h, at(o.In[0]), o.V, at(o.Out[0]))
+				// A row a stream: the streams themselves through the stream
+				// norm, a per-stream row of the n-gram's through the row norm.
+				// The n-gram's norms are the tier's uploads (grouped, as its
+				// kernels read them), not the container's vectors.
+				k, w := bs.q4e.normS, o.V
+				switch prog.slots[o.Out[0]] {
+				case slotNKn:
+					k, w = bs.q4e.normR, l.q4e.ngK
+				case slotNQn:
+					w = l.q4e.ngQ
+				case slotNGvn:
+					k, w = bs.q4e.normR, l.q4e.ngC
+				}
+				ds4Rows(lc, k, R*bs.q4e.h, at(o.In[0]), w, at(o.Out[0]))
+			case dkIdxWrite:
+				lc.la(ix.writeK, R*ix.d, at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
+			case dkIdxAttendLatent:
+				lc.la(ix.scores, R*ix.tcap, at(o.In[1]), ix.wts, pl.k, pl.tab, pk.pRow, ix.score)
+				lc.la(ix.sel, R*ix.tcap, ix.score, pk.pRow, ix.selBuf)
+				lc.la(ix.gather, R*ix.k*ix.w, pl.k, pl.tab, pk.pRow, ix.selBuf, ix.gk)
+				lc.la(ix.desc, R*kernels.PRowWords, pk.pRow, ix.gdesc)
+				g.IdxSelects++
+				if err == nil {
+					err = pk.pagedDecode(s, lc, at(o.In[0]), ix.gk, ix.gk, bs.n, at(o.Out[0]), ix.gtab, ix.gdesc, nil)
+					g.PagedLaunches++
+				}
+			case dkClampAt:
+				lc.la(bs.clampK[o.N], R*prog.vals[o.In[0]].Width, at(o.In[0]), l.clampB, at(o.Out[0]))
+			case dkRowBias:
+				g.ds4RouteBias(lc, bs, l, R)
+			case dkStreamFlatten:
+				lc.la(bs.ds4.hcFlat, R*p.DS4.HCMult*p.NEmbd, at(o.In[0]), at(o.Out[0]))
+			case dkFlatNorm:
+				ds4Rows(lc, bs.ds4.hcRms, R, at(o.In[0]), bs.ds4.onesFlat, at(o.Out[0]))
+			case dkMixLogits:
+				fn := l.ds4.fnF
+				if o.N == 1 {
+					fn = l.ds4.fnA
+				}
+				n := p.DS4.HCMult
+				if err == nil {
+					err = lc.launch(bs.ds4.hcFn, (2+n)*n*R, kernels.RouterThreads(1), fn, at(o.In[0]), at(o.Out[0]))
+				}
+			case dkSinkhorn:
+				sc, bb := l.ds4.scF, l.ds4.bF
+				if o.N == 1 {
+					sc, bb = l.ds4.scA, l.ds4.bA
+				}
+				lc.la(bs.ds4.hcMix, R, at(o.In[0]), sc, bb, at(o.Out[0]))
+			case dkStreamCollect:
+				lc.la(bs.ds4.hcColl, R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+				g.DS4HC++
+			case dkRowRMS:
+				x, b := bs.ds4, l.ds4
+				switch prog.slots[o.Out[0]] {
+				case slotCQAN:
+					ds4Rows(lc, x.rmsQ, R, at(o.In[0]), l.nQA, at(o.Out[0]))
+				case slotCQN:
+					ds4Rows(lc, x.rmsHeads, R*p.NHead, at(o.In[0]), x.onesHD, at(o.Out[0]))
+				case slotCKN:
+					ds4Rows(lc, x.rmsHD, R, at(o.In[0]), l.nKVA, at(o.Out[0]))
+				case slotCPEN:
+					ds4Rows(lc, x.rmsHD, R, at(o.In[0]), b.norm, at(o.Out[0]))
+				case slotCIPEN:
+					ds4Rows(lc, x.rmsIHD, R, at(o.In[0]), b.inorm, at(o.Out[0]))
+				}
+			case dkTurn:
+				x, d := bs.ds4, p.DS4
+				cs := bs.csSWA
+				if l.ds4.comp != nn.DS4CompNone && d.Fault != nn.DS4FaultMainRope {
+					cs = bs.cs
+				}
+				kd := x.kinds[l.ds4.comp]
+				switch prog.slots[o.Out[0]] {
+				case slotCIQR:
+					lc.la(x.ropeIQ, R*d.IdxHeads*d.IdxHeadDim, at(o.In[0]), cs, at(o.Out[0]))
+				case slotCQR:
+					lc.la(x.ropeQ, R*p.NHead*p.HeadDim, at(o.In[0]), cs, at(o.Out[0]))
+				case slotCKR:
+					lc.la(x.ropeK, R*p.HeadDim, at(o.In[0]), cs, at(o.Out[0]))
+				case slotCPER:
+					lc.la(x.ropeK, R*p.HeadDim, at(o.In[0]), kd.csE, at(o.Out[0]))
+				case slotCIPER:
+					lc.la(x.ropeIE, R*d.IdxHeadDim, at(o.In[0]), kd.csE, at(o.Out[0]))
+				case slotCAOR:
+					if d.Fault == nn.DS4FaultNoDerope {
+						// The step left out: its slot reads its input from here on.
+						buf[slotCAOR] = at(o.In[0])
+						break
+					}
+					lc.la(x.ropeI, R*p.NHead*p.HeadDim, at(o.In[0]), cs, at(o.Out[0]))
+				}
+			case dkCacheWrite:
+				x, kd, d := bs.ds4, bs.ds4.kinds[l.ds4.comp], p.DS4
+				switch o.N {
+				case 0:
+					lc.la(kd.wK, R*p.HeadDim, at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
+				case 1:
+					cw := kd.coff * p.HeadDim
+					lc.la(kd.ape, R*cw, at(o.In[1]), l.ds4.ape, pk.pRow, x.cgA)
+					lc.la(kd.wKV, R*cw, at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
+					lc.la(kd.wG, R*cw, x.cgA, pl.k, bs.zero, pl.tab, pk.pRow)
+				case 2:
+					iw := 2 * d.IdxHeadDim
+					lc.la(kd.apeI, R*iw, at(o.In[1]), l.ds4.iape, pk.pRow, x.igA)
+					lc.la(kd.wIKV, R*iw, at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
+					lc.la(kd.wIG, R*iw, x.igA, pl.k, bs.zero, pl.tab, pk.pRow)
+				}
+			case dkPoolEntries:
+				kd := bs.ds4.kinds[l.ds4.comp]
+				if o.N == 0 {
+					lc.la(kd.pool, R*p.HeadDim, pl.k, pl.tab, pk.pRow, at(o.Out[0]))
+				} else {
+					lc.la(kd.poolI, R*p.DS4.IdxHeadDim, pl.k, pl.tab, pk.pRow, at(o.Out[0]))
+				}
+			case dkEntryWrite:
+				kd, ent := bs.ds4.kinds[l.ds4.comp], g.kvp.layers[entKey(li)]
+				if ent == nil {
+					if err == nil {
+						err = fmt.Errorf("tier: block %d has no entry pages in this device's pool", li)
+					}
+					return
+				}
+				if o.N == 0 {
+					lc.la(kd.entW, R*p.HeadDim, at(o.In[0]), ent.k, ent.tab, pk.pRow)
+				} else {
+					lc.la(kd.entWI, R*p.DS4.IdxHeadDim, at(o.In[0]), ent.k, ent.tab, pk.pRow)
+				}
+			case dkEntrySelect:
+				x, d, kd, ent := bs.ds4, p.DS4, bs.ds4.kinds[l.ds4.comp], g.kvp.layers[entKey(li)]
+				if keys := ds4Keys(d, l.ds4.comp); keys.All || keys.None || ent == nil {
+					break // every visible entry, or none: nothing to select
+				}
+				tcap := p.MaxSeq/kd.rate + 1
+				lc.la(x.entDesc, R*kernels.PRowWords, pk.pRow, x.edesc)
+				lc.la(x.idxSc, R*tcap, at(o.In[0]), at(o.In[1]), ent.k, ent.tab, x.edesc, x.score)
+				lc.la(x.idxSl, R*tcap, x.score, x.edesc, at(o.Out[0]))
+				g.IdxSelects++
+			case dkGatherEntries:
+				x, kd := bs.ds4, bs.ds4.kinds[l.ds4.comp]
+				ek, et := pl.k, pl.tab
+				if ent := g.kvp.layers[entKey(li)]; ent != nil {
+					ek, et = ent.k, ent.tab
+				}
+				lc.la(kd.gather, R*x.kmax*p.HeadDim, pl.k, pl.tab, ek, et, pk.pRow, x.sel, at(o.Out[0]))
+				lc.la(kd.desc, R*kernels.PRowWords, pk.pRow, x.gdesc)
+			case dkGroupedMatVec:
+				wa, ok := l.ds4WoA(R)
+				if !ok {
+					if err == nil {
+						err = errNoBatch
+					}
+					return
+				}
+				mvid(wa, l.woA, at(o.Out[0]), bs.ds4.oSel)
+				g.DS4Blocks++
+			case dkStreamScore:
+				lc.la(bs.k3.score[o.N], R*(o.N+1), at(o.In[0]), o.V, at(o.Out[0]))
+			case dkStreamWeighted:
+				lc.la(bs.k3.mixK[o.N], R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+				g.K3Mixes++
+			case dkStreamDot:
+				ds4Rows(lc, bs.q4e.streamDot, R*bs.q4e.h, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+			case dkGatedVal:
+				lc.la(bs.q4e.gatedVal, R*bs.q4e.h*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+			case dkNGramConv:
+				// The block's recurrent state carries the convolution's
+				// history, at the step's parity.
+				par, has := g.stepPar(sid, l)
+				pool := l.pool
+				if !has || pool == nil {
+					if err == nil {
+						err = fmt.Errorf("tier: block %d has no recurrent state for session %d", li, sid)
+					}
+					return
+				}
+				inS, outS := pool.s[par], pool.s[1-par]
+				if g.recShared {
+					inS, outS = pool.s[0], g.recNext
+				}
+				conv := bs.q4e.ngConv
+				if rag != nil {
+					if rk := bs.ragLin[len(rag.pos)]; rk != nil {
+						conv = rk.ngConv
+					}
+				}
+				// The convolution's taps as the tier uploaded them (tap-major).
+				lc.la(conv, bs.q4e.h*p.NEmbd, inS, at(o.In[0]), l.q4e.ngConv, bs.dRows, at(o.Out[0]), outS)
+			case dkNGramAdd:
+				lc.la(bs.q4e.ngAdd, bs.q4e.h*R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.Out[0]))
+				g.Q4ENGram++
 			case dkStreamGateMix:
 				lc.la(bs.q4e.gateMix, R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
 				g.Q4EMixes++
 			case dkPlaceWeights:
 				lc.la(bs.q4e.injK, R*bs.q4e.h, at(o.In[0]), at(o.Out[0]))
 			case dkStreamPlace:
+				if prog.slots[o.In[2%len(o.In)]] == slotHC {
+					lc.la(bs.ds4.hcPost, p.DS4.HCMult*R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.Out[0]))
+					break
+				}
+				if len(o.In) == 2 {
+					// The banked placement: the checkpoint's kernel banks the
+					// block's input as it places.
+					lc.la(bs.k3.post[o.N], bs.k3.streams*R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+					break
+				}
 				lc.la(bs.q4e.place, bs.q4e.h*R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.Out[0]))
 			case dkStreamRoute:
 				lc.la(bs.altRoute, R*p.AltUp, at(o.In[0]), l.altRouter, at(o.Out[0]))
@@ -1616,7 +2004,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				case l.xielu != nil:
 					lc.la(bs.actMul, R*nf, at(o.In[0]), l.xielu, at(o.Out[0]))
 				default:
-					lc.la(bs.actMul, R*nf, at(o.In[0]), at(o.Out[0]))
+					lc.la(blockAct(bs, l), R*nf, at(o.In[0]), at(o.Out[0]))
 				}
 			case dkKVCopy:
 				if pk == nil {
@@ -1647,6 +2035,14 @@ func (g *devTier) layersSession(s backend.Session) {
 					return
 				}
 			case dkPostNorm:
+				if prog.slots[o.Out[0]] == slotLatN && l.k3 != nil && l.k3.fault == nn.K3FaultNoLatentNorm {
+					buf[slotLatN] = at(o.In[0]) // the norm left out
+					break
+				}
+				if prog.slots[o.Out[0]] == slotLatN {
+					ds4Rows(lc, bs.k3.normL, R, at(o.In[0]), o.V, at(o.Out[0]))
+					break
+				}
 				// Out of place, as the encoder writes it: the norm's two
 				// passes over the sublayer's output into bs.h.
 				lc.la(bs.normPart, R*bs.parts, at(o.In[0]), bs.part)
@@ -1976,6 +2372,14 @@ func (g *devTier) layersSession(s backend.Session) {
 					break
 				}
 				vg, vwid := headNormGeom(bs.outNormL, R*rr.VHeads)
+				if rr.ChanDecay && l.k3 != nil && l.k3.fault == nn.K3FaultNoKDAGate {
+					// The gate left out: the normed row is the output.
+					if err == nil {
+						err = lc.launch(bs.outNorm, vg, vwid, at(o.In[0]), l.ssmNorm, bs.dOutN)
+					}
+					buf[prog.slots[o.Out[0]]] = bs.dOutN
+					break
+				}
 				if bs.outNormGate != nil && g.normGateOn(l, R == 1) {
 					// The norm's epilogue gates it: the normalised row is never
 					// written.
@@ -2056,7 +2460,9 @@ func (g *devTier) layersSession(s backend.Session) {
 				why = progRowsLatent
 			case l.prog.streamed && (g.StreamProbe || g.StreamPrefetch || g.StreamFixedSel):
 				why = progStreamTuning
-			case l.prog.attends && R > 1 && rag == nil && (bs.pkv == nil || !bs.pkv.prefill):
+			case l.prog.attends && R > 1 && rag == nil && !p.NonCausal && (bs.pkv == nil || !bs.pkv.prefill):
+				// A causal block's rows attend through the paged prefill; a
+				// non-causal one's over its contiguous history (ncAttend).
 				why = progRowsNotPrefill
 			case len(skip) != 0 || g.blockFaulted():
 				why = progFault
@@ -2068,8 +2474,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				why = progNotPaged
 			case l.prog.ropes && (bs.ropeQ == nil || l.noRope):
 				why = progRotary
-			case l.nResid != nil:
-				why = progNormResid
 			case g.TableSplit:
 				why = progTableSplit
 			}
@@ -3654,6 +4058,19 @@ func q8Pair(bs *blockScratch, s devSlot) (a, ax backend.Buf, ok bool) {
 		if x := bs.q4e; x != nil {
 			return x.aLR, x.axLR, true
 		}
+	case slotSQ8W:
+		if x := bs.q4e; x != nil {
+			return x.aW, x.axW, true
+		}
 	}
 	return nil, nil, false
+}
+
+// blockAct is block l's activation kernel: a non-causal block's own where its
+// MLP is not the scratch set's (layer.actK), else the set's.
+func blockAct(bs *blockScratch, l *layer) backend.Kernel {
+	if l.nonCausal && l.actK != nil {
+		return l.actK
+	}
+	return bs.actMul
 }

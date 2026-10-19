@@ -163,6 +163,9 @@ func init() {
 	visionFamProjNames[ProjD1OmniA] = "d1omni_a"
 }
 
+// AudioRole reports whether r is one of the audio tower's roles.
+func AudioRole(r Role) bool { return audioRole(r) }
+
 // audioRole reports whether r is one of the audio tower's roles.
 func audioRole(r Role) bool {
 	_, ok := audioRoleNames[r]

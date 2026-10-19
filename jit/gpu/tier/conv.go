@@ -570,6 +570,9 @@ func (g *devTier) prepConv(li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage 
 	if g.layers == nil {
 		g.layers = map[int]*layer{}
 	}
+	// Its own program of generated kernels (convProg), outside the device
+	// program's lowering: named, so the compiler's coverage counts it.
+	l.progWhy = "a convolution block, run by its own program of kernels"
 	g.layers[li] = l
 	g.layerGen++
 	g.convN++

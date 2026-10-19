@@ -32,6 +32,11 @@ type Facts struct {
 	// instead of a dense block: its epsilon, value head width and gate are
 	// what the norms and the act_mul are held to.
 	Delta *Delta
+	// Conformer, where set, is the FastConformer block the graph describes
+	// instead of a dense block: its epsilon and activation are what the
+	// norms and activations are held to, and its feed-forwards add at one
+	// half.
+	Conformer *Conformer
 	// Mixture, where set, is the routed mixture sublayer the graph
 	// describes: its expert counts, router and activation are what the
 	// route, the experts and the act_muls are held to.
@@ -84,6 +89,9 @@ func Verify(g *Graph, f Facts) error {
 	}
 	if f.Mixture != nil {
 		act = f.Mixture.Act
+	}
+	if f.Conformer != nil {
+		eps, headDim, act = f.Conformer.Eps, f.Conformer.HeadDim, ActSiLU
 	}
 	for i, o := range g.Ops {
 		at := fmt.Sprintf("graph: block %d op %d (%s)", g.Block, i, o.Kind)
@@ -413,11 +421,37 @@ func Verify(g *Graph, f Facts) error {
 			if o.Kind == OpAdd && o.Attr.Scale != 0 && (o.Attr.Scale != LaurelJoin || c.AltUp == nil) {
 				bad("%s: an output scale %g the configuration does not state", at, o.Attr.Scale)
 			}
-			if o.Kind == OpAdd && o.Attr.Alpha != 0 && o.Attr.Alpha != c.ResidScale {
+			if o.Kind == OpAdd && o.Attr.Alpha != 0 && o.Attr.Alpha != c.ResidScale &&
+				!(f.Conformer != nil && o.Attr.Alpha == ConformerHalf) {
 				bad("%s: residual scale %g, the configuration states %g", at, o.Attr.Alpha, c.ResidScale)
 			}
-			if o.Kind == OpActMul && o.Attr.Act != act && !((c.OutGate || c.MLA != nil && c.MLA.Gate) && o.Attr.Act == ActSigmoid) {
+			if o.Kind == OpActMul && o.Attr.Act != act &&
+				!((c.OutGate || c.MLA != nil && c.MLA.Gate || f.Conformer != nil) && o.Attr.Act == ActSigmoid) {
 				bad("%s: activation %d, the configuration states %d", at, o.Attr.Act, act)
+			}
+		case OpConv:
+			if !ins(1) || !outs(1) {
+				break
+			}
+			if f.Conformer == nil || o.Attr.Taps != f.Conformer.Taps || o.Attr.Taps%2 != 1 || len(o.Weight) != 1 ||
+				o.Weight[0].K != width(o.In[0]) || o.Weight[0].Rows != o.Attr.Taps || width(o.Out[0]) != width(o.In[0]) {
+				bad("%s: %d taps over a row of %d; the configuration states a convolution of %v", at,
+					o.Attr.Taps, width(o.In[0]), f.Conformer)
+			}
+		case OpAffine:
+			if !ins(1) || !outs(1) || len(o.Weight) != 2 || o.Weight[0].K != width(o.In[0]) ||
+				o.Weight[1].K != width(o.In[0]) || width(o.Out[0]) != width(o.In[0]) {
+				bad("%s: wants a row, a scale and a shift of its width", at)
+			}
+		case OpRelAttend:
+			if !ins(4) || !outs(1) {
+				break
+			}
+			w := width(o.In[0])
+			if f.Conformer == nil || o.Attr.NHead*o.Attr.HeadDim != w || o.Attr.HeadDim != headDim ||
+				width(o.In[1]) != w || width(o.In[2]) != w || width(o.In[3]) != w || width(o.Out[0]) != w ||
+				len(o.Weight) != 2 || o.Weight[0].K*o.Weight[0].Rows != w || o.Weight[1].K*o.Weight[1].Rows != w {
+				bad("%s: %d heads of %d over rows of %d", at, o.Attr.NHead, o.Attr.HeadDim, w)
 			}
 		case OpScale:
 			if !ins(1) || !outs(1) || len(o.Weight) != 1 || o.Weight[0].K != 1 || o.Weight[0].Rows > 1 ||
@@ -464,6 +498,14 @@ func Verify(g *Graph, f Facts) error {
 			}
 		case OpClamp:
 			if !ins(1) || !outs(1) {
+				break
+			}
+			if len(o.Weight) != 0 {
+				// A bounds table's pair.
+				if c.ClampTable == 0 || len(o.Weight) != 1 || o.Weight[0].Role != c.ClampTable ||
+					o.Attr.Offset < 0 || o.Attr.Offset+2 > clampTableLen || width(o.Out[0]) != width(o.In[0]) {
+					bad("%s: a bounds table at %d, the configuration states table %v", at, o.Attr.Offset, c.ClampTable)
+				}
 				break
 			}
 			if o.Attr.Bound <= 0 || o.Attr.Bound != c.Clamp || width(o.Out[0]) != width(o.In[0]) {

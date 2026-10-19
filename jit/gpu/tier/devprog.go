@@ -59,66 +59,96 @@ func (t devType) String() string {
 type devKind uint8
 
 const (
-	dkNorm          devKind = iota // RMSNorm of a row by a weight
-	dkQuant                        // a float row to the int8 operand a matvec reads
-	dkMatVec                       // an integer matvec over a weight
-	dkRopeQ                        // q's rotary
-	dkKVWrite                      // k's rotary into the history, and v's copy
-	dkAttend                       // the paged decode attention
-	dkAdd                          // a residual add
-	dkActMul                       // act(gate) * up
-	dkHeadNorm                     // each head's RMSNorm (q's or k's)
-	dkPostNorm                     // a sublayer's output normed before its residual add (post-norm)
-	dkRecurrent                    // a recurrent mixer with its pre-norm, from the block's row (emitLinear)
-	dkCopy                         // a row moved to another slot (the sum home to the block's row)
-	dkKVCopy                       // an unrotated key and its value copied into the history (NoPE)
-	dkAct                          // an ungated FFN's activation of up's row
-	dkQTemp                        // the query's temperature, a factor of each row's position
-	dkSplitQG                      // a double-width query split into its heads and its output gate
-	dkGateOut                      // the attention's output times the sigmoid of the gate
-	dkPLESlice                     // this block's rows of the per-layer input table
-	dkRopeKRow                     // k's rotary into a row of its own (XD-RoPE's k is normed after it)
-	dkStreamRoute                  // a stream router's weights over a row (AltUp's)
-	dkStreamPredict                // each stream predicted from the others by the routed coefficients
-	dkStreamCorrect                // each stream corrected by the active one's change
-	dkStreamScale                  // the active stream's correction scaled
-	dkStreamFinish                 // every stream written back from the corrections and a row
-	dkResidJoin3                   // a residual add with a branch beside it, over sqrt(2)
-	dkGaussTopK                    // the gate's values above its mean plus a bound of deviations
-	dkStreamNorm                   // every stream normed
-	dkStreamGateMix                // the streams averaged under a gate per channel: a sublayer's row
-	dkPlaceWeights                 // a placement's weights from its projection (2*sigmoid)
-	dkStreamPlace                  // a sublayer's output added into every stream at its weights
-	dkScale                        // the block's row times the layer's output scale
-	dkClamp                        // q, k or v clamped to the plan's bound
-	dkSubNorm                      // an inner norm before wo or down, with the quantize it feeds
-	dkRouterLogits                 // a router's logits over the normed row (the router read as floats)
-	dkRouterBias                   // a bias added to the router's logits before the choice
-	dkGroupMask                    // the experts of the best-scoring groups kept, the rest masked
-	dkTopK                         // the top k of the logits (or a masked or biased plane): the selection
-	dkRouteWeights                 // the selection's weights: softmax, sigmoid or renormalised, per the plan
-	dkExpertMatVec                 // a matvec per selected expert over a bank, indexed by the selection
-	dkExpertBias                   // each selected expert's bias, indexed by its id
-	dkScaleWeights                 // each routed weight times its expert's own factor
-	dkCombine                      // the selection's weighted sum of the experts' outputs
-	dkGateLogit                    // a shared expert's gate: one logit over the normed row
-	dkGatedAdd                     // a branch added in, scaled by the sigmoid of its gate's logit
-	dkExpertFetch                  // a paged bank's selected sheets brought to the card, and the index its matvecs read
-	dkGroupByExpert                // over rows, the selection sorted by expert: the order the grouped matvecs read
-	dkSlice                        // a strided copy: each head's slice, or a row's tail
-	dkView                         // a row's prefix read in place (no launch)
-	dkRopeTail                     // the rotary over each head's tail, compacted
-	dkLatentWrite                  // a latent row and its rotated key into this position's paged row
-	dkConcatHeads                  // per-head parts assembled into one query row
-	dkLatentAttend                 // attention over latent rows: the key the row, the value its prefix
-	dkExpertMatVecE                // an expert matvec with its epilogue: its bias, or act(gate)*up (the bank's fused kernel)
-	dkConv1d                       // a causal convolution over the session's convolution state, and its shift
-	dkScan                         // a recurrence's state update over the session's state, by the plan's rule
-	dkGatedNorm                    // a recurrence's output: each head normed, gated by z
-	dkMul                          // an elementwise product of two rows
-	dkConvBias                     // the convolved row plus its bias, activated (Mamba-1's)
-	dkSSMNorm                      // a selective scan's dt, B or C row normed (Mamba-1's)
-	numBaseKinds                   // the fused kinds (devrewrite.go) count on from here
+	dkNorm            devKind = iota // RMSNorm of a row by a weight
+	dkQuant                          // a float row to the int8 operand a matvec reads
+	dkMatVec                         // an integer matvec over a weight
+	dkRopeQ                          // q's rotary
+	dkKVWrite                        // k's rotary into the history, and v's copy
+	dkAttend                         // the paged decode attention
+	dkAdd                            // a residual add
+	dkActMul                         // act(gate) * up
+	dkHeadNorm                       // each head's RMSNorm (q's or k's)
+	dkPostNorm                       // a sublayer's output normed before its residual add (post-norm)
+	dkRecurrent                      // a recurrent mixer with its pre-norm, from the block's row (emitLinear)
+	dkCopy                           // a row moved to another slot (the sum home to the block's row)
+	dkKVCopy                         // an unrotated key and its value copied into the history (NoPE)
+	dkAct                            // an ungated FFN's activation of up's row
+	dkQTemp                          // the query's temperature, a factor of each row's position
+	dkSplitQG                        // a double-width query split into its heads and its output gate
+	dkGateOut                        // the attention's output times the sigmoid of the gate
+	dkPLESlice                       // this block's rows of the per-layer input table
+	dkRopeKRow                       // k's rotary into a row of its own (XD-RoPE's k is normed after it)
+	dkStreamRoute                    // a stream router's weights over a row (AltUp's)
+	dkStreamPredict                  // each stream predicted from the others by the routed coefficients
+	dkStreamCorrect                  // each stream corrected by the active one's change
+	dkStreamScale                    // the active stream's correction scaled
+	dkStreamFinish                   // every stream written back from the corrections and a row
+	dkResidJoin3                     // a residual add with a branch beside it, over sqrt(2)
+	dkGaussTopK                      // the gate's values above its mean plus a bound of deviations
+	dkStreamNorm                     // every stream normed
+	dkStreamGateMix                  // the streams averaged under a gate per channel: a sublayer's row
+	dkPlaceWeights                   // a placement's weights from its projection (2*sigmoid)
+	dkStreamPlace                    // a sublayer's output added into every stream at its weights
+	dkIdxNorm                        // an indexer's query or key, each head normed
+	dkIdxRope                        // an indexer's query turned
+	dkIdxAssemble                    // the cached row: the attention's key and the indexer's as one more head
+	dkIdxScore                       // the indexer's scores over the cached keys or pooled blocks
+	dkSelectBlocks                   // the best blocks by score, compacted into a list
+	dkGatherKV                       // the selected blocks' keys and values gathered, with their descriptors
+	dkAttendGathered                 // the paged attention over the gathered keys
+	dkStreamDot                      // per stream, the dot of two rows: a gate
+	dkGatedVal                       // a value gated by a signed root of its gate
+	dkNGramConv                      // a dilated convolution over the block's recurrent state
+	dkNGramAdd                       // a gated value and its convolution added into every stream
+	dkStreamScore                    // a bank of streams scored against a row's weights
+	dkStreamWeighted                 // the bank's softmax-weighted sum: a sublayer's row
+	dkIdxWrite                       // an indexer's turned key into this position's latent row
+	dkIdxAttendLatent                // latent attention over the indexer's top positions, gathered
+	dkRowBias                        // each row's selection bias: the block's, or a hash table's row for the token
+	dkStreamFlatten                  // the streams laid out as one row
+	dkFlatNorm                       // the flat row RMS-normed
+	dkMixLogits                      // the mix's coefficients: the flat row against the sublayer's weights
+	dkSinkhorn                       // the coefficients into read and placement weights, Sinkhorn-normalised
+	dkStreamCollect                  // the streams weighed into the sublayer's row
+	dkRowRMS                         // rows RMS-normed by a weight (per head where the width is a head's)
+	dkTurn                           // a rotary over a row's tail dimensions by a table
+	dkCacheWrite                     // a row's key (or a compressing block's pair) into the position's history row
+	dkPoolEntries                    // every closed block of positions pooled into an entry
+	dkEntryWrite                     // an entry turned into the block's second history
+	dkEntrySelect                    // an indexer's top entries over the second history
+	dkGatherEntries                  // the window's rows and the visible entries gathered for one attention
+	dkGroupedMatVec                  // a grouped low-rank projection: each group's rows times its own matrix
+	dkClampAt                        // a row clamped to a pair of the block's bounds table
+	dkScale                          // the block's row times the layer's output scale
+	dkClamp                          // q, k or v clamped to the plan's bound
+	dkSubNorm                        // an inner norm before wo or down, with the quantize it feeds
+	dkRouterLogits                   // a router's logits over the normed row (the router read as floats)
+	dkRouterBias                     // a bias added to the router's logits before the choice
+	dkGroupMask                      // the experts of the best-scoring groups kept, the rest masked
+	dkTopK                           // the top k of the logits (or a masked or biased plane): the selection
+	dkRouteWeights                   // the selection's weights: softmax, sigmoid or renormalised, per the plan
+	dkExpertMatVec                   // a matvec per selected expert over a bank, indexed by the selection
+	dkExpertBias                     // each selected expert's bias, indexed by its id
+	dkScaleWeights                   // each routed weight times its expert's own factor
+	dkCombine                        // the selection's weighted sum of the experts' outputs
+	dkGateLogit                      // a shared expert's gate: one logit over the normed row
+	dkGatedAdd                       // a branch added in, scaled by the sigmoid of its gate's logit
+	dkExpertFetch                    // a paged bank's selected sheets brought to the card, and the index its matvecs read
+	dkGroupByExpert                  // over rows, the selection sorted by expert: the order the grouped matvecs read
+	dkSlice                          // a strided copy: each head's slice, or a row's tail
+	dkView                           // a row's prefix read in place (no launch)
+	dkRopeTail                       // the rotary over each head's tail, compacted
+	dkLatentWrite                    // a latent row and its rotated key into this position's paged row
+	dkConcatHeads                    // per-head parts assembled into one query row
+	dkLatentAttend                   // attention over latent rows: the key the row, the value its prefix
+	dkExpertMatVecE                  // an expert matvec with its epilogue: its bias, or act(gate)*up (the bank's fused kernel)
+	dkConv1d                         // a causal convolution over the session's convolution state, and its shift
+	dkScan                           // a recurrence's state update over the session's state, by the plan's rule
+	dkGatedNorm                      // a recurrence's output: each head normed, gated by z
+	dkMul                            // an elementwise product of two rows
+	dkConvBias                       // the convolved row plus its bias, activated (Mamba-1's)
+	dkSSMNorm                        // a selective scan's dt, B or C row normed (Mamba-1's)
+	numBaseKinds                     // the fused kinds (devrewrite.go) count on from here
 )
 
 // devVal names a value of the program; its buffer is the scratch slot the
@@ -232,6 +262,69 @@ const (
 	slotSMix                    // the gated mix: a sublayer's row
 	slotSInj                    // the placement's projection
 	slotSW                      // the placement's weights
+	slotIKRaw                   // an indexer's key, projected
+	slotIQRaw                   // its query, projected
+	slotIQn                     // the query normed
+	slotIKn                     // the key normed
+	slotIQRot                   // the query turned
+	slotKAll                    // the cached row with the indexer's key
+	slotISel                    // the selection: the gathered keys' list and descriptors
+	slotNEmb                    // the call's n-gram table rows, staged
+	slotSQ8W                    // their own int8 operand
+	slotNKey                    // the n-gram key
+	slotNVal                    // the n-gram value
+	slotNKn                     // the key normed per stream
+	slotNQn                     // the streams normed
+	slotNDot                    // each stream's gate
+	slotNGv                     // the gated value
+	slotNGvn                    // it normed
+	slotNConv                   // its convolution
+	slotNXg                     // the streams with the n-gram embedding added
+	slotBScores                 // a bank's scores
+	slotBMix                    // the bank's weighted sum
+	slotMGate                   // an output gate's projection beside latent attention
+	slotMGated                  // the latent attention gated
+	slotLat                     // a mixture's latent row
+	slotLatAcc                  // the experts' sum in the latent
+	slotLatN                    // it normed
+	slotIdxW                    // an indexer's per-head weights
+	slotIKRot                   // its key turned
+	slotRBias                   // a row's selection bias
+	slotHFlat                   // the streams flat
+	slotHFlatN                  // normed
+	slotHMix                    // the mix's coefficients
+	slotHC                      // read and placement weights
+	slotHColl                   // the streams weighed into a row
+	slotCQA                     // the query's latent
+	slotCQAN                    // normed
+	slotCQ                      // the query
+	slotCQN                     // normed per head
+	slotCQR                     // turned
+	slotCKRaw                   // the key
+	slotCKN                     // normed
+	slotCKR                     // turned
+	slotCKV                     // a compressing block's pooled value
+	slotCG                      // its pooling gate
+	slotCIKV                    // the indexer's
+	slotCIG                     // its gate
+	slotCIW                     // the indexer's per-head weights
+	slotCIQ                     // the indexer's query
+	slotCIQR                    // turned
+	slotCPE                     // the pooled entry
+	slotCPEN                    // normed
+	slotCPER                    // turned
+	slotCIPE                    // the indexer's pooled entry
+	slotCIPEN                   // normed
+	slotCIPER                   // turned
+	slotCSel                    // the selected entries
+	slotCGK                     // the gathered rows
+	slotCAO                     // the attention's heads
+	slotCAOR                    // turned back
+	slotCOA                     // the grouped projection's rows
+	slotCIn                     // a linear's clamped input
+	slotCOut                    // a linear's clamped output
+	slotGC                      // the gate's, clamped
+	slotUC                      // up's, clamped
 	numSlots
 )
 
@@ -443,6 +536,132 @@ func (s devSlot) String() string {
 		return "s_inj"
 	case slotSW:
 		return "s_w"
+	case slotIKRaw:
+		return "idx_k_raw"
+	case slotIQRaw:
+		return "idx_q_raw"
+	case slotIQn:
+		return "idx_q_n"
+	case slotIKn:
+		return "idx_k_n"
+	case slotIQRot:
+		return "idx_q_rot"
+	case slotKAll:
+		return "k_all"
+	case slotISel:
+		return "idx_sel"
+	case slotNEmb:
+		return "ng_emb"
+	case slotSQ8W:
+		return "ng_q8"
+	case slotNKey:
+		return "ng_key"
+	case slotNVal:
+		return "ng_val"
+	case slotNKn:
+		return "ng_kn"
+	case slotNQn:
+		return "ng_qn"
+	case slotNDot:
+		return "ng_dot"
+	case slotNGv:
+		return "ng_gv"
+	case slotNGvn:
+		return "ng_gvn"
+	case slotNConv:
+		return "ng_conv"
+	case slotNXg:
+		return "ng_xg"
+	case slotBScores:
+		return "b_scores"
+	case slotBMix:
+		return "b_mix"
+	case slotMGate:
+		return "m_gate"
+	case slotMGated:
+		return "m_gated"
+	case slotLat:
+		return "lat"
+	case slotLatAcc:
+		return "lat_acc"
+	case slotLatN:
+		return "lat_n"
+	case slotIdxW:
+		return "idx_w"
+	case slotIKRot:
+		return "idx_k_rot"
+	case slotRBias:
+		return "r_bias"
+	case slotHFlat:
+		return "hc_flat"
+	case slotHFlatN:
+		return "hc_flat_n"
+	case slotHMix:
+		return "hc_mix"
+	case slotHC:
+		return "hc"
+	case slotHColl:
+		return "hc_row"
+	case slotCQA:
+		return "c_qa"
+	case slotCQAN:
+		return "c_qa_n"
+	case slotCQ:
+		return "c_q"
+	case slotCQN:
+		return "c_q_n"
+	case slotCQR:
+		return "c_q_rot"
+	case slotCKRaw:
+		return "c_k"
+	case slotCKN:
+		return "c_k_n"
+	case slotCKR:
+		return "c_k_rot"
+	case slotCKV:
+		return "c_ckv"
+	case slotCG:
+		return "c_cg"
+	case slotCIKV:
+		return "c_ikv"
+	case slotCIG:
+		return "c_ig"
+	case slotCIW:
+		return "c_iw"
+	case slotCIQ:
+		return "c_iq"
+	case slotCIQR:
+		return "c_iq_rot"
+	case slotCPE:
+		return "c_pe"
+	case slotCPEN:
+		return "c_pe_n"
+	case slotCPER:
+		return "c_pe_rot"
+	case slotCIPE:
+		return "c_ipe"
+	case slotCIPEN:
+		return "c_ipe_n"
+	case slotCIPER:
+		return "c_ipe_rot"
+	case slotCSel:
+		return "c_sel"
+	case slotCGK:
+		return "c_gk"
+	case slotCAO:
+		return "c_ao"
+	case slotCAOR:
+		return "c_ao_rot"
+	case slotCOA:
+		return "c_oa"
+	case slotCIn:
+		return "clamp_in"
+	case slotCOut:
+		return "clamp_out"
+	case slotGC:
+		return "g_clamped"
+	case slotUC:
+		return "u_clamped"
 	}
 	return ""
 }
@@ -545,6 +764,9 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	}
 	switch o.Kind {
+	case dkPoolEntries:
+		// Pooling reads the position's history.
+		return devType{Elem: elemF32, Layout: layoutKV, Width: in.Width}
 	case dkRecurrent, dkCopy, dkKVCopy, dkAct, dkQTemp, dkSplitQG, dkGateOut, dkPLESlice, dkRopeKRow, dkScale, dkClamp, dkSubNorm:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkExpertMatVec:
@@ -572,7 +794,11 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkSlice, dkView, dkRopeTail, dkLatentWrite, dkConcatHeads, dkLatentAttend, dkConv1d, dkScan, dkGatedNorm, dkMul, dkConvBias, dkSSMNorm,
 		dkStreamRoute, dkStreamPredict, dkStreamCorrect, dkStreamScale, dkStreamFinish, dkResidJoin3, dkGaussTopK,
-		dkStreamNorm, dkStreamGateMix, dkPlaceWeights, dkStreamPlace:
+		dkStreamNorm, dkStreamGateMix, dkPlaceWeights, dkStreamPlace,
+		dkIdxNorm, dkIdxRope, dkIdxAssemble, dkIdxScore, dkSelectBlocks, dkGatherKV, dkAttendGathered,
+		dkStreamDot, dkGatedVal, dkNGramConv, dkNGramAdd, dkStreamScore, dkStreamWeighted, dkIdxWrite, dkIdxAttendLatent,
+		dkRowBias, dkStreamFlatten, dkFlatNorm, dkMixLogits, dkSinkhorn, dkStreamCollect, dkRowRMS, dkTurn,
+		dkCacheWrite, dkEntryWrite, dkEntrySelect, dkGatherEntries, dkClampAt:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkExpertFetch, dkGroupByExpert:
 		return devType{Elem: elemU32, Layout: layoutRow, Width: in.Width}
@@ -652,10 +878,16 @@ func lowersOp(k graph.OpKind) bool {
 	switch k {
 	case graph.OpNorm, graph.OpMatVec, graph.OpRope, graph.OpKVAppend, graph.OpAttend, graph.OpAdd,
 		graph.OpActMul, graph.OpAct, graph.OpHeadNorm, graph.OpLayerNorm, graph.OpScale, graph.OpClamp,
+		// A block-selecting indexer (its selection read by the attention).
+		graph.OpIndex,
+		// An n-gram embedding added into the streams.
+		graph.OpNGram,
 		// A stream mix and its placement (the low-rank gated form).
 		graph.OpStreamMix, graph.OpStreamPlace,
 		// Predicted and corrected streams, a low-rank branch, the sparse gate.
 		graph.OpAltPredict, graph.OpAltCorrect, graph.OpLaurel, graph.OpGaussTopK,
+		// An attention keeping pooled entries beside its rows.
+		graph.OpCompressedAttend,
 		// The mixture's ops.
 		graph.OpRoute, graph.OpGather, graph.OpExpertMatVec, graph.OpCombine, graph.OpGateScalar,
 		// A recurrent mixer, lowered whole with its pre-norm (emitLinear).
@@ -677,10 +909,6 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		return nil, "no graph"
 	case !actHasKernel(p):
 		return nil, "an activation with no kernel"
-	case bindsRole(g, jlm.RoleFFNRoutedDown):
-		// Read off the graph, not the architecture: experts run in a latent
-		// (the row taken down before them).
-		return nil, "latent experts"
 	}
 	for _, o := range g.Ops {
 		if !lowersOp(o.Kind) {
@@ -730,6 +958,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		jlm.RoleShExpGate: slotShG, jlm.RoleShExpUp: slotShU, jlm.RoleShExpDown: slotShOut,
 		jlm.RoleAttnQA: slotMQA, jlm.RoleAttnQB: slotQ, jlm.RoleAttnKVA: slotMKV,
 		jlm.RolePLEGate: slotPLEG, jlm.RolePLEProj: slotPLEO,
+		jlm.RoleAttnGate: slotMGate, jlm.RoleFFNRoutedDown: slotLat, jlm.RoleFFNRoutedUp: slotOut,
 	}
 	adds := 0
 	// routeW is each selection's routed weights; gated is a shared expert's
@@ -740,15 +969,16 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 	weightSel := map[devVal]devVal{}
 	weightIn := map[devVal]bool{}
 	gated := map[graph.ValueID]devVal{}
+	// idxQuery is a block-selecting indexer's turned query, lowered with
+	// the history write its key joins.
+	idxQuery := devVal(-1)
+	lightning := false
 	var kRot graph.ValueID = -1
 	mla := false
 	for _, o := range g.Ops {
 		if o.Kind == graph.OpAttendLatent {
 			mla = true
 		}
-	}
-	if mla && bindsRole(g, jlm.RoleAttnGate) {
-		return nil, "an output gate on latent attention"
 	}
 	skipTo := 0
 	for i, o := range g.Ops {
@@ -777,8 +1007,27 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				vals[o.Out[0]] = sub
 				continue
 			case jlm.RoleAttnNorm, jlm.RoleFFNNorm:
+			case jlm.RoleAttnOutNorm, jlm.RoleLayerOutNorm:
+				// A norm after the residual add (post-norm): its output is the
+				// residual. The norm into h, then h into the residual slot
+				// the add did not write.
+				h := prog.val(name(0)+".h", f32(ne), slotH)
+				prog.ops = append(prog.ops, devOp{Kind: dkNorm, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{h}, Role: o.Weight[0].Role})
+				rs := slotX2
+				if prog.slots[in(0)] == slotX2 {
+					rs = slotX
+				}
+				out := prog.val(name(0), f32(ne), rs)
+				prog.ops = append(prog.ops, devOp{Kind: dkCopy, Src: []int{i}, In: []devVal{h}, Out: []devVal{out}})
+				vals[o.Out[0]] = out
+				continue
 			case jlm.RolePostAttnNorm, jlm.RolePostFFNNorm:
 				k = dkPostNorm
+			case jlm.RoleFFNRoutedNorm:
+				out := prog.val(name(0), prog.vals[in(0)], slotLatN)
+				prog.ops = append(prog.ops, devOp{Kind: dkPostNorm, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Role: o.Weight[0].Role})
+				vals[o.Out[0]] = out
+				continue
 			case jlm.RolePostFFNNorm1, jlm.RolePostFFNNorm2, jlm.RoleRouterNorm, jlm.RoleFFNNorm2, jlm.RolePLEPostNorm:
 				// A mixture beside a dense MLP: each branch's norms, out of
 				// place, into the buffers the branches read (the router's
@@ -920,13 +1169,20 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				prog.scans = true
 				continue
 			}
-			if rr := p.Recurrent; prog.slots[in(0)] == slotH && rr.ChanDecay && !l.centred && l.k3 == nil && l.q4e == nil {
+			if rr := p.Recurrent; rr.ChanDecay && !l.centred && l.q4e == nil {
 				// Kimi Delta Attention: the fused in-projection, the output
 				// and decay gates each through a low-rank pair (the second
 				// matvec reading its own int8 operand), beta's logits, the
 				// convolution and the per-channel scan over the session's
 				// state, the sigmoid-gated norm, projected out.
-				for _, w := range [...]int{posSSMInProj, posSSMBA, posSSMOut, posLowA, posLowB, posGateA, posGateB} {
+				fullGate := posGateA >= len(l.rs) || *l.rs[posGateA] == nil
+				need := []int{posSSMInProj, posSSMBA, posSSMOut, posLowA, posLowB}
+				if fullGate {
+					need = append(need, posSSMGate) // one full-rank output gate
+				} else {
+					need = append(need, posGateA, posGateB)
+				}
+				for _, w := range need {
 					if w >= len(l.rs) || *l.rs[w] == nil {
 						return nil, "a delta rule whose projections the block's device copy does not hold"
 					}
@@ -945,7 +1201,12 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 					return mv(nm, lq, wb, s, width, low)
 				}
 				mixed := mv(".mixed", q, posSSMInProj, slotDMixed, rr.Chans)
-				z := lowRank(".z", posGateA, posGateB, slotDZ, inner)
+				var z devVal
+				if fullGate {
+					z = mv(".z", q, posSSMGate, slotDZ, inner)
+				} else {
+					z = lowRank(".z", posGateA, posGateB, slotDZ, inner)
+				}
 				alpha := lowRank(".alpha", posLowA, posLowB, slotDAlpha, l.ms[posLowB].rows)
 				beta := mv(".beta", q, posSSMBA, slotDBRaw, l.ms[posSSMBA].rows)
 				conv := prog.val(name(0)+".conv", f32(rr.Chans), slotDConv)
@@ -1048,9 +1309,6 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 					hash = w.Role
 				}
 			}
-			if hash != 0 {
-				return nil, "hash routing"
-			}
 			ex, k := o.Attr.Experts, o.Attr.TopK
 			logits := prog.val(name(0)+".logits", f32(ex), slotRLogits)
 			prog.ops = append(prog.ops, devOp{Kind: dkRouterLogits, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{logits}})
@@ -1067,6 +1325,13 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				plane := prog.val(name(0)+".plane", f32(ex), slotRBM)
 				prog.ops = append(prog.ops, devOp{Kind: dkGroupMask, Src: []int{i}, In: []devVal{logits}, Out: []devVal{plane}, Role: selBias})
 				rank = append(rank, plane)
+			}
+			if routeOf(p).RowBias {
+				// The rank kernel reads a bias per row: the block's, or on a
+				// hash-routed block the table's experts for the row's token.
+				rb := prog.val(name(0)+".row_bias", f32(ex), slotRBias)
+				prog.ops = append(prog.ops, devOp{Kind: dkRowBias, Src: []int{i}, Out: []devVal{rb}, Role: hash})
+				rank = append(rank, rb)
 			}
 			sel := prog.val(name(0), devType{Elem: elemU32, Layout: layoutRow, Width: k}, slotSel)
 			top := prog.val(name(0)+".top", f32(k), slotTop)
@@ -1138,7 +1403,11 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				prog.ops = append(prog.ops, devOp{Kind: dkScaleWeights, Src: []int{i}, In: []devVal{rw, in(1)}, Out: []devVal{ws}, Role: o.Weight[0].Role})
 				rw = ws
 			}
-			out := prog.val(name(0), f32(g.Values[o.Out[0]].Width), slotOut)
+			cs := slotOut
+			if g.Values[o.Out[0]].Width != ne {
+				cs = slotLatAcc // experts in a latent: their sum there
+			}
+			out := prog.val(name(0), f32(g.Values[o.Out[0]].Width), cs)
 			prog.ops = append(prog.ops, devOp{Kind: dkCombine, Src: []int{i}, In: []devVal{in(0), rw}, Out: []devVal{out}})
 			vals[o.Out[0]] = out
 		case graph.OpGateScalar:
@@ -1156,7 +1425,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			}
 			prog.ops = append(prog.ops, k)
 		case graph.OpAttendLatent:
-			if len(o.In) > 2 {
+			if len(o.In) > 2 && !lightning {
 				return nil, "an attention indexer"
 			}
 			kb, vb := l.matIndex(o.Weight[0].Role), l.matIndex(o.Weight[1].Role)
@@ -1174,7 +1443,12 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			abs := prog.val(name(0)+".query", f32(nh*(lat+o.Attr.NRot)), slotMAbs)
 			prog.ops = append(prog.ops, devOp{Kind: dkConcatHeads, Src: []int{i}, In: []devVal{raw, in(1)}, Out: []devVal{abs}})
 			acc := prog.val(name(0)+".acc", f32(nh*lat), slotMAcc)
-			prog.ops = append(prog.ops, devOp{Kind: dkLatentAttend, Src: []int{i}, In: []devVal{abs}, Out: []devVal{acc}})
+			if len(o.In) > 2 {
+				// Over the indexer's top positions, gathered.
+				prog.ops = append(prog.ops, devOp{Kind: dkIdxAttendLatent, Src: []int{i}, In: []devVal{abs, in(2)}, Out: []devVal{acc}})
+			} else {
+				prog.ops = append(prog.ops, devOp{Kind: dkLatentAttend, Src: []int{i}, In: []devVal{abs}, Out: []devVal{acc}})
+			}
 			// Un-absorb: each head's attention through its sheet of the v
 			// up-projection.
 			qc := operand(acc, i, false)
@@ -1182,7 +1456,194 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkExpertMatVec, Src: []int{i}, In: []devVal{qc, ident, acc}, Out: []devVal{out}, Role: o.Weight[1].Role, W: vb})
 			vals[o.Out[0]] = out
 			prog.latent = true
+		case graph.OpNGram:
+			if p.Q4E == nil {
+				return nil, "an n-gram block with no device scratch"
+			}
+			role := func(r jlm.Role) jlm.Role {
+				for _, w := range o.Weight {
+					if w.Role == r {
+						return r
+					}
+				}
+				return jlm.RoleNone
+			}
+			kw, vw := l.matIndex(jlm.RoleNGramKey), l.matIndex(jlm.RoleNGramValue)
+			if kw < 0 || vw < 0 {
+				return nil, "an n-gram block whose projections the block's device copy does not hold"
+			}
+			// The call's table rows (staged) into their own operand, key
+			// and value; the key normed against the normed streams, their
+			// dot the gate; the gated value normed and convolved over the
+			// block's state; both added into every stream.
+			sw := prog.vals[in(0)]
+			emb := prog.val("ng_emb", f32(p.Q4E.NGramWidth), slotNEmb)
+			qe := prog.val("ng_emb.q8", devType{Elem: elemQ8, Layout: layoutRow, Width: prog.vals[emb].Width}, slotSQ8W)
+			prog.ops = append(prog.ops, devOp{Kind: dkQuant, Src: []int{i}, In: []devVal{emb}, Out: []devVal{qe}})
+			key := prog.val("ng_key", sw, slotNKey)
+			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{qe, emb}, Out: []devVal{key}, W: kw})
+			val := prog.val("ng_val", sw, slotNVal)
+			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{qe, emb}, Out: []devVal{val}, W: vw})
+			norm := func(nm string, v devVal, r jlm.Role, s devSlot) devVal {
+				out := prog.val(nm, prog.vals[v], s)
+				prog.ops = append(prog.ops, devOp{Kind: dkStreamNorm, Src: []int{i}, In: []devVal{v}, Out: []devVal{out}, Role: r})
+				return out
+			}
+			kn := norm("ng_kn", key, role(jlm.RoleNGramNormKey), slotNKn)
+			qn := norm("ng_qn", in(0), role(jlm.RoleNGramNormQuery), slotNQn)
+			dot := prog.val("ng_dot", f32(o.Attr.Streams), slotNDot)
+			prog.ops = append(prog.ops, devOp{Kind: dkStreamDot, Src: []int{i}, In: []devVal{kn, qn}, Out: []devVal{dot}})
+			gv := prog.val("ng_gv", sw, slotNGv)
+			prog.ops = append(prog.ops, devOp{Kind: dkGatedVal, Src: []int{i}, In: []devVal{dot, val}, Out: []devVal{gv}})
+			gvn := norm("ng_gvn", gv, role(jlm.RoleNGramNormConv), slotNGvn)
+			conv := prog.val("ng_conv", sw, slotNConv)
+			prog.ops = append(prog.ops, devOp{Kind: dkNGramConv, Src: []int{i}, In: []devVal{gvn}, Out: []devVal{conv}, Role: role(jlm.RoleNGramConv)})
+			xg := prog.val(name(0), sw, slotNXg)
+			prog.ops = append(prog.ops, devOp{Kind: dkNGramAdd, Src: []int{i}, In: []devVal{in(0), gv, conv}, Out: []devVal{xg}})
+			vals[o.Out[0]] = xg
+			prog.scans = true
+		case graph.OpCompressedAttend:
+			// Over the normed row: a low-rank query normed per head and
+			// turned; one key head, normed and turned, into the history row
+			// (with a compressing block's pooled value and gate, and its
+			// indexer's); every closed block pooled into an entry, normed,
+			// turned, into the second history; an indexer's top entries where
+			// it selects; the window and the entries gathered for one
+			// attention with sinks; the heads turned back; the grouped
+			// low-rank output.
+			// Read off the bindings: a compressor's pooled value, and an
+			// indexer's beside it.
+			comp, csa := false, false
+			for _, w := range o.Weight {
+				comp = comp || w.Role == jlm.RoleCompKV
+				csa = csa || w.Role == jlm.RoleIdxCompKV
+			}
+			idx := map[jlm.Role]int{}
+			for _, w := range o.Weight {
+				switch w.Role {
+				case jlm.RoleAttnQA, jlm.RoleAttnQB, jlm.RoleAttnK, jlm.RoleAttnOut, jlm.RoleCompKV, jlm.RoleCompGate,
+					jlm.RoleIdxQB, jlm.RoleIdxProj, jlm.RoleIdxCompKV, jlm.RoleIdxCompGate:
+					// The matrices it multiplies by; the grouped output runs
+					// its own plan, the rest are tables and vectors.
+					if idx[w.Role] = l.matIndex(w.Role); idx[w.Role] < 0 {
+						return nil, "a compressed attention whose projections the block's device copy does not hold"
+					}
+				}
+			}
+			h, H, hd := in(0), o.Attr.NHead, o.Attr.HeadDim
+			mvc := func(nm string, src devVal, r jlm.Role, s devSlot, w int) devVal {
+				out := prog.val(nm, f32(w), s)
+				prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{operand(src, i, false)}, Out: []devVal{out}, W: idx[r]})
+				return out
+			}
+			un := func(kind devKind, nm string, src devVal, s devSlot, n int) devVal {
+				out := prog.val(nm, prog.vals[src], s)
+				prog.ops = append(prog.ops, devOp{Kind: kind, Src: []int{i}, In: []devVal{src}, Out: []devVal{out}, N: n})
+				return out
+			}
+			width := func(r jlm.Role) int {
+				for _, w := range o.Weight {
+					if w.Role == r {
+						return w.Rows
+					}
+				}
+				return 0
+			}
+			qa := mvc("c_qa", h, jlm.RoleAttnQA, slotCQA, width(jlm.RoleAttnQA))
+			kraw := mvc("c_k", h, jlm.RoleAttnK, slotCKRaw, hd)
+			var ckv, cg, ikv, ig, iw devVal
+			if comp {
+				ckv = mvc("c_ckv", h, jlm.RoleCompKV, slotCKV, width(jlm.RoleCompKV))
+				cg = mvc("c_cg", h, jlm.RoleCompGate, slotCG, width(jlm.RoleCompGate))
+			}
+			if csa {
+				ikv = mvc("c_ikv", h, jlm.RoleIdxCompKV, slotCIKV, width(jlm.RoleIdxCompKV))
+				ig = mvc("c_ig", h, jlm.RoleIdxCompGate, slotCIG, width(jlm.RoleIdxCompGate))
+				iw = mvc("c_iw", h, jlm.RoleIdxProj, slotCIW, width(jlm.RoleIdxProj))
+			}
+			qan := un(dkRowRMS, "c_qa_n", qa, slotCQAN, 0)
+			q := mvc("c_q", qan, jlm.RoleAttnQB, slotCQ, H*hd)
+			var iqr devVal
+			if csa {
+				iq := mvc("c_iq", qan, jlm.RoleIdxQB, slotCIQ, width(jlm.RoleIdxQB))
+				iqr = un(dkTurn, "c_iq_rot", iq, slotCIQR, 0)
+			}
+			qr := un(dkTurn, "c_q_rot", un(dkRowRMS, "c_q_n", q, slotCQN, 0), slotCQR, 0)
+			kr := un(dkTurn, "c_k_rot", un(dkRowRMS, "c_k_n", kraw, slotCKN, 0), slotCKR, 0)
+			hist := prog.val("c_hist", devType{Elem: elemF32, Layout: layoutKV, Width: hd}, slotKV)
+			prog.ops = append(prog.ops, devOp{Kind: dkCacheWrite, Src: []int{i}, In: []devVal{kr}, Out: []devVal{hist}, Staged: true})
+			var gIn []devVal
+			if comp {
+				prog.ops = append(prog.ops, devOp{Kind: dkCacheWrite, Src: []int{i}, In: []devVal{ckv, cg}, Out: []devVal{hist}, Staged: true, N: 1})
+				if csa {
+					prog.ops = append(prog.ops, devOp{Kind: dkCacheWrite, Src: []int{i}, In: []devVal{ikv, ig}, Out: []devVal{hist}, Staged: true, N: 2})
+				}
+				ent := prog.val("c_entries", devType{Elem: elemF32, Layout: layoutKV, Width: hd}, slotKV)
+				pool := func(n int, nm string, s, sn, sr devSlot) {
+					pe := prog.val(nm, f32(hd), s)
+					prog.ops = append(prog.ops, devOp{Kind: dkPoolEntries, Src: []int{i}, In: []devVal{hist}, Out: []devVal{pe}, Staged: true, N: n})
+					per := un(dkTurn, nm+"_rot", un(dkRowRMS, nm+"_n", pe, sn, 0), sr, 0)
+					prog.ops = append(prog.ops, devOp{Kind: dkEntryWrite, Src: []int{i}, In: []devVal{per}, Out: []devVal{ent}, Staged: true, N: n})
+				}
+				pool(0, "c_pe", slotCPE, slotCPEN, slotCPER)
+				if csa {
+					pool(1, "c_ipe", slotCIPE, slotCIPEN, slotCIPER)
+					sel := prog.val("c_sel", devType{Elem: elemU32, Layout: layoutRow, Width: 1}, slotCSel)
+					prog.ops = append(prog.ops, devOp{Kind: dkEntrySelect, Src: []int{i}, In: []devVal{iqr, iw}, Out: []devVal{sel}, Staged: true})
+					gIn = append(gIn, sel)
+				}
+			}
+			gk := prog.val("c_gk", f32(hd), slotCGK)
+			prog.ops = append(prog.ops, devOp{Kind: dkGatherEntries, Src: []int{i}, In: gIn, Out: []devVal{gk}, Staged: true,
+				Need: []devType{{Elem: elemU32, Layout: layoutRow, Width: 1}}})
+			ao := prog.val("c_ao", f32(H*hd), slotCAO)
+			prog.ops = append(prog.ops, devOp{Kind: dkAttendGathered, Src: []int{i}, In: []devVal{qr, gk}, Out: []devVal{ao}})
+			aor := un(dkTurn, "c_ao_rot", ao, slotCAOR, 0)
+			oa := prog.val("c_oa", f32(o.Attr.Groups*width(jlm.RoleAttnOutA)), slotCOA)
+			prog.ops = append(prog.ops, devOp{Kind: dkGroupedMatVec, Src: []int{i}, In: []devVal{operand(aor, i, false)}, Out: []devVal{oa}})
+			vals[o.Out[0]] = mvc(name(0), oa, jlm.RoleAttnOut, slotOut, ne)
 		case graph.OpStreamMix:
+			if o.Attr.Sinkhorn && len(o.Out) == 2 {
+				// The streams flat, RMS-normed, scored against the
+				// sublayer's weights into coefficients, those Sinkhorn-
+				// normalised into read and placement weights, the streams
+				// weighed into the row. N marks the attention's weights.
+				att := 0
+				for _, w := range o.Weight {
+					if w.Role == jlm.RoleHCAttnFn {
+						att = 1
+					}
+				}
+				n := o.Attr.Streams
+				flat := prog.val(name(0)+".flat", f32(n*ne), slotHFlat)
+				prog.ops = append(prog.ops, devOp{Kind: dkStreamFlatten, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{flat}})
+				fn := prog.val(name(0)+".flat_n", f32(n*ne), slotHFlatN)
+				prog.ops = append(prog.ops, devOp{Kind: dkFlatNorm, Src: []int{i}, In: []devVal{flat}, Out: []devVal{fn}})
+				mx := prog.val(name(0)+".coeff", f32((2+n)*n), slotHMix)
+				prog.ops = append(prog.ops, devOp{Kind: dkMixLogits, Src: []int{i}, In: []devVal{fn}, Out: []devVal{mx}, N: att})
+				hc := prog.val(name(1), f32((2+n)*n), slotHC)
+				prog.ops = append(prog.ops, devOp{Kind: dkSinkhorn, Src: []int{i}, In: []devVal{mx}, Out: []devVal{hc}, N: att})
+				row := prog.val(name(0), f32(ne), slotHColl)
+				prog.ops = append(prog.ops, devOp{Kind: dkStreamCollect, Src: []int{i}, In: []devVal{in(0), hc}, Out: []devVal{row}})
+				vals[o.Out[0]], vals[o.Out[1]] = row, hc
+				continue
+			}
+			if len(o.Out) == 1 && !o.Attr.Sinkhorn {
+				// A banked read (residual attention): the bank's entries
+				// scored against the row's weights, their softmax-weighted
+				// sum the sublayer's row; an empty bank reads the row as it is.
+				nb := o.Attr.Groups
+				if nb == 0 {
+					vals[o.Out[0]] = in(0)
+					continue
+				}
+				sc := prog.val(name(0)+".scores", f32(nb+1), slotBScores)
+				prog.ops = append(prog.ops, devOp{Kind: dkStreamScore, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{sc}, Role: o.Weight[0].Role, N: nb})
+				row := prog.val(name(0), f32(ne), slotBMix)
+				prog.ops = append(prog.ops, devOp{Kind: dkStreamWeighted, Src: []int{i}, In: []devVal{in(0), sc}, Out: []devVal{row}, N: nb})
+				vals[o.Out[0]] = row
+				continue
+			}
 			if o.Attr.Sinkhorn || len(o.Out) != 2 || p.Q4E == nil {
 				return nil, "a stream mix other than the low-rank gated one"
 			}
@@ -1219,9 +1680,6 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkPlaceWeights, Src: []int{i}, In: []devVal{inj}, Out: []devVal{w}})
 			vals[o.Out[0]], vals[o.Out[1]] = row, w
 		case graph.OpStreamPlace:
-			if len(o.In) != 3 || o.Attr.Sinkhorn {
-				return nil, "a placement other than the gated one"
-			}
 			// Every stream with the sublayer's output added at its weights:
 			// a residual add over the streams, into the slot it does not read.
 			s := slotX2
@@ -1229,7 +1687,12 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				s = slotX
 			}
 			out := prog.val(name(0), prog.vals[in(0)], s)
-			prog.ops = append(prog.ops, devOp{Kind: dkStreamPlace, Src: []int{i}, In: []devVal{in(0), in(1), in(2)}, Out: []devVal{out}})
+			ins := []devVal{in(0), in(1)}
+			if len(o.In) > 2 {
+				ins = append(ins, in(2)) // the gated form's weights
+			}
+			// A banked placement's checkpoint block banks its input (N).
+			prog.ops = append(prog.ops, devOp{Kind: dkStreamPlace, Src: []int{i}, In: ins, Out: []devVal{out}, N: o.Attr.Block})
 			vals[o.Out[0]] = out
 			adds++
 		case graph.OpAltPredict:
@@ -1293,6 +1756,31 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkStreamFinish, Src: []int{i}, In: []devVal{b, pn}, Out: []devVal{out}})
 			vals[o.Out[0]] = out
 		case graph.OpClamp:
+			if len(o.Weight) != 0 {
+				// A pair of the block's bounds table: an input into its own
+				// slot, an output into its matrix's clamped slot.
+				cs := slotCIn
+				if o.Attr.Offset%4 == 2 {
+					switch prog.slots[in(0)] {
+					case slotQ:
+						cs = slotQC
+					case slotK:
+						cs = slotKC
+					case slotV:
+						cs = slotVC
+					case slotG:
+						cs = slotGC
+					case slotU:
+						cs = slotUC
+					default:
+						cs = slotCOut
+					}
+				}
+				out := prog.val(name(0), prog.vals[in(0)], cs)
+				prog.ops = append(prog.ops, devOp{Kind: dkClampAt, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, N: o.Attr.Offset / 2})
+				vals[o.Out[0]] = out
+				continue
+			}
 			var cs devSlot
 			switch prog.slots[in(0)] {
 			case slotQ:
@@ -1445,6 +1933,39 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				vals[o.Out[0]] = in(0)
 			}
 		case graph.OpKVAppend:
+			if x := selectOf(g); x != nil {
+				// A block-selecting indexer: its key rides the cached row as
+				// one more head, so its projections, norms and the row's
+				// assembly come before the history write; its query turns
+				// for the scores the attention's selection reads.
+				h := vals[x.In[0]]
+				kw, qw := l.matIndex(jlm.RoleIdxK), l.matIndex(jlm.RoleIdxQ)
+				if kw < 0 || qw < 0 {
+					return nil, "an indexer whose projections the block's device copy does not hold"
+				}
+				hq := operand(h, i, false)
+				kRaw := prog.val("idx_k", f32(x.Attr.HeadDim), slotIKRaw)
+				prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{hq}, Out: []devVal{kRaw}, W: kw})
+				qRaw := prog.val("idx_q", f32(x.Attr.NHead*x.Attr.HeadDim), slotIQRaw)
+				prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{hq}, Out: []devVal{qRaw}, W: qw})
+				qn := prog.val("idx_q_normed", prog.vals[qRaw], slotIQn)
+				prog.ops = append(prog.ops, devOp{Kind: dkIdxNorm, Src: []int{i}, In: []devVal{qRaw}, Out: []devVal{qn}})
+				key := kRaw
+				if !x.Attr.Pooled {
+					// The selecting form's key is normed; the pooled form's
+					// is the raw projection, normed per block as it pools.
+					key = prog.val("idx_k_normed", prog.vals[kRaw], slotIKn)
+					prog.ops = append(prog.ops, devOp{Kind: dkIdxNorm, Src: []int{i}, In: []devVal{kRaw}, Out: []devVal{key}})
+				}
+				qr := prog.val("idx_q_rot", prog.vals[qn], slotIQRot)
+				prog.ops = append(prog.ops, devOp{Kind: dkIdxRope, Src: []int{i}, In: []devVal{qn}, Out: []devVal{qr}})
+				all := prog.val("k_all", f32(kv), slotKAll)
+				prog.ops = append(prog.ops, devOp{Kind: dkIdxAssemble, Src: []int{i}, In: []devVal{in(0), key}, Out: []devVal{all}})
+				hist := prog.val("kv", devType{Elem: elemF32, Layout: layoutKV, Width: kv}, slotKV)
+				prog.ops = append(prog.ops, devOp{Kind: dkKVWrite, Src: []int{i - 1, i}, In: []devVal{all, in(1)}, Out: []devVal{hist}})
+				idxQuery = qr
+				continue
+			}
 			if o.In[0] != kRot {
 				// A layer without a rotary (NoPE): k and v copied in.
 				hist := prog.val("kv", devType{Elem: elemF32, Layout: layoutKV, Width: kv}, slotKV)
@@ -1453,8 +1974,57 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			}
 			hist := prog.val("kv", devType{Elem: elemF32, Layout: layoutKV, Width: kv}, slotKV)
 			prog.ops = append(prog.ops, devOp{Kind: dkKVWrite, Src: []int{i - 1, i}, In: []devVal{in(0), in(1)}, Out: []devVal{hist}})
+		case graph.OpIndex:
+			if len(o.In) == 2 {
+				// The lightning indexer over latent attention: its key
+				// LayerNormed, turned and written into the position's latent
+				// row; its per-head weights; its query off the query latent,
+				// turned. The selection is the attention's to compute.
+				kw, ww, qw := l.matIndex(jlm.RoleIdxK), l.matIndex(jlm.RoleIdxProj), l.matIndex(jlm.RoleIdxQB)
+				if kw < 0 || ww < 0 || qw < 0 {
+					return nil, "an indexer whose projections the block's device copy does not hold"
+				}
+				hq := operand(in(0), i, false)
+				kRaw := prog.val("idx_k", f32(o.Attr.HeadDim), slotIKRaw)
+				prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{hq}, Out: []devVal{kRaw}, W: kw})
+				wts := prog.val("idx_w", f32(o.Attr.NHead), slotIdxW)
+				prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{hq}, Out: []devVal{wts}, W: ww})
+				kn := prog.val("idx_k_normed", prog.vals[kRaw], slotIKn)
+				prog.ops = append(prog.ops, devOp{Kind: dkIdxNorm, Src: []int{i}, In: []devVal{kRaw}, Out: []devVal{kn}})
+				kr := prog.val("idx_k_rot", prog.vals[kn], slotIKRot)
+				prog.ops = append(prog.ops, devOp{Kind: dkIdxRope, Src: []int{i}, In: []devVal{kn}, Out: []devVal{kr}})
+				hist := prog.val("idx_hist", devType{Elem: elemF32, Layout: layoutKV, Width: o.Attr.HeadDim}, slotKV)
+				prog.ops = append(prog.ops, devOp{Kind: dkIdxWrite, Src: []int{i}, In: []devVal{kr}, Out: []devVal{hist}, Staged: true})
+				qRaw := prog.val("idx_q", f32(o.Attr.NHead*o.Attr.HeadDim), slotIQRaw)
+				prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{operand(in(1), i, false)}, Out: []devVal{qRaw}, W: qw})
+				qr := prog.val("idx_q_rot", prog.vals[qRaw], slotIQRot)
+				prog.ops = append(prog.ops, devOp{Kind: dkIdxRope, Src: []int{i}, In: []devVal{qRaw}, Out: []devVal{qr}})
+				vals[o.Out[0]] = qr
+				lightning = true
+				continue
+			}
+			// Lowered with the append (its key) and the attention (its
+			// selection): the selection is the attention's to compute.
+			if idxQuery < 0 || o.Attr.NHead == 0 || o.Attr.Block == 0 {
+				return nil, "an attention indexer"
+			}
+			vals[o.Out[0]] = idxQuery
 		case graph.OpAttend:
 			q := in(0)
+			if len(o.In) > 1 {
+				// Attention over the indexer's selection: the scores, the
+				// best blocks, their keys and values gathered, attended.
+				sc := prog.val(name(0)+".scores", f32(1), slotISel)
+				prog.ops = append(prog.ops, devOp{Kind: dkIdxScore, Src: []int{i}, In: []devVal{in(1)}, Out: []devVal{sc}, Staged: true})
+				sel := prog.val(name(0)+".selection", f32(1), slotISel)
+				prog.ops = append(prog.ops, devOp{Kind: dkSelectBlocks, Src: []int{i}, In: []devVal{sc}, Out: []devVal{sel}, Staged: true})
+				gk := prog.val(name(0)+".gathered", f32(1), slotISel)
+				prog.ops = append(prog.ops, devOp{Kind: dkGatherKV, Src: []int{i}, In: []devVal{sel}, Out: []devVal{gk}, Staged: true})
+				out := prog.val(name(0), f32(qd), slotXB)
+				prog.ops = append(prog.ops, devOp{Kind: dkAttendGathered, Src: []int{i}, In: []devVal{q, gk}, Out: []devVal{out}})
+				vals[o.Out[0]] = out
+				continue
+			}
 			if o.Attr.TempScale != 0 {
 				// The query's temperature, a scalar a row: it commutes with
 				// the rotary, so it scales whichever q the attention reads.
@@ -1536,6 +2106,13 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkAct, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}})
 			vals[o.Out[0]] = out
 		case graph.OpActMul:
+			if o.Attr.Act == graph.ActSigmoid && prog.slots[in(0)] == slotMGate {
+				// Latent attention's output gate: sigmoid(gate) * attention.
+				out := prog.val(name(0), prog.vals[in(1)], slotMGated)
+				prog.ops = append(prog.ops, devOp{Kind: dkGateOut, Src: []int{i}, In: []devVal{in(0), in(1)}, Out: []devVal{out}})
+				vals[o.Out[0]] = out
+				continue
+			}
 			if o.Attr.Act == graph.ActSigmoid && prog.slots[in(0)] == slotOGate {
 				// The attention's output gate: sigmoid(gate) * attention.
 				out := prog.val(name(0), f32(qd), slotOGated)
@@ -1564,7 +2141,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		o := &prog.ops[i]
 		switch o.Kind {
 		case dkNorm, dkPostNorm, dkHeadNorm, dkSubNorm:
-		case dkRouterBias, dkGroupMask, dkTopK, dkExpertBias, dkScaleWeights, dkGateLogit, dkStreamNorm:
+		case dkRouterBias, dkGroupMask, dkTopK, dkExpertBias, dkScaleWeights, dkGateLogit, dkStreamNorm, dkNGramConv, dkStreamScore:
 			// A vector operand of the mixture's, by its role.
 			if o.Role != jlm.RoleNone {
 				if o.V = l.vecOf(o.Role); o.V == nil {
@@ -1614,7 +2191,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 	}
 	for _, o := range prog.ops {
 		switch o.Kind {
-		case dkAttend, dkLatentAttend:
+		case dkAttend, dkLatentAttend, dkAttendGathered, dkIdxAttendLatent:
 			prog.attends = true
 		case dkRopeQ, dkKVWrite:
 			prog.ropes = true
@@ -1722,7 +2299,6 @@ const (
 	progFault                     // a fault skips a kernel
 	progNotPaged                  // not a paged decode or prefill
 	progRotary                    // a rotary the program does not lower
-	progNormResid                 // a norm or residual the program does not lower
 	progTableSplit                // TableSplit
 	progRowsExperts               // experts over several rows (grouped expert kernels not yet lowered)
 	progStreamTuning              // a paged bank under a probe, prefetch or fixed selection
@@ -1750,8 +2326,6 @@ func (r progReason) String() string {
 		return "not a paged decode or prefill"
 	case progRotary:
 		return "a rotary the program does not lower"
-	case progNormResid:
-		return "a norm or residual the program does not lower"
 	case progTableSplit:
 		return "TableSplit"
 	}
@@ -1835,7 +2409,7 @@ func actSlot(s devSlot) devSlot {
 
 // constSlot reports that slot s holds a constant the block's scratch is
 // built with: read without a writer.
-func constSlot(s devSlot) bool { return s == slotOnes || s == slotMIdent }
+func constSlot(s devSlot) bool { return s == slotOnes || s == slotMIdent || s == slotNEmb }
 
 // A recurrence's projections in the tier's positional list (layer.tensors'
 // order): the in-projection (the fused q|k|v, or x|B|C), the output gate,
@@ -1854,3 +2428,14 @@ const (
 	posGateA = 20
 	posGateB = 21
 )
+
+// selectOf is block graph g's block-selecting indexer op (a selection over
+// GQA keys), or nil.
+func selectOf(g *graph.Graph) *graph.Op {
+	for i := range g.Ops {
+		if o := &g.Ops[i]; o.Kind == graph.OpIndex && o.Attr.Block > 0 && len(o.In) == 1 {
+			return o
+		}
+	}
+	return nil
+}

@@ -3,8 +3,10 @@ package model
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/cpu"
 )
 
@@ -242,6 +244,16 @@ func (m *Model) encZeros(n int) []float32 {
 
 // encPlan is encoder block li's plan for a device.
 func (s *State) encPlan(li int) *nn.LayerPlan {
+	p := s.encPlanOf(li)
+	if p != nil && p.Graph == nil {
+		// The block's verified graph, for the device's compiler.
+		p.Graph = s.m.enc.graphOf(li)
+	}
+	return p
+}
+
+// encPlanOf is encPlan's plan before its graph is attached.
+func (s *State) encPlanOf(li int) *nn.LayerPlan {
 	if s.enc.audio {
 		return s.audPlan(li)
 	}
@@ -333,6 +345,8 @@ func (s *State) encWeights(li int) nn.LayerWeights {
 			AttnNorm: b.norm, FFNNorm: b.ffnNorm,
 			Gate: wt(b.gate), Up: wt(b.up), Down: wt(b.down),
 		}
+		w.Vecs = s.roleVecs(nn.Vector{Role: jlm.RoleAttnNorm, V: b.norm}, nn.Vector{Role: jlm.RoleFFNNorm, V: b.ffnNorm},
+			nn.Vector{Role: jlm.RoleAttnQNorm, V: b.qNorm}, nn.Vector{Role: jlm.RoleAttnKNorm, V: b.kNorm})
 		if b.attn {
 			w.Wq, w.Wk, w.Wv, w.Wo = wt(b.wq), wt(b.wk), wt(b.wv), wt(b.wo)
 			w.QNorm, w.KNorm = b.qNorm, b.kNorm
@@ -352,6 +366,11 @@ func (s *State) encWeights(li int) nn.LayerWeights {
 				Wq: wt(b.wq), Wk: wt(b.wk), Wv: wt(b.wv), Wo: wt(b.wo),
 				Bq: b.bq, Bk: b.bk, Bv: b.bv, Bo: b.bo,
 				Up: wt(b.up), Down: wt(b.down), BUp: b.bUp, BDown: b.bDown,
+				Vecs: s.roleVecs(nn.Vector{Role: jlm.RoleAttnQBias, V: b.bq}, nn.Vector{Role: jlm.RoleAttnKBias, V: b.bk},
+					nn.Vector{Role: jlm.RoleAttnVBias, V: b.bv}, nn.Vector{Role: jlm.RoleAttnOutBias, V: b.bo},
+					nn.Vector{Role: jlm.RoleFFNUpBias, V: b.bUp}, nn.Vector{Role: jlm.RoleFFNDownBias, V: b.bDown},
+					nn.Vector{Role: jlm.RoleAttnNorm, V: b.ln1W}, nn.Vector{Role: jlm.RoleAttnNormBias, V: b.ln1B},
+					nn.Vector{Role: jlm.RoleFFNNorm, V: b.ln2W}, nn.Vector{Role: jlm.RoleFFNNormBias, V: b.ln2B}),
 			}
 		}
 		b := &mb.blocks[li]
@@ -364,8 +383,12 @@ func (s *State) encWeights(li int) nn.LayerWeights {
 			w.AttnNorm, w.AttnNormB = b.attnNorm, m.encZeros(d)
 		}
 		if s.enc.violation == "up-gated" {
+			// The two swapped as the device binds them: by role, so the
+			// roles move with the places.
 			w.Gate, w.Up = w.Up, w.Gate
+			w.Gate.Role, w.Up.Role = jlm.RoleFFNGate, jlm.RoleFFNUp
 		}
+		w.Vecs = s.roleVecs(nn.Vector{Role: jlm.RoleAttnNorm, V: b.attnNorm}, nn.Vector{Role: jlm.RoleFFNNorm, V: b.ffnNorm})
 		return w
 	}
 	b := &enc.blocks[li]
@@ -380,5 +403,46 @@ func (s *State) encWeights(li int) nn.LayerWeights {
 	if b.gate.e != nil {
 		w.Gate = wt(b.gate)
 	}
+	// By role, read at the offer as the fields above are.
+	w.Vecs = s.roleVecs(nn.Vector{Role: jlm.RoleAttnQBias, V: b.bq}, nn.Vector{Role: jlm.RoleAttnKBias, V: b.bk},
+		nn.Vector{Role: jlm.RoleAttnVBias, V: b.bv}, nn.Vector{Role: jlm.RoleAttnOutBias, V: b.bo},
+		nn.Vector{Role: jlm.RoleFFNUpBias, V: b.bUp}, nn.Vector{Role: jlm.RoleFFNDownBias, V: b.bDown},
+		nn.Vector{Role: jlm.RoleAttnOutNorm, V: b.ln1W}, nn.Vector{Role: jlm.RoleAttnOutNormBias, V: b.ln1B},
+		nn.Vector{Role: jlm.RoleLayerOutNorm, V: b.ln2W}, nn.Vector{Role: jlm.RoleLayerOutNormBias, V: b.ln2B})
 	return w
+}
+
+// graphOf is encoder block li's verified graph (encgraph.go): a trunk
+// block's, or past the trunk a decision head block's; nil where the block
+// has none.
+func (enc *encoder) graphOf(li int) *graph.Graph {
+	switch {
+	case enc.lf != nil:
+		if li < len(enc.lf.blocks) {
+			return enc.lf.blocks[li].g
+		}
+	case enc.mb != nil:
+		if li < len(enc.mb.blocks) {
+			return enc.mb.blocks[li].g
+		}
+		if h := li - len(enc.mb.blocks); h < len(enc.mb.head) {
+			return enc.mb.head[h].g
+		}
+	case li < len(enc.graphs) && enc.graphs[li] != nil:
+		return enc.graphs[li].g
+	}
+	return nil
+}
+
+// roleVecs is the block's vectors by role for a device (nn.LayerWeights.Vecs),
+// the empty ones left out, in s's reused backing array.
+func (s *State) roleVecs(vs ...nn.Vector) []nn.Vector {
+	out := s.vecW[:0]
+	for _, v := range vs {
+		if len(v.V) != 0 {
+			out = append(out, v)
+		}
+	}
+	s.vecW = out
+	return out
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/cpu"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 )
@@ -368,6 +369,9 @@ type Tower struct {
 	// pending is the vision blocks buildTower read, until Open moves them into
 	// the model's layers at base.
 	pending []layer
+	// graphs is each vision block's verified graph (towergraph.go), nil
+	// where the dense language does not state the block.
+	graphs []*graph.Graph
 }
 
 // weights is every matrix of the entry and the head, in no particular order.
@@ -2089,6 +2093,9 @@ func (s *State) visPlan(li int) *nn.LayerPlan {
 	if b := l.mn; b != nil {
 		plan.Conv = b.plan(tc.Eps, plan.ActWin)
 	}
+	if i := li - s.vis.t.base; i >= 0 && i < len(s.vis.t.graphs) {
+		plan.Graph = s.vis.t.graphs[i]
+	}
 	return plan
 }
 
@@ -2108,6 +2115,11 @@ func (s *State) visWeights(li int) nn.LayerWeights {
 	w.QNorm, w.KNorm = l.qNorm, l.kNorm
 	w.PostAttnNorm, w.PostFFNNorm = l.postAttnNorm, l.postFFNNorm
 	w.Clamp = l.clamp
+	// By the role each plays in the block's graph (towergraph.go).
+	w.Wq.Role, w.Wk.Role, w.Wv.Role, w.Wo.Role = jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV, jlm.RoleAttnOut
+	w.Gate.Role, w.Up.Role, w.Down.Role = jlm.RoleFFNGate, jlm.RoleFFNUp, jlm.RoleFFNDown
+	vs := towerVectors(l)
+	w.Vecs = s.roleVecs(vs[:]...)
 	if b := l.mn; b != nil {
 		w.Conv = &nn.ConvWeights{Norm1: b.norm1, Norm2: b.norm2, DwStart: b.dwStart, DwStartNorm: b.dwStartNorm,
 			DwMid: b.dwMid, DwMidNorm: b.dwMidNorm, KDown: b.kDown, KDownNorm: b.kDownNorm,
