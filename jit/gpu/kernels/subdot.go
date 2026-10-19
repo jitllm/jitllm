@@ -391,8 +391,8 @@ func NewSubDotEnv(b *ir.Builder, s MatVecShape) (*SubDotEnv, int, error) {
 	if why := DeviceWhyNot(s.T); why != "" {
 		return nil, 0, fmt.Errorf("kernels: SubDot: %s", why)
 	}
-	if s.Experts > 1 || s.Slots > 1 || s.PickOf > 0 || s.Gate2 || s.In.On {
-		return nil, 0, fmt.Errorf("kernels: SubDot: NewSubDotEnv takes a dense shape")
+	if s.PickOf > 0 || s.Gate2 || s.In.On || s.NTok > 1 && (s.Experts > 1 || s.Slots > 1) {
+		return nil, 0, fmt.Errorf("kernels: SubDot: NewSubDotEnv takes a dense chunk or a bank's slots at one token")
 	}
 	// A chunk of NTok tokens is NTok operand slots (MatVec's own reading of
 	// it): each token's vector at K/4 words, its scales nb apart, its sums
@@ -423,8 +423,14 @@ func NewSubDotEnv(b *ir.Builder, s MatVecShape) (*SubDotEnv, int, error) {
 	e := &SubDotEnv{S: s,
 		Mask: b.Const(ir.U32, 0x0F0F0F0F), Four: b.Const(ir.U32, 4), ZeroF: b.ConstF32(0), One: b.Const(ir.U32, 1),
 		NegBK: b.ConstF32(-qi.biasK), Dot4: b.Dot4Bounded,
-		PW: sub * qi.bits / 32, HW: sub * qi.hi / 32, AWords: sub / 4, NB: nb, SumOff: int64(ntok * nb), SlotAct: ntok > 1,
+		PW: sub * qi.bits / 32, HW: sub * qi.hi / 32, AWords: sub / 4, NB: nb, SumOff: int64(nb),
 		DExpAdd: func(v ir.Value) ir.Value { return v }, TileOff: func(j int) int64 { return int64(j) }}
+	// Each slot its own operand vector: a chunk's tokens, or a bank's slots
+	// that read their own (SlotAct); the sums after every slot's scales.
+	if slots := max(s.Slots, 1); ntok > 1 || s.SlotAct && slots > 1 {
+		n := max(ntok, slots)
+		e.SlotAct, e.SumOff = true, int64(n*nb)
+	}
 	if qi.signedQ {
 		e.Dot4 = b.Dot4
 	}

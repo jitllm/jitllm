@@ -21,16 +21,22 @@ type MatVec struct {
 	T         kernels.Quant
 	K, Rows   int
 	NTok, Tok int
-	Split     int
-	Group     bool
-	Rowt      int
-	Center    kernels.Center
-	Epi       *Epi
+	// Experts is a bank of that many sheets of Rows x K, and Slots the
+	// selected sheets one launch runs (pSel holds their ids, at one token);
+	// SlotAct gives each slot its own operand vector (a down bank's).
+	Experts, Slots int
+	SlotAct        bool
+	Split          int
+	Group          bool
+	Rowt           int
+	Center         kernels.Center
+	Epi            *Epi
 }
 
 // Encode is the group's structure and schedule, for the kernel cache's key.
 func (m *MatVec) Encode() []uint32 {
-	e := []uint32{3, uint32(m.T), uint32(m.K), uint32(m.Rows), uint32(m.NTok), uint32(m.Tok), uint32(m.Split), b2u(m.Group), uint32(m.Rowt),
+	e := []uint32{3, uint32(m.T), uint32(m.K), uint32(m.Rows), uint32(m.NTok), uint32(m.Tok), uint32(m.Experts), uint32(m.Slots),
+		b2u(m.SlotAct), uint32(m.Split), b2u(m.Group), uint32(m.Rowt),
 		b2u(m.Center.NoCenter), uint32(m.Center.MinTok)}
 	if m.Epi != nil {
 		e = append(e, m.Epi.Encode()...)
@@ -59,7 +65,18 @@ func (m *MatVec) tok() int {
 	return max(m.Tok, 1)
 }
 
-func (m *MatVec) groups() int { return max(m.NTok, 1) / m.tok() }
+func (m *MatVec) groups() int { return m.lanes() / m.tok() }
+
+// lanes is the output's slots: a chunk's tokens, or a bank's selected sheets.
+func (m *MatVec) lanes() int {
+	if max(m.NTok, 1) > 1 {
+		return m.NTok
+	}
+	if m.Experts > 1 {
+		return max(m.Slots, 1)
+	}
+	return 1
+}
 
 // Emit forms the kernel.
 func (m *MatVec) Emit() (*ir.Kernel, error) {
@@ -68,8 +85,10 @@ func (m *MatVec) Emit() (*ir.Kernel, error) {
 	switch {
 	case ntok%tok != 0:
 		return nil, fmt.Errorf("compose: MatVec: %d tokens at %d a thread", ntok, tok)
-	case m.Group && groups > 1:
+	case m.Group && groups > 1 && m.Experts <= 1:
 		return nil, fmt.Errorf("compose: MatVec: an in-group split over %d token groups", groups)
+	case m.Experts > 1 && ntok > 1:
+		return nil, fmt.Errorf("compose: MatVec: a bank over a chunk is the grouped run's")
 	case m.Group && (split < 2 || rowt > 1 || !kernels.GroupSplitOK(m.Rows, split)):
 		return nil, fmt.Errorf("compose: MatVec: an in-group split of %d over %d rows at %d rows a thread", split, m.Rows, rowt)
 	case !m.Group && split > 1 && m.Epi != nil:
@@ -98,6 +117,10 @@ func (m *MatVec) Emit() (*ir.Kernel, error) {
 	pA := b.Param("pA", ir.U32)
 	pAX := b.Param("pAX", ir.F32)
 	pOut := b.Param("pOut", ir.F32)
+	var pSel ir.Value
+	if m.Experts > 1 {
+		pSel = b.Param("pSel", ir.U32) // the selected sheets' ids, a slot each
+	}
 	if m.Epi != nil {
 		m.Epi.Params(b)
 	}
@@ -106,7 +129,7 @@ func (m *MatVec) Emit() (*ir.Kernel, error) {
 		shPart = b.Shared("part", ir.F32, group*tok) // before every loop (ir.Validate)
 	}
 	s := kernels.MatVecShape{T: m.T, K: m.K, Rows: m.Rows, NTok: m.NTok, Tok: tok, Split: split, Rowt: rowt,
-		GroupSplit: m.Group, Center: m.Center}
+		GroupSplit: m.Group, Center: m.Center, Experts: m.Experts, Slots: m.Slots, SlotAct: m.SlotAct}
 	env, nsub, err := kernels.NewSubDotEnv(b, s)
 	if err != nil {
 		return nil, err
@@ -146,36 +169,70 @@ func (m *MatVec) Emit() (*ir.Kernel, error) {
 		orow = b.Min(ir.U32, orow, b.Sub(ir.U32, orows, one))
 		splitSeg = segLocal
 	}
-	// A chunk's token group: its first token is the operand slot this thread
-	// reads from, its vectors K/4 words apart, its scales and sums its own.
+	// The output's slot: a chunk's token group (its first token), or a
+	// bank's selected sheet; an in-group split over a bank takes it from the
+	// workgroup, Rows/rpg workgroups a slot.
+	lanes := m.lanes()
 	slot := ir.Value(0)
-	if ntok > 1 {
-		slot = b.Const(ir.U32, 0)
-		if groups > 1 {
-			rest := splitSeg
-			ngrp := b.Const(ir.U32, int64(groups))
-			g := b.Rem(ir.U32, rest, ngrp)
-			splitSeg = b.Div(ir.U32, rest, ngrp)
-			slot = g
-			if tok > 1 {
-				slot = b.Mul(ir.U32, g, b.Const(ir.U32, int64(tok)))
-			}
+	switch {
+	case m.Group && m.Experts > 1:
+		rbk := b.Const(ir.U32, int64(m.Rows/rpg))
+		c := b.CTAID()
+		slot = b.Min(ir.U32, b.Div(ir.U32, c, rbk), b.Const(ir.U32, int64(lanes-1)))
+		orow = b.Add(ir.U32, b.Mul(ir.U32, b.Rem(ir.U32, c, rbk), b.Const(ir.U32, int64(rpg))), rowLocal)
+	case lanes > 1 && groups > 1:
+		rest := splitSeg
+		ngrp := b.Const(ir.U32, int64(groups))
+		g := b.Rem(ir.U32, rest, ngrp)
+		splitSeg = b.Div(ir.U32, rest, ngrp)
+		slot = g
+		if tok > 1 {
+			slot = b.Mul(ir.U32, g, b.Const(ir.U32, int64(tok)))
 		}
+	case lanes > 1 || m.Experts > 1:
+		slot = b.Const(ir.U32, 0)
+	}
+	if env.SlotAct {
 		env.AxS = b.Mul(ir.U32, slot, b.Const(ir.U32, int64(env.NB)))
 		env.AxU = b.Mul(ir.U32, slot, b.Const(ir.U32, int64(m.K/16)))
 	}
 	env.PA, env.PAX, env.PX = pA, pAX, pX
-	env.BankRows, env.WSel, env.WRowD, env.WRowSC, env.WRows = orows, orow, orow, orow, m.Rows
+	wrow, wrowD, wrowSC := orow, orow, orow
+	var eSel ir.Value
+	if m.Experts > 1 {
+		// A bank is Experts sheets back to back in each plane, each plane its
+		// own words a sheet: the slot's sheet adds a base to each.
+		nq, nd, nsc, err := kernels.PackedWords(m.T, m.Rows, m.K)
+		if err != nil {
+			return nil, err
+		}
+		eSel = b.Load(ir.U32, pSel, slot, 0)
+		base := func(words int) ir.Value {
+			if words == 0 {
+				return orow
+			}
+			return b.Add(ir.U32, b.Mul(ir.U32, eSel, b.Const(ir.U32, int64(words))), orow)
+		}
+		wrow, wrowD, wrowSC = base(nq), base(nd), base(nsc)
+		env.DExpAdd = func(v ir.Value) ir.Value {
+			return b.Add(ir.U32, b.Mul(ir.U32, eSel, b.Const(ir.U32, int64(nd))), v)
+		}
+	}
+	env.BankRows, env.WSel, env.WRowD, env.WRowSC, env.WRows = orows, orow, wrowD, wrowSC, m.Rows
 
 	words := env.PW + env.HW
 	segSub := b.Mul(ir.U32, splitSeg, b.Const(ir.U32, int64(spg)))
-	wStart := b.Add(ir.U32, orow, b.Mul(ir.U32, segSub, b.Mul(ir.U32, b.Const(ir.U32, int64(words)), orows)))
+	wStart := b.Add(ir.U32, wrow, b.Mul(ir.U32, segSub, b.Mul(ir.U32, b.Const(ir.U32, int64(words)), orows)))
 	aStart := b.Mul(ir.U32, segSub, b.Const(ir.U32, int64(env.AWords)))
-	if ntok > 1 {
+	if env.SlotAct {
 		aStart = b.Add(ir.U32, aStart, b.Mul(ir.U32, slot, b.Const(ir.U32, int64(m.K/4))))
 	}
 	if fl {
-		wStart = b.Add(ir.U32, b.Mul(ir.U32, orow, b.Const(ir.U32, int64(env.FW))),
+		rowF := orow
+		if m.Experts > 1 {
+			rowF = b.Add(ir.U32, b.Mul(ir.U32, eSel, orows), orow)
+		}
+		wStart = b.Add(ir.U32, b.Mul(ir.U32, rowF, b.Const(ir.U32, int64(env.FW))),
 			b.Mul(ir.U32, segSub, b.Const(ir.U32, int64(env.FSub))))
 	}
 
@@ -217,8 +274,11 @@ func (m *MatVec) Emit() (*ir.Kernel, error) {
 				sum = b.Add(ir.F32, sum, b.Load(ir.F32, shPart, rowLocal, int64(t*group+sg*rpg)))
 			}
 			at := orow
+			if lanes > 1 {
+				at = b.Add(ir.U32, b.Mul(ir.U32, slot, orows), orow)
+			}
 			if t > 0 {
-				at = b.Add(ir.U32, orow, b.Const(ir.U32, int64(t*m.Rows)))
+				at = b.Add(ir.U32, at, b.Const(ir.U32, int64(t*m.Rows)))
 			}
 			store(sum, at, orow)
 		}
@@ -227,11 +287,11 @@ func (m *MatVec) Emit() (*ir.Kernel, error) {
 	// Token-major outputs, Rows a token; a split's partials at its segment's
 	// plane of Rows*NTok.
 	base := orow
-	if ntok > 1 {
+	if lanes > 1 {
 		base = b.Add(ir.U32, b.Mul(ir.U32, slot, orows), orow)
 	}
 	if split > 1 {
-		base = b.Add(ir.U32, base, b.Mul(ir.U32, splitSeg, b.Const(ir.U32, int64(m.Rows*ntok))))
+		base = b.Add(ir.U32, base, b.Mul(ir.U32, splitSeg, b.Const(ir.U32, int64(m.Rows*lanes))))
 	}
 	for j := 0; j < rowt; j++ {
 		row := orow

@@ -370,3 +370,117 @@ func TestComposedChunkMatVecMatchesTheMenu(t *testing.T) {
 		})
 	}
 }
+
+// TestComposedBankMatVecMatchesTheMenu holds the matvec former over an expert
+// bank's selected sheets to the menu's MatVec bit for bit: two slots of a
+// four-sheet bank, one operand or one a slot (a down bank's), unsplit, split
+// in the group, and split into partial planes; the selection reversed is its
+// violation.
+func TestComposedBankMatVecMatchesTheMenu(t *testing.T) {
+	gpuLock(t)
+	devs := backend.Open()
+	if len(devs) == 0 {
+		t.Skip("no GPU backend on this host")
+	}
+	const rows, k, experts, slots = 128, 512, 4, 2
+	rng := rand.New(rand.NewSource(31))
+	for _, d := range devs {
+		defer d.Close()
+		t.Run(d.API(), func(t *testing.T) {
+			g := newGPU(t, d)
+			defer g.free()
+			acts := randActs(slots*k, rng)
+			bX := g.up(f32bytes(acts))
+			bA, bAX := g.up(make([]byte, slots*k)), g.up(make([]byte, slots*k/32*3*4))
+			qk, err := kernels.Quantize(slots*k, 32)
+			if err != nil {
+				t.Fatal(err)
+			}
+			qc, err := d.Compile(qk)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := qc.Launch((kernels.QuantizeThreads(slots*k/32)+127)/128, 128, bX, bA, bAX); err != nil {
+				t.Fatal(err)
+			}
+			qc.Close()
+			sel := make([]byte, 8)
+			binary.LittleEndian.PutUint32(sel[0:], 2)
+			binary.LittleEndian.PutUint32(sel[4:], 0)
+			rev := make([]byte, 8)
+			binary.LittleEndian.PutUint32(rev[0:], 0)
+			binary.LittleEndian.PutUint32(rev[4:], 2)
+			bSel, bRev := g.up(sel), g.up(rev)
+			ran := 0
+			for _, q := range []kernels.Quant{kernels.Q4_0, kernels.Q8_0, kernels.Q4_K, kernels.Q6_K, kernels.MXFP4, kernels.Q5_K} {
+				var qs, dw, sc []uint32
+				for e := 0; e < experts; e++ {
+					a, b2, c, err := kernels.PackWeights(q, randWeights(q, rows, k, rng), rows, k)
+					if err != nil {
+						t.Fatal(err)
+					}
+					qs, dw, sc = append(qs, a...), append(dw, b2...), append(sc, c...)
+				}
+				bQS, bD, bSC := g.up(u32bytes(qs)), g.up(u32bytes(dw)), g.up(u32bytes(sc))
+				for _, sh := range []struct {
+					name    string
+					slotAct bool
+					split   int
+					group   bool
+				}{{"plain", false, 1, false}, {"slotact", true, 1, false}, {"group4", false, 4, true}, {"split2", true, 2, false}} {
+					s := kernels.MatVecShape{T: q, K: k, Rows: rows, Experts: experts, Slots: slots, SlotAct: sh.slotAct,
+						Split: sh.split, GroupSplit: sh.group}
+					menu, err := kernels.MatVec(s)
+					if err != nil {
+						t.Logf("%v %s: the menu refuses: %v", q, sh.name, err)
+						continue
+					}
+					n := rows * slots
+					if sh.split > 1 && !sh.group {
+						n *= sh.split
+					}
+					width := 128
+					if sh.group {
+						width = kernels.GroupSplitWidth(sh.split)
+					}
+					run := func(ker *ir.Kernel, threads, width int, menuOrder bool, s backend.Buf) []byte {
+						c, err := d.Compile(ker)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer c.Close()
+						out := g.up(make([]byte, n*4))
+						args := []backend.Buf{bQS, bD, bSC, bA, bAX, out, s}
+						if err := c.Launch((threads+width-1)/width, width, args...); err != nil {
+							t.Fatal(err)
+						}
+						raw := make([]byte, n*4)
+						if err := out.Read(raw); err != nil {
+							t.Fatal(err)
+						}
+						return raw
+					}
+					want := run(menu, rows*slots*sh.split, width, true, bSel)
+					mv := &compose.MatVec{T: q, K: k, Rows: rows, Experts: experts, Slots: slots, SlotAct: sh.slotAct,
+						Split: sh.split, Group: sh.group}
+					ker, err := mv.Emit()
+					if err != nil {
+						t.Errorf("%v %s: the former refuses what the menu builds: %v", q, sh.name, err)
+						continue
+					}
+					if got := run(ker, mv.Threads(), mv.Width(), false, bSel); !bytes.Equal(got, want) {
+						t.Errorf("%v %s: the composed bank matvec parts from the menu's", q, sh.name)
+					}
+					if got := run(ker, mv.Threads(), mv.Width(), false, bRev); bytes.Equal(got, want) {
+						t.Errorf("%v %s: the reversed selection matched", q, sh.name)
+					}
+					ran++
+				}
+			}
+			if ran < 20 {
+				t.Fatalf("only %d format and schedule pairs ran", ran)
+			}
+			t.Logf("%d format and schedule pairs bit-exact", ran)
+		})
+	}
+}

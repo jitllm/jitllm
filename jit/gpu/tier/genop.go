@@ -278,11 +278,17 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		// grid's) kernel, emitted from its shape.
 		return []genLaunch{{former: formMatVec}}
 	case dkAttend, dkLatentAttend, dkKVWrite, dkKVCopy, dkRopeQKV, dkSlice, dkView, dkConcatHeads, dkRopeTail, dkLatentWrite:
-		if o.Kind == dkKVWrite || o.Kind == dkKVCopy {
+		switch o.Kind {
+		case dkKVWrite, dkKVCopy:
 			if l := g.genPagedWrite(o, prog, bs, rows); l != nil {
 				return l
 			}
 			o.Why = whyHistory
+		case dkSlice, dkConcatHeads, dkRopeTail:
+			if l := g.genHeadCopy(o, prog, bs, rows); l != nil {
+				return l
+			}
+			o.Why = whyLayout
 		}
 		// The attention former: the paged plans emitted from the attention's
 		// shape and the device's tuning, the history's row writes, and a
@@ -1175,13 +1181,15 @@ const (
 	whyTail
 	whyNoFloat
 	whyHistory
+	whyLayout
 )
 
 func (w genWhy) String() string {
 	return [...]string{"", "no resident weight", "no decode kernel", "a k split", "a bank's sheets",
 		"padded rows", "a table split", "an operand of its own", "an epilogue it cannot compose",
 		"no batched form", "a prompt form other than the staged GEMM", "a tail launch",
-		"no float row stated", "a history that is not paged, or a row wider than its heads"}[w]
+		"no float row stated", "a history that is not paged, or a row wider than its heads",
+		"rows whose head-major layout the program does not state"}[w]
 }
 
 // genSplitMatVec is a decode matvec whose k is split across threads: the
@@ -1344,4 +1352,71 @@ func (g *devTier) genPagedWrite(o *devOp, prog *devProgram, bs *blockScratch, ro
 		out = append(out, l)
 	}
 	return out
+}
+
+// genHeadCopy is a row's per-head rearrangement as one composed index map: a
+// slice (each head's Width columns from Offset of its HeadDim-wide stride in
+// the source, or a row's Width from Offset), a concatenation of two values
+// head by head, and the rotary over a value of rotary-wide heads. nil over a
+// chunk of a program with latent attention, whose rows the executor keeps
+// head-major where the program types them row-major.
+func (g *devTier) genHeadCopy(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
+	if rows > 1 && prog.latent || len(o.In) == 0 || len(o.Out) == 0 {
+		return nil
+	}
+	p := &bs.p
+	iw, w := prog.vals[o.In[0]].Width, prog.vals[o.Out[0]].Width
+	rb := &rowBuild{r: compose.Row{Width: w, Rows: rows}}
+	r := &rb.r
+	u := r.UConst
+	switch o.Kind {
+	case dkSlice:
+		a := o.A
+		src := rb.buf(compose.BufRow, gaIn0)
+		col := r.Column()
+		at := r.UBin(compose.OpAdd, col, u(a.Offset))
+		if a.HeadDim > 0 {
+			if a.Width <= 0 || iw%a.HeadDim != 0 || w != iw/a.HeadDim*a.Width || a.Offset+a.Width > a.HeadDim {
+				return nil
+			}
+			at = r.UBin(compose.OpAdd, r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.UBin(compose.OpDiv, col, u(a.Width)), u(a.HeadDim)),
+				u(a.Offset)), r.UBin(compose.OpRem, col, u(a.Width)))
+		} else if a.Offset+w > iw {
+			return nil
+		}
+		rb.store(r.LoadAt(src, r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.RowIdx(), u(iw)), at)), gaOut0)
+	case dkConcatHeads:
+		nh := p.NHead
+		if len(o.In) != 2 || nh <= 0 || iw%nh != 0 || prog.vals[o.In[1]].Width%nh != 0 || w != iw+prog.vals[o.In[1]].Width {
+			return nil
+		}
+		pw := prog.vals[o.In[1]].Width
+		la, lb := iw/nh, pw/nh
+		a, b := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufRow, gaIn1)
+		col := r.Column()
+		h, c := r.UBin(compose.OpDiv, col, u(la+lb)), r.UBin(compose.OpRem, col, u(la+lb))
+		first := r.Less(c, u(la))
+		ia := r.UBin(compose.OpAdd, r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.RowIdx(), u(iw)), r.UBin(compose.OpMul, h, u(la))),
+			r.UBin(compose.OpMin, c, u(la-1)))
+		ib := r.UBin(compose.OpAdd, r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.RowIdx(), u(pw)), r.UBin(compose.OpMul, h, u(lb))),
+			r.Select(first, u(0), r.UBin(compose.OpSub, c, u(la))))
+		rb.store(r.Select(first, r.LoadAt(a, ia), r.LoadAt(b, ib)), gaOut0)
+	case dkRopeTail:
+		nh := p.NHead
+		if nh <= 0 || w%nh != 0 || iw != w || (w/nh)%2 != 0 {
+			return nil
+		}
+		rot := w / nh
+		in, cs := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufVec, gaCS)
+		rb.store(r.Rotary(in, cs, rot, rot, p.RopeNeox, false), gaOut0)
+	default:
+		return nil
+	}
+	k := g.rowKern(r)
+	if k.k == nil {
+		return nil
+	}
+	l := genLaunch{k: k.k, groups: rows, width: k.group, n: uint8(len(rb.args))}
+	copy(l.args[:], rb.args)
+	return []genLaunch{l}
 }
