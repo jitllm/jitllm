@@ -1079,13 +1079,6 @@ func (g *devTier) layersSession(s backend.Session) {
 		// so it costs a warm step nothing.
 		form := func(op *devOp) {
 			o := *op
-			// unformed is an op the program generates from itself at these
-			// rows: its former reached means its generator declined.
-			unformed := func() {
-				if err == nil {
-					err = fmt.Errorf("tier: block %d: %s at %d rows has no kernel generated from it (%v)", li, o.Kind, R, o.Why)
-				}
-			}
 			var m mv
 			var r *resident
 			if o.W >= 0 && o.W < len(l.ms) {
@@ -1354,7 +1347,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					lg(router, kernels.RouterThreads(mg.nExp*R), kernels.RouterThreads(1), l.router, at(o.In[0]), at(o.Out[0]))
 					break
 				}
-				unformed()
+				lc.la(l.mvRouter, kernels.RouterThreads(bs.nExpert), l.router, at(o.In[0]), at(o.Out[0]))
 			case dkResIn:
 				m, r := *l.ms[o.W], *l.rs[o.W]
 				mvIn(m, m.resIn, r, at(o.Out[0]), at(o.In[0]), nil, at(o.In[1]))
@@ -1412,10 +1405,8 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				lc.la(bs.mlaRopeQ, p.NHead*bs.mlaRot/2, at(o.In[0]), bs.cs, bs.zero, at(o.Out[0]))
 			case dkTopK:
-				if !rowsMoE {
-					unformed()
-					break
-				}
+				// The arity follows the inputs: a masked plane, a selection
+				// bias, or the logits alone.
 				// The rank kernel's arity is the plan's route's (routeOf): a
 				// masked plane where it groups, else a selection bias where it
 				// carries one. Vulkan refuses a surplus buffer.
@@ -1426,16 +1417,22 @@ func (g *devTier) layersSession(s backend.Session) {
 					o.V, sb = at(o.In[len(o.In)-1]), true
 				}
 				switch {
-				case plane:
+				case rowsMoE && plane:
 					lg(mg.rank, R*mg.nExp, 128, at(o.In[0]), at(o.Out[0]), at(o.Out[1]), at(o.In[1]))
-				case sb:
+				case rowsMoE && sb:
 					lg(mg.rank, R*mg.nExp, 128, at(o.In[0]), at(o.Out[0]), at(o.Out[1]), o.V)
-				default:
+				case rowsMoE:
 					lg(mg.rank, R*mg.nExp, 128, at(o.In[0]), at(o.Out[0]), at(o.Out[1]))
+				case plane:
+					lc.la(bs.rank, bs.nExpert, at(o.In[0]), at(o.Out[0]), at(o.Out[1]), at(o.In[1]))
+				case sb:
+					lc.la(bs.rank, bs.nExpert, at(o.In[0]), at(o.Out[0]), at(o.Out[1]), o.V)
+				default:
+					lc.la(bs.rank, bs.nExpert, at(o.In[0]), at(o.Out[0]), at(o.Out[1]))
 				}
 			case dkRouteWeights:
-				// The unrenormalised softmax reads every logit; the others do
-				// not declare them.
+				// One thread: k is a handful. The unrenormalised softmax reads
+				// every logit; the others do not declare them.
 				if rowsMoE {
 					if p.NoExpertNorm && !p.ExpertSigmoid {
 						lg(mg.weights, R, 64, at(o.In[0]), at(o.Out[0]), at(o.In[1]))
@@ -1444,7 +1441,13 @@ func (g *devTier) layersSession(s backend.Session) {
 					}
 					break
 				}
-				unformed()
+				if err == nil {
+					if p.NoExpertNorm && !p.ExpertSigmoid {
+						err = lc.launch(bs.weights, 1, 1, at(o.In[0]), at(o.Out[0]), at(o.In[1]))
+					} else {
+						err = lc.launch(bs.weights, 1, 1, at(o.In[0]), at(o.Out[0]))
+					}
+				}
 			case dkCombine:
 				if prog.slots[o.Out[0]] == slotLatAcc {
 					g.K3Latent++ // experts in a latent
@@ -1463,33 +1466,37 @@ func (g *devTier) layersSession(s backend.Session) {
 					}
 				}
 			case dkGateLogit:
-				unformed()
+				lc.la(bs.shRouterK, kernels.SharedRouterThreads(R), o.V, at(o.In[0]), at(o.Out[0]))
 			case dkGroupMask:
-				if !rowsMoE {
-					unformed()
-					break
-				}
 				// The selection bias rides the group kernels where the route
 				// carries one (routeOf), as the rank's does.
-				if routeOf(p).Bias && o.V != nil {
+				sb := routeOf(p).Bias && o.V != nil
+				switch {
+				case rowsMoE && sb:
 					lg(mg.gscore, R*p.ExpertGroups, 128, at(o.In[0]), mg.rgs, o.V)
 					lg(mg.gmask, R*mg.nExp, 128, at(o.In[0]), mg.rgs, at(o.Out[0]), o.V)
-				} else {
+				case rowsMoE:
 					lg(mg.gscore, R*p.ExpertGroups, 128, at(o.In[0]), mg.rgs)
 					lg(mg.gmask, R*mg.nExp, 128, at(o.In[0]), mg.rgs, at(o.Out[0]))
+				case sb:
+					lc.la(bs.gscore, p.ExpertGroups, at(o.In[0]), bs.rgs, o.V)
+					lc.la(bs.gmask, bs.nExpert, at(o.In[0]), bs.rgs, at(o.Out[0]), o.V)
+				default:
+					lc.la(bs.gscore, p.ExpertGroups, at(o.In[0]), bs.rgs)
+					lc.la(bs.gmask, bs.nExpert, at(o.In[0]), bs.rgs, at(o.Out[0]))
 				}
 			case dkScaleWeights:
 				if rowsMoE {
 					lg(mg.ewScale, R*mg.k, 128, at(o.In[0]), mg.rsel, o.V, at(o.Out[0]))
 					break
 				}
-				unformed()
+				lc.la(bs.ewScale, bs.nUsed, at(o.In[0]), at(o.In[1]), o.V, at(o.Out[0]))
 			case dkRouterBias:
 				if rowsMoE {
 					lg(mg.biasR, R*mg.nExp, 128, at(o.In[0]), mg.zsel, o.V, at(o.Out[0]))
 					break
 				}
-				unformed()
+				lc.la(bs.rbias, bs.nExpert, at(o.In[0]), o.V, at(o.Out[0]))
 			case dkExpertBias:
 				if rowsMoE {
 					k, n := mg.biasFF, gr.cols*p.NFFNExp
