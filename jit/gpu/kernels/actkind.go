@@ -89,6 +89,10 @@ const (
 	// a sigmoid of the signed square root, the floor on the magnitude the
 	// reference's own (clamp_min(1e-6)). Ungated.
 	ActSqrtSigmoid
+	// ActTanh is tanh alone, the rational form on x clamped to +-TanhClamp
+	// (tanhRational): an element a composed kernel bounds a value with
+	// (b*tanh(x/b)), never an FFN's activation.
+	ActTanh
 )
 
 // SqrtSigmoidFloor is ActSqrtSigmoid's floor on |x|.
@@ -162,6 +166,8 @@ func (k ActKind) String() string {
 		return "gelu-erf"
 	case ActSqrtSigmoid:
 		return "sqrt-sigmoid"
+	case ActTanh:
+		return "tanh"
 	}
 	return "act(" + strconv.Itoa(int(k)) + ")"
 }

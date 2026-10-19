@@ -148,7 +148,7 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 	has := func(r jlm.Role) bool { return hasRole(inv, r) }
 	d := graph.Dense{Block: li, NEmbd: c.NEmbd, NHead: c.NHead, NKVHead: c.NKVHeadAt(li), HeadDim: c.HeadDimAt(li),
 		NFFN: c.NFFNAt(li), Eps: c.RMSEps, NRot: c.NRot, Base: c.RopeBase, Layout: layout, RopeFreqs: m.rope.Freqs != nil,
-		Scale: c.AttnScale, Softcap: float64(c.AttnSoftcap), Act: m.blockAct(inv),
+		Scale: c.AttnScale, Softcap: float64(c.AttnSoftcap), Act: m.blockAct(inv), GLU: c.GLU,
 		QKNorm: c.QKNormAt(li) && !c.QKNormWide, QKNormWhole: c.QKNormAt(li) && c.QKNormWide,
 		LayerNorm: c.LayerNorm, NormBias: has(jlm.RoleAttnNormBias), FFNNormBias: has(jlm.RoleFFNNormBias),
 		Parallel: c.Parallel, SharedNorm: c.Parallel && !has(jlm.RoleFFNNorm),

@@ -77,7 +77,7 @@ func (m *Model) mixtureWhy(li int) (graph.Facts, string) {
 			return graph.Facts{}, UncoveredMixExperts
 		}
 	}
-	mx := graph.Mixture{Block: li, NEmbd: c.NEmbd, NExpert: c.NExpert, K: c.NExpertUsed, NFF: c.NFFNExp, Act: act,
+	mx := graph.Mixture{Block: li, NEmbd: c.NEmbd, NExpert: c.NExpert, K: c.NExpertUsed, NFF: c.NFFNExp, Act: act, GLU: c.GLU,
 		Router: graph.RouterSoftmax, Norm: !c.NoExpertNorm, Scale: c.ExpertScale,
 		Groups: c.NExpertGroup, GroupsUsed: c.NExpertGroupUsed, SharedFF: c.NFFNShExp, WeightIn: c.ExpertWeightIn,
 		Ungated: l.ungatedExp, Latent: c.ExpertLatent, Eps: c.RMSEps, Inv: inv}

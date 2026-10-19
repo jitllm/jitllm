@@ -325,6 +325,9 @@ type Attrs struct {
 	Bidir   bool
 	Softcap float64
 	Act     Act
+	// GLU is an OpActMul's bounds, the container's numbers (jlm.GLU): what
+	// a generator composes the gated unit from. The zero value is SwiGLU.
+	GLU jlm.GLU
 	// A mixture's router and combine (OpRoute, OpCombine).
 	Experts, TopK      int
 	Router             Router

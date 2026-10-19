@@ -33,6 +33,9 @@ import (
 // that loads, runs, and produces confident nonsense.
 type Config struct {
 	Arch string
+	// GLU is the FFNs' gated unit's bounds, as the container states them
+	// (jlm.Config.GLU): what the graph's activation ops carry.
+	GLU jlm.GLU
 	// TokenAct says every projection input is quantized to int8 per token
 	// by its absolute maximum, as BitNet's BitLinear does: the session's
 	// activation window is the widest row (nn.WithActWindow), so each 32-wide
@@ -909,6 +912,7 @@ func configFrom(c *jlm.Config) (*Config, error) {
 	}
 	// BitNet quantizes every projection input per token (jlm.ArchBitNet).
 	out.TokenAct = c.Arch == jlm.ArchBitNet
+	out.GLU = c.GLU()
 	// Apertus's activation is its arch's: a file states it only through the
 	// per-block numbers (jlm.RoleXIELU).
 	if c.Arch == jlm.ArchApertus {

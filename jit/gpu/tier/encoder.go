@@ -1750,6 +1750,12 @@ func (g *devTier) layersSession(s backend.Session) {
 			if len(o.Gen) != 0 && !(o.Kind == dkAdd && first+oi == len(prog.ops)-1 && prog.f16 && prog.slots[o.Out[0]] == slotX) {
 				if o.Gen[0].former != 0 {
 					genIdx = first + oi
+					if o.FIn > 0 {
+						// The float row the program states behind the op's
+						// int8 operand, not whichever row the step last
+						// quantized.
+						fsrc = at(o.In[o.FIn-1])
+					}
 					form(&o)
 				} else {
 					gst.cs, gst.qOff, gst.kOff = rcs, qOff, kro

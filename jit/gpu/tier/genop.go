@@ -307,7 +307,12 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		w = prog.vals[o.Out[0]].Width
 	}
 	p := &bs.p
+	// A norm's epsilon is its graph op's (a latent norm states its own),
+	// the model's where the op states none.
 	eps := float32(p.RMSEps)
+	if o.A.Eps != 0 {
+		eps = float32(o.A.Eps)
+	}
 	rb := &rowBuild{r: compose.Row{Width: w, Rows: rows}}
 	var q8 uint8 // which output holds an int8 value
 	switch o.Kind {
@@ -332,12 +337,14 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		}
 		rb.store(rb.node(compose.Node{Kind: compose.NUnary, Op: compose.OpAct, Act: a, A: rb.load(compose.BufRow, gaIn0)}), gaOut0)
 	case dkActMul:
-		a, ok := kernAct(o.Act)
-		if !ok || len(o.In) != 2 || kernels.ActMulOK(a) != nil {
+		if len(o.In) != 2 {
 			return nil
 		}
-		gt, up := rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1)
-		rb.store(rb.node(compose.Node{Kind: compose.NBinary, Op: compose.OpActMul, Act: a, A: gt, B: up}), gaOut0)
+		y, ok := rb.gated(o, rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1))
+		if !ok {
+			return nil
+		}
+		rb.store(y, gaOut0)
 	case dkMul:
 		rb.store(rb.bin(compose.OpMul, rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1)), gaOut0)
 	case dkGateOut:
@@ -406,12 +413,13 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		}
 	case dkActQuant:
 		// act(gate) * up, and its int8 operand.
-		a, ok := kernAct(o.Act)
-		if !ok || len(o.In) != 2 || kernels.ActMulOK(a) != nil {
+		if len(o.In) != 2 {
 			return nil
 		}
-		y := rb.node(compose.Node{Kind: compose.NBinary, Op: compose.OpActMul, Act: a,
-			A: rb.load(compose.BufRow, gaIn0), B: rb.load(compose.BufRow, gaIn1)})
+		y, ok := rb.gated(o, rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1))
+		if !ok {
+			return nil
+		}
 		rb.store(y, gaOut0)
 		q8 = 1
 		rb.quantize(y, w, p)
@@ -632,9 +640,9 @@ type genState struct {
 	// The step's binary16 operand: its plane, and the conversion the step
 	// last made, by kernel and source (shared with the executor, so a
 	// conversion either one made is not made again).
-	f16 backend.Buf
-	memoK     backend.Kernel
-	memoSrc   backend.Buf
+	f16     backend.Buf
+	memoK   backend.Kernel
+	memoSrc backend.Buf
 	// The step's (token, expert) pairs: the grouped run's sorted columns
 	// over rows (moe), else the selection's.
 	moe     bool
@@ -786,12 +794,12 @@ func (g *devTier) genPairs(o *devOp, prog *devProgram, bs *blockScratch, rows in
 		}
 		rb.store(rb.r.Act(a, rb.load(compose.BufRow, gaIn0)), gaOut0)
 	case dkActMul:
-		a, ok := kernAct(o.Act)
-		if !ok || kernels.ActMulOK(a) != nil {
-			return nil
-		}
 		gt, up := rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1)
 		if len(o.In) > 2 {
+			a, ok := kernAct(o.Act)
+			if !ok || kernels.ActMulOK(a) != nil || o.A.GLU.Bounded() {
+				return nil
+			}
 			// act(w*gate) * (w*up), w the pair's routed weight.
 			wb := rb.buf(compose.BufVec, gaIn2)
 			at := rb.r.RowIdx()
@@ -803,7 +811,11 @@ func (g *devTier) genPairs(o *devOp, prog *devProgram, bs *blockScratch, rows in
 			rb.store(rb.bin(compose.OpMul, rb.r.Act(a, gw), uw), gaOut0)
 			break
 		}
-		rb.store(rb.node(compose.Node{Kind: compose.NBinary, Op: compose.OpActMul, Act: a, A: gt, B: up}), gaOut0)
+		y, ok := rb.gated(o, gt, up)
+		if !ok {
+			return nil
+		}
+		rb.store(y, gaOut0)
 	case dkQuant:
 		if moe {
 			return nil // over rows the grouped matvec quantizes what it reads
@@ -1026,4 +1038,59 @@ func (p *devProgram) floatSource(j int, v devVal) (devVal, bool) {
 		}
 	}
 	return 0, false
+}
+
+// gated is act(gate) * up for op o, from its attributes alone: the gated
+// form of its activation, or, where the op carries a gated unit's bounds
+// (graph.Attrs.GLU, the container's numbers), the unit composed from them.
+// The bounded unit is
+//
+//	g' = min(gate, GateMax)            (Clamp)
+//	l  = GateTanh*tanh(g'/GateTanh)    (GateTanh, else g')
+//	a  = l * sigmoid(g')               (GateTanh), l / (1 + exp(-SigScale*g')) otherwise
+//	u  = clamp(up, UpMin, UpMax)       (Clamp) + UpShift, then bounded by UpTanh
+//
+// the order of operations the kernels' own gated forms use, so the two are
+// the same bits. False where the op's activation has no gated form.
+func (rb *rowBuild) gated(o *devOp, gt, up int) (int, bool) {
+	u := o.A.GLU
+	if !u.Bounded() {
+		a, ok := kernAct(o.Act)
+		if !ok || kernels.ActMulOK(a) != nil {
+			return 0, false
+		}
+		return rb.node(compose.Node{Kind: compose.NBinary, Op: compose.OpActMul, Act: a, A: gt, B: up}), true
+	}
+	c := func(f float32) int { return rb.node(compose.Node{Kind: compose.NConst, F: f}) }
+	exp := func(x int) int { return rb.node(compose.Node{Kind: compose.NUnary, Op: compose.OpExp, A: x}) }
+	bound := func(x int, b float32) int {
+		t := rb.node(compose.Node{Kind: compose.NUnary, Op: compose.OpAct, Act: kernels.ActTanh, A: rb.bin(compose.OpMul, c(1/b), x)})
+		return rb.bin(compose.OpMul, c(b), t)
+	}
+	g := gt
+	if u.Clamp {
+		g = rb.bin(compose.OpMin, gt, c(u.GateMax))
+	}
+	z := g
+	if u.SigScale != 0 && u.SigScale != 1 {
+		z = rb.bin(compose.OpMul, c(u.SigScale), g)
+	}
+	denom := rb.bin(compose.OpAdd, c(1), exp(rb.bin(compose.OpSub, c(0), z)))
+	var a int
+	if u.GateTanh != 0 {
+		a = rb.bin(compose.OpMul, bound(g, u.GateTanh), rb.bin(compose.OpDiv, c(1), denom))
+	} else {
+		a = rb.bin(compose.OpDiv, g, denom)
+	}
+	v := up
+	if u.Clamp {
+		v = rb.bin(compose.OpMax, rb.bin(compose.OpMin, up, c(u.UpMax)), c(u.UpMin))
+	}
+	if u.UpShift != 0 {
+		v = rb.bin(compose.OpAdd, v, c(u.UpShift))
+	}
+	if u.UpTanh != 0 {
+		v = bound(v, u.UpTanh)
+	}
+	return rb.bin(compose.OpMul, a, v), true
 }

@@ -86,6 +86,8 @@ func (e *Epi) Apply(b *ir.Builder, v, at, row ir.Value) ir.Value {
 			switch nd.Op {
 			case OpAct:
 				x = kernels.ActFragment(b, a, nd.Act)
+			case OpExp:
+				x = b.Exp(a)
 			case OpRsqrt:
 				x = b.Div(ir.F32, b.ConstF32(1), b.Sqrt(a))
 			case OpAbs:

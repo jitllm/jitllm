@@ -133,7 +133,9 @@ var ds4Violations = []c6Violation{
 		return cfgMut(m, func(c *Config) { c.ExpertSqrtSoftplus, c.ExpertSigmoid = false, true })
 	}},
 	{"plain SwiGLU", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.Act = nn.ActSiLU })
+		// The activation and its bounds: the device composes the unit from
+		// the bounds (Config.GLU), so plain SwiGLU is both gone.
+		return cfgMut(m, func(c *Config) { c.Act, c.GLU = nn.ActSiLU, jlm.GLU{} })
 	}},
 }
 

@@ -43,8 +43,9 @@ type Mixture struct {
 	Block       int
 	NEmbd       int
 	NExpert, K  int
-	NFF         int // one expert's hidden width
-	Act         Act // the experts' (and the shared expert's) gate activation
+	NFF         int     // one expert's hidden width
+	Act         Act     // the experts' (and the shared expert's) gate activation
+	GLU         jlm.GLU // its bounds (Attrs.GLU)
 	Router      Router
 	Norm        bool    // the K weights are divided by their sum
 	Scale       float64 // routed_scaling_factor; 0 and 1 are none
@@ -139,7 +140,7 @@ func (m *Mixture) emitFrom(g *Graph, r, x ValueID) ValueID {
 	} else {
 		gate := expert("exp_gate", pairs, jlm.RoleExpGateBank, jlm.RoleExpGateBias)
 		up := expert("exp_up", pairs, jlm.RoleExpUpBank, jlm.RoleExpUpBias)
-		g.op(Op{Kind: OpActMul, In: []ValueID{gate, up}, Out: []ValueID{h}, Attr: Attrs{Act: m.Act}})
+		g.op(Op{Kind: OpActMul, In: []ValueID{gate, up}, Out: []ValueID{h}, Attr: Attrs{Act: m.Act, GLU: m.GLU}})
 	}
 	down := expert("exp_down", h, jlm.RoleExpDownBank, jlm.RoleExpDownBias)
 	y := g.value("routed", ew)
@@ -173,7 +174,7 @@ func (m *Mixture) emitFrom(g *Graph, r, x ValueID) ValueID {
 		} else {
 			sg := mv("sh_gate", x, jlm.RoleShExpGate, m.SharedFF)
 			su := mv("sh_up", x, jlm.RoleShExpUp, m.SharedFF)
-			g.op(Op{Kind: OpActMul, In: []ValueID{sg, su}, Out: []ValueID{sh}, Attr: Attrs{Act: m.Act}})
+			g.op(Op{Kind: OpActMul, In: []ValueID{sg, su}, Out: []ValueID{sh}, Attr: Attrs{Act: m.Act, GLU: m.GLU}})
 		}
 		sd := mv("sh_down", sh, jlm.RoleShExpDown, m.NEmbd)
 		if m.SharedGated {

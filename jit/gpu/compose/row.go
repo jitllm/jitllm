@@ -88,6 +88,7 @@ const (
 	OpAbs
 	OpFma // A*B + C, one rounding (C in Node.C)
 	OpRem // the remainder of indices
+	OpExp // e to the A
 )
 
 // Red is a row reduction.
@@ -349,6 +350,8 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			switch nd.Op {
 			case OpAct:
 				v = kernels.ActFragment(b, a, nd.Act)
+			case OpExp:
+				v = b.Exp(a)
 			case OpRsqrt:
 				v = b.Div(ir.F32, b.ConstF32(1), b.Sqrt(a))
 			case OpAbs:

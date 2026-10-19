@@ -41,8 +41,9 @@ type Dense struct {
 	// (Attrs); TempScale 0 is none.
 	TempScale, TempFloor, TempOffs float64 // RoleAttnSinks: a per-head logit in every softmax's denominator
 	Act                            Act
-	QKNorm                         bool // RoleAttnQNorm and RoleAttnKNorm, over each head before the rotary
-	PostNorm                       bool // RolePostAttnNorm and RolePostFFNNorm, over each sublayer's output
+	GLU                            jlm.GLU // the FFN's gated unit's bounds (Attrs.GLU)
+	QKNorm                         bool    // RoleAttnQNorm and RoleAttnKNorm, over each head before the rotary
+	PostNorm                       bool    // RolePostAttnNorm and RolePostFFNNorm, over each sublayer's output
 	// NoPreNorm is a block whose attention reads its input unnormed (OLMo
 	// 2's, its post-norms standing in; ModernBERT's first block), NoFFNNorm
 	// one whose FFN does (OLMo 2's), NoRope one with no rotary.
@@ -582,7 +583,7 @@ func (d *Dense) Build() *Graph {
 		sg := mv("dense_gate", f, jlm.RoleShExpGate, d.Mixture.SharedFF, 0)
 		su := mv("dense_up", f, jlm.RoleShExpUp, d.Mixture.SharedFF, 0)
 		sa := g.value("dense_act", d.Mixture.SharedFF)
-		g.op(Op{Kind: OpActMul, In: []ValueID{sg, su}, Out: []ValueID{sa}, Attr: Attrs{Act: mx.Act}})
+		g.op(Op{Kind: OpActMul, In: []ValueID{sg, su}, Out: []ValueID{sa}, Attr: Attrs{Act: mx.Act, GLU: mx.GLU}})
 		dd := norm("dense_post", mv("dense_out", sa, jlm.RoleShExpDown, d.NEmbd, 0), jlm.RolePostFFNNorm1)
 		rin := norm("route_in", x1, jlm.RoleRouterNorm)
 		ein := norm("experts_in", x1, jlm.RoleFFNNorm2)
@@ -609,7 +610,7 @@ func (d *Dense) Build() *Graph {
 			gt = gs
 		}
 		p := g.value("act", d.NFFN)
-		g.op(Op{Kind: OpActMul, In: []ValueID{gt, up}, Out: []ValueID{p}, Attr: Attrs{Act: d.Act}})
+		g.op(Op{Kind: OpActMul, In: []ValueID{gt, up}, Out: []ValueID{p}, Attr: Attrs{Act: d.Act, GLU: d.GLU}})
 		if d.SubNorm {
 			p = norm("ffn_sub", p, jlm.RoleFFNSubNorm)
 		}
