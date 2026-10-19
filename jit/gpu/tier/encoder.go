@@ -2269,8 +2269,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				// numbers as a buffer.
 				nf := prog.vals[o.In[0]].Width
 				switch {
-				case prog.slots[o.Out[0]] == slotSLo2:
-					lc.la(bs.q4e.silu, R*bs.q4e.rank, at(o.In[0]), at(o.Out[0]))
 				case prog.slots[o.Out[0]] == slotEAct && rowsMoE:
 					lg(mg.actMul, gr.cols*p.NFFNExp, 128, at(o.In[0]), at(o.Out[0]))
 				case prog.slots[o.Out[0]] == slotEAct:

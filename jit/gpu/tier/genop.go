@@ -367,7 +367,12 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		if !ok || len(o.In) != 1 {
 			return nil
 		}
-		rb.store(rb.node(compose.Node{Kind: compose.NUnary, Op: compose.OpAct, Act: a, A: rb.load(compose.BufRow, gaIn0)}), gaOut0)
+		x := rb.load(compose.BufRow, gaIn0)
+		if o.Alpha != 0 && o.Alpha != 1 {
+			// An input scale the step states (a stream gate's 1/streams).
+			x = rb.bin(compose.OpMul, x, rb.node(compose.Node{Kind: compose.NConst, F: float32(o.Alpha)}))
+		}
+		rb.store(rb.node(compose.Node{Kind: compose.NUnary, Op: compose.OpAct, Act: a, A: x}), gaOut0)
 	case dkActMul:
 		if len(o.In) != 2 {
 			return nil

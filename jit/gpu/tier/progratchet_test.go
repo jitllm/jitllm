@@ -15,9 +15,9 @@ import (
 // itself (genop.go), so each count only falls; a count above its ceiling
 // fails. Lower a ceiling to the count in the same change that lowers it.
 var progCeilings = map[string]int{
-	"scratch kernel launches": 189,
-	"family references":       297,
-	"kernels chosen by slot":  54,
+	"scratch kernel launches": 188,
+	"family references":       295,
+	"kernels chosen by slot":  53,
 	"family-named slots":      68,
 }
 

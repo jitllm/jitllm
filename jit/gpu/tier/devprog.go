@@ -1763,7 +1763,11 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			}
 			lo := mv(".lo", qx, xn, ws[1].Role, slotSLo)
 			lo2 := prog.val(name(0)+".lo_act", prog.vals[lo], slotSLo2)
-			prog.ops = append(prog.ops, devOp{Kind: dkAct, Src: []int{i}, In: []devVal{lo}, Out: []devVal{lo2}})
+			// The gate's down projection through SiLU of its input over the
+			// stream count: OpStreamMix's own definition (graph.OpStreamMix),
+			// stated on the step as an activation and an input scale.
+			prog.ops = append(prog.ops, devOp{Kind: dkAct, Src: []int{i}, In: []devVal{lo}, Out: []devVal{lo2}, Act: graph.ActSiLU,
+				Alpha: float64(1 / float32(o.Attr.Streams))})
 			ql := prog.val(name(0)+".lo_q8", devType{Elem: elemQ8, Layout: layoutRow, Width: prog.vals[lo2].Width}, slotSQ8LR)
 			prog.ops = append(prog.ops, devOp{Kind: dkQuant, Src: []int{i}, In: []devVal{lo2}, Out: []devVal{ql}})
 			gate := mv(".gate", ql, lo2, ws[2].Role, slotSGate)
@@ -2574,6 +2578,9 @@ func faultSig(l *layer, plan *nn.LayerPlan) uint32 {
 	if plan.DS4 != nil {
 		s |= uint32(plan.DS4.Fault) << 8
 	}
+	if plan.Q4E != nil {
+		s |= uint32(plan.Q4E.Fault) << 16
+	}
 	return s
 }
 
@@ -2592,6 +2599,9 @@ func faultRewrite(p *devProgram, l *layer, plan *nn.LayerPlan) {
 			p.elide(i, o.In[0]) // the latent sum, unnormed
 		case plan.DS4 != nil && plan.DS4.Fault == nn.DS4FaultNoDerope && o.Kind == dkTurn && s == slotCAOR:
 			p.elide(i, o.In[0]) // the heads left turned
+		case plan.Q4E != nil && plan.Q4E.Fault == nn.Q4EFaultUnscaledGate && o.Kind == dkAct && o.Alpha != 0:
+			p.ops[i].Alpha = 0 // the stream gate's activation unscaled
+			continue
 		default:
 			continue
 		}
