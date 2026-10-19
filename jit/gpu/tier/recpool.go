@@ -161,7 +161,9 @@ func (p *recPool) free() {
 // dropped. Callers hold g.mu, outside a session.
 func (g *devTier) recResize(slots int, shared bool) error {
 	// Every session's seat is copied out of buffers about to be freed.
-	g.quiesce()
+	if err := g.quiesce(); err != nil {
+		return err
+	}
 	if g.recShared && !shared && len(g.recPools()) > 0 {
 		return fmt.Errorf("a shared recurrent pool does not go back to two halves while a session holds it")
 	}
@@ -348,7 +350,10 @@ func (g *devTier) growSeat(sid uint64, rows int) bool {
 		return true
 	}
 	// The pools are rebuilt with every other session's seat carried across.
-	g.quiesce()
+	if err := g.quiesce(); err != nil {
+		g.LastErr = err.Error()
+		return false
+	}
 	if g.recSeats == nil {
 		g.recSeats = map[uint64]recSeat{}
 	}
@@ -901,7 +906,10 @@ func (g *devTier) prepRecRows(sid uint64, lo, hi int, rs *ragStep) bool {
 // step's company changes. Callers hold g.mu, outside a session.
 func (g *devTier) alignRec(lo, hi int, sid []uint64) bool {
 	// It copies other sessions' states between halves.
-	g.quiesce()
+	if err := g.quiesce(); err != nil {
+		g.LastErr = err.Error()
+		return false
+	}
 	for li := lo; li < hi; li++ {
 		l := g.layers[li]
 		if l == nil || !l.linear {

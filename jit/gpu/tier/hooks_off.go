@@ -7,6 +7,9 @@ package tier
 
 type hooks struct{}
 
+// failure is nil: a release build arms no faults.
+func (*hooks) failure() error { return nil }
+
 func (*Config) pagedFaulted(pagedFaultID) bool { return false }
 func (*Config) recFaulted(recFaultID) bool     { return false }
 func (*Config) rowsFaulted(rowsFaultID) bool   { return false }

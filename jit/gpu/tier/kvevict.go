@@ -142,7 +142,9 @@ func (g *devTier) evictableIn(sid uint64, kp *kvPool, l *kvLayerPool) int {
 // every submission in flight first (s may be another session's, stepping),
 // so nothing reads the page and its id is free at once.
 func (g *devTier) evictPage(kp *kvPool, s seqID) error {
-	g.quiesce()
+	if err := g.quiesce(); err != nil {
+		return err
+	}
 	if err := g.flushTabs(); err != nil {
 		return err
 	}

@@ -525,7 +525,10 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 	if l.pg == nil || l.pg.in {
 		return g.holdPages(li, li+1)
 	}
-	g.quiesce()
+	if err := g.quiesce(); err != nil {
+		g.LastErr = err.Error()
+		return false
+	}
 	if l.pg.in {
 		return g.holdPages(li, li+1)
 	}

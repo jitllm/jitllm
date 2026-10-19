@@ -542,7 +542,10 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	for {
 		if excl = g.exclusiveRange(lo, hi, g.rag, bs) || g.evictedFor(sid, g.rag); excl {
 			// Running alone is right whatever changes while it waits.
-			g.quiesce()
+			if err := g.quiesce(); err != nil {
+				g.LastErr = err.Error()
+				return false
+			}
 			break
 		}
 		if g.quiet == 0 {
@@ -1096,7 +1099,11 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		// the bookkeeping of the others goes on meanwhile. What the
 		// submission builds on the way takes g.mu for the build (subLock),
 		// and its counters are its own until it completes.
-		t := g.beginSub()
+		t, err := g.beginSub()
+		if err != nil {
+			g.sub = submitArgs{}
+			return refuse("%v", err)
+		}
 		g.inSub, g.Stats = true, &g.acc
 		g.runUnlocked(g.subFn)
 		g.inSub, g.Stats = false, &g.tot

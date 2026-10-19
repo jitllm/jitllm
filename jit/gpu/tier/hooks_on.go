@@ -12,6 +12,9 @@ import "fmt"
 // The fault names are documented beside fault.go's old switches; the enums are
 // faultids.go and the names below are parsed only here, where a test arms one.
 type hooks struct {
+	// err is the first fault or violation named that does not exist: New
+	// returns it, since a gate that arms nothing proves nothing (RULE 10).
+	err   error
 	paged pagedFaultID
 	rec   recFaultID
 	rows  rowsFaultID
@@ -51,12 +54,13 @@ func (c *Config) allocFault() {
 	}
 }
 
-// setFault arms one violation of a family; "" disarms it. It panics on a name
-// it does not know: a gate that arms nothing proves nothing (RULE 10).
+// setFault arms one violation of a family; "" disarms it. A name it does
+// not know is recorded (hooks.err) and refused by New: a gate that arms
+// nothing proves nothing (RULE 10).
 func (h *hooks) setFault(family, name string) {
 	look := func(ok bool) {
-		if !ok {
-			panic(fmt.Sprintf("tier: no %q fault named %q", family, name))
+		if !ok && h.err == nil {
+			h.err = fmt.Errorf("tier: no %q fault named %q", family, name)
 		}
 	}
 	var ok bool
@@ -74,7 +78,10 @@ func (h *hooks) setFault(family, name string) {
 	case "peer":
 		h.peer, ok = peerFaultNames[name]
 	default:
-		panic(fmt.Sprintf("tier: no fault family %q", family))
+		if h.err == nil {
+			h.err = fmt.Errorf("tier: no fault family %q", family)
+		}
+		return
 	}
 	look(ok || name == "")
 }
@@ -95,7 +102,10 @@ func (h *hooks) setViolation(name string, on bool) bool {
 	case "normgate":
 		p = &h.normGateBroken
 	default:
-		panic(fmt.Sprintf("tier: no violation named %q", name))
+		if h.err == nil {
+			h.err = fmt.Errorf("tier: no violation named %q", name)
+		}
+		return false
 	}
 	old := *p
 	*p = on
@@ -122,3 +132,6 @@ func (g *GPU) SetFault(family, name string) { g.Config.hook.setFault(family, nam
 // SetViolation sets one wrong-answer switch on this tier and returns the
 // setting it replaced.
 func (g *GPU) SetViolation(name string, on bool) bool { return g.Config.hook.setViolation(name, on) }
+
+// failure is the first fault or violation named that does not exist.
+func (h *hooks) failure() error { return h.err }

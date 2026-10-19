@@ -356,7 +356,11 @@ func (g *devTier) waitQuiet() bool {
 // background tuner on a T4. The placement-path trial also writes g.partBuf,
 // which a submission in flight may be reading. Callers hold g.mu, and are not
 // inside a submission or its prologue (quiesce refuses).
-func (g *devTier) trialQuiet() { g.quiesce() }
+func (g *devTier) trialQuiet() {
+	if err := g.quiesce(); err != nil {
+		g.LastErr = err.Error()
+	}
+}
 
 // stopTune stops the background tuner and waits for it. Callers do not hold
 // g.mu.
@@ -482,7 +486,10 @@ func (g *devTier) retuneDecode() {
 	g.retunedAt = len(g.layers)
 	// The retune rewrites the blocks' matvecs, which a submission in flight
 	// launches.
-	g.quiesce()
+	if err := g.quiesce(); err != nil {
+		g.LastErr = err.Error()
+		return
+	}
 	type use struct {
 		m *mv
 		r *resident

@@ -1,6 +1,7 @@
 package tier
 
 import (
+	"fmt"
 	"slices"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
@@ -40,9 +41,9 @@ type subClock struct {
 // caller waited for any quiesce in progress before its prologue and has held
 // g.mu since (layersOnce), so none can be: a wait here would let the state
 // the prologue read change under the submission. Callers hold g.mu.
-func (g *devTier) beginSub() uint64 {
+func (g *devTier) beginSub() (uint64, error) {
 	if g.quiet > 0 {
-		panic("tier: a submission began while a quiesce waited")
+		return 0, fmt.Errorf("tier: a submission began while a quiesce waited")
 	}
 	t := g.clk.seq
 	g.clk.seq++
@@ -52,7 +53,7 @@ func (g *devTier) beginSub() uint64 {
 	g.tickets = append(g.tickets, t)
 	g.clk.live = len(g.tickets)
 	g.clk.oldest = g.tickets[0]
-	return t
+	return t, nil
 }
 
 // endSub gives ticket t back. Callers hold g.mu.
@@ -128,15 +129,15 @@ func (g *devTier) evictedFor(sid uint64, rag *ragStep) bool {
 // starting while it waits; the caller then changes what they read before it
 // lets g.mu go. It must not be called from inside a submission -- it would
 // wait for itself. Callers hold g.mu.
-func (g *devTier) quiesce() {
+func (g *devTier) quiesce() error {
 	if g.inSub {
-		panic("tier: quiesce from inside a submission")
+		return fmt.Errorf("tier: quiesce from inside a submission")
 	}
 	if g.prologueHeld {
-		panic("tier: quiesce inside a submission's prologue")
+		return fmt.Errorf("tier: quiesce inside a submission's prologue")
 	}
 	if len(g.tickets) == 0 {
-		return
+		return nil
 	}
 	g.quiet++
 	for len(g.tickets) > 0 {
@@ -145,4 +146,5 @@ func (g *devTier) quiesce() {
 	if g.quiet--; g.quiet == 0 {
 		g.idle.Broadcast()
 	}
+	return nil
 }

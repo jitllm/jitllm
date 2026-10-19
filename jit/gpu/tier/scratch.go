@@ -185,7 +185,10 @@ func (g *devTier) keepExact(w int) int {
 	if g.bbs[w] == nil {
 		drop := func() {
 			// After every submission that may read it.
-			g.quiesce()
+			if err := g.quiesce(); err != nil {
+				g.LastErr = err.Error()
+				return
+			}
 			if g.exactDropped == nil {
 				g.exactDropped = map[int]bool{}
 			}

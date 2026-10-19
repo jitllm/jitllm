@@ -2397,6 +2397,10 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 		closeAll()
 		return nil, fmt.Errorf("tier: WithRewrite: %w", err)
 	}
+	if err := cfg.hook.failure(); err != nil {
+		closeAll()
+		return nil, err
+	}
 	g := &GPU{Config: cfg, own: map[int]*devTier{}, geo: map[int]geoKey{}}
 	for i, s := range slots {
 		if s.Dev == nil {
@@ -2831,7 +2835,10 @@ func (g *devTier) Close() {
 	g.closed = true
 	// Every session's queue, before the device that owns them, once nothing
 	// runs on one.
-	g.quiesce()
+	if err := g.quiesce(); err != nil {
+		g.LastErr = err.Error()
+		return
+	}
 	g.khClose() // before dhClose: its programs launch dh's kernels
 	g.dhClose()
 	for _, ds := range g.sess {
@@ -2961,7 +2968,10 @@ func (g *devTier) Close() {
 // so it waits for every submission in flight first (quiesce), and its caller,
 // holding g.mu, makes the change before any other starts. Callers hold g.mu.
 func (g *devTier) dropGraph() {
-	g.quiesce()
+	if err := g.quiesce(); err != nil {
+		g.LastErr = err.Error()
+		return
+	}
 	// Every recording, not just the current one, in every lane: a moved
 	// address invalidates all of them, whichever session made them.
 	g.eachLane(func(l *lane) {

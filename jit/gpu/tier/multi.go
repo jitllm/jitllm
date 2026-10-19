@@ -765,7 +765,10 @@ func (g *devTier) dropCaches(n uint64) bool {
 		if l == nil || l.stream == nil || !l.stream.cached() || l.stream.plain[2] == nil {
 			continue
 		}
-		g.quiesce()
+		if err := g.quiesce(); err != nil {
+			g.LastErr = err.Error()
+			return false
+		}
 		for m, dst := range [3]**resident{&l.gate, &l.up, &l.down} {
 			if l.stream.plain[m] == nil {
 				continue

@@ -44,7 +44,10 @@ func TestBackgroundTrialWaitsForSubmissionsInFlight(t *testing.T) {
 	d := g.devs[0]
 
 	d.mu.Lock()
-	ticket := d.beginSub()
+	ticket, err := d.beginSub()
+	if err != nil {
+		t.Fatal(err)
+	}
 	d.tuneSplit(kernels.Q4_0, rows, k, &resident{ok: true})
 	running := d.tuneRunning
 	// As layersOnce marks its session for the submission it lets g.mu go

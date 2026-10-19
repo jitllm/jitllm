@@ -377,7 +377,9 @@ func (g *devTier) growKVLayer(kp *kvPool, l *kvLayerPool, want int) error {
 	}
 	// The pages are copied into the new buffers: a submission in flight
 	// writing a row into the old ones would be lost.
-	g.quiesce()
+	if err := g.quiesce(); err != nil {
+		return err
+	}
 	pb := kp.pageBytes(l)
 	fits := func(n uint64) bool { return g.stateFits(n, l) }
 	// A doubling stops at what a scheduler promised (PromiseKV): the pages in
@@ -636,7 +638,9 @@ func (g *devTier) shrinkKVLayer(kp *kvPool, l *kvLayerPool) error {
 	}
 	// The live pages are gathered into new buffers and renumbered under
 	// every sequence: nothing in flight may write or read the old ones.
-	g.quiesce()
+	if err := g.quiesce(); err != nil {
+		return err
+	}
 	pb := kp.pageBytes(l)
 	// The gather order: new id j is old id order[j], the dummy first.
 	seqs := make([]seqID, 0, len(l.owned))
@@ -716,7 +720,9 @@ func (g *devTier) shrinkKVLayer(kp *kvPool, l *kvLayerPool) error {
 func (g *devTier) compactViaHost(kp *kvPool, l *kvLayerPool, order []uint32, n int) (k, v backend.Buf, err error) {
 	kw, vw := l.geom.kWords(kp.p), l.geom.vWords(kp.p)
 	// The layer is read home whole: nothing in flight may still write it.
-	g.quiesce()
+	if err := g.quiesce(); err != nil {
+		return nil, nil, err
+	}
 	hk, err := readPages(l.k, kw, l.n)
 	if err != nil {
 		return nil, nil, err
