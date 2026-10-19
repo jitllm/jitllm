@@ -931,6 +931,10 @@ func (g *devTier) layersSession(s backend.Session) {
 			slotM1LowN: bs.m1LowN, slotM1BN: bs.m1BN, slotM1CN: bs.m1CN,
 			slotPLEG: bs.pleG, slotPLES: bs.pleS, slotPLEA: bs.pleA, slotPLEO: bs.pleO, slotKRot: bs.krot,
 			slotPred: bs.altPred, slotAltM: bs.altM, slotAltB: bs.altB, slotLT: bs.altLT, slotLaur: bs.altLaur, slotGG: bs.gg}
+		if x := bs.q4e; x != nil {
+			buf[slotSXN], buf[slotSQ8], buf[slotSQ8LR], buf[slotSLo], buf[slotSLo2] = x.xn, x.aHD, x.aLR, x.lo, x.lo2
+			buf[slotSGate], buf[slotSMix], buf[slotSInj], buf[slotSW] = x.gate, x.mix, x.inj, x.w
+		}
 		// The rewrites legal at one row, on a prompt chunk and on a ragged
 		// step differ: each class keeps its own fused program.
 		fc := &l.progOne
@@ -1064,6 +1068,14 @@ func (g *devTier) layersSession(s backend.Session) {
 					norm(at(o.In[0]), o.V, o.VB)
 				}
 			case dkQuant:
+				if x := bs.q4e; x != nil && (prog.slots[o.Out[0]] == slotSQ8 || prog.slots[o.Out[0]] == slotSQ8LR) {
+					k, n, a, ax := x.quantHD, x.h*p.NEmbd, x.aHD, x.axHD
+					if prog.slots[o.Out[0]] == slotSQ8LR {
+						k, n, a, ax = x.quantLR, x.rank, x.aLR, x.axLR
+					}
+					lc.la(k, kernels.QuantizeThreads(R*pad32(n)/32), at(o.In[0]), a, ax)
+					break
+				}
 				if prog.slots[o.Out[0]] == slotLRQ8 {
 					// The low-rank projections' own operand (bs.dLRa, dLRax).
 					k, n := bs.quantLR, bs.rec.KDim
@@ -1116,8 +1128,10 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 			case dkMatVec:
 				m, r := *l.ms[o.W], *l.rs[o.W]
-				if prog.slots[o.In[0]] == slotLRQ8 {
-					mvrunAct(m, r, at(o.Out[0]), bs.dLRa, bs.dLRax, at(o.In[1]))
+				if a, ax, ok := q8Pair(bs, prog.slots[o.In[0]]); ok {
+					// A matvec reading an int8 operand of its own (a low-rank
+					// pair's, a stream mix's), its float source beside it.
+					mvrunAct(m, r, at(o.Out[0]), a, ax, at(o.In[1]))
 					break
 				}
 				if prog.f16 {
@@ -1539,6 +1553,15 @@ func (g *devTier) layersSession(s backend.Session) {
 					kro = bs.kroff
 				}
 				lc.la(bs.ropeKRow, R*p.NKVHead*p.NRot/2, at(o.In[0]), rcs, kro, at(o.Out[0]))
+			case dkStreamNorm:
+				ds4Rows(lc, bs.q4e.normS, R*bs.q4e.h, at(o.In[0]), o.V, at(o.Out[0]))
+			case dkStreamGateMix:
+				lc.la(bs.q4e.gateMix, R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+				g.Q4EMixes++
+			case dkPlaceWeights:
+				lc.la(bs.q4e.injK, R*bs.q4e.h, at(o.In[0]), at(o.Out[0]))
+			case dkStreamPlace:
+				lc.la(bs.q4e.place, bs.q4e.h*R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.Out[0]))
 			case dkStreamRoute:
 				lc.la(bs.altRoute, R*p.AltUp, at(o.In[0]), l.altRouter, at(o.Out[0]))
 			case dkStreamPredict:
@@ -1582,6 +1605,8 @@ func (g *devTier) layersSession(s backend.Session) {
 				// numbers as a buffer.
 				nf := prog.vals[o.In[0]].Width
 				switch {
+				case prog.slots[o.Out[0]] == slotSLo2:
+					lc.la(bs.q4e.silu, R*bs.q4e.rank, at(o.In[0]), at(o.Out[0]))
 				case prog.slots[o.Out[0]] == slotEAct && rowsMoE:
 					lg(mg.actMul, gr.cols*p.NFFNExp, 128, at(o.In[0]), at(o.Out[0]))
 				case prog.slots[o.Out[0]] == slotEAct:
@@ -3613,4 +3638,22 @@ func (g *devTier) contigAttend(lc *launcher, bs *blockScratch, l *layer, li, R i
 		}
 	}
 	return err
+}
+
+// q8Pair is the int8 operand buffers of slot s where it is one beside the
+// block's own (bs.a, bs.ax): a low-rank pair's, a stream mix's.
+func q8Pair(bs *blockScratch, s devSlot) (a, ax backend.Buf, ok bool) {
+	switch s {
+	case slotLRQ8:
+		return bs.dLRa, bs.dLRax, true
+	case slotSQ8:
+		if x := bs.q4e; x != nil {
+			return x.aHD, x.axHD, true
+		}
+	case slotSQ8LR:
+		if x := bs.q4e; x != nil {
+			return x.aLR, x.axLR, true
+		}
+	}
+	return nil, nil, false
 }

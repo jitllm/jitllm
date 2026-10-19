@@ -94,6 +94,14 @@ func (k devKind) String() string {
 		return "resid_join3"
 	case dkGaussTopK:
 		return "gauss_topk"
+	case dkStreamNorm:
+		return "stream_norm"
+	case dkStreamGateMix:
+		return "stream_gate_mix"
+	case dkPlaceWeights:
+		return "place_weights"
+	case dkStreamPlace:
+		return "stream_place"
 	case dkScale:
 		return "scale"
 	case dkClamp:

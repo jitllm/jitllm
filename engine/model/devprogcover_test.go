@@ -50,24 +50,26 @@ func TestDeviceProgramCoverage(t *testing.T) {
 				reasons["prefill: "+err.Error()] = append(reasons["prefill: "+err.Error()], name)
 				return
 			}
-			// The first block the device holds (a sliding or shared layer
-			// may leave block 0 home).
-			first := 0
-			if runs := s.DeviceBlocks(); len(runs) > 0 {
-				first = runs[0][0]
-			}
-			prog, why := g.BlockProgram(first)
-			// Compiled means primitives only: a block whose program still
-			// runs an encoder sequence whole is listed by that op.
-			if c := g.BlockComposite(first); prog != "" && c != "" {
-				why = "composite op " + c
-			}
-			if prog != "" && why == "" {
-				covered++
-				return
+			// Every block the device holds: compiled means each one's
+			// program holds primitives alone. The first that does not names
+			// the fixture's reason.
+			why := ""
+			for _, r := range s.DeviceBlocks() {
+				for li := r[0]; li < r[1] && why == ""; li++ {
+					prog, w := g.BlockProgram(li)
+					if c := g.BlockComposite(li); prog != "" && c != "" {
+						w = "composite op " + c
+					}
+					if prog == "" && w == "" {
+						w = fmt.Sprintf("(no program, no reason: block %d of runs %v, %d device blocks; declines %v; device %q)",
+							li, s.DeviceBlocks(), s.GPULayers(), s.DeviceDeclines(), s.devWhy())
+					}
+					why = w
+				}
 			}
 			if why == "" {
-				why = fmt.Sprintf("(no program, no reason: block %d of runs %v, %d device blocks; declines %v; device %q)", first, s.DeviceBlocks(), s.GPULayers(), s.DeviceDeclines(), s.devWhy())
+				covered++
+				return
 			}
 			reasons[why] = append(reasons[why], name)
 		}()
@@ -78,7 +80,7 @@ func TestDeviceProgramCoverage(t *testing.T) {
 		keys = append(keys, k)
 	}
 	slices.SortFunc(keys, func(a, b string) int { return cmp.Compare(len(reasons[b]), len(reasons[a])) })
-	t.Logf("%d of %d fixtures run their first device block as a device program of primitives", covered, tried)
+	t.Logf("%d of %d fixtures run every device block as a device program of primitives", covered, tried)
 	for _, k := range keys {
 		t.Logf("%3d  %s: %s", len(reasons[k]), k, strings.Join(reasons[k], " "))
 	}

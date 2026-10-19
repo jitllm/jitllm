@@ -85,6 +85,10 @@ const (
 	dkStreamFinish                 // every stream written back from the corrections and a row
 	dkResidJoin3                   // a residual add with a branch beside it, over sqrt(2)
 	dkGaussTopK                    // the gate's values above its mean plus a bound of deviations
+	dkStreamNorm                   // every stream normed
+	dkStreamGateMix                // the streams averaged under a gate per channel: a sublayer's row
+	dkPlaceWeights                 // a placement's weights from its projection (2*sigmoid)
+	dkStreamPlace                  // a sublayer's output added into every stream at its weights
 	dkScale                        // the block's row times the layer's output scale
 	dkClamp                        // q, k or v clamped to the plan's bound
 	dkSubNorm                      // an inner norm before wo or down, with the quantize it feeds
@@ -219,6 +223,15 @@ const (
 	slotLT                      // bs.altLT: a low-rank branch's middle
 	slotLaur                    // bs.altLaur: the branch
 	slotGG                      // bs.gg: the gate after its gaussian top-k
+	slotSXN                     // the streams normed
+	slotSQ8                     // the streams' own int8 operand
+	slotSQ8LR                   // the low-rank gate's own int8 operand
+	slotSLo                     // the gate's rank-wide middle
+	slotSLo2                    // it activated
+	slotSGate                   // the gate
+	slotSMix                    // the gated mix: a sublayer's row
+	slotSInj                    // the placement's projection
+	slotSW                      // the placement's weights
 	numSlots
 )
 
@@ -412,6 +425,24 @@ func (s devSlot) String() string {
 		return "branch"
 	case slotGG:
 		return "gg"
+	case slotSXN:
+		return "s_xn"
+	case slotSQ8:
+		return "s_q8"
+	case slotSQ8LR:
+		return "s_q8_lr"
+	case slotSLo:
+		return "s_lo"
+	case slotSLo2:
+		return "s_lo2"
+	case slotSGate:
+		return "s_gate"
+	case slotSMix:
+		return "s_mix"
+	case slotSInj:
+		return "s_inj"
+	case slotSW:
+		return "s_w"
 	}
 	return ""
 }
@@ -540,7 +571,8 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		}
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkSlice, dkView, dkRopeTail, dkLatentWrite, dkConcatHeads, dkLatentAttend, dkConv1d, dkScan, dkGatedNorm, dkMul, dkConvBias, dkSSMNorm,
-		dkStreamRoute, dkStreamPredict, dkStreamCorrect, dkStreamScale, dkStreamFinish, dkResidJoin3, dkGaussTopK:
+		dkStreamRoute, dkStreamPredict, dkStreamCorrect, dkStreamScale, dkStreamFinish, dkResidJoin3, dkGaussTopK,
+		dkStreamNorm, dkStreamGateMix, dkPlaceWeights, dkStreamPlace:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkExpertFetch, dkGroupByExpert:
 		return devType{Elem: elemU32, Layout: layoutRow, Width: in.Width}
@@ -620,6 +652,8 @@ func lowersOp(k graph.OpKind) bool {
 	switch k {
 	case graph.OpNorm, graph.OpMatVec, graph.OpRope, graph.OpKVAppend, graph.OpAttend, graph.OpAdd,
 		graph.OpActMul, graph.OpAct, graph.OpHeadNorm, graph.OpLayerNorm, graph.OpScale, graph.OpClamp,
+		// A stream mix and its placement (the low-rank gated form).
+		graph.OpStreamMix, graph.OpStreamPlace,
 		// Predicted and corrected streams, a low-rank branch, the sparse gate.
 		graph.OpAltPredict, graph.OpAltCorrect, graph.OpLaurel, graph.OpGaussTopK,
 		// The mixture's ops.
@@ -927,8 +961,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				prog.scans = true
 				continue
 			}
-			if rr := p.Recurrent; prog.slots[in(0)] == slotH && !l.centred && l.k3 == nil && l.q4e == nil &&
-				!rr.ShortConv && !rr.Mamba1 && !rr.ChanDecay {
+			if rr := p.Recurrent; !l.centred && l.k3 == nil && !rr.ShortConv && !rr.Mamba1 && !rr.ChanDecay {
 				// The delta rule or Mamba-2's SSD as primitives: the
 				// projections by role (a mixer beside an attention has its own
 				// in-projection), the convolution and the scan over the
@@ -1149,6 +1182,56 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkExpertMatVec, Src: []int{i}, In: []devVal{qc, ident, acc}, Out: []devVal{out}, Role: o.Weight[1].Role, W: vb})
 			vals[o.Out[0]] = out
 			prog.latent = true
+		case graph.OpStreamMix:
+			if o.Attr.Sinkhorn || len(o.Out) != 2 || p.Q4E == nil {
+				return nil, "a stream mix other than the low-rank gated one"
+			}
+			// The streams normed and quantized into their own operand; a
+			// low-rank sigmoid gate (down, SiLU, its own operand, up); the
+			// gated average, the sublayer's row; the placement's projection
+			// and weights.
+			ws := o.Weight
+			rows := func(r jlm.Role) int {
+				if w := l.matIndex(r); w >= 0 {
+					return l.ms[w].rows
+				}
+				return 0
+			}
+			xn := prog.val(name(0)+".streams_normed", prog.vals[in(0)], slotSXN)
+			prog.ops = append(prog.ops, devOp{Kind: dkStreamNorm, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{xn}, Role: ws[0].Role})
+			qx := prog.val(name(0)+".q8", devType{Elem: elemQ8, Layout: layoutRow, Width: prog.vals[xn].Width}, slotSQ8)
+			prog.ops = append(prog.ops, devOp{Kind: dkQuant, Src: []int{i}, In: []devVal{xn}, Out: []devVal{qx}})
+			mv := func(nm string, q, src devVal, r jlm.Role, s devSlot) devVal {
+				v := prog.val(name(0)+nm, f32(rows(r)), s)
+				prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{q, src}, Out: []devVal{v}, W: l.matIndex(r)})
+				return v
+			}
+			lo := mv(".lo", qx, xn, ws[1].Role, slotSLo)
+			lo2 := prog.val(name(0)+".lo_act", prog.vals[lo], slotSLo2)
+			prog.ops = append(prog.ops, devOp{Kind: dkAct, Src: []int{i}, In: []devVal{lo}, Out: []devVal{lo2}})
+			ql := prog.val(name(0)+".lo_q8", devType{Elem: elemQ8, Layout: layoutRow, Width: prog.vals[lo2].Width}, slotSQ8LR)
+			prog.ops = append(prog.ops, devOp{Kind: dkQuant, Src: []int{i}, In: []devVal{lo2}, Out: []devVal{ql}})
+			gate := mv(".gate", ql, lo2, ws[2].Role, slotSGate)
+			row := prog.val(name(0), f32(ne), slotSMix)
+			prog.ops = append(prog.ops, devOp{Kind: dkStreamGateMix, Src: []int{i}, In: []devVal{xn, gate}, Out: []devVal{row}})
+			inj := mv(".inj", qx, xn, ws[3].Role, slotSInj)
+			w := prog.val(name(1), f32(o.Attr.Streams), slotSW)
+			prog.ops = append(prog.ops, devOp{Kind: dkPlaceWeights, Src: []int{i}, In: []devVal{inj}, Out: []devVal{w}})
+			vals[o.Out[0]], vals[o.Out[1]] = row, w
+		case graph.OpStreamPlace:
+			if len(o.In) != 3 || o.Attr.Sinkhorn {
+				return nil, "a placement other than the gated one"
+			}
+			// Every stream with the sublayer's output added at its weights:
+			// a residual add over the streams, into the slot it does not read.
+			s := slotX2
+			if prog.slots[in(0)] == slotX2 {
+				s = slotX
+			}
+			out := prog.val(name(0), prog.vals[in(0)], s)
+			prog.ops = append(prog.ops, devOp{Kind: dkStreamPlace, Src: []int{i}, In: []devVal{in(0), in(1), in(2)}, Out: []devVal{out}})
+			vals[o.Out[0]] = out
+			adds++
 		case graph.OpAltPredict:
 			// The active stream normed, the router's weights, every stream's
 			// prediction, the active one's copied into the row.
@@ -1481,7 +1564,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		o := &prog.ops[i]
 		switch o.Kind {
 		case dkNorm, dkPostNorm, dkHeadNorm, dkSubNorm:
-		case dkRouterBias, dkGroupMask, dkTopK, dkExpertBias, dkScaleWeights, dkGateLogit:
+		case dkRouterBias, dkGroupMask, dkTopK, dkExpertBias, dkScaleWeights, dkGateLogit, dkStreamNorm:
 			// A vector operand of the mixture's, by its role.
 			if o.Role != jlm.RoleNone {
 				if o.V = l.vecOf(o.Role); o.V == nil {
