@@ -32,7 +32,7 @@ var progCounters = map[string]*regexp.Regexp{
 var familySlot = regexp.MustCompile(`^\s+slot(C[A-Z]|N[A-Z]|B[A-Z]|H[CFM]|Idx|IK|IQ|SQ8|SX|SG|SM|SI|SW|SLo|Lat|MGate|MGated|RBias)`)
 
 // genFiles is the program's generators: what an op's kernel is built by.
-var genFiles = []string{"genop.go", "conv.go", "convgraph.go", "kernid.go", "devrewrite.go"}
+var genFiles = []string{"genop.go", "conv.go", "convgraph.go", "kernid.go", "devrewrite.go", "gen_attend.go"}
 
 // The generators' own deviation: kernel classes by another name. A named
 // kernel id, a kernel taken from the menu rather than formed from the op's

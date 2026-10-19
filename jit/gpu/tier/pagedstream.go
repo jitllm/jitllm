@@ -293,11 +293,13 @@ func (pg *pagedScratch) streamDecode(s backend.Session, lc *launcher,
 		}
 		g.StagedPasses++
 		desc := st.desc[di][j]
-		lc.la(vr.scores, vr.scoreT, q, k, n, pg.sc, tab, desc)
-		if err := lc.launch(vr.soft, vr.softG, 64, pg.sc, n, pg.wt, pg.part, tab, desc); err != nil {
-			return err
+		// The staged plan's scores, softmax and accumulate, not its merge:
+		// the pass's partials fold into the running one.
+		ab := attendBufs{q: q, k: k, v: v, n: n, tab: tab, desc: desc, part: pg.part, sc: pg.sc, wt: pg.wt}
+		runPlan(lc, vr.gen[:3], &ab)
+		if *lc.err != nil {
+			return *lc.err
 		}
-		lc.la(vr.acc, vr.accT, pg.wt, v, n, pg.part, tab, desc)
 		if j == 0 {
 			lc.la(ss.first, ss.foldT, pg.part, ss.run[0])
 		} else if !g.pagedFaulted(pagedPassfold) {

@@ -1733,7 +1733,12 @@ func (g *devTier) layersSession(s backend.Session) {
 			// An op with generated launches runs them and nothing else; the
 			// block's last add stays with the executor where the next
 			// block's norm may fold it (foldAddNorm).
-			if len(o.Gen) != 0 && !(o.Kind == dkAdd && first+oi == len(prog.ops)-1 && prog.f16 && prog.slots[o.Out[0]] == slotX) {
+			// A decode plan's launch runs the call's plan; a call whose
+			// attention is not one plan -- a prompt chunk's prefill, a
+			// ragged step's run table, history streamed in passes -- runs
+			// through the executor's case.
+			planOff := len(o.Gen) != 0 && o.Gen[0].plan && (pk.st != nil || pk.prefill || rag != nil && pk.ragRows > 0)
+			if len(o.Gen) != 0 && !planOff && !(o.Kind == dkAdd && first+oi == len(prog.ops)-1 && prog.f16 && prog.slots[o.Out[0]] == slotX) {
 				if o.Gen[0].former != 0 {
 					genIdx = first + oi
 					if o.FIn > 0 {
@@ -1766,11 +1771,21 @@ func (g *devTier) layersSession(s backend.Session) {
 					gst.split = g.partBuf
 					if pl != nil && pk != nil {
 						gst.kpool, gst.vpool, gst.tab, gst.prow = pl.k, pl.v, pl.tab, pk.pRow
+						gst.adesc, gst.sink = pk.pRow, sk
+						if p.Window(li) > 0 {
+							gst.adesc = pk.pRowW
+						}
 					}
 					if o.Kind == dkGatherHeads {
 						gst.perm = g.perms[[2]int{o.Heads, R}]
 					}
 					runGen(lc, &o, R, bs.rows, &buf, &gst)
+					if o.Gen[0].plan {
+						g.PagedLaunches++
+						if pk.cur.plan.Path == kernels.PathStaged {
+							g.PagedStagedLaunches++
+						}
+					}
 					actMemoK, actMemoSrc = gst.memoK, gst.memoSrc
 				}
 				switch o.Kind {

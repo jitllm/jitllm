@@ -86,6 +86,21 @@ func FlashKVGroups(s FlashShape) int {
 	return max(1, s.Rows) * s.Heads / flashKVGroup(s) * max(1, s.Splits)
 }
 
+// flashKVCheck refuses a shape FlashDecodeKV cannot build.
+func flashKVCheck(s FlashShape) error {
+	if (s.Page == 0 && s.Rows != 1) || s.Rows < 1 || s.Splits < 0 || s.Heads < 1 || s.KVHeads < 1 || s.Heads%s.KVHeads != 0 || s.Dim < 1 ||
+		s.KStride < 0 || s.Window < 0 || s.Softcap < 0 || (s.F16 && s.Dim%2 != 0) {
+		return fmt.Errorf("kernels: FlashDecodeKV: invalid shape %+v", s)
+	}
+	if err := flashPaged("FlashDecodeKV", s); err != nil {
+		return err
+	}
+	if s.Group > 0 && (s.Heads/s.KVHeads)%s.Group != 0 {
+		return fmt.Errorf("kernels: FlashDecodeKV: group %d does not divide %d query heads a KV head", s.Group, s.Heads/s.KVHeads)
+	}
+	return nil
+}
+
 // FlashDecodeKV is decode attention (s.Rows == 1) as one workgroup per KV head
 // and key partition, serving every query head of its GQA group.
 //
@@ -105,15 +120,8 @@ func FlashKVGroups(s FlashShape) int {
 func FlashDecodeKV(s FlashShape) (*ir.Kernel, error) {
 	T := FlashKVWidth(s)
 	W, Wd, Wk, ds := flashKVGeom(s)
-	if (s.Page == 0 && s.Rows != 1) || s.Rows < 1 || s.Splits < 0 || s.Heads < 1 || s.KVHeads < 1 || s.Heads%s.KVHeads != 0 || s.Dim < 1 ||
-		s.KStride < 0 || s.Window < 0 || s.Softcap < 0 || (s.F16 && s.Dim%2 != 0) {
-		return nil, fmt.Errorf("kernels: FlashDecodeKV: invalid shape %+v", s)
-	}
-	if err := flashPaged("FlashDecodeKV", s); err != nil {
+	if err := flashKVCheck(s); err != nil {
 		return nil, err
-	}
-	if s.Group > 0 && (s.Heads/s.KVHeads)%s.Group != 0 {
-		return nil, fmt.Errorf("kernels: FlashDecodeKV: group %d does not divide %d query heads a KV head", s.Group, s.Heads/s.KVHeads)
 	}
 	// gqa below is the heads THIS workgroup serves, a slice of its KV head's.
 	gqa, splits, C := flashKVGroup(s), max(1, s.Splits), FlashKVChunk(s)
