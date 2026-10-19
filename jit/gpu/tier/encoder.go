@@ -991,7 +991,9 @@ func (g *devTier) layersSession(s backend.Session) {
 			func() {
 				took := g.subLock()
 				defer g.subUnlock(took)
+				g.curLayer = l
 				g.genProgram(fc.prog, bs, bs.rows)
+				g.curLayer = nil
 			}()
 		}
 		prog = fc.prog
@@ -1024,7 +1026,8 @@ func (g *devTier) layersSession(s backend.Session) {
 		if R > 1 {
 			qOff, kro = bs.roff, bs.kroff
 		}
-		genv := genEnv{bs: bs}
+		gst := genState{bs: bs, slots: prog.slots}
+		genIdx := 0 // the op a former is running, which it may read ahead of
 		var sk backend.Buf
 		if p.AttnSinks {
 			if sk = l.sinks; sk == nil {
@@ -1076,19 +1079,13 @@ func (g *devTier) layersSession(s backend.Session) {
 		var gr groupRun
 		skipNext := false
 		at := func(v devVal) backend.Buf { return buf[prog.slots[v]] }
-		// q8At is an int8 value's two buffers: its slot's own pair, or the
-		// block's operand.
-		q8At := func(v devVal) (backend.Buf, backend.Buf) {
-			if a, ax, ok := q8Pair(bs, prog.slots[v]); ok {
-				return a, ax
-			}
-			return bs.a, bs.ax
-		}
 		// The matvec former's launcher: the op's weight's kernel, emitted from
 		// its MatVecShape (format, width, rows, split, epilogue) and cached
 		// by it, at the step's rows -- the decode kernel, a batched or ragged
 		// twin, the split with its reduction, the residual or gate epilogue.
-		genv.form = func(op *devOp) {
+		// form runs a former's launch for op: called directly, never stored,
+		// so it costs a warm step nothing.
+		form := func(op *devOp) {
 			o := *op
 			var m mv
 			var r *resident
@@ -1132,7 +1129,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					// tensor-core one) takes the bias op's place.
 					var bias backend.Buf
 					var next *devOp
-					if j := genv.idx + 1; j < len(prog.ops) && prog.ops[j].Kind == dkExpertBias && prog.ops[j].In[0] == o.Out[0] {
+					if j := genIdx + 1; j < len(prog.ops) && prog.ops[j].Kind == dkExpertBias && prog.ops[j].In[0] == o.Out[0] {
 						next = &prog.ops[j]
 						bias = next.V
 					}
@@ -1748,9 +1745,22 @@ func (g *devTier) layersSession(s backend.Session) {
 			// block's last add stays with the executor where the next
 			// block's norm may fold it (foldAddNorm).
 			if len(o.Gen) != 0 && !(o.Kind == dkAdd && first+oi == len(prog.ops)-1 && prog.f16 && prog.slots[o.Out[0]] == slotX) {
-				genv.cs, genv.qOff, genv.kOff, genv.idx = rcs, qOff, kro, first+oi
-				genv.moe, genv.gr = rowsMoE, &gr
-				runGen(lc, &o, R, bs.rows, at, q8At, &genv)
+				if o.Gen[0].former != 0 {
+					genIdx = first + oi
+					form(&o)
+				} else {
+					gst.cs, gst.qOff, gst.kOff = rcs, qOff, kro
+					gst.moe, gst.cols = rowsMoE, gr.cols
+					if mg != nil {
+						gst.colPair = mg.colPair
+					}
+					if o.W >= 0 && o.W < len(l.rs) && *l.rs[o.W] != nil {
+						r := *l.rs[o.W]
+						gst.qs, gst.d, gst.sc, gst.mbias = r.qs, dOf(r), r.sc, (*l.ms[o.W]).bias
+					}
+					gst.a, gst.ax = bs.a, bs.ax
+					runGen(lc, &o, R, bs.rows, &buf, &gst)
+				}
 				switch o.Kind {
 				case dkQuant:
 					// A binary16 GEMM converts the float row the quantize read.

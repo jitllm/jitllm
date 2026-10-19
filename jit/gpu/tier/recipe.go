@@ -309,10 +309,21 @@ func (g *devTier) tuneFFN() {
 		if !kernels.Gate2Exact(g.dev.API()) {
 			forms = []FFNForm{FFNTwo, FFNGate2}
 		}
-		if ls[0].mvu.gate2In != nil {
+		// A form is timed over every block of the key, so it is offered only
+		// where every one has it: a block built without it (a dense lead, a
+		// shape its kernel refused) is a nil kernel under the arm.
+		every := func(has func(l *layer) bool) bool {
+			for _, l := range ls {
+				if !has(l) {
+					return false
+				}
+			}
+			return true
+		}
+		if every(func(l *layer) bool { return l.mvu.gate2In != nil }) {
 			forms = append(forms, FFNGate2In)
 		}
-		if ls[0].gu != nil && ls[0].guDown != nil {
+		if every(func(l *layer) bool { return l.gu != nil && l.guDown != nil }) {
 			forms = append(forms, FFNGU)
 		}
 		arms := make([]func(backend.Session) error, len(forms))

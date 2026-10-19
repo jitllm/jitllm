@@ -543,7 +543,7 @@ func rwMatVecGate(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq
 			continue
 		}
 		am := p.ops[j]
-		p.replace(i, j, devOp{Kind: dkMatVecGate, Src: cat(o.Src, am.Src), In: []devVal{o.In[0], am.In[0]}, Out: am.Out, Role: o.Role, W: o.W})
+		p.replace(i, j, devOp{Kind: dkMatVecGate, Src: cat(o.Src, am.Src), In: []devVal{o.In[0], am.In[0]}, Out: am.Out, Role: o.Role, W: o.W, Act: am.Act})
 		return true
 	}
 	return false

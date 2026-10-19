@@ -406,7 +406,32 @@ func Gate2Exact(api string) bool { return api == "ptx" }
 // The IR has no conditional execution outside a loop, so a thread past the
 // last row is clamped to it with Min: it recomputes that row and writes the
 // same value to the same address, which is benign.
-func MatVec(s MatVecShape) (*ir.Kernel, error) { return matVec(s, nil) }
+func MatVec(s MatVecShape) (*ir.Kernel, error) { return matVec(s, nil, nil) }
+
+// Epilogue is an elementwise chain a matvec applies to each finished output
+// before its store, composed from the ops that read the output (a bias, a
+// residual, a gate, a clamp...) rather than taken from MatVecShape's menu.
+// Params declares its buffers after the matvec's own; Apply maps the output
+// v, at element index at of the output (and row, its row of Rows), to the
+// value stored, emitting any further stores of its own.
+type Epilogue interface {
+	Params(b *ir.Builder)
+	Apply(b *ir.Builder, v, at, row ir.Value) ir.Value
+}
+
+// MatVecEpi is MatVec whose every output passes through e. It is for a dense
+// matvec that reduces in one launch -- no split partial buffer, one expert,
+// no menu epilogue of its own -- which is every shape the tier's decode
+// matvec takes when its split reduces in the group.
+func MatVecEpi(s MatVecShape, e Epilogue) (*ir.Kernel, error) {
+	if e == nil {
+		return MatVec(s)
+	}
+	if s.Split > 1 && !s.GroupSplit || s.Experts > 1 || s.Slots > 1 || s.Bias || s.Gate || s.Gate2 || s.PickOf > 0 {
+		return nil, fmt.Errorf("kernels: MatVecEpi: a shape that reduces across launches or carries its own epilogue")
+	}
+	return matVec(s, nil, e)
+}
 
 // segCtx is where matVec emits when it is one SEGMENT of a MatVecSegments
 // kernel instead of a kernel of its own: the shared builder, a suffix that keeps
@@ -422,7 +447,7 @@ type segCtx struct {
 	hasSh   bool
 }
 
-func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
+func matVec(s MatVecShape, into *segCtx, epi Epilogue) (*ir.Kernel, error) {
 	// NTok reuses the slot machinery: n token columns are exactly SlotAct's
 	// "each slot reads its own activation vector at stride K", and one thread
 	// carries Tok of them.
@@ -677,6 +702,9 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 	var pGate ir.Value
 	if s.Gate {
 		pGate = b.Param("pGate"+suffix, ir.F32)
+	}
+	if epi != nil {
+		epi.Params(b)
 	}
 	// Gate2: the gate's weight, the same format and shape as up's (pQS).
 	var pQS2, pD2, pSC2 ir.Value
@@ -1376,6 +1404,11 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 				return done()
 			}
 			// Token t is t*Rows further along the output, as below.
+			if epi != nil {
+				at := b.Add(ir.U32, orow, b.Const(ir.U32, int64(t*s.Rows)))
+				b.Store(pOut, at, epi.Apply(b, sum, at, orow), 0)
+				continue
+			}
 			b.Store(pOut, orow, sum, int64(t*s.Rows))
 		}
 		return done()
@@ -1401,6 +1434,12 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 			}
 			// Token t is t*Rows further along the output; tile row j is the next
 			// row, so the tile's outputs are contiguous like its inputs.
+			if epi != nil {
+				at := b.Add(ir.U32, outIdx, b.Const(ir.U32, int64(t*s.Rows)+tileOff(j)))
+				row := b.Add(ir.U32, outIdx, b.Const(ir.U32, tileOff(j)))
+				b.Store(pOut, at, epi.Apply(b, a, at, row), 0)
+				continue
+			}
 			b.Store(pOut, outIdx, a, int64(t*s.Rows)+tileOff(j))
 		}
 	}
@@ -1479,7 +1518,7 @@ func MatVecSegmentsIn(segs []MatVecShape, split int, grp bool, in ActIn) (*ir.Ke
 		seg := ctx
 		seg.suffix = fmt.Sprintf("%d", i)
 		seg.cta = func() ir.Value { return b.Sub(ir.U32, b.CTAID(), lo) }
-		if _, err := matVec(sg, &seg); err != nil {
+		if _, err := matVec(sg, &seg, nil); err != nil {
 			return nil, fmt.Errorf("kernels: MatVecSegments: segment %d: %w", i, err)
 		}
 		b.EndLoop()

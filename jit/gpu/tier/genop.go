@@ -44,8 +44,14 @@ const (
 	gaQOff    // the rows' offsets into q's table rows
 	gaKOff    // the rows' offsets into k's
 	gaColPair // over rows, each sorted column's (token, slot) pair
-	gaQ8A     // an int8 output's values
-	gaQ8X     // its scales and sums
+	gaWQS     // the op's weight's payload, scale and scale-of-scale planes
+	gaWD
+	gaWSC
+	gaOpA   // the int8 operand the op's matvec reads, values
+	gaOpAX  // and scales
+	gaMBias // the weight's own bias (mv.bias)
+	gaQ8A   // an int8 output's values
+	gaQ8X   // its scales and sums
 )
 
 // genLaunch is one generated launch: threads for a flat launch, or groups of
@@ -59,7 +65,7 @@ type genLaunch struct {
 	// q8 is which output holds the op's int8 value (gaQ8A and gaQ8X).
 	q8 uint8
 	// former, where set, runs the launch through a kernel former's own
-	// launcher (genEnv.form) rather than one kernel: the matvec's.
+	// launcher (the executor's form) rather than one kernel: the matvec's.
 	former uint8
 	// pairs launches a group a (token, expert) pair of the step, not a
 	// group a token.
@@ -204,8 +210,14 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 	// The formers take their ops whatever their values' layouts: a former
 	// lays out its own rows (a bank's pairs, a history's pages).
 	switch o.Kind {
-	case dkMatVec, dkMatVecRes, dkMatVecGate, dkExpertMatVec, dkExpertMatVecE, dkQKV, dkQKVGemm, dkRouterLogits,
-		dkResIn, dkQKVSep:
+	case dkMatVec, dkMatVecRes, dkMatVecGate:
+		if rows == 1 {
+			if l := g.genMatVec(o, prog, bs); l != nil {
+				return l
+			}
+		}
+		return []genLaunch{{former: formMatVec}}
+	case dkExpertMatVec, dkExpertMatVecE, dkQKV, dkQKVGemm, dkRouterLogits, dkResIn, dkQKVSep:
 		// The matvec former: the weight's (or bank's, or the fused q/k/v
 		// grid's) kernel, emitted from its shape.
 		return []genLaunch{{former: formMatVec}}
@@ -518,31 +530,33 @@ func (g *devTier) genTemplate(o *devOp, prog *devProgram, bs *blockScratch, rows
 // runGen runs op o's generated launches for R rows, its buffers resolved by
 // at. A launch's thread count was generated for the variant's rows; a step
 // of fewer runs fewer, the kernels clamping as every row kernel does.
-// genEnv is what a generated launch reads that is not a value of its
-// program: the call's tables, chosen per block and per step.
-type genEnv struct {
+// genState is what a generated launch reads that is not a value of its
+// program, resolved by the executor for the op about to run: the call's
+// tables, the op's weight planes and operand, the step's pair count. Data
+// only, no functions: it lives on the executor's stack and a warm step
+// allocates nothing for it.
+type genState struct {
 	bs             *blockScratch
+	slots          []devSlot
 	cs, qOff, kOff backend.Buf
-	// form runs a former's launch for an op (the matvec former's).
-	form func(o *devOp)
-	// idx is the op's place in its program, which a former may read ahead
-	// of (an expert matvec folding the bias after it).
-	idx int
-	// moe says the step's expert pairs are the grouped run's sorted
-	// columns (gr), not the selection's (bs.nUsed a row).
-	moe bool
-	gr  *groupRun
+	// The op's weight: its payload, scale (the float row for a float
+	// format) and scale-of-scale planes, its own bias, and the int8 operand
+	// its matvec reads.
+	qs, d, sc, mbias backend.Buf
+	a, ax            backend.Buf
+	// The step's (token, expert) pairs: the grouped run's sorted columns
+	// over rows (moe), else the selection's.
+	moe     bool
+	cols    int
+	colPair backend.Buf
 }
 
-func runGen(lc *launcher, o *devOp, R, rows int, at func(devVal) backend.Buf, q8 func(devVal) (backend.Buf, backend.Buf), env *genEnv) {
-	bs := env.bs
+func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st *genState) {
+	bs := st.bs
+	at := func(v devVal) backend.Buf { return buf[st.slots[v]] }
 	var bufs [8]backend.Buf
 	for i := range o.Gen {
 		l := &o.Gen[i]
-		if l.former != 0 {
-			env.form(o)
-			continue
-		}
 		for j := 0; j < int(l.n); j++ {
 			switch a := l.args[j]; a {
 			case gaIn0, gaIn1, gaIn2, gaIn3:
@@ -562,17 +576,29 @@ func runGen(lc *launcher, o *devOp, R, rows int, at func(devVal) backend.Buf, q8
 			case gaOnes:
 				bufs[j] = bs.hdOnes
 			case gaCS:
-				bufs[j] = env.cs
+				bufs[j] = st.cs
 			case gaQOff:
-				bufs[j] = env.qOff
+				bufs[j] = st.qOff
 			case gaKOff:
-				bufs[j] = env.kOff
+				bufs[j] = st.kOff
 			case gaColPair:
-				bufs[j] = env.gr.m.colPair
+				bufs[j] = st.colPair
+			case gaWQS:
+				bufs[j] = st.qs
+			case gaWD:
+				bufs[j] = st.d
+			case gaWSC:
+				bufs[j] = st.sc
+			case gaOpA:
+				bufs[j] = st.a
+			case gaOpAX:
+				bufs[j] = st.ax
+			case gaMBias:
+				bufs[j] = st.mbias
 			case gaQ8A:
-				bufs[j], _ = q8(o.Out[l.q8])
+				bufs[j], _ = int8Of(st, o.Out[l.q8])
 			case gaQ8X:
-				_, bufs[j] = q8(o.Out[l.q8])
+				_, bufs[j] = int8Of(st, o.Out[l.q8])
 			}
 		}
 		threads := l.threads
@@ -582,8 +608,8 @@ func runGen(lc *launcher, o *devOp, R, rows int, at func(devVal) backend.Buf, q8
 		if l.width != 0 {
 			groups := l.groups
 			switch {
-			case l.pairs && env.moe:
-				groups = env.gr.cols
+			case l.pairs && st.moe:
+				groups = st.cols
 			case l.pairs:
 				groups = bs.nUsed * R
 			case rows > 0 && R < rows:
@@ -596,6 +622,15 @@ func runGen(lc *launcher, o *devOp, R, rows int, at func(devVal) backend.Buf, q8
 		}
 		lc.la(l.k, threads, bufs[:l.n]...)
 	}
+}
+
+// int8Of is an int8 value's two buffers: its slot's own pair, or the
+// block's operand.
+func int8Of(st *genState, v devVal) (backend.Buf, backend.Buf) {
+	if a, ax, ok := q8Pair(st.bs, st.slots[v]); ok {
+		return a, ax
+	}
+	return st.bs.a, st.bs.ax
 }
 
 // normParts is a row norm's partial count for width w over rows rows: the
@@ -669,4 +704,109 @@ func (g *devTier) genPairs(o *devOp, prog *devProgram, bs *blockScratch, rows in
 	l := genLaunch{k: k.k, groups: rb.r.Rows, width: k.group, n: uint8(len(rb.args)), q8: q8, pairs: true}
 	copy(l.args[:], rb.args)
 	return []genLaunch{l}
+}
+
+// genMatVec is a decode matvec composed with its epilogue: the weight's
+// kernel at the schedule its tuning chose (mv: split, rows per thread, the
+// in-group reduction) and, applied to each output before the store, the
+// fragments of the ops the program fused into it -- the weight's bias, a
+// residual added (matvec_res), act(gate) times the output (matvec_gate).
+// nil where the shape reduces across launches (a split into a partial plane),
+// where the table split swaps the kernel, or where it reads an operand of its
+// own: the former runs those.
+func (g *devTier) genMatVec(o *devOp, prog *devProgram, bs *blockScratch) []genLaunch {
+	l := g.curLayer
+	if l == nil || o.W < 0 || o.W >= len(l.ms) || *l.rs[o.W] == nil {
+		return nil
+	}
+	m := *l.ms[o.W]
+	if m.kern == nil || m.split > 1 && !m.group || m.experts > 1 || m.slots > 0 || m.pad || g.TableSplit && m.alt != nil {
+		return nil
+	}
+	if _, _, own := q8Pair(bs, prog.slots[o.In[0]]); own {
+		return nil
+	}
+	ep := &compose.Row{Width: m.rows, Rows: 1}
+	var args []genArg
+	buf := func(k compose.BufKind, a genArg) int {
+		args = append(args, a)
+		return ep.Buf(k)
+	}
+	v := ep.Add(compose.Node{Kind: compose.NInput})
+	if m.bias != nil {
+		v = ep.Bin(compose.OpAdd, v, ep.Load(buf(compose.BufVec, gaMBias)))
+	}
+	switch o.Kind {
+	case dkMatVecRes:
+		v = ep.Bin(compose.OpAdd, v, ep.Load(buf(compose.BufRow, gaIn1)))
+	case dkMatVecGate:
+		a, ok := kernAct(o.Act)
+		if !ok {
+			return nil
+		}
+		v = ep.Bin(compose.OpMul, ep.Act(a, ep.Load(buf(compose.BufRow, gaIn1))), v)
+	}
+	e := &compose.Epi{G: ep, Out: v}
+	if e.Check() != nil {
+		return nil
+	}
+	rowt := max(m.rowt, 1)
+	s := kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Split: m.split, Rowt: rowt, GroupSplit: m.group}
+	k, width := g.mvEpiKern(s, e)
+	if k == nil {
+		return nil
+	}
+	n := m.rows * max(m.split, 1)
+	if rowt > 1 {
+		n /= rowt
+	}
+	gl := genLaunch{k: k, groups: (n + width - 1) / width, width: width,
+		args: [8]genArg{gaWQS, gaWD, gaWSC, gaOpA, gaOpAX, gaOut0}, n: 6}
+	for _, a := range args {
+		gl.args[gl.n] = a
+		gl.n++
+	}
+	return []genLaunch{gl}
+}
+
+// mvEpiEntry is a cached composed matvec and what it was formed from.
+type mvEpiEntry struct {
+	shape kernels.MatVecShape
+	enc   []uint32
+	k     backend.Kernel
+	width int
+}
+
+// mvEpiKern is the matvec of shape s composed with epilogue e, formed once a
+// device and structure, and its workgroup width. Callers hold g.mu.
+func (g *devTier) mvEpiKern(s kernels.MatVecShape, e *compose.Epi) (backend.Kernel, int) {
+	enc := e.Encode()
+	key := compose.KeyOf(append(enc, uint32(s.T), uint32(s.K), uint32(s.Rows), uint32(s.Split), uint32(s.Rowt), b2u(s.GroupSplit)))
+	for _, x := range g.mvEpiK[key] {
+		if x.shape == s && slices.Equal(x.enc, enc) {
+			return x.k, x.width
+		}
+	}
+	ent := mvEpiEntry{shape: s, enc: enc}
+	ker, err := kernels.MatVecEpi(s, e)
+	if err == nil {
+		ent.width = ker.Group[0]
+		ent.k, err = g.dev.Compile(ker)
+	}
+	if err != nil {
+		g.LastErr = fmt.Sprintf("a composed matvec: %v", err)
+		ent.k = nil
+	}
+	if g.mvEpiK == nil {
+		g.mvEpiK = map[compose.Key][]mvEpiEntry{}
+	}
+	g.mvEpiK[key] = append(g.mvEpiK[key], ent)
+	return ent.k, ent.width
+}
+
+func b2u(x bool) uint32 {
+	if x {
+		return 1
+	}
+	return 0
 }

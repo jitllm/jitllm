@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
+	"math/rand"
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/compose"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
@@ -248,6 +250,111 @@ func TestComposedRotaryMatchesRoPERows(t *testing.T) {
 				}
 				tc.Close()
 				cc.Close()
+			}
+		})
+	}
+}
+
+// TestMatVecEpilogueMatchesTheMenu holds a matvec whose output passes through
+// a composed epilogue (compose.Epi) to the menu form it replaces, bit for
+// bit: a residual added (the menu's Bias slot carrying the residual) and
+// silu(gate)*out (the menu's Gate), over Q8_0 and binary16 weights, unsplit and
+// split in the group. A residual subtracted in the epilogue must part.
+func TestMatVecEpilogueMatchesTheMenu(t *testing.T) {
+	gpuLock(t)
+	devs := backend.Open()
+	if len(devs) == 0 {
+		t.Skip("no GPU backend on this host")
+	}
+	const rows, k = 96, 512
+	rng := rand.New(rand.NewSource(7))
+	acts := randActs(k, rng)
+	resid := randActs(rows, rng)
+	gate := randActs(rows, rng)
+	epi := func(op compose.Op, gated bool) *compose.Epi {
+		g := &compose.Row{Width: rows, Rows: 1}
+		in := g.Add(compose.Node{Kind: compose.NInput})
+		other := g.Load(g.Buf(compose.BufRow))
+		if gated {
+			return &compose.Epi{G: g, Out: g.Bin(compose.OpMul, g.Act(kernels.ActSiLU, other), in)}
+		}
+		return &compose.Epi{G: g, Out: g.Bin(op, in, other)}
+	}
+	for _, d := range devs {
+		defer d.Close()
+		t.Run(d.API(), func(t *testing.T) {
+			g := newGPU(t, d)
+			defer g.free()
+			for _, q := range []kernels.Quant{kernels.Q8_0, kernels.Float16} {
+				qs, dw, sc, err := kernels.PackWeights(q, randWeights(q, rows, k, rng), rows, k)
+				if err != nil {
+					t.Fatal(err)
+				}
+				bQS, bD, bSC := g.up(u32bytes(qs)), g.up(u32bytes(dw)), g.up(u32bytes(sc))
+				bX := g.up(f32bytes(acts))
+				// The int8 operand, quantized on the device as a step does.
+				bA, bAX := g.up(make([]byte, k)), g.up(make([]byte, k/32*3*4))
+				qk, err := kernels.Quantize(k, 32)
+				if err != nil {
+					t.Fatal(err)
+				}
+				qc, err := d.Compile(qk)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := qc.Launch((kernels.QuantizeThreads(k/32)+127)/128, 128, bX, bA, bAX); err != nil {
+					t.Fatal(err)
+				}
+				qc.Close()
+				dArg := bD
+				if kernels.IsFloat(q) {
+					dArg = bX // a float matvec reads the float row in the scale slot
+				}
+				for _, grp := range []int{1, 4} {
+					s := kernels.MatVecShape{T: q, K: k, Rows: rows, Split: grp, GroupSplit: grp > 1}
+					width := 128
+					if grp > 1 {
+						width = kernels.GroupSplitWidth(grp)
+					}
+					launch := func(ker *ir.Kernel, extra ...backend.Buf) []byte {
+						c, err := d.Compile(ker)
+						if err != nil {
+							t.Fatalf("%v split %d: compile: %v", q, grp, err)
+						}
+						defer c.Close()
+						out := g.up(make([]byte, rows*4))
+						args := append([]backend.Buf{bQS, dArg, bSC, bA, bAX, out}, extra...)
+						if err := c.Launch((rows*grp+width-1)/width, width, args...); err != nil {
+							t.Fatal(err)
+						}
+						raw := make([]byte, rows*4)
+						if err := out.Read(raw); err != nil {
+							t.Fatal(err)
+						}
+						return raw
+					}
+					build := func(s kernels.MatVecShape, e kernels.Epilogue) *ir.Kernel {
+						ker, err := kernels.MatVecEpi(s, e)
+						if err != nil {
+							t.Fatalf("%v split %d: %v", q, grp, err)
+						}
+						return ker
+					}
+					sb, sg := s, s
+					sb.Bias = true
+					sg.Gate, sg.GateAct = true, kernels.ActSiLU
+					menuRes := build(sb, nil)
+					menuGate := build(sg, nil)
+					if want, got := launch(menuRes, g.up(f32bytes(resid))), launch(build(s, epi(compose.OpAdd, false)), g.up(f32bytes(resid))); !bytes.Equal(got, want) {
+						t.Errorf("%v split %d: the composed residual parts from the menu's", q, grp)
+					}
+					if want, got := launch(menuGate, g.up(f32bytes(gate))), launch(build(s, epi(0, true)), g.up(f32bytes(gate))); !bytes.Equal(got, want) {
+						t.Errorf("%v split %d: the composed gate parts from the menu's", q, grp)
+					}
+					if bad := launch(build(s, epi(compose.OpSub, false)), g.up(f32bytes(resid))); bytes.Equal(bad, launch(menuRes, g.up(f32bytes(resid)))) {
+						t.Errorf("%v split %d: a subtracted residual matched: the gate cannot see the epilogue", q, grp)
+					}
+				}
 			}
 		})
 	}

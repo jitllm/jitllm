@@ -2055,6 +2055,10 @@ type devShared struct {
 	// rowK is the composed row groups' kernels by structure and schedule
 	// (genop.go).
 	rowK map[compose.Key][]rowEntry
+	// mvEpiK is the matvecs composed with epilogues (genop.go).
+	mvEpiK map[compose.Key][]mvEpiEntry
+	// curLayer is the block whose program is being generated.
+	curLayer *layer
 	conv convScratch
 	// dh is Clef's decision head on this device (dechead.go), and ClefHeads
 	// how many requests it has answered.
@@ -2900,6 +2904,13 @@ func (g *devTier) Close() {
 	for _, k := range g.convK {
 		if k != nil {
 			g.closeKern(k)
+		}
+	}
+	for _, es := range g.mvEpiK {
+		for _, e := range es {
+			if e.k != nil {
+				g.closeKern(e.k)
+			}
 		}
 	}
 	for _, es := range g.rowK {

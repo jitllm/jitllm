@@ -69,6 +69,7 @@ const (
 	NUBinary                 // Op (Add, Sub, Mul, Div, Rem, Min) of indices A and B
 	NLess                    // A < B, of indices: a condition
 	NSelect                  // C ? A : B, of floats or of indices
+	NInput                   // a former's own output at the element (a matvec's), in an epilogue
 )
 
 // Op is a unary or binary map.
