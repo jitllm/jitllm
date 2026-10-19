@@ -26,6 +26,7 @@ import (
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
@@ -1081,6 +1082,12 @@ type Stats struct {
 	// (devprog.go) rather than through the block encoder; a replayed
 	// recording encodes none, so a decode counts its recording's blocks once.
 	ProgBlocks int
+	// GenOps counts program ops that ran their generated launches
+	// (genop.go) rather than an executor case.
+	GenOps int
+	// ProgOps counts every program op a step ran: GenOps reaching it is
+	// every op compiled.
+	ProgOps int
 	// PagedPrefillLaunches counts layer attentions of a prefill chunk that ran
 	// the paged prefill kernels (pagedprefill.go) rather than FlashDecodeKV.
 	PagedPrefillLaunches int
@@ -1514,6 +1521,8 @@ func (s *Stats) add(o Stats) {
 	s.ActInKept += o.ActInKept
 	s.PagedLaunches += o.PagedLaunches
 	s.ProgBlocks += o.ProgBlocks
+	s.GenOps += o.GenOps
+	s.ProgOps += o.ProgOps
 	s.PagedPrefillLaunches += o.PagedPrefillLaunches
 	s.PagedStagedLaunches += o.PagedStagedLaunches
 	s.KVEvictions += o.KVEvictions
@@ -2040,7 +2049,10 @@ type devShared struct {
 	// convK, conv and convN are the convolutional blocks' kernels, their
 	// shared scratch and how many hold it (conv.go).
 	convK map[convKey]backend.Kernel
-	conv  convScratch
+	// rowK is the composed row groups' kernels by structure and schedule
+	// (genop.go).
+	rowK map[compose.Key][]rowEntry
+	conv convScratch
 	// dh is Clef's decision head on this device (dechead.go), and ClefHeads
 	// how many requests it has answered.
 	dh        dhState
@@ -2885,6 +2897,13 @@ func (g *devTier) Close() {
 	for _, k := range g.convK {
 		if k != nil {
 			g.closeKern(k)
+		}
+	}
+	for _, es := range g.rowK {
+		for _, e := range es {
+			if e.rk.k != nil {
+				g.closeKern(e.rk.k)
+			}
 		}
 	}
 	for _, s := range g.qkvK {

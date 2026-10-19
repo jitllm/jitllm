@@ -27,6 +27,8 @@ func TestDeviceProgramCoverage(t *testing.T) {
 	paths, _ := filepath.Glob(filepath.Join(testmodels.Dir(), "synth-*.jlm"))
 	reasons := map[string][]string{}
 	covered, tried := 0, 0
+	// kinds is every program op's kind across the fixtures: [generated, not].
+	kinds := map[string]*[2]int{}
 	for _, p := range paths {
 		name := strings.TrimSuffix(filepath.Base(p), ".jlm")
 		if strings.HasSuffix(name, "-vlm") || strings.Contains(name, "mmproj") {
@@ -56,6 +58,12 @@ func TestDeviceProgramCoverage(t *testing.T) {
 			// the fixture's reason.
 			why := ""
 			for _, r := range s.DeviceBlocks() {
+				for li := r[0]; li < r[1]; li++ {
+					prog, _ := g.BlockProgram(li)
+					countKinds(prog, kinds)
+				}
+			}
+			for _, r := range s.DeviceBlocks() {
 				for li := r[0]; li < r[1] && why == ""; li++ {
 					prog, w := g.BlockProgram(li)
 					if c := g.BlockComposite(li); prog != "" && c != "" {
@@ -82,6 +90,7 @@ func TestDeviceProgramCoverage(t *testing.T) {
 	}
 	slices.SortFunc(keys, func(a, b string) int { return cmp.Compare(len(reasons[b]), len(reasons[a])) })
 	t.Logf("%d of %d fixtures run every device block as a device program of primitives", covered, tried)
+	reportKinds(t, kinds)
 	for _, k := range keys {
 		t.Logf("%3d  %s: %s", len(reasons[k]), k, strings.Join(reasons[k], " "))
 	}
@@ -223,5 +232,46 @@ func TestDeviceProgramCoverageBeyondText(t *testing.T) {
 	t.Logf("%d of %d towers and encoders run every device block as a device program of primitives", covered, tried)
 	for _, k := range keys {
 		t.Logf("%3d  %s: %s", len(reasons[k]), k, strings.Join(reasons[k], " "))
+	}
+}
+
+// countKinds adds a block program's ops to kinds by kind: generated (a
+// kernel composed from the op, genop.go) or not.
+func countKinds(prog string, kinds map[string]*[2]int) {
+	for _, line := range strings.Split(prog, "\n") {
+		i, j := strings.Index(line, " = "), strings.Index(line, "(")
+		if i < 0 || j < i {
+			continue
+		}
+		k := line[i+3 : j]
+		c := kinds[k]
+		if c == nil {
+			c = &[2]int{}
+			kinds[k] = c
+		}
+		if strings.Contains(line, "generated:") {
+			c[0]++
+		} else {
+			c[1]++
+		}
+	}
+}
+
+// reportKinds logs every op kind with ops not generated, most first: the
+// codegen work list.
+func reportKinds(t *testing.T, kinds map[string]*[2]int) {
+	names := make([]string, 0, len(kinds))
+	gen, all := 0, 0
+	for k, c := range kinds {
+		names = append(names, k)
+		gen += c[0]
+		all += c[0] + c[1]
+	}
+	slices.SortFunc(names, func(a, b string) int { return cmp.Compare(kinds[b][1], kinds[a][1]) })
+	t.Logf("program ops generated: %d of %d", gen, all)
+	for _, k := range names {
+		if c := kinds[k]; c[1] > 0 {
+			t.Logf("  %-22s %4d not generated, %4d generated", k, c[1], c[0])
+		}
 	}
 }

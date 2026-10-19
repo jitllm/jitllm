@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/jitllm/jitllm/engine/nn"
@@ -118,14 +119,11 @@ func (d *Decider) clefOnDevice(p *clefPrompt, out []float32) (bool, error) {
 		}
 	}
 	if !dev.ClefHead(d.m.clefDevHead(), in, out[:no]) {
-		// A device with no room for the head declines it as it declines a
-		// block (clefDevWhy says why): the host's generated head runs it,
-		// and the every-block gate holds the device to running it.
-		d.clefDevWhy = "no reason given"
+		why := "no reason given"
 		if e, ok := s.ld.(nn.ErrReporter); ok && e.Err() != "" {
-			d.clefDevWhy = e.Err()
+			why = e.Err()
 		}
-		return false, nil
+		return false, fmt.Errorf("model: the device holding the head declined Clef's head: %s", why)
 	}
 	d.clefDevRuns++
 	return true, nil

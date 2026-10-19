@@ -348,6 +348,25 @@ func (g *devTier) reclaim(n uint64, cur, lo, hi int) bool {
 	return true
 }
 
+// reclaimFor pages blocks out until n bytes fit, for something that is not a
+// block (a decision head): every paged block is a candidate, the one used
+// furthest away first. False is a card that holds nothing it can give back.
+// Callers hold g.mu.
+func (g *devTier) reclaimFor(n uint64) bool {
+	for !g.room(n) {
+		v := g.victim(-1, 0, len(g.layers), false)
+		if v < 0 {
+			if !g.victimHeld(-1, false) {
+				return false
+			}
+			g.idle.Wait()
+			continue
+		}
+		g.pageOut(v)
+	}
+	return true
+}
+
 // victimHeld reports a block victim would take but for a submission reading
 // it (page.uses). Callers hold g.mu.
 func (g *devTier) victimHeld(cur int, streamed bool) bool {

@@ -84,8 +84,13 @@ func (g *devTier) dhUpload(h *nn.ClefHead) (*dhHead, bool) {
 	for _, v := range all {
 		need += uint64(4 * len(v))
 	}
-	if !g.room(need) {
-		g.LastErr = fmt.Sprintf("the decision head needs %d bytes, %d of %d used", need, g.used, g.limit)
+	// The head is the model's, as a block is: a card short of room pages
+	// blocks out for it (they fault back in when next run), and refuses only
+	// when nothing it holds can go.
+	g.kvCompact(need, nil)
+	if !g.room(need) && !g.reclaimFor(need) {
+		g.LastErr = fmt.Sprintf("the decision head needs %d bytes and nothing can be paged out (%d of %d used)",
+			need, g.used, g.limit)
 		return nil, false
 	}
 	r := &dhHead{h: h, bufs: map[*float32]backend.Buf{}}

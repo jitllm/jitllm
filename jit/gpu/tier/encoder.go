@@ -870,6 +870,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	// of the kernel the encoder's unfused path takes for it, over the scratch
 	// slot the program assigned its values. A program that attends reads its
 	// history through the block's pages in the device's pool.
+	// the device program's executor begins here (progratchet_test.go)
 	runProg := func(l *layer, li int, prog *devProgram) {
 		pk := bs.pkv
 		var pl *kvLayerPool
@@ -983,6 +984,11 @@ func (g *devTier) layersSession(s backend.Session) {
 			fc.prog, fc.took, fc.err = prog.fused(l, bs, g, R, nseq)
 			fc.qkv, fc.gu, fc.down, fc.dense = fc.prog.forms()
 			fc.bs = bs
+			// Each op's kernels generated from the op, for the scratch's rows;
+			// a build reached from inside a submission takes g.mu (subLock).
+			took := g.subLock()
+			g.genProgram(fc.prog, bs, bs.rows)
+			g.subUnlock(took)
 		}
 		prog = fc.prog
 		l.ran.note(formQKV, uint8(fc.qkv))
@@ -1010,10 +1016,11 @@ func (g *devTier) layersSession(s backend.Session) {
 			}
 			pendX, pendY = nil, nil
 		}
-		qOff := bs.zero
+		qOff, kro := bs.zero, bs.zero
 		if R > 1 {
-			qOff = bs.roff
+			qOff, kro = bs.roff, bs.kroff
 		}
+		genv := genEnv{bs: bs}
 		var sk backend.Buf
 		if p.AttnSinks {
 			if sk = l.sinks; sk == nil {
@@ -1065,9 +1072,36 @@ func (g *devTier) layersSession(s backend.Session) {
 		var gr groupRun
 		skipNext := false
 		at := func(v devVal) backend.Buf { return buf[prog.slots[v]] }
+		// q8At is an int8 value's two buffers: its slot's own pair, or the
+		// block's operand.
+		q8At := func(v devVal) (backend.Buf, backend.Buf) {
+			if a, ax, ok := q8Pair(bs, prog.slots[v]); ok {
+				return a, ax
+			}
+			return bs.a, bs.ax
+		}
 		for oi, o := range prog.ops[first:] {
 			if skipNext {
 				skipNext = false
+				continue
+			}
+			g.ProgOps++
+			// An op with generated launches runs them and nothing else; the
+			// block's last add stays with the executor where the next
+			// block's norm may fold it (foldAddNorm).
+			if len(o.Gen) != 0 && !(o.Kind == dkAdd && first+oi == len(prog.ops)-1 && prog.f16 && prog.slots[o.Out[0]] == slotX) {
+				genv.cs, genv.qOff, genv.kOff = rcs, qOff, kro
+				runGen(lc, &o, R, bs.rows, at, q8At, &genv)
+				switch o.Kind {
+				case dkQuant:
+					// A binary16 GEMM converts the float row the quantize read.
+					fsrc = at(o.In[0])
+				case dkNormQuant, dkActQuant:
+					fsrc = at(o.Out[0])
+				case dkAddNormQuant:
+					fsrc = at(o.Out[1])
+				}
+				g.GenOps++
 				continue
 			}
 			if R > 1 && o.OneRow {
@@ -2411,7 +2445,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			g.recSteps++
 		}
 		g.ProgBlocks++
-	}
+	} // the device program's executor ends here (progratchet_test.go)
 	// emit issues the whole token's launches. It is a closure so the same code
 	// both runs the sequence and records it: one source for both means a graph
 	// cannot differ from the launches it replaces.

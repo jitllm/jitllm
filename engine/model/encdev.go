@@ -417,6 +417,8 @@ func (s *State) encWeights(li int) nn.LayerWeights {
 // has none.
 func (enc *encoder) graphOf(li int) *graph.Graph {
 	switch {
+	case enc == nil:
+		return nil
 	case enc.lf != nil:
 		if li < len(enc.lf.blocks) {
 			return enc.lf.blocks[li].g

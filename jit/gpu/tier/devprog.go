@@ -40,6 +40,7 @@ const (
 	layoutKV                      // the paged KV history
 	layoutTokF16                  // token-major binary16 (kernels.ActF16T)
 	layoutFrag                    // the MMA's m16n8 fragments (kernels.ActF16)
+	layoutPairs                   // one row a (token, selected expert) pair
 )
 
 // devType is a value's type: element, layout and width a row.
@@ -51,7 +52,7 @@ type devType struct {
 
 func (t devType) String() string {
 	e := [...]string{"f32", "q8", "f16", "u32"}[t.Elem]
-	l := [...]string{"row", "kv", "tok", "frag"}[t.Layout]
+	l := [...]string{"row", "kv", "tok", "frag", "pairs"}[t.Layout]
 	return fmt.Sprintf("%s.%s[%d]", e, l, t.Width)
 }
 
@@ -119,6 +120,9 @@ const (
 	dkGatherEntries                  // the window's rows and the visible entries gathered for one attention
 	dkGroupedMatVec                  // a grouped low-rank projection: each group's rows times its own matrix
 	dkClampAt                        // a row clamped to a pair of the block's bounds table
+	dkDWConvRows                     // a depthwise convolution over the call's rows, centred
+	dkAffineRows                     // a per-channel scale and shift over the rows
+	dkRelAttend                      // relative-position self-attention over the call's rows
 	dkScale                          // the block's row times the layer's output scale
 	dkClamp                          // q, k or v clamped to the plan's bound
 	dkSubNorm                        // an inner norm before wo or down, with the quantize it feeds
@@ -325,10 +329,30 @@ const (
 	slotCOut                    // a linear's clamped output
 	slotGC                      // the gate's, clamped
 	slotUC                      // up's, clamped
+	// slotPool0.. are a pool coloured by liveness: a convolution-path
+	// program's values take the first free one (convgraph.go).
+	slotPool0
+	slotPool1
+	slotPool2
+	slotPool3
+	slotPool4
+	slotPool5
+	slotPool6
+	slotPool7
+	slotPool8
+	slotPool9
+	slotPool10
+	slotPool11
+	slotConvIn  // a convolution-path block's input
+	slotConvOut // its output
+	slotConvPos // its positions' table (a second input)
 	numSlots
 )
 
 func (s devSlot) String() string {
+	if s >= slotPool0 && s < slotPool0+numPool {
+		return fmt.Sprintf("pool%d", s-slotPool0)
+	}
 	switch s {
 	case slotX:
 		return "x"
@@ -662,6 +686,12 @@ func (s devSlot) String() string {
 		return "g_clamped"
 	case slotUC:
 		return "u_clamped"
+	case slotConvIn:
+		return "conv_in"
+	case slotConvOut:
+		return "conv_out"
+	case slotConvPos:
+		return "conv_pos"
 	}
 	return ""
 }
@@ -697,6 +727,18 @@ type devOp struct {
 	Staged bool
 	N      int     // K's thread count, where it is not the rows'
 	QS     *qkvSeg // the q/k/v grid's segments (qkv-gemm)
+	// Alpha is an add's scale on its second operand (the graph's), and Act
+	// an activation's kind: what the op's generated kernel is built from.
+	Alpha float64
+	Act   graph.Act
+	// HD is a per-head op's head width (the graph's), and A its first
+	// source graph op's attributes.
+	HD int
+	A  graph.Attrs
+	// Gen is the op's generated launches (genop.go), and GC a constant it
+	// owns (an add's scale), uploaded at admission.
+	Gen []genLaunch
+	GC  backend.Buf
 }
 
 // devProgram is a block's device program.
@@ -748,7 +790,11 @@ func (p *devProgram) String() string {
 		if o.Role != 0 {
 			fmt.Fprintf(&b, ", %s", o.Role)
 		}
-		fmt.Fprintf(&b, ")  ; graph ops %v\n", o.Src)
+		gen := ""
+		if len(o.Gen) != 0 {
+			gen = fmt.Sprintf(", generated: %d launch(es)", len(o.Gen))
+		}
+		fmt.Fprintf(&b, ")  ; graph ops %v%s\n", o.Src, gen)
 	}
 	return b.String()
 }
@@ -757,18 +803,24 @@ func (p *devProgram) String() string {
 // check holds every edge to it.
 func (o devOp) wants(p *devProgram, i int) devType {
 	in := p.vals[o.In[i]]
+	// A selected expert's rows are rows to every elementwise and row kind:
+	// what the pair layout changes is how many there are.
+	row := layoutRow
+	if in.Layout == layoutPairs {
+		row = layoutPairs
+	}
 	if i < len(o.Need) && o.Need[i] != (devType{}) {
 		return o.Need[i]
 	}
 	if p.f16 && (o.Kind == dkMatVec || o.Kind == dkQKV || o.Kind == dkQKVGemm) {
-		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
+		return devType{Elem: elemF32, Layout: row, Width: in.Width}
 	}
 	switch o.Kind {
 	case dkPoolEntries:
 		// Pooling reads the position's history.
 		return devType{Elem: elemF32, Layout: layoutKV, Width: in.Width}
 	case dkRecurrent, dkCopy, dkKVCopy, dkAct, dkQTemp, dkSplitQG, dkGateOut, dkPLESlice, dkRopeKRow, dkScale, dkClamp, dkSubNorm:
-		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
+		return devType{Elem: elemF32, Layout: row, Width: in.Width}
 	case dkExpertMatVec:
 		// The activation, int8; the selection, indices; the float rows the
 		// grouped form sorts and quantizes itself.
@@ -776,7 +828,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		case 1:
 			return devType{Elem: elemU32, Layout: layoutRow, Width: in.Width}
 		case 2:
-			return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
+			return devType{Elem: elemF32, Layout: row, Width: in.Width}
 		}
 		return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
 	case dkExpertMatVecE:
@@ -786,38 +838,39 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		case 1:
 			return devType{Elem: elemU32, Layout: layoutRow, Width: in.Width}
 		}
-		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
+		return devType{Elem: elemF32, Layout: row, Width: in.Width}
 	case dkExpertBias, dkScaleWeights:
 		if i == 1 {
 			return devType{Elem: elemU32, Layout: layoutRow, Width: in.Width}
 		}
-		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
+		return devType{Elem: elemF32, Layout: row, Width: in.Width}
 	case dkSlice, dkView, dkRopeTail, dkLatentWrite, dkConcatHeads, dkLatentAttend, dkConv1d, dkScan, dkGatedNorm, dkMul, dkConvBias, dkSSMNorm,
 		dkStreamRoute, dkStreamPredict, dkStreamCorrect, dkStreamScale, dkStreamFinish, dkResidJoin3, dkGaussTopK,
 		dkStreamNorm, dkStreamGateMix, dkPlaceWeights, dkStreamPlace,
 		dkIdxNorm, dkIdxRope, dkIdxAssemble, dkIdxScore, dkSelectBlocks, dkGatherKV, dkAttendGathered,
 		dkStreamDot, dkGatedVal, dkNGramConv, dkNGramAdd, dkStreamScore, dkStreamWeighted, dkIdxWrite, dkIdxAttendLatent,
 		dkRowBias, dkStreamFlatten, dkFlatNorm, dkMixLogits, dkSinkhorn, dkStreamCollect, dkRowRMS, dkTurn,
-		dkCacheWrite, dkEntryWrite, dkEntrySelect, dkGatherEntries, dkClampAt:
-		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
+		dkCacheWrite, dkEntryWrite, dkEntrySelect, dkGatherEntries, dkClampAt,
+		dkDWConvRows, dkAffineRows, dkRelAttend:
+		return devType{Elem: elemF32, Layout: row, Width: in.Width}
 	case dkExpertFetch, dkGroupByExpert:
 		return devType{Elem: elemU32, Layout: layoutRow, Width: in.Width}
 	case dkRouterLogits, dkRouterBias, dkGroupMask, dkTopK, dkRouteWeights, dkCombine, dkGateLogit, dkGatedAdd:
-		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
+		return devType{Elem: elemF32, Layout: row, Width: in.Width}
 	case dkMatVec, dkQKV, dkGate2:
 		if i > 0 {
-			return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width} // a low-rank operand's float source
+			return devType{Elem: elemF32, Layout: row, Width: in.Width} // a low-rank operand's float source
 		}
 		return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
 	case dkMatVecRes, dkMatVecGate:
 		if i == 0 {
 			return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
 		}
-		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
+		return devType{Elem: elemF32, Layout: row, Width: in.Width}
 	case dkQuant, dkNorm, dkRopeQ, dkAdd, dkActMul, dkKVWrite, dkAttend, dkHeadNorm, dkPostNorm,
 		dkNormQuant, dkAddNorm, dkAddNormQuant, dkActQuant, dkRopeQKV, dkGate2In,
 		dkQKVIn, dkQKVSep, dkResIn, dkFFNIn, dkDownAct, dkNormF16, dkAddNormF16, dkActF16:
-		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
+		return devType{Elem: elemF32, Layout: row, Width: in.Width}
 	}
 	return in
 }
@@ -924,6 +977,9 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 	prog := &devProgram{}
 	ne, qd, kv := p.NEmbd, p.NHead*p.HeadDim, p.KVRow()
 	f32 := func(w int) devType { return devType{Elem: elemF32, Layout: layoutRow, Width: w} }
+	// like is a float value of width w laid out as v is: an elementwise op
+	// keeps its input's rows (a token's, or a selected expert's).
+	like := func(v devVal, w int) devType { return devType{Elem: elemF32, Layout: prog.vals[v].Layout, Width: w} }
 	// The block's row: every stream of it where it carries several.
 	vals := map[graph.ValueID]devVal{g.In[0]: prog.val("x", f32(g.Values[g.In[0]].Width), slotX)}
 	if len(g.In) > 1 && p.PLEDim != 0 {
@@ -1064,7 +1120,8 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 					s = slotKN
 				}
 				out := prog.val(name(0), prog.vals[in(0)], s)
-				prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Role: o.Weight[0].Role})
+				// A whole projection normed at once: one head of its width.
+				prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Role: o.Weight[0].Role, HD: prog.vals[in(0)].Width})
 				vals[o.Out[0]] = out
 				continue
 			default:
@@ -1377,7 +1434,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			}
 			width := g.Values[o.Out[0]].Width
 			a := operand(in(0), i, true)
-			out := prog.val(name(0), f32(width), s)
+			out := prog.val(name(0), devType{Elem: elemF32, Layout: layoutPairs, Width: width}, s)
 			prog.experts = true
 			ix := in(1)
 			if w, ok := weightSel[ix]; ok {
@@ -1385,7 +1442,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			}
 			prog.ops = append(prog.ops, devOp{Kind: dkExpertMatVec, Src: []int{i}, In: []devVal{a, ix, in(0)}, Out: []devVal{out}, Role: role, W: wi})
 			if len(o.Weight) > 1 {
-				b := prog.val(name(0)+".biased", f32(width), sb)
+				b := prog.val(name(0)+".biased", like(out, width), sb)
 				prog.ops = append(prog.ops, devOp{Kind: dkExpertBias, Src: []int{i}, In: []devVal{out, in(1)}, Out: []devVal{b}, Role: o.Weight[1].Role})
 				out = b
 			}
@@ -1777,7 +1834,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 					}
 				}
 				out := prog.val(name(0), prog.vals[in(0)], cs)
-				prog.ops = append(prog.ops, devOp{Kind: dkClampAt, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, N: o.Attr.Offset / 2})
+				prog.ops = append(prog.ops, devOp{Kind: dkClampAt, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, N: o.Attr.Offset / 2, V: l.clampB})
 				vals[o.Out[0]] = out
 				continue
 			}
@@ -1793,7 +1850,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				return nil, "a clamp of neither q, k nor v"
 			}
 			out := prog.val(name(0), prog.vals[in(0)], cs)
-			prog.ops = append(prog.ops, devOp{Kind: dkClamp, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}})
+			prog.ops = append(prog.ops, devOp{Kind: dkClamp, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Alpha: o.Attr.Bound})
 			vals[o.Out[0]] = out
 		case graph.OpScale:
 			// The layer's output scale over the block's row.
@@ -1801,7 +1858,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				return nil, "a scale the program does not lower"
 			}
 			out := prog.val(name(0), f32(ne), slotX)
-			prog.ops = append(prog.ops, devOp{Kind: dkScale, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Staged: true})
+			prog.ops = append(prog.ops, devOp{Kind: dkScale, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Staged: true, V: l.outScale})
 			vals[o.Out[0]] = out
 		case graph.OpSlice:
 			if mla {
@@ -1855,13 +1912,14 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				role = o.Weight[0].Role
 			}
 			src := in(0)
+			hd := o.Attr.HeadDim
 			switch {
 			case role == 0 && o.In[0] == kRot:
 				// A weightless (L2) norm of k after its rotary: a rotation
 				// keeps a head's norm, so it norms k before, and the rotary
 				// still writes the history (the norm then the rotation).
 				out := prog.val(name(0), prog.vals[src], slotKN)
-				prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{src}, Out: []devVal{out}})
+				prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{src}, Out: []devVal{out}, HD: hd})
 				kRot = o.Out[0]
 				vals[o.Out[0]] = out
 				continue
@@ -1875,7 +1933,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 					return nil, "an L2 norm of q not after its rotary"
 				}
 				qn := prog.val(name(0)+".pre", prog.vals[prog.ops[r].In[0]], slotQN)
-				norm := devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{prog.ops[r].In[0]}, Out: []devVal{qn}}
+				norm := devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{prog.ops[r].In[0]}, Out: []devVal{qn}, HD: hd}
 				prog.ops = append(prog.ops[:r], append([]devOp{norm}, prog.ops[r:]...)...)
 				prog.ops[r+1].In[0] = qn
 				vals[o.Out[0]] = src
@@ -1897,7 +1955,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				return nil, "a head norm of neither q nor k"
 			}
 			out := prog.val(name(0), prog.vals[src], s)
-			prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{src}, Out: []devVal{out}, Role: role})
+			prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{src}, Out: []devVal{out}, Role: role, HD: hd})
 			vals[o.Out[0]] = out
 		case graph.OpRope:
 			switch prog.slots[in(0)] {
@@ -2090,7 +2148,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				s = slotX
 			}
 			out := prog.val(name(0), f32(ne), s)
-			prog.ops = append(prog.ops, devOp{Kind: dkAdd, Src: []int{i}, In: []devVal{in(0), in(1)}, Out: []devVal{out}})
+			prog.ops = append(prog.ops, devOp{Kind: dkAdd, Src: []int{i}, In: []devVal{in(0), in(1)}, Out: []devVal{out}, Alpha: o.Attr.Alpha})
 			if home && s != slotX {
 				// The block's only add reads its row: the sum goes to x2 and
 				// is moved home, as no launch reads what it writes (RULE 13).
@@ -2102,8 +2160,8 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			adds++
 		case graph.OpAct:
 			// An ungated FFN: the activation of up's row alone.
-			out := prog.val(name(0), f32(prog.vals[in(0)].Width), actSlot(prog.slots[in(0)]))
-			prog.ops = append(prog.ops, devOp{Kind: dkAct, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}})
+			out := prog.val(name(0), like(in(0), prog.vals[in(0)].Width), actSlot(prog.slots[in(0)]))
+			prog.ops = append(prog.ops, devOp{Kind: dkAct, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Act: o.Attr.Act})
 			vals[o.Out[0]] = out
 		case graph.OpActMul:
 			if o.Attr.Act == graph.ActSigmoid && prog.slots[in(0)] == slotMGate {
@@ -2120,14 +2178,14 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				vals[o.Out[0]] = out
 				continue
 			}
-			out := prog.val(name(0), f32(prog.vals[in(0)].Width), actSlot(prog.slots[in(0)]))
+			out := prog.val(name(0), like(in(0), prog.vals[in(0)].Width), actSlot(prog.slots[in(0)]))
 			ins := []devVal{in(0), in(1)}
 			if s := actSlot(prog.slots[in(0)]); s == slotEAct {
 				for sel := range weightIn {
 					ins = append(ins, routeW[sel])
 				}
 			}
-			prog.ops = append(prog.ops, devOp{Kind: dkActMul, Src: []int{i}, In: ins, Out: []devVal{out}})
+			prog.ops = append(prog.ops, devOp{Kind: dkActMul, Src: []int{i}, In: ins, Out: []devVal{out}, Act: o.Attr.Act})
 			vals[o.Out[0]] = out
 		}
 	}
@@ -2205,6 +2263,13 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 	}
 	if err := prog.check(); err != nil {
 		return nil, err.Error()
+	}
+	// Each op carries its first source graph op's attributes: what its
+	// generated kernel is built from (genop.go).
+	for i := range prog.ops {
+		if src := prog.ops[i].Src; len(src) > 0 && src[0] < len(g.Ops) {
+			prog.ops[i].A = g.Ops[src[0]].Attr
+		}
 	}
 	return prog, ""
 }

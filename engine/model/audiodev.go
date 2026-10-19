@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // The audio tower's blocks on a device: each FastConformer block is one
@@ -68,6 +69,7 @@ func (s *State) audPlan(li int) *nn.LayerPlan {
 	r := a.audioMaxRows()
 	eps := float64(cf.Eps)
 	return &nn.LayerPlan{
+		Graph: a.graphs[li-s.m.audioFirst()],
 		Model: s.m.id, NonCausal: true, NEmbd: d, NHead: int(cf.NHead), NKVHead: int(cf.NHead),
 		HeadDim: d / int(cf.NHead), NFFN: int(cf.NFFN), MaxSeq: r, ActWin: s.jit.ActWindow(),
 		RMSEps: float64(cf.Eps), LayerNorm: true,
@@ -94,12 +96,26 @@ func (s *State) audWeights(li int) nn.LayerWeights {
 		FF2Norm: b.ff2N, FF2NormB: b.ff2NB, FF2UpB: b.ff2UB, FF2DownB: b.ff2DB,
 		OutNorm: b.outN, OutNormB: b.outNB, PE: a.audioPE(a.audioMaxRows()),
 	}}
+	cv := w.Conv.Conformer
 	if s.enc.violation == "audio-u-v-swapped" {
 		// The two attention biases change places: the device reads which is
 		// the content term's and which the position term's off the vectors.
-		cv := w.Conv.Conformer
 		cv.U, cv.V = cv.V, cv.U
 	}
+	// By role, for the block's graph: the same slices as the list above.
+	w.Vecs = s.roleVecs(nn.Vector{Role: jlm.RoleAFF1Norm, V: cv.FF1Norm}, nn.Vector{Role: jlm.RoleAFF1NormB, V: cv.FF1NormB},
+		nn.Vector{Role: jlm.RoleAFF1UpB, V: cv.FF1UpB}, nn.Vector{Role: jlm.RoleAFF1DownB, V: cv.FF1DownB},
+		nn.Vector{Role: jlm.RoleAAttnNorm, V: cv.AttnNorm}, nn.Vector{Role: jlm.RoleAAttnNormB, V: cv.AttnNormB},
+		nn.Vector{Role: jlm.RoleAQB, V: cv.QB}, nn.Vector{Role: jlm.RoleAKB, V: cv.KB},
+		nn.Vector{Role: jlm.RoleAVB, V: cv.VB}, nn.Vector{Role: jlm.RoleAOutB, V: cv.OB},
+		nn.Vector{Role: jlm.RoleAPosU, V: cv.U}, nn.Vector{Role: jlm.RoleAPosV, V: cv.V},
+		nn.Vector{Role: jlm.RoleAConvNorm, V: cv.ConvNorm}, nn.Vector{Role: jlm.RoleAConvNormB, V: cv.ConvNormB},
+		nn.Vector{Role: jlm.RoleAGLUValB, V: cv.GLUValB}, nn.Vector{Role: jlm.RoleAGLUGateB, V: cv.GLUGateB},
+		nn.Vector{Role: jlm.RoleADW, V: cv.DW}, nn.Vector{Role: jlm.RoleABNScale, V: cv.BNScale},
+		nn.Vector{Role: jlm.RoleABNShift, V: cv.BNShift}, nn.Vector{Role: jlm.RoleAPW2B, V: cv.PW2B},
+		nn.Vector{Role: jlm.RoleAFF2Norm, V: cv.FF2Norm}, nn.Vector{Role: jlm.RoleAFF2NormB, V: cv.FF2NormB},
+		nn.Vector{Role: jlm.RoleAFF2UpB, V: cv.FF2UpB}, nn.Vector{Role: jlm.RoleAFF2DownB, V: cv.FF2DownB},
+		nn.Vector{Role: jlm.RoleAOutNorm, V: cv.OutNorm}, nn.Vector{Role: jlm.RoleAOutNormB, V: cv.OutNormB})
 	return w
 }
 

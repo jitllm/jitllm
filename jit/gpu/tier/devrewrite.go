@@ -162,6 +162,12 @@ func (k devKind) String() string {
 		return "grouped_mat_vec"
 	case dkClampAt:
 		return "clamp_at"
+	case dkDWConvRows:
+		return "dw_conv_rows"
+	case dkAffineRows:
+		return "affine_rows"
+	case dkRelAttend:
+		return "rel_attend"
 	case dkScale:
 		return "scale"
 	case dkClamp:
@@ -556,7 +562,7 @@ func rwActQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq i
 		}
 		q := p.ops[i+1]
 		if q.Kind == dkQuant && q.In[0] == o.Out[0] {
-			p.replace(i, i+1, devOp{Kind: dkActQuant, Src: cat(o.Src, q.Src), In: o.In, Out: []devVal{o.Out[0], q.Out[0]}})
+			p.replace(i, i+1, devOp{Kind: dkActQuant, Src: cat(o.Src, q.Src), In: o.In, Out: []devVal{o.Out[0], q.Out[0]}, Act: o.Act, A: o.A})
 			return true
 		}
 	}

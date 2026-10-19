@@ -135,6 +135,13 @@ func TestDeviceProgramMatchesTheEncoder(t *testing.T) {
 			if es.ProgBlocks != 0 {
 				t.Fatalf("the encoder arm ran %d block-steps as a device program", es.ProgBlocks)
 			}
+			// The program's ops run kernels generated from the ops
+			// themselves (genop.go): a program that ran none compiled
+			// nothing.
+			t.Logf("%d of %d op-steps ran generated launches", ps.GenOps, ps.ProgOps)
+			if ps.GenOps != ps.ProgOps {
+				t.Errorf("%d of %d op-steps ran a kernel not generated from the op", ps.ProgOps-ps.GenOps, ps.ProgOps)
+			}
 			for li, f := range pa.forms {
 				if f != "program" {
 					t.Fatalf("block %d ran as %q, not the program: %s (forms %v)", li, f, pa.whys[li], pa.forms)
