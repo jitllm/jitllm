@@ -256,6 +256,9 @@ func countKinds(prog string, kinds map[string]*[2]int) {
 			c[0]++
 		} else {
 			c[1]++
+			if i := strings.Index(line, "former (old kernels): "); i >= 0 {
+				whyNot[k+" former: "+line[i+22:]]++
+			}
 			if i := strings.Index(line, "not generated ["); i >= 0 {
 				why := k + " " + line[i+14:]
 				whyNot[why]++

@@ -720,6 +720,8 @@ type devOp struct {
 	// Need overrides what the op reads on an input: a GEMM's binary16
 	// operand is the layout its batched twin reads.
 	Need []devType
+	// Why is why its generator handed it to a former (genWhy).
+	Why genWhy
 	// FIn, where set, is 1 + the input holding the float row a matvec's
 	// int8 operand was quantized from (floatSource): what a binary16
 	// conversion and a float weight read.
@@ -801,6 +803,8 @@ func (p *devProgram) String() string {
 		}
 		gen := ""
 		switch {
+		case len(o.Gen) != 0 && o.Gen[0].former != 0 && o.Why != 0:
+			gen = ", former (old kernels): " + o.Why.String()
 		case len(o.Gen) != 0 && o.Gen[0].former != 0:
 			gen = ", former (old kernels)"
 		case len(o.Gen) != 0:

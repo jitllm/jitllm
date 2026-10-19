@@ -846,17 +846,32 @@ func (g *devTier) genPairs(o *devOp, prog *devProgram, bs *blockScratch, rows in
 func (g *devTier) genMatVec(o *devOp, prog *devProgram, bs *blockScratch) []genLaunch {
 	l := g.curLayer
 	if l == nil || o.W < 0 || o.W >= len(l.ms) || *l.rs[o.W] == nil {
+		o.Why = whyNoWeight
 		return nil
 	}
 	m := *l.ms[o.W]
-	if m.kern == nil || m.split > 1 && !m.group || m.experts > 1 || m.slots > 0 || m.pad || g.TableSplit && m.alt != nil {
+	switch {
+	case m.kern == nil:
+		o.Why = whyNoKernel
+	case m.split > 1 && !m.group:
+		o.Why = whySplit
+	case m.experts > 1 || m.slots > 0:
+		o.Why = whyBank
+	case m.pad:
+		o.Why = whyPadded
+	case g.TableSplit && m.alt != nil:
+		o.Why = whyTable
+	}
+	if o.Why != 0 {
 		return nil
 	}
 	if _, _, own := q8Pair(bs, prog.slots[o.In[0]]); own {
+		o.Why = whyOwnOperand
 		return nil
 	}
 	e, args := matEpi(o, m, m.rows)
 	if e == nil {
+		o.Why = whyEpilogue
 		return nil
 	}
 	rowt := max(m.rowt, 1)
@@ -947,18 +962,38 @@ func matEpi(o *devOp, m mv, rows int) (*compose.Epi, []genArg) {
 func (g *devTier) genGemm(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
 	l := g.curLayer
 	if l == nil || o.W < 0 || o.W >= len(l.ms) || *l.rs[o.W] == nil || prog.vals[o.In[0]].Layout != layoutRow {
+		o.Why = whyNoWeight
 		return nil
 	}
 	m := *l.ms[o.W]
-	if m.slots > 0 || m.pad || g.TableSplit && m.alt != nil {
+	switch {
+	case m.slots > 0:
+		o.Why = whyBank
+	case m.pad:
+		o.Why = whyPadded
+	case g.TableSplit && m.alt != nil:
+		o.Why = whyTable
+	}
+	if o.Why != 0 {
 		return nil
 	}
 	bm, ok := g.batchMV(m, rows, bs.tok)
-	if !ok || bm.act == nil || !bm.actT || bm.split > 1 || bm.tail != nil || bm.vt.MT == 0 {
+	switch {
+	case !ok:
+		o.Why = whyNoBatch
+	case bm.act == nil || !bm.actT || bm.vt.MT == 0:
+		o.Why = whyNotStaged
+	case bm.split > 1:
+		o.Why = whySplit
+	case bm.tail != nil:
+		o.Why = whyTail
+	}
+	if o.Why != 0 {
 		return nil
 	}
 	e, args := matEpi(o, m, m.rows)
 	if e == nil {
+		o.Why = whyEpilogue
 		return nil
 	}
 	s := kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: rows}
@@ -978,7 +1013,8 @@ func (g *devTier) genGemm(o *devOp, prog *devProgram, bs *blockScratch, rows int
 	// GEMM's layout, which is a function of the token count it was built
 	// for: an f16 value a writer made for another count is not it.
 	if o.FIn == 0 {
-		return nil // no float row stated to convert
+		o.Why = whyNoFloat // no float row stated to convert
+		return nil
 	}
 	conv := genLaunch{k: bm.act, threads: bm.actN, args: [8]genArg{gaIn0 + genArg(o.FIn-1), gaF16}, n: 2, toF16: true, whole: true}
 	return []genLaunch{conv, gl}
@@ -1093,4 +1129,31 @@ func (rb *rowBuild) gated(o *devOp, gt, up int) (int, bool) {
 		v = bound(v, u.UpTanh)
 	}
 	return rb.bin(compose.OpMul, a, v), true
+}
+
+// genWhy is why a generator handed an op to a former: what the dump prints
+// beside it, so a decline is a named work item rather than an absence.
+type genWhy uint8
+
+const (
+	whyNone genWhy = iota
+	whyNoWeight
+	whyNoKernel
+	whySplit
+	whyBank
+	whyPadded
+	whyTable
+	whyOwnOperand
+	whyEpilogue
+	whyNoBatch
+	whyNotStaged
+	whyTail
+	whyNoFloat
+)
+
+func (w genWhy) String() string {
+	return [...]string{"", "no resident weight", "no decode kernel", "a k split", "a bank's sheets",
+		"padded rows", "a table split", "an operand of its own", "an epilogue it cannot compose",
+		"no batched form", "a prompt form other than the staged GEMM", "a tail launch",
+		"no float row stated"}[w]
 }
