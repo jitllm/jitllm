@@ -2051,15 +2051,12 @@ type devShared struct {
 	pcache     *persistCache                 // composed persistent kernels; see persist.go
 	// convK, conv and convN are the convolutional blocks' kernels, their
 	// shared scratch and how many hold it (conv.go).
-	convK map[convKey]backend.Kernel
-	// rowK is the composed row groups' kernels by structure and schedule
-	// (genop.go).
-	rowK map[compose.Key][]rowEntry
-	// mvEpiK is the matvecs composed with epilogues (genop.go).
-	mvEpiK map[compose.Key][]mvEpiEntry
+	// genK is the one cache of generated kernels, by encoded structure and
+	// schedule (genop.go genKern).
+	genK map[compose.Key][]genEntry
 	// curLayer is the block whose program is being generated.
 	curLayer *layer
-	conv convScratch
+	conv     convScratch
 	// dh is Clef's decision head on this device (dechead.go), and ClefHeads
 	// how many requests it has answered.
 	dh        dhState
@@ -2901,22 +2898,10 @@ func (g *devTier) Close() {
 			g.closeKern(k)
 		}
 	}
-	for _, k := range g.convK {
-		if k != nil {
-			g.closeKern(k)
-		}
-	}
-	for _, es := range g.mvEpiK {
+	for _, es := range g.genK {
 		for _, e := range es {
 			if e.k != nil {
 				g.closeKern(e.k)
-			}
-		}
-	}
-	for _, es := range g.rowK {
-		for _, e := range es {
-			if e.rk.k != nil {
-				g.closeKern(e.rk.k)
 			}
 		}
 	}

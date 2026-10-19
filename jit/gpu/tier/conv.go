@@ -3,6 +3,7 @@ package tier
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
@@ -148,23 +149,12 @@ type convScratch struct {
 // shape-keyed cache the convolution path and the program's generated ops share. nil is a
 // shape the backend refused, and the reason is in LastErr.
 func (g *devTier) shapeKern(key convKey, build func() (*ir.Kernel, error)) backend.Kernel {
-	if k, ok := g.convK[key]; ok {
-		return k
+	enc := []uint32{encTemplate, uint32(key.id), uint32(key.act), math.Float32bits(key.eps)}
+	for _, a := range key.a {
+		enc = append(enc, uint32(a))
 	}
-	ker, err := build()
-	var c backend.Kernel
-	if err == nil {
-		c, err = g.dev.Compile(ker)
-	}
-	if err != nil {
-		g.LastErr = fmt.Sprintf("%s: %v", key.id, err)
-		c = nil
-	}
-	if g.convK == nil {
-		g.convK = map[convKey]backend.Kernel{}
-	}
-	g.convK[key] = c
-	return c
+	k, _ := g.genKern(enc, build)
+	return k
 }
 
 // same is TF SAME's padding along one side: the output length and the zeros

@@ -436,39 +436,57 @@ type rowKernel struct {
 	group int
 }
 
-// rowEntry is a cached row kernel and the structure it was formed from: a
-// hash that matches with a different structure is a collision, not a hit.
-type rowEntry struct {
-	enc []uint32
-	rk  rowKernel
+// genEntry is a generated kernel in the device's one cache, with the
+// encoding it was formed from: a hash that matches with a different encoding
+// is a collision, not a hit.
+type genEntry struct {
+	enc   []uint32
+	k     backend.Kernel
+	width int
 }
 
-// rowKern is row group r's kernel under the target's schedule, formed once
-// per device and structure. Callers hold g.mu.
-func (g *devTier) rowKern(r *compose.Row) rowKernel {
-	s := rowSchedule(r)
-	enc := r.Encode(s)
+// genKern is the kernel encoding enc names -- a group's structure and its
+// schedule, a former's shape and epilogue, a template's id and sizes --
+// built by build once a device. The one cache every generated kernel goes
+// through; its width is the workgroup the kernel declares. A build the
+// backend refuses is cached as nil, the reason in LastErr. Callers hold g.mu.
+func (g *devTier) genKern(enc []uint32, build func() (*ir.Kernel, error)) (backend.Kernel, int) {
 	key := compose.KeyOf(enc)
-	for _, e := range g.rowK[key] {
+	for _, e := range g.genK[key] {
 		if slices.Equal(e.enc, enc) {
-			return e.rk
+			return e.k, e.width
 		}
 	}
-	rk := rowKernel{group: s.Group}
-	ker, err := r.Emit(s)
+	ent := genEntry{enc: enc}
+	ker, err := build()
 	if err == nil {
-		rk.k, err = g.dev.Compile(ker)
+		ent.width = ker.Group[0]
+		ent.k, err = g.dev.Compile(ker)
 	}
 	if err != nil {
-		g.LastErr = fmt.Sprintf("a composed row group: %v", err)
-		rk.k = nil
+		g.LastErr = fmt.Sprintf("a generated kernel: %v", err)
+		ent.k = nil
 	}
-	if g.rowK == nil {
-		g.rowK = map[compose.Key][]rowEntry{}
+	if g.genK == nil {
+		g.genK = map[compose.Key][]genEntry{}
 	}
-	g.rowK[key] = append(g.rowK[key], rowEntry{enc: enc, rk: rk})
-	return rk
+	g.genK[key] = append(g.genK[key], ent)
+	return ent.k, ent.width
 }
+
+// rowKern is row group r's kernel under the target's schedule.
+func (g *devTier) rowKern(r *compose.Row) rowKernel {
+	s := rowSchedule(r)
+	k, _ := g.genKern(append([]uint32{encRow}, r.Encode(s)...), func() (*ir.Kernel, error) { return r.Emit(s) })
+	return rowKernel{k: k, group: s.Group}
+}
+
+// The encodings' first words: what built the kernel.
+const (
+	encRow = 1 + iota
+	encEpi
+	encTemplate
+)
 
 // genTemplate is a rotary's or the query/gate split's launches from their
 // templates, until the row former states their index maps.
@@ -773,14 +791,6 @@ func (g *devTier) genMatVec(o *devOp, prog *devProgram, bs *blockScratch) []genL
 	return []genLaunch{gl}
 }
 
-// mvEpiEntry is a cached composed matvec and what it was formed from.
-type mvEpiEntry struct {
-	shape kernels.MatVecShape
-	enc   []uint32
-	k     backend.Kernel
-	width int
-}
-
 // mvEpiKern is the matvec of shape s composed with epilogue e, formed once a
 // device and structure, and its workgroup width. Callers hold g.mu.
 func (g *devTier) mvEpiKern(s kernels.MatVecShape, e *compose.Epi) (backend.Kernel, int) {
@@ -791,28 +801,10 @@ func (g *devTier) mvEpiKern(s kernels.MatVecShape, e *compose.Epi) (backend.Kern
 // enc (the epilogue's and the former's schedule), built by build once a
 // device and structure, and its workgroup width. Callers hold g.mu.
 func (g *devTier) epiKern(s kernels.MatVecShape, enc []uint32, build func() (*ir.Kernel, error)) (backend.Kernel, int) {
-	key := compose.KeyOf(append(append([]uint32(nil), enc...), uint32(s.T), uint32(s.K), uint32(s.Rows),
-		uint32(s.Split), uint32(s.Rowt), b2u(s.GroupSplit), uint32(s.NTok)))
-	for _, x := range g.mvEpiK[key] {
-		if x.shape == s && slices.Equal(x.enc, enc) {
-			return x.k, x.width
-		}
-	}
-	ent := mvEpiEntry{shape: s, enc: enc}
-	ker, err := build()
-	if err == nil {
-		ent.width = ker.Group[0]
-		ent.k, err = g.dev.Compile(ker)
-	}
-	if err != nil {
-		g.LastErr = fmt.Sprintf("a composed matvec: %v", err)
-		ent.k = nil
-	}
-	if g.mvEpiK == nil {
-		g.mvEpiK = map[compose.Key][]mvEpiEntry{}
-	}
-	g.mvEpiK[key] = append(g.mvEpiK[key], ent)
-	return ent.k, ent.width
+	full := append([]uint32{encEpi}, enc...)
+	full = append(full, uint32(s.T), uint32(s.K), uint32(s.Rows), uint32(s.Split), uint32(s.Rowt), b2u(s.GroupSplit),
+		uint32(s.NTok), b2u(s.Center.NoCenter), uint32(s.Center.MinTok))
+	return g.genKern(full, build)
 }
 
 func b2u(x bool) uint32 {
