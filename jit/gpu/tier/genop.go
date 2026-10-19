@@ -306,7 +306,6 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 			if l := g.genAttend(o, bs, rows); l != nil {
 				return l
 			}
-			o.Why = whyHistory
 		case dkKVWrite, dkKVCopy:
 			if l := g.genPagedWrite(o, prog, bs, rows, o.Kind == dkKVWrite, gaIn0, gaIn1); l != nil {
 				return l
@@ -1244,6 +1243,7 @@ const (
 	whyHistory
 	whyLayout
 	whyRoute
+	whyPrompt
 )
 
 func (w genWhy) String() string {
@@ -1252,7 +1252,8 @@ func (w genWhy) String() string {
 		"no batched form", "a prompt form other than the staged GEMM", "a tail launch",
 		"no float row stated", "a history that is not paged, or a row wider than its heads",
 		"rows whose head-major layout the program does not state",
-		"a route its op's attributes do not state"}[w]
+		"a route its op's attributes do not state",
+		"a prompt's rows, whose attention is the prefill's"}[w]
 }
 
 // genSplitMatVec is a decode matvec whose k is split across threads: the

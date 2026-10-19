@@ -145,7 +145,12 @@ func runPlan(lc *launcher, ls []genLaunch, ab *attendBufs) {
 // segment's contiguous cache) or the op is over a prompt's rows, whose
 // attention is the prefill's.
 func (g *devTier) genAttend(o *devOp, bs *blockScratch, rows int) []genLaunch {
-	if rows != 1 || bs.pkv == nil || !g.pagedPlan(&bs.p) || len(o.In) != 1 || len(o.Out) != 1 {
+	switch {
+	case bs.pkv == nil || !g.pagedPlan(&bs.p) || len(o.In) != 1 || len(o.Out) != 1:
+		o.Why = whyHistory
+		return nil
+	case rows != 1:
+		o.Why = whyPrompt
 		return nil
 	}
 	return []genLaunch{{plan: true}}
