@@ -285,7 +285,12 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 	case dkAttend, dkLatentAttend, dkKVWrite, dkKVCopy, dkRopeQKV, dkSlice, dkView, dkConcatHeads, dkRopeTail, dkLatentWrite:
 		switch o.Kind {
 		case dkKVWrite, dkKVCopy:
-			if l := g.genPagedWrite(o, prog, bs, rows); l != nil {
+			if l := g.genPagedWrite(o, prog, bs, rows, o.Kind == dkKVWrite, gaIn0, gaIn1); l != nil {
+				return l
+			}
+			o.Why = whyHistory
+		case dkRopeQKV:
+			if l := g.genRopeQKV(o, prog, bs, rows); l != nil {
 				return l
 			}
 			o.Why = whyHistory
@@ -1310,20 +1315,20 @@ func (g *devTier) genChunkMatVec(o *devOp, prog *devProgram, bs *blockScratch, m
 // the page table (compose.PagedPos). nil where the history is not paged, a
 // row is wider than the heads it holds (an indexer's key beside them), or a
 // segment writes in phases.
-func (g *devTier) genPagedWrite(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
+func (g *devTier) genPagedWrite(o *devOp, prog *devProgram, bs *blockScratch, rows int, turn bool, kArg, vArg genArg) []genLaunch {
 	p := &bs.p
 	kw, vw := p.KVRow(), p.NKVHead*p.HeadDim
-	if bs.pkv == nil || p.NonCausal || len(o.In) < 2 || prog.vals[o.In[0]].Width != vw || kw != vw ||
-		prog.vals[o.In[1]].Width != vw {
+	ki, vi := int(kArg-gaIn0), int(vArg-gaIn0)
+	if bs.pkv == nil || p.NonCausal || len(o.In) <= max(ki, vi) || prog.vals[o.In[ki]].Width != vw || kw != vw ||
+		prog.vals[o.In[vi]].Width != vw {
 		return nil
 	}
 	P := g.kvPage()
-	turn := o.Kind == dkKVWrite
 	if turn && (p.NRot <= 0 || p.NoPosEnc || p.RopeSplit || p.NRot%2 != 0 || p.NRot > p.HeadDim) {
 		return nil
 	}
 	kr := &rowBuild{r: compose.Row{Width: kw, Rows: rows}}
-	in := kr.buf(compose.BufRow, gaIn0)
+	in := kr.buf(compose.BufRow, kArg)
 	var cs int
 	if turn {
 		cs = kr.buf(compose.BufVec, gaCS)
@@ -1337,7 +1342,7 @@ func (g *devTier) genPagedWrite(o *devOp, prog *devProgram, bs *blockScratch, ro
 	kr.r.StoreAt(kr.buf(compose.BufOut, gaKPool), x, kr.r.PagedK(pid, off, kw, P))
 
 	vr := &rowBuild{r: compose.Row{Width: vw, Rows: rows}}
-	vin := vr.buf(compose.BufRow, gaIn1)
+	vin := vr.buf(compose.BufRow, vArg)
 	vdesc, vtab := vr.buf(compose.BufU32, gaPRow), vr.buf(compose.BufU32, gaTab)
 	vpid, voff := vr.r.PagedPos(vdesc, vtab, P)
 	if g.KVF16 {
@@ -1523,4 +1528,34 @@ func (g *devTier) genCombine(o *devOp, prog *devProgram, bs *blockScratch) []gen
 	l := genLaunch{k: k.k, groups: 1, width: k.group, n: uint8(len(rb.args))}
 	copy(l.args[:], rb.args)
 	return []genLaunch{l}
+}
+
+// genRopeQKV is a step's q, k and v into place in one op: q turned by the
+// rotary at its offset in the call's table, k turned into its paged K
+// place and v copied to its row (genPagedWrite), q, k and v the op's three
+// inputs. Callers hold g.mu.
+func (g *devTier) genRopeQKV(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
+	p := &bs.p
+	if len(o.In) != 3 || len(o.Out) < 1 || p.HeadDim <= 0 || p.NRot <= 0 || p.NRot%2 != 0 || p.NRot > p.HeadDim {
+		return nil
+	}
+	qw := prog.vals[o.In[0]].Width
+	if qw%p.HeadDim != 0 || prog.vals[o.Out[0]].Width != qw {
+		return nil
+	}
+	kv := g.genPagedWrite(o, prog, bs, rows, true, gaIn1, gaIn2)
+	if kv == nil {
+		return nil
+	}
+	qb := &rowBuild{r: compose.Row{Width: qw, Rows: rows}}
+	in, cs, off := qb.buf(compose.BufRow, gaIn0), qb.buf(compose.BufVec, gaCS), qb.buf(compose.BufU32, gaQOff)
+	v := qb.r.Rotary(in, cs, p.HeadDim, p.NRot, p.RopeNeox, false)
+	qb.r.StoreAt(qb.buf(compose.BufOut, gaOut0), v, qb.r.UBin(compose.OpAdd, qb.r.Load(off), qb.r.Column()))
+	k := g.rowKern(&qb.r)
+	if k.k == nil {
+		return nil
+	}
+	l := genLaunch{k: k.k, groups: rows, width: k.group, n: uint8(len(qb.args))}
+	copy(l.args[:], qb.args)
+	return append([]genLaunch{l}, kv...)
 }
