@@ -750,13 +750,6 @@ type devOp struct {
 	// owns (an add's scale), uploaded at admission.
 	Gen []genLaunch
 	GC  backend.Buf
-	// ByRow says a stream op's input holds each row's streams together (row
-	// r's stream k at (r*h + k)*d), where false it is stream-major as the
-	// residual is ((k*rows + r)*d). OutScale is a placement's factor on the
-	// sigmoid of its logits (the graph's mix states 2), and with no logits
-	// the weight itself.
-	ByRow    bool
-	OutScale float64
 }
 
 // devProgram is a block's device program.
@@ -1589,20 +1582,18 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{qe, emb}, Out: []devVal{key}, W: kw})
 			val := prog.val("ng_val", sw, slotNVal)
 			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{qe, emb}, Out: []devVal{val}, W: vw})
-			// A projection's rows hold their streams together; the residual's
-			// are stream-major.
-			norm := func(nm string, v devVal, r jlm.Role, s devSlot, byRow bool) devVal {
+			norm := func(nm string, v devVal, r jlm.Role, s devSlot) devVal {
 				out := prog.val(nm, prog.vals[v], s)
-				prog.ops = append(prog.ops, devOp{Kind: dkStreamNorm, Src: []int{i}, In: []devVal{v}, Out: []devVal{out}, Role: r, ByRow: byRow})
+				prog.ops = append(prog.ops, devOp{Kind: dkStreamNorm, Src: []int{i}, In: []devVal{v}, Out: []devVal{out}, Role: r})
 				return out
 			}
-			kn := norm("ng_kn", key, role(jlm.RoleNGramNormKey), slotNKn, true)
-			qn := norm("ng_qn", in(0), role(jlm.RoleNGramNormQuery), slotNQn, false)
+			kn := norm("ng_kn", key, role(jlm.RoleNGramNormKey), slotNKn)
+			qn := norm("ng_qn", in(0), role(jlm.RoleNGramNormQuery), slotNQn)
 			dot := prog.val("ng_dot", f32(o.Attr.Streams), slotNDot)
 			prog.ops = append(prog.ops, devOp{Kind: dkStreamDot, Src: []int{i}, In: []devVal{kn, qn}, Out: []devVal{dot}})
 			gv := prog.val("ng_gv", sw, slotNGv)
 			prog.ops = append(prog.ops, devOp{Kind: dkGatedVal, Src: []int{i}, In: []devVal{dot, val}, Out: []devVal{gv}})
-			gvn := norm("ng_gvn", gv, role(jlm.RoleNGramNormConv), slotNGvn, true)
+			gvn := norm("ng_gvn", gv, role(jlm.RoleNGramNormConv), slotNGvn)
 			conv := prog.val("ng_conv", sw, slotNConv)
 			prog.ops = append(prog.ops, devOp{Kind: dkNGramConv, Src: []int{i}, In: []devVal{gvn}, Out: []devVal{conv}, Role: role(jlm.RoleNGramConv)})
 			xg := prog.val(name(0), sw, slotNXg)
@@ -1791,10 +1782,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkStreamGateMix, Src: []int{i}, In: []devVal{xn, gate}, Out: []devVal{row}})
 			inj := mv(".inj", qx, xn, ws[3].Role, slotSInj)
 			w := prog.val(name(1), f32(o.Attr.Streams), slotSW)
-			// The placement's weights are 2*sigmoid(logit/streams): OpStreamMix's
-			// own definition, stated on the step.
-			prog.ops = append(prog.ops, devOp{Kind: dkPlaceWeights, Src: []int{i}, In: []devVal{inj}, Out: []devVal{w},
-				Alpha: float64(1 / float32(o.Attr.Streams)), OutScale: 2})
+			prog.ops = append(prog.ops, devOp{Kind: dkPlaceWeights, Src: []int{i}, In: []devVal{inj}, Out: []devVal{w}})
 			vals[o.Out[0]], vals[o.Out[1]] = row, w
 		case graph.OpStreamPlace:
 			// Every stream with the sublayer's output added at its weights:
@@ -1820,9 +1808,9 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			hn := prog.val(name(1)+".normed", f32(ne), slotH)
 			prog.ops = append(prog.ops, devOp{Kind: dkPostNorm, Src: []int{i}, In: []devVal{active}, Out: []devVal{hn}, Role: o.Weight[0].Role})
 			m := prog.val(name(0)+".route", f32(o.Attr.Streams), slotAltM)
-			prog.ops = append(prog.ops, devOp{Kind: dkStreamRoute, Src: []int{i}, In: []devVal{hn}, Out: []devVal{m}, V: l.altRouter})
+			prog.ops = append(prog.ops, devOp{Kind: dkStreamRoute, Src: []int{i}, In: []devVal{hn}, Out: []devVal{m}})
 			pred := prog.val(name(0), prog.vals[in(0)], slotPred)
-			prog.ops = append(prog.ops, devOp{Kind: dkStreamPredict, Src: []int{i}, In: []devVal{in(0), m}, Out: []devVal{pred}, V: l.altPredT})
+			prog.ops = append(prog.ops, devOp{Kind: dkStreamPredict, Src: []int{i}, In: []devVal{in(0), m}, Out: []devVal{pred}})
 			act := prog.val(name(1), f32(ne), slotX)
 			prog.ops = append(prog.ops, devOp{Kind: dkCopy, Src: []int{i}, In: []devVal{pred}, Out: []devVal{act}})
 			vals[o.Out[0]], vals[o.Out[1]] = pred, act
@@ -1856,11 +1844,11 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			hn := prog.val(name(0)+".normed", f32(ne), slotH)
 			prog.ops = append(prog.ops, devOp{Kind: dkPostNorm, Src: []int{i}, In: []devVal{in(1)}, Out: []devVal{hn}, Role: ws[0].Role})
 			m := prog.val(name(0)+".route", f32(o.Attr.Streams), slotAltM)
-			prog.ops = append(prog.ops, devOp{Kind: dkStreamRoute, Src: []int{i}, In: []devVal{hn}, Out: []devVal{m}, V: l.altRouter})
+			prog.ops = append(prog.ops, devOp{Kind: dkStreamRoute, Src: []int{i}, In: []devVal{hn}, Out: []devVal{m}})
 			b := prog.val(name(0)+".corr", prog.vals[in(0)], slotAltB)
-			prog.ops = append(prog.ops, devOp{Kind: dkStreamCorrect, Src: []int{i}, In: []devVal{in(0), in(1), m}, Out: []devVal{b}, V: l.altCorrT})
+			prog.ops = append(prog.ops, devOp{Kind: dkStreamCorrect, Src: []int{i}, In: []devVal{in(0), in(1), m}, Out: []devVal{b}})
 			sc := prog.val(name(0)+".scaled", f32(ne), slotH)
-			prog.ops = append(prog.ops, devOp{Kind: dkStreamScale, Src: []int{i}, In: []devVal{b}, Out: []devVal{sc}, V: l.altCorrScale})
+			prog.ops = append(prog.ops, devOp{Kind: dkStreamScale, Src: []int{i}, In: []devVal{b}, Out: []devVal{sc}})
 			pg := prog.val(name(0)+".ple_gate", f32(p.PLEDim), slotPLEG)
 			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{operand(sc, i, false)}, Out: []devVal{pg}, W: l.matIndex(ws[4].Role)})
 			pa := prog.val(name(0)+".ple_act", f32(p.PLEDim), slotPLEA)
@@ -2643,15 +2631,6 @@ func faultRewrite(p *devProgram, l *layer, plan *nn.LayerPlan) {
 			p.elide(i, o.In[0]) // the heads left turned
 		case plan.Q4E != nil && plan.Q4E.Fault == nn.Q4EFaultUnscaledGate && o.Kind == dkAct && o.Alpha != 0:
 			p.ops[i].Alpha = 0 // the stream gate's activation unscaled
-			continue
-		case plan.Q4E != nil && plan.Q4E.Fault == nn.Q4EFaultNoGate && o.Kind == dkStreamGateMix && len(o.In) == 2:
-			p.ops[i].In = []devVal{o.In[0]} // the streams' plain mean, no gate
-			continue
-		case plan.Q4E != nil && plan.Q4E.Fault == nn.Q4EFaultPlainPlace && o.Kind == dkPlaceWeights:
-			p.ops[i].In, p.ops[i].OutScale = nil, 1 // every stream placed at one
-			continue
-		case plan.Q4E != nil && plan.Q4E.Fault == nn.Q4EFaultHalfPlace && o.Kind == dkPlaceWeights:
-			p.ops[i].OutScale = 1 // the placement halved
 			continue
 		default:
 			continue
