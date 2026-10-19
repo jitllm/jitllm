@@ -2,6 +2,7 @@ package kernels
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
@@ -824,6 +825,8 @@ func act(b *ir.Builder, g ir.Value, k ActKind) ir.Value {
 		m := b.Sqrt(b.Max(ir.F32, ax, b.ConstF32(SqrtSigmoidFloor)))
 		sm := b.Select(ir.F32, b.Lt(ir.F32, g, b.ConstF32(0)), b.Sub(ir.F32, b.ConstF32(0), m), m)
 		return b.Div(ir.F32, one, b.Add(ir.F32, one, b.Exp(b.Sub(ir.F32, b.ConstF32(0), sm))))
+	case ActSigmoid:
+		return b.Div(ir.F32, one, b.Add(ir.F32, one, b.Exp(b.Sub(ir.F32, b.ConstF32(0), g))))
 	case ActGELUErf:
 		// 0.5*((x + |x|) - |x|*q), q = 1 - erf(|x|/sqrt 2); see ActGELUErf.
 		ax := b.Max(ir.F32, g, b.Sub(ir.F32, b.ConstF32(0), g))
@@ -835,6 +838,13 @@ func act(b *ir.Builder, g ir.Value, k ActKind) ir.Value {
 		}
 		q := b.Mul(ir.F32, b.Mul(ir.F32, p, t), b.Exp(b.Sub(ir.F32, b.ConstF32(0), b.Mul(ir.F32, z, z))))
 		return b.Mul(ir.F32, b.ConstF32(0.5), b.Sub(ir.F32, b.Add(ir.F32, g, ax), b.Mul(ir.F32, ax, q)))
+	}
+	if k != ActGELU {
+		// Unreachable: every builder refuses a kind ActElemOK refuses
+		// before it emits. NaN, not another activation, so a missed check
+		// fails every finiteness gate instead of computing the wrong
+		// function (a default once computed the tanh GELU for every sigmoid).
+		return b.ConstF32(float32(math.NaN()))
 	}
 	const c = 0.7978845608028654 // sqrt(2/pi)
 	inner := b.Mul(ir.F32, b.ConstF32(c),
@@ -884,9 +894,7 @@ func softplus(b *ir.Builder, z ir.Value) ir.Value {
 // Act is the ungated activation: out[i] = act(x[i]), for FFNs with no gate
 // (a ViT's), and DeepSeek V4's router gate (ActSqrtSoftplus).
 func Act(n int, k ActKind) (*ir.Kernel, error) {
-	switch k {
-	case ActSiLU, ActGELU, ActQuickGELU, ActReLU2, ActReLU, ActSqrtSoftplus, ActGELUErf, ActSqrtSigmoid:
-	default:
+	if err := ActElemOK(k); err != nil || k == ActIdentity || k == ActSigmoid {
 		return nil, fmt.Errorf("kernels: Act: %v is not an ungated activation", k)
 	}
 	b := ir.New("act", [3]int{128, 1, 1})
@@ -1218,4 +1226,15 @@ func BiasAct(width, rows int, k ActKind) (*ir.Kernel, error) {
 	c := b.Rem(ir.U32, i, b.Const(ir.U32, int64(width)))
 	b.Store(pOut, i, act(b, b.Add(ir.F32, b.Load(ir.F32, pX, i, 0), b.Load(ir.F32, pBias, c, 0)), k), 0)
 	return b.Done(), nil
+}
+
+// ActElemOK refuses an activation act has no element form for: a gated one
+// (ActMulOK's), or one reading a buffer (xIELU's numbers). Every builder that
+// emits act for a caller's kind asks it first.
+func ActElemOK(k ActKind) error {
+	switch k {
+	case ActIdentity, ActReLU, ActReLU2, ActSiLU, ActQuickGELU, ActSqrtSoftplus, ActSqrtSigmoid, ActSigmoid, ActGELUErf, ActGELU:
+		return nil
+	}
+	return fmt.Errorf("kernels: %v has no element form", k)
 }

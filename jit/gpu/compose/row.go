@@ -205,6 +205,11 @@ func (g *Row) Check() error {
 		return fmt.Errorf("compose: a row group of %d x %d", g.Rows, g.Width)
 	}
 	for i, n := range g.Nodes {
+		if n.Kind == NUnary && n.Op == OpAct {
+			if err := kernels.ActElemOK(n.Act); err != nil {
+				return fmt.Errorf("compose: node %d: %w", i, err)
+			}
+		}
 		in := []int{}
 		switch n.Kind {
 		case NLoad:

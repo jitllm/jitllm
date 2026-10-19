@@ -359,3 +359,95 @@ func TestMatVecEpilogueMatchesTheMenu(t *testing.T) {
 		})
 	}
 }
+
+// TestComposedGatesMatchTheTemplates holds the two sigmoid-gated row ops to
+// their templates bit for bit: a gated output, sigmoid(gate) * row
+// (SigmoidMul), and a gated add, acc + sigmoid(the row's logit) * branch
+// (SharedExpertAdd). A unary sigmoid that computed another activation passed
+// every other gate, which covered no op that reads one.
+func TestComposedGatesMatchTheTemplates(t *testing.T) {
+	gpuLock(t)
+	devs := backend.Open()
+	if len(devs) == 0 {
+		t.Skip("no GPU backend on this host")
+	}
+	const k, rows = 256, 3
+	fill := func(n int, s float64) []float32 {
+		v := make([]float32, n)
+		for i := range v {
+			v[i] = float32(math.Sin(float64(i)*s) * (1 + float64(i%5)))
+		}
+		return v
+	}
+	acc, br, logit := fill(rows*k, 0.21), fill(rows*k, 0.13), fill(rows, 1.7)
+	gateOut := func(act kernels.ActKind) *compose.Row {
+		g := &compose.Row{Width: k, Rows: rows}
+		gt, row := g.Load(g.Buf(compose.BufRow)), g.Load(g.Buf(compose.BufRow))
+		g.Store(g.Buf(compose.BufOut), g.Bin(compose.OpMul, g.Act(act, gt), row))
+		return g
+	}
+	gatedAdd := func(act kernels.ActKind) *compose.Row {
+		g := &compose.Row{Width: k, Rows: rows}
+		a, b := g.Load(g.Buf(compose.BufRow)), g.Load(g.Buf(compose.BufRow))
+		lg := g.Load(g.Buf(compose.BufRowScalar))
+		g.Store(g.Buf(compose.BufOut), g.Bin(compose.OpAdd, a, g.Bin(compose.OpMul, g.Act(act, lg), b)))
+		return g
+	}
+	emit := func(r *compose.Row) *ir.Kernel {
+		ker, err := r.Emit(compose.Schedule{Group: 128})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ker
+	}
+	sigMul, err := kernels.SigmoidMul(rows * k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shAdd, err := kernels.SharedExpertAdd(k, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range devs {
+		defer d.Close()
+		t.Run(d.API(), func(t *testing.T) {
+			g := newGPU(t, d)
+			defer g.free()
+			run := func(ker *ir.Kernel, groups int, ins ...[]float32) []byte {
+				c, err := d.Compile(ker)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				var bufs []backend.Buf
+				for _, v := range ins {
+					bufs = append(bufs, g.up(f32bytes(v)))
+				}
+				out := g.up(make([]byte, rows*k*4))
+				if err := c.Launch(groups, 128, append(bufs, out)...); err != nil {
+					t.Fatal(err)
+				}
+				raw := make([]byte, rows*k*4)
+				if err := out.Read(raw); err != nil {
+					t.Fatal(err)
+				}
+				return raw
+			}
+			want := run(sigMul, (rows*k+127)/128, br, acc)
+			if got := run(emit(gateOut(kernels.ActSigmoid)), rows, br, acc); !bytes.Equal(got, want) {
+				t.Errorf("sigmoid(gate) * row: the composed kernel parts from SigmoidMul")
+			}
+			if bad := run(emit(gateOut(kernels.ActSiLU)), rows, br, acc); bytes.Equal(bad, want) {
+				t.Errorf("a SiLU gate matched SigmoidMul: the gate cannot see the activation")
+			}
+			// SharedExpertAdd's order: acc, branch, logit, out.
+			want = run(shAdd, (rows*k+127)/128, acc, br, logit)
+			if got := run(emit(gatedAdd(kernels.ActSigmoid)), rows, acc, br, logit); !bytes.Equal(got, want) {
+				t.Errorf("acc + sigmoid(logit) * branch: the composed kernel parts from SharedExpertAdd")
+			}
+			if bad := run(emit(gatedAdd(kernels.ActSiLU)), rows, acc, br, logit); bytes.Equal(bad, want) {
+				t.Errorf("a SiLU gate matched SharedExpertAdd: the gate cannot see the activation")
+			}
+		})
+	}
+}

@@ -23,6 +23,11 @@ type Epi struct {
 // Check refuses a group that is not an epilogue.
 func (e *Epi) Check() error {
 	for i, n := range e.G.Nodes {
+		if n.Kind == NUnary && n.Op == OpAct {
+			if err := kernels.ActElemOK(n.Act); err != nil {
+				return fmt.Errorf("compose: node %d of an epilogue: %w", i, err)
+			}
+		}
 		if n.Kind == NReduce || n.Kind == NColumn || n.Kind == NRowIdx || n.Kind == NLoad && n.Indexed {
 			return fmt.Errorf("compose: node %d of an epilogue reads beyond its element", i)
 		}
