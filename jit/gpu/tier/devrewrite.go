@@ -76,8 +76,8 @@ func (k devKind) String() string {
 		return "split_qg"
 	case dkGateOut:
 		return "gate_out"
-	case dkPerLayer:
-		return "per_layer"
+	case dkPLESlice:
+		return "ple_slice"
 	case dkScale:
 		return "scale"
 	case dkClamp:

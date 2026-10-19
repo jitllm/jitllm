@@ -76,7 +76,7 @@ const (
 	dkQTemp                        // the query's temperature, a factor of each row's position
 	dkSplitQG                      // a double-width query split into its heads and its output gate
 	dkGateOut                      // the attention's output times the sigmoid of the gate
-	dkPerLayer                     // the per-layer embedding added to the block's row (perLayerEmbed)
+	dkPLESlice                     // this block's rows of the per-layer input table
 	dkScale                        // the block's row times the layer's output scale
 	dkClamp                        // q, k or v clamped to the plan's bound
 	dkSubNorm                      // an inner norm before wo or down, with the quantize it feeds
@@ -200,6 +200,10 @@ const (
 	slotM1LowN                  // bs.m1LowN: its dt row normed
 	slotM1BN                    // bs.m1BN: B normed
 	slotM1CN                    // bs.m1CN: C normed
+	slotPLEG                    // bs.pleG: the per-layer embedding's gate
+	slotPLES                    // bs.pleS: this block's per-layer input
+	slotPLEA                    // bs.pleA: the gate activated, times the input
+	slotPLEO                    // bs.pleO: projected back to the row
 	numSlots
 )
 
@@ -371,6 +375,14 @@ func (s devSlot) String() string {
 		return "m1_b_n"
 	case slotM1CN:
 		return "m1_c_n"
+	case slotPLEG:
+		return "ple_g"
+	case slotPLES:
+		return "ple_s"
+	case slotPLEA:
+		return "ple_a"
+	case slotPLEO:
+		return "ple_o"
 	}
 	return ""
 }
@@ -473,7 +485,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	}
 	switch o.Kind {
-	case dkRecurrent, dkCopy, dkKVCopy, dkAct, dkQTemp, dkSplitQG, dkGateOut, dkPerLayer, dkScale, dkClamp, dkSubNorm:
+	case dkRecurrent, dkCopy, dkKVCopy, dkAct, dkQTemp, dkSplitQG, dkGateOut, dkPLESlice, dkScale, dkClamp, dkSubNorm:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkExpertMatVec:
 		// The activation, int8; the selection, indices; the float rows the
@@ -623,6 +635,12 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 	ne, qd, kv := p.NEmbd, p.NHead*p.HeadDim, p.KVRow()
 	f32 := func(w int) devType { return devType{Elem: elemF32, Layout: layoutRow, Width: w} }
 	vals := map[graph.ValueID]devVal{g.In[0]: prog.val("x", f32(ne), slotX)}
+	if len(g.In) > 1 && p.PLEDim != 0 {
+		// The per-layer input: this block's rows of the model's table.
+		pl := prog.val(g.Values[g.In[1]].Name, f32(p.PLEDim), slotPLES)
+		prog.ops = append(prog.ops, devOp{Kind: dkPLESlice, Out: []devVal{pl}})
+		vals[g.In[1]] = pl
+	}
 	// The int8 operand of a matvec: the float row it reads, quantized once
 	// per source (q, k and v read one quantize of the normed row).
 	//
@@ -648,6 +666,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		jlm.RoleFFNGate: slotG, jlm.RoleFFNUp: slotU, jlm.RoleFFNDown: slotOut,
 		jlm.RoleShExpGate: slotShG, jlm.RoleShExpUp: slotShU, jlm.RoleShExpDown: slotShOut,
 		jlm.RoleAttnQA: slotMQA, jlm.RoleAttnQB: slotQ, jlm.RoleAttnKVA: slotMKV,
+		jlm.RolePLEGate: slotPLEG, jlm.RolePLEProj: slotPLEO,
 	}
 	adds := 0
 	// routeW is each selection's routed weights; gated is a shared expert's
@@ -697,7 +716,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			case jlm.RoleAttnNorm, jlm.RoleFFNNorm:
 			case jlm.RolePostAttnNorm, jlm.RolePostFFNNorm:
 				k = dkPostNorm
-			case jlm.RolePostFFNNorm1, jlm.RolePostFFNNorm2, jlm.RoleRouterNorm, jlm.RoleFFNNorm2:
+			case jlm.RolePostFFNNorm1, jlm.RolePostFFNNorm2, jlm.RoleRouterNorm, jlm.RoleFFNNorm2, jlm.RolePLEPostNorm:
 				// A mixture beside a dense MLP: each branch's norms, out of
 				// place, into the buffers the branches read (the router's
 				// own row, the experts', and each branch's output).
@@ -744,28 +763,6 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			vals[o.Out[0]] = out
 		case graph.OpMatVec:
 			role := o.Weight[0].Role
-			if role == jlm.RolePLEGate {
-				// The per-layer embedding: its gate to the add that brings
-				// it into the row, lowered whole (perLayerEmbed).
-				a := -1
-				for k := i + 1; k < len(g.Ops) && a < 0; k++ {
-					if g.Ops[k].Kind == graph.OpAdd && (g.Ops[k].In[0] == o.In[0] || g.Ops[k].In[1] == o.In[0]) {
-						a = k
-					}
-				}
-				if a < 0 {
-					return nil, "a per-layer embedding with no add"
-				}
-				src := make([]int, 0, a+1-i)
-				for k := i; k <= a; k++ {
-					src = append(src, k)
-				}
-				out := prog.val(g.Values[g.Ops[a].Out[0]].Name, f32(ne), slotX)
-				prog.ops = append(prog.ops, devOp{Kind: dkPerLayer, Src: src, In: []devVal{in(0)}, Out: []devVal{out}, Staged: true})
-				vals[g.Ops[a].Out[0]] = out
-				skipTo = a + 1
-				continue
-			}
 			s, ok := matvecSlot[role]
 			if !ok {
 				return nil, "a matvec over " + role.String()
@@ -1366,7 +1363,8 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 	}
 	// Pre-norms, post-norms or both (OLMo 2 has no pre-norm: its sublayers
 	// read the residual), one residual add a sublayer (a recurrent mixer
-	// alone has one), ending in the block's row.
+	// alone has one; a per-layer embedding is a third), ending in the
+	// block's row.
 	// Every norm binds its weight and bias by role, from the graph op it
 	// lowers: the device copy prep uploaded (layer.vecs).
 	for i := range prog.ops {
@@ -1411,8 +1409,8 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			}
 		}
 	}
-	if adds == 0 || adds > 2 || len(g.Out) != 1 || prog.slots[vals[g.Out[0]]] != slotX {
-		return nil, "not a block of one or two residual adds"
+	if adds == 0 || adds > 3 || len(g.Out) != 1 || prog.slots[vals[g.Out[0]]] != slotX {
+		return nil, "not a block of one to three residual adds"
 	}
 	for _, o := range prog.ops {
 		switch o.Kind {
@@ -1435,7 +1433,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 // (TestCompositeKindsOnlyShrink), to empty at the encoder's deletion.
 func compositeKind(k devKind) bool {
 	switch k {
-	case dkRecurrent, dkPerLayer:
+	case dkRecurrent:
 		return true
 	}
 	return false
@@ -1623,6 +1621,8 @@ func actSlot(s devSlot) devSlot {
 		return slotEAct
 	case slotShG, slotShU:
 		return slotShAct
+	case slotPLEG:
+		return slotPLEA
 	}
 	return slotAct
 }

@@ -905,7 +905,8 @@ func (g *devTier) layersSession(s backend.Session) {
 			slotDMixed: bs.dMixed, slotDZ: bs.dZ, slotDBA: bs.dBA, slotDBRaw: bs.dBRaw, slotDConv: bs.dConv,
 			slotDOut: bs.dOut, slotDAct: bs.dAct, slotScB: bs.scB, slotScC: bs.scC, slotScBx: bs.scBx, slotScY: bs.scY,
 			slotLRQ8: bs.dLRa, slotDLow: bs.dLowRank, slotDAlpha: bs.dAlpha, slotM1B: bs.m1B, slotM1C: bs.m1C,
-			slotM1LowN: bs.m1LowN, slotM1BN: bs.m1BN, slotM1CN: bs.m1CN}
+			slotM1LowN: bs.m1LowN, slotM1BN: bs.m1BN, slotM1CN: bs.m1CN,
+			slotPLEG: bs.pleG, slotPLES: bs.pleS, slotPLEA: bs.pleA, slotPLEO: bs.pleO}
 		// The rewrites legal at one row, on a prompt chunk and on a ragged
 		// step differ: each class keeps its own fused program.
 		fc := &l.progOne
@@ -1057,6 +1058,8 @@ func (g *devTier) layersSession(s backend.Session) {
 					lc.la(bs.quantX, kernels.QuantizeThreads(bs.nUsed*pad32(p.NFFNExp)/32), src, bs.a, bs.ax)
 				case prog.slots[o.In[0]] == slotShAct:
 					lc.la(bs.shQuant, kernels.QuantizeThreads(R*bs.nShExp/32), src, bs.a, bs.ax)
+				case prog.slots[o.In[0]] == slotPLEA:
+					lc.la(bs.pleQuant, kernels.QuantizeThreads(R*pad32(p.PLEDim)/32), src, bs.a, bs.ax)
 				case prog.slots[o.In[0]] == slotDAct || prog.slots[o.In[0]] == slotDMixed:
 					lc.la(bs.quantD, kernels.QuantizeThreads(R*pad32(bs.rec.VHeads*bs.rec.VDim)/32), src, bs.a, bs.ax)
 				case rowsMLA && prog.slots[o.In[0]] == slotMQAn:
@@ -1196,6 +1199,8 @@ func (g *devTier) layersSession(s backend.Session) {
 					lc.la(bs.actMulE, bs.nUsed*bs.nFFNExp, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
 				case prog.slots[o.Out[0]] == slotShAct:
 					lc.la(bs.shActMul, R*bs.nShExp, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+				case prog.slots[o.Out[0]] == slotPLEA:
+					lc.la(bs.pleAct, R*p.PLEDim, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
 				default:
 					lc.la(bs.actMul, R*p.NFFN, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
 				}
@@ -1473,14 +1478,14 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				laRows(k, at(o.In[0]), o.V, at(o.Out[0]), bs.a, bs.ax)
 				fsrc = at(o.Out[0])
-			case dkPerLayer:
+			case dkPLESlice:
 				if bs.pleIn == nil {
 					if err == nil {
 						err = fmt.Errorf("tier: block %d: no per-layer inputs on this step", li)
 					}
 					return
 				}
-				perLayerEmbed(l, at(o.In[0]))
+				lc.la(bs.pleSlice, R*p.PLEDim, bs.pleIn, l.pleOff, at(o.Out[0]))
 			case dkScale:
 				// The layer's output scale, out of place through bs.h and back.
 				lc.la(bs.scaleX, R*p.NEmbd, at(o.In[0]), l.outScale, bs.h)

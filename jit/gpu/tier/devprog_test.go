@@ -36,7 +36,7 @@ func TestEveryDevKindHasAName(t *testing.T) {
 // VIOLATION SIGNATURE. Mark a new kind composite, or lower a mechanism to
 // a wrapper of mixFFN again, and this names it.
 func TestCompositeKindsOnlyShrink(t *testing.T) {
-	allowed := map[string]bool{"recurrent": true, "per_layer": true}
+	allowed := map[string]bool{"recurrent": true}
 	for k := devKind(0); k < numKinds; k++ {
 		name := k.String()
 		switch {
