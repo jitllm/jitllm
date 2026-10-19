@@ -528,3 +528,74 @@ func TestComposedSplitQGMatchesSplitHeadGate(t *testing.T) {
 		})
 	}
 }
+
+// TestComposedCombineMatchesExpertCombine holds the composed weighted sum of
+// a step's selected experts (each slot's fused multiply-add in slot order
+// from zero) to ExpertCombine bit for bit; the weights read in reverse order
+// are its violation.
+func TestComposedCombineMatchesExpertCombine(t *testing.T) {
+	gpuLock(t)
+	devs := backend.Open()
+	if len(devs) == 0 {
+		t.Skip("no GPU backend on this host")
+	}
+	const n, slots = 192, 6
+	e := make([]float32, slots*n)
+	for i := range e {
+		e[i] = float32(math.Sin(float64(i)*0.31)) * 2
+	}
+	w := []float32{0.31, 0.22, 0.17, 0.12, 0.11, 0.07}
+	build := func(rev bool) *ir.Kernel {
+		gr := &compose.Row{Width: n, Rows: 1}
+		eb, wb, out := gr.Buf(compose.BufRow), gr.Buf(compose.BufRow), gr.Buf(compose.BufOut)
+		acc := gr.Const(0)
+		for j := 0; j < slots; j++ {
+			jw := j
+			if rev {
+				jw = slots - 1 - j
+			}
+			x := gr.LoadAt(eb, gr.UBin(compose.OpAdd, gr.UConst(j*n), gr.Column()))
+			acc = gr.Add(compose.Node{Kind: compose.NBinary, Op: compose.OpFma, A: gr.LoadAt(wb, gr.UConst(jw)), B: x, C: acc})
+		}
+		gr.Store(out, acc)
+		k, err := gr.Emit(compose.Schedule{Group: 128})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	for _, d := range devs {
+		defer d.Close()
+		t.Run(d.API(), func(t *testing.T) {
+			g := newGPU(t, d)
+			defer g.free()
+			run := func(ker *ir.Kernel, groups int) []byte {
+				c, err := d.Compile(ker)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				out := g.up(make([]byte, n*4))
+				if err := c.Launch(groups, 128, g.up(f32bytes(e)), g.up(f32bytes(w)), out); err != nil {
+					t.Fatal(err)
+				}
+				raw := make([]byte, n*4)
+				if err := out.Read(raw); err != nil {
+					t.Fatal(err)
+				}
+				return raw
+			}
+			tk, err := kernels.ExpertCombine(n, slots)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := run(tk, (n+127)/128)
+			if got := run(build(false), 1); !bytes.Equal(got, want) {
+				t.Errorf("the composed combine parts from ExpertCombine")
+			}
+			if got := run(build(true), 1); bytes.Equal(got, want) {
+				t.Errorf("weights in reverse order matched")
+			}
+		})
+	}
+}

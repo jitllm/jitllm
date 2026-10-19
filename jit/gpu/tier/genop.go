@@ -301,6 +301,11 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		return []genLaunch{{former: formAttend}}
 	case dkTopK, dkRouteWeights, dkCombine, dkGroupByExpert, dkGateLogit, dkGroupMask, dkScaleWeights, dkRouterBias,
 		dkExpertBias, dkExpertFetch:
+		if o.Kind == dkCombine && rows == 1 {
+			if l := g.genCombine(o, prog, bs); l != nil {
+				return l
+			}
+		}
 		// The router former: the selection's kernels emitted from the route's
 		// shape (MoERoute), the bank's fetch, and the combine.
 		return []genLaunch{{former: formRoute}}
@@ -1489,4 +1494,33 @@ func (g *devTier) genBankMatVec(o *devOp, prog *devProgram, bs *blockScratch) []
 		return nil
 	}
 	return []genLaunch{gl, {k: rk, groups: (n + rwidth - 1) / rwidth, width: rwidth, args: [8]genArg{gaSplit, gaOut0}, n: 2}}
+}
+
+// genCombine is a decode step's weighted sum of its selected experts' rows:
+// each column the slots' fused multiply-adds in slot order from zero (the
+// pairs' rows and the weights the op's two inputs). Callers hold g.mu.
+func (g *devTier) genCombine(o *devOp, prog *devProgram, bs *blockScratch) []genLaunch {
+	if len(o.In) != 2 || len(o.Out) != 1 {
+		return nil
+	}
+	n, slots := prog.vals[o.Out[0]].Width, prog.vals[o.In[1]].Width
+	if n < 1 || slots < 1 || prog.vals[o.In[0]].Width != n {
+		return nil
+	}
+	rb := &rowBuild{r: compose.Row{Width: n, Rows: 1}}
+	r := &rb.r
+	e, w := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufRow, gaIn1)
+	acc := r.Const(0)
+	for j := 0; j < slots; j++ {
+		x := r.LoadAt(e, r.UBin(compose.OpAdd, r.UConst(j*n), r.Column()))
+		acc = r.Add(compose.Node{Kind: compose.NBinary, Op: compose.OpFma, A: r.LoadAt(w, r.UConst(j)), B: x, C: acc})
+	}
+	rb.store(acc, gaOut0)
+	k := g.rowKern(r)
+	if k.k == nil {
+		return nil
+	}
+	l := genLaunch{k: k.k, groups: 1, width: k.group, n: uint8(len(rb.args))}
+	copy(l.args[:], rb.args)
+	return []genLaunch{l}
 }
