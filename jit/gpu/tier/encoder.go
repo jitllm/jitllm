@@ -1080,6 +1080,660 @@ func (g *devTier) layersSession(s backend.Session) {
 			}
 			return bs.a, bs.ax
 		}
+		// The matvec former's launcher: the op's weight's kernel, emitted from
+		// its MatVecShape (format, width, rows, split, epilogue) and cached
+		// by it, at the step's rows -- the decode kernel, a batched or ragged
+		// twin, the split with its reduction, the residual or gate epilogue.
+		genv.form = func(op *devOp) {
+			o := *op
+			var m mv
+			var r *resident
+			if o.W >= 0 && o.W < len(l.ms) {
+				m, r = *l.ms[o.W], *l.rs[o.W]
+			}
+			switch o.Kind {
+			case dkMatVec:
+				if a, ax, ok := q8Pair(bs, prog.slots[o.In[0]]); ok {
+					// A matvec reading an int8 operand of its own (a low-rank
+					// pair's, a stream mix's), its float source beside it.
+					mvrunAct(m, r, at(o.Out[0]), a, ax, at(o.In[1]))
+					return
+				}
+				if prog.f16 {
+					// The GEMM converts this row, or finds it written.
+					fsrc = at(o.In[0])
+				}
+				mvrun(m, r, at(o.Out[0]))
+			case dkMatVecRes:
+				if !mvres(m, r, at(o.Out[0]), at(o.In[1])) && err == nil {
+					err = fmt.Errorf("tier: block %d: matvec-residual has no variant for %s", li, o.Role)
+				}
+			case dkMatVecGate:
+				if !mvgate(m, r, at(o.Out[0]), at(o.In[1])) && err == nil {
+					err = fmt.Errorf("tier: block %d: matvec-gate has no variant for %s", li, o.Role)
+				}
+			case dkExpertMatVec:
+				if rowsMLA && prog.slots[o.Out[0]] == slotMAbsRaw {
+					latentGrouped(*l.ms[o.W], *l.rs[o.W], ml.nopeHM, at(o.Out[0]))
+					break
+				}
+				if rowsMLA && prog.slots[o.Out[0]] == slotMOut {
+					// Head-major out of the grouped un-absorb, token-major after.
+					latentGrouped(*l.ms[o.W], *l.rs[o.W], ml.accHM, ml.outHM)
+					lc.la(ml.gatherOut, R*ml.nh*ml.hdv, ml.outHM, ml.permTM, at(o.Out[0]))
+					break
+				}
+				if rowsMoE {
+					// A bias the grouped form folds into its epilogue (the
+					// tensor-core one) takes the bias op's place.
+					var bias backend.Buf
+					var next *devOp
+					if j := genv.idx + 1; j < len(prog.ops) && prog.ops[j].Kind == dkExpertBias && prog.ops[j].In[0] == o.Out[0] {
+						next = &prog.ops[j]
+						bias = next.V
+					}
+					gr.ein = at(o.In[2])
+					if gr.grouped(lg, &err, l.ms[o.W], *l.rs[o.W], bias, at(o.Out[0])) && next != nil {
+						buf[prog.slots[next.Out[0]]] = at(o.Out[0])
+						skipNext = true
+					}
+					break
+				}
+				mvid(*l.ms[o.W], *l.rs[o.W], at(o.Out[0]), at(o.In[1]))
+			case dkExpertMatVecE:
+				// The bank's fused kernel: (pOut, [pBias], [pGate], pSel).
+				m, r := *l.ms[o.W], *l.rs[o.W]
+				var all [12]backend.Buf
+				args := append(all[:0], r.qs, dOf(r), r.sc, bs.a, bs.ax, at(o.Out[0]))
+				if o.V != nil {
+					args = append(args, o.V)
+				}
+				if len(o.In) > 2 {
+					args = append(args, at(o.In[2]))
+				}
+				lamv(m, o.K, m.rows*m.slots*m.split, append(args, at(o.In[1]))...)
+				g.MoEFused++
+			case dkAttend:
+				if pk == nil {
+					if !ncAttend {
+						break
+					}
+					var fv *flashVariant
+					var flash backend.Kernel
+					if len(bs.flashV) > 0 {
+						fv = bs.flashFor(nCap)
+						flash = fv.k
+						if p.Window(li) > 0 {
+							flash = fv.kW
+						}
+					}
+					if err == nil {
+						err = g.contigAttend(lc, bs, l, li, R, kvp, at(o.In[0]), nCap, sm, smG, smW, nil, fv, flash,
+							g.flashOn() && flash != nil && !l.windowed)
+					}
+					break
+				}
+				if pk.prefill {
+					// A prefill chunk: one sequence's rows in order, a K or V
+					// load serving a whole query tile.
+					win := p.Window(li) > 0
+					if err == nil {
+						err = pk.pf.prefillAttn(s, lc, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, win, sk)
+						g.PagedPrefillLaunches++
+						if pk.pf.flash != nil {
+							g.FlashPrefills++
+						}
+						g.PagedPrefillPasses += pk.pf.passes(win)
+						if pk.pf.on70() {
+							g.PagedPrefill70++
+						}
+						if pk.pf.accOnMMA() {
+							g.PagedAccMMA++
+						}
+						if pk.pf.on80() {
+							g.FlashPrefill80++
+						}
+					}
+					return
+				}
+				// A decode row or a step's rows: each a descriptor, a window
+				// its keyStart, through the decode plan. A ragged step with a
+				// run table empties the table's rows from the decode plan and
+				// attends them with the table's prefill (raggedprefill.go).
+				win := p.Window(li) > 0
+				desc := pk.pRow
+				if win {
+					desc = pk.pRowW
+				}
+				ragOn := rag != nil && pk.ragRows > 0
+				dec := desc
+				if ragOn {
+					dec = pk.pRowDec
+					if win {
+						dec = pk.pRowDecW
+					}
+				}
+				if err == nil && !(ragOn && pk.ragAlone) {
+					err = pk.attend(s, lc, pl, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, dec, sk)
+					g.PagedLaunches++
+					if pk.cur.plan.Path == kernels.PathStaged {
+						g.PagedStagedLaunches++
+					}
+				}
+				if ragOn && err == nil {
+					if pk.ragStaged {
+						err = pk.ragStagedAttend(lc, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, desc, sk, win)
+					} else {
+						err = pk.ragAttend(lc, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, desc, sk)
+					}
+					g.RagPrefills++
+				}
+			case dkKVWrite:
+				if pk != nil && prog.slots[o.In[0]] == slotKAll {
+					// The assembled row: the selecting form turns the
+					// indexer's head with k's; the pooled form keeps it raw,
+					// copied whole first.
+					kHeads := p.NKVHead
+					if ms != nil {
+						kHeads++
+					}
+					if partialRotary(p) || qs != nil {
+						lc.la(pk.copyK, R*kvDim, at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
+					}
+					lc.la(pk.ropeK, R*kHeads*p.NRot/2, at(o.In[0]), rcs, bs.zero, pl.k, pl.tab, pk.pRow)
+					lc.la(pk.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), pl.v, bs.zero, pl.tab, pk.pRow)
+					break
+				}
+				if pk == nil {
+					if ncWrite {
+						if partialRotary(p) {
+							lc.la(bs.copyK, R*kvDim, at(o.In[0]), kvp.kc, kOff)
+						}
+						lc.la(bs.ropeK, R*p.NKVHead*p.NRot/2, at(o.In[0]), rcs, kOff, kvp.kc)
+						lc.la(bs.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), kvp.vc, bs.koff)
+					}
+					break
+				}
+				if partialRotary(p) {
+					lc.la(pk.copyK, R*p.KVRow(), at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
+				}
+				lc.la(pk.ropeK, R*p.NKVHead*p.NRot/2, at(o.In[0]), rcs, bs.zero, pl.k, pl.tab, pk.pRow)
+				lc.la(pk.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), pl.v, bs.zero, pl.tab, pk.pRow)
+			case dkKVCopy:
+				if pk == nil {
+					if ncWrite {
+						lc.la(bs.copyK, R*kvDim, at(o.In[0]), kvp.kc, kOff)
+						lc.la(bs.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), kvp.vc, bs.koff)
+					}
+					break
+				}
+				lc.la(pk.copyK, R*p.KVRow(), at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
+				lc.la(pk.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), pl.v, bs.zero, pl.tab, pk.pRow)
+			case dkLatentAttend:
+				// The latent row is the key and its prefix the value: a
+				// prefill chunk through the paged prefill kernels, a step's
+				// rows through the decode plan.
+				g.PagedLaunches++
+				if rowsMLA {
+					g.MLABatched++
+				}
+				if !pk.prefill && pk.cur != nil && pk.cur.plan.Path == kernels.PathStaged {
+					g.PagedStagedLaunches++
+				}
+				if err == nil && rowsMLA && pk.prefill {
+					err = pk.pf.prefillAttn(s, lc, at(o.In[0]), pl.k, pl.k, bs.n, at(o.Out[0]), pl.tab, false, nil)
+					g.PagedPrefillLaunches++
+					if pk.pf.on70() {
+						g.PagedPrefill70++
+					}
+					break
+				}
+				if err == nil {
+					err = pk.attend(s, lc, pl, at(o.In[0]), pl.k, pl.k, bs.n, at(o.Out[0]), pl.tab, pk.pRow, nil)
+				}
+			case dkQKV:
+				kern, blocks, w := l.qkv, l.qkvBlocks, l.qkvW
+				if rag != nil {
+					// A ragged step's segments (groupQKV).
+					seg, _ := g.groupQKV(l, len(rag.pos), R)
+					kern, blocks, w = seg.kern, seg.blocks, seg.w
+					g.RagQKVFused++
+				}
+				var bufArr [17]backend.Buf
+				bufs := append(bufArr[:0], bs.a, bs.ax)
+				for i, sg := range [3]struct {
+					m mv
+					r *resident
+				}{{l.mvq, l.wq}, {l.mvk, l.wk}, {l.mvv, l.wv}} {
+					bufs = append(bufs, sg.r.qs, sg.r.d, sg.r.sc, at(o.Out[i]))
+					if sg.m.bias != nil {
+						bufs = append(bufs, sg.m.bias)
+					}
+				}
+				if err == nil {
+					err = lc.launch(kern, blocks, w, bufs...)
+				}
+			case dkQKVGemm:
+				qs := o.QS
+				fsrc = at(o.In[0])
+				if qs.act != actMemoK || fsrc != actMemoSrc {
+					lc.la(qs.act, qs.actN, fsrc, g.f16Buf)
+					g.ActF16Launches++
+				}
+				actMemoK, actMemoSrc = qs.act, fsrc
+				all := [3]struct {
+					m mv
+					r *resident
+				}{{l.mvq, l.wq}, {l.mvk, l.wk}, {l.mvv, l.wv}}
+				var arr [16]backend.Buf
+				bufs := append(arr[:0], g.f16Buf)
+				for _, i := range qs.segs {
+					sg := all[i]
+					w := sg.r
+					if g.qkvGemmSwapped() && i > 0 && qs.has(3-i) && all[3-i].r.t == w.t && all[3-i].m.rows == sg.m.rows {
+						w = all[3-i].r
+					}
+					bufs = append(bufs, w.qs, w.d, w.sc, at(o.Out[i]))
+					if sg.m.bias != nil {
+						bufs = append(bufs, sg.m.bias)
+					}
+				}
+				lc.law(qs.kern, qs.threads, qs.width, bufs...)
+				g.QKVGemmRuns++
+				for i, sg := range all {
+					if !qs.has(i) {
+						mvrun(sg.m, sg.r, at(o.Out[i]))
+					}
+				}
+			case dkRouterLogits:
+				if rowsMoE {
+					router := mg.router
+					if l.routerF16 {
+						router = mg.router16
+					}
+					lg(router, kernels.RouterThreads(mg.nExp*R), kernels.RouterThreads(1), l.router, at(o.In[0]), at(o.Out[0]))
+					break
+				}
+				lc.la(l.mvRouter, kernels.RouterThreads(bs.nExpert), l.router, at(o.In[0]), at(o.Out[0]))
+			case dkResIn:
+				m, r := *l.ms[o.W], *l.rs[o.W]
+				mvIn(m, m.resIn, r, at(o.Out[0]), at(o.In[0]), nil, at(o.In[1]))
+				g.ActInSaved++
+			case dkQKVSep:
+				for i, sg := range [3]struct {
+					m mv
+					r *resident
+				}{{l.mvq, l.wq}, {l.mvk, l.wk}, {l.mvv, l.wv}} {
+					mvIn(sg.m, sg.m.kernIn, sg.r, at(o.Out[i]), at(o.In[0]), o.V, sg.m.bias)
+				}
+				g.ActInSaved++
+			case dkRopeQKV:
+				lc.la(pk.ropeQKV, kernels.RoPEQKVPagedThreads(p.NHead, p.NKVHead, p.HeadDim, p.NRot, R, g.KVF16),
+					at(o.In[0]), rcs, qOff, at(o.Out[0]), at(o.In[1]), pl.k, at(o.In[2]), pl.v, pl.tab, pk.pRow)
+				g.FusedLaunches++
+			case dkSlice:
+				if rowsMLA {
+					switch prog.slots[o.Out[0]] {
+					case slotMNope:
+						lc.la(ml.sliceNope, R*ml.nh*ml.nope, at(o.In[0]), at(o.Out[0]))
+					case slotMPE:
+						lc.la(ml.slicePE, R*ml.nh*ml.rot, at(o.In[0]), at(o.Out[0]))
+					case slotMKPE:
+						lc.la(ml.sliceKPE, R*ml.rot, at(o.In[0]), at(o.Out[0]))
+					}
+					break
+				}
+				switch prog.slots[o.Out[0]] {
+				case slotMNope:
+					lc.la(bs.mlaSliceNope, p.NHead*bs.mlaNopeW, at(o.In[0]), at(o.Out[0]))
+				case slotMPE:
+					lc.la(bs.mlaSlicePE, p.NHead*bs.mlaRot, at(o.In[0]), at(o.Out[0]))
+				case slotMKPE:
+					lc.la(bs.mlaSliceKPE, bs.mlaRot, at(o.In[0]), at(o.Out[0]))
+				}
+			case dkView:
+				// One row's prefix is read in place; each of several rows'
+				// is copied out.
+				if rowsMLA {
+					lc.la(ml.sliceLat, R*ml.lat, at(o.In[0]), at(o.Out[0]))
+				}
+			case dkConcatHeads:
+				if rowsMLA {
+					lc.la(ml.copyAbs, ml.nh*R*ml.lat, at(o.In[0]), at(o.Out[0]), ml.absOff)
+					lc.la(ml.copyPE, R*ml.nh*ml.rot, at(o.In[1]), at(o.Out[0]), ml.peOff)
+					break
+				}
+				lc.la(bs.mlaCopyAbs, p.NHead*bs.mlaLat, at(o.In[0]), at(o.Out[0]), bs.mlaAbsOff)
+				lc.la(bs.mlaCopyPE, p.NHead*bs.mlaRot, at(o.In[1]), at(o.Out[0]), bs.mlaPEOff)
+			case dkRopeTail:
+				if rowsMLA {
+					lc.la(ml.ropeQ, R*ml.nh*ml.rot/2, at(o.In[0]), bs.cs, ml.qOff, at(o.Out[0]))
+					break
+				}
+				lc.la(bs.mlaRopeQ, p.NHead*bs.mlaRot/2, at(o.In[0]), bs.cs, bs.zero, at(o.Out[0]))
+			case dkLatentWrite:
+				pc := pagedCall{pk: pk, pl: pl, k: pl.k, tab: pl.tab, desc: pk.pRow}
+				off := bs.zero
+				if R > 1 {
+					off = pk.rotOff
+				}
+				pc.writeLatent(lc, R, at(o.In[0]), at(o.In[1]), off, bs, o.N == 1)
+			case dkTopK:
+				// The arity follows the inputs: a masked plane, a selection
+				// bias, or the logits alone.
+				// The rank kernel's arity is the plan's route's (routeOf): a
+				// masked plane where it groups, else a selection bias where it
+				// carries one. Vulkan refuses a surplus buffer.
+				rt := routeOf(p)
+				plane, sb := rt.NGroup > 1 && len(o.In) > 1, !(rt.NGroup > 1) && rt.Bias && o.V != nil
+				if rt.RowBias && !(rt.NGroup > 1) && len(o.In) > 1 {
+					// A bias per row (dkRowBias's), read where the block's would be.
+					o.V, sb = at(o.In[len(o.In)-1]), true
+				}
+				switch {
+				case rowsMoE && plane:
+					lg(mg.rank, R*mg.nExp, 128, at(o.In[0]), at(o.Out[0]), at(o.Out[1]), at(o.In[1]))
+				case rowsMoE && sb:
+					lg(mg.rank, R*mg.nExp, 128, at(o.In[0]), at(o.Out[0]), at(o.Out[1]), o.V)
+				case rowsMoE:
+					lg(mg.rank, R*mg.nExp, 128, at(o.In[0]), at(o.Out[0]), at(o.Out[1]))
+				case plane:
+					lc.la(bs.rank, bs.nExpert, at(o.In[0]), at(o.Out[0]), at(o.Out[1]), at(o.In[1]))
+				case sb:
+					lc.la(bs.rank, bs.nExpert, at(o.In[0]), at(o.Out[0]), at(o.Out[1]), o.V)
+				default:
+					lc.la(bs.rank, bs.nExpert, at(o.In[0]), at(o.Out[0]), at(o.Out[1]))
+				}
+			case dkRouteWeights:
+				// One thread: k is a handful. The unrenormalised softmax reads
+				// every logit; the others do not declare them.
+				if rowsMoE {
+					if p.NoExpertNorm && !p.ExpertSigmoid {
+						lg(mg.weights, R, 64, at(o.In[0]), at(o.Out[0]), at(o.In[1]))
+					} else {
+						lg(mg.weights, R, 64, at(o.In[0]), at(o.Out[0]))
+					}
+					break
+				}
+				if err == nil {
+					if p.NoExpertNorm && !p.ExpertSigmoid {
+						err = lc.launch(bs.weights, 1, 1, at(o.In[0]), at(o.Out[0]), at(o.In[1]))
+					} else {
+						err = lc.launch(bs.weights, 1, 1, at(o.In[0]), at(o.Out[0]))
+					}
+				}
+			case dkCombine:
+				if prog.slots[o.Out[0]] == slotLatAcc {
+					g.K3Latent++ // experts in a latent
+				}
+				if rowsMoE {
+					lg(mg.combine, R*p.ExpWidth(), 128, at(o.In[0]), at(o.In[1]), mg.pos, at(o.Out[0]))
+					g.GroupedMoE++
+					break
+				}
+				lc.la(bs.combine, p.ExpWidth(), at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+			case dkGroupByExpert:
+				if rowsMoE {
+					gr = groupRun{g: g, m: mg, l: l, p: p, rows: R, e: mg.nExp, ew: p.ExpWidth()}
+					if !gr.sort(lg, &err, s) {
+						return
+					}
+				}
+			case dkGateLogit:
+				lc.la(bs.shRouterK, kernels.SharedRouterThreads(R), o.V, at(o.In[0]), at(o.Out[0]))
+			case dkGroupMask:
+				// The selection bias rides the group kernels where the route
+				// carries one (routeOf), as the rank's does.
+				sb := routeOf(p).Bias && o.V != nil
+				switch {
+				case rowsMoE && sb:
+					lg(mg.gscore, R*p.ExpertGroups, 128, at(o.In[0]), mg.rgs, o.V)
+					lg(mg.gmask, R*mg.nExp, 128, at(o.In[0]), mg.rgs, at(o.Out[0]), o.V)
+				case rowsMoE:
+					lg(mg.gscore, R*p.ExpertGroups, 128, at(o.In[0]), mg.rgs)
+					lg(mg.gmask, R*mg.nExp, 128, at(o.In[0]), mg.rgs, at(o.Out[0]))
+				case sb:
+					lc.la(bs.gscore, p.ExpertGroups, at(o.In[0]), bs.rgs, o.V)
+					lc.la(bs.gmask, bs.nExpert, at(o.In[0]), bs.rgs, at(o.Out[0]), o.V)
+				default:
+					lc.la(bs.gscore, p.ExpertGroups, at(o.In[0]), bs.rgs)
+					lc.la(bs.gmask, bs.nExpert, at(o.In[0]), bs.rgs, at(o.Out[0]))
+				}
+			case dkScaleWeights:
+				if rowsMoE {
+					lg(mg.ewScale, R*mg.k, 128, at(o.In[0]), mg.rsel, o.V, at(o.Out[0]))
+					break
+				}
+				lc.la(bs.ewScale, bs.nUsed, at(o.In[0]), at(o.In[1]), o.V, at(o.Out[0]))
+			case dkRouterBias:
+				if rowsMoE {
+					lg(mg.biasR, R*mg.nExp, 128, at(o.In[0]), mg.zsel, o.V, at(o.Out[0]))
+					break
+				}
+				lc.la(bs.rbias, bs.nExpert, at(o.In[0]), o.V, at(o.Out[0]))
+			case dkExpertBias:
+				if rowsMoE {
+					k, n := mg.biasFF, gr.cols*p.NFFNExp
+					if prog.slots[o.Out[0]] == slotEDownB {
+						k, n = mg.biasD, gr.cols*p.ExpWidth()
+					}
+					lg(k, n, 128, at(o.In[0]), mg.colE, o.V, at(o.Out[0]))
+					break
+				}
+				k, n := bs.ebiasFF, bs.nUsed*bs.nFFNExp
+				if prog.slots[o.Out[0]] == slotEDownB {
+					k, n = bs.ebiasD, bs.nUsed*p.NEmbd
+				}
+				lc.la(k, n, at(o.In[0]), at(o.In[1]), o.V, at(o.Out[0]))
+			case dkExpertFetch:
+				// The paging runtime, by property of the bank: the selection
+				// home, the sheets filled, the matvecs' index chosen.
+				st := l.stream
+				if err == nil && len(g.adm) > 0 {
+					err = g.flushAdmits(s)
+				}
+				tw := time.Now()
+				if err == nil {
+					err = s.Sync()
+				}
+				g.TStreamWait += time.Since(tw)
+				if err == nil {
+					err = s.Read(at(o.In[0]), u32b(st.sel))
+				}
+				if err == nil && len(g.admPub) > 0 {
+					err = g.publishAdmits(s)
+				}
+				if err != nil {
+					return
+				}
+				st.score(g, li)
+				st.count(g.hostFns[sid][li].uses)
+				tf := time.Now()
+				if err = st.fill(g, s, l, p.NExpert); err != nil && st.cached() {
+					st.forget()
+				}
+				g.fillDone(time.Since(tf))
+				buf[slotSelW] = bs.ident
+				if err == nil && st.cached() {
+					// The cache's slots over the selection, in its order.
+					err = s.WriteAt(at(o.In[0]), 0, u32b(st.slotSel))
+					buf[slotSelW] = at(o.In[0])
+				}
+				if err != nil {
+					return
+				}
+				g.StreamFills++
+			case dkConv1d, dkScan:
+				// The session's state, double-buffered: this step reads one
+				// half and writes the other (the shared-state mode writes the
+				// device's scratch and copies it home).
+				par, has := g.stepPar(sid, l)
+				pool := l.pool
+				if !has || pool == nil {
+					if err == nil {
+						err = fmt.Errorf("tier: block %d has no recurrent state for session %d", li, sid)
+					}
+					return
+				}
+				rr := bs.rec
+				var rk *ragLinear
+				if rag != nil {
+					if rk = bs.ragLin[len(rag.pos)]; rk == nil {
+						if err == nil {
+							err = fmt.Errorf("tier: block %d: no batched recurrent step for %d sequences", li, len(rag.pos))
+						}
+						return
+					}
+				}
+				if o.Kind == dkConv1d {
+					inC, outC := pool.c[par], pool.c[1-par]
+					if rk != nil {
+						lc.la(rk.conv, len(rag.pos)*rr.Chans, inC, at(o.In[0]), l.ssmConv1d, at(o.Out[0]), bs.dRows)
+						lc.la(rk.shift, len(rag.runs)*(rr.Conv-1)*rr.Chans, inC, at(o.In[0]), outC, bs.dRows)
+					} else {
+						lc.la(bs.convRows, R*rr.Chans, inC, at(o.In[0]), l.ssmConv1d, at(o.Out[0]), bs.dRows)
+						lc.la(bs.convShift, (rr.Conv-1)*rr.Chans, inC, at(o.In[0]), outC, bs.dRows)
+					}
+					break
+				}
+				inS, outS := pool.s[par], pool.s[1-par]
+				if g.recShared {
+					inS, outS = pool.s[0], g.recNext
+				}
+				seqs := 1
+				switch {
+				case rr.Mamba1 && rk != nil:
+					seqs = len(rag.pos)
+					lc.la(rk.delta, len(rag.runs)*rk.perRun, inS, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.In[3]),
+						l.ssmDt, l.ssmA, l.ssmD, at(o.Out[0]), outS, bs.dRows)
+					g.LinearFused++
+				case rr.Mamba1:
+					lc.la(bs.m1Scan, bs.scanThreads, inS, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.In[3]),
+						l.ssmDt, l.ssmA, l.ssmD, at(o.Out[0]), outS, bs.dRows)
+					g.LinearFused++
+				case rr.ChanDecay && rk != nil:
+					seqs = len(rag.pos)
+					lc.la(rk.delta, len(rag.runs)*rk.perRun, inS, at(o.In[0]), at(o.In[1]), at(o.In[2]),
+						l.ssmDt, l.ssmA, at(o.Out[0]), outS, bs.dRows)
+					g.LinearFused++
+				case rr.ChanDecay && bs.deltaFused != nil:
+					lc.la(bs.deltaFused, bs.scanThreads, inS, at(o.In[0]), at(o.In[1]), at(o.In[2]),
+						l.ssmDt, l.ssmA, at(o.Out[0]), outS, bs.dRows)
+					g.LinearFused++
+				case rk != nil:
+					seqs = len(rag.pos)
+					if rr.SSD {
+						lc.la(rk.delta, len(rag.runs)*rk.perRun, inS, at(o.In[0]), at(o.In[1]), l.ssmDt, l.ssmA, l.ssmCB, l.ssmD,
+							at(o.Out[0]), outS, bs.dRows)
+					} else {
+						lc.la(rk.delta, len(rag.runs)*rk.perRun, inS, at(o.In[0]), at(o.In[1]), l.ssmDt, l.ssmA,
+							at(o.Out[0]), outS, bs.dRows)
+					}
+					g.LinearFused++
+					if rk.lanes == 1 {
+						g.LinearRowsScalar++
+					}
+					if g.rag.sid != nil {
+						g.SessionLinear++
+					}
+				case rr.SSD:
+					lc.la(bs.ssdScan, bs.scanThreads, inS, at(o.In[0]), at(o.In[1]), l.ssmDt, l.ssmA, l.ssmCB, l.ssmD,
+						at(o.Out[0]), outS, bs.dRows)
+					g.LinearFused++
+				case bs.deltaFused != nil:
+					lc.la(bs.deltaFused, bs.scanThreads, inS, at(o.In[0]), at(o.In[1]), l.ssmDt, l.ssmA,
+						at(o.Out[0]), outS, bs.dRows)
+					g.LinearFused++
+				default:
+					g.deltaUnfused(lc, bs, l, li, R, inS, outS, &err)
+				}
+				if rk == nil && R > 1 {
+					g.LinearBatched++
+				}
+				if g.recShared {
+					cp := g.recCopies[[2]int{rr.StateLen, seqs}]
+					if cp == nil && err == nil {
+						err = fmt.Errorf("tier: block %d: no copy home for %d shared recurrent state(s)", li, seqs)
+					}
+					lc.la(cp, seqs*rr.StateLen, g.recNext, pool.s[0], bs.dRows)
+				}
+			case dkGatedNorm:
+				rr := bs.rec
+				inner := rr.VHeads * rr.VDim
+				if rr.Mamba1 {
+					// y*silu(z): the selective scan has no output norm.
+					lc.la(bs.outActMul, R*inner, at(o.In[1]), at(o.In[0]), at(o.Out[0]))
+					break
+				}
+				if rr.SSD {
+					ng, nwid := headNormGeom(bs.ssdNormL, R*rr.NormGroups)
+					switch {
+					case rr.NoNorm:
+						lc.la(bs.outActMul, R*inner, at(o.In[1]), at(o.In[0]), at(o.Out[0]))
+					case rr.NormBeforeGate:
+						if err == nil {
+							err = lc.launch(bs.ssdNorm, ng, nwid, at(o.In[0]), l.ssmNorm, bs.dOutN)
+						}
+						lc.la(bs.outActMul, R*inner, at(o.In[1]), bs.dOutN, at(o.Out[0]))
+					default:
+						lc.la(bs.outActMul, R*inner, at(o.In[1]), at(o.In[0]), bs.dOutN)
+						if err == nil {
+							err = lc.launch(bs.ssdNorm, ng, nwid, bs.dOutN, l.ssmNorm, at(o.Out[0]))
+						}
+					}
+					break
+				}
+				vg, vwid := headNormGeom(bs.outNormL, R*rr.VHeads)
+				if rr.ChanDecay && l.k3 != nil && l.k3.fault == nn.K3FaultNoKDAGate {
+					// The gate left out: the normed row is the output.
+					if err == nil {
+						err = lc.launch(bs.outNorm, vg, vwid, at(o.In[0]), l.ssmNorm, bs.dOutN)
+					}
+					buf[prog.slots[o.Out[0]]] = bs.dOutN
+					break
+				}
+				if bs.outNormGate != nil && g.normGateOn(l, R == 1) {
+					// The norm's epilogue gates it: the normalised row is never
+					// written.
+					in, z := at(o.In[0]), at(o.In[1])
+					if g.normGateBroken() {
+						in, z = z, in
+					}
+					if err == nil {
+						err = lc.launch(bs.outNormGate, vg, vwid, in, l.ssmNorm, z, at(o.Out[0]))
+					}
+					g.NormGateRuns++
+					break
+				}
+				if err == nil {
+					err = lc.launch(bs.outNorm, vg, vwid, at(o.In[0]), l.ssmNorm, bs.dOutN)
+				}
+				if rr.ChanDecay || rr.SigmoidGate {
+					lc.la(bs.outSigMul, R*inner, at(o.In[1]), bs.dOutN, at(o.Out[0]))
+				} else {
+					lc.la(bs.outActMul, R*inner, at(o.In[1]), bs.dOutN, at(o.Out[0]))
+				}
+			case dkSSMNorm:
+				switch prog.slots[o.Out[0]] {
+				case slotM1LowN:
+					dg, dw := headNormGeom(bs.m1NormDtL, R)
+					if err == nil {
+						err = lc.launch(bs.m1NormDt, dg, dw, at(o.In[0]), l.m1DtN, at(o.Out[0]))
+					}
+				default:
+					w := l.m1BN
+					if prog.slots[o.Out[0]] == slotM1CN {
+						w = l.m1CN
+					}
+					cg, cw := headNormGeom(bs.m1NormBCL, R)
+					if err == nil {
+						err = lc.launch(bs.m1NormBC, cg, cw, at(o.In[0]), w, at(o.Out[0]))
+					}
+				}
+			case dkConvBias:
+				lc.la(bs.m1Bias, R*bs.rec.Chans, at(o.In[0]), l.ssmCB, at(o.Out[0]))
+			}
+		}
 		for oi, o := range prog.ops[first:] {
 			if skipNext {
 				skipNext = false
@@ -1090,7 +1744,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			// block's last add stays with the executor where the next
 			// block's norm may fold it (foldAddNorm).
 			if len(o.Gen) != 0 && !(o.Kind == dkAdd && first+oi == len(prog.ops)-1 && prog.f16 && prog.slots[o.Out[0]] == slotX) {
-				genv.cs, genv.qOff, genv.kOff = rcs, qOff, kro
+				genv.cs, genv.qOff, genv.kOff, genv.idx = rcs, qOff, kro, first+oi
 				runGen(lc, &o, R, bs.rows, at, q8At, &genv)
 				switch o.Kind {
 				case dkQuant:
@@ -1207,19 +1861,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				default:
 					lc.la(bs.quantF, kernels.QuantizeThreads(R*p.NFFN/32), src, bs.a, bs.ax)
 				}
-			case dkMatVec:
-				m, r := *l.ms[o.W], *l.rs[o.W]
-				if a, ax, ok := q8Pair(bs, prog.slots[o.In[0]]); ok {
-					// A matvec reading an int8 operand of its own (a low-rank
-					// pair's, a stream mix's), its float source beside it.
-					mvrunAct(m, r, at(o.Out[0]), a, ax, at(o.In[1]))
-					break
-				}
-				if prog.f16 {
-					// The GEMM converts this row, or finds it written.
-					fsrc = at(o.In[0])
-				}
-				mvrun(m, r, at(o.Out[0]))
 			case dkRopeQ:
 				// The unrotated tail first: the rotary writes only the NRot
 				// dimensions it turns, and the scores read the whole head.
@@ -1227,112 +1868,6 @@ func (g *devTier) layersSession(s backend.Session) {
 					lc.la(bs.copyQ, R*qdim, at(o.In[0]), at(o.Out[0]), qOff)
 				}
 				lc.la(bs.ropeQ, R*p.NHead*p.NRot/2, at(o.In[0]), rcs, qOff, at(o.Out[0]))
-			case dkKVWrite:
-				if pk != nil && prog.slots[o.In[0]] == slotKAll {
-					// The assembled row: the selecting form turns the
-					// indexer's head with k's; the pooled form keeps it raw,
-					// copied whole first.
-					kHeads := p.NKVHead
-					if ms != nil {
-						kHeads++
-					}
-					if partialRotary(p) || qs != nil {
-						lc.la(pk.copyK, R*kvDim, at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
-					}
-					lc.la(pk.ropeK, R*kHeads*p.NRot/2, at(o.In[0]), rcs, bs.zero, pl.k, pl.tab, pk.pRow)
-					lc.la(pk.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), pl.v, bs.zero, pl.tab, pk.pRow)
-					break
-				}
-				if pk == nil {
-					if ncWrite {
-						if partialRotary(p) {
-							lc.la(bs.copyK, R*kvDim, at(o.In[0]), kvp.kc, kOff)
-						}
-						lc.la(bs.ropeK, R*p.NKVHead*p.NRot/2, at(o.In[0]), rcs, kOff, kvp.kc)
-						lc.la(bs.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), kvp.vc, bs.koff)
-					}
-					break
-				}
-				if partialRotary(p) {
-					lc.la(pk.copyK, R*p.KVRow(), at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
-				}
-				lc.la(pk.ropeK, R*p.NKVHead*p.NRot/2, at(o.In[0]), rcs, bs.zero, pl.k, pl.tab, pk.pRow)
-				lc.la(pk.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), pl.v, bs.zero, pl.tab, pk.pRow)
-			case dkAttend:
-				if pk == nil {
-					if !ncAttend {
-						break
-					}
-					var fv *flashVariant
-					var flash backend.Kernel
-					if len(bs.flashV) > 0 {
-						fv = bs.flashFor(nCap)
-						flash = fv.k
-						if p.Window(li) > 0 {
-							flash = fv.kW
-						}
-					}
-					if err == nil {
-						err = g.contigAttend(lc, bs, l, li, R, kvp, at(o.In[0]), nCap, sm, smG, smW, nil, fv, flash,
-							g.flashOn() && flash != nil && !l.windowed)
-					}
-					break
-				}
-				if pk.prefill {
-					// A prefill chunk: one sequence's rows in order, a K or V
-					// load serving a whole query tile.
-					win := p.Window(li) > 0
-					if err == nil {
-						err = pk.pf.prefillAttn(s, lc, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, win, sk)
-						g.PagedPrefillLaunches++
-						if pk.pf.flash != nil {
-							g.FlashPrefills++
-						}
-						g.PagedPrefillPasses += pk.pf.passes(win)
-						if pk.pf.on70() {
-							g.PagedPrefill70++
-						}
-						if pk.pf.accOnMMA() {
-							g.PagedAccMMA++
-						}
-						if pk.pf.on80() {
-							g.FlashPrefill80++
-						}
-					}
-					continue
-				}
-				// A decode row or a step's rows: each a descriptor, a window
-				// its keyStart, through the decode plan. A ragged step with a
-				// run table empties the table's rows from the decode plan and
-				// attends them with the table's prefill (raggedprefill.go).
-				win := p.Window(li) > 0
-				desc := pk.pRow
-				if win {
-					desc = pk.pRowW
-				}
-				ragOn := rag != nil && pk.ragRows > 0
-				dec := desc
-				if ragOn {
-					dec = pk.pRowDec
-					if win {
-						dec = pk.pRowDecW
-					}
-				}
-				if err == nil && !(ragOn && pk.ragAlone) {
-					err = pk.attend(s, lc, pl, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, dec, sk)
-					g.PagedLaunches++
-					if pk.cur.plan.Path == kernels.PathStaged {
-						g.PagedStagedLaunches++
-					}
-				}
-				if ragOn && err == nil {
-					if pk.ragStaged {
-						err = pk.ragStagedAttend(lc, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, desc, sk, win)
-					} else {
-						err = pk.ragAttend(lc, at(o.In[0]), pl.k, pl.v, bs.n, at(o.Out[0]), pl.tab, desc, sk)
-					}
-					g.RagPrefills++
-				}
 			case dkAdd:
 				// The block's last add, held for the next block's attention
 				// norm to do where its program or the encoder folds it in
@@ -1369,271 +1904,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				default:
 					lc.la(blockAct(bs, l), R*prog.vals[o.In[0]].Width, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
 				}
-			case dkRouterLogits:
-				if rowsMoE {
-					router := mg.router
-					if l.routerF16 {
-						router = mg.router16
-					}
-					lg(router, kernels.RouterThreads(mg.nExp*R), kernels.RouterThreads(1), l.router, at(o.In[0]), at(o.Out[0]))
-					break
-				}
-				lc.la(l.mvRouter, kernels.RouterThreads(bs.nExpert), l.router, at(o.In[0]), at(o.Out[0]))
-			case dkRouterBias:
-				if rowsMoE {
-					lg(mg.biasR, R*mg.nExp, 128, at(o.In[0]), mg.zsel, o.V, at(o.Out[0]))
-					break
-				}
-				lc.la(bs.rbias, bs.nExpert, at(o.In[0]), o.V, at(o.Out[0]))
-			case dkGroupMask:
-				// The selection bias rides the group kernels where the route
-				// carries one (routeOf), as the rank's does.
-				sb := routeOf(p).Bias && o.V != nil
-				switch {
-				case rowsMoE && sb:
-					lg(mg.gscore, R*p.ExpertGroups, 128, at(o.In[0]), mg.rgs, o.V)
-					lg(mg.gmask, R*mg.nExp, 128, at(o.In[0]), mg.rgs, at(o.Out[0]), o.V)
-				case rowsMoE:
-					lg(mg.gscore, R*p.ExpertGroups, 128, at(o.In[0]), mg.rgs)
-					lg(mg.gmask, R*mg.nExp, 128, at(o.In[0]), mg.rgs, at(o.Out[0]))
-				case sb:
-					lc.la(bs.gscore, p.ExpertGroups, at(o.In[0]), bs.rgs, o.V)
-					lc.la(bs.gmask, bs.nExpert, at(o.In[0]), bs.rgs, at(o.Out[0]), o.V)
-				default:
-					lc.la(bs.gscore, p.ExpertGroups, at(o.In[0]), bs.rgs)
-					lc.la(bs.gmask, bs.nExpert, at(o.In[0]), bs.rgs, at(o.Out[0]))
-				}
-			case dkTopK:
-				// The arity follows the inputs: a masked plane, a selection
-				// bias, or the logits alone.
-				// The rank kernel's arity is the plan's route's (routeOf): a
-				// masked plane where it groups, else a selection bias where it
-				// carries one. Vulkan refuses a surplus buffer.
-				rt := routeOf(p)
-				plane, sb := rt.NGroup > 1 && len(o.In) > 1, !(rt.NGroup > 1) && rt.Bias && o.V != nil
-				if rt.RowBias && !(rt.NGroup > 1) && len(o.In) > 1 {
-					// A bias per row (dkRowBias's), read where the block's would be.
-					o.V, sb = at(o.In[len(o.In)-1]), true
-				}
-				switch {
-				case rowsMoE && plane:
-					lg(mg.rank, R*mg.nExp, 128, at(o.In[0]), at(o.Out[0]), at(o.Out[1]), at(o.In[1]))
-				case rowsMoE && sb:
-					lg(mg.rank, R*mg.nExp, 128, at(o.In[0]), at(o.Out[0]), at(o.Out[1]), o.V)
-				case rowsMoE:
-					lg(mg.rank, R*mg.nExp, 128, at(o.In[0]), at(o.Out[0]), at(o.Out[1]))
-				case plane:
-					lc.la(bs.rank, bs.nExpert, at(o.In[0]), at(o.Out[0]), at(o.Out[1]), at(o.In[1]))
-				case sb:
-					lc.la(bs.rank, bs.nExpert, at(o.In[0]), at(o.Out[0]), at(o.Out[1]), o.V)
-				default:
-					lc.la(bs.rank, bs.nExpert, at(o.In[0]), at(o.Out[0]), at(o.Out[1]))
-				}
-			case dkRouteWeights:
-				// One thread: k is a handful. The unrenormalised softmax reads
-				// every logit; the others do not declare them.
-				if rowsMoE {
-					if p.NoExpertNorm && !p.ExpertSigmoid {
-						lg(mg.weights, R, 64, at(o.In[0]), at(o.Out[0]), at(o.In[1]))
-					} else {
-						lg(mg.weights, R, 64, at(o.In[0]), at(o.Out[0]))
-					}
-					break
-				}
-				if err == nil {
-					if p.NoExpertNorm && !p.ExpertSigmoid {
-						err = lc.launch(bs.weights, 1, 1, at(o.In[0]), at(o.Out[0]), at(o.In[1]))
-					} else {
-						err = lc.launch(bs.weights, 1, 1, at(o.In[0]), at(o.Out[0]))
-					}
-				}
-			case dkSlice:
-				if rowsMLA {
-					switch prog.slots[o.Out[0]] {
-					case slotMNope:
-						lc.la(ml.sliceNope, R*ml.nh*ml.nope, at(o.In[0]), at(o.Out[0]))
-					case slotMPE:
-						lc.la(ml.slicePE, R*ml.nh*ml.rot, at(o.In[0]), at(o.Out[0]))
-					case slotMKPE:
-						lc.la(ml.sliceKPE, R*ml.rot, at(o.In[0]), at(o.Out[0]))
-					}
-					break
-				}
-				switch prog.slots[o.Out[0]] {
-				case slotMNope:
-					lc.la(bs.mlaSliceNope, p.NHead*bs.mlaNopeW, at(o.In[0]), at(o.Out[0]))
-				case slotMPE:
-					lc.la(bs.mlaSlicePE, p.NHead*bs.mlaRot, at(o.In[0]), at(o.Out[0]))
-				case slotMKPE:
-					lc.la(bs.mlaSliceKPE, bs.mlaRot, at(o.In[0]), at(o.Out[0]))
-				}
-			case dkView:
-				// One row's prefix is read in place; each of several rows'
-				// is copied out.
-				if rowsMLA {
-					lc.la(ml.sliceLat, R*ml.lat, at(o.In[0]), at(o.Out[0]))
-				}
-			case dkRopeTail:
-				if rowsMLA {
-					lc.la(ml.ropeQ, R*ml.nh*ml.rot/2, at(o.In[0]), bs.cs, ml.qOff, at(o.Out[0]))
-					break
-				}
-				lc.la(bs.mlaRopeQ, p.NHead*bs.mlaRot/2, at(o.In[0]), bs.cs, bs.zero, at(o.Out[0]))
-			case dkLatentWrite:
-				pc := pagedCall{pk: pk, pl: pl, k: pl.k, tab: pl.tab, desc: pk.pRow}
-				off := bs.zero
-				if R > 1 {
-					off = pk.rotOff
-				}
-				pc.writeLatent(lc, R, at(o.In[0]), at(o.In[1]), off, bs, o.N == 1)
-			case dkConcatHeads:
-				if rowsMLA {
-					lc.la(ml.copyAbs, ml.nh*R*ml.lat, at(o.In[0]), at(o.Out[0]), ml.absOff)
-					lc.la(ml.copyPE, R*ml.nh*ml.rot, at(o.In[1]), at(o.Out[0]), ml.peOff)
-					break
-				}
-				lc.la(bs.mlaCopyAbs, p.NHead*bs.mlaLat, at(o.In[0]), at(o.Out[0]), bs.mlaAbsOff)
-				lc.la(bs.mlaCopyPE, p.NHead*bs.mlaRot, at(o.In[1]), at(o.Out[0]), bs.mlaPEOff)
-			case dkLatentAttend:
-				// The latent row is the key and its prefix the value: a
-				// prefill chunk through the paged prefill kernels, a step's
-				// rows through the decode plan.
-				g.PagedLaunches++
-				if rowsMLA {
-					g.MLABatched++
-				}
-				if !pk.prefill && pk.cur != nil && pk.cur.plan.Path == kernels.PathStaged {
-					g.PagedStagedLaunches++
-				}
-				if err == nil && rowsMLA && pk.prefill {
-					err = pk.pf.prefillAttn(s, lc, at(o.In[0]), pl.k, pl.k, bs.n, at(o.Out[0]), pl.tab, false, nil)
-					g.PagedPrefillLaunches++
-					if pk.pf.on70() {
-						g.PagedPrefill70++
-					}
-					break
-				}
-				if err == nil {
-					err = pk.attend(s, lc, pl, at(o.In[0]), pl.k, pl.k, bs.n, at(o.Out[0]), pl.tab, pk.pRow, nil)
-				}
-			case dkGroupByExpert:
-				if rowsMoE {
-					gr = groupRun{g: g, m: mg, l: l, p: p, rows: R, e: mg.nExp, ew: p.ExpWidth()}
-					if !gr.sort(lg, &err, s) {
-						return
-					}
-				}
-			case dkExpertMatVec:
-				if rowsMLA && prog.slots[o.Out[0]] == slotMAbsRaw {
-					latentGrouped(*l.ms[o.W], *l.rs[o.W], ml.nopeHM, at(o.Out[0]))
-					break
-				}
-				if rowsMLA && prog.slots[o.Out[0]] == slotMOut {
-					// Head-major out of the grouped un-absorb, token-major after.
-					latentGrouped(*l.ms[o.W], *l.rs[o.W], ml.accHM, ml.outHM)
-					lc.la(ml.gatherOut, R*ml.nh*ml.hdv, ml.outHM, ml.permTM, at(o.Out[0]))
-					break
-				}
-				if rowsMoE {
-					// A bias the grouped form folds into its epilogue (the
-					// tensor-core one) takes the bias op's place.
-					var bias backend.Buf
-					var next *devOp
-					if j := first + oi + 1; j < len(prog.ops) && prog.ops[j].Kind == dkExpertBias && prog.ops[j].In[0] == o.Out[0] {
-						next = &prog.ops[j]
-						bias = next.V
-					}
-					gr.ein = at(o.In[2])
-					if gr.grouped(lg, &err, l.ms[o.W], *l.rs[o.W], bias, at(o.Out[0])) && next != nil {
-						buf[prog.slots[next.Out[0]]] = at(o.Out[0])
-						skipNext = true
-					}
-					break
-				}
-				mvid(*l.ms[o.W], *l.rs[o.W], at(o.Out[0]), at(o.In[1]))
-			case dkExpertMatVecE:
-				// The bank's fused kernel: (pOut, [pBias], [pGate], pSel).
-				m, r := *l.ms[o.W], *l.rs[o.W]
-				var all [12]backend.Buf
-				args := append(all[:0], r.qs, dOf(r), r.sc, bs.a, bs.ax, at(o.Out[0]))
-				if o.V != nil {
-					args = append(args, o.V)
-				}
-				if len(o.In) > 2 {
-					args = append(args, at(o.In[2]))
-				}
-				lamv(m, o.K, m.rows*m.slots*m.split, append(args, at(o.In[1]))...)
-				g.MoEFused++
-			case dkExpertBias:
-				if rowsMoE {
-					k, n := mg.biasFF, gr.cols*p.NFFNExp
-					if prog.slots[o.Out[0]] == slotEDownB {
-						k, n = mg.biasD, gr.cols*p.ExpWidth()
-					}
-					lg(k, n, 128, at(o.In[0]), mg.colE, o.V, at(o.Out[0]))
-					break
-				}
-				k, n := bs.ebiasFF, bs.nUsed*bs.nFFNExp
-				if prog.slots[o.Out[0]] == slotEDownB {
-					k, n = bs.ebiasD, bs.nUsed*p.NEmbd
-				}
-				lc.la(k, n, at(o.In[0]), at(o.In[1]), o.V, at(o.Out[0]))
-			case dkScaleWeights:
-				if rowsMoE {
-					lg(mg.ewScale, R*mg.k, 128, at(o.In[0]), mg.rsel, o.V, at(o.Out[0]))
-					break
-				}
-				lc.la(bs.ewScale, bs.nUsed, at(o.In[0]), at(o.In[1]), o.V, at(o.Out[0]))
-			case dkCombine:
-				if prog.slots[o.Out[0]] == slotLatAcc {
-					g.K3Latent++ // experts in a latent
-				}
-				if rowsMoE {
-					lg(mg.combine, R*p.ExpWidth(), 128, at(o.In[0]), at(o.In[1]), mg.pos, at(o.Out[0]))
-					g.GroupedMoE++
-					break
-				}
-				lc.la(bs.combine, p.ExpWidth(), at(o.In[0]), at(o.In[1]), at(o.Out[0]))
-			case dkGateLogit:
-				lc.la(bs.shRouterK, kernels.SharedRouterThreads(R), o.V, at(o.In[0]), at(o.Out[0]))
-			case dkExpertFetch:
-				// The paging runtime, by property of the bank: the selection
-				// home, the sheets filled, the matvecs' index chosen.
-				st := l.stream
-				if err == nil && len(g.adm) > 0 {
-					err = g.flushAdmits(s)
-				}
-				tw := time.Now()
-				if err == nil {
-					err = s.Sync()
-				}
-				g.TStreamWait += time.Since(tw)
-				if err == nil {
-					err = s.Read(at(o.In[0]), u32b(st.sel))
-				}
-				if err == nil && len(g.admPub) > 0 {
-					err = g.publishAdmits(s)
-				}
-				if err != nil {
-					return
-				}
-				st.score(g, li)
-				st.count(g.hostFns[sid][li].uses)
-				tf := time.Now()
-				if err = st.fill(g, s, l, p.NExpert); err != nil && st.cached() {
-					st.forget()
-				}
-				g.fillDone(time.Since(tf))
-				buf[slotSelW] = bs.ident
-				if err == nil && st.cached() {
-					// The cache's slots over the selection, in its order.
-					err = s.WriteAt(at(o.In[0]), 0, u32b(st.slotSel))
-					buf[slotSelW] = at(o.In[0])
-				}
-				if err != nil {
-					return
-				}
-				g.StreamFills++
 			case dkGatedAdd:
 				lc.la(bs.shAdd, R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.Out[0]))
 			case dkSplitQG:
@@ -2040,16 +2310,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				default:
 					lc.la(blockAct(bs, l), R*nf, at(o.In[0]), at(o.Out[0]))
 				}
-			case dkKVCopy:
-				if pk == nil {
-					if ncWrite {
-						lc.la(bs.copyK, R*kvDim, at(o.In[0]), kvp.kc, kOff)
-						lc.la(bs.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), kvp.vc, bs.koff)
-					}
-					break
-				}
-				lc.la(pk.copyK, R*p.KVRow(), at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
-				lc.la(pk.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), pl.v, bs.zero, pl.tab, pk.pRow)
 			case dkCopy:
 				// The first row copy the scratch built: the residual's, the
 				// rows', or the streams'.
@@ -2123,42 +2383,10 @@ func (g *devTier) layersSession(s backend.Session) {
 			case dkAddNormQuant:
 				laRows(bs.addRmsQ, at(o.In[0]), at(o.In[1]), o.V, at(o.Out[0]), at(o.Out[1]), bs.a, bs.ax)
 				fsrc = at(o.Out[1])
-			case dkMatVecRes:
-				m, r := *l.ms[o.W], *l.rs[o.W]
-				if !mvres(m, r, at(o.Out[0]), at(o.In[1])) && err == nil {
-					err = fmt.Errorf("tier: block %d: matvec-residual has no variant for %s", li, o.Role)
-				}
-			case dkMatVecGate:
-				m, r := *l.ms[o.W], *l.rs[o.W]
-				if !mvgate(m, r, at(o.Out[0]), at(o.In[1])) && err == nil {
-					err = fmt.Errorf("tier: block %d: matvec-gate has no variant for %s", li, o.Role)
-				}
 			case dkActQuant:
 				lc.la(bs.quantAct, kernels.QuantizeThreads(R*p.NFFN/32), at(o.In[0]), at(o.In[1]), at(o.Out[0]), bs.a, bs.ax)
 				fsrc = at(o.Out[0])
 				g.QuantActs++
-			case dkQKV:
-				kern, blocks, w := l.qkv, l.qkvBlocks, l.qkvW
-				if rag != nil {
-					// A ragged step's segments (groupQKV).
-					seg, _ := g.groupQKV(l, len(rag.pos), R)
-					kern, blocks, w = seg.kern, seg.blocks, seg.w
-					g.RagQKVFused++
-				}
-				var bufArr [17]backend.Buf
-				bufs := append(bufArr[:0], bs.a, bs.ax)
-				for i, sg := range [3]struct {
-					m mv
-					r *resident
-				}{{l.mvq, l.wq}, {l.mvk, l.wk}, {l.mvv, l.wv}} {
-					bufs = append(bufs, sg.r.qs, sg.r.d, sg.r.sc, at(o.Out[i]))
-					if sg.m.bias != nil {
-						bufs = append(bufs, sg.m.bias)
-					}
-				}
-				if err == nil {
-					err = lc.launch(kern, blocks, w, bufs...)
-				}
 			case dkGate2, dkGate2In:
 				wu, wg := l.up, l.gate
 				if g.gateUp2Swapped() {
@@ -2190,18 +2418,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				g.ActInLaunches++
 				g.ActInSaved++
-			case dkQKVSep:
-				for i, sg := range [3]struct {
-					m mv
-					r *resident
-				}{{l.mvq, l.wq}, {l.mvk, l.wk}, {l.mvv, l.wv}} {
-					mvIn(sg.m, sg.m.kernIn, sg.r, at(o.Out[i]), at(o.In[0]), o.V, sg.m.bias)
-				}
-				g.ActInSaved++
-			case dkResIn:
-				m, r := *l.ms[o.W], *l.rs[o.W]
-				mvIn(m, m.resIn, r, at(o.Out[0]), at(o.In[0]), nil, at(o.In[1]))
-				g.ActInSaved++
 			case dkFFNIn:
 				mvIn(l.mvg, l.mvg.kernIn, l.gate, at(o.Out[0]), at(o.In[0]), o.V, nil)
 				if o.Role == jlm.RoleFFNUp {
@@ -2228,213 +2444,8 @@ func (g *devTier) layersSession(s backend.Session) {
 				lc.la(o.K, o.N, at(o.In[0]), at(o.In[1]), g.f16Buf)
 				actMemoK, actMemoSrc = o.Conv, at(o.Out[0])
 				g.ActF16Fused++
-			case dkQKVGemm:
-				qs := o.QS
-				fsrc = at(o.In[0])
-				if qs.act != actMemoK || fsrc != actMemoSrc {
-					lc.la(qs.act, qs.actN, fsrc, g.f16Buf)
-					g.ActF16Launches++
-				}
-				actMemoK, actMemoSrc = qs.act, fsrc
-				all := [3]struct {
-					m mv
-					r *resident
-				}{{l.mvq, l.wq}, {l.mvk, l.wk}, {l.mvv, l.wv}}
-				var arr [16]backend.Buf
-				bufs := append(arr[:0], g.f16Buf)
-				for _, i := range qs.segs {
-					sg := all[i]
-					w := sg.r
-					if g.qkvGemmSwapped() && i > 0 && qs.has(3-i) && all[3-i].r.t == w.t && all[3-i].m.rows == sg.m.rows {
-						w = all[3-i].r
-					}
-					bufs = append(bufs, w.qs, w.d, w.sc, at(o.Out[i]))
-					if sg.m.bias != nil {
-						bufs = append(bufs, sg.m.bias)
-					}
-				}
-				lc.law(qs.kern, qs.threads, qs.width, bufs...)
-				g.QKVGemmRuns++
-				for i, sg := range all {
-					if !qs.has(i) {
-						mvrun(sg.m, sg.r, at(o.Out[i]))
-					}
-				}
-			case dkRopeQKV:
-				lc.la(pk.ropeQKV, kernels.RoPEQKVPagedThreads(p.NHead, p.NKVHead, p.HeadDim, p.NRot, R, g.KVF16),
-					at(o.In[0]), rcs, qOff, at(o.Out[0]), at(o.In[1]), pl.k, at(o.In[2]), pl.v, pl.tab, pk.pRow)
-				g.FusedLaunches++
-			case dkConv1d, dkScan:
-				// The session's state, double-buffered: this step reads one
-				// half and writes the other (the shared-state mode writes the
-				// device's scratch and copies it home).
-				par, has := g.stepPar(sid, l)
-				pool := l.pool
-				if !has || pool == nil {
-					if err == nil {
-						err = fmt.Errorf("tier: block %d has no recurrent state for session %d", li, sid)
-					}
-					return
-				}
-				rr := bs.rec
-				var rk *ragLinear
-				if rag != nil {
-					if rk = bs.ragLin[len(rag.pos)]; rk == nil {
-						if err == nil {
-							err = fmt.Errorf("tier: block %d: no batched recurrent step for %d sequences", li, len(rag.pos))
-						}
-						return
-					}
-				}
-				if o.Kind == dkConv1d {
-					inC, outC := pool.c[par], pool.c[1-par]
-					if rk != nil {
-						lc.la(rk.conv, len(rag.pos)*rr.Chans, inC, at(o.In[0]), l.ssmConv1d, at(o.Out[0]), bs.dRows)
-						lc.la(rk.shift, len(rag.runs)*(rr.Conv-1)*rr.Chans, inC, at(o.In[0]), outC, bs.dRows)
-					} else {
-						lc.la(bs.convRows, R*rr.Chans, inC, at(o.In[0]), l.ssmConv1d, at(o.Out[0]), bs.dRows)
-						lc.la(bs.convShift, (rr.Conv-1)*rr.Chans, inC, at(o.In[0]), outC, bs.dRows)
-					}
-					break
-				}
-				inS, outS := pool.s[par], pool.s[1-par]
-				if g.recShared {
-					inS, outS = pool.s[0], g.recNext
-				}
-				seqs := 1
-				switch {
-				case rr.Mamba1 && rk != nil:
-					seqs = len(rag.pos)
-					lc.la(rk.delta, len(rag.runs)*rk.perRun, inS, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.In[3]),
-						l.ssmDt, l.ssmA, l.ssmD, at(o.Out[0]), outS, bs.dRows)
-					g.LinearFused++
-				case rr.Mamba1:
-					lc.la(bs.m1Scan, bs.scanThreads, inS, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.In[3]),
-						l.ssmDt, l.ssmA, l.ssmD, at(o.Out[0]), outS, bs.dRows)
-					g.LinearFused++
-				case rr.ChanDecay && rk != nil:
-					seqs = len(rag.pos)
-					lc.la(rk.delta, len(rag.runs)*rk.perRun, inS, at(o.In[0]), at(o.In[1]), at(o.In[2]),
-						l.ssmDt, l.ssmA, at(o.Out[0]), outS, bs.dRows)
-					g.LinearFused++
-				case rr.ChanDecay && bs.deltaFused != nil:
-					lc.la(bs.deltaFused, bs.scanThreads, inS, at(o.In[0]), at(o.In[1]), at(o.In[2]),
-						l.ssmDt, l.ssmA, at(o.Out[0]), outS, bs.dRows)
-					g.LinearFused++
-				case rk != nil:
-					seqs = len(rag.pos)
-					if rr.SSD {
-						lc.la(rk.delta, len(rag.runs)*rk.perRun, inS, at(o.In[0]), at(o.In[1]), l.ssmDt, l.ssmA, l.ssmCB, l.ssmD,
-							at(o.Out[0]), outS, bs.dRows)
-					} else {
-						lc.la(rk.delta, len(rag.runs)*rk.perRun, inS, at(o.In[0]), at(o.In[1]), l.ssmDt, l.ssmA,
-							at(o.Out[0]), outS, bs.dRows)
-					}
-					g.LinearFused++
-					if rk.lanes == 1 {
-						g.LinearRowsScalar++
-					}
-					if g.rag.sid != nil {
-						g.SessionLinear++
-					}
-				case rr.SSD:
-					lc.la(bs.ssdScan, bs.scanThreads, inS, at(o.In[0]), at(o.In[1]), l.ssmDt, l.ssmA, l.ssmCB, l.ssmD,
-						at(o.Out[0]), outS, bs.dRows)
-					g.LinearFused++
-				case bs.deltaFused != nil:
-					lc.la(bs.deltaFused, bs.scanThreads, inS, at(o.In[0]), at(o.In[1]), l.ssmDt, l.ssmA,
-						at(o.Out[0]), outS, bs.dRows)
-					g.LinearFused++
-				default:
-					g.deltaUnfused(lc, bs, l, li, R, inS, outS, &err)
-				}
-				if rk == nil && R > 1 {
-					g.LinearBatched++
-				}
-				if g.recShared {
-					cp := g.recCopies[[2]int{rr.StateLen, seqs}]
-					if cp == nil && err == nil {
-						err = fmt.Errorf("tier: block %d: no copy home for %d shared recurrent state(s)", li, seqs)
-					}
-					lc.la(cp, seqs*rr.StateLen, g.recNext, pool.s[0], bs.dRows)
-				}
-			case dkConvBias:
-				lc.la(bs.m1Bias, R*bs.rec.Chans, at(o.In[0]), l.ssmCB, at(o.Out[0]))
-			case dkSSMNorm:
-				switch prog.slots[o.Out[0]] {
-				case slotM1LowN:
-					dg, dw := headNormGeom(bs.m1NormDtL, R)
-					if err == nil {
-						err = lc.launch(bs.m1NormDt, dg, dw, at(o.In[0]), l.m1DtN, at(o.Out[0]))
-					}
-				default:
-					w := l.m1BN
-					if prog.slots[o.Out[0]] == slotM1CN {
-						w = l.m1CN
-					}
-					cg, cw := headNormGeom(bs.m1NormBCL, R)
-					if err == nil {
-						err = lc.launch(bs.m1NormBC, cg, cw, at(o.In[0]), w, at(o.Out[0]))
-					}
-				}
 			case dkMul:
 				lc.la(bs.scMul, R*bs.rec.Chans, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
-			case dkGatedNorm:
-				rr := bs.rec
-				inner := rr.VHeads * rr.VDim
-				if rr.Mamba1 {
-					// y*silu(z): the selective scan has no output norm.
-					lc.la(bs.outActMul, R*inner, at(o.In[1]), at(o.In[0]), at(o.Out[0]))
-					break
-				}
-				if rr.SSD {
-					ng, nwid := headNormGeom(bs.ssdNormL, R*rr.NormGroups)
-					switch {
-					case rr.NoNorm:
-						lc.la(bs.outActMul, R*inner, at(o.In[1]), at(o.In[0]), at(o.Out[0]))
-					case rr.NormBeforeGate:
-						if err == nil {
-							err = lc.launch(bs.ssdNorm, ng, nwid, at(o.In[0]), l.ssmNorm, bs.dOutN)
-						}
-						lc.la(bs.outActMul, R*inner, at(o.In[1]), bs.dOutN, at(o.Out[0]))
-					default:
-						lc.la(bs.outActMul, R*inner, at(o.In[1]), at(o.In[0]), bs.dOutN)
-						if err == nil {
-							err = lc.launch(bs.ssdNorm, ng, nwid, bs.dOutN, l.ssmNorm, at(o.Out[0]))
-						}
-					}
-					break
-				}
-				vg, vwid := headNormGeom(bs.outNormL, R*rr.VHeads)
-				if rr.ChanDecay && l.k3 != nil && l.k3.fault == nn.K3FaultNoKDAGate {
-					// The gate left out: the normed row is the output.
-					if err == nil {
-						err = lc.launch(bs.outNorm, vg, vwid, at(o.In[0]), l.ssmNorm, bs.dOutN)
-					}
-					buf[prog.slots[o.Out[0]]] = bs.dOutN
-					break
-				}
-				if bs.outNormGate != nil && g.normGateOn(l, R == 1) {
-					// The norm's epilogue gates it: the normalised row is never
-					// written.
-					in, z := at(o.In[0]), at(o.In[1])
-					if g.normGateBroken() {
-						in, z = z, in
-					}
-					if err == nil {
-						err = lc.launch(bs.outNormGate, vg, vwid, in, l.ssmNorm, z, at(o.Out[0]))
-					}
-					g.NormGateRuns++
-					break
-				}
-				if err == nil {
-					err = lc.launch(bs.outNorm, vg, vwid, at(o.In[0]), l.ssmNorm, bs.dOutN)
-				}
-				if rr.ChanDecay || rr.SigmoidGate {
-					lc.la(bs.outSigMul, R*inner, at(o.In[1]), bs.dOutN, at(o.Out[0]))
-				} else {
-					lc.la(bs.outActMul, R*inner, at(o.In[1]), bs.dOutN, at(o.Out[0]))
-				}
 			}
 		}
 		// A recurrence's state parity flips once its launches are queued, and

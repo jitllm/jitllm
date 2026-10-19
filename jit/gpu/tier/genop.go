@@ -57,7 +57,19 @@ type genLaunch struct {
 	n             uint8
 	// q8 is which output holds the op's int8 value (gaQ8A and gaQ8X).
 	q8 uint8
+	// former, where set, runs the launch through a kernel former's own
+	// launcher (genEnv.form) rather than one kernel: the matvec's.
+	former uint8
 }
+
+// The formers whose launchers run an op: the matvec's (the op's weight's
+// MatVecShape kernel) and the paged attention's (its DecodePlan's).
+const (
+	formMatVec = 1 + iota
+	formAttend
+	formRoute
+	formScan
+)
 
 // kernAct is a graph activation's kernel form, false for one whose kernel
 // needs more than its kind (a clamp's bound).
@@ -185,6 +197,29 @@ func rowSchedule(r *compose.Row) compose.Schedule {
 // rotaries and the query/gate split, whose index maps the row former does not
 // state yet: they launch their template until it does.
 func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
+	// The formers take their ops whatever their values' layouts: a former
+	// lays out its own rows (a bank's pairs, a history's pages).
+	switch o.Kind {
+	case dkMatVec, dkMatVecRes, dkMatVecGate, dkExpertMatVec, dkExpertMatVecE, dkQKV, dkQKVGemm, dkRouterLogits,
+		dkResIn, dkQKVSep:
+		// The matvec former: the weight's (or bank's, or the fused q/k/v
+		// grid's) kernel, emitted from its shape.
+		return []genLaunch{{former: formMatVec}}
+	case dkAttend, dkLatentAttend, dkKVWrite, dkKVCopy, dkRopeQKV, dkSlice, dkView, dkConcatHeads, dkRopeTail, dkLatentWrite:
+		// The attention former: the paged plans emitted from the attention's
+		// shape and the device's tuning, the history's row writes, and a
+		// latent attention's slices of its rows.
+		return []genLaunch{{former: formAttend}}
+	case dkTopK, dkRouteWeights, dkCombine, dkGroupByExpert, dkGateLogit, dkGroupMask, dkScaleWeights, dkRouterBias,
+		dkExpertBias, dkExpertFetch:
+		// The router former: the selection's kernels emitted from the route's
+		// shape (MoERoute), the bank's fetch, and the combine.
+		return []genLaunch{{former: formRoute}}
+	case dkConv1d, dkScan, dkGatedNorm, dkSSMNorm, dkConvBias:
+		// The scan former: a recurrence's kernels emitted from its plan's
+		// shape (RecurrentPlan).
+		return []genLaunch{{former: formScan}}
+	}
 	for _, v := range o.In {
 		if prog.vals[v].Layout != layoutRow {
 			return nil
@@ -339,7 +374,22 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		x := rb.load(compose.BufRow, gaIn0)
 		rb.r.Q8 = &compose.Q8{Val: x, A: rb.buf(compose.BufQ8, gaQ8A), X: rb.buf(compose.BufQ8X, gaQ8X),
 			Window: kernels.ClampWindow(win, kp), Pad: kp}
-	case dkRopeQ, dkRopeKRow, dkSplitQG:
+	case dkRopeQ:
+		// The rotary over each head's first NRot dimensions (NORM or NEOX
+		// pairs), the rest of the head passed through: one composed group
+		// where a partial rotary took a copy and a turn. Each row lands at
+		// its offset in the call's table.
+		ra := o.A
+		iw := prog.vals[o.In[0]].Width
+		if ra.HeadDim <= 0 || iw%ra.HeadDim != 0 || ra.NRot <= 0 || ra.NRot%2 != 0 || ra.Layout == graph.RopeXD {
+			return g.genTemplate(o, prog, bs, rows)
+		}
+		rb.r.Width = iw
+		in, cs, off := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufVec, gaCS), rb.buf(compose.BufU32, gaQOff)
+		v := rb.r.Rotary(in, cs, ra.HeadDim, ra.NRot, ra.Layout == graph.RopeNeox)
+		out := rb.buf(compose.BufOut, gaOut0)
+		rb.r.StoreAt(out, v, rb.r.UBin(compose.OpAdd, rb.r.Load(off), rb.r.Column()))
+	case dkRopeKRow, dkSplitQG:
 		return g.genTemplate(o, prog, bs, rows)
 	default:
 		return nil
@@ -466,6 +516,11 @@ func (g *devTier) genTemplate(o *devOp, prog *devProgram, bs *blockScratch, rows
 type genEnv struct {
 	bs             *blockScratch
 	cs, qOff, kOff backend.Buf
+	// form runs a former's launch for an op (the matvec former's).
+	form func(o *devOp)
+	// idx is the op's place in its program, which a former may read ahead
+	// of (an expert matvec folding the bias after it).
+	idx int
 }
 
 func runGen(lc *launcher, o *devOp, R, rows int, at func(devVal) backend.Buf, q8 func(devVal) (backend.Buf, backend.Buf), env *genEnv) {
@@ -473,6 +528,10 @@ func runGen(lc *launcher, o *devOp, R, rows int, at func(devVal) backend.Buf, q8
 	var bufs [8]backend.Buf
 	for i := range o.Gen {
 		l := &o.Gen[i]
+		if l.former != 0 {
+			env.form(o)
+			continue
+		}
 		for j := 0; j < int(l.n); j++ {
 			switch a := l.args[j]; a {
 			case gaIn0, gaIn1, gaIn2, gaIn3:

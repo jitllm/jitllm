@@ -47,6 +47,8 @@ const (
 	// BufQ8 and BufQ8X are an int8 operand's values and scales.
 	BufQ8
 	BufQ8X
+	// BufU32 is a table of indices (a row's offset), read at an index.
+	BufU32
 )
 
 // Buf is one of a group's buffers, a kernel parameter in order.
@@ -56,11 +58,17 @@ type Buf struct{ Kind BufKind }
 type NodeKind uint8
 
 const (
-	NLoad   NodeKind = iota // Bufs[Buf] at the element
-	NConst                  // F
-	NUnary                  // Op of A
-	NBinary                 // Op of A and B
-	NReduce                 // Red over the row of A: a row value every element reads
+	NLoad    NodeKind = iota // Bufs[Buf] at the element
+	NConst                   // F
+	NUnary                   // Op of A
+	NBinary                  // Op of A and B
+	NReduce                  // Red over the row of A: a row value every element reads
+	NColumn                  // the element's column in its row (an index)
+	NRowIdx                  // the row's index (an index)
+	NUConst                  // the index At
+	NUBinary                 // Op (Add, Sub, Mul, Div, Rem, Min) of indices A and B
+	NLess                    // A < B, of indices: a condition
+	NSelect                  // C ? A : B, of floats or of indices
 )
 
 // Op is a unary or binary map.
@@ -78,6 +86,7 @@ const (
 	OpRsqrt  // 1/sqrt(A)
 	OpAbs
 	OpFma // A*B + C, one rounding (C in Node.C)
+	OpRem // the remainder of indices
 )
 
 // Red is a row reduction.
@@ -97,12 +106,21 @@ type Node struct {
 	Buf     int
 	A, B, C int
 	F       float32
-	// At is a BufScalar load's index.
+	// At is a BufScalar load's index, or an NUConst's value.
 	At int
+	// Indexed loads at node Ix (an index), the buffer's own position
+	// where it is false: the element's place in its row, or the row's.
+	Indexed bool
+	Ix      int
 }
 
-// Store writes node Val into buffer Buf at the element.
-type Store struct{ Buf, Val int }
+// Store writes node Val into buffer Buf at the element, or at index node Ix
+// where Indexed (an absolute place in the buffer).
+type Store struct {
+	Buf, Val int
+	Indexed  bool
+	Ix       int
+}
 
 // Q8 is a group's int8 epilogue.
 type Q8 struct {
@@ -132,10 +150,10 @@ func (g *Row) Encode(s Schedule) []uint32 {
 	}
 	for _, n := range g.Nodes {
 		e = append(e, uint32(n.Kind), uint32(n.Op), uint32(n.Act), uint32(n.Red), uint32(n.Buf),
-			uint32(n.A), uint32(n.B), uint32(n.C), f2u(n.F), uint32(n.At))
+			uint32(n.A), uint32(n.B), uint32(n.C), f2u(n.F), uint32(n.At), b2u(n.Indexed), uint32(n.Ix))
 	}
 	for _, s := range g.Stores {
-		e = append(e, uint32(s.Buf), uint32(s.Val))
+		e = append(e, uint32(s.Buf), uint32(s.Val), b2u(s.Indexed), uint32(s.Ix))
 	}
 	if q := g.Q8; q != nil {
 		e = append(e, uint32(q.Val), uint32(q.A), uint32(q.X), uint32(q.Window), uint32(q.Pad))
@@ -161,13 +179,19 @@ func (g *Row) depth() []int {
 		switch n.Kind {
 		case NUnary:
 			d[i] = d[n.A]
-		case NBinary:
+		case NBinary, NUBinary, NLess:
 			d[i] = max(d[n.A], d[n.B])
-			if n.Op == OpFma {
+			if n.Op == OpFma && n.Kind == NBinary {
 				d[i] = max(d[i], d[n.C])
 			}
+		case NSelect:
+			d[i] = max(d[n.A], d[n.B], d[n.C])
 		case NReduce:
 			d[i] = d[n.A] + 1
+		case NLoad:
+			if n.Indexed {
+				d[i] = d[n.Ix]
+			}
 		}
 	}
 	return d
@@ -186,16 +210,21 @@ func (g *Row) Check() error {
 			if n.Buf < 0 || n.Buf >= len(g.Bufs) {
 				return fmt.Errorf("compose: node %d loads buffer %d of %d", i, n.Buf, len(g.Bufs))
 			}
-			if k := g.Bufs[n.Buf].Kind; k != BufRow && k != BufVec && k != BufScalar && k != BufRowScalar {
+			if k := g.Bufs[n.Buf].Kind; k != BufRow && k != BufVec && k != BufScalar && k != BufRowScalar && k != BufU32 {
 				return fmt.Errorf("compose: node %d loads an output buffer", i)
 			}
 		case NUnary, NReduce:
 			in = []int{n.A}
-		case NBinary:
+		case NBinary, NUBinary, NLess:
 			in = []int{n.A, n.B}
-			if n.Op == OpFma {
+			if n.Op == OpFma && n.Kind == NBinary {
 				in = append(in, n.C)
 			}
+		case NSelect:
+			in = []int{n.A, n.B, n.C}
+		}
+		if n.Kind == NLoad && n.Indexed {
+			in = append(in, n.Ix)
 		}
 		for _, x := range in {
 			if x < 0 || x >= i {
@@ -204,7 +233,8 @@ func (g *Row) Check() error {
 		}
 	}
 	for _, s := range g.Stores {
-		if s.Buf < 0 || s.Buf >= len(g.Bufs) || g.Bufs[s.Buf].Kind != BufOut || s.Val < 0 || s.Val >= len(g.Nodes) {
+		if s.Buf < 0 || s.Buf >= len(g.Bufs) || g.Bufs[s.Buf].Kind != BufOut || s.Val < 0 || s.Val >= len(g.Nodes) ||
+			s.Indexed && (s.Ix < 0 || s.Ix >= len(g.Nodes)) {
 			return fmt.Errorf("compose: a store of node %d into buffer %d", s.Val, s.Buf)
 		}
 	}
@@ -230,7 +260,7 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 	params := make([]ir.Value, len(g.Bufs))
 	for i, bf := range g.Bufs {
 		t := ir.F32
-		if bf.Kind == BufQ8 {
+		if bf.Kind == BufQ8 || bf.Kind == BufU32 {
 			t = ir.U32
 		}
 		params[i] = b.Param(fmt.Sprintf("p%d", i), t)
@@ -253,7 +283,18 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		var v ir.Value
 		switch nd.Kind {
 		case NLoad:
+			if nd.Indexed {
+				at := elem(nd.Ix, idx, memo)
+				t := ir.F32
+				if g.Bufs[nd.Buf].Kind == BufU32 {
+					t = ir.U32
+				}
+				v = b.Load(t, params[nd.Buf], at, 0)
+				break
+			}
 			switch g.Bufs[nd.Buf].Kind {
+			case BufU32:
+				v = b.Load(ir.U32, params[nd.Buf], r, 0)
 			case BufRow:
 				v = b.Load(ir.F32, params[nd.Buf], b.Add(ir.U32, rowBase, idx), 0)
 			case BufVec:
@@ -265,6 +306,36 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			}
 		case NConst:
 			v = b.ConstF32(nd.F)
+		case NColumn:
+			v = idx
+		case NRowIdx:
+			v = r
+		case NUConst:
+			v = b.Const(ir.U32, int64(nd.At))
+		case NUBinary:
+			x, y := elem(nd.A, idx, memo), elem(nd.B, idx, memo)
+			switch nd.Op {
+			case OpAdd:
+				v = b.Add(ir.U32, x, y)
+			case OpSub:
+				v = b.Sub(ir.U32, x, y)
+			case OpMul:
+				v = b.Mul(ir.U32, x, y)
+			case OpDiv:
+				v = b.Div(ir.U32, x, y)
+			case OpRem:
+				v = b.Rem(ir.U32, x, y)
+			case OpMin:
+				v = b.Min(ir.U32, x, y)
+			}
+		case NLess:
+			v = b.Lt(ir.U32, elem(nd.A, idx, memo), elem(nd.B, idx, memo))
+		case NSelect:
+			t := ir.F32
+			if g.isIndex(nd.A) {
+				t = ir.U32
+			}
+			v = b.Select(t, elem(nd.C, idx, memo), elem(nd.A, idx, memo), elem(nd.B, idx, memo))
 		case NReduce:
 			v = rowVal[n]
 		case NUnary:
@@ -309,6 +380,9 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 	for _, d := range depth {
 		passes = max(passes, d)
 	}
+	for _, st := range g.Stores {
+		passes = max(passes, g.storePass(st, depth))
+	}
 	iters := int64((g.Width + G - 1) / G)
 	step := b.Const(ir.U32, int64(G))
 	// Pass p: every reduction of depth p+1 accumulates; every store of depth
@@ -322,7 +396,7 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		}
 		var stores []Store
 		for _, st := range g.Stores {
-			if depth[st.Val] == p {
+			if g.storePass(st, depth) == p {
 				stores = append(stores, st)
 			}
 		}
@@ -355,7 +429,11 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			}
 		}
 		for _, st := range stores {
-			b.Store(params[st.Buf], b.Add(ir.U32, rowBase, idx), elem(st.Val, idx, memo), 0)
+			at := b.Add(ir.U32, rowBase, idx)
+			if st.Indexed {
+				at = elem(st.Ix, idx, memo)
+			}
+			b.Store(params[st.Buf], at, elem(st.Val, idx, memo), 0)
 		}
 		b.SetPhi(i, b.Add(ir.U32, i, step))
 		b.EndLoop()
@@ -389,3 +467,27 @@ func b2u(x bool) uint32 {
 }
 
 func f2u(f float32) uint32 { return math.Float32bits(f) }
+
+// isIndex reports node n is an index (an integer), not a float.
+func (g *Row) isIndex(n int) bool {
+	nd := g.Nodes[n]
+	switch nd.Kind {
+	case NColumn, NRowIdx, NUConst, NUBinary:
+		return true
+	case NLoad:
+		return g.Bufs[nd.Buf].Kind == BufU32
+	case NSelect:
+		return g.isIndex(nd.A)
+	}
+	return false
+}
+
+// storePass is the pass a store writes in: once its value and its index have
+// their reductions.
+func (g *Row) storePass(st Store, depth []int) int {
+	d := depth[st.Val]
+	if st.Indexed {
+		d = max(d, depth[st.Ix])
+	}
+	return d
+}

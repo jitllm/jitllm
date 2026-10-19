@@ -2,6 +2,7 @@ package backend_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math"
 	"testing"
 
@@ -154,6 +155,99 @@ func TestComposedRowsMatchTheTemplates(t *testing.T) {
 			gotA := run(cka, 1, 128, []int{n * 4}, x, y)
 			if !bytes.Equal(gotA[0], wantA[0]) {
 				t.Errorf("silu(gate) * up: the composed kernel parts from ActMul")
+			}
+		})
+	}
+}
+
+// TestComposedRotaryMatchesRoPERows holds the rotary op emitter to RoPERows
+// bit for bit: NORM and NEOX pairs, a whole head turned and half of one,
+// over rows each turned by its own row of the table.
+func TestComposedRotaryMatchesRoPERows(t *testing.T) {
+	gpuLock(t)
+	devs := backend.Open()
+	if len(devs) == 0 {
+		t.Skip("no GPU backend on this host")
+	}
+	const heads, hd, rows = 4, 64, 3
+	const width = heads * hd
+	for _, d := range devs {
+		defer d.Close()
+		t.Run(d.API(), func(t *testing.T) {
+			g := newGPU(t, d)
+			defer g.free()
+			for _, c := range []struct {
+				nrot int
+				neox bool
+			}{{64, false}, {64, true}, {32, false}, {32, true}} {
+				src := make([]float32, rows*width)
+				for i := range src {
+					src[i] = float32(math.Sin(float64(i) * 0.13))
+				}
+				cs := make([]float32, rows*c.nrot)
+				for i := 0; i < rows*c.nrot; i += 2 {
+					th := float64(i) * 0.07
+					cs[i], cs[i+1] = float32(math.Cos(th)), float32(math.Sin(th))
+				}
+				off := make([]byte, rows*4)
+				for r := 0; r < rows; r++ {
+					binary.LittleEndian.PutUint32(off[r*4:], uint32(r*width))
+				}
+				tk, err := kernels.RoPERows(heads, hd, c.nrot, c.neox, rows)
+				if err != nil {
+					t.Fatal(err)
+				}
+				gr := &compose.Row{Width: width, Rows: rows}
+				in, tab, out := gr.Buf(compose.BufRow), gr.Buf(compose.BufVec), gr.Buf(compose.BufOut)
+				gr.Store(out, gr.Rotary(in, tab, hd, c.nrot, c.neox))
+				ck, err := gr.Emit(compose.Schedule{Group: 256})
+				if err != nil {
+					t.Fatal(err)
+				}
+				tc, err := d.Compile(tk)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cc, err := d.Compile(ck)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// The template writes the turned dimensions over a copy of the
+				// row; the composed group writes the whole row.
+				want := g.up(f32bytes(src))
+				pairs := heads * c.nrot / 2 * rows
+				if err := tc.Launch((pairs+127)/128, 128, g.up(f32bytes(src)), g.up(f32bytes(cs)), g.up(off), want); err != nil {
+					t.Fatal(err)
+				}
+				got := g.up(make([]byte, rows*width*4))
+				if err := cc.Launch(rows, 256, g.up(f32bytes(src)), g.up(f32bytes(cs)), got); err != nil {
+					t.Fatal(err)
+				}
+				w, gb := make([]byte, rows*width*4), make([]byte, rows*width*4)
+				if err := want.Read(w); err != nil {
+					t.Fatal(err)
+				}
+				if err := got.Read(gb); err != nil {
+					t.Fatal(err)
+				}
+				// Bit for bit where the backend contracts as the template does
+				// (PTX); within a few ulps where a driver fuses a multiply and
+				// an add at its own whim (SPIR-V): kernels may differ per
+				// device inside the gated margin.
+				worst := 0.0
+				for i := 0; i < rows*width; i++ {
+					a := math.Float32frombits(binary.LittleEndian.Uint32(w[i*4:]))
+					b := math.Float32frombits(binary.LittleEndian.Uint32(gb[i*4:]))
+					// The inputs are at most 1 in magnitude: a contraction
+					// moves a result by an ulp of 1, about 1.2e-7.
+					worst = math.Max(worst, math.Abs(float64(a-b)))
+				}
+				t.Logf("nrot %d neox %v: worst difference %.3g", c.nrot, c.neox, worst)
+				if d.API() == "ptx" && !bytes.Equal(w, gb) || worst > 4.8e-7 {
+					t.Errorf("nrot %d neox %v: the composed rotary parts from RoPERows (worst %.3g)", c.nrot, c.neox, worst)
+				}
+				tc.Close()
+				cc.Close()
 			}
 		})
 	}
