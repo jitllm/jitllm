@@ -77,6 +77,7 @@ const (
 	dkSplitQG                      // a double-width query split into its heads and its output gate
 	dkGateOut                      // the attention's output times the sigmoid of the gate
 	dkPLESlice                     // this block's rows of the per-layer input table
+	dkRopeKRow                     // k's rotary into a row of its own (XD-RoPE's k is normed after it)
 	dkScale                        // the block's row times the layer's output scale
 	dkClamp                        // q, k or v clamped to the plan's bound
 	dkSubNorm                      // an inner norm before wo or down, with the quantize it feeds
@@ -204,6 +205,7 @@ const (
 	slotPLES                    // bs.pleS: this block's per-layer input
 	slotPLEA                    // bs.pleA: the gate activated, times the input
 	slotPLEO                    // bs.pleO: projected back to the row
+	slotKRot                    // bs.krot: k rotated, before its norm (XD-RoPE)
 	numSlots
 )
 
@@ -383,6 +385,8 @@ func (s devSlot) String() string {
 		return "ple_a"
 	case slotPLEO:
 		return "ple_o"
+	case slotKRot:
+		return "k_rot"
 	}
 	return ""
 }
@@ -485,7 +489,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	}
 	switch o.Kind {
-	case dkRecurrent, dkCopy, dkKVCopy, dkAct, dkQTemp, dkSplitQG, dkGateOut, dkPLESlice, dkScale, dkClamp, dkSubNorm:
+	case dkRecurrent, dkCopy, dkKVCopy, dkAct, dkQTemp, dkSplitQG, dkGateOut, dkPLESlice, dkRopeKRow, dkScale, dkClamp, dkSubNorm:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkExpertMatVec:
 		// The activation, int8; the selection, indices; the float rows the
@@ -609,10 +613,6 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 	switch {
 	case g == nil:
 		return nil, "no graph"
-	case p.NonCausal:
-		return nil, "non-causal attention"
-	case p.RopeSplit:
-		return nil, "XD-RoPE"
 	case !actHasKernel(p):
 		return nil, "an activation with no kernel"
 	case bindsRole(g, jlm.RoleFFNRoutedDown):
@@ -625,10 +625,10 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			return nil, "op " + o.Kind.String()
 		}
 		// A window or an aligned chunk is the plan's per-row key start (the
-		// descriptors); a bidirectional sequence is an encoder's, not a
-		// paged history's.
-		if o.Kind == graph.OpAttend && o.Attr.Bidir {
-			return nil, "a bidirectional attention"
+		// descriptors); a bidirectional sequence is a non-causal segment's,
+		// over its contiguous history.
+		if o.Kind == graph.OpAttend && o.Attr.Bidir && !p.NonCausal {
+			return nil, "a bidirectional attention in a causal block"
 		}
 	}
 	prog := &devProgram{}
@@ -1223,7 +1223,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			}
 			s := slotQN
 			switch prog.slots[src] {
-			case slotK, slotV, slotKC, slotVC:
+			case slotK, slotV, slotKC, slotVC, slotKRot:
 				// k's norm; or v's (weightless, on k's heads), which reads
 				// the projection k's norm does not overwrite where v is k's.
 				s = slotKN
@@ -1252,6 +1252,15 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				kRot = o.Out[0]
 				vals[o.Out[0]] = in(0)
 				continue
+			case slotK, slotKC:
+				if p.RopeSplit {
+					// XD-RoPE: k turns into a row of its own, which its norm
+					// reads before the history copies it in.
+					out := prog.val(name(0), prog.vals[in(0)], slotKRot)
+					prog.ops = append(prog.ops, devOp{Kind: dkRopeKRow, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}})
+					vals[o.Out[0]] = out
+					continue
+				}
 			}
 			if s := prog.slots[in(0)]; s == slotQ || s == slotQG || s == slotQN || s == slotQC {
 				out := prog.val(name(0), f32(qd), slotQR)

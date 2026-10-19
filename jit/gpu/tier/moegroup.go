@@ -699,27 +699,27 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 	// pass is the card's grouped run over the selection m.rsel and weights
 	// m.rw holds, its weighted sum written to dst.
 	pass := func(dst backend.Buf) {
-		gr := groupRun{g: g, la: la, m: m, l: l, p: p, errp: errp, rows: rows, e: e, ew: ew, ein: ein}
-		if !gr.sort(s) {
+		gr := groupRun{g: g, m: m, l: l, p: p, rows: rows, e: e, ew: ew, ein: ein}
+		if !gr.sort(la, errp, s) {
 			return
 		}
 		cols := gr.cols
 		if ungatedFFN(p) {
 			// Ungated experts (Nemotron 3): up, the activation alone, down. No
 			// such architecture has expert biases or input weighting.
-			gr.grouped(&l.mvu, l.up, nil, m.eu)
+			gr.grouped(la, errp, &l.mvu, l.up, nil, m.eu)
 			gr.actK = nil
 			la(m.actMul, cols*p.NFFNExp, 128, m.eu, m.eact)
-			gr.grouped(&l.mvd, l.down, nil, m.edown)
+			gr.grouped(la, errp, &l.mvd, l.down, nil, m.edown)
 			la(m.combine, rows*ew, 128, m.edown, m.rw, m.pos, dst)
 			g.GroupedMoE++
 			return
 		}
-		gateB := gr.grouped(&l.mvg, l.gate, l.expGateB, m.eg)
+		gateB := gr.grouped(la, errp, &l.mvg, l.gate, l.expGateB, m.eg)
 		// A different act kernel is a different layout; the SAME kernel over the
 		// same source is the same conversion, so up reuses gate's unless its
 		// format differs. The down reads eact, a different source: forget it.
-		upB := gr.grouped(&l.mvu, l.up, l.expUpB, m.eu)
+		upB := gr.grouped(la, errp, &l.mvu, l.up, l.expUpB, m.eu)
 		gr.actK = nil
 		eg, eu := m.eg, m.eu
 		if l.expGateB != nil && !gateB {
@@ -742,7 +742,7 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 		} else {
 			la(m.actMul, cols*p.NFFNExp, 128, eg, eu, m.eact)
 		}
-		downB := gr.grouped(&l.mvd, l.down, l.expDownB, m.edown)
+		downB := gr.grouped(la, errp, &l.mvd, l.down, l.expDownB, m.edown)
 		edown := m.edown
 		if l.expDownB != nil && !downB {
 			la(m.biasD, cols*ew, 128, m.edown, m.colE, l.expDownB, m.edownB)
@@ -841,13 +841,16 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 // that chose its experts (grouped), reading them gathered, quantized or
 // converted once per source. The block encoder's pass and the device
 // program's expert ops both run through it.
+//
+// The launch path and the error are each method's parameters, not fields:
+// escape analysis does not tell one field from another, and a launch's
+// buffers flow to the heap, so a field holding the session's error moved it
+// there on every call.
 type groupRun struct {
-	g    *devTier
-	la   func(k backend.Kernel, threads, group int, bufs ...backend.Buf)
-	m    *moeGroup
-	l    *layer
-	p    *nn.LayerPlan
-	errp *error
+	g *devTier
+	m *moeGroup
+	l *layer
+	p *nn.LayerPlan
 
 	rows, e, ew int
 	ein         backend.Buf // the rows the experts read
@@ -865,8 +868,8 @@ type groupRun struct {
 
 // sort groups the selection by expert on the device and reads back the one
 // size that depends on it, the used column count. False on an error.
-func (r *groupRun) sort(s backend.Session) bool {
-	m, la, rows, e := r.m, r.la, r.rows, r.e
+func (r *groupRun) sort(la launchFn, errp *error, s backend.Session) bool {
+	m, rows, e := r.m, r.rows, r.e
 	// The grouping runs on the device (kernels.ExpertGroup*) and only the used
 	// column count comes home.
 	nbe := kernels.GroupBlocks(rows, m.k) * e
@@ -884,13 +887,13 @@ func (r *groupRun) sort(s backend.Session) bool {
 	if m.volta {
 		la(m.gtilesU, m.p/m.unit, 128, m.ends, m.tselU)
 	}
-	if *r.errp == nil {
-		*r.errp = s.Sync()
+	if *errp == nil {
+		*errp = s.Sync()
 	}
-	if *r.errp == nil {
-		*r.errp = s.Read(m.ends, u32b(m.endsH))
+	if *errp == nil {
+		*errp = s.Read(m.ends, u32b(m.endsH))
 	}
-	if *r.errp != nil {
+	if *errp != nil {
 		return false
 	}
 	r.cols = int(m.endsH[e-1])
@@ -908,9 +911,9 @@ func (r *groupRun) sort(s backend.Session) bool {
 // through ActF16TGather, so the float32 sorted copy (hg) exists only for the
 // dp4a path, and the expert biases ride the GEMM's epilogue instead of three
 // elementwise passes over the sorted outputs.
-func (r *groupRun) gather() {
+func (r *groupRun) gather(la launchFn) {
 	if !r.gathered {
-		r.la(r.m.gather, r.cols*r.ew, 128, r.ein, r.m.perm, r.m.hg)
+		la(r.m.gather, r.cols*r.ew, 128, r.ein, r.m.perm, r.m.hg)
 		r.gathered = true
 	}
 }
@@ -919,17 +922,17 @@ func (r *groupRun) gather() {
 // the three runs there; the tensor-core ones convert to binary16 once per
 // source and layout (a Q6_K down reads a different step order from a Q4_K
 // gate).
-func (r *groupRun) quantize(q backend.Kernel, n int, src backend.Buf) {
+func (r *groupRun) quantize(la launchFn, q backend.Kernel, n int, src backend.Buf) {
 	if r.quantized != src {
-		r.la(q, kernels.QuantizeThreads(r.cols*pad32(n)/32), 128, src, r.m.ga, r.m.gax)
+		la(q, kernels.QuantizeThreads(r.cols*pad32(n)/32), 128, src, r.m.ga, r.m.gax)
 		r.quantized = src
 	}
 }
 
 // grouped runs one bank over the sorted columns into dst and reports whether
 // it added the bias itself.
-func (r *groupRun) grouped(mv *mv, res *resident, bias, dst backend.Buf) bool {
-	g, m, la, l := r.g, r.m, r.la, r.l
+func (r *groupRun) grouped(la launchFn, errp *error, mv *mv, res *resident, bias, dst backend.Buf) bool {
+	g, m, l := r.g, r.m, r.l
 	down := mv == &l.mvd
 	if kernels.IsFloat(mv.q) {
 		// A float bank reads the sorted float rows in the scale plane's
@@ -937,8 +940,8 @@ func (r *groupRun) grouped(mv *mv, res *resident, bias, dst backend.Buf) bool {
 		// anywhere: moeFloatHalf built the gather there.
 		c, ok := g.groupedMV(*mv, r.e, m.p)
 		if !ok || m.gather == nil {
-			if *r.errp == nil {
-				*r.errp = errNoBatch
+			if *errp == nil {
+				*errp = errNoBatch
 			}
 			return false
 		}
@@ -947,7 +950,7 @@ func (r *groupRun) grouped(mv *mv, res *resident, bias, dst backend.Buf) bool {
 			src = m.eg
 		}
 		if !down {
-			r.gather()
+			r.gather(la)
 			src = m.hg
 		}
 		// The int8 slots are bound and never read; sm_70's scratch has no
@@ -963,16 +966,16 @@ func (r *groupRun) grouped(mv *mv, res *resident, bias, dst backend.Buf) bool {
 	if !m.volta {
 		c, ok := g.groupedMV(*mv, r.e, m.p)
 		if !ok {
-			if *r.errp == nil {
-				*r.errp = errNoBatch
+			if *errp == nil {
+				*errp = errNoBatch
 			}
 			return false
 		}
 		if down {
-			r.quantize(m.quantX, r.p.NFFNExp, r.downSrc)
+			r.quantize(la, m.quantX, r.p.NFFNExp, r.downSrc)
 		} else {
-			r.gather()
-			r.quantize(m.quantH, r.ew, m.hg)
+			r.gather(la)
+			r.quantize(la, m.quantH, r.ew, m.hg)
 		}
 		// Only the groups in use: the thread index is row fastest, then group.
 		la(c, mv.rows*r.used, 128, res.qs, res.d, res.sc, m.ga, m.gax, dst, m.tsel)
@@ -983,8 +986,8 @@ func (r *groupRun) grouped(mv *mv, res *resident, bias, dst backend.Buf) bool {
 	withBias, nsrc := moeVoltaArgs(l, mv, m)
 	vm, ok := g.voltaGroupedMV(*mv, r.e, m.p, m.unit, withBias, nsrc)
 	if !ok {
-		if *r.errp == nil {
-			*r.errp = errNoBatch
+		if *errp == nil {
+			*errp = errNoBatch
 		}
 		return withBias
 	}
@@ -1012,3 +1015,7 @@ func (r *groupRun) grouped(mv *mv, res *resident, bias, dst backend.Buf) bool {
 	g.GroupedVolta++
 	return withBias
 }
+
+// launchFn launches kernel k over threads in workgroups of group, latching
+// the submission's first error.
+type launchFn func(k backend.Kernel, threads, group int, bufs ...backend.Buf)

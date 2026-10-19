@@ -872,8 +872,12 @@ func (g *devTier) layersSession(s backend.Session) {
 	runProg := func(l *layer, li int, prog *devProgram) {
 		pk := bs.pkv
 		var pl *kvLayerPool
+		var kvp *kvPair
 		var kvBuf backend.Buf
-		if prog.attends {
+		switch {
+		case prog.attends && pk != nil:
+			// The paged history: the pool's layer, each row's page by its
+			// descriptor.
 			if g.kvp != nil {
 				pl = g.kvp.layers[l.kvSrc]
 			}
@@ -884,7 +888,26 @@ func (g *devTier) layersSession(s backend.Session) {
 				return
 			}
 			kvBuf = pl.k
+		case prog.attends:
+			// A contiguous history (a non-causal segment's): this session's
+			// cache at each row's offset.
+			if kvp = g.layers[l.kvSrc].kvOf(sid); kvp == nil {
+				if err == nil {
+					err = fmt.Errorf("tier: block %d has no KV cache for session %d", li, sid)
+				}
+				return
+			}
+			kvBuf = kvp.kc
 		}
+		// A non-causal call in two phases (a row-chunked segment): the first
+		// writes its chunk's keys and attends nothing, the second attends
+		// every chunk's and writes none.
+		kOff := bs.koff
+		if kst > 0 {
+			kOff = bs.kpos
+		}
+		ncWrite := !(p.NonCausal && g.ncPhase == 2)
+		ncAttend := !(p.NonCausal && g.ncPhase == 1)
 		qdim := p.NHead * p.HeadDim
 		rcs := bs.cs
 		if bs.csSWA != nil && p.LocalRope(li) {
@@ -906,7 +929,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			slotDOut: bs.dOut, slotDAct: bs.dAct, slotScB: bs.scB, slotScC: bs.scC, slotScBx: bs.scBx, slotScY: bs.scY,
 			slotLRQ8: bs.dLRa, slotDLow: bs.dLowRank, slotDAlpha: bs.dAlpha, slotM1B: bs.m1B, slotM1C: bs.m1C,
 			slotM1LowN: bs.m1LowN, slotM1BN: bs.m1BN, slotM1CN: bs.m1CN,
-			slotPLEG: bs.pleG, slotPLES: bs.pleS, slotPLEA: bs.pleA, slotPLEO: bs.pleO}
+			slotPLEG: bs.pleG, slotPLES: bs.pleS, slotPLEA: bs.pleA, slotPLEO: bs.pleO, slotKRot: bs.krot}
 		// The rewrites legal at one row, on a prompt chunk and on a ragged
 		// step differ: each class keeps its own fused program.
 		fc := &l.progOne
@@ -1107,12 +1130,41 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				lc.la(bs.ropeQ, R*p.NHead*p.NRot/2, at(o.In[0]), rcs, qOff, at(o.Out[0]))
 			case dkKVWrite:
+				if pk == nil {
+					if ncWrite {
+						if partialRotary(p) {
+							lc.la(bs.copyK, R*kvDim, at(o.In[0]), kvp.kc, kOff)
+						}
+						lc.la(bs.ropeK, R*p.NKVHead*p.NRot/2, at(o.In[0]), rcs, kOff, kvp.kc)
+						lc.la(bs.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), kvp.vc, bs.koff)
+					}
+					break
+				}
 				if partialRotary(p) {
 					lc.la(pk.copyK, R*p.KVRow(), at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
 				}
 				lc.la(pk.ropeK, R*p.NKVHead*p.NRot/2, at(o.In[0]), rcs, bs.zero, pl.k, pl.tab, pk.pRow)
 				lc.la(pk.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), pl.v, bs.zero, pl.tab, pk.pRow)
 			case dkAttend:
+				if pk == nil {
+					if !ncAttend {
+						break
+					}
+					var fv *flashVariant
+					var flash backend.Kernel
+					if len(bs.flashV) > 0 {
+						fv = bs.flashFor(nCap)
+						flash = fv.k
+						if p.Window(li) > 0 {
+							flash = fv.kW
+						}
+					}
+					if err == nil {
+						err = g.contigAttend(lc, bs, l, li, R, kvp, at(o.In[0]), nCap, sm, smG, smW, nil, fv, flash,
+							g.flashOn() && flash != nil && !l.windowed)
+					}
+					break
+				}
 				if pk.prefill {
 					// A prefill chunk: one sequence's rows in order, a K or V
 					// load serving a whole query tile.
@@ -1346,8 +1398,8 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 			case dkGroupByExpert:
 				if rowsMoE {
-					gr = groupRun{g: g, la: lg, m: mg, l: l, p: p, errp: &err, rows: R, e: mg.nExp, ew: p.ExpWidth()}
-					if !gr.sort(s) {
+					gr = groupRun{g: g, m: mg, l: l, p: p, rows: R, e: mg.nExp, ew: p.ExpWidth()}
+					if !gr.sort(lg, &err, s) {
 						return
 					}
 				}
@@ -1372,7 +1424,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						bias = next.V
 					}
 					gr.ein = at(o.In[2])
-					if gr.grouped(l.ms[o.W], *l.rs[o.W], bias, at(o.Out[0])) && next != nil {
+					if gr.grouped(lg, &err, l.ms[o.W], *l.rs[o.W], bias, at(o.Out[0])) && next != nil {
 						buf[prog.slots[next.Out[0]]] = at(o.Out[0])
 						skipNext = true
 					}
@@ -1478,6 +1530,12 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				laRows(k, at(o.In[0]), o.V, at(o.Out[0]), bs.a, bs.ax)
 				fsrc = at(o.Out[0])
+			case dkRopeKRow:
+				kro := bs.zero
+				if R > 1 {
+					kro = bs.kroff
+				}
+				lc.la(bs.ropeKRow, R*p.NKVHead*p.NRot/2, at(o.In[0]), rcs, kro, at(o.Out[0]))
 			case dkPLESlice:
 				if bs.pleIn == nil {
 					if err == nil {
@@ -1515,6 +1573,13 @@ func (g *devTier) layersSession(s backend.Session) {
 					lc.la(bs.actMul, R*nf, at(o.In[0]), at(o.Out[0]))
 				}
 			case dkKVCopy:
+				if pk == nil {
+					if ncWrite {
+						lc.la(bs.copyK, R*kvDim, at(o.In[0]), kvp.kc, kOff)
+						lc.la(bs.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), kvp.vc, bs.koff)
+					}
+					break
+				}
 				lc.la(pk.copyK, R*p.KVRow(), at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
 				lc.la(pk.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), pl.v, bs.zero, pl.tab, pk.pRow)
 			case dkCopy:
@@ -1940,8 +2005,11 @@ func (g *devTier) layersSession(s backend.Session) {
 				why = progRowsNotPrefill
 			case len(skip) != 0 || g.blockFaulted():
 				why = progFault
-			case l.prog.attends && (bs.pkv == nil || (R == 1 || rag != nil) && (bs.pkv.cur == nil || bs.pkv.prefill) ||
-				R > 1 && rag == nil && bs.pkv.pf == nil):
+			case l.prog.attends && bs.pkv != nil && ((R == 1 || rag != nil) && (bs.pkv.cur == nil || bs.pkv.prefill) ||
+				R > 1 && rag == nil && bs.pkv.pf == nil),
+				l.prog.attends && bs.pkv == nil && !p.NonCausal:
+				// A paged block whose call lacks its plan, or a causal block
+				// with no paged history.
 				why = progNotPaged
 			case l.prog.ropes && (bs.ropeQ == nil || l.noRope):
 				why = progRotary
@@ -2558,135 +2626,8 @@ func (g *devTier) layersSession(s backend.Session) {
 							}
 							g.RagPrefills++
 						}
-					} else if !skipAttn && useFlash {
-						dst := bs.xb
-						if fv.splits > 1 {
-							dst = bs.flashPart
-						}
-						args := []backend.Buf{qAtt, kvp.kc, kvp.vc, bs.n, dst}
-						if p.AttnSinks {
-							sk := l.sinks
-							if sk == nil {
-								sk = bs.noSink
-							}
-							args = append(args, sk)
-						}
-						if err == nil {
-							err = lc.launch(flash, fv.groups, bs.flashWidth, args...)
-							if err == nil && fv.splits > 1 {
-								ma := []backend.Buf{bs.flashPart, bs.xb}
-								if p.AttnSinks {
-									ma = append(ma, args[5])
-								}
-								err = lc.launch(fv.merge, R*p.NHead, 32, ma...)
-							}
-							g.FlashLaunches++
-						}
-					} else if !skipAttn && bs.fp70 != nil && !skip["scores"] && !skip["softmax"] && !skip["acc"] && !l.windowed {
-						// The chunk's attention as one kernel: scores,
-						// softmax and the weighted V sum per key tile, the
-						// scores never written (kernels.FlashPrefill70).
-						fk := bs.fp70
-						if p.Window(li) > 0 {
-							fk = bs.fp70W
-						}
-						if err == nil {
-							err = lc.launch(fk, kernels.FlashPrefill70Groups(kernels.FlashPrefill70Shape{Heads: p.NHead, Rows: R}),
-								kernels.FlashPrefill70Threads, qAtt, kvp.kc, kvp.vc, bs.n, bs.xb)
-						}
-						g.FlashPrefills++
-					} else if !skipAttn && bs.fpT != nil && !skip["scores"] && !skip["softmax"] && !skip["acc"] && !l.windowed {
-						// The same, on Metal's matrix unit (kernels.FlashPrefillTile).
-						fk := bs.fpT
-						if p.Window(li) > 0 {
-							fk = bs.fpTW
-						}
-						if err == nil {
-							err = lc.launch(fk, kernels.FlashTileGroups(p.NHead, R, bs.fpTile),
-								bs.fpTile.Threads(), qAtt, kvp.kc, kvp.vc, bs.n, bs.xb)
-						}
-						g.FlashPrefills++
-					} else if !skipAttn {
-						// One pass over the rows, or one per query chunk of a vision
-						// block whose score planes are sized for a chunk (arows):
-						// the chunk's queries gathered into qc, its output scattered
-						// back from xc.
-						run := func(qIn, out, win backend.Buf, R int) {
-							if !skip["scores"] {
-								// A local layer takes the windowed pair: bs.n's key counts are
-								// causal and shared, while the window is per layer and baked in.
-								scores, scoresMMA := bs.scores, bs.scoresMMA
-								if p.Window(li) > 0 {
-									scores, scoresMMA = bs.scoresW, bs.scoresMMAW
-								}
-								scores70 := bs.scores70
-								if p.Window(li) > 0 {
-									scores70 = bs.scores70W
-								}
-								if scoresMMA != nil {
-									// One warp per 16 query rows x 8*attnNT key positions.
-									kg := (nCap + 8*g.tiles.attnNT - 1) / (8 * g.tiles.attnNT)
-									lc.la(scoresMMA, (R/16)*p.NHead*kg*32, qIn, kvp.kc, bs.n, bs.att)
-								} else if scores70 != nil {
-									lc.la(scores70, kernels.AttnScoresMMA70Warps(p.NHead, R, nCap, volta70AttnMT,
-										volta70AttnNT)*32, qIn, kvp.kc, bs.n, bs.att)
-								} else {
-									// The key axis is covered by ceil(nCap/ktile)
-									// threads, which is the same G the kernel derives
-									// from pN.
-									kg := (nCap + bs.ktile - 1) / bs.ktile
-									lc.la(scores, (R/bs.qtile)*p.NHead*kg, qIn, kvp.kc, bs.n, bs.att)
-								}
-							}
-							att := bs.att
-							if bs.softcap != nil {
-								lc.la(bs.softcap, R*p.NHead*bs.sstride, bs.att, bs.attCap)
-								att = bs.attCap
-							}
-							// Qwen2.5-VL's windowed blocks: every key outside a
-							// row's window to -inf before the softmax, the windows
-							// of this pass's rows in win.
-							// Packed sequences: every key outside a row's own
-							// sequence, the same mask over the runs (SetSeqRuns).
-							if win != nil {
-								lc.la(bs.winMask, R*p.NHead*bs.sstride, att, win, bs.attWin)
-								att = bs.attWin
-							}
-							if err == nil && !skip["softmax"] {
-								// Not la(): softmax is the one kernel whose group is
-								// not 128 wide. With 32 lanes to a head the group IS
-								// the warp, which is what lets the shuffle assume
-								// lane == tid.
-								if bs.p.AttnSinks {
-									sk := l.sinks
-									if sk == nil {
-										sk = bs.noSink
-									}
-									err = lc.launch(sm, smG, smW, att, bs.n, bs.prob, sk)
-								} else {
-									err = lc.launch(sm, smG, smW, att, bs.n, bs.prob)
-								}
-							}
-							if bs.accSplit > 1 {
-								lc.la(bs.attnAcc, qdim*bs.accSplit, bs.prob, kvp.vc, bs.n, g.partBuf)
-								lc.la(bs.attnRed, qdim, g.partBuf, out)
-							} else if !skip["acc"] && bs.acc70 != nil {
-								lc.la(bs.acc70, kernels.AttnAccMMA70Warps(p.NHead, p.HeadDim, R,
-									volta70AccMT, volta70AttnNT)*32, bs.prob, kvp.vc, bs.n, out)
-							} else if !skip["acc"] {
-								lc.la(bs.attnAcc, R*qdim/bs.atile, bs.prob, kvp.vc, bs.n, out)
-							}
-						}
-						if bs.arows > 0 && bs.arows < R {
-							for c := range bs.qoffs {
-								lc.la(bs.qGather, bs.arows*qdim, qAtt, bs.qc, bs.qoffs[c])
-								run(bs.qc, bs.xc, bs.winOf(l, c), bs.arows)
-								lc.la(bs.xScatter, bs.arows*qdim, bs.xc, bs.xb, bs.qoffs[c])
-							}
-							g.VisionAttnChunks += len(bs.qoffs)
-						} else {
-							run(qAtt, bs.xb, bs.winOf(l, 0), R)
-						}
+					} else if !skipAttn && err == nil {
+						err = g.contigAttend(lc, bs, l, li, R, kvp, qAtt, nCap, sm, smG, smW, skip, fv, flash, useFlash)
 					}
 					// The out-gate goes before wo: gating after the projection would scale
 					// the residual contribution instead (as engine/model/forward.go notes).
@@ -3498,4 +3439,148 @@ func (g *devTier) layersSession(s backend.Session) {
 	default:
 		err = s.Read(bs.x, bs.hraw[:nrow*p.NEmbd*4])
 	}
+}
+
+// contigAttend is attention over a contiguous history (kvp: a non-causal
+// segment's, or a block whose history is not paged) into bs.xb: the flash
+// kernel where built, the one-kernel prefill on sm_70 or Metal's matrix
+// unit, else scores, a softcap, a window mask, the softmax and the weighted
+// sum, per query chunk where the score planes are sized for one. The block
+// encoder and the device program's attention both run it.
+func (g *devTier) contigAttend(lc *launcher, bs *blockScratch, l *layer, li, R int, kvp *kvPair, qAtt backend.Buf,
+	nCap int, sm backend.Kernel, smG, smW int, skip map[string]bool, fv *flashVariant, flash backend.Kernel, useFlash bool) error {
+	p := &bs.p
+	qdim := p.NHead * p.HeadDim
+	var err error
+	if useFlash {
+		dst := bs.xb
+		if fv.splits > 1 {
+			dst = bs.flashPart
+		}
+		args := []backend.Buf{qAtt, kvp.kc, kvp.vc, bs.n, dst}
+		if p.AttnSinks {
+			sk := l.sinks
+			if sk == nil {
+				sk = bs.noSink
+			}
+			args = append(args, sk)
+		}
+		if err == nil {
+			err = lc.launch(flash, fv.groups, bs.flashWidth, args...)
+			if err == nil && fv.splits > 1 {
+				ma := []backend.Buf{bs.flashPart, bs.xb}
+				if p.AttnSinks {
+					ma = append(ma, args[5])
+				}
+				err = lc.launch(fv.merge, R*p.NHead, 32, ma...)
+			}
+			g.FlashLaunches++
+		}
+	} else if bs.fp70 != nil && !skip["scores"] && !skip["softmax"] && !skip["acc"] && !l.windowed {
+		// The chunk's attention as one kernel: scores,
+		// softmax and the weighted V sum per key tile, the
+		// scores never written (kernels.FlashPrefill70).
+		fk := bs.fp70
+		if p.Window(li) > 0 {
+			fk = bs.fp70W
+		}
+		if err == nil {
+			err = lc.launch(fk, kernels.FlashPrefill70Groups(kernels.FlashPrefill70Shape{Heads: p.NHead, Rows: R}),
+				kernels.FlashPrefill70Threads, qAtt, kvp.kc, kvp.vc, bs.n, bs.xb)
+		}
+		g.FlashPrefills++
+	} else if bs.fpT != nil && !skip["scores"] && !skip["softmax"] && !skip["acc"] && !l.windowed {
+		// The same, on Metal's matrix unit (kernels.FlashPrefillTile).
+		fk := bs.fpT
+		if p.Window(li) > 0 {
+			fk = bs.fpTW
+		}
+		if err == nil {
+			err = lc.launch(fk, kernels.FlashTileGroups(p.NHead, R, bs.fpTile),
+				bs.fpTile.Threads(), qAtt, kvp.kc, kvp.vc, bs.n, bs.xb)
+		}
+		g.FlashPrefills++
+	} else {
+		// One pass over the rows, or one per query chunk of a vision
+		// block whose score planes are sized for a chunk (arows):
+		// the chunk's queries gathered into qc, its output scattered
+		// back from xc.
+		run := func(qIn, out, win backend.Buf, R int) {
+			if !skip["scores"] {
+				// A local layer takes the windowed pair: bs.n's key counts are
+				// causal and shared, while the window is per layer and baked in.
+				scores, scoresMMA := bs.scores, bs.scoresMMA
+				if p.Window(li) > 0 {
+					scores, scoresMMA = bs.scoresW, bs.scoresMMAW
+				}
+				scores70 := bs.scores70
+				if p.Window(li) > 0 {
+					scores70 = bs.scores70W
+				}
+				if scoresMMA != nil {
+					// One warp per 16 query rows x 8*attnNT key positions.
+					kg := (nCap + 8*g.tiles.attnNT - 1) / (8 * g.tiles.attnNT)
+					lc.la(scoresMMA, (R/16)*p.NHead*kg*32, qIn, kvp.kc, bs.n, bs.att)
+				} else if scores70 != nil {
+					lc.la(scores70, kernels.AttnScoresMMA70Warps(p.NHead, R, nCap, volta70AttnMT,
+						volta70AttnNT)*32, qIn, kvp.kc, bs.n, bs.att)
+				} else {
+					// The key axis is covered by ceil(nCap/ktile)
+					// threads, which is the same G the kernel derives
+					// from pN.
+					kg := (nCap + bs.ktile - 1) / bs.ktile
+					lc.la(scores, (R/bs.qtile)*p.NHead*kg, qIn, kvp.kc, bs.n, bs.att)
+				}
+			}
+			att := bs.att
+			if bs.softcap != nil {
+				lc.la(bs.softcap, R*p.NHead*bs.sstride, bs.att, bs.attCap)
+				att = bs.attCap
+			}
+			// Qwen2.5-VL's windowed blocks: every key outside a
+			// row's window to -inf before the softmax, the windows
+			// of this pass's rows in win.
+			// Packed sequences: every key outside a row's own
+			// sequence, the same mask over the runs (SetSeqRuns).
+			if win != nil {
+				lc.la(bs.winMask, R*p.NHead*bs.sstride, att, win, bs.attWin)
+				att = bs.attWin
+			}
+			if err == nil && !skip["softmax"] {
+				// Not la(): softmax is the one kernel whose group is
+				// not 128 wide. With 32 lanes to a head the group IS
+				// the warp, which is what lets the shuffle assume
+				// lane == tid.
+				if bs.p.AttnSinks {
+					sk := l.sinks
+					if sk == nil {
+						sk = bs.noSink
+					}
+					err = lc.launch(sm, smG, smW, att, bs.n, bs.prob, sk)
+				} else {
+					err = lc.launch(sm, smG, smW, att, bs.n, bs.prob)
+				}
+			}
+			if bs.accSplit > 1 {
+				lc.la(bs.attnAcc, qdim*bs.accSplit, bs.prob, kvp.vc, bs.n, g.partBuf)
+				lc.la(bs.attnRed, qdim, g.partBuf, out)
+			} else if !skip["acc"] && bs.acc70 != nil {
+				lc.la(bs.acc70, kernels.AttnAccMMA70Warps(p.NHead, p.HeadDim, R,
+					volta70AccMT, volta70AttnNT)*32, bs.prob, kvp.vc, bs.n, out)
+			} else if !skip["acc"] {
+				lc.la(bs.attnAcc, R*qdim/bs.atile, bs.prob, kvp.vc, bs.n, out)
+			}
+		}
+		if bs.arows > 0 && bs.arows < R {
+			for c := range bs.qoffs {
+				lc.la(bs.qGather, bs.arows*qdim, qAtt, bs.qc, bs.qoffs[c])
+				run(bs.qc, bs.xc, bs.winOf(l, c), bs.arows)
+				lc.la(bs.xScatter, bs.arows*qdim, bs.xc, bs.xb, bs.qoffs[c])
+			}
+			g.VisionAttnChunks += len(bs.qoffs)
+		} else {
+			run(qAtt, bs.xb, bs.winOf(l, 0), R)
+		}
+	}
+	return err
 }

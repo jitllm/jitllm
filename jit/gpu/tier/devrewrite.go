@@ -78,6 +78,8 @@ func (k devKind) String() string {
 		return "gate_out"
 	case dkPLESlice:
 		return "ple_slice"
+	case dkRopeKRow:
+		return "rope_k_row"
 	case dkScale:
 		return "scale"
 	case dkClamp:
