@@ -1126,7 +1126,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						bias = next.V
 					}
 					gr.ein = at(o.In[2])
-					if gr.grouped(lg, &err, l.ms[o.W], *l.rs[o.W], bias, at(o.Out[0])) && next != nil {
+					if gr.grouped(groupLaunch{lc, &err}, &err, l.ms[o.W], *l.rs[o.W], bias, at(o.Out[0])) && next != nil {
 						buf[prog.slots[next.Out[0]]] = at(o.Out[0])
 						skipNext = true
 					}
@@ -1468,7 +1468,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			case dkGroupByExpert:
 				if rowsMoE {
 					gr = groupRun{g: g, m: mg, l: l, p: p, rows: R, e: mg.nExp, ew: p.ExpWidth()}
-					if !gr.sort(lg, &err, s) {
+					if !gr.sort(groupLaunch{lc, &err}, &err, s) {
 						return
 					}
 				}
@@ -1777,6 +1777,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					}
 					gst.a, gst.ax = bs.a, bs.ax
 					gst.f16, gst.memoK, gst.memoSrc = g.f16Buf, actMemoK, actMemoSrc
+					gst.split = g.partBuf
 					if o.Kind == dkGatherHeads {
 						gst.perm = g.perms[[2]int{o.Heads, R}]
 					}

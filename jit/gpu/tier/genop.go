@@ -54,6 +54,7 @@ const (
 	gaQ8A   // an int8 output's values
 	gaQ8X   // its scales and sums
 	gaPerm  // the step's head-major order: each gathered row's source row (headPerm)
+	gaSplit // a k split's partial plane (the tier's partBuf)
 )
 
 // genLaunch is one generated launch: threads for a flat launch, or groups of
@@ -638,6 +639,8 @@ type genState struct {
 	a, ax            backend.Buf
 	// perm is the step's head-major order for a gather (headPerm).
 	perm backend.Buf
+	// split is the partial plane a k split's segments write (partBuf).
+	split backend.Buf
 	// The step's binary16 operand: its plane, and the conversion the step
 	// last made, by kernel and source (shared with the executor, so a
 	// conversion either one made is not made again).
@@ -699,6 +702,8 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.f16
 			case gaPerm:
 				bufs[j] = st.perm
+			case gaSplit:
+				bufs[j] = st.split
 			case gaQ8A:
 				bufs[j], _ = int8Of(st, o.Out[l.q8])
 			case gaQ8X:
@@ -854,8 +859,6 @@ func (g *devTier) genMatVec(o *devOp, prog *devProgram, bs *blockScratch) []genL
 	switch {
 	case m.kern == nil:
 		o.Why = whyNoKernel
-	case m.split > 1 && !m.group:
-		o.Why = whySplit
 	case m.experts > 1 || m.slots > 0:
 		o.Why = whyBank
 	case m.pad:
@@ -877,6 +880,9 @@ func (g *devTier) genMatVec(o *devOp, prog *devProgram, bs *blockScratch) []genL
 	}
 	rowt := max(m.rowt, 1)
 	s := kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Split: m.split, Rowt: rowt, GroupSplit: m.group}
+	if m.split > 1 && !m.group {
+		return g.genSplitMatVec(o, s, e, args)
+	}
 	k, width := g.mvEpiKern(s, e)
 	if k == nil {
 		return nil
@@ -1160,4 +1166,40 @@ func (w genWhy) String() string {
 		"padded rows", "a table split", "an operand of its own", "an epilogue it cannot compose",
 		"no batched form", "a prompt form other than the staged GEMM", "a tail launch",
 		"no float row stated"}[w]
+}
+
+// genSplitMatVec is a decode matvec whose k is split across threads: the
+// former's segments write the partial plane, and the reduction former sums
+// them in segment order through the op's epilogue. Callers hold g.mu.
+func (g *devTier) genSplitMatVec(o *devOp, s kernels.MatVecShape, e *compose.Epi, eargs []genArg) []genLaunch {
+	// The plane is grown here, in the prologue; inside a submission nothing
+	// may allocate, so there it must already hold the segments.
+	need := s.Rows * s.Split
+	if g.genInSub && g.partCap < need || !g.genInSub && !g.sizePart(need) {
+		o.Why = whySplit
+		return nil
+	}
+	mv := &compose.MatVec{T: s.T, K: s.K, Rows: s.Rows, Split: s.Split, Rowt: s.Rowt, Center: s.Center}
+	k, width := g.genKern(append([]uint32{encMatVec}, mv.Encode()...), mv.Emit)
+	ss := &compose.SplitSum{Rows: s.Rows, Split: s.Split, Epi: e}
+	rk, rwidth := g.genKern(append([]uint32{encMatVec}, ss.Encode()...), ss.Emit)
+	if k == nil || rk == nil {
+		o.Why = whyNoKernel
+		return nil
+	}
+	part := genLaunch{k: k, groups: (mv.Threads() + width - 1) / width, width: width,
+		args: [8]genArg{gaWQS, gaWD, gaWSC, gaOpA, gaOpAX, gaSplit}, n: 6}
+	if kernels.IsFloat(s.T) {
+		if o.FIn == 0 {
+			o.Why = whyNoFloat
+			return nil
+		}
+		part.args[1] = gaIn0 + genArg(o.FIn-1)
+	}
+	red := genLaunch{k: rk, groups: (s.Rows + rwidth - 1) / rwidth, width: rwidth, args: [8]genArg{gaSplit, gaOut0}, n: 2}
+	for _, a := range eargs {
+		red.args[red.n] = a
+		red.n++
+	}
+	return []genLaunch{part, red}
 }

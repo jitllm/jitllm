@@ -391,10 +391,20 @@ func NewSubDotEnv(b *ir.Builder, s MatVecShape) (*SubDotEnv, int, error) {
 	if why := DeviceWhyNot(s.T); why != "" {
 		return nil, 0, fmt.Errorf("kernels: SubDot: %s", why)
 	}
-	if s.NTok > 1 || s.Experts > 1 || s.Slots > 1 || s.PickOf > 0 || s.Gate2 || s.In.On {
-		return nil, 0, fmt.Errorf("kernels: SubDot: NewSubDotEnv takes a dense one-token shape")
+	if s.Experts > 1 || s.Slots > 1 || s.PickOf > 0 || s.Gate2 || s.In.On {
+		return nil, 0, fmt.Errorf("kernels: SubDot: NewSubDotEnv takes a dense shape")
 	}
-	s.Tok = 1
+	// A chunk of NTok tokens is NTok operand slots (MatVec's own reading of
+	// it): each token's vector at K/4 words, its scales nb apart, its sums
+	// after every slot's scales; Tok of them a thread.
+	ntok := max(s.NTok, 1)
+	s.Tok = max(s.Tok, 1)
+	if ntok == 1 {
+		s.Tok = 1
+	}
+	if ntok%s.Tok != 0 {
+		return nil, 0, fmt.Errorf("kernels: SubDot: %d tokens at %d a thread", ntok, s.Tok)
+	}
 	s.Rowt = max(s.Rowt, 1)
 	sub := qi.sub
 	if s.Sub == 0 {
@@ -413,7 +423,7 @@ func NewSubDotEnv(b *ir.Builder, s MatVecShape) (*SubDotEnv, int, error) {
 	e := &SubDotEnv{S: s,
 		Mask: b.Const(ir.U32, 0x0F0F0F0F), Four: b.Const(ir.U32, 4), ZeroF: b.ConstF32(0), One: b.Const(ir.U32, 1),
 		NegBK: b.ConstF32(-qi.biasK), Dot4: b.Dot4Bounded,
-		PW: sub * qi.bits / 32, HW: sub * qi.hi / 32, AWords: sub / 4, NB: nb, SumOff: int64(nb),
+		PW: sub * qi.bits / 32, HW: sub * qi.hi / 32, AWords: sub / 4, NB: nb, SumOff: int64(ntok * nb), SlotAct: ntok > 1,
 		DExpAdd: func(v ir.Value) ir.Value { return v }, TileOff: func(j int) int64 { return int64(j) }}
 	if qi.signedQ {
 		e.Dot4 = b.Dot4
