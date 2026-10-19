@@ -28,15 +28,109 @@ func TestEveryDevKindHasAName(t *testing.T) {
 	}
 }
 
-// TestCompositeKindsOnlyShrink pins the kinds that still run an encoder
-// sequence whole (compositeKind): the device program is a compiler of
-// primitives, and each of these goes as its mechanism is decomposed. A kind
-// added to the set fails here, and so does a list entry no longer composite.
+// TestCompositeKindsOnlyShrink pins the kinds that are not the program's
+// primitives (compositeKind: every kind primitiveKind does not name): a
+// mechanism of one family run whole, whether by an encoder sequence or by a
+// generator written for that kind alone. The device program is a compiler
+// of primitives, and each of these goes as the builder lowers its graph op
+// into them. A kind added to the set fails here, and so does a list entry
+// no longer composite.
 //
-// VIOLATION SIGNATURE. Mark a new kind composite, or lower a mechanism to
-// a wrapper of mixFFN again, and this names it.
+// VIOLATION SIGNATURE. Add a program kind for one family's mechanism, or
+// give one a generator of its own, and this names it.
 func TestCompositeKindsOnlyShrink(t *testing.T) {
-	allowed := map[string]bool{"recurrent": true}
+	allowed := map[string]bool{
+		"recurrent":         true,
+		"q_temp":            true,
+		"split_qg":          true,
+		"gate_out":          true,
+		"ple_slice":         true,
+		"rope_k_row":        true,
+		"stream_route":      true,
+		"stream_predict":    true,
+		"stream_correct":    true,
+		"stream_scale":      true,
+		"stream_finish":     true,
+		"resid_join3":       true,
+		"gauss_topk":        true,
+		"stream_norm":       true,
+		"stream_gate_mix":   true,
+		"place_weights":     true,
+		"stream_place":      true,
+		"idx_norm":          true,
+		"idx_rope":          true,
+		"idx_assemble":      true,
+		"idx_score":         true,
+		"select_blocks":     true,
+		"gather_kv":         true,
+		"attend_gathered":   true,
+		"stream_dot":        true,
+		"gated_val":         true,
+		"ngram_conv":        true,
+		"ngram_add":         true,
+		"stream_score":      true,
+		"stream_weighted":   true,
+		"idx_write":         true,
+		"idx_attend_latent": true,
+		"row_bias":          true,
+		"stream_flatten":    true,
+		"flat_norm":         true,
+		"mix_logits":        true,
+		"sinkhorn":          true,
+		"stream_collect":    true,
+		"row_r_m_s":         true,
+		"turn":              true,
+		"cache_write":       true,
+		"pool_entries":      true,
+		"entry_write":       true,
+		"entry_select":      true,
+		"gather_entries":    true,
+		"grouped_mat_vec":   true,
+		"clamp_at":          true,
+		"rel_attend":        true,
+		"sub_norm":          true,
+		"router_logits":     true,
+		"router_bias":       true,
+		"group_mask":        true,
+		"route_weights":     true,
+		"expert_bias":       true,
+		"scale_weights":     true,
+		"gate_logit":        true,
+		"gated_add":         true,
+		"group_by_expert":   true,
+		"rope_tail":         true,
+		"latent_write":      true,
+		"latent_attend":     true,
+		"expert_matvec_e":   true,
+		"conv1d":            true,
+		"scan":              true,
+		"gated_norm":        true,
+		"conv_bias":         true,
+		"ssm_norm":          true,
+		"norm_quant":        true,
+		"add_norm":          true,
+		"add_norm_quant":    true,
+		"matvec_res":        true,
+		"matvec_gate":       true,
+		"act_quant":         true,
+		"qkv":               true,
+		"rope_qkv":          true,
+		"gate2":             true,
+		"gate2_in":          true,
+		"qkv_in":            true,
+		"qkv_sep":           true,
+		"matvec_res_in":     true,
+		"ffn_in":            true,
+		"down_act":          true,
+		"norm_f16":          true,
+		"add_norm_f16":      true,
+		"act_f16":           true,
+		"qkv_gemm":          true,
+		"gather_heads":      true,
+	}
+	if len(allowed) > 87 {
+		t.Fatalf("%d composite kinds allowed: the list only shrinks from 87", len(allowed))
+	}
 	for k := devKind(0); k < numKinds; k++ {
 		name := k.String()
 		switch {

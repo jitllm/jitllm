@@ -2315,14 +2315,30 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 	return prog, ""
 }
 
-// compositeKind reports that kind k runs one of the block encoder's
-// sequences whole rather than primitives the program compiles: it cannot be
-// fused, reordered or re-tiled, so a block holding one does not count as
-// compiled (GPU.BlockComposite). The set only shrinks
-// (TestCompositeKindsOnlyShrink), to empty at the encoder's deletion.
-func compositeKind(k devKind) bool {
+// compositeKind reports that kind k is not one of the program's primitives
+// (primitiveKind): a mechanism of one family run whole, by an encoder
+// sequence or by a generator written for that kind alone. It cannot be fused,
+// reordered or re-tiled, and a model arranging the same pieces differently
+// does not build, so a block holding one does not count as compiled
+// (GPU.BlockComposite). The set only shrinks (TestCompositeKindsOnlyShrink),
+// to empty as the builder lowers each graph op into primitives.
+func compositeKind(k devKind) bool { return !primitiveKind(k) }
+
+// primitiveKind is the program's primitive set (docs/design/composer.md,
+// "Primitives only"), each stated by structure and its attributes so any
+// model whose graph uses it runs: norms (a row's, a head's, a sublayer
+// output's), the int8 operand, matvec plain and over a bank's selected
+// sheets, the elementwise maps (add, mul, an activation, a gated activation,
+// a scale, a clamp), the index maps (copy, slice, view, concatenation), the
+// rotary, the paged history's write, copy and attention, top-k, the
+// selection's combine, a bank's fetch (a runtime op inserted by property),
+// and convolution's depthwise and affine forms. Every other kind is a
+// mechanism of one family run whole: composite, to be lowered into these.
+func primitiveKind(k devKind) bool {
 	switch k {
-	case dkRecurrent:
+	case dkNorm, dkHeadNorm, dkPostNorm, dkQuant, dkMatVec, dkExpertMatVec, dkAdd, dkMul, dkAct, dkActMul,
+		dkScale, dkClamp, dkCopy, dkSlice, dkView, dkConcatHeads, dkRopeQ, dkKVWrite, dkKVCopy, dkAttend,
+		dkTopK, dkCombine, dkExpertFetch, dkDWConvRows, dkAffineRows:
 		return true
 	}
 	return false
