@@ -50,6 +50,8 @@ const (
 	gaOpA   // the int8 operand the op's matvec reads, values
 	gaOpAX  // and scales
 	gaMBias // the weight's own bias (mv.bias)
+	gaF16   // the binary16 operand a GEMM reads (the device's f16 plane)
+	gaFSrc  // the float row a binary16 operand is made from
 	gaQ8A   // an int8 output's values
 	gaQ8X   // its scales and sums
 )
@@ -70,6 +72,10 @@ type genLaunch struct {
 	// pairs launches a group a (token, expert) pair of the step, not a
 	// group a token.
 	pairs bool
+	// toF16 is a binary16 operand made from the op's float row: skipped
+	// where the step's last conversion was this kernel over this row (q, k
+	// and v share one normed row, as do gate and up).
+	toF16 bool
 }
 
 // The formers whose launchers run an op: the matvec's (the op's weight's
@@ -215,6 +221,8 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 			if l := g.genMatVec(o, prog, bs); l != nil {
 				return l
 			}
+		} else if l := g.genGemm(o, prog, bs, rows); l != nil {
+			return l
 		}
 		return []genLaunch{{former: formMatVec}}
 	case dkExpertMatVec, dkExpertMatVecE, dkQKV, dkQKVGemm, dkRouterLogits, dkResIn, dkQKVSep:
@@ -544,6 +552,12 @@ type genState struct {
 	// its matvec reads.
 	qs, d, sc, mbias backend.Buf
 	a, ax            backend.Buf
+	// The step's binary16 operand: its plane, the float row it is made
+	// from, and the conversion the step last made (shared with the
+	// executor, so a conversion either one made is not made again).
+	f16, fsrc backend.Buf
+	memoK     backend.Kernel
+	memoSrc   backend.Buf
 	// The step's (token, expert) pairs: the grouped run's sorted columns
 	// over rows (moe), else the selection's.
 	moe     bool
@@ -595,11 +609,21 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.ax
 			case gaMBias:
 				bufs[j] = st.mbias
+			case gaF16:
+				bufs[j] = st.f16
+			case gaFSrc:
+				bufs[j] = st.fsrc
 			case gaQ8A:
 				bufs[j], _ = int8Of(st, o.Out[l.q8])
 			case gaQ8X:
 				_, bufs[j] = int8Of(st, o.Out[l.q8])
 			}
+		}
+		if l.toF16 {
+			if st.memoK == l.k && st.memoSrc == st.fsrc {
+				continue
+			}
+			st.memoK, st.memoSrc = l.k, st.fsrc
 		}
 		threads := l.threads
 		if rows > 0 && R < rows {
@@ -726,28 +750,8 @@ func (g *devTier) genMatVec(o *devOp, prog *devProgram, bs *blockScratch) []genL
 	if _, _, own := q8Pair(bs, prog.slots[o.In[0]]); own {
 		return nil
 	}
-	ep := &compose.Row{Width: m.rows, Rows: 1}
-	var args []genArg
-	buf := func(k compose.BufKind, a genArg) int {
-		args = append(args, a)
-		return ep.Buf(k)
-	}
-	v := ep.Add(compose.Node{Kind: compose.NInput})
-	if m.bias != nil {
-		v = ep.Bin(compose.OpAdd, v, ep.Load(buf(compose.BufVec, gaMBias)))
-	}
-	switch o.Kind {
-	case dkMatVecRes:
-		v = ep.Bin(compose.OpAdd, v, ep.Load(buf(compose.BufRow, gaIn1)))
-	case dkMatVecGate:
-		a, ok := kernAct(o.Act)
-		if !ok {
-			return nil
-		}
-		v = ep.Bin(compose.OpMul, ep.Act(a, ep.Load(buf(compose.BufRow, gaIn1))), v)
-	}
-	e := &compose.Epi{G: ep, Out: v}
-	if e.Check() != nil {
+	e, args := matEpi(o, m, m.rows)
+	if e == nil {
 		return nil
 	}
 	rowt := max(m.rowt, 1)
@@ -780,15 +784,22 @@ type mvEpiEntry struct {
 // mvEpiKern is the matvec of shape s composed with epilogue e, formed once a
 // device and structure, and its workgroup width. Callers hold g.mu.
 func (g *devTier) mvEpiKern(s kernels.MatVecShape, e *compose.Epi) (backend.Kernel, int) {
-	enc := e.Encode()
-	key := compose.KeyOf(append(enc, uint32(s.T), uint32(s.K), uint32(s.Rows), uint32(s.Split), uint32(s.Rowt), b2u(s.GroupSplit)))
+	return g.epiKern(s, e.Encode(), func() (*ir.Kernel, error) { return kernels.MatVecEpi(s, e) })
+}
+
+// epiKern is a former's kernel of shape s with an epilogue, its structure
+// enc (the epilogue's and the former's schedule), built by build once a
+// device and structure, and its workgroup width. Callers hold g.mu.
+func (g *devTier) epiKern(s kernels.MatVecShape, enc []uint32, build func() (*ir.Kernel, error)) (backend.Kernel, int) {
+	key := compose.KeyOf(append(append([]uint32(nil), enc...), uint32(s.T), uint32(s.K), uint32(s.Rows),
+		uint32(s.Split), uint32(s.Rowt), b2u(s.GroupSplit), uint32(s.NTok)))
 	for _, x := range g.mvEpiK[key] {
 		if x.shape == s && slices.Equal(x.enc, enc) {
 			return x.k, x.width
 		}
 	}
 	ent := mvEpiEntry{shape: s, enc: enc}
-	ker, err := kernels.MatVecEpi(s, e)
+	ker, err := build()
 	if err == nil {
 		ent.width = ker.Group[0]
 		ent.k, err = g.dev.Compile(ker)
@@ -809,4 +820,74 @@ func b2u(x bool) uint32 {
 		return 1
 	}
 	return 0
+}
+
+// matEpi is op o's epilogue over a matvec of rows outputs, and the launch
+// arguments its buffers bind: the weight's bias, a residual added
+// (matvec_res), act(gate) times the output (matvec_gate).
+func matEpi(o *devOp, m mv, rows int) (*compose.Epi, []genArg) {
+	ep := &compose.Row{Width: rows, Rows: 1}
+	var args []genArg
+	buf := func(k compose.BufKind, a genArg) int {
+		args = append(args, a)
+		return ep.Buf(k)
+	}
+	v := ep.Add(compose.Node{Kind: compose.NInput})
+	if m.bias != nil {
+		v = ep.Bin(compose.OpAdd, v, ep.Load(buf(compose.BufVec, gaMBias)))
+	}
+	switch o.Kind {
+	case dkMatVecRes:
+		v = ep.Bin(compose.OpAdd, v, ep.Load(buf(compose.BufRow, gaIn1)))
+	case dkMatVecGate:
+		a, ok := kernAct(o.Act)
+		if !ok {
+			return nil, nil
+		}
+		v = ep.Bin(compose.OpMul, ep.Act(a, ep.Load(buf(compose.BufRow, gaIn1))), v)
+	}
+	e := &compose.Epi{G: ep, Out: v}
+	if e.Check() != nil {
+		return nil, nil
+	}
+	return e, args
+}
+
+// genGemm is a prompt chunk's matvec as the binary16 GEMM its schedule chose
+// (batchMV: tile and split for this card and these rows), composed with its
+// epilogue, behind the conversion of its float row to the GEMM's operand.
+// nil where the schedule is another (the former runs it) or splits into a
+// partial plane.
+func (g *devTier) genGemm(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
+	l := g.curLayer
+	if l == nil || o.W < 0 || o.W >= len(l.ms) || *l.rs[o.W] == nil || prog.vals[o.In[0]].Layout != layoutRow {
+		return nil
+	}
+	m := *l.ms[o.W]
+	if m.slots > 0 || m.pad || g.TableSplit && m.alt != nil {
+		return nil
+	}
+	bm, ok := g.batchMV(m, rows, bs.tok)
+	if !ok || bm.act == nil || !bm.actT || bm.split > 1 || bm.tail != nil || bm.vt.MT == 0 {
+		return nil
+	}
+	e, args := matEpi(o, m, m.rows)
+	if e == nil {
+		return nil
+	}
+	s := kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: rows}
+	enc := append(e.Encode(), 7, uint32(bm.vt.MT), uint32(bm.vt.NT), uint32(bm.vt.WM), uint32(bm.vt.WN),
+		uint32(bm.vt.KB), b2u(bm.vt.Single), uint32(bm.vt.F16K))
+	k, _ := g.epiKern(s, enc, func() (*ir.Kernel, error) { return kernels.GemmVoltaEpi(s, bm.vt, e) })
+	if k == nil {
+		return nil
+	}
+	conv := genLaunch{k: bm.act, threads: bm.actN, args: [8]genArg{gaFSrc, gaF16}, n: 2, toF16: true}
+	gl := genLaunch{k: k, threads: bm.threads, groups: bm.threads / bm.width, width: bm.width,
+		args: [8]genArg{gaWQS, gaWD, gaWSC, gaF16, gaOut0}, n: 5}
+	for _, a := range args {
+		gl.args[gl.n] = a
+		gl.n++
+	}
+	return []genLaunch{conv, gl}
 }

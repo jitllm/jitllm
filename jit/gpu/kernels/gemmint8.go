@@ -80,7 +80,18 @@ func int8Pos(w int) int { return (w%4)*2 + w/4 }
 // Split > 1 each segment writes its own slice of pOut (Reduce sums them) and
 // only the first adds the bias. The grid is exact (GemmInt8Groups workgroups
 // of t.Threads()).
-func GemmInt8(s MatVecShape, t Int8Tile) (*ir.Kernel, error) {
+func GemmInt8(s MatVecShape, t Int8Tile) (*ir.Kernel, error) { return gemmInt8(s, t, nil) }
+
+// GemmInt8Epi is GemmInt8 with every output passed through e (Epilogue), for
+// a shape that reduces in one launch: no split, no bias of the menu.
+func GemmInt8Epi(s MatVecShape, t Int8Tile, e Epilogue) (*ir.Kernel, error) {
+	if e != nil && (s.Split > 1 || s.Bias) {
+		return nil, fmt.Errorf("kernels: GemmInt8Epi: a split or a menu bias beside an epilogue")
+	}
+	return gemmInt8(s, t, e)
+}
+
+func gemmInt8(s MatVecShape, t Int8Tile, epi Epilogue) (*ir.Kernel, error) {
 	if int(s.T) >= len(qtab) || !Int8OK(s.T) {
 		return nil, fmt.Errorf("kernels: GemmInt8: %v has no int8 decode", s.T)
 	}
@@ -168,6 +179,9 @@ func GemmInt8(s MatVecShape, t Int8Tile) (*ir.Kernel, error) {
 	var pBias ir.Value
 	if s.Bias {
 		pBias = b.Param("pBias", ir.F32)
+	}
+	if epi != nil {
+		epi.Params(b)
 	}
 	c := func(v int64) ir.Value { return b.Const(ir.U32, v) }
 	add := func(v ir.Value, n int64) ir.Value {
@@ -639,7 +653,11 @@ func GemmInt8(s MatVecShape, t Int8Tile) (*ir.Kernel, error) {
 					}
 					val = b.Add(ir.F32, val, bv)
 				}
-				b.Store(pOut, b.Add(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, tok, nrows), rr), outSeg), val, 0)
+				at := b.Add(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, tok, nrows), rr), outSeg)
+				if epi != nil {
+					val = epi.Apply(b, val, at, rr)
+				}
+				b.Store(pOut, at, val, 0)
 			}
 		}
 	}

@@ -791,7 +791,10 @@ func (p *devProgram) String() string {
 			fmt.Fprintf(&b, ", %s", o.Role)
 		}
 		gen := ""
-		if len(o.Gen) != 0 {
+		switch {
+		case len(o.Gen) != 0 && o.Gen[0].former != 0:
+			gen = ", former (old kernels)"
+		case len(o.Gen) != 0:
 			gen = fmt.Sprintf(", generated: %d launch(es)", len(o.Gen))
 		}
 		fmt.Fprintf(&b, ")  ; graph ops %v%s\n", o.Src, gen)

@@ -1754,12 +1754,25 @@ func (g *devTier) layersSession(s backend.Session) {
 					if mg != nil {
 						gst.colPair = mg.colPair
 					}
-					if o.W >= 0 && o.W < len(l.rs) && *l.rs[o.W] != nil {
+					// Only a matvec reads a weight (devOp.W is 0, a real index,
+					// on every other op).
+					isMat := o.Kind == dkMatVec || o.Kind == dkMatVecRes || o.Kind == dkMatVecGate
+					if isMat && prog.f16 && len(o.In) > 0 {
+						// A binary16 GEMM reads the float row (a float weight
+						// through the scale slot).
+						fsrc = at(o.In[0])
+					}
+					if isMat && o.W >= 0 && o.W < len(l.rs) && *l.rs[o.W] != nil {
 						r := *l.rs[o.W]
 						gst.qs, gst.d, gst.sc, gst.mbias = r.qs, dOf(r), r.sc, (*l.ms[o.W]).bias
 					}
 					gst.a, gst.ax = bs.a, bs.ax
+					gst.f16, gst.fsrc, gst.memoK, gst.memoSrc = g.f16Buf, nil, actMemoK, actMemoSrc
+					if len(o.In) > 0 {
+						gst.fsrc = at(o.In[0])
+					}
 					runGen(lc, &o, R, bs.rows, &buf, &gst)
+					actMemoK, actMemoSrc = gst.memoK, gst.memoSrc
 				}
 				switch o.Kind {
 				case dkQuant:

@@ -127,7 +127,17 @@ func voltaSwizzle(b *ir.Builder, r ir.Value, c int, weights bool) ir.Value {
 // expert sheet, so one staged tile serves every token routed there. Launch
 // GemmVoltaGrouped(s, t, used) workgroups; the row block varies fastest, so
 // token blocks past `used` are never launched.
-func GemmVolta(s MatVecShape, t VoltaTile) (*ir.Kernel, error) { return gemmVolta(s, t, nil) }
+func GemmVolta(s MatVecShape, t VoltaTile) (*ir.Kernel, error) { return gemmVolta(s, t, nil, nil) }
+
+// GemmVoltaEpi is GemmVolta with every output passed through e (Epilogue),
+// for a dense shape that reduces in one launch: no split, no experts, no
+// menu bias.
+func GemmVoltaEpi(s MatVecShape, t VoltaTile, e Epilogue) (*ir.Kernel, error) {
+	if e != nil && (s.Split > 1 || s.Bias || s.Experts > 1) {
+		return nil, fmt.Errorf("kernels: GemmVoltaEpi: a split, a menu bias or a bank beside an epilogue")
+	}
+	return gemmVolta(s, t, nil, e)
+}
 
 // gemmCtx is where gemmVolta emits when it is one SEGMENT of a
 // GemmVoltaSegments kernel: the shared builder, a suffix that keeps its
@@ -142,7 +152,7 @@ type gemmCtx struct {
 	shA, shB ir.Value
 }
 
-func gemmVolta(s MatVecShape, t VoltaTile, into *gemmCtx) (*ir.Kernel, error) {
+func gemmVolta(s MatVecShape, t VoltaTile, into *gemmCtx, epi Epilogue) (*ir.Kernel, error) {
 	if !GemmVoltaOK(s.T) {
 		return nil, fmt.Errorf("kernels: GemmVolta: %v has no Volta layout", s.T)
 	}
@@ -245,6 +255,9 @@ func gemmVolta(s MatVecShape, t VoltaTile, into *gemmCtx) (*ir.Kernel, error) {
 	}
 	if grouped {
 		pSel = b.Param("pSel", ir.U32)
+	}
+	if epi != nil {
+		epi.Params(b)
 	}
 	if into == nil {
 		shA = b.Shared("gemmA", ir.U32, nbuf*BM*kHalf)
@@ -716,7 +729,11 @@ func gemmVolta(s MatVecShape, t VoltaTile, into *gemmCtx) (*ir.Kernel, error) {
 					}
 					val = b.Add(ir.F32, val, bv)
 				}
-				b.Store(pOut, b.Add(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, tok, nrows), rr), outSeg), val, 0)
+				at := b.Add(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, tok, nrows), rr), outSeg)
+				if epi != nil {
+					val = epi.Apply(b, val, at, rr)
+				}
+				b.Store(pOut, at, val, 0)
 			}
 		}
 	}
@@ -773,7 +790,7 @@ func GemmVoltaSegments(segs []MatVecShape, tiles []VoltaTile) (*ir.Kernel, error
 		seg := ctx
 		seg.suffix = fmt.Sprintf("%d", i)
 		seg.cta = func() ir.Value { return b.Sub(ir.U32, b.CTAID(), lo) }
-		if _, err := gemmVolta(sg, tiles[i], &seg); err != nil {
+		if _, err := gemmVolta(sg, tiles[i], &seg, nil); err != nil {
 			return nil, fmt.Errorf("kernels: GemmVoltaSegments: segment %d: %w", i, err)
 		}
 		b.EndLoop()
