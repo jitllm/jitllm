@@ -1,0 +1,532 @@
+actf16/BF16 refused
+actf16/F16 refused
+actf16/F32 refused
+actf16/MXFP4 9e1cca384a6addf7d66aaacb
+actf16/Q3_K 48641b5110b2494cec30f828
+actf16/Q4_0 9e1cca384a6addf7d66aaacb
+actf16/Q4_K 9e1cca384a6addf7d66aaacb
+actf16/Q5_0 9e1cca384a6addf7d66aaacb
+actf16/Q5_1 9e1cca384a6addf7d66aaacb
+actf16/Q5_K 9e1cca384a6addf7d66aaacb
+actf16/Q6_K 48641b5110b2494cec30f828
+actf16/Q8_0 b708805399e8e817f9df59ad
+actf16/TQ2 refused
+actf16/TQ2F refused
+actf16t/BF16 7c75dded66e1d78412326679
+actf16t/F16 7c75dded66e1d78412326679
+actf16t/F32 refused
+actf16t/MXFP4 6d6ab94f1f9ef15d6f40169e
+actf16t/Q3_K 82b4fcd096234dd74fc6f967
+actf16t/Q4_0 6d6ab94f1f9ef15d6f40169e
+actf16t/Q4_K 6d6ab94f1f9ef15d6f40169e
+actf16t/Q5_0 6d6ab94f1f9ef15d6f40169e
+actf16t/Q5_1 6d6ab94f1f9ef15d6f40169e
+actf16t/Q5_K 6d6ab94f1f9ef15d6f40169e
+actf16t/Q6_K 82b4fcd096234dd74fc6f967
+actf16t/Q8_0 7c75dded66e1d78412326679
+actf16t/TQ2 refused
+actf16t/TQ2F refused
+actf16tgather/BF16 refused
+actf16tgather/F16 refused
+actf16tgather/F32 refused
+actf16tgather/MXFP4 a0e7419009d65e77ee712f94
+actf16tgather/Q3_K 11a18370acdd5dfffb558621
+actf16tgather/Q4_0 a0e7419009d65e77ee712f94
+actf16tgather/Q4_K a0e7419009d65e77ee712f94
+actf16tgather/Q5_0 a0e7419009d65e77ee712f94
+actf16tgather/Q5_1 a0e7419009d65e77ee712f94
+actf16tgather/Q5_K a0e7419009d65e77ee712f94
+actf16tgather/Q6_K 11a18370acdd5dfffb558621
+actf16tgather/Q8_0 299a5ad32650cb1a81f1632e
+actf16tgather/TQ2 refused
+actf16tgather/TQ2F refused
+int8/BF16/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false} refused
+int8/BF16/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false}/epi refused
+int8/BF16/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false} refused
+int8/BF16/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false}/epi refused
+int8/F16/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false} refused
+int8/F16/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false}/epi refused
+int8/F16/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false} refused
+int8/F16/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false}/epi refused
+int8/F32/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false} refused
+int8/F32/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false}/epi refused
+int8/F32/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false} refused
+int8/F32/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false}/epi refused
+int8/MXFP4/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false} refused
+int8/MXFP4/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false}/epi refused
+int8/MXFP4/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false} refused
+int8/MXFP4/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false}/epi refused
+int8/Q3_K/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false} a333813e6049fe9d6a181284
+int8/Q3_K/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false}/epi a46dfcad3a74c993ab5df145
+int8/Q3_K/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false} 8a338dda8e2de40ce0f5d4ea
+int8/Q3_K/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false}/epi 12d044660b364342e2b27eb8
+int8/Q4_0/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false} fcd6937b8995101c105d5000
+int8/Q4_0/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false}/epi 10a81d048bb9dd9f847a97f8
+int8/Q4_0/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false} 7e0f3e8aba9f5ee186edf567
+int8/Q4_0/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false}/epi e9b0fc503e26ac50cb32858b
+int8/Q4_K/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false} d5ef98ac2455ba931ae79756
+int8/Q4_K/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false}/epi 605ad7507f2102954529e34a
+int8/Q4_K/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false} 5763cce43596df53072d1960
+int8/Q4_K/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false}/epi c22e26542d2765997746a1fd
+int8/Q5_0/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false} bf715f12886583d4a3bff131
+int8/Q5_0/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false}/epi 1f8e33062fb14190aaad3f34
+int8/Q5_0/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false} 96a6f7105c3ef9dd60bb0bec
+int8/Q5_0/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false}/epi ff3274533baee3fc076cfa7e
+int8/Q5_1/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false} 96635d90f1f10addbc5c530a
+int8/Q5_1/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false}/epi 05f0692e5d25984ce184f726
+int8/Q5_1/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false} f09b53c7fc8e8423c9845fb0
+int8/Q5_1/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false}/epi 03b2da70d16ffc5defc58e06
+int8/Q5_K/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false} ca6f363b7943fa9c610905bd
+int8/Q5_K/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false}/epi 10720a2f2842027a8c195a4d
+int8/Q5_K/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false} 336c49df930924b00f8c3415
+int8/Q5_K/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false}/epi 8d79106e6dda7afeb7a95cfc
+int8/Q6_K/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false} eb04197885662e0359ed4707
+int8/Q6_K/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false}/epi 030233ae09e0913357d54414
+int8/Q6_K/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false} b4a02acc81b81136cd91e9af
+int8/Q6_K/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false}/epi 8e92736c3739a9bc6d8261cf
+int8/Q8_0/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false} 076ad5ed97c6d202d24d40ce
+int8/Q8_0/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false}/epi fd13da78419be4b2ddff0b07
+int8/Q8_0/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false} b2df07c1089667349b77689d
+int8/Q8_0/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false}/epi 6ecb7e347c5958235da711fa
+int8/TQ2/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false} refused
+int8/TQ2/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false}/epi refused
+int8/TQ2/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false} refused
+int8/TQ2/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false}/epi refused
+int8/TQ2F/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false} refused
+int8/TQ2F/{MT:2 NT:2 WM:2 WN:2 D:0 Single:false M8:false LdM:false}/epi refused
+int8/TQ2F/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false} refused
+int8/TQ2F/{MT:4 NT:4 WM:2 WN:2 D:0 Single:true M8:false LdM:false}/epi refused
+mma/BF16/2x2 refused
+mma/BF16/4x4 refused
+mma/F16/2x2 refused
+mma/F16/4x4 refused
+mma/F32/2x2 refused
+mma/F32/4x4 refused
+mma/MXFP4/2x2 02f55de082488280fc594d5e
+mma/MXFP4/4x4 d08ffca83b209b3cb28d406f
+mma/Q3_K/2x2 4b8b1b17e44f5c7f7225b714
+mma/Q3_K/4x4 b22675513b4bbe52f3117d32
+mma/Q4_0/2x2 a7fbe2c8c559cce343b3999b
+mma/Q4_0/4x4 a89e38516110a951b8473f30
+mma/Q4_K/2x2 83898f493c111a949f7ecf2d
+mma/Q4_K/4x4 82d33abf170ac9d5c8b5d01b
+mma/Q5_0/2x2 d60954a416b97339a1acd1bd
+mma/Q5_0/4x4 57691858778bc587d0124448
+mma/Q5_1/2x2 5da5f5dbd1c28f2d99308740
+mma/Q5_1/4x4 287c20081ac4dd12bb25171c
+mma/Q5_K/2x2 26e86b1e9f3833936672ae4e
+mma/Q5_K/4x4 ac961c438dd99da38e2617cf
+mma/Q6_K/2x2 906223fab57d488456ac4e9d
+mma/Q6_K/4x4 7885856173ff45e20253f2d5
+mma/Q8_0/2x2 22e19c1c01ec586e949f5309
+mma/Q8_0/4x4 1c5cf5befc4fd4d826ff8bfc
+mma/TQ2/2x2 28f1672e596a34afc1ef5d57
+mma/TQ2/4x4 3fb08d583b4171e4bd53700d
+mma/TQ2F/2x2 b0d2f8e4cd1c84ef1826305c
+mma/TQ2F/4x4 dd28bb04daf4f9bde1eac3e9
+mma70/BF16 refused
+mma70/F16 refused
+mma70/F32 refused
+mma70/MXFP4 ae36f742b09c8080de37312d
+mma70/Q3_K ecd1dafd0e338a3ffb21301d
+mma70/Q4_0 4b113a4390d4ac038fec84f7
+mma70/Q4_K 0c863590a975d310de31475c
+mma70/Q5_0 6873a5e304271cebcb5c188b
+mma70/Q5_1 f0664d1304e9312da1765ce4
+mma70/Q5_K 8efb9c216caab594fd9502ba
+mma70/Q6_K 77818f95aa4468b7ed33f586
+mma70/Q8_0 27434f4cf685aac3fd553067
+mma70/TQ2 refused
+mma70/TQ2F refused
+tile/BF16/{MT:2 NT:2 WM:2 WN:2 KB:1 NoSplit:false Tall:false TokOff:0} refused
+tile/BF16/{MT:4 NT:2 WM:2 WN:2 KB:2 NoSplit:false Tall:true TokOff:0} refused
+tile/F16/{MT:2 NT:2 WM:2 WN:2 KB:1 NoSplit:false Tall:false TokOff:0} refused
+tile/F16/{MT:4 NT:2 WM:2 WN:2 KB:2 NoSplit:false Tall:true TokOff:0} refused
+tile/F32/{MT:2 NT:2 WM:2 WN:2 KB:1 NoSplit:false Tall:false TokOff:0} refused
+tile/F32/{MT:4 NT:2 WM:2 WN:2 KB:2 NoSplit:false Tall:true TokOff:0} refused
+tile/MXFP4/{MT:2 NT:2 WM:2 WN:2 KB:1 NoSplit:false Tall:false TokOff:0} bf00a66b29e4ff9108bf14fd
+tile/MXFP4/{MT:4 NT:2 WM:2 WN:2 KB:2 NoSplit:false Tall:true TokOff:0} 88fc1e53a8ae105890e69598
+tile/Q3_K/{MT:2 NT:2 WM:2 WN:2 KB:1 NoSplit:false Tall:false TokOff:0} refused
+tile/Q3_K/{MT:4 NT:2 WM:2 WN:2 KB:2 NoSplit:false Tall:true TokOff:0} d9628b37b31b523e2798be91
+tile/Q4_0/{MT:2 NT:2 WM:2 WN:2 KB:1 NoSplit:false Tall:false TokOff:0} 87fa2b038d3aa4749b03ae59
+tile/Q4_0/{MT:4 NT:2 WM:2 WN:2 KB:2 NoSplit:false Tall:true TokOff:0} c8d4041cb22a02c0833064e1
+tile/Q4_K/{MT:2 NT:2 WM:2 WN:2 KB:1 NoSplit:false Tall:false TokOff:0} 7830c6e2c73727e9ba645da1
+tile/Q4_K/{MT:4 NT:2 WM:2 WN:2 KB:2 NoSplit:false Tall:true TokOff:0} 948ebc9d482b4dca8899388c
+tile/Q5_0/{MT:2 NT:2 WM:2 WN:2 KB:1 NoSplit:false Tall:false TokOff:0} c5b0a0ec19ddcb6634569a04
+tile/Q5_0/{MT:4 NT:2 WM:2 WN:2 KB:2 NoSplit:false Tall:true TokOff:0} 87d34d441e031286195deea5
+tile/Q5_1/{MT:2 NT:2 WM:2 WN:2 KB:1 NoSplit:false Tall:false TokOff:0} d4f2e3292571463ff66c5820
+tile/Q5_1/{MT:4 NT:2 WM:2 WN:2 KB:2 NoSplit:false Tall:true TokOff:0} e34787b2dbfcc21f5fdcc2e1
+tile/Q5_K/{MT:2 NT:2 WM:2 WN:2 KB:1 NoSplit:false Tall:false TokOff:0} 6cc70d90a8d42c6ecd195b9d
+tile/Q5_K/{MT:4 NT:2 WM:2 WN:2 KB:2 NoSplit:false Tall:true TokOff:0} fb4867081a5ff81687a03401
+tile/Q6_K/{MT:2 NT:2 WM:2 WN:2 KB:1 NoSplit:false Tall:false TokOff:0} refused
+tile/Q6_K/{MT:4 NT:2 WM:2 WN:2 KB:2 NoSplit:false Tall:true TokOff:0} 59101b5f64ea49d1b76fad8e
+tile/Q8_0/{MT:2 NT:2 WM:2 WN:2 KB:1 NoSplit:false Tall:false TokOff:0} 23dcfae10482aa301b2da505
+tile/Q8_0/{MT:4 NT:2 WM:2 WN:2 KB:2 NoSplit:false Tall:true TokOff:0} ab34db3e6778fbe6bf1a7e0f
+tile/TQ2/{MT:2 NT:2 WM:2 WN:2 KB:1 NoSplit:false Tall:false TokOff:0} refused
+tile/TQ2/{MT:4 NT:2 WM:2 WN:2 KB:2 NoSplit:false Tall:true TokOff:0} refused
+tile/TQ2F/{MT:2 NT:2 WM:2 WN:2 KB:1 NoSplit:false Tall:false TokOff:0} refused
+tile/TQ2F/{MT:4 NT:2 WM:2 WN:2 KB:2 NoSplit:false Tall:true TokOff:0} refused
+volta/BF16/deep/bias f72f963e470ab57add093f57
+volta/BF16/deep/epi dea86b7f314bd629bd55e333
+volta/BF16/deep/experts refused
+volta/BF16/deep/plain 0b0095fdf4ef49ee3f5b4f1f
+volta/BF16/deep/split2 33d57e6c5a0d019214a40129
+volta/BF16/m2n2/bias c7349ad3c2cfb5779ba4b645
+volta/BF16/m2n2/epi 28f9a5791911ff610edb0b4a
+volta/BF16/m2n2/experts refused
+volta/BF16/m2n2/plain ded98944326a558213efce40
+volta/BF16/m2n2/split2 897a8dcbf0115f85b9cf149d
+volta/BF16/m2n4k8/bias 32d485c98fe8c71155ca3de9
+volta/BF16/m2n4k8/epi e0aee4e0fe245acbf9e15290
+volta/BF16/m2n4k8/experts refused
+volta/BF16/m2n4k8/plain 215b03c0ccf5842f1b3a3f43
+volta/BF16/m2n4k8/split2 49ed5111053ff72c78e8ed85
+volta/BF16/m4n4/bias 8adfded926a4fe3189f39b0b
+volta/BF16/m4n4/epi 7cf9e2a394954a140e6400a7
+volta/BF16/m4n4/experts refused
+volta/BF16/m4n4/plain fae70106992b1fa85eca29d8
+volta/BF16/m4n4/split2 fe03f3d4974bd57a1896dd48
+volta/BF16/m4n4k16/bias f3c9c2be0b1d461bb1c9221e
+volta/BF16/m4n4k16/epi b3194635936d52892e7c2204
+volta/BF16/m4n4k16/experts refused
+volta/BF16/m4n4k16/plain de7a750b75b7dd55b7a60992
+volta/BF16/m4n4k16/split2 dbead8c0f5bad430137fa661
+volta/F16/deep/bias 488dcb74e1071bd360b869bd
+volta/F16/deep/epi c2cccd9e59fc5080afb5eecb
+volta/F16/deep/experts refused
+volta/F16/deep/plain 03c837b4d248c219144615f6
+volta/F16/deep/split2 6a0617ed0219a07b256d1481
+volta/F16/m2n2/bias 5fe78ddcddbd48f8f54d6ad2
+volta/F16/m2n2/epi fdb7e14496a42aa3c0ad848a
+volta/F16/m2n2/experts refused
+volta/F16/m2n2/plain 83c5719458fffcc23dbe1411
+volta/F16/m2n2/split2 547e45de6ed9abc57340c211
+volta/F16/m2n4k8/bias 5d9d9ba2d6f634281ffef424
+volta/F16/m2n4k8/epi 5681a787de1d2b7c0a332fea
+volta/F16/m2n4k8/experts refused
+volta/F16/m2n4k8/plain c3e0bd11a934af9dcc5ad137
+volta/F16/m2n4k8/split2 f93efa71c1eef6cf0bb97c37
+volta/F16/m4n4/bias dee1019850bee05b6d29680b
+volta/F16/m4n4/epi 02b3f715935602b2145d5bdf
+volta/F16/m4n4/experts refused
+volta/F16/m4n4/plain e4ed8ddb1872c0908dbaeba4
+volta/F16/m4n4/split2 25e77364f8e4be6a34a6ac50
+volta/F16/m4n4k16/bias 1d97e69453cdc9bdc1ef4290
+volta/F16/m4n4k16/epi ac4d1b7239a0a4118323ee2f
+volta/F16/m4n4k16/experts refused
+volta/F16/m4n4k16/plain 5017c49822f02375c1981cec
+volta/F16/m4n4k16/split2 9f5dd394f41dcdf4824c7ce9
+volta/F32/deep/bias refused
+volta/F32/deep/epi refused
+volta/F32/deep/experts refused
+volta/F32/deep/plain refused
+volta/F32/deep/split2 refused
+volta/F32/m2n2/bias refused
+volta/F32/m2n2/epi refused
+volta/F32/m2n2/experts refused
+volta/F32/m2n2/plain refused
+volta/F32/m2n2/split2 refused
+volta/F32/m2n4k8/bias refused
+volta/F32/m2n4k8/epi refused
+volta/F32/m2n4k8/experts refused
+volta/F32/m2n4k8/plain refused
+volta/F32/m2n4k8/split2 refused
+volta/F32/m4n4/bias refused
+volta/F32/m4n4/epi refused
+volta/F32/m4n4/experts refused
+volta/F32/m4n4/plain refused
+volta/F32/m4n4/split2 refused
+volta/F32/m4n4k16/bias refused
+volta/F32/m4n4k16/epi refused
+volta/F32/m4n4k16/experts refused
+volta/F32/m4n4k16/plain refused
+volta/F32/m4n4k16/split2 refused
+volta/MXFP4/deep/bias 8dfb4c66b33bffa85d960642
+volta/MXFP4/deep/epi f4300baced1973fec67c1d47
+volta/MXFP4/deep/experts 89d037671e445b095b6d37b3
+volta/MXFP4/deep/plain 4097a0b8c771fbcd74a8afc2
+volta/MXFP4/deep/split2 7ac0cfb70e121a1669e508d5
+volta/MXFP4/m2n2/bias 3a740c67338c0327494e4985
+volta/MXFP4/m2n2/epi 81c7deffe4da47172b1d4d27
+volta/MXFP4/m2n2/experts c00407104c37d48fc4bed98c
+volta/MXFP4/m2n2/plain ff65fe92b0c54dda9b089f31
+volta/MXFP4/m2n2/split2 f3251e520ecd8ff199a1abe9
+volta/MXFP4/m2n4k8/bias 407593e81bfc8638bc18de79
+volta/MXFP4/m2n4k8/epi a17fae9271970e6f37858cc2
+volta/MXFP4/m2n4k8/experts 4aa3075da474db0b3b478a32
+volta/MXFP4/m2n4k8/plain 76f0ca493ff3a427a90a753b
+volta/MXFP4/m2n4k8/split2 776fecd9ca671558a35f0693
+volta/MXFP4/m4n4/bias 74307fb50b992ad84301ba73
+volta/MXFP4/m4n4/epi d7931161f3389c5e06757735
+volta/MXFP4/m4n4/experts 9a2f2dfbbf94f5f0d0d5e95e
+volta/MXFP4/m4n4/plain acc5570198e27e011ed07de3
+volta/MXFP4/m4n4/split2 8030f1f0b044b6869217d254
+volta/MXFP4/m4n4k16/bias a59a07bd17b040d770147680
+volta/MXFP4/m4n4k16/epi 295a3b032e26818e740ff3df
+volta/MXFP4/m4n4k16/experts 275a54109de048f79c910659
+volta/MXFP4/m4n4k16/plain cef8094c7634866837e9cf8e
+volta/MXFP4/m4n4k16/split2 bfefbef42bbfcec45faf49ce
+volta/Q3_K/deep/bias 4787a0bc9873b00481b08c42
+volta/Q3_K/deep/epi 84d7162b3e864f3469d83053
+volta/Q3_K/deep/experts 6aff3710a8e7e349ff2150b5
+volta/Q3_K/deep/plain 2d8b7304b682d5dda60a6920
+volta/Q3_K/deep/split2 62f6841b74915b7edc7c1025
+volta/Q3_K/m2n2/bias refused
+volta/Q3_K/m2n2/epi refused
+volta/Q3_K/m2n2/experts refused
+volta/Q3_K/m2n2/plain refused
+volta/Q3_K/m2n2/split2 refused
+volta/Q3_K/m2n4k8/bias refused
+volta/Q3_K/m2n4k8/epi refused
+volta/Q3_K/m2n4k8/experts refused
+volta/Q3_K/m2n4k8/plain refused
+volta/Q3_K/m2n4k8/split2 refused
+volta/Q3_K/m4n4/bias 5c464b70345f5bf272e705b7
+volta/Q3_K/m4n4/epi 37ecb9f544c60a67acfea97c
+volta/Q3_K/m4n4/experts f8ec8694540ad3f9f1ff9f1f
+volta/Q3_K/m4n4/plain c1d699afd7df55136962b1a8
+volta/Q3_K/m4n4/split2 3dfb0faa2610aee3f9b94b68
+volta/Q3_K/m4n4k16/bias refused
+volta/Q3_K/m4n4k16/epi refused
+volta/Q3_K/m4n4k16/experts refused
+volta/Q3_K/m4n4k16/plain refused
+volta/Q3_K/m4n4k16/split2 refused
+volta/Q4_0/deep/bias 6ceb6279e946335eae610b24
+volta/Q4_0/deep/epi deded6fb5ba7d579578032af
+volta/Q4_0/deep/experts 0d6bda5f84b95e4bec9e24e4
+volta/Q4_0/deep/plain a4018d32c7c26279f5a529d4
+volta/Q4_0/deep/split2 c5beef22a263941ce6e8bfe5
+volta/Q4_0/m2n2/bias 0a43db4b3223cd3a85fecf93
+volta/Q4_0/m2n2/epi bed32b0551e01dab6a35ebe0
+volta/Q4_0/m2n2/experts 9093daa06bad87caa138e2e0
+volta/Q4_0/m2n2/plain da8fabe9cd565dbbb27ede39
+volta/Q4_0/m2n2/split2 0bebdc06279ad44cc0c7b125
+volta/Q4_0/m2n4k8/bias 41a0017d11ccc9bb120c076f
+volta/Q4_0/m2n4k8/epi 1e86582b89179a70f98a794b
+volta/Q4_0/m2n4k8/experts 22a55270701cc8e220203581
+volta/Q4_0/m2n4k8/plain 43aec14c3df10c25a43a0558
+volta/Q4_0/m2n4k8/split2 0ae6882ac804a43f0ffb5970
+volta/Q4_0/m4n4/bias b3639952ce735e20d5a5763a
+volta/Q4_0/m4n4/epi cf6f171402d196a2d5670a34
+volta/Q4_0/m4n4/experts d9308f18c5385f4b7293fb8e
+volta/Q4_0/m4n4/plain 89e0eccd7759c2b1fc45fcd8
+volta/Q4_0/m4n4/split2 c11f9be4dc9ec01a64ee3ace
+volta/Q4_0/m4n4k16/bias 2042324dbcfa0e03c8809823
+volta/Q4_0/m4n4k16/epi ac1a77488a721ee89cfd4212
+volta/Q4_0/m4n4k16/experts a225e9dd1b0739680fbafd25
+volta/Q4_0/m4n4k16/plain 6a51c54dce91b0b5c80a2110
+volta/Q4_0/m4n4k16/split2 de892656c5c424aeb6db9f70
+volta/Q4_K/deep/bias 88740d18a99b1edf6f1b2ff0
+volta/Q4_K/deep/epi d6bdc034ee624b891b5bef5e
+volta/Q4_K/deep/experts e16cee3e7e2e81ad0a80d98b
+volta/Q4_K/deep/plain e2106f0708198081f92e9e28
+volta/Q4_K/deep/split2 9bd74c0a9036c6c50b239029
+volta/Q4_K/m2n2/bias e470d3699475618d2653559e
+volta/Q4_K/m2n2/epi 120c156f37aee2d28d05ccb2
+volta/Q4_K/m2n2/experts 93dfdfbf85c80905cecb24dd
+volta/Q4_K/m2n2/plain bc0c37e7cee8372936b531bd
+volta/Q4_K/m2n2/split2 4d3e9e139633a175909400f3
+volta/Q4_K/m2n4k8/bias 0265ad333955b6c233684729
+volta/Q4_K/m2n4k8/epi b04bb713ebad46a83d3e0b74
+volta/Q4_K/m2n4k8/experts 3267c7cb66dd6153258e81ae
+volta/Q4_K/m2n4k8/plain c24515d91d6df08db6279c61
+volta/Q4_K/m2n4k8/split2 c69d5a25ca92447dbef639cc
+volta/Q4_K/m4n4/bias a9dd9be84d79d3cf319f8dd8
+volta/Q4_K/m4n4/epi 6f73104ddb58490cf5c33e8b
+volta/Q4_K/m4n4/experts a6c27ff8f148e477e49129f5
+volta/Q4_K/m4n4/plain 388a071188ca44602edb0298
+volta/Q4_K/m4n4/split2 ff0b45cef7e4f8684d6a879d
+volta/Q4_K/m4n4k16/bias e6861e0861265926d675d37e
+volta/Q4_K/m4n4k16/epi 3b1387bbbd12f2c495d603f2
+volta/Q4_K/m4n4k16/experts 9874a23b306e39ef65f7f055
+volta/Q4_K/m4n4k16/plain 570d42bec5483936e7a5a6b7
+volta/Q4_K/m4n4k16/split2 bda9c14eed353203ecf5d016
+volta/Q5_0/deep/bias 3e2a7a028542386854caecd3
+volta/Q5_0/deep/epi 315b388a0722a7af3a93ddfe
+volta/Q5_0/deep/experts 50864c69d1237a991b741eaf
+volta/Q5_0/deep/plain 52378f05db13ab173cac9e9b
+volta/Q5_0/deep/split2 41762b6f6045eb3941101c70
+volta/Q5_0/m2n2/bias f6efe47715d495286a19c167
+volta/Q5_0/m2n2/epi bd45d5f4ac1b9456f5f2325d
+volta/Q5_0/m2n2/experts 11ee169bba55169b40243abc
+volta/Q5_0/m2n2/plain d1e4659a6d8c5c5bd571b2e5
+volta/Q5_0/m2n2/split2 e79971a8d4dd7d076eb7e37f
+volta/Q5_0/m2n4k8/bias f41ff8b21674ae82af9a96f6
+volta/Q5_0/m2n4k8/epi 0a3570ff90ec704486b55e6e
+volta/Q5_0/m2n4k8/experts f5a1f297fa26cf8874c83eb2
+volta/Q5_0/m2n4k8/plain f0859292fbb10065e00d1768
+volta/Q5_0/m2n4k8/split2 a4c81e62c720c00e265b6fce
+volta/Q5_0/m4n4/bias 58890f41582eb40658453057
+volta/Q5_0/m4n4/epi 363771c75c028db87499dfbf
+volta/Q5_0/m4n4/experts 518c4ff0f0c303a1afe98665
+volta/Q5_0/m4n4/plain 625ecac5b2454f50f8a2de16
+volta/Q5_0/m4n4/split2 2f0e182ae85992272e919299
+volta/Q5_0/m4n4k16/bias 054e33e92f4d60c0cb6f05b6
+volta/Q5_0/m4n4k16/epi 1cc827147d702916e0446916
+volta/Q5_0/m4n4k16/experts fd4d799a0ec086cef4bf9c63
+volta/Q5_0/m4n4k16/plain 23f67d471af154831f5664f5
+volta/Q5_0/m4n4k16/split2 1ad23d3290d42203fb300cee
+volta/Q5_1/deep/bias 4a5dcd007a568148c3d950a8
+volta/Q5_1/deep/epi 16ed9663f3f17977c31ebc47
+volta/Q5_1/deep/experts b7547eac020d0aaa9239a0a3
+volta/Q5_1/deep/plain 1c15e6f4c72deb81ecb4ac3e
+volta/Q5_1/deep/split2 d1b4e9ec0b9de4e6151e088b
+volta/Q5_1/m2n2/bias 989e3ed5eb442e5a3eb4ad54
+volta/Q5_1/m2n2/epi bd868072caa6f4c6fcc2f23a
+volta/Q5_1/m2n2/experts c0aab7a84ccaf5a3d00986d6
+volta/Q5_1/m2n2/plain b188dbb7d9c5ef79264972cb
+volta/Q5_1/m2n2/split2 4df1608b460618936be74706
+volta/Q5_1/m2n4k8/bias cf6082519804489b2a0e876c
+volta/Q5_1/m2n4k8/epi b31fac314bb5426b05d7b758
+volta/Q5_1/m2n4k8/experts b3492431b969f0cdcab5fa0c
+volta/Q5_1/m2n4k8/plain 51bd7da0370ee76a815207f1
+volta/Q5_1/m2n4k8/split2 a9dc0ef20ac97d90e82b2bd9
+volta/Q5_1/m4n4/bias e0698d68367a4f6ccf48e7a1
+volta/Q5_1/m4n4/epi 80f8c0592ae912d1fee1d529
+volta/Q5_1/m4n4/experts e1483bbbfa6720accf07c000
+volta/Q5_1/m4n4/plain be29d8c2a5fb0882b22b066c
+volta/Q5_1/m4n4/split2 8977d19f942bdeb01df29d57
+volta/Q5_1/m4n4k16/bias d68033c16b7b8d6e382bab99
+volta/Q5_1/m4n4k16/epi 87978fe4aa7069ff3a20687d
+volta/Q5_1/m4n4k16/experts 0ca21b308b5a8838d73043b0
+volta/Q5_1/m4n4k16/plain d512a593c8fef331b719f0ae
+volta/Q5_1/m4n4k16/split2 2af082165c13139867d2d279
+volta/Q5_K/deep/bias 98c5ee8d253faa3cc5f9e188
+volta/Q5_K/deep/epi 3732dddab02fe427d230f7b0
+volta/Q5_K/deep/experts 75ff89bec99ebe2aec3c9a09
+volta/Q5_K/deep/plain 8c48357066f0b18cef15d81d
+volta/Q5_K/deep/split2 acb09fb94123cf97435d4fa0
+volta/Q5_K/m2n2/bias bbba35e1d8690b09ff3c62f4
+volta/Q5_K/m2n2/epi 1e2dfb8a75f626a2512fcc75
+volta/Q5_K/m2n2/experts c968e2cb5c6418031d94f3bc
+volta/Q5_K/m2n2/plain a080b03a60bdd2887d029e17
+volta/Q5_K/m2n2/split2 6b48ae4e7c04b8eddbf64e50
+volta/Q5_K/m2n4k8/bias c029a2ebc05c1fd8bde20820
+volta/Q5_K/m2n4k8/epi a08b8b3142f55ae557ec6bb2
+volta/Q5_K/m2n4k8/experts 5a745bc8bbbbbd7f29c9703b
+volta/Q5_K/m2n4k8/plain 3e9d458920d808de730f9560
+volta/Q5_K/m2n4k8/split2 ff3404946574cc8d3bf6cac7
+volta/Q5_K/m4n4/bias d0ca29c793cd05e7766b156a
+volta/Q5_K/m4n4/epi 82910d607b5049bba56bda47
+volta/Q5_K/m4n4/experts dc76ef45dd9156389a3addcf
+volta/Q5_K/m4n4/plain 2842b95fb5d6d3385c89385f
+volta/Q5_K/m4n4/split2 28a93a8e02d8b4a08dde2640
+volta/Q5_K/m4n4k16/bias e72c0d157ad5d70796a8a2bc
+volta/Q5_K/m4n4k16/epi 8f2866f136671cbe570a61a9
+volta/Q5_K/m4n4k16/experts 1b6d84f90232351ed4e854ab
+volta/Q5_K/m4n4k16/plain 694072fe6c26bca0c0b53d2a
+volta/Q5_K/m4n4k16/split2 f1aa4e9b18e2725f243f6c2b
+volta/Q6_K/deep/bias f88103f6184caf5d65043077
+volta/Q6_K/deep/epi 12e3815c818490ed030b4768
+volta/Q6_K/deep/experts ee5e00ab2b122bffe10e3482
+volta/Q6_K/deep/plain f6269f1b1ddc2b5cec1f2884
+volta/Q6_K/deep/split2 92283bcaaaf50d2babb18d53
+volta/Q6_K/m2n2/bias refused
+volta/Q6_K/m2n2/epi refused
+volta/Q6_K/m2n2/experts refused
+volta/Q6_K/m2n2/plain refused
+volta/Q6_K/m2n2/split2 refused
+volta/Q6_K/m2n4k8/bias refused
+volta/Q6_K/m2n4k8/epi refused
+volta/Q6_K/m2n4k8/experts refused
+volta/Q6_K/m2n4k8/plain refused
+volta/Q6_K/m2n4k8/split2 refused
+volta/Q6_K/m4n4/bias 0e928e80ef542740651d0342
+volta/Q6_K/m4n4/epi d9b896e30ead76605e705217
+volta/Q6_K/m4n4/experts 4a4d051fe8a0e2d52d2a3710
+volta/Q6_K/m4n4/plain bc165bb1522c01d63d30f810
+volta/Q6_K/m4n4/split2 e870413cd2942ba06323cf4f
+volta/Q6_K/m4n4k16/bias refused
+volta/Q6_K/m4n4k16/epi refused
+volta/Q6_K/m4n4k16/experts refused
+volta/Q6_K/m4n4k16/plain refused
+volta/Q6_K/m4n4k16/split2 refused
+volta/Q8_0/deep/bias 4119a0dd44f5e41aead6bebc
+volta/Q8_0/deep/epi 0e7fa767612f430e388541f4
+volta/Q8_0/deep/experts 755237177c577ace903c22a8
+volta/Q8_0/deep/plain 1ccf595aabccc7f4326532fa
+volta/Q8_0/deep/split2 2ac4e0fb7d152bf27553db6e
+volta/Q8_0/m2n2/bias b05e11a8e23882af71217312
+volta/Q8_0/m2n2/epi d8c2c41285cf3d20124e12b9
+volta/Q8_0/m2n2/experts 7487686bed0e66fb61d1b057
+volta/Q8_0/m2n2/plain 62f0a23ae9d65cc36b7fd3f9
+volta/Q8_0/m2n2/split2 f80a6354612529293650619e
+volta/Q8_0/m2n4k8/bias 3f0cb0fe2a58927f36170a65
+volta/Q8_0/m2n4k8/epi dba032d10d34e7feb288a384
+volta/Q8_0/m2n4k8/experts 7ddea9fb235c6d9f1dcf2c9e
+volta/Q8_0/m2n4k8/plain b6b3002295370f832cef8c71
+volta/Q8_0/m2n4k8/split2 832c699e0356ba1cf9e105f3
+volta/Q8_0/m4n4/bias 394af163285010d191cd62ef
+volta/Q8_0/m4n4/epi 8cb829ff3e8c46cada76be19
+volta/Q8_0/m4n4/experts 7d3881d2fa438cb9270cf972
+volta/Q8_0/m4n4/plain 9e1b4df0d86d69865960a421
+volta/Q8_0/m4n4/split2 79a91e61195188d19fc5c3af
+volta/Q8_0/m4n4k16/bias 51d9b9a9c31c64edd495f96d
+volta/Q8_0/m4n4k16/epi 33eda79ebff52c7426c5fb98
+volta/Q8_0/m4n4k16/experts b4a8c8f1414c65e1f7a6732e
+volta/Q8_0/m4n4k16/plain f3f2735143aeae113723db6d
+volta/Q8_0/m4n4k16/split2 c2242964c618bab4c40e04b4
+volta/TQ2/deep/bias refused
+volta/TQ2/deep/epi refused
+volta/TQ2/deep/experts refused
+volta/TQ2/deep/plain refused
+volta/TQ2/deep/split2 refused
+volta/TQ2/m2n2/bias refused
+volta/TQ2/m2n2/epi refused
+volta/TQ2/m2n2/experts refused
+volta/TQ2/m2n2/plain refused
+volta/TQ2/m2n2/split2 refused
+volta/TQ2/m2n4k8/bias refused
+volta/TQ2/m2n4k8/epi refused
+volta/TQ2/m2n4k8/experts refused
+volta/TQ2/m2n4k8/plain refused
+volta/TQ2/m2n4k8/split2 refused
+volta/TQ2/m4n4/bias refused
+volta/TQ2/m4n4/epi refused
+volta/TQ2/m4n4/experts refused
+volta/TQ2/m4n4/plain refused
+volta/TQ2/m4n4/split2 refused
+volta/TQ2/m4n4k16/bias refused
+volta/TQ2/m4n4k16/epi refused
+volta/TQ2/m4n4k16/experts refused
+volta/TQ2/m4n4k16/plain refused
+volta/TQ2/m4n4k16/split2 refused
+volta/TQ2F/deep/bias refused
+volta/TQ2F/deep/epi refused
+volta/TQ2F/deep/experts refused
+volta/TQ2F/deep/plain refused
+volta/TQ2F/deep/split2 refused
+volta/TQ2F/m2n2/bias refused
+volta/TQ2F/m2n2/epi refused
+volta/TQ2F/m2n2/experts refused
+volta/TQ2F/m2n2/plain refused
+volta/TQ2F/m2n2/split2 refused
+volta/TQ2F/m2n4k8/bias refused
+volta/TQ2F/m2n4k8/epi refused
+volta/TQ2F/m2n4k8/experts refused
+volta/TQ2F/m2n4k8/plain refused
+volta/TQ2F/m2n4k8/split2 refused
+volta/TQ2F/m4n4/bias refused
+volta/TQ2F/m4n4/epi refused
+volta/TQ2F/m4n4/experts refused
+volta/TQ2F/m4n4/plain refused
+volta/TQ2F/m4n4/split2 refused
+volta/TQ2F/m4n4k16/bias refused
+volta/TQ2F/m4n4k16/epi refused
+volta/TQ2F/m4n4k16/experts refused
+volta/TQ2F/m4n4k16/plain refused
+volta/TQ2F/m4n4k16/split2 refused
+voltasegs/BF16 refused
+voltasegs/F16 refused
+voltasegs/F32 refused
+voltasegs/MXFP4 f431e2d138fc7529511b4917
+voltasegs/Q3_K refused
+voltasegs/Q4_0 5a90627131754e0a24a4d50d
+voltasegs/Q4_K a565bc87755263ec6b3b6acc
+voltasegs/Q5_0 bfe4f0ae3a387b8aadf927bc
+voltasegs/Q5_1 c2588624b17881f29c172dfe
+voltasegs/Q5_K b159343e131aca46b4246cb2
+voltasegs/Q6_K refused
+voltasegs/Q8_0 0e3f5048d311d6eb38146ced
+voltasegs/TQ2 refused
+voltasegs/TQ2F refused
