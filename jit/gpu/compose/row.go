@@ -73,6 +73,13 @@ const (
 	NLess                    // A < B, of indices: a condition
 	NSelect                  // C ? A : B, of floats or of indices
 	NInput                   // a former's own output at the element (a matvec's), in an epilogue
+	// NLoopIdx is the counter of the fold whose operands read it (an index).
+	NLoopIdx
+	// NFold is a serial fused multiply-add over At terms, per element:
+	// acc = fma(A, B, acc) for the counter 0..At-1, from zero, in that order
+	// (the order a thread's own dot product takes). A and B read NLoopIdx.
+	// Its result is a value of the element, like a load's.
+	NFold
 )
 
 // Op is a unary or binary map.
@@ -114,7 +121,8 @@ type Node struct {
 	Buf     int
 	A, B, C int
 	F       float32
-	// At is a BufScalar load's index, or an NUConst's value.
+	// At is a BufScalar load's index, an NUConst's value, or an NFold's
+	// term count.
 	At int
 	// Indexed loads at node Ix (an index), the buffer's own position
 	// where it is false: the element's place in its row, or the row's.
@@ -235,6 +243,11 @@ func (g *Row) Check() error {
 			}
 		case NSelect:
 			in = []int{n.A, n.B, n.C}
+		case NFold:
+			in = []int{n.A, n.B}
+			if n.Op != OpFma || n.At < 1 {
+				return fmt.Errorf("compose: node %d is a fold of %d terms by op %d", i, n.At, n.Op)
+			}
 		}
 		if n.Kind == NLoad && n.Indexed {
 			in = append(in, n.Ix)
@@ -256,6 +269,61 @@ func (g *Row) Check() error {
 			q.Pad%32 != 0 || q.Pad < g.Width {
 			return fmt.Errorf("compose: an int8 epilogue of node %d at %d", q.Val, q.Pad)
 		}
+	}
+	return g.checkFolds()
+}
+
+// variant is each node's dependence on a fold's counter: a node reading the
+// counter, or a node that does. A fold itself is not variant (its operands
+// are: they are the loop's body), so only the operands of a fold may be.
+func (g *Row) variant() []bool {
+	v := make([]bool, len(g.Nodes))
+	for i, n := range g.Nodes {
+		var in []int
+		switch n.Kind {
+		case NLoopIdx:
+			v[i] = true
+		case NUnary, NReduce:
+			in = []int{n.A}
+		case NBinary, NUBinary, NLess:
+			in = []int{n.A, n.B}
+			if n.Op == OpFma && n.Kind == NBinary {
+				in = append(in, n.C)
+			}
+		case NSelect:
+			in = []int{n.A, n.B, n.C}
+		case NLoad:
+			if n.Indexed {
+				in = []int{n.Ix}
+			}
+		}
+		for _, x := range in {
+			v[i] = v[i] || v[x]
+		}
+	}
+	return v
+}
+
+// checkFolds refuses what a fold's loop cannot hold: a reduction under it
+// (the loop is one thread's), and the counter reaching anything but a fold's
+// operands -- a store, a reduction or an int8 epilogue.
+func (g *Row) checkFolds() error {
+	v, d := g.variant(), g.depth()
+	for i, n := range g.Nodes {
+		switch {
+		case n.Kind == NFold && (d[n.A] != 0 || d[n.B] != 0):
+			return fmt.Errorf("compose: fold %d reads a reduction", i)
+		case n.Kind == NReduce && v[n.A]:
+			return fmt.Errorf("compose: reduction %d reads a fold's counter", i)
+		}
+	}
+	for _, s := range g.Stores {
+		if v[s.Val] || s.Indexed && v[s.Ix] {
+			return fmt.Errorf("compose: a store of a value that reads a fold's counter")
+		}
+	}
+	if q := g.Q8; q != nil && v[q.Val] {
+		return fmt.Errorf("compose: an int8 epilogue of a value that reads a fold's counter")
 	}
 	return nil
 }
@@ -285,7 +353,9 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 	width := b.Const(ir.U32, int64(g.Width))
 	last := b.Const(ir.U32, int64(g.Width-1))
 	depth := g.depth()
-	rowVal := make([]ir.Value, len(g.Nodes)) // a reduction's result, once its pass ran
+	rowVal := make([]ir.Value, len(g.Nodes))  // a reduction's result, once its pass ran
+	foldVal := make([]ir.Value, len(g.Nodes)) // a fold's result, before the passes
+	var loopI ir.Value                        // the counter of the fold being emitted
 	// elem emits node n at column idx, its loads and maps in this pass.
 	var elem func(n int, idx ir.Value, memo map[int]ir.Value) ir.Value
 	elem = func(n int, idx ir.Value, memo map[int]ir.Value) ir.Value {
@@ -325,6 +395,10 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			v = r
 		case NUConst:
 			v = b.Const(ir.U32, int64(nd.At))
+		case NLoopIdx:
+			v = loopI
+		case NFold:
+			v = foldVal[n]
 		case NUBinary:
 			x, y := elem(nd.A, idx, memo), elem(nd.B, idx, memo)
 			switch nd.Op {
@@ -402,6 +476,29 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 	}
 	iters := int64((g.Width + G - 1) / G)
 	step := b.Const(ir.U32, int64(G))
+	// Folds first, each a loop of its own (the IR has no nested loops): one
+	// thread's serial sum for the element it holds, which is the whole row
+	// where the row fits the group.
+	for n, nd := range g.Nodes {
+		if nd.Kind != NFold {
+			continue
+		}
+		if iters != 1 {
+			return nil, fmt.Errorf("compose: a fold over a row of %d in a group of %d", g.Width, G)
+		}
+		zero, zu, one := b.ConstF32(0), b.Const(ir.U32, 0), b.Const(ir.U32, 1)
+		col := b.Min(ir.U32, tid, last)
+		b.Loop(int64(nd.At))
+		ctr := b.Phi(ir.U32, zu)
+		acc := b.Phi(ir.F32, zero)
+		loopI = ctr
+		memo := map[int]ir.Value{}
+		x, y := elem(nd.A, col, memo), elem(nd.B, col, memo)
+		b.SetPhi(acc, b.Fma(x, y, acc))
+		b.SetPhi(ctr, b.Add(ir.U32, ctr, one))
+		b.EndLoop()
+		foldVal[n] = acc
+	}
 	// Pass p: every reduction of depth p+1 accumulates; every store of depth
 	// p writes, once its reductions ran.
 	for p := 0; p <= passes; p++ {
@@ -489,7 +586,7 @@ func f2u(f float32) uint32 { return math.Float32bits(f) }
 func (g *Row) isIndex(n int) bool {
 	nd := g.Nodes[n]
 	switch nd.Kind {
-	case NColumn, NRowIdx, NUConst, NUBinary:
+	case NColumn, NRowIdx, NUConst, NUBinary, NLoopIdx:
 		return true
 	case NLoad:
 		return g.Bufs[nd.Buf].Kind == BufU32

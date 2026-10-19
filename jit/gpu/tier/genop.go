@@ -319,6 +319,9 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		// shape (RecurrentPlan).
 		return []genLaunch{{former: formScan}}
 	}
+	if l := g.genStreamsA(o, prog, bs, rows); l != nil {
+		return l
+	}
 	if l := g.genPairs(o, prog, bs, rows); l != nil {
 		return l
 	}

@@ -1795,6 +1795,10 @@ func (g *devTier) layersSession(s backend.Session) {
 					fsrc = at(o.Out[0])
 				case dkAddNormQuant:
 					fsrc = at(o.Out[1])
+				case dkStreamPredict:
+					g.AltUpBlocks++
+				case dkStreamGateMix:
+					g.Q4EMixes++
 				}
 				if o.Gen[0].former != 0 {
 					g.FormerOps++
@@ -2030,21 +2034,6 @@ func (g *devTier) layersSession(s backend.Session) {
 					err = pk.pagedDecode(s, lc, at(o.In[0]), gk, gv, bs.n, at(o.Out[0]), gtab, gdesc, sink)
 					g.PagedLaunches++
 				}
-			case dkStreamNorm:
-				// A row a stream: the streams themselves through the stream
-				// norm, a per-stream row of the n-gram's through the row norm.
-				// The n-gram's norms are the tier's uploads (grouped, as its
-				// kernels read them), not the container's vectors.
-				k, w := bs.q4e.normS, o.V
-				switch prog.slots[o.Out[0]] {
-				case slotNKn:
-					k, w = bs.q4e.normR, l.q4e.ngK
-				case slotNQn:
-					w = l.q4e.ngQ
-				case slotNGvn:
-					k, w = bs.q4e.normR, l.q4e.ngC
-				}
-				ds4Rows(lc, k, R*bs.q4e.h, at(o.In[0]), w, at(o.Out[0]))
 			case dkIdxWrite:
 				lc.la(ix.writeK, R*ix.d, at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
 			case dkIdxAttendLatent:
@@ -2215,11 +2204,6 @@ func (g *devTier) layersSession(s backend.Session) {
 			case dkNGramAdd:
 				lc.la(bs.q4e.ngAdd, bs.q4e.h*R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.Out[0]))
 				g.Q4ENGram++
-			case dkStreamGateMix:
-				lc.la(bs.q4e.gateMix, R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
-				g.Q4EMixes++
-			case dkPlaceWeights:
-				lc.la(bs.q4e.injK, R*bs.q4e.h, at(o.In[0]), at(o.Out[0]))
 			case dkStreamPlace:
 				if prog.slots[o.In[2%len(o.In)]] == slotHC {
 					lc.la(bs.ds4.hcPost, p.DS4.HCMult*R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.Out[0]))
@@ -2231,18 +2215,11 @@ func (g *devTier) layersSession(s backend.Session) {
 					lc.la(bs.k3.post[o.N], bs.k3.streams*R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
 					break
 				}
-				lc.la(bs.q4e.place, bs.q4e.h*R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.Out[0]))
-			case dkStreamRoute:
-				lc.la(bs.altRoute, R*p.AltUp, at(o.In[0]), l.altRouter, at(o.Out[0]))
-			case dkStreamPredict:
-				lc.la(bs.altPredictK, R*p.AltUp*p.NEmbd, at(o.In[0]), at(o.In[1]), l.altPredT, at(o.Out[0]))
-				g.AltUpBlocks++
-			case dkStreamCorrect:
-				lc.la(bs.altCorrectK, R*p.AltUp*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.In[2]), l.altCorrT, at(o.Out[0]))
-			case dkStreamScale:
-				lc.la(bs.altMul, R*p.NEmbd, at(o.In[0]), l.altCorrScale, at(o.Out[0]))
-			case dkStreamFinish:
-				lc.la(bs.altFinish, R*p.AltUp*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+				// Every other placement is generated from its op (genop.go).
+				if err == nil {
+					err = fmt.Errorf("tier: block %d: op %s has no generated kernel (last: %s)", li, o.Kind, g.LastErr)
+				}
+				return
 			case dkGaussTopK:
 				if g.emitGauss(lc, bs, l, R) != at(o.Out[0]) {
 					err = fmt.Errorf("tier: block %d: the gaussian top-k has no kernels on this device", li)

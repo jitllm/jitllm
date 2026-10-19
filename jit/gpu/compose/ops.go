@@ -57,6 +57,15 @@ func (g *Row) Act(k kernels.ActKind, a int) int {
 	return g.Add(Node{Kind: NUnary, Op: OpAct, Act: k, A: a})
 }
 
+// LoopIdx is the counter of the fold whose operands read it.
+func (g *Row) LoopIdx() int { return g.Add(Node{Kind: NLoopIdx}) }
+
+// Fold is the serial sum over n terms of a*b, a and b reading LoopIdx: each
+// term one fused multiply-add into the running sum, from zero, in order.
+func (g *Row) Fold(a, b, n int) int {
+	return g.Add(Node{Kind: NFold, Op: OpFma, A: a, B: b, At: n})
+}
+
 // Store writes v at the element into buffer b; StoreAt at index node ix.
 func (g *Row) Store(b, v int) { g.Stores = append(g.Stores, Store{Buf: b, Val: v}) }
 

@@ -15,9 +15,9 @@ import (
 // itself (genop.go), so each count only falls; a count above its ceiling
 // fails. Lower a ceiling to the count in the same change that lowers it.
 var progCeilings = map[string]int{
-	"scratch kernel launches": 188,
-	"family references":       295,
-	"kernels chosen by slot":  53,
+	"scratch kernel launches": 180,
+	"family references":       283,
+	"kernels chosen by slot":  52,
 	"family-named slots":      68,
 }
 
@@ -31,7 +31,7 @@ var progCounters = map[string]*regexp.Regexp{
 var familySlot = regexp.MustCompile(`^\s+slot(C[A-Z]|N[A-Z]|B[A-Z]|H[CFM]|Idx|IK|IQ|SQ8|SX|SG|SM|SI|SW|SLo|Lat|MGate|MGated|RBias)`)
 
 // genFiles is the program's generators: what an op's kernel is built by.
-var genFiles = []string{"genop.go", "conv.go", "convgraph.go", "kernid.go", "devrewrite.go"}
+var genFiles = []string{"genop.go", "conv.go", "convgraph.go", "kernid.go", "devrewrite.go", "gen_streams_a.go"}
 
 // The generators' own deviation: kernel classes by another name. A named
 // kernel id, a kernel taken from the menu rather than formed from the op's
