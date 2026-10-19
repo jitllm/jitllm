@@ -299,6 +299,11 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 				return l
 			}
 			o.Why = whyLayout
+		case dkLatentWrite:
+			if l := g.genLatentWrite(o, prog, bs, rows); l != nil {
+				return l
+			}
+			o.Why = whyHistory
 		}
 		// The attention former: the paged plans emitted from the attention's
 		// shape and the device's tuning, the history's row writes, and a

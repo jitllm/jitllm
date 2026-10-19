@@ -1404,13 +1404,6 @@ func (g *devTier) layersSession(s backend.Session) {
 					break
 				}
 				lc.la(bs.mlaRopeQ, p.NHead*bs.mlaRot/2, at(o.In[0]), bs.cs, bs.zero, at(o.Out[0]))
-			case dkLatentWrite:
-				pc := pagedCall{pk: pk, pl: pl, k: pl.k, tab: pl.tab, desc: pk.pRow}
-				off := bs.zero
-				if R > 1 {
-					off = pk.rotOff
-				}
-				pc.writeLatent(lc, R, at(o.In[0]), at(o.In[1]), off, bs, o.N == 1)
 			case dkTopK:
 				// The arity follows the inputs: a masked plane, a selection
 				// bias, or the logits alone.
