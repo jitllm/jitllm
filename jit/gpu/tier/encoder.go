@@ -970,7 +970,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		// The rewrites legal at one row, on a prompt chunk and on a ragged
 		// step differ: each class keeps its own fused program.
 		fc := l.fusedFor(R, rag)
-		if fc.bs != bs {
+		if fc.bs != bs || fc.fault != faultSig(l, &bs.p) {
 			// The prologue builds every block's variant before the
 			// submission (ensureFused); one built here is a step that
 			// compiled inside a submission, counted so a gate holds it to
@@ -1048,6 +1048,9 @@ func (g *devTier) layersSession(s backend.Session) {
 			buf[slotMQA], buf[slotMQAn], buf[slotMKV], buf[slotMKVLat], buf[slotMKVn] = ml.qa, ml.qan, ml.kv, ml.kvLat, ml.kvn
 			buf[slotMNope], buf[slotMPE], buf[slotMPErot], buf[slotMKPE] = ml.qNope, ml.pe, ml.pErot, ml.kpe
 			buf[slotMAbsRaw], buf[slotMAbs], buf[slotMAcc], buf[slotMOut] = ml.absRaw, ml.abs, ml.accOut, ml.out
+			// The head-major rows headMajor's gathers write, in the order
+			// they come: storage the latent scratch sizes for R.
+			buf[slotPool0], buf[slotPool1] = ml.nopeHM, ml.accHM
 		}
 		// grouped runs an absorb bank over the heads' rows, head-major, its
 		// int8 operand just quantized (emitMLARows' grouped).
@@ -1104,12 +1107,12 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 			case dkExpertMatVec:
 				if rowsMLA && prog.slots[o.Out[0]] == slotMAbsRaw {
-					latentGrouped(*l.ms[o.W], *l.rs[o.W], ml.nopeHM, at(o.Out[0]))
+					latentGrouped(*l.ms[o.W], *l.rs[o.W], at(o.In[2]), at(o.Out[0]))
 					break
 				}
 				if rowsMLA && prog.slots[o.Out[0]] == slotMOut {
 					// Head-major out of the grouped un-absorb, token-major after.
-					latentGrouped(*l.ms[o.W], *l.rs[o.W], ml.accHM, ml.outHM)
+					latentGrouped(*l.ms[o.W], *l.rs[o.W], at(o.In[2]), ml.outHM)
 					lc.la(ml.gatherOut, R*ml.nh*ml.hdv, ml.outHM, ml.permTM, at(o.Out[0]))
 					break
 				}
@@ -1732,6 +1735,14 @@ func (g *devTier) layersSession(s backend.Session) {
 			if R > 1 && o.OneRow {
 				continue // what reads it over rows produces it itself
 			}
+			// An op about to write the row the last binary16 conversion read
+			// voids it: the next GEMM converts the row's new value. An op
+			// that makes the conversion itself sets it after writing.
+			for _, v := range o.Out {
+				if actMemoSrc != nil && at(v) == actMemoSrc {
+					actMemoK, actMemoSrc = nil, nil
+				}
+			}
 			g.ProgOps++
 			// An op with generated launches runs them and nothing else; the
 			// block's last add stays with the executor where the next
@@ -1759,9 +1770,9 @@ func (g *devTier) layersSession(s backend.Session) {
 						gst.qs, gst.d, gst.sc, gst.mbias = r.qs, dOf(r), r.sc, (*l.ms[o.W]).bias
 					}
 					gst.a, gst.ax = bs.a, bs.ax
-					gst.f16, gst.fsrc, gst.memoK, gst.memoSrc = g.f16Buf, nil, actMemoK, actMemoSrc
-					if len(o.In) > 0 {
-						gst.fsrc = at(o.In[0])
+					gst.f16, gst.memoK, gst.memoSrc = g.f16Buf, actMemoK, actMemoSrc
+					if o.Kind == dkGatherHeads {
+						gst.perm = g.perms[[2]int{o.Heads, R}]
 					}
 					runGen(lc, &o, R, bs.rows, &buf, &gst)
 					actMemoK, actMemoSrc = gst.memoK, gst.memoSrc
@@ -1786,30 +1797,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				continue
 			}
 			switch o.Kind {
-			case dkNorm:
-				// RMSNorm, or LayerNorm with its bias: the norm the block was
-				// built with (norm picks the form), its weights bound by role.
-				// A latent's norm runs at the latent's width.
-				switch prog.slots[o.Out[0]] {
-				case slotMQAn:
-					if rowsMLA {
-						lc.la(ml.qaNormPart, R*ml.qaParts, at(o.In[0]), ml.qaPart)
-						lc.la(ml.qaNormApply, R*ml.qlr, at(o.In[0]), o.V, ml.qaPart, at(o.Out[0]))
-						break
-					}
-					lc.la(bs.mlaNormQAPart, bs.mlaQAParts, at(o.In[0]), bs.mlaQAPart)
-					lc.la(bs.mlaNormQAApply, p.QLoraRank, at(o.In[0]), o.V, bs.mlaQAPart, at(o.Out[0]))
-				case slotMKVn:
-					if rowsMLA {
-						lc.la(ml.normPart, R*ml.parts, at(o.In[0]), ml.kvPart)
-						lc.la(ml.normApply, R*ml.lat, at(o.In[0]), o.V, ml.kvPart, at(o.Out[0]))
-						break
-					}
-					lc.la(bs.mlaNormKVPart, bs.mlaParts, at(o.In[0]), bs.mlaKVPart)
-					lc.la(bs.mlaNormKVApply, bs.mlaLat, at(o.In[0]), o.V, bs.mlaKVPart, at(o.Out[0]))
-				default:
-					norm(at(o.In[0]), o.V, o.VB)
-				}
 			case dkQuant:
 				if x := bs.q4e; x != nil && prog.slots[o.Out[0]] == slotSQ8W {
 					lc.la(x.quantW, kernels.QuantizeThreads(R*pad32(x.width)/32), at(o.In[0]), x.aW, x.axW)
@@ -1910,44 +1897,8 @@ func (g *devTier) layersSession(s backend.Session) {
 					break
 				}
 				addRes(at(o.In[0]), at(o.In[1]), at(o.Out[0]))
-			case dkActMul:
-				switch {
-				case prog.slots[o.Out[0]] == slotEAct && len(o.In) > 2 && rowsMoE:
-					// Weighted at the input: the routed weight scales gate and up.
-					lg(mg.actMulW, gr.cols*p.NFFNExp, 128, at(o.In[0]), at(o.In[1]), at(o.In[2]), mg.colPair, at(o.Out[0]))
-				case prog.slots[o.Out[0]] == slotEAct && len(o.In) > 2:
-					lc.la(bs.actMulW, bs.nUsed*bs.nFFNExp, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.Out[0]))
-				case prog.slots[o.Out[0]] == slotEAct && rowsMoE:
-					lg(mg.actMul, gr.cols*p.NFFNExp, 128, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
-				case prog.slots[o.Out[0]] == slotEAct:
-					lc.la(bs.actMulE, bs.nUsed*bs.nFFNExp, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
-				case prog.slots[o.Out[0]] == slotShAct:
-					lc.la(bs.shActMul, R*bs.nShExp, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
-				case prog.slots[o.Out[0]] == slotPLEA:
-					lc.la(bs.pleAct, R*p.PLEDim, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
-				default:
-					lc.la(blockAct(bs, l), R*prog.vals[o.In[0]].Width, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
-				}
-			case dkGatedAdd:
-				lc.la(bs.shAdd, R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.Out[0]))
 			case dkSplitQG:
 				lc.la(bs.splitQG, R*qdim, at(o.In[0]), at(o.Out[0]), at(o.Out[1]))
-			case dkGateOut:
-				if prog.slots[o.Out[0]] == slotMGated && l.k3 != nil && l.k3.fault == nn.K3FaultNoMLAGate {
-					buf[slotMGated] = at(o.In[1]) // the gate left out
-					break
-				}
-				if prog.slots[o.Out[0]] == slotMGated {
-					lc.la(bs.k3.sigMG, R*bs.k3.mgateW, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
-					break
-				}
-				lc.la(bs.sigMul, R*qdim, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
-			case dkClamp:
-				if prog.slots[o.Out[0]] == slotQC {
-					lc.la(bs.clampQ, R*qdim, at(o.In[0]), at(o.Out[0]))
-				} else {
-					lc.la(bs.clampKV, R*p.KVRow(), at(o.In[0]), at(o.Out[0]))
-				}
 			case dkSubNorm:
 				k := bs.subQA
 				if o.Role == jlm.RoleFFNSubNorm {
@@ -2096,8 +2047,6 @@ func (g *devTier) layersSession(s backend.Session) {
 					err = pk.pagedDecode(s, lc, at(o.In[0]), ix.gk, ix.gk, bs.n, at(o.Out[0]), ix.gtab, ix.gdesc, nil)
 					g.PagedLaunches++
 				}
-			case dkClampAt:
-				lc.la(bs.clampK[o.N], R*prog.vals[o.In[0]].Width, at(o.In[0]), l.clampB, at(o.Out[0]))
 			case dkRowBias:
 				g.ds4RouteBias(lc, bs, l, R)
 			case dkStreamFlatten:
@@ -2155,11 +2104,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				case slotCIPER:
 					lc.la(x.ropeIE, R*d.IdxHeadDim, at(o.In[0]), kd.csE, at(o.Out[0]))
 				case slotCAOR:
-					if d.Fault == nn.DS4FaultNoDerope {
-						// The step left out: its slot reads its input from here on.
-						buf[slotCAOR] = at(o.In[0])
-						break
-					}
 					lc.la(x.ropeI, R*p.NHead*p.HeadDim, at(o.In[0]), cs, at(o.Out[0]))
 				}
 			case dkCacheWrite:
@@ -2289,8 +2233,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				lc.la(bs.altMul, R*p.NEmbd, at(o.In[0]), l.altCorrScale, at(o.Out[0]))
 			case dkStreamFinish:
 				lc.la(bs.altFinish, R*p.AltUp*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
-			case dkResidJoin3:
-				lc.la(bs.laurelJoin, R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.Out[0]))
 			case dkGaussTopK:
 				if g.emitGauss(lc, bs, l, R) != at(o.Out[0]) {
 					err = fmt.Errorf("tier: block %d: the gaussian top-k has no kernels on this device", li)
@@ -2304,10 +2246,6 @@ func (g *devTier) layersSession(s backend.Session) {
 					return
 				}
 				lc.la(bs.pleSlice, R*p.PLEDim, bs.pleIn, l.pleOff, at(o.Out[0]))
-			case dkScale:
-				// The layer's output scale, out of place through bs.h and back.
-				lc.la(bs.scaleX, R*p.NEmbd, at(o.In[0]), l.outScale, bs.h)
-				lc.la(bs.scaleX, R*p.NEmbd, bs.h, bs.one, at(o.Out[0]))
 			case dkQTemp:
 				if at(o.Out[0]) == nil {
 					if err == nil {
@@ -2334,17 +2272,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				default:
 					lc.la(blockAct(bs, l), R*nf, at(o.In[0]), at(o.Out[0]))
 				}
-			case dkCopy:
-				// The first row copy the scratch built: the residual's, the
-				// rows', or the streams'.
-				k := bs.copyRes
-				if k == nil {
-					k = bs.copyRows
-				}
-				if k == nil {
-					k = bs.altCopy
-				}
-				lc.la(k, R*p.NEmbd, at(o.In[0]), at(o.Out[0]))
 			case dkRecurrent:
 				// The recurrent mixer with its pre-norm and quantize, as the
 				// encoder runs it, ending in bs.mvOut (emitLinear).
@@ -2352,65 +2279,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				if err != nil {
 					return
 				}
-			case dkPostNorm:
-				if prog.slots[o.Out[0]] == slotLatN && l.k3 != nil && l.k3.fault == nn.K3FaultNoLatentNorm {
-					buf[slotLatN] = at(o.In[0]) // the norm left out
-					break
-				}
-				if prog.slots[o.Out[0]] == slotLatN {
-					ds4Rows(lc, bs.k3.normL, R, at(o.In[0]), o.V, at(o.Out[0]))
-					break
-				}
-				// Out of place, as the encoder writes it: the norm's two
-				// passes over the sublayer's output into bs.h.
-				lc.la(bs.normPart, R*bs.parts, at(o.In[0]), bs.part)
-				lc.la(bs.normApply, R*p.NEmbd, at(o.In[0]), o.V, bs.part, at(o.Out[0]))
-			case dkHeadNorm:
-				// The form the encoder takes: one whole-row norm, the norm's
-				// two passes, or the per-head kernel at its lanes' geometry.
-				w, nk, lanes, heads := l.nQ, bs.qNorm, bs.qNormL, R*p.NHead
-				switch prog.slots[o.Out[0]] {
-				case slotKN:
-					w, nk, lanes, heads = l.nK, bs.kNorm, bs.kNormL, R*p.NKVHead
-				case slotVN:
-					// v's heads on k's kernel, weightless, against ones.
-					w, nk, lanes, heads = bs.hdOnes, bs.kNorm, bs.kNormL, R*p.NKVHead
-				}
-				if o.V != nil {
-					w = o.V // a weighted head norm, bound by role
-				}
-				if o.Role == 0 && prog.slots[o.Out[0]] != slotVN {
-					// A weightless (L2) norm: against ones.
-					w = bs.l4Ones
-				}
-				if p.QKNormWide {
-					heads = R
-				}
-				switch {
-				case bs.qkRms != nil:
-					laRows(bs.qkRms, at(o.In[0]), w, at(o.Out[0]))
-					g.QKRms++
-				case bs.qkPart != nil && bs.qkApply != nil:
-					lc.la(bs.qkPart, R*bs.parts, at(o.In[0]), bs.part)
-					lc.la(bs.qkApply, R*p.NHead*p.HeadDim, at(o.In[0]), w, bs.part, at(o.Out[0]))
-				default:
-					gr, gw := headNormGeom(lanes, heads)
-					if err == nil {
-						err = lc.launch(nk, gr, gw, at(o.In[0]), w, at(o.Out[0]))
-					}
-				}
-			case dkNormQuant:
-				laRows(bs.rmsQ, at(o.In[0]), o.V, at(o.Out[0]), bs.a, bs.ax)
-				fsrc = at(o.Out[0])
-			case dkAddNorm:
-				laRows(bs.addRms, at(o.In[0]), at(o.In[1]), o.V, at(o.Out[0]), at(o.Out[1]))
-			case dkAddNormQuant:
-				laRows(bs.addRmsQ, at(o.In[0]), at(o.In[1]), o.V, at(o.Out[0]), at(o.Out[1]), bs.a, bs.ax)
-				fsrc = at(o.Out[1])
-			case dkActQuant:
-				lc.la(bs.quantAct, kernels.QuantizeThreads(R*p.NFFN/32), at(o.In[0]), at(o.In[1]), at(o.Out[0]), bs.a, bs.ax)
-				fsrc = at(o.Out[0])
-				g.QuantActs++
 			case dkGate2, dkGate2In:
 				wu, wg := l.up, l.gate
 				if g.gateUp2Swapped() {
@@ -2468,8 +2336,14 @@ func (g *devTier) layersSession(s backend.Session) {
 				lc.la(o.K, o.N, at(o.In[0]), at(o.In[1]), g.f16Buf)
 				actMemoK, actMemoSrc = o.Conv, at(o.Out[0])
 				g.ActF16Fused++
-			case dkMul:
-				lc.la(bs.scMul, R*bs.rec.Chans, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+			default:
+				// Every op runs generated launches or a former's; a kind
+				// with neither has nothing that runs it, which is a
+				// compiler bug, not a step to skip.
+				if err == nil {
+					err = fmt.Errorf("tier: block %d: op %s has no generated kernel (last: %s)", li, o.Kind, g.LastErr)
+				}
+				return
 			}
 		}
 		// A recurrence's state parity flips once its launches are queued, and
@@ -4162,7 +4036,7 @@ func (l *layer) fusedFor(R int, rag *ragStep) *progFused {
 // from the op -- where it is not built for bs already. Callers hold g.mu.
 func (g *devTier) ensureFusedLocked(l *layer, prog *devProgram, bs *blockScratch, R int, rag *ragStep) {
 	fc := l.fusedFor(R, rag)
-	if fc.bs == bs {
+	if fc.bs == bs && fc.fault == faultSig(l, &bs.p) {
 		return
 	}
 	nseq := 0
@@ -4170,11 +4044,30 @@ func (g *devTier) ensureFusedLocked(l *layer, prog *devProgram, bs *blockScratch
 		nseq = len(rag.pos)
 	}
 	fc.prog, fc.took, fc.err = prog.fused(l, bs, g, R, nseq)
+	if fc.prog == prog {
+		fc.prog = prog.clone() // a refused fusion hands back the base program, which the rewrite must not change
+	}
+	faultRewrite(fc.prog, l, &bs.p)
+	fc.fault = faultSig(l, &bs.p)
 	fc.qkv, fc.gu, fc.down, fc.dense = fc.prog.forms()
 	fc.bs = bs
 	g.curLayer = l
 	g.genProgram(fc.prog, bs, bs.rows)
 	g.curLayer = nil
+}
+
+// ensureOrders builds the head-major orders block l's variant for R rows
+// gathers through, outside any submission. Callers hold g.mu.
+func (g *devTier) ensureOrders(l *layer, R int, rag *ragStep) {
+	fc := l.fusedFor(R, rag)
+	if fc.prog == nil {
+		return
+	}
+	for i := range fc.prog.ops {
+		if o := &fc.prog.ops[i]; o.Kind == dkGatherHeads {
+			g.headPerm(o.Heads, R)
+		}
+	}
 }
 
 // ensureFused builds, in the prologue and outside any submission, the fused
@@ -4184,6 +4077,7 @@ func (g *devTier) ensureFused(lo, hi, R int, bs *blockScratch, rag *ragStep) {
 	for li := lo; li < hi && li < len(g.layers); li++ {
 		if l := g.layers[li]; l != nil && l.ok && l.prog != nil && l.conv == nil {
 			g.ensureFusedLocked(l, l.prog, bs, R, rag)
+			g.ensureOrders(l, R, rag)
 		}
 	}
 }

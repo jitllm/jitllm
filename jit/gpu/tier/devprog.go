@@ -41,6 +41,7 @@ const (
 	layoutTokF16                  // token-major binary16 (kernels.ActF16T)
 	layoutFrag                    // the MMA's m16n8 fragments (kernels.ActF16)
 	layoutPairs                   // one row a (token, selected expert) pair
+	layoutHeads                   // over a chunk's rows, head-major: each head's rows together (devrewrite.go headMajor)
 )
 
 // devType is a value's type: element, layout and width a row.
@@ -52,7 +53,7 @@ type devType struct {
 
 func (t devType) String() string {
 	e := [...]string{"f32", "q8", "f16", "u32"}[t.Elem]
-	l := [...]string{"row", "kv", "tok", "frag", "pairs"}[t.Layout]
+	l := [...]string{"row", "kv", "tok", "frag", "pairs", "heads"}[t.Layout]
 	return fmt.Sprintf("%s.%s[%d]", e, l, t.Width)
 }
 
@@ -719,6 +720,14 @@ type devOp struct {
 	// Need overrides what the op reads on an input: a GEMM's binary16
 	// operand is the layout its batched twin reads.
 	Need []devType
+	// FIn, where set, is 1 + the input holding the float row a matvec's
+	// int8 operand was quantized from (floatSource): what a binary16
+	// conversion and a float weight read.
+	FIn int8
+	// Heads, where set, is a selected matvec over this many heads that
+	// reads its operands head-major over a chunk's rows (In[0] int8, In[2]
+	// float): headMajor lowers the order into the program.
+	Heads int
 	// K and Conv are a binary16 writer's kernel and the conversion it
 	// stands in for (rmsF16For, actF16For), chosen when it was rewritten.
 	K, Conv backend.Kernel
@@ -821,6 +830,12 @@ func (o devOp) wants(p *devProgram, i int) devType {
 	}
 	if i < len(o.Need) && o.Need[i] != (devType{}) {
 		return o.Need[i]
+	}
+	if in.Layout == layoutHeads && (o.Kind == dkQuant || o.Kind == dkExpertMatVec && o.Heads > 0 && i == 2) {
+		return in // the head-major order the gather wrote, read in it
+	}
+	if o.Kind == dkGatherHeads {
+		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	}
 	if p.f16 && (o.Kind == dkMatVec || o.Kind == dkQKV || o.Kind == dkQKVGemm) {
 		return devType{Elem: elemF32, Layout: row, Width: in.Width}
@@ -1442,7 +1457,12 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			default:
 				return nil, "an expert matvec over " + role.String()
 			}
+			// The graph's value is a token's whole selection, k pairs; the
+			// program's is a row a pair, so a pair's width.
 			width := g.Values[o.Out[0]].Width
+			if k := prog.vals[in(1)].Width; k > 0 && width%k == 0 {
+				width /= k
+			}
 			a := operand(in(0), i, true)
 			out := prog.val(name(0), devType{Elem: elemF32, Layout: layoutPairs, Width: width}, s)
 			prog.experts = true
@@ -1506,7 +1526,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			// up-projection, one selected matvec over the heads.
 			qa := operand(in(0), i, false)
 			raw := prog.val(name(0)+".abs_raw", f32(nh*lat), slotMAbsRaw)
-			prog.ops = append(prog.ops, devOp{Kind: dkExpertMatVec, Src: []int{i}, In: []devVal{qa, ident, in(0)}, Out: []devVal{raw}, Role: o.Weight[0].Role, W: kb})
+			prog.ops = append(prog.ops, devOp{Kind: dkExpertMatVec, Src: []int{i}, In: []devVal{qa, ident, in(0)}, Out: []devVal{raw}, Role: o.Weight[0].Role, W: kb, Heads: nh})
 			abs := prog.val(name(0)+".query", f32(nh*(lat+o.Attr.NRot)), slotMAbs)
 			prog.ops = append(prog.ops, devOp{Kind: dkConcatHeads, Src: []int{i}, In: []devVal{raw, in(1)}, Out: []devVal{abs}})
 			acc := prog.val(name(0)+".acc", f32(nh*lat), slotMAcc)
@@ -1520,7 +1540,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			// up-projection.
 			qc := operand(acc, i, false)
 			out := prog.val(name(0), f32(g.Values[o.Out[0]].Width), slotMOut)
-			prog.ops = append(prog.ops, devOp{Kind: dkExpertMatVec, Src: []int{i}, In: []devVal{qc, ident, acc}, Out: []devVal{out}, Role: o.Weight[1].Role, W: vb})
+			prog.ops = append(prog.ops, devOp{Kind: dkExpertMatVec, Src: []int{i}, In: []devVal{qc, ident, acc}, Out: []devVal{out}, Role: o.Weight[1].Role, W: vb, Heads: nh})
 			vals[o.Out[0]] = out
 			prog.latent = true
 		case graph.OpNGram:
@@ -1701,7 +1721,10 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				// sum the sublayer's row; an empty bank reads the row as it is.
 				nb := o.Attr.Groups
 				if nb == 0 {
-					vals[o.Out[0]] = in(0)
+					// The row as it is: the first stream of the streams,
+					// which are stored stream-major, so a view of their
+					// prefix at the row's width.
+					vals[o.Out[0]] = prog.val(name(0), f32(ne), prog.slots[in(0)])
 					continue
 				}
 				sc := prog.val(name(0)+".scores", f32(nb+1), slotBScores)
@@ -2513,4 +2536,61 @@ func selectOf(g *graph.Graph) *graph.Op {
 		}
 	}
 	return nil
+}
+
+// Faults as program rewrites. A fault switch (a test's violation, set per
+// instance) that leaves an op out of a block is applied to the block's
+// program before its kernels are generated: the op is removed and what read
+// its output reads its input, so the executor holds no fault at all and the
+// program it runs is the program a dump prints. The switches name the
+// mechanism they break, which is why they are matched here and nowhere in the
+// executor.
+
+// elide removes op i of p, its readers reading value keep in its output's
+// place.
+func (p *devProgram) elide(i int, keep devVal) {
+	out := p.ops[i].Out[0]
+	for j := i + 1; j < len(p.ops); j++ {
+		for k, v := range p.ops[j].In {
+			if v == out {
+				p.ops[j].In[k] = keep
+			}
+		}
+	}
+	p.ops = append(p.ops[:i], p.ops[i+1:]...)
+}
+
+// faultSig is block l's fault switches as one number: what a fused variant
+// was rewritten for, so a switch that changes rebuilds it.
+func faultSig(l *layer, plan *nn.LayerPlan) uint32 {
+	var s uint32
+	if l.k3 != nil {
+		s = uint32(l.k3.fault)
+	}
+	if plan.DS4 != nil {
+		s |= uint32(plan.DS4.Fault) << 8
+	}
+	return s
+}
+
+// faultRewrite applies block l's fault switches to its program.
+func faultRewrite(p *devProgram, l *layer, plan *nn.LayerPlan) {
+	for i := 0; i < len(p.ops); i++ {
+		o := p.ops[i]
+		if len(o.Out) == 0 {
+			continue
+		}
+		s := p.slots[o.Out[0]]
+		switch {
+		case l.k3 != nil && l.k3.fault == nn.K3FaultNoMLAGate && o.Kind == dkGateOut && s == slotMGated:
+			p.elide(i, o.In[1]) // the latent attention's output, ungated
+		case l.k3 != nil && l.k3.fault == nn.K3FaultNoLatentNorm && o.Kind == dkPostNorm && s == slotLatN:
+			p.elide(i, o.In[0]) // the latent sum, unnormed
+		case plan.DS4 != nil && plan.DS4.Fault == nn.DS4FaultNoDerope && o.Kind == dkTurn && s == slotCAOR:
+			p.elide(i, o.In[0]) // the heads left turned
+		default:
+			continue
+		}
+		i--
+	}
 }

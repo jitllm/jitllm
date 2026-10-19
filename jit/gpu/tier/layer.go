@@ -320,10 +320,12 @@ type layer struct {
 // progFused is a block's program with the rewrites that apply on one
 // scratch, and their names.
 type progFused struct {
-	bs   *blockScratch
-	prog *devProgram
-	took rwSet
-	err  error // the type error that refused every rewrite, if one did
+	bs *blockScratch
+	// fault is the fault switches the variant was rewritten for (faultSig).
+	fault uint32
+	prog  *devProgram
+	took  rwSet
+	err   error // the type error that refused every rewrite, if one did
 	// The op-span forms the program runs (BlockForms), noted each step.
 	qkv   qkvForm
 	gu    ffnGateUpForm

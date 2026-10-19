@@ -2062,6 +2062,8 @@ type devShared struct {
 	// genInSub is set while a block's program is generated inside a
 	// submission, where nothing may allocate.
 	genInSub bool
+	// perms is the head-major orders by (heads, rows) (headPerm).
+	perms map[[2]int]backend.Buf
 	// consts is the generated ops' constants by bit pattern (constBuf).
 	consts map[uint32]backend.Buf
 	// curLayer is the block whose program is being generated.
@@ -2912,6 +2914,10 @@ func (g *devTier) Close() {
 		b.Free()
 	}
 	g.consts = nil
+	for _, b := range g.perms {
+		b.Free()
+	}
+	g.perms = nil
 	for _, es := range g.genK {
 		for _, e := range es {
 			if e.k != nil {

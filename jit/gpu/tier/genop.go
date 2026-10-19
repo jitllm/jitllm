@@ -51,9 +51,9 @@ const (
 	gaOpAX  // and scales
 	gaMBias // the weight's own bias (mv.bias)
 	gaF16   // the binary16 operand a GEMM reads (the device's f16 plane)
-	gaFSrc  // the float row a binary16 operand is made from
 	gaQ8A   // an int8 output's values
 	gaQ8X   // its scales and sums
+	gaPerm  // the step's head-major order: each gathered row's source row (headPerm)
 )
 
 // genLaunch is one generated launch: threads for a flat launch, or groups of
@@ -76,6 +76,11 @@ type genLaunch struct {
 	// where the step's last conversion was this kernel over this row (q, k
 	// and v share one normed row, as do gate and up).
 	toF16 bool
+	// whole launches the kernel's full grid at any rows: a tiled GEMM's
+	// grid is tiles of rows by tiles of tokens, which no proportional cut
+	// keeps. Rows past the step's compute what nothing reads. (A kernel
+	// built for the step's own rows in the prologue is the faster form.)
+	whole bool
 }
 
 // The formers whose launchers run an op: the matvec's (the op's weight's
@@ -103,12 +108,6 @@ func kernAct(a graph.Act) (kernels.ActKind, bool) {
 		return kernels.ActReLU2, true
 	case graph.ActReLU:
 		return kernels.ActReLU, true
-	case graph.ActSwiGLUOAI:
-		return kernels.ActSwiGLUOAI, true
-	case graph.ActSwiGLUClamp:
-		return kernels.ActSwiGLUClamp, true
-	case graph.ActSitu:
-		return kernels.ActSitu, true
 	}
 	return 0, false
 }
@@ -118,6 +117,12 @@ func kernAct(a graph.Act) (kernels.ActKind, bool) {
 func (g *devTier) genProgram(prog *devProgram, bs *blockScratch, rows int) {
 	for i := range prog.ops {
 		o := &prog.ops[i]
+		if o.FIn == 0 && (o.Kind == dkMatVec || o.Kind == dkMatVecRes || o.Kind == dkMatVecGate) && len(o.In) < 4 {
+			if f, ok := prog.floatSource(i, o.In[0]); ok {
+				o.In = append(o.In, f)
+				o.FIn = int8(len(o.In))
+			}
+		}
 		if o.Act == 0 {
 			o.Act = o.A.Act // an activation its emit site did not record
 		}
@@ -285,13 +290,15 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 	if l := g.genPairs(o, prog, bs, rows); l != nil {
 		return l
 	}
+	// A head-major value is rows like any other to a row group: the order
+	// is what its gather wrote (headMajor).
 	for _, v := range o.In {
-		if prog.vals[v].Layout != layoutRow {
+		if l := prog.vals[v].Layout; l != layoutRow && l != layoutHeads {
 			return nil
 		}
 	}
 	for _, v := range o.Out {
-		if prog.vals[v].Layout != layoutRow {
+		if l := prog.vals[v].Layout; l != layoutRow && l != layoutHeads {
 			return nil
 		}
 	}
@@ -408,6 +415,18 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		rb.store(y, gaOut0)
 		q8 = 1
 		rb.quantize(y, w, p)
+	case dkGatherHeads:
+		// A chunk's rows head-major: each head's slice of every row in turn,
+		// a group row a (head, row), read through the step's order.
+		iw := prog.vals[o.In[0]].Width
+		if o.Heads <= 0 || iw%o.Heads != 0 {
+			return nil
+		}
+		hw := iw / o.Heads
+		rb.r.Width, rb.r.Rows = hw, rows*o.Heads
+		src, perm := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufU32, gaPerm)
+		at := rb.r.UBin(compose.OpAdd, rb.r.UBin(compose.OpMul, rb.r.Load(perm), rb.r.UConst(hw)), rb.r.Column())
+		rb.store(rb.r.LoadAt(src, at), gaOut0)
 	case dkHeadNorm:
 		// Each head a row of the head's width: rows*heads rows.
 		hd := o.HD
@@ -608,10 +627,12 @@ type genState struct {
 	// its matvec reads.
 	qs, d, sc, mbias backend.Buf
 	a, ax            backend.Buf
-	// The step's binary16 operand: its plane, the float row it is made
-	// from, and the conversion the step last made (shared with the
-	// executor, so a conversion either one made is not made again).
-	f16, fsrc backend.Buf
+	// perm is the step's head-major order for a gather (headPerm).
+	perm backend.Buf
+	// The step's binary16 operand: its plane, and the conversion the step
+	// last made, by kernel and source (shared with the executor, so a
+	// conversion either one made is not made again).
+	f16 backend.Buf
 	memoK     backend.Kernel
 	memoSrc   backend.Buf
 	// The step's (token, expert) pairs: the grouped run's sorted columns
@@ -667,8 +688,8 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.mbias
 			case gaF16:
 				bufs[j] = st.f16
-			case gaFSrc:
-				bufs[j] = st.fsrc
+			case gaPerm:
+				bufs[j] = st.perm
 			case gaQ8A:
 				bufs[j], _ = int8Of(st, o.Out[l.q8])
 			case gaQ8X:
@@ -676,13 +697,14 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 			}
 		}
 		if l.toF16 {
-			if st.memoK == l.k && st.memoSrc == st.fsrc {
+			// Its source is the first argument: the stated float row.
+			if st.memoK == l.k && st.memoSrc == bufs[0] {
 				continue
 			}
-			st.memoK, st.memoSrc = l.k, st.fsrc
+			st.memoK, st.memoSrc = l.k, bufs[0]
 		}
 		threads := l.threads
-		if rows > 0 && R < rows {
+		if rows > 0 && R < rows && !l.whole {
 			threads = threads / rows * R
 		}
 		if l.width != 0 {
@@ -692,8 +714,13 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				groups = st.cols
 			case l.pairs:
 				groups = bs.nUsed * R
-			case rows > 0 && R < rows:
+			case rows > 0 && R < rows && !l.whole:
 				groups = (groups*R + rows - 1) / rows
+			}
+			if groups > l.groups && *lc.err == nil {
+				// The kernel clamps its group to its last row: a wider launch
+				// would recompute that row and leave the rest unwritten.
+				*lc.err = fmt.Errorf("tier: op %s launched %d groups over %d rows", o.Kind, groups, l.groups)
 			}
 			if *lc.err == nil {
 				*lc.err = lc.launch(l.k, groups, l.width, bufs[:l.n]...)
@@ -739,7 +766,17 @@ func (g *devTier) genPairs(o *devOp, prog *devProgram, bs *blockScratch, rows in
 	p := &bs.p
 	moe := rows > 1 && prog.experts
 	w := prog.vals[o.In[0]].Width
-	rb := &rowBuild{r: compose.Row{Width: w, Rows: max(rows*p.NExpertUsed, 1)}}
+	// The rows the pairs fill: a token's selection, or over rows the grouped
+	// run's sorted columns, each expert's padded to the run's tile -- the
+	// capacity its producer laid out, which a launch may fill to the end.
+	cap := max(rows*p.NExpertUsed, 1)
+	if moe {
+		if bs.mg == nil {
+			return nil
+		}
+		cap = bs.mg.p
+	}
+	rb := &rowBuild{r: compose.Row{Width: w, Rows: cap}}
 	var q8 uint8
 	switch o.Kind {
 	case dkAct:
@@ -822,6 +859,13 @@ func (g *devTier) genMatVec(o *devOp, prog *devProgram, bs *blockScratch) []genL
 	}
 	gl := genLaunch{k: k, groups: (n + width - 1) / width, width: width,
 		args: [8]genArg{gaWQS, gaWD, gaWSC, gaOpA, gaOpAX, gaOut0}, n: 6}
+	if kernels.IsFloat(m.q) {
+		// A float weight reads the float row in the scale slot.
+		if o.FIn == 0 {
+			return nil
+		}
+		gl.args[1] = gaIn0 + genArg(o.FIn-1)
+	}
 	for _, a := range args {
 		gl.args[gl.n] = a
 		gl.n++
@@ -912,12 +956,74 @@ func (g *devTier) genGemm(o *devOp, prog *devProgram, bs *blockScratch, rows int
 	if k == nil {
 		return nil
 	}
-	conv := genLaunch{k: bm.act, threads: bm.actN, args: [8]genArg{gaFSrc, gaF16}, n: 2, toF16: true}
 	gl := genLaunch{k: k, threads: bm.threads, groups: bm.threads / bm.width, width: bm.width,
-		args: [8]genArg{gaWQS, gaWD, gaWSC, gaF16, gaOut0}, n: 5}
+		args: [8]genArg{gaWQS, gaWD, gaWSC, gaF16, gaOut0}, n: 5, whole: true}
 	for _, a := range args {
 		gl.args[gl.n] = a
 		gl.n++
 	}
+	// The binary16 operand, converted here from the float row in this
+	// GEMM's layout, which is a function of the token count it was built
+	// for: an f16 value a writer made for another count is not it.
+	if o.FIn == 0 {
+		return nil // no float row stated to convert
+	}
+	conv := genLaunch{k: bm.act, threads: bm.actN, args: [8]genArg{gaIn0 + genArg(o.FIn-1), gaF16}, n: 2, toF16: true, whole: true}
 	return []genLaunch{conv, gl}
+}
+
+// headPerm is the head-major order of R rows of h heads: row h*R + r of the
+// gathered rows reads row r*h + h of the chunk's. Built in the prologue,
+// outside any submission, once a (heads, rows) pair; a step looks it up.
+func (g *devTier) headPerm(h, R int) backend.Buf {
+	k := [2]int{h, R}
+	if b, ok := g.perms[k]; ok {
+		return b
+	}
+	if g.genInSub {
+		return nil // inside a submission nothing may allocate
+	}
+	t := make([]uint32, h*R)
+	for i := range t {
+		t[i] = uint32(i%R*h + i/R)
+	}
+	b, err := g.dev.Alloc(4 * len(t))
+	if err == nil {
+		err = b.Write(u32b(t))
+	}
+	if err != nil {
+		g.LastErr = fmt.Sprintf("a head-major order of %d x %d: %v", h, R, err)
+		return nil
+	}
+	if g.perms == nil {
+		g.perms = map[[2]int]backend.Buf{}
+	}
+	g.perms[k] = b
+	return b
+}
+
+// floatSource is the float row int8 value v (read by op j) was quantized
+// from: a quantize's input, or the float output a fused norm or activation
+// writes beside its int8 one. False where v is not an int8 value or its
+// writer states no float row.
+func (p *devProgram) floatSource(j int, v devVal) (devVal, bool) {
+	if p.vals[v].Elem != elemQ8 {
+		return 0, false
+	}
+	for i := j - 1; i >= 0; i-- {
+		o := p.ops[i]
+		for k, out := range o.Out {
+			if out != v {
+				continue
+			}
+			if o.Kind == dkQuant {
+				return o.In[0], true
+			}
+			if k > 0 && p.vals[o.Out[k-1]].Elem == elemF32 && p.vals[o.Out[k-1]].Width == p.vals[v].Width {
+				return o.Out[k-1], true
+			}
+			return 0, false
+		}
+	}
+	return 0, false
 }

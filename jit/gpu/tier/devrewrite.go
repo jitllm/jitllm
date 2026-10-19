@@ -34,6 +34,7 @@ const (
 	dkAddNormF16                                 // the residual add, its norm and the operand (rmsF16For, add)
 	dkActF16                                     // act(gate)*up written as down's binary16 operand only (actF16For)
 	dkQKVGemm                                    // q, k and v as one binary16 grid over one operand (qkvGemm)
+	dkGatherHeads                                // a chunk's rows reordered head-major (headMajor)
 	numKinds
 )
 
@@ -226,6 +227,8 @@ func (k devKind) String() string {
 		return "conv_bias"
 	case dkSSMNorm:
 		return "ssm_norm"
+	case dkGatherHeads:
+		return "gather_heads"
 	case dkNormQuant:
 		return "norm_quant"
 	case dkAddNorm:
@@ -339,6 +342,9 @@ func (p *devProgram) fused(l *layer, bs *blockScratch, g *devTier, R, nseq int) 
 		q.toF16()
 		took |= 1
 		lo, hi = 1, rwF16End
+	}
+	if R > 1 {
+		q.headMajor()
 	}
 	if err := q.check(); err != nil {
 		return p, 0, err
@@ -1149,4 +1155,38 @@ func rwExpertEpilogue(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, 
 		return true
 	}
 	return false
+}
+
+// headMajor lowers, on a chunk of rows, the order a selected matvec over
+// heads reads (devOp.Heads): its float rows gathered head-major by an op of
+// their own, and its int8 operand quantized from those, so the order is an
+// edge of the program rather than a buffer a launch wrote on the side. The
+// gathered rows of the program's first such matvec take the pool's first
+// slot, of the next its second.
+func (p *devProgram) headMajor() {
+	pool := slotPool0
+	for j := 0; j < len(p.ops); j++ {
+		o := p.ops[j]
+		if o.Heads <= 0 || len(o.In) != 3 || o.Kind != dkExpertMatVec {
+			continue
+		}
+		src := o.In[2]
+		k := -1
+		for i := 0; i < j; i++ {
+			if q := p.ops[i]; q.Kind == dkQuant && len(q.Out) > 0 && q.Out[0] == o.In[0] && q.In[0] == src {
+				k = i
+			}
+		}
+		if k < 0 {
+			continue // no quantize of its rows to reorder: the check refuses what reads it
+		}
+		t := p.vals[src]
+		h := p.val(p.names[src]+".heads", devType{Elem: elemF32, Layout: layoutHeads, Width: t.Width}, pool)
+		pool++
+		p.ops[k].In[0] = h
+		p.ops[j].In[2] = h
+		g := devOp{Kind: dkGatherHeads, Src: o.Src, In: []devVal{src}, Out: []devVal{h}, Heads: o.Heads}
+		p.ops = append(p.ops[:k], append([]devOp{g}, p.ops[k:]...)...)
+		j++
+	}
 }
