@@ -80,6 +80,20 @@ func (k devKind) String() string {
 		return "ple_slice"
 	case dkRopeKRow:
 		return "rope_k_row"
+	case dkStreamRoute:
+		return "stream_route"
+	case dkStreamPredict:
+		return "stream_predict"
+	case dkStreamCorrect:
+		return "stream_correct"
+	case dkStreamScale:
+		return "stream_scale"
+	case dkStreamFinish:
+		return "stream_finish"
+	case dkResidJoin3:
+		return "resid_join3"
+	case dkGaussTopK:
+		return "gauss_topk"
 	case dkScale:
 		return "scale"
 	case dkClamp:

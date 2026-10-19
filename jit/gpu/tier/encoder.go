@@ -929,7 +929,8 @@ func (g *devTier) layersSession(s backend.Session) {
 			slotDOut: bs.dOut, slotDAct: bs.dAct, slotScB: bs.scB, slotScC: bs.scC, slotScBx: bs.scBx, slotScY: bs.scY,
 			slotLRQ8: bs.dLRa, slotDLow: bs.dLowRank, slotDAlpha: bs.dAlpha, slotM1B: bs.m1B, slotM1C: bs.m1C,
 			slotM1LowN: bs.m1LowN, slotM1BN: bs.m1BN, slotM1CN: bs.m1CN,
-			slotPLEG: bs.pleG, slotPLES: bs.pleS, slotPLEA: bs.pleA, slotPLEO: bs.pleO, slotKRot: bs.krot}
+			slotPLEG: bs.pleG, slotPLES: bs.pleS, slotPLEA: bs.pleA, slotPLEO: bs.pleO, slotKRot: bs.krot,
+			slotPred: bs.altPred, slotAltM: bs.altM, slotAltB: bs.altB, slotLT: bs.altLT, slotLaur: bs.altLaur, slotGG: bs.gg}
 		// The rewrites legal at one row, on a prompt chunk and on a ragged
 		// step differ: each class keeps its own fused program.
 		fc := &l.progOne
@@ -1081,6 +1082,8 @@ func (g *devTier) layersSession(s backend.Session) {
 					lc.la(bs.quantX, kernels.QuantizeThreads(bs.nUsed*pad32(p.NFFNExp)/32), src, bs.a, bs.ax)
 				case prog.slots[o.In[0]] == slotShAct:
 					lc.la(bs.shQuant, kernels.QuantizeThreads(R*bs.nShExp/32), src, bs.a, bs.ax)
+				case prog.slots[o.In[0]] == slotLT:
+					lc.la(bs.laurelQuant, kernels.QuantizeThreads(R*p.LaurelRank/32), src, bs.a, bs.ax)
 				case prog.slots[o.In[0]] == slotPLEA:
 					lc.la(bs.pleQuant, kernels.QuantizeThreads(R*pad32(p.PLEDim)/32), src, bs.a, bs.ax)
 				case prog.slots[o.In[0]] == slotDAct || prog.slots[o.In[0]] == slotDMixed:
@@ -1536,6 +1539,24 @@ func (g *devTier) layersSession(s backend.Session) {
 					kro = bs.kroff
 				}
 				lc.la(bs.ropeKRow, R*p.NKVHead*p.NRot/2, at(o.In[0]), rcs, kro, at(o.Out[0]))
+			case dkStreamRoute:
+				lc.la(bs.altRoute, R*p.AltUp, at(o.In[0]), l.altRouter, at(o.Out[0]))
+			case dkStreamPredict:
+				lc.la(bs.altPredictK, R*p.AltUp*p.NEmbd, at(o.In[0]), at(o.In[1]), l.altPredT, at(o.Out[0]))
+				g.AltUpBlocks++
+			case dkStreamCorrect:
+				lc.la(bs.altCorrectK, R*p.AltUp*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.In[2]), l.altCorrT, at(o.Out[0]))
+			case dkStreamScale:
+				lc.la(bs.altMul, R*p.NEmbd, at(o.In[0]), l.altCorrScale, at(o.Out[0]))
+			case dkStreamFinish:
+				lc.la(bs.altFinish, R*p.AltUp*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.Out[0]))
+			case dkResidJoin3:
+				lc.la(bs.laurelJoin, R*p.NEmbd, at(o.In[0]), at(o.In[1]), at(o.In[2]), at(o.Out[0]))
+			case dkGaussTopK:
+				if g.emitGauss(lc, bs, l, R) != at(o.Out[0]) {
+					err = fmt.Errorf("tier: block %d: the gaussian top-k has no kernels on this device", li)
+					return
+				}
 			case dkPLESlice:
 				if bs.pleIn == nil {
 					if err == nil {
@@ -1583,7 +1604,16 @@ func (g *devTier) layersSession(s backend.Session) {
 				lc.la(pk.copyK, R*p.KVRow(), at(o.In[0]), pl.k, bs.zero, pl.tab, pk.pRow)
 				lc.la(pk.copyV, R*p.NKVHead*p.HeadDim, at(o.In[1]), pl.v, bs.zero, pl.tab, pk.pRow)
 			case dkCopy:
-				lc.la(bs.copyRes, R*p.NEmbd, at(o.In[0]), at(o.Out[0]))
+				// The first row copy the scratch built: the residual's, the
+				// rows', or the streams'.
+				k := bs.copyRes
+				if k == nil {
+					k = bs.copyRows
+				}
+				if k == nil {
+					k = bs.altCopy
+				}
+				lc.la(k, R*p.NEmbd, at(o.In[0]), at(o.Out[0]))
 			case dkRecurrent:
 				// The recurrent mixer with its pre-norm and quantize, as the
 				// encoder runs it, ending in bs.mvOut (emitLinear).

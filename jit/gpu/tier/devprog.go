@@ -78,6 +78,13 @@ const (
 	dkGateOut                      // the attention's output times the sigmoid of the gate
 	dkPLESlice                     // this block's rows of the per-layer input table
 	dkRopeKRow                     // k's rotary into a row of its own (XD-RoPE's k is normed after it)
+	dkStreamRoute                  // a stream router's weights over a row (AltUp's)
+	dkStreamPredict                // each stream predicted from the others by the routed coefficients
+	dkStreamCorrect                // each stream corrected by the active one's change
+	dkStreamScale                  // the active stream's correction scaled
+	dkStreamFinish                 // every stream written back from the corrections and a row
+	dkResidJoin3                   // a residual add with a branch beside it, over sqrt(2)
+	dkGaussTopK                    // the gate's values above its mean plus a bound of deviations
 	dkScale                        // the block's row times the layer's output scale
 	dkClamp                        // q, k or v clamped to the plan's bound
 	dkSubNorm                      // an inner norm before wo or down, with the quantize it feeds
@@ -206,6 +213,12 @@ const (
 	slotPLEA                    // bs.pleA: the gate activated, times the input
 	slotPLEO                    // bs.pleO: projected back to the row
 	slotKRot                    // bs.krot: k rotated, before its norm (XD-RoPE)
+	slotPred                    // bs.altPred: every stream's prediction
+	slotAltM                    // bs.altM: a stream router's weights
+	slotAltB                    // bs.altB: the streams corrected
+	slotLT                      // bs.altLT: a low-rank branch's middle
+	slotLaur                    // bs.altLaur: the branch
+	slotGG                      // bs.gg: the gate after its gaussian top-k
 	numSlots
 )
 
@@ -387,6 +400,18 @@ func (s devSlot) String() string {
 		return "ple_o"
 	case slotKRot:
 		return "k_rot"
+	case slotPred:
+		return "pred"
+	case slotAltM:
+		return "alt_m"
+	case slotAltB:
+		return "alt_b"
+	case slotLT:
+		return "lt"
+	case slotLaur:
+		return "branch"
+	case slotGG:
+		return "gg"
 	}
 	return ""
 }
@@ -514,7 +539,8 @@ func (o devOp) wants(p *devProgram, i int) devType {
 			return devType{Elem: elemU32, Layout: layoutRow, Width: in.Width}
 		}
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
-	case dkSlice, dkView, dkRopeTail, dkLatentWrite, dkConcatHeads, dkLatentAttend, dkConv1d, dkScan, dkGatedNorm, dkMul, dkConvBias, dkSSMNorm:
+	case dkSlice, dkView, dkRopeTail, dkLatentWrite, dkConcatHeads, dkLatentAttend, dkConv1d, dkScan, dkGatedNorm, dkMul, dkConvBias, dkSSMNorm,
+		dkStreamRoute, dkStreamPredict, dkStreamCorrect, dkStreamScale, dkStreamFinish, dkResidJoin3, dkGaussTopK:
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
 	case dkExpertFetch, dkGroupByExpert:
 		return devType{Elem: elemU32, Layout: layoutRow, Width: in.Width}
@@ -594,6 +620,8 @@ func lowersOp(k graph.OpKind) bool {
 	switch k {
 	case graph.OpNorm, graph.OpMatVec, graph.OpRope, graph.OpKVAppend, graph.OpAttend, graph.OpAdd,
 		graph.OpActMul, graph.OpAct, graph.OpHeadNorm, graph.OpLayerNorm, graph.OpScale, graph.OpClamp,
+		// Predicted and corrected streams, a low-rank branch, the sparse gate.
+		graph.OpAltPredict, graph.OpAltCorrect, graph.OpLaurel, graph.OpGaussTopK,
 		// The mixture's ops.
 		graph.OpRoute, graph.OpGather, graph.OpExpertMatVec, graph.OpCombine, graph.OpGateScalar,
 		// A recurrent mixer, lowered whole with its pre-norm (emitLinear).
@@ -634,7 +662,8 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 	prog := &devProgram{}
 	ne, qd, kv := p.NEmbd, p.NHead*p.HeadDim, p.KVRow()
 	f32 := func(w int) devType { return devType{Elem: elemF32, Layout: layoutRow, Width: w} }
-	vals := map[graph.ValueID]devVal{g.In[0]: prog.val("x", f32(ne), slotX)}
+	// The block's row: every stream of it where it carries several.
+	vals := map[graph.ValueID]devVal{g.In[0]: prog.val("x", f32(g.Values[g.In[0]].Width), slotX)}
 	if len(g.In) > 1 && p.PLEDim != 0 {
 		// The per-layer input: this block's rows of the model's table.
 		pl := prog.val(g.Values[g.In[1]].Name, f32(p.PLEDim), slotPLES)
@@ -1120,6 +1149,66 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkExpertMatVec, Src: []int{i}, In: []devVal{qc, ident, acc}, Out: []devVal{out}, Role: o.Weight[1].Role, W: vb})
 			vals[o.Out[0]] = out
 			prog.latent = true
+		case graph.OpAltPredict:
+			// The active stream normed, the router's weights, every stream's
+			// prediction, the active one's copied into the row.
+			active := prog.val("x.active", f32(ne), slotX)
+			prog.ops = append(prog.ops, devOp{Kind: dkView, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{active}, Staged: true})
+			hn := prog.val(name(1)+".normed", f32(ne), slotH)
+			prog.ops = append(prog.ops, devOp{Kind: dkPostNorm, Src: []int{i}, In: []devVal{active}, Out: []devVal{hn}, Role: o.Weight[0].Role})
+			m := prog.val(name(0)+".route", f32(o.Attr.Streams), slotAltM)
+			prog.ops = append(prog.ops, devOp{Kind: dkStreamRoute, Src: []int{i}, In: []devVal{hn}, Out: []devVal{m}})
+			pred := prog.val(name(0), prog.vals[in(0)], slotPred)
+			prog.ops = append(prog.ops, devOp{Kind: dkStreamPredict, Src: []int{i}, In: []devVal{in(0), m}, Out: []devVal{pred}})
+			act := prog.val(name(1), f32(ne), slotX)
+			prog.ops = append(prog.ops, devOp{Kind: dkCopy, Src: []int{i}, In: []devVal{pred}, Out: []devVal{act}})
+			vals[o.Out[0]], vals[o.Out[1]] = pred, act
+		case graph.OpLaurel:
+			// in + norm(R(L(in))): the rank's middle, its own quantize, back
+			// to the row, normed into the corrections' first plane, added.
+			if p.AltUp == 0 {
+				return nil, "a low-rank branch with no rank"
+			}
+			lt := prog.val(name(0)+".mid", f32(p.LaurelRank), slotLT)
+			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{operand(in(0), i, false)}, Out: []devVal{lt}, W: l.matIndex(o.Weight[0].Role)})
+			back := prog.val(name(0)+".back", f32(ne), slotOut)
+			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{operand(lt, i, false)}, Out: []devVal{back}, W: l.matIndex(o.Weight[1].Role)})
+			bn := prog.val(name(0)+".normed", f32(ne), slotAltB)
+			prog.ops = append(prog.ops, devOp{Kind: dkPostNorm, Src: []int{i}, In: []devVal{back}, Out: []devVal{bn}, Role: o.Weight[2].Role})
+			lr := prog.val(name(0), f32(ne), slotLaur)
+			prog.ops = append(prog.ops, devOp{Kind: dkAdd, Src: []int{i}, In: []devVal{in(0), bn}, Out: []devVal{lr}})
+			vals[o.Out[0]] = lr
+		case graph.OpGaussTopK:
+			if prog.slots[in(0)] != slotG {
+				return nil, "a gaussian top-k not of the gate"
+			}
+			out := prog.val(name(0), prog.vals[in(0)], slotGG)
+			prog.ops = append(prog.ops, devOp{Kind: dkGaussTopK, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}})
+			vals[o.Out[0]] = out
+		case graph.OpAltCorrect:
+			// The block's active row normed, the router's weights, every
+			// stream corrected, the active correction scaled and projected
+			// through the per-layer input, every stream written back.
+			ws := o.Weight
+			hn := prog.val(name(0)+".normed", f32(ne), slotH)
+			prog.ops = append(prog.ops, devOp{Kind: dkPostNorm, Src: []int{i}, In: []devVal{in(1)}, Out: []devVal{hn}, Role: ws[0].Role})
+			m := prog.val(name(0)+".route", f32(o.Attr.Streams), slotAltM)
+			prog.ops = append(prog.ops, devOp{Kind: dkStreamRoute, Src: []int{i}, In: []devVal{hn}, Out: []devVal{m}})
+			b := prog.val(name(0)+".corr", prog.vals[in(0)], slotAltB)
+			prog.ops = append(prog.ops, devOp{Kind: dkStreamCorrect, Src: []int{i}, In: []devVal{in(0), in(1), m}, Out: []devVal{b}})
+			sc := prog.val(name(0)+".scaled", f32(ne), slotH)
+			prog.ops = append(prog.ops, devOp{Kind: dkStreamScale, Src: []int{i}, In: []devVal{b}, Out: []devVal{sc}})
+			pg := prog.val(name(0)+".ple_gate", f32(p.PLEDim), slotPLEG)
+			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{operand(sc, i, false)}, Out: []devVal{pg}, W: l.matIndex(ws[4].Role)})
+			pa := prog.val(name(0)+".ple_act", f32(p.PLEDim), slotPLEA)
+			prog.ops = append(prog.ops, devOp{Kind: dkActMul, Src: []int{i}, In: []devVal{pg, in(2)}, Out: []devVal{pa}})
+			po := prog.val(name(0)+".ple_out", f32(ne), slotPLEO)
+			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{operand(pa, i, false)}, Out: []devVal{po}, W: l.matIndex(ws[5].Role)})
+			pn := prog.val(name(0)+".ple_normed", f32(ne), slotH)
+			prog.ops = append(prog.ops, devOp{Kind: dkPostNorm, Src: []int{i}, In: []devVal{po}, Out: []devVal{pn}, Role: ws[6].Role})
+			out := prog.val(name(0), prog.vals[in(0)], slotX)
+			prog.ops = append(prog.ops, devOp{Kind: dkStreamFinish, Src: []int{i}, In: []devVal{b, pn}, Out: []devVal{out}})
+			vals[o.Out[0]] = out
 		case graph.OpClamp:
 			var cs devSlot
 			switch prog.slots[in(0)] {
@@ -1298,6 +1387,18 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkAttend, Src: []int{i}, In: []devVal{q}, Out: []devVal{out}})
 			vals[o.Out[0]] = out
 		case graph.OpAdd:
+			if o.Attr.Scale != 0 {
+				// A three-way join: the residual add just lowered with the
+				// branch beside it, over sqrt(2), one launch.
+				n := len(prog.ops) - 1
+				if o.Attr.Scale != graph.LaurelJoin || n < 0 || prog.ops[n].Kind != dkAdd || prog.ops[n].Out[0] != in(0) {
+					return nil, "a scaled add that is not a three-way join"
+				}
+				r := prog.ops[n]
+				prog.ops[n] = devOp{Kind: dkResidJoin3, Src: append(r.Src, i), In: []devVal{r.In[0], r.In[1], in(1)}, Out: r.Out}
+				vals[o.Out[0]] = r.Out[0]
+				continue
+			}
 			if lg, ok := gated[o.In[1]]; ok {
 				// The routed sum and a gated shared expert: one launch.
 				out := prog.val(name(0), f32(ne), slotShSum)
@@ -1394,7 +1495,14 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		if o.Role == jlm.RoleNone {
 			continue // a weightless norm
 		}
-		ws := g.Ops[o.Src[0]].Weight
+		// A norm op's weight and bias are its bindings; a norm inside a
+		// composite op (a branch's, a stream router's) binds the role its
+		// lowering named.
+		gop := g.Ops[o.Src[0]]
+		ws := gop.Weight
+		if gop.Kind != graph.OpNorm && gop.Kind != graph.OpLayerNorm && gop.Kind != graph.OpHeadNorm {
+			ws = []graph.Binding{{Role: o.Role}}
+		}
 		if o.V = l.vecOf(ws[0].Role); o.V == nil {
 			return nil, "a norm over " + ws[0].Role.String() + ", which the block's device copy does not hold"
 		}
@@ -1427,6 +1535,12 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.attends = true
 		case dkRopeQ, dkKVWrite:
 			prog.ropes = true
+		}
+	}
+	// Every matrix an op binds is one the block holds.
+	for _, o := range prog.ops {
+		if (o.Kind == dkMatVec || o.Kind == dkExpertMatVec) && (o.W < 0 || o.W >= len(l.rs) || *l.rs[o.W] == nil) {
+			return nil, "a matvec over a matrix the block's device copy does not hold"
 		}
 	}
 	if err := prog.check(); err != nil {

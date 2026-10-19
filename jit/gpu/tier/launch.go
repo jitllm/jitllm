@@ -1,6 +1,10 @@
 package tier
 
-import "github.com/jitllm/jitllm/jit/gpu/backend"
+import (
+	"errors"
+
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+)
 
 // launcher is a submission's launch path: its session, and the slice every
 // launch's buffer list is copied into before the call reaches the session. A
@@ -36,6 +40,11 @@ type launcher struct {
 
 // launch is s.Launch through the reused buffer list.
 func (l *launcher) launch(k backend.Kernel, groups, width int, bufs ...backend.Buf) error {
+	// A kernel a scratch never built is a refusal with a reason: handed to
+	// the backend it stalled the device (a launch that never completes).
+	if k == nil {
+		return errNilKernel
+	}
 	t := l.to
 	if ps := t.ps; ps != nil && ps.on {
 		if ps.add(k, groups, width, bufs) {
@@ -86,3 +95,6 @@ func (l *launcher) law(k backend.Kernel, threads, width int, bufs ...backend.Buf
 		*l.fsrc = bufs[0]
 	}
 }
+
+// errNilKernel is a launch of a kernel the scratch did not build.
+var errNilKernel = errors.New("tier: a launch of a kernel this block's scratch did not build")
