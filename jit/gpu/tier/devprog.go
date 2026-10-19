@@ -174,6 +174,7 @@ const (
 	slotMOut                    // bs.mlaOut: it un-absorbed
 	slotMIdent                  // bs.mlaIdent: the identity selection 0..NHead-1
 	slotMKVLat                  // the kv latent's prefix: bs.mlaKV read in place, copied out over rows
+	slotHR                      // bs.hr: a router's own norm of the row
 	numSlots
 )
 
@@ -305,6 +306,8 @@ func (s devSlot) String() string {
 		return "mla_ident"
 	case slotMKVLat:
 		return "mla_kv_lat"
+	case slotHR:
+		return "hr"
 	}
 	return ""
 }
@@ -625,6 +628,21 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			case jlm.RoleAttnNorm, jlm.RoleFFNNorm:
 			case jlm.RolePostAttnNorm, jlm.RolePostFFNNorm:
 				k = dkPostNorm
+			case jlm.RolePostFFNNorm1, jlm.RolePostFFNNorm2, jlm.RoleRouterNorm, jlm.RoleFFNNorm2:
+				// A mixture beside a dense MLP: each branch's norms, out of
+				// place, into the buffers the branches read (the router's
+				// own row, the experts', and each branch's output).
+				ns := slotH
+				switch o.Weight[0].Role {
+				case jlm.RolePostFFNNorm1:
+					ns = slotShSum
+				case jlm.RoleRouterNorm:
+					ns = slotHR
+				}
+				out := prog.val(name(0), prog.vals[in(0)], ns)
+				prog.ops = append(prog.ops, devOp{Kind: dkPostNorm, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Role: o.Weight[0].Role})
+				vals[o.Out[0]] = out
+				continue
 			case jlm.RoleAttnQANorm, jlm.RoleAttnKVANorm:
 				// A latent's norm, at the latent's width, into its own buffer.
 				ls := slotMQAn
@@ -657,10 +675,6 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			vals[o.Out[0]] = out
 		case graph.OpMatVec:
 			role := o.Weight[0].Role
-			if role == jlm.RoleShExpGate && p.DenseMoE {
-				// Its own norms and sum need buffers by liveness.
-				return nil, "a dense MLP beside the mixture"
-			}
 			if role == jlm.RolePLEGate {
 				// The per-layer embedding: its gate to the add that brings
 				// it into the row, lowered whole (perLayerEmbed).
@@ -1063,8 +1077,16 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			reads := func(sl devSlot) bool { return prog.slots[in(0)] == sl || prog.slots[in(1)] == sl }
 			if !reads(slotX) && !reads(slotX2) {
 				// A sum of two branches (an attention's and a mixer's beside
-				// it), not a residual add: into bs.h, as the encoder sums.
-				out := prog.val(name(0), f32(ne), slotH)
+				// it, a dense MLP's and a mixture's), not a residual add: into
+				// the first of bs.h, bs.mvOut and bs.shsum it does not read.
+				bsum := slotH
+				for _, c := range [...]devSlot{slotH, slotOut, slotShSum} {
+					if !reads(c) {
+						bsum = c
+						break
+					}
+				}
+				out := prog.val(name(0), f32(ne), bsum)
 				prog.ops = append(prog.ops, devOp{Kind: dkAdd, Src: []int{i}, In: []devVal{in(0), in(1)}, Out: []devVal{out}})
 				vals[o.Out[0]] = out
 				continue
