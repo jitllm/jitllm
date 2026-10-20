@@ -2602,6 +2602,9 @@ func buildDevProgram(p *nn.LayerPlan, l *layer, page int) (*devProgram, string) 
 			return nil, "a matvec over a matrix the block's device copy does not hold"
 		}
 	}
+	if p.NoPreNorm && p.Q4E == nil {
+		prog.copyBranchInput(ne)
+	}
 	if err := prog.check(); err != nil {
 		return nil, err.Error()
 	}
@@ -2951,5 +2954,24 @@ func faultRewrite(p *devProgram, l *layer, plan *nn.LayerPlan) {
 			continue
 		}
 		i--
+	}
+}
+
+// copyBranchInput gives a block with no pre-norm the row its first branch
+// reads as a copy of the residual in h, where a norm would have written it:
+// the first op reading the residual reads the copy.
+func (p *devProgram) copyBranchInput(ne int) {
+	for i, o := range p.ops {
+		for j, v := range o.In {
+			if (p.slots[v] != slotX && p.slots[v] != slotX2) || p.vals[v].Width != ne || o.Kind == dkAdd {
+				continue
+			}
+			h := p.val(p.names[v]+".copy", p.vals[v], slotH)
+			cp := devOp{Kind: dkCopy, Src: o.Src, In: []devVal{v}, Out: []devVal{h}}
+			p.ops[i].In = append([]devVal(nil), o.In...)
+			p.ops[i].In[j] = h
+			p.ops = append(p.ops[:i], append([]devOp{cp}, p.ops[i:]...)...)
+			return
+		}
 	}
 }

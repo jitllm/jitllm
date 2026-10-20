@@ -150,7 +150,7 @@ func TestComposerParity(t *testing.T) {
 			if *parityModel == "" && *parityKernel != "" {
 				n := 0
 				for _, m := range r.miss {
-					if strings.HasPrefix(m.K.Name, *parityKernel) {
+					if (*parityKernel == "*" || strings.HasPrefix(m.K.Name, *parityKernel)) {
 						n++
 					}
 				}
@@ -164,7 +164,7 @@ func TestComposerParity(t *testing.T) {
 					prefix = digits.ReplaceAllString(m.K.Name, "N")
 				}
 				missing[prefix]++
-				if *parityModel != "" && *parityKernel != "" && strings.HasPrefix(m.K.Name, *parityKernel) {
+				if *parityModel != "" && *parityKernel != "" && (*parityKernel == "*" || strings.HasPrefix(m.K.Name, *parityKernel)) {
 					t.Logf("%s missing %s\n        %s", m.K.Name, opLine(m.K, m.Op), paritytest.Explain(ex, m.K, m.Op, 4))
 				}
 			}
