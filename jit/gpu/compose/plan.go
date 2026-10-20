@@ -70,6 +70,11 @@ type Facts struct {
 	// and of 8 rows a warp; NoMMA, the caller's refusal of the instruction.
 	MMAMT, MMANT int
 	NoMMA        bool
+	// A row group's width and combine where the tier states them: RowGroup
+	// threads (0 for the rule's), and Tree to combine a reduction through
+	// threadgroup memory where the target could butterfly it.
+	RowGroup int
+	Tree     bool
 }
 
 // Planned is one kernel of a plan: its group, its schedule, its buffers by
@@ -110,6 +115,12 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 	}
 	if !g.contraction() {
 		s := rowSchedule(g, f.Target)
+		if f.RowGroup > 0 {
+			s.Group = f.RowGroup
+		}
+		if f.Tree {
+			s.Warp = false
+		}
 		s.Target = f.Target
 		return []Planned{{G: g, S: s, Bufs: all, Threads: g.Rows}}, nil
 	}

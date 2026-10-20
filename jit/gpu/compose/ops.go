@@ -389,3 +389,15 @@ func (g *Row) Argmax(x, out int) {
 	r := g.Add(Node{Kind: NReduce, Red: RedArgmax, A: x})
 	g.Stages = append(g.Stages, Stage{Width: 1, Stores: []Store{{Buf: out, Val: r, Indexed: true, Ix: g.RowIdx()}}})
 }
+
+// RouterLogits stores each group row's logit: weight row r (BufRow, rows of
+// k, read by index) against token t's row of x (BufRow, read by index),
+// the group's rows token-major over the weight's rows (row t*rows + r).
+func (g *Row) RouterLogits(w, x, out, rows, k int) {
+	u, ub := g.UConst, g.UBin
+	row, e := g.RowIdx(), g.Column()
+	wv := g.LoadAt(w, ub(OpAdd, ub(OpMul, ub(OpRem, row, u(rows)), u(k)), e))
+	xv := g.LoadAt(x, ub(OpAdd, ub(OpMul, ub(OpDiv, row, u(rows)), u(k)), e))
+	r := g.Add(Node{Kind: NReduce, Red: RedSum, A: g.Bin(OpMul, wv, xv)})
+	g.Stages = append(g.Stages, Stage{Width: 1, Stores: []Store{{Buf: out, Val: r, Indexed: true, Ix: row}}})
+}

@@ -125,3 +125,32 @@ func TestLayerNormPartsIsMains(t *testing.T) {
 		}
 	}
 }
+
+// TestRouterIsMains holds the composer's router logits to main's
+// RouterMatVecOf and RouterMatVecTok: a workgroup of 128 a logit, the
+// partials through a tree.
+func TestRouterIsMains(t *testing.T) {
+	for _, c := range []struct{ e, k, ntok int }{{8, 64, 1}, {64, 2048, 1}, {8, 64, 32}, {128, 512, 4}} {
+		name := fmt.Sprintf("e%d_k%d_t%d", c.e, c.k, c.ntok)
+		t.Run(name, func(t *testing.T) {
+			var mk *ir.Kernel
+			var err error
+			if c.ntok == 1 {
+				mk, err = mainkernels.RouterMatVecOf(c.e, c.k, false)
+			} else {
+				mk, err = mainkernels.RouterMatVecTok(c.e, c.k, c.ntok, false)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			g := &compose.Row{Width: c.k, Rows: c.e * c.ntok}
+			w, x, out := g.Buf(compose.BufRow), g.Buf(compose.BufRow), g.Buf(compose.BufOut)
+			g.RouterLogits(w, x, out, c.e, c.k)
+			ps, err := g.Plan(compose.Facts{Target: sm70, RowGroup: 128, Tree: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			same(t, name, []*ir.Kernel{mk}, emitAt(t, g, ps[0].S))
+		})
+	}
+}
