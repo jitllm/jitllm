@@ -44,27 +44,46 @@ func (g *devTier) ragStaged(bs *blockScratch) bool {
 		return false
 	}
 	if g.tilesOK() {
-		return !flashTileServes(bs.p.HeadDim, bs.rows)
+		_, _, ok := g.prefillTile(bs)
+		return !ok
 	}
 	return !mma
 }
 
-// flashTileServes reports whether a collective-tile flash prefill serves a
-// head width over rows rows: the blocking with the most query rows, then the
+// prefillTile is the collective-tile flash prefill's blocking for bs's
+// rows (subgroups of eight query rows, keys a trip), false where the device
+// lowers no tile, the attention is latent or has sinks (whose merge the
+// form does not take), or no blocking serves its head width.
+func (g *devTier) prefillTile(bs *blockScratch) (sg, tk int, ok bool) {
+	p := &bs.p
+	if !g.tilesOK() || p.MLA() || p.AttnSinks || g.KVF16 {
+		return 0, 0, false
+	}
+	return flashTileOf(p.HeadDim, bs.rows)
+}
+
+// prefillRuns reports whether a chunk's or a ragged call's runs attend
+// as a prefill here: staged, or on the collective tiles.
+func (g *devTier) prefillRuns(bs *blockScratch) bool {
+	_, _, tile := g.prefillTile(bs)
+	return tile || g.ragStaged(bs)
+}
+
+// flashTileOf is the collective-tile flash prefill's blocking for a head
+// width over rows rows, ok where it serves them: the blocking with the most query rows, then the
 // most keys, whose workgroup memory -- binary16 K and float32 V a key tile,
 // the scores and the output a query tile -- fits 32 KiB and whose staging
 // divides among its threads, must be four subgroups of rows that tile the
 // chunk, its key tile a divisor of 32.
-func flashTileServes(hd, rows int) bool {
+func flashTileOf(hd, rows int) (sg, tk int, ok bool) {
 	for _, t := range [][2]int{{4, 32}, {4, 16}, {2, 32}, {2, 16}, {2, 8}, {1, 32}, {1, 16}} {
 		sg, tk := t[0], t[1]
 		qb, threads := 8*sg, 32*sg
-		mem := tk*(hd+8)*2 + tk*(hd+4)*4 + qb*(tk+4)*4 + qb*(hd+4)*4
-		if mem <= 32<<10 && (tk*hd/2)%threads == 0 && (tk*hd/4)%threads == 0 {
-			return sg >= 4 && rows%qb == 0 && 32%tk == 0
+		if compose.FlashTileMem(hd, sg, tk) <= 32<<10 && (tk*hd/2)%threads == 0 && (tk*hd/4)%threads == 0 {
+			return sg, tk, sg >= 4 && rows%qb == 0 && 32%tk == 0
 		}
 	}
-	return false
+	return 0, 0, false
 }
 
 // ragStage builds the call's run table from its rows and descriptors, or
@@ -74,11 +93,15 @@ func flashTileServes(hd, rows int) bool {
 func (g *devTier) ragStage(bs *blockScratch, pk *pagedScratch) {
 	rr := &pk.rag
 	rr.n = 0
-	if !g.ragStaged(bs) || len(pk.desc) == 0 {
+	if !g.prefillRuns(bs) || len(pk.desc) == 0 {
 		return
 	}
 	rr.sq, rr.kt, rr.qt = g.tiles.qtile, g.tiles.ktile, ragAccTile
 	wg := lcmInt(rr.sq, rr.qt)
+	sg, _, tile := g.prefillTile(bs)
+	if tile {
+		wg = 8 * sg // a workgroup's query rows, one sequence's
+	}
 	rows := pk.rows
 	rr.order = rr.order[:0]
 	for r, row := range rows {
@@ -144,7 +167,7 @@ func (g *devTier) ragStage(bs *blockScratch, pk *pagedScratch) {
 				span = max(span, end-int(cur))
 			}
 		}
-		if span > ragPassW {
+		if span > ragPassW && !tile {
 			return
 		}
 		c := 64
@@ -168,6 +191,51 @@ const (
 	ragAccTile = 8
 	ragPassW   = 4096
 )
+
+// prefillAt is a layer's prefill launches: the collective-tile flash where
+// it serves, else the staged three.
+func (g *devTier) prefillAt(bs *blockScratch, rows, c int, mapped bool, set int) []genLaunch {
+	if sg, tk, ok := g.prefillTile(bs); ok {
+		return g.tilePrefill(bs, rows, mapped, set, sg, tk)
+	}
+	return g.stagedPrefill(bs, rows, c, mapped, set)
+}
+
+// tilePrefill is the collective-tile flash prefill's one launch: a
+// workgroup a query tile of a head, its whole grid at any rows (a padding
+// row's descriptor attends nothing).
+func (g *devTier) tilePrefill(bs *blockScratch, rows int, mapped bool, set, sg, tk int) []genLaunch {
+	p := &bs.p
+	prow := gaPRow
+	switch {
+	case !mapped && set == 1:
+		prow = gaPreDescW
+	case !mapped:
+		prow = gaPreDesc
+	case set == 1:
+		prow = gaPRowW
+	}
+	s := compose.FlashTile{Heads: p.NHead, KVHeads: p.NKVHead, Dim: p.HeadDim, Rows: rows, Page: g.kvPage(),
+		Scale: g.scoreScale(p), Softcap: p.AttnSoftcap, Map: mapped, SG: sg, TK: tk}
+	if rows%s.QRows() != 0 {
+		return nil
+	}
+	u32 := compose.BufU32
+	rb := &rowBuild{r: compose.Row{Width: s.Threads(), Rows: s.Groups()}}
+	q, k, v := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufRow, gaKPool), rb.buf(compose.BufRow, gaVPool)
+	n, out := rb.buf(u32, gaCount), rb.buf(compose.BufOut, gaOut0)
+	tab, desc := rb.buf(u32, gaTab), rb.buf(u32, prow)
+	mp := -1
+	if mapped {
+		mp = rb.buf(u32, gaRagMap)
+	}
+	rb.r.PagedFlashTile(s, q, k, v, n, out, tab, desc, mp)
+	ls := g.launches(rb)
+	for i := range ls {
+		ls[i].whole = true
+	}
+	return ls
+}
 
 // stagedPrefill is the staged prefill's three launches for a layer: the
 // scores, the softmax and the accumulate into the attention's output. With
@@ -267,7 +335,7 @@ func (g *devTier) ragAttendAt(o *devOp, prog *devProgram, bs *blockScratch) []ge
 	if ls, ok := prog.attend[k]; ok {
 		return ls
 	}
-	ls := g.stagedPrefill(bs, rr.n, rr.chunk[set], true, set)
+	ls := g.prefillAt(bs, rr.n, rr.chunk[set], true, set)
 	if ls != nil {
 		if prog.attend == nil {
 			prog.attend = map[attendKey][]genLaunch{}
@@ -295,9 +363,10 @@ type prePass struct {
 func (g *devTier) preStage(bs *blockScratch, pk *pagedScratch, nrow int) {
 	pp := &pk.pre
 	pp.on = false
-	if nrow < 1 || !g.ragStaged(bs) || len(pk.desc) == 0 {
+	if nrow < 1 || !g.prefillRuns(bs) || len(pk.desc) == 0 {
 		return
 	}
+	_, _, tile := g.prefillTile(bs)
 	W := kernels.PRowWords
 	for i, src := range [2][]uint32{pk.desc, pk.descW} {
 		pp.desc[i] = append(pp.desc[i][:0], src...)
@@ -310,7 +379,7 @@ func (g *devTier) preStage(bs *blockScratch, pk *pagedScratch, nrow int) {
 			pp.desc[i][o+kernels.PRowTab], pp.desc[i][o+kernels.PRowStart], pp.desc[i][o+kernels.PRowEnd] = src[kernels.PRowTab], end, end
 		}
 		span := int(end) - int(src[kernels.PRowStart]&^63)
-		if span > ragPassW {
+		if span > ragPassW && !tile {
 			return
 		}
 		c := 64
@@ -336,7 +405,7 @@ func (g *devTier) preAttendAt(o *devOp, prog *devProgram, bs *blockScratch, rows
 	if ls, ok := prog.attend[k]; ok {
 		return ls
 	}
-	ls := g.stagedPrefill(bs, rows, pp.chunk[set], false, set)
+	ls := g.prefillAt(bs, rows, pp.chunk[set], false, set)
 	if ls != nil {
 		if prog.attend == nil {
 			prog.attend = map[attendKey][]genLaunch{}
