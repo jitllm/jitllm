@@ -419,6 +419,14 @@ func (c *canon) index(i int) (affine, bool) {
 		c.busy[i] = false
 		return r, true
 	}
+	if o.Kind == ir.OpBitcast && o.Args[0] != 0 && isInt(c.k.Ops[o.Args[0]-1].Type) {
+		x, ok := arg(0)
+		c.busy[i] = false
+		if ok {
+			c.aff[i] = &x
+		}
+		return x, ok
+	}
 	switch o.Kind {
 	case ir.OpConst:
 		r = affine{c: o.Imm}
@@ -575,6 +583,12 @@ func (c *canon) index(i int) (affine, bool) {
 // name is op i's canonical name.
 func (c *canon) name(i int) int32 {
 	if id := c.ids[i]; id != 0 {
+		return id
+	}
+	// A reinterpretation between the integer types is the same bits.
+	if o := c.k.Ops[i]; o.Kind == ir.OpBitcast && isInt(o.Type) && o.Args[0] != 0 && isInt(c.k.Ops[o.Args[0]-1].Type) {
+		id := c.name(int(o.Args[0]) - 1)
+		c.ids[i] = id
 		return id
 	}
 	var id int32
