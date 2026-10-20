@@ -166,17 +166,32 @@ func (g *Row) induct(c int, s Schedule) *Row {
 	// in c starts.
 	var cands []int
 	init := map[int]bool{}
+	// loads is how many loads read each index; an index written as a word
+	// scaled to its elements (X*k + Z) counts for X,
+	// the word, which is what the cursor counts, Z a place known per env.
+	loads := map[int]int{}
 	for _, nd := range g.Nodes {
 		switch {
 		case nd.Kind == NLoad && nd.Indexed:
-			cands = append(cands, nd.Ix)
+			ix := nd.Ix
+			if x := g.Nodes[ix]; x.Kind == NUBinary && x.Op == OpAdd && g.fixedPlace(x.B) {
+				if m := g.Nodes[x.A]; m.Kind == NUBinary && m.Op == OpMul && g.Nodes[m.B].Kind == NUConst && vary[m.A] {
+					ix = m.A
+				}
+			}
+			cands = append(cands, ix)
+			loads[ix]++
 		case nd.Kind == NFold && nd.At != c && inLoop[nd.At] && g.typeOf(nd.B) == ir.U32:
 			cands = append(cands, nd.B)
 			init[nd.B] = true
 		}
 	}
+	// A cursor serves where several loads step together; one load reads at
+	// its iterator. A nested or unrolled loop's index, and a nested loop's
+	// start, always ride one.
+	ridden := map[int]bool{}
 	for _, ix := range cands {
-		if seen[ix] || !vary[ix] {
+		if seen[ix] || !vary[ix] || ix == iter {
 			continue
 		}
 		seen[ix] = true
@@ -184,9 +199,7 @@ func (g *Row) induct(c int, s Schedule) *Row {
 		if a == nil || a.terms[iter] == 0 {
 			continue
 		}
-		if !nested[ix] && !(unrolled && a.terms[iter] != 1) && !init[ix] {
-			continue
-		}
+		ridden[ix] = nested[ix] || unrolled && a.terms[iter] != 1 || init[ix] || loads[ix] > 1
 		var base []int
 		for k, v := range a.terms {
 			if k != iter && v != 0 && !nested[k] && !g.isTileOff(k) {
@@ -210,6 +223,9 @@ func (g *Row) induct(c int, s Schedule) *Row {
 		}
 		f.uses = append(f.uses, ix)
 	}
+	fams = slices.DeleteFunc(fams, func(f *fam) bool {
+		return len(f.uses) < 2 && !slices.ContainsFunc(f.uses, func(ix int) bool { return ridden[ix] })
+	})
 	if len(fams) == 0 {
 		return g
 	}
@@ -357,3 +373,16 @@ func (g *Row) tiled(s Schedule) *Row {
 // isTileOff is whether node n is an env's place in its tile: a part of an
 // index each env adds to what the tile shares.
 func (g *Row) isTileOff(n int) bool { k := g.Nodes[n].Kind; return k == NColOff || k == NRowOff }
+
+// fixedPlace is whether index node n is the same for every thread: constants
+// and an env's place in its tile, summed and scaled.
+func (g *Row) fixedPlace(n int) bool {
+	nd := g.Nodes[n]
+	switch nd.Kind {
+	case NUConst, NColOff, NRowOff:
+		return true
+	case NUBinary:
+		return (nd.Op == OpAdd || nd.Op == OpMul) && g.fixedPlace(nd.A) && g.fixedPlace(nd.B)
+	}
+	return false
+}

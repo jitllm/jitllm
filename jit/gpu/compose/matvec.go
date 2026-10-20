@@ -88,28 +88,50 @@ func (g *Row) MatVec(w MatVecWeight, a MatVecOperand) (int, error) {
 }
 
 // floatMatVec is MatVec over a float weight, stored row-major (row e's K
-// values at e*K): a fold over the row's 32-element sub-blocks, each the sum
-// of its products in element order from zero, added into the accumulator.
-// Only an f32 weight here; a binary16 or bfloat16 one is refused by name.
+// values at e*K, info.Float bytes each, a word holding 4/Float of them low
+// first): a fold over the row's sub-blocks (32 elements, or the widest of
+// 16, 8, 4 dividing K where 32 does not), each the sum of
+// its products in element order from zero, added into the accumulator. A
+// binary16 element is its half of the word; a bfloat16 one the half moved
+// to the top of an f32.
 func (g *Row) floatMatVec(w MatVecWeight, a MatVecOperand, info kernels.QInfo) (int, error) {
-	if info.Float != 4 {
-		return 0, fmt.Errorf("compose: a matvec over %v has no node form yet", w.T)
+	sub := 32
+	for _, n := range []int{32, 16, 8, 4} {
+		if w.K%n == 0 {
+			sub = n
+			break
+		}
 	}
-	const sub = 32
-	if w.K%sub != 0 {
-		return 0, fmt.Errorf("compose: a float matvec at K=%d, not whole 32-element blocks", w.K)
+	if w.K%sub != 0 || (info.Float != 4 && info.Float != 2) {
+		return 0, fmt.Errorf("compose: a float matvec over %v at K=%d", w.T, w.K)
 	}
+	per := 4 / info.Float // elements a word
 	e, t := g.Column(), g.RowIdx()
 	u := g.UConst
 	c := g.Loop(w.K / sub)
 	s := g.Iter(c)
 	acc := g.Fold(c, g.Const(0))
-	base := g.UBin(OpMul, s, u(sub))
-	wRow := g.UBin(OpAdd, g.UBin(OpMul, e, u(w.K)), base)
-	xRow := g.UBin(OpAdd, g.UBin(OpMul, t, u(w.K)), base)
+	wRow := g.UBin(OpAdd, g.UBin(OpMul, e, u(w.K/per)), g.UBin(OpMul, s, u(sub/per)))
+	// The operand's element is its int8 word's, four elements a word: what the
+	// quantized formats read the operand by.
+	aw := g.UBin(OpAdd, g.UBin(OpMul, t, u(w.K/4)), g.UBin(OpMul, s, u(sub/4)))
+	xRow := g.UBin(OpMul, aw, u(4))
 	dot := g.Const(0)
 	for i := 0; i < sub; i++ {
-		wv := g.Add(Node{Kind: NUnary, Op: OpBits, A: g.LoadAt(w.QS, g.UBin(OpAdd, wRow, u(i)))})
+		word := g.LoadAt(w.QS, g.UBin(OpAdd, wRow, u(i/per)))
+		var wv int
+		switch {
+		case per == 1:
+			wv = g.Add(Node{Kind: NUnary, Op: OpBits, A: word})
+		case info.BF16 && i%2 == 0:
+			wv = g.Add(Node{Kind: NUnary, Op: OpBits, A: g.UBin(OpShl, word, u(16))})
+		case info.BF16:
+			wv = g.Add(Node{Kind: NUnary, Op: OpBits, A: g.UBin(OpAnd, word, u(0xFFFF0000))})
+		case i%2 == 0:
+			wv = g.Add(Node{Kind: NUnary, Op: OpHalf, A: word})
+		default:
+			wv = g.Add(Node{Kind: NUnary, Op: OpHalf, A: g.UBin(OpShr, word, u(16))})
+		}
 		xv := g.LoadAt(a.X, g.UBin(OpAdd, xRow, u(i)))
 		dot = g.Add(Node{Kind: NBinary, Op: OpFma, A: wv, B: xv, C: dot})
 	}

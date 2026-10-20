@@ -157,7 +157,7 @@ func composedMatVec(t *testing.T, c mvCase) []*ir.Kernel {
 // differs is the former's, not the plan's.
 func TestMatVecIsMains(t *testing.T) {
 	var cases []mvCase
-	for _, q := range []format{{kernels.Float32, mainkernels.Float32}, {kernels.Q8_0, mainkernels.Q8_0}} {
+	for _, q := range []format{{kernels.Float32, mainkernels.Float32}, {kernels.Float16, mainkernels.Float16}, {kernels.BFloat16, mainkernels.BFloat16}, {kernels.Q8_0, mainkernels.Q8_0}} {
 		for _, rk := range [][2]int{{64, 64}, {96, 64}, {64, 256}} {
 			for _, sp := range []int{1, 2} {
 				for _, rowt := range []int{1, 2} {
