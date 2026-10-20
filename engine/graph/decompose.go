@@ -36,6 +36,16 @@ func Decompose(g *Graph) *Graph {
 				continue
 			}
 		}
+		switch o.Kind {
+		case OpStreamMix:
+			if d.streamMix(o) {
+				continue
+			}
+		case OpStreamPlace:
+			if d.streamPlace(o) {
+				continue
+			}
+		}
 		o.In = append([]ValueID(nil), o.In...)
 		if w, ok := weights[selOf(o)]; ok && (o.Kind == OpCombine || o.Kind == OpGather && o.Attr.WeightIn) {
 			o.In = append(o.In, w)

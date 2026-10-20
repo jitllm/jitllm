@@ -224,10 +224,16 @@ const (
 	// whole row where Span is 0), largest first, equal values to the lower
 	// index (u32): OpTopK's order, for every element. A primitive.
 	OpRank
+	// OpTile is In[0] repeated: element i of Out[0] is In[0]'s element
+	// i mod Span (Span 0: the whole row), Out[0]'s width a multiple of Span.
+	// A primitive, a periodic index map: with OpSlice's offsets and OpMap's
+	// group broadcast it states a row seen as several (a stream-major
+	// residual) without naming what the groups are.
+	OpTile
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -313,18 +319,19 @@ const (
 type MapFn uint8
 
 const (
-	MapAdd MapFn = iota + 1 // a + b
-	MapSub                  // a - b
-	MapMul                  // a * b
-	MapDiv                  // a / b
-	MapMax                  // max(a, b)
-	MapMin                  // min(a, b)
-	MapExp                  // exp(a)
-	MapSigmoid              // 1 / (1 + exp(-a))
-	MapSoftplus             // log(1 + exp(a))
-	MapSqrt                 // sqrt(a)
-	MapWhere                // b where a > 0, else c
-	MapLess                 // 1 where a < b, else 0
+	MapAdd      MapFn = iota + 1 // a + b
+	MapSub                       // a - b
+	MapMul                       // a * b
+	MapDiv                       // a / b
+	MapMax                       // max(a, b)
+	MapMin                       // min(a, b)
+	MapExp                       // exp(a)
+	MapSigmoid                   // 1 / (1 + exp(-a))
+	MapSoftplus                  // log(1 + exp(a))
+	MapSqrt                      // sqrt(a)
+	MapWhere                     // b where a > 0, else c
+	MapLess                      // 1 where a < b, else 0
+	MapFma                       // a*b + c, the product not rounded before the sum
 )
 
 // Arity is how many operands f takes.
@@ -332,7 +339,7 @@ func (f MapFn) Arity() int {
 	switch f {
 	case MapExp, MapSigmoid, MapSoftplus, MapSqrt:
 		return 1
-	case MapWhere:
+	case MapWhere, MapFma:
 		return 3
 	case MapAdd, MapSub, MapMul, MapDiv, MapMax, MapMin, MapLess:
 		return 2
@@ -340,7 +347,7 @@ func (f MapFn) Arity() int {
 	return 0
 }
 
-var mapFnNames = [...]string{"?", "add", "sub", "mul", "div", "max", "min", "exp", "sigmoid", "softplus", "sqrt", "where", "less"}
+var mapFnNames = [...]string{"?", "add", "sub", "mul", "div", "max", "min", "exp", "sigmoid", "softplus", "sqrt", "where", "less", "fma"}
 
 func (f MapFn) String() string {
 	if int(f) < len(mapFnNames) {
@@ -450,7 +457,7 @@ type Attrs struct {
 	Streams  int
 	Sinkhorn bool
 	// Fn, Order, Span and Const are the primitives' (OpMap, OpReduce,
-	// OpTopK, OpRank): the function, the order a reduction runs in, the
+	// OpTopK, OpRank, OpTile): the function, the order a reduction runs in, the
 	// group a reduction, top-k or rank runs over (0: the row), a constant
 	// operand.
 	Fn    MapFn
