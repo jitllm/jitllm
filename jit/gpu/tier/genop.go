@@ -473,7 +473,9 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 	case dkGatedAdd:
 		// acc + sigmoid(the row's logit) * the branch.
 		acc, br := rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1)
-		sig := rb.node(compose.Node{Kind: compose.NUnary, Op: compose.OpAct, Act: kernels.ActSigmoid, A: rb.load(compose.BufRowScalar, gaIn2)})
+		one := rb.node(compose.Node{Kind: compose.NConst, F: 1})
+		neg := rb.bin(compose.OpSub, rb.node(compose.Node{Kind: compose.NConst}), rb.load(compose.BufRowScalar, gaIn2))
+		sig := rb.bin(compose.OpDiv, one, rb.bin(compose.OpAdd, one, rb.node(compose.Node{Kind: compose.NUnary, Op: compose.OpExp, A: neg})))
 		rb.store(rb.bin(compose.OpAdd, acc, rb.bin(compose.OpMul, sig, br)), gaOut0)
 	case dkClamp:
 		b := float32(o.Alpha)
@@ -481,8 +483,8 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 			return nil
 		}
 		x := rb.load(compose.BufRow, gaIn0)
-		hi := rb.bin(compose.OpMin, x, rb.node(compose.Node{Kind: compose.NConst, F: b}))
-		rb.store(rb.bin(compose.OpMax, hi, rb.node(compose.Node{Kind: compose.NConst, F: -b})), gaOut0)
+		lo := rb.bin(compose.OpMax, x, rb.node(compose.Node{Kind: compose.NConst, F: -b}))
+		rb.store(rb.bin(compose.OpMin, lo, rb.node(compose.Node{Kind: compose.NConst, F: b})), gaOut0)
 	case dkClampAt:
 		// A pair of the block's bounds table: min(max(x, lo), hi).
 		if o.V == nil {
