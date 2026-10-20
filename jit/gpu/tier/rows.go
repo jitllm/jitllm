@@ -7,6 +7,7 @@ import (
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
@@ -453,17 +454,7 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 		return false
 	}
 	g.mu.Lock()
-	// The matrix instruction's 32 rows where the device has one, 8 where a
-	// quantized first projection would want it and it has none; a float
-	// weight takes no matrix instruction, and keeps 32.
-	grain := batchGrain
-	quantized := false
-	if l := g.layers[lo]; l != nil && l.ok && l.wq != nil {
-		quantized = !kernels.IsFloat(l.wq.t)
-	}
-	if g.NoMMA || quantized && !g.composeTarget().IntMMA() {
-		grain = 8
-	}
+	grain := g.rowGrain()
 	w := (n + grain - 1) / grain * grain
 	if w > batchWidth {
 		g.mu.Unlock()
@@ -630,4 +621,53 @@ func (g *devTier) prewarmPrompt() {
 // Callers hold g.mu.
 func (g *devTier) prewarmFused(bs *blockScratch) {
 	g.ensureFused(0, len(g.layers), bs.rows, bs, nil)
+}
+
+// anyNarrow reports whether a placed block or the head holds a matrix
+// narrower than f32 -- quantized, or a two-byte float: what a matrix
+// instruction would be asked for. Callers hold g.mu.
+func (g *devTier) anyNarrow() bool {
+	narrow := func(q kernels.Quant) bool { return !kernels.IsFloat(q) || q.Info().Float == 2 }
+	if g.bs != nil && g.bs.head.t != 0 && narrow(g.bs.head.t) {
+		return true
+	}
+	for _, l := range g.layers {
+		if l == nil || !l.ok {
+			continue
+		}
+		for _, m := range l.ms {
+			if m != nil && m.rows > 0 && narrow(m.q) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// rowGrain is a step over rows' grain: the matrix instruction's 32 rows
+// where the device lowers it, or where the model asks it for nothing, and 8
+// where the model would ask it -- a narrow matrix (quantized, or a two-byte
+// float a staged GEMM would take), a mixture's banks, or a prefill attention
+// tile at a head a whole number of 32 wide where no collective tile serves
+// it -- and the device does not: the dp4a twins and every attention tile
+// take 8. Callers hold g.mu.
+func (g *devTier) rowGrain() int {
+	if g.NoMMA {
+		return 8
+	}
+	if g.intMMA == 0 {
+		g.intMMA = -1
+		if ok, _ := backend.LowersIntMMA(g.dev); ok {
+			g.intMMA = 1
+		}
+	}
+	if g.intMMA > 0 || g.bs == nil {
+		return batchGrain
+	}
+	p := &g.bs.p
+	attn := g.composeTarget().API != compose.APIMSL && p.HeadDim > 0 && p.HeadDim%32 == 0
+	if g.anyNarrow() || p.NExpert > 0 || attn {
+		return 8
+	}
+	return batchGrain
 }

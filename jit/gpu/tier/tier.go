@@ -2036,6 +2036,9 @@ type devShared struct {
 	// curLayer is the block whose program is being generated.
 	curLayer *layer
 	// ctarget is this device as the composer sees it (composeTarget).
+	// intMMA is whether the device lowers the int8 matrix instruction: 0
+	// unasked, 1 it does, -1 it does not (backend.LowersIntMMA).
+	intMMA  int8
 	ctarget compose.Target
 	// genRag says the program being formed is a ragged step's (its matvecs
 	// take the ragged schedule).

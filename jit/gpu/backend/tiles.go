@@ -63,3 +63,37 @@ func tileProbe(s TileShape) (*ir.Kernel, error) {
 	k := b.Done()
 	return k, k.Validate()
 }
+
+// LowersIntMMA reports whether d compiles the int8 matrix instruction (an
+// m16n8k32 s8 product), and the device's own words when it does not: what a
+// tier asks before it sizes its batches for the instruction. Compiled, never
+// launched.
+func LowersIntMMA(d Device) (bool, string) {
+	sh := ir.MMAShape{M: 16, N: 8, K: 32, Kind: ir.MMAS8}
+	na, nb, nc := sh.Frags()
+	b := ir.New("mmacap", [3]int{ir.SubgroupLanes, 1, 1})
+	pIn := b.Param("pIn", ir.U32)
+	pOut := b.Param("pOut", ir.I32)
+	tid := b.TID()
+	frag := func(n, off int) []ir.Value {
+		v := make([]ir.Value, n)
+		for i := range v {
+			v[i] = b.Load(ir.U32, pIn, tid, int64(off+i))
+		}
+		return v
+	}
+	c := make([]ir.Value, nc)
+	for i := range c {
+		c[i] = b.Const(ir.I32, 0)
+	}
+	out := b.MMA(sh, frag(na, 0), frag(nb, na), c)
+	for i, v := range out {
+		b.Store(pOut, tid, v, int64(i))
+	}
+	kern, err := d.Compile(b.Done())
+	if err != nil {
+		return false, err.Error()
+	}
+	kern.Close()
+	return true, ""
+}
