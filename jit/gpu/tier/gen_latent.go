@@ -39,7 +39,7 @@ func (g *devTier) genLatentWrite(o *devOp, prog *devProgram, bs *blockScratch, r
 		if k.k == nil {
 			return nil
 		}
-		l := genLaunch{k: k.k, groups: rows, width: k.group, n: uint8(len(rb.args))}
+		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
 		copy(l.args[:], rb.args)
 		out = append(out, l)
 	}

@@ -3,11 +3,11 @@ package tier
 import (
 	"errors"
 	"fmt"
+	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"slices"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // ErrKVCapacity is a device that cannot give a sequence another page of
@@ -822,26 +822,17 @@ func (g *devTier) gatherInto(src, dst backend.Buf, order []uint32, words int) er
 	return k.Launch((n*words+127)/128, 128, src, dst, tab)
 }
 
-// gatherKernel is the gather of n pages of words each, compiled once and kept
-// with the restrides.
 func (g *devTier) gatherKernel(words, n int) (backend.Kernel, error) {
-	key := [4]int{-1, words, n, 0}
-	if k := g.restrides[key]; k != nil {
-		return k, nil
+	r := compose.Row{Width: words * n, Rows: 1}
+	src, dst, tab := r.Buf(compose.BufRow), r.Buf(compose.BufOut), r.Buf(compose.BufU32)
+	e, u := r.Column(), r.UConst
+	pid := r.LoadAt(tab, r.UBin(compose.OpDiv, e, u(words)))
+	r.Store(dst, r.LoadAt(src, r.UBin(compose.OpAdd, r.UBin(compose.OpMul, pid, u(words)), r.UBin(compose.OpRem, e, u(words)))))
+	k := g.rowKern(&r)
+	if k.k == nil {
+		return nil, fmt.Errorf("tier: no composed page gather of %d pages of %d words", n, words)
 	}
-	ker, err := mainkernels.PagedGatherPages(words, n)
-	if err != nil {
-		return nil, err
-	}
-	k, err := g.dev.Compile(ker)
-	if err != nil {
-		return nil, err
-	}
-	if g.restrides == nil {
-		g.restrides = map[[4]int]backend.Kernel{}
-	}
-	g.restrides[key] = k
-	return k, nil
+	return k.k, nil
 }
 
 // freeKVLayer frees one layer's buffers and refunds its charge, and forgets

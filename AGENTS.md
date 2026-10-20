@@ -857,6 +857,11 @@ still stands.
 
 Evidence: `docs/engineering-history/placement.md` ("RULE 12's tower case").
 
+## RULE 12a: minimal comments.
+
+Prefer no comment: good code is readable. Write a short one only where the
+code cannot say it.
+
 ## RULE 13: device kernels — three invariants that do not bend.
 
 - **No kernel may read a buffer it writes within one phase.** The IR has no

@@ -288,7 +288,7 @@ func (g *devTier) genPrim(o *devOp, prog *devProgram, rows int) []genLaunch {
 		o.Why = whyNoKernel
 		return nil
 	}
-	l := genLaunch{k: k.k, groups: rows, width: k.group, n: uint8(len(rb.args))}
+	l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
 	copy(l.args[:], rb.args)
 	return []genLaunch{l}
 }

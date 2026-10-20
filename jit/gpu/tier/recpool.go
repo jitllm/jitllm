@@ -2,10 +2,10 @@ package tier
 
 import (
 	"fmt"
+	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"slices"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // A linear block's recurrent state is a session's, like an attention history,
@@ -13,7 +13,7 @@ import (
 // one launch. A launch names buffers, not sessions, so every session's state
 // for a block lives in ONE pool: a pair of buffers whose SLOTS are sequences'
 // states, and each row of a step finds its own through the recurrent
-// descriptor (mainkernels.RecDescWords). A session holds a SEAT -- a run of slots,
+// descriptor (the recurrent descriptor's words). A session holds a SEAT -- a run of slots,
 // one per row of its batch -- and the seat is the same in every linear block's
 // pool on the device, so one descriptor serves every block of a submission.
 //
@@ -770,10 +770,14 @@ type runKey struct {
 	base int
 }
 
+// runDescWords is a ragged step's run descriptor's length for rows rows:
+// the row count, then seven words a row.
+func runDescWords(rows int) int { return 1 + 7*rows }
+
 // recDesc is the recurrent descriptor the running call stages: for a chunk or
 // a decode, the real row count and session sid's one slot pair
-// (mainkernels.RecDescWords); for a ragged step, the run descriptor
-// (mainkernels.RunDescWords) over the step's runs (groupRuns), each run's slots
+// (the recurrent descriptor's words); for a ragged step, the run descriptor
+// (runDescWords) over the step's runs (groupRuns), each run's slots
 // being its sequence's seat row of its session's seat. In the shared form a
 // run's out slot is its place in recNext. Callers hold g.mu.
 func (g *devTier) recDesc(sid uint64, nrow int) []byte {
@@ -804,7 +808,7 @@ func (g *devTier) recDesc(sid uint64, nrow int) []byte {
 		return u32view(w)
 	}
 	n, S := len(rag.pos), len(rag.runs)
-	w := words(mainkernels.RunDescWords(n))
+	w := words(runDescWords(n))
 	w[0] = uint32(nrow)
 	at := 0
 	for j := 0; j < n; j++ {
@@ -827,27 +831,21 @@ func (g *devTier) recDesc(sid uint64, nrow int) []byte {
 	return u32view(w)
 }
 
-// slotCopy is CopySlots for w-float slots over rows sequences, compiled on
-// first use -- outside any session, which ensureRecNext and alignRec are.
-// Callers hold g.mu.
 func (g *devTier) slotCopy(w, rows int) (backend.Kernel, error) {
-	key := [2]int{w, rows}
-	if k, ok := g.recCopies[key]; ok {
-		return k, nil
+	r := compose.Row{Width: w * rows, Rows: 1}
+	src, dst, desc := r.Buf(compose.BufRow), r.Buf(compose.BufOut), r.Buf(compose.BufU32)
+	e, u := r.Column(), r.UConst
+	j, i := r.UBin(compose.OpDiv, e, u(w)), r.UBin(compose.OpRem, e, u(w))
+	slot := func(at int) int {
+		return r.LoadAt(desc, r.UBin(compose.OpAdd, r.UBin(compose.OpMul, j, u(2)), u(at)))
 	}
-	kk, err := mainkernels.CopySlots(w, rows)
-	if err != nil {
-		return nil, err
+	place := func(s int) int { return r.UBin(compose.OpAdd, r.UBin(compose.OpMul, s, u(w)), i) }
+	r.StoreAt(dst, r.LoadAt(src, place(slot(2))), place(slot(1)))
+	k := g.rowKern(&r)
+	if k.k == nil {
+		return nil, fmt.Errorf("tier: no composed slot copy of %d slots of %d", rows, w)
 	}
-	k, err := g.dev.Compile(kk)
-	if err != nil {
-		return nil, err
-	}
-	if g.recCopies == nil {
-		g.recCopies = map[[2]int]backend.Kernel{}
-	}
-	g.recCopies[key] = k
-	return k, nil
+	return k.k, nil
 }
 
 // linearIn reports whether any block in [lo, hi) is a linear one. Callers

@@ -11,7 +11,6 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // Code generation for the device program: each op's kernels are generated
@@ -59,7 +58,7 @@ const (
 	gaKPool // the block's paged K pool
 	gaVPool // its paged V pool
 	gaTab   // its page table
-	gaPRow  // the step's row descriptors (mainkernels.PRowWords a row)
+	gaPRow  // the step's row descriptors (kernels.PRowWords a row)
 )
 
 // genLaunch is one generated launch: threads for a flat launch, or groups of
@@ -78,6 +77,8 @@ type genLaunch struct {
 	// pairs launches a group a (token, expert) pair of the step, not a
 	// group a token.
 	pairs bool
+	// flat is a flat kernel's elements a row, 0 for a group a row.
+	flat int
 	// toF16 is a binary16 operand made from the op's float row: skipped
 	// where the step's last conversion was this kernel over this row (q, k
 	// and v share one normed row, as do gate and up).
@@ -559,6 +560,7 @@ type rowKernel struct {
 	group int
 	// groups is the launch's workgroups: a row each, or the flat grid's.
 	groups int
+	flat   int
 }
 
 // genEntry is a generated kernel in the device's one cache, with the
@@ -612,11 +614,11 @@ func (g *devTier) rowKern(r *compose.Row) rowKernel {
 	}
 	s := ps[0].S
 	k, _ := g.genKern(append([]uint32{encRow}, r.Encode(s)...), func() (*ir.Kernel, error) { return r.Emit(s) })
-	groups := r.Rows
+	groups, flat := r.Rows, 0
 	if s.Flat {
-		groups = (ps[0].Threads + s.Group - 1) / s.Group
+		groups, flat = (ps[0].Threads+s.Group-1)/s.Group, r.Width
 	}
-	return rowKernel{k: k, group: s.Group, groups: groups}
+	return rowKernel{k: k, group: s.Group, groups: groups, flat: flat}
 }
 
 // composeTarget is this device as the composer's passes ask of it, stated
@@ -758,10 +760,15 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 		if l.width != 0 {
 			groups := l.groups
 			switch {
-			case l.pairs && st.moe:
-				groups = st.cols
 			case l.pairs:
-				groups = bs.nUsed * R
+				n := bs.nUsed * R
+				if st.moe {
+					n = st.cols
+				}
+				groups = n
+				if l.flat > 0 {
+					groups = (n*l.flat + l.width - 1) / l.width
+				}
 			case rows > 0 && R < rows && !l.whole:
 				groups = (groups*R + rows - 1) / rows
 			}
@@ -862,7 +869,7 @@ func (g *devTier) genPairs(o *devOp, prog *devProgram, bs *blockScratch, rows in
 		}
 		x := rb.load(compose.BufRow, gaIn0)
 		rb.r.Q8 = &compose.Q8{Val: x, A: rb.buf(compose.BufQ8, gaQ8A), X: rb.buf(compose.BufQ8X, gaQ8X),
-			Window: mainkernels.ClampWindow(max(p.ActWin, 32), pad32(w)), Pad: pad32(w)}
+			Window: min(max(p.ActWin, 32), pad32(w)), Pad: pad32(w)}
 	default:
 		return nil
 	}
@@ -870,19 +877,9 @@ func (g *devTier) genPairs(o *devOp, prog *devProgram, bs *blockScratch, rows in
 	if k.k == nil {
 		return nil
 	}
-	l := genLaunch{k: k.k, groups: rb.r.Rows, width: k.group, n: uint8(len(rb.args)), q8: q8, pairs: true}
+	l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args)), q8: q8, pairs: true, flat: k.flat}
 	copy(l.args[:], rb.args)
 	return []genLaunch{l}
-}
-
-// epiKern is a former's kernel of shape s with an epilogue, its structure
-// enc (the epilogue's and the former's schedule), built by build once a
-// device and structure, and its workgroup width. Callers hold g.mu.
-func (g *devTier) epiKern(s mainkernels.MatVecShape, enc []uint32, build func() (*ir.Kernel, error)) (backend.Kernel, int) {
-	full := append([]uint32{encEpi}, enc...)
-	full = append(full, uint32(s.T), uint32(s.K), uint32(s.Rows), uint32(s.Split), uint32(s.Rowt), b2u(s.GroupSplit),
-		uint32(s.NTok), b2u(s.Center.NoCenter), uint32(s.Center.MinTok))
-	return g.genKern(full, build)
 }
 
 func b2u(x bool) uint32 {
@@ -1233,7 +1230,7 @@ func (g *devTier) genPagedWrite(o *devOp, prog *devProgram, bs *blockScratch, ro
 		if k.k == nil {
 			return nil
 		}
-		l := genLaunch{k: k.k, groups: rows, width: k.group, n: uint8(len(rb.args))}
+		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
 		copy(l.args[:], rb.args)
 		out = append(out, l)
 	}
@@ -1258,7 +1255,7 @@ func (g *devTier) genHeadCopy(o *devOp, prog *devProgram, bs *blockScratch, rows
 		if k.k == nil {
 			return nil
 		}
-		l := genLaunch{k: k.k, groups: rows, width: k.group, n: uint8(len(rb.args))}
+		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
 		copy(l.args[:], rb.args)
 		return []genLaunch{l}
 	}
@@ -1317,7 +1314,7 @@ func (g *devTier) genHeadCopy(o *devOp, prog *devProgram, bs *blockScratch, rows
 	if k.k == nil {
 		return nil
 	}
-	l := genLaunch{k: k.k, groups: rows, width: k.group, n: uint8(len(rb.args))}
+	l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
 	copy(l.args[:], rb.args)
 	return []genLaunch{l}
 }
@@ -1346,7 +1343,7 @@ func (g *devTier) genCombine(o *devOp, prog *devProgram, bs *blockScratch) []gen
 	if k.k == nil {
 		return nil
 	}
-	l := genLaunch{k: k.k, groups: 1, width: k.group, n: uint8(len(rb.args))}
+	l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
 	copy(l.args[:], rb.args)
 	return []genLaunch{l}
 }
@@ -1376,7 +1373,7 @@ func (g *devTier) genRopeQKV(o *devOp, prog *devProgram, bs *blockScratch, rows 
 	if k.k == nil {
 		return nil
 	}
-	l := genLaunch{k: k.k, groups: rows, width: k.group, n: uint8(len(qb.args))}
+	l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(qb.args))}
 	copy(l.args[:], qb.args)
 	return append([]genLaunch{l}, kv...)
 }

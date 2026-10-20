@@ -91,8 +91,8 @@ type Planned struct {
 //   - a group with a windowed reduction and no stages runs flat, a thread an
 //     element, 128 to a workgroup (its windows meet in the workgroup); one
 //     with stages runs a workgroup a row, its stages' windows within it;
-//   - any other group runs a workgroup a row: 1024 threads with a row
-//     reduction, else the narrowest power of two over the row, at most 256.
+//   - a group with no reduction runs flat, 128 threads to a workgroup;
+//   - a group with a row reduction runs a workgroup a row, 1024 threads.
 func (g *Row) Plan(f Facts) ([]Planned, error) {
 	all := make([]int, len(g.Bufs))
 	for i := range all {
@@ -101,6 +101,10 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 	if g.windowed() && len(g.Stages) == 0 {
 		// Windows meet across a workgroup's consecutive threads: flat, a
 		// thread an element, 128 to a group.
+		return []Planned{{G: g, S: Schedule{Group: 128, Flat: true, Target: f.Target}, Bufs: all,
+			Threads: g.Rows * g.Width}}, nil
+	}
+	if !g.contraction() && !g.reduces() && len(g.Stages) == 0 {
 		return []Planned{{G: g, S: Schedule{Group: 128, Flat: true, Target: f.Target}, Bufs: all,
 			Threads: g.Rows * g.Width}}, nil
 	}
@@ -126,6 +130,15 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 		{G: first, S: s, Bufs: b1, Threads: threads * s.Split},
 		{G: second, S: Schedule{Group: s.Group, Flat: true, Target: f.Target}, Bufs: b2, Threads: g.Rows * g.Width},
 	}, nil
+}
+
+func (g *Row) reduces() bool {
+	for _, n := range g.Nodes {
+		if n.Kind == NReduce {
+			return true
+		}
+	}
+	return false
 }
 
 // windowed reports whether g holds a windowed reduction (NWindow).
