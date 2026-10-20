@@ -193,8 +193,9 @@ func TestMatVecIsMains(t *testing.T) {
 // each reading its expert's sheet, the activation shared (gate and up) or a
 // slot's own (down), split or not.
 func TestExpertMatVecIsMains(t *testing.T) {
-	for _, q := range []format{{kernels.Float32, mainkernels.Float32}, {kernels.Float16, mainkernels.Float16}, {kernels.Q8_0, mainkernels.Q8_0}, {kernels.MXFP4, mainkernels.MXFP4}, {kernels.Q4_0, mainkernels.Q4_0}} {
-		for _, rk := range [][2]int{{64, 64}, {96, 128}} {
+	for _, q := range []format{{kernels.Float32, mainkernels.Float32}, {kernels.Float16, mainkernels.Float16}, {kernels.Q8_0, mainkernels.Q8_0}, {kernels.MXFP4, mainkernels.MXFP4}, {kernels.Q4_0, mainkernels.Q4_0},
+		{kernels.Q5_0, mainkernels.Q5_0}, {kernels.Q5_1, mainkernels.Q5_1}, {kernels.Q4_K, mainkernels.Q4_K}, {kernels.Q5_K, mainkernels.Q5_K}, {kernels.Q6_K, mainkernels.Q6_K}, {kernels.Q3_K, mainkernels.Q3_K}} {
+		for _, rk := range [][2]int{{64, 256}, {96, 512}} {
 			for _, sp := range []int{1, 2} {
 				for _, own := range []bool{false, true} {
 					for _, ek := range [][2]int{{8, 2}, {16, 4}} {
@@ -217,6 +218,9 @@ func TestExpertMatVecIsMains(t *testing.T) {
 							w := compose.MatVecWeight{T: q.c, K: rk[1], Rows: rk[0], QS: g.Buf(compose.BufU32), D: -1, SC: -1, Experts: ek[0]}
 							if !kernels.IsFloat(q.c) {
 								w.D = g.Buf(compose.BufU32)
+							}
+							if q.c.Info().PerSuper > 1 {
+								w.SC = g.Buf(compose.BufU32)
 							}
 							a := compose.MatVecOperand{Toks: ek[1], One: !own}
 							if !own {
@@ -246,8 +250,9 @@ func TestExpertMatVecIsMains(t *testing.T) {
 // sorted columns -- a token group of four a thread, each group reading the
 // sheet its tile's expert names -- to main's grouped matvec.
 func TestGroupedMatVecIsMains(t *testing.T) {
-	for _, q := range []format{{kernels.Float32, mainkernels.Float32}, {kernels.Float16, mainkernels.Float16}, {kernels.Q8_0, mainkernels.Q8_0}, {kernels.MXFP4, mainkernels.MXFP4}, {kernels.Q4_0, mainkernels.Q4_0}} {
-		for _, rk := range [][2]int{{64, 64}, {96, 128}} {
+	for _, q := range []format{{kernels.Float32, mainkernels.Float32}, {kernels.Float16, mainkernels.Float16}, {kernels.Q8_0, mainkernels.Q8_0}, {kernels.MXFP4, mainkernels.MXFP4}, {kernels.Q4_0, mainkernels.Q4_0},
+		{kernels.Q5_0, mainkernels.Q5_0}, {kernels.Q5_1, mainkernels.Q5_1}, {kernels.Q4_K, mainkernels.Q4_K}, {kernels.Q5_K, mainkernels.Q5_K}, {kernels.Q6_K, mainkernels.Q6_K}, {kernels.Q3_K, mainkernels.Q3_K}} {
+		for _, rk := range [][2]int{{64, 256}, {96, 512}} {
 			for _, ep := range [][2]int{{8, 64}, {16, 128}} {
 				name := fmt.Sprintf("%v_%dx%d_e%d_np%d", q.c, rk[0], rk[1], ep[0], ep[1])
 				t.Run(name, func(t *testing.T) {
@@ -259,6 +264,9 @@ func TestGroupedMatVecIsMains(t *testing.T) {
 					w := compose.MatVecWeight{T: q.c, K: rk[1], Rows: rk[0], QS: g.Buf(compose.BufU32), D: -1, SC: -1, Experts: ep[0], SelPer: 4}
 					if !kernels.IsFloat(q.c) {
 						w.D = g.Buf(compose.BufU32)
+					}
+					if q.c.Info().PerSuper > 1 {
+						w.SC = g.Buf(compose.BufU32)
 					}
 					a := compose.MatVecOperand{Toks: ep[1]}
 					if kernels.IsFloat(q.c) {
