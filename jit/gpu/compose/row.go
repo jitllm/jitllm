@@ -99,6 +99,9 @@ const (
 	// with the four of word B, a signed 32-bit integer (At 1: no byte of
 	// either is -128, which a target may use).
 	NDot4
+	// NSegment is the thread's segment under a split schedule (an index),
+	// 0 without one.
+	NSegment
 )
 
 // Op is a unary or binary map.
@@ -884,6 +887,12 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			}
 		case NIConst:
 			v = b.Const(ir.I32, int64(nd.At))
+		case NSegment:
+			if seg != 0 {
+				v = seg
+			} else {
+				v = b.Const(ir.U32, 0)
+			}
 		case NDot4:
 			x, y, acc := elem(nd.A, idx, e), elem(nd.B, idx, e), elem(nd.C, idx, e)
 			if nd.At == 1 {
@@ -1118,7 +1127,7 @@ func (g *Row) isIndex(n int) bool { return g.typeOf(n) != ir.F32 }
 func (g *Row) typeOf(n int) ir.Type {
 	nd := g.Nodes[n]
 	switch nd.Kind {
-	case NColumn, NRowIdx, NUConst, NIter:
+	case NColumn, NRowIdx, NUConst, NIter, NSegment:
 		return ir.U32
 	case NIConst, NDot4:
 		return ir.I32

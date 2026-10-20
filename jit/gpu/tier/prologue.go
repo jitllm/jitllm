@@ -73,9 +73,9 @@ func (g *devTier) ensureFusedLocked(l *layer, prog *devProgram, bs *blockScratch
 	if R == 1 && rag == nil {
 		fc.rows = 1
 	}
-	g.curLayer = l
+	g.curLayer, g.genRag = l, rag != nil
 	g.genProgram(fc.prog, bs, fc.rows)
-	g.curLayer = nil
+	g.curLayer, g.genRag = nil, false
 }
 
 // ensureOrders builds the head-major orders block l's variant for R rows

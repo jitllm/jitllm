@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
@@ -24,6 +26,7 @@ var (
 		"the recorder profiles TestComposerParity compares on")
 	parityModel   = flag.String("parity-model", "", "TestComposerParity on this fixture alone, printing what it misses")
 	parityByShape = flag.Bool("parity-by-shape", false, "TestComposerParity groups what is missing by main's kernel name with its sizes elided")
+	parityExplain = flag.Bool("parity-explain", false, "with -parity-kernel, every composed instruction written out")
 	parityKernel  = flag.String("parity-kernel", "", "with -parity-model, the main kernel name prefix whose missing instructions to print")
 )
 
@@ -49,6 +52,19 @@ func TestComposerParity(t *testing.T) {
 		}
 		var total, same, models, identical int
 		missing := map[string]int{}
+		// Each model's pair of tiers is its own: they run in parallel, a
+		// worker a core, and their results are summed in model order.
+		type result struct {
+			name     string
+			mt, ms   int
+			miss     []paritytest.Miss
+			main     []*ir.Kernel
+			composed []*ir.Kernel
+			mainErr  error
+			compErr  error
+			hasMain  bool
+		}
+		var todo []string
 		for _, p := range paths {
 			name := strings.TrimSuffix(filepath.Base(p), ".jlm")
 			if strings.HasSuffix(name, "-vlm") || strings.Contains(name, "mmproj") {
@@ -57,30 +73,75 @@ func TestComposerParity(t *testing.T) {
 			if *parityModel != "" && name != *parityModel {
 				continue
 			}
-			mk, err := parityKernels(t, prof, p, true)
-			if err != nil {
-				t.Logf("%s on %s, main: %v", name, pn, err)
+			todo = append(todo, p)
+		}
+		results := make([]result, len(todo))
+		work := make(chan int)
+		var wg sync.WaitGroup
+		for w := 0; w < runtime.GOMAXPROCS(0); w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := range work {
+					p := todo[i]
+					r := &results[i]
+					r.name = strings.TrimSuffix(filepath.Base(p), ".jlm")
+					mk, err := parityKernels(t, prof, p, true)
+					r.mainErr = err
+					if len(mk) == 0 {
+						continue
+					}
+					r.hasMain = true
+					ck, err := parityKernels(t, prof, p, false)
+					r.compErr = err
+					r.main, r.composed = mk, composedOnly(ck)
+					r.mt, r.ms, r.miss = paritytest.Compare(r.main, r.composed)
+				}
+			}()
+		}
+		for i := range todo {
+			work <- i
+		}
+		close(work)
+		wg.Wait()
+		ex := paritytest.NewInterner()
+		for _, r := range results {
+			if r.mainErr != nil {
+				t.Logf("%s on %s, main: %v", r.name, pn, r.mainErr)
 			}
-			if len(mk) == 0 {
+			if !r.hasMain {
 				continue
 			}
-			ck, err := parityKernels(t, prof, p, false)
-			if err != nil {
-				t.Logf("%s on %s, composer: %v", name, pn, err)
+			if r.compErr != nil && *parityModel != "" {
+				t.Logf("%s on %s, composer: %v", r.name, pn, r.compErr)
 			}
-			mt, ms, miss := paritytest.Compare(mk, composedOnly(ck))
-			for _, m := range miss {
+			if *parityModel != "" && *parityKernel != "" {
+				for _, k := range r.main {
+					if strings.HasPrefix(k.Name, *parityKernel) {
+						t.Logf("main     %s", shapeOf(k))
+					}
+				}
+				for _, k := range r.composed {
+					t.Logf("composed %s", shapeOf(k))
+					if *parityExplain {
+						for i := range k.Ops {
+							t.Logf("    %%%d %s", i, paritytest.Explain(ex, k, i, 4))
+						}
+					}
+				}
+			}
+			for _, m := range r.miss {
 				prefix, _, _ := strings.Cut(m.K.Name, "_")
 				if *parityByShape {
 					prefix = digits.ReplaceAllString(m.K.Name, "N")
 				}
 				missing[prefix]++
 				if *parityModel != "" && *parityKernel != "" && strings.HasPrefix(m.K.Name, *parityKernel) {
-					t.Logf("%s missing %s", m.K.Name, opLine(m.K, m.Op))
+					t.Logf("%s missing %s\n        %s", m.K.Name, opLine(m.K, m.Op), paritytest.Explain(ex, m.K, m.Op, 4))
 				}
 			}
-			total, same, models = total+mt, same+ms, models+1
-			if ms == mt {
+			total, same, models = total+r.mt, same+r.ms, models+1
+			if r.ms == r.mt {
 				identical++
 			}
 		}
@@ -159,6 +220,29 @@ func parityKernels(t *testing.T, prof recorder.Profile, path string, main bool) 
 }
 
 var digits = regexp.MustCompile(`[0-9]+`)
+
+// shapeOf is a kernel's schedule at a glance: its op count, its f32
+// accumulators (the f32 phis: rows times tokens a thread), its loops' trips
+// and its grid clamp (the first min's constant).
+func shapeOf(k *ir.Kernel) string {
+	acc, clamp := 0, int64(-1)
+	var trips []int64
+	for _, o := range k.Ops {
+		switch {
+		case o.Kind == ir.OpPhi && o.Type == ir.F32:
+			acc++
+		case o.Kind == ir.OpLoop:
+			trips = append(trips, o.Imm)
+		case o.Kind == ir.OpMin && clamp < 0:
+			for _, a := range o.Args[:2] {
+				if a != 0 && k.Ops[a-1].Kind == ir.OpConst {
+					clamp = k.Ops[a-1].Imm
+				}
+			}
+		}
+	}
+	return fmt.Sprintf("%s: %d ops, %d f32 accumulators, loops %v, grid clamp %d", k.Name, len(k.Ops), acc, trips, clamp)
+}
 
 // composedOnly is the kernels the composer formed (genKern marks them).
 func composedOnly(ks []*ir.Kernel) []*ir.Kernel {

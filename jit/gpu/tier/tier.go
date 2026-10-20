@@ -2075,6 +2075,9 @@ type devShared struct {
 	consts map[uint32]backend.Buf
 	// curLayer is the block whose program is being generated.
 	curLayer *layer
+	// genRag says the program being formed is a ragged step's (its matvecs
+	// take the ragged schedule).
+	genRag bool
 	conv     convScratch
 	// dh is Clef's decision head on this device (dechead.go), and ClefHeads
 	// how many requests it has answered.

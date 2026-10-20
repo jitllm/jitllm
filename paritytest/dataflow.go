@@ -5,6 +5,7 @@
 package paritytest
 
 import (
+	"fmt"
 	"slices"
 
 	"github.com/jitllm/jitllm/jit/gpu/ir"
@@ -48,10 +49,18 @@ func Compare(main, composed []*ir.Kernel) (total, same int, missing []Miss) {
 
 // Interner names each distinct canonical form by a small integer, so equal
 // forms in any of the kernels it saw get equal names.
-type Interner struct{ ids map[form]int32 }
+type Interner struct {
+	ids map[form]int32
+	// fields is each field atom's parts.
+	fields map[int32]field
+	// desc is each atom's description, for Explain.
+	desc map[int32]string
+}
 
 // NewInterner is an empty interner.
-func NewInterner() *Interner { return &Interner{ids: map[form]int32{}} }
+func NewInterner() *Interner {
+	return &Interner{ids: map[form]int32{}, desc: map[int32]string{}, fields: map[int32]field{}}
+}
 
 // form is one canonical form: an instruction by its kind, type, loop depth,
 // immediate, tile and its operands' names; or a piece of an affine index.
@@ -91,7 +100,17 @@ const (
 	atomIter // a loop's iteration, by its depth and trip count
 	atomProd // a product of two atoms
 	atomOpaque
+	// atomField is floor((x mod m) / d) of an index x, m 0 for none: a digit
+	// of x in mixed radix, which nested divisions and remainders by
+	// constants all reduce to.
+	atomField
 )
+
+// field is a field atom's x (an affine's name), d and m.
+type field struct {
+	x    int32
+	d, m int64
+}
 
 // Dataflow is each of k's instructions' name by what it computes: its kind,
 // type, tile and loop depth and its operands' names, with integer arithmetic
@@ -189,7 +208,33 @@ func newCanon(k *ir.Kernel, in *Interner) *canon {
 }
 
 func (c *canon) atom(kind int64, a, b int32) affine {
-	return affine{terms: []term{{c.in.name(form{tag: fAtom, imm: kind, a: [4]int32{a, b}}), 1}}}
+	id := c.in.name(form{tag: fAtom, imm: kind, a: [4]int32{a, b}})
+	if _, ok := c.in.desc[id]; !ok {
+		switch kind {
+		case atomTID:
+			c.in.desc[id] = "tid"
+		case atomCTAID:
+			c.in.desc[id] = "ctaid"
+		case atomNTID:
+			c.in.desc[id] = "ntid"
+		case atomIter:
+			c.in.desc[id] = fmt.Sprintf("iter(d%d,t%d)", a, b)
+		case atomProd:
+			c.in.desc[id] = c.in.desc[a] + "*" + c.in.desc[b]
+		default:
+			c.in.desc[id] = fmt.Sprintf("op%d", a)
+		}
+	}
+	return affine{terms: []term{{id, 1}}}
+}
+
+func (c *canon) fieldAtom(f field) affine {
+	id := c.in.name(form{tag: fAtom, imm: atomField, a: [4]int32{f.x, int32(f.d), int32(f.m)}})
+	if _, ok := c.in.fields[id]; !ok {
+		c.in.fields[id] = f
+		c.in.desc[id] = fmt.Sprintf("field(v%d,/%d,%%%d)", f.x, f.d, f.m)
+	}
+	return affine{terms: []term{{id, 1}}}
 }
 
 func (c *canon) affineName(a affine) int32 {
@@ -275,7 +320,30 @@ func (c *canon) index(i int) (affine, bool) {
 			}
 			break
 		}
-		ok = false
+		// Otherwise a field of the dividend: a field of a field where the
+		// dividend is one.
+		x, ok1 := arg(0)
+		if !ok1 || !ok2 || !y.isConst() || y.c <= 0 {
+			ok = false
+			break
+		}
+		f := field{x: c.affineName(x), d: 1}
+		if len(x.terms) == 1 && x.c == 0 && x.terms[0].coef == 1 {
+			if g, isF := c.in.fields[x.terms[0].atom]; isF {
+				f = g
+			}
+		}
+		if o.Kind == ir.OpDiv {
+			f.d *= y.c
+		} else {
+			mm := f.d * y.c
+			if f.m != 0 && f.m%mm != 0 {
+				ok = false
+				break
+			}
+			f.m = mm
+		}
+		r = c.fieldAtom(f)
 	case ir.OpPhi:
 		// An induction: phi(start, phi + step) is start + step*iteration.
 		ok = false
@@ -308,6 +376,7 @@ func (c *canon) index(i int) (affine, bool) {
 		// An integer the affine form does not state (a minimum, a load):
 		// an atom of its own form.
 		r = c.atom(atomOpaque, c.instrName(i), 0)
+		c.in.desc[r.terms[0].atom] = c.describeOp(i, 3)
 	}
 	c.aff[i] = &r
 	return r, true
@@ -459,4 +528,54 @@ func Sorted(missing []Miss, key func(*ir.Kernel) string) (names []string, counts
 	}
 	slices.SortFunc(names, func(a, b string) int { return counts[b] - counts[a] })
 	return names, counts
+}
+
+// Explain is instruction i of k as the comparison sees it, written out, its
+// atoms named by in (share one interner to compare kernels): an index as
+// its affine form, any other instruction as its kind of its operands', to
+// depth levels. For reading a miss, never for comparing.
+func Explain(in *Interner, k *ir.Kernel, i, depth int) string {
+	return newCanon(k, in).describe(i, depth)
+}
+
+func (c *canon) describe(i, d int) string {
+	if a, ok := c.index(i); ok {
+		s := fmt.Sprint(a.c)
+		for _, t := range a.terms {
+			s += fmt.Sprintf(" + %d*%s", t.coef, c.in.desc[t.atom])
+		}
+		return "[" + s + "]"
+	}
+	return c.describeOp(i, d)
+}
+
+// describeOp is describe of op i by its kind and operands, not its affine
+// form.
+func (c *canon) describeOp(i, d int) string {
+	k := c.k
+	o := k.Ops[i]
+	if d == 0 {
+		return fmt.Sprintf("%v…", o.Kind)
+	}
+	s := fmt.Sprintf("%v.%v@%d", o.Kind, o.Type, c.depth[i])
+	if o.Kind == ir.OpLoad || o.Kind == ir.OpStore {
+		s += fmt.Sprintf("+%d", o.Imm)
+	} else if o.Imm != 0 {
+		s += fmt.Sprintf("#%d", o.Imm)
+	}
+	s += "("
+	for j, a := range o.Args {
+		if a == 0 {
+			continue
+		}
+		if j > 0 {
+			s += ", "
+		}
+		if int(a)-1 >= i {
+			s += fmt.Sprintf("back:%v", k.Ops[int(a)-1].Kind)
+			continue
+		}
+		s += c.describe(int(a)-1, d-1)
+	}
+	return s + ")"
 }
