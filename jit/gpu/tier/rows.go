@@ -453,9 +453,15 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 		return false
 	}
 	g.mu.Lock()
-	// The matrix instruction's 32 rows where the device has one, 8 where not.
+	// The matrix instruction's 32 rows where the device has one, 8 where a
+	// quantized first projection would want it and it has none; a float
+	// weight takes no matrix instruction, and keeps 32.
 	grain := batchGrain
-	if g.NoMMA || !g.composeTarget().IntMMA() {
+	quantized := false
+	if l := g.layers[lo]; l != nil && l.ok && l.wq != nil {
+		quantized = !kernels.IsFloat(l.wq.t)
+	}
+	if g.NoMMA || quantized && !g.composeTarget().IntMMA() {
 		grain = 8
 	}
 	w := (n + grain - 1) / grain * grain
@@ -474,10 +480,6 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 			return fail("block %d is non-causal or streamed", li)
 		}
 	}
-	if head != nil {
-		g.mu.Unlock()
-		return fail("the head has no composed form")
-	}
 	// The step's own width, or the reserved one when that does not fit.
 	ok := g.bs != nil
 	if ok {
@@ -485,6 +487,10 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 		ok = w > 0
 	}
 	bs := g.bbs[w]
+	if ok && head != nil && !g.ensureRowsHead(bs, head) {
+		g.mu.Unlock()
+		return fail("the head has no composed per-row form: %s", g.LastErr)
+	}
 	if ok {
 		g.RowsSteps++
 		g.RowsPadded += w - n

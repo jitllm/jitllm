@@ -27,6 +27,7 @@ const (
 	haSplit                 // a k split's partial plane
 	haLogits                // the logits
 	haCapped                // the softcapped logits
+	haTok                   // each row's greatest logit's index
 )
 
 // headLaunch is one launch of the decode head: a composed kernel and its
@@ -212,46 +213,150 @@ func (g *devTier) headProgram(p *nn.LayerPlan, r *resident, h *nn.Head, split in
 	return prog, nil
 }
 
-// runHead launches the decode head on bs's row.
-func (g *devTier) runHead(lc *launcher, bs *blockScratch) {
-	r := bs.head
+// headBufs is what a head program's roles name on one launch.
+type headBufs struct {
+	x, part, norm, h, a, ax, logits, capped, tok backend.Buf
+	r                                          *resident
+}
+
+// runHead launches prog over bufs, the first groups of each launch where
+// groups is above 0 (the rows that want a head).
+func (g *devTier) runHead(lc *launcher, prog []headLaunch, hb headBufs) {
 	var bufs [8]backend.Buf
-	for i := range bs.headProg {
-		l := &bs.headProg[i]
+	for i := range prog {
+		l := &prog[i]
 		for j := 0; j < int(l.n); j++ {
 			switch l.args[j] {
 			case haX:
-				bufs[j] = bs.x
+				bufs[j] = hb.x
 			case haPart:
-				bufs[j] = bs.part
+				bufs[j] = hb.part
 			case haNorm:
-				bufs[j] = bs.hNorm
+				bufs[j] = hb.norm
 			case haH:
-				bufs[j] = bs.h
+				bufs[j] = hb.h
 			case haA:
-				bufs[j] = bs.a
+				bufs[j] = hb.a
 			case haAX:
-				bufs[j] = bs.ax
+				bufs[j] = hb.ax
 			case haQS:
-				bufs[j] = r.qs
+				bufs[j] = hb.r.qs
 			case haD:
-				if kernels.IsFloat(r.t) {
-					bufs[j] = bs.h
+				if kernels.IsFloat(hb.r.t) {
+					bufs[j] = hb.h
 				} else {
-					bufs[j] = r.d
+					bufs[j] = hb.r.d
 				}
 			case haSC:
-				bufs[j] = r.sc
+				bufs[j] = hb.r.sc
 			case haSplit:
 				bufs[j] = g.partBuf
 			case haLogits:
-				bufs[j] = bs.logits
+				bufs[j] = hb.logits
 			case haCapped:
-				bufs[j] = bs.logitsCap
+				bufs[j] = hb.capped
+			case haTok:
+				bufs[j] = hb.tok
 			}
 		}
 		if err := lc.launch(l.k, l.groups, l.width, bufs[:l.n]...); err != nil {
 			return
 		}
 	}
+}
+
+// decodeHeadBufs is the decode head's binding on bs.
+func decodeHeadBufs(bs *blockScratch) headBufs {
+	return headBufs{x: bs.x, part: bs.part, norm: bs.hNorm, h: bs.h, a: bs.a, ax: bs.ax, logits: bs.logits,
+		capped: bs.logitsCap, r: bs.head}
+}
+
+// rowsHeadBufs is the per-row head's binding: rows scratch bs, the head the
+// decode scratch hb holds.
+func rowsHeadBufs(bs, hb *blockScratch) headBufs {
+	return headBufs{x: bs.x, part: bs.part, norm: hb.hNorm, h: bs.h, a: bs.a, ax: bs.ax, logits: bs.ragLogits,
+		capped: bs.ragCap, tok: bs.ragTok, r: hb.head}
+}
+
+// ensureRowsHead composes the per-row head for rows scratch bs, the decode
+// scratch's head over its rows: their RMSNorm, the int8 operand, the first
+// row's projection at decode's split (the operand's sums after every row's
+// scales), its softcap, and the argmax of each wanted row. Callers hold
+// g.mu, outside any submission.
+func (g *devTier) ensureRowsHead(bs *blockScratch, h *nn.Head) bool {
+	hd := g.bs
+	if bs.ragHeadProg != nil {
+		return true
+	}
+	if hd == nil || hd.headProg == nil || h == nil || !g.reserveRowsHead(bs, &bs.p) {
+		return false
+	}
+	p, r, R := &bs.p, hd.head, bs.rows
+	n, vocab := p.NEmbd, hd.mvHead.rows
+	t := g.composeTarget()
+	flat := compose.Facts{Target: t}
+	var prog []headLaunch
+	add := func(b *headBuild, f compose.Facts) bool {
+		ls, err := g.headKern(b, f)
+		prog = append(prog, ls...)
+		if err != nil {
+			g.LastErr = fmt.Sprintf("rows: the head: %v", err)
+		}
+		return err == nil
+	}
+	nb := &headBuild{r: compose.Row{Width: n, Rows: R}}
+	x := nb.r.Load(nb.buf(compose.BufRow, haX))
+	w := nb.r.Load(nb.buf(compose.BufVec, haNorm))
+	ss := nb.r.Add(compose.Node{Kind: compose.NReduce, Red: compose.RedSum, A: nb.r.Bin(compose.OpMul, x, x)})
+	rms := nb.r.Add(compose.Node{Kind: compose.NUnary, Op: compose.OpRsqrt,
+		A: nb.r.Bin(compose.OpAdd, nb.r.Bin(compose.OpMul, ss, nb.r.Const(1/float32(n))), nb.r.Const(float32(p.RMSEps)))})
+	nb.r.Store(nb.buf(compose.BufOut, haH), nb.r.Bin(compose.OpMul, nb.r.Bin(compose.OpMul, x, rms), w))
+	if !add(nb, flat) {
+		return false
+	}
+	float := kernels.IsFloat(r.t)
+	if !float {
+		qb := &headBuild{r: compose.Row{Width: R * n / 4, Rows: 1}}
+		qb.r.Quantize8(qb.buf(compose.BufRow, haH), qb.buf(compose.BufOutU32, haA), qb.buf(compose.BufOut, haAX), min(g.actWinFor(R), n))
+		if !add(qb, flat) {
+			return false
+		}
+	}
+	mb := &headBuild{r: compose.Row{Width: vocab, Rows: 1}}
+	wt := compose.MatVecWeight{T: r.t, K: n, Rows: vocab, QS: mb.buf(compose.BufU32, haQS), D: -1, SC: -1}
+	op := compose.MatVecOperand{Toks: R}
+	if float {
+		op.X = mb.buf(compose.BufRow, haD)
+	} else {
+		wt.D, wt.SC = mb.buf(compose.BufU32, haD), mb.buf(compose.BufU32, haSC)
+		op.A, op.AX = mb.buf(compose.BufU32, haA), mb.buf(compose.BufRow, haAX)
+	}
+	v, err := mb.r.MatVec(wt, op)
+	if err != nil {
+		g.LastErr = fmt.Sprintf("rows: the head: %v", err)
+		return false
+	}
+	mb.r.Store(mb.buf(compose.BufOut, haLogits), v)
+	if !add(mb, compose.Facts{Target: t, Step: compose.StepDecode, DecodeSplit: hd.mvHead.split}) {
+		return false
+	}
+	in := haLogits
+	if h.Softcap != 0 {
+		cb := &headBuild{r: compose.Row{Width: vocab, Rows: 1}}
+		lx := cb.r.Load(cb.buf(compose.BufRow, haLogits))
+		cb.r.Store(cb.buf(compose.BufOut, haCapped), cb.r.Softcap(lx, h.Softcap))
+		if !add(cb, flat) {
+			return false
+		}
+		in = haCapped
+	}
+	ab := &headBuild{r: compose.Row{Width: vocab, Rows: R}}
+	ab.r.Argmax(ab.r.Load(ab.buf(compose.BufRow, in)), ab.buf(compose.BufOutU32, haTok))
+	if !add(ab, flat) {
+		return false
+	}
+	// The argmax runs over the wanted rows: one group each, the first.
+	prog[len(prog)-1].groups = 1
+	bs.ragHeadProg = prog
+	return true
 }

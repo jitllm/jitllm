@@ -123,6 +123,8 @@ type blockScratch struct {
 	mvHead        mv
 	// headProg is the decode head's composed launches (PrepHead).
 	headProg []headLaunch
+	// ragHeadProg is the per-row head's, for one wanted row (ensureRowsHead).
+	ragHeadProg []headLaunch
 	hRaw          []byte
 	hOut          []float32
 	att, prob, xb backend.Buf
