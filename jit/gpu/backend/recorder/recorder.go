@@ -80,6 +80,16 @@ type Device struct {
 	order []int    // the kernels in the order first launched
 	used  uint64
 	low   *Lowerings
+	// events is every launch and host access in order, for LiveLaunched.
+	events []event
+}
+
+// event is a launch of kernel k over bufs, or (k < 0) a host read or write
+// of bufs[0].
+type event struct {
+	k     int
+	write bool
+	bufs  []*buf
 }
 
 // New is a recording device standing in for p, holding total bytes.
@@ -283,14 +293,138 @@ type kern struct {
 
 func (k kern) IR() *ir.Kernel { return k.src }
 
-func (k kern) Launch(int, int, ...backend.Buf) error {
+func (k kern) Launch(_, _ int, bufs ...backend.Buf) error {
 	k.d.mu.Lock()
 	defer k.d.mu.Unlock()
 	if !k.d.ran[k.i] {
 		k.d.ran[k.i] = true
 		k.d.order = append(k.d.order, k.i)
 	}
+	bs := make([]*buf, len(bufs))
+	for i, b := range bufs {
+		bs[i], _ = b.(*buf)
+	}
+	k.d.events = append(k.d.events, event{k: k.i, bufs: bs})
 	return nil
+}
+
+// host notes a host access to b.
+func (b *buf) host(write bool) {
+	b.d.mu.Lock()
+	b.d.events = append(b.d.events, event{k: -1, write: write, bufs: []*buf{b}})
+	b.d.mu.Unlock()
+}
+
+// LiveLaunched is Launched without the kernels every launch of which was
+// dead: each buffer it wrote written again -- by a later launch that stores
+// at places no loaded value moves (not a cache row at a table's offset) and
+// does not read it, or by the host -- before any launch or the host read it. What is read at
+// the end of the recording -- a cache, a state -- counts as read.
+func (d *Device) LiveLaunched() []Emitted {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	reads, writes, fixed := make([][]bool, len(d.irs)), make([][]bool, len(d.irs)), make([][]bool, len(d.irs))
+	for i, k := range d.irs {
+		reads[i], writes[i], fixed[i] = paramUse(k)
+	}
+	need := map[*buf]bool{}
+	needed := func(b *buf) bool {
+		v, ok := need[b]
+		return !ok || v
+	}
+	live := make([]bool, len(d.irs))
+	for e := len(d.events) - 1; e >= 0; e-- {
+		ev := d.events[e]
+		if ev.k < 0 {
+			need[ev.bufs[0]] = !ev.write
+			continue
+		}
+		r, w := reads[ev.k], writes[ev.k]
+		alive := false
+		for j, b := range ev.bufs {
+			if b == nil || j >= len(w) || !w[j] {
+				continue
+			}
+			if needed(b) {
+				alive = true
+			}
+		}
+		if !alive {
+			continue
+		}
+		live[ev.k] = true
+		for j, b := range ev.bufs {
+			if b == nil || j >= len(w) {
+				continue
+			}
+			if w[j] && !r[j] && fixed[ev.k][j] {
+				need[b] = false
+			}
+		}
+		for j, b := range ev.bufs {
+			if b != nil && j < len(r) && r[j] {
+				need[b] = true
+			}
+		}
+	}
+	out := make([]Emitted, 0, len(d.order))
+	for _, i := range d.order {
+		if live[i] {
+			out = append(out, Emitted{K: d.irs[i], Code: d.code[i]})
+		}
+	}
+	return out
+}
+
+// paramUse is which of k's parameters it reads, which it writes, and
+// which it writes only at places no loaded value moves.
+func paramUse(k *ir.Kernel) (reads, writes, fixed []bool) {
+	reads, writes, fixed = make([]bool, len(k.Params)), make([]bool, len(k.Params)), make([]bool, len(k.Params))
+	for i := range fixed {
+		fixed[i] = true
+	}
+	loaded := make([]int8, len(k.Ops)+1) // 0 unknown, 1 reads a load, -1 does not
+	var readsLoad func(v ir.Value) bool
+	readsLoad = func(v ir.Value) bool {
+		if v <= 0 || int(v) > len(k.Ops) {
+			return false
+		}
+		if loaded[v] != 0 {
+			return loaded[v] > 0
+		}
+		loaded[v] = -1
+		o := k.Ops[v-1]
+		x := o.Kind == ir.OpLoad || o.Kind == ir.OpLoadV || o.Kind == ir.OpLoadVGet || o.Kind == ir.OpPhi
+		for _, a := range o.Args {
+			x = x || readsLoad(a)
+		}
+		if x {
+			loaded[v] = 1
+		}
+		return x
+	}
+	param := func(v ir.Value) int {
+		if v <= 0 || int(v) > len(k.Ops) || k.Ops[v-1].Kind != ir.OpParam {
+			return -1
+		}
+		return int(k.Ops[v-1].Imm)
+	}
+	for _, o := range k.Ops {
+		switch o.Kind {
+		case ir.OpLoad, ir.OpLoadV, ir.OpTileLoad:
+			if p := param(o.Args[0]); p >= 0 {
+				reads[p] = true
+			}
+		case ir.OpStore, ir.OpStoreV, ir.OpTileStore:
+			if p := param(o.Args[0]); p >= 0 {
+				writes[p] = true
+				if readsLoad(o.Args[1]) {
+					fixed[p] = false
+				}
+			}
+		}
+	}
+	return reads, writes, fixed
 }
 
 func (kern) Close() {}
@@ -300,9 +434,9 @@ type buf struct {
 	b []byte
 }
 
-func (b *buf) Write(p []byte) error            { copy(b.b, p); return nil }
-func (b *buf) WriteAt(off int, p []byte) error { copy(b.b[off:], p); return nil }
-func (b *buf) Read(p []byte) error             { copy(p, b.b); return nil }
+func (b *buf) Write(p []byte) error            { b.host(true); copy(b.b, p); return nil }
+func (b *buf) WriteAt(off int, p []byte) error { b.host(false); copy(b.b[off:], p); return nil }
+func (b *buf) Read(p []byte) error             { b.host(false); copy(p, b.b); return nil }
 func (b *buf) Free() {
 	b.d.mu.Lock()
 	defer b.d.mu.Unlock()

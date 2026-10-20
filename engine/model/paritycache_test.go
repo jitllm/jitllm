@@ -20,8 +20,8 @@ import (
 
 // Main's recording never changes with the composer: it is kept on disk per
 // profile and fixture, keyed by the fixture's size and time and by every
-// source file but the composer's and its tier's, so a change to anything
-// main's run reads records it again.
+// source file but the composer's and its tier's (the harness's own
+// included), so a change to anything main's run reads records it again.
 var (
 	mainKeyOnce sync.Once
 	mainKey     string
@@ -46,7 +46,8 @@ func mainSourceKey(t *testing.T) string {
 				}
 				return nil
 			}
-			if !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+			harness := strings.HasPrefix(filepath.Base(p), "parity") && filepath.Dir(rel) == "engine/model"
+			if !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") && !harness {
 				return nil
 			}
 			b, err := os.ReadFile(p)

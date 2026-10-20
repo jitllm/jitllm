@@ -267,7 +267,9 @@ func parityKernels(t *testing.T, prof recorder.Profile, path string, main bool, 
 	// step stops at the first op it cannot form).
 	var ks []*ir.Kernel
 	if main {
-		for _, e := range rec.Launched() {
+		// What main launched, less the launches whose every output was
+		// overwritten before anything read it.
+		for _, e := range rec.LiveLaunched() {
 			ks = append(ks, e.K)
 		}
 		return ks, err
