@@ -174,7 +174,9 @@ func parityKernels(t *testing.T, prof recorder.Profile, path string, main bool) 
 	rec := recorder.New(prof, 1<<40)
 	var g nn.Device
 	if main {
-		mg, err := maintier.New([]maintier.Slot{{Dev: rec, Bytes: 1 << 40}},
+		// Tuning off on both sides: a tuner on a device that runs nothing
+		// times no-ops, and launches every candidate it times.
+		mg, err := maintier.New([]maintier.Slot{{Dev: rec, Bytes: 1 << 40}}, maintier.WithDeviceTune(maintier.TuneOff),
 			maintier.WithConfig(func(c *maintier.Config) { c.NoGraph = true }))
 		if err != nil {
 			return nil, err
@@ -182,7 +184,7 @@ func parityKernels(t *testing.T, prof recorder.Profile, path string, main bool) 
 		defer mg.Close()
 		g = mg
 	} else {
-		cg, err := tier.New([]tier.Slot{{Dev: rec, Bytes: 1 << 40}}, append(testTierOpts(t),
+		cg, err := tier.New([]tier.Slot{{Dev: rec, Bytes: 1 << 40}}, append(testTierOpts(t), tier.WithDeviceTune(tier.TuneOff),
 			tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))...)
 		if err != nil {
 			return nil, err
