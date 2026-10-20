@@ -167,7 +167,7 @@ func TestMatVecIsMains(t *testing.T) {
 			}
 		}
 	}
-	for _, q := range []format{{kernels.TQ2, mainkernels.TQ2}, {kernels.TQ2F, mainkernels.TQ2F}} {
+	for _, q := range []format{{kernels.TQ2, mainkernels.TQ2}, {kernels.TQ2F, mainkernels.TQ2F}, {kernels.MXFP4, mainkernels.MXFP4}, {kernels.Q4_0, mainkernels.Q4_0}} {
 		for _, rk := range [][2]int{{64, 256}, {96, 512}} {
 			for _, sp := range []int{1, 2} {
 				for _, rowt := range []int{1, 2} {
@@ -188,7 +188,7 @@ func TestMatVecIsMains(t *testing.T) {
 // each reading its expert's sheet, the activation shared (gate and up) or a
 // slot's own (down), split or not.
 func TestExpertMatVecIsMains(t *testing.T) {
-	for _, q := range []format{{kernels.Float32, mainkernels.Float32}, {kernels.Float16, mainkernels.Float16}, {kernels.Q8_0, mainkernels.Q8_0}} {
+	for _, q := range []format{{kernels.Float32, mainkernels.Float32}, {kernels.Float16, mainkernels.Float16}, {kernels.Q8_0, mainkernels.Q8_0}, {kernels.MXFP4, mainkernels.MXFP4}, {kernels.Q4_0, mainkernels.Q4_0}} {
 		for _, rk := range [][2]int{{64, 64}, {96, 128}} {
 			for _, sp := range []int{1, 2} {
 				for _, own := range []bool{false, true} {
@@ -241,7 +241,7 @@ func TestExpertMatVecIsMains(t *testing.T) {
 // sorted columns -- a token group of four a thread, each group reading the
 // sheet its tile's expert names -- to main's grouped matvec.
 func TestGroupedMatVecIsMains(t *testing.T) {
-	for _, q := range []format{{kernels.Float32, mainkernels.Float32}, {kernels.Float16, mainkernels.Float16}, {kernels.Q8_0, mainkernels.Q8_0}} {
+	for _, q := range []format{{kernels.Float32, mainkernels.Float32}, {kernels.Float16, mainkernels.Float16}, {kernels.Q8_0, mainkernels.Q8_0}, {kernels.MXFP4, mainkernels.MXFP4}, {kernels.Q4_0, mainkernels.Q4_0}} {
 		for _, rk := range [][2]int{{64, 64}, {96, 128}} {
 			for _, ep := range [][2]int{{8, 64}, {16, 128}} {
 				name := fmt.Sprintf("%v_%dx%d_e%d_np%d", q.c, rk[0], rk[1], ep[0], ep[1])

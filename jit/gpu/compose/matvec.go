@@ -54,6 +54,10 @@ func (g *Row) MatVec(w MatVecWeight, a MatVecOperand) (int, error) {
 	if info.Bits == 2 && info.Hi == 0 && info.PerSuper == 1 && !info.BiasArray && info.Codes == nil && !info.E8M0 {
 		return g.planeMatVec(w, a, info)
 	}
+	if info.Bits == 4 && info.Hi == 0 && info.PerSuper == 1 && !info.BiasArray && !info.D32 &&
+		(info.Codes == nil || kernels.DeviceWhyNot(w.T) == "") {
+		return g.nibbleMatVec(w, a, info)
+	}
 	switch {
 	case info.Bits != 8 || info.Hi != 0 || info.PerSuper != 1 || info.BiasK != 0 || info.BiasArray ||
 		info.Codes != nil || info.E8M0 || info.D32:
@@ -267,4 +271,94 @@ func (g *Row) planeMatVec(w MatVecWeight, a MatVecOperand, info kernels.QInfo) (
 	ax := g.LoadAt(a.AX, ub(OpAdd, ub(OpMul, at, u(w.K/32)), ub(OpMul, s, u(sub/32))))
 	g.SetFold(acc, g.Add(Node{Kind: NBinary, Op: OpFma, A: v, B: ax, C: acc}))
 	return acc, nil
+}
+
+// nibbleMatVec is MatVec over a 4-bit plane with one scale a sub-block
+// (Q4_0, MXFP4): each word's low nibbles the sub-block's first half, its
+// high nibbles the second, each a byte lane of four codes against the
+// operand's word; a coded format's codes mapped to their values first
+// (e2m1); the integer dot corrected by the zero point times the operand's
+// sum, then scaled -- an f16 scale, or an E8M0 exponent byte, several rows
+// to a word (kernels.DIndex).
+func (g *Row) nibbleMatVec(w MatVecWeight, a MatVecOperand, info kernels.QInfo) (int, error) {
+	sub := info.Sub
+	if w.K%sub != 0 || sub%32 != 0 {
+		return 0, fmt.Errorf("compose: a matvec over %v at K=%d", w.T, w.K)
+	}
+	nsub := w.K / sub
+	words := sub * 4 / 32
+	slots := kernels.DSlots(w.T)
+	e, t := g.Column(), g.RowIdx()
+	u, ub := g.UConst, g.UBin
+	rows := u(w.Rows)
+	sheetQ, sheetD, err := g.sheets(w, t)
+	if err != nil {
+		return 0, err
+	}
+	at := a.token(g, t)
+	c := g.Loop(nsub)
+	s := g.Iter(c)
+	acc := g.Fold(c, g.Const(0))
+	cj := g.Loop(words)
+	j := g.Iter(cj)
+	isum := g.Fold(cj, g.Add(Node{Kind: NIConst}))
+	x := g.LoadAt(w.QS, sheetQ(ub(OpAdd, ub(OpMul, ub(OpAdd, ub(OpMul, s, u(words)), j), rows), e)))
+	mask := u(0x0F0F0F0F)
+	lo, hi := ub(OpAnd, x, mask), ub(OpAnd, ub(OpShr, x, u(4)), mask)
+	if info.Codes != nil {
+		lo, hi = g.e2m1(lo), g.e2m1(hi)
+	}
+	bounded := 1
+	if info.SignedQ {
+		bounded = 0
+	}
+	aw := ub(OpAdd, ub(OpAdd, ub(OpMul, at, u(w.K/4)), ub(OpMul, s, u(sub/4))), j)
+	dot := g.Add(Node{Kind: NDot4, A: lo, B: g.LoadAt(a.A, aw), C: isum, At: bounded})
+	dot = g.Add(Node{Kind: NDot4, A: hi, B: g.LoadAt(a.A, ub(OpAdd, aw, u(sub/8))), C: dot, At: bounded})
+	g.SetFold(isum, dot)
+	var dw int
+	if slots > 1 {
+		di := sheetD(ub(OpAdd, ub(OpMul, s, u((w.Rows+slots-1)/slots)), ub(OpDiv, e, u(slots))))
+		dw = ub(OpShr, g.LoadAt(w.D, di), ub(OpMul, ub(OpRem, e, u(slots)), u(32/slots)))
+	} else {
+		dw = g.LoadAt(w.D, sheetD(ub(OpAdd, ub(OpMul, s, rows), e)))
+	}
+	var d int
+	if info.E8M0 {
+		d = g.Add(Node{Kind: NUnary, Op: OpBits, A: ub(OpShl, ub(OpAnd, dw, u(0xFF)), u(23))})
+	} else {
+		d = g.Add(Node{Kind: NUnary, Op: OpHalf, A: dw})
+	}
+	q := g.Add(Node{Kind: NUnary, Op: OpFloat, A: isum})
+	v := g.Bin(OpMul, q, d)
+	if info.BiasK != 0 {
+		nb := a.Toks * w.K / 32
+		si := ub(OpAdd, u(nb), ub(OpAdd, ub(OpMul, at, u(w.K/16)), ub(OpMul, s, u(sub/16))))
+		sum := g.LoadAt(a.AX, si)
+		for k := 1; k < sub/16; k++ {
+			sum = g.Bin(OpAdd, sum, g.LoadAt(a.AX, ub(OpAdd, si, u(k))))
+		}
+		v = g.Bin(OpMul, d, g.Add(Node{Kind: NBinary, Op: OpFma, A: g.Const(-info.BiasK), B: sum, C: q}))
+	}
+	ax := g.LoadAt(a.AX, ub(OpAdd, ub(OpMul, at, u(w.K/32)), ub(OpMul, s, u(sub/32))))
+	g.SetFold(acc, g.Add(Node{Kind: NBinary, Op: OpFma, A: v, B: ax, C: acc}))
+	return acc, nil
+}
+
+// e2m1 maps four e2m1 codes, a nibble in each byte lane of x, to their
+// biased values (the code table kernels.Codes holds) by arithmetic: with q
+// = s|e1|e0|m, the doubled magnitude l + (l if b2) + 4*b2 + 2*(b0 b1 b2), l
+// = q&3, and the biased code (v+bias) - (2v if s).
+func (g *Row) e2m1(x int) int {
+	u, ub := g.UConst, g.UBin
+	ones, ff := u(0x01010101), u(0xFF)
+	l := ub(OpAnd, x, u(0x03030303))
+	b2 := ub(OpAnd, ub(OpShr, x, u(2)), ones)
+	v := ub(OpAdd, l, ub(OpAnd, l, ub(OpMul, b2, ff)))
+	v = ub(OpAdd, v, ub(OpShl, b2, u(2)))
+	t := ub(OpAnd, ub(OpAnd, x, ub(OpShr, x, u(1))), b2)
+	v = ub(OpAdd, v, ub(OpShl, t, u(1)))
+	neg := ub(OpMul, ub(OpAnd, ub(OpShr, x, u(3)), ones), ff)
+	b := uint32(kernels.MXFP4Bias)
+	return ub(OpSub, ub(OpAdd, v, u(int(b|b<<8|b<<16|b<<24))), ub(OpAnd, ub(OpShl, v, u(1)), neg))
 }
