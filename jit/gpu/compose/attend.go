@@ -10,6 +10,9 @@ type Paged struct {
 	// MLA > 0 is a latent row: one row-major region of Dim a position (one
 	// KV head), its first MLA elements the value.
 	MLA int
+	// Lanes > 1 takes an item over a subgroup's lanes: a group row an item,
+	// its element the lane.
+	Lanes int
 }
 
 // valueDim is the value's width: the latent's prefix, or the head.
@@ -68,20 +71,30 @@ func (g *Row) valid(p pagedSplit, slot int) int {
 func (g *Row) PagedSoftmax(scores, out, part, desc int, p Paged) {
 	u, ub := g.UConst, g.UBin
 	item := g.Column()
+	lane, step := u(0), u(1)
+	if p.Lanes > 1 {
+		item, lane, step = g.RowIdx(), g.Column(), u(p.Lanes)
+	}
 	sp := ub(OpRem, item, u(p.Splits))
 	row := ub(OpDiv, item, u(p.Heads*p.Splits))
 	ps := g.pagedSplitOf(desc, row, sp, p.Splits)
 	keys := ub(OpSub, ps.en, ps.st)
 	base := ub(OpMul, item, u(p.Chunk))
-	lane, step := u(0), u(1)
 	cnt := ub(OpDiv, ub(OpAdd, ub(OpSub, ub(OpMax, keys, lane), lane), ub(OpSub, step, u(1))), step)
 	c1 := g.LoopN(cnt)
 	mi := ub(OpAdd, lane, ub(OpMul, g.Iter(c1), step))
 	m := g.Fold(c1, g.Const(-math.MaxFloat32))
 	g.SetFold(m, g.Bin(OpMax, m, g.LoadAt(scores, ub(OpAdd, base, mi))))
+	if p.Lanes > 1 {
+		m = g.Add(Node{Kind: NReduce, Red: RedMax, A: m, At: 1})
+	}
 	cntC := ub(OpDiv, ub(OpAdd, ub(OpSub, u(p.Chunk), lane), ub(OpSub, step, u(1))), step)
 	c2 := g.LoopN(cntC)
 	si := ub(OpAdd, lane, ub(OpMul, g.Iter(c2), step))
+	if p.Lanes > 1 {
+		si = g.Fold(c2, lane)
+		g.SetFold(si, ub(OpAdd, si, step))
+	}
 	at := ub(OpAdd, base, si)
 	w := g.Select(g.valid(ps, si), g.Add(Node{Kind: NUnary, Op: OpExp, A: g.Bin(OpSub, g.LoadAt(scores, at), m)}), g.Const(0))
 	g.StoreAt(out, w, at)
@@ -89,6 +102,12 @@ func (g *Row) PagedSoftmax(scores, out, part, desc int, p Paged) {
 	g.SetFold(l, g.Bin(OpAdd, l, w))
 	padded := (p.valueDim() + 31) / 32 * 32
 	pb := ub(OpMul, item, u(padded+64))
+	if p.Lanes > 1 {
+		l = g.Add(Node{Kind: NReduce, Red: RedSum, A: l, At: 1})
+		g.StoreAt(part, m, ub(OpAdd, ub(OpAdd, pb, lane), u(padded)))
+		g.StoreAt(part, l, ub(OpAdd, ub(OpAdd, pb, lane), u(padded+32)))
+		return
+	}
 	for r := 0; r < 32; r++ {
 		g.StoreAt(part, m, ub(OpAdd, pb, u(padded+r)))
 		g.StoreAt(part, l, ub(OpAdd, pb, u(padded+32+r)))
@@ -153,6 +172,9 @@ func (g *Row) PagedScores(q, k, out, table, desc int, p Paged, scale, softcap fl
 	gqa, S, C, P := p.Heads/p.KVHeads, p.Splits, p.Chunk, p.Page
 	kvRow := p.KVHeads * p.Dim
 	flat := g.Column()
+	if p.Lanes > 1 {
+		flat = g.RowIdx()
+	}
 	slot := ub(OpRem, flat, u(C))
 	rest := ub(OpDiv, flat, u(C))
 	sp := ub(OpRem, rest, u(S))
@@ -170,6 +192,10 @@ func (g *Row) PagedScores(q, k, out, table, desc int, p Paged, scale, softcap fl
 	step := P
 	if p.MLA > 0 {
 		kb, step = ub(OpMul, ub(OpAdd, ub(OpMul, pid, u(P)), g.pageRem(t, P)), u(kvRow)), 1
+	}
+	if p.Lanes > 1 {
+		g.laneScores(q, k, out, rh0, qb, kb, step, slot, sp, ps, p, scale, softcap)
+		return
 	}
 	chains := max(1, 4/G)
 	acc := make([][]int, G)
@@ -237,6 +263,41 @@ func (g *Row) PagedScores(q, k, out, table, desc int, p Paged, scale, softcap fl
 		score := g.Bin(OpMul, dot, g.Const(scale))
 		if softcap > 0 {
 			// c*tanh(score/c), as c*(1 - 2/(exp(2*score/c) + 1)).
+			e := g.Add(Node{Kind: NUnary, Op: OpExp, A: g.Bin(OpMul, g.Const(2/softcap), score)})
+			score = g.Bin(OpMul, g.Const(softcap), g.Bin(OpSub, g.Const(1), g.Bin(OpDiv, g.Const(2), g.Bin(OpAdd, e, g.Const(1)))))
+		}
+		g.StoreAt(out, g.Select(valid, score, g.Const(-math.MaxFloat32)), ub(OpAdd, ob, u(h*S*C)))
+	}
+}
+
+// laneScores is PagedScores with the item's dimensions strided over its
+// lanes: a lane past the last multiplies a clamped element by zero, and the
+// lanes' products summed by the subgroup.
+func (g *Row) laneScores(q, k, out, rh0, qb, kb, step, slot, sp int, ps pagedSplit, p Paged, scale, softcap float32) {
+	u, ub := g.UConst, g.UBin
+	G, S, C, L := p.HeadGroup(), p.Splits, p.Chunk, p.Lanes
+	lane := g.Column()
+	acc := make([]int, G)
+	for h := range acc {
+		acc[h] = g.Const(0)
+	}
+	for i := 0; i*L < p.Dim; i++ {
+		d := ub(OpAdd, lane, u(i*L))
+		dc := ub(OpMin, d, u(p.Dim-1))
+		kv := g.LoadAt(k, ub(OpAdd, kb, ub(OpMul, dc, u(step))))
+		if (i+1)*L > p.Dim {
+			kv = g.Select(g.Less(d, u(p.Dim)), kv, g.Const(0))
+		}
+		for h := range acc {
+			qv := g.LoadAt(q, ub(OpAdd, ub(OpAdd, qb, dc), u(h*p.Dim)))
+			acc[h] = g.Add(Node{Kind: NBinary, Op: OpFma, A: qv, B: kv, C: acc[h]})
+		}
+	}
+	valid := g.valid(ps, slot)
+	ob := ub(OpAdd, ub(OpMul, ub(OpAdd, ub(OpMul, rh0, u(S)), sp), u(C)), slot)
+	for h := range acc {
+		score := g.Bin(OpMul, g.Add(Node{Kind: NReduce, Red: RedSum, A: acc[h], At: 1}), g.Const(scale))
+		if softcap > 0 {
 			e := g.Add(Node{Kind: NUnary, Op: OpExp, A: g.Bin(OpMul, g.Const(2/softcap), score)})
 			score = g.Bin(OpMul, g.Const(softcap), g.Bin(OpSub, g.Const(1), g.Bin(OpDiv, g.Const(2), g.Bin(OpAdd, e, g.Const(1)))))
 		}

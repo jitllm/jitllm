@@ -79,6 +79,53 @@ func TestPagedScoresIsMains(t *testing.T) {
 	}
 }
 
+// TestPagedLanesAreMains holds the composer's staged softmax and a latent
+// row's scores, an item a subgroup, to main's at lanes 32: two splits a
+// 64-thread group, four slots a 128-thread one, a head past a whole number
+// of lanes included.
+func TestPagedLanesAreMains(t *testing.T) {
+	shapes := append(append([]mainkernels.FlashShape(nil), stagedShapes...),
+		mainkernels.FlashShape{Rows: 1, Heads: 4, KVHeads: 1, Dim: 48, MLA: 32, Page: 256, Splits: 2, Chunk: 64, Scale: 0.1},
+		mainkernels.FlashShape{Rows: 2, Heads: 8, KVHeads: 1, Dim: 48, MLA: 32, Page: 64, Splits: 1, Chunk: 128, Scale: 0.1, Softcap: 30})
+	for _, s := range shapes {
+		name := fmt.Sprintf("r%d_h%d_kv%d_d%d_m%d_s%d_c%d", s.Rows, s.Heads, s.KVHeads, s.Dim, s.MLA, s.Splits, s.Chunk)
+		t.Run("softmax_"+name, func(t *testing.T) {
+			mk, err := mainkernels.PagedStagedSoftmax(s, 32)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := pagedOf(s)
+			p.Lanes = 32
+			g := &compose.Row{Width: 32, Rows: s.Rows * s.Heads * s.Splits}
+			scores := g.Buf(compose.BufRow)
+			g.Buf(compose.BufU32)
+			out, part := g.Buf(compose.BufOut), g.Buf(compose.BufOut)
+			g.Buf(compose.BufU32)
+			desc := g.Buf(compose.BufU32)
+			g.PagedSoftmax(scores, out, part, desc, p)
+			same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{Target: sm70, RowGroup: 64, GroupRows: true}))
+		})
+		if s.MLA == 0 {
+			continue
+		}
+		t.Run("scores_"+name, func(t *testing.T) {
+			mk, err := mainkernels.PagedStagedScores(s, 32)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := pagedOf(s)
+			p.Lanes = 32
+			g := &compose.Row{Width: 32, Rows: mainkernels.PagedStagedScoreItems(s)}
+			q, k := g.Buf(compose.BufRow), g.Buf(compose.BufRow)
+			g.Buf(compose.BufU32)
+			out := g.Buf(compose.BufOut)
+			table, desc := g.Buf(compose.BufU32), g.Buf(compose.BufU32)
+			g.PagedScores(q, k, out, table, desc, p, s.Scale, s.Softcap)
+			same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{Target: sm70, GroupRows: true}))
+		})
+	}
+}
+
 // TestPagedAccIsMains holds the composer's staged accumulate to main's
 // PagedStagedAcc over f32 V.
 func TestPagedAccIsMains(t *testing.T) {

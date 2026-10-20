@@ -365,6 +365,9 @@ type Schedule struct {
 	// LaneLoops, under Lanes, spreads a row of one element over the lanes,
 	// each loop's trips dealt across them (laneLoops).
 	LaneLoops bool
+	// GroupRows, under Lanes, takes a row from the workgroup and the thread
+	// (Group/Lanes rows a workgroup) rather than from the flat index.
+	GroupRows bool
 	// Block cuts each range loop into aligned blocks of that many places
 	// (blocks), 0 and 1 for none.
 	Block int
@@ -379,7 +382,7 @@ type Key struct {
 // Encode is the group's structure and schedule as integers.
 func (g *Row) Encode(s Schedule) []uint32 {
 	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs)), b2u(s.Flat), uint32(s.Tile), uint32(s.TileCols), uint32(s.Split),
-		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes), uint32(s.Lanes), b2u(s.WorkRow), uint32(s.RowStride), uint32(s.ColStride), b2u(s.LaneLoops), uint32(s.Block)}
+		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes), uint32(s.Lanes), b2u(s.WorkRow), uint32(s.RowStride), uint32(s.ColStride), b2u(s.LaneLoops), uint32(s.Block), b2u(s.GroupRows)}
 	for _, b := range g.Bufs {
 		e = append(e, uint32(b.Kind), uint32(b.N), uint32(b.Of), b2u(b.Over))
 	}
@@ -1136,6 +1139,10 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				flatIdx, r = b.And(ir.U32, b.TID(), u(L-1)), b.Min(ir.U32, b.CTAID(), u(g.Rows-1))
 			case L == 1:
 				flatIdx, r = u(0), b.Min(ir.U32, flat, u(g.Rows-1))
+			case s.GroupRows:
+				// G/L rows a workgroup, a row's lanes consecutive threads.
+				flatIdx = b.Rem(ir.U32, b.TID(), u(L))
+				r = b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), u(G/L)), b.Div(ir.U32, b.TID(), u(L))), u(g.Rows-1))
 			default:
 				flatIdx, r = b.And(ir.U32, flat, u(L-1)), b.Min(ir.U32, b.Div(ir.U32, flat, u(L)), u(g.Rows-1))
 			}

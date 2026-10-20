@@ -107,20 +107,37 @@ func (g *devTier) attendKeys(o *devOp, prog *devProgram, bs *blockScratch, rows,
 	}
 	scale, cap := g.scoreScale(p), p.AttnSoftcap
 	G := pa.HeadGroup()
+	// Where the device guarantees a subgroup, a split's softmax takes one,
+	// and so does a latent row's slot, hundreds of floats a key.
+	lanes := g.composeTarget().Lanes == ir.SubgroupLanes
+	ps, ss := pa, pa
+	if lanes {
+		ss.Lanes = ir.SubgroupLanes
+		if latent {
+			ps.Lanes = ir.SubgroupLanes
+		}
+	}
+	items := rows * (pa.Heads / G) * pa.Splits * pa.Chunk
 
-	sc := &rowBuild{r: compose.Row{Width: rows * (pa.Heads / G) * pa.Splits * pa.Chunk, Rows: 1}}
+	sc := &rowBuild{r: compose.Row{Width: items, Rows: 1}}
+	if ps.Lanes > 1 {
+		sc.r = compose.Row{Width: ps.Lanes, Rows: items}
+	}
 	q, k := sc.buf(compose.BufRow, gaIn0), sc.buf(compose.BufRow, gaKPool)
 	sc.buf(compose.BufU32, prow)
 	out := sc.buf(compose.BufOut, gaScores)
 	tab, desc := sc.buf(compose.BufU32, gaTab), sc.buf(compose.BufU32, prow)
-	sc.r.PagedScores(q, k, out, tab, desc, pa, scale, cap)
+	sc.r.PagedScores(q, k, out, tab, desc, ps, scale, cap)
 
 	sm := &rowBuild{r: compose.Row{Width: rows * pa.Heads * pa.Splits, Rows: 1}}
+	if ss.Lanes > 1 {
+		sm.r = compose.Row{Width: ss.Lanes, Rows: rows * pa.Heads * pa.Splits}
+	}
 	scores := sm.buf(compose.BufRow, gaScores)
 	sm.buf(compose.BufU32, prow)
 	wts, part := sm.buf(compose.BufOut, gaWts), sm.buf(compose.BufOut, gaParts)
 	sm.buf(compose.BufU32, gaTab)
-	sm.r.PagedSoftmax(scores, wts, part, sm.buf(compose.BufU32, prow), pa)
+	sm.r.PagedSoftmax(scores, wts, part, sm.buf(compose.BufU32, prow), ss)
 
 	ac := &rowBuild{r: compose.Row{Width: rows * (pa.Heads / G) * pa.Splits * vd, Rows: 1}}
 	w, v := ac.buf(compose.BufRow, gaWts), ac.buf(compose.BufRow, vpool)
@@ -134,8 +151,15 @@ func (g *devTier) attendKeys(o *devOp, prog *devProgram, bs *blockScratch, rows,
 	mg.r.PagedMerge(mpart, mout, -1, pa)
 
 	var ls []genLaunch
-	for _, rb := range []*rowBuild{sc, sm, ac, mg} {
-		k := g.rowKern(&rb.r)
+	for i, rb := range []*rowBuild{sc, sm, ac, mg} {
+		f := compose.Facts{}
+		switch {
+		case i == 0 && ps.Lanes > 1:
+			f.GroupRows = true
+		case i == 1 && ss.Lanes > 1:
+			f.RowGroup, f.GroupRows = 64, true
+		}
+		k := g.rowKernWith(&rb.r, f)
 		if k.k == nil {
 			return nil
 		}

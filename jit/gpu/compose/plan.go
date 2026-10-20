@@ -75,6 +75,9 @@ type Facts struct {
 	// threadgroup memory where the target could butterfly it.
 	RowGroup int
 	Tree     bool
+	// GroupRows takes a lane row from the workgroup and the thread
+	// (Schedule.GroupRows).
+	GroupRows bool
 }
 
 // Planned is one kernel of a plan: its group, its schedule, its buffers by
@@ -120,7 +123,7 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 		// A row no wider than a subgroup, or a reduction a loop's body reads
 		// (a value of the body), runs on one subgroup's lanes, the reduction
 		// their butterfly.
-		s := Schedule{Group: 128, Flat: true, Lanes: g.Width, Target: f.Target}
+		s := Schedule{Group: 128, Flat: true, Lanes: g.Width, Target: f.Target, GroupRows: f.GroupRows}
 		if f.RowGroup > 0 {
 			s.Group = f.RowGroup
 		}
