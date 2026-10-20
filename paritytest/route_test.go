@@ -15,9 +15,13 @@ import (
 // and four.
 func routes() []mainkernels.MoERoute {
 	var rs []mainkernels.MoERoute
-	for _, rows := range []int{1, 4} {
+	for _, rows := range []int{1, 4, 8} {
 		rs = append(rs,
 			mainkernels.MoERoute{NExpert: 8, K: 2, Norm: true, Rows: rows},
+			mainkernels.MoERoute{NExpert: 4, K: 2, Norm: true, Rows: rows},
+			mainkernels.MoERoute{NExpert: 8, K: 2, Sigmoid: true, Bias: true, Norm: true, Rows: rows},
+			mainkernels.MoERoute{NExpert: 8, K: 2, Sigmoid: true, Bias: true, Norm: true, Scale: 2.5, Rows: rows},
+			mainkernels.MoERoute{NExpert: 8, K: 2, Sigmoid: true, Bias: true, NGroup: 2, NGroupUsed: 1, Norm: true, Rows: rows},
 			mainkernels.MoERoute{NExpert: 64, K: 6, Norm: true, Scale: 2.5, Rows: rows},
 			mainkernels.MoERoute{NExpert: 60, K: 4, Rows: rows},
 			mainkernels.MoERoute{NExpert: 64, K: 8, Sigmoid: true, Bias: true, Norm: true, Scale: 2.5, Rows: rows},

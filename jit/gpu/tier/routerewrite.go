@@ -1,14 +1,14 @@
 package tier
 
-import "github.com/jitllm/jitllm/engine/graph"
+import (
+	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/format/jlm"
+)
 
 // rwRoute: a route stated as primitives -- the k largest of the router's
 // logits, their logits taken and softmaxed (the selection's renormalised
 // weights), optionally scaled -- as the route's rank and weights.
 func rwRoute(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
-	if nseq > 0 {
-		return false // a ragged step's route has no composed form yet
-	}
 	writer := func(v devVal) int {
 		for j, o := range p.ops {
 			for _, x := range o.Out {
@@ -47,6 +47,9 @@ func rwRoute(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int)
 	for i, o := range p.ops {
 		if o.Kind != dkSelectK || len(o.In) != 1 || len(o.Out) != 2 || o.A.Span != 0 {
 			continue
+		}
+		if gatedRoute(p, i, writer, only, is) {
+			return true
 		}
 		lg := o.In[0]
 		if w := writer(lg); w < 0 || p.ops[w].Kind != dkRouterLogits {
@@ -126,4 +129,98 @@ func rwRoute(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int)
 		return true
 	}
 	return false
+}
+
+// gatedRoute rewrites select_k op i over a gated router's scores -- the
+// sigmoid (or sqrt of the softplus) of the router's logits, a selection
+// bias added -- with the selected unbiased scores taken, renormalised by
+// their sum plus the floor and scaled, as the route's rank and weights.
+func gatedRoute(p *devProgram, i int, writer, only func(devVal) int, is func(int, devKind, graph.MapFn, ...devVal) bool) bool {
+	o := p.ops[i]
+	sel, top := o.Out[0], o.Out[1]
+	if p.uses(top) != 0 {
+		return false
+	}
+	chain := []int{}
+	key, role := o.In[0], jlm.Role(0)
+	if b := writer(key); b >= 0 && p.ops[b].Kind == dkMap && p.ops[b].A.Fn == graph.MapAdd && p.ops[b].Role == jlm.RoleExpProbsB && len(p.ops[b].In) == 1 {
+		if p.uses(key) != 1 {
+			return false
+		}
+		chain, key, role = append(chain, b), p.ops[b].In[0], jlm.RoleExpProbsB
+	}
+	sc := writer(key)
+	if sc < 0 || p.ops[sc].Kind != dkMap || len(p.ops[sc].In) != 1 || p.uses(key) != 2 {
+		return false
+	}
+	router, lg := graph.RouterSigmoid, p.ops[sc].In[0]
+	switch p.ops[sc].A.Fn {
+	case graph.MapSigmoid:
+	case graph.MapSqrt:
+		sp := writer(lg)
+		if sp < 0 || !is(sp, dkMap, graph.MapSoftplus, p.ops[sp].In...) || len(p.ops[sp].In) != 1 || p.uses(lg) != 1 {
+			return false
+		}
+		chain, lg, router = append(chain, sp), p.ops[sp].In[0], graph.RouterSqrtSoftplus
+	default:
+		return false
+	}
+	if w := writer(lg); w < 0 || p.ops[w].Kind != dkRouterLogits {
+		return false
+	}
+	t := -1
+	for j, q := range p.ops {
+		if q.Kind == dkTake && len(q.In) == 2 && q.In[0] == key && q.In[1] == sel && len(q.Out) == 1 {
+			t = j
+		}
+	}
+	if t < 0 {
+		return false
+	}
+	chain = append(chain, sc, t)
+	w, norm := p.ops[t].Out[0], false
+	if r := only(w); r < 0 && p.uses(w) == 2 {
+		var rs, dv int
+		rs, dv = -1, -1
+		for j, q := range p.ops {
+			if len(q.In) > 0 && q.In[0] == w {
+				if q.Kind == dkReduce {
+					rs = j
+				} else {
+					dv = j
+				}
+			}
+		}
+		if !is(rs, dkReduce, graph.MapAdd, w) {
+			return false
+		}
+		f := only(p.ops[rs].Out[0])
+		if !is(f, dkMap, graph.MapAdd, p.ops[rs].Out[0]) || float32(p.ops[f].A.Const) != float32(graph.RouteSumFloor) ||
+			!is(dv, dkMap, graph.MapDiv, w, p.ops[f].Out[0]) {
+			return false
+		}
+		chain = append(chain, rs, f, dv)
+		w, norm = p.ops[dv].Out[0], true
+	}
+	scale := 0.0
+	if s := only(w); s >= 0 && p.ops[s].Kind == dkMap && p.ops[s].A.Fn == graph.MapMul && len(p.ops[s].In) == 1 {
+		chain = append(chain, s)
+		scale, w = p.ops[s].A.Const, p.ops[s].Out[0]
+	}
+	end := chain[len(chain)-1]
+	a := graph.Attrs{Experts: p.vals[lg].Width, TopK: o.A.TopK, Router: router, RouteNorm: norm, Scale: scale}
+	p.ops[i] = devOp{Kind: dkTopK, Src: o.Src, In: []devVal{lg}, Out: []devVal{sel, top}, Role: role, A: a}
+	p.ops[end] = devOp{Kind: dkRouteWeights, Src: p.ops[end].Src, In: []devVal{top, lg}, Out: []devVal{w}, A: a}
+	drop := map[int]bool{}
+	for _, j := range chain[:len(chain)-1] {
+		drop[j] = true
+	}
+	ops := p.ops[:0]
+	for j, q := range p.ops {
+		if !drop[j] {
+			ops = append(ops, q)
+		}
+	}
+	p.ops = ops
+	return true
 }
