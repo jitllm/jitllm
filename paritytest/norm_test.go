@@ -89,3 +89,39 @@ func TestRopeTableIsMains(t *testing.T) {
 		})
 	}
 }
+
+// TestLayerNormPartsIsMains holds the composer's LayerNorm in three passes
+// to main's LayerNormPartRows, LayerNormVarRows and LayerNormApplyRows.
+func TestLayerNormPartsIsMains(t *testing.T) {
+	for _, c := range []struct{ k, parts, rows int }{{64, 8, 1}, {2048, 64, 1}, {256, 16, 32}} {
+		for _, bias := range []bool{false, true} {
+			name := fmt.Sprintf("k%d_p%d_r%d_b%v", c.k, c.parts, c.rows, bias)
+			t.Run(name, func(t *testing.T) {
+				const eps = 1e-5
+				mp, _ := mainkernels.LayerNormPartRows(c.k, c.parts, c.rows)
+				mv, _ := mainkernels.LayerNormVarRows(c.k, c.parts, c.rows)
+				ma, err := mainkernels.LayerNormApplyRows(c.k, c.parts, eps, bias, c.rows)
+				if err != nil {
+					t.Fatal(err)
+				}
+				flat := compose.Schedule{Group: 128, Flat: true, Target: sm70}
+				gp := &compose.Row{Width: c.parts * c.rows, Rows: 1}
+				x, out := gp.Buf(compose.BufRow), gp.Buf(compose.BufOut)
+				gp.Store(out, gp.SumParts(x, c.k, c.parts))
+				same(t, name+"/part", []*ir.Kernel{mp}, emitAt(t, gp, flat))
+				gv := &compose.Row{Width: c.parts * c.rows, Rows: 1}
+				vx, vs := gv.Buf(compose.BufRow), gv.Buf(compose.BufRow)
+				gv.Store(gv.Buf(compose.BufOut), gv.VarParts(vx, vs, c.k, c.parts))
+				same(t, name+"/var", []*ir.Kernel{mv}, emitAt(t, gv, flat))
+				ga := &compose.Row{Width: c.k, Rows: c.rows}
+				ax, w, sum, vr := ga.Buf(compose.BufRow), ga.Buf(compose.BufVec), ga.Buf(compose.BufRow), ga.Buf(compose.BufRow)
+				b := -1
+				if bias {
+					b = ga.Buf(compose.BufVec)
+				}
+				ga.Store(ga.Buf(compose.BufOut), ga.LayerNormApplyParts(ax, w, b, sum, vr, c.k, c.parts, eps))
+				same(t, name+"/apply", []*ir.Kernel{ma}, emitAt(t, ga, flat))
+			})
+		}
+	}
+}

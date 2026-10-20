@@ -290,20 +290,71 @@ func (g *Row) storeLoop(st Store) int {
 	return c
 }
 
-// SquareSumParts is the group element's part of a row's sum of squares:
-// element p of parts consecutive runs of the row's k elements at x (BufRow,
-// read by index), summed in element order from zero. NormApplyParts reads
-// the parts back.
-func (g *Row) SquareSumParts(x, k, parts int) int {
+// PartFold is the group element's part of a row's fold: element p of parts
+// consecutive runs of the row's k elements at x (BufRow, read by index),
+// step(element, acc) over its run in element order from zero.
+func (g *Row) PartFold(x, k, parts int, step func(v, acc int) int) int {
 	u, ub := g.UConst, g.UBin
 	per := k / parts
 	start := ub(OpMul, g.Column(), u(per))
 	c := g.Loop(per)
 	acc := g.Fold(c, g.Const(0))
-	v := g.LoadAt(x, ub(OpAdd, start, g.Iter(c)))
-	g.SetFold(acc, g.Add(Node{Kind: NBinary, Op: OpFma, A: v, B: v, C: acc}))
+	g.SetFold(acc, step(g.LoadAt(x, ub(OpAdd, start, g.Iter(c))), acc))
 	return acc
 }
+
+// SquareSumParts is a row's sum of squares in parts (PartFold); NormApplyParts
+// reads them back.
+func (g *Row) SquareSumParts(x, k, parts int) int {
+	return g.PartFold(x, k, parts, func(v, acc int) int { return g.fma(v, v, acc) })
+}
+
+// SumParts is a row's sum in parts.
+func (g *Row) SumParts(x, k, parts int) int {
+	return g.PartFold(x, k, parts, func(v, acc int) int { return g.Bin(OpAdd, acc, v) })
+}
+
+// partsMean is the mean of a row of k from its parts partials of sums at
+// sum, the row's first at base.
+func (g *Row) partsMean(sum, base, k, parts int) int {
+	s := g.Const(0)
+	for p := 0; p < parts; p++ {
+		s = g.Bin(OpAdd, s, g.LoadAt(sum, g.UBin(OpAdd, base, g.UConst(p))))
+	}
+	return g.Bin(OpMul, s, g.Const(1/float32(k)))
+}
+
+// VarParts is a row's sum of squared deviations from its mean in parts, the
+// mean from the parts of sums at sum.
+func (g *Row) VarParts(x, sum, k, parts int) int {
+	base := g.UBin(OpMul, g.UBin(OpDiv, g.Column(), g.UConst(parts)), g.UConst(parts))
+	mean := g.partsMean(sum, base, k, parts)
+	return g.PartFold(x, k, parts, func(v, acc int) int {
+		d := g.Bin(OpSub, v, mean)
+		return g.fma(d, d, acc)
+	})
+}
+
+// LayerNormApplyParts is LayerNorm's element from a row's parts of sums and
+// of squared deviations: (x - mean) / sqrt(var + eps) times the weight w
+// (BufVec), plus the bias bias (BufVec) where bias >= 0.
+func (g *Row) LayerNormApplyParts(x, w, bias, sum, vr, k, parts int, eps float32) int {
+	base := g.UBin(OpMul, g.RowIdx(), g.UConst(parts))
+	mean := g.partsMean(sum, base, k, parts)
+	vs := g.Const(0)
+	for p := 0; p < parts; p++ {
+		vs = g.Bin(OpAdd, vs, g.LoadAt(vr, g.UBin(OpAdd, base, g.UConst(p))))
+	}
+	varr := g.Bin(OpAdd, g.Bin(OpMul, vs, g.Const(1/float32(k))), g.Const(eps))
+	scale := g.Bin(OpDiv, g.Const(1), g.Add(Node{Kind: NUnary, Op: OpSqrt, A: varr}))
+	v := g.Bin(OpMul, g.Bin(OpMul, g.Bin(OpSub, g.Load(x), mean), scale), g.Load(w))
+	if bias >= 0 {
+		v = g.Bin(OpAdd, v, g.Load(bias))
+	}
+	return v
+}
+
+func (g *Row) fma(a, b, c int) int { return g.Add(Node{Kind: NBinary, Op: OpFma, A: a, B: b, C: c}) }
 
 // NormApplyParts is RMSNorm's element from a row's sums of squares in parts
 // partials at part (BufRow, read by index): the element of x times
