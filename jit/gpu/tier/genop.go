@@ -81,6 +81,8 @@ const (
 	gaSelB    // its selection bias
 	gaRouteW  // the route's weights (a fused route writes them with the selection)
 	gaSink    // the block's per-head attention sinks
+	gaCount   // the step's per-row key counts (the decode's one, then each row's)
+	gaTemp    // the attention temperature over each row's count
 	gaMgBC    // a mixture's grouping over rows: the block counts,
 	gaMgOff   // the offsets,
 	gaMgCnt   // the totals,
@@ -448,6 +450,24 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		lo := rb.node(compose.Node{Kind: compose.NLoad, Buf: tb, At: 2 * o.N})
 		hi := rb.node(compose.Node{Kind: compose.NLoad, Buf: tb, At: 2*o.N + 1})
 		rb.store(rb.bin(compose.OpMin, rb.bin(compose.OpMax, x, lo), hi), gaOut0)
+	case dkQTemp:
+		// Each row's query by its temperature: the table at its causal count
+		// (n's word 0 at one row, 1+r over rows), the count's position
+		// offset and floored by the plan's two integers.
+		tl := len(l4TempTab(p))
+		if p.AttnTempScale == 0 || tl < 1 {
+			return nil
+		}
+		ni := rb.r.UConst(0)
+		if rows > 1 {
+			ni = rb.r.UBin(compose.OpAdd, rb.r.RowIdx(), rb.r.UConst(1))
+		}
+		cnt := rb.r.LoadAt(rb.buf(compose.BufU32, gaCount), ni)
+		pos := rb.r.UBin(compose.OpSub, rb.r.UBin(compose.OpMax, cnt, rb.r.UConst(1)), rb.r.UConst(1))
+		k := rb.r.UBin(compose.OpMin, rb.r.UBin(compose.OpDiv, rb.r.UBin(compose.OpAdd, pos, rb.r.UConst(int(p.AttnTempOffset))),
+			rb.r.UConst(int(p.AttnTempFloor))), rb.r.UConst(tl-1))
+		x := rb.load(compose.BufRow, gaIn0)
+		rb.store(rb.bin(compose.OpMul, x, rb.r.LoadAt(rb.buf(compose.BufRow, gaTemp), k)), gaOut0)
 	case dkScale:
 		if o.V == nil {
 			return nil
@@ -892,6 +912,10 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.routeW
 			case gaSink:
 				bufs[j] = st.sink
+			case gaCount:
+				bufs[j] = st.bs.n
+			case gaTemp:
+				bufs[j] = st.bs.tempTab
 			case gaMgBC, gaMgOff, gaMgCnt, gaMgEnds, gaMgColE, gaMgPerm, gaMgPos, gaMgTsel, gaMgHG, gaMgGA, gaMgGAX:
 				m := bs.mg
 				bufs[j] = [...]backend.Buf{m.bc, m.off, m.cnt, m.ends, m.colE, m.perm, m.pos, m.tsel, m.hg, m.ga, m.gax}[a-gaMgBC]
