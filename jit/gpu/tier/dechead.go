@@ -351,7 +351,9 @@ func (g *devTier) dhBuild(h *nn.ClefHead, hd *dhHead, n, nq, no int) (*dhProg, e
 	linear := func(dst, x backend.Buf, rows, k, nOut int, wt, bias []float32) {
 		hasB := len(bias) != 0
 		kk := kern(dhKey{name: "matabt", a: [10]int{1, rows, nOut, k, k, k, nOut, 0, 0, 0}, f: [3]float32{1}, b: [2]bool{hasB}},
-			func() (*ir.Kernel, error) { return mainkernels.DHMatABt(1, rows, nOut, k, k, k, nOut, 0, 0, 0, 1, hasB) })
+			func() (*ir.Kernel, error) {
+				return mainkernels.DHMatABt(1, rows, nOut, k, k, k, nOut, 0, 0, 0, 1, hasB)
+			})
 		bb := w(wt)
 		if hasB {
 			bb = w(bias)

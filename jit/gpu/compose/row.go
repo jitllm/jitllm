@@ -235,6 +235,15 @@ type Schedule struct {
 	// segment's stores write their own plane of Rows*Width further on, for
 	// a group that sums the planes (a matvec's k split).
 	Split int
+	// MMA, under Flat, runs the group a warp a tile of MT*16 elements by
+	// NT*8 rows on the target's int8 matrix instruction (ir.OpMMA): a lane
+	// holds elements g, g+8 of each 16 and rows 2t, 2t+1 of each 8 (g its
+	// lane over 4, t its lane mod 4), and a fold whose step is an NDot4 of
+	// a value that reads no row by one that reads no element, over 4 or 8
+	// words, is the instruction's K of 16 or 32 bytes: its operands taken at
+	// the lane's fragment, element g (+8) and row g, words t (+4).
+	MMA    bool
+	MT, NT int
 }
 
 // Key is a group's identity in a cache: its structure and its schedule,
@@ -246,7 +255,7 @@ type Key struct {
 // Encode is the group's structure and schedule as integers.
 func (g *Row) Encode(s Schedule) []uint32 {
 	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs)), b2u(s.Flat), uint32(s.Tile), uint32(s.TileCols), uint32(s.Split),
-		uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes)}
+		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes)}
 	for _, b := range g.Bufs {
 		e = append(e, uint32(b.Kind))
 	}
@@ -432,11 +441,123 @@ type env struct {
 	sh   [3]*env
 	cls  uint8
 	t    *tile
+	// own is the nodes computed in this env whatever they read (a
+	// fragment's: what reads the iterator it binds), nil for none.
+	own []bool
 }
+
+// carried is a fold a loop carries in one env.
+type carried struct {
+	f   int
+	in  *env // the body env it is read in
+	out *env // where its value after the loop goes
+	phi ir.Value
+}
+
+// unrollTrips is the most trips a loop nested in another's body runs
+// unrolled: a sub-block's words, a block's elements.
+const unrollTrips = 32
 
 // tile is every env of one tile: one a (row, column) pair, one a row, one
 // a column and one for neither, each a node is computed in once.
-type tile struct{ all []*env }
+type tile struct {
+	all []*env
+	// mma is the tile's matrix layout under an MMA schedule, nil otherwise.
+	mma *mmaTile
+}
+
+// mmaTile is a lane's place in an MMA schedule's warp tile: its envs by
+// what they hold, and the lane's word in a fragment (t).
+type mmaTile struct {
+	mt, nt int
+	none   *env
+	// cols[x] is element g + (x/2)*16 + (x%2)*8 of the warp's; rows[y] row
+	// 2t + (y/2)*8 + y%2; brows[j] row g + j*8, a B fragment's; outs[x][y]
+	// each output.
+	cols, rows, brows []*env
+	outs              [][]*env
+	// word is the lane's word in a fragment (t), g its place among a
+	// tile's 8, colBase the lane's first element, tokBase the warp's first
+	// row and tok0 the lane's.
+	word, g, colBase, tokBase, tok0 ir.Value
+}
+
+// mmaEnvs builds m's envs -- its elements, its output rows, its B
+// fragments' rows and every output, each over what it reads, under one tile
+// (the B rows beside it: no output reads them) -- and returns the outputs.
+func mmaEnvs(b *ir.Builder, m *mmaTile, width ir.Value) []*env {
+	t := &tile{mma: m}
+	mk := func(cls uint8) *env {
+		x := newEnv(nil)
+		x.cls, x.t = cls, t
+		t.all = append(t.all, x)
+		return x
+	}
+	off := func(v ir.Value, n int) ir.Value {
+		if n == 0 {
+			return v
+		}
+		return b.Add(ir.U32, v, b.Const(ir.U32, int64(n)))
+	}
+	m.none = mk(0)
+	row := func(x *env, at ir.Value) {
+		x.row, x.base, x.col = at, b.Mul(ir.U32, at, width), m.colBase
+		x.sh[0] = m.none
+	}
+	for x := 0; x < 2*m.mt; x++ {
+		e := mk(2)
+		e.col = off(m.colBase, (x/2)*16+(x%2)*8)
+		e.row, e.base = m.tokBase, m.tokBase
+		e.sh[0] = m.none
+		m.cols = append(m.cols, e)
+	}
+	for y := 0; y < 2*m.nt; y++ {
+		e := mk(1)
+		row(e, off(m.tok0, (y/2)*8+y%2))
+		m.rows = append(m.rows, e)
+	}
+	for j := 0; j < m.nt; j++ {
+		e := newEnv(nil)
+		e.cls = 1
+		row(e, off(b.Add(ir.U32, m.tokBase, m.g), j*8))
+		m.brows = append(m.brows, e)
+	}
+	var outs []*env
+	for x := range m.cols {
+		var o []*env
+		for y := range m.rows {
+			e := mk(3)
+			e.row, e.base, e.col = m.rows[y].row, m.rows[y].base, m.cols[x].col
+			e.sh = [3]*env{m.none, m.rows[y], m.cols[x]}
+			o = append(o, e)
+			outs = append(outs, e)
+		}
+		m.outs = append(m.outs, o)
+	}
+	return outs
+}
+
+// remap is m with every env replaced by its body env in ins.
+func (m *mmaTile) remap(ins map[*env]*env) *mmaTile {
+	n := &mmaTile{mt: m.mt, nt: m.nt, none: ins[m.none], word: m.word, g: m.g, colBase: m.colBase, tokBase: m.tokBase, tok0: m.tok0}
+	for _, x := range m.cols {
+		n.cols = append(n.cols, ins[x])
+	}
+	for _, x := range m.rows {
+		n.rows = append(n.rows, ins[x])
+	}
+	for _, x := range m.brows {
+		n.brows = append(n.brows, ins[x])
+	}
+	for _, o := range m.outs {
+		var r []*env
+		for _, x := range o {
+			r = append(r, ins[x])
+		}
+		n.outs = append(n.outs, r)
+	}
+	return n
+}
 
 func (e *env) get(n int) (ir.Value, bool) {
 	for x := e; x != nil; x = x.up {
@@ -669,6 +790,8 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 	// flatRaw is the flat schedule's clamped thread number; windowSh each
 	// window node's threadgroup array, declared before any loop.
 	var flatRaw ir.Value
+	// mma is the warp tile's layout under an MMA schedule.
+	var mma *mmaTile
 	windowSh := map[int]ir.Value{}
 	for i, nd := range g.Nodes {
 		if nd.Kind == NWindow {
@@ -687,33 +810,58 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		}
 		cols := g.Width / tc
 		split := max(s.Split, 1)
+		if s.MMA && (!s.Target.IntMMA() || tr*tc > 1 || split > 1 || g.Width%(16*max(s.MT, 1)) != 0 || g.Rows%(8*max(s.NT, 1)) != 0) {
+			return nil, fmt.Errorf("compose: a %dx%d warp tile over %dx%d, tile %dx%d split %d, on %v",
+				s.MT, s.NT, g.Width, g.Rows, tr, tc, split, s.Target.ISA)
+		}
 		if split > 1 && (len(g.Loops) == 0 || g.Loops[0]%split != 0) {
 			return nil, fmt.Errorf("compose: a split of %d over a loop of %v trips", split, g.Loops)
 		}
 		flat := b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
-		flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(g.Rows/tr*cols*split-1)))
-		flatRaw = flat
-		if split > 1 {
-			// The segment is the slowest: a plane of Rows*Width a segment.
-			per := b.Const(ir.U32, int64(g.Rows/tr*cols))
-			seg = b.Div(ir.U32, flat, per)
-			flat = b.Rem(ir.U32, flat, per)
-			segTrip = g.Loops[0] / split
+		if s.MMA {
+			// A warp a tile, the element's tiles fastest; a lane's place in
+			// it (g, t), the surplus warps clamped to the last tile.
+			mt, nt := max(s.MT, 1), max(s.NT, 1)
+			u := func(n int) ir.Value { return b.Const(ir.U32, int64(n)) }
+			mtiles, ntiles := g.Width/(16*mt), g.Rows/(8*nt)
+			warp := b.Div(ir.U32, flat, u(ir.SubgroupLanes))
+			lane := b.And(ir.U32, flat, u(ir.SubgroupLanes-1))
+			lg, lt := b.Shr(ir.U32, lane, u(2)), b.And(ir.U32, lane, u(3))
+			warp = b.Min(ir.U32, warp, u(mtiles*ntiles-1))
+			wm, wn := b.Rem(ir.U32, warp, u(mtiles)), b.Div(ir.U32, warp, u(mtiles))
+			colBase := b.Add(ir.U32, b.Mul(ir.U32, wm, u(16*mt)), lg)
+			tokBase := b.Mul(ir.U32, wn, u(8*nt))
+			width = u(g.Width)
+			// The kernel's own row and element are no env's: what reads
+			// neither is all that reads them.
+			r, rowBase, flatIdx = tokBase, tokBase, colBase
+			mma = &mmaTile{mt: mt, nt: nt, word: lt, g: lg, colBase: colBase, tokBase: tokBase,
+				tok0: b.Add(ir.U32, tokBase, b.Mul(ir.U32, lt, u(2)))}
+		} else {
+			flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(g.Rows/tr*cols*split-1)))
+			flatRaw = flat
+			if split > 1 {
+				// The segment is the slowest: a plane of Rows*Width a segment.
+				per := b.Const(ir.U32, int64(g.Rows/tr*cols))
+				seg = b.Div(ir.U32, flat, per)
+				flat = b.Rem(ir.U32, flat, per)
+				segTrip = g.Loops[0] / split
+			}
+			width = b.Const(ir.U32, int64(g.Width))
+			tcols := width
+			if tc > 1 {
+				tcols = b.Const(ir.U32, int64(cols))
+			}
+			flatIdx = b.Rem(ir.U32, flat, tcols)
+			r = b.Div(ir.U32, flat, tcols)
+			if tc > 1 {
+				flatIdx = b.Mul(ir.U32, flatIdx, b.Const(ir.U32, int64(tc)))
+			}
+			if tr > 1 {
+				r = b.Mul(ir.U32, r, b.Const(ir.U32, int64(tr)))
+			}
+			rowBase = b.Mul(ir.U32, r, width)
 		}
-		width = b.Const(ir.U32, int64(g.Width))
-		tcols := width
-		if tc > 1 {
-			tcols = b.Const(ir.U32, int64(cols))
-		}
-		flatIdx = b.Rem(ir.U32, flat, tcols)
-		r = b.Div(ir.U32, flat, tcols)
-		if tc > 1 {
-			flatIdx = b.Mul(ir.U32, flatIdx, b.Const(ir.U32, int64(tc)))
-		}
-		if tr > 1 {
-			r = b.Mul(ir.U32, r, b.Const(ir.U32, int64(tr)))
-		}
-		rowBase = b.Mul(ir.U32, r, width)
 	} else {
 		sh = b.Shared("red", ir.F32, G)
 		r = b.Min(ir.U32, b.CTAID(), b.Const(ir.U32, int64(g.Rows-1)))
@@ -753,6 +901,87 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		}
 		return c
 	}
+	// open is how many loops are being emitted around the one emitting now.
+	open := 0
+	// mmaLoop emits fold loop c as the matrix instruction where it is one
+	// (Schedule.MMA): one fold, its step an NDot4 of itself, of a value that
+	// reads no row (A) by one that reads no element (B), over 4 or 8 words.
+	// A lane's fragments are A at its elements and B at its B rows, the
+	// loop's iterator bound to its word (and the word 4 on); each output's
+	// fold start is its accumulator, and the instruction's components are
+	// the fold's value at the outputs. False, and nothing emitted, where the
+	// loop is not one.
+	mmaLoop := func(c int, folds []int, m *mmaTile, idx ir.Value, vary []bool) bool {
+		if len(folds) != 1 {
+			return false
+		}
+		f := folds[0]
+		st := g.Nodes[g.Nodes[f].A]
+		words := g.Loops[c]
+		if g.Nodes[f].A < 0 || st.Kind != NDot4 || st.C != f || words != 4 && words != 8 || rowDep[st.A] || colDep[st.B] {
+			return false
+		}
+		sh := ir.MMAShape{M: 16, N: 8, K: 4 * words, Kind: ir.MMAS8}
+		// frag is node n in a fresh env at the given row and column envs
+		// (nil for one n does not read), the iterator at the lane's word
+		// and q*4 on: what reads the iterator computed there, the rest where
+		// the tile computes it.
+		frag := func(n int, rowE, colE *env, q int) ir.Value {
+			fe := newEnv(nil)
+			fe.cls, fe.own = 3, vary
+			fe.sh = [3]*env{m.none, rowE, colE}
+			if rowE != nil {
+				fe.row, fe.base, _ = rowE.at()
+			}
+			var col ir.Value
+			if colE != nil {
+				_, _, col = colE.at()
+				fe.col = col
+			}
+			w := m.word
+			if q > 0 {
+				w = b.Add(ir.U32, w, b.Const(ir.U32, int64(4*q)))
+			}
+			for i, nd := range g.Nodes {
+				if nd.Kind == NIter && nd.At == c {
+					fe.m[i] = w
+				}
+			}
+			return elem(n, col, fe)
+		}
+		halves := words / 4
+		af := make([][]ir.Value, m.mt)
+		for i := range af {
+			af[i] = make([]ir.Value, 2*halves)
+			for q := 0; q < halves; q++ {
+				for h := 0; h < 2; h++ {
+					af[i][q*2+h] = frag(st.A, nil, m.cols[2*i+h], q)
+				}
+			}
+		}
+		bf := make([][]ir.Value, m.nt)
+		for j := range bf {
+			bf[j] = make([]ir.Value, halves)
+			for q := range bf[j] {
+				bf[j][q] = frag(st.B, m.brows[j], nil, q)
+			}
+		}
+		for i := 0; i < m.mt; i++ {
+			for j := 0; j < m.nt; j++ {
+				var cf [4]*env
+				cv := make([]ir.Value, len(cf))
+				for k := range cf {
+					cf[k] = m.outs[2*i+k/2][2*j+k%2]
+					cv[k] = elem(g.Nodes[f].B, idx, cf[k])
+				}
+				d := b.MMA(sh, af[i], bf[j], cv)
+				for k, o := range cf {
+					o.m[f] = d[k]
+				}
+			}
+		}
+		return true
+	}
 	loop := func(c int, idx ir.Value, e *env) {
 		// The envs the loop runs for: e alone, or every env of e's tile, a
 		// fold carried in each env of its own class.
@@ -768,6 +997,9 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			}
 		}
 		vary := g.varies(c)
+		if t != nil && t.mma != nil && mmaLoop(c, folds, t.mma, idx, vary) {
+			return
+		}
 		// closed is a node reading the iterator of a loop not open here: a
 		// loop nested in c's body, so the node is too.
 		var closed func(n int) bool
@@ -817,13 +1049,6 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 				}
 			}
 		}
-		zero, one := b.Const(ir.U32, 0), b.Const(ir.U32, 1)
-		type carried struct {
-			f   int
-			in  *env // the body env it is read in
-			out *env // where its value after the loop goes
-			phi ir.Value
-		}
 		var cs []carried
 		for _, f := range folds {
 			for _, ej := range envs {
@@ -838,38 +1063,80 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		}
 		// Under a split, loop 0 runs its segment's trips from the segment's
 		// first.
-		trip, first := g.Loops[c], zero
-		if c == 0 && segTrip > 0 {
+		trip, first := g.Loops[c], ir.Value(0)
+		split0 := c == 0 && segTrip > 0
+		if split0 {
 			trip, first = segTrip, b.Mul(ir.U32, seg, b.Const(ir.U32, int64(segTrip)))
 		}
-		b.Loop(int64(trip))
-		// The body's envs, one a tile env, redirecting as theirs do.
-		ins := map[*env]*env{}
-		for _, ej := range envs {
-			ins[ej] = newEnv(ej)
-			ins[ej].cls = ej.cls
-		}
-		if t != nil {
-			nt := &tile{}
+		// body is a trip's envs, one a tile env, redirecting as theirs do,
+		// the iterator it at.
+		body := func(it ir.Value) map[*env]*env {
+			ins := map[*env]*env{}
 			for _, ej := range envs {
-				x := ins[ej]
-				for k, to := range ej.sh {
-					if to != nil {
-						x.sh[k] = ins[to]
+				ins[ej] = newEnv(ej)
+				ins[ej].cls = ej.cls
+			}
+			if t != nil {
+				nt := &tile{}
+				for _, ej := range envs {
+					x := ins[ej]
+					for k, to := range ej.sh {
+						if to != nil {
+							x.sh[k] = ins[to]
+						}
+					}
+					x.t = nt
+					nt.all = append(nt.all, x)
+				}
+				if t.mma != nil {
+					// The B fragments' rows are no output's: their envs
+					// follow the tile's.
+					for _, y := range t.mma.brows {
+						x := newEnv(y)
+						x.cls, x.sh[0] = y.cls, ins[y.sh[0]]
+						ins[y] = x
+					}
+					nt.mma = t.mma.remap(ins)
+				}
+			}
+			for i, nd := range g.Nodes {
+				if nd.Kind == NIter && nd.At == c {
+					for _, in := range ins {
+						in.m[i] = it
 					}
 				}
-				x.t = nt
-				nt.all = append(nt.all, x)
 			}
+			return ins
 		}
-		it := b.Phi(ir.U32, first)
-		for i, nd := range g.Nodes {
-			if nd.Kind == NIter && nd.At == c {
-				for _, in := range ins {
-					in.m[i] = it
+		open++
+		defer func() { open-- }()
+		if open > 1 && trip <= unrollTrips && !split0 {
+			// A short loop in another's body runs unrolled: each trip's body
+			// at its iterator, the folds' values chained from trip to trip.
+			cur := inits
+			for j := 0; j < trip; j++ {
+				ins := body(b.Const(ir.U32, int64(j)))
+				nx := make([]ir.Value, len(cs))
+				for i, x := range cs {
+					ins[x.out].m[x.f] = cur[i]
 				}
+				for i, x := range cs {
+					nx[i] = elem(g.Nodes[x.f].A, idx, ins[x.out])
+				}
+				cur = nx
 			}
+			for i, x := range cs {
+				x.out.m[x.f] = cur[i]
+			}
+			return
 		}
+		zero, one := b.Const(ir.U32, 0), b.Const(ir.U32, 1)
+		if first == 0 {
+			first = zero
+		}
+		b.Loop(int64(trip))
+		it := b.Phi(ir.U32, first)
+		ins := body(it)
 		for i := range cs {
 			x := &cs[i]
 			x.in = ins[x.out]
@@ -890,8 +1157,10 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		}
 	}
 	elem = func(n int, idx ir.Value, e *env) ir.Value {
-		// Under a tile, a node is computed in the env of what it reads.
+		// Under a tile, a node is computed in the env of what it reads --
+		// but where this env owns it.
 		switch dc := clsOf(n); {
+		case e.own != nil && e.own[n]:
 		case dc == 0 && e.sh[0] != nil:
 			return elem(n, idx, e.sh[0])
 		case dc == 1 && e.sh[1] != nil:
@@ -1120,7 +1389,9 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		// computed in.
 		tr, tc := max(s.Tile, 1), max(s.TileCols, 1)
 		var outs []*env
-		if tr*tc == 1 {
+		if mma != nil {
+			outs = mmaEnvs(b, mma, width)
+		} else if tr*tc == 1 {
 			outs = []*env{newEnv(nil)}
 		} else {
 			t := &tile{}

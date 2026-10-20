@@ -1556,7 +1556,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			return mainkernels.ActMul(rows*r.VHeads*r.VDim, kernels.ActSiLU)
 		}},
-
 	}
 	for _, j := range altJobs(bs, p, rows, actWin) {
 		jobs = append(jobs, job{j.dst, j.make})

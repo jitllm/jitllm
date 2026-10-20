@@ -300,7 +300,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		eps = float32(o.A.Eps)
 	}
 	rb := &rowBuild{r: compose.Row{Width: w, Rows: rows}}
-	var q8 uint8     // which output holds an int8 value
+	var q8 uint8 // which output holds an int8 value
 	switch o.Kind {
 	case dkAdd:
 		a, b := rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1)
@@ -1104,7 +1104,8 @@ func (g *devTier) genMatVecNodes(o *devOp, bs *blockScratch, rows int) []genLaun
 	// stating what it knows -- the step, its pins, the weight's tuned split.
 	f := compose.Facts{Target: g.composeTarget(), Step: compose.StepChunk, Tok: bs.tok, RowTile: g.tiles.rowt,
 		Split: g.kb.batch.Split, DecodeSplit: max(m.split, 1), DecodeRowt: max(m.rowt, 1),
-		RagTok: g.kb.batch.RagTok, RagRowT: g.kb.batch.RagRowT, RagSplit: g.kb.batch.RagSplit}
+		RagTok: g.kb.batch.RagTok, RagRowT: g.kb.batch.RagRowT, RagSplit: g.kb.batch.RagSplit,
+		MMAMT: g.tiles.mmaMT, MMANT: g.tiles.mmaNT, NoMMA: g.NoMMA}
 	switch {
 	case g.genRag:
 		f.Step = compose.StepRagged

@@ -29,8 +29,8 @@ type MatVecWeight struct {
 // MatVec is node: the product of the weight's row e (the element) with the
 // operand's token t (the group's row), sum over k of w[e][k] a[t][k], by the
 // definitions of the packed layout: a fold over the row's sub-blocks, each
-// the integer dot of its codes with the operand's, scaled by the weight's
-// and the operand's scales.
+// the integer dot of its codes with the operand's (a fold over its words),
+// scaled by the weight's scale and then the operand's.
 //
 // The weight's value is scale*q - bias (kernels.PackWeights): for a format
 // with signed codes and no bias that is d*q, and a sub-block's contribution
@@ -59,14 +59,14 @@ func (g *Row) MatVec(w MatVecWeight, a MatVecOperand) (int, error) {
 	c := g.Loop(nsub)
 	s := g.Iter(c)
 	acc := g.Fold(c, g.Const(0))
-	// The sub-block's integer dot: payload word (s*words + j)*Rows + e, the
-	// operand's word t*K/4 + s*words + j.
-	isum := g.Add(Node{Kind: NIConst})
-	for j := 0; j < words; j++ {
-		wi := g.UBin(OpAdd, g.UBin(OpMul, g.UBin(OpAdd, g.UBin(OpMul, s, u(words)), u(j)), rows), e)
-		ai := g.UBin(OpAdd, g.UBin(OpAdd, g.UBin(OpMul, t, u(w.K/4)), g.UBin(OpMul, s, u(sub/4))), u(j))
-		isum = g.Add(Node{Kind: NDot4, A: g.LoadAt(w.QS, wi), B: g.LoadAt(a.A, ai), C: isum})
-	}
+	// The sub-block's integer dot, a fold over its words j: payload word
+	// (s*words + j)*Rows + e, the operand's word t*K/4 + s*words + j.
+	cj := g.Loop(words)
+	j := g.Iter(cj)
+	isum := g.Fold(cj, g.Add(Node{Kind: NIConst}))
+	wi := g.UBin(OpAdd, g.UBin(OpMul, g.UBin(OpAdd, g.UBin(OpMul, s, u(words)), j), rows), e)
+	ai := g.UBin(OpAdd, g.UBin(OpAdd, g.UBin(OpMul, t, u(w.K/4)), g.UBin(OpMul, s, u(sub/4))), j)
+	g.SetFold(isum, g.Add(Node{Kind: NDot4, A: g.LoadAt(w.QS, wi), B: g.LoadAt(a.A, ai), C: isum}))
 	// The weight's scale: the binary16 of super-block s (one a sub-block
 	// here), slots rows to a word, row e's half (kernels.DIndex).
 	var d int
@@ -81,8 +81,9 @@ func (g *Row) MatVec(w MatVecWeight, a MatVecOperand) (int, error) {
 	}
 	// The operand's scale of block t*K/32 + s (sub is 32 here).
 	ax := g.LoadAt(a.AX, g.UBin(OpAdd, g.UBin(OpMul, t, u(w.K/32)), g.UBin(OpMul, s, u(sub/32))))
+	// The weight's scale on the integer dot, the operand's by the fused add.
 	q := g.Add(Node{Kind: NUnary, Op: OpFloat, A: isum})
-	g.SetFold(acc, g.Add(Node{Kind: NBinary, Op: OpFma, A: q, B: g.Bin(OpMul, d, ax), C: acc}))
+	g.SetFold(acc, g.Add(Node{Kind: NBinary, Op: OpFma, A: g.Bin(OpMul, q, d), B: ax, C: acc}))
 	return acc, nil
 }
 

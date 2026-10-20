@@ -1,6 +1,5 @@
 package kernels
 
-
 // ScStreamWords is how many SC words a row's super-block holds in a format
 // whose sub-block scales and minima are 6-bit fields (ScStream): sixteen of
 // them in 96 bits.
@@ -58,5 +57,3 @@ func scPut(words *[ScStreamWords]uint32, sub int, min bool, v uint8) {
 		words[w+1] |= uint32(v&63) >> uint(6-hi)
 	}
 }
-
-

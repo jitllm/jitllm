@@ -27,7 +27,7 @@ var (
 	parityModel   = flag.String("parity-model", "", "TestComposerParity on this fixture alone, printing what it misses")
 	parityByShape = flag.Bool("parity-by-shape", false, "TestComposerParity groups what is missing by main's kernel name with its sizes elided")
 	parityExplain = flag.Bool("parity-explain", false, "with -parity-kernel, every composed instruction written out")
-	parityKernel  = flag.String("parity-kernel", "", "with -parity-model, the main kernel name prefix whose missing instructions to print")
+	parityKernel  = flag.String("parity-kernel", "", "the main kernel name prefix to print: with -parity-model what it misses, else every model's kernels of that name")
 )
 
 // TestComposerParity holds what the composer emits to what main emits, with
@@ -114,6 +114,13 @@ func TestComposerParity(t *testing.T) {
 			}
 			if r.compErr != nil && *parityModel != "" {
 				t.Logf("%s on %s, composer: %v", r.name, pn, r.compErr)
+			}
+			if *parityModel == "" && *parityKernel != "" {
+				for _, k := range r.main {
+					if strings.HasPrefix(k.Name, *parityKernel) {
+						t.Logf("%s main %s", r.name, shapeOf(k))
+					}
+				}
 			}
 			if *parityModel != "" && *parityKernel != "" {
 				for _, k := range r.main {
@@ -224,13 +231,16 @@ func parityKernels(t *testing.T, prof recorder.Profile, path string, main bool) 
 var digits = regexp.MustCompile(`[0-9]+`)
 
 // shapeOf is a kernel's schedule at a glance: its op count, its f32
-// accumulators (the f32 phis: rows times tokens a thread), its loops' trips
-// and its grid clamp (the first min's constant).
+// accumulators (the f32 phis: rows times tokens a thread), its matrix
+// instructions, its loops' trips and its grid clamp (the first min's
+// constant).
 func shapeOf(k *ir.Kernel) string {
-	acc, clamp := 0, int64(-1)
+	acc, mma, clamp := 0, 0, int64(-1)
 	var trips []int64
 	for _, o := range k.Ops {
 		switch {
+		case o.Kind == ir.OpMMA:
+			mma++
 		case o.Kind == ir.OpPhi && o.Type == ir.F32:
 			acc++
 		case o.Kind == ir.OpLoop:
@@ -243,7 +253,7 @@ func shapeOf(k *ir.Kernel) string {
 			}
 		}
 	}
-	return fmt.Sprintf("%s: %d ops, %d f32 accumulators, loops %v, grid clamp %d", k.Name, len(k.Ops), acc, trips, clamp)
+	return fmt.Sprintf("%s: %d ops, %d f32 accumulators, %d mma, loops %v, grid clamp %d", k.Name, len(k.Ops), acc, mma, trips, clamp)
 }
 
 // composedOnly is the kernels the composer formed (genKern marks them).

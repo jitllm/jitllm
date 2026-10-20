@@ -66,6 +66,10 @@ type Facts struct {
 	DecodeSplit, DecodeRowt int
 	// Over a ragged step: tokens and rows a thread, and the k split.
 	RagTok, RagRowT, RagSplit int
+	// The warp tile of the int8 matrix instruction: tiles of 16 elements
+	// and of 8 rows a warp; NoMMA, the caller's refusal of the instruction.
+	MMAMT, MMANT int
+	NoMMA        bool
 }
 
 // Planned is one kernel of a plan: its group, its schedule, its buffers by
@@ -108,6 +112,9 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 	s := g.contractSchedule(f)
 	s.Target = f.Target
 	threads := g.Rows / max(s.Tile, 1) * (g.Width / max(s.TileCols, 1))
+	if s.MMA {
+		threads = g.Width / (16 * s.MT) * (g.Rows / (8 * s.NT)) * ir.SubgroupLanes
+	}
 	if s.Split <= 1 {
 		return []Planned{{G: g, S: s, Bufs: all, Threads: threads}}, nil
 	}
@@ -164,9 +171,12 @@ func (g *Row) contraction() bool {
 //   - at one row, the pinned or tuned k split and rows a thread, else the
 //     split doubling while the grid holds fewer than two small cards' resident
 //     threads (2*30720), at most 32, and it divides the trips;
-//   - over a ragged step on a target with no int8 matrix instruction, eight
-//     tokens and two rows a thread (four from 64 tokens), each halved until
-//     it divides (swept on a Volta-class card);
+//   - over several tokens where the int8 matrix instruction takes the
+//     contraction (mmaShaped), its warp tile of 4x4 instructions (Facts' pin)
+//     halved until it divides;
+//   - over a ragged step the int8 matrix instruction does not take
+//     (mmaShaped), eight tokens and two rows a thread (four from 64 tokens),
+//     each halved until it divides (swept on a Volta-class card);
 //   - over a chunk, the scratch's tokens a thread and rows a thread where they
 //     divide, else two, else one;
 //   - over several tokens, the k split doubling until the grid holds 1<<16
@@ -193,9 +203,26 @@ func (g *Row) contractSchedule(f Facts) Schedule {
 		s.TileCols, s.Split = rowt, split
 		return s
 	}
+	if !f.NoMMA && g.mmaShaped(f.Target) {
+		// The matrix instruction's warp tile, 4x4 unless pinned, each
+		// halved until it divides (wider runs out of registers, narrower
+		// reads the weights more often: measured on sm_86).
+		mt, nt := 4, 4
+		if f.MMAMT > 0 && f.MMANT > 0 {
+			mt, nt = f.MMAMT, f.MMANT
+		}
+		for mt > 1 && g.Width%(16*mt) != 0 {
+			mt /= 2
+		}
+		for nt > 1 && g.Rows%(8*nt) != 0 {
+			nt /= 2
+		}
+		s.MMA, s.MT, s.NT = true, mt, nt
+		return s
+	}
 	var tok, rowt, split int
 	switch {
-	case f.Step == StepRagged && !f.Target.IntMMA():
+	case f.Step == StepRagged:
 		tok, rowt = min(g.Rows, 8), 2
 		if g.Rows >= 64 {
 			rowt = 4
@@ -235,6 +262,22 @@ func (g *Row) contractSchedule(f Facts) Schedule {
 	}
 	s.Tile, s.TileCols, s.Split = tok, rowt, split
 	return s
+}
+
+// mmaShaped reports whether the int8 matrix instruction can run g on t: an
+// integer contraction (its loop's body a chain of NDot4) on a target that
+// has the instruction, its outputs a whole number of the instruction's 16
+// rows and its tokens of its 8 columns.
+func (g *Row) mmaShaped(t Target) bool {
+	if !t.IntMMA() || g.Width%16 != 0 || g.Rows%8 != 0 {
+		return false
+	}
+	for _, n := range g.Nodes {
+		if n.Kind == NDot4 {
+			return true
+		}
+	}
+	return false
 }
 
 // rowSchedule is a row group's schedule: a group with a row reduction runs

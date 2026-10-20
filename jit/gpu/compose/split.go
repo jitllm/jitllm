@@ -122,7 +122,7 @@ func usesOperand(nd Node, p *int, base *Node) bool {
 	switch p {
 	case &base.A:
 		switch nd.Kind {
-		case NUnary, NBinary, NUBinary, NLess, NSelect, NReduce, NWindow, NDot4:
+		case NUnary, NBinary, NUBinary, NLess, NSelect, NReduce, NWindow, NDot4, NAt:
 			return true
 		case NFold:
 			return nd.A >= 0
@@ -135,7 +135,7 @@ func usesOperand(nd Node, p *int, base *Node) bool {
 	case &base.C:
 		return nd.Kind == NSelect || nd.Kind == NDot4 || nd.Kind == NBinary && nd.Op == OpFma
 	case &base.Ix:
-		return nd.Kind == NLoad && nd.Indexed
+		return nd.Kind == NLoad && nd.Indexed || nd.Kind == NAt
 	}
 	return false
 }
