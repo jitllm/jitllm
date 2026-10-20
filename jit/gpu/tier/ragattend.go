@@ -33,12 +33,33 @@ type ragRun struct {
 // ragStaged reports whether a ragged call's runs attend through the staged
 // run table here: a device with neither the int8 matrix instruction nor the
 // collective tiles, outside PTX (whose matrix forms take a chunk).
-func (g *devTier) ragStaged() bool {
-	if g.composeTarget().API == compose.APIPTX || g.tilesOK() {
+func (g *devTier) ragStaged(bs *blockScratch) bool {
+	if g.composeTarget().API == compose.APIPTX {
 		return false
+	}
+	if g.tilesOK() {
+		return !flashTileServes(bs.p.HeadDim, bs.rows)
 	}
 	ok, _ := backend.LowersIntMMA(g.dev)
 	return !ok
+}
+
+// flashTileServes reports whether a collective-tile flash prefill serves a
+// head width over rows rows: the blocking with the most query rows, then the
+// most keys, whose workgroup memory -- binary16 K and float32 V a key tile,
+// the scores and the output a query tile -- fits 32 KiB and whose staging
+// divides among its threads, must be four subgroups of rows that tile the
+// chunk, its key tile a divisor of 32.
+func flashTileServes(hd, rows int) bool {
+	for _, t := range [][2]int{{4, 32}, {4, 16}, {2, 32}, {2, 16}, {2, 8}, {1, 32}, {1, 16}} {
+		sg, tk := t[0], t[1]
+		qb, threads := 8*sg, 32*sg
+		mem := tk*(hd+8)*2 + tk*(hd+4)*4 + qb*(tk+4)*4 + qb*(hd+4)*4
+		if mem <= 32<<10 && (tk*hd/2)%threads == 0 && (tk*hd/4)%threads == 0 {
+			return sg >= 4 && rows%qb == 0 && 32%tk == 0
+		}
+	}
+	return false
 }
 
 // ragStage builds the call's run table from its rows and descriptors, or
@@ -48,7 +69,7 @@ func (g *devTier) ragStaged() bool {
 func (g *devTier) ragStage(bs *blockScratch, pk *pagedScratch) {
 	rr := &pk.rag
 	rr.n = 0
-	if !g.ragStaged() || len(pk.desc) == 0 {
+	if !g.ragStaged(bs) || len(pk.desc) == 0 {
 		return
 	}
 	rr.sq, rr.kt, rr.qt = g.tiles.qtile, g.tiles.ktile, ragAccTile
