@@ -1,6 +1,18 @@
 package compose
 
-import "github.com/jitllm/jitllm/jit/gpu/ir"
+import (
+	"math"
+
+	"github.com/jitllm/jitllm/format/quant"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+)
+
+// Simplify is the composer's IR pass on k: constants folded (integer and
+// float arithmetic of constants, a binary16 pack of two, a conversion or
+// reinterpretation of one), identities removed, an addend that is a
+// multiple of a power-of-two modulus dropped from what the remainder reads,
+// common subexpressions merged and what no effect reads removed.
+func Simplify(k *ir.Kernel) *ir.Kernel { return simplify(k) }
 
 // simplify is k after the IR passes the former leaves to them: integer
 // constants folded, common subexpressions merged (cse) and identities removed (x+0, x*1, x*0, x%1, x-x, min(x, 0)), a split index
@@ -40,9 +52,14 @@ func simplify(k *ir.Kernel) *ir.Kernel {
 			for j, a := range o.Vargs {
 				o.Vargs[j] = res(a)
 			}
+			if c, ok := foldConst(ops, o); ok {
+				*o = ir.Op{Kind: ir.OpConst, Type: o.Type, Imm: c}
+				continue
+			}
 			if o.Type != ir.U32 && o.Type != ir.I32 {
 				continue
 			}
+			peelMultiples(ops, o)
 			if v, ok := foldInt(o, intConst); ok {
 				if v != 0 {
 					repl[i+1] = v
@@ -382,4 +399,105 @@ func pure(k ir.Kind) bool {
 		return true
 	}
 	return false
+}
+
+// foldConst is op o's constant where every operand is one and o is
+// float arithmetic, a binary16 pack, a conversion to float or a
+// reinterpretation: its value's bits, exactly as the device computes it.
+func foldConst(ops []ir.Op, o *ir.Op) (int64, bool) {
+	arg := func(j int) (ir.Op, bool) {
+		a := o.Args[j]
+		if a == 0 {
+			return ir.Op{}, false
+		}
+		x := ops[a-1]
+		return x, x.Kind == ir.OpConst
+	}
+	f := func(x ir.Op) float32 { return math.Float32frombits(uint32(x.Imm)) }
+	bits := func(v float32) int64 { return int64(math.Float32bits(v)) }
+	x, okx := arg(0)
+	switch o.Kind {
+	case ir.OpBitcast:
+		if okx {
+			return int64(uint32(x.Imm)), true
+		}
+	case ir.OpCvtF32:
+		if okx && o.Type == ir.F32 {
+			if x.Type == ir.I32 {
+				return bits(float32(int32(x.Imm))), true
+			}
+			if x.Type == ir.U32 {
+				return bits(float32(uint32(x.Imm))), true
+			}
+		}
+	case ir.OpPackF16:
+		y, oky := arg(1)
+		if okx && oky && x.Type == ir.F32 && y.Type == ir.F32 {
+			return int64(uint32(quant.EncodeHalf(f(x))) | uint32(quant.EncodeHalf(f(y)))<<16), true
+		}
+	case ir.OpAdd, ir.OpSub, ir.OpMul:
+		y, oky := arg(1)
+		if !okx || !oky || o.Type != ir.F32 || x.Type != ir.F32 || y.Type != ir.F32 {
+			return 0, false
+		}
+		a, b := f(x), f(y)
+		switch o.Kind {
+		case ir.OpAdd:
+			return bits(a + b), true
+		case ir.OpSub:
+			return bits(a - b), true
+		}
+		return bits(a * b), true
+	}
+	return 0, false
+}
+
+// peelMultiples drops from what an unsigned remainder by a power of two
+// (or a mask of one less) reads each addend that is a multiple of it.
+func peelMultiples(ops []ir.Op, o *ir.Op) {
+	if o.Type != ir.U32 || o.Args[0] == 0 || o.Args[1] == 0 {
+		return
+	}
+	c := ops[o.Args[1]-1]
+	if c.Kind != ir.OpConst {
+		return
+	}
+	m := uint64(0)
+	switch v := uint64(uint32(c.Imm)); {
+	case o.Kind == ir.OpRem && v > 0 && v&(v-1) == 0:
+		m = v
+	case o.Kind == ir.OpAnd && v != 0 && (v+1)&v == 0:
+		m = v + 1
+	default:
+		return
+	}
+	multiple := func(a ir.Value) bool {
+		x := ops[a-1]
+		k := func(j int) (uint64, bool) {
+			y := ops[x.Args[j]-1]
+			return uint64(uint32(y.Imm)), x.Args[j] != 0 && y.Kind == ir.OpConst
+		}
+		switch x.Kind {
+		case ir.OpConst:
+			return uint64(uint32(x.Imm))%m == 0
+		case ir.OpMul:
+			a, oka := k(0)
+			b, okb := k(1)
+			return oka && a%m == 0 || okb && b%m == 0
+		case ir.OpShl:
+			b, okb := k(1)
+			return okb && b < 32 && (uint64(1)<<b)%m == 0
+		}
+		return false
+	}
+	for x := ops[o.Args[0]-1]; x.Kind == ir.OpAdd && x.Type == ir.U32; x = ops[o.Args[0]-1] {
+		switch {
+		case multiple(x.Args[1]):
+			o.Args[0] = x.Args[0]
+		case multiple(x.Args[0]):
+			o.Args[0] = x.Args[1]
+		default:
+			return
+		}
+	}
 }
