@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
@@ -418,6 +419,10 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		}
 		if p.LayerNorm && o.Kind != dkNormQuant {
 			return g.genLayerNorm(o, bs, rows, w, eps)
+		}
+		if prog.scans && o.Role == jlm.RoleAttnNorm && !p.LayerNorm {
+			// A recurrent block's pre-norm in two passes, its int8 operand apart.
+			return g.genNormParts(o, prog, bs, rows, w, eps)
 		}
 		y := rb.normed(o, rb.load(compose.BufRow, gaIn0), w, eps, p.LayerNorm)
 		if y < 0 {
@@ -1698,6 +1703,40 @@ func (g *devTier) genGatedNorm(o *devOp, prog *devProgram, bs *blockScratch, row
 	}
 	if !ok {
 		return nil
+	}
+	return ls
+}
+
+// genNormParts is an RMSNorm in two launches, each row's sum of squares in
+// the scratch's parts and then the apply, with the int8 operand quantized
+// after where the op makes one.
+func (g *devTier) genNormParts(o *devOp, prog *devProgram, bs *blockScratch, rows, w int, eps float32) []genLaunch {
+	parts := bs.parts
+	if o.V == nil || parts < 1 || w%parts != 0 {
+		return nil
+	}
+	sb := &rowBuild{r: compose.Row{Width: parts * rows, Rows: 1}}
+	sx := sb.buf(compose.BufRow, gaIn0)
+	sb.r.Store(sb.buf(compose.BufOut, gaPart), sb.r.SquareSumParts(sx, w, parts))
+	ab := &rowBuild{r: compose.Row{Width: w, Rows: rows}}
+	ax, wt, part := ab.buf(compose.BufRow, gaIn0), ab.buf(compose.BufVec, gaV), ab.buf(compose.BufRow, gaPart)
+	ab.r.Store(ab.buf(compose.BufOut, gaOut0), ab.r.NormApplyParts(ax, wt, part, w, parts, eps, false))
+	var ls []genLaunch
+	for _, rb := range []*rowBuild{sb, ab} {
+		k := g.rowKern(&rb.r)
+		if k.k == nil {
+			return nil
+		}
+		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
+		copy(l.args[:], rb.args)
+		ls = append(ls, l)
+	}
+	if o.Kind == dkNormQuant {
+		q := g.genQuant(o, prog, rows, gaOut0, gaQ8A, gaQ8X, 1, bs.p.ActWin)
+		if q == nil {
+			return nil
+		}
+		ls = append(ls, q...)
 	}
 	return ls
 }
