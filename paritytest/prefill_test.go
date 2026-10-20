@@ -15,8 +15,8 @@ import (
 func TestPrefillIsMains(t *testing.T) {
 	type pc struct {
 		heads, kv, dim, rows, splits, chunk, mla int
-		mp, sink                            bool
-		softcap                             float32
+		mp, sink                                 bool
+		softcap                                  float32
 	}
 	var cases []pc
 	for _, hd := range [][3]int{{4, 2, 32}, {8, 8, 16}, {4, 1, 64}} {

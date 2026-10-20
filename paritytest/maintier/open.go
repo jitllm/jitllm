@@ -10,9 +10,9 @@ import (
 	"github.com/jitllm/jitllm/engine/sched"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	kernels "github.com/jitllm/jitllm/paritytest/mainkernels"
 	"github.com/jitllm/jitllm/jit/gpu/metal"
 	"github.com/jitllm/jitllm/jit/gpu/vulkan"
+	kernels "github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // This file is the opening half of the tier: which devices, what each one may

@@ -14,10 +14,10 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 	"github.com/jitllm/jitllm/jit/gpu/msl"
 	"github.com/jitllm/jitllm/jit/gpu/ptx"
 	"github.com/jitllm/jitllm/jit/gpu/spirv"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 func all(t *testing.T) map[string]*ir.Kernel {
@@ -228,7 +228,9 @@ func all(t *testing.T) map[string]*ir.Kernel {
 	add("ropetable", func() (*ir.Kernel, error) { return mainkernels.RopeTable(128, 1) })
 	add("ropetable-rows", func() (*ir.Kernel, error) { return mainkernels.RopeTable(128, 8) })
 	add("copyat", func() (*ir.Kernel, error) { return mainkernels.CopyAt(256) })
-	add("attnscores", func() (*ir.Kernel, error) { return mainkernels.AttnScoresTiled(8, 256, 256, 8, 2048, 0.0625, 1, 1, 1, 0) })
+	add("attnscores", func() (*ir.Kernel, error) {
+		return mainkernels.AttnScoresTiled(8, 256, 256, 8, 2048, 0.0625, 1, 1, 1, 0)
+	})
 	// Both softmax arms: the warp reduction ships where the device has a
 	// subgroup shuffle and the scalar one is the fallback, so both must
 	// assemble everywhere.

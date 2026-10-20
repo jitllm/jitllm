@@ -127,14 +127,14 @@ func TestComposerParity(t *testing.T) {
 			}
 			if *parityModel == "" && *parityKernel != "" {
 				for _, k := range r.main {
-					if (*parityKernel == "*" || strings.HasPrefix(k.Name, *parityKernel)) {
+					if *parityKernel == "*" || strings.HasPrefix(k.Name, *parityKernel) {
 						t.Logf("%s main %s", r.name, shapeOf(k))
 					}
 				}
 			}
 			if *parityModel != "" && *parityKernel != "" {
 				for _, k := range r.main {
-					if (*parityKernel == "*" || strings.HasPrefix(k.Name, *parityKernel)) {
+					if *parityKernel == "*" || strings.HasPrefix(k.Name, *parityKernel) {
 						t.Logf("main     %s", shapeOf(k))
 					}
 				}

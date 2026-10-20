@@ -204,7 +204,9 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 		buf(&m.rwS, rows*k*4)
 	}
 	if p.ExpertWeightIn {
-		kern(&m.actMulW, func() (*ir.Kernel, error) { return kernels.ActMulWeighted(np*p.NFFNExp, p.NFFNExp, kernels.ActKind(p.Act), true) })
+		kern(&m.actMulW, func() (*ir.Kernel, error) {
+			return kernels.ActMulWeighted(np*p.NFFNExp, p.NFFNExp, kernels.ActKind(p.Act), true)
+		})
 		buf(&m.colPair, np*4)
 		buf(&m.ones, rows*k*4)
 		if err == nil {

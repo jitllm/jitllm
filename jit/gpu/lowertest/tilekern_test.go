@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 	"github.com/jitllm/jitllm/jit/gpu/msl"
 	"github.com/jitllm/jitllm/jit/gpu/ptx"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestTileKernelsAssemble lowers the shipped collective-tile kernels
