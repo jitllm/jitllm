@@ -84,16 +84,17 @@ type Planned struct {
 //     that do (an operand) -- runs flat, a tile of rows and elements a thread
 //     and loop 0 split between threads (contractSchedule), the split a
 //     rewrite of the group (SplitFold);
-//   - a group with a windowed reduction runs flat, a thread an element, 128
-//     to a workgroup (its windows meet in the workgroup);
-//   - any other group runs a workgroup a row, its width the narrowest power of
-//     two over the row, at most 256, or 1024 with a row reduction.
+//   - a group with a windowed reduction and no stages runs flat, a thread an
+//     element, 128 to a workgroup (its windows meet in the workgroup); one
+//     with stages runs a workgroup a row, its stages' windows within it;
+//   - any other group runs a workgroup a row: 1024 threads with a row
+//     reduction, else the narrowest power of two over the row, at most 256.
 func (g *Row) Plan(f Facts) ([]Planned, error) {
 	all := make([]int, len(g.Bufs))
 	for i := range all {
 		all[i] = i
 	}
-	if g.windowed() {
+	if g.windowed() && len(g.Stages) == 0 {
 		// Windows meet across a workgroup's consecutive threads: flat, a
 		// thread an element, 128 to a group.
 		return []Planned{{G: g, S: Schedule{Group: 128, Flat: true, Target: f.Target}, Bufs: all,
@@ -236,22 +237,22 @@ func (g *Row) contractSchedule(f Facts) Schedule {
 	return s
 }
 
-// rowSchedule is a row group's schedule: the narrowest power-of-two group
-// over the row, at most 256, or 1024 for a group with a row reduction; its
+// rowSchedule is a row group's schedule: a group with a row reduction runs
+// 1024 threads whatever its width (every reduction one workgroup's), its
 // reductions a shuffle butterfly on a ptx target guaranteeing 32 lanes, a
-// tree elsewhere.
+// tree elsewhere; any other the narrowest power of two over the row, at
+// most 256.
 func rowSchedule(g *Row, t Target) Schedule {
-	top := 256
 	for _, n := range g.Nodes {
 		if n.Kind == NReduce {
-			top = 1024
+			return Schedule{Group: 1024, Warp: t.API == APIPTX && t.Lanes == ir.SubgroupLanes}
 		}
 	}
 	w := 32
-	for w < g.Width && w < top {
+	for w < g.Width && w < 256 {
 		w *= 2
 	}
-	return Schedule{Group: w, Warp: t.API == APIPTX && t.Lanes == ir.SubgroupLanes}
+	return Schedule{Group: w}
 }
 
 // String is the plan's kernels, for a dump.

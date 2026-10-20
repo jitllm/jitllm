@@ -31,6 +31,18 @@ type Row struct {
 	// Loops are the trip counts of the group's folds' loops (Loop): loop c
 	// runs Loops[c] times.
 	Loops []int
+	// Stages are further element spaces of the row the workgroup stores
+	// after the group's own (a row group, not flat): each of its own width,
+	// its element loop unrolled, its nodes' Column its element, and what it
+	// reads of the row's own elements read by NAt.
+	Stages []Stage
+}
+
+// Stage is one further element space of a row group: its width and the
+// stores at each of its elements.
+type Stage struct {
+	Width  int
+	Stores []Store
 }
 
 // BufKind is how a group reads a buffer.
@@ -107,6 +119,10 @@ const (
 	// order from the window's first), every element of the window holding
 	// the same value. At must divide the group.
 	NWindow
+	// NAt is node A's value at element Ix (an index) of the same row: A
+	// recomputed there from what it reads (RULE 13: no stage reads what
+	// another wrote).
+	NAt
 )
 
 // Op is a unary or binary map.
@@ -244,6 +260,12 @@ func (g *Row) Encode(s Schedule) []uint32 {
 	if q := g.Q8; q != nil {
 		e = append(e, uint32(q.Val), uint32(q.A), uint32(q.X), uint32(q.Window), uint32(q.Pad))
 	}
+	for _, st := range g.Stages {
+		e = append(e, 0x57A6, uint32(st.Width), uint32(len(st.Stores)))
+		for _, x := range st.Stores {
+			e = append(e, uint32(x.Buf), uint32(x.Val), b2u(x.Indexed), uint32(x.Ix))
+		}
+	}
 	if len(g.Loops) > 0 {
 		e = append(e, 0xF01D, uint32(len(g.Loops)))
 		for _, t := range g.Loops {
@@ -284,6 +306,8 @@ func (g *Row) depth() ([]int, bool) {
 				}
 			case NSelect, NDot4:
 				v = max(d[n.A], d[n.B], d[n.C])
+			case NAt:
+				v = max(d[n.A], d[n.Ix])
 			case NReduce:
 				v = d[n.A] + 1
 			case NLoad:
@@ -329,6 +353,8 @@ func (g *Row) Check() error {
 			}
 		case NSelect, NDot4:
 			in = []int{n.A, n.B, n.C}
+		case NAt:
+			in = []int{n.A, n.Ix}
 		case NIter:
 			if n.At < 0 || n.At >= len(g.Loops) {
 				return fmt.Errorf("compose: node %d iterates loop %d of %d", i, n.At, len(g.Loops))
@@ -361,6 +387,17 @@ func (g *Row) Check() error {
 			return fmt.Errorf("compose: a store of node %d into buffer %d", s.Val, s.Buf)
 		}
 	}
+	for _, st := range g.Stages {
+		if st.Width < 1 {
+			return fmt.Errorf("compose: a stage of %d elements", st.Width)
+		}
+		for _, x := range st.Stores {
+			if x.Buf < 0 || x.Buf >= len(g.Bufs) || g.Bufs[x.Buf].Kind != BufOut && g.Bufs[x.Buf].Kind != BufOutU32 ||
+				x.Val < 0 || x.Val >= len(g.Nodes) || x.Indexed && (x.Ix < 0 || x.Ix >= len(g.Nodes)) {
+				return fmt.Errorf("compose: a stage's store of node %d into buffer %d", x.Val, x.Buf)
+			}
+		}
+	}
 	if g.Q8 != nil {
 		// The int8 operand (a scale per window, rounded codes packed four
 		// to a word, sums per 16) needs primitives the node language does
@@ -386,7 +423,13 @@ type env struct {
 	// env is that one; cls what this env's nodes depend on (bit 1 the row,
 	// bit 2 the column); and t the tile's envs.
 	row, base, col ir.Value
-	sh             [3]*env
+	// slot is the thread's place in its window space (NWindow): its
+	// element less the first of its workgroup's span.
+	slot ir.Value
+	// rows says a node that reads no element is read from the row env
+	// where it was hoisted there.
+	rows bool
+	sh   [3]*env
 	cls            uint8
 	t              *tile
 }
@@ -418,6 +461,26 @@ func (e *env) at() (row, base, col ir.Value) {
 	return row, base, col
 }
 
+// readsRow reports whether e (or an env it is in) reads hoisted row values.
+func (e *env) readsRow() bool {
+	for x := e; x != nil; x = x.up {
+		if x.rows {
+			return true
+		}
+	}
+	return false
+}
+
+// slotOf is e's window slot, zero where none is stated.
+func (e *env) slotOf() ir.Value {
+	for x := e; x != nil; x = x.up {
+		if x.slot != 0 {
+			return x.slot
+		}
+	}
+	return 0
+}
+
 // tileOf is e's tile, nil outside one.
 func (e *env) tileOf() *tile {
 	for x := e; x != nil; x = x.up {
@@ -446,6 +509,8 @@ func (g *Row) operands(n int) []int {
 		return []int{nd.A, nd.B}
 	case NSelect, NDot4:
 		return []int{nd.A, nd.B, nd.C}
+	case NAt:
+		return []int{nd.A, nd.Ix}
 	case NLoad:
 		if nd.Indexed {
 			return []int{nd.Ix}
@@ -658,6 +723,11 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		last = b.Const(ir.U32, int64(g.Width-1))
 	}
 	rowVal := make([]ir.Value, len(g.Nodes)) // a reduction's result, once its pass ran
+	// rowEnv holds the row's values that read no element (a norm's scale),
+	// computed once where the passes first need them (hoist) and read by
+	// every element after.
+	rowEnv := newEnv(nil)
+
 	var emitErr error
 	// half is the binary16 element at e of a BufRowF16 buffer: its word,
 	// and the half of it the element sits in.
@@ -832,6 +902,11 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		if v, ok := e.get(n); ok {
 			return v
 		}
+		if e.readsRow() && !colDep[n] {
+			if v, ok := rowEnv.m[n]; ok {
+				return v
+			}
+		}
 		// The row and column this env runs for: its tile's, or the kernel's.
 		r, rowBase := r, rowBase
 		er, eb, ec := e.at()
@@ -918,9 +993,9 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			// Through threadgroup memory: each thread's value stored at its
 			// slot, then every thread folds its window's, in order.
 			x := elem(nd.A, idx, e)
-			if !s.Flat || nd.At < 1 || G%nd.At != 0 {
+			if nd.At < 1 || G%nd.At != 0 || !s.Flat && e.slotOf() == 0 {
 				if emitErr == nil {
-					emitErr = fmt.Errorf("compose: a window of %d over a group of %d, or not flat", nd.At, G)
+					emitErr = fmt.Errorf("compose: a window of %d over a group of %d, outside a flat group or a stage", nd.At, G)
 				}
 				v = x
 				break
@@ -935,7 +1010,10 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			}
 			b.Store(wsh, b.TID(), x, 0)
 			b.Barrier()
-			local := b.Sub(ir.U32, flatRaw, b.Mul(ir.U32, b.CTAID(), b.NTID()))
+			local := e.slotOf()
+			if local == 0 {
+				local = b.Sub(ir.U32, flatRaw, b.Mul(ir.U32, b.CTAID(), b.NTID()))
+			}
 			span := b.Const(ir.U32, int64(nd.At))
 			wbase := b.Mul(ir.U32, b.Div(ir.U32, local, span), span)
 			if nd.Red == RedMax {
@@ -949,6 +1027,16 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 					v = b.Add(ir.F32, v, b.Load(ir.F32, wsh, wbase, int64(i)))
 				}
 			}
+		case NAt:
+			// A at element ix: a fresh env at that column, what reads no
+			// column taken from the env that holds the row's values.
+			ix := elem(nd.Ix, idx, e)
+			at := newEnv(nil)
+			at.col = ix
+			at.row, at.base = r, rowBase
+			at.cls = 3
+			at.sh = [3]*env{rowEnv, rowEnv, nil}
+			v = elem(nd.A, ix, at)
 		case NIConst:
 			v = b.Const(ir.I32, int64(nd.At))
 		case NSegment:
@@ -1105,6 +1193,42 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		}
 		return b.Done(), nil
 	}
+	// iterDep is which nodes read a fold loop's iterator or carried value:
+	// those stay in their loop.
+	iterDep := make([]bool, len(g.Nodes))
+	for c := range g.Loops {
+		for i, v := range g.varies(c) {
+			iterDep[i] = iterDep[i] || v
+		}
+	}
+	// hoist emits, into rowEnv and before the loop that follows, every node
+	// roots reach that reads no element and no loop, of depth at most p
+	// (its reductions ran in an earlier pass).
+	hoist := func(roots []int, p int) {
+		seen := make([]bool, len(g.Nodes))
+		var walk func(n int)
+		walk = func(n int) {
+			if seen[n] {
+				return
+			}
+			seen[n] = true
+			nd := g.Nodes[n]
+			if !colDep[n] && !iterDep[n] && depth[n] <= p && nd.Kind != NReduce && nd.Kind != NWindow {
+				// Constants stay where they are read: hoisting them moves
+				// nothing a target pays for.
+				if nd.Kind != NConst && nd.Kind != NUConst && nd.Kind != NIConst {
+					elem(n, 0, rowEnv)
+					return
+				}
+			}
+			for _, o := range g.operands(n) {
+				walk(o)
+			}
+		}
+		for _, n := range roots {
+			walk(n)
+		}
+	}
 	passes := 0
 	for _, d := range depth {
 		passes = max(passes, d)
@@ -1143,6 +1267,17 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 				inits[j] = b.ConstF32(-3.4028235e38)
 			}
 		}
+		var roots []int
+		for _, n := range reds {
+			roots = append(roots, g.Nodes[n].A)
+		}
+		for _, st := range stores {
+			roots = append(roots, st.Val)
+			if st.Indexed {
+				roots = append(roots, st.Ix)
+			}
+		}
+		hoist(roots, p)
 		b.Loop(iters)
 		i := b.Phi(ir.U32, tid)
 		accs := make([]ir.Value, len(reds))
@@ -1152,6 +1287,7 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		idx := b.Min(ir.U32, i, last)
 		in := b.Lt(ir.U32, i, width)
 		e := newEnv(nil)
+		e.rows = true
 		for j, n := range reds {
 			x := elem(g.Nodes[n].A, idx, e)
 			if g.Nodes[n].Red == RedMax {
@@ -1174,6 +1310,42 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 				rowVal[n] = groupReduce(b, sh, tid, accs[j], G, true, warp)
 			} else {
 				rowVal[n] = groupReduce(b, sh, tid, accs[j], G, false, warp)
+			}
+		}
+	}
+	// The stages: each element space after the row's own, its loop
+	// unrolled, a thread's element tid + j*G clamped to the last.
+	for _, st := range g.Stages {
+		var roots []int
+		for _, x := range st.Stores {
+			roots = append(roots, x.Val)
+			if x.Indexed {
+				roots = append(roots, x.Ix)
+			}
+		}
+		hoist(roots, passes)
+		lastS := b.Const(ir.U32, int64(st.Width-1))
+		base := b.Mul(ir.U32, r, b.Const(ir.U32, int64(st.Width)))
+		windows := false
+		for _, n := range g.Nodes {
+			windows = windows || n.Kind == NWindow
+		}
+		for j := 0; j < (st.Width+G-1)/G; j++ {
+			off := b.Const(ir.U32, int64(j*G))
+			word := b.Min(ir.U32, b.Add(ir.U32, tid, off), lastS)
+			se := newEnv(nil)
+			se.col, se.slot, se.rows = word, b.Sub(ir.U32, word, off), true
+			for _, x := range st.Stores {
+				at := b.Add(ir.U32, base, word)
+				if x.Indexed {
+					at = elem(x.Ix, word, se)
+				}
+				b.Store(params[x.Buf], at, elem(x.Val, word, se), 0)
+			}
+			if windows {
+				// The next element's window writes must not overtake this
+				// one's reads.
+				b.Barrier()
 			}
 		}
 	}
@@ -1209,7 +1381,7 @@ func (g *Row) typeOf(n int) ir.Type {
 		return g.typeOf(nd.A)
 	case NFold:
 		return g.typeOf(nd.B)
-	case NSelect:
+	case NSelect, NAt:
 		return g.typeOf(nd.A)
 	case NLoad:
 		if g.Bufs[nd.Buf].Kind == BufU32 {

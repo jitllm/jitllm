@@ -27,6 +27,10 @@ func (g *Row) expanded() (*Row, []int, error) {
 	c := *g
 	c.Nodes = append([]Node(nil), g.Nodes...)
 	c.Stores = append([]Store(nil), g.Stores...)
+	c.Stages = make([]Stage, len(g.Stages))
+	for i, st := range g.Stages {
+		c.Stages[i] = Stage{Width: st.Width, Stores: append([]Store(nil), st.Stores...)}
+	}
 	if g.Q8 != nil {
 		q := *g.Q8
 		c.Q8 = &q
@@ -74,6 +78,8 @@ func (g *Row) expandActs() ([]int, error) {
 			nd.A = at[n.A]
 		case NDot4:
 			nd.A, nd.B, nd.C = at[n.A], at[n.B], at[n.C]
+		case NAt:
+			nd.A, nd.Ix = at[n.A], at[n.Ix]
 		case NBinary, NUBinary, NLess:
 			nd.A, nd.B = at[n.A], at[n.B]
 			if n.Kind == NBinary && n.Op == OpFma {
@@ -93,11 +99,17 @@ func (g *Row) expandActs() ([]int, error) {
 		}
 	}
 	g.Nodes = x.nodes
-	for i := range g.Stores {
-		g.Stores[i].Val = at[g.Stores[i].Val]
-		if g.Stores[i].Indexed {
-			g.Stores[i].Ix = at[g.Stores[i].Ix]
+	remap := func(sts []Store) {
+		for i := range sts {
+			sts[i].Val = at[sts[i].Val]
+			if sts[i].Indexed {
+				sts[i].Ix = at[sts[i].Ix]
+			}
 		}
+	}
+	remap(g.Stores)
+	for _, st := range g.Stages {
+		remap(st.Stores)
 	}
 	if g.Q8 != nil {
 		g.Q8.Val = at[g.Q8.Val]

@@ -301,7 +301,6 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 	}
 	rb := &rowBuild{r: compose.Row{Width: w, Rows: rows}}
 	var q8 uint8     // which output holds an int8 value
-	qOf := genArg(0) // the output it is the int8 operand of
 	switch o.Kind {
 	case dkAdd:
 		a, b := rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1)
@@ -378,7 +377,8 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		}
 		rb.store(y, gaOut0)
 		if o.Kind == dkNormQuant {
-			q8, qOf = 1, gaOut0
+			q8 = 1
+			rb.quantStage(y, w, p.ActWin)
 		}
 	case dkAddNorm, dkAddNormQuant:
 		// The residual's sum, normed; with its int8 operand.
@@ -390,7 +390,8 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		}
 		rb.store(y, gaOut1)
 		if o.Kind == dkAddNormQuant {
-			q8, qOf = 2, gaOut1
+			q8 = 2
+			rb.quantStage(y, w, p.ActWin)
 		}
 	case dkActQuant:
 		// act(gate) * up, and its int8 operand.
@@ -402,7 +403,8 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 			return nil
 		}
 		rb.store(y, gaOut0)
-		q8, qOf = 1, gaOut0
+		q8 = 1
+		rb.quantStage(y, w, p.ActWin)
 	case dkGatherHeads:
 		// A chunk's rows head-major: each head's slice of every row in turn,
 		// a group row a (head, row), read through the step's order.
@@ -478,18 +480,22 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 	if k.k == nil {
 		return nil
 	}
-	l := genLaunch{k: k.k, groups: rb.r.Rows, width: k.group, n: uint8(len(rb.args))}
+	l := genLaunch{k: k.k, groups: rb.r.Rows, width: k.group, n: uint8(len(rb.args)), q8: q8}
 	copy(l.args[:], rb.args)
-	if q8 == 0 {
-		return []genLaunch{l}
+	return []genLaunch{l}
+}
+
+// quantStage adds the int8 operand of node y (a row of width w) to the row
+// group as a stage of it (compose.Row.Quantize8Stage), over the session's
+// window (32 where it states none) clamped to the row.
+func (rb *rowBuild) quantStage(y, w, win int) {
+	if win <= 0 {
+		win = 32
 	}
-	// The int8 operand of the output, by a group of its own (a fusion pass
-	// joins them).
-	qs := g.genQuant(o, prog, rows, qOf, gaQ8A, gaQ8X, q8, p.ActWin)
-	if qs == nil {
-		return nil
+	if win > w {
+		win = w // the host's window ends at the row
 	}
-	return append([]genLaunch{l}, qs...)
+	rb.r.Quantize8Stage(y, rb.buf(compose.BufOutU32, gaQ8A), rb.buf(compose.BufOut, gaQ8X), win)
 }
 
 // genQuant is the int8 operand of the value at argument src as its own
