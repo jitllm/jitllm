@@ -7,7 +7,7 @@ import (
 	"github.com/jitllm/jitllm/internal/oracle"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 func u32b1(v uint32) []byte {
@@ -50,7 +50,7 @@ func TestAttentionAgainstRef(t *testing.T) {
 		cs[2*p], cs[2*p+1] = float32(math.Cos(theta)), float32(math.Sin(theta))
 		theta *= rs
 	}
-	rope, err := kernels.RoPERows(nh, hd, nRot, false, 1)
+	rope, err := oldkernels.RoPERows(nh, hd, nRot, false, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,11 +88,11 @@ func TestAttentionAgainstRef(t *testing.T) {
 	}
 
 	// --- scores, softmax, accumulate.
-	sc, err := kernels.AttnScoresTiled(nh, hd, kvDim, gqa, maxSeq, scale, 1, 1, 1, 0)
+	sc, err := oldkernels.AttnScoresTiled(nh, hd, kvDim, gqa, maxSeq, scale, 1, 1, 1, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ac, err := kernels.AttnAcc(nh, hd, kvDim, gqa, maxSeq)
+	ac, err := oldkernels.AttnAcc(nh, hd, kvDim, gqa, maxSeq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestAttentionAgainstRef(t *testing.T) {
 	// fallback. They must reach the same attention output, not merely each
 	// produce a plausible one.
 	for _, lanes := range []int{1, 32} {
-		sm, err := kernels.SoftmaxRows(nh, maxSeq, lanes, 1, 1)
+		sm, err := oldkernels.SoftmaxRows(nh, maxSeq, lanes, 1, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -203,7 +203,7 @@ func TestSoftmaxWarpMatchesScalar(t *testing.T) {
 	defer func() { ba.Free(); bn.Free(); bo.Free() }()
 	ba.Write(f32b(a))
 
-	sm, err := kernels.SoftmaxRows(nh, maxSeq, 32, 1, 1)
+	sm, err := oldkernels.SoftmaxRows(nh, maxSeq, 32, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestLoopNRunsZeroTimes(t *testing.T) {
 	// Both arms: the warp kernel derives a per-lane trip count from n, so zero
 	// has to survive that arithmetic as well as the loop.
 	for _, lanes := range []int{1, 32} {
-		sm, err := kernels.SoftmaxRows(nh, maxSeq, lanes, 1, 1)
+		sm, err := oldkernels.SoftmaxRows(nh, maxSeq, lanes, 1, 1)
 		if err != nil {
 			t.Fatal(err)
 		}

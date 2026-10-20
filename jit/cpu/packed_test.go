@@ -1,11 +1,12 @@
 package cpu
 
 import (
-	"github.com/jitllm/jitllm/internal/oracle"
 	"math"
 	"math/rand"
 	"testing"
 	"unsafe"
+
+	"github.com/jitllm/jitllm/internal/oracle"
 
 	"github.com/jitllm/jitllm/format/quant"
 
@@ -13,7 +14,7 @@ import (
 )
 
 // The kernel is gated against the packed reference here, and the reference
-// against the GGUF dequantizer in kernels.TestPackedRefMatchesDequant; neither
+// against the GGUF dequantizer in oldkernels.TestPackedRefMatchesDequant; neither
 // alone would catch a wrong layout shared by the packer and reference.
 // packedFormats derives from quant.PackedTypes so no format is left out.
 var packedFormats = func() (fs []struct {

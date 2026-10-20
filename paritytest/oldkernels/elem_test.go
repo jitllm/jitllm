@@ -8,6 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // dev returns the one device this test binary uses, opened once: a CUDA
@@ -77,7 +78,7 @@ func TestQuantizeMatchesCPU(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	kern, err := kernels.Quantize(k, 32)
+	kern, err := oldkernels.Quantize(k, 32)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +94,7 @@ func TestQuantizeMatchesCPU(t *testing.T) {
 	if err := bx.Write(f32b(x)); err != nil {
 		t.Fatal(err)
 	}
-	if err := kk.Launch((kernels.QuantizeThreads(k/32)+127)/128, 128, bx, ba, bax); err != nil {
+	if err := kk.Launch((oldkernels.QuantizeThreads(k/32)+127)/128, 128, bx, ba, bax); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 	gotQ := make([]byte, k)
@@ -159,7 +160,7 @@ func quantizeWideCase(t *testing.T, k, window int) {
 	if err := kernels.PackActivationsInto(wantA, wantD, wantS, x64, window); err != nil {
 		t.Fatal(err)
 	}
-	kern, err := kernels.Quantize(k, window)
+	kern, err := oldkernels.Quantize(k, window)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +174,7 @@ func quantizeWideCase(t *testing.T, k, window int) {
 	bax, _ := d.Alloc((k/32 + k/16) * 4)
 	defer func() { bx.Free(); ba.Free(); bax.Free() }()
 	bx.Write(f32b(x))
-	if err := kk.Launch((kernels.QuantizeThreads(k/32)+127)/128, 128, bx, ba, bax); err != nil {
+	if err := kk.Launch((oldkernels.QuantizeThreads(k/32)+127)/128, 128, bx, ba, bax); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 	gotQ := make([]byte, k)
@@ -215,11 +216,11 @@ func TestNormSiLUAdd(t *testing.T) {
 	w := ramp(k, func(i int) float32 { return 0.5 + float32(i%5)*0.25 })
 	const eps = 1e-6
 
-	np, err := kernels.NormPart(k, parts)
+	np, err := oldkernels.NormPart(k, parts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	na, err := kernels.NormApply(k, parts, eps, false)
+	na, err := oldkernels.NormApply(k, parts, eps, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +266,7 @@ func TestNormSiLUAdd(t *testing.T) {
 	}
 
 	// SiLU * up, then a residual add, in one pass over the same buffers.
-	sm, err := kernels.ActMul(k, kernels.ActSiLU)
+	sm, err := oldkernels.ActMul(k, kernels.ActSiLU)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +288,7 @@ func TestNormSiLUAdd(t *testing.T) {
 		}
 	}
 
-	ad, err := kernels.Add(k)
+	ad, err := oldkernels.Add(k)
 	if err != nil {
 		t.Fatal(err)
 	}

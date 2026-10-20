@@ -11,7 +11,7 @@ import (
 
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // MoERouteJIT end to end: the generated gating function AND the generated
@@ -423,4 +423,4 @@ func TestRouterFloorMatchesTheKernel(t *testing.T) {
 
 // kernelMoESumFloorForTest is jit/gpu/kernels' constant, named here so the
 // comparison above reads as one line rather than an import in the middle of it.
-const kernelMoESumFloorForTest = kernels.MoESumFloor
+const kernelMoESumFloorForTest = oldkernels.MoESumFloor

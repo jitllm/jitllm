@@ -12,6 +12,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 var updateGemm = flag.Bool("update-gemm", false, "rewrite testdata/gemm_ir.sha")
@@ -36,58 +37,58 @@ func gemmSweep() map[string]string {
 	epi := &compose.Epi{G: g, Out: g.Bin(compose.OpAdd, in, g.Load(g.Buf(compose.BufRow)))}
 	tiles := []struct {
 		name string
-		t    kernels.VoltaTile
+		t    oldkernels.VoltaTile
 	}{
-		{"m4n4", kernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 2, KB: 1}},
-		{"m2n2", kernels.VoltaTile{MT: 2, NT: 2, WM: 2, WN: 2, KB: 1}},
-		{"m4n4k16", kernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 2, KB: 1, F16K: 16}},
-		{"m2n4k8", kernels.VoltaTile{MT: 2, NT: 4, WM: 2, WN: 2, KB: 1, F16K: 8}},
-		{"deep", kernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 4, KB: 2, F16K: 16, Single: true}},
+		{"m4n4", oldkernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 2, KB: 1}},
+		{"m2n2", oldkernels.VoltaTile{MT: 2, NT: 2, WM: 2, WN: 2, KB: 1}},
+		{"m4n4k16", oldkernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 2, KB: 1, F16K: 16}},
+		{"m2n4k8", oldkernels.VoltaTile{MT: 2, NT: 4, WM: 2, WN: 2, KB: 1, F16K: 8}},
+		{"deep", oldkernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 4, KB: 2, F16K: 16, Single: true}},
 	}
 	for q := kernels.Q4_0; q <= kernels.TQ2F; q++ {
 		for _, tl := range tiles {
 			for _, v := range []struct {
 				name string
-				s    kernels.MatVecShape
+				s    oldkernels.MatVecShape
 			}{
-				{"plain", kernels.MatVecShape{K: 1024, Rows: 256, NTok: 128}},
-				{"split2", kernels.MatVecShape{K: 1024, Rows: 256, NTok: 128, Split: 2}},
-				{"bias", kernels.MatVecShape{K: 1024, Rows: 256, NTok: 128, Bias: true}},
-				{"experts", kernels.MatVecShape{K: 1024, Rows: 256, NTok: 128, Experts: 4}},
+				{"plain", oldkernels.MatVecShape{K: 1024, Rows: 256, NTok: 128}},
+				{"split2", oldkernels.MatVecShape{K: 1024, Rows: 256, NTok: 128, Split: 2}},
+				{"bias", oldkernels.MatVecShape{K: 1024, Rows: 256, NTok: 128, Bias: true}},
+				{"experts", oldkernels.MatVecShape{K: 1024, Rows: 256, NTok: 128, Experts: 4}},
 			} {
 				s := v.s
 				s.T = q
-				k, err := kernels.GemmVolta(s, tl.t)
+				k, err := oldkernels.GemmVolta(s, tl.t)
 				add(fmt.Sprintf("volta/%v/%s/%s", q, tl.name, v.name), k, err)
 			}
-			s := kernels.MatVecShape{T: q, K: 1024, Rows: 256, NTok: 128}
-			k, err := kernels.GemmVoltaEpi(s, tl.t, epi)
+			s := oldkernels.MatVecShape{T: q, K: 1024, Rows: 256, NTok: 128}
+			k, err := oldkernels.GemmVoltaEpi(s, tl.t, epi)
 			add(fmt.Sprintf("volta/%v/%s/epi", q, tl.name), k, err)
 		}
-		segs := []kernels.MatVecShape{{T: q, K: 1024, Rows: 256, NTok: 128}, {T: q, K: 1024, Rows: 128, NTok: 128}}
-		k, err := kernels.GemmVoltaSegments(segs, []kernels.VoltaTile{tiles[2].t, tiles[2].t})
+		segs := []oldkernels.MatVecShape{{T: q, K: 1024, Rows: 256, NTok: 128}, {T: q, K: 1024, Rows: 128, NTok: 128}}
+		k, err := oldkernels.GemmVoltaSegments(segs, []oldkernels.VoltaTile{tiles[2].t, tiles[2].t})
 		add(fmt.Sprintf("voltasegs/%v", q), k, err)
-		for _, tt := range []kernels.TileGemm{{MT: 2, NT: 2, WM: 2, WN: 2, KB: 1}, {MT: 4, NT: 2, WM: 2, WN: 2, KB: 2, Tall: true}} {
-			k, err := kernels.GemmTile(kernels.MatVecShape{T: q, K: 1024, Rows: 256, NTok: 128}, tt)
+		for _, tt := range []oldkernels.TileGemm{{MT: 2, NT: 2, WM: 2, WN: 2, KB: 1}, {MT: 4, NT: 2, WM: 2, WN: 2, KB: 2, Tall: true}} {
+			k, err := oldkernels.GemmTile(oldkernels.MatVecShape{T: q, K: 1024, Rows: 256, NTok: 128}, tt)
 			add(fmt.Sprintf("tile/%v/%+v", q, tt), k, err)
 		}
-		for _, it := range []kernels.Int8Tile{{MT: 2, NT: 2, WM: 2, WN: 2}, {MT: 4, NT: 4, WM: 2, WN: 2, Single: true}} {
-			k, err := kernels.GemmInt8(kernels.MatVecShape{T: q, K: 1024, Rows: 256, NTok: 128}, it)
+		for _, it := range []oldkernels.Int8Tile{{MT: 2, NT: 2, WM: 2, WN: 2}, {MT: 4, NT: 4, WM: 2, WN: 2, Single: true}} {
+			k, err := oldkernels.GemmInt8(oldkernels.MatVecShape{T: q, K: 1024, Rows: 256, NTok: 128}, it)
 			add(fmt.Sprintf("int8/%v/%+v", q, it), k, err)
-			k, err = kernels.GemmInt8Epi(kernels.MatVecShape{T: q, K: 1024, Rows: 256, NTok: 128}, it, epi)
+			k, err = oldkernels.GemmInt8Epi(oldkernels.MatVecShape{T: q, K: 1024, Rows: 256, NTok: 128}, it, epi)
 			add(fmt.Sprintf("int8/%v/%+v/epi", q, it), k, err)
 		}
 		for _, mn := range [][2]int{{2, 2}, {4, 4}} {
-			k, err := kernels.MatVecMMA(kernels.MatVecShape{T: q, K: 1024, Rows: 256, NTok: 128, MT: mn[0], NT: mn[1], ActWin: 32})
+			k, err := oldkernels.MatVecMMA(oldkernels.MatVecShape{T: q, K: 1024, Rows: 256, NTok: 128, MT: mn[0], NT: mn[1], ActWin: 32})
 			add(fmt.Sprintf("mma/%v/%dx%d", q, mn[0], mn[1]), k, err)
 		}
-		k, err = kernels.MatVecMMA70(kernels.MatVecShape{T: q, K: 1024, Rows: 256, NTok: 128})
+		k, err = oldkernels.MatVecMMA70(oldkernels.MatVecShape{T: q, K: 1024, Rows: 256, NTok: 128})
 		add(fmt.Sprintf("mma70/%v", q), k, err)
-		k, err = kernels.ActF16T(q, 128, 1024)
+		k, err = oldkernels.ActF16T(q, 128, 1024)
 		add(fmt.Sprintf("actf16t/%v", q), k, err)
-		k, err = kernels.ActF16(q, 128, 1024)
+		k, err = oldkernels.ActF16(q, 128, 1024)
 		add(fmt.Sprintf("actf16/%v", q), k, err)
-		k, err = kernels.ActF16TGather(q, 128, 1024, 64)
+		k, err = oldkernels.ActF16TGather(q, 128, 1024, 64)
 		add(fmt.Sprintf("actf16tgather/%v", q), k, err)
 	}
 	return out

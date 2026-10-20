@@ -1,9 +1,7 @@
-package oldkernels
+package kernels
 
 import (
 	"testing"
-
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // TestPackWorkersNeverShareADWord: every worker boundary packPer produces falls
@@ -11,8 +9,8 @@ import (
 // workers OR-ing into one word lose an update about one run in fifteen, so the
 // arithmetic is gated rather than the lottery.
 func TestPackWorkersNeverShareADWord(t *testing.T) {
-	for q := Quant(0); q < Quant(kernels.Quants()); q++ {
-		if IsFloat(q) || infoOf(q).blockE == 0 {
+	for q := Quant(0); q < Quant(Quants()); q++ {
+		if IsFloat(q) || q.info().blockE == 0 {
 			continue
 		}
 		g := DSlots(q)

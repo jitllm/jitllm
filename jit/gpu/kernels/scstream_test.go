@@ -1,4 +1,4 @@
-package oldkernels
+package kernels
 
 import (
 	"math/rand"

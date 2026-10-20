@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 var updateAttn = flag.Bool("update-attn", false, "rewrite testdata/attn_ir.sha")
@@ -30,7 +30,7 @@ func attnSweep() map[string]string {
 		}
 		out[name] = irHash(k)
 	}
-	base := []kernels.FlashShape{
+	base := []oldkernels.FlashShape{
 		{Heads: 8, KVHeads: 8, Dim: 64, Rows: 1, Page: 64, Scale: 0.125},
 		{Heads: 16, KVHeads: 4, Dim: 128, Rows: 1, Page: 128, Scale: 0.0884},
 		{Heads: 32, KVHeads: 8, Dim: 256, Rows: 1, Page: 64, Scale: 0.0625},
@@ -39,45 +39,45 @@ func attnSweep() map[string]string {
 	for i, s := range base {
 		for _, v := range []struct {
 			name string
-			f    func(s kernels.FlashShape) kernels.FlashShape
+			f    func(s oldkernels.FlashShape) oldkernels.FlashShape
 		}{
-			{"plain", func(s kernels.FlashShape) kernels.FlashShape { return s }},
-			{"split4", func(s kernels.FlashShape) kernels.FlashShape { s.Splits = 4; return s }},
-			{"f16", func(s kernels.FlashShape) kernels.FlashShape { s.F16 = true; return s }},
-			{"sink", func(s kernels.FlashShape) kernels.FlashShape { s.Sink = true; return s }},
-			{"softcap", func(s kernels.FlashShape) kernels.FlashShape { s.Softcap = 30; return s }},
-			{"group1", func(s kernels.FlashShape) kernels.FlashShape { s.Group = 1; return s }},
-			{"warps4", func(s kernels.FlashShape) kernels.FlashShape { s.Warps = 4; return s }},
-			{"kimm", func(s kernels.FlashShape) kernels.FlashShape { s.KImm = true; return s }},
-			{"vecv", func(s kernels.FlashShape) kernels.FlashShape { s.VecV = true; return s }},
+			{"plain", func(s oldkernels.FlashShape) oldkernels.FlashShape { return s }},
+			{"split4", func(s oldkernels.FlashShape) oldkernels.FlashShape { s.Splits = 4; return s }},
+			{"f16", func(s oldkernels.FlashShape) oldkernels.FlashShape { s.F16 = true; return s }},
+			{"sink", func(s oldkernels.FlashShape) oldkernels.FlashShape { s.Sink = true; return s }},
+			{"softcap", func(s oldkernels.FlashShape) oldkernels.FlashShape { s.Softcap = 30; return s }},
+			{"group1", func(s oldkernels.FlashShape) oldkernels.FlashShape { s.Group = 1; return s }},
+			{"warps4", func(s oldkernels.FlashShape) oldkernels.FlashShape { s.Warps = 4; return s }},
+			{"kimm", func(s oldkernels.FlashShape) oldkernels.FlashShape { s.KImm = true; return s }},
+			{"vecv", func(s oldkernels.FlashShape) oldkernels.FlashShape { s.VecV = true; return s }},
 		} {
 			sh := v.f(s)
-			k, err := kernels.FlashDecodeKV(sh)
+			k, err := oldkernels.FlashDecodeKV(sh)
 			add(fmt.Sprintf("flashkv/%d/%s", i, v.name), k, err)
-			m, err := kernels.FlashAttentionMergeWide(kernels.FlashShape{Heads: sh.Heads, Dim: sh.Dim, Rows: sh.Rows, Splits: 4, Sink: sh.Sink})
+			m, err := oldkernels.FlashAttentionMergeWide(oldkernels.FlashShape{Heads: sh.Heads, Dim: sh.Dim, Rows: sh.Rows, Splits: 4, Sink: sh.Sink})
 			add(fmt.Sprintf("merge/%d/%s", i, v.name), m, err)
 		}
 		for _, keys := range []int{512, 4096} {
-			st := kernels.PagedStagedAt(s, keys, 8)
+			st := oldkernels.PagedStagedAt(s, keys, 8)
 			for _, lanes := range []int{32, 64} {
-				k, err := kernels.PagedStagedScores(st, lanes)
+				k, err := oldkernels.PagedStagedScores(st, lanes)
 				add(fmt.Sprintf("staged/scores/%d/%d/%d", i, keys, lanes), k, err)
-				k, err = kernels.PagedStagedSoftmax(st, lanes)
+				k, err = oldkernels.PagedStagedSoftmax(st, lanes)
 				add(fmt.Sprintf("staged/softmax/%d/%d/%d", i, keys, lanes), k, err)
 			}
-			k, err := kernels.PagedStagedAcc(st)
+			k, err := oldkernels.PagedStagedAcc(st)
 			add(fmt.Sprintf("staged/acc/%d/%d", i, keys), k, err)
 		}
 	}
-	mla := kernels.FlashShape{Heads: 16, KVHeads: 1, Dim: 576, Rows: 1, Page: 64, MLA: 512, Scale: 0.07}
-	st := kernels.PagedStagedAt(mla, 2048, 8)
-	k, err := kernels.PagedStagedScores(st, 64)
+	mla := oldkernels.FlashShape{Heads: 16, KVHeads: 1, Dim: 576, Rows: 1, Page: 64, MLA: 512, Scale: 0.07}
+	st := oldkernels.PagedStagedAt(mla, 2048, 8)
+	k, err := oldkernels.PagedStagedScores(st, 64)
 	add("staged/mla/scores", k, err)
-	k, err = kernels.PagedStagedSoftmax(st, 64)
+	k, err = oldkernels.PagedStagedSoftmax(st, 64)
 	add("staged/mla/softmax", k, err)
-	k, err = kernels.PagedStagedAcc(st)
+	k, err = oldkernels.PagedStagedAcc(st)
 	add("staged/mla/acc", k, err)
-	k, err = kernels.FlashAttentionMergeWide(kernels.FlashShape{Heads: 8, Dim: 64, Rows: 16, Splits: 4, Map: true})
+	k, err = oldkernels.FlashAttentionMergeWide(oldkernels.FlashShape{Heads: 8, Dim: 64, Rows: 16, Splits: 4, Map: true})
 	add("merge/map", k, err)
 	return out
 }

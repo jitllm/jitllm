@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestAttnScoresWarpMatchesTheReference gates the warp-per-(head, position)
@@ -26,7 +26,7 @@ func TestAttnScoresWarpMatchesTheReference(t *testing.T) {
 		scale := float32(1 / math.Sqrt(float64(c.hd)))
 		q := ramp(c.nh*c.hd, func(i int) float32 { return float32(math.Sin(float64(i) * 0.37)) })
 		kc := ramp(maxSeq*c.kvDim, func(i int) float32 { return float32(math.Cos(float64(i) * 0.11)) })
-		k, err := kernels.AttnScoresWarp(c.nh, c.hd, c.kvDim, c.gqa, maxSeq, scale)
+		k, err := oldkernels.AttnScoresWarp(c.nh, c.hd, c.kvDim, c.gqa, maxSeq, scale)
 		if err != nil {
 			t.Fatal(err)
 		}

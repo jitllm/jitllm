@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestPartialRotaryMatchesTheHost runs nRot < headDim, which
@@ -64,7 +64,7 @@ func TestPartialRotaryMatchesTheHost(t *testing.T) {
 				bz.Write(u32b1(0))
 
 				if nRot < hd {
-					cp, err := kernels.CopyAtRows(nh*hd, 1)
+					cp, err := oldkernels.CopyAtRows(nh*hd, 1)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -77,7 +77,7 @@ func TestPartialRotaryMatchesTheHost(t *testing.T) {
 					}
 					kc.Close()
 				}
-				rope, err := kernels.RoPERows(nh, hd, nRot, neox, 1)
+				rope, err := oldkernels.RoPERows(nh, hd, nRot, neox, 1)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -157,7 +157,7 @@ func TestPartialRotaryKCacheMatchesTheHost(t *testing.T) {
 			}
 			cache.Write(f32b(poison))
 
-			cp, err := kernels.CopyAtRowsT(kvDim, 1, stride)
+			cp, err := oldkernels.CopyAtRowsT(kvDim, 1, stride)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -166,7 +166,7 @@ func TestPartialRotaryKCacheMatchesTheHost(t *testing.T) {
 				t.Fatalf("compile CopyAtRowsT: %v", err)
 			}
 			defer kc.Close()
-			rope, err := kernels.RoPERowsT(nkv, hd, nRot, neox, 1, stride)
+			rope, err := oldkernels.RoPERowsT(nkv, hd, nRot, neox, 1, stride)
 			if err != nil {
 				t.Skipf("no transposed rope for this shape: %v", err)
 			}

@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 var updatePrefill = flag.Bool("update-prefill", false, "rewrite testdata/prefill_ir.sha")
@@ -47,47 +47,47 @@ func contiguousPrefill(t *testing.T) map[string]*ir.Kernel {
 		{1, 1, 1, 0, 0}, {1, 1, 1, 2049, 0}, {1, 1, 1, 2049, 97}, {32, 4, 2, 2049, 0},
 		{32, 2, 4, 0, 0}, {64, 8, 1, 2049, 97}, {64, 4, 4, 2049, -128}, {16, 1, 1, 2049, 0},
 	} {
-		k, err := kernels.AttnScoresTiledW(8, 64, 256, 2, 2064, .125, c.rows, c.qt, c.kt, c.ks, c.w)
+		k, err := oldkernels.AttnScoresTiledW(8, 64, 256, 2, 2064, .125, c.rows, c.qt, c.kt, c.ks, c.w)
 		add(fmt.Sprintf("scorestiled/r%d/q%d/k%d/s%d/w%d", c.rows, c.qt, c.kt, c.ks, c.w), k, err)
 	}
-	k, err := kernels.AttnScoresTiled(16, 576, 576, 16, 2064, .04, 32, 2, 2, 0)
+	k, err := oldkernels.AttnScoresTiled(16, 576, 576, 16, 2064, .04, 32, 2, 2, 0)
 	add("scorestiled/mla", k, err)
 	for _, c := range []struct{ rows, qt int }{{1, 1}, {32, 1}, {32, 4}, {64, 8}} {
-		k, err := kernels.AttnAccTiled(8, 64, 256, 2, 2064, c.rows, c.qt)
+		k, err := oldkernels.AttnAccTiled(8, 64, 256, 2, 2064, c.rows, c.qt)
 		add(fmt.Sprintf("acctiled/r%d/q%d", c.rows, c.qt), k, err)
 	}
-	k, err = kernels.AttnAccTiled(16, 512, 576, 16, 2064, 32, 4)
+	k, err = oldkernels.AttnAccTiled(16, 512, 576, 16, 2064, 32, 4)
 	add("acctiled/mla", k, err)
 	for _, c := range []struct{ nt, w int }{{1, 0}, {2, 0}, {4, 97}, {2, -256}} {
-		k, err := kernels.AttnScoresMMAW(8, 64, 256, 2, 2064, .125, 64, 2049, c.nt, c.w)
+		k, err := oldkernels.AttnScoresMMAW(8, 64, 256, 2, 2064, .125, 64, 2049, c.nt, c.w)
 		add(fmt.Sprintf("scoresmma/n%d/w%d", c.nt, c.w), k, err)
 	}
 	for _, c := range []struct{ hd, kvd, gqa, ks, mt, nt, w int }{
 		{128, 1024, 4, 2049, 1, 2, 0}, {128, 1024, 4, 2049, 2, 2, 100}, {64, 512, 4, 2049, 1, 1, -64},
 		{576, 576, 16, 0, 1, 2, 0}, {128, 1024, 4, 0, 2, 1, 0},
 	} {
-		k, err := kernels.AttnScoresMMA70(32, c.hd, c.kvd, c.gqa, 2064, .09, 64, c.ks, c.mt, c.nt, c.w)
+		k, err := oldkernels.AttnScoresMMA70(32, c.hd, c.kvd, c.gqa, 2064, .09, 64, c.ks, c.mt, c.nt, c.w)
 		add(fmt.Sprintf("scoresmma70/d%d/kv%d/s%d/m%dn%d/w%d", c.hd, c.kvd, c.ks, c.mt, c.nt, c.w), k, err)
 	}
 	for _, c := range []struct{ hd, kvd, gqa, mt, nt int }{{128, 1024, 4, 1, 2}, {128, 1024, 4, 2, 2}, {512, 576, 16, 2, 2}, {64, 512, 8, 2, 1}} {
-		k, err := kernels.AttnAccMMA70(32, c.hd, c.kvd, c.gqa, 2064, 64, c.mt, c.nt)
+		k, err := oldkernels.AttnAccMMA70(32, c.hd, c.kvd, c.gqa, 2064, 64, c.mt, c.nt)
 		add(fmt.Sprintf("accmma70/d%d/kv%d/m%dn%d", c.hd, c.kvd, c.mt, c.nt), k, err)
 	}
-	for _, s := range []kernels.FlashPrefill70Shape{
+	for _, s := range []oldkernels.FlashPrefill70Shape{
 		{Heads: 32, KVHeads: 8, Dim: 64, Rows: 128, KStride: 2049, Scale: .125},
 		{Heads: 16, KVHeads: 8, Dim: 128, Rows: 64, KStride: 2049, Scale: .088, Window: 100},
 		{Heads: 8, KVHeads: 4, Dim: 128, Rows: 128, KStride: 2049, Scale: .088, Softcap: 50},
 	} {
-		k, err := kernels.FlashPrefill70(s)
+		k, err := oldkernels.FlashPrefill70(s)
 		add(fmt.Sprintf("flash70/h%d-%d/d%d/r%d/w%d/c%g", s.Heads, s.KVHeads, s.Dim, s.Rows, s.Window, s.Softcap), k, err)
 		for _, hd := range []int{s.Dim, 256} {
 			st := s
 			st.Dim = hd
-			tl, ok := kernels.FlashTileFor(hd)
+			tl, ok := oldkernels.FlashTileFor(hd)
 			if !ok {
 				t.Fatalf("no tile at %d", hd)
 			}
-			k, err := kernels.FlashPrefillTile(st, tl)
+			k, err := oldkernels.FlashPrefillTile(st, tl)
 			add(fmt.Sprintf("flashtile/h%d-%d/d%d/r%d/w%d/c%g/sg%d/tk%d", st.Heads, st.KVHeads, st.Dim, st.Rows, st.Window, st.Softcap, tl.SG, tl.TK), k, err)
 		}
 	}

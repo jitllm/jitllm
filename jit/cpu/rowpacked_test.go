@@ -3,11 +3,12 @@
 package cpu_test
 
 import (
-	"github.com/jitllm/jitllm/internal/oracle"
 	"math"
 	"math/rand"
 	"testing"
 	"unsafe"
+
+	"github.com/jitllm/jitllm/internal/oracle"
 
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/cpu"
@@ -15,7 +16,7 @@ import (
 )
 
 // TestPackedRowMatchesTheLayout dequantizes every row of an odd-row-count
-// tensor in every packed format and compares it with kernels.RowPacked. The
+// tensor in every packed format and compares it with oldkernels.RowPacked. The
 // narrow formats pair rows in their d plane (even row low half, odd row high
 // half), and thirteen rows add an unpaired last row. The scales vary per block
 // (quant.PlantScales), since a constant plane hides reading the wrong one.

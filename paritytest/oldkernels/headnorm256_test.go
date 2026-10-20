@@ -6,7 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/internal/oracle"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestHeadNormAtEveryRealHeadDim runs the per-head QK norm against nn.RMSNorm32
@@ -21,7 +21,7 @@ func TestHeadNormAtEveryRealHeadDim(t *testing.T) {
 	for _, hd := range []int{64, 96, 128, 256} {
 		for _, nh := range []int{1, 4} {
 			t.Run(itoa(hd)+"x"+itoa(nh), func(t *testing.T) {
-				k, err := kernels.HeadNorm(nh, hd, eps, 32)
+				k, err := oldkernels.HeadNorm(nh, hd, eps, 32)
 				if err != nil {
 					t.Skipf("no 32-lane head norm for headDim %d: %v", hd, err)
 				}

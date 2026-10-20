@@ -12,6 +12,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 var updateMatVec = flag.Bool("update-matvec", false, "rewrite testdata/matvec_ir.sha")
@@ -37,37 +38,37 @@ func matVecSweep() map[string]string {
 	epi := &compose.Epi{G: g, Out: g.Bin(compose.OpAdd, in, g.Load(g.Buf(compose.BufRow)))}
 	shapes := []struct {
 		name string
-		s    kernels.MatVecShape
+		s    oldkernels.MatVecShape
 	}{
-		{"decode", kernels.MatVecShape{K: 512, Rows: 64}},
-		{"split4", kernels.MatVecShape{K: 512, Rows: 64, Split: 4}},
-		{"group4", kernels.MatVecShape{K: 512, Rows: 64, Split: 4, GroupSplit: true}},
-		{"rowt2", kernels.MatVecShape{K: 512, Rows: 64, Rowt: 2}},
-		{"ntok8", kernels.MatVecShape{K: 512, Rows: 64, NTok: 8, Tok: 1}},
-		{"ntok8tok4", kernels.MatVecShape{K: 512, Rows: 64, NTok: 8, Tok: 4}},
-		{"ntok8tok8", kernels.MatVecShape{K: 512, Rows: 64, NTok: 8, Tok: 8}},
-		{"bias", kernels.MatVecShape{K: 512, Rows: 64, Bias: true}},
-		{"gate", kernels.MatVecShape{K: 512, Rows: 64, Gate: true, GateAct: kernels.ActSiLU}},
-		{"gate2", kernels.MatVecShape{K: 512, Rows: 64, Gate2: true, GateAct: kernels.ActSiLU}},
-		{"experts", kernels.MatVecShape{K: 512, Rows: 64, Experts: 4, Slots: 2}},
-		{"slotact", kernels.MatVecShape{K: 512, Rows: 64, Experts: 4, Slots: 2, SlotAct: true}},
-		{"actin", kernels.MatVecShape{K: 512, Rows: 64, In: kernels.ActIn{On: true, Window: 32}}},
-		{"actinnorm", kernels.MatVecShape{K: 512, Rows: 64, In: kernels.ActIn{On: true, Norm: true, Eps: 1e-6, Window: 32}}},
-		{"sub16", kernels.MatVecShape{K: 48, Rows: 64, Sub: 16}},
+		{"decode", oldkernels.MatVecShape{K: 512, Rows: 64}},
+		{"split4", oldkernels.MatVecShape{K: 512, Rows: 64, Split: 4}},
+		{"group4", oldkernels.MatVecShape{K: 512, Rows: 64, Split: 4, GroupSplit: true}},
+		{"rowt2", oldkernels.MatVecShape{K: 512, Rows: 64, Rowt: 2}},
+		{"ntok8", oldkernels.MatVecShape{K: 512, Rows: 64, NTok: 8, Tok: 1}},
+		{"ntok8tok4", oldkernels.MatVecShape{K: 512, Rows: 64, NTok: 8, Tok: 4}},
+		{"ntok8tok8", oldkernels.MatVecShape{K: 512, Rows: 64, NTok: 8, Tok: 8}},
+		{"bias", oldkernels.MatVecShape{K: 512, Rows: 64, Bias: true}},
+		{"gate", oldkernels.MatVecShape{K: 512, Rows: 64, Gate: true, GateAct: kernels.ActSiLU}},
+		{"gate2", oldkernels.MatVecShape{K: 512, Rows: 64, Gate2: true, GateAct: kernels.ActSiLU}},
+		{"experts", oldkernels.MatVecShape{K: 512, Rows: 64, Experts: 4, Slots: 2}},
+		{"slotact", oldkernels.MatVecShape{K: 512, Rows: 64, Experts: 4, Slots: 2, SlotAct: true}},
+		{"actin", oldkernels.MatVecShape{K: 512, Rows: 64, In: oldkernels.ActIn{On: true, Window: 32}}},
+		{"actinnorm", oldkernels.MatVecShape{K: 512, Rows: 64, In: oldkernels.ActIn{On: true, Norm: true, Eps: 1e-6, Window: 32}}},
+		{"sub16", oldkernels.MatVecShape{K: 48, Rows: 64, Sub: 16}},
 	}
 	for q := kernels.Q4_0; q <= kernels.TQ2F; q++ {
 		for _, sh := range shapes {
 			s := sh.s
 			s.T = q
-			k, err := kernels.MatVec(s)
+			k, err := oldkernels.MatVec(s)
 			add(fmt.Sprintf("%v/%s", q, sh.name), k, err)
 		}
-		k, err := kernels.MatVecEpi(kernels.MatVecShape{T: q, K: 512, Rows: 64}, epi)
+		k, err := oldkernels.MatVecEpi(oldkernels.MatVecShape{T: q, K: 512, Rows: 64}, epi)
 		add(fmt.Sprintf("%v/epi", q), k, err)
-		segs := []kernels.MatVecShape{{T: q, K: 512, Rows: 64}, {T: q, K: 512, Rows: 32}}
-		k, err = kernels.MatVecSegments(segs, 1, false)
+		segs := []oldkernels.MatVecShape{{T: q, K: 512, Rows: 64}, {T: q, K: 512, Rows: 32}}
+		k, err = oldkernels.MatVecSegments(segs, 1, false)
 		add(fmt.Sprintf("%v/segments", q), k, err)
-		k, err = kernels.MatVecSegments(segs, 4, true)
+		k, err = oldkernels.MatVecSegments(segs, 4, true)
 		add(fmt.Sprintf("%v/segments-group4", q), k, err)
 	}
 	return out
