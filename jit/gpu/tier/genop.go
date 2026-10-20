@@ -606,13 +606,27 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		if hd <= 0 || iw%hd != 0 {
 			return nil
 		}
+		if o.V != nil {
+			// A subgroup a head where the device promises one and the head
+			// is a whole number of its lanes, else a thread a head.
+			lanes := 1
+			if g.composeTarget().Lanes == ir.SubgroupLanes && hd%ir.SubgroupLanes == 0 {
+				lanes = ir.SubgroupLanes
+			}
+			rb.r.Width, rb.r.Rows = lanes, rows*(iw/hd)
+			x, wt, y := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufVec, gaV), rb.buf(compose.BufOut, gaOut0)
+			rb.r.LaneRMSNorm(x, wt, y, hd, 1, eps)
+			k := g.rowKernWith(&rb.r, compose.Facts{RowGroup: max(lanes, 32)})
+			if k.k == nil {
+				return nil
+			}
+			l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
+			copy(l.args[:], rb.args)
+			return []genLaunch{l}
+		}
 		rb.r.Width, rb.r.Rows = hd, rows*(iw/hd)
 		x := rb.load(compose.BufRow, gaIn0)
-		y := rb.bin(compose.OpMul, x, rb.rmsOf(x, hd, eps))
-		if o.V != nil {
-			y = rb.bin(compose.OpMul, y, rb.load(compose.BufVec, gaV))
-		}
-		rb.store(y, gaOut0)
+		rb.store(rb.bin(compose.OpMul, x, rb.rmsOf(x, hd, eps)), gaOut0)
 	case dkQuant:
 		if o.OneRow && rows > 1 {
 			return nil
