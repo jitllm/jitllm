@@ -7,7 +7,6 @@ import (
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
@@ -665,11 +664,13 @@ func (g *devTier) rowGrain() int {
 		return batchGrain
 	}
 	// What any geometry's blocks ask, the tier's grain being one: a
-	// mixture's banks, or a prefill attention tile at a head a whole number
-	// of 32 wide where no collective tile serves it.
+	// mixture's banks, or a prefill attention the collective-tile flash
+	// does not take at a head a whole number of 32 wide (its staged forms
+	// ask the matrix instruction).
 	asks := func(p *nn.LayerPlan) bool {
-		attn := g.composeTarget().API != compose.APIMSL && p.HeadDim > 0 && p.HeadDim%32 == 0
-		return p.NExpert > 0 || attn
+		_, _, tile := flashTileOf(p.HeadDim, batchWidth)
+		tile = tile && g.tilesOK() && !p.MLA()
+		return p.NExpert > 0 || p.HeadDim > 0 && p.HeadDim%32 == 0 && !tile
 	}
 	if g.anyNarrow() || asks(&g.bs.p) {
 		return 8
