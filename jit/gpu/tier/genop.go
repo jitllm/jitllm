@@ -1384,8 +1384,9 @@ func (g *devTier) genMatVecNodes(o *devOp, prog *devProgram, bs *blockScratch, r
 		w.Experts, w.Sel, w.SelPer = m.experts, rb.buf(compose.BufU32, gaHeadTiles), groupTok
 	case bank:
 		w.Experts, w.Sel = m.experts, rb.buf(compose.BufU32, gaIn1)
-		// The gate and up read the row, the down a slot's own activation.
-		if prog.vals[o.In[2]].Layout != layoutPairs {
+		// The gate and up read the row, the down a slot's own activation,
+		// and a bank over heads each head's slice of the row.
+		if x := prog.vals[o.In[2]]; x.Layout != layoutPairs && x.Width == m.k {
 			a.One, a.Toks = true, 1
 		}
 	}
