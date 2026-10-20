@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend/recorder"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
@@ -69,6 +70,47 @@ func sameAsMain(t *testing.T, main, composed []*ir.Kernel) {
 	}
 	t.Errorf("%d of %d of main's values (%.1f%%); first missing %%%d %s", n, total,
 		100*float64(n)/float64(total), miss[0].Op, paritytest.Explain(in, miss[0].K, miss[0].Op, 3))
+}
+
+// TestElementwiseIsMains holds the tier's lowering of the elementwise ops
+// and the quantizers to main's kernels for them on a ptx target.
+func TestElementwiseIsMains(t *testing.T) {
+	prof := recorder.Profiles["cuda-sm70"]
+	for _, w := range []int{64, 256, 2048} {
+		for _, rows := range []int{1, 32} {
+			plan := nn.LayerPlan{ActWin: 32, NEmbd: w}
+			n, win := rows*w, min(32, w)
+			cases := []struct {
+				name      string
+				op        devOp
+				ins, outs []int
+				main      func() (*ir.Kernel, error)
+			}{
+				{"add", devOp{Kind: dkAdd}, []int{w, w}, []int{w}, func() (*ir.Kernel, error) { return mainkernels.Add(n) }},
+				{"act_mul", devOp{Kind: dkActMul, Act: graph.ActSiLU}, []int{w, w}, []int{w}, func() (*ir.Kernel, error) {
+					return mainkernels.ActMul(n, mainkernels.ActSiLU)
+				}},
+				{"act", devOp{Kind: dkAct, Act: graph.ActSiLU}, []int{w}, []int{w}, func() (*ir.Kernel, error) {
+					return mainkernels.Act(n, mainkernels.ActSiLU)
+				}},
+				{"quantize", devOp{Kind: dkQuant}, []int{w}, []int{w}, func() (*ir.Kernel, error) {
+					return mainkernels.Quantize(n, win)
+				}},
+				{"act_quant", devOp{Kind: dkActQuant, Act: graph.ActSiLU}, []int{w, w}, []int{w}, func() (*ir.Kernel, error) {
+					return mainkernels.QuantizeAct(n, win, mainkernels.ActSiLU)
+				}},
+			}
+			for _, c := range cases {
+				t.Run(fmt.Sprintf("%s_%dx%d", c.name, rows, w), func(t *testing.T) {
+					mk, err := c.main()
+					if err != nil {
+						t.Fatal(err)
+					}
+					sameAsMain(t, []*ir.Kernel{mk}, opKernels(t, prof, c.op, c.ins, c.outs, false, plan, rows))
+				})
+			}
+		}
+	}
 }
 
 // TestNormsAreMains holds the tier's lowering of the RMSNorm ops -- alone,

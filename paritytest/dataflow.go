@@ -89,11 +89,13 @@ type Interner struct {
 	fields map[int32]field
 	// desc is each atom's description, for Explain.
 	desc map[int32]string
+	// affs is each named affine form, by its name.
+	affs map[int32]affine
 }
 
 // NewInterner is an empty interner.
 func NewInterner() *Interner {
-	return &Interner{ids: map[form]int32{}, desc: map[int32]string{}, fields: map[int32]field{}}
+	return &Interner{ids: map[form]int32{}, desc: map[int32]string{}, fields: map[int32]field{}, affs: map[int32]affine{}}
 }
 
 // form is one canonical form: an instruction by its kind, type, loop depth,
@@ -279,7 +281,57 @@ func (c *canon) affineName(a affine) int32 {
 	for _, t := range a.terms {
 		id = c.in.name(form{tag: fTerm, imm: t.coef, a: [4]int32{id, t.atom}})
 	}
+	c.in.affs[id] = a
 	return id
+}
+
+// merge is a with its digits of one dividend recombined: coef*field(x,/d,%m)
+// beside coef*(m/d)*field(x,/m,%M) is coef*field(x,/d,%M), and a field
+// x/1 with no modulus is x itself.
+func (c *canon) merge(a affine) affine {
+	for changed := true; changed; {
+		changed = false
+		for i := 0; i < len(a.terms) && !changed; i++ {
+			f1, ok1 := c.in.fields[a.terms[i].atom]
+			if !ok1 || f1.m == 0 {
+				continue
+			}
+			for j := 0; j < len(a.terms) && !changed; j++ {
+				f2, ok2 := c.in.fields[a.terms[j].atom]
+				if i == j || !ok2 || f2.x != f1.x || f2.d != f1.m || f1.m%f1.d != 0 ||
+					a.terms[j].coef != a.terms[i].coef*(f1.m/f1.d) {
+					continue
+				}
+				coef := a.terms[i].coef
+				var rest affine
+				rest.c = a.c
+				for k, t := range a.terms {
+					if k != i && k != j {
+						rest.terms = append(rest.terms, t)
+					}
+				}
+				a = rest.add(c.fieldAtom(field{x: f1.x, d: f1.d, m: f2.m}).scale(coef), 1)
+				changed = true
+			}
+		}
+		for i, t := range a.terms {
+			if f, ok := c.in.fields[t.atom]; ok && f.d == 1 && f.m == 0 {
+				if x, ok := c.in.affs[f.x]; ok {
+					var rest affine
+					rest.c = a.c
+					for k, u := range a.terms {
+						if k != i {
+							rest.terms = append(rest.terms, u)
+						}
+					}
+					a = rest.add(x.scale(t.coef), 1)
+					changed = true
+					break
+				}
+			}
+		}
+	}
+	return a
 }
 
 func isInt(t ir.Type) bool { return t == ir.U32 || t == ir.I32 }
@@ -442,6 +494,7 @@ func (c *canon) index(i int) (affine, bool) {
 		r = c.atom(atomOpaque, c.instrName(i), 0)
 		c.in.desc[r.terms[0].atom] = c.describeOp(i, 3)
 	}
+	r = c.merge(r)
 	c.aff[i] = &r
 	return r, true
 }
