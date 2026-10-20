@@ -895,6 +895,8 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		width = b.Const(ir.U32, int64(g.Width))
 		last = b.Const(ir.U32, int64(g.Width-1))
 	}
+	overRows := s.Flat && mma == nil && max(s.Split, 1) == 1 && max(s.Tile, 1)*max(s.TileCols, 1) == 1 && g.Rows > 1
+	col := g.colDeps()
 	rowVal := make([]ir.Value, len(g.Nodes)) // a reduction's result, once its pass ran
 	// rowEnv holds the row's values that read no element (a norm's scale),
 	// computed once where the passes first need them (hoist) and read by
@@ -1263,7 +1265,13 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			t := g.typeOf(nd.A)
 			switch nd.Op {
 			case OpAdd:
-				v = b.Add(t, x, y)
+				if overRows && g.Nodes[nd.B].Kind == NColumn && !col[nd.A] {
+					// A row's place plus the column is that place less the
+					// row's base plus the flat index the column came from.
+					v = b.Add(t, b.Sub(t, x, rowBase), flatRaw)
+				} else {
+					v = b.Add(t, x, y)
+				}
 			case OpSub:
 				v = b.Sub(t, x, y)
 			case OpMul:

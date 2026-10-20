@@ -315,6 +315,34 @@ func (c *canon) merge(a affine) affine {
 			}
 		}
 		for i, t := range a.terms {
+			f, ok := c.in.fields[t.atom]
+			if changed || !ok || f.m != 0 || f.d <= 1 || t.coef%f.d != 0 {
+				continue
+			}
+			x, ok := c.in.affs[f.x]
+			k := -t.coef / f.d
+			if !ok || x.isConst() {
+				continue
+			}
+			var rest affine
+			rest.c = a.c
+			for j, u := range a.terms {
+				if j != i {
+					rest.terms = append(rest.terms, u)
+				}
+			}
+			r := rest.add(x.scale(k), -1)
+			if len(r.terms) > len(rest.terms)-len(x.terms) {
+				continue
+			}
+			// x - d*(x/d) is x%d.
+			a = r.add(c.fieldAtom(field{x: f.x, d: 1, m: f.d}).scale(k), 1)
+			changed = true
+		}
+		for i, t := range a.terms {
+			if changed {
+				break
+			}
 			if f, ok := c.in.fields[t.atom]; ok && f.d == 1 && f.m == 0 {
 				if x, ok := c.in.affs[f.x]; ok {
 					var rest affine
