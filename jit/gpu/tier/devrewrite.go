@@ -418,18 +418,28 @@ func ropeQKVFuses(p *nn.LayerPlan) bool {
 		p.NKVHead*p.HeadDim == p.KVRow()
 }
 
+// producedBy reports whether value v is written by an op of kind k.
+func (p *devProgram) producedBy(v devVal, k devKind) bool {
+	for _, o := range p.ops {
+		if o.Kind == k && slices.Contains(o.Out, v) {
+			return true
+		}
+	}
+	return false
+}
+
 // rwRopeQKV: q's rotary and the history write, one paged launch.
 func rwRopeQKV(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	if bs.pkv == nil || g.NoFuse || !ropeQKVFuses(&bs.p) {
 		return false
 	}
 	for i, o := range p.ops {
-		if o.Kind != dkRopeQ {
-			continue
+		if o.Kind != dkRopeQ || o.N > 0 {
+			continue // an indexer's query lands in a table of its own
 		}
 		for j := i + 1; j < len(p.ops); j++ {
 			w := p.ops[j]
-			if w.Kind != dkKVWrite || p.slots[w.In[0]] == slotKAll {
+			if w.Kind != dkKVWrite || p.producedBy(w.In[0], dkIdxAssemble) {
 				continue // an assembled row (an indexer's key in it) writes alone
 			}
 			// The fused launch goes where the history write was, after

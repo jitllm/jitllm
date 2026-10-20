@@ -153,6 +153,8 @@ type Dense struct {
 	// (OpNGram), binding NGramW.
 	NGram  bool
 	NGramW []Binding
+	// NGramTaps and NGramDil are its convolution's taps and their spacing.
+	NGramTaps, NGramDil int
 	// AltUp, where set, is Gemma 3n's residual of AltUp streams: the block
 	// runs on the active stream OpAltPredict reads out, with LAuReL beside
 	// its attention, and OpAltCorrect (carrying the per-layer input, PLEDim
@@ -254,7 +256,8 @@ func (d *Dense) Build() *Graph {
 	if d.NGram {
 		xn := g.value("x_ngram", rw)
 		g.op(Op{Kind: OpNGram, In: []ValueID{x}, Out: []ValueID{xn}, Weight: d.NGramW,
-			Reads: []StateRef{{"ngram", 0}}, Writes: []StateRef{{"ngram", 1}}, Attr: Attrs{Streams: d.Streams.N}})
+			Reads: []StateRef{{"ngram", 0}}, Writes: []StateRef{{"ngram", 1}},
+			Attr: Attrs{Streams: d.Streams.N, Taps: d.NGramTaps, Dil: d.NGramDil}})
 		x = xn
 	}
 	// mixOf is a sublayer's read of the streams (OpStreamMix): its row and

@@ -634,7 +634,7 @@ func (g *Row) LoadVec(b, ix, w, c int) int {
 // rows of K (src, heads*hd a row) a thread a pair (NORM or NEOX pairs) into
 // the row's place in the paged K pool out ([width][page] a page), the place
 // its descriptor at desc and the page ids at tab name.
-func (g *Row) PagedRotaryPairs(src, cs, desc, tab, out, heads, hd, nrot int, neox bool, page int) {
+func (g *Row) PagedRotaryPairs(src, cs, desc, tab, out, heads, hd, nrot int, neox bool, page, width int) {
 	u, ub := g.UConst, g.UBin
 	pairs := nrot / 2
 	e, row := g.Column(), g.RowIdx()
@@ -648,11 +648,11 @@ func (g *Row) PagedRotaryPairs(src, cs, desc, tab, out, heads, hd, nrot int, neo
 		base = ub(OpAdd, head, ub(OpMul, p, u(2)))
 	}
 	at := ub(OpAdd, ub(OpMul, p, u(2)), ub(OpMul, row, u(nrot)))
-	x := ub(OpAdd, base, ub(OpMul, row, u(heads*hd)))
+	x := ub(OpAdd, base, ub(OpMul, row, u(width)))
 	c, s := g.LoadAt(cs, at), g.LoadAt(cs, ub(OpAdd, at, u(1)))
 	x0, x1 := g.LoadAt(src, x), g.LoadAt(src, ub(OpAdd, x, u(stride)))
 	pid, off := g.PagedPos(desc, tab, page)
-	o := ub(OpAdd, ub(OpMul, pid, u(page*heads*hd)), ub(OpAdd, ub(OpMul, base, u(page)), off))
+	o := ub(OpAdd, ub(OpMul, pid, u(page*width)), ub(OpAdd, ub(OpMul, base, u(page)), off))
 	g.StoreAt(out, g.Bin(OpSub, g.Bin(OpMul, x0, c), g.Bin(OpMul, x1, s)), o)
 	g.StoreAt(out, g.Bin(OpAdd, g.Bin(OpMul, x0, s), g.Bin(OpMul, x1, c)), ub(OpAdd, o, u(stride*page)))
 }

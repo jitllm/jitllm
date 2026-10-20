@@ -449,8 +449,9 @@ type Attrs struct {
 	// Alpha is a residual OpAdd's scale on its second input (Granite's
 	// residual_scale: x + Alpha*y); 0 is one.
 	Alpha float64
-	// Taps is OpConv's kernel.
-	Taps int
+	// Taps is OpConv's kernel, and OpNGram's convolution's; Dil the
+	// latter's spacing between taps.
+	Taps, Dil int
 	// Bound is OpClamp's.
 	Bound float64
 	// Offset and Width are OpSlice's.

@@ -3641,6 +3641,10 @@ func freeScratch(bs *blockScratch, g *devShared) {
 	}
 	bs.vsegs = nil
 	freePaged(bs.pkv)
+	for k, e := range bs.own { // a map, which the field walk does not follow
+		e.b.Free()
+		delete(bs.own, k)
+	}
 	bs.mlab.free(g)
 	bs.ds4.free(g)
 	bs.k3.free(g)

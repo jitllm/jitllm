@@ -270,7 +270,7 @@ func (m *Model) blockFacts(li int) (graph.Facts, error) {
 	if c.Q4E() {
 		d.Streams = &graph.Streams{N: c.HCMult, LowRank: c.HCLowRank}
 		if c.NGramAt(li) {
-			d.NGram = true
+			d.NGram, d.NGramTaps, d.NGramDil = true, c.NGramConv, c.NGram
 			for _, r := range []jlm.Role{jlm.RoleNGramKey, jlm.RoleNGramValue, jlm.RoleNGramNormKey,
 				jlm.RoleNGramNormQuery, jlm.RoleNGramNormConv, jlm.RoleNGramConv} {
 				sh := inv[r]

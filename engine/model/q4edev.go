@@ -21,6 +21,7 @@ func (s *State) q4ePlan(li int, plan *nn.LayerPlan) {
 		q.QSARatio = c.QSARatio
 		if c.NRot > 0 {
 			q.QSARope = s.m.rope.TabPlanes(c.NRot / 2)
+			plan.RopeTabScalar = q.QSARope
 		}
 		plan.IdxHeads, plan.IdxHeadDim, plan.IdxTopK = c.IdxHeads, c.IdxHeadDim, c.IdxTopK
 	} else {

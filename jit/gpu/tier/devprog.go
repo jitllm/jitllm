@@ -8,6 +8,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // The device program (docs/design/composer.md, "The device program"): a
@@ -780,6 +781,10 @@ type devOp struct {
 	// owns (an add's scale), uploaded at admission.
 	Gen []genLaunch
 	GC  backend.Buf
+	// Own is the op's own buffers (gaOwn0..), kept with the scratch it was
+	// generated over (ownBuf): its tables and the scratch between its
+	// launches.
+	Own [8]backend.Buf
 }
 
 // devProgram is a block's device program.
@@ -1053,7 +1058,7 @@ func lowersOp(k graph.OpKind) bool {
 // buildDevProgram lowers p's graph to a device program, or says why it does
 // not: an op or an attribute the program does not lower yet. The reason is
 // what BlockProgram reports for a block left on the encoder.
-func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
+func buildDevProgram(p *nn.LayerPlan, l *layer, page int) (*devProgram, string) {
 	g := l.graph
 	switch {
 	case g == nil:
@@ -1817,7 +1822,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			prog.ops = append(prog.ops, devOp{Kind: dkQuant, Src: []int{i}, In: []devVal{emb}, Out: []devVal{qe}})
 			key := prog.val("ng_key", sw, slotNKey)
 			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{qe, emb}, Out: []devVal{key}, W: kw})
-			val := prog.val("ng_val", sw, slotNVal)
+			val := prog.val("ng_val", f32(ne), slotNVal)
 			prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{qe, emb}, Out: []devVal{val}, W: vw})
 			norm := func(nm string, v devVal, r jlm.Role, s devSlot) devVal {
 				out := prog.val(nm, prog.vals[v], s)
@@ -2304,22 +2309,30 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 					return nil, "an indexer whose projections the block's device copy does not hold"
 				}
 				hq := operand(h, i, false)
-				kRaw := prog.val("idx_k", f32(x.Attr.HeadDim), slotIKRaw)
+				hd, nh := x.Attr.HeadDim, x.Attr.NHead
+				kRaw := prog.val("idx_k", f32(hd), slotAuto)
 				prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{hq}, Out: []devVal{kRaw}, W: kw})
-				qRaw := prog.val("idx_q", f32(x.Attr.NHead*x.Attr.HeadDim), slotIQRaw)
+				qRaw := prog.val("idx_q", f32(nh*hd), slotAuto)
 				prog.ops = append(prog.ops, devOp{Kind: dkMatVec, Src: []int{i}, In: []devVal{hq}, Out: []devVal{qRaw}, W: qw})
-				qn := prog.val("idx_q_normed", prog.vals[qRaw], slotIQn)
-				prog.ops = append(prog.ops, devOp{Kind: dkIdxNorm, Src: []int{i}, In: []devVal{qRaw}, Out: []devVal{qn}})
+				qn := prog.val("idx_q_normed", prog.vals[qRaw], slotAuto)
+				prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{qRaw}, Out: []devVal{qn},
+					Role: jlm.RoleIdxQNorm, HD: hd})
 				key := kRaw
 				if !x.Attr.Pooled {
 					// The selecting form's key is normed; the pooled form's
 					// is the raw projection, normed per block as it pools.
-					key = prog.val("idx_k_normed", prog.vals[kRaw], slotIKn)
-					prog.ops = append(prog.ops, devOp{Kind: dkIdxNorm, Src: []int{i}, In: []devVal{kRaw}, Out: []devVal{key}})
+					key = prog.val("idx_k_normed", prog.vals[kRaw], slotAuto)
+					prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{kRaw}, Out: []devVal{key},
+						Role: jlm.RoleIdxKNorm, HD: hd})
 				}
-				qr := prog.val("idx_q_rot", prog.vals[qn], slotIQRot)
-				prog.ops = append(prog.ops, devOp{Kind: dkIdxRope, Src: []int{i}, In: []devVal{qn}, Out: []devVal{qr}})
-				all := prog.val("k_all", f32(kv), slotKAll)
+				layout := graph.RopeNorm
+				if p.RopeNeox {
+					layout = graph.RopeNeox
+				}
+				qr := prog.val("idx_q_rot", prog.vals[qn], slotAuto)
+				prog.ops = append(prog.ops, devOp{Kind: dkRopeQ, Src: []int{i}, In: []devVal{qn}, Out: []devVal{qr},
+					A: graph.Attrs{HeadDim: hd, NRot: p.NRot, Layout: layout}, N: nh * hd})
+				all := prog.val("k_all", f32(kv), slotAuto)
 				prog.ops = append(prog.ops, devOp{Kind: dkIdxAssemble, Src: []int{i}, In: []devVal{in(0), key}, Out: []devVal{all}})
 				hist := prog.val("kv", devType{Elem: elemF32, Layout: layoutKV, Width: kv}, slotKV)
 				prog.ops = append(prog.ops, devOp{Kind: dkKVWrite, Src: []int{i - 1, i}, In: []devVal{all, in(1)}, Out: []devVal{hist}})
@@ -2374,14 +2387,26 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			if len(o.In) > 1 {
 				// Attention over the indexer's selection: the scores, the
 				// best blocks, their keys and values gathered, attended.
-				sc := prog.val(name(0)+".scores", f32(1), slotISel)
+				// The selection's sizes, per row: the blocks the history
+				// spans and the kept ones (the pooled form's tail among
+				// them), the gathered pages of each.
+				x := selectOf(g)
+				if x == nil {
+					return nil, "an attention over a selection with no block-selecting indexer"
+				}
+				sz := selSizes(p, x.Attr, page)
+				sc := prog.val(name(0)+".scores", f32(sz.scores), slotAuto)
 				prog.ops = append(prog.ops, devOp{Kind: dkIdxScore, Src: []int{i}, In: []devVal{in(1)}, Out: []devVal{sc}, Staged: true})
-				sel := prog.val(name(0)+".selection", f32(1), slotISel)
+				sel := prog.val(name(0)+".selection", devType{Elem: elemU32, Width: sz.list}, slotAuto)
 				prog.ops = append(prog.ops, devOp{Kind: dkSelectBlocks, Src: []int{i}, In: []devVal{sc}, Out: []devVal{sel}, Staged: true})
-				gk := prog.val(name(0)+".gathered", f32(1), slotISel)
-				prog.ops = append(prog.ops, devOp{Kind: dkGatherKV, Src: []int{i}, In: []devVal{sel}, Out: []devVal{gk}, Staged: true})
+				gk := prog.val(name(0)+".gathered_k", f32(sz.gk), slotAuto)
+				gv := prog.val(name(0)+".gathered_v", f32(sz.gv), slotAuto)
+				gd := prog.val(name(0)+".gathered_desc", devType{Elem: elemU32, Width: kernels.PRowWords}, slotAuto)
+				prog.ops = append(prog.ops, devOp{Kind: dkGatherKV, Src: []int{i}, In: []devVal{sel}, Out: []devVal{gk, gv, gd}, Staged: true,
+					Need: []devType{prog.vals[sel]}})
 				out := prog.val(name(0), f32(qd), slotXB)
-				prog.ops = append(prog.ops, devOp{Kind: dkAttendGathered, Src: []int{i}, In: []devVal{q, gk}, Out: []devVal{out}})
+				prog.ops = append(prog.ops, devOp{Kind: dkAttendGathered, Src: []int{i}, In: []devVal{q, gk, gv, gd}, Out: []devVal{out},
+					Need: []devType{{}, {}, {}, prog.vals[gd]}})
 				vals[o.Out[0]] = out
 				continue
 			}

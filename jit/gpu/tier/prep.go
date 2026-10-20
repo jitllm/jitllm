@@ -1564,7 +1564,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	if old := g.layers[li]; old != nil && old != l {
 		g.dropLayerLocal(old)
 	}
-	l.prog, l.progWhy = buildDevProgram(p, l)
+	l.prog, l.progWhy = buildDevProgram(p, l, g.kvPage())
 	g.layers[li] = l
 	g.layerGen++
 	// The reserved widths' scratches, before the blocks fill the card.

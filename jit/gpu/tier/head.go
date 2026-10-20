@@ -108,7 +108,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	switch {
 	case !ok || h.W.K != p.NEmbd || h.W.Rows <= 0 || len(h.W.Data) == 0:
 		return false
-	case len(h.Norm) == 0 || p.NEmbd%bs.parts != 0 || lnBlock(p) && (len(h.NormB) != len(h.Norm) || bs.part2 == nil):
+	case len(h.Norm) > 0 && p.NEmbd%bs.parts != 0 || lnBlock(p) && (len(h.NormB) != len(h.Norm) || bs.part2 == nil):
 		g.LastErr = "the head's norm has no composed form"
 		return false
 	}
@@ -128,8 +128,12 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	for i, v := range h.Norm {
 		f[i] = float32(v)
 	}
-	if bs.hNorm, err = g.dev.Alloc(len(f) * 4); err != nil || bs.hNorm.Write(f32b(f)) != nil {
-		return false
+	// A head with no norm (a mix read as it is) copies the row where the
+	// norm would have written.
+	if len(f) > 0 {
+		if bs.hNorm, err = g.dev.Alloc(len(f) * 4); err != nil || bs.hNorm.Write(f32b(f)) != nil {
+			return false
+		}
 	}
 	if lnBlock(p) {
 		if bs.hNormB, err = g.dev.Alloc(len(h.NormB) * 4); err != nil || bs.hNormB.Write(f32b(h.NormB)) != nil {
@@ -174,13 +178,20 @@ func (g *devTier) headProgram(p *nn.LayerPlan, r *resident, h *nn.Head, split in
 		prog = append(prog, ls...)
 		return err
 	}
-	if lnBlock(p) {
+	switch {
+	case len(h.Norm) == 0:
+		cp := &headBuild{r: compose.Row{Width: n, Rows: 1}}
+		cp.r.Store(cp.buf(compose.BufOut, haH), cp.r.Load(cp.buf(compose.BufRow, haX)))
+		if err := add(cp, flat); err != nil {
+			return nil, err
+		}
+	case lnBlock(p):
 		for _, b := range layerNormBuilds(n, 1, parts, float32(p.RMSEps)) {
 			if err := add(b, flat); err != nil {
 				return nil, err
 			}
 		}
-	} else {
+	default:
 		ps := &headBuild{r: compose.Row{Width: parts, Rows: 1}}
 		x := ps.buf(compose.BufRow, haX)
 		ps.r.Store(ps.buf(compose.BufOut, haPart), ps.r.SquareSumParts(x, n, parts))
@@ -330,7 +341,15 @@ func (g *devTier) ensureRowsHead(bs *blockScratch, h *nn.Head) bool {
 		}
 		return err == nil
 	}
-	if lnBlock(p) {
+	switch {
+	case hd.hNorm == nil:
+		// A head with no norm reads the rows as they are.
+		cp := &headBuild{r: compose.Row{Width: n, Rows: R}}
+		cp.r.Store(cp.buf(compose.BufOut, haH), cp.r.Load(cp.buf(compose.BufRow, haX)))
+		if !add(cp, flat) {
+			return false
+		}
+	case lnBlock(p):
 		if bs.part2 == nil {
 			return false
 		}
@@ -339,7 +358,7 @@ func (g *devTier) ensureRowsHead(bs *blockScratch, h *nn.Head) bool {
 				return false
 			}
 		}
-	} else {
+	default:
 		nb := &headBuild{r: compose.Row{Width: n, Rows: R}}
 		x := nb.r.Load(nb.buf(compose.BufRow, haX))
 		w := nb.r.Load(nb.buf(compose.BufVec, haNorm))

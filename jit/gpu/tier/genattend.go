@@ -60,7 +60,10 @@ func (g *devTier) attendAt(o *devOp, prog *devProgram, bs *blockScratch, rows, k
 }
 
 // attendKey names an attention variant: its op, its rows, its keys.
-type attendKey struct{ op, rows, keys int }
+type attendKey struct {
+	op, rows, keys int
+	gathered       bool
+}
 
 // attendKeys is the paged attention planned for keys keys: the flash
 // decode where its plan takes it, else the staged composition.

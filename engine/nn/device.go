@@ -791,6 +791,11 @@ type LayerPlan struct {
 	// is zero. A tier may ignore them and upload the finished cs/csSWA tables
 	// instead; see tier.Config.RopeTableHost.
 	RopeTab, RopeTabSWA []float32
+	// RopeTabScalar is the rotary's folded planes at a scalar position
+	// (Rope.TabPlanes), whatever table the call's rows turn by: what a
+	// block selection's pooled keys turn by at their blocks' first
+	// positions. Nil where nothing reads it.
+	RopeTabScalar []float32
 	// RopeSplit is XD-RoPE (HunyuanVL): each NEOX pair's two elements turn by
 	// tables of their own, so a row's table is two of NRot floats (A then B;
 	// RopeW) and the rotation does not keep a head's RMS -- k's norm follows

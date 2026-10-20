@@ -263,6 +263,8 @@ func (g *devTier) layersSession(s backend.Session) {
 			if len(o.Gen) == 1 && o.Gen[0].former == formAttend {
 				// The attention of this call's keys, or its run table's.
 				switch {
+				case o.Kind == dkAttendGathered:
+					o.Gen = g.gatheredAttendAt(&o, prog, bs, fc.rows, pagedKeys(pk.rows))
 				case pk.rag.n > 0:
 					o.Gen = g.ragAttendAt(&o, prog, bs)
 				case pk.pre.on:

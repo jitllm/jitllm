@@ -254,8 +254,10 @@ type blockScratch struct {
 	pleIn, pleG, pleS, pleA, pleO backend.Buf
 	// headTiles is each token group's head over the chunk's rows head-major
 	// (headTiles in genop.go), headTilesN its entries.
-	headTiles                  backend.Buf
-	headTilesN                 int
+	headTiles  backend.Buf
+	headTilesN int
+	// own is the ops' own buffers generated over this scratch (ownBuf).
+	own                        map[ownKey]ownEntry
 	pleSlice, pleAct, pleQuant backend.Kernel
 	// Gemma 3n's AltUp and LAuReL (nn.LayerPlan.AltUp, altup.go): the
 	// router's modalities, every stream's prediction, the corrected streams,

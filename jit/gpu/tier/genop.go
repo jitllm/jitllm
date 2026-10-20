@@ -101,6 +101,14 @@ const (
 	gaMgHG      // the sorted rows,
 	gaMgGA      // and their int8 operand
 	gaMgGAX
+	gaOwn0 // the op's own buffers (devOp.Own)
+	gaOwn1
+	gaOwn2
+	gaOwn3
+	gaOwn4
+	gaOwn5
+	gaOwn6
+	gaOwn7
 )
 
 // genLaunch is one generated launch: threads for a flat launch, or groups of
@@ -331,6 +339,18 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 			o.Why = whyNone
 		}
 		return l
+	case dkStreamNorm, dkStreamDot, dkGatedVal, dkNGramConv, dkNGramAdd:
+		ls := g.genStreams(o, prog, bs, rows)
+		if ls == nil {
+			o.Why = whyNoForm
+		}
+		return ls
+	case dkIdxAssemble, dkIdxScore, dkSelectBlocks, dkGatherKV, dkAttendGathered:
+		ls := g.genSelect(o, prog, bs, rows)
+		if ls == nil {
+			o.Why = whyNoForm
+		}
+		return ls
 	case dkAttend, dkLatentAttend:
 		l := g.genAttend(o, prog, bs, rows)
 		o.Why = whyNoForm
@@ -607,6 +627,13 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		offArg := gaQOff
 		if o.Kind == dkRopeKRow {
 			offArg = gaKOff
+		}
+		if o.N > 0 {
+			// Rows landing N apart in a table of the op's own.
+			if o.Own[0] = g.ownBuf(bs, o, 0, rows, rowTable(rows, o.N, 0)); o.Own[0] == nil {
+				return nil
+			}
+			offArg = gaOwn0
 		}
 		return g.ropePairs(rows, iw, ra.HeadDim, ra.NRot, ra.Layout == graph.RopeNeox || ra.Layout == graph.RopeXD,
 			ra.Layout == graph.RopeXD, gaIn0, offArg, gaOut0)
@@ -963,6 +990,8 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.bs.pleIn
 			case gaHeadTiles:
 				bufs[j] = st.bs.headTiles
+			case gaOwn0, gaOwn1, gaOwn2, gaOwn3, gaOwn4, gaOwn5, gaOwn6, gaOwn7:
+				bufs[j] = o.Own[a-gaOwn0]
 			case gaMgBC, gaMgOff, gaMgCnt, gaMgEnds, gaMgColE, gaMgPerm, gaMgPos, gaMgTsel, gaMgHG, gaMgGA, gaMgGAX:
 				m := bs.mg
 				bufs[j] = [...]backend.Buf{m.bc, m.off, m.cnt, m.ends, m.colE, m.perm, m.pos, m.tsel, m.hg, m.ga, m.gax}[a-gaMgBC]
@@ -1471,18 +1500,33 @@ func (g *devTier) genPagedWrite(o *devOp, prog *devProgram, bs *blockScratch, ro
 	p := &bs.p
 	kw, vw := p.KVRow(), p.NKVHead*p.HeadDim
 	ki, vi := int(kArg-gaIn0), int(vArg-gaIn0)
-	if bs.pkv == nil || p.NonCausal || len(o.In) <= max(ki, vi) || prog.vals[o.In[ki]].Width != vw || kw != vw ||
+	if bs.pkv == nil || p.NonCausal || len(o.In) <= max(ki, vi) || prog.vals[o.In[ki]].Width != kw ||
 		prog.vals[o.In[vi]].Width != vw {
 		return nil
+	}
+	// A row wider than the heads carries a block selection's key after them:
+	// turned with them, or (pooled, turned per block when scored) not.
+	heads, whole := p.NKVHead, false
+	if kw != vw {
+		x := selectOfProg(prog)
+		if x == nil || kw != vw+p.HeadDim {
+			return nil
+		}
+		if x.Attr.Pooled {
+			whole = true
+		} else {
+			heads++
+		}
 	}
 	P := g.kvPage()
 	if turn && (p.NRot <= 0 || p.NoPosEnc || p.RopeSplit || p.NRot%2 != 0 || p.NRot > p.HeadDim) {
 		return nil
 	}
 	// K into the pool as it is where nothing turns it, or where the pairs
-	// leave a tail; then the pairs turned into place, a thread a pair.
+	// leave a tail or an unturned key; then the pairs turned into place, a
+	// thread a pair.
 	var ks []*rowBuild
-	if !turn || p.NRot < p.HeadDim {
+	if !turn || p.NRot < p.HeadDim || whole {
 		kr := &rowBuild{r: compose.Row{Width: kw, Rows: rows}}
 		in := kr.buf(compose.BufRow, kArg)
 		desc, tab := kr.buf(compose.BufU32, gaPRow), kr.buf(compose.BufU32, gaTab)
@@ -1491,10 +1535,10 @@ func (g *devTier) genPagedWrite(o *devOp, prog *devProgram, bs *blockScratch, ro
 		ks = append(ks, kr)
 	}
 	if turn {
-		kp := &rowBuild{r: compose.Row{Width: p.NKVHead * p.NRot / 2, Rows: rows}}
+		kp := &rowBuild{r: compose.Row{Width: heads * p.NRot / 2, Rows: rows}}
 		in, cs := kp.buf(compose.BufRow, kArg), kp.buf(compose.BufVec, gaCS)
 		desc, tab := kp.buf(compose.BufU32, gaPRow), kp.buf(compose.BufU32, gaTab)
-		kp.r.PagedRotaryPairs(in, cs, desc, tab, kp.buf(compose.BufOut, gaKPool), p.NKVHead, p.HeadDim, p.NRot, p.RopeNeox, P)
+		kp.r.PagedRotaryPairs(in, cs, desc, tab, kp.buf(compose.BufOut, gaKPool), heads, p.HeadDim, p.NRot, p.RopeNeox, P, kw)
 		ks = append(ks, kp)
 	}
 
@@ -1735,7 +1779,7 @@ func (g *devTier) genScan(o *devOp, prog *devProgram, bs *blockScratch, rows int
 		}
 	default:
 		sc.Delta = true
-		if rows != 1 || len(o.In) != 2+b2i(r.ChanDecay) {
+		if len(o.In) != 2+b2i(r.ChanDecay) {
 			return nil
 		}
 		eps := bs.p.RMSEps
