@@ -1,4 +1,4 @@
-// Command modelfree runs every test of the four modules on whatever host CI
+// Command modelfree runs every test of every module on whatever host CI
 // gives it, with no model download and no GPU, and writes what was SKIPPED into
 // the job summary. .github/scripts/test-model-free.sh runs it; it is Go rather
 // than shell so that one program runs on Linux, macOS and Windows alike.
@@ -121,6 +121,7 @@ func modelFree() bool {
 	runs = append(runs, testRun{"server", filepath.Join(root, "server"), []string{"./..."}})
 	runs = append(runs, testRun{"common", filepath.Join(root, "common"), []string{"./..."}})
 	runs = append(runs, testRun{"tui", filepath.Join(root, "tui"), []string{"./..."}})
+	runs = append(runs, testRun{"jivman", filepath.Join(root, "examples", "jivman"), []string{"./..."}})
 	uiPkgs, err := list(filepath.Join(root, "ui"))
 	if err != nil {
 		fatal(err)
