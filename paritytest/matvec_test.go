@@ -178,6 +178,9 @@ func TestMatVecIsMains(t *testing.T) {
 				for _, rowt := range []int{1, 2} {
 					cases = append(cases, mvCase{t: q, rows: rk[0], k: rk[1], ntok: 1, rowt: rowt, split: sp})
 				}
+				for _, tr := range [][2]int{{8, 2}, {4, 2}} {
+					cases = append(cases, mvCase{t: q, rows: rk[0], k: rk[1], ntok: 32, tok: tr[0], rowt: tr[1], split: sp})
+				}
 			}
 		}
 	}

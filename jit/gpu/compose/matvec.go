@@ -243,7 +243,7 @@ func (g *Row) planeMatVec(w MatVecWeight, a MatVecOperand, info kernels.QInfo) (
 		if f > 0 {
 			q = ub(OpShr, x, u(2*f))
 		}
-		q = ub(OpAnd, q, u(0x03030303))
+		q = g.zeroPoint(ub(OpAnd, q, u(0x03030303)), info.BiasK)
 		dot = g.Add(Node{Kind: NDot4, A: q, B: g.LoadAt(a.A, ub(OpAdd, aw, u(f*words))), C: dot, At: 1})
 	}
 	g.SetFold(isum, dot)
@@ -266,7 +266,7 @@ func (g *Row) planeMatVec(w MatVecWeight, a MatVecOperand, info kernels.QInfo) (
 		sum = g.Bin(OpAdd, sum, g.LoadAt(a.AX, ub(OpAdd, si, u(k))))
 	}
 	q := g.Add(Node{Kind: NUnary, Op: OpFloat, A: isum})
-	v := g.Bin(OpMul, d, g.Add(Node{Kind: NBinary, Op: OpFma, A: g.Const(-info.BiasK), B: sum, C: q}))
+	v := g.corrected(g.Bin(OpMul, d, g.Add(Node{Kind: NBinary, Op: OpFma, A: g.Const(-info.BiasK), B: sum, C: q})), g.Bin(OpMul, q, d))
 	ax := g.LoadAt(a.AX, ub(OpAdd, ub(OpMul, at, u(w.K/32)), ub(OpMul, s, u(sub/32))))
 	g.SetFold(acc, g.Add(Node{Kind: NBinary, Op: OpFma, A: v, B: ax, C: acc}))
 	return acc, nil
@@ -351,6 +351,9 @@ func (g *Row) nibbleMatVec(w MatVecWeight, a MatVecOperand, info kernels.QInfo) 
 		if hw > 0 {
 			lo, hi = ub(OpXor, lo, hiOf(k)), ub(OpXor, hi, hiOf(k+pw))
 		}
+		if info.BiasK != 0 && !info.BiasArray {
+			lo, hi = g.zeroPoint(lo, info.BiasK), g.zeroPoint(hi, info.BiasK)
+		}
 		dot = g.Add(Node{Kind: NDot4, A: lo, B: g.LoadAt(a.A, ub(OpAdd, aw0, u(k))), C: dot, At: bounded})
 		dot = g.Add(Node{Kind: NDot4, A: hi, B: g.LoadAt(a.A, ub(OpAdd, aw0, u(k+sub/8))), C: dot, At: bounded})
 	}
@@ -427,7 +430,7 @@ func (g *Row) nibbleMatVec(w MatVecWeight, a MatVecOperand, info kernels.QInfo) 
 	case info.BiasK == 0:
 		v = g.Bin(OpMul, q, scale)
 	default:
-		v = g.Bin(OpMul, scale, g.Add(Node{Kind: NBinary, Op: OpFma, A: g.Const(-info.BiasK), B: sumA(), C: q}))
+		v = g.corrected(g.Bin(OpMul, scale, g.Add(Node{Kind: NBinary, Op: OpFma, A: g.Const(-info.BiasK), B: sumA(), C: q})), g.Bin(OpMul, q, scale))
 	}
 	g.SetFold(acc, g.Add(Node{Kind: NBinary, Op: OpFma, A: v, B: da, C: acc}))
 	return acc, nil
@@ -449,4 +452,49 @@ func (g *Row) e2m1(x int) int {
 	neg := ub(OpMul, ub(OpAnd, ub(OpShr, x, u(3)), ones), ff)
 	b := uint32(kernels.MXFP4Bias)
 	return ub(OpSub, ub(OpAdd, v, u(int(b|b<<8|b<<16|b<<24))), ub(OpAnd, ub(OpShl, v, u(1)), neg))
+}
+
+// centreTok is the tokens a thread from which a constant zero point rides
+// the weights: a fixed cost per weight word against a correction per token.
+const centreTok = 8
+
+// zeroPoint is codes x against zero point k, for the centring pass.
+func (g *Row) zeroPoint(x int, k float32) int {
+	return g.Add(Node{Kind: NHint, Hint: HintZeroPoint, A: x, At: int(k)})
+}
+
+// corrected is v, the corrected value, or c where the codes are centred.
+func (g *Row) corrected(v, c int) int {
+	return g.Add(Node{Kind: NHint, Hint: HintCorrected, A: v, B: c})
+}
+
+// centred takes each zero point's hints under schedule s: at centreTok
+// tokens a thread the codes carry the zero point, each byte moved by
+// 0x80 - k and its sign bit flipped (an add and an xor: the bytes stay
+// above -128), and the corrected values are the centred ones; else the
+// codes and the corrections stand.
+func (g *Row) centred(s Schedule) *Row {
+	var r *Row
+	on := max(s.Tile, 1) >= centreTok && !s.MMA
+	for i, nd := range g.Nodes {
+		if nd.Kind != NHint || nd.Hint != HintZeroPoint && nd.Hint != HintCorrected {
+			continue
+		}
+		if r == nil {
+			r = g.clone()
+		}
+		n := nd.A
+		switch {
+		case on && nd.Hint == HintCorrected:
+			n = nd.B
+		case on:
+			c := uint32(0x80-nd.At) & 0xFF
+			n = r.UBin(OpXor, r.UBin(OpAdd, nd.A, r.UConst(int(c|c<<8|c<<16|c<<24))), r.UConst(0x80808080))
+		}
+		r.Nodes[i] = r.Nodes[n]
+	}
+	if r == nil {
+		return g
+	}
+	return r
 }

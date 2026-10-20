@@ -219,6 +219,12 @@ const (
 	// HintLast: fold A's step as its loop's last trip made it, read after
 	// the loop (the value the fold then holds, as the trip's own value).
 	HintLast
+	// HintZeroPoint: A, a weight's codes, four bytes, against a constant
+	// zero point of At; HintCorrected: A, a value corrected by the zero
+	// point times the operand's sum, B the same value from codes that carry
+	// the zero point themselves (centred).
+	HintZeroPoint
+	HintCorrected
 )
 
 // Op is a unary or binary map.
@@ -1089,7 +1095,7 @@ func (g *Row) prepared(s Schedule) (*Row, error) {
 	if g, err = g.laneLoops(s); err != nil {
 		return nil, err
 	}
-	g = g.blocks(s).pipelined().tiled(s).hulls(s).inductions(s)
+	g = g.centred(s).blocks(s).pipelined().tiled(s).hulls(s).inductions(s)
 	if s.Lanes == 0 && g.loopReduces() {
 		return nil, fmt.Errorf("compose: a reduction in a loop's body off lane rows")
 	}
