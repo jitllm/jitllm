@@ -168,11 +168,6 @@ func evalPrims(t *testing.T, g *Graph, in map[ValueID][]float32, w map[jlm.Role]
 		case OpSlice:
 			// The whole-row form: Width elements from Offset.
 			copy(out, v[o.In[0]][o.Attr.Offset:o.Attr.Offset+o.Attr.Width])
-		case OpAdd:
-			a, b := v[o.In[0]], v[o.In[1]]
-			for i := range out {
-				out[i] = a[i] + b[i]
-			}
 		case OpHeadNorm:
 			// A weightless norm of each head: x * (1/sqrt(mean(x^2) + eps)),
 			// the mean accumulated in f64 as the oracle's does.
