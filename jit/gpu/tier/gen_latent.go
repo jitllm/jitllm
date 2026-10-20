@@ -20,20 +20,33 @@ func (g *devTier) genLatentWrite(o *devOp, prog *devProgram, bs *blockScratch, r
 		return nil
 	}
 	P := g.kvPage()
-	var out []genLaunch
+	var out, rope []genLaunch
+	src := [2]genArg{gaIn0, gaIn1}
+	if o.N == 1 {
+		// The key's rotary part turned a pair a thread into a staged row
+		// (the op's own, its rows' offsets beside it), then paged.
+		offs := make([]uint32, rows)
+		for i := range offs {
+			offs[i] = uint32(i * rot)
+		}
+		if o.Own[0] = g.ownBuf(bs, o, 0, rows, offs); o.Own[0] == nil {
+			return nil
+		}
+		if o.Own[1] = g.ownBuf(bs, o, 1, rows*rot, nil); o.Own[1] == nil {
+			return nil
+		}
+		if rope = g.ropePairs(rows, rot, rot, rot, p.RopeNeox, false, gaIn1, gaOwn0, gaOwn1); rope == nil {
+			return nil
+		}
+		src[1] = gaOwn1
+	}
 	for part, w := range [2]int{lat, rot} {
 		rb := &rowBuild{r: compose.Row{Width: w, Rows: rows}}
 		r := &rb.r
-		in := rb.buf(compose.BufRow, gaIn0+genArg(part))
-		x := -1
-		if part == 1 && o.N == 1 {
-			x = r.Rotary(in, rb.buf(compose.BufVec, gaCS), rot, rot, p.RopeNeox, false)
-		}
+		in := rb.buf(compose.BufRow, src[part])
 		desc, tab := rb.buf(compose.BufU32, gaPRow), rb.buf(compose.BufU32, gaTab)
 		pid, off := r.PagedPos(desc, tab, P)
-		if x < 0 {
-			x = r.Load(in)
-		}
+		x := r.Load(in)
 		r.StoreAt(rb.buf(compose.BufOut, gaKPool), x, r.UBin(compose.OpAdd, r.PagedRow(pid, off, P, width, part*lat), r.Column()))
 		k := g.rowKern(r)
 		if k.k == nil {
@@ -42,6 +55,9 @@ func (g *devTier) genLatentWrite(o *devOp, prog *devProgram, bs *blockScratch, r
 		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
 		copy(l.args[:], rb.args)
 		out = append(out, l)
+		if part == 0 {
+			out = append(out, rope...)
+		}
 	}
 	return out
 }
