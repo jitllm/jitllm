@@ -693,6 +693,25 @@ A value gains an element type: `f32` rows as before, and `u32` index rows
 (a selection's experts, a top-k's positions). A selection is two values, its
 indices and its weights, which `gather`, `expert_matvec` and `combine` read.
 
+**`fold`, as the recurrences need it.** Every recurrence the engine runs
+(the gated delta rule, Kimi Delta Attention, Mamba-2's SSD, Mamba-1's
+selective scan) is one core over a per-head matrix state `S[h][j][e]`,
+carried per sequence: the state decayed (`S ⊙ g`, g a row's per head or per
+key element), optionally a prediction `Σ_e S[j][e]·k[e]` subtracted from the
+value, a rank-one update `S += d ⊗ k`, and a read-out `Σ_e S[j][e]·q[e]`,
+optionally plus a skip. Its operands (the convolution over the window, the
+activations, a norm of q and k, softplus and exp of the decay's terms) are
+`map`, `reduce` and `conv` ahead of it, and its output norm and gate are the
+same after it. So `fold` is a state-update former whose body is an
+expression of the program's own, not a rule enumerated by flags: a carried
+tensor state (a register-resident row of the matrix), a trip count read at
+run time from the row's descriptor, reductions over the state's key
+dimension that combine across lanes, a state-update node `S ← f(S, ...)` and
+output nodes stated in the expression, and the state's input and output
+bound through a slot descriptor (slot, stride) as a generic buffer. A
+former keyed by rule flags (`Delta`, `Skip`, a decay kind) was built and is
+not this.
+
 **The order.** Route first (logits a float `matvec`; the bias and the
 selection bias `map`; the score a `map`; groups a `topk` and `reduce` over a
 row view, a `topk` of the groups and a `map` that masks the rest; the top k a

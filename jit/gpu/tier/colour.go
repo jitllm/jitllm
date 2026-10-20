@@ -52,7 +52,7 @@ func colourVals(p *devProgram) ([numVals]int, error) {
 			}
 			p.slots[v] = slotVal0 + devSlot(c)
 			busyTo[c] = last[v]
-			need[c] = max(need[c], p.vals[v].Width)
+			need[c] = max(need[c], p.stride(v))
 		}
 	}
 	for v, s := range p.slots {

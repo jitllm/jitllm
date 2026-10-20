@@ -829,6 +829,8 @@ func act(b *ir.Builder, g ir.Value, k ActKind) ir.Value {
 		return b.Div(ir.F32, one, b.Add(ir.F32, one, b.Exp(b.Sub(ir.F32, b.ConstF32(0), g))))
 	case ActTanh:
 		return tanhRational(b, g)
+	case ActSoftplus:
+		return softplus(b, g)
 	case ActGELUErf:
 		// 0.5*((x + |x|) - |x|*q), q = 1 - erf(|x|/sqrt 2); see ActGELUErf.
 		ax := b.Max(ir.F32, g, b.Sub(ir.F32, b.ConstF32(0), g))
@@ -896,7 +898,7 @@ func softplus(b *ir.Builder, z ir.Value) ir.Value {
 // Act is the ungated activation: out[i] = act(x[i]), for FFNs with no gate
 // (a ViT's), and DeepSeek V4's router gate (ActSqrtSoftplus).
 func Act(n int, k ActKind) (*ir.Kernel, error) {
-	if err := ActElemOK(k); err != nil || k == ActIdentity || k == ActSigmoid || k == ActTanh {
+	if err := ActElemOK(k); err != nil || k == ActIdentity || k == ActSigmoid || k == ActTanh || k == ActSoftplus {
 		return nil, fmt.Errorf("kernels: Act: %v is not an ungated activation", k)
 	}
 	b := ir.New("act", [3]int{128, 1, 1})
@@ -1235,7 +1237,8 @@ func BiasAct(width, rows int, k ActKind) (*ir.Kernel, error) {
 // emits act for a caller's kind asks it first.
 func ActElemOK(k ActKind) error {
 	switch k {
-	case ActIdentity, ActReLU, ActReLU2, ActSiLU, ActQuickGELU, ActSqrtSoftplus, ActSqrtSigmoid, ActSigmoid, ActTanh, ActGELUErf, ActGELU:
+	case ActIdentity, ActReLU, ActReLU2, ActSiLU, ActQuickGELU, ActSqrtSoftplus, ActSqrtSigmoid, ActSigmoid, ActTanh, ActGELUErf, ActGELU,
+		ActSoftplus:
 		return nil
 	}
 	return fmt.Errorf("kernels: %v has no element form", k)

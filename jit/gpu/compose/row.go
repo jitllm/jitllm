@@ -112,6 +112,10 @@ const (
 	OpFma // A*B + C, one rounding (C in Node.C)
 	OpRem // the remainder of indices
 	OpExp // e to the A
+	// OpSqrt is the square root of A.
+	OpSqrt
+	// OpFloat is index A as a float (exact below 2^31).
+	OpFloat
 	// OpPackF16 is A and B as two binary16 halves of one 32-bit word, A low:
 	// a value only a BufOutU32 store takes.
 	OpPackF16
@@ -617,6 +621,10 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 				v = kernels.ActFragment(b, a, nd.Act)
 			case OpExp:
 				v = b.Exp(a)
+			case OpSqrt:
+				v = b.Sqrt(a)
+			case OpFloat:
+				v = b.CvtF32(b.Bitcast(ir.I32, a))
 			case OpRsqrt:
 				v = b.Div(ir.F32, b.ConstF32(1), b.Sqrt(a))
 			case OpAbs:

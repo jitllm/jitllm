@@ -264,6 +264,8 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 	// The formers take their ops whatever their values' layouts: a former
 	// lays out its own rows (a bank's pairs, a history's pages).
 	switch o.Kind {
+	case dkMap, dkReduce, dkSelectK, dkRank, dkTake:
+		return g.genPrim(o, prog, rows)
 	case dkMatVec, dkMatVecRes, dkMatVecGate:
 		if rows == 1 {
 			if l := g.genMatVec(o, prog, bs); l != nil {
@@ -1204,6 +1206,7 @@ const (
 	whyNoFloat
 	whyHistory
 	whyLayout
+	whyShape
 )
 
 func (w genWhy) String() string {
@@ -1211,7 +1214,8 @@ func (w genWhy) String() string {
 		"padded rows", "a table split", "an epilogue it cannot compose",
 		"no batched form", "a prompt form other than the staged GEMM", "a tail launch",
 		"no float row stated", "a history that is not paged, or a row wider than its heads",
-		"rows whose head-major layout the program does not state"}[w]
+		"rows whose head-major layout the program does not state",
+		"values whose widths the primitive does not take"}[w]
 }
 
 // genSplitMatVec is a decode matvec whose k is split across threads: the

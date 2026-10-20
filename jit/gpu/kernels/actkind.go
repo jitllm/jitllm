@@ -93,6 +93,9 @@ const (
 	// (tanhRational): an element a composed kernel bounds a value with
 	// (b*tanh(x/b)), never an FFN's activation.
 	ActTanh
+	// ActSoftplus is log(1 + exp(x)) alone, softplus's series (softplus): an
+	// element a composed kernel scores with, never an FFN's activation.
+	ActSoftplus
 )
 
 // SqrtSigmoidFloor is ActSqrtSigmoid's floor on |x|.
@@ -168,6 +171,8 @@ func (k ActKind) String() string {
 		return "sqrt-sigmoid"
 	case ActTanh:
 		return "tanh"
+	case ActSoftplus:
+		return "softplus"
 	}
 	return "act(" + strconv.Itoa(int(k)) + ")"
 }

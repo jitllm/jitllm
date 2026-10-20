@@ -229,6 +229,16 @@ func (k devKind) String() string {
 		return "ssm_norm"
 	case dkGatherHeads:
 		return "gather_heads"
+	case dkMap:
+		return "map"
+	case dkReduce:
+		return "reduce"
+	case dkSelectK:
+		return "select_k"
+	case dkRank:
+		return "rank"
+	case dkTake:
+		return "take"
 	case dkNormQuant:
 		return "norm_quant"
 	case dkAddNorm:
@@ -378,6 +388,7 @@ func (p *devProgram) clone() *devProgram {
 	q.vals = append([]devType(nil), p.vals...)
 	q.slots = append([]devSlot(nil), p.slots...)
 	q.names = append([]string(nil), p.names...)
+	q.pad = append([]int(nil), p.pad...)
 	q.ops = make([]devOp, 0, len(p.ops))
 	for _, o := range p.ops {
 		o.Src = append([]int(nil), o.Src...)

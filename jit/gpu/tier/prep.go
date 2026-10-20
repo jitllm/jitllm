@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
@@ -672,7 +673,10 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// nor charged. A linear block leaves 1..3 empty (Wq carries its fused q|k|v),
 	// an attention block leaves 10..12 empty, and pageSizeWhy skips zero-length
 	// weights.
-	l.bound = boundRoles(p.Graph)
+	if p.Graph != nil {
+		l.graph = graph.Decompose(p.Graph)
+	}
+	l.bound = boundRoles(l.graph)
 	ws := weightList(make([]nn.Weight, 0, numPositional+len(l.bound)), w, l.bound)
 	// A streamed bank is priced at its compact size by scaling the three bank
 	// rows from NExpert sheets to NExpertUsed; every size derives from
@@ -1746,7 +1750,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// The vectors the block's program binds, by role: the buffer an upload
 	// above made from the same host floats, else one of their own.
 	l.vecs, l.vecOwned = l.vecs[:0], l.vecOwned[:0]
-	for _, r := range boundVecRoles(p.Graph) {
+	for _, r := range boundVecRoles(l.graph) {
 		var v []float32
 		for _, x := range w.Vecs {
 			if x.Role == r {

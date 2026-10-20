@@ -22,6 +22,10 @@ type layer struct {
 	// does not lower the block yet; progWhy says why.
 	prog    *devProgram
 	progWhy string
+	// graph is the plan's block graph with its composite ops decomposed into
+	// primitives (graph.Decompose): what the program, its matrices and its
+	// vectors are bound from.
+	graph *graph.Graph
 	// progRun and progRunRows are why the last step of one row and of many
 	// ran the block through the encoder, progRanProgram where it ran the
 	// program.

@@ -153,6 +153,13 @@ const (
 	dkMul                            // an elementwise product of two rows
 	dkConvBias                       // the convolved row plus its bias, activated (Mamba-1's)
 	dkSSMNorm                        // a selective scan's dt, B or C row normed (Mamba-1's)
+	// The graph's primitives (graph.OpMap ...), each its op's attributes
+	// (devOp.A) and nothing else.
+	dkMap     // an elementwise function of rows, a bound vector and a constant, broadcast
+	dkReduce  // a sum, max or min over a row or each group of it, in a stated order
+	dkSelectK // the k largest of a row or each group: their indices and values
+	dkRank    // each element's place in its row or group, largest first
+	dkTake    // a row's elements at an index row
 	numBaseKinds                     // the fused kinds (devrewrite.go) count on from here
 )
 
@@ -800,7 +807,18 @@ type devProgram struct {
 	vals   []devType
 	slots  []devSlot
 	names  []string
+	// pad is each value's elements past its width a row: a row is Width+pad
+	// apart (the selection's bin). Only the primitives' generators read it.
+	pad []int
 	ops    []devOp
+}
+
+// stride is value v's row stride: its width and its padding (pad).
+func (p *devProgram) stride(v devVal) int {
+	if int(v) < len(p.pad) {
+		return p.vals[v].Width + p.pad[v]
+	}
+	return p.vals[v].Width
 }
 
 // numVals is how many values a program colours by liveness at once.
@@ -814,6 +832,7 @@ func (p *devProgram) val(name string, t devType, s devSlot) devVal {
 	p.vals = append(p.vals, t)
 	p.slots = append(p.slots, s)
 	p.names = append(p.names, name)
+	p.pad = append(p.pad, 0)
 	return devVal(len(p.vals) - 1)
 }
 
@@ -872,6 +891,16 @@ func (o devOp) wants(p *devProgram, i int) devType {
 	}
 	if o.Kind == dkGatherHeads {
 		return devType{Elem: elemF32, Layout: layoutRow, Width: in.Width}
+	}
+	switch o.Kind {
+	case dkMap, dkReduce, dkSelectK, dkRank:
+		return devType{Elem: in.Elem, Layout: layoutRow, Width: in.Width} // a float or an index row, as the graph typed it
+	case dkTake:
+		e := elemF32
+		if i == 1 {
+			e = elemU32
+		}
+		return devType{Elem: e, Layout: layoutRow, Width: in.Width}
 	}
 	if p.f16 && (o.Kind == dkMatVec || o.Kind == dkQKV || o.Kind == dkQKVGemm) {
 		return devType{Elem: elemF32, Layout: row, Width: in.Width}
@@ -1007,7 +1036,9 @@ func lowersOp(k graph.OpKind) bool {
 		// A recurrent mixer, lowered whole with its pre-norm (emitLinear).
 		graph.OpRecurrent,
 		// Latent attention's own ops, lowered whole (emitMLA).
-		graph.OpSlice, graph.OpLatentAppend, graph.OpAttendLatent:
+		graph.OpSlice, graph.OpLatentAppend, graph.OpAttendLatent,
+		// The primitives a composite op decomposes into.
+		graph.OpMap, graph.OpReduce, graph.OpTopK, graph.OpRank, graph.OpTake:
 		return true
 	}
 	return false
@@ -1017,7 +1048,7 @@ func lowersOp(k graph.OpKind) bool {
 // not: an op or an attribute the program does not lower yet. The reason is
 // what BlockProgram reports for a block left on the encoder.
 func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
-	g := p.Graph
+	g := l.graph
 	switch {
 	case g == nil:
 		return nil, "no graph"
@@ -1085,6 +1116,27 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 	// weightIn marks a selection whose weights scale the experts' input.
 	weightSel := map[devVal]devVal{}
 	weightIn := map[devVal]bool{}
+	// grouped is a decomposed route's selection whose grouping (and a paged
+	// bank's fetch) the program already holds.
+	grouped := map[devVal]bool{}
+	// producer is the kind of the graph op that writes each value.
+	producer := map[graph.ValueID]graph.OpKind{}
+	// selVals are the selections the experts read and weightVals their
+	// weights (a decomposed route's): they take the slots the experts'
+	// launches read them from.
+	selVals, weightVals := map[graph.ValueID]bool{}, map[graph.ValueID]bool{}
+	for _, o := range g.Ops {
+		for _, v := range o.Out {
+			producer[v] = o.Kind
+		}
+		switch o.Kind {
+		case graph.OpGather, graph.OpExpertMatVec, graph.OpCombine:
+			selVals[o.In[1]] = true
+			if len(o.In) > 2 {
+				weightVals[o.In[2]] = true
+			}
+		}
+	}
 	gated := map[graph.ValueID]devVal{}
 	// idxQuery is a block-selecting indexer's turned query, lowered with
 	// the history write its key joins.
@@ -1195,7 +1247,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			role := o.Weight[0].Role
 			s, ok := matvecSlot[role]
 			if !ok {
-				return nil, "a matvec over " + role.String()
+				s = slotAuto // a matrix no slot is named for: a value coloured by liveness
 			}
 			w := o.Weight[0].Rows
 			if w == 0 {
@@ -1467,7 +1519,65 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				weightSel[sel] = sw
 				prog.streamed = true
 			}
+		case graph.OpMap, graph.OpReduce, graph.OpRank, graph.OpTake, graph.OpTopK:
+			// A primitive: its inputs, its attributes and a bound vector,
+			// each output a value coloured by liveness (colourVals).
+			k := map[graph.OpKind]devKind{graph.OpMap: dkMap, graph.OpReduce: dkReduce, graph.OpRank: dkRank,
+				graph.OpTake: dkTake, graph.OpTopK: dkSelectK}[o.Kind]
+			op := devOp{Kind: k, Src: []int{i}, A: o.Attr}
+			for j := range o.In {
+				op.In = append(op.In, in(j))
+			}
+			if len(o.Weight) > 0 {
+				op.Role = o.Weight[0].Role
+			}
+			for j, v := range o.Out {
+				t := devType{Elem: elemF32, Layout: layoutRow, Width: g.Values[v].Width}
+				if g.Values[v].Elem == graph.ElemU32 {
+					t.Elem = elemU32
+				}
+				s := slotAuto
+				switch {
+				case o.Kind == graph.OpTopK && selVals[o.Out[0]]:
+					// The selection and its values: k wide, k+1 a row apart
+					// (devProgram.pad): the experts' grouped launches read a
+					// row's selection at that stride, its last place a bin
+					// nothing writes.
+					s = [2]devSlot{slotSel, slotTop}[j]
+				case weightVals[v]:
+					s = slotRW
+				}
+				out := prog.val(g.Values[v].Name, t, s)
+				if s == slotSel || s == slotTop {
+					prog.pad[out] = 1
+				}
+				op.Out = append(op.Out, out)
+				vals[v] = out
+			}
+			prog.ops = append(prog.ops, op)
 		case graph.OpGather:
+			// A decomposed route's selection (an index row) and its weights,
+			// read here first: the order its experts' rows are grouped in
+			// over rows, and a paged bank's sheets brought to the card.
+			if producer[o.In[1]] == graph.OpTopK {
+				if l.stream != nil && l.stream.hybrid {
+					return nil, "experts run on the host beside the card"
+				}
+				if len(o.In) > 2 {
+					routeW[in(1)] = vals[o.In[2]]
+				}
+				if !grouped[in(1)] {
+					grouped[in(1)] = true
+					sel := in(1)
+					prog.ops = append(prog.ops, devOp{Kind: dkGroupByExpert, Src: []int{i}, In: []devVal{sel}})
+					if l.stream != nil {
+						sw := prog.val(name(0)+".slots", devType{Elem: elemU32, Layout: layoutRow, Width: prog.vals[sel].Width}, slotSelW)
+						prog.ops = append(prog.ops, devOp{Kind: dkExpertFetch, Src: []int{i}, In: []devVal{sel}, Out: []devVal{sw}, Staged: true})
+						weightSel[sel] = sw
+						prog.streamed = true
+					}
+				}
+			}
 			// One row: the selection indexes the weight side, so the
 			// experts read the row itself.
 			// Weighted at their input (Llama 4's): the weight scales the
@@ -1514,6 +1624,9 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			}
 			vals[o.Out[0]] = out
 		case graph.OpCombine:
+			if len(o.In) > 2 {
+				routeW[in(1)] = vals[o.In[2]] // a decomposed route's weights
+			}
 			rw, ok := routeW[in(1)]
 			if !ok {
 				return nil, "a combine of no selection"
@@ -2272,7 +2385,8 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		o := &prog.ops[i]
 		switch o.Kind {
 		case dkNorm, dkPostNorm, dkHeadNorm, dkSubNorm:
-		case dkRouterBias, dkGroupMask, dkTopK, dkExpertBias, dkScaleWeights, dkGateLogit, dkStreamNorm, dkNGramConv, dkStreamScore:
+		case dkRouterBias, dkGroupMask, dkTopK, dkExpertBias, dkScaleWeights, dkGateLogit, dkStreamNorm, dkNGramConv, dkStreamScore,
+			dkMap:
 			// A vector operand of the mixture's, by its role.
 			if o.Role != jlm.RoleNone {
 				if o.V = l.vecOf(o.Role); o.V == nil {
@@ -2370,7 +2484,8 @@ func primitiveKind(k devKind) bool {
 	switch k {
 	case dkNorm, dkHeadNorm, dkPostNorm, dkQuant, dkMatVec, dkExpertMatVec, dkAdd, dkMul, dkAct, dkActMul,
 		dkScale, dkClamp, dkCopy, dkSlice, dkView, dkConcatHeads, dkRopeQ, dkKVWrite, dkKVCopy, dkAttend,
-		dkTopK, dkCombine, dkExpertFetch, dkDWConvRows, dkAffineRows:
+		dkTopK, dkCombine, dkExpertFetch, dkDWConvRows, dkAffineRows,
+		dkMap, dkReduce, dkSelectK, dkRank, dkTake:
 		return true
 	}
 	return false

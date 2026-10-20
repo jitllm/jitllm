@@ -2349,7 +2349,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				// with neither has nothing that runs it, which is a
 				// compiler bug, not a step to skip.
 				if err == nil {
-					err = fmt.Errorf("tier: block %d: op %s has no generated kernel (last: %s)", li, o.Kind, g.LastErr)
+					err = fmt.Errorf("tier: block %d: op %s has no generated kernel (%v; last: %s)", li, o.Kind, o.Why, g.LastErr)
 				}
 				return
 			}
