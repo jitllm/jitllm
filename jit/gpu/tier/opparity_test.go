@@ -50,6 +50,58 @@ func opKernels(t *testing.T, prof recorder.Profile, o devOp, ins, outs []int, ve
 	return ks
 }
 
+// chainKernels is the composed kernels of a program of kinds over rows of
+// width w, each op reading the last's value (an add reads a second row
+// too) and through the composer's program: lowered each alone, then fused.
+// A norm binds a vector.
+func chainKernels(t *testing.T, prof recorder.Profile, kinds []devKind, w int, plan nn.LayerPlan, rows int) []*ir.Kernel {
+	t.Helper()
+	rec := recorder.New(prof, 1<<40)
+	g := &devTier{devShared: &devShared{dev: rec}, devSess: &devSess{}, lane: &lane{}, Stats: &Stats{}}
+	bs := &blockScratch{p: plan}
+	prog := &devProgram{}
+	row := func(e devElem) devVal {
+		return prog.val("v", devType{Elem: e, Layout: layoutRow, Width: w}, slotAuto)
+	}
+	x := row(elemF32)
+	for _, k := range kinds {
+		o := devOp{Kind: k, Act: graph.ActSiLU, In: []devVal{x}}
+		switch k {
+		case dkAdd, dkActMul:
+			o.In = append(o.In, row(elemF32))
+		case dkNorm:
+			b, err := rec.Alloc(4 * w)
+			if err != nil {
+				t.Fatal(err)
+			}
+			o.V = b
+		}
+		switch k {
+		case dkQuant:
+			x = row(elemQ8)
+		case dkActMul:
+			x = prog.val("act", devType{Elem: elemF32, Layout: layoutRow, Width: w}, slotAct)
+		default:
+			x = row(elemF32)
+		}
+		o.Out = []devVal{x}
+		prog.ops = append(prog.ops, o)
+	}
+	g.genProgram(prog, bs, rows)
+	for i, o := range prog.ops {
+		if len(o.Gen) == 0 && o.Why != whyFused {
+			t.Fatalf("op %d (%v) formed nothing: %v; %s", i, o.Kind, o.Why, g.LastErr)
+		}
+	}
+	var ks []*ir.Kernel
+	for _, k := range rec.IR() {
+		if strings.HasPrefix(k.Comment, "composed") {
+			ks = append(ks, k)
+		}
+	}
+	return ks
+}
+
 // sameAsMain holds composed to main's kernels, instruction by instruction.
 func sameAsMain(t *testing.T, main, composed []*ir.Kernel) {
 	t.Helper()
@@ -106,10 +158,14 @@ func TestElementwiseIsMains(t *testing.T) {
 				{"quantize", devOp{Kind: dkQuant}, []int{w}, []int{w}, func() (*ir.Kernel, error) {
 					return mainkernels.Quantize(n, win)
 				}},
-				{"act_quant", devOp{Kind: dkActQuant, Act: graph.ActSiLU}, []int{w, w}, []int{w}, func() (*ir.Kernel, error) {
-					return mainkernels.QuantizeAct(n, win, mainkernels.ActSiLU)
-				}},
 			}
+			t.Run(fmt.Sprintf("act_quant_%dx%d", rows, w), func(t *testing.T) {
+				mk, err := mainkernels.QuantizeAct(n, win, mainkernels.ActSiLU)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sameAsMain(t, []*ir.Kernel{mk}, chainKernels(t, prof, []devKind{dkActMul, dkQuant}, w, plan, rows))
+			})
 			for _, c := range cases {
 				t.Run(fmt.Sprintf("%s_%dx%d", c.name, rows, w), func(t *testing.T) {
 					mk, err := c.main()
@@ -170,30 +226,29 @@ func TestNormsAreMains(t *testing.T) {
 			plan := nn.LayerPlan{RMSEps: eps, ActWin: 32, NEmbd: w}
 			win := min(32, w)
 			cases := []struct {
-				kind      devKind
-				ins, outs []int
-				main      func() (*ir.Kernel, error)
+				kinds []devKind
+				main  func() (*ir.Kernel, error)
 			}{
-				{dkNorm, []int{w}, []int{w}, func() (*ir.Kernel, error) {
+				{[]devKind{dkNorm}, func() (*ir.Kernel, error) {
 					return mainkernels.RMSNormRowsWarp(w, rows, eps, false, false)
 				}},
-				{dkNormQuant, []int{w}, []int{w}, func() (*ir.Kernel, error) {
+				{[]devKind{dkNorm, dkQuant}, func() (*ir.Kernel, error) {
 					return mainkernels.RMSNormQuantRowsWarp(w, rows, eps, false, false, win)
 				}},
-				{dkAddNorm, []int{w, w}, []int{w, w}, func() (*ir.Kernel, error) {
+				{[]devKind{dkAdd, dkNorm}, func() (*ir.Kernel, error) {
 					return mainkernels.RMSNormRowsWarp(w, rows, eps, false, true)
 				}},
-				{dkAddNormQuant, []int{w, w}, []int{w, w}, func() (*ir.Kernel, error) {
+				{[]devKind{dkAdd, dkNorm, dkQuant}, func() (*ir.Kernel, error) {
 					return mainkernels.RMSNormQuantRowsWarp(w, rows, eps, false, true, win)
 				}},
 			}
 			for _, c := range cases {
-				t.Run(fmt.Sprintf("%v_%dx%d", c.kind, rows, w), func(t *testing.T) {
+				t.Run(fmt.Sprintf("%v_%dx%d", c.kinds, rows, w), func(t *testing.T) {
 					mk, err := c.main()
 					if err != nil {
 						t.Fatal(err)
 					}
-					sameAsMain(t, []*ir.Kernel{mk}, opKernels(t, prof, devOp{Kind: c.kind}, c.ins, c.outs, true, plan, rows))
+					sameAsMain(t, []*ir.Kernel{mk}, chainKernels(t, prof, c.kinds, w, plan, rows))
 				})
 			}
 		}
@@ -214,17 +269,17 @@ func TestRowWindowNormQuantIsMains(t *testing.T) {
 		for _, w := range []int{64, 256, 512, 2048, 8192} {
 			for _, rows := range []int{1, 8, 32} {
 				plan := nn.LayerPlan{RMSEps: eps, ActWin: 1 << 16, NEmbd: 256} // BitNet's: a window past every row, rows wider than the embedding
-				for _, kind := range []devKind{dkNormQuant, dkAddNormQuant} {
-					ins := []int{w}
-					if kind == dkAddNormQuant {
-						ins = []int{w, w}
+				for _, add := range []bool{false, true} {
+					kinds := []devKind{dkNorm, dkQuant}
+					if add {
+						kinds = []devKind{dkAdd, dkNorm, dkQuant}
 					}
-					t.Run(fmt.Sprintf("%s_%v_%dx%d", pc.prof, kind, rows, w), func(t *testing.T) {
-						mk, err := pc.main(w, rows, eps, false, kind == dkAddNormQuant, w)
+					t.Run(fmt.Sprintf("%s_%v_%dx%d", pc.prof, kinds, rows, w), func(t *testing.T) {
+						mk, err := pc.main(w, rows, eps, false, add, w)
 						if err != nil {
 							t.Fatal(err)
 						}
-						sameAsMain(t, []*ir.Kernel{mk}, opKernels(t, prof, devOp{Kind: kind}, ins, ins, true, plan, rows))
+						sameAsMain(t, []*ir.Kernel{mk}, chainKernels(t, prof, kinds, w, plan, rows))
 					})
 				}
 			}

@@ -15,6 +15,9 @@ type Program struct {
 	Rows  int
 	Vals  []Value
 	Prims []Prim
+	// Out is whether a value is read past the program (the block's
+	// caller): what a pass may not drop.
+	Out []bool
 }
 
 // ValElem is a value's element: a float, or an int8 operand (its codes
@@ -26,10 +29,12 @@ const (
 	ValQ8
 )
 
-// Value is a program value: Width elements a row, rows contiguous.
+// Value is a program value: Width elements a row, rows contiguous, in
+// buffer Buf (values of one Buf share it; -1 a buffer of its own).
 type Value struct {
 	Elem  ValElem
 	Width int
+	Buf   int
 }
 
 // PrimKind is a primitive op.
@@ -57,6 +62,14 @@ const (
 	// PrimQuant is In[0]'s int8 operand over windows of Win (32 where it
 	// states none) clamped to the row.
 	PrimQuant
+	// PrimMatVec is the weight W's product with In[0], an int8 operand,
+	// or with In[Float] where W is a float format; plus the weight's bias
+	// where Bias. Facts are its planning's.
+	PrimMatVec
+	// PrimExtern is an op the composer does not form here: its operands
+	// and results, which no pass moves anything across.
+	PrimExtern
+	numPrimKinds
 )
 
 // Prim is a primitive op over program values.
@@ -69,6 +82,10 @@ type Prim struct {
 	Eps     float32
 	Layer   bool
 	Win     int
+	W       MatVecWeight
+	Bias    bool
+	Float   int
+	Facts   Facts
 }
 
 // BindKind is what a group's buffer binds to.
@@ -81,6 +98,10 @@ const (
 	BindVec                   // prim Index's bound vector (or scalar)
 	BindVecB                  // prim Index's bound bias
 	BindConst                 // prim Index's bound constant (an add's Alpha)
+	BindWQS                   // prim Index's weight: its payload,
+	BindWD                    // its scales,
+	BindWSC                   // its sub-block scales,
+	BindWBias                 // its bias
 )
 
 // Bind is a group buffer's binding.
@@ -95,6 +116,11 @@ type Group struct {
 	Row   Row
 	Binds []Bind
 	Prims []int
+	// Extern is an extern prim's place: no group.
+	Extern bool
+	// Facts is what the group is planned under: a contraction's, else the
+	// zero Facts (the target alone).
+	Facts Facts
 }
 
 // Lower is the program's ops each its own group, nothing fused: every
@@ -105,11 +131,19 @@ func (p *Program) Lower() ([]Group, error) {
 		b := &builder{p: p, binds: map[Bind]int{}}
 		b.g.Prims = []int{i}
 		o := p.Prims[i]
+		if o.Kind == PrimExtern {
+			b.g.Extern = true
+			gs = append(gs, b.g)
+			continue
+		}
 		if o.Kind == PrimQuant {
 			gs = append(gs, b.quantAlone(o))
 			continue
 		}
 		b.g.Row = Row{Width: p.Vals[o.Out[0]].Width, Rows: p.Rows}
+		if o.Kind == PrimMatVec {
+			b.g.Row.Width = o.W.Rows
+		}
 		if err := b.lowerPrim(i); err != nil {
 			return nil, err
 		}
@@ -202,6 +236,30 @@ func (b *builder) lowerPrim(i int) error {
 		y = r.Bin(OpMul, b.in(o.In[0]), r.Load(b.buf(BufScalar, Bind{BindVec, i})))
 	case PrimNorm:
 		y = b.normed(i, o, b.in(o.In[0]), b.p.Vals[o.In[0]].Width)
+	case PrimMatVec:
+		w := o.W
+		w.QS, w.D, w.SC = b.buf(BufU32, Bind{BindWQS, i}), -1, -1
+		if !kernels.IsFloat(w.T) {
+			w.D = b.buf(BufU32, Bind{BindWD, i})
+		}
+		if w.T.Info().PerSuper > 1 {
+			w.SC = b.buf(BufU32, Bind{BindWSC, i})
+		}
+		a := MatVecOperand{Toks: b.p.Rows}
+		if kernels.IsFloat(w.T) {
+			a.X = b.buf(BufRow, Bind{BindVal, o.In[o.Float]})
+		} else {
+			a.A, a.AX = b.buf(BufU32, Bind{BindQ8, o.In[0]}), b.buf(BufRow, Bind{BindQ8X, o.In[0]})
+		}
+		v, err := r.MatVec(w, a)
+		if err != nil {
+			return err
+		}
+		if o.Bias {
+			v = r.Bin(OpAdd, v, r.Load(b.buf(BufVec, Bind{BindWBias, i})))
+		}
+		b.g.Facts = o.Facts
+		y = v
 	default:
 		return fmt.Errorf("compose: prim %d inside a region", o.Kind)
 	}

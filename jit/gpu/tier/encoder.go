@@ -207,7 +207,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		if R > 1 {
 			qOff, kro = bs.roff, bs.kroff
 		}
-		gst := genState{bs: bs, slots: prog.slots}
+		gst := genState{bs: bs, slots: prog.slots, ops: prog.ops}
 		var sk backend.Buf
 		if p.AttnSinks {
 			if sk = l.sinks; sk == nil {
@@ -276,8 +276,8 @@ func (g *devTier) layersSession(s backend.Session) {
 					err = fmt.Errorf("tier: block %d: no attention for the call's keys", li)
 				}
 			}
-			if len(o.Gen) != 0 && o.Gen[0].former == 0 {
-				{
+			if o.Why == whyFused || len(o.Gen) != 0 && o.Gen[0].former == 0 {
+				if len(o.Gen) != 0 {
 					gst.cs, gst.qOff, gst.kOff = rcs, qOff, kro
 					gst.moe = rowsMoE
 					if mg != nil {
@@ -344,10 +344,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				case dkQuant:
 					// A binary16 GEMM converts the float row the quantize read.
 					fsrc = at(o.In[0])
-				case dkNormQuant, dkActQuant:
-					fsrc = at(o.Out[0])
-				case dkAddNormQuant:
-					fsrc = at(o.Out[1])
 				}
 				g.GenOps++
 				continue

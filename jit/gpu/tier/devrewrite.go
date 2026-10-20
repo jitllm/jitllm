@@ -20,12 +20,8 @@ import (
 
 // Fused kinds, past the program's base kinds.
 const (
-	dkNormQuant    devKind = iota + numBaseKinds // norm and the quantize of its row (bs.rmsQ)
-	dkAddNorm                                    // residual add and the norm of the sum (bs.addRms)
-	dkAddNormQuant                               // the two, and the quantize (bs.addRmsQ)
-	dkMatVecRes                                  // a matvec carrying the residual add (mv.res)
-	dkMatVecGate                                 // up's matvec writing act(gate)*up (mv.gated)
-	dkActQuant                                   // act(gate)*up and its quantize (bs.quantAct)
+	dkMatVecRes  devKind = iota + numBaseKinds // a matvec carrying the residual add (mv.res)
+	dkMatVecGate                               // up's matvec writing act(gate)*up (mv.gated)
 	dkQKV                                        // q, k and v in one launch (layer.qkv)
 	dkRopeQKV                                    // q's rotary, k's into its page and v's copy (ropeQKV)
 	dkGate2                                      // gate and up in one launch writing act(gate)*up (mv.gate2)
@@ -242,18 +238,10 @@ func (k devKind) String() string {
 		return "concat"
 	case dkRelayout:
 		return "relayout"
-	case dkNormQuant:
-		return "norm_quant"
-	case dkAddNorm:
-		return "add_norm"
-	case dkAddNormQuant:
-		return "add_norm_quant"
 	case dkMatVecRes:
 		return "matvec_res"
 	case dkMatVecGate:
 		return "matvec_gate"
-	case dkActQuant:
-		return "act_quant"
 	case dkQKV:
 		return "qkv"
 	case dkRopeQKV:
@@ -301,10 +289,6 @@ func newDevRewrites() []devRewrite {
 		{"matvec-residual", rwMatVecRes},
 		{"matvec-gate", rwMatVecGate},
 		{"expert-epilogue", rwExpertEpilogue},
-		{"act-quant", rwActQuant},
-		{"add-norm-quant", rwAddNormQuant},
-		{"add-norm", rwAddNorm},
-		{"norm-quant", rwNormQuant},
 		{"segments", rwSegments},
 		{"route", rwRoute},
 		{"gated-add", rwGatedAdd},
@@ -535,123 +519,6 @@ func rwMatVecGate(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq
 	}
 	return false
 }
-
-// rwActQuant: act_mul and the quantize of its product, one launch.
-func rwActQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
-	if ungatedFFN(&bs.p) || bs.p.NFFN == 0 || g.NoOperandFuse {
-		return false
-	}
-	for i, o := range p.ops {
-		// The dense FFN's activation: an expert's or a shared expert's has
-		// its own width and quantize layout.
-		if o.Kind != dkActMul || p.slots[o.Out[0]] != slotAct || i+1 >= len(p.ops) {
-			continue
-		}
-		q := p.ops[i+1]
-		if q.Kind == dkQuant && q.In[0] == o.Out[0] {
-			p.replace(i, i+1, devOp{Kind: dkActQuant, Src: cat(o.Src, q.Src), In: o.In, Out: []devVal{o.Out[0], q.Out[0]}, Act: o.Act, A: o.A})
-			return true
-		}
-	}
-	return false
-}
-
-// addNorm finds a residual add whose sum a norm reads next.
-func addNorm(p *devProgram) (int, int, bool) {
-	for i, o := range p.ops {
-		if o.Kind != dkAdd || i+1 >= len(p.ops) {
-			continue
-		}
-		if n := p.ops[i+1]; n.Kind == dkNorm && p.slots[n.Out[0]] == slotH && n.In[0] == o.Out[0] {
-			return i, i + 1, true
-		}
-	}
-	return 0, 0, false
-}
-
-// rwAddNormQuant: the add, the norm of the sum and its quantize, one launch.
-func rwAddNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
-	if residScaled(&bs.p) {
-		return false // a scaled residual: the fused kernel carries no scale
-	}
-	if lnBlock(&bs.p) {
-		return false
-	}
-	i, j, ok := addNorm(p)
-	if !ok {
-		return false
-	}
-	k := rowQuant(p, j)
-	if k < 0 {
-		return false
-	}
-	a, n, q := p.ops[i], p.ops[j], p.ops[k]
-	fused := devOp{Kind: dkAddNormQuant, Src: cat(cat(a.Src, n.Src), q.Src), In: a.In,
-		Out: []devVal{a.Out[0], n.Out[0], q.Out[0]}, Role: n.Role, V: n.V, VB: n.VB}
-	p.ops = append(p.ops[:k], p.ops[k+1:]...)
-	p.ops[i] = fused
-	p.ops = append(p.ops[:i+1], p.ops[j+1:]...)
-	return true
-}
-
-// rowQuant is the first quantize of op i's row after it, where it may run
-// with op i: no op between writes the row or reads or writes what the
-// quantize writes; -1 for none.
-func rowQuant(p *devProgram, i int) int {
-	v := p.ops[i].Out[0]
-	for k := i + 1; k < len(p.ops); k++ {
-		o := p.ops[k]
-		if o.Kind == dkQuant && len(o.In) > 0 && o.In[0] == v {
-			q := o.Out[0]
-			for m := i + 1; m < k; m++ {
-				if slices.Contains(p.ops[m].Out, v) || slices.Contains(p.ops[m].In, q) || slices.Contains(p.ops[m].Out, q) {
-					return -1
-				}
-			}
-			return k
-		}
-	}
-	return -1
-}
-
-// rwAddNorm: the add and the norm of the sum, one launch.
-func rwAddNorm(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
-	if residScaled(&bs.p) {
-		return false // a scaled residual: the fused kernel carries no scale
-	}
-	if lnBlock(&bs.p) {
-		return false
-	}
-	i, j, ok := addNorm(p)
-	if !ok {
-		return false
-	}
-	a, n := p.ops[i], p.ops[j]
-	p.replace(i, j, devOp{Kind: dkAddNorm, Src: cat(a.Src, n.Src), In: a.In, Out: []devVal{a.Out[0], n.Out[0]}, Role: n.Role, V: n.V, VB: n.VB})
-	return true
-}
-
-// rwNormQuant: a norm and the quantize of its row, one launch.
-func rwNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
-	if lnBlock(&bs.p) {
-		return false
-	}
-	for i, o := range p.ops {
-		// The block row's norm or an inner norm before a projection: a
-		// latent's has its own width and kernels.
-		if o.Kind != dkNorm || p.slots[o.Out[0]] != slotH && p.slots[o.Out[0]] != slotSub {
-			continue
-		}
-		if k := rowQuant(p, i); k >= 0 {
-			q := p.ops[k]
-			p.ops = append(p.ops[:k], p.ops[k+1:]...)
-			p.ops[i] = devOp{Kind: dkNormQuant, Src: cat(o.Src, q.Src), In: o.In, Out: []devVal{o.Out[0], q.Out[0]}, Role: o.Role, V: o.V, VB: o.VB}
-			return true
-		}
-	}
-	return false
-}
-
 // gateUp finds gate's matvec followed by up's over the same operand, and the
 // act_mul reading them; -1s where the program has none.
 func gateUp(p *devProgram) (gi, ui, ai int) {
@@ -947,7 +814,7 @@ func rwSegments(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq i
 // product reports whether one activation product reads both a and b.
 func (p *devProgram) product(a, b devVal) bool {
 	for _, o := range p.ops {
-		if (o.Kind == dkActMul || o.Kind == dkActQuant) && slices.Contains(o.In, a) && slices.Contains(o.In, b) {
+		if o.Kind == dkActMul && slices.Contains(o.In, a) && slices.Contains(o.In, b) {
 			return true
 		}
 	}

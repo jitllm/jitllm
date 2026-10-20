@@ -116,6 +116,16 @@ const (
 	gaSegEnd = gaSeg0 + 4*maxSegs
 )
 
+// The by-reference arguments (genLaunch.refs).
+const (
+	gaVal    = gaSegEnd + iota // the value refs names
+	gaValQ8A                   // an int8 value's codes
+	gaValQ8X                   // and its scales
+	gaOpV                      // the op refs names: its bound vector,
+	gaOpVB                     // its bias,
+	gaOpGC                     // its constant
+)
+
 // maxSegs is the most matvecs one segmented launch carries.
 const maxSegs = 3
 
@@ -126,7 +136,10 @@ type genLaunch struct {
 	threads       int
 	groups, width int
 	args          [20]genArg
-	n             uint8
+	// refs is what a by-reference argument names: a value (gaVal, gaValQ8A,
+	// gaValQ8X) or an op of the program (gaOpV, gaOpVB, gaOpGC).
+	refs [20]int32
+	n    uint8
 	// q8 is which output holds the op's int8 value (gaQ8A and gaQ8X).
 	q8 uint8
 	// former, where set, runs the launch through a kernel former's own
@@ -199,7 +212,35 @@ func (g *devTier) genProgram(prog *devProgram, bs *blockScratch, rows int) {
 		if o.Kind == dkAdd && o.Alpha != 0 && o.Alpha != 1 && o.GC == nil {
 			o.GC = g.constBuf(float32(o.Alpha))
 		}
-		o.Gen = g.genOp(o, prog, bs, rows)
+	}
+	// The composer's program: its prims lowered each alone, then fused; an
+	// extern is the op's own generator.
+	cp := g.composeProgram(prog, bs, rows)
+	gs, err := cp.Lower()
+	if err != nil {
+		g.LastErr = err.Error()
+		for i := range prog.ops {
+			prog.ops[i].Gen, prog.ops[i].Why = nil, whyNoForm
+		}
+		return
+	}
+	for _, gr := range compose.Fuse(cp, gs, g.fuseParams()) {
+		o := &prog.ops[gr.Prims[0]]
+		// An op over rows that what reads it makes itself runs only inside
+		// a fused launch: alone, it is its own generator's.
+		if gr.Extern || len(gr.Prims) == 1 && o.OneRow && rows > 1 {
+			o.Gen = g.genOp(o, prog, bs, rows)
+			continue
+		}
+		l, ok := g.groupLaunch(&gr)
+		if !ok {
+			o.Gen, o.Why = nil, whyNoKernel
+			continue
+		}
+		o.Gen, o.Why = []genLaunch{l}, whyNone
+		for _, i := range gr.Prims[1:] {
+			prog.ops[i].Gen, prog.ops[i].Why = nil, whyFused
+		}
 	}
 }
 
@@ -543,12 +584,12 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 			return nil
 		}
 		rb.store(rb.bin(compose.OpMul, rb.load(compose.BufRow, gaIn0), rb.load(compose.BufScalar, gaV)), gaOut0)
-	case dkNorm, dkPostNorm, dkNormQuant:
-		// A row norm; with its int8 operand (norm_quant).
+	case dkNorm, dkPostNorm:
+		// A row norm.
 		if prog.vals[o.In[0]].Width != w {
 			return nil
 		}
-		if p.LayerNorm && o.Kind != dkNormQuant {
+		if p.LayerNorm {
 			return g.genLayerNorm(o, bs, rows, w, eps)
 		}
 		if !p.LayerNorm && (o.Kind == dkPostNorm || prog.scans && o.Role == jlm.RoleAttnNorm) && w%bs.parts == 0 {
@@ -565,45 +606,6 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 			return nil
 		}
 		rb.store(y, gaOut0)
-		if o.Kind == dkNormQuant {
-			q8 = 1
-			rb.quantStage(y, w, p.ActWin)
-		}
-	case dkAddNorm, dkAddNormQuant:
-		// The residual's sum, normed; with its int8 operand.
-		s := rb.bin(compose.OpAdd, rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1))
-		rb.store(s, gaOut0)
-		y := rb.normed(o, s, w, eps, p.LayerNorm)
-		if y < 0 {
-			return nil
-		}
-		rb.store(y, gaOut1)
-		if o.Kind == dkAddNormQuant {
-			q8 = 2
-			rb.quantStage(y, w, p.ActWin)
-		}
-	case dkActQuant:
-		// act(gate) * up, and its int8 operand.
-		if len(o.In) != 2 {
-			return nil
-		}
-		// An elementwise row: its int8 operand formed over its words, the
-		// row computed at each word's elements and stored there.
-		if w%32 != 0 {
-			o.Why = whyNoForm
-			return nil
-		}
-		rb.r.Width, rb.r.Rows = rows*w/4, 1
-		y, ok := rb.gated(o, rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1))
-		if !ok {
-			return nil
-		}
-		win := p.ActWin
-		if win <= 0 {
-			win = 32
-		}
-		q8 = 1
-		rb.r.Quantize8Words(y, rb.buf(compose.BufOut, gaOut0), rb.buf(compose.BufOutU32, gaQ8A), rb.buf(compose.BufOut, gaQ8X), min(win, w))
 	case dkGatherHeads:
 		// A chunk's rows head-major: each head's slice of every row in turn,
 		// a group row a (head, row), read through the step's order.
@@ -877,6 +879,7 @@ const (
 type genState struct {
 	bs             *blockScratch
 	slots          []devSlot
+	ops            []devOp
 	cs, qOff, kOff backend.Buf
 	// The op's weight: its payload, scale (the float row for a float
 	// format) and scale-of-scale planes, its own bias, and the int8 operand
@@ -929,6 +932,18 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 			switch a := l.args[j]; a {
 			case gaIn0, gaIn1, gaIn2, gaIn3:
 				bufs[j] = at(o.In[a-gaIn0])
+			case gaVal:
+				bufs[j] = at(devVal(l.refs[j]))
+			case gaValQ8A:
+				bufs[j], _ = int8Of(st, devVal(l.refs[j]))
+			case gaValQ8X:
+				_, bufs[j] = int8Of(st, devVal(l.refs[j]))
+			case gaOpV:
+				bufs[j] = st.ops[l.refs[j]].V
+			case gaOpVB:
+				bufs[j] = st.ops[l.refs[j]].VB
+			case gaOpGC:
+				bufs[j] = st.ops[l.refs[j]].GC
 			case gaOut0, gaOut1, gaOut2:
 				bufs[j] = at(o.Out[a-gaOut0])
 			case gaV:
@@ -1551,6 +1566,8 @@ const (
 	// whyNothing is an op formed with nothing to launch at this step (a
 	// grouping a row does not need).
 	whyNothing
+	// whyFused is an op the fusion pass took into an earlier op's launch.
+	whyFused
 )
 
 func (w genWhy) String() string {
@@ -1560,7 +1577,8 @@ func (w genWhy) String() string {
 		"no float row stated", "a history that is not paged, or a row wider than its heads",
 		"rows whose head-major layout the program does not state",
 		"values whose widths the primitive does not take",
-		"an op with no form in the composer's primitives yet", "nothing to launch at this step"}[w]
+		"an op with no form in the composer's primitives yet", "nothing to launch at this step",
+		"fused into an earlier op's launch"}[w]
 }
 
 // genPagedWrite is a block's new K and V rows into its paged history: K
@@ -2001,8 +2019,7 @@ func (g *devTier) genGatedNorm(o *devOp, prog *devProgram, bs *blockScratch, row
 }
 
 // genNormParts is an RMSNorm in two launches, each row's sum of squares in
-// the scratch's parts and then the apply, with the int8 operand quantized
-// after where the op makes one.
+// the scratch's parts and then the apply.
 func (g *devTier) genNormParts(o *devOp, prog *devProgram, bs *blockScratch, rows, w int, eps float32, parts int) []genLaunch {
 	if o.V == nil || parts < 1 || w%parts != 0 {
 		return nil
@@ -2022,13 +2039,6 @@ func (g *devTier) genNormParts(o *devOp, prog *devProgram, bs *blockScratch, row
 		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
 		copy(l.args[:], rb.args)
 		ls = append(ls, l)
-	}
-	if o.Kind == dkNormQuant {
-		q := g.genQuant(o, prog, rows, gaOut0, gaQ8A, gaQ8X, 1, bs.p.ActWin)
-		if q == nil {
-			return nil
-		}
-		ls = append(ls, q...)
 	}
 	return ls
 }

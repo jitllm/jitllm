@@ -972,7 +972,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		}
 		return devType{Elem: elemF32, Layout: row, Width: in.Width}
 	case dkQuant, dkNorm, dkRopeQ, dkAdd, dkActMul, dkKVWrite, dkAttend, dkHeadNorm, dkPostNorm,
-		dkNormQuant, dkAddNorm, dkAddNormQuant, dkActQuant, dkRopeQKV, dkGate2In,
+		dkRopeQKV, dkGate2In,
 		dkQKVIn, dkQKVSep, dkResIn, dkFFNIn, dkDownAct, dkNormF16, dkAddNormF16, dkActF16:
 		return devType{Elem: elemF32, Layout: row, Width: in.Width}
 	}

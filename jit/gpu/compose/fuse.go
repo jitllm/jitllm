@@ -14,22 +14,150 @@ package compose
 //     its own space: each read the producer's node at the element read, the
 //     producer's store made there.
 //
-// What the merge cannot express leaves the groups apart. Every store a
-// group made is kept.
-func Fuse(gs []Group) []Group {
-	if len(gs) == 0 {
+// What the merge cannot express, what the parameters do not allow, and a
+// merged group that would read a buffer it writes (RULE 13) leave the
+// groups apart. Every store a group made is kept.
+func Fuse(pr *Program, gs []Group, f FuseParams) []Group {
+	if len(gs) == 0 || f.Off {
 		return gs
 	}
 	out := []Group{gs[0]}
 	for _, c := range gs[1:] {
-		p := &out[len(out)-1]
-		if m, ok := fuse(*p, c); ok {
-			*p = m
+		if c.Extern {
+			out = append(out, c)
 			continue
 		}
-		out = append(out, c)
+		// The nearest earlier group c may join: nothing between writes what
+		// c reads, or reads or writes what c writes.
+		merged := false
+		for j := len(out) - 1; j >= 0 && !merged; j-- {
+			p := &out[j]
+			if !p.Extern && f.allows(pr, *p, c) {
+				if m, ok := fuse(*p, c); ok && !pr.readsWhatItWrites(m) {
+					*p, merged = m, true
+					break
+				}
+			}
+			if pr.conflicts(*p, c) {
+				break
+			}
+		}
+		if !merged {
+			out = append(out, c)
+		}
 	}
 	return out
+}
+
+// conflicts reports whether c may not move before group p: p writes what c
+// reads, or reads or writes what c writes, by value or by buffer.
+func (pr *Program) conflicts(p, c Group) bool {
+	type key struct{ v, b int }
+	set := func(g Group, out bool) []key {
+		var ks []key
+		for _, i := range g.Prims {
+			vs := pr.Prims[i].In
+			if out {
+				vs = pr.Prims[i].Out
+			}
+			for _, v := range vs {
+				ks = append(ks, key{v, pr.Vals[v].Buf})
+			}
+		}
+		return ks
+	}
+	meet := func(a, b []key) bool {
+		for _, x := range a {
+			for _, y := range b {
+				if x.v == y.v || x.b >= 0 && x.b == y.b {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	pin, pout, cin, cout := set(p, false), set(p, true), set(c, false), set(c, true)
+	return meet(pout, cin) || meet(pin, cout) || meet(pout, cout)
+}
+
+// FuseParams is the fusion pass's switch and parameters: Off runs no
+// fusion; Pairs[k] has bit c where a value prim kind k computes may be
+// fused into the prim of kind c reading it.
+type FuseParams struct {
+	Off   bool
+	Pairs [numPrimKinds]uint32
+	// Only[k][c], where set, is 1 + the buffer a pair's value must live in.
+	Only [numPrimKinds][numPrimKinds]int
+}
+
+// Allow lets a value of a prim of kind from fuse into a prim of kind to.
+func (f *FuseParams) Allow(from, to PrimKind) { f.Pairs[from] |= 1 << to }
+
+// AllowIn is Allow for values in buffer buf alone.
+func (f *FuseParams) AllowIn(from, to PrimKind, buf int) {
+	f.Allow(from, to)
+	f.Only[from][to] = buf + 1
+}
+
+// allows reports whether consumer c's prim may fuse every value of p's it
+// reads.
+func (f FuseParams) allows(pr *Program, p, c Group) bool {
+	maker := map[int]PrimKind{}
+	for _, i := range p.Prims {
+		for _, v := range pr.Prims[i].Out {
+			maker[v] = pr.Prims[i].Kind
+		}
+	}
+	any := false
+	for _, i := range c.Prims {
+		o := pr.Prims[i]
+		for _, v := range o.In {
+			if k, ok := maker[v]; ok {
+				if f.Pairs[k]&(1<<o.Kind) == 0 {
+					return false
+				}
+				if b := f.Only[k][o.Kind]; b != 0 && pr.Vals[v].Buf != b-1 {
+					return false
+				}
+				any = true
+			}
+		}
+	}
+	return any
+}
+
+// readsWhatItWrites reports whether group g reads a value whose buffer it
+// writes.
+func (pr *Program) readsWhatItWrites(g Group) bool {
+	read, wrote := map[int]bool{}, map[int]bool{}
+	for _, n := range g.Row.Nodes {
+		if n.Kind == NLoad {
+			if b := g.Binds[n.Buf]; b.Kind == BindVal || b.Kind == BindQ8 || b.Kind == BindQ8X {
+				if c := pr.Vals[b.Index].Buf; c >= 0 {
+					read[c] = true
+				}
+			}
+		}
+	}
+	mark := func(sts []Store) {
+		for _, st := range sts {
+			if b := g.Binds[st.Buf]; b.Kind == BindVal || b.Kind == BindQ8 || b.Kind == BindQ8X {
+				if c := pr.Vals[b.Index].Buf; c >= 0 {
+					wrote[c] = true
+				}
+			}
+		}
+	}
+	mark(g.Row.Stores)
+	for _, s := range g.Row.Stages {
+		mark(s.Stores)
+	}
+	for c := range wrote {
+		if read[c] {
+			return true
+		}
+	}
+	return false
 }
 
 // fuse is producer p and consumer c as one group, false where no form of
@@ -406,4 +534,65 @@ func (g Group) compact() Group {
 	}
 	g.Row.Bufs, g.Binds = bufs, binds
 	return g
+}
+
+// PruneParams is the dead-store pass's switch and parameters: Drop[k] lets
+// it drop the store of a value a prim of kind k computes.
+type PruneParams struct {
+	Off  bool
+	Drop [numPrimKinds]bool
+}
+
+// Prune is the dead-store pass: a group's store of a value it computes,
+// which no prim outside the group reads and the program does not hand out
+// (Out), is dropped where the parameters let the kind's be.
+func Prune(pr *Program, gs []Group, f PruneParams) []Group {
+	if f.Off {
+		return gs
+	}
+	maker := map[int]int{}
+	for i, o := range pr.Prims {
+		for _, v := range o.Out {
+			maker[v] = i
+		}
+	}
+	for gi := range gs {
+		g := &gs[gi]
+		if g.Extern {
+			continue
+		}
+		in := map[int]bool{}
+		for _, i := range g.Prims {
+			in[i] = true
+		}
+		dead := func(v int) bool {
+			m, ok := maker[v]
+			if !ok || !in[m] || !f.Drop[pr.Prims[m].Kind] || v < len(pr.Out) && pr.Out[v] {
+				return false
+			}
+			for i, o := range pr.Prims {
+				if in[i] {
+					continue
+				}
+				for _, x := range o.In {
+					if x == v {
+						return false
+					}
+				}
+			}
+			return true
+		}
+		var keep []Store
+		for _, st := range g.Row.Stores {
+			if b := g.Binds[st.Buf]; b.Kind == BindVal && !st.Indexed && dead(b.Index) {
+				continue
+			}
+			keep = append(keep, st)
+		}
+		if len(keep) != len(g.Row.Stores) {
+			g.Row.Stores = keep
+			*g = g.compact()
+		}
+	}
+	return gs
 }

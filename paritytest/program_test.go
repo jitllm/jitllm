@@ -17,7 +17,11 @@ func fused(t *testing.T, p *compose.Program) *compose.Row {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gs = compose.Fuse(gs)
+	var f compose.FuseParams
+	f.Allow(compose.PrimAdd, compose.PrimNorm)
+	f.Allow(compose.PrimNorm, compose.PrimQuant)
+	f.Allow(compose.PrimActMul, compose.PrimQuant)
+	gs = compose.Fuse(p, gs, f)
 	if len(gs) != 1 {
 		t.Fatalf("%d groups after the fusion pass, want 1", len(gs))
 	}
@@ -46,7 +50,7 @@ func TestFusedNormsAreMains(t *testing.T) {
 			}
 			p := &compose.Program{Rows: c.rows}
 			val := func(e compose.ValElem) int {
-				p.Vals = append(p.Vals, compose.Value{Elem: e, Width: c.w})
+				p.Vals = append(p.Vals, compose.Value{Elem: e, Width: c.w, Buf: -1})
 				return len(p.Vals) - 1
 			}
 			x := val(compose.ValF32)
@@ -75,10 +79,56 @@ func TestFusedActQuantIsMains(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			p := &compose.Program{Rows: 1, Vals: []compose.Value{{Width: n}, {Width: n}, {Width: n}, {Elem: compose.ValQ8, Width: n}}}
+			p := &compose.Program{Rows: 1, Vals: []compose.Value{{Width: n, Buf: -1}, {Width: n, Buf: -1}, {Width: n, Buf: -1}, {Elem: compose.ValQ8, Width: n, Buf: -1}}}
 			p.Prims = []compose.Prim{{Kind: compose.PrimActMul, Act: kernels.ActSiLU, In: []int{0, 1}, Out: []int{2}},
 				{Kind: compose.PrimQuant, In: []int{2}, Out: []int{3}}}
 			same(t, name, []*ir.Kernel{mk}, planned(t, fused(t, p), compose.Facts{Target: sm70}))
 		})
+	}
+}
+
+// TestFusedMatVecEpiloguesAreMains holds a matvec and the add or gated
+// activation reading it, each lowered alone, through the fusion and
+// dead-store passes to main's matvec with the residual or gate epilogue.
+func TestFusedMatVecEpiloguesAreMains(t *testing.T) {
+	for _, q := range []format{{kernels.Q8_0, mainkernels.Q8_0}, {kernels.Q4_K, mainkernels.Q4_K}} {
+		for _, sp := range []int{1, 4} {
+			for _, epi := range []int{1, 2} {
+				const rows, k = 256, 512
+				name := fmt.Sprintf("%v_s%d_epi%d", q.c, sp, epi)
+				t.Run(name, func(t *testing.T) {
+					mk, err := mainkernels.MatVec(mainkernels.MatVecShape{T: q.m, K: k, Rows: rows, NTok: 1,
+						Split: sp, GroupSplit: sp > 1, Bias: epi == 1, Gate: epi == 2, GateAct: mainkernels.ActSiLU})
+					if err != nil {
+						t.Fatal(err)
+					}
+					p := &compose.Program{Rows: 1, Vals: []compose.Value{{Elem: compose.ValQ8, Width: k, Buf: -1},
+						{Width: rows, Buf: -1}, {Width: rows, Buf: -1}, {Width: rows, Buf: -1}}}
+					f := compose.Facts{Target: sm70, Step: compose.StepDecode, DecodeSplit: sp, DecodeGroup: sp > 1}
+					mv := compose.Prim{Kind: compose.PrimMatVec, In: []int{0}, Out: []int{1}, Facts: f,
+						W: compose.MatVecWeight{T: q.c, K: k, Rows: rows}}
+					ep := compose.Prim{Kind: compose.PrimAdd, In: []int{1, 2}, Out: []int{3}}
+					if epi == 2 {
+						ep = compose.Prim{Kind: compose.PrimActMul, Act: kernels.ActSiLU, In: []int{2, 1}, Out: []int{3}}
+					}
+					p.Prims = []compose.Prim{mv, ep}
+					gs, err := p.Lower()
+					if err != nil {
+						t.Fatal(err)
+					}
+					var fp compose.FuseParams
+					fp.Allow(compose.PrimMatVec, compose.PrimAdd)
+					fp.Allow(compose.PrimMatVec, compose.PrimActMul)
+					gs = compose.Fuse(p, gs, fp)
+					var pp compose.PruneParams
+					pp.Drop[compose.PrimMatVec] = true
+					gs = compose.Prune(p, gs, pp)
+					if len(gs) != 1 {
+						t.Fatalf("%d groups", len(gs))
+					}
+					same(t, name, []*ir.Kernel{mk}, plannedAll(t, &gs[0].Row, gs[0].Facts))
+				})
+			}
+		}
 	}
 }
