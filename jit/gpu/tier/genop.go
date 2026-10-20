@@ -383,6 +383,9 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		if prog.vals[o.In[0]].Width != w {
 			return nil
 		}
+		if p.LayerNorm && o.Kind != dkNormQuant {
+			return g.genLayerNorm(o, bs, rows, w, eps)
+		}
 		y := rb.normed(o, rb.load(compose.BufRow, gaIn0), w, eps, p.LayerNorm)
 		if y < 0 {
 			return nil
@@ -1418,4 +1421,39 @@ func (g *devTier) genRopeQKV(o *devOp, prog *devProgram, bs *blockScratch, rows 
 	l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(qb.args))}
 	copy(l.args[:], qb.args)
 	return append([]genLaunch{l}, kv...)
+}
+
+// genLayerNorm is a LayerNorm in three launches, each row's statistics in
+// the scratch's parts: the parts' sums, their squared deviations from the
+// row's mean, and the apply with the op's weight and bias.
+func (g *devTier) genLayerNorm(o *devOp, bs *blockScratch, rows, w int, eps float32) []genLaunch {
+	parts := bs.parts
+	if o.V == nil || parts < 1 || w%parts != 0 {
+		return nil
+	}
+	sb := &rowBuild{r: compose.Row{Width: parts * rows, Rows: 1}}
+	sx := sb.buf(compose.BufRow, gaIn0)
+	sb.r.Store(sb.buf(compose.BufOut, gaPart), sb.r.SumParts(sx, w, parts))
+	vb := &rowBuild{r: compose.Row{Width: parts * rows, Rows: 1}}
+	vx, vs := vb.buf(compose.BufRow, gaIn0), vb.buf(compose.BufRow, gaPart)
+	vb.r.Store(vb.buf(compose.BufOut, gaPart2), vb.r.VarParts(vx, vs, w, parts))
+	ab := &rowBuild{r: compose.Row{Width: w, Rows: rows}}
+	ax, wt := ab.buf(compose.BufRow, gaIn0), ab.buf(compose.BufVec, gaV)
+	sum, vr := ab.buf(compose.BufRow, gaPart), ab.buf(compose.BufRow, gaPart2)
+	bias := -1
+	if o.VB != nil {
+		bias = ab.buf(compose.BufVec, gaVB)
+	}
+	ab.r.Store(ab.buf(compose.BufOut, gaOut0), ab.r.LayerNormApplyParts(ax, wt, bias, sum, vr, w, parts, eps))
+	var ls []genLaunch
+	for _, rb := range []*rowBuild{sb, vb, ab} {
+		k := g.rowKern(&rb.r)
+		if k.k == nil {
+			return nil
+		}
+		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
+		copy(l.args[:], rb.args)
+		ls = append(ls, l)
+	}
+	return ls
 }
