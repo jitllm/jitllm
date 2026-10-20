@@ -5,6 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/compose"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
@@ -40,14 +41,48 @@ func (g *devTier) ragStaged(bs *blockScratch) bool {
 		// staged FMA tiles serve it everywhere else.
 		return !(g.composeTarget().API == compose.APIPTX && !mma)
 	}
-	if g.composeTarget().API == compose.APIPTX {
+	if _, _, ok := g.prefillTile(bs); ok || g.flash16Serves(bs) {
 		return false
 	}
-	if g.tilesOK() {
-		_, _, ok := g.prefillTile(bs)
-		return !ok
+	if g.composeTarget().API == compose.APIPTX || g.tilesOK() {
+		return true
 	}
 	return !mma
+}
+
+// f16MMA is the k of the binary16 m16n8 instruction a PTX device lowers:
+// 16, else 8, else 0.
+func (g *devTier) f16MMA() int {
+	if g.f16K == 0 {
+		g.f16K = -1
+		if g.composeTarget().API != compose.APIPTX {
+			return 0
+		}
+		for _, k := range []int{16, 8} {
+			if ok, _ := backend.LowersMMA(g.dev, ir.MMAShape{M: 16, N: 8, K: k, Kind: ir.MMAF16}); ok {
+				g.f16K = k
+				break
+			}
+		}
+	}
+	return max(g.f16K, 0)
+}
+
+// flash16Serves reports whether a prompt's paged attention is the one
+// kernel on the binary16 m16n8 instruction here: a device that lowers it,
+// a head a whole number of 32 up to 256, rows a whole number of its row
+// block (16 a subgroup, four subgroups, two sharing a head past 128).
+func (g *devTier) flash16Serves(bs *blockScratch) bool {
+	p := &bs.p
+	if g.composeTarget().API != compose.APIPTX || g.kb.noAttnMMA || p.MLA() || g.f16MMA() == 0 {
+		return false
+	}
+	hd, split := p.HeadDim, 1
+	if hd > 128 {
+		split = 2
+	}
+	return p.NKVHead > 0 && p.NHead%p.NKVHead == 0 && hd%32 == 0 && hd >= 32 && hd <= 256 &&
+		bs.rows%(16*4/split) == 0 && p.AttnSoftcap >= 0 && !g.KVF16
 }
 
 // prefillTile is the collective-tile flash prefill's blocking for bs's
@@ -56,7 +91,7 @@ func (g *devTier) ragStaged(bs *blockScratch) bool {
 // form does not take), or no blocking serves its head width.
 func (g *devTier) prefillTile(bs *blockScratch) (sg, tk int, ok bool) {
 	p := &bs.p
-	if !g.tilesOK() || p.MLA() || p.AttnSinks || g.KVF16 {
+	if !g.tileF32() || p.MLA() || p.AttnSinks || g.KVF16 || g.flash16Serves(bs) {
 		return 0, 0, false
 	}
 	return flashTileOf(p.HeadDim, bs.rows)
@@ -179,17 +214,27 @@ func (g *devTier) ragStage(bs *blockScratch, pk *pagedScratch) {
 			return
 		}
 	}
-	if !g.regrow(&rr.pMap, &rr.mapCap, n, 4, false, false) {
+	if !g.regrow(&rr.pMap, &rr.mapCap, n, 4, false, false) || !tile && !g.stagedPlanes(bs, pk, n, max(rr.chunk[0], rr.chunk[1])) {
 		return
 	}
 	rr.n = n
 }
 
+// stagedPlanes grows the staged prefill's score and weight planes to rows
+// slots of every head over chunk keys, outside any submission: inside one
+// they may not grow. Callers hold g.mu.
+func (g *devTier) stagedPlanes(bs *blockScratch, pk *pagedScratch, rows, chunk int) bool {
+	plane := rows * bs.p.NHead * chunk
+	return g.regrow(&pk.sc, &pk.scCap, plane, 4, true, true) && g.regrow(&pk.wt, &pk.wtCap, plane, 4, true, true)
+}
+
 // ragAccTile is the run table's accumulate (and softmax reader) query tile,
-// and ragPassW the widest span one launch of the table attends.
+// ragPassW the widest span one launch of the table attends, and accMMANT
+// the matrix accumulate's 8-query tiles a subgroup.
 const (
 	ragAccTile = 8
 	ragPassW   = 4096
+	accMMANT   = 2
 )
 
 // prefillAt is a layer's prefill launches: the collective-tile flash where
@@ -268,6 +313,16 @@ func (g *devTier) stagedPrefill(bs *blockScratch, rows, c int, mapped bool, set 
 		!g.regrow(&pk.sc, &pk.scCap, plane, 4, true, true) || !g.regrow(&pk.wt, &pk.wtCap, plane, 4, true, true) {
 		return nil
 	}
+	// A chunk's scores, and where the device lowers the binary16 m16n8
+	// instruction its accumulate too, on the matrix instruction where the
+	// head and the rows take its 16.
+	t := g.composeTarget()
+	mmaScores := !mapped && t.API == compose.APIPTX && !g.NoMMA && !g.kb.noAttnMMA && s.MLA == 0 &&
+		p.HeadDim%16 == 0 && rows%16 == 0
+	mmaAcc := mmaScores && g.f16MMA() > 0 && rows%(8*accMMANT) == 0
+	if mmaAcc {
+		qt = 8 * accMMANT
+	}
 	group := lcmInt(sq, qt)
 	if !mapped {
 		group = rows
@@ -279,11 +334,20 @@ func (g *devTier) stagedPrefill(bs *blockScratch, rows, c int, mapped bool, set 
 		}
 		return rb.buf(u32, gaRagMap), rb.buf(u32, pbase)
 	}
-	sc := &rowBuild{r: compose.Row{Width: c, Rows: rows * p.NHead, SpanGroup: group}}
-	q, k := sc.buf(compose.BufRow, gaIn0), sc.buf(compose.BufRow, gaKPool)
-	out, tab, desc := sc.buf(compose.BufOut, gaScores), sc.buf(u32, gaTab), sc.buf(u32, prow)
-	mp, bt := tables(sc)
-	sc.r.PrefillScores(s, q, k, out, tab, desc, mp, bt)
+	var sc *rowBuild
+	if mmaScores {
+		nt := g.tiles.attnNT
+		sc = &rowBuild{r: compose.Row{Width: 32 * s.ScoresMMAWarps(nt), Rows: 1}}
+		q, k, n := sc.buf(compose.BufRow, gaIn0), sc.buf(compose.BufRow, gaKPool), sc.buf(u32, gaCount)
+		out, tab, desc := sc.buf(compose.BufOut, gaScores), sc.buf(u32, gaTab), sc.buf(u32, prow)
+		sc.r.PrefillScoresMMA(s, nt, q, k, n, out, tab, desc)
+	} else {
+		sc = &rowBuild{r: compose.Row{Width: c, Rows: rows * p.NHead, SpanGroup: group}}
+		q, k := sc.buf(compose.BufRow, gaIn0), sc.buf(compose.BufRow, gaKPool)
+		out, tab, desc := sc.buf(compose.BufOut, gaScores), sc.buf(u32, gaTab), sc.buf(u32, prow)
+		mp, bt := tables(sc)
+		sc.r.PrefillScores(s, q, k, out, tab, desc, mp, bt)
+	}
 
 	sm := &rowBuild{r: compose.Row{Width: 1, Rows: rows * p.NHead}}
 	a, w, part, sdesc := sm.buf(compose.BufRow, gaScores), sm.buf(compose.BufOut, gaWts), sm.buf(compose.BufOut, gaParts), sm.buf(u32, prow)
@@ -294,19 +358,37 @@ func (g *devTier) stagedPrefill(bs *blockScratch, rows, c int, mapped bool, set 
 	smp, sbt := tables(sm)
 	sm.r.PrefillSoftmax(s, a, w, part, sdesc, sink, smp, sbt, qt)
 
-	ac := &rowBuild{r: compose.Row{Width: vd, Rows: rows * p.NHead, SpanGroup: group}}
-	aw, v, aout := ac.buf(compose.BufRow, gaWts), ac.buf(compose.BufRow, vpool), ac.buf(compose.BufOut, gaOut0)
-	atab, adesc := ac.buf(u32, gaTab), ac.buf(u32, prow)
-	amp, abt := tables(ac)
-	ac.r.PrefillAcc(s, aw, v, aout, atab, adesc, amp, abt)
+	var ac *rowBuild
+	if mmaAcc {
+		mt := 4
+		for mt > 1 && s.Dim%(16*mt) != 0 {
+			mt /= 2
+		}
+		ac = &rowBuild{r: compose.Row{Width: 32 * s.AccMMAWarps(mt, accMMANT), Rows: 1}}
+		aw, v, n := ac.buf(compose.BufRow, gaWts), ac.buf(compose.BufRow, vpool), ac.buf(u32, gaCount)
+		aout, atab, adesc := ac.buf(compose.BufOut, gaOut0), ac.buf(u32, gaTab), ac.buf(u32, prow)
+		ac.r.PrefillAccMMA(s, mt, accMMANT, aw, v, n, aout, atab, adesc)
+	} else {
+		ac = &rowBuild{r: compose.Row{Width: vd, Rows: rows * p.NHead, SpanGroup: group}}
+		aw, v, aout := ac.buf(compose.BufRow, gaWts), ac.buf(compose.BufRow, vpool), ac.buf(compose.BufOut, gaOut0)
+		atab, adesc := ac.buf(u32, gaTab), ac.buf(u32, prow)
+		amp, abt := tables(ac)
+		ac.r.PrefillAcc(s, aw, v, aout, atab, adesc, amp, abt)
+	}
 
-	t := g.composeTarget()
-	var ls []genLaunch
-	for i, f := range []compose.Facts{
+	facts := []compose.Facts{
 		{Target: t, Step: compose.StepChunk, Tok: sq, RowTile: kt},
 		{Target: t},
 		{Target: t, Step: compose.StepChunk, Tok: qt, RowTile: 1},
-	} {
+	}
+	if mmaScores {
+		facts[0] = compose.Facts{Target: t}
+	}
+	if mmaAcc {
+		facts[2] = compose.Facts{Target: t}
+	}
+	var ls []genLaunch
+	for i, f := range facts {
 		rb := []*rowBuild{sc, sm, ac}[i]
 		kk := g.rowKernWith(&rb.r, f)
 		if kk.k == nil {
@@ -387,7 +469,7 @@ func (g *devTier) preStage(bs *blockScratch, pk *pagedScratch, nrow int) {
 			c *= 2
 		}
 		pp.chunk[i] = c
-		if !g.regrow(&pp.pDesc[i], &pp.caps[i], len(src), 4, false, false) {
+		if !g.regrow(&pp.pDesc[i], &pp.caps[i], len(src), 4, false, false) || !tile && !g.stagedPlanes(bs, pk, bs.rows, c) {
 			return
 		}
 	}

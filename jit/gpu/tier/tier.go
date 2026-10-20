@@ -2165,7 +2165,7 @@ type devShared struct {
 	// voltaMoE is the grouped tensor-core mixture's probe (voltaOn): 0 not yet
 	// asked, 1 this device runs it, -1 it does not.
 	voltaMoE int8
-	// f16K is f16GemmK's probe: 0 not yet asked, -1 no m16n8 binary16
+	// f16K is f16MMA's probe: 0 not yet asked, -1 no m16n8 binary16
 	// instruction, else its k.
 	f16K int
 	// i8Gemm is int8GemmOn's probe: 0 not yet asked, 1 the device lowers

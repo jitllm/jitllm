@@ -277,4 +277,10 @@ func (g *devTier) kStride(p *nn.LayerPlan) int {
 }
 
 // promptGrain is the grain a prompt chunk's own width is rounded to.
-func (g *devTier) promptGrain() int { return batchGrain }
+func (g *devTier) promptGrain() int {
+	if !g.kb.noAttnMMA && g.f16MMA() == 16 {
+		// The binary16 m16n8k16 forms' row blocks.
+		return max(batchGrain, 16*4)
+	}
+	return batchGrain
+}

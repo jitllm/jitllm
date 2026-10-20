@@ -69,11 +69,16 @@ func tileProbe(s TileShape) (*ir.Kernel, error) {
 // tier asks before it sizes its batches for the instruction. Compiled, never
 // launched.
 func LowersIntMMA(d Device) (bool, string) {
-	sh := ir.MMAShape{M: 16, N: 8, K: 32, Kind: ir.MMAS8}
+	return LowersMMA(d, ir.MMAShape{M: 16, N: 8, K: 32, Kind: ir.MMAS8})
+}
+
+// LowersMMA reports whether d compiles the subgroup matrix instruction sh,
+// and the device's own words when it does not. Compiled, never launched.
+func LowersMMA(d Device, sh ir.MMAShape) (bool, string) {
 	na, nb, nc := sh.Frags()
 	b := ir.New("mmacap", [3]int{ir.SubgroupLanes, 1, 1})
 	pIn := b.Param("pIn", ir.U32)
-	pOut := b.Param("pOut", ir.I32)
+	pOut := b.Param("pOut", sh.Elem())
 	tid := b.TID()
 	frag := func(n, off int) []ir.Value {
 		v := make([]ir.Value, n)
@@ -84,7 +89,7 @@ func LowersIntMMA(d Device) (bool, string) {
 	}
 	c := make([]ir.Value, nc)
 	for i := range c {
-		c[i] = b.Const(ir.I32, 0)
+		c[i] = b.Const(sh.Elem(), 0)
 	}
 	out := b.MMA(sh, frag(na, 0), frag(nb, na), c)
 	for i, v := range out {

@@ -669,7 +669,7 @@ func (g *devTier) rowGrain() int {
 	// ask the matrix instruction).
 	asks := func(p *nn.LayerPlan) bool {
 		_, _, tile := flashTileOf(p.HeadDim, batchWidth)
-		tile = tile && g.tilesOK() && !p.MLA()
+		tile = tile && g.tileF32() && !p.MLA()
 		return p.NExpert > 0 || p.HeadDim > 0 && p.HeadDim%32 == 0 && !tile
 	}
 	if g.anyNarrow() || asks(&g.bs.p) {

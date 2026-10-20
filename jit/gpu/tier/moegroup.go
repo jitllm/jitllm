@@ -127,3 +127,19 @@ func (g *devTier) tilesOK() bool {
 	}
 	return g.tileCap == 1
 }
+
+// tileF32 reports whether the device also lowers the float32 8x8 tile (the
+// collective-tile flash prefill's P V): Metal's simdgroup_matrix, sm_80's
+// tf32 products.
+func (g *devTier) tileF32() bool {
+	if !g.tilesOK() {
+		return false
+	}
+	if g.tileF32Cap == 0 {
+		g.tileF32Cap = -1
+		if ok, _ := backend.LowersTile(g.dev, backend.TileShape{M: 8, N: 8, K: 8, Elem: ir.TileF32, Acc: ir.TileF32}); ok {
+			g.tileF32Cap = 1
+		}
+	}
+	return g.tileF32Cap == 1
+}
