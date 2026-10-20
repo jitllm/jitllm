@@ -35,7 +35,7 @@ func (g *devTier) genAttend(o *devOp, prog *devProgram, bs *blockScratch, rows i
 	// Formed for the whole context, which sizes the planes every shorter
 	// call's plan fits in (the splits only grow with the keys); a call runs
 	// the plan of its own keys (attendAt).
-	if g.attendKeys(o, prog, bs, rows, g.kvCap) == nil {
+	if g.attendKeys(o, prog, bs, rows, (max(g.kvCap, 1)+scoreGrain-1)/scoreGrain*scoreGrain) == nil {
 		return nil
 	}
 	return []genLaunch{{former: formAttend}}
@@ -44,7 +44,7 @@ func (g *devTier) genAttend(o *devOp, prog *devProgram, bs *blockScratch, rows i
 // attendAt is the attention's launches for a call whose rows attend up to
 // keys keys, rounded to the recording grain: generated once a plan and kept.
 func (g *devTier) attendAt(o *devOp, prog *devProgram, bs *blockScratch, rows, keys int) []genLaunch {
-	keys = min((max(keys, 1)+scoreGrain-1)/scoreGrain*scoreGrain, max(g.kvCap, 1))
+	keys = (max(keys, 1) + scoreGrain - 1) / scoreGrain * scoreGrain
 	k := attendKey{op: o.Src[0], rows: rows, keys: keys}
 	if ls, ok := prog.attend[k]; ok {
 		return ls
