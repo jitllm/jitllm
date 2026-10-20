@@ -83,6 +83,9 @@ const (
 	gaSink    // the block's per-head attention sinks
 	gaCount   // the step's per-row key counts (the decode's one, then each row's)
 	gaTemp    // the attention temperature over each row's count
+	gaRagMap   // a ragged call's run table: each slot's row
+	gaRagBase  // each slot's partition base
+	gaRagBaseW // the windowed descriptors' bases
 	gaMgBC    // a mixture's grouping over rows: the block counts,
 	gaMgOff   // the offsets,
 	gaMgCnt   // the totals,
@@ -916,6 +919,12 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.bs.n
 			case gaTemp:
 				bufs[j] = st.bs.tempTab
+			case gaRagMap:
+				bufs[j] = st.bs.pkv.rag.pMap
+			case gaRagBase:
+				bufs[j] = st.bs.pkv.rag.pBase[0]
+			case gaRagBaseW:
+				bufs[j] = st.bs.pkv.rag.pBase[1]
 			case gaMgBC, gaMgOff, gaMgCnt, gaMgEnds, gaMgColE, gaMgPerm, gaMgPos, gaMgTsel, gaMgHG, gaMgGA, gaMgGAX:
 				m := bs.mg
 				bufs[j] = [...]backend.Buf{m.bc, m.off, m.cnt, m.ends, m.colE, m.perm, m.pos, m.tsel, m.hg, m.ga, m.gax}[a-gaMgBC]

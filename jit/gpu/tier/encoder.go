@@ -261,8 +261,13 @@ func (g *devTier) layersSession(s backend.Session) {
 			// block's last add stays with the executor where the next
 			// block's norm may fold it (foldAddNorm).
 			if len(o.Gen) == 1 && o.Gen[0].former == formAttend {
-				// The attention of this call's keys.
-				if o.Gen = g.attendAt(&o, prog, bs, fc.rows, pagedKeys(pk.rows)); o.Gen == nil && err == nil {
+				// The attention of this call's keys, or its run table's.
+				if pk.rag.n > 0 {
+					o.Gen = g.ragAttendAt(&o, prog, bs)
+				} else {
+					o.Gen = g.attendAt(&o, prog, bs, fc.rows, pagedKeys(pk.rows))
+				}
+				if o.Gen == nil && err == nil {
 					err = fmt.Errorf("tier: block %d: no attention for the call's keys", li)
 				}
 			}
@@ -540,6 +545,14 @@ func (g *devTier) layersSession(s backend.Session) {
 		w(pk.pRow, u32view(pk.desc))
 		if len(pk.descW) > 0 {
 			w(pk.pRowW, u32view(pk.descW))
+		}
+		if rr := &pk.rag; rr.n > 0 {
+			w(rr.pMap, u32view(rr.slots))
+			for i := range rr.base {
+				if len(rr.base[i]) > 0 {
+					w(rr.pBase[i], u32view(rr.base[i]))
+				}
+			}
 		}
 	}
 	if bs.mlaPOff != nil {

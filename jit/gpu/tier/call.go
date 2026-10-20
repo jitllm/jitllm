@@ -765,6 +765,10 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			return refuse("paged history: %v", e)
 		}
 		g.pagedStage(pk, p, pk.rows)
+		pk.rag.n = 0
+		if rag != nil {
+			g.ragStage(bs, pk)
+		}
 	}
 
 	// A plan with a local rotary table (two bases, gemma3) needs it for every

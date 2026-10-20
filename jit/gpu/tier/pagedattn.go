@@ -41,6 +41,8 @@ type pagedScratch struct {
 	scCap, wtCap, partCap int
 	rows                  []pagedRow
 	desc, descW           []uint32
+	// rag is a ragged call's run table (ragattend.go).
+	rag ragRun
 }
 
 // kvPage is the pool's page size, decided when the pool is made and fixed for
