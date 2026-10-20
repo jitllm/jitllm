@@ -109,7 +109,14 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 		return []Planned{{G: g, S: Schedule{Group: 128, Flat: true, Target: f.Target}, Bufs: all,
 			Threads: g.Rows * g.Width}}, nil
 	}
-	if g.reduces() && g.Width <= f.Target.Lanes && g.Width&(g.Width-1) == 0 || g.loopReduces() {
+	shuffles, shared := false, false
+	for _, n := range g.Nodes {
+		shuffles = shuffles || n.Kind == NShuffle
+	}
+	for i := range g.Bufs {
+		shared = shared || g.shared(i)
+	}
+	if g.reduces() && g.Width <= f.Target.Lanes && g.Width&(g.Width-1) == 0 || g.loopReduces() || shuffles {
 		// A row no wider than a subgroup, or a reduction a loop's body reads
 		// (a value of the body), runs on one subgroup's lanes, the reduction
 		// their butterfly.
@@ -117,7 +124,16 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 		if f.RowGroup > 0 {
 			s.Group = f.RowGroup
 		}
+		if shared {
+			// A row's arrays are its workgroup's.
+			s.Group = max(g.Width, 32)
+		}
 		return []Planned{{G: g, S: s, Bufs: all, Threads: g.Rows * g.Width}}, nil
+	}
+	if shared && g.Width <= 1024 {
+		// Elements that meet in workgroup arrays: a row a workgroup.
+		return []Planned{{G: g, S: Schedule{Group: (g.Width + 31) / 32 * 32, Flat: true, WorkRow: true, Target: f.Target}, Bufs: all,
+			Threads: g.Rows * ((g.Width + 31) / 32 * 32)}}, nil
 	}
 	if !g.contraction() && !g.reduces() && len(g.Stages) == 0 {
 		return []Planned{{G: g, S: Schedule{Group: 128, Flat: true, Target: f.Target}, Bufs: all,

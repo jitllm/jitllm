@@ -78,10 +78,19 @@ const (
 	// (the low half first): a load decodes the element's half. A buffer of
 	// an odd element count is padded to a whole word.
 	BufRowF16
+	// BufShared and BufSharedU32 are a workgroup's own array of Buf.N floats
+	// or words, no parameter: stored and read by index, a store reaching a
+	// read across the barrier between their phases.
+	BufShared
+	BufSharedU32
 )
 
 // Buf is one of a group's buffers, a kernel parameter in order.
-type Buf struct{ Kind BufKind }
+type Buf struct {
+	Kind BufKind
+	// N is a workgroup array's length.
+	N int
+}
 
 // NodeKind is what a node computes.
 type NodeKind uint8
@@ -137,6 +146,9 @@ const (
 	NColOff
 	NRowBase
 	NRowOff
+	// NShuffle is A's value at the lane At away (an xor of the lane) in the
+	// subgroup, under lane rows.
+	NShuffle
 )
 
 // Op is a unary or binary map.
@@ -267,6 +279,10 @@ type Schedule struct {
 	// to the last, and a reduction is a butterfly over the lanes, every lane
 	// holding it -- a value in any scope, a loop's body too.
 	Lanes int
+	// WorkRow, under Flat, runs a row a workgroup of Group threads, the
+	// element the thread's clamped to the row's last: a row whose elements
+	// meet in workgroup arrays.
+	WorkRow bool
 }
 
 // Key is a group's identity in a cache: its structure and its schedule,
@@ -278,9 +294,9 @@ type Key struct {
 // Encode is the group's structure and schedule as integers.
 func (g *Row) Encode(s Schedule) []uint32 {
 	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs)), b2u(s.Flat), uint32(s.Tile), uint32(s.TileCols), uint32(s.Split),
-		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes), uint32(s.Lanes)}
+		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes), uint32(s.Lanes), b2u(s.WorkRow)}
 	for _, b := range g.Bufs {
-		e = append(e, uint32(b.Kind))
+		e = append(e, uint32(b.Kind), uint32(b.N))
 	}
 	for _, n := range g.Nodes {
 		e = append(e, uint32(n.Kind), uint32(n.Op), uint32(n.Act), uint32(n.Red), uint32(n.Buf),
@@ -335,7 +351,7 @@ func (g *Row) depth() ([]int, bool) {
 		for i, n := range g.Nodes {
 			v := 0
 			switch n.Kind {
-			case NUnary, NWindow:
+			case NUnary, NWindow, NShuffle:
 				v = d[n.A]
 			case NBinary, NUBinary, NLess:
 				v = max(d[n.A], d[n.B])
@@ -379,10 +395,10 @@ func (g *Row) Check() error {
 			if n.Buf < 0 || n.Buf >= len(g.Bufs) {
 				return fmt.Errorf("compose: node %d loads buffer %d of %d", i, n.Buf, len(g.Bufs))
 			}
-			if k := g.Bufs[n.Buf].Kind; k != BufRow && k != BufVec && k != BufScalar && k != BufRowScalar && k != BufU32 && k != BufRowF16 {
+			if k := g.Bufs[n.Buf].Kind; k != BufRow && k != BufVec && k != BufScalar && k != BufRowScalar && k != BufU32 && k != BufRowF16 && k != BufShared && k != BufSharedU32 {
 				return fmt.Errorf("compose: node %d loads an output buffer", i)
 			}
-		case NUnary, NReduce, NWindow:
+		case NUnary, NReduce, NWindow, NShuffle:
 			in = []int{n.A}
 		case NBinary, NUBinary, NLess:
 			in = []int{n.A, n.B}
@@ -420,7 +436,7 @@ func (g *Row) Check() error {
 		}
 	}
 	for _, s := range g.Stores {
-		if s.Buf < 0 || s.Buf >= len(g.Bufs) || g.Bufs[s.Buf].Kind != BufOut && g.Bufs[s.Buf].Kind != BufOutU32 || s.Val < 0 || s.Val >= len(g.Nodes) ||
+		if s.Buf < 0 || s.Buf >= len(g.Bufs) || g.Bufs[s.Buf].Kind != BufOut && g.Bufs[s.Buf].Kind != BufOutU32 && !g.shared(s.Buf) || s.Val < 0 || s.Val >= len(g.Nodes) ||
 			s.Indexed && (s.Ix < 0 || s.Ix >= len(g.Nodes)) {
 			return fmt.Errorf("compose: a store of node %d into buffer %d", s.Val, s.Buf)
 		}
@@ -653,7 +669,7 @@ func newEnv(up *env) *env { return &env{m: map[int]ir.Value{}, up: up} }
 func (g *Row) operands(n int) []int {
 	nd := g.Nodes[n]
 	switch nd.Kind {
-	case NUnary, NWindow:
+	case NUnary, NWindow, NShuffle:
 		return []int{nd.A}
 	case NBinary:
 		if nd.Op == OpFma {
@@ -814,15 +830,19 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		return nil, fmt.Errorf("compose: a reduction in a loop's body off lane rows")
 	}
 	G := s.Group
-	if G < 32 || G&(G-1) != 0 {
+	if G < 32 || G&(G-1) != 0 && !(s.WorkRow && G%32 == 0) {
 		return nil, fmt.Errorf("compose: a group of %d threads", G)
 	}
 	b := ir.New("row", [3]int{G, 1, 1})
 	params := make([]ir.Value, len(g.Bufs))
 	for i, bf := range g.Bufs {
 		t := ir.F32
-		if bf.Kind == BufQ8 || bf.Kind == BufU32 || bf.Kind == BufOutU32 || bf.Kind == BufRowF16 {
+		if bf.Kind == BufQ8 || bf.Kind == BufU32 || bf.Kind == BufOutU32 || bf.Kind == BufRowF16 || bf.Kind == BufSharedU32 {
 			t = ir.U32
+		}
+		if g.shared(i) {
+			params[i] = b.Shared(fmt.Sprintf("s%d", i), t, bf.N)
+			continue
 		}
 		params[i] = b.Param(fmt.Sprintf("p%d", i), t)
 	}
@@ -888,6 +908,15 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			r, rowBase, flatIdx = tokBase, tokBase, colBase
 			mma = &mmaTile{mt: mt, nt: nt, word: lt, g: lg, colBase: colBase, tokBase: tokBase,
 				tok0: b.Add(ir.U32, tokBase, b.Mul(ir.U32, lt, u(2)))}
+		} else if s.WorkRow {
+			if tr*tc > 1 || split > 1 || g.HasLive || g.Width > G {
+				return nil, fmt.Errorf("compose: a row of %d a workgroup of %d", g.Width, G)
+			}
+			u := func(n int) ir.Value { return b.Const(ir.U32, int64(n)) }
+			flatIdx, r = b.Min(ir.U32, b.TID(), u(g.Width-1)), b.Min(ir.U32, b.CTAID(), u(g.Rows-1))
+			flatRaw = flat
+			width = u(g.Width)
+			rowBase = b.Mul(ir.U32, r, width)
 		} else if s.Lanes > 0 {
 			L := s.Lanes
 			if L != g.Width || L&(L-1) != 0 || L > max(s.Target.Lanes, 1) || tr*tc > 1 || split > 1 || g.HasLive {
@@ -961,7 +990,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		width = b.Const(ir.U32, int64(g.Width))
 		last = b.Const(ir.U32, int64(g.Width-1))
 	}
-	overRows := s.Flat && mma == nil && max(s.Split, 1) == 1 && s.Lanes == 0 && max(s.Tile, 1)*max(s.TileCols, 1) == 1 && g.Rows > 1
+	overRows := s.Flat && mma == nil && max(s.Split, 1) == 1 && s.Lanes == 0 && !s.WorkRow && max(s.Tile, 1)*max(s.TileCols, 1) == 1 && g.Rows > 1
 	col := g.colDeps()
 	rowVal := make([]ir.Value, len(g.Nodes)) // a reduction's result, once its pass ran
 	// rowEnv holds the row's values that read no element (a norm's scale),
@@ -1089,6 +1118,8 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				folds = append(folds, i)
 			}
 		}
+		// A lane exchange, and what reads it, stays where it is read.
+		lane := g.readsShuffle()
 		vary := g.varies(c)
 		if t != nil && t.mma != nil && mmaLoop(c, folds, t.mma, idx, vary) {
 			return
@@ -1117,7 +1148,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 					return
 				}
 				seen[n] = true
-				if !vary[n] && !closed(n) {
+				if !vary[n] && !closed(n) && !lane[n] {
 					elem(n, idx, ej)
 					return
 				}
@@ -1439,6 +1470,11 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 					v = b.Add(ir.F32, v, b.Load(ir.F32, wsh, wbase, int64(i)))
 				}
 			}
+		case NShuffle:
+			if s.Lanes == 0 && emitErr == nil {
+				emitErr = fmt.Errorf("compose: a shuffle off lane rows")
+			}
+			v = b.ShuffleXor(g.typeOf(nd.A), elem(nd.A, idx, e), int64(nd.At))
 		case NAt:
 			// A at element ix: a fresh env at that column, what reads no
 			// column taken from the env that holds the row's values.
@@ -1604,52 +1640,73 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		// A tile's elements are stored at the tile's first place plus each
 		// env's own (a constant).
 		var tileAt ir.Value
+		emitStore := func(st Store, e *env, base, col ir.Value) {
+			var at ir.Value
+			off := 0
+			switch {
+			case st.Indexed:
+				at = elem(st.Ix, col, e)
+			case e.t != nil && mma == nil:
+				if tileAt == 0 {
+					tileAt = b.Add(ir.U32, rowBase, flatIdx)
+				}
+				at, off = tileAt, e.rowOff*g.Width+e.colOff
+			default:
+				at = b.Add(ir.U32, base, col)
+			}
+			if seg != 0 {
+				at = b.Add(ir.U32, at, b.Mul(ir.U32, seg, b.Const(ir.U32, int64(g.Rows*g.Width))))
+			}
+			if off != 0 {
+				at = b.Add(ir.U32, at, b.Const(ir.U32, int64(off)))
+			}
+			b.Store(params[st.Buf], at, elem(st.Val, col, e), 0)
+		}
+		_, stPhase := g.phases()
 		for _, e := range outs {
 			base, col := rowBase, flatIdx
 			if e.base != 0 {
 				base, col = e.base, e.col
 			}
-			// A loop that only stores runs where nothing reads it, in store
-			// order; one that carries values runs where they are read.
+			// The stores phase by phase, a barrier after a phase that stored
+			// into a workgroup array. A loop whose body stores runs where its
+			// first store's phase comes, unless what reads its values ran it.
 			ran := make([]bool, len(g.Loops))
-			for _, st := range g.Stores {
-				c := g.storeLoop(st)
-				if c < 0 || ran[c] {
-					continue
-				}
-				ran[c] = true
-				folds := false
-				for _, nd := range g.Nodes {
-					folds = folds || nd.Kind == NFold && nd.At == c
-				}
-				if !folds {
-					loop(c, col, e)
-				}
+			last := 0
+			for _, p := range stPhase {
+				last = max(last, p)
 			}
-			for _, st := range g.Stores {
-				if g.storeLoop(st) >= 0 {
-					continue // stored in its loop's body
-				}
-				var at ir.Value
-				off := 0
-				switch {
-				case st.Indexed:
-					at = elem(st.Ix, col, e)
-				case e.t != nil && mma == nil:
-					if tileAt == 0 {
-						tileAt = b.Add(ir.U32, rowBase, flatIdx)
+			for p := 0; p <= last; p++ {
+				shared := false
+				for j, st := range g.Stores {
+					if stPhase[j] != p {
+						continue
 					}
-					at, off = tileAt, e.rowOff*g.Width+e.colOff
-				default:
-					at = b.Add(ir.U32, base, col)
+					shared = shared || g.shared(st.Buf)
+					c := g.storeLoop(st)
+					if c < 0 {
+						emitStore(st, e, base, col)
+						continue
+					}
+					if ran[c] {
+						continue
+					}
+					ran[c] = true
+					fold := -1
+					for i, nd := range g.Nodes {
+						if nd.Kind == NFold && nd.At == c && fold < 0 {
+							fold = i
+						}
+					}
+					if fold < 0 {
+						loop(c, col, e)
+					} else {
+						elem(fold, col, e)
+					}
 				}
-				if seg != 0 {
-					at = b.Add(ir.U32, at, b.Mul(ir.U32, seg, b.Const(ir.U32, int64(g.Rows*g.Width))))
+				if shared && p < last {
+					b.Barrier()
 				}
-				if off != 0 {
-					at = b.Add(ir.U32, at, b.Const(ir.U32, int64(off)))
-				}
-				b.Store(params[st.Buf], at, elem(st.Val, col, e), 0)
 			}
 		}
 		if emitErr != nil {
@@ -1876,10 +1933,10 @@ func (g *Row) typeOf(n int) ir.Type {
 		return g.typeOf(nd.A)
 	case NFold:
 		return g.typeOf(nd.B)
-	case NSelect, NAt:
+	case NSelect, NAt, NShuffle:
 		return g.typeOf(nd.A)
 	case NLoad:
-		if g.Bufs[nd.Buf].Kind == BufU32 {
+		if g.Bufs[nd.Buf].Kind == BufU32 || g.Bufs[nd.Buf].Kind == BufSharedU32 {
 			return ir.U32
 		}
 	case NBinary:

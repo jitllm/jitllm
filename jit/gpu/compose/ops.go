@@ -489,3 +489,83 @@ func (g *Row) LaneRMSNorm(x, w, out, width, groups int, eps float32) {
 		g.StoreAt(out, y, at(base, u(k*L)))
 	}
 }
+
+// Shared is a workgroup array of n floats (words where u32), no parameter.
+func (g *Row) Shared(n int, u32 bool) int {
+	k := BufShared
+	if u32 {
+		k = BufSharedU32
+	}
+	g.Bufs = append(g.Bufs, Buf{Kind: k, N: n})
+	return len(g.Bufs) - 1
+}
+
+// Shuffle is node a's value at the lane mask away (xor) in the subgroup.
+func (g *Row) Shuffle(a, mask int) int { return g.Add(Node{Kind: NShuffle, A: a, At: mask}) }
+
+// shared reports whether buffer b is a workgroup array.
+func (g *Row) shared(b int) bool {
+	k := g.Bufs[b].Kind
+	return k == BufShared || k == BufSharedU32
+}
+
+// phases is each node's phase and each store's: a read of a workgroup array
+// is one past the phase of the stores into it, every other node the latest
+// of what it reads. A phase's stores into an array are behind a barrier
+// from the next phase's reads.
+func (g *Row) phases() (node []int, store []int) {
+	node = make([]int, len(g.Nodes))
+	arr := make([]int, len(g.Bufs))
+	store = make([]int, len(g.Stores))
+	for sweep := 0; sweep <= len(g.Bufs)+len(g.Nodes); sweep++ {
+		changed := false
+		set := func(p *int, v int) {
+			if v > *p {
+				*p, changed = v, true
+			}
+		}
+		for i, nd := range g.Nodes {
+			v := 0
+			for _, o := range g.loopOperands(i) {
+				v = max(v, node[o])
+			}
+			switch nd.Kind {
+			case NFold:
+				if nd.A >= 0 {
+					v = max(v, node[nd.A])
+				}
+			case NLoad:
+				if g.shared(nd.Buf) {
+					v = max(v, arr[nd.Buf])
+				}
+			}
+			set(&node[i], v)
+		}
+		for j, st := range g.Stores {
+			v := node[st.Val]
+			if st.Indexed {
+				v = max(v, node[st.Ix])
+			}
+			set(&store[j], v)
+			if g.shared(st.Buf) {
+				set(&arr[st.Buf], v+1)
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	return node, store
+}
+
+// readsShuffle is which nodes read a lane exchange.
+func (g *Row) readsShuffle() []bool {
+	v := make([]bool, len(g.Nodes))
+	for i, nd := range g.Nodes {
+		v[i] = nd.Kind == NShuffle
+		for _, o := range g.loopOperands(i) {
+			v[i] = v[i] || v[o]
+		}
+	}
+	return v
+}

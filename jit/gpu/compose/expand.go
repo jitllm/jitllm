@@ -74,7 +74,7 @@ func (g *Row) expandActs() ([]int, error) {
 		}
 		nd := &x.nodes[at[i]]
 		switch n.Kind {
-		case NUnary, NReduce, NWindow:
+		case NUnary, NReduce, NWindow, NShuffle:
 			nd.A = at[n.A]
 		case NDot4:
 			nd.A, nd.B, nd.C = at[n.A], at[n.B], at[n.C]
