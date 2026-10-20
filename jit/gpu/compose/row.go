@@ -891,12 +891,49 @@ func (g *Row) colDeps() []bool {
 	return v
 }
 
+// encloses reports whether loop d holds loop c in its body: c's trip count
+// or one of its folds' starts reads d's iterator or folds, so c runs anew
+// each trip of d, and d's values stay put through c's trips.
+func (g *Row) encloses(d, c int) bool {
+	seen := map[int]bool{}
+	var reads func(n int) bool
+	reads = func(n int) bool {
+		if n < 0 || seen[n] {
+			return false
+		}
+		seen[n] = true
+		nd := g.Nodes[n]
+		if (nd.Kind == NIter || nd.Kind == NFold) && nd.At == d {
+			return true
+		}
+		if nd.Kind == NFold {
+			return false
+		}
+		for _, o := range g.operands(n) {
+			if reads(o) {
+				return true
+			}
+		}
+		return false
+	}
+	if reads(g.tripOf(c)) {
+		return true
+	}
+	for _, f := range g.Nodes {
+		if f.Kind == NFold && f.At == c && reads(f.B) {
+			return true
+		}
+	}
+	return false
+}
+
 // varies is which nodes change from trip to trip of loop c: its iterator,
 // its folds, and whatever reads them -- a fold of another loop whose start
 // or step does is a loop nested in c's body. A fixed point, since a fold
 // reads later nodes.
 func (g *Row) varies(c int) []bool {
 	v := make([]bool, len(g.Nodes))
+	outer := map[int]bool{}
 	for changed := true; changed; {
 		changed = false
 		for i, nd := range g.Nodes {
@@ -909,8 +946,13 @@ func (g *Row) varies(c int) []bool {
 				x = nd.At == c
 			case NFold:
 				x = nd.At == c
+				enc, ok := outer[nd.At]
+				if !ok {
+					enc = nd.At != c && g.encloses(nd.At, c)
+					outer[nd.At] = enc
+				}
 				for _, f := range g.Nodes {
-					if f.Kind == NFold && f.At == nd.At && (v[f.B] || v[f.A]) {
+					if !enc && f.Kind == NFold && f.At == nd.At && (v[f.B] || v[f.A]) {
 						x = true
 					}
 				}
@@ -1699,7 +1741,14 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			if nd.C >= 0 {
 				elem(nd.C, idx, e)
 			}
-			at := elem(nd.Ix, idx, e)
+			var at ir.Value
+			off := int64(0)
+			if x := g.Nodes[nd.Ix]; nd.Vec > 1 && x.Kind == NUBinary && x.Op == OpAdd && g.Nodes[x.B].Kind == NUConst {
+				// A vector store's constant offset is its immediate.
+				at, off = elem(x.A, idx, e), int64(g.Nodes[x.B].At)
+			} else {
+				at = elem(nd.Ix, idx, e)
+			}
 			switch {
 			case nd.Tile.Rows > 0:
 				b.TileStore(params[nd.Buf], at, elem(nd.B, idx, e), elem(nd.A, idx, e), nd.Major)
@@ -1708,7 +1757,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				for i := 0; i < int(nd.Vec)-1; i++ {
 					vs = append(vs, elem(int(nd.H[i]), idx, e))
 				}
-				b.StoreV(params[nd.Buf], at, 0, vs...)
+				b.StoreV(params[nd.Buf], at, off, vs...)
 			default:
 				b.Store(params[nd.Buf], at, elem(nd.A, idx, e), 0)
 			}

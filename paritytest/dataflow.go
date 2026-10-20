@@ -708,10 +708,20 @@ func (c *canon) instrName(i int) int32 {
 			f.imm = int64(p.Elem)<<8 | int64(p.Tile)
 		}
 	case ir.OpLoad, ir.OpStore, ir.OpLoadV, ir.OpStoreV, ir.OpPrefetch:
-		// The buffer, and the address with the immediate folded in.
+		// The buffer, and the address with the immediate offset folded in:
+		// a vector access's immediate is its offset, its width and whether
+		// it is an ldmatrix (ir.LoadV), only the offset an address.
 		f.a[0] = arg(o.Args[0])
+		off, rest := o.Imm, int64(0)
+		if o.Kind == ir.OpLoadV || o.Kind == ir.OpStoreV {
+			n := o.Imm & 7
+			off, rest = (o.Imm&^(1<<60))>>3, n
+			if ir.IsLdMatrix(o) {
+				rest |= 8
+			}
+		}
 		if a, ok := c.index(int(o.Args[1]) - 1); ok && o.Args[1] != 0 {
-			f.a[1] = c.affineName(a.add(affine{c: o.Imm}, 1))
+			f.a[1], f.imm = c.affineName(a.add(affine{c: off}, 1)), rest
 		} else {
 			f.a[1], f.imm = arg(o.Args[1]), o.Imm
 		}
