@@ -16,6 +16,7 @@ var stagedShapes = []mainkernels.FlashShape{
 	{Rows: 1, Heads: 8, KVHeads: 2, Dim: 128, Page: 256, Splits: 2, Chunk: 128, Scale: 0.088},
 	{Rows: 4, Heads: 4, KVHeads: 4, Dim: 64, Page: 256, Splits: 4, Chunk: 256, Scale: 0.125},
 	{Rows: 32, Heads: 2, KVHeads: 1, Dim: 96, Page: 512, Splits: 1, Chunk: 32, Scale: 0.1},
+	{Rows: 2, Heads: 4, KVHeads: 2, Dim: 64, Page: 256, Splits: 2, Chunk: 64, Scale: 0.125, Softcap: 50},
 }
 
 func pagedOf(s mainkernels.FlashShape) compose.Paged {
@@ -70,7 +71,7 @@ func TestPagedScoresIsMains(t *testing.T) {
 			g.Buf(compose.BufU32)
 			out := g.Buf(compose.BufOut)
 			table, desc := g.Buf(compose.BufU32), g.Buf(compose.BufU32)
-			g.PagedScores(q, k, out, table, desc, p, s.Scale)
+			g.PagedScores(q, k, out, table, desc, p, s.Scale, s.Softcap)
 			same(t, name, []*ir.Kernel{mk}, emitAt(t, g, compose.Schedule{Group: 128, Flat: true, Target: sm70}))
 		})
 	}

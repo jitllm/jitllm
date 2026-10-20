@@ -84,10 +84,10 @@ func (g *Row) PagedSoftmax(scores, out, part, desc int, p Paged) {
 	}
 }
 
-// headGroup is how many query heads of one KV head an item serves, so one K
+// HeadGroup is how many query heads of one KV head an item serves, so one K
 // or V load feeds that many products: one per 64 slots of a chunk up to 8,
 // rounded down to a divisor of the KV head's group.
-func (p Paged) headGroup() int {
+func (p Paged) HeadGroup() int {
 	gqa := p.Heads / p.KVHeads
 	g := min(8, gqa, max(1, p.Chunk/64))
 	for gqa%g != 0 {
@@ -129,15 +129,16 @@ func log2(n int) int {
 // PagedScores is the scaled q.k of the group element's slot (an element a
 // (row, head group, split, slot), slot fastest) for each query head of its
 // group, stored into the score plane at out, [row][head][split][chunk], and
-// -MaxFloat32 where the slot holds no key of the row. K is the paged pool
+// -MaxFloat32 where the slot holds no key of the row; softcap > 0 caps a
+// score at c*tanh(score/c). K is the paged pool
 // [page][kvRow][Page] (an element of position t of page pid at
 // (pid*kvRow + e)*Page + t%Page); the key read is the slot's clamped into
 // the row's, so a masked slot reads the row's own pages. The dot runs in
 // chains of the head's dimensions, over blocks of 32 where the group's
 // products pass 512.
-func (g *Row) PagedScores(q, k, out, table, desc int, p Paged, scale float32) {
+func (g *Row) PagedScores(q, k, out, table, desc int, p Paged, scale, softcap float32) {
 	u, ub := g.UConst, g.UBin
-	G := p.headGroup()
+	G := p.HeadGroup()
 	gqa, S, C, P := p.Heads/p.KVHeads, p.Splits, p.Chunk, p.Page
 	kvRow := p.KVHeads * p.Dim
 	flat := g.Column()
@@ -219,6 +220,11 @@ func (g *Row) PagedScores(q, k, out, table, desc int, p Paged, scale float32) {
 			dot = g.Bin(OpAdd, dot, acc[h][x])
 		}
 		score := g.Bin(OpMul, dot, g.Const(scale))
+		if softcap > 0 {
+			// c*tanh(score/c), as c*(1 - 2/(exp(2*score/c) + 1)).
+			e := g.Add(Node{Kind: NUnary, Op: OpExp, A: g.Bin(OpMul, g.Const(2/softcap), score)})
+			score = g.Bin(OpMul, g.Const(softcap), g.Bin(OpSub, g.Const(1), g.Bin(OpDiv, g.Const(2), g.Bin(OpAdd, e, g.Const(1)))))
+		}
 		g.StoreAt(out, g.Select(valid, score, g.Const(-math.MaxFloat32)), ub(OpAdd, ob, u(h*S*C)))
 	}
 }
@@ -234,7 +240,7 @@ func (g *Row) PagedScores(q, k, out, table, desc int, p Paged, scale float32) {
 func (g *Row) PagedAcc(wts, v, part, table, desc int, p Paged) {
 	const block = 8
 	u, ub := g.UConst, g.UBin
-	G := p.headGroup()
+	G := p.HeadGroup()
 	gqa, S, C, P := p.Heads/p.KVHeads, p.Splits, p.Chunk, p.Page
 	kvRow := p.KVHeads * p.Dim
 	flat := g.Column()

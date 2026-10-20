@@ -59,6 +59,10 @@ const (
 	gaVPool // its paged V pool
 	gaTab   // its page table
 	gaPRow  // the step's row descriptors (kernels.PRowWords a row)
+	gaPRowW // the windowed descriptors, a sliding layer's
+	gaScores // the staged attention's score plane
+	gaWts    // its weight plane
+	gaParts  // the splits' partials the merge reads
 )
 
 // genLaunch is one generated launch: threads for a flat launch, or groups of
@@ -245,8 +249,15 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		return g.genPrim(o, prog, rows)
 	case dkMatVec, dkMatVecRes, dkMatVecGate:
 		return g.genMatVecNodes(o, bs, rows)
+	case dkAttend:
+		l := g.genAttend(o, prog, bs, rows)
+		o.Why = whyNoForm
+		if l != nil {
+			o.Why = whyNone
+		}
+		return l
 	case dkExpertMatVec, dkExpertMatVecE, dkQKV, dkQKVGemm, dkRouterLogits,
-		dkResIn, dkQKVSep, dkAttend, dkLatentAttend, dkView, dkTopK, dkRouteWeights, dkGroupByExpert, dkGateLogit,
+		dkResIn, dkQKVSep, dkLatentAttend, dkView, dkTopK, dkRouteWeights, dkGroupByExpert, dkGateLogit,
 		dkGroupMask, dkRouterBias, dkExpertBias, dkExpertFetch, dkConv1d, dkScan, dkGatedNorm, dkSSMNorm, dkConvBias:
 		// No form in the composer's primitives yet: the op fails to
 		// generate, and its block does not place.
@@ -688,6 +699,8 @@ type genState struct {
 	// The block's paged history: its K and V pools, page table, and the
 	// step's row descriptors.
 	kpool, vpool, tab, prow backend.Buf
+	// The windowed descriptors, and the staged attention's planes.
+	prowW, scores, wts, parts backend.Buf
 	// The step's binary16 operand: its plane, and the conversion the step
 	// last made, by kernel and source (shared with the executor, so a
 	// conversion either one made is not made again).
@@ -761,6 +774,14 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.tab
 			case gaPRow:
 				bufs[j] = st.prow
+			case gaPRowW:
+				bufs[j] = st.prowW
+			case gaScores:
+				bufs[j] = st.scores
+			case gaWts:
+				bufs[j] = st.wts
+			case gaParts:
+				bufs[j] = st.parts
 			case gaQ8A:
 				bufs[j], _ = int8Of(st, o.Out[l.q8])
 			case gaQ8X:

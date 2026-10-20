@@ -35,6 +35,10 @@ const maxKVPage = 256
 // their per-call staging.
 type pagedScratch struct {
 	pRow, pRowW backend.Buf
+	// The staged attention's score and weight planes and its splits'
+	// partials, in floats held.
+	sc, wt, part           backend.Buf
+	scCap, wtCap, partCap int
 	rows        []pagedRow
 	desc, descW []uint32
 }
@@ -109,7 +113,7 @@ func freePaged(pg *pagedScratch) {
 	if pg == nil {
 		return
 	}
-	for _, b := range []backend.Buf{pg.pRow, pg.pRowW} {
+	for _, b := range []backend.Buf{pg.pRow, pg.pRowW, pg.sc, pg.wt, pg.part} {
 		if b != nil {
 			b.Free()
 		}
