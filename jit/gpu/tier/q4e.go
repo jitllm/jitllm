@@ -6,7 +6,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // Qwen3.8-Flash-Next on the device (nn.LayerPlan.Q4E; engine/model/q4e.go is
@@ -171,24 +171,24 @@ func (g *devTier) initQ4E(bs *blockScratch) error {
 		}
 	}
 	eps := float32(p.RMSEps)
-	place := kernels.Q4EPlaceGated
+	place := oldkernels.Q4EPlaceGated
 	switch q.Fault {
 	case nn.Q4EFaultPlainPlace:
-		place = kernels.Q4EPlacePlain
+		place = oldkernels.Q4EPlacePlain
 	case nn.Q4EFaultHalfPlace:
-		place = kernels.Q4EPlaceHalf
+		place = oldkernels.Q4EPlaceHalf
 	}
-	comp(&x.normS, func() (*ir.Kernel, error) { return kernels.Q4EGroupNorm(d, h, R, eps, true) })
+	comp(&x.normS, func() (*ir.Kernel, error) { return oldkernels.Q4EGroupNorm(d, h, R, eps, true) })
 	comp(&x.quantHD, func() (*ir.Kernel, error) { return quantizeRows(R, hd, actWin) })
 	comp(&x.quantLR, func() (*ir.Kernel, error) { return quantizeRows(R, rank, actWin) })
 	comp(&x.silu, func() (*ir.Kernel, error) {
-		return kernels.Q4EScaleSiLU(R*rank, h, q.Fault == nn.Q4EFaultUnscaledGate)
+		return oldkernels.Q4EScaleSiLU(R*rank, h, q.Fault == nn.Q4EFaultUnscaledGate)
 	})
 	comp(&x.gateMix, func() (*ir.Kernel, error) {
-		return kernels.Q4EGateMix(d, h, R, q.Fault == nn.Q4EFaultNoGate)
+		return oldkernels.Q4EGateMix(d, h, R, q.Fault == nn.Q4EFaultNoGate)
 	})
-	comp(&x.injK, func() (*ir.Kernel, error) { return kernels.Q4EInject(R*h, h, place) })
-	comp(&x.place, func() (*ir.Kernel, error) { return kernels.Q4EPlace(d, h, R) })
+	comp(&x.injK, func() (*ir.Kernel, error) { return oldkernels.Q4EInject(R*h, h, place) })
+	comp(&x.place, func() (*ir.Kernel, error) { return oldkernels.Q4EPlace(d, h, R) })
 	al(&x.xn, R*hd)
 	al(&x.gate, R*hd)
 	al(&x.lo, R*rank)
@@ -210,13 +210,13 @@ func (g *devTier) initQ4E(bs *blockScratch) error {
 		// the host keeps.
 		off := r.StateLen - hd*dil*(taps-1)
 		comp(&x.quantW, func() (*ir.Kernel, error) { return quantizeRows(R, W, actWin) })
-		comp(&x.normR, func() (*ir.Kernel, error) { return kernels.Q4EGroupNorm(d, h, R, eps, false) })
-		comp(&x.streamDot, func() (*ir.Kernel, error) { return kernels.Q4EStreamDot(d, h, R) })
-		comp(&x.gatedVal, func() (*ir.Kernel, error) { return kernels.Q4EGatedValue(d, h, R) })
+		comp(&x.normR, func() (*ir.Kernel, error) { return oldkernels.Q4EGroupNorm(d, h, R, eps, false) })
+		comp(&x.streamDot, func() (*ir.Kernel, error) { return oldkernels.Q4EStreamDot(d, h, R) })
+		comp(&x.gatedVal, func() (*ir.Kernel, error) { return oldkernels.Q4EGatedValue(d, h, R) })
 		comp(&x.ngConv, func() (*ir.Kernel, error) {
-			return kernels.Q4ENGramConv(hd, taps, dil, R, r.StateLen, off, false, q.Fault == nn.Q4EFaultNoNGramConv)
+			return oldkernels.Q4ENGramConv(hd, taps, dil, R, r.StateLen, off, false, q.Fault == nn.Q4EFaultNoNGramConv)
 		})
-		comp(&x.ngAdd, func() (*ir.Kernel, error) { return kernels.Q4ENGramAdd(d, h, R) })
+		comp(&x.ngAdd, func() (*ir.Kernel, error) { return oldkernels.Q4ENGramAdd(d, h, R) })
 		al(&x.emb, R*W)
 		al(&x.aW, R*pad32(W))
 		al(&x.axW, 3*R*(pad32(W)/32))
@@ -285,11 +285,11 @@ func (g *devTier) q4eMix(lc *launcher, bs *blockScratch, R int, src, norm backen
 	x := bs.q4e
 	hd := x.h * bs.p.NEmbd
 	ds4Rows(lc, x.normS, R*x.h, src, norm, x.xn)
-	lc.la(x.quantHD, kernels.QuantizeThreads(R*pad32(hd)/32), x.xn, x.aHD, x.axHD)
+	lc.la(x.quantHD, oldkernels.QuantizeThreads(R*pad32(hd)/32), x.xn, x.aHD, x.axHD)
 	if bs.p.Q4E.Fault != nn.Q4EFaultNoGate {
 		mvrunAct(mvDown, down, x.lo, x.aHD, x.axHD, x.xn)
 		lc.la(x.silu, R*x.rank, x.lo, x.lo2)
-		lc.la(x.quantLR, kernels.QuantizeThreads(R*pad32(x.rank)/32), x.lo2, x.aLR, x.axLR)
+		lc.la(x.quantLR, oldkernels.QuantizeThreads(R*pad32(x.rank)/32), x.lo2, x.aLR, x.axLR)
 		mvrunAct(mvUp, up, x.gate, x.aLR, x.axLR, x.lo2)
 	}
 	lc.la(x.gateMix, R*bs.p.NEmbd, x.xn, x.gate, x.mix)
@@ -352,7 +352,7 @@ func (g *devTier) q4eNGram(lc *launcher, bs *blockScratch, l *layer, R int,
 	x, b := bs.q4e, l.q4e
 	d := bs.p.NEmbd
 	hd := x.h * d
-	lc.la(x.quantW, kernels.QuantizeThreads(R*pad32(x.width)/32), x.emb, x.aW, x.axW)
+	lc.la(x.quantW, oldkernels.QuantizeThreads(R*pad32(x.width)/32), x.emb, x.aW, x.axW)
 	mvrunAct(l.mvNGK, l.ngKey, x.key, x.aW, x.axW, x.emb)
 	mvrunAct(l.mvNGV, l.ngVal, x.val, x.aW, x.axW, x.emb)
 	ds4Rows(lc, x.normR, R*x.h, x.key, b.ngK, x.kn)

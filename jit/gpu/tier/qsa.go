@@ -7,6 +7,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // QSA on the device: Qwen3.8-Flash-Next's block selection
@@ -19,7 +20,7 @@ import (
 //	the key: idx_k on the block's normed input, assembled after k's normed
 //	  heads into one row
 //	the query: idx_q on the same input, each head's RMSNorm, the rotary
-//	the scores (kernels.QSAScores): each complete block's keys pooled,
+//	the scores (oldkernels.QSAScores): each complete block's keys pooled,
 //	  normed, rotated at the block's first position and scored against the
 //	  query's heads; the tail block forced in
 //	the selection, the compaction, the gather and the descriptors (MSA's,
@@ -49,7 +50,7 @@ type qsaScratch struct {
 	qRaw, qn, qRot, kRaw, kAll                  backend.Buf
 	qOff, allOff, idxOff                        backend.Buf
 	cs, csPos, planes, consts                   backend.Buf
-	// The marks (kernels.QSAScores' pMark) and their turns: a RopeTable over
+	// The marks (oldkernels.QSAScores' pMark) and their turns: a RopeTable over
 	// the marks' |delta| (dpos) into dcs.
 	marks, dpos, dcs                       backend.Buf
 	dTab                                   backend.Kernel
@@ -94,7 +95,7 @@ func (g *devTier) initQSA(bs *blockScratch, rows, P int,
 	if fault == nn.Q4EFaultDenseQSA {
 		m.k = m.nb
 	}
-	m.ppr = kernels.MSAGatherPages(m.k, blk, P)
+	m.ppr = oldkernels.MSAGatherPages(m.k, blk, P)
 	bs.pkv.qsa = m
 	m.qLanes, m.kLanes = bs.kNormL, bs.kNormL
 	h, d, rot, kv := m.h, m.d, p.NRot, m.attnW
@@ -103,26 +104,26 @@ func (g *devTier) initQSA(bs *blockScratch, rows, P int,
 		dst *backend.Kernel
 		mk  func() (*ir.Kernel, error)
 	}{
-		{&m.normQ, func() (*ir.Kernel, error) { return kernels.HeadNormRows(h, d, p.RMSEps, rows, m.qLanes) }},
-		{&m.copyQ, func() (*ir.Kernel, error) { return kernels.CopyAtRows(h*d, rows) }},
-		{&m.ropeQ, func() (*ir.Kernel, error) { return kernels.RoPERows(h, d, rot, p.RopeNeox, rows) }},
-		{&m.asmK, func() (*ir.Kernel, error) { return kernels.CopyAtRows(kv, rows) }},
-		{&m.asmI, func() (*ir.Kernel, error) { return kernels.CopyAtRows(d, rows) }},
-		{&m.csTab, func() (*ir.Kernel, error) { return kernels.RopeTable(rot/2, m.nb) }},
-		{&m.dTab, func() (*ir.Kernel, error) { return kernels.RopeTable(rot/2, qsaMarkCap) }},
+		{&m.normQ, func() (*ir.Kernel, error) { return oldkernels.HeadNormRows(h, d, p.RMSEps, rows, m.qLanes) }},
+		{&m.copyQ, func() (*ir.Kernel, error) { return oldkernels.CopyAtRows(h*d, rows) }},
+		{&m.ropeQ, func() (*ir.Kernel, error) { return oldkernels.RoPERows(h, d, rot, p.RopeNeox, rows) }},
+		{&m.asmK, func() (*ir.Kernel, error) { return oldkernels.CopyAtRows(kv, rows) }},
+		{&m.asmI, func() (*ir.Kernel, error) { return oldkernels.CopyAtRows(d, rows) }},
+		{&m.csTab, func() (*ir.Kernel, error) { return oldkernels.RopeTable(rot/2, m.nb) }},
+		{&m.dTab, func() (*ir.Kernel, error) { return oldkernels.RopeTable(rot/2, qsaMarkCap) }},
 		{&m.scores, func() (*ir.Kernel, error) {
-			return kernels.QSAScores(rows, h, d, m.nb, blk, m.groups, P, m.kvRow, kv, rot, p.RopeNeox,
+			return oldkernels.QSAScores(rows, h, d, m.nb, blk, m.groups, P, m.kvRow, kv, rot, p.RopeNeox,
 				float32(p.RMSEps), fault == nn.Q4EFaultQSAFirstKey, fault == nn.Q4EFaultDenseQSA)
 		}},
-		{&m.sel, func() (*ir.Kernel, error) { return kernels.QSASelect(rows, m.groups, m.nb*blk, blk, m.k) }},
-		{&m.compact, func() (*ir.Kernel, error) { return kernels.MSACompact(rows, m.groups, m.nb*blk, blk, m.k) }},
+		{&m.sel, func() (*ir.Kernel, error) { return oldkernels.QSASelect(rows, m.groups, m.nb*blk, blk, m.k) }},
+		{&m.compact, func() (*ir.Kernel, error) { return oldkernels.MSACompact(rows, m.groups, m.nb*blk, blk, m.k) }},
 		{&m.gatherK, func() (*ir.Kernel, error) {
-			return kernels.QSAGatherK(rows, p.NKVHead, p.HeadDim, blk, m.k, P, m.kvRow, noTail)
+			return oldkernels.QSAGatherK(rows, p.NKVHead, p.HeadDim, blk, m.k, P, m.kvRow, noTail)
 		}},
 		{&m.gatherV, func() (*ir.Kernel, error) {
-			return kernels.QSAGatherV(rows, p.NKVHead, p.HeadDim, blk, m.k, P, m.kvRow, g.KVF16, noTail)
+			return oldkernels.QSAGatherV(rows, p.NKVHead, p.HeadDim, blk, m.k, P, m.kvRow, g.KVF16, noTail)
 		}},
-		{&m.desc, func() (*ir.Kernel, error) { return kernels.QSADesc(rows, blk, m.k, P, noTail) }},
+		{&m.desc, func() (*ir.Kernel, error) { return oldkernels.QSADesc(rows, blk, m.k, P, noTail) }},
 	} {
 		kn, err := b.mk()
 		if err := comp(b.dst, kn, err); err != nil {
@@ -162,7 +163,7 @@ func (g *devTier) initQSA(bs *blockScratch, rows, P int,
 	al(&m.gk, rows*m.ppr*P*kv)
 	al(&m.gv, rows*vw)
 	al(&m.gtab, rows*m.ppr)
-	al(&m.gdesc, rows*kernels.PRowWords)
+	al(&m.gdesc, rows*oldkernels.PRowWords)
 	if err != nil {
 		return err
 	}
@@ -182,7 +183,7 @@ func (g *devTier) initQSA(bs *blockScratch, rows, P int,
 	for i := range tab {
 		tab[i] = uint32(i)
 	}
-	// The block starts, after their count (kernels.RopeTable's positions).
+	// The block starts, after their count (oldkernels.RopeTable's positions).
 	pos := make([]uint32, m.nb+1)
 	pos[0] = uint32(m.nb)
 	for b := 0; b < m.nb; b++ {
@@ -214,7 +215,7 @@ func (g *devTier) SetRopeMarks(marks []int32) {
 // hands them to every device it holds (inputsTo).
 func (s *gpuSession) SetRopeMarks(marks []int32) { s.marks = marks }
 
-// qsaStage lays the call's marks out as kernels.QSAScores reads them, from
+// qsaStage lays the call's marks out as oldkernels.QSAScores reads them, from
 // nn.QSADevice's form: per row in the call's order its count, then its
 // (position, delta) pairs. A row past the caller's carries none. Callers hold
 // g.mu.
@@ -319,7 +320,7 @@ func (g *devTier) qsaAttend(s backend.Session, lc *launcher, bs *blockScratch, R
 		vw /= 2
 	}
 	lc.la(m.gatherV, R*m.k*m.blk*vw, pl.v, pl.tab, pk.pRow, m.list, m.gv)
-	lc.la(m.desc, R*kernels.PRowWords, pk.pRow, m.gdesc)
+	lc.la(m.desc, R*oldkernels.PRowWords, pk.pRow, m.gdesc)
 	g.QSASelects++
 	return pk.pagedDecode(s, lc, q, m.gk, m.gv, n, out, m.gtab, m.gdesc, nil)
 }

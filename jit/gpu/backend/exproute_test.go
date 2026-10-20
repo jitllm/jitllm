@@ -7,7 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestExpertRouteMatchesRankAndWeights holds the fused softmax router to the
@@ -76,7 +76,7 @@ func TestExpertRouteMatchesRankAndWeights(t *testing.T) {
 
 func exprouteCase(t *testing.T, d backend.Device, l []float32, k int, norm bool, scale float32) {
 	n := len(l)
-	r := kernels.MoERoute{NExpert: n, K: k, Norm: norm, Scale: scale}
+	r := oldkernels.MoERoute{NExpert: n, K: k, Norm: norm, Scale: scale}
 	g := newGPU(t, d)
 	defer g.free()
 	bL := g.up(f32bytes(l))
@@ -103,9 +103,9 @@ func exprouteCase(t *testing.T, d backend.Device, l []float32, k int, norm bool,
 	}
 	// The pair.
 	sel0, top0, w0 := g.up(make([]byte, (k+1)*4)), g.up(make([]byte, (k+1)*4)), g.up(make([]byte, (k+1)*4))
-	kr, err := kernels.ExpertRank(r)
+	kr, err := oldkernels.ExpertRank(r)
 	launch(kr, err, (n+127)/128, 128, bL, sel0, top0)
-	kw, err := kernels.ExpertWeights(r)
+	kw, err := oldkernels.ExpertWeights(r)
 	if norm {
 		launch(kw, err, 1, 1, top0, w0)
 	} else {
@@ -114,8 +114,8 @@ func exprouteCase(t *testing.T, d backend.Device, l []float32, k int, norm bool,
 	// The fused kernel, into buffers poisoned so an unwritten slot shows.
 	poison := bytes.Repeat([]byte{0xFF}, (k+1)*4)
 	sel1, top1, w1 := g.up(poison), g.up(poison), g.up(poison)
-	kf, err := kernels.ExpertRoute(r)
-	launch(kf, err, 1, kernels.ExpertRouteWidth(n), bL, sel1, top1, w1)
+	kf, err := oldkernels.ExpertRoute(r)
+	launch(kf, err, 1, oldkernels.ExpertRouteWidth(n), bL, sel1, top1, w1)
 
 	if a, b := read(sel0, k*4), read(sel1, k*4); !bytes.Equal(a, b) {
 		t.Fatalf("selection differs: pair %v fused %v", a, b)
@@ -137,7 +137,7 @@ func exprouteCase(t *testing.T, d backend.Device, l []float32, k int, norm bool,
 		return
 	}
 	sel2, top2, w2 := g.up(poison), g.up(poison), g.up(poison)
-	kw2, err := kernels.ExpertRouteWarp(r)
+	kw2, err := oldkernels.ExpertRouteWarp(r)
 	launch(kw2, err, 1, ir.SubgroupLanes, bL, sel2, top2, w2)
 	if a, b := read(sel0, k*4), read(sel2, k*4); !bytes.Equal(a, b) {
 		t.Fatalf("warp selection differs: pair %v warp %v", a, b)

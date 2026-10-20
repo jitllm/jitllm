@@ -5,7 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // A prefill chunk's attention over pages: the rows of one sequence in position
@@ -24,7 +24,7 @@ import (
 // history goes in passes of that width, folded into a running partial.
 
 // prefillPassW is the most keys one staged prefill launch attends: a longer
-// span runs in passes of it (kernels.FlashAttentionMergeRun), which bounds the
+// span runs in passes of it (oldkernels.FlashAttentionMergeRun), which bounds the
 // score planes by it rather than by the context.
 const prefillPassW = 4096
 
@@ -57,9 +57,9 @@ type pagedPrefill struct {
 	// table (raggedprefill.go) at a shape, ragGroups and ragThreads are its
 	// launch and ragWG the rows a workgroup takes, nil where the form has
 	// none; ragK is it compiled, by slot count.
-	fs         kernels.FlashPrefill70Shape
-	ragBuild   func(kernels.FlashPrefill70Shape) (*ir.Kernel, error)
-	ragGroups  func(kernels.FlashPrefill70Shape) int
+	fs         oldkernels.FlashPrefill70Shape
+	ragBuild   func(oldkernels.FlashPrefill70Shape) (*ir.Kernel, error)
+	ragGroups  func(oldkernels.FlashPrefill70Shape) int
 	ragThreads int
 	ragWG      int
 	ragK       map[int]backend.Kernel
@@ -67,7 +67,7 @@ type pagedPrefill struct {
 	ragMerge map[int]backend.Kernel
 	// ragVars is the staged form's run-table variants by chunk and width.
 	ragVars map[[2]int]*prefillVariant
-	// flash80 says flash is kernels.FlashPrefill80, the m16n8k16 form, or
+	// flash80 says flash is oldkernels.FlashPrefill80, the m16n8k16 form, or
 	// its m16n8k8 twin on sm_75 (FlashPrefill80K8).
 	flash80         bool
 	fGroups, fWidth int
@@ -116,11 +116,11 @@ const accMMANT = 2
 
 // prefillVariant is the staged kernels at one span.
 type prefillVariant struct {
-	s                   kernels.FlashShape
+	s                   oldkernels.FlashShape
 	scores, soft, acc   backend.Kernel
 	scoreT, softG, accT int
 	// softW is the softmax's workgroup width, which its lanes decide
-	// (kernels.PagedPrefillSoftmaxWidth): a 32-lane softmax is one item a
+	// (oldkernels.PagedPrefillSoftmaxWidth): a 32-lane softmax is one item a
 	// 32-wide group, and Metal, which runs a launch at the width it is given,
 	// put two of its subgroups on one item at 64.
 	softW int
@@ -154,7 +154,7 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 		}
 		return c
 	}
-	fs := kernels.FlashPrefill70Shape{Heads: p.NHead, KVHeads: p.NHead / gqa, Dim: hd, Rows: rows,
+	fs := oldkernels.FlashPrefill70Shape{Heads: p.NHead, KVHeads: p.NHead / gqa, Dim: hd, Rows: rows,
 		Scale: pg.shape.Scale, Softcap: p.AttnSoftcap, Page: pg.shape.Page, F16: g.KVF16}
 	if p.AttnSinks {
 		fs.Splits = 1
@@ -164,11 +164,11 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 	// FMA tiles and sm_70's pair do.
 	if !g.NoFlashPrefill && !p.MLA() {
 		tile := func() {
-			if t, ok := kernels.FlashTileFor(hd); ok && t.SG >= 4 && rows%t.Rows() == 0 && 32%t.TK == 0 {
-				if pf.flash = comp(kernels.FlashPrefillTile(fs, t)); pf.flash != nil {
-					pf.fGroups, pf.fWidth = kernels.FlashPrefillTileGroups(fs, t), t.Threads()
-					pf.ragBuild = func(s kernels.FlashPrefill70Shape) (*ir.Kernel, error) { return kernels.FlashPrefillTile(s, t) }
-					pf.ragGroups = func(s kernels.FlashPrefill70Shape) int { return kernels.FlashPrefillTileGroups(s, t) }
+			if t, ok := oldkernels.FlashTileFor(hd); ok && t.SG >= 4 && rows%t.Rows() == 0 && 32%t.TK == 0 {
+				if pf.flash = comp(oldkernels.FlashPrefillTile(fs, t)); pf.flash != nil {
+					pf.fGroups, pf.fWidth = oldkernels.FlashPrefillTileGroups(fs, t), t.Threads()
+					pf.ragBuild = func(s oldkernels.FlashPrefill70Shape) (*ir.Kernel, error) { return oldkernels.FlashPrefillTile(s, t) }
+					pf.ragGroups = func(s oldkernels.FlashPrefill70Shape) int { return oldkernels.FlashPrefillTileGroups(s, t) }
 					pf.ragThreads, pf.ragWG = t.Threads(), t.Rows()
 				}
 			}
@@ -176,32 +176,32 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 		switch {
 		case g.PreferTiles && g.tileF32():
 			tile()
-		case !g.kb.noAttnMMA && g.f16GemmK() == 16 && kernels.FlashPrefill80WhyNot(fs) == "":
+		case !g.kb.noAttnMMA && g.f16GemmK() == 16 && oldkernels.FlashPrefill80WhyNot(fs) == "":
 			// sm_80 on: the whole attention in one kernel on m16n8k16.
-			if pf.flash = comp(kernels.FlashPrefill80(fs)); pf.flash != nil {
-				pf.fGroups, pf.fWidth = kernels.FlashPrefill80Groups(fs), kernels.FlashPrefill80Threads
+			if pf.flash = comp(oldkernels.FlashPrefill80(fs)); pf.flash != nil {
+				pf.fGroups, pf.fWidth = oldkernels.FlashPrefill80Groups(fs), oldkernels.FlashPrefill80Threads
 				pf.flash80 = true
-				pf.ragBuild, pf.ragGroups = kernels.FlashPrefill80, kernels.FlashPrefill80Groups
-				pf.ragThreads, pf.ragWG = kernels.FlashPrefill80Threads, kernels.FlashPrefill80Rows(fs)
+				pf.ragBuild, pf.ragGroups = oldkernels.FlashPrefill80, oldkernels.FlashPrefill80Groups
+				pf.ragThreads, pf.ragWG = oldkernels.FlashPrefill80Threads, oldkernels.FlashPrefill80Rows(fs)
 			}
-		case !g.kb.noAttnMMA && g.f16GemmK() == 8 && kernels.FlashPrefill80WhyNot(fs) == "":
+		case !g.kb.noAttnMMA && g.f16GemmK() == 8 && oldkernels.FlashPrefill80WhyNot(fs) == "":
 			// sm_75: the same kernel on m16n8k8, two products for each of
 			// the k16 form's. A width it does not divide keeps sm_70's pair.
-			if pf.flash = comp(kernels.FlashPrefill80K8(fs)); pf.flash != nil {
-				pf.fGroups, pf.fWidth = kernels.FlashPrefill80Groups(fs), kernels.FlashPrefill80Threads
+			if pf.flash = comp(oldkernels.FlashPrefill80K8(fs)); pf.flash != nil {
+				pf.fGroups, pf.fWidth = oldkernels.FlashPrefill80Groups(fs), oldkernels.FlashPrefill80Threads
 				pf.flash80 = true
-				pf.ragBuild, pf.ragGroups = kernels.FlashPrefill80K8, kernels.FlashPrefill80Groups
-				pf.ragThreads, pf.ragWG = kernels.FlashPrefill80Threads, kernels.FlashPrefill80Rows(fs)
+				pf.ragBuild, pf.ragGroups = oldkernels.FlashPrefill80K8, oldkernels.FlashPrefill80Groups
+				pf.ragThreads, pf.ragWG = oldkernels.FlashPrefill80Threads, oldkernels.FlashPrefill80Rows(fs)
 			}
 		case g.tileF32():
 			// The collective tiles where they lower and FlashPrefill80 does
 			// not run: Metal, and a CUDA card it refuses.
 			tile()
-		case !g.NoVolta && (hd == 64 || hd == 128) && rows%kernels.FlashPrefill70Rows == 0 && g.sm70():
-			if pf.flash = comp(kernels.FlashPrefill70(fs)); pf.flash != nil {
-				pf.fGroups, pf.fWidth = kernels.FlashPrefill70Groups(fs), kernels.FlashPrefill70Threads
-				pf.ragBuild, pf.ragGroups = kernels.FlashPrefill70, kernels.FlashPrefill70Groups
-				pf.ragThreads, pf.ragWG = kernels.FlashPrefill70Threads, kernels.FlashPrefill70Rows
+		case !g.NoVolta && (hd == 64 || hd == 128) && rows%oldkernels.FlashPrefill70Rows == 0 && g.sm70():
+			if pf.flash = comp(oldkernels.FlashPrefill70(fs)); pf.flash != nil {
+				pf.fGroups, pf.fWidth = oldkernels.FlashPrefill70Groups(fs), oldkernels.FlashPrefill70Threads
+				pf.ragBuild, pf.ragGroups = oldkernels.FlashPrefill70, oldkernels.FlashPrefill70Groups
+				pf.ragThreads, pf.ragWG = oldkernels.FlashPrefill70Threads, oldkernels.FlashPrefill70Rows
 			}
 		}
 	}
@@ -209,11 +209,11 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 		g.RagForms++
 	}
 	if pf.flash != nil && p.AttnSinks {
-		ms := kernels.FlashShape{Heads: p.NHead, KVHeads: p.NKVHead, Dim: hd, Rows: rows, Splits: 1, Sink: true}
-		if pf.fmerge = comp(kernels.FlashAttentionMergeWide(ms)); pf.fmerge == nil {
+		ms := oldkernels.FlashShape{Heads: p.NHead, KVHeads: p.NKVHead, Dim: hd, Rows: rows, Splits: 1, Sink: true}
+		if pf.fmerge = comp(oldkernels.FlashAttentionMergeWide(ms)); pf.fmerge == nil {
 			g.closeKern(pf.flash)
 			pf.flash = nil
-		} else if err := g.prefillBuf(&pf.part, &pf.partFloats, kernels.FlashPartialFloats(ms)); err != nil {
+		} else if err := g.prefillBuf(&pf.part, &pf.partFloats, oldkernels.FlashPartialFloats(ms)); err != nil {
 			pf.free(g.devShared)
 			return err
 		}
@@ -292,12 +292,12 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 			pf.free(g.devShared)
 			return nil // no staged form on this device: FlashDecodeKV serves
 		}
-		ms := mergeShape(kernels.FlashShape{Heads: p.NHead, KVHeads: pg.shape.KVHeads, Dim: hd, MLA: pg.shape.MLA,
+		ms := mergeShape(oldkernels.FlashShape{Heads: p.NHead, KVHeads: pg.shape.KVHeads, Dim: hd, MLA: pg.shape.MLA,
 			Rows: rows, Splits: max(1, v.s.Splits)})
 		if short > 0 {
 			// The softmax binds the partials in every form, so they exist at
 			// one pass's width.
-			if err := g.prefillBuf(&pf.part, &pf.partFloats, kernels.FlashPartialFloats(ms)); err != nil {
+			if err := g.prefillBuf(&pf.part, &pf.partFloats, oldkernels.FlashPartialFloats(ms)); err != nil {
 				pf.free(g.devShared)
 				return err
 			}
@@ -305,20 +305,20 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 			pf.passV = v
 			one := ms
 			one.Splits, one.Sink = 1, p.AttnSinks
-			pf.mFirst = comp(kernels.FlashAttentionMergeRun(ms, true))
-			pf.mFold = comp(kernels.FlashAttentionMergeRun(ms, false))
-			pf.mFin = comp(kernels.FlashAttentionMergeWide(one))
+			pf.mFirst = comp(oldkernels.FlashAttentionMergeRun(ms, true))
+			pf.mFold = comp(oldkernels.FlashAttentionMergeRun(ms, false))
+			pf.mFin = comp(oldkernels.FlashAttentionMergeWide(one))
 			if pf.mFirst == nil || pf.mFold == nil || pf.mFin == nil {
 				pf.free(g.devShared)
 				return nil
 			}
-			if err := g.prefillBuf(&pf.part, &pf.partFloats, kernels.FlashPartialFloats(ms)); err != nil {
+			if err := g.prefillBuf(&pf.part, &pf.partFloats, oldkernels.FlashPartialFloats(ms)); err != nil {
 				pf.free(g.devShared)
 				return err
 			}
 			for i := range pf.run {
 				var have int
-				if err := g.prefillBuf(&pf.run[i], &have, kernels.FlashPartialFloats(one)); err != nil {
+				if err := g.prefillBuf(&pf.run[i], &have, oldkernels.FlashPartialFloats(one)); err != nil {
 					pf.free(g.devShared)
 					return err
 				}
@@ -329,7 +329,7 @@ func (g *devTier) initPagedPrefill(bs *blockScratch) error {
 		if i == 1 && p.SWAWindow <= 0 {
 			break
 		}
-		b, err := g.dev.Alloc(rows * kernels.PRowWords * 4)
+		b, err := g.dev.Alloc(rows * oldkernels.PRowWords * 4)
 		if err != nil {
 			pf.free(g.devShared)
 			return err
@@ -385,39 +385,39 @@ func (g *devTier) prefillVariantAt(bs *blockScratch, pf *pagedPrefill, chunk, sp
 	var err error
 	switch pf.mode {
 	case prefillMMA, prefillMMAAcc:
-		ks, err = kernels.PagedAttnScoresMMA(s, g.tiles.attnNT)
-		v.scoreT = kernels.PagedAttnScoresMMAWarps(s, g.tiles.attnNT) * 32
+		ks, err = oldkernels.PagedAttnScoresMMA(s, g.tiles.attnNT)
+		v.scoreT = oldkernels.PagedAttnScoresMMAWarps(s, g.tiles.attnNT) * 32
 	case prefillMMA70:
-		ks, err = kernels.PagedAttnScoresMMA70(s, volta70AttnMT, volta70AttnNT)
-		v.scoreT = kernels.PagedAttnScoresMMA70Warps(s, volta70AttnMT, volta70AttnNT) * 32
+		ks, err = oldkernels.PagedAttnScoresMMA70(s, volta70AttnMT, volta70AttnNT)
+		v.scoreT = oldkernels.PagedAttnScoresMMA70Warps(s, volta70AttnMT, volta70AttnNT) * 32
 	default:
-		ks, err = kernels.PagedAttnScoresTiled(s, pf.sq, pf.kt)
-		v.scoreT = kernels.PagedAttnScoresTiledThreads(s, pf.sq, pf.kt)
+		ks, err = oldkernels.PagedAttnScoresTiled(s, pf.sq, pf.kt)
+		v.scoreT = oldkernels.PagedAttnScoresTiledThreads(s, pf.sq, pf.kt)
 	}
 	if err == nil {
-		kf, err = kernels.PagedPrefillSoftmax(s, pf.lanes, pf.qt)
+		kf, err = oldkernels.PagedPrefillSoftmax(s, pf.lanes, pf.qt)
 	}
 	if err == nil {
 		switch pf.mode {
 		case prefillMMA70:
-			ka, err = kernels.PagedAttnAccMMA70(s, volta70AccMT, volta70AttnNT)
-			v.accT = kernels.PagedAttnAccMMA70Warps(s, volta70AccMT, volta70AttnNT) * 32
+			ka, err = oldkernels.PagedAttnAccMMA70(s, volta70AccMT, volta70AttnNT)
+			v.accT = oldkernels.PagedAttnAccMMA70Warps(s, volta70AccMT, volta70AttnNT) * 32
 		case prefillMMAAcc:
 			mt := 4
 			for mt > 1 && s.Dim%(16*mt) != 0 {
 				mt /= 2
 			}
-			ka, err = kernels.PagedAttnAccMMA(s, mt, accMMANT)
-			v.accT = kernels.PagedAttnAccMMAWarps(s, mt, accMMANT) * 32
+			ka, err = oldkernels.PagedAttnAccMMA(s, mt, accMMANT)
+			v.accT = oldkernels.PagedAttnAccMMAWarps(s, mt, accMMANT) * 32
 		default:
-			ka, err = kernels.PagedAttnAccTiled(s, pf.qt)
-			v.accT = kernels.PagedAttnAccTiledThreads(s, pf.qt)
+			ka, err = oldkernels.PagedAttnAccTiled(s, pf.qt)
+			v.accT = oldkernels.PagedAttnAccTiledThreads(s, pf.qt)
 		}
 	}
 	if err != nil {
 		return nil, err
 	}
-	v.softG, v.softW = kernels.PagedPrefillSoftmaxGroups(s, pf.lanes), kernels.PagedPrefillSoftmaxWidth(pf.lanes)
+	v.softG, v.softW = oldkernels.PagedPrefillSoftmaxGroups(s, pf.lanes), oldkernels.PagedPrefillSoftmaxWidth(pf.lanes)
 	cs := []*backend.Kernel{&v.scores, &v.soft, &v.acc}
 	for i, k := range []*ir.Kernel{ks, kf, ka} {
 		c, err := g.compileShared(k)
@@ -431,7 +431,7 @@ func (g *devTier) prefillVariantAt(bs *blockScratch, pf *pagedPrefill, chunk, sp
 		}
 		*cs[i] = c
 	}
-	n := kernels.PagedPrefillPlane(s)
+	n := oldkernels.PagedPrefillPlane(s)
 	have := pf.planeFloats
 	if err := g.prefillBuf(&pf.sc, &have, n); err != nil {
 		v.close(g.devShared)
@@ -501,17 +501,17 @@ func (g *devTier) prefillPrep(bs *blockScratch, nrow int) error {
 			continue
 		}
 		// A padded row is empty at the last real row's keyEnd, in its table.
-		last := (nrow - 1) * kernels.PRowWords
-		end := src[last+kernels.PRowEnd]
-		for r := nrow; r < len(src)/kernels.PRowWords; r++ {
-			o := r * kernels.PRowWords
-			pl.desc[o+kernels.PRowTab], pl.desc[o+kernels.PRowStart], pl.desc[o+kernels.PRowEnd] =
-				src[kernels.PRowTab], end, end
+		last := (nrow - 1) * oldkernels.PRowWords
+		end := src[last+oldkernels.PRowEnd]
+		for r := nrow; r < len(src)/oldkernels.PRowWords; r++ {
+			o := r * oldkernels.PRowWords
+			pl.desc[o+oldkernels.PRowTab], pl.desc[o+oldkernels.PRowStart], pl.desc[o+oldkernels.PRowEnd] =
+				src[oldkernels.PRowTab], end, end
 		}
 		if pf.flash != nil {
 			continue
 		}
-		base := int(src[kernels.PRowStart]) &^ 63
+		base := int(src[oldkernels.PRowStart]) &^ 63
 		span := int(end) - base
 		pw, _ := g.prefillPass()
 		if span <= pw {
@@ -539,8 +539,8 @@ func (g *devTier) prefillPrep(bs *blockScratch, nrow int) error {
 			lo, hi := uint32(base+j*pw), uint32(base+(j+1)*pw)
 			at := len(pl.passD)
 			pl.passD = append(pl.passD, pl.desc...)
-			for o := at; o < at+n && !g.pagedFaulted(pagedPassclip); o += kernels.PRowWords {
-				for _, f := range []int{kernels.PRowStart, kernels.PRowEnd} {
+			for o := at; o < at+n && !g.pagedFaulted(pagedPassclip); o += oldkernels.PRowWords {
+				for _, f := range []int{oldkernels.PRowStart, oldkernels.PRowEnd} {
 					pl.passD[o+f] = min(max(pl.passD[o+f], lo), hi)
 				}
 			}
@@ -574,7 +574,7 @@ func (pf *pagedPrefill) prefillWrites(w func(backend.Buf, []byte)) {
 // on70 reports that the staged form runs on sm_70's m8n8k4 pair.
 func (pf *pagedPrefill) on70() bool { return pf.flash == nil && pf.mode == prefillMMA70 }
 
-// on80 reports that the prompt's attention is kernels.FlashPrefill80.
+// on80 reports that the prompt's attention is oldkernels.FlashPrefill80.
 func (pf *pagedPrefill) on80() bool { return pf.flash != nil && pf.flash80 }
 
 // accOnMMA reports that the staged form's accumulate is PagedAttnAccMMA.

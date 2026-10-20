@@ -8,7 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestSubgroupCollectivesMatchTheReference runs every subgroup collective
@@ -41,7 +41,7 @@ func TestSubgroupCollectivesMatchTheReference(t *testing.T) {
 		}
 		for _, ty := range []ir.Type{ir.F32, ir.I32, ir.U32} {
 			t.Run(d.API()+"/"+ty.String(), func(t *testing.T) {
-				kk, err := kernels.SubgroupProbe(ty)
+				kk, err := oldkernels.SubgroupProbe(ty)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -66,8 +66,8 @@ func TestSubgroupCollectivesMatchTheReference(t *testing.T) {
 					}
 					src[i] = uint32(rng.Intn(200)) // past 31 on purpose
 				}
-				out := poisonWords(n*kernels.SubgroupProbeOuts, 0x7FC0DEAD)
-				meta := poisonWords(n*kernels.SubgroupProbeMeta, 0xDEADBEEF)
+				out := poisonWords(n*oldkernels.SubgroupProbeOuts, 0x7FC0DEAD)
+				meta := poisonWords(n*oldkernels.SubgroupProbeMeta, 0xDEADBEEF)
 				bufs := []backend.Buf{}
 				for _, w := range [][]uint32{in, src, out, meta} {
 					b, err := d.Alloc(4 * len(w))
@@ -97,7 +97,7 @@ func TestSubgroupCollectivesMatchTheReference(t *testing.T) {
 					sg := (i % width) / ir.SubgroupLanes
 					want := subgroupWant(ty, in[base:base+ir.SubgroupLanes], (7*sg+3)&31, int(src[i]&31))
 					for j, w := range want {
-						g := binary.LittleEndian.Uint32(got[4*(i*kernels.SubgroupProbeOuts+j):])
+						g := binary.LittleEndian.Uint32(got[4*(i*oldkernels.SubgroupProbeOuts+j):])
 						if g != w {
 							if bad < 8 {
 								t.Errorf("thread %d result %d (%s): got %#x want %#x",
@@ -106,8 +106,8 @@ func TestSubgroupCollectivesMatchTheReference(t *testing.T) {
 							bad++
 						}
 					}
-					lane := binary.LittleEndian.Uint32(gm[4*(i*kernels.SubgroupProbeMeta):])
-					size := binary.LittleEndian.Uint32(gm[4*(i*kernels.SubgroupProbeMeta+1):])
+					lane := binary.LittleEndian.Uint32(gm[4*(i*oldkernels.SubgroupProbeMeta):])
+					size := binary.LittleEndian.Uint32(gm[4*(i*oldkernels.SubgroupProbeMeta+1):])
 					if lane != uint32(i%ir.SubgroupLanes) || size != ir.SubgroupLanes {
 						if bad < 8 {
 							t.Errorf("thread %d: lane %d width %d, want %d and %d", i, lane, size, i%32, 32)
@@ -116,7 +116,7 @@ func TestSubgroupCollectivesMatchTheReference(t *testing.T) {
 					}
 				}
 				if bad > 0 {
-					t.Fatalf("%d wrong results of %d", bad, n*(kernels.SubgroupProbeOuts+kernels.SubgroupProbeMeta))
+					t.Fatalf("%d wrong results of %d", bad, n*(oldkernels.SubgroupProbeOuts+oldkernels.SubgroupProbeMeta))
 				}
 				ran++
 			})

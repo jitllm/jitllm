@@ -11,6 +11,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestGemmVoltaMatchesTheReference holds the shared-memory-staged sm_70 GEMM to
@@ -31,22 +32,22 @@ func TestGemmVoltaMatchesTheReference(t *testing.T) {
 		for _, q := range []kernels.Quant{kernels.Q4_K, kernels.Q6_K, kernels.Q8_0, kernels.Q5_K, kernels.Q4_0, kernels.Q5_0, kernels.Q5_1} {
 			for _, sh := range []struct {
 				rows, k, ntok, split int
-				tl                   kernels.VoltaTile
+				tl                   oldkernels.VoltaTile
 				bias                 bool
 			}{
-				{128, 512, 128, 1, kernels.VoltaTile{MT: 2, NT: 8, WM: 2, WN: 2, KB: 1}, false},
-				{256, 512, 128, 2, kernels.VoltaTile{MT: 2, NT: 8, WM: 2, WN: 2, KB: 1}, true},
-				{128, 1024, 64, 1, kernels.VoltaTile{MT: 4, NT: 4, WM: 1, WN: 2, KB: 2}, true},
-				{64, 512, 64, 1, kernels.VoltaTile{MT: 1, NT: 2, WM: 2, WN: 2, KB: 2}, false},
-				{32, 1024, 32, 2, kernels.VoltaTile{MT: 1, NT: 4, WM: 1, WN: 1, KB: 4}, true},
-				{256, 768, 32, 3, kernels.VoltaTile{MT: 1, NT: 4, WM: 4, WN: 1, KB: 2}, false},
+				{128, 512, 128, 1, oldkernels.VoltaTile{MT: 2, NT: 8, WM: 2, WN: 2, KB: 1}, false},
+				{256, 512, 128, 2, oldkernels.VoltaTile{MT: 2, NT: 8, WM: 2, WN: 2, KB: 1}, true},
+				{128, 1024, 64, 1, oldkernels.VoltaTile{MT: 4, NT: 4, WM: 1, WN: 2, KB: 2}, true},
+				{64, 512, 64, 1, oldkernels.VoltaTile{MT: 1, NT: 2, WM: 2, WN: 2, KB: 2}, false},
+				{32, 1024, 32, 2, oldkernels.VoltaTile{MT: 1, NT: 4, WM: 1, WN: 1, KB: 4}, true},
+				{256, 768, 32, 3, oldkernels.VoltaTile{MT: 1, NT: 4, WM: 4, WN: 1, KB: 2}, false},
 				// A 96-row block, whose 96 staging items do not nest in 128
 				// threads (gpt-oss's 2880-row projection).
-				{192, 512, 128, 2, kernels.VoltaTile{MT: 3, NT: 4, WM: 1, WN: 4, KB: 1}, true},
+				{192, 512, 128, 2, oldkernels.VoltaTile{MT: 3, NT: 4, WM: 1, WN: 4, KB: 1}, true},
 			} {
-				s := kernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, MT: sh.tl.MT, NT: sh.tl.NT,
+				s := oldkernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, MT: sh.tl.MT, NT: sh.tl.NT,
 					Split: sh.split, Bias: sh.bias}
-				kk, err := kernels.GemmVolta(s, sh.tl)
+				kk, err := oldkernels.GemmVolta(s, sh.tl)
 				if err != nil {
 					t.Fatalf("%v %+v: %v", q, sh, err)
 				}
@@ -62,7 +63,7 @@ func TestGemmVoltaMatchesTheReference(t *testing.T) {
 				}
 				ran++
 				mma70Case(t, d, kern, s, fmt.Sprintf("gemmvolta %+v", sh.tl),
-					kernels.GemmVoltaGroups(s, sh.tl), sh.tl.Threads(), true)
+					oldkernels.GemmVoltaGroups(s, sh.tl), sh.tl.Threads(), true)
 				kern.Close()
 			}
 		}
@@ -95,19 +96,19 @@ func TestGemmF16MatchesTheReference(t *testing.T) {
 				refused := false
 				for _, sh := range []struct {
 					rows, k, ntok, split int
-					tl                   kernels.VoltaTile
+					tl                   oldkernels.VoltaTile
 					bias                 bool
 				}{
-					{128, 512, 64, 1, kernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 2}, false},
-					{256, 768, 128, 1, kernels.VoltaTile{MT: 4, NT: 8, WM: 2, WN: 2}, true},
-					{32, 256, 32, 1, kernels.VoltaTile{MT: 1, NT: 2, WM: 2, WN: 2}, true},
-					{192, 512, 32, 2, kernels.VoltaTile{MT: 3, NT: 2, WM: 2, WN: 2}, true},
-					{256, 768, 32, 3, kernels.VoltaTile{MT: 1, NT: 4, WM: 4, WN: 1}, false},
-					{64, 1024, 128, 1, kernels.VoltaTile{MT: 4, NT: 4, WM: 1, WN: 4}, false},
+					{128, 512, 64, 1, oldkernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 2}, false},
+					{256, 768, 128, 1, oldkernels.VoltaTile{MT: 4, NT: 8, WM: 2, WN: 2}, true},
+					{32, 256, 32, 1, oldkernels.VoltaTile{MT: 1, NT: 2, WM: 2, WN: 2}, true},
+					{192, 512, 32, 2, oldkernels.VoltaTile{MT: 3, NT: 2, WM: 2, WN: 2}, true},
+					{256, 768, 32, 3, oldkernels.VoltaTile{MT: 1, NT: 4, WM: 4, WN: 1}, false},
+					{64, 1024, 128, 1, oldkernels.VoltaTile{MT: 4, NT: 4, WM: 1, WN: 4}, false},
 				} {
 					sh.tl.KB, sh.tl.F16K = kb, f16k
-					s := kernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, Split: sh.split, Bias: sh.bias}
-					kk, err := kernels.GemmVolta(s, sh.tl)
+					s := oldkernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, Split: sh.split, Bias: sh.bias}
+					kk, err := oldkernels.GemmVolta(s, sh.tl)
 					if err != nil {
 						// A staging nesting the block does not admit (a 96-row
 						// block of two-sub-block trips) is the tier's next tile.
@@ -124,7 +125,7 @@ func TestGemmF16MatchesTheReference(t *testing.T) {
 					}
 					ran++
 					mma70Case(t, d, kern, s, fmt.Sprintf("gemm f%d %+v", f16k, sh.tl),
-						kernels.GemmVoltaGroups(s, sh.tl), sh.tl.Threads(), true)
+						oldkernels.GemmVoltaGroups(s, sh.tl), sh.tl.Threads(), true)
 					kern.Close()
 				}
 				if refused && d.API() == "ptx" && ptxSM(d.Name()) >= mmaMinSM(ir.MMAShape{M: 16, N: 8, K: f16k, Kind: ir.MMAF16}) {
@@ -176,26 +177,26 @@ func TestGemmVoltaSpeed(t *testing.T) {
 				t.Logf("%5dx%-5d t%d %-34s %8.1f us  %.2f TMAC/s", rows, k, ntok, name, float64(el.Microseconds()),
 					float64(rows)*float64(k)*float64(ntok)/el.Seconds()/1e12)
 			}
-			kk, _ := kernels.MatVecMMA70(kernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok, MT: 2, NT: 4})
+			kk, _ := oldkernels.MatVecMMA70(oldkernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok, MT: 2, NT: 4})
 			if kern, err := d.Compile(kk); err == nil {
 				warps := rows / 64 * ntok / 32
 				time1("mma70 mt2 nt4", func() error { return kern.Launch((warps*32+127)/128, 128, bQS, bD, bSC, bB, out) })
 			}
-			tiles := []kernels.VoltaTile{
+			tiles := []oldkernels.VoltaTile{
 				{MT: 2, NT: 8, WM: 2, WN: 2, KB: 1}, {MT: 4, NT: 4, WM: 1, WN: 4, KB: 1},
 				{MT: 4, NT: 4, WM: 2, WN: 4, KB: 1}, {MT: 4, NT: 2, WM: 1, WN: 8, KB: 1},
 				{MT: 2, NT: 4, WM: 2, WN: 4, KB: 1}, {MT: 4, NT: 4, WM: 1, WN: 2, KB: 1},
 				{MT: 2, NT: 4, WM: 1, WN: 4, KB: 1}, {MT: 4, NT: 2, WM: 1, WN: 4, KB: 1},
 			}
 			if v := os.Getenv("JITLLM_GEMM_TILE"); v != "" {
-				var tl kernels.VoltaTile
+				var tl oldkernels.VoltaTile
 				fmt.Sscanf(v, "%d,%d,%d,%d,%d", &tl.MT, &tl.NT, &tl.WM, &tl.WN, &tl.KB)
-				tiles = []kernels.VoltaTile{tl}
+				tiles = []oldkernels.VoltaTile{tl}
 			}
 			for _, tl := range tiles {
 				for _, split := range []int{1, 2, 4} {
-					s := kernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok, Split: split}
-					kk, err := kernels.GemmVolta(s, tl)
+					s := oldkernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok, Split: split}
+					kk, err := oldkernels.GemmVolta(s, tl)
 					if err != nil {
 						continue
 					}
@@ -205,7 +206,7 @@ func TestGemmVoltaSpeed(t *testing.T) {
 						continue
 					}
 					time1(fmt.Sprintf("gemm %dx%d w%dx%d k%d s%d", tl.MT, tl.NT, tl.WM, tl.WN, tl.KB, split), func() error {
-						return kern.Launch(kernels.GemmVoltaGroups(s, tl), tl.Threads(), bQS, bD, bSC, bB, out)
+						return kern.Launch(oldkernels.GemmVoltaGroups(s, tl), tl.Threads(), bQS, bD, bSC, bB, out)
 					})
 				}
 			}
@@ -240,19 +241,19 @@ func TestGemmF16DeepStageMatchesTheReference(t *testing.T) {
 				sub, _, _, _ := kernels.Layout(q)
 				for _, sh := range []struct {
 					rows, k, ntok, split, depth int
-					tl                          kernels.VoltaTile
+					tl                          oldkernels.VoltaTile
 					bias                        bool
 				}{
-					{128, 512, 64, 1, 64, kernels.VoltaTile{MT: 4, NT: 2, WM: 2, WN: 4}, false},
-					{128, 512, 64, 1, 128, kernels.VoltaTile{MT: 4, NT: 2, WM: 2, WN: 4, Single: true}, true},
-					{256, 768, 128, 1, 128, kernels.VoltaTile{MT: 2, NT: 4, WM: 4, WN: 2, Single: true}, false},
-					{128, 1024, 64, 2, 128, kernels.VoltaTile{MT: 2, NT: 4, WM: 4, WN: 2, Single: true}, true},
-					{128, 256, 32, 1, 128, kernels.VoltaTile{MT: 4, NT: 1, WM: 2, WN: 4, Single: true}, true},
-					{128, 768, 64, 3, 64, kernels.VoltaTile{MT: 2, NT: 4, WM: 4, WN: 2, Single: true}, false},
+					{128, 512, 64, 1, 64, oldkernels.VoltaTile{MT: 4, NT: 2, WM: 2, WN: 4}, false},
+					{128, 512, 64, 1, 128, oldkernels.VoltaTile{MT: 4, NT: 2, WM: 2, WN: 4, Single: true}, true},
+					{256, 768, 128, 1, 128, oldkernels.VoltaTile{MT: 2, NT: 4, WM: 4, WN: 2, Single: true}, false},
+					{128, 1024, 64, 2, 128, oldkernels.VoltaTile{MT: 2, NT: 4, WM: 4, WN: 2, Single: true}, true},
+					{128, 256, 32, 1, 128, oldkernels.VoltaTile{MT: 4, NT: 1, WM: 2, WN: 4, Single: true}, true},
+					{128, 768, 64, 3, 64, oldkernels.VoltaTile{MT: 2, NT: 4, WM: 4, WN: 2, Single: true}, false},
 				} {
 					sh.tl.KB, sh.tl.F16K = sh.depth/sub, f16k
-					s := kernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, Split: sh.split, Bias: sh.bias}
-					kk, err := kernels.GemmVolta(s, sh.tl)
+					s := oldkernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, Split: sh.split, Bias: sh.bias}
+					kk, err := oldkernels.GemmVolta(s, sh.tl)
 					if err != nil {
 						t.Fatalf("%v %+v: %v", q, sh, err)
 					}
@@ -262,7 +263,7 @@ func TestGemmF16DeepStageMatchesTheReference(t *testing.T) {
 					}
 					ran++
 					mma70Case(t, d, kern, s, fmt.Sprintf("gemm f%d k%d %+v", f16k, sh.depth, sh.tl),
-						kernels.GemmVoltaGroups(s, sh.tl), sh.tl.Threads(), true)
+						oldkernels.GemmVoltaGroups(s, sh.tl), sh.tl.Threads(), true)
 					kern.Close()
 				}
 			}

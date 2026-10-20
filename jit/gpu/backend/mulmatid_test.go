@@ -6,6 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestIndexedMatVecMatchesDense is the correctness gate on MUL_MAT_ID.
@@ -120,13 +121,13 @@ func indexedCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 			s1 = []uint32{0}
 		}
 		eQS, eD, eSC := g.up(u32bytes(q1)), dOf(d1), g.up(u32bytes(s1))
-		want[e] = g.run(t, kernels.MatVecShape{T: q, K: k, Rows: rows, Split: split},
+		want[e] = g.run(t, oldkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split},
 			rows, 1, split, eQS, eD, eSC, bA, bAX, nil)
 	}
 
 	// The kernel under test: the same buffer, one expert's sheet per slot.
 	bSel := g.up(u32bytes(sel))
-	got := g.run(t, kernels.MatVecShape{T: q, K: k, Rows: rows, Split: split,
+	got := g.run(t, oldkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split,
 		Experts: experts, Slots: len(sel)}, rows, len(sel), split,
 		bQS, bD, bSC, bA, bAX, bSel)
 
@@ -228,7 +229,7 @@ func slotActCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	bSC := g.up(u32bytes(scw))
 	bSel := g.up(u32bytes(sel))
 
-	// pAX is flat: all the scales, then all the sums, as one kernels.Quantize
+	// pAX is flat: all the scales, then all the sums, as one oldkernels.Quantize
 	// over the whole Slots*K vector produces on the device.
 	var allA []uint32
 	var allScale, allSum []float32
@@ -255,7 +256,7 @@ func slotActCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	if kernels.IsFloat(q) {
 		bD = g.up(f32bytes(allX))
 	}
-	got := g.run(t, kernels.MatVecShape{T: q, K: k, Rows: rows, Split: split,
+	got := g.run(t, oldkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split,
 		Experts: experts, Slots: slots, SlotAct: true}, rows, slots, split,
 		bQS, bD, bSC, g.up(u32bytes(allA)), g.up(f32bytes(allAX)), bSel)
 
@@ -268,7 +269,7 @@ func slotActCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 		if kernels.IsFloat(q) {
 			eD = g.up(f32bytes(perSlotX[j]))
 		}
-		want := g.run(t, kernels.MatVecShape{T: q, K: k, Rows: rows, Split: split}, rows, 1, split,
+		want := g.run(t, oldkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split}, rows, 1, split,
 			g.up(u32bytes(q1)), eD, g.up(u32bytes(s1)),
 			g.up(u32bytes(perSlotA[j])), g.up(f32bytes(perSlot[j])), nil)
 		for r := 0; r < rows; r++ {
@@ -364,7 +365,7 @@ func compactCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 
 	// A: the whole bank, addressed by real expert ids -- what ships.
 	fq, fd, fs := pack(all)
-	full := g.run(t, kernels.MatVecShape{T: q, K: k, Rows: rows, Split: split,
+	full := g.run(t, oldkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split,
 		Experts: experts, Slots: len(sel)}, rows, len(sel), split,
 		g.up(u32bytes(fq)), g.up(u32bytes(fd)), g.up(u32bytes(fs)), bA, bAX,
 		g.up(u32bytes(sel)))
@@ -376,7 +377,7 @@ func compactCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	for i := range slots {
 		slots[i] = uint32(i)
 	}
-	compact := g.run(t, kernels.MatVecShape{T: q, K: k, Rows: rows, Split: split,
+	compact := g.run(t, oldkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split,
 		Experts: len(sel), Slots: len(sel)}, rows, len(sel), split,
 		g.up(u32bytes(cq)), g.up(u32bytes(cd)), g.up(u32bytes(cs)), bA, bAX,
 		g.up(u32bytes(slots)))

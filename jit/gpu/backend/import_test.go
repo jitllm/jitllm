@@ -9,6 +9,7 @@ import (
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // The zero-copy page-in, on real hardware: a device whose heap is the host's
@@ -127,7 +128,7 @@ func importCaseRun(t *testing.T, d backend.Device) {
 	}
 	ax := append(append([]float32{}, as...), asum...)
 
-	ker, err := kernels.MatVec(kernels.MatVecShape{T: q, K: k, Rows: rows, Split: 1})
+	ker, err := oldkernels.MatVec(oldkernels.MatVecShape{T: q, K: k, Rows: rows, Split: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

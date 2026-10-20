@@ -4,7 +4,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // emitMLA issues one multi-head latent attention block's launches, from the
@@ -80,7 +80,7 @@ func (g *devTier) emitMLA(s backend.Session, bs *blockScratch, l *layer, kvp *kv
 			lc.la(bs.mlaNormQAApply, p.QLoraRank, bs.mlaQA, l.nQA, bs.mlaQAPart, bs.mlaQAn)
 		}
 		if !skip["quant"] {
-			lc.la(bs.mlaQuantQA, kernels.QuantizeThreads(p.QLoraRank/32), bs.mlaQAn, bs.a, bs.ax)
+			lc.la(bs.mlaQuantQA, oldkernels.QuantizeThreads(p.QLoraRank/32), bs.mlaQAn, bs.a, bs.ax)
 		}
 		if !skip["qkvo"] {
 			mvrun(l.mvQB, l.wqb, bs.q)
@@ -139,7 +139,7 @@ func (g *devTier) emitMLA(s backend.Session, bs *blockScratch, l *layer, kvp *kv
 	// One indexed launch, not NHead matvecs: slot h reads bs.mlaNope at h*nope
 	// and the bank's sheet h (SlotAct), with the identity selection.
 	if !skip["quant"] {
-		lc.la(bs.mlaQuantNope, kernels.QuantizeThreads(nh*nope/32), bs.mlaNope, bs.a, bs.ax)
+		lc.la(bs.mlaQuantNope, oldkernels.QuantizeThreads(nh*nope/32), bs.mlaNope, bs.a, bs.ax)
 	}
 	// Which bank is which is a container fact: attn_k_b is stored already
 	// transposed and attn_v_b verbatim, and they can be the same shape. The
@@ -195,7 +195,7 @@ func (g *devTier) emitMLA(s backend.Session, bs *blockScratch, l *layer, kvp *kv
 	// attention result (bs.mlaAcc at h*KVLoraRank) against its own sheet of
 	// attn_v_b.
 	if !skip["quant"] {
-		lc.la(bs.mlaQuantAcc, kernels.QuantizeThreads(nh*lat/32), bs.mlaAcc, bs.a, bs.ax)
+		lc.la(bs.mlaQuantAcc, oldkernels.QuantizeThreads(nh*lat/32), bs.mlaAcc, bs.a, bs.ax)
 	}
 	if !skip["qkvo"] {
 		mvid(unMV, unW, bs.mlaOut, bs.mlaIdent)
@@ -203,7 +203,7 @@ func (g *devTier) emitMLA(s backend.Session, bs *blockScratch, l *layer, kvp *kv
 	// Kimi-K3's output gate (k3GatedMLA) and no bias: the o bias is added by
 	// the caller on bs.mvOut.
 	if !skip["quant"] {
-		lc.la(bs.mlaQuantOut, kernels.QuantizeThreads(nh*p.HeadDimV/32), g.k3GatedMLA(lc, bs, l, 1, bs.mlaOut),
+		lc.la(bs.mlaQuantOut, oldkernels.QuantizeThreads(nh*p.HeadDimV/32), g.k3GatedMLA(lc, bs, l, 1, bs.mlaOut),
 			bs.a, bs.ax)
 	}
 	if !skip["qkvo"] {

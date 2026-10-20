@@ -11,9 +11,10 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
-// TestGatedDeltaFusedMatchesTheUnfusedChain holds kernels.GatedDeltaFused to
+// TestGatedDeltaFusedMatchesTheUnfusedChain holds oldkernels.GatedDeltaFused to
 // the eleven launches it replaces -- Act, three SliceRows, two HeadNormRows,
 // three Scales, SplitDeltaGatesRows and DeltaGateRows (KDA: two DeltaGateRows)
 // -- followed by GatedDeltaScan, run on the device in that order from the same
@@ -38,7 +39,7 @@ func TestGatedDeltaFusedMatchesTheUnfusedChain(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 	}
-	cases := []kernels.DeltaScan{
+	cases := []oldkernels.DeltaScan{
 		{VHeads: 4, VDim: 32, KDim: 32, Rep: 2, Rows: 5, Lanes: ir.SubgroupLanes},
 		{VHeads: 4, VDim: 32, KDim: 32, Rep: 2, TiledK: 2, Rows: 5, Lanes: ir.SubgroupLanes},
 		{VHeads: 2, VDim: 32, KDim: 32, Rep: 1, PerChan: true, Rows: 4, Lanes: ir.SubgroupLanes},
@@ -59,7 +60,7 @@ func TestGatedDeltaFusedMatchesTheUnfusedChain(t *testing.T) {
 	}
 }
 
-func deltaFusedCase(t *testing.T, d backend.Device, c kernels.DeltaScan, m int) {
+func deltaFusedCase(t *testing.T, d backend.Device, c oldkernels.DeltaScan, m int) {
 	if c.Lanes == ir.SubgroupLanes {
 		if ok, why := backend.GuaranteedLanes(d, ir.SubgroupLanes); !ok {
 			t.Logf("%s: no guaranteed 32-lane subgroup (%s)", d.API(), why)
@@ -130,21 +131,21 @@ func deltaFusedCase(t *testing.T, d backend.Device, c kernels.DeltaScan, m int) 
 
 	// The unfused chain, as emitLinear issues it.
 	mixed := buf(rows * chans)
-	k, err := kernels.Act(rows*chans, kernels.ActSiLU)
+	k, err := oldkernels.Act(rows*chans, kernels.ActSiLU)
 	lin(k, err, rows*chans, bConv, mixed)
 	bQ, bK, bV := buf(rows*qk), buf(rows*qk), buf(rows*vw)
-	k, err = kernels.SliceRows(qk, chans, 0, rows)
+	k, err = oldkernels.SliceRows(qk, chans, 0, rows)
 	lin(k, err, rows*qk, mixed, bQ)
-	k, err = kernels.SliceRows(qk, chans, qk, rows)
+	k, err = oldkernels.SliceRows(qk, chans, qk, rows)
 	lin(k, err, rows*qk, mixed, bK)
-	k, err = kernels.SliceRows(vw, chans, 2*qk, rows)
+	k, err = oldkernels.SliceRows(vw, chans, 2*qk, rows)
 	lin(k, err, rows*vw, mixed, bV)
 	lanes := c.Lanes
 	if lanes == ir.SubgroupLanes && c.KDim%ir.SubgroupLanes != 0 {
 		lanes = 1 // the tier's headLanes: HeadNorm's warp form needs whole subgroups
 	}
 	bQn, bKn := buf(rows*qk), buf(rows*qk)
-	k, err = kernels.HeadNormRows(kHeads, c.KDim, float64(eps), rows, lanes)
+	k, err = oldkernels.HeadNormRows(kHeads, c.KDim, float64(eps), rows, lanes)
 	if lanes == 1 {
 		run(k, err, (rows*kHeads+63)/64, 64, bQ, bOnes, bQn)
 		run(k, err, (rows*kHeads+63)/64, 64, bK, bOnes, bKn)
@@ -152,7 +153,7 @@ func deltaFusedCase(t *testing.T, d backend.Device, c kernels.DeltaScan, m int) 
 		run(k, err, rows*kHeads, 32, bQ, bOnes, bQn)
 		run(k, err, rows*kHeads, 32, bK, bOnes, bKn)
 	}
-	k, err = kernels.Scale(rows * qk)
+	k, err = oldkernels.Scale(rows * qk)
 	lin(k, err, rows*qk, bKn, bScale, bK)
 	lin(k, err, rows*qk, bQn, bScale, bQ)
 	lin(k, err, rows*qk, bQ, bScale, bQn)
@@ -160,25 +161,25 @@ func deltaFusedCase(t *testing.T, d backend.Device, c kernels.DeltaScan, m int) 
 	var bBA, bAlpha, bBRaw backend.Buf
 	if c.PerChan {
 		bAlpha, bBRaw = g.up(f32bytes(alpha)), g.up(f32bytes(bRaw))
-		k, err = kernels.DeltaGateRows(nGate, rows)
+		k, err = oldkernels.DeltaGateRows(nGate, rows)
 		lin(k, err, rows*nGate, bAlpha, bDt, bA, bAlpha, bDecay, bWaste)
-		k, err = kernels.DeltaGateRows(c.VHeads, rows)
+		k, err = oldkernels.DeltaGateRows(c.VHeads, rows)
 		lin(k, err, rows*c.VHeads, bAlpha, bDt, bA, bBRaw, bWaste, bBeta)
 	} else {
 		bBA = g.up(f32bytes(ba))
 		bBRaw, bAlpha = buf(rows*c.VHeads), buf(rows*c.VHeads)
-		k, err = kernels.SplitDeltaGatesRows(c.VHeads/baRep, baRep, rows)
+		k, err = oldkernels.SplitDeltaGatesRows(c.VHeads/baRep, baRep, rows)
 		lin(k, err, rows*c.VHeads, bBA, bBRaw, bAlpha)
-		k, err = kernels.DeltaGateRows(c.VHeads, rows)
+		k, err = oldkernels.DeltaGateRows(c.VHeads, rows)
 		lin(k, err, rows*c.VHeads, bAlpha, bDt, bA, bBRaw, bDecay, bBeta)
 	}
 	out0, s0 := buf(rows*vw), buf(len(st))
-	k, err = kernels.GatedDeltaScan(c)
+	k, err = oldkernels.GatedDeltaScan(c)
 	lin(k, err, c.Threads(), bS, bK, bQn, bV, bDecay, bBeta, out0, s0, bN)
 
 	// The fused kernel, from the same raw inputs.
 	out1, s1 := buf(rows*vw), buf(len(st))
-	k, err = kernels.GatedDeltaFused(c, kernels.DeltaFuse{Chans: chans, Eps: eps, Scale: sc, BARep: baRep})
+	k, err = oldkernels.GatedDeltaFused(c, oldkernels.DeltaFuse{Chans: chans, Eps: eps, Scale: sc, BARep: baRep})
 	if c.PerChan {
 		lin(k, err, c.Threads(), bS, bConv, bAlpha, bBRaw, bDt, bA, out1, s1, bN)
 	} else {

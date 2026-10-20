@@ -226,7 +226,7 @@ func (g *GPU) MatVec(out []float32, t quant.Type, w []byte, x []float32, nrows, 
 
 // matVec serves one matvec, asking each device in turn.
 //
-// noKernel and tooSmall are the same answer on every device (kernels.MatVec is
+// noKernel and tooSmall are the same answer on every device (oldkernels.MatVec is
 // device-independent, and mvPays judges the model, not a card), so they stop
 // the walk; a full card or a failed compile or allocation asks the next one.
 //

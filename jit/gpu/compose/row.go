@@ -257,11 +257,6 @@ func (g *Row) Check() error {
 		return fmt.Errorf("compose: a row group of %d x %d", g.Rows, g.Width)
 	}
 	for i, n := range g.Nodes {
-		if n.Kind == NUnary && n.Op == OpAct {
-			if err := kernels.ActElemOK(n.Act); err != nil {
-				return fmt.Errorf("compose: node %d: %w", i, err)
-			}
-		}
 		in := []int{}
 		switch n.Kind {
 		case NLoad:
@@ -312,11 +307,11 @@ func (g *Row) Check() error {
 			return fmt.Errorf("compose: a store of node %d into buffer %d", s.Val, s.Buf)
 		}
 	}
-	if q := g.Q8; q != nil {
-		if q.Val < 0 || q.Val >= len(g.Nodes) || g.Bufs[q.A].Kind != BufQ8 || g.Bufs[q.X].Kind != BufQ8X ||
-			q.Pad%32 != 0 || q.Pad < g.Width {
-			return fmt.Errorf("compose: an int8 epilogue of node %d at %d", q.Val, q.Pad)
-		}
+	if g.Q8 != nil {
+		// The int8 operand (a scale per window, rounded codes packed four
+		// to a word, sums per 16) needs primitives the node language does
+		// not have yet: windowed reductions, float to integer, bit packing.
+		return fmt.Errorf("compose: an int8 operand has no primitive form yet")
 	}
 	if _, ok := g.depth(); !ok {
 		return fmt.Errorf("compose: a reduction read through a fold of its own")
@@ -408,6 +403,12 @@ func (g *Row) varies(c int) []bool {
 // Emit forms the group's kernel under schedule s.
 func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 	if err := g.Check(); err != nil {
+		return nil, err
+	}
+	// Activations are formulas over primitive nodes; the former emits
+	// primitives only.
+	g, _, err := g.expanded()
+	if err != nil {
 		return nil, err
 	}
 	G := s.Group
@@ -617,8 +618,6 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		case NUnary:
 			a := elem(nd.A, idx, e)
 			switch nd.Op {
-			case OpAct:
-				v = kernels.ActFragment(b, a, nd.Act)
 			case OpExp:
 				v = b.Exp(a)
 			case OpSqrt:
@@ -633,8 +632,6 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		case NBinary:
 			a := elem(nd.A, idx, e)
 			switch nd.Op {
-			case OpActMul:
-				v = kernels.ActMulFragment(b, nd.Act, a, func() ir.Value { return elem(nd.B, idx, e) })
 			case OpPackF16:
 				v = b.PackF16(a, elem(nd.B, idx, e))
 			case OpFma:
@@ -723,22 +720,11 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		b.EndLoop()
 		for j, n := range reds {
 			if g.Nodes[n].Red == RedMax {
-				rowVal[n] = kernels.TreeMax(b, sh, tid, accs[j], G)
+				rowVal[n] = groupReduce(b, sh, tid, accs[j], G, true)
 			} else {
-				rowVal[n] = kernels.TreeSum(b, sh, tid, accs[j], G)
+				rowVal[n] = groupReduce(b, sh, tid, accs[j], G, false)
 			}
 		}
-	}
-	if q := g.Q8; q != nil {
-		shMax := b.Shared("amax", ir.F32, G)
-		shSum := b.Shared("qsum", ir.F32, G)
-		zero := b.ConstF32(0)
-		kernels.QuantFragment(b, q.Pad, g.Rows, q.Window, G, r, tid, params[q.A], params[q.X], shMax, shSum,
-			func(at ir.Value) ir.Value {
-				// Past the row's width, the zero pad.
-				v := elem(q.Val, b.Min(ir.U32, at, last), newEnv(nil))
-				return b.Select(ir.F32, b.Lt(ir.U32, at, width), v, zero)
-			})
 	}
 	if emitErr != nil {
 		return nil, emitErr

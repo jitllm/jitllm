@@ -7,10 +7,10 @@ import (
 
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
-// TestXIELUMatchesTheOracle holds kernels.XIELU -- Apertus's ungated
+// TestXIELUMatchesTheOracle holds oldkernels.XIELU -- Apertus's ungated
 // activation, its four numbers a buffer -- to internal/oracle.XIELU (a float64
 // expm1) on every backend present, over the regions it distinguishes: the
 // polynomial's [-1/2, 0], exp below it, values near zero where expm1 - x
@@ -49,7 +49,7 @@ func TestXIELUMatchesTheOracle(t *testing.T) {
 		// The device exp is the backend's own, a few ulps.
 		return 2e-6*(math.Abs(ap*x*x)+math.Abs(b*x)+math.Abs(an)*(math.Abs(math.Expm1(m)-m)+math.Abs(m-x)+math.Abs(m))) + 1e-30
 	}
-	k, err := kernels.XIELU(n)
+	k, err := oldkernels.XIELU(n)
 	if err != nil {
 		t.Fatal(err)
 	}

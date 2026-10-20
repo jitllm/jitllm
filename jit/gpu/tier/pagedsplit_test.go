@@ -3,7 +3,7 @@ package tier
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestAStagedPlanThatDoesNotFitHalvesItsSplits builds a staged plan for a
@@ -14,15 +14,15 @@ import (
 func TestAStagedPlanThatDoesNotFitHalvesItsSplits(t *testing.T) {
 	g, d, _ := fakeTier(t)
 	g.StagedDecode = true
-	shape := kernels.FlashShape{Heads: 32, KVHeads: 1, Dim: 576, MLA: 512, Rows: 512, Page: 256}
-	bs := &blockScratch{pkv: &pagedScratch{shape: shape, vars: map[kernels.DecodePlan]*pagedVariant{}}}
+	shape := oldkernels.FlashShape{Heads: 32, KVHeads: 1, Dim: 576, MLA: 512, Rows: 512, Page: 256}
+	bs := &blockScratch{pkv: &pagedScratch{shape: shape, vars: map[oldkernels.DecodePlan]*pagedVariant{}}}
 	const keys = 544
-	want := kernels.PagedStagedPlan(shape, keys, g.dev.Slots())
+	want := oldkernels.PagedStagedPlan(shape, keys, g.dev.Slots())
 	if want.Splits < 2 {
 		t.Fatalf("the default plan has %d split(s): nothing to step down from, so this proves nothing", want.Splits)
 	}
 	// Room for the partials at half the default splits, not at the default.
-	d.allocMax = kernels.FlashPartialFloats(mergeShape(kernels.PagedStagedAt(shape, keys, want.Splits/2))) * 4
+	d.allocMax = oldkernels.FlashPartialFloats(mergeShape(oldkernels.PagedStagedAt(shape, keys, want.Splits/2))) * 4
 	v, err := g.pagedPlanFor(bs, keys)
 	if err != nil {
 		t.Fatalf("a %d-split plan did not fit and no narrower one was tried: %v", want.Splits, err)

@@ -1,6 +1,8 @@
 package compose
 
-import "github.com/jitllm/jitllm/jit/gpu/kernels"
+import (
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
+)
 
 // The op emitters: each appends one op's fragment -- its loads, its math, its
 // stores -- to a group, as a function of the element it is handed. The kernel

@@ -13,6 +13,7 @@ import (
 	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestMatVecRealWeights runs the GPU kernel over real model tensors of every
@@ -101,7 +102,7 @@ func realCase(t *testing.T, d backend.Device, q kernels.Quant, w []byte, nrows, 
 	}
 	ax := append(append([]float32{}, as...), asum...)
 
-	ker, err := kernels.MatVec(kernels.MatVecShape{T: q, K: k, Rows: nrows, Split: split, Rowt: rowt})
+	ker, err := oldkernels.MatVec(oldkernels.MatVecShape{T: q, K: k, Rows: nrows, Split: split, Rowt: rowt})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +149,7 @@ func realCase(t *testing.T, d backend.Device, q kernels.Quant, w []byte, nrows, 
 		t.Fatal(err)
 	}
 	if split > 1 {
-		rk, err := kernels.Reduce(nrows, split)
+		rk, err := oldkernels.Reduce(nrows, split)
 		if err != nil {
 			t.Fatal(err)
 		}

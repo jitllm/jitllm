@@ -28,6 +28,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 type resident struct {
@@ -106,7 +107,7 @@ type kernKey struct {
 	// group is the in-group split reduction: the kernel writes the final row
 	// instead of a partial plane, a different output contract.
 	group bool
-	// gated is a Gate matvec (kernels.MatVecShape.Gate) and act its activation:
+	// gated is a Gate matvec (oldkernels.MatVecShape.Gate) and act its activation:
 	// one more parameter and a different output, so its own entry.
 	gated bool
 	act   kernels.ActKind
@@ -168,12 +169,12 @@ type Config struct {
 	// NoKT refuses the transposed device K cache, leaving [position][head][dim].
 	NoKT bool
 	// NoFuse issues each fused kernel's parts one launch at a time
-	// (kernels.RoPEQKVPaged's three writers): the per-op reference path, the
+	// (oldkernels.RoPEQKVPaged's three writers): the per-op reference path, the
 	// A/B arm and the bisection switch for a fused kernel.
 	NoFuse bool
 	// NoActFuse keeps the decode matvecs reading an operand quantized by a
 	// launch of its own (Quantize, RMSNormQuantRows) instead of building it in
-	// their prologue (kernels.ActIn): the A/B arm and bisection switch for
+	// their prologue (oldkernels.ActIn): the A/B arm and bisection switch for
 	// the operand prologue alone. NoFuse turns it off too.
 	NoActFuse bool
 	// NoAddNormFold keeps a prompt chunk's block-end residual add a launch
@@ -181,9 +182,9 @@ type Config struct {
 	// (the binary16 GEMM path's add-and-norm kernel): the A/B arm.
 	NoAddNormFold bool
 	// GateUp2 runs a dense gated FFN's gate and up as one Gate2 matvec
-	// (kernels.MatVecShape.Gate2): each workgroup sums its rows of both
+	// (oldkernels.MatVecShape.Gate2): each workgroup sums its rows of both
 	// matrices over the one operand and writes act(gate)*up: the bits the
-	// gate's launch and up's gated launch write on PTX (kernels.Gate2Exact),
+	// gate's launch and up's gated launch write on PTX (oldkernels.Gate2Exact),
 	// the reduction-order band elsewhere. On by default, taken per shape where
 	// this device's tuner finds it faster (tuneFFN).
 	GateUp2 bool
@@ -196,7 +197,7 @@ type Config struct {
 	// device's tuner chose (gateUp2Pick): the A/B arm and the gates.
 	GateUp2Force bool
 	// ActInPrefetch is how many weight words each thread of an operand-prologue
-	// matvec prefetches before its prologue (kernels.ActIn.Prefetch): 0 is the
+	// matvec prefetches before its prologue (oldkernels.ActIn.Prefetch): 0 is the
 	// default (8), -1 none.
 	ActInPrefetch int
 	// ActInSites picks which matvecs take the operand prologue, a bit each:
@@ -206,13 +207,13 @@ type Config struct {
 	// NoMMA refuses the warp matrix instruction, leaving the dp4a tile. It is
 	// the bisection switch for a wrong answer that only the matrix path shows.
 	NoMMA bool
-	// NoVolta refuses sm_70's f16 tensor-core matvec (kernels.MatVecMMA70),
+	// NoVolta refuses sm_70's f16 tensor-core matvec (oldkernels.MatVecMMA70),
 	// which a card without the integer matrix instruction -- or NoMMA -- takes
 	// before the dp4a tile, and the m16n8 binary16 GEMM (devTier.f16Gemm) that
 	// sm_75 and later take before MatVecMMA. The A/B arm and the bisection
 	// switch for both.
 	//
-	// It refuses Metal's kernels.GemmTile too (tileMV, tileMoE): both are the
+	// It refuses Metal's oldkernels.GemmTile too (tileMV, tileMoE): both are the
 	// binary16-activation twin of the int8 matvec, and a gate that holds the
 	// device to the int8 path's precision (model's hybrid batch gate) asks for
 	// that with this one knob on every backend.
@@ -227,7 +228,7 @@ type Config struct {
 	// device program (devprog.go): the A/B arm and the bisection switch.
 	NoProgram bool
 	// PreferGemmInt8 puts a prompt chunk's matvecs on the staged int8 GEMM
-	// (kernels.GemmInt8, sm_80 on) ahead of the m16n8 binary16 GEMM. Off by
+	// (oldkernels.GemmInt8, sm_80 on) ahead of the m16n8 binary16 GEMM. Off by
 	// default: on an L4 and an A100 the binary16 GEMM read Llama-3.2-1B's
 	// prompt at 0.75 and 0.91 of llama.cpp where this one read 0.67 and 0.78
 	// (gpu-kernels.md "The sm_80+ prompt"). The A/B arm.
@@ -236,8 +237,8 @@ type Config struct {
 	// GEMM shape they divide (1) or off (-1); 0 leaves it to tuneGemm's
 	// measurement. The A/B arm and the gate's selection switch.
 	GemmDeep int
-	// PreferTiles puts the collective-tile prompt kernels (kernels.GemmTile,
-	// kernels.FlashPrefillTile) ahead of a backend's own -- the m16n8 GEMMs
+	// PreferTiles puts the collective-tile prompt kernels (oldkernels.GemmTile,
+	// oldkernels.FlashPrefillTile) ahead of a backend's own -- the m16n8 GEMMs
 	// and FlashPrefill80 on CUDA -- wherever the device lowers the tiles. Off
 	// by default: it is the arm that gates and measures the IR path on a card
 	// that has a faster special case.
@@ -292,27 +293,27 @@ type Config struct {
 	// Prefill, MLA, vision and devices without guaranteed 32-lane subgroups use
 	// the staged path. Configure before placing layers; default is disabled.
 	FlashAttention bool
-	// FlashKV runs that decode attention as kernels.FlashDecodeKV -- one
+	// FlashKV runs that decode attention as oldkernels.FlashDecodeKV -- one
 	// workgroup per KV head and key partition, serving the GQA group -- in
-	// place of kernels.FlashAttention's one warp per query head. It implies
+	// place of oldkernels.FlashAttention's one warp per query head. It implies
 	// FlashAttention; FlashSplit is then a floor, raised until every key of
 	// MaxSeq has a partition to land in.
 	FlashKV bool
-	// FlashGroup is FlashKV's query heads per workgroup (kernels.FlashShape.Group);
+	// FlashGroup is FlashKV's query heads per workgroup (oldkernels.FlashShape.Group);
 	// 0 serves a whole GQA group, 1 one head.
 	FlashGroup int
 	// NoFlashKV keeps decode attention on the staged kernels (scores, softmax,
 	// split accumulate, reduce) on CUDA and Metal, where FlashKV is the default.
 	NoFlashKV bool
 	// FlashWarps is FlashKV's workgroup width in warps
-	// (kernels.FlashShape.Warps); 0 is the kernel's default.
+	// (oldkernels.FlashShape.Warps); 0 is the kernel's default.
 	FlashWarps int
 	// SharedRec keeps the device's recurrent pools in the shared form even
 	// when two halves would fit -- the other arm of that form's gates.
 	SharedRec bool
 	// NoFlashPrefill keeps batched attention on its three-kernel form (scores,
-	// softmax, accumulate) instead of kernels.FlashPrefill70 on sm_70 and
-	// kernels.FlashPrefillTile on Metal -- the other arm of those kernels'
+	// softmax, accumulate) instead of oldkernels.FlashPrefill70 on sm_70 and
+	// oldkernels.FlashPrefillTile on Metal -- the other arm of those kernels'
 	// gates and measurements.
 	NoFlashPrefill bool
 	// NoRagPrefill keeps a ragged step's prompt chunks on the decode plan, a
@@ -324,14 +325,14 @@ type Config struct {
 	// reports spilling (backend.KernelResources.SpillBytes) is passed over
 	// for the next one that divides the shape; this is the other arm.
 	SpillingTiles bool
-	// DecodePlanOff puts pieces of kernels.ChooseDecodePlan back as the tier
+	// DecodePlanOff puts pieces of oldkernels.ChooseDecodePlan back as the tier
 	// had them before it, for the plan's A/B: 1 the split count (the square
 	// root, the cap rounded down, the default width), 2 the group-per-item
 	// merge, 4 no vector V loads; 7 is the whole old rule. It always decodes
 	// through FlashDecodeKV.
 	DecodePlanOff int
 	// StagedDecode runs every paged decode through the staged kernels, the
-	// path kernels.ChooseDecodePlan takes only at depth: the gates' way to
+	// path oldkernels.ChooseDecodePlan takes only at depth: the gates' way to
 	// run it on a short history, and the other arm of the plan's A/B.
 	StagedDecode bool
 	// PrefillPass is the most keys one staged paged prefill launch attends
@@ -573,7 +574,7 @@ type Config struct {
 	// limit; zero takes the limit, or the widest launch's groups when fewer.
 	PersistGrid int
 	// GateUpFuse runs a dense gated FFN's gate and up as one launch over
-	// their shared operand (kernels.MatVecSegments) and has down form
+	// their shared operand (oldkernels.MatVecSegments) and has down form
 	// act(gate)*up and quantize it in its prologue: three launches where there
 	// were four, every row reduced as before. Off by default.
 	GateUpFuse bool
@@ -610,7 +611,7 @@ type Config struct {
 	// rather than running it row-chunked (chunkTower, LayersPhase).
 	NoTowerChunks bool
 	// NoPickMV runs the label pick as the head's whole matvec and a gather
-	// (the arm before kernels.MatVec's PickOf), for the A/B.
+	// (the arm before oldkernels.MatVec's PickOf), for the A/B.
 	NoPickMV bool
 	// ScalarSoftmax runs the thread-per-head softmax instead of the warp
 	// reduction, the other arm of that comparison. It is ignored on a device
@@ -800,17 +801,17 @@ type Stats struct {
 	// ran, and Q4ENGram its n-gram embeddings (q4e.go).
 	Q4EMixes, Q4ENGram int
 	// LinearBatched counts recurrent (linear-attention) blocks a batched chunk
-	// ran through the chunked delta rule (kernels.GatedDeltaScan) rather than
+	// ran through the chunked delta rule (oldkernels.GatedDeltaScan) rather than
 	// one row at a time.
 	LinearBatched int
 	// LinearFused counts recurrent blocks whose rule ran as ONE launch from the
-	// convolution's output (kernels.GatedDeltaFused) -- decode or chunk.
+	// convolution's output (oldkernels.GatedDeltaFused) -- decode or chunk.
 	LinearFused int
 	// RecShared counts recurrent pools sized in the shared form (recpool.go):
 	// one resident state a slot and the device's next-state scratch.
 	RecShared int
 	// VoltaMV counts batched matvecs built on sm_70's f16 tensor cores
-	// (kernels.MatVecMMA70); a refused shape falls to dp4a with the same answer.
+	// (oldkernels.MatVecMMA70); a refused shape falls to dp4a with the same answer.
 	VoltaMV int
 	// RagGroupMV counts a few-sequence decode step's matvecs run as the decode
 	// matvec with every token in one thread (groupMV) rather than a tiled twin.
@@ -835,7 +836,7 @@ type Stats struct {
 	// card and those whose verdict is not the device's default recipe.
 	FFNTimed, FFNKept int
 	// NormGateRuns counts gated output norms run as one launch (graph.NormGate,
-	// kernels.HeadNormGated); NormGateTimed and NormGateKept the shape keys
+	// oldkernels.HeadNormGated); NormGateTimed and NormGateKept the shape keys
 	// tuneNormGate decided and those it kept the fused launch on.
 	NormGateRuns, NormGateTimed, NormGateKept int
 	// MoENarrowScratches counts batched mixture scratches built with the
@@ -869,7 +870,7 @@ type Stats struct {
 	// token, and the penalty's when it runs.
 	SampleLaunches int
 	// VoltaGemm counts those of them that are the shared-memory-staged
-	// kernels.GemmVolta rather than MatVecMMA70.
+	// oldkernels.GemmVolta rather than MatVecMMA70.
 	VoltaGemm int
 	// SpillRefused counts GemmVolta tiles compiled and passed over because
 	// the compiler reported them spilling (Config.SpillingTiles).
@@ -882,7 +883,7 @@ type Stats struct {
 	// TuneTrials counts the timed trials of the tuners on the device's path,
 	// and BgTuneTrials those WithLazyTune's background tuner timed beside it.
 	TuneTrials, BgTuneTrials int64
-	// GemmInt8 counts batched matvecs built as kernels.GemmInt8, the staged
+	// GemmInt8 counts batched matvecs built as oldkernels.GemmInt8, the staged
 	// int8 GEMM (sm_80 on, devTier.int8Gemm).
 	GemmInt8 int
 	// NormF16, ActF16Fused and QuantActs count a prompt chunk's fused operand
@@ -917,7 +918,7 @@ type Stats struct {
 	// the residual in the bias slot, instead of a separate Add launch.
 	ResidualFused int
 	// ResidScaled counts residual adds that scaled the block output first
-	// (Granite's residual_scale, kernels.AddScaled): the selection check that
+	// (Granite's residual_scale, oldkernels.AddScaled): the selection check that
 	// a scaled model's blocks took the scaled add rather than a fused one.
 	ResidScaled int
 	// RowtSplitTiles counts the ones built with both a tile and a k-split, the
@@ -1068,11 +1069,11 @@ type Stats struct {
 	// FlashLaunches counts encoded fused-attention launches (not graph replays).
 	FlashLaunches int
 	// FusedLaunches counts encoded launches of a kernel that stands for
-	// several (kernels.RoPEQKVPaged), not graph replays: the selection check
+	// several (oldkernels.RoPEQKVPaged), not graph replays: the selection check
 	// that the fused form ran rather than its parts.
 	FusedLaunches int
 	// ActInLaunches counts encoded matvec launches that built their own operand
-	// (kernels.ActIn), and ActInSaved the norm or quantize launches they
+	// (oldkernels.ActIn), and ActInSaved the norm or quantize launches they
 	// replaced: the selection check that the prologue ran.
 	ActInLaunches, ActInSaved int
 	// ActInDeclined counts prologue kernels the device would not launch at
@@ -1188,18 +1189,18 @@ type Stats struct {
 	// kept zeros could not be had on the device (recZeroLayers).
 	RecZeroHost int
 	// PagedStagedLaunches counts decode attentions that ran the staged
-	// kernels rather than FlashDecodeKV (kernels.ChooseDecodePlan).
+	// kernels rather than FlashDecodeKV (oldkernels.ChooseDecodePlan).
 	PagedStagedLaunches int
 	// PagedPrefill70 counts those prefill launches on sm_70's m8n8k4 pair
 	// (PagedAttnScoresMMA70/PagedAttnAccMMA70): the selection check that a
 	// prompt on an sm_70 card took the tensor cores, latent blocks included.
 	PagedPrefill70 int
 	// PagedAccMMA counts prefill launches whose accumulate ran on the m16n8k8
-	// binary16 instruction (kernels.PagedAttnAccMMA, sm_75 on): the selection
+	// binary16 instruction (oldkernels.PagedAttnAccMMA, sm_75 on): the selection
 	// check that the weighted sum of V left the FMA tiles.
 	PagedAccMMA int
 	// FlashPrefill80 counts prompt attention launches of
-	// kernels.FlashPrefill80, scores, softmax and accumulate in one kernel
+	// oldkernels.FlashPrefill80, scores, softmax and accumulate in one kernel
 	// on m16n8k16 (sm_80 on).
 	FlashPrefill80 int
 	// RagPrefills counts run-table prefill launches inside ragged steps
@@ -1226,7 +1227,7 @@ type Stats struct {
 	// projection (pickMV) instead of the whole head and a gather.
 	PickRows int
 	// FlashPrefills counts batched attention launches of a one-kernel form
-	// (kernels.FlashPrefill70, FlashPrefillTile), paged or not.
+	// (oldkernels.FlashPrefill70, FlashPrefillTile), paged or not.
 	FlashPrefills int
 	// VisionAttnChunks counts the query chunks vision blocks ran their
 	// attention in (visionattn.go) -- the selection check that a large image's
@@ -1234,7 +1235,7 @@ type Stats struct {
 	VisionAttnChunks int
 	// MMAWhy is what the device said when it refused the matrix instruction.
 	MMAWhy string
-	// TileMV counts batched matvecs built as kernels.GemmTile (binary16 tiles
+	// TileMV counts batched matvecs built as oldkernels.GemmTile (binary16 tiles
 	// on Metal's simdgroup_matrix), and TileWhy is what the device said if it
 	// refused them.
 	TileMV  int
@@ -1296,7 +1297,7 @@ type Stats struct {
 	// packed because the staging would not hold them (the budget refused the
 	// buffer, or the tensor is wider than any block's; see rawCap). One is a
 	// kernel to write, the other a budget. UnpackWhy is the reason in the
-	// kernel table's own words (kernels.UnpackWhyNot).
+	// kernel table's own words (oldkernels.UnpackWhyNot).
 	NoUnpackKernel int
 	NoUnpackRoom   int
 	UnpackWhy      string
@@ -1989,7 +1990,7 @@ type devShared struct {
 	ord   int
 	kerns map[kernKey]backend.Kernel
 	// idKerns is the indexed matvecs, by their whole shape; see idKernel.
-	idKerns map[kernels.MatVecShape]backend.Kernel
+	idKerns map[oldkernels.MatVecShape]backend.Kernel
 	res     map[resKey]*resident
 	splits  map[splitKey]int
 	// gemmDeep is tuneGemm's verdict per prompt GEMM shape: true where the
@@ -2036,8 +2037,8 @@ type devShared struct {
 	// lastSub is when the device last started or finished a submission
 	// (unix ns): the background tuner waits for tuneQuiet past it.
 	lastSub   atomic.Int64
-	restrides map[[4]int]backend.Kernel // kernels.Restride by shape; see copyKVAcrossStride
-	segKerns  map[string]backend.Kernel // kernels.MatVecSegments by shapes; see fuseQKV
+	restrides map[[4]int]backend.Kernel // oldkernels.Restride by shape; see copyKVAcrossStride
+	segKerns  map[string]backend.Kernel // oldkernels.MatVecSegments by shapes; see fuseQKV
 	// actInWin is tuneActIn's verdict per operand-prologue site key: true where
 	// the prologue measured faster than the two launches on this card.
 	// actInTrial makes fuseActIn build every candidate for that measurement.
@@ -2085,14 +2086,14 @@ type devShared struct {
 	KevHeads int64
 	convN    int
 	ragSeg   map[segShapeKey]segLaunch // a few-sequence step's q/k/v; see groupQKV
-	argmaxK  backend.Kernel            // kernels.Argmax over the head's rows; see PrepHead
+	argmaxK  backend.Kernel            // oldkernels.Argmax over the head's rows; see PrepHead
 	// samplePenK and sampleKs are the device sampler's kernels: the penalty
 	// over the head's rows and, per k, the two top-k passes (sample.go).
 	samplePenK backend.Kernel
 	sampleKs   map[int]sampleKerns
 	// pickK is the label pick's gather over the head's rows (pick.go).
 	pickK backend.Kernel
-	// pickMV projects the picked rows of the head alone (kernels.MatVec's
+	// pickMV projects the picked rows of the head alone (oldkernels.MatVec's
 	// PickOf), in place of the head's whole matvec and pickK's gather; nil
 	// where the head's format or a cap needs the whole row.
 	pickMV backend.Kernel
@@ -2182,7 +2183,7 @@ type devShared struct {
 	// first refusal is the last: it is a property of the backend, not of a
 	// shape.
 	mmaOff bool
-	// tileOff records that this device refused kernels.GemmTile; see tileMV.
+	// tileOff records that this device refused oldkernels.GemmTile; see tileMV.
 	tileOff bool
 	// prefillRefused are the staged prefill forms this device refused to
 	// compile, by row width (initPagedPrefill).
@@ -3133,7 +3134,7 @@ func (g *devTier) matVecSession(sess backend.Session) {
 		dst = g.mvPart
 	}
 	// A float weight reads the float activation in the scale plane's slot
-	// (kernels.MatVec), written every call: it is k floats.
+	// (oldkernels.MatVec), written every call: it is k floats.
 	d := c.r.d
 	if c.float {
 		if c.err = sess.Write(g.xfBuf, f32b(c.x[:k])); c.err != nil {
@@ -3344,7 +3345,7 @@ func (g *devTier) resident(block, slot int, q kernels.Quant, w []byte, nrows, k 
 
 	// The device unpack comes before the arena: the upload is roughly the file's
 	// bytes and the card extracts far faster than the host packs (see
-	// kernels.Unpack and arena.go). It is below the importing() branch because
+	// oldkernels.Unpack and arena.go). It is below the importing() branch because
 	// on a unified heap the pack is the device buffer, so the arena wins there.
 	// A false is a counted fallback (NoUnpackKernel, NoUnpackRoom), not a
 	// decline: the host path below produces the same bytes.
@@ -3575,7 +3576,7 @@ func (g *devTier) kernel(q kernels.Quant, k, rows, split, rowt int, bias bool) b
 }
 
 // kernelMode is kernel with the in-group split reduction selectable. See
-// kernels.MatVecShape.GroupSplit: it removes the partial buffer and the Reduce
+// oldkernels.MatVecShape.GroupSplit: it removes the partial buffer and the Reduce
 // launch, which wins on small matvecs and loses on big-k ones, so it is chosen
 // per shape by tuneSplit rather than switched on.
 func (g *devTier) kernelMode(q kernels.Quant, k, rows, split, rowt int, bias, groupSplit bool) backend.Kernel {
@@ -3583,7 +3584,7 @@ func (g *devTier) kernelMode(q kernels.Quant, k, rows, split, rowt int, bias, gr
 	if c, ok := g.kerns[kk]; ok {
 		return c
 	}
-	ker, err := kernels.MatVec(kernels.MatVecShape{Center: g.center, T: q, K: k, Rows: rows, Split: split,
+	ker, err := oldkernels.MatVec(oldkernels.MatVecShape{Center: g.center, T: q, K: k, Rows: rows, Split: split,
 		Bias: bias, Rowt: rowt, GroupSplit: groupSplit})
 	if err != nil {
 		g.kerns[kk], g.LastErr = nil, err.Error()
@@ -3606,11 +3607,11 @@ func (g *devTier) kernelMode(q kernels.Quant, k, rows, split, rowt int, bias, gr
 // mixture asks for the same few shapes, so they share one kernel, which Close
 // closes: a kernel compiled per block and kept by the block was closed by
 // nothing, since ReleaseLayers leaves kernels to the caches.
-func (g *devTier) idKernel(s kernels.MatVecShape) (backend.Kernel, error) {
+func (g *devTier) idKernel(s oldkernels.MatVecShape) (backend.Kernel, error) {
 	if c, ok := g.idKerns[s]; ok {
 		return c, nil
 	}
-	ker, err := kernels.MatVec(s)
+	ker, err := oldkernels.MatVec(s)
 	if err != nil {
 		return nil, err
 	}
@@ -3619,7 +3620,7 @@ func (g *devTier) idKernel(s kernels.MatVecShape) (backend.Kernel, error) {
 		return nil, err
 	}
 	if g.idKerns == nil {
-		g.idKerns = map[kernels.MatVecShape]backend.Kernel{}
+		g.idKerns = map[oldkernels.MatVecShape]backend.Kernel{}
 	}
 	g.idKerns[s] = c
 	return c, nil
@@ -3635,7 +3636,7 @@ func (g *devTier) gatedKernel(q kernels.Quant, k, rows, split int, groupSplit bo
 	if c, ok := g.kerns[kk]; ok {
 		return c
 	}
-	ker, err := kernels.MatVec(kernels.MatVecShape{Center: g.center, T: q, K: k, Rows: rows, Split: split,
+	ker, err := oldkernels.MatVec(oldkernels.MatVecShape{Center: g.center, T: q, K: k, Rows: rows, Split: split,
 		GroupSplit: groupSplit, Gate: true, GateAct: act})
 	if err != nil {
 		g.kerns[kk], g.LastErr = nil, err.Error()
@@ -3652,7 +3653,7 @@ func (g *devTier) gatedKernel(q kernels.Quant, k, rows, split int, groupSplit bo
 }
 
 // gate2Kernel is the FFN up projection summing the gate's row beside its own
-// and writing act(gate)*up (kernels.MatVecShape.Gate2), or nil where the
+// and writing act(gate)*up (oldkernels.MatVecShape.Gate2), or nil where the
 // backend cannot make it exact or the split writes partials.
 func (g *devTier) gate2Kernel(q kernels.Quant, k, rows, split int, groupSplit bool, act kernels.ActKind) backend.Kernel {
 	if split > 1 && !groupSplit || kernels.IsFloat(q) {
@@ -3662,7 +3663,7 @@ func (g *devTier) gate2Kernel(q kernels.Quant, k, rows, split int, groupSplit bo
 	if c, ok := g.kerns[kk]; ok {
 		return c
 	}
-	ker, err := kernels.MatVec(kernels.MatVecShape{Center: g.center, T: q, K: k, Rows: rows, Split: split,
+	ker, err := oldkernels.MatVec(oldkernels.MatVecShape{Center: g.center, T: q, K: k, Rows: rows, Split: split,
 		GroupSplit: groupSplit, Gate2: true, GateAct: act})
 	if err != nil {
 		g.kerns[kk], g.LastErr = nil, err.Error()
@@ -3686,7 +3687,7 @@ func (g *devTier) reduceKernel(rows, split int) backend.Kernel {
 	if c, ok := g.reduce[key]; ok {
 		return c
 	}
-	ker, err := kernels.Reduce(rows, split)
+	ker, err := oldkernels.Reduce(rows, split)
 	if err != nil {
 		g.reduce[key] = nil
 		return nil

@@ -10,9 +10,10 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
-// TestQuantizePaddedMatchesTheHost holds kernels.QuantizePadded -- rows of k
+// TestQuantizePaddedMatchesTheHost holds oldkernels.QuantizePadded -- rows of k
 // floats quantized as rows of kp whose columns past k are zero, the
 // activation of a matrix packed at kp (a tower 144 wide) -- to the host's
 // quantizer over the same rows padded with zeros, bit for bit, on ragged
@@ -98,7 +99,7 @@ func TestQuantizePaddedMatchesTheHost(t *testing.T) {
 
 func quantPadded(t *testing.T, d backend.Device, x []float32, rows, k, kp, window int) ([]byte, []float32) {
 	t.Helper()
-	kern, err := kernels.QuantizePadded(rows, k, kp, window)
+	kern, err := oldkernels.QuantizePadded(rows, k, kp, window)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +108,7 @@ func quantPadded(t *testing.T, d backend.Device, x []float32, rows, k, kp, windo
 
 func quantDense(t *testing.T, d backend.Device, x []float32, window int) ([]byte, []float32) {
 	t.Helper()
-	kern, err := kernels.Quantize(len(x), window)
+	kern, err := oldkernels.Quantize(len(x), window)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +140,7 @@ func quantRun(t *testing.T, d backend.Device, kern *ir.Kernel, x []float32, n in
 	}
 	nan[nax] = math.Float32frombits(0xA5A5A5A5)
 	bx, ba, bax := g.up(f32bytes(x)), g.up(poison), g.up(f32bytes(nan))
-	if err := kk.Launch((kernels.QuantizeThreads(n/32)+127)/128, 128, bx, ba, bax); err != nil {
+	if err := kk.Launch((oldkernels.QuantizeThreads(n/32)+127)/128, 128, bx, ba, bax); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 	got := make([]byte, n+4)

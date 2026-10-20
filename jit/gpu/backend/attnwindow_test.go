@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestAttnScoresWindowMasksExactlyTheOldKeys holds every windowed scores kernel
@@ -68,11 +68,11 @@ func windowCase(t *testing.T, d backend.Device, kind string, nHeads, headDim, nK
 		var err error
 		switch kind {
 		case "decode":
-			k, err = kernels.AttnScoresTiledW(nHeads, headDim, kvDim, gqa, sstride, scale, 1, 1, 1, kStride, window)
+			k, err = oldkernels.AttnScoresTiledW(nHeads, headDim, kvDim, gqa, sstride, scale, 1, 1, 1, kStride, window)
 		case "tiled":
-			k, err = kernels.AttnScoresTiledW(nHeads, headDim, kvDim, gqa, sstride, scale, rows, 4, 2, kStride, window)
+			k, err = oldkernels.AttnScoresTiledW(nHeads, headDim, kvDim, gqa, sstride, scale, rows, 4, 2, kStride, window)
 		case "mma":
-			k, err = kernels.AttnScoresMMAW(nHeads, headDim, kvDim, gqa, sstride, scale, rows, kStride, 1, window)
+			k, err = oldkernels.AttnScoresMMAW(nHeads, headDim, kvDim, gqa, sstride, scale, rows, kStride, 1, window)
 		}
 		if err != nil {
 			t.Fatal(err)

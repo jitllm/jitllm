@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestConv3CentredMatchesTheLoop runs LFM2's encoder convolution on every
@@ -49,7 +49,7 @@ func TestConv3CentredMatchesTheLoop(t *testing.T) {
 					want[r*tc.chans+c] = v
 				}
 			}
-			k, err := kernels.Conv3Centred(tc.chans, tc.rows)
+			k, err := oldkernels.Conv3Centred(tc.chans, tc.rows)
 			got := convRun(t, d, k, err, tc.rows*tc.chans, tc.rows*tc.chans, x, w, win)
 			convCheck(t, d.Name(), got, want, 1e-5)
 		}

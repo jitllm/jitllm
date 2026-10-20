@@ -3,7 +3,7 @@ package tier
 import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // The device sampler (nn.Head.SampleK): after the head, the repeat penalty
@@ -31,14 +31,14 @@ type sampleKerns struct{ p1, p2 backend.Kernel }
 func (g *devTier) prepSample(head *nn.Head) bool {
 	n, k := head.W.Rows, head.SampleK
 	if k < 1 || k >= n || k > sampleMaxK || len(head.SampleVals) < k || len(head.SampleIDs) < k ||
-		len(head.SampleArgs) < 2 || len(head.SampleArgs) > kernels.SampleArgsWords(sampleMaxHist) ||
+		len(head.SampleArgs) < 2 || len(head.SampleArgs) > oldkernels.SampleArgsWords(sampleMaxHist) ||
 		int(head.SampleArgs[0]) != len(head.SampleArgs)-2 {
 		return false
 	}
 	w := g.scratchWin()
 	defer w.close()
 	if g.samplePenK == nil {
-		kk, err := kernels.SamplePenalty(n)
+		kk, err := oldkernels.SamplePenalty(n)
 		if err != nil {
 			return false
 		}
@@ -50,12 +50,12 @@ func (g *devTier) prepSample(head *nn.Head) bool {
 		g.samplePenK = c
 	}
 	if _, ok := g.sampleKs[k]; !ok {
-		groups := kernels.SampleSlices(n)
-		k1, err := kernels.SampleTopK(n, kernels.SampleSlice, k, false)
+		groups := oldkernels.SampleSlices(n)
+		k1, err := oldkernels.SampleTopK(n, oldkernels.SampleSlice, k, false)
 		if err != nil {
 			return false
 		}
-		k2, err := kernels.SampleTopK(groups*k, groups*k, k, true)
+		k2, err := oldkernels.SampleTopK(groups*k, groups*k, k, true)
 		if err != nil {
 			return false
 		}
@@ -79,8 +79,8 @@ func (g *devTier) prepSample(head *nn.Head) bool {
 	if l.sampleArgs != nil {
 		return true
 	}
-	cand := kernels.SampleSlices(n) * sampleMaxK
-	sizes := [...]int{4 * kernels.SampleArgsWords(sampleMaxHist), 4 * n, 4 * cand, 4 * cand, 4 * sampleMaxK, 4 * sampleMaxK}
+	cand := oldkernels.SampleSlices(n) * sampleMaxK
+	sizes := [...]int{4 * oldkernels.SampleArgsWords(sampleMaxHist), 4 * n, 4 * cand, 4 * cand, 4 * sampleMaxK, 4 * sampleMaxK}
 	var bufs [len(sizes)]backend.Buf
 	for i, sz := range sizes {
 		b, err := g.dev.Alloc(sz)
@@ -102,20 +102,20 @@ func (g *devTier) prepSample(head *nn.Head) bool {
 // penalty when it is on (pen), then the two top-k passes.
 func (g *devTier) launchSample(lc *launcher, logits backend.Buf, n, k int, pen bool) error {
 	ks := g.sampleKs[k]
-	groups := kernels.SampleSlices(n)
+	groups := oldkernels.SampleSlices(n)
 	src := logits
 	if pen {
-		if err := lc.launch(g.samplePenK, kernels.SampleGroups(n), kernels.SampleGroup,
+		if err := lc.launch(g.samplePenK, oldkernels.SampleGroups(n), oldkernels.SampleGroup,
 			logits, g.sampleArgs, g.samplePen); err != nil {
 			return err
 		}
 		src = g.samplePen
 	}
-	if err := lc.launch(ks.p1, groups, kernels.SampleGroup,
+	if err := lc.launch(ks.p1, groups, oldkernels.SampleGroup,
 		src, src, g.sampleV1, g.sampleI1); err != nil {
 		return err
 	}
-	return lc.launch(ks.p2, 1, kernels.SampleGroup, g.sampleV1, g.sampleI1, g.sampleV, g.sampleI)
+	return lc.launch(ks.p2, 1, oldkernels.SampleGroup, g.sampleV1, g.sampleI1, g.sampleV, g.sampleI)
 }
 
 // freeSample gives back the lane's sampler buffers.

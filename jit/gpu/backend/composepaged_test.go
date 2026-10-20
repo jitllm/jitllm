@@ -9,7 +9,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestComposedPagedWritesMatchTheMenu holds the paged history's row writes,
@@ -52,10 +52,10 @@ func TestComposedPagedWritesMatchTheMenu(t *testing.T) {
 		}
 		out := g.Buf(kind)
 		pid, off := g.PagedPos(d, tb, page)
-		if wordFrom != kernels.PRowWrite {
-			base := g.UBin(compose.OpMul, g.RowIdx(), g.UConst(kernels.PRowWords))
+		if wordFrom != oldkernels.PRowWrite {
+			base := g.UBin(compose.OpMul, g.RowIdx(), g.UConst(oldkernels.PRowWords))
 			pos := g.LoadAt(d, g.UBin(compose.OpAdd, base, g.UConst(wordFrom)))
-			first := g.LoadAt(d, g.UBin(compose.OpAdd, base, g.UConst(kernels.PRowTab)))
+			first := g.LoadAt(d, g.UBin(compose.OpAdd, base, g.UConst(oldkernels.PRowTab)))
 			pid = g.LoadAt(tb, g.UBin(compose.OpAdd, first, g.UBin(compose.OpDiv, pos, g.UConst(page))))
 			off = g.UBin(compose.OpRem, pos, g.UConst(page))
 		}
@@ -111,9 +111,9 @@ func TestComposedPagedWritesMatchTheMenu(t *testing.T) {
 				var err error
 				n := rows * width
 				if c.kpool {
-					menu, err = kernels.PagedCopyRowsT(width, rows, page)
+					menu, err = oldkernels.PagedCopyRowsT(width, rows, page)
 				} else {
-					menu, err = kernels.PagedCopyRows(width, rows, page, width, 0, c.f16)
+					menu, err = oldkernels.PagedCopyRows(width, rows, page, width, 0, c.f16)
 					if c.f16 {
 						n /= 2
 					}
@@ -122,10 +122,10 @@ func TestComposedPagedWritesMatchTheMenu(t *testing.T) {
 					t.Fatal(err)
 				}
 				want := run(menu, (n+127)/128, true)
-				if got := run(build(c.f16, c.kpool, kernels.PRowWrite), rows, false); !bytes.Equal(got, want) {
+				if got := run(build(c.f16, c.kpool, oldkernels.PRowWrite), rows, false); !bytes.Equal(got, want) {
 					t.Errorf("%s: the composed paged write parts from the menu's", c.name)
 				}
-				if got := run(build(c.f16, c.kpool, kernels.PRowStart), rows, false); bytes.Equal(got, want) {
+				if got := run(build(c.f16, c.kpool, oldkernels.PRowStart), rows, false); bytes.Equal(got, want) {
 					t.Errorf("%s: a write at the row's start position matched", c.name)
 				}
 			}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestFloatMatVecBelowItsSubBlock runs a float matvec whose k is below the
@@ -77,14 +78,14 @@ func TestFloatMatVecBelowItsSubBlockIsGated(t *testing.T) {
 func TestMatVecSubIsRefusedWhereItCannotHold(t *testing.T) {
 	for _, c := range []struct {
 		name string
-		s    kernels.MatVecShape
+		s    oldkernels.MatVecShape
 	}{
-		{"quantized", kernels.MatVecShape{T: kernels.Q4_K, K: 256, Rows: 64, Sub: 16}},
-		{"not a multiple of four", kernels.MatVecShape{T: kernels.Float32, K: 18, Rows: 8, Sub: 18}},
-		{"does not divide k", kernels.MatVecShape{T: kernels.Float32, K: 20, Rows: 8, Sub: 8}},
-		{"wider than the format's own", kernels.MatVecShape{T: kernels.Float32, K: 64, Rows: 8, Sub: 64}},
+		{"quantized", oldkernels.MatVecShape{T: kernels.Q4_K, K: 256, Rows: 64, Sub: 16}},
+		{"not a multiple of four", oldkernels.MatVecShape{T: kernels.Float32, K: 18, Rows: 8, Sub: 18}},
+		{"does not divide k", oldkernels.MatVecShape{T: kernels.Float32, K: 20, Rows: 8, Sub: 8}},
+		{"wider than the format's own", oldkernels.MatVecShape{T: kernels.Float32, K: 64, Rows: 8, Sub: 64}},
 	} {
-		if _, err := kernels.MatVec(c.s); err == nil {
+		if _, err := oldkernels.MatVec(c.s); err == nil {
 			t.Fatalf("%s: MatVec accepted Sub=%d for %v K=%d", c.name, c.s.Sub, c.s.T, c.s.K)
 		} else {
 			t.Logf("%s: refused by name -- %v", c.name, err)
@@ -92,7 +93,7 @@ func TestMatVecSubIsRefusedWhereItCannotHold(t *testing.T) {
 	}
 	// And the shape the whole field exists for is accepted, or the four
 	// refusals above would be a gate on a capability that does not exist.
-	if _, err := kernels.MatVec(kernels.MatVecShape{T: kernels.Float32, K: 16, Rows: 16, Sub: 16}); err != nil {
+	if _, err := oldkernels.MatVec(oldkernels.MatVecShape{T: kernels.Float32, K: 16, Rows: 16, Sub: 16}); err != nil {
 		t.Fatalf("the narrowed float shape was refused: %v", err)
 	}
 }
@@ -150,7 +151,7 @@ func narrowKCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, sub i
 	av := make([]uint32, max(1, (k+3)/4))
 	ax := make([]float32, max(1, 3*((k+31)/32)))
 
-	kk, err := kernels.MatVec(kernels.MatVecShape{T: q, K: k, Rows: rows, Sub: sub})
+	kk, err := oldkernels.MatVec(oldkernels.MatVecShape{T: q, K: k, Rows: rows, Sub: sub})
 	if err != nil {
 		t.Fatalf("MatVec %v %dx%d sub=%d: %v", q, rows, k, sub, err)
 	}

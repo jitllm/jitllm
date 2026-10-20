@@ -3,6 +3,7 @@ package tier
 import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // mv is a matvec's compiled kernel plus the split it was chosen for. alt is the
@@ -73,19 +74,19 @@ type mv struct {
 	// ActMul launch goes. nil elsewhere, and on a split whose last pass is a
 	// reduce (which would have to apply it instead).
 	gated backend.Kernel
-	// gate2 is gated summing the gate's row itself (kernels.MatVecShape.Gate2):
+	// gate2 is gated summing the gate's row itself (oldkernels.MatVecShape.Gate2):
 	// gate and up in one launch (Config.GateUp2). Built beside gated.
 	gate2 backend.Kernel
 	// gate2In is gate2 normalising and quantizing its own operand
-	// (kernels.ActIn with Norm): the FFN norm, gate and up in one launch,
+	// (oldkernels.ActIn with Norm): the FFN norm, gate and up in one launch,
 	// the FFN site's gate2in recipe. Built by fuseActIn beside gate2.
 	gate2In backend.Kernel
 	// resIn, gatedIn and kernIn are res, gated and kern building their own
-	// operand (kernels.ActIn) from the float row: pIn [pNW] in pA/pAX's
+	// operand (oldkernels.ActIn) from the float row: pIn [pNW] in pA/pAX's
 	// place. Built by fuseActIn; nil where the block cannot take them.
 	resIn, gatedIn, kernIn backend.Kernel
 	// resActIn is res forming act(gate)*up and quantizing it in its prologue
-	// (kernels.ActIn.Gated), for an FFN whose up projection has no gated form.
+	// (oldkernels.ActIn.Gated), for an FFN whose up projection has no gated form.
 	resActIn backend.Kernel
 	// wantGated marks the FFN up projection that takes a gated variant
 	// whenever its split allows one, so a retune to an in-group split builds
@@ -99,14 +100,14 @@ type mv struct {
 	// actN threads.
 	act  backend.Kernel
 	actN int
-	// actT says act writes the token-major layout (kernels.ActF16T) the
+	// actT says act writes the token-major layout (oldkernels.ActF16T) the
 	// fused operand writers produce (rmsF16For, actF16For). The MMA twin's
-	// act writes the m16n8 fragment layout (kernels.ActF16) instead, and a
+	// act writes the m16n8 fragment layout (oldkernels.ActF16) instead, and a
 	// fused writer standing in for it hands the GEMM a scrambled operand.
 	actT bool
 	// vt is the GemmVolta tile a binary16 twin was built at (stagedGemm), so
 	// a block's q, k and v can be put in one grid (qkvGemm); zero elsewhere.
-	vt kernels.VoltaTile
+	vt oldkernels.VoltaTile
 }
 
 // mvForm is a batched twin's form, for the generator that forms its schedule

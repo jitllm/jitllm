@@ -9,6 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestGemmF16Speed times GemmVolta's m16n8 form against MatVecMMA on
@@ -51,7 +52,7 @@ func TestGemmF16Speed(t *testing.T) {
 					2*float64(rows)*float64(k)*float64(ntok)/el.Seconds()/1e12)
 			}
 			for _, tl := range [][2]int{{4, 4}, {2, 4}, {4, 2}} {
-				kk, err := kernels.MatVecMMA(kernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok, MT: tl[0], NT: tl[1], ActWin: 32})
+				kk, err := oldkernels.MatVecMMA(oldkernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok, MT: tl[0], NT: tl[1], ActWin: 32})
 				if err != nil {
 					t.Log(err)
 					continue
@@ -63,12 +64,12 @@ func TestGemmF16Speed(t *testing.T) {
 					})
 				}
 			}
-			for _, tl := range []kernels.Int8Tile{
+			for _, tl := range []oldkernels.Int8Tile{
 				{MT: 4, NT: 4, WM: 2, WN: 2}, {MT: 4, NT: 2, WM: 2, WN: 2}, {MT: 2, NT: 4, WM: 2, WN: 2},
 				{MT: 4, NT: 8, WM: 2, WN: 2}, {MT: 2, NT: 2, WM: 2, WN: 2},
 			} {
-				s := kernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok}
-				kk, err := kernels.GemmInt8(s, tl)
+				s := oldkernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok}
+				kk, err := oldkernels.GemmInt8(s, tl)
 				if err != nil {
 					t.Log(err)
 					continue
@@ -79,10 +80,10 @@ func TestGemmF16Speed(t *testing.T) {
 					continue
 				}
 				time1(fmt.Sprintf("int8 gemm %dx%d w%dx%d", tl.MT, tl.NT, tl.WM, tl.WN), func() error {
-					return kern.Launch(kernels.GemmInt8Groups(s, tl), tl.Threads(), bQS, bD, bSC, bB, bAX, out)
+					return kern.Launch(oldkernels.GemmInt8Groups(s, tl), tl.Threads(), bQS, bD, bSC, bB, bAX, out)
 				})
 			}
-			for _, tl := range []kernels.VoltaTile{
+			for _, tl := range []oldkernels.VoltaTile{
 				{MT: 4, NT: 8, WM: 2, WN: 2}, {MT: 4, NT: 4, WM: 2, WN: 2}, {MT: 2, NT: 8, WM: 2, WN: 2},
 				{MT: 8, NT: 4, WM: 2, WN: 2}, {MT: 2, NT: 4, WM: 2, WN: 2}, {MT: 4, NT: 4, WM: 1, WN: 4}, {MT: 8, NT: 2, WM: 1, WN: 4},
 				// The deep stage: eight warps, 64 (two buffers) or 128 (one) of k a trip.
@@ -92,8 +93,8 @@ func TestGemmF16Speed(t *testing.T) {
 			} {
 				for _, f16k := range []int{16, 8} {
 					tl.KB, tl.F16K = max(tl.KB, 1), f16k
-					s := kernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok}
-					kk, err := kernels.GemmVolta(s, tl)
+					s := oldkernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok}
+					kk, err := oldkernels.GemmVolta(s, tl)
 					if err != nil {
 						continue
 					}
@@ -103,7 +104,7 @@ func TestGemmF16Speed(t *testing.T) {
 						continue
 					}
 					time1(fmt.Sprintf("f16 %dx%d w%dx%d kb%d 1b%v k%d", tl.MT, tl.NT, tl.WM, tl.WN, tl.KB, tl.Single, f16k), func() error {
-						return kern.Launch(kernels.GemmVoltaGroups(s, tl), tl.Threads(), bQS, bD, bSC, bB, out)
+						return kern.Launch(oldkernels.GemmVoltaGroups(s, tl), tl.Threads(), bQS, bD, bSC, bB, out)
 					})
 				}
 			}

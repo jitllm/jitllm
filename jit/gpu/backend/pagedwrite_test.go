@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestPagedWriters holds the paged K/V writers to the page layout: rows
@@ -152,17 +152,17 @@ func pagedWriteCheck(t *testing.T, d backend.Device, page, heads, hd, nRot int, 
 			if neox {
 				words /= 2
 			}
-			launch(func() (*ir.Kernel, error) { return kernels.PagedCopyRowsTF16(kvRow, R, page) }, R*kvRow/2, sb, kb, off, tb, rb)
-			launch(func() (*ir.Kernel, error) { return kernels.PagedRoPERowsTF16(heads, hd, nRot, neox, R, page) }, words, sb, csb, off, kb, tb, rb)
+			launch(func() (*ir.Kernel, error) { return oldkernels.PagedCopyRowsTF16(kvRow, R, page) }, R*kvRow/2, sb, kb, off, tb, rb)
+			launch(func() (*ir.Kernel, error) { return oldkernels.PagedRoPERowsTF16(heads, hd, nRot, neox, R, page) }, words, sb, csb, off, kb, tb, rb)
 		} else {
-			launch(func() (*ir.Kernel, error) { return kernels.PagedCopyRowsT(kvRow, R, page) }, R*kvRow, sb, kb, off, tb, rb)
-			launch(func() (*ir.Kernel, error) { return kernels.PagedRoPERowsT(heads, hd, nRot, neox, R, page) }, R*heads*nRot/2, sb, csb, off, kb, tb, rb)
+			launch(func() (*ir.Kernel, error) { return oldkernels.PagedCopyRowsT(kvRow, R, page) }, R*kvRow, sb, kb, off, tb, rb)
+			launch(func() (*ir.Kernel, error) { return oldkernels.PagedRoPERowsT(heads, hd, nRot, neox, R, page) }, R*heads*nRot/2, sb, csb, off, kb, tb, rb)
 		}
 		per := kvRow
 		if f16 {
 			per = kvRow / 2
 		}
-		launch(func() (*ir.Kernel, error) { return kernels.PagedCopyRows(kvRow, R, page, kvRow, 0, f16) }, R*per, sb, vb, off, tb, rb)
+		launch(func() (*ir.Kernel, error) { return oldkernels.PagedCopyRows(kvRow, R, page, kvRow, 0, f16) }, R*per, sb, vb, off, tb, rb)
 		return readF32raw(t, kb, nw), readF32raw(t, vb, nw)
 	}
 	check := func(kp, vp []float32, tab []uint32) error {

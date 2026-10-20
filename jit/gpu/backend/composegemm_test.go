@@ -9,6 +9,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestComposedGemmMatchesTheMenu holds the GEMM former (compose.Gemm: the
@@ -31,7 +32,7 @@ func TestComposedGemmMatchesTheMenu(t *testing.T) {
 		in := g.Add(compose.Node{Kind: compose.NInput})
 		return &compose.Epi{G: g, Out: g.Bin(op, in, g.Load(g.Buf(compose.BufRow)))}
 	}
-	tiles := []kernels.VoltaTile{
+	tiles := []oldkernels.VoltaTile{
 		{MT: 4, NT: 4, WM: 2, WN: 2, KB: 1, F16K: 16},
 		{MT: 2, NT: 4, WM: 2, WN: 2, KB: 1, F16K: 8},
 		{MT: 4, NT: 4, WM: 2, WN: 4, KB: 2, F16K: 16, Single: true},
@@ -47,11 +48,11 @@ func TestComposedGemmMatchesTheMenu(t *testing.T) {
 			bR := g.up(f32bytes(resid))
 			ran := 0
 			for q := kernels.Q4_0; q <= kernels.TQ2F; q++ {
-				if !kernels.GemmVoltaOK(q) || kernels.DeviceWhyNot(q) != "" {
+				if !oldkernels.GemmVoltaOK(q) || kernels.DeviceWhyNot(q) != "" {
 					continue
 				}
-				sub, _, _, _, _ := kernels.GemmFormat(q)
-				ak, err := kernels.ActF16T(q, ntok, k)
+				sub, _, _, _, _ := oldkernels.GemmFormat(q)
+				ak, err := oldkernels.ActF16T(q, ntok, k)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -88,12 +89,12 @@ func TestComposedGemmMatchesTheMenu(t *testing.T) {
 					return raw, true
 				}
 				for _, tl := range tiles {
-					s := kernels.MatVecShape{T: q, K: k, Rows: rows, NTok: ntok}
-					menu, err := kernels.GemmVoltaEpi(s, tl, epi(compose.OpAdd))
+					s := oldkernels.MatVecShape{T: q, K: k, Rows: rows, NTok: ntok}
+					menu, err := oldkernels.GemmVoltaEpi(s, tl, epi(compose.OpAdd))
 					if err != nil {
 						continue
 					}
-					want, ok := run(menu, kernels.GemmVoltaGroups(s, tl), tl.Threads(), rows*ntok, bR)
+					want, ok := run(menu, oldkernels.GemmVoltaGroups(s, tl), tl.Threads(), rows*ntok, bR)
 					if !ok {
 						continue // the device compiles no such instruction shape
 					}
@@ -116,8 +117,8 @@ func TestComposedGemmMatchesTheMenu(t *testing.T) {
 					}
 					ss := s
 					ss.Split = 2
-					if sm, err := kernels.GemmVolta(ss, tl); err == nil {
-						wantP, _ := run(sm, kernels.GemmVoltaGroups(ss, tl), tl.Threads(), 2*rows*ntok)
+					if sm, err := oldkernels.GemmVolta(ss, tl); err == nil {
+						wantP, _ := run(sm, oldkernels.GemmVoltaGroups(ss, tl), tl.Threads(), 2*rows*ntok)
 						sg := &compose.Gemm{T: q, K: k, Rows: rows, NTok: ntok, Tile: tl, Split: 2}
 						sk, err := sg.Emit()
 						if err != nil {
@@ -158,10 +159,10 @@ func TestComposedGemmOperandMatchesActF16T(t *testing.T) {
 			bX := g.up(f32bytes(acts))
 			ran := 0
 			for q := kernels.Q4_0; q <= kernels.TQ2F; q++ {
-				if !kernels.GemmVoltaOK(q) {
+				if !oldkernels.GemmVoltaOK(q) {
 					continue
 				}
-				sub, _, _, _, _ := kernels.GemmFormat(q)
+				sub, _, _, _, _ := oldkernels.GemmFormat(q)
 				run := func(ker *ir.Kernel, groups, width int) ([]byte, bool) {
 					c, err := d.Compile(ker)
 					if err != nil {
@@ -178,7 +179,7 @@ func TestComposedGemmOperandMatchesActF16T(t *testing.T) {
 					}
 					return raw, true
 				}
-				ak, err := kernels.ActF16T(q, ntok, k)
+				ak, err := oldkernels.ActF16T(q, ntok, k)
 				if err != nil {
 					t.Fatal(err)
 				}

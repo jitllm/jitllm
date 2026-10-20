@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestRestrideMovesExactlyTheBlock: every word of a rows x cols block lands at
@@ -47,7 +47,7 @@ func restrideCase(t *testing.T, d backend.Device, name string, rows, cols, ss, d
 		binary.LittleEndian.PutUint32(dst[4*i:], poison)
 	}
 	binary.LittleEndian.PutUint32(dst[4*n:], guard)
-	kern, err := kernels.Restride(rows, cols, ss, ds)
+	kern, err := oldkernels.Restride(rows, cols, ss, ds)
 	if err != nil {
 		t.Fatal(err)
 	}

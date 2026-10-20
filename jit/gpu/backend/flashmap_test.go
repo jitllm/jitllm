@@ -8,7 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestFlashPrefillRunTable holds a flash prefill's run-table form (Map) --
@@ -35,7 +35,7 @@ func TestFlashPrefillRunTable(t *testing.T) {
 		k    int
 	}{{flash80Form, 16}, {flash80K8Form, 8}} {
 		for _, d := range mmaDevices(t, devs, ir.MMAShape{M: 16, N: 8, K: fk.k, Kind: ir.MMAF16}) {
-			for _, fs := range []kernels.FlashPrefill70Shape{
+			for _, fs := range []oldkernels.FlashPrefill70Shape{
 				{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: 64},
 				{Heads: 8, KVHeads: 4, Dim: 128, Scale: .088, Page: 64, F16: true, Softcap: 50},
 				{Heads: 8, KVHeads: 4, Dim: 256, Scale: .0625, Page: 64},
@@ -52,7 +52,7 @@ func TestFlashPrefillRunTable(t *testing.T) {
 		if ok, _ := backend.LowersTile(d, tile8f32); !ok {
 			continue
 		}
-		for _, fs := range []kernels.FlashPrefill70Shape{
+		for _, fs := range []oldkernels.FlashPrefill70Shape{
 			{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: 64},
 			{Heads: 8, KVHeads: 4, Dim: 128, Scale: .088, Page: 64, F16: true, Softcap: 50},
 			{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: 64, Splits: 1},
@@ -64,7 +64,7 @@ func TestFlashPrefillRunTable(t *testing.T) {
 		}
 	}
 	for _, d := range mmaDevices(t, devs, ir.MMAVolta()) {
-		for _, fs := range []kernels.FlashPrefill70Shape{
+		for _, fs := range []oldkernels.FlashPrefill70Shape{
 			{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: 64},
 			{Heads: 8, KVHeads: 4, Dim: 128, Scale: .088, Page: 64, F16: true, Softcap: 50},
 			{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: 64, Splits: 1},
@@ -80,15 +80,15 @@ func TestFlashPrefillRunTable(t *testing.T) {
 	}
 }
 
-func runTableCase(t *testing.T, d backend.Device, fs kernels.FlashPrefill70Shape, form flashForm) {
+func runTableCase(t *testing.T, d backend.Device, fs oldkernels.FlashPrefill70Shape, form flashForm) {
 	t.Helper()
-	wg := kernels.FlashPrefill80Rows(fs)
+	wg := oldkernels.FlashPrefill80Rows(fs)
 	switch form {
 	case flashTileForm:
-		tl, _ := kernels.FlashTileFor(fs.Dim)
+		tl, _ := oldkernels.FlashTileFor(fs.Dim)
 		wg = tl.Rows()
 	case flash70Form:
-		wg = kernels.FlashPrefill70Rows
+		wg = oldkernels.FlashPrefill70Rows
 	}
 	pg := fs.Page
 	// Two sequences: A's 40 rows at a later base, B's 23 crossing a page edge.
@@ -205,7 +205,7 @@ func runTableCase(t *testing.T, d backend.Device, fs kernels.FlashPrefill70Shape
 
 // runFlash launches one flash prefill (Map when mp is set) over rows rows of q
 // with tab and desc, and returns the rows' output, NaN where nothing wrote.
-func runFlash(t *testing.T, d backend.Device, fs kernels.FlashPrefill70Shape, form flashForm, p *pagedPool,
+func runFlash(t *testing.T, d backend.Device, fs oldkernels.FlashPrefill70Shape, form flashForm, p *pagedPool,
 	q []float32, tab, desc, mp []uint32, rows int) []float64 {
 	t.Helper()
 	fs.Map = mp != nil
@@ -234,9 +234,9 @@ func runFlash(t *testing.T, d backend.Device, fs kernels.FlashPrefill70Shape, fo
 	var merge backend.Kernel
 	var margs []backend.Buf
 	if fs.Splits > 0 {
-		ms := kernels.FlashShape{Heads: fs.Heads, KVHeads: fs.KVHeads, Dim: fs.Dim, Rows: fs.Rows,
+		ms := oldkernels.FlashShape{Heads: fs.Heads, KVHeads: fs.KVHeads, Dim: fs.Dim, Rows: fs.Rows,
 			Splits: fs.Splits, Sink: true, Map: fs.Map}
-		mk, err := kernels.FlashAttentionMergeWide(ms)
+		mk, err := oldkernels.FlashAttentionMergeWide(ms)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -245,7 +245,7 @@ func runFlash(t *testing.T, d backend.Device, fs kernels.FlashPrefill70Shape, fo
 		}
 		defer merge.Close()
 		// Partials at the rows: sized for every row the table can name.
-		part := g.up(f32bytes(nanFill(kernels.FlashPartialFloats(kernels.FlashShape{Heads: fs.Heads, Dim: fs.Dim,
+		part := g.up(f32bytes(nanFill(oldkernels.FlashPartialFloats(oldkernels.FlashShape{Heads: fs.Heads, Dim: fs.Dim,
 			Rows: max(rows, fs.Rows), Splits: fs.Splits}))))
 		args[4] = part
 		_, sinks := prefillInputs(ms)

@@ -9,6 +9,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // PrepLayer is prepLayerFor for the zero session: a caller that never attached.
@@ -59,7 +60,7 @@ func declineReason(p *nn.LayerPlan) string {
 	switch {
 	case p.Recurrent.Centred && (!p.NonCausal || !p.Recurrent.ShortConv || p.Recurrent.Conv != 3 || !p.Windowed):
 		// The centred convolution reads its neighbours through the call's row
-		// windows (kernels.Conv3Centred): a non-causal call is the whole
+		// windows (oldkernels.Conv3Centred): a non-causal call is the whole
 		// sequence, and the windows are where the taps stop.
 		return "a centred convolution outside a windowed non-causal short convolution of three taps"
 	case p.NonCausal && (p.Parallel || p.Recurrent.Conv > 0 && !p.Recurrent.Centred || p.MLA() || p.NExpert > 0 ||
@@ -169,31 +170,31 @@ func l4TempTab(p *nn.LayerPlan) []float32 {
 }
 
 // windowArg is the window a windowed score kernel is built with: the sliding
-// width, or kernels.ChunkWindow of it where the layers attend within a chunk.
+// width, or oldkernels.ChunkWindow of it where the layers attend within a chunk.
 func windowArg(p *nn.LayerPlan) int {
 	if p.SWAChunked {
-		return kernels.ChunkWindow(p.SWAWindow)
+		return oldkernels.ChunkWindow(p.SWAWindow)
 	}
 	return p.SWAWindow
 }
 
 // routerWhyNot names the mixture gating this tier cannot express, or "". The
-// answer comes from the kernels (kernels.MoERouteWhyNot), so a missing gating
+// answer comes from the kernels (oldkernels.MoERouteWhyNot), so a missing gating
 // feature is a device kernel owed, not a refused capability.
 func routerWhyNot(p *nn.LayerPlan) string {
 	if p.NExpert == 0 {
 		return ""
 	}
-	return kernels.MoERouteWhyNot(routeOf(p))
+	return oldkernels.MoERouteWhyNot(routeOf(p))
 }
 
 // routeOf is the plan's router as the kernels describe one: one translation,
 // so the decline and the kernel cannot disagree.
-func routeOf(p *nn.LayerPlan) kernels.MoERoute {
+func routeOf(p *nn.LayerPlan) oldkernels.MoERoute {
 	// DeepSeek V4 selects through a per-row plane on every block (ds4.go):
 	// its selection bias, or a hash block's table.
 	ds4 := p.DS4 != nil
-	return kernels.MoERoute{
+	return oldkernels.MoERoute{
 		NExpert: p.NExpert, K: p.NExpertUsed,
 		Sigmoid: p.ExpertSigmoid, Bias: p.ExpertSelBias || ds4,
 		SqrtSoftplus: ds4 && p.DS4.ExpertSqrtSoftplus, RowBias: ds4,
@@ -205,16 +206,16 @@ func routeOf(p *nn.LayerPlan) kernels.MoERoute {
 
 // subFor is the activation sub-block a matvec of this format and width needs,
 // or 0 for the format's own. It is float-only: a quantized format's scales are
-// laid out against its sub-block (see kernels.MatVecShape.Sub), while a float
+// laid out against its sub-block (see oldkernels.MatVecShape.Sub), while a float
 // weight has no scale plane. What reaches this is MLA's absorbed banks, whose k
 // can be below 32 on a small fixture, where the sub-block narrows to the width
 // itself, and a ragged width past 32 (KDA's output at two heads of 40), where
 // it narrows to the widest of 16, 8 and 4 that divides k.
-func subFor(q kernels.Quant, k int) int { return kernels.FloatSub(q, k) }
+func subFor(q kernels.Quant, k int) int { return oldkernels.FloatSub(q, k) }
 
 // mlaWhyNot names the MLA shape this tier cannot express, or "". Each is a
 // width, so each is a kernel owed rather than a refusal (RULE 8): the
-// 32-element granule of kernels.Quantize and of the norm's partial reduction.
+// 32-element granule of oldkernels.Quantize and of the norm's partial reduction.
 // The batched arm is refused separately, at submission (see layersOnce), so a
 // correct decode stays on the device.
 func mlaWhyNot(p *nn.LayerPlan) string {
@@ -262,7 +263,7 @@ func lnBlock(p *nn.LayerPlan) bool { return p.LayerNorm }
 // (C6: phi-2, starcoder, falcon, nemotron).
 func ungatedFFN(p *nn.LayerPlan) bool { return p.UngatedFFN }
 
-// actHasKernel reports whether kernels.Act (an ungated FFN) or kernels.ActMul
+// actHasKernel reports whether oldkernels.Act (an ungated FFN) or oldkernels.ActMul
 // (every gated FFN) bakes the plan's activation.
 func actHasKernel(p *nn.LayerPlan) bool {
 	// A block with no FFN runs no activation.
@@ -271,7 +272,7 @@ func actHasKernel(p *nn.LayerPlan) bool {
 	}
 	set := kernels.Gated[:]
 	if ungatedFFN(p) {
-		// xIELU reads its numbers from a buffer (kernels.XIELU), so it is in
+		// xIELU reads its numbers from a buffer (oldkernels.XIELU), so it is in
 		// no baked set.
 		if p.Act == kernels.ActXIELU {
 			return true
@@ -557,10 +558,10 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		// The in-group split reduction, where tuneSplit measured it faster. It
 		// writes the final row, so no reduction kernel and no partial plane; see
-		// kernels.MatVecShape.GroupSplit.
+		// oldkernels.MatVecShape.GroupSplit.
 		grp := !g.NoGroupSplit && split > 1 && rowt == 1 &&
 			(g.ForceGroupSplit || g.groupSplit[splitKey{q, x.Rows, x.K}]) &&
-			kernels.GroupSplitOK(x.Rows, split)
+			oldkernels.GroupSplitOK(x.Rows, split)
 		kern := g.kernelMode(q, x.K, x.Rows, split, rowt, bias, grp)
 		if kern == nil {
 			// A refused tile is not a refused weight: fall back to one row.
@@ -624,8 +625,8 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			// ForceIndexedGroup selects the in-group reduction here without
 			// depending on what retuneIndexed happens to time fastest.
 			grp := g.ForceIndexedGroup && !g.NoGroupSplit && split > 1 && !bias &&
-				kernels.GroupSplitOK(x.Rows, split)
-			c, e := g.idKernel(kernels.MatVecShape{Center: g.center, T: q, K: x.K, Rows: x.Rows,
+				oldkernels.GroupSplitOK(x.Rows, split)
+			c, e := g.idKernel(oldkernels.MatVecShape{Center: g.center, T: q, K: x.K, Rows: x.Rows,
 				Split: split, Experts: experts, Slots: slots, SlotAct: slotAct, Bias: bias,
 				Sub: subFor(q, x.K), GroupSplit: grp})
 			if e != nil {
@@ -1256,7 +1257,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				len(w.Router.Data), p.NExpert, p.NEmbd)
 			return false
 		}
-		rk, e := kernels.RouterMatVecOf(p.NExpert, p.NEmbd, es == 2)
+		rk, e := oldkernels.RouterMatVecOf(p.NExpert, p.NEmbd, es == 2)
 		if e != nil {
 			g.LastErr = e.Error()
 			return false

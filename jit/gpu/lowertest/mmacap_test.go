@@ -5,10 +5,10 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/jit/gpu/msl"
 	"github.com/jitllm/jitllm/jit/gpu/ptx"
 	"github.com/jitllm/jitllm/jit/gpu/spirv"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // Which backends lower ir.OpMMA and the tile ops is a list in the repo, asserted
@@ -148,7 +148,7 @@ func TestTileCoversExactlyWhatItClaims(t *testing.T) {
 		{8, 8, 8, ir.TileF32, []string{"spirv", "msl", "ptx"}},
 		{16, 8, 32, ir.TileS8, []string{"spirv"}},
 	} {
-		k, err := kernels.TileProbe(c.m, c.n, c.k, 2, c.elem)
+		k, err := oldkernels.TileProbe(c.m, c.n, c.k, 2, c.elem)
 		if err != nil {
 			t.Fatalf("TileProbe: %v", err)
 		}

@@ -4,11 +4,10 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
 // Epi is a row group a former applies to each of its outputs before the
-// store (kernels.Epilogue): Out is the node the former stores, NInput nodes
+// store: Out is the node the former stores, NInput nodes
 // read the former's own value, a BufRow loads at the output's element, a
 // BufVec at its row, and the group's stores write further outputs at the
 // element. A group with a reduction cannot be an epilogue: one output does
@@ -18,16 +17,15 @@ type Epi struct {
 	Out int
 
 	params []ir.Value
+	// x and out are G with its activations expanded into primitive nodes,
+	// and Out's place in it (Check sets them).
+	x   *Row
+	out int
 }
 
 // Check refuses a group that is not an epilogue.
 func (e *Epi) Check() error {
 	for i, n := range e.G.Nodes {
-		if n.Kind == NUnary && n.Op == OpAct {
-			if err := kernels.ActElemOK(n.Act); err != nil {
-				return fmt.Errorf("compose: node %d of an epilogue: %w", i, err)
-			}
-		}
 		if n.Kind == NReduce || n.Kind == NColumn || n.Kind == NRowIdx || n.Kind == NLoad && n.Indexed {
 			return fmt.Errorf("compose: node %d of an epilogue reads beyond its element", i)
 		}
@@ -35,6 +33,11 @@ func (e *Epi) Check() error {
 	if e.Out < 0 || e.Out >= len(e.G.Nodes) || e.G.Q8 != nil {
 		return fmt.Errorf("compose: an epilogue storing node %d", e.Out)
 	}
+	x, at, err := e.G.expanded()
+	if err != nil {
+		return err
+	}
+	e.x, e.out = x, at[e.Out]
 	return nil
 }
 
@@ -55,15 +58,16 @@ func (e *Epi) Params(b *ir.Builder) {
 	}
 }
 
-// Apply emits the group at one output.
+// Apply emits the group at one output. Check runs first.
 func (e *Epi) Apply(b *ir.Builder, v, at, row ir.Value) ir.Value {
+	g := e.x
 	memo := map[int]ir.Value{}
 	var val func(n int) ir.Value
 	val = func(n int) ir.Value {
 		if x, ok := memo[n]; ok {
 			return x
 		}
-		nd := e.G.Nodes[n]
+		nd := g.Nodes[n]
 		var x ir.Value
 		switch nd.Kind {
 		case NInput:
@@ -73,7 +77,7 @@ func (e *Epi) Apply(b *ir.Builder, v, at, row ir.Value) ir.Value {
 		case NUConst:
 			x = b.Const(ir.U32, int64(nd.At))
 		case NLoad:
-			switch e.G.Bufs[nd.Buf].Kind {
+			switch g.Bufs[nd.Buf].Kind {
 			case BufRow:
 				x = b.Load(ir.F32, e.params[nd.Buf], at, 0)
 			case BufVec:
@@ -84,10 +88,10 @@ func (e *Epi) Apply(b *ir.Builder, v, at, row ir.Value) ir.Value {
 		case NUnary:
 			a := val(nd.A)
 			switch nd.Op {
-			case OpAct:
-				x = kernels.ActFragment(b, a, nd.Act)
 			case OpExp:
 				x = b.Exp(a)
+			case OpSqrt:
+				x = b.Sqrt(a)
 			case OpRsqrt:
 				x = b.Div(ir.F32, b.ConstF32(1), b.Sqrt(a))
 			case OpAbs:
@@ -96,8 +100,6 @@ func (e *Epi) Apply(b *ir.Builder, v, at, row ir.Value) ir.Value {
 		case NBinary:
 			a := val(nd.A)
 			switch nd.Op {
-			case OpActMul:
-				x = kernels.ActMulFragment(b, nd.Act, a, func() ir.Value { return val(nd.B) })
 			case OpFma:
 				x = b.Fma(a, val(nd.B), val(nd.C))
 			default:
@@ -117,14 +119,16 @@ func (e *Epi) Apply(b *ir.Builder, v, at, row ir.Value) ir.Value {
 					x = b.Min(ir.F32, a, c)
 				}
 			}
+		case NLess:
+			x = b.Lt(ir.F32, val(nd.A), val(nd.B))
 		case NSelect:
 			x = b.Select(ir.F32, val(nd.C), val(nd.A), val(nd.B))
 		}
 		memo[n] = x
 		return x
 	}
-	for _, st := range e.G.Stores {
+	for _, st := range g.Stores {
 		b.Store(e.params[st.Buf], at, val(st.Val), 0)
 	}
-	return val(e.Out)
+	return val(e.out)
 }

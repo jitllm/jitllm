@@ -9,11 +9,11 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestRoPEQKVPagedMatchesItsParts holds the fused decode position writer
-// (kernels.RoPEQKVPaged) to the three kernels it replaces -- RoPERows on q,
+// (oldkernels.RoPEQKVPaged) to the three kernels it replaces -- RoPERows on q,
 // PagedRoPERowsT on k, PagedCopyRows on v -- bit for bit: the rotated q, and
 // every word of both pools, which start NaN so a write either arm missed or
 // made in the wrong place shows. Heads of different counts for q and k (GQA,
@@ -117,15 +117,15 @@ func fusedCase(t *testing.T, d backend.Device, nh, nkv, hd, nRot int, neox, f16 
 		}
 		pairs := nRot / 2
 		if fused {
-			kk, err := kernels.RoPEQKVPaged(nh, nkv, hd, nRot, neox, R, page, f16)
-			run(kk, err, kernels.RoPEQKVPagedThreads(nh, nkv, hd, nRot, R, f16),
+			kk, err := oldkernels.RoPEQKVPaged(nh, nkv, hd, nRot, neox, R, page, f16)
+			run(kk, err, oldkernels.RoPEQKVPagedThreads(nh, nkv, hd, nRot, R, f16),
 				qb, csb, offb, qd, kb, kp, vb, vp, tb, rb)
 		} else {
-			kk, err := kernels.RoPERows(nh, hd, nRot, neox, R)
+			kk, err := oldkernels.RoPERows(nh, hd, nRot, neox, R)
 			run(kk, err, R*nh*pairs, qb, csb, offb, qd)
-			kk, err = kernels.PagedRoPERowsT(nkv, hd, nRot, neox, R, page)
+			kk, err = oldkernels.PagedRoPERowsT(nkv, hd, nRot, neox, R, page)
 			run(kk, err, R*nkv*pairs, kb, csb, offb, kp, tb, rb)
-			kk, err = kernels.PagedCopyRows(kvRow, R, page, kvRow, 0, f16)
+			kk, err = oldkernels.PagedCopyRows(kvRow, R, page, kvRow, 0, f16)
 			nv := R * kvRow
 			if f16 {
 				nv /= 2

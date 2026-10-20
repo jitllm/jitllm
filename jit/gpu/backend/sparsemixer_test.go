@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestSparseMixerWeightsMatchTheOracle holds the device's sparsemixer route --
@@ -63,7 +63,7 @@ func TestSparseMixerWeightsMatchTheOracle(t *testing.T) {
 		t.Run(d.API(), func(t *testing.T) {
 			caught := make([]int, len(faults))
 			for _, n := range []int{2, 3, 8, 16, 31, 33, 64} {
-				r := kernels.MoERoute{NExpert: n, K: 2, SparseMixer: eps}
+				r := oldkernels.MoERoute{NExpert: n, K: 2, SparseMixer: eps}
 				for _, in := range inputs(n) {
 					sel, w := sparseMixerRun(t, d, r, in.s)
 					want := oracle.SparseMixer(in.s, eps, oracle.SparseMixerFaultNone)
@@ -88,7 +88,7 @@ func TestSparseMixerWeightsMatchTheOracle(t *testing.T) {
 
 // sparseMixerRun launches the route on one token and returns the two ids and
 // the two weights.
-func sparseMixerRun(t *testing.T, d backend.Device, r kernels.MoERoute, s []float32) ([2]int32, [2]float32) {
+func sparseMixerRun(t *testing.T, d backend.Device, r oldkernels.MoERoute, s []float32) ([2]int32, [2]float32) {
 	t.Helper()
 	g := newGPU(t, d)
 	defer g.free()
@@ -112,8 +112,8 @@ func sparseMixerRun(t *testing.T, d backend.Device, r kernels.MoERoute, s []floa
 			t.Fatal(err)
 		}
 	}
-	run(func() (*ir.Kernel, error) { return kernels.ExpertRank(r) }, (r.NExpert+127)/128, 128, bL, bSel, bTop)
-	run(func() (*ir.Kernel, error) { return kernels.ExpertWeights(r) }, 1, 1, bTop, bW, bL)
+	run(func() (*ir.Kernel, error) { return oldkernels.ExpertRank(r) }, (r.NExpert+127)/128, 128, bL, bSel, bTop)
+	run(func() (*ir.Kernel, error) { return oldkernels.ExpertWeights(r) }, 1, 1, bTop, bW, bL)
 	selRaw, wRaw := make([]byte, (k+1)*4), make([]byte, k*4)
 	if err := bSel.Read(selRaw); err != nil {
 		t.Fatal(err)

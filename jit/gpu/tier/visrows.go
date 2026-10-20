@@ -5,7 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // A vision tower's set is sized to the picture it encodes.
@@ -471,9 +471,9 @@ func (g *devTier) ownActKern(l *layer) bool {
 	if bs == nil || (l.ungated == ungatedFFN(&bs.p) && l.act == bs.p.Act) {
 		return true
 	}
-	k, err := kernels.ActMul(bs.rows*l.nffn, l.act)
+	k, err := oldkernels.ActMul(bs.rows*l.nffn, l.act)
 	if l.ungated {
-		k, err = kernels.Act(bs.rows*l.nffn, l.act)
+		k, err = oldkernels.Act(bs.rows*l.nffn, l.act)
 	}
 	if err == nil {
 		l.actK, err = g.dev.Compile(k)

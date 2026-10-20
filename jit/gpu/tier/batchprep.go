@@ -7,6 +7,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // errNoBatch is what a block reports when a matvec in it has no batched twin --
@@ -336,9 +337,9 @@ func quantizeRows(rows, n, win int) (*ir.Kernel, error) {
 // of blocks and n or more (a ragged tower's padded width, nn.LayerPlan.KPad).
 func quantizeRowsAt(rows, n, kp, win int) (*ir.Kernel, error) {
 	if n == kp {
-		return kernels.Quantize(rows*n, kernels.ClampWindow(win, n))
+		return oldkernels.Quantize(rows*n, oldkernels.ClampWindow(win, n))
 	}
-	return kernels.QuantizePadded(rows, n, kp, kernels.ClampWindow(win, kp))
+	return oldkernels.QuantizePadded(rows, n, kp, oldkernels.ClampWindow(win, kp))
 }
 
 // ePad is the width a block's residual-reading matrices quantize their
@@ -408,7 +409,7 @@ func (g *devTier) intBatchMV(m mv, ntok, tok int) (mv, bool) {
 		kk := kernKey{m.q, m.k, m.rows, -(ntok*100 + mt*10 + nt), m.bias != nil, 1, false, false, 0, false}
 		c, cached := g.kerns[kk]
 		if !cached {
-			ker, err := kernels.MatVecMMA(kernels.MatVecShape{Center: g.center,
+			ker, err := oldkernels.MatVecMMA(oldkernels.MatVecShape{Center: g.center,
 				T: m.q, K: m.k, Rows: m.rows, NTok: ntok, MT: mt, NT: nt,
 				Bias: m.bias != nil, ActWin: g.actWinFor(ntok)})
 			if err == nil {
@@ -481,7 +482,7 @@ func (g *devTier) batchMVDot4(m mv, ntok, tok int) (mv, bool) {
 }
 
 // kStride is the device K cache's transposed stride, or 0 for the row-major
-// layout. See kernels.RoPERowsT: the scores kernel reads K with one thread per
+// layout. See oldkernels.RoPERowsT: the scores kernel reads K with one thread per
 // position, so [head][dim][position] coalesces where [position][head][dim] costs
 // eight times the memory transactions.
 //

@@ -10,7 +10,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // A site is a place in a block's graph where more than one generated form
@@ -29,7 +29,7 @@ const (
 	FFNTuned FFNForm = iota
 	// FFNTwo: the gate's matvec, then up's gated matvec writing act(gate)*up.
 	FFNTwo
-	// FFNGate2: gate and up summed in one launch (kernels.MatVecShape.Gate2).
+	// FFNGate2: gate and up summed in one launch (oldkernels.MatVecShape.Gate2).
 	FFNGate2
 	// FFNGate2In: Gate2 normalising and quantizing its own operand, so the
 	// FFN norm's launch goes too (behind a residual the attention output's
@@ -160,7 +160,7 @@ func (g *devTier) mvLaunch(s backend.Session, m mv, k backend.Kernel, r *residen
 	}
 	w := 128
 	if m.group {
-		w = kernels.GroupSplitWidth(m.split)
+		w = oldkernels.GroupSplitWidth(m.split)
 	} else if m.width > 0 && k == m.kern {
 		w = m.width
 	}
@@ -306,7 +306,7 @@ func (g *devTier) tuneFFN() {
 		// The incumbent is the device's default (gateUp2Pick with no
 		// verdict): Gate2 where it writes the two launches' bits, else two.
 		forms := []FFNForm{FFNGate2, FFNTwo}
-		if !kernels.Gate2Exact(g.dev.API()) {
+		if !oldkernels.Gate2Exact(g.dev.API()) {
 			forms = []FFNForm{FFNTwo, FFNGate2}
 		}
 		// A form is timed over every block of the key, so it is offered only
@@ -366,7 +366,7 @@ func (g *devTier) tuneFFN() {
 		}
 	}
 	def := FFNTwo
-	if kernels.Gate2Exact(g.dev.API()) {
+	if oldkernels.Gate2Exact(g.dev.API()) {
 		def = FFNGate2
 	}
 	for _, key := range keys {
@@ -402,7 +402,7 @@ func (g *devTier) ffnForcedForm() FFNForm {
 		return g.FFNForm
 	case g.GateUpFuse:
 		return FFNGU
-	case !g.GateUp2 || !kernels.Gate2Exact(g.dev.API()):
+	case !g.GateUp2 || !oldkernels.Gate2Exact(g.dev.API()):
 		return FFNTwo
 	}
 	return FFNGate2
@@ -416,7 +416,7 @@ func (g *devTier) ffnArm(s backend.Session, f FFNForm, ls []*layer) error {
 	ax := []backend.Buf{bs.a, bs.ax}
 	for _, l := range ls {
 		if f != FFNGate2In {
-			if err := s.Launch(bs.rmsQ, 1, kernels.RMSNormGroup, bs.x2, l.nFFN, bs.h, bs.a, bs.ax); err != nil {
+			if err := s.Launch(bs.rmsQ, 1, oldkernels.RMSNormGroup, bs.x2, l.nFFN, bs.h, bs.a, bs.ax); err != nil {
 				return err
 			}
 		}
@@ -453,7 +453,7 @@ func (g *devTier) ffnArm(s backend.Session, f FFNForm, ls []*layer) error {
 			}
 			continue
 		}
-		if err := s.Launch(bs.quantF, (kernels.QuantizeThreads(l.mvd.k/32)+127)/128, 128, bs.act, bs.a, bs.ax); err != nil {
+		if err := s.Launch(bs.quantF, (oldkernels.QuantizeThreads(l.mvd.k/32)+127)/128, 128, bs.act, bs.a, bs.ax); err != nil {
 			return err
 		}
 		if err := g.mvLaunch(s, l.mvd, l.mvd.res, l.down, ax, bs.x, bs.x2); err != nil {

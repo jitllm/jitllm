@@ -7,10 +7,10 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
-// TestGridBarrierHoldsEveryWorkgroup runs kernels.GridProbe on every device
+// TestGridBarrierHoldsEveryWorkgroup runs oldkernels.GridProbe on every device
 // that states a co-residency limit, at two workgroups, at half the limit and
 // at the limit itself (every workgroup resident, the case a barrier deadlocks
 // or leaks in), five launches in a row on one sync buffer (each launch leaves
@@ -49,7 +49,7 @@ func eachGridDevice(t *testing.T, f func(d backend.Device, width, limit int)) {
 	for _, d := range devs {
 		defer d.Close()
 		for _, width := range []int{128, 256} {
-			probe, err := d.Compile(kernels.GridProbe(2, width))
+			probe, err := d.Compile(oldkernels.GridProbe(2, width))
 			if err != nil {
 				t.Logf("%s: compile: %v", d.API(), err)
 				continue
@@ -97,7 +97,7 @@ func newGridRig(t *testing.T, d backend.Device, groups, width int) *gridRig {
 // newGridRigOn is newGridRig on a sync buffer another rig owns, or its own when
 // sync is nil.
 func newGridRigOn(t *testing.T, d backend.Device, groups, width int, sync backend.Buf) *gridRig {
-	k, err := d.Compile(kernels.GridProbe(groups, width))
+	k, err := d.Compile(oldkernels.GridProbe(groups, width))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,12 +111,12 @@ func newGridRigOn(t *testing.T, d backend.Device, groups, width int, sync backen
 		t.Cleanup(b.Free)
 		return b
 	}
-	r := &gridRig{t: t, k: k, groups: groups, width: width, want: kernels.GridProbeWant(groups, width)}
-	r.outs = make([]backend.Buf, kernels.GridProbePhases)
+	r := &gridRig{t: t, k: k, groups: groups, width: width, want: oldkernels.GridProbeWant(groups, width)}
+	r.outs = make([]backend.Buf, oldkernels.GridProbePhases)
 	for p := range r.outs {
 		r.outs[p] = alloc(n)
 	}
-	sink := alloc(kernels.GridProbePhases * n)
+	sink := alloc(oldkernels.GridProbePhases * n)
 	r.sync = sync
 	if sync == nil {
 		r.sync = alloc(ir.GridSyncWords)
@@ -169,7 +169,7 @@ func gridProbeCase(t *testing.T, d backend.Device, groups, width, limit int) {
 			t.Fatalf("launch %d: %v", rep, err)
 		}
 		if bad, first := r.wrong(); bad > 0 {
-			t.Fatalf("launch %d: %d of %d words wrong; first %s", rep, bad, kernels.GridProbePhases*groups*width, first)
+			t.Fatalf("launch %d: %d of %d words wrong; first %s", rep, bad, oldkernels.GridProbePhases*groups*width, first)
 		}
 	}
 	// Two grids taking turns on one sync buffer, as a decode's persistent
@@ -220,7 +220,7 @@ func gridProbeCase(t *testing.T, d backend.Device, groups, width, limit int) {
 
 	// Past the limit, refused before the device.
 	if groups == limit {
-		big, err := d.Compile(kernels.GridProbe(limit+1, width))
+		big, err := d.Compile(oldkernels.GridProbe(limit+1, width))
 		if err != nil {
 			t.Fatal(err)
 		}

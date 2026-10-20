@@ -5,7 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // devKVPage is the granule the device's capacity grows in. It matches the
@@ -315,7 +315,7 @@ func (g *devTier) kvCacheBytes(p *nn.LayerPlan, c int) (cache, vcache int) {
 }
 
 // copyKVAcrossStride moves the live history from a cache of oldCap positions
-// into one of newCap, on the device, with kernels.Restride.
+// into one of newCap, on the device, with oldkernels.Restride.
 //
 // K's transpose makes a growth a reshape (at stride S row e lives at e*S), a
 // strided copy a generated kernel does without leaving the card. trans is
@@ -349,7 +349,7 @@ func (g *devTier) copyKVAcrossStride(kvp *kvPair, nk, nv backend.Buf, kvDim, old
 	return g.restride(kvp.vc, nv, 1, words, words, words)
 }
 
-// restride runs one kernels.Restride and waits for it. Every block of a growth
+// restride runs one oldkernels.Restride and waits for it. Every block of a growth
 // has the same shape, so the kernel is compiled once per shape. One contiguous
 // run is a device copy instead: no kernel compiled for every size a buffer
 // grows to, and no grid to outgrow (an integrated GPU may dispatch at most
@@ -365,7 +365,7 @@ func (g *devTier) restride(src, dst backend.Buf, rows, cols, srcStride, dstStrid
 	key := [4]int{rows, cols, srcStride, dstStride}
 	k := g.restrides[key]
 	if k == nil {
-		ker, err := kernels.Restride(rows, cols, srcStride, dstStride)
+		ker, err := oldkernels.Restride(rows, cols, srcStride, dstStride)
 		if err != nil {
 			g.LastErr = err.Error()
 			return false

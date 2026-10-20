@@ -65,7 +65,7 @@ type layer struct {
 	shRouter             backend.Buf
 	// Gemma 4's per-layer embedding (nn.LayerPlan.PLEDim): the gate and the
 	// projection back, the post-norm, and pleOff the block's li*PLEDim, the
-	// offset of its slice in a row's inputs (kernels.PLESlice).
+	// offset of its slice in a row's inputs (oldkernels.PLESlice).
 	pleGate, pleProj *resident
 	mvpg, mvpp       mv
 	nPLE, pleOff     backend.Buf
@@ -235,11 +235,11 @@ type layer struct {
 	geo      geoKey
 	vFromK   bool
 	outScale backend.Buf
-	// xielu is an Apertus block's four activation numbers (kernels.XIELU's
+	// xielu is an Apertus block's four activation numbers (oldkernels.XIELU's
 	// pP), nil elsewhere.
 	xielu         backend.Buf
 	mvq, mvk, mvv mv
-	// qkv is q, k and v in one launch (kernels.MatVecSegments), each still
+	// qkv is q, k and v in one launch (oldkernels.MatVecSegments), each still
 	// writing its own buffer; nil where fuseQKV declined. qkvBlocks and qkvW
 	// are its grid.
 	qkv             backend.Kernel

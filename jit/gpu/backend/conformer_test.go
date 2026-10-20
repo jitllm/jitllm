@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestConformerKernelsMatchTheLoops runs a FastConformer block's kernels on
@@ -39,7 +39,7 @@ func TestConformerKernelsMatchTheLoops(t *testing.T) {
 			u, vb := convRand(rng, dm), convRand(rng, dm)
 
 			// Scores: the valid rows' valid keys.
-			ker, err := kernels.RelPosScores(r, heads, kd)
+			ker, err := oldkernels.RelPosScores(r, heads, kd)
 			got := convRun(t, d, ker, err, r*heads*r, r*heads*r, q, k, p, u, vb, nbuf)
 			for i := 0; i < tn; i++ {
 				for h := 0; h < heads; h++ {
@@ -67,7 +67,7 @@ func TestConformerKernelsMatchTheLoops(t *testing.T) {
 
 			// The weighted sum over the valid keys only.
 			probs := convRand(rng, r*heads*r)
-			ker, err = kernels.AttnAccRows(r, heads, kd)
+			ker, err = oldkernels.AttnAccRows(r, heads, kd)
 			got = convRun(t, d, ker, err, r*dm, r*dm, probs, v, nbuf)
 			for i := 0; i < tn; i++ {
 				for c := 0; c < dm; c++ {
@@ -84,7 +84,7 @@ func TestConformerKernelsMatchTheLoops(t *testing.T) {
 
 			// The centred depthwise convolution inside the valid rows.
 			w := convRand(rng, tc.k*dm)
-			ker, err = kernels.DWConv1dRows(tc.k, dm, r)
+			ker, err = oldkernels.DWConv1dRows(tc.k, dm, r)
 			got = convRun(t, d, ker, err, r*dm, r*dm, v, w, nbuf)
 			half := tc.k / 2
 			for i := 0; i < tn; i++ {
@@ -104,7 +104,7 @@ func TestConformerKernelsMatchTheLoops(t *testing.T) {
 			// The folded BatchNorm.
 			x := convRand(rng, r*dm)
 			sc, sh := convRand(rng, dm), convRand(rng, dm)
-			ker, err = kernels.AffineRows(dm, r)
+			ker, err = oldkernels.AffineRows(dm, r)
 			got = convRun(t, d, ker, err, r*dm, r*dm, x, sc, sh)
 			want := make([]float64, r*dm)
 			for i := range want {

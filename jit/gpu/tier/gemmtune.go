@@ -8,6 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // gemmDeepMargin is how far under f16Tiles' pick the deep tiles' median
@@ -47,7 +48,7 @@ func (g *devTier) tuneGemm() {
 		for _, u := range []use{{l.mvq, l.wq}, {l.mvk, l.wk}, {l.mvv, l.wv}, {l.mvo, l.wo},
 			{l.mvg, l.gate}, {l.mvu, l.up}, {l.mvd, l.down}} {
 			if u.r == nil || u.m.kern == nil || u.m.slots > 0 || u.m.bias != nil || kernels.IsFloat(u.m.q) ||
-				!kernels.Volta70OK(u.m.q) || u.r.nrows != u.m.rows {
+				!oldkernels.Volta70OK(u.m.q) || u.r.nrows != u.m.rows {
 				continue
 			}
 			key := splitKey{u.m.q, u.m.rows, u.m.k}

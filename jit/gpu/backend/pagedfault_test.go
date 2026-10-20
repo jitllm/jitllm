@@ -7,10 +7,10 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
-// TestPagedGatesDiscriminate arms each generation fault kernels.SetPagedFault
+// TestPagedGatesDiscriminate arms each generation fault oldkernels.SetPagedFault
 // knows and demands that the paged gates FAIL on it (RULE 10), on every
 // device, for both decode kernels, and that they pass again disarmed:
 //
@@ -21,7 +21,7 @@ func TestPagedGatesDiscriminate(t *testing.T) {
 	if len(devs) == 0 {
 		t.Skip("no GPU")
 	}
-	defer kernels.SetPagedFault("")
+	defer oldkernels.SetPagedFault("")
 	const page = 64
 	for _, d := range devs {
 		defer d.Close()
@@ -29,16 +29,16 @@ func TestPagedGatesDiscriminate(t *testing.T) {
 			for _, c := range []struct {
 				fault string
 				rows  string
-				shape kernels.FlashShape
+				shape oldkernels.FlashShape
 			}{
-				{"(t-1)/P", "one-long", kernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125}},
-				{"unaligned", "rows", kernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125}},
-				{"normpart", "one-long", kernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Splits: 3}},
-				{"sinkchunk", "one-long", kernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Splits: 3, Sink: true}},
-				{"vgroup", "one-long", kernels.FlashShape{Heads: 4, KVHeads: 2, Dim: 256, Scale: .0625}},
-				{"vecv", "rows", kernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 128, Scale: .088, VecV: true}},
-				{"f16k", "rows", kernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, F16K: true}},
-				{"f16k", "one-long", kernels.FlashShape{Heads: 4, KVHeads: 2, Dim: 34, Scale: .17, Splits: 2, F16K: true}},
+				{"(t-1)/P", "one-long", oldkernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125}},
+				{"unaligned", "rows", oldkernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125}},
+				{"normpart", "one-long", oldkernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Splits: 3}},
+				{"sinkchunk", "one-long", oldkernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Splits: 3, Sink: true}},
+				{"vgroup", "one-long", oldkernels.FlashShape{Heads: 4, KVHeads: 2, Dim: 256, Scale: .0625}},
+				{"vecv", "rows", oldkernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 128, Scale: .088, VecV: true}},
+				{"f16k", "rows", oldkernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, F16K: true}},
+				{"f16k", "one-long", oldkernels.FlashShape{Heads: 4, KVHeads: 2, Dim: 34, Scale: .17, Splits: 2, F16K: true}},
 			} {
 				for _, kv := range []bool{true, false} {
 					if (c.fault == "vgroup" && kv) || (c.fault == "vecv" && (!kv || d.API() == "spirv")) {
@@ -48,9 +48,9 @@ func TestPagedGatesDiscriminate(t *testing.T) {
 						rows := pagedCases(page)[c.rows]
 						s := c.shape
 						s.Page, s.Rows = page, len(rows)
-						build := kernels.FlashAttention
+						build := oldkernels.FlashAttention
 						if kv {
-							build = kernels.FlashDecodeKV
+							build = oldkernels.FlashDecodeKV
 						}
 						k, err := build(s)
 						if err != nil {
@@ -63,9 +63,9 @@ func TestPagedGatesDiscriminate(t *testing.T) {
 						if s.F16K {
 							p.withF16K()
 						}
-						kernels.SetPagedFault(c.fault)
+						oldkernels.SetPagedFault(c.fault)
 						bad, berr := pagedAttn(t, d, s, kv, p, p.tab, rows)
-						kernels.SetPagedFault("")
+						oldkernels.SetPagedFault("")
 						if berr == nil && bad < 1e-6 {
 							t.Fatalf("violation %q passed the gate: NMSE %.3g", c.fault, bad)
 						}
@@ -86,14 +86,14 @@ func TestPagedGatesDiscriminate(t *testing.T) {
 					if fault == "unaligned" {
 						rows = pagedCases(page)["rows"]
 					}
-					s := kernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: page, Chunk: 128, Splits: 4, Sink: true, F16K: fault == "f16k"}
+					s := oldkernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: page, Chunk: 128, Splits: 4, Sink: true, F16K: fault == "f16k"}
 					p := newPagedPool(rand.New(rand.NewSource(5)), page, s.KVHeads*s.Dim, s.F16, rows)
 					if s.F16K {
 						p.withF16K()
 					}
-					kernels.SetPagedFault(fault)
+					oldkernels.SetPagedFault(fault)
 					bad, berr := pagedStaged(t, d, s, 1, 1, p, p.tab, rows)
-					kernels.SetPagedFault("")
+					oldkernels.SetPagedFault("")
 					if berr == nil && bad < 1e-6 {
 						t.Fatalf("violation %q passed the staged gate: NMSE %.3g", fault, bad)
 					}
@@ -109,13 +109,13 @@ func TestPagedGatesDiscriminate(t *testing.T) {
 			// probability must fail its gate too.
 			for _, dim := range []int{64, 256} {
 				t.Run(fmt.Sprintf("vgroup/contiguous/d%d", dim), func(t *testing.T) {
-					s := kernels.FlashShape{Heads: 4, KVHeads: 2, Dim: dim, Rows: 3, KStride: 128, Scale: .125, F16: dim == 256}
-					if k, err := kernels.FlashAttention(s); err != nil || !laneOK(t, d, k) {
+					s := oldkernels.FlashShape{Heads: 4, KVHeads: 2, Dim: dim, Rows: 3, KStride: 128, Scale: .125, F16: dim == 256}
+					if k, err := oldkernels.FlashAttention(s); err != nil || !laneOK(t, d, k) {
 						t.Skip("no 32-lane guarantee")
 					}
-					kernels.SetPagedFault("vgroup")
+					oldkernels.SetPagedFault("vgroup")
 					bad, berr := flashDecodeNMSE(t, d, s, 97, false)
-					kernels.SetPagedFault("")
+					oldkernels.SetPagedFault("")
 					if berr == nil && bad < 1e-6 {
 						t.Fatalf("grouped V weighting every key by its group's first passed: NMSE %.3g", bad)
 					}
@@ -129,9 +129,9 @@ func TestPagedGatesDiscriminate(t *testing.T) {
 			// The writers share the page lookup: (t-1)/P misplaces the first slot
 			// of every page.
 			t.Run("f16krope/writers", func(t *testing.T) {
-				kernels.SetPagedFault("f16krope")
+				oldkernels.SetPagedFault("f16krope")
 				err := pagedWriteCheck(t, d, page, 2, 64, 64, true, false, true, []pagedRow{{0, 0, page}, {0, 0, 2*page + 3}, {5, 5, 5}})
-				kernels.SetPagedFault("")
+				oldkernels.SetPagedFault("")
 				if err == nil {
 					t.Fatal("the binary16 K writers passed with a word's halves swapped")
 				}
@@ -141,9 +141,9 @@ func TestPagedGatesDiscriminate(t *testing.T) {
 				}
 			})
 			t.Run("(t-1)/P/writers", func(t *testing.T) {
-				kernels.SetPagedFault("(t-1)/P")
+				oldkernels.SetPagedFault("(t-1)/P")
 				err := pagedWriteCheck(t, d, page, 2, 64, 64, true, false, false, []pagedRow{{0, 0, page}, {0, 0, 2*page + 3}})
-				kernels.SetPagedFault("")
+				oldkernels.SetPagedFault("")
 				if err == nil {
 					t.Fatal("the writers passed with page index (t-1)/P")
 				}

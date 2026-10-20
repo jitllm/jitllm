@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestGetRowsPackedMatchesDequant holds the device embedding lookup to the
@@ -77,7 +78,7 @@ func TestGetRowsPackedIsGated(t *testing.T) {
 
 func getRowsCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k int, ids []uint32, scale float32, violate bool) {
 	t.Helper()
-	kk, err := kernels.GetRowsPacked(q, rows, k, len(ids), scale)
+	kk, err := oldkernels.GetRowsPacked(q, rows, k, len(ids), scale)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +114,7 @@ func getRowsCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k int, i
 		}
 	}
 	out := g.up(f32bytes(nanFill(len(ids) * k)))
-	if err := kern.Launch((kernels.GetRowsThreads(q, k, len(ids))+127)/128, 128,
+	if err := kern.Launch((oldkernels.GetRowsThreads(q, k, len(ids))+127)/128, 128,
 		g.up(u32bytes(qs)), g.up(u32bytes(dw)), g.up(u32bytes(scw)), g.up(u32bytes(send)), out); err != nil {
 		t.Fatal(err)
 	}

@@ -5,6 +5,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // mlaBatch is the scratch for multi-head latent attention over a batched
@@ -37,9 +38,9 @@ type mlaBatch struct {
 	sliceNope, slicePE, ropeQ, gatherNope, quantNope, copyAbs, copyPE,
 	acc, gatherAcc, quantAcc, gatherOut, quantOut backend.Kernel
 	// scores70 is the scores on sm_70's m8n8k4 over the row-major latent
-	// cache (kernels.AttnScoresMMA70 at kStride 0), nil where the FMA tile
+	// cache (oldkernels.AttnScoresMMA70 at kStride 0), nil where the FMA tile
 	// the block scratch built (bs.scores) serves; acc70 the accumulate
-	// (kernels.AttnAccMMA70), nil where acc serves.
+	// (oldkernels.AttnAccMMA70), nil where acc serves.
 	scores70, acc70 backend.Kernel
 
 	kv, kvLat, kvn, kvPart, kpe, pOff, qa, qan, qaPart,
@@ -84,36 +85,36 @@ func (g *devTier) newMLABatch(bs *blockScratch, p *nn.LayerPlan, rows int) *mlaB
 	}
 	R, nope, row, hdv := rows, m.nope, m.row, m.hdv
 	// The shared latent and its rotary key.
-	kern(&m.sliceLat, func() (*ir.Kernel, error) { return kernels.SliceRows(lat, row, 0, R) })
-	kern(&m.normPart, func() (*ir.Kernel, error) { return kernels.NormPartRows(lat, m.parts, R) })
-	kern(&m.normApply, func() (*ir.Kernel, error) { return kernels.NormApplyRows(lat, m.parts, eps, false, R) })
-	kern(&m.copyLat, func() (*ir.Kernel, error) { return kernels.CopyAtRows(lat, R) })
-	kern(&m.sliceKPE, func() (*ir.Kernel, error) { return kernels.SliceRows(rot, row, lat, R) })
+	kern(&m.sliceLat, func() (*ir.Kernel, error) { return oldkernels.SliceRows(lat, row, 0, R) })
+	kern(&m.normPart, func() (*ir.Kernel, error) { return oldkernels.NormPartRows(lat, m.parts, R) })
+	kern(&m.normApply, func() (*ir.Kernel, error) { return oldkernels.NormApplyRows(lat, m.parts, eps, false, R) })
+	kern(&m.copyLat, func() (*ir.Kernel, error) { return oldkernels.CopyAtRows(lat, R) })
+	kern(&m.sliceKPE, func() (*ir.Kernel, error) { return oldkernels.SliceRows(rot, row, lat, R) })
 	if p.NoPosEnc {
-		kern(&m.noPEK, func() (*ir.Kernel, error) { return kernels.CopyAtRows(rot, R) })
+		kern(&m.noPEK, func() (*ir.Kernel, error) { return oldkernels.CopyAtRows(rot, R) })
 	}
 	// The fault arm's rotations on a NoPE model (MLAFaultRotateNoPE).
 	rotate := !p.NoPosEnc || g.kb.mlaFault == MLAFaultRotateNoPE
 	if rotate {
-		kern(&m.ropeK, func() (*ir.Kernel, error) { return kernels.RoPERows(1, rot, rot, p.RopeNeox, R) })
+		kern(&m.ropeK, func() (*ir.Kernel, error) { return oldkernels.RoPERows(1, rot, rot, p.RopeNeox, R) })
 	}
 	if m.qlr != 0 {
-		kern(&m.qaNormPart, func() (*ir.Kernel, error) { return kernels.NormPartRows(m.qlr, m.qaParts, R) })
+		kern(&m.qaNormPart, func() (*ir.Kernel, error) { return oldkernels.NormPartRows(m.qlr, m.qaParts, R) })
 		kern(&m.qaNormApply, func() (*ir.Kernel, error) {
-			return kernels.NormApplyRows(m.qlr, m.qaParts, eps, false, R)
+			return oldkernels.NormApplyRows(m.qlr, m.qaParts, eps, false, R)
 		})
-		kern(&m.qaQuant, func() (*ir.Kernel, error) { return kernels.Quantize(R*m.qlr, actWin) })
+		kern(&m.qaQuant, func() (*ir.Kernel, error) { return oldkernels.Quantize(R*m.qlr, actWin) })
 	}
 	// The query's two halves, the absorb and the assembled row-wide query.
-	kern(&m.sliceNope, func() (*ir.Kernel, error) { return kernels.SliceRows(nope, p.HeadDim, 0, R*nh) })
-	kern(&m.slicePE, func() (*ir.Kernel, error) { return kernels.SliceRows(rot, p.HeadDim, nope, R*nh) })
+	kern(&m.sliceNope, func() (*ir.Kernel, error) { return oldkernels.SliceRows(nope, p.HeadDim, 0, R*nh) })
+	kern(&m.slicePE, func() (*ir.Kernel, error) { return oldkernels.SliceRows(rot, p.HeadDim, nope, R*nh) })
 	if rotate {
-		kern(&m.ropeQ, func() (*ir.Kernel, error) { return kernels.RoPERows(nh, rot, rot, p.RopeNeox, R) })
+		kern(&m.ropeQ, func() (*ir.Kernel, error) { return oldkernels.RoPERows(nh, rot, rot, p.RopeNeox, R) })
 	}
-	kern(&m.gatherNope, func() (*ir.Kernel, error) { return kernels.GatherRows(nope, nh*R, R*nh) })
-	kern(&m.quantNope, func() (*ir.Kernel, error) { return kernels.Quantize(nh*R*nope, actWin) })
-	kern(&m.copyAbs, func() (*ir.Kernel, error) { return kernels.CopyAtRows(lat, nh*R) })
-	kern(&m.copyPE, func() (*ir.Kernel, error) { return kernels.CopyAtRows(rot, R*nh) })
+	kern(&m.gatherNope, func() (*ir.Kernel, error) { return oldkernels.GatherRows(nope, nh*R, R*nh) })
+	kern(&m.quantNope, func() (*ir.Kernel, error) { return oldkernels.Quantize(nh*R*nope, actWin) })
+	kern(&m.copyAbs, func() (*ir.Kernel, error) { return oldkernels.CopyAtRows(lat, nh*R) })
+	kern(&m.copyPE, func() (*ir.Kernel, error) { return oldkernels.CopyAtRows(rot, R*nh) })
 	// The accumulate at the latent's width over the row-wide cache, and the
 	// un-absorb's two reorderings.
 	kern(&m.acc, func() (*ir.Kernel, error) {
@@ -124,7 +125,7 @@ func (g *devTier) newMLABatch(bs *blockScratch, p *nn.LayerPlan, rows int) *mlaB
 		if g.kb.mlaFault == MLAFaultValueHeadMajor {
 			gqa = 1
 		}
-		return kernels.AttnAccTiled(nh, lat, row, gqa, bs.sstride, R, bs.atile)
+		return oldkernels.AttnAccTiled(nh, lat, row, gqa, bs.sstride, R, bs.atile)
 	})
 	// Scores and accumulate on sm_70's tensor cores. The FMA tile walks the
 	// row in 4-byte loads a row apart (the layout is the cache's and cannot
@@ -146,18 +147,18 @@ func (g *devTier) newMLABatch(bs *blockScratch, p *nn.LayerPlan, rows int) *mlaB
 			}
 			return c
 		}
-		m.scores70 = comp(kernels.AttnScoresMMA70(nh, row, row, nh, bs.sstride, g.scoreScale(p), R, 0,
+		m.scores70 = comp(oldkernels.AttnScoresMMA70(nh, row, row, nh, bs.sstride, g.scoreScale(p), R, 0,
 			volta70AttnMT, volta70AttnNT, 0))
 		gqa := nh
 		if g.kb.mlaFault == MLAFaultValueHeadMajor {
 			gqa = 1 // the tiled accumulate's fault arm, for the same gate
 		}
-		m.acc70 = comp(kernels.AttnAccMMA70(nh, lat, row, gqa, bs.sstride, R, volta70LatMT(lat), volta70AttnNT))
+		m.acc70 = comp(oldkernels.AttnAccMMA70(nh, lat, row, gqa, bs.sstride, R, volta70LatMT(lat), volta70AttnNT))
 	}
-	kern(&m.gatherAcc, func() (*ir.Kernel, error) { return kernels.GatherRows(lat, nh*R, R*nh) })
-	kern(&m.quantAcc, func() (*ir.Kernel, error) { return kernels.Quantize(nh*R*lat, actWin) })
-	kern(&m.gatherOut, func() (*ir.Kernel, error) { return kernels.GatherRows(hdv, R*nh, nh*R) })
-	kern(&m.quantOut, func() (*ir.Kernel, error) { return kernels.Quantize(R*nh*hdv, actWin) })
+	kern(&m.gatherAcc, func() (*ir.Kernel, error) { return oldkernels.GatherRows(lat, nh*R, R*nh) })
+	kern(&m.quantAcc, func() (*ir.Kernel, error) { return oldkernels.Quantize(nh*R*lat, actWin) })
+	kern(&m.gatherOut, func() (*ir.Kernel, error) { return oldkernels.GatherRows(hdv, R*nh, nh*R) })
+	kern(&m.quantOut, func() (*ir.Kernel, error) { return oldkernels.Quantize(R*nh*hdv, actWin) })
 
 	for _, b := range []struct {
 		dst *backend.Buf
@@ -298,7 +299,7 @@ func (g *devTier) emitMLARows(s backend.Session, bs *blockScratch, l *layer, kvp
 	if m.qlr != 0 {
 		lc.la(m.qaNormPart, R*m.qaParts, m.qa, m.qaPart)
 		lc.la(m.qaNormApply, R*m.qlr, m.qa, l.nQA, m.qaPart, m.qan)
-		lc.la(m.qaQuant, kernels.QuantizeThreads(R*m.qlr/32), m.qan, bs.a, bs.ax)
+		lc.la(m.qaQuant, oldkernels.QuantizeThreads(R*m.qlr/32), m.qan, bs.a, bs.ax)
 		mvrun(l.mvQB, l.wqb, bs.q)
 		if idx {
 			g.idxQuery(lc, bs, l, R, pc, mvrun)
@@ -335,7 +336,7 @@ func (g *devTier) emitMLARows(s backend.Session, bs *blockScratch, l *layer, kvp
 		pe = m.pErot
 	}
 	lc.la(m.gatherNope, nh*R*nope, m.qNope, m.permHM, m.nopeHM)
-	lc.la(m.quantNope, kernels.QuantizeThreads(nh*R*nope/32), m.nopeHM, bs.a, bs.ax)
+	lc.la(m.quantNope, oldkernels.QuantizeThreads(nh*R*nope/32), m.nopeHM, bs.a, bs.ax)
 	absMV, absW, unMV, unW := mlaBanks(l, g.kb.mlaFault)
 	grouped(absMV, absW, m.nopeHM, m.absRaw)
 	lc.la(m.copyAbs, nh*R*lat, m.absRaw, m.abs, m.absOff)
@@ -364,10 +365,10 @@ func (g *devTier) emitMLARows(s backend.Session, bs *blockScratch, l *layer, kvp
 
 	// ── un-absorb W_v, head-major, and project out token-major ──────────
 	lc.la(m.gatherAcc, nh*R*lat, m.accOut, m.permHM, m.accHM)
-	lc.la(m.quantAcc, kernels.QuantizeThreads(nh*R*lat/32), m.accHM, bs.a, bs.ax)
+	lc.la(m.quantAcc, oldkernels.QuantizeThreads(nh*R*lat/32), m.accHM, bs.a, bs.ax)
 	grouped(unMV, unW, m.accHM, m.outHM)
 	lc.la(m.gatherOut, R*nh*m.hdv, m.outHM, m.permTM, m.out)
-	lc.la(m.quantOut, kernels.QuantizeThreads(R*nh*m.hdv/32), g.k3GatedMLA(lc, bs, l, R, m.out), bs.a, bs.ax)
+	lc.la(m.quantOut, oldkernels.QuantizeThreads(R*nh*m.hdv/32), g.k3GatedMLA(lc, bs, l, R, m.out), bs.a, bs.ax)
 	mvrun(l.mvo, l.wo, bs.mvOut)
 	g.MLABatched++
 }
@@ -412,7 +413,7 @@ func (g *devTier) emitMLARowsContiguous(s backend.Session, bs *blockScratch, kvp
 	m := bs.mlab
 	R, nh, lat := m.rows, m.nh, m.lat
 	if m.scores70 != nil {
-		lc.la(m.scores70, kernels.AttnScoresMMA70Warps(nh, R, nCap, volta70AttnMT, volta70AttnNT)*32,
+		lc.la(m.scores70, oldkernels.AttnScoresMMA70Warps(nh, R, nCap, volta70AttnMT, volta70AttnNT)*32,
 			m.abs, kvp.kc, bs.n, bs.att)
 		g.MLAScores70++
 	} else {
@@ -424,7 +425,7 @@ func (g *devTier) emitMLARowsContiguous(s backend.Session, bs *blockScratch, kvp
 		*errp = lc.launch(sm, smG, smW, bs.att, bs.n, bs.prob)
 	}
 	if m.acc70 != nil {
-		lc.la(m.acc70, kernels.AttnAccMMA70Warps(nh, lat, R, volta70LatMT(lat), volta70AttnNT)*32,
+		lc.la(m.acc70, oldkernels.AttnAccMMA70Warps(nh, lat, R, volta70LatMT(lat), volta70AttnNT)*32,
 			bs.prob, kvp.value(), bs.n, m.accOut)
 		g.MLAAcc70++
 	} else {

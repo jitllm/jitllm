@@ -10,6 +10,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestGemmDeepSweep times GemmVolta's m16n8 tiles on Llama-3.1-8B
@@ -36,11 +37,11 @@ func TestGemmDeepSweep(t *testing.T) {
 		}
 		type arm struct {
 			name   string
-			tl     kernels.VoltaTile
+			tl     oldkernels.VoltaTile
 			depth  int
 			split  int
 			kern   backend.Kernel
-			s      kernels.MatVecShape
+			s      oldkernels.MatVecShape
 			ratios []float64
 			us     []float64
 		}
@@ -68,12 +69,12 @@ func TestGemmDeepSweep(t *testing.T) {
 			out := g.up(make([]byte, 4*sh.rows*ntok*4))
 			bB := g.up(make([]byte, ntok*sh.k*2))
 			sync := func() { out.Read(make([]byte, 4)) }
-			ship := kernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 2}
+			ship := oldkernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 2}
 			var arms []*arm
-			addArm := func(name string, tl kernels.VoltaTile, depth, split int) {
+			addArm := func(name string, tl oldkernels.VoltaTile, depth, split int) {
 				tl.KB, tl.F16K = max(depth/sub, 1), f16k
-				s := kernels.MatVecShape{T: sh.q, K: sh.k, Rows: sh.rows, NTok: ntok, Split: split}
-				kk, err := kernels.GemmVolta(s, tl)
+				s := oldkernels.MatVecShape{T: sh.q, K: sh.k, Rows: sh.rows, NTok: ntok, Split: split}
+				kk, err := oldkernels.GemmVolta(s, tl)
 				if err != nil {
 					return
 				}
@@ -89,7 +90,7 @@ func TestGemmDeepSweep(t *testing.T) {
 			addArm("ship s2", ship, 32, 2)
 			for _, depth := range []int{32, 64, 128} {
 				for _, single := range []bool{false, true} {
-					for _, tl := range []kernels.VoltaTile{
+					for _, tl := range []oldkernels.VoltaTile{
 						{MT: 4, NT: 4, WM: 2, WN: 2}, {MT: 4, NT: 2, WM: 2, WN: 2},
 						{MT: 4, NT: 2, WM: 2, WN: 4}, {MT: 2, NT: 4, WM: 4, WN: 2}, {MT: 4, NT: 4, WM: 2, WN: 4},
 					} {
@@ -104,7 +105,7 @@ func TestGemmDeepSweep(t *testing.T) {
 				}
 			}
 			launch := func(a *arm) error {
-				return a.kern.Launch(kernels.GemmVoltaGroups(a.s, a.tl), a.tl.Threads(), bQS, bD, bSC, bB, out)
+				return a.kern.Launch(oldkernels.GemmVoltaGroups(a.s, a.tl), a.tl.Threads(), bQS, bD, bSC, bB, out)
 			}
 			for _, a := range arms {
 				if err := launch(a); err != nil {

@@ -9,7 +9,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // The gates for the paged PREFILL kernels (docs/design/device-kv-paging.md):
@@ -197,7 +197,7 @@ func prefillSplits(rows []pagedRow, chunk, extra int) int {
 // pagedPrefillStaged runs one staged form over the pool through tab and desc
 // and returns the output ([row][head][value]) and its NMSE against the
 // oracle, or an error for a non-finite output or an overrun.
-func pagedPrefillStaged(t *testing.T, d backend.Device, s kernels.FlashShape, f prefillForm, p *pagedPool, tab, desc []uint32, rows []pagedRow) ([]float64, float64, error) {
+func pagedPrefillStaged(t *testing.T, d backend.Device, s oldkernels.FlashShape, f prefillForm, p *pagedPool, tab, desc []uint32, rows []pagedRow) ([]float64, float64, error) {
 	t.Helper()
 	s.Rows = len(rows)
 	vd := s.Dim
@@ -215,28 +215,28 @@ func pagedPrefillStaged(t *testing.T, d backend.Device, s kernels.FlashShape, f 
 	}
 	switch {
 	case f.mmaNT > 0:
-		build(kernels.PagedAttnScoresMMA(s, f.mmaNT))
+		build(oldkernels.PagedAttnScoresMMA(s, f.mmaNT))
 	case f.voltaMT > 0:
-		build(kernels.PagedAttnScoresMMA70(s, f.voltaMT, f.voltaNT))
+		build(oldkernels.PagedAttnScoresMMA70(s, f.voltaMT, f.voltaNT))
 	default:
-		build(kernels.PagedAttnScoresTiled(s, f.scoresQT, f.scoresKT))
+		build(oldkernels.PagedAttnScoresTiled(s, f.scoresQT, f.scoresKT))
 	}
-	build(kernels.PagedPrefillSoftmax(s, f.smLanes, f.accTile()))
+	build(oldkernels.PagedPrefillSoftmax(s, f.smLanes, f.accTile()))
 	switch {
 	case f.voltaMT > 0:
-		build(kernels.PagedAttnAccMMA70(s, f.accMT(), f.voltaNT))
+		build(oldkernels.PagedAttnAccMMA70(s, f.accMT(), f.voltaNT))
 	case f.accMMA[0] > 0:
-		build(kernels.PagedAttnAccMMA(s, f.accMMA[0], f.accMMA[1]))
+		build(oldkernels.PagedAttnAccMMA(s, f.accMMA[0], f.accMMA[1]))
 	default:
-		build(kernels.PagedAttnAccTiled(s, f.accQT))
+		build(oldkernels.PagedAttnAccTiled(s, f.accQT))
 	}
 	direct := s.Splits == 0 // the accumulate writes the output, no merge
 	switch {
 	case direct:
 	case f.groupMerge:
-		build(kernels.FlashAttentionMerge(ms))
+		build(oldkernels.FlashAttentionMerge(ms))
 	default:
-		build(kernels.FlashAttentionMergeWide(ms))
+		build(oldkernels.FlashAttentionMergeWide(ms))
 	}
 	var cs []backend.Kernel
 	for i, k := range ks {
@@ -266,9 +266,9 @@ func pagedPrefillStaged(t *testing.T, d backend.Device, s kernels.FlashShape, f 
 	}
 	no := g.up(u32bytes([]uint32{0xFFFFFFFF, 0xFFFFFFFF}))
 	to, ro := g.up(u32bytes(tab)), g.up(u32bytes(desc))
-	plane := kernels.PagedPrefillPlane(s)
+	plane := oldkernels.PagedPrefillPlane(s)
 	sc, pr := nanBuf(plane), nanBuf(plane)
-	part := nanBuf(kernels.FlashPartialFloats(ms))
+	part := nanBuf(oldkernels.FlashPartialFloats(ms))
 	so := g.up(f32bytes(sinks))
 	var err error
 	d.Session(func(se backend.Session) {
@@ -279,16 +279,16 @@ func pagedPrefillStaged(t *testing.T, d backend.Device, s kernels.FlashShape, f 
 		}
 		switch {
 		case f.mmaNT > 0:
-			launch(cs[0], (kernels.PagedAttnScoresMMAWarps(s, f.mmaNT)+3)/4, 128, qo, ko, no, sc, to, ro)
+			launch(cs[0], (oldkernels.PagedAttnScoresMMAWarps(s, f.mmaNT)+3)/4, 128, qo, ko, no, sc, to, ro)
 		case f.voltaMT > 0:
-			launch(cs[0], (kernels.PagedAttnScoresMMA70Warps(s, f.voltaMT, f.voltaNT)+3)/4, 128, qo, ko, no, sc, to, ro)
+			launch(cs[0], (oldkernels.PagedAttnScoresMMA70Warps(s, f.voltaMT, f.voltaNT)+3)/4, 128, qo, ko, no, sc, to, ro)
 		default:
-			launch(cs[0], (kernels.PagedAttnScoresTiledThreads(s, f.scoresQT, f.scoresKT)+127)/128, 128, qo, ko, no, sc, to, ro)
+			launch(cs[0], (oldkernels.PagedAttnScoresTiledThreads(s, f.scoresQT, f.scoresKT)+127)/128, 128, qo, ko, no, sc, to, ro)
 		}
 		if direct && s.Sink {
-			launch(cs[1], kernels.PagedPrefillSoftmaxGroups(s, f.smLanes), kernels.PagedPrefillSoftmaxWidth(f.smLanes), sc, no, pr, part, to, ro, so)
+			launch(cs[1], oldkernels.PagedPrefillSoftmaxGroups(s, f.smLanes), oldkernels.PagedPrefillSoftmaxWidth(f.smLanes), sc, no, pr, part, to, ro, so)
 		} else {
-			launch(cs[1], kernels.PagedPrefillSoftmaxGroups(s, f.smLanes), kernels.PagedPrefillSoftmaxWidth(f.smLanes), sc, no, pr, part, to, ro)
+			launch(cs[1], oldkernels.PagedPrefillSoftmaxGroups(s, f.smLanes), oldkernels.PagedPrefillSoftmaxWidth(f.smLanes), sc, no, pr, part, to, ro)
 		}
 		dst := part
 		if direct {
@@ -296,11 +296,11 @@ func pagedPrefillStaged(t *testing.T, d backend.Device, s kernels.FlashShape, f 
 		}
 		switch {
 		case f.voltaMT > 0:
-			launch(cs[2], (kernels.PagedAttnAccMMA70Warps(s, f.accMT(), f.voltaNT)+3)/4, 128, pr, vo, no, dst, to, ro)
+			launch(cs[2], (oldkernels.PagedAttnAccMMA70Warps(s, f.accMT(), f.voltaNT)+3)/4, 128, pr, vo, no, dst, to, ro)
 		case f.accMMA[0] > 0:
-			launch(cs[2], (kernels.PagedAttnAccMMAWarps(s, f.accMMA[0], f.accMMA[1])+3)/4, 128, pr, vo, no, dst, to, ro)
+			launch(cs[2], (oldkernels.PagedAttnAccMMAWarps(s, f.accMMA[0], f.accMMA[1])+3)/4, 128, pr, vo, no, dst, to, ro)
 		default:
-			launch(cs[2], (kernels.PagedAttnAccTiledThreads(s, f.accQT)+127)/128, 128, pr, vo, no, dst, to, ro)
+			launch(cs[2], (oldkernels.PagedAttnAccTiledThreads(s, f.accQT)+127)/128, 128, pr, vo, no, dst, to, ro)
 		}
 		ma := []backend.Buf{part, oo}
 		if s.Sink {
@@ -332,7 +332,7 @@ func pagedPrefillStaged(t *testing.T, d backend.Device, s kernels.FlashShape, f 
 
 // prefillInputs is a shape's queries and per-head sink logits, the same for
 // every arm of a comparison.
-func prefillInputs(s kernels.FlashShape) (q, sinks []float32) {
+func prefillInputs(s oldkernels.FlashShape) (q, sinks []float32) {
 	rng := rand.New(rand.NewSource(97))
 	q = make([]float32, s.Rows*s.Heads*s.Dim)
 	for i := range q {
@@ -347,7 +347,7 @@ func prefillInputs(s kernels.FlashShape) (q, sinks []float32) {
 
 // prefillNMSE is got's NMSE against pagedWant, or an error for a non-finite
 // element or a degenerate oracle.
-func prefillNMSE(s kernels.FlashShape, p *pagedPool, rows []pagedRow, q, sinks []float32, got []float64) (float64, error) {
+func prefillNMSE(s oldkernels.FlashShape, p *pagedPool, rows []pagedRow, q, sinks []float32, got []float64) (float64, error) {
 	want := pagedWant(s, p, rows, q, sinks)
 	var se, ss float64
 	for i, w := range want {
@@ -367,7 +367,7 @@ func prefillNMSE(s kernels.FlashShape, p *pagedPool, rows []pagedRow, q, sinks [
 // shortDesc is desc with every row's keyEnd one short: the last key dropped.
 func shortDesc(desc []uint32) []uint32 {
 	out := append([]uint32(nil), desc...)
-	for i := kernels.PRowEnd; i < len(out); i += kernels.PRowWords {
+	for i := oldkernels.PRowEnd; i < len(out); i += oldkernels.PRowWords {
 		if out[i] > out[i-1] {
 			out[i]--
 		}
@@ -378,7 +378,7 @@ func shortDesc(desc []uint32) []uint32 {
 // prefillShapes are the geometries every staged prefill gate sweeps: GQA,
 // sinks and softcap, packed f16 V, an odd head width, a wide head, and MLA's
 // row-major region with the value its prefix, at a latent's widths.
-var prefillShapes = []kernels.FlashShape{
+var prefillShapes = []oldkernels.FlashShape{
 	{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125},
 	{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Sink: true, Softcap: 3},
 	{Heads: 6, KVHeads: 6, Dim: 48, Scale: .14, F16: true, Sink: true},

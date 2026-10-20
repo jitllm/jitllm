@@ -3,7 +3,7 @@ package tier
 import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // blockScratch is the per-call staging every layer of a lane shares: a call
@@ -57,21 +57,21 @@ type blockScratch struct {
 
 	scoresW, scoresMMAW backend.Kernel
 	// scores70/scores70W/acc70 are the batched attention on sm_70's m8n8k4
-	// (kernels.AttnScoresMMA70/AttnAccMMA70), for a device whose m16n8k16 f16
+	// (oldkernels.AttnScoresMMA70/AttnAccMMA70), for a device whose m16n8k16 f16
 	// scores kernel does not lower. acc70 walks 32-row groups, so atile is 32.
 	scores70, scores70W, acc70 backend.Kernel
 	// mla70 says a batched latent block's attention runs on sm_70's m8n8k4
 	// (mlabatch.go): its accumulate walks 32-row groups too, so the softmax
 	// this scratch builds takes atile 32 for it (mla70Attn).
 	mla70 bool
-	// fp70/fp70W are the same attention as one kernel (kernels.FlashPrefill70),
+	// fp70/fp70W are the same attention as one kernel (oldkernels.FlashPrefill70),
 	// the second for a sliding-window layer; nil where it does not take the
 	// shape, and the three above run instead.
 	fp70, fp70W backend.Kernel
 	// fpT/fpTW are that one kernel on a collective matrix unit
-	// (kernels.FlashPrefillTile, Metal), blocked by fpTile.
+	// (oldkernels.FlashPrefillTile, Metal), blocked by fpTile.
 	fpT, fpTW backend.Kernel
-	fpTile    kernels.FlashTile
+	fpTile    oldkernels.FlashTile
 	// The ragged-decode set (rows.go): attention whose rows are different
 	// sequences, a per-row softmax, the head's batched twin and a per-row argmax.
 	ragArgmax         backend.Kernel
@@ -175,14 +175,14 @@ type blockScratch struct {
 	ropeTable              backend.Kernel
 	ropeNPairs             int
 	quantE, quantF, quantQ backend.Kernel
-	// quantAct is ActMul and quantF in one launch (kernels.QuantizeAct), nil
+	// quantAct is ActMul and quantF in one launch (oldkernels.QuantizeAct), nil
 	// for an ungated FFN or an activation ActMul has no gated form of.
 	quantAct            backend.Kernel
 	normPart, normApply backend.Kernel
 	// A vision block normalises with LayerNorm, which is three kernels: the mean,
 	// the variance about it, then the apply. The passes cannot fuse because
 	// E[x^2]-E[x]^2 cancels in f32 on a ViT residual whose mean dwarfs its
-	// variance (see kernels.LayerNormPart). normPart is the first pass either way
+	// variance (see oldkernels.LayerNormPart). normPart is the first pass either way
 	// (sums of squares for RMSNorm, the mean for LayerNorm); normVar is
 	// LayerNorm's second, nil otherwise.
 	normVar backend.Kernel
@@ -225,15 +225,15 @@ type blockScratch struct {
 	// kernel bs.rms is), two launches a layer where the pair took four.
 	qkRms backend.Kernel
 	// rms and addRms are the whole RMSNorm in one launch of R groups of
-	// kernels.RMSNormGroup -- rms for the norm closure, addRms for a residual
+	// oldkernels.RMSNormGroup -- rms for the norm closure, addRms for a residual
 	// add followed by the FFN norm. nil for a LayerNorm (vision) block.
 	rms, addRms backend.Kernel
 	// rmsQ and addRmsQ are rms and addRms that also write the quantized
-	// activation quantE would (kernels.RMSNormQuantRows): one launch where the
+	// activation quantE would (oldkernels.RMSNormQuantRows): one launch where the
 	// norm and the quantize were two. nil where they cannot be built.
 	rmsQ, addRmsQ backend.Kernel
 	// subQA and subQF are BitNet's inner norms fused with the quantize wo and
-	// down read (kernels.RMSNormQuantRows at qdim and NFFN, the row window),
+	// down read (oldkernels.RMSNormQuantRows at qdim and NFFN, the row window),
 	// writing the normed rows to sub. nil elsewhere.
 	subQA, subQF backend.Kernel
 	sub          backend.Buf
@@ -277,8 +277,8 @@ type blockScratch struct {
 	// separate destination because the fold reads the routed sum in bs.mvOut
 	// (RULE 13).
 	shRouterK, shActMul, shQuant, shAdd backend.Kernel
-	// routeWidth is bs.route's workgroup: one warp for kernels.ExpertRouteWarp,
-	// ExpertRouteWidth(NExpert) for kernels.ExpertRoute.
+	// routeWidth is bs.route's workgroup: one warp for oldkernels.ExpertRouteWarp,
+	// ExpertRouteWidth(NExpert) for oldkernels.ExpertRoute.
 	routeWidth                             int
 	shg, shu, shact, shout, shlogit, shsum backend.Buf
 	nShExp                                 int
@@ -292,7 +292,7 @@ type blockScratch struct {
 	qkNorm, qkScale, deltaStep   backend.Kernel
 	outNorm, outActMul           backend.Kernel
 	// outNormGate is outNorm and its gate (outActMul or outSigMul) in one
-	// launch (kernels.HeadNormGated, graph.NormGate).
+	// launch (oldkernels.HeadNormGated, graph.NormGate).
 	outNormGate            backend.Kernel
 	sliceQ, sliceK, sliceV backend.Kernel
 	dMixed, dConv, dZ, dBA backend.Buf
@@ -308,16 +308,16 @@ type blockScratch struct {
 	quantLR, deltaGateChan            backend.Kernel
 	deltaStepChan, outSigMul          backend.Kernel
 	// deltaScan is the gated delta rule over a whole chunk in one launch
-	// (kernels.GatedDeltaScan): every token of the chunk steps the state,
+	// (oldkernels.GatedDeltaScan): every token of the chunk steps the state,
 	// which GatedDeltaStep -- one token -- cannot. scanThreads is its grid.
 	deltaScan   backend.Kernel
 	scanThreads int
 	// deltaFused is deltaScan with everything from the convolution's output to
-	// the rule folded in (kernels.GatedDeltaFused); built where the device has
+	// the rule folded in (oldkernels.GatedDeltaFused); built where the device has
 	// a subgroup, and then the eleven kernels it replaces are not launched.
 	deltaFused backend.Kernel
 	// ssdScan is Mamba-2's whole update at this scratch's rows
-	// (kernels.GatedDeltaFused with SSD), from the convolution's raw output
+	// (oldkernels.GatedDeltaFused with SSD), from the convolution's raw output
 	// and the dt projection to the output and the next state, at any row
 	// count and any lanes; ssdNorm its grouped gated norm (ssdNormL the lanes
 	// it was built at), and copyRes the copy a block with no FFN ends with,
@@ -336,10 +336,10 @@ type blockScratch struct {
 	side backend.Buf
 	// LFM2's short convolution: its two gates' rows (scB, scC), B*x (scBx),
 	// C times the convolution (scY) and the plain product that forms both
-	// (scMul, kernels.ActMul with the identity).
+	// (scMul, oldkernels.ActMul with the identity).
 	scB, scC, scBx, scY backend.Buf
 	scMul               backend.Kernel
-	// convCentred is an LFM2 encoder's convolution (kernels.Conv3Centred),
+	// convCentred is an LFM2 encoder's convolution (oldkernels.Conv3Centred),
 	// and vwinAll every row's window in one buffer, the taps' bounds
 	// (setWindowsLocked writes it beside the per-pass vwins).
 	convCentred backend.Kernel

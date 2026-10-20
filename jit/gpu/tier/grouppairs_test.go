@@ -7,7 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // groupPairs must give every (token, slot) pair its own column inside its
@@ -136,7 +136,7 @@ func tselOf(colE []uint32, unit int, tsel []uint32) {
 	}
 }
 
-// TestDeviceGroupingMatchesTheReference holds kernels.ExpertGroup* -- the
+// TestDeviceGroupingMatchesTheReference holds oldkernels.ExpertGroup* -- the
 // batched mixture's grouping, which moved from Go onto the device -- to
 // groupPairs and tselOf above, bit for bit, on every real backend: random
 // selections, every pair on ONE expert, most experts empty, k of 1, and the
@@ -239,13 +239,13 @@ func runGrouping(d backend.Device, sel []uint32, rows, k, nExp, unit, np int) (g
 		c, err = d.Compile(kk)
 		return c
 	}
-	bcount := comp(func() (*ir.Kernel, error) { return kernels.ExpertGroupBlockCount(rows, k, nExp) })
-	count := comp(func() (*ir.Kernel, error) { return kernels.ExpertGroupCount(rows, k, nExp) })
-	ends := comp(func() (*ir.Kernel, error) { return kernels.ExpertGroupEnds(nExp, unit) })
-	cols := comp(func() (*ir.Kernel, error) { return kernels.ExpertGroupColumns(rows, nExp, np, true) })
-	scatter := comp(func() (*ir.Kernel, error) { return kernels.ExpertGroupScatter(rows, k, nExp, unit, np, true) })
-	tiles := comp(func() (*ir.Kernel, error) { return kernels.ExpertGroupTiles(nExp, np/groupTok, groupTok) })
-	tilesU := comp(func() (*ir.Kernel, error) { return kernels.ExpertGroupTiles(nExp, np/unit, unit) })
+	bcount := comp(func() (*ir.Kernel, error) { return oldkernels.ExpertGroupBlockCount(rows, k, nExp) })
+	count := comp(func() (*ir.Kernel, error) { return oldkernels.ExpertGroupCount(rows, k, nExp) })
+	ends := comp(func() (*ir.Kernel, error) { return oldkernels.ExpertGroupEnds(nExp, unit) })
+	cols := comp(func() (*ir.Kernel, error) { return oldkernels.ExpertGroupColumns(rows, nExp, np, true) })
+	scatter := comp(func() (*ir.Kernel, error) { return oldkernels.ExpertGroupScatter(rows, k, nExp, unit, np, true) })
+	tiles := comp(func() (*ir.Kernel, error) { return oldkernels.ExpertGroupTiles(nExp, np/groupTok, groupTok) })
+	tilesU := comp(func() (*ir.Kernel, error) { return oldkernels.ExpertGroupTiles(nExp, np/unit, unit) })
 	if err != nil {
 		return out, err
 	}
@@ -264,7 +264,7 @@ func runGrouping(d backend.Device, sel []uint32, rows, k, nExp, unit, np int) (g
 		}
 		return b
 	}
-	nbe := kernels.GroupBlocks(rows, k) * nExp
+	nbe := oldkernels.GroupBlocks(rows, k) * nExp
 	bSel, bCnt, bEnds, bBC, bOff := buf(len(sel)), buf(2*nExp), buf(nExp), buf(nbe), buf(nbe)
 	bPerm, bColE, bPos, bPair := buf(np+1), buf(np), buf(rows*k), buf(np+1)
 	bTsel, bTselU := buf(np/groupTok), buf(np/unit)

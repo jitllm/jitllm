@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestSplitDeltaGatesMatchesTheHostDeinterleave runs the beta/alpha split on
@@ -46,7 +46,7 @@ func TestSplitDeltaGatesMatchesTheHostDeinterleave(t *testing.T) {
 				wantA[vh] = ba[base+c.rep+r]
 			}
 		}
-		k, err := kernels.SplitDeltaGatesRows(c.kHeads, c.rep, 1)
+		k, err := oldkernels.SplitDeltaGatesRows(c.kHeads, c.rep, 1)
 		if err != nil {
 			t.Fatalf("SplitDeltaGates: %v", err)
 		}

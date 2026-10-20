@@ -11,6 +11,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestComposedMatVecMatchesTheMenu holds the matvec former (compose.MatVec:
@@ -46,7 +47,7 @@ func TestComposedMatVecMatchesTheMenu(t *testing.T) {
 			acts := randActs(k, rng)
 			bX := g.up(f32bytes(acts))
 			bA, bAX := g.up(make([]byte, k)), g.up(make([]byte, k/32*3*4))
-			qk, err := kernels.Quantize(k, 32)
+			qk, err := oldkernels.Quantize(k, 32)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -54,7 +55,7 @@ func TestComposedMatVecMatchesTheMenu(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := qc.Launch((kernels.QuantizeThreads(k/32)+127)/128, 128, bX, bA, bAX); err != nil {
+			if err := qc.Launch((oldkernels.QuantizeThreads(k/32)+127)/128, 128, bX, bA, bAX); err != nil {
 				t.Fatal(err)
 			}
 			qc.Close()
@@ -90,15 +91,15 @@ func TestComposedMatVecMatchesTheMenu(t *testing.T) {
 					return raw
 				}
 				for _, sc := range scheds {
-					s := kernels.MatVecShape{T: q, K: k, Rows: rows, Split: sc.split, GroupSplit: sc.group, Rowt: sc.rowt}
-					menu, err := kernels.MatVecEpi(s, epi(compose.OpAdd))
+					s := oldkernels.MatVecShape{T: q, K: k, Rows: rows, Split: sc.split, GroupSplit: sc.group, Rowt: sc.rowt}
+					menu, err := oldkernels.MatVecEpi(s, epi(compose.OpAdd))
 					if err != nil {
 						t.Logf("%v %s: the menu refuses: %v", q, sc.name, err)
 						continue
 					}
 					width := 128
 					if sc.group {
-						width = kernels.GroupSplitWidth(sc.split)
+						width = oldkernels.GroupSplitWidth(sc.split)
 					}
 					want := launch(menu, rows/sc.rowt*sc.split, width)
 					mv := &compose.MatVec{T: q, K: k, Rows: rows, Split: sc.split, Group: sc.group, Rowt: sc.rowt, Epi: epi(compose.OpAdd)}
@@ -155,7 +156,7 @@ func TestComposedSplitMatVecMatchesTheMenu(t *testing.T) {
 			acts := randActs(k, rng)
 			bX := g.up(f32bytes(acts))
 			bA, bAX := g.up(make([]byte, k)), g.up(make([]byte, k/32*3*4))
-			qk, err := kernels.Quantize(k, 32)
+			qk, err := oldkernels.Quantize(k, 32)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -163,7 +164,7 @@ func TestComposedSplitMatVecMatchesTheMenu(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := qc.Launch((kernels.QuantizeThreads(k/32)+127)/128, 128, bX, bA, bAX); err != nil {
+			if err := qc.Launch((oldkernels.QuantizeThreads(k/32)+127)/128, 128, bX, bA, bAX); err != nil {
 				t.Fatal(err)
 			}
 			qc.Close()
@@ -199,7 +200,7 @@ func TestComposedSplitMatVecMatchesTheMenu(t *testing.T) {
 				if kernels.IsFloat(q) {
 					dArg = bX
 				}
-				menuMV, err := kernels.MatVec(kernels.MatVecShape{T: q, K: k, Rows: rows, Split: split})
+				menuMV, err := oldkernels.MatVec(oldkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -214,7 +215,7 @@ func TestComposedSplitMatVecMatchesTheMenu(t *testing.T) {
 					t.Errorf("%v: the composed partial plane parts from the menu's", q)
 				}
 				bP := g.up(wantPart)
-				red, err := kernels.Reduce(rows, split)
+				red, err := oldkernels.Reduce(rows, split)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -288,7 +289,7 @@ func TestComposedChunkMatVecMatchesTheMenu(t *testing.T) {
 			acts := randActs(ntok*k, rng)
 			bX := g.up(f32bytes(acts))
 			bA, bAX := g.up(make([]byte, ntok*k)), g.up(make([]byte, ntok*k/32*3*4))
-			qk, err := kernels.Quantize(ntok*k, 32)
+			qk, err := oldkernels.Quantize(ntok*k, 32)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -296,7 +297,7 @@ func TestComposedChunkMatVecMatchesTheMenu(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := qc.Launch((kernels.QuantizeThreads(ntok*k/32)+127)/128, 128, bX, bA, bAX); err != nil {
+			if err := qc.Launch((oldkernels.QuantizeThreads(ntok*k/32)+127)/128, 128, bX, bA, bAX); err != nil {
 				t.Fatal(err)
 			}
 			qc.Close()
@@ -332,8 +333,8 @@ func TestComposedChunkMatVecMatchesTheMenu(t *testing.T) {
 					return raw
 				}
 				for _, sc := range scheds {
-					s := kernels.MatVecShape{T: q, K: k, Rows: rows, NTok: ntok, Tok: sc.tok, Rowt: sc.rowt, Split: sc.split}
-					menu, err := kernels.MatVec(s)
+					s := oldkernels.MatVecShape{T: q, K: k, Rows: rows, NTok: ntok, Tok: sc.tok, Rowt: sc.rowt, Split: sc.split}
+					menu, err := oldkernels.MatVec(s)
 					if err != nil {
 						t.Logf("%v %s: the menu refuses: %v", q, sc.name, err)
 						continue
@@ -392,7 +393,7 @@ func TestComposedBankMatVecMatchesTheMenu(t *testing.T) {
 			acts := randActs(slots*k, rng)
 			bX := g.up(f32bytes(acts))
 			bA, bAX := g.up(make([]byte, slots*k)), g.up(make([]byte, slots*k/32*3*4))
-			qk, err := kernels.Quantize(slots*k, 32)
+			qk, err := oldkernels.Quantize(slots*k, 32)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -400,7 +401,7 @@ func TestComposedBankMatVecMatchesTheMenu(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := qc.Launch((kernels.QuantizeThreads(slots*k/32)+127)/128, 128, bX, bA, bAX); err != nil {
+			if err := qc.Launch((oldkernels.QuantizeThreads(slots*k/32)+127)/128, 128, bX, bA, bAX); err != nil {
 				t.Fatal(err)
 			}
 			qc.Close()
@@ -428,9 +429,9 @@ func TestComposedBankMatVecMatchesTheMenu(t *testing.T) {
 					split   int
 					group   bool
 				}{{"plain", false, 1, false}, {"slotact", true, 1, false}, {"group4", false, 4, true}, {"split2", true, 2, false}} {
-					s := kernels.MatVecShape{T: q, K: k, Rows: rows, Experts: experts, Slots: slots, SlotAct: sh.slotAct,
+					s := oldkernels.MatVecShape{T: q, K: k, Rows: rows, Experts: experts, Slots: slots, SlotAct: sh.slotAct,
 						Split: sh.split, GroupSplit: sh.group}
-					menu, err := kernels.MatVec(s)
+					menu, err := oldkernels.MatVec(s)
 					if err != nil {
 						t.Logf("%v %s: the menu refuses: %v", q, sh.name, err)
 						continue
@@ -441,7 +442,7 @@ func TestComposedBankMatVecMatchesTheMenu(t *testing.T) {
 					}
 					width := 128
 					if sh.group {
-						width = kernels.GroupSplitWidth(sh.split)
+						width = oldkernels.GroupSplitWidth(sh.split)
 					}
 					run := func(ker *ir.Kernel, threads, width int, menuOrder bool, s backend.Buf) []byte {
 						c, err := d.Compile(ker)

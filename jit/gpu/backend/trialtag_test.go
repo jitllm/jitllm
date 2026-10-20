@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestKernelTimingTagsTrials: with CUDA's kernel timing armed, a launch in a
@@ -29,7 +29,7 @@ func TestKernelTimingTagsTrials(t *testing.T) {
 	defer backend.SetCUDAKernelTiming(false)
 	backend.CUDAKernelTimes()
 	const n = 256
-	kk, err := kernels.Add(n)
+	kk, err := oldkernels.Add(n)
 	if err != nil {
 		t.Fatal(err)
 	}

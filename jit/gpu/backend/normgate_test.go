@@ -10,10 +10,11 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestHeadNormGatedIsTheTwoLaunches holds the norm-gate recipe's numerical
-// contract on every backend this host opens: kernels.HeadNormGated is the
+// contract on every backend this host opens: oldkernels.HeadNormGated is the
 // bits of HeadNormRows writing the normalised row and then ActMul (SiLU) or
 // SigmoidMul reading it, at every shape, row count and lane width the tier
 // launches, with a poisoned guard after the output that must survive. The
@@ -46,7 +47,7 @@ func TestHeadNormGatedIsTheTwoLaunches(t *testing.T) {
 			}
 			for _, c := range cases {
 				for _, l := range lanes {
-					for _, gate := range []kernels.NormGate{kernels.GateSiLU, kernels.GateSigmoid} {
+					for _, gate := range []oldkernels.NormGate{oldkernels.GateSiLU, oldkernels.GateSigmoid} {
 						t.Run(name(c.heads, c.dim)+"/r"+itoa32(c.rows)+"/lanes"+itoa32(l)+"/g"+itoa32(int(gate)), func(t *testing.T) {
 							normGateCase(t, d, c.heads, c.dim, c.rows, l, eps, gate)
 							ran++
@@ -61,7 +62,7 @@ func TestHeadNormGatedIsTheTwoLaunches(t *testing.T) {
 	}
 }
 
-func normGateCase(t *testing.T, d backend.Device, heads, dim, rows, lanes int, eps float64, gate kernels.NormGate) {
+func normGateCase(t *testing.T, d backend.Device, heads, dim, rows, lanes int, eps float64, gate oldkernels.NormGate) {
 	n := heads * dim * rows
 	rng := rand.New(rand.NewSource(int64(n)*31 + int64(gate)))
 	in, z, w := make([]float32, n), make([]float32, n), make([]float32, dim)
@@ -99,14 +100,14 @@ func normGateCase(t *testing.T, d backend.Device, heads, dim, rows, lanes int, e
 	if lanes == 1 {
 		groups, width = (heads*rows+63)/64, 64
 	}
-	norm := compile(kernels.HeadNormRows(heads, dim, eps, rows, lanes))
+	norm := compile(oldkernels.HeadNormRows(heads, dim, eps, rows, lanes))
 	var mul backend.Kernel
-	if gate == kernels.GateSiLU {
-		mul = compile(kernels.ActMul(n, kernels.ActSiLU))
+	if gate == oldkernels.GateSiLU {
+		mul = compile(oldkernels.ActMul(n, kernels.ActSiLU))
 	} else {
-		mul = compile(kernels.SigmoidMul(n))
+		mul = compile(oldkernels.SigmoidMul(n))
 	}
-	fused := compile(kernels.HeadNormGated(heads, dim, eps, rows, lanes, gate))
+	fused := compile(oldkernels.HeadNormGated(heads, dim, eps, rows, lanes, gate))
 	if err := norm.Launch(groups, width, bIn, bW, bTmp); err != nil {
 		t.Fatal(err)
 	}
@@ -138,11 +139,11 @@ func normGateCase(t *testing.T, d backend.Device, heads, dim, rows, lanes int, e
 		}
 	}
 	// The violations: the other gate, and a scale one ulp off, each differ.
-	other := kernels.GateSigmoid
-	if gate == kernels.GateSigmoid {
-		other = kernels.GateSiLU
+	other := oldkernels.GateSigmoid
+	if gate == oldkernels.GateSigmoid {
+		other = oldkernels.GateSiLU
 	}
-	wrong := compile(kernels.HeadNormGated(heads, dim, eps, rows, lanes, other))
+	wrong := compile(oldkernels.HeadNormGated(heads, dim, eps, rows, lanes, other))
 	bBad := g.up(poison)
 	if err := wrong.Launch(groups, width, bIn, bW, bZ, bBad); err != nil {
 		t.Fatal(err)

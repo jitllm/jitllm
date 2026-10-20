@@ -16,7 +16,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // benchModel is a decode attention shape the paged benches measure.
@@ -165,7 +165,7 @@ var flashExperiments = map[string]func(e *decodeEnv, arg int) (flashArm, flashAr
 	},
 	// FlashDecodeKV's V as vector loads, paged (arg 0) or contiguous (arg 1).
 	"vecv": func(e *decodeEnv, arg int) (flashArm, flashArm) {
-		vec := func(s *kernels.FlashShape) { s.VecV = true }
+		vec := func(s *oldkernels.FlashShape) { s.VecV = true }
 		return flashArm{name: "kv-scalar", kind: "kv", paged: arg == 0},
 			flashArm{name: "kv-vecv", kind: "kv", paged: arg == 0, tweak: vec}
 	},
@@ -173,7 +173,7 @@ var flashExperiments = map[string]func(e *decodeEnv, arg int) (flashArm, flashAr
 	// staged sequence (arg 1).
 	"f16k": func(e *decodeEnv, arg int) (flashArm, flashArm) {
 		kind := map[int]string{0: "kv", 1: "staged"}[arg]
-		f16k := func(s *kernels.FlashShape) { s.F16K = true }
+		f16k := func(s *oldkernels.FlashShape) { s.F16K = true }
 		return flashArm{name: kind + "-f32k", kind: kind, paged: true},
 			flashArm{name: kind + "-f16k", kind: kind, paged: true, tweak: f16k}
 	},
@@ -187,12 +187,12 @@ var flashExperiments = map[string]func(e *decodeEnv, arg int) (flashArm, flashAr
 	// flashKVGroup's choice, each at the tier's split for its chunk.
 	"kvgroup": func(e *decodeEnv, arg int) (flashArm, flashArm) {
 		return flashArm{name: "kv-tier", kind: "kv", paged: true},
-			flashArm{name: fmt.Sprintf("kv-g%d", arg), kind: "kv", paged: true, tweak: func(s *kernels.FlashShape) { s.Group = arg }}
+			flashArm{name: fmt.Sprintf("kv-g%d", arg), kind: "kv", paged: true, tweak: func(s *oldkernels.FlashShape) { s.Group = arg }}
 	},
 	// Paged FlashDecodeKV at arg warps a workgroup against the default.
 	"kvwarps": func(e *decodeEnv, arg int) (flashArm, flashArm) {
 		return flashArm{name: "kv-tier", kind: "kv", paged: true},
-			flashArm{name: fmt.Sprintf("kv-w%d", arg), kind: "kv", paged: true, tweak: func(s *kernels.FlashShape) { s.Warps = arg }}
+			flashArm{name: fmt.Sprintf("kv-w%d", arg), kind: "kv", paged: true, tweak: func(s *oldkernels.FlashShape) { s.Warps = arg }}
 	},
 	// Paged FlashDecodeKV configured by JITLLM_FLASH_B (warps=, splits=,
 	// group=, wide=1, vecv=1, f16k=1, comma separated) against the tier's.
@@ -222,15 +222,15 @@ var flashExperiments = map[string]func(e *decodeEnv, arg int) (flashArm, flashAr
 				f16k = v == 1
 			}
 		}
-		b.tweak = func(s *kernels.FlashShape) { s.Warps, s.Group, s.VecV, s.F16K = warps, group, vecv, f16k }
+		b.tweak = func(s *oldkernels.FlashShape) { s.Warps, s.Group, s.VecV, s.F16K = warps, group, vecv, f16k }
 		return flashArm{name: "kv-tier", kind: "kv", paged: true}, b
 	},
-	// kernels.FlashKVPlan's shape and the wide merge against the tier's rule.
+	// oldkernels.FlashKVPlan's shape and the wide merge against the tier's rule.
 	// arg 1: both contiguous, as the tier runs FlashDecodeKV.
 	"kvplan": func(e *decodeEnv, arg int) (flashArm, flashArm) {
 		return flashArm{name: "kv-tier", kind: "kv", paged: arg == 0}, flashArm{name: "kv-plan", kind: "kv", paged: arg == 0, plan: true}
 	},
-	// kernels.PagedStagedPlan's splits against sqrt(n/8).
+	// oldkernels.PagedStagedPlan's splits against sqrt(n/8).
 	"stplan": func(e *decodeEnv, arg int) (flashArm, flashArm) {
 		return flashArm{name: "staged-sqrt", kind: "staged", paged: true}, flashArm{name: "staged-plan", kind: "staged", paged: true, plan: true}
 	},
@@ -238,7 +238,7 @@ var flashExperiments = map[string]func(e *decodeEnv, arg int) (flashArm, flashAr
 	"pathplan": func(e *decodeEnv, arg int) (flashArm, flashArm) {
 		return flashArm{name: "kv-plan", kind: "kv", paged: true, plan: true}, flashArm{name: "staged-plan", kind: "staged", paged: true, plan: true}
 	},
-	// kernels.ChooseDecodePlan against what the tier runs: FlashDecodeKV
+	// oldkernels.ChooseDecodePlan against what the tier runs: FlashDecodeKV
 	// at its rule on CUDA and Metal, the staged path at sqrt(n/8) splits on
 	// Vulkan.
 	"choose": func(e *decodeEnv, arg int) (flashArm, flashArm) {
@@ -275,13 +275,13 @@ type flashArm struct {
 	paged      bool
 	splits     int
 	wideMerge  bool // FlashAttentionMergeWide in place of FlashAttentionMerge
-	// plan takes the shape from kernels.FlashKVPlan or PagedStagedPlan (and
+	// plan takes the shape from oldkernels.FlashKVPlan or PagedStagedPlan (and
 	// the wide merge) instead of the tier's rule.
 	plan bool
-	// choose takes the path and shape from kernels.ChooseDecodePlan.
+	// choose takes the path and shape from oldkernels.ChooseDecodePlan.
 	choose bool
 	knobs  map[string]int
-	tweak  func(*kernels.FlashShape)
+	tweak  func(*oldkernels.FlashShape)
 }
 
 // decodeEnv is one shape's buffers, shared by every arm: `layers` independent
@@ -355,7 +355,7 @@ func newDecodeEnv(t *testing.T, d backend.Device, m benchModel, n int, wall floa
 
 // kPool is layer l's paged K for s: f32, or binary16 pairs, which are
 // generated the first time an arm asks.
-func (e *decodeEnv) kPool(s kernels.FlashShape, l int) backend.Buf {
+func (e *decodeEnv) kPool(s oldkernels.FlashShape, l int) backend.Buf {
 	if !s.F16K {
 		return e.pk[l]
 	}
@@ -374,7 +374,7 @@ func (e *decodeEnv) kPool(s kernels.FlashShape, l int) backend.Buf {
 }
 
 // armBytes is what one launch of an arm over s reads from the cache.
-func (e *decodeEnv) armBytes(s kernels.FlashShape) float64 {
+func (e *decodeEnv) armBytes(s oldkernels.FlashShape) float64 {
 	kb, vb := 4, 4
 	if s.F16K {
 		kb = 2
@@ -386,19 +386,19 @@ func (e *decodeEnv) armBytes(s kernels.FlashShape) float64 {
 }
 
 // baseShape is the model's decode shape, one row.
-func (e *decodeEnv) baseShape() kernels.FlashShape {
-	return kernels.FlashShape{Heads: e.m.heads, KVHeads: e.m.kv, Dim: e.m.dim, Rows: 1,
+func (e *decodeEnv) baseShape() oldkernels.FlashShape {
+	return oldkernels.FlashShape{Heads: e.m.heads, KVHeads: e.m.kv, Dim: e.m.dim, Rows: 1,
 		Scale: float32(1 / math.Sqrt(float64(e.m.dim))), F16: e.m.f16}
 }
 
 // compile builds k under the arm's knobs and compiles it.
 func (e *decodeEnv) compile(t *testing.T, a flashArm, build func() (*ir.Kernel, error)) backend.Kernel {
 	for n, v := range a.knobs {
-		kernels.SetBenchKnob(n, v)
+		oldkernels.SetBenchKnob(n, v)
 	}
 	k, err := build()
 	for n := range a.knobs {
-		kernels.SetBenchKnob(n, 0)
+		oldkernels.SetBenchKnob(n, 0)
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -420,12 +420,12 @@ func (e *decodeEnv) arm(t *testing.T, a flashArm) bench.Case {
 	if a.tweak != nil {
 		a.tweak(&s)
 	}
-	var chosen kernels.FlashShape
+	var chosen oldkernels.FlashShape
 	if a.choose {
-		p := kernels.ChooseDecodePlan(e.d.API(), s, e.n, e.d.Slots())
+		p := oldkernels.ChooseDecodePlan(e.d.API(), s, e.n, e.d.Slots())
 		t.Logf("%s: ChooseDecodePlan takes %v", a.name, p.Path)
 		a.plan, a.paged, a.kind, chosen = true, true, "kv", p.Shape
-		if p.Path == kernels.PathStaged {
+		if p.Path == oldkernels.PathStaged {
 			a.kind = "staged"
 		}
 	}
@@ -438,7 +438,7 @@ func (e *decodeEnv) arm(t *testing.T, a flashArm) bench.Case {
 		s = chosen
 		a.wideMerge = true
 	} else if a.plan && kv {
-		s = kernels.FlashKVPlan(s, e.n, e.d.Slots())
+		s = oldkernels.FlashKVPlan(s, e.n, e.d.Slots())
 		a.wideMerge = true
 	} else if s.Splits == 0 {
 		s.Splits = splitsFor(e.d, s, kv, e.n)
@@ -447,29 +447,29 @@ func (e *decodeEnv) arm(t *testing.T, a flashArm) bench.Case {
 		// The kernel's floor: Splits*FlashKVChunk covers the keys.
 		sh := s
 		sh.Splits = 1
-		s.Splits = max(s.Splits, (e.n+kernels.FlashKVChunk(sh)-1)/kernels.FlashKVChunk(sh))
+		s.Splits = max(s.Splits, (e.n+oldkernels.FlashKVChunk(sh)-1)/oldkernels.FlashKVChunk(sh))
 	}
 	if a.paged {
 		s.Page = e.page
-		// The tier's per-API choice (kernels.FlashShape.KImm).
+		// The tier's per-API choice (oldkernels.FlashShape.KImm).
 		s.KImm = e.d.API() == "msl"
 	} else {
 		s.KStride = e.n + 1
 		fmt.Sscanf(os.Getenv("JITLLM_PAGED_KSTRIDE"), "%d", &s.KStride)
 	}
-	if kernels.FlashPartialFloats(s) > e.partFloats {
+	if oldkernels.FlashPartialFloats(s) > e.partFloats {
 		t.Fatalf("%s: %d splits overrun the partials", a.name, s.Splits)
 	}
-	build, groups, width := kernels.FlashAttention, s.Heads*max(1, s.Splits), 32
+	build, groups, width := oldkernels.FlashAttention, s.Heads*max(1, s.Splits), 32
 	if kv {
-		build, groups, width = kernels.FlashDecodeKV, kernels.FlashKVGroups(s), kernels.FlashKVWidth(s)
+		build, groups, width = oldkernels.FlashDecodeKV, oldkernels.FlashKVGroups(s), oldkernels.FlashKVWidth(s)
 	}
 	kc := e.compile(t, a, func() (*ir.Kernel, error) { return build(s) })
 	var merge backend.Kernel
 	if s.Splits > 1 {
-		mk := kernels.FlashAttentionMerge
+		mk := oldkernels.FlashAttentionMerge
 		if a.wideMerge {
-			mk = kernels.FlashAttentionMergeWide
+			mk = oldkernels.FlashAttentionMergeWide
 		}
 		merge = e.compile(t, a, func() (*ir.Kernel, error) { return mk(s) })
 	}
@@ -517,14 +517,14 @@ func (e *decodeEnv) arm(t *testing.T, a flashArm) bench.Case {
 // stagedArm is the paged staged sequence: scores, the per-split softmax, the
 // accumulate and the wide merge, at a.splits splits (0: sqrt(n/8), as
 // TestPagedStagedAB takes it).
-func (e *decodeEnv) stagedArm(t *testing.T, a flashArm, s kernels.FlashShape) bench.Case {
+func (e *decodeEnv) stagedArm(t *testing.T, a flashArm, s oldkernels.FlashShape) bench.Case {
 	S := a.splits
 	if S == 0 {
 		S = 1 << int(math.Log2(math.Sqrt(max(1, float64(e.n)/8))))
 	}
 	s.Page, s.Splits, s.Chunk = e.page, S, ((e.n+S-1)/S+31)/32*32
 	if a.plan {
-		s = kernels.PagedStagedPlan(s, e.n, e.d.Slots())
+		s = oldkernels.PagedStagedPlan(s, e.n, e.d.Slots())
 		S = s.Splits
 	}
 	lanes := 1
@@ -533,17 +533,17 @@ func (e *decodeEnv) stagedArm(t *testing.T, a flashArm, s kernels.FlashShape) be
 	}
 	ms := s
 	ms.Page, ms.Chunk = 0, 0
-	if kernels.FlashPartialFloats(ms) > e.partFloats {
+	if oldkernels.FlashPartialFloats(ms) > e.partFloats {
 		t.Fatalf("%s: %d splits overrun the partials", a.name, S)
 	}
-	if plane := kernels.PagedStagedPlane(s); plane > e.planeFloats {
+	if plane := oldkernels.PagedStagedPlane(s); plane > e.planeFloats {
 		e.scores, e.probs = e.g.up(make([]byte, plane*4)), e.g.up(make([]byte, plane*4))
 		e.planeFloats = plane
 	}
-	pScore := e.compile(t, a, func() (*ir.Kernel, error) { return kernels.PagedStagedScores(s, 1) })
-	pSoft := e.compile(t, a, func() (*ir.Kernel, error) { return kernels.PagedStagedSoftmax(s, lanes) })
-	pAcc := e.compile(t, a, func() (*ir.Kernel, error) { return kernels.PagedStagedAcc(s) })
-	pMerge := e.compile(t, a, func() (*ir.Kernel, error) { return kernels.FlashAttentionMergeWide(ms) })
+	pScore := e.compile(t, a, func() (*ir.Kernel, error) { return oldkernels.PagedStagedScores(s, 1) })
+	pSoft := e.compile(t, a, func() (*ir.Kernel, error) { return oldkernels.PagedStagedSoftmax(s, lanes) })
+	pAcc := e.compile(t, a, func() (*ir.Kernel, error) { return oldkernels.PagedStagedAcc(s) })
+	pMerge := e.compile(t, a, func() (*ir.Kernel, error) { return oldkernels.FlashAttentionMergeWide(ms) })
 	smG := (s.Heads*S + 1) / 2
 	if lanes == 1 {
 		smG = (s.Heads*S + 63) / 64
@@ -565,9 +565,9 @@ func (e *decodeEnv) stagedArm(t *testing.T, a flashArm, s kernels.FlashShape) be
 			}
 			for i := 0; i < iters; i++ {
 				l := i % e.layers
-				launch(pScore, (kernels.PagedStagedScoreItems(s)+127)/128, 128, e.q, kpool[l], e.nb, scores, e.tabs[l], e.desc)
+				launch(pScore, (oldkernels.PagedStagedScoreItems(s)+127)/128, 128, e.q, kpool[l], e.nb, scores, e.tabs[l], e.desc)
 				launch(pSoft, smG, 64, scores, e.nb, probs, e.part, e.tabs[l], e.desc)
-				launch(pAcc, (kernels.PagedStagedAccThreads(s)+127)/128, 128, probs, e.pv[l], e.nb, e.part, e.tabs[l], e.desc)
+				launch(pAcc, (oldkernels.PagedStagedAccThreads(s)+127)/128, 128, probs, e.pv[l], e.nb, e.part, e.tabs[l], e.desc)
 				launch(pMerge, (s.Heads*s.Dim+127)/128, 128, e.part, e.out)
 			}
 			if err == nil {
@@ -603,10 +603,10 @@ func (e *decodeEnv) ab(t *testing.T, aa, ba flashArm) {
 }
 
 // deviceWall is the device's streaming read rate over 256 MiB, bytes/s: the
-// best of five timed passes of kernels.StreamWide.
+// best of five timed passes of oldkernels.StreamWide.
 func deviceWall(t *testing.T, d backend.Device) float64 {
 	const words, per, w = 64 << 20, 64, 4
-	k, err := kernels.StreamWide(per, w)
+	k, err := oldkernels.StreamWide(per, w)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -640,7 +640,7 @@ func deviceWall(t *testing.T, d backend.Device) float64 {
 }
 
 // splitsFor is the tier's split choice for n keys (tier/flash.go).
-func splitsFor(d backend.Device, s kernels.FlashShape, kv bool, n int) int {
+func splitsFor(d backend.Device, s oldkernels.FlashShape, kv bool, n int) int {
 	if !kv {
 		sp := 1
 		fmt.Sscanf(os.Getenv("JITLLM_PAGED_FASPLITS"), "%d", &sp)
@@ -651,9 +651,9 @@ func splitsFor(d backend.Device, s kernels.FlashShape, kv bool, n int) int {
 	if slots <= 0 {
 		slots = 16384
 	}
-	cp := max(1, slots/1280/max(1, kernels.FlashKVGroups(s)))
+	cp := max(1, slots/1280/max(1, oldkernels.FlashKVGroups(s)))
 	sp := 1 << int(math.Round(math.Log2(math.Sqrt(max(1, float64(n)/8)))))
 	sp = max(1, min(sp, cp))
-	c := kernels.FlashKVChunk(s)
+	c := oldkernels.FlashKVChunk(s)
 	return max(sp, (n+c-1)/c)
 }

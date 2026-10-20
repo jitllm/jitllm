@@ -6,6 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/jit/gpu/spirv"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestShuffleEncoding decodes the emitted module and states the shuffle's
@@ -15,7 +16,7 @@ import (
 // operand order. A shuffle carries an execution scope and a mask, both <id>s,
 // so swapping them assembles and shuffles by the wrong distance.
 func TestShuffleEncoding(t *testing.T) {
-	k, err := kernels.SoftmaxRows(8, 64, 32, 1, 1)
+	k, err := oldkernels.SoftmaxRows(8, 64, 32, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +84,7 @@ func TestShuffleEncoding(t *testing.T) {
 
 	// And the fallback kernel must not ask the device for a capability it does
 	// not use: that is the whole point of having a fallback.
-	sc, err := kernels.SoftmaxRows(8, 64, 1, 1, 1)
+	sc, err := oldkernels.SoftmaxRows(8, 64, 1, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +105,7 @@ func TestShuffleEncoding(t *testing.T) {
 // with a runtime count reads a descriptor at its entry, ahead of every loop,
 // and keeps it alive through that loop's count; one whose first access is not
 // inside such a loop is emitted without it. See anchorFor: without it llvmpipe
-// faults on kernels.MatVecSegments, which spirv-val and the validation layer
+// faults on oldkernels.MatVecSegments, which spirv-val and the validation layer
 // both pass.
 func TestDescriptorAnchor(t *testing.T) {
 	const (
@@ -115,12 +116,12 @@ func TestDescriptorAnchor(t *testing.T) {
 		opULessThan   = 176
 		opLoopMerge   = 246
 	)
-	sh := kernels.MatVecShape{T: kernels.Q4_K, K: 512, Rows: 64}
-	seg, err := kernels.MatVecSegments([]kernels.MatVecShape{sh, sh}, 1, false)
+	sh := oldkernels.MatVecShape{T: kernels.Q4_K, K: 512, Rows: 64}
+	seg, err := oldkernels.MatVecSegments([]oldkernels.MatVecShape{sh, sh}, 1, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plain, err := kernels.MatVec(sh)
+	plain, err := oldkernels.MatVec(sh)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestComposedRowsMatchTheTemplates holds kernels the row former composes
@@ -55,7 +56,7 @@ func TestComposedRowsMatchTheTemplates(t *testing.T) {
 		Stores: []compose.Store{{Buf: 3, Val: 2}, {Buf: 4, Val: 12}},
 		Q8:     &compose.Q8{Val: 12, A: 5, X: 6, Window: win, Pad: k},
 	}
-	composed, err := norm.Emit(compose.Schedule{Group: kernels.RMSNormGroup})
+	composed, err := norm.Emit(compose.Schedule{Group: oldkernels.RMSNormGroup})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,11 +64,11 @@ func TestComposedRowsMatchTheTemplates(t *testing.T) {
 	bad := *norm
 	bad.Nodes = append([]compose.Node(nil), norm.Nodes...)
 	bad.Nodes[2].Op = compose.OpSub
-	violated, err := bad.Emit(compose.Schedule{Group: kernels.RMSNormGroup})
+	violated, err := bad.Emit(compose.Schedule{Group: oldkernels.RMSNormGroup})
 	if err != nil {
 		t.Fatal(err)
 	}
-	template, err := kernels.RMSNormQuantRows(k, rows, eps, false, true, win)
+	template, err := oldkernels.RMSNormQuantRows(k, rows, eps, false, true, win)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +84,7 @@ func TestComposedRowsMatchTheTemplates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	templateAct, err := kernels.ActMul(n, kernels.ActSiLU)
+	templateAct, err := oldkernels.ActMul(n, kernels.ActSiLU)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,8 +129,8 @@ func TestComposedRowsMatchTheTemplates(t *testing.T) {
 			defer tk.Close()
 			outs := []int{rows * k * 4, rows * k * 4, rows * k, rows * k / 32 * 3 * 4}
 			// The template's order: x, y, w, sum, out, a, ax.
-			want := run(tk, rows, kernels.RMSNormGroup, outs, x, y, w)
-			got := run(ck, rows, kernels.RMSNormGroup, outs, x, y, w)
+			want := run(tk, rows, oldkernels.RMSNormGroup, outs, x, y, w)
+			got := run(ck, rows, oldkernels.RMSNormGroup, outs, x, y, w)
 			for i, name := range []string{"sum", "normed", "int8", "scales"} {
 				if !bytes.Equal(got[i], want[i]) {
 					t.Errorf("add, RMSNorm, quantize: the composed %s parts from the template's", name)
@@ -140,7 +141,7 @@ func TestComposedRowsMatchTheTemplates(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer vk.Close()
-			if v := run(vk, rows, kernels.RMSNormGroup, outs, x, y, w); bytes.Equal(v[1], want[1]) {
+			if v := run(vk, rows, oldkernels.RMSNormGroup, outs, x, y, w); bytes.Equal(v[1], want[1]) {
 				t.Errorf("a subtract in the add's place matched the template: the gate cannot see a wrong op")
 			}
 			cka, err := d.Compile(composedAct)
@@ -199,9 +200,9 @@ func TestComposedRotaryMatchesRoPERows(t *testing.T) {
 				for r := 0; r < rows; r++ {
 					binary.LittleEndian.PutUint32(off[r*4:], uint32(r*width))
 				}
-				tk, err := kernels.RoPERows(heads, hd, c.nrot, c.neox, rows)
+				tk, err := oldkernels.RoPERows(heads, hd, c.nrot, c.neox, rows)
 				if c.split {
-					tk, err = kernels.RoPERowsSplit(heads, hd, c.nrot, rows, 0)
+					tk, err = oldkernels.RoPERowsSplit(heads, hd, c.nrot, rows, 0)
 				}
 				if err != nil {
 					t.Fatal(err)
@@ -302,7 +303,7 @@ func TestMatVecEpilogueMatchesTheMenu(t *testing.T) {
 				bX := g.up(f32bytes(acts))
 				// The int8 operand, quantized on the device as a step does.
 				bA, bAX := g.up(make([]byte, k)), g.up(make([]byte, k/32*3*4))
-				qk, err := kernels.Quantize(k, 32)
+				qk, err := oldkernels.Quantize(k, 32)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -310,7 +311,7 @@ func TestMatVecEpilogueMatchesTheMenu(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := qc.Launch((kernels.QuantizeThreads(k/32)+127)/128, 128, bX, bA, bAX); err != nil {
+				if err := qc.Launch((oldkernels.QuantizeThreads(k/32)+127)/128, 128, bX, bA, bAX); err != nil {
 					t.Fatal(err)
 				}
 				qc.Close()
@@ -319,10 +320,10 @@ func TestMatVecEpilogueMatchesTheMenu(t *testing.T) {
 					dArg = bX // a float matvec reads the float row in the scale slot
 				}
 				for _, grp := range []int{1, 4} {
-					s := kernels.MatVecShape{T: q, K: k, Rows: rows, Split: grp, GroupSplit: grp > 1}
+					s := oldkernels.MatVecShape{T: q, K: k, Rows: rows, Split: grp, GroupSplit: grp > 1}
 					width := 128
 					if grp > 1 {
-						width = kernels.GroupSplitWidth(grp)
+						width = oldkernels.GroupSplitWidth(grp)
 					}
 					launch := func(ker *ir.Kernel, extra ...backend.Buf) []byte {
 						c, err := d.Compile(ker)
@@ -341,8 +342,8 @@ func TestMatVecEpilogueMatchesTheMenu(t *testing.T) {
 						}
 						return raw
 					}
-					build := func(s kernels.MatVecShape, e kernels.Epilogue) *ir.Kernel {
-						ker, err := kernels.MatVecEpi(s, e)
+					build := func(s oldkernels.MatVecShape, e oldkernels.Epilogue) *ir.Kernel {
+						ker, err := oldkernels.MatVecEpi(s, e)
 						if err != nil {
 							t.Fatalf("%v split %d: %v", q, grp, err)
 						}
@@ -408,11 +409,11 @@ func TestComposedGatesMatchTheTemplates(t *testing.T) {
 		}
 		return ker
 	}
-	sigMul, err := kernels.SigmoidMul(rows * k)
+	sigMul, err := oldkernels.SigmoidMul(rows * k)
 	if err != nil {
 		t.Fatal(err)
 	}
-	shAdd, err := kernels.SharedExpertAdd(k, rows)
+	shAdd, err := oldkernels.SharedExpertAdd(k, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,7 +515,7 @@ func TestComposedSplitQGMatchesSplitHeadGate(t *testing.T) {
 				}
 				return append(a, b...)
 			}
-			tk, err := kernels.SplitHeadGate(heads, hd, rows)
+			tk, err := oldkernels.SplitHeadGate(heads, hd, rows)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -585,7 +586,7 @@ func TestComposedCombineMatchesExpertCombine(t *testing.T) {
 				}
 				return raw
 			}
-			tk, err := kernels.ExpertCombine(n, slots)
+			tk, err := oldkernels.ExpertCombine(n, slots)
 			if err != nil {
 				t.Fatal(err)
 			}

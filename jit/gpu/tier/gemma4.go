@@ -3,7 +3,7 @@ package tier
 import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // Gemma 4 on the device. Its global layers attend at another geometry than its
@@ -239,12 +239,12 @@ func (g *devTier) emitDenseMLP(lc *launcher, bs *blockScratch, l *layer, R int, 
 	mvrun(l.mvsg, l.shGate, bs.shg)
 	mvrun(l.mvsu, l.shUp, bs.shu)
 	lc.la(bs.shActMul, R*bs.nShExp, bs.shg, bs.shu, bs.shact)
-	lc.la(bs.shQuant, kernels.QuantizeThreads(R*bs.nShExp/32), bs.shact, bs.a, bs.ax)
+	lc.la(bs.shQuant, oldkernels.QuantizeThreads(R*bs.nShExp/32), bs.shact, bs.a, bs.ax)
 	mvrun(l.mvsd, l.shDown, bs.shout)
 	lc.la(bs.normPart, R*bs.parts, bs.shout, bs.part)
 	lc.la(bs.normApply, R*p.NEmbd, bs.shout, l.nPost1, bs.part, bs.shsum)
 	lc.la(bs.normPart, R*bs.parts, x2, bs.part)
 	lc.la(bs.normApply, R*p.NEmbd, x2, l.nRouter, bs.part, bs.hr)
 	lc.la(bs.normApply, R*p.NEmbd, x2, l.nFFN2, bs.part, bs.h)
-	lc.la(bs.quantE, kernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
+	lc.la(bs.quantE, oldkernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
 }

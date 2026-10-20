@@ -7,7 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestSharedExpertKernelsMatchTheHost gates qwen3next's always-on expert: the
@@ -62,18 +62,18 @@ func TestSharedExpertKernelsMatchTheHost(t *testing.T) {
 
 	for _, d := range devs {
 		// the gate
-		kl, err := kernels.SharedRouterLogits(rows, k)
+		kl, err := oldkernels.SharedRouterLogits(rows, k)
 		if err != nil {
 			t.Fatal(err)
 		}
-		gotL := launch3(t, d, kl, kernels.SharedRouterThreads(rows), f32le(w), f32le(x), rows*4)
+		gotL := launch3(t, d, kl, oldkernels.SharedRouterThreads(rows), f32le(w), f32le(x), rows*4)
 		for r := range wantL {
 			if math.Abs(float64(gotL[r]-wantL[r])) > 1e-4 {
 				t.Fatalf("%s logit[%d] = %v, want %v", d.API(), r, gotL[r], wantL[r])
 			}
 		}
 		// the fold
-		kf, err := kernels.SharedExpertAdd(n, rows)
+		kf, err := oldkernels.SharedExpertAdd(n, rows)
 		if err != nil {
 			t.Fatal(err)
 		}

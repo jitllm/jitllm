@@ -7,7 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // The convolutional tower's kernels (kernels/conv.go) on every device against
@@ -89,7 +89,7 @@ func TestConvKernelsMatchTheLoops(t *testing.T) {
 				top, left := ph/2, pw/2
 				hp, wp := (ho-1)*sh.s+sh.k, (wo-1)*sh.s+sh.k
 				x := convRand(rng, sh.h*sh.w*sh.c)
-				k, err := kernels.PadRows(sh.h, sh.w, sh.c, hp, wp, top, left)
+				k, err := oldkernels.PadRows(sh.h, sh.w, sh.c, hp, wp, top, left)
 				pad := convRun(t, d, k, err, hp*wp*sh.c, hp*wp*sh.c, x)
 				want := make([]float64, hp*wp*sh.c)
 				for y := 0; y < hp; y++ {
@@ -105,7 +105,7 @@ func TestConvKernelsMatchTheLoops(t *testing.T) {
 				}
 				convCheck(t, "PadRows", pad, want, 0)
 				w := convRand(rng, sh.k*sh.k*sh.c)
-				k, err = kernels.DWConv(sh.k, sh.s, wp, sh.c, ho, wo)
+				k, err = oldkernels.DWConv(sh.k, sh.s, wp, sh.c, ho, wo)
 				dw := convRun(t, d, k, err, ho*wo*sh.c, ho*wo*sh.c, pad, w)
 				want = make([]float64, ho*wo*sh.c)
 				for y := 0; y < ho; y++ {
@@ -125,7 +125,7 @@ func TestConvKernelsMatchTheLoops(t *testing.T) {
 				kk := sh.k * sh.k * sh.c
 				kpad := (kk + 31) / 32 * 32
 				n := ho * wo
-				k, err = kernels.Im2col(sh.k, sh.s, wp, sh.c, wo, kpad, n, len(pad))
+				k, err = oldkernels.Im2col(sh.k, sh.s, wp, sh.c, wo, kpad, n, len(pad))
 				col := convRun(t, d, k, err, n*kpad, n*kpad, pad)
 				want = make([]float64, n*kpad)
 				for p := 0; p < n; p++ {
@@ -144,7 +144,7 @@ func TestConvKernelsMatchTheLoops(t *testing.T) {
 				q := convRand(rng, sh.n*sh.heads*sh.kd)
 				kv := convRand(rng, sh.m*sh.kd)
 				v := convRand(rng, sh.m*sh.kd)
-				k, err := kernels.MQAScores(sh.n, sh.m, sh.heads, sh.kd)
+				k, err := oldkernels.MQAScores(sh.n, sh.m, sh.heads, sh.kd)
 				sc := convRun(t, d, k, err, sh.n*sh.heads*sh.m, sh.n*sh.heads*sh.m, q, kv)
 				want := make([]float64, len(sc))
 				for i := range want {
@@ -157,7 +157,7 @@ func TestConvKernelsMatchTheLoops(t *testing.T) {
 				}
 				convCheck(t, "MQAScores", sc, want, 1e-5)
 				rows := sh.n * sh.heads
-				k, err = kernels.RowSoftmax(rows, sh.m)
+				k, err = oldkernels.RowSoftmax(rows, sh.m)
 				pr := convRun(t, d, k, err, rows, rows*sh.m, sc)
 				for r := 0; r < rows; r++ {
 					mx := math.Inf(-1)
@@ -173,7 +173,7 @@ func TestConvKernelsMatchTheLoops(t *testing.T) {
 					}
 				}
 				convCheck(t, "RowSoftmax", pr, want[:rows*sh.m], 1e-5)
-				k, err = kernels.MQAAcc(sh.n, sh.m, sh.heads, sh.kd)
+				k, err = oldkernels.MQAAcc(sh.n, sh.m, sh.heads, sh.kd)
 				ao := convRun(t, d, k, err, rows*sh.kd, rows*sh.kd, pr, v)
 				want = make([]float64, rows*sh.kd)
 				for i := range want {

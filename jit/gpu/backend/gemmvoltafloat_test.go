@@ -9,6 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestGemmVoltaFloatWeights holds GemmVolta over two-byte float weights
@@ -32,18 +33,18 @@ func TestGemmVoltaFloatWeights(t *testing.T) {
 		for _, q := range []kernels.Quant{kernels.BFloat16, kernels.Float16} {
 			for _, sh := range []struct {
 				rows, k, ntok, split int
-				tl                   kernels.VoltaTile
+				tl                   oldkernels.VoltaTile
 				bias                 bool
 			}{
-				{128, 512, 128, 1, kernels.VoltaTile{MT: 2, NT: 8, WM: 2, WN: 2, KB: 1}, false},
-				{256, 512, 128, 2, kernels.VoltaTile{MT: 2, NT: 8, WM: 2, WN: 2, KB: 1}, true},
-				{128, 1024, 64, 1, kernels.VoltaTile{MT: 4, NT: 4, WM: 1, WN: 2, KB: 2}, true},
-				{64, 512, 64, 1, kernels.VoltaTile{MT: 1, NT: 2, WM: 2, WN: 2, KB: 2}, false},
-				{128, 2624, 64, 1, kernels.VoltaTile{MT: 4, NT: 2, WM: 1, WN: 4, KB: 1}, false},
-				{192, 512, 128, 2, kernels.VoltaTile{MT: 3, NT: 4, WM: 1, WN: 4, KB: 1}, true},
+				{128, 512, 128, 1, oldkernels.VoltaTile{MT: 2, NT: 8, WM: 2, WN: 2, KB: 1}, false},
+				{256, 512, 128, 2, oldkernels.VoltaTile{MT: 2, NT: 8, WM: 2, WN: 2, KB: 1}, true},
+				{128, 1024, 64, 1, oldkernels.VoltaTile{MT: 4, NT: 4, WM: 1, WN: 2, KB: 2}, true},
+				{64, 512, 64, 1, oldkernels.VoltaTile{MT: 1, NT: 2, WM: 2, WN: 2, KB: 2}, false},
+				{128, 2624, 64, 1, oldkernels.VoltaTile{MT: 4, NT: 2, WM: 1, WN: 4, KB: 1}, false},
+				{192, 512, 128, 2, oldkernels.VoltaTile{MT: 3, NT: 4, WM: 1, WN: 4, KB: 1}, true},
 			} {
-				s := kernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, Split: sh.split, Bias: sh.bias}
-				kk, err := kernels.GemmVolta(s, sh.tl)
+				s := oldkernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, Split: sh.split, Bias: sh.bias}
+				kk, err := oldkernels.GemmVolta(s, sh.tl)
 				if err != nil {
 					t.Fatalf("%v %+v: %v", q, sh, err)
 				}
@@ -56,7 +57,7 @@ func TestGemmVoltaFloatWeights(t *testing.T) {
 					break
 				}
 				ran++
-				floatGemmCase(t, d, kern, s, kernels.GemmVoltaGroups(s, sh.tl), sh.tl.Threads(), fmt.Sprintf("%+v", sh.tl))
+				floatGemmCase(t, d, kern, s, oldkernels.GemmVoltaGroups(s, sh.tl), sh.tl.Threads(), fmt.Sprintf("%+v", sh.tl))
 				kern.Close()
 			}
 		}
@@ -66,7 +67,7 @@ func TestGemmVoltaFloatWeights(t *testing.T) {
 	}
 }
 
-func floatGemmCase(t *testing.T, d backend.Device, kern backend.Kernel, s kernels.MatVecShape, groups, width int, what string) {
+func floatGemmCase(t *testing.T, d backend.Device, kern backend.Kernel, s oldkernels.MatVecShape, groups, width int, what string) {
 	t.Helper()
 	rng := rand.New(rand.NewSource(int64(s.Rows*7 + s.K + s.NTok)))
 	g := newGPU(t, d)
@@ -109,7 +110,7 @@ func floatGemmCase(t *testing.T, d backend.Device, kern backend.Kernel, s kernel
 			ref[tk*s.Rows+r] = acc
 		}
 	}
-	ak, err := kernels.ActF16T(s.T, s.NTok, s.K)
+	ak, err := oldkernels.ActF16T(s.T, s.NTok, s.K)
 	if err != nil {
 		t.Fatal(err)
 	}

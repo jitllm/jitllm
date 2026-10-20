@@ -13,6 +13,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // choose picks which GPU API to run on when a host offers more than one.
@@ -129,7 +130,7 @@ func probe(devs []backend.Device) (best int, rates []float64) {
 func timeOne(d backend.Device, qs, dw, a []uint32, ax []float32,
 	rows, k int, macs float64) float64 {
 
-	ker, err := kernels.MatVec(kernels.MatVecShape{T: kernels.Q4_0, K: k, Rows: rows, Split: 1})
+	ker, err := oldkernels.MatVec(oldkernels.MatVecShape{T: kernels.Q4_0, K: k, Rows: rows, Split: 1})
 	if err != nil {
 		return 0
 	}

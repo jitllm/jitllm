@@ -8,7 +8,7 @@ import (
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestGatedDeltaScanOnEveryDevice runs the chunked gated delta rule on every
@@ -33,7 +33,7 @@ func TestGatedDeltaScanOnEveryDevice(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 	}
-	cases := []kernels.DeltaScan{
+	cases := []oldkernels.DeltaScan{
 		{VHeads: 4, VDim: 8, KDim: 8, Rep: 2, Rows: 6, Lanes: ir.SubgroupLanes},
 		{VHeads: 4, VDim: 32, KDim: 32, Rep: 2, TiledK: 2, Rows: 6, Lanes: ir.SubgroupLanes},
 		{VHeads: 2, VDim: 32, KDim: 32, Rep: 1, PerChan: true, Rows: 5, Lanes: ir.SubgroupLanes},
@@ -54,7 +54,7 @@ func TestGatedDeltaScanOnEveryDevice(t *testing.T) {
 	}
 }
 
-func deltaScanCase(t *testing.T, d backend.Device, c kernels.DeltaScan, m int) {
+func deltaScanCase(t *testing.T, d backend.Device, c oldkernels.DeltaScan, m int) {
 	kHeads := c.VHeads / c.Rep
 	if c.TiledK > 0 {
 		kHeads = c.TiledK
@@ -85,7 +85,7 @@ func deltaScanCase(t *testing.T, d backend.Device, c kernels.DeltaScan, m int) {
 		decay[i] = float32(0.5 + 0.45*rng.Float64())
 	}
 
-	kk, err := kernels.GatedDeltaScan(c)
+	kk, err := oldkernels.GatedDeltaScan(c)
 	if err != nil {
 		t.Fatal(err)
 	}

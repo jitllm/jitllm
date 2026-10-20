@@ -6,7 +6,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // MiniMax Sparse Attention on the device (nn.LayerPlan.MSA;
@@ -77,9 +77,9 @@ func (g *devTier) initMSA(bs *blockScratch, rows, P int,
 	comp func(*backend.Kernel, *ir.Kernel, error) error) error {
 	p := &bs.p
 	tcap := max(p.MaxSeq, 1)
-	kk := min(p.IdxTopK, kernels.MSABlocks(tcap, p.IdxBlock))
+	kk := min(p.IdxTopK, oldkernels.MSABlocks(tcap, p.IdxBlock))
 	m := &msaScratch{h: p.IdxHeads, d: p.IdxHeadDim, k: kk, blk: p.IdxBlock, tcap: tcap,
-		nb: kernels.MSABlocks(tcap, p.IdxBlock), ppr: kernels.MSAGatherPages(kk, p.IdxBlock, P),
+		nb: oldkernels.MSABlocks(tcap, p.IdxBlock), ppr: oldkernels.MSAGatherPages(kk, p.IdxBlock, P),
 		kvRow: p.KVRow(), attnW: p.NKVHead * p.HeadDim}
 	bs.pkv.msa = m
 	m.qLanes, m.kLanes = bs.kNormL, bs.kNormL
@@ -88,25 +88,25 @@ func (g *devTier) initMSA(bs *blockScratch, rows, P int,
 		dst *backend.Kernel
 		mk  func() (*ir.Kernel, error)
 	}{
-		{&m.normQ, func() (*ir.Kernel, error) { return kernels.HeadNormRows(h, d, p.RMSEps, rows, m.qLanes) }},
-		{&m.normK, func() (*ir.Kernel, error) { return kernels.HeadNormRows(1, d, p.RMSEps, rows, m.kLanes) }},
-		{&m.copyQ, func() (*ir.Kernel, error) { return kernels.CopyAtRows(h*d, rows) }},
-		{&m.ropeQ, func() (*ir.Kernel, error) { return kernels.RoPERows(h, d, rot, p.RopeNeox, rows) }},
-		{&m.asmK, func() (*ir.Kernel, error) { return kernels.CopyAtRows(kv, rows) }},
-		{&m.asmI, func() (*ir.Kernel, error) { return kernels.CopyAtRows(d, rows) }},
+		{&m.normQ, func() (*ir.Kernel, error) { return oldkernels.HeadNormRows(h, d, p.RMSEps, rows, m.qLanes) }},
+		{&m.normK, func() (*ir.Kernel, error) { return oldkernels.HeadNormRows(1, d, p.RMSEps, rows, m.kLanes) }},
+		{&m.copyQ, func() (*ir.Kernel, error) { return oldkernels.CopyAtRows(h*d, rows) }},
+		{&m.ropeQ, func() (*ir.Kernel, error) { return oldkernels.RoPERows(h, d, rot, p.RopeNeox, rows) }},
+		{&m.asmK, func() (*ir.Kernel, error) { return oldkernels.CopyAtRows(kv, rows) }},
+		{&m.asmI, func() (*ir.Kernel, error) { return oldkernels.CopyAtRows(d, rows) }},
 		{&m.scores, func() (*ir.Kernel, error) {
-			return kernels.MSAScoresPaged(rows, h, d, tcap, P, m.kvRow, kv)
+			return oldkernels.MSAScoresPaged(rows, h, d, tcap, P, m.kvRow, kv)
 		}},
-		{&m.bmax, func() (*ir.Kernel, error) { return kernels.MSABlockMax(rows, h, tcap, m.blk, p.IdxLocal) }},
-		{&m.sel, func() (*ir.Kernel, error) { return kernels.MSASelect(rows, h, tcap, m.blk, kk) }},
-		{&m.compact, func() (*ir.Kernel, error) { return kernels.MSACompact(rows, h, tcap, m.blk, kk) }},
+		{&m.bmax, func() (*ir.Kernel, error) { return oldkernels.MSABlockMax(rows, h, tcap, m.blk, p.IdxLocal) }},
+		{&m.sel, func() (*ir.Kernel, error) { return oldkernels.MSASelect(rows, h, tcap, m.blk, kk) }},
+		{&m.compact, func() (*ir.Kernel, error) { return oldkernels.MSACompact(rows, h, tcap, m.blk, kk) }},
 		{&m.gatherK, func() (*ir.Kernel, error) {
-			return kernels.MSAGatherK(rows, p.NKVHead, p.HeadDim, m.blk, kk, P, m.kvRow)
+			return oldkernels.MSAGatherK(rows, p.NKVHead, p.HeadDim, m.blk, kk, P, m.kvRow)
 		}},
 		{&m.gatherV, func() (*ir.Kernel, error) {
-			return kernels.MSAGatherV(rows, p.NKVHead, p.HeadDim, m.blk, kk, P, m.kvRow, g.KVF16)
+			return oldkernels.MSAGatherV(rows, p.NKVHead, p.HeadDim, m.blk, kk, P, m.kvRow, g.KVF16)
 		}},
-		{&m.desc, func() (*ir.Kernel, error) { return kernels.MSADesc(rows, m.blk, kk, P) }},
+		{&m.desc, func() (*ir.Kernel, error) { return oldkernels.MSADesc(rows, m.blk, kk, P) }},
 	} {
 		kn, err := b.mk()
 		if err := comp(b.dst, kn, err); err != nil {
@@ -139,7 +139,7 @@ func (g *devTier) initMSA(bs *blockScratch, rows, P int,
 	al(&m.gk, rows*m.ppr*P*kv)
 	al(&m.gv, rows*vw)
 	al(&m.gtab, rows*m.ppr)
-	al(&m.gdesc, rows*kernels.PRowWords)
+	al(&m.gdesc, rows*oldkernels.PRowWords)
 	if err != nil {
 		return err
 	}
@@ -221,7 +221,7 @@ func (g *devTier) msaAttend(s backend.Session, lc *launcher, R int, pk *pagedScr
 		vw /= 2
 	}
 	lc.la(m.gatherV, R*m.k*m.blk*vw, pl.v, pl.tab, pk.pRow, m.list, m.gv)
-	lc.la(m.desc, R*kernels.PRowWords, pk.pRow, m.gdesc)
+	lc.la(m.desc, R*oldkernels.PRowWords, pk.pRow, m.gdesc)
 	g.MSASelects++
 	return pk.pagedDecode(s, lc, q, m.gk, m.gv, n, out, m.gtab, m.gdesc, nil)
 }

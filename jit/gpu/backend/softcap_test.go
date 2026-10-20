@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestSoftcapMatchesTheHost runs gemma2's attention cap on every backend
@@ -30,7 +30,7 @@ func TestSoftcapMatchesTheHost(t *testing.T) {
 			g := newGPU(t, d)
 			defer g.free()
 			bIn, bOut := g.up(f32bytes(in)), g.up(make([]byte, n*4))
-			kk, err := kernels.Softcap(n, c)
+			kk, err := oldkernels.Softcap(n, c)
 			if err != nil {
 				t.Fatal(err)
 			}

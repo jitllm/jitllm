@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestAddScaledRoundsOnce holds every device's scaled residual add to the
@@ -47,7 +47,7 @@ func TestAddScaledRoundsOnce(t *testing.T) {
 	if twice == 0 {
 		t.Fatal("the two-rounding form agrees with the fused one on every element: the input cannot tell them apart")
 	}
-	k, err := kernels.AddScaled(n)
+	k, err := oldkernels.AddScaled(n)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,7 +8,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // DeepSeek V4 on the device (nn.LayerPlan.DS4; engine/model/ds4.go is the
@@ -35,7 +35,7 @@ import (
 //
 // The mixture is the generic one with two changes: the router gates with
 // sqrt(softplus) and every block selects with a per-row bias plane
-// (kernels.MoERoute.RowBias) -- the block's selection bias copied to each row,
+// (oldkernels.MoERoute.RowBias) -- the block's selection bias copied to each row,
 // or on a block that routes by token, zero at the experts of the row's token
 // (SetTokenIDs) and -inf elsewhere.
 
@@ -54,9 +54,9 @@ func ds4WhyNot(p *nn.LayerPlan) string {
 		gw = p.NHead / d.OGroups * p.HeadDim
 	}
 	switch {
-	case d.HCMult != kernels.DS4Streams:
+	case d.HCMult != oldkernels.DS4Streams:
 		return fmt.Sprintf("DeepSeek V4 with %d hyper-connection streams (the mixer is unrolled for %d)",
-			d.HCMult, kernels.DS4Streams)
+			d.HCMult, oldkernels.DS4Streams)
 	case p.NKVHead != 1 || p.QLoraRank == 0 || p.MLA() || d.Window <= 0 || p.RopeNeox ||
 		p.NRot <= 0 || p.NRot%2 != 0 || p.NRot > p.HeadDim:
 		return "DeepSeek V4 attention of a shape the kernels are not built for"
@@ -248,8 +248,8 @@ type ds4Kind struct {
 }
 
 // ds4Keys is a kind's key choice under the plan's fault.
-func ds4Keys(d *nn.DS4Plan, comp int) kernels.DS4Keys {
-	k := kernels.DS4Keys{Window: d.Window, Rate: d.RateAt(comp)}
+func ds4Keys(d *nn.DS4Plan, comp int) oldkernels.DS4Keys {
+	k := oldkernels.DS4Keys{Window: d.Window, Rate: d.RateAt(comp)}
 	switch {
 	case comp == nn.DS4CompNone || d.Fault == nn.DS4FaultWindowOnly:
 		k.None = true
@@ -297,7 +297,7 @@ func (g *devTier) initDS4(bs *blockScratch) error {
 	for _, comp := range []int{nn.DS4CompNone, nn.DS4CompCSA, nn.DS4CompHCA} {
 		x.kmax = max(x.kmax, ds4KMax(d, comp, p.MaxSeq))
 	}
-	x.ppr = kernels.DS4GatherPages(x.kmax, P)
+	x.ppr = oldkernels.DS4GatherPages(x.kmax, P)
 	var err error
 	comp := func(dst *backend.Kernel, mk func() (*ir.Kernel, error)) {
 		if err != nil {
@@ -318,25 +318,25 @@ func (g *devTier) initDS4(bs *blockScratch) error {
 	if d.Fault == nn.DS4FaultCombSoftmax {
 		iters = 0
 	}
-	comp(&x.hcFlat, func() (*ir.Kernel, error) { return kernels.HCFlat(n, R) })
-	comp(&x.hcRms, func() (*ir.Kernel, error) { return kernels.RMSNormRows(s*n, R, float32(p.RMSEps), false, false) })
-	comp(&x.hcFn, func() (*ir.Kernel, error) { return kernels.RouterMatVecTok(mix, s*n, R, false) })
-	comp(&x.hcMix, func() (*ir.Kernel, error) { return kernels.HCMix(R, iters, d.HCEps) })
-	comp(&x.hcColl, func() (*ir.Kernel, error) { return kernels.HCCollapse(n, R) })
-	comp(&x.hcPost, func() (*ir.Kernel, error) { return kernels.HCPost(n, R, d.Fault == nn.DS4FaultCombRows) })
+	comp(&x.hcFlat, func() (*ir.Kernel, error) { return oldkernels.HCFlat(n, R) })
+	comp(&x.hcRms, func() (*ir.Kernel, error) { return oldkernels.RMSNormRows(s*n, R, float32(p.RMSEps), false, false) })
+	comp(&x.hcFn, func() (*ir.Kernel, error) { return oldkernels.RouterMatVecTok(mix, s*n, R, false) })
+	comp(&x.hcMix, func() (*ir.Kernel, error) { return oldkernels.HCMix(R, iters, d.HCEps) })
+	comp(&x.hcColl, func() (*ir.Kernel, error) { return oldkernels.HCCollapse(n, R) })
+	comp(&x.hcPost, func() (*ir.Kernel, error) { return oldkernels.HCPost(n, R, d.Fault == nn.DS4FaultCombRows) })
 	eps := float32(p.RMSEps)
-	comp(&x.rmsQ, func() (*ir.Kernel, error) { return kernels.RMSNormRows(p.QLoraRank, R, eps, false, false) })
-	comp(&x.rmsHeads, func() (*ir.Kernel, error) { return kernels.RMSNormRows(hd, R*H, eps, false, false) })
-	comp(&x.rmsHD, func() (*ir.Kernel, error) { return kernels.RMSNormRows(hd, R, eps, false, false) })
-	comp(&x.quantQA, func() (*ir.Kernel, error) { return kernels.Quantize(R*p.QLoraRank, actWin) })
-	comp(&x.quantOA, func() (*ir.Kernel, error) { return kernels.Quantize(R*d.OGroups*d.OLoraRank, actWin) })
-	comp(&x.ropeQ, func() (*ir.Kernel, error) { return kernels.RoPETail(H, hd, nr, R, false) })
-	comp(&x.ropeK, func() (*ir.Kernel, error) { return kernels.RoPETail(1, hd, nr, R, false) })
-	comp(&x.ropeI, func() (*ir.Kernel, error) { return kernels.RoPETail(H, hd, nr, R, true) })
+	comp(&x.rmsQ, func() (*ir.Kernel, error) { return oldkernels.RMSNormRows(p.QLoraRank, R, eps, false, false) })
+	comp(&x.rmsHeads, func() (*ir.Kernel, error) { return oldkernels.RMSNormRows(hd, R*H, eps, false, false) })
+	comp(&x.rmsHD, func() (*ir.Kernel, error) { return oldkernels.RMSNormRows(hd, R, eps, false, false) })
+	comp(&x.quantQA, func() (*ir.Kernel, error) { return oldkernels.Quantize(R*p.QLoraRank, actWin) })
+	comp(&x.quantOA, func() (*ir.Kernel, error) { return oldkernels.Quantize(R*d.OGroups*d.OLoraRank, actWin) })
+	comp(&x.ropeQ, func() (*ir.Kernel, error) { return oldkernels.RoPETail(H, hd, nr, R, false) })
+	comp(&x.ropeK, func() (*ir.Kernel, error) { return oldkernels.RoPETail(1, hd, nr, R, false) })
+	comp(&x.ropeI, func() (*ir.Kernel, error) { return oldkernels.RoPETail(H, hd, nr, R, true) })
 	if ih > 0 {
-		comp(&x.rmsIHD, func() (*ir.Kernel, error) { return kernels.RMSNormRows(ihd, R, eps, false, false) })
-		comp(&x.ropeIQ, func() (*ir.Kernel, error) { return kernels.RoPETail(ih, ihd, nr, R, false) })
-		comp(&x.ropeIE, func() (*ir.Kernel, error) { return kernels.RoPETail(1, ihd, nr, R, false) })
+		comp(&x.rmsIHD, func() (*ir.Kernel, error) { return oldkernels.RMSNormRows(ihd, R, eps, false, false) })
+		comp(&x.ropeIQ, func() (*ir.Kernel, error) { return oldkernels.RoPETail(ih, ihd, nr, R, false) })
+		comp(&x.ropeIE, func() (*ir.Kernel, error) { return oldkernels.RoPETail(1, ihd, nr, R, false) })
 	}
 	// The indexer's score scale, a load-time constant (1/sqrt of its heads
 	// times their width, as the host's).
@@ -351,58 +351,58 @@ func (g *devTier) initDS4(bs *blockScratch) error {
 		x.kinds[c] = k
 		kv, gt := hd, hd+k.coff*hd
 		ikv, ig := gt+k.coff*hd, gt+k.coff*hd+2*ihd
-		comp(&k.wK, func() (*ir.Kernel, error) { return kernels.PagedCopyRows(hd, R, P, k.row, 0, false) })
+		comp(&k.wK, func() (*ir.Kernel, error) { return oldkernels.PagedCopyRows(hd, R, P, k.row, 0, false) })
 		keys := ds4Keys(d, c)
 		comp(&k.gather, func() (*ir.Kernel, error) {
 			re := k.ent
 			if re == 0 {
 				re = hd // bound, never read
 			}
-			return kernels.DS4Gather(R, x.kmax, hd, P, k.row, re, keys)
+			return oldkernels.DS4Gather(R, x.kmax, hd, P, k.row, re, keys)
 		})
-		comp(&k.desc, func() (*ir.Kernel, error) { return kernels.DS4Desc(R, x.kmax, P, keys) })
+		comp(&k.desc, func() (*ir.Kernel, error) { return oldkernels.DS4Desc(R, x.kmax, P, keys) })
 		if c == nn.DS4CompNone {
 			continue
 		}
 		cw := k.coff * hd
 		noOv := d.Fault == nn.DS4FaultNoOverlap
-		comp(&k.wKV, func() (*ir.Kernel, error) { return kernels.PagedCopyRows(cw, R, P, k.row, kv, false) })
-		comp(&k.wG, func() (*ir.Kernel, error) { return kernels.PagedCopyRows(cw, R, P, k.row, gt, false) })
-		comp(&k.ape, func() (*ir.Kernel, error) { return kernels.DS4ApeAdd(cw, rate, R) })
+		comp(&k.wKV, func() (*ir.Kernel, error) { return oldkernels.PagedCopyRows(cw, R, P, k.row, kv, false) })
+		comp(&k.wG, func() (*ir.Kernel, error) { return oldkernels.PagedCopyRows(cw, R, P, k.row, gt, false) })
+		comp(&k.ape, func() (*ir.Kernel, error) { return oldkernels.DS4ApeAdd(cw, rate, R) })
 		comp(&k.pool, func() (*ir.Kernel, error) {
-			return kernels.DS4Pool(R, P, k.row, kv, gt, hd, rate, c == nn.DS4CompCSA, noOv)
+			return oldkernels.DS4Pool(R, P, k.row, kv, gt, hd, rate, c == nn.DS4CompCSA, noOv)
 		})
-		comp(&k.entW, func() (*ir.Kernel, error) { return kernels.DS4EntWrite(hd, R, P, k.ent, 0, rate) })
+		comp(&k.entW, func() (*ir.Kernel, error) { return oldkernels.DS4EntWrite(hd, R, P, k.ent, 0, rate) })
 		al(&k.csE, R*nr)
 		al(&k.erpos, R+1)
 		k.posStage = make([]uint32, R+1)
 		if c != nn.DS4CompCSA {
 			continue
 		}
-		comp(&k.wIKV, func() (*ir.Kernel, error) { return kernels.PagedCopyRows(2*ihd, R, P, k.row, ikv, false) })
-		comp(&k.wIG, func() (*ir.Kernel, error) { return kernels.PagedCopyRows(2*ihd, R, P, k.row, ig, false) })
-		comp(&k.apeI, func() (*ir.Kernel, error) { return kernels.DS4ApeAdd(2*ihd, rate, R) })
+		comp(&k.wIKV, func() (*ir.Kernel, error) { return oldkernels.PagedCopyRows(2*ihd, R, P, k.row, ikv, false) })
+		comp(&k.wIG, func() (*ir.Kernel, error) { return oldkernels.PagedCopyRows(2*ihd, R, P, k.row, ig, false) })
+		comp(&k.apeI, func() (*ir.Kernel, error) { return oldkernels.DS4ApeAdd(2*ihd, rate, R) })
 		comp(&k.poolI, func() (*ir.Kernel, error) {
-			return kernels.DS4Pool(R, P, k.row, ikv, ig, ihd, rate, true, noOv)
+			return oldkernels.DS4Pool(R, P, k.row, ikv, ig, ihd, rate, true, noOv)
 		})
-		comp(&k.entWI, func() (*ir.Kernel, error) { return kernels.DS4EntWrite(ihd, R, P, k.ent, hd, rate) })
+		comp(&k.entWI, func() (*ir.Kernel, error) { return oldkernels.DS4EntWrite(ihd, R, P, k.ent, hd, rate) })
 		tcap := p.MaxSeq/rate + 1
-		comp(&x.entDesc, func() (*ir.Kernel, error) { return kernels.DS4EntDesc(R, rate) })
+		comp(&x.entDesc, func() (*ir.Kernel, error) { return oldkernels.DS4EntDesc(R, rate) })
 		comp(&x.idxSc, func() (*ir.Kernel, error) {
-			return kernels.IdxScoresPaged(R, ih, ihd, tcap, P, k.ent, hd, idxScale)
+			return oldkernels.IdxScoresPaged(R, ih, ihd, tcap, P, k.ent, hd, idxScale)
 		})
-		comp(&x.idxSl, func() (*ir.Kernel, error) { return kernels.IdxSelect(R, tcap, d.IdxTopK) })
-		al(&x.edesc, R*kernels.PRowWords)
+		comp(&x.idxSl, func() (*ir.Kernel, error) { return oldkernels.IdxSelect(R, tcap, d.IdxTopK) })
+		al(&x.edesc, R*oldkernels.PRowWords)
 		al(&x.score, R*tcap)
 		al(&x.sel, R*(d.IdxTopK+1))
 	}
 	if x.sel == nil {
 		al(&x.sel, R) // bound by the gathers of a model with no CSA block, never read
 	}
-	comp(&x.routeCopy, func() (*ir.Kernel, error) { return kernels.DS4RouteBias(p.NExpert, 0, 0, R, false) })
+	comp(&x.routeCopy, func() (*ir.Kernel, error) { return oldkernels.DS4RouteBias(p.NExpert, 0, 0, R, false) })
 	if p.Vocab > 0 {
 		comp(&x.routeHash, func() (*ir.Kernel, error) {
-			return kernels.DS4RouteBias(p.NExpert, p.NExpertUsed, p.Vocab, R, true)
+			return oldkernels.DS4RouteBias(p.NExpert, p.NExpertUsed, p.Vocab, R, true)
 		})
 	}
 	al(&x.flat, R*s*n)
@@ -439,7 +439,7 @@ func (g *devTier) initDS4(bs *blockScratch) error {
 	}
 	al(&x.gk, R*x.ppr*P*hd)
 	al(&x.gtab, R*x.ppr)
-	al(&x.gdesc, R*kernels.PRowWords)
+	al(&x.gdesc, R*oldkernels.PRowWords)
 	al(&x.ao, R*H*hd)
 	al(&x.aor, R*H*hd)
 	al(&x.oa, R*d.OGroups*d.OLoraRank)
@@ -548,7 +548,7 @@ func (g *devTier) ds4Twins(l *layer, R int) bool {
 		return true
 	}
 	m := l.mvWoA
-	c, err := g.idKernel(kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Split: 1,
+	c, err := g.idKernel(oldkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Split: 1,
 		Experts: m.experts, Slots: R * m.experts, SlotAct: true, Sub: subFor(m.q, m.k)})
 	if err != nil {
 		g.LastErr = fmt.Sprintf("tier: DeepSeek V4's grouped output at %d rows: %v", R, err)
@@ -658,7 +658,7 @@ func (g *devTier) ds4Tables(lc *launcher, bs *blockScratch, R int) {
 func ds4Rows(lc *launcher, k backend.Kernel, rows int, bufs ...backend.Buf) {
 	*lc.memoK, *lc.memoSrc = nil, nil
 	if *lc.err == nil {
-		*lc.err = lc.launch(k, rows, kernels.RMSNormGroup, bufs...)
+		*lc.err = lc.launch(k, rows, oldkernels.RMSNormGroup, bufs...)
 	}
 }
 
@@ -677,12 +677,12 @@ func (g *devTier) ds4Pre(lc *launcher, bs *blockScratch, l *layer, R int, src ba
 	lc.la(x.hcFlat, R*s*n, src, x.flat)
 	ds4Rows(lc, x.hcRms, R, x.flat, x.onesFlat, x.flatn)
 	if *lc.err == nil {
-		*lc.err = lc.launch(x.hcFn, mix*R, kernels.RouterThreads(1), fn, x.flatn, x.mix)
+		*lc.err = lc.launch(x.hcFn, mix*R, oldkernels.RouterThreads(1), fn, x.flatn, x.mix)
 	}
 	lc.la(x.hcMix, R, x.mix, sc, bb, x.hc)
 	lc.la(x.hcColl, R*n, src, x.hc, x.coll)
 	norm(x.coll, nw, nil)
-	lc.la(bs.quantE, kernels.QuantizeThreads(R*n/32), bs.h, bs.a, bs.ax)
+	lc.la(bs.quantE, oldkernels.QuantizeThreads(R*n/32), bs.h, bs.a, bs.ax)
 	g.DS4HC++
 }
 
@@ -739,7 +739,7 @@ func (g *devTier) ds4Attn(s backend.Session, lc *launcher, bs *blockScratch, l *
 	// The query: the latent normed, its quantization through q_b (and the
 	// indexer's q), each head normed with no weight and rotated.
 	ds4Rows(lc, x.rmsQ, R, x.qa, l.nQA, x.qan)
-	lc.la(x.quantQA, kernels.QuantizeThreads(R*p.QLoraRank/32), x.qan, bs.a, bs.ax)
+	lc.la(x.quantQA, oldkernels.QuantizeThreads(R*p.QLoraRank/32), x.qan, bs.a, bs.ax)
 	mvrun(l.mvQB, l.wqb, x.q)
 	if csa {
 		mvrun(l.mvIQ, l.idxQB, x.iq)
@@ -786,13 +786,13 @@ func (g *devTier) ds4Attn(s backend.Session, lc *launcher, bs *blockScratch, l *
 	}
 	if csa && !ds4Keys(d, b.comp).All && !ds4Keys(d, b.comp).None {
 		tcap := p.MaxSeq/k.rate + 1
-		lc.la(x.entDesc, R*kernels.PRowWords, pRow, x.edesc)
+		lc.la(x.entDesc, R*oldkernels.PRowWords, pRow, x.edesc)
 		lc.la(x.idxSc, R*tcap, x.iqr, x.iw, ent.k, ent.tab, x.edesc, x.score)
 		lc.la(x.idxSl, R*tcap, x.score, x.edesc, x.sel)
 		g.IdxSelects++
 	}
 	lc.la(k.gather, R*x.kmax*hd, pc.k, pc.tab, ek, et, pRow, x.sel, x.gk)
-	lc.la(k.desc, R*kernels.PRowWords, pRow, x.gdesc)
+	lc.la(k.desc, R*oldkernels.PRowWords, pRow, x.gdesc)
 	sink := l.sinks
 	if d.Fault == nn.DS4FaultNoSinks {
 		sink = x.noSink
@@ -807,7 +807,7 @@ func (g *devTier) ds4Attn(s backend.Session, lc *launcher, bs *blockScratch, l *
 		lc.la(x.ropeI, R*H*hd, x.ao, cs, x.aor)
 		out = x.aor
 	}
-	lc.la(bs.quantQ, kernels.QuantizeThreads(R*H*hd/32), out, bs.a, bs.ax)
+	lc.la(bs.quantQ, oldkernels.QuantizeThreads(R*H*hd/32), out, bs.a, bs.ax)
 	wa, ok := l.ds4WoA(R)
 	if !ok {
 		if *lc.err == nil {
@@ -816,7 +816,7 @@ func (g *devTier) ds4Attn(s backend.Session, lc *launcher, bs *blockScratch, l *
 		return
 	}
 	mvid(wa, l.woA, x.oa, x.oSel)
-	lc.la(x.quantOA, kernels.QuantizeThreads(R*d.OGroups*d.OLoraRank/32), x.oa, bs.a, bs.ax)
+	lc.la(x.quantOA, oldkernels.QuantizeThreads(R*d.OGroups*d.OLoraRank/32), x.oa, bs.a, bs.ax)
 	mvrun(l.mvo, l.wo, bs.mvOut)
 	g.DS4Blocks++
 }

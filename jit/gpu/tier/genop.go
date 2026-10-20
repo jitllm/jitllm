@@ -12,6 +12,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // Code generation for the device program: each op's kernels are generated
@@ -59,7 +60,7 @@ const (
 	gaKPool // the block's paged K pool
 	gaVPool // its paged V pool
 	gaTab   // its page table
-	gaPRow  // the step's row descriptors (kernels.PRowWords a row)
+	gaPRow  // the step's row descriptors (oldkernels.PRowWords a row)
 )
 
 // genLaunch is one generated launch: threads for a flat launch, or groups of
@@ -245,7 +246,7 @@ func (rb *rowBuild) quantize(v, w int, p *nn.LayerPlan) {
 		win = 32
 	}
 	rb.r.Q8 = &compose.Q8{Val: v, A: rb.buf(compose.BufQ8, gaQ8A), X: rb.buf(compose.BufQ8X, gaQ8X),
-		Window: kernels.ClampWindow(win, kp), Pad: kp}
+		Window: oldkernels.ClampWindow(win, kp), Pad: kp}
 }
 
 // rowSchedule is a row group's schedule: the target's group for its width,
@@ -257,7 +258,7 @@ func rowSchedule(r *compose.Row) compose.Schedule {
 	}
 	top := 256
 	if reduces || r.Q8 != nil {
-		top = kernels.RMSNormGroup
+		top = oldkernels.RMSNormGroup
 	}
 	g := 32
 	for g < r.Width && g < top {
@@ -266,76 +267,43 @@ func rowSchedule(r *compose.Row) compose.Schedule {
 	return compose.Schedule{Group: g}
 }
 
-// genOp is op o's launches, or nil where it has no generator yet or the
-// backend refused its kernel (the executor's case runs it). Every kind here
-// is a composed row group of op fragments (jit/gpu/compose) except the
-// rotaries and the query/gate split, whose index maps the row former does not
-// state yet: they launch their template until it does.
+// genOp is op o's launches, or nil where the composer has no form for it
+// yet or the backend refused its kernel, o.Why saying which. Nil fails the
+// block: nothing else runs an op.
 func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
 	// The formers take their ops whatever their values' layouts: a former
 	// lays out its own rows (a bank's pairs, a history's pages).
 	switch o.Kind {
 	case dkMap, dkReduce, dkSelectK, dkRank, dkTake, dkTile, dkConcat, dkRelayout:
 		return g.genPrim(o, prog, rows)
-	case dkMatVec, dkMatVecRes, dkMatVecGate:
-		if rows == 1 {
-			if l := g.genMatVec(o, prog, bs); l != nil {
-				return l
-			}
-		} else if l := g.genGemm(o, prog, bs, rows); l != nil {
-			return l
-		}
-		return []genLaunch{{former: formMatVec}}
-	case dkExpertMatVec, dkExpertMatVecE, dkQKV, dkQKVGemm, dkRouterLogits, dkResIn, dkQKVSep:
-		if o.Kind == dkExpertMatVec && rows == 1 {
-			if l := g.genBankMatVec(o, prog, bs); l != nil {
-				return l
-			}
-		}
-		// The matvec former: the weight's (or bank's, or the fused q/k/v
-		// grid's) kernel, emitted from its shape.
-		return []genLaunch{{former: formMatVec}}
-	case dkAttend, dkLatentAttend, dkKVWrite, dkKVCopy, dkRopeQKV, dkSlice, dkView, dkConcatHeads, dkRopeTail, dkLatentWrite:
+	case dkMatVec, dkMatVecRes, dkMatVecGate, dkExpertMatVec, dkExpertMatVecE, dkQKV, dkQKVGemm, dkRouterLogits,
+		dkResIn, dkQKVSep, dkAttend, dkLatentAttend, dkView, dkTopK, dkRouteWeights, dkGroupByExpert, dkGateLogit,
+		dkGroupMask, dkRouterBias, dkExpertBias, dkExpertFetch, dkConv1d, dkScan, dkGatedNorm, dkSSMNorm, dkConvBias:
+		// No form in the composer's primitives yet: the op fails to
+		// generate, and its block does not place.
+		o.Why = whyNoForm
+		return nil
+	case dkKVWrite, dkKVCopy, dkRopeQKV, dkSlice, dkConcatHeads, dkRopeTail, dkLatentWrite, dkCombine:
+		var l []genLaunch
 		switch o.Kind {
 		case dkKVWrite, dkKVCopy:
-			if l := g.genPagedWrite(o, prog, bs, rows, o.Kind == dkKVWrite, gaIn0, gaIn1); l != nil {
-				return l
-			}
-			o.Why = whyHistory
+			l, o.Why = g.genPagedWrite(o, prog, bs, rows, o.Kind == dkKVWrite, gaIn0, gaIn1), whyHistory
 		case dkRopeQKV:
-			if l := g.genRopeQKV(o, prog, bs, rows); l != nil {
-				return l
-			}
-			o.Why = whyHistory
+			l, o.Why = g.genRopeQKV(o, prog, bs, rows), whyHistory
 		case dkSlice, dkConcatHeads, dkRopeTail:
-			if l := g.genHeadCopy(o, prog, bs, rows); l != nil {
-				return l
-			}
-			o.Why = whyLayout
+			l, o.Why = g.genHeadCopy(o, prog, bs, rows), whyLayout
 		case dkLatentWrite:
-			if l := g.genLatentWrite(o, prog, bs, rows); l != nil {
-				return l
+			l, o.Why = g.genLatentWrite(o, prog, bs, rows), whyHistory
+		case dkCombine:
+			if rows == 1 {
+				l = g.genCombine(o, prog, bs)
 			}
-			o.Why = whyHistory
+			o.Why = whyNoForm
 		}
-		// The attention former: the paged plans emitted from the attention's
-		// shape and the device's tuning, the history's row writes, and a
-		// latent attention's slices of its rows.
-		return []genLaunch{{former: formAttend}}
-	case dkTopK, dkRouteWeights, dkCombine, dkGroupByExpert, dkGateLogit, dkGroupMask, dkRouterBias,
-		dkExpertBias, dkExpertFetch:
-		if o.Kind == dkCombine && rows == 1 {
-			if l := g.genCombine(o, prog, bs); l != nil {
-				return l
-			}
+		if l != nil {
+			o.Why = whyNone
 		}
-		// The router former: the selection's kernels emitted from the route's
-		// shape (MoERoute), the bank's fetch, and the combine.
-		return []genLaunch{{former: formRoute}}
-	case dkConv1d, dkScan, dkGatedNorm, dkSSMNorm, dkConvBias:
-		// The scan former: a recurrence's kernels emitted from its plan's
-		// shape (RecurrentPlan).
-		return []genLaunch{{former: formScan}}
+		return l
 	}
 	if l := g.genPairs(o, prog, bs, rows); l != nil {
 		return l
@@ -511,7 +479,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		rb.r.Width = iw
 		x := rb.load(compose.BufRow, gaIn0)
 		rb.r.Q8 = &compose.Q8{Val: x, A: rb.buf(compose.BufQ8, gaQ8A), X: rb.buf(compose.BufQ8X, gaQ8X),
-			Window: kernels.ClampWindow(win, kp), Pad: kp}
+			Window: oldkernels.ClampWindow(win, kp), Pad: kp}
 	case dkRopeQ, dkRopeKRow:
 		// The rotary over each head's first NRot dimensions (NORM or NEOX
 		// pairs; XD-RoPE's NEOX pairs on two tables), the rest of the head
@@ -819,7 +787,7 @@ func (g *devTier) genPairs(o *devOp, prog *devProgram, bs *blockScratch, rows in
 		gt, up := rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1)
 		if len(o.In) > 2 {
 			a, ok := kernAct(o.Act)
-			if !ok || kernels.ActMulOK(a) != nil || o.A.GLU.Bounded() {
+			if !ok || oldkernels.ActMulOK(a) != nil || o.A.GLU.Bounded() {
 				return nil
 			}
 			// act(w*gate) * (w*up), w the pair's routed weight.
@@ -844,7 +812,7 @@ func (g *devTier) genPairs(o *devOp, prog *devProgram, bs *blockScratch, rows in
 		}
 		x := rb.load(compose.BufRow, gaIn0)
 		rb.r.Q8 = &compose.Q8{Val: x, A: rb.buf(compose.BufQ8, gaQ8A), X: rb.buf(compose.BufQ8X, gaQ8X),
-			Window: kernels.ClampWindow(max(p.ActWin, 32), pad32(w)), Pad: pad32(w)}
+			Window: oldkernels.ClampWindow(max(p.ActWin, 32), pad32(w)), Pad: pad32(w)}
 	default:
 		return nil
 	}
@@ -857,81 +825,10 @@ func (g *devTier) genPairs(o *devOp, prog *devProgram, bs *blockScratch, rows in
 	return []genLaunch{l}
 }
 
-// genMatVec is a decode matvec composed with its epilogue: the weight's
-// kernel at the schedule its tuning chose (mv: split, rows per thread, the
-// in-group reduction) and, applied to each output before the store, the
-// fragments of the ops the program fused into it -- the weight's bias, a
-// residual added (matvec_res), act(gate) times the output (matvec_gate).
-// nil where the shape reduces across launches (a split into a partial plane),
-// where the table split swaps the kernel, or where it reads an operand of its
-// own: the former runs those.
-func (g *devTier) genMatVec(o *devOp, prog *devProgram, bs *blockScratch) []genLaunch {
-	l := g.curLayer
-	if l == nil || o.W < 0 || o.W >= len(l.ms) || *l.rs[o.W] == nil {
-		o.Why = whyNoWeight
-		return nil
-	}
-	m := *l.ms[o.W]
-	switch {
-	case m.kern == nil:
-		o.Why = whyNoKernel
-	case m.experts > 1 || m.slots > 0:
-		o.Why = whyBank
-	case m.pad:
-		o.Why = whyPadded
-	case g.TableSplit && m.alt != nil:
-		o.Why = whyTable
-	}
-	if o.Why != 0 {
-		return nil
-	}
-	e, args := matEpi(o, m, m.rows)
-	if e == nil {
-		o.Why = whyEpilogue
-		return nil
-	}
-	rowt := max(m.rowt, 1)
-	s := kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Split: m.split, Rowt: rowt, GroupSplit: m.group}
-	if m.split > 1 && !m.group {
-		return g.genSplitMatVec(o, s, e, args)
-	}
-	k, width := g.mvEpiKern(s, e)
-	if k == nil {
-		return nil
-	}
-	n := m.rows * max(m.split, 1)
-	if rowt > 1 {
-		n /= rowt
-	}
-	gl := genLaunch{k: k, groups: (n + width - 1) / width, width: width,
-		args: [8]genArg{gaWQS, gaWD, gaWSC, gaOpA, gaOpAX, gaOut0}, n: 6}
-	if kernels.IsFloat(m.q) {
-		// A float weight reads the float row in the scale slot.
-		if o.FIn == 0 {
-			return nil
-		}
-		gl.args[1] = gaIn0 + genArg(o.FIn-1)
-	}
-	for _, a := range args {
-		gl.args[gl.n] = a
-		gl.n++
-	}
-	return []genLaunch{gl}
-}
-
-// mvEpiKern is the matvec of shape s with epilogue e, formed by the matvec
-// former (compose.MatVec: the loop nest around the format's SubDot) once a
-// device and structure, and its workgroup width. Callers hold g.mu.
-func (g *devTier) mvEpiKern(s kernels.MatVecShape, e *compose.Epi) (backend.Kernel, int) {
-	mv := &compose.MatVec{T: s.T, K: s.K, Rows: s.Rows, Split: s.Split, Group: s.GroupSplit, Rowt: s.Rowt,
-		Center: s.Center, Epi: e}
-	return g.genKern(append([]uint32{encMatVec}, mv.Encode()...), mv.Emit)
-}
-
 // epiKern is a former's kernel of shape s with an epilogue, its structure
 // enc (the epilogue's and the former's schedule), built by build once a
 // device and structure, and its workgroup width. Callers hold g.mu.
-func (g *devTier) epiKern(s kernels.MatVecShape, enc []uint32, build func() (*ir.Kernel, error)) (backend.Kernel, int) {
+func (g *devTier) epiKern(s oldkernels.MatVecShape, enc []uint32, build func() (*ir.Kernel, error)) (backend.Kernel, int) {
 	full := append([]uint32{encEpi}, enc...)
 	full = append(full, uint32(s.T), uint32(s.K), uint32(s.Rows), uint32(s.Split), uint32(s.Rowt), b2u(s.GroupSplit),
 		uint32(s.NTok), b2u(s.Center.NoCenter), uint32(s.Center.MinTok))
@@ -974,111 +871,6 @@ func matEpi(o *devOp, m mv, rows int) (*compose.Epi, []genArg) {
 		return nil, nil
 	}
 	return e, args
-}
-
-// genGemm is a prompt chunk's matvec as the binary16 GEMM its schedule chose
-// (batchMV: tile and split for this card and these rows), composed with its
-// epilogue, behind the conversion of its float row to the GEMM's operand.
-// nil where the schedule is another (the former runs it) or splits into a
-// partial plane.
-func (g *devTier) genGemm(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
-	l := g.curLayer
-	if l == nil || o.W < 0 || o.W >= len(l.ms) || *l.rs[o.W] == nil || prog.vals[o.In[0]].Layout != layoutRow {
-		o.Why = whyNoWeight
-		return nil
-	}
-	m := *l.ms[o.W]
-	switch {
-	case m.slots > 0:
-		o.Why = whyBank
-	case m.pad:
-		o.Why = whyPadded
-	case g.TableSplit && m.alt != nil:
-		o.Why = whyTable
-	}
-	if o.Why != 0 {
-		return nil
-	}
-	bm, ok := g.batchMV(m, rows, bs.tok)
-	if ok && bm.form == mvFormDot4 {
-		return g.genChunkMatVec(o, prog, bs, m, bm, rows)
-	}
-	switch {
-	case !ok:
-		o.Why = whyNoBatch
-	case bm.act == nil || !bm.actT || bm.vt.MT == 0:
-		o.Why = whyNotStaged
-	case bm.tail != nil:
-		o.Why = whyTail
-	}
-	if o.Why != 0 {
-		return nil
-	}
-	e, args := matEpi(o, m, m.rows)
-	if e == nil {
-		o.Why = whyEpilogue
-		return nil
-	}
-	// The GEMM former at the schedule batchMV chose (tile, instruction,
-	// staging, split); a split's planes summed by the reduction former.
-	split := max(bm.split, 1)
-	gm := &compose.Gemm{T: m.q, K: m.k, Rows: m.rows, NTok: rows, Tile: bm.vt, Split: split}
-	out := gaOut0
-	if split > 1 {
-		need := m.rows * rows * split
-		if g.genInSub && g.partCap < need || !g.genInSub && !g.sizePart(need) {
-			o.Why = whySplit
-			return nil
-		}
-		out = gaSplit
-	} else {
-		gm.Epi = e
-	}
-	k, width := g.genKern(append([]uint32{encMatVec}, gm.Encode()...), gm.Emit)
-	if k == nil {
-		o.Why = whyNoKernel
-		return nil
-	}
-	gl := genLaunch{k: k, threads: gm.Groups() * width, groups: gm.Groups(), width: width,
-		args: [8]genArg{gaWQS, gaWD, gaWSC, gaF16, out}, n: 5, whole: true}
-	var red *genLaunch
-	if split > 1 {
-		ss := &compose.SplitSum{Rows: m.rows * rows, Split: split, Width: m.rows, Epi: e}
-		rk, rwidth := g.genKern(append([]uint32{encMatVec}, ss.Encode()...), ss.Emit)
-		if rk == nil {
-			o.Why = whyNoKernel
-			return nil
-		}
-		red = &genLaunch{k: rk, groups: (m.rows*rows + rwidth - 1) / rwidth, width: rwidth, args: [8]genArg{gaSplit, gaOut0}, n: 2, whole: true}
-	}
-	tail := &gl
-	if red != nil {
-		tail = red
-	}
-	for _, a := range args {
-		tail.args[tail.n] = a
-		tail.n++
-	}
-	// The binary16 operand, converted here from the float row in this
-	// GEMM's layout, which is a function of the token count it was built
-	// for: an f16 value a writer made for another count is not it.
-	if o.FIn == 0 {
-		o.Why = whyNoFloat // no float row stated to convert
-		return nil
-	}
-	// The operand: the GEMM's own group, a row a token (Gemm.Operand).
-	ok2 := gm.Operand()
-	ck := g.rowKern(ok2)
-	if ck.k == nil {
-		o.Why = whyNoKernel
-		return nil
-	}
-	conv := genLaunch{k: ck.k, groups: rows, width: ck.group, args: [8]genArg{gaIn0 + genArg(o.FIn-1), gaF16}, n: 2,
-		toF16: true, whole: true}
-	if red != nil {
-		return []genLaunch{conv, gl, *red}
-	}
-	return []genLaunch{conv, gl}
 }
 
 // headPerm is the head-major order of R rows of h heads: row h*R + r of the
@@ -1156,7 +948,7 @@ func (rb *rowBuild) gated(o *devOp, gt, up int) (int, bool) {
 		if !ok {
 			return 0, false
 		}
-		if kernels.ActMulOK(a) != nil {
+		if oldkernels.ActMulOK(a) != nil {
 			// An activation with an element form and no gated one (a
 			// sigmoid gate): act(gate) times up. One with no element form
 			// either compose refuses at emit (ActElemOK).
@@ -1218,6 +1010,7 @@ const (
 	whyHistory
 	whyLayout
 	whyShape
+	whyNoForm
 )
 
 func (w genWhy) String() string {
@@ -1226,104 +1019,8 @@ func (w genWhy) String() string {
 		"no batched form", "a prompt form other than the staged GEMM", "a tail launch",
 		"no float row stated", "a history that is not paged, or a row wider than its heads",
 		"rows whose head-major layout the program does not state",
-		"values whose widths the primitive does not take"}[w]
-}
-
-// genSplitMatVec is a decode matvec whose k is split across threads: the
-// former's segments write the partial plane, and the reduction former sums
-// them in segment order through the op's epilogue. Callers hold g.mu.
-func (g *devTier) genSplitMatVec(o *devOp, s kernels.MatVecShape, e *compose.Epi, eargs []genArg) []genLaunch {
-	// The plane is grown here, in the prologue; inside a submission nothing
-	// may allocate, so there it must already hold the segments.
-	need := s.Rows * s.Split
-	if g.genInSub && g.partCap < need || !g.genInSub && !g.sizePart(need) {
-		o.Why = whySplit
-		return nil
-	}
-	mv := &compose.MatVec{T: s.T, K: s.K, Rows: s.Rows, Split: s.Split, Rowt: s.Rowt, Center: s.Center}
-	k, width := g.genKern(append([]uint32{encMatVec}, mv.Encode()...), mv.Emit)
-	ss := &compose.SplitSum{Rows: s.Rows, Split: s.Split, Epi: e}
-	rk, rwidth := g.genKern(append([]uint32{encMatVec}, ss.Encode()...), ss.Emit)
-	if k == nil || rk == nil {
-		o.Why = whyNoKernel
-		return nil
-	}
-	part := genLaunch{k: k, groups: (mv.Threads() + width - 1) / width, width: width,
-		args: [8]genArg{gaWQS, gaWD, gaWSC, gaOpA, gaOpAX, gaSplit}, n: 6}
-	if kernels.IsFloat(s.T) {
-		if o.FIn == 0 {
-			o.Why = whyNoFloat
-			return nil
-		}
-		part.args[1] = gaIn0 + genArg(o.FIn-1)
-	}
-	red := genLaunch{k: rk, groups: (s.Rows + rwidth - 1) / rwidth, width: rwidth, args: [8]genArg{gaSplit, gaOut0}, n: 2}
-	for _, a := range eargs {
-		red.args[red.n] = a
-		red.n++
-	}
-	return []genLaunch{part, red}
-}
-
-// genChunkMatVec is a prompt chunk's matvec in the batched dp4a form batchMV
-// chose (dot4Split: tokens and rows a thread, a k split), formed by the matvec
-// former over the chunk's int8 operand, and a split's segments summed by the
-// reduction former through the op's epilogue. Launched whole: the grid is
-// row tiles by token groups by segments, which no proportional cut keeps.
-// Callers hold g.mu.
-func (g *devTier) genChunkMatVec(o *devOp, prog *devProgram, bs *blockScratch, m, bm mv, rows int) []genLaunch {
-	e, eargs := matEpi(o, m, m.rows)
-	if e == nil {
-		o.Why = whyEpilogue
-		return nil
-	}
-	rowt, tok := m.rows/max(bm.rows, 1), rows/max(bm.groups, 1)
-	split := max(bm.split, 1)
-	mv := &compose.MatVec{T: m.q, K: m.k, Rows: m.rows, NTok: rows, Tok: tok, Rowt: rowt, Split: split, Center: g.center}
-	out := gaOut0
-	if split > 1 {
-		need := m.rows * rows * split
-		if g.genInSub && g.partCap < need || !g.genInSub && !g.sizePart(need) {
-			o.Why = whySplit
-			return nil
-		}
-		out = gaSplit
-	} else {
-		mv.Epi = e
-	}
-	k, width := g.genKern(append([]uint32{encMatVec}, mv.Encode()...), mv.Emit)
-	if k == nil {
-		o.Why = whyNoKernel
-		return nil
-	}
-	gl := genLaunch{k: k, groups: (mv.Threads() + width - 1) / width, width: width,
-		args: [8]genArg{gaWQS, gaWD, gaWSC, gaOpA, gaOpAX, out}, n: 6, whole: true}
-	if kernels.IsFloat(m.q) {
-		if o.FIn == 0 {
-			o.Why = whyNoFloat
-			return nil
-		}
-		gl.args[1] = gaIn0 + genArg(o.FIn-1)
-	}
-	if split == 1 {
-		for _, a := range eargs {
-			gl.args[gl.n] = a
-			gl.n++
-		}
-		return []genLaunch{gl}
-	}
-	ss := &compose.SplitSum{Rows: m.rows * rows, Split: split, Width: m.rows, Epi: e}
-	rk, rwidth := g.genKern(append([]uint32{encMatVec}, ss.Encode()...), ss.Emit)
-	if rk == nil {
-		o.Why = whyNoKernel
-		return nil
-	}
-	red := genLaunch{k: rk, groups: (m.rows*rows + rwidth - 1) / rwidth, width: rwidth, args: [8]genArg{gaSplit, gaOut0}, n: 2, whole: true}
-	for _, a := range eargs {
-		red.args[red.n] = a
-		red.n++
-	}
-	return []genLaunch{gl, red}
+		"values whose widths the primitive does not take",
+		"an op with no form in the composer's primitives yet"}[w]
 }
 
 // genPagedWrite is a block's new K and V rows into its paged history: K
@@ -1467,67 +1164,6 @@ func (g *devTier) genHeadCopy(o *devOp, prog *devProgram, bs *blockScratch, rows
 	l := genLaunch{k: k.k, groups: rows, width: k.group, n: uint8(len(rb.args))}
 	copy(l.args[:], rb.args)
 	return []genLaunch{l}
-}
-
-// genBankMatVec is a decode step's matvec over a bank's selected sheets
-// (an expert bank, or a latent attention's heads), formed by the matvec
-// former at the bank's schedule: its slots, an operand vector a slot where
-// the bank reads one, its k split in the group or into planes summed by the
-// reduction former. The selection is the op's second input; a float bank
-// reads the float rows, its third. Callers hold g.mu.
-func (g *devTier) genBankMatVec(o *devOp, prog *devProgram, bs *blockScratch) []genLaunch {
-	l := g.curLayer
-	if l == nil || o.W < 0 || o.W >= len(l.ms) || *l.rs[o.W] == nil || len(o.In) < 2 {
-		o.Why = whyNoWeight
-		return nil
-	}
-	m := *l.ms[o.W]
-	switch {
-	case m.kern == nil:
-		o.Why = whyNoKernel
-	case m.experts < 2 || m.rowt > 1 || m.pad || g.TableSplit && m.alt != nil:
-		o.Why = whyBank
-	}
-	if o.Why != 0 {
-		return nil
-	}
-	split := max(m.split, 1)
-	mv := &compose.MatVec{T: m.q, K: m.k, Rows: m.rows, Experts: m.experts, Slots: max(m.slots, 1), SlotAct: m.slotAct,
-		Split: split, Group: m.group, Center: g.center}
-	n := m.rows * mv.Slots
-	out := gaOut0
-	if split > 1 && !m.group {
-		need := n * split
-		if g.genInSub && g.partCap < need || !g.genInSub && !g.sizePart(need) {
-			o.Why = whySplit
-			return nil
-		}
-		out = gaSplit
-	}
-	k, width := g.genKern(append([]uint32{encMatVec}, mv.Encode()...), mv.Emit)
-	if k == nil {
-		o.Why = whyNoKernel
-		return nil
-	}
-	gl := genLaunch{k: k, groups: (mv.Threads() + width - 1) / width, width: width,
-		args: [8]genArg{gaWQS, gaWD, gaWSC, gaOpA, gaOpAX, out, gaIn1}, n: 7}
-	if kernels.IsFloat(m.q) {
-		if len(o.In) < 3 {
-			o.Why = whyNoFloat
-			return nil
-		}
-		gl.args[1] = gaIn2
-	}
-	if out == gaOut0 {
-		return []genLaunch{gl}
-	}
-	ss := &compose.SplitSum{Rows: n, Split: split}
-	rk, rwidth := g.genKern(append([]uint32{encMatVec}, ss.Encode()...), ss.Emit)
-	if rk == nil {
-		o.Why = whyNoKernel
-		return nil
-	}
-	return []genLaunch{gl, {k: rk, groups: (n + rwidth - 1) / rwidth, width: rwidth, args: [8]genArg{gaSplit, gaOut0}, n: 2}}
 }
 
 // genCombine is a decode step's weighted sum of its selected experts' rows:

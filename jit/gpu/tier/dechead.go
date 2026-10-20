@@ -8,10 +8,11 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // Clef's joint schema head on the device (nn.ClefHeadDevice): the request's
-// final residual rows go up, the head runs as a program of kernels.DH*
+// final residual rows go up, the head runs as a program of oldkernels.DH*
 // launches on the device that holds the model's output projection -- where
 // the backbone's last rows came from -- and one logit per option comes back.
 // The head's matrices are uploaded once per head (f32, as the model hands
@@ -350,7 +351,7 @@ func (g *devTier) dhBuild(h *nn.ClefHead, hd *dhHead, n, nq, no int) (*dhProg, e
 	linear := func(dst, x backend.Buf, rows, k, nOut int, wt, bias []float32) {
 		hasB := len(bias) != 0
 		kk := kern(dhKey{name: "matabt", a: [10]int{1, rows, nOut, k, k, k, nOut, 0, 0, 0}, f: [3]float32{1}, b: [2]bool{hasB}},
-			func() (*ir.Kernel, error) { return kernels.DHMatABt(1, rows, nOut, k, k, k, nOut, 0, 0, 0, 1, hasB) })
+			func() (*ir.Kernel, error) { return oldkernels.DHMatABt(1, rows, nOut, k, k, k, nOut, 0, 0, 0, 1, hasB) })
 		bb := w(wt)
 		if hasB {
 			bb = w(bias)
@@ -360,7 +361,7 @@ func (g *devTier) dhBuild(h *nn.ClefHead, hd *dhHead, n, nq, no int) (*dhProg, e
 	norm := func(dst, x backend.Buf, rows, width int, wt, bias []float32, eps float32, rms bool) {
 		hasB := len(bias) != 0
 		kk := kern(dhKey{name: "norm", a: [10]int{width, rows}, f: [3]float32{eps}, b: [2]bool{rms, hasB}},
-			func() (*ir.Kernel, error) { return kernels.DHNormRows(width, rows, eps, rms, hasB) })
+			func() (*ir.Kernel, error) { return oldkernels.DHNormRows(width, rows, eps, rms, hasB) })
 		bb := w(wt)
 		if hasB {
 			bb = w(bias)
@@ -368,23 +369,23 @@ func (g *devTier) dhBuild(h *nn.ClefHead, hd *dhHead, n, nq, no int) (*dhProg, e
 		launch(kk, rows, x, w(wt), bb, dst)
 	}
 	add := func(dst, a, b backend.Buf, nf int) {
-		launch(kern(dhKey{name: "add", a: [10]int{nf}}, func() (*ir.Kernel, error) { return kernels.Add(nf) }), nf, a, b, dst)
+		launch(kern(dhKey{name: "add", a: [10]int{nf}}, func() (*ir.Kernel, error) { return oldkernels.Add(nf) }), nf, a, b, dst)
 	}
 	gather := func(dst, x, idx, t backend.Buf, rows, width int) {
-		launch(kern(dhKey{name: "gather", a: [10]int{width, rows}}, func() (*ir.Kernel, error) { return kernels.DHGatherAdd(width, rows) }),
+		launch(kern(dhKey{name: "gather", a: [10]int{width, rows}}, func() (*ir.Kernel, error) { return oldkernels.DHGatherAdd(width, rows) }),
 			rows*width, x, idx, t, dst)
 	}
 	act := func(dst, x backend.Buf, nf int) {
-		launch(kern(dhKey{name: "gelu", a: [10]int{nf}}, func() (*ir.Kernel, error) { return kernels.Act(nf, kernels.ActGELUErf) }), nf, x, dst)
+		launch(kern(dhKey{name: "gelu", a: [10]int{nf}}, func() (*ir.Kernel, error) { return oldkernels.Act(nf, kernels.ActGELUErf) }), nf, x, dst)
 	}
 	l2 := func(dst, x backend.Buf, rows, width int) {
-		launch(kern(dhKey{name: "l2", a: [10]int{width, rows}}, func() (*ir.Kernel, error) { return kernels.DHL2Rows(width, rows) }), rows, x, dst)
+		launch(kern(dhKey{name: "l2", a: [10]int{width, rows}}, func() (*ir.Kernel, error) { return oldkernels.DHL2Rows(width, rows) }), rows, x, dst)
 	}
 	dot := func(dst, a, idx, b backend.Buf, rows, width int) {
-		launch(kern(dhKey{name: "dot", a: [10]int{width, rows}}, func() (*ir.Kernel, error) { return kernels.DHRowDot(width, rows) }), rows, a, idx, b, dst)
+		launch(kern(dhKey{name: "dot", a: [10]int{width, rows}}, func() (*ir.Kernel, error) { return oldkernels.DHRowDot(width, rows) }), rows, a, idx, b, dst)
 	}
 	softmax := func(dst, x backend.Buf, rows, m int) {
-		launch(kern(dhKey{name: "softmax", a: [10]int{rows, m}}, func() (*ir.Kernel, error) { return kernels.RowSoftmax(rows, m) }), rows, x, dst)
+		launch(kern(dhKey{name: "softmax", a: [10]int{rows, m}}, func() (*ir.Kernel, error) { return oldkernels.RowSoftmax(rows, m) }), rows, x, dst)
 	}
 	// attn is torch's MultiheadAttention, mq query rows over nk key rows.
 	attn := func(dst, xq, xkv backend.Buf, mq, nk int, wq, wk, wv, wo, bq, bk, bv, bo []float32) {
@@ -396,11 +397,13 @@ func (g *devTier) dhBuild(h *nn.ClefHead, hd *dhHead, n, nq, no int) (*dhProg, e
 		s, p, o := buf("as", H*mq*nk), buf("ap", H*mq*nk), buf("ao", mq*W)
 		sc := float32(1 / math.Sqrt(float64(hd)))
 		launch(kern(dhKey{name: "matabt", a: [10]int{H, mq, nk, hd, W, W, nk, hd, hd, mq * nk}, f: [3]float32{sc}},
-			func() (*ir.Kernel, error) { return kernels.DHMatABt(H, mq, nk, hd, W, W, nk, hd, hd, mq*nk, sc, false) }),
+			func() (*ir.Kernel, error) {
+				return oldkernels.DHMatABt(H, mq, nk, hd, W, W, nk, hd, hd, mq*nk, sc, false)
+			}),
 			H*mq*nk, q, k, k, s)
 		softmax(p, s, H*mq, nk)
 		launch(kern(dhKey{name: "matab", a: [10]int{H, mq, hd, nk, nk, W, W, mq * nk, hd, hd}},
-			func() (*ir.Kernel, error) { return kernels.DHMatAB(H, mq, hd, nk, nk, W, W, mq*nk, hd, hd) }),
+			func() (*ir.Kernel, error) { return oldkernels.DHMatAB(H, mq, hd, nk, nk, W, W, mq*nk, hd, hd) }),
 			H*mq*hd, p, v, o)
 		linear(dst, o, mq, W, W, wo, bo)
 	}
@@ -428,7 +431,7 @@ func (g *devTier) dhBuild(h *nn.ClefHead, hd *dhHead, n, nq, no int) (*dhProg, e
 	linear(mem, hid, n, D, W, h.PMem, nil)
 	pooled := buf("pooled", (nq+1+no)*D)
 	launch(kern(dhKey{name: "matab", a: [10]int{1, nq + 1 + no, D, n, n, D, D}},
-		func() (*ir.Kernel, error) { return kernels.DHMatAB(1, nq+1+no, D, n, n, D, D, 0, 0, 0) }),
+		func() (*ir.Kernel, error) { return oldkernels.DHMatAB(1, nq+1+no, D, n, n, D, D, 0, 0, 0) }),
 		(nq+1+no)*D, pool, hid, pooled)
 	// pooled rows: the questions, the last position, the options.
 	qv, glob, ctx := buf("qv", nq*D), buf("glob", D), buf("ctx", no*D)
@@ -436,7 +439,7 @@ func (g *devTier) dhBuild(h *nn.ClefHead, hd *dhHead, n, nq, no int) (*dhProg, e
 		// A copy as a pooling product: the identity rows are in the pool's
 		// tail, so a slice is a gather with idx (rows of the pooled table).
 		launch(kern(dhKey{name: "slice", a: [10]int{1, rows, D, nq + 1 + no, nq + 1 + no, D, D}},
-			func() (*ir.Kernel, error) { return kernels.DHMatAB(1, rows, D, nq+1+no, nq+1+no, D, D, 0, 0, 0) }),
+			func() (*ir.Kernel, error) { return oldkernels.DHMatAB(1, rows, D, nq+1+no, nq+1+no, D, D, 0, 0, 0) }),
 			rows*D, buf("sel"+fmt.Sprint(from), rows*(nq+1+no)), pooled, dst)
 	}
 	copyRows(qv, 0, nq)
@@ -468,20 +471,20 @@ func (g *devTier) dhBuild(h *nn.ClefHead, hd *dhHead, n, nq, no int) (*dhProg, e
 	linear(f0, qv, nq, D, W, h.PQ, nil)
 	sc := float32(1 / math.Sqrt(float64(W)))
 	launch(kern(dhKey{name: "matabt", a: [10]int{1, nq, no, W, W, W, no}, f: [3]float32{sc}},
-		func() (*ir.Kernel, error) { return kernels.DHMatABt(1, nq, no, W, W, W, no, 0, 0, 0, sc, false) }),
+		func() (*ir.Kernel, error) { return oldkernels.DHMatABt(1, nq, no, W, W, W, no, 0, 0, 0, sc, false) }),
 		nq*no, f0, opts, opts, sw)
 	swm := buf("swm", nq*no)
 	add(swm, sw, mask, nq*no)
 	softmax(sp, swm, nq, no)
 	launch(kern(dhKey{name: "matab", a: [10]int{1, nq, W, no, no, W, W}},
-		func() (*ir.Kernel, error) { return kernels.DHMatAB(1, nq, W, no, no, W, W, 0, 0, 0) }),
+		func() (*ir.Kernel, error) { return oldkernels.DHMatAB(1, nq, W, no, no, W, W, 0, 0, 0) }),
 		nq*W, sp, opts, sm)
 	norm(sn, sm, nq, W, h.SumW, h.SumB, h.Eps, false)
 	f1, gw, f2, f3 := buf("f1", nq*W), buf("gw", W), buf("f2", nq*W), buf("fa0", nq*W)
 	add(f1, f0, sn, nq*W)
 	linear(gw, glob, 1, D, W, h.PG, nil)
 	gather(f2, f1, zero, gw, nq, W)
-	launch(kern(dhKey{name: "gather", a: [10]int{W, nq}}, func() (*ir.Kernel, error) { return kernels.DHGatherAdd(W, nq) }),
+	launch(kern(dhKey{name: "gather", a: [10]int{W, nq}}, func() (*ir.Kernel, error) { return oldkernels.DHGatherAdd(W, nq) }),
 		nq*W, f2, qtype, w(h.Types), f3)
 	// 5. The joint blocks.
 	cur, nxt = "fa0", "fa1"
@@ -512,14 +515,14 @@ func (g *devTier) dhBuild(h *nn.ClefHead, hd *dhHead, n, nq, no int) (*dhProg, e
 	l2(fl, fields, nq, W)
 	dot(cosv, onl, owner, fl, no, W)
 	feat, hs, ha, res, logits := buf("feat", no*4*W), buf("hs", no*W), buf("ha", no*W), buf("res", no), buf("logits", no)
-	launch(kern(dhKey{name: "features", a: [10]int{W, no}}, func() (*ir.Kernel, error) { return kernels.DHFeatures(W, no) }),
+	launch(kern(dhKey{name: "features", a: [10]int{W, no}}, func() (*ir.Kernel, error) { return oldkernels.DHFeatures(W, no) }),
 		no*W, fields, owner, on, feat)
 	linear(hs, feat, no, 4*W, W, h.Sc, h.ScB)
 	act(ha, hs, no*W)
 	linear(res, ha, no, W, 1, h.ScOut, h.ScOutB)
 	launch(kern(dhKey{name: "combine", a: [10]int{no}, f: h.Scales},
 		func() (*ir.Kernel, error) {
-			return kernels.DHCombine(no, h.Scales[0], h.Scales[1], h.Scales[2])
+			return oldkernels.DHCombine(no, h.Scales[0], h.Scales[1], h.Scales[2])
 		}), no, prior, cosv, res, logits)
 	if err != nil {
 		pr.free()

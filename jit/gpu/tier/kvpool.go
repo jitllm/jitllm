@@ -7,7 +7,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // ErrKVCapacity is a device that cannot give a sequence another page of
@@ -829,7 +829,7 @@ func (g *devTier) gatherKernel(words, n int) (backend.Kernel, error) {
 	if k := g.restrides[key]; k != nil {
 		return k, nil
 	}
-	ker, err := kernels.PagedGatherPages(words, n)
+	ker, err := oldkernels.PagedGatherPages(words, n)
 	if err != nil {
 		return nil, err
 	}

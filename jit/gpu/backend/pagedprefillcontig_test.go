@@ -8,7 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // contigCache is the pool's history laid out as the contiguous kernels read
@@ -48,7 +48,7 @@ func contigCounts(rows []pagedRow, L int) []uint32 {
 // AttnScoresMMAW or AttnScoresMMA70, SoftmaxRowsSink over the context-wide
 // plane, AttnAccTiled or AttnAccMMA70 -- on the same history and queries with
 // the case's window baked in, and returns its output [row][head][value].
-func contigStaged(t *testing.T, d backend.Device, s kernels.FlashShape, f prefillForm, p *pagedPool, rows []pagedRow, window int) []float64 {
+func contigStaged(t *testing.T, d backend.Device, s oldkernels.FlashShape, f prefillForm, p *pagedPool, rows []pagedRow, window int) []float64 {
 	t.Helper()
 	R, H := len(rows), s.Heads
 	s.Rows = R
@@ -60,29 +60,29 @@ func contigStaged(t *testing.T, d backend.Device, s kernels.FlashShape, f prefil
 	var skG, akG, accQT int
 	switch {
 	case f.mmaNT > 0:
-		sk, err = kernels.AttnScoresMMAW(H, s.Dim, kvRow, gqa, sstride, s.Scale, R, kStride, f.mmaNT, window)
+		sk, err = oldkernels.AttnScoresMMAW(H, s.Dim, kvRow, gqa, sstride, s.Scale, R, kStride, f.mmaNT, window)
 		skG = (R/16*H*((L+8*f.mmaNT-1)/(8*f.mmaNT))*32 + 127) / 128
 		accQT = f.accQT
 	case f.voltaMT > 0:
-		sk, err = kernels.AttnScoresMMA70(H, s.Dim, kvRow, gqa, sstride, s.Scale, R, kStride, f.voltaMT, f.voltaNT, window)
-		skG = (kernels.AttnScoresMMA70Warps(H, R, L, f.voltaMT, f.voltaNT)*32 + 127) / 128
+		sk, err = oldkernels.AttnScoresMMA70(H, s.Dim, kvRow, gqa, sstride, s.Scale, R, kStride, f.voltaMT, f.voltaNT, window)
+		skG = (oldkernels.AttnScoresMMA70Warps(H, R, L, f.voltaMT, f.voltaNT)*32 + 127) / 128
 		accQT = 8 * f.voltaNT
 	default:
-		sk, err = kernels.AttnScoresTiledW(H, s.Dim, kvRow, gqa, sstride, s.Scale, R, f.scoresQT, f.scoresKT, kStride, window)
+		sk, err = oldkernels.AttnScoresTiledW(H, s.Dim, kvRow, gqa, sstride, s.Scale, R, f.scoresQT, f.scoresKT, kStride, window)
 		skG = (R/f.scoresQT*H*((L+f.scoresKT-1)/f.scoresKT) + 127) / 128
 		accQT = f.accQT
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sm, err = kernels.SoftmaxRowsSink(H, sstride, 32, R, accQT, s.Sink); err != nil {
+	if sm, err = oldkernels.SoftmaxRowsSink(H, sstride, 32, R, accQT, s.Sink); err != nil {
 		t.Fatal(err)
 	}
 	if f.voltaMT > 0 {
-		ak, err = kernels.AttnAccMMA70(H, vd, kvRow, gqa, sstride, R, f.accMT(), f.voltaNT)
-		akG = (kernels.AttnAccMMA70Warps(H, vd, R, f.accMT(), f.voltaNT)*32 + 127) / 128
+		ak, err = oldkernels.AttnAccMMA70(H, vd, kvRow, gqa, sstride, R, f.accMT(), f.voltaNT)
+		akG = (oldkernels.AttnAccMMA70Warps(H, vd, R, f.accMT(), f.voltaNT)*32 + 127) / 128
 	} else {
-		ak, err = kernels.AttnAccTiled(H, vd, kvRow, gqa, sstride, R, accQT)
+		ak, err = oldkernels.AttnAccTiled(H, vd, kvRow, gqa, sstride, R, accQT)
 		akG = (R*H*vd/accQT + 127) / 128
 	}
 	if err != nil {

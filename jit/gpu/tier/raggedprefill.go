@@ -5,7 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // A ragged step's prompt chunks attend as a prefill
@@ -160,9 +160,9 @@ func (g *devTier) ragFlashPrep(pf *pagedPrefill, n int) bool {
 	// the wide merge takes the same table to add the sink and write the
 	// rows (FlashShape.Map).
 	if pf.fs.Splits > 0 && pf.ragMerge[n] == nil {
-		ms := kernels.FlashShape{Heads: pf.fs.Heads, KVHeads: pf.fs.KVHeads, Dim: pf.fs.Dim, Rows: n,
+		ms := oldkernels.FlashShape{Heads: pf.fs.Heads, KVHeads: pf.fs.KVHeads, Dim: pf.fs.Dim, Rows: n,
 			Splits: pf.fs.Splits, Sink: true, Map: true}
-		k, err := kernels.FlashAttentionMergeWide(ms)
+		k, err := oldkernels.FlashAttentionMergeWide(ms)
 		if err != nil {
 			g.LastErr = "ragged prefill: " + err.Error()
 			return false
@@ -197,8 +197,8 @@ func (g *devTier) ragDecDescs(pk *pagedScratch, n int) bool {
 		// Empty at the row's own end: the decode plan attends nothing there,
 		// and the table's launch writes the row.
 		for _, r := range pk.ragMap {
-			w := int(r) * kernels.PRowWords
-			d[w+kernels.PRowStart] = d[w+kernels.PRowEnd]
+			w := int(r) * oldkernels.PRowWords
+			d[w+oldkernels.PRowStart] = d[w+oldkernels.PRowEnd]
 		}
 		*dec.dst = d
 		if *dec.size < 4*len(d) {
@@ -315,10 +315,10 @@ func (g *devTier) ragStagedPrep(bs *blockScratch, n int) bool {
 			// A run's first slot sets its base: the slot before it is
 			// another sequence's (or none).
 			if slot == 0 || pk.rows[pk.ragMap[slot-1]].s != row.s || pk.rows[pk.ragMap[slot-1]].pad != row.pad {
-				cur = desc[int(r)*kernels.PRowWords+kernels.PRowStart] &^ 63
+				cur = desc[int(r)*oldkernels.PRowWords+oldkernels.PRowStart] &^ 63
 			}
 			rs.base = append(rs.base, cur)
-			if end := int(desc[int(r)*kernels.PRowWords+kernels.PRowEnd]); end > int(cur) {
+			if end := int(desc[int(r)*oldkernels.PRowWords+oldkernels.PRowEnd]); end > int(cur) {
 				span = max(span, end-int(cur))
 			}
 		}
@@ -364,20 +364,20 @@ func (g *devTier) ragStagedVariant(bs *blockScratch, pf *pagedPrefill, chunk, n 
 	s.Group, s.Warps, s.KImm = 0, 0, false
 	s.Sink = bs.p.AttnSinks
 	v := &prefillVariant{s: s}
-	ks, err := kernels.PagedAttnScoresTiled(s, pf.sq, pf.kt)
+	ks, err := oldkernels.PagedAttnScoresTiled(s, pf.sq, pf.kt)
 	var kf, ka *ir.Kernel
 	if err == nil {
-		kf, err = kernels.PagedPrefillSoftmax(s, pf.lanes, pf.qt)
+		kf, err = oldkernels.PagedPrefillSoftmax(s, pf.lanes, pf.qt)
 	}
 	if err == nil {
-		ka, err = kernels.PagedAttnAccTiled(s, pf.qt)
+		ka, err = oldkernels.PagedAttnAccTiled(s, pf.qt)
 	}
 	if err != nil {
 		return nil, err
 	}
-	v.scoreT = kernels.PagedAttnScoresTiledThreads(s, pf.sq, pf.kt)
-	v.accT = kernels.PagedAttnAccTiledThreads(s, pf.qt)
-	v.softG, v.softW = kernels.PagedPrefillSoftmaxGroups(s, pf.lanes), kernels.PagedPrefillSoftmaxWidth(pf.lanes)
+	v.scoreT = oldkernels.PagedAttnScoresTiledThreads(s, pf.sq, pf.kt)
+	v.accT = oldkernels.PagedAttnAccTiledThreads(s, pf.qt)
+	v.softG, v.softW = oldkernels.PagedPrefillSoftmaxGroups(s, pf.lanes), oldkernels.PagedPrefillSoftmaxWidth(pf.lanes)
 	for i, k := range []*ir.Kernel{ks, kf, ka} {
 		c, err := g.compileShared(k)
 		if err != nil {
@@ -386,7 +386,7 @@ func (g *devTier) ragStagedVariant(bs *blockScratch, pf *pagedPrefill, chunk, n 
 		}
 		*[]*backend.Kernel{&v.scores, &v.soft, &v.acc}[i] = c
 	}
-	np := kernels.PagedPrefillPlane(s)
+	np := oldkernels.PagedPrefillPlane(s)
 	have := pf.planeFloats
 	if err := g.prefillBuf(&pf.sc, &have, np); err != nil {
 		v.close(g.devShared)

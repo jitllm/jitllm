@@ -7,10 +7,10 @@ import (
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
-// fuseActIn builds block l's operand-prologue kernels (kernels.ActIn): q/k/v
+// fuseActIn builds block l's operand-prologue kernels (oldkernels.ActIn): q/k/v
 // normalising and quantizing the residual themselves, gate and up the FFN's
 // normed row, the attention output and FFN down projections quantizing their
 // float input. Each takes the place of a RMSNormQuantRows or Quantize launch
@@ -30,14 +30,14 @@ func (g *devTier) fuseActIn(l *layer) {
 	}
 	p := &g.bs.p
 	// The prologue meets its window and sums by subgroup shuffles.
-	// A window wider than one group (a per-token model's, kernels.WideWindow)
+	// A window wider than one group (a per-token model's, oldkernels.WideWindow)
 	// is not one the shuffles meet.
-	if lnBlock(p) || l.mla || l.linear || l.nonCausal || g.pickLanes() != ir.SubgroupLanes || kernels.WideWindow(p.ActWin) {
+	if lnBlock(p) || l.mla || l.linear || l.nonCausal || g.pickLanes() != ir.SubgroupLanes || oldkernels.WideWindow(p.ActWin) {
 		return
 	}
 	win := max(p.ActWin, 32)
-	norm := kernels.ActIn{On: true, Norm: true, Eps: float32(p.RMSEps), Warp: g.warpNorm(), Window: win}
-	quant := kernels.ActIn{On: true, Window: win}
+	norm := oldkernels.ActIn{On: true, Norm: true, Eps: float32(p.RMSEps), Warp: g.warpNorm(), Window: win}
+	quant := oldkernels.ActIn{On: true, Window: win}
 	pf := g.ActInPrefetch
 	switch {
 	case pf == 0:
@@ -52,7 +52,7 @@ func (g *devTier) fuseActIn(l *layer) {
 	// prologue, the norm, gate and up in one launch. Built wherever Gate2 is,
 	// whatever the verdict, so a forced recipe and the trial both find it.
 	if mu := l.mvu; mu.gate2 != nil && l.nFFN != nil && !ungatedFFN(p) {
-		s := kernels.MatVecShape{Center: g.center, T: mu.q, K: mu.k, Rows: mu.rows, Split: mu.split,
+		s := oldkernels.MatVecShape{Center: g.center, T: mu.q, K: mu.k, Rows: mu.rows, Split: mu.split,
 			GroupSplit: mu.group, Rowt: 1, Gate2: true, GateAct: p.Act, In: norm}
 		l.mvu.gate2In = g.inKernel(s)
 	}
@@ -69,8 +69,8 @@ func (g *devTier) fuseActIn(l *layer) {
 	plain := func(m mv) bool {
 		return m.kern != nil && m.slots == 0 && m.groups == 0 && m.threads == 0 && m.act == nil
 	}
-	shape := func(m mv, in kernels.ActIn) kernels.MatVecShape {
-		return kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Split: m.split,
+	shape := func(m mv, in oldkernels.ActIn) oldkernels.MatVecShape {
+		return oldkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Split: m.split,
 			GroupSplit: m.group, Rowt: max(m.rowt, 1), Bias: m.bias != nil, In: in}
 	}
 	l.actInKeys = [4]string{}
@@ -86,9 +86,9 @@ func (g *devTier) fuseActIn(l *layer) {
 		offered[i], sfx[i] = !graphed || why == nil, targetSuffix(tkey)
 	}
 	if l.qkv != nil && offered[0] {
-		var segs []kernels.MatVecShape
+		var segs []oldkernels.MatVecShape
 		for _, m := range []mv{l.mvq, l.mvk, l.mvv} {
-			segs = append(segs, kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Bias: m.bias != nil})
+			segs = append(segs, oldkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Bias: m.bias != nil})
 		}
 		key := fmt.Sprintf("qkv/%v/%d/%v", segs, l.mvq.split, l.mvq.group) + sfx[0]
 		if on(actInQKV, key) {
@@ -111,9 +111,9 @@ func (g *devTier) fuseActIn(l *layer) {
 			}
 		}
 	}
-	res := func(m mv, in kernels.ActIn) (kernels.MatVecShape, bool) {
+	res := func(m mv, in oldkernels.ActIn) (oldkernels.MatVecShape, bool) {
 		if !plain(m) || m.res == nil || m.bias != nil {
-			return kernels.MatVecShape{}, false
+			return oldkernels.MatVecShape{}, false
 		}
 		s := shape(m, in)
 		s.Bias = true
@@ -146,7 +146,7 @@ func (g *devTier) fuseActIn(l *layer) {
 		// No gated up: up writes its row, and down forms act(gate)*up as it
 		// quantizes (QuantizeAct's arithmetic).
 		l.mvu.kernIn = g.inKernel(shape(l.mvu, norm))
-		if s, ok := res(l.mvd, kernels.ActIn{On: true, Gated: true, Act: p.Act, Window: win, Prefetch: pf}); ok {
+		if s, ok := res(l.mvd, oldkernels.ActIn{On: true, Gated: true, Act: p.Act, Window: win, Prefetch: pf}); ok {
 			l.mvd.resActIn = g.inKernel(s)
 		}
 	}
@@ -170,7 +170,7 @@ const (
 // inKernel is an ActIn matvec from the device-wide cache (idKerns, keyed by
 // the whole shape), nil where the kernels refuse the shape or it does not
 // compile -- recorded in LastErr, and the block keeps its two launches.
-func (g *devTier) inKernel(s kernels.MatVecShape) backend.Kernel {
+func (g *devTier) inKernel(s oldkernels.MatVecShape) backend.Kernel {
 	k, err := g.idKernel(s)
 	if err != nil {
 		g.actInDeclined(err)
@@ -179,12 +179,12 @@ func (g *devTier) inKernel(s kernels.MatVecShape) backend.Kernel {
 	return k
 }
 
-func (g *devTier) segInKernel(segs []kernels.MatVecShape, split int, grp bool, in kernels.ActIn) backend.Kernel {
+func (g *devTier) segInKernel(segs []oldkernels.MatVecShape, split int, grp bool, in oldkernels.ActIn) backend.Kernel {
 	key := fmt.Sprintf("in/%v/%d/%v/%v", segs, split, grp, in)
 	if k, ok := g.segKerns[key]; ok {
 		return k
 	}
-	ker, err := kernels.MatVecSegmentsIn(segs, split, grp, in)
+	ker, err := oldkernels.MatVecSegmentsIn(segs, split, grp, in)
 	var k backend.Kernel
 	if err == nil {
 		k, err = g.dev.Compile(ker)

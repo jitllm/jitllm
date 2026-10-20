@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // flashForm is which flash prefill kernel a gate builds.
@@ -32,41 +32,41 @@ func formOf(tile bool) flashForm {
 
 // flashPrefillBuild builds one flash prefill kernel for a shape in form, with
 // its launch.
-func flashPrefillBuild(t *testing.T, fs kernels.FlashPrefill70Shape, form flashForm) (*ir.Kernel, int, int) {
+func flashPrefillBuild(t *testing.T, fs oldkernels.FlashPrefill70Shape, form flashForm) (*ir.Kernel, int, int) {
 	t.Helper()
 	if form == flash80Form || form == flash80K8Form {
-		build := kernels.FlashPrefill80
+		build := oldkernels.FlashPrefill80
 		if form == flash80K8Form {
-			build = kernels.FlashPrefill80K8
+			build = oldkernels.FlashPrefill80K8
 		}
 		k, err := build(fs)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return k, kernels.FlashPrefill80Groups(fs), kernels.FlashPrefill80Threads
+		return k, oldkernels.FlashPrefill80Groups(fs), oldkernels.FlashPrefill80Threads
 	}
 	if form == flash70Form {
-		k, err := kernels.FlashPrefill70(fs)
+		k, err := oldkernels.FlashPrefill70(fs)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return k, kernels.FlashPrefill70Groups(fs), kernels.FlashPrefill70Threads
+		return k, oldkernels.FlashPrefill70Groups(fs), oldkernels.FlashPrefill70Threads
 	}
-	tl, ok := kernels.FlashTileFor(fs.Dim)
+	tl, ok := oldkernels.FlashTileFor(fs.Dim)
 	if !ok {
 		t.Fatalf("no tile blocking at head width %d", fs.Dim)
 	}
-	k, err := kernels.FlashPrefillTile(fs, tl)
+	k, err := oldkernels.FlashPrefillTile(fs, tl)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return k, kernels.FlashPrefillTileGroups(fs, tl), tl.Threads()
+	return k, oldkernels.FlashPrefillTileGroups(fs, tl), tl.Threads()
 }
 
 // pagedFlashPrefill runs a paged flash prefill kernel (and, at Splits > 0, the
 // merge, with the sink when sink) over the pool through tab and desc, and
 // returns the output and its NMSE against the oracle.
-func pagedFlashPrefill(t *testing.T, d backend.Device, fs kernels.FlashPrefill70Shape, sink bool, form flashForm, p *pagedPool, tab, desc []uint32, rows []pagedRow) ([]float64, float64, error) {
+func pagedFlashPrefill(t *testing.T, d backend.Device, fs oldkernels.FlashPrefill70Shape, sink bool, form flashForm, p *pagedPool, tab, desc []uint32, rows []pagedRow) ([]float64, float64, error) {
 	t.Helper()
 	fs.Rows = len(rows)
 	k, groups, threads := flashPrefillBuild(t, fs, form)
@@ -74,11 +74,11 @@ func pagedFlashPrefill(t *testing.T, d backend.Device, fs kernels.FlashPrefill70
 	if !strings.Contains(k.Name, "paged") || k.Params[len(k.Params)-1].Name != "pRow" || k.Params[len(k.Params)-2].Name != "pTab" {
 		t.Fatalf("not the paged kernel: %s %v", k.Name, k.Params)
 	}
-	ms := kernels.FlashShape{Heads: fs.Heads, KVHeads: fs.KVHeads, Dim: fs.Dim, Rows: fs.Rows, Splits: max(1, fs.Splits),
+	ms := oldkernels.FlashShape{Heads: fs.Heads, KVHeads: fs.KVHeads, Dim: fs.Dim, Rows: fs.Rows, Splits: max(1, fs.Splits),
 		Scale: fs.Scale, Softcap: fs.Softcap, Sink: sink}
 	cs := []*ir.Kernel{k}
 	if fs.Splits > 0 {
-		mk, err := kernels.FlashAttentionMergeWide(ms)
+		mk, err := oldkernels.FlashAttentionMergeWide(ms)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -103,7 +103,7 @@ func pagedFlashPrefill(t *testing.T, d backend.Device, fs kernels.FlashPrefill70
 	oo := g.up(f32bytes(nanFill(nOut + 32)))
 	dst := oo
 	if fs.Splits > 0 {
-		dst = g.up(f32bytes(nanFill(kernels.FlashPartialFloats(ms))))
+		dst = g.up(f32bytes(nanFill(oldkernels.FlashPartialFloats(ms))))
 	}
 	so := g.up(f32bytes(sinks))
 	var err error
@@ -135,7 +135,7 @@ func pagedFlashPrefill(t *testing.T, d backend.Device, fs kernels.FlashPrefill70
 
 // contigFlash runs the contiguous FlashPrefill70 (or FlashPrefillTile) on the
 // same history and queries with the case's sliding window baked in.
-func contigFlash(t *testing.T, d backend.Device, fs kernels.FlashPrefill70Shape, form flashForm, p *pagedPool, rows []pagedRow, window int) []float64 {
+func contigFlash(t *testing.T, d backend.Device, fs oldkernels.FlashPrefill70Shape, form flashForm, p *pagedPool, rows []pagedRow, window int) []float64 {
 	t.Helper()
 	kc, vc, L, kStride := contigCache(p, rows)
 	fs.Rows, fs.Page, fs.Splits, fs.F16, fs.KStride, fs.Window = len(rows), 0, 0, false, kStride, window
@@ -147,7 +147,7 @@ func contigFlash(t *testing.T, d backend.Device, fs kernels.FlashPrefill70Shape,
 	defer c.Close()
 	g := newGPU(t, d)
 	defer g.free()
-	q, _ := prefillInputs(kernels.FlashShape{Heads: fs.Heads, Dim: fs.Dim, Rows: fs.Rows})
+	q, _ := prefillInputs(oldkernels.FlashShape{Heads: fs.Heads, Dim: fs.Dim, Rows: fs.Rows})
 	nOut := fs.Rows * fs.Heads * fs.Dim
 	out := g.up(f32bytes(nanFill(nOut)))
 	if err := c.Launch(groups, threads, g.up(f32bytes(q)), g.up(f32bytes(kc)), g.up(f32bytes(vc)),
@@ -160,14 +160,14 @@ func contigFlash(t *testing.T, d backend.Device, fs kernels.FlashPrefill70Shape,
 // flashPrefillShapes are the flash prefill gates' geometries: GQA at both head
 // widths, packed f16 V, a softcap, a sink (applied by the merge), one KV head.
 var flashPrefillShapes = []struct {
-	fs   kernels.FlashPrefill70Shape
+	fs   oldkernels.FlashPrefill70Shape
 	sink bool
 }{
-	{kernels.FlashPrefill70Shape{Heads: 16, KVHeads: 8, Dim: 128, Scale: .088}, false},
-	{kernels.FlashPrefill70Shape{Heads: 32, KVHeads: 8, Dim: 64, Scale: .125, F16: true}, false},
-	{kernels.FlashPrefill70Shape{Heads: 8, KVHeads: 4, Dim: 128, Scale: .088, Softcap: 50}, false},
-	{kernels.FlashPrefill70Shape{Heads: 8, KVHeads: 1, Dim: 128, Scale: .088}, true},
-	{kernels.FlashPrefill70Shape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, F16: true}, true},
+	{oldkernels.FlashPrefill70Shape{Heads: 16, KVHeads: 8, Dim: 128, Scale: .088}, false},
+	{oldkernels.FlashPrefill70Shape{Heads: 32, KVHeads: 8, Dim: 64, Scale: .125, F16: true}, false},
+	{oldkernels.FlashPrefill70Shape{Heads: 8, KVHeads: 4, Dim: 128, Scale: .088, Softcap: 50}, false},
+	{oldkernels.FlashPrefill70Shape{Heads: 8, KVHeads: 1, Dim: 128, Scale: .088}, true},
+	{oldkernels.FlashPrefill70Shape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, F16: true}, true},
 }
 
 // TestPagedFlashPrefill holds the paged FlashPrefill70 (m8n8k4: sm_70, and

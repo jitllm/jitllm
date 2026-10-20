@@ -8,6 +8,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestLayerNormAndAct gates the vision tower's two device kernels on every
@@ -77,14 +78,14 @@ func layerNormCase(t *testing.T, d backend.Device) {
 		}
 		return c
 	}
-	kp := comp(kernels.LayerNormPartRows(k, parts, 1))
+	kp := comp(oldkernels.LayerNormPartRows(k, parts, 1))
 	defer kp.Close()
-	kv := comp(kernels.LayerNormVarRows(k, parts, 1))
+	kv := comp(oldkernels.LayerNormVarRows(k, parts, 1))
 	defer kv.Close()
 
 	raw := make([]byte, k*4)
 	for _, withBias := range []bool{false, true} {
-		ka := comp(kernels.LayerNormApplyRows(k, parts, eps, withBias, 1))
+		ka := comp(oldkernels.LayerNormApplyRows(k, parts, eps, withBias, 1))
 		if err := kp.Launch((parts+127)/128, 128, bX, bS); err != nil {
 			t.Fatal(err)
 		}
@@ -214,13 +215,13 @@ func actCase(t *testing.T, d backend.Device) {
 	}
 	var outs [][]float64
 	for _, k := range kernels.Ungated {
-		kk, err := kernels.Act(n, k)
+		kk, err := oldkernels.Act(n, k)
 		o := run("Act "+k.String(), kk, err, bIn, bOut)
 		check("Act "+k.String(), o, func(i int) float64 { return ungated(k, float64(in[i])) })
 		outs = append(outs, o)
 	}
 	for _, k := range kernels.Gated {
-		kk, err := kernels.ActMul(n, k)
+		kk, err := oldkernels.ActMul(n, k)
 		o := run("ActMul "+k.String(), kk, err, bIn, bUp, bOut)
 		check("ActMul "+k.String(), o, func(i int) float64 { return gated(k, float64(in[i]), float64(up[i])) })
 	}

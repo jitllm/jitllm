@@ -9,12 +9,13 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestIndexedGateAndBiasMatchTheSeparateKernels gates the mixture's fused
 // epilogues -- an expert matvec adding its expert's own bias, and the up
 // projection writing act(gate)*up itself -- against the separate launches they
-// replace: the plain indexed matvec, kernels.IndexedBiasAdd and kernels.ActMul.
+// replace: the plain indexed matvec, oldkernels.IndexedBiasAdd and oldkernels.ActMul.
 //
 // The bar is bit equality: the fused epilogue does the same float operations in
 // the same order, so anything else is an index (the bias read at the slot
@@ -104,7 +105,7 @@ func idGateCase(t *testing.T, d backend.Device, q kernels.Quant, act kernels.Act
 	n := rows * slots
 	w := 128
 	if grp {
-		w = kernels.GroupSplitWidth(split)
+		w = oldkernels.GroupSplitWidth(split)
 	}
 	launch := func(kk *ir.Kernel, err error, groups, width int, args ...backend.Buf) {
 		t.Helper()
@@ -127,21 +128,21 @@ func idGateCase(t *testing.T, d backend.Device, q kernels.Quant, act kernels.Act
 		}
 		return p
 	}
-	shape := kernels.MatVecShape{T: q, K: k, Rows: rows, Split: split, GroupSplit: grp,
+	shape := oldkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split, GroupSplit: grp,
 		Experts: experts, Slots: slots}
 	groups := (n*split + w - 1) / w
 
 	// The separate launches: plain matvec, IndexedBiasAdd, ActMul.
 	gRaw, uRaw := g.up(make([]byte, n*4)), g.up(make([]byte, n*4))
-	kk, err := kernels.MatVec(shape)
+	kk, err := oldkernels.MatVec(shape)
 	launch(kk, err, groups, w, gQS, gD, gSC, bA, bAX, gRaw, bSel)
 	launch(kk, err, groups, w, uQS, uD, uSC, bA, bAX, uRaw, bSel)
 	gWant, uWant := g.up(make([]byte, n*4)), g.up(make([]byte, n*4))
-	kb, err := kernels.IndexedBiasAdd(slots, rows)
+	kb, err := oldkernels.IndexedBiasAdd(slots, rows)
 	launch(kb, err, (n+127)/128, 128, gRaw, bSel, gBias, gWant)
 	launch(kb, err, (n+127)/128, 128, uRaw, bSel, uBias, uWant)
 	want := g.up(make([]byte, n*4))
-	ka, err := kernels.ActMul(n, act)
+	ka, err := oldkernels.ActMul(n, act)
 	launch(ka, err, (n+127)/128, 128, gWant, uWant, want)
 
 	// The fused epilogues: the gate with its bias, then up with its bias
@@ -150,14 +151,14 @@ func idGateCase(t *testing.T, d backend.Device, q kernels.Quant, act kernels.Act
 	gGot, got := g.up(poison), g.up(poison)
 	bs := shape
 	bs.Bias = true
-	kgb, err := kernels.MatVec(bs)
+	kgb, err := oldkernels.MatVec(bs)
 	launch(kgb, err, groups, w, gQS, gD, gSC, bA, bAX, gGot, gBias, bSel)
 	if a, b := read(gWant), read(gGot); !bytes.Equal(a, b) {
 		t.Fatalf("the gate with its fused expert bias differs from matvec + IndexedBiasAdd")
 	}
 	us := bs
 	us.Gate, us.GateAct = true, act
-	kug, err := kernels.MatVec(us)
+	kug, err := oldkernels.MatVec(us)
 	launch(kug, err, groups, w, uQS, uD, uSC, bA, bAX, got, uBias, gGot, bSel)
 	a, b := read(want), read(got)
 	if !bytes.Equal(a, b) {

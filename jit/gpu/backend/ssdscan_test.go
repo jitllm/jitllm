@@ -9,7 +9,7 @@ import (
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // ssdRef steps Mamba-2's selective update over rows of convolved (pre-bias,
@@ -17,7 +17,7 @@ import (
 // state), the way engine/model/delta.go's ssdAttn does: the bias and the
 // SiLU, C | B | x sliced off the row, dt and the decay, and oracle.GatedSSD per
 // head. It returns the outputs, row by row, and the final state.
-func ssdRef(c kernels.DeltaScan, conv, dtRaw, cb, dtb, aa, dd, st []float32, rows int) ([]float64, []float64) {
+func ssdRef(c oldkernels.DeltaScan, conv, dtRaw, cb, dtb, aa, dd, st []float32, rows int) ([]float64, []float64) {
 	kHeads := c.VHeads / c.Rep
 	qk, vw := kHeads*c.KDim, c.VHeads*c.VDim
 	chans := 2*qk + vw
@@ -52,7 +52,7 @@ func ssdNMSE(got []float32, want []float64) float64 {
 	return se / math.Max(sy, 1e-30)
 }
 
-// TestGatedSSDMatchesTheOracle holds kernels.GatedDeltaFused's Mamba-2 form to
+// TestGatedSSDMatchesTheOracle holds oldkernels.GatedDeltaFused's Mamba-2 form to
 // a float64 transcription of ssdAttn over oracle.GatedSSD, on every backend: a
 // chunk of consecutive tokens at its full length, a ragged one and decode, the
 // lane-group and one-thread forms, one group and several (a value head reading
@@ -74,7 +74,7 @@ func TestGatedSSDMatchesTheOracle(t *testing.T) {
 		defer d.Close()
 	}
 	ran := 0
-	for _, c := range []kernels.DeltaScan{
+	for _, c := range []oldkernels.DeltaScan{
 		{VHeads: 8, VDim: 16, KDim: 16, Rep: 8, Rows: 5, Lanes: ir.SubgroupLanes},
 		{VHeads: 8, VDim: 16, KDim: 64, Rep: 4, Rows: 5, Lanes: ir.SubgroupLanes},
 		{VHeads: 4, VDim: 64, KDim: 128, Rep: 2, Rows: 3, Lanes: ir.SubgroupLanes},
@@ -100,7 +100,7 @@ func TestGatedSSDMatchesTheOracle(t *testing.T) {
 	}
 }
 
-func ssdCase(t *testing.T, d backend.Device, c kernels.DeltaScan, m int) {
+func ssdCase(t *testing.T, d backend.Device, c oldkernels.DeltaScan, m int) {
 	kHeads := c.VHeads / c.Rep
 	qk, vw := kHeads*c.KDim, c.VHeads*c.VDim
 	chans := 2*qk + vw
@@ -135,7 +135,7 @@ func ssdCase(t *testing.T, d backend.Device, c kernels.DeltaScan, m int) {
 		}
 		return v
 	}
-	k, err := kernels.GatedDeltaFused(c, kernels.DeltaFuse{Chans: chans, SSD: true})
+	k, err := oldkernels.GatedDeltaFused(c, oldkernels.DeltaFuse{Chans: chans, SSD: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func ssdCase(t *testing.T, d backend.Device, c kernels.DeltaScan, m int) {
 // ssdRunsCase is the run form: three sequences over the chunk's rows -- one
 // decoding, two chunks -- each from its own state at its own slots, held to
 // the oracle stepping each alone.
-func ssdRunsCase(t *testing.T, d backend.Device, c kernels.DeltaScan, conv, dtRaw, cb, dtb, aa, dd []float32,
+func ssdRunsCase(t *testing.T, d backend.Device, c oldkernels.DeltaScan, conv, dtRaw, cb, dtb, aa, dd []float32,
 	read func(backend.Buf, int) []float32) {
 	R := c.Rows
 	var runs stepRuns
@@ -229,7 +229,7 @@ func ssdRunsCase(t *testing.T, d backend.Device, c kernels.DeltaScan, conv, dtRa
 	defer g.free()
 	cr := c
 	cr.Runs = true
-	k, err := kernels.GatedDeltaFused(cr, kernels.DeltaFuse{Chans: chans, SSD: true})
+	k, err := oldkernels.GatedDeltaFused(cr, oldkernels.DeltaFuse{Chans: chans, SSD: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func ssdRunsCase(t *testing.T, d backend.Device, c kernels.DeltaScan, conv, dtRa
 	}
 }
 
-// TestGroupNormRowsNormsEachGroupAgainstItsSlice holds kernels.GroupNormRows
+// TestGroupNormRowsNormsEachGroupAgainstItsSlice holds oldkernels.GroupNormRows
 // to a float64 grouped RMSNorm on every backend, both lane forms, several rows:
 // each group of width normalised on its own and scaled by its own slice of the
 // weight. The violation is HeadNorm's shared weight (every group reading the
@@ -295,7 +295,7 @@ func TestGroupNormRowsNormsEachGroupAgainstItsSlice(t *testing.T) {
 				for i := range w {
 					w[i] = float32(1 + 0.5*rng.NormFloat64())
 				}
-				k, err := kernels.GroupNormRows(c.groups, c.width, eps, c.rows, c.lanes)
+				k, err := oldkernels.GroupNormRows(c.groups, c.width, eps, c.rows, c.lanes)
 				if err != nil {
 					t.Fatal(err)
 				}

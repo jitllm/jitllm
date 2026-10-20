@@ -8,6 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // embPend is a prompt chunk whose rows EmbedRows promised and has not yet
@@ -29,7 +30,7 @@ func (pe *embPend) same(x []float32) bool {
 // EmbedRows promises dst's first len(ids) rows as the token embedding,
 // gathered on the card from the resident head (nn.EmbedDevice). It needs a
 // head that is also the embedding (nn.Head.Embeds) in a format
-// kernels.GetRowsPacked reads; otherwise it returns false and writes nothing.
+// oldkernels.GetRowsPacked reads; otherwise it returns false and writes nothing.
 //
 // The gather rides the next submission rather than running here: reading the
 // rows back into a fresh prompt buffer cost more than the host lookup it
@@ -75,7 +76,7 @@ func (g *devTier) embedKernel(bs *blockScratch) bool {
 	if g.kb.scaleFault == ScaleFaultEmbd {
 		es = 1
 	}
-	kk, err := kernels.GetRowsPacked(r.t, r.nrows, r.k, batchWidth, es)
+	kk, err := oldkernels.GetRowsPacked(r.t, r.nrows, r.k, batchWidth, es)
 	var k backend.Kernel
 	if err == nil {
 		k, err = g.dev.Compile(kk)
@@ -161,7 +162,7 @@ func (g *devTier) materializeLocked(pe *embPend) {
 		if err = s.Write(ib, g.subBytes.embIDs); err != nil {
 			return
 		}
-		threads := kernels.GetRowsThreads(r.t, r.k, n)
+		threads := oldkernels.GetRowsThreads(r.t, r.k, n)
 		if err = s.Launch(kern, (threads+127)/128, 128, r.qs, r.d, r.sc, ib, ob); err != nil {
 			return
 		}

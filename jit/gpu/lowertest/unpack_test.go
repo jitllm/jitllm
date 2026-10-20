@@ -8,6 +8,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/msl"
 	"github.com/jitllm/jitllm/jit/gpu/ptx"
 	"github.com/jitllm/jitllm/jit/gpu/spirv"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // Which formats the device can unpack is a list in the repo. A page-in with no
@@ -54,11 +55,11 @@ func TestUnpackCoversExactlyWhatItClaims(t *testing.T) {
 	}
 
 	for _, q := range unpackImplemented {
-		if !kernels.UnpackSupported(q) {
+		if !oldkernels.UnpackSupported(q) {
 			t.Errorf("%s is in the implemented list and UnpackSupported says no", q)
 			continue
 		}
-		k, err := kernels.Unpack(q, 256, 2048)
+		k, err := oldkernels.Unpack(q, 256, 2048)
 		if err != nil {
 			t.Errorf("%s: %v", q, err)
 			continue
@@ -81,10 +82,10 @@ func TestUnpackCoversExactlyWhatItClaims(t *testing.T) {
 	}
 
 	for _, q := range unpackDeclined {
-		if kernels.UnpackSupported(q) {
+		if oldkernels.UnpackSupported(q) {
 			t.Errorf("%s is in the declined list and UnpackSupported says yes", q)
 		}
-		k, err := kernels.Unpack(q, 256, 2048)
+		k, err := oldkernels.Unpack(q, 256, 2048)
 		if err == nil {
 			t.Errorf("%s built an unpack kernel and is listed as declined; move it", q)
 			_ = k

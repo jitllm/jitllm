@@ -9,10 +9,11 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestGate2InIsTheTwoLaunches: a Gate2 matvec with the norm's operand
-// prologue (kernels.ActIn{Norm}) -- the FFN norm, the quantize, the gate's
+// prologue (oldkernels.ActIn{Norm}) -- the FFN norm, the quantize, the gate's
 // row and up's row in one launch -- writes, bit for bit on PTX, what
 // RMSNormQuantRows followed by the Gate2 matvec writes (and Gate2 is the
 // gate's launch then up's gated launch, TestMatVecGate2IsTheTwoLaunches).
@@ -28,7 +29,7 @@ func TestGate2InIsTheTwoLaunches(t *testing.T) {
 	ran := 0
 	for _, d := range devs {
 		defer d.Close()
-		if !kernels.Gate2Exact(d.API()) {
+		if !oldkernels.Gate2Exact(d.API()) {
 			continue // the tier offers Gate2 only where it is exact
 		}
 		for _, q := range []kernels.Quant{kernels.Q8_0, kernels.Q4_K, kernels.Q6_K} {
@@ -40,7 +41,7 @@ func TestGate2InIsTheTwoLaunches(t *testing.T) {
 							if win == 256 {
 								a = kernels.ActGELU
 							}
-							if sp > 1 && !kernels.GroupSplitOK(sh[0], sp) || (sh[1]/32)%sp != 0 || sh[1]%win != 0 {
+							if sp > 1 && !oldkernels.GroupSplitOK(sh[0], sp) || (sh[1]/32)%sp != 0 || sh[1]%win != 0 {
 								continue
 							}
 							name := fmt.Sprintf("%s/%v/%dx%d/s%d/w%d/warp%v/%v", d.API(), q, sh[0], sh[1], sp, win, warp, a)
@@ -90,10 +91,10 @@ func gate2InCase(t *testing.T, d backend.Device, name string, q kernels.Quant, r
 		binary.LittleEndian.PutUint32(b[n*4:], guard)
 		return g.up(b)
 	}
-	in := kernels.ActIn{On: true, Norm: true, Eps: 1e-5, Warp: warp, Window: win}
-	norm, err := kernels.RMSNormQuantRows(k, 1, in.Eps, false, false, win)
+	in := oldkernels.ActIn{On: true, Norm: true, Eps: 1e-5, Warp: warp, Window: win}
+	norm, err := oldkernels.RMSNormQuantRows(k, 1, in.Eps, false, false, win)
 	if warp {
-		norm, err = kernels.RMSNormQuantRowsWarp(k, 1, in.Eps, false, false, win)
+		norm, err = oldkernels.RMSNormQuantRowsWarp(k, 1, in.Eps, false, false, win)
 	}
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
@@ -104,9 +105,9 @@ func gate2InCase(t *testing.T, d backend.Device, name string, q kernels.Quant, r
 	}
 	defer normK.Close()
 	grp := split > 1
-	s := kernels.MatVecShape{T: q, K: k, Rows: rows, Split: split, GroupSplit: grp, Gate2: true, GateAct: a}
-	mk := func(s kernels.MatVecShape) backend.Kernel {
-		kk, err := kernels.MatVec(s)
+	s := oldkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split, GroupSplit: grp, Gate2: true, GateAct: a}
+	mk := func(s oldkernels.MatVecShape) backend.Kernel {
+		kk, err := oldkernels.MatVec(s)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -130,12 +131,12 @@ func gate2InCase(t *testing.T, d backend.Device, name string, q kernels.Quant, r
 	bUQ, bUD, bUS := g.up(u32bytes(uq)), g.up(u32bytes(ud)), g.up(u32bytes(usc))
 	bA, bAX := poisoned(k/4), poisoned(k/32+k/16)
 	ref, got, swapped := poisoned(rows), poisoned(rows), poisoned(rows)
-	if err := normK.Launch(1, kernels.RMSNormGroup, bX, bNW, poisoned(k), bA, bAX); err != nil {
+	if err := normK.Launch(1, oldkernels.RMSNormGroup, bX, bNW, poisoned(k), bA, bAX); err != nil {
 		t.Fatalf("%s: norm: %v", name, err)
 	}
 	w := 128
 	if grp {
-		w = kernels.GroupSplitWidth(split)
+		w = oldkernels.GroupSplitWidth(split)
 	}
 	groups := (rows*split + w - 1) / w
 	if err := two.Launch(groups, w, bUQ, bUD, bUS, bA, bAX, ref, bGQ, bGD, bGS); err != nil {

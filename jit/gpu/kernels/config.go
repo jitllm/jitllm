@@ -21,3 +21,7 @@ func (c Center) minTok() int {
 	}
 	return 8
 }
+
+// Tokens is the fewest tokens a thread at which centring pays (minTok): the
+// stated MinTok, or the default.
+func (c Center) Tokens() int { return c.minTok() }

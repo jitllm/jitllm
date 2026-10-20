@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestDeviceCopyMovesExactlyTheRange: Device.Copy is how a recurrent pool's
@@ -65,7 +65,7 @@ func TestDeviceCopyMovesExactlyTheRange(t *testing.T) {
 			src := alloc(bytes.Repeat([]byte{0xEE}, n))
 			want[src] = fill(1)
 			stage := alloc(want[src])
-			k, err := kernels.Restride(1, n/4, n/4, n/4)
+			k, err := oldkernels.Restride(1, n/4, n/4, n/4)
 			if err != nil {
 				t.Fatal(err)
 			}

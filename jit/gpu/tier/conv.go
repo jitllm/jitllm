@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // A convolutional tower's blocks on the device (nn.ConvPlan): Gemma 3n's
@@ -186,19 +187,19 @@ func (g *devTier) convProgram(cl *convLayer, ws []nn.Weight) ([nConvScratch]int,
 	norm := func(src, vec, dst cbuf, c, rows int) {
 		eps := float32(p.Eps)
 		k := kern(convKey{id: kidRmsnormrows, a: [8]int{c, rows}, eps: eps}, func() (*ir.Kernel, error) {
-			return kernels.RMSNormRows(c, rows, eps, false, false)
+			return oldkernels.RMSNormRows(c, rows, eps, false, false)
 		})
-		prog = append(prog, convStep{k: k, groups: rows, width: kernels.RMSNormGroup, bufs: []cbuf{src, vec, dst}})
+		prog = append(prog, convStep{k: k, groups: rows, width: oldkernels.RMSNormGroup, bufs: []cbuf{src, vec, dst}})
 		want(dst, c*rows)
 	}
 	gelu := func(src, dst cbuf, n int) {
 		launch(kern(convKey{id: kidAct, act: kernels.ActGELU, a: [8]int{n}}, func() (*ir.Kernel, error) {
-			return kernels.Act(n, kernels.ActGELU)
+			return oldkernels.Act(n, kernels.ActGELU)
 		}), n, src, dst)
 		want(dst, n)
 	}
 	add := func(a, b, dst cbuf, n int) {
-		launch(kern(convKey{id: kidAdd, a: [8]int{n}}, func() (*ir.Kernel, error) { return kernels.Add(n) }), n, a, b, dst)
+		launch(kern(convKey{id: kidAdd, a: [8]int{n}}, func() (*ir.Kernel, error) { return oldkernels.Add(n) }), n, a, b, dst)
 	}
 	mm := func(slot int, src, dst cbuf, n, k int) {
 		x := ws[slot]
@@ -225,8 +226,8 @@ func (g *devTier) convProgram(cl *convLayer, ws []nn.Weight) ([nConvScratch]int,
 		if bm.act == nil {
 			nk := n * k
 			launch(kern(convKey{id: kidQuantize, a: [8]int{nk, p.ActWin}}, func() (*ir.Kernel, error) {
-				return kernels.Quantize(nk, p.ActWin)
-			}), kernels.QuantizeThreads(nk/32), src, cA, cAX)
+				return oldkernels.Quantize(nk, p.ActWin)
+			}), oldkernels.QuantizeThreads(nk/32), src, cA, cAX)
 			need[cA] = max(need[cA], nk)
 			need[cAX] = max(need[cAX], 3*(nk/32)*4)
 		}
@@ -241,14 +242,14 @@ func (g *devTier) convProgram(cl *convLayer, ws []nn.Weight) ([nConvScratch]int,
 		hp := (ho-1)*s + k
 		wp = (wo-1)*s + k
 		launch(kern(convKey{id: kidPadrows, a: [8]int{h, w, c, hp, wp, top, left}}, func() (*ir.Kernel, error) {
-			return kernels.PadRows(h, w, c, hp, wp, top, left)
+			return oldkernels.PadRows(h, w, c, hp, wp, top, left)
 		}), hp*wp*c, src, cPad)
 		want(cPad, hp*wp*c)
 		return wp, ho, wo
 	}
 	dw := func(filt, dst cbuf, k, s, wp, c, ho, wo int) {
 		launch(kern(convKey{id: kidDwconv, a: [8]int{k, s, wp, c, ho, wo}}, func() (*ir.Kernel, error) {
-			return kernels.DWConv(k, s, wp, c, ho, wo)
+			return oldkernels.DWConv(k, s, wp, c, ho, wo)
 		}), ho*wo*c, cPad, filt, dst)
 		want(dst, ho*wo*c)
 	}
@@ -274,7 +275,7 @@ func (g *devTier) convProgram(cl *convLayer, ws []nn.Weight) ([nConvScratch]int,
 		kpad := ws[5].K
 		padLen := ((ho-1)*p.Stride + 3) * wp * p.CIn
 		launch(kern(convKey{id: kidIm2col, a: [8]int{3, p.Stride, wp, p.CIn, wo, kpad, n, padLen}}, func() (*ir.Kernel, error) {
-			return kernels.Im2col(3, p.Stride, wp, p.CIn, wo, kpad, n, padLen)
+			return oldkernels.Im2col(3, p.Stride, wp, p.CIn, wo, kpad, n, padLen)
 		}), n*kpad, cPad, cCol)
 		want(cCol, n*kpad)
 		mm(5, cCol, cE1, n, kpad)
@@ -329,15 +330,15 @@ func (g *devTier) convProgram(cl *convLayer, ws []nn.Weight) ([nConvScratch]int,
 			mm(side.slot, src, side.out, m, p.CIn)
 		}
 		launch(kern(convKey{id: kidMqascores, a: [8]int{nin, m, p.Heads, p.KD}}, func() (*ir.Kernel, error) {
-			return kernels.MQAScores(nin, m, p.Heads, p.KD)
+			return oldkernels.MQAScores(nin, m, p.Heads, p.KD)
 		}), nin*p.Heads*m, cQ, cK, cSc)
 		want(cSc, nin*p.Heads*m)
 		launch(kern(convKey{id: kidRowsoftmax, a: [8]int{nin * p.Heads, m}}, func() (*ir.Kernel, error) {
-			return kernels.RowSoftmax(nin*p.Heads, m)
+			return oldkernels.RowSoftmax(nin*p.Heads, m)
 		}), nin*p.Heads, cSc, cSc2)
 		want(cSc2, nin*p.Heads*m)
 		launch(kern(convKey{id: kidMqaacc, a: [8]int{nin, m, p.Heads, p.KD}}, func() (*ir.Kernel, error) {
-			return kernels.MQAAcc(nin, m, p.Heads, p.KD)
+			return oldkernels.MQAAcc(nin, m, p.Heads, p.KD)
 		}), nin*qd, cSc2, cV, cAO)
 		want(cAO, nin*qd)
 		if p.Residual {
@@ -852,7 +853,7 @@ func (g *devTier) convRun(lc *launcher, l *layer, cs *convScratch) {
 			}
 			w := 128
 			if bm.group {
-				w = kernels.GroupSplitWidth(bm.split)
+				w = oldkernels.GroupSplitWidth(bm.split)
 			}
 			if *lc.err == nil {
 				*lc.err = lc.launch(bm.kern, (n+w-1)/w, w, r.qs, d, r.sc, a, ax, out)
@@ -928,31 +929,31 @@ func (g *devTier) conformerProgram(p nn.ConvPlan, kern func(convKey, func() (*ir
 		want(cLP, parts*r)
 		want(cLV, parts*r)
 		launch(kern(convKey{id: kidLnpart, a: [8]int{d, parts, r}}, func() (*ir.Kernel, error) {
-			return kernels.LayerNormPartRows(d, parts, r)
+			return oldkernels.LayerNormPartRows(d, parts, r)
 		}), parts*r, src, cLP)
 		launch(kern(convKey{id: kidLnvar, a: [8]int{d, parts, r}}, func() (*ir.Kernel, error) {
-			return kernels.LayerNormVarRows(d, parts, r)
+			return oldkernels.LayerNormVarRows(d, parts, r)
 		}), parts*r, src, cLP, cLV)
 		launch(kern(convKey{id: kidLnapply, a: [8]int{d, parts, r}, eps: eps}, func() (*ir.Kernel, error) {
-			return kernels.LayerNormApplyRows(d, parts, eps, true, r)
+			return oldkernels.LayerNormApplyRows(d, parts, eps, true, r)
 		}), d*r, src, w, cLP, cLV, b, dst)
 		want(dst, d*r)
 	}
 	bias := func(src, b, dst cbuf, width int, act kernels.ActKind) {
 		launch(kern(convKey{id: kidBiasAct, act: act, a: [8]int{width, r}}, func() (*ir.Kernel, error) {
-			return kernels.BiasAct(width, r, act)
+			return oldkernels.BiasAct(width, r, act)
 		}), width*r, src, b, dst)
 		want(dst, width*r)
 	}
 	add := func(a, b, dst cbuf) {
-		launch(kern(convKey{id: kidAdd, a: [8]int{d * r}}, func() (*ir.Kernel, error) { return kernels.Add(d * r) }),
+		launch(kern(convKey{id: kidAdd, a: [8]int{d * r}}, func() (*ir.Kernel, error) { return oldkernels.Add(d * r) }),
 			d*r, a, b, dst)
 		want(dst, d*r)
 	}
 	half := func(a, b, dst cbuf) {
 		// x + b/2: the half feed-forward's residual, alpha from cCHalf.
 		launch(kern(convKey{id: kidAddhalf, a: [8]int{d * r}}, func() (*ir.Kernel, error) {
-			return kernels.AddHalf(d * r)
+			return oldkernels.AddHalf(d * r)
 		}), d*r, a, b, dst)
 		want(dst, d*r)
 	}
@@ -978,15 +979,15 @@ func (g *devTier) conformerProgram(p nn.ConvPlan, kern func(convKey, func() (*ir
 	}
 	mm(4, cCPE, cCol, 2*r-1, d)
 	launch(kern(convKey{id: kidRelposscores, a: [8]int{r, heads, kd}}, func() (*ir.Kernel, error) {
-		return kernels.RelPosScores(r, heads, kd)
+		return oldkernels.RelPosScores(r, heads, kd)
 	}), r*heads*r, cQ, cK, cCol, cCU, cCV, cTN, cSc)
 	want(cSc, r*heads*r)
 	launch(kern(convKey{id: kidRowsoftmax, a: [8]int{r * heads, r}}, func() (*ir.Kernel, error) {
-		return kernels.RowSoftmax(r*heads, r)
+		return oldkernels.RowSoftmax(r*heads, r)
 	}), r*heads, cSc, cSc2)
 	want(cSc2, r*heads*r)
 	launch(kern(convKey{id: kidAttnaccrows, a: [8]int{r, heads, kd}}, func() (*ir.Kernel, error) {
-		return kernels.AttnAccRows(r, heads, kd)
+		return oldkernels.AttnAccRows(r, heads, kd)
 	}), r*d, cSc2, cV, cTN, cAO)
 	want(cAO, r*d)
 	mm(3, cAO, cE1, r, d)
@@ -999,16 +1000,16 @@ func (g *devTier) conformerProgram(p nn.ConvPlan, kern func(convKey, func() (*ir
 	mm(10, cT1, cE1, r, d)
 	bias(cE1, cCGLUGB, cE2, d, kernels.ActIdentity)
 	launch(kern(convKey{id: kidSigmoidmul, a: [8]int{d * r}}, func() (*ir.Kernel, error) {
-		return kernels.SigmoidMul(d * r)
+		return oldkernels.SigmoidMul(d * r)
 	}), d*r, cE2, cT2, cE1)
 	launch(kern(convKey{id: kidDwconv1drows, a: [8]int{p.KMid, d, r}}, func() (*ir.Kernel, error) {
-		return kernels.DWConv1dRows(p.KMid, d, r)
+		return oldkernels.DWConv1dRows(p.KMid, d, r)
 	}), d*r, cE1, cCDW, cTN, cT2)
 	launch(kern(convKey{id: kidAffinerows, a: [8]int{d, r}}, func() (*ir.Kernel, error) {
-		return kernels.AffineRows(d, r)
+		return oldkernels.AffineRows(d, r)
 	}), d*r, cT2, cCBNS, cCBNH, cE2)
 	launch(kern(convKey{id: kidAct, act: kernels.ActSiLU, a: [8]int{d * r}}, func() (*ir.Kernel, error) {
-		return kernels.Act(d*r, kernels.ActSiLU)
+		return oldkernels.Act(d*r, kernels.ActSiLU)
 	}), d*r, cE2, cE1)
 	mm(11, cE1, cT2, r, d)
 	bias(cT2, cCPW2B, cT1, d, kernels.ActIdentity)

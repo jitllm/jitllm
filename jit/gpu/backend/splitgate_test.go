@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/oldkernels"
 )
 
 // TestSplitHeadGateMatchesTheHostDeinterleave runs the q/gate split on every
@@ -47,7 +47,7 @@ func TestSplitHeadGateMatchesTheHostDeinterleave(t *testing.T) {
 				copy(wantG[r*qdim+hh*c.headDim:][:c.headDim], in[hh*2*c.headDim+c.headDim:][:c.headDim])
 			}
 		}
-		k, err := kernels.SplitHeadGate(c.nHead, c.headDim, c.rows)
+		k, err := oldkernels.SplitHeadGate(c.nHead, c.headDim, c.rows)
 		if err != nil {
 			t.Fatalf("SplitHeadGate: %v", err)
 		}
