@@ -30,7 +30,7 @@ var (
 	parityExplain  = flag.Bool("parity-explain", false, "with -parity-kernel, every composed instruction written out")
 	parityPerModel = flag.Bool("parity-per-model", false, "TestComposerParity logs each model's instructions matched")
 	parityLazy     = flag.Bool("parity-lazy", false, "TestComposerParity's composer forms each prompt width at its first prompt, not at placement")
-	parityKernel   = flag.String("parity-kernel", "", "the main kernel name prefix to print: with -parity-model what it misses, else every model's kernels of that name")
+	parityKernel   = flag.String("parity-kernel", "", "the main kernel name prefix to print (* every kernel): with -parity-model what it misses, else every model's kernels of that name")
 )
 
 // TestComposerParity holds what the composer emits to what main emits, with
@@ -127,14 +127,14 @@ func TestComposerParity(t *testing.T) {
 			}
 			if *parityModel == "" && *parityKernel != "" {
 				for _, k := range r.main {
-					if strings.HasPrefix(k.Name, *parityKernel) {
+					if (*parityKernel == "*" || strings.HasPrefix(k.Name, *parityKernel)) {
 						t.Logf("%s main %s", r.name, shapeOf(k))
 					}
 				}
 			}
 			if *parityModel != "" && *parityKernel != "" {
 				for _, k := range r.main {
-					if strings.HasPrefix(k.Name, *parityKernel) {
+					if (*parityKernel == "*" || strings.HasPrefix(k.Name, *parityKernel)) {
 						t.Logf("main     %s", shapeOf(k))
 					}
 				}

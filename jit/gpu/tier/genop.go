@@ -1361,6 +1361,15 @@ func (g *devTier) genMatVecNodes(o *devOp, prog *devProgram, bs *blockScratch, r
 		o.Why = whyNoForm
 		return nil
 	}
+	// A prompt chunk's projection on the binary16 matrix instruction where
+	// the device lowers it, as main's batched matvec chooses.
+	if rows > 1 && !bank && !g.genRag && o.Kind == dkMatVec && !g.PreferTiles && !g.PreferGemmInt8 {
+		if s, ok := g.gemm16Of(m, rows); ok {
+			if ls := g.genGemm16(o, s); ls != nil {
+				return ls
+			}
+		}
+	}
 	// The product, into the output or a split's planes; a bank's slots are
 	// the group's rows, each reading its expert's sheet.
 	grows := rows
