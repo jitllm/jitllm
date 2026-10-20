@@ -460,7 +460,7 @@ func (g *Row) pipelined() *Row {
 		vary := g.varies(c)
 		for i, nd := range g.Nodes {
 			if nd.Kind != NLoad || !nd.Indexed || !addr[i] || g.Bufs[nd.Buf].Kind != BufU32 || !vary[nd.Ix] ||
-				!g.onlyIter(nd.Ix, iter, c) {
+				!g.onlyIter(nd.Ix, iter, c) || !g.quotientOf(nd.Ix, iter) {
 				continue
 			}
 			if r == nil {
@@ -528,6 +528,43 @@ func (g *Row) onlyIter(n, iter, c int) bool {
 		return true
 	}
 	return ok(n)
+}
+
+// quotientOf is whether index node n reads iterator iter through a
+// quotient: a table entry several trips share (a page of positions), which
+// is worth loading a trip ahead.
+func (g *Row) quotientOf(n, iter int) bool {
+	seen := map[int]bool{}
+	var reads func(n int) bool
+	reads = func(n int) bool {
+		if n == iter {
+			return true
+		}
+		if seen[n] {
+			return false
+		}
+		seen[n] = true
+		for _, o := range g.operands(n) {
+			if reads(o) {
+				return true
+			}
+		}
+		return false
+	}
+	var q func(n int) bool
+	q = func(n int) bool {
+		nd := g.Nodes[n]
+		if nd.Kind == NUBinary && (nd.Op == OpDiv || nd.Op == OpShr) && reads(nd.A) {
+			return true
+		}
+		for _, o := range g.operands(n) {
+			if q(o) {
+				return true
+			}
+		}
+		return false
+	}
+	return q(n)
 }
 
 // iterFormed is whether a node that is no affine index reads an affine

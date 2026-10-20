@@ -153,3 +153,73 @@ func TestCombineIsMains(t *testing.T) {
 		})
 	}
 }
+
+// TestGroupingIsMains holds the composer's grouping of a mixture's rows by
+// expert, the gather, the grouped combine and the indexed bias to main's
+// ExpertGroup*, GatherRows, ExpertCombineGrouped and IndexedBiasAdd.
+func TestGroupingIsMains(t *testing.T) {
+	for _, c := range []struct{ rows, k, nExp, unit int }{{32, 2, 8, 4}, {128, 8, 64, 4}, {16, 4, 128, 32}, {7, 3, 5, 4}} {
+		name := fmt.Sprintf("r%d_k%d_e%d_u%d", c.rows, c.k, c.nExp, c.unit)
+		np := (c.rows*c.k + c.nExp*(c.unit-1) + c.unit - 1) / c.unit * c.unit
+		nb := compose.GroupBlocks(c.rows, c.k)
+		check := func(t *testing.T, sub string, mk func() (*ir.Kernel, error), build func(g *compose.Row), width int) {
+			t.Helper()
+			k, err := mk()
+			if err != nil {
+				t.Fatal(err)
+			}
+			g := &compose.Row{Width: width, Rows: 1}
+			build(g)
+			same(t, name+"/"+sub, []*ir.Kernel{k}, planned(t, g, compose.Facts{}))
+		}
+		u32, out := compose.BufU32, compose.BufOutU32
+		t.Run(name, func(t *testing.T) {
+			check(t, "blockcount", func() (*ir.Kernel, error) { return mainkernels.ExpertGroupBlockCount(c.rows, c.k, c.nExp) }, func(g *compose.Row) {
+				sel, bc := g.Buf(u32), g.Buf(out)
+				g.Store(bc, g.GroupBlockCount(sel, c.rows, c.k, c.nExp))
+			}, nb*c.nExp)
+			check(t, "count", func() (*ir.Kernel, error) { return mainkernels.ExpertGroupCount(c.rows, c.k, c.nExp) }, func(g *compose.Row) {
+				bc, off, cnt := g.Buf(u32), g.Buf(out), g.Buf(out)
+				g.GroupCount(bc, off, cnt, c.rows, c.k, c.nExp)
+			}, nb*c.nExp)
+			check(t, "ends", func() (*ir.Kernel, error) { return mainkernels.ExpertGroupEnds(c.nExp, c.unit) }, func(g *compose.Row) {
+				cnt, ends := g.Buf(u32), g.Buf(out)
+				g.Store(ends, g.GroupEnds(cnt, c.nExp, c.unit))
+			}, c.nExp)
+			for _, pair := range []bool{false, true} {
+				check(t, fmt.Sprintf("columns_%v", pair), func() (*ir.Kernel, error) { return mainkernels.ExpertGroupColumns(c.rows, c.nExp, np, pair) }, func(g *compose.Row) {
+					ends, colE, perm, pp := g.Buf(u32), g.Buf(out), g.Buf(out), -1
+					if pair {
+						pp = g.Buf(out)
+					}
+					g.GroupColumns(ends, colE, perm, pp, c.rows, c.nExp)
+				}, np)
+				check(t, fmt.Sprintf("scatter_%v", pair), func() (*ir.Kernel, error) {
+					return mainkernels.ExpertGroupScatter(c.rows, c.k, c.nExp, c.unit, pair)
+				}, func(g *compose.Row) {
+					sel, cnt, ends, off, perm, pos, pp := g.Buf(u32), g.Buf(u32), g.Buf(u32), g.Buf(u32), g.Buf(out), g.Buf(out), -1
+					if pair {
+						pp = g.Buf(out)
+					}
+					g.GroupScatter(sel, cnt, ends, off, perm, pos, pp, c.rows, c.k, c.nExp, c.unit)
+				}, c.rows*c.k)
+			}
+			check(t, "tiles", func() (*ir.Kernel, error) { return mainkernels.ExpertGroupTiles(c.nExp, np/4, 4) }, func(g *compose.Row) {
+				ends, tsel := g.Buf(u32), g.Buf(out)
+				g.Store(tsel, g.GroupTiles(ends, c.nExp, 4))
+			}, np/4)
+			check(t, "gather", func() (*ir.Kernel, error) { return mainkernels.GatherRows(64, np, c.rows) }, func(g *compose.Row) {
+				src, perm, dst := g.Buf(compose.BufRow), g.Buf(u32), g.Buf(compose.BufOut)
+				g.Store(dst, g.GatherRows(src, perm, 64, c.rows))
+			}, np*64)
+			check(t, "combine", func() (*ir.Kernel, error) { return mainkernels.ExpertCombineGrouped(64, c.k, c.rows) }, func(g *compose.Row) {
+				e, w, pos, o := g.Buf(compose.BufRow), g.Buf(compose.BufRow), g.Buf(u32), g.Buf(compose.BufOut)
+				g.Store(o, g.CombineGrouped(e, w, pos, 64, c.k))
+			}, c.rows*64)
+			check(t, "bias", func() (*ir.Kernel, error) { return mainkernels.IndexedBiasAdd(c.k, 96) }, func(g *compose.Row) {
+				in, sel, bias, o := g.Buf(compose.BufRow), g.Buf(u32), g.Buf(compose.BufRow), g.Buf(compose.BufOut)
+				g.Store(o, g.IndexedBias(in, sel, bias, 96))
+			}, c.k*96)
+		})
+	}
+}
