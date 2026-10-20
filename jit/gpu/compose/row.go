@@ -1570,6 +1570,7 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			}
 		}
 		hoist(roots, p)
+		zero := b.ConstF32(0)
 		b.Loop(iters)
 		i := b.Phi(ir.U32, tid)
 		accs := make([]ir.Value, len(reds))
@@ -1585,7 +1586,7 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			if g.Nodes[n].Red == RedMax {
 				b.SetPhi(accs[j], b.Select(ir.F32, in, b.Max(ir.F32, accs[j], x), accs[j]))
 			} else {
-				b.SetPhi(accs[j], b.Add(ir.F32, accs[j], b.Select(ir.F32, in, x, b.ConstF32(0))))
+				b.SetPhi(accs[j], b.Add(ir.F32, accs[j], b.Select(ir.F32, in, x, zero)))
 			}
 		}
 		for _, st := range stores {
