@@ -29,6 +29,8 @@ const (
 	haCapped                // the softcapped logits
 	haTok                   // each row's greatest logit's index
 	haSrc                   // a folded chunk's residual rows
+	haPart2                 // a LayerNorm's variance partials
+	haNormB                 // its bias
 	haOff                   // the word naming the folded row's place in them
 )
 
@@ -106,7 +108,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	switch {
 	case !ok || h.W.K != p.NEmbd || h.W.Rows <= 0 || len(h.W.Data) == 0:
 		return false
-	case len(h.Norm) == 0 || lnBlock(p) || p.NEmbd%bs.parts != 0:
+	case len(h.Norm) == 0 || p.NEmbd%bs.parts != 0 || lnBlock(p) && (len(h.NormB) != len(h.Norm) || bs.part2 == nil):
 		g.LastErr = "the head's norm has no composed form"
 		return false
 	}
@@ -128,6 +130,12 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	}
 	if bs.hNorm, err = g.dev.Alloc(len(f) * 4); err != nil || bs.hNorm.Write(f32b(f)) != nil {
 		return false
+	}
+	if lnBlock(p) {
+		if bs.hNormB, err = g.dev.Alloc(len(h.NormB) * 4); err != nil || bs.hNormB.Write(f32b(h.NormB)) != nil {
+			return false
+		}
+		g.charge(uint64(len(h.NormB) * 4))
 	}
 	if bs.logits, err = g.dev.Alloc(h.W.Rows * 4); err != nil {
 		return false
@@ -166,17 +174,25 @@ func (g *devTier) headProgram(p *nn.LayerPlan, r *resident, h *nn.Head, split in
 		prog = append(prog, ls...)
 		return err
 	}
-	ps := &headBuild{r: compose.Row{Width: parts, Rows: 1}}
-	x := ps.buf(compose.BufRow, haX)
-	ps.r.Store(ps.buf(compose.BufOut, haPart), ps.r.SquareSumParts(x, n, parts))
-	if err := add(ps, flat); err != nil {
-		return nil, err
-	}
-	na := &headBuild{r: compose.Row{Width: n, Rows: 1}}
-	ax, w, part := na.buf(compose.BufRow, haX), na.buf(compose.BufVec, haNorm), na.buf(compose.BufRow, haPart)
-	na.r.Store(na.buf(compose.BufOut, haH), na.r.NormApplyParts(ax, w, part, n, parts, float32(p.RMSEps), false))
-	if err := add(na, flat); err != nil {
-		return nil, err
+	if lnBlock(p) {
+		for _, b := range layerNormBuilds(n, 1, parts, float32(p.RMSEps)) {
+			if err := add(b, flat); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		ps := &headBuild{r: compose.Row{Width: parts, Rows: 1}}
+		x := ps.buf(compose.BufRow, haX)
+		ps.r.Store(ps.buf(compose.BufOut, haPart), ps.r.SquareSumParts(x, n, parts))
+		if err := add(ps, flat); err != nil {
+			return nil, err
+		}
+		na := &headBuild{r: compose.Row{Width: n, Rows: 1}}
+		ax, w, part := na.buf(compose.BufRow, haX), na.buf(compose.BufVec, haNorm), na.buf(compose.BufRow, haPart)
+		na.r.Store(na.buf(compose.BufOut, haH), na.r.NormApplyParts(ax, w, part, n, parts, float32(p.RMSEps), false))
+		if err := add(na, flat); err != nil {
+			return nil, err
+		}
 	}
 	float := kernels.IsFloat(r.t)
 	if !float {
@@ -217,8 +233,8 @@ func (g *devTier) headProgram(p *nn.LayerPlan, r *resident, h *nn.Head, split in
 
 // headBufs is what a head program's roles name on one launch.
 type headBufs struct {
-	x, part, norm, h, a, ax, logits, capped, tok, src, off backend.Buf
-	r                                                      *resident
+	x, part, norm, h, a, ax, logits, capped, tok, src, off, part2, normB backend.Buf
+	r                                                                    *resident
 }
 
 // runHead launches prog over bufs, the first groups of each launch where
@@ -263,6 +279,10 @@ func (g *devTier) runHead(lc *launcher, prog []headLaunch, hb headBufs) {
 				bufs[j] = hb.src
 			case haOff:
 				bufs[j] = hb.off
+			case haPart2:
+				bufs[j] = hb.part2
+			case haNormB:
+				bufs[j] = hb.normB
 			}
 		}
 		if err := lc.launch(l.k, l.groups, l.width, bufs[:l.n]...); err != nil {
@@ -274,14 +294,14 @@ func (g *devTier) runHead(lc *launcher, prog []headLaunch, hb headBufs) {
 // decodeHeadBufs is the decode head's binding on bs.
 func decodeHeadBufs(bs *blockScratch) headBufs {
 	return headBufs{x: bs.x, part: bs.part, norm: bs.hNorm, h: bs.h, a: bs.a, ax: bs.ax, logits: bs.logits,
-		capped: bs.logitsCap, r: bs.head}
+		capped: bs.logitsCap, r: bs.head, part2: bs.part2, normB: bs.hNormB}
 }
 
 // rowsHeadBufs is the per-row head's binding: rows scratch bs, the head the
 // decode scratch hb holds.
 func rowsHeadBufs(bs, hb *blockScratch) headBufs {
 	return headBufs{x: bs.x, part: bs.part, norm: hb.hNorm, h: bs.h, a: bs.a, ax: bs.ax, logits: bs.ragLogits,
-		capped: bs.ragCap, tok: bs.ragTok, r: hb.head}
+		capped: bs.ragCap, tok: bs.ragTok, r: hb.head, part2: bs.part2, normB: hb.hNormB}
 }
 
 // ensureRowsHead composes the per-row head for rows scratch bs, the decode
@@ -310,15 +330,26 @@ func (g *devTier) ensureRowsHead(bs *blockScratch, h *nn.Head) bool {
 		}
 		return err == nil
 	}
-	nb := &headBuild{r: compose.Row{Width: n, Rows: R}}
-	x := nb.r.Load(nb.buf(compose.BufRow, haX))
-	w := nb.r.Load(nb.buf(compose.BufVec, haNorm))
-	ss := nb.r.Add(compose.Node{Kind: compose.NReduce, Red: compose.RedSum, A: nb.r.Bin(compose.OpMul, x, x)})
-	rms := nb.r.Add(compose.Node{Kind: compose.NUnary, Op: compose.OpRsqrt,
-		A: nb.r.Bin(compose.OpAdd, nb.r.Bin(compose.OpMul, ss, nb.r.Const(1/float32(n))), nb.r.Const(float32(p.RMSEps)))})
-	nb.r.Store(nb.buf(compose.BufOut, haH), nb.r.Bin(compose.OpMul, nb.r.Bin(compose.OpMul, x, rms), w))
-	if !add(nb, flat) {
-		return false
+	if lnBlock(p) {
+		if bs.part2 == nil {
+			return false
+		}
+		for _, b := range layerNormBuilds(n, R, bs.parts, float32(p.RMSEps)) {
+			if !add(b, flat) {
+				return false
+			}
+		}
+	} else {
+		nb := &headBuild{r: compose.Row{Width: n, Rows: R}}
+		x := nb.r.Load(nb.buf(compose.BufRow, haX))
+		w := nb.r.Load(nb.buf(compose.BufVec, haNorm))
+		ss := nb.r.Add(compose.Node{Kind: compose.NReduce, Red: compose.RedSum, A: nb.r.Bin(compose.OpMul, x, x)})
+		rms := nb.r.Add(compose.Node{Kind: compose.NUnary, Op: compose.OpRsqrt,
+			A: nb.r.Bin(compose.OpAdd, nb.r.Bin(compose.OpMul, ss, nb.r.Const(1/float32(n))), nb.r.Const(float32(p.RMSEps)))})
+		nb.r.Store(nb.buf(compose.BufOut, haH), nb.r.Bin(compose.OpMul, nb.r.Bin(compose.OpMul, x, rms), w))
+		if !add(nb, flat) {
+			return false
+		}
 	}
 	float := kernels.IsFloat(r.t)
 	if !float {
@@ -393,4 +424,22 @@ func (g *devTier) ensureSpan(hb *blockScratch) bool {
 	}
 	hb.spanProg = ls
 	return true
+}
+
+// layerNormBuilds is a LayerNorm head's norm over rows of n in three
+// launches: the parts' sums, their deviations, the apply with the norm's
+// weight and bias.
+func layerNormBuilds(n, rows, parts int, eps float32) []*headBuild {
+	sb := &headBuild{r: compose.Row{Width: parts * rows, Rows: 1}}
+	sx := sb.buf(compose.BufRow, haX)
+	sb.r.Store(sb.buf(compose.BufOut, haPart), sb.r.SumParts(sx, n, parts))
+	vb := &headBuild{r: compose.Row{Width: parts * rows, Rows: 1}}
+	vx, vs := vb.buf(compose.BufRow, haX), vb.buf(compose.BufRow, haPart)
+	vb.r.Store(vb.buf(compose.BufOut, haPart2), vb.r.VarParts(vx, vs, n, parts))
+	ab := &headBuild{r: compose.Row{Width: n, Rows: rows}}
+	ax, w := ab.buf(compose.BufRow, haX), ab.buf(compose.BufVec, haNorm)
+	sum, vr := ab.buf(compose.BufRow, haPart), ab.buf(compose.BufRow, haPart2)
+	bias := ab.buf(compose.BufVec, haNormB)
+	ab.r.Store(ab.buf(compose.BufOut, haH), ab.r.LayerNormApplyParts(ax, w, bias, sum, vr, n, parts, eps))
+	return []*headBuild{sb, vb, ab}
 }

@@ -486,6 +486,9 @@ func rwMatVecGate(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq
 	if R != 1 {
 		return false
 	}
+	if l.mvu.split > 1 && !l.mvu.group {
+		return false // the gate rides only a matvec that writes its final row
+	}
 	if l.mvu.bias != nil || l.mvg.bias != nil {
 		return false // the gated launch carries neither bias
 	}
