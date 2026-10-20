@@ -2158,7 +2158,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer, page int) (*devProgram, string) 
 				vals[o.Out[0]] = out
 				continue
 			}
-			if mla && prog.slots[in(0)] != slotAuto {
+			if src := prog.slots[in(0)]; mla && (src == slotQ || src == slotMKV) {
 				// Latent attention's slices: each head's unrotated and
 				// rotary parts of q, compacted; the kv latent's prefix, read
 				// in place; its rotary key.

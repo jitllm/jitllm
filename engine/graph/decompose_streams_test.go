@@ -292,9 +292,9 @@ func TestStreamPlaceDecomposesToItsReference(t *testing.T) {
 	}
 }
 
-// TestStreamMixAndPlaceVariantsStayWhole: the Sinkhorn mix, the softmax
-// bank's single-weight read, a placement with no weights and the Sinkhorn
-// placement are not stated by these primitives and are left as they are.
+// TestStreamMixAndPlaceVariantsStayWhole: the Sinkhorn mix, a weighted
+// placement of a checkpoint block and the Sinkhorn placement are not stated
+// by these primitives and are left as they are.
 func TestStreamMixAndPlaceVariantsStayWhole(t *testing.T) {
 	c := streamCases[0]
 	mix := func(edit func(*Op)) *Graph {
@@ -309,16 +309,205 @@ func TestStreamMixAndPlaceVariantsStayWhole(t *testing.T) {
 	}
 	for name, g := range map[string]*Graph{
 		"sinkhorn mix":          mix(func(o *Op) { o.Attr.Sinkhorn = true }),
-		"bank mix":              mix(func(o *Op) { o.Weight, o.Out, o.Attr.Groups = o.Weight[:1], o.Out[:1], 3 }),
 		"mismatched down":       mix(func(o *Op) { o.Weight[1].K++ }),
 		"mismatched stream":     mix(func(o *Op) { o.Attr.Streams = 3 }),
 		"sinkhorn place":        place(func(o *Op) { o.Attr.Sinkhorn = true }),
-		"bank place":            place(func(o *Op) { o.In = o.In[:2] }),
 		"place of a checkpoint": place(func(o *Op) { o.Attr.Block = 1 }),
 	} {
 		d := Decompose(g)
 		if len(d.Ops) != 1 || (d.Ops[0].Kind != OpStreamMix && d.Ops[0].Kind != OpStreamPlace) {
 			t.Errorf("%s was decomposed into %d ops", name, len(d.Ops))
+		}
+	}
+}
+
+// bankCase is a residual of h streams of d whose read mixes the first nb
+// checkpoints with the running residual.
+type bankCase struct {
+	name     string
+	h, d, nb int
+}
+
+var bankCases = []bankCase{
+	{name: "four streams, the whole bank", h: 4, d: 16, nb: 3},
+	{name: "five streams, one checkpoint", h: 5, d: 13, nb: 1},
+	{name: "three streams, ragged width", h: 3, d: 7, nb: 2},
+}
+
+func bankGraph(c bankCase) (g *Graph, in, row ValueID) {
+	g = &Graph{Version: Version}
+	in, row = g.value("x", c.h*c.d), g.value("row", c.d)
+	g.op(Op{Kind: OpStreamMix, In: []ValueID{in}, Out: []ValueID{row}, Weight: []Binding{{Role: jlm.RoleAttnResScore, K: c.d}},
+		Attr: Attrs{Streams: c.h, Eps: 1e-6, Groups: c.nb}})
+	return g, in, row
+}
+
+// bankReference is the host's k3Mix for one row: each term (checkpoints
+// first, the running residual last) RMSNormed with a unit weight and dotted
+// with the score row, the scores' softmax, and the terms added in order at
+// their probabilities by a fused multiply-add.
+func bankReference(c bankCase, x, w []float32) []float32 {
+	ns := c.nb + 1
+	scores := make([]float32, ns)
+	ones := make([]float32, c.d)
+	for i := range ones {
+		ones[i] = 1
+	}
+	term := func(j int) []float32 {
+		k := j + 1
+		if j == c.nb {
+			k = 0
+		}
+		return x[k*c.d : (k+1)*c.d]
+	}
+	for j := range scores {
+		n := make([]float32, c.d)
+		oracle.RMSNorm32(n, term(j), ones, 1e-6)
+		var s float32
+		for i := range n {
+			s = fma32(w[i], n[i], s)
+		}
+		scores[j] = s
+	}
+	mx := scores[0]
+	for _, s := range scores[1:] {
+		mx = max(mx, s)
+	}
+	var sum float32
+	for j := range scores {
+		scores[j] = float32(math.Exp(float64(scores[j] - mx)))
+		sum += scores[j]
+	}
+	out := make([]float32, c.d)
+	for j := range scores {
+		p := scores[j] / sum
+		for i, v := range term(j) {
+			out[i] = fma32(p, v, out[i])
+		}
+	}
+	return out
+}
+
+func bankRow(t *testing.T, c bankCase, seed int64, edit func(*Graph)) (got, want []float32) {
+	t.Helper()
+	g, in, rv := bankGraph(c)
+	d := Decompose(g)
+	if edit != nil {
+		edit(d)
+	}
+	rng := rand.New(rand.NewSource(seed))
+	fill := func(n int, s float32) []float32 {
+		f := make([]float32, n)
+		for i := range f {
+			f[i] = (rng.Float32()*2 - 1) * s
+		}
+		return f
+	}
+	x, w := fill(c.h*c.d, 2), fill(c.d, 1.5)
+	got = evalPrims(t, d, map[ValueID][]float32{in: x}, map[jlm.Role][]float32{jlm.RoleAttnResScore: w})[rv]
+	return got, bankReference(c, x, w)
+}
+
+// TestBankMixDecomposesToItsReference holds a residual attention's read, as
+// primitives, to the host's k3Mix over several seeds.
+func TestBankMixDecomposesToItsReference(t *testing.T) {
+	for _, c := range bankCases {
+		t.Run(c.name, func(t *testing.T) {
+			g, _, _ := bankGraph(c)
+			for _, o := range Decompose(g).Ops {
+				if o.Kind == OpStreamMix {
+					t.Fatalf("the bank's read was not decomposed")
+				}
+			}
+			for seed := int64(1); seed <= 8; seed++ {
+				got, want := bankRow(t, c, seed, nil)
+				if i, ok := closeTo(got, want, 2e-5, 1e-3); !ok {
+					t.Fatalf("seed %d: row[%d] = %g, the reference's %g", seed, i, got[i], want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestBankMixViolationArms: a read that scores the terms in another order,
+// drops the norm or mixes without the softmax's maximum parts from the
+// reference on some seed.
+func TestBankMixViolationArms(t *testing.T) {
+	c := bankCases[0]
+	for name, edit := range map[string]func(*Graph){
+		"terms reordered": func(g *Graph) {
+			for i, o := range g.Ops {
+				if o.Kind == OpSlice && o.Attr.Offset == 0 {
+					g.Ops[i].Attr.Offset = c.d
+				}
+			}
+		},
+		"no norm": func(g *Graph) {
+			for i, o := range g.Ops {
+				if o.Kind == OpMap && o.Attr.Fn == MapSqrt {
+					g.Ops[i].Attr.Fn = MapMax
+					g.Ops[i].In = []ValueID{o.In[0], o.In[0]}
+				}
+			}
+		},
+		"scores not centred": func(g *Graph) {
+			for i, o := range g.Ops {
+				if o.Kind == OpMap && o.Attr.Fn == MapSub {
+					g.Ops[i].Attr.Fn = MapMul
+				}
+			}
+		},
+	} {
+		parted := false
+		for seed := int64(1); seed <= 8 && !parted; seed++ {
+			got, want := bankRow(t, c, seed, edit)
+			if _, ok := closeTo(got, want, 2e-5, 1e-3); !ok {
+				parted = true
+			}
+		}
+		if !parted {
+			t.Errorf("%s: the decomposition still matches the reference", name)
+		}
+	}
+}
+
+// TestBankPlaceDecomposesToItsReference: the running residual plus the
+// output, or on a checkpoint block the output alone with the block's input
+// banked at its stream, every other stream as it was, exactly.
+func TestBankPlaceDecomposesToItsReference(t *testing.T) {
+	const h, w = 5, 9
+	for k := 0; k < h; k++ {
+		g := &Graph{Version: Version}
+		in, y, out := g.value("x", h*w), g.value("y", w), g.value("out", h*w)
+		g.op(Op{Kind: OpStreamPlace, In: []ValueID{in, y}, Out: []ValueID{out}, Attr: Attrs{Streams: h, Block: k}})
+		d := Decompose(g)
+		for _, o := range d.Ops {
+			if o.Kind == OpStreamPlace {
+				t.Fatalf("block %d: the placement was not decomposed", k)
+			}
+		}
+		rng := rand.New(rand.NewSource(int64(k + 1)))
+		x, yv := make([]float32, h*w), make([]float32, w)
+		for i := range x {
+			x[i] = rng.Float32()*4 - 2
+		}
+		for i := range yv {
+			yv[i] = rng.Float32()*4 - 2
+		}
+		got := evalPrims(t, d, map[ValueID][]float32{in: x, y: yv}, nil)[out]
+		want := append([]float32(nil), x...)
+		if k == 0 {
+			for i := range yv {
+				want[i] = x[i] + yv[i]
+			}
+		} else {
+			copy(want[k*w:(k+1)*w], x[:w])
+			copy(want, yv)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("block %d: element %d is %g, the reference's %g", k, i, got[i], want[i])
+			}
 		}
 	}
 }

@@ -534,7 +534,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		if p.LayerNorm && o.Kind != dkNormQuant {
 			return g.genLayerNorm(o, bs, rows, w, eps)
 		}
-		if !p.LayerNorm && (o.Kind == dkPostNorm || prog.scans && o.Role == jlm.RoleAttnNorm) {
+		if !p.LayerNorm && (o.Kind == dkPostNorm || prog.scans && o.Role == jlm.RoleAttnNorm) && w%bs.parts == 0 {
 			// A norm of a branch's output, or a recurrent block's pre-norm: two
 			// passes, the int8 operand apart.
 			return g.genNormParts(o, prog, bs, rows, w, eps, bs.parts)
