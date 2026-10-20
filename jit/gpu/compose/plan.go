@@ -100,7 +100,7 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 			Threads: g.Rows * g.Width}}, nil
 	}
 	if !g.contraction() {
-		s := rowSchedule(g)
+		s := rowSchedule(g, f.Target)
 		s.Target = f.Target
 		return []Planned{{G: g, S: s, Bufs: all, Threads: g.Rows}}, nil
 	}
@@ -237,8 +237,10 @@ func (g *Row) contractSchedule(f Facts) Schedule {
 }
 
 // rowSchedule is a row group's schedule: the narrowest power-of-two group
-// over the row, at most 256, or 1024 for a group with a row reduction.
-func rowSchedule(g *Row) Schedule {
+// over the row, at most 256, or 1024 for a group with a row reduction; its
+// reductions a shuffle butterfly on a ptx target guaranteeing 32 lanes, a
+// tree elsewhere.
+func rowSchedule(g *Row, t Target) Schedule {
 	top := 256
 	for _, n := range g.Nodes {
 		if n.Kind == NReduce {
@@ -249,7 +251,7 @@ func rowSchedule(g *Row) Schedule {
 	for w < g.Width && w < top {
 		w *= 2
 	}
-	return Schedule{Group: w}
+	return Schedule{Group: w, Warp: t.API == APIPTX && t.Lanes == ir.SubgroupLanes}
 }
 
 // String is the plan's kernels, for a dump.

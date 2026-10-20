@@ -1112,6 +1112,9 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 	for _, st := range g.Stores {
 		passes = max(passes, g.storePass(st, depth))
 	}
+	// A butterfly needs the target's 32-lane guarantee and a group of whole
+	// subgroups, at most 32 of them (the second stage's one slot a lane).
+	warp := s.Warp && G%ir.SubgroupLanes == 0 && G/ir.SubgroupLanes <= ir.SubgroupLanes
 	iters := int64((g.Width + G - 1) / G)
 	step := b.Const(ir.U32, int64(G))
 	// Pass p: every reduction of depth p+1 accumulates; every store of depth
@@ -1168,9 +1171,9 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		b.EndLoop()
 		for j, n := range reds {
 			if g.Nodes[n].Red == RedMax {
-				rowVal[n] = groupReduce(b, sh, tid, accs[j], G, true)
+				rowVal[n] = groupReduce(b, sh, tid, accs[j], G, true, warp)
 			} else {
-				rowVal[n] = groupReduce(b, sh, tid, accs[j], G, false)
+				rowVal[n] = groupReduce(b, sh, tid, accs[j], G, false, warp)
 			}
 		}
 	}
