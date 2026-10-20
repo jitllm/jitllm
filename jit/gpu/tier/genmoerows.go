@@ -63,7 +63,14 @@ func (g *devTier) genMoERows(o *devOp, prog *devProgram, bs *blockScratch, rows 
 		ti := &rowBuild{r: compose.Row{Width: np / groupTok, Rows: 1}}
 		ends := ti.buf(u32, gaMgEnds)
 		ti.r.Store(ti.buf(out32, gaMgTsel), ti.r.GroupTiles(ends, E, groupTok))
-		for _, rb := range []*rowBuild{bc, ct, en, co, sc, ti} {
+		builds := []*rowBuild{bc, ct, en, co, sc, ti}
+		if m.tile {
+			tu := &rowBuild{r: compose.Row{Width: np / m.unit, Rows: 1}}
+			tends := tu.buf(u32, gaMgEnds)
+			tu.r.Store(tu.buf(out32, gaMgTselU), tu.r.GroupTiles(tends, E, m.unit))
+			builds = append(builds, tu)
+		}
+		for _, rb := range builds {
 			if !launch(rb, 0, 0, 0) {
 				return nil, true
 			}
@@ -79,6 +86,12 @@ func (g *devTier) genMoERows(o *devOp, prog *devProgram, bs *blockScratch, rows 
 			return nil, true
 		}
 		float := kernels.IsFloat(mv.q)
+		if m.tile && !float {
+			if tl := g.genTileBank(o, prog, mv, m, rows); tl != nil {
+				ls = append(ls, tl...)
+				break
+			}
+		}
 		src := gaIn2
 		if prog.vals[o.In[2]].Layout != layoutPairs {
 			// Gate and up read the rows gathered into sorted order.
@@ -145,4 +158,59 @@ func (g *devTier) genMoERows(o *devOp, prog *devProgram, bs *blockScratch, rows 
 	}
 	o.Why = whyNone
 	return ls, true
+}
+
+// genTileBank is a bank over a chunk's sorted columns as the grouped tile
+// GEMM: the source made the binary16 operand (gate and up gather the rows
+// in sorted order as they convert, shared where their formats agree), then
+// the widest blocking the bank's rows divide over the used token blocks,
+// the row block fastest. Nil where the format or the shape has no form.
+func (g *devTier) genTileBank(o *devOp, prog *devProgram, mv mv, m *moeGroup, rows int) []genLaunch {
+	sub := mv.q.Info().Sub
+	if sub <= 0 || mv.k%sub != 0 || m.unit%16 != 0 {
+		return nil
+	}
+	var ls []genLaunch
+	launch := func(rb *rowBuild, colScale, colDiv int, once uint8) bool {
+		k := g.rowKern(&rb.r)
+		if k.k == nil {
+			return false
+		}
+		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args)), whole: true,
+			colScale: colScale, colDiv: colDiv, once: once}
+		copy(l.args[:], rb.args)
+		ls = append(ls, l)
+		return true
+	}
+	np := m.p
+	cv := &rowBuild{r: compose.Row{Width: np * mv.k / sub, Rows: 1}}
+	x, h16 := cv.buf(compose.BufRow, gaIn2), cv.buf(compose.BufOutU32, gaMgH16)
+	var err error
+	if prog.vals[o.In[2]].Layout != layoutPairs {
+		err = cv.r.ActF16TGather(mv.q, mv.k, x, cv.buf(compose.BufU32, gaMgPerm), rows, h16)
+	} else {
+		err = cv.r.ActF16T(mv.q, mv.k, x, h16)
+	}
+	if err != nil || !launch(cv, mv.k/sub, 1, 3) {
+		return nil
+	}
+	for _, mt := range []int{4, 2, 1} {
+		s := compose.GemmTile{T: mv.q, Rows: mv.rows, K: mv.k, NTok: np, MT: mt, NT: m.unit / 16, WM: 2, WN: 2,
+			KB: max(32/sub, 1), Tall: g.tileTall() && mt%2 == 0, Experts: mv.experts}
+		if mv.rows%s.BlockRows() != 0 || np%s.Toks() != 0 {
+			continue
+		}
+		blocks := mv.rows / s.BlockRows()
+		rb := &rowBuild{r: compose.Row{Width: s.Threads(), Rows: s.Groups()}}
+		qs, d, sc := rb.buf(compose.BufU32, gaWQS), rb.buf(compose.BufU32, gaWD), rb.buf(compose.BufU32, gaWSC)
+		b, out := rb.buf(compose.BufU32, gaMgH16), rb.buf(compose.BufTile, gaOut0)
+		if rb.r.GemmTile(s, qs, d, sc, b, out, -1, rb.buf(compose.BufU32, gaMgTselU)) != nil {
+			continue
+		}
+		if !launch(rb, blocks*s.Threads(), m.unit, 0) {
+			return nil
+		}
+		return ls
+	}
+	return nil
 }

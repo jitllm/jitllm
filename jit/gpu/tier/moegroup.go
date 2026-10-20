@@ -26,6 +26,11 @@ type moeGroup struct {
 	// ends read home, its last word the used column count.
 	bc, off, cnt, ends, colE, perm, pos, tsel, hg, ga, gax backend.Buf
 	endsH                                                  []uint32
+	// tile is whether the banks run as the grouped tile GEMM (tilesOK):
+	// tselU names each unit-wide block's expert, h16 the sorted rows as its
+	// binary16 operand.
+	tile       bool
+	tselU, h16 backend.Buf
 }
 
 func (m *moeGroup) free() {
@@ -34,7 +39,7 @@ func (m *moeGroup) free() {
 	}
 	for _, b := range []backend.Buf{m.colPair, m.ones, m.rwS, m.rlog, m.rlogB, m.rsel, m.rtop, m.rw, m.rbm,
 		m.eg, m.eu, m.egB, m.euB, m.eact, m.edown, m.edownB,
-		m.bc, m.off, m.cnt, m.ends, m.colE, m.perm, m.pos, m.tsel, m.hg, m.ga, m.gax} {
+		m.bc, m.off, m.cnt, m.ends, m.colE, m.perm, m.pos, m.tsel, m.hg, m.ga, m.gax, m.tselU, m.h16} {
 		if b != nil {
 			b.Free()
 		}
@@ -46,7 +51,7 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 	k, e, ew := p.NExpertUsed, p.NExpert, p.ExpWidth()
 	unit := g.groupUnit(rows, k, e)
 	np := (rows*k + e*(unit-1) + unit - 1) / unit * unit
-	m := &moeGroup{rows: rows, k: k, nExp: e, p: np, unit: unit, endsH: make([]uint32, e)}
+	m := &moeGroup{rows: rows, k: k, nExp: e, p: np, unit: unit, endsH: make([]uint32, e), tile: g.tilesOK()}
 	nb, wide := compose.GroupBlocks(rows, k), max(ew, p.NFFNExp)
 	var err error
 	buf := func(dst *backend.Buf, n int) {
@@ -77,6 +82,10 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 		{&m.perm, np * 4}, {&m.pos, rows * k * 4}, {&m.tsel, np / groupTok * 4}, {&m.hg, np * ew * 4},
 		{&m.ga, np * wide}, {&m.gax, 3 * np * (wide / 32) * 4}} {
 		buf(b.dst, b.n)
+	}
+	if m.tile {
+		buf(&m.tselU, np/unit*4)
+		buf(&m.h16, np*wide*2)
 	}
 	if err == nil {
 		err = m.edown.WriteAt(np*ew*4, make([]byte, ew*4))

@@ -102,6 +102,8 @@ const (
 	gaMgHG      // the sorted rows,
 	gaMgGA      // and their int8 operand
 	gaMgGAX
+	gaMgTselU // each unit-wide block's expert,
+	gaMgH16   // the sorted rows as the binary16 operand
 	gaOwn0 // the op's own buffers (devOp.Own)
 	gaOwn1
 	gaOwn2
@@ -150,9 +152,9 @@ type genLaunch struct {
 	// readEnds sends what was launched, then reads the grouping's run ends
 	// home: the used column count the next launches are sized by.
 	readEnds bool
-	// once, where set, skips the launch where its first buffer is the one
-	// its kind last read this step (a gather, a quantize shared by gate and
-	// up).
+	// once, where set, skips the launch where its kernel and first buffer
+	// are the ones its kind last ran this step (a gather, a quantize or a
+	// binary16 conversion shared by gate and up).
 	once uint8
 }
 
@@ -902,7 +904,8 @@ type genState struct {
 	router, routerB, selB, routeW, shRouter     backend.Buf
 	sink                                        backend.Buf
 	// once is what each once-kind's launch last read this step.
-	once [3]backend.Buf
+	once  [4]backend.Buf
+	onceK [4]backend.Kernel
 	// The step's binary16 operand: its plane, and the conversion the step
 	// last made, by kernel and source (shared with the executor, so a
 	// conversion either one made is not made again).
@@ -1043,9 +1046,9 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 			case gaSeg0, gaSeg0 + 1, gaSeg0 + 2, gaSeg0 + 3, gaSeg0 + 4, gaSeg0 + 5, gaSeg0 + 6, gaSeg0 + 7,
 				gaSeg0 + 8, gaSeg0 + 9, gaSeg0 + 10, gaSeg0 + 11:
 				bufs[j] = st.segs[(a-gaSeg0)/4][(a-gaSeg0)%4]
-			case gaMgBC, gaMgOff, gaMgCnt, gaMgEnds, gaMgColE, gaMgPerm, gaMgPos, gaMgTsel, gaMgHG, gaMgGA, gaMgGAX:
+			case gaMgBC, gaMgOff, gaMgCnt, gaMgEnds, gaMgColE, gaMgPerm, gaMgPos, gaMgTsel, gaMgHG, gaMgGA, gaMgGAX, gaMgTselU, gaMgH16:
 				m := bs.mg
-				bufs[j] = [...]backend.Buf{m.bc, m.off, m.cnt, m.ends, m.colE, m.perm, m.pos, m.tsel, m.hg, m.ga, m.gax}[a-gaMgBC]
+				bufs[j] = [...]backend.Buf{m.bc, m.off, m.cnt, m.ends, m.colE, m.perm, m.pos, m.tsel, m.hg, m.ga, m.gax, m.tselU, m.h16}[a-gaMgBC]
 			case gaQ8A:
 				bufs[j], _ = int8Of(st, o.Out[l.q8])
 			case gaQ8X:
@@ -1060,10 +1063,10 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 			st.memoK, st.memoSrc = l.k, bufs[0]
 		}
 		if l.once != 0 {
-			if st.once[l.once] == bufs[0] {
+			if st.once[l.once] == bufs[0] && st.onceK[l.once] == l.k {
 				continue
 			}
-			st.once[l.once] = bufs[0]
+			st.once[l.once], st.onceK[l.once] = bufs[0], l.k
 		}
 		if l.readEnds {
 			m := bs.mg
@@ -1074,7 +1077,7 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				*lc.err = lc.to.s.Read(m.ends, u32b(m.endsH))
 			}
 			st.cols = int(m.endsH[m.nExp-1])
-			st.once = [3]backend.Buf{}
+			st.once, st.onceK = [4]backend.Buf{}, [4]backend.Kernel{}
 			continue
 		}
 		if l.colScale > 0 {

@@ -364,6 +364,19 @@ func (g *Row) Gemm16(s Gemm16, qs, d, sc, b, out int) error {
 // order the instruction's steps take them -- an 8-bit or binary16 format's
 // in byte order, a narrower one's halves interleaved.
 func (g *Row) ActF16T(t kernels.Quant, k, x, out int) error {
+	return g.actF16T(t, k, x, -1, 0, out)
+}
+
+// ActF16TGather is ActF16T of rows gathered through perm: token t's row is
+// perm[t] of nsrc, a padding column (past nsrc) zeros.
+func (g *Row) ActF16TGather(t kernels.Quant, k, x, perm, nsrc, out int) error {
+	if nsrc < 1 {
+		return fmt.Errorf("compose: a gathered binary16 operand of %d rows", nsrc)
+	}
+	return g.actF16T(t, k, x, perm, nsrc, out)
+}
+
+func (g *Row) actF16T(t kernels.Quant, k, x, perm, nsrc, out int) error {
 	info := t.Info()
 	sub := info.Sub
 	if k%sub != 0 || sub%8 != 0 {
@@ -377,11 +390,23 @@ func (g *Row) ActF16T(t kernels.Quant, k, x, out int) error {
 	}
 	e := g.Column()
 	in := ub(OpMul, e, u(sub))
+	pad := -1
+	if perm >= 0 {
+		nsub := k / sub
+		src := g.LoadAt(perm, ub(OpDiv, e, u(nsub)))
+		last := u(nsrc - 1)
+		pad = g.Less(last, src)
+		in = ub(OpAdd, ub(OpMul, ub(OpMin, src, last), u(k)), ub(OpMul, ub(OpRem, e, u(nsub)), u(sub)))
+	}
 	var v []int
 	for o := 0; o < sub; o += 4 {
 		at := ub(OpAdd, in, u(o))
 		for i := 0; i < 4; i++ {
-			v = append(v, g.LoadVec(x, at, 4, i))
+			x := g.LoadVec(x, at, 4, i)
+			if pad >= 0 {
+				x = g.Select(pad, g.Const(0), x)
+			}
+			v = append(v, x)
 		}
 	}
 	var w []int
