@@ -51,7 +51,7 @@ func (g *devTier) lanesRoute(r compose.Route) bool {
 func (g *devTier) genRoute(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
 	o.Why = whyNoForm
 	l := g.curLayer
-	if l == nil || rows != 1 || g.genRag {
+	if l == nil || g.genRag || rows != 1 && o.Kind != dkRouterLogits {
 		return nil
 	}
 	launch := func(rb *rowBuild, f compose.Facts) []genLaunch {
@@ -73,7 +73,7 @@ func (g *devTier) genRoute(o *devOp, prog *devProgram, bs *blockScratch, rows in
 			return nil
 		}
 		k, ex := prog.vals[o.In[0]].Width, prog.vals[o.Out[0]].Width
-		rb := &rowBuild{r: compose.Row{Width: k, Rows: ex}}
+		rb := &rowBuild{r: compose.Row{Width: k, Rows: ex * rows}}
 		wk := compose.BufRow
 		if l.routerF16 {
 			wk = compose.BufRowF16
