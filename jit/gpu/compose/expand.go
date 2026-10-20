@@ -132,7 +132,7 @@ func (x *expander) abs(a int) int          { return x.un(OpAbs, a) }
 func (x *expander) less(a, b int) int      { return x.add(Node{Kind: NLess, A: a, B: b}) }
 func (x *expander) sel(cond, a, b int) int { return x.add(Node{Kind: NSelect, A: a, B: b, C: cond}) }
 func (x *expander) clamp(v int, lo, hi float32) int {
-	return x.bin(OpMin, x.bin(OpMax, v, x.c(lo)), x.c(hi))
+	return x.bin(OpMax, x.bin(OpMin, v, x.c(hi)), x.c(lo))
 }
 
 // fma is a*b + c with one rounding.
