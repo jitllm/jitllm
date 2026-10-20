@@ -462,11 +462,32 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 			offArg = gaKOff
 		}
 		xd := ra.Layout == graph.RopeXD
-		rb.r.Width = iw
+		heads := iw / ra.HeadDim
+		var ls []genLaunch
+		if ra.NRot < ra.HeadDim {
+			// The dimensions the pairs do not turn reach the destination
+			// as they are, the pairs then written over them.
+			cb := &rowBuild{r: compose.Row{Width: iw, Rows: rows}}
+			src, off := cb.buf(compose.BufRow, gaIn0), cb.buf(compose.BufU32, offArg)
+			cb.r.StoreAt(cb.buf(compose.BufOut, gaOut0), cb.r.Load(src), cb.r.UBin(compose.OpAdd, cb.r.Load(off), cb.r.Column()))
+			ck := g.rowKern(&cb.r)
+			if ck.k == nil {
+				return nil
+			}
+			l := genLaunch{k: ck.k, groups: ck.groups, width: ck.group, n: uint8(len(cb.args))}
+			copy(l.args[:], cb.args)
+			ls = append(ls, l)
+		}
+		rb.r.Width = heads * ra.NRot / 2
 		in, cs, off := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufVec, gaCS), rb.buf(compose.BufU32, offArg)
-		v := rb.r.Rotary(in, cs, ra.HeadDim, ra.NRot, ra.Layout == graph.RopeNeox || xd, xd)
-		out := rb.buf(compose.BufOut, gaOut0)
-		rb.r.StoreAt(out, v, rb.r.UBin(compose.OpAdd, rb.r.Load(off), rb.r.Column()))
+		rb.r.RotaryPairs(in, cs, off, rb.buf(compose.BufOut, gaOut0), heads, ra.HeadDim, ra.NRot, ra.Layout == graph.RopeNeox || xd, xd)
+		k := g.rowKern(&rb.r)
+		if k.k == nil {
+			return nil
+		}
+		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
+		copy(l.args[:], rb.args)
+		return append(ls, l)
 	case dkSplitQG:
 		// A gated query's interleaved heads apart: each head's q, then its
 		// gate, of 2*hd a head in, hd a head out.

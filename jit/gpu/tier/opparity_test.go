@@ -113,6 +113,42 @@ func TestElementwiseIsMains(t *testing.T) {
 	}
 }
 
+// TestRotaryIsMains holds the tier's lowering of q's rotary to main's
+// RoPERows (after its CopyAtRows where the rotary is partial), NORM and
+// NEOX, whole and partial, at decode and a chunk's rows.
+func TestRotaryIsMains(t *testing.T) {
+	prof := recorder.Profiles["cuda-sm70"]
+	for _, c := range []struct{ heads, hd, nrot int }{{4, 64, 64}, {8, 128, 128}, {4, 64, 32}, {2, 128, 64}} {
+		for _, neox := range []bool{false, true} {
+			for _, rows := range []int{1, 32} {
+				layout := graph.RopeNorm
+				if neox {
+					layout = graph.RopeNeox
+				}
+				w := c.heads * c.hd
+				name := fmt.Sprintf("h%d_hd%d_rot%d_neox%v_%d", c.heads, c.hd, c.nrot, neox, rows)
+				t.Run(name, func(t *testing.T) {
+					var main []*ir.Kernel
+					if c.nrot < c.hd {
+						k, err := mainkernels.CopyAtRows(w, rows)
+						if err != nil {
+							t.Fatal(err)
+						}
+						main = append(main, k)
+					}
+					k, err := mainkernels.RoPERows(c.heads, c.hd, c.nrot, neox, rows)
+					if err != nil {
+						t.Fatal(err)
+					}
+					main = append(main, k)
+					op := devOp{Kind: dkRopeQ, A: graph.Attrs{HeadDim: c.hd, NRot: c.nrot, Layout: layout}}
+					sameAsMain(t, main, opKernels(t, prof, op, []int{w}, []int{w}, false, nn.LayerPlan{NEmbd: w}, rows))
+				})
+			}
+		}
+	}
+}
+
 // TestNormsAreMains holds the tier's lowering of the RMSNorm ops -- alone,
 // after an add, with the int8 operand -- to main's warp norms on a ptx
 // target with 32 lanes, at decode and at a chunk's rows.

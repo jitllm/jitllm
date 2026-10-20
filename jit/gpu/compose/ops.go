@@ -123,6 +123,43 @@ func (g *Row) Rotary(src, cs, hd, nrot int, neox, split bool) int {
 	return g.Select(g.Less(j, g.UConst(nrot)), turned, x)
 }
 
+// RotaryPairs is the rotary of a row of heads of hd, a group element a
+// rotated pair (the group's Width heads*nrot/2): the pair's two elements of
+// src -- NORM (2p, 2p+1) or NEOX (p, p+nrot/2) of head h -- turned by the
+// row's (cos, sin) at 2p of cs (nrot a row; split, XD-RoPE's two tables a
+// row, the second element turning by the second table's), both stored at
+// the row's offset off (word row of BufU32 off) plus the element's place in
+// out. The dimensions past nrot are not written.
+func (g *Row) RotaryPairs(src, cs, off, out, heads, hd, nrot int, neox, split bool) {
+	u, ub := g.UConst, g.UBin
+	pairs := nrot / 2
+	e, row := g.Column(), g.RowIdx()
+	p, h := ub(OpRem, e, u(pairs)), ub(OpDiv, e, u(pairs))
+	head := ub(OpMul, h, u(hd))
+	stride := 1
+	var base int
+	if neox {
+		base, stride = ub(OpAdd, head, p), pairs
+	} else {
+		base = ub(OpAdd, head, ub(OpMul, p, u(2)))
+	}
+	tabW := nrot
+	if split {
+		tabW = 2 * nrot
+	}
+	at := ub(OpAdd, ub(OpMul, p, u(2)), ub(OpMul, row, u(tabW)))
+	x := ub(OpAdd, base, ub(OpMul, row, u(heads*hd)))
+	c, s := g.LoadAt(cs, at), g.LoadAt(cs, ub(OpAdd, at, u(1)))
+	c2, s2 := c, s
+	if split {
+		c2, s2 = g.LoadAt(cs, ub(OpAdd, at, u(nrot))), g.LoadAt(cs, ub(OpAdd, at, u(nrot+1)))
+	}
+	x0, x1 := g.LoadAt(src, x), g.LoadAt(src, ub(OpAdd, x, u(stride)))
+	o := ub(OpAdd, g.Load(off), base)
+	g.StoreAt(out, g.Bin(OpSub, g.Bin(OpMul, x0, c), g.Bin(OpMul, x1, s)), o)
+	g.StoreAt(out, g.Bin(OpAdd, g.Bin(OpMul, x0, s2), g.Bin(OpMul, x1, c2)), ub(OpAdd, o, u(stride)))
+}
+
 // PagedPos is where the group's row lands in a paged history (the ABI of
 // kernels/paged.go): the page id and the offset in the page of the position
 // its descriptor names for the write, the descriptors at desc (PRowWords
