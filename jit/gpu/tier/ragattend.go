@@ -101,7 +101,7 @@ func (g *devTier) prefillTile(bs *blockScratch) (sg, tk int, ok bool) {
 // as a prefill here: staged, or on the collective tiles.
 func (g *devTier) prefillRuns(bs *blockScratch) bool {
 	_, _, tile := g.prefillTile(bs)
-	return tile || g.ragStaged(bs)
+	return tile || g.flash16Serves(bs) || g.ragStaged(bs)
 }
 
 // flashTileOf is the collective-tile flash prefill's blocking for a head
@@ -134,8 +134,11 @@ func (g *devTier) ragStage(bs *blockScratch, pk *pagedScratch) {
 	rr.sq, rr.kt, rr.qt = g.tiles.qtile, g.tiles.ktile, ragAccTile
 	wg := lcmInt(rr.sq, rr.qt)
 	sg, _, tile := g.prefillTile(bs)
-	if tile {
+	switch {
+	case tile:
 		wg = 8 * sg // a workgroup's query rows, one sequence's
+	case g.flash16Serves(bs):
+		wg, tile = g.flash16(bs, 0, false).QRows(), true
 	}
 	rows := pk.rows
 	rr.order = rr.order[:0]
@@ -243,7 +246,55 @@ func (g *devTier) prefillAt(bs *blockScratch, rows, c int, mapped bool, set int)
 	if sg, tk, ok := g.prefillTile(bs); ok {
 		return g.tilePrefill(bs, rows, mapped, set, sg, tk)
 	}
+	if g.flash16Serves(bs) {
+		return g.flash16Prefill(bs, rows, mapped, set)
+	}
 	return g.stagedPrefill(bs, rows, c, mapped, set)
+}
+
+// flash16 is the binary16 m16n8 flash prefill over rows rows of bs's
+// attention, on the k the device's instruction takes.
+func (g *devTier) flash16(bs *blockScratch, rows int, mapped bool) compose.Flash16 {
+	p := &bs.p
+	return compose.Flash16{Heads: p.NHead, KVHeads: p.NKVHead, Dim: p.HeadDim, Rows: rows, Page: g.kvPage(),
+		Scale: g.scoreScale(p), Softcap: p.AttnSoftcap, Map: mapped, K8: g.f16MMA() == 8}
+}
+
+// flash16Prefill is the binary16 m16n8 flash prefill's one launch.
+func (g *devTier) flash16Prefill(bs *blockScratch, rows int, mapped bool, set int) []genLaunch {
+	s := g.flash16(bs, rows, mapped)
+	if rows%s.QRows() != 0 {
+		return nil
+	}
+	u32 := compose.BufU32
+	rb := &rowBuild{r: compose.Row{Width: s.Threads(), Rows: s.Groups()}}
+	q, k, v := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufRow, gaKPool), rb.buf(compose.BufRow, gaVPool)
+	n, out := rb.buf(u32, gaCount), rb.buf(compose.BufOut, gaOut0)
+	tab, desc := rb.buf(u32, gaTab), rb.buf(u32, prefillDesc(mapped, set))
+	mp := -1
+	if mapped {
+		mp = rb.buf(u32, gaRagMap)
+	}
+	rb.r.PagedFlash16(s, q, k, v, n, out, tab, desc, mp)
+	ls := g.launches(rb)
+	for i := range ls {
+		ls[i].whole = true
+	}
+	return ls
+}
+
+// prefillDesc is the descriptor plane a prefill reads: the chunk's or the
+// run table's, the windowed one for set 1.
+func prefillDesc(mapped bool, set int) genArg {
+	switch {
+	case !mapped && set == 1:
+		return gaPreDescW
+	case !mapped:
+		return gaPreDesc
+	case set == 1:
+		return gaPRowW
+	}
+	return gaPRow
 }
 
 // tilePrefill is the collective-tile flash prefill's one launch: a
@@ -251,15 +302,7 @@ func (g *devTier) prefillAt(bs *blockScratch, rows, c int, mapped bool, set int)
 // row's descriptor attends nothing).
 func (g *devTier) tilePrefill(bs *blockScratch, rows int, mapped bool, set, sg, tk int) []genLaunch {
 	p := &bs.p
-	prow := gaPRow
-	switch {
-	case !mapped && set == 1:
-		prow = gaPreDescW
-	case !mapped:
-		prow = gaPreDesc
-	case set == 1:
-		prow = gaPRowW
-	}
+	prow := prefillDesc(mapped, set)
 	s := compose.FlashTile{Heads: p.NHead, KVHeads: p.NKVHead, Dim: p.HeadDim, Rows: rows, Page: g.kvPage(),
 		Scale: g.scoreScale(p), Softcap: p.AttnSoftcap, Map: mapped, SG: sg, TK: tk}
 	if rows%s.QRows() != 0 {
@@ -449,6 +492,7 @@ func (g *devTier) preStage(bs *blockScratch, pk *pagedScratch, nrow int) {
 		return
 	}
 	_, _, tile := g.prefillTile(bs)
+	tile = tile || g.flash16Serves(bs)
 	W := kernels.PRowWords
 	for i, src := range [2][]uint32{pk.desc, pk.descW} {
 		pp.desc[i] = append(pp.desc[i][:0], src...)
