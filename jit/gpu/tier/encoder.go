@@ -371,6 +371,11 @@ func (g *devTier) layersSession(s backend.Session) {
 			g.runHead(lc, bs.headProg, decodeHeadBufs(bs))
 		case rag != nil && !allRows && ragHead == 1 && bs.ragHeadProg != nil:
 			g.runHead(lc, bs.ragHeadProg, rowsHeadBufs(bs, g.bs))
+		case fold && hb.spanProg != nil && hb.headProg != nil:
+			hbufs := decodeHeadBufs(hb)
+			hbufs.src, hbufs.off = bs.x, hb.spanOff
+			g.runHead(lc, hb.spanProg, hbufs)
+			g.runHead(lc, hb.headProg, hbufs)
 		default:
 			err = fmt.Errorf("tier: the head has no composed form for this step")
 		}

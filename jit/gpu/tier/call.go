@@ -184,7 +184,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 		// and the split, projecting the last row alone, cannot.
 		noFold := dbs != nil && dbs.head != nil && dbs.head.ok && bbs != nil &&
 			!(head != nil && head.RowLogits) &&
-			(kernels.IsFloat(dbs.head.t) || dbs.p.NEmbd != bbs.p.NEmbd)
+			(kernels.IsFloat(dbs.head.t) || dbs.p.NEmbd != bbs.p.NEmbd || !g.ensureSpan(dbs))
 		g.mu.Unlock()
 		if head != nil && head.RowLogits && (!ok || bbs == nil) {
 			if g.LastErr == "" {

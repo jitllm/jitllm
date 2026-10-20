@@ -116,15 +116,17 @@ type blockScratch struct {
 	// spanK and spanOff move a batched chunk's last residual row into this
 	// (decode) scratch's x, so the output projection can ride the chunk's own
 	// submission (layersOnce's folded head). Made on first use.
-	spanK         backend.Kernel
-	spanOff       backend.Buf
-	hNormB        backend.Buf // a LayerNorm head's bias (C6)
-	head          *resident
-	mvHead        mv
+	spanK   backend.Kernel
+	spanOff backend.Buf
+	hNormB  backend.Buf // a LayerNorm head's bias (C6)
+	head    *resident
+	mvHead  mv
 	// headProg is the decode head's composed launches (PrepHead).
 	headProg []headLaunch
 	// ragHeadProg is the per-row head's, for one wanted row (ensureRowsHead).
 	ragHeadProg []headLaunch
+	// spanProg is the folded head's row copy into this scratch (ensureSpan).
+	spanProg      []headLaunch
 	hRaw          []byte
 	hOut          []float32
 	att, prob, xb backend.Buf

@@ -28,6 +28,8 @@ const (
 	haLogits                // the logits
 	haCapped                // the softcapped logits
 	haTok                   // each row's greatest logit's index
+	haSrc                   // a folded chunk's residual rows
+	haOff                   // the word naming the folded row's place in them
 )
 
 // headLaunch is one launch of the decode head: a composed kernel and its
@@ -215,8 +217,8 @@ func (g *devTier) headProgram(p *nn.LayerPlan, r *resident, h *nn.Head, split in
 
 // headBufs is what a head program's roles name on one launch.
 type headBufs struct {
-	x, part, norm, h, a, ax, logits, capped, tok backend.Buf
-	r                                          *resident
+	x, part, norm, h, a, ax, logits, capped, tok, src, off backend.Buf
+	r                                                      *resident
 }
 
 // runHead launches prog over bufs, the first groups of each launch where
@@ -257,6 +259,10 @@ func (g *devTier) runHead(lc *launcher, prog []headLaunch, hb headBufs) {
 				bufs[j] = hb.capped
 			case haTok:
 				bufs[j] = hb.tok
+			case haSrc:
+				bufs[j] = hb.src
+			case haOff:
+				bufs[j] = hb.off
 			}
 		}
 		if err := lc.launch(l.k, l.groups, l.width, bufs[:l.n]...); err != nil {
@@ -358,5 +364,33 @@ func (g *devTier) ensureRowsHead(bs *blockScratch, h *nn.Head) bool {
 	// The argmax runs over the wanted rows: one group each, the first.
 	prog[len(prog)-1].groups = 1
 	bs.ragHeadProg = prog
+	return true
+}
+
+// ensureSpan composes the decode scratch hb's row copy a folded chunk's head
+// reads: the chunk's last residual row, at the offset its word holds, into
+// hb's row. Callers hold g.mu.
+func (g *devTier) ensureSpan(hb *blockScratch) bool {
+	if hb.spanProg != nil {
+		return true
+	}
+	if hb.spanOff == nil {
+		w := g.scratchWin() // the scratch's own word (scratch.go)
+		b, err := g.dev.Alloc(4)
+		w.close()
+		if err != nil {
+			return false
+		}
+		hb.spanOff = b
+	}
+	sb := &headBuild{r: compose.Row{Width: hb.p.NEmbd, Rows: 1}}
+	src, dst, off := sb.buf(compose.BufRow, haSrc), sb.buf(compose.BufOut, haX), sb.buf(compose.BufU32, haOff)
+	sb.r.Store(dst, sb.r.LoadAt(src, sb.r.UBin(compose.OpAdd, sb.r.LoadAt(off, sb.r.UConst(0)), sb.r.Column())))
+	ls, err := g.headKern(sb, compose.Facts{Target: g.composeTarget()})
+	if err != nil {
+		g.LastErr = fmt.Sprintf("the folded head's row copy: %v", err)
+		return false
+	}
+	hb.spanProg = ls
 	return true
 }

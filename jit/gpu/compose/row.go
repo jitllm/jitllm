@@ -176,8 +176,8 @@ const (
 	OpWord
 	// OpInt is float A truncated toward zero to a signed integer.
 	OpInt
-	// OpAsWord is signed integer A's bits as a word: no instruction, the
-	// value read as unsigned by what uses it.
+	// OpAsWord is signed integer A's bits as a word: a reinterpretation, which
+	// a typed target (SPIR-V) states as a bitcast.
 	OpAsWord
 	// OpDivExact is A/B correctly rounded, whatever the target's division
 	// allows (expandDivs writes it in integer arithmetic).
@@ -1441,7 +1441,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			case OpWord:
 				v = b.Bitcast(ir.U32, a)
 			case OpAsWord:
-				v = a
+				v = b.Bitcast(ir.U32, a)
 			case OpInt:
 				v = b.CvtI32(a)
 			case OpRsqrt:

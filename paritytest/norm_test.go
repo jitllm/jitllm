@@ -66,3 +66,26 @@ func TestArgmaxIsMains(t *testing.T) {
 		})
 	}
 }
+
+// TestRopeTableIsMains holds the composer's rotary table to main's
+// RopeTable, at one row and over a chunk's.
+func TestRopeTableIsMains(t *testing.T) {
+	for _, c := range []struct{ pairs, rows int }{{32, 1}, {64, 1}, {32, 32}, {16, 8}} {
+		name := fmt.Sprintf("p%d_r%d", c.pairs, c.rows)
+		t.Run(name, func(t *testing.T) {
+			mk, err := mainkernels.RopeTable(c.pairs, c.rows)
+			if err != nil {
+				t.Fatal(err)
+			}
+			g := &compose.Row{Width: c.pairs, Rows: c.rows}
+			out, planes := g.Buf(compose.BufOut), g.Buf(compose.BufRow)
+			consts, pos := g.Buf(compose.BufU32), g.Buf(compose.BufU32)
+			g.RopeTable(out, planes, consts, pos)
+			ps, err := g.Plan(compose.Facts{Target: sm70})
+			if err != nil {
+				t.Fatal(err)
+			}
+			same(t, name, []*ir.Kernel{mk}, emitAt(t, g, ps[0].S))
+		})
+	}
+}
