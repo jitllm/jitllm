@@ -220,24 +220,31 @@ func (g *Row) contraction() bool {
 	if len(g.Stores) != 1 || len(g.Loops) == 0 || g.Q8 != nil {
 		return false
 	}
-	vary, rowDep := g.varies(0), g.rowDeps()
-	weight, operand := false, false
-	for i, nd := range g.Nodes {
-		if nd.Kind != NLoad || !nd.Indexed || !vary[i] {
-			continue
-		}
-		if rowDep[i] {
-			operand = true
-		} else {
-			weight = true
-		}
-	}
 	for _, nd := range g.Nodes {
 		if nd.Kind == NReduce {
 			return false
 		}
 	}
-	return weight && operand
+	// A weight is what reads no row -- or the row only as its choice of
+	// sheet -- and an operand what reads the row.
+	vary := g.varies(0)
+	for _, rowDep := range [][]bool{g.rowDeps(), g.selectedRowDeps()} {
+		weight, operand := false, false
+		for i, nd := range g.Nodes {
+			if nd.Kind != NLoad || !nd.Indexed || !vary[i] {
+				continue
+			}
+			if rowDep[i] {
+				operand = true
+			} else {
+				weight = true
+			}
+		}
+		if weight && operand {
+			return true
+		}
+	}
+	return false
 }
 
 // contractSchedule is a contraction's schedule, Width outputs by Rows
@@ -276,6 +283,12 @@ func (g *Row) contractSchedule(f Facts) Schedule {
 			rowt = 1
 		}
 		s.TileCols, s.Split = rowt, split
+		return s
+	}
+	if d := g.rowGroup(); d > 1 && g.Rows%d == 0 {
+		// A weight selected per aligned group of rows: the group a thread,
+		// the selection read once, an element a thread and no split.
+		s.Tile, s.TileCols, s.Split = d, 1, 1
 		return s
 	}
 	if !f.NoMMA && g.mmaShaped(f.Target) {
@@ -387,7 +400,7 @@ func (g *Row) product() bool {
 	if len(g.Stores) != 1 || len(g.Loops) != 0 || g.reduces() || g.Q8 != nil || len(g.Stages) != 0 {
 		return false
 	}
-	row, col := g.rowDepsPast(g.spanStride()), g.colDeps()
+	row, col := g.rowDepsPast(g.spanStride(), 0), g.colDeps()
 	operand, weight := false, false
 	for i, nd := range g.Nodes {
 		if nd.Kind != NLoad || !nd.Indexed || g.typeOf(i) == ir.U32 {
@@ -456,27 +469,33 @@ func (g *Row) spanStride() int {
 	return d
 }
 
-// rowDepsPast is rowDeps with the spans' nodes and the row's remainder by
-// stride read as uniform over rows stride apart.
-func (g *Row) rowDepsPast(stride int) []bool {
-	uniform := make([]bool, len(g.Nodes))
-	for i, nd := range g.Nodes {
-		uniform[i] = nd.Kind == NHint
-		if nd.Kind == NUBinary && nd.Op == OpRem && g.Nodes[nd.A].Kind == NRowIdx && g.Nodes[nd.B].Kind == NUConst && g.Nodes[nd.B].At == stride {
-			uniform[i] = true
-		}
-	}
+// rowDepsPast is rowDeps with the hints' nodes, the row's remainder by
+// stride and its quotient by group read as uniform: over rows stride apart,
+// and over each aligned group of rows.
+func (g *Row) rowDepsPast(stride, group int) []bool {
+	return g.rowDepsWith(func(i int) bool {
+		nd := g.Nodes[i]
+		return nd.Kind == NHint || nd.Kind == NUBinary && g.Nodes[nd.A].Kind == NRowIdx && g.Nodes[nd.B].Kind == NUConst &&
+			(nd.Op == OpRem && g.Nodes[nd.B].At == stride || nd.Op == OpDiv && group > 1 && g.Nodes[nd.B].At == group)
+	})
+}
+
+// rowDepsWith is rowDeps where a node uniform names reads as no row's.
+func (g *Row) rowDepsWith(uniform func(int) bool) []bool {
 	v := make([]bool, len(g.Nodes))
 	for changed := true; changed; {
 		changed = false
 		for i, nd := range g.Nodes {
-			if v[i] || uniform[i] {
+			if v[i] || uniform(i) {
 				continue
 			}
 			x := nd.Kind == NRowIdx || nd.Kind == NRowOff
 			if nd.Kind == NLoad && !nd.Indexed {
 				k := g.Bufs[nd.Buf].Kind
 				x = k == BufRow || k == BufRowF16 || k == BufRowScalar || k == BufU32
+			}
+			if nd.Kind == NFold {
+				x = x || v[nd.B] || nd.A >= 0 && v[nd.A]
 			}
 			for _, o := range g.operands(i) {
 				x = x || v[o]
@@ -516,4 +535,36 @@ func (g *Row) gathersByColumn() bool {
 		}
 	}
 	return false
+}
+
+// rowGroup is d where a load's place reads the row as the row over d (a
+// selection per aligned group of rows), else 1.
+func (g *Row) rowGroup() int {
+	for _, nd := range g.Nodes {
+		if nd.Kind != NLoad || !nd.Indexed {
+			continue
+		}
+		if x := g.Nodes[nd.Ix]; x.Kind == NUBinary && x.Op == OpDiv && g.Nodes[x.A].Kind == NRowIdx && g.Nodes[x.B].Kind == NUConst && g.Nodes[x.B].At > 1 {
+			return g.Nodes[x.B].At
+		}
+	}
+	return 1
+}
+
+// selectedRowDeps is rowDeps with a selection read by the row -- a word
+// loaded at the row, or at the row over its group -- read as the row's
+// choice of sheet, not as the row's own value.
+func (g *Row) selectedRowDeps() []bool {
+	d := g.rowGroup()
+	return g.rowDepsWith(func(i int) bool {
+		nd := g.Nodes[i]
+		if nd.Kind == NUBinary && nd.Op == OpDiv && d > 1 && g.Nodes[nd.A].Kind == NRowIdx && g.Nodes[nd.B].Kind == NUConst && g.Nodes[nd.B].At == d {
+			return true
+		}
+		if nd.Kind != NLoad || !nd.Indexed || g.typeOf(i) != ir.U32 {
+			return false
+		}
+		x := g.Nodes[nd.Ix]
+		return x.Kind == NRowIdx || x.Kind == NUBinary && x.Op == OpDiv && g.Nodes[x.A].Kind == NRowIdx && g.Nodes[x.B].Kind == NUConst && g.Nodes[x.B].At == d
+	})
 }

@@ -110,7 +110,7 @@ func (g *devTier) genMoERows(o *devOp, prog *devProgram, bs *blockScratch, rows 
 			return nil, true
 		}
 		rb.store(v, gaOut0)
-		ps, err := rb.r.PlanAt(compose.Schedule{Group: 128, Flat: true, Tile: groupTok, Target: g.composeTarget()})
+		ps, err := rb.r.Plan(compose.Facts{Target: g.composeTarget(), Step: compose.StepChunk})
 		if err != nil || len(ps) != 1 {
 			return nil, true
 		}

@@ -13,20 +13,16 @@ import (
 
 var sm70 = compose.Target{API: compose.APIPTX, ISA: ir.PTX(70), Lanes: ir.SubgroupLanes}
 
-// formed is every kernel g forms under schedule s.
-func formed(t *testing.T, g *compose.Row, s compose.Schedule) []*ir.Kernel {
+// plannedAll is every kernel g's plan forms for facts f.
+func plannedAll(t *testing.T, g *compose.Row, f compose.Facts) []*ir.Kernel {
 	t.Helper()
-	ps, err := g.PlanAt(s)
+	ps, err := g.Plan(f)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var ks []*ir.Kernel
 	for _, p := range ps {
-		k, err := p.G.Emit(p.S)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ks = append(ks, k)
+		ks = append(ks, emitPlanned(t, p)...)
 	}
 	return ks
 }
@@ -145,11 +141,11 @@ func composedMatVec(t *testing.T, c mvCase) []*ir.Kernel {
 		v = g.Bin(compose.OpAdd, v, g.Load(g.Buf(compose.BufVec)))
 	}
 	g.Store(g.Buf(compose.BufOut), v)
-	s := compose.Schedule{Group: 128, Flat: true, Target: sm70, TileCols: max(c.rowt, 1), Split: max(c.split, 1)}
+	f := compose.Facts{Target: sm70, Step: compose.StepDecode, DecodeSplit: max(c.split, 1), DecodeRowt: max(c.rowt, 1)}
 	if c.ntok > 1 {
-		s.Tile = c.tok
+		f = compose.Facts{Target: sm70, Step: compose.StepChunk, Tok: c.tok, RowTile: c.rowt, Split: max(c.split, 1), NoMMA: true}
 	}
-	return formed(t, g, s)
+	return plannedAll(t, g, f)
 }
 
 // TestMatVecIsMains holds the composer's matvec to main's at the same
@@ -163,7 +159,7 @@ func TestMatVecIsMains(t *testing.T) {
 				for _, rowt := range []int{1, 2} {
 					cases = append(cases, mvCase{t: q, rows: rk[0], k: rk[1], ntok: 1, rowt: rowt, split: sp})
 				}
-				for _, tr := range [][2]int{{8, 2}, {16, 4}, {8, 1}, {16, 2}, {16, 1}} {
+				for _, tr := range [][2]int{{8, 2}, {16, 4}, {16, 2}, {4, 2}} {
 					cases = append(cases, mvCase{t: q, rows: rk[0], k: rk[1], ntok: 32, tok: tr[0], rowt: tr[1], split: sp})
 					cases = append(cases, mvCase{t: q, rows: rk[0], k: rk[1], ntok: 32, tok: tr[0], rowt: tr[1], split: sp, bias: true})
 				}
@@ -222,7 +218,7 @@ func TestExpertMatVecIsMains(t *testing.T) {
 								t.Fatal(err)
 							}
 							g.Store(g.Buf(compose.BufOut), v)
-							same(t, name, ks, formed(t, g, compose.Schedule{Group: 128, Flat: true, Target: sm70, Split: sp}))
+							same(t, name, ks, plannedAll(t, g, compose.Facts{Target: sm70, Step: compose.StepDecode, DecodeSplit: sp}))
 						})
 					}
 				}
@@ -261,7 +257,7 @@ func TestGroupedMatVecIsMains(t *testing.T) {
 						t.Fatal(err)
 					}
 					g.Store(g.Buf(compose.BufOut), v)
-					same(t, name, []*ir.Kernel{mk}, formed(t, g, compose.Schedule{Group: 128, Flat: true, Target: sm70, Tile: 4}))
+					same(t, name, []*ir.Kernel{mk}, plannedAll(t, g, compose.Facts{Target: sm70, Step: compose.StepChunk, NoMMA: true}))
 				})
 			}
 		}

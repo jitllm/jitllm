@@ -133,8 +133,12 @@ func timeOne(d backend.Device, qs, dw, a []uint32, ax []float32, rows, k int, ma
 		return 0
 	}
 	g.Store(bo, v)
-	ker, err := g.Emit(compose.Schedule{Group: 128, Flat: true,
-		Target: compose.Target{API: compose.APIOf(d.API()), ISA: backend.ArchOf(d)}})
+	ps, err := g.Plan(compose.Facts{Target: compose.Target{API: compose.APIOf(d.API()), ISA: backend.ArchOf(d)},
+		Step: compose.StepDecode, DecodeSplit: 1})
+	if err != nil || len(ps) != 1 {
+		return 0
+	}
+	ker, err := ps[0].G.Emit(ps[0].S)
 	if err != nil {
 		return 0
 	}
