@@ -313,3 +313,60 @@ func TestGroupMatVecIsMains(t *testing.T) {
 		}
 	}
 }
+
+// TestSegmentsIsMains holds the composer's q, k and v over one activation,
+// fused into one launch (EmitSegments), to main's segmented matvec: at
+// decode and over a ragged step's few rows, split in the workgroup or not.
+func TestSegmentsIsMains(t *testing.T) {
+	rows := []int{128, 64, 64}
+	for _, q := range []format{{kernels.Q8_0, mainkernels.Q8_0}, {kernels.TQ2, mainkernels.TQ2}} {
+		for _, sp := range []int{1, 2, 4} {
+			for _, ntok := range []int{1, 3} {
+				name := fmt.Sprintf("%v_s%d_t%d", q.c, sp, ntok)
+				t.Run(name, func(t *testing.T) {
+					var ms []mainkernels.MatVecShape
+					for _, r := range rows {
+						s := mainkernels.MatVecShape{T: q.m, K: 256, Rows: r}
+						if ntok > 1 {
+							s.NTok, s.Tok, s.ActRows = ntok, ntok, 8
+						}
+						ms = append(ms, s)
+					}
+					mk, err := mainkernels.MatVecSegments(ms, sp, sp > 1)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var segs []compose.Segment
+					for _, r := range rows {
+						g := &compose.Row{Width: r, Rows: ntok}
+						w := compose.MatVecWeight{T: q.c, K: 256, Rows: r, QS: g.Buf(compose.BufU32), D: g.Buf(compose.BufU32), SC: -1}
+						a := compose.MatVecOperand{Toks: max(ntok, 1), A: g.Buf(compose.BufU32), AX: g.Buf(compose.BufRow)}
+						if ntok > 1 {
+							a.Toks = 8
+						}
+						v, err := g.MatVec(w, a)
+						if err != nil {
+							t.Fatal(err)
+						}
+						g.Store(g.Buf(compose.BufOut), v)
+						f := compose.Facts{Target: sm70, Step: compose.StepDecode, DecodeSplit: sp, DecodeGroup: true}
+						if ntok > 1 {
+							f.Step, f.RagGroup = compose.StepRagged, true
+						}
+						ps, err := g.Plan(f)
+						if err != nil || len(ps) != 1 {
+							t.Fatalf("%d plans: %v", len(ps), err)
+						}
+						share := []int{-1, -1, 0, 1, -1}
+						segs = append(segs, compose.Segment{G: ps[0].G, S: ps[0].S, Blocks: (ps[0].Threads + ps[0].S.Group - 1) / ps[0].S.Group, Share: share})
+					}
+					k, err := compose.EmitSegments(segs, 2)
+					if err != nil {
+						t.Fatal(err)
+					}
+					same(t, name, []*ir.Kernel{mk}, []*ir.Kernel{k})
+				})
+			}
+		}
+	}
+}

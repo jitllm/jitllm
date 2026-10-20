@@ -110,7 +110,12 @@ const (
 	gaOwn5
 	gaOwn6
 	gaOwn7
+	gaSeg0 // a segmented launch's weights: gaSeg0 + 4*segment + its payload, scales, sub-scales or bias
+	gaSegEnd = gaSeg0 + 4*maxSegs
 )
+
+// maxSegs is the most matvecs one segmented launch carries.
+const maxSegs = 3
 
 // genLaunch is one generated launch: threads for a flat launch, or groups of
 // width where width is set.
@@ -118,7 +123,7 @@ type genLaunch struct {
 	k             backend.Kernel
 	threads       int
 	groups, width int
-	args          [12]genArg
+	args          [20]genArg
 	n             uint8
 	// q8 is which output holds the op's int8 value (gaQ8A and gaQ8X).
 	q8 uint8
@@ -370,7 +375,14 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		}
 		o.Why = whyNoForm
 		return nil
-	case dkExpertMatVecE, dkQKV, dkQKVGemm,
+	case dkQKV:
+		ls := g.genSegments(o, prog, rows)
+		o.Why = whyNoForm
+		if ls != nil {
+			o.Why = whyNone
+		}
+		return ls
+	case dkExpertMatVecE, dkQKVGemm,
 		dkResIn, dkQKVSep,
 		dkGroupMask, dkExpertBias, dkExpertFetch:
 		// No form in the composer's primitives yet: the op fails to
@@ -840,6 +852,7 @@ const (
 	encEpi
 	encTemplate
 	encMatVec
+	encSegments
 )
 
 // runGen runs op o's generated launches for R rows, its buffers resolved by
@@ -859,6 +872,9 @@ type genState struct {
 	// its matvec reads.
 	qs, d, sc, mbias backend.Buf
 	a, ax            backend.Buf
+	// segs is a segmented launch's weights, each payload, scales,
+	// sub-scales and bias.
+	segs [maxSegs][4]backend.Buf
 	// perm is the step's head-major order for a gather (headPerm).
 	perm backend.Buf
 	// split is the partial plane a k split's segments write (partBuf).
@@ -894,7 +910,7 @@ type genState struct {
 func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st *genState) {
 	bs := st.bs
 	at := func(v devVal) backend.Buf { return buf[st.slots[v]] }
-	var bufs [12]backend.Buf
+	var bufs [20]backend.Buf
 	for i := range o.Gen {
 		l := &o.Gen[i]
 		for j := 0; j < int(l.n); j++ {
@@ -1015,6 +1031,9 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.bs.headTiles
 			case gaOwn0, gaOwn1, gaOwn2, gaOwn3, gaOwn4, gaOwn5, gaOwn6, gaOwn7:
 				bufs[j] = o.Own[a-gaOwn0]
+			case gaSeg0, gaSeg0 + 1, gaSeg0 + 2, gaSeg0 + 3, gaSeg0 + 4, gaSeg0 + 5, gaSeg0 + 6, gaSeg0 + 7,
+				gaSeg0 + 8, gaSeg0 + 9, gaSeg0 + 10, gaSeg0 + 11:
+				bufs[j] = st.segs[(a-gaSeg0)/4][(a-gaSeg0)%4]
 			case gaMgBC, gaMgOff, gaMgCnt, gaMgEnds, gaMgColE, gaMgPerm, gaMgPos, gaMgTsel, gaMgHG, gaMgGA, gaMgGAX:
 				m := bs.mg
 				bufs[j] = [...]backend.Buf{m.bc, m.off, m.cnt, m.ends, m.colE, m.perm, m.pos, m.tsel, m.hg, m.ga, m.gax}[a-gaMgBC]
@@ -1360,12 +1379,6 @@ func (g *devTier) genMatVecNodes(o *devOp, prog *devProgram, bs *blockScratch, r
 		o.Why = whyNoForm
 		return nil
 	}
-	if rows == 1 && m.group {
-		// The in-group split (segments reduced in the workgroup) has no
-		// schedule in the former yet.
-		o.Why = whyNoForm
-		return nil
-	}
 	// A prompt chunk's projection on the binary16 matrix instruction where
 	// the device lowers it, as main's batched matvec chooses.
 	if rows > 1 && !bank && !g.genRag && o.Kind == dkMatVec && !g.PreferTiles && !g.PreferGemmInt8 {
@@ -1450,7 +1463,7 @@ func (g *devTier) genMatVecNodes(o *devOp, prog *devProgram, bs *blockScratch, r
 	f := compose.Facts{Target: g.composeTarget(), Step: compose.StepChunk, Tok: bs.tok, RowTile: pinned(g.tiles.rowt),
 		Split: g.kb.batch.Split, DecodeSplit: max(m.split, 1), DecodeRowt: max(m.rowt, 1),
 		RagTok: g.kb.batch.RagTok, RagRowT: g.kb.batch.RagRowT, RagSplit: g.kb.batch.RagSplit,
-		MMAMT: g.tiles.mmaMT, MMANT: g.tiles.mmaNT, NoMMA: g.NoMMA}
+		MMAMT: g.tiles.mmaMT, MMANT: g.tiles.mmaNT, NoMMA: g.NoMMA, DecodeGroup: m.group}
 	switch {
 	case g.genRag:
 		f.Step, f.RagGroup = compose.StepRagged, few

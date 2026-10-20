@@ -1061,6 +1061,17 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 
 // form is the group's kernel under schedule s as the former emits it.
 func (g *Row) form(s Schedule) (*ir.Kernel, error) {
+	g, err := g.prepared(s)
+	if err != nil {
+		return nil, err
+	}
+	b := ir.New("row", [3]int{s.Group, 1, 1})
+	return g.emitIn(b, g.bind(b, nil), s, b.CTAID, true)
+}
+
+// prepared is g as the former emits it under s: its activations expanded
+// to primitives and the schedule's rewrites taken.
+func (g *Row) prepared(s Schedule) (*Row, error) {
 	if err := g.Check(); err != nil {
 		return nil, err
 	}
@@ -1081,13 +1092,21 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 	if G < 32 || G&(G-1) != 0 && !(s.WorkRow && G%32 == 0) {
 		return nil, fmt.Errorf("compose: a group of %d threads", G)
 	}
-	b := ir.New("row", [3]int{G, 1, 1})
+	return g, nil
+}
+
+// bind is each of g's buffers as a value of b: a parameter, or a workgroup
+// array, those of have taken from it where it names one.
+func (g *Row) bind(b *ir.Builder, have func(i int) (ir.Value, bool)) []ir.Value {
 	params := make([]ir.Value, len(g.Bufs))
 	for i, bf := range g.Bufs {
-		t := ir.F32
-		if bf.Kind == BufQ8 || bf.Kind == BufU32 || bf.Kind == BufOutU32 || bf.Kind == BufRowF16 || bf.Kind == BufSharedU32 {
-			t = ir.U32
+		if have != nil {
+			if v, ok := have(i); ok {
+				params[i] = v
+				continue
+			}
 		}
+		t := bufType(bf.Kind)
 		if g.shared(i) {
 			params[i] = b.Shared(fmt.Sprintf("s%d", i), t, bf.N)
 			if bf.Of > 0 {
@@ -1097,6 +1116,20 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		}
 		params[i] = b.Param(fmt.Sprintf("p%d", i), t)
 	}
+	return params
+}
+
+func bufType(k BufKind) ir.Type {
+	if k == BufQ8 || k == BufU32 || k == BufOutU32 || k == BufRowF16 || k == BufSharedU32 {
+		return ir.U32
+	}
+	return ir.F32
+}
+
+// emitIn forms prepared group g under s into b, its buffers params and cta
+// the workgroup's place among the group's; done ends the kernel.
+func (g *Row) emitIn(b *ir.Builder, params []ir.Value, s Schedule, cta func() ir.Value, done bool) (*ir.Kernel, error) {
+	G := s.Group
 	depth, _ := g.depth()
 	// The row and, under the flat schedule, the element: a workgroup a row
 	// with the element looping over the group, or a thread an element of
@@ -1148,7 +1181,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		if split > 1 && (len(g.Loops) == 0 || g.Loops[0]%split != 0) {
 			return nil, fmt.Errorf("compose: a split of %d over a loop of %v trips", split, g.Loops)
 		}
-		flat := b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
+		flat := b.Add(ir.U32, b.Mul(ir.U32, cta(), b.NTID()), b.TID())
 		if s.MMA {
 			// A warp a tile, the element's tiles fastest; a lane's place in
 			// it (g, t), the surplus warps clamped to the last tile.
@@ -1173,7 +1206,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				return nil, fmt.Errorf("compose: a row of %d a workgroup of %d", g.Width, G)
 			}
 			u := func(n int) ir.Value { return b.Const(ir.U32, int64(n)) }
-			flatIdx, r = b.TID(), b.CTAID()
+			flatIdx, r = b.TID(), cta()
 			flatRaw = flat
 			width = u(g.Width)
 			rowBase = b.Mul(ir.U32, r, width)
@@ -1186,13 +1219,13 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			switch {
 			case L == G:
 				// A workgroup a row.
-				flatIdx, r = b.And(ir.U32, b.TID(), u(L-1)), b.Min(ir.U32, b.CTAID(), u(g.Rows-1))
+				flatIdx, r = b.And(ir.U32, b.TID(), u(L-1)), b.Min(ir.U32, cta(), u(g.Rows-1))
 			case L == 1:
 				flatIdx, r = u(0), b.Min(ir.U32, flat, u(g.Rows-1))
 			case s.GroupRows:
 				// G/L rows a workgroup, a row's lanes consecutive threads.
 				flatIdx = b.Rem(ir.U32, b.TID(), u(L))
-				r = b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), u(G/L)), b.Div(ir.U32, b.TID(), u(L))), u(g.Rows-1))
+				r = b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, cta(), u(G/L)), b.Div(ir.U32, b.TID(), u(L))), u(g.Rows-1))
 			default:
 				flatIdx, r = b.And(ir.U32, flat, u(L-1)), b.Min(ir.U32, b.Div(ir.U32, flat, u(L)), u(g.Rows-1))
 			}
@@ -1209,7 +1242,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			local := b.Rem(ir.U32, tid, u(rpg))
 			seg = b.Div(ir.U32, tid, u(rpg))
 			segTrip = g.Loops[0] / split
-			flatIdx = b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), u(rpg)), local), u(g.Width-1))
+			flatIdx = b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, cta(), u(rpg)), local), u(g.Width-1))
 			r = u(0)
 			flatRaw, rawRow, rawCol = flatIdx, r, flatIdx
 			width = u(g.Width)
@@ -1260,7 +1293,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				shi = b.Shared("redi", ir.U32, G)
 			}
 		}
-		r = b.Min(ir.U32, b.CTAID(), b.Const(ir.U32, int64(g.Rows-1)))
+		r = b.Min(ir.U32, cta(), b.Const(ir.U32, int64(g.Rows-1)))
 		rowBase = b.Mul(ir.U32, r, b.Const(ir.U32, int64(g.Width)))
 		tid = b.TID()
 		width = b.Const(ir.U32, int64(g.Width))
@@ -1781,7 +1814,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			b.Barrier()
 			local := e.slotOf()
 			if local == 0 {
-				local = b.Sub(ir.U32, flatRaw, b.Mul(ir.U32, b.CTAID(), b.NTID()))
+				local = b.Sub(ir.U32, flatRaw, b.Mul(ir.U32, cta(), b.NTID()))
 			}
 			span := b.Const(ir.U32, int64(nd.At))
 			wbase := b.Mul(ir.U32, b.Div(ir.U32, local, span), span)
@@ -1863,7 +1896,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		case NSubgroup:
 			v = b.SubgroupIndex()
 		case NThread:
-			v = b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
+			v = b.Add(ir.U32, b.Mul(ir.U32, cta(), b.NTID()), b.TID())
 		case NLocal:
 			v = b.TID()
 		case NMMA:
@@ -2156,7 +2189,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		if emitErr != nil {
 			return nil, emitErr
 		}
-		return b.Done(), nil
+		return finish(b, done)
 	}
 	// iterDep is which nodes read a fold loop's iterator or carried value:
 	// those stay in their loop.
@@ -2373,6 +2406,13 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 	}
 	if emitErr != nil {
 		return nil, emitErr
+	}
+	return finish(b, done)
+}
+
+func finish(b *ir.Builder, done bool) (*ir.Kernel, error) {
+	if !done {
+		return nil, nil
 	}
 	return b.Done(), nil
 }

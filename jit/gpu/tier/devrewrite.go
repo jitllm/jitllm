@@ -1,6 +1,7 @@
 package tier
 
 import (
+	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"slices"
 	"strings"
 
@@ -303,6 +304,7 @@ func newDevRewrites() []devRewrite {
 		{"add-norm-quant", rwAddNormQuant},
 		{"add-norm", rwAddNorm},
 		{"norm-quant", rwNormQuant},
+		{"segments", rwSegments},
 		{"route", rwRoute},
 		{"gated-add", rwGatedAdd},
 	}
@@ -843,4 +845,76 @@ func (p *devProgram) headMajor() {
 		p.ops = append(p.ops[:k], append([]devOp{g}, p.ops[k:]...)...)
 		j++
 	}
+}
+
+// rwSegments: the quantized matvecs reading one int8 operand at decode or
+// over a ragged step's few rows, as one segmented launch at the first's k
+// split, reduced in the workgroup where it splits: at decode only where
+// decode reduces it there. A gate and an up that one activation product
+// reads stay apart, for the product's own forms.
+func rwSegments(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
+	if R != 1 && !ragFew(nseq) || g.NoFuse {
+		return false
+	}
+	seg := func(o devOp) bool {
+		if o.Kind != dkMatVec || len(o.In) != 1 || o.W < 0 || o.W >= len(l.ms) || *l.rs[o.W] == nil {
+			return false
+		}
+		m := *l.ms[o.W]
+		return m.experts <= 1 && !m.pad && !kernels.IsFloat(m.q) && m.rowt <= 1
+	}
+	for i, o := range p.ops {
+		if !seg(o) {
+			continue
+		}
+		m0 := *l.ms[o.W]
+		split := max(m0.split, 1)
+		if split > 1 && !m0.group && nseq == 0 {
+			continue // decode's split reduced through planes
+		}
+		group := []int{i}
+		for j := i + 1; j < len(p.ops) && len(group) < maxSegs; j++ {
+			q := p.ops[j]
+			if !seg(q) || q.In[0] != o.In[0] || p.product(o.Out[0], q.Out[0]) {
+				continue
+			}
+			if m := *l.ms[q.W]; m.k != m0.k || split > 1 && !groupSplits(m.rows, split) {
+				continue
+			}
+			group = append(group, j)
+		}
+		if len(group) < 2 || split > 1 && !groupSplits(m0.rows, split) {
+			continue
+		}
+		f := devOp{Kind: dkQKV, In: []devVal{o.In[0]}, W: -1}
+		for _, j := range group {
+			f.Src = cat(f.Src, p.ops[j].Src)
+			f.Out = append(f.Out, p.ops[j].Out[0])
+			f.Ws = append(f.Ws, p.ops[j].W)
+		}
+		p.ops[i] = f
+		drop := map[int]bool{}
+		for _, j := range group[1:] {
+			drop[j] = true
+		}
+		ops := p.ops[:0]
+		for j, q := range p.ops {
+			if !drop[j] {
+				ops = append(ops, q)
+			}
+		}
+		p.ops = ops
+		return true
+	}
+	return false
+}
+
+// product reports whether one activation product reads both a and b.
+func (p *devProgram) product(a, b devVal) bool {
+	for _, o := range p.ops {
+		if (o.Kind == dkActMul || o.Kind == dkActQuant) && slices.Contains(o.In, a) && slices.Contains(o.In, b) {
+			return true
+		}
+	}
+	return false
 }

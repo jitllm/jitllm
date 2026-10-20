@@ -291,6 +291,11 @@ func (g *devTier) layersSession(s backend.Session) {
 						// through the scale slot).
 						fsrc = at(o.In[0])
 					}
+					for si, w := range o.Ws {
+						if r := *l.rs[w]; r != nil {
+							gst.segs[si] = [4]backend.Buf{r.qs, dOf(r), r.sc, (*l.ms[w]).bias}
+						}
+					}
 					if isMat && o.W >= 0 && o.W < len(l.rs) && *l.rs[o.W] != nil {
 						r := *l.rs[o.W]
 						gst.qs, gst.d, gst.sc, gst.mbias = r.qs, nil, r.sc, (*l.ms[o.W]).bias

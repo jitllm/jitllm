@@ -70,6 +70,9 @@ type Facts struct {
 	// split, reduced in the workgroup (Schedule.GroupSplit) where the split
 	// and the rows allow it.
 	RagGroup bool
+	// DecodeGroup reduces decode's k split in the workgroup
+	// (Schedule.GroupSplit) rather than through planes.
+	DecodeGroup bool
 	// The warp tile of the int8 matrix instruction: tiles of 16 elements
 	// and of 8 rows a warp; NoMMA, the caller's refusal of the instruction.
 	MMAMT, MMANT int
@@ -303,6 +306,9 @@ func (g *Row) contractSchedule(f Facts) Schedule {
 			rowt = 1
 		}
 		s.TileCols, s.Split = rowt, split
+		if gw := min(max(32*split, 128), 1024); f.DecodeGroup && split > 1 && rowt == 1 && gw%split == 0 && g.Width%(gw/split) == 0 {
+			s.Group, s.Tile, s.GroupSplit = gw, g.Rows, true
+		}
 		return s
 	}
 	if d := g.rowGroup(); d > 1 && g.Rows%d == 0 {

@@ -742,6 +742,8 @@ type devOp struct {
 	// block's matrix list (layer.rs, layer.ms), resolved from Role once
 	// when the program is built.
 	W int
+	// Ws is a segmented launch's matvec weights (dkQKV), each as W.
+	Ws []int
 	// V and VB are a norm's weight and bias on the device, bound by role
 	// when the program is built (layer.vecOf); a fused op carries the norm
 	// it absorbed. nil for a weightless norm.
