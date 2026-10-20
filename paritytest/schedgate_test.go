@@ -11,7 +11,7 @@ import (
 // device's facts (compose.Plan). A parity test that hands the composer a
 // schedule, or a tier generator that builds one, has chosen main's kernel by
 // hand. The count only falls; lower the ceiling with the change that lowers it.
-const handSchedulesCeiling = 36
+const handSchedulesCeiling = 10
 
 var handSchedule = regexp.MustCompile(`compose\.Schedule\{|\bPlanAt\(|\bemitAt\(t|\bformed\(t,|\.Emit\(compose\.Schedule`)
 

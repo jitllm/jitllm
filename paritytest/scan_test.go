@@ -73,7 +73,7 @@ func TestScanIsMains(t *testing.T) {
 			if len(pl) != 1 || pl[0].S.Lanes != L {
 				t.Fatalf("planned %d kernels, lanes %d", len(pl), pl[0].S.Lanes)
 			}
-			same(t, name, []*ir.Kernel{mk}, emitAt(t, pl[0].G, pl[0].S))
+			same(t, name, []*ir.Kernel{mk}, emitPlanned(t, pl[0]))
 		})
 	}
 }
@@ -113,7 +113,7 @@ func TestLaneNormIsMains(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			same(t, name, []*ir.Kernel{mk}, emitAt(t, pl[0].G, pl[0].S))
+			same(t, name, []*ir.Kernel{mk}, emitPlanned(t, pl[0]))
 		})
 	}
 }

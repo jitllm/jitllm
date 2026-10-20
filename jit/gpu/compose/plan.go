@@ -425,8 +425,8 @@ func (g *Row) productSchedule(f Facts) Schedule {
 // span's row reads the group's row only as the row over d, else 1.
 func (g *Row) spanStride() int {
 	d := 1
-	for _, sp := range g.Spans {
-		if sp.Uniform {
+	for _, sp := range g.Nodes {
+		if sp.Kind != NHint || sp.Hint != HintSpan {
 			continue
 		}
 		var walk func(n int) int
@@ -449,7 +449,7 @@ func (g *Row) spanStride() int {
 			}
 			return x
 		}
-		if x := walk(sp.Row); x > 0 {
+		if x := walk(sp.C); x > 0 {
 			d = x
 		}
 	}
@@ -460,10 +460,8 @@ func (g *Row) spanStride() int {
 // stride read as uniform over rows stride apart.
 func (g *Row) rowDepsPast(stride int) []bool {
 	uniform := make([]bool, len(g.Nodes))
-	for _, sp := range g.Spans {
-		uniform[sp.Clamp] = true
-	}
 	for i, nd := range g.Nodes {
+		uniform[i] = nd.Kind == NHint
 		if nd.Kind == NUBinary && nd.Op == OpRem && g.Nodes[nd.A].Kind == NRowIdx && g.Nodes[nd.B].Kind == NUConst && g.Nodes[nd.B].At == stride {
 			uniform[i] = true
 		}

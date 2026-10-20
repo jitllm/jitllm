@@ -349,7 +349,6 @@ func (g *Row) clone() *Row {
 	c.Stores = append([]Store(nil), g.Stores...)
 	c.Loops = append([]int(nil), g.Loops...)
 	c.Trip = append([]int(nil), g.Trip...)
-	c.Spans = append([]Span(nil), g.Spans...)
 	c.Stages = make([]Stage, len(g.Stages))
 	for i, st := range g.Stages {
 		c.Stages[i] = Stage{Width: st.Width, Stores: append([]Store(nil), st.Stores...)}

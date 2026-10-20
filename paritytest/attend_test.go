@@ -23,10 +23,10 @@ func pagedOf(s mainkernels.FlashShape) compose.Paged {
 	return compose.Paged{Rows: s.Rows, Heads: s.Heads, KVHeads: s.KVHeads, Dim: s.Dim, Page: s.Page, Splits: s.Splits, Chunk: s.Chunk}
 }
 
-// emitAt is g's kernel under s.
-func emitAt(t *testing.T, g *compose.Row, s compose.Schedule) []*ir.Kernel {
+// emitPlanned is the kernel of a planned group.
+func emitPlanned(t *testing.T, p compose.Planned) []*ir.Kernel {
 	t.Helper()
-	k, err := g.Emit(s)
+	k, err := p.G.Emit(p.S)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestPagedSoftmaxIsMains(t *testing.T) {
 			g.Buf(compose.BufU32)
 			desc := g.Buf(compose.BufU32)
 			g.PagedSoftmax(scores, out, part, desc, pagedOf(s))
-			same(t, name, []*ir.Kernel{mk}, emitAt(t, g, compose.Schedule{Group: 64, Flat: true, Target: sm70}))
+			same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{Target: sm70}))
 		})
 	}
 }
@@ -72,7 +72,7 @@ func TestPagedScoresIsMains(t *testing.T) {
 			out := g.Buf(compose.BufOut)
 			table, desc := g.Buf(compose.BufU32), g.Buf(compose.BufU32)
 			g.PagedScores(q, k, out, table, desc, p, s.Scale, s.Softcap)
-			same(t, name, []*ir.Kernel{mk}, emitAt(t, g, compose.Schedule{Group: 128, Flat: true, Target: sm70}))
+			same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{Target: sm70}))
 		})
 	}
 }
@@ -93,7 +93,7 @@ func TestPagedAccIsMains(t *testing.T) {
 			part := g.Buf(compose.BufOut)
 			table, desc := g.Buf(compose.BufU32), g.Buf(compose.BufU32)
 			g.PagedAcc(wts, v, part, table, desc, pagedOf(s))
-			same(t, name, []*ir.Kernel{mk}, emitAt(t, g, compose.Schedule{Group: 128, Flat: true, Target: sm70}))
+			same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{Target: sm70}))
 		})
 	}
 }
@@ -116,7 +116,7 @@ func TestPagedMergeIsMains(t *testing.T) {
 					sk = g.Buf(compose.BufRow)
 				}
 				g.PagedMerge(part, out, sk, pagedOf(s))
-				same(t, name, []*ir.Kernel{mk}, emitAt(t, g, compose.Schedule{Group: 128, Flat: true, Target: sm70}))
+				same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{Target: sm70}))
 			})
 		}
 	}

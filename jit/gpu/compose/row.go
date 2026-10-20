@@ -43,10 +43,8 @@ type Row struct {
 	// LiveAt of buffer LiveBuf (BufU32). The rest keep what they hold.
 	HasLive         bool
 	LiveBuf, LiveAt int
-	// Spans are the group's indices into descriptor spans (Span), and
-	// SpanGroup the aligned rows that share a table and whose spans do not
-	// decrease.
-	Spans     []Span
+	// SpanGroup is the aligned rows that share a table and whose spans do
+	// not decrease (HintUniform, HintSpan).
 	SpanGroup int
 }
 
@@ -164,6 +162,22 @@ const (
 	// strided tile spaces it (Schedule.RowStride, ColStride).
 	NRowTile
 	NColTile
+	// NHint is A's value, no instruction of its own, carrying a fact for the
+	// passes (Hint, and its arguments).
+	NHint
+)
+
+// HintKind is what a hint states.
+type HintKind uint8
+
+const (
+	// HintUniform: A has one value over each aligned group of the rows
+	// whose span rows share it (Row.SpanGroup).
+	HintUniform HintKind = iota + 1
+	// HintSpan: A is index B clamped into row C's keys [H[1], H[2]) of
+	// descriptor buffer Buf (H[0] words a row), aligned down to At: equal to
+	// B inside the keys, any key of the row's table outside them.
+	HintSpan
 )
 
 // Op is a unary or binary map.
@@ -241,6 +255,9 @@ type Node struct {
 	// Vec, 2 or 4, makes an indexed load component Comp of the Vec
 	// consecutive elements from Ix, one vector load for all of them.
 	Vec, Comp uint8
+	// Hint and H are an NHint's fact and its further arguments.
+	Hint HintKind
+	H    [3]int32
 }
 
 // Store writes node Val into buffer Buf at the element, or at index node Ix
@@ -325,6 +342,9 @@ func (g *Row) Encode(s Schedule) []uint32 {
 	for _, n := range g.Nodes {
 		e = append(e, uint32(n.Kind), uint32(n.Op), uint32(n.Act), uint32(n.Red), uint32(n.Buf),
 			uint32(n.A), uint32(n.B), uint32(n.C), f2u(n.F), uint32(n.At), b2u(n.Indexed), uint32(n.Ix), uint32(n.Vec)<<8|uint32(n.Comp))
+		if n.Kind == NHint {
+			e = append(e, uint32(n.Hint), uint32(n.H[0]), uint32(n.H[1]), uint32(n.H[2]))
+		}
 	}
 	for _, s := range g.Stores {
 		e = append(e, uint32(s.Buf), uint32(s.Val), b2u(s.Indexed), uint32(s.Ix))
@@ -350,12 +370,8 @@ func (g *Row) Encode(s Schedule) []uint32 {
 			e = append(e, uint32(g.tripOf(c)))
 		}
 	}
-	if len(g.Spans) > 0 {
-		e = append(e, 0x5BA2, uint32(g.SpanGroup), uint32(len(g.Spans)))
-		for _, s := range g.Spans {
-			e = append(e, uint32(s.Clamp), uint32(s.T), uint32(s.Row), b2u(s.Uniform), uint32(s.Desc), uint32(s.Words),
-				uint32(s.Start), uint32(s.End), uint32(s.Align))
-		}
+	if g.SpanGroup > 0 {
+		e = append(e, 0x5BA2, uint32(g.SpanGroup))
 	}
 	return e
 }
@@ -700,7 +716,7 @@ func newEnv(up *env) *env { return &env{m: map[int]ir.Value{}, up: up} }
 func (g *Row) operands(n int) []int {
 	nd := g.Nodes[n]
 	switch nd.Kind {
-	case NUnary, NWindow, NShuffle:
+	case NUnary, NWindow, NShuffle, NHint:
 		return []int{nd.A}
 	case NBinary:
 		if nd.Op == OpFma {
@@ -1576,6 +1592,8 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				break
 			}
 			v = rowVal[n]
+		case NHint:
+			v = elem(nd.A, idx, e)
 		case NUnary:
 			a := elem(nd.A, idx, e)
 			switch nd.Op {
@@ -2017,7 +2035,7 @@ func (g *Row) typeOf(n int) ir.Type {
 		return g.typeOf(nd.A)
 	case NFold:
 		return g.typeOf(nd.B)
-	case NSelect, NAt, NShuffle:
+	case NSelect, NAt, NShuffle, NHint:
 		return g.typeOf(nd.A)
 	case NLoad:
 		if g.Bufs[nd.Buf].Kind == BufU32 || g.Bufs[nd.Buf].Kind == BufSharedU32 {

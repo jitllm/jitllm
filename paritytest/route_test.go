@@ -51,7 +51,7 @@ func planned(t *testing.T, g *compose.Row, f compose.Facts) []*ir.Kernel {
 	if len(pl) != 1 {
 		t.Fatalf("planned %d kernels", len(pl))
 	}
-	return emitAt(t, pl[0].G, pl[0].S)
+	return emitPlanned(t, pl[0])
 }
 
 // TestRouteRankIsMains holds the composer's rank to main's ExpertRank.

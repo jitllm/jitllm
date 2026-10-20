@@ -1,37 +1,22 @@
 package compose
 
-// Span is an index into a row's span of a descriptor buffer, recorded so a
-// pass may widen it: Clamp is index T clamped into row Row's keys [start,
-// end) of descriptor Desc (Words a row), equal to T inside them and any key
-// of the row's table outside; or, where Uniform, a value of the row that is
-// the same over its group. Rows of an aligned group of SpanGroup share such
-// values and their spans do not decrease, so under a tile of such rows the
-// tile's first row's values and the tile's widest span serve every row.
-type Span struct {
-	Clamp, T, Row     int
-	Uniform           bool
-	Desc, Words       int
-	Start, End, Align int
-}
-
 // SpanWord is word w of row row's descriptor.
 func (g *Row) SpanWord(desc, words, row, w int) int {
 	u, ub := g.UConst, g.UBin
 	return g.LoadAt(desc, ub(OpAdd, ub(OpMul, row, u(words)), u(w)))
 }
 
-// SpanUniform states that node n has one value over its row's group.
+// SpanUniform is n, hinted to have one value over its row's group.
 func (g *Row) SpanUniform(n int) int {
-	g.Spans = append(g.Spans, Span{Clamp: n, Uniform: true})
-	return n
+	return g.Add(Node{Kind: NHint, Hint: HintUniform, A: n})
 }
 
 // SpanClamp is index t clamped into row row's keys [start, end), aligned
-// down to align where it is over one; position 0 for an empty span.
+// down to align where it is over one, position 0 for an empty span; hinted
+// to be any key of the row's table outside the keys.
 func (g *Row) SpanClamp(desc, words, row, start, end, t, align int) int {
 	n := g.clampInto(t, g.SpanWord(desc, words, row, start), g.SpanWord(desc, words, row, end), align)
-	g.Spans = append(g.Spans, Span{Clamp: n, T: t, Row: row, Desc: desc, Words: words, Start: start, End: end, Align: align})
-	return n
+	return g.Add(Node{Kind: NHint, Hint: HintSpan, A: n, B: t, C: row, Buf: desc, At: align, H: [3]int32{int32(words), int32(start), int32(end)}})
 }
 
 func (g *Row) clampInto(t, lo, hi, align int) int {
@@ -44,25 +29,33 @@ func (g *Row) clampInto(t, lo, hi, align int) int {
 	return g.Select(live, ub(OpMin, ub(OpMax, t, lo), last), u(0))
 }
 
-// hulls widens every span under a row tile of schedule s to the tile's:
-// a uniform value at the first row, a clamp into the first row's start and
-// the last row's end.
+// hulls widens every span hint under a row tile of schedule s to the
+// tile's -- a uniform value at the first row, a clamp into the first row's
+// start and the last row's end -- and drops every hint.
 func (g *Row) hulls(s Schedule) *Row {
 	tr := max(s.Tile, 1)
-	if len(g.Spans) == 0 || !s.Flat || s.MMA || tr == 1 || g.SpanGroup%tr != 0 {
-		return g
-	}
-	r := g.clone()
-	last := tr - 1
-	for _, sp := range g.Spans {
-		var n int
-		if sp.Uniform {
-			n = r.atRowOff(sp.Clamp, 0)
-		} else {
-			first, end := r.atRowOff(sp.Row, 0), r.atRowOff(sp.Row, last)
-			n = r.clampInto(r.atRowOff(sp.T, 0), r.SpanWord(sp.Desc, sp.Words, first, sp.Start), r.SpanWord(sp.Desc, sp.Words, end, sp.End), sp.Align)
+	widen := s.Flat && !s.MMA && tr > 1 && g.SpanGroup%tr == 0
+	var r *Row
+	for i, nd := range g.Nodes {
+		if nd.Kind != NHint {
+			continue
 		}
-		r.Nodes[sp.Clamp] = r.Nodes[n]
+		if r == nil {
+			r = g.clone()
+		}
+		n := nd.A
+		switch {
+		case widen && nd.Hint == HintUniform:
+			n = r.atRowOff(nd.A, 0)
+		case widen && nd.Hint == HintSpan:
+			words, start, end := int(nd.H[0]), int(nd.H[1]), int(nd.H[2])
+			first, last := r.atRowOff(nd.C, 0), r.atRowOff(nd.C, tr-1)
+			n = r.clampInto(r.atRowOff(nd.B, 0), r.SpanWord(nd.Buf, words, first, start), r.SpanWord(nd.Buf, words, last, end), nd.At)
+		}
+		r.Nodes[i] = r.Nodes[n]
+	}
+	if r == nil {
+		return g
 	}
 	return r
 }
@@ -80,10 +73,10 @@ func (g *Row) atRowOff(n, off int) int {
 		switch nd.Kind {
 		case NRowOff:
 			m = g.UConst(off)
-		case NUBinary, NLess, NSelect, NUnary, NBinary:
+		case NUBinary, NLess, NSelect, NUnary, NBinary, NHint:
 			c := nd
 			c.A = at(nd.A)
-			if nd.Kind != NUnary {
+			if nd.Kind != NUnary && nd.Kind != NHint {
 				c.B = at(nd.B)
 			}
 			if nd.Kind == NSelect || nd.Kind == NBinary && nd.Op == OpFma {

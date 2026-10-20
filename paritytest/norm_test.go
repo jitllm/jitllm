@@ -30,11 +30,11 @@ func TestTwoPassNormIsMains(t *testing.T) {
 				gp := &compose.Row{Width: c.parts * c.rows, Rows: 1}
 				x, out := gp.Buf(compose.BufRow), gp.Buf(compose.BufOut)
 				gp.Store(out, gp.SquareSumParts(x, c.k, c.parts))
-				same(t, name+"/part", []*ir.Kernel{mp}, emitAt(t, gp, compose.Schedule{Group: 128, Flat: true, Target: sm70}))
+				same(t, name+"/part", []*ir.Kernel{mp}, planned(t, gp, compose.Facts{}))
 				ga := &compose.Row{Width: c.k, Rows: c.rows}
 				ax, w, part := ga.Buf(compose.BufRow), ga.Buf(compose.BufVec), ga.Buf(compose.BufRow)
 				ga.Store(ga.Buf(compose.BufOut), ga.NormApplyParts(ax, w, part, c.k, c.parts, eps, addOne))
-				same(t, name+"/apply", []*ir.Kernel{ma}, emitAt(t, ga, compose.Schedule{Group: 128, Flat: true, Target: sm70}))
+				same(t, name+"/apply", []*ir.Kernel{ma}, planned(t, ga, compose.Facts{}))
 			})
 		}
 	}
@@ -62,7 +62,7 @@ func TestArgmaxIsMains(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			same(t, name, []*ir.Kernel{mk}, emitAt(t, g, ps[0].S))
+			same(t, name, []*ir.Kernel{mk}, emitPlanned(t, ps[0]))
 		})
 	}
 }
@@ -85,7 +85,7 @@ func TestRopeTableIsMains(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			same(t, name, []*ir.Kernel{mk}, emitAt(t, g, ps[0].S))
+			same(t, name, []*ir.Kernel{mk}, emitPlanned(t, ps[0]))
 		})
 	}
 }
@@ -104,15 +104,14 @@ func TestLayerNormPartsIsMains(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				flat := compose.Schedule{Group: 128, Flat: true, Target: sm70}
 				gp := &compose.Row{Width: c.parts * c.rows, Rows: 1}
 				x, out := gp.Buf(compose.BufRow), gp.Buf(compose.BufOut)
 				gp.Store(out, gp.SumParts(x, c.k, c.parts))
-				same(t, name+"/part", []*ir.Kernel{mp}, emitAt(t, gp, flat))
+				same(t, name+"/part", []*ir.Kernel{mp}, planned(t, gp, compose.Facts{}))
 				gv := &compose.Row{Width: c.parts * c.rows, Rows: 1}
 				vx, vs := gv.Buf(compose.BufRow), gv.Buf(compose.BufRow)
 				gv.Store(gv.Buf(compose.BufOut), gv.VarParts(vx, vs, c.k, c.parts))
-				same(t, name+"/var", []*ir.Kernel{mv}, emitAt(t, gv, flat))
+				same(t, name+"/var", []*ir.Kernel{mv}, planned(t, gv, compose.Facts{}))
 				ga := &compose.Row{Width: c.k, Rows: c.rows}
 				ax, w, sum, vr := ga.Buf(compose.BufRow), ga.Buf(compose.BufVec), ga.Buf(compose.BufRow), ga.Buf(compose.BufRow)
 				b := -1
@@ -120,7 +119,7 @@ func TestLayerNormPartsIsMains(t *testing.T) {
 					b = ga.Buf(compose.BufVec)
 				}
 				ga.Store(ga.Buf(compose.BufOut), ga.LayerNormApplyParts(ax, w, b, sum, vr, c.k, c.parts, eps))
-				same(t, name+"/apply", []*ir.Kernel{ma}, emitAt(t, ga, flat))
+				same(t, name+"/apply", []*ir.Kernel{ma}, planned(t, ga, compose.Facts{}))
 			})
 		}
 	}
@@ -157,7 +156,7 @@ func TestRouterIsMains(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			same(t, name, []*ir.Kernel{mk}, emitAt(t, g, ps[0].S))
+			same(t, name, []*ir.Kernel{mk}, emitPlanned(t, ps[0]))
 		})
 	}
 }
@@ -173,16 +172,15 @@ func TestConvIsMains(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			flat := compose.Schedule{Group: 128, Flat: true, Target: sm70}
 			g := &compose.Row{Width: c.rows * c.chans, Rows: 1}
 			s, x, w, out, desc := g.Buf(compose.BufRow), g.Buf(compose.BufRow), g.Buf(compose.BufRow), g.Buf(compose.BufOut), g.Buf(compose.BufU32)
 			g.Store(out, g.ConvRows(s, x, w, desc, c.taps, c.chans, c.rows))
-			same(t, name+"/rows", []*ir.Kernel{mr}, emitAt(t, g, flat))
+			same(t, name+"/rows", []*ir.Kernel{mr}, planned(t, g, compose.Facts{}))
 			h := &compose.Row{Width: (c.taps - 1) * c.chans, Rows: 1}
 			hs, hx, hout, hdesc := h.Buf(compose.BufRow), h.Buf(compose.BufRow), h.Buf(compose.BufOut), h.Buf(compose.BufU32)
 			v, at := h.ConvShift(hs, hx, hdesc, c.taps, c.chans, c.rows)
 			h.StoreAt(hout, v, at)
-			same(t, name+"/shift", []*ir.Kernel{ms}, emitAt(t, h, flat))
+			same(t, name+"/shift", []*ir.Kernel{ms}, planned(t, h, compose.Facts{}))
 		})
 	}
 }
