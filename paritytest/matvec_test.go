@@ -230,3 +230,40 @@ func TestExpertMatVecIsMains(t *testing.T) {
 		}
 	}
 }
+
+// TestGroupedMatVecIsMains holds the composer's matvec over a mixture's
+// sorted columns -- a token group of four a thread, each group reading the
+// sheet its tile's expert names -- to main's grouped matvec.
+func TestGroupedMatVecIsMains(t *testing.T) {
+	for _, q := range []format{{kernels.Float32, mainkernels.Float32}, {kernels.Float16, mainkernels.Float16}, {kernels.Q8_0, mainkernels.Q8_0}} {
+		for _, rk := range [][2]int{{64, 64}, {96, 128}} {
+			for _, ep := range [][2]int{{8, 64}, {16, 128}} {
+				name := fmt.Sprintf("%v_%dx%d_e%d_np%d", q.c, rk[0], rk[1], ep[0], ep[1])
+				t.Run(name, func(t *testing.T) {
+					mk, err := mainkernels.MatVec(mainkernels.MatVecShape{T: q.m, K: rk[1], Rows: rk[0], Experts: ep[0], NTok: ep[1], Tok: 4, ActWin: 32})
+					if err != nil {
+						t.Fatal(err)
+					}
+					g := &compose.Row{Width: rk[0], Rows: ep[1]}
+					w := compose.MatVecWeight{T: q.c, K: rk[1], Rows: rk[0], QS: g.Buf(compose.BufU32), D: -1, SC: -1, Experts: ep[0], SelPer: 4}
+					if !kernels.IsFloat(q.c) {
+						w.D = g.Buf(compose.BufU32)
+					}
+					a := compose.MatVecOperand{Toks: ep[1]}
+					if kernels.IsFloat(q.c) {
+						a.X = g.Buf(compose.BufRow)
+					} else {
+						a.A, a.AX = g.Buf(compose.BufU32), g.Buf(compose.BufRow)
+					}
+					w.Sel = g.Buf(compose.BufU32)
+					v, err := g.MatVec(w, a)
+					if err != nil {
+						t.Fatal(err)
+					}
+					g.Store(g.Buf(compose.BufOut), v)
+					same(t, name, []*ir.Kernel{mk}, formed(t, g, compose.Schedule{Group: 128, Flat: true, Target: sm70, Tile: 4}))
+				})
+			}
+		}
+	}
+}

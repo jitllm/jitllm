@@ -543,6 +543,23 @@ func (c *canon) index(i int) (affine, bool) {
 			}
 			break
 		}
+		// A quotient of a dividend every term of which the divisor divides,
+		// plus a constant at or above zero, is the terms' quotients plus the
+		// constant's.
+		if x, okx := arg(0); isDiv && okx && ok2 && y.isConst() && y.c > 1 && x.c >= 0 && len(x.terms) > 0 {
+			exact := true
+			for _, tm := range x.terms {
+				exact = exact && tm.coef > 0 && tm.coef%y.c == 0
+			}
+			if exact {
+				q := affine{c: x.c / y.c}
+				for _, tm := range x.terms {
+					q.terms = append(q.terms, term{atom: tm.atom, coef: tm.coef / y.c})
+				}
+				r = q
+				break
+			}
+		}
 		// Otherwise a field of the dividend: a field of a field where the
 		// dividend is one.
 		x, ok1 := arg(0)

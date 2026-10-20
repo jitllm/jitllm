@@ -31,6 +31,9 @@ type MatVecWeight struct {
 	// row of the group reading the sheet its expert id at Sel (BufU32, a row
 	// an id) names.
 	Experts, Sel int
+	// SelPer, above one, is the rows one id at Sel serves: a sorted run's
+	// group of tokens.
+	SelPer int
 }
 
 // MatVec is node: the product of the weight's row e (the element) with the
@@ -179,7 +182,11 @@ func (g *Row) sheets(w MatVecWeight, t int) (q, d func(int) int, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	e := g.LoadAt(w.Sel, t)
+	at := t
+	if w.SelPer > 1 {
+		at = g.UBin(OpDiv, t, g.UConst(w.SelPer))
+	}
+	e := g.LoadAt(w.Sel, at)
 	off := func(words int) func(int) int {
 		return func(i int) int { return g.UBin(OpAdd, g.UBin(OpMul, e, g.UConst(words)), i) }
 	}
