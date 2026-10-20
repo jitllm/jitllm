@@ -1572,7 +1572,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer, page int) (*devProgram, string) 
 			prog.pad[sel], prog.pad[top] = 1, 1 // k+1 a row apart: the bin the rank kernel writes past the k
 			prog.ops = append(prog.ops, devOp{Kind: dkTopK, Src: []int{i}, In: rank, Out: []devVal{sel, top}, Role: selBias, A: o.Attr})
 			rw := prog.val(name(0)+".weights", f32(k), slotRW)
-			prog.ops = append(prog.ops, devOp{Kind: dkRouteWeights, Src: []int{i}, In: []devVal{top, logits}, Out: []devVal{rw}, A: o.Attr})
+			prog.ops = append(prog.ops, devOp{Kind: dkRouteWeights, Src: []int{i}, In: []devVal{top, logits}, Out: []devVal{rw}, Role: selBias, A: o.Attr})
 			vals[o.Out[0]] = sel
 			routeW[sel] = rw
 			prog.ops = append(prog.ops, devOp{Kind: dkGroupByExpert, Src: []int{i}, In: []devVal{sel}})

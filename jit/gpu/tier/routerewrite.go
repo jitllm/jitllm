@@ -51,7 +51,17 @@ func rwRoute(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int)
 		if gatedRoute(p, i, writer, only, is) {
 			return true
 		}
-		lg := o.In[0]
+		lg, role := o.In[0], jlm.Role(0)
+		var keyOps []int
+		if b := writer(lg); b >= 0 && p.ops[b].Kind == dkMap && p.ops[b].A.Fn == graph.MapAdd && p.ops[b].Role == jlm.RoleExpProbsB && len(p.ops[b].In) == 1 {
+			// The key the softmax's probability with the selection bias
+			// added: the rank computes both from the logits.
+			x, ops, ok := softmaxOf(p, p.ops[b].In[0], writer, only, is)
+			if !ok || p.uses(lg) != 1 {
+				continue
+			}
+			lg, role, keyOps = x, jlm.RoleExpProbsB, append(ops, b)
+		}
 		if w := writer(lg); w < 0 || p.ops[w].Kind != dkRouterLogits {
 			continue
 		}
@@ -116,9 +126,12 @@ func rwRoute(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int)
 			scale, end, w = p.ops[s].A.Const, s, p.ops[s].Out[0]
 		}
 		a := graph.Attrs{Experts: p.vals[lg].Width, TopK: o.A.TopK, Router: graph.RouterSoftmax, RouteNorm: true, Scale: scale}
-		p.ops[i] = devOp{Kind: dkTopK, Src: o.Src, In: []devVal{lg}, Out: []devVal{sel, top}, A: a}
-		p.ops[end] = devOp{Kind: dkRouteWeights, Src: p.ops[end].Src, In: []devVal{top, lg}, Out: []devVal{w}, A: a}
+		p.ops[i] = devOp{Kind: dkTopK, Src: o.Src, In: []devVal{lg}, Out: []devVal{sel, top}, Role: role, A: a}
+		p.ops[end] = devOp{Kind: dkRouteWeights, Src: p.ops[end].Src, In: []devVal{top, lg}, Out: []devVal{w}, Role: role, A: a}
 		drop := map[int]bool{t: true, rmax: true, csub: true, cexp: true, rsum: true}
+		for _, j := range keyOps {
+			drop[j] = true
+		}
 		if end != wdiv {
 			drop[wdiv] = true
 		}
@@ -213,7 +226,7 @@ func gatedRoute(p *devProgram, i int, writer, only func(devVal) int, is func(int
 	end := chain[len(chain)-1]
 	a := graph.Attrs{Experts: p.vals[lg].Width, TopK: o.A.TopK, Router: router, RouteNorm: norm, Scale: scale}
 	p.ops[i] = devOp{Kind: dkTopK, Src: o.Src, In: []devVal{lg}, Out: []devVal{sel, top}, Role: role, A: a}
-	p.ops[end] = devOp{Kind: dkRouteWeights, Src: p.ops[end].Src, In: []devVal{top, lg}, Out: []devVal{w}, A: a}
+	p.ops[end] = devOp{Kind: dkRouteWeights, Src: p.ops[end].Src, In: []devVal{top, lg}, Out: []devVal{w}, Role: role, A: a}
 	drop := map[int]bool{}
 	for _, j := range chain[:len(chain)-1] {
 		drop[j] = true
@@ -295,4 +308,29 @@ func probsRoute(p *devProgram, i int, only func(devVal) int, is func(int, devKin
 	}
 	p.ops = ops
 	return true
+}
+
+// softmaxOf reports whether v is the softmax of a value x over its row
+// (its maximum subtracted, exponentiated, divided by the sum), with x and
+// the ops that compute it.
+func softmaxOf(p *devProgram, v devVal, writer, only func(devVal) int, is func(int, devKind, graph.MapFn, ...devVal) bool) (devVal, []int, bool) {
+	dv := writer(v)
+	if dv < 0 || p.ops[dv].Kind != dkMap || p.ops[dv].A.Fn != graph.MapDiv || len(p.ops[dv].In) != 2 || p.uses(v) != 1 {
+		return 0, nil, false
+	}
+	e, sum := p.ops[dv].In[0], p.ops[dv].In[1]
+	rs, ex := writer(sum), writer(e)
+	if !is(rs, dkReduce, graph.MapAdd, e) || ex < 0 || !is(ex, dkMap, graph.MapExp, p.ops[ex].In...) || len(p.ops[ex].In) != 1 || p.uses(e) != 2 {
+		return 0, nil, false
+	}
+	cs := writer(p.ops[ex].In[0])
+	if cs < 0 || p.ops[cs].Kind != dkMap || p.ops[cs].A.Fn != graph.MapSub || len(p.ops[cs].In) != 2 || only(p.ops[cs].Out[0]) != ex {
+		return 0, nil, false
+	}
+	x, m := p.ops[cs].In[0], p.ops[cs].In[1]
+	mx := writer(m)
+	if !is(mx, dkReduce, graph.MapMax, x) || only(m) != cs {
+		return 0, nil, false
+	}
+	return x, []int{mx, cs, ex, rs, dv}, true
 }

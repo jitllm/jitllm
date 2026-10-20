@@ -26,8 +26,8 @@ func routeOf(o *devOp, prog *devProgram, rows int) (compose.Route, bool) {
 	}
 	if o.Kind == dkTopK {
 		r.RowBias = len(o.In) > 1+b2i(r.NGroup > 1)
-		r.Bias = o.Role == jlm.RoleExpProbsB || r.RowBias
 	}
+	r.Bias = o.Role == jlm.RoleExpProbsB || r.RowBias
 	return r, r.NExpert > 0 && r.K > 0
 }
 
