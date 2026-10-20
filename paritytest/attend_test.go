@@ -17,10 +17,12 @@ var stagedShapes = []mainkernels.FlashShape{
 	{Rows: 4, Heads: 4, KVHeads: 4, Dim: 64, Page: 256, Splits: 4, Chunk: 256, Scale: 0.125},
 	{Rows: 32, Heads: 2, KVHeads: 1, Dim: 96, Page: 512, Splits: 1, Chunk: 32, Scale: 0.1},
 	{Rows: 2, Heads: 4, KVHeads: 2, Dim: 64, Page: 256, Splits: 2, Chunk: 64, Scale: 0.125, Softcap: 50},
+	{Rows: 1, Heads: 4, KVHeads: 1, Dim: 96, MLA: 64, Page: 256, Splits: 2, Chunk: 64, Scale: 0.1},
+	{Rows: 1, Heads: 8, KVHeads: 1, Dim: 576, MLA: 512, Page: 256, Splits: 1, Chunk: 64, Scale: 0.07},
 }
 
 func pagedOf(s mainkernels.FlashShape) compose.Paged {
-	return compose.Paged{Rows: s.Rows, Heads: s.Heads, KVHeads: s.KVHeads, Dim: s.Dim, Page: s.Page, Splits: s.Splits, Chunk: s.Chunk}
+	return compose.Paged{Rows: s.Rows, Heads: s.Heads, KVHeads: s.KVHeads, Dim: s.Dim, Page: s.Page, Splits: s.Splits, Chunk: s.Chunk, MLA: s.MLA}
 }
 
 // emitPlanned is the kernel of a planned group.
@@ -106,11 +108,16 @@ func TestPagedMergeIsMains(t *testing.T) {
 			s.Sink = sink
 			name := fmt.Sprintf("r%d_h%d_d%d_s%d_sink%v", s.Rows, s.Heads, s.Dim, s.Splits, sink)
 			t.Run(name, func(t *testing.T) {
-				mk, err := mainkernels.FlashAttentionMergeWide(s)
+				// Main merges a latent row at the value's width.
+				ms, vd := s, s.Dim
+				if s.MLA > 0 {
+					ms.Dim, ms.MLA, vd = s.MLA, 0, s.MLA
+				}
+				mk, err := mainkernels.FlashAttentionMergeWide(ms)
 				if err != nil {
 					t.Fatal(err)
 				}
-				g := &compose.Row{Width: s.Rows * s.Heads * s.Dim, Rows: 1}
+				g := &compose.Row{Width: s.Rows * s.Heads * vd, Rows: 1}
 				part, out, sk := g.Buf(compose.BufRow), g.Buf(compose.BufOut), -1
 				if sink {
 					sk = g.Buf(compose.BufRow)

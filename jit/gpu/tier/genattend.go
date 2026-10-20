@@ -67,20 +67,32 @@ type attendKey struct{ op, rows, keys int }
 func (g *devTier) attendKeys(o *devOp, prog *devProgram, bs *blockScratch, rows, keys int) []genLaunch {
 	p := &bs.p
 	pg := bs.pkv
-	if pg == nil || g.KVF16 || p.MLA() || p.NonCausal || len(o.In) != 1 ||
-		prog.vals[o.In[0]].Width != p.NHead*p.HeadDim {
+	// A latent row is one KV head of the latent and its key, the value its
+	// prefix, both read from the one pool.
+	latent := o.Kind == dkLatentAttend
+	kvh, hd, vd, vpool := p.NKVHead, p.HeadDim, p.HeadDim, gaVPool
+	if latent {
+		kvh, hd, vd, vpool = 1, p.KVLoraRank+p.NRot, p.KVLoraRank, gaKPool
+	}
+	if pg == nil || g.KVF16 || p.MLA() != latent || p.NonCausal || len(o.In) != 1 ||
+		prog.vals[o.In[0]].Width != p.NHead*hd {
 		return nil
 	}
-	if fl, ok := g.flashPlan(p, rows, keys); ok {
-		return g.genFlash(fl, bs)
+	if !latent {
+		if fl, ok := g.flashPlan(p, rows, keys); ok {
+			return g.genFlash(fl, bs)
+		}
 	}
 	if p.AttnSinks {
 		return nil
 	}
-	pa := stagedPlan(compose.Paged{Rows: rows, Heads: p.NHead, KVHeads: p.NKVHead, Dim: p.HeadDim, Page: g.kvPage()},
-		keys, g.dev.Slots())
+	pp := compose.Paged{Rows: rows, Heads: p.NHead, KVHeads: kvh, Dim: hd, Page: g.kvPage()}
+	if latent {
+		pp.MLA = vd
+	}
+	pa := stagedPlan(pp, keys, g.dev.Slots())
 	plane := pa.Rows * pa.Heads * pa.Splits * pa.Chunk
-	parts := pa.Rows * pa.Heads * pa.Splits * ((pa.Dim+31)/32*32 + 64)
+	parts := pa.Rows * pa.Heads * pa.Splits * ((vd+31)/32*32 + 64)
 	if g.genInSub && (pg.scCap < plane || pg.partCap < parts) ||
 		!g.regrow(&pg.sc, &pg.scCap, plane, 4, true, true) || !g.regrow(&pg.wt, &pg.wtCap, plane, 4, true, true) ||
 		!g.regrow(&pg.part, &pg.partCap, parts, 4, true, true) {
@@ -90,7 +102,7 @@ func (g *devTier) attendKeys(o *devOp, prog *devProgram, bs *blockScratch, rows,
 	if l := g.curLayer; l != nil && l.windowed {
 		prow = gaPRowW
 	}
-	scale, cap := float32(p.Scale()), p.AttnSoftcap
+	scale, cap := g.scoreScale(p), p.AttnSoftcap
 	G := pa.HeadGroup()
 
 	sc := &rowBuild{r: compose.Row{Width: rows * (pa.Heads / G) * pa.Splits * pa.Chunk, Rows: 1}}
@@ -107,14 +119,14 @@ func (g *devTier) attendKeys(o *devOp, prog *devProgram, bs *blockScratch, rows,
 	sm.buf(compose.BufU32, gaTab)
 	sm.r.PagedSoftmax(scores, wts, part, sm.buf(compose.BufU32, prow), pa)
 
-	ac := &rowBuild{r: compose.Row{Width: rows * (pa.Heads / G) * pa.Splits * pa.Dim, Rows: 1}}
-	w, v := ac.buf(compose.BufRow, gaWts), ac.buf(compose.BufRow, gaVPool)
+	ac := &rowBuild{r: compose.Row{Width: rows * (pa.Heads / G) * pa.Splits * vd, Rows: 1}}
+	w, v := ac.buf(compose.BufRow, gaWts), ac.buf(compose.BufRow, vpool)
 	ac.buf(compose.BufU32, prow)
 	apart := ac.buf(compose.BufOut, gaParts)
 	atab, adesc := ac.buf(compose.BufU32, gaTab), ac.buf(compose.BufU32, prow)
 	ac.r.PagedAcc(w, v, apart, atab, adesc, pa)
 
-	mg := &rowBuild{r: compose.Row{Width: rows * pa.Heads * pa.Dim, Rows: 1}}
+	mg := &rowBuild{r: compose.Row{Width: rows * pa.Heads * vd, Rows: 1}}
 	mpart, mout := mg.buf(compose.BufRow, gaParts), mg.buf(compose.BufOut, gaOut0)
 	mg.r.PagedMerge(mpart, mout, -1, pa)
 

@@ -330,7 +330,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 			o.Why = whyNone
 		}
 		return l
-	case dkAttend:
+	case dkAttend, dkLatentAttend:
 		l := g.genAttend(o, prog, bs, rows)
 		o.Why = whyNoForm
 		if l != nil {
@@ -349,7 +349,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		o.Why = whyNoForm
 		return nil
 	case dkExpertMatVecE, dkQKV, dkQKVGemm,
-		dkResIn, dkQKVSep, dkLatentAttend, dkGateLogit,
+		dkResIn, dkQKVSep, dkGateLogit,
 		dkGroupMask, dkExpertBias, dkExpertFetch:
 		// No form in the composer's primitives yet: the op fails to
 		// generate, and its block does not place.

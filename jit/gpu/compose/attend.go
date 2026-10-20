@@ -7,6 +7,17 @@ import "math"
 // holds (docs/design/device-kv-paging.md).
 type Paged struct {
 	Rows, Heads, KVHeads, Dim, Page, Splits, Chunk int
+	// MLA > 0 is a latent row: one row-major region of Dim a position (one
+	// KV head), its first MLA elements the value.
+	MLA int
+}
+
+// valueDim is the value's width: the latent's prefix, or the head.
+func (p Paged) valueDim() int {
+	if p.MLA > 0 {
+		return p.MLA
+	}
+	return p.Dim
 }
 
 // Descriptor words of a row (the paged ABI): where its table starts, its
@@ -76,7 +87,7 @@ func (g *Row) PagedSoftmax(scores, out, part, desc int, p Paged) {
 	g.StoreAt(out, w, at)
 	l := g.Fold(c2, g.Const(0))
 	g.SetFold(l, g.Bin(OpAdd, l, w))
-	padded := (p.Dim + 31) / 32 * 32
+	padded := (p.valueDim() + 31) / 32 * 32
 	pb := ub(OpMul, item, u(padded+64))
 	for r := 0; r < 32; r++ {
 		g.StoreAt(part, m, ub(OpAdd, pb, u(padded+r)))
@@ -156,6 +167,10 @@ func (g *Row) PagedScores(q, k, out, table, desc int, p Paged, scale, softcap fl
 	rh0 := ub(OpAdd, ub(OpMul, row, u(p.Heads)), h0)
 	qb := ub(OpMul, rh0, u(p.Dim))
 	kb := ub(OpAdd, ub(OpAdd, ub(OpMul, pid, u(P*kvRow)), ub(OpMul, kvh, u(P))), g.pageRem(t, P))
+	step := P
+	if p.MLA > 0 {
+		kb, step = ub(OpMul, ub(OpAdd, ub(OpMul, pid, u(P)), g.pageRem(t, P)), u(kvRow)), 1
+	}
 	chains := max(1, 4/G)
 	acc := make([][]int, G)
 	for h := range acc {
@@ -176,7 +191,7 @@ func (g *Row) PagedScores(q, k, out, table, desc int, p Paged, scale, softcap fl
 			if blk >= 0 {
 				dd = ub(OpAdd, blk, dd)
 			}
-			kv := g.LoadAt(k, ub(OpAdd, kb, ub(OpMul, dd, u(P))))
+			kv := g.LoadAt(k, ub(OpAdd, kb, ub(OpMul, dd, u(step))))
 			for h := range nx {
 				qv := g.LoadAt(q, ub(OpAdd, qb, ub(OpAdd, u(h*p.Dim), dd)))
 				nx[h][d%chains] = g.Add(Node{Kind: NBinary, Op: OpFma, A: qv, B: kv, C: nx[h][d%chains]})
@@ -243,9 +258,10 @@ func (g *Row) PagedAcc(wts, v, part, table, desc int, p Paged) {
 	G := p.HeadGroup()
 	gqa, S, C, P := p.Heads/p.KVHeads, p.Splits, p.Chunk, p.Page
 	kvRow := p.KVHeads * p.Dim
+	vd := p.valueDim()
 	flat := g.Column()
-	j := ub(OpRem, flat, u(p.Dim))
-	rest := ub(OpDiv, flat, u(p.Dim))
+	j := ub(OpRem, flat, u(vd))
+	rest := ub(OpDiv, flat, u(vd))
 	sp := ub(OpRem, rest, u(S))
 	rest = ub(OpDiv, rest, u(S))
 	hg := ub(OpRem, rest, u(p.Heads/G))
@@ -254,7 +270,10 @@ func (g *Row) PagedAcc(wts, v, part, table, desc int, p Paged) {
 	ps := g.pagedSplitOf(desc, row, sp, S)
 	keys := ub(OpSub, ps.en, ps.st)
 	blocks := ub(OpDiv, ub(OpAdd, keys, u(block-1)), u(block))
-	col := ub(OpAdd, ub(OpMul, ub(OpDiv, h0, u(gqa)), u(p.Dim)), j)
+	col := j
+	if p.MLA == 0 {
+		col = ub(OpAdd, ub(OpMul, ub(OpDiv, h0, u(gqa)), u(p.Dim)), j)
+	}
 	lastTile := ub(OpMul, ub(OpDiv, ps.last, u(32)), u(32))
 	wb := ub(OpMul, ub(OpAdd, ub(OpMul, ub(OpAdd, ub(OpMul, row, u(p.Heads)), h0), u(S)), sp), u(C))
 	d0 := ub(OpSub, ps.st, ps.ks)
@@ -283,7 +302,7 @@ func (g *Row) PagedAcc(wts, v, part, table, desc int, p Paged) {
 	for h := range acc {
 		g.SetFold(acc[h], next[h])
 	}
-	padded := (p.Dim + 31) / 32 * 32
+	padded := (vd + 31) / 32 * 32
 	pb := ub(OpMul, ub(OpAdd, ub(OpMul, ub(OpAdd, ub(OpMul, row, u(p.Heads)), h0), u(S)), sp), u(padded+64))
 	for h := range acc {
 		g.StoreAt(part, acc[h], ub(OpAdd, ub(OpAdd, pb, j), u(h*S*(padded+64))))
@@ -298,9 +317,10 @@ func (g *Row) PagedAcc(wts, v, part, table, desc int, p Paged) {
 func (g *Row) PagedMerge(part, out, sink int, p Paged) {
 	u, ub := g.UConst, g.UBin
 	flat := g.Column()
-	item := ub(OpDiv, flat, u(p.Dim))
-	dim := ub(OpRem, flat, u(p.Dim))
-	padded := (p.Dim + 31) / 32 * 32
+	vd := p.valueDim()
+	item := ub(OpDiv, flat, u(vd))
+	dim := ub(OpRem, flat, u(vd))
+	padded := (vd + 31) / 32 * 32
 	stride := padded + 64
 	base := ub(OpMul, item, u(p.Splits*stride))
 	mx := g.Const(-math.MaxFloat32)
