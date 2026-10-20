@@ -537,7 +537,11 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		if !p.LayerNorm && (o.Kind == dkPostNorm || prog.scans && o.Role == jlm.RoleAttnNorm) {
 			// A norm of a branch's output, or a recurrent block's pre-norm: two
 			// passes, the int8 operand apart.
-			return g.genNormParts(o, prog, bs, rows, w, eps)
+			return g.genNormParts(o, prog, bs, rows, w, eps, bs.parts)
+		}
+		if !p.LayerNorm && (o.Role == jlm.RoleAttnQANorm || o.Role == jlm.RoleAttnKVANorm) {
+			// A latent's norm over rows: two passes at the latent's own parts.
+			return g.genNormParts(o, prog, bs, rows, w, eps, partsFor(w))
 		}
 		y := rb.normed(o, rb.load(compose.BufRow, gaIn0), w, eps, p.LayerNorm)
 		if y < 0 {
@@ -1898,8 +1902,7 @@ func (g *devTier) genGatedNorm(o *devOp, prog *devProgram, bs *blockScratch, row
 // genNormParts is an RMSNorm in two launches, each row's sum of squares in
 // the scratch's parts and then the apply, with the int8 operand quantized
 // after where the op makes one.
-func (g *devTier) genNormParts(o *devOp, prog *devProgram, bs *blockScratch, rows, w int, eps float32) []genLaunch {
-	parts := bs.parts
+func (g *devTier) genNormParts(o *devOp, prog *devProgram, bs *blockScratch, rows, w int, eps float32, parts int) []genLaunch {
 	if o.V == nil || parts < 1 || w%parts != 0 {
 		return nil
 	}
