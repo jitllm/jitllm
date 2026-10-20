@@ -68,23 +68,20 @@ func TestComposedMatVecMatchesItsDefinition(t *testing.T) {
 					}
 				}
 			}
+			bias := make([]float32, c.rows)
+			for r := range bias {
+				bias[r] = float32(rng.Float64() - 0.5)
+			}
 			g := &compose.Row{Width: c.rows, Rows: c.toks}
-			bq, bd, ba, bx, bo := g.Buf(compose.BufU32), g.Buf(compose.BufU32), g.Buf(compose.BufU32), g.Buf(compose.BufRow), g.Buf(compose.BufOut)
+			bq, bd, ba, bx := g.Buf(compose.BufU32), g.Buf(compose.BufU32), g.Buf(compose.BufU32), g.Buf(compose.BufRow)
+			bb, bo := g.Buf(compose.BufVec), g.Buf(compose.BufOut)
 			v, err := g.MatVec(compose.MatVecWeight{T: kernels.Q8_0, K: c.k, Rows: c.rows, QS: bq, D: bd, SC: -1},
 				compose.MatVecOperand{A: ba, AX: bx, Toks: c.toks})
 			if err != nil {
 				t.Fatal(err)
 			}
-			g.Store(bo, v)
+			g.Store(bo, g.Bin(compose.OpAdd, v, g.Load(bb)))
 			const group = 128
-			k, err := g.Emit(compose.Schedule{Group: group, Flat: true, Tile: c.tile, TileCols: c.cols, Split: c.split})
-			if err != nil {
-				t.Fatal(err)
-			}
-			kern, err := d.Compile(k)
-			if err != nil {
-				t.Fatalf("%s: %v", d.API(), err)
-			}
 			up := func(b []byte) backend.Buf {
 				buf, err := d.Alloc(max(len(b), 4))
 				if err != nil {
@@ -95,31 +92,50 @@ func TestComposedMatVecMatchesItsDefinition(t *testing.T) {
 				}
 				return buf
 			}
-			out := up(make([]byte, 4*c.rows*c.toks*c.split))
-			bufs := []backend.Buf{up(wordsLE(qs)), up(wordsLE(dw)), up(wordsLE(codes)), up(f32le(ax)), out}
-			if err := kern.Launch((c.rows/c.cols*c.toks/c.tile*c.split+group-1)/group, group, bufs...); err != nil {
-				t.Fatal(err)
+			out := up(make([]byte, 4*c.rows*c.toks))
+			named := []backend.Buf{up(wordsLE(qs)), up(wordsLE(dw)), up(wordsLE(codes)), up(f32le(ax)), up(f32le(bias)), out}
+			bufs := append([]backend.Buf(nil), named...)
+			run := func(r *compose.Row, s compose.Schedule, threads int, args []backend.Buf) {
+				k, err := r.Emit(s)
+				if err != nil {
+					t.Fatal(err)
+				}
+				kern, err := d.Compile(k)
+				if err != nil {
+					t.Fatalf("%s: %v", d.API(), err)
+				}
+				defer kern.Close()
+				if err := kern.Launch((threads+group-1)/group, group, args...); err != nil {
+					t.Fatal(err)
+				}
 			}
-			if c.split > 1 {
-				// The segments' planes summed by a group of their own.
-				red := &compose.Row{Width: c.rows, Rows: c.toks}
-				in, o := red.Buf(compose.BufRow), red.Buf(compose.BufOut)
-				red.Store(o, red.SumPlanes(in, c.split))
-				rk, err := red.Emit(compose.Schedule{Group: group, Flat: true})
+			sched := compose.Schedule{Group: group, Flat: true, Tile: c.tile, TileCols: c.cols}
+			threads := c.rows / c.cols * c.toks / c.tile
+			if c.split <= 1 {
+				run(g, sched, threads, named)
+			} else {
+				// The split rewrite: the segments' planes (the bias in the
+				// first's), then their sum.
+				first, second, b1, b2, err := g.SplitFold(c.split)
 				if err != nil {
 					t.Fatal(err)
 				}
-				rkern, err := d.Compile(rk)
-				if err != nil {
-					t.Fatal(err)
+				planes := up(make([]byte, 4*c.rows*c.toks*c.split))
+				bufs = append(bufs, planes)
+				pick := func(ix []int) []backend.Buf {
+					var out []backend.Buf
+					for _, i := range ix {
+						if i < 0 {
+							out = append(out, planes)
+						} else {
+							out = append(out, named[i])
+						}
+					}
+					return out
 				}
-				sum := up(make([]byte, 4*c.rows*c.toks))
-				if err := rkern.Launch((c.rows*c.toks+group-1)/group, group, out, sum); err != nil {
-					t.Fatal(err)
-				}
-				rkern.Close()
-				bufs = append(bufs, sum)
-				out = sum
+				sched.Split = c.split
+				run(first, sched, threads*c.split, pick(b1))
+				run(second, compose.Schedule{Group: group, Flat: true}, c.rows*c.toks, pick(b2))
 			}
 			got := make([]byte, 4*c.rows*c.toks)
 			if err := out.Read(got); err != nil {
@@ -127,7 +143,7 @@ func TestComposedMatVecMatchesItsDefinition(t *testing.T) {
 			}
 			for tk := 0; tk < c.toks; tk++ {
 				for r := 0; r < c.rows; r++ {
-					var want float64
+					want := float64(bias[r])
 					for j := 0; j < c.k; j++ {
 						want += wv[r*c.k+j] * av[tk*c.k+j]
 					}
@@ -140,7 +156,6 @@ func TestComposedMatVecMatchesItsDefinition(t *testing.T) {
 			for _, b := range bufs {
 				b.Free()
 			}
-			kern.Close()
 		}
 	}
 }

@@ -48,9 +48,6 @@ func (g *Row) Select(cond, a, b int) int { return g.Add(Node{Kind: NSelect, A: a
 // Column is the element's place in its row; RowIdx the row's.
 func (g *Row) Column() int { return g.Add(Node{Kind: NColumn}) }
 
-// Segment is the thread's segment under a split schedule, 0 without one.
-func (g *Row) Segment() int { return g.Add(Node{Kind: NSegment}) }
-
 // RowIdx is the row's index.
 func (g *Row) RowIdx() int { return g.Add(Node{Kind: NRowIdx}) }
 

@@ -102,6 +102,11 @@ const (
 	// NSegment is the thread's segment under a split schedule (an index),
 	// 0 without one.
 	NSegment
+	// NWindow is Red of A over the window of At consecutive elements
+	// holding this one (under the flat schedule, At consecutive threads, in
+	// order from the window's first), every element of the window holding
+	// the same value. At must divide the group.
+	NWindow
 )
 
 // Op is a unary or binary map.
@@ -138,6 +143,10 @@ const (
 	OpHalf
 	// OpBits is word A's 32 bits as a float, no conversion.
 	OpBits
+	// OpWord is float A's 32 bits as a word, no conversion.
+	OpWord
+	// OpInt is float A truncated toward zero to a signed integer.
+	OpInt
 )
 
 // Red is a row reduction.
@@ -196,6 +205,9 @@ type Schedule struct {
 	// carries a value for each it does. Rows and Width must be multiples;
 	// 0 and 1 are one.
 	Tile, TileCols int
+	// Target is the device the kernel is formed for: a lowering whose best
+	// form depends on it reads it here.
+	Target Target
 	// Split, under Flat, divides loop 0's trips between that many
 	// threads, a segment each, the segment the slowest of the grid: a
 	// segment's stores write their own plane of Rows*Width further on, for
@@ -211,7 +223,8 @@ type Key struct {
 
 // Encode is the group's structure and schedule as integers.
 func (g *Row) Encode(s Schedule) []uint32 {
-	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs)), b2u(s.Flat), uint32(s.Tile), uint32(s.TileCols), uint32(s.Split)}
+	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs)), b2u(s.Flat), uint32(s.Tile), uint32(s.TileCols), uint32(s.Split),
+		uint32(s.Target.API), uint32(s.Target.SM), uint32(s.Target.Lanes)}
 	for _, b := range g.Bufs {
 		e = append(e, uint32(b.Kind))
 	}
@@ -256,7 +269,7 @@ func (g *Row) depth() ([]int, bool) {
 		for i, n := range g.Nodes {
 			v := 0
 			switch n.Kind {
-			case NUnary:
+			case NUnary, NWindow:
 				v = d[n.A]
 			case NBinary, NUBinary, NLess:
 				v = max(d[n.A], d[n.B])
@@ -301,7 +314,7 @@ func (g *Row) Check() error {
 			if k := g.Bufs[n.Buf].Kind; k != BufRow && k != BufVec && k != BufScalar && k != BufRowScalar && k != BufU32 && k != BufRowF16 {
 				return fmt.Errorf("compose: node %d loads an output buffer", i)
 			}
-		case NUnary, NReduce:
+		case NUnary, NReduce, NWindow:
 			in = []int{n.A}
 		case NBinary, NUBinary, NLess:
 			in = []int{n.A, n.B}
@@ -416,7 +429,7 @@ func newEnv(up *env) *env { return &env{m: map[int]ir.Value{}, up: up} }
 func (g *Row) operands(n int) []int {
 	nd := g.Nodes[n]
 	switch nd.Kind {
-	case NUnary:
+	case NUnary, NWindow:
 		return []int{nd.A}
 	case NBinary:
 		if nd.Op == OpFma {
@@ -582,6 +595,15 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 	// trips.
 	var seg ir.Value
 	segTrip := 0
+	// flatRaw is the flat schedule's clamped thread number; windowSh each
+	// window node's threadgroup array, declared before any loop.
+	var flatRaw ir.Value
+	windowSh := map[int]ir.Value{}
+	for i, nd := range g.Nodes {
+		if nd.Kind == NWindow {
+			windowSh[i] = b.Shared(fmt.Sprintf("win%d", i), ir.F32, G)
+		}
+	}
 	if s.Flat {
 		for i, nd := range g.Nodes {
 			if nd.Kind == NReduce && depth[i] > 0 {
@@ -599,6 +621,7 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		}
 		flat := b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
 		flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(g.Rows/tr*cols*split-1)))
+		flatRaw = flat
 		if split > 1 {
 			// The segment is the slowest: a plane of Rows*Width a segment.
 			per := b.Const(ir.U32, int64(g.Rows/tr*cols))
@@ -885,6 +908,41 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			case OpShr:
 				v = b.Shr(t, x, y)
 			}
+		case NWindow:
+			// Through threadgroup memory: each thread's value stored at its
+			// slot, then every thread folds its window's, in order.
+			x := elem(nd.A, idx, e)
+			if !s.Flat || nd.At < 1 || G%nd.At != 0 {
+				if emitErr == nil {
+					emitErr = fmt.Errorf("compose: a window of %d over a group of %d, or not flat", nd.At, G)
+				}
+				v = x
+				break
+			}
+			wsh, ok := windowSh[n]
+			if !ok {
+				if emitErr == nil {
+					emitErr = fmt.Errorf("compose: window node %d has no threadgroup array", n)
+				}
+				v = x
+				break
+			}
+			b.Store(wsh, b.TID(), x, 0)
+			b.Barrier()
+			local := b.Sub(ir.U32, flatRaw, b.Mul(ir.U32, b.CTAID(), b.NTID()))
+			span := b.Const(ir.U32, int64(nd.At))
+			wbase := b.Mul(ir.U32, b.Div(ir.U32, local, span), span)
+			if nd.Red == RedMax {
+				v = b.ConstF32(0)
+				for i := 0; i < nd.At; i++ {
+					v = b.Max(ir.F32, v, b.Load(ir.F32, wsh, wbase, int64(i)))
+				}
+			} else {
+				v = b.Load(ir.F32, wsh, wbase, 0)
+				for i := 1; i < nd.At; i++ {
+					v = b.Add(ir.F32, v, b.Load(ir.F32, wsh, wbase, int64(i)))
+				}
+			}
 		case NIConst:
 			v = b.Const(ir.I32, int64(nd.At))
 		case NSegment:
@@ -923,6 +981,10 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 				v = b.CvtF16H(a)
 			case OpBits:
 				v = b.Bitcast(ir.F32, a)
+			case OpWord:
+				v = b.Bitcast(ir.U32, a)
+			case OpInt:
+				v = b.CvtI32(a)
 			case OpRsqrt:
 				v = b.Div(ir.F32, b.ConstF32(1), b.Sqrt(a))
 			case OpAbs:
@@ -1110,6 +1172,7 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 	return b.Done(), nil
 }
 
+
 func b2u(x bool) uint32 {
 	if x {
 		return 1
@@ -1144,6 +1207,13 @@ func (g *Row) typeOf(n int) ir.Type {
 	case NBinary:
 		if nd.Op == OpPackF16 {
 			return ir.U32
+		}
+	case NUnary:
+		switch nd.Op {
+		case OpWord:
+			return ir.U32
+		case OpInt:
+			return ir.I32
 		}
 	}
 	return ir.F32

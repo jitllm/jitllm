@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/jitllm/jitllm/engine/graph"
@@ -247,24 +248,6 @@ func (rb *rowBuild) quantize(v, w int, p *nn.LayerPlan) {
 	}
 	rb.r.Q8 = &compose.Q8{Val: v, A: rb.buf(compose.BufQ8, gaQ8A), X: rb.buf(compose.BufQ8X, gaQ8X),
 		Window: mainkernels.ClampWindow(win, kp), Pad: kp}
-}
-
-// rowSchedule is a row group's schedule: the target's group for its width,
-// a reduction's widest where it has one. The tuner's choice replaces it.
-func rowSchedule(r *compose.Row) compose.Schedule {
-	reduces := false
-	for _, n := range r.Nodes {
-		reduces = reduces || n.Kind == compose.NReduce
-	}
-	top := 256
-	if reduces || r.Q8 != nil {
-		top = mainkernels.RMSNormGroup
-	}
-	g := 32
-	for g < r.Width && g < top {
-		g *= 2
-	}
-	return compose.Schedule{Group: g}
 }
 
 // genOp is op o's launches, or nil where the composer has no form for it
@@ -578,11 +561,36 @@ func (g *devTier) genKern(enc []uint32, build func() (*ir.Kernel, error)) (backe
 	return ent.k, ent.width
 }
 
-// rowKern is row group r's kernel under the target's schedule.
+// rowKern is row group r's kernel under the schedule compose plans for it
+// on this target: one kernel, a row group (a contraction goes through
+// genMatVecNodes).
 func (g *devTier) rowKern(r *compose.Row) rowKernel {
-	s := rowSchedule(r)
+	ps, err := r.Plan(compose.Facts{Target: g.composeTarget()})
+	if err != nil || len(ps) != 1 {
+		return rowKernel{}
+	}
+	s := ps[0].S
 	k, _ := g.genKern(append([]uint32{encRow}, r.Encode(s)...), func() (*ir.Kernel, error) { return r.Emit(s) })
 	return rowKernel{k: k, group: s.Group}
+}
+
+// composeTarget is this device as the composer's passes ask of it, stated
+// once a tier.
+func (g *devTier) composeTarget() compose.Target {
+	if g.ctarget.API != compose.APINone {
+		return g.ctarget
+	}
+	t := compose.Target{API: compose.APIOf(g.dev.API())}
+	if isa := backend.ISAOf(g.dev); strings.HasPrefix(isa, "sm_") {
+		if sm, err := strconv.Atoi(isa[3:]); err == nil {
+			t.SM = sm
+		}
+	}
+	if ok, _ := backend.GuaranteedLanes(g.dev, ir.SubgroupLanes); ok {
+		t.Lanes = ir.SubgroupLanes
+	}
+	g.ctarget = t
+	return t
 }
 
 // The encodings' first words: what built the kernel.
@@ -986,13 +994,12 @@ func (rb *rowBuild) gated(o *devOp, gt, up int) (int, bool) {
 	return rb.bin(compose.OpMul, a, v), true
 }
 
-// genMatVecNodes is a matvec op's kernel formed from primitive nodes
-// (compose.Row.MatVec), a thread an output element of a token under the flat
-// schedule, its schedule chosen from the shape (matSchedule): tokens and
-// weight rows a thread, and a k split whose planes a second group sums. The
-// weight's bias, a residual add (matvec_res) or a gate (act(gate) times the
-// product, matvec_gate) are nodes after the product, in the group that
-// writes the output. Callers hold g.mu.
+// genMatVecNodes is a matvec op's kernels: its product formed from primitive
+// nodes (compose.Row.MatVec), the weight's bias, a residual add (matvec_res)
+// or a gate (act(gate) times the product, matvec_gate) as nodes after it,
+// and the kernels compose plans for the group on this target (Plan): its
+// schedule and, under a k split, the rewrite into the segments' planes and
+// their sum. Callers hold g.mu.
 func (g *devTier) genMatVecNodes(o *devOp, bs *blockScratch, rows int) []genLaunch {
 	l := g.curLayer
 	if l == nil || o.W < 0 || o.W >= len(l.ms) || *l.rs[o.W] == nil {
@@ -1010,7 +1017,6 @@ func (g *devTier) genMatVecNodes(o *devOp, bs *blockScratch, rows int) []genLaun
 		o.Why = whyNoForm
 		return nil
 	}
-	sc := g.matSchedule(m, bs, rows)
 	// The product, into the output or a split's planes.
 	rb := &rowBuild{r: compose.Row{Width: m.rows, Rows: rows}}
 	w := compose.MatVecWeight{T: m.q, K: m.k, Rows: m.rows, QS: rb.buf(compose.BufU32, gaWQS), D: -1, SC: -1}
@@ -1037,128 +1043,66 @@ func (g *devTier) genMatVecNodes(o *devOp, bs *blockScratch, rows int) []genLaun
 		o.Why = whyNoForm
 		return nil
 	}
-	// The epilogue, in the group that writes the output: the product's, or
-	// the planes' sum.
-	out := rb
-	if sc.Split > 1 {
-		need := m.rows * rows * sc.Split
-		if g.genInSub && g.partCap < need || !g.genInSub && !g.sizePart(need) {
-			o.Why = whySplit
-			return nil
-		}
-		// The bias joins the first segment's partial: it is added once,
-		// and the planes' sum is the biased product.
-		if m.bias != nil {
-			first := rb.node(compose.Node{Kind: compose.NLess, A: rb.node(compose.Node{Kind: compose.NSegment}),
-				B: rb.node(compose.Node{Kind: compose.NUConst, At: 1})})
-			bias := rb.node(compose.Node{Kind: compose.NSelect, C: first, A: rb.load(compose.BufVec, gaMBias),
-				B: rb.node(compose.Node{Kind: compose.NConst})})
-			v = rb.bin(compose.OpAdd, v, bias)
-		}
-		rb.store(v, gaSplit)
-		out = &rowBuild{r: compose.Row{Width: m.rows, Rows: rows}}
-		v = out.r.SumPlanes(out.buf(compose.BufRow, gaSplit), sc.Split)
-	} else if m.bias != nil {
-		v = out.bin(compose.OpAdd, v, out.load(compose.BufVec, gaMBias))
+	// The epilogue: the weight's bias, a residual, a gate.
+	if m.bias != nil {
+		v = rb.bin(compose.OpAdd, v, rb.load(compose.BufVec, gaMBias))
 	}
 	switch o.Kind {
 	case dkMatVecRes:
-		v = out.bin(compose.OpAdd, v, out.load(compose.BufRow, gaIn1))
+		v = rb.bin(compose.OpAdd, v, rb.load(compose.BufRow, gaIn1))
 	case dkMatVecGate:
 		act, ok := kernAct(o.Act)
 		if !ok {
 			o.Why = whyEpilogue
 			return nil
 		}
-		gate := out.node(compose.Node{Kind: compose.NUnary, Op: compose.OpAct, Act: act, A: out.load(compose.BufRow, gaIn1)})
-		v = out.bin(compose.OpMul, gate, v)
+		gate := rb.node(compose.Node{Kind: compose.NUnary, Op: compose.OpAct, Act: act, A: rb.load(compose.BufRow, gaIn1)})
+		v = rb.bin(compose.OpMul, gate, v)
 	}
-	out.store(v, gaOut0)
-	const group = 128
-	launch := func(rb *rowBuild, s compose.Schedule, threads int) (genLaunch, bool) {
-		k, _ := g.genKern(append([]uint32{encRow}, rb.r.Encode(s)...), func() (*ir.Kernel, error) { return rb.r.Emit(s) })
-		if k == nil || len(rb.args) > 8 {
-			return genLaunch{}, false
-		}
-		gl := genLaunch{k: k, groups: (threads + group - 1) / group, width: group}
-		gl.n = uint8(copy(gl.args[:], rb.args))
-		return gl, true
+	rb.store(v, gaOut0)
+	// The plan: compose's schedule for this shape on this target, the tier
+	// stating what it knows -- the step, its pins, the weight's tuned split.
+	f := compose.Facts{Target: g.composeTarget(), Step: compose.StepChunk, Tok: bs.tok, RowTile: g.tiles.rowt,
+		Split: g.kb.batch.Split, DecodeSplit: max(m.split, 1), DecodeRowt: max(m.rowt, 1),
+		RagTok: g.kb.batch.RagTok, RagRowT: g.kb.batch.RagRowT, RagSplit: g.kb.batch.RagSplit}
+	switch {
+	case g.genRag:
+		f.Step = compose.StepRagged
+	case rows == 1:
+		f.Step = compose.StepDecode
 	}
-	threads := rows / max(sc.Tile, 1) * (m.rows / max(sc.TileCols, 1)) * max(sc.Split, 1)
-	first, ok := launch(rb, sc, threads)
-	if !ok {
-		o.Why = whyNoKernel
+	ps, err := rb.r.Plan(f)
+	if err != nil {
+		g.LastErr = err.Error()
+		o.Why = whyNoForm
 		return nil
 	}
-	if sc.Split <= 1 {
-		return []genLaunch{first}
-	}
-	sum, ok := launch(out, compose.Schedule{Group: group, Flat: true}, rows*m.rows)
-	if !ok {
-		o.Why = whyNoKernel
-		return nil
-	}
-	return []genLaunch{first, sum}
-}
-
-// matSchedule is a matvec's schedule from its shape: at one token, the
-// weight's own (its tuned k split and rows a thread); over a chunk, tokens a
-// thread (the scratch's) and rows a thread (the tier's row tile, else two,
-// where it divides the rows), or over a ragged step eight tokens and two rows
-// (four from 64 tokens); and a k split doubling until the grid holds 1<<16
-// threads, at most 64, halved until it divides the row's 32-element blocks.
-func (g *devTier) matSchedule(m mv, bs *blockScratch, rows int) compose.Schedule {
-	s := compose.Schedule{Group: 128, Flat: true}
-	if rows == 1 {
-		s.TileCols, s.Split = max(m.rowt, 1), max(m.split, 1)
-		return s
-	}
-	var tok, rowt, split int
-	if g.genRag {
-		// A ragged step's rows (ragMV's rule): eight tokens a thread, two
-		// rows (four from 64 tokens), each halved until it divides.
-		tok, rowt = min(rows, 8), 2
-		if rows >= 64 {
-			rowt = 4
-		}
-		if b := g.kb.batch; b.RagTok > 0 && rows%b.RagTok == 0 {
-			tok = b.RagTok
-		}
-		if b := g.kb.batch; b.RagRowT > 0 {
-			rowt = b.RagRowT
-		}
-		for rows%tok != 0 {
-			tok /= 2
-		}
-		for rowt > 1 && m.rows%rowt != 0 {
-			rowt /= 2
-		}
-		split = g.kb.batch.RagSplit
-	} else {
-		tok = max(bs.tok, 1)
-		if rows%tok != 0 {
-			tok = 1
-		}
-		rowt = 1
-		for _, r := range []int{g.tiles.rowt, 2} {
-			if r > 1 && m.rows%r == 0 {
-				rowt = r
-				break
+	var out []genLaunch
+	for _, p := range ps {
+		if p.S.Split > 1 {
+			need := m.rows * rows * p.S.Split
+			if g.genInSub && g.partCap < need || !g.genInSub && !g.sizePart(need) {
+				o.Why = whySplit
+				return nil
 			}
 		}
-		split = g.kb.batch.Split
-	}
-	if split < 1 {
-		split = 1
-		for m.rows/rowt*(rows/tok)*split < 1<<16 && split < 64 {
-			split *= 2
+		s := p.S
+		k, _ := g.genKern(append([]uint32{encRow}, p.G.Encode(s)...), func() (*ir.Kernel, error) { return p.G.Emit(s) })
+		if k == nil || len(p.Bufs) > 8 {
+			o.Why = whyNoKernel
+			return nil
 		}
+		gl := genLaunch{k: k, groups: (p.Threads + s.Group - 1) / s.Group, width: s.Group}
+		for i, b := range p.Bufs {
+			gl.args[i] = gaSplit
+			if b >= 0 {
+				gl.args[i] = rb.args[b]
+			}
+		}
+		gl.n = uint8(len(p.Bufs))
+		out = append(out, gl)
 	}
-	for split > 1 && (m.k/32)%split != 0 {
-		split /= 2
-	}
-	s.Tile, s.TileCols, s.Split = tok, rowt, split
-	return s
+	return out
 }
 
 // genWhy is why a generator handed an op to a former: what the dump prints
