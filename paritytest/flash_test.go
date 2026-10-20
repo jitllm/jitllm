@@ -15,8 +15,8 @@ import (
 func TestPagedFlashIsMains(t *testing.T) {
 	type fc struct {
 		heads, kv, dim, rows, splits int
-		vec, kimm, sink                bool
-		softcap                        float32
+		vec, kimm, sink              bool
+		softcap                      float32
 	}
 	var cases []fc
 	for _, hd := range [][3]int{{8, 2, 64}, {4, 4, 128}, {16, 2, 64}, {8, 1, 256}} {
