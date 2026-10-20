@@ -40,7 +40,9 @@ func (g *Row) TileLoad(tt ir.TileType, b, ix, stride int, major bool, after int)
 }
 
 // TileSplat is a tile tt of every element v.
-func (g *Row) TileSplat(tt ir.TileType, v int) int { return g.Add(Node{Kind: NTileSplat, A: v, Tile: tt}) }
+func (g *Row) TileSplat(tt ir.TileType, v int) int {
+	return g.Add(Node{Kind: NTileSplat, A: v, Tile: tt})
+}
 
 // TileMMA is a times b plus c.
 func (g *Row) TileMMA(a, b, c int) int { return g.Add(Node{Kind: NTileMMA, A: a, B: b, C: c}) }
