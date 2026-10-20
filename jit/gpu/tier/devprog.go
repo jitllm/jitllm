@@ -2470,7 +2470,11 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 		case graph.OpAct:
 			// An ungated FFN: the activation of up's row alone.
 			out := prog.val(name(0), like(in(0), prog.vals[in(0)].Width), actSlot(prog.slots[in(0)]))
-			prog.ops = append(prog.ops, devOp{Kind: dkAct, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Act: o.Attr.Act})
+			op := devOp{Kind: dkAct, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Act: o.Attr.Act}
+			if len(o.Weight) > 0 {
+				op.Role, op.V = o.Weight[0].Role, l.vecOf(o.Weight[0].Role)
+			}
+			prog.ops = append(prog.ops, op)
 			vals[o.Out[0]] = out
 		case graph.OpActMul:
 			if o.Attr.Act == graph.ActSigmoid && prog.slots[in(0)] == slotMGate {

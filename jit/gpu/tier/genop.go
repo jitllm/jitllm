@@ -421,6 +421,13 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 	case dkCopy:
 		rb.store(rb.load(compose.BufRow, gaIn0), gaOut0)
 	case dkAct:
+		if o.Act == graph.ActXIELU {
+			if o.V == nil || len(o.In) != 1 {
+				return nil
+			}
+			rb.store(rb.r.XIELU(rb.load(compose.BufRow, gaIn0), rb.buf(compose.BufScalar, gaV)), gaOut0)
+			break
+		}
 		a, ok := kernAct(o.Act)
 		if !ok || len(o.In) != 1 {
 			return nil

@@ -656,3 +656,24 @@ func (g *Row) PagedRotaryPairs(src, cs, desc, tab, out, heads, hd, nrot int, neo
 	g.StoreAt(out, g.Bin(OpSub, g.Bin(OpMul, x0, c), g.Bin(OpMul, x1, s)), o)
 	g.StoreAt(out, g.Bin(OpAdd, g.Bin(OpMul, x0, s), g.Bin(OpMul, x1, c)), ub(OpAdd, o, u(stride*page)))
 }
+
+// XIELU is xIELU of x, its four numbers (alpha_p, alpha_n, beta, eps) the
+// scalars of buffer p: x>0 gives alpha_p*x*x + beta*x, else alpha_n times
+// expm1(min(x, eps)) - x plus beta*x, expm1 as its Taylor polynomial to
+// the eighth power where min(x, eps) is at least -0.5.
+func (g *Row) XIELU(x, p int) int {
+	at := func(k int) int { return g.Add(Node{Kind: NLoad, Buf: p, At: k}) }
+	ap, an, beta, eps := at(0), at(1), at(2), at(3)
+	m := g.Bin(OpMin, x, eps)
+	poly := g.Const(1.0 / 40320)
+	for _, c := range []float32{1.0 / 5040, 1.0 / 720, 1.0 / 120, 1.0 / 24, 1.0 / 6, 0.5} {
+		poly = g.Bin(OpAdd, g.Bin(OpMul, poly, m), g.Const(c))
+	}
+	small := g.Bin(OpMul, g.Bin(OpMul, poly, m), m)
+	large := g.Bin(OpSub, g.Bin(OpSub, g.Add(Node{Kind: NUnary, Op: OpExp, A: m}), g.Const(1)), m)
+	gm := g.Add(Node{Kind: NSelect, A: large, B: small, C: g.Add(Node{Kind: NLess, A: m, B: g.Const(-0.5)})})
+	bx := g.Bin(OpMul, beta, x)
+	neg := g.Bin(OpAdd, g.Bin(OpMul, g.Bin(OpAdd, gm, g.Bin(OpSub, m, x)), an), bx)
+	pos := g.Bin(OpAdd, g.Bin(OpMul, g.Bin(OpMul, ap, x), x), bx)
+	return g.Add(Node{Kind: NSelect, A: pos, B: neg, C: g.Add(Node{Kind: NLess, A: g.Const(0), B: x})})
+}
