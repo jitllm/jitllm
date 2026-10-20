@@ -664,10 +664,20 @@ func (g *devTier) rowGrain() int {
 	if g.intMMA > 0 || g.bs == nil {
 		return batchGrain
 	}
-	p := &g.bs.p
-	attn := g.composeTarget().API != compose.APIMSL && p.HeadDim > 0 && p.HeadDim%32 == 0
-	if g.anyNarrow() || p.NExpert > 0 || attn {
+	// What any geometry's blocks ask, the tier's grain being one: a
+	// mixture's banks, or a prefill attention tile at a head a whole number
+	// of 32 wide where no collective tile serves it.
+	asks := func(p *nn.LayerPlan) bool {
+		attn := g.composeTarget().API != compose.APIMSL && p.HeadDim > 0 && p.HeadDim%32 == 0
+		return p.NExpert > 0 || attn
+	}
+	if g.anyNarrow() || asks(&g.bs.p) {
 		return 8
+	}
+	for _, gs := range g.geoSets {
+		if gs.bs != nil && asks(&gs.bs.p) {
+			return 8
+		}
 	}
 	return batchGrain
 }
