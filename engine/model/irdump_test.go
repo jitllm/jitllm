@@ -10,6 +10,7 @@ import (
 
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit/gpu/backend/recorder"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
@@ -86,19 +87,41 @@ func emittedCode(t *testing.T, prof recorder.Profile, path string) (string, erro
 	if s.GPULayers() == 0 {
 		return "", fmt.Errorf("no block on the device")
 	}
+	// A prompt chunk, then one decode step, each asked whatever the other
+	// did: the prologue forms every block's kernels for the step's rows
+	// before the first launch, so a step that stops at an op the composer
+	// cannot form has still asked for the rest.
 	lg, err := s.Prefill(m.Vocab.Encode("Hello there", true))
+	tok := int32(1)
 	if err == nil {
-		_, err = s.Forward(Greedy(lg))
+		tok = Greedy(lg)
+	}
+	_, ferr := s.Forward(tok)
+	if err == nil {
+		err = ferr
 	}
 	var b strings.Builder
-	for i, e := range rec.Launched() {
-		// A kernel the composer formed from ops is marked; one launched from
-		// anywhere else (a pre-made kernel) is not, and is not the composer's.
+	// What was launched, in order (main's pre-made kernels, on main); then
+	// what the composer formed and the step never reached.
+	seen := map[*ir.Kernel]bool{}
+	i := 0
+	emit := func(e recorder.Emitted) {
+		if seen[e.K] {
+			return
+		}
+		seen[e.K] = true
 		mark := ""
 		if strings.HasPrefix(e.K.Comment, "composed") {
 			mark = " [composed]"
 		}
 		fmt.Fprintf(&b, "// kernel %d: %s%s\n%s\n", i, e.K.Name, mark, e.Code)
+		i++
+	}
+	for _, e := range rec.Launched() {
+		emit(e)
+	}
+	for _, e := range rec.Compiled(func(k *ir.Kernel) bool { return strings.HasPrefix(k.Comment, "composed") }) {
+		emit(e)
 	}
 	return b.String(), err
 }

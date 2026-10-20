@@ -1,20 +1,21 @@
 package main
 
 import (
-	"encoding/binary"
 	"fmt"
 	"sort"
 	"time"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/gpu/compose"
 )
 
 // deviceReadWall measures the first device of api's read bandwidth in this
 // process, over a working set of mib MiB: the denominator of a decode row's
 // "fraction of the wall" (RULE 1), taken beside the row rather than carried
-// from another session. It streams one word a thread a step, grid-strided,
-// and reports the median of rounds launches in GB/s.
+// from another session. It streams one word a thread a step, grid-strided --
+// a composed row group: each thread folds its words, in[t + j*threads] for j
+// below per, and stores the sum -- and reports the median of rounds launches
+// in GB/s.
 func deviceReadWall(api string, mib, rounds int) (float64, string, error) {
 	devs := backend.Open()
 	defer func() {
@@ -35,7 +36,15 @@ func deviceReadWall(api string, mib, rounds int) (float64, string, error) {
 	const threads = 256 * 1024
 	per := max((mib<<20)/4/threads, 1)
 	n := threads * per
-	k, err := kernels.StreamWide(per, 1)
+	const width = 256
+	r := &compose.Row{Width: width, Rows: threads / width}
+	in0, out0 := r.Buf(compose.BufRow), r.Buf(compose.BufOut)
+	t := r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.RowIdx(), r.UConst(width)), r.Column())
+	sum := r.FoldSum(per, func(j int) int {
+		return r.LoadAt(in0, r.UBin(compose.OpAdd, t, r.UBin(compose.OpMul, j, r.UConst(threads))))
+	})
+	r.Store(out0, sum)
+	k, err := r.Emit(compose.Schedule{Group: width})
 	if err != nil {
 		return 0, "", err
 	}
@@ -52,20 +61,12 @@ func deviceReadWall(api string, mib, rounds int) (float64, string, error) {
 	if err := in.Write(make([]byte, n*4)); err != nil {
 		return 0, "", err
 	}
-	np, err := d.Alloc(4)
-	if err != nil {
-		return 0, "", err
-	}
-	defer np.Free()
-	if err := np.Write(binary.LittleEndian.AppendUint32(nil, threads)); err != nil {
-		return 0, "", err
-	}
 	out, err := d.Alloc(threads * 4)
 	if err != nil {
 		return 0, "", err
 	}
 	defer out.Free()
-	run := func() error { return kern.Launch(threads/256, 256, in, np, out) }
+	run := func() error { return kern.Launch(threads/width, width, in, out) }
 	for i := 0; i < 5; i++ {
 		if err := run(); err != nil {
 			return 0, "", err

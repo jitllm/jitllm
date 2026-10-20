@@ -104,6 +104,20 @@ func (d *Device) Launched() []Emitted {
 	return out
 }
 
+// Compiled is every kernel compiled for d whose IR keep accepts, launched
+// or not, in the order compiled.
+func (d *Device) Compiled(keep func(*ir.Kernel) bool) []Emitted {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []Emitted
+	for i, k := range d.irs {
+		if keep(k) {
+			out = append(out, Emitted{K: k, Code: d.code[i]})
+		}
+	}
+	return out
+}
+
 // IR is every kernel compiled for d, in order.
 func (d *Device) IR() []*ir.Kernel {
 	d.mu.Lock()
