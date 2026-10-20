@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -13,7 +12,7 @@ import (
 // into shared memory, and into its output alone among its parameters; a
 // kernel storing into two parameters reports both.
 func TestWrittenParamsNamesTheOutputs(t *testing.T) {
-	k, err := mainkernels.GemmTile(mainkernels.MatVecShape{T: kernels.Q4_K, K: 512, Rows: 64, NTok: 32},
+	k, err := mainkernels.GemmTile(mainkernels.MatVecShape{T: mainkernels.Q4_K, K: 512, Rows: 64, NTok: 32},
 		mainkernels.TileGemm{MT: 4, NT: 2, WM: 2, WN: 2, KB: 1})
 	if err != nil {
 		t.Fatal(err)

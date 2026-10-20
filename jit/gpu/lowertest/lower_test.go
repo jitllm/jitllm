@@ -108,8 +108,8 @@ func all(t *testing.T) map[string]*ir.Kernel {
 		add("subgroup/"+ty.String(), func() (*ir.Kernel, error) { return mainkernels.SubgroupProbe(ty) })
 	}
 
-	for _, q := range []kernels.Quant{kernels.Q4_0, kernels.Q8_0, kernels.Q4_K,
-		kernels.Q3_K, kernels.Q5_K, kernels.Q6_K} {
+	for _, q := range []mainkernels.Quant{mainkernels.Q4_0, mainkernels.Q8_0, mainkernels.Q4_K,
+		mainkernels.Q3_K, mainkernels.Q5_K, mainkernels.Q6_K} {
 		for _, split := range []int{1, 4} {
 			q, split := q, split
 			add(fmt.Sprintf("matvec/%s/split%d", q, split), func() (*ir.Kernel, error) {
@@ -126,7 +126,7 @@ func all(t *testing.T) map[string]*ir.Kernel {
 		c := c
 		add(fmt.Sprintf("matvec-moe/e%ds%d/split%d", c.experts, c.slots, c.split),
 			func() (*ir.Kernel, error) {
-				return mainkernels.MatVec(mainkernels.MatVecShape{T: kernels.Q4_K, K: 2048,
+				return mainkernels.MatVec(mainkernels.MatVecShape{T: mainkernels.Q4_K, K: 2048,
 					Rows: 64, Split: c.split, Experts: c.experts, Slots: c.slots})
 			})
 	}
@@ -142,17 +142,17 @@ func all(t *testing.T) map[string]*ir.Kernel {
 	// q, k and v in one launch, with v in another format.
 	add("matvecseg/q4k-q4k-q6k/split16g", func() (*ir.Kernel, error) {
 		return mainkernels.MatVecSegments([]mainkernels.MatVecShape{
-			{T: kernels.Q4_K, K: 2048, Rows: 256}, {T: kernels.Q4_K, K: 2048, Rows: 64},
-			{T: kernels.Q6_K, K: 2048, Rows: 64, Bias: true}}, 16, true)
+			{T: mainkernels.Q4_K, K: 2048, Rows: 256}, {T: mainkernels.Q4_K, K: 2048, Rows: 64},
+			{T: mainkernels.Q6_K, K: 2048, Rows: 64, Bias: true}}, 16, true)
 	})
 	// The gated up projection, on both final-row paths.
 	add("matvec-gate/silu/split1", func() (*ir.Kernel, error) {
-		return mainkernels.MatVec(mainkernels.MatVecShape{T: kernels.Q4_K, K: 2048, Rows: 64, Split: 1,
-			Gate: true, GateAct: kernels.ActSiLU})
+		return mainkernels.MatVec(mainkernels.MatVecShape{T: mainkernels.Q4_K, K: 2048, Rows: 64, Split: 1,
+			Gate: true, GateAct: mainkernels.ActSiLU})
 	})
 	add("matvec-gate/gelu/split4g", func() (*ir.Kernel, error) {
-		return mainkernels.MatVec(mainkernels.MatVecShape{T: kernels.Q4_K, K: 2048, Rows: 64, Split: 4,
-			GroupSplit: true, Gate: true, GateAct: kernels.ActGELU})
+		return mainkernels.MatVec(mainkernels.MatVecShape{T: mainkernels.Q4_K, K: 2048, Rows: 64, Split: 4,
+			GroupSplit: true, Gate: true, GateAct: mainkernels.ActGELU})
 	})
 	add("expertweights", func() (*ir.Kernel, error) {
 		return mainkernels.ExpertWeights(mainkernels.MoERoute{NExpert: 64, K: 8, Norm: true})
@@ -188,19 +188,19 @@ func all(t *testing.T) map[string]*ir.Kernel {
 	add("normpart", func() (*ir.Kernel, error) { return mainkernels.NormPart(2048, 64) })
 	add("normapply", func() (*ir.Kernel, error) { return mainkernels.NormApply(2048, 64, 1e-6, false) })
 	add("normapply1", func() (*ir.Kernel, error) { return mainkernels.NormApply(2048, 64, 1e-6, true) })
-	add("silumul", func() (*ir.Kernel, error) { return mainkernels.ActMul(16384, kernels.ActSiLU) })
+	add("silumul", func() (*ir.Kernel, error) { return mainkernels.ActMul(16384, mainkernels.ActSiLU) })
 	add("sigmoidmul", func() (*ir.Kernel, error) { return mainkernels.SigmoidMul(16384) })
 	add("splitheadgate", func() (*ir.Kernel, error) { return mainkernels.SplitHeadGate(16, 256, 1) })
 	add("sharedrouterlogits", func() (*ir.Kernel, error) { return mainkernels.SharedRouterLogits(1, 2048) })
 	add("sharedexpertadd", func() (*ir.Kernel, error) { return mainkernels.SharedExpertAdd(2048, 1) })
 	add("add", func() (*ir.Kernel, error) { return mainkernels.Add(2048) })
 	add("scale", func() (*ir.Kernel, error) { return mainkernels.Scale(2048) })
-	add("actmul-gelu", func() (*ir.Kernel, error) { return mainkernels.ActMul(16384, kernels.ActGELU) })
-	add("actmul-swiglu-oai", func() (*ir.Kernel, error) { return mainkernels.ActMul(16384, kernels.ActSwiGLUOAI) })
-	add("actmul-situ", func() (*ir.Kernel, error) { return mainkernels.ActMul(16384, kernels.ActSitu) })
-	add("act-silu", func() (*ir.Kernel, error) { return mainkernels.Act(16384, kernels.ActSiLU) })
-	add("act-gelu", func() (*ir.Kernel, error) { return mainkernels.Act(16384, kernels.ActGELU) })
-	add("act-quickgelu", func() (*ir.Kernel, error) { return mainkernels.Act(16384, kernels.ActQuickGELU) })
+	add("actmul-gelu", func() (*ir.Kernel, error) { return mainkernels.ActMul(16384, mainkernels.ActGELU) })
+	add("actmul-swiglu-oai", func() (*ir.Kernel, error) { return mainkernels.ActMul(16384, mainkernels.ActSwiGLUOAI) })
+	add("actmul-situ", func() (*ir.Kernel, error) { return mainkernels.ActMul(16384, mainkernels.ActSitu) })
+	add("act-silu", func() (*ir.Kernel, error) { return mainkernels.Act(16384, mainkernels.ActSiLU) })
+	add("act-gelu", func() (*ir.Kernel, error) { return mainkernels.Act(16384, mainkernels.ActGELU) })
+	add("act-quickgelu", func() (*ir.Kernel, error) { return mainkernels.Act(16384, mainkernels.ActQuickGELU) })
 	add("xielu", func() (*ir.Kernel, error) { return mainkernels.XIELU(16384) })
 	add("expertweights_sparsemixer", func() (*ir.Kernel, error) {
 		return mainkernels.ExpertWeights(mainkernels.MoERoute{NExpert: 16, K: 2, SparseMixer: 0.01})
@@ -277,10 +277,10 @@ func all(t *testing.T) map[string]*ir.Kernel {
 	// tensor the Load and Store immediates are large, which a 256-row shape
 	// would not exercise.
 	add("unpack-q4k/256x2048", func() (*ir.Kernel, error) {
-		return mainkernels.Unpack(kernels.Q4_K, 256, 2048)
+		return mainkernels.Unpack(mainkernels.Q4_K, 256, 2048)
 	})
 	add("unpack-q4k/28672x8192", func() (*ir.Kernel, error) {
-		return mainkernels.Unpack(kernels.Q4_K, 28672, 8192)
+		return mainkernels.Unpack(mainkernels.Q4_K, 28672, 8192)
 	})
 	return out
 }
@@ -455,8 +455,8 @@ func mmaKernels(t *testing.T) map[string]*ir.Kernel {
 		}
 		out[fmt.Sprintf("mmaprobe/m%dn%dk%d", sh.M, sh.N, sh.K)] = k
 	}
-	for _, q := range []kernels.Quant{kernels.Q4_0, kernels.Q8_0, kernels.Q4_K,
-		kernels.Q3_K, kernels.Q5_K, kernels.Q6_K} {
+	for _, q := range []mainkernels.Quant{mainkernels.Q4_0, mainkernels.Q8_0, mainkernels.Q4_K,
+		mainkernels.Q3_K, mainkernels.Q5_K, mainkernels.Q6_K} {
 		for _, tl := range [][2]int{{1, 1}, {4, 4}} {
 			k, err := mainkernels.MatVecMMA(mainkernels.MatVecShape{T: q, K: 2048, Rows: 128,
 				NTok: 128, MT: tl[0], NT: tl[1]})

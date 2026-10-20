@@ -25,8 +25,8 @@ func TestTileKernelsAssemble(t *testing.T) {
 	ptxas, _ := exec.LookPath("ptxas")
 	dir := t.TempDir()
 	ks := map[string]*ir.Kernel{}
-	for _, q := range []kernels.Quant{kernels.Q4_K, kernels.Q6_K, kernels.Q8_0, kernels.Q4_0} {
-		sub, _, _, _ := kernels.Layout(q)
+	for _, q := range []mainkernels.Quant{mainkernels.Q4_K, mainkernels.Q6_K, mainkernels.Q8_0, mainkernels.Q4_0} {
+		sub, _, _, _ := mainkernels.Layout(q)
 		tl := mainkernels.TileGemm{MT: 4, NT: 4, WM: 2, WN: 2, KB: max(32/sub, 1)}
 		k, err := mainkernels.GemmTile(mainkernels.MatVecShape{T: q, K: 1024, Rows: 128, NTok: 64, Bias: true}, tl)
 		if err != nil {

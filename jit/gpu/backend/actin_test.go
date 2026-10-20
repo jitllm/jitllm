@@ -35,12 +35,12 @@ func TestActInIsTheTwoLaunches(t *testing.T) {
 			warps = append(warps, true)
 		}
 		for _, c := range []struct {
-			q    kernels.Quant
+			q    mainkernels.Quant
 			k    int
 			rows int
 		}{
-			{kernels.Q4_K, 2048, 512}, {kernels.Q6_K, 2048, 256}, {kernels.Q4_K, 8192, 128},
-			{kernels.Q8_0, 96, 64}, {kernels.Q8_0, 2080, 128}, {kernels.Q4_K, 1536, 256},
+			{mainkernels.Q4_K, 2048, 512}, {mainkernels.Q6_K, 2048, 256}, {mainkernels.Q4_K, 8192, 128},
+			{mainkernels.Q8_0, 96, 64}, {mainkernels.Q8_0, 2080, 128}, {mainkernels.Q4_K, 1536, 256},
 		} {
 			for _, sp := range []struct {
 				split int
@@ -54,8 +54,8 @@ func TestActInIsTheTwoLaunches(t *testing.T) {
 						{On: true, Window: win},
 						{On: true, Norm: true, Eps: 1e-5, Window: win},
 						{On: true, Norm: true, Eps: 1e-6, AddOne: true, Window: win},
-						{On: true, Gated: true, Act: kernels.ActSiLU, Window: win},
-						{On: true, Gated: true, Act: kernels.ActGELU, Window: win},
+						{On: true, Gated: true, Act: mainkernels.ActSiLU, Window: win},
+						{On: true, Gated: true, Act: mainkernels.ActGELU, Window: win},
 					} {
 						for _, warp := range warps {
 							if warp && !in.Norm {
@@ -64,7 +64,7 @@ func TestActInIsTheTwoLaunches(t *testing.T) {
 							in.Warp = warp
 							for _, epi := range []string{"plain", "res", "gate"} {
 								s := mainkernels.MatVecShape{T: c.q, K: c.k, Rows: c.rows, Split: sp.split,
-									GroupSplit: sp.grp, Bias: epi == "res", Gate: epi == "gate", GateAct: kernels.ActSiLU}
+									GroupSplit: sp.grp, Bias: epi == "res", Gate: epi == "gate", GateAct: mainkernels.ActSiLU}
 								name := fmt.Sprintf("%s/%v-%dx%d/s%d-g%v/w%d/norm%v-one%v-warp%v-gated%v-%v/%s", d.API(), c.q,
 									c.rows, c.k, sp.split, sp.grp, win, in.Norm, in.AddOne, warp, in.Gated, in.Act, epi)
 								if actInCase(t, d, name, []mainkernels.MatVecShape{s}, in) {
@@ -73,7 +73,7 @@ func TestActInIsTheTwoLaunches(t *testing.T) {
 							}
 							if sp.split == 1 || sp.grp {
 								segs := []mainkernels.MatVecShape{{T: c.q, K: c.k, Rows: c.rows},
-									{T: c.q, K: c.k, Rows: 64, Bias: true}, {T: kernels.Q8_0, K: c.k, Rows: 64}}
+									{T: c.q, K: c.k, Rows: 64, Bias: true}, {T: mainkernels.Q8_0, K: c.k, Rows: 64}}
 								name := fmt.Sprintf("%s/seg-%v-%d/s%d-g%v/w%d/norm%v-warp%v-gated%v", d.API(), c.q, c.k,
 									sp.split, sp.grp, win, in.Norm, warp, in.Gated)
 								s0 := segs[0]
@@ -190,7 +190,7 @@ func actInCase(t *testing.T, d backend.Device, name string, shapes []mainkernels
 		return true
 	}
 	for i, s := range shapes {
-		qs, dw, scw, err := kernels.PackWeights(s.T, rawWeights(s.T, s.Rows, k, rng), s.Rows, k)
+		qs, dw, scw, err := mainkernels.PackWeights(s.T, rawWeights(kernels.Quant(s.T), s.Rows, k, rng), s.Rows, k)
 		if err != nil {
 			t.Fatal(err)
 		}

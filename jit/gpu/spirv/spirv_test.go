@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/jit/gpu/spirv"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
@@ -116,7 +115,7 @@ func TestDescriptorAnchor(t *testing.T) {
 		opULessThan   = 176
 		opLoopMerge   = 246
 	)
-	sh := mainkernels.MatVecShape{T: kernels.Q4_K, K: 512, Rows: 64}
+	sh := mainkernels.MatVecShape{T: mainkernels.Q4_K, K: 512, Rows: 64}
 	seg, err := mainkernels.MatVecSegments([]mainkernels.MatVecShape{sh, sh}, 1, false)
 	if err != nil {
 		t.Fatal(err)
