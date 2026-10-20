@@ -21,9 +21,18 @@ func Decompose(g *Graph) *Graph {
 		In: append([]ValueID(nil), g.In...), Out: append([]ValueID(nil), g.Out...)}
 	weights := map[ValueID]ValueID{}
 	for _, o := range g.Ops {
-		if o.Kind == OpRoute {
+		switch o.Kind {
+		case OpRoute:
 			if w, ok := d.route(o); ok {
 				weights[o.Out[0]] = w
+				continue
+			}
+		case OpGaussTopK:
+			if d.gaussTopK(o) {
+				continue
+			}
+		case OpLaurel:
+			if d.laurel(o) {
 				continue
 			}
 		}
@@ -140,6 +149,76 @@ func (d *Graph) route(o Op) (ValueID, bool) {
 		w = p.out("route.weights_s", K, Op{Kind: OpMap, In: []ValueID{w}, Attr: Attrs{Fn: MapMul, Const: float64(float32(a.Scale))}})
 	}
 	return w, true
+}
+
+// gaussTopK writes op o, which keeps the values of a row above its mean plus
+// Bound standard deviations and zeroes the rest, as primitives: the mean the
+// row's sum times 1/n, the population variance the sum of the squared
+// deviations times 1/n (no epsilon), the cut the deviation times Bound plus
+// the mean, and each value max(x - cut, 0). Every constant is the float32 the
+// host's routine holds, the multiplies and the add separate (not fused), and
+// each sum runs in sequence. It stays whole where its row is not f32 or its
+// bound is not finite.
+func (d *Graph) gaussTopK(o Op) bool {
+	if len(o.In) != 1 || len(o.Out) != 1 {
+		return false
+	}
+	x := o.In[0]
+	n := d.Values[x].Width
+	bound := o.Attr.Bound
+	if n < 1 || d.Values[x].Elem != ElemF32 || d.Values[o.Out[0]].Width != n || math.IsNaN(bound) || math.IsInf(bound, 0) {
+		return false
+	}
+	p := prims{d: d}
+	sum := func(name string, v ValueID) ValueID {
+		return p.out(name, 1, Op{Kind: OpReduce, In: []ValueID{v}, Attr: Attrs{Fn: MapAdd, Order: OrderSeq}})
+	}
+	mapc := func(name string, w int, f MapFn, c float64, in ...ValueID) ValueID {
+		return p.out(name, w, Op{Kind: OpMap, In: in, Attr: Attrs{Fn: f, Const: c}})
+	}
+	inv := float64(1 / float32(n))
+	mean := mapc("gauss.mean", 1, MapMul, inv, sum("gauss.sum", x))
+	dev := mapc("gauss.dev", n, MapSub, 0, x, mean)
+	sq := mapc("gauss.sq", n, MapMul, 0, dev, dev)
+	sd := mapc("gauss.sd", 1, MapSqrt, 0, mapc("gauss.var", 1, MapMul, inv, sum("gauss.sqsum", sq)))
+	cut := mapc("gauss.cut", 1, MapAdd, 0, mapc("gauss.offset", 1, MapMul, float64(float32(bound)), sd), mean)
+	gap := mapc("gauss.gap", n, MapSub, 0, x, cut)
+	d.op(Op{Kind: OpMap, In: []ValueID{gap}, Out: o.Out, Attr: Attrs{Fn: MapMax, Const: 0}})
+	return true
+}
+
+// laurel writes op o, In[0] + norm(R(L(In[0]))), as primitives: the two
+// matrices by role, the norm over the second's output, and the add of the
+// input. It stays whole where a binding is missing or the widths do not chain.
+func (d *Graph) laurel(o Op) bool {
+	if len(o.In) != 1 || len(o.Out) != 1 {
+		return false
+	}
+	var l, r, post *Binding
+	for i := range o.Weight {
+		switch w := &o.Weight[i]; w.Role {
+		case jlm.RoleLaurelL:
+			l = w
+		case jlm.RoleLaurelR:
+			r = w
+		case jlm.RoleLaurelPostNorm:
+			post = w
+		default:
+			return false
+		}
+	}
+	h := o.In[0]
+	n := d.Values[h].Width
+	if l == nil || r == nil || post == nil || len(o.Weight) != 3 || d.Values[h].Elem != ElemF32 ||
+		l.K != n || r.K != l.Rows || r.Rows != n || post.K != n || d.Values[o.Out[0]].Width != n {
+		return false
+	}
+	p := prims{d: d}
+	low := p.out("laurel.low", l.Rows, Op{Kind: OpMatVec, In: []ValueID{h}, Weight: []Binding{*l}})
+	up := p.out("laurel.up", n, Op{Kind: OpMatVec, In: []ValueID{low}, Weight: []Binding{*r}})
+	nm := p.out("laurel.norm", n, Op{Kind: OpNorm, In: []ValueID{up}, Weight: []Binding{*post}, Attr: Attrs{Eps: o.Attr.Eps}})
+	d.op(Op{Kind: OpAdd, In: []ValueID{nm, h}, Out: o.Out})
+	return true
 }
 
 // prims writes primitives into a graph, each into a new value.

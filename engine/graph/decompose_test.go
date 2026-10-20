@@ -34,6 +34,14 @@ func evalPrims(t *testing.T, g *Graph, in map[ValueID][]float32, w map[jlm.Role]
 				}
 				out[r] = s
 			}
+		case OpNorm:
+			// An RMSNorm in float32 with float64 statistics: the oracle's.
+			oracle.RMSNorm32(out, v[o.In[0]], w[o.Weight[0].Role], o.Attr.Eps)
+		case OpAdd:
+			a, b := v[o.In[0]], v[o.In[1]]
+			for i := range out {
+				out[i] = a[i] + b[i]
+			}
 		case OpMap:
 			var ops [][]float32
 			for _, id := range o.In {
