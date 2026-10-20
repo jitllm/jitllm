@@ -1,6 +1,7 @@
 package tier
 
 import (
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"slices"
 	"strings"
@@ -466,7 +467,7 @@ func rwMatVecRes(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq 
 	if residScaled(&bs.p) {
 		return false // a scaled residual: the fused kernel carries no scale
 	}
-	if R != 1 {
+	if R != 1 && !ragFew(nseq) {
 		return false
 	}
 	for i, o := range p.ops {
@@ -501,10 +502,11 @@ func rwMatVecRes(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq 
 // rwMatVecGate: up's matvec and the act_mul over the gate, as up's Gate
 // variant writing the product.
 func rwMatVecGate(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
-	if R != 1 {
+	few := R != 1 && ragFew(nseq)
+	if R != 1 && !few {
 		return false
 	}
-	if l.mvu.split > 1 && !l.mvu.group {
+	if l.mvu.split > 1 && !l.mvu.group && !few {
 		return false // the gate rides only a matvec that writes its final row
 	}
 	if l.mvu.bias != nil || l.mvg.bias != nil {
@@ -519,6 +521,9 @@ func rwMatVecGate(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq
 			continue
 		}
 		am := p.ops[j]
+		if few && am.Act != graph.ActSiLU && am.Act != graph.ActGELUTanh {
+			continue // a step's few rows carry the two gates its reduction was measured with
+		}
 		p.replace(i, j, devOp{Kind: dkMatVecGate, Src: cat(o.Src, am.Src), In: []devVal{o.In[0], am.In[0]}, Out: am.Out, Role: o.Role, W: o.W, Act: am.Act})
 		return true
 	}
