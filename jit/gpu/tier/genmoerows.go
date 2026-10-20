@@ -48,10 +48,18 @@ func (g *devTier) genMoERows(o *devOp, prog *devProgram, bs *blockScratch, rows 
 		cnt := en.buf(u32, gaMgCnt)
 		en.r.Store(en.buf(out32, gaMgEnds), en.r.GroupEnds(cnt, E, m.unit))
 		co := &rowBuild{r: compose.Row{Width: np, Rows: 1}}
-		co.r.GroupColumns(co.buf(u32, gaMgEnds), co.buf(out32, gaMgColE), co.buf(out32, gaMgPerm), -1, rows, E)
+		cp := -1
+		if m.colPair != nil {
+			cp = co.buf(out32, gaColPair)
+		}
+		co.r.GroupColumns(co.buf(u32, gaMgEnds), co.buf(out32, gaMgColE), co.buf(out32, gaMgPerm), cp, rows, E)
 		sc := &rowBuild{r: compose.Row{Width: rows * K, Rows: 1}}
 		ssel, scnt, sends, soff := sc.buf(u32, gaIn0), sc.buf(u32, gaMgCnt), sc.buf(u32, gaMgEnds), sc.buf(u32, gaMgOff)
-		sc.r.GroupScatter(ssel, scnt, sends, soff, sc.buf(out32, gaMgPerm), sc.buf(out32, gaMgPos), -1, rows, K, E, m.unit)
+		sp := -1
+		if m.colPair != nil {
+			sp = sc.buf(out32, gaColPair)
+		}
+		sc.r.GroupScatter(ssel, scnt, sends, soff, sc.buf(out32, gaMgPerm), sc.buf(out32, gaMgPos), sp, rows, K, E, m.unit)
 		ti := &rowBuild{r: compose.Row{Width: np / groupTok, Rows: 1}}
 		ends := ti.buf(u32, gaMgEnds)
 		ti.r.Store(ti.buf(out32, gaMgTsel), ti.r.GroupTiles(ends, E, groupTok))
