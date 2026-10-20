@@ -22,7 +22,9 @@ type Miss struct {
 // by its dataflow (Dataflow): each of a kernel's live instructions (liveOps),
 // a value computed twice in one kernel counted once, and an instruction of
 // the composer's matching one of main's at most. Constants are not counted
-// (constant): a constant op or constant-valued arithmetic is an immediate. It returns how many of
+// (constant): a constant op or constant-valued arithmetic is an immediate. Nor
+// is index arithmetic (indexOnly): its form is no part of what a kernel
+// computes, and every access is counted at its canonical address. It returns how many of
 // main's values there are (parameters aside), how many match, and the rest.
 func Compare(main, composed []*ir.Kernel) (total, same int, missing []Miss) {
 	in := NewInterner()
@@ -34,12 +36,13 @@ func Compare(main, composed []*ir.Kernel) (total, same int, missing []Miss) {
 	}
 	for _, k := range main {
 		live := liveOps(k)
+		ix := indexOnly(k, live)
 		// A value a kernel computes twice is one value: main's builder
 		// eliminates no common subexpression, and recomputing is no part of
 		// what it computes.
 		seen := map[int32]bool{}
 		for i, id := range in.Dataflow(k) {
-			if k.Ops[i].Kind == ir.OpParam || !live[i] || seen[id] || in.constant(k, i, id) {
+			if k.Ops[i].Kind == ir.OpParam || !live[i] || ix[i] || seen[id] || in.constant(k, i, id) {
 				continue
 			}
 			seen[id] = true
@@ -744,4 +747,39 @@ func (c *canon) describeOp(i, d int) string {
 		s += c.describe(int(a)-1, d-1)
 	}
 	return s + ")"
+}
+
+// indexOnly is which of k's integer instructions serve only to address
+// memory: every live reader takes it as an access's index, a loop's trip,
+// or is one of these itself. The form of index arithmetic is not what a
+// kernel computes; each access's address, canonical, is.
+func indexOnly(k *ir.Kernel, live []bool) []bool {
+	idx := make([]bool, len(k.Ops))
+	for i, o := range k.Ops {
+		idx[i] = live[i] && (o.Type == ir.U32 || o.Type == ir.I32) && o.Kind != ir.OpLoad && o.Kind != ir.OpConst &&
+			o.Kind != ir.OpParam
+	}
+	for changed := true; changed; {
+		changed = false
+		for j, o := range k.Ops {
+			if !live[j] {
+				continue
+			}
+			for p, a := range o.Args {
+				if a == 0 || int(a) > len(k.Ops) || !idx[a-1] {
+					continue
+				}
+				addr := (o.Kind == ir.OpLoad || o.Kind == ir.OpStore) && p == 1 || o.Kind == ir.OpLoop && p == 0
+				if !addr && !idx[j] {
+					idx[a-1], changed = false, true
+				}
+			}
+			for _, a := range o.Vargs {
+				if a != 0 && int(a) <= len(k.Ops) && idx[a-1] && !idx[j] {
+					idx[a-1], changed = false, true
+				}
+			}
+		}
+	}
+	return idx
 }

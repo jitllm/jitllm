@@ -195,8 +195,8 @@ func (g *Row) induct(c int, s Schedule) *Row {
 	formed := g.iterFormed(iter)
 	ridden := map[int]bool{}
 	// sole is the one index the iterator serves, where it serves one: its
-	// cursor replaces the loop's counter, unless it steps by one, when it is
-	// the counter and a base.
+	// cursor replaces the loop's counter -- in a run-time loop, unless it
+	// steps by one, when it is the counter and a base.
 	sole := -1
 	{
 		var in []int
@@ -235,7 +235,7 @@ func (g *Row) induct(c int, s Schedule) *Row {
 		if a == nil || a.terms[iter] == 0 {
 			continue
 		}
-		ridden[ix] = nested[ix] || unrolled && a.terms[iter] != 1 || init[ix] || loads[ix] > 1 && !formed || ix == sole && a.terms[iter] != 1
+		ridden[ix] = nested[ix] || unrolled && a.terms[iter] != 1 || init[ix] || loads[ix] > 1 && !formed || ix == sole && (a.terms[iter] != 1 || g.Loops[c] > 0)
 		var base []int
 		for k, v := range a.terms {
 			if k != iter && v != 0 && !nested[k] && !g.isTileOff(k) {

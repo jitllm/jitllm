@@ -289,3 +289,37 @@ func (g *Row) storeLoop(st Store) int {
 	}
 	return c
 }
+
+// SquareSumParts is the group element's part of a row's sum of squares:
+// element p of parts consecutive runs of the row's k elements at x (BufRow,
+// read by index), summed in element order from zero. NormApplyParts reads
+// the parts back.
+func (g *Row) SquareSumParts(x, k, parts int) int {
+	u, ub := g.UConst, g.UBin
+	per := k / parts
+	start := ub(OpMul, g.Column(), u(per))
+	c := g.Loop(per)
+	acc := g.Fold(c, g.Const(0))
+	v := g.LoadAt(x, ub(OpAdd, start, g.Iter(c)))
+	g.SetFold(acc, g.Add(Node{Kind: NBinary, Op: OpFma, A: v, B: v, C: acc}))
+	return acc
+}
+
+// NormApplyParts is RMSNorm's element from a row's sums of squares in parts
+// partials at part (BufRow, read by index): the element of x times
+// 1/sqrt(sum/k + eps) times the weight w (BufVec), one more where addOne.
+func (g *Row) NormApplyParts(x, w, part, k, parts int, eps float32, addOne bool) int {
+	u, ub := g.UConst, g.UBin
+	base := ub(OpMul, g.RowIdx(), u(parts))
+	sum := g.Const(0)
+	for p := 0; p < parts; p++ {
+		sum = g.Bin(OpAdd, sum, g.LoadAt(part, ub(OpAdd, base, u(p))))
+	}
+	mean := g.Bin(OpAdd, g.Bin(OpMul, sum, g.Const(1/float32(k))), g.Const(eps))
+	scale := g.Bin(OpDiv, g.Const(1), g.Add(Node{Kind: NUnary, Op: OpSqrt, A: mean}))
+	wt := g.Load(w)
+	if addOne {
+		wt = g.Bin(OpAdd, wt, g.Const(1))
+	}
+	return g.Bin(OpMul, g.Bin(OpMul, g.Load(x), scale), wt)
+}
