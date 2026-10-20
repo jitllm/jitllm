@@ -1562,17 +1562,23 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		switch nd.Kind {
 		case NLoad:
 			if nd.Indexed {
-				at := elem(nd.Ix, idx, e)
 				if nd.Vec > 1 {
-					k := vecKey{nd.Buf, at, nd.Vec}
+					// A vector load's constant offset is its immediate.
+					ix, off := nd.Ix, int64(0)
+					if x := g.Nodes[ix]; x.Kind == NUBinary && x.Op == OpAdd && g.Nodes[x.B].Kind == NUConst {
+						ix, off = x.A, int64(g.Nodes[x.B].At)
+					}
+					at := elem(ix, idx, e)
+					k := vecKey{nd.Buf, at, nd.Vec, off}
 					vs, ok := vecs[k]
 					if !ok {
-						vs = b.LoadV(g.typeOf(n), params[nd.Buf], at, 0, int(nd.Vec))
+						vs = b.LoadV(g.typeOf(n), params[nd.Buf], at, off, int(nd.Vec))
 						vecs[k] = vs
 					}
 					v = vs[nd.Comp]
 					break
 				}
+				at := elem(nd.Ix, idx, e)
 				switch g.Bufs[nd.Buf].Kind {
 				case BufU32, BufSharedU32:
 					v = b.Load(ir.U32, params[nd.Buf], at, 0)

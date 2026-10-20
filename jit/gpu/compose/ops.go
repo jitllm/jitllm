@@ -622,6 +622,7 @@ type vecKey struct {
 	buf int
 	at  ir.Value
 	w   uint8
+	off int64
 }
 
 // LoadVec is component c of the w consecutive elements of buffer b from
