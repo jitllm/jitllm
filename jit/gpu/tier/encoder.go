@@ -292,11 +292,21 @@ func (g *devTier) layersSession(s backend.Session) {
 							gst.stateIn, gst.stateOut = l.pool.s[0], g.recNext
 						}
 						gst.recDt, gst.recA, gst.recD, gst.recCB = l.ssmDt, l.ssmA, l.ssmD, l.ssmCB
+						gst.recNorm, gst.recMid = l.ssmNorm, bs.dOutN
 					}
 					if o.Kind == dkGatherHeads {
 						gst.perm = g.perms[[2]int{o.Heads, R}]
 					}
 					runGen(lc, &o, R, fc.rows, &buf, &gst)
+					if o.Kind == dkScan && g.recShared && err == nil {
+						// The shared form's next state goes home.
+						st := bs.p.Recurrent.StateLen
+						if cp := g.recCopies[[2]int{st, 1}]; cp != nil {
+							lc.la(cp, st, g.recNext, l.pool.s[0], bs.dRows)
+						} else {
+							err = fmt.Errorf("tier: block %d: no copy home for a shared recurrent state", li)
+						}
+					}
 					actMemoK, actMemoSrc = gst.memoK, gst.memoSrc
 				}
 				switch o.Kind {

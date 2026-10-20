@@ -73,6 +73,8 @@ const (
 	gaRecA     // its decay rates
 	gaRecD     // its skip
 	gaRecCB    // its convolution's bias
+	gaRecNorm  // its output norm's weight
+	gaRecMid   // the scratch between its gated norm's two launches
 )
 
 // genLaunch is one generated launch: threads for a flat launch, or groups of
@@ -259,6 +261,13 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		return g.genPrim(o, prog, rows)
 	case dkMatVec, dkMatVecRes, dkMatVecGate:
 		return g.genMatVecNodes(o, bs, rows)
+	case dkGatedNorm:
+		l := g.genGatedNorm(o, prog, bs, rows)
+		o.Why = whyNoForm
+		if l != nil {
+			o.Why = whyNone
+		}
+		return l
 	case dkScan:
 		l := g.genScan(o, prog, bs, rows)
 		o.Why = whyNoForm
@@ -282,7 +291,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		return l
 	case dkExpertMatVec, dkExpertMatVecE, dkQKV, dkQKVGemm, dkRouterLogits,
 		dkResIn, dkQKVSep, dkLatentAttend, dkView, dkTopK, dkRouteWeights, dkGroupByExpert, dkGateLogit,
-		dkGroupMask, dkRouterBias, dkExpertBias, dkExpertFetch, dkGatedNorm, dkSSMNorm, dkConvBias:
+		dkGroupMask, dkRouterBias, dkExpertBias, dkExpertFetch, dkSSMNorm, dkConvBias:
 		// No form in the composer's primitives yet: the op fails to
 		// generate, and its block does not place.
 		o.Why = whyNoForm
@@ -666,8 +675,12 @@ func (g *devTier) genKern(enc []uint32, build func() (*ir.Kernel, error)) (backe
 // rowKern is row group r's kernel under the schedule compose plans for it
 // on this target: one kernel, a row group (a contraction goes through
 // genMatVecNodes).
-func (g *devTier) rowKern(r *compose.Row) rowKernel {
-	ps, err := r.Plan(compose.Facts{Target: g.composeTarget()})
+func (g *devTier) rowKern(r *compose.Row) rowKernel { return g.rowKernWith(r, compose.Facts{}) }
+
+// rowKernWith is rowKern under the tier's pins in f.
+func (g *devTier) rowKernWith(r *compose.Row, f compose.Facts) rowKernel {
+	f.Target = g.composeTarget()
+	ps, err := r.Plan(f)
 	if err != nil || len(ps) != 1 {
 		return rowKernel{}
 	}
@@ -733,6 +746,7 @@ type genState struct {
 	convIn, convOut, convW, recDesc backend.Buf
 	// Its state's halves and its dt bias, decay rates, skip and convolution bias.
 	stateIn, stateOut, recDt, recA, recD, recCB backend.Buf
+	recNorm, recMid                             backend.Buf
 	// The step's binary16 operand: its plane, and the conversion the step
 	// last made, by kernel and source (shared with the executor, so a
 	// conversion either one made is not made again).
@@ -834,6 +848,10 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.recD
 			case gaRecCB:
 				bufs[j] = st.recCB
+			case gaRecNorm:
+				bufs[j] = st.recNorm
+			case gaRecMid:
+				bufs[j] = st.recMid
 			case gaQ8A:
 				bufs[j], _ = int8Of(st, o.Out[l.q8])
 			case gaQ8X:
@@ -1615,4 +1633,71 @@ func (g *devTier) genScan(o *devOp, prog *devProgram, bs *blockScratch, rows int
 	l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args)), whole: true}
 	copy(l.args[:], rb.args)
 	return []genLaunch{l}
+}
+
+// genGatedNorm is a recurrence's output normed and gated by z: each value
+// head RMS-normed then times the gate (SiLU of z, or its sigmoid), or a
+// grouped norm before or after the SiLU gate, or the gate alone.
+func (g *devTier) genGatedNorm(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
+	r := bs.p.Recurrent
+	inner := r.VHeads * r.VDim
+	if g.genRag || len(o.In) != 2 || prog.vals[o.In[0]].Width != inner || prog.vals[o.In[1]].Width != inner {
+		return nil
+	}
+	eps := float32(bs.p.RMSEps)
+	var ls []genLaunch
+	add := func(rb *rowBuild) bool {
+		k := g.rowKern(&rb.r)
+		if k.k == nil {
+			return false
+		}
+		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args)), flat: k.flat}
+		copy(l.args[:], rb.args)
+		ls = append(ls, l)
+		return true
+	}
+	gate := func(z, y, out genArg, sigmoid bool) bool {
+		rb := &rowBuild{r: compose.Row{Width: rows * inner, Rows: 1}}
+		zv, yv := rb.load(compose.BufRow, z), rb.load(compose.BufRow, y)
+		v := rb.node(compose.Node{Kind: compose.NBinary, Op: compose.OpActMul, Act: kernels.ActSiLU, A: zv, B: yv})
+		if sigmoid {
+			v = rb.bin(compose.OpMul, rb.node(compose.Node{Kind: compose.NUnary, Op: compose.OpAct, Act: kernels.ActSigmoid, A: zv}), yv)
+		}
+		rb.store(v, out)
+		return add(rb)
+	}
+	norm := func(in, out genArg, width, groups int) bool {
+		lanes := g.composeTarget().Lanes
+		if lanes == 0 || width%lanes != 0 {
+			lanes = 1
+		}
+		rb := &rowBuild{r: compose.Row{Width: lanes, Rows: rows * inner / width}}
+		x, w, y := rb.buf(compose.BufRow, in), rb.buf(compose.BufRow, gaRecNorm), rb.buf(compose.BufOut, out)
+		rb.r.LaneRMSNorm(x, w, y, width, groups, eps)
+		k := g.rowKernWith(&rb.r, compose.Facts{RowGroup: max(lanes, 32)})
+		if k.k == nil {
+			return false
+		}
+		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
+		copy(l.args[:], rb.args)
+		ls = append(ls, l)
+		return true
+	}
+	ok := true
+	switch {
+	case r.Mamba1 || r.SSD && r.NoNorm:
+		ok = gate(gaIn1, gaIn0, gaOut0, false)
+	case r.SSD && r.NormBeforeGate:
+		w := inner / max(r.NormGroups, 1)
+		ok = norm(gaIn0, gaRecMid, w, inner/w) && gate(gaIn1, gaRecMid, gaOut0, false)
+	case r.SSD:
+		w := inner / max(r.NormGroups, 1)
+		ok = gate(gaIn1, gaIn0, gaRecMid, false) && norm(gaRecMid, gaOut0, w, inner/w)
+	default:
+		ok = norm(gaIn0, gaRecMid, r.VDim, 1) && gate(gaIn1, gaRecMid, gaOut0, r.ChanDecay || r.SigmoidGate)
+	}
+	if !ok {
+		return nil
+	}
+	return ls
 }
