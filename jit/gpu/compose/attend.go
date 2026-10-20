@@ -283,3 +283,44 @@ func (g *Row) PagedAcc(wts, v, part, table, desc int, p Paged) {
 		g.StoreAt(part, acc[h], ub(OpAdd, ub(OpAdd, pb, j), u(h*S*(padded+64))))
 	}
 }
+
+// PagedMerge is the group element's output (an element a (row, head,
+// value element)) from the splits' partials at part: each split's maximum
+// and denominator after its numerators, the splits weighted by exp of their
+// maximum less the greatest, the sum of the weighted denominators (and the
+// sink's exp, where sink >= 0: one logit a head) the normaliser.
+func (g *Row) PagedMerge(part, out, sink int, p Paged) {
+	u, ub := g.UConst, g.UBin
+	flat := g.Column()
+	item := ub(OpDiv, flat, u(p.Dim))
+	dim := ub(OpRem, flat, u(p.Dim))
+	padded := (p.Dim + 31) / 32 * 32
+	stride := padded + 64
+	base := ub(OpMul, item, u(p.Splits*stride))
+	mx := g.Const(-math.MaxFloat32)
+	ms, ns := make([]int, p.Splits), make([]int, p.Splits)
+	for j := range ms {
+		ms[j] = g.LoadAt(part, ub(OpAdd, base, u(j*stride+padded)))
+		ns[j] = g.LoadAt(part, ub(OpAdd, base, u(j*stride+padded+32)))
+		mx = g.Bin(OpMax, mx, ms[j])
+	}
+	var sv int
+	if sink >= 0 {
+		sv = g.LoadAt(sink, ub(OpRem, item, u(p.Heads)))
+		mx = g.Bin(OpMax, mx, sv)
+	}
+	sum, acc := g.Const(0), g.Const(0)
+	src := ub(OpAdd, base, dim)
+	exp := func(x int) int { return g.Add(Node{Kind: NUnary, Op: OpExp, A: x}) }
+	fma := func(a, b, c int) int { return g.Add(Node{Kind: NBinary, Op: OpFma, A: a, B: b, C: c}) }
+	for j := range ms {
+		w := exp(g.Bin(OpSub, ms[j], mx))
+		sum = fma(ns[j], w, sum)
+		acc = fma(g.LoadAt(part, ub(OpAdd, src, u(j*stride))), w, acc)
+	}
+	if sink >= 0 {
+		sum = g.Bin(OpAdd, sum, exp(g.Bin(OpSub, sv, mx)))
+	}
+	inv := g.Bin(OpDiv, g.Const(1), g.Bin(OpMax, sum, g.Const(1e-30)))
+	g.StoreAt(out, g.Bin(OpMul, acc, inv), flat)
+}

@@ -96,3 +96,27 @@ func TestPagedAccIsMains(t *testing.T) {
 		})
 	}
 }
+
+// TestPagedMergeIsMains holds the composer's merge to main's
+// FlashAttentionMergeWide, with and without sinks.
+func TestPagedMergeIsMains(t *testing.T) {
+	for _, s := range stagedShapes {
+		for _, sink := range []bool{false, true} {
+			s.Sink = sink
+			name := fmt.Sprintf("r%d_h%d_d%d_s%d_sink%v", s.Rows, s.Heads, s.Dim, s.Splits, sink)
+			t.Run(name, func(t *testing.T) {
+				mk, err := mainkernels.FlashAttentionMergeWide(s)
+				if err != nil {
+					t.Fatal(err)
+				}
+				g := &compose.Row{Width: s.Rows * s.Heads * s.Dim, Rows: 1}
+				part, out, sk := g.Buf(compose.BufRow), g.Buf(compose.BufOut), -1
+				if sink {
+					sk = g.Buf(compose.BufRow)
+				}
+				g.PagedMerge(part, out, sk, pagedOf(s))
+				same(t, name, []*ir.Kernel{mk}, emitAt(t, g, compose.Schedule{Group: 128, Flat: true, Target: sm70}))
+			})
+		}
+	}
+}
