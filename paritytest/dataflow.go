@@ -280,6 +280,14 @@ func (c *canon) atom(kind int64, a, b int32) affine {
 }
 
 func (c *canon) fieldAtom(f field) affine {
+	if f.m == 1 {
+		return affine{}
+	}
+	if f.d == 1 && f.m == 0 {
+		if x, ok := c.in.affs[f.x]; ok {
+			return x
+		}
+	}
 	id := c.in.name(form{tag: fAtom, imm: atomField, a: [4]int32{f.x, int32(f.d), int32(f.m)}})
 	if _, ok := c.in.fields[id]; !ok {
 		c.in.fields[id] = f

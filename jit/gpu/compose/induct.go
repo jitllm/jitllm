@@ -78,7 +78,7 @@ func (g *Row) induct(c int, s Schedule) *Row {
 	// step wider than one is an add from the trip before, a unit step the
 	// access's offset.
 	unrolled := false
-	if g.Loops[c] <= unrollTrips && (c > 0 || s.Split <= 1) {
+	if g.Loops[c] > 0 && g.Loops[c] <= unrollTrips && (c > 0 || s.Split <= 1) {
 		for c0 := range g.Loops {
 			if c0 != c && g.foldReadsIter(c, c0) {
 				unrolled = true
@@ -191,7 +191,8 @@ func (g *Row) induct(c int, s Schedule) *Row {
 	// start, always ride one.
 	ridden := map[int]bool{}
 	// sole is the one index the iterator serves, where it serves one: its
-	// cursor replaces the loop's counter.
+	// cursor replaces the loop's counter, unless it steps by one, when it is
+	// the counter and a base.
 	sole := -1
 	{
 		var in []int
@@ -230,7 +231,7 @@ func (g *Row) induct(c int, s Schedule) *Row {
 		if a == nil || a.terms[iter] == 0 {
 			continue
 		}
-		ridden[ix] = nested[ix] || unrolled && a.terms[iter] != 1 || init[ix] || loads[ix] > 1 || ix == sole
+		ridden[ix] = nested[ix] || unrolled && a.terms[iter] != 1 || init[ix] || loads[ix] > 1 || ix == sole && a.terms[iter] != 1
 		var base []int
 		for k, v := range a.terms {
 			if k != iter && v != 0 && !nested[k] && !g.isTileOff(k) {
@@ -343,6 +344,7 @@ func (g *Row) clone() *Row {
 	c.Nodes = append([]Node(nil), g.Nodes...)
 	c.Stores = append([]Store(nil), g.Stores...)
 	c.Loops = append([]int(nil), g.Loops...)
+	c.Trip = append([]int(nil), g.Trip...)
 	c.Stages = make([]Stage, len(g.Stages))
 	for i, st := range g.Stages {
 		c.Stages[i] = Stage{Width: st.Width, Stores: append([]Store(nil), st.Stores...)}

@@ -194,6 +194,7 @@ func (g *Row) PagedRow(pid, off, page, width, col int) int {
 // iterator, Fold a value it carries from start, stepped by SetFold.
 func (g *Row) Loop(trip int) int {
 	g.Loops = append(g.Loops, trip)
+	g.Trip = append(g.Trip, -1)
 	return len(g.Loops) - 1
 }
 
@@ -242,4 +243,49 @@ func (g *Row) FoldSum(n int, x func(f int) int) int {
 	s := g.Fold(c, g.Const(0))
 	g.SetFold(s, g.Bin(OpAdd, s, x(g.Iter(c))))
 	return s
+}
+
+// LoopN is a loop whose trip count is index node n's value, known at run
+// time: it never runs unrolled.
+func (g *Row) LoopN(n int) int {
+	c := g.Loop(-1)
+	g.Trip[c] = n
+	return c
+}
+
+// tripOf is the node a run-time loop c runs for, -1 for a static one.
+func (g *Row) tripOf(c int) int {
+	if c < len(g.Trip) {
+		return g.Trip[c]
+	}
+	return -1
+}
+
+// storeLoop is the loop whose body a store runs in: the one whose iterator
+// its index or value reads (not through a fold's result), -1 for none.
+func (g *Row) storeLoop(st Store) int {
+	memo := map[int]int{}
+	var in func(n int) int
+	in = func(n int) int {
+		if c, ok := memo[n]; ok {
+			return c
+		}
+		memo[n] = -1
+		c := -1
+		if nd := g.Nodes[n]; nd.Kind == NIter {
+			c = nd.At
+		}
+		for _, o := range g.operands(n) {
+			if x := in(o); x > c {
+				c = x
+			}
+		}
+		memo[n] = c
+		return c
+	}
+	c := in(st.Val)
+	if st.Indexed {
+		c = max(c, in(st.Ix))
+	}
+	return c
 }

@@ -29,8 +29,10 @@ type Row struct {
 	// into buffers Q8.A and Q8.X at Q8.Window, the row padded to Q8.Pad.
 	Q8 *Q8
 	// Loops are the trip counts of the group's folds' loops (Loop): loop c
-	// runs Loops[c] times.
+	// runs Loops[c] times, or where that is -1 (LoopN) the value of index
+	// node Trip[c], known at run time.
 	Loops []int
+	Trip  []int
 	// Stages are further element spaces of the row the workgroup stores
 	// after the group's own (a row group, not flat): each of its own width,
 	// its element loop unrolled, its nodes' Column its element, and what it
@@ -294,6 +296,9 @@ func (g *Row) Encode(s Schedule) []uint32 {
 		for _, t := range g.Loops {
 			e = append(e, uint32(t))
 		}
+		for c := range g.Loops {
+			e = append(e, uint32(g.tripOf(c)))
+		}
 	}
 	return e
 }
@@ -383,7 +388,7 @@ func (g *Row) Check() error {
 				return fmt.Errorf("compose: node %d iterates loop %d of %d", i, n.At, len(g.Loops))
 			}
 		case NFold:
-			if n.At < 0 || n.At >= len(g.Loops) || g.Loops[n.At] < 1 {
+			if n.At < 0 || n.At >= len(g.Loops) || g.Loops[n.At] < 1 && g.tripOf(n.At) < 0 {
 				return fmt.Errorf("compose: node %d folds over loop %d of %d", i, n.At, len(g.Loops))
 			}
 			// Its step may be any node, a later one too: the back edge.
@@ -1149,9 +1154,31 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			}
 			return ins
 		}
+		var runtime ir.Value
+		if tn := g.tripOf(c); tn >= 0 {
+			runtime = elem(tn, idx, e)
+		}
+		// bodyStores are the stores of a trip: those its iterator places
+		// (storeLoop), in the trip's env of the element's.
+		bodyStores := func(ins map[*env]*env) {
+			for _, st := range g.Stores {
+				if g.storeLoop(st) != c {
+					continue
+				}
+				if t != nil {
+					if emitErr == nil {
+						emitErr = fmt.Errorf("compose: a store in loop %d's body under a tile", c)
+					}
+					return
+				}
+				in := ins[e]
+				at := elem(st.Ix, idx, in)
+				b.Store(params[st.Buf], at, elem(st.Val, idx, in), 0)
+			}
+		}
 		open++
 		defer func() { open-- }()
-		if open > 1 && trip <= unrollTrips && !split0 {
+		if open > 1 && trip > 0 && trip <= unrollTrips && !split0 {
 			// A short loop in another's body runs unrolled: each trip's body
 			// at its iterator, the folds' values chained from trip to trip.
 			cur := inits
@@ -1164,6 +1191,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				for i, x := range cs {
 					nx[i] = elem(g.Nodes[x.f].A, idx, ins[x.out])
 				}
+				bodyStores(ins)
 				cur = nx
 			}
 			for i, x := range cs {
@@ -1175,7 +1203,11 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		if first == 0 {
 			first = zero
 		}
-		b.Loop(int64(trip))
+		if runtime != 0 {
+			b.LoopN(runtime)
+		} else {
+			b.Loop(int64(trip))
+		}
 		it := b.Phi(ir.U32, first)
 		ins := body(it)
 		for i := range cs {
@@ -1188,6 +1220,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		for i, x := range cs {
 			next[i] = elem(g.Nodes[x.f].A, idx, x.in)
 		}
+		bodyStores(ins)
 		for i, x := range cs {
 			b.SetPhi(x.phi, next[i])
 		}
@@ -1302,6 +1335,8 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				v = b.Rem(t, x, y)
 			case OpMin:
 				v = b.Min(t, x, y)
+			case OpMax:
+				v = b.Max(t, x, y)
 			case OpAnd:
 				v = b.And(t, x, y)
 			case OpXor:
@@ -1504,6 +1539,9 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				base, col = e.base, e.col
 			}
 			for _, st := range g.Stores {
+				if g.storeLoop(st) >= 0 {
+					continue // stored in its loop's body
+				}
 				var at ir.Value
 				off := 0
 				switch {
