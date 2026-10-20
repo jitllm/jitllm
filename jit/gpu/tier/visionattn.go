@@ -1,13 +1,5 @@
 package tier
 
-import (
-	"encoding/binary"
-
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
-)
-
 // A vision block's attention in query chunks.
 //
 // A vision block is one submission over the whole image (visrows.go), and
@@ -72,35 +64,4 @@ func lcmInt(a, b int) int {
 		x, y = y, x%y
 	}
 	return a / x * b
-}
-
-// allocAttnChunks allocates a chunked vision block's gather and scatter: the
-// chunk's q and output, one offset per chunk (written once, since a chunk's
-// place in q never changes), and the two copy kernels.
-func (g *devTier) allocAttnChunks(bs *blockScratch, qdim int, al func(*backend.Buf, int)) {
-	n := bs.arows * qdim
-	al(&bs.qc, n*4)
-	al(&bs.xc, n*4)
-	bs.qoffs = make([]backend.Buf, bs.rows/bs.arows)
-	for c := range bs.qoffs {
-		al(&bs.qoffs[c], 4)
-		if bs.qoffs[c] != nil {
-			var b [4]byte
-			binary.LittleEndian.PutUint32(b[:], uint32(c*n))
-			if err := bs.qoffs[c].Write(b[:]); err != nil {
-				g.LastErr = err.Error()
-			}
-		}
-	}
-	comp := func(dst *backend.Kernel, build func(int) (*ir.Kernel, error)) {
-		k, err := build(n)
-		if err == nil {
-			*dst, err = g.dev.Compile(k)
-		}
-		if err != nil {
-			g.LastErr = err.Error()
-		}
-	}
-	comp(&bs.qGather, mainkernels.CopySpan)
-	comp(&bs.xScatter, mainkernels.CopyAt)
 }

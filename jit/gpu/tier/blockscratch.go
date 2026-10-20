@@ -3,7 +3,6 @@ package tier
 import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // blockScratch is the per-call staging every layer of a lane shares: a call
@@ -38,9 +37,6 @@ type blockScratch struct {
 	// layer (LayerPlan.Window), built only when the plan has a window. The mask
 	// is in the scores alone; softmax and accumulate are shared. See
 	// kernels.windowed for why that is exact.
-	// flashV is the decode attention's compiled key partitionings (flash.go),
-	// sharing one partial buffer sized for the widest.
-	flashV []flashVariant
 	// pkv is the paged attention set; nil unless this scratch's history is
 	// paged (devTier.pagedPlan), and then the staged, tiled and flash
 	// kernels above that read a contiguous cache are not built.
@@ -71,7 +67,6 @@ type blockScratch struct {
 	// fpT/fpTW are that one kernel on a collective matrix unit
 	// (mainkernels.FlashPrefillTile, Metal), blocked by fpTile.
 	fpT, fpTW backend.Kernel
-	fpTile    mainkernels.FlashTile
 	// The ragged-decode set (rows.go): attention whose rows are different
 	// sequences, a per-row softmax, the head's batched twin and a per-row argmax.
 	ragArgmax         backend.Kernel

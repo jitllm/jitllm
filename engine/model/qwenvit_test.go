@@ -5,8 +5,9 @@ import (
 	"image/color"
 	"math"
 
-	"github.com/jitllm/jitllm/format/jlm"
 	"testing"
+
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // goldenImage is a golden's RGB bytes as an image.

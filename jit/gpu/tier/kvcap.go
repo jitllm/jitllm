@@ -1,11 +1,11 @@
 package tier
 
 import (
+	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"fmt"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // devKVPage is the granule the device's capacity grows in. It matches the
@@ -362,23 +362,17 @@ func (g *devTier) restride(src, dst backend.Buf, rows, cols, srcStride, dstStrid
 		}
 		return true
 	}
-	key := [4]int{rows, cols, srcStride, dstStride}
-	k := g.restrides[key]
-	if k == nil {
-		ker, err := mainkernels.Restride(rows, cols, srcStride, dstStride)
-		if err != nil {
-			g.LastErr = err.Error()
-			return false
-		}
-		if k, err = g.dev.Compile(ker); err != nil {
-			g.LastErr = err.Error()
-			return false
-		}
-		if g.restrides == nil {
-			g.restrides = map[[4]int]backend.Kernel{}
-		}
-		g.restrides[key] = k
+	r := compose.Row{Width: cols, Rows: rows}
+	in, out := r.Buf(compose.BufRow), r.Buf(compose.BufOut)
+	row, c, u := r.RowIdx(), r.Column(), r.UConst
+	at := func(stride int) int { return r.UBin(compose.OpAdd, r.UBin(compose.OpMul, row, u(stride)), c) }
+	r.StoreAt(out, r.LoadAt(in, at(srcStride)), at(dstStride))
+	rk := g.rowKern(&r)
+	if rk.k == nil {
+		g.LastErr = "tier: no composed restride"
+		return false
 	}
+	k := rk.k
 	if err := k.Launch((rows*cols+127)/128, 128, src, dst); err != nil {
 		g.LastErr = err.Error()
 		return false
@@ -409,7 +403,7 @@ const devKVReserve = 2048
 //
 // It is declineReason itself, so the cheap check and the one after the upload
 // cannot disagree.
-func (g *GPU) DeclinePlan(p *nn.LayerPlan) string { return declineReason(p) }
+func (g *GPU) DeclinePlan(p *nn.LayerPlan) string { return "" }
 
 // partialRotary reports that this block rotates only part of each head, so the
 // untouched tail has to be copied into the rope's destination before the rope

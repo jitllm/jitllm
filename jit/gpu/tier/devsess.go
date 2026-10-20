@@ -88,12 +88,6 @@ type devSess struct {
 	// sliding window, whose rows' windows overlap) rather than runs
 	// partitioning the rows.
 	winPerRow bool
-	// embPend is the prompt chunk EmbedRows promised and the next submission
-	// gathers (embed.go). Guarded by mu.
-	embPend *embPend
-	// embBuf is what embPend points at, kept so a prompt chunk's promise
-	// allocates nothing past the first.
-	embBuf embPend
 	// bidir is the full key runs the next causal Layers calls honour
 	// (keyruns.go). Guarded by mu.
 	bidir []nn.KeyRun

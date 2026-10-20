@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/engine/graph"
-	"github.com/jitllm/jitllm/engine/nn"
 )
 
 // mixOffer is a mixture block's rewrites decided outside a token
@@ -46,51 +45,6 @@ func (st *streamBank) residency() graph.Residency {
 		return graph.ResidencyCached
 	}
 	return graph.ResidencyHost
-}
-
-// wavesRun is whether a chunk of valid rows of streamed block l runs its
-// routed experts in waves through the expert cache (streamBank.prefillWaves):
-// graph.MoEWaves' decision at the chunk's row class and the bank's residency
-// where the block has a mixture graph, else the same guards from the tier's
-// own facts.
-func (g *devTier) wavesRun(l *layer, m *moeGroup, valid int) bool {
-	rows := graph.RowsFew
-	if valid >= prefillWaveRows {
-		rows = graph.RowsChunk
-	}
-	res := l.stream.residency()
-	if l.mix.found {
-		return l.mix.waves[rows][res] == nil
-	}
-	return rows == graph.RowsChunk && res == graph.ResidencyCached && m.ewScale == nil &&
-		l.expGateB == nil && l.expUpB == nil && l.expDownB == nil
-}
-
-// moeRowClass is the executed row class of a batched mixture scratch of rows
-// rows: few where its routed pairs are fewer than VoltaMoEMinPairs
-// (voltaMoEWide), a prompt chunk's otherwise.
-func (g *devTier) moeRowClass(rows, k, nExp int) graph.RowClass {
-	if g.voltaMoEWide(rows, k, nExp) {
-		return graph.RowsChunk
-	}
-	return graph.RowsFew
-}
-
-// moeNarrow is whether a batched mixture scratch of rows rows builds the dp4a
-// grouped matvec for its experts where the staged f16 GEMM would run them:
-// graph.MoEFewRow's decision at the scratch's row class, its experts on the
-// card, where the plan carries a mixture graph; else the row class alone.
-func (g *devTier) moeNarrow(p *nn.LayerPlan, rows, k, nExp int) bool {
-	class := g.moeRowClass(rows, k, nExp)
-	o, found := graph.Find(p.Rewrites, graph.MoEFewRow.Name)
-	if !found {
-		return class == graph.RowsFew
-	}
-	defer g.subUnlock(g.subLock())
-	t := g.target(class)
-	t.Residency = graph.ResidencyCard
-	taken, _ := o.Chosen(t, g.Rewrites[graph.MoEFewRow.Name])
-	return taken
 }
 
 // errRefusedByCaller is a rewrite's decision where the caller's choice

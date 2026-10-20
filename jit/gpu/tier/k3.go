@@ -5,8 +5,6 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // Kimi-K3 on the device (nn.LayerPlan.K3; engine/model/k3.go is the graph and
@@ -123,74 +121,6 @@ type k3Scratch struct {
 	latent, mgateW int
 }
 
-// initK3 builds bs's Kimi-K3 set. Callers hold g.mu.
-func (g *devTier) initK3(bs *blockScratch) error {
-	p := &bs.p
-	k := p.K3
-	if k == nil {
-		return nil
-	}
-	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
-	R, d, s := bs.rows, p.NEmbd, k.Streams
-	actWin := p.ActWin
-	if actWin <= 0 {
-		actWin = 32
-	}
-	x := &k3Scratch{streams: s, score: map[int]backend.Kernel{}, mixK: map[int]backend.Kernel{},
-		post: map[int]backend.Kernel{}}
-	bs.k3 = x
-	var err error
-	comp := func(dst *backend.Kernel, mk func() (*ir.Kernel, error)) {
-		if err != nil {
-			return
-		}
-		var kk *ir.Kernel
-		if kk, err = mk(); err != nil {
-			return
-		}
-		*dst, err = g.dev.Compile(kk)
-	}
-	al := func(dst *backend.Buf, n int) {
-		if err == nil && n > 0 {
-			*dst, err = g.dev.Alloc(n * 4)
-		}
-	}
-	if s > 1 {
-		for nb := 1; nb < s; nb++ {
-			var sk, mk backend.Kernel
-			comp(&sk, func() (*ir.Kernel, error) {
-				return mainkernels.K3ResScores(d, R, nb, float32(p.RMSEps), k.Fault == nn.K3FaultRawScores)
-			})
-			comp(&mk, func() (*ir.Kernel, error) { return mainkernels.K3ResMix(d, R, nb) })
-			x.score[nb], x.mixK[nb] = sk, mk
-		}
-		for push := 0; push < s; push++ {
-			var pk backend.Kernel
-			restart := push > 0 && k.Fault != nn.K3FaultNoRestart
-			comp(&pk, func() (*ir.Kernel, error) { return mainkernels.K3Post(d, R, s, push, restart) })
-			x.post[push] = pk
-		}
-		al(&x.scores, R*s)
-		al(&x.mix, R*d)
-	}
-	if L := k.Latent; L != 0 {
-		x.latent = L
-		comp(&x.normL, func() (*ir.Kernel, error) { return mainkernels.RMSNormRows(L, R, float32(p.RMSEps), false, false) })
-		comp(&x.quantL, func() (*ir.Kernel, error) { return quantizeRows(R, L, actWin) })
-		al(&x.lat, R*L)
-		al(&x.latAcc, R*L)
-		al(&x.latN, R*L)
-	}
-	if p.MLA() {
-		n := p.NHead * p.HeadDimV
-		x.mgateW = n
-		comp(&x.sigMG, func() (*ir.Kernel, error) { return mainkernels.SigmoidMul(R * n) })
-		al(&x.mgate, R*n)
-		al(&x.mgated, R*n)
-	}
-	return err
-}
-
 // free releases the set's kernels and buffers.
 func (x *k3Scratch) free(g *devShared) {
 	if x == nil {
@@ -250,31 +180,6 @@ func (g *devTier) k3FFNIn(lc *launcher, bs *blockScratch, l *layer, R int) backe
 // added to the running residual.
 func (g *devTier) k3PostFFN(lc *launcher, bs *blockScratch, R int, y backend.Buf) {
 	lc.la(bs.k3.post[0], bs.k3.streams*R*bs.p.NEmbd, bs.x2, y, bs.x)
-}
-
-// k3LatentIn projects the R normed rows (quantized in bs.a/bs.ax) to the
-// latent and quantizes them there, where the routed experts read them; the
-// float rows are x.lat.
-func (g *devTier) k3LatentIn(lc *launcher, bs *blockScratch, l *layer, R int,
-	mvrun func(mv, *resident, backend.Buf)) {
-	x := bs.k3
-	mvrun(l.mvRD, l.routedDown, x.lat)
-	lc.la(x.quantL, mainkernels.QuantizeThreads(R*pad32(x.latent)/32), x.lat, bs.a, bs.ax)
-}
-
-// k3LatentOut takes the routed sum in x.latAcc out of the latent into
-// bs.mvOut: RMSNormed by the block's routed norm, then routed_up.
-func (g *devTier) k3LatentOut(lc *launcher, bs *blockScratch, l *layer, R int,
-	mvrun func(mv, *resident, backend.Buf)) {
-	x := bs.k3
-	src := x.latAcc
-	if l.k3.rnorm != nil && l.k3.fault != nn.K3FaultNoLatentNorm {
-		ds4Rows(lc, x.normL, R, x.latAcc, l.k3.rnorm, x.latN)
-		src = x.latN
-	}
-	lc.la(x.quantL, mainkernels.QuantizeThreads(R*pad32(x.latent)/32), src, bs.a, bs.ax)
-	mvrun(l.mvRU, l.routedUp, bs.mvOut)
-	g.K3Latent++
 }
 
 // k3GateMLA takes the MLA output gate's projection of the block's normed

@@ -5,9 +5,6 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // errNoBatch is what a block reports when a matvec in it has no batched twin --
@@ -170,17 +167,6 @@ func (g *devTier) prepBatch(width int) bool {
 // 33% waste on a 42-row tail.
 const batchGrain = 8 * 4
 
-// promptGrain is the grain a prompt chunk's own width is rounded to: the
-// batched kernels' batchGrain, or on a device that runs a chunk's attention
-// as FlashPrefill80 the row block that kernel takes (64 rows; a 32-row grain
-// sent every width that is not a multiple of 64 to the staged kernels and
-// the int8 operands). Callers hold g.mu.
-func (g *devTier) promptGrain() int {
-	if !g.kb.noAttnMMA && g.f16GemmK() == 16 {
-		return max(batchGrain, 16*4)
-	}
-	return batchGrain
-}
 
 // actWinFor is the activation window of the scratch set in use: a tier with a
 // vision tower has a set per segment, each with its plan, and the window is a
@@ -200,22 +186,6 @@ func (g *devTier) actWinFor(ntok int) int {
 // width a ragged activation is quantized at, its tail zero.
 func pad32(n int) int { return (n + 31) / 32 * 32 }
 
-// quantizeRows is the quantizer of rows activations n wide: Quantize over
-// them where n is a whole number of blocks, QuantizePadded with a zero tail
-// where it is not (launch QuantizeThreads(rows*pad32(n)/32)). The window is
-// clamped to the padded row, as the host's ragged quantizer clamps it.
-func quantizeRows(rows, n, win int) (*ir.Kernel, error) {
-	return quantizeRowsAt(rows, n, pad32(n), win)
-}
-
-// quantizeRowsAt is quantizeRows with the stored row kp wide, a whole number
-// of blocks and n or more (a ragged tower's padded width, nn.LayerPlan.KPad).
-func quantizeRowsAt(rows, n, kp, win int) (*ir.Kernel, error) {
-	if n == kp {
-		return mainkernels.Quantize(rows*n, mainkernels.ClampWindow(win, n))
-	}
-	return mainkernels.QuantizePadded(rows, n, kp, mainkernels.ClampWindow(win, kp))
-}
 
 // ePad is the width a block's residual-reading matrices quantize their
 // activation at: NEmbd rounded up to a whole quantizer block, or the padded
@@ -248,70 +218,10 @@ func (g *devTier) attendsIn(lo, hi int) bool {
 	return false
 }
 
-func (g *devTier) batchMV(m mv, ntok, tok int) (mv, bool) {
-	// A build reached from inside a submission takes g.mu (subLock).
-	defer g.subUnlock(g.subLock())
-	if g.PreferTiles {
-		if bm, ok := g.tileMV(m, ntok); ok && padOK(m, bm) {
-			return bm, true
-		}
-	}
-	if bm, ok := g.int8Gemm(m, ntok); ok && padOK(m, bm) {
-		return bm, true
-	}
-	if bm, ok := g.f16Gemm(m, ntok); ok && padOK(m, bm) {
-		return bm, true
-	}
-	return g.intBatchMV(m, ntok, tok)
-}
 
 // padOK reports whether batched twin bm may serve m: not one that reads the
 // float activation when m's is the padded int8 rows (mv.pad).
 func padOK(m, bm mv) bool { return !m.pad || bm.act == nil }
-
-// intBatchMV is batchMV without the m16n8 GEMM: the integer matrix
-// instruction wherever the device has one (MatVecMMA is faster than the dp4a
-// tile and bit-identical to it), then the other tiled forms, then the dp4a
-// tile. The widest admissible warp tile is a divisor calculation (mmaTile),
-// not a search. A ragged step takes it directly (ragMV): its few rows a
-// sequence are decode's, and keep decode's int8 arithmetic.
-func (g *devTier) intBatchMV(m mv, ntok, tok int) (mv, bool) {
-	// A build reached from inside a submission takes g.mu (subLock).
-	defer g.subUnlock(g.subLock())
-	// A float weight has no tensor-core kernel. Asking would fail, and a
-	// failure here switches MMA off for every other matvec (mmaOff).
-	if mt, nt, ok := g.mmaTile(m.rows, ntok); ok && !kernels.IsFloat(m.q) {
-		kk := kernKey{m.q, m.k, m.rows, -(ntok*100 + mt*10 + nt), m.bias != nil, 1, false, false, 0, false}
-		c, cached := g.kerns[kk]
-		if !cached {
-			ker, err := mainkernels.MatVecMMA(mainkernels.MatVecShape{Center: g.center,
-				T: m.q, K: m.k, Rows: m.rows, NTok: ntok, MT: mt, NT: nt,
-				Bias: m.bias != nil, ActWin: g.actWinFor(ntok)})
-			if err == nil {
-				c, err = g.dev.Compile(ker)
-			}
-			if err != nil {
-				// A backend without a matrix instruction is a property of the
-				// device, not the shape, so it is recorded once instead of every
-				// matvec re-discovering it with a Compile call.
-				g.mmaOff, g.MMAWhy = true, err.Error()
-				c = nil
-			}
-			g.kerns[kk] = c
-		}
-		if c != nil {
-			return mv{kern: c, rows: m.rows, split: 1, bias: m.bias, q: m.q, k: m.k,
-				threads: (m.rows / (16 * mt)) * (ntok / (8 * nt)) * 32}, true
-		}
-	}
-	if bm, ok := g.tileMV(m, ntok); ok && padOK(m, bm) {
-		return bm, true
-	}
-	if bm, ok := g.voltaMV(m, ntok); ok && padOK(m, bm) {
-		return bm, true
-	}
-	return g.batchMVDot4(m, ntok, tok)
-}
 
 // mmaTile is the widest warp tile this shape admits: MT blocks of 16 rows by NT
 // blocks of 8 token columns, each capped at the measured optimum and reduced to
@@ -341,20 +251,6 @@ func (g *devTier) mmaTile(rows, ntok int) (int, int, bool) {
 	return mt, nt, true
 }
 
-func (g *devTier) batchMVDot4(m mv, ntok, tok int) (mv, bool) {
-	// Rows per thread is per shape because it only divides some; the
-	// fallback is 2 and then 1.
-	rowt := 1
-	for _, r := range []int{g.tiles.rowt, 2} {
-		if r > 1 && m.rows%r == 0 {
-			rowt = r
-			break
-		}
-	}
-	// dot4Split passes the bias (this is every non-MMA backend's batched
-	// path) and splits k where the tile leaves the grid thin.
-	return g.dot4Split(m, ntok, tok, rowt, g.kb.batch.Split)
-}
 
 // kStride is the device K cache's transposed stride, or 0 for the row-major
 // layout. See mainkernels.RoPERowsT: the scores kernel reads K with one thread per
@@ -383,3 +279,6 @@ func (g *devTier) kStride(p *nn.LayerPlan) int {
 	// it or the last real position lands on top of another head's first.
 	return p.MaxSeq + 1
 }
+// promptGrain is the grain a prompt chunk's own width is rounded to.
+func (g *devTier) promptGrain() int { return batchGrain }
+

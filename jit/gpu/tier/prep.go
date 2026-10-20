@@ -9,7 +9,6 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // PrepLayer is prepLayerFor for the zero session: a caller that never attached.
@@ -23,95 +22,6 @@ func (g *devTier) prepLayerFor(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerW
 	return g.prepLayer(sid, li, p, w, false)
 }
 
-// declineReason names the graph feature this tier cannot run, or "" when it can
-// run the block's shape. A string rather than a bool so the reason survives: a
-// full card, a missing kernel and an unknown graph want opposite responses.
-func declineReason(p *nn.LayerPlan) string {
-	// The router's gating shape, declined by name: a kernel gate on ExpertRank
-	// proves the kernel, not that the tier asked for the right gating function.
-	if p.NExpert > 0 {
-		if r := routerWhyNot(p); r != "" {
-			return r
-		}
-	}
-	// MLA runs; what is left is a shape check (a tier that does not implement
-	// MLA still declines on KVLoraRank alone).
-	if r := mlaWhyNot(p); r != "" {
-		return r
-	}
-	if r := llama4WhyNot(p); r != "" {
-		return r
-	}
-	if r := gemma4WhyNot(p); r != "" {
-		return r
-	}
-	if r := msaWhyNot(p); r != "" {
-		return r
-	}
-	if r := ds4WhyNot(p); r != "" {
-		return r
-	}
-	if r := k3WhyNot(p); r != "" {
-		return r
-	}
-	if r := q4eWhyNot(p); r != "" {
-		return r
-	}
-	switch {
-	case p.Recurrent.Centred && (!p.NonCausal || !p.Recurrent.ShortConv || p.Recurrent.Conv != 3 || !p.Windowed):
-		// The centred convolution reads its neighbours through the call's row
-		// windows (mainkernels.Conv3Centred): a non-causal call is the whole
-		// sequence, and the windows are where the taps stop.
-		return "a centred convolution outside a windowed non-causal short convolution of three taps"
-	case p.NonCausal && (p.Parallel || p.Recurrent.Conv > 0 && !p.Recurrent.Centred || p.MLA() || p.NExpert > 0 ||
-		p.AttnSinks):
-		// A non-causal call is one submission of the block body's plain
-		// attention over its runs; these features are built only on the causal
-		// paths, and no non-causal model has them.
-		return "a non-causal block with a parallel residual, a recurrence, latent attention, experts or sinks"
-	case p.Windowed && !p.NonCausal:
-		return "windowed key runs on a causal block"
-	case p.PostResidNorm && (!p.NonCausal || !p.NoPreNorm || !p.LayerNorm):
-		// The norms after the residual adds are wired into the non-causal
-		// block (BERT's encoder): its attention reads the residual through
-		// the no-pre-norm copy, and its norms are LayerNorms.
-		return "post-residual norms on a block other than a non-causal LayerNorm one with no pre-norm"
-	case p.Clamps && (!p.NonCausal || p.ClampKQV != 0 || p.AttnOutGate || ungatedFFN(p)):
-		// The clipped linears are wired into the non-causal block's plain
-		// q/k/v, its output projection and a gated MLP: Gemma 4's tower, the
-		// one block that has them.
-		return "clipped linears on a block other than a non-causal one with a gated MLP"
-	case p.ClampKQV != 0 && (p.AttnOutGate || p.MLA()):
-		// The clamp is wired into the plain q/k/v path; an out-gate splits the
-		// double-width q first and MLA projects through its own sequence. No
-		// architecture combines them.
-		return "a q/k/v clamp with an attention out-gate or latent attention"
-	case p.Recurrent.Conv > 0 && p.Recurrent.KHeads == 0 && !p.Recurrent.ShortConv:
-		// The gated delta rule runs (recPair gives every kernel an out-of-place
-		// state); what is left is a shape check.
-		return "a linear-attention block with no key heads"
-	case p.Recurrent.Mamba1 && p.Recurrent.Rank <= 0:
-		return fmt.Sprintf("a Mamba-1 dt rank of %d", p.Recurrent.Rank)
-	case p.Recurrent.WithAttn && (!p.Recurrent.SSD || p.MLA() || p.NoFFN):
-		// The sum is built for Falcon-H1's shape alone: Mamba-2 beside plain
-		// attention, then an FFN.
-		return "attention beside a recurrent mixer in a shape no architecture has"
-	case p.Recurrent.SSD && (p.Recurrent.ChanDecay || p.Recurrent.KeyTiled):
-		// Mamba-2's update has one decay a head and grouped keys; neither
-		// switch exists on any Mamba-2, and the fused form refuses both.
-		return "Mamba-2's update with a per-channel decay or tiled keys"
-	case p.Recurrent.SSD && !p.Recurrent.NoNorm && (p.Recurrent.NormGroups <= 0 ||
-		(p.Recurrent.VHeads*p.Recurrent.VDim)%p.Recurrent.NormGroups != 0):
-		return fmt.Sprintf("a Mamba-2 gated norm of %d groups over %d channels",
-			p.Recurrent.NormGroups, p.Recurrent.VHeads*p.Recurrent.VDim)
-	case !actHasKernel(p):
-		// Every activation the host bakes has a device kernel (quick-GELU
-		// for CLIP towers, swiglu-oai for gpt-oss); what is left is a kind in a
-		// shape it does not exist in -- a gated kind in an ungated block.
-		return "the " + p.Act.String() + " activation in a " + map[bool]string{true: "ungated", false: "gated"}[ungatedFFN(p)] + " block"
-	}
-	return ""
-}
 
 // residScaled reports a plan whose block outputs are scaled before their
 // residual adds (Granite's residual_scale). Such a block takes neither the
@@ -169,49 +79,27 @@ func l4TempTab(p *nn.LayerPlan) []float32 {
 	return out
 }
 
-// windowArg is the window a windowed score kernel is built with: the sliding
-// width, or mainkernels.ChunkWindow of it where the layers attend within a chunk.
-func windowArg(p *nn.LayerPlan) int {
-	if p.SWAChunked {
-		return mainkernels.ChunkWindow(p.SWAWindow)
-	}
-	return p.SWAWindow
-}
 
-// routerWhyNot names the mixture gating this tier cannot express, or "". The
-// answer comes from the kernels (mainkernels.MoERouteWhyNot), so a missing gating
-// feature is a device kernel owed, not a refused capability.
-func routerWhyNot(p *nn.LayerPlan) string {
-	if p.NExpert == 0 {
-		return ""
-	}
-	return mainkernels.MoERouteWhyNot(routeOf(p))
-}
 
-// routeOf is the plan's router as the kernels describe one: one translation,
-// so the decline and the kernel cannot disagree.
-func routeOf(p *nn.LayerPlan) mainkernels.MoERoute {
-	// DeepSeek V4 selects through a per-row plane on every block (ds4.go):
-	// its selection bias, or a hash block's table.
-	ds4 := p.DS4 != nil
-	return mainkernels.MoERoute{
-		NExpert: p.NExpert, K: p.NExpertUsed,
-		Sigmoid: p.ExpertSigmoid, Bias: p.ExpertSelBias || ds4,
-		SqrtSoftplus: ds4 && p.DS4.ExpertSqrtSoftplus, RowBias: ds4,
-		NGroup: p.ExpertGroups, NGroupUsed: p.ExpertGroupsUsed,
-		Norm: !p.NoExpertNorm, Scale: float32(p.ExpertScale),
-		SparseMixer: p.ExpertSparseMixer,
-	}
-}
 
-// subFor is the activation sub-block a matvec of this format and width needs,
-// or 0 for the format's own. It is float-only: a quantized format's scales are
-// laid out against its sub-block (see mainkernels.MatVecShape.Sub), while a float
-// weight has no scale plane. What reaches this is MLA's absorbed banks, whose k
-// can be below 32 on a small fixture, where the sub-block narrows to the width
-// itself, and a ragged width past 32 (KDA's output at two heads of 40), where
-// it narrows to the widest of 16, 8 and 4 that divides k.
-func subFor(q kernels.Quant, k int) int { return mainkernels.FloatSub(q, k) }
+
+// subFor is the activation sub-block a float matvec of width k reads where k
+// is not whole 32-element blocks: k itself below 32, else the widest of 16,
+// 8 and 4 that divides it; 0 for a quantized format or a whole width.
+func subFor(q kernels.Quant, k int) int {
+	if !kernels.IsFloat(q) || k <= 0 || k%4 != 0 || k%32 == 0 {
+		return 0
+	}
+	if k < 32 {
+		return k
+	}
+	for _, sub := range []int{16, 8, 4} {
+		if k%sub == 0 {
+			return sub
+		}
+	}
+	return 0
+}
 
 // mlaWhyNot names the MLA shape this tier cannot express, or "". Each is a
 // width, so each is a kernel owed rather than a refusal (RULE 8): the
@@ -343,12 +231,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// are checked before any allocation so a decline takes no VRAM from the next
 	// block.
 	if p.Conv != nil {
-		g.mu.Lock()
-		defer g.mu.Unlock()
-		return g.prepConv(li, p, w, mayPage)
-	}
-	if r := declineReason(p); r != "" {
-		g.LastErr = fmt.Sprintf("block %d: %s", li, r)
+		g.LastErr = fmt.Sprintf("block %d: a convolutional block has no composed form", li)
 		return false
 	}
 	// A row range of a packed tensor cannot be expressed: the device layout
@@ -513,9 +396,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	if p.NonCausal {
 		l.nffn, l.ungated, l.act = p.NFFN, ungatedFFN(p), p.Act
 		l.noRope = p.NRot == 0 || p.NoPosEnc
-		if !g.ownActKern(l) {
-			return false
-		}
 	}
 	mkw := func(slot int, x nn.Weight) *resident {
 		q, ok := quantOf(x.T)
@@ -534,79 +414,18 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if !ok {
 			return mv{}, false
 		}
-		// A narrowed float sub-block (subFor) walks k/sub steps, which the
-		// split, chosen against k/32, must divide.
 		if sub := subFor(q, x.K); sub > 0 && (x.K/sub)%split != 0 {
 			split = 1
 		}
-		// The decode row tile: its rows are adjacent, so a lane loads Rowt
-		// contiguous u32 instead of one. It composes with the split (the tile buys
-		// bytes per lane, the split buys threads). The row count must divide.
 		rowt := 1
 		if g.DecodeRowt > 1 && x.Rows%g.DecodeRowt == 0 {
 			rowt = g.DecodeRowt
 		}
-		// Counted, so "it made no difference" and "it never ran" can be told
-		// apart.
-		if rowt > 1 {
-			g.RowtTiles++
-			if split > 1 {
-				g.RowtSplitTiles++
-			}
-		} else {
-			g.RowtPlain++
-		}
-		// The in-group split reduction, where tuneSplit measured it faster. It
-		// writes the final row, so no reduction kernel and no partial plane; see
-		// mainkernels.MatVecShape.GroupSplit.
-		grp := !g.NoGroupSplit && split > 1 && rowt == 1 &&
-			(g.ForceGroupSplit || g.groupSplit[splitKey{q, x.Rows, x.K}]) &&
-			mainkernels.GroupSplitOK(x.Rows, split)
-		kern := g.kernelMode(q, x.K, x.Rows, split, rowt, bias, grp)
-		if kern == nil {
-			// A refused tile is not a refused weight: fall back to one row.
-			rowt, grp = 1, false
-			if kern = g.kernel(q, x.K, x.Rows, split, 1, bias); kern == nil {
-				return mv{}, false
-			}
-		}
-		var red backend.Kernel
-		if split > 1 && !grp {
-			if red = g.reduceKernel(x.Rows, split); red == nil {
-				split = 1
-				if kern = g.kernel(q, x.K, x.Rows, 1, rowt, bias); kern == nil {
-					return mv{}, false
-				}
-			}
-		}
-		if !grp && !g.sizePart(x.Rows*split) {
-			return mv{}, false
-		}
-		return mv{kern: kern, red: red, rows: x.Rows, split: split, q: q, k: x.K,
-			rowt: rowt, group: grp, pad: p.KPad > 0 && x.K == p.KPad}, true
+		return mv{rows: x.Rows, split: split, q: q, k: x.K, rowt: rowt, pad: p.KPad > 0 && x.K == p.KPad}, true
 	}
-	// bias is threaded into every kernel: a 6-buffer kernel launched with 7 is
-	// refused on Vulkan and silently drops the bias on CUDA, which does not
-	// check arity.
 	mkk := func(x nn.Weight, r *resident, bias bool) (mv, bool) {
-		q, ok := quantOf(x.T)
-		if !ok {
-			return mv{}, false
-		}
-		m, ok := build(x, g.tuneSplit(q, x.Rows, x.K, r), bias)
-		if !ok {
-			return mv{}, false
-		}
-		if tbl := chooseSplit(x.Rows, x.K/32, g.kb.split); tbl != m.split {
-			if a, ok := build(x, tbl, bias); ok {
-				m.alt = &a
-			}
-		}
-		return m, true
+		return build(x, chooseSplit(x.Rows, x.K/32, g.kb.split), bias)
 	}
-	// mkkID is mkk with the expert fields. A dense weight passes experts=1 and
-	// gets exactly the kernel it always got -- MatVec is byte-identical there,
-	// which TestDenseKernelsUnchanged holds it to.
 	mkkID := func(x nn.Weight, r *resident, experts, slots int, slotAct, bias bool) (mv, bool) {
 		if experts <= 1 {
 			return mkk(x, r, bias)
@@ -615,47 +434,11 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if !ok {
 			return mv{}, false
 		}
-		// The split is chosen from Rows*Slots, not Rows: an indexed launch is
-		// rows*slots*split threads and MatVec lays its partials out at stride
-		// Rows*Slots, so Rows alone would over-split and reduce the wrong stride.
-		// It comes from the table, not the tuner, which has no selection to pass;
-		// WithSplit still pins it.
-		nout := x.Rows * slots
-		mk := func(split int) (mv, bool) {
-			// ForceIndexedGroup selects the in-group reduction here without
-			// depending on what retuneIndexed happens to time fastest.
-			grp := g.ForceIndexedGroup && !g.NoGroupSplit && split > 1 && !bias &&
-				mainkernels.GroupSplitOK(x.Rows, split)
-			c, e := g.idKernel(mainkernels.MatVecShape{Center: g.center, T: q, K: x.K, Rows: x.Rows,
-				Split: split, Experts: experts, Slots: slots, SlotAct: slotAct, Bias: bias,
-				Sub: subFor(q, x.K), GroupSplit: grp})
-			if e != nil {
-				g.LastErr = e.Error()
-				return mv{}, false
-			}
-			m := mv{kern: c, rows: x.Rows, slots: slots, split: split, q: q, k: x.K, group: grp,
-				experts: experts, slotAct: slotAct}
-			if grp {
-				g.IndexedGroup++
-			}
-			if split > 1 && !grp {
-				if m.red = g.reduceKernel(nout, split); m.red == nil {
-					return mv{}, false
-				}
-				if !g.sizePart(nout * split) {
-					return mv{}, false
-				}
-			}
-			return m, true
-		}
-		// A narrowed sub-block takes no split: chooseSplit is handed K/32, zero
-		// below 32 elements, which MatVec would refuse.
+		split := 1
 		if subFor(q, x.K) == 0 {
-			if m, ok := mk(chooseSplit(nout, x.K/32, g.kb.split)); ok {
-				return m, true
-			}
+			split = chooseSplit(x.Rows*slots, x.K/32, g.kb.split)
 		}
-		return mk(1)
+		return mv{rows: x.Rows, slots: slots, split: split, q: q, k: x.K, experts: experts, slotAct: slotAct}, true
 	}
 	// An expert bank is one matrix of NExpert*Rows rows: a GGUF 3-D expert tensor
 	// is expert-major and contiguous, so it packs, uploads and indexes as one
@@ -819,7 +602,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			return false
 		}
 	}
-	g.ensureRaw(ws, need)
 	// The block's matrices past the positional list: each uploaded and paged
 	// with the block, and bound by role (layer.roles).
 	l.extra = make([]*resident, len(ws)-numPositional)
@@ -1221,17 +1003,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		if !ok {
 			return false
 		}
-		if (i == 3 || i == 6) && e <= 1 && bias[i] == nil && !p.NonCausal && k.kern != nil {
-			k.res = g.kernelMode(k.q, k.k, k.rows, k.split, max(k.rowt, 1), true, k.group)
-		}
-		if i == 5 && e <= 1 && bias[i] == nil && !ungatedFFN(p) && k.kern != nil && k.rowt <= 1 &&
-			(p.Act == kernels.ActSiLU || p.Act == kernels.ActGELU) {
-			k.gated = g.gatedKernel(k.q, k.k, k.rows, k.split, k.group, p.Act)
-			k.gate2 = g.gate2Kernel(k.q, k.k, k.rows, k.split, k.group, p.Act)
-			// nil at a partial-writing split; the retune builds it once the
-			// split it picks has a final-row form.
-			k.wantGated = true
-		}
 		*ms[i] = k
 	}
 	if moe {
@@ -1257,23 +1028,14 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 				len(w.Router.Data), p.NExpert, p.NEmbd)
 			return false
 		}
-		rk, e := mainkernels.RouterMatVecOf(p.NExpert, p.NEmbd, es == 2)
-		if e != nil {
-			g.LastErr = e.Error()
-			return false
-		}
-		if l.mvRouter, e = g.dev.Compile(rk); e != nil {
-			g.LastErr = e.Error()
-			return false
-		}
 		// Padded to a whole word: the f16 kernel loads the word an element
 		// sits in, and an odd element count's last word runs past the matrix.
 		rb := w.Router.Data[:es*n]
 		if len(rb)%4 != 0 {
 			rb = append(append([]byte(nil), rb...), make([]byte, 4-len(rb)%4)...)
 		}
-		var b backend.Buf
-		if b, e = g.dev.Alloc(len(rb)); e != nil {
+		b, e := g.dev.Alloc(len(rb))
+		if e != nil {
 			return false
 		}
 		if e = b.Write(rb); e != nil {
@@ -1506,7 +1268,6 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// After the biases: the fused kernel bakes which segments take one, and the
 	// launch appends a buffer for every bias it finds. CUDA does not check the
 	// count, so a mismatch shifts every later buffer.
-	g.fuseQKV(l)
 	if w.QNorm != nil {
 		up(&l.nQ, w.QNorm)
 		up(&l.nK, w.KNorm)
@@ -1811,30 +1572,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	l.prog, l.progWhy = buildDevProgram(p, l)
 	g.layers[li] = l
 	g.layerGen++
-	// A non-causal block's batched twins are built here, not lazily: every
-	// call over it is batched, and a Compile from inside layersOnce would post
-	// to the backend goroutine that is blocked running the session -- a
-	// deadlock. prepBatch walks the causal layers eagerly for the same reason.
-	if p.NonCausal && g.bs != nil {
-		for _, m := range []*mv{&l.mvq, &l.mvk, &l.mvv, &l.mvo, &l.mvg, &l.mvu, &l.mvd, &l.mvSG, &l.mvBA, &l.mvSO} {
-			if m.kern == nil {
-				continue
-			}
-			if _, ok := g.batchMV(*m, g.bs.rows, g.bs.tok); !ok {
-				g.LastErr = fmt.Sprintf("non-causal block %d: no batched twin at %d rows",
-					li, g.bs.rows)
-				return false
-			}
-		}
-	}
-	// The reserved widths' batched twins are built here, against this block,
-	// as the non-causal twins are above. Their shared buffers -- the binary16
-	// activation and the k-split partials of sm_70's tensor-core twin
-	// (voltaMV) -- are sized by the block's matrices, which reserveScratch,
-	// running before the first block is installed, cannot see. Left to the
-	// first prompt or step, they were asked of a card the blocks had filled:
-	// 12 MB for Llama-3.2-1B on a Volta-class card, a driver out-of-memory on a
-	// full card and the last swap slot on a streaming one.
+	// The reserved widths' scratches, before the blocks fill the card.
 	if !p.NonCausal {
 		for _, w := range []int{g.promptW, g.stepW} {
 			if w > 0 {
@@ -1877,3 +1615,4 @@ func nanFill(n int) []byte {
 	}
 	return b
 }
+

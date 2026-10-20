@@ -344,14 +344,6 @@ func (g *devTier) reservePaged(bs *blockScratch) bool {
 	if bs == nil {
 		return false
 	}
-	if bs.pkv == nil {
-		return true
-	}
-	defer g.scratchWin().close()
-	if _, err := g.pagedPlanFor(bs, roundUp(max(bs.p.MaxSeq, 1), scoreGrain)); err != nil {
-		g.LastErr = "paged attention: " + err.Error()
-		return false
-	}
 	return true
 }
 
@@ -451,12 +443,6 @@ func (g *devTier) batchFor(w int) int {
 // switched off, has nothing to warm.
 func (g *GPU) prewarmPromptWidths() {
 	for _, d := range g.devs {
-		// The decode retune compiles its candidate splits; run at the first
-		// token it put those compiles, on a cold shader cache seconds of
-		// them, inside the decode. Placement is done, so it runs here.
-		if !d.NoPromptPrewarm {
-			d.retuneDecode()
-		}
 		d.mu.Lock()
 		d.prewarmPromptWidths()
 		d.mu.Unlock()
@@ -469,9 +455,7 @@ func (g *devTier) prewarmPromptWidths() {
 	if g.NoPromptPrewarm {
 		return
 	}
-	g.prewarmHeadKernels()
 	g.prewarmPrompt()
-	g.prewarmDecodePlans()
 	grain := g.promptGrain()
 	if g.NoExactPrompt || g.promptW <= grain {
 		return
@@ -485,47 +469,6 @@ func (g *devTier) prewarmPromptWidths() {
 			g.prewarmFused(g.bbs[w])
 		}
 		g.dropBatch(w)
-	}
-}
-
-// prewarmDecodePlans builds the decode scratch's attention plan at every key
-// count its history can reach (pagedPlanFor follows the count, rounded to
-// scoreGrain): the plans differ in split count at a few depths only, and one
-// met first at a token would compile inside it. Callers hold g.mu.
-func (g *devTier) prewarmDecodePlans() {
-	bs := g.bs
-	if bs == nil || bs.pkv == nil {
-		return
-	}
-	defer g.scratchWin().close()
-	for keys := scoreGrain; ; keys += scoreGrain {
-		if _, err := g.pagedPlanFor(bs, keys); err != nil {
-			g.LastErr = "paged attention: " + err.Error()
-			return
-		}
-		if keys >= bs.p.MaxSeq {
-			return
-		}
-	}
-}
-
-// prewarmHeadKernels builds the decode scratch's two prompt-only kernels,
-// which a first prompt would build otherwise: the embedding gather from the
-// resident head and the row copy the folded head reads. PrepHead calls it
-// once the head is resident; placement may end before the head is offered.
-// Callers hold g.mu.
-func (g *devTier) prewarmHeadKernels() {
-	hb := g.bs
-	if g.NoPromptPrewarm || hb == nil || hb.head == nil || !hb.head.ok || kernels.IsFloat(hb.head.t) {
-		return
-	}
-	if hb.headEmbeds {
-		g.embedKernel(hb)
-	}
-	if hb.p.NEmbd == hb.head.k {
-		if err := g.spanKernel(hb); err != nil {
-			g.LastErr = "the folded head's row copy: " + err.Error()
-		}
 	}
 }
 

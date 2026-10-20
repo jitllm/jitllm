@@ -107,7 +107,6 @@ func TestModelOpenCloseDoesNotLeak(t *testing.T) {
 			grow, rounds, grow/rounds)
 	}
 }
-
 // TestPagedModelOpenCloseDoesNotLeak is the same question where the pager is
 // actually doing work: a real model under a budget too small to hold it, so
 // every round allocates frames, evicts, re-reads and must give all of it back.
@@ -187,3 +186,4 @@ func TestPagedModelOpenCloseDoesNotLeak(t *testing.T) {
 			"coming back", grow, rounds, grow/rounds)
 	}
 }
+

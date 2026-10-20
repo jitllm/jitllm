@@ -250,21 +250,6 @@ type layer struct {
 	// actInKeys names the operand-prologue site each of q/k/v, the attention
 	// output and down took (fuseActIn), for tuneActIn to group blocks by.
 	actInKeys [4]string
-	// mlaQK is MLA's query projection (q, or q_a under a q LoRA) and kv_a in
-	// one launch, and shGU the shared expert's gate and up: two matvecs over
-	// one activation each, built by fuseQKV like qkv. nil where declined.
-	mlaQK, shGU *segLaunch
-	// gu is a dense gated FFN's gate and up in one launch (Config.GateUpFuse,
-	// fuseGateUp), and guDown the down projection forming act(gate)*up from
-	// their rows and quantizing it in its prologue, with the residual add:
-	// three launches where there were four. nil where declined.
-	gu     *segLaunch
-	guDown backend.Kernel
-	// ffnForm is the recipe this block's dense gated FFN runs where
-	// Config.FFNForm leaves it to the tuner (tuneFFN; recipe.go), and ffnKey
-	// the shape key it was decided under.
-	ffnForm FFNForm
-	ffnKey  string
 	// ffnWhy is why the block graph's gate2in rewrite was not offered here
 	// at this device's Target (offer), nil where it was or the block has no
 	// graph: the plan explanation's reason.

@@ -11,7 +11,6 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // The device unpack, at the tier's level: a page-in of a covered format must
@@ -184,60 +183,6 @@ func TestAPageInUnpacksOnTheDeviceAndPacksNothingOnTheHost(t *testing.T) {
 	t.Logf("VIOLATION seen: with Config.NoUnpack set the same page-ins report %d unpacks and "+
 		"%d host packs, and the gate above reads %q", v.Unpacks, v.Packs,
 		fmt.Sprintf("%d host pack(s) on a Q4_K-only model", v.Packs))
-}
-
-// TestAnUncoveredFormatFallsBackToTheHostPackerAndSaysWhy: a format outside the
-// fast-path list must still load. The block must be taken (a decline would look
-// like a full card), uncovered tensors counted separately, and the reason
-// quoted from kernels' own table.
-func TestAnUncoveredFormatFallsBackToTheHostPackerAndSaysWhy(t *testing.T) {
-	g, p := unpackTier(t, 4, &fakeDev{}, true)
-	ws := q4kBlocks(p, 2, true)
-	for i, w := range ws {
-		if !g.PrepLayer(i, p, w) {
-			t.Fatalf("block %d with Q6_K FFN matrices declined: %s -- an uncovered format "+
-				"must fall back to the host packer, not refuse the block", i, g.Err())
-		}
-	}
-	st := g.Stats()
-	// Two blocks, seven tensors each: five Q4_K and two Q6_K.
-	if st.Unpacks != 10 {
-		t.Fatalf("%d tensors unpacked on the device; the five Q4_K matrices of each of two "+
-			"blocks is 10", st.Unpacks)
-	}
-	if st.NoUnpackKernel != 4 {
-		t.Fatalf("%d tensors counted as having no device unpack; the two Q6_K matrices of "+
-			"each of two blocks is 4", st.NoUnpackKernel)
-	}
-	if st.Packs != 4 {
-		t.Fatalf("%d host packs for %d uncovered tensors: the fallback did not run, or it "+
-			"ran for something else", st.Packs, st.NoUnpackKernel)
-	}
-	// The reason comes from the kernel table, so it cannot drift from the one
-	// that decides.
-	want := mainkernels.UnpackWhyNot(kernels.Q6_K)
-	if !bytes.Contains([]byte(st.UnpackWhy), []byte(want)) {
-		t.Fatalf("UnpackWhy is %q and mainkernels.UnpackWhyNot(Q6_K) is %q; the tier is not "+
-			"quoting the table that made the decision", st.UnpackWhy, want)
-	}
-	t.Logf("mixed block: %d unpacked, %d host-packed, reason %q",
-		st.Unpacks, st.Packs, st.UnpackWhy)
-
-	// Violation: an all-Q4_K model must read zero on the same counters.
-	g2, p2 := unpackTier(t, 4, &fakeDev{}, false)
-	for i, w := range q4kBlocks(p2, 2, false) {
-		if !g2.PrepLayer(i, p2, w) {
-			t.Fatalf("all-Q4_K block %d declined: %s", i, g2.Err())
-		}
-	}
-	v := g2.Stats()
-	if v.NoUnpackKernel != 0 || v.Packs != 0 {
-		t.Fatalf("violation arm: an all-Q4_K model reports %d uncovered tensors and %d host "+
-			"packs, so the counters above are not reading the format",
-			v.NoUnpackKernel, v.Packs)
-	}
-	t.Logf("VIOLATION seen: the same counters read %d/%d on an all-Q4_K model, so the 4/4 "+
-		"above is the Q6_K pair and not a constant", v.NoUnpackKernel, v.Packs)
 }
 
 // TestTheStagingIsChargedAndGivenBack is the leak gate on the staging buffer.

@@ -10,7 +10,6 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // Layers is layersFor for the zero session: a caller that never attached.
@@ -34,9 +33,7 @@ func (g *devTier) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float
 		return false
 	}
 	defer v.done()
-	ok := v.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
-	v.dropEmbed()
-	return ok
+	return v.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
 }
 
 // layersCall is Layers. The wrapper exists because an EmbedRows promise lives
@@ -97,9 +94,6 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			return false
 		}
 		return g.submit(sid, bs, lo, hi, pos, x, cs, csSWA, nil)
-	}
-	if n == 1 {
-		g.retuneDecode()
 	}
 	if !g.ensureKVCap(pos + n) {
 		return false
@@ -180,11 +174,7 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 		// the one-submission path, with the per-row head built for it: every
 		// fallback below splits the chunk and projects the last row alone.
 		if ok && bbs != nil && head != nil && head.RowLogits {
-			if dbs == nil || dbs.head == nil || !g.prepRowsHead(bbs, head, n) {
-				ok = false
-			} else if len(head.Tokens) < n {
-				head.Tokens = make([]int32, n)
-			}
+			ok = false
 		}
 		// The fold copies the last row into the decode scratch and projects it
 		// there (layersOnce), which a resident float head cannot take. Only a
@@ -418,29 +408,12 @@ type graphKey struct {
 	scoreN   int // the rounded position count the scores grid was sized for
 	rows     int // the batch width; 1 for decode
 	head     bool
-	tblSplit bool
-	// The softmax arm: the two kernels' grids differ, and verify -ab softmax
-	// flips it every round.
-	scalarSM bool
-	flash    bool
 	// The packed V cache changes copyV's grid and AttnAcc's kernel entirely, so
 	// a recording made under one arm cannot replay under the other.
 	kvF16 bool
 	// Whether the rotary table is built on the device, which adds launches at
 	// the head of the sequence; verify -ab ropetab flips it every round.
 	ropeDev bool
-	// argmax says the head ends in the device argmax (nn.Head.ArgmaxOnly):
-	// one more launch, so a recording without it cannot serve a call with it.
-	argmax bool
-	// sampleK is the device sampler's k (nn.Head.SampleK), 0 for none: its
-	// launches follow the head, so a recording without them cannot serve a
-	// call with them, nor one of another k.
-	sampleK int
-	// samplePen says the sampler's penalty launch runs: with no history it
-	// is skipped and the first top-k pass reads the logits.
-	samplePen bool
-	// pick says the head ends in the label pick's gather (nn.Head.Pick).
-	pick bool
 	// rag is a LayersRows step's sequence count, 0 for any other call: ragged
 	// attention and a per-row head, and on a hybrid the per-count linear
 	// kernels (ragLin), which a recording names by address.
@@ -455,39 +428,12 @@ type graphKey struct {
 	// as a partial seam alternates two lo/hi keys. One bit per linear block
 	// (rangeParity).
 	recParity parityMask
-	// pagedVar is the paged attention's variant: the decode plan a recording
-	// launched, which the keys' count chose and nCap may not.
-	pagedVar *pagedVariant
-	// ragHead is how many of a ragged step's rows the head projects
-	// (nn.Head.LogitRows): it picks the head's matvec, which a recording
-	// names, and a step of the same rows wanting fewer logits differs only
-	// here.
-	ragHead int
-	// ragMap is the ragged call's run-table width (raggedprefill.go): it
-	// picks the run-table launch, which a recording names, and 0 is the
-	// decode plan for every row.
-	ragMap int
-	// hnorm is which norm the head reads (headNormFor): a recording names its
-	// buffer by address.
-	hnorm int
 	// persist says the recording holds composed persistent kernels
 	// (Config.Persist), which a per-op recording does not.
 	persist bool
 	// persistDeps says those kernels are ordered by dependency counters
 	// (Config.PersistDeps) rather than grid barriers.
 	persistDeps bool
-	// gateUp says the dense FFNs ran gate and up as one launch
-	// (Config.GateUpFuse).
-	gateUp bool
-	// gateUp2 says the dense FFNs ran gate and up as one Gate2 launch
-	// (Config.GateUp2).
-	gateUp2 bool
-	// gateUp2Force says Gate2 ran whatever the tuner chose
-	// (Config.GateUp2Force).
-	gateUp2Force bool
-	// noAddNorm says a prompt chunk's block-end adds ran alone
-	// (Config.NoAddNormFold).
-	noAddNorm bool
 	// sid is the session the recording was made for: it bakes that session's
 	// page descriptors and recurrent seats, so another session never replays
 	// it. Keying on it, rather than dropping every recording when the current
@@ -498,10 +444,6 @@ type graphKey struct {
 	// noFuse is Config.NoFuse: the fused kernels and their parts are two
 	// launch sequences, and verify -ab fuse flips it every round.
 	noFuse bool
-	// noActFuse is Config.NoActFuse, verify -ab actfuse's switch.
-	noActFuse bool
-	// ffnForm is Config.FFNForm, verify -ab ffn's switch.
-	ffnForm FFNForm
 }
 
 // canRecord reports whether this device's sessions can capture a launch
@@ -608,17 +550,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	if (rag != nil || allRows) && head != nil && g.bs != nil && g.bs.headCap != nil && bs.ragCapK == nil {
 		return refuse("a %d-row step of a model with a final logit softcap, with no per-row softcap built", bs.rows)
 	}
-	// The head's norm: the one it was built with, or a prediction block's own
-	// (headnorm.go). A norm the device was never given is a refusal, never the
-	// resident one in its place.
 	var hNorm backend.Buf
-	hNormID := 0
-	if head != nil && g.bs != nil {
-		var ok bool
-		if hNorm, hNormID, ok = g.headNormFor(head); !ok {
-			return refuse("the head brings a norm this device was not given (PrepHead)")
-		}
-	}
 	if fold {
 		hb = g.bs
 		switch {
@@ -626,9 +558,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			return refuse("the head is not resident on this device")
 		case kernels.IsFloat(hb.head.t) || hb.p.NEmbd != bs.p.NEmbd:
 			return refuse("a batched submission of %d rows with a %v head", bs.rows, hb.head.t)
-		}
-		if e := g.spanKernel(hb); e != nil {
-			return refuse("the folded head's row copy: %v", e)
 		}
 	}
 	if head != nil && (hb == nil || hb.head == nil || !hb.head.ok) {
@@ -703,24 +632,12 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// EmbedRows); the gather writes all R rows of bs.x, padding as zeros. Its
 	// last workgroup must not run past R rows; otherwise the promise is made real
 	// on the host.
-	pe := g.takeEmbedLocked(x)
-	var gatherN int
-	if pe != nil {
-		hr := g.bs.head
-		gatherN = mainkernels.GetRowsThreads(hr.t, hr.k, R)
-		if !g.embedKernel(g.bs) || hr.k != p.NEmbd || len(pe.ids) > R || gatherN%128 != 0 {
-			g.materializeLocked(pe)
-			pe = nil
-		}
+	for i := range hx {
+		hx[i] = 0
 	}
-	if pe == nil {
-		for i := range hx {
-			hx[i] = 0
-		}
-		// AltUp's streams are stream-major over the caller's nrow rows and
-		// over the scratch's R (altup.go); one stream is a prefix either way.
-		streamRows(hx, x, p, R, nrow)
-	}
+	// AltUp's streams are stream-major over the caller's nrow rows and over
+	// the scratch's R; one stream is a prefix either way.
+	streamRows(hx, x, p, R, nrow)
 	// pN carries a header at R > 1: element 0 is the uniform score width every
 	// grid is sized for, elements 1..R each row's own causal key count. At R == 1
 	// it is the single count.
@@ -842,42 +759,12 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// other per-call writes. The pages were taken before the submission
 	// (pagedAppend); here nothing may allocate one, since growing the pool can
 	// page weights out from under the range about to run.
-	var pagedVar *pagedVariant
 	if pk := bs.pkv; pk != nil {
 		pk.rows = g.pagedRows(sid, pk.rows, R, nrow, pos, rag)
 		if e := g.pagedPrep(sid, bs, pk.rows); e != nil {
-			return refuse("paged attention: %v", e)
+			return refuse("paged history: %v", e)
 		}
-		pk.st = nil
-		if pk.cur != nil {
-			g.pagedStage(pk, p, pk.rows)
-			// A call over evicted history streams (pagedstream.go), through
-			// the staged decode kernels rather than the prefill ones.
-			pf := pk.pf != nil && rag == nil && R > 1 && nrow > 0
-			if e := g.pagedStreamPrep(sid, bs, pk.rows, pf); e != nil {
-				return refuse("paged attention: %v", e)
-			}
-			// The lightning indexer scores every position through the
-			// table, which a streamed pass does not hold.
-			if pk.st != nil && pk.idx != nil {
-				return refuse("the lightning indexer reads the whole history and part of it is evicted")
-			}
-			// So do MiniMax-M3's and QSA's block selections (msa.go, qsa.go).
-			if pk.st != nil && (pk.msa != nil || pk.qsa != nil) {
-				return refuse("the block selection reads the whole history and part of it is evicted")
-			}
-		}
-		pk.ragRows = 0
-		if rag != nil && pk.cur != nil {
-			g.ragPrep(bs)
-		}
-		pk.prefill = pk.pf != nil && pk.cur != nil && pk.st == nil && rag == nil && R > 1 && nrow > 0
-		if pk.prefill {
-			if e := g.prefillPrep(bs, nrow); e != nil {
-				return refuse("paged prefill attention: %v", e)
-			}
-		}
-		pagedVar = pk.cur
+		g.pagedStage(pk, p, pk.rows)
 	}
 
 	// A plan with a local rotary table (two bases, gemma3) needs it for every
@@ -934,30 +821,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	}
 	ropeDev := bs.ropeTable != nil && !g.RopeTableHost && rrows >= 1 &&
 		pos >= 0 && top <= kernels.RopeTabMaxPos
-	// QSA's marks, each row's pictures (qsa.go).
-	if bs.pkv != nil {
-		if e := g.qsaStage(bs.pkv.qsa, R); e != nil {
-			return refuse("QSA: %v", e)
-		}
-	}
-	// DeepSeek V4's entries rotate at positions of their own, which only the
-	// device's table builds; its keys are read through the paged pool.
-	if bs.ds4 != nil && lo < hi {
-		pk := bs.pkv
-		switch {
-		case !ropeDev:
-			return refuse("DeepSeek V4's entries rotate at positions of their own, which needs the " +
-				"device's rotary table")
-		case pk == nil || pk.cur == nil:
-			return refuse("DeepSeek V4 reads its keys through the paged pool, and this call holds none")
-		case pk.st != nil:
-			return refuse("DeepSeek V4's window and entries are read through their tables and part " +
-				"of the history is evicted")
-		}
-		if e := g.ds4Stage(bs, lo, hi, pk.rows); e != nil {
-			return refuse("%v", e)
-		}
-	}
 	if ropeDev {
 		rposs = append(g.subBytes.rposs[:0], u32one(uint32(rrows))...)
 		for r := 0; r < R; r++ {
@@ -985,41 +848,17 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// Retire on nCap, keep on lo/hi. nCap only increases, so a key differing
 	// only there is dead once a longer one appears; lo/hi/head is a placement,
 	// and a partial seam alternates two of them every token.
-	argmax := head != nil && head.ArgmaxOnly && g.argmaxK != nil && R == 1
-	sampleK, samplePen := 0, false
-	if head != nil && !argmax && head.SampleK > 0 && R == 1 && rag == nil && !allRows && !fold && g.prepSample(head) {
-		sampleK, samplePen = head.SampleK, head.SampleArgs[0] > 0
-	}
-	// The label pick: one row's logits, a decode's or a folded chunk's last.
-	pick := head != nil && !argmax && sampleK == 0 && len(head.Pick) > 0 && rag == nil && !allRows &&
-		(R == 1 || fold) && g.prepPick(head)
-	ragN, ragRuns, ragHead, ragMap := 0, 0, 0, 0
-	if bs.pkv != nil {
-		// The width, and whether the decode plan runs beside it (ragAlone):
-		// two launch sequences a recording names.
-		ragMap = bs.pkv.ragKey()
-	}
+	ragN, ragRuns := 0, 0
 	if rag != nil {
 		ragN, ragRuns = len(rag.pos), len(rag.runs)
-		if head != nil {
-			ragHead = head.WantedRows(ragN)
-		}
-	}
-	// Counted here rather than in emit, which a replayed recording skips.
-	if ragHead == 1 {
-		if _, ok := g.headOneMV(R); ok {
-			g.RagHeadOne++
-		}
 	}
 	par, parOK := g.rangeParity(sid, lo, hi)
-	if allRows {
-		ragHead = head.WantedRows(nrow)
-	}
 	// The persistent path: decode only, and not over history streamed from
 	// home, whose uploads sit between launches.
-	persistOn := R == 1 && rag == nil && !(bs.pkv != nil && bs.pkv.st != nil) && g.ensurePersist()
-	key := graphKey{lo, hi, nCap, R, head != nil, g.TableSplit, g.ScalarSoftmax, g.flashOn(), g.KVF16,
-		ropeDev, argmax, sampleK, samplePen, pick, ragN, ragRuns, par, pagedVar, ragHead, ragMap, hNormID, persistOn, persistOn && g.PersistDeps, g.GateUpFuse, g.GateUp2, g.GateUp2Force, g.NoAddNormFold, sid, g.NoFuse, g.NoActFuse, g.FFNForm}
+	persistOn := R == 1 && rag == nil && g.ensurePersist()
+	key := graphKey{lo: lo, hi: hi, scoreN: nCap, rows: R, head: head != nil, kvF16: g.KVF16, ropeDev: ropeDev,
+		rag: ragN, ragRuns: ragRuns, recParity: par, persist: persistOn, persistDeps: persistOn && g.PersistDeps,
+		sid: sid, noFuse: g.NoFuse}
 	if lo == hi {
 		// The head alone reads no history, so the capacity is not part of
 		// what it records: keyed by it, prompts on either side of a growth
@@ -1073,9 +912,9 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	g.sub = submitArgs{
 		bs: bs, hb: hb, head: head, lo: lo, hi: hi, pos: pos, x: x,
 		hx: hx, hcs: hcs, hcsSWA: hcsSWA, pn: pn, koffs: koffs, kposs: kposs, rposs: rposs,
-		p: p, rag: rag, pe: pe, key: key, R: R, nrow: nrow, kvDim: kvDim, qdim: qdim,
-		kst: kst, nCap: nCap, gatherN: gatherN, rrows: rrows, sm: sm, smG: smG, smW: smW,
-		fold: fold, ropeDev: ropeDev, argmax: argmax, sampleK: sampleK, samplePen: samplePen, pick: pick, ragHead: ragHead, parOK: parOK,
+		p: p, rag: rag, key: key, R: R, nrow: nrow, kvDim: kvDim, qdim: qdim,
+		kst: kst, nCap: nCap, rrows: rrows, sm: sm, smG: smG, smW: smW,
+		fold: fold, ropeDev: ropeDev, parOK: parOK,
 		allRows: allRows, hNorm: hNorm,
 	}
 	if g.subFn == nil {
@@ -1134,7 +973,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// The submission has completed (its readback waited for it), so pages
 	// released before it are no longer read by anything in flight, and the
 	// rows it wrote are history eviction may send home.
-	if pk := bs.pkv; pk != nil && pk.cur != nil && g.kvp != nil {
+	if pk := bs.pkv; pk != nil && len(pk.rows) > 0 && g.kvp != nil {
 		g.kvp.wrote(pk.rows)
 	}
 	if g.kvp != nil {
@@ -1165,7 +1004,6 @@ type submitArgs struct {
 	pn, koffs, kposs, rposs []byte
 	p                       *nn.LayerPlan
 	rag                     *ragStep
-	pe                      *embPend
 	key                     graphKey
 	R, nrow, kvDim, qdim    int
 	kst, nCap, gatherN      int

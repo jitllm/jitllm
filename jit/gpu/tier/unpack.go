@@ -1,12 +1,7 @@
 package tier
 
 import (
-	"time"
-
-	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // A page-in that uploads the GGUF bytes raw and unpacks them on the device.
@@ -37,38 +32,6 @@ const unpackWidth = 128
 type unpackKey struct {
 	t        kernels.Quant
 	nrows, k int
-}
-
-// canUnpack reports that this device would unpack a format rather than ask the
-// host to pack it: mainkernels.UnpackSupported enumerates, and NoUnpack is the A/B
-// arm.
-func (g *devTier) canUnpack(q kernels.Quant) bool {
-	return !g.NoUnpack && mainkernels.UnpackSupported(q)
-}
-
-// unpackKernel compiles and caches the unpack for one shape. A compile failure
-// is cached as nil and recorded in UnpackWhy, so a silent fallback is visible.
-// Callers hold g.mu.
-func (g *devTier) unpackKernel(q kernels.Quant, nrows, k int) backend.Kernel {
-	kk := unpackKey{q, nrows, k}
-	if c, ok := g.unks[kk]; ok {
-		return c
-	}
-	if g.unks == nil {
-		g.unks = map[unpackKey]backend.Kernel{}
-	}
-	ker, err := mainkernels.Unpack(q, nrows, k)
-	if err != nil {
-		g.unks[kk], g.UnpackWhy = nil, err.Error()
-		return nil
-	}
-	c, err := g.dev.Compile(ker)
-	if err != nil {
-		g.unks[kk], g.UnpackWhy = nil, err.Error()
-		return nil
-	}
-	g.unks[kk] = c
-	return c
 }
 
 // rawStage makes the staging buffer at least n bytes and charges it.
@@ -119,137 +82,4 @@ func (g *devTier) freeRaw() uint64 {
 		g.StageVRAM = 0
 	}
 	return n
-}
-
-// ensureRaw sizes the staging for a block, after that block has been admitted
-// and reserving what it has still to spend. It is the only thing that allocates
-// the staging buffer: sized earlier, or from inside a block's upload, the
-// buffer takes the bytes a block needed and a model that fits loses a block
-// (TestAModelThatFitsAdmitsTheSameBlocksEitherWay).
-//
-// A device that cannot afford the staging keeps whatever it has and the covered
-// tensors fall back to the host packer, counted. Callers hold g.mu.
-func (g *devTier) ensureRaw(ws []nn.Weight, reserve uint64) {
-	var want uint64
-	for _, x := range ws {
-		q, ok := quantOf(x.T)
-		if !ok || len(x.Data) == 0 || !g.canUnpack(q) {
-			continue
-		}
-		if n := uint64(len(x.Data)); n > want {
-			want = n
-		}
-	}
-	if want == 0 {
-		return
-	}
-	// The cap is the widest covered tensor of any block this device has been
-	// offered, and it only ever grows: a model whose blocks differ in width has
-	// to serve the widest of them, for slots()'s reason.
-	if want > g.rawCap {
-		g.rawCap = want
-	}
-	if g.rawBuf != nil && g.rawBytes >= g.rawCap {
-		return // already held, and already inside the budget the block was priced against
-	}
-	if !g.room(g.rawCap + reserve) {
-		return
-	}
-	g.rawStage(g.rawCap)
-}
-
-// unpackInto uploads a tensor's raw GGUF bytes and unpacks them on the device,
-// filling r's three buffers. It reports whether it did; false means the caller
-// runs the host packer, which is a fallback and not a failure.
-//
-// The bytes are not charged here. resident() checked room() for the packed size
-// before calling and charges it after, so that the two paths spend the budget
-// through one expression. Callers hold g.mu.
-func (g *devTier) unpackInto(r *resident, q kernels.Quant, w []byte, nrows, k int) bool {
-	if len(w) == 0 {
-		return false
-	}
-	if !g.canUnpack(q) {
-		// A format with no kernel (reason from kernels' own table) and the
-		// NoUnpack measurement arm are reported apart.
-		g.NoUnpackKernel++
-		if g.UnpackWhy == "" {
-			if g.NoUnpack {
-				g.UnpackWhy = "the device unpack is off (Config.NoUnpack)"
-			} else {
-				g.UnpackWhy = q.String() + ": " + mainkernels.UnpackWhyNot(q)
-			}
-		}
-		return false
-	}
-	// This never allocates the staging (see ensureRaw). The staging is capped
-	// at the widest tensor of a block, so a wider tensor (the output
-	// projection, uploaded once) is host-packed rather than growing a buffer
-	// that exists to serve page-ins.
-	if g.rawBuf == nil || uint64(len(w)) > g.rawBytes {
-		g.NoUnpackRoom++
-		return false
-	}
-	kern := g.unpackKernel(q, nrows, k)
-	if kern == nil {
-		g.NoUnpackKernel++
-		return false
-	}
-	nq, nd, nsc, err := kernels.PackedWords(q, nrows, k)
-	if err != nil {
-		g.LastErr = "PackedWords " + q.String() + ": " + err.Error()
-		return false
-	}
-	// The destinations, allocated and not written: the kernel assigns every word
-	// of all three. An absent array still gets a word, because the matvec kernel
-	// takes the parameter either way -- the same rule the upload path follows.
-	bufs := [3]backend.Buf{}
-	ok := true
-	for i, n := range [3]int{nq, nd, nsc} {
-		if n == 0 {
-			n = 1
-		}
-		b, err := g.dev.Alloc(n * 4)
-		if err != nil {
-			g.LastErr = "unpack destination: " + err.Error()
-			ok = false
-			break
-		}
-		bufs[i] = b
-	}
-	if ok {
-		tu := time.Now()
-		err = g.rawBuf.Write(w)
-		g.TUpload += time.Since(tu)
-		if err != nil {
-			g.LastErr = "raw upload: " + err.Error()
-			ok = false
-		}
-	}
-	if ok {
-		threads := mainkernels.UnpackThreads(q, nrows, k)
-		groups := (threads + unpackWidth - 1) / unpackWidth
-		t0 := time.Now()
-		err = kern.Launch(groups, unpackWidth, g.rawBuf, bufs[0], bufs[1], bufs[2])
-		g.TUnpack += time.Since(t0)
-		if err != nil {
-			g.LastErr = "unpack launch: " + err.Error()
-			ok = false
-		}
-	}
-	if !ok {
-		// A half-built tensor would run and answer wrongly: free it all and
-		// let the host packer take it.
-		for _, b := range bufs {
-			if b != nil {
-				b.Free()
-			}
-		}
-		g.NoUnpackRoom++
-		return false
-	}
-	r.qs, r.d, r.sc, r.ok = bufs[0], bufs[1], bufs[2], true
-	g.Unpacks++
-	g.UnpackBytes += uint64(len(w))
-	return true
 }

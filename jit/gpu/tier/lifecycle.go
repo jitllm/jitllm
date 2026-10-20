@@ -3,11 +3,12 @@ package tier
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
+	"slices"
+
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
-	"math"
-	"slices"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"

@@ -30,20 +30,11 @@ func (g *devTier) target(rows graph.RowClass) graph.Target {
 	}
 }
 
-// mmaShape is the widest matrix instruction this device lowers, by the
-// probes the tier already runs for its tensor-core paths: m16n8 binary16 at
-// its k (sm_80's k16, sm_75's k8), sm_70's m8n8k4, or the 8x8 collective
-// tile Metal and Vulkan lower; "" for none.
+// mmaShape is the widest matrix instruction the composer lowers on this
+// device, "" for none.
 func (g *devTier) mmaShape() string {
-	switch k := g.f16GemmK(); {
-	case k == 16:
-		return "m16n8k16"
-	case k == 8:
-		return "m16n8k8"
-	case g.sm70():
-		return "m8n8k4"
-	case g.tilesOK():
-		return "t8x8"
+	if g.composeTarget().IntMMA() {
+		return "m16n8k32"
 	}
 	return ""
 }

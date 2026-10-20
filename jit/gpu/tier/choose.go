@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // choose picks which GPU API to run on when a host offers more than one.
@@ -87,26 +87,24 @@ func choose(devs []backend.Device, kb knobs) backend.Device {
 	return keep(cand[best])
 }
 
-// probe times one representative decode matvec on each device.
-//
-// The shape is gemma's q/o projection -- 2048x2048 Q4_0, about 2.6 MB of
-// weights -- which is big enough to leave any cache and small enough that the
-// probe costs a few milliseconds. It measures the kernel, not the bandwidth
-// ceiling, because the kernel is what will run.
+// probe times one composed decode matvec on each device: 2048x2048 Q8_0,
+// big enough to leave any cache, a few milliseconds a device.
 func probe(devs []backend.Device) (best int, rates []float64) {
 	const rows, k = 2048, 2048
 	rates = make([]float64, len(devs))
 	nb := k / 32
-	raw := make([]byte, rows*nb*18)
+	raw := make([]byte, rows*nb*34)
 	rng := rand.New(rand.NewSource(1))
 	for i := range raw {
 		raw[i] = byte(rng.Intn(256))
 	}
-	qs, dw, scw, err := kernels.PackWeights(kernels.Q4_0, raw, rows, k)
+	for b := 0; b < rows*nb; b++ {
+		raw[b*34], raw[b*34+1] = 0, 0x3c
+	}
+	qs, dw, _, err := kernels.PackWeights(kernels.Q8_0, raw, rows, k)
 	if err != nil {
 		return 0, rates
 	}
-	_ = scw
 	x := make([]float32, k)
 	for i := range x {
 		x[i] = float32(rng.NormFloat64())
@@ -117,7 +115,6 @@ func probe(devs []backend.Device) (best int, rates []float64) {
 	}
 	ax := append(append([]float32{}, as...), sum...)
 	macs := float64(rows) * float64(k)
-
 	for i, d := range devs {
 		rates[i] = timeOne(d, qs, dw, a, ax, rows, k, macs)
 		if rates[i] > rates[best] {
@@ -127,10 +124,17 @@ func probe(devs []backend.Device) (best int, rates []float64) {
 	return best, rates
 }
 
-func timeOne(d backend.Device, qs, dw, a []uint32, ax []float32,
-	rows, k int, macs float64) float64 {
-
-	ker, err := mainkernels.MatVec(mainkernels.MatVecShape{T: kernels.Q4_0, K: k, Rows: rows, Split: 1})
+func timeOne(d backend.Device, qs, dw, a []uint32, ax []float32, rows, k int, macs float64) float64 {
+	g := compose.Row{Width: rows, Rows: 1}
+	bq, bd, ba, bx, bo := g.Buf(compose.BufU32), g.Buf(compose.BufU32), g.Buf(compose.BufU32), g.Buf(compose.BufRow), g.Buf(compose.BufOut)
+	v, err := g.MatVec(compose.MatVecWeight{T: kernels.Q8_0, K: k, Rows: rows, QS: bq, D: bd, SC: -1},
+		compose.MatVecOperand{A: ba, AX: bx, Toks: 1})
+	if err != nil {
+		return 0
+	}
+	g.Store(bo, v)
+	ker, err := g.Emit(compose.Schedule{Group: 128, Flat: true,
+		Target: compose.Target{API: compose.APIOf(d.API()), ISA: backend.ArchOf(d)}})
 	if err != nil {
 		return 0
 	}
@@ -139,7 +143,6 @@ func timeOne(d backend.Device, qs, dw, a []uint32, ax []float32,
 		return 0
 	}
 	defer kern.Close()
-
 	var bufs []backend.Buf
 	defer func() {
 		for _, b := range bufs {
@@ -157,10 +160,8 @@ func timeOne(d backend.Device, qs, dw, a []uint32, ax []float32,
 		}
 		return b
 	}
-	bQS, bD, bSC := up(u32b(qs)), up(u32b(dw)), up(u32b([]uint32{0}))
-	bA, bAX := up(u32b(a)), up(f32b(ax))
-	bOut := up(make([]byte, rows*4))
-	for _, b := range []backend.Buf{bQS, bD, bSC, bA, bAX, bOut} {
+	bQS, bD, bA, bAX, bOut := up(u32b(qs)), up(u32b(dw)), up(u32b(a)), up(f32b(ax)), up(make([]byte, rows*4))
+	for _, b := range []backend.Buf{bQS, bD, bA, bAX, bOut} {
 		if b == nil {
 			return 0
 		}
@@ -168,7 +169,7 @@ func timeOne(d backend.Device, qs, dw, a []uint32, ax []float32,
 	run := func() bool {
 		ok := true
 		d.Session(func(s backend.Session) {
-			if s.Launch(kern, (rows+127)/128, 128, bQS, bD, bSC, bA, bAX, bOut) != nil {
+			if s.Launch(kern, (rows+127)/128, 128, bQS, bD, bA, bAX, bOut) != nil {
 				ok = false
 				return
 			}

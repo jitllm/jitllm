@@ -767,8 +767,7 @@ type devOp struct {
 	// Staged says the op is several launches that pass through scratch, so
 	// reading and writing one slot is safe: no single launch does both.
 	Staged bool
-	N      int     // K's thread count, where it is not the rows'
-	QS     *qkvSeg // the q/k/v grid's segments (qkv-gemm)
+	N      int // K's thread count, where it is not the rows'
 	// Alpha is an add's scale on its second operand (the graph's), and Act
 	// an activation's kind: what the op's generated kernel is built from.
 	Alpha float64
@@ -1542,9 +1541,9 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				prog.ops = append(prog.ops, devOp{Kind: dkGroupMask, Src: []int{i}, In: []devVal{logits}, Out: []devVal{plane}, Role: selBias})
 				rank = append(rank, plane)
 			}
-			if routeOf(p).RowBias {
-				// The rank kernel reads a bias per row: the block's, or on a
-				// hash-routed block the table's experts for the row's token.
+			if hash != 0 {
+				// A hash-bound route ranks against the table's experts for
+				// the row's token: a bias per row.
 				rb := prog.val(name(0)+".row_bias", f32(ex), slotRBias)
 				prog.ops = append(prog.ops, devOp{Kind: dkRowBias, Src: []int{i}, Out: []devVal{rb}, Role: hash})
 				rank = append(rank, rb)

@@ -532,11 +532,6 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 	if l.pg.in {
 		return g.holdPages(li, li+1)
 	}
-	// The staging is asked for before the reclaim, best-effort: it is normally
-	// already held and is absent only after trim took it. Without room the
-	// page-in proceeds without it and packs on the host. Passing the bytes this
-	// block still owes keeps the staging from taking the page-in's room.
-	g.ensureRaw(l.pg.ws, l.pg.bytes)
 	if need := l.pg.bytes + l.pg.round; !g.kvCompact(need, nil) && !g.reclaim(need, li, lo, hi) {
 		g.LastErr = fmt.Sprintf("block %d needs %d bytes and nothing can be paged out (%d of %d used, %d slot(s))",
 			li, l.pg.bytes+l.pg.round, g.used, g.limit, g.slots())

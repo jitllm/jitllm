@@ -345,13 +345,7 @@ func WithPersistDeps(on bool, grid int) Option {
 	return WithConfig(func(c *Config) { c.Persist, c.PersistDeps, c.PersistGrid = on, on, grid })
 }
 
-// WithFFNForm sets Config.FFNForm: the recipe every dense gated FFN runs,
-// FFNTuned (the default) leaving it to the per-card trial.
-func WithFFNForm(f FFNForm) Option { return WithConfig(func(c *Config) { c.FFNForm = f }) }
 
-// WithNormGate sets Config.NormGate: the recipe every gated output norm
-// runs, NormGateTuned (the default) leaving it to the per-card trial.
-func WithNormGate(f NormGateForm) Option { return WithConfig(func(c *Config) { c.NormGate = f }) }
 
 // WithRewrite sets Config.Rewrites[name]: a caller's choice over one
 // block-graph rewrite (graph.Rewrites names them). It copies the map, so two

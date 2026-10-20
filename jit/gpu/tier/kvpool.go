@@ -3,9 +3,10 @@ package tier
 import (
 	"errors"
 	"fmt"
-	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"slices"
 	"unsafe"
+
+	"github.com/jitllm/jitllm/jit/gpu/compose"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 )

@@ -28,7 +28,6 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 type resident struct {
@@ -578,17 +577,6 @@ type Config struct {
 	// act(gate)*up and quantize it in its prologue: three launches where there
 	// were four, every row reduced as before. Off by default.
 	GateUpFuse bool
-	// FFNForm forces the recipe every dense gated FFN runs (recipe.go):
-	// FFNTuned, the zero value, takes the per-shape verdict tuneFFN timed on
-	// this card, or Gate2 where nothing was timed. A forced recipe a block
-	// cannot express runs the next one down the chain (gate2in, gate2, two).
-	FFNForm FFNForm
-	// NormGate forces the gated output norm's recipe (normgate.go):
-	// NormGateTuned, the zero value, takes the per-shape verdict
-	// tuneNormGate timed on this card at decode and the two launches at a
-	// prompt chunk's rows; a block the rewrite is not offered on runs the two
-	// launches whatever this says.
-	NormGate NormGateForm
 	// Rewrites is the caller's choice per block-graph rewrite
 	// (graph.Choice, WithRewrite): Take asks for one wherever its block's
 	// graph offers it on this device, Refuse keeps the reference recipe,
@@ -656,10 +644,8 @@ type Config struct {
 	// -tags jitllmfault.
 	failAt []int
 	// hook is the tier's fault and violation state (empty in a release
-	// build) and trial the tuner seams a gate replaces; both belong to the
-	// tier, never the process.
-	hook  hooks
-	trial trialHooks
+	// build); it belongs to the tier, never the process.
+	hook hooks
 	// FillFirst places blocks on the first device until it is full, then the
 	// next, instead of spreading a model that fits across the devices in
 	// proportion to their budgets (GPU.PlanBlocks). The spread leaves each card
@@ -1989,16 +1975,7 @@ type devShared struct {
 	// of its label.
 	ord   int
 	kerns map[kernKey]backend.Kernel
-	// idKerns is the indexed matvecs, by their whole shape; see idKernel.
-	idKerns map[mainkernels.MatVecShape]backend.Kernel
 	res     map[resKey]*resident
-	splits  map[splitKey]int
-	// gemmDeep is tuneGemm's verdict per prompt GEMM shape: true where the
-	// deep m16n8 tiles (f16DeepTiles) measured faster than f16Tiles' pick.
-	gemmDeep map[splitKey]bool
-	// groupSplit records, per shape, whether tuneSplit found the in-group
-	// reduction faster than the partial-buffer one.
-	groupSplit map[splitKey]bool
 	// actWin is the activation amax window the CPU tier chose; see
 	// nn.JIT.SetDevice. Zero means the default 32. It is copied per device
 	// rather than kept in Config because it is written after Open and read on
@@ -2028,36 +2005,19 @@ type devShared struct {
 	xfCap               int
 	reduce              map[[2]int]backend.Kernel
 	retunedAt           int // len(layers) at the last retuneDecode
-	// The background split tuner (WithLazyTune): its queue, whether its
-	// goroutine runs, Close's stop, and the goroutine to wait for.
-	tuneQ       []tuneJob
-	tuneRunning bool
-	tuneStop    bool
-	tuneWG      sync.WaitGroup
 	// lastSub is when the device last started or finished a submission
 	// (unix ns): the background tuner waits for tuneQuiet past it.
 	lastSub   atomic.Int64
-	restrides map[[4]int]backend.Kernel // mainkernels.Restride by shape; see copyKVAcrossStride
 	segKerns  map[string]backend.Kernel // mainkernels.MatVecSegments by shapes; see fuseQKV
 	// actInWin is tuneActIn's verdict per operand-prologue site key: true where
 	// the prologue measured faster than the two launches on this card.
 	// actInTrial makes fuseActIn build every candidate for that measurement.
 	actInWin map[string]bool
-	// gu2Win is tuneFFN's verdict per up-projection shape: Gate2 or
-	// the two launches.
-	gu2Win map[splitKey]bool
-	// ffnWin is tuneFFN's verdict per FFN shape key (recipe.go).
-	ffnWin map[string]FFNForm
-	// normGateWin is tuneNormGate's verdict per gated-norm key (normgate.go).
-	normGateWin map[string]bool
 	// explain is each site's decision in force, with its reason (explain.go).
 	explain    map[string]RecipeChoice
 	actInTrial bool
-	ragKerns   map[moeKernKey]backend.Kernel // a batched mixture's grouped matvecs (moegroup.go)
-	moeVolta   map[moeVoltaKey]moeVoltaMV    // their tensor-core twins; see voltaGroupedMV
 	ragK       map[ragKey]backend.Kernel     // a ragged step's matvecs; see ragMV
 	tailK      map[ragKey]*mvTail            // tileMV's second launches, one per shape
-	qkvK       map[string]*qkvSeg            // a prompt chunk's q/k/v grids; see qkvGemm
 	kshareKey  map[string]backend.Kernel     // scratch kernels by content; see compileShared
 	kshared    map[backend.Kernel]struct{}   // the same kernels, by identity: closeKern leaves them open
 	pcache     *persistCache                 // composed persistent kernels; see persist.go
@@ -2090,7 +2050,6 @@ type devShared struct {
 	kh       khState
 	KevHeads int64
 	convN    int
-	ragSeg   map[segShapeKey]segLaunch // a few-sequence step's q/k/v; see groupQKV
 	argmaxK  backend.Kernel            // mainkernels.Argmax over the head's rows; see PrepHead
 	// samplePenK and sampleKs are the device sampler's kernels: the penalty
 	// over the head's rows and, per k, the two top-k passes (sample.go).
@@ -2190,9 +2149,6 @@ type devShared struct {
 	mmaOff bool
 	// tileOff records that this device refused mainkernels.GemmTile; see tileMV.
 	tileOff bool
-	// prefillRefused are the staged prefill forms this device refused to
-	// compile, by row width (initPagedPrefill).
-	prefillRefused map[prefillRefusal]struct{}
 	// tileCap is the collective-tile probe (tilesOK): 0 not yet asked, 1 the
 	// device lowers the 8x8 f16 tile GemmTile and FlashPrefillTile multiply
 	// in, -1 it does not.
@@ -2430,58 +2386,6 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 	return g, nil
 }
 
-// addSlot builds the tier's device for slot s at ordinal i and pools it.
-func (g *GPU) addSlot(i int, s Slot) {
-	cfg := g.Config
-	limit := s.Bytes
-	if limit == 0 {
-		limit = defaultBudget
-	}
-	pool := s.Pool
-	if pool == nil {
-		pool = NewPool(s.Dev.Name(), limit)
-	}
-	why := s.Why
-	if why == "" {
-		why = "the caller set it"
-	}
-	cnt, _ := s.Dev.(backend.AllocCounter)
-	g.devs = append(g.devs, newDevice(&devShared{
-		Config:     cfg,
-		tot:        Stats{Device: label(s.Dev, i)},
-		dev:        s.Dev,
-		cnt:        cnt,
-		pool:       pool,
-		why:        why,
-		ord:        i,
-		name:       DeviceName(s.Name),
-		kerns:      map[kernKey]backend.Kernel{},
-		rewrites:   newDevRewrites(),
-		res:        map[resKey]*resident{},
-		splits:     map[splitKey]int{},
-		groupSplit: map[splitKey]bool{},
-		reduce:     map[[2]int]backend.Kernel{},
-		limit:      limit,
-	}))
-	// The zero-copy path is guarded on UnifiedMemory, not on the extension:
-	// a discrete card may also advertise VK_EXT_external_memory_host, and
-	// importing there would leave the weights behind PCIe for every matvec
-	// to re-read. Only a device whose memory is the host's wraps for free.
-	if a := backend.ImportAlign(s.Dev); a > 0 && unified(s.Dev) {
-		d := g.devs[len(g.devs)-1]
-		d.imp, d.impAlign = s.Dev.(backend.HostImport), uint64(a)
-	}
-	known := false
-	for _, p := range g.pools {
-		known = known || p == pool
-	}
-	if !known {
-		g.pools = append(g.pools, pool)
-	}
-	if pool.Host() {
-		g.hostPool = pool
-	}
-}
 
 // takeExpertCard moves the device Config.ExpertCard names out of the
 // placement candidates. It must be one of several devices, and the others
@@ -2687,75 +2591,6 @@ func (g *devTier) Bytes() uint64 {
 	return g.used
 }
 
-// freeScratch returns every device buffer and scratch-owned kernel a scratch
-// holds. It runs on Close and on every KV grow (ensureKVCap rebuilds the
-// scratch at the new stride), so a missed buffer leaks a whole set per grow,
-// and a later allocation then fails.
-//
-// It walks the struct by reflection rather than a hand-written list, which
-// fell behind every field added since; reflection is affordable once per grow.
-// Duplicates are freed once: two fields may alias one buffer, and a double Free
-// is a driver error.
-func freeScratch(bs *blockScratch, g *devShared) {
-	if bs == nil {
-		return
-	}
-	bs.mg.free(g)    // a pointer, which the field walk below does not follow
-	freeFlash(bs, g) // a slice, likewise
-	// Both slices may hold nil where an allocation failed part-way, which is
-	// how a card too small for a tower's planes reaches here.
-	for _, b := range bs.qoffs {
-		if b != nil {
-			b.Free()
-		}
-	}
-	bs.qoffs = nil
-	for _, b := range bs.vwins { // the windows' per-chunk buffers, likewise
-		if b != nil {
-			b.Free()
-		}
-	}
-	bs.vwins = nil
-	for _, b := range bs.vsegs { // the packed sequences' buffers, likewise
-		if b != nil {
-			b.Free()
-		}
-	}
-	bs.vsegs = nil
-	freePaged(bs.pkv, g)
-	bs.mlab.free(g)
-	bs.ds4.free(g)
-	bs.k3.free(g)
-	bs.q4e.free(g)
-	for n, rk := range bs.ragLin { // a map, which the walk does not follow either
-		for _, k := range []backend.Kernel{rk.conv, rk.shift, rk.delta, rk.ngConv} {
-			if k != nil {
-				g.closeKern(k)
-			}
-		}
-		delete(bs.ragLin, n)
-	}
-	seen := map[backend.Buf]bool{}
-	v := reflect.ValueOf(bs).Elem()
-	bufType := reflect.TypeOf((*backend.Buf)(nil)).Elem()
-	for i := 0; i < v.NumField(); i++ {
-		f := v.Field(i)
-		if f.Type() != bufType || f.IsNil() {
-			continue
-		}
-		// NewAt because the fields are unexported: reflect panics on
-		// Interface() through an unexported name. The address is real and the
-		// type is checked above, so re-deriving a value at it is sound.
-		b, ok := reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).
-			Elem().Interface().(backend.Buf)
-		if !ok || b == nil || seen[b] {
-			continue
-		}
-		seen[b] = true
-		b.Free()
-	}
-	*bs = blockScratch{}
-}
 
 // releaseEveryLayer drops every block this device holds, through the same path a
 // migration uses. Close calls it; see the comment there.
@@ -2815,8 +2650,7 @@ func (g *devTier) Close() {
 	// decline tombstones, freeStale) rather than a second copy of that walk.
 	// A driver that reclaims the context on close would hide a leak here, but
 	// a unified-memory device would not. It takes g.mu, hence before the lock
-	// below. The background tuner stops first: it times resident weights.
-	g.stopTune()
+	// below.
 	g.releaseEveryLayer()
 
 	g.mu.Lock()
@@ -2858,9 +2692,6 @@ func (g *devTier) Close() {
 			g.closeKern(k)
 		}
 	}
-	for _, k := range g.idKerns {
-		g.closeKern(k)
-	}
 	for _, r := range g.res {
 		if r.ok {
 			r.qs.Free()
@@ -2875,9 +2706,7 @@ func (g *devTier) Close() {
 			g.closeKern(k)
 		}
 	}
-	for _, k := range g.restrides {
-		g.closeKern(k)
-	}
+
 	// Every layer left the pool with its block; what remains is the pool
 	// itself and its charge.
 	g.freeKVPool(g.kvp)
@@ -2902,11 +2731,6 @@ func (g *devTier) Close() {
 			g.closeKern(k)
 		}
 	}
-	for _, k := range g.ragKerns {
-		if k != nil {
-			g.closeKern(k)
-		}
-	}
 	for _, k := range g.ragK {
 		if k != nil {
 			g.closeKern(k)
@@ -2925,11 +2749,6 @@ func (g *devTier) Close() {
 			if e.k != nil {
 				g.closeKern(e.k)
 			}
-		}
-	}
-	for _, s := range g.qkvK {
-		if s != nil {
-			g.closeKern(s.kern)
 		}
 	}
 	for _, k := range g.unks {
@@ -3009,86 +2828,12 @@ const (
 	failed           // this card could not compile or could not launch
 )
 
-// MatVec implements nn.Device for one device, for the zero session. It
-// returns false for anything it cannot serve, and the caller then runs the CPU
-// path unchanged. GPU.MatVec is what a caller with several devices uses.
+// MatVec is nn.Device's single matvec on the card. The composer forms none
+// outside a block's program, so the host runs it.
 func (g *devTier) MatVec(out []float32, t quant.Type, w []byte, x []float32, nrows, k int) bool {
-	return g.matVec(0, out, t, w, x, nrows, k) == served
+	return false
 }
 
-func (g *devTier) matVec(sid uint64, out []float32, t quant.Type, w []byte, x []float32, nrows, k int) decline {
-	q, ok := quantOf(t)
-	if !ok || k%q.Elems() != 0 || nrows <= 0 || len(w) == 0 {
-		g.mu.Lock()
-		g.NoKernel++
-		g.mu.Unlock()
-		return noKernel
-	}
-	// A matvec served alone pays a whole host/device crossing, and whether that
-	// pays is a property of the model (mvPays); unpriced, it made partial
-	// placements slower than no device at all.
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if !g.mvPays(sid, len(w)) {
-		return tooSmall
-	}
-
-	r := g.resident(-1, 0, q, w, nrows, k, nil)
-	if r == nil || !r.ok {
-		// resident() has already counted this as Declined (the budget) or
-		// NoRoom (the card), and either way another card may have the room.
-		return noRoom
-	}
-	split := chooseSplit(nrows, k/32, g.kb.split)
-	kern := g.kernel(q, k, nrows, split, 1, false)
-	if kern == nil {
-		return failed
-	}
-	var red backend.Kernel
-	if split > 1 {
-		if red = g.reduceKernel(nrows, split); red == nil {
-			split, kern = 1, g.kernel(q, k, nrows, 1, 1, false)
-			if kern == nil {
-				return failed
-			}
-		}
-	}
-	t0 := time.Now()
-	// Buffers are sized outside the session: Alloc takes its own ownership hop
-	// and cannot nest inside one.
-	fresh, ok := g.prepare(x, nrows, k, !kernels.IsFloat(q))
-	if !ok || !g.sizeMVPart(nrows*split) || (kernels.IsFloat(q) && !g.sizeXF(k)) {
-		return noRoom
-	}
-	t1 := time.Now()
-
-	// One ownership hop for the whole matvec: two uploads, a launch and a
-	// readback batched in one Session.
-	g.mvc = mvCall{fresh: fresh, float: kernels.IsFloat(q), r: r, x: x, nrows: nrows, k: k,
-		split: split, kern: kern, red: red}
-	if g.mvcFn == nil {
-		g.mvcFn = g.matVecSession
-	}
-	g.dev.Session(g.mvcFn)
-	err := g.mvc.err
-	g.mvc = mvCall{}
-	if err != nil {
-		return failed
-	}
-	t3 := time.Now()
-	f := g.hostOut[:nrows]
-	for i := range f {
-		out[i] = f[i]
-	}
-	g.TStage += t1.Sub(t0)
-	g.TLaunch += t3.Sub(t1)
-	g.TConv += time.Since(t3)
-	if g.Verify {
-		g.verify(out, t, w, x, nrows, k)
-	}
-	g.Served++
-	return served
-}
 
 // mvCall is one matVec's device side, handed to matVecSession through the
 // devTier rather than captured by a closure: the function a Session runs
@@ -3200,219 +2945,6 @@ func (g *devTier) importPacked(r *resident, p *kernels.Packed) bool {
 	return true
 }
 
-// resident uploads a tensor once, keyed by resKey.
-//
-// block is the caller's block index, or -1 for a tensor that is not part of one
-// (the output projection, a lone matvec offered by the host tier). It is a tag
-// telling the arena which entries to release together, and nothing else.
-func (g *devTier) resident(block, slot int, q kernels.Quant, w []byte, nrows, k int, pre *nn.Packed) *resident {
-	g.applyForgets()
-	key := resKey{block: block, slot: slot, nrows: nrows, k: k, t: q}
-	if block < 0 {
-		// The ad-hoc path: no block, no slot, and the weight is host-owned.
-		key.p = &w[0]
-	}
-	if r, ok := g.res[key]; ok {
-		// The shape is part of the key because an expert bank and its expert 0
-		// begin at the same byte: both shapes are legitimate and both may be
-		// resident. Sharing one entry would launch a kernel against a
-		// differently strided payload (a silent out-of-bounds read), and
-		// refusing on a mismatch would stop a bank from ever being placed.
-		if !r.ok && r.why != "" {
-			g.LastErr = r.why
-		}
-		return r
-	}
-	r := &resident{nrows: nrows, k: k, t: q}
-	g.res[key] = r
-	defer func() {
-		if !r.ok {
-			r.why = g.LastErr
-		}
-	}()
-
-	// Price it before packing it: declining after a pack costs a full read and
-	// fresh host memory to learn the answer is no. PackedWords is the same
-	// arithmetic with no allocation (TestPackedWordsMatchesPack).
-	pq, pd, psc, err := kernels.PackedWords(q, nrows, k)
-	if err != nil {
-		g.LastErr = "PackedWords " + q.String() + ": " + err.Error()
-		return r
-	}
-	need := uint64(pq+pd+psc) * 4
-
-	// A bank in expert pages is assembled on the device, one sheet at a time:
-	// there is no host span of the whole bank, and gathering one would hold a
-	// layer's every expert in host memory at once.
-	if pre != nil && pre.Sheet != nil {
-		if !g.room(need) {
-			g.Declined++
-			g.LastErr = fmt.Sprintf("%s %dx%d needs %d, %d of %d used", q, nrows, k, need, g.used, g.limit)
-			return r
-		}
-		tu := time.Now()
-		ok := g.residentSheets(r, q, nrows, k, pre)
-		g.TUpload += time.Since(tu)
-		if !ok {
-			g.NoRoom++
-			return r
-		}
-		g.Prepacked++
-		g.PrepackedBytes += need
-		g.charge(need)
-		return r
-	}
-	// The arena packs GGUF bytes, so it serves a tensor that has no container
-	// form. A container's spans are already the device layout, and read as
-	// GGUF they are too short for any quantized format: the arena refused
-	// them and every container block was declined on a unified device with an
-	// arena budget (TestAContainerWeightIsNotRepackedOnAUnifiedDevice). They
-	// are copied below, which also lets the pager reuse the frame they came
-	// from; a wrapper over a frame would read the next block's bytes.
-	var pk *kernels.Packed
-	if pre == nil && g.importing() {
-		tp := time.Now()
-		p, aerr := g.arena.Pack(block, q, w, nrows, k)
-		g.TPack += time.Since(tp)
-		if aerr != nil {
-			g.LastErr = "arena " + q.String() + ": " + aerr.Error()
-			return r
-		}
-		if p != nil {
-			if g.importPacked(r, p) {
-				g.Imports++
-				g.ImportBytes += need
-				return r
-			}
-			pk = p // the wrap was refused; upload these same bytes instead
-		}
-	}
-	if !g.room(need) {
-		g.Declined++
-		g.LastErr = fmt.Sprintf("%s %dx%d needs %d, %d of %d used (pool %s: %d of %d)",
-			q, nrows, k, need, g.used, g.limit, g.pool.Name(), g.pool.Used(), g.pool.Limit())
-		return r // declines from here on; the CPU keeps this tensor
-	}
-	// A converted container skips every path below: its bytes are already what
-	// the kernel reads (packed once, offline), so there is nothing to pack or
-	// unpack and no arena entry, and the spans go straight to the driver.
-	if pre != nil {
-		// Spans shorter than the shape's planes (the container may pad them
-		// longer) are none at all -- a host page given back -- or another
-		// tensor's, and a kernel would read past them; they are refused,
-		// never uploaded.
-		if len(pre.QS) < 4*pq || len(pre.D) < 4*pd || len(pre.SC) < 4*psc {
-			g.LastErr = fmt.Sprintf("%s %dx%d: planes of %d, %d and %d bytes, short of the shape's %d, %d and %d",
-				q, nrows, k, len(pre.QS), len(pre.D), len(pre.SC), 4*pq, 4*pd, 4*psc)
-			return r
-		}
-		tu := time.Now()
-		bq, eq := g.allocBytes(pre.QS)
-		bd, ed := g.allocBytes(pre.D)
-		bs, es := g.allocBytes(pre.SC)
-		g.TUpload += time.Since(tu)
-		if bq == nil || bd == nil || bs == nil {
-			for _, b := range []backend.Buf{bq, bd, bs} {
-				if b != nil {
-					b.Free()
-				}
-			}
-			g.NoRoom++
-			// The driver's own words, so a reader can tell a full card from
-			// a failed copy.
-			g.LastErr = fmt.Sprintf("%s %dx%d: a plane of %d, %d and %d bytes was not uploaded: %v",
-				q, nrows, k, len(pre.QS), len(pre.D), len(pre.SC), errors.Join(eq, ed, es))
-			return r
-		}
-		r.qs, r.d, r.sc, r.ok = bq, bd, bs, true
-		g.Prepacked++
-		g.PrepackedBytes += need
-		g.charge(need)
-		return r
-	}
-
-	// The device unpack comes before the arena: the upload is roughly the file's
-	// bytes and the card extracts far faster than the host packs (see
-	// mainkernels.Unpack and arena.go). It is below the importing() branch because
-	// on a unified heap the pack is the device buffer, so the arena wins there.
-	// A false is a counted fallback (NoUnpackKernel, NoUnpackRoom), not a
-	// decline: the host path below produces the same bytes.
-	if g.unpackInto(r, q, w, nrows, k) {
-		g.charge(need)
-		return r
-	}
-	// Then the arena: a tensor it holds is a map lookup and a DMA of bytes
-	// already in the device layout, and one it does not hold is packed into it
-	// when it has budget, so the next page-in is that lookup. nil is not an
-	// error: the arena is off (the default) or full.
-	var qs, dw, scw []uint32
-	p := pk
-	if p == nil {
-		tp := time.Now()
-		var aerr error
-		p, aerr = g.arena.Pack(block, q, w, nrows, k)
-		g.TPack += time.Since(tp)
-		if aerr != nil {
-			g.LastErr = "arena " + q.String() + ": " + aerr.Error()
-			return r
-		}
-	}
-	if p != nil {
-		qs, dw, scw = p.QS, p.D, p.SC
-	}
-	// Use a background pack if one is waiting. Packing is most of preparing a
-	// block and is pure host arithmetic, so it is the part of a migration that
-	// can overlap a token (Prewarm). It is below the arena because Prewarm packs
-	// into the arena when there is budget; a stage exists only for a tensor the
-	// arena declined.
-	if qs == nil {
-		qs, dw, scw = g.takeStage(key)
-	}
-	if qs == nil {
-		tp := time.Now()
-		var err error
-		qs, dw, scw, err = kernels.PackWeights(q, w, nrows, k)
-		g.TPack += time.Since(tp)
-		g.Packs++
-		if err != nil {
-			g.LastErr = "PackWeights " + q.String() + ": " + err.Error()
-			return r
-		}
-	}
-	tu := time.Now()
-	defer func() { g.TUpload += time.Since(tu) }()
-	alloc := func(v []uint32) backend.Buf {
-		if len(v) == 0 {
-			// The kernel still takes the parameter, so hand it a word.
-			v = []uint32{0}
-		}
-		b, err := g.dev.Alloc(len(v) * 4)
-		if err != nil {
-			return nil
-		}
-		if b.Write(u32b(v)) != nil {
-			b.Free()
-			return nil
-		}
-		return b
-	}
-	bq, bd, bs := alloc(qs), alloc(dw), alloc(scw)
-	if bq == nil || bd == nil || bs == nil {
-		for _, b := range []backend.Buf{bq, bd, bs} {
-			if b != nil {
-				b.Free()
-			}
-		}
-		// The device refusing is not the budget declining, and is counted apart:
-		// over budget is a choice, out of memory is the card being full (for
-		// instance another process holding VRAM).
-		g.NoRoom++
-		return r
-	}
-	r.qs, r.d, r.sc, r.ok = bq, bd, bs, true
-	g.charge(need)
-	return r
-}
 
 // residentSheets allocates a bank's three planes and fills them from its
 // expert pages: sheet x of each plane at x times one sheet's bytes, which is
@@ -3559,136 +3091,6 @@ func (g *devTier) allocBytes(v []byte) (backend.Buf, error) {
 	return b, nil
 }
 
-func (g *devTier) kernel(q kernels.Quant, k, rows, split, rowt int, bias bool) backend.Kernel {
-	return g.kernelMode(q, k, rows, split, rowt, bias, false)
-}
-
-// kernelMode is kernel with the in-group split reduction selectable. See
-// mainkernels.MatVecShape.GroupSplit: it removes the partial buffer and the Reduce
-// launch, which wins on small matvecs and loses on big-k ones, so it is chosen
-// per shape by tuneSplit rather than switched on.
-func (g *devTier) kernelMode(q kernels.Quant, k, rows, split, rowt int, bias, groupSplit bool) backend.Kernel {
-	kk := kernKey{q, k, rows, split, bias, rowt, groupSplit, false, 0, false}
-	if c, ok := g.kerns[kk]; ok {
-		return c
-	}
-	ker, err := mainkernels.MatVec(mainkernels.MatVecShape{Center: g.center, T: q, K: k, Rows: rows, Split: split,
-		Bias: bias, Rowt: rowt, GroupSplit: groupSplit})
-	if err != nil {
-		g.kerns[kk], g.LastErr = nil, err.Error()
-		return nil
-	}
-	c, err := g.dev.Compile(ker)
-	if err != nil {
-		// A compile failure is recorded, not swallowed, so a silent fallback
-		// to the CPU is visible.
-		g.kerns[kk], g.LastErr = nil, err.Error()
-		g.Failed++
-		return nil
-	}
-	g.kerns[kk] = c
-	return c
-}
-
-// idKernel is an indexed matvec -- an expert bank, or MLA's per-head absorb
-// bank -- from the device-wide cache, compiling on a miss. Every block of a
-// mixture asks for the same few shapes, so they share one kernel, which Close
-// closes: a kernel compiled per block and kept by the block was closed by
-// nothing, since ReleaseLayers leaves kernels to the caches.
-func (g *devTier) idKernel(s mainkernels.MatVecShape) (backend.Kernel, error) {
-	if c, ok := g.idKerns[s]; ok {
-		return c, nil
-	}
-	ker, err := mainkernels.MatVec(s)
-	if err != nil {
-		return nil, err
-	}
-	c, err := g.dev.Compile(ker)
-	if err != nil {
-		return nil, err
-	}
-	if g.idKerns == nil {
-		g.idKerns = map[mainkernels.MatVecShape]backend.Kernel{}
-	}
-	g.idKerns[s] = c
-	return c, nil
-}
-
-// gatedKernel is kernelMode's Gate variant: the matvec writes act(gate)*row.
-// nil where the shape has no final-row form (a partial-writing split).
-func (g *devTier) gatedKernel(q kernels.Quant, k, rows, split int, groupSplit bool, act kernels.ActKind) backend.Kernel {
-	if split > 1 && !groupSplit {
-		return nil
-	}
-	kk := kernKey{t: q, k: k, rows: rows, split: split, rowt: 1, group: groupSplit, gated: true, act: act}
-	if c, ok := g.kerns[kk]; ok {
-		return c
-	}
-	ker, err := mainkernels.MatVec(mainkernels.MatVecShape{Center: g.center, T: q, K: k, Rows: rows, Split: split,
-		GroupSplit: groupSplit, Gate: true, GateAct: act})
-	if err != nil {
-		g.kerns[kk], g.LastErr = nil, err.Error()
-		return nil
-	}
-	c, err := g.dev.Compile(ker)
-	if err != nil {
-		g.kerns[kk], g.LastErr = nil, err.Error()
-		g.Failed++
-		return nil
-	}
-	g.kerns[kk] = c
-	return c
-}
-
-// gate2Kernel is the FFN up projection summing the gate's row beside its own
-// and writing act(gate)*up (mainkernels.MatVecShape.Gate2), or nil where the
-// backend cannot make it exact or the split writes partials.
-func (g *devTier) gate2Kernel(q kernels.Quant, k, rows, split int, groupSplit bool, act kernels.ActKind) backend.Kernel {
-	if split > 1 && !groupSplit || kernels.IsFloat(q) {
-		return nil
-	}
-	kk := kernKey{t: q, k: k, rows: rows, split: split, rowt: 1, group: groupSplit, gate2: true, act: act}
-	if c, ok := g.kerns[kk]; ok {
-		return c
-	}
-	ker, err := mainkernels.MatVec(mainkernels.MatVecShape{Center: g.center, T: q, K: k, Rows: rows, Split: split,
-		GroupSplit: groupSplit, Gate2: true, GateAct: act})
-	if err != nil {
-		g.kerns[kk], g.LastErr = nil, err.Error()
-		return nil
-	}
-	c, err := g.dev.Compile(ker)
-	if err != nil {
-		g.kerns[kk], g.LastErr = nil, err.Error()
-		g.Failed++
-		return nil
-	}
-	g.kerns[kk] = c
-	return c
-}
-
-// reduceKernel compiles the second pass that sums a row's partial results.
-func (g *devTier) reduceKernel(rows, split int) backend.Kernel {
-	// A build reached from inside a submission takes g.mu (subLock).
-	defer g.subUnlock(g.subLock())
-	key := [2]int{rows, split}
-	if c, ok := g.reduce[key]; ok {
-		return c
-	}
-	ker, err := mainkernels.Reduce(rows, split)
-	if err != nil {
-		g.reduce[key] = nil
-		return nil
-	}
-	c, err := g.dev.Compile(ker)
-	if err != nil {
-		g.reduce[key], g.LastErr = nil, err.Error()
-		g.Failed++
-		return nil
-	}
-	g.reduce[key] = c
-	return c
-}
 
 // sizeF16 grows f16Buf to n bytes, dropping any recording that names the old
 // one, under regrow's rules.
@@ -4031,99 +3433,6 @@ func (g *devTier) takeStage(key resKey) (qs, d, sc []uint32) {
 
 func (s *staged) bytes() uint64 { return uint64(len(s.qs)+len(s.d)+len(s.sc)) * 4 }
 
-// prewarm packs one weight tensor off the main loop, so that a later PrepLayer
-// only has to upload it, tagged with the block the arena groups entries by.
-// The pack runs outside g.mu (layersOnce holds it for a whole token), so it can
-// overlap decoding; the lock covers only the map operations. It is bounded by
-// StageLimit, since a stage is host memory nothing uses yet; over the cap it
-// declines and the work happens on the main loop.
-func (g *devTier) prewarm(block int, q kernels.Quant, w []byte, nrows, k int) bool {
-	if len(w) == 0 {
-		return false
-	}
-	key := resKey{p: &w[0], nrows: nrows, k: k, t: q}
-	g.mu.Lock()
-	g.applyForgets()
-	if g.res[key] != nil || (g.stage != nil && g.stage[key] != nil) {
-		g.mu.Unlock()
-		return false // already resident, or already staged
-	}
-	// A format the device unpacks has no host pack to move off the main loop:
-	// resident() asks unpackInto before takeStage, so a stage would only hold
-	// host memory until DropStage.
-	if g.canUnpack(q) {
-		g.mu.Unlock()
-		return false
-	}
-	g.mu.Unlock()
-
-	// Into the arena when it has budget: a stage is consumed by the upload,
-	// while an arena entry survives it, so the block never packs again.
-	if g.arena.Get(q, w, nrows, k) != nil {
-		return false // already packed; nothing to do, exactly as "already staged"
-	}
-	t0 := time.Now()
-	if p, err := g.arena.Pack(block, q, w, nrows, k); err == nil && p != nil {
-		g.mu.Lock()
-		g.TPrewarm += time.Since(t0)
-		g.mu.Unlock()
-		return true
-	}
-	g.mu.Lock()
-	g.applyForgets()
-	if g.res[key] != nil || (g.stage != nil && g.stage[key] != nil) {
-		g.mu.Unlock()
-		return false
-	}
-	limit := g.StageLimit
-	if limit == 0 {
-		limit = defaultStageLimit
-	}
-	// The tier's total, not this device's: the stage is host memory (see
-	// Config.stage).
-	if g.Config.stage.Used() >= limit {
-		g.mu.Unlock()
-		return false
-	}
-	g.mu.Unlock()
-
-	g.mu.Lock()
-	pk := &packing{at: uintptr(unsafe.Pointer(&w[0]))}
-	g.packing = append(g.packing, pk)
-	g.mu.Unlock()
-	t0 = time.Now()
-	qs, d, sc, err := kernels.PackWeights(q, w, nrows, k)
-	took := time.Since(t0)
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	// A forget the page-in queued while the pack ran is applied first, so it
-	// can spoil this one.
-	g.applyForgets()
-	g.donePacking(pk)
-	if err != nil {
-		return false
-	}
-	g.Packs++
-	st := &staged{qs: qs, d: d, sc: sc, t: q, nrows: nrows, k: k}
-	// Another goroutine, or the main loop, may have taken this tensor while the
-	// pack was running. Both outcomes are correct; drop the loser's work.
-	if g.res[key] != nil || (g.stage != nil && g.stage[key] != nil) {
-		return false
-	}
-	// The host was told the bytes under the pack changed while it ran: the
-	// pack may be of either tensor, so it is not kept.
-	if pk.spoiled {
-		return false
-	}
-	if g.stage == nil {
-		g.stage = map[resKey]*staged{}
-	}
-	g.stage[key] = st
-	g.stageBytes += st.bytes()
-	g.Config.stage.take(st.bytes())
-	g.TPrewarm += took
-	return true
-}
 
 // DropStage frees every pack that has not been uploaded.
 func (g *devTier) DropStage() {
@@ -4245,3 +3554,414 @@ func (g *devTier) residentCompact(q kernels.Quant, rows, k, slots int) (*residen
 	g.charge(need)
 	return r, sh, true
 }
+// addSlot builds the tier's device for slot s at ordinal i and pools it.
+func (g *GPU) addSlot(i int, s Slot) {
+	cfg := g.Config
+	limit := s.Bytes
+	if limit == 0 {
+		limit = defaultBudget
+	}
+	pool := s.Pool
+	if pool == nil {
+		pool = NewPool(s.Dev.Name(), limit)
+	}
+	why := s.Why
+	if why == "" {
+		why = "the caller set it"
+	}
+	cnt, _ := s.Dev.(backend.AllocCounter)
+	g.devs = append(g.devs, newDevice(&devShared{
+		Config:     cfg,
+		tot:        Stats{Device: label(s.Dev, i)},
+		dev:        s.Dev,
+		cnt:        cnt,
+		pool:       pool,
+		why:        why,
+		ord:        i,
+		name:       DeviceName(s.Name),
+		kerns:      map[kernKey]backend.Kernel{},
+		rewrites:   newDevRewrites(),
+		res:        map[resKey]*resident{},
+		reduce:     map[[2]int]backend.Kernel{},
+		limit:      limit,
+	}))
+	// The zero-copy path is guarded on UnifiedMemory, not on the extension:
+	// a discrete card may also advertise VK_EXT_external_memory_host, and
+	// importing there would leave the weights behind PCIe for every matvec
+	// to re-read. Only a device whose memory is the host's wraps for free.
+	if a := backend.ImportAlign(s.Dev); a > 0 && unified(s.Dev) {
+		d := g.devs[len(g.devs)-1]
+		d.imp, d.impAlign = s.Dev.(backend.HostImport), uint64(a)
+	}
+	known := false
+	for _, p := range g.pools {
+		known = known || p == pool
+	}
+	if !known {
+		g.pools = append(g.pools, pool)
+	}
+	if pool.Host() {
+		g.hostPool = pool
+	}
+}
+
+// freeScratch returns every device buffer and scratch-owned kernel a scratch
+// holds. It runs on Close and on every KV grow (ensureKVCap rebuilds the
+// scratch at the new stride), so a missed buffer leaks a whole set per grow,
+// and a later allocation then fails.
+//
+// It walks the struct by reflection rather than a hand-written list, which
+// fell behind every field added since; reflection is affordable once per grow.
+// Duplicates are freed once: two fields may alias one buffer, and a double Free
+// is a driver error.
+func freeScratch(bs *blockScratch, g *devShared) {
+	if bs == nil {
+		return
+	}
+	bs.mg.free() // a pointer, which the field walk below does not follow
+	// Both slices may hold nil where an allocation failed part-way, which is
+	// how a card too small for a tower's planes reaches here.
+	for _, b := range bs.qoffs {
+		if b != nil {
+			b.Free()
+		}
+	}
+	bs.qoffs = nil
+	for _, b := range bs.vwins { // the windows' per-chunk buffers, likewise
+		if b != nil {
+			b.Free()
+		}
+	}
+	bs.vwins = nil
+	for _, b := range bs.vsegs { // the packed sequences' buffers, likewise
+		if b != nil {
+			b.Free()
+		}
+	}
+	bs.vsegs = nil
+	freePaged(bs.pkv)
+	bs.mlab.free(g)
+	bs.ds4.free(g)
+	bs.k3.free(g)
+	bs.q4e.free(g)
+	for n, rk := range bs.ragLin { // a map, which the walk does not follow either
+		for _, k := range []backend.Kernel{rk.conv, rk.shift, rk.delta, rk.ngConv} {
+			if k != nil {
+				g.closeKern(k)
+			}
+		}
+		delete(bs.ragLin, n)
+	}
+	seen := map[backend.Buf]bool{}
+	v := reflect.ValueOf(bs).Elem()
+	bufType := reflect.TypeOf((*backend.Buf)(nil)).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Field(i)
+		if f.Type() != bufType || f.IsNil() {
+			continue
+		}
+		// NewAt because the fields are unexported: reflect panics on
+		// Interface() through an unexported name. The address is real and the
+		// type is checked above, so re-deriving a value at it is sound.
+		b, ok := reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).
+			Elem().Interface().(backend.Buf)
+		if !ok || b == nil || seen[b] {
+			continue
+		}
+		seen[b] = true
+		b.Free()
+	}
+	*bs = blockScratch{}
+}
+
+// resident uploads a tensor once, keyed by resKey.
+//
+// block is the caller's block index, or -1 for a tensor that is not part of one
+// (the output projection, a lone matvec offered by the host tier). It is a tag
+// telling the arena which entries to release together, and nothing else.
+func (g *devTier) resident(block, slot int, q kernels.Quant, w []byte, nrows, k int, pre *nn.Packed) *resident {
+	g.applyForgets()
+	key := resKey{block: block, slot: slot, nrows: nrows, k: k, t: q}
+	if block < 0 {
+		// The ad-hoc path: no block, no slot, and the weight is host-owned.
+		key.p = &w[0]
+	}
+	if r, ok := g.res[key]; ok {
+		// The shape is part of the key because an expert bank and its expert 0
+		// begin at the same byte: both shapes are legitimate and both may be
+		// resident. Sharing one entry would launch a kernel against a
+		// differently strided payload (a silent out-of-bounds read), and
+		// refusing on a mismatch would stop a bank from ever being placed.
+		if !r.ok && r.why != "" {
+			g.LastErr = r.why
+		}
+		return r
+	}
+	r := &resident{nrows: nrows, k: k, t: q}
+	g.res[key] = r
+	defer func() {
+		if !r.ok {
+			r.why = g.LastErr
+		}
+	}()
+
+	// Price it before packing it: declining after a pack costs a full read and
+	// fresh host memory to learn the answer is no. PackedWords is the same
+	// arithmetic with no allocation (TestPackedWordsMatchesPack).
+	pq, pd, psc, err := kernels.PackedWords(q, nrows, k)
+	if err != nil {
+		g.LastErr = "PackedWords " + q.String() + ": " + err.Error()
+		return r
+	}
+	need := uint64(pq+pd+psc) * 4
+
+	// A bank in expert pages is assembled on the device, one sheet at a time:
+	// there is no host span of the whole bank, and gathering one would hold a
+	// layer's every expert in host memory at once.
+	if pre != nil && pre.Sheet != nil {
+		if !g.room(need) {
+			g.Declined++
+			g.LastErr = fmt.Sprintf("%s %dx%d needs %d, %d of %d used", q, nrows, k, need, g.used, g.limit)
+			return r
+		}
+		tu := time.Now()
+		ok := g.residentSheets(r, q, nrows, k, pre)
+		g.TUpload += time.Since(tu)
+		if !ok {
+			g.NoRoom++
+			return r
+		}
+		g.Prepacked++
+		g.PrepackedBytes += need
+		g.charge(need)
+		return r
+	}
+	// The arena packs GGUF bytes, so it serves a tensor that has no container
+	// form. A container's spans are already the device layout, and read as
+	// GGUF they are too short for any quantized format: the arena refused
+	// them and every container block was declined on a unified device with an
+	// arena budget (TestAContainerWeightIsNotRepackedOnAUnifiedDevice). They
+	// are copied below, which also lets the pager reuse the frame they came
+	// from; a wrapper over a frame would read the next block's bytes.
+	var pk *kernels.Packed
+	if pre == nil && g.importing() {
+		tp := time.Now()
+		p, aerr := g.arena.Pack(block, q, w, nrows, k)
+		g.TPack += time.Since(tp)
+		if aerr != nil {
+			g.LastErr = "arena " + q.String() + ": " + aerr.Error()
+			return r
+		}
+		if p != nil {
+			if g.importPacked(r, p) {
+				g.Imports++
+				g.ImportBytes += need
+				return r
+			}
+			pk = p // the wrap was refused; upload these same bytes instead
+		}
+	}
+	if !g.room(need) {
+		g.Declined++
+		g.LastErr = fmt.Sprintf("%s %dx%d needs %d, %d of %d used (pool %s: %d of %d)",
+			q, nrows, k, need, g.used, g.limit, g.pool.Name(), g.pool.Used(), g.pool.Limit())
+		return r // declines from here on; the CPU keeps this tensor
+	}
+	// A converted container skips every path below: its bytes are already what
+	// the kernel reads (packed once, offline), so there is nothing to pack or
+	// unpack and no arena entry, and the spans go straight to the driver.
+	if pre != nil {
+		// Spans shorter than the shape's planes (the container may pad them
+		// longer) are none at all -- a host page given back -- or another
+		// tensor's, and a kernel would read past them; they are refused,
+		// never uploaded.
+		if len(pre.QS) < 4*pq || len(pre.D) < 4*pd || len(pre.SC) < 4*psc {
+			g.LastErr = fmt.Sprintf("%s %dx%d: planes of %d, %d and %d bytes, short of the shape's %d, %d and %d",
+				q, nrows, k, len(pre.QS), len(pre.D), len(pre.SC), 4*pq, 4*pd, 4*psc)
+			return r
+		}
+		tu := time.Now()
+		bq, eq := g.allocBytes(pre.QS)
+		bd, ed := g.allocBytes(pre.D)
+		bs, es := g.allocBytes(pre.SC)
+		g.TUpload += time.Since(tu)
+		if bq == nil || bd == nil || bs == nil {
+			for _, b := range []backend.Buf{bq, bd, bs} {
+				if b != nil {
+					b.Free()
+				}
+			}
+			g.NoRoom++
+			// The driver's own words, so a reader can tell a full card from
+			// a failed copy.
+			g.LastErr = fmt.Sprintf("%s %dx%d: a plane of %d, %d and %d bytes was not uploaded: %v",
+				q, nrows, k, len(pre.QS), len(pre.D), len(pre.SC), errors.Join(eq, ed, es))
+			return r
+		}
+		r.qs, r.d, r.sc, r.ok = bq, bd, bs, true
+		g.Prepacked++
+		g.PrepackedBytes += need
+		g.charge(need)
+		return r
+	}
+
+	// Then the arena: a tensor it holds is a map lookup and a DMA of bytes
+	// already in the device layout, and one it does not hold is packed into it
+	// when it has budget, so the next page-in is that lookup. nil is not an
+	// error: the arena is off (the default) or full.
+	var qs, dw, scw []uint32
+	p := pk
+	if p == nil {
+		tp := time.Now()
+		var aerr error
+		p, aerr = g.arena.Pack(block, q, w, nrows, k)
+		g.TPack += time.Since(tp)
+		if aerr != nil {
+			g.LastErr = "arena " + q.String() + ": " + aerr.Error()
+			return r
+		}
+	}
+	if p != nil {
+		qs, dw, scw = p.QS, p.D, p.SC
+	}
+	// Use a background pack if one is waiting. Packing is most of preparing a
+	// block and is pure host arithmetic, so it is the part of a migration that
+	// can overlap a token (Prewarm). It is below the arena because Prewarm packs
+	// into the arena when there is budget; a stage exists only for a tensor the
+	// arena declined.
+	if qs == nil {
+		qs, dw, scw = g.takeStage(key)
+	}
+	if qs == nil {
+		tp := time.Now()
+		var err error
+		qs, dw, scw, err = kernels.PackWeights(q, w, nrows, k)
+		g.TPack += time.Since(tp)
+		g.Packs++
+		if err != nil {
+			g.LastErr = "PackWeights " + q.String() + ": " + err.Error()
+			return r
+		}
+	}
+	tu := time.Now()
+	defer func() { g.TUpload += time.Since(tu) }()
+	alloc := func(v []uint32) backend.Buf {
+		if len(v) == 0 {
+			// The kernel still takes the parameter, so hand it a word.
+			v = []uint32{0}
+		}
+		b, err := g.dev.Alloc(len(v) * 4)
+		if err != nil {
+			return nil
+		}
+		if b.Write(u32b(v)) != nil {
+			b.Free()
+			return nil
+		}
+		return b
+	}
+	bq, bd, bs := alloc(qs), alloc(dw), alloc(scw)
+	if bq == nil || bd == nil || bs == nil {
+		for _, b := range []backend.Buf{bq, bd, bs} {
+			if b != nil {
+				b.Free()
+			}
+		}
+		// The device refusing is not the budget declining, and is counted apart:
+		// over budget is a choice, out of memory is the card being full (for
+		// instance another process holding VRAM).
+		g.NoRoom++
+		return r
+	}
+	r.qs, r.d, r.sc, r.ok = bq, bd, bs, true
+	g.charge(need)
+	return r
+}
+
+// prewarm packs one weight tensor off the main loop, so that a later PrepLayer
+// only has to upload it, tagged with the block the arena groups entries by.
+// The pack runs outside g.mu (layersOnce holds it for a whole token), so it can
+// overlap decoding; the lock covers only the map operations. It is bounded by
+// StageLimit, since a stage is host memory nothing uses yet; over the cap it
+// declines and the work happens on the main loop.
+func (g *devTier) prewarm(block int, q kernels.Quant, w []byte, nrows, k int) bool {
+	if len(w) == 0 {
+		return false
+	}
+	key := resKey{p: &w[0], nrows: nrows, k: k, t: q}
+	g.mu.Lock()
+	g.applyForgets()
+	if g.res[key] != nil || (g.stage != nil && g.stage[key] != nil) {
+		g.mu.Unlock()
+		return false // already resident, or already staged
+	}
+	g.mu.Unlock()
+
+	// Into the arena when it has budget: a stage is consumed by the upload,
+	// while an arena entry survives it, so the block never packs again.
+	if g.arena.Get(q, w, nrows, k) != nil {
+		return false // already packed; nothing to do, exactly as "already staged"
+	}
+	t0 := time.Now()
+	if p, err := g.arena.Pack(block, q, w, nrows, k); err == nil && p != nil {
+		g.mu.Lock()
+		g.TPrewarm += time.Since(t0)
+		g.mu.Unlock()
+		return true
+	}
+	g.mu.Lock()
+	g.applyForgets()
+	if g.res[key] != nil || (g.stage != nil && g.stage[key] != nil) {
+		g.mu.Unlock()
+		return false
+	}
+	limit := g.StageLimit
+	if limit == 0 {
+		limit = defaultStageLimit
+	}
+	// The tier's total, not this device's: the stage is host memory (see
+	// Config.stage).
+	if g.Config.stage.Used() >= limit {
+		g.mu.Unlock()
+		return false
+	}
+	g.mu.Unlock()
+
+	g.mu.Lock()
+	pk := &packing{at: uintptr(unsafe.Pointer(&w[0]))}
+	g.packing = append(g.packing, pk)
+	g.mu.Unlock()
+	t0 = time.Now()
+	qs, d, sc, err := kernels.PackWeights(q, w, nrows, k)
+	took := time.Since(t0)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	// A forget the page-in queued while the pack ran is applied first, so it
+	// can spoil this one.
+	g.applyForgets()
+	g.donePacking(pk)
+	if err != nil {
+		return false
+	}
+	g.Packs++
+	st := &staged{qs: qs, d: d, sc: sc, t: q, nrows: nrows, k: k}
+	// Another goroutine, or the main loop, may have taken this tensor while the
+	// pack was running. Both outcomes are correct; drop the loser's work.
+	if g.res[key] != nil || (g.stage != nil && g.stage[key] != nil) {
+		return false
+	}
+	// The host was told the bytes under the pack changed while it ran: the
+	// pack may be of either tensor, so it is not kept.
+	if pk.spoiled {
+		return false
+	}
+	if g.stage == nil {
+		g.stage = map[resKey]*staged{}
+	}
+	g.stage[key] = st
+	g.stageBytes += st.bytes()
+	g.Config.stage.take(st.bytes())
+	g.TPrewarm += took
+	return true
+}
+

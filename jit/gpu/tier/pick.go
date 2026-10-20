@@ -1,12 +1,8 @@
 package tier
 
 import (
-	"fmt"
-
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // The label pick (nn.Head.Pick): after the head, the logits at a handful of
@@ -20,58 +16,6 @@ import (
 // tier's choice, not a device limit: a longer pick reads the row back and the
 // caller gathers there. Lev's codes are at most 255; d1's groups two a code.
 const pickMax = 512
-
-// prepPick readies the pick for head: the device's gather over its rows and
-// this lane's buffers. False leaves the call to read the logits back.
-// Callers hold g.mu, outside any Session.
-func (g *devTier) prepPick(head *nn.Head) bool {
-	n, k := head.W.Rows, len(head.Pick)
-	if k < 1 || k > pickMax || len(head.PickVals) < k {
-		return false
-	}
-	w := g.scratchWin()
-	defer w.close()
-	if g.pickK == nil {
-		kk, err := mainkernels.GatherRows(1, pickMax, n)
-		if err != nil {
-			g.LastErr = "the label pick: " + err.Error()
-			return false
-		}
-		c, err := g.dev.Compile(kk)
-		if err != nil {
-			g.LastErr = "the label pick: " + err.Error()
-			return false
-		}
-		g.pickK = c
-	}
-	// The picked rows' own projection, compiled once for the head here:
-	// outside any session, where Compile is allowed. A float head keeps the
-	// whole matvec and the gather.
-	if hr := g.headRes(); hr != nil && g.pickMV == nil && !g.NoPickMV && !kernels.IsFloat(hr.t) {
-		if c, err := g.idKernel(mainkernels.MatVecShape{Center: g.center, T: hr.t, K: hr.k, Rows: pickMax,
-			Split: 1, PickOf: hr.nrows}); err == nil {
-			g.pickMV = c
-		}
-	}
-	l := g.lane
-	if l.pickIDs != nil {
-		return true
-	}
-	var bufs [2]backend.Buf
-	for i := range bufs {
-		b, err := g.dev.Alloc(4 * pickMax)
-		if err != nil {
-			if i > 0 {
-				bufs[0].Free()
-			}
-			g.LastErr = fmt.Sprintf("the label pick's buffers: %v", err)
-			return false
-		}
-		bufs[i] = b
-	}
-	l.pickIDs, l.pickOut = bufs[0], bufs[1]
-	return true
-}
 
 // pickStage is the pick's ids as the gather reads them: every slot past the
 // pick's an id past the vocabulary, which the gather writes as zero.

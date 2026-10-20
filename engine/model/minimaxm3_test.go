@@ -1,10 +1,11 @@
 package model
 
 import (
-	"github.com/jitllm/jitllm/format/jlm"
 	"math"
 	"slices"
 	"testing"
+
+	"github.com/jitllm/jitllm/format/jlm"
 
 	"github.com/jitllm/jitllm/engine/nn"
 )

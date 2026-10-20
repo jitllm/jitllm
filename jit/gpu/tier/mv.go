@@ -3,7 +3,6 @@ package tier
 import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // mv is a matvec's compiled kernel plus the split it was chosen for. alt is the
@@ -105,9 +104,6 @@ type mv struct {
 	// act writes the m16n8 fragment layout (mainkernels.ActF16) instead, and a
 	// fused writer standing in for it hands the GEMM a scrambled operand.
 	actT bool
-	// vt is the GemmVolta tile a binary16 twin was built at (stagedGemm), so
-	// a block's q, k and v can be put in one grid (qkvGemm); zero elsewhere.
-	vt mainkernels.VoltaTile
 }
 
 // mvForm is a batched twin's form, for the generator that forms its schedule

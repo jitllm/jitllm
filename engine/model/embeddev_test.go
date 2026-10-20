@@ -1,11 +1,12 @@
 package model
 
 import (
-	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"math"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/jit/gpu/backend"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"

@@ -34,30 +34,6 @@ var gateUpNames = [...]string{"ungated", "clamped", "gate2in", "actin", "gu", "g
 
 func (f ffnGateUpForm) String() string { return gateUpNames[f] }
 
-// ffnGateUp decides block l's gate/up form on a step of R rows (ragged where
-// rag), from what the block holds and the step's conditions. It launches
-// nothing.
-func (g *devTier) ffnGateUp(l *layer, R int, rag, voltaOnly, ungated, resScaled bool, skip map[string]bool,
-	g2in, ffnIn bool, nffn int) ffnGateUpForm {
-	switch {
-	case l.clampB != nil && !ungated:
-		return gateUpClamped
-	case g2in:
-		return gateUpGate2In
-	case ffnIn:
-		return gateUpIn
-	case (g.GateUpFuse || g.ffnFormOf(l) == FFNGU) && l.gu != nil && l.guDown != nil && R == 1 && !rag && !voltaOnly && !ungated &&
-		l.nSubFFN == nil && l.nPostFFN == nil && !resScaled && !skip["add"] && !skip["actmul"] && !skip["quantf"] &&
-		!g.TableSplit && l.mvd.k == nffn && l.k3 == nil && l.q4e == nil && !l.nonCausal && !l.sparse:
-		return gateUpGU
-	case g.ffnFormOf(l) != FFNTwo && g.gateUp2On(l, R, rag, voltaOnly, ungated, skip["actmul"]):
-		return gateUpGate2
-	case !ungated:
-		return gateUpTwo
-	}
-	return gateUpUngated
-}
-
 // ffnDownForm is how a dense FFN's down projection reads its operand.
 type ffnDownForm uint8
 
@@ -72,22 +48,6 @@ const (
 )
 
 func (f ffnDownForm) String() string { return [...]string{"plain", "actin", "actin-act"}[f] }
-
-// ffnDown decides block l's down form on a step, once gate and up have run:
-// gated is whether up formed the product in its own store.
-func (g *devTier) ffnDown(l *layer, R int, rag, voltaOnly, resScaled bool, skip map[string]bool,
-	gated, ffnIn bool, nffn int) ffnDownForm {
-	ok := R == 1 && !rag && g.actInOn() && !voltaOnly && l.clampB == nil && l.nPostFFN == nil && l.nSubFFN == nil &&
-		!resScaled && !skip["add"] && !skip["quantf"] && !skip["actmul"] && l.k3 == nil && l.q4e == nil && !l.nonCausal &&
-		!(g.TableSplit && l.mvd.alt != nil) && l.mvd.k == nffn
-	switch {
-	case ok && gated && l.mvd.resIn != nil:
-		return downFormIn
-	case ok && ffnIn && !gated && l.mvd.resActIn != nil:
-		return downFormAct
-	}
-	return downFormPlain
-}
 
 // qkvForm is how a block's q, k and v projections run on a step.
 type qkvForm uint8
@@ -113,28 +73,6 @@ const (
 var qkvNames = [...]string{"q-only", "q-k", "grouped", "clamped", "actin", "gemm", "three"}
 
 func (f qkvForm) String() string { return qkvNames[f] }
-
-// qkvLowering decides block l's q/k/v form on a step of R rows, and the GEMM
-// segments where the form is qkvGEMM. It launches nothing.
-func (g *devTier) qkvLowering(l *layer, R int, rag, shared, vFromK, segOK, qkvSep bool) (qkvForm, *qkvSeg) {
-	switch {
-	case shared:
-		return qkvQOnly, nil
-	case vFromK:
-		return qkvQK, nil
-	case segOK || R == 1 && l.qkv != nil && !g.TableSplit &&
-		l.qkvBias == [3]bool{l.mvq.bias != nil, l.mvk.bias != nil, l.mvv.bias != nil}:
-		return qkvGrouped, nil
-	case l.clampB != nil:
-		return qkvClamped, nil
-	case qkvSep:
-		return qkvSeparate, nil
-	}
-	if qs, ok := g.qkvGemm(l, R, rag); ok {
-		return qkvGEMM, qs
-	}
-	return qkvThree, nil
-}
 
 // The span a recorded form is of.
 const (

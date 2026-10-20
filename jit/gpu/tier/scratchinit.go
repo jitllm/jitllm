@@ -2,15 +2,15 @@ package tier
 
 import (
 	"fmt"
-	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"math"
 	"unsafe"
+
+	"github.com/jitllm/jitllm/jit/gpu/compose"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // initRopeTable builds the device's own rotary table for this scratch, or
@@ -139,12 +139,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		}
 		for rows%bs.atile != 0 {
 			bs.atile /= 2
-		}
-		// A latent block on sm_70 takes both products on m8n8k4, and the
-		// accumulate walks the softmax's row group, so the group is fixed
-		// here, before the softmax is built.
-		if p.MLA() && g.mla70Attn(p, rows) {
-			bs.atile, bs.mla70 = 8*volta70AttnNT, true
 		}
 	}
 	// The norm reduction wants enough parts to spread across the device and few
@@ -365,9 +359,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	if !paged {
 		al(&bs.prob, bs.arows*p.NHead*bs.sstride*4)
 	}
-	if bs.arows < rows {
-		g.allocAttnChunks(bs, qdim, al)
-	}
 	al(&bs.xb, rows*qdim*4)
 	// An ungated FFN (a vision block, C6) has no gate to write here; at a
 	// 4096-patch image the plane is 70 MB nothing reads.
@@ -451,8 +442,8 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		// and a zero column shifted into the state is a column the model never
 		// produced, and it stays there -- and each sequence's slots in the
 		// block's pool; for a ragged step, the run descriptor its rows are
-		// grouped by (mainkernels.RunDescWords, the longer of the two).
-		al(&bs.dRows, 4*mainkernels.RunDescWords(rows))
+		// grouped by (runDescWords, the longer of the two).
+		al(&bs.dRows, 4*runDescWords(rows))
 	}
 	// MLA's scratch, allocated only where the model has a latent block.
 	if p.MLA() {
@@ -621,11 +612,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			freeScratch(bs, g.devShared)
 			return nil
 		}
-		if err := g.initDS4(bs); err != nil {
-			g.LastErr = "DeepSeek V4: " + err.Error()
-			freeScratch(bs, g.devShared)
-			return nil
-		}
 	}
 	bs.hx = make([]float32, rows*max(wide, p.ResidW()))
 	bs.hcs = make([]float32, rows*p.RopeW())
@@ -636,19 +622,6 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	bs.hout = unsafe.Slice((*float32)(unsafe.Pointer(&bs.hraw[0])), rows*p.ResidW())
 	if rows > 1 && p.NExpert > 0 {
 		bs.mg = g.newMoeGroup(p, rows)
-	}
-	if err := g.initK3(bs); err != nil {
-		g.LastErr = "Kimi-K3: " + err.Error()
-		freeScratch(bs, g.devShared)
-		return nil
-	}
-	if err := g.initQ4E(bs); err != nil {
-		g.LastErr = "Qwen3.8-Flash-Next: " + err.Error()
-		freeScratch(bs, g.devShared)
-		return nil
-	}
-	if rows > 1 && p.MLA() {
-		bs.mlab = g.newMLABatch(bs, p, rows)
 	}
 	return bs
 }
@@ -685,87 +658,6 @@ func (g *devTier) pickLanes() int {
 		}
 	}
 	return g.Lanes
-}
-
-// pickSoftmax takes the warp-per-head softmax when this device guarantees a
-// 32-lane subgroup and the kernel then agrees with the host, and the
-// one-thread-per-head kernel otherwise.
-//
-// It asks first (pickLanes) and probes second. The probe alone is not enough:
-// an out-of-subgroup shuffle is undefined, and a device that picks its width
-// per shader can pass on an idle device and produce NaN in a real submission
-// (see docs/engineering-history/gpu-kernels.md). The probe stays because it
-// catches a driver that promised a width and did not deliver, a shuffle
-// lowered wrongly, and a deterministically narrow device. A device that
-// refuses to compile the shuffle lands in the same fallback.
-func (g *devTier) pickSoftmax(bs *blockScratch) bool {
-	p := &bs.p
-	// Every row of a chunk is an independent set of score rows, so a batched
-	// softmax is simply nHeads*rows of them -- the kernel already takes the row
-	// count as its first argument and needs no other change.
-	heads := p.NHead * bs.arows
-	build := func(lanes int) backend.Kernel {
-		k, err := mainkernels.SoftmaxRowsSink(p.NHead, bs.sstride, lanes, bs.arows, bs.atile, p.AttnSinks)
-		if err != nil {
-			g.LastErr = err.Error()
-			return nil
-		}
-		c, err := g.compileShared(k)
-		if err != nil {
-			g.LastErr = err.Error()
-			return nil
-		}
-		return c
-	}
-	scalarGroups := (heads + scalarWidth - 1) / scalarWidth
-
-	// The batched scratch inherits the decision rather than re-probing: the
-	// subgroup width is a property of the device, and the rows==1 scratch is
-	// always built first, so g.SoftmaxLanes is settled.
-	if bs.rows > 1 {
-		lanes, groups, width := g.SoftmaxLanes, heads, ir.SubgroupLanes
-		if lanes != ir.SubgroupLanes {
-			lanes, groups, width = 1, scalarGroups, scalarWidth
-		}
-		c := build(lanes)
-		if c == nil {
-			return false
-		}
-		bs.softmax, bs.smGroups, bs.smWidth = c, groups, width
-		return true
-	}
-
-	// The wide kernel is the default on every device that guarantees the width;
-	// WithLanes(1) forces the one-thread kernel. (An apparent Metal bug here was
-	// the harness comparing two free-running greedy chains; diff at a fixed input,
-	// see docs/engineering-history/gpu-kernels.md.)
-	warpOK := g.pickLanes() == ir.SubgroupLanes
-	g.SoftmaxWhy = "the warp reduction did not agree with the host"
-	if !warpOK {
-		g.SoftmaxWhy = g.LanesWhy
-	}
-	if c := build(ir.SubgroupLanes); warpOK && c != nil {
-		// One workgroup per head, one warp wide: the group IS the warp, so the
-		// kernel's lane == tid holds without assuming how a larger group is cut
-		// into subgroups.
-		if g.softmaxAgrees(bs, c, heads, 32) {
-			bs.softmax, bs.smGroups, bs.smWidth = c, heads, ir.SubgroupLanes
-			g.SoftmaxLanes = ir.SubgroupLanes
-			bs.softmaxAlt = build(1)
-			bs.smAltGroups, bs.smAltWidth = scalarGroups, scalarWidth
-			return true
-		}
-		g.closeKern(c)
-	} else if c != nil {
-		g.closeKern(c)
-	}
-	c := build(1)
-	if c == nil {
-		return false
-	}
-	bs.softmax, bs.smGroups, bs.smWidth = c, scalarGroups, scalarWidth
-	g.SoftmaxLanes = 1
-	return true
 }
 
 // scalarWidth is the launch width of every thread-per-head kernel in the

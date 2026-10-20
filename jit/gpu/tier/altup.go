@@ -7,7 +7,6 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // Gemma 3n's AltUp and LAuReL on the device (nn.LayerPlan.AltUp; the graph is
@@ -60,34 +59,6 @@ func (d *devTier) streams() int {
 type kernJob struct {
 	dst  *backend.Kernel
 	make func() (*ir.Kernel, error)
-}
-
-// altJobs are an AltUp scratch's kernels, none where the plan has no AltUp.
-func altJobs(bs *blockScratch, p *nn.LayerPlan, rows, actWin int) []kernJob {
-	if p.AltUp == 0 {
-		return nil
-	}
-	s, d, rank := p.AltUp, p.NEmbd, p.LaurelRank
-	gparts := bs.gParts
-	jobs := []kernJob{
-		{&bs.altRoute, func() (*ir.Kernel, error) { return mainkernels.AltUpRoute(rows, d, s) }},
-		{&bs.altPredictK, func() (*ir.Kernel, error) { return mainkernels.AltUpPredict(rows, d, s) }},
-		{&bs.altCorrectK, func() (*ir.Kernel, error) { return mainkernels.AltUpCorrect(rows, d, s) }},
-		{&bs.altFinish, func() (*ir.Kernel, error) { return mainkernels.AltUpFinish(rows, d, s) }},
-		{&bs.altMul, func() (*ir.Kernel, error) { return mainkernels.MulRows(rows, d) }},
-		{&bs.altCopy, func() (*ir.Kernel, error) { return mainkernels.Restride(rows, d, d, d) }},
-		{&bs.laurelJoin, func() (*ir.Kernel, error) { return mainkernels.LaurelJoin(rows * d) }},
-		{&bs.laurelQuant, func() (*ir.Kernel, error) { return mainkernels.Quantize(rows*rank, actWin) }},
-	}
-	if p.Sparse {
-		jobs = append(jobs,
-			kernJob{&bs.gPart, func() (*ir.Kernel, error) { return mainkernels.LayerNormPartRows(p.NFFN, gparts, rows) }},
-			kernJob{&bs.gVar, func() (*ir.Kernel, error) { return mainkernels.LayerNormVarRows(p.NFFN, gparts, rows) }},
-			kernJob{&bs.gApply, func() (*ir.Kernel, error) {
-				return mainkernels.GaussTopKApplyRows(p.NFFN, gparts, p.SparseStd, rows)
-			}})
-	}
-	return jobs
 }
 
 // allocAltUp allocates an AltUp scratch's buffers through al.
@@ -149,28 +120,6 @@ func (g *devTier) emitAltPredict(lc *launcher, bs *blockScratch, l *layer, R int
 	g.AltUpBlocks++
 }
 
-// emitLaurel writes LAuReL's branch of bs.h into bs.altLaur and leaves bs.a
-// holding bs.h's quantization again, as the attention expects. fsrc is the
-// float row a float weight's matvec reads in place of the int8 one: set
-// before each of the branch's two, and left at bs.h.
-func (g *devTier) emitLaurel(lc *launcher, bs *blockScratch, l *layer, R int,
-	mvrun func(mv, *resident, backend.Buf), norm func(src, w, wb backend.Buf), fsrc *backend.Buf) {
-	p := &bs.p
-	*fsrc = bs.h
-	mvrun(l.mvLL, l.laurelL, bs.altLT)
-	lc.la(bs.laurelQuant, mainkernels.QuantizeThreads(R*p.LaurelRank/32), bs.altLT, bs.a, bs.ax)
-	*fsrc = bs.altLT
-	mvrun(l.mvLR, l.laurelR, bs.mvOut)
-	// norm writes bs.h, which the attention reads: the branch's norm goes
-	// through bs.altB's first plane and comes back after.
-	lc.la(bs.altCopy, R*p.NEmbd, bs.h, bs.altB)
-	norm(bs.mvOut, l.nLaurel, nil)
-	lc.la(bs.addE, R*p.NEmbd, bs.h, bs.altB, bs.altLaur)
-	lc.la(bs.altCopy, R*p.NEmbd, bs.altB, bs.h)
-	lc.la(bs.quantE, mainkernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
-	*fsrc = bs.h
-}
-
 // emitGauss runs a sparse block's gaussian top-k on its gate bs.g, into
 // bs.gg, and returns the buffer the FFN's activation reads.
 func (g *devTier) emitGauss(lc *launcher, bs *blockScratch, l *layer, R int) backend.Buf {
@@ -182,26 +131,4 @@ func (g *devTier) emitGauss(lc *launcher, bs *blockScratch, l *layer, R int) bac
 	lc.la(bs.gVar, R*bs.gParts, bs.g, bs.gPartB, bs.gVarB)
 	lc.la(bs.gApply, R*p.NFFN, bs.g, bs.gPartB, bs.gVarB, bs.gg)
 	return bs.gg
-}
-
-// emitAltCorrect is a block's epilogue, with the block's output in stream 0
-// of bs.x: every stream corrected, and the per-layer input gated into the
-// others, back into bs.x.
-func (g *devTier) emitAltCorrect(lc *launcher, bs *blockScratch, l *layer, R int,
-	mvrun func(mv, *resident, backend.Buf), norm func(src, w, wb backend.Buf), fsrc *backend.Buf) {
-	p := &bs.p
-	norm(bs.x, l.altRouterNorm, nil)
-	lc.la(bs.altRoute, R*p.AltUp, bs.h, l.altRouter, bs.altM)
-	lc.la(bs.altCorrectK, R*p.AltUp*p.NEmbd, bs.altPred, bs.x, bs.altM, l.altCorrT, bs.altB)
-	lc.la(bs.altMul, R*p.NEmbd, bs.altB, l.altCorrScale, bs.h)
-	lc.la(bs.quantE, mainkernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
-	*fsrc = bs.h
-	mvrun(l.mvpg, l.pleGate, bs.pleG)
-	lc.la(bs.pleSlice, R*p.PLEDim, bs.pleIn, l.pleOff, bs.pleS)
-	lc.la(bs.pleAct, R*p.PLEDim, bs.pleG, bs.pleS, bs.pleA)
-	lc.la(bs.pleQuant, mainkernels.QuantizeThreads(R*pad32(p.PLEDim)/32), bs.pleA, bs.a, bs.ax)
-	*fsrc = bs.pleA
-	mvrun(l.mvpp, l.pleProj, bs.pleO)
-	norm(bs.pleO, l.nPLE, nil)
-	lc.la(bs.altFinish, R*p.AltUp*p.NEmbd, bs.altB, bs.h, bs.x)
 }

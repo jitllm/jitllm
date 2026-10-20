@@ -756,45 +756,6 @@ func TestAFullTailSendsTheHeadToACardWithRoom(t *testing.T) {
 	}
 }
 
-// TestANarrowLatentIsNotALatentTile: mla70Attn must answer false, not divide by
-// zero, for a latent narrower than one 32-dim warp tile (a panic under the
-// device lock deadlocked State.Close).
-func TestANarrowLatentIsNotALatentTile(t *testing.T) {
-	g, _, p := fakeTier(t)
-	for _, lat := range []int{1, 16, 31} {
-		q := *p
-		q.KVLoraRank = lat
-		if g.mla70Attn(&q, 64) {
-			t.Fatalf("a %d-wide latent took the 32-dim latent tile", lat)
-		}
-	}
-}
-
-// TestTheSplitTunerFreesAFailedCaptureOutsideTheSession: a failed capture's
-// recording must be freed after the Session returns; freed inside on CUDA it
-// deadlocks on the owner goroutine. The fake device panics on any Free, Alloc
-// or recording Free inside a Session.
-func TestTheSplitTunerFreesAFailedCaptureOutsideTheSession(t *testing.T) {
-	g, d, _ := fakeTier(t)
-	var l *layer
-	for _, x := range g.layers {
-		l = x
-	}
-	k, err := d.Compile(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.failCapture = true
-	defer func() { d.failCapture = false }()
-	cs := g.timeSequences([]splitCand{{kern: k, split: 1}}, []*resident{l.wq}, l.wq.nrows, nil)
-	if len(cs) != 1 {
-		t.Fatalf("timeSequences returned %d candidates, want 1", len(cs))
-	}
-	if d.live != 0 {
-		t.Fatalf("%d recording(s) still live: the failed capture was never freed", d.live)
-	}
-}
-
 // TestAPlannedModelThatFitsIsSpreadOverTheDevices is GPU.PlanBlocks: blocks
 // that fit are split in proportion to the budgets over the fewest devices that
 // hold them, rather than filling the first (which left no room for prefill

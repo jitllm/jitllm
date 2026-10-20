@@ -2,8 +2,6 @@ package tier
 
 import (
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // Gemma 4 on the device. Its global layers attend at another geometry than its
@@ -222,29 +220,4 @@ func (g *devTier) pleRows(n int) []float32 {
 	m := copy(st, g.pleHost)
 	clear(st[m:])
 	return st
-}
-
-// emitDenseMLP is the dense half of Gemma 4's mixture block
-// (nn.LayerPlan.DenseMoE), on the ffn_norm rows in bs.h whose quantization is
-// in bs.a/bs.ax: the shared expert's kernels, ungated, into bs.shout, normed
-// by the dense MLP's post-norm into bs.shsum. Then the mixture's two inputs
-// from x2: the router's norm into bs.hr and the experts' pre-norm into bs.h,
-// quantized for the decode arm's expert matvecs.
-func (g *devTier) emitDenseMLP(lc *launcher, bs *blockScratch, l *layer, R int, x2 backend.Buf,
-	mvrun func(mv, *resident, backend.Buf), errp *error) {
-	p := &bs.p
-	if *errp != nil {
-		return
-	}
-	mvrun(l.mvsg, l.shGate, bs.shg)
-	mvrun(l.mvsu, l.shUp, bs.shu)
-	lc.la(bs.shActMul, R*bs.nShExp, bs.shg, bs.shu, bs.shact)
-	lc.la(bs.shQuant, mainkernels.QuantizeThreads(R*bs.nShExp/32), bs.shact, bs.a, bs.ax)
-	mvrun(l.mvsd, l.shDown, bs.shout)
-	lc.la(bs.normPart, R*bs.parts, bs.shout, bs.part)
-	lc.la(bs.normApply, R*p.NEmbd, bs.shout, l.nPost1, bs.part, bs.shsum)
-	lc.la(bs.normPart, R*bs.parts, x2, bs.part)
-	lc.la(bs.normApply, R*p.NEmbd, x2, l.nRouter, bs.part, bs.hr)
-	lc.la(bs.normApply, R*p.NEmbd, x2, l.nFFN2, bs.part, bs.h)
-	lc.la(bs.quantE, mainkernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
 }

@@ -943,23 +943,6 @@ func abRun(m *model.Model, g *tier.GPU, which string, n, rounds, depth int) {
 	case "gateup2":
 		a = bench.Case{Name: "gate, up gated", Fn: func(it int) { g.GateUp2 = false; step(it) }}
 		b = bench.Case{Name: "gate and up in one Gate2 launch", Fn: func(it int) { g.GateUp2, g.GateUp2Force = true, true; step(it) }}
-	case "ffn", "ffn-aa":
-		// The FFN site's recipes (tier.FFNForm): JITLLM_VERIFY_FFN names the
-		// challenger (gate2in by default) against Gate2.
-		f, err := tier.ParseFFNForm(os.Getenv("JITLLM_VERIFY_FFN"))
-		if err != nil || f == tier.FFNTuned {
-			f = tier.FFNGate2In
-		}
-		if which == "ffn-aa" {
-			f = tier.FFNGate2
-		}
-		a = bench.Case{Name: "FFN recipe gate2", Fn: func(it int) { g.FFNForm = tier.FFNGate2; step(it) }}
-		b = bench.Case{Name: "FFN recipe " + f.String(), Fn: func(it int) { g.FFNForm = f; step(it) }}
-		defer func() {
-			st := g.Stats()
-			fmt.Printf("norm, gate and up in one launch in %d FFNs; Gate2 in %d; FFN keys timed %d, kept %d\n",
-				st.Gate2InRuns, st.GateUp2Runs, st.FFNTimed, st.FFNKept)
-		}()
 	case "gateup2-aa":
 		a = bench.Case{Name: "gate, up gated", Fn: func(it int) { g.GateUp2 = false; step(it) }}
 		b = bench.Case{Name: "gate, up gated (again)", Fn: func(it int) { g.GateUp2 = false; step(it) }}

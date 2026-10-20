@@ -3,11 +3,12 @@ package model
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/format/jlm"
 	"math"
 	"math/rand/v2"
 	"path/filepath"
 	"testing"
+
+	"github.com/jitllm/jitllm/format/jlm"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/tier"

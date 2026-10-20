@@ -91,9 +91,6 @@ func (g *devTier) exclusiveRange(lo, hi int, rag *ragStep, bs *blockScratch) boo
 	if rag != nil && rag.sid != nil {
 		return true
 	}
-	if bs != nil && bs.pkv != nil && bs.pkv.st != nil && bs.pkv.st.evicted > 0 {
-		return true
-	}
 	for li := lo; li < hi; li++ {
 		l := g.layers[li]
 		if l == nil {

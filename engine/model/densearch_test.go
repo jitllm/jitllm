@@ -1,9 +1,10 @@
 package model
 
 import (
-	"github.com/jitllm/jitllm/engine/graph"
 	"math"
 	"slices"
+
+	"github.com/jitllm/jitllm/engine/graph"
 
 	"github.com/jitllm/jitllm/engine/nn"
 )

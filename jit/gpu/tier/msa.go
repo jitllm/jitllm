@@ -5,8 +5,6 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // MiniMax Sparse Attention on the device (nn.LayerPlan.MSA;
@@ -71,97 +69,6 @@ func msaWhyNot(p *nn.LayerPlan) string {
 	return ""
 }
 
-// initMSA builds bs's selection: rows rows of P-position pages whose K row is
-// kvRow wide, the indexer's key its last head. Callers hold g.mu.
-func (g *devTier) initMSA(bs *blockScratch, rows, P int,
-	comp func(*backend.Kernel, *ir.Kernel, error) error) error {
-	p := &bs.p
-	tcap := max(p.MaxSeq, 1)
-	kk := min(p.IdxTopK, mainkernels.MSABlocks(tcap, p.IdxBlock))
-	m := &msaScratch{h: p.IdxHeads, d: p.IdxHeadDim, k: kk, blk: p.IdxBlock, tcap: tcap,
-		nb: mainkernels.MSABlocks(tcap, p.IdxBlock), ppr: mainkernels.MSAGatherPages(kk, p.IdxBlock, P),
-		kvRow: p.KVRow(), attnW: p.NKVHead * p.HeadDim}
-	bs.pkv.msa = m
-	m.qLanes, m.kLanes = bs.kNormL, bs.kNormL
-	h, d, rot, kv := m.h, m.d, p.NRot, p.NKVHead*p.HeadDim
-	for _, b := range []struct {
-		dst *backend.Kernel
-		mk  func() (*ir.Kernel, error)
-	}{
-		{&m.normQ, func() (*ir.Kernel, error) { return mainkernels.HeadNormRows(h, d, p.RMSEps, rows, m.qLanes) }},
-		{&m.normK, func() (*ir.Kernel, error) { return mainkernels.HeadNormRows(1, d, p.RMSEps, rows, m.kLanes) }},
-		{&m.copyQ, func() (*ir.Kernel, error) { return mainkernels.CopyAtRows(h*d, rows) }},
-		{&m.ropeQ, func() (*ir.Kernel, error) { return mainkernels.RoPERows(h, d, rot, p.RopeNeox, rows) }},
-		{&m.asmK, func() (*ir.Kernel, error) { return mainkernels.CopyAtRows(kv, rows) }},
-		{&m.asmI, func() (*ir.Kernel, error) { return mainkernels.CopyAtRows(d, rows) }},
-		{&m.scores, func() (*ir.Kernel, error) {
-			return mainkernels.MSAScoresPaged(rows, h, d, tcap, P, m.kvRow, kv)
-		}},
-		{&m.bmax, func() (*ir.Kernel, error) { return mainkernels.MSABlockMax(rows, h, tcap, m.blk, p.IdxLocal) }},
-		{&m.sel, func() (*ir.Kernel, error) { return mainkernels.MSASelect(rows, h, tcap, m.blk, kk) }},
-		{&m.compact, func() (*ir.Kernel, error) { return mainkernels.MSACompact(rows, h, tcap, m.blk, kk) }},
-		{&m.gatherK, func() (*ir.Kernel, error) {
-			return mainkernels.MSAGatherK(rows, p.NKVHead, p.HeadDim, m.blk, kk, P, m.kvRow)
-		}},
-		{&m.gatherV, func() (*ir.Kernel, error) {
-			return mainkernels.MSAGatherV(rows, p.NKVHead, p.HeadDim, m.blk, kk, P, m.kvRow, g.KVF16)
-		}},
-		{&m.desc, func() (*ir.Kernel, error) { return mainkernels.MSADesc(rows, m.blk, kk, P) }},
-	} {
-		kn, err := b.mk()
-		if err := comp(b.dst, kn, err); err != nil {
-			return fmt.Errorf("the block selection: %w", err)
-		}
-	}
-	vw := m.ppr * P * kv
-	if g.KVF16 {
-		vw /= 2
-	}
-	var err error
-	al := func(dst *backend.Buf, n int) {
-		if err == nil {
-			*dst, err = g.dev.Alloc(n * 4)
-		}
-	}
-	al(&m.qRaw, rows*h*d)
-	al(&m.qn, rows*h*d)
-	al(&m.qRot, rows*h*d)
-	al(&m.kRaw, rows*d)
-	al(&m.kn, rows*d)
-	al(&m.kAll, rows*m.kvRow)
-	al(&m.qOff, rows)
-	al(&m.allOff, rows)
-	al(&m.idxOff, rows)
-	al(&m.score, rows*h*tcap)
-	al(&m.bmx, rows*h*m.nb)
-	al(&m.flag, rows*h*m.nb)
-	al(&m.list, rows*h*(kk+1))
-	al(&m.gk, rows*m.ppr*P*kv)
-	al(&m.gv, rows*vw)
-	al(&m.gtab, rows*m.ppr)
-	al(&m.gdesc, rows*mainkernels.PRowWords)
-	if err != nil {
-		return err
-	}
-	qo, ao, io, tab := make([]uint32, rows), make([]uint32, rows), make([]uint32, rows),
-		make([]uint32, rows*m.ppr)
-	for r := range qo {
-		qo[r], ao[r], io[r] = uint32(r*h*d), uint32(r*m.kvRow), uint32(r*m.kvRow+kv)
-	}
-	for i := range tab {
-		tab[i] = uint32(i)
-	}
-	for _, x := range []struct {
-		b backend.Buf
-		v []uint32
-	}{{m.qOff, qo}, {m.allOff, ao}, {m.idxOff, io}, {m.gtab, tab}} {
-		if err := x.b.Write(u32view(x.v)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // free releases the selection's kernels and buffers.
 func (m *msaScratch) free(g *devShared) {
 	if m == nil {
@@ -181,50 +88,6 @@ func (m *msaScratch) free(g *devShared) {
 	}
 }
 
-// msaKeyQuery runs the indexer's projections while bs.a/bs.ax hold the
-// block's normed input, their norms and the query's rotary, and assembles
-// k's normed heads kn and the key into one row each (m.kAll), which the
-// pool's writers then rotate and store.
-func (g *devTier) msaKeyQuery(lc *launcher, bs *blockScratch, l *layer, R int, kn, cs backend.Buf,
-	mvrun func(mv, *resident, backend.Buf)) error {
-	m := bs.pkv.msa
-	mvrun(l.mvIK, l.idxK, m.kRaw)
-	mvrun(l.mvMQ, l.idxQ, m.qRaw)
-	qg, qw := headNormGeom(m.qLanes, R*m.h)
-	if err := lc.launch(m.normQ, qg, qw, m.qRaw, l.nIdxQ, m.qn); err != nil {
-		return err
-	}
-	kg, kw := headNormGeom(m.kLanes, R)
-	if err := lc.launch(m.normK, kg, kw, m.kRaw, l.nIdxK, m.kn); err != nil {
-		return err
-	}
-	lc.la(m.copyQ, R*m.h*m.d, m.qn, m.qRot, m.qOff)
-	lc.la(m.ropeQ, R*m.h*bs.p.NRot/2, m.qn, cs, m.qOff, m.qRot)
-	lc.la(m.asmK, R*m.attnW, kn, m.kAll, m.allOff)
-	lc.la(m.asmI, R*m.d, m.kn, m.kAll, m.idxOff)
-	return nil
-}
-
-// msaAttend selects each row's blocks per kv group, gathers them and runs
-// the attention over the gathered pages: q the rotated queries, out the
-// heads' results. pl is the layer's pool, tab its table arena.
-func (g *devTier) msaAttend(s backend.Session, lc *launcher, R int, pk *pagedScratch, pl *kvLayerPool,
-	q, n, out backend.Buf) error {
-	m := pk.msa
-	lc.la(m.scores, R*m.h*m.tcap, m.qRot, pl.k, pl.tab, pk.pRow, m.score)
-	lc.la(m.bmax, R*m.h*m.nb, m.score, pk.pRow, m.bmx)
-	lc.la(m.sel, R*m.h*m.nb, m.bmx, pk.pRow, m.flag)
-	lc.la(m.compact, R*m.h*m.nb, m.flag, m.list)
-	lc.la(m.gatherK, R*m.attnW*m.k*m.blk, pl.k, pl.tab, pk.pRow, m.list, m.gk)
-	vw := m.attnW
-	if g.KVF16 {
-		vw /= 2
-	}
-	lc.la(m.gatherV, R*m.k*m.blk*vw, pl.v, pl.tab, pk.pRow, m.list, m.gv)
-	lc.la(m.desc, R*mainkernels.PRowWords, pk.pRow, m.gdesc)
-	g.MSASelects++
-	return pk.pagedDecode(s, lc, q, m.gk, m.gv, n, out, m.gtab, m.gdesc, nil)
-}
 
 // msaKeys is the most keys a gathered row attends: the call's, at most the
 // kept blocks.

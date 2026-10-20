@@ -8,10 +8,8 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/engine/graph"
-	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // layersSession is the device side of layersOnce: the staging writes, the
@@ -34,10 +32,10 @@ func (g *devTier) layersSession(s backend.Session) {
 	sid := a.key.sid
 	bs, hb, head, lo, hi, pos, x := a.bs, a.hb, a.head, a.lo, a.hi, a.pos, a.x
 	hx, hcs, hcsSWA, pn, koffs, kposs, rposs := a.hx, a.hcs, a.hcsSWA, a.pn, a.koffs, a.kposs, a.rposs
-	p, rag, pe, key := a.p, a.rag, a.pe, a.key
-	R, nrow, kvDim, kst, gatherN, rrows := a.R, a.nrow, a.kvDim, a.kst, a.gatherN, a.rrows
+	p, rag, key := a.p, a.rag, a.key
+	R, nrow, kvDim, kst, rrows := a.R, a.nrow, a.kvDim, a.kst, a.rrows
 	fold, ropeDev, argmax, sampleK, samplePen, pick := a.fold, a.ropeDev, a.argmax, a.sampleK, a.samplePen, a.pick
-	ragHead, parOK, allRows, hNorm := a.ragHead, a.parOK, a.allRows, a.hNorm
+	ragHead, parOK, allRows := a.ragHead, a.parOK, a.allRows
 	var err error
 	direct := false
 	defer func() { a.err, a.direct = err, direct }()
@@ -78,20 +76,6 @@ func (g *devTier) layersSession(s backend.Session) {
 	lc := &launcher{to: &g.launchTo, err: &err, fsrc: &fsrc,
 		memoK: &actMemoK, memoSrc: &actMemoSrc, a: bs.a, ax: bs.ax, g: g}
 
-	// lamv launches a decode matvec at its own workgroup width: an in-group
-	// split is 32 rows by Split segments (mainkernels.GroupSplitWidth), every
-	// other matvec 128. The thread count is the same either way.
-	lamv := func(m mv, k backend.Kernel, threads int, bufs ...backend.Buf) {
-		w := 128
-		if m.group {
-			w = mainkernels.GroupSplitWidth(m.split)
-		} else if m.width > 0 && k == m.kern {
-			w = m.width
-		}
-		if err == nil {
-			err = lc.launch(k, (threads+w-1)/w, w, bufs...)
-		}
-	}
 	// dOf is what a matvec takes in the scale-plane slot.
 	dOf := func(r *resident) backend.Buf {
 		if !kernels.IsFloat(r.t) {
@@ -102,99 +86,6 @@ func (g *devTier) layersSession(s backend.Session) {
 		}
 		return fsrc
 	}
-	// runBatched launches a batched twin: straight into dst, or, when it
-	// splits k (a ragged step on a card with no matrix instruction; see
-	// ragMV), into the partials and a Reduce over every row of every token.
-	runBatched := func(bm mv, r *resident, dst, a, ax, d, f backend.Buf) {
-		if bm.act != nil {
-			// sm_70's tensor-core twin reads the float activation as f16.
-			//
-			// Once per source and layout, not once per matvec: q, k and v read
-			// one normed row, as do gate and up. A layout is the kernel (Q6_K's
-			// step order is not Q4_K's).
-			if bm.act != actMemoK || f != actMemoSrc {
-				lc.la(bm.act, bm.actN, f, g.f16Buf)
-				g.ActF16Launches++
-			}
-			memoK, memoSrc := bm.act, f
-			defer func() { actMemoK, actMemoSrc = memoK, memoSrc }()
-			out := dst
-			if bm.split > 1 {
-				out = g.partBuf
-			}
-			if bm.bias != nil {
-				lc.law(bm.kern, bm.threads, bm.width, r.qs, d, r.sc, g.f16Buf, out, bm.bias)
-			} else {
-				lc.law(bm.kern, bm.threads, bm.width, r.qs, d, r.sc, g.f16Buf, out)
-			}
-			if t := bm.tail; t != nil {
-				if bm.bias != nil {
-					lc.law(t.kern, t.threads, t.width, r.qs, d, r.sc, g.f16Buf, out, bm.bias)
-				} else {
-					lc.law(t.kern, t.threads, t.width, r.qs, d, r.sc, g.f16Buf, out)
-				}
-			}
-			if bm.split > 1 {
-				lc.la(bm.red, bm.redN, g.partBuf, dst)
-			}
-			return
-		}
-		n := bm.threads
-		if n == 0 {
-			n = bm.rows * bm.groups * max(bm.split, 1)
-		}
-		out := dst
-		if bm.split > 1 && !bm.group {
-			out = g.partBuf
-		}
-		if bm.bias != nil {
-			lamv(bm, bm.kern, n, r.qs, d, r.sc, a, ax, out, bm.bias)
-		} else {
-			lamv(bm, bm.kern, n, r.qs, d, r.sc, a, ax, out)
-		}
-		if bm.split > 1 && !bm.group {
-			lc.la(bm.red, bm.redN, g.partBuf, dst)
-		}
-	}
-	mvrun := func(m mv, r *resident, dst backend.Buf) {
-		if R > 1 {
-			// The batched twin has no split arm: a prefill chunk already has token
-			// parallelism, so MatVec refuses NTok > 1 with Split > 1.
-			bm, ok := g.batchMV(m, R, bs.tok)
-			if rag != nil {
-				bm, ok = g.ragStepMV(m, R, len(rag.pos))
-			}
-			if !ok {
-				if err == nil {
-					err = errNoBatch
-				}
-				return
-			}
-			runBatched(bm, r, dst, bs.a, bs.ax, dOf(r), fsrc)
-			return
-		}
-		if g.TableSplit && m.alt != nil {
-			m = *m.alt
-		}
-		out := dst
-		if m.split > 1 && !m.group {
-			out = g.partBuf
-		}
-		// The grid divides by the row tile; an oversized one is silent, since
-		// surplus threads clamp to the last work item.
-		n := m.rows * m.split
-		if m.rowt > 1 {
-			n /= m.rowt
-		}
-		if m.bias != nil {
-			lamv(m, m.kern, n, r.qs, dOf(r), r.sc, bs.a, bs.ax, out, m.bias)
-		} else {
-			lamv(m, m.kern, n, r.qs, dOf(r), r.sc, bs.a, bs.ax, out)
-		}
-		if m.split > 1 && !m.group {
-			lc.la(m.red, m.rows, g.partBuf, dst)
-		}
-	}
 	// skip holds WithSkip's bisection probes (scores, softmax, acc, attn, ffn,
 	// ...), which produce wrong tokens on purpose: skipping a phase and
 	// re-timing the prompt prices it without serialising the stream.
@@ -204,63 +95,6 @@ func (g *devTier) layersSession(s backend.Session) {
 			skip[k] = true
 		}
 	}
-	// laRows launches one RMSNormGroup-thread group per row.
-	laRows := func(k backend.Kernel, bufs ...backend.Buf) {
-		actMemoK, actMemoSrc = nil, nil
-		if err == nil {
-			err = lc.launch(k, R, mainkernels.RMSNormGroup, bufs...)
-		}
-	}
-	// norm is RMSNorm or LayerNorm, decided by the block once; LayerNorm has
-	// a pass in between, a bias, and an apply reading two partial arrays.
-	norm := func(src, w, wb backend.Buf) {
-		// No pre-norm (OLMo 2): the branch reads the residual as it is.
-		if w == nil {
-			lc.la(bs.copyRows, R*p.NEmbd, src, bs.h)
-			return
-		}
-		if bs.rms != nil && bs.normVar == nil && wb == nil {
-			laRows(bs.rms, src, w, bs.h)
-			return
-		}
-		lc.la(bs.normPart, R*bs.parts, src, bs.part)
-		if bs.normVar != nil {
-			lc.la(bs.normVar, R*bs.parts, src, bs.part, bs.part2)
-			lc.la(bs.normApply, R*p.NEmbd, src, w, bs.part, bs.part2, wb, bs.h)
-			return
-		}
-		lc.la(bs.normApply, R*p.NEmbd, src, w, bs.part, bs.h)
-	}
-	// Scanned rather than counted on the tier, so no release path can let a
-	// counter drift.
-	streamed := false
-	for li := lo; li < hi && !streamed; li++ {
-		// A batched mixture reads its selection home too (moegroup.go).
-		if l := g.layers[li]; l != nil && (l.stream != nil || (R > 1 && l.router != nil)) {
-			streamed = true
-		}
-	}
-	// addRes is a block's residual add, out = x + y, with y scaled first where
-	// the model scales its block outputs (residScaled): never fused into a
-	// projection or a norm, which carry no scale.
-	scaled := residScaled(p)
-	addRes := func(x, y, out backend.Buf) {
-		if scaled {
-			if g.kb.scaleFault == ScaleFaultResidual {
-				lc.la(bs.addE, R*p.NEmbd, x, y, out)
-				return
-			}
-			lc.la(bs.addS, R*p.NEmbd, x, y, bs.rscale, out)
-			g.ResidScaled++
-			return
-		}
-		lc.la(bs.addE, R*p.NEmbd, x, y, out)
-	}
-	// A block-end residual add held for the next block's attention norm to do
-	// in its own launch (foldAddNorm): x = pendX + pendY. The encoder and
-	// the device program (runProg) both hold and take it.
-	var pendX, pendY backend.Buf
-	var pendNorm, pendConv backend.Kernel
 	// runProg runs block li's device program (devprog.go): each op one launch
 	// of the kernel the encoder's unfused path takes for it, over the scratch
 	// slot the program assigned its values. A program that attends reads its
@@ -318,21 +152,6 @@ func (g *devTier) layersSession(s backend.Session) {
 			slotM1LowN: bs.m1LowN, slotM1BN: bs.m1BN, slotM1CN: bs.m1CN,
 			slotPLEG: bs.pleG, slotPLES: bs.pleS, slotPLEA: bs.pleA, slotPLEO: bs.pleO, slotKRot: bs.krot,
 			slotPred: bs.altPred, slotAltM: bs.altM, slotAltB: bs.altB, slotLT: bs.altLT, slotLaur: bs.altLaur, slotGG: bs.gg}
-		// A block-selecting indexer's buffers (msa.go, qsa.go).
-		var ms *msaScratch
-		var qs *qsaScratch
-		var ix *idxScratch
-		if pk != nil {
-			ms, qs, ix = pk.msa, pk.qsa, pk.idx
-		}
-		switch {
-		case ix != nil:
-			buf[slotIKRaw], buf[slotIdxW], buf[slotIKn], buf[slotIKRot], buf[slotIQRaw], buf[slotIQRot] = ix.kRaw, ix.wts, ix.kn, ix.kRot, ix.qRaw, ix.qRot
-		case ms != nil:
-			buf[slotIKRaw], buf[slotIQRaw], buf[slotIQn], buf[slotIKn], buf[slotIQRot], buf[slotKAll] = ms.kRaw, ms.qRaw, ms.qn, ms.kn, ms.qRot, ms.kAll
-		case qs != nil:
-			buf[slotIKRaw], buf[slotIQRaw], buf[slotIQn], buf[slotIQRot], buf[slotKAll] = qs.kRaw, qs.qRaw, qs.qn, qs.qRot, qs.kAll
-		}
 		if x := bs.q4e; x != nil {
 			buf[slotSXN], buf[slotSQ8], buf[slotSQ8LR], buf[slotSLo], buf[slotSLo2] = x.xn, x.aHD, x.aLR, x.lo, x.lo2
 			buf[slotSGate], buf[slotSMix], buf[slotSInj], buf[slotSW] = x.gate, x.mix, x.inj, x.w
@@ -383,26 +202,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			l.ran.note(formGateUp, uint8(fc.gu))
 			l.ran.note(formDown, uint8(fc.down))
 		}
-		// A residual add the previous block held (the fold, below) runs in
-		// this block's first launch where that is the attention norm writing
-		// the first GEMM's operand: the kernel foldAddNorm built for it.
 		first := 0
-		if pendX != nil {
-			if o := prog.ops[0]; o.Kind == dkNormF16 && o.Role == jlm.RoleAttnNorm && prog.slots[o.In[0]] == slotX {
-				y := pendY
-				if g.addNormBroken() {
-					y = pendX
-				}
-				laRows(pendNorm, pendX, y, l.nAttn, bs.x, bs.h, g.f16Buf)
-				actMemoK, actMemoSrc = pendConv, bs.h
-				g.NormF16++
-				g.AddNormFolded++
-				first = 1
-			} else {
-				addRes(pendX, pendY, bs.x)
-			}
-			pendX, pendY = nil, nil
-		}
 		qOff, kro := bs.zero, bs.zero
 		if R > 1 {
 			qOff, kro = bs.roff, bs.kroff
@@ -426,19 +226,6 @@ func (g *devTier) layersSession(s backend.Session) {
 			buf[slotEG], buf[slotEU], buf[slotEGB], buf[slotEUB], buf[slotEAct], buf[slotEDown], buf[slotEDownB] =
 				mg.eg, mg.eu, mg.egB, mg.euB, mg.eact, mg.edown, mg.edownB
 		}
-		// Over rows latent attention's values live in the batched latent
-		// scratch (bs.mlab), its absorbs grouped by head.
-		ml := bs.mlab
-		rowsMLA := R > 1 && prog.latent
-		if rowsMLA {
-			buf[slotMQA], buf[slotMQAn], buf[slotMKV], buf[slotMKVLat], buf[slotMKVn] = ml.qa, ml.qan, ml.kv, ml.kvLat, ml.kvn
-			buf[slotMNope], buf[slotMPE], buf[slotMPErot], buf[slotMKPE] = ml.qNope, ml.pe, ml.pErot, ml.kpe
-			buf[slotMAbsRaw], buf[slotMAbs], buf[slotMAcc], buf[slotMOut] = ml.absRaw, ml.abs, ml.accOut, ml.out
-			// The head-major rows headMajor's gathers write, in the order
-			// they come: storage the latent scratch sizes for R.
-			buf[slotPool0], buf[slotPool1] = ml.nopeHM, ml.accHM
-		}
-		var gr groupRun
 		skipNext := false
 		at := func(v devVal) backend.Buf { return buf[prog.slots[v]] }
 		// A traced run reads each graph op's values back (Config.OpTrace).
@@ -472,7 +259,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			if len(o.Gen) != 0 && o.Gen[0].former == 0 {
 				{
 					gst.cs, gst.qOff, gst.kOff = rcs, qOff, kro
-					gst.moe, gst.cols = rowsMoE, gr.cols
+					gst.moe = rowsMoE
 					if mg != nil {
 						gst.colPair = mg.colPair
 					}
@@ -537,37 +324,15 @@ func (g *devTier) layersSession(s backend.Session) {
 	// both runs the sequence and records it: one source for both means a graph
 	// cannot differ from the launches it replaces.
 	emit := func() {
-		// The rotary table first: every block reads it and nothing writes it again.
-		// Both launches are pure functions of buffers, so a replay rebuilds it from
-		// whatever bs.rpos holds this token.
 		if ropeDev {
 			lc.la(bs.ropeTable, rrows*bs.ropeNPairs, bs.cs, bs.ropeTab, bs.ropeConst, bs.rpos)
 			if p.SWAPeriod > 0 && bs.csSWA != nil {
 				lc.la(bs.ropeTable, rrows*bs.ropeNPairs, bs.csSWA, bs.ropeTabSWA, bs.ropeConst, bs.rpos)
 			}
-			g.ds4Tables(lc, bs, R)
 		}
-		// No add is held across submissions: each emit starts clean.
-		pendX, pendY, pendNorm, pendConv = nil, nil, nil, nil
 		for li := lo; li < hi; li++ {
 			l := g.layers[li]
-			// The previous block's held launches go out; this block's are
-			// held when it is one the path takes.
-			lc.persistBlock(persist && !streamed && persistable(l, bs))
-			// A block whose every batched matvec is on sm_70's f16 path never reads
-			// the int8 activation, so it skips the quantize: the norm runs alone and
-			// fsrc names the float row the ActF16 conversion reads.
-			// Not an AltUp block, whose LAuReL branch quantizes between the norm
-			// and the attention.
-			voltaOnly := R > 1 && rag == nil && g.voltaBlock(l, R, bs.tok) && l.altRouter == nil && l.ds4 == nil &&
-				l.k3 == nil && l.q4e == nil
-			// A held add this block's norm will not take runs alone first.
-			if pendX != nil && !g.foldTakes(l, R, voltaOnly, skip) {
-				addRes(pendX, pendY, bs.x)
-				pendX, pendY = nil, nil
-			}
-			// The device program, where it lowers the block and the step is
-			// one decode row over the paged history (devprog.go).
+			lc.persistBlock(persist && persistable(l, bs))
 			why := progRanProgram
 			switch {
 			case l.prog == nil:
@@ -576,21 +341,9 @@ func (g *devTier) layersSession(s backend.Session) {
 				why = progNoProgram
 			case l.prog.experts && R > 1 && (bs.mg == nil || bs.mg.rows != R || l.prog.streamed):
 				why = progRowsExperts
-			case l.prog.latent && R > 1 && (bs.mlab == nil || bs.mlab.rows != R):
-				why = progRowsLatent
-			case l.prog.streamed && (g.StreamProbe || g.StreamPrefetch || g.StreamFixedSel):
-				why = progStreamTuning
-			case l.prog.attends && R > 1 && rag == nil && !p.NonCausal && (bs.pkv == nil || !bs.pkv.prefill):
-				// A causal block's rows attend through the paged prefill; a
-				// non-causal one's over its contiguous history (ncAttend).
-				why = progRowsNotPrefill
 			case len(skip) != 0 || g.blockFaulted():
 				why = progFault
-			case l.prog.attends && bs.pkv != nil && ((R == 1 || rag != nil) && (bs.pkv.cur == nil || bs.pkv.prefill) ||
-				R > 1 && rag == nil && bs.pkv.pf == nil),
-				l.prog.attends && bs.pkv == nil && !p.NonCausal:
-				// A paged block whose call lacks its plan, or a causal block
-				// with no paged history.
+			case l.prog.attends && bs.pkv == nil && !p.NonCausal:
 				why = progNotPaged
 			case l.prog.ropes && l.noRope:
 				why = progRotary
@@ -602,169 +355,18 @@ func (g *devTier) layersSession(s backend.Session) {
 			} else {
 				l.progRun = why
 			}
-			if why == progRanProgram {
-				runProg(l, li, l.prog)
-				l.ran.note(formBlock, uint8(blockProgram))
-				continue
+			if why != progRanProgram {
+				if err == nil {
+					err = fmt.Errorf("tier: block %d: the program cannot run this step: %v", li, why)
+				}
+				return
 			}
-			// The program could not run this step, and nothing else runs a
-			// block: the step fails, naming why.
-			if err == nil {
-				err = fmt.Errorf("tier: block %d: the program cannot run this step: %v", li, why)
-			}
-			return
+			runProg(l, li, l.prog)
+			l.ran.note(formBlock, uint8(blockProgram))
 		}
-		if pendX != nil {
-			addRes(pendX, pendY, bs.x)
+		if head != nil && err == nil {
+			err = fmt.Errorf("tier: the head has no composed form")
 		}
-		if head != nil && (rag != nil || allRows) {
-			// The output norm, the projection of the rows that want logits
-			// (they lead) and a per-row argmax over them: their tokens and
-			// logits come home. A chunk asking for every row's logits
-			// (nn.Head.RowLogits on Layers) takes the same tail.
-			hr := g.bs.head
-			norm(bs.x, hNorm, g.bs.hNormB)
-			lc.la(bs.quantE, mainkernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
-			one, oneOK := mv{}, false
-			if ragHead == 1 {
-				one, oneOK = g.headOneMV(R) // compiled by prepRagged
-			}
-			if m := one; oneOK {
-				// One row: decode's head matvec at decode's split, reading
-				// the activation's first row -- the wanted row's -- and
-				// writing that row's logits, the first of ragLogits. A
-				// batched twin would project every row of the step to read
-				// back one.
-				if g.rowsFaulted(rowsHeadone) {
-					// Decode's own kernel, which takes the sums to follow
-					// the first row's scales: they follow all R rows'.
-					m.kern = g.bs.mvHead.kern
-				}
-				out := bs.ragLogits
-				if m.split > 1 && !m.group {
-					out = g.partBuf
-				}
-				nt := m.rows * m.split
-				if m.rowt > 1 {
-					nt /= m.rowt
-				}
-				lamv(m, m.kern, nt, hr.qs, dOf(hr), hr.sc, bs.a, bs.ax, out)
-				if m.split > 1 && !m.group {
-					lc.la(m.red, m.rows, g.partBuf, bs.ragLogits)
-				}
-			} else {
-				hm := bs.ragHead
-				if gm, ok := g.groupMV(g.headMV(), ragHead, R); ok {
-					hm = gm // the wanted rows only
-				}
-				runBatched(hm, hr, bs.ragLogits, bs.a, bs.ax, dOf(hr), fsrc)
-			}
-			// The final softcap, then the argmax over the capped rows: over
-			// the wanted rows only, as the one-row and few-row heads project
-			// nothing past them, and no row past them is read.
-			if bs.ragCapK != nil && !g.rowsFaulted(rowsNocap) {
-				lc.la(bs.ragCapK, ragHead*hr.nrows, bs.ragLogits, bs.ragCap)
-			}
-			if err == nil {
-				err = lc.launch(bs.ragArgmax, ragHead, mainkernels.ArgmaxGroup, bs.ragOut(g.Config), bs.ragTok)
-			}
-		} else if fold {
-			// The chunk's last row, into the decode scratch, and the decode
-			// scratch's head sequence on it -- mvrun's one-row arm, spelled
-			// out because mvrun's R is the chunk's.
-			hr := hb.head
-			lc.la(hb.spanK, p.NEmbd, bs.x, hb.x, hb.spanOff)
-			if hNorm == nil {
-				lc.la(hb.copyRows, p.NEmbd, hb.x, hb.h)
-			} else {
-				lc.la(hb.normPart, hb.parts, hb.x, hb.part)
-				lc.la(hb.normApply, p.NEmbd, hb.x, hNorm, hb.part, hb.h)
-			}
-			lc.la(hb.quantE, mainkernels.QuantizeThreads(p.NEmbd/32), hb.h, hb.a, hb.ax)
-			// The label pick projects the picked rows alone (pickMV).
-			pickOnly := pick && g.pickMV != nil && hb.headCap == nil
-			if pickOnly {
-				lc.la(g.pickMV, pickMax, hr.qs, hr.d, hr.sc, hb.a, hb.ax, g.pickOut, g.pickIDs)
-				g.PickRows++
-			}
-			m := hb.mvHead
-			if g.TableSplit && m.alt != nil {
-				m = *m.alt
-			}
-			out := hb.logits
-			if m.split > 1 && !m.group {
-				out = g.partBuf
-			}
-			n := m.rows * m.split
-			if m.rowt > 1 {
-				n /= m.rowt
-			}
-			if !pickOnly {
-				lamv(m, m.kern, n, hr.qs, hr.d, hr.sc, hb.a, hb.ax, out)
-				if m.split > 1 && !m.group {
-					lc.la(m.red, m.rows, g.partBuf, hb.logits)
-				}
-				if hb.headCap != nil {
-					lc.la(hb.headCap, m.rows, hb.logits, hb.logitsCap)
-				}
-				if pick {
-					lc.la(g.pickK, pickMax, hb.headOut(), g.pickIDs, g.pickOut)
-				}
-			}
-			g.HeadFolds++
-		} else if head != nil {
-			// The output norm and the vocabulary projection, in the same
-			// submission: the residual stream never comes home.
-			if hNorm == nil {
-				// No output norm: the row as it is.
-				lc.la(bs.copyRows, R*p.NEmbd, bs.x, bs.h)
-			} else if bs.normVar != nil {
-				// A LayerNorm head (C6): its mean, variance and apply, with
-				// the output norm's bias (zeros where the file has none).
-				norm(bs.x, hNorm, bs.hNormB)
-			} else {
-				lc.la(bs.normPart, R*bs.parts, bs.x, bs.part)
-			}
-			// HeadNormRepeat is a probe, not a feature: normApply is idempotent, so
-			// each repeat costs exactly one extra tiny dispatch, which prices whether
-			// the head's fixed per-token cost is dispatch structure or work (see the
-			// Metal entries in AGENTS.md).
-			if bs.normVar == nil && hNorm != nil {
-				for r := 0; r < g.HeadNormRepeat; r++ {
-					lc.la(bs.normApply, p.NEmbd, bs.x, hNorm, bs.part, bs.h)
-				}
-				lc.la(bs.normApply, p.NEmbd, bs.x, hNorm, bs.part, bs.h)
-			}
-			lc.la(bs.quantE, mainkernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
-			// HeadMatvecRepeat is the same idempotent-repeat probe on the head
-			// matvec, pricing it by repetition.
-			pickOnly := pick && g.pickMV != nil && bs.headCap == nil && R == 1
-			if pickOnly {
-				// The label pick projects the picked rows alone (pickMV).
-				lc.la(g.pickMV, pickMax, bs.head.qs, bs.head.d, bs.head.sc, bs.a, bs.ax, g.pickOut, g.pickIDs)
-				g.PickRows++
-			} else {
-				for r := 0; r < g.HeadMatvecRepeat; r++ {
-					mvrun(bs.mvHead, bs.head, bs.logits)
-				}
-				mvrun(bs.mvHead, bs.head, bs.logits)
-			}
-			if bs.headCap != nil {
-				lc.la(bs.headCap, bs.mvHead.rows, bs.logits, bs.logitsCap)
-			}
-			if argmax && err == nil {
-				err = lc.launch(g.argmaxK, 1, mainkernels.ArgmaxGroup, bs.headOut(), g.argmaxOut)
-			}
-			if sampleK > 0 && err == nil {
-				err = g.launchSample(lc, bs.headOut(), bs.mvHead.rows, sampleK, samplePen)
-			}
-			if pick && !pickOnly {
-				lc.la(g.pickK, pickMax, bs.headOut(), g.pickIDs, g.pickOut)
-			}
-		}
-		// What the last block held goes out inside emit, so a recording
-		// captures it.
-		lc.persistFlush()
 	}
 	// submit gets the sequence onto the device, by replaying a captured graph
 	// where the backend has one and by issuing the launches where it does not.
@@ -794,7 +396,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		//   in a replay.
 		// - History streamed from home: its uploads and waits are per call.
 		if (R > 1 && rag == nil) || !parOK || g.NoGraph || g.graphOff || g.PerLayerSubmit ||
-			a.paging || streamed || bs.pkv != nil && bs.pkv.st != nil {
+			a.paging {
 			te := time.Now()
 			emit()
 			g.TEmit += time.Since(te)
@@ -849,17 +451,8 @@ func (g *devTier) layersSession(s backend.Session) {
 	if fold {
 		w(hb.spanOff, g.u32b(uint32((nrow-1)*p.NEmbd)))
 	}
-	if pe != nil {
-		hr := g.bs.head
-		g.subBytes.embIDs = embIDs(g.subBytes.embIDs, pe.ids, R, hr.nrows)
-		w(g.bs.embIds, g.subBytes.embIDs)
-		if err == nil {
-			err = lc.launch(g.bs.embK, gatherN/128, 128, hr.qs, hr.d, hr.sc, g.bs.embIds, bs.x)
-		}
-		g.EmbedLaunches++
-	} else {
-		w(bs.x, f32b(hx))
-	}
+
+	w(bs.x, f32b(hx))
 	if bs.pleIn != nil {
 		w(bs.pleIn, f32b(g.pleRows(R*p.PLEWidth)))
 	}
@@ -899,34 +492,11 @@ func (g *devTier) layersSession(s backend.Session) {
 	if kst > 0 {
 		w(bs.kpos, kposs)
 	}
-	bs.ds4.ds4Writes(w)
-	if bs.pkv != nil {
-		bs.pkv.qsa.qsaWrites(w)
-	}
-	g.q4eWrites(bs.q4e, w)
-	if pk := bs.pkv; pk != nil && pk.cur != nil {
+	if pk := bs.pkv; pk != nil && len(pk.desc) > 0 {
 		w(pk.pRow, u32view(pk.desc))
 		if len(pk.descW) > 0 {
 			w(pk.pRowW, u32view(pk.descW))
 		}
-		if pk.prefill {
-			pk.pf.prefillWrites(w)
-		}
-		pk.ragWrites(w)
-		if pk.st != nil {
-			pk.st.writes(w)
-		}
-	}
-	if bs.mlab != nil && R > 1 {
-		// The batched twin of mlaPOff below: each row's rotary key sits at
-		// its own cache row plus KVLoraRank -- a padded row's in the trash
-		// slot, where its latent went.
-		po := g.subBytes.mlaPOff[:0]
-		for r := 0; r < R; r++ {
-			po = binary.LittleEndian.AppendUint32(po, binary.LittleEndian.Uint32(koffs[4*r:])+uint32(bs.mlab.lat))
-		}
-		g.subBytes.mlaPOff = po
-		w(bs.mlab.pOff, po)
 	}
 	if bs.mlaPOff != nil {
 		// The rotary key's slot inside this position's row: bs.koff holds
@@ -1018,150 +588,6 @@ func (g *devTier) layersSession(s backend.Session) {
 	default:
 		err = s.Read(bs.x, bs.hraw[:nrow*p.NEmbd*4])
 	}
-}
-
-// contigAttend is attention over a contiguous history (kvp: a non-causal
-// segment's, or a block whose history is not paged) into bs.xb: the flash
-// kernel where built, the one-kernel prefill on sm_70 or Metal's matrix
-// unit, else scores, a softcap, a window mask, the softmax and the weighted
-// sum, per query chunk where the score planes are sized for one. The block
-// encoder and the device program's attention both run it.
-func (g *devTier) contigAttend(lc *launcher, bs *blockScratch, l *layer, li, R int, kvp *kvPair, qAtt backend.Buf,
-	nCap int, sm backend.Kernel, smG, smW int, skip map[string]bool, fv *flashVariant, flash backend.Kernel, useFlash bool) error {
-	p := &bs.p
-	qdim := p.NHead * p.HeadDim
-	var err error
-	if useFlash {
-		dst := bs.xb
-		if fv.splits > 1 {
-			dst = bs.flashPart
-		}
-		args := []backend.Buf{qAtt, kvp.kc, kvp.vc, bs.n, dst}
-		if p.AttnSinks {
-			sk := l.sinks
-			if sk == nil {
-				sk = bs.noSink
-			}
-			args = append(args, sk)
-		}
-		if err == nil {
-			err = lc.launch(flash, fv.groups, bs.flashWidth, args...)
-			if err == nil && fv.splits > 1 {
-				ma := []backend.Buf{bs.flashPart, bs.xb}
-				if p.AttnSinks {
-					ma = append(ma, args[5])
-				}
-				err = lc.launch(fv.merge, R*p.NHead, 32, ma...)
-			}
-			g.FlashLaunches++
-		}
-	} else if bs.fp70 != nil && !skip["scores"] && !skip["softmax"] && !skip["acc"] && !l.windowed {
-		// The chunk's attention as one kernel: scores,
-		// softmax and the weighted V sum per key tile, the
-		// scores never written (mainkernels.FlashPrefill70).
-		fk := bs.fp70
-		if p.Window(li) > 0 {
-			fk = bs.fp70W
-		}
-		if err == nil {
-			err = lc.launch(fk, mainkernels.FlashPrefill70Groups(mainkernels.FlashPrefill70Shape{Heads: p.NHead, Rows: R}),
-				mainkernels.FlashPrefill70Threads, qAtt, kvp.kc, kvp.vc, bs.n, bs.xb)
-		}
-		g.FlashPrefills++
-	} else if bs.fpT != nil && !skip["scores"] && !skip["softmax"] && !skip["acc"] && !l.windowed {
-		// The same, on Metal's matrix unit (mainkernels.FlashPrefillTile).
-		fk := bs.fpT
-		if p.Window(li) > 0 {
-			fk = bs.fpTW
-		}
-		if err == nil {
-			err = lc.launch(fk, mainkernels.FlashTileGroups(p.NHead, R, bs.fpTile),
-				bs.fpTile.Threads(), qAtt, kvp.kc, kvp.vc, bs.n, bs.xb)
-		}
-		g.FlashPrefills++
-	} else {
-		// One pass over the rows, or one per query chunk of a vision
-		// block whose score planes are sized for a chunk (arows):
-		// the chunk's queries gathered into qc, its output scattered
-		// back from xc.
-		run := func(qIn, out, win backend.Buf, R int) {
-			if !skip["scores"] {
-				// A local layer takes the windowed pair: bs.n's key counts are
-				// causal and shared, while the window is per layer and baked in.
-				scores, scoresMMA := bs.scores, bs.scoresMMA
-				if p.Window(li) > 0 {
-					scores, scoresMMA = bs.scoresW, bs.scoresMMAW
-				}
-				scores70 := bs.scores70
-				if p.Window(li) > 0 {
-					scores70 = bs.scores70W
-				}
-				if scoresMMA != nil {
-					// One warp per 16 query rows x 8*attnNT key positions.
-					kg := (nCap + 8*g.tiles.attnNT - 1) / (8 * g.tiles.attnNT)
-					lc.la(scoresMMA, (R/16)*p.NHead*kg*32, qIn, kvp.kc, bs.n, bs.att)
-				} else if scores70 != nil {
-					lc.la(scores70, mainkernels.AttnScoresMMA70Warps(p.NHead, R, nCap, volta70AttnMT,
-						volta70AttnNT)*32, qIn, kvp.kc, bs.n, bs.att)
-				} else {
-					// The key axis is covered by ceil(nCap/ktile)
-					// threads, which is the same G the kernel derives
-					// from pN.
-					kg := (nCap + bs.ktile - 1) / bs.ktile
-					lc.la(scores, (R/bs.qtile)*p.NHead*kg, qIn, kvp.kc, bs.n, bs.att)
-				}
-			}
-			att := bs.att
-			if bs.softcap != nil {
-				lc.la(bs.softcap, R*p.NHead*bs.sstride, bs.att, bs.attCap)
-				att = bs.attCap
-			}
-			// Qwen2.5-VL's windowed blocks: every key outside a
-			// row's window to -inf before the softmax, the windows
-			// of this pass's rows in win.
-			// Packed sequences: every key outside a row's own
-			// sequence, the same mask over the runs (SetSeqRuns).
-			if win != nil {
-				lc.la(bs.winMask, R*p.NHead*bs.sstride, att, win, bs.attWin)
-				att = bs.attWin
-			}
-			if err == nil && !skip["softmax"] {
-				// Not la(): softmax is the one kernel whose group is
-				// not 128 wide. With 32 lanes to a head the group IS
-				// the warp, which is what lets the shuffle assume
-				// lane == tid.
-				if bs.p.AttnSinks {
-					sk := l.sinks
-					if sk == nil {
-						sk = bs.noSink
-					}
-					err = lc.launch(sm, smG, smW, att, bs.n, bs.prob, sk)
-				} else {
-					err = lc.launch(sm, smG, smW, att, bs.n, bs.prob)
-				}
-			}
-			if bs.accSplit > 1 {
-				lc.la(bs.attnAcc, qdim*bs.accSplit, bs.prob, kvp.vc, bs.n, g.partBuf)
-				lc.la(bs.attnRed, qdim, g.partBuf, out)
-			} else if !skip["acc"] && bs.acc70 != nil {
-				lc.la(bs.acc70, mainkernels.AttnAccMMA70Warps(p.NHead, p.HeadDim, R,
-					volta70AccMT, volta70AttnNT)*32, bs.prob, kvp.vc, bs.n, out)
-			} else if !skip["acc"] {
-				lc.la(bs.attnAcc, R*qdim/bs.atile, bs.prob, kvp.vc, bs.n, out)
-			}
-		}
-		if bs.arows > 0 && bs.arows < R {
-			for c := range bs.qoffs {
-				lc.la(bs.qGather, bs.arows*qdim, qAtt, bs.qc, bs.qoffs[c])
-				run(bs.qc, bs.xc, bs.winOf(l, c), bs.arows)
-				lc.la(bs.xScatter, bs.arows*qdim, bs.xc, bs.xb, bs.qoffs[c])
-			}
-			g.VisionAttnChunks += len(bs.qoffs)
-		} else {
-			run(qAtt, bs.xb, bs.winOf(l, 0), R)
-		}
-	}
-	return err
 }
 
 // q8Pair is the int8 operand buffers of slot s where it is one beside the

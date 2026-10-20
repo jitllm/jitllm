@@ -5,8 +5,6 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // Qwen3.8-Flash-Next on the device (nn.LayerPlan.Q4E; engine/model/q4e.go is
@@ -138,102 +136,6 @@ type q4eScratch struct {
 	stage []float32
 }
 
-// initQ4E builds bs's Qwen3.8-Flash-Next set. Callers hold g.mu.
-func (g *devTier) initQ4E(bs *blockScratch) error {
-	p := &bs.p
-	q := p.Q4E
-	if q == nil {
-		return nil
-	}
-	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
-	R, d, h := bs.rows, p.NEmbd, q.HCMult
-	hd, rank := h*d, q.HCLowRank
-	actWin := p.ActWin
-	if actWin <= 0 {
-		actWin = 32
-	}
-	x := &q4eScratch{h: h, rank: rank}
-	bs.q4e = x
-	var err error
-	comp := func(dst *backend.Kernel, mk func() (*ir.Kernel, error)) {
-		if err != nil {
-			return
-		}
-		var kk *ir.Kernel
-		if kk, err = mk(); err != nil {
-			return
-		}
-		*dst, err = g.dev.Compile(kk)
-	}
-	al := func(dst *backend.Buf, n int) {
-		if err == nil && n > 0 {
-			*dst, err = g.dev.Alloc(n * 4)
-		}
-	}
-	eps := float32(p.RMSEps)
-	place := mainkernels.Q4EPlaceGated
-	switch q.Fault {
-	case nn.Q4EFaultPlainPlace:
-		place = mainkernels.Q4EPlacePlain
-	case nn.Q4EFaultHalfPlace:
-		place = mainkernels.Q4EPlaceHalf
-	}
-	comp(&x.normS, func() (*ir.Kernel, error) { return mainkernels.Q4EGroupNorm(d, h, R, eps, true) })
-	comp(&x.quantHD, func() (*ir.Kernel, error) { return quantizeRows(R, hd, actWin) })
-	comp(&x.quantLR, func() (*ir.Kernel, error) { return quantizeRows(R, rank, actWin) })
-	comp(&x.silu, func() (*ir.Kernel, error) {
-		return mainkernels.Q4EScaleSiLU(R*rank, h, q.Fault == nn.Q4EFaultUnscaledGate)
-	})
-	comp(&x.gateMix, func() (*ir.Kernel, error) {
-		return mainkernels.Q4EGateMix(d, h, R, q.Fault == nn.Q4EFaultNoGate)
-	})
-	comp(&x.injK, func() (*ir.Kernel, error) { return mainkernels.Q4EInject(R*h, h, place) })
-	comp(&x.place, func() (*ir.Kernel, error) { return mainkernels.Q4EPlace(d, h, R) })
-	al(&x.xn, R*hd)
-	al(&x.gate, R*hd)
-	al(&x.lo, R*rank)
-	al(&x.lo2, R*rank)
-	al(&x.mix, R*d)
-	al(&x.inj, R*h)
-	al(&x.w, R*h)
-	al(&x.aHD, R*pad32(hd))
-	al(&x.axHD, 3*R*(pad32(hd)/32))
-	al(&x.aLR, R*pad32(rank))
-	al(&x.axLR, 3*R*(pad32(rank)/32))
-	// The n-gram set is the model's: a scratch serves every block of its
-	// shape, the n-gram block among them.
-	if W := q.NGramWidth; W != 0 && p.Recurrent.TailLen != 0 {
-		x.width = W
-		r := p.Recurrent
-		taps, dil := q.NGramConv, q.NGramDil
-		// The history is the tail's last positions, after the predecessors
-		// the host keeps.
-		off := r.StateLen - hd*dil*(taps-1)
-		comp(&x.quantW, func() (*ir.Kernel, error) { return quantizeRows(R, W, actWin) })
-		comp(&x.normR, func() (*ir.Kernel, error) { return mainkernels.Q4EGroupNorm(d, h, R, eps, false) })
-		comp(&x.streamDot, func() (*ir.Kernel, error) { return mainkernels.Q4EStreamDot(d, h, R) })
-		comp(&x.gatedVal, func() (*ir.Kernel, error) { return mainkernels.Q4EGatedValue(d, h, R) })
-		comp(&x.ngConv, func() (*ir.Kernel, error) {
-			return mainkernels.Q4ENGramConv(hd, taps, dil, R, r.StateLen, off, false, q.Fault == nn.Q4EFaultNoNGramConv)
-		})
-		comp(&x.ngAdd, func() (*ir.Kernel, error) { return mainkernels.Q4ENGramAdd(d, h, R) })
-		al(&x.emb, R*W)
-		al(&x.aW, R*pad32(W))
-		al(&x.axW, 3*R*(pad32(W)/32))
-		al(&x.key, R*hd)
-		al(&x.val, R*d)
-		al(&x.kn, R*hd)
-		al(&x.qn, R*hd)
-		al(&x.dot, R*h)
-		al(&x.gv, R*hd)
-		al(&x.gvn, R*hd)
-		al(&x.conv, R*hd)
-		al(&x.xg, R*hd)
-		x.stage = make([]float32, R*W)
-	}
-	return err
-}
-
 // free releases the set's kernels and buffers.
 func (x *q4eScratch) free(g *devShared) {
 	if x == nil {
@@ -276,45 +178,6 @@ func (g *devTier) q4eWrites(x *q4eScratch, w func(backend.Buf, []byte)) {
 	w(x.emb, f32b(x.stage))
 }
 
-// q4eMix is a hyper-connection's mix over the R rows of src (every stream):
-// the sublayer's input in x.mix, and the placement weights in x.w. down, up
-// and inj are the hyper-connection's projections, norm its grouped norm.
-func (g *devTier) q4eMix(lc *launcher, bs *blockScratch, R int, src, norm backend.Buf,
-	down, up, inj *resident, mvDown, mvUp, mvInj mv,
-	mvrunAct func(mv, *resident, backend.Buf, backend.Buf, backend.Buf, backend.Buf)) backend.Buf {
-	x := bs.q4e
-	hd := x.h * bs.p.NEmbd
-	ds4Rows(lc, x.normS, R*x.h, src, norm, x.xn)
-	lc.la(x.quantHD, mainkernels.QuantizeThreads(R*pad32(hd)/32), x.xn, x.aHD, x.axHD)
-	if bs.p.Q4E.Fault != nn.Q4EFaultNoGate {
-		mvrunAct(mvDown, down, x.lo, x.aHD, x.axHD, x.xn)
-		lc.la(x.silu, R*x.rank, x.lo, x.lo2)
-		lc.la(x.quantLR, mainkernels.QuantizeThreads(R*pad32(x.rank)/32), x.lo2, x.aLR, x.axLR)
-		mvrunAct(mvUp, up, x.gate, x.aLR, x.axLR, x.lo2)
-	}
-	lc.la(x.gateMix, R*bs.p.NEmbd, x.xn, x.gate, x.mix)
-	if inj != nil {
-		mvrunAct(mvInj, inj, x.inj, x.aHD, x.axHD, x.xn)
-		lc.la(x.injK, R*x.h, x.inj, x.w)
-	}
-	g.Q4EMixes++
-	return x.mix
-}
-
-// q4eAttnIn is block l's attention (or delta rule) input before its norm:
-// the n-gram block's embedding added into the streams (x.xg), then the mix.
-// inS and outS are the block's recurrent pool halves the call reads and
-// writes, and conv the n-gram convolution for the call's rows (x.ngConv, or
-// a ragged step's per-run one).
-func (g *devTier) q4eAttnIn(lc *launcher, bs *blockScratch, l *layer, R int,
-	mvrunAct func(mv, *resident, backend.Buf, backend.Buf, backend.Buf, backend.Buf),
-	inS, outS backend.Buf, conv backend.Kernel) backend.Buf {
-	src := g.q4eStreams(bs, l)
-	if l.q4e.ngram {
-		g.q4eNGram(lc, bs, l, R, mvrunAct, inS, outS, conv)
-	}
-	return g.q4eMix(lc, bs, R, src, l.q4e.normA, l.hcAD, l.hcAU, l.hcAI, l.mvHAD, l.mvHAU, l.mvHAI, mvrunAct)
-}
 
 // q4eStreams is the streams block l's attention reads: bs.x, or on the
 // n-gram block bs.x with its embedding added.
@@ -331,36 +194,9 @@ func (g *devTier) q4ePostAttn(lc *launcher, bs *blockScratch, l *layer, R int, y
 	lc.la(bs.q4e.place, bs.q4e.h*R*bs.p.NEmbd, g.q4eStreams(bs, l), y, bs.q4e.w, bs.x2)
 }
 
-// q4eFFNIn is block l's mixture input before its norm: the mix over bs.x2.
-func (g *devTier) q4eFFNIn(lc *launcher, bs *blockScratch, l *layer, R int,
-	mvrunAct func(mv, *resident, backend.Buf, backend.Buf, backend.Buf, backend.Buf)) backend.Buf {
-	return g.q4eMix(lc, bs, R, bs.x2, l.q4e.normF, l.hcFD, l.hcFU, l.hcFI, l.mvHFD, l.mvHFU, l.mvHFI, mvrunAct)
-}
 
 // q4ePostFFN writes every stream of bs.x from bs.x2 with the mixture's output
 // y placed.
 func (g *devTier) q4ePostFFN(lc *launcher, bs *blockScratch, R int, y backend.Buf) {
 	lc.la(bs.q4e.place, bs.q4e.h*R*bs.p.NEmbd, bs.x2, y, bs.q4e.w, bs.x)
-}
-
-// q4eNGram adds the n-gram embedding of the R rows (x.emb, staged by
-// q4eWrites) into the streams of bs.x, into x.xg, and moves each sequence's
-// convolution history on from its in slot of inS to its out slot of outS.
-func (g *devTier) q4eNGram(lc *launcher, bs *blockScratch, l *layer, R int,
-	mvrunAct func(mv, *resident, backend.Buf, backend.Buf, backend.Buf, backend.Buf),
-	inS, outS backend.Buf, conv backend.Kernel) {
-	x, b := bs.q4e, l.q4e
-	d := bs.p.NEmbd
-	hd := x.h * d
-	lc.la(x.quantW, mainkernels.QuantizeThreads(R*pad32(x.width)/32), x.emb, x.aW, x.axW)
-	mvrunAct(l.mvNGK, l.ngKey, x.key, x.aW, x.axW, x.emb)
-	mvrunAct(l.mvNGV, l.ngVal, x.val, x.aW, x.axW, x.emb)
-	ds4Rows(lc, x.normR, R*x.h, x.key, b.ngK, x.kn)
-	ds4Rows(lc, x.normS, R*x.h, bs.x, b.ngQ, x.qn)
-	ds4Rows(lc, x.streamDot, R*x.h, x.kn, x.qn, x.dot)
-	lc.la(x.gatedVal, R*hd, x.dot, x.val, x.gv)
-	ds4Rows(lc, x.normR, R*x.h, x.gv, b.ngC, x.gvn)
-	lc.la(conv, hd, inS, x.gvn, b.ngConv, bs.dRows, x.conv, outS)
-	lc.la(x.ngAdd, x.h*R*d, bs.x, x.gv, x.conv, x.xg)
-	g.Q4ENGram++
 }

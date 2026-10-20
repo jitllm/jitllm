@@ -2,12 +2,13 @@ package model
 
 import (
 	"encoding/binary"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
 	"math"
 	"math/rand"
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 
 	"github.com/jitllm/jitllm/format/jlm"
 

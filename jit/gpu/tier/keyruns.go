@@ -1,12 +1,10 @@
 package tier
 
 import (
-	"encoding/binary"
 	"fmt"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // Key runs (nn.KeyRunDevice): every mask this tier runs is, per row, an
@@ -28,32 +26,6 @@ func (g *GPU) SetKeyRuns(full, windowed []nn.KeyRun) bool {
 	return g.setKeyRuns(0, full, windowed)
 }
 
-// setKeyRuns is SetKeyRuns for session sid. The full runs are the session's:
-// its calls' rows are its own sequence's. The windows are staged in the
-// tower's set, which is one per device (visrows.go) and runs one picture at a
-// time.
-func (g *GPU) setKeyRuns(sid uint64, full, windowed []nn.KeyRun) bool {
-	g.mu.Lock()
-	ds := g.devs
-	g.mu.Unlock()
-	for _, d := range ds {
-		d.mu.Lock()
-		ss := d.sessOf(sid)
-		ss.bidir = append(ss.bidir[:0], full...)
-		ss.winRuns = append(ss.winRuns[:0], windowed...)
-		ss.winPerRow = false
-		d.mu.Unlock()
-		// Staged now, so a picture whose windows the device cannot hold is
-		// refused here; staged again at each of the session's tower calls
-		// (layersCall), since another session's picture may be staged in
-		// between.
-		if !d.setWindowsFor(sid) {
-			return false
-		}
-	}
-	return true
-}
-
 // SetRowWindows records one window a row for the NonCausal calls that follow
 // on every device (nn.RowWindowDevice): row r of a call attends inside
 // wins[r] on its Windowed blocks. A symmetric sliding window is this
@@ -61,25 +33,6 @@ func (g *GPU) setKeyRuns(sid uint64, full, windowed []nn.KeyRun) bool {
 // and its rows' windows overlap, which SetKeyRuns' partition cannot say.
 func (g *GPU) SetRowWindows(wins []nn.KeyRun) bool {
 	return g.setRowWindows(0, wins)
-}
-
-// setRowWindows is SetRowWindows for session sid.
-func (g *GPU) setRowWindows(sid uint64, wins []nn.KeyRun) bool {
-	g.mu.Lock()
-	ds := g.devs
-	g.mu.Unlock()
-	for _, d := range ds {
-		d.mu.Lock()
-		ss := d.sessOf(sid)
-		ss.bidir = ss.bidir[:0]
-		ss.winRuns = append(ss.winRuns[:0], wins...)
-		ss.winPerRow = true
-		d.mu.Unlock()
-		if !d.setWindowsFor(sid) {
-			return false
-		}
-	}
-	return true
 }
 
 // bidirCount is row r's key count under the runs, at position pos+r: the end
@@ -114,6 +67,77 @@ func bidirCheck(runs []nn.KeyRun, pos, nrow int, p *nn.LayerPlan, paged bool) st
 		}
 	}
 	return ""
+}
+
+// winOf is the windows of query chunk c for a windowed block l, the packed
+// sequences' runs for an unwindowed non-causal block when sequences are
+// packed (SetSeqRuns: a windowed block's windows are inside them already),
+// and nil for every other.
+func (bs *blockScratch) winOf(l *layer, c int) backend.Buf {
+	switch {
+	case l.windowed:
+		return bs.vwins[c]
+	case l.nonCausal && bs.vsegRows > 0:
+		return bs.vsegs[c]
+	}
+	return nil
+}
+
+// SetSeqRuns records the packed sequences for the non-causal calls that
+// follow on every device (nn.SeqRunsDevice).
+func (g *GPU) SetSeqRuns(runs []nn.KeyRun) bool {
+	return g.setSeqRuns(0, runs)
+}
+
+// SetSeqRuns forwards under the session's call locks.
+func (s *gpuSession) SetSeqRuns(runs []nn.KeyRun) bool {
+	defer s.leave(s.step())
+	return s.g.setSeqRuns(s.sid, runs)
+}
+
+// setKeyRuns is SetKeyRuns for session sid. The full runs are the session's:
+// its calls' rows are its own sequence's. The windows are staged in the
+// tower's set, which is one per device (visrows.go) and runs one picture at a
+// time.
+func (g *GPU) setKeyRuns(sid uint64, full, windowed []nn.KeyRun) bool {
+	g.mu.Lock()
+	ds := g.devs
+	g.mu.Unlock()
+	for _, d := range ds {
+		d.mu.Lock()
+		ss := d.sessOf(sid)
+		ss.bidir = append(ss.bidir[:0], full...)
+		ss.winRuns = append(ss.winRuns[:0], windowed...)
+		ss.winPerRow = false
+		d.mu.Unlock()
+		// Staged now, so a picture whose windows the device cannot hold is
+		// refused here; staged again at each of the session's tower calls
+		// (layersCall), since another session's picture may be staged in
+		// between.
+		if !d.setWindowsFor(sid) {
+			return false
+		}
+	}
+	return true
+}
+
+// setRowWindows is SetRowWindows for session sid.
+func (g *GPU) setRowWindows(sid uint64, wins []nn.KeyRun) bool {
+	g.mu.Lock()
+	ds := g.devs
+	g.mu.Unlock()
+	for _, d := range ds {
+		d.mu.Lock()
+		ss := d.sessOf(sid)
+		ss.bidir = ss.bidir[:0]
+		ss.winRuns = append(ss.winRuns[:0], wins...)
+		ss.winPerRow = true
+		d.mu.Unlock()
+		if !d.setWindowsFor(sid) {
+			return false
+		}
+	}
+	return true
 }
 
 // setWindowsFor stages session sid's windows (devSess.winRuns) in lane0's
@@ -184,134 +208,8 @@ func (g *devTier) setWindowsLocked(runs []nn.KeyRun, perRow bool) bool {
 	if ar <= 0 {
 		ar = bs.rows
 	}
-	if !g.winMaskLocked(bs) {
-		return false
-	}
-	if bs.vwins == nil {
-		w := g.scratchWin() // the scratch's own buffers (scratch.go)
-		defer w.close()
-		wins := make([]backend.Buf, bs.rows/ar)
-		for i := range wins {
-			var err error
-			if wins[i], err = g.dev.Alloc(ar * 8); err != nil {
-				for _, b := range wins[:i] {
-					b.Free()
-				}
-				return fail("windowed runs: %v", err)
-			}
-		}
-		bs.vwins = wins
-	}
-	if bs.convCentred != nil && bs.vwinAll == nil {
-		w := g.scratchWin()
-		var err error
-		bs.vwinAll, err = g.dev.Alloc(bs.rows * 8)
-		w.close()
-		if err != nil {
-			return fail("row windows for the convolution: %v", err)
-		}
-	}
-	// Every row's window, the scratch's padded rows past n given the whole
-	// image: they are never read, and a row with no key would softmax to NaN.
-	if cap(g.winBuf) < bs.rows*8 {
-		g.winBuf = make([]byte, bs.rows*8)
-	}
-	buf := g.winBuf[:bs.rows*8]
-	for r := 0; r < bs.rows; r++ {
-		binary.LittleEndian.PutUint32(buf[8*r:], 0)
-		binary.LittleEndian.PutUint32(buf[8*r+4:], uint32(n))
-	}
-	if perRow {
-		for r, w := range runs {
-			if w.Lo < 0 || w.Hi <= w.Lo || w.Hi > n || r < w.Lo || r >= w.Hi {
-				return fail("row windows: row %d's [%d, %d) is not a window of %d rows holding the row", r, w.Lo, w.Hi, n)
-			}
-			binary.LittleEndian.PutUint32(buf[8*r:], uint32(w.Lo))
-			binary.LittleEndian.PutUint32(buf[8*r+4:], uint32(w.Hi))
-		}
-	}
-	prev := 0
-	for i := 0; i < len(segs); i += 2 {
-		lo, hi := segs[i], segs[i+1]
-		if lo != prev || hi <= lo {
-			return fail("windowed runs: [%d, %d) after %d does not partition the rows", lo, hi, prev)
-		}
-		for r := lo; r < hi; r++ {
-			binary.LittleEndian.PutUint32(buf[8*r:], uint32(lo))
-			binary.LittleEndian.PutUint32(buf[8*r+4:], uint32(hi))
-		}
-		prev = hi
-	}
-	for i, b := range bs.vwins {
-		if err := b.Write(buf[i*ar*8 : (i+1)*ar*8]); err != nil {
-			return fail("windowed runs: %v", err)
-		}
-	}
-	if bs.vwinAll != nil {
-		if err := bs.vwinAll.Write(buf); err != nil {
-			return fail("row windows for the convolution: %v", err)
-		}
-	}
-	bs.vwinRows = n
-	return true
-}
-
-// winMaskLocked builds bs's window mask and the scores it writes, once, for
-// the windows and the packed sequences alike. Callers hold g.mu.
-func (g *devTier) winMaskLocked(bs *blockScratch) bool {
-	if bs.winMask != nil {
-		return true
-	}
-	ar := bs.arows
-	if ar <= 0 {
-		ar = bs.rows
-	}
-	w := g.scratchWin() // the scratch's own buffers (scratch.go)
-	defer w.close()
-	k, err := mainkernels.WindowMaskRows(ar, bs.p.NHead, bs.sstride)
-	if err != nil {
-		g.LastErr = "windowed runs: " + err.Error()
-		return false
-	}
-	c, err := g.dev.Compile(k)
-	if err != nil {
-		g.LastErr = fmt.Sprintf("windowed runs: %s declined the mask: %v", g.dev.API(), err)
-		return false
-	}
-	att, err := g.dev.Alloc(ar * bs.p.NHead * bs.sstride * 4)
-	if err != nil {
-		g.closeKern(c)
-		g.LastErr = "windowed runs: " + err.Error()
-		return false
-	}
-	bs.winMask, bs.attWin = c, att
-	return true
-}
-
-// winOf is the windows of query chunk c for a windowed block l, the packed
-// sequences' runs for an unwindowed non-causal block when sequences are
-// packed (SetSeqRuns: a windowed block's windows are inside them already),
-// and nil for every other.
-func (bs *blockScratch) winOf(l *layer, c int) backend.Buf {
-	switch {
-	case l.windowed:
-		return bs.vwins[c]
-	case l.nonCausal && bs.vsegRows > 0:
-		return bs.vsegs[c]
-	}
-	return nil
-}
-
-// SetSeqRuns records the packed sequences for the non-causal calls that
-// follow on every device (nn.SeqRunsDevice).
-func (g *GPU) SetSeqRuns(runs []nn.KeyRun) bool {
-	return g.setSeqRuns(0, runs)
-}
-
-// SetSeqRuns forwards under the session's call locks.
-func (s *gpuSession) SetSeqRuns(runs []nn.KeyRun) bool {
-	defer s.leave(s.step())
-	return s.g.setSeqRuns(s.sid, runs)
+	g.LastErr = "the window mask has no composed form"
+	return false
 }
 
 // setSeqRuns is SetSeqRuns for session sid: kept with the session's windows
@@ -356,54 +254,6 @@ func (g *devTier) setSeqsLocked(runs []nn.KeyRun) bool {
 	if n > bs.rows {
 		return fail("packed sequences over %d rows on a scratch of %d", n, bs.rows)
 	}
-	if !g.winMaskLocked(bs) {
-		return false
-	}
-	ar := bs.arows
-	if ar <= 0 {
-		ar = bs.rows
-	}
-	if bs.vsegs == nil {
-		w := g.scratchWin()
-		defer w.close()
-		segs := make([]backend.Buf, bs.rows/ar)
-		for i := range segs {
-			var err error
-			if segs[i], err = g.dev.Alloc(ar * 8); err != nil {
-				for _, b := range segs[:i] {
-					b.Free()
-				}
-				return fail("packed sequences: %v", err)
-			}
-		}
-		bs.vsegs = segs
-	}
-	if cap(g.winBuf) < bs.rows*8 {
-		g.winBuf = make([]byte, bs.rows*8)
-	}
-	buf := g.winBuf[:bs.rows*8]
-	// Padded rows past n see every row: never read, and a row with no key
-	// would softmax to NaN.
-	for r := 0; r < bs.rows; r++ {
-		binary.LittleEndian.PutUint32(buf[8*r:], 0)
-		binary.LittleEndian.PutUint32(buf[8*r+4:], uint32(n))
-	}
-	prev := 0
-	for _, s := range runs {
-		if s.Lo != prev || s.Hi <= s.Lo {
-			return fail("packed sequences: [%d, %d) after %d does not partition the rows", s.Lo, s.Hi, prev)
-		}
-		for r := s.Lo; r < s.Hi; r++ {
-			binary.LittleEndian.PutUint32(buf[8*r:], uint32(s.Lo))
-			binary.LittleEndian.PutUint32(buf[8*r+4:], uint32(s.Hi))
-		}
-		prev = s.Hi
-	}
-	for i, b := range bs.vsegs {
-		if err := b.Write(buf[i*ar*8 : (i+1)*ar*8]); err != nil {
-			return fail("packed sequences: %v", err)
-		}
-	}
-	bs.vsegRows = n
-	return true
+	g.LastErr = "the window mask has no composed form"
+	return false
 }

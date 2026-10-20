@@ -5,7 +5,6 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // A vision tower's set is sized to the picture it encodes.
@@ -246,6 +245,156 @@ func (g *devTier) towerWindowed() bool {
 	return false
 }
 
+// towerKVAt reallocates every tower k/v pair for visCap rows, moving its
+// charge by the difference. Callers hold g.mu.
+func (g *devTier) towerKVAt(p *nn.LayerPlan) bool {
+	cp := g.capped(p)
+	cache, vcache := g.kvCacheBytes(p, cp.MaxSeq)
+	for _, kvp := range g.towerKV() {
+		for _, b := range []*backend.Buf{&kvp.kc, &kvp.vc} {
+			if *b != nil {
+				(*b).Free()
+				*b = nil
+			}
+		}
+		g.refund(kvp.bytes)
+		g.KVBytes -= min(g.KVBytes, kvp.bytes)
+		kvp.bytes = 0
+		var err error
+		if kvp.kc, err = g.dev.Alloc(cache); err == nil && vcache > 0 {
+			kvp.vc, err = g.dev.Alloc(vcache)
+		}
+		if err != nil {
+			g.LastErr = fmt.Sprintf("the tower's k/v pair at %d rows: %v", cp.MaxSeq, err)
+			return false
+		}
+		kvp.bytes = uint64(cache + vcache)
+		g.charge(kvp.bytes)
+		g.KVBytes += kvp.bytes
+	}
+	for _, l := range g.layers {
+		if l != nil && l.geo == g.geoCur && l.kvBytes > 0 {
+			l.kvBytes = uint64(cache + vcache)
+		}
+	}
+	return true
+}
+
+// dropIdleTower frees the non-causal set when no tower block is left on the
+// device: the last one released, or a first one the budget refused after its
+// set was built. Callers hold g.mu.
+func (g *devTier) dropIdleTower() {
+	if g.visCap == 0 || g.holdsTower() {
+		return
+	}
+	home := g.geoCur
+	for _, k := range []geoKey{geoNonCausal, geoNonCausal | geoNCHead} {
+		g.useGeom(k)
+		if g.bs != nil || len(g.bbs) > 0 {
+			g.dropGraph()
+			for w := range g.bbs {
+				g.dropBatch(w)
+			}
+			g.dropScratch(g.bs)
+			g.bs = nil
+		}
+	}
+	g.useGeom(home)
+	g.visCap, g.visMax = 0, 0
+}
+
+// hasHeadSet reports a decision head's own non-causal set on this device
+// (geoNCHead). Callers hold g.mu.
+func (g *devTier) hasHeadSet() bool {
+	for _, l := range g.layers {
+		if l != nil && l.geo == geoNonCausal|geoNCHead {
+			return true
+		}
+	}
+	return false
+}
+
+// ReserveRows asks every device (nn.RowsReserver); one holding no tower block
+// says yes.
+func (g *GPU) ReserveRows(n int) bool {
+	g.mu.Lock()
+	ds := g.devs
+	g.mu.Unlock()
+	for _, d := range ds {
+		if !d.ReserveRows(n) {
+			return false
+		}
+	}
+	return true
+}
+
+// ReserveRows forwards under the session's call locks: a resize rebuilds the
+// set another session's call would run in.
+func (s *gpuSession) ReserveRows(n int) bool {
+	defer s.leave(s.enter())
+	return s.g.ReserveRows(n)
+}
+
+// TowerChunk is the rows every device's row-chunked tower set takes a call,
+// 0 when every set takes a picture whole (nn.RowChunker). Devices that
+// disagree report the narrowest: a phase call is cut to it on all of them.
+func (g *GPU) TowerChunk() int {
+	g.mu.Lock()
+	ds := g.devs
+	g.mu.Unlock()
+	c := 0
+	for _, d := range ds {
+		if k := d.TowerChunk(); k > 0 && (c == 0 || k < c) {
+			c = k
+		}
+	}
+	return c
+}
+
+// LayersPhase is Layers over one phase of a row-chunked non-causal block
+// (nn.RowChunker): rows [pos, pos+n) of a picture of keys rows. Phase 1
+// writes the rows' k and v at their positions and leaves x as it was;
+// phase 2 runs their queries over all keys rows' k and v and the rest of
+// the blocks, writing their x. Every chunk's phase 1 runs before any
+// chunk's phase 2, block by block.
+func (g *GPU) LayersPhase(lo, hi, pos, n, keys, phase int, x, cs, csSWA []float32) bool {
+	return g.layersPhase(0, lo, hi, pos, n, keys, phase, x, cs, csSWA)
+}
+
+func (g *GPU) layersPhase(sid uint64, lo, hi, pos, n, keys, phase int, x, cs, csSWA []float32) bool {
+	if phase != 1 && phase != 2 || keys < pos+n {
+		return false
+	}
+	g.mu.Lock()
+	ds := g.devs
+	g.mu.Unlock()
+	set := func(ph, k int) {
+		for _, d := range ds {
+			d.mu.Lock()
+			ss := d.sessOf(sid)
+			ss.ncPhase, ss.ncKeys = ph, k
+			if ph != 0 {
+				d.TowerPhases++
+			}
+			d.mu.Unlock()
+		}
+	}
+	set(phase, keys)
+	defer set(0, 0)
+	return g.layersFor(sid, lo, hi, pos, n, x, cs, csSWA, nil)
+}
+
+// TowerChunk and LayersPhase forward under the session's locks.
+func (s *gpuSession) TowerChunk() int {
+	defer s.leave(s.enter())
+	return s.g.TowerChunk()
+}
+
+func (s *gpuSession) LayersPhase(lo, hi, pos, n, keys, phase int, x, cs, csSWA []float32) bool {
+	defer s.leave(s.inputsTo(s.step()))
+	return s.g.layersPhase(s.sid, lo, hi, pos, n, keys, phase, x, cs, csSWA)
+}
+
 // chunkTower builds the non-causal set row-chunked when no whole set for a
 // picture of n rows fits: k/v pairs and score rows for want keys, the rest
 // of the scratch for a chunk of rows, the widest chunk that fits, halving
@@ -398,125 +547,12 @@ func (g *devTier) towerAt(p *nn.LayerPlan, rows int) bool {
 	return ok
 }
 
-// towerKVAt reallocates every tower k/v pair for visCap rows, moving its
-// charge by the difference. Callers hold g.mu.
-func (g *devTier) towerKVAt(p *nn.LayerPlan) bool {
-	cp := g.capped(p)
-	cache, vcache := g.kvCacheBytes(p, cp.MaxSeq)
-	for _, kvp := range g.towerKV() {
-		for _, b := range []*backend.Buf{&kvp.kc, &kvp.vc} {
-			if *b != nil {
-				(*b).Free()
-				*b = nil
-			}
-		}
-		g.refund(kvp.bytes)
-		g.KVBytes -= min(g.KVBytes, kvp.bytes)
-		kvp.bytes = 0
-		var err error
-		if kvp.kc, err = g.dev.Alloc(cache); err == nil && vcache > 0 {
-			kvp.vc, err = g.dev.Alloc(vcache)
-		}
-		if err != nil {
-			g.LastErr = fmt.Sprintf("the tower's k/v pair at %d rows: %v", cp.MaxSeq, err)
-			return false
-		}
-		kvp.bytes = uint64(cache + vcache)
-		g.charge(kvp.bytes)
-		g.KVBytes += kvp.bytes
-	}
-	for _, l := range g.layers {
-		if l != nil && l.geo == g.geoCur && l.kvBytes > 0 {
-			l.kvBytes = uint64(cache + vcache)
-		}
-	}
-	return true
-}
-
-// towerTwins builds every tower block's batched twins at the scratch's rows,
+// towerTwins forms every tower block's program at the scratch's rows,
 // which PrepLayer builds for a placed block and a resize must build for all:
 // a Compile from inside a submission deadlocks. Callers hold g.mu.
 func (g *devTier) towerTwins() bool {
-	for li, l := range g.layers {
-		if l == nil || l.geo != g.geoCur {
-			continue
-		}
-		for _, m := range []*mv{&l.mvq, &l.mvk, &l.mvv, &l.mvo, &l.mvg, &l.mvu, &l.mvd, &l.mvSG, &l.mvBA, &l.mvSO} {
-			if m.kern == nil {
-				continue
-			}
-			if _, ok := g.batchMV(*m, g.bs.rows, g.bs.tok); !ok {
-				g.LastErr = fmt.Sprintf("non-causal block %d: no batched twin at %d rows", li, g.bs.rows)
-				return false
-			}
-		}
-		// A block's own activation bakes the set's rows too.
-		if l.actK != nil {
-			l.actK.Close()
-			l.actK = nil
-		}
-		if !g.ownActKern(l) {
-			return false
-		}
-	}
+	g.ensureFused(0, len(g.layers), g.bs.rows, g.bs, nil)
 	return true
-}
-
-// ownActKern builds non-causal block l's own activation kernel at the set's
-// rows, where its MLP's gating or activation is not the set's (layer.actK):
-// the set's bs.actMul bakes the first block's. Callers hold g.mu with the
-// non-causal set in use.
-func (g *devTier) ownActKern(l *layer) bool {
-	bs := g.bs
-	if bs == nil || (l.ungated == ungatedFFN(&bs.p) && l.act == bs.p.Act) {
-		return true
-	}
-	k, err := mainkernels.ActMul(bs.rows*l.nffn, l.act)
-	if l.ungated {
-		k, err = mainkernels.Act(bs.rows*l.nffn, l.act)
-	}
-	if err == nil {
-		l.actK, err = g.dev.Compile(k)
-	}
-	if err != nil {
-		g.LastErr = fmt.Sprintf("a non-causal block's own %s activation: %v", l.act, err)
-		return false
-	}
-	return true
-}
-
-// dropIdleTower frees the non-causal set when no tower block is left on the
-// device: the last one released, or a first one the budget refused after its
-// set was built. Callers hold g.mu.
-func (g *devTier) dropIdleTower() {
-	if g.visCap == 0 || g.holdsTower() {
-		return
-	}
-	home := g.geoCur
-	for _, k := range []geoKey{geoNonCausal, geoNonCausal | geoNCHead} {
-		g.useGeom(k)
-		if g.bs != nil || len(g.bbs) > 0 {
-			g.dropGraph()
-			for w := range g.bbs {
-				g.dropBatch(w)
-			}
-			g.dropScratch(g.bs)
-			g.bs = nil
-		}
-	}
-	g.useGeom(home)
-	g.visCap, g.visMax = 0, 0
-}
-
-// hasHeadSet reports a decision head's own non-causal set on this device
-// (geoNCHead). Callers hold g.mu.
-func (g *devTier) hasHeadSet() bool {
-	for _, l := range g.layers {
-		if l != nil && l.geo == geoNonCausal|geoNCHead {
-			return true
-		}
-	}
-	return false
 }
 
 // headSetAt moves a decision head's own set to rows rows, as resizeTower
@@ -540,85 +576,4 @@ func (g *devTier) headSetAt(rows int) bool {
 		return false
 	}
 	return true
-}
-
-// ReserveRows asks every device (nn.RowsReserver); one holding no tower block
-// says yes.
-func (g *GPU) ReserveRows(n int) bool {
-	g.mu.Lock()
-	ds := g.devs
-	g.mu.Unlock()
-	for _, d := range ds {
-		if !d.ReserveRows(n) {
-			return false
-		}
-	}
-	return true
-}
-
-// ReserveRows forwards under the session's call locks: a resize rebuilds the
-// set another session's call would run in.
-func (s *gpuSession) ReserveRows(n int) bool {
-	defer s.leave(s.enter())
-	return s.g.ReserveRows(n)
-}
-
-// TowerChunk is the rows every device's row-chunked tower set takes a call,
-// 0 when every set takes a picture whole (nn.RowChunker). Devices that
-// disagree report the narrowest: a phase call is cut to it on all of them.
-func (g *GPU) TowerChunk() int {
-	g.mu.Lock()
-	ds := g.devs
-	g.mu.Unlock()
-	c := 0
-	for _, d := range ds {
-		if k := d.TowerChunk(); k > 0 && (c == 0 || k < c) {
-			c = k
-		}
-	}
-	return c
-}
-
-// LayersPhase is Layers over one phase of a row-chunked non-causal block
-// (nn.RowChunker): rows [pos, pos+n) of a picture of keys rows. Phase 1
-// writes the rows' k and v at their positions and leaves x as it was;
-// phase 2 runs their queries over all keys rows' k and v and the rest of
-// the blocks, writing their x. Every chunk's phase 1 runs before any
-// chunk's phase 2, block by block.
-func (g *GPU) LayersPhase(lo, hi, pos, n, keys, phase int, x, cs, csSWA []float32) bool {
-	return g.layersPhase(0, lo, hi, pos, n, keys, phase, x, cs, csSWA)
-}
-
-func (g *GPU) layersPhase(sid uint64, lo, hi, pos, n, keys, phase int, x, cs, csSWA []float32) bool {
-	if phase != 1 && phase != 2 || keys < pos+n {
-		return false
-	}
-	g.mu.Lock()
-	ds := g.devs
-	g.mu.Unlock()
-	set := func(ph, k int) {
-		for _, d := range ds {
-			d.mu.Lock()
-			ss := d.sessOf(sid)
-			ss.ncPhase, ss.ncKeys = ph, k
-			if ph != 0 {
-				d.TowerPhases++
-			}
-			d.mu.Unlock()
-		}
-	}
-	set(phase, keys)
-	defer set(0, 0)
-	return g.layersFor(sid, lo, hi, pos, n, x, cs, csSWA, nil)
-}
-
-// TowerChunk and LayersPhase forward under the session's locks.
-func (s *gpuSession) TowerChunk() int {
-	defer s.leave(s.enter())
-	return s.g.TowerChunk()
-}
-
-func (s *gpuSession) LayersPhase(lo, hi, pos, n, keys, phase int, x, cs, csSWA []float32) bool {
-	defer s.leave(s.inputsTo(s.step()))
-	return s.g.layersPhase(s.sid, lo, hi, pos, n, keys, phase, x, cs, csSWA)
 }
