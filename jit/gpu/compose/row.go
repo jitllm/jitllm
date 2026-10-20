@@ -43,6 +43,8 @@ type Row struct {
 	// LiveAt of buffer LiveBuf (BufU32). The rest keep what they hold.
 	HasLive         bool
 	LiveBuf, LiveAt int
+	// Ranges are the range loops' coordinates, by loop (RangeLoop).
+	Ranges []Range
 	// SpanGroup is the aligned rows that share a table and whose spans do
 	// not decrease (HintTileFirst, HintTileLast).
 	SpanGroup int
@@ -177,6 +179,12 @@ const (
 	// that only widens across them.
 	HintTileFirst HintKind = iota + 1
 	HintTileLast
+	// HintKey: A is key B clamped into [C, Ix), read only for its page
+	// (KeyClamp).
+	HintKey
+	// HintMultiple: A is a multiple of At (data written so, a table's
+	// aligned entries).
+	HintMultiple
 )
 
 // Op is a unary or binary map.
@@ -326,6 +334,9 @@ type Schedule struct {
 	// LaneLoops, under Lanes, spreads a row of one element over the lanes,
 	// each loop's trips dealt across them (laneLoops).
 	LaneLoops bool
+	// Block cuts each range loop into aligned blocks of that many places
+	// (blocks), 0 and 1 for none.
+	Block int
 }
 
 // Key is a group's identity in a cache: its structure and its schedule,
@@ -337,7 +348,7 @@ type Key struct {
 // Encode is the group's structure and schedule as integers.
 func (g *Row) Encode(s Schedule) []uint32 {
 	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs)), b2u(s.Flat), uint32(s.Tile), uint32(s.TileCols), uint32(s.Split),
-		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes), uint32(s.Lanes), b2u(s.WorkRow), uint32(s.RowStride), uint32(s.ColStride), b2u(s.LaneLoops)}
+		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes), uint32(s.Lanes), b2u(s.WorkRow), uint32(s.RowStride), uint32(s.ColStride), b2u(s.LaneLoops), uint32(s.Block)}
 	for _, b := range g.Bufs {
 		e = append(e, uint32(b.Kind), uint32(b.N), uint32(b.Of), b2u(b.Over))
 	}
@@ -374,6 +385,11 @@ func (g *Row) Encode(s Schedule) []uint32 {
 	}
 	if g.SpanGroup > 0 {
 		e = append(e, 0x5BA2, uint32(g.SpanGroup))
+	}
+	for c, rg := range g.Ranges {
+		if rg.ok {
+			e = append(e, 0x2A6E, uint32(c), uint32(rg.S), uint32(rg.Lo), uint32(rg.Hi), uint32(rg.Origin), uint32(rg.Ext))
+		}
 	}
 	return e
 }
@@ -877,7 +893,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 	if g, err = g.laneLoops(s); err != nil {
 		return nil, err
 	}
-	g = g.pipelined().tiled(s).hulls(s).inductions(s)
+	g = g.blocks(s).pipelined().tiled(s).hulls(s).inductions(s)
 	if s.Lanes == 0 && g.loopReduces() {
 		return nil, fmt.Errorf("compose: a reduction in a loop's body off lane rows")
 	}

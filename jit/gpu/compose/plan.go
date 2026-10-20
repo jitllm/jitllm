@@ -234,7 +234,7 @@ func (g *Row) contraction() bool {
 	// A weight is what reads no row -- or the row only as its choice of
 	// sheet -- and an operand what reads the row.
 	vary := g.varies(0)
-	for _, rowDep := range [][]bool{g.rowDeps(), g.selectedRowDeps()} {
+	for _, rowDep := range [][]bool{g.rowDeps(), g.selectedRowDeps(), g.rowDepsPast(g.spanStride(), 0)} {
 		weight, operand := false, false
 		for i, nd := range g.Nodes {
 			if nd.Kind != NLoad || !nd.Indexed || !vary[i] {
@@ -330,16 +330,17 @@ func (g *Row) contractSchedule(f Facts) Schedule {
 		split = f.RagSplit
 	default:
 		tok = max(f.Tok, 1)
-		rowt = 1
-		for _, r := range []int{f.RowTile, 2} {
-			if r > 1 && g.Width%r == 0 {
-				rowt = r
-				break
+		rowt = f.RowTile
+		if rowt < 1 {
+			rowt = 1
+			if g.Width%2 == 0 {
+				rowt = 2
 			}
 		}
 		split = f.Split
+		s.RowStride = g.spanStride()
 	}
-	for g.Rows%tok != 0 {
+	for tok > 1 && (g.Rows%(tok*max(s.RowStride, 1)) != 0 || g.SpanGroup > 0 && g.SpanGroup%tok != 0) {
 		tok /= 2
 	}
 	for rowt > 1 && g.Width%rowt != 0 {
@@ -355,6 +356,11 @@ func (g *Row) contractSchedule(f Facts) Schedule {
 		split /= 2
 	}
 	s.Tile, s.TileCols, s.Split = tok, rowt, split
+	if len(g.Ranges) > 0 && g.Ranges[0].ok && g.tripOf(0) >= 0 {
+		// A contraction over a run-time range of a coordinate: blocks of
+		// eight places, unsplit.
+		s.Block, s.Split = keyBlock, 1
+	}
 	return s
 }
 
@@ -451,8 +457,8 @@ func (g *Row) spanStride() int {
 		var walk func(n int) int
 		walk = func(n int) int {
 			nd := g.Nodes[n]
-			if nd.Kind == NUBinary && nd.Op == OpDiv && g.Nodes[nd.A].Kind == NRowIdx && g.Nodes[nd.B].Kind == NUConst {
-				return g.Nodes[nd.B].At
+			if q := g.rowQuot(n); q > 1 {
+				return q
 			}
 			if nd.Kind == NRowIdx {
 				return -1
@@ -481,9 +487,29 @@ func (g *Row) spanStride() int {
 func (g *Row) rowDepsPast(stride, group int) []bool {
 	return g.rowDepsWith(func(i int) bool {
 		nd := g.Nodes[i]
-		return nd.Kind == NHint || nd.Kind == NUBinary && g.Nodes[nd.A].Kind == NRowIdx && g.Nodes[nd.B].Kind == NUConst &&
-			(nd.Op == OpRem && g.Nodes[nd.B].At == stride || nd.Op == OpDiv && group > 1 && g.Nodes[nd.B].At == group)
+		if nd.Kind == NHint {
+			return true
+		}
+		if nd.Kind != NUBinary || g.Nodes[nd.B].Kind != NUConst {
+			return false
+		}
+		q, m := g.rowQuot(nd.A), g.Nodes[nd.B].At
+		return nd.Op == OpRem && q > 0 && m > 0 && stride%(q*m) == 0 || nd.Op == OpDiv && group > 1 && q == 1 && m == group
 	})
+}
+
+// rowQuot is q where node n is the row over q (1 for the row itself), else 0.
+func (g *Row) rowQuot(n int) int {
+	nd := g.Nodes[n]
+	switch {
+	case nd.Kind == NRowIdx:
+		return 1
+	case nd.Kind == NUBinary && nd.Op == OpDiv && g.Nodes[nd.B].Kind == NUConst && g.Nodes[nd.B].At > 0:
+		if q := g.rowQuot(nd.A); q > 0 {
+			return q * g.Nodes[nd.B].At
+		}
+	}
+	return 0
 }
 
 // rowDepsWith is rowDeps where a node uniform names reads as no row's.
@@ -594,3 +620,6 @@ func (g *Row) foldsReadAfter() bool {
 	}
 	return false
 }
+
+// keyBlock is the places a range loop's block takes (Schedule.Block).
+const keyBlock = 8

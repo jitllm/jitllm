@@ -42,7 +42,7 @@ func (g *Row) descOf(desc, r, w int) int {
 // the base table's entry.
 func (g *Row) baseOf(s Prefill, desc, bt, slot int) int {
 	if s.Map {
-		return g.LoadAt(bt, slot)
+		return g.Add(Node{Kind: NHint, Hint: HintMultiple, A: g.LoadAt(bt, slot), At: 64})
 	}
 	u, ub := g.UConst, g.UBin
 	return ub(OpMul, ub(OpDiv, g.descOf(desc, u(0), kernels.PRowStart), u(64)), u(64))
@@ -165,96 +165,38 @@ func (g *Row) PrefillSoftmax(s Prefill, a, out, part, desc, sink, mp, bt, qt int
 	g.StoreAt(part, sum, add(add(pp, g.Iter(r)), u(padded+32)))
 }
 
-// PrefillAcc is each split's weighted sum of V a thread a (query tile of
-// qt rows, head, split, value element): the split's part of the tile's keys
-// in blocks of 8 from a multiple of 8, a block's page read once (a block
-// ahead between the first and the last), the first and the last block
-// masked to the keys; into the merge's partials, or the output in the
-// direct form.
-func (g *Row) PrefillAcc(s Prefill, a, v, part, tab, desc, mp, bt, qt int) {
+// PrefillAcc is a split's weighted sum of V an element: row R's (query
+// row, head, split) value element j summed over the keys of its split its
+// row attends, each key's weight at its slot and its V through the row's
+// table; into the merge's partials, or the output in the direct form. The
+// group is Rows*Heads*Splits rows of Dim elements.
+func (g *Row) PrefillAcc(s Prefill, a, v, part, tab, desc, mp, bt int) {
 	u, ub := g.UConst, g.UBin
 	add := func(x, y int) int { return ub(OpAdd, x, y) }
 	mul := func(x, y int) int { return ub(OpMul, x, y) }
-	const blk = 8
 	P, C, S := s.Page, s.Chunk, s.splits()
 	kvRow, gqa := s.KVHeads*s.Dim, s.Heads/s.KVHeads
-	per := s.Dim
-	flat := g.Column()
-	j, rest := ub(OpRem, flat, u(per)), ub(OpDiv, flat, u(per))
-	spl := ub(OpRem, rest, u(S))
-	rest = ub(OpDiv, rest, u(S))
-	h := ub(OpRem, rest, u(s.Heads))
-	qrow := mul(ub(OpDiv, rest, u(s.Heads)), u(qt))
-	sp := g.spanOf(s, desc, mp, bt, qrow, add(qrow, u(qt-1)))
-	c0 := add(sp.base, mul(spl, u(C)))
-	st := ub(OpMin, ub(OpMax, sp.lo, c0), add(c0, u(C)))
-	en := ub(OpMax, ub(OpMin, sp.hi, add(c0, u(C))), st)
-	a8 := add(c0, mul(ub(OpDiv, ub(OpSub, st, c0), u(blk)), u(blk)))
-	blocks := ub(OpDiv, add(ub(OpSub, en, a8), u(blk-1)), u(blk))
-	blocks = g.Select(g.Less(st, en), blocks, u(0))
+	j, R := g.Column(), g.RowIdx()
+	spl, rest := ub(OpRem, R, u(S)), ub(OpDiv, R, u(S))
+	h, row := ub(OpRem, rest, u(s.Heads)), ub(OpDiv, rest, u(s.Heads))
+	dr := g.rowOf(s, mp, row)
+	base := g.TileFirst(g.baseOf(s, desc, bt, row))
+	tw := g.TileFirst(g.descOf(desc, dr, kernels.PRowTab))
+	lo := g.TileFirst(g.descOf(desc, dr, kernels.PRowStart))
+	hi := g.TileLast(g.descOf(desc, dr, kernels.PRowEnd))
+	c0 := add(base, mul(spl, u(C)))
+	st := ub(OpMin, ub(OpMax, lo, c0), add(c0, u(C)))
+	en := ub(OpMax, ub(OpMin, hi, add(c0, u(C))), st)
+	c, t := g.RangeLoop(c0, st, en, C)
+	pid := g.LoadAt(tab, add(tw, ub(OpDiv, g.KeyClamp(t, lo, hi), u(P))))
 	col := add(mul(ub(OpDiv, h, u(gqa)), u(s.Dim)), j)
-	blockPage := func(t int) int { return g.LoadAt(tab, add(sp.tab, ub(OpDiv, g.clamp(sp, t, blk), u(P)))) }
-	wb := add(mul(add(mul(qrow, u(s.Heads)), h), u(S*C)), mul(spl, u(C)))
-	block := func(bs, pid int, acc []int, masked bool) []int {
-		next := append([]int(nil), acc...)
-		vb := add(mul(add(mul(pid, u(P)), ub(OpRem, bs, u(P))), u(kvRow)), col)
-		slot := ub(OpSub, bs, c0)
-		if masked {
-			slot = ub(OpMin, slot, u(C-blk))
-		}
-		wk := add(wb, slot)
-		for kk := 0; kk < blk; kk++ {
-			var live int
-			if masked {
-				live = g.Less(ub(OpSub, add(bs, u(kk)), st), ub(OpSub, en, st))
-			}
-			v0 := g.LoadAt(v, add(vb, u(kk*kvRow)))
-			if masked {
-				v0 = g.Select(live, v0, g.Const(0))
-			}
-			for r := 0; r < qt; r++ {
-				w := g.LoadAt(a, add(wk, u(r*s.Heads*S*C+kk)))
-				if masked {
-					w = g.Select(live, w, g.Const(0))
-				}
-				next[r] = g.fma(w, v0, next[r])
-			}
-		}
-		return next
-	}
-	acc := make([]int, qt)
-	for i := range acc {
-		acc[i] = g.Const(0)
-	}
-	acc = block(a8, blockPage(a8), acc, true)
-	mid := ub(OpSub, ub(OpMax, blocks, u(2)), u(2))
-	b1 := add(a8, u(blk))
-	c := g.LoopN(mid)
-	it := g.Iter(c)
-	ph := make([]int, qt)
-	for i := range ph {
-		ph[i] = g.Fold(c, acc[i])
-	}
-	bs := add(b1, mul(it, u(blk)))
-	pid := g.Fold(c, blockPage(b1))
-	next := block(bs, pid, ph, false)
-	for i := range ph {
-		g.SetFold(ph[i], next[i])
-	}
-	g.SetFold(pid, blockPage(add(bs, u(blk))))
-	last := add(a8, mul(add(mid, u(1)), u(blk)))
-	acc = block(last, blockPage(last), ph, true)
-	padded := (s.Dim + 31) / 32 * 32
-	pb := mul(add(mul(add(mul(qrow, u(s.Heads)), h), u(S)), spl), u(padded+64))
-	rstep := s.Heads * S * (padded + 64)
+	vv := g.LoadAt(v, add(mul(add(mul(pid, u(P)), ub(OpRem, t, u(P))), u(kvRow)), col))
+	w := g.LoadAt(a, add(mul(R, u(C)), ub(OpSub, t, c0)))
+	acc := g.Fold(c, g.Const(0))
+	g.SetFold(acc, g.fma(w, vv, acc))
 	if s.Splits == 0 {
-		pb, rstep = mul(add(mul(qrow, u(s.Heads)), h), u(s.Dim)), s.Heads*s.Dim
+		g.StoreAt(part, acc, add(mul(add(mul(dr, u(s.Heads)), h), u(s.Dim)), j))
+		return
 	}
-	for r := 0; r < qt; r++ {
-		at := add(add(pb, j), u(r*rstep))
-		if s.Map {
-			at = add(mul(add(mul(g.rowOf(s, mp, add(qrow, u(r))), u(s.Heads)), h), u(s.Dim)), j)
-		}
-		g.StoreAt(part, acc[r], at)
-	}
+	g.StoreAt(part, acc, add(mul(R, u((s.Dim+31)/32*32+64)), j))
 }

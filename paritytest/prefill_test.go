@@ -86,11 +86,14 @@ func TestPrefillIsMains(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				g := &compose.Row{Width: c.rows / qt * c.heads * max(1, c.splits) * c.dim, Rows: 1}
+				g := &compose.Row{Width: c.dim, Rows: c.rows * c.heads * max(1, c.splits), SpanGroup: c.rows}
+				if c.mp {
+					g.SpanGroup = qt
+				}
 				a, v, part, tab, desc := g.Buf(compose.BufRow), g.Buf(compose.BufRow), g.Buf(compose.BufOut), g.Buf(compose.BufU32), g.Buf(compose.BufU32)
 				mp, bt := tables(g)
-				g.PrefillAcc(ps, a, v, part, tab, desc, mp, bt, qt)
-				same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{}))
+				g.PrefillAcc(ps, a, v, part, tab, desc, mp, bt)
+				same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{Step: compose.StepChunk, Tok: qt, RowTile: 1}))
 			})
 		}
 	}
