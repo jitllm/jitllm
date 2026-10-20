@@ -287,6 +287,11 @@ func (g *devTier) layersSession(s backend.Session) {
 						par, _ := g.stepPar(sid, l)
 						gst.convIn, gst.convOut = l.pool.c[par], l.pool.c[1-par]
 						gst.convW, gst.recDesc = l.ssmConv1d, bs.dRows
+						gst.stateIn, gst.stateOut = l.pool.s[par], l.pool.s[1-par]
+						if g.recShared {
+							gst.stateIn, gst.stateOut = l.pool.s[0], g.recNext
+						}
+						gst.recDt, gst.recA, gst.recD, gst.recCB = l.ssmDt, l.ssmA, l.ssmD, l.ssmCB
 					}
 					if o.Kind == dkGatherHeads {
 						gst.perm = g.perms[[2]int{o.Heads, R}]
