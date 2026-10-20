@@ -176,3 +176,57 @@ func TestMatVecIsMains(t *testing.T) {
 		})
 	}
 }
+
+// TestExpertMatVecIsMains holds the composer's matvec over a bank's
+// selected sheets to main's indexed matvec: the slots as the group's rows,
+// each reading its expert's sheet, the activation shared (gate and up) or a
+// slot's own (down), split or not.
+func TestExpertMatVecIsMains(t *testing.T) {
+	for _, q := range []format{{kernels.Float32, mainkernels.Float32}, {kernels.Float16, mainkernels.Float16}, {kernels.Q8_0, mainkernels.Q8_0}} {
+		for _, rk := range [][2]int{{64, 64}, {96, 128}} {
+			for _, sp := range []int{1, 2} {
+				for _, own := range []bool{false, true} {
+					for _, ek := range [][2]int{{8, 2}, {16, 4}} {
+						name := fmt.Sprintf("%v_%dx%d_e%dx%d_s%d_own%v", q.c, rk[0], rk[1], ek[0], ek[1], sp, own)
+						t.Run(name, func(t *testing.T) {
+							s := mainkernels.MatVecShape{T: q.m, K: rk[1], Rows: rk[0], Split: sp, Experts: ek[0], Slots: ek[1], SlotAct: own}
+							mk, err := mainkernels.MatVec(s)
+							if err != nil {
+								t.Fatal(err)
+							}
+							ks := []*ir.Kernel{mk}
+							if sp > 1 {
+								r, err := mainkernels.Reduce(rk[0]*ek[1], sp)
+								if err != nil {
+									t.Fatal(err)
+								}
+								ks = append(ks, r)
+							}
+							g := &compose.Row{Width: rk[0], Rows: ek[1]}
+							w := compose.MatVecWeight{T: q.c, K: rk[1], Rows: rk[0], QS: g.Buf(compose.BufU32), D: -1, SC: -1, Experts: ek[0]}
+							if !kernels.IsFloat(q.c) {
+								w.D = g.Buf(compose.BufU32)
+							}
+							a := compose.MatVecOperand{Toks: ek[1], One: !own}
+							if !own {
+								a.Toks = 1
+							}
+							if kernels.IsFloat(q.c) {
+								a.X = g.Buf(compose.BufRow)
+							} else {
+								a.A, a.AX = g.Buf(compose.BufU32), g.Buf(compose.BufRow)
+							}
+							w.Sel = g.Buf(compose.BufU32)
+							v, err := g.MatVec(w, a)
+							if err != nil {
+								t.Fatal(err)
+							}
+							g.Store(g.Buf(compose.BufOut), v)
+							same(t, name, ks, formed(t, g, compose.Schedule{Group: 128, Flat: true, Target: sm70, Split: sp}))
+						})
+					}
+				}
+			}
+		}
+	}
+}
