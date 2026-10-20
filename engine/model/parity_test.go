@@ -141,6 +141,17 @@ func TestComposerParity(t *testing.T) {
 					}
 				}
 			}
+			if *parityModel == "" && *parityKernel != "" {
+				n := 0
+				for _, m := range r.miss {
+					if strings.HasPrefix(m.K.Name, *parityKernel) {
+						n++
+					}
+				}
+				if n > 0 {
+					t.Logf("%s misses %d of %s", r.name, n, *parityKernel)
+				}
+			}
 			for _, m := range r.miss {
 				prefix, _, _ := strings.Cut(m.K.Name, "_")
 				if *parityByShape {

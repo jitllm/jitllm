@@ -212,7 +212,7 @@ func (g *Row) RouteLanes(r Route, l, sel, top, w int) {
 // over every expert (each exponential shared), and scaled.
 func (g *Row) RouteShared(r Route, l, sel, top, w int) {
 	u, ub := g.UConst, g.UBin
-	e := g.Column()
+	e := g.UBin(OpMin, g.Column(), g.UConst(r.NExpert-1))
 	le := g.LoadAt(l, e)
 	shL := g.Shared(r.NExpert, false)
 	g.StoreAt(shL, le, e)

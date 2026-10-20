@@ -258,7 +258,33 @@ func newCanon(k *ir.Kernel, in *Interner) *canon {
 			stack = append(stack, i)
 		}
 	}
+	// An integer op of what a loop does not change is the same value
+	// wherever it is computed: it is named at the depth of what it reads.
+	for i, o := range k.Ops {
+		if !isInt(o.Type) || !pureInt(o.Kind) {
+			continue
+		}
+		d := int16(0)
+		for _, a := range o.Args {
+			if a != 0 {
+				d = max(d, c.depth[a-1])
+			}
+		}
+		if d < c.depth[i] {
+			c.depth[i] = d
+		}
+	}
 	return c
+}
+
+// pureInt reports whether an integer op's value is its operands' alone.
+func pureInt(k ir.Kind) bool {
+	switch k {
+	case ir.OpAdd, ir.OpSub, ir.OpMul, ir.OpDiv, ir.OpRem, ir.OpMin, ir.OpMax, ir.OpAnd, ir.OpXor, ir.OpShl, ir.OpShr,
+		ir.OpSelect, ir.OpConst, ir.OpBitcast:
+		return true
+	}
+	return false
 }
 
 func (c *canon) atom(kind int64, a, b int32) affine {

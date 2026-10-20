@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
@@ -500,6 +501,19 @@ func (g *Row) Shared(n int, u32 bool) int {
 	return len(g.Bufs) - 1
 }
 
+// SharedAfter is a new version of workgroup array prev's storage, stored
+// after every read of prev; SharedOver one each thread writes only where it
+// read prev itself, in the same phase.
+func (g *Row) SharedAfter(prev int) int { return g.version(prev, false) }
+
+func (g *Row) SharedOver(prev int) int { return g.version(prev, true) }
+
+func (g *Row) version(prev int, over bool) int {
+	b := g.Bufs[prev]
+	g.Bufs = append(g.Bufs, Buf{Kind: b.Kind, N: b.N, Of: prev + 1, Over: over})
+	return len(g.Bufs) - 1
+}
+
 // Shuffle is node a's value at the lane mask away (xor) in the subgroup.
 func (g *Row) Shuffle(a, mask int) int { return g.Add(Node{Kind: NShuffle, A: a, At: mask}) }
 
@@ -541,10 +555,23 @@ func (g *Row) phases() (node []int, store []int) {
 			}
 			set(&node[i], v)
 		}
+		// A version's stores come after the reads of the storage it takes.
+		read := make([]int, len(g.Bufs))
+		for i := range read {
+			read[i] = -1
+		}
+		for i, nd := range g.Nodes {
+			if nd.Kind == NLoad && g.shared(nd.Buf) {
+				read[nd.Buf] = max(read[nd.Buf], node[i])
+			}
+		}
 		for j, st := range g.Stores {
 			v := node[st.Val]
 			if st.Indexed {
 				v = max(v, node[st.Ix])
+			}
+			if b := g.Bufs[st.Buf]; b.Of > 0 && read[b.Of-1] >= 0 {
+				v = max(v, read[b.Of-1]+b2i(!b.Over))
 			}
 			set(&store[j], v)
 			if g.shared(st.Buf) {
@@ -568,4 +595,25 @@ func (g *Row) readsShuffle() []bool {
 		}
 	}
 	return v
+}
+
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// vecKey names a vector load: its buffer, its first element's place, its
+// width.
+type vecKey struct {
+	buf int
+	at  ir.Value
+	w   uint8
+}
+
+// LoadVec is component c of the w consecutive elements of buffer b from
+// index ix, one load of all of them.
+func (g *Row) LoadVec(b, ix, w, c int) int {
+	return g.Add(Node{Kind: NLoad, Buf: b, Indexed: true, Ix: ix, Vec: uint8(w), Comp: uint8(c)})
 }

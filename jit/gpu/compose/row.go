@@ -90,6 +90,12 @@ type Buf struct {
 	Kind BufKind
 	// N is a workgroup array's length.
 	N int
+	// Of, where not 0, is the array (its index plus one) whose storage this
+	// one takes over: its stores after every read of that one, behind a
+	// barrier, or with Over in the same phase, each thread rewriting only
+	// places it read itself.
+	Of   int
+	Over bool
 }
 
 // NodeKind is what a node computes.
@@ -223,6 +229,9 @@ type Node struct {
 	// where it is false: the element's place in its row, or the row's.
 	Indexed bool
 	Ix      int
+	// Vec, 2 or 4, makes an indexed load component Comp of the Vec
+	// consecutive elements from Ix, one vector load for all of them.
+	Vec, Comp uint8
 }
 
 // Store writes node Val into buffer Buf at the element, or at index node Ix
@@ -280,8 +289,9 @@ type Schedule struct {
 	// holding it -- a value in any scope, a loop's body too.
 	Lanes int
 	// WorkRow, under Flat, runs a row a workgroup of Group threads, the
-	// element the thread's clamped to the row's last: a row whose elements
-	// meet in workgroup arrays.
+	// element the thread itself and the row the workgroup, the grid the rows
+	// exactly (a group of fewer elements clamps its own, and stores at its
+	// own places): a row whose elements meet in workgroup arrays and lanes.
 	WorkRow bool
 }
 
@@ -296,11 +306,11 @@ func (g *Row) Encode(s Schedule) []uint32 {
 	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs)), b2u(s.Flat), uint32(s.Tile), uint32(s.TileCols), uint32(s.Split),
 		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes), uint32(s.Lanes), b2u(s.WorkRow)}
 	for _, b := range g.Bufs {
-		e = append(e, uint32(b.Kind), uint32(b.N))
+		e = append(e, uint32(b.Kind), uint32(b.N), uint32(b.Of), b2u(b.Over))
 	}
 	for _, n := range g.Nodes {
 		e = append(e, uint32(n.Kind), uint32(n.Op), uint32(n.Act), uint32(n.Red), uint32(n.Buf),
-			uint32(n.A), uint32(n.B), uint32(n.C), f2u(n.F), uint32(n.At), b2u(n.Indexed), uint32(n.Ix))
+			uint32(n.A), uint32(n.B), uint32(n.C), f2u(n.F), uint32(n.At), b2u(n.Indexed), uint32(n.Ix), uint32(n.Vec)<<8|uint32(n.Comp))
 	}
 	for _, s := range g.Stores {
 		e = append(e, uint32(s.Buf), uint32(s.Val), b2u(s.Indexed), uint32(s.Ix))
@@ -842,6 +852,9 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		}
 		if g.shared(i) {
 			params[i] = b.Shared(fmt.Sprintf("s%d", i), t, bf.N)
+			if bf.Of > 0 {
+				params[i] = params[bf.Of-1]
+			}
 			continue
 		}
 		params[i] = b.Param(fmt.Sprintf("p%d", i), t)
@@ -864,6 +877,8 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 	// mma is the warp tile's layout under an MMA schedule.
 	var mma *mmaTile
 	windowSh := map[int]ir.Value{}
+	// vecs is each vector load emitted, by its buffer, place and width.
+	vecs := map[vecKey][]ir.Value{}
 	for i, nd := range g.Nodes {
 		if nd.Kind == NWindow {
 			windowSh[i] = b.Shared(fmt.Sprintf("win%d", i), ir.F32, G)
@@ -913,7 +928,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				return nil, fmt.Errorf("compose: a row of %d a workgroup of %d", g.Width, G)
 			}
 			u := func(n int) ir.Value { return b.Const(ir.U32, int64(n)) }
-			flatIdx, r = b.Min(ir.U32, b.TID(), u(g.Width-1)), b.Min(ir.U32, b.CTAID(), u(g.Rows-1))
+			flatIdx, r = b.TID(), b.CTAID()
 			flatRaw = flat
 			width = u(g.Width)
 			rowBase = b.Mul(ir.U32, r, width)
@@ -1351,8 +1366,18 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		case NLoad:
 			if nd.Indexed {
 				at := elem(nd.Ix, idx, e)
+				if nd.Vec > 1 {
+					k := vecKey{nd.Buf, at, nd.Vec}
+					vs, ok := vecs[k]
+					if !ok {
+						vs = b.LoadV(g.typeOf(n), params[nd.Buf], at, 0, int(nd.Vec))
+						vecs[k] = vs
+					}
+					v = vs[nd.Comp]
+					break
+				}
 				switch g.Bufs[nd.Buf].Kind {
-				case BufU32:
+				case BufU32, BufSharedU32:
 					v = b.Load(ir.U32, params[nd.Buf], at, 0)
 				case BufRowF16:
 					v = half(params[nd.Buf], at)
@@ -1471,7 +1496,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				}
 			}
 		case NShuffle:
-			if s.Lanes == 0 && emitErr == nil {
+			if s.Lanes == 0 && !(s.WorkRow && G%ir.SubgroupLanes == 0 && s.Target.Lanes == ir.SubgroupLanes) && emitErr == nil {
 				emitErr = fmt.Errorf("compose: a shuffle off lane rows")
 			}
 			v = b.ShuffleXor(g.typeOf(nd.A), elem(nd.A, idx, e), int64(nd.At))
@@ -1662,7 +1687,30 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			}
 			b.Store(params[st.Buf], at, elem(st.Val, col, e), 0)
 		}
-		_, stPhase := g.phases()
+		ndPhase, stPhase := g.phases()
+		// later is which nodes a later phase's node or store reads; inLoop which
+		// sit in a loop's body (a fold is its value after the loop).
+		later, inLoop := make([]bool, len(g.Nodes)), make([]bool, len(g.Nodes))
+		for c := range g.Loops {
+			for i, v := range g.varies(c) {
+				inLoop[i] = inLoop[i] || v && g.Nodes[i].Kind != NFold
+			}
+		}
+		for i, nd := range g.Nodes {
+			ops := g.loopOperands(i)
+			if nd.Kind == NFold && nd.A >= 0 {
+				ops = append(ops, nd.A)
+			}
+			for _, o := range ops {
+				later[o] = later[o] || ndPhase[o] < ndPhase[i]
+			}
+		}
+		for j, st := range g.Stores {
+			later[st.Val] = later[st.Val] || ndPhase[st.Val] < stPhase[j]
+			if st.Indexed {
+				later[st.Ix] = later[st.Ix] || ndPhase[st.Ix] < stPhase[j]
+			}
+		}
 		for _, e := range outs {
 			base, col := rowBase, flatIdx
 			if e.base != 0 {
@@ -1704,7 +1752,14 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 						elem(fold, col, e)
 					}
 				}
-				if shared && p < last {
+				if p < last {
+					// What a later phase reads of this one is made here, before
+					// the barrier a later version of an array it read waits on.
+					for i, nd := range g.Nodes {
+						if ndPhase[i] == p && later[i] && !inLoop[i] && nd.Kind != NConst && nd.Kind != NUConst && nd.Kind != NIConst {
+							elem(i, col, e)
+						}
+					}
 					b.Barrier()
 				}
 			}

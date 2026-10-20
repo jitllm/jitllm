@@ -116,7 +116,7 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 	for i := range g.Bufs {
 		shared = shared || g.shared(i)
 	}
-	if g.reduces() && g.Width <= f.Target.Lanes && g.Width&(g.Width-1) == 0 || g.loopReduces() || shuffles {
+	if g.reduces() && g.Width <= f.Target.Lanes && g.Width&(g.Width-1) == 0 || g.loopReduces() || shuffles && !(shared && g.Width > f.Target.Lanes) {
 		// A row no wider than a subgroup, or a reduction a loop's body reads
 		// (a value of the body), runs on one subgroup's lanes, the reduction
 		// their butterfly.
