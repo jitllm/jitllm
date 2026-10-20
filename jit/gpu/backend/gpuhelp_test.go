@@ -8,7 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // f16At is where each format keeps its super-block float16 scales, from
@@ -110,10 +110,10 @@ func (g *gpu) free() {
 
 // run compiles and launches one matvec, reducing the split partials, and
 // returns rows*slots float32 results.
-func (g *gpu) run(t *testing.T, s oldkernels.MatVecShape, rows, slots, split int,
+func (g *gpu) run(t *testing.T, s mainkernels.MatVecShape, rows, slots, split int,
 	qs, dw, scw, av, ax, sel backend.Buf) []float32 {
 	t.Helper()
-	kk, err := oldkernels.MatVec(s)
+	kk, err := mainkernels.MatVec(s)
 	if err != nil {
 		t.Skipf("shape rejected: %v", err)
 	}
@@ -148,7 +148,7 @@ func (g *gpu) run(t *testing.T, s oldkernels.MatVecShape, rows, slots, split int
 		// Reduce bakes its row count, which for an indexed launch is
 		// Rows*Slots (not Rows, not Experts*Rows); Rows would leave the other
 		// slots holding un-summed partials.
-		rk, err := oldkernels.Reduce(n, split)
+		rk, err := mainkernels.Reduce(n, split)
 		if err != nil {
 			t.Fatal(err)
 		}

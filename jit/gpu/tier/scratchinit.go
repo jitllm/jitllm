@@ -9,7 +9,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // initRopeTable builds the device's own rotary table for this scratch, or
@@ -45,7 +45,7 @@ func (g *devTier) initRopeTable(bs *blockScratch, p *nn.LayerPlan, rows int) err
 		return why("SWAPeriod is %d and the LOCAL rotary planes are %d words",
 			p.SWAPeriod, len(p.RopeTabSWA))
 	}
-	k, err := oldkernels.RopeTable(npairs, rows)
+	k, err := mainkernels.RopeTable(npairs, rows)
 	if err != nil {
 		return why("%v", err)
 	}
@@ -78,7 +78,7 @@ func (g *devTier) initRopeTable(bs *blockScratch, p *nn.LayerPlan, rows int) err
 		return err
 	}
 	// (rows+1) words, the first being the valid row count as in bs.n, so a
-	// ragged chunk's per-token staging is one small write (see oldkernels.RopeTable).
+	// ragged chunk's per-token staging is one small write (see mainkernels.RopeTable).
 	b, err := g.dev.Alloc((rows + 1) * 4)
 	if err != nil {
 		g.closeKern(c)
@@ -448,16 +448,16 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		for _, b := range []*backend.Buf{&bs.dV, &bs.dOutN, &bs.dAct} {
 			al(b, rows*r.VHeads*r.VDim*4)
 		}
-		// 1/sqrt(kDim), written once: it is geometry, and oldkernels.Scale takes its
+		// 1/sqrt(kDim), written once: it is geometry, and mainkernels.Scale takes its
 		// factor from a one-element buffer.
 		al(&bs.dScale, 4)
-		// The recurrent descriptor (oldkernels.RecDescWords): the real row count,
+		// The recurrent descriptor (mainkernels.RecDescWords): the real row count,
 		// which Conv1dShift reads -- a padded chunk submits surplus zero rows
 		// and a zero column shifted into the state is a column the model never
 		// produced, and it stays there -- and each sequence's slots in the
 		// block's pool; for a ragged step, the run descriptor its rows are
-		// grouped by (oldkernels.RunDescWords, the longer of the two).
-		al(&bs.dRows, 4*oldkernels.RunDescWords(rows))
+		// grouped by (mainkernels.RunDescWords, the longer of the two).
+		al(&bs.dRows, 4*mainkernels.RunDescWords(rows))
 	}
 	// MLA's scratch, allocated only where the model has a latent block.
 	if p.MLA() {
@@ -663,20 +663,20 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if !p.SubNorm {
 				return nil, nil
 			}
-			return g.rmsQuantRows()(qdim, rows, float32(p.RMSEps), false, false, oldkernels.ClampWindow(actWin, qdim))
+			return g.rmsQuantRows()(qdim, rows, float32(p.RMSEps), false, false, mainkernels.ClampWindow(actWin, qdim))
 		}},
 		{&bs.subQF, func() (*ir.Kernel, error) {
 			if !p.SubNorm {
 				return nil, nil
 			}
-			return g.rmsQuantRows()(p.NFFN, rows, float32(p.RMSEps), false, false, oldkernels.ClampWindow(actWin, p.NFFN))
+			return g.rmsQuantRows()(p.NFFN, rows, float32(p.RMSEps), false, false, mainkernels.ClampWindow(actWin, p.NFFN))
 		}},
 		{&bs.quantAct, func() (*ir.Kernel, error) {
 			if ungatedFFN(p) || p.NFFN == 0 {
 				return nil, nil
 			}
 			// Optional: an activation with no gated form keeps two launches.
-			if k, err := oldkernels.QuantizeAct(rows*p.NFFN, oldkernels.ClampWindow(actWin, p.NFFN), p.Act); err == nil {
+			if k, err := mainkernels.QuantizeAct(rows*p.NFFN, mainkernels.ClampWindow(actWin, p.NFFN), p.Act); err == nil {
 				return k, nil
 			}
 			return nil, nil
@@ -690,7 +690,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if r.Conv == 0 {
 				return nil, nil
 			}
-			return quantizeRows(rows, r.VHeads*r.VDim, oldkernels.ClampWindow(actWin, pad32(r.VHeads*r.VDim)))
+			return quantizeRows(rows, r.VHeads*r.VDim, mainkernels.ClampWindow(actWin, pad32(r.VHeads*r.VDim)))
 		}},
 		{&bs.quantQ, func() (*ir.Kernel, error) {
 			return quantizeRowsAt(rows, qdim, qPad(p, qdim), actWin)
@@ -699,9 +699,9 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		// about it, apply); see blockScratch.normVar.
 		{&bs.normPart, func() (*ir.Kernel, error) {
 			if lnBlock(p) {
-				return oldkernels.LayerNormPartRows(p.NEmbd, bs.parts, rows)
+				return mainkernels.LayerNormPartRows(p.NEmbd, bs.parts, rows)
 			}
-			return oldkernels.NormPartRows(p.NEmbd, bs.parts, rows)
+			return mainkernels.NormPartRows(p.NEmbd, bs.parts, rows)
 		}},
 		{&bs.rms, func() (*ir.Kernel, error) {
 			if lnBlock(p) {
@@ -721,7 +721,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			// Optional: a width the window does not tile keeps the two
 			// launches rather than failing the scratch.
-			if k, err := g.rmsQuantRows()(p.NEmbd, rows, float32(p.RMSEps), false, false, oldkernels.ClampWindow(actWin, p.NEmbd)); err == nil {
+			if k, err := g.rmsQuantRows()(p.NEmbd, rows, float32(p.RMSEps), false, false, mainkernels.ClampWindow(actWin, p.NEmbd)); err == nil {
 				return k, nil
 			}
 			return nil, nil
@@ -732,7 +732,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			// Optional: a width the window does not tile keeps the two
 			// launches rather than failing the scratch.
-			if k, err := g.rmsQuantRows()(p.NEmbd, rows, float32(p.RMSEps), false, true, oldkernels.ClampWindow(actWin, p.NEmbd)); err == nil {
+			if k, err := g.rmsQuantRows()(p.NEmbd, rows, float32(p.RMSEps), false, true, mainkernels.ClampWindow(actWin, p.NEmbd)); err == nil {
 				return k, nil
 			}
 			return nil, nil
@@ -742,13 +742,13 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if !p.NoPreNorm && p.Q4E == nil {
 				return nil, nil
 			}
-			return oldkernels.Restride(rows, p.NEmbd, p.NEmbd, p.NEmbd)
+			return mainkernels.Restride(rows, p.NEmbd, p.NEmbd, p.NEmbd)
 		}},
 		{&bs.normApply, func() (*ir.Kernel, error) {
 			if lnBlock(p) {
-				return oldkernels.LayerNormApplyRows(p.NEmbd, bs.parts, float32(p.RMSEps), true, rows)
+				return mainkernels.LayerNormApplyRows(p.NEmbd, bs.parts, float32(p.RMSEps), true, rows)
 			}
-			return oldkernels.NormApplyRows(p.NEmbd, bs.parts, float32(p.RMSEps), false, rows)
+			return mainkernels.NormApplyRows(p.NEmbd, bs.parts, float32(p.RMSEps), false, rows)
 		}},
 		// RoPE is not generated at all for a vision block with no rotary (NRot
 		// is zero), so it cannot be launched by mistake. A ViT with a 2-D
@@ -762,9 +762,9 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				return nil, nil
 			}
 			if p.RopeSplit {
-				return oldkernels.RoPERowsSplit(p.NHead, p.HeadDim, p.NRot, rows, 0)
+				return mainkernels.RoPERowsSplit(p.NHead, p.HeadDim, p.NRot, rows, 0)
 			}
-			return oldkernels.RoPERows(p.NHead, p.HeadDim, p.NRot, p.RopeNeox, rows)
+			return mainkernels.RoPERows(p.NHead, p.HeadDim, p.NRot, p.RopeNeox, rows)
 		}},
 		{&bs.ropeK, func() (*ir.Kernel, error) {
 			if (p.NonCausal && p.NRot == 0) || p.MLA() {
@@ -773,7 +773,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if p.RopeSplit {
 				return nil, nil // ropeKRow
 			}
-			return oldkernels.RoPERowsT(p.NKVHead, p.HeadDim, p.NRot, p.RopeNeox, rows, g.kStride(p))
+			return mainkernels.RoPERowsT(p.NKVHead, p.HeadDim, p.NRot, p.RopeNeox, rows, g.kStride(p))
 		}},
 		{&bs.ropeKRow, func() (*ir.Kernel, error) {
 			// XD-RoPE's k is normed after the rotary, so it turns row-major
@@ -782,14 +782,14 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if !p.RopeSplit {
 				return nil, nil
 			}
-			return oldkernels.RoPERowsSplit(p.NKVHead, p.HeadDim, p.NRot, rows, 0)
+			return mainkernels.RoPERowsSplit(p.NKVHead, p.HeadDim, p.NRot, rows, 0)
 		}},
 
 		{&bs.normVar, func() (*ir.Kernel, error) {
 			if !lnBlock(p) {
 				return nil, nil
 			}
-			return oldkernels.LayerNormVarRows(p.NEmbd, bs.parts, rows)
+			return mainkernels.LayerNormVarRows(p.NEmbd, bs.parts, rows)
 		}},
 		{&bs.copyK, func() (*ir.Kernel, error) {
 			// Needed wherever k reaches the cache unrotated or partly rotated: a
@@ -802,28 +802,28 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				return nil, nil
 			}
 			if st := g.kStride(p); st > 0 {
-				return oldkernels.CopyAtRowsT(kvDim, rows, st)
+				return mainkernels.CopyAtRowsT(kvDim, rows, st)
 			}
-			return oldkernels.CopyAtRows(kvDim, rows)
+			return mainkernels.CopyAtRows(kvDim, rows)
 		}},
 		{&bs.qTemp, func() (*ir.Kernel, error) {
 			if p.AttnTempScale == 0 {
 				return nil, nil
 			}
-			return oldkernels.ScaleRowsByCount(rows, qdim, int(p.AttnTempFloor),
+			return mainkernels.ScaleRowsByCount(rows, qdim, int(p.AttnTempFloor),
 				int(p.AttnTempOffset), len(l4TempTab(p)))
 		}},
 		{&bs.actMulW, func() (*ir.Kernel, error) {
 			if !p.ExpertWeightIn || p.NExpert == 0 {
 				return nil, nil
 			}
-			return oldkernels.ActMulWeighted(p.NExpertUsed*p.NFFNExp, p.NFFNExp, p.Act, false)
+			return mainkernels.ActMulWeighted(p.NExpertUsed*p.NFFNExp, p.NFFNExp, p.Act, false)
 		}},
 		{&bs.copyQ, func() (*ir.Kernel, error) {
 			if p.MLA() || !partialRotary(p) {
 				return nil, nil
 			}
-			return oldkernels.CopyAtRows(qdim, rows)
+			return mainkernels.CopyAtRows(qdim, rows)
 		}},
 		{&bs.copyV, func() (*ir.Kernel, error) {
 			// MLA writes no V at all: the value is the key row's own prefix.
@@ -831,9 +831,9 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				return nil, nil
 			}
 			if g.KVF16 {
-				return oldkernels.CopyAtF16(kvDim)
+				return mainkernels.CopyAtF16(kvDim)
 			}
-			return oldkernels.CopyAtRows(kvDim, rows)
+			return mainkernels.CopyAtRows(kvDim, rows)
 		}},
 		// MLA's own sequence, built from existing kernels: the absorb is the
 		// indexed matvec, scores and accumulate are the ordinary two at two widths,
@@ -846,13 +846,13 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			// tail, at a stride of HeadDim. Both are compacted, because the
 			// absorb wants one contiguous activation per head at stride nope
 			// and the rotation wants nRot pairs from a base.
-			return oldkernels.SliceRows(bs.mlaNopeW, p.HeadDim, 0, p.NHead)
+			return mainkernels.SliceRows(bs.mlaNopeW, p.HeadDim, 0, p.NHead)
 		}},
 		{&bs.mlaSlicePE, func() (*ir.Kernel, error) {
 			if !p.MLA() {
 				return nil, nil
 			}
-			return oldkernels.SliceRows(bs.mlaRot, p.HeadDim, bs.mlaNopeW, p.NHead)
+			return mainkernels.SliceRows(bs.mlaRot, p.HeadDim, bs.mlaNopeW, p.NHead)
 		}},
 		{&bs.mlaSliceKPE, func() (*ir.Kernel, error) {
 			if !p.MLA() {
@@ -860,7 +860,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			// The key's rotary half is the tail of the kv_a output, one for the
 			// whole layer (the "mqa" in kv_a_proj_with_mqa).
-			return oldkernels.SliceRows(bs.mlaRot, bs.mlaRow, bs.mlaLat, 1)
+			return mainkernels.SliceRows(bs.mlaRot, bs.mlaRow, bs.mlaLat, 1)
 		}},
 		{&bs.mlaRopeQ, func() (*ir.Kernel, error) {
 			if !p.MLA() {
@@ -868,7 +868,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			// NHead "heads" of exactly nRot, because the halves were compacted
 			// above -- so the rotation is over the whole of each one.
-			return oldkernels.RoPERows(p.NHead, bs.mlaRot, bs.mlaRot, p.RopeNeox, 1)
+			return mainkernels.RoPERows(p.NHead, bs.mlaRot, bs.mlaRot, p.RopeNeox, 1)
 		}},
 		{&bs.mlaRopeK, func() (*ir.Kernel, error) {
 			if !p.MLA() {
@@ -876,13 +876,13 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			// It rotates straight into the cache at this position's row plus the
 			// latent's width; RoPERows takes its destination offset from a buffer.
-			return oldkernels.RoPERows(1, bs.mlaRot, bs.mlaRot, p.RopeNeox, 1)
+			return mainkernels.RoPERows(1, bs.mlaRot, bs.mlaRot, p.RopeNeox, 1)
 		}},
 		{&bs.mlaCopyLat, func() (*ir.Kernel, error) {
 			if !p.MLA() {
 				return nil, nil
 			}
-			return oldkernels.CopyAt(bs.mlaLat)
+			return mainkernels.CopyAt(bs.mlaLat)
 		}},
 		// A NoPE MLA model (Kimi-Linear) still writes both destinations the rope
 		// kernels would, so these copies replace them rather than a skipped launch.
@@ -890,73 +890,73 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if !p.MLA() || !p.NoPosEnc {
 				return nil, nil
 			}
-			return oldkernels.CopyAt(p.NHead * bs.mlaRot)
+			return mainkernels.CopyAt(p.NHead * bs.mlaRot)
 		}},
 		{&bs.mlaNoPEK, func() (*ir.Kernel, error) {
 			if !p.MLA() || !p.NoPosEnc {
 				return nil, nil
 			}
-			return oldkernels.CopyAt(bs.mlaRot)
+			return mainkernels.CopyAt(bs.mlaRot)
 		}},
 		{&bs.mlaCopyAbs, func() (*ir.Kernel, error) {
 			if !p.MLA() {
 				return nil, nil
 			}
-			return oldkernels.CopyAtRows(bs.mlaLat, p.NHead)
+			return mainkernels.CopyAtRows(bs.mlaLat, p.NHead)
 		}},
 		{&bs.mlaCopyPE, func() (*ir.Kernel, error) {
 			if !p.MLA() {
 				return nil, nil
 			}
-			return oldkernels.CopyAtRows(bs.mlaRot, p.NHead)
+			return mainkernels.CopyAtRows(bs.mlaRot, p.NHead)
 		}},
 		{&bs.mlaQuantNope, func() (*ir.Kernel, error) {
 			if !p.MLA() {
 				return nil, nil
 			}
-			return oldkernels.Quantize(p.NHead*bs.mlaNopeW, actWin)
+			return mainkernels.Quantize(p.NHead*bs.mlaNopeW, actWin)
 		}},
 		{&bs.mlaQuantAcc, func() (*ir.Kernel, error) {
 			if !p.MLA() {
 				return nil, nil
 			}
-			return oldkernels.Quantize(p.NHead*bs.mlaLat, actWin)
+			return mainkernels.Quantize(p.NHead*bs.mlaLat, actWin)
 		}},
 		{&bs.mlaQuantOut, func() (*ir.Kernel, error) {
 			if !p.MLA() {
 				return nil, nil
 			}
-			return oldkernels.Quantize(p.NHead*p.HeadDimV, actWin)
+			return mainkernels.Quantize(p.NHead*p.HeadDimV, actWin)
 		}},
 		{&bs.mlaNormKVPart, func() (*ir.Kernel, error) {
 			if !p.MLA() {
 				return nil, nil
 			}
-			return oldkernels.NormPart(bs.mlaLat, bs.mlaParts)
+			return mainkernels.NormPart(bs.mlaLat, bs.mlaParts)
 		}},
 		{&bs.mlaNormKVApply, func() (*ir.Kernel, error) {
 			if !p.MLA() {
 				return nil, nil
 			}
-			return oldkernels.NormApply(bs.mlaLat, bs.mlaParts, latentEps(p), false)
+			return mainkernels.NormApply(bs.mlaLat, bs.mlaParts, latentEps(p), false)
 		}},
 		{&bs.mlaQuantQA, func() (*ir.Kernel, error) {
 			if !p.MLA() || p.QLoraRank == 0 {
 				return nil, nil
 			}
-			return oldkernels.Quantize(p.QLoraRank, actWin)
+			return mainkernels.Quantize(p.QLoraRank, actWin)
 		}},
 		{&bs.mlaNormQAPart, func() (*ir.Kernel, error) {
 			if !p.MLA() || p.QLoraRank == 0 {
 				return nil, nil
 			}
-			return oldkernels.NormPart(p.QLoraRank, bs.mlaQAParts)
+			return mainkernels.NormPart(p.QLoraRank, bs.mlaQAParts)
 		}},
 		{&bs.mlaNormQAApply, func() (*ir.Kernel, error) {
 			if !p.MLA() || p.QLoraRank == 0 {
 				return nil, nil
 			}
-			return oldkernels.NormApply(p.QLoraRank, bs.mlaQAParts, latentEps(p), false)
+			return mainkernels.NormApply(p.QLoraRank, bs.mlaQAParts, latentEps(p), false)
 		}},
 		{&bs.scores, func() (*ir.Kernel, error) {
 			// MLA's scores are MQA over the whole cache row in the existing kernel's
@@ -967,13 +967,13 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				// A decode row takes the warp-per-(head, position) kernel
 				// where the device guarantees the width: the thread-per-pair
 				// one walks the whole 576-wide row serially (see
-				// oldkernels.AttnScoresWarp).
+				// mainkernels.AttnScoresWarp).
 				if rows == 1 && g.pickLanes() == ir.SubgroupLanes {
 					bs.scoresWarp = true
-					return oldkernels.AttnScoresWarp(p.NHead, p.KVRow(), p.KVRow(), p.NHead,
+					return mainkernels.AttnScoresWarp(p.NHead, p.KVRow(), p.KVRow(), p.NHead,
 						bs.sstride, g.scoreScale(p))
 				}
-				return oldkernels.AttnScoresTiled(p.NHead, p.KVRow(), p.KVRow(), p.NHead,
+				return mainkernels.AttnScoresTiled(p.NHead, p.KVRow(), p.KVRow(), p.NHead,
 					bs.sstride, g.scoreScale(p), rows, bs.qtile, bs.ktile, 0)
 			}
 			// The matrix instruction where the shape allows it: q.k is a matrix
@@ -981,7 +981,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			// refusal falls through to the FMA tile.
 			if kst := g.kStride(p); bs.arows > 1 && kst > 0 && !g.NoMMA && !g.kb.noAttnMMA &&
 				p.HeadDim%16 == 0 && bs.arows%16 == 0 {
-				k, err := oldkernels.AttnScoresMMA(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride,
+				k, err := mainkernels.AttnScoresMMA(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride,
 					scale, bs.arows, kst, g.tiles.attnNT)
 				if err == nil {
 					if c, e := g.dev.Compile(k); e == nil {
@@ -998,7 +998,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			// The one-kernel form on Metal's matrix unit where it takes the
 			// shape; the FMA tiles below stay built as everything else's path.
 			g.flashTileAttn(bs, kvDim, gqa, scale)
-			return oldkernels.AttnScoresTiled(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, scale,
+			return mainkernels.AttnScoresTiled(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, scale,
 				bs.arows, bs.qtile, bs.ktile, g.kStride(p))
 		}},
 		{&bs.scoresW, func() (*ir.Kernel, error) {
@@ -1009,7 +1009,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				return nil, nil
 			}
 			if bs.scoresMMA != nil {
-				k, err := oldkernels.AttnScoresMMAW(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride,
+				k, err := mainkernels.AttnScoresMMAW(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride,
 					scale, bs.arows, g.kStride(p), g.tiles.attnNT, windowArg(p))
 				if err == nil {
 					if c, e := g.dev.Compile(k); e == nil {
@@ -1020,7 +1020,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				// A refusal falls through to the windowed FMA tile, which the
 				// launch takes whenever scoresMMAW is nil.
 			}
-			return oldkernels.AttnScoresTiledW(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, scale,
+			return mainkernels.AttnScoresTiledW(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, scale,
 				bs.arows, bs.qtile, bs.ktile, g.kStride(p), windowArg(p))
 		}},
 		{&bs.attnAcc, func() (*ir.Kernel, error) {
@@ -1035,7 +1035,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				if g.kb.mlaFault == MLAFaultValueHeadMajor {
 					gqa = 1
 				}
-				return oldkernels.AttnAcc(p.NHead, p.KVLoraRank, p.KVRow(), gqa, p.MaxSeq)
+				return mainkernels.AttnAcc(p.NHead, p.KVLoraRank, p.KVRow(), gqa, p.MaxSeq)
 			}
 			// The position split is a constant, not a tuned parameter: each thread's
 			// trip count is ceil((n - s)/S), zero for every split past n, so one S is
@@ -1044,7 +1044,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			// capped so the grid does not overshoot the device, and never above 32.
 			if rows > 1 {
 				bs.accSplit = 1
-				return oldkernels.AttnAccTiled(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, bs.arows, bs.atile)
+				return mainkernels.AttnAccTiled(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, bs.arows, bs.atile)
 			}
 			bs.accSplit = accSplitFor(qdim, g.dev.Slots(), g.kb.mvAccSplit)
 			// WithAttnAccSplit pins it, to tell a real difference from f32
@@ -1055,87 +1055,87 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if g.KVF16 {
 				// The packed kernel handles split 1 too, so there is no
 				// unsplit variant to fall back to here.
-				return oldkernels.AttnAccSplitF16(p.NHead, p.HeadDim, kvDim, gqa, p.MaxSeq, bs.accSplit)
+				return mainkernels.AttnAccSplitF16(p.NHead, p.HeadDim, kvDim, gqa, p.MaxSeq, bs.accSplit)
 			}
 			if bs.accSplit < 2 {
-				return oldkernels.AttnAcc(p.NHead, p.HeadDim, kvDim, gqa, p.MaxSeq)
+				return mainkernels.AttnAcc(p.NHead, p.HeadDim, kvDim, gqa, p.MaxSeq)
 			}
-			return oldkernels.AttnAccSplit(p.NHead, p.HeadDim, kvDim, gqa, p.MaxSeq, bs.accSplit)
+			return mainkernels.AttnAccSplit(p.NHead, p.HeadDim, kvDim, gqa, p.MaxSeq, bs.accSplit)
 		}},
 		{&bs.attnRed, func() (*ir.Kernel, error) {
 			if bs.accSplit < 2 {
 				return nil, nil // no split, no reduction
 			}
-			return oldkernels.Reduce(qdim, bs.accSplit)
+			return mainkernels.Reduce(qdim, bs.accSplit)
 		}},
 		{&bs.shRouterK, func() (*ir.Kernel, error) {
 			if p.NFFNShExp == 0 {
 				return nil, nil
 			}
-			return oldkernels.SharedRouterLogits(rows, p.NEmbd)
+			return mainkernels.SharedRouterLogits(rows, p.NEmbd)
 		}},
 		{&bs.shActMul, func() (*ir.Kernel, error) {
 			if p.NFFNShExp == 0 {
 				return nil, nil
 			}
 			if ungatedFFN(p) {
-				return oldkernels.Act(rows*p.NFFNShExp, p.Act)
+				return mainkernels.Act(rows*p.NFFNShExp, p.Act)
 			}
-			return oldkernels.ActMul(rows*p.NFFNShExp, p.Act)
+			return mainkernels.ActMul(rows*p.NFFNShExp, p.Act)
 		}},
 		{&bs.shQuant, func() (*ir.Kernel, error) {
 			if p.NFFNShExp == 0 {
 				return nil, nil
 			}
-			return oldkernels.Quantize(rows*p.NFFNShExp, actWin)
+			return mainkernels.Quantize(rows*p.NFFNShExp, actWin)
 		}},
 		{&bs.shAdd, func() (*ir.Kernel, error) {
 			if p.NFFNShExp == 0 {
 				return nil, nil
 			}
-			return oldkernels.SharedExpertAdd(p.NEmbd, rows)
+			return mainkernels.SharedExpertAdd(p.NEmbd, rows)
 		}},
 		{&bs.splitQG, func() (*ir.Kernel, error) {
 			if !p.AttnOutGate {
 				return nil, nil
 			}
-			return oldkernels.SplitHeadGate(p.NHead, p.HeadDim, rows)
+			return mainkernels.SplitHeadGate(p.NHead, p.HeadDim, rows)
 		}},
 		{&bs.softcap, func() (*ir.Kernel, error) {
 			if p.AttnSoftcap == 0 {
 				return nil, nil
 			}
-			return oldkernels.Softcap(bs.arows*p.NHead*bs.sstride, p.AttnSoftcap)
+			return mainkernels.Softcap(bs.arows*p.NHead*bs.sstride, p.AttnSoftcap)
 		}},
 		{&bs.clampQ, func() (*ir.Kernel, error) {
 			if p.ClampKQV == 0 {
 				return nil, nil
 			}
-			return oldkernels.Clamp(rows*qdim, p.ClampKQV)
+			return mainkernels.Clamp(rows*qdim, p.ClampKQV)
 		}},
 		{&bs.clampKV, func() (*ir.Kernel, error) {
 			if p.ClampKQV == 0 {
 				return nil, nil
 			}
-			return oldkernels.Clamp(rows*kvDim, p.ClampKQV)
+			return mainkernels.Clamp(rows*kvDim, p.ClampKQV)
 		}},
 		{&bs.sigMul, func() (*ir.Kernel, error) {
 			if !p.AttnOutGate {
 				return nil, nil
 			}
-			return oldkernels.SigmoidMul(rows * qdim)
+			return mainkernels.SigmoidMul(rows * qdim)
 		}},
 		{&bs.qkPart, func() (*ir.Kernel, error) {
 			if !p.QKNorm || !p.QKNormWide || p.NKVHead != p.NHead || (p.NHead*p.HeadDim)%bs.parts != 0 {
 				return nil, nil
 			}
-			return oldkernels.NormPartRows(p.NHead*p.HeadDim, bs.parts, rows)
+			return mainkernels.NormPartRows(p.NHead*p.HeadDim, bs.parts, rows)
 		}},
 		{&bs.qkApply, func() (*ir.Kernel, error) {
 			if !p.QKNorm || !p.QKNormWide || p.NKVHead != p.NHead || (p.NHead*p.HeadDim)%bs.parts != 0 {
 				return nil, nil
 			}
-			return oldkernels.NormApplyRows(p.NHead*p.HeadDim, bs.parts, float32(p.RMSEps), false, rows)
+			return mainkernels.NormApplyRows(p.NHead*p.HeadDim, bs.parts, float32(p.RMSEps), false, rows)
 		}},
 		{&bs.qkRms, func() (*ir.Kernel, error) {
 			if !p.QKNorm || !p.QKNormWide || p.NKVHead != p.NHead || g.NoQKRms {
@@ -1152,10 +1152,10 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if p.QKNorm && p.QKNormWide {
 				w := p.NHead * p.HeadDim
 				bs.qNormL = headLanes(w)
-				return oldkernels.HeadNormRows(1, w, p.RMSEps, rows, bs.qNormL)
+				return mainkernels.HeadNormRows(1, w, p.RMSEps, rows, bs.qNormL)
 			}
 			bs.qNormL = headLanes(p.HeadDim)
-			return oldkernels.HeadNormRows(p.NHead, p.HeadDim, p.RMSEps, rows, bs.qNormL)
+			return mainkernels.HeadNormRows(p.NHead, p.HeadDim, p.RMSEps, rows, bs.qNormL)
 		}},
 		{&bs.kNorm, func() (*ir.Kernel, error) {
 			if !p.QKNorm && !p.QKL2Norm {
@@ -1164,10 +1164,10 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if p.QKNorm && p.QKNormWide {
 				w := p.NKVHead * p.HeadDim
 				bs.kNormL = headLanes(w)
-				return oldkernels.HeadNormRows(1, w, p.RMSEps, rows, bs.kNormL)
+				return mainkernels.HeadNormRows(1, w, p.RMSEps, rows, bs.kNormL)
 			}
 			bs.kNormL = headLanes(p.HeadDim)
-			return oldkernels.HeadNormRows(p.NKVHead, p.HeadDim, p.RMSEps, rows, bs.kNormL)
+			return mainkernels.HeadNormRows(p.NKVHead, p.HeadDim, p.RMSEps, rows, bs.kNormL)
 		}},
 		{&bs.actMul, func() (*ir.Kernel, error) {
 			if ungatedFFN(p) {
@@ -1175,14 +1175,14 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				// would read a bs.g nothing wrote. xIELU's numbers are each
 				// block's buffer (layer.xielu).
 				if p.Act == kernels.ActXIELU {
-					return oldkernels.XIELU(rows * p.NFFN)
+					return mainkernels.XIELU(rows * p.NFFN)
 				}
-				return oldkernels.Act(rows*p.NFFN, p.Act)
+				return mainkernels.Act(rows*p.NFFN, p.Act)
 			}
 			if p.NFFN == 0 {
 				return nil, nil
 			}
-			return oldkernels.ActMul(rows*p.NFFN, p.Act)
+			return mainkernels.ActMul(rows*p.NFFN, p.Act)
 		}},
 		// A second activation kernel because the element count is baked and a
 		// DeepSeek has both shapes in one model (dense lead blocks, then
@@ -1195,33 +1195,33 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			// and elementwise, so the slot boundary does not matter. Ungated
 			// experts (Nemotron 3) take the activation alone.
 			if ungatedFFN(p) {
-				return oldkernels.Act(p.NExpertUsed*p.NFFNExp, p.Act)
+				return mainkernels.Act(p.NExpertUsed*p.NFFNExp, p.Act)
 			}
-			return oldkernels.ActMul(p.NExpertUsed*p.NFFNExp, p.Act)
+			return mainkernels.ActMul(p.NExpertUsed*p.NFFNExp, p.Act)
 		}},
 		{&bs.rank, func() (*ir.Kernel, error) {
 			if p.NExpert == 0 {
 				return nil, nil
 			}
-			return oldkernels.ExpertRank(routeOf(p))
+			return mainkernels.ExpertRank(routeOf(p))
 		}},
 		{&bs.weights, func() (*ir.Kernel, error) {
 			if p.NExpert == 0 {
 				return nil, nil
 			}
-			return oldkernels.ExpertWeights(routeOf(p))
+			return mainkernels.ExpertWeights(routeOf(p))
 		}},
 		{&bs.pleSlice, func() (*ir.Kernel, error) {
 			if p.PLEDim == 0 {
 				return nil, nil
 			}
-			return oldkernels.PLESlice(rows, p.PLEWidth, p.PLEDim)
+			return mainkernels.PLESlice(rows, p.PLEWidth, p.PLEDim)
 		}},
 		{&bs.pleAct, func() (*ir.Kernel, error) {
 			if p.PLEDim == 0 {
 				return nil, nil
 			}
-			return oldkernels.ActMul(rows*p.PLEDim, p.Act)
+			return mainkernels.ActMul(rows*p.PLEDim, p.Act)
 		}},
 		{&bs.pleQuant, func() (*ir.Kernel, error) {
 			if p.PLEDim == 0 {
@@ -1233,63 +1233,63 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if !p.DenseMoE {
 				return nil, nil
 			}
-			return oldkernels.ExpertWeightScale(1, p.NExpertUsed)
+			return mainkernels.ExpertWeightScale(1, p.NExpertUsed)
 		}},
 		{&bs.route, func() (*ir.Kernel, error) {
 			r := routeOf(p)
 			// The fused route renormalises or softmaxes all; sparsemixer's weights
-			// are their own kernel (oldkernels.ExpertWeights).
+			// are their own kernel (mainkernels.ExpertWeights).
 			if p.NExpert == 0 || r.Gated() || r.Bias || r.Grouped() || r.SparseMixer != 0 ||
-				oldkernels.ExpertRouteWidth(p.NExpert) == 0 {
+				mainkernels.ExpertRouteWidth(p.NExpert) == 0 {
 				return nil, nil
 			}
 			// One warp for the renormalised route where the device has one: the
 			// thread-per-expert form walks every logit. Same selection and weights
-			// (oldkernels.ExpertRouteWarp).
+			// (mainkernels.ExpertRouteWarp).
 			if r.Norm && bs.qkLanes == ir.SubgroupLanes {
-				if k, err := oldkernels.ExpertRouteWarp(r); err == nil {
+				if k, err := mainkernels.ExpertRouteWarp(r); err == nil {
 					bs.routeWidth = ir.SubgroupLanes
 					return k, nil
 				}
 			}
-			bs.routeWidth = oldkernels.ExpertRouteWidth(p.NExpert)
-			return oldkernels.ExpertRoute(r)
+			bs.routeWidth = mainkernels.ExpertRouteWidth(p.NExpert)
+			return mainkernels.ExpertRoute(r)
 		}},
 		{&bs.gscore, func() (*ir.Kernel, error) {
 			if p.NExpert == 0 || p.ExpertGroups <= 1 {
 				return nil, nil
 			}
-			return oldkernels.ExpertGroupScore(routeOf(p))
+			return mainkernels.ExpertGroupScore(routeOf(p))
 		}},
 		{&bs.gmask, func() (*ir.Kernel, error) {
 			if p.NExpert == 0 || p.ExpertGroups <= 1 {
 				return nil, nil
 			}
-			return oldkernels.ExpertGroupMask(routeOf(p))
+			return mainkernels.ExpertGroupMask(routeOf(p))
 		}},
 		{&bs.rbias, func() (*ir.Kernel, error) {
 			if p.NExpert == 0 || !p.MoEBias {
 				return nil, nil
 			}
-			return oldkernels.Add(p.NExpert)
+			return mainkernels.Add(p.NExpert)
 		}},
 		{&bs.ebiasFF, func() (*ir.Kernel, error) {
 			if p.NExpert == 0 || !p.MoEBias {
 				return nil, nil
 			}
-			return oldkernels.IndexedBiasAdd(p.NExpertUsed, p.NFFNExp)
+			return mainkernels.IndexedBiasAdd(p.NExpertUsed, p.NFFNExp)
 		}},
 		{&bs.ebiasD, func() (*ir.Kernel, error) {
 			if p.NExpert == 0 || !p.MoEBias {
 				return nil, nil
 			}
-			return oldkernels.IndexedBiasAdd(p.NExpertUsed, p.NEmbd)
+			return mainkernels.IndexedBiasAdd(p.NExpertUsed, p.NEmbd)
 		}},
 		{&bs.combine, func() (*ir.Kernel, error) {
 			if p.NExpert == 0 {
 				return nil, nil
 			}
-			return oldkernels.ExpertCombine(p.ExpWidth(), p.NExpertUsed)
+			return mainkernels.ExpertCombine(p.ExpWidth(), p.NExpertUsed)
 		}},
 		{&bs.quantX, func() (*ir.Kernel, error) {
 			if p.NExpert == 0 {
@@ -1300,18 +1300,18 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			// MatVecShape.SlotAct then reads.
 			return quantizeRows(p.NExpertUsed, p.NFFNExp, actWin)
 		}},
-		{&bs.addE, func() (*ir.Kernel, error) { return oldkernels.Add(rows * p.NEmbd) }},
+		{&bs.addE, func() (*ir.Kernel, error) { return mainkernels.Add(rows * p.NEmbd) }},
 		{&bs.addS, func() (*ir.Kernel, error) {
 			if !residScaled(p) {
 				return nil, nil
 			}
-			return oldkernels.AddScaled(rows * p.NEmbd)
+			return mainkernels.AddScaled(rows * p.NEmbd)
 		}},
 		{&bs.scaleX, func() (*ir.Kernel, error) {
 			if !p.GeomSplit {
 				return nil, nil
 			}
-			return oldkernels.Scale(rows * p.NEmbd)
+			return mainkernels.Scale(rows * p.NEmbd)
 		}},
 		// Mamba-1's: the convolution's bias and SiLU, dt's quantization, the
 		// three norms (dt over the rank, B and C over the state), and the
@@ -1320,7 +1320,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if r.Conv == 0 || !r.Mamba1 {
 				return nil, nil
 			}
-			return oldkernels.BiasAct(r.Chans, rows, kernels.ActSiLU)
+			return mainkernels.BiasAct(r.Chans, rows, kernels.ActSiLU)
 		}},
 		{&bs.m1Quant, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || !r.Mamba1 {
@@ -1333,14 +1333,14 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				return nil, nil
 			}
 			bs.m1NormDtL = headLanes(r.Rank)
-			return oldkernels.HeadNormRows(1, r.Rank, p.RMSEps, rows, bs.m1NormDtL)
+			return mainkernels.HeadNormRows(1, r.Rank, p.RMSEps, rows, bs.m1NormDtL)
 		}},
 		{&bs.m1NormBC, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || !r.Mamba1 {
 				return nil, nil
 			}
 			bs.m1NormBCL = headLanes(r.KDim)
-			return oldkernels.HeadNormRows(1, r.KDim, p.RMSEps, rows, bs.m1NormBCL)
+			return mainkernels.HeadNormRows(1, r.KDim, p.RMSEps, rows, bs.m1NormBCL)
 		}},
 		{&bs.m1Scan, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || !r.Mamba1 {
@@ -1348,7 +1348,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			d := deltaScanOf(r, rows, bs.qkLanes)
 			bs.scanThreads = d.Threads()
-			return oldkernels.GatedDeltaFused(d, oldkernels.DeltaFuse{Mamba1: true})
+			return mainkernels.GatedDeltaFused(d, mainkernels.DeltaFuse{Mamba1: true})
 		}},
 		// Mamba-2's: the whole update in one launch, its grouped norm, and the
 		// copy a mixer-only block ends with.
@@ -1358,7 +1358,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			d := deltaScanOf(r, rows, bs.qkLanes)
 			bs.scanThreads = d.Threads()
-			return oldkernels.GatedDeltaFused(d, oldkernels.DeltaFuse{Chans: r.Chans, SSD: true})
+			return mainkernels.GatedDeltaFused(d, mainkernels.DeltaFuse{Chans: r.Chans, SSD: true})
 		}},
 		{&bs.ssdNorm, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || !r.SSD || r.NoNorm {
@@ -1366,56 +1366,56 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			w := r.VHeads * r.VDim / r.NormGroups
 			bs.ssdNormL = headLanes(w)
-			return oldkernels.GroupNormRows(r.NormGroups, w, p.RMSEps, rows, bs.ssdNormL)
+			return mainkernels.GroupNormRows(r.NormGroups, w, p.RMSEps, rows, bs.ssdNormL)
 		}},
 		{&bs.copyRes, func() (*ir.Kernel, error) {
 			if !r.SSD && !r.Mamba1 {
 				return nil, nil
 			}
-			return oldkernels.Restride(rows, p.NEmbd, p.NEmbd, p.NEmbd)
+			return mainkernels.Restride(rows, p.NEmbd, p.NEmbd, p.NEmbd)
 		}},
 		// The linear block's kernels, each nil when the model has no such block.
 		{&bs.convRows, func() (*ir.Kernel, error) {
 			if r.Conv == 0 {
 				return nil, nil
 			}
-			return oldkernels.Conv1dRows(r.Conv, r.Chans, rows)
+			return mainkernels.Conv1dRows(r.Conv, r.Chans, rows)
 		}},
 		{&bs.scMul, func() (*ir.Kernel, error) {
 			if !r.ShortConv {
 				return nil, nil
 			}
-			return oldkernels.ActMul(rows*r.Chans, kernels.ActIdentity)
+			return mainkernels.ActMul(rows*r.Chans, kernels.ActIdentity)
 		}},
 		{&bs.convCentred, func() (*ir.Kernel, error) {
 			if !r.Centred {
 				return nil, nil
 			}
-			return oldkernels.Conv3Centred(r.Chans, rows)
+			return mainkernels.Conv3Centred(r.Chans, rows)
 		}},
 		{&bs.convShift, func() (*ir.Kernel, error) {
 			if r.Conv == 0 {
 				return nil, nil
 			}
-			return oldkernels.Conv1dShift(r.Conv, r.Chans, rows)
+			return mainkernels.Conv1dShift(r.Conv, r.Chans, rows)
 		}},
 		{&bs.ssmSiLU, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
 				return nil, nil
 			}
-			return oldkernels.Act(rows*r.Chans, kernels.ActSiLU)
+			return mainkernels.Act(rows*r.Chans, kernels.ActSiLU)
 		}},
 		{&bs.splitGates, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
 				return nil, nil
 			}
-			return oldkernels.SplitDeltaGatesRows(r.KHeads, r.VHeads/r.KHeads, rows)
+			return mainkernels.SplitDeltaGatesRows(r.KHeads, r.VHeads/r.KHeads, rows)
 		}},
 		{&bs.deltaGate, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
 				return nil, nil
 			}
-			return oldkernels.DeltaGateRows(r.VHeads, rows)
+			return mainkernels.DeltaGateRows(r.VHeads, rows)
 		}},
 		// KDA's gate kernels: two launches because decay runs over VHeads*KDim
 		// channels and beta over VHeads heads. DeltaGate computes both, so each
@@ -1426,9 +1426,9 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			if r.DecayBound != 0 {
 				// Kimi-K3's lower-bounded decay, the same params.
-				return oldkernels.DeltaDecayBoundRows(r.VHeads*r.KDim, rows, r.DecayBound)
+				return mainkernels.DeltaDecayBoundRows(r.VHeads*r.KDim, rows, r.DecayBound)
 			}
-			return oldkernels.DeltaGateRows(r.VHeads*r.KDim, rows)
+			return mainkernels.DeltaGateRows(r.VHeads*r.KDim, rows)
 		}},
 		{&bs.quantLR, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || r.ShortConv || !r.ChanDecay {
@@ -1440,7 +1440,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if r.Conv == 0 || r.ShortConv || !r.ChanDecay {
 				return nil, nil
 			}
-			return oldkernels.GatedDeltaStepChan(r.VHeads, r.VDim, r.KDim, r.VHeads/r.KHeads)
+			return mainkernels.GatedDeltaStepChan(r.VHeads, r.VDim, r.KDim, r.VHeads/r.KHeads)
 		}},
 		{&bs.outSigMul, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || r.ShortConv || !(r.ChanDecay || r.SigmoidGate) {
@@ -1448,25 +1448,25 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			}
 			// SigmoidMul, not ActMul: KimiLinearRMSNormGated applies out*sigma(z)
 			// where qwen3next applies out*SiLU(z), which differ by a factor of z.
-			return oldkernels.SigmoidMul(rows * r.VHeads * r.VDim)
+			return mainkernels.SigmoidMul(rows * r.VHeads * r.VDim)
 		}},
 		{&bs.sliceQ, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
 				return nil, nil
 			}
-			return oldkernels.SliceRows(r.KHeads*r.KDim, r.Chans, 0, rows)
+			return mainkernels.SliceRows(r.KHeads*r.KDim, r.Chans, 0, rows)
 		}},
 		{&bs.sliceK, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
 				return nil, nil
 			}
-			return oldkernels.SliceRows(r.KHeads*r.KDim, r.Chans, r.KHeads*r.KDim, rows)
+			return mainkernels.SliceRows(r.KHeads*r.KDim, r.Chans, r.KHeads*r.KDim, rows)
 		}},
 		{&bs.sliceV, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
 				return nil, nil
 			}
-			return oldkernels.SliceRows(r.VHeads*r.VDim, r.Chans, 2*r.KHeads*r.KDim, rows)
+			return mainkernels.SliceRows(r.VHeads*r.VDim, r.Chans, 2*r.KHeads*r.KDim, rows)
 		}},
 		{&bs.qkNorm, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
@@ -1481,26 +1481,26 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				eps = 1e-6
 			}
 			bs.qkNormL = headLanes(r.KDim)
-			return oldkernels.HeadNormRows(r.KHeads, r.KDim, eps/float64(r.KDim),
+			return mainkernels.HeadNormRows(r.KHeads, r.KDim, eps/float64(r.KDim),
 				rows, bs.qkNormL)
 		}},
 		{&bs.qkScale, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
 				return nil, nil
 			}
-			return oldkernels.Scale(rows * r.KHeads * r.KDim)
+			return mainkernels.Scale(rows * r.KHeads * r.KDim)
 		}},
 		{&bs.deltaStep, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
 				return nil, nil
 			}
 			if r.KeyTiled && r.TailLen > 0 {
-				return oldkernels.GatedDeltaStepTiledStride(r.VHeads, r.VDim, r.KDim, r.KHeads, r.StateLen)
+				return mainkernels.GatedDeltaStepTiledStride(r.VHeads, r.VDim, r.KDim, r.KHeads, r.StateLen)
 			}
 			if r.KeyTiled {
-				return oldkernels.GatedDeltaStepTiled(r.VHeads, r.VDim, r.KDim, r.KHeads)
+				return mainkernels.GatedDeltaStepTiled(r.VHeads, r.VDim, r.KDim, r.KHeads)
 			}
-			return oldkernels.GatedDeltaStep(r.VHeads, r.VDim, r.KDim, r.VHeads/r.KHeads)
+			return mainkernels.GatedDeltaStep(r.VHeads, r.VDim, r.KDim, r.VHeads/r.KHeads)
 		}},
 		// The chunk's delta rule: GatedDeltaStep steps one token, so a batched
 		// submission needs the scan. Decode takes it too where the device has a
@@ -1528,7 +1528,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				eps = 1e-6
 			}
 			bs.scanThreads = d.Threads()
-			return oldkernels.GatedDeltaFused(d, oldkernels.DeltaFuse{Chans: r.Chans,
+			return mainkernels.GatedDeltaFused(d, mainkernels.DeltaFuse{Chans: r.Chans,
 				Eps: float32(eps / float64(r.KDim)), Scale: float32(1 / math.Sqrt(float64(r.KDim))),
 				BARep: r.VHeads / r.KHeads, Bound: r.DecayBound})
 		}},
@@ -1541,34 +1541,22 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				return nil, nil
 			}
 			bs.scanThreads = d.Threads()
-			return oldkernels.GatedDeltaScan(d)
+			return mainkernels.GatedDeltaScan(d)
 		}},
 		{&bs.outNorm, func() (*ir.Kernel, error) {
 			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
 				return nil, nil
 			}
 			bs.outNormL = headLanes(r.VDim)
-			return oldkernels.HeadNormRows(r.VHeads, r.VDim, p.RMSEps, rows, bs.outNormL)
+			return mainkernels.HeadNormRows(r.VHeads, r.VDim, p.RMSEps, rows, bs.outNormL)
 		}},
 		{&bs.outActMul, func() (*ir.Kernel, error) {
 			if r.Conv == 0 {
 				return nil, nil
 			}
-			return oldkernels.ActMul(rows*r.VHeads*r.VDim, kernels.ActSiLU)
+			return mainkernels.ActMul(rows*r.VHeads*r.VDim, kernels.ActSiLU)
 		}},
-		{&bs.outNormGate, func() (*ir.Kernel, error) {
-			// graph.NormGate's recipe: the output norm and its gate in one
-			// launch, at outNorm's lanes. Built wherever outNorm is; each
-			// block's plan decides whether it runs (prepNormGate).
-			if r.Conv == 0 || r.ShortConv || r.Mamba1 {
-				return nil, nil
-			}
-			gate := oldkernels.GateSiLU
-			if r.ChanDecay || r.SigmoidGate {
-				gate = oldkernels.GateSigmoid
-			}
-			return oldkernels.HeadNormGated(r.VHeads, r.VDim, p.RMSEps, rows, headLanes(r.VDim), gate)
-		}},
+
 	}
 	for _, j := range altJobs(bs, p, rows, actWin) {
 		jobs = append(jobs, job{j.dst, j.make})
@@ -1581,8 +1569,8 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		for s := range 7 {
 			ni, no, off := rows*in[s], rows*out[s], 4*s
 			jobs = append(jobs,
-				job{&bs.clampK[2*s], func() (*ir.Kernel, error) { return oldkernels.ClampAt(ni, off) }},
-				job{&bs.clampK[2*s+1], func() (*ir.Kernel, error) { return oldkernels.ClampAt(no, off+2) }})
+				job{&bs.clampK[2*s], func() (*ir.Kernel, error) { return mainkernels.ClampAt(ni, off) }},
+				job{&bs.clampK[2*s+1], func() (*ir.Kernel, error) { return mainkernels.ClampAt(no, off+2) }})
 		}
 	}
 	// The contiguous cache's writers and readers, which paged history
@@ -1706,7 +1694,7 @@ func (g *devTier) pickSoftmax(bs *blockScratch) bool {
 	// count as its first argument and needs no other change.
 	heads := p.NHead * bs.arows
 	build := func(lanes int) backend.Kernel {
-		k, err := oldkernels.SoftmaxRowsSink(p.NHead, bs.sstride, lanes, bs.arows, bs.atile, p.AttnSinks)
+		k, err := mainkernels.SoftmaxRowsSink(p.NHead, bs.sstride, lanes, bs.arows, bs.atile, p.AttnSinks)
 		if err != nil {
 			g.LastErr = err.Error()
 			return nil

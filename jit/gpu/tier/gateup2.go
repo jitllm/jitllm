@@ -1,7 +1,7 @@
 package tier
 
 import (
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // gateUp2On says block l's gated FFN runs gate and up as one Gate2 launch
@@ -29,13 +29,13 @@ func (g *devTier) gateUp2Shape(l *layer) bool {
 
 // gateUp2Pick is this device's choice for a shape: the tuner's verdict
 // (tuneFFN, recipe.go) where it has one; otherwise Gate2 where it writes the two
-// launches' bits (oldkernels.Gate2Exact), which measured faster on every shape
+// launches' bits (mainkernels.Gate2Exact), which measured faster on every shape
 // a V100 was given, and the two launches elsewhere until a trial says.
 func (g *devTier) gateUp2Pick(key splitKey) bool {
 	if v, ok := g.gu2Win[key]; ok {
 		return v
 	}
-	return oldkernels.Gate2Exact(g.dev.API())
+	return mainkernels.Gate2Exact(g.dev.API())
 }
 
 // gateUp2Swapped (the wrong-answer switch of a gate, Config.hook; WithViolation) hands the Gate2 launch up's weight as the gate's and the

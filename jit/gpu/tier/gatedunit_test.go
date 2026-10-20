@@ -11,7 +11,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestGatedUnitMatchesTheKernels holds the gated unit composed from a
@@ -91,7 +91,7 @@ func TestGatedUnitMatchesTheKernels(t *testing.T) {
 				return run(c, 1, 128)
 			}
 			for _, tc := range cases {
-				tk, err := oldkernels.ActMul(n, tc.k)
+				tk, err := mainkernels.ActMul(n, tc.k)
 				if err != nil {
 					t.Fatal(err)
 				}

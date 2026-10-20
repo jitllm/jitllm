@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // flash70Case is one geometry for FlashPrefill70.
@@ -71,7 +71,7 @@ func TestFlashPrefill70IsGated(t *testing.T) {
 }
 
 // TestFlashPrefillTileMatchesReference is the same reference and the same
-// poisoned slots for oldkernels.FlashPrefillTile, on every device that lowers the
+// poisoned slots for mainkernels.FlashPrefillTile, on every device that lowers the
 // ir tile ops at its 8x8 shape (Metal's simdgroup_matrix, PTX's mma.sync), at
 // the blocking FlashTileFor picks per head width.
 func TestFlashPrefillTileMatchesReference(t *testing.T) {
@@ -127,20 +127,20 @@ var tile8f32 = backend.TileShape{M: 8, N: 8, K: 8, Elem: ir.TileF32, Acc: ir.Til
 var tile16x8 = backend.TileShape{M: 16, N: 8, K: 8, Elem: ir.TileF16, Acc: ir.TileF32}
 
 // flashBuild returns a flash kernel for a shape and its launch geometry.
-type flashBuild func(sh oldkernels.FlashPrefill70Shape) (*ir.Kernel, int, int, error)
+type flashBuild func(sh mainkernels.FlashPrefill70Shape) (*ir.Kernel, int, int, error)
 
-func flash70Build(sh oldkernels.FlashPrefill70Shape) (*ir.Kernel, int, int, error) {
-	k, err := oldkernels.FlashPrefill70(sh)
-	return k, oldkernels.FlashPrefill70Groups(sh), oldkernels.FlashPrefill70Threads, err
+func flash70Build(sh mainkernels.FlashPrefill70Shape) (*ir.Kernel, int, int, error) {
+	k, err := mainkernels.FlashPrefill70(sh)
+	return k, mainkernels.FlashPrefill70Groups(sh), mainkernels.FlashPrefill70Threads, err
 }
 
-func flashTileBuild(sh oldkernels.FlashPrefill70Shape) (*ir.Kernel, int, int, error) {
-	tl, ok := oldkernels.FlashTileFor(sh.Dim)
+func flashTileBuild(sh mainkernels.FlashPrefill70Shape) (*ir.Kernel, int, int, error) {
+	tl, ok := mainkernels.FlashTileFor(sh.Dim)
 	if !ok {
 		return nil, 0, 0, fmt.Errorf("no blocking fits head width %d", sh.Dim)
 	}
-	k, err := oldkernels.FlashPrefillTile(sh, tl)
-	return k, oldkernels.FlashTileGroups(sh.Heads, sh.Rows, tl), tl.Threads(), err
+	k, err := mainkernels.FlashPrefillTile(sh, tl)
+	return k, mainkernels.FlashTileGroups(sh.Heads, sh.Rows, tl), tl.Threads(), err
 }
 
 func flash70Run(t *testing.T, d backend.Device, c flash70Case, violate bool) {
@@ -153,7 +153,7 @@ func flashRun(t *testing.T, d backend.Device, c flash70Case, violate bool, build
 	kvDim := c.kv * c.dim
 	gqa := c.heads / c.kv
 	scale := float32(1 / math.Sqrt(float64(c.dim)))
-	sh := oldkernels.FlashPrefill70Shape{Heads: c.heads, KVHeads: c.kv, Dim: c.dim, Rows: c.rows, KStride: kStride,
+	sh := mainkernels.FlashPrefill70Shape{Heads: c.heads, KVHeads: c.kv, Dim: c.dim, Rows: c.rows, KStride: kStride,
 		Scale: scale, Softcap: c.softcap, Window: c.window}
 	kk, groups, threads, err := build(sh)
 	if err != nil {

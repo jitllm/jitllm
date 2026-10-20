@@ -8,7 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestIndexedGroupSplitMatchesTheReduce gates the indexed in-group split: an
@@ -115,12 +115,12 @@ func idGroupCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	bAX := g.up(f32bytes(append(append([]float32{}, as...), asum...)))
 	bSel := g.up(u32bytes(sel))
 
-	shape := oldkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split,
+	shape := mainkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split,
 		Experts: experts, Slots: slots, SlotAct: slotAct}
 	want := g.run(t, shape, rows, slots, split, bQS, bD, bSC, bA, bAX, bSel)
 
 	shape.GroupSplit = true
-	kk, err := oldkernels.MatVec(shape)
+	kk, err := mainkernels.MatVec(shape)
 	if err != nil {
 		t.Fatalf("the in-group indexed shape is refused: %v", err)
 	}
@@ -131,7 +131,7 @@ func idGroupCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	defer kern.Close()
 	n := rows * slots
 	out := g.up(make([]byte, n*4))
-	w := oldkernels.GroupSplitWidth(split)
+	w := mainkernels.GroupSplitWidth(split)
 	if err := kern.Launch(n*split/w, w, bQS, bD, bSC, bA, bAX, out, bSel); err != nil {
 		t.Fatalf("launch: %v", err)
 	}

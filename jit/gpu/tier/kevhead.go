@@ -7,7 +7,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // Kev's pointer head on the device (nn.KevHeadDevice), on the decision
@@ -213,12 +213,12 @@ func (g *devTier) khBuild(h *nn.KevHead, hd *khHead, n int) (*khProg, error) {
 	}
 	norm := func(dst, x backend.Buf, rows int) {
 		launch(kern(dhKey{name: "norm", a: [10]int{D, rows}, f: [3]float32{h.RMSEps}, b: [2]bool{true, false}},
-			func() (*ir.Kernel, error) { return oldkernels.DHNormRows(D, rows, h.RMSEps, true, false) }),
+			func() (*ir.Kernel, error) { return mainkernels.DHNormRows(D, rows, h.RMSEps, true, false) }),
 			rows, x, w(h.OutNorm), w(h.OutNorm), dst)
 	}
 	linear := func(dst, x backend.Buf, rows int, wt, bias []float32) {
 		launch(kern(dhKey{name: "matabt", a: [10]int{1, rows, P, D, D, D, P, 0, 0, 0}, f: [3]float32{1}, b: [2]bool{true}},
-			func() (*ir.Kernel, error) { return oldkernels.DHMatABt(1, rows, P, D, D, D, P, 0, 0, 0, 1, true) }),
+			func() (*ir.Kernel, error) { return mainkernels.DHMatABt(1, rows, P, D, D, D, P, 0, 0, 0, 1, true) }),
 			rows*P, x, w(wt), w(bias), dst)
 	}
 	pr.q, pr.k = buf(D), buf(n*D)
@@ -230,7 +230,7 @@ func (g *devTier) khBuild(h *nn.KevHead, hd *khHead, n int) (*khProg, error) {
 	linear(kp, kn, n, h.WK, h.BK)
 	sc := float32(1 / math.Sqrt(float64(P)))
 	launch(kern(dhKey{name: "matabt", a: [10]int{1, 1, n, P, P, P, n, 0, 0, 0}, f: [3]float32{sc}},
-		func() (*ir.Kernel, error) { return oldkernels.DHMatABt(1, 1, n, P, P, P, n, 0, 0, 0, sc, false) }),
+		func() (*ir.Kernel, error) { return mainkernels.DHMatABt(1, 1, n, P, P, P, n, 0, 0, 0, sc, false) }),
 		n, qp, kp, kp, pr.outB)
 	if err != nil {
 		for _, b := range pr.own {

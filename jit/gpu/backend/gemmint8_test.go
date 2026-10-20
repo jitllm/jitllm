@@ -9,14 +9,14 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // int8Tiles are the GemmInt8 blockings TestMatVecMMAMatchesDot4 sweeps on
 // every shape a tile divides: 2x2 and 1x4 warp grids, one and several
 // m-tiles and n-tiles, a 32-row block whose staging items are fewer than its
 // threads.
-var int8Tiles = []oldkernels.Int8Tile{
+var int8Tiles = []mainkernels.Int8Tile{
 	{MT: 4, NT: 4, WM: 2, WN: 2}, {MT: 2, NT: 2, WM: 2, WN: 2}, {MT: 1, NT: 1, WM: 2, WN: 2},
 	{MT: 4, NT: 2, WM: 1, WN: 4}, {MT: 1, NT: 2, WM: 4, WN: 1},
 	// The deep stage (MMQ's shape): eight warps, 64 and 128 elements of k a
@@ -31,7 +31,7 @@ var int8Tiles = []oldkernels.Int8Tile{
 
 // int8M8Tiles are int8Tiles' m8n8k16 forms: all a device with only sm_75's
 // integer instruction runs.
-var int8M8Tiles = func() (out []oldkernels.Int8Tile) {
+var int8M8Tiles = func() (out []mainkernels.Int8Tile) {
 	for _, tl := range int8Tiles {
 		if tl.M8 {
 			out = append(out, tl)
@@ -47,12 +47,12 @@ var int8M8Tiles = func() (out []oldkernels.Int8Tile) {
 // order. run launches a kernel into a fresh poisoned output of n floats per
 // split slice and returns the bytes. A format GemmInt8 has no decode for is
 // refused by name.
-func gemmInt8Case(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, ntok int, want []byte, tiles []oldkernels.Int8Tile,
+func gemmInt8Case(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, ntok int, want []byte, tiles []mainkernels.Int8Tile,
 	run func(kern backend.Kernel, groups, w, n int) []byte) {
 	t.Helper()
-	if !oldkernels.Int8OK(q) {
-		if _, err := oldkernels.GemmInt8(oldkernels.MatVecShape{T: q, K: k, Rows: nrows, NTok: ntok},
-			oldkernels.Int8Tile{MT: 1, NT: 1, WM: 1, WN: 1}); err == nil {
+	if !mainkernels.Int8OK(q) {
+		if _, err := mainkernels.GemmInt8(mainkernels.MatVecShape{T: q, K: k, Rows: nrows, NTok: ntok},
+			mainkernels.Int8Tile{MT: 1, NT: 1, WM: 1, WN: 1}); err == nil {
 			t.Fatalf("GemmInt8 built %v, which it has no decode for", q)
 		}
 		return
@@ -60,8 +60,8 @@ func gemmInt8Case(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 	ran := 0
 	for _, tl := range tiles {
 		for _, split := range []int{1, 2} {
-			s := oldkernels.MatVecShape{T: q, K: k, Rows: nrows, NTok: ntok, Split: split}
-			kk, err := oldkernels.GemmInt8(s, tl)
+			s := mainkernels.MatVecShape{T: q, K: k, Rows: nrows, NTok: ntok, Split: split}
+			kk, err := mainkernels.GemmInt8(s, tl)
 			if err != nil {
 				if strings.Contains(err.Error(), "does not divide") || strings.Contains(err.Error(), "do not tile") ||
 					strings.Contains(err.Error(), "shared memory") {
@@ -78,7 +78,7 @@ func gemmInt8Case(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 				return
 			}
 			n := nrows * ntok
-			got := run(kern, oldkernels.GemmInt8Groups(s, tl), tl.Threads(), n*split)
+			got := run(kern, mainkernels.GemmInt8Groups(s, tl), tl.Threads(), n*split)
 			kern.Close()
 			ran++
 			bad := 0

@@ -6,7 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestGroupedMatVecMatchesPerSlot is the kernel half of a batched mixture: NTok
@@ -98,9 +98,9 @@ func groupedFloatCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, 
 	defer g.free()
 	// The int8 slots are bound and never read by a float matvec.
 	bQS, bX, bNone := g.up(u32bytes(qs)), g.up(f32bytes(acts)), g.up(nil)
-	got := g.run(t, oldkernels.MatVecShape{T: q, K: k, Rows: rows, Experts: experts, NTok: ntok, Tok: tok, Sub: sub},
+	got := g.run(t, mainkernels.MatVecShape{T: q, K: k, Rows: rows, Experts: experts, NTok: ntok, Tok: tok, Sub: sub},
 		rows, ntok, 1, bQS, bX, bNone, bNone, bNone, g.up(u32bytes(sel)))
-	want := g.run(t, oldkernels.MatVecShape{T: q, K: k, Rows: rows, Experts: experts, Slots: ntok, SlotAct: true, Sub: sub},
+	want := g.run(t, mainkernels.MatVecShape{T: q, K: k, Rows: rows, Experts: experts, Slots: ntok, SlotAct: true, Sub: sub},
 		rows, ntok, 1, bQS, bX, bNone, bNone, bNone, g.up(u32bytes(perCol)))
 	if len(got) == 0 || len(want) == 0 {
 		t.Fatal("a kernel did not run -- this gate proved nothing")
@@ -118,7 +118,7 @@ func groupedFloatCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, 
 	for j := range off {
 		off[j] = (perCol[j] + 1) % uint32(experts)
 	}
-	bad := g.run(t, oldkernels.MatVecShape{T: q, K: k, Rows: rows, Experts: experts, Slots: ntok, SlotAct: true, Sub: sub},
+	bad := g.run(t, mainkernels.MatVecShape{T: q, K: k, Rows: rows, Experts: experts, Slots: ntok, SlotAct: true, Sub: sub},
 		rows, ntok, 1, bQS, bX, bNone, bNone, bNone, g.up(u32bytes(off)))
 	same := true
 	for i := range bad {
@@ -165,9 +165,9 @@ func groupedCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	defer g.free()
 	bQS, bD, bSC := g.up(u32bytes(qs)), g.up(u32bytes(dw)), g.up(u32bytes(scw))
 	bA, bAX := g.up(u32bytes(allA)), g.up(f32bytes(append(allScale, allSum...)))
-	got := g.run(t, oldkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split, Experts: experts,
+	got := g.run(t, mainkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split, Experts: experts,
 		NTok: ntok, Tok: tok}, rows, ntok, split, bQS, bD, bSC, bA, bAX, g.up(u32bytes(sel)))
-	want := g.run(t, oldkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split, Experts: experts,
+	want := g.run(t, mainkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split, Experts: experts,
 		Slots: ntok, SlotAct: true}, rows, ntok, split, bQS, bD, bSC, bA, bAX, g.up(u32bytes(perCol)))
 	if len(got) == 0 || len(want) == 0 {
 		t.Fatal("a kernel did not run -- this gate proved nothing")

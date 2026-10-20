@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestMatVecGate2IsTheTwoLaunches: a Gate2 matvec -- gate's row and up's row
@@ -32,7 +32,7 @@ func TestMatVecGate2IsTheTwoLaunches(t *testing.T) {
 			for _, sh := range [][2]int{{1024, 4096}, {256, 2048}, {96, 768}, {8192, 2048}} {
 				for _, sp := range []int{1, 2, 4, 8, 16, 32, 64} {
 					for _, a := range []kernels.ActKind{kernels.ActSiLU, kernels.ActGELU} {
-						if sp > 1 && !oldkernels.GroupSplitOK(sh[0], sp) || (sh[1]/q.Elems()*q.Elems()/32)%sp != 0 {
+						if sp > 1 && !mainkernels.GroupSplitOK(sh[0], sp) || (sh[1]/q.Elems()*q.Elems()/32)%sp != 0 {
 							continue
 						}
 						name := fmt.Sprintf("%s/%v/%dx%d/s%d/%v", d.API(), q, sh[0], sh[1], sp, a)
@@ -105,10 +105,10 @@ func gate2Case(t *testing.T, d backend.Device, name string, q kernels.Quant, row
 		t.Fatal(err)
 	}
 	grp := split > 1
-	mk := func(s oldkernels.MatVecShape) backend.Kernel {
+	mk := func(s mainkernels.MatVecShape) backend.Kernel {
 		t.Helper()
 		s.T, s.K, s.Rows, s.Split, s.GroupSplit, s.GateAct = q, k, rows, split, grp, a
-		kk, err := oldkernels.MatVec(s)
+		kk, err := mainkernels.MatVec(s)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -121,7 +121,7 @@ func gate2Case(t *testing.T, d backend.Device, name string, q kernels.Quant, row
 		}
 		return c
 	}
-	plain, gated, both := mk(oldkernels.MatVecShape{}), mk(oldkernels.MatVecShape{Gate: true}), mk(oldkernels.MatVecShape{Gate2: true})
+	plain, gated, both := mk(mainkernels.MatVecShape{}), mk(mainkernels.MatVecShape{Gate: true}), mk(mainkernels.MatVecShape{Gate2: true})
 	defer plain.Close()
 	defer gated.Close()
 	defer both.Close()
@@ -144,7 +144,7 @@ func gate2Case(t *testing.T, d backend.Device, name string, q kernels.Quant, row
 	gOut, ref, got, swapped := poisoned(), poisoned(), poisoned(), poisoned()
 	w := 128
 	if grp {
-		w = oldkernels.GroupSplitWidth(split)
+		w = mainkernels.GroupSplitWidth(split)
 	}
 	groups := (rows*split + w - 1) / w
 	if err := plain.Launch(groups, w, bGQ, bGD, bGS, bA, bAX, gOut); err != nil {
@@ -167,9 +167,9 @@ func gate2Case(t *testing.T, d backend.Device, name string, q kernels.Quant, row
 	// .rn arithmetic). SPIR-V lowers Fma as an OpFMul and OpFAdd without
 	// NoContraction and MSL compiles with fast math, so there the driver may
 	// contract the two kernels' sums differently; the tier offers Gate2 only
-	// on PTX (oldkernels.Gate2Exact), and elsewhere this holds the rows to the
+	// on PTX (mainkernels.Gate2Exact), and elsewhere this holds the rows to the
 	// f32 band.
-	exact := oldkernels.Gate2Exact(d.API())
+	exact := mainkernels.Gate2Exact(d.API())
 	bad, same := 0, 0
 	var num, den float64
 	for i := 0; i <= rows; i++ {

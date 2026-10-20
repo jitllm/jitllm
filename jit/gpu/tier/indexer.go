@@ -7,7 +7,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // DeepSeek V3.2's lightning indexer on the device (nn.LayerPlan.IdxHeads;
@@ -61,7 +61,7 @@ func (g *devTier) initIdx(bs *blockScratch, rows, P, row, w int,
 	tcap := max(p.MaxSeq, 1)
 	kk := min(p.IdxTopK, tcap)
 	ix := &idxScratch{h: p.IdxHeads, d: p.IdxHeadDim, k: kk, tcap: tcap, w: w,
-		ppr: oldkernels.IdxGatherPages(kk, P), parts: partsFor(p.IdxHeadDim)}
+		ppr: mainkernels.IdxGatherPages(kk, P), parts: partsFor(p.IdxHeadDim)}
 	bs.pkv.idx = ix
 	h, d, k, rot := ix.h, ix.d, ix.k, p.NRot
 	scale := float32(1 / math.Sqrt(float64(d*h)))
@@ -69,20 +69,20 @@ func (g *devTier) initIdx(bs *blockScratch, rows, P, row, w int,
 		dst *backend.Kernel
 		mk  func() (*ir.Kernel, error)
 	}{
-		{&ix.lnPart, func() (*ir.Kernel, error) { return oldkernels.LayerNormPartRows(d, ix.parts, rows) }},
-		{&ix.lnVar, func() (*ir.Kernel, error) { return oldkernels.LayerNormVarRows(d, ix.parts, rows) }},
-		{&ix.lnApply, func() (*ir.Kernel, error) { return oldkernels.LayerNormApplyRows(d, ix.parts, 1e-6, true, rows) }},
-		{&ix.copyK, func() (*ir.Kernel, error) { return oldkernels.CopyAtRows(d, rows) }},
-		{&ix.ropeK, func() (*ir.Kernel, error) { return oldkernels.RoPERows(1, d, rot, true, rows) }},
-		{&ix.writeK, func() (*ir.Kernel, error) { return oldkernels.PagedCopyRows(d, rows, P, row, w, false) }},
-		{&ix.copyQ, func() (*ir.Kernel, error) { return oldkernels.CopyAtRows(h*d, rows) }},
-		{&ix.ropeQ, func() (*ir.Kernel, error) { return oldkernels.RoPERows(h, d, rot, true, rows) }},
+		{&ix.lnPart, func() (*ir.Kernel, error) { return mainkernels.LayerNormPartRows(d, ix.parts, rows) }},
+		{&ix.lnVar, func() (*ir.Kernel, error) { return mainkernels.LayerNormVarRows(d, ix.parts, rows) }},
+		{&ix.lnApply, func() (*ir.Kernel, error) { return mainkernels.LayerNormApplyRows(d, ix.parts, 1e-6, true, rows) }},
+		{&ix.copyK, func() (*ir.Kernel, error) { return mainkernels.CopyAtRows(d, rows) }},
+		{&ix.ropeK, func() (*ir.Kernel, error) { return mainkernels.RoPERows(1, d, rot, true, rows) }},
+		{&ix.writeK, func() (*ir.Kernel, error) { return mainkernels.PagedCopyRows(d, rows, P, row, w, false) }},
+		{&ix.copyQ, func() (*ir.Kernel, error) { return mainkernels.CopyAtRows(h*d, rows) }},
+		{&ix.ropeQ, func() (*ir.Kernel, error) { return mainkernels.RoPERows(h, d, rot, true, rows) }},
 		{&ix.scores, func() (*ir.Kernel, error) {
-			return oldkernels.IdxScoresPaged(rows, h, d, ix.tcap, P, row, w, scale)
+			return mainkernels.IdxScoresPaged(rows, h, d, ix.tcap, P, row, w, scale)
 		}},
-		{&ix.sel, func() (*ir.Kernel, error) { return oldkernels.IdxSelect(rows, ix.tcap, k) }},
-		{&ix.gather, func() (*ir.Kernel, error) { return oldkernels.IdxGather(rows, k, w, P, row) }},
-		{&ix.desc, func() (*ir.Kernel, error) { return oldkernels.IdxDesc(rows, k, P) }},
+		{&ix.sel, func() (*ir.Kernel, error) { return mainkernels.IdxSelect(rows, ix.tcap, k) }},
+		{&ix.gather, func() (*ir.Kernel, error) { return mainkernels.IdxGather(rows, k, w, P, row) }},
+		{&ix.desc, func() (*ir.Kernel, error) { return mainkernels.IdxDesc(rows, k, P) }},
 	} {
 		kk, err := b.mk()
 		if err := comp(b.dst, kk, err); err != nil {
@@ -109,7 +109,7 @@ func (g *devTier) initIdx(bs *blockScratch, rows, P, row, w int,
 	al(&ix.selBuf, rows*(k+1))
 	al(&ix.gk, rows*ix.ppr*P*w)
 	al(&ix.gtab, rows*ix.ppr)
-	al(&ix.gdesc, rows*oldkernels.PRowWords)
+	al(&ix.gdesc, rows*mainkernels.PRowWords)
 	if err != nil {
 		return err
 	}
@@ -186,7 +186,7 @@ func (g *devTier) idxAttend(s backend.Session, lc *launcher, R int, pc *pagedCal
 	lc.la(ix.scores, R*ix.tcap, ix.qRot, ix.wts, pc.k, pc.tab, pk.pRow, ix.score)
 	lc.la(ix.sel, R*ix.tcap, ix.score, pk.pRow, ix.selBuf)
 	lc.la(ix.gather, R*ix.k*ix.w, pc.k, pc.tab, pk.pRow, ix.selBuf, ix.gk)
-	lc.la(ix.desc, R*oldkernels.PRowWords, pk.pRow, ix.gdesc)
+	lc.la(ix.desc, R*mainkernels.PRowWords, pk.pRow, ix.gdesc)
 	g.IdxSelects++
 	return pk.pagedDecode(s, lc, q, ix.gk, ix.gk, n, out, ix.gtab, ix.gdesc, nil)
 }

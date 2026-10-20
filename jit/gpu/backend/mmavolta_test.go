@@ -12,7 +12,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestMMAVoltaProbeMatchesTheHost runs sm_70's m8n8k4 through the IR on every
@@ -36,7 +36,7 @@ func TestMMAVoltaProbeMatchesTheHost(t *testing.T) {
 	ran := 0
 	for _, d := range devs {
 		defer d.Close()
-		kern, err := d.Compile(oldkernels.MMAVoltaProbe())
+		kern, err := d.Compile(mainkernels.MMAVoltaProbe())
 		if err != nil {
 			t.Logf("%s: %v", d.API(), err)
 			continue
@@ -96,9 +96,9 @@ func TestMatVecMMA70MatchesTheReference(t *testing.T) {
 				{64, 256, 8, 1, 1, 1, false}, {128, 512, 16, 2, 1, 1, true}, {256, 512, 32, 2, 2, 1, false},
 				{64, 1024, 16, 1, 2, 1, false}, {64, 1024, 16, 2, 2, 4, true}, {128, 512, 32, 2, 4, 2, false},
 			} {
-				s := oldkernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, MT: sh.mt, NT: sh.nt,
+				s := mainkernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, MT: sh.mt, NT: sh.nt,
 					Split: sh.split, Bias: sh.bias}
-				kk, err := oldkernels.MatVecMMA70(s)
+				kk, err := mainkernels.MatVecMMA70(s)
 				if err != nil {
 					t.Fatalf("%v %+v: %v", q, sh, err)
 				}
@@ -144,7 +144,7 @@ var ggufOf = func() map[kernels.Quant]quant.Type {
 //
 // extra launches run after kern on the same parameters: a tail launch that
 // covers the tokens kern's block does not.
-func mma70Case(t *testing.T, d backend.Device, kern backend.Kernel, s oldkernels.MatVecShape, what string, groups, width int, tokMajor bool,
+func mma70Case(t *testing.T, d backend.Device, kern backend.Kernel, s mainkernels.MatVecShape, what string, groups, width int, tokMajor bool,
 	extra ...func(args ...backend.Buf) error) {
 	t.Helper()
 	rng := rand.New(rand.NewSource(int64(s.Rows*7 + s.K + s.NTok)))
@@ -217,7 +217,7 @@ func mma70Case(t *testing.T, d backend.Device, kern backend.Kernel, s oldkernels
 		return se / sy
 	}
 	// The dp4a kernel on int8 activations: the path this replaces.
-	rk0, err := oldkernels.MatVec(oldkernels.MatVecShape{T: s.T, K: s.K, Rows: s.Rows, NTok: s.NTok, Tok: 8, Bias: s.Bias})
+	rk0, err := mainkernels.MatVec(mainkernels.MatVecShape{T: s.T, K: s.K, Rows: s.Rows, NTok: s.NTok, Tok: 8, Bias: s.Bias})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,11 +239,11 @@ func mma70Case(t *testing.T, d backend.Device, kern backend.Kernel, s oldkernels
 	// GemmVolta reads the token-major layout (ActF16T), MatVecMMA70 the
 	// step-major one; a kernel handed the other would read every activation
 	// from the wrong place, which is what this comparison would catch.
-	ak, err := oldkernels.ActF16(s.T, s.NTok, s.K)
+	ak, err := mainkernels.ActF16(s.T, s.NTok, s.K)
 	at := s.NTok * s.K / 4
 	if tokMajor {
 		sub, _, _, _ := kernels.Layout(s.T)
-		ak, err = oldkernels.ActF16T(s.T, s.NTok, s.K)
+		ak, err = mainkernels.ActF16T(s.T, s.NTok, s.K)
 		at = s.NTok * s.K / sub
 	}
 	if err != nil {
@@ -322,7 +322,7 @@ func TestMMA70Speed(t *testing.T) {
 				float64(rows)*k*ntok/el.Seconds()/1e12)
 		}
 		for _, tk := range []int{16} {
-			ref, _ := oldkernels.MatVec(oldkernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok, Tok: tk, Rowt: 4})
+			ref, _ := mainkernels.MatVec(mainkernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok, Tok: tk, Rowt: 4})
 			rk, err := d.Compile(ref)
 			if err != nil {
 				t.Fatal(err)
@@ -330,13 +330,13 @@ func TestMMA70Speed(t *testing.T) {
 			th := rows / 4 * ntok / tk
 			time1("dp4a tok16 rowt4", func() { rk.Launch((th+127)/128, 128, bQS, bD, bSC, bA, bAX, out) })
 		}
-		ak, _ := oldkernels.ActF16(kernels.Q4_K, ntok, k)
+		ak, _ := mainkernels.ActF16(kernels.Q4_K, ntok, k)
 		ac, _ := d.Compile(ak)
 		at := ntok * k / 4
 		bX := g.up(f32bytes(x))
 		time1("actf16", func() { ac.Launch((at+127)/128, 128, bX, bB) })
 		for _, tl := range [][2]int{{2, 2}, {2, 4}, {4, 2}, {4, 4}, {2, 8}, {1, 8}, {4, 8}, {8, 2}} {
-			kk, err := oldkernels.MatVecMMA70(oldkernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok, MT: tl[0], NT: tl[1]})
+			kk, err := mainkernels.MatVecMMA70(mainkernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok, MT: tl[0], NT: tl[1]})
 			if err != nil {
 				t.Log(err)
 				continue

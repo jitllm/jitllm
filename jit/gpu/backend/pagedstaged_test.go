@@ -8,14 +8,14 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // pagedStaged runs the staged paged decode -- PagedStagedScores,
 // PagedStagedSoftmax, PagedStagedAcc and FlashAttentionMerge -- over rows
 // through tab, with scoreLanes/smLanes selecting each kernel's form, and
 // returns the NMSE against the oracle. Every scratch plane starts NaN.
-func pagedStaged(t *testing.T, d backend.Device, s oldkernels.FlashShape, scoreLanes, smLanes int, p *pagedPool, tab []uint32, rows []pagedRow) (float64, error) {
+func pagedStaged(t *testing.T, d backend.Device, s mainkernels.FlashShape, scoreLanes, smLanes int, p *pagedPool, tab []uint32, rows []pagedRow) (float64, error) {
 	t.Helper()
 	s.Rows = len(rows)
 	vd := s.Dim
@@ -31,10 +31,10 @@ func pagedStaged(t *testing.T, d backend.Device, s oldkernels.FlashShape, scoreL
 	}
 	var ks []built
 	for _, f := range []func() (*ir.Kernel, error){
-		func() (*ir.Kernel, error) { return oldkernels.PagedStagedScores(s, scoreLanes) },
-		func() (*ir.Kernel, error) { return oldkernels.PagedStagedSoftmax(s, smLanes) },
-		func() (*ir.Kernel, error) { return oldkernels.PagedStagedAcc(s) },
-		func() (*ir.Kernel, error) { return oldkernels.FlashAttentionMergeWide(ms) },
+		func() (*ir.Kernel, error) { return mainkernels.PagedStagedScores(s, scoreLanes) },
+		func() (*ir.Kernel, error) { return mainkernels.PagedStagedSoftmax(s, smLanes) },
+		func() (*ir.Kernel, error) { return mainkernels.PagedStagedAcc(s) },
+		func() (*ir.Kernel, error) { return mainkernels.FlashAttentionMergeWide(ms) },
 	} {
 		k, err := f()
 		ks = append(ks, built{k, err, ""})
@@ -83,10 +83,10 @@ func pagedStaged(t *testing.T, d backend.Device, s oldkernels.FlashShape, scoreL
 	}
 	no := g.up(u32bytes([]uint32{0xFFFFFFFF, 0xFFFFFFFF}))
 	to, ro := g.up(u32bytes(tab)), g.up(u32bytes(p.desc))
-	plane := oldkernels.PagedStagedPlane(s)
+	plane := mainkernels.PagedStagedPlane(s)
 	sc, pr := nanBuf(plane), nanBuf(plane)
-	part := nanBuf(oldkernels.FlashPartialFloats(ms))
-	total := oldkernels.PagedStagedScoreItems(s)
+	part := nanBuf(mainkernels.FlashPartialFloats(ms))
+	total := mainkernels.PagedStagedScoreItems(s)
 	groups := (total + 127) / 128
 	if scoreLanes == 32 {
 		groups = (total + 3) / 4
@@ -105,7 +105,7 @@ func pagedStaged(t *testing.T, d backend.Device, s oldkernels.FlashShape, scoreL
 		}
 		launch(cs[0], groups, 128, qo, ko, no, sc, to, ro)
 		launch(cs[1], smGroups, 64, sc, no, pr, part, to, ro)
-		launch(cs[2], (oldkernels.PagedStagedAccThreads(s)+127)/128, 128, pr, vo, no, part, to, ro)
+		launch(cs[2], (mainkernels.PagedStagedAccThreads(s)+127)/128, 128, pr, vo, no, part, to, ro)
 		ma := []backend.Buf{part, oo}
 		if s.Sink {
 			ma = append(ma, g.up(f32bytes(sinks)))
@@ -154,7 +154,7 @@ func TestPagedStagedDecode(t *testing.T) {
 		defer d.Close()
 		t.Run(d.API()+"/"+d.Name(), func(t *testing.T) {
 			for _, page := range []int{64, 256} {
-				for _, sh := range []oldkernels.FlashShape{
+				for _, sh := range []mainkernels.FlashShape{
 					{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125},
 					{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Sink: true, Softcap: 3},
 					{Heads: 6, KVHeads: 6, Dim: 48, Scale: .14, F16: true, Sink: true},

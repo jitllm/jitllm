@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestSliceRowsMatchesTheHostSlice runs the field cut on every device against
@@ -14,7 +14,7 @@ import (
 //
 // Byte equality, because it is a copy and any tolerance would admit an
 // off-by-one in the offset. Reading q where k belongs is the whole failure mode
-// -- the same shape oldkernels.SplitDeltaGates and SplitHeadGate are written
+// -- the same shape mainkernels.SplitDeltaGates and SplitHeadGate are written
 // against -- and it produces finite, plausible numbers.
 //
 // The shapes are qwen3next-80B's three fields and a ragged one whose grid is not
@@ -43,7 +43,7 @@ func TestSliceRowsMatchesTheHostSlice(t *testing.T) {
 		for r := 0; r < c.rows; r++ {
 			copy(want[r*c.n:][:c.n], src[r*c.stride+c.off:][:c.n])
 		}
-		k, err := oldkernels.SliceRows(c.n, c.stride, c.off, c.rows)
+		k, err := mainkernels.SliceRows(c.n, c.stride, c.off, c.rows)
 		if err != nil {
 			t.Fatalf("SliceRows: %v", err)
 		}

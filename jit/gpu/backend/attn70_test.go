@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // attn70Case is one attention geometry: heads, head width, kv heads, query
@@ -86,7 +86,7 @@ func scores70Case(t *testing.T, d backend.Device, c attn70Case) {
 		kStride = 0
 	}
 	scale := float32(1) / float32(math.Sqrt(float64(c.headDim)))
-	mk, err := oldkernels.AttnScoresMMA70(c.nHeads, c.headDim, kvDim, gqa, sstride, scale, c.rows, kStride, mt, nt, c.window)
+	mk, err := mainkernels.AttnScoresMMA70(c.nHeads, c.headDim, kvDim, gqa, sstride, scale, c.rows, kStride, mt, nt, c.window)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func scores70Case(t *testing.T, d backend.Device, c attn70Case) {
 		t.Fatal(err)
 	}
 	defer mkern.Close()
-	fk, err := oldkernels.AttnScoresTiledW(c.nHeads, c.headDim, kvDim, gqa, sstride, scale, c.rows, 4, 2, kStride, c.window)
+	fk, err := mainkernels.AttnScoresTiledW(c.nHeads, c.headDim, kvDim, gqa, sstride, scale, c.rows, 4, 2, kStride, c.window)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func scores70Case(t *testing.T, d backend.Device, c attn70Case) {
 		}
 		return v
 	}
-	gotM := run(mkern, oldkernels.AttnScoresMMA70Warps(c.nHeads, c.rows, c.cap, mt, nt)*32)
+	gotM := run(mkern, mainkernels.AttnScoresMMA70Warps(c.nHeads, c.rows, c.cap, mt, nt)*32)
 	gotF := run(fkern, (c.rows/4)*c.nHeads*((c.cap+1)/2))
 	var sse, sy2 float64
 	skipped := 0
@@ -242,7 +242,7 @@ func acc70Case(t *testing.T, d backend.Device, c attn70Case, mt int) {
 		kvDim, mt = c.kvRow, min(c.headDim/32, 4)
 	}
 	sstride := maxSeq + 32
-	mk, err := oldkernels.AttnAccMMA70(c.nHeads, c.headDim, kvDim, gqa, sstride, c.rows, mt, nt)
+	mk, err := mainkernels.AttnAccMMA70(c.nHeads, c.headDim, kvDim, gqa, sstride, c.rows, mt, nt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func acc70Case(t *testing.T, d backend.Device, c attn70Case, mt int) {
 	}
 	defer mkern.Close()
 	const qt = 8 * nt
-	fk, err := oldkernels.AttnAccTiled(c.nHeads, c.headDim, kvDim, gqa, sstride, c.rows, qt)
+	fk, err := mainkernels.AttnAccTiled(c.nHeads, c.headDim, kvDim, gqa, sstride, c.rows, qt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func acc70Case(t *testing.T, d backend.Device, c attn70Case, mt int) {
 		}
 		return v
 	}
-	gotM := run(mkern, oldkernels.AttnAccMMA70Warps(c.nHeads, c.headDim, c.rows, mt, nt)*32)
+	gotM := run(mkern, mainkernels.AttnAccMMA70Warps(c.nHeads, c.headDim, c.rows, mt, nt)*32)
 	gotF := run(fkern, c.rows*c.nHeads*c.headDim/qt)
 	var sse, sy2 float64
 	for i := range gotF {

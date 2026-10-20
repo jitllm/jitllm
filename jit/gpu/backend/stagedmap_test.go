@@ -8,7 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestStagedPrefillRunTable holds the staged prefill's run-table form
@@ -29,7 +29,7 @@ func TestStagedPrefillRunTable(t *testing.T) {
 		defer d.Close()
 	}
 	for _, d := range devs {
-		for _, sh := range []oldkernels.FlashShape{
+		for _, sh := range []mainkernels.FlashShape{
 			{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: 64},
 			{Heads: 8, KVHeads: 4, Dim: 128, Scale: .088, Page: 64, F16: true, Softcap: 50},
 			{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: 64, Sink: true},
@@ -46,7 +46,7 @@ func TestStagedPrefillRunTable(t *testing.T) {
 	}
 }
 
-func stagedTableCase(t *testing.T, d backend.Device, s oldkernels.FlashShape, f prefillForm) {
+func stagedTableCase(t *testing.T, d backend.Device, s mainkernels.FlashShape, f prefillForm) {
 	t.Helper()
 	wg := max(f.scoresQT, f.accQT) // every kernel's query tile divides it
 	pg := s.Page
@@ -166,7 +166,7 @@ func stagedTableCase(t *testing.T, d backend.Device, s oldkernels.FlashShape, f 
 
 // runStaged runs the staged direct form (Map when mp is set) over rows rows
 // of q and returns the rows' output, NaN where nothing wrote.
-func runStaged(t *testing.T, d backend.Device, s oldkernels.FlashShape, f prefillForm, p *pagedPool,
+func runStaged(t *testing.T, d backend.Device, s mainkernels.FlashShape, f prefillForm, p *pagedPool,
 	q []float32, tab, desc, mp, base []uint32, rows int) []float64 {
 	t.Helper()
 	s.Splits, s.Map = 0, mp != nil
@@ -175,9 +175,9 @@ func runStaged(t *testing.T, d backend.Device, s oldkernels.FlashShape, f prefil
 		s.Rows = len(mp)
 	}
 	ks := []func() (*ir.Kernel, error){
-		func() (*ir.Kernel, error) { return oldkernels.PagedAttnScoresTiled(s, f.scoresQT, f.scoresKT) },
-		func() (*ir.Kernel, error) { return oldkernels.PagedPrefillSoftmax(s, f.smLanes, f.accTile()) },
-		func() (*ir.Kernel, error) { return oldkernels.PagedAttnAccTiled(s, f.accQT) },
+		func() (*ir.Kernel, error) { return mainkernels.PagedAttnScoresTiled(s, f.scoresQT, f.scoresKT) },
+		func() (*ir.Kernel, error) { return mainkernels.PagedPrefillSoftmax(s, f.smLanes, f.accTile()) },
+		func() (*ir.Kernel, error) { return mainkernels.PagedAttnAccTiled(s, f.accQT) },
 	}
 	var cs []backend.Kernel
 	for _, mk := range ks {
@@ -203,7 +203,7 @@ func runStaged(t *testing.T, d backend.Device, s oldkernels.FlashShape, f prefil
 	qo, ko, vo, oo := g.up(f32bytes(q)), g.up(f32bytes(p.k)), g.up(p.vBytes()), nan(nOut+32)
 	no := g.up(u32bytes([]uint32{0xFFFFFFFF, 0xFFFFFFFF}))
 	to, ro := g.up(u32bytes(tab)), g.up(u32bytes(desc))
-	plane := oldkernels.PagedPrefillPlane(s)
+	plane := mainkernels.PagedPrefillPlane(s)
 	sc, pr, part := nan(plane), nan(plane), nan(8)
 	so := g.up(f32bytes(sinks))
 	var tail []backend.Buf
@@ -217,13 +217,13 @@ func runStaged(t *testing.T, d backend.Device, s oldkernels.FlashShape, f prefil
 				err = se.Launch(c, groups, width, append(args, tail...)...)
 			}
 		}
-		launch(cs[0], (oldkernels.PagedAttnScoresTiledThreads(s, f.scoresQT, f.scoresKT)+127)/128, 128, qo, ko, no, sc, to, ro)
+		launch(cs[0], (mainkernels.PagedAttnScoresTiledThreads(s, f.scoresQT, f.scoresKT)+127)/128, 128, qo, ko, no, sc, to, ro)
 		sm := []backend.Buf{sc, no, pr, part, to, ro}
 		if s.Sink {
 			sm = append(sm, so)
 		}
-		launch(cs[1], oldkernels.PagedPrefillSoftmaxGroups(s, f.smLanes), oldkernels.PagedPrefillSoftmaxWidth(f.smLanes), sm...)
-		launch(cs[2], (oldkernels.PagedAttnAccTiledThreads(s, f.accQT)+127)/128, 128, pr, vo, no, oo, to, ro)
+		launch(cs[1], mainkernels.PagedPrefillSoftmaxGroups(s, f.smLanes), mainkernels.PagedPrefillSoftmaxWidth(f.smLanes), sm...)
+		launch(cs[2], (mainkernels.PagedAttnAccTiledThreads(s, f.accQT)+127)/128, 128, pr, vo, no, oo, to, ro)
 		if err == nil {
 			err = se.Sync()
 		}

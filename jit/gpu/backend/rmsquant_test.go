@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestRMSNormQuantIsNormThenQuantize: one RMSNormQuantRows launch writes, BIT
@@ -47,9 +47,9 @@ func TestRMSNormQuantIsNormThenQuantize(t *testing.T) {
 
 func rmsQuantCase(t *testing.T, d backend.Device, rng *rand.Rand, name string, k, win, rows int, add, one, warp bool) {
 	t.Helper()
-	mkq, mkn := oldkernels.RMSNormQuantRows, oldkernels.RMSNormRows
+	mkq, mkn := mainkernels.RMSNormQuantRows, mainkernels.RMSNormRows
 	if warp {
-		mkq, mkn = oldkernels.RMSNormQuantRowsWarp, oldkernels.RMSNormRowsWarp
+		mkq, mkn = mainkernels.RMSNormQuantRowsWarp, mainkernels.RMSNormRowsWarp
 	}
 	fused, err := mkq(k, rows, 1e-5, one, add, win)
 	if err != nil {
@@ -60,7 +60,7 @@ func rmsQuantCase(t *testing.T, d backend.Device, rng *rand.Rand, name string, k
 	if err != nil {
 		t.Fatal(err)
 	}
-	quant, err := oldkernels.Quantize(rows*k, oldkernels.ClampWindow(win, k))
+	quant, err := mainkernels.Quantize(rows*k, mainkernels.ClampWindow(win, k))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,14 +108,14 @@ func rmsQuantCase(t *testing.T, d backend.Device, rng *rand.Rand, name string, k
 		}
 		return []backend.Buf{bx, bw, o.h}
 	}
-	if err := kn.Launch(rows, oldkernels.RMSNormGroup, nbufs(ref)...); err != nil {
+	if err := kn.Launch(rows, mainkernels.RMSNormGroup, nbufs(ref)...); err != nil {
 		t.Fatal(err)
 	}
-	qt := oldkernels.QuantizeThreads(nb)
+	qt := mainkernels.QuantizeThreads(nb)
 	if err := kq.Launch((qt+127)/128, 128, ref.h, ref.a, ref.ax); err != nil {
 		t.Fatal(err)
 	}
-	if err := kf.Launch(rows, oldkernels.RMSNormGroup, append(nbufs(got), got.a, got.ax)...); err != nil {
+	if err := kf.Launch(rows, mainkernels.RMSNormGroup, append(nbufs(got), got.a, got.ax)...); err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
 	for _, c := range []struct {

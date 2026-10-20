@@ -14,7 +14,7 @@ import (
 	"github.com/jitllm/jitllm/dev/bench"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestPagedStagedAB is the staged decode's bar: the tier's contiguous staged
@@ -91,22 +91,22 @@ func stagedAB(t *testing.T, d backend.Device, heads, nkv, dim, modelLayers, n, p
 	for accSplit < 32 && heads*dim*accSplit*2 <= slots {
 		accSplit *= 2
 	}
-	cScore := compile(oldkernels.AttnScoresTiled(heads, dim, kvRow, gqa, n, scale, 1, 1, 1, n+1))
-	cSoft := compile(oldkernels.SoftmaxRows(heads, n, lanes, 1, 1))
-	cAcc := compile(oldkernels.AttnAccSplit(heads, dim, kvRow, gqa, n, accSplit))
-	cRed := compile(oldkernels.Reduce(heads*dim, accSplit))
+	cScore := compile(mainkernels.AttnScoresTiled(heads, dim, kvRow, gqa, n, scale, 1, 1, 1, n+1))
+	cSoft := compile(mainkernels.SoftmaxRows(heads, n, lanes, 1, 1))
+	cAcc := compile(mainkernels.AttnAccSplit(heads, dim, kvRow, gqa, n, accSplit))
+	cRed := compile(mainkernels.Reduce(heads*dim, accSplit))
 	// Paged: splits near sqrt(n/8) (JITLLM_PAGED_SPLITS pins), chunks covering n.
 	S := 1 << int(math.Log2(math.Sqrt(max(1, float64(n)/8))))
 	fmt.Sscanf(os.Getenv("JITLLM_PAGED_SPLITS"), "%d", &S)
 	C := ((n+S-1)/S + 31) / 32 * 32
-	s := oldkernels.FlashShape{Heads: heads, KVHeads: nkv, Dim: dim, Rows: 1, Scale: scale, Page: page, Splits: S, Chunk: C}
+	s := mainkernels.FlashShape{Heads: heads, KVHeads: nkv, Dim: dim, Rows: 1, Scale: scale, Page: page, Splits: S, Chunk: C}
 	fmt.Sscanf(os.Getenv("JITLLM_PAGED_GROUP"), "%d", &s.Group)
 	ms := s
 	ms.Page, ms.Chunk = 0, 0
-	pScore := compile(oldkernels.PagedStagedScores(s, 1))
-	pSoft := compile(oldkernels.PagedStagedSoftmax(s, lanes))
-	pAcc := compile(oldkernels.PagedStagedAcc(s))
-	pMerge := compile(oldkernels.FlashAttentionMergeWide(ms))
+	pScore := compile(mainkernels.PagedStagedScores(s, 1))
+	pSoft := compile(mainkernels.PagedStagedSoftmax(s, lanes))
+	pAcc := compile(mainkernels.PagedStagedAcc(s))
+	pMerge := compile(mainkernels.FlashAttentionMergeWide(ms))
 	g := newGPU(t, d)
 	defer g.free()
 	rng := rand.New(rand.NewSource(int64(n)))
@@ -122,9 +122,9 @@ func stagedAB(t *testing.T, d backend.Device, heads, nkv, dim, modelLayers, n, p
 	out := g.up(make([]byte, heads*dim*4))
 	scores, probs := g.up(make([]byte, heads*n*4)), g.up(make([]byte, heads*n*4))
 	accPart := g.up(make([]byte, heads*dim*accSplit*4))
-	plane := oldkernels.PagedStagedPlane(s)
+	plane := mainkernels.PagedStagedPlane(s)
 	pscores, pprobs := g.up(make([]byte, plane*4)), g.up(make([]byte, plane*4))
-	part := g.up(make([]byte, oldkernels.FlashPartialFloats(ms)*4))
+	part := g.up(make([]byte, mainkernels.FlashPartialFloats(ms)*4))
 	var ck, cv, pk, pv, tabs []backend.Buf
 	npages := (n + page - 1) / page
 	for l := 0; l < layers; l++ {
@@ -162,13 +162,13 @@ func stagedAB(t *testing.T, d backend.Device, heads, nkv, dim, modelLayers, n, p
 					if isPaged {
 						skip := os.Getenv("XSKIP")
 						if !strings.Contains(skip, "S") {
-							launch(pScore, (oldkernels.PagedStagedScoreItems(s)+127)/128, 128, q, pk[l], nb, pscores, tabs[l], desc)
+							launch(pScore, (mainkernels.PagedStagedScoreItems(s)+127)/128, 128, q, pk[l], nb, pscores, tabs[l], desc)
 						}
 						if !strings.Contains(skip, "M") {
 							launch(pSoft, pSmG, 64, pscores, nb, pprobs, part, tabs[l], desc)
 						}
 						if !strings.Contains(skip, "A") {
-							launch(pAcc, (oldkernels.PagedStagedAccThreads(s)+127)/128, 128, pprobs, pv[l], nb, part, tabs[l], desc)
+							launch(pAcc, (mainkernels.PagedStagedAccThreads(s)+127)/128, 128, pprobs, pv[l], nb, part, tabs[l], desc)
 						}
 						if !strings.Contains(skip, "G") {
 							launch(pMerge, (heads*dim+127)/128, 128, part, out)

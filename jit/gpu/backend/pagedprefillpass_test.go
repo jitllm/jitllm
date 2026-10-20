@@ -8,7 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // passDesc is desc clipped to the keys [lo, hi): every row's keyStart and
@@ -18,8 +18,8 @@ import (
 func passDesc(desc []uint32, lo, hi int) []uint32 {
 	out := append([]uint32(nil), desc...)
 	cl := func(x uint32) uint32 { return uint32(min(max(int(x), lo), hi)) }
-	for i := 0; i < len(out); i += oldkernels.PRowWords {
-		out[i+oldkernels.PRowStart], out[i+oldkernels.PRowEnd] = cl(out[i+oldkernels.PRowStart]), cl(out[i+oldkernels.PRowEnd])
+	for i := 0; i < len(out); i += mainkernels.PRowWords {
+		out[i+mainkernels.PRowStart], out[i+mainkernels.PRowEnd] = cl(out[i+mainkernels.PRowStart]), cl(out[i+mainkernels.PRowEnd])
 	}
 	return out
 }
@@ -32,12 +32,12 @@ func passDesc(desc []uint32, lo, hi int) []uint32 {
 // dropFirst skips the first pass, the violation. flash runs
 // FlashPrefill70 (or FlashPrefillTile when tile) at s.Splits; otherwise f's
 // staged kernels.
-func pagedPrefillPasses(t *testing.T, d backend.Device, s oldkernels.FlashShape, f prefillForm, flash, tile bool, p *pagedPool, rows []pagedRow, width int, dropFirst bool) (float64, int, error) {
+func pagedPrefillPasses(t *testing.T, d backend.Device, s mainkernels.FlashShape, f prefillForm, flash, tile bool, p *pagedPool, rows []pagedRow, width int, dropFirst bool) (float64, int, error) {
 	t.Helper()
 	R := len(rows)
 	s.Rows = R
 	vd := prefillValue(s)
-	ms := oldkernels.FlashShape{Heads: s.Heads, KVHeads: s.KVHeads, Dim: vd, Rows: R, Splits: s.Splits, Sink: s.Sink}
+	ms := mainkernels.FlashShape{Heads: s.Heads, KVHeads: s.KVHeads, Dim: vd, Rows: R, Splits: s.Splits, Sink: s.Sink}
 	one := ms
 	one.Splits = 1
 	compile := func(k *ir.Kernel, err error) backend.Kernel {
@@ -56,7 +56,7 @@ func pagedPrefillPasses(t *testing.T, d backend.Device, s oldkernels.FlashShape,
 	}
 	var sk, sm, ak, fk backend.Kernel
 	var skG, akG, fG, fW int
-	fs := oldkernels.FlashPrefill70Shape{Heads: s.Heads, KVHeads: s.KVHeads, Dim: s.Dim, Rows: R, Scale: s.Scale, Softcap: s.Softcap,
+	fs := mainkernels.FlashPrefill70Shape{Heads: s.Heads, KVHeads: s.KVHeads, Dim: s.Dim, Rows: R, Scale: s.Scale, Softcap: s.Softcap,
 		Page: s.Page, Splits: s.Splits, F16: s.F16}
 	if flash {
 		k, g, w := flashPrefillBuild(t, fs, formOf(tile))
@@ -64,20 +64,20 @@ func pagedPrefillPasses(t *testing.T, d backend.Device, s oldkernels.FlashShape,
 	} else {
 		switch {
 		case f.voltaMT > 0:
-			sk = compile(oldkernels.PagedAttnScoresMMA70(s, f.voltaMT, f.voltaNT))
-			skG = (oldkernels.PagedAttnScoresMMA70Warps(s, f.voltaMT, f.voltaNT) + 3) / 4
-			ak = compile(oldkernels.PagedAttnAccMMA70(s, f.accMT(), f.voltaNT))
-			akG = (oldkernels.PagedAttnAccMMA70Warps(s, f.accMT(), f.voltaNT) + 3) / 4
+			sk = compile(mainkernels.PagedAttnScoresMMA70(s, f.voltaMT, f.voltaNT))
+			skG = (mainkernels.PagedAttnScoresMMA70Warps(s, f.voltaMT, f.voltaNT) + 3) / 4
+			ak = compile(mainkernels.PagedAttnAccMMA70(s, f.accMT(), f.voltaNT))
+			akG = (mainkernels.PagedAttnAccMMA70Warps(s, f.accMT(), f.voltaNT) + 3) / 4
 		default:
-			sk = compile(oldkernels.PagedAttnScoresTiled(s, f.scoresQT, f.scoresKT))
-			skG = (oldkernels.PagedAttnScoresTiledThreads(s, f.scoresQT, f.scoresKT) + 127) / 128
-			ak = compile(oldkernels.PagedAttnAccTiled(s, f.accQT))
-			akG = (oldkernels.PagedAttnAccTiledThreads(s, f.accQT) + 127) / 128
+			sk = compile(mainkernels.PagedAttnScoresTiled(s, f.scoresQT, f.scoresKT))
+			skG = (mainkernels.PagedAttnScoresTiledThreads(s, f.scoresQT, f.scoresKT) + 127) / 128
+			ak = compile(mainkernels.PagedAttnAccTiled(s, f.accQT))
+			akG = (mainkernels.PagedAttnAccTiledThreads(s, f.accQT) + 127) / 128
 		}
-		sm = compile(oldkernels.PagedPrefillSoftmax(s, f.smLanes, f.accTile()))
+		sm = compile(mainkernels.PagedPrefillSoftmax(s, f.smLanes, f.accTile()))
 	}
-	first, fold := compile(oldkernels.FlashAttentionMergeRun(ms, true)), compile(oldkernels.FlashAttentionMergeRun(ms, false))
-	fin := compile(oldkernels.FlashAttentionMergeWide(one))
+	first, fold := compile(mainkernels.FlashAttentionMergeRun(ms, true)), compile(mainkernels.FlashAttentionMergeRun(ms, false))
+	fin := compile(mainkernels.FlashAttentionMergeWide(one))
 	g := newGPU(t, d)
 	defer g.free()
 	q, sinks := prefillInputs(s)
@@ -89,9 +89,9 @@ func pagedPrefillPasses(t *testing.T, d backend.Device, s oldkernels.FlashShape,
 	}
 	no, to := g.up(u32bytes([]uint32{0xFFFFFFFF, 0xFFFFFFFF})), g.up(u32bytes(p.tab))
 	nanBuf := func(n int) backend.Buf { return g.up(f32bytes(nanFill(n))) }
-	plane := oldkernels.PagedPrefillPlane(s)
-	sc, pr, part := nanBuf(plane), nanBuf(plane), nanBuf(oldkernels.FlashPartialFloats(ms))
-	run := [2]backend.Buf{nanBuf(oldkernels.FlashPartialFloats(one)), nanBuf(oldkernels.FlashPartialFloats(one))}
+	plane := mainkernels.PagedPrefillPlane(s)
+	sc, pr, part := nanBuf(plane), nanBuf(plane), nanBuf(mainkernels.FlashPartialFloats(ms))
+	run := [2]backend.Buf{nanBuf(mainkernels.FlashPartialFloats(one)), nanBuf(mainkernels.FlashPartialFloats(one))}
 	padded := (vd + 31) / 32 * 32
 	lo, hi := rows[0].ks/64*64, 0
 	for _, r := range rows {
@@ -119,7 +119,7 @@ func pagedPrefillPasses(t *testing.T, d backend.Device, s oldkernels.FlashShape,
 				launch(fk, fG, fW, qo, ko, vo, no, part, to, ro)
 			} else {
 				launch(sk, skG, 128, qo, ko, no, sc, to, ro)
-				launch(sm, oldkernels.PagedPrefillSoftmaxGroups(s, f.smLanes), oldkernels.PagedPrefillSoftmaxWidth(f.smLanes), sc, no, pr, part, to, ro)
+				launch(sm, mainkernels.PagedPrefillSoftmaxGroups(s, f.smLanes), mainkernels.PagedPrefillSoftmaxWidth(f.smLanes), sc, no, pr, part, to, ro)
 				launch(ak, akG, 128, pr, vo, no, part, to, ro)
 			}
 			rg := (R*s.Heads*padded + 127) / 128
@@ -187,7 +187,7 @@ func TestPagedPrefillPasses(t *testing.T) {
 				paths = append(paths, path{name: "flashtile", flash: true, tile: true})
 			}
 			for _, pa := range paths {
-				for _, sh := range []oldkernels.FlashShape{
+				for _, sh := range []mainkernels.FlashShape{
 					{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Sink: true, Softcap: 5},
 					{Heads: 8, KVHeads: 4, Dim: 128, Scale: .088, F16: true},
 				} {

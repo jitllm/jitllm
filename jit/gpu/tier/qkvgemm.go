@@ -5,7 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // qkvSeg is a prompt chunk's q/k/v grid for one set of shapes: the
@@ -53,8 +53,8 @@ func (g *devTier) qkvGemm(l *layer, R int, ragged bool) (*qkvSeg, bool) {
 	}
 	q := bms[0]
 	var segs []int
-	var shapes []oldkernels.MatVecShape
-	var tiles []oldkernels.VoltaTile
+	var shapes []mainkernels.MatVecShape
+	var tiles []mainkernels.VoltaTile
 	key := fmt.Sprintf("%d", R)
 	for i, bm := range bms {
 		if bm.kern == nil || bm.act != q.act || bm.vt.Threads() != q.vt.Threads() || bm.vt.F16K != q.vt.F16K {
@@ -62,7 +62,7 @@ func (g *devTier) qkvGemm(l *layer, R int, ragged bool) (*qkvSeg, bool) {
 		}
 		segs = append(segs, i)
 		vt := bm.vt
-		shapes = append(shapes, oldkernels.MatVecShape{Center: g.center, T: bm.q, K: bm.k, Rows: bm.rows, NTok: R,
+		shapes = append(shapes, mainkernels.MatVecShape{Center: g.center, T: bm.q, K: bm.k, Rows: bm.rows, NTok: R,
 			Bias: bm.bias != nil})
 		tiles = append(tiles, vt)
 		key += fmt.Sprintf("/%d:%v:%d:%d:%v:%+v", i, bm.q, bm.rows, bm.k, bm.bias != nil, vt)
@@ -79,8 +79,8 @@ func (g *devTier) qkvGemm(l *layer, R int, ragged bool) (*qkvSeg, bool) {
 	// A build reached from inside a submission takes g.mu (subLock).
 	defer g.subUnlock(g.subLock())
 	var s *qkvSeg
-	if blocks, nth, err := oldkernels.GemmVoltaSegmentsGrid(shapes, tiles); err == nil {
-		if ker, err := oldkernels.GemmVoltaSegments(shapes, tiles); err == nil {
+	if blocks, nth, err := mainkernels.GemmVoltaSegmentsGrid(shapes, tiles); err == nil {
+		if ker, err := mainkernels.GemmVoltaSegments(shapes, tiles); err == nil {
 			if c, err := g.dev.Compile(ker); err == nil {
 				// The segment guard holds a value or two across the body, and a
 				// tile already at the register cap (sm_70's m4n4 Q4_K, 255)

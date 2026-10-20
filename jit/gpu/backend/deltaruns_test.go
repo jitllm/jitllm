@@ -8,7 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestRunsStepEachSequenceAlone holds the run forms of a linear block's
@@ -45,7 +45,7 @@ func TestRunsStepEachSequenceAlone(t *testing.T) {
 	}
 	const taps = 4
 	ran := 0
-	for _, c := range []oldkernels.DeltaScan{
+	for _, c := range []mainkernels.DeltaScan{
 		{VHeads: 4, VDim: 32, KDim: 32, Rep: 2, Lanes: ir.SubgroupLanes},
 		{VHeads: 2, VDim: 32, KDim: 32, Rep: 1, PerChan: true, Lanes: ir.SubgroupLanes},
 		{VHeads: 4, VDim: 32, KDim: 32, Rep: 2, TiledK: 2, Lanes: ir.SubgroupLanes},
@@ -85,9 +85,9 @@ func TestRunsStepEachSequenceAlone(t *testing.T) {
 type stepRuns [][]int
 
 // desc is the run descriptor for a step compiled for n rows (see
-// oldkernels.RunDescWords), run j's state read at in[j] and written at out[j].
+// mainkernels.RunDescWords), run j's state read at in[j] and written at out[j].
 func (rs stepRuns) desc(n int, in, out []int) []byte {
-	w := make([]uint32, oldkernels.RunDescWords(n))
+	w := make([]uint32, mainkernels.RunDescWords(n))
 	w[0] = uint32(n)
 	at := 0
 	for j := 0; j < n; j++ {
@@ -114,7 +114,7 @@ func (rs stepRuns) desc(n int, in, out []int) []byte {
 	return b
 }
 
-func runsCase(t *testing.T, d backend.Device, c oldkernels.DeltaScan, taps int) {
+func runsCase(t *testing.T, d backend.Device, c mainkernels.DeltaScan, taps int) {
 	// Rows 0..5: sequence 0 is a chunk at rows 4, 0, 2 (positions in that
 	// order), sequence 1 decodes at row 5, sequence 2 is a chunk at rows 1, 3.
 	runs := stepRuns{{4, 0, 2}, {5}, {1, 3}}
@@ -192,7 +192,7 @@ func runsCase(t *testing.T, d backend.Device, c oldkernels.DeltaScan, taps int) 
 		}
 		return o
 	}
-	fuse := oldkernels.DeltaFuse{Chans: chans, Eps: eps, Scale: sc, BARep: baRep}
+	fuse := mainkernels.DeltaFuse{Chans: chans, Eps: eps, Scale: sc, BARep: baRep}
 	bDt, bA := g.up(f32bytes(dt)), g.up(f32bytes(aa))
 	bW := g.up(f32bytes(w))
 
@@ -228,7 +228,7 @@ func runsCase(t *testing.T, d backend.Device, c oldkernels.DeltaScan, taps int) 
 		cr.Lanes = lanes
 		bN := g.up(rs.desc(R, in, out))
 		outI, sI := buf(R*vw), g.up(f32bytes(poisonPool(P*sLen)))
-		k, err := oldkernels.GatedDeltaFused(cr, fuse)
+		k, err := mainkernels.GatedDeltaFused(cr, fuse)
 		bS := g.up(f32bytes(pS))
 		if c.PerChan {
 			lin(k, err, cr.Threads(), bS, bConv, bAlpha, bBRaw, bDt, bA, outI, sI, bN)
@@ -237,9 +237,9 @@ func runsCase(t *testing.T, d backend.Device, c oldkernels.DeltaScan, taps int) 
 		}
 		convI, cstI := buf(R*chans), g.up(f32bytes(poisonPool(P*cLen)))
 		bC := g.up(f32bytes(pC))
-		k, err = oldkernels.Conv1dRowsRuns(taps, chans, R)
+		k, err = mainkernels.Conv1dRowsRuns(taps, chans, R)
 		lin(k, err, R*chans, bC, bMixed, bW, convI, bN)
-		k, err = oldkernels.Conv1dShiftRuns(taps, chans, R)
+		k, err = mainkernels.Conv1dShiftRuns(taps, chans, R)
 		lin(k, err, R*cLen, bC, bMixed, cstI, bN)
 		poolS, poolC := read(sI, P*sLen), read(cstI, P*cLen)
 		poisonKept(t, "state pool", f64of(poolS), sLen, out...)
@@ -259,7 +259,7 @@ func runsCase(t *testing.T, d backend.Device, c oldkernels.DeltaScan, taps int) 
 		cj.Rows = m
 		chunk := g.up(recDesc(uint32(m), 0, 0))
 		o, s := buf(m*vw), buf(sLen)
-		k, err := oldkernels.GatedDeltaFused(cj, fuse)
+		k, err := mainkernels.GatedDeltaFused(cj, fuse)
 		bs1, bc1 := g.up(f32bytes(st[j*sLen:(j+1)*sLen])), g.up(f32bytes(rowsOf(conv, chans, rs)))
 		if c.PerChan {
 			lin(k, err, cj.Threads(), bs1, bc1, g.up(f32bytes(rowsOf(alpha, nGate, rs))),
@@ -270,9 +270,9 @@ func runsCase(t *testing.T, d backend.Device, c oldkernels.DeltaScan, taps int) 
 		ov := read(o, m*vw)
 		cv, cs := buf(m*chans), buf(cLen)
 		bcs1, bx1 := g.up(f32bytes(cst[j*cLen:(j+1)*cLen])), g.up(f32bytes(rowsOf(mixed, chans, rs)))
-		k, err = oldkernels.Conv1dRows(taps, chans, m)
+		k, err = mainkernels.Conv1dRows(taps, chans, m)
 		lin(k, err, m*chans, bcs1, bx1, bW, cv, chunk)
-		k, err = oldkernels.Conv1dShift(taps, chans, m)
+		k, err = mainkernels.Conv1dShift(taps, chans, m)
 		lin(k, err, cLen, bcs1, bx1, cs, chunk)
 		cvv := read(cv, m*chans)
 		for i, r := range rs {

@@ -5,14 +5,14 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // deltaScanOf is the chunked delta rule's geometry for a linear block's plan:
 // the key pairing, the decay's axis and the subgroup the device guarantees are
 // the plan's and the device's, and nothing else about the scan varies.
-func deltaScanOf(r nn.RecurrentPlan, rows, lanes int) oldkernels.DeltaScan {
-	d := oldkernels.DeltaScan{VHeads: r.VHeads, VDim: r.VDim, KDim: r.KDim,
+func deltaScanOf(r nn.RecurrentPlan, rows, lanes int) mainkernels.DeltaScan {
+	d := mainkernels.DeltaScan{VHeads: r.VHeads, VDim: r.VDim, KDim: r.KDim,
 		Rep: r.VHeads / r.KHeads, PerChan: r.ChanDecay, Rows: rows, Lanes: lanes}
 	if r.KeyTiled {
 		d.TiledK = r.KHeads
@@ -90,7 +90,7 @@ func (g *devTier) emitLinear(sid uint64, s backend.Session, bs *blockScratch, l 
 		lc.la(bs.normPart, R*bs.parts, in, bs.part)
 		lc.la(bs.normApply, R*p.NEmbd, in, l.nAttn, bs.part, bs.h)
 	}
-	lc.la(bs.quantE, oldkernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
+	lc.la(bs.quantE, mainkernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
 
 	if r.SSD {
 		g.emitSSD(sid, bs, l, li, R, rag, p, errp, lc, mvrun, pool, par, seqs)
@@ -116,11 +116,11 @@ func (g *devTier) emitLinear(sid uint64, s backend.Session, bs *blockScratch, l 
 			mvrun(l.mvSG, l.ssmGate, bs.dZ)
 		} else {
 			mvrun(l.mvGA, l.ssmGA, bs.dLowRank)
-			lc.la(bs.quantLR, oldkernels.QuantizeThreads(R*pad32(r.KDim)/32), bs.dLowRank, bs.dLRa, bs.dLRax)
+			lc.la(bs.quantLR, mainkernels.QuantizeThreads(R*pad32(r.KDim)/32), bs.dLowRank, bs.dLRa, bs.dLRax)
 			mvrunAct(l.mvGB, l.ssmGB, bs.dZ, bs.dLRa, bs.dLRax, bs.dLowRank)
 		}
 		mvrun(l.mvFA, l.ssmFA, bs.dLowRank)
-		lc.la(bs.quantLR, oldkernels.QuantizeThreads(R*pad32(r.KDim)/32), bs.dLowRank, bs.dLRa, bs.dLRax)
+		lc.la(bs.quantLR, mainkernels.QuantizeThreads(R*pad32(r.KDim)/32), bs.dLowRank, bs.dLRa, bs.dLRax)
 		mvrunAct(l.mvFB, l.ssmFB, bs.dAlpha, bs.dLRa, bs.dLRax, bs.dLowRank)
 		// ssmBA is b_proj alone here: beta's logits, one per value head, with
 		// no alpha stream in it to deinterleave.
@@ -166,7 +166,7 @@ func (g *devTier) emitLinear(sid uint64, s backend.Session, bs *blockScratch, l 
 		lc.la(bs.convShift, (r.Conv-1)*r.Chans, inC, bs.dMixed, outC, bs.dRows)
 	}
 	// One launch from the convolution to the state where the device has a
-	// subgroup (oldkernels.GatedDeltaFused): the SiLU, slices, L2 norms, scales and
+	// subgroup (mainkernels.GatedDeltaFused): the SiLU, slices, L2 norms, scales and
 	// gates are formed inside the scan, replacing eleven launches.
 	if rag {
 		// stepped above, one launch over every sequence
@@ -228,7 +228,7 @@ func (g *devTier) emitLinear(sid uint64, s backend.Session, bs *blockScratch, l 
 	default:
 		lc.la(bs.outActMul, R*inner, bs.dZ, bs.dOutN, bs.dAct)
 	}
-	lc.la(bs.quantD, oldkernels.QuantizeThreads(R*pad32(inner)/32), gated, bs.a, bs.ax)
+	lc.la(bs.quantD, mainkernels.QuantizeThreads(R*pad32(inner)/32), gated, bs.a, bs.ax)
 	mvrun(l.mvSO, l.ssmOut, bs.mvOut)
 
 	// The flip is after the launches, so a captured graph replays the pointers
@@ -251,7 +251,7 @@ func (g *devTier) emitLinear(sid uint64, s backend.Session, bs *blockScratch, l 
 // projections (C|B|x, z and dt), the convolution and its shift as the delta
 // rule runs them, one launch for the whole update -- the bias and SiLU, dt and
 // the decay, the state over every row (or every run of a ragged step) and the
-// D skip (oldkernels.GatedDeltaFused with SSD) -- then y*silu(z), its grouped
+// D skip (mainkernels.GatedDeltaFused with SSD) -- then y*silu(z), its grouped
 // norm, and ssm_out into bs.mvOut. The pre-norm and its quantization ran in
 // emitLinear; the state is out of place exactly as there.
 func (g *devTier) emitSSD(sid uint64, bs *blockScratch, l *layer, li, R int, rag bool, p *nn.LayerPlan,
@@ -328,7 +328,7 @@ func (g *devTier) emitSSD(sid uint64, bs *blockScratch, l *layer, li, R int, rag
 			*errp = lc.launch(bs.ssdNorm, ng, nwid, bs.dOutN, l.ssmNorm, bs.dAct)
 		}
 	}
-	lc.la(bs.quantD, oldkernels.QuantizeThreads(R*pad32(inner)/32), act, bs.a, bs.ax)
+	lc.la(bs.quantD, mainkernels.QuantizeThreads(R*pad32(inner)/32), act, bs.a, bs.ax)
 	mvrun(l.mvSO, l.ssmOut, out)
 	if errp == nil || *errp == nil {
 		g.stepFlip(sid, l)
@@ -355,21 +355,21 @@ func (g *devTier) emitCentred(bs *blockScratch, l *layer, li, R int, p *nn.Layer
 	}
 	lc.la(bs.normPart, R*bs.parts, bs.x, bs.part)
 	lc.la(bs.normApply, R*p.NEmbd, bs.x, l.nAttn, bs.part, bs.h)
-	lc.la(bs.quantE, oldkernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
+	lc.la(bs.quantE, mainkernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
 	mvrun(l.mvq, l.wq, bs.dMixed)
 	mvrun(l.mvSG, l.ssmGate, bs.scB)
 	mvrun(l.mvBA, l.ssmBA, bs.scC)
 	lc.la(bs.scMul, R*r.Chans, bs.scB, bs.dMixed, bs.scBx)
 	lc.la(bs.convCentred, R*r.Chans, bs.scBx, l.ssmConv1d, bs.vwinAll, bs.dConv)
 	lc.la(bs.scMul, R*r.Chans, bs.scC, bs.dConv, bs.scY)
-	lc.la(bs.quantE, oldkernels.QuantizeThreads(R*ePad(p)/32), bs.scY, bs.a, bs.ax)
+	lc.la(bs.quantE, mainkernels.QuantizeThreads(R*ePad(p)/32), bs.scY, bs.a, bs.ax)
 	mvrun(l.mvSO, l.ssmOut, bs.mvOut)
 }
 
 // emitShortConv issues one LFM2 short-convolution block, from the quantized
 // pre-norm to bs.mvOut: x, B and C, B*x through the convolution (its window is
 // the block's whole recurrent state, in pool.c), C times that, out_proj. The
-// two products are oldkernels.ActMul with the identity.
+// two products are mainkernels.ActMul with the identity.
 func (g *devTier) emitShortConv(sid uint64, bs *blockScratch, l *layer, li, R int, rag bool, p *nn.LayerPlan,
 	errp *error, lc *launcher, mvrun func(mv, *resident, backend.Buf), pool *recPool, par int) {
 	r := bs.rec
@@ -400,7 +400,7 @@ func (g *devTier) emitShortConv(sid uint64, bs *blockScratch, l *layer, li, R in
 		}
 	}
 	lc.la(bs.scMul, R*r.Chans, bs.scC, bs.dConv, bs.scY)
-	lc.la(bs.quantE, oldkernels.QuantizeThreads(R*ePad(p)/32), bs.scY, bs.a, bs.ax)
+	lc.la(bs.quantE, mainkernels.QuantizeThreads(R*ePad(p)/32), bs.scY, bs.a, bs.ax)
 	mvrun(l.mvSO, l.ssmOut, bs.mvOut)
 	if errp == nil || *errp == nil {
 		g.stepFlip(sid, l)
@@ -412,7 +412,7 @@ func (g *devTier) emitShortConv(sid uint64, bs *blockScratch, l *layer, li, R in
 // mamba1Attn transcribed: x and z, the convolution and its shift as the delta
 // rule runs them, x's bias and SiLU, x_proj's three outputs and their norms,
 // dt_proj through a quantized bottleneck, the whole scan in one launch
-// (oldkernels.GatedDeltaFused with Mamba1, every run of a ragged step), then
+// (mainkernels.GatedDeltaFused with Mamba1, every run of a ragged step), then
 // y*silu(z) and ssm_out into bs.mvOut. The pre-norm and its quantization ran
 // in emitLinear; the state is out of place exactly as there. Its four
 // matrices ride KDA's slots (nn.SSMWeights): x_proj's dt rows in FA, dt_proj
@@ -450,7 +450,7 @@ func (g *devTier) emitMamba1(sid uint64, bs *blockScratch, l *layer, li, R int, 
 	// x through its bias and SiLU, into dMixed (dead past the convolution),
 	// and quantized for x_proj's three matvecs.
 	lc.la(bs.m1Bias, R*r.Chans, bs.dConv, l.ssmCB, bs.dMixed)
-	lc.la(bs.quantD, oldkernels.QuantizeThreads(R*pad32(inner)/32), bs.dMixed, bs.a, bs.ax)
+	lc.la(bs.quantD, mainkernels.QuantizeThreads(R*pad32(inner)/32), bs.dMixed, bs.a, bs.ax)
 	mvrun(l.mvFA, l.ssmFA, bs.dLowRank)
 	mvrun(l.mvGA, l.ssmGA, bs.m1B)
 	mvrun(l.mvGB, l.ssmGB, bs.m1C)
@@ -471,7 +471,7 @@ func (g *devTier) emitMamba1(sid uint64, bs *blockScratch, l *layer, li, R int, 
 		low, bv, cv = bs.m1LowN, bs.m1BN, bs.m1CN
 	}
 	// dt_proj reads the bottleneck's own quantization.
-	lc.la(bs.m1Quant, oldkernels.QuantizeThreads(R*pad32(r.Rank)/32), low, bs.dLRa, bs.dLRax)
+	lc.la(bs.m1Quant, mainkernels.QuantizeThreads(R*pad32(r.Rank)/32), low, bs.dLRa, bs.dLRax)
 	mvrunAct(l.mvFB, l.ssmFB, bs.dBRaw, bs.dLRa, bs.dLRax, low)
 	if rag {
 		lc.la(rk.delta, runs*rk.perRun, inS, bs.dMixed, bv, cv, bs.dBRaw, l.ssmDt, l.ssmA, l.ssmD,
@@ -499,7 +499,7 @@ func (g *devTier) emitMamba1(sid uint64, bs *blockScratch, l *layer, li, R int, 
 		lc.la(cp, seqs*r.StateLen, g.recNext, pool.s[0], bs.dRows)
 	}
 	lc.la(bs.outActMul, R*inner, bs.dZ, bs.dOut, bs.dAct)
-	lc.la(bs.quantD, oldkernels.QuantizeThreads(R*pad32(inner)/32), bs.dAct, bs.a, bs.ax)
+	lc.la(bs.quantD, mainkernels.QuantizeThreads(R*pad32(inner)/32), bs.dAct, bs.a, bs.ax)
 	mvrun(l.mvSO, l.ssmOut, bs.mvOut)
 	if errp == nil || *errp == nil {
 		g.stepFlip(sid, l)
@@ -508,7 +508,7 @@ func (g *devTier) emitMamba1(sid uint64, bs *blockScratch, l *layer, li, R int, 
 }
 
 // deltaUnfused is the delta rule's state update as separate launches, where
-// the device has no subgroup for oldkernels.GatedDeltaFused: the SiLU, the
+// the device has no subgroup for mainkernels.GatedDeltaFused: the SiLU, the
 // gates, q, k and v sliced, normed and scaled, then the scan or one row's
 // step. The block encoder and the device program's scan both run it.
 func (g *devTier) deltaUnfused(lc *launcher, bs *blockScratch, l *layer, li, R int, inS, outS backend.Buf, errp *error) {

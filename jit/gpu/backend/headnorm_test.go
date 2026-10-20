@@ -7,10 +7,10 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
-// TestHeadNorm holds oldkernels.HeadNorm to a float64 reference on real hardware.
+// TestHeadNorm holds mainkernels.HeadNorm to a float64 reference on real hardware.
 //
 // The shapes are the point: (16, 128) is qwen3's per-head q/k norm and
 // (1, 2048) is olmoe's whole-projection norm over the same buffer. They
@@ -47,7 +47,7 @@ func TestHeadNorm(t *testing.T) {
 			// The refusal is asserted: a device that will not promise 32
 			// lanes must fail to compile the 32-lane kernel, so the scalar
 			// twin is chosen by construction.
-			k32, err := oldkernels.HeadNorm(16, 128, eps, 32)
+			k32, err := mainkernels.HeadNorm(16, 128, eps, 32)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -114,7 +114,7 @@ func headNormCase(t *testing.T, d backend.Device, nHeads, headDim int, eps float
 	defer g.free()
 	bIn, bW, bOut := g.up(f32bytes(in)), g.up(f32bytes(w)), g.up(make([]byte, n*4))
 
-	kk, err := oldkernels.HeadNorm(nHeads, headDim, eps, lanes)
+	kk, err := mainkernels.HeadNorm(nHeads, headDim, eps, lanes)
 	if err != nil {
 		t.Fatal(err)
 	}

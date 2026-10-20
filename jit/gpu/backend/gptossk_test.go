@@ -7,7 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 func readF32(t *testing.T, b backend.Buf, n int) []float64 {
@@ -67,7 +67,7 @@ func TestSoftmaxSinkMatchesTheHost(t *testing.T) {
 					}
 					bA, bN := g.up(f32bytes(scores)), g.up(u32bytes(counts))
 					bOut, bS := g.up(make([]byte, len(scores)*4)), g.up(f32bytes(sinks))
-					kk, err := oldkernels.SoftmaxRowsSink(nh, maxSeq, lanes, rows, 1, true)
+					kk, err := mainkernels.SoftmaxRowsSink(nh, maxSeq, lanes, rows, 1, true)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -141,7 +141,7 @@ func TestIndexedBiasAddMatchesTheHost(t *testing.T) {
 			defer g.free()
 			bIn, bSel, bB := g.up(f32bytes(in)), g.up(u32bytes(sel)), g.up(f32bytes(bias))
 			bOut := g.up(make([]byte, len(in)*4))
-			kk, err := oldkernels.IndexedBiasAdd(k, rows)
+			kk, err := mainkernels.IndexedBiasAdd(k, rows)
 			if err != nil {
 				t.Fatal(err)
 			}

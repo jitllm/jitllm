@@ -11,7 +11,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // The device unpack, at the tier's level: a page-in of a covered format must
@@ -215,9 +215,9 @@ func TestAnUncoveredFormatFallsBackToTheHostPackerAndSaysWhy(t *testing.T) {
 	}
 	// The reason comes from the kernel table, so it cannot drift from the one
 	// that decides.
-	want := oldkernels.UnpackWhyNot(kernels.Q6_K)
+	want := mainkernels.UnpackWhyNot(kernels.Q6_K)
 	if !bytes.Contains([]byte(st.UnpackWhy), []byte(want)) {
-		t.Fatalf("UnpackWhy is %q and oldkernels.UnpackWhyNot(Q6_K) is %q; the tier is not "+
+		t.Fatalf("UnpackWhy is %q and mainkernels.UnpackWhyNot(Q6_K) is %q; the tier is not "+
 			"quoting the table that made the decision", st.UnpackWhy, want)
 	}
 	t.Logf("mixed block: %d unpacked, %d host-packed, reason %q",

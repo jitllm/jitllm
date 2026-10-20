@@ -12,7 +12,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // Code generation for the device program: each op's kernels are generated
@@ -60,7 +60,7 @@ const (
 	gaKPool // the block's paged K pool
 	gaVPool // its paged V pool
 	gaTab   // its page table
-	gaPRow  // the step's row descriptors (oldkernels.PRowWords a row)
+	gaPRow  // the step's row descriptors (mainkernels.PRowWords a row)
 )
 
 // genLaunch is one generated launch: threads for a flat launch, or groups of
@@ -246,7 +246,7 @@ func (rb *rowBuild) quantize(v, w int, p *nn.LayerPlan) {
 		win = 32
 	}
 	rb.r.Q8 = &compose.Q8{Val: v, A: rb.buf(compose.BufQ8, gaQ8A), X: rb.buf(compose.BufQ8X, gaQ8X),
-		Window: oldkernels.ClampWindow(win, kp), Pad: kp}
+		Window: mainkernels.ClampWindow(win, kp), Pad: kp}
 }
 
 // rowSchedule is a row group's schedule: the target's group for its width,
@@ -258,7 +258,7 @@ func rowSchedule(r *compose.Row) compose.Schedule {
 	}
 	top := 256
 	if reduces || r.Q8 != nil {
-		top = oldkernels.RMSNormGroup
+		top = mainkernels.RMSNormGroup
 	}
 	g := 32
 	for g < r.Width && g < top {
@@ -481,7 +481,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		rb.r.Width = iw
 		x := rb.load(compose.BufRow, gaIn0)
 		rb.r.Q8 = &compose.Q8{Val: x, A: rb.buf(compose.BufQ8, gaQ8A), X: rb.buf(compose.BufQ8X, gaQ8X),
-			Window: oldkernels.ClampWindow(win, kp), Pad: kp}
+			Window: mainkernels.ClampWindow(win, kp), Pad: kp}
 	case dkRopeQ, dkRopeKRow:
 		// The rotary over each head's first NRot dimensions (NORM or NEOX
 		// pairs; XD-RoPE's NEOX pairs on two tables), the rest of the head
@@ -789,7 +789,7 @@ func (g *devTier) genPairs(o *devOp, prog *devProgram, bs *blockScratch, rows in
 		gt, up := rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1)
 		if len(o.In) > 2 {
 			a, ok := kernAct(o.Act)
-			if !ok || oldkernels.ActMulOK(a) != nil || o.A.GLU.Bounded() {
+			if !ok || o.A.GLU.Bounded() {
 				return nil
 			}
 			// act(w*gate) * (w*up), w the pair's routed weight.
@@ -814,7 +814,7 @@ func (g *devTier) genPairs(o *devOp, prog *devProgram, bs *blockScratch, rows in
 		}
 		x := rb.load(compose.BufRow, gaIn0)
 		rb.r.Q8 = &compose.Q8{Val: x, A: rb.buf(compose.BufQ8, gaQ8A), X: rb.buf(compose.BufQ8X, gaQ8X),
-			Window: oldkernels.ClampWindow(max(p.ActWin, 32), pad32(w)), Pad: pad32(w)}
+			Window: mainkernels.ClampWindow(max(p.ActWin, 32), pad32(w)), Pad: pad32(w)}
 	default:
 		return nil
 	}
@@ -830,7 +830,7 @@ func (g *devTier) genPairs(o *devOp, prog *devProgram, bs *blockScratch, rows in
 // epiKern is a former's kernel of shape s with an epilogue, its structure
 // enc (the epilogue's and the former's schedule), built by build once a
 // device and structure, and its workgroup width. Callers hold g.mu.
-func (g *devTier) epiKern(s oldkernels.MatVecShape, enc []uint32, build func() (*ir.Kernel, error)) (backend.Kernel, int) {
+func (g *devTier) epiKern(s mainkernels.MatVecShape, enc []uint32, build func() (*ir.Kernel, error)) (backend.Kernel, int) {
 	full := append([]uint32{encEpi}, enc...)
 	full = append(full, uint32(s.T), uint32(s.K), uint32(s.Rows), uint32(s.Split), uint32(s.Rowt), b2u(s.GroupSplit),
 		uint32(s.NTok), b2u(s.Center.NoCenter), uint32(s.Center.MinTok))
@@ -949,12 +949,6 @@ func (rb *rowBuild) gated(o *devOp, gt, up int) (int, bool) {
 		a, ok := kernAct(o.Act)
 		if !ok {
 			return 0, false
-		}
-		if oldkernels.ActMulOK(a) != nil {
-			// An activation with an element form and no gated one (a
-			// sigmoid gate): act(gate) times up. One with no element form
-			// either compose refuses at emit (ActElemOK).
-			return rb.bin(compose.OpMul, rb.node(compose.Node{Kind: compose.NUnary, Op: compose.OpAct, Act: a, A: gt}), up), true
 		}
 		return rb.node(compose.Node{Kind: compose.NBinary, Op: compose.OpActMul, Act: a, A: gt, B: up}), true
 	}

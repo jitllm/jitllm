@@ -6,7 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // Key runs (nn.KeyRunDevice): every mask this tier runs is, per row, an
@@ -18,7 +18,7 @@ import (
 // non-causal call (nn.LayerPlan.NonCausal) is one whole run by construction:
 // every row counts the call's rows. On its Windowed blocks each row's scores
 // outside its window run go to -inf before the softmax
-// (oldkernels.WindowMaskRows, as llama.cpp adds its window_mask): Qwen2.5-VL's
+// (mainkernels.WindowMaskRows, as llama.cpp adds its window_mask): Qwen2.5-VL's
 // tower. The windows are a property of the picture, not of a block, so they
 // are handed over once per picture and every windowed block reads them.
 
@@ -268,7 +268,7 @@ func (g *devTier) winMaskLocked(bs *blockScratch) bool {
 	}
 	w := g.scratchWin() // the scratch's own buffers (scratch.go)
 	defer w.close()
-	k, err := oldkernels.WindowMaskRows(ar, bs.p.NHead, bs.sstride)
+	k, err := mainkernels.WindowMaskRows(ar, bs.p.NHead, bs.sstride)
 	if err != nil {
 		g.LastErr = "windowed runs: " + err.Error()
 		return false

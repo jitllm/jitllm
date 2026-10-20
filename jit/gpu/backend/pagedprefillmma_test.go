@@ -6,11 +6,11 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // prefillValue is the width a shape's accumulate runs at.
-func prefillValue(s oldkernels.FlashShape) int {
+func prefillValue(s mainkernels.FlashShape) int {
 	if s.MLA > 0 {
 		return s.MLA
 	}

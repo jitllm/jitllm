@@ -5,7 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // flashVariant is one compiled key partitioning of the decode attention: the
@@ -41,7 +41,7 @@ func (bs *blockScratch) flashSplitFor(n int) int {
 	return max(s, (n+bs.flashChunk-1)/bs.flashChunk)
 }
 
-// flashKV is whether decode attention runs as oldkernels.FlashDecodeKV: asked
+// flashKV is whether decode attention runs as mainkernels.FlashDecodeKV: asked
 // for, or the default on CUDA and Metal, where it measured faster than the
 // staged kernels end to end (TestFlashAttentionAB at kernel level). Vulkan
 // was not measured and stays staged.
@@ -61,10 +61,10 @@ func (g *devTier) initFlash(bs *blockScratch) (err error) {
 	if !g.flashOn() || bs.rows != 1 || p.MLA() || p.NonCausal || g.pickLanes() != 32 {
 		return nil
 	}
-	shape := oldkernels.FlashShape{Heads: p.NHead, KVHeads: p.NKVHead, Dim: p.HeadDim, Rows: bs.rows,
+	shape := mainkernels.FlashShape{Heads: p.NHead, KVHeads: p.NKVHead, Dim: p.HeadDim, Rows: bs.rows,
 		KStride: g.kStride(p), Scale: g.scoreScale(p), Softcap: p.AttnSoftcap, F16: g.KVF16, Sink: p.AttnSinks}
-	build, width := oldkernels.FlashAttention, 32
-	groups := func(s oldkernels.FlashShape) int { return p.NHead * max(1, s.Splits) }
+	build, width := mainkernels.FlashAttention, 32
+	groups := func(s mainkernels.FlashShape) int { return p.NHead * max(1, s.Splits) }
 	// FlashAttention holds no partition in shared memory: any split covers.
 	bs.flashChunk, bs.flashForced, bs.flashCap = p.MaxSeq+1, max(1, g.FlashSplit), 1
 	if g.flashKV() {
@@ -72,14 +72,14 @@ func (g *devTier) initFlash(bs *blockScratch) (err error) {
 			shape.Group = g.FlashGroup
 		}
 		shape.Warps = g.FlashWarps
-		build, width, groups = oldkernels.FlashDecodeKV, oldkernels.FlashKVWidth(shape), oldkernels.FlashKVGroups
+		build, width, groups = mainkernels.FlashDecodeKV, mainkernels.FlashKVWidth(shape), mainkernels.FlashKVGroups
 		shape.Splits = 1
-		bs.flashChunk, bs.flashForced = oldkernels.FlashKVChunk(shape), g.FlashSplit
+		bs.flashChunk, bs.flashForced = mainkernels.FlashKVChunk(shape), g.FlashSplit
 		slots := g.dev.Slots()
 		if slots <= 0 {
 			slots = 16384
 		}
-		bs.flashCap = max(1, slots/1280/max(1, oldkernels.FlashKVGroups(shape)))
+		bs.flashCap = max(1, slots/1280/max(1, mainkernels.FlashKVGroups(shape)))
 	}
 	bs.flashWidth = width
 	// One variant per split any count up to MaxSeq selects.
@@ -106,7 +106,7 @@ func (g *devTier) initFlash(bs *blockScratch) (err error) {
 	}
 	if top := splits[len(splits)-1]; top > 1 {
 		shape.Splits = top
-		n := oldkernels.FlashPartialFloats(shape) * 4
+		n := mainkernels.FlashPartialFloats(shape) * 4
 		bs.flashPart, err = g.dev.Alloc(n)
 		if err != nil {
 			return err
@@ -123,7 +123,7 @@ func (g *devTier) initFlash(bs *blockScratch) (err error) {
 		bs.flashV = append(bs.flashV, v)
 		fv := &bs.flashV[len(bs.flashV)-1]
 		if sp > 1 {
-			if fv.merge, err = compile(oldkernels.FlashAttentionMerge(shape)); err != nil {
+			if fv.merge, err = compile(mainkernels.FlashAttentionMerge(shape)); err != nil {
 				return err
 			}
 		}

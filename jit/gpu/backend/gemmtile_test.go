@@ -10,7 +10,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // gemmTileCases are the shapes TestGemmTileMatchesTheReference sweeps: every
@@ -19,14 +19,14 @@ import (
 // and a bias on each family.
 var gemmTileCases = []struct {
 	rows, k, ntok int
-	tl            oldkernels.TileGemm
+	tl            mainkernels.TileGemm
 	bias          bool
 }{
-	{64, 512, 32, oldkernels.TileGemm{MT: 4, NT: 2, WM: 2, WN: 2, KB: 2}, false},
-	{128, 512, 64, oldkernels.TileGemm{MT: 4, NT: 2, WM: 2, WN: 2, KB: 2}, true},
-	{128, 1024, 64, oldkernels.TileGemm{MT: 4, NT: 4, WM: 2, WN: 2, KB: 1}, false},
-	{256, 768, 32, oldkernels.TileGemm{MT: 4, NT: 4, WM: 4, WN: 1, KB: 1}, true},
-	{64, 1024, 128, oldkernels.TileGemm{MT: 2, NT: 4, WM: 2, WN: 2, KB: 2}, true},
+	{64, 512, 32, mainkernels.TileGemm{MT: 4, NT: 2, WM: 2, WN: 2, KB: 2}, false},
+	{128, 512, 64, mainkernels.TileGemm{MT: 4, NT: 2, WM: 2, WN: 2, KB: 2}, true},
+	{128, 1024, 64, mainkernels.TileGemm{MT: 4, NT: 4, WM: 2, WN: 2, KB: 1}, false},
+	{256, 768, 32, mainkernels.TileGemm{MT: 4, NT: 4, WM: 4, WN: 1, KB: 1}, true},
+	{64, 1024, 128, mainkernels.TileGemm{MT: 2, NT: 4, WM: 2, WN: 2, KB: 2}, true},
 }
 
 // TestGemmTileMatchesTheReference holds the staged collective-tile GEMM to the
@@ -56,8 +56,8 @@ func TestGemmTileMatchesTheReference(t *testing.T) {
 					tl := sh.tl
 					tl.KB = max(tl.KB*32/sub, 1)
 					tl.Tall = isTall
-					s := oldkernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, Bias: sh.bias}
-					kk, err := oldkernels.GemmTile(s, tl)
+					s := mainkernels.MatVecShape{T: q, K: sh.k, Rows: sh.rows, NTok: sh.ntok, Bias: sh.bias}
+					kk, err := mainkernels.GemmTile(s, tl)
 					if err != nil {
 						t.Fatalf("%v %+v: %v", q, sh, err)
 					}
@@ -77,7 +77,7 @@ func TestGemmTileMatchesTheReference(t *testing.T) {
 						tall++
 					}
 					mma70Case(t, d, kern, s, fmt.Sprintf("gemmtile %+v", tl),
-						oldkernels.GemmTileGroups(s, tl), tl.Threads(), true)
+						mainkernels.GemmTileGroups(s, tl), tl.Threads(), true)
 					kern.Close()
 				}
 			}
@@ -113,19 +113,19 @@ func TestGemmTileGroupedMatchesPerExpert(t *testing.T) {
 			kb := max(32/sub, 1)
 			for _, c := range []struct {
 				rows, k, experts int
-				tl               oldkernels.TileGemm
+				tl               mainkernels.TileGemm
 				sel              []uint32
 				used             int
 				bias             bool
 			}{
-				{128, 512, 4, oldkernels.TileGemm{MT: 4, NT: 2, WM: 2, WN: 2, KB: kb}, []uint32{2, 0, 0, 3, 1}, 5, false},
-				{192, 256, 4, oldkernels.TileGemm{MT: 4, NT: 2, WM: 2, WN: 2, KB: kb}, []uint32{3, 3, 1, 0}, 3, true},
-				{256, 512, 3, oldkernels.TileGemm{MT: 4, NT: 4, WM: 2, WN: 2, KB: kb}, []uint32{1, 2, 0}, 3, false},
-				{96, 512, 4, oldkernels.TileGemm{MT: 2, NT: 2, WM: 2, WN: 2, KB: kb}, []uint32{0, 3, 3, 1}, 4, true},
+				{128, 512, 4, mainkernels.TileGemm{MT: 4, NT: 2, WM: 2, WN: 2, KB: kb}, []uint32{2, 0, 0, 3, 1}, 5, false},
+				{192, 256, 4, mainkernels.TileGemm{MT: 4, NT: 2, WM: 2, WN: 2, KB: kb}, []uint32{3, 3, 1, 0}, 3, true},
+				{256, 512, 3, mainkernels.TileGemm{MT: 4, NT: 4, WM: 2, WN: 2, KB: kb}, []uint32{1, 2, 0}, 3, false},
+				{96, 512, 4, mainkernels.TileGemm{MT: 2, NT: 2, WM: 2, WN: 2, KB: kb}, []uint32{0, 3, 3, 1}, 4, true},
 			} {
-				s := oldkernels.MatVecShape{T: q, K: c.k, Rows: c.rows, NTok: c.tl.Toks() * len(c.sel), Experts: c.experts,
+				s := mainkernels.MatVecShape{T: q, K: c.k, Rows: c.rows, NTok: c.tl.Toks() * len(c.sel), Experts: c.experts,
 					Bias: c.bias}
-				kk, err := oldkernels.GemmTile(s, c.tl)
+				kk, err := mainkernels.GemmTile(s, c.tl)
 				if err != nil {
 					t.Fatalf("%v %+v: %v", q, c.tl, err)
 				}
@@ -217,7 +217,7 @@ func TestGemmTileSpeed(t *testing.T) {
 					2*float64(rows)*float64(k)*float64(ntok)/el.Seconds()/1e12)
 			}
 			sub, _, _, _ := kernels.Layout(q)
-			for _, tl := range []oldkernels.TileGemm{
+			for _, tl := range []mainkernels.TileGemm{
 				{MT: 4, NT: 2, WM: 2, WN: 2, KB: 1}, {MT: 4, NT: 2, WM: 2, WN: 2, KB: 2},
 				{MT: 4, NT: 4, WM: 2, WN: 2, KB: 1}, {MT: 4, NT: 4, WM: 2, WN: 2, KB: 2},
 				{MT: 2, NT: 4, WM: 2, WN: 2, KB: 1}, {MT: 4, NT: 4, WM: 4, WN: 1, KB: 1},
@@ -225,8 +225,8 @@ func TestGemmTileSpeed(t *testing.T) {
 				tl.KB = max(tl.KB*32/sub, 1)
 				for _, ns := range []bool{true, false} {
 					tl.NoSplit = ns
-					s := oldkernels.MatVecShape{T: q, K: k, Rows: rows, NTok: ntok}
-					kk, err := oldkernels.GemmTile(s, tl)
+					s := mainkernels.MatVecShape{T: q, K: k, Rows: rows, NTok: ntok}
+					kk, err := mainkernels.GemmTile(s, tl)
 					if err != nil {
 						continue
 					}
@@ -238,7 +238,7 @@ func TestGemmTileSpeed(t *testing.T) {
 						t.Fatalf("%+v: %v", tl, err)
 					}
 					time1(fmt.Sprintf("tile m%dn%d w%dx%d k%d split %v", tl.MT, tl.NT, tl.WM, tl.WN, tl.KB, !ns), func() error {
-						return kern.Launch(oldkernels.GemmTileGroups(s, tl), tl.Threads(), bQS, bD, bSC, bB, out)
+						return kern.Launch(mainkernels.GemmTileGroups(s, tl), tl.Threads(), bQS, bD, bSC, bB, out)
 					})
 					kern.Close()
 				}

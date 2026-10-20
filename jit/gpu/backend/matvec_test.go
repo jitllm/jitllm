@@ -11,7 +11,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestMatVecMatchesReference holds the GPU decode matvec to jitllm's CPU bar:
@@ -60,7 +60,7 @@ func TestMatVecMatchesReference(t *testing.T) {
 						// reduction at every split the group divides: each has
 						// per-column, per-tile or per-slot offsets that are
 						// invisible at a width of 1 (or Split == 2).
-						if oldkernels.GroupSplitOK(shape.rows, shape.split) {
+						if mainkernels.GroupSplitOK(shape.rows, shape.split) {
 							t.Run("groupsplit", func(t *testing.T) {
 								for _, withBias := range []bool{false, true} {
 									matvecCaseGroup(t, d, q, shape.rows, shape.k, shape.split, withBias)
@@ -253,7 +253,7 @@ func matvecCaseFull(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, s
 			bias[i] = float32(rng.NormFloat64() * 4)
 		}
 	}
-	kk, err := oldkernels.MatVec(oldkernels.MatVecShape{T: q, K: k, Rows: nrows, Split: split, Bias: withBias, Rowt: rowt, GroupSplit: groupSplit})
+	kk, err := mainkernels.MatVec(mainkernels.MatVecShape{T: q, K: k, Rows: nrows, Split: split, Bias: withBias, Rowt: rowt, GroupSplit: groupSplit})
 	if err != nil {
 		t.Skipf("shape rejected: %v", err)
 	}
@@ -286,7 +286,7 @@ func matvecCaseFull(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, s
 	}
 	bQS := up(len(qs)*4, u32bytes(qs))
 	// A float format has no scale plane; its slot carries the float
-	// activation (oldkernels.MatVec).
+	// activation (mainkernels.MatVec).
 	var bD backend.Buf
 	if kernels.IsFloat(q) {
 		bD = up(len(x)*4, f32bytes(x))
@@ -315,7 +315,7 @@ func matvecCaseFull(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, s
 
 	width := 128
 	if groupSplit {
-		width = oldkernels.GroupSplitWidth(split)
+		width = mainkernels.GroupSplitWidth(split)
 	}
 	groups := (nrows + width - 1) / width
 	launchArgs := []backend.Buf{bQS, bD, bSC, bA, bAX, bOut}
@@ -329,7 +329,7 @@ func matvecCaseFull(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, s
 		t.Fatal(err)
 	}
 	if split > 1 && !groupSplit {
-		rk, err := oldkernels.Reduce(nrows, split)
+		rk, err := mainkernels.Reduce(nrows, split)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -550,7 +550,7 @@ func ntokCase(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, ntok, t
 	if tok == ntok && !kernels.IsFloat(q) {
 		// 14 and 28 are what the tuner gives a Q4_K_M 8B's ffn matvecs.
 		for _, split := range []int{4, 14, 16, 28} {
-			if oldkernels.GroupSplitOK(nrows, split) && k/32%split == 0 {
+			if mainkernels.GroupSplitOK(nrows, split) && k/32%split == 0 {
 				ntokCaseRowt(t, d, q, nrows, k, ntok, tok, 1, split, true, 0)
 				// The step's live rows at the head of a scratch padded to
 				// 8: the sums sit after all 8 rows' scales.
@@ -577,7 +577,7 @@ func ntokCaseRowt(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 	}
 	vecs := max(ntok, actRows) // activation vectors quantized together
 	t.Run(fmt.Sprintf("ntok%d/tok%d/rowt%d/split%d%s", ntok, tok, rowt, split, g), func(t *testing.T) {
-		kk, err := oldkernels.MatVec(oldkernels.MatVecShape{T: q, K: k, Rows: nrows, NTok: ntok, Tok: tok, Rowt: rowt,
+		kk, err := mainkernels.MatVec(mainkernels.MatVecShape{T: q, K: k, Rows: nrows, NTok: ntok, Tok: tok, Rowt: rowt,
 			Split: split, GroupSplit: grp, ActRows: actRows})
 		if err != nil {
 			t.Skipf("shape rejected: %v", err)

@@ -11,11 +11,11 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestActInIsTheTwoLaunches: a matvec with the operand prologue
-// (oldkernels.ActIn) writes, bit for bit, what the launch it replaces followed by
+// (mainkernels.ActIn) writes, bit for bit, what the launch it replaces followed by
 // the plain matvec writes -- RMSNormQuantRows (the warp reduction on CUDA, the
 // tree everywhere) or Quantize, then MatVec. Every split and in-group split,
 // the residual (bias) and gate epilogues, the q/k/v segments, both amax
@@ -50,7 +50,7 @@ func TestActInIsTheTwoLaunches(t *testing.T) {
 					if c.k%win != 0 {
 						continue
 					}
-					for _, in := range []oldkernels.ActIn{
+					for _, in := range []mainkernels.ActIn{
 						{On: true, Window: win},
 						{On: true, Norm: true, Eps: 1e-5, Window: win},
 						{On: true, Norm: true, Eps: 1e-6, AddOne: true, Window: win},
@@ -63,22 +63,22 @@ func TestActInIsTheTwoLaunches(t *testing.T) {
 							}
 							in.Warp = warp
 							for _, epi := range []string{"plain", "res", "gate"} {
-								s := oldkernels.MatVecShape{T: c.q, K: c.k, Rows: c.rows, Split: sp.split,
+								s := mainkernels.MatVecShape{T: c.q, K: c.k, Rows: c.rows, Split: sp.split,
 									GroupSplit: sp.grp, Bias: epi == "res", Gate: epi == "gate", GateAct: kernels.ActSiLU}
 								name := fmt.Sprintf("%s/%v-%dx%d/s%d-g%v/w%d/norm%v-one%v-warp%v-gated%v-%v/%s", d.API(), c.q,
 									c.rows, c.k, sp.split, sp.grp, win, in.Norm, in.AddOne, warp, in.Gated, in.Act, epi)
-								if actInCase(t, d, name, []oldkernels.MatVecShape{s}, in) {
+								if actInCase(t, d, name, []mainkernels.MatVecShape{s}, in) {
 									ran++
 								}
 							}
 							if sp.split == 1 || sp.grp {
-								segs := []oldkernels.MatVecShape{{T: c.q, K: c.k, Rows: c.rows},
+								segs := []mainkernels.MatVecShape{{T: c.q, K: c.k, Rows: c.rows},
 									{T: c.q, K: c.k, Rows: 64, Bias: true}, {T: kernels.Q8_0, K: c.k, Rows: 64}}
 								name := fmt.Sprintf("%s/seg-%v-%d/s%d-g%v/w%d/norm%v-warp%v-gated%v", d.API(), c.q, c.k,
 									sp.split, sp.grp, win, in.Norm, warp, in.Gated)
 								s0 := segs[0]
 								s0.Split, s0.GroupSplit = sp.split, sp.grp
-								if actInCase(t, d, name, append([]oldkernels.MatVecShape{s0}, segs...), in) {
+								if actInCase(t, d, name, append([]mainkernels.MatVecShape{s0}, segs...), in) {
 									ran++
 								}
 							}
@@ -97,7 +97,7 @@ func TestActInIsTheTwoLaunches(t *testing.T) {
 // actInCase runs one case. shapes is one matvec, or the segment kernel's
 // split carrier followed by its segments. It reports whether the case was a
 // shape the kernels build; a refusal of the reference is not a failure.
-func actInCase(t *testing.T, d backend.Device, name string, shapes []oldkernels.MatVecShape, in oldkernels.ActIn) bool {
+func actInCase(t *testing.T, d backend.Device, name string, shapes []mainkernels.MatVecShape, in mainkernels.ActIn) bool {
 	t.Helper()
 	rng := rand.New(rand.NewSource(int64(len(name)) * 7919))
 	seg := len(shapes) > 1
@@ -134,13 +134,13 @@ func actInCase(t *testing.T, d backend.Device, name string, shapes []oldkernels.
 	var err error
 	switch {
 	case in.Norm && in.Warp:
-		ref, err = oldkernels.RMSNormQuantRowsWarp(k, 1, in.Eps, in.AddOne, false, in.Window)
+		ref, err = mainkernels.RMSNormQuantRowsWarp(k, 1, in.Eps, in.AddOne, false, in.Window)
 	case in.Norm:
-		ref, err = oldkernels.RMSNormQuantRows(k, 1, in.Eps, in.AddOne, false, in.Window)
+		ref, err = mainkernels.RMSNormQuantRows(k, 1, in.Eps, in.AddOne, false, in.Window)
 	case in.Gated:
-		ref, err = oldkernels.QuantizeAct(k, in.Window, in.Act)
+		ref, err = mainkernels.QuantizeAct(k, in.Window, in.Act)
 	default:
-		ref, err = oldkernels.Quantize(k, in.Window)
+		ref, err = mainkernels.Quantize(k, in.Window)
 	}
 	if err != nil {
 		t.Logf("%s: no reference (%v)", name, err)
@@ -153,11 +153,11 @@ func actInCase(t *testing.T, d backend.Device, name string, shapes []oldkernels.
 	defer rk.Close()
 	bA, bAX := poisoned(k/4), poisoned(k/32+k/16)
 	if in.Norm {
-		err = rk.Launch(1, oldkernels.RMSNormGroup, bX, bNW, poisoned(k), bA, bAX)
+		err = rk.Launch(1, mainkernels.RMSNormGroup, bX, bNW, poisoned(k), bA, bAX)
 	} else if in.Gated {
-		err = rk.Launch((oldkernels.QuantizeThreads(k/32)+127)/128, 128, bX, bU, poisoned(k), bA, bAX)
+		err = rk.Launch((mainkernels.QuantizeThreads(k/32)+127)/128, 128, bX, bU, poisoned(k), bA, bAX)
 	} else {
-		err = rk.Launch((oldkernels.QuantizeThreads(k/32)+127)/128, 128, bX, bA, bAX)
+		err = rk.Launch((mainkernels.QuantizeThreads(k/32)+127)/128, 128, bX, bA, bAX)
 	}
 	if err != nil {
 		t.Fatalf("%s: reference: %v", name, err)
@@ -166,7 +166,7 @@ func actInCase(t *testing.T, d backend.Device, name string, shapes []oldkernels.
 	ws := make([]w, len(shapes))
 	width := 128
 	if grp {
-		width = oldkernels.GroupSplitWidth(split)
+		width = mainkernels.GroupSplitWidth(split)
 	}
 	// run reports false for a kernel the device refuses at its width
 	// (backend.ErrGroupTooWide): the tier then keeps the two launches.
@@ -205,7 +205,7 @@ func actInCase(t *testing.T, d backend.Device, name string, shapes []oldkernels.
 		}
 		one := s
 		one.Split, one.GroupSplit = split, grp
-		kk, err := oldkernels.MatVec(one)
+		kk, err := mainkernels.MatVec(one)
 		if err != nil {
 			t.Logf("%s: not a shape (%v)", name, err)
 			return false
@@ -225,7 +225,7 @@ func actInCase(t *testing.T, d backend.Device, name string, shapes []oldkernels.
 				return false
 			}
 			one.In = in
-			fk, err := oldkernels.MatVec(one)
+			fk, err := mainkernels.MatVec(one)
 			if err != nil {
 				t.Fatalf("%s: the prologue refuses a shape its matvec takes: %v", name, err)
 			}
@@ -248,12 +248,12 @@ func actInCase(t *testing.T, d backend.Device, name string, shapes []oldkernels.
 		}
 	}
 	if seg {
-		kk, err := oldkernels.MatVecSegmentsIn(shapes, split, grp, in)
+		kk, err := mainkernels.MatVecSegmentsIn(shapes, split, grp, in)
 		if err != nil {
 			t.Logf("%s: not a segment shape (%v)", name, err)
 			return false
 		}
-		blocks, _, err := oldkernels.SegmentsGrid(shapes, split, grp)
+		blocks, _, err := mainkernels.SegmentsGrid(shapes, split, grp)
 		if err != nil {
 			t.Fatal(err)
 		}

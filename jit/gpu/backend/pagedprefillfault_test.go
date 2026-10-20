@@ -9,11 +9,11 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestPagedPrefillGatesDiscriminate arms each generation fault the paged
-// prefill kernels share (oldkernels.SetPagedFault) and demands the prefill gates
+// prefill kernels share (mainkernels.SetPagedFault) and demands the prefill gates
 // FAIL on it, on every path and every device that runs the path, and pass
 // again disarmed (RULE 10):
 //
@@ -34,7 +34,7 @@ func TestPagedPrefillGatesDiscriminate(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 	}
-	defer oldkernels.SetPagedFault("")
+	defer mainkernels.SetPagedFault("")
 	const page = 64
 	// "later" crosses page edges and ends mid-page; "window" starts mid-page,
 	// so the aligned tile below its first key reads poisoned slots.
@@ -78,15 +78,15 @@ func TestPagedPrefillGatesDiscriminate(t *testing.T) {
 				t.Run(fmt.Sprintf("%s/%s/%s/%s", pa.name, d.API(), d.Name(), fc.fault), func(t *testing.T) {
 					rows := prefillRows(cases[fc.cs])
 					run := func(fault string) (float64, error) {
-						oldkernels.SetPagedFault(fault)
-						defer oldkernels.SetPagedFault("")
+						mainkernels.SetPagedFault(fault)
+						defer mainkernels.SetPagedFault("")
 						if pa.flash {
-							fs := oldkernels.FlashPrefill70Shape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: page, Splits: 2}
+							fs := mainkernels.FlashPrefill70Shape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: page, Splits: 2}
 							p := newPrefillPool(rand.New(rand.NewSource(7)), page, fs.KVHeads*fs.Dim, false, false, false, rows)
 							_, n, err := pagedFlashPrefill(t, d, fs, false, formOf(pa.tile), p, p.tab, p.desc, rows)
 							return n, err
 						}
-						s := oldkernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: page, Chunk: 64}
+						s := mainkernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: page, Chunk: 64}
 						s.Splits = prefillSplits(rows, s.Chunk, 1)
 						p := newPrefillPool(rand.New(rand.NewSource(7)), page, s.KVHeads*s.Dim, false, false, false, rows)
 						_, n, err := pagedPrefillStaged(t, d, s, pa.f, p, p.tab, p.desc, rows)

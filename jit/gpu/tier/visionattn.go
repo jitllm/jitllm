@@ -5,7 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // A vision block's attention in query chunks.
@@ -101,6 +101,6 @@ func (g *devTier) allocAttnChunks(bs *blockScratch, qdim int, al func(*backend.B
 			g.LastErr = err.Error()
 		}
 	}
-	comp(&bs.qGather, oldkernels.CopySpan)
-	comp(&bs.xScatter, oldkernels.CopyAt)
+	comp(&bs.qGather, mainkernels.CopySpan)
+	comp(&bs.xScatter, mainkernels.CopyAt)
 }

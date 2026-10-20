@@ -9,11 +9,11 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestMatVecGateIsActMulAfterIt: a Gate matvec writes exactly what the plain
-// matvec followed by oldkernels.ActMul writes -- bit for bit, since it is the same
+// matvec followed by mainkernels.ActMul writes -- bit for bit, since it is the same
 // multiply on the same two floats -- at Split 1 and at the in-group splits the
 // tuner picks, for SiLU and GELU. The output is poisoned with NaN and carries a
 // guard word.
@@ -78,7 +78,7 @@ func gateCase(t *testing.T, d backend.Device, name string, q kernels.Quant, rows
 	grp := split > 1
 	mk := func(gated bool) backend.Kernel {
 		t.Helper()
-		kk, err := oldkernels.MatVec(oldkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split,
+		kk, err := mainkernels.MatVec(mainkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split,
 			GroupSplit: grp, Gate: gated, GateAct: a})
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -95,7 +95,7 @@ func gateCase(t *testing.T, d backend.Device, name string, q kernels.Quant, rows
 	plain, gatedK := mk(false), mk(true)
 	defer plain.Close()
 	defer gatedK.Close()
-	am, err := oldkernels.ActMul(rows, a)
+	am, err := mainkernels.ActMul(rows, a)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func gateCase(t *testing.T, d backend.Device, name string, q kernels.Quant, rows
 	up, ref, got := poisoned(), poisoned(), poisoned()
 	w := 128
 	if grp {
-		w = oldkernels.GroupSplitWidth(split)
+		w = mainkernels.GroupSplitWidth(split)
 	}
 	groups := (rows*split + w - 1) / w
 	if err := plain.Launch(groups, w, bQS, bD, bSC, bA, bAX, up); err != nil {

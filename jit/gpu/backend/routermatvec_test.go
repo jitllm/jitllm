@@ -8,7 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestRouterMatVecMatchesADotProduct: the router's logits against a float64
@@ -53,7 +53,7 @@ func routerMatVecCase(t *testing.T, f16 bool) {
 					binary.LittleEndian.PutUint16(wb[2*i:], h)
 				}
 			}
-			k, err := oldkernels.RouterMatVecOf(c.rows, c.k, f16)
+			k, err := mainkernels.RouterMatVecOf(c.rows, c.k, f16)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -74,7 +74,7 @@ func routerMatVecCase(t *testing.T, f16 bool) {
 			pb := f32bytes(poison)
 			binary.LittleEndian.PutUint32(pb[c.rows*4:], guard)
 			bo := g.up(pb)
-			if err := kern.Launch((oldkernels.RouterThreads(c.rows)+127)/128, 128, bw, bx, bo); err != nil {
+			if err := kern.Launch((mainkernels.RouterThreads(c.rows)+127)/128, 128, bw, bx, bo); err != nil {
 				t.Fatalf("%s: launch: %v", d.API(), err)
 			}
 			raw := make([]byte, len(pb))

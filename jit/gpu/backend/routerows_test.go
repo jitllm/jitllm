@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestRouteRowsMatchOneRow routes R tokens in one launch of each router kernel
@@ -28,7 +28,7 @@ func TestRouteRowsMatchOneRow(t *testing.T) {
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}
-	routes := []oldkernels.MoERoute{
+	routes := []mainkernels.MoERoute{
 		{NExpert: 64, K: 6, Norm: true}, // qwen3moe, olmoe-like
 		{NExpert: 64, K: 6},             // DeepSeek-V2-Lite: softmax, no renorm
 		{NExpert: 64, K: 6, Sigmoid: true, Bias: true, Norm: true, Scale: 2.446}, // ungrouped V3
@@ -49,7 +49,7 @@ func TestRouteRowsMatchOneRow(t *testing.T) {
 	}
 }
 
-func routeRowsCase(t *testing.T, d backend.Device, rt oldkernels.MoERoute, R int, rng *rand.Rand) {
+func routeRowsCase(t *testing.T, d backend.Device, rt mainkernels.MoERoute, R int, rng *rand.Rand) {
 	n, k := rt.NExpert, rt.K
 	l := make([]float32, R*n)
 	for i := range l {
@@ -97,8 +97,8 @@ func routeRowsCase(t *testing.T, d backend.Device, rt oldkernels.MoERoute, R int
 		case r.Grouped():
 			bGS := g.up(make([]byte, rows*r.NGroup*4))
 			bBM := g.up(make([]byte, rows*n*4))
-			gs := compile(func() (*ir.Kernel, error) { return oldkernels.ExpertGroupScore(r) })
-			gm := compile(func() (*ir.Kernel, error) { return oldkernels.ExpertGroupMask(r) })
+			gs := compile(func() (*ir.Kernel, error) { return mainkernels.ExpertGroupScore(r) })
+			gm := compile(func() (*ir.Kernel, error) { return mainkernels.ExpertGroupMask(r) })
 			if r.Bias {
 				launch(gs, blocks(rows*r.NGroup), 128, bL, bGS, bB)
 				launch(gm, blocks(rows*n), 128, bL, bGS, bBM, bB)
@@ -106,16 +106,16 @@ func routeRowsCase(t *testing.T, d backend.Device, rt oldkernels.MoERoute, R int
 				launch(gs, blocks(rows*r.NGroup), 128, bL, bGS)
 				launch(gm, blocks(rows*n), 128, bL, bGS, bBM)
 			}
-			launch(compile(func() (*ir.Kernel, error) { return oldkernels.ExpertRank(r) }),
+			launch(compile(func() (*ir.Kernel, error) { return mainkernels.ExpertRank(r) }),
 				blocks(rows*n), 128, bL, bSel, bTop, bBM)
 		case r.Bias:
-			launch(compile(func() (*ir.Kernel, error) { return oldkernels.ExpertRank(r) }),
+			launch(compile(func() (*ir.Kernel, error) { return mainkernels.ExpertRank(r) }),
 				blocks(rows*n), 128, bL, bSel, bTop, bB)
 		default:
-			launch(compile(func() (*ir.Kernel, error) { return oldkernels.ExpertRank(r) }),
+			launch(compile(func() (*ir.Kernel, error) { return mainkernels.ExpertRank(r) }),
 				blocks(rows*n), 128, bL, bSel, bTop)
 		}
-		wk := compile(func() (*ir.Kernel, error) { return oldkernels.ExpertWeights(r) })
+		wk := compile(func() (*ir.Kernel, error) { return mainkernels.ExpertWeights(r) })
 		grid, width := 1, 1
 		if rows > 1 {
 			grid, width = (rows+63)/64, 64

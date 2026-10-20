@@ -8,7 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestQuantizeOnTheRoundingBoundary holds every device's activation quantizer
@@ -16,7 +16,7 @@ import (
 // a few ulps either side of a rounding boundary (n+0.5 after scaling), so an
 // inv one ulp off the host's 1/(amax/127) moves them to the next int8. The
 // scales are compared as bits too. A smooth input almost never lands there,
-// which is how oldkernels.Quantize multiplied by 127/amax -- and Vulkan divided to
+// which is how mainkernels.Quantize multiplied by 127/amax -- and Vulkan divided to
 // 2.5 ulp -- behind green gates on sines and ramps, while the real
 // granite-3.3-2b's first block parted from the host at NMSE 1e-4 on CUDA.
 //
@@ -109,7 +109,7 @@ func oldQuantMoves(x []float32, window int, want []uint32) int {
 
 func quantBitsCase(t *testing.T, d backend.Device, x []float32, window int, wantA []uint32, wantD, wantS []float32) {
 	k := len(x)
-	kern, err := oldkernels.Quantize(k, window)
+	kern, err := mainkernels.Quantize(k, window)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func quantBitsCase(t *testing.T, d backend.Device, x []float32, window int, want
 		nan[i] = float32(math.NaN())
 	}
 	bx, ba, bax := g.up(f32bytes(x)), g.up(make([]byte, k)), g.up(f32bytes(nan))
-	if err := kk.Launch((oldkernels.QuantizeThreads(k/32)+127)/128, 128, bx, ba, bax); err != nil {
+	if err := kk.Launch((mainkernels.QuantizeThreads(k/32)+127)/128, 128, bx, ba, bax); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 	gotQ := make([]byte, k)

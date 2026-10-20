@@ -9,7 +9,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestMatVecPickMatchesTheReference holds MatVec's PickOf form -- output row
@@ -57,7 +57,7 @@ func TestMatVecPickMatchesTheReference(t *testing.T) {
 			}
 			pick[1], pick[2], pick[3] = pick[0], 0, rows-1 // repeated, first, last
 			pick[npick-1] = rows + 5                       // padding: reads the last row
-			ker, err := oldkernels.MatVec(oldkernels.MatVecShape{T: q, K: k, Rows: npick, Split: 1, PickOf: rows})
+			ker, err := mainkernels.MatVec(mainkernels.MatVecShape{T: q, K: k, Rows: npick, Split: 1, PickOf: rows})
 			if err != nil {
 				t.Fatalf("%v: %v", q, err)
 			}

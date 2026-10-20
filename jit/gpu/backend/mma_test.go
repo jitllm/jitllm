@@ -10,7 +10,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestMMAFragmentLayout pins the warp-level matrix instruction's fragment
@@ -54,7 +54,7 @@ func TestMMAFragmentLayout(t *testing.T) {
 					name = "f16/m16n8k" + itoa(sh.K)
 				}
 				t.Run(name, func(t *testing.T) {
-					k, err := oldkernels.MMAProbe(sh)
+					k, err := mainkernels.MMAProbe(sh)
 					if err != nil {
 						t.Fatal(err)
 					}

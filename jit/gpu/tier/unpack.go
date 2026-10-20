@@ -6,7 +6,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // A page-in that uploads the GGUF bytes raw and unpacks them on the device.
@@ -14,7 +14,7 @@ import (
 // When a model is paged through a card too small for it, the host repack was
 // most of the token, and the arena cannot help because the packed model does
 // not fit host RAM either. So the raw bytes are uploaded as they lie and the
-// card does the bit extraction (oldkernels.Unpack carries the per-tensor A/B). No
+// card does the bit extraction (mainkernels.Unpack carries the per-tensor A/B). No
 // host allocation happens on this path: Buf.Write takes the weight slice
 // straight to the driver. The arena still wins on a device whose heap is host
 // memory, and is the only answer for formats whose GGUF block is not a
@@ -40,10 +40,10 @@ type unpackKey struct {
 }
 
 // canUnpack reports that this device would unpack a format rather than ask the
-// host to pack it: oldkernels.UnpackSupported enumerates, and NoUnpack is the A/B
+// host to pack it: mainkernels.UnpackSupported enumerates, and NoUnpack is the A/B
 // arm.
 func (g *devTier) canUnpack(q kernels.Quant) bool {
-	return !g.NoUnpack && oldkernels.UnpackSupported(q)
+	return !g.NoUnpack && mainkernels.UnpackSupported(q)
 }
 
 // unpackKernel compiles and caches the unpack for one shape. A compile failure
@@ -57,7 +57,7 @@ func (g *devTier) unpackKernel(q kernels.Quant, nrows, k int) backend.Kernel {
 	if g.unks == nil {
 		g.unks = map[unpackKey]backend.Kernel{}
 	}
-	ker, err := oldkernels.Unpack(q, nrows, k)
+	ker, err := mainkernels.Unpack(q, nrows, k)
 	if err != nil {
 		g.unks[kk], g.UnpackWhy = nil, err.Error()
 		return nil
@@ -177,7 +177,7 @@ func (g *devTier) unpackInto(r *resident, q kernels.Quant, w []byte, nrows, k in
 			if g.NoUnpack {
 				g.UnpackWhy = "the device unpack is off (Config.NoUnpack)"
 			} else {
-				g.UnpackWhy = q.String() + ": " + oldkernels.UnpackWhyNot(q)
+				g.UnpackWhy = q.String() + ": " + mainkernels.UnpackWhyNot(q)
 			}
 		}
 		return false
@@ -227,7 +227,7 @@ func (g *devTier) unpackInto(r *resident, q kernels.Quant, w []byte, nrows, k in
 		}
 	}
 	if ok {
-		threads := oldkernels.UnpackThreads(q, nrows, k)
+		threads := mainkernels.UnpackThreads(q, nrows, k)
 		groups := (threads + unpackWidth - 1) / unpackWidth
 		t0 := time.Now()
 		err = kern.Launch(groups, unpackWidth, g.rawBuf, bufs[0], bufs[1], bufs[2])

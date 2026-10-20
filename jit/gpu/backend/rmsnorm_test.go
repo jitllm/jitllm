@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestRMSNormRowsMatchesFloat64: the one-launch norm against a float64
@@ -49,9 +49,9 @@ func rmsCase(t *testing.T, d backend.Device, rng *rand.Rand, name string, k, row
 	for i := range w {
 		w[i] = float32(rng.NormFloat64())
 	}
-	mk := oldkernels.RMSNormRows
+	mk := mainkernels.RMSNormRows
 	if warp {
-		mk = oldkernels.RMSNormRowsWarp
+		mk = mainkernels.RMSNormRowsWarp
 	}
 	kern, err := mk(k, rows, eps, addOne, add)
 	if err != nil {
@@ -83,7 +83,7 @@ func rmsCase(t *testing.T, d backend.Device, rng *rand.Rand, name string, k, row
 	if add {
 		bufs = []backend.Buf{bx, by, bw, bsum, bout}
 	}
-	if err := kk.Launch(rows, oldkernels.RMSNormGroup, bufs...); err != nil {
+	if err := kk.Launch(rows, mainkernels.RMSNormGroup, bufs...); err != nil {
 		t.Fatalf("%s: launch: %v", name, err)
 	}
 	read := func(b backend.Buf) []float32 {

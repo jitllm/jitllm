@@ -9,7 +9,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestRopeTableOnDeviceMatchesHost gates the rotary table on the device against
@@ -66,7 +66,7 @@ func ropeTabCase(t *testing.T, d backend.Device) {
 	for _, g := range ropeTabGeoms {
 		t.Run(g.name, func(t *testing.T) {
 			npairs := g.rope.NRot / 2
-			k, err := oldkernels.RopeTable(npairs, g.rows)
+			k, err := mainkernels.RopeTable(npairs, g.rows)
 			if err != nil {
 				t.Fatalf("RopeTable(%d,%d): %v", npairs, g.rows, err)
 			}
@@ -134,7 +134,7 @@ func ropeTabRun(t *testing.T, c backend.Kernel, bPl, bCo, bPos, bOut backend.Buf
 	p0, rows, nrot int) []float32 {
 	t.Helper()
 	// Element 0 is the valid row count and the positions follow; see
-	// oldkernels.RopeTable on why the row count is runtime.
+	// mainkernels.RopeTable on why the row count is runtime.
 	pos := make([]byte, (rows+1)*4)
 	binary.LittleEndian.PutUint32(pos, uint32(rows))
 	for r := 0; r < rows; r++ {
@@ -219,7 +219,7 @@ func ropeTabViolations(t *testing.T, d backend.Device) {
 	const bound = 3e-7
 	r := nn.Rope{NRot: 128, Base: 1000000}
 	npairs := r.NRot / 2
-	k, err := oldkernels.RopeTable(npairs, 1)
+	k, err := mainkernels.RopeTable(npairs, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +349,7 @@ func TestRopeTableLeavesThePaddedRowsAlone(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
-			k, err := oldkernels.RopeTable(npairs, rows)
+			k, err := mainkernels.RopeTable(npairs, rows)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -440,7 +440,7 @@ func TestRopeTableLeavesThePaddedRowsAlone(t *testing.T) {
 // rather than of the hardware: no kernel may read a buffer it writes, because
 // surplus threads are clamped rather than branched off.
 func TestRopeTableWritesWhatItReads(t *testing.T) {
-	k, err := oldkernels.RopeTable(64, 8)
+	k, err := mainkernels.RopeTable(64, 8)
 	if err != nil {
 		t.Fatal(err)
 	}

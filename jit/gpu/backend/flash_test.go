@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 func TestFlashAttention(t *testing.T) {
@@ -29,7 +29,7 @@ func TestFlashAttention(t *testing.T) {
 			for _, dim := range []int{7, 32, 64, 96, 128, 256} {
 				for _, n := range []int{1, 31, 32, 33, 97} {
 					t.Run(fmt.Sprintf("d%d/n%d", dim, n), func(t *testing.T) {
-						s := oldkernels.FlashShape{Heads: 4, KVHeads: 2, Dim: dim, Rows: 3, KStride: 128, Scale: float32(1 / math.Sqrt(float64(dim)))}
+						s := mainkernels.FlashShape{Heads: 4, KVHeads: 2, Dim: dim, Rows: 3, KStride: 128, Scale: float32(1 / math.Sqrt(float64(dim)))}
 						flashCheck(t, d, s, n)
 						s.Splits = 4
 						flashCheck(t, d, s, n)
@@ -38,10 +38,10 @@ func TestFlashAttention(t *testing.T) {
 			}
 			for _, split := range []int{0, 4, 16} {
 				t.Run(fmt.Sprintf("long/split%d", split), func(t *testing.T) {
-					flashCheck(t, d, oldkernels.FlashShape{Heads: 4, KVHeads: 2, Dim: 64, Rows: 3, KStride: 4096, Scale: 0.125, Splits: split}, 4093)
+					flashCheck(t, d, mainkernels.FlashShape{Heads: 4, KVHeads: 2, Dim: 64, Rows: 3, KStride: 4096, Scale: 0.125, Splits: split}, 4093)
 				})
 			}
-			for _, s := range []oldkernels.FlashShape{
+			for _, s := range []mainkernels.FlashShape{
 				{Heads: 4, KVHeads: 1, Dim: 64, Rows: 1, KStride: 128, Scale: .125, F16: true},
 				{Heads: 4, KVHeads: 2, Dim: 64, Rows: 3, Scale: .125, Window: 17, Sink: true, Softcap: 2},
 				{Heads: 2, KVHeads: 2, Dim: 32, Rows: 3, KStride: 128, Scale: .177, F16: true, Window: 1, Sink: true},
@@ -77,7 +77,7 @@ func TestFlashDecodeKV(t *testing.T) {
 			for _, dim := range []int{7, 48, 64, 96, 128, 256} {
 				for _, n := range []int{1, 31, 128, 129, 300} {
 					for _, sh := range []struct{ heads, kv, stride int }{{4, 2, 512}, {8, 1, 0}, {6, 6, 512}} {
-						s := oldkernels.FlashShape{Heads: sh.heads, KVHeads: sh.kv, Dim: dim, Rows: 1, KStride: sh.stride,
+						s := mainkernels.FlashShape{Heads: sh.heads, KVHeads: sh.kv, Dim: dim, Rows: 1, KStride: sh.stride,
 							Scale: float32(1 / math.Sqrt(float64(dim)))}
 						for _, split := range []int{1, 3} {
 							for _, grp := range []int{0, 1, 2} {
@@ -102,9 +102,9 @@ func TestFlashDecodeKV(t *testing.T) {
 				}
 			}
 			t.Run("long/split4", func(t *testing.T) {
-				flashCheckWith(t, d, oldkernels.FlashShape{Heads: 4, KVHeads: 2, Dim: 64, Rows: 1, KStride: 4096, Scale: 0.125, Splits: 4}, 4093, true)
+				flashCheckWith(t, d, mainkernels.FlashShape{Heads: 4, KVHeads: 2, Dim: 64, Rows: 1, KStride: 4096, Scale: 0.125, Splits: 4}, 4093, true)
 			})
-			for _, s := range []oldkernels.FlashShape{
+			for _, s := range []mainkernels.FlashShape{
 				{Heads: 4, KVHeads: 1, Dim: 64, Rows: 1, KStride: 128, Scale: .125, F16: true},
 				{Heads: 4, KVHeads: 2, Dim: 64, Rows: 1, Scale: .125, Window: 17, Sink: true, Softcap: 2},
 				{Heads: 2, KVHeads: 2, Dim: 32, Rows: 1, KStride: 128, Scale: .177, F16: true, Window: 1, Sink: true},
@@ -128,15 +128,15 @@ func TestFlashDecodeKV(t *testing.T) {
 	}
 }
 
-func flashCheck(t *testing.T, d backend.Device, s oldkernels.FlashShape, n int) {
+func flashCheck(t *testing.T, d backend.Device, s mainkernels.FlashShape, n int) {
 	t.Helper()
 	flashCheckWith(t, d, s, n, false)
 }
 
 // flashCheckWith is flashCheck for either decode kernel: kv selects
-// oldkernels.FlashDecodeKV (one workgroup per KV head and partition) in place of
-// oldkernels.FlashAttention, against the same oracle and the same merge.
-func flashCheckWith(t *testing.T, d backend.Device, s oldkernels.FlashShape, n int, kv bool) {
+// mainkernels.FlashDecodeKV (one workgroup per KV head and partition) in place of
+// mainkernels.FlashAttention, against the same oracle and the same merge.
+func flashCheckWith(t *testing.T, d backend.Device, s mainkernels.FlashShape, n int, kv bool) {
 	t.Helper()
 	if nmse, err := flashDecodeNMSE(t, d, s, n, kv); err != nil || nmse > 1e-10 {
 		t.Fatalf("NMSE %.3g, %v", nmse, err)
@@ -145,15 +145,15 @@ func flashCheckWith(t *testing.T, d backend.Device, s oldkernels.FlashShape, n i
 
 // flashDecodeNMSE is flashCheckWith's measurement: the NMSE against the oracle, or
 // an error for an overwritten guard or a non-finite output.
-func flashDecodeNMSE(t *testing.T, d backend.Device, s oldkernels.FlashShape, n int, kv bool) (float64, error) {
+func flashDecodeNMSE(t *testing.T, d backend.Device, s mainkernels.FlashShape, n int, kv bool) (float64, error) {
 	t.Helper()
-	build, groups, width := oldkernels.FlashAttention, s.Rows*s.Heads*max(1, s.Splits), 32
+	build, groups, width := mainkernels.FlashAttention, s.Rows*s.Heads*max(1, s.Splits), 32
 	if kv {
 		// The kernel's contract: Splits*FlashKVChunk(s) covers every count.
-		if c := oldkernels.FlashKVChunk(s); max(1, s.Splits)*c < n {
+		if c := mainkernels.FlashKVChunk(s); max(1, s.Splits)*c < n {
 			s.Splits = (n + c - 1) / c
 		}
-		build, groups, width = oldkernels.FlashDecodeKV, oldkernels.FlashKVGroups(s), oldkernels.FlashKVWidth(s)
+		build, groups, width = mainkernels.FlashDecodeKV, mainkernels.FlashKVGroups(s), mainkernels.FlashKVWidth(s)
 	}
 	ker, err := build(s)
 	if err != nil {
@@ -216,7 +216,7 @@ func flashDecodeNMSE(t *testing.T, d backend.Device, s oldkernels.FlashShape, n 
 	qo, ko, vo, no, oo := g.up(f32bytes(q)), g.up(f32bytes(k)), g.up(vb), g.up(u32bytes(counts)), g.up(f32bytes(outInit))
 	dst := oo
 	if s.Splits > 1 {
-		parts := make([]float32, oldkernels.FlashPartialFloats(s))
+		parts := make([]float32, mainkernels.FlashPartialFloats(s))
 		for i := range parts {
 			parts[i] = float32(math.NaN())
 		}
@@ -230,7 +230,7 @@ func flashDecodeNMSE(t *testing.T, d backend.Device, s oldkernels.FlashShape, n 
 		t.Fatal(err)
 	}
 	if s.Splits > 1 {
-		mk, e := oldkernels.FlashAttentionMerge(s)
+		mk, e := mainkernels.FlashAttentionMerge(s)
 		if e != nil {
 			t.Fatal(e)
 		}

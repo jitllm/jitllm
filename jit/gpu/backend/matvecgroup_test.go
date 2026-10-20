@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestGroupEpiloguesAreTheSeparateLaunches: a few-sequence step's matvec with
@@ -82,7 +82,7 @@ func groupEpiCase(t *testing.T, d backend.Device, name string, q kernels.Quant, 
 		side[i] = float32(rng.NormFloat64())
 	}
 	bSide := g.up(f32bytes(side))
-	base := oldkernels.MatVecShape{T: q, K: k, Rows: rows, NTok: ntok, Tok: ntok, ActRows: actRows,
+	base := mainkernels.MatVecShape{T: q, K: k, Rows: rows, NTok: ntok, Tok: ntok, ActRows: actRows,
 		Split: split, GroupSplit: grp}
 	fused := base
 	act := kernels.ActSiLU
@@ -96,11 +96,11 @@ func groupEpiCase(t *testing.T, d backend.Device, name string, q kernels.Quant, 
 	}
 	width := 128
 	if grp {
-		width = oldkernels.GroupSplitWidth(split)
+		width = mainkernels.GroupSplitWidth(split)
 	}
-	run := func(s oldkernels.MatVecShape, bufs ...backend.Buf) {
+	run := func(s mainkernels.MatVecShape, bufs ...backend.Buf) {
 		t.Helper()
-		kk, err := oldkernels.MatVec(s)
+		kk, err := mainkernels.MatVec(s)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -120,7 +120,7 @@ func groupEpiCase(t *testing.T, d backend.Device, name string, q kernels.Quant, 
 	// ActMul(gate, up).
 	elem := func() backend.Kernel {
 		if epi == "res" {
-			kk, err := oldkernels.Add(n)
+			kk, err := mainkernels.Add(n)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -130,7 +130,7 @@ func groupEpiCase(t *testing.T, d backend.Device, name string, q kernels.Quant, 
 			}
 			return c
 		}
-		kk, err := oldkernels.ActMul(n, act)
+		kk, err := mainkernels.ActMul(n, act)
 		if err != nil {
 			t.Fatal(err)
 		}

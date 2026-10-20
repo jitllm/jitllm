@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestMatVecSegmentsIsTheSeparateLaunches: one MatVecSegments launch writes,
@@ -45,10 +45,10 @@ func TestMatVecSegmentsIsTheSeparateLaunches(t *testing.T) {
 			}{{1, false}, {4, true}, {16, true}, {32, true}} {
 				for _, bias := range []bool{false, true} {
 					for _, ntok := range []int{1, 2, 4} {
-						var shapes []oldkernels.MatVecShape
+						var shapes []mainkernels.MatVecShape
 						name := d.API()
 						for _, s := range c.segs {
-							sh := oldkernels.MatVecShape{T: s.q, K: c.k, Rows: s.rows, Bias: bias}
+							sh := mainkernels.MatVecShape{T: s.q, K: c.k, Rows: s.rows, Bias: bias}
 							if ntok > 1 {
 								sh.NTok, sh.Tok, sh.ActRows = ntok, ntok, 8
 							}
@@ -95,7 +95,7 @@ func rawWeights(q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
 	return raw
 }
 
-func segCase(t *testing.T, d backend.Device, name string, shapes []oldkernels.MatVecShape, split int, grp bool) {
+func segCase(t *testing.T, d backend.Device, name string, shapes []mainkernels.MatVecShape, split int, grp bool) {
 	t.Helper()
 	rng := rand.New(rand.NewSource(int64(len(name))))
 	k := shapes[0].K
@@ -125,7 +125,7 @@ func segCase(t *testing.T, d backend.Device, name string, shapes []oldkernels.Ma
 	ws := make([]w, len(shapes))
 	width := 128
 	if grp {
-		width = oldkernels.GroupSplitWidth(split)
+		width = mainkernels.GroupSplitWidth(split)
 	}
 	for i, s := range shapes {
 		qs, dw, scw, err := kernels.PackWeights(s.T, rawWeights(s.T, s.Rows, k, rng), s.Rows, k)
@@ -143,7 +143,7 @@ func segCase(t *testing.T, d backend.Device, name string, shapes []oldkernels.Ma
 		}
 		one := s
 		one.Split, one.GroupSplit = split, grp
-		kk, err := oldkernels.MatVec(one)
+		kk, err := mainkernels.MatVec(one)
 		if err != nil {
 			// Not a skip: that would end every case after this one.
 			t.Logf("%s: not a shape (segment %d: %v)", name, i, err)
@@ -162,7 +162,7 @@ func segCase(t *testing.T, d backend.Device, name string, shapes []oldkernels.Ma
 		}
 		kern.Close()
 	}
-	kk, err := oldkernels.MatVecSegments(shapes, split, grp)
+	kk, err := mainkernels.MatVecSegments(shapes, split, grp)
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
@@ -174,7 +174,7 @@ func segCase(t *testing.T, d backend.Device, name string, shapes []oldkernels.Ma
 		t.Fatalf("%s: compile: %v", name, err)
 	}
 	defer kern.Close()
-	blocks, group, err := oldkernels.SegmentsGrid(shapes, split, grp)
+	blocks, group, err := mainkernels.SegmentsGrid(shapes, split, grp)
 	if err != nil {
 		t.Fatal(err)
 	}

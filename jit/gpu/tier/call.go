@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // Layers is layersFor for the zero session: a caller that never attached.
@@ -704,7 +704,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	var gatherN int
 	if pe != nil {
 		hr := g.bs.head
-		gatherN = oldkernels.GetRowsThreads(hr.t, hr.k, R)
+		gatherN = mainkernels.GetRowsThreads(hr.t, hr.k, R)
 		if !g.embedKernel(g.bs) || hr.k != p.NEmbd || len(pe.ids) > R || gatherN%128 != 0 {
 			g.materializeLocked(pe)
 			pe = nil

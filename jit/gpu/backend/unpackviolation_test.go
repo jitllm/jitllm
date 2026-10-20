@@ -7,7 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // Violations for TestUnpackMatchesHostPacker (RULE 10): each is a one-field
@@ -66,7 +66,7 @@ func TestUnpackViolationsAreCaught(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	good, err := oldkernels.Unpack(kernels.Q4_K, rows, k)
+	good, err := mainkernels.Unpack(kernels.Q4_K, rows, k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func diffWords(want, got []uint32) int {
 // Unpacking in place would apply the transform twice to the last item, and
 // Validate sees it.
 func TestUnpackRefusesAnAliasedBuffer(t *testing.T) {
-	good, err := oldkernels.Unpack(kernels.Q4_K, 256, 2048)
+	good, err := mainkernels.Unpack(kernels.Q4_K, 256, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}

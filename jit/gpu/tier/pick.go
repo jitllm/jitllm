@@ -6,11 +6,11 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // The label pick (nn.Head.Pick): after the head, the logits at a handful of
-// vocabulary ids are gathered on the device (oldkernels.GatherRows, rows of one
+// vocabulary ids are gathered on the device (mainkernels.GatherRows, rows of one
 // float) and those alone come home in place of the vocabulary's. A decision
 // model's readout reads a question's label ids (model.Decider): a few
 // hundred bytes where the row is the vocabulary's 65536-151936 floats.
@@ -32,7 +32,7 @@ func (g *devTier) prepPick(head *nn.Head) bool {
 	w := g.scratchWin()
 	defer w.close()
 	if g.pickK == nil {
-		kk, err := oldkernels.GatherRows(1, pickMax, n)
+		kk, err := mainkernels.GatherRows(1, pickMax, n)
 		if err != nil {
 			g.LastErr = "the label pick: " + err.Error()
 			return false
@@ -48,7 +48,7 @@ func (g *devTier) prepPick(head *nn.Head) bool {
 	// outside any session, where Compile is allowed. A float head keeps the
 	// whole matvec and the gather.
 	if hr := g.headRes(); hr != nil && g.pickMV == nil && !g.NoPickMV && !kernels.IsFloat(hr.t) {
-		if c, err := g.idKernel(oldkernels.MatVecShape{Center: g.center, T: hr.t, K: hr.k, Rows: pickMax,
+		if c, err := g.idKernel(mainkernels.MatVecShape{Center: g.center, T: hr.t, K: hr.k, Rows: pickMax,
 			Split: 1, PickOf: hr.nrows}); err == nil {
 			g.pickMV = c
 		}

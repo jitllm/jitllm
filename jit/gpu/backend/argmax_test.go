@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestArgmaxTakesTheLowestIndexOfTheMax: the device argmax against a scan in
@@ -47,7 +47,7 @@ func TestArgmaxTakesTheLowestIndexOfTheMax(t *testing.T) {
 					}
 				}
 				name := fmt.Sprintf("%s/%d/%s", d.API(), n, shape)
-				kk, err := oldkernels.Argmax(n)
+				kk, err := mainkernels.Argmax(n)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -61,7 +61,7 @@ func TestArgmaxTakesTheLowestIndexOfTheMax(t *testing.T) {
 				g := newGPU(t, d)
 				in := g.up(f32bytes(x))
 				out := g.up([]byte{0xEF, 0xBE, 0xAD, 0xDE, 0xED, 0x5E, 0xED, 0x5E}) // poison, guard
-				if err := kern.Launch(1, oldkernels.ArgmaxGroup, in, out); err != nil {
+				if err := kern.Launch(1, mainkernels.ArgmaxGroup, in, out); err != nil {
 					t.Fatalf("%s: %v", name, err)
 				}
 				got := make([]byte, 8)
@@ -104,7 +104,7 @@ func TestArgmaxRowsTakesEachRowsOwnMax(t *testing.T) {
 	}
 	for _, d := range devs {
 		defer d.Close()
-		kk, err := oldkernels.ArgmaxRows(n, rows)
+		kk, err := mainkernels.ArgmaxRows(n, rows)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,7 +117,7 @@ func TestArgmaxRowsTakesEachRowsOwnMax(t *testing.T) {
 		}
 		g := newGPU(t, d)
 		in, out := g.up(f32bytes(x)), g.up(make([]byte, 4*rows))
-		if err := kern.Launch(rows, oldkernels.ArgmaxGroup, in, out); err != nil {
+		if err := kern.Launch(rows, mainkernels.ArgmaxGroup, in, out); err != nil {
 			t.Fatal(err)
 		}
 		got := make([]byte, 4*rows)

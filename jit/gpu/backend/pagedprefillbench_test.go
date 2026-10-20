@@ -14,7 +14,7 @@ import (
 	"github.com/jitllm/jitllm/dev/bench"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestPagedPrefillAB is the paged prefill kernels' performance bar
@@ -176,7 +176,7 @@ func prefillAB(t *testing.T, d backend.Device, kern string, volta, mma16 bool, h
 		// The paged arm runs in passes of at most passW keys, folded by
 		// FlashAttentionMergeRun: its plane is a pass's, not the context's.
 		W := min(n, passW)
-		s := oldkernels.FlashShape{Heads: heads, KVHeads: nkv, Dim: dim, Rows: R, Scale: scale, Page: page, Chunk: chunk,
+		s := mainkernels.FlashShape{Heads: heads, KVHeads: nkv, Dim: dim, Rows: R, Scale: scale, Page: page, Chunk: chunk,
 			Splits: (W + chunk - 1) / chunk}
 		W = s.Splits * chunk
 		// JITLLM_PAGED_DIRECT=1: the direct form (Splits 0, one chunk of the
@@ -187,7 +187,7 @@ func prefillAB(t *testing.T, d backend.Device, kern string, volta, mma16 bool, h
 			s.Chunk, s.Splits = (n+63)/64*64, 0
 			W = s.Chunk
 		}
-		ms := oldkernels.FlashShape{Heads: heads, KVHeads: nkv, Dim: dim, Rows: R, Splits: s.Splits}
+		ms := mainkernels.FlashShape{Heads: heads, KVHeads: nkv, Dim: dim, Rows: R, Splits: s.Splits}
 		one := ms
 		one.Splits = 1
 		var passDescs []backend.Buf
@@ -206,44 +206,44 @@ func prefillAB(t *testing.T, d backend.Device, kern string, volta, mma16 bool, h
 			const mt, nt = 2, 4
 			atile = 8 * nt
 			what = fmt.Sprintf("m8n8k4 %dx%d, acc m8n8k4 1x%d", mt, nt, nt)
-			cs = compile(oldkernels.AttnScoresMMA70(heads, dim, kvRow, gqa, sstride, scale, R, n+1, mt, nt, 0))
-			csG = (oldkernels.AttnScoresMMA70Warps(heads, R, n, mt, nt)*32 + 127) / 128
-			ca = compile(oldkernels.AttnAccMMA70(heads, dim, kvRow, gqa, sstride, R, 1, nt))
-			caG = (oldkernels.AttnAccMMA70Warps(heads, dim, R, 1, nt)*32 + 127) / 128
-			ps = compile(oldkernels.PagedAttnScoresMMA70(s, mt, nt))
-			psG = (oldkernels.PagedAttnScoresMMA70Warps(s, mt, nt) + 3) / 4
-			pa = compile(oldkernels.PagedAttnAccMMA70(s, 1, nt))
-			paG = (oldkernels.PagedAttnAccMMA70Warps(s, 1, nt) + 3) / 4
+			cs = compile(mainkernels.AttnScoresMMA70(heads, dim, kvRow, gqa, sstride, scale, R, n+1, mt, nt, 0))
+			csG = (mainkernels.AttnScoresMMA70Warps(heads, R, n, mt, nt)*32 + 127) / 128
+			ca = compile(mainkernels.AttnAccMMA70(heads, dim, kvRow, gqa, sstride, R, 1, nt))
+			caG = (mainkernels.AttnAccMMA70Warps(heads, dim, R, 1, nt)*32 + 127) / 128
+			ps = compile(mainkernels.PagedAttnScoresMMA70(s, mt, nt))
+			psG = (mainkernels.PagedAttnScoresMMA70Warps(s, mt, nt) + 3) / 4
+			pa = compile(mainkernels.PagedAttnAccMMA70(s, 1, nt))
+			paG = (mainkernels.PagedAttnAccMMA70Warps(s, 1, nt) + 3) / 4
 		case mma16:
 			const nt = 2
 			what = fmt.Sprintf("m16n8k16 nt=%d, acc FMA qt=%d", nt, atile)
-			cs = compile(oldkernels.AttnScoresMMA(heads, dim, kvRow, gqa, sstride, scale, R, n+1, nt))
+			cs = compile(mainkernels.AttnScoresMMA(heads, dim, kvRow, gqa, sstride, scale, R, n+1, nt))
 			csG = (R/16*heads*((n+8*nt-1)/(8*nt))*32 + 127) / 128
-			ps = compile(oldkernels.PagedAttnScoresMMA(s, nt))
-			psG = (oldkernels.PagedAttnScoresMMAWarps(s, nt) + 3) / 4
+			ps = compile(mainkernels.PagedAttnScoresMMA(s, nt))
+			psG = (mainkernels.PagedAttnScoresMMAWarps(s, nt) + 3) / 4
 		default:
 			const qt, kt = 4, 2
 			what = fmt.Sprintf("FMA %dx%d, acc FMA qt=%d", qt, kt, atile)
-			cs = compile(oldkernels.AttnScoresTiled(heads, dim, kvRow, gqa, sstride, scale, R, qt, kt, n+1))
+			cs = compile(mainkernels.AttnScoresTiled(heads, dim, kvRow, gqa, sstride, scale, R, qt, kt, n+1))
 			csG = (R/qt*heads*((n+kt-1)/kt) + 127) / 128
-			ps = compile(oldkernels.PagedAttnScoresTiled(s, qt, kt))
-			psG = (oldkernels.PagedAttnScoresTiledThreads(s, qt, kt) + 127) / 128
+			ps = compile(mainkernels.PagedAttnScoresTiled(s, qt, kt))
+			psG = (mainkernels.PagedAttnScoresTiledThreads(s, qt, kt) + 127) / 128
 		}
 		if !volta {
-			ca = compile(oldkernels.AttnAccTiled(heads, dim, kvRow, gqa, sstride, R, atile))
+			ca = compile(mainkernels.AttnAccTiled(heads, dim, kvRow, gqa, sstride, R, atile))
 			caG = (R*heads*dim/atile + 127) / 128
-			pa = compile(oldkernels.PagedAttnAccTiled(s, atile))
-			paG = (oldkernels.PagedAttnAccTiledThreads(s, atile) + 127) / 128
+			pa = compile(mainkernels.PagedAttnAccTiled(s, atile))
+			paG = (mainkernels.PagedAttnAccTiledThreads(s, atile) + 127) / 128
 		}
-		csm = compile(oldkernels.SoftmaxRows(heads, sstride, lanes, R, atile))
-		psm = compile(oldkernels.PagedPrefillSoftmax(s, lanes, atile))
+		csm = compile(mainkernels.SoftmaxRows(heads, sstride, lanes, R, atile))
+		psm = compile(mainkernels.PagedPrefillSoftmax(s, lanes, atile))
 		if !direct {
-			pm = compile(oldkernels.FlashAttentionMergeWide(ms))
+			pm = compile(mainkernels.FlashAttentionMergeWide(ms))
 		}
 		var mFirst, mFold, mFin backend.Kernel
 		if len(passDescs) > 1 {
-			mFirst, mFold = compile(oldkernels.FlashAttentionMergeRun(ms, true)), compile(oldkernels.FlashAttentionMergeRun(ms, false))
-			mFin = compile(oldkernels.FlashAttentionMergeWide(one))
+			mFirst, mFold = compile(mainkernels.FlashAttentionMergeRun(ms, true)), compile(mainkernels.FlashAttentionMergeRun(ms, false))
+			mFin = compile(mainkernels.FlashAttentionMergeWide(one))
 		}
 		smG, smW := R*heads, 32
 		if lanes == 1 {
@@ -251,10 +251,10 @@ func prefillAB(t *testing.T, d backend.Device, kern string, volta, mma16 bool, h
 		}
 		what += fmt.Sprintf(", R=%d, paged C=%d S=%d in %d pass(es)", R, s.Chunk, s.Splits, len(passDescs))
 		sc, pr := g.up(make([]byte, R*heads*sstride*4)), g.up(make([]byte, R*heads*sstride*4))
-		plane := oldkernels.PagedPrefillPlane(s)
+		plane := mainkernels.PagedPrefillPlane(s)
 		psc, ppr := g.up(make([]byte, plane*4)), g.up(make([]byte, plane*4))
-		pp := g.up(make([]byte, oldkernels.FlashPartialFloats(ms)*4))
-		run := [2]backend.Buf{g.up(make([]byte, oldkernels.FlashPartialFloats(one)*4)), g.up(make([]byte, oldkernels.FlashPartialFloats(one)*4))}
+		pp := g.up(make([]byte, mainkernels.FlashPartialFloats(ms)*4))
+		run := [2]backend.Buf{g.up(make([]byte, mainkernels.FlashPartialFloats(one)*4)), g.up(make([]byte, mainkernels.FlashPartialFloats(one)*4))}
 		rg := (R*heads*((dim+31)/32*32) + 127) / 128
 		contig = func(se backend.Session, l int) error {
 			var e error
@@ -276,7 +276,7 @@ func prefillAB(t *testing.T, d backend.Device, kern string, volta, mma16 bool, h
 					e = se.Launch(ps, psG, 128, q, pk[l], nb, psc, tabs[l], pd)
 				}
 				if e == nil && on("softmax") {
-					e = se.Launch(psm, oldkernels.PagedPrefillSoftmaxGroups(s, lanes), oldkernels.PagedPrefillSoftmaxWidth(lanes), psc, nb, ppr, pp, tabs[l], pd)
+					e = se.Launch(psm, mainkernels.PagedPrefillSoftmaxGroups(s, lanes), mainkernels.PagedPrefillSoftmaxWidth(lanes), psc, nb, ppr, pp, tabs[l], pd)
 				}
 				if e == nil && on("acc") {
 					dst := pp
@@ -312,7 +312,7 @@ func prefillAB(t *testing.T, d backend.Device, kern string, volta, mma16 bool, h
 		}
 		splits := 0
 		fmt.Sscanf(os.Getenv("JITLLM_PAGED_FSPLITS"), "%d", &splits)
-		cf := oldkernels.FlashPrefill70Shape{Heads: heads, KVHeads: nkv, Dim: dim, Rows: R, KStride: n + 1, Scale: scale}
+		cf := mainkernels.FlashPrefill70Shape{Heads: heads, KVHeads: nkv, Dim: dim, Rows: R, KStride: n + 1, Scale: scale}
 		pf := cf
 		pf.KStride, pf.Page, pf.Splits = 0, page, splits
 		tile := !volta
@@ -323,9 +323,9 @@ func prefillAB(t *testing.T, d backend.Device, kern string, volta, mma16 bool, h
 		dst := out
 		var merge backend.Kernel
 		if splits > 0 {
-			ms := oldkernels.FlashShape{Heads: heads, KVHeads: nkv, Dim: dim, Rows: R, Splits: splits}
-			merge = compile(oldkernels.FlashAttentionMergeWide(ms))
-			dst = g.up(make([]byte, oldkernels.FlashPartialFloats(ms)*4))
+			ms := mainkernels.FlashShape{Heads: heads, KVHeads: nkv, Dim: dim, Rows: R, Splits: splits}
+			merge = compile(mainkernels.FlashAttentionMergeWide(ms))
+			dst = g.up(make([]byte, mainkernels.FlashPartialFloats(ms)*4))
 		}
 		contig = func(se backend.Session, l int) error {
 			return se.Launch(fc, cG, cW, q, ck[l], cv[l], nb, out)

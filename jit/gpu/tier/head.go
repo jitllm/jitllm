@@ -7,7 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // PrepHead uploads the output norm and the vocabulary projection.
@@ -125,7 +125,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	// tier's to apply once it accepts the head -- so a failure here is a
 	// refusal of the head, not a head without its cap.
 	if h.Softcap != 0 {
-		ck, e := oldkernels.Softcap(h.W.Rows, h.Softcap)
+		ck, e := mainkernels.Softcap(h.W.Rows, h.Softcap)
 		if e != nil {
 			return false
 		}
@@ -144,7 +144,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	// The greedy token on the device (nn.Head.ArgmaxOnly). Without it the head
 	// still runs and every caller gets its logits, so a failure is not one.
 	if g.argmaxK == nil {
-		if ak, e := oldkernels.Argmax(h.W.Rows); e == nil {
+		if ak, e := mainkernels.Argmax(h.W.Rows); e == nil {
 			if c, e := g.dev.Compile(ak); e == nil {
 				w := g.scratchWin() // the device's own word (scratch.go)
 				if b, e := g.dev.Alloc(4); e == nil {

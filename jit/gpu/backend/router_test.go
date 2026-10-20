@@ -8,7 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestExpertRouter holds the device router to the host router kernel, nn.MoETopK32JIT.
@@ -104,16 +104,16 @@ func routerCaseScaled(t *testing.T, d backend.Device, l []float32, k int, norm b
 			t.Fatal(err)
 		}
 	}
-	run(func() (*ir.Kernel, error) { return oldkernels.ExpertRank(oldkernels.MoERoute{NExpert: n, K: k}) },
+	run(func() (*ir.Kernel, error) { return mainkernels.ExpertRank(mainkernels.MoERoute{NExpert: n, K: k}) },
 		(n+127)/128, 128, bL, bSel, bTop)
 	if norm {
 		run(func() (*ir.Kernel, error) {
-			return oldkernels.ExpertWeights(oldkernels.MoERoute{NExpert: n, K: k, Norm: true, Scale: scale})
+			return mainkernels.ExpertWeights(mainkernels.MoERoute{NExpert: n, K: k, Norm: true, Scale: scale})
 		},
 			1, 1, bTop, bW)
 	} else {
 		run(func() (*ir.Kernel, error) {
-			return oldkernels.ExpertWeights(oldkernels.MoERoute{NExpert: n, K: k, Scale: scale})
+			return mainkernels.ExpertWeights(mainkernels.MoERoute{NExpert: n, K: k, Scale: scale})
 		},
 			1, 1, bTop, bW, bL)
 	}

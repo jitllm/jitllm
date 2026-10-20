@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // ragStep is one LayersRows call's rows, read by layersOnce while it runs.
@@ -49,7 +49,7 @@ type ragStep struct {
 //
 // It is batched prefill with different attention: the batched scratch runs the
 // matvecs and writes each row's K and V at its own offset, and each row then
-// reads its own sequence's keys (oldkernels.AttnScoresRagged/AttnAccRagged),
+// reads its own sequence's keys (mainkernels.AttnScoresRagged/AttnAccRagged),
 // softmaxes over its own count and ends in its own argmax. N sequences cost
 // one pass over the weights instead of N.
 func (g *devTier) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
@@ -291,7 +291,7 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 	g.groupMV(g.headMV(), rowsHead.WantedRows(n), R)
 	g.headOneMV(R)
 	if bs.ragArgmax == nil {
-		amk := comp(oldkernels.ArgmaxRows(head.nrows, R))
+		amk := comp(mainkernels.ArgmaxRows(head.nrows, R))
 		if amk == nil {
 			return false
 		}
@@ -319,7 +319,7 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 	// The final softcap over every row the head can project: the kernel is
 	// sized for R rows and launched over the wanted ones.
 	if c := rowsHead.Softcap; c != 0 && (bs.ragCapK == nil || bs.ragCapC != c) {
-		k := comp(oldkernels.Softcap(R*head.nrows, c))
+		k := comp(mainkernels.Softcap(R*head.nrows, c))
 		if k == nil {
 			return false
 		}
@@ -594,7 +594,7 @@ func (g *devTier) headMV() mv {
 // first of R quantized rows, which is the one row of a ragged step that wants
 // the head (rows that want logits lead): one projection where a batched twin
 // would project every row of the step to read back one. The activation's
-// sums sit after every row's scales (oldkernels.MatVecShape.ActRows), which is
+// sums sit after every row's scales (mainkernels.MatVecShape.ActRows), which is
 // the only way it differs from decode's own kernel. Compiled on first use,
 // which prepRagged makes outside any session; false where the shape is
 // refused, and the batched twin serves.
@@ -609,7 +609,7 @@ func (g *devTier) headOneMV(R int) (mv, bool) {
 	key := ragKey{kind: "headone", q: q, k: k, rows: m.rows, r: R, split: m.split}
 	c, ok := g.ragK[key]
 	if !ok {
-		ker, err := oldkernels.MatVec(oldkernels.MatVecShape{Center: g.center, T: q, K: k, Rows: m.rows,
+		ker, err := mainkernels.MatVec(mainkernels.MatVecShape{Center: g.center, T: q, K: k, Rows: m.rows,
 			Split: m.split, ActRows: R})
 		if err == nil {
 			c, err = g.dev.Compile(ker)
@@ -696,14 +696,14 @@ func (g *devTier) groupKern(m mv, ntok, R int, epi groupEpi, act kernels.ActKind
 	}
 	split := max(m.split, 1)
 	grp := split > 1
-	if grp && !oldkernels.GroupSplitOK(m.rows, split) {
+	if grp && !mainkernels.GroupSplitOK(m.rows, split) {
 		return mv{}, false
 	}
 	key := ragKey{kind: "grp", q: m.q, k: m.k, rows: m.rows, ntok: ntok, r: R, split: split, grp: grp,
 		bias: m.bias != nil, epi: epi, act: act}
 	k, ok := g.ragK[key]
 	if !ok {
-		ker, err := oldkernels.MatVec(oldkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok,
+		ker, err := mainkernels.MatVec(mainkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok,
 			Tok: ntok, ActRows: R, Split: split, GroupSplit: grp, Bias: m.bias != nil || epi == groupRes,
 			BiasRows: epi == groupRes, Gate: epi == groupGate, GateAct: act})
 		if err == nil {
@@ -727,7 +727,7 @@ func (g *devTier) groupKern(m mv, ntok, R int, epi groupEpi, act kernels.ActKind
 }
 
 // groupQKV is block l's q, k and v for a step of ntok rows in a scratch of R
-// as one oldkernels.MatVecSegments launch with every token in one thread --
+// as one mainkernels.MatVecSegments launch with every token in one thread --
 // decode's l.qkv over the step, at q's split as there, reduced in the group
 // -- or nil where the three cannot share one (fuseQKV's conditions, less the
 // one on decode's own split: this kernel always reduces in the group).
@@ -753,15 +753,15 @@ func (g *devTier) groupQKV(l *layer, ntok, R int) (segLaunch, bool) {
 	if sl, ok := g.ragSeg[sk]; ok {
 		return sl, sl.kern != nil
 	}
-	var segs []oldkernels.MatVecShape
+	var segs []mainkernels.MatVecShape
 	for _, m := range ms {
-		segs = append(segs, oldkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows,
+		segs = append(segs, mainkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows,
 			Bias: m.bias != nil, NTok: ntok, Tok: ntok, ActRows: R})
 	}
 	if g.ragSeg == nil {
 		g.ragSeg = map[segShapeKey]segLaunch{}
 	}
-	blocks, w, err := oldkernels.SegmentsGrid(segs, split, grp)
+	blocks, w, err := mainkernels.SegmentsGrid(segs, split, grp)
 	if err != nil {
 		g.ragSeg[sk] = segLaunch{}
 		return segLaunch{}, false
@@ -769,7 +769,7 @@ func (g *devTier) groupQKV(l *layer, ntok, R int) (segLaunch, bool) {
 	key := fmt.Sprintf("%v/%d/%v", segs, split, grp)
 	k, ok := g.segKerns[key]
 	if !ok {
-		ker, err := oldkernels.MatVecSegments(segs, split, grp)
+		ker, err := mainkernels.MatVecSegments(segs, split, grp)
 		if err == nil {
 			k, err = g.dev.Compile(ker)
 		}
@@ -828,7 +828,7 @@ func (g *devTier) dot4Split(m mv, ntok, tok, rowt, split int) (mv, bool) {
 		if !ok {
 			// A split that does not divide the row's sub-blocks is refused
 			// by MatVec, and the next one down is tried.
-			ker, err := oldkernels.MatVec(oldkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok,
+			ker, err := mainkernels.MatVec(mainkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok,
 				Tok: tok, Rowt: rowt, Split: split, Bias: m.bias != nil})
 			if err == nil {
 				k, err = g.dev.Compile(ker)
@@ -863,7 +863,7 @@ func (g *devTier) dot4Split(m mv, ntok, tok, rowt, split int) (mv, bool) {
 	return out, true
 }
 
-// voltaMV is m's batched twin on sm_70's f16 tensor cores (oldkernels.MatVecMMA70)
+// voltaMV is m's batched twin on sm_70's f16 tensor cores (mainkernels.MatVecMMA70)
 // and the ActF16 conversion it reads, or false where it does not apply: a card
 // with an integer matrix instruction takes that instead (batchMV asks first),
 // and a backend that does not lower the m8n8k4 shape refuses the compile, which
@@ -872,7 +872,7 @@ func (g *devTier) dot4Split(m mv, ntok, tok, rowt, split int) (mv, bool) {
 func (g *devTier) voltaMV(m mv, ntok int) (mv, bool) {
 	// A build reached from inside a submission takes g.mu (subLock).
 	defer g.subUnlock(g.subLock())
-	if g.NoVolta || m.slots > 0 || !oldkernels.GemmVoltaOK(m.q) {
+	if g.NoVolta || m.slots > 0 || !mainkernels.GemmVoltaOK(m.q) {
 		return mv{}, false
 	}
 	// A two-byte float weight takes the staged GEMM where the card lowers no
@@ -890,7 +890,7 @@ func (g *devTier) voltaMV(m mv, ntok int) (mv, bool) {
 		return bm, true
 	}
 	// A float weight has the staged GEMM alone (GemmVoltaOK).
-	if !oldkernels.Volta70OK(m.q) {
+	if !mainkernels.Volta70OK(m.q) {
 		return mv{}, false
 	}
 	mt, nt := 2, 4
@@ -921,7 +921,7 @@ func (g *devTier) voltaMV(m mv, ntok int) (mv, bool) {
 		if !ok {
 			// A split that does not divide the sub-blocks is refused and the
 			// next one down tried; a backend without the shape refuses them all.
-			ker, err := oldkernels.MatVecMMA70(oldkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok,
+			ker, err := mainkernels.MatVecMMA70(mainkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok,
 				MT: mt, NT: nt, Split: split, Bias: m.bias != nil})
 			if err == nil {
 				k, err = g.dev.Compile(ker)
@@ -944,7 +944,7 @@ func (g *devTier) voltaMV(m mv, ntok int) (mv, bool) {
 	akey := ragKey{kind: "actf16", q: m.q, ntok: ntok, k: m.k}
 	a, ok := g.ragK[akey]
 	if !ok {
-		ker, err := oldkernels.ActF16(m.q, ntok, m.k)
+		ker, err := mainkernels.ActF16(m.q, ntok, m.k)
 		if err == nil {
 			a, err = g.dev.Compile(ker)
 		}
@@ -974,11 +974,11 @@ func (g *devTier) voltaMV(m mv, ntok int) (mv, bool) {
 //
 // 64x64 leads 64x32 (llama.cpp's kernel_mul_mm block): a few percent faster on
 // Apple Silicon by TestGemmTileSpeed and in pp512.
-var tileGemms = []oldkernels.TileGemm{
+var tileGemms = []mainkernels.TileGemm{
 	{MT: 4, NT: 4, WM: 2, WN: 2}, {MT: 4, NT: 2, WM: 2, WN: 2}, {MT: 2, NT: 2, WM: 2, WN: 2}, {MT: 1, NT: 2, WM: 2, WN: 2},
 }
 
-// tileMV is m's batched twin as oldkernels.GemmTile (binary16 tiles on the
+// tileMV is m's batched twin as mainkernels.GemmTile (binary16 tiles on the
 // collective matrix unit, staged through workgroup memory) with the ActF16T
 // conversion it reads; false where the device does not lower it or no tile
 // divides the shape, and the next twin is asked.
@@ -991,17 +991,17 @@ var tileGemms = []oldkernels.TileGemm{
 func (g *devTier) tileMV(m mv, ntok int) (mv, bool) {
 	// A build reached from inside a submission takes g.mu (subLock).
 	defer g.subUnlock(g.subLock())
-	if g.NoVolta || m.slots > 0 || !oldkernels.Volta70OK(m.q) || !g.tilesOK() {
+	if g.NoVolta || m.slots > 0 || !mainkernels.Volta70OK(m.q) || !g.tilesOK() {
 		return mv{}, false
 	}
 	sub, _, _, _ := kernels.Layout(m.q)
-	build := func(tl oldkernels.TileGemm, n int) (backend.Kernel, oldkernels.MatVecShape, bool) {
-		s := oldkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: n, Bias: m.bias != nil}
+	build := func(tl mainkernels.TileGemm, n int) (backend.Kernel, mainkernels.MatVecShape, bool) {
+		s := mainkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: n, Bias: m.bias != nil}
 		key := ragKey{kind: "gemmtile", q: m.q, k: m.k, rows: m.rows, ntok: n, off: tl.TokOff,
 			tile: [5]int{tl.MT, tl.NT, tl.WM, tl.WN, tl.KB}, bias: s.Bias}
 		c, ok := g.ragK[key]
 		if !ok {
-			ker, err := oldkernels.GemmTile(s, tl)
+			ker, err := mainkernels.GemmTile(s, tl)
 			if err == nil {
 				c, err = g.dev.Compile(ker)
 			}
@@ -1020,7 +1020,7 @@ func (g *devTier) tileMV(m mv, ntok int) (mv, bool) {
 		akey := ragKey{kind: "actf16t", q: m.q, ntok: ntok, k: m.k}
 		a, ok := g.ragK[akey]
 		if !ok {
-			ker, err := oldkernels.ActF16T(m.q, ntok, m.k)
+			ker, err := mainkernels.ActF16T(m.q, ntok, m.k)
 			if err == nil {
 				a, err = g.dev.Compile(ker)
 			}
@@ -1068,7 +1068,7 @@ func (g *devTier) tileMV(m mv, ntok int) (mv, bool) {
 				tkey := ragKey{kind: "gemmtail", q: m.q, k: m.k, rows: m.rows, ntok: rest, off: lead,
 					tile: [5]int{tt.MT, tt.NT, tt.WM, tt.WN, tt.KB}, bias: m.bias != nil}
 				if tail = g.tailK[tkey]; tail == nil {
-					tail = &mvTail{kern: tk, threads: oldkernels.GemmTileGroups(ts, tt) * tt.Threads()}
+					tail = &mvTail{kern: tk, threads: mainkernels.GemmTileGroups(ts, tt) * tt.Threads()}
 					if g.tailK == nil {
 						g.tailK = map[ragKey]*mvTail{}
 					}
@@ -1093,7 +1093,7 @@ func (g *devTier) tileMV(m mv, ntok int) (mv, bool) {
 			g.TileTail++
 		}
 		return mv{kern: c, act: a, actT: true, actN: ntok * m.k / sub, rows: m.rows, split: 1, bias: m.bias,
-			q: m.q, k: m.k, threads: oldkernels.GemmTileGroups(s, tl) * tl.Threads(), redN: m.rows * ntok, tail: tail}, true
+			q: m.q, k: m.k, threads: mainkernels.GemmTileGroups(s, tl) * tl.Threads(), redN: m.rows * ntok, tail: tail}, true
 	}
 	return mv{}, false
 }
@@ -1103,12 +1103,12 @@ func (g *devTier) tileMV(m mv, ntok int) (mv, bool) {
 // 2x2 warp grid dequantizes twice the weights per MMA and measured slower on a
 // Volta-class card. The 96-row tiles serve matrices no 128-row block divides
 // (gpt-oss's 2880 rows).
-var voltaTiles = []oldkernels.VoltaTile{
+var voltaTiles = []mainkernels.VoltaTile{
 	{MT: 4, NT: 4, WM: 1, WN: 4}, {MT: 4, NT: 2, WM: 1, WN: 4}, {MT: 4, NT: 1, WM: 1, WN: 4},
 	{MT: 3, NT: 4, WM: 1, WN: 4}, {MT: 3, NT: 2, WM: 1, WN: 4},
 }
 
-// voltaGemm is m's batched twin as oldkernels.GemmVolta, the shared-memory-staged
+// voltaGemm is m's batched twin as mainkernels.GemmVolta, the shared-memory-staged
 // form of MatVecMMA70, with the ActF16T conversion it reads; false where no
 // tile divides the shape, and voltaMV then takes MatVecMMA70.
 //
@@ -1129,13 +1129,13 @@ func (g *devTier) voltaGemm(m mv, ntok int) (mv, bool) {
 
 // voltaTiles64 are GemmVolta's 64-row blockings, for the float shapes
 // voltaTiles leave to a slower kernel.
-var voltaTiles64 = []oldkernels.VoltaTile{{MT: 2, NT: 4, WM: 1, WN: 4}, {MT: 2, NT: 2, WM: 1, WN: 4}}
+var voltaTiles64 = []mainkernels.VoltaTile{{MT: 2, NT: 4, WM: 1, WN: 4}, {MT: 2, NT: 2, WM: 1, WN: 4}}
 
 // f16Tiles are GemmVolta's m16n8 blockings, widest first: four warps as 2x2,
 // each four m-tiles of 16 rows by up to eight n-tiles of 8 tokens, so a
 // 128-row block meets 128, 64 or 32 tokens. The 96- and 32-row blocks serve
 // matrices no 128-row block divides.
-var f16Tiles = []oldkernels.VoltaTile{
+var f16Tiles = []mainkernels.VoltaTile{
 	{MT: 4, NT: 4, WM: 2, WN: 2}, {MT: 4, NT: 2, WM: 2, WN: 2},
 	{MT: 3, NT: 4, WM: 2, WN: 2}, {MT: 3, NT: 2, WM: 2, WN: 2},
 	{MT: 2, NT: 4, WM: 2, WN: 2}, {MT: 2, NT: 2, WM: 2, WN: 2}, {MT: 1, NT: 2, WM: 2, WN: 2},
@@ -1150,8 +1150,8 @@ func (g *devTier) f16GemmK() int {
 		g.f16K = -1
 		if g.dev.API() == "ptx" {
 			for _, k := range []int{16, 8} {
-				ker, err := oldkernels.GemmVolta(oldkernels.MatVecShape{Center: g.center, T: kernels.Q8_0, K: 32, Rows: 32, NTok: 32},
-					oldkernels.VoltaTile{MT: 1, NT: 2, WM: 2, WN: 2, KB: 1, F16K: k})
+				ker, err := mainkernels.GemmVolta(mainkernels.MatVecShape{Center: g.center, T: kernels.Q8_0, K: 32, Rows: 32, NTok: 32},
+					mainkernels.VoltaTile{MT: 1, NT: 2, WM: 2, WN: 2, KB: 1, F16K: k})
 				if err != nil {
 					continue
 				}
@@ -1178,7 +1178,7 @@ func (g *devTier) f16GemmK() int {
 func (g *devTier) f16Gemm(m mv, ntok int) (mv, bool) {
 	// A build reached from inside a submission takes g.mu (subLock).
 	defer g.subUnlock(g.subLock())
-	if g.NoVolta || m.slots > 0 || !oldkernels.Volta70OK(m.q) {
+	if g.NoVolta || m.slots > 0 || !mainkernels.Volta70OK(m.q) {
 		return mv{}, false
 	}
 	k := g.f16GemmK()
@@ -1233,7 +1233,7 @@ func (g *devTier) rowClass(ntok int) graph.RowClass {
 // steps here). They win on some shapes and lose on others, by card, so
 // tuneGemm times them against f16Tiles' pick per shape and gemmDeep records
 // where they won.
-var f16DeepTiles = []oldkernels.VoltaTile{
+var f16DeepTiles = []mainkernels.VoltaTile{
 	{MT: 4, NT: 4, WM: 2, WN: 4, KB: 2, Single: true}, {MT: 4, NT: 2, WM: 2, WN: 4, KB: 2, Single: true},
 }
 
@@ -1268,11 +1268,11 @@ func (g *devTier) fusedKern(key ragKey, build func() (*ir.Kernel, error)) backen
 }
 
 // rmsF16For is the RMSNorm that also writes m's binary16 operand
-// (oldkernels.RMSNormF16TRows; with add, x+y and its norm as bs.addRms), and
+// (mainkernels.RMSNormF16TRows; with add, x+y and its norm as bs.addRms), and
 // the conversion it stands in for: m's batched twin's ActF16T kernel, which
 // the caller names in the conversion memo so the GEMM finds its operand
 // written. nil where m's twin reads int8 (no conversion to save) or the MMA
-// twin's fragment layout (oldkernels.ActF16, not this kernel's), where the
+// twin's fragment layout (mainkernels.ActF16, not this kernel's), where the
 // norm is not RMSNorm's one launch, or NoOperandFuse.
 func (g *devTier) rmsF16For(bs *blockScratch, m mv, ntok int, add bool) (norm, conv backend.Kernel) {
 	if g.NoOperandFuse || m.kern == nil || bs.rms == nil || bs.normVar != nil {
@@ -1288,7 +1288,7 @@ func (g *devTier) rmsF16For(bs *blockScratch, m mv, ntok int, add bool) (norm, c
 	}
 	p := &bs.p
 	k := g.fusedKern(ragKey{kind: kind, q: bm.q, k: p.NEmbd, rows: bs.rows}, func() (*ir.Kernel, error) {
-		return oldkernels.RMSNormF16TRows(p.NEmbd, bs.rows, float32(p.RMSEps), false, add, bm.q, g.warpNorm())
+		return mainkernels.RMSNormF16TRows(p.NEmbd, bs.rows, float32(p.RMSEps), false, add, bm.q, g.warpNorm())
 	})
 	if k == nil {
 		return nil, nil
@@ -1297,7 +1297,7 @@ func (g *devTier) rmsF16For(bs *blockScratch, m mv, ntok int, add bool) (norm, c
 }
 
 // actF16For is the gated activation that writes m's binary16 operand
-// (oldkernels.ActMulF16T), the conversion it stands in for, and its thread
+// (mainkernels.ActMulF16T), the conversion it stands in for, and its thread
 // count; nil as rmsF16For.
 func (g *devTier) actF16For(bs *blockScratch, m mv, ntok int) (act, conv backend.Kernel, threads int) {
 	if g.NoOperandFuse || m.kern == nil {
@@ -1316,12 +1316,12 @@ func (g *devTier) actF16For(bs *blockScratch, m mv, ntok int) (act, conv backend
 		kn = bs.rows
 	}
 	k := g.fusedKern(ragKey{kind: "actmulf16t", q: bm.q, k: m.k, ntok: kn, act: bs.p.Act}, func() (*ir.Kernel, error) {
-		return oldkernels.ActMulF16T(bm.q, kn, m.k, bs.p.Act)
+		return mainkernels.ActMulF16T(bm.q, kn, m.k, bs.p.Act)
 	})
 	if k == nil {
 		return nil, nil, 0
 	}
-	return k, bm.act, oldkernels.ActMulF16TThreads(ntok, m.k)
+	return k, bm.act, mainkernels.ActMulF16TThreads(ntok, m.k)
 }
 
 // prewarmPrompt compiles, ahead of the first prompt, the fused binary16
@@ -1378,8 +1378,8 @@ func (g *devTier) int8GemmOn() bool {
 	if g.i8Gemm == 0 {
 		g.i8Gemm = -1
 		if g.dev.API() == "ptx" {
-			ker, err := oldkernels.GemmInt8(oldkernels.MatVecShape{Center: g.center, T: kernels.Q8_0, K: 32, Rows: 32, NTok: 32},
-				oldkernels.Int8Tile{MT: 1, NT: 2, WM: 2, WN: 2})
+			ker, err := mainkernels.GemmInt8(mainkernels.MatVecShape{Center: g.center, T: kernels.Q8_0, K: 32, Rows: 32, NTok: 32},
+				mainkernels.Int8Tile{MT: 1, NT: 2, WM: 2, WN: 2})
 			if err == nil {
 				if c, err := g.dev.Compile(ker); err == nil {
 					c.Close()
@@ -1391,7 +1391,7 @@ func (g *devTier) int8GemmOn() bool {
 	return g.i8Gemm > 0
 }
 
-// int8Gemm is m's batched twin as oldkernels.GemmInt8: MatVecMMA's int8
+// int8Gemm is m's batched twin as mainkernels.GemmInt8: MatVecMMA's int8
 // arithmetic and its quantized activations, staged through shared memory as
 // GemmVolta stages, so a workgroup decodes a trip of its rows once for all
 // its tokens. Its blockings are f16Tiles' (the same 16-row m-tiles and 8-token
@@ -1401,7 +1401,7 @@ func (g *devTier) int8GemmOn() bool {
 func (g *devTier) int8Gemm(m mv, ntok int) (mv, bool) {
 	// A build reached from inside a submission takes g.mu (subLock).
 	defer g.subUnlock(g.subLock())
-	if !g.PreferGemmInt8 || g.NoMMA || m.slots > 0 || !oldkernels.Int8OK(m.q) || !g.int8GemmOn() {
+	if !g.PreferGemmInt8 || g.NoMMA || m.slots > 0 || !mainkernels.Int8OK(m.q) || !g.int8GemmOn() {
 		return mv{}, false
 	}
 	fill := g.dev.Slots() / 16
@@ -1415,7 +1415,7 @@ func (g *devTier) int8Gemm(m mv, ntok int) (mv, bool) {
 			idx = first
 		}
 		vt := f16Tiles[idx]
-		tl := oldkernels.Int8Tile{MT: vt.MT, NT: vt.NT, WM: vt.WM, WN: vt.WN}
+		tl := mainkernels.Int8Tile{MT: vt.MT, NT: vt.NT, WM: vt.WM, WN: vt.WN}
 		if m.rows%tl.Rows() != 0 || ntok%tl.Toks() != 0 {
 			continue
 		}
@@ -1426,12 +1426,12 @@ func (g *devTier) int8Gemm(m mv, ntok int) (mv, bool) {
 		}
 		var c backend.Kernel
 		for ; split >= 1; split /= 2 {
-			s := oldkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok, Split: split, Bias: m.bias != nil}
+			s := mainkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok, Split: split, Bias: m.bias != nil}
 			key := ragKey{kind: "gemmint8", q: m.q, k: m.k, rows: m.rows, ntok: ntok,
 				tile: [5]int{tl.MT, tl.NT, tl.WM, tl.WN}, split: split, bias: s.Bias}
 			k, ok := g.ragK[key]
 			if !ok {
-				ker, err := oldkernels.GemmInt8(s, tl)
+				ker, err := mainkernels.GemmInt8(s, tl)
 				if err == nil {
 					k, err = g.dev.Compile(ker)
 				}
@@ -1450,9 +1450,9 @@ func (g *devTier) int8Gemm(m mv, ntok int) (mv, bool) {
 		if c == nil {
 			continue
 		}
-		s := oldkernels.MatVecShape{Rows: m.rows, NTok: ntok, Split: split}
+		s := mainkernels.MatVecShape{Rows: m.rows, NTok: ntok, Split: split}
 		out := mv{kern: c, rows: m.rows, split: split, bias: m.bias, q: m.q, k: m.k,
-			threads: oldkernels.GemmInt8Groups(s, tl) * tl.Threads(), width: tl.Threads(), redN: m.rows * ntok}
+			threads: mainkernels.GemmInt8Groups(s, tl) * tl.Threads(), width: tl.Threads(), redN: m.rows * ntok}
 		if split > 1 {
 			if out.red = g.reduceKernel(m.rows*ntok, split); out.red == nil ||
 				!g.sizePart(m.rows*ntok*split) {
@@ -1469,7 +1469,7 @@ func (g *devTier) int8Gemm(m mv, ntok int) (mv, bool) {
 // threads: the first of tiles (widest first) that divides the shape and
 // reaches it, else the dividing tile with the most workgroups, whose grid a
 // k-split (fillSplit) then widens. -1 where none divides.
-func fillTile(tiles []oldkernels.VoltaTile, f16k, rows, ntok, fill int) int {
+func fillTile(tiles []mainkernels.VoltaTile, f16k, rows, ntok, fill int) int {
 	best, most := -1, 0
 	for i, tl := range tiles {
 		tl.F16K = f16k // an m-tile's rows depend on it
@@ -1502,7 +1502,7 @@ func fillSplit(trips, threads, fill int) int {
 // > 0 the tile and split are chosen for a grid of at least fill threads
 // (fillTile, fillSplit) and the others are the fallbacks; with 0, tiles'
 // order and kb0Split decide. Callers hold g.mu.
-func (g *devTier) stagedGemm(m mv, ntok int, tiles []oldkernels.VoltaTile, f16k, fill int) (mv, bool) {
+func (g *devTier) stagedGemm(m mv, ntok int, tiles []mainkernels.VoltaTile, f16k, fill int) (mv, bool) {
 	sub, _, _, _ := kernels.Layout(m.q)
 	kbN := max(32/sub, 1)
 	first := -1
@@ -1521,7 +1521,7 @@ func (g *devTier) stagedGemm(m mv, ntok int, tiles []oldkernels.VoltaTile, f16k,
 		tl := tiles[idx]
 		// A list's KB is the trip in 32-element steps (0 is one).
 		tl.KB, tl.F16K = kbN*max(tl.KB, 1), f16k
-		s := oldkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok, Bias: m.bias != nil}
+		s := mainkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok, Bias: m.bias != nil}
 		if m.rows%tl.Rows() != 0 || ntok%tl.Toks() != 0 {
 			continue
 		}
@@ -1540,7 +1540,7 @@ func (g *devTier) stagedGemm(m mv, ntok int, tiles []oldkernels.VoltaTile, f16k,
 				tile: [5]int{tl.MT, tl.NT, tl.WM, tl.WN, tl.KB + 1000*b2i(tl.Single)}, split: split, bias: s.Bias, r: f16k}
 			k, ok := g.ragK[key]
 			if !ok {
-				ker, err := oldkernels.GemmVolta(s, tl)
+				ker, err := mainkernels.GemmVolta(s, tl)
 				if err == nil {
 					k, err = g.dev.Compile(ker)
 				}
@@ -1570,7 +1570,7 @@ func (g *devTier) stagedGemm(m mv, ntok int, tiles []oldkernels.VoltaTile, f16k,
 		akey := ragKey{kind: "actf16t", q: m.q, ntok: ntok, k: m.k}
 		a, ok := g.ragK[akey]
 		if !ok {
-			ker, err := oldkernels.ActF16T(m.q, ntok, m.k)
+			ker, err := mainkernels.ActF16T(m.q, ntok, m.k)
 			if err == nil {
 				a, err = g.dev.Compile(ker)
 			}
@@ -1583,7 +1583,7 @@ func (g *devTier) stagedGemm(m mv, ntok int, tiles []oldkernels.VoltaTile, f16k,
 			return mv{}, false
 		}
 		out := mv{kern: c, act: a, actT: true, actN: ntok * m.k / sub, rows: m.rows, split: split, bias: m.bias,
-			q: m.q, k: m.k, threads: oldkernels.GemmVoltaGroups(s, tl) * tl.Threads(), width: tl.Threads(), redN: m.rows * ntok, vt: tl}
+			q: m.q, k: m.k, threads: mainkernels.GemmVoltaGroups(s, tl) * tl.Threads(), width: tl.Threads(), redN: m.rows * ntok, vt: tl}
 		if split > 1 {
 			if out.red = g.reduceKernel(m.rows*ntok, split); out.red == nil ||
 				!g.sizePart(m.rows*ntok*split) {
@@ -1638,7 +1638,7 @@ func (g *devTier) prepRagLinear(bs *blockScratch, n int) bool {
 	}
 	// A short convolution (LFM2) has no rule to scan: its run is the
 	// convolution and the shift alone.
-	var d oldkernels.DeltaScan
+	var d mainkernels.DeltaScan
 	rk := &ragLinear{}
 	if !r.ShortConv {
 		d = deltaScanOf(r, n, lanes)
@@ -1659,17 +1659,17 @@ func (g *devTier) prepRagLinear(bs *blockScratch, n int) bool {
 				return nil, nil
 			}
 			if r.SSD {
-				return oldkernels.GatedDeltaFused(d, oldkernels.DeltaFuse{Chans: r.Chans, SSD: true})
+				return mainkernels.GatedDeltaFused(d, mainkernels.DeltaFuse{Chans: r.Chans, SSD: true})
 			}
 			if r.Mamba1 {
-				return oldkernels.GatedDeltaFused(d, oldkernels.DeltaFuse{Mamba1: true})
+				return mainkernels.GatedDeltaFused(d, mainkernels.DeltaFuse{Mamba1: true})
 			}
-			return oldkernels.GatedDeltaFused(d, oldkernels.DeltaFuse{Chans: r.Chans,
+			return mainkernels.GatedDeltaFused(d, mainkernels.DeltaFuse{Chans: r.Chans,
 				Eps: float32(eps / float64(r.KDim)), Scale: float32(1 / math.Sqrt(float64(r.KDim))),
 				BARep: r.VHeads / r.KHeads, Bound: r.DecayBound})
 		}},
-		{&rk.conv, func() (*ir.Kernel, error) { return oldkernels.Conv1dRowsRuns(r.Conv, r.Chans, n) }},
-		{&rk.shift, func() (*ir.Kernel, error) { return oldkernels.Conv1dShiftRuns(r.Conv, r.Chans, n) }},
+		{&rk.conv, func() (*ir.Kernel, error) { return mainkernels.Conv1dRowsRuns(r.Conv, r.Chans, n) }},
+		{&rk.shift, func() (*ir.Kernel, error) { return mainkernels.Conv1dShiftRuns(r.Conv, r.Chans, n) }},
 		{&rk.ngConv, func() (*ir.Kernel, error) {
 			// Qwen3.8-Flash-Next's n-gram convolution, each run's history
 			// moved on through its rows (q4e.go).
@@ -1678,7 +1678,7 @@ func (g *devTier) prepRagLinear(bs *blockScratch, n int) bool {
 				return nil, nil
 			}
 			hd, hist := q.HCMult*bs.p.NEmbd, q.NGramDil*(q.NGramConv-1)
-			return oldkernels.Q4ENGramConv(hd, q.NGramConv, q.NGramDil, n, r.StateLen, r.StateLen-hist*hd,
+			return mainkernels.Q4ENGramConv(hd, q.NGramConv, q.NGramDil, n, r.StateLen, r.StateLen-hist*hd,
 				true, q.Fault == nn.Q4EFaultNoNGramConv)
 		}},
 	} {

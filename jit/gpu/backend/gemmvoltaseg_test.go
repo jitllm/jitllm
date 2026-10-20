@@ -10,7 +10,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestGemmVoltaSegmentsIsTheLaunches: a GemmVoltaSegments launch -- q, k and v
@@ -29,12 +29,12 @@ func TestGemmVoltaSegmentsIsTheLaunches(t *testing.T) {
 		if d.API() != "ptx" {
 			continue
 		}
-		for _, tl := range []oldkernels.VoltaTile{
+		for _, tl := range []mainkernels.VoltaTile{
 			{MT: 4, NT: 4, WM: 1, WN: 4, KB: 1},
 			{MT: 4, NT: 4, WM: 2, WN: 2, KB: 1, F16K: 16},
 			{MT: 4, NT: 4, WM: 2, WN: 2, KB: 1, F16K: 8},
 		} {
-			segs := []oldkernels.MatVecShape{
+			segs := []mainkernels.MatVecShape{
 				{T: kernels.Q4_K, K: 1024, Rows: 512, NTok: 128},
 				{T: kernels.Q4_K, K: 1024, Rows: 512, NTok: 128},
 				{T: kernels.Q8_0, K: 1024, Rows: 256, NTok: 128, Bias: true},
@@ -49,13 +49,13 @@ func TestGemmVoltaSegmentsIsTheLaunches(t *testing.T) {
 	}
 }
 
-func gemmSegCase(t *testing.T, d backend.Device, segs []oldkernels.MatVecShape, tl oldkernels.VoltaTile) bool {
+func gemmSegCase(t *testing.T, d backend.Device, segs []mainkernels.MatVecShape, tl mainkernels.VoltaTile) bool {
 	name := fmt.Sprintf("%s %+v", d.Name(), tl)
-	tiles := make([]oldkernels.VoltaTile, len(segs))
+	tiles := make([]mainkernels.VoltaTile, len(segs))
 	for i := range tiles {
 		tiles[i] = tl
 	}
-	kk, err := oldkernels.GemmVoltaSegments(segs, tiles)
+	kk, err := mainkernels.GemmVoltaSegments(segs, tiles)
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
@@ -65,7 +65,7 @@ func gemmSegCase(t *testing.T, d backend.Device, segs []oldkernels.MatVecShape, 
 		return false
 	}
 	defer seg.Close()
-	blocks, nth, err := oldkernels.GemmVoltaSegmentsGrid(segs, tiles)
+	blocks, nth, err := mainkernels.GemmVoltaSegmentsGrid(segs, tiles)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func gemmSegCase(t *testing.T, d backend.Device, segs []oldkernels.MatVecShape, 
 		}
 		n := s.Rows * ntok
 		refs[i], gots[i], swapped[i] = poisoned(n), poisoned(n), poisoned(n)
-		one, err := oldkernels.GemmVolta(s, tl)
+		one, err := mainkernels.GemmVolta(s, tl)
 		if err != nil {
 			t.Fatalf("%s: segment %d alone: %v", name, i, err)
 		}
@@ -123,7 +123,7 @@ func gemmSegCase(t *testing.T, d backend.Device, segs []oldkernels.MatVecShape, 
 		if s.Bias {
 			args = append(args, ws[i].bias)
 		}
-		if err := k1.Launch(oldkernels.GemmVoltaGroups(s, tl), tl.Threads(), args...); err != nil {
+		if err := k1.Launch(mainkernels.GemmVoltaGroups(s, tl), tl.Threads(), args...); err != nil {
 			t.Fatalf("%s: segment %d alone: %v", name, i, err)
 		}
 		k1.Close()

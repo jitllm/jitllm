@@ -5,16 +5,16 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // A mixture's prompt, batched. Batching needs the tokens routed to one expert
 // to share its weight read, and the router decides that only at run time -- so
-// the chunk is routed on the device, oldkernels.ExpertGroup* sort the (token,
+// the chunk is routed on the device, mainkernels.ExpertGroup* sort the (token,
 // slot) pairs by expert with each expert's run padded to a whole matvec token
 // group, the used column count comes home (the one word the grouped launches
 // are sized by), and the expert matvecs run in that order with one expert per
-// group (oldkernels.MatVec's grouped shape). ExpertCombineGrouped reads the
+// group (mainkernels.MatVec's grouped shape). ExpertCombineGrouped reads the
 // outputs back in token order.
 //
 // The readback makes the block uncapturable, as a streamed block is.
@@ -25,7 +25,7 @@ import (
 const groupTok = 4
 
 // voltaUnit is the padding unit of an expert's run on sm_70's tensor cores.
-// oldkernels.GemmVolta's grouped shape reads one expert per token block, so a run
+// mainkernels.GemmVolta's grouped shape reads one expert per token block, so a run
 // is padded to the block (32 or 64 columns rather than 4); the padding is
 // compute, never a weight read. A 64-column block wins where an expert
 // averages 48 tokens or more; below that the extra padding costs more than
@@ -47,14 +47,14 @@ func voltaUnit(rows, k, nExp int) int {
 // 30 blocks of 96, faster than 64x64 because the staged activations serve more
 // rows. A 16-element format at MT 3 stages 192 items, which do not nest in 128
 // threads, so the generator refuses it and voltaGroupedMV takes the next tile.
-func voltaGroupTiles(q kernels.Quant, rows, unit int) []oldkernels.VoltaTile {
+func voltaGroupTiles(q kernels.Quant, rows, unit int) []mainkernels.VoltaTile {
 	if unit%32 != 0 {
 		return nil
 	}
 	sub, _, _, _ := kernels.Layout(q)
-	var out []oldkernels.VoltaTile
+	var out []mainkernels.VoltaTile
 	for _, mt := range []int{4, 3, 2, 1} {
-		tl := oldkernels.VoltaTile{MT: mt, NT: unit / 32, WM: 1, WN: 4, KB: max(32/sub, 1)}
+		tl := mainkernels.VoltaTile{MT: mt, NT: unit / 32, WM: 1, WN: 4, KB: max(32/sub, 1)}
 		if rows%tl.Rows() == 0 {
 			out = append(out, tl)
 		}
@@ -91,7 +91,7 @@ type moeGroup struct {
 	// hsum is a split step's host sum of its rows (streamBank.hostRowsLate).
 	hsum backend.Buf
 	// gcount..gtilesU group the chunk's pairs by expert on the device
-	// (oldkernels.ExpertGroup*), into cnt and ends; endsH is ends read home, whose
+	// (mainkernels.ExpertGroup*), into cnt and ends; endsH is ends read home, whose
 	// last word is the used column count the grouped launches are sized by.
 	gbcount, gcount, gends, gcols, gscatter, gtiles, gtilesU backend.Kernel
 	bc, off, cnt, ends                                       backend.Buf
@@ -103,7 +103,7 @@ func moeGroupWhyNot(p *nn.LayerPlan) string {
 	if p.NExpert == 0 {
 		return "not a mixture"
 	}
-	return oldkernels.MoERouteWhyNot(routeOf(p))
+	return mainkernels.MoERouteWhyNot(routeOf(p))
 }
 
 // newMoeGroup builds the mixture half of a rows-wide scratch, or nil with
@@ -156,15 +156,15 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 			*dst, err = g.dev.Alloc(n)
 		}
 	}
-	kern(&m.router, func() (*ir.Kernel, error) { return oldkernels.RouterMatVecTok(e, p.NEmbd, rows, false) })
-	kern(&m.router16, func() (*ir.Kernel, error) { return oldkernels.RouterMatVecTok(e, p.NEmbd, rows, true) })
-	kern(&m.rank, func() (*ir.Kernel, error) { return oldkernels.ExpertRank(route) })
-	kern(&m.weights, func() (*ir.Kernel, error) { return oldkernels.ExpertWeights(route) })
+	kern(&m.router, func() (*ir.Kernel, error) { return mainkernels.RouterMatVecTok(e, p.NEmbd, rows, false) })
+	kern(&m.router16, func() (*ir.Kernel, error) { return mainkernels.RouterMatVecTok(e, p.NEmbd, rows, true) })
+	kern(&m.rank, func() (*ir.Kernel, error) { return mainkernels.ExpertRank(route) })
+	kern(&m.weights, func() (*ir.Kernel, error) { return mainkernels.ExpertWeights(route) })
 	if route.Grouped() {
 		// The V3 family's two planes, per row: a chunk ranks every row against
 		// its own group scores, so both carry a row stride (MoERoute.Rows).
-		kern(&m.gscore, func() (*ir.Kernel, error) { return oldkernels.ExpertGroupScore(route) })
-		kern(&m.gmask, func() (*ir.Kernel, error) { return oldkernels.ExpertGroupMask(route) })
+		kern(&m.gscore, func() (*ir.Kernel, error) { return mainkernels.ExpertGroupScore(route) })
+		kern(&m.gmask, func() (*ir.Kernel, error) { return mainkernels.ExpertGroupMask(route) })
 		buf(&m.rgs, rows*p.ExpertGroups*4)
 		buf(&m.rbm, rows*e*4)
 	}
@@ -174,21 +174,21 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 	// nothing reads (~0.3 GB on gpt-oss-120b). prepBatch refuses the batch
 	// rather than falling back when a bank has no Volta form.
 	if !volta {
-		kern(&m.gather, func() (*ir.Kernel, error) { return oldkernels.GatherRows(ew, np, rows) })
+		kern(&m.gather, func() (*ir.Kernel, error) { return mainkernels.GatherRows(ew, np, rows) })
 		kern(&m.quantH, func() (*ir.Kernel, error) { return quantizeRows(np, ew, actWin) })
 		kern(&m.quantX, func() (*ir.Kernel, error) { return quantizeRows(np, p.NFFNExp, actWin) })
 	}
 	pair := p.ExpertWeightIn
-	kern(&m.gbcount, func() (*ir.Kernel, error) { return oldkernels.ExpertGroupBlockCount(rows, k, e) })
-	kern(&m.gcount, func() (*ir.Kernel, error) { return oldkernels.ExpertGroupCount(rows, k, e) })
-	kern(&m.gends, func() (*ir.Kernel, error) { return oldkernels.ExpertGroupEnds(e, unit) })
-	kern(&m.gcols, func() (*ir.Kernel, error) { return oldkernels.ExpertGroupColumns(rows, e, np, pair) })
-	kern(&m.gscatter, func() (*ir.Kernel, error) { return oldkernels.ExpertGroupScatter(rows, k, e, unit, np, pair) })
-	kern(&m.gtiles, func() (*ir.Kernel, error) { return oldkernels.ExpertGroupTiles(e, np/groupTok, groupTok) })
+	kern(&m.gbcount, func() (*ir.Kernel, error) { return mainkernels.ExpertGroupBlockCount(rows, k, e) })
+	kern(&m.gcount, func() (*ir.Kernel, error) { return mainkernels.ExpertGroupCount(rows, k, e) })
+	kern(&m.gends, func() (*ir.Kernel, error) { return mainkernels.ExpertGroupEnds(e, unit) })
+	kern(&m.gcols, func() (*ir.Kernel, error) { return mainkernels.ExpertGroupColumns(rows, e, np, pair) })
+	kern(&m.gscatter, func() (*ir.Kernel, error) { return mainkernels.ExpertGroupScatter(rows, k, e, unit, pair) })
+	kern(&m.gtiles, func() (*ir.Kernel, error) { return mainkernels.ExpertGroupTiles(e, np/groupTok, groupTok) })
 	if volta {
-		kern(&m.gtilesU, func() (*ir.Kernel, error) { return oldkernels.ExpertGroupTiles(e, np/unit, unit) })
+		kern(&m.gtilesU, func() (*ir.Kernel, error) { return mainkernels.ExpertGroupTiles(e, np/unit, unit) })
 	}
-	nb := oldkernels.GroupBlocks(rows, k)
+	nb := mainkernels.GroupBlocks(rows, k)
 	buf(&m.bc, nb*e*4)
 	buf(&m.off, nb*e*4)
 	buf(&m.cnt, 2*e*4) // + ExpertGroupCount's trash row
@@ -196,17 +196,17 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 	kern(&m.actMul, func() (*ir.Kernel, error) {
 		// Ungated experts (Nemotron 3) take the activation alone.
 		if ungatedFFN(p) {
-			return oldkernels.Act(np*p.NFFNExp, p.Act)
+			return mainkernels.Act(np*p.NFFNExp, p.Act)
 		}
-		return oldkernels.ActMul(np*p.NFFNExp, p.Act)
+		return mainkernels.ActMul(np*p.NFFNExp, p.Act)
 	})
-	kern(&m.combine, func() (*ir.Kernel, error) { return oldkernels.ExpertCombineGrouped(ew, k, rows) })
+	kern(&m.combine, func() (*ir.Kernel, error) { return mainkernels.ExpertCombineGrouped(ew, k, rows) })
 	if p.DenseMoE {
-		kern(&m.ewScale, func() (*ir.Kernel, error) { return oldkernels.ExpertWeightScale(rows, k) })
+		kern(&m.ewScale, func() (*ir.Kernel, error) { return mainkernels.ExpertWeightScale(rows, k) })
 		buf(&m.rwS, rows*k*4)
 	}
 	if p.ExpertWeightIn {
-		kern(&m.actMulW, func() (*ir.Kernel, error) { return oldkernels.ActMulWeighted(np*p.NFFNExp, p.NFFNExp, p.Act, true) })
+		kern(&m.actMulW, func() (*ir.Kernel, error) { return mainkernels.ActMulWeighted(np*p.NFFNExp, p.NFFNExp, p.Act, true) })
 		buf(&m.colPair, (np+1)*4)
 		buf(&m.ones, rows*k*4)
 		if err == nil {
@@ -240,12 +240,12 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 	if p.MoEBias {
 		// The router bias is added to every row: IndexedBiasAdd with a
 		// selection of zeros reads bias row 0 for each of them.
-		kern(&m.biasR, func() (*ir.Kernel, error) { return oldkernels.IndexedBiasAdd(rows, e) })
+		kern(&m.biasR, func() (*ir.Kernel, error) { return mainkernels.IndexedBiasAdd(rows, e) })
 		buf(&m.rlogB, rows*e*4)
 		buf(&m.zsel, rows*4)
 		if !volta {
-			kern(&m.biasFF, func() (*ir.Kernel, error) { return oldkernels.IndexedBiasAdd(np, p.NFFNExp) })
-			kern(&m.biasD, func() (*ir.Kernel, error) { return oldkernels.IndexedBiasAdd(np, ew) })
+			kern(&m.biasFF, func() (*ir.Kernel, error) { return mainkernels.IndexedBiasAdd(np, p.NFFNExp) })
+			kern(&m.biasD, func() (*ir.Kernel, error) { return mainkernels.IndexedBiasAdd(np, ew) })
 			buf(&m.egB, np*p.NFFNExp*4)
 			buf(&m.euB, np*p.NFFNExp*4)
 			buf(&m.edownB, np*ew*4)
@@ -333,7 +333,7 @@ func (g *devTier) sm70() bool {
 		if !g.mmaOff && !g.NoMMA {
 			// Only a COMPILE refusal is the device's; a shape the generator
 			// refuses says nothing about the card.
-			if ker, err := oldkernels.MatVecMMA(oldkernels.MatVecShape{Center: g.center, T: kernels.Q8_0, K: 32, Rows: 16, NTok: 8,
+			if ker, err := mainkernels.MatVecMMA(mainkernels.MatVecShape{Center: g.center, T: kernels.Q8_0, K: 32, Rows: 16, NTok: 8,
 				MT: 1, NT: 1}); err == nil {
 				if c, err := g.dev.Compile(ker); err != nil {
 					g.mmaOff, g.MMAWhy = true, err.Error()
@@ -342,8 +342,8 @@ func (g *devTier) sm70() bool {
 				}
 			}
 		}
-		tl := oldkernels.VoltaTile{MT: 4, NT: 1, WM: 1, WN: 4, KB: 1}
-		if (g.mmaOff || g.NoMMA) && probe(oldkernels.GemmVolta(oldkernels.MatVecShape{Center: g.center, T: kernels.Q8_0, K: 32, Rows: 128,
+		tl := mainkernels.VoltaTile{MT: 4, NT: 1, WM: 1, WN: 4, KB: 1}
+		if (g.mmaOff || g.NoMMA) && probe(mainkernels.GemmVolta(mainkernels.MatVecShape{Center: g.center, T: kernels.Q8_0, K: 32, Rows: 128,
 			NTok: 32, Experts: 2}, tl)) {
 			g.voltaMoE = 1
 		}
@@ -352,7 +352,7 @@ func (g *devTier) sm70() bool {
 }
 
 // tileMoE is whether a batched mixture's experts run as the grouped
-// oldkernels.GemmTile -- the collective tiles, wherever the device lowers them
+// mainkernels.GemmTile -- the collective tiles, wherever the device lowers them
 // (tilesOK) -- as tileMV asks for the dense one, and off once the device has
 // refused a tile.
 func (g *devTier) tileMoE() bool {
@@ -380,7 +380,7 @@ func (g *devTier) tilesOK() bool {
 }
 
 // tileF32 reports whether the device also lowers float32-operand tiles, which
-// oldkernels.FlashPrefillTile multiplies P by V in: Metal's float
+// mainkernels.FlashPrefillTile multiplies P by V in: Metal's float
 // simdgroup_matrix, and mma.sync from sm_80 (three tf32 products). sm_75 has
 // the f16 tiles GemmTile needs and not these.
 func (g *devTier) tileF32() bool {
@@ -397,7 +397,7 @@ func (g *devTier) tileF32() bool {
 }
 
 // tileTall reports whether the device also lowers the 16-row tile
-// (oldkernels.TileGemm.Tall): mma.sync's own m16, which the 8-row tile runs
+// (mainkernels.TileGemm.Tall): mma.sync's own m16, which the 8-row tile runs
 // with half its rows zero. Metal's simdgroup_matrix is 8x8 only.
 func (g *devTier) tileTall() bool {
 	if g.tileTallCap == 0 {
@@ -412,14 +412,14 @@ func (g *devTier) tileTall() bool {
 // tileGroupTiles is GemmTile's grouped blocking for rows at a padding unit of
 // unit columns: two subgroups along the tokens, each unit/16 n-tiles wide, and
 // the widest m-tile the rows divide -- tier.tileGemms' 64-row block first.
-func tileGroupTiles(q kernels.Quant, rows, unit int) []oldkernels.TileGemm {
+func tileGroupTiles(q kernels.Quant, rows, unit int) []mainkernels.TileGemm {
 	if unit%16 != 0 {
 		return nil
 	}
 	sub, _, _, _ := kernels.Layout(q)
-	var out []oldkernels.TileGemm
+	var out []mainkernels.TileGemm
 	for _, mt := range []int{4, 2, 1} {
-		tl := oldkernels.TileGemm{MT: mt, NT: unit / 16, WM: 2, WN: 2, KB: max(32/sub, 1)}
+		tl := mainkernels.TileGemm{MT: mt, NT: unit / 16, WM: 2, WN: 2, KB: max(32/sub, 1)}
 		if rows%tl.Rows() == 0 {
 			out = append(out, tl)
 		}
@@ -450,8 +450,8 @@ type moeKernKey struct {
 	kind                    string
 	q                       kernels.Quant
 	k, rows, bank, np, nsrc int
-	vt                      oldkernels.VoltaTile
-	tt                      oldkernels.TileGemm
+	vt                      mainkernels.VoltaTile
+	tt                      mainkernels.TileGemm
 	bias                    bool
 }
 
@@ -502,7 +502,7 @@ func (g *devTier) moeKern(key moeKernKey, why string, mk func() (*ir.Kernel, err
 }
 
 // voltaGroupedMV is the tensor-core twin of a bank's grouped matvec -- a
-// grouped oldkernels.GemmVolta over np sorted columns in unit-wide blocks, with
+// grouped mainkernels.GemmVolta over np sorted columns in unit-wide blocks, with
 // the expert bias in its epilogue where bias -- and the conversion it reads:
 // ActF16TGather from nsrc source rows, or ActF16T of an already sorted input
 // at nsrc 0. Compiled on first use (prepBatch makes that happen outside any
@@ -522,7 +522,7 @@ func (g *devTier) voltaGroupedMV(m mv, bank, np, unit int, bias bool, nsrc int) 
 		return v, v.kern != nil
 	}
 	var v moeVoltaMV
-	if oldkernels.Volta70OK(m.q) {
+	if mainkernels.Volta70OK(m.q) {
 		v = g.buildVoltaGroupedMV(m, bank, np, unit, bias, nsrc)
 	}
 	if g.moeVolta == nil {
@@ -537,15 +537,15 @@ func (g *devTier) voltaGroupedMV(m mv, bank, np, unit int, bias bool, nsrc int) 
 func (g *devTier) buildVoltaGroupedMV(m mv, bank, np, unit int, bias bool, nsrc int) moeVoltaMV {
 	const why = "tier: batched mixture on tensor cores: "
 	var v moeVoltaMV
-	s := oldkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: np, Experts: bank, Bias: bias}
+	s := mainkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: np, Experts: bank, Bias: bias}
 	key := moeKernKey{q: m.q, k: m.k, rows: m.rows, bank: bank, np: np, bias: bias}
 	if g.tileMoE() {
 		key.kind = "groupedtile"
 		for _, tl := range tileGroupTiles(m.q, m.rows, unit) {
 			tl.Tall = g.tileTall() && tl.MT%2 == 0
 			key.tt = tl
-			if v.kern = g.moeKern(key, why, func() (*ir.Kernel, error) { return oldkernels.GemmTile(s, tl) }); v.kern != nil {
-				v.width, v.rowBlocks = tl.Threads(), oldkernels.GemmTileGrouped(s, tl, 1)
+			if v.kern = g.moeKern(key, why, func() (*ir.Kernel, error) { return mainkernels.GemmTile(s, tl) }); v.kern != nil {
+				v.width, v.rowBlocks = tl.Threads(), mainkernels.GemmTileGrouped(s, tl, 1)
 				break
 			}
 		}
@@ -553,8 +553,8 @@ func (g *devTier) buildVoltaGroupedMV(m mv, bank, np, unit int, bias bool, nsrc 
 		key.kind = "groupedvolta"
 		for _, tl := range voltaGroupTiles(m.q, m.rows, unit) {
 			key.vt = tl
-			if v.kern = g.moeKern(key, why, func() (*ir.Kernel, error) { return oldkernels.GemmVolta(s, tl) }); v.kern != nil {
-				v.width, v.rowBlocks = tl.Threads(), oldkernels.GemmVoltaGrouped(s, tl, 1)
+			if v.kern = g.moeKern(key, why, func() (*ir.Kernel, error) { return mainkernels.GemmVolta(s, tl) }); v.kern != nil {
+				v.width, v.rowBlocks = tl.Threads(), mainkernels.GemmVoltaGrouped(s, tl, 1)
 				break
 			}
 		}
@@ -564,10 +564,10 @@ func (g *devTier) buildVoltaGroupedMV(m mv, bank, np, unit int, bias bool, nsrc 
 	}
 	if nsrc > 0 {
 		v.act = g.moeKern(moeKernKey{kind: "actf16tgather", q: m.q, k: m.k, np: np, nsrc: nsrc}, why,
-			func() (*ir.Kernel, error) { return oldkernels.ActF16TGather(m.q, np, m.k, nsrc) })
+			func() (*ir.Kernel, error) { return mainkernels.ActF16TGather(m.q, np, m.k, nsrc) })
 	} else {
 		v.act = g.moeKern(moeKernKey{kind: "actf16t", q: m.q, k: m.k, np: np}, why,
-			func() (*ir.Kernel, error) { return oldkernels.ActF16T(m.q, np, m.k) })
+			func() (*ir.Kernel, error) { return mainkernels.ActF16T(m.q, np, m.k) })
 	}
 	if v.act == nil {
 		return moeVoltaMV{}
@@ -598,11 +598,11 @@ func (g *devTier) moeFloatHalf(m *moeGroup, p *nn.LayerPlan) bool {
 		}
 	}
 	ew := p.ExpWidth()
-	kern(&m.gather, func() (*ir.Kernel, error) { return oldkernels.GatherRows(ew, m.p, m.rows) })
+	kern(&m.gather, func() (*ir.Kernel, error) { return mainkernels.GatherRows(ew, m.p, m.rows) })
 	buf(&m.hg, m.p*ew*4)
 	if p.MoEBias {
-		kern(&m.biasFF, func() (*ir.Kernel, error) { return oldkernels.IndexedBiasAdd(m.p, p.NFFNExp) })
-		kern(&m.biasD, func() (*ir.Kernel, error) { return oldkernels.IndexedBiasAdd(m.p, ew) })
+		kern(&m.biasFF, func() (*ir.Kernel, error) { return mainkernels.IndexedBiasAdd(m.p, p.NFFNExp) })
+		kern(&m.biasD, func() (*ir.Kernel, error) { return mainkernels.IndexedBiasAdd(m.p, ew) })
 		buf(&m.egB, m.p*p.NFFNExp*4)
 		buf(&m.euB, m.p*p.NFFNExp*4)
 		buf(&m.edownB, m.p*ew*4)
@@ -617,7 +617,7 @@ func (g *devTier) moeFloatHalf(m *moeGroup, p *nn.LayerPlan) bool {
 // groupedMV is the grouped twin of a bank's matvec, compiled on first use --
 // which prepBatch makes happen outside any session, so inside one it is a
 // lookup on a struct. A float bank reads the float activation its caller
-// passes in the scale-plane slot (oldkernels.MatVec), column j at j*k, as the
+// passes in the scale-plane slot (mainkernels.MatVec), column j at j*k, as the
 // int8 one is read.
 func (g *devTier) groupedMV(m mv, bank, np int) (backend.Kernel, bool) {
 	// A build reached from inside a submission takes g.mu (subLock).
@@ -627,9 +627,9 @@ func (g *devTier) groupedMV(m mv, bank, np int) (backend.Kernel, bool) {
 		return c, c != nil
 	}
 	// A float bank narrower than 32 (MLA's absorbs at a small latent or nope
-	// width) walks its own k; see oldkernels.MatVecShape.Sub.
+	// width) walks its own k; see mainkernels.MatVecShape.Sub.
 	c := g.moeKern(key, "tier: batched mixture: ", func() (*ir.Kernel, error) {
-		return oldkernels.MatVec(oldkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Experts: bank,
+		return mainkernels.MatVec(mainkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Experts: bank,
 			NTok: np, Tok: groupTok, ActWin: g.actWinFor(0), Sub: subFor(m.q, m.k)})
 	})
 	return c, c != nil
@@ -666,7 +666,7 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 	if l.routerF16 {
 		router = m.router16
 	}
-	la(router, oldkernels.RouterThreads(e*rows), oldkernels.RouterThreads(1), l.router, rin, m.rlog)
+	la(router, mainkernels.RouterThreads(e*rows), mainkernels.RouterThreads(1), l.router, rin, m.rlog)
 	logits := m.rlog
 	if l.routerB != nil {
 		la(m.biasR, rows*e, 128, m.rlog, m.zsel, l.routerB, m.rlogB)
@@ -871,9 +871,9 @@ type groupRun struct {
 // size that depends on it, the used column count. False on an error.
 func (r *groupRun) sort(gl groupLaunch, errp *error, s backend.Session) bool {
 	m, rows, e := r.m, r.rows, r.e
-	// The grouping runs on the device (oldkernels.ExpertGroup*) and only the used
+	// The grouping runs on the device (mainkernels.ExpertGroup*) and only the used
 	// column count comes home.
-	nbe := oldkernels.GroupBlocks(rows, m.k) * e
+	nbe := mainkernels.GroupBlocks(rows, m.k) * e
 	gl.la(m.gbcount, nbe, 128, m.rsel, m.bc)
 	gl.la(m.gcount, nbe, 128, m.bc, m.off, m.cnt)
 	gl.la(m.gends, e, 128, m.cnt, m.ends)
@@ -925,7 +925,7 @@ func (r *groupRun) gather(gl groupLaunch) {
 // gate).
 func (r *groupRun) quantize(gl groupLaunch, q backend.Kernel, n int, src backend.Buf) {
 	if r.quantized != src {
-		gl.la(q, oldkernels.QuantizeThreads(r.cols*pad32(n)/32), 128, src, r.m.ga, r.m.gax)
+		gl.la(q, mainkernels.QuantizeThreads(r.cols*pad32(n)/32), 128, src, r.m.ga, r.m.gax)
 		r.quantized = src
 	}
 }
@@ -937,7 +937,7 @@ func (r *groupRun) grouped(gl groupLaunch, errp *error, mv *mv, res *resident, b
 	down := mv == &l.mvd
 	if kernels.IsFloat(mv.q) {
 		// A float bank reads the sorted float rows in the scale plane's
-		// slot and no int8 activation (oldkernels.MatVec), on sm_70 as
+		// slot and no int8 activation (mainkernels.MatVec), on sm_70 as
 		// anywhere: moeFloatHalf built the gather there.
 		c, ok := g.groupedMV(*mv, r.e, m.p)
 		if !ok || m.gather == nil {

@@ -12,7 +12,7 @@ import (
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // The gates for the paged KV kernels (docs/design/device-kv-paging.md). Every
@@ -178,7 +178,7 @@ func (p *pagedPool) vBytes() []byte {
 // pagedWant is the attention every row should produce, in float64: keys
 // [ks, ke), sinks and softcap as FlashAttention defines them. An empty row
 // is 0.
-func pagedWant(s oldkernels.FlashShape, p *pagedPool, rows []pagedRow, q, sinks []float32) []float64 {
+func pagedWant(s mainkernels.FlashShape, p *pagedPool, rows []pagedRow, q, sinks []float32) []float64 {
 	vd := s.Dim
 	if s.MLA > 0 {
 		vd = s.MLA
@@ -231,13 +231,13 @@ func pagedWant(s oldkernels.FlashShape, p *pagedPool, rows []pagedRow, q, sinks 
 // pagedAttn runs one paged decode kernel (FlashDecodeKV when kv, else
 // FlashAttention) plus the merge over rows, reading through tab, and returns
 // the NMSE against the oracle, or an error for a non-finite or overrun output.
-func pagedAttn(t *testing.T, d backend.Device, s oldkernels.FlashShape, kv bool, p *pagedPool, tab []uint32, rows []pagedRow) (float64, error) {
+func pagedAttn(t *testing.T, d backend.Device, s mainkernels.FlashShape, kv bool, p *pagedPool, tab []uint32, rows []pagedRow) (float64, error) {
 	t.Helper()
 	s.Rows = len(rows)
-	build, groups, width := oldkernels.FlashAttention, s.Rows*s.Heads*max(1, s.Splits), 32
+	build, groups, width := mainkernels.FlashAttention, s.Rows*s.Heads*max(1, s.Splits), 32
 	if kv {
-		build = oldkernels.FlashDecodeKV
-		groups, width = oldkernels.FlashKVGroups(s), oldkernels.FlashKVWidth(s)
+		build = mainkernels.FlashDecodeKV
+		groups, width = mainkernels.FlashKVGroups(s), mainkernels.FlashKVWidth(s)
 	}
 	ker, err := build(s)
 	if err != nil {
@@ -275,7 +275,7 @@ func pagedAttn(t *testing.T, d backend.Device, s oldkernels.FlashShape, kv bool,
 	to, ro := g.up(u32bytes(tab)), g.up(u32bytes(p.desc))
 	dst := oo
 	if s.Splits > 1 {
-		parts := make([]float32, oldkernels.FlashPartialFloats(s))
+		parts := make([]float32, mainkernels.FlashPartialFloats(s))
 		for i := range parts {
 			parts[i] = nan32
 		}
@@ -291,7 +291,7 @@ func pagedAttn(t *testing.T, d backend.Device, s oldkernels.FlashShape, kv bool,
 		t.Fatal(err)
 	}
 	if s.Splits > 1 {
-		mk, e := oldkernels.FlashAttentionMerge(s)
+		mk, e := mainkernels.FlashAttentionMerge(s)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -404,7 +404,7 @@ func TestPagedFlashDecode(t *testing.T) {
 		t.Run(d.API()+"/"+d.Name(), func(t *testing.T) {
 			for _, kv := range []bool{true, false} {
 				for _, page := range []int{64, 256} {
-					for _, sh := range []oldkernels.FlashShape{
+					for _, sh := range []mainkernels.FlashShape{
 						{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125},
 						{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Splits: 3, Sink: true, Softcap: 3},
 						{Heads: 6, KVHeads: 6, Dim: 48, Scale: .14, F16: true, Sink: true},
@@ -433,13 +433,13 @@ func TestPagedFlashDecode(t *testing.T) {
 							s.Rows = len(rows)
 							if kv {
 								// Splits*chunk covers the longest row's aligned span.
-								c, longest := oldkernels.FlashKVChunk(s), 0
+								c, longest := mainkernels.FlashKVChunk(s), 0
 								for _, r := range rows {
 									longest = max(longest, r.ke)
 								}
 								s.Splits = max(s.Splits, (longest+c-1)/c)
 							}
-							k, err := map[bool]func(oldkernels.FlashShape) (*ir.Kernel, error){true: oldkernels.FlashDecodeKV, false: oldkernels.FlashAttention}[kv](s)
+							k, err := map[bool]func(mainkernels.FlashShape) (*ir.Kernel, error){true: mainkernels.FlashDecodeKV, false: mainkernels.FlashAttention}[kv](s)
 							if err != nil {
 								t.Fatal(err)
 							}

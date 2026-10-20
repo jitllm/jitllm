@@ -14,7 +14,7 @@ import (
 	"github.com/jitllm/jitllm/dev/bench"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestFlashAttentionAB measures the actual staged sequence, including its MMA
@@ -57,36 +57,36 @@ func TestFlashAttentionAB(t *testing.T) {
 						t.Cleanup(c.Close)
 						return c
 					}
-					shape := oldkernels.FlashShape{Heads: heads, KVHeads: nkv, Dim: dim, Rows: rows, KStride: depth, Scale: .125}
+					shape := mainkernels.FlashShape{Heads: heads, KVHeads: nkv, Dim: dim, Rows: rows, KStride: depth, Scale: .125}
 					if rows == 1 && depth >= 512 {
 						shape.Splits = 8
 					}
-					// JITLLM_FLASH_KV=1 times oldkernels.FlashDecodeKV as the fused arm.
+					// JITLLM_FLASH_KV=1 times mainkernels.FlashDecodeKV as the fused arm.
 					kv := os.Getenv("JITLLM_FLASH_KV") == "1" && rows == 1
 					fGroups, fWidth := rows*heads*max(1, shape.Splits), 32
-					build := oldkernels.FlashAttention
+					build := mainkernels.FlashAttention
 					if kv {
 						// JITLLM_FLASH_GROUP / JITLLM_FLASH_SPLITS pin the KV kernel's shape.
 						fmt.Sscanf(os.Getenv("JITLLM_FLASH_GROUP"), "%d", &shape.Group)
 						fmt.Sscanf(os.Getenv("JITLLM_FLASH_SPLITS"), "%d", &shape.Splits)
-						c := oldkernels.FlashKVChunk(shape)
+						c := mainkernels.FlashKVChunk(shape)
 						shape.Splits = max(shape.Splits, (depth+c-1)/c)
-						build = oldkernels.FlashDecodeKV
-						fGroups, fWidth = oldkernels.FlashKVGroups(shape), oldkernels.FlashKVWidth(shape)
+						build = mainkernels.FlashDecodeKV
+						fGroups, fWidth = mainkernels.FlashKVGroups(shape), mainkernels.FlashKVWidth(shape)
 					}
 					f := compile(build(shape))
 					var merge backend.Kernel
 					if shape.Splits > 1 {
-						merge = compile(oldkernels.FlashAttentionMerge(shape))
+						merge = compile(mainkernels.FlashAttentionMerge(shape))
 					}
 					qt, kt, at := 1, 1, 1
 					if rows > 1 {
 						qt, kt, at = 4, 2, 4
 					}
-					score := compile(oldkernels.AttnScoresTiled(heads, dim, nkv*dim, heads/nkv, depth, .125, rows, qt, kt, depth))
+					score := compile(mainkernels.AttnScoresTiled(heads, dim, nkv*dim, heads/nkv, depth, .125, rows, qt, kt, depth))
 					scoreGroups, scoreWidth := ((rows/qt)*heads*((depth+kt-1)/kt)+127)/128, 128
 					if rows > 1 {
-						k, e := oldkernels.AttnScoresMMA(heads, dim, nkv*dim, heads/nkv, depth, .125, rows, depth, 4)
+						k, e := mainkernels.AttnScoresMMA(heads, dim, nkv*dim, heads/nkv, depth, .125, rows, depth, 4)
 						if e == nil {
 							if c, e := d.Compile(k); e == nil {
 								t.Cleanup(c.Close)
@@ -97,8 +97,8 @@ func TestFlashAttentionAB(t *testing.T) {
 							}
 						}
 					}
-					soft := compile(oldkernels.SoftmaxRows(heads, depth, 32, rows, at))
-					acc := compile(oldkernels.AttnAccTiled(heads, dim, nkv*dim, heads/nkv, depth, rows, at))
+					soft := compile(mainkernels.SoftmaxRows(heads, depth, 32, rows, at))
+					acc := compile(mainkernels.AttnAccTiled(heads, dim, nkv*dim, heads/nkv, depth, rows, at))
 					accSplit := 1
 					var reduce backend.Kernel
 					if rows == 1 {
@@ -109,8 +109,8 @@ func TestFlashAttentionAB(t *testing.T) {
 						for accSplit < 32 && heads*dim*accSplit*2 <= slots {
 							accSplit *= 2
 						}
-						acc = compile(oldkernels.AttnAccSplit(heads, dim, nkv*dim, heads/nkv, depth, accSplit))
-						reduce = compile(oldkernels.Reduce(heads*dim, accSplit))
+						acc = compile(mainkernels.AttnAccSplit(heads, dim, nkv*dim, heads/nkv, depth, accSplit))
+						reduce = compile(mainkernels.Reduce(heads*dim, accSplit))
 					}
 					t.Logf("fused splits=%d; staged accumulator splits=%d", max(1, shape.Splits), accSplit)
 					rng := rand.New(rand.NewSource(83))
@@ -128,7 +128,7 @@ func TestFlashAttentionAB(t *testing.T) {
 					}
 					nb := g.up(u32bytes(ns))
 					scores, probs, out := data(rows*heads*depth), data(rows*heads*depth), data(rows*heads*dim)
-					partial := data(oldkernels.FlashPartialFloats(shape))
+					partial := data(mainkernels.FlashPartialFloats(shape))
 					accPart := data(heads * dim * accSplit)
 					run := func(fused bool) func(int) {
 						return func(iters int) {
@@ -210,7 +210,7 @@ func TestFlashAttentionAB(t *testing.T) {
 						r := bench.AB(a, b, 20, 100)
 						t.Logf("pass%d %s; staged score/prob scratch=%d bytes; fused partials=%d bytes; shared=128 bytes/group", pass, r, rows*heads*depth*8, func() int {
 							if shape.Splits > 1 {
-								return oldkernels.FlashPartialFloats(shape) * 4
+								return mainkernels.FlashPartialFloats(shape) * 4
 							}
 							return 0
 						}())

@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestGemmVoltaGroupedSpeed times the grouped tensor-core GEMM against the
@@ -95,7 +95,7 @@ func TestGemmVoltaGroupedSpeed(t *testing.T) {
 			{
 				sel := selFor(4)
 				ntok := len(sel) * 4
-				kk, err := oldkernels.MatVec(oldkernels.MatVecShape{T: sh.q, K: sh.k, Rows: sh.rows, Experts: sh.e, NTok: ntok, Tok: 4})
+				kk, err := mainkernels.MatVec(mainkernels.MatVecShape{T: sh.q, K: sh.k, Rows: sh.rows, Experts: sh.e, NTok: ntok, Tok: 4})
 				if err == nil {
 					if kern, err := d.Compile(kk); err == nil {
 						bSel := g.up(u32bytes(sel))
@@ -108,7 +108,7 @@ func TestGemmVoltaGroupedSpeed(t *testing.T) {
 			}
 			sub, _, _, _ := kernels.Layout(sh.q)
 			kb := max(32/sub, 1)
-			for _, tl := range []oldkernels.VoltaTile{
+			for _, tl := range []mainkernels.VoltaTile{
 				{MT: 4, NT: 1, WM: 1, WN: 4, KB: kb}, {MT: 2, NT: 1, WM: 1, WN: 4, KB: kb},
 				{MT: 4, NT: 2, WM: 1, WN: 4, KB: kb}, {MT: 2, NT: 2, WM: 1, WN: 4, KB: kb},
 				{MT: 2, NT: 1, WM: 2, WN: 2, KB: kb}, {MT: 4, NT: 1, WM: 2, WN: 2, KB: kb},
@@ -118,8 +118,8 @@ func TestGemmVoltaGroupedSpeed(t *testing.T) {
 			} {
 				sel := selFor(tl.Toks())
 				ntok := len(sel) * tl.Toks()
-				s := oldkernels.MatVecShape{T: sh.q, K: sh.k, Rows: sh.rows, NTok: ntok, Experts: sh.e}
-				kk, err := oldkernels.GemmVolta(s, tl)
+				s := mainkernels.MatVecShape{T: sh.q, K: sh.k, Rows: sh.rows, NTok: ntok, Experts: sh.e}
+				kk, err := mainkernels.GemmVolta(s, tl)
 				if err != nil {
 					t.Logf("%+v: %v", tl, err)
 					continue
@@ -131,7 +131,7 @@ func TestGemmVoltaGroupedSpeed(t *testing.T) {
 				}
 				bSel := g.up(u32bytes(sel))
 				time1(fmt.Sprintf("gemm %dx%d w%dx%d (%dx%d)", tl.MT, tl.NT, tl.WM, tl.WN, tl.Rows(), tl.Toks()), ntok, func() error {
-					return kern.Launch(oldkernels.GemmVoltaGrouped(s, tl, len(sel)), tl.Threads(), bQS, bD, bSC, bB, out, bSel)
+					return kern.Launch(mainkernels.GemmVoltaGrouped(s, tl, len(sel)), tl.Threads(), bQS, bD, bSC, bB, out, bSel)
 				})
 				kern.Close()
 			}

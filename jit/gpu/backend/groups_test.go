@@ -11,7 +11,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/jit/gpu/vulkan"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // forcedGroups is the workgroup limit the split gates impose on a Vulkan device
@@ -277,7 +277,7 @@ func TestRealKernelsPastTheGroupLimit(t *testing.T) {
 				matvecCaseFull(t, g.d, kernels.Q4_K, 2048, 2048, 4, true, 1, false)
 			})
 			t.Run("matvec/groupsplit16", func(t *testing.T) {
-				if !oldkernels.GroupSplitOK(2048, 16) {
+				if !mainkernels.GroupSplitOK(2048, 16) {
 					t.Fatal("2048 rows at split 16 is not an in-group split")
 				}
 				matvecCaseFull(t, g.d, kernels.Q4_K, 2048, 2048, 16, true, 1, true)

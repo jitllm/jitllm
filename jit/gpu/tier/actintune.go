@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // tuneActIn decides, on this card, which operand-prologue sites run: for each
@@ -145,7 +145,7 @@ func (g *devTier) timeActIn(site int, ls []*layer) (float64, bool) {
 					if bs.rmsQ == nil {
 						return errNoBatch
 					}
-					if err := s.Launch(bs.rmsQ, 1, oldkernels.RMSNormGroup, bs.x, l.nAttn, bs.h, bs.a, bs.ax); err != nil {
+					if err := s.Launch(bs.rmsQ, 1, mainkernels.RMSNormGroup, bs.x, l.nAttn, bs.h, bs.a, bs.ax); err != nil {
 						return err
 					}
 				}
@@ -197,7 +197,7 @@ func (g *devTier) timeActIn(site int, ls []*layer) (float64, bool) {
 				if q == nil {
 					return errNoBatch
 				}
-				if err := s.Launch(q, (oldkernels.QuantizeThreads(m.k/32)+127)/128, 128, src, bs.a, bs.ax); err != nil {
+				if err := s.Launch(q, (mainkernels.QuantizeThreads(m.k/32)+127)/128, 128, src, bs.a, bs.ax); err != nil {
 					return err
 				}
 				if err := g.mvLaunch(s, m, m.res, r, ax, dst, resid); err != nil {

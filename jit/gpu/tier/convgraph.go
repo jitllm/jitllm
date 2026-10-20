@@ -9,7 +9,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // A convolution-path block (one ConvLayers runs: the call's rows on the card
@@ -169,13 +169,13 @@ func (g *devTier) graphConvProgram(cl *convLayer, gr *graph.Graph, ws []nn.Weigh
 			want(cLV, parts*n)
 			wb, bb := bind(o.Weight[0].Role), bind(o.Weight[1].Role)
 			launch(kern(convKey{id: kidLnpart, a: [8]int{w, parts, n}}, func() (*ir.Kernel, error) {
-				return oldkernels.LayerNormPartRows(w, parts, n)
+				return mainkernels.LayerNormPartRows(w, parts, n)
 			}), parts*n, in0(), cLP)
 			launch(kern(convKey{id: kidLnvar, a: [8]int{w, parts, n}}, func() (*ir.Kernel, error) {
-				return oldkernels.LayerNormVarRows(w, parts, n)
+				return mainkernels.LayerNormVarRows(w, parts, n)
 			}), parts*n, in0(), cLP, cLV)
 			launch(kern(convKey{id: kidLnapply, a: [8]int{w, parts, n}, eps: eps}, func() (*ir.Kernel, error) {
-				return oldkernels.LayerNormApplyRows(w, parts, eps, true, n)
+				return mainkernels.LayerNormApplyRows(w, parts, eps, true, n)
 			}), w*n, in0(), wb, cLP, cLV, bb, dst)
 		case graph.OpMatVec:
 			kind = dkMatVec
@@ -195,7 +195,7 @@ func (g *devTier) graphConvProgram(cl *convLayer, gr *graph.Graph, ws []nn.Weigh
 			mm(slot, in0(), tmp, n, k)
 			bb := bind(o.Weight[1].Role)
 			launch(kern(convKey{id: kidBiasAct, act: act, a: [8]int{w, n}}, func() (*ir.Kernel, error) {
-				return oldkernels.BiasAct(w, n, act)
+				return mainkernels.BiasAct(w, n, act)
 			}), w*n, tmp, bb, dst)
 			free(tmp)
 		case graph.OpAct:
@@ -204,13 +204,13 @@ func (g *devTier) graphConvProgram(cl *convLayer, gr *graph.Graph, ws []nn.Weigh
 				return nil, fmt.Sprintf("op %d: an activation %d on the convolution path", i, o.Attr.Act)
 			}
 			launch(kern(convKey{id: kidAct, act: kernels.ActSiLU, a: [8]int{w * n}}, func() (*ir.Kernel, error) {
-				return oldkernels.Act(w*n, kernels.ActSiLU)
+				return mainkernels.Act(w*n, kernels.ActSiLU)
 			}), w*n, in0(), dst)
 		case graph.OpAdd:
 			kind = dkAdd
-			id, mk := kidAdd, oldkernels.Add
+			id, mk := kidAdd, mainkernels.Add
 			if o.Attr.Alpha == graph.ConformerHalf {
-				id, mk = kidAddhalf, oldkernels.AddHalf
+				id, mk = kidAddhalf, mainkernels.AddHalf
 			} else if o.Attr.Alpha != 0 {
 				return nil, fmt.Sprintf("op %d: a residual scale %g on the convolution path", i, o.Attr.Alpha)
 			}
@@ -222,18 +222,18 @@ func (g *devTier) graphConvProgram(cl *convLayer, gr *graph.Graph, ws []nn.Weigh
 				return nil, fmt.Sprintf("op %d: a gate %d on the convolution path", i, o.Attr.Act)
 			}
 			launch(kern(convKey{id: kidSigmoidmul, a: [8]int{w * n}}, func() (*ir.Kernel, error) {
-				return oldkernels.SigmoidMul(w * n)
+				return mainkernels.SigmoidMul(w * n)
 			}), w*n, in0(), buf[o.In[1]], dst)
 		case graph.OpConv:
 			kind = dkDWConvRows
 			taps := o.Attr.Taps
 			launch(kern(convKey{id: kidDwconv1drows, a: [8]int{taps, w, n}}, func() (*ir.Kernel, error) {
-				return oldkernels.DWConv1dRows(taps, w, n)
+				return mainkernels.DWConv1dRows(taps, w, n)
 			}), w*n, in0(), bind(o.Weight[0].Role), cTN, dst)
 		case graph.OpAffine:
 			kind = dkAffineRows
 			launch(kern(convKey{id: kidAffinerows, a: [8]int{w, n}}, func() (*ir.Kernel, error) {
-				return oldkernels.AffineRows(w, n)
+				return mainkernels.AffineRows(w, n)
 			}), w*n, in0(), bind(o.Weight[0].Role), bind(o.Weight[1].Role), dst)
 		case graph.OpRelAttend:
 			kind = dkRelAttend
@@ -241,13 +241,13 @@ func (g *devTier) graphConvProgram(cl *convLayer, gr *graph.Graph, ws []nn.Weigh
 			want(cSc, n*heads*n)
 			want(cSc2, n*heads*n)
 			launch(kern(convKey{id: kidRelposscores, a: [8]int{n, heads, kd}}, func() (*ir.Kernel, error) {
-				return oldkernels.RelPosScores(n, heads, kd)
+				return mainkernels.RelPosScores(n, heads, kd)
 			}), n*heads*n, buf[o.In[0]], buf[o.In[1]], buf[o.In[3]], bind(o.Weight[0].Role), bind(o.Weight[1].Role), cTN, cSc)
 			launch(kern(convKey{id: kidRowsoftmax, a: [8]int{n * heads, n}}, func() (*ir.Kernel, error) {
-				return oldkernels.RowSoftmax(n*heads, n)
+				return mainkernels.RowSoftmax(n*heads, n)
 			}), n*heads, cSc, cSc2)
 			launch(kern(convKey{id: kidAttnaccrows, a: [8]int{n, heads, kd}}, func() (*ir.Kernel, error) {
-				return oldkernels.AttnAccRows(n, heads, kd)
+				return mainkernels.AttnAccRows(n, heads, kd)
 			}), n*w, cSc2, buf[o.In[2]], cTN, dst)
 		default:
 			return nil, fmt.Sprintf("op %d: %s on the convolution path", i, o.Kind)

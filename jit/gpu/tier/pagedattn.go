@@ -9,7 +9,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // Paged attention history on the device (docs/design/device-kv-paging.md).
@@ -26,7 +26,7 @@ import (
 // capacity machinery (sesscap.go) go: every session shares one scratch.
 //
 // Decode and a ragged batch read through the decode plan the device and the
-// history choose (oldkernels.ChooseDecodePlan: FlashDecodeKV or the staged
+// history choose (mainkernels.ChooseDecodePlan: FlashDecodeKV or the staged
 // kernels), one row per descriptor; a prefill chunk through the prefill
 // kernels (pagedprefill.go). A sliding window is only the descriptor's
 // keyStart, so a windowed layer reads a second descriptor set rather than a
@@ -43,7 +43,7 @@ type pagedScratch struct {
 	// rope writes only the dimensions it rotates); ropeK where it rotates.
 	copyK, ropeK, copyV backend.Kernel
 	// ropeQKV is the three decode writers as one launch
-	// (oldkernels.RoPEQKVPaged): q's rotation, k's into the pool, v's copy.
+	// (mainkernels.RoPEQKVPaged): q's rotation, k's into the pool, v's copy.
 	// nil where the block's rotary is not the plain one it fuses (partial,
 	// split, MSA's extra key head) or Config.NoFuse is set.
 	ropeQKV backend.Kernel
@@ -52,8 +52,8 @@ type pagedScratch struct {
 	// rotOff's per-row offsets first (the rotary kernels write no pages).
 	copyLat, copyPE backend.Kernel
 	kpeRot, rotOff  backend.Buf
-	shape           oldkernels.FlashShape // the plan's input: Splits, Chunk unset
-	vars            map[oldkernels.DecodePlan]*pagedVariant
+	shape           mainkernels.FlashShape // the plan's input: Splits, Chunk unset
+	vars            map[mainkernels.DecodePlan]*pagedVariant
 	// part holds a split variant's partials, sc and wt the staged path's
 	// score and weight planes, each sized for the widest variant built.
 	part, sc, wt            backend.Buf
@@ -113,11 +113,11 @@ type pagedScratch struct {
 	streamDesc [2][]backend.Buf
 }
 
-// pagedVariant is one decode plan's attention (oldkernels.ChooseDecodePlan):
+// pagedVariant is one decode plan's attention (mainkernels.ChooseDecodePlan):
 // FlashDecodeKV, or the staged scores, softmax and accumulate, and the wide
 // merge of their partials where there are any.
 type pagedVariant struct {
-	plan                        oldkernels.DecodePlan
+	plan                        mainkernels.DecodePlan
 	k, scores, soft, acc, merge backend.Kernel
 	groups, width               int // FlashDecodeKV's launch
 	scoreT, softG, accT, mergeT int // the staged launches, and the merge's threads
@@ -179,7 +179,7 @@ func (g *devTier) initPagedScratch(bs *blockScratch) error {
 	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
 	p := &bs.p
 	P, rows, kvDim := g.kvPage(), bs.rows, p.KVRow()
-	pg := &pagedScratch{vars: map[oldkernels.DecodePlan]*pagedVariant{}}
+	pg := &pagedScratch{vars: map[mainkernels.DecodePlan]*pagedVariant{}}
 	bs.pkv = pg
 	comp := func(dst *backend.Kernel, k *ir.Kernel, err error) error {
 		if err != nil {
@@ -200,7 +200,7 @@ func (g *devTier) initPagedScratch(bs *blockScratch) error {
 	}
 	// A QSA row is copied whole, its raw key included, before k's heads turn.
 	if partialRotary(p) || p.NoPEGlobal || p.NoPosEnc || p.NRot == 0 || p.RopeSplit || p.QSA() {
-		k, err := oldkernels.PagedCopyRowsT(kvDim, rows, P)
+		k, err := mainkernels.PagedCopyRowsT(kvDim, rows, P)
 		if err := comp(&pg.copyK, k, err); err != nil {
 			return err
 		}
@@ -214,16 +214,16 @@ func (g *devTier) initPagedScratch(bs *blockScratch) error {
 	}
 	// XD-RoPE's k reaches the pages through copyK, turned and normed first.
 	if p.NRot > 0 && !p.NoPosEnc && !p.RopeSplit {
-		k, err := oldkernels.PagedRoPERowsT(kHeads, p.HeadDim, p.NRot, p.RopeNeox, rows, P)
+		k, err := mainkernels.PagedRoPERowsT(kHeads, p.HeadDim, p.NRot, p.RopeNeox, rows, P)
 		if p.QSA() {
 			// k's heads turn in a row that carries the raw key after them.
-			k, err = oldkernels.PagedRoPERowsTIn(kHeads, p.HeadDim, kvDim, p.NRot, p.RopeNeox, rows, P)
+			k, err = mainkernels.PagedRoPERowsTIn(kHeads, p.HeadDim, kvDim, p.NRot, p.RopeNeox, rows, P)
 		}
 		if err := comp(&pg.ropeK, k, err); err != nil {
 			return err
 		}
 	}
-	k, err := oldkernels.PagedCopyRows(vw, rows, P, kvDim, 0, g.KVF16)
+	k, err := mainkernels.PagedCopyRows(vw, rows, P, kvDim, 0, g.KVF16)
 	if err := comp(&pg.copyV, k, err); err != nil {
 		return err
 	}
@@ -231,18 +231,18 @@ func (g *devTier) initPagedScratch(bs *blockScratch) error {
 		// Built beside the three it fuses, which stay: the per-op path is
 		// the reference and the A/B arm, and a layer the fused form does not
 		// fit (an unrotated one, a KV-sharing one) still takes them.
-		k, err := oldkernels.RoPEQKVPaged(p.NHead, p.NKVHead, p.HeadDim, p.NRot, p.RopeNeox, rows, P, g.KVF16)
+		k, err := mainkernels.RoPEQKVPaged(p.NHead, p.NKVHead, p.HeadDim, p.NRot, p.RopeNeox, rows, P, g.KVF16)
 		if err := comp(&pg.ropeQKV, k, err); err != nil {
 			return err
 		}
 	}
-	s := oldkernels.FlashShape{Heads: p.NHead, KVHeads: p.NKVHead, Dim: p.HeadDim, Rows: rows,
+	s := mainkernels.FlashShape{Heads: p.NHead, KVHeads: p.NKVHead, Dim: p.HeadDim, Rows: rows,
 		Scale: g.scoreScale(p), Softcap: p.AttnSoftcap, F16: g.KVF16, Sink: p.AttnSinks,
 		Page: P, KImm: g.dev.API() == "msl", Warps: g.FlashWarps}
 	if gqa := p.NHead / p.NKVHead; g.FlashGroup > 0 && gqa%g.FlashGroup == 0 {
 		s.Group = g.FlashGroup
 	}
-	// Vector V loads lower on PTX only (oldkernels.FlashShape.VecV).
+	// Vector V loads lower on PTX only (mainkernels.FlashShape.VecV).
 	s.VecV = g.dev.API() == "ptx"
 	pg.shape = s
 	al := func(dst *backend.Buf, n int) error {
@@ -253,11 +253,11 @@ func (g *devTier) initPagedScratch(bs *blockScratch) error {
 		*dst = b
 		return nil
 	}
-	if err := al(&pg.pRow, rows*oldkernels.PRowWords*4); err != nil {
+	if err := al(&pg.pRow, rows*mainkernels.PRowWords*4); err != nil {
 		return err
 	}
 	if p.SWAWindow > 0 {
-		if err := al(&pg.pRowW, rows*oldkernels.PRowWords*4); err != nil {
+		if err := al(&pg.pRowW, rows*mainkernels.PRowWords*4); err != nil {
 			return err
 		}
 	}
@@ -285,17 +285,17 @@ func (g *devTier) initPagedScratch(bs *blockScratch) error {
 // initPagedMLA builds bs's paged set for a latent block: the latent row's two
 // writers, the rotation's staging, and the attention's shape -- one KV head
 // whose row is the whole latent row and whose value is its first KVLoraRank
-// floats, which oldkernels.ChooseDecodePlan sends to the staged kernels.
+// floats, which mainkernels.ChooseDecodePlan sends to the staged kernels.
 // Callers hold g.mu.
 func (g *devTier) initPagedMLA(bs *blockScratch, comp func(*backend.Kernel, *ir.Kernel, error) error) error {
 	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
 	p, pg := &bs.p, bs.pkv
 	P, rows, row, lat, rot := g.kvPage(), bs.rows, p.KVRow(), p.KVLoraRank, p.NRot
-	k, err := oldkernels.PagedCopyRows(lat, rows, P, row, 0, false)
+	k, err := mainkernels.PagedCopyRows(lat, rows, P, row, 0, false)
 	if err := comp(&pg.copyLat, k, err); err != nil {
 		return err
 	}
-	k, err = oldkernels.PagedCopyRows(rot, rows, P, row, lat, false)
+	k, err = mainkernels.PagedCopyRows(rot, rows, P, row, lat, false)
 	if err := comp(&pg.copyPE, k, err); err != nil {
 		return err
 	}
@@ -306,7 +306,7 @@ func (g *devTier) initPagedMLA(bs *blockScratch, comp func(*backend.Kernel, *ir.
 	}
 	al(&pg.kpeRot, rows*rot*4)
 	al(&pg.rotOff, rows*4)
-	al(&pg.pRow, rows*oldkernels.PRowWords*4)
+	al(&pg.pRow, rows*mainkernels.PRowWords*4)
 	if err != nil {
 		return err
 	}
@@ -328,7 +328,7 @@ func (g *devTier) initPagedMLA(bs *blockScratch, comp func(*backend.Kernel, *ir.
 			return err
 		}
 	}
-	pg.shape = oldkernels.FlashShape{Heads: p.NHead, KVHeads: 1, Dim: w, MLA: lat, Rows: rows,
+	pg.shape = mainkernels.FlashShape{Heads: p.NHead, KVHeads: 1, Dim: w, MLA: lat, Rows: rows,
 		Scale: g.scoreScale(p), Page: P, MLAValueTail: g.kb.mlaFault == MLAFaultValueHeadMajor}
 	if _, err := g.pagedPlanFor(bs, scoreGrain); err != nil {
 		return err
@@ -342,12 +342,12 @@ func (g *devTier) initPagedMLA(bs *blockScratch, comp func(*backend.Kernel, *ir.
 // initPagedDS4 builds bs's paged set for DeepSeek V4: the rows' descriptors
 // and the attention's shape over the gathered keys (ds4.go) -- one head
 // hd wide that is also the value, with the heads' sinks, which
-// oldkernels.ChooseDecodePlan sends to the staged kernels. There is no prefill
+// mainkernels.ChooseDecodePlan sends to the staged kernels. There is no prefill
 // kernel over gathered keys, so a chunk takes the decode plan row by row in
 // one launch. Callers hold g.mu.
 func (g *devTier) initPagedDS4(bs *blockScratch) error {
 	p, pg := &bs.p, bs.pkv
-	b, err := g.dev.Alloc(bs.rows * oldkernels.PRowWords * 4)
+	b, err := g.dev.Alloc(bs.rows * mainkernels.PRowWords * 4)
 	if err != nil {
 		return err
 	}
@@ -355,11 +355,11 @@ func (g *devTier) initPagedDS4(bs *blockScratch) error {
 	// The windowed descriptors are staged for every windowed plan
 	// (pagedStage); the gathers read the window from the full ones.
 	if p.SWAWindow > 0 {
-		if pg.pRowW, err = g.dev.Alloc(bs.rows * oldkernels.PRowWords * 4); err != nil {
+		if pg.pRowW, err = g.dev.Alloc(bs.rows * mainkernels.PRowWords * 4); err != nil {
 			return err
 		}
 	}
-	pg.shape = oldkernels.FlashShape{Heads: p.NHead, KVHeads: 1, Dim: p.HeadDim, MLA: p.HeadDim, Rows: bs.rows,
+	pg.shape = mainkernels.FlashShape{Heads: p.NHead, KVHeads: 1, Dim: p.HeadDim, MLA: p.HeadDim, Rows: bs.rows,
 		Scale: g.scoreScale(p), Page: g.kvPage(), Sink: true}
 	_, err = g.pagedPlanFor(bs, scoreGrain)
 	return err
@@ -399,7 +399,7 @@ func freePaged(pg *pagedScratch, g *devShared) {
 }
 
 // pagedPlanFor makes sure bs has the variant for a call whose rows attend up
-// to keys keys, and returns it: oldkernels.ChooseDecodePlan's path, splits and
+// to keys keys, and returns it: mainkernels.ChooseDecodePlan's path, splits and
 // width for this device, or FlashDecodeKV at Config.FlashSplit when that is
 // forced (the order-only controls pin it), or the staged path under
 // Config.StagedDecode. The kernels are generated for the plan and kept, so a
@@ -409,14 +409,14 @@ func freePaged(pg *pagedScratch, g *devShared) {
 // Callers hold g.mu.
 func (g *devTier) pagedPlanFor(bs *blockScratch, keys int) (*pagedVariant, error) {
 	pg := bs.pkv
-	var plan oldkernels.DecodePlan
+	var plan mainkernels.DecodePlan
 	if g.DecodePlanOff != 0 {
 		// The plan with the pieces DecodePlanOff names put back as they were:
 		// 1 the split count, 2 the merge (below), 4 the vector V loads.
 		s := pg.shape
-		p := oldkernels.ChooseDecodePlan(g.dev.API(), s, keys, g.dev.Slots())
+		p := mainkernels.ChooseDecodePlan(g.dev.API(), s, keys, g.dev.Slots())
 		s = p.Shape
-		if p.Path != oldkernels.PathFlashKV {
+		if p.Path != mainkernels.PathFlashKV {
 			s = pg.shape
 		}
 		if g.DecodePlanOff&4 != 0 {
@@ -424,40 +424,40 @@ func (g *devTier) pagedPlanFor(bs *blockScratch, keys int) (*pagedVariant, error
 		}
 		if g.DecodePlanOff&1 != 0 {
 			s.Warps, s.Splits = pg.shape.Warps, 1
-			c := oldkernels.FlashKVChunk(s)
+			c := mainkernels.FlashKVChunk(s)
 			slots := g.dev.Slots()
 			if slots <= 0 {
 				slots = 16384
 			}
 			sp := 1 << int(math.Round(math.Log2(math.Sqrt(max(1, float64(keys)/8)))))
-			sp = max(1, min(sp, max(1, slots/1280/max(1, oldkernels.FlashKVGroups(s)))))
+			sp = max(1, min(sp, max(1, slots/1280/max(1, mainkernels.FlashKVGroups(s)))))
 			s.Splits = max(sp, (keys+c-1)/c)
 		}
-		plan = oldkernels.DecodePlan{Path: oldkernels.PathFlashKV, Shape: s}
+		plan = mainkernels.DecodePlan{Path: mainkernels.PathFlashKV, Shape: s}
 	} else if g.StagedDecode {
-		plan = oldkernels.DecodePlan{Path: oldkernels.PathStaged, Shape: oldkernels.PagedStagedPlan(pg.shape, keys, g.dev.Slots())}
+		plan = mainkernels.DecodePlan{Path: mainkernels.PathStaged, Shape: mainkernels.PagedStagedPlan(pg.shape, keys, g.dev.Slots())}
 	} else if f := g.FlashSplit; f > 0 {
 		s := pg.shape
 		s.Splits = 1
-		c := oldkernels.FlashKVChunk(s)
+		c := mainkernels.FlashKVChunk(s)
 		s.Splits = max(f, (keys+c-1)/c)
-		plan = oldkernels.DecodePlan{Path: oldkernels.PathFlashKV, Shape: s}
+		plan = mainkernels.DecodePlan{Path: mainkernels.PathFlashKV, Shape: s}
 	} else {
-		plan = oldkernels.ChooseDecodePlan(g.dev.API(), pg.shape, keys, g.dev.Slots())
+		plan = mainkernels.ChooseDecodePlan(g.dev.API(), pg.shape, keys, g.dev.Slots())
 	}
 	// FlashDecodeKV reduces across a warp and needs the device to promise 32
 	// lanes; the staged kernels have one-lane forms. A device that cannot
 	// promise the width (Vulkan unpinned on an 8..32 part, a software
 	// rasteriser) runs the staged path whatever the plan chose, rather than
 	// declining the block (RULE 8).
-	if plan.Path == oldkernels.PathFlashKV && g.pickLanes() != ir.SubgroupLanes {
-		plan = oldkernels.DecodePlan{Path: oldkernels.PathStaged, Shape: oldkernels.PagedStagedPlan(pg.shape, keys, g.dev.Slots())}
+	if plan.Path == mainkernels.PathFlashKV && g.pickLanes() != ir.SubgroupLanes {
+		plan = mainkernels.DecodePlan{Path: mainkernels.PathStaged, Shape: mainkernels.PagedStagedPlan(pg.shape, keys, g.dev.Slots())}
 	}
 	// A staged plan's planes grow with its keys: past the pass width it is
 	// built for the pass, and a deeper call goes in passes (pagedStreamPrep).
-	if pk := g.stagedPassKeys(bs); plan.Path == oldkernels.PathStaged && pk > 0 && keys > pk {
+	if pk := g.stagedPassKeys(bs); plan.Path == mainkernels.PathStaged && pk > 0 && keys > pk {
 		keys = pk
-		plan.Shape = oldkernels.PagedStagedPlan(pg.shape, keys, g.dev.Slots())
+		plan.Shape = mainkernels.PagedStagedPlan(pg.shape, keys, g.dev.Slots())
 	}
 	v, err := g.pagedBuild(bs, plan)
 	// The split count only divides the work, and the partials are rows x
@@ -466,8 +466,8 @@ func (g *devTier) pagedPlanFor(bs *blockScratch, keys int) (*pagedVariant, error
 	// went a row at a time. A staged plan that does not fit halves its splits
 	// rather than refusing; it retries on any build error (no backend reports
 	// out-of-memory but CUDA), at most log2(splits) extra builds.
-	for err != nil && plan.Path == oldkernels.PathStaged && plan.Shape.Splits > 1 {
-		plan.Shape = oldkernels.PagedStagedAt(plan.Shape, keys, plan.Shape.Splits/2)
+	for err != nil && plan.Path == mainkernels.PathStaged && plan.Shape.Splits > 1 {
+		plan.Shape = mainkernels.PagedStagedAt(plan.Shape, keys, plan.Shape.Splits/2)
 		v, err = g.pagedBuild(bs, plan)
 	}
 	return v, err
@@ -476,7 +476,7 @@ func (g *devTier) pagedPlanFor(bs *blockScratch, keys int) (*pagedVariant, error
 // pagedBuild is bs's variant for plan: a lookup once built, else the kernels
 // compiled and the partials and planes grown to it. Callers hold g.mu, outside
 // any submission.
-func (g *devTier) pagedBuild(bs *blockScratch, plan oldkernels.DecodePlan) (*pagedVariant, error) {
+func (g *devTier) pagedBuild(bs *blockScratch, plan mainkernels.DecodePlan) (*pagedVariant, error) {
 	pg := bs.pkv
 	if v, ok := pg.vars[plan]; ok {
 		return v, nil
@@ -499,7 +499,7 @@ func (g *devTier) pagedBuild(bs *blockScratch, plan oldkernels.DecodePlan) (*pag
 	}
 	v.mergeT = s.Rows * s.Heads * vd
 	merged := s.Splits > 1
-	if plan.Path == oldkernels.PathStaged {
+	if plan.Path == mainkernels.PathStaged {
 		merged = true
 		lanes := g.pickLanes()
 		if lanes != ir.SubgroupLanes {
@@ -512,24 +512,24 @@ func (g *devTier) pagedBuild(bs *blockScratch, plan oldkernels.DecodePlan) (*pag
 		if s.MLA > 0 && lanes == ir.SubgroupLanes {
 			scoreLanes = ir.SubgroupLanes
 		}
-		k, err := oldkernels.PagedStagedScores(s, scoreLanes)
+		k, err := mainkernels.PagedStagedScores(s, scoreLanes)
 		if err = comp(&v.scores, k, err); err == nil {
-			k, err = oldkernels.PagedStagedSoftmax(s, lanes)
+			k, err = mainkernels.PagedStagedSoftmax(s, lanes)
 			err = comp(&v.soft, k, err)
 		}
 		if err == nil {
-			k, err = oldkernels.PagedStagedAcc(s)
+			k, err = mainkernels.PagedStagedAcc(s)
 			err = comp(&v.acc, k, err)
 		}
 		if err != nil {
 			return fail(err)
 		}
 		items := s.Rows * s.Heads * s.Splits
-		v.scoreT, v.accT, v.softG = oldkernels.PagedStagedScoreItems(s)*scoreLanes, oldkernels.PagedStagedAccThreads(s), (items+63)/64
+		v.scoreT, v.accT, v.softG = mainkernels.PagedStagedScoreItems(s)*scoreLanes, mainkernels.PagedStagedAccThreads(s), (items+63)/64
 		if lanes == ir.SubgroupLanes {
 			v.softG = (items + 1) / 2
 		}
-		n, have := oldkernels.PagedStagedPlane(s), pg.planeFloats
+		n, have := mainkernels.PagedStagedPlane(s), pg.planeFloats
 		if err := g.prefillBuf(&pg.sc, &have, n); err != nil {
 			return fail(err)
 		}
@@ -539,31 +539,31 @@ func (g *devTier) pagedBuild(bs *blockScratch, plan oldkernels.DecodePlan) (*pag
 		}
 		pg.planeFloats = max(pg.planeFloats, n)
 	} else {
-		k, err := oldkernels.FlashDecodeKV(s)
+		k, err := mainkernels.FlashDecodeKV(s)
 		if err := comp(&v.k, k, err); err != nil {
 			return fail(err)
 		}
-		v.groups, v.width = oldkernels.FlashKVGroups(s), oldkernels.FlashKVWidth(s)
+		v.groups, v.width = mainkernels.FlashKVGroups(s), mainkernels.FlashKVWidth(s)
 	}
 	// The merge and its partials run at the value's width: a head, or MLA's
 	// latent (the row's prefix), not the whole row the scores read.
 	ms := mergeShape(s)
 	if merged && g.DecodePlanOff&2 != 0 {
 		// The group-per-item merge: a 32-lane group per (row, head).
-		k, err := oldkernels.FlashAttentionMerge(ms)
+		k, err := mainkernels.FlashAttentionMerge(ms)
 		if err := comp(&v.merge, k, err); err != nil {
 			return fail(err)
 		}
 		v.mergeItems = s.Rows * s.Heads
-		if err := g.prefillBuf(&pg.part, &pg.partFloats, oldkernels.FlashPartialFloats(ms)); err != nil {
+		if err := g.prefillBuf(&pg.part, &pg.partFloats, mainkernels.FlashPartialFloats(ms)); err != nil {
 			return fail(err)
 		}
 	} else if merged {
-		k, err := oldkernels.FlashAttentionMergeWide(ms)
+		k, err := mainkernels.FlashAttentionMergeWide(ms)
 		if err := comp(&v.merge, k, err); err != nil {
 			return fail(err)
 		}
-		if err := g.prefillBuf(&pg.part, &pg.partFloats, oldkernels.FlashPartialFloats(ms)); err != nil {
+		if err := g.prefillBuf(&pg.part, &pg.partFloats, mainkernels.FlashPartialFloats(ms)); err != nil {
 			return fail(err)
 		}
 	}
@@ -574,7 +574,7 @@ func (g *devTier) pagedBuild(bs *blockScratch, plan oldkernels.DecodePlan) (*pag
 // mergeShape is s at its value's width, which is what the partials hold and
 // the merge writes: MLA's latent, the row's first MLA floats, where the
 // scores read the whole row.
-func mergeShape(s oldkernels.FlashShape) oldkernels.FlashShape {
+func mergeShape(s mainkernels.FlashShape) mainkernels.FlashShape {
 	if s.MLA > 0 {
 		s.Dim, s.MLA = s.MLA, 0
 	}

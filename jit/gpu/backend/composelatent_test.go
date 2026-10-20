@@ -8,7 +8,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestComposedLatentWriteMatchesTheMenu holds a latent row's write into its
@@ -98,17 +98,17 @@ func TestComposedLatentWriteMatchesTheMenu(t *testing.T) {
 				// copied into the pool.
 				dst, stage := gp.up(make([]byte, pool)), gp.up(make([]byte, rows*rot*4))
 				offs := u32(0, rot, 2*rot)
-				rope, err := oldkernels.RoPERows(1, rot, rot, neox, rows)
+				rope, err := mainkernels.RoPERows(1, rot, rot, neox, rows)
 				if err != nil {
 					t.Fatal(err)
 				}
 				launch(rope, (rows*rot/2+127)/128, gp.up(f32bytes(kpe)), gp.up(f32bytes(cs)), gp.up(offs), stage)
-				cl, err := oldkernels.PagedCopyRows(lat, rows, page, width, 0, false)
+				cl, err := mainkernels.PagedCopyRows(lat, rows, page, width, 0, false)
 				if err != nil {
 					t.Fatal(err)
 				}
 				launch(cl, (rows*lat+127)/128, gp.up(f32bytes(latv)), dst, gp.up(u32(0)), gp.up(tab), gp.up(desc))
-				cp, err := oldkernels.PagedCopyRows(rot, rows, page, width, lat, false)
+				cp, err := mainkernels.PagedCopyRows(rot, rows, page, width, lat, false)
 				if err != nil {
 					t.Fatal(err)
 				}

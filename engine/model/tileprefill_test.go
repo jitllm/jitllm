@@ -1,4 +1,4 @@
-// The collective-tile prompt path (oldkernels.GemmTile, oldkernels.FlashPrefillTile)
+// The collective-tile prompt path (mainkernels.GemmTile, mainkernels.FlashPrefillTile)
 // runs wherever a device lowers the ir tile ops (tier.tilesOK): Metal's
 // simdgroup_matrix, and mma.sync on sm_75 and later.
 
@@ -12,12 +12,12 @@ import (
 
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestTilePrefillMatchesTheHost prefills real models with every block placed,
-// through the collective tiles -- oldkernels.GemmTile for the matvecs and
-// oldkernels.FlashPrefillTile for attention -- and holds the prompt's logits AND
+// through the collective tiles -- mainkernels.GemmTile for the matvecs and
+// mainkernels.FlashPrefillTile for attention -- and holds the prompt's logits AND
 // the decode that reads the chunk's KV to the host.
 //
 // The models cover the formats and features the tile must carry: Q4_K/Q6_K,
@@ -136,7 +136,7 @@ func TestTilePrefillMatchesTheHost(t *testing.T) {
 			// And only where the device multiplies float32 tiles: sm_75 has
 			// the f16 tiles GemmTile needs and not these (tf32 is sm_80).
 			sm75 := strings.Contains(g.Name(), "(sm_75)")
-			if ft, ok := oldkernels.FlashTileFor(int(m.Cfg.HeadDim)); ok && ft.SG >= 4 && !sm75 && st.FlashPrefills == 0 {
+			if ft, ok := mainkernels.FlashTileFor(int(m.Cfg.HeadDim)); ok && ft.SG >= 4 && !sm75 && st.FlashPrefills == 0 {
 				t.Fatalf("no one-kernel prompt attention ran (%d tile matvecs): FlashPrefillTile was not selected", st.TileMV)
 			}
 			// 200 tokens are a 224-row chunk on Metal, which no 64-token block

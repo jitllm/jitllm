@@ -6,7 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/jit/gpu/spirv"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestShuffleEncoding decodes the emitted module and states the shuffle's
@@ -16,7 +16,7 @@ import (
 // operand order. A shuffle carries an execution scope and a mask, both <id>s,
 // so swapping them assembles and shuffles by the wrong distance.
 func TestShuffleEncoding(t *testing.T) {
-	k, err := oldkernels.SoftmaxRows(8, 64, 32, 1, 1)
+	k, err := mainkernels.SoftmaxRows(8, 64, 32, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestShuffleEncoding(t *testing.T) {
 
 	// And the fallback kernel must not ask the device for a capability it does
 	// not use: that is the whole point of having a fallback.
-	sc, err := oldkernels.SoftmaxRows(8, 64, 1, 1, 1)
+	sc, err := mainkernels.SoftmaxRows(8, 64, 1, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestShuffleEncoding(t *testing.T) {
 // with a runtime count reads a descriptor at its entry, ahead of every loop,
 // and keeps it alive through that loop's count; one whose first access is not
 // inside such a loop is emitted without it. See anchorFor: without it llvmpipe
-// faults on oldkernels.MatVecSegments, which spirv-val and the validation layer
+// faults on mainkernels.MatVecSegments, which spirv-val and the validation layer
 // both pass.
 func TestDescriptorAnchor(t *testing.T) {
 	const (
@@ -116,12 +116,12 @@ func TestDescriptorAnchor(t *testing.T) {
 		opULessThan   = 176
 		opLoopMerge   = 246
 	)
-	sh := oldkernels.MatVecShape{T: kernels.Q4_K, K: 512, Rows: 64}
-	seg, err := oldkernels.MatVecSegments([]oldkernels.MatVecShape{sh, sh}, 1, false)
+	sh := mainkernels.MatVecShape{T: kernels.Q4_K, K: 512, Rows: 64}
+	seg, err := mainkernels.MatVecSegments([]mainkernels.MatVecShape{sh, sh}, 1, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plain, err := oldkernels.MatVec(sh)
+	plain, err := mainkernels.MatVec(sh)
 	if err != nil {
 		t.Fatal(err)
 	}

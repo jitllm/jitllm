@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestMatVecMMAMatchesDot4 holds the tensor-core prefill GEMM to the dp4a one,
@@ -75,8 +75,8 @@ func mmaMVCase(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, ntok, 
 
 func mmaMVCaseWin(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, ntok, mt, nt, win int) {
 	t.Helper()
-	shape := oldkernels.MatVecShape{T: q, K: k, Rows: nrows, NTok: ntok, MT: mt, NT: nt, ActWin: win}
-	mk, err := oldkernels.MatVecMMA(shape)
+	shape := mainkernels.MatVecShape{T: q, K: k, Rows: nrows, NTok: ntok, MT: mt, NT: nt, ActWin: win}
+	mk, err := mainkernels.MatVecMMA(shape)
 	if err != nil {
 		t.Skipf("shape rejected: %v", err)
 	}
@@ -91,7 +91,7 @@ func mmaMVCaseWin(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 		mkern = nil
 	}
 	// The dp4a arm at Tok=1, the plainest form of the batched kernel.
-	dk, err := oldkernels.MatVec(oldkernels.MatVecShape{T: q, K: k, Rows: nrows, NTok: ntok, Tok: 1})
+	dk, err := mainkernels.MatVec(mainkernels.MatVecShape{T: q, K: k, Rows: nrows, NTok: ntok, Tok: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func mmaMVCaseWin(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 		if ntok%tk != 0 {
 			continue
 		}
-		ck, err := oldkernels.MatVec(oldkernels.MatVecShape{T: q, K: k, Rows: nrows, NTok: ntok, Tok: tk})
+		ck, err := mainkernels.MatVec(mainkernels.MatVecShape{T: q, K: k, Rows: nrows, NTok: ntok, Tok: tk})
 		if err != nil {
 			continue
 		}
@@ -375,7 +375,7 @@ func scoresMMACase(t *testing.T, d backend.Device, nHeads, headDim, nKV, rows, c
 	sstride, kStride := maxSeq+8, maxSeq+1
 	scale := float32(1) / float32(math.Sqrt(float64(headDim)))
 
-	mk, err := oldkernels.AttnScoresMMA(nHeads, headDim, kvDim, gqa, sstride, scale, rows, kStride, 1)
+	mk, err := mainkernels.AttnScoresMMA(nHeads, headDim, kvDim, gqa, sstride, scale, rows, kStride, 1)
 	if err != nil {
 		t.Skipf("shape rejected: %v", err)
 	}
@@ -384,7 +384,7 @@ func scoresMMACase(t *testing.T, d backend.Device, nHeads, headDim, nKV, rows, c
 		t.Skipf("declined: %v", err)
 	}
 	defer mkern.Close()
-	fk, err := oldkernels.AttnScoresTiled(nHeads, headDim, kvDim, gqa, sstride, scale, rows, 4, 2, kStride)
+	fk, err := mainkernels.AttnScoresTiled(nHeads, headDim, kvDim, gqa, sstride, scale, rows, 4, 2, kStride)
 	if err != nil {
 		t.Fatal(err)
 	}

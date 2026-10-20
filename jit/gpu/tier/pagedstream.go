@@ -6,7 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // Attention over a history whose oldest pages are at home (kvevict.go).
@@ -15,7 +15,7 @@ import (
 // uploads them into w of the layer's free ids and points the sequence's table
 // at them; every pass then runs the staged decode kernels over its keys alone
 // (its descriptors clipped to them) into the scratch's partials, which fold
-// into a running partial (oldkernels.FlashAttentionMergeRun); the last fold is
+// into a running partial (mainkernels.FlashAttentionMergeRun); the last fold is
 // finished, sinks and all, into the layer's output. It is the chunk-and-merge
 // contract prefill's passes already keep. A prompt chunk streams the same way:
 // every row has its own descriptor, so a pass clipped to its keys serves each
@@ -112,7 +112,7 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow,
 		}
 	}
 	pass := g.stagedPassKeys(bs)
-	deep := pass > 0 && far >= pass && !prefill && pg.cur != nil && pg.cur.plan.Path == oldkernels.PathStaged
+	deep := pass > 0 && far >= pass && !prefill && pg.cur != nil && pg.cur.plan.Path == mainkernels.PathStaged
 	if !over && !deep {
 		return nil
 	}
@@ -168,9 +168,9 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow,
 			lo, hi := uint32(j*keys), uint32((j+1)*keys)
 			d := all[j*len(src) : (j+1)*len(src)]
 			copy(d, src)
-			for o := 0; o < len(d); o += oldkernels.PRowWords {
-				d[o+oldkernels.PRowStart] = min(max(d[o+oldkernels.PRowStart], lo), hi)
-				d[o+oldkernels.PRowEnd] = min(max(d[o+oldkernels.PRowEnd], lo), hi)
+			for o := 0; o < len(d); o += mainkernels.PRowWords {
+				d[o+mainkernels.PRowStart] = min(max(d[o+mainkernels.PRowStart], lo), hi)
+				d[o+mainkernels.PRowEnd] = min(max(d[o+mainkernels.PRowEnd], lo), hi)
 			}
 		}
 		st.desc[i], st.words[i] = pg.streamDesc[i][:st.passes], all
@@ -186,8 +186,8 @@ func (g *devTier) streamSetFor(bs *blockScratch, w int) (*streamSet, error) {
 	if ss := pg.streams[w]; ss != nil {
 		return ss, nil
 	}
-	shape := oldkernels.PagedStagedPlan(pg.shape, w*g.kvPages().p, g.dev.Slots())
-	v, err := g.pagedBuild(bs, oldkernels.DecodePlan{Path: oldkernels.PathStaged, Shape: shape})
+	shape := mainkernels.PagedStagedPlan(pg.shape, w*g.kvPages().p, g.dev.Slots())
+	v, err := g.pagedBuild(bs, mainkernels.DecodePlan{Path: mainkernels.PathStaged, Shape: shape})
 	if err != nil {
 		return nil, err
 	}
@@ -207,15 +207,15 @@ func (g *devTier) streamSetFor(bs *blockScratch, w int) (*streamSet, error) {
 		g.LastErr = err.Error()
 		return nil
 	}
-	ss.first = comp(oldkernels.FlashAttentionMergeRun(ms, true))
-	ss.fold = comp(oldkernels.FlashAttentionMergeRun(ms, false))
-	ss.finish = comp(oldkernels.FlashAttentionMergeWide(one))
+	ss.first = comp(mainkernels.FlashAttentionMergeRun(ms, true))
+	ss.fold = comp(mainkernels.FlashAttentionMergeRun(ms, false))
+	ss.finish = comp(mainkernels.FlashAttentionMergeWide(one))
 	if ss.first == nil || ss.fold == nil || ss.finish == nil {
 		ss.close(g.devShared)
 		return nil, fmt.Errorf("streamed attention's folds: %s", g.LastErr)
 	}
 	for i := range ss.run {
-		b, err := g.dev.Alloc(oldkernels.FlashPartialFloats(one) * 4)
+		b, err := g.dev.Alloc(mainkernels.FlashPartialFloats(one) * 4)
 		if err != nil {
 			ss.close(g.devShared)
 			return nil, err

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestRaggedAttentionReadsEachRowsOwnSequence: AttnScoresRagged and
@@ -57,11 +57,11 @@ func TestRaggedAttentionReadsEachRowsOwnSequence(t *testing.T) {
 					}
 				}
 			}
-			sk, err := oldkernels.AttnScoresRagged(nh, hd, kvDim, gqa, maxSeq, scale, rows, 2, kst, 0)
+			sk, err := mainkernels.AttnScoresRagged(nh, hd, kvDim, gqa, maxSeq, scale, rows, 2, kst, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
-			ak, err := oldkernels.AttnAccRagged(nh, hd, kvDim, gqa, maxSeq, rows)
+			ak, err := mainkernels.AttnAccRagged(nh, hd, kvDim, gqa, maxSeq, rows)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -9,7 +9,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestFusedOperandsAreTheirTwoKernels holds each of a prompt chunk's fused
@@ -69,15 +69,15 @@ func TestFusedOperandsAreTheirTwoKernels(t *testing.T) {
 					name := fmt.Sprintf("%s/quantact/%v/n%d/w%d", d.API(), kind, n, win)
 					g := newGPU(t, d)
 					gb, ub := g.up(f32bytes(randActs(n, rng))), g.up(f32bytes(randActs(n, rng)))
-					fk := compile(kOf(oldkernels.QuantizeAct(n, win, kind)))
-					ak := compile(kOf(oldkernels.ActMul(n, kind)))
-					qk := compile(kOf(oldkernels.Quantize(n, win)))
+					fk := compile(kOf(mainkernels.QuantizeAct(n, win, kind)))
+					ak := compile(kOf(mainkernels.ActMul(n, kind)))
+					qk := compile(kOf(mainkernels.Quantize(n, win)))
 					nb := n / 32
 					o1, a1, x1 := poison(g, n), poison(g, n/4), poison(g, 3*nb)
 					o2, a2, x2 := poison(g, n), poison(g, n/4), poison(g, 3*nb)
-					launchFused(t, fk, oldkernels.QuantizeThreads(nb), gb, ub, o1, a1, x1)
+					launchFused(t, fk, mainkernels.QuantizeThreads(nb), gb, ub, o1, a1, x1)
 					launchFused(t, ak, n, gb, ub, o2)
-					launchFused(t, qk, oldkernels.QuantizeThreads(nb), o2, a2, x2)
+					launchFused(t, qk, mainkernels.QuantizeThreads(nb), o2, a2, x2)
 					same(name+"/float", read(o1, 4*n), read(o2, 4*n))
 					same(name+"/int8", read(a1, n), read(a2, n))
 					same(name+"/scales", read(x1, 12*nb), read(x2, 12*nb))
@@ -91,7 +91,7 @@ func TestFusedOperandsAreTheirTwoKernels(t *testing.T) {
 		}
 		// The binary16 operand is the binary16 GEMMs' (PTX's and Metal's); a
 		// backend that does not lower ActF16T itself has no operand to fuse.
-		if probe, err := oldkernels.ActF16T(kernels.Q4_K, 1, 256); err == nil {
+		if probe, err := mainkernels.ActF16T(kernels.Q4_K, 1, 256); err == nil {
 			c, err := d.Compile(probe)
 			if err != nil {
 				t.Logf("%s: no binary16 operand here: %v", d.API(), err)
@@ -108,11 +108,11 @@ func TestFusedOperandsAreTheirTwoKernels(t *testing.T) {
 				gb, ub := g.up(f32bytes(randActs(n, rng))), g.up(f32bytes(randActs(n, rng)))
 				sub, _, _, _ := kernels.Layout(q)
 				threads := ntok * k / sub
-				fk := compile(kOf(oldkernels.ActMulF16T(q, ntok, k, kernels.ActSiLU)))
-				ak := compile(kOf(oldkernels.ActMul(n, kernels.ActSiLU)))
-				ck := compile(kOf(oldkernels.ActF16T(q, ntok, k)))
+				fk := compile(kOf(mainkernels.ActMulF16T(q, ntok, k, kernels.ActSiLU)))
+				ak := compile(kOf(mainkernels.ActMul(n, kernels.ActSiLU)))
+				ck := compile(kOf(mainkernels.ActF16T(q, ntok, k)))
 				b1, f2, b2 := poison(g, n/2), poison(g, n), poison(g, n/2)
-				launchFused(t, fk, oldkernels.ActMulF16TThreads(ntok, k), gb, ub, b1)
+				launchFused(t, fk, mainkernels.ActMulF16TThreads(ntok, k), gb, ub, b1)
 				launchFused(t, ak, n, gb, ub, f2)
 				launchFused(t, ck, threads, f2, b2)
 				same(name, read(b1, 2*n), read(b2, 2*n))
@@ -133,14 +133,14 @@ func TestFusedOperandsAreTheirTwoKernels(t *testing.T) {
 							nr := rows * k
 							name := fmt.Sprintf("%s/rmsf16t/%v/k%d/r%d/add%v/warp%v", d.API(), q, k, rows, add, warp)
 							g := newGPU(t, d)
-							mkn := oldkernels.RMSNormRows
+							mkn := mainkernels.RMSNormRows
 							if warp {
-								mkn = oldkernels.RMSNormRowsWarp
+								mkn = mainkernels.RMSNormRowsWarp
 							}
 							xb, yb, wb := g.up(f32bytes(randActs(nr, rng))), g.up(f32bytes(randActs(nr, rng))), g.up(f32bytes(randActs(k, rng)))
-							nk := compile(kOf(oldkernels.RMSNormF16TRows(k, rows, 1e-5, false, add, q, warp)))
+							nk := compile(kOf(mainkernels.RMSNormF16TRows(k, rows, 1e-5, false, add, q, warp)))
 							pk := compile(kOf(mkn(k, rows, 1e-5, false, add)))
-							ck := compile(kOf(oldkernels.ActF16T(q, rows, k)))
+							ck := compile(kOf(mainkernels.ActF16T(q, rows, k)))
 							s1, o1, b1 := poison(g, nr), poison(g, nr), poison(g, nr/2)
 							s2, o2, b2 := poison(g, nr), poison(g, nr), poison(g, nr/2)
 							args1 := []backend.Buf{xb, wb, o1, b1}
@@ -149,10 +149,10 @@ func TestFusedOperandsAreTheirTwoKernels(t *testing.T) {
 								args1 = []backend.Buf{xb, yb, wb, s1, o1, b1}
 								args2 = []backend.Buf{xb, yb, wb, s2, o2}
 							}
-							if err := nk.Launch(rows, oldkernels.RMSNormGroup, args1...); err != nil {
+							if err := nk.Launch(rows, mainkernels.RMSNormGroup, args1...); err != nil {
 								t.Fatal(err)
 							}
-							if err := pk.Launch(rows, oldkernels.RMSNormGroup, args2...); err != nil {
+							if err := pk.Launch(rows, mainkernels.RMSNormGroup, args2...); err != nil {
 								t.Fatal(err)
 							}
 							launchFused(t, ck, rows*k/sub, o2, b2)

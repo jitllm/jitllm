@@ -7,7 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestQ4EKernelsMatchTheLoops runs Qwen3.8-Flash-Next's device kernels
@@ -94,13 +94,13 @@ func TestQ4EKernelsMatchTheLoops(t *testing.T) {
 		tol   float64
 	}
 	jobs := []job{
-		{"group norm, stream-major", func() (*ir.Kernel, error) { return oldkernels.Q4EGroupNorm(d, h, rows, eps, true) },
-			rows * h, oldkernels.RMSNormGroup, [][]float32{x, w}, wantXN, 1e-5},
-		{"gate mix", func() (*ir.Kernel, error) { return oldkernels.Q4EGateMix(d, h, rows, false) },
+		{"group norm, stream-major", func() (*ir.Kernel, error) { return mainkernels.Q4EGroupNorm(d, h, rows, eps, true) },
+			rows * h, mainkernels.RMSNormGroup, [][]float32{x, w}, wantXN, 1e-5},
+		{"gate mix", func() (*ir.Kernel, error) { return mainkernels.Q4EGateMix(d, h, rows, false) },
 			(rows*d + 127) / 128, 128, [][]float32{xnF, gate}, wantMix, 1e-5},
-		{"inject", func() (*ir.Kernel, error) { return oldkernels.Q4EInject(rows*h, h, oldkernels.Q4EPlaceGated) },
+		{"inject", func() (*ir.Kernel, error) { return mainkernels.Q4EInject(rows*h, h, mainkernels.Q4EPlaceGated) },
 			1, 128, [][]float32{inj}, wantW, 1e-6},
-		{"place", func() (*ir.Kernel, error) { return oldkernels.Q4EPlace(d, h, rows) },
+		{"place", func() (*ir.Kernel, error) { return mainkernels.Q4EPlace(d, h, rows) },
 			(h*rows*d + 127) / 128, 128, [][]float32{x, y, wF}, wantPlace, 1e-5},
 	}
 	for _, dv := range devs {

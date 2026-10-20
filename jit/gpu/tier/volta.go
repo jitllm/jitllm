@@ -4,7 +4,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // ones32 is n float32 ones.
@@ -55,13 +55,13 @@ func (g *devTier) volta70Attn(bs *blockScratch, kvDim, gqa int, scale float32) b
 		}
 		return c
 	}
-	sk := comp(oldkernels.AttnScoresMMA70(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, scale, bs.rows, kst,
+	sk := comp(mainkernels.AttnScoresMMA70(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, scale, bs.rows, kst,
 		volta70AttnMT, volta70AttnNT, 0))
-	ak := comp(oldkernels.AttnAccMMA70(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, bs.rows,
+	ak := comp(mainkernels.AttnAccMMA70(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, bs.rows,
 		volta70AccMT, volta70AttnNT))
 	var sw backend.Kernel
 	if p.SWAWindow > 0 {
-		sw = comp(oldkernels.AttnScoresMMA70(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, scale, bs.rows, kst,
+		sw = comp(mainkernels.AttnScoresMMA70(p.NHead, p.HeadDim, kvDim, gqa, bs.sstride, scale, bs.rows, kst,
 			volta70AttnMT, volta70AttnNT, windowArg(p)))
 	}
 	if sk == nil || ak == nil || (p.SWAWindow > 0 && sw == nil) {
@@ -78,14 +78,14 @@ func (g *devTier) volta70Attn(bs *blockScratch, kvDim, gqa int, scale float32) b
 	// The one-kernel form where it takes the shape (no sinks, no chunked
 	// window); the pair above stays built as everyone else's path and
 	// NoFlashPrefill's arm.
-	if !g.NoFlashPrefill && !p.AttnSinks && !p.SWAChunked && bs.rows%oldkernels.FlashPrefill70Rows == 0 {
-		fs := oldkernels.FlashPrefill70Shape{Heads: p.NHead, KVHeads: p.NHead / gqa, Dim: p.HeadDim, Rows: bs.rows,
+	if !g.NoFlashPrefill && !p.AttnSinks && !p.SWAChunked && bs.rows%mainkernels.FlashPrefill70Rows == 0 {
+		fs := mainkernels.FlashPrefill70Shape{Heads: p.NHead, KVHeads: p.NHead / gqa, Dim: p.HeadDim, Rows: bs.rows,
 			KStride: kst, Scale: scale, Softcap: p.AttnSoftcap}
-		fk := comp(oldkernels.FlashPrefill70(fs))
+		fk := comp(mainkernels.FlashPrefill70(fs))
 		var fw backend.Kernel
 		if fk != nil && p.SWAWindow > 0 {
 			fs.Window = p.SWAWindow
-			if fw = comp(oldkernels.FlashPrefill70(fs)); fw == nil {
+			if fw = comp(mainkernels.FlashPrefill70(fs)); fw == nil {
 				g.closeKern(fk)
 				fk = nil
 			}
@@ -128,7 +128,7 @@ func (g *devTier) voltaBlock(l *layer, ntok, tok int) bool {
 	return n > 0
 }
 
-// flashTileAttn builds oldkernels.FlashPrefillTile for a batched block where it
+// flashTileAttn builds mainkernels.FlashPrefillTile for a batched block where it
 // takes the shape: a device that lowers the collective tiles (tilesOK), the
 // transposed float32 K cache and float32 V, no sinks and no chunked window, a
 // chunk that is a whole number of the kernel's query blocks. It leaves fpT nil
@@ -145,7 +145,7 @@ func (g *devTier) flashTileAttn(bs *blockScratch, kvDim, gqa int, scale float32)
 	// (wide heads) lost to the three kernels. Staging K/V once per shared kv
 	// head would fix the wide heads, but the float32 output in workgroup memory
 	// leaves no room.
-	t, ok := oldkernels.FlashTileFor(p.HeadDim)
+	t, ok := mainkernels.FlashTileFor(p.HeadDim)
 	if !ok || t.SG < 4 || bs.rows%t.Rows() != 0 {
 		return
 	}
@@ -159,13 +159,13 @@ func (g *devTier) flashTileAttn(bs *blockScratch, kvDim, gqa int, scale float32)
 		}
 		return c
 	}
-	fs := oldkernels.FlashPrefill70Shape{Heads: p.NHead, KVHeads: p.NHead / gqa, Dim: p.HeadDim, Rows: bs.rows,
+	fs := mainkernels.FlashPrefill70Shape{Heads: p.NHead, KVHeads: p.NHead / gqa, Dim: p.HeadDim, Rows: bs.rows,
 		KStride: kst, Scale: scale, Softcap: p.AttnSoftcap}
-	fk := comp(oldkernels.FlashPrefillTile(fs, t))
+	fk := comp(mainkernels.FlashPrefillTile(fs, t))
 	var fw backend.Kernel
 	if fk != nil && p.SWAWindow > 0 {
 		fs.Window = p.SWAWindow
-		if fw = comp(oldkernels.FlashPrefillTile(fs, t)); fw == nil {
+		if fw = comp(mainkernels.FlashPrefillTile(fs, t)); fw == nil {
 			g.closeKern(fk)
 			fk = nil
 		}
@@ -179,7 +179,7 @@ func (g *devTier) spanKernel(hb *blockScratch) error {
 	if hb.spanK != nil {
 		return nil
 	}
-	kk, e := oldkernels.CopySpan(hb.p.NEmbd)
+	kk, e := mainkernels.CopySpan(hb.p.NEmbd)
 	var k backend.Kernel
 	if e == nil {
 		k, e = g.dev.Compile(kk)

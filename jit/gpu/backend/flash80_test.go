@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestPagedFlashPrefill80 holds FlashPrefill80 (m16n8k16, sm_80 on) and its
@@ -27,23 +27,23 @@ func TestPagedFlashPrefill80(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 	}
-	if why := oldkernels.FlashPrefill80WhyNot(oldkernels.FlashPrefill70Shape{Heads: 8, KVHeads: 8, Dim: 320, Rows: 64, Page: 64}); why == "" {
+	if why := mainkernels.FlashPrefill80WhyNot(mainkernels.FlashPrefill70Shape{Heads: 8, KVHeads: 8, Dim: 320, Rows: 64, Page: 64}); why == "" {
 		t.Fatal("a 320-wide head was taken; FlashPrefill80 declines it by name")
 	}
 	shapes := append(flashPrefillShapes[:len(flashPrefillShapes):len(flashPrefillShapes)],
 		struct {
-			fs   oldkernels.FlashPrefill70Shape
+			fs   mainkernels.FlashPrefill70Shape
 			sink bool
-		}{oldkernels.FlashPrefill70Shape{Heads: 12, KVHeads: 4, Dim: 96, Scale: .102}, false},
+		}{mainkernels.FlashPrefill70Shape{Heads: 12, KVHeads: 4, Dim: 96, Scale: .102}, false},
 		// Past 128 the head's dims split over two warps (gemma-2b's 256).
 		struct {
-			fs   oldkernels.FlashPrefill70Shape
+			fs   mainkernels.FlashPrefill70Shape
 			sink bool
-		}{oldkernels.FlashPrefill70Shape{Heads: 8, KVHeads: 4, Dim: 256, Scale: .0625}, false},
+		}{mainkernels.FlashPrefill70Shape{Heads: 8, KVHeads: 4, Dim: 256, Scale: .0625}, false},
 		struct {
-			fs   oldkernels.FlashPrefill70Shape
+			fs   mainkernels.FlashPrefill70Shape
 			sink bool
-		}{oldkernels.FlashPrefill70Shape{Heads: 8, KVHeads: 1, Dim: 256, Scale: .0625, Softcap: 50, F16: true}, true})
+		}{mainkernels.FlashPrefill70Shape{Heads: 8, KVHeads: 1, Dim: 256, Scale: .0625, Softcap: 50, F16: true}, true})
 	ran := 0
 	vdevs := mmaDevices(t, devs, ir.MMAVolta())
 	for _, fk := range []struct {

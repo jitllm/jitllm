@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestGemmMMQSweep sets the staged int8 GEMM in llama.cpp MMQ's shape
@@ -77,10 +77,10 @@ func TestGemmMMQSweep(t *testing.T) {
 			bAX := g.up(make([]byte, 4*(ntok*sh.k/32+ntok*sh.k/16)))
 			sync := func() { out.Read(make([]byte, 4)) }
 			var arms []*arm
-			f16 := func(name string, tl oldkernels.VoltaTile, depth, split int) {
+			f16 := func(name string, tl mainkernels.VoltaTile, depth, split int) {
 				tl.KB, tl.F16K = max(depth/sub, 1), f16k
-				s := oldkernels.MatVecShape{T: sh.q, K: sh.k, Rows: sh.rows, NTok: ntok, Split: split}
-				kk, err := oldkernels.GemmVolta(s, tl)
+				s := mainkernels.MatVecShape{T: sh.q, K: sh.k, Rows: sh.rows, NTok: ntok, Split: split}
+				kk, err := mainkernels.GemmVolta(s, tl)
 				if err != nil {
 					return
 				}
@@ -92,12 +92,12 @@ func TestGemmMMQSweep(t *testing.T) {
 				r, _ := backend.KernelResourcesOf(kern)
 				arms = append(arms, &arm{name: fmt.Sprintf("%-40s regs %3d spill %d res %d", name, r.Regs, r.SpillBytes, r.Resident),
 					kern: []backend.Kernel{kern}, launch: func() error {
-						return kern.Launch(oldkernels.GemmVoltaGroups(s, tl), tl.Threads(), bQS, bD, bSC, bB, out)
+						return kern.Launch(mainkernels.GemmVoltaGroups(s, tl), tl.Threads(), bQS, bD, bSC, bB, out)
 					}})
 			}
-			i8 := func(name string, tl oldkernels.Int8Tile, split int) {
-				s := oldkernels.MatVecShape{T: sh.q, K: sh.k, Rows: sh.rows, NTok: ntok, Split: split}
-				kk, err := oldkernels.GemmInt8(s, tl)
+			i8 := func(name string, tl mainkernels.Int8Tile, split int) {
+				s := mainkernels.MatVecShape{T: sh.q, K: sh.k, Rows: sh.rows, NTok: ntok, Split: split}
+				kk, err := mainkernels.GemmInt8(s, tl)
 				if err != nil {
 					return
 				}
@@ -109,11 +109,11 @@ func TestGemmMMQSweep(t *testing.T) {
 				r, _ := backend.KernelResourcesOf(kern)
 				arms = append(arms, &arm{name: fmt.Sprintf("%-40s regs %3d spill %d res %d", name, r.Regs, r.SpillBytes, r.Resident),
 					kern: []backend.Kernel{kern}, launch: func() error {
-						return kern.Launch(oldkernels.GemmInt8Groups(s, tl), tl.Threads(), bQS, bD, bSC, bA, bAX, out)
+						return kern.Launch(mainkernels.GemmInt8Groups(s, tl), tl.Threads(), bQS, bD, bSC, bA, bAX, out)
 					}})
 			}
-			ship := oldkernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 2}
-			deep := oldkernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 4, Single: true}
+			ship := mainkernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 2}
+			deep := mainkernels.VoltaTile{MT: 4, NT: 4, WM: 2, WN: 4, Single: true}
 			f16("f16 ship s1", ship, 32, 1)
 			f16("f16 ship s1 (A/A)", ship, 32, 1)
 			f16("f16 ship s2", ship, 32, 2)
@@ -125,7 +125,7 @@ func TestGemmMMQSweep(t *testing.T) {
 				}
 				for _, dd := range []int{1, 2, 4} {
 					for _, single := range []bool{false, true} {
-						for _, tl := range []oldkernels.Int8Tile{
+						for _, tl := range []mainkernels.Int8Tile{
 							{MT: 4, NT: 4, WM: 2, WN: 2}, {MT: 2, NT: 2, WM: 2, WN: 2}, {MT: 2, NT: 4, WM: 2, WN: 2},
 							{MT: 4, NT: 2, WM: 2, WN: 4}, {MT: 2, NT: 4, WM: 4, WN: 2}, {MT: 2, NT: 2, WM: 4, WN: 2},
 						} {
@@ -144,16 +144,16 @@ func TestGemmMMQSweep(t *testing.T) {
 				}
 			}
 			// The operand preparations, alone.
-			if kk, err := oldkernels.ActF16T(sh.q, ntok, sh.k); err == nil {
+			if kk, err := mainkernels.ActF16T(sh.q, ntok, sh.k); err == nil {
 				if kern, err := d.Compile(kk); err == nil {
 					n := ntok * sh.k / sub
 					arms = append(arms, &arm{name: "prep ActF16T (binary16 operand)", kern: []backend.Kernel{kern},
 						launch: func() error { return kern.Launch((n+127)/128, 128, bX, bB) }})
 				}
 			}
-			if kk, err := oldkernels.Quantize(ntok*sh.k, 32); err == nil {
+			if kk, err := mainkernels.Quantize(ntok*sh.k, 32); err == nil {
 				if kern, err := d.Compile(kk); err == nil {
-					n := oldkernels.QuantizeThreads(ntok * sh.k / 32)
+					n := mainkernels.QuantizeThreads(ntok * sh.k / 32)
 					arms = append(arms, &arm{name: "prep Quantize (int8 operand)", kern: []backend.Kernel{kern},
 						launch: func() error { return kern.Launch((n+127)/128, 128, bX, bA, bAX) }})
 				}

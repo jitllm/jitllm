@@ -8,7 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestRecurrentKernelsOnEveryDevice runs the hybrid's recurrent kernels on real
@@ -89,11 +89,11 @@ func convCase(t *testing.T, d backend.Device) {
 	bStOut := g.up(f32bytes(poisonPool(slots * per)))
 	bRows := g.up(recDesc(rows, slot, slot))
 
-	kr, err := oldkernels.Conv1dRows(taps, chans, rows)
+	kr, err := mainkernels.Conv1dRows(taps, chans, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ks, err := oldkernels.Conv1dShift(taps, chans, rows)
+	ks, err := mainkernels.Conv1dShift(taps, chans, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,9 +214,9 @@ func deltaCase(t *testing.T, d backend.Device, chanDecay bool) {
 	bSOut := g.up(f32bytes(poisonPool(slots * per)))
 	bN := g.up(recDesc(1, in, out))
 
-	mk := oldkernels.GatedDeltaStep
+	mk := mainkernels.GatedDeltaStep
 	if chanDecay {
-		mk = oldkernels.GatedDeltaStepChan
+		mk = mainkernels.GatedDeltaStepChan
 	}
 	kk, err := mk(vHeads, vDim, kDim, rep)
 	if err != nil {
@@ -272,7 +272,7 @@ func splitGateCase(t *testing.T, d backend.Device) {
 	defer g.free()
 	bSrc := g.up(f32bytes(src))
 	bQ, bG := g.up(make([]byte, rows*qdim*4)), g.up(make([]byte, rows*qdim*4))
-	kk, err := oldkernels.SplitHeadGate(nHead, headDim, rows)
+	kk, err := mainkernels.SplitHeadGate(nHead, headDim, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func ropeCase(t *testing.T, d backend.Device, headDim, nRot int, neox bool) {
 	bSrc, bCS := g.up(f32bytes(src)), g.up(f32bytes(cs))
 	bOff := g.up(u32le(0))
 	bDst := g.up(f32bytes(dst))
-	kk, err := oldkernels.RoPERows(nHeads, headDim, nRot, neox, rows)
+	kk, err := mainkernels.RoPERows(nHeads, headDim, nRot, neox, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +387,7 @@ func ropeSplitCase(t *testing.T, d backend.Device, headDim, nRot int) {
 	g := newGPU(t, d)
 	defer g.free()
 	bSrc, bCS, bOff, bDst := g.up(f32bytes(src)), g.up(f32bytes(cs)), g.up(offs), g.up(f32bytes(dst))
-	kk, err := oldkernels.RoPERowsSplit(nHeads, headDim, nRot, rows, 0)
+	kk, err := mainkernels.RoPERowsSplit(nHeads, headDim, nRot, rows, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,7 +434,7 @@ func normPartCase(t *testing.T, d backend.Device, k, parts int) {
 	defer g.free()
 	bX := g.up(f32bytes(x))
 	bOut := g.up(make([]byte, parts*rows*4))
-	kk, err := oldkernels.NormPartRows(k, parts, rows)
+	kk, err := mainkernels.NormPartRows(k, parts, rows)
 	if err != nil {
 		t.Fatal(err)
 	}

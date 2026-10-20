@@ -12,11 +12,11 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/jit/gpu/msl"
 	"github.com/jitllm/jitllm/jit/gpu/ptx"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestTileKernelsAssemble lowers the shipped collective-tile kernels
-// (oldkernels.GemmTile, its grouped form, oldkernels.FlashPrefillTile) to PTX at
+// (mainkernels.GemmTile, its grouped form, mainkernels.FlashPrefillTile) to PTX at
 // sm_75 and sm_86 and assembles them with ptxas, and to MSL. They are not in
 // all() because SPIR-V does not lower a tile carried across a loop or staged
 // in workgroup memory, which both need; the backend gates run them on the
@@ -27,21 +27,21 @@ func TestTileKernelsAssemble(t *testing.T) {
 	ks := map[string]*ir.Kernel{}
 	for _, q := range []kernels.Quant{kernels.Q4_K, kernels.Q6_K, kernels.Q8_0, kernels.Q4_0} {
 		sub, _, _, _ := kernels.Layout(q)
-		tl := oldkernels.TileGemm{MT: 4, NT: 4, WM: 2, WN: 2, KB: max(32/sub, 1)}
-		k, err := oldkernels.GemmTile(oldkernels.MatVecShape{T: q, K: 1024, Rows: 128, NTok: 64, Bias: true}, tl)
+		tl := mainkernels.TileGemm{MT: 4, NT: 4, WM: 2, WN: 2, KB: max(32/sub, 1)}
+		k, err := mainkernels.GemmTile(mainkernels.MatVecShape{T: q, K: 1024, Rows: 128, NTok: 64, Bias: true}, tl)
 		if err != nil {
 			t.Fatal(err)
 		}
 		ks["gemmtile/"+q.String()] = k
-		k, err = oldkernels.GemmTile(oldkernels.MatVecShape{T: q, K: 1024, Rows: 128, NTok: 64, Experts: 4}, tl)
+		k, err = mainkernels.GemmTile(mainkernels.MatVecShape{T: q, K: 1024, Rows: 128, NTok: 64, Experts: 4}, tl)
 		if err != nil {
 			t.Fatal(err)
 		}
 		ks["gemmtile-grouped/"+q.String()] = k
 	}
 	for _, hd := range []int{64, 128} {
-		ft, _ := oldkernels.FlashTileFor(hd)
-		k, err := oldkernels.FlashPrefillTile(oldkernels.FlashPrefill70Shape{Heads: 8, KVHeads: 2, Dim: hd,
+		ft, _ := mainkernels.FlashTileFor(hd)
+		k, err := mainkernels.FlashPrefillTile(mainkernels.FlashPrefill70Shape{Heads: 8, KVHeads: 2, Dim: hd,
 			Rows: 64, KStride: 4096, Scale: .125}, ft)
 		if err != nil {
 			t.Fatal(err)

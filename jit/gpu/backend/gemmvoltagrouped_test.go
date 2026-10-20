@@ -11,7 +11,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestGemmVoltaGroupedMatchesPerExpert is the tensor-core half of a batched
@@ -49,21 +49,21 @@ func TestGemmVoltaGroupedMatchesPerExpert(t *testing.T) {
 			kb := max(32/sub, 1)
 			for _, c := range []struct {
 				rows, k, experts int
-				tl               oldkernels.VoltaTile
+				tl               mainkernels.VoltaTile
 				sel              []uint32 // one expert per token block
 				used             int      // blocks launched; the rest must stay poisoned
 				bias             bool
 			}{
-				{128, 512, 4, oldkernels.VoltaTile{MT: 4, NT: 1, WM: 1, WN: 4, KB: kb}, []uint32{2, 0, 0, 3, 1}, 5, false},
-				{192, 256, 4, oldkernels.VoltaTile{MT: 2, NT: 1, WM: 1, WN: 4, KB: kb}, []uint32{3, 3, 1, 0}, 3, true},
-				{256, 512, 3, oldkernels.VoltaTile{MT: 4, NT: 2, WM: 1, WN: 4, KB: kb}, []uint32{1, 2, 0}, 3, false},
+				{128, 512, 4, mainkernels.VoltaTile{MT: 4, NT: 1, WM: 1, WN: 4, KB: kb}, []uint32{2, 0, 0, 3, 1}, 5, false},
+				{192, 256, 4, mainkernels.VoltaTile{MT: 2, NT: 1, WM: 1, WN: 4, KB: kb}, []uint32{3, 3, 1, 0}, 3, true},
+				{256, 512, 3, mainkernels.VoltaTile{MT: 4, NT: 2, WM: 1, WN: 4, KB: kb}, []uint32{1, 2, 0}, 3, false},
 				// gpt-oss's shape: 96-row blocks, whose 96 (or 192) staging
 				// items do not nest in 128 threads.
-				{192, 512, 4, oldkernels.VoltaTile{MT: 3, NT: 2, WM: 1, WN: 4, KB: kb}, []uint32{0, 3, 3, 1}, 4, true},
+				{192, 512, 4, mainkernels.VoltaTile{MT: 3, NT: 2, WM: 1, WN: 4, KB: kb}, []uint32{0, 3, 3, 1}, 4, true},
 			} {
-				s := oldkernels.MatVecShape{T: q, K: c.k, Rows: c.rows, NTok: c.tl.Toks() * len(c.sel), Experts: c.experts,
+				s := mainkernels.MatVecShape{T: q, K: c.k, Rows: c.rows, NTok: c.tl.Toks() * len(c.sel), Experts: c.experts,
 					Bias: c.bias}
-				kk, err := oldkernels.GemmVolta(s, c.tl)
+				kk, err := mainkernels.GemmVolta(s, c.tl)
 				if err != nil && c.tl.MT == 3 && kb > 1 {
 					// 192 staging items do not nest in 128 threads; the tier
 					// takes the next tile (voltaGroupTiles).
@@ -98,26 +98,26 @@ func TestGemmVoltaGroupedMatchesPerExpert(t *testing.T) {
 type groupedGemm struct {
 	tile        string
 	toks, width int
-	groups      func(s oldkernels.MatVecShape, used int) int
-	dense       func(s oldkernels.MatVecShape) (*ir.Kernel, error)
-	denseGroups func(s oldkernels.MatVecShape) int
+	groups      func(s mainkernels.MatVecShape, used int) int
+	dense       func(s mainkernels.MatVecShape) (*ir.Kernel, error)
+	denseGroups func(s mainkernels.MatVecShape) int
 }
 
-func voltaGrouped(tl oldkernels.VoltaTile) groupedGemm {
+func voltaGrouped(tl mainkernels.VoltaTile) groupedGemm {
 	return groupedGemm{fmt.Sprintf("%+v", tl), tl.Toks(), tl.Threads(),
-		func(s oldkernels.MatVecShape, used int) int { return oldkernels.GemmVoltaGrouped(s, tl, used) },
-		func(s oldkernels.MatVecShape) (*ir.Kernel, error) { return oldkernels.GemmVolta(s, tl) },
-		func(s oldkernels.MatVecShape) int { return oldkernels.GemmVoltaGroups(s, tl) }}
+		func(s mainkernels.MatVecShape, used int) int { return mainkernels.GemmVoltaGrouped(s, tl, used) },
+		func(s mainkernels.MatVecShape) (*ir.Kernel, error) { return mainkernels.GemmVolta(s, tl) },
+		func(s mainkernels.MatVecShape) int { return mainkernels.GemmVoltaGroups(s, tl) }}
 }
 
-func tileGrouped(tl oldkernels.TileGemm) groupedGemm {
+func tileGrouped(tl mainkernels.TileGemm) groupedGemm {
 	return groupedGemm{fmt.Sprintf("tile %+v", tl), tl.Toks(), tl.Threads(),
-		func(s oldkernels.MatVecShape, used int) int { return oldkernels.GemmTileGrouped(s, tl, used) },
-		func(s oldkernels.MatVecShape) (*ir.Kernel, error) { return oldkernels.GemmTile(s, tl) },
-		func(s oldkernels.MatVecShape) int { return oldkernels.GemmTileGroups(s, tl) }}
+		func(s mainkernels.MatVecShape, used int) int { return mainkernels.GemmTileGrouped(s, tl, used) },
+		func(s mainkernels.MatVecShape) (*ir.Kernel, error) { return mainkernels.GemmTile(s, tl) },
+		func(s mainkernels.MatVecShape) int { return mainkernels.GemmTileGroups(s, tl) }}
 }
 
-func groupedGemmCase(t *testing.T, d backend.Device, kern backend.Kernel, s oldkernels.MatVecShape,
+func groupedGemmCase(t *testing.T, d backend.Device, kern backend.Kernel, s mainkernels.MatVecShape,
 	gg groupedGemm, sel []uint32, used int) {
 	t.Helper()
 	name := fmt.Sprintf("%s %v %dx%d e%d %s used %d/%d bias %v", d.API(), s.T, s.Rows, s.K, s.Experts, gg.tile, used,
@@ -186,7 +186,7 @@ func groupedGemmCase(t *testing.T, d backend.Device, kern backend.Kernel, s oldk
 	n := s.Rows * s.NTok
 	sub, _, _, _ := kernels.Layout(s.T)
 	at := s.NTok * s.K / sub
-	ak, err := oldkernels.ActF16T(s.T, s.NTok, s.K)
+	ak, err := mainkernels.ActF16T(s.T, s.NTok, s.K)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func groupedGemmCase(t *testing.T, d backend.Device, kern backend.Kernel, s oldk
 		t.Fatal(err)
 	}
 	defer ac.Close()
-	gk, err := oldkernels.ActF16TGather(s.T, s.NTok, s.K, nsrc)
+	gk, err := mainkernels.ActF16TGather(s.T, s.NTok, s.K, nsrc)
 	if err != nil {
 		t.Fatal(err)
 	}

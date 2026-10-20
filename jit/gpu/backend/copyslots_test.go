@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestCopySlotsMovesTheNamedSlots: CopySlots is how the shared recurrent form
@@ -37,7 +37,7 @@ func TestCopySlotsMovesTheNamedSlots(t *testing.T) {
 			defer g.free()
 			bSrc, bDst := g.up(f32bytes(src)), g.up(f32bytes(poisonPool(P*w)))
 			bMap := g.up(recDesc(0, desc...))
-			k, err := oldkernels.CopySlots(w, len(pairs))
+			k, err := mainkernels.CopySlots(w, len(pairs))
 			if err != nil {
 				t.Fatal(err)
 			}

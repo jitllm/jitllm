@@ -7,7 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestTileMatchesReference runs a collective matrix multiply on the device and
@@ -42,7 +42,7 @@ func TestTileMatchesReference(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 		for _, c := range cases {
-			kk, err := oldkernels.TileProbe(c.m, c.n, c.k, chain, c.elem)
+			kk, err := mainkernels.TileProbe(c.m, c.n, c.k, chain, c.elem)
 			if err != nil {
 				t.Fatalf("TileProbe: %v", err)
 			}

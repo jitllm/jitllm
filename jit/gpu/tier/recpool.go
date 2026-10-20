@@ -5,7 +5,7 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // A linear block's recurrent state is a session's, like an attention history,
@@ -13,7 +13,7 @@ import (
 // one launch. A launch names buffers, not sessions, so every session's state
 // for a block lives in ONE pool: a pair of buffers whose SLOTS are sequences'
 // states, and each row of a step finds its own through the recurrent
-// descriptor (oldkernels.RecDescWords). A session holds a SEAT -- a run of slots,
+// descriptor (mainkernels.RecDescWords). A session holds a SEAT -- a run of slots,
 // one per row of its batch -- and the seat is the same in every linear block's
 // pool on the device, so one descriptor serves every block of a submission.
 //
@@ -772,8 +772,8 @@ type runKey struct {
 
 // recDesc is the recurrent descriptor the running call stages: for a chunk or
 // a decode, the real row count and session sid's one slot pair
-// (oldkernels.RecDescWords); for a ragged step, the run descriptor
-// (oldkernels.RunDescWords) over the step's runs (groupRuns), each run's slots
+// (mainkernels.RecDescWords); for a ragged step, the run descriptor
+// (mainkernels.RunDescWords) over the step's runs (groupRuns), each run's slots
 // being its sequence's seat row of its session's seat. In the shared form a
 // run's out slot is its place in recNext. Callers hold g.mu.
 func (g *devTier) recDesc(sid uint64, nrow int) []byte {
@@ -804,7 +804,7 @@ func (g *devTier) recDesc(sid uint64, nrow int) []byte {
 		return u32view(w)
 	}
 	n, S := len(rag.pos), len(rag.runs)
-	w := words(oldkernels.RunDescWords(n))
+	w := words(mainkernels.RunDescWords(n))
 	w[0] = uint32(nrow)
 	at := 0
 	for j := 0; j < n; j++ {
@@ -835,7 +835,7 @@ func (g *devTier) slotCopy(w, rows int) (backend.Kernel, error) {
 	if k, ok := g.recCopies[key]; ok {
 		return k, nil
 	}
-	kk, err := oldkernels.CopySlots(w, rows)
+	kk, err := mainkernels.CopySlots(w, rows)
 	if err != nil {
 		return nil, err
 	}

@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // deviceTopK runs the device sampler's half -- the penalty when hist is
@@ -34,31 +34,31 @@ func deviceTopK(t *testing.T, d backend.Device, x []float32, hist []int32, pen f
 			t.Fatalf("%s: compile: %v", name, err)
 		}
 		defer c.Close()
-		if err := c.Launch(groups, oldkernels.SampleGroup, bufs...); err != nil {
+		if err := c.Launch(groups, mainkernels.SampleGroup, bufs...); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
 	in := g.up(f32bytes(x))
 	src := in
 	if len(hist) > 0 {
-		args := make([]byte, 4*oldkernels.SampleArgsWords(len(hist)))
+		args := make([]byte, 4*mainkernels.SampleArgsWords(len(hist)))
 		binary.LittleEndian.PutUint32(args, uint32(len(hist)))
 		binary.LittleEndian.PutUint32(args[4:], math.Float32bits(pen))
 		for i, h := range hist {
 			binary.LittleEndian.PutUint32(args[8+4*i:], uint32(h))
 		}
 		src = g.up(seedPoison(4 * n))
-		launch("penalty", oldkernels.SampleGroups(n), func() (*ir.Kernel, error) { return oldkernels.SamplePenalty(n) },
+		launch("penalty", mainkernels.SampleGroups(n), func() (*ir.Kernel, error) { return mainkernels.SamplePenalty(n) },
 			in, g.up(args), src)
 	}
-	groups := oldkernels.SampleSlices(n)
+	groups := mainkernels.SampleSlices(n)
 	v1, i1 := g.up(seedPoison(4*groups*k)), g.up(seedPoison(4*groups*k))
 	launch("pass 1", groups, func() (*ir.Kernel, error) {
-		return oldkernels.SampleTopK(n, oldkernels.SampleSlice, k, false)
+		return mainkernels.SampleTopK(n, mainkernels.SampleSlice, k, false)
 	}, src, src, v1, i1)
 	v2, i2 := g.up(seedPoison(4*k+4)), g.up(seedPoison(4*k+4))
 	launch("pass 2", 1, func() (*ir.Kernel, error) {
-		return oldkernels.SampleTopK(groups*k, groups*k, k, true)
+		return mainkernels.SampleTopK(groups*k, groups*k, k, true)
 	}, v1, i1, v2, i2)
 	bv, bi := make([]byte, 4*k+4), make([]byte, 4*k+4)
 	if err := v2.Read(bv); err != nil {

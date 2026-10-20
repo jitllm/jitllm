@@ -8,7 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // memReporter is a device that reports its free memory.
@@ -40,9 +40,9 @@ func TestPagedGatesLeakNothing(t *testing.T) {
 		volta[d] = true
 	}
 	pass := func(d backend.Device) {
-		s := oldkernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: page, Splits: 3, Sink: true}
+		s := mainkernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: page, Splits: 3, Sink: true}
 		p := newPagedPool(rand.New(rand.NewSource(3)), page, s.KVHeads*s.Dim, false, rows)
-		if k, err := oldkernels.FlashDecodeKV(s); err == nil && laneOK(t, d, k) {
+		if k, err := mainkernels.FlashDecodeKV(s); err == nil && laneOK(t, d, k) {
 			if _, err := pagedAttn(t, d, s, true, p, p.tab, rows); err != nil {
 				t.Fatal(err)
 			}
@@ -60,7 +60,7 @@ func TestPagedGatesLeakNothing(t *testing.T) {
 		h := s
 		h.F16K, h.VecV = true, d.API() != "spirv"
 		ph := newPagedPool(rand.New(rand.NewSource(3)), page, h.KVHeads*h.Dim, false, rows).withF16K()
-		if k, err := oldkernels.FlashDecodeKV(h); err == nil && laneOK(t, d, k) {
+		if k, err := mainkernels.FlashDecodeKV(h); err == nil && laneOK(t, d, k) {
 			if _, err := pagedAttn(t, d, h, true, ph, ph.tab, rows); err != nil {
 				t.Fatal(err)
 			}
@@ -76,13 +76,13 @@ func TestPagedGatesLeakNothing(t *testing.T) {
 		// The prefill paths: the staged one on every device, the flash ones
 		// where they lower.
 		prows := prefillRows(prefillCases(page, 64)[1])
-		ps := oldkernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: page, Chunk: 64, Sink: true}
+		ps := mainkernels.FlashShape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: page, Chunk: 64, Sink: true}
 		ps.Splits = prefillSplits(prows, ps.Chunk, 1)
 		pp := newPrefillPool(rand.New(rand.NewSource(3)), page, ps.KVHeads*ps.Dim, false, false, false, prows)
 		if _, _, err := pagedPrefillStaged(t, d, ps, prefillForm{scoresQT: 2, scoresKT: 2, accQT: 4, smLanes: 1}, pp, pp.tab, pp.desc, prows); err != nil {
 			t.Fatal(err)
 		}
-		fs := oldkernels.FlashPrefill70Shape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: page, Splits: 2}
+		fs := mainkernels.FlashPrefill70Shape{Heads: 8, KVHeads: 2, Dim: 64, Scale: .125, Page: page, Splits: 2}
 		if d.API() == "msl" || volta[d] {
 			if _, _, err := pagedFlashPrefill(t, d, fs, true, formOf(d.API() == "msl"), pp, pp.tab, pp.desc, prows); err != nil {
 				t.Fatal(err)

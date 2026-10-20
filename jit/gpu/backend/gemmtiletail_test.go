@@ -7,7 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // TestGemmTileTailCoversThePrompt holds the tier's wide-block-plus-tail form
@@ -28,16 +28,16 @@ func TestGemmTileTailCoversThePrompt(t *testing.T) {
 				sub, _, _, _ := kernels.Layout(q)
 				kb := max(32/sub, 1)
 				lead := c.ntok - c.ntok%64
-				wide := oldkernels.TileGemm{MT: 4, NT: 4, WM: 2, WN: 2, KB: kb}
-				tail := oldkernels.TileGemm{MT: 4, NT: 2, WM: 2, WN: 2, KB: kb, TokOff: lead}
-				full := oldkernels.MatVecShape{T: q, K: c.k, Rows: c.rows, NTok: c.ntok}
+				wide := mainkernels.TileGemm{MT: 4, NT: 4, WM: 2, WN: 2, KB: kb}
+				tail := mainkernels.TileGemm{MT: 4, NT: 2, WM: 2, WN: 2, KB: kb, TokOff: lead}
+				full := mainkernels.MatVecShape{T: q, K: c.k, Rows: c.rows, NTok: c.ntok}
 				sw, st := full, full
 				sw.NTok, st.NTok = lead, c.ntok-lead
-				kw, err := oldkernels.GemmTile(sw, wide)
+				kw, err := mainkernels.GemmTile(sw, wide)
 				if err != nil {
 					t.Fatal(err)
 				}
-				kt, err := oldkernels.GemmTile(st, tail)
+				kt, err := mainkernels.GemmTile(st, tail)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -51,12 +51,12 @@ func TestGemmTileTailCoversThePrompt(t *testing.T) {
 				}
 				ran++
 				mma70Case(t, d, cw, full, fmt.Sprintf("gemmtile 64x64 over %d + tail at %d", lead, lead),
-					oldkernels.GemmTileGroups(sw, wide), wide.Threads(), true,
+					mainkernels.GemmTileGroups(sw, wide), wide.Threads(), true,
 					func(args ...backend.Buf) error {
 						if os.Getenv("JITLLM_VIOLATE_TILE_TAIL") != "" {
 							return nil
 						}
-						return ct.Launch(oldkernels.GemmTileGroups(st, tail), tail.Threads(), args...)
+						return ct.Launch(mainkernels.GemmTileGroups(st, tail), tail.Threads(), args...)
 					})
 				cw.Close()
 				ct.Close()

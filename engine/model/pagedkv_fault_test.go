@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // pagedFaultCase is one violation TestPagedKVGateDiscriminates runs.
@@ -38,15 +38,15 @@ type pagedFaultCase struct {
 func TestPagedKVGateDiscriminates(t *testing.T) {
 	const gemma = "gemma-3-1b-it-Q4_K_M.gguf|google_gemma-3-1b-it-Q4_K_M.gguf"
 	cases := []pagedFaultCase{
-		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "(t-1)/P", 6, oldkernels.SetPagedFault, false, 0, false},
-		{gemma, "unaligned", 60, oldkernels.SetPagedFault, false, 0, false},
+		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "(t-1)/P", 6, mainkernels.SetPagedFault, false, 0, false},
+		{gemma, "unaligned", 60, mainkernels.SetPagedFault, false, 0, false},
 		{gemma, "window", 60, nil, false, 0, false},
-		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "(t-1)/P", 6, oldkernels.SetPagedFault, true, 0, false},
-		{gemma, "unaligned", 60, oldkernels.SetPagedFault, true, 0, false},
+		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "(t-1)/P", 6, mainkernels.SetPagedFault, true, 0, false},
+		{gemma, "unaligned", 60, mainkernels.SetPagedFault, true, 0, false},
 		{gemma, "window", 60, nil, true, 0, false},
 		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "passclip", 6, nil, true, 64, false},
-		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "normpart", 6, oldkernels.SetPagedFault, false, 0, true},
-		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "(t-1)/P", 6, oldkernels.SetPagedFault, false, 0, true},
+		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "normpart", 6, mainkernels.SetPagedFault, false, 0, true},
+		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "(t-1)/P", 6, mainkernels.SetPagedFault, false, 0, true},
 	}
 	for _, c := range cases {
 		name := c.fault

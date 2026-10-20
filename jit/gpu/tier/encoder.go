@@ -11,7 +11,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // layersSession is the device side of layersOnce: the staging writes, the
@@ -59,7 +59,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	// fsrc is the float buffer the current int8 activation was quantized
 	// from: a launch writing (bs.a, bs.ax) quantizes its first buffer, and
 	// that shape is the record. A float weight reads it in place of a
-	// scale plane (see oldkernels.MatVec), so it keeps its precision.
+	// scale plane (see mainkernels.MatVec), so it keeps its precision.
 	var fsrc backend.Buf
 	// actMemo is the ActF16 conversion the last batched matvec left in
 	// g.f16Buf: which kernel (its layout and shape) and from which float
@@ -79,12 +79,12 @@ func (g *devTier) layersSession(s backend.Session) {
 		memoK: &actMemoK, memoSrc: &actMemoSrc, a: bs.a, ax: bs.ax, g: g}
 
 	// lamv launches a decode matvec at its own workgroup width: an in-group
-	// split is 32 rows by Split segments (oldkernels.GroupSplitWidth), every
+	// split is 32 rows by Split segments (mainkernels.GroupSplitWidth), every
 	// other matvec 128. The thread count is the same either way.
 	lamv := func(m mv, k backend.Kernel, threads int, bufs ...backend.Buf) {
 		w := 128
 		if m.group {
-			w = oldkernels.GroupSplitWidth(m.split)
+			w = mainkernels.GroupSplitWidth(m.split)
 		} else if m.width > 0 && k == m.kern {
 			w = m.width
 		}
@@ -208,7 +208,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	laRows := func(k backend.Kernel, bufs ...backend.Buf) {
 		actMemoK, actMemoSrc = nil, nil
 		if err == nil {
-			err = lc.launch(k, R, oldkernels.RMSNormGroup, bufs...)
+			err = lc.launch(k, R, mainkernels.RMSNormGroup, bufs...)
 		}
 	}
 	// norm is RMSNorm or LayerNorm, decided by the block once; LayerNorm has
@@ -624,7 +624,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			// (nn.Head.RowLogits on Layers) takes the same tail.
 			hr := g.bs.head
 			norm(bs.x, hNorm, g.bs.hNormB)
-			lc.la(bs.quantE, oldkernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
+			lc.la(bs.quantE, mainkernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
 			one, oneOK := mv{}, false
 			if ragHead == 1 {
 				one, oneOK = g.headOneMV(R) // compiled by prepRagged
@@ -666,7 +666,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				lc.la(bs.ragCapK, ragHead*hr.nrows, bs.ragLogits, bs.ragCap)
 			}
 			if err == nil {
-				err = lc.launch(bs.ragArgmax, ragHead, oldkernels.ArgmaxGroup, bs.ragOut(g.Config), bs.ragTok)
+				err = lc.launch(bs.ragArgmax, ragHead, mainkernels.ArgmaxGroup, bs.ragOut(g.Config), bs.ragTok)
 			}
 		} else if fold {
 			// The chunk's last row, into the decode scratch, and the decode
@@ -680,7 +680,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				lc.la(hb.normPart, hb.parts, hb.x, hb.part)
 				lc.la(hb.normApply, p.NEmbd, hb.x, hNorm, hb.part, hb.h)
 			}
-			lc.la(hb.quantE, oldkernels.QuantizeThreads(p.NEmbd/32), hb.h, hb.a, hb.ax)
+			lc.la(hb.quantE, mainkernels.QuantizeThreads(p.NEmbd/32), hb.h, hb.a, hb.ax)
 			// The label pick projects the picked rows alone (pickMV).
 			pickOnly := pick && g.pickMV != nil && hb.headCap == nil
 			if pickOnly {
@@ -735,7 +735,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				lc.la(bs.normApply, p.NEmbd, bs.x, hNorm, bs.part, bs.h)
 			}
-			lc.la(bs.quantE, oldkernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
+			lc.la(bs.quantE, mainkernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
 			// HeadMatvecRepeat is the same idempotent-repeat probe on the head
 			// matvec, pricing it by repetition.
 			pickOnly := pick && g.pickMV != nil && bs.headCap == nil && R == 1
@@ -753,7 +753,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				lc.la(bs.headCap, bs.mvHead.rows, bs.logits, bs.logitsCap)
 			}
 			if argmax && err == nil {
-				err = lc.launch(g.argmaxK, 1, oldkernels.ArgmaxGroup, bs.headOut(), g.argmaxOut)
+				err = lc.launch(g.argmaxK, 1, mainkernels.ArgmaxGroup, bs.headOut(), g.argmaxOut)
 			}
 			if sampleK > 0 && err == nil {
 				err = g.launchSample(lc, bs.headOut(), bs.mvHead.rows, sampleK, samplePen)
@@ -1058,24 +1058,24 @@ func (g *devTier) contigAttend(lc *launcher, bs *blockScratch, l *layer, li, R i
 	} else if bs.fp70 != nil && !skip["scores"] && !skip["softmax"] && !skip["acc"] && !l.windowed {
 		// The chunk's attention as one kernel: scores,
 		// softmax and the weighted V sum per key tile, the
-		// scores never written (oldkernels.FlashPrefill70).
+		// scores never written (mainkernels.FlashPrefill70).
 		fk := bs.fp70
 		if p.Window(li) > 0 {
 			fk = bs.fp70W
 		}
 		if err == nil {
-			err = lc.launch(fk, oldkernels.FlashPrefill70Groups(oldkernels.FlashPrefill70Shape{Heads: p.NHead, Rows: R}),
-				oldkernels.FlashPrefill70Threads, qAtt, kvp.kc, kvp.vc, bs.n, bs.xb)
+			err = lc.launch(fk, mainkernels.FlashPrefill70Groups(mainkernels.FlashPrefill70Shape{Heads: p.NHead, Rows: R}),
+				mainkernels.FlashPrefill70Threads, qAtt, kvp.kc, kvp.vc, bs.n, bs.xb)
 		}
 		g.FlashPrefills++
 	} else if bs.fpT != nil && !skip["scores"] && !skip["softmax"] && !skip["acc"] && !l.windowed {
-		// The same, on Metal's matrix unit (oldkernels.FlashPrefillTile).
+		// The same, on Metal's matrix unit (mainkernels.FlashPrefillTile).
 		fk := bs.fpT
 		if p.Window(li) > 0 {
 			fk = bs.fpTW
 		}
 		if err == nil {
-			err = lc.launch(fk, oldkernels.FlashTileGroups(p.NHead, R, bs.fpTile),
+			err = lc.launch(fk, mainkernels.FlashTileGroups(p.NHead, R, bs.fpTile),
 				bs.fpTile.Threads(), qAtt, kvp.kc, kvp.vc, bs.n, bs.xb)
 		}
 		g.FlashPrefills++
@@ -1101,7 +1101,7 @@ func (g *devTier) contigAttend(lc *launcher, bs *blockScratch, l *layer, li, R i
 					kg := (nCap + 8*g.tiles.attnNT - 1) / (8 * g.tiles.attnNT)
 					lc.la(scoresMMA, (R/16)*p.NHead*kg*32, qIn, kvp.kc, bs.n, bs.att)
 				} else if scores70 != nil {
-					lc.la(scores70, oldkernels.AttnScoresMMA70Warps(p.NHead, R, nCap, volta70AttnMT,
+					lc.la(scores70, mainkernels.AttnScoresMMA70Warps(p.NHead, R, nCap, volta70AttnMT,
 						volta70AttnNT)*32, qIn, kvp.kc, bs.n, bs.att)
 				} else {
 					// The key axis is covered by ceil(nCap/ktile)
@@ -1144,7 +1144,7 @@ func (g *devTier) contigAttend(lc *launcher, bs *blockScratch, l *layer, li, R i
 				lc.la(bs.attnAcc, qdim*bs.accSplit, bs.prob, kvp.vc, bs.n, g.partBuf)
 				lc.la(bs.attnRed, qdim, g.partBuf, out)
 			} else if !skip["acc"] && bs.acc70 != nil {
-				lc.la(bs.acc70, oldkernels.AttnAccMMA70Warps(p.NHead, p.HeadDim, R,
+				lc.la(bs.acc70, mainkernels.AttnAccMMA70Warps(p.NHead, p.HeadDim, R,
 					volta70AccMT, volta70AttnNT)*32, bs.prob, kvp.vc, bs.n, out)
 			} else if !skip["acc"] {
 				lc.la(bs.attnAcc, R*qdim/bs.atile, bs.prob, kvp.vc, bs.n, out)

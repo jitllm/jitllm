@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/jit/gpu/ptx"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 func main() {
@@ -32,17 +32,17 @@ func main() {
 	// tinyllama's real prefill shapes at the shipping batch width.
 	const R, H, HD, KV, GQA, MS = 128, 32, 64, 256, 8, 640
 	out("mma-q3k", func() (*ir.Kernel, error) {
-		return oldkernels.MatVecMMA(oldkernels.MatVecShape{
+		return mainkernels.MatVecMMA(mainkernels.MatVecShape{
 			T: kernels.Q3_K, K: 2048, Rows: 5632, NTok: 128, MT: 4, NT: 4})
 	})
 	out("dp4a-q3k", func() (*ir.Kernel, error) {
-		return oldkernels.MatVec(oldkernels.MatVecShape{
+		return mainkernels.MatVec(mainkernels.MatVecShape{
 			T: kernels.Q3_K, K: 2048, Rows: 5632, NTok: 128, Tok: 16, Rowt: 4})
 	})
-	out("scores", func() (*ir.Kernel, error) { return oldkernels.AttnScoresTiled(H, HD, KV, GQA, MS, 0.125, R, 4, 2, MS) })
-	out("scores-mma", func() (*ir.Kernel, error) { return oldkernels.AttnScoresMMA(H, HD, KV, GQA, MS, 0.125, R, MS, 1) })
-	out("attnacc", func() (*ir.Kernel, error) { return oldkernels.AttnAccTiled(H, HD, KV, GQA, MS, R, 4) })
-	out("softmax", func() (*ir.Kernel, error) { return oldkernels.SoftmaxRows(H, MS, 32, R, 4) })
-	out("normapply", func() (*ir.Kernel, error) { return oldkernels.NormApplyRows(2048, 64, 1e-5, false, R) })
-	out("quantize", func() (*ir.Kernel, error) { return oldkernels.Quantize(R*2048, 256) })
+	out("scores", func() (*ir.Kernel, error) { return mainkernels.AttnScoresTiled(H, HD, KV, GQA, MS, 0.125, R, 4, 2, MS) })
+	out("scores-mma", func() (*ir.Kernel, error) { return mainkernels.AttnScoresMMA(H, HD, KV, GQA, MS, 0.125, R, MS, 1) })
+	out("attnacc", func() (*ir.Kernel, error) { return mainkernels.AttnAccTiled(H, HD, KV, GQA, MS, R, 4) })
+	out("softmax", func() (*ir.Kernel, error) { return mainkernels.SoftmaxRows(H, MS, 32, R, 4) })
+	out("normapply", func() (*ir.Kernel, error) { return mainkernels.NormApplyRows(2048, 64, 1e-5, false, R) })
+	out("quantize", func() (*ir.Kernel, error) { return mainkernels.Quantize(R*2048, 256) })
 }

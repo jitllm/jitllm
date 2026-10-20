@@ -12,7 +12,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/oldkernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // Split width, measured on the device that will run it rather than tabulated:
@@ -56,7 +56,7 @@ func (g *devTier) tuneSplit(q kernels.Quant, rows, k int, r *resident) int {
 	if v, ok := lookupCache(g.kb.cacheDir, "gpusplit1", ck); ok && g.kb.tune != TuneForce {
 		var s, gi int
 		if n, err := fmt.Sscanf(v, "%d %d", &s, &gi); n == 2 && err == nil && s >= 1 && nb32ok(k, s) &&
-			(gi == 0 || gi == 1 && !g.NoGroupSplit && oldkernels.GroupSplitOK(rows, s)) &&
+			(gi == 0 || gi == 1 && !g.NoGroupSplit && mainkernels.GroupSplitOK(rows, s)) &&
 			// A partial-writing split needs its partial plane, which the
 			// measurement below would have grown.
 			(s == 1 || gi == 1 || g.sizePart(rows*s)) {
@@ -104,7 +104,7 @@ func (g *devTier) tuneSplit(q kernels.Quant, rows, k int, r *resident) int {
 			if grp && g.NoGroupSplit {
 				continue
 			}
-			if grp && !oldkernels.GroupSplitOK(rows, split) {
+			if grp && !mainkernels.GroupSplitOK(rows, split) {
 				continue
 			}
 			// The split tuner times the unbiased shape; a bias is one add per
@@ -170,7 +170,7 @@ func (g *devTier) splitCands(q kernels.Quant, rows, k int) []splitCand {
 			continue
 		}
 		for _, grp := range []bool{false, true} {
-			if grp && (g.NoGroupSplit || !oldkernels.GroupSplitOK(rows, split)) {
+			if grp && (g.NoGroupSplit || !mainkernels.GroupSplitOK(rows, split)) {
 				continue
 			}
 			c := splitCand{split: split, grp: grp}
@@ -534,7 +534,7 @@ func (g *devTier) retuneDecode() {
 				continue
 			}
 			for _, grp := range []bool{false, true} {
-				if grp && (g.NoGroupSplit || !oldkernels.GroupSplitOK(key.rows, split)) {
+				if grp && (g.NoGroupSplit || !mainkernels.GroupSplitOK(key.rows, split)) {
 					continue
 				}
 				c := splitCand{split: split, grp: grp}
@@ -712,7 +712,7 @@ func (g *devTier) retuneIndexed() bool {
 		nout := key.rows * key.slots
 		ck := g.tuneKey(fmt.Sprintf("%v-%dx%d-e%dx%d-%v", key.q, key.rows, key.k, key.experts, key.slots, key.slotAct))
 		mk := func(split int, grp bool) (backend.Kernel, backend.Kernel, bool) {
-			kern, err := oldkernels.MatVec(oldkernels.MatVecShape{Center: g.center, T: key.q, K: key.k, Rows: key.rows,
+			kern, err := mainkernels.MatVec(mainkernels.MatVecShape{Center: g.center, T: key.q, K: key.k, Rows: key.rows,
 				Split: split, Experts: key.experts, Slots: key.slots, SlotAct: key.slotAct, GroupSplit: grp})
 			if err != nil {
 				return nil, nil, false
@@ -743,7 +743,7 @@ func (g *devTier) retuneIndexed() bool {
 					continue
 				}
 				for _, grp := range []bool{false, true} {
-					if grp && (g.NoGroupSplit || !oldkernels.GroupSplitOK(key.rows, split)) {
+					if grp && (g.NoGroupSplit || !mainkernels.GroupSplitOK(key.rows, split)) {
 						continue
 					}
 					if kern, red, ok := mk(split, grp); ok {
@@ -808,7 +808,7 @@ func (g *devTier) retuneIndexed() bool {
 		}
 		// The winner from the device's cache, which Close closes; mk's kernels
 		// are the trial's own.
-		kern, err := g.idKernel(oldkernels.MatVecShape{Center: g.center, T: key.q, K: key.k, Rows: key.rows,
+		kern, err := g.idKernel(mainkernels.MatVecShape{Center: g.center, T: key.q, K: key.k, Rows: key.rows,
 			Split: best, Experts: key.experts, Slots: key.slots, SlotAct: key.slotAct, GroupSplit: bestGrp})
 		if err != nil {
 			continue
@@ -1003,8 +1003,8 @@ var binaryIDOnce = sync.OnceValue(func() string {
 // epilogue to until its Reduce.
 //
 // It removes one to four launches a layer: the gated activation always
-// (oldkernels.ActMul over the slots), and with expert biases the three
-// oldkernels.IndexedBiasAdd. A streamed bank is left alone: its weights are
+// (mainkernels.ActMul over the slots), and with expert biases the three
+// mainkernels.IndexedBiasAdd. A streamed bank is left alone: its weights are
 // compacted 0..k-1 while its biases need the true ids.
 func (g *devTier) fuseMoE(l *layer) {
 	l.moeGate, l.moeUp, l.moeDown = nil, nil, nil
@@ -1025,14 +1025,14 @@ func (g *devTier) fuseMoE(l *layer) {
 			(m.split <= 1 || m.group) && !kernels.IsFloat(m.q)
 	}
 	build := func(m mv, bias, gate bool) backend.Kernel {
-		s := oldkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Split: m.split, GroupSplit: m.group,
+		s := mainkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Split: m.split, GroupSplit: m.group,
 			Experts: m.experts, Slots: m.slots, SlotAct: m.slotAct, Bias: bias, Gate: gate, GateAct: act}
 		key := fmt.Sprintf("%+v", s)
 		if k, ok := g.segKerns[key]; ok {
 			return k
 		}
 		var k backend.Kernel
-		ker, err := oldkernels.MatVec(s)
+		ker, err := mainkernels.MatVec(s)
 		if err == nil {
 			k, err = g.dev.Compile(ker)
 		}
@@ -1067,7 +1067,7 @@ func (g *devTier) fuseMoE(l *layer) {
 }
 
 // warpNorm reports whether the whole-row RMSNorm kernels take the
-// subgroup-shuffle reduction (oldkernels.RMSNormRowsWarp): a device that
+// subgroup-shuffle reduction (mainkernels.RMSNormRowsWarp): a device that
 // guarantees 32 lanes AND whose subgroups are contiguous runs of 32 threads,
 // which CUDA's warps are by architecture and nothing promises elsewhere.
 // Config.NoWarpNorm keeps the shared-memory tree.
@@ -1077,19 +1077,19 @@ func (g *devTier) warpNorm() bool {
 
 func (g *devTier) rmsRows() func(k, rows int, eps float32, addOne, add bool) (*ir.Kernel, error) {
 	if g.warpNorm() {
-		return oldkernels.RMSNormRowsWarp
+		return mainkernels.RMSNormRowsWarp
 	}
-	return oldkernels.RMSNormRows
+	return mainkernels.RMSNormRows
 }
 
 func (g *devTier) rmsQuantRows() func(k, rows int, eps float32, addOne, add bool, window int) (*ir.Kernel, error) {
 	if g.warpNorm() {
-		return oldkernels.RMSNormQuantRowsWarp
+		return mainkernels.RMSNormQuantRowsWarp
 	}
-	return oldkernels.RMSNormQuantRows
+	return mainkernels.RMSNormQuantRows
 }
 
-// segLaunch is a oldkernels.MatVecSegments launch: the kernel and its grid.
+// segLaunch is a mainkernels.MatVecSegments launch: the kernel and its grid.
 type segLaunch struct {
 	kern      backend.Kernel
 	blocks, w int
@@ -1108,22 +1108,22 @@ func (g *devTier) fuseSegs(ms []mv) *segLaunch {
 	if m0.split > 1 && !m0.group {
 		return nil
 	}
-	var segs []oldkernels.MatVecShape
+	var segs []mainkernels.MatVecShape
 	for _, m := range ms {
 		if m.kern == nil || m.slots > 0 || m.groups > 0 || m.threads > 0 || m.rowt > 1 ||
 			m.k != m0.k || m.bias != nil || kernels.IsFloat(m.q) {
 			return nil
 		}
-		segs = append(segs, oldkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows})
+		segs = append(segs, mainkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows})
 	}
-	blocks, w, err := oldkernels.SegmentsGrid(segs, m0.split, m0.group)
+	blocks, w, err := mainkernels.SegmentsGrid(segs, m0.split, m0.group)
 	if err != nil {
 		return nil
 	}
 	key := fmt.Sprintf("%v/%d/%v", segs, m0.split, m0.group)
 	k, ok := g.segKerns[key]
 	if !ok {
-		ker, err := oldkernels.MatVecSegments(segs, m0.split, m0.group)
+		ker, err := mainkernels.MatVecSegments(segs, m0.split, m0.group)
 		if err == nil {
 			k, err = g.dev.Compile(ker)
 		}
@@ -1147,10 +1147,10 @@ func (g *devTier) fuseSegs(ms []mv) *segLaunch {
 }
 
 // widthOf is a matvec's workgroup width, and groupsOf the groups that cover
-// threads at it; see oldkernels.GroupSplitWidth.
+// threads at it; see mainkernels.GroupSplitWidth.
 func widthOf(split int, grp bool) int {
 	if grp {
-		return oldkernels.GroupSplitWidth(split)
+		return mainkernels.GroupSplitWidth(split)
 	}
 	return 128
 }
@@ -1160,7 +1160,7 @@ func groupsOf(threads, split int, grp bool) int {
 	return (threads + w - 1) / w
 }
 
-// fuseQKV builds block l's q/k/v launch (oldkernels.MatVecSegments) at the split
+// fuseQKV builds block l's q/k/v launch (mainkernels.MatVecSegments) at the split
 // its q projection runs, or leaves l.qkv nil where the three cannot share one:
 // a batched, indexed, tiled or float matvec, a split that needs a separate
 // reduction, or projections that read different activations. MLA, recurrent
@@ -1193,21 +1193,21 @@ func (g *devTier) fuseQKV(l *layer) {
 	if q.split > 1 && !q.group {
 		return
 	}
-	var segs []oldkernels.MatVecShape
+	var segs []mainkernels.MatVecShape
 	for _, m := range []mv{l.mvq, l.mvk, l.mvv} {
 		if m.kern == nil || m.slots > 0 || m.groups > 0 || m.threads > 0 || m.rowt > 1 || m.k != q.k {
 			return
 		}
-		segs = append(segs, oldkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Bias: m.bias != nil})
+		segs = append(segs, mainkernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, Bias: m.bias != nil})
 	}
-	blocks, w, err := oldkernels.SegmentsGrid(segs, q.split, q.group)
+	blocks, w, err := mainkernels.SegmentsGrid(segs, q.split, q.group)
 	if err != nil {
 		return
 	}
 	key := fmt.Sprintf("%v/%d/%v", segs, q.split, q.group)
 	k, ok := g.segKerns[key]
 	if !ok {
-		ker, err := oldkernels.MatVecSegments(segs, q.split, q.group)
+		ker, err := mainkernels.MatVecSegments(segs, q.split, q.group)
 		if err == nil {
 			k, err = g.dev.Compile(ker)
 		}
@@ -1259,7 +1259,7 @@ func (g *devTier) fuseGateUp(l *layer) {
 	case md.res == nil || md.bias != nil || md.slots > 0 || md.groups > 0 || md.threads > 0 || md.act != nil:
 		why("down is not a plain residual matvec")
 		return
-	case g.pickLanes() != ir.SubgroupLanes || oldkernels.WideWindow(g.bs.p.ActWin):
+	case g.pickLanes() != ir.SubgroupLanes || mainkernels.WideWindow(g.bs.p.ActWin):
 		why("no 32-lane subgroup, or a wide quantization window")
 		return
 	}
@@ -1268,11 +1268,11 @@ func (g *devTier) fuseGateUp(l *layer) {
 		why(fmt.Sprintf("gate and up cannot share a launch at split %d/%v (rowt %d/%d)", mg.split, mg.group, mg.rowt, mu.rowt))
 		return
 	}
-	in := oldkernels.ActIn{On: true, Gated: true, Act: g.bs.p.Act, Window: max(g.bs.p.ActWin, 32), Prefetch: 8}
+	in := mainkernels.ActIn{On: true, Gated: true, Act: g.bs.p.Act, Window: max(g.bs.p.ActWin, 32), Prefetch: 8}
 	if g.ActInPrefetch != 0 {
 		in.Prefetch = max(g.ActInPrefetch, 0)
 	}
-	s := oldkernels.MatVecShape{Center: g.center, T: md.q, K: md.k, Rows: md.rows, Split: md.split,
+	s := mainkernels.MatVecShape{Center: g.center, T: md.q, K: md.k, Rows: md.rows, Split: md.split,
 		GroupSplit: md.group, Rowt: max(md.rowt, 1), Bias: true, In: in}
 	down, err := g.idKernel(s)
 	if err != nil {
