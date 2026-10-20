@@ -1089,6 +1089,12 @@ func (g *GPU) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, 
 	ok := g.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
 	// A refusal before any device ran leaves the head device's promise
 	// unconsumed; it lives for one call (devTier.layersCall).
+	g.mu.Lock()
+	hd := g.head
+	g.mu.Unlock()
+	if hd != nil {
+		hd.dropEmbedOf(sid)
+	}
 	return ok
 }
 
@@ -1502,6 +1508,10 @@ func (g *GPU) EmbedRows(ids []int32, dst []float32) bool {
 func (g *GPU) embedRows(sid uint64, ids []int32, dst []float32) bool {
 	g.mu.Lock()
 	hd := g.head
+	var first *devTier
+	if len(g.own) > 0 {
+		first = g.own[0]
+	}
 	g.mu.Unlock()
 	if hd == nil {
 		return false
@@ -1513,6 +1523,9 @@ func (g *GPU) embedRows(sid uint64, ids []int32, dst []float32) bool {
 	defer v.done()
 	if !v.EmbedRows(ids, dst) {
 		return false
+	}
+	if first != hd {
+		v.takeEmbed(nil) // nil is no submission's x: this materializes
 	}
 	return true
 }

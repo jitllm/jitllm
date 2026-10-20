@@ -33,7 +33,9 @@ func (g *devTier) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float
 		return false
 	}
 	defer v.done()
-	return v.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
+	ok := v.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
+	v.dropEmbed()
+	return ok
 }
 
 // layersCall is Layers. The wrapper exists because an EmbedRows promise lives
@@ -632,12 +634,24 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// EmbedRows); the gather writes all R rows of bs.x, padding as zeros. Its
 	// last workgroup must not run past R rows; otherwise the promise is made real
 	// on the host.
-	for i := range hx {
-		hx[i] = 0
+	pe := g.takeEmbedLocked(x)
+	var gatherN int
+	if pe != nil {
+		hr := g.bs.head
+		gatherN = embedThreads(hr, R)
+		if !g.embedKernel(g.bs) || hr.k != p.NEmbd || len(pe.ids) > R || gatherN%g.bs.embW != 0 {
+			g.materializeLocked(pe)
+			pe = nil
+		}
 	}
-	// AltUp's streams are stream-major over the caller's nrow rows and over
-	// the scratch's R; one stream is a prefix either way.
-	streamRows(hx, x, p, R, nrow)
+	if pe == nil {
+		for i := range hx {
+			hx[i] = 0
+		}
+		// AltUp's streams are stream-major over the caller's nrow rows and
+		// over the scratch's R; one stream is a prefix either way.
+		streamRows(hx, x, p, R, nrow)
+	}
 	// pN carries a header at R > 1: element 0 is the uniform score width every
 	// grid is sized for, elements 1..R each row's own causal key count. At R == 1
 	// it is the single count.
@@ -919,7 +933,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	g.sub = submitArgs{
 		bs: bs, hb: hb, head: head, lo: lo, hi: hi, pos: pos, x: x,
 		hx: hx, hcs: hcs, hcsSWA: hcsSWA, pn: pn, koffs: koffs, kposs: kposs, rposs: rposs,
-		p: p, rag: rag, key: key, R: R, nrow: nrow, kvDim: kvDim, qdim: qdim,
+		p: p, rag: rag, pe: pe, key: key, R: R, nrow: nrow, kvDim: kvDim, qdim: qdim, gatherN: gatherN,
 		kst: kst, nCap: nCap, rrows: rrows, sm: sm, smG: smG, smW: smW,
 		fold: fold, ropeDev: ropeDev, parOK: parOK,
 		allRows: allRows, hNorm: hNorm,
@@ -1011,6 +1025,7 @@ type submitArgs struct {
 	pn, koffs, kposs, rposs []byte
 	p                       *nn.LayerPlan
 	rag                     *ragStep
+	pe                      *embPend
 	key                     graphKey
 	R, nrow, kvDim, qdim    int
 	kst, nCap, gatherN      int

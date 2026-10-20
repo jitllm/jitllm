@@ -516,7 +516,17 @@ func (g *devTier) layersSession(s backend.Session) {
 		w(hb.spanOff, g.u32b(uint32((nrow-1)*p.NEmbd)))
 	}
 
-	w(bs.x, f32b(hx))
+	if a.pe != nil {
+		hr := g.bs.head
+		g.subBytes.embIDs = embIDs(g.subBytes.embIDs, a.pe.ids, R, hr.nrows)
+		w(g.bs.embIds, g.subBytes.embIDs)
+		if err == nil {
+			err = lc.launch(g.bs.embK, a.gatherN/g.bs.embW, g.bs.embW, hr.qs, hr.d, hr.sc, g.bs.embIds, bs.x)
+		}
+		g.EmbedLaunches++
+	} else {
+		w(bs.x, f32b(hx))
+	}
 	if bs.pleIn != nil {
 		w(bs.pleIn, f32b(g.pleRows(R*p.PLEWidth)))
 	}
