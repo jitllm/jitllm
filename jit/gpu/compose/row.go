@@ -1492,18 +1492,33 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				x.col = flatIdx
 			}
 		}
+		// A tile's elements are stored at the tile's first place plus each
+		// env's own (a constant).
+		var tileAt ir.Value
 		for _, e := range outs {
 			base, col := rowBase, flatIdx
 			if e.base != 0 {
 				base, col = e.base, e.col
 			}
 			for _, st := range g.Stores {
-				at := b.Add(ir.U32, base, col)
-				if st.Indexed {
+				var at ir.Value
+				off := 0
+				switch {
+				case st.Indexed:
 					at = elem(st.Ix, col, e)
+				case e.t != nil && mma == nil:
+					if tileAt == 0 {
+						tileAt = b.Add(ir.U32, rowBase, flatIdx)
+					}
+					at, off = tileAt, e.rowOff*g.Width+e.colOff
+				default:
+					at = b.Add(ir.U32, base, col)
 				}
 				if seg != 0 {
 					at = b.Add(ir.U32, at, b.Mul(ir.U32, seg, b.Const(ir.U32, int64(g.Rows*g.Width))))
+				}
+				if off != 0 {
+					at = b.Add(ir.U32, at, b.Const(ir.U32, int64(off)))
 				}
 				b.Store(params[st.Buf], at, elem(st.Val, col, e), 0)
 			}
