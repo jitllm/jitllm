@@ -291,7 +291,12 @@ func (g *devTier) layersSession(s backend.Session) {
 					}
 					if isMat && o.W >= 0 && o.W < len(l.rs) && *l.rs[o.W] != nil {
 						r := *l.rs[o.W]
-						gst.qs, gst.d, gst.sc, gst.mbias = r.qs, dOf(r), r.sc, (*l.ms[o.W]).bias
+						gst.qs, gst.d, gst.sc, gst.mbias = r.qs, nil, r.sc, (*l.ms[o.W]).bias
+						if !kernels.IsFloat(r.t) {
+							// A float weight's product reads its float row as
+							// an input of its own; a quantized one its scales.
+							gst.d = dOf(r)
+						}
 					}
 					gst.a, gst.ax = bs.a, bs.ax
 					gst.f16, gst.memoK, gst.memoSrc = g.f16Buf, actMemoK, actMemoSrc

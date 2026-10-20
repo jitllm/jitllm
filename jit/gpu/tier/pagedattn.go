@@ -117,7 +117,8 @@ func freePaged(pg *pagedScratch) {
 	if pg == nil {
 		return
 	}
-	for _, b := range []backend.Buf{pg.pRow, pg.pRowW, pg.sc, pg.wt, pg.part} {
+	for _, b := range []backend.Buf{pg.pRow, pg.pRowW, pg.sc, pg.wt, pg.part,
+		pg.rag.pMap, pg.rag.pBase[0], pg.rag.pBase[1], pg.pre.pDesc[0], pg.pre.pDesc[1]} {
 		if b != nil {
 			b.Free()
 		}

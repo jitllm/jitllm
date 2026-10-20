@@ -48,57 +48,58 @@ const (
 	gaWQS     // the op's weight's payload, scale and scale-of-scale planes
 	gaWD
 	gaWSC
-	gaOpA      // the int8 operand the op's matvec reads, values
-	gaOpAX     // and scales
-	gaMBias    // the weight's own bias (mv.bias)
-	gaF16      // the binary16 operand a GEMM reads (the device's f16 plane)
-	gaQ8A      // an int8 output's values
-	gaQ8X      // its scales and sums
-	gaPerm     // the step's head-major order: each gathered row's source row (headPerm)
-	gaSplit    // a k split's partial plane (the tier's partBuf)
-	gaKPool    // the block's paged K pool
-	gaVPool    // its paged V pool
-	gaTab      // its page table
-	gaPRow     // the step's row descriptors (kernels.PRowWords a row)
-	gaPRowW    // the windowed descriptors, a sliding layer's
-	gaScores   // the staged attention's score plane
-	gaWts      // its weight plane
-	gaParts    // the splits' partials the merge reads
-	gaConvIn   // a recurrent block's convolution window, the half the step reads
-	gaConvOut  // the half it writes
-	gaConvW    // the convolution's weights
-	gaRecDesc  // the step's recurrent descriptor
-	gaStateIn  // a recurrent block's state, the half the step reads
-	gaStateOut // where it writes the next
-	gaRecDt    // the block's dt bias
-	gaRecA     // its decay rates
-	gaRecD     // its skip
-	gaRecCB    // its convolution's bias
-	gaRecNorm  // its output norm's weight
-	gaRecMid   // the scratch between its gated norm's two launches
-	gaRouter  // a mixture's router matrix
-	gaRouterB // its bias on the logits
-	gaSelB    // its selection bias
-	gaRouteW  // the route's weights (a fused route writes them with the selection)
-	gaSink    // the block's per-head attention sinks
-	gaCount   // the step's per-row key counts (the decode's one, then each row's)
-	gaTemp    // the attention temperature over each row's count
-	gaRagMap   // a ragged call's run table: each slot's row
-	gaRagBase  // each slot's partition base
-	gaRagBaseW // the windowed descriptors' bases
-	gaPreDesc  // a chunk's staged prefill descriptors, padding rows emptied
-	gaPreDescW // and its windowed ones
-	gaPLEIn    // the step's per-layer inputs, every block's a row
-	gaMgBC    // a mixture's grouping over rows: the block counts,
-	gaMgOff   // the offsets,
-	gaMgCnt   // the totals,
-	gaMgEnds  // each run's end,
-	gaMgColE  // each column's expert,
-	gaMgPerm  // each column's row,
-	gaMgPos   // each pair's column,
-	gaMgTsel  // each tile's expert,
-	gaMgHG    // the sorted rows,
-	gaMgGA    // and their int8 operand
+	gaOpA       // the int8 operand the op's matvec reads, values
+	gaOpAX      // and scales
+	gaMBias     // the weight's own bias (mv.bias)
+	gaF16       // the binary16 operand a GEMM reads (the device's f16 plane)
+	gaQ8A       // an int8 output's values
+	gaQ8X       // its scales and sums
+	gaPerm      // the step's head-major order: each gathered row's source row (headPerm)
+	gaSplit     // a k split's partial plane (the tier's partBuf)
+	gaKPool     // the block's paged K pool
+	gaVPool     // its paged V pool
+	gaTab       // its page table
+	gaPRow      // the step's row descriptors (kernels.PRowWords a row)
+	gaPRowW     // the windowed descriptors, a sliding layer's
+	gaScores    // the staged attention's score plane
+	gaWts       // its weight plane
+	gaParts     // the splits' partials the merge reads
+	gaConvIn    // a recurrent block's convolution window, the half the step reads
+	gaConvOut   // the half it writes
+	gaConvW     // the convolution's weights
+	gaRecDesc   // the step's recurrent descriptor
+	gaStateIn   // a recurrent block's state, the half the step reads
+	gaStateOut  // where it writes the next
+	gaRecDt     // the block's dt bias
+	gaRecA      // its decay rates
+	gaRecD      // its skip
+	gaRecCB     // its convolution's bias
+	gaRecNorm   // its output norm's weight
+	gaRecMid    // the scratch between its gated norm's two launches
+	gaRouter    // a mixture's router matrix
+	gaRouterB   // its bias on the logits
+	gaSelB      // its selection bias
+	gaRouteW    // the route's weights (a fused route writes them with the selection)
+	gaSink      // the block's per-head attention sinks
+	gaCount     // the step's per-row key counts (the decode's one, then each row's)
+	gaTemp      // the attention temperature over each row's count
+	gaRagMap    // a ragged call's run table: each slot's row
+	gaRagBase   // each slot's partition base
+	gaRagBaseW  // the windowed descriptors' bases
+	gaPreDesc   // a chunk's staged prefill descriptors, padding rows emptied
+	gaPreDescW  // and its windowed ones
+	gaPLEIn     // the step's per-layer inputs, every block's a row
+	gaHeadTiles // each token group's head, a chunk's rows head-major
+	gaMgBC      // a mixture's grouping over rows: the block counts,
+	gaMgOff     // the offsets,
+	gaMgCnt     // the totals,
+	gaMgEnds    // each run's end,
+	gaMgColE    // each column's expert,
+	gaMgPerm    // each column's row,
+	gaMgPos     // each pair's column,
+	gaMgTsel    // each tile's expert,
+	gaMgHG      // the sorted rows,
+	gaMgGA      // and their int8 operand
 	gaMgGAX
 )
 
@@ -960,6 +961,8 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.bs.pkv.pre.pDesc[1]
 			case gaPLEIn:
 				bufs[j] = st.bs.pleIn
+			case gaHeadTiles:
+				bufs[j] = st.bs.headTiles
 			case gaMgBC, gaMgOff, gaMgCnt, gaMgEnds, gaMgColE, gaMgPerm, gaMgPos, gaMgTsel, gaMgHG, gaMgGA, gaMgGAX:
 				m := bs.mg
 				bufs[j] = [...]backend.Buf{m.bc, m.off, m.cnt, m.ends, m.colE, m.perm, m.pos, m.tsel, m.hg, m.ga, m.gax}[a-gaMgBC]
@@ -1294,7 +1297,14 @@ func (g *devTier) genMatVecNodes(o *devOp, prog *devProgram, bs *blockScratch, r
 	}
 	m := *l.ms[o.W]
 	bank := o.Kind == dkExpertMatVec
-	if bank != (m.experts > 1) || m.pad || bank && (rows != 1 || g.genRag || len(o.In) < 2) {
+	// Over rows a bank over heads reads its rows head-major, each head's
+	// run of rows its own sheet: the grouped form, a token group a thread.
+	heads := bank && rows > 1 && o.Heads > 0
+	if bank != (m.experts > 1) || m.pad || bank && !heads && (rows != 1 || g.genRag || len(o.In) < 2) {
+		o.Why = whyNoForm
+		return nil
+	}
+	if heads && (m.experts != o.Heads || rows%groupTok != 0 || !g.headTiles(bs, o.Heads, rows)) {
 		o.Why = whyNoForm
 		return nil
 	}
@@ -1307,7 +1317,10 @@ func (g *devTier) genMatVecNodes(o *devOp, prog *devProgram, bs *blockScratch, r
 	// The product, into the output or a split's planes; a bank's slots are
 	// the group's rows, each reading its expert's sheet.
 	grows := rows
-	if bank {
+	switch {
+	case heads:
+		grows = o.Heads * rows
+	case bank:
 		grows = prog.vals[o.In[1]].Width
 	}
 	rb := &rowBuild{r: compose.Row{Width: m.rows, Rows: grows}}
@@ -1319,7 +1332,10 @@ func (g *devTier) genMatVecNodes(o *devOp, prog *devProgram, bs *blockScratch, r
 		w.SC = rb.buf(compose.BufU32, gaWSC)
 	}
 	a := compose.MatVecOperand{Toks: grows}
-	if bank {
+	switch {
+	case heads:
+		w.Experts, w.Sel, w.SelPer = m.experts, rb.buf(compose.BufU32, gaHeadTiles), groupTok
+	case bank:
 		w.Experts, w.Sel = m.experts, rb.buf(compose.BufU32, gaIn1)
 		// The gate and up read the row, the down a slot's own activation.
 		if prog.vals[o.In[2]].Layout != layoutPairs {
@@ -1532,8 +1548,15 @@ func (g *devTier) genHeadCopy(o *devOp, prog *devProgram, bs *blockScratch, rows
 		copy(l.args[:], rb.args)
 		return []genLaunch{l}
 	}
-	if rows > 1 && prog.latent || len(o.In) == 0 || len(o.Out) == 0 {
+	if len(o.In) == 0 || len(o.Out) == 0 {
 		return nil
+	}
+	if rows > 1 && prog.latent {
+		for _, v := range append(append([]devVal(nil), o.In...), o.Out...) {
+			if prog.vals[v].Layout == layoutHeads {
+				return nil // a head-major input or output the row-major copy does not read
+			}
+		}
 	}
 	p := &bs.p
 	iw, w := prog.vals[o.In[0]].Width, prog.vals[o.Out[0]].Width
@@ -1943,3 +1966,32 @@ func pinned(t int) int {
 // instructions are held against main's by (model.TestDumpEmittedKernels)
 // counts only these.
 func composedComment(c string) string { return strings.TrimSpace("composed " + c) }
+
+// headTiles makes bs's table of each token group's head over a chunk of
+// rows head-major (heads runs of rows columns, groupTok a group). Callers
+// hold g.mu; nothing is made inside a submission.
+func (g *devTier) headTiles(bs *blockScratch, heads, rows int) bool {
+	n := heads * rows / groupTok
+	if bs.headTilesN == n && bs.headTiles != nil {
+		return true
+	}
+	if g.genInSub {
+		return false
+	}
+	t := make([]uint32, n)
+	for i := range t {
+		t[i] = uint32(i * groupTok / rows)
+	}
+	if bs.headTiles != nil {
+		bs.headTiles.Free()
+	}
+	b, err := g.dev.Alloc(4 * n)
+	if err == nil {
+		err = b.Write(u32view(t))
+	}
+	if err != nil {
+		return false
+	}
+	bs.headTiles, bs.headTilesN = b, n
+	return true
+}

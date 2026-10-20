@@ -2166,7 +2166,9 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				case src == slotQ && o.Attr.HeadDim == p.HeadDim:
 					k, ss = dkSlice, slotMPE
 				case src == slotMKV && o.Attr.HeadDim == 0 && o.Attr.Offset == 0:
-					k, ss = dkView, slotMKVLat
+					// The latent's prefix, a value of its own: over rows a row's
+					// prefix is not a row-major value of the latent's width.
+					k, ss = dkSlice, slotAuto
 				case src == slotMKV && o.Attr.HeadDim == 0:
 					k, ss = dkSlice, slotMKPE
 				default:
