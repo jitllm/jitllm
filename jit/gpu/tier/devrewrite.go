@@ -484,6 +484,9 @@ func rwMatVecRes(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq 
 		if p.uses(o.Out[0]) != 1 || m.bias != nil {
 			continue // the residual rides the bias slot
 		}
+		if R != 1 && kernels.IsFloat(m.q) {
+			continue // a step's few rows carry it on a quantized weight's
+		}
 		j := p.next(i, o.Out[0])
 		if j < 0 || p.ops[j].Kind != dkAdd {
 			continue
@@ -508,6 +511,9 @@ func rwMatVecGate(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq
 	}
 	if l.mvu.split > 1 && !l.mvu.group && !few {
 		return false // the gate rides only a matvec that writes its final row
+	}
+	if few && kernels.IsFloat(l.mvu.q) {
+		return false
 	}
 	if l.mvu.bias != nil || l.mvg.bias != nil {
 		return false // the gated launch carries neither bias

@@ -621,15 +621,21 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		if hd <= 0 || iw%hd != 0 {
 			return nil
 		}
-		if o.V != nil {
+		ones := o.V == nil && bs.hdOnes != nil && hd == bs.p.HeadDim
+		if o.V != nil || ones {
 			// A subgroup a head where the device promises one and the head
-			// is a whole number of its lanes, else a thread a head.
+			// is a whole number of its lanes, else a thread a head; a
+			// weightless norm against the head's row of ones.
 			lanes := 1
 			if g.composeTarget().Lanes == ir.SubgroupLanes && hd%ir.SubgroupLanes == 0 {
 				lanes = ir.SubgroupLanes
 			}
 			rb.r.Width, rb.r.Rows = lanes, rows*(iw/hd)
-			x, wt, y := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufVec, gaV), rb.buf(compose.BufOut, gaOut0)
+			wa := gaV
+			if ones {
+				wa = gaOnes
+			}
+			x, wt, y := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufVec, wa), rb.buf(compose.BufOut, gaOut0)
 			rb.r.LaneRMSNorm(x, wt, y, hd, 1, eps)
 			k := g.rowKernWith(&rb.r, compose.Facts{RowGroup: max(lanes, 32)})
 			if k.k == nil {

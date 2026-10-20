@@ -496,6 +496,8 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	// ones, and the 1.0 the scaled residual is copied back with.
 	if p.VNorm {
 		al(&bs.vn, rows*p.NKVHead*p.HeadDim*4)
+	}
+	if p.VNorm || p.QKL2Norm {
 		al(&bs.hdOnes, p.HeadDim*4)
 	}
 	if p.GeomSplit {
