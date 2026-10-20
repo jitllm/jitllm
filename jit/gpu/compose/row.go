@@ -26,6 +26,8 @@ type Row struct {
 	Bufs        []Buf
 	Nodes       []Node
 	Stores      []Store
+	// Frags is each matrix instruction's fragments (NMMA).
+	Frags [][]int
 	// Q8, where set, writes node Q8.Val as the int8 operand a matvec reads:
 	// into buffers Q8.A and Q8.X at Q8.Window, the row padded to Q8.Pad.
 	Q8 *Q8
@@ -182,6 +184,13 @@ const (
 	NBarrier
 	// NSubgroup is the thread's subgroup in its workgroup.
 	NSubgroup
+	// NMMA is the subgroup's matrix instruction MMA over the fragments in
+	// the group's Frags[At] (A's, B's, then the accumulator's), its first
+	// component; NMMAGet component At of the NMMA at A.
+	NMMA
+	NMMAGet
+	// NThread is the thread's number in the grid, unclamped.
+	NThread
 )
 
 // HintKind is what a hint states.
@@ -285,6 +294,8 @@ type Node struct {
 	// Tile is a tile node's shape and role, Major its column-major layout.
 	Tile  ir.TileType
 	Major bool
+	// MMA is an NMMA's instruction.
+	MMA ir.MMAShape
 }
 
 // Store writes node Val into buffer Buf at the element, or at index node Ix
@@ -380,6 +391,12 @@ func (g *Row) Encode(s Schedule) []uint32 {
 		}
 		if n.Kind == NTileLoad || n.Kind == NTileSplat || n.Kind == NWrite {
 			e = append(e, uint32(n.Tile.Rows)<<16|uint32(n.Tile.Cols), uint32(n.Tile.Elem)<<8|uint32(n.Tile.Use), b2u(n.Major))
+		}
+		if n.Kind == NMMA {
+			e = append(e, uint32(n.MMA.Kind)<<24|uint32(n.MMA.M)<<16|uint32(n.MMA.N)<<8|uint32(n.MMA.K), uint32(len(g.Frags[n.At])))
+			for _, a := range g.Frags[n.At] {
+				e = append(e, uint32(a))
+			}
 		}
 	}
 	for _, s := range g.Stores {
@@ -491,8 +508,14 @@ func (g *Row) Check() error {
 				return fmt.Errorf("compose: node %d reaches buffer %d of %d", i, n.Buf, len(g.Bufs))
 			}
 			in = g.operands(i)
-		case NTileSplat, NTileMMA, NBarrier:
+		case NTileSplat, NTileMMA, NBarrier, NMMAGet:
 			in = g.operands(i)
+		case NMMA:
+			na, nb, nc := n.MMA.Frags()
+			if !n.MMA.Valid() || n.At < 0 || n.At >= len(g.Frags) || len(g.Frags[n.At]) != na+nb+nc {
+				return fmt.Errorf("compose: node %d is a %dx%dx%d product without its fragments", i, n.MMA.M, n.MMA.N, n.MMA.K)
+			}
+			in = g.Frags[n.At]
 		case NUnary, NReduce, NWindow, NShuffle:
 			in = []int{n.A}
 		case NBinary, NUBinary, NLess:
@@ -792,6 +815,10 @@ func (g *Row) operands(n int) []int {
 		return o
 	case NBarrier:
 		return some(nd.A)
+	case NMMA:
+		return g.Frags[nd.At]
+	case NMMAGet:
+		return []int{nd.A}
 	case NUnary, NWindow, NShuffle:
 		return []int{nd.A}
 	case NBinary:
@@ -870,7 +897,7 @@ func (g *Row) colDeps() []bool {
 			}
 			x := false
 			switch nd.Kind {
-			case NColumn, NColOff, NWrite, NBarrier, NSubgroup:
+			case NColumn, NColOff, NWrite, NBarrier, NSubgroup, NThread:
 				x = true
 			case NLoad:
 				if !nd.Indexed {
@@ -1037,8 +1064,10 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 	// mma is the warp tile's layout under an MMA schedule.
 	var mma *mmaTile
 	windowSh := map[int]ir.Value{}
-	// vecs is each vector load emitted, by its buffer, place and width.
+	// vecs is each vector load emitted, by its buffer, place and width;
+	// mmaOut each matrix instruction's components, by its first.
 	vecs := map[vecKey][]ir.Value{}
+	mmaOut := map[ir.Value][]ir.Value{}
 	for i, nd := range g.Nodes {
 		if nd.Kind == NWindow {
 			windowSh[i] = b.Shared(fmt.Sprintf("win%d", i), ir.F32, G)
@@ -1728,6 +1757,20 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			v = elem(nd.A, idx, e)
 		case NSubgroup:
 			v = b.SubgroupIndex()
+		case NThread:
+			v = b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
+		case NMMA:
+			na, nb, _ := nd.MMA.Frags()
+			args := g.Frags[nd.At]
+			vs := make([]ir.Value, len(args))
+			for i, a := range args {
+				vs[i] = elem(a, idx, e)
+			}
+			out := b.MMA(nd.MMA, vs[:na], vs[na:na+nb], vs[na+nb:])
+			mmaOut[out[0]] = out
+			v = out[0]
+		case NMMAGet:
+			v = mmaOut[elem(nd.A, idx, e)][nd.At]
 		case NTileLoad:
 			if nd.C >= 0 {
 				elem(nd.C, idx, e)
@@ -2198,8 +2241,12 @@ func (g *Row) typeOf(n int) ir.Type {
 	nd := g.Nodes[n]
 	switch nd.Kind {
 	case NColumn, NRowIdx, NUConst, NIter, NSegment, NColBase, NColOff, NRowBase, NRowOff, NRowTile, NColTile,
-		NWrite, NBarrier, NSubgroup:
+		NWrite, NBarrier, NSubgroup, NThread:
 		return ir.U32
+	case NMMA:
+		return nd.MMA.Elem()
+	case NMMAGet:
+		return g.typeOf(nd.A)
 	case NIConst, NDot4:
 		return ir.I32
 	case NReduce:

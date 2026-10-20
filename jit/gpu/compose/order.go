@@ -49,3 +49,16 @@ func (g *Row) TileMMA(a, b, c int) int { return g.Add(Node{Kind: NTileMMA, A: a,
 
 // Subgroup is the thread's subgroup in its workgroup.
 func (g *Row) Subgroup() int { return g.Add(Node{Kind: NSubgroup}) }
+
+// MMA is the subgroup's matrix instruction sh over fragments a, b and the
+// accumulator c, its components.
+func (g *Row) MMA(sh ir.MMAShape, a, b, c []int) []int {
+	g.Frags = append(g.Frags, append(append(append([]int{}, a...), b...), c...))
+	first := g.Add(Node{Kind: NMMA, MMA: sh, At: len(g.Frags) - 1})
+	_, _, nc := sh.Frags()
+	out := []int{first}
+	for i := 1; i < nc; i++ {
+		out = append(out, g.Add(Node{Kind: NMMAGet, A: first, At: i}))
+	}
+	return out
+}
