@@ -614,19 +614,20 @@ func (g *devTier) genQuant(o *devOp, prog *devProgram, rows int, src, a, ax genA
 	default:
 		return nil
 	}
-	if iw%32 != 0 {
-		// A padded row (zero columns past its width) has no form yet.
-		o.Why = whyNoForm
-		return nil
-	}
+	kp := pad32(iw)
 	if win <= 0 {
 		win = 32
 	}
-	if win > iw {
-		win = iw // the host's window ends at the row
+	if win > kp {
+		win = kp // the host's window ends at the row
 	}
-	rb := &rowBuild{r: compose.Row{Width: rows * iw / 4, Rows: 1}}
-	rb.r.Quantize8(rb.buf(compose.BufRow, src), rb.buf(compose.BufOutU32, a), rb.buf(compose.BufOut, ax), win)
+	rb := &rowBuild{r: compose.Row{Width: rows * kp / 4, Rows: 1}}
+	if kp != iw {
+		// A row padded to whole blocks, its columns past the width zero.
+		rb.r.Quantize8Padded(rb.buf(compose.BufRow, src), rb.buf(compose.BufOutU32, a), rb.buf(compose.BufOut, ax), win, iw, kp)
+	} else {
+		rb.r.Quantize8(rb.buf(compose.BufRow, src), rb.buf(compose.BufOutU32, a), rb.buf(compose.BufOut, ax), win)
+	}
 	ps, err := rb.r.Plan(compose.Facts{Target: g.composeTarget()})
 	if err != nil || len(ps) != 1 {
 		o.Why = whyNoForm

@@ -61,6 +61,23 @@ func (g *Row) Quantize8(x, a, ax, window int) {
 	g.StoreAt(ax, q.sum, q.sumAt)
 }
 
+// Quantize8Padded is Quantize8 over rows of k floats read as rows of kp, a
+// whole number of 32 blocks: a column past k is zero, its address held
+// inside the row.
+func (g *Row) Quantize8Padded(x, a, ax, window, k, kp int) {
+	u, ub := g.UConst, g.UBin
+	e := g.Column()
+	q := g.quantize8(e, g.Width/8, window, func(i int) int {
+		at := ub(OpAdd, ub(OpMul, e, u(4)), u(i))
+		row, col := ub(OpDiv, at, u(kp)), ub(OpRem, at, u(kp))
+		src := ub(OpAdd, ub(OpMul, row, u(k)), ub(OpMin, col, u(k-1)))
+		return g.Select(g.Less(col, u(k)), g.LoadAt(x, src), g.Const(0))
+	})
+	g.StoreAt(a, q.codes, q.codesAt)
+	g.StoreAt(ax, q.scale, q.scaleAt)
+	g.StoreAt(ax, q.sum, q.sumAt)
+}
+
 // Quantize8Stage is the int8 operand of node y over the group's rows, as a
 // stage of the group (a word an element, Width/4 of them a row): y's value
 // at element 4e+i of its row (NAt, recomputed there), the codes at a, the
