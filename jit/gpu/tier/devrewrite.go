@@ -8,7 +8,6 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -23,7 +22,6 @@ const (
 	dkMatVecRes   devKind = iota + numBaseKinds // a matvec carrying the residual add (mv.res)
 	dkMatVecGate                                // up's matvec writing act(gate)*up (mv.gated)
 	dkQKV                                       // q, k and v in one launch (layer.qkv)
-	dkRopeQKV                                   // q's rotary, k's into its page and v's copy (ropeQKV)
 	dkGatherHeads                               // a chunk's rows reordered head-major (headMajor)
 	numKinds
 )
@@ -231,8 +229,6 @@ func (k devKind) String() string {
 		return "matvec_gate"
 	case dkQKV:
 		return "qkv"
-	case dkRopeQKV:
-		return "rope_qkv"
 	}
 	return ""
 }
@@ -250,7 +246,6 @@ type devRewrite struct {
 // each (rwSet), by position here. Each device holds its own list (devShared).
 func newDevRewrites() []devRewrite {
 	return []devRewrite{
-		{"rope-qkv-paged", rwRopeQKV},
 		{"matvec-residual", rwMatVecRes},
 		{"matvec-gate", rwMatVecGate},
 		{"expert-epilogue", rwExpertEpilogue},
@@ -363,52 +358,6 @@ func (p *devProgram) replace(i, j int, o devOp) {
 }
 
 func cat(a, b []int) []int { return append(append([]int(nil), a...), b...) }
-
-// ropeQKVFuses: every head turned whole on every layer, k and v the whole
-// cached row, nothing between the rotary and the history.
-func ropeQKVFuses(p *nn.LayerPlan) bool {
-	return p.NRot > 0 && !partialRotary(p) && !p.NoPosEnc && !p.RopeSplit && !p.QKNormPost &&
-		p.NKVHead*p.HeadDim == p.KVRow()
-}
-
-// producedBy reports whether value v is written by an op of kind k.
-func (p *devProgram) producedBy(v devVal, k devKind) bool {
-	for _, o := range p.ops {
-		if o.Kind == k && slices.Contains(o.Out, v) {
-			return true
-		}
-	}
-	return false
-}
-
-// rwRopeQKV: q's rotary and the history write, one paged launch.
-func rwRopeQKV(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
-	if bs.pkv == nil || g.NoFuse || !ropeQKVFuses(&bs.p) {
-		return false
-	}
-	for i, o := range p.ops {
-		if o.Kind != dkRopeQ || o.N > 0 {
-			continue // an indexer's query lands in a table of its own
-		}
-		for j := i + 1; j < len(p.ops); j++ {
-			w := p.ops[j]
-			if w.Kind != dkKVWrite || p.producedBy(w.In[0], dkIdxAssemble) {
-				continue // an assembled row (an indexer's key in it) writes alone
-			}
-			// The fused launch goes where the history write was, after
-			// every op its key and value come from; nothing between may
-			// read the rotated q it now writes later.
-			if p.next(i, o.Out[0]) < j {
-				return false
-			}
-			p.ops[j] = devOp{Kind: dkRopeQKV, Src: cat(o.Src, w.Src), In: []devVal{o.In[0], w.In[0], w.In[1]},
-				Out: []devVal{o.Out[0], w.Out[0]}}
-			p.ops = append(p.ops[:i], p.ops[i+1:]...)
-			return true
-		}
-	}
-	return false
-}
 
 // rwMatVecRes: a matvec whose output only a residual add reads, as the
 // matvec carrying the add.

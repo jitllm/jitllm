@@ -215,7 +215,8 @@ func (g *devTier) genProgram(prog *devProgram, bs *blockScratch, rows int) {
 	}
 	// The composer's program: its prims lowered each alone, then fused; an
 	// extern is the op's own generator.
-	cp := g.composeProgram(prog, bs, rows)
+	pb := g.composeProgram(prog, bs, rows)
+	cp := pb.cp
 	gs, err := cp.Lower()
 	if err != nil {
 		g.LastErr = err.Error()
@@ -224,6 +225,7 @@ func (g *devTier) genProgram(prog *devProgram, bs *blockScratch, rows int) {
 		}
 		return
 	}
+	last := -1
 	for _, gr := range compose.Prune(cp, compose.Fuse(cp, gs, g.fuseParams()), g.pruneParams()) {
 		o := &prog.ops[gr.Prims[0]]
 		// An op over rows that what reads it makes itself runs only inside
@@ -232,12 +234,21 @@ func (g *devTier) genProgram(prog *devProgram, bs *blockScratch, rows int) {
 			o.Gen = g.genOp(o, prog, bs, rows)
 			continue
 		}
-		ls, ok := g.groupLaunch(&gr)
+		if o.Why == whyNoKernel && len(o.Gen) == 0 && gr.Prims[0] == last {
+			continue // an earlier part of this prim's failed
+		}
+		ls, ok := g.groupLaunch(pb, len(prog.vals), &gr)
 		if !ok {
 			o.Gen, o.Why = nil, whyNoKernel
+			last = gr.Prims[0]
 			continue
 		}
-		o.Gen, o.Why = ls, whyNone
+		if gr.Prims[0] == last {
+			// A further launch of the prim the last group lowered.
+			o.Gen = append(o.Gen, ls...)
+			continue
+		}
+		o.Gen, o.Why, last = ls, whyNone, gr.Prims[0]
 		for _, i := range gr.Prims[1:] {
 			prog.ops[i].Gen, prog.ops[i].Why = nil, whyFused
 		}
@@ -431,13 +442,11 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		// generate, and its block does not place.
 		o.Why = whyNoForm
 		return nil
-	case dkKVWrite, dkKVCopy, dkRopeQKV, dkSlice, dkConcatHeads, dkRopeTail, dkLatentWrite, dkCombine:
+	case dkKVWrite, dkKVCopy, dkSlice, dkConcatHeads, dkRopeTail, dkLatentWrite, dkCombine:
 		var l []genLaunch
 		switch o.Kind {
 		case dkKVWrite, dkKVCopy:
 			l, o.Why = g.genPagedWrite(o, prog, bs, rows, o.Kind == dkKVWrite, gaIn0, gaIn1), whyHistory
-		case dkRopeQKV:
-			l, o.Why = g.genRopeQKV(o, prog, bs, rows), whyHistory
 		case dkSlice, dkConcatHeads, dkRopeTail:
 			l, o.Why = g.genHeadCopy(o, prog, bs, rows), whyLayout
 		case dkLatentWrite:
@@ -1779,30 +1788,6 @@ func (g *devTier) genHeadCopy(o *devOp, prog *devProgram, bs *blockScratch, rows
 	l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
 	copy(l.args[:], rb.args)
 	return []genLaunch{l}
-}
-
-// genRopeQKV is a step's q, k and v into place in one op: q turned by the
-// rotary at its offset in the call's table, k turned into its paged K
-// place and v copied to its row (genPagedWrite), q, k and v the op's three
-// inputs. Callers hold g.mu.
-func (g *devTier) genRopeQKV(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
-	p := &bs.p
-	if len(o.In) != 3 || len(o.Out) < 1 || p.HeadDim <= 0 || p.NRot <= 0 || p.NRot%2 != 0 || p.NRot > p.HeadDim {
-		return nil
-	}
-	qw := prog.vals[o.In[0]].Width
-	if qw%p.HeadDim != 0 || prog.vals[o.Out[0]].Width != qw {
-		return nil
-	}
-	kv := g.genPagedWrite(o, prog, bs, rows, true, gaIn1, gaIn2)
-	if kv == nil {
-		return nil
-	}
-	q := g.ropePairs(rows, qw, p.HeadDim, p.NRot, p.RopeNeox, false, gaIn0, gaQOff, gaOut0)
-	if q == nil {
-		return nil
-	}
-	return append(q, kv...)
 }
 
 // genLayerNorm is a LayerNorm in three launches, each row's statistics in

@@ -8,11 +8,34 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
+// progBuild is prog being stated as the composer's program: past prog's
+// values, the step's tables an op reads (a rotary's table, the history's
+// descriptors, pages and pools), each a value bound to its argument.
+type progBuild struct {
+	cp  *compose.Program
+	ext []genArg
+	at  map[genArg]int
+}
+
+// table is the program value standing for the step's buffer at argument a.
+func (pb *progBuild) table(a genArg, e compose.ValElem) int {
+	if v, ok := pb.at[a]; ok {
+		return v
+	}
+	pb.cp.Vals = append(pb.cp.Vals, compose.Value{Elem: e, Buf: -1})
+	pb.cp.Out = append(pb.cp.Out, true)
+	pb.ext = append(pb.ext, a)
+	v := len(pb.cp.Vals) - 1
+	pb.at[a] = v
+	return v
+}
+
 // composeProgram is prog's ops as the composer's program at rows, op i its
 // prim i: an op of a kind the composer forms, with operands it takes, a
 // prim; every other an extern.
-func (g *devTier) composeProgram(prog *devProgram, bs *blockScratch, rows int) *compose.Program {
+func (g *devTier) composeProgram(prog *devProgram, bs *blockScratch, rows int) *progBuild {
 	cp := &compose.Program{Rows: rows, Vals: make([]compose.Value, len(prog.vals)), Out: make([]bool, len(prog.vals))}
+	pb := &progBuild{cp: cp, at: map[genArg]int{}}
 	for v, t := range prog.vals {
 		cp.Out[v] = prog.slots[v] == slotX // the block's row, read past it
 		e := compose.ValF32
@@ -27,13 +50,13 @@ func (g *devTier) composeProgram(prog *devProgram, bs *blockScratch, rows int) *
 	}
 	cp.Prims = make([]compose.Prim, len(prog.ops))
 	for i := range prog.ops {
-		cp.Prims[i] = g.primOf(&prog.ops[i], prog, bs, rows)
+		cp.Prims[i] = g.primOf(&prog.ops[i], prog, pb, bs, rows)
 	}
-	return cp
+	return pb
 }
 
 // primOf is op o as a prim of the composer's program.
-func (g *devTier) primOf(o *devOp, prog *devProgram, bs *blockScratch, rows int) compose.Prim {
+func (g *devTier) primOf(o *devOp, prog *devProgram, pb *progBuild, bs *blockScratch, rows int) compose.Prim {
 	vals := func(vs []devVal) []int {
 		out := make([]int, len(vs))
 		for i, v := range vs {
@@ -42,6 +65,10 @@ func (g *devTier) primOf(o *devOp, prog *devProgram, bs *blockScratch, rows int)
 		return out
 	}
 	ext := compose.Prim{Kind: compose.PrimExtern, In: vals(o.In), Out: vals(o.Out)}
+	switch o.Kind {
+	case dkKVWrite, dkKVCopy:
+		return g.kvPrim(o, prog, pb, bs, rows, ext)
+	}
 	for _, v := range append(append([]devVal(nil), o.In...), o.Out...) {
 		if prog.vals[v].Layout != layoutRow {
 			return ext
@@ -103,9 +130,64 @@ func (g *devTier) primOf(o *devOp, prog *devProgram, bs *blockScratch, rows int)
 		}
 	case dkQuant:
 		pr.Kind, pr.Win = compose.PrimQuant, p.ActWin
+	case dkRopeQ, dkRopeKRow:
+		ra := o.A
+		iw := prog.vals[o.In[0]].Width
+		if ra.HeadDim <= 0 || iw%ra.HeadDim != 0 || ra.NRot <= 0 || ra.NRot%2 != 0 || ra.NRot > ra.HeadDim {
+			return ext
+		}
+		off := pb.table(gaQOff, compose.ValU32)
+		if o.Kind == dkRopeKRow {
+			off = pb.table(gaKOff, compose.ValU32)
+		}
+		if o.N > 0 {
+			// Rows landing N apart in a table of the op's own.
+			if o.Own[0] = g.ownBuf(bs, o, 0, rows, rowTable(rows, o.N, 0)); o.Own[0] == nil {
+				return ext
+			}
+			off = pb.table(gaOwn0, compose.ValU32)
+		}
+		pr.Kind = compose.PrimRope
+		pr.In = []int{int(o.In[0]), pb.table(gaCS, compose.ValF32), off}
+		pr.Rope = compose.RopeAttrs{Heads: iw / ra.HeadDim, HD: ra.HeadDim, NRot: ra.NRot,
+			Neox: ra.Layout == graph.RopeNeox || ra.Layout == graph.RopeXD, Split: ra.Layout == graph.RopeXD}
 	default:
 		return ext
 	}
+	return pr
+}
+
+// kvPrim is a history write as a prim: k's row turned into its page (or
+// copied, kvCopy), v's row beside it; ext where the history is not paged,
+// a row is wider than its heads in a way the prim does not state, or the
+// rotary is one it does not turn.
+func (g *devTier) kvPrim(o *devOp, prog *devProgram, pb *progBuild, bs *blockScratch, rows int, ext compose.Prim) compose.Prim {
+	p := &bs.p
+	turn := o.Kind == dkKVWrite
+	kw, vw := p.KVRow(), p.NKVHead*p.HeadDim
+	if bs.pkv == nil || p.NonCausal || len(o.In) < 2 || prog.vals[o.In[0]].Width != kw || prog.vals[o.In[1]].Width != vw {
+		return ext
+	}
+	heads, whole := p.NKVHead, false
+	if kw != vw {
+		x := selectOfProg(prog)
+		if x == nil || kw != vw+p.HeadDim {
+			return ext
+		}
+		if x.Attr.Pooled {
+			whole = true
+		} else {
+			heads++
+		}
+	}
+	if turn && (p.NRot <= 0 || p.NoPosEnc || p.RopeSplit || p.NRot%2 != 0 || p.NRot > p.HeadDim) {
+		return ext
+	}
+	pr := compose.Prim{Kind: compose.PrimKVWrite,
+		In:  []int{int(o.In[0]), int(o.In[1]), pb.table(gaCS, compose.ValF32), pb.table(gaPRow, compose.ValU32), pb.table(gaTab, compose.ValU32)},
+		Out: append([]int{pb.table(gaKPool, compose.ValF32), pb.table(gaVPool, compose.ValF32)}, ext.Out...),
+		KV: compose.KVAttrs{KW: kw, VW: vw, Page: g.kvPage(), Heads: heads, HD: p.HeadDim, NRot: p.NRot,
+			Turn: turn, Neox: p.RopeNeox, Whole: whole, F16: g.KVF16}}
 	return pr
 }
 
@@ -173,12 +255,16 @@ func (g *devTier) pruneParams() compose.PruneParams {
 // groupLaunch is composed group gr's launch, its buffers bound by what
 // they bind to; ok false where the composer cannot plan it or the backend
 // refused it.
-func (g *devTier) groupLaunch(gr *compose.Group) ([]genLaunch, bool) {
+func (g *devTier) groupLaunch(pb *progBuild, nvals int, gr *compose.Group) ([]genLaunch, bool) {
 	bind := func(l *genLaunch, j int, b compose.Bind) {
 		l.args[j] = [...]genArg{compose.BindVal: gaVal, compose.BindQ8: gaValQ8A, compose.BindQ8X: gaValQ8X,
 			compose.BindVec: gaOpV, compose.BindVecB: gaOpVB, compose.BindConst: gaOpGC,
 			compose.BindWQS: gaWQS, compose.BindWD: gaWD, compose.BindWSC: gaWSC, compose.BindWBias: gaMBias}[b.Kind]
 		l.refs[j] = int32(b.Index)
+		if b.Kind == compose.BindVal && b.Index >= nvals {
+			// One of the step's tables.
+			l.args[j], l.refs[j] = pb.ext[b.Index-nvals], 0
+		}
 	}
 	if len(gr.Binds) > len(genLaunch{}.args) {
 		return nil, false

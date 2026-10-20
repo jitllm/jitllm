@@ -105,11 +105,10 @@ func TestCompositeKindsOnlyShrink(t *testing.T) {
 		"matvec_res":        true,
 		"matvec_gate":       true,
 		"qkv":               true,
-		"rope_qkv":          true,
 		"gather_heads":      true,
 	}
-	if len(allowed) > 67 {
-		t.Fatalf("%d composite kinds allowed: the list only shrinks from 67", len(allowed))
+	if len(allowed) > 66 {
+		t.Fatalf("%d composite kinds allowed: the list only shrinks from 66", len(allowed))
 	}
 	for k := devKind(0); k < numKinds; k++ {
 		name := k.String()

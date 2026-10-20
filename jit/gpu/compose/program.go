@@ -27,6 +27,8 @@ type ValElem uint8
 const (
 	ValF32 ValElem = iota
 	ValQ8
+	// ValU32 is a table of words (row offsets, descriptors, pages).
+	ValU32
 )
 
 // Value is a program value: Width elements a row, rows contiguous, in
@@ -66,6 +68,17 @@ const (
 	// or with In[Float] where W is a float format; plus the weight's bias
 	// where Bias. Facts are its planning's.
 	PrimMatVec
+	// PrimRope is In[0]'s rows of Rope.Heads heads of Rope.HD, each head's
+	// first Rope.NRot dimensions turned by the table In[1] (NORM or NEOX
+	// pairs; Split two tables), the rest passed through, each row landing in
+	// Out[0] at the offset its row's word of In[2] names.
+	PrimRope
+	// PrimKVWrite is a row's K (In[0], KV.KW wide) and V (In[1], KV.VW) into
+	// the paged history Out[0] (K) and Out[1] (V): each row's place from
+	// its descriptor In[3] and the page table In[4]; K's first KV.NRot of
+	// each of KV.Heads heads turned by the table In[2] where KV.Turn, the
+	// rest as it is; V packed in binary16 pairs where KV.F16.
+	PrimKVWrite
 	// PrimExtern is an op the composer does not form here: its operands
 	// and results, which no pass moves anything across.
 	PrimExtern
@@ -82,6 +95,8 @@ type Prim struct {
 	Eps     float32
 	Layer   bool
 	Win     int
+	Rope    RopeAttrs
+	KV      KVAttrs
 	W       MatVecWeight
 	Bias    bool
 	// Alone is a hint: what reads the prim's result does not fuse into it.
@@ -91,6 +106,18 @@ type Prim struct {
 	Epi   uint32
 	Float int
 	Facts Facts
+}
+
+// RopeAttrs is a rotary's heads, their width and the turned dimensions.
+type RopeAttrs struct {
+	Heads, HD, NRot int
+	Neox, Split     bool
+}
+
+// KVAttrs is a paged write's widths and page, the heads K turns and how.
+type KVAttrs struct {
+	KW, VW, Page, Heads, HD, NRot int
+	Turn, Neox, Whole, F16        bool
 }
 
 // BindKind is what a group's buffer binds to.
@@ -144,6 +171,14 @@ func (p *Program) Lower() ([]Group, error) {
 		}
 		if o.Kind == PrimQuant {
 			gs = append(gs, b.quantAlone(o))
+			continue
+		}
+		if o.Kind == PrimRope || o.Kind == PrimKVWrite {
+			parts, err := p.lowerParts(i)
+			if err != nil {
+				return nil, err
+			}
+			gs = append(gs, parts...)
 			continue
 		}
 		b.g.Row = Row{Width: p.Vals[o.Out[0]].Width, Rows: p.Rows}
@@ -331,4 +366,75 @@ func (b *builder) gated(o Prim, gt, up int) int {
 		v = bound(v, u.UpTanh)
 	}
 	return r.Bin(OpMul, a, v)
+}
+
+// lowerParts is a prim lowered as several groups, each a launch: a rotary's
+// pass-through copy and its turned pairs, a paged write's K and V.
+func (p *Program) lowerParts(i int) ([]Group, error) {
+	o := p.Prims[i]
+	var gs []Group
+	part := func(w int, body func(b *builder)) {
+		b := &builder{p: p, binds: map[Bind]int{}}
+		b.g.Prims = []int{i}
+		b.g.Row = Row{Width: w, Rows: p.Rows}
+		body(b)
+		gs = append(gs, b.g)
+	}
+	row := func(b *builder, v int) int { return b.buf(BufRow, Bind{BindVal, v}) }
+	u32 := func(b *builder, v int) int { return b.buf(BufU32, Bind{BindVal, v}) }
+	switch o.Kind {
+	case PrimRope:
+		ra := o.Rope
+		iw := ra.Heads * ra.HD
+		if ra.HD <= 0 || ra.NRot <= 0 || ra.NRot%2 != 0 || ra.NRot > ra.HD {
+			return nil, fmt.Errorf("compose: a rotary of %d of a head of %d", ra.NRot, ra.HD)
+		}
+		if ra.NRot < ra.HD {
+			part(iw, func(b *builder) {
+				r := &b.g.Row
+				x, off := row(b, o.In[0]), u32(b, o.In[2])
+				r.StoreAt(b.buf(BufOut, Bind{BindVal, o.Out[0]}), r.Load(x), r.UBin(OpAdd, r.Load(off), r.Column()))
+			})
+		}
+		part(ra.Heads*ra.NRot/2, func(b *builder) {
+			in, cs, off := row(b, o.In[0]), b.buf(BufVec, Bind{BindVal, o.In[1]}), u32(b, o.In[2])
+			b.g.Row.RotaryPairs(in, cs, off, b.buf(BufOut, Bind{BindVal, o.Out[0]}), ra.Heads, ra.HD, ra.NRot, ra.Neox, ra.Split)
+		})
+	case PrimKVWrite:
+		kv := o.KV
+		if !kv.Turn || kv.NRot < kv.HD || kv.Whole {
+			part(kv.KW, func(b *builder) {
+				r := &b.g.Row
+				in, desc, tab := row(b, o.In[0]), u32(b, o.In[3]), u32(b, o.In[4])
+				pid, off := r.PagedPos(desc, tab, kv.Page)
+				r.StoreAt(b.buf(BufOut, Bind{BindVal, o.Out[0]}), r.Load(in), r.PagedK(pid, off, kv.KW, kv.Page))
+			})
+		}
+		if kv.Turn {
+			part(kv.Heads*kv.NRot/2, func(b *builder) {
+				in, cs := row(b, o.In[0]), b.buf(BufVec, Bind{BindVal, o.In[2]})
+				desc, tab := u32(b, o.In[3]), u32(b, o.In[4])
+				b.g.Row.PagedRotaryPairs(in, cs, desc, tab, b.buf(BufOut, Bind{BindVal, o.Out[0]}), kv.Heads, kv.HD, kv.NRot, kv.Neox, kv.Page, kv.KW)
+			})
+		}
+		w := kv.VW
+		if kv.F16 {
+			w = kv.VW / 2
+		}
+		part(w, func(b *builder) {
+			r := &b.g.Row
+			vin, desc, tab := row(b, o.In[1]), u32(b, o.In[3]), u32(b, o.In[4])
+			pid, off := r.PagedPos(desc, tab, kv.Page)
+			if kv.F16 {
+				base := r.UBin(OpMul, r.RowIdx(), r.UConst(kv.VW))
+				e := r.UBin(OpAdd, base, r.UBin(OpMul, r.Column(), r.UConst(2)))
+				pk := r.Bin(OpPackF16, r.LoadAt(vin, e), r.LoadAt(vin, r.UBin(OpAdd, e, r.UConst(1))))
+				at := r.UBin(OpAdd, r.UBin(OpDiv, r.PagedRow(pid, off, kv.Page, kv.KW, 0), r.UConst(2)), r.Column())
+				r.StoreAt(b.buf(BufOutU32, Bind{BindVal, o.Out[1]}), pk, at)
+				return
+			}
+			r.StoreAt(b.buf(BufOut, Bind{BindVal, o.Out[1]}), r.Load(vin), r.UBin(OpAdd, r.PagedRow(pid, off, kv.Page, kv.KW, 0), r.Column()))
+		})
+	}
+	return gs, nil
 }

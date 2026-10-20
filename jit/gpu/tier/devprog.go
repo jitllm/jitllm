@@ -970,8 +970,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 			return devType{Elem: elemQ8, Layout: layoutRow, Width: in.Width}
 		}
 		return devType{Elem: elemF32, Layout: row, Width: in.Width}
-	case dkQuant, dkNorm, dkRopeQ, dkAdd, dkActMul, dkKVWrite, dkAttend, dkHeadNorm, dkPostNorm,
-		dkRopeQKV:
+	case dkQuant, dkNorm, dkRopeQ, dkAdd, dkActMul, dkKVWrite, dkAttend, dkHeadNorm, dkPostNorm:
 		return devType{Elem: elemF32, Layout: row, Width: in.Width}
 	}
 	return in
