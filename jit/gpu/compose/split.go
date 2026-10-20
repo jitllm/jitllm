@@ -133,7 +133,7 @@ func usesOperand(nd Node, p *int, base *Node) bool {
 			return true
 		}
 	case &base.C:
-		return nd.Kind == NSelect || nd.Kind == NDot4 || nd.Kind == NBinary && nd.Op == OpFma
+		return nd.Kind == NSelect || nd.Kind == NDot4 || nd.ternary()
 	case &base.Ix:
 		return nd.Kind == NLoad && nd.Indexed || nd.Kind == NAt
 	}

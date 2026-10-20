@@ -31,14 +31,14 @@ func (g *Row) clampInto(t, lo, hi, align int) int {
 }
 
 // hulls takes every tile hint under a row tile of schedule s at the tile's
-// first or last row, and drops every hint but an ordering one (the
-// former's to honour).
+// first or last row, and drops every hint but an ordering one and a last
+// trip's read (the former's to honour).
 func (g *Row) hulls(s Schedule) *Row {
 	tr := max(s.Tile, 1)
 	widen := s.Flat && !s.MMA && tr > 1 && g.SpanGroup%tr == 0
 	var r *Row
 	for i, nd := range g.Nodes {
-		if nd.Kind != NHint || nd.Hint == HintAfter {
+		if nd.Kind != NHint || nd.Hint == HintAfter || nd.Hint == HintLast {
 			continue
 		}
 		if r == nil {
@@ -78,7 +78,7 @@ func (g *Row) atRowOff(n, off int) int {
 			if nd.Kind != NUnary && nd.Kind != NHint {
 				c.B = at(nd.B)
 			}
-			if nd.Kind == NSelect || nd.Kind == NBinary && nd.Op == OpFma {
+			if nd.Kind == NSelect || nd.ternary() {
 				c.C = at(nd.C)
 			}
 			if c != nd {

@@ -30,6 +30,10 @@ func (g *Row) WriteTile(b, ix, stride, t int, tt ir.TileType, major bool, after 
 // Barrier is the workgroup's barrier after token after (-1 none).
 func (g *Row) Barrier(after int) int { return g.Add(Node{Kind: NBarrier, A: after}) }
 
+// Last is fold f's step as its loop's last trip made it, read after the
+// loop: the value the fold then holds, as that trip's own value.
+func (g *Row) Last(f int) int { return g.Add(Node{Kind: NHint, Hint: HintLast, A: f}) }
+
 // After is v, taken after token tok.
 func (g *Row) After(v, tok int) int { return g.Add(Node{Kind: NHint, Hint: HintAfter, A: v, B: tok}) }
 

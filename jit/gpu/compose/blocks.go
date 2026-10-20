@@ -215,7 +215,7 @@ func (r *Row) copyWith(n int, at func(int) int) int {
 		nd.A = at(nd.A)
 	case NBinary, NUBinary, NLess:
 		nd.A, nd.B = at(nd.A), at(nd.B)
-		if nd.Kind == NBinary && nd.Op == OpFma {
+		if nd.ternary() {
 			nd.C = at(nd.C)
 		}
 	case NSelect, NDot4:

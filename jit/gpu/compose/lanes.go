@@ -166,7 +166,7 @@ func (n *Node) replaceOperand(from, to int) {
 		if n.B == from {
 			n.B = to
 		}
-		if (n.Kind == NSelect || n.Kind == NDot4 || n.Kind == NBinary && n.Op == OpFma) && n.C == from {
+		if (n.Kind == NSelect || n.Kind == NDot4 || n.ternary()) && n.C == from {
 			n.C = to
 		}
 	case NAt:

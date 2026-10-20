@@ -378,7 +378,7 @@ func pure(k ir.Kind) bool {
 	switch k {
 	case ir.OpConst, ir.OpTID, ir.OpCTAID, ir.OpNTID, ir.OpAdd, ir.OpSub, ir.OpMul, ir.OpDiv, ir.OpRem, ir.OpShl,
 		ir.OpShr, ir.OpAnd, ir.OpXor, ir.OpMin, ir.OpMax, ir.OpExp, ir.OpSqrt, ir.OpCvtF32, ir.OpCvtF16H,
-		ir.OpPackF16, ir.OpCvtI32, ir.OpBitcast, ir.OpDot4, ir.OpFma, ir.OpLt, ir.OpSelect, ir.OpFunnel:
+		ir.OpPackF16, ir.OpCvtI32, ir.OpBitcast, ir.OpDot4, ir.OpFma, ir.OpLt, ir.OpSelect, ir.OpFunnel, ir.OpSubF16x2, ir.OpFmaF16x2:
 		return true
 	}
 	return false

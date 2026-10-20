@@ -82,7 +82,7 @@ func (g *Row) expandActs() ([]int, error) {
 			nd.A, nd.Ix = at[n.A], at[n.Ix]
 		case NBinary, NUBinary, NLess:
 			nd.A, nd.B = at[n.A], at[n.B]
-			if n.Kind == NBinary && n.Op == OpFma {
+			if n.ternary() {
 				nd.C = at[n.C]
 			}
 		case NSelect:

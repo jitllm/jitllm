@@ -211,6 +211,9 @@ const (
 	HintMultiple
 	// HintAfter: A, taken after token B.
 	HintAfter
+	// HintLast: fold A's step as its loop's last trip made it, read after
+	// the loop (the value the fold then holds, as the trip's own value).
+	HintLast
 )
 
 // Op is a unary or binary map.
@@ -257,7 +260,21 @@ const (
 	// OpDivExact is A/B correctly rounded, whatever the target's division
 	// allows (expandDivs writes it in integer arithmetic).
 	OpDivExact
+	// OpSubH2 and OpFmaH2 are words of two binary16 halves: A - B, and
+	// A*B + C (C in Node.C), each half alone.
+	OpSubH2
+	OpFmaH2
 )
+
+// token is whether fold f carries an order rather than a value: it starts
+// at a write or a barrier.
+func (g *Row) token(f int) bool {
+	k := g.Nodes[g.Nodes[f].B].Kind
+	return k == NWrite || k == NBarrier
+}
+
+// ternary is whether nd reads a third operand at C as a multiply-add does.
+func (nd Node) ternary() bool { return nd.Kind == NBinary && (nd.Op == OpFma || nd.Op == OpFmaH2) }
 
 // Red is a row reduction.
 type Red uint8
@@ -463,7 +480,7 @@ func (g *Row) depth() ([]int, bool) {
 				v = d[n.A]
 			case NBinary, NUBinary, NLess:
 				v = max(d[n.A], d[n.B])
-				if n.Op == OpFma && n.Kind == NBinary {
+				if n.ternary() {
 					v = max(v, d[n.C])
 				}
 			case NSelect, NDot4:
@@ -523,7 +540,7 @@ func (g *Row) Check() error {
 			in = []int{n.A}
 		case NBinary, NUBinary, NLess:
 			in = []int{n.A, n.B}
-			if n.Op == OpFma && n.Kind == NBinary {
+			if n.ternary() {
 				in = append(in, n.C)
 			}
 		case NSelect, NDot4:
@@ -615,6 +632,8 @@ type env struct {
 	// own is the nodes computed in this env whatever they read (a
 	// fragment's: what reads the iterator it binds), nil for none.
 	own []bool
+	// last is each fold's step as its loop's last trip left it (HintLast).
+	last map[int]ir.Value
 }
 
 // carried is a fold a loop carries in one env.
@@ -730,6 +749,24 @@ func (m *mmaTile) remap(ins map[*env]*env) *mmaTile {
 	return n
 }
 
+// setLast records fold f's last step in e.
+func (e *env) setLast(f int, v ir.Value) {
+	if e.last == nil {
+		e.last = map[int]ir.Value{}
+	}
+	e.last[f] = v
+}
+
+// lastOf is fold f's last step, walking out to the env that ran its loop.
+func (e *env) lastOf(f int) (ir.Value, bool) {
+	for x := e; x != nil; x = x.up {
+		if v, ok := x.last[f]; ok {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
 func (e *env) get(n int) (ir.Value, bool) {
 	for x := e; x != nil; x = x.up {
 		if v, ok := x.m[n]; ok {
@@ -825,7 +862,7 @@ func (g *Row) operands(n int) []int {
 	case NUnary, NWindow, NShuffle:
 		return []int{nd.A}
 	case NBinary:
-		if nd.Op == OpFma {
+		if nd.ternary() {
 			return []int{nd.A, nd.B, nd.C}
 		}
 		return []int{nd.A, nd.B}
@@ -1504,6 +1541,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			}
 			for i, x := range cs {
 				x.out.m[x.f] = cur[i]
+				x.out.setLast(x.f, cur[i])
 			}
 			return
 		}
@@ -1521,20 +1559,32 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		for i := range cs {
 			x := &cs[i]
 			x.in = ins[x.out]
+			if g.token(x.f) {
+				// An order carried from trip to trip: no value to carry.
+				x.in.m[x.f] = inits[i]
+				continue
+			}
 			x.phi = b.Phi(g.typeOf(x.f), inits[i])
 			x.in.m[x.f] = x.phi
 		}
 		next := make([]ir.Value, len(cs))
 		for i, x := range cs {
 			next[i] = elem(g.Nodes[x.f].A, idx, x.in)
+			x.out.setLast(x.f, next[i])
 		}
 		bodyStores(ins)
 		for i, x := range cs {
-			b.SetPhi(x.phi, next[i])
+			if x.phi != 0 {
+				b.SetPhi(x.phi, next[i])
+			}
 		}
 		b.SetPhi(it, b.Add(ir.U32, it, one))
 		b.EndLoop()
-		for _, x := range cs {
+		for i, x := range cs {
+			if x.phi == 0 {
+				x.out.m[x.f] = next[i]
+				continue
+			}
 			x.out.m[x.f] = x.phi
 		}
 	}
@@ -1775,6 +1825,13 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				elem(nd.B, idx, e)
 			}
 			v = elem(nd.A, idx, e)
+			if nd.Hint == HintLast {
+				w, ok := e.lastOf(nd.A)
+				if !ok && emitErr == nil {
+					emitErr = fmt.Errorf("compose: node %d reads fold %d's last trip, which no loop made", n, nd.A)
+				}
+				v = w
+			}
 		case NSubgroup:
 			v = b.SubgroupIndex()
 		case NThread:
@@ -1860,6 +1917,10 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			switch nd.Op {
 			case OpPackF16:
 				v = b.PackF16(a, elem(nd.B, idx, e))
+			case OpSubH2:
+				v = b.SubF16x2(a, elem(nd.B, idx, e))
+			case OpFmaH2:
+				v = b.FmaF16x2(a, elem(nd.B, idx, e), elem(nd.C, idx, e))
 			case OpFma:
 				v = b.Fma(a, elem(nd.B, idx, e), elem(nd.C, idx, e))
 			default:
@@ -2313,7 +2374,7 @@ func (g *Row) typeOf(n int) ir.Type {
 			return ir.U32
 		}
 	case NBinary:
-		if nd.Op == OpPackF16 {
+		if nd.Op == OpPackF16 || nd.Op == OpSubH2 || nd.Op == OpFmaH2 {
 			return ir.U32
 		}
 	case NUnary:
