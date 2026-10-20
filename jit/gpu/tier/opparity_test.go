@@ -199,3 +199,35 @@ func TestNormsAreMains(t *testing.T) {
 		}
 	}
 }
+
+// TestRowWindowNormQuantIsMains holds a norm's int8 operand over a window as
+// wide as the row (one scale a row, BitNet's activations) to main's, on a
+// target whose norm reduces by a warp and on one whose norm reduces through
+// its workgroup.
+func TestRowWindowNormQuantIsMains(t *testing.T) {
+	const eps = 1e-6
+	for _, pc := range []struct {
+		prof string
+		main func(k, rows int, eps float32, addOne, add bool, window int) (*ir.Kernel, error)
+	}{{"cuda-sm70", mainkernels.RMSNormQuantRowsWarp}, {"hip-gfx942", mainkernels.RMSNormQuantRows}} {
+		prof := recorder.Profiles[pc.prof]
+		for _, w := range []int{64, 256, 512, 2048, 8192} {
+			for _, rows := range []int{1, 8, 32} {
+				plan := nn.LayerPlan{RMSEps: eps, ActWin: 1 << 16, NEmbd: 256} // BitNet's: a window past every row, rows wider than the embedding
+				for _, kind := range []devKind{dkNormQuant, dkAddNormQuant} {
+					ins := []int{w}
+					if kind == dkAddNormQuant {
+						ins = []int{w, w}
+					}
+					t.Run(fmt.Sprintf("%s_%v_%dx%d", pc.prof, kind, rows, w), func(t *testing.T) {
+						mk, err := pc.main(w, rows, eps, false, kind == dkAddNormQuant, w)
+						if err != nil {
+							t.Fatal(err)
+						}
+						sameAsMain(t, []*ir.Kernel{mk}, opKernels(t, prof, devOp{Kind: kind}, ins, ins, true, plan, rows))
+					})
+				}
+			}
+		}
+	}
+}

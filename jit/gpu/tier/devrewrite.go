@@ -623,8 +623,9 @@ func rwNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq 
 		return false
 	}
 	for i, o := range p.ops {
-		// The block row's norm: a latent's has its own width and kernels.
-		if o.Kind != dkNorm || p.slots[o.Out[0]] != slotH {
+		// The block row's norm or an inner norm before a projection: a
+		// latent's has its own width and kernels.
+		if o.Kind != dkNorm || p.slots[o.Out[0]] != slotH && p.slots[o.Out[0]] != slotSub {
 			continue
 		}
 		if k := rowQuant(p, i); k >= 0 {

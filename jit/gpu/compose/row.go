@@ -1220,6 +1220,9 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 	}
 	// elem emits node n at column idx, its loads and maps, in scope e.
 	var elem func(n int, idx ir.Value, e *env) ir.Value
+	// rowWin is a stage's window that covers its whole row, met once before
+	// the stage's elements.
+	rowWin := map[int]ir.Value{}
 	// loop emits fold loop c in scope e: first what its body reads that
 	// does not change from trip to trip, then the loop, its folds' values
 	// after it left in e.
@@ -1674,6 +1677,10 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				v = b.Shr(t, x, y)
 			}
 		case NWindow:
+			if w, ok := rowWin[n]; ok {
+				v = w
+				break
+			}
 			// Through threadgroup memory: each thread's value stored at its
 			// slot, then every thread folds its window's, in order.
 			x := elem(nd.A, idx, e)
@@ -2210,6 +2217,35 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		windows := false
 		for _, n := range g.Nodes {
 			windows = windows || n.Kind == NWindow
+		}
+		for n, nd := range g.Nodes {
+			wsh, ok := windowSh[n]
+			if nd.Kind != NWindow || nd.Red != RedMax || nd.At < st.Width || !ok || G&(G-1) != 0 {
+				continue
+			}
+			// The row's maximum: a strided scan of its elements, then a
+			// halving tree in the window's array.
+			acc := b.ConstF32(0)
+			for j := 0; j < (st.Width+G-1)/G; j++ {
+				off := b.Const(ir.U32, int64(j*G))
+				word := b.Min(ir.U32, b.Add(ir.U32, tid, off), lastS)
+				se := newEnv(nil)
+				se.col, se.slot, se.rows = word, b.Sub(ir.U32, word, off), true
+				acc = b.Max(ir.F32, acc, elem(nd.A, word, se))
+			}
+			b.Store(wsh, tid, acc, 0)
+			b.Barrier()
+			top := b.Const(ir.U32, int64(G-1))
+			for h := G / 2; h >= 1; h /= 2 {
+				mine := b.Load(ir.F32, wsh, tid, 0)
+				other := b.Load(ir.F32, wsh, b.Min(ir.U32, b.Add(ir.U32, tid, b.Const(ir.U32, int64(h))), top), 0)
+				m := b.Max(ir.F32, mine, other)
+				b.Barrier()
+				b.Store(wsh, tid, m, 0)
+				b.Barrier()
+			}
+			rowWin[n] = b.Load(ir.F32, wsh, b.Const(ir.U32, 0), 0)
+			b.Barrier()
 		}
 		for j := 0; j < (st.Width+G-1)/G; j++ {
 			off := b.Const(ir.U32, int64(j*G))
