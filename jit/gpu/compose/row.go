@@ -167,6 +167,21 @@ const (
 	// NHint is A's value, no instruction of its own, carrying a fact for the
 	// passes (Hint, and its arguments).
 	NHint
+	// NTileLoad is a Tile of buffer Buf from index Ix, its rows B apart
+	// (Major: its columns), after token C (-1 none); NTileSplat a Tile of
+	// every element A; NTileMMA A times B plus the accumulator C.
+	NTileLoad
+	NTileSplat
+	NTileMMA
+	// NWrite stores into buffer Buf at index Ix -- A, and with Vec > 1
+	// the values H[0..Vec-2] after it, one vector store; a tile A (Tile
+	// set), its rows B apart -- after token C (-1 none), and is a token
+	// itself: what reads it comes after the store.
+	NWrite
+	// NBarrier is the workgroup's barrier after token A (-1 none), a token.
+	NBarrier
+	// NSubgroup is the thread's subgroup in its workgroup.
+	NSubgroup
 )
 
 // HintKind is what a hint states.
@@ -185,6 +200,8 @@ const (
 	// HintMultiple: A is a multiple of At (data written so, a table's
 	// aligned entries).
 	HintMultiple
+	// HintAfter: A, taken after token B.
+	HintAfter
 )
 
 // Op is a unary or binary map.
@@ -265,6 +282,9 @@ type Node struct {
 	// Hint and H are an NHint's fact and its further arguments.
 	Hint HintKind
 	H    [3]int32
+	// Tile is a tile node's shape and role, Major its column-major layout.
+	Tile  ir.TileType
+	Major bool
 }
 
 // Store writes node Val into buffer Buf at the element, or at index node Ix
@@ -355,8 +375,11 @@ func (g *Row) Encode(s Schedule) []uint32 {
 	for _, n := range g.Nodes {
 		e = append(e, uint32(n.Kind), uint32(n.Op), uint32(n.Act), uint32(n.Red), uint32(n.Buf),
 			uint32(n.A), uint32(n.B), uint32(n.C), f2u(n.F), uint32(n.At), b2u(n.Indexed), uint32(n.Ix), uint32(n.Vec)<<8|uint32(n.Comp))
-		if n.Kind == NHint {
+		if n.Kind == NHint || n.Kind == NWrite {
 			e = append(e, uint32(n.Hint), uint32(n.H[0]), uint32(n.H[1]), uint32(n.H[2]))
+		}
+		if n.Kind == NTileLoad || n.Kind == NTileSplat || n.Kind == NWrite {
+			e = append(e, uint32(n.Tile.Rows)<<16|uint32(n.Tile.Cols), uint32(n.Tile.Elem)<<8|uint32(n.Tile.Use), b2u(n.Major))
 		}
 	}
 	for _, s := range g.Stores {
@@ -463,6 +486,13 @@ func (g *Row) Check() error {
 			if k := g.Bufs[n.Buf].Kind; k != BufRow && k != BufVec && k != BufScalar && k != BufRowScalar && k != BufU32 && k != BufRowF16 && k != BufShared && k != BufSharedU32 {
 				return fmt.Errorf("compose: node %d loads an output buffer", i)
 			}
+		case NTileLoad, NWrite:
+			if n.Buf < 0 || n.Buf >= len(g.Bufs) {
+				return fmt.Errorf("compose: node %d reaches buffer %d of %d", i, n.Buf, len(g.Bufs))
+			}
+			in = g.operands(i)
+		case NTileSplat, NTileMMA, NBarrier:
+			in = g.operands(i)
 		case NUnary, NReduce, NWindow, NShuffle:
 			in = []int{n.A}
 		case NBinary, NUBinary, NLess:
@@ -733,8 +763,36 @@ func newEnv(up *env) *env { return &env{m: map[int]ir.Value{}, up: up} }
 // step (its loop's body), and not a reduction's operand (an earlier pass).
 func (g *Row) operands(n int) []int {
 	nd := g.Nodes[n]
+	some := func(xs ...int) []int {
+		var o []int
+		for _, x := range xs {
+			if x >= 0 {
+				o = append(o, x)
+			}
+		}
+		return o
+	}
 	switch nd.Kind {
-	case NUnary, NWindow, NShuffle, NHint:
+	case NHint:
+		if nd.Hint == HintAfter {
+			return []int{nd.A, nd.B}
+		}
+		return []int{nd.A}
+	case NTileLoad:
+		return some(nd.Ix, nd.B, nd.C)
+	case NTileSplat:
+		return []int{nd.A}
+	case NTileMMA:
+		return []int{nd.A, nd.B, nd.C}
+	case NWrite:
+		o := some(nd.Ix, nd.A, nd.B, nd.C)
+		for i := 0; i < int(nd.Vec)-1; i++ {
+			o = append(o, int(nd.H[i]))
+		}
+		return o
+	case NBarrier:
+		return some(nd.A)
+	case NUnary, NWindow, NShuffle:
 		return []int{nd.A}
 	case NBinary:
 		if nd.Op == OpFma {
@@ -812,7 +870,7 @@ func (g *Row) colDeps() []bool {
 			}
 			x := false
 			switch nd.Kind {
-			case NColumn, NColOff:
+			case NColumn, NColOff, NWrite, NBarrier, NSubgroup:
 				x = true
 			case NLoad:
 				if !nd.Indexed {
@@ -1622,7 +1680,45 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			}
 			v = rowVal[n]
 		case NHint:
+			if nd.Hint == HintAfter {
+				elem(nd.B, idx, e)
+			}
 			v = elem(nd.A, idx, e)
+		case NSubgroup:
+			v = b.SubgroupIndex()
+		case NTileLoad:
+			if nd.C >= 0 {
+				elem(nd.C, idx, e)
+			}
+			v = b.TileLoad(nd.Tile, params[nd.Buf], elem(nd.Ix, idx, e), elem(nd.B, idx, e), nd.Major)
+		case NTileSplat:
+			v = b.TileSplat(nd.Tile, elem(nd.A, idx, e))
+		case NTileMMA:
+			v = b.TileMMA(elem(nd.A, idx, e), elem(nd.B, idx, e), elem(nd.C, idx, e))
+		case NWrite:
+			if nd.C >= 0 {
+				elem(nd.C, idx, e)
+			}
+			at := elem(nd.Ix, idx, e)
+			switch {
+			case nd.Tile.Rows > 0:
+				b.TileStore(params[nd.Buf], at, elem(nd.B, idx, e), elem(nd.A, idx, e), nd.Major)
+			case nd.Vec > 1:
+				vs := []ir.Value{elem(nd.A, idx, e)}
+				for i := 0; i < int(nd.Vec)-1; i++ {
+					vs = append(vs, elem(int(nd.H[i]), idx, e))
+				}
+				b.StoreV(params[nd.Buf], at, 0, vs...)
+			default:
+				b.Store(params[nd.Buf], at, elem(nd.A, idx, e), 0)
+			}
+			v = at
+		case NBarrier:
+			if nd.A >= 0 {
+				elem(nd.A, idx, e)
+			}
+			b.Barrier()
+			v = b.Const(ir.U32, 0)
 		case NUnary:
 			a := elem(nd.A, idx, e)
 			switch nd.Op {
@@ -2052,7 +2148,8 @@ func (g *Row) isIndex(n int) bool { return g.typeOf(n) != ir.F32 }
 func (g *Row) typeOf(n int) ir.Type {
 	nd := g.Nodes[n]
 	switch nd.Kind {
-	case NColumn, NRowIdx, NUConst, NIter, NSegment, NColBase, NColOff, NRowBase, NRowOff, NRowTile, NColTile:
+	case NColumn, NRowIdx, NUConst, NIter, NSegment, NColBase, NColOff, NRowBase, NRowOff, NRowTile, NColTile,
+		NWrite, NBarrier, NSubgroup:
 		return ir.U32
 	case NIConst, NDot4:
 		return ir.I32

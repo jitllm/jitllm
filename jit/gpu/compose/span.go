@@ -31,13 +31,14 @@ func (g *Row) clampInto(t, lo, hi, align int) int {
 }
 
 // hulls takes every tile hint under a row tile of schedule s at the tile's
-// first or last row, and drops every hint.
+// first or last row, and drops every hint but an ordering one (the
+// former's to honour).
 func (g *Row) hulls(s Schedule) *Row {
 	tr := max(s.Tile, 1)
 	widen := s.Flat && !s.MMA && tr > 1 && g.SpanGroup%tr == 0
 	var r *Row
 	for i, nd := range g.Nodes {
-		if nd.Kind != NHint {
+		if nd.Kind != NHint || nd.Hint == HintAfter {
 			continue
 		}
 		if r == nil {
