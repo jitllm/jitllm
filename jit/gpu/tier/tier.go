@@ -1989,7 +1989,9 @@ type devShared struct {
 	// its launch target and mvPart its partial sums. They are matVec's own and
 	// not a lane's: a matvec a host block offers runs while a session's
 	// submission holds whichever lane it took.
-	mvc       mvCall
+	mvc mvCall
+	// mvForms is each standalone matvec shape's composed launches.
+	mvForms   map[mvShape]*mvPlan
 	mvTo      launchTo
 	mvPart    backend.Buf
 	mvPartCap int
@@ -2831,67 +2833,6 @@ const (
 	noRoom           // this card is full, or refused the allocation
 	failed           // this card could not compile or could not launch
 )
-
-// MatVec is nn.Device's single matvec on the card. The composer forms none
-// outside a block's program, so the host runs it.
-func (g *devTier) MatVec(out []float32, t quant.Type, w []byte, x []float32, nrows, k int) bool {
-	return false
-}
-
-// mvCall is one matVec's device side, handed to matVecSession through the
-// devTier rather than captured by a closure: the function a Session runs
-// escapes, so a closure over the call's locals was a heap object on every
-// matvec a host block offered (a mixture's router, every token). g.mu is held
-// across the call.
-type mvCall struct {
-	fresh, float    bool
-	r               *resident
-	x               []float32
-	nrows, k, split int
-	kern, red       backend.Kernel
-	err             error
-}
-
-// matVecSession is matVec's Session: two uploads, a launch and a readback.
-func (g *devTier) matVecSession(sess backend.Session) {
-	c := &g.mvc
-	k, nrows, split := c.k, c.nrows, c.split
-	nb := k / 32
-	if c.fresh {
-		if c.err = sess.Write(g.aBuf, u32b(g.hostA[:k/4])); c.err != nil {
-			return
-		}
-		if c.err = sess.Write(g.axBuf, f32b(g.hostAX[:3*nb])); c.err != nil {
-			return
-		}
-	}
-	dst := g.outBuf
-	if split > 1 {
-		dst = g.mvPart
-	}
-	// A float weight reads the float activation in the scale plane's slot
-	// (mainkernels.MatVec), written every call: it is k floats.
-	d := c.r.d
-	if c.float {
-		if c.err = sess.Write(g.xfBuf, f32b(c.x[:k])); c.err != nil {
-			return
-		}
-		d = g.xfBuf
-	}
-	lc := launcher{to: &g.mvTo}
-	g.mvTo.s = sess
-	defer func() { g.mvTo.s = nil }()
-	if c.err = lc.launch(c.kern, (nrows*split+127)/128, 128,
-		c.r.qs, d, c.r.sc, g.aBuf, g.axBuf, dst); c.err != nil {
-		return
-	}
-	if split > 1 {
-		if c.err = lc.launch(c.red, (nrows+127)/128, 128, g.mvPart, g.outBuf); c.err != nil {
-			return
-		}
-	}
-	c.err = sess.Read(g.outBuf, g.hostRaw[:nrows*4])
-}
 
 // importing reports that a page-in on this device is a descriptor update rather
 // than a transfer: the heap is the host's, the driver will wrap a host pointer,

@@ -233,6 +233,14 @@ func (g *GPU) MatVec(out []float32, t quant.Type, w []byte, x []float32, nrows, 
 // The walk is not round-robin: prepare() skips the activation upload when x is
 // unchanged, per device, and the first device that accepts a tensor keeps it.
 func (g *GPU) matVec(sid uint64, out []float32, t quant.Type, w []byte, x []float32, nrows, k int) bool {
+	for _, d := range g.devs {
+		switch d.matVec(sid, out, t, w, x, nrows, k) {
+		case served:
+			return true
+		case noKernel, tooSmall:
+			return false
+		}
+	}
 	return false
 }
 
