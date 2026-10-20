@@ -6,8 +6,8 @@ import "github.com/jitllm/jitllm/engine/graph"
 // logits, their logits taken and softmaxed (the selection's renormalised
 // weights), optionally scaled -- as the route's rank and weights.
 func rwRoute(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
-	if R != 1 || nseq > 0 {
-		return false // the route's rows have no composed form yet
+	if nseq > 0 {
+		return false // a ragged step's route has no composed form yet
 	}
 	writer := func(v devVal) int {
 		for j, o := range p.ops {

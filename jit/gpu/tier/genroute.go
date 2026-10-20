@@ -51,7 +51,7 @@ func (g *devTier) lanesRoute(r compose.Route) bool {
 func (g *devTier) genRoute(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
 	o.Why = whyNoForm
 	l := g.curLayer
-	if l == nil || g.genRag || rows != 1 && o.Kind != dkRouterLogits {
+	if l == nil || g.genRag || rows != 1 && (o.Kind == dkRouterBias || o.Kind == dkGroupByExpert) {
 		return nil
 	}
 	launch := func(rb *rowBuild, f compose.Facts) []genLaunch {
@@ -99,7 +99,7 @@ func (g *devTier) genRoute(o *devOp, prog *devProgram, bs *blockScratch, rows in
 			o.Why = whyNothing
 			return nil
 		}
-		rb := &rowBuild{r: compose.Row{Width: 1, Rows: 1}}
+		rb := &rowBuild{r: compose.Row{Width: 1, Rows: rows}}
 		top, w := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufOut, gaOut0)
 		lg := -1
 		if !r.Norm && !r.Sigmoid && !r.SqrtSoftplus {
@@ -122,7 +122,7 @@ func (g *devTier) genRoute(o *devOp, prog *devProgram, bs *blockScratch, rows in
 		}
 		return launch(rb, compose.Facts{})
 	}
-	rb := &rowBuild{r: compose.Row{Width: r.NExpert, Rows: 1}}
+	rb := &rowBuild{r: compose.Row{Width: r.NExpert, Rows: rows}}
 	lg, sel, top := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufOutU32, gaOut0), rb.buf(compose.BufOut, gaOut1)
 	bm, bias := -1, -1
 	switch {

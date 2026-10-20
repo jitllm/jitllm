@@ -84,6 +84,17 @@ const (
 	gaSelB    // its selection bias
 	gaRouteW  // the route's weights (a fused route writes them with the selection)
 	gaSink    // the block's per-head attention sinks
+	gaMgBC    // a mixture's grouping over rows: the block counts,
+	gaMgOff   // the offsets,
+	gaMgCnt   // the totals,
+	gaMgEnds  // each run's end,
+	gaMgColE  // each column's expert,
+	gaMgPerm  // each column's row,
+	gaMgPos   // each pair's column,
+	gaMgTsel  // each tile's expert,
+	gaMgHG    // the sorted rows,
+	gaMgGA    // and their int8 operand
+	gaMgGAX
 )
 
 // genLaunch is one generated launch: threads for a flat launch, or groups of
@@ -113,6 +124,16 @@ type genLaunch struct {
 	// keeps. Rows past the step's compute what nothing reads. (A kernel
 	// built for the step's own rows in the prologue is the faster form.)
 	whole bool
+	// colScale, where set, sizes the launch by the step's used columns of a
+	// mixture's sorted rows: cols*colScale/colDiv threads, flat.
+	colScale, colDiv int
+	// readEnds sends what was launched, then reads the grouping's run ends
+	// home: the used column count the next launches are sized by.
+	readEnds bool
+	// once, where set, skips the launch where its first buffer is the one
+	// its kind last read this step (a gather, a quantize shared by gate and
+	// up).
+	once uint8
 }
 
 // The formers whose launchers run an op: the matvec's (the op's weight's
@@ -263,6 +284,12 @@ func (rb *rowBuild) normed(o *devOp, x, w int, eps float32, layer bool) int {
 // yet or the backend refused its kernel, o.Why saying which. Nil fails the
 // block: nothing else runs an op.
 func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
+	if ls, ok := g.genMoERows(o, prog, bs, rows); ok {
+		if ls == nil {
+			o.Why = whyNoForm
+		}
+		return ls
+	}
 	// The formers take their ops whatever their values' layouts: a former
 	// lays out its own rows (a bank's pairs, a history's pages).
 	switch o.Kind {
@@ -747,6 +774,8 @@ type genState struct {
 	m1DtN, m1BN, m1CN                           backend.Buf
 	router, routerB, selB, routeW               backend.Buf
 	sink                                        backend.Buf
+	// once is what each once-kind's launch last read this step.
+	once [3]backend.Buf
 	// The step's binary16 operand: its plane, and the conversion the step
 	// last made, by kernel and source (shared with the executor, so a
 	// conversion either one made is not made again).
@@ -868,6 +897,9 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.routeW
 			case gaSink:
 				bufs[j] = st.sink
+			case gaMgBC, gaMgOff, gaMgCnt, gaMgEnds, gaMgColE, gaMgPerm, gaMgPos, gaMgTsel, gaMgHG, gaMgGA, gaMgGAX:
+				m := bs.mg
+				bufs[j] = [...]backend.Buf{m.bc, m.off, m.cnt, m.ends, m.colE, m.perm, m.pos, m.tsel, m.hg, m.ga, m.gax}[a-gaMgBC]
 			case gaQ8A:
 				bufs[j], _ = int8Of(st, o.Out[l.q8])
 			case gaQ8X:
@@ -880,6 +912,31 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				continue
 			}
 			st.memoK, st.memoSrc = l.k, bufs[0]
+		}
+		if l.once != 0 {
+			if st.once[l.once] == bufs[0] {
+				continue
+			}
+			st.once[l.once] = bufs[0]
+		}
+		if l.readEnds {
+			m := bs.mg
+			if *lc.err == nil {
+				*lc.err = lc.to.s.Sync()
+			}
+			if *lc.err == nil {
+				*lc.err = lc.to.s.Read(m.ends, u32b(m.endsH))
+			}
+			st.cols = int(m.endsH[m.nExp-1])
+			st.once = [3]backend.Buf{}
+			continue
+		}
+		if l.colScale > 0 {
+			n := st.cols * l.colScale / max(l.colDiv, 1)
+			if n > 0 && *lc.err == nil {
+				*lc.err = lc.launch(l.k, (n+l.width-1)/l.width, l.width, bufs[:l.n]...)
+			}
+			continue
 		}
 		threads := l.threads
 		if rows > 0 && R < rows && !l.whole {
@@ -993,7 +1050,8 @@ func (g *devTier) genPairs(o *devOp, prog *devProgram, bs *blockScratch, rows in
 		rb.store(y, gaOut0)
 	case dkQuant:
 		if moe {
-			return nil // over rows the grouped matvec quantizes what it reads
+			o.Why = whyNothing // over rows the grouped matvec quantizes what it reads
+			return nil
 		}
 		// The slots' rows quantized as one flat row, a window never crossing
 		// a slot.
@@ -1201,7 +1259,7 @@ func (g *devTier) genMatVecNodes(o *devOp, prog *devProgram, bs *blockScratch, r
 	if bank {
 		w.Experts, w.Sel = m.experts, rb.buf(compose.BufU32, gaIn1)
 		// The gate and up read the row, the down a slot's own activation.
-		if prog.vals[o.In[0]].Layout != layoutPairs {
+		if prog.vals[o.In[2]].Layout != layoutPairs {
 			a.One, a.Toks = true, 1
 		}
 	}

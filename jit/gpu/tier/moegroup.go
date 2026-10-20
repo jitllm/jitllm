@@ -3,6 +3,7 @@ package tier
 import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit/gpu/compose"
 )
 
 // groupTok is the padding of an expert's run of columns.
@@ -16,6 +17,12 @@ type moeGroup struct {
 	rwS              backend.Buf
 	rlog, rlogB, rsel, rtop, rw, rbm,
 	eg, eu, egB, euB, eact, edown, edownB backend.Buf
+	// The grouping's planes (compose.Group*): the block counts, offsets and
+	// totals, each run's end, each column's expert, row and pair's column,
+	// each tile's expert; the sorted rows and their int8 operand. endsH is
+	// ends read home, its last word the used column count.
+	bc, off, cnt, ends, colE, perm, pos, tsel, hg, ga, gax backend.Buf
+	endsH                                                  []uint32
 }
 
 func (m *moeGroup) free() {
@@ -23,7 +30,8 @@ func (m *moeGroup) free() {
 		return
 	}
 	for _, b := range []backend.Buf{m.colPair, m.ones, m.rwS, m.rlog, m.rlogB, m.rsel, m.rtop, m.rw, m.rbm,
-		m.eg, m.eu, m.egB, m.euB, m.eact, m.edown, m.edownB} {
+		m.eg, m.eu, m.egB, m.euB, m.eact, m.edown, m.edownB,
+		m.bc, m.off, m.cnt, m.ends, m.colE, m.perm, m.pos, m.tsel, m.hg, m.ga, m.gax} {
 		if b != nil {
 			b.Free()
 		}
@@ -34,7 +42,8 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 	defer g.scratchWin().close()
 	k, e, ew := p.NExpertUsed, p.NExpert, p.ExpWidth()
 	np := (rows*k + e*(groupTok-1) + groupTok - 1) / groupTok * groupTok
-	m := &moeGroup{rows: rows, k: k, nExp: e, p: np}
+	m := &moeGroup{rows: rows, k: k, nExp: e, p: np, endsH: make([]uint32, e)}
+	nb, wide := compose.GroupBlocks(rows, k), max(ew, p.NFFNExp)
 	var err error
 	buf := func(dst *backend.Buf, n int) {
 		if err == nil {
@@ -59,7 +68,10 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 		n   int
 	}{{&m.rlog, rows * e * 4}, {&m.rsel, rows * (k + 1) * 4}, {&m.rtop, rows * (k + 1) * 4},
 		{&m.rw, rows * k * 4}, {&m.eg, np * p.NFFNExp * 4}, {&m.eu, np * p.NFFNExp * 4},
-		{&m.eact, np * p.NFFNExp * 4}, {&m.edown, (np + 1) * ew * 4}} {
+		{&m.eact, np * p.NFFNExp * 4}, {&m.edown, (np + 1) * ew * 4},
+		{&m.bc, nb * e * 4}, {&m.off, nb * e * 4}, {&m.cnt, 2 * e * 4}, {&m.ends, e * 4}, {&m.colE, np * 4},
+		{&m.perm, np * 4}, {&m.pos, rows * k * 4}, {&m.tsel, np / groupTok * 4}, {&m.hg, np * ew * 4},
+		{&m.ga, np * wide}, {&m.gax, 3 * np * (wide / 32) * 4}} {
 		buf(b.dst, b.n)
 	}
 	if err == nil {
