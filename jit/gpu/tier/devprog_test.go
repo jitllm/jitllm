@@ -85,7 +85,6 @@ func TestCompositeKindsOnlyShrink(t *testing.T) {
 		"gather_entries":    true,
 		"grouped_mat_vec":   true,
 		"clamp_at":          true,
-		"rel_attend":        true,
 		"router_logits":     true,
 		"router_bias":       true,
 		"group_mask":        true,
@@ -107,21 +106,10 @@ func TestCompositeKindsOnlyShrink(t *testing.T) {
 		"matvec_gate":       true,
 		"qkv":               true,
 		"rope_qkv":          true,
-		"gate2":             true,
-		"gate2_in":          true,
-		"qkv_in":            true,
-		"qkv_sep":           true,
-		"matvec_res_in":     true,
-		"ffn_in":            true,
-		"down_act":          true,
-		"norm_f16":          true,
-		"add_norm_f16":      true,
-		"act_f16":           true,
-		"qkv_gemm":          true,
 		"gather_heads":      true,
 	}
-	if len(allowed) > 79 {
-		t.Fatalf("%d composite kinds allowed: the list only shrinks from 79", len(allowed))
+	if len(allowed) > 67 {
+		t.Fatalf("%d composite kinds allowed: the list only shrinks from 67", len(allowed))
 	}
 	for k := devKind(0); k < numKinds; k++ {
 		name := k.String()

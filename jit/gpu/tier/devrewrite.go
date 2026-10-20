@@ -24,17 +24,6 @@ const (
 	dkMatVecGate                                // up's matvec writing act(gate)*up (mv.gated)
 	dkQKV                                       // q, k and v in one launch (layer.qkv)
 	dkRopeQKV                                   // q's rotary, k's into its page and v's copy (ropeQKV)
-	dkGate2                                     // gate and up in one launch writing act(gate)*up (mv.gate2)
-	dkGate2In                                   // the FFN norm, gate and up in one launch (mv.gate2In)
-	dkQKVIn                                     // the norm, its quantize and q, k and v, one launch (layer.qkvIn)
-	dkQKVSep                                    // q, k and v each normalising and quantizing (mv.kernIn)
-	dkResIn                                     // a matvec quantizing its own operand, with the residual (mv.resIn)
-	dkFFNIn                                     // gate and up normalising and quantizing the residual (mv.kernIn, gatedIn)
-	dkDownAct                                   // down forming act(gate)*up as it quantizes, with the residual (mv.resActIn)
-	dkNormF16                                   // a norm writing its row and the next GEMM's binary16 operand (rmsF16For)
-	dkAddNormF16                                // the residual add, its norm and the operand (rmsF16For, add)
-	dkActF16                                    // act(gate)*up written as down's binary16 operand only (actF16For)
-	dkQKVGemm                                   // q, k and v as one binary16 grid over one operand (qkvGemm)
 	dkGatherHeads                               // a chunk's rows reordered head-major (headMajor)
 	numKinds
 )
@@ -164,8 +153,6 @@ func (k devKind) String() string {
 		return "dw_conv_rows"
 	case dkAffineRows:
 		return "affine_rows"
-	case dkRelAttend:
-		return "rel_attend"
 	case dkScale:
 		return "scale"
 	case dkClamp:
@@ -246,28 +233,6 @@ func (k devKind) String() string {
 		return "qkv"
 	case dkRopeQKV:
 		return "rope_qkv"
-	case dkGate2:
-		return "gate2"
-	case dkGate2In:
-		return "gate2_in"
-	case dkQKVIn:
-		return "qkv_in"
-	case dkQKVSep:
-		return "qkv_sep"
-	case dkResIn:
-		return "matvec_res_in"
-	case dkFFNIn:
-		return "ffn_in"
-	case dkDownAct:
-		return "down_act"
-	case dkNormF16:
-		return "norm_f16"
-	case dkAddNormF16:
-		return "add_norm_f16"
-	case dkActF16:
-		return "act_f16"
-	case dkQKVGemm:
-		return "qkv_gemm"
 	}
 	return ""
 }
@@ -451,8 +416,8 @@ func rwMatVecRes(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq 
 	if residScaled(&bs.p) {
 		return false // a scaled residual: the fused kernel carries no scale
 	}
-	if R != 1 && !ragFew(nseq) {
-		return false
+	if !ragFew(nseq) {
+		return false // decode's is the composer's fusion pass
 	}
 	for i, o := range p.ops {
 		if o.Kind != dkMatVec || (o.Role != jlm.RoleAttnOut && o.Role != jlm.RoleFFNDown) {
@@ -490,8 +455,8 @@ func rwMatVecRes(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq 
 // variant writing the product.
 func rwMatVecGate(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
 	few := R != 1 && ragFew(nseq)
-	if R != 1 && !few {
-		return false
+	if !few {
+		return false // decode's is the composer's fusion pass
 	}
 	if l.mvu.split > 1 && !l.mvu.group && !few {
 		return false // the gate rides only a matvec that writes its final row
@@ -545,34 +510,6 @@ func normQuantBefore(p *devProgram, i int, role jlm.Role, uses int) bool {
 		p.uses(n.Out[0]) == 1 && p.uses(q.Out[0]) == uses
 }
 
-// resIn rewrites quantize + matvec_res of role into the matvec quantizing
-// its own operand, where m's prologue variant exists.
-func resIn(p *devProgram, role jlm.Role, ok func(src devVal) bool) bool {
-	for i := 1; i < len(p.ops); i++ {
-		o, q := p.ops[i], p.ops[i-1]
-		if o.Kind == dkMatVecRes && o.Role == role && q.Kind == dkQuant && o.In[0] == q.Out[0] &&
-			p.uses(q.Out[0]) == 1 && ok(q.In[0]) {
-			p.ops[i-1] = devOp{Kind: dkResIn, Src: cat(q.Src, o.Src), In: []devVal{q.In[0], o.In[1]}, Out: o.Out, Role: role, W: o.W}
-			p.ops = append(p.ops[:i], p.ops[i+1:]...)
-			return true
-		}
-	}
-	return false
-}
-
-// gatedProduct says v is act(gate)*up written by a gated launch.
-func gatedProduct(p *devProgram, v devVal) bool {
-	for _, o := range p.ops {
-		for _, x := range o.Out {
-			if x == v {
-				return o.Kind == dkMatVecGate || o.Kind == dkGate2 || o.Kind == dkGate2In ||
-					o.Kind == dkFFNIn && o.Role == jlm.RoleFFNUp
-			}
-		}
-	}
-	return false
-}
-
 // mvOfLayer is the matvec and weight of role in l.
 func mvOfLayer(l *layer, role jlm.Role) (mv, *resident) {
 	switch role {
@@ -601,24 +538,8 @@ func (p *devProgram) forms() (qkv qkvForm, gu ffnGateUpForm, down ffnDownForm, d
 		switch o.Kind {
 		case dkExpertMatVec:
 			dense = false
-		case dkQKV, dkQKVIn:
+		case dkQKV:
 			qkv = qkvGrouped
-		case dkQKVSep:
-			qkv = qkvSeparate
-		case dkQKVGemm:
-			qkv = qkvGEMM
-		case dkGate2In:
-			gu = gateUpGate2In
-		case dkGate2:
-			gu = gateUpGate2
-		case dkFFNIn:
-			gu = gateUpIn
-		case dkDownAct:
-			down = downFormAct
-		case dkResIn:
-			if o.Role == jlm.RoleFFNDown {
-				down = downFormIn
-			}
 		}
 	}
 	return qkv, gu, down, dense

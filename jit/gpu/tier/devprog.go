@@ -122,7 +122,6 @@ const (
 	dkClampAt                        // a row clamped to a pair of the block's bounds table
 	dkDWConvRows                     // a depthwise convolution over the call's rows, centred
 	dkAffineRows                     // a per-channel scale and shift over the rows
-	dkRelAttend                      // relative-position self-attention over the call's rows
 	dkScale                          // the block's row times the layer's output scale
 	dkClamp                          // q, k or v clamped to the plan's bound
 	dkRouterLogits                   // a router's logits over the normed row (the router read as floats)
@@ -916,7 +915,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		}
 		return devType{Elem: e, Layout: layoutRow, Width: in.Width}
 	}
-	if p.f16 && (o.Kind == dkMatVec || o.Kind == dkQKV || o.Kind == dkQKVGemm) {
+	if p.f16 && (o.Kind == dkMatVec || o.Kind == dkQKV) {
 		return devType{Elem: elemF32, Layout: row, Width: in.Width}
 	}
 	switch o.Kind {
@@ -955,13 +954,13 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		dkStreamDot, dkGatedVal, dkNGramConv, dkNGramAdd, dkStreamScore, dkStreamWeighted, dkIdxWrite, dkIdxAttendLatent,
 		dkRowBias, dkStreamFlatten, dkFlatNorm, dkMixLogits, dkSinkhorn, dkStreamCollect, dkRowRMS, dkTurn,
 		dkCacheWrite, dkEntryWrite, dkEntrySelect, dkGatherEntries, dkClampAt,
-		dkDWConvRows, dkAffineRows, dkRelAttend:
+		dkDWConvRows, dkAffineRows:
 		return devType{Elem: elemF32, Layout: row, Width: in.Width}
 	case dkExpertFetch, dkGroupByExpert:
 		return devType{Elem: elemU32, Layout: layoutRow, Width: in.Width}
 	case dkRouterLogits, dkRouterBias, dkGroupMask, dkTopK, dkRouteWeights, dkCombine, dkGateLogit, dkGatedAdd:
 		return devType{Elem: elemF32, Layout: row, Width: in.Width}
-	case dkMatVec, dkQKV, dkGate2:
+	case dkMatVec, dkQKV:
 		if i > 0 {
 			return devType{Elem: elemF32, Layout: row, Width: in.Width} // a low-rank operand's float source
 		}
@@ -972,8 +971,7 @@ func (o devOp) wants(p *devProgram, i int) devType {
 		}
 		return devType{Elem: elemF32, Layout: row, Width: in.Width}
 	case dkQuant, dkNorm, dkRopeQ, dkAdd, dkActMul, dkKVWrite, dkAttend, dkHeadNorm, dkPostNorm,
-		dkRopeQKV, dkGate2In,
-		dkQKVIn, dkQKVSep, dkResIn, dkFFNIn, dkDownAct, dkNormF16, dkAddNormF16, dkActF16:
+		dkRopeQKV:
 		return devType{Elem: elemF32, Layout: row, Width: in.Width}
 	}
 	return in

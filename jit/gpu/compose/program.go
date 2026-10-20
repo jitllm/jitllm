@@ -84,8 +84,13 @@ type Prim struct {
 	Win     int
 	W       MatVecWeight
 	Bias    bool
-	Float   int
-	Facts   Facts
+	// Alone is a hint: what reads the prim's result does not fuse into it.
+	Alone bool
+	// Epi is a hint: the consumer kinds that may fuse into the prim, a bit
+	// each; 0 for any.
+	Epi   uint32
+	Float int
+	Facts Facts
 }
 
 // BindKind is what a group's buffer binds to.
@@ -118,9 +123,10 @@ type Group struct {
 	Prims []int
 	// Extern is an extern prim's place: no group.
 	Extern bool
-	// Facts is what the group is planned under: a contraction's, else the
-	// zero Facts (the target alone).
-	Facts Facts
+	// Contract says the group holds a contraction, planned under Facts;
+	// any other is planned under the target alone.
+	Contract bool
+	Facts    Facts
 }
 
 // Lower is the program's ops each its own group, nothing fused: every
@@ -258,7 +264,7 @@ func (b *builder) lowerPrim(i int) error {
 		if o.Bias {
 			v = r.Bin(OpAdd, v, r.Load(b.buf(BufVec, Bind{BindWBias, i})))
 		}
-		b.g.Facts = o.Facts
+		b.g.Contract, b.g.Facts = true, o.Facts
 		y = v
 	default:
 		return fmt.Errorf("compose: prim %d inside a region", o.Kind)

@@ -86,44 +86,90 @@ func (pr *Program) conflicts(p, c Group) bool {
 type FuseParams struct {
 	Off   bool
 	Pairs [numPrimKinds]uint32
-	// Only[k][c], where set, is 1 + the buffer a pair's value must live in.
-	Only [numPrimKinds][numPrimKinds]int
+	Rules [numPrimKinds][numPrimKinds]PairRule
+}
+
+// PairRule is what a pair's fusion further asks of it.
+type PairRule struct {
+	// Buf, where set, is 1 + the buffer the value must live in.
+	Buf int
+	// Sole asks that no other prim read the value, NoBias that its
+	// producer add no bias, Plain that the consumer carry no scale.
+	Sole, NoBias, Plain bool
+	// Arg, where set, is 1 + the consumer's operand the value must be.
+	Arg int
+	// Final asks that the producer write its final row (no k split, or one
+	// reduced in its workgroup).
+	Final bool
+	// Acts, where set, is the consumer activations allowed, a bit each.
+	Acts uint64
 }
 
 // Allow lets a value of a prim of kind from fuse into a prim of kind to.
 func (f *FuseParams) Allow(from, to PrimKind) { f.Pairs[from] |= 1 << to }
 
-// AllowIn is Allow for values in buffer buf alone.
-func (f *FuseParams) AllowIn(from, to PrimKind, buf int) {
+// AllowIf is Allow under rule r.
+func (f *FuseParams) AllowIf(from, to PrimKind, r PairRule) {
 	f.Allow(from, to)
-	f.Only[from][to] = buf + 1
+	f.Rules[from][to] = r
 }
 
 // allows reports whether consumer c's prim may fuse every value of p's it
 // reads.
 func (f FuseParams) allows(pr *Program, p, c Group) bool {
-	maker := map[int]PrimKind{}
+	maker := map[int]int{}
 	for _, i := range p.Prims {
 		for _, v := range pr.Prims[i].Out {
-			maker[v] = pr.Prims[i].Kind
+			maker[v] = i
 		}
 	}
 	any := false
 	for _, i := range c.Prims {
 		o := pr.Prims[i]
-		for _, v := range o.In {
-			if k, ok := maker[v]; ok {
-				if f.Pairs[k]&(1<<o.Kind) == 0 {
-					return false
-				}
-				if b := f.Only[k][o.Kind]; b != 0 && pr.Vals[v].Buf != b-1 {
-					return false
-				}
-				any = true
+		for j, v := range o.In {
+			m, ok := maker[v]
+			if !ok {
+				continue
 			}
+			mk := pr.Prims[m]
+			if f.Pairs[mk.Kind]&(1<<o.Kind) == 0 || !f.Rules[mk.Kind][o.Kind].holds(pr, mk, o, i, v, j) {
+				return false
+			}
+			any = true
 		}
 	}
 	return any
+}
+
+// holds reports whether rule r admits value v, made by mk, read as operand
+// j of prim o (prim index ci).
+func (r PairRule) holds(pr *Program, mk, o Prim, ci, v, j int) bool {
+	switch {
+	case mk.Alone, mk.Epi != 0 && mk.Epi&(1<<o.Kind) == 0,
+		r.Buf != 0 && pr.Vals[v].Buf != r.Buf-1,
+		r.NoBias && mk.Bias,
+		r.Plain && o.Alpha != 0 && o.Alpha != 1,
+		r.Arg != 0 && j != r.Arg-1,
+		r.Final && mk.Facts.DecodeSplit > 1 && !mk.Facts.DecodeGroup,
+		r.Acts != 0 && r.Acts&(1<<o.Act) == 0:
+		return false
+	}
+	if r.Sole {
+		for i, x := range pr.Prims {
+			if i == ci {
+				continue
+			}
+			for _, y := range x.In {
+				if y == v {
+					return false
+				}
+			}
+		}
+		if v < len(pr.Out) && pr.Out[v] {
+			return false
+		}
+	}
+	return true
 }
 
 // readsWhatItWrites reports whether group g reads a value whose buffer it
@@ -178,6 +224,10 @@ func fuse(p, c Group) (Group, bool) {
 		}
 	}
 	if !reads || len(p.Row.Stages) > 0 || len(c.Row.Stages) > 0 {
+		return Group{}, false
+	}
+	// A contraction's rows span workgroups: nothing reducing over them joins.
+	if p.Row.contracts() && c.Row.reduces() {
 		return Group{}, false
 	}
 	switch {
@@ -595,4 +645,14 @@ func Prune(pr *Program, gs []Group, f PruneParams) []Group {
 		}
 	}
 	return gs
+}
+
+// contracts reports whether the group folds over a contraction's loop.
+func (g *Row) contracts() bool {
+	for _, n := range g.Nodes {
+		if n.Kind == NFold {
+			return true
+		}
+	}
+	return false
 }

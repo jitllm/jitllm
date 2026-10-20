@@ -224,7 +224,7 @@ func (g *devTier) genProgram(prog *devProgram, bs *blockScratch, rows int) {
 		}
 		return
 	}
-	for _, gr := range compose.Fuse(cp, gs, g.fuseParams()) {
+	for _, gr := range compose.Prune(cp, compose.Fuse(cp, gs, g.fuseParams()), g.pruneParams()) {
 		o := &prog.ops[gr.Prims[0]]
 		// An op over rows that what reads it makes itself runs only inside
 		// a fused launch: alone, it is its own generator's.
@@ -232,12 +232,12 @@ func (g *devTier) genProgram(prog *devProgram, bs *blockScratch, rows int) {
 			o.Gen = g.genOp(o, prog, bs, rows)
 			continue
 		}
-		l, ok := g.groupLaunch(&gr)
+		ls, ok := g.groupLaunch(&gr)
 		if !ok {
 			o.Gen, o.Why = nil, whyNoKernel
 			continue
 		}
-		o.Gen, o.Why = []genLaunch{l}, whyNone
+		o.Gen, o.Why = ls, whyNone
 		for _, i := range gr.Prims[1:] {
 			prog.ops[i].Gen, prog.ops[i].Why = nil, whyFused
 		}
@@ -425,8 +425,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 			o.Why = whyNone
 		}
 		return ls
-	case dkExpertMatVecE, dkQKVGemm,
-		dkResIn, dkQKVSep,
+	case dkExpertMatVecE,
 		dkExpertBias, dkExpertFetch:
 		// No form in the composer's primitives yet: the op fails to
 		// generate, and its block does not place.

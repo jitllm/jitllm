@@ -9,7 +9,8 @@ import (
 
 // Simplify is the composer's IR pass on k: constants folded (integer and
 // float arithmetic of constants, a binary16 pack of two, a conversion or
-// reinterpretation of one), identities removed, an addend that is a
+// reinterpretation of one), a commutative float op's operands in canonical
+// order (canonOrder), identities removed, an addend that is a
 // multiple of a power-of-two modulus dropped from what the remainder reads,
 // common subexpressions merged and what no effect reads removed.
 func Simplify(k *ir.Kernel) *ir.Kernel { return simplify(k) }
@@ -56,6 +57,7 @@ func simplify(k *ir.Kernel) *ir.Kernel {
 				*o = ir.Op{Kind: ir.OpConst, Type: o.Type, Imm: c}
 				continue
 			}
+			canonOrder(ops, o)
 			if o.Type != ir.U32 && o.Type != ir.I32 {
 				continue
 			}
@@ -499,5 +501,35 @@ func peelMultiples(ops []ir.Op, o *ir.Op) {
 		default:
 			return
 		}
+	}
+}
+
+// canonOrder puts a commutative float op's operands in canonical order by
+// their rank: a carried value, then a computed one, a load, an input, a
+// constant last; equal ranks keep their order.
+func canonOrder(ops []ir.Op, o *ir.Op) {
+	switch o.Kind {
+	case ir.OpAdd, ir.OpMul, ir.OpMin, ir.OpMax:
+	default:
+		return
+	}
+	if o.Type != ir.F32 || o.Args[0] == 0 || o.Args[1] == 0 {
+		return
+	}
+	rank := func(v ir.Value) int {
+		switch ops[v-1].Kind {
+		case ir.OpPhi:
+			return 0
+		case ir.OpLoad, ir.OpLoadV:
+			return 2
+		case ir.OpParam, ir.OpTID, ir.OpCTAID, ir.OpNTID:
+			return 3
+		case ir.OpConst:
+			return 4
+		}
+		return 1
+	}
+	if rank(o.Args[1]) < rank(o.Args[0]) {
+		o.Args[0], o.Args[1] = o.Args[1], o.Args[0]
 	}
 }
