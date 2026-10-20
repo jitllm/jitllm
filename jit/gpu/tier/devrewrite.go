@@ -470,6 +470,9 @@ func rwMatVecRes(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq 
 		if o.Kind != dkMatVec || (o.Role != jlm.RoleAttnOut && o.Role != jlm.RoleFFNDown) {
 			continue
 		}
+		if o.Role == jlm.RoleAttnOut && p.latent {
+			continue // a latent attention's projection runs alone, its add with the norm after it
+		}
 		m := l.mvo
 		if o.Role == jlm.RoleFFNDown {
 			m = l.mvd
