@@ -604,10 +604,10 @@ func verifyMixtureOp(o Op, at string, m *Mixture, width func(ValueID) int, ins, 
 		}
 		a := o.Attr
 		if a.Experts != m.NExpert || a.TopK != m.K || a.Router != m.Router || a.RouteNorm != m.Norm ||
-			a.Scale != m.Scale || a.Groups != m.Groups || a.GroupsUsed != m.GroupsUsed {
-			bad("%s: top %d of %d by router %d (norm %v, scale %g, groups %d/%d); the configuration states top %d of %d by %d (%v, %g, %d/%d)",
-				at, a.TopK, a.Experts, a.Router, a.RouteNorm, a.Scale, a.GroupsUsed, a.Groups,
-				m.K, m.NExpert, m.Router, m.Norm, m.Scale, m.GroupsUsed, m.Groups)
+			a.Scale != m.Scale || a.Groups != m.Groups || a.GroupsUsed != m.GroupsUsed || a.Margin != m.Margin {
+			bad("%s: top %d of %d by router %d (norm %v, scale %g, groups %d/%d, margin %g); the configuration states top %d of %d by %d (%v, %g, %d/%d, %g)",
+				at, a.TopK, a.Experts, a.Router, a.RouteNorm, a.Scale, a.GroupsUsed, a.Groups, a.Margin,
+				m.K, m.NExpert, m.Router, m.Norm, m.Scale, m.GroupsUsed, m.Groups, m.Margin)
 		}
 		if w := o.Weight[0]; w.Role != jlm.RoleRouter || w.K != width(o.In[0]) || w.Rows != m.NExpert {
 			bad("%s: router %v of %dx%d over a row of %d and %d experts", at, w.Role, w.K, w.Rows, width(o.In[0]), m.NExpert)

@@ -96,6 +96,19 @@ func evalPrims(t *testing.T, g *Graph, in map[ValueID][]float32, w map[jlm.Role]
 				case MapMax, MapMin:
 					acc = grp[0]
 				}
+				if o.Attr.Fn == MapAdd && o.Attr.Order == OrderTree {
+					// Pairwise: the first half with the second, down to one.
+					t := append([]float32(nil), grp...)
+					for n := len(t); n > 1; {
+						h := (n + 1) / 2
+						for i := 0; i < n-h; i++ {
+							t[i] += t[i+h]
+						}
+						n = h
+					}
+					out[gi] = t[0]
+					continue
+				}
 				for _, e := range grp {
 					switch o.Attr.Fn {
 					case MapAdd:
@@ -165,7 +178,8 @@ type routeCase struct {
 	groups, used    int
 	bias, selBias   bool
 	experts, k, dim int
-	ties            bool // every logit equal: the tie rule decides the selection
+	ties            bool    // every logit equal: the tie rule decides the selection
+	margin          float32 // a banded router's stated margin (Attrs.Margin)
 }
 
 // routeGraph is a route over a row of c.dim, its selection read by a combine.
@@ -182,7 +196,7 @@ func routeGraph(c routeCase) (*Graph, ValueID, ValueID) {
 	}
 	g.op(Op{Kind: OpRoute, In: []ValueID{x}, Out: []ValueID{sel}, Weight: ws,
 		Attr: Attrs{Experts: c.experts, TopK: c.k, Router: c.router, RouteNorm: c.norm, Scale: c.scale,
-			Groups: c.groups, GroupsUsed: c.used}})
+			Groups: c.groups, GroupsUsed: c.used, Margin: float64(c.margin)}})
 	pairs := g.value("pairs", c.k*4)
 	y := g.value("y", 4)
 	g.op(Op{Kind: OpCombine, In: []ValueID{pairs, sel}, Out: []ValueID{y}})

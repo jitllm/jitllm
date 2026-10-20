@@ -51,7 +51,8 @@ type Mixture struct {
 	Scale       float64 // routed_scaling_factor; 0 and 1 are none
 	Groups      int     // the router's expert groups (DeepSeek-V3); 0 or 1 is none
 	GroupsUsed  int
-	SharedFF    int // the shared expert's hidden width; 0 for none
+	Margin      float64 // the sparse-mixer router's band (Attrs.Margin)
+	SharedFF    int     // the shared expert's hidden width; 0 for none
 	SharedGated bool
 	// WeightIn scales each pair's input by its routed weight and sums the
 	// experts unweighted (Attrs.WeightIn).
@@ -115,7 +116,7 @@ func (m *Mixture) emitFrom(g *Graph, r, x ValueID) ValueID {
 	}
 	g.op(Op{Kind: OpRoute, In: []ValueID{r}, Out: []ValueID{sel}, Weight: rw,
 		Attr: Attrs{Experts: m.NExpert, TopK: m.K, Router: m.Router, RouteNorm: m.Norm, Scale: m.Scale,
-			Groups: m.Groups, GroupsUsed: m.GroupsUsed}})
+			Groups: m.Groups, GroupsUsed: m.GroupsUsed, Margin: m.Margin}})
 	// ew is the experts' width: the row's, or the latent's.
 	ew, ex := m.NEmbd, x
 	if m.Latent != 0 {
