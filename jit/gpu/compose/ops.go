@@ -445,3 +445,47 @@ func (g *Row) ConvShift(s, x, desc, taps, chans, rows int) (val, at int) {
 	xv := g.LoadAt(x, ub(OpMin, ub(OpAdd, ub(OpMul, ub(OpSub, z, pre), u(chans)), c), u(rows*chans-1)))
 	return g.Select(in, sv, xv), ub(OpAdd, base, idx)
 }
+
+// LaneRMSNorm is an RMSNorm of rows of width elements: on lane rows a row's
+// lanes (the group's Width) hold width/Width elements each, element
+// lane+i*Width, their squares summed by a butterfly; at one lane the row is
+// two loops. Each element is stored to out times 1/sqrt(mean(x^2) + eps)
+// times the weight w at its place in the slice of row % groups.
+func (g *Row) LaneRMSNorm(x, w, out, width, groups int, eps float32) {
+	u, ub := g.UConst, g.UBin
+	L := g.Width
+	row := g.RowIdx()
+	base := ub(OpMul, row, u(width))
+	wBase := ub(OpMul, ub(OpRem, row, u(groups)), u(width))
+	at := func(b, off int) int { return ub(OpAdd, b, off) }
+	scale := func(sum int) int {
+		mean := g.Bin(OpMul, sum, g.Const(1/float32(width)))
+		return g.Add(Node{Kind: NUnary, Op: OpRsqrt, A: g.Bin(OpAdd, mean, g.Const(eps))})
+	}
+	if L == 1 {
+		c := g.Loop(width)
+		i := g.Iter(c)
+		acc := g.Fold(c, g.Const(0))
+		v := g.LoadAt(x, at(base, i))
+		g.SetFold(acc, g.fma(v, v, acc))
+		inv := scale(acc)
+		c2 := g.Loop(width)
+		j := g.Iter(c2)
+		y := g.Bin(OpMul, g.Bin(OpMul, g.LoadAt(x, at(base, j)), inv), g.LoadAt(w, at(wBase, j)))
+		g.StoreAt(out, y, at(base, j))
+		return
+	}
+	lane := g.Column()
+	base, wBase = at(base, lane), at(wBase, lane)
+	per := width / L
+	acc := g.Const(0)
+	for k := 0; k < per; k++ {
+		v := g.LoadAt(x, at(base, u(k*L)))
+		acc = g.fma(v, v, acc)
+	}
+	inv := scale(g.Add(Node{Kind: NReduce, Red: RedSum, A: acc, At: 1}))
+	for k := 0; k < per; k++ {
+		y := g.Bin(OpMul, g.Bin(OpMul, g.LoadAt(x, at(base, u(k*L))), inv), g.LoadAt(w, at(wBase, u(k*L))))
+		g.StoreAt(out, y, at(base, u(k*L)))
+	}
+}

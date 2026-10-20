@@ -894,9 +894,13 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				return nil, fmt.Errorf("compose: a row of %d over %d lanes on a subgroup of %d", g.Width, L, s.Target.Lanes)
 			}
 			u := func(n int) ir.Value { return b.Const(ir.U32, int64(n)) }
-			if L == 1 {
+			switch {
+			case L == G:
+				// A workgroup a row.
+				flatIdx, r = b.And(ir.U32, b.TID(), u(L-1)), b.Min(ir.U32, b.CTAID(), u(g.Rows-1))
+			case L == 1:
 				flatIdx, r = u(0), b.Min(ir.U32, flat, u(g.Rows-1))
-			} else {
+			default:
 				flatIdx, r = b.And(ir.U32, flat, u(L-1)), b.Min(ir.U32, b.Div(ir.U32, flat, u(L)), u(g.Rows-1))
 			}
 			flatRaw = flat
@@ -1604,6 +1608,23 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			base, col := rowBase, flatIdx
 			if e.base != 0 {
 				base, col = e.base, e.col
+			}
+			// A loop that only stores runs where nothing reads it, in store
+			// order; one that carries values runs where they are read.
+			ran := make([]bool, len(g.Loops))
+			for _, st := range g.Stores {
+				c := g.storeLoop(st)
+				if c < 0 || ran[c] {
+					continue
+				}
+				ran[c] = true
+				folds := false
+				for _, nd := range g.Nodes {
+					folds = folds || nd.Kind == NFold && nd.At == c
+				}
+				if !folds {
+					loop(c, col, e)
+				}
 			}
 			for _, st := range g.Stores {
 				if g.storeLoop(st) >= 0 {

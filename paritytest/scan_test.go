@@ -77,3 +77,43 @@ func TestScanIsMains(t *testing.T) {
 		})
 	}
 }
+
+// TestLaneNormIsMains holds the composer's lane-row RMSNorm to main's
+// HeadNorm (a weight one head wide) and GroupNormRows (a weight a group's
+// slice), a subgroup a head and a thread a head.
+func TestLaneNormIsMains(t *testing.T) {
+	for _, c := range []struct{ groups, width, rows, lanes int }{
+		{1, 128, 8, 32}, {1, 64, 1, 32}, {4, 64, 2, 32}, {8, 32, 16, 32},
+		{1, 128, 8, 1}, {1, 48, 3, 1}, {4, 64, 2, 1},
+	} {
+		name := fmt.Sprintf("g%d_w%d_r%d_l%d", c.groups, c.width, c.rows, c.lanes)
+		t.Run(name, func(t *testing.T) {
+			var mk *ir.Kernel
+			var err error
+			n := c.groups * c.rows
+			if c.groups == 1 {
+				mk, err = mainkernels.HeadNorm(c.rows, c.width, 1e-5, c.lanes)
+				n = c.rows
+			} else {
+				mk, err = mainkernels.GroupNormRows(c.groups, c.width, 1e-5, c.rows, c.lanes)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			g := &compose.Row{Width: c.lanes, Rows: n}
+			x, w, out := g.Buf(compose.BufRow), g.Buf(compose.BufRow), g.Buf(compose.BufOut)
+			g.LaneRMSNorm(x, w, out, c.width, c.groups, float32(1e-5))
+			f := compose.Facts{Target: sm70}
+			if c.lanes == 1 {
+				f.Target.Lanes = 0
+			} else {
+				f.RowGroup = 32
+			}
+			pl, err := g.Plan(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			same(t, name, []*ir.Kernel{mk}, emitAt(t, pl[0].G, pl[0].S))
+		})
+	}
+}

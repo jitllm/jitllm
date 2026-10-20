@@ -109,11 +109,15 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 		return []Planned{{G: g, S: Schedule{Group: 128, Flat: true, Target: f.Target}, Bufs: all,
 			Threads: g.Rows * g.Width}}, nil
 	}
-	if g.loopReduces() {
-		// A reduction a loop's body reads is a value of the body: a row over
-		// one subgroup's lanes, the reduction their butterfly.
-		return []Planned{{G: g, S: Schedule{Group: 128, Flat: true, Lanes: g.Width, Target: f.Target}, Bufs: all,
-			Threads: g.Rows * g.Width}}, nil
+	if g.reduces() && g.Width <= f.Target.Lanes && g.Width&(g.Width-1) == 0 || g.loopReduces() {
+		// A row no wider than a subgroup, or a reduction a loop's body reads
+		// (a value of the body), runs on one subgroup's lanes, the reduction
+		// their butterfly.
+		s := Schedule{Group: 128, Flat: true, Lanes: g.Width, Target: f.Target}
+		if f.RowGroup > 0 {
+			s.Group = f.RowGroup
+		}
+		return []Planned{{G: g, S: s, Bufs: all, Threads: g.Rows * g.Width}}, nil
 	}
 	if !g.contraction() && !g.reduces() && len(g.Stages) == 0 {
 		return []Planned{{G: g, S: Schedule{Group: 128, Flat: true, Target: f.Target}, Bufs: all,
