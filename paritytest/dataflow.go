@@ -278,9 +278,9 @@ type canon struct {
 	// fold is which ops compute from constants alone (constOnly).
 	fold []bool
 	loop []int // the loop op each op sits in, -1 outside
-	aff   []*affine
-	ids   []int32
-	busy  []bool
+	aff  []*affine
+	ids  []int32
+	busy []bool
 }
 
 func newCanon(k *ir.Kernel, in *Interner) *canon {
