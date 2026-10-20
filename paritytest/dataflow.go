@@ -495,6 +495,25 @@ func (c *canon) index(i int) (affine, bool) {
 		if ok = ok1 && ok2 && y.isConst() && y.c >= 0 && y.c < 32; ok {
 			r = x.scale(1 << y.c)
 		}
+	case ir.OpMin, ir.OpMax:
+		// Of two constants, a constant; an unsigned minimum with a
+		// constant at or above the other's bound, that other.
+		x, ok1 := arg(0)
+		y, ok2 := arg(1)
+		ok = false
+		if o.Type == ir.U32 && ok1 && ok2 {
+			switch {
+			case x.isConst() && y.isConst():
+				r, ok = affine{c: int64(min(uint32(x.c), uint32(y.c)))}, true
+				if o.Kind == ir.OpMax {
+					r.c = int64(max(uint32(x.c), uint32(y.c)))
+				}
+			case o.Kind == ir.OpMin && y.isConst() && y.c >= 0:
+				if hi, okh := c.bound(int(o.Args[0]) - 1); okh && hi <= uint64(y.c) {
+					r, ok = x, true
+				}
+			}
+		}
 	case ir.OpDiv, ir.OpRem, ir.OpShr, ir.OpAnd:
 		// An unsigned shift right by k is the quotient by 2^k, a mask of
 		// 2^k-1 the remainder; any other shift or mask is no field.

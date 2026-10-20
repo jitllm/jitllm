@@ -784,6 +784,8 @@ type devOp struct {
 
 // devProgram is a block's device program.
 type devProgram struct {
+	// attend is the attention's launches by the plan of a call's keys (attendAt).
+	attend map[attendKey][]genLaunch
 	// f16 says the program's matvecs are binary16 GEMMs reading the float
 	// rows (a prompt chunk on a card whose twins are all binary16): no
 	// int8 operand, each GEMM converting its row or finding it written.

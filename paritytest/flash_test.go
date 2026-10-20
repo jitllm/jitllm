@@ -19,13 +19,14 @@ func TestPagedFlashIsMains(t *testing.T) {
 		softcap                      float32
 	}
 	var cases []fc
-	for _, hd := range [][3]int{{8, 2, 64}, {4, 4, 128}, {16, 2, 64}, {8, 1, 256}} {
+	for _, hd := range [][3]int{{8, 2, 64}, {4, 4, 128}, {16, 2, 64}, {8, 1, 256}, {4, 2, 32}} {
 		for _, sp := range []int{1, 2} {
 			for _, vec := range []bool{false, true} {
 				cases = append(cases, fc{heads: hd[0], kv: hd[1], dim: hd[2], rows: 1, splits: sp, vec: vec})
 			}
 		}
 		cases = append(cases, fc{heads: hd[0], kv: hd[1], dim: hd[2], rows: 3, splits: 2, vec: true})
+		cases = append(cases, fc{heads: hd[0], kv: hd[1], dim: hd[2], rows: 32, splits: 1, vec: true})
 		cases = append(cases, fc{heads: hd[0], kv: hd[1], dim: hd[2], rows: 1, splits: 1, kimm: true, sink: true, softcap: 30})
 	}
 	for _, c := range cases {

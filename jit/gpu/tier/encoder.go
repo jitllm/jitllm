@@ -214,6 +214,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				sk = bs.noSink
 			}
 		}
+		gst.sink = sk
 		// Over rows a mixture's values live in the grouped scratch (bs.mg),
 		// and its ops launch that scratch's kernels (groupRun for the
 		// experts).
@@ -259,6 +260,12 @@ func (g *devTier) layersSession(s backend.Session) {
 			// An op with generated launches runs them and nothing else; the
 			// block's last add stays with the executor where the next
 			// block's norm may fold it (foldAddNorm).
+			if len(o.Gen) == 1 && o.Gen[0].former == formAttend {
+				// The attention of this call's keys.
+				if o.Gen = g.attendAt(&o, prog, bs, fc.rows, pagedKeys(pk.rows)); o.Gen == nil && err == nil {
+					err = fmt.Errorf("tier: block %d: no attention for the call's keys", li)
+				}
+			}
 			if len(o.Gen) != 0 && o.Gen[0].former == 0 {
 				{
 					gst.cs, gst.qOff, gst.kOff = rcs, qOff, kro

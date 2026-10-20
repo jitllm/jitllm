@@ -83,6 +83,7 @@ const (
 	gaRouterB // its bias on the logits
 	gaSelB    // its selection bias
 	gaRouteW  // the route's weights (a fused route writes them with the selection)
+	gaSink    // the block's per-head attention sinks
 )
 
 // genLaunch is one generated launch: threads for a flat launch, or groups of
@@ -770,6 +771,7 @@ type genState struct {
 	recNorm, recMid                             backend.Buf
 	m1DtN, m1BN, m1CN                           backend.Buf
 	router, routerB, selB, routeW               backend.Buf
+	sink                                        backend.Buf
 	// The step's binary16 operand: its plane, and the conversion the step
 	// last made, by kernel and source (shared with the executor, so a
 	// conversion either one made is not made again).
@@ -889,6 +891,8 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.selB
 			case gaRouteW:
 				bufs[j] = st.routeW
+			case gaSink:
+				bufs[j] = st.sink
 			case gaQ8A:
 				bufs[j], _ = int8Of(st, o.Out[l.q8])
 			case gaQ8X:
