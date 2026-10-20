@@ -39,14 +39,15 @@ func Compare(main, composed []*ir.Kernel) (total, same int, missing []Miss) {
 	// scratch set), is one kernel: the composer forms it once.
 	once := map[string]bool{}
 	for _, k := range main {
-		ids := slices.Clone(in.Dataflow(k))
+		df := in.Dataflow(k)
+		ids := slices.Clone(df)
 		slices.Sort(ids)
 		key := fmt.Sprint(ids)
 		if once[key] {
 			continue
 		}
 		once[key] = true
-		live := liveOps(k)
+		live := liveOps(k, func(i int) bool { return in.constant(k, i, df[i]) })
 		ix := indexOnly(k, live)
 		// A value a kernel computes twice is one value: main's builder
 		// eliminates no common subexpression, and recomputing is no part of
@@ -71,8 +72,10 @@ func Compare(main, composed []*ir.Kernel) (total, same int, missing []Miss) {
 
 // liveOps is which of k's instructions an effect reaches: the void ones
 // (stores, barriers, the loops) and every operand they read, transitively.
-// What nothing reads computes nothing, so it is not held to.
-func liveOps(k *ir.Kernel) []bool {
+// What nothing reads computes nothing, so it is not held to, and neither is
+// what only a constant reads (konst): its value is the constant's whatever
+// it is.
+func liveOps(k *ir.Kernel, konst func(int) bool) []bool {
 	live := make([]bool, len(k.Ops))
 	var mark func(v ir.Value)
 	mark = func(v ir.Value) {
@@ -81,6 +84,9 @@ func liveOps(k *ir.Kernel) []bool {
 		}
 		live[v-1] = true
 		o := k.Ops[v-1]
+		if o.Type != ir.Void && konst(int(v)-1) {
+			return
+		}
 		for _, a := range o.Args {
 			mark(a)
 		}
@@ -106,11 +112,14 @@ type Interner struct {
 	desc map[int32]string
 	// affs is each named affine form, by its name.
 	affs map[int32]affine
+	// folded is each name of an op computed from constants alone: a
+	// constant too, wherever and however often it is computed.
+	folded map[int32]bool
 }
 
 // NewInterner is an empty interner.
 func NewInterner() *Interner {
-	return &Interner{ids: map[form]int32{}, desc: map[int32]string{}, fields: map[int32]field{}, affs: map[int32]affine{}}
+	return &Interner{ids: map[form]int32{}, desc: map[int32]string{}, fields: map[int32]field{}, affs: map[int32]affine{}, folded: map[int32]bool{}}
 }
 
 // form is one canonical form: an instruction by its kind, type, loop depth,
@@ -192,6 +201,9 @@ func (in *Interner) constant(k *ir.Kernel, i int, id int32) bool {
 	if k.Ops[i].Kind == ir.OpConst {
 		return true
 	}
+	if in.folded[id] {
+		return true
+	}
 	a, ok := in.affs[id]
 	return ok && a.isConst()
 }
@@ -263,7 +275,9 @@ type canon struct {
 	in    *Interner
 	k     *ir.Kernel
 	depth []int16
-	loop  []int // the loop op each op sits in, -1 outside
+	// fold is which ops compute from constants alone (constOnly).
+	fold []bool
+	loop []int // the loop op each op sits in, -1 outside
 	aff   []*affine
 	ids   []int32
 	busy  []bool
@@ -286,6 +300,23 @@ func newCanon(k *ir.Kernel, in *Interner) *canon {
 		if o.Kind == ir.OpLoop {
 			stack = append(stack, i)
 		}
+	}
+	c.fold = make([]bool, n)
+	for i, o := range k.Ops {
+		if !pureOp(o.Kind) || o.Tile != nil || len(o.Vargs) > 0 {
+			continue
+		}
+		f, any := true, false
+		for _, a := range o.Args {
+			if a == 0 {
+				continue
+			}
+			any = true
+			if j := int(a) - 1; j >= i || k.Ops[j].Kind != ir.OpConst && !c.fold[j] {
+				f = false
+			}
+		}
+		c.fold[i] = f && any
 	}
 	// An integer op of what a loop does not change is the same value
 	// wherever it is computed: it is named at the depth of what it reads.
@@ -452,6 +483,13 @@ func (c *canon) index(i int) (affine, bool) {
 	o := c.k.Ops[i]
 	if !isInt(o.Type) || c.busy[i] {
 		return affine{}, false
+	}
+	if x := c.identity(i); x >= 0 {
+		r, ok := c.index(x)
+		if ok {
+			c.aff[i] = &r
+		}
+		return r, ok
 	}
 	c.busy[i] = true
 	arg := func(j int) (affine, bool) {
@@ -682,11 +720,19 @@ func (c *canon) name(i int) int32 {
 		c.ids[i] = id
 		return id
 	}
+	if x := c.identity(i); x >= 0 {
+		id := c.name(x)
+		c.ids[i] = id
+		return id
+	}
 	var id int32
 	if a, ok := c.index(i); ok {
 		id = c.affineName(a)
 	} else {
 		id = c.instrName(i)
+		if c.fold[i] {
+			c.in.folded[id] = true
+		}
 	}
 	c.ids[i] = id
 	return id
@@ -702,8 +748,9 @@ func (c *canon) instrName(i int) int32 {
 	c.busy[i] = true
 	defer func() { c.busy[i] = false }()
 	f := form{tag: fInstr, kind: o.Kind, typ: o.Type, d: c.depth[i]}
-	if o.Kind == ir.OpConst {
-		// A constant is its value wherever it is defined.
+	if o.Kind == ir.OpConst || c.fold[i] {
+		// A constant is its value wherever it is defined, and so is an op
+		// of constants alone.
 		f.d = 0
 	}
 	if o.Tile != nil {
@@ -922,4 +969,42 @@ func indexOnly(k *ir.Kernel, live []bool) []bool {
 		}
 	}
 	return idx
+}
+
+// pureOp reports whether an op's value is a function of its operands alone.
+func pureOp(k ir.Kind) bool {
+	switch k {
+	case ir.OpAdd, ir.OpSub, ir.OpMul, ir.OpDiv, ir.OpRem, ir.OpShl, ir.OpShr, ir.OpAnd, ir.OpXor, ir.OpMin, ir.OpMax,
+		ir.OpExp, ir.OpSqrt, ir.OpCvtF32, ir.OpCvtF16H, ir.OpPackF16, ir.OpCvtI32, ir.OpBitcast, ir.OpDot4, ir.OpFma,
+		ir.OpLt, ir.OpSelect, ir.OpSubF16x2, ir.OpFmaF16x2:
+		return true
+	}
+	return false
+}
+
+// identity is the op that op i equals, -1 for none: x+0, x-0, x^0 and x
+// shifted by 0 are x, whatever states the 0.
+func (c *canon) identity(i int) int {
+	o := c.k.Ops[i]
+	if !isInt(o.Type) || o.Args[0] == 0 || o.Args[1] == 0 || int(o.Args[0]) > i || int(o.Args[1]) > i || c.busy[i] {
+		return -1
+	}
+	switch o.Kind {
+	case ir.OpAdd, ir.OpXor, ir.OpSub, ir.OpShl, ir.OpShr:
+	default:
+		return -1
+	}
+	c.busy[i] = true
+	defer func() { c.busy[i] = false }()
+	zero := func(j int) bool {
+		a, ok := c.index(int(o.Args[j]) - 1)
+		return ok && a.isConst() && a.c == 0
+	}
+	switch {
+	case zero(1):
+		return int(o.Args[0]) - 1
+	case (o.Kind == ir.OpAdd || o.Kind == ir.OpXor) && zero(0):
+		return int(o.Args[1]) - 1
+	}
+	return -1
 }

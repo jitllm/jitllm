@@ -93,6 +93,9 @@ const (
 	// read across the barrier between their phases.
 	BufShared
 	BufSharedU32
+	// BufTile is a parameter of f32 collective tiles, loaded and stored
+	// as whole tiles (TileLoad, WriteTile).
+	BufTile
 )
 
 // Buf is one of a group's buffers, a kernel parameter in order.
@@ -1117,6 +1120,10 @@ func (g *Row) bind(b *ir.Builder, have func(i int) (ir.Value, bool)) []ir.Value 
 				continue
 			}
 		}
+		if bf.Kind == BufTile {
+			params[i] = b.ParamTile(fmt.Sprintf("p%d", i), ir.TileF32)
+			continue
+		}
 		t := bufType(bf.Kind)
 		if g.shared(i) {
 			params[i] = b.Shared(fmt.Sprintf("s%d", i), t, bf.N)
@@ -1636,7 +1643,11 @@ func (g *Row) emitIn(b *ir.Builder, params []ir.Value, s Schedule, cta func() ir
 				x.in.m[x.f] = inits[i]
 				continue
 			}
-			x.phi = b.Phi(g.typeOf(x.f), inits[i])
+			if g.tile(x.f) {
+				x.phi = b.TilePhi(inits[i])
+			} else {
+				x.phi = b.Phi(g.typeOf(x.f), inits[i])
+			}
 			x.in.m[x.f] = x.phi
 		}
 		next := make([]ir.Value, len(cs))
@@ -1697,6 +1708,10 @@ func (g *Row) emitIn(b *ir.Builder, params []ir.Value, s Schedule, cta func() ir
 				if nd.Vec > 1 {
 					// A vector load's constant offset is its immediate.
 					ix, off := nd.Ix, int64(0)
+					if x := g.Nodes[ix]; x.Kind == NHint && x.Hint == HintAfter {
+						elem(x.B, idx, e)
+						ix = x.A
+					}
 					if x := g.Nodes[ix]; x.Kind == NUBinary && x.Op == OpAdd && g.Nodes[x.B].Kind == NUConst {
 						ix, off = x.A, int64(g.Nodes[x.B].At)
 					}
@@ -2522,4 +2537,17 @@ func strided(b *ir.Builder, t ir.Value, n, stride int) ir.Value {
 	}
 	k := b.Const(ir.U32, int64(stride))
 	return b.Add(ir.U32, b.Mul(ir.U32, b.Div(ir.U32, t, k), b.Const(ir.U32, int64(n*stride))), b.Rem(ir.U32, t, k))
+}
+
+// tile reports whether node n's value is a collective tile.
+func (g *Row) tile(n int) bool {
+	switch nd := g.Nodes[n]; nd.Kind {
+	case NTileLoad, NTileSplat, NTileMMA:
+		return true
+	case NFold:
+		return g.tile(nd.B)
+	case NHint:
+		return g.tile(nd.A)
+	}
+	return false
 }
