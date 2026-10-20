@@ -67,8 +67,14 @@ func (g *devTier) ensureFusedLocked(l *layer, prog *devProgram, bs *blockScratch
 	}
 	fc.qkv, fc.gu, fc.down, fc.dense = fc.prog.forms()
 	fc.bs = bs
+	// A decode step's kernels are formed for its one row, a chunk's for the
+	// scratch's rows: the shape each step runs.
+	fc.rows = bs.rows
+	if R == 1 && rag == nil {
+		fc.rows = 1
+	}
 	g.curLayer = l
-	g.genProgram(fc.prog, bs, bs.rows)
+	g.genProgram(fc.prog, bs, fc.rows)
 	g.curLayer = nil
 }
 

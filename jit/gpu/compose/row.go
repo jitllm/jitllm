@@ -133,6 +133,8 @@ const (
 	OpShr
 	// OpHalf is the binary16 in word A's low half, as a float.
 	OpHalf
+	// OpBits is word A's 32 bits as a float, no conversion.
+	OpBits
 )
 
 // Red is a row reduction.
@@ -673,6 +675,8 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 				}
 			case OpHalf:
 				v = b.CvtF16H(a)
+			case OpBits:
+				v = b.Bitcast(ir.F32, a)
 			case OpRsqrt:
 				v = b.Div(ir.F32, b.ConstF32(1), b.Sqrt(a))
 			case OpAbs:

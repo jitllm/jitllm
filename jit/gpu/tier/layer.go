@@ -328,8 +328,12 @@ type progFused struct {
 	// fault is the fault switches the variant was rewritten for (faultSig).
 	fault uint32
 	prog  *devProgram
-	took  rwSet
-	err   error // the type error that refused every rewrite, if one did
+	// rows is the rows its kernels were formed for: one for a decode
+	// step, the scratch's chunk otherwise. A launch over fewer runs a
+	// proportional share of the grid.
+	rows int
+	took rwSet
+	err  error // the type error that refused every rewrite, if one did
 	// valErr refuses the variant: its values could not be coloured, or
 	// their buffers could not grow (colour.go). The step fails by it.
 	valErr error

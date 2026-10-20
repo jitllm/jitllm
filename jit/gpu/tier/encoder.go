@@ -497,7 +497,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					if o.Kind == dkGatherHeads {
 						gst.perm = g.perms[[2]int{o.Heads, R}]
 					}
-					runGen(lc, &o, R, bs.rows, &buf, &gst)
+					runGen(lc, &o, R, fc.rows, &buf, &gst)
 					actMemoK, actMemoSrc = gst.memoK, gst.memoSrc
 				}
 				switch o.Kind {

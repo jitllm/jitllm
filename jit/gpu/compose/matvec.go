@@ -6,12 +6,14 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
-// MatVecOperand is a matvec's int8 operand as the row group reads it: the
-// codes (four to a word, K/4 words a token) and, at AX, each 32-element
-// block's scale (K/32 a token), then each 16 elements' code sum after every
-// token's scales.
+// MatVecOperand is a matvec's operand as the row group reads it. For a
+// quantized weight, the int8 operand: the codes (four to a word, K/4 words
+// a token) and, at AX, each 32-element block's scale (K/32 a token), then
+// each 16 elements' code sum after every token's scales. For a float weight,
+// the float rows at X, K a token.
 type MatVecOperand struct {
 	A, AX int // the group's buffers: BufU32 and BufRow (read by index)
+	X     int // the float rows (BufRow, read by index)
 	Toks  int // tokens the operand holds, so where the sums start
 }
 
@@ -36,9 +38,10 @@ type MatVecWeight struct {
 // refused by name.
 func (g *Row) MatVec(w MatVecWeight, a MatVecOperand) (int, error) {
 	info := w.T.Info()
+	if info.Float > 0 {
+		return g.floatMatVec(w, a, info)
+	}
 	switch {
-	case info.Float > 0:
-		return 0, fmt.Errorf("compose: a matvec over float weights (%v) has no node form yet", w.T)
 	case info.Bits != 8 || info.Hi != 0 || info.PerSuper != 1 || info.BiasK != 0 || info.BiasArray ||
 		info.Codes != nil || info.E8M0 || info.D32:
 		return 0, fmt.Errorf("compose: a matvec over %v has no node form yet", w.T)
@@ -80,5 +83,35 @@ func (g *Row) MatVec(w MatVecWeight, a MatVecOperand) (int, error) {
 	ax := g.LoadAt(a.AX, g.UBin(OpAdd, g.UBin(OpMul, t, u(w.K/32)), g.UBin(OpMul, s, u(sub/32))))
 	q := g.Add(Node{Kind: NUnary, Op: OpFloat, A: isum})
 	g.SetFold(acc, g.Add(Node{Kind: NBinary, Op: OpFma, A: q, B: g.Bin(OpMul, d, ax), C: acc}))
+	return acc, nil
+}
+
+// floatMatVec is MatVec over a float weight, stored row-major (row e's K
+// values at e*K): a fold over the row's 32-element sub-blocks, each the sum
+// of its products in element order from zero, added into the accumulator.
+// Only an f32 weight here; a binary16 or bfloat16 one is refused by name.
+func (g *Row) floatMatVec(w MatVecWeight, a MatVecOperand, info kernels.QInfo) (int, error) {
+	if info.Float != 4 {
+		return 0, fmt.Errorf("compose: a matvec over %v has no node form yet", w.T)
+	}
+	const sub = 32
+	if w.K%sub != 0 {
+		return 0, fmt.Errorf("compose: a float matvec at K=%d, not whole 32-element blocks", w.K)
+	}
+	e, t := g.Column(), g.RowIdx()
+	u := g.UConst
+	c := g.Loop(w.K / sub)
+	s := g.Iter(c)
+	acc := g.Fold(c, g.Const(0))
+	base := g.UBin(OpMul, s, u(sub))
+	wRow := g.UBin(OpAdd, g.UBin(OpMul, e, u(w.K)), base)
+	xRow := g.UBin(OpAdd, g.UBin(OpMul, t, u(w.K)), base)
+	dot := g.Const(0)
+	for i := 0; i < sub; i++ {
+		wv := g.Add(Node{Kind: NUnary, Op: OpBits, A: g.LoadAt(w.QS, g.UBin(OpAdd, wRow, u(i)))})
+		xv := g.LoadAt(a.X, g.UBin(OpAdd, xRow, u(i)))
+		dot = g.Add(Node{Kind: NBinary, Op: OpFma, A: wv, B: xv, C: dot})
+	}
+	g.SetFold(acc, g.Bin(OpAdd, acc, dot))
 	return acc, nil
 }

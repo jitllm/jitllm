@@ -1003,12 +1003,24 @@ func (g *devTier) genMatVecNodes(o *devOp, rows int) []genLaunch {
 		return nil
 	}
 	rb := &rowBuild{r: compose.Row{Width: m.rows, Rows: rows}}
-	w := compose.MatVecWeight{T: m.q, K: m.k, Rows: m.rows,
-		QS: rb.buf(compose.BufU32, gaWQS), D: rb.buf(compose.BufU32, gaWD), SC: -1}
+	w := compose.MatVecWeight{T: m.q, K: m.k, Rows: m.rows, QS: rb.buf(compose.BufU32, gaWQS), D: -1, SC: -1}
+	if !kernels.IsFloat(m.q) {
+		w.D = rb.buf(compose.BufU32, gaWD)
+	}
 	if m.q.Info().PerSuper > 1 {
 		w.SC = rb.buf(compose.BufU32, gaWSC)
 	}
-	a := compose.MatVecOperand{A: rb.buf(compose.BufU32, gaOpA), AX: rb.buf(compose.BufRow, gaOpAX), Toks: rows}
+	a := compose.MatVecOperand{Toks: rows}
+	if kernels.IsFloat(m.q) {
+		// A float weight reads the float row the program states.
+		if o.FIn == 0 {
+			o.Why = whyNoFloat
+			return nil
+		}
+		a.X = rb.buf(compose.BufRow, gaIn0+genArg(o.FIn-1))
+	} else {
+		a.A, a.AX = rb.buf(compose.BufU32, gaOpA), rb.buf(compose.BufRow, gaOpAX)
+	}
 	v, err := rb.r.MatVec(w, a)
 	if err != nil {
 		g.LastErr = err.Error()
