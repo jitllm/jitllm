@@ -150,6 +150,9 @@ type Group struct {
 	Prims []int
 	// Extern is an extern prim's place: no group.
 	Extern bool
+	// Segs, where set, are the group's members as one segmented launch
+	// (Siblings): its Row and Binds are unused.
+	Segs []Group
 	// Contract says the group holds a contraction, planned under Facts;
 	// any other is planned under the target alone.
 	Contract bool

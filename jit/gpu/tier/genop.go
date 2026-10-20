@@ -118,12 +118,16 @@ const (
 
 // The by-reference arguments (genLaunch.refs).
 const (
-	gaVal    = gaSegEnd + iota // the value refs names
-	gaValQ8A                   // an int8 value's codes
-	gaValQ8X                   // and its scales
-	gaOpV                      // the op refs names: its bound vector,
-	gaOpVB                     // its bias,
-	gaOpGC                     // its constant
+	gaVal     = gaSegEnd + iota // the value refs names
+	gaValQ8A                    // an int8 value's codes
+	gaValQ8X                    // and its scales
+	gaOpV                       // the op refs names: its bound vector,
+	gaOpVB                      // its bias,
+	gaOpGC                      // its constant
+	gaOpWQS                     // its weight's payload,
+	gaOpWD                      // scales,
+	gaOpWSC                     // sub-block scales,
+	gaOpWBias                   // and bias
 )
 
 // maxSegs is the most matvecs one segmented launch carries.
@@ -226,7 +230,8 @@ func (g *devTier) genProgram(prog *devProgram, bs *blockScratch, rows int) {
 		return
 	}
 	last := -1
-	for _, gr := range compose.Prune(cp, compose.Fuse(cp, gs, g.fuseParams()), g.pruneParams()) {
+	gs = compose.Prune(cp, compose.Fuse(cp, gs, g.fuseParams(rows)), g.pruneParams())
+	for _, gr := range compose.Siblings(cp, gs, g.siblingParams(rows)) {
 		o := &prog.ops[gr.Prims[0]]
 		// An op over rows that what reads it makes itself runs only inside
 		// a fused launch: alone, it is its own generator's.
@@ -888,6 +893,7 @@ type genState struct {
 	bs             *blockScratch
 	slots          []devSlot
 	ops            []devOp
+	l              *layer
 	cs, qOff, kOff backend.Buf
 	// The op's weight: its payload, scale (the float row for a float
 	// format) and scale-of-scale planes, its own bias, and the int8 operand
@@ -952,6 +958,10 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.ops[l.refs[j]].VB
 			case gaOpGC:
 				bufs[j] = st.ops[l.refs[j]].GC
+			case gaOpWQS, gaOpWD, gaOpWSC, gaOpWBias:
+				w := st.ops[l.refs[j]].W
+				r := *st.l.rs[w]
+				bufs[j] = [...]backend.Buf{r.qs, r.d, r.sc, (*st.l.ms[w]).bias}[a-gaOpWQS]
 			case gaOut0, gaOut1, gaOut2:
 				bufs[j] = at(o.Out[a-gaOut0])
 			case gaV:

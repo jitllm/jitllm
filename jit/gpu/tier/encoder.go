@@ -207,7 +207,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		if R > 1 {
 			qOff, kro = bs.roff, bs.kroff
 		}
-		gst := genState{bs: bs, slots: prog.slots, ops: prog.ops}
+		gst := genState{bs: bs, slots: prog.slots, ops: prog.ops, l: l}
 		var sk backend.Buf
 		if p.AttnSinks {
 			if sk = l.sinks; sk == nil {

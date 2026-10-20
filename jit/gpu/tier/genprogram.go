@@ -4,7 +4,6 @@ import (
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/gpu/compose"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
@@ -191,12 +190,17 @@ func (g *devTier) kvPrim(o *devOp, prog *devProgram, pb *progBuild, bs *blockScr
 	return pr
 }
 
-// matvecPrim is matvec o as a prim: a decode step's projection of a
-// resident dense weight, planned under the step's facts and the weight's
-// tuned split; ext where it takes another form.
+// matvecPrim is matvec o as a prim: a decode step's or a chunk's
+// projection of a resident dense weight, planned under the step's facts and
+// the weight's tuned split; ext where it takes another form.
 func (g *devTier) matvecPrim(o *devOp, prog *devProgram, ext compose.Prim, bs *blockScratch, rows int) compose.Prim {
 	l := g.curLayer
-	if rows != 1 || g.genRag || o.Heads > 0 || l == nil || o.W < 0 || o.W >= len(l.ms) || *l.rs[o.W] == nil {
+	if g.genRag || o.Heads > 0 || l == nil || o.W < 0 || o.W >= len(l.ms) || *l.rs[o.W] == nil {
+		return ext
+	}
+	// Over a chunk's rows, where the device has a binary16 GEMM or the
+	// collective tiles, the staged forms (gemm16Of, genGemmTile) serve.
+	if rows > 1 && (g.composeTarget().API == compose.APIPTX && g.f16MMA() != 0 || g.tilesOK() || g.PreferTiles || g.PreferGemmInt8) {
 		return ext
 	}
 	m := *l.ms[o.W]
@@ -219,7 +223,11 @@ func (g *devTier) matvecPrim(o *devOp, prog *devProgram, ext compose.Prim, bs *b
 	default:
 		pr.Alone = true
 	}
-	pr.Facts = compose.Facts{Step: compose.StepDecode, Tok: bs.tok, RowTile: pinned(g.tiles.rowt),
+	step := compose.StepDecode
+	if rows > 1 {
+		step = compose.StepChunk
+	}
+	pr.Facts = compose.Facts{Step: step, Tok: bs.tok, RowTile: pinned(g.tiles.rowt),
 		Split: g.kb.batch.Split, DecodeSplit: max(m.split, 1), DecodeRowt: max(m.rowt, 1),
 		RagTok: g.kb.batch.RagTok, RagRowT: g.kb.batch.RagRowT, RagSplit: g.kb.batch.RagSplit,
 		MMAMT: g.tiles.mmaMT, MMANT: g.tiles.mmaNT, NoMMA: g.NoMMA, DecodeGroup: m.group}
@@ -229,19 +237,28 @@ func (g *devTier) matvecPrim(o *devOp, prog *devProgram, ext compose.Prim, bs *b
 // fuseParams is the fusion pass's parameters on this device, main's: a
 // residual's sum into its norm, a norm's row into its quantize, and the
 // dense FFN's gated activation into its quantize but under NoOperandFuse.
-func (g *devTier) fuseParams() compose.FuseParams {
+func (g *devTier) fuseParams(rows int) compose.FuseParams {
 	var f compose.FuseParams
 	f.Allow(compose.PrimAdd, compose.PrimNorm)
 	f.Allow(compose.PrimNorm, compose.PrimQuant)
 	if g.Config == nil || !g.NoOperandFuse {
 		f.AllowIf(compose.PrimActMul, compose.PrimQuant, compose.PairRule{Buf: int(slotAct) + 1})
 	}
-	// A projection's residual add and up's gate, as main's matvec carries
-	// them: its sole reader, no bias; the gate on a final row, up its second
-	// operand.
-	f.AllowIf(compose.PrimMatVec, compose.PrimAdd, compose.PairRule{Sole: true, NoBias: true, Plain: true})
-	f.AllowIf(compose.PrimMatVec, compose.PrimActMul, compose.PairRule{Sole: true, NoBias: true, Arg: 2, Final: true})
+	// At decode, a projection's residual add and up's gate, as main's matvec
+	// carries them: its sole reader, no bias; the gate on a final row, up its
+	// second operand.
+	if rows == 1 {
+		f.AllowIf(compose.PrimMatVec, compose.PrimAdd, compose.PairRule{Sole: true, NoBias: true, Plain: true})
+		f.AllowIf(compose.PrimMatVec, compose.PrimActMul, compose.PairRule{Sole: true, NoBias: true, Arg: 2, Final: true})
+	}
 	return f
+}
+
+// siblingParams is the sibling pass's: at decode, up to maxSegs
+// contractions over one int8 operand as one segmented launch, a gate and an
+// up its product reads apart, as main's; none under NoFuse.
+func (g *devTier) siblingParams(rows int) compose.SiblingParams {
+	return compose.SiblingParams{Off: rows != 1 || g.Config != nil && g.NoFuse, Max: maxSegs, NoProduct: true}
 }
 
 // pruneParams is the dead-store pass's: a projection's row its fused
@@ -252,63 +269,41 @@ func (g *devTier) pruneParams() compose.PruneParams {
 	return f
 }
 
-// groupLaunch is composed group gr's launch, its buffers bound by what
-// they bind to; ok false where the composer cannot plan it or the backend
-// refused it.
+// groupLaunch is composed group gr's launches as the composer plans them,
+// each buffer bound by what it binds to; ok false where the composer cannot
+// plan it, a split's planes do not fit, or the backend refused a kernel.
 func (g *devTier) groupLaunch(pb *progBuild, nvals int, gr *compose.Group) ([]genLaunch, bool) {
-	bind := func(l *genLaunch, j int, b compose.Bind) {
-		l.args[j] = [...]genArg{compose.BindVal: gaVal, compose.BindQ8: gaValQ8A, compose.BindQ8X: gaValQ8X,
-			compose.BindVec: gaOpV, compose.BindVecB: gaOpVB, compose.BindConst: gaOpGC,
-			compose.BindWQS: gaWQS, compose.BindWD: gaWD, compose.BindWSC: gaWSC, compose.BindWBias: gaMBias}[b.Kind]
-		l.refs[j] = int32(b.Index)
-		if b.Kind == compose.BindVal && b.Index >= nvals {
-			// One of the step's tables.
-			l.args[j], l.refs[j] = pb.ext[b.Index-nvals], 0
-		}
-	}
-	if len(gr.Binds) > len(genLaunch{}.args) {
-		return nil, false
-	}
-	if !gr.Contract {
-		k := g.rowKern(&gr.Row)
-		if k.k == nil {
-			return nil, false
-		}
-		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(gr.Binds))}
-		for j, b := range gr.Binds {
-			bind(&l, j, b)
-		}
-		return []genLaunch{l}, true
-	}
-	// A contraction: its plan's launches, a k split's planes in the split
-	// scratch and their sum.
-	f := gr.Facts
-	f.Target = g.composeTarget()
-	ps, err := gr.Row.Plan(f)
+	ls, err := gr.Launches(g.composeTarget())
 	if err != nil {
 		g.LastErr = err.Error()
 		return nil, false
 	}
 	var out []genLaunch
-	for _, p := range ps {
-		s := p.S
-		if s.Split > 1 {
-			need := gr.Row.Width * gr.Row.Rows * s.Split
-			if g.genInSub && g.partCap < need || !g.genInSub && !g.sizePart(need) {
-				return nil, false
-			}
-		}
-		k, _ := g.genKern(append([]uint32{encRow}, p.G.Encode(s)...), func() (*ir.Kernel, error) { return p.G.Emit(s) })
-		if k == nil || len(p.Bufs) > len(genLaunch{}.args) {
+	for _, cl := range ls {
+		if cl.Planes > 0 && (g.genInSub && g.partCap < cl.Planes || !g.genInSub && !g.sizePart(cl.Planes)) {
 			return nil, false
 		}
-		l := genLaunch{k: k, groups: (p.Threads + s.Group - 1) / s.Group, width: s.Group, n: uint8(len(p.Bufs))}
-		for i, b := range p.Bufs {
-			if b < 0 {
-				l.args[i] = gaSplit
-				continue
+		tag := uint32(encRow)
+		if cl.Segmented {
+			tag = encSegments
+		}
+		k, _ := g.genKern(append([]uint32{tag}, cl.Key...), cl.Emit)
+		if k == nil || len(cl.Binds) > len(genLaunch{}.args) {
+			return nil, false
+		}
+		l := genLaunch{k: k, groups: cl.Groups, width: cl.Width, n: uint8(len(cl.Binds))}
+		for j, b := range cl.Binds {
+			switch {
+			case b.Kind == compose.BindScratch:
+				l.args[j] = gaSplit
+			case b.Kind == compose.BindVal && b.Index >= nvals:
+				l.args[j] = pb.ext[b.Index-nvals] // one of the step's tables
+			default:
+				l.args[j] = [...]genArg{compose.BindVal: gaVal, compose.BindQ8: gaValQ8A, compose.BindQ8X: gaValQ8X,
+					compose.BindVec: gaOpV, compose.BindVecB: gaOpVB, compose.BindConst: gaOpGC,
+					compose.BindWQS: gaOpWQS, compose.BindWD: gaOpWD, compose.BindWSC: gaOpWSC, compose.BindWBias: gaOpWBias}[b.Kind]
+				l.refs[j] = int32(b.Index)
 			}
-			bind(&l, i, gr.Binds[b])
 		}
 		out = append(out, l)
 	}

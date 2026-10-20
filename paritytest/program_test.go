@@ -178,3 +178,49 @@ func TestMatVecPrimIsMains(t *testing.T) {
 		}
 	}
 }
+
+// TestSiblingsAreMains holds three matvecs over one int8 operand, each
+// lowered alone, through the sibling pass and its launch to main's
+// segmented matvec.
+func TestSiblingsAreMains(t *testing.T) {
+	rows := []int{128, 64, 64}
+	for _, q := range []format{{kernels.Q8_0, mainkernels.Q8_0}, {kernels.TQ2, mainkernels.TQ2}} {
+		for _, sp := range []int{1, 2, 4} {
+			name := fmt.Sprintf("%v_s%d", q.c, sp)
+			t.Run(name, func(t *testing.T) {
+				var ms []mainkernels.MatVecShape
+				for _, r := range rows {
+					ms = append(ms, mainkernels.MatVecShape{T: q.m, K: 256, Rows: r})
+				}
+				mk, err := mainkernels.MatVecSegments(ms, sp, sp > 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				p := &compose.Program{Rows: 1, Vals: []compose.Value{{Elem: compose.ValQ8, Width: 256, Buf: -1}}}
+				for i, r := range rows {
+					p.Vals = append(p.Vals, compose.Value{Width: r, Buf: -1})
+					p.Prims = append(p.Prims, compose.Prim{Kind: compose.PrimMatVec, In: []int{0}, Out: []int{i + 1},
+						Facts: compose.Facts{Step: compose.StepDecode, DecodeSplit: sp, DecodeGroup: true},
+						W:     compose.MatVecWeight{T: q.c, K: 256, Rows: r}})
+				}
+				gs, err := p.Lower()
+				if err != nil {
+					t.Fatal(err)
+				}
+				gs = compose.Siblings(p, gs, compose.SiblingParams{Max: 3})
+				if len(gs) != 1 {
+					t.Fatalf("%d groups", len(gs))
+				}
+				ls, err := gs[0].Launches(sm70)
+				if err != nil || len(ls) != 1 {
+					t.Fatalf("%d launches: %v", len(ls), err)
+				}
+				k, err := ls[0].Emit()
+				if err != nil {
+					t.Fatal(err)
+				}
+				same(t, name, []*ir.Kernel{mk}, []*ir.Kernel{k})
+			})
+		}
+	}
+}

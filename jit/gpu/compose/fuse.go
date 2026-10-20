@@ -656,3 +656,88 @@ func (g *Row) contracts() bool {
 	}
 	return false
 }
+
+// SiblingParams is the sibling pass's switch and parameters: Max members a
+// launch, and whether two that one prim reads both of stay apart (a gate
+// and an up its activation product reads, for the product's own forms).
+type SiblingParams struct {
+	Off       bool
+	Max       int
+	NoProduct bool
+}
+
+// Siblings is the sibling pass: contractions reading one int8 operand, of
+// one k and one quantized format family, each planning to its final row in
+// its workgroup (no split, or one reduced there), as one segmented launch,
+// the members in program order; nothing between moves past them.
+func Siblings(pr *Program, gs []Group, f SiblingParams) []Group {
+	if f.Off || f.Max < 2 {
+		return gs
+	}
+	member := func(g Group) (Prim, bool) {
+		if g.Extern || !g.Contract || len(g.Prims) != 1 || len(g.Segs) > 0 {
+			return Prim{}, false
+		}
+		o := pr.Prims[g.Prims[0]]
+		return o, o.Kind == PrimMatVec && len(o.In) == 1 && o.Facts.DecodeRowt <= 1 &&
+			pr.Vals[o.In[0]].Elem == ValQ8
+	}
+	product := func(a, b int) bool {
+		for _, o := range pr.Prims {
+			ra, rb := false, false
+			for _, x := range o.In {
+				ra, rb = ra || x == a, rb || x == b
+			}
+			if ra && rb && o.Kind == PrimActMul {
+				return true
+			}
+		}
+		return false
+	}
+	used := make([]bool, len(gs))
+	var out []Group
+	for i := range gs {
+		if used[i] {
+			continue
+		}
+		o, ok := member(gs[i])
+		split := max(o.Facts.DecodeSplit, 1)
+		if !ok || split > 1 && (!o.Facts.DecodeGroup || !groupSplitFits(o.W.Rows, split)) {
+			out = append(out, gs[i])
+			continue
+		}
+		set := []int{i}
+		for j := i + 1; j < len(gs) && len(set) < f.Max; j++ {
+			q, ok := member(gs[j])
+			if ok && q.In[0] == o.In[0] && q.W.K == o.W.K && !(f.NoProduct && product(o.Out[0], q.Out[0])) &&
+				(split == 1 || groupSplitFits(q.W.Rows, split)) {
+				set = append(set, j)
+				continue
+			}
+			if pr.conflicts(gs[j], gs[i]) {
+				break
+			}
+		}
+		if len(set) < 2 {
+			out = append(out, gs[i])
+			continue
+		}
+		seg := Group{Prims: nil, Contract: true}
+		for _, j := range set {
+			m := gs[j]
+			m.Facts.DecodeGroup, m.Facts.DecodeSplit = true, split
+			seg.Segs = append(seg.Segs, m)
+			seg.Prims = append(seg.Prims, m.Prims...)
+			used[j] = true
+		}
+		out = append(out, seg)
+	}
+	return out
+}
+
+// groupSplitFits reports whether rows tile a k split of split reduced in the
+// workgroup (the GroupSplit schedule): its width over the split divides them.
+func groupSplitFits(rows, split int) bool {
+	w := min(max(32*split, 128), 1024)
+	return split == 1 || w%split == 0 && rows%(w/split) == 0
+}

@@ -626,8 +626,8 @@ func (p *devProgram) headMajor() {
 // decode reduces it there. A gate and an up that one activation product
 // reads stay apart, for the product's own forms.
 func rwSegments(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
-	if R != 1 && !ragFew(nseq) || g.NoFuse {
-		return false
+	if !ragFew(nseq) || g.NoFuse {
+		return false // decode's is the composer's sibling pass
 	}
 	seg := func(o devOp) bool {
 		if o.Kind != dkMatVec || len(o.In) != 1 || o.W < 0 || o.W >= len(l.ms) || *l.rs[o.W] == nil {
