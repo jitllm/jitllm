@@ -167,7 +167,6 @@ func (g *devTier) prepBatch(width int) bool {
 // 33% waste on a 42-row tail.
 const batchGrain = 8 * 4
 
-
 // actWinFor is the activation window of the scratch set in use: a tier with a
 // vision tower has a set per segment, each with its plan, and the window is a
 // codegen input both tiers must agree on (nn.LayerPlan.ActWin).
@@ -185,7 +184,6 @@ func (g *devTier) actWinFor(ntok int) int {
 // pad32 is n rounded up to the activation quantizer's 32-element block: the
 // width a ragged activation is quantized at, its tail zero.
 func pad32(n int) int { return (n + 31) / 32 * 32 }
-
 
 // ePad is the width a block's residual-reading matrices quantize their
 // activation at: NEmbd rounded up to a whole quantizer block, or the padded
@@ -217,7 +215,6 @@ func (g *devTier) attendsIn(lo, hi int) bool {
 	}
 	return false
 }
-
 
 // padOK reports whether batched twin bm may serve m: not one that reads the
 // float activation when m's is the padded int8 rows (mv.pad).
@@ -251,7 +248,6 @@ func (g *devTier) mmaTile(rows, ntok int) (int, int, bool) {
 	return mt, nt, true
 }
 
-
 // kStride is the device K cache's transposed stride, or 0 for the row-major
 // layout. See mainkernels.RoPERowsT: the scores kernel reads K with one thread per
 // position, so [head][dim][position] coalesces where [position][head][dim] costs
@@ -279,6 +275,6 @@ func (g *devTier) kStride(p *nn.LayerPlan) int {
 	// it or the last real position lands on top of another head's first.
 	return p.MaxSeq + 1
 }
+
 // promptGrain is the grain a prompt chunk's own width is rounded to.
 func (g *devTier) promptGrain() int { return batchGrain }
-

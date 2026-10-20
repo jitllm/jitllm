@@ -404,10 +404,10 @@ func (g *devTier) hasRecurrent(lo, hi int) bool {
 // buffer. The only grid that changes is the attention scores', over pos+1
 // positions.
 type graphKey struct {
-	lo, hi   int
-	scoreN   int // the rounded position count the scores grid was sized for
-	rows     int // the batch width; 1 for decode
-	head     bool
+	lo, hi int
+	scoreN int // the rounded position count the scores grid was sized for
+	rows   int // the batch width; 1 for decode
+	head   bool
 	// The packed V cache changes copyV's grid and AttnAcc's kernel entirely, so
 	// a recording made under one arm cannot replay under the other.
 	kvF16 bool

@@ -178,7 +178,6 @@ func (g *devTier) q4eWrites(x *q4eScratch, w func(backend.Buf, []byte)) {
 	w(x.emb, f32b(x.stage))
 }
 
-
 // q4eStreams is the streams block l's attention reads: bs.x, or on the
 // n-gram block bs.x with its embedding added.
 func (g *devTier) q4eStreams(bs *blockScratch, l *layer) backend.Buf {
@@ -193,7 +192,6 @@ func (g *devTier) q4eStreams(bs *blockScratch, l *layer) backend.Buf {
 func (g *devTier) q4ePostAttn(lc *launcher, bs *blockScratch, l *layer, R int, y backend.Buf) {
 	lc.la(bs.q4e.place, bs.q4e.h*R*bs.p.NEmbd, g.q4eStreams(bs, l), y, bs.q4e.w, bs.x2)
 }
-
 
 // q4ePostFFN writes every stream of bs.x from bs.x2 with the mixture's output
 // y placed.

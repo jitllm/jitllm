@@ -37,10 +37,10 @@ type pagedScratch struct {
 	pRow, pRowW backend.Buf
 	// The staged attention's score and weight planes and its splits'
 	// partials, in floats held.
-	sc, wt, part           backend.Buf
+	sc, wt, part          backend.Buf
 	scCap, wtCap, partCap int
-	rows        []pagedRow
-	desc, descW []uint32
+	rows                  []pagedRow
+	desc, descW           []uint32
 }
 
 // kvPage is the pool's page size, decided when the pool is made and fixed for

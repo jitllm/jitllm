@@ -1,8 +1,8 @@
 package tier
 
 import (
-	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"fmt"
+	"github.com/jitllm/jitllm/jit/gpu/compose"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"

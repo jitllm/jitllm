@@ -221,7 +221,6 @@ func (p *dhProg) free() {
 	p.own = nil
 }
 
-
 // dhRun is a program's submission: the inputs up, the launches, the logits
 // back.
 func (p *dhProg) dhRun(s backend.Session) {

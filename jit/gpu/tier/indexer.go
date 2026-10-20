@@ -65,8 +65,6 @@ func (ix *idxScratch) free(g *devShared) {
 	}
 }
 
-
-
 // idxKeys is the most keys a gathered row attends: the call's, at most the
 // top-k.
 func idxKeys(p *nn.LayerPlan, keys int) int {

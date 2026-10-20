@@ -47,19 +47,19 @@ const (
 	gaWQS     // the op's weight's payload, scale and scale-of-scale planes
 	gaWD
 	gaWSC
-	gaOpA   // the int8 operand the op's matvec reads, values
-	gaOpAX  // and scales
-	gaMBias // the weight's own bias (mv.bias)
-	gaF16   // the binary16 operand a GEMM reads (the device's f16 plane)
-	gaQ8A   // an int8 output's values
-	gaQ8X   // its scales and sums
-	gaPerm  // the step's head-major order: each gathered row's source row (headPerm)
-	gaSplit // a k split's partial plane (the tier's partBuf)
-	gaKPool // the block's paged K pool
-	gaVPool // its paged V pool
-	gaTab   // its page table
-	gaPRow  // the step's row descriptors (kernels.PRowWords a row)
-	gaPRowW // the windowed descriptors, a sliding layer's
+	gaOpA    // the int8 operand the op's matvec reads, values
+	gaOpAX   // and scales
+	gaMBias  // the weight's own bias (mv.bias)
+	gaF16    // the binary16 operand a GEMM reads (the device's f16 plane)
+	gaQ8A    // an int8 output's values
+	gaQ8X    // its scales and sums
+	gaPerm   // the step's head-major order: each gathered row's source row (headPerm)
+	gaSplit  // a k split's partial plane (the tier's partBuf)
+	gaKPool  // the block's paged K pool
+	gaVPool  // its paged V pool
+	gaTab    // its page table
+	gaPRow   // the step's row descriptors (kernels.PRowWords a row)
+	gaPRowW  // the windowed descriptors, a sliding layer's
 	gaScores // the staged attention's score plane
 	gaWts    // its weight plane
 	gaParts  // the splits' partials the merge reads

@@ -1975,7 +1975,7 @@ type devShared struct {
 	// of its label.
 	ord   int
 	kerns map[kernKey]backend.Kernel
-	res     map[resKey]*resident
+	res   map[resKey]*resident
 	// actWin is the activation amax window the CPU tier chose; see
 	// nn.JIT.SetDevice. Zero means the default 32. It is copied per device
 	// rather than kept in Config because it is written after Open and read on
@@ -2007,8 +2007,8 @@ type devShared struct {
 	retunedAt           int // len(layers) at the last retuneDecode
 	// lastSub is when the device last started or finished a submission
 	// (unix ns): the background tuner waits for tuneQuiet past it.
-	lastSub   atomic.Int64
-	segKerns  map[string]backend.Kernel // mainkernels.MatVecSegments by shapes; see fuseQKV
+	lastSub  atomic.Int64
+	segKerns map[string]backend.Kernel // mainkernels.MatVecSegments by shapes; see fuseQKV
 	// actInWin is tuneActIn's verdict per operand-prologue site key: true where
 	// the prologue measured faster than the two launches on this card.
 	// actInTrial makes fuseActIn build every candidate for that measurement.
@@ -2016,11 +2016,11 @@ type devShared struct {
 	// explain is each site's decision in force, with its reason (explain.go).
 	explain    map[string]RecipeChoice
 	actInTrial bool
-	ragK       map[ragKey]backend.Kernel     // a ragged step's matvecs; see ragMV
-	tailK      map[ragKey]*mvTail            // tileMV's second launches, one per shape
-	kshareKey  map[string]backend.Kernel     // scratch kernels by content; see compileShared
-	kshared    map[backend.Kernel]struct{}   // the same kernels, by identity: closeKern leaves them open
-	pcache     *persistCache                 // composed persistent kernels; see persist.go
+	ragK       map[ragKey]backend.Kernel   // a ragged step's matvecs; see ragMV
+	tailK      map[ragKey]*mvTail          // tileMV's second launches, one per shape
+	kshareKey  map[string]backend.Kernel   // scratch kernels by content; see compileShared
+	kshared    map[backend.Kernel]struct{} // the same kernels, by identity: closeKern leaves them open
+	pcache     *persistCache               // composed persistent kernels; see persist.go
 	// convK, conv and convN are the convolutional blocks' kernels, their
 	// shared scratch and how many hold it (conv.go).
 	// genK is the one cache of generated kernels, by encoded structure and
@@ -2050,7 +2050,7 @@ type devShared struct {
 	kh       khState
 	KevHeads int64
 	convN    int
-	argmaxK  backend.Kernel            // mainkernels.Argmax over the head's rows; see PrepHead
+	argmaxK  backend.Kernel // mainkernels.Argmax over the head's rows; see PrepHead
 	// samplePenK and sampleKs are the device sampler's kernels: the penalty
 	// over the head's rows and, per k, the two top-k passes (sample.go).
 	samplePenK backend.Kernel
@@ -2386,7 +2386,6 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 	return g, nil
 }
 
-
 // takeExpertCard moves the device Config.ExpertCard names out of the
 // placement candidates. It must be one of several devices, and the others
 // must be able to copy from it.
@@ -2590,7 +2589,6 @@ func (g *devTier) Bytes() uint64 {
 	g.settleRounding()
 	return g.used
 }
-
 
 // releaseEveryLayer drops every block this device holds, through the same path a
 // migration uses. Close calls it; see the comment there.
@@ -2834,7 +2832,6 @@ func (g *devTier) MatVec(out []float32, t quant.Type, w []byte, x []float32, nro
 	return false
 }
 
-
 // mvCall is one matVec's device side, handed to matVecSession through the
 // devTier rather than captured by a closure: the function a Session runs
 // escapes, so a closure over the call's locals was a heap object on every
@@ -2944,7 +2941,6 @@ func (g *devTier) importPacked(r *resident, p *kernels.Packed) bool {
 	g.arena.Import(p)
 	return true
 }
-
 
 // residentSheets allocates a bank's three planes and fills them from its
 // expert pages: sheet x of each plane at x times one sheet's bytes, which is
@@ -3090,7 +3086,6 @@ func (g *devTier) allocBytes(v []byte) (backend.Buf, error) {
 	}
 	return b, nil
 }
-
 
 // sizeF16 grows f16Buf to n bytes, dropping any recording that names the old
 // one, under regrow's rules.
@@ -3433,7 +3428,6 @@ func (g *devTier) takeStage(key resKey) (qs, d, sc []uint32) {
 
 func (s *staged) bytes() uint64 { return uint64(len(s.qs)+len(s.d)+len(s.sc)) * 4 }
 
-
 // DropStage frees every pack that has not been uploaded.
 func (g *devTier) DropStage() {
 	g.mu.Lock()
@@ -3554,6 +3548,7 @@ func (g *devTier) residentCompact(q kernels.Quant, rows, k, slots int) (*residen
 	g.charge(need)
 	return r, sh, true
 }
+
 // addSlot builds the tier's device for slot s at ordinal i and pools it.
 func (g *GPU) addSlot(i int, s Slot) {
 	cfg := g.Config
@@ -3571,19 +3566,19 @@ func (g *GPU) addSlot(i int, s Slot) {
 	}
 	cnt, _ := s.Dev.(backend.AllocCounter)
 	g.devs = append(g.devs, newDevice(&devShared{
-		Config:     cfg,
-		tot:        Stats{Device: label(s.Dev, i)},
-		dev:        s.Dev,
-		cnt:        cnt,
-		pool:       pool,
-		why:        why,
-		ord:        i,
-		name:       DeviceName(s.Name),
-		kerns:      map[kernKey]backend.Kernel{},
-		rewrites:   newDevRewrites(),
-		res:        map[resKey]*resident{},
-		reduce:     map[[2]int]backend.Kernel{},
-		limit:      limit,
+		Config:   cfg,
+		tot:      Stats{Device: label(s.Dev, i)},
+		dev:      s.Dev,
+		cnt:      cnt,
+		pool:     pool,
+		why:      why,
+		ord:      i,
+		name:     DeviceName(s.Name),
+		kerns:    map[kernKey]backend.Kernel{},
+		rewrites: newDevRewrites(),
+		res:      map[resKey]*resident{},
+		reduce:   map[[2]int]backend.Kernel{},
+		limit:    limit,
 	}))
 	// The zero-copy path is guarded on UnifiedMemory, not on the extension:
 	// a discrete card may also advertise VK_EXT_external_memory_host, and
@@ -3964,4 +3959,3 @@ func (g *devTier) prewarm(block int, q kernels.Quant, w []byte, nrows, k int) bo
 	g.TPrewarm += took
 	return true
 }
-

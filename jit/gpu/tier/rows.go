@@ -59,8 +59,6 @@ func (g *devTier) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csS
 	return v.layersRows(lo, hi, &ragStep{pos: pos, slot: slot, seqLen: seqLen}, x, cs, csSWA, head)
 }
 
-
-
 // LayersRows runs blocks [lo, hi) for the rows, one call per device run, the
 // residual crossing to the next device through x. Each row's history for a
 // block lives in the cache of the device that holds the block. The head rides
@@ -69,7 +67,6 @@ func (g *devTier) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csS
 func (g *GPU) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
 	return g.layersRows(0, lo, hi, pos, slot, nil, seqLen, x, cs, csSWA, head)
 }
-
 
 // RowsWidth is the widest step of at most want rows every device holding a
 // block can run (nn.RowsWidther): each device's batched scratch for it held
@@ -197,7 +194,6 @@ type ragKey struct {
 	act kernels.ActKind
 }
 
-
 // headMV is the decode head projection as groupMV reads it: its split, its
 // format and its k.
 func (g *devTier) headMV() mv {
@@ -206,14 +202,12 @@ func (g *devTier) headMV() mv {
 	return m
 }
 
-
 // groupTokMax is the widest step groupMV takes: one thread carries every
 // token, so its dot products grow with the step and past four sequences the
 // tiled twins win: on an 8B Q4_K_M model groupMV leads at two and four
 // sessions and loses at eight (gpu-kernels.md, "Measurements once cited in
 // jit/gpu/tier's comments").
 const groupTokMax = 4
-
 
 // groupEpi is the epilogue a groupMV launch carries, decode's own fusions
 // over every token of the step: the plain row, the residual added per token
@@ -238,12 +232,6 @@ type segShapeKey struct {
 	grp               bool
 }
 
-
-
-
-
-
-
 // rowClass is the executed row-width class (graph.RowClass) of a launch of
 // ntok rows: one row is a decode; a prompt chunk is at least half the
 // reserved prompt width, the width the prompt's verdicts were timed at; and
@@ -258,7 +246,6 @@ func (g *devTier) rowClass(ntok int) graph.RowClass {
 	}
 	return graph.RowsFew
 }
-
 
 func b2i(b bool) int {
 	if b {
@@ -289,8 +276,6 @@ func (g *devTier) fusedKern(key ragKey, build func() (*ir.Kernel, error)) backen
 	g.ragK[key] = c
 	return c
 }
-
-
 
 // fillSplit is the k-split that brings threads up to fill: doubled while the
 // grid is short of it and the halves still divide the trips, at most 8.
@@ -416,6 +401,7 @@ func (s *gpuSession) ResetRecRows(rows []int) bool {
 	defer s.leave(s.enter())
 	return s.g.resetRecRows(s.sid, rows)
 }
+
 // layersRows is LayersRows for rs's rows, each of its own session where
 // rs.sid is set and of rs.self's otherwise.
 func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, head *nn.Head) bool {
@@ -547,7 +533,6 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 	return true
 }
 
-
 // layersRows is LayersRows for session self, with each row's session, or nil
 // for self's.
 func (g *GPU) layersRows(self uint64, lo, hi int, pos, slot []int, sid []uint64, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
@@ -640,4 +625,3 @@ func (g *devTier) prewarmPrompt() {
 func (g *devTier) prewarmFused(bs *blockScratch) {
 	g.ensureFused(0, len(g.layers), bs.rows, bs, nil)
 }
-

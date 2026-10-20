@@ -345,8 +345,6 @@ func WithPersistDeps(on bool, grid int) Option {
 	return WithConfig(func(c *Config) { c.Persist, c.PersistDeps, c.PersistGrid = on, on, grid })
 }
 
-
-
 // WithRewrite sets Config.Rewrites[name]: a caller's choice over one
 // block-graph rewrite (graph.Rewrites names them). It copies the map, so two
 // tiers built from one option set keep their own.

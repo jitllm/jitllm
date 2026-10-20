@@ -22,7 +22,6 @@ func (g *devTier) prepLayerFor(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerW
 	return g.prepLayer(sid, li, p, w, false)
 }
 
-
 // residScaled reports a plan whose block outputs are scaled before their
 // residual adds (Granite's residual_scale). Such a block takes neither the
 // projection's fused residual (mvres: the bias slot has no scale) nor the
@@ -78,10 +77,6 @@ func l4TempTab(p *nn.LayerPlan) []float32 {
 	}
 	return out
 }
-
-
-
-
 
 // subFor is the activation sub-block a float matvec of width k reads where k
 // is not whole 32-element blocks: k itself below 32, else the widest of 16,
@@ -1615,4 +1610,3 @@ func nanFill(n int) []byte {
 	}
 	return b
 }
-

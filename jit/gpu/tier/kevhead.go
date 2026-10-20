@@ -106,7 +106,6 @@ func (g *devTier) khClose() {
 	g.kh = khState{}
 }
 
-
 func (p *khProg) khRun(s backend.Session) {
 	w := func(b backend.Buf, x []byte) {
 		if p.err == nil {

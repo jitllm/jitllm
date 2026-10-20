@@ -212,7 +212,6 @@ type ds4Kind struct {
 	posStage               []uint32
 }
 
-
 // free releases the set's kernels and buffers.
 func (x *ds4Scratch) free(g *devShared) {
 	if x == nil {
@@ -382,6 +381,7 @@ func (g *devTier) ds4RouteBias(lc *launcher, bs *blockScratch, l *layer, R int) 
 	}
 	return x.rbias
 }
+
 // ds4KMax is the most keys one row of kind comp reads at a plan of maxSeq.
 func ds4KMax(d *nn.DS4Plan, comp, maxSeq int) int {
 	n := d.Window
@@ -394,4 +394,3 @@ func ds4KMax(d *nn.DS4Plan, comp, maxSeq int) int {
 	}
 	return n
 }
-

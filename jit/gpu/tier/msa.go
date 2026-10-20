@@ -88,7 +88,6 @@ func (m *msaScratch) free(g *devShared) {
 	}
 }
 
-
 // msaKeys is the most keys a gathered row attends: the call's, at most the
 // kept blocks.
 func msaKeys(p *nn.LayerPlan, keys int) int {

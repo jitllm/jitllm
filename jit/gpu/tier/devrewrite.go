@@ -644,8 +644,6 @@ func gatedProduct(p *devProgram, v devVal) bool {
 	return false
 }
 
-
-
 // mvOfLayer is the matvec and weight of role in l.
 func mvOfLayer(l *layer, role jlm.Role) (mv, *resident) {
 	switch role {
