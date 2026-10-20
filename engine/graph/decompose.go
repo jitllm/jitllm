@@ -46,6 +46,9 @@ func Decompose(g *Graph) *Graph {
 				continue
 			}
 		}
+		if o.Kind == OpGateScalar && d.gateScalar(o) {
+			continue
+		}
 		o.In = append([]ValueID(nil), o.In...)
 		if w, ok := weights[selOf(o)]; ok && (o.Kind == OpCombine || o.Kind == OpGather && o.Attr.WeightIn) {
 			o.In = append(o.In, w)
@@ -77,7 +80,7 @@ const RouteSumFloor = 1e-20
 
 // route writes route op o as primitives into d and returns its weights'
 // value, or false where o states a router the primitives here do not yet
-// express (sparsemixer, a hash-routed block's table).
+// express (a hash-routed block's table).
 func (d *Graph) route(o Op) (ValueID, bool) {
 	a := o.Attr
 	E, K := a.Experts, a.TopK
@@ -93,6 +96,9 @@ func (d *Graph) route(o Op) (ValueID, bool) {
 		default:
 			return 0, false
 		}
+	}
+	if a.Router == RouterSparseMixer {
+		return d.bandedRoute(o, router, bias, selBias)
 	}
 	gated := a.Router == RouterSigmoid || a.Router == RouterSqrtSoftplus
 	if router == nil || E < 1 || K < 1 || K > E || !gated && a.Router != RouterSoftmax ||

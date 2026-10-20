@@ -427,6 +427,11 @@ type Attrs struct {
 	Router             Router
 	RouteNorm          bool
 	Groups, GroupsUsed int
+	// Margin is OpRoute's relative band under RouterSparseMixer: an expert
+	// is kept in a pick's softmax unless its gap to the pick's logit m,
+	// (m - s)/max(|s|, m), exceeds twice Margin (phimoe's jitter_eps, as the
+	// f32 number the file states). It is 0 on every other router.
+	Margin float64
 	// TempScale, TempFloor and TempOffs are OpAttend's query temperature:
 	// the scores scaled by 1 + TempScale*ln(1 + floor((pos+TempOffs)/TempFloor))
 	// (Llama 4's and Mistral 3's); TempScale 0 is none.
