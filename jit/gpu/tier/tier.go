@@ -666,6 +666,8 @@ type Config struct {
 	// repack. It is shared by every device because the bytes are one heap. Its
 	// retention budget is zero by default; see kernels.NewArena and SetArena.
 	arena *kernels.Arena
+	// forms is the formed kernels this tier shares with others (WithFormCache).
+	forms *FormCache
 	// stage is the host memory held by packs prepared and not yet uploaded,
 	// across every device (one heap, so one pool; see Pool). Its limit is 0,
 	// unbounded, because StageLimit is settable after Open; Prewarm compares
@@ -2346,6 +2348,7 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 		// the budget decides whether anything is retained. At zero (the
 		// default) Pack declines immediately.
 		arena: kernels.NewArena(o.kb.arena),
+		forms: o.forms,
 	}
 	// Gate2 is allowed by default; tuneFFN takes it per shape where it
 	// measures faster. On a V100 it read 1.008-1.028 of the two launches on

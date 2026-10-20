@@ -674,11 +674,14 @@ func (g *devTier) genKern(enc []uint32, build func() (*ir.Kernel, error)) (backe
 		}
 	}
 	ent := genEntry{enc: enc}
-	ker, err := build()
+	var ker *ir.Kernel
+	var err error
+	if g.forms != nil {
+		ker, err = g.forms.form(enc, build)
+	} else if ker, err = build(); err == nil {
+		ker.Comment = composedComment(ker.Comment)
+	}
 	if err == nil {
-		// Marked as the composer's: what a kernel's instructions are held
-		// against main's by (model.TestDumpEmittedKernels) counts only these.
-		ker.Comment = strings.TrimSpace("composed " + ker.Comment)
 		ent.width = ker.Group[0]
 		ent.k, err = g.dev.Compile(ker)
 	}
@@ -1291,7 +1294,7 @@ func (g *devTier) genMatVecNodes(o *devOp, prog *devProgram, bs *blockScratch, r
 	rb.store(v, gaOut0)
 	// The plan: compose's schedule for this shape on this target, the tier
 	// stating what it knows -- the step, its pins, the weight's tuned split.
-	f := compose.Facts{Target: g.composeTarget(), Step: compose.StepChunk, Tok: bs.tok, RowTile: g.tiles.rowt,
+	f := compose.Facts{Target: g.composeTarget(), Step: compose.StepChunk, Tok: bs.tok, RowTile: pinned(g.tiles.rowt),
 		Split: g.kb.batch.Split, DecodeSplit: max(m.split, 1), DecodeRowt: max(m.rowt, 1),
 		RagTok: g.kb.batch.RagTok, RagRowT: g.kb.batch.RagRowT, RagSplit: g.kb.batch.RagSplit,
 		MMAMT: g.tiles.mmaMT, MMANT: g.tiles.mmaNT, NoMMA: g.NoMMA}
@@ -1857,3 +1860,16 @@ func (g *devTier) ropePairs(rows, iw, hd, nrot int, neox, split bool, src, off, 
 	}
 	return ls
 }
+
+// pinned is a tile the tier states, 0 (the planner's rule) for one.
+func pinned(t int) int {
+	if t > 1 {
+		return t
+	}
+	return 0
+}
+
+// composedComment marks a kernel as the composer's: what a kernel's
+// instructions are held against main's by (model.TestDumpEmittedKernels)
+// counts only these.
+func composedComment(c string) string { return strings.TrimSpace("composed " + c) }

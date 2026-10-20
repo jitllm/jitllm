@@ -55,6 +55,8 @@ type openOpts struct {
 	// pools is the registry the tier's discrete cards take their pools from
 	// (WithPoolRegistry); nil, each tier its own.
 	pools *PoolRegistry
+	// forms is the formed kernels shared with other tiers (WithFormCache).
+	forms *FormCache
 	// op reaches the backends' constructors; the zero value is the real ones.
 	op opener
 }

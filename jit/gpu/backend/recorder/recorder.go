@@ -79,10 +79,33 @@ type Device struct {
 	ran   []bool   // ran[i]: irs[i] was launched
 	order []int    // the kernels in the order first launched
 	used  uint64
+	low   *Lowerings
 }
 
 // New is a recording device standing in for p, holding total bytes.
 func New(p Profile, total uint64) *Device { return &Device{p: p, total: total} }
+
+// Lowerings are kernels lowered for one profile, shared by the devices that
+// stand in for it: a kernel two devices are given (one formed kernel shared
+// between tiers) is lowered once.
+type Lowerings struct {
+	mu sync.Mutex
+	m  map[*ir.Kernel]lowered
+}
+
+type lowered struct {
+	code string
+	err  error
+}
+
+// NewLowerings is an empty Lowerings.
+func NewLowerings() *Lowerings { return &Lowerings{m: map[*ir.Kernel]lowered{}} }
+
+// NewSharing is New lowering through l, every device sharing l standing in
+// for the same profile.
+func NewSharing(p Profile, total uint64, l *Lowerings) *Device {
+	return &Device{p: p, total: total, low: l}
+}
 
 // Emitted is a launched kernel and its instructions as lowered for the
 // device: ptx, amdgcn or msl source, or the IR ops (Text) the spirv emitter
@@ -178,14 +201,45 @@ func (d *Device) Compile(k *ir.Kernel) (backend.Kernel, error) {
 			return nil, fmt.Errorf("recorder: %s: %s", k.Name, why)
 		}
 	}
-	var err error
-	var code string
+	code, err := d.lowered(k)
+	if err != nil {
+		return nil, err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.irs = append(d.irs, k)
+	d.code = append(d.code, strings.ReplaceAll(code, k.Name, "K"))
+	d.ran = append(d.ran, false)
+	return kern{d: d, i: len(d.irs) - 1, src: k}, nil
+}
+
+// lowered is k lowered for the profile, through the shared lowerings where
+// the device has them.
+func (d *Device) lowered(k *ir.Kernel) (string, error) {
+	if d.low == nil {
+		return d.lower(k)
+	}
+	d.low.mu.Lock()
+	l, ok := d.low.m[k]
+	d.low.mu.Unlock()
+	if ok {
+		return l.code, l.err
+	}
+	code, err := d.lower(k)
+	d.low.mu.Lock()
+	d.low.m[k] = lowered{code: code, err: err}
+	d.low.mu.Unlock()
+	return code, err
+}
+
+// lower is k as the profile's target takes it.
+func (d *Device) lower(k *ir.Kernel) (code string, err error) {
 	switch d.p.API {
 	case "ptx":
 		code, err = ptx.Lower(k, d.p.ISA)
 	case "spirv":
 		if ir.UsesTiles(k) && !d.p.Tiles {
-			return nil, fmt.Errorf("spirv: %s uses cooperative-matrix tiles and %s has none", k.Name, d.p.Name)
+			return "", fmt.Errorf("spirv: %s uses cooperative-matrix tiles and %s has none", k.Name, d.p.Name)
 		}
 		if _, err = spirv.Emit(k); err == nil {
 			code = Text(k)
@@ -200,15 +254,7 @@ func (d *Device) Compile(k *ir.Kernel) (backend.Kernel, error) {
 	default:
 		err = fmt.Errorf("recorder: no lowering for %q", d.p.API)
 	}
-	if err != nil {
-		return nil, err
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.irs = append(d.irs, k)
-	d.code = append(d.code, strings.ReplaceAll(code, k.Name, "K"))
-	d.ran = append(d.ran, false)
-	return kern{d: d, i: len(d.irs) - 1, src: k}, nil
+	return code, err
 }
 
 func (d *Device) Alloc(n int) (backend.Buf, error) {

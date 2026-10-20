@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -28,6 +29,7 @@ var (
 	parityByShape  = flag.Bool("parity-by-shape", false, "TestComposerParity groups what is missing by main's kernel name with its sizes elided")
 	parityExplain  = flag.Bool("parity-explain", false, "with -parity-kernel, every composed instruction written out")
 	parityPerModel = flag.Bool("parity-per-model", false, "TestComposerParity logs each model's instructions matched")
+	parityLazy     = flag.Bool("parity-lazy", false, "TestComposerParity's composer forms each prompt width at its first prompt, not at placement")
 	parityKernel   = flag.String("parity-kernel", "", "the main kernel name prefix to print: with -parity-model what it misses, else every model's kernels of that name")
 )
 
@@ -64,6 +66,7 @@ func TestComposerParity(t *testing.T) {
 			mainErr  error
 			compErr  error
 			hasMain  bool
+			took     time.Duration
 		}
 		var todo []string
 		for _, p := range paths {
@@ -77,6 +80,7 @@ func TestComposerParity(t *testing.T) {
 			todo = append(todo, p)
 		}
 		results := make([]result, len(todo))
+		sh := paritySharing{forms: tier.NewFormCache(), low: recorder.NewLowerings()}
 		work := make(chan int)
 		var wg sync.WaitGroup
 		for w := 0; w < runtime.GOMAXPROCS(0); w++ {
@@ -87,13 +91,15 @@ func TestComposerParity(t *testing.T) {
 					p := todo[i]
 					r := &results[i]
 					r.name = strings.TrimSuffix(filepath.Base(p), ".jlm")
-					mk, err := parityKernels(t, prof, p, true)
+					t0 := time.Now()
+					defer func() { r.took = time.Since(t0) }()
+					mk, err := mainKernelsCached(t, prof, p)
 					r.mainErr = err
 					if len(mk) == 0 {
 						continue
 					}
 					r.hasMain = true
-					ck, err := parityKernels(t, prof, p, false)
+					ck, err := composedKernels(t, prof, p, sh)
 					r.compErr = err
 					r.main, r.composed = mk, composedOnly(ck)
 					r.mt, r.ms, r.miss = paritytest.Compare(r.main, r.composed)
@@ -117,7 +123,7 @@ func TestComposerParity(t *testing.T) {
 				t.Logf("%s on %s, composer: %v", r.name, pn, r.compErr)
 			}
 			if *parityPerModel {
-				t.Logf("model %s %d %d", r.name, r.ms, r.mt)
+				t.Logf("model %s %d %d %v", r.name, r.ms, r.mt, r.took)
 			}
 			if *parityModel == "" && *parityKernel != "" {
 				for _, k := range r.main {
@@ -184,7 +190,19 @@ func TestComposerParity(t *testing.T) {
 // recording device standing in for prof, on main's tier or the composer's,
 // over a prompt chunk and a decode step: main's launched, the composer's
 // formed. Launches run nothing.
-func parityKernels(t *testing.T, prof recorder.Profile, path string, main bool) ([]*ir.Kernel, error) {
+// paritySharing is what one profile's composer tiers share: the kernels
+// formed and their lowerings.
+type paritySharing struct {
+	forms *tier.FormCache
+	low   *recorder.Lowerings
+}
+
+// composedKernels is parityKernels on the composer's tier, sharing sh.
+func composedKernels(t *testing.T, prof recorder.Profile, path string, sh paritySharing) ([]*ir.Kernel, error) {
+	return parityKernels(t, prof, path, false, &sh)
+}
+
+func parityKernels(t *testing.T, prof recorder.Profile, path string, main bool, sh *paritySharing) ([]*ir.Kernel, error) {
 	m, err := Open(path, noTune)
 	if err != nil {
 		return nil, err
@@ -194,6 +212,11 @@ func parityKernels(t *testing.T, prof recorder.Profile, path string, main bool) 
 		return nil, nil
 	}
 	rec := recorder.New(prof, 1<<40)
+	var share []tier.Option
+	if sh != nil {
+		rec = recorder.NewSharing(prof, 1<<40, sh.low)
+		share = append(share, tier.WithFormCache(sh.forms))
+	}
 	var g nn.Device
 	if main {
 		// Tuning off on both sides: a tuner on a device that runs nothing
@@ -206,8 +229,8 @@ func parityKernels(t *testing.T, prof recorder.Profile, path string, main bool) 
 		defer mg.Close()
 		g = mg
 	} else {
-		cg, err := tier.New([]tier.Slot{{Dev: rec, Bytes: 1 << 40}}, append(testTierOpts(t), tier.WithDeviceTune(tier.TuneOff),
-			tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))...)
+		cg, err := tier.New([]tier.Slot{{Dev: rec, Bytes: 1 << 40}}, append(append(testTierOpts(t), share...), tier.WithDeviceTune(tier.TuneOff),
+			tier.WithConfig(func(c *tier.Config) { c.NoGraph, c.NoPromptPrewarm = true, *parityLazy }))...)
 		if err != nil {
 			return nil, err
 		}
