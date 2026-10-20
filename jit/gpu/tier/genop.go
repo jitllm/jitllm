@@ -677,7 +677,7 @@ func (g *devTier) genKern(enc []uint32, build func() (*ir.Kernel, error)) (backe
 	ent := genEntry{enc: enc}
 	var ker *ir.Kernel
 	var err error
-	if g.forms != nil {
+	if g.Config != nil && g.forms != nil {
 		ker, err = g.forms.form(enc, build)
 	} else if ker, err = build(); err == nil {
 		ker.Comment = composedComment(ker.Comment)
