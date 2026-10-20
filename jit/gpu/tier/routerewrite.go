@@ -159,8 +159,36 @@ func gatedRoute(p *devProgram, i int, writer, only func(devVal) int, is func(int
 	}
 	chain := []int{}
 	key, role := o.In[0], jlm.Role(0)
+	// A grouped route's key is the masked plane: the keys where their
+	// group's score (its two best keys summed) ranks among the kept.
+	var group []int
+	mask, plane, groups, used := -1, key, 0, 0
+	if wh := writer(key); wh >= 0 && p.ops[wh].Kind == dkMap && p.ops[wh].A.Fn == graph.MapWhere && len(p.ops[wh].In) == 2 {
+		keep, k0 := p.ops[wh].In[0], p.ops[wh].In[1]
+		ls := writer(keep)
+		if ls < 0 || p.ops[ls].Kind != dkMap || p.ops[ls].A.Fn != graph.MapLess || len(p.ops[ls].In) != 1 {
+			return false
+		}
+		rk := writer(p.ops[ls].In[0])
+		if rk < 0 || p.ops[rk].Kind != dkRank || len(p.ops[rk].In) != 1 {
+			return false
+		}
+		rs := writer(p.ops[rk].In[0])
+		if rs < 0 || p.ops[rs].Kind != dkReduce || p.ops[rs].A.Fn != graph.MapAdd || len(p.ops[rs].In) != 1 {
+			return false
+		}
+		gk := writer(p.ops[rs].In[0])
+		if gk < 0 || p.ops[gk].Kind != dkSelectK || p.ops[gk].A.Span == 0 || p.ops[gk].In[0] != k0 || p.ops[gk].Out[1] != p.ops[rs].In[0] {
+			return false
+		}
+		if p.uses(p.ops[gk].Out[0]) != 0 || p.uses(k0) != 2 {
+			return false
+		}
+		group, mask, key = []int{gk, rs, rk, ls}, wh, k0
+		groups, used = p.vals[p.ops[rk].In[0]].Width, int(p.ops[ls].A.Const)
+	}
 	if b := writer(key); b >= 0 && p.ops[b].Kind == dkMap && p.ops[b].A.Fn == graph.MapAdd && p.ops[b].Role == jlm.RoleExpProbsB && len(p.ops[b].In) == 1 {
-		if p.uses(key) != 1 {
+		if p.uses(key) != 1+b2i(groups > 0) {
 			return false
 		}
 		chain, key, role = append(chain, b), p.ops[b].In[0], jlm.RoleExpProbsB
@@ -224,11 +252,19 @@ func gatedRoute(p *devProgram, i int, writer, only func(devVal) int, is func(int
 		scale, w = p.ops[s].A.Const, p.ops[s].Out[0]
 	}
 	end := chain[len(chain)-1]
-	a := graph.Attrs{Experts: p.vals[lg].Width, TopK: o.A.TopK, Router: router, RouteNorm: norm, Scale: scale}
-	p.ops[i] = devOp{Kind: dkTopK, Src: o.Src, In: []devVal{lg}, Out: []devVal{sel, top}, Role: role, A: a}
+	a := graph.Attrs{Experts: p.vals[lg].Width, TopK: o.A.TopK, Router: router, RouteNorm: norm, Scale: scale, Groups: groups, GroupsUsed: used}
+	rank := []devVal{lg}
+	if groups > 0 {
+		rank = append(rank, plane)
+		p.ops[mask] = devOp{Kind: dkGroupMask, Src: p.ops[mask].Src, In: []devVal{lg}, Out: []devVal{plane}, Role: role, A: a}
+	}
+	p.ops[i] = devOp{Kind: dkTopK, Src: o.Src, In: rank, Out: []devVal{sel, top}, Role: role, A: a}
 	p.ops[end] = devOp{Kind: dkRouteWeights, Src: p.ops[end].Src, In: []devVal{top, lg}, Out: []devVal{w}, Role: role, A: a}
 	drop := map[int]bool{}
 	for _, j := range chain[:len(chain)-1] {
+		drop[j] = true
+	}
+	for _, j := range group {
 		drop[j] = true
 	}
 	ops := p.ops[:0]

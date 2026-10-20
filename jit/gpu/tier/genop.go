@@ -364,7 +364,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 			o.Why = whyNone
 		}
 		return l
-	case dkRouterLogits, dkTopK, dkRouteWeights, dkRouterBias, dkGroupByExpert, dkGateLogit:
+	case dkRouterLogits, dkTopK, dkRouteWeights, dkRouterBias, dkGroupByExpert, dkGateLogit, dkGroupMask:
 		return g.genRoute(o, prog, bs, rows)
 	case dkView:
 		// A row's prefix read in place: at one row the value is its source's
@@ -384,7 +384,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		return ls
 	case dkExpertMatVecE, dkQKVGemm,
 		dkResIn, dkQKVSep,
-		dkGroupMask, dkExpertBias, dkExpertFetch:
+		dkExpertBias, dkExpertFetch:
 		// No form in the composer's primitives yet: the op fails to
 		// generate, and its block does not place.
 		o.Why = whyNoForm

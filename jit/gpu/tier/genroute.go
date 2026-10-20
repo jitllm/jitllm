@@ -11,7 +11,7 @@ import (
 // it has no form of.
 func routeOf(o *devOp, prog *devProgram, rows int) (compose.Route, bool) {
 	a := o.A
-	r := compose.Route{NExpert: a.Experts, K: a.TopK, Norm: a.RouteNorm, NGroup: a.Groups, Rows: rows}
+	r := compose.Route{NExpert: a.Experts, K: a.TopK, Norm: a.RouteNorm, NGroup: a.Groups, NGroupUsed: a.GroupsUsed, Rows: rows}
 	if a.Scale != 0 && a.Scale != 1 {
 		r.Scale = float32(a.Scale)
 	}
@@ -102,6 +102,37 @@ func (g *devTier) genRoute(o *devOp, prog *devProgram, bs *blockScratch, rows in
 	r, ok := routeOf(o, prog, rows)
 	if !ok {
 		return nil
+	}
+	if o.Kind == dkGroupMask {
+		if r.NGroup < 2 || r.NExpert%r.NGroup != 0 || r.Bias && l.expSelB == nil || len(o.In) != 1 {
+			return nil
+		}
+		if o.Own[0] = g.ownBuf(bs, o, 0, rows*r.NGroup, nil); o.Own[0] == nil {
+			return nil
+		}
+		gs := &rowBuild{r: compose.Row{Width: r.NGroup, Rows: rows}}
+		lg, sc := gs.buf(compose.BufRow, gaIn0), gs.buf(compose.BufOut, gaOwn0)
+		bias := -1
+		if r.Bias {
+			bias = gs.buf(compose.BufRow, gaSelB)
+		}
+		gs.r.RouteGroupScore(r, lg, sc, bias)
+		gm := &rowBuild{r: compose.Row{Width: r.NExpert, Rows: rows}}
+		lg, in, bm := gm.buf(compose.BufRow, gaIn0), gm.buf(compose.BufRow, gaOwn0), gm.buf(compose.BufOut, gaOut0)
+		bias = -1
+		if r.Bias {
+			bias = gm.buf(compose.BufRow, gaSelB)
+		}
+		gm.r.RouteGroupMask(r, lg, in, bm, bias)
+		ls := launch(gs, compose.Facts{})
+		if ls == nil {
+			return nil
+		}
+		lm := launch(gm, compose.Facts{})
+		if lm == nil {
+			return nil
+		}
+		return append(ls, lm...)
 	}
 	if o.Kind == dkRouteWeights {
 		if fused(r) {

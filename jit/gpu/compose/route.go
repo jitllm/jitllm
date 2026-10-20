@@ -16,7 +16,7 @@ type Route struct {
 	NExpert, K            int
 	Sigmoid, SqrtSoftplus bool
 	Bias, RowBias         bool
-	NGroup                int
+	NGroup, NGroupUsed    int
 	Norm                  bool
 	Scale                 float32
 	// Rows is the rows one group routes, 0 and 1 one.
@@ -258,4 +258,64 @@ func (g *Row) Combine(e, w, slots int) int {
 	acc := g.Fold(c, g.Const(0))
 	g.SetFold(acc, g.fma(g.LoadAt(w, j), g.LoadAt(e, ub(OpAdd, i, ub(OpMul, j, u(g.Width)))), acc))
 	return acc
+}
+
+// masked is the key a group not kept takes: below every score.
+const masked = -math.MaxFloat32
+
+// RouteGroupScore is each group's score, a thread a (row, group): the sum
+// of its two largest keys, by a running maximum and second over the
+// group's experts (the one key where a group is one expert), at gs.
+func (g *Row) RouteGroupScore(r Route, l, gs, bias int) {
+	u, ub := g.UConst, g.UBin
+	sz := r.NExpert / r.NGroup
+	gi, row := g.Column(), g.RowIdx()
+	if r.rows() > 1 {
+		gi = ub(OpMin, gi, u(r.NGroup-1))
+	}
+	base := ub(OpMul, gi, u(sz))
+	c := g.Loop(sz)
+	i := g.Iter(c)
+	m1, m2 := g.Fold(c, g.Const(masked)), g.Fold(c, g.Const(masked))
+	idx := ub(OpAdd, base, i)
+	v := g.score(r, g.LoadAt(l, g.at(r, row, r.NExpert, idx)))
+	if r.Bias {
+		v = g.Bin(OpAdd, v, g.LoadAt(bias, idx))
+	}
+	g.SetFold(m2, g.Select(g.Less(m1, v), m1, g.Bin(OpMax, m2, v)))
+	g.SetFold(m1, g.Bin(OpMax, m1, v))
+	s := m1
+	if sz > 1 {
+		s = g.Bin(OpAdd, m1, m2)
+	}
+	g.StoreAt(gs, s, g.at(r, row, r.NGroup, gi))
+}
+
+// RouteGroupMask is the selection plane, a thread a (row, expert): the
+// expert's key where its group ranks below NGroupUsed among the row's
+// group scores (ties to the lower group), else the masked key, at bm.
+func (g *Row) RouteGroupMask(r Route, l, gs, bm, bias int) {
+	u, ub := g.UConst, g.UBin
+	sz := r.NExpert / r.NGroup
+	e, row := g.Column(), g.RowIdx()
+	if r.rows() > 1 {
+		e = ub(OpMin, e, u(r.NExpert-1))
+	}
+	gi := ub(OpDiv, e, u(sz))
+	mine := g.LoadAt(gs, g.at(r, row, r.NGroup, gi))
+	c := g.Loop(r.NGroup)
+	h := g.Iter(c)
+	rank := g.Fold(c, u(0))
+	gh := g.LoadAt(gs, g.at(r, row, r.NGroup, h))
+	gt := g.Select(g.Less(mine, gh), u(1), u(0))
+	lt := g.Select(g.Less(gh, mine), u(1), u(0))
+	eq := ub(OpSub, u(1), ub(OpAdd, gt, lt))
+	lower := g.Select(g.Less(h, gi), u(1), u(0))
+	g.SetFold(rank, ub(OpAdd, rank, ub(OpAdd, gt, ub(OpMul, eq, lower))))
+	v := g.score(r, g.LoadAt(l, g.at(r, row, r.NExpert, e)))
+	if r.Bias {
+		v = g.Bin(OpAdd, v, g.LoadAt(bias, e))
+	}
+	keep := g.Less(rank, u(r.NGroupUsed))
+	g.StoreAt(bm, g.Select(keep, v, g.Const(masked)), g.at(r, row, r.NExpert, e))
 }

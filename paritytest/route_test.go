@@ -227,3 +227,43 @@ func TestGroupingIsMains(t *testing.T) {
 		})
 	}
 }
+
+// TestGroupRouteIsMains holds the composer's grouped route -- each group's
+// score, then the plane its rank masks -- to main's, at one row and at
+// several.
+func TestGroupRouteIsMains(t *testing.T) {
+	for _, m := range routes() {
+		if m.NGroup <= 1 {
+			continue
+		}
+		m.NGroupUsed = max(m.NGroupUsed, 1)
+		r := routeOf(m)
+		r.NGroupUsed = m.NGroupUsed
+		t.Run(routeName(m), func(t *testing.T) {
+			ms, err := mainkernels.ExpertGroupScore(m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mm, err := mainkernels.ExpertGroupMask(m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gs := &compose.Row{Width: m.NGroup, Rows: max(m.Rows, 1)}
+			l, out := gs.Buf(compose.BufRow), gs.Buf(compose.BufOut)
+			bias := -1
+			if m.Bias {
+				bias = gs.Buf(compose.BufRow)
+			}
+			gs.RouteGroupScore(r, l, out, bias)
+			gm := &compose.Row{Width: m.NExpert, Rows: max(m.Rows, 1)}
+			l, in, bm := gm.Buf(compose.BufRow), gm.Buf(compose.BufRow), gm.Buf(compose.BufOut)
+			bias = -1
+			if m.Bias {
+				bias = gm.Buf(compose.BufRow)
+			}
+			gm.RouteGroupMask(r, l, in, bm, bias)
+			same(t, routeName(m)+"/score", []*ir.Kernel{ms}, planned(t, gs, compose.Facts{}))
+			same(t, routeName(m)+"/mask", []*ir.Kernel{mm}, planned(t, gm, compose.Facts{}))
+		})
+	}
+}

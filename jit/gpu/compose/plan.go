@@ -240,7 +240,7 @@ func (g *Row) windowed() bool {
 // over loop 0, whose body reads an indexed load that depends on no row and
 // one that does.
 func (g *Row) contraction() bool {
-	if len(g.Stores) != 1 || len(g.Loops) == 0 || g.Q8 != nil {
+	if len(g.Stores) != 1 || len(g.Loops) == 0 || g.Q8 != nil || !g.sumsLoop0(g.Stores[0].Val) {
 		return false
 	}
 	for _, nd := range g.Nodes {
@@ -655,3 +655,31 @@ func (g *Row) foldsReadAfter() bool {
 
 // keyBlock is the places a range loop's block takes (Schedule.Block).
 const keyBlock = 8
+
+// sumsLoop0 reports whether value n reads a fold over loop 0 whose step
+// adds into it: a sum, not a running maximum or a selection.
+func (g *Row) sumsLoop0(n int) bool {
+	seen := map[int]bool{}
+	var walk func(n int) bool
+	walk = func(n int) bool {
+		if seen[n] {
+			return false
+		}
+		seen[n] = true
+		nd := g.Nodes[n]
+		if nd.Kind == NFold && nd.At == 0 {
+			if nd.A < 0 {
+				return false
+			}
+			st := g.Nodes[nd.A]
+			return st.Kind == NDot4 || st.Kind == NBinary && (st.Op == OpAdd || st.Op == OpFma) || st.Kind == NUBinary && st.Op == OpAdd
+		}
+		for _, o := range g.operands(n) {
+			if walk(o) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(n)
+}
