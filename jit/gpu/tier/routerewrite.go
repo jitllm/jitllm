@@ -64,6 +64,9 @@ func rwRoute(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int)
 			}
 		}
 		if t < 0 {
+			if probsRoute(p, i, only, is) {
+				return true
+			}
 			continue
 		}
 		tl := p.ops[t].Out[0]
@@ -210,6 +213,75 @@ func gatedRoute(p *devProgram, i int, writer, only func(devVal) int, is func(int
 	end := chain[len(chain)-1]
 	a := graph.Attrs{Experts: p.vals[lg].Width, TopK: o.A.TopK, Router: router, RouteNorm: norm, Scale: scale}
 	p.ops[i] = devOp{Kind: dkTopK, Src: o.Src, In: []devVal{lg}, Out: []devVal{sel, top}, Role: role, A: a}
+	p.ops[end] = devOp{Kind: dkRouteWeights, Src: p.ops[end].Src, In: []devVal{top, lg}, Out: []devVal{w}, A: a}
+	drop := map[int]bool{}
+	for _, j := range chain[:len(chain)-1] {
+		drop[j] = true
+	}
+	ops := p.ops[:0]
+	for j, q := range p.ops {
+		if !drop[j] {
+			ops = append(ops, q)
+		}
+	}
+	p.ops = ops
+	return true
+}
+
+// probsRoute rewrites select_k op i over the router's logits whose weights
+// are the full softmax's probabilities of the selected experts, optionally
+// scaled, as the route's rank and weights.
+func probsRoute(p *devProgram, i int, only func(devVal) int, is func(int, devKind, graph.MapFn, ...devVal) bool) bool {
+	o := p.ops[i]
+	lg, sel, top := o.In[0], o.Out[0], o.Out[1]
+	if p.uses(top) != 0 || p.uses(lg) != 3 {
+		return false
+	}
+	mx, cs := -1, -1
+	for j, q := range p.ops {
+		if j != i && len(q.In) > 0 && q.In[0] == lg {
+			if q.Kind == dkReduce {
+				mx = j
+			} else {
+				cs = j
+			}
+		}
+	}
+	if !is(mx, dkReduce, graph.MapMax, lg) || !is(cs, dkMap, graph.MapSub, lg, p.ops[mx].Out[0]) {
+		return false
+	}
+	ex := only(p.ops[cs].Out[0])
+	if !is(ex, dkMap, graph.MapExp, p.ops[cs].Out[0]) || p.uses(p.ops[ex].Out[0]) != 2 {
+		return false
+	}
+	e := p.ops[ex].Out[0]
+	rs, dv := -1, -1
+	for j, q := range p.ops {
+		if len(q.In) > 0 && q.In[0] == e {
+			if q.Kind == dkReduce {
+				rs = j
+			} else {
+				dv = j
+			}
+		}
+	}
+	if !is(rs, dkReduce, graph.MapAdd, e) || !is(dv, dkMap, graph.MapDiv, e, p.ops[rs].Out[0]) {
+		return false
+	}
+	t := only(p.ops[dv].Out[0])
+	if t < 0 || p.ops[t].Kind != dkTake || len(p.ops[t].In) != 2 || p.ops[t].In[1] != sel || len(p.ops[t].Out) != 1 {
+		return false
+	}
+	chain := []int{mx, cs, ex, rs, dv, t}
+	w := p.ops[t].Out[0]
+	scale := 0.0
+	if s := only(w); s >= 0 && p.ops[s].Kind == dkMap && p.ops[s].A.Fn == graph.MapMul && len(p.ops[s].In) == 1 {
+		chain = append(chain, s)
+		scale, w = p.ops[s].A.Const, p.ops[s].Out[0]
+	}
+	end := chain[len(chain)-1]
+	a := graph.Attrs{Experts: p.vals[lg].Width, TopK: o.A.TopK, Router: graph.RouterSoftmax, Scale: scale}
+	p.ops[i] = devOp{Kind: dkTopK, Src: o.Src, In: []devVal{lg}, Out: []devVal{sel, top}, A: a}
 	p.ops[end] = devOp{Kind: dkRouteWeights, Src: p.ops[end].Src, In: []devVal{top, lg}, Out: []devVal{w}, A: a}
 	drop := map[int]bool{}
 	for _, j := range chain[:len(chain)-1] {
