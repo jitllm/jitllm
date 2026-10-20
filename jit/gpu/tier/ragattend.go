@@ -34,14 +34,19 @@ type ragRun struct {
 // run table here: a device with neither the int8 matrix instruction nor the
 // collective tiles, outside PTX (whose matrix forms take a chunk).
 func (g *devTier) ragStaged(bs *blockScratch) bool {
+	mma, _ := backend.LowersIntMMA(g.dev)
+	if bs.p.MLA() {
+		// A latent row has no flash or matrix form but sm_70's pair: the
+		// staged FMA tiles serve it everywhere else.
+		return !(g.composeTarget().API == compose.APIPTX && !mma)
+	}
 	if g.composeTarget().API == compose.APIPTX {
 		return false
 	}
 	if g.tilesOK() {
 		return !flashTileServes(bs.p.HeadDim, bs.rows)
 	}
-	ok, _ := backend.LowersIntMMA(g.dev)
-	return !ok
+	return !mma
 }
 
 // flashTileServes reports whether a collective-tile flash prefill serves a
@@ -182,7 +187,14 @@ func (g *devTier) stagedPrefill(bs *blockScratch, rows, c int, mapped bool, set 
 		prow, pbase = gaPRowW, gaRagBaseW
 	}
 	s := compose.Prefill{Rows: rows, Heads: p.NHead, KVHeads: p.NKVHead, Dim: p.HeadDim, Page: g.kvPage(),
-		Chunk: c, Scale: float32(p.Scale()), Softcap: p.AttnSoftcap, Sink: p.AttnSinks, Map: mapped}
+		Chunk: c, Scale: g.scoreScale(p), Softcap: p.AttnSoftcap, Sink: p.AttnSinks, Map: mapped}
+	vd, vpool := p.HeadDim, gaVPool
+	if p.MLA() {
+		// A latent row: one KV head of the latent and its key, the value
+		// its prefix, both in the one pool.
+		s.KVHeads, s.Dim, s.MLA = 1, p.KVLoraRank+p.NRot, p.KVLoraRank
+		vd, vpool = p.KVLoraRank, gaKPool
+	}
 	plane := rows * p.NHead * c
 	if g.genInSub && (pk.scCap < plane || pk.wtCap < plane) ||
 		!g.regrow(&pk.sc, &pk.scCap, plane, 4, true, true) || !g.regrow(&pk.wt, &pk.wtCap, plane, 4, true, true) {
@@ -214,8 +226,8 @@ func (g *devTier) stagedPrefill(bs *blockScratch, rows, c int, mapped bool, set 
 	smp, sbt := tables(sm)
 	sm.r.PrefillSoftmax(s, a, w, part, sdesc, sink, smp, sbt, qt)
 
-	ac := &rowBuild{r: compose.Row{Width: p.HeadDim, Rows: rows * p.NHead, SpanGroup: group}}
-	aw, v, aout := ac.buf(compose.BufRow, gaWts), ac.buf(compose.BufRow, gaVPool), ac.buf(compose.BufOut, gaOut0)
+	ac := &rowBuild{r: compose.Row{Width: vd, Rows: rows * p.NHead, SpanGroup: group}}
+	aw, v, aout := ac.buf(compose.BufRow, gaWts), ac.buf(compose.BufRow, vpool), ac.buf(compose.BufOut, gaOut0)
 	atab, adesc := ac.buf(u32, gaTab), ac.buf(u32, prow)
 	amp, abt := tables(ac)
 	ac.r.PrefillAcc(s, aw, v, aout, atab, adesc, amp, abt)

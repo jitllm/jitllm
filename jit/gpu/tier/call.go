@@ -582,7 +582,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		// A latent block without a batched scratch refuses the submission, not
 		// the block: Layers then runs the chunk's rows one at a time on this
 		// device, keeping decode here. The batched arm is emitMLARows.
-		if l.mla && bs.rows > 1 && bs.mlab == nil {
+		if l.mla && bs.rows > 1 && bs.mlab == nil && l.prog == nil {
 			g.LastErr = fmt.Sprintf("block %d: multi-head latent attention has no batched "+
 				"scratch here, so a %d-row chunk goes one row at a time", li, bs.rows)
 			return false

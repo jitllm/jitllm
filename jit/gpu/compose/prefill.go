@@ -17,6 +17,17 @@ type Prefill struct {
 	Rows, Heads, KVHeads, Dim, Page, Splits, Chunk int
 	Scale, Softcap                                 float32
 	Sink, Map                                      bool
+	// MLA > 0 is a latent row: K one row-major region of Dim a position
+	// (one KV head), V its first MLA elements.
+	MLA int
+}
+
+// valueDim is the value's width: the latent's prefix, or the head.
+func (s Prefill) valueDim() int {
+	if s.MLA > 0 {
+		return s.MLA
+	}
+	return s.Dim
 }
 
 func (s Prefill) splits() int { return max(1, s.Splits) }
@@ -93,10 +104,14 @@ func (g *Row) PrefillScores(s Prefill, q, k, out, tab, desc, mp, bt int) {
 	t := g.SpanClamp(desc, kernels.PRowWords, dr, kernels.PRowStart, kernels.PRowEnd, add(base, j), 1)
 	pid := g.LoadAt(tab, add(tw, ub(OpDiv, t, u(P))))
 	kb := add(add(mul(pid, u(P*kvRow)), mul(mul(ub(OpDiv, h, u(gqa)), u(s.Dim)), u(P))), ub(OpRem, t, u(P)))
+	step := P
+	if s.MLA > 0 {
+		kb, step = add(mul(add(mul(pid, u(P)), ub(OpRem, t, u(P))), u(kvRow)), mul(ub(OpDiv, h, u(gqa)), u(s.Dim))), 1
+	}
 	qb := mul(add(mul(dr, u(s.Heads)), h), u(s.Dim))
 	acc := g.Const(0)
 	for i := 0; i < s.Dim; i++ {
-		acc = g.fma(g.LoadAt(q, add(qb, u(i))), g.LoadAt(k, add(kb, u(i*P))), acc)
+		acc = g.fma(g.LoadAt(q, add(qb, u(i))), g.LoadAt(k, add(kb, u(i*step))), acc)
 	}
 	ks, ke := g.descOf(desc, dr, kernels.PRowStart), g.descOf(desc, dr, kernels.PRowEnd)
 	ok := g.Less(ub(OpSub, add(base, j), ks), ub(OpSub, ke, ks))
@@ -158,7 +173,7 @@ func (g *Row) PrefillSoftmax(s Prefill, a, out, part, desc, sink, mp, bt, qt int
 	w := g.exp(g.Bin(OpSub, g.LoadAt(a, at), m))
 	g.StoreAt(out, w, at)
 	g.SetFold(sum, g.Bin(OpAdd, sum, w))
-	padded := (s.Dim + 31) / 32 * 32
+	padded := (s.valueDim() + 31) / 32 * 32
 	pp := ub(OpMul, item, u(padded+64))
 	r := g.Loop(32)
 	g.StoreAt(part, m, add(add(pp, g.Iter(r)), u(padded)))
@@ -189,14 +204,18 @@ func (g *Row) PrefillAcc(s Prefill, a, v, part, tab, desc, mp, bt int) {
 	en := ub(OpMax, ub(OpMin, hi, add(c0, u(C))), st)
 	c, t := g.RangeLoop(c0, st, en, C)
 	pid := g.LoadAt(tab, add(tw, ub(OpDiv, g.KeyClamp(t, lo, hi), u(P))))
-	col := add(mul(ub(OpDiv, h, u(gqa)), u(s.Dim)), j)
+	col := j
+	if s.MLA == 0 {
+		col = add(mul(ub(OpDiv, h, u(gqa)), u(s.Dim)), j)
+	}
 	vv := g.LoadAt(v, add(mul(add(mul(pid, u(P)), ub(OpRem, t, u(P))), u(kvRow)), col))
 	w := g.LoadAt(a, add(mul(R, u(C)), ub(OpSub, t, c0)))
 	acc := g.Fold(c, g.Const(0))
 	g.SetFold(acc, g.fma(w, vv, acc))
+	vd := s.valueDim()
 	if s.Splits == 0 {
-		g.StoreAt(part, acc, add(mul(add(mul(dr, u(s.Heads)), h), u(s.Dim)), j))
+		g.StoreAt(part, acc, add(mul(add(mul(dr, u(s.Heads)), h), u(vd)), j))
 		return
 	}
-	g.StoreAt(part, acc, add(mul(R, u((s.Dim+31)/32*32+64)), j))
+	g.StoreAt(part, acc, add(mul(R, u((vd+31)/32*32+64)), j))
 }

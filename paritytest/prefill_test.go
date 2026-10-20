@@ -14,7 +14,7 @@ import (
 // split and direct, a run table or none, a subgroup an item or a thread.
 func TestPrefillIsMains(t *testing.T) {
 	type pc struct {
-		heads, kv, dim, rows, splits, chunk int
+		heads, kv, dim, rows, splits, chunk, mla int
 		mp, sink                            bool
 		softcap                             float32
 	}
@@ -27,12 +27,16 @@ func TestPrefillIsMains(t *testing.T) {
 			pc{heads: hd[0], kv: hd[1], dim: hd[2], rows: 32, splits: 0, chunk: 64, sink: true, softcap: 30},
 		)
 	}
+	cases = append(cases,
+		pc{heads: 4, kv: 1, dim: 96, mla: 64, rows: 32, splits: 0, chunk: 128},
+		pc{heads: 4, kv: 1, dim: 96, mla: 64, rows: 8, splits: 0, chunk: 128, mp: true},
+	)
 	for _, c := range cases {
-		name := fmt.Sprintf("h%d_kv%d_d%d_r%d_s%d_c%d_map%v_sink%v", c.heads, c.kv, c.dim, c.rows, c.splits, c.chunk, c.mp, c.sink)
+		name := fmt.Sprintf("h%d_kv%d_d%d_m%d_r%d_s%d_c%d_map%v_sink%v", c.heads, c.kv, c.dim, c.mla, c.rows, c.splits, c.chunk, c.mp, c.sink)
 		ms := mainkernels.FlashShape{Heads: c.heads, KVHeads: c.kv, Dim: c.dim, Rows: c.rows, Splits: c.splits, Chunk: c.chunk, Page: 64,
-			Scale: 0.125, Softcap: c.softcap, Sink: c.sink, Map: c.mp}
+			Scale: 0.125, Softcap: c.softcap, Sink: c.sink, Map: c.mp, MLA: c.mla}
 		ps := compose.Prefill{Heads: c.heads, KVHeads: c.kv, Dim: c.dim, Rows: c.rows, Splits: c.splits, Chunk: c.chunk, Page: 64,
-			Scale: 0.125, Softcap: c.softcap, Sink: c.sink, Map: c.mp}
+			Scale: 0.125, Softcap: c.softcap, Sink: c.sink, Map: c.mp, MLA: c.mla}
 		tables := func(g *compose.Row) (int, int) {
 			if !c.mp {
 				return -1, -1
@@ -86,7 +90,11 @@ func TestPrefillIsMains(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				g := &compose.Row{Width: c.dim, Rows: c.rows * c.heads * max(1, c.splits), SpanGroup: c.rows}
+				vd := c.dim
+				if c.mla > 0 {
+					vd = c.mla
+				}
+				g := &compose.Row{Width: vd, Rows: c.rows * c.heads * max(1, c.splits), SpanGroup: c.rows}
 				if c.mp {
 					g.SpanGroup = qt
 				}
