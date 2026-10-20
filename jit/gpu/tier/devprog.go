@@ -1270,8 +1270,8 @@ func buildDevProgram(p *nn.LayerPlan, l *layer, page int) (*devProgram, string) 
 				vals[o.Out[0]] = out
 				continue
 			case jlm.RoleAttnQNorm, jlm.RoleAttnKNorm:
-				// A whole-projection q/k norm (OLMo 2's, OLMoE's): the head
-				// norm's lowering at the plan's wide geometry.
+				// A whole-projection q/k norm (OLMo 2's, OLMoE's) at the
+				// plan's wide geometry.
 				if !p.QKNormWide {
 					return nil, "a row norm of q or k on a plan that is not wide"
 				}
@@ -1280,8 +1280,13 @@ func buildDevProgram(p *nn.LayerPlan, l *layer, page int) (*devProgram, string) 
 					s = slotKN
 				}
 				out := prog.val(name(0), prog.vals[in(0)], s)
-				// A whole projection normed at once: one head of its width.
-				prog.ops = append(prog.ops, devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Role: o.Weight[0].Role, HD: prog.vals[in(0)].Width})
+				// A whole projection normed at once: a row norm of its width
+				// where q and k are one width, else one head of it.
+				op := devOp{Kind: dkHeadNorm, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Role: o.Weight[0].Role, HD: prog.vals[in(0)].Width}
+				if p.NKVHead == p.NHead {
+					op.Kind, op.HD = dkNorm, 0
+				}
+				prog.ops = append(prog.ops, op)
 				vals[o.Out[0]] = out
 				continue
 			default:

@@ -606,16 +606,6 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		if hd <= 0 || iw%hd != 0 {
 			return nil
 		}
-		if o.V != nil && hd == iw {
-			// One head the whole row: the row's norm.
-			rb.r.Width, rb.r.Rows = iw, rows
-			y := rb.normed(o, rb.load(compose.BufRow, gaIn0), iw, eps, false)
-			if y < 0 {
-				return nil
-			}
-			rb.store(y, gaOut0)
-			break
-		}
 		if o.V != nil {
 			// A subgroup a head where the device promises one and the head
 			// is a whole number of its lanes, else a thread a head.
