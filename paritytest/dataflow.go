@@ -207,7 +207,25 @@ type term struct {
 	coef int64
 }
 
+// wrap is a as the 32-bit words it computes: its constant and coefficients
+// modulo 2^32, as signed 32-bit values.
+func (a affine) wrap() affine {
+	a.c = int64(int32(a.c))
+	o := a.terms[:0:0]
+	for _, t := range a.terms {
+		if t.coef = int64(int32(t.coef)); t.coef != 0 {
+			o = append(o, t)
+		}
+	}
+	a.terms = o
+	return a
+}
+
 func (a affine) add(b affine, sign int64) affine {
+	return a.sum(b, sign).wrap()
+}
+
+func (a affine) sum(b affine, sign int64) affine {
 	o := affine{c: a.c + sign*b.c}
 	i, j := 0, 0
 	for i < len(a.terms) || j < len(b.terms) {
@@ -236,7 +254,7 @@ func (a affine) scale(m int64) affine {
 			o.terms = append(o.terms, term{t.atom, t.coef * m})
 		}
 	}
-	return o
+	return o.wrap()
 }
 
 func (a affine) isConst() bool { return len(a.terms) == 0 }

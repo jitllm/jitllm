@@ -269,6 +269,9 @@ const (
 	// A*B + C (C in Node.C), each half alone.
 	OpSubH2
 	OpFmaH2
+	// OpFunnel is the low word of the 64-bit (B:A) shifted right by C
+	// (Node.C, under 32), of words (NUBinary).
+	OpFunnel
 )
 
 // token is whether fold f carries an order rather than a value: it starts
@@ -279,7 +282,9 @@ func (g *Row) token(f int) bool {
 }
 
 // ternary is whether nd reads a third operand at C as a multiply-add does.
-func (nd Node) ternary() bool { return nd.Kind == NBinary && (nd.Op == OpFma || nd.Op == OpFmaH2) }
+func (nd Node) ternary() bool {
+	return nd.Kind == NBinary && (nd.Op == OpFma || nd.Op == OpFmaH2) || nd.Kind == NUBinary && nd.Op == OpFunnel
+}
 
 // Red is a row reduction.
 type Red uint8
@@ -1786,6 +1791,8 @@ func (g *Row) emitIn(b *ir.Builder, params []ir.Value, s Schedule, cta func() ir
 				v = b.Shl(t, x, y)
 			case OpShr:
 				v = b.Shr(t, x, y)
+			case OpFunnel:
+				v = b.Funnel(x, y, elem(nd.C, idx, e))
 			}
 		case NWindow:
 			if w, ok := rowWin[n]; ok {
@@ -2448,6 +2455,9 @@ func (g *Row) typeOf(n int) ir.Type {
 			return ir.U32
 		}
 	case NUBinary:
+		if nd.Op != OpFunnel && g.typeOf(nd.B) == ir.I32 {
+			return ir.I32
+		}
 		return g.typeOf(nd.A)
 	case NFold:
 		return g.typeOf(nd.B)

@@ -54,8 +54,7 @@ func (g *Row) MatVec(w MatVecWeight, a MatVecOperand) (int, error) {
 	if info.Bits == 2 && info.Hi == 0 && info.PerSuper == 1 && !info.BiasArray && info.Codes == nil && !info.E8M0 {
 		return g.planeMatVec(w, a, info)
 	}
-	if info.Bits == 4 && info.Hi == 0 && info.PerSuper == 1 && !info.BiasArray && !info.D32 &&
-		(info.Codes == nil || kernels.DeviceWhyNot(w.T) == "") {
+	if info.Bits == 4 && !info.D32 && (info.Codes == nil || kernels.DeviceWhyNot(w.T) == "") {
 		return g.nibbleMatVec(w, a, info)
 	}
 	switch {
@@ -273,20 +272,28 @@ func (g *Row) planeMatVec(w MatVecWeight, a MatVecOperand, info kernels.QInfo) (
 	return acc, nil
 }
 
-// nibbleMatVec is MatVec over a 4-bit plane with one scale a sub-block
-// (Q4_0, MXFP4): each word's low nibbles the sub-block's first half, its
-// high nibbles the second, each a byte lane of four codes against the
-// operand's word; a coded format's codes mapped to their values first
-// (e2m1); the integer dot corrected by the zero point times the operand's
-// sum, then scaled -- an f16 scale, or an E8M0 exponent byte, several rows
-// to a word (kernels.DIndex).
+// nibbleMatVec is MatVec over a 4-bit plane (Q4_0, Q5_0, Q5_1, Q3_K,
+// Q4_K, Q5_K, Q6_K, MXFP4): a sub-block's words, each word's low nibbles
+// the sub-block's first half and its high nibbles the second, a byte lane
+// of four codes against the operand's word; a secondary plane's codes
+// (Hi bits a weight, read first) joined above each nibble; a coded
+// format's codes mapped to their values (e2m1). The integer dot is scaled
+// by the super-block's scale (an f16, or an E8M0 exponent byte, several
+// rows to a word: kernels.DIndex) times the sub-block's integer scale
+// (a byte of the sc plane, offset by ScOff, or a six-bit field of the
+// k-quants' stream), less the operand's sum times the zero point or the
+// sub-block's minimum.
 func (g *Row) nibbleMatVec(w MatVecWeight, a MatVecOperand, info kernels.QInfo) (int, error) {
 	sub := info.Sub
-	if w.K%sub != 0 || sub%32 != 0 {
+	if w.K%sub != 0 || sub%16 != 0 {
 		return 0, fmt.Errorf("compose: a matvec over %v at K=%d", w.T, w.K)
 	}
+	if info.PerSuper > 1 && w.SC < 0 {
+		return 0, fmt.Errorf("compose: a matvec over %v with no sub-scale plane", w.T)
+	}
 	nsub := w.K / sub
-	words := sub * 4 / 32
+	pw, hw := sub*4/32, sub*info.Hi/32
+	words := pw + hw
 	slots := kernels.DSlots(w.T)
 	e, t := g.Column(), g.RowIdx()
 	u, ub := g.UConst, g.UBin
@@ -295,33 +302,68 @@ func (g *Row) nibbleMatVec(w MatVecWeight, a MatVecOperand, info kernels.QInfo) 
 	if err != nil {
 		return 0, err
 	}
+	sheetSC := sheetD
+	if w.Experts > 1 && info.PerSuper > 1 {
+		_, _, nsc, err := kernels.PackedWords(w.T, w.Rows, w.K)
+		if err != nil {
+			return 0, err
+		}
+		at := t
+		if w.SelPer > 1 {
+			at = ub(OpDiv, t, u(w.SelPer))
+		}
+		ex := g.LoadAt(w.Sel, at)
+		sheetSC = func(i int) int { return ub(OpAdd, ub(OpMul, ex, u(nsc)), i) }
+	}
 	at := a.token(g, t)
 	c := g.Loop(nsub)
 	s := g.Iter(c)
 	acc := g.Fold(c, g.Const(0))
-	cj := g.Loop(words)
-	j := g.Iter(cj)
-	isum := g.Fold(cj, g.Add(Node{Kind: NIConst}))
-	x := g.LoadAt(w.QS, sheetQ(ub(OpAdd, ub(OpMul, ub(OpAdd, ub(OpMul, s, u(words)), j), rows), e)))
-	mask := u(0x0F0F0F0F)
-	lo, hi := ub(OpAnd, x, mask), ub(OpAnd, ub(OpShr, x, u(4)), mask)
-	if info.Codes != nil {
-		lo, hi = g.e2m1(lo), g.e2m1(hi)
+	word := func(k int) int {
+		return g.LoadAt(w.QS, sheetQ(ub(OpAdd, ub(OpMul, ub(OpAdd, ub(OpMul, s, u(words)), u(k)), rows), e)))
+	}
+	var his []int
+	for k := 0; k < hw; k++ {
+		his = append(his, word(pw+k))
+	}
+	hiOf := func(gi int) int {
+		lanes := 8 / info.Hi
+		v := his[gi/lanes]
+		if sh := info.Hi * (gi % lanes); sh > 0 {
+			v = ub(OpShr, v, u(sh))
+		}
+		m := uint32(1)<<uint(info.Hi) - 1
+		return ub(OpShl, ub(OpAnd, v, u(int(m|m<<8|m<<16|m<<24))), u(4))
 	}
 	bounded := 1
 	if info.SignedQ {
 		bounded = 0
 	}
-	aw := ub(OpAdd, ub(OpAdd, ub(OpMul, at, u(w.K/4)), ub(OpMul, s, u(sub/4))), j)
-	dot := g.Add(Node{Kind: NDot4, A: lo, B: g.LoadAt(a.A, aw), C: isum, At: bounded})
-	dot = g.Add(Node{Kind: NDot4, A: hi, B: g.LoadAt(a.A, ub(OpAdd, aw, u(sub/8))), C: dot, At: bounded})
-	g.SetFold(isum, dot)
+	mask := u(0x0F0F0F0F)
+	aw0 := ub(OpAdd, ub(OpMul, at, u(w.K/4)), ub(OpMul, s, u(sub/4)))
+	dot := g.Add(Node{Kind: NIConst})
+	for k := 0; k < pw; k++ {
+		x := word(k)
+		lo, hi := ub(OpAnd, x, mask), ub(OpAnd, ub(OpShr, x, u(4)), mask)
+		if info.Codes != nil {
+			lo, hi = g.e2m1(lo), g.e2m1(hi)
+		}
+		if hw > 0 {
+			lo, hi = ub(OpXor, lo, hiOf(k)), ub(OpXor, hi, hiOf(k+pw))
+		}
+		dot = g.Add(Node{Kind: NDot4, A: lo, B: g.LoadAt(a.A, ub(OpAdd, aw0, u(k))), C: dot, At: bounded})
+		dot = g.Add(Node{Kind: NDot4, A: hi, B: g.LoadAt(a.A, ub(OpAdd, aw0, u(k+sub/8))), C: dot, At: bounded})
+	}
+	super := s
+	if info.PerSuper > 1 {
+		super = ub(OpShr, s, u(log2(info.PerSuper)))
+	}
 	var dw int
 	if slots > 1 {
-		di := sheetD(ub(OpAdd, ub(OpMul, s, u((w.Rows+slots-1)/slots)), ub(OpDiv, e, u(slots))))
+		di := sheetD(ub(OpAdd, ub(OpMul, super, u((w.Rows+slots-1)/slots)), ub(OpDiv, e, u(slots))))
 		dw = ub(OpShr, g.LoadAt(w.D, di), ub(OpMul, ub(OpRem, e, u(slots)), u(32/slots)))
 	} else {
-		dw = g.LoadAt(w.D, sheetD(ub(OpAdd, ub(OpMul, s, rows), e)))
+		dw = g.LoadAt(w.D, sheetD(ub(OpAdd, ub(OpMul, super, rows), e)))
 	}
 	var d int
 	if info.E8M0 {
@@ -329,19 +371,65 @@ func (g *Row) nibbleMatVec(w MatVecWeight, a MatVecOperand, info kernels.QInfo) 
 	} else {
 		d = g.Add(Node{Kind: NUnary, Op: OpHalf, A: dw})
 	}
-	q := g.Add(Node{Kind: NUnary, Op: OpFloat, A: isum})
-	v := g.Bin(OpMul, q, d)
-	if info.BiasK != 0 {
-		nb := a.Toks * w.K / 32
-		si := ub(OpAdd, u(nb), ub(OpAdd, ub(OpMul, at, u(w.K/16)), ub(OpMul, s, u(sub/16))))
-		sum := g.LoadAt(a.AX, si)
-		for k := 1; k < sub/16; k++ {
-			sum = g.Bin(OpAdd, sum, g.LoadAt(a.AX, ub(OpAdd, si, u(k))))
-		}
-		v = g.Bin(OpMul, d, g.Add(Node{Kind: NBinary, Op: OpFma, A: g.Const(-info.BiasK), B: sum, C: q}))
+	var dmin int
+	if info.BiasArray {
+		dmin = g.Add(Node{Kind: NUnary, Op: OpHalf, A: ub(OpShr, dw, u(16))})
 	}
-	ax := g.LoadAt(a.AX, ub(OpAdd, ub(OpMul, at, u(w.K/32)), ub(OpMul, s, u(sub/32))))
-	g.SetFold(acc, g.Add(Node{Kind: NBinary, Op: OpFma, A: v, B: ax, C: acc}))
+	scale, mInt := d, -1
+	float := func(n int) int { return g.Add(Node{Kind: NUnary, Op: OpFloat, A: n}) }
+	scAt := func(wi int) int { return g.LoadAt(w.SC, sheetSC(ub(OpAdd, ub(OpMul, wi, rows), e))) }
+	switch {
+	case kernels.ScStream(w.T):
+		pos := ub(OpMul, s, u(12))
+		lo, bit := ub(OpShr, pos, u(5)), ub(OpAnd, pos, u(31))
+		hi := ub(OpAdd, lo, g.Select(g.Less(u(20), bit), u(1), u(0)))
+		pair := g.Add(Node{Kind: NUBinary, Op: OpFunnel, A: scAt(lo), B: scAt(hi), C: bit})
+		scale = g.Bin(OpMul, d, float(ub(OpAnd, pair, u(63))))
+		mInt = ub(OpAnd, ub(OpShr, pair, u(6)), u(63))
+	case info.PerSuper > 1:
+		per, stride := 4, 8
+		if info.BiasArray {
+			per, stride = 2, 16
+		}
+		sw := scAt(ub(OpShr, s, u(log2(per))))
+		base := ub(OpMul, ub(OpAnd, s, u(per-1)), u(stride))
+		sc := ub(OpAnd, ub(OpShr, sw, base), u(0xFF))
+		if info.ScOff != 0 {
+			sc = ub(OpSub, sc, g.Add(Node{Kind: NIConst, At: -info.ScOff}))
+		}
+		scale = g.Bin(OpMul, d, float(sc))
+		if info.BiasArray {
+			mInt = ub(OpAnd, ub(OpShr, sw, ub(OpAdd, base, u(8))), u(0xFF))
+		}
+	}
+	ablk := s
+	if sub == 16 {
+		ablk = ub(OpShr, s, u(1))
+	}
+	da := g.LoadAt(a.AX, ub(OpAdd, ub(OpMul, at, u(w.K/32)), ablk))
+	sumA := func() int {
+		base := ub(OpAdd, u(a.Toks*w.K/32), ub(OpMul, at, u(w.K/16)))
+		if sub == 16 {
+			return g.LoadAt(a.AX, ub(OpAdd, base, s))
+		}
+		i0 := ub(OpAdd, base, ub(OpMul, s, u(2)))
+		return g.Bin(OpAdd, g.LoadAt(a.AX, i0), g.LoadAt(a.AX, ub(OpAdd, i0, u(1))))
+	}
+	q := float(dot)
+	var v int
+	switch {
+	case info.BiasArray:
+		bias := dmin
+		if mInt >= 0 {
+			bias = g.Bin(OpMul, dmin, float(mInt))
+		}
+		v = g.Bin(OpSub, g.Bin(OpMul, q, scale), g.Bin(OpMul, sumA(), bias))
+	case info.BiasK == 0:
+		v = g.Bin(OpMul, q, scale)
+	default:
+		v = g.Bin(OpMul, scale, g.Add(Node{Kind: NBinary, Op: OpFma, A: g.Const(-info.BiasK), B: sumA(), C: q}))
+	}
+	g.SetFold(acc, g.Add(Node{Kind: NBinary, Op: OpFma, A: v, B: da, C: acc}))
 	return acc, nil
 }
 

@@ -127,6 +127,9 @@ func composedMatVec(t *testing.T, c mvCase) []*ir.Kernel {
 	if !kernels.IsFloat(c.t.c) {
 		w.D = g.Buf(compose.BufU32)
 	}
+	if c.t.c.Info().PerSuper > 1 {
+		w.SC = g.Buf(compose.BufU32)
+	}
 	a := compose.MatVecOperand{Toks: ntok}
 	if kernels.IsFloat(c.t.c) {
 		a.X = g.Buf(compose.BufRow)
@@ -167,7 +170,9 @@ func TestMatVecIsMains(t *testing.T) {
 			}
 		}
 	}
-	for _, q := range []format{{kernels.TQ2, mainkernels.TQ2}, {kernels.TQ2F, mainkernels.TQ2F}, {kernels.MXFP4, mainkernels.MXFP4}, {kernels.Q4_0, mainkernels.Q4_0}} {
+	for _, q := range []format{{kernels.TQ2, mainkernels.TQ2}, {kernels.TQ2F, mainkernels.TQ2F}, {kernels.MXFP4, mainkernels.MXFP4}, {kernels.Q4_0, mainkernels.Q4_0},
+		{kernels.Q5_0, mainkernels.Q5_0}, {kernels.Q5_1, mainkernels.Q5_1}, {kernels.Q4_K, mainkernels.Q4_K}, {kernels.Q5_K, mainkernels.Q5_K},
+		{kernels.Q6_K, mainkernels.Q6_K}, {kernels.Q3_K, mainkernels.Q3_K}} {
 		for _, rk := range [][2]int{{64, 256}, {96, 512}} {
 			for _, sp := range []int{1, 2} {
 				for _, rowt := range []int{1, 2} {
