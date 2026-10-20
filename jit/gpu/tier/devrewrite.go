@@ -1,6 +1,7 @@
 package tier
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
@@ -550,14 +551,40 @@ func rwAddNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, ns
 		return false
 	}
 	i, j, ok := addNorm(p)
-	if !ok || j+1 >= len(p.ops) || p.ops[j+1].Kind != dkQuant || p.ops[j+1].In[0] != p.ops[j].Out[0] {
+	if !ok {
 		return false
 	}
-	a, n, q := p.ops[i], p.ops[j], p.ops[j+1]
-	p.ops[i] = devOp{Kind: dkAddNormQuant, Src: cat(cat(a.Src, n.Src), q.Src), In: a.In,
+	k := rowQuant(p, j)
+	if k < 0 {
+		return false
+	}
+	a, n, q := p.ops[i], p.ops[j], p.ops[k]
+	fused := devOp{Kind: dkAddNormQuant, Src: cat(cat(a.Src, n.Src), q.Src), In: a.In,
 		Out: []devVal{a.Out[0], n.Out[0], q.Out[0]}, Role: n.Role, V: n.V, VB: n.VB}
-	p.ops = append(p.ops[:i+1], p.ops[j+2:]...)
+	p.ops = append(p.ops[:k], p.ops[k+1:]...)
+	p.ops[i] = fused
+	p.ops = append(p.ops[:i+1], p.ops[j+1:]...)
 	return true
+}
+
+// rowQuant is the first quantize of op i's row after it, where it may run
+// with op i: no op between writes the row or reads or writes what the
+// quantize writes; -1 for none.
+func rowQuant(p *devProgram, i int) int {
+	v := p.ops[i].Out[0]
+	for k := i + 1; k < len(p.ops); k++ {
+		o := p.ops[k]
+		if o.Kind == dkQuant && len(o.In) > 0 && o.In[0] == v {
+			q := o.Out[0]
+			for m := i + 1; m < k; m++ {
+				if slices.Contains(p.ops[m].Out, v) || slices.Contains(p.ops[m].In, q) || slices.Contains(p.ops[m].Out, q) {
+					return -1
+				}
+			}
+			return k
+		}
+	}
+	return -1
 }
 
 // rwAddNorm: the add and the norm of the sum, one launch.
@@ -584,11 +611,13 @@ func rwNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq 
 	}
 	for i, o := range p.ops {
 		// The block row's norm: a latent's has its own width and kernels.
-		if o.Kind != dkNorm || p.slots[o.Out[0]] != slotH || i+1 >= len(p.ops) {
+		if o.Kind != dkNorm || p.slots[o.Out[0]] != slotH {
 			continue
 		}
-		if q := p.ops[i+1]; q.Kind == dkQuant && q.In[0] == o.Out[0] {
-			p.replace(i, i+1, devOp{Kind: dkNormQuant, Src: cat(o.Src, q.Src), In: o.In, Out: []devVal{o.Out[0], q.Out[0]}, Role: o.Role, V: o.V, VB: o.VB})
+		if k := rowQuant(p, i); k >= 0 {
+			q := p.ops[k]
+			p.ops = append(p.ops[:k], p.ops[k+1:]...)
+			p.ops[i] = devOp{Kind: dkNormQuant, Src: cat(o.Src, q.Src), In: o.In, Out: []devVal{o.Out[0], q.Out[0]}, Role: o.Role, V: o.V, VB: o.VB}
 			return true
 		}
 	}
