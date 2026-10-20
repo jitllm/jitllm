@@ -104,7 +104,7 @@ const (
 	gaMgGAX
 	gaMgTselU // each unit-wide block's expert,
 	gaMgH16   // the sorted rows as the binary16 operand
-	gaOwn0 // the op's own buffers (devOp.Own)
+	gaOwn0    // the op's own buffers (devOp.Own)
 	gaOwn1
 	gaOwn2
 	gaOwn3
