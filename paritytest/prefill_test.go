@@ -54,8 +54,7 @@ func TestPrefillIsMains(t *testing.T) {
 				q, k, out, tab, desc := g.Buf(compose.BufRow), g.Buf(compose.BufRow), g.Buf(compose.BufOut), g.Buf(compose.BufU32), g.Buf(compose.BufU32)
 				mp, bt := tables(g)
 				g.PrefillScores(ps, q, k, out, tab, desc, mp, bt)
-				s := compose.Schedule{Group: 128, Flat: true, Tile: qt, TileCols: kt, RowStride: c.heads, ColStride: W / kt, Target: sm70}
-				same(t, name, []*ir.Kernel{mk}, formed(t, g, s))
+				same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{Target: sm70, Step: compose.StepChunk, Tok: qt, RowTile: kt}))
 			})
 		}
 		for _, lanes := range []int{32, 1} {

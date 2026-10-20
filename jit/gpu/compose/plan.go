@@ -135,6 +135,9 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 		return []Planned{{G: g, S: Schedule{Group: (g.Width + 31) / 32 * 32, Flat: true, WorkRow: true, Target: f.Target}, Bufs: all,
 			Threads: g.Rows * ((g.Width + 31) / 32 * 32)}}, nil
 	}
+	if g.product() {
+		return g.PlanAt(g.productSchedule(f))
+	}
 	if !g.contraction() && !g.reduces() && len(g.Stages) == 0 {
 		return []Planned{{G: g, S: Schedule{Group: 128, Flat: true, Target: f.Target}, Bufs: all,
 			Threads: g.Rows * g.Width}}, nil
@@ -373,4 +376,146 @@ func rowSchedule(g *Row, t Target) Schedule {
 // String is the plan's kernels, for a dump.
 func (p Planned) String() string {
 	return fmt.Sprintf("%d nodes, %+v, %d threads", len(p.G.Nodes), p.S, p.Threads)
+}
+
+// product reports a group of no loop and no reduction whose one store
+// reads products of an operand that reads the row and not the element by
+// one that reads the element and not the row, past what its spans hold
+// uniform over a group of rows: a tile of rows by elements a thread reads
+// each operand once for the tile.
+func (g *Row) product() bool {
+	if len(g.Stores) != 1 || len(g.Loops) != 0 || g.reduces() || g.Q8 != nil || len(g.Stages) != 0 {
+		return false
+	}
+	row, col := g.rowDepsPast(g.spanStride()), g.colDeps()
+	operand, weight := false, false
+	for i, nd := range g.Nodes {
+		if nd.Kind != NLoad || !nd.Indexed || g.typeOf(i) == ir.U32 {
+			continue
+		}
+		operand = operand || row[i] && !col[i]
+		weight = weight || col[i] && !row[i]
+	}
+	return operand && weight
+}
+
+// productSchedule is a product's tile: the step's rows and elements a
+// thread, halved until they divide; rows spaced as its spans' rows are (a
+// row's span is the row's over a divisor, every row the divisor apart
+// sharing it), elements spaced a tile's count apart where an element's
+// operand is gathered through a table (neighbouring threads then read
+// neighbouring places), adjacent where it is an affine place.
+func (g *Row) productSchedule(f Facts) Schedule {
+	s := Schedule{Group: 128, Flat: true, Target: f.Target, RowStride: g.spanStride(), ColStride: 1}
+	tok, rowt := max(f.Tok, 1), max(f.RowTile, 1)
+	for tok > 1 && (g.Rows%(tok*s.RowStride) != 0 || g.SpanGroup > 0 && g.SpanGroup%tok != 0) {
+		tok /= 2
+	}
+	for rowt > 1 && g.Width%rowt != 0 {
+		rowt /= 2
+	}
+	s.Tile, s.TileCols = tok, rowt
+	if rowt > 1 && g.gathersByColumn() {
+		s.ColStride = g.Width / rowt
+	}
+	return s
+}
+
+// spanStride is how far apart the rows sharing a span are: d where every
+// span's row reads the group's row only as the row over d, else 1.
+func (g *Row) spanStride() int {
+	d := 1
+	for _, sp := range g.Spans {
+		if sp.Uniform {
+			continue
+		}
+		var walk func(n int) int
+		walk = func(n int) int {
+			nd := g.Nodes[n]
+			if nd.Kind == NUBinary && nd.Op == OpDiv && g.Nodes[nd.A].Kind == NRowIdx && g.Nodes[nd.B].Kind == NUConst {
+				return g.Nodes[nd.B].At
+			}
+			if nd.Kind == NRowIdx {
+				return -1
+			}
+			x := 0
+			for _, o := range g.operands(n) {
+				switch y := walk(o); {
+				case y < 0 || x > 0 && y > 0 && y != x:
+					return -1
+				case y > 0:
+					x = y
+				}
+			}
+			return x
+		}
+		if x := walk(sp.Row); x > 0 {
+			d = x
+		}
+	}
+	return d
+}
+
+// rowDepsPast is rowDeps with the spans' nodes and the row's remainder by
+// stride read as uniform over rows stride apart.
+func (g *Row) rowDepsPast(stride int) []bool {
+	uniform := make([]bool, len(g.Nodes))
+	for _, sp := range g.Spans {
+		uniform[sp.Clamp] = true
+	}
+	for i, nd := range g.Nodes {
+		if nd.Kind == NUBinary && nd.Op == OpRem && g.Nodes[nd.A].Kind == NRowIdx && g.Nodes[nd.B].Kind == NUConst && g.Nodes[nd.B].At == stride {
+			uniform[i] = true
+		}
+	}
+	v := make([]bool, len(g.Nodes))
+	for changed := true; changed; {
+		changed = false
+		for i, nd := range g.Nodes {
+			if v[i] || uniform[i] {
+				continue
+			}
+			x := nd.Kind == NRowIdx || nd.Kind == NRowOff
+			if nd.Kind == NLoad && !nd.Indexed {
+				k := g.Bufs[nd.Buf].Kind
+				x = k == BufRow || k == BufRowF16 || k == BufRowScalar || k == BufU32
+			}
+			for _, o := range g.operands(i) {
+				x = x || v[o]
+			}
+			if x {
+				v[i], changed = true, true
+			}
+		}
+	}
+	return v
+}
+
+// gathersByColumn reports whether a float load's place reads a load that
+// reads the element: an operand gathered through a table.
+func (g *Row) gathersByColumn() bool {
+	col := g.colDeps()
+	var via func(n int, seen map[int]bool) bool
+	via = func(n int, seen map[int]bool) bool {
+		if seen[n] {
+			return false
+		}
+		seen[n] = true
+		nd := g.Nodes[n]
+		if nd.Kind == NLoad && nd.Indexed && col[n] {
+			return true
+		}
+		for _, o := range g.operands(n) {
+			if via(o, seen) {
+				return true
+			}
+		}
+		return false
+	}
+	for i, nd := range g.Nodes {
+		if nd.Kind == NLoad && nd.Indexed && g.typeOf(i) != ir.U32 && col[i] && via(nd.Ix, map[int]bool{}) {
+			return true
+		}
+	}
+	return false
 }
