@@ -1672,9 +1672,17 @@ func (g *devTier) genHeadCopy(o *devOp, prog *devProgram, bs *blockScratch, rows
 		if nh <= 0 || w%nh != 0 || iw != w || (w/nh)%2 != 0 {
 			return nil
 		}
+		// A pair a thread, each row written at its own offset in the
+		// output (a table of the row's place, the op's own).
 		rot := w / nh
-		in, cs := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufVec, gaCS)
-		rb.store(r.Rotary(in, cs, rot, rot, p.RopeNeox, false), gaOut0)
+		offs := make([]uint32, rows)
+		for i := range offs {
+			offs[i] = uint32(i * w)
+		}
+		if o.Own[0] = g.ownBuf(bs, o, 0, rows, offs); o.Own[0] == nil {
+			return nil
+		}
+		return g.ropePairs(rows, w, rot, rot, p.RopeNeox, false, gaIn0, gaOwn0, gaOut0)
 	default:
 		return nil
 	}
