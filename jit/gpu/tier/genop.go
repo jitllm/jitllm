@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
@@ -590,6 +591,9 @@ func (g *devTier) genKern(enc []uint32, build func() (*ir.Kernel, error)) (backe
 	ent := genEntry{enc: enc}
 	ker, err := build()
 	if err == nil {
+		// Marked as the composer's: what a kernel's instructions are held
+		// against main's by (model.TestDumpEmittedKernels) counts only these.
+		ker.Comment = strings.TrimSpace("composed " + ker.Comment)
 		ent.width = ker.Group[0]
 		ent.k, err = g.dev.Compile(ker)
 	}
