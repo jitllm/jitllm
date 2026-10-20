@@ -2614,7 +2614,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer, page int) (*devProgram, string) 
 			return nil, "a matvec over a matrix the block's device copy does not hold"
 		}
 	}
-	if p.NoPreNorm && p.Q4E == nil {
+	if l.nAttn == nil && l.nPostAttn != nil && l.nPostFFN != nil {
 		prog.copyBranchInput(ne)
 	}
 	if err := prog.check(); err != nil {

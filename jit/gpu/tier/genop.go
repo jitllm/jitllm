@@ -1378,7 +1378,7 @@ func (g *devTier) genMatVecNodes(o *devOp, prog *devProgram, bs *blockScratch, r
 	// The product, into the output or a split's planes; a bank's slots are
 	// the group's rows, each reading its expert's sheet.
 	grows := rows
-	few := g.genRagLive > 0 && !bank && !kernels.IsFloat(m.q) && m.bias == nil && groupSplits(m.rows, max(m.split, 1))
+	few := g.genRagLive > 0 && !bank && !kernels.IsFloat(m.q) && (m.bias == nil || o.Kind == dkMatVec) && groupSplits(m.rows, max(m.split, 1))
 	switch {
 	case few:
 		grows = g.genRagLive
