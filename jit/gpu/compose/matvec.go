@@ -51,6 +51,9 @@ func (g *Row) MatVec(w MatVecWeight, a MatVecOperand) (int, error) {
 	if info.Float > 0 {
 		return g.floatMatVec(w, a, info)
 	}
+	if info.Bits == 2 && info.Hi == 0 && info.PerSuper == 1 && !info.BiasArray && info.Codes == nil && !info.E8M0 {
+		return g.planeMatVec(w, a, info)
+	}
 	switch {
 	case info.Bits != 8 || info.Hi != 0 || info.PerSuper != 1 || info.BiasK != 0 || info.BiasArray ||
 		info.Codes != nil || info.E8M0 || info.D32:
@@ -200,4 +203,68 @@ func (a MatVecOperand) token(g *Row, t int) int {
 		return g.UConst(0)
 	}
 	return t
+}
+
+// planeMatVec is a matvec over a 2-bit plane with a constant zero point
+// (TQ2): each word four fields of four codes, field f's codes against the
+// operand's words f*words on; the integer dot corrected by the zero point
+// times the operand's sum, then scaled -- an f16 scale, or the d word itself
+// as an f32 (D32).
+func (g *Row) planeMatVec(w MatVecWeight, a MatVecOperand, info kernels.QInfo) (int, error) {
+	sub := info.Sub
+	if w.K%sub != 0 || sub%32 != 0 {
+		return 0, fmt.Errorf("compose: a matvec over %v at K=%d", w.T, w.K)
+	}
+	nsub := w.K / sub
+	words := sub * info.Bits / 32
+	slots := kernels.DSlots(w.T)
+	e, t := g.Column(), g.RowIdx()
+	u, ub := g.UConst, g.UBin
+	rows := u(w.Rows)
+	sheetQ, sheetD, err := g.sheets(w, t)
+	if err != nil {
+		return 0, err
+	}
+	at := a.token(g, t)
+	c := g.Loop(nsub)
+	s := g.Iter(c)
+	acc := g.Fold(c, g.Const(0))
+	cj := g.Loop(words)
+	j := g.Iter(cj)
+	isum := g.Fold(cj, g.Add(Node{Kind: NIConst}))
+	x := g.LoadAt(w.QS, sheetQ(ub(OpAdd, ub(OpMul, ub(OpAdd, ub(OpMul, s, u(words)), j), rows), e)))
+	aw := ub(OpAdd, ub(OpAdd, ub(OpMul, at, u(w.K/4)), ub(OpMul, s, u(sub/4))), j)
+	dot := isum
+	for f := 0; f < 4; f++ {
+		q := x
+		if f > 0 {
+			q = ub(OpShr, x, u(2*f))
+		}
+		q = ub(OpAnd, q, u(0x03030303))
+		dot = g.Add(Node{Kind: NDot4, A: q, B: g.LoadAt(a.A, ub(OpAdd, aw, u(f*words))), C: dot, At: 1})
+	}
+	g.SetFold(isum, dot)
+	var d int
+	switch {
+	case info.D32:
+		d = g.Add(Node{Kind: NUnary, Op: OpBits, A: g.LoadAt(w.D, sheetD(ub(OpAdd, ub(OpMul, s, rows), e)))})
+	case slots == 2:
+		half := u((w.Rows + 1) / 2)
+		di := sheetD(ub(OpAdd, ub(OpMul, s, half), ub(OpDiv, e, u(2))))
+		shift := ub(OpMul, ub(OpRem, e, u(2)), u(16))
+		d = g.Add(Node{Kind: NUnary, Op: OpHalf, A: ub(OpShr, g.LoadAt(w.D, di), shift)})
+	default:
+		d = g.Add(Node{Kind: NUnary, Op: OpHalf, A: g.LoadAt(w.D, sheetD(ub(OpAdd, ub(OpMul, s, rows), e)))})
+	}
+	nb := a.Toks * w.K / 32
+	si := ub(OpAdd, u(nb), ub(OpAdd, ub(OpMul, at, u(w.K/16)), ub(OpMul, s, u(sub/16))))
+	sum := g.LoadAt(a.AX, si)
+	for k := 1; k < sub/16; k++ {
+		sum = g.Bin(OpAdd, sum, g.LoadAt(a.AX, ub(OpAdd, si, u(k))))
+	}
+	q := g.Add(Node{Kind: NUnary, Op: OpFloat, A: isum})
+	v := g.Bin(OpMul, d, g.Add(Node{Kind: NBinary, Op: OpFma, A: g.Const(-info.BiasK), B: sum, C: q}))
+	ax := g.LoadAt(a.AX, ub(OpAdd, ub(OpMul, at, u(w.K/32)), ub(OpMul, s, u(sub/32))))
+	g.SetFold(acc, g.Add(Node{Kind: NBinary, Op: OpFma, A: v, B: ax, C: acc}))
+	return acc, nil
 }

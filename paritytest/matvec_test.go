@@ -166,6 +166,15 @@ func TestMatVecIsMains(t *testing.T) {
 			}
 		}
 	}
+	for _, q := range []format{{kernels.TQ2, mainkernels.TQ2}, {kernels.TQ2F, mainkernels.TQ2F}} {
+		for _, rk := range [][2]int{{64, 256}, {96, 512}} {
+			for _, sp := range []int{1, 2} {
+				for _, rowt := range []int{1, 2} {
+					cases = append(cases, mvCase{t: q, rows: rk[0], k: rk[1], ntok: 1, rowt: rowt, split: sp})
+				}
+			}
+		}
+	}
 	for _, c := range cases {
 		t.Run(c.String(), func(t *testing.T) {
 			same(t, c.String(), mainMatVec(t, c), composedMatVec(t, c))
