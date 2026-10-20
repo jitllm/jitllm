@@ -105,13 +105,13 @@ type blockScratch struct {
 	ragCap  backend.Buf
 	ragCapC float32
 	// headEmbeds and embScale are nn.Head.Embeds and EmbdScale: the resident
-	// head is also the token embedding, and EmbedRows gathers from it. embK is
-	// GetRowsPacked at embW rows, with its id and output buffers; all three are
-	// made on first use.
+	// head is also the token embedding, and EmbedRows gathers from it. emb is
+	// the gather (a pointer: the cache owns the kernel, which freeScratch's
+	// field walk must not close), with its id and output buffers; all three
+	// are made on first use.
 	headEmbeds     bool
 	embScale       float32
-	embK           backend.Kernel
-	embW           int
+	emb            *rowKernel
 	embIds, embOut backend.Buf
 	// spanK and spanOff move a batched chunk's last residual row into this
 	// (decode) scratch's x, so the output projection can ride the chunk's own

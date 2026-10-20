@@ -56,12 +56,13 @@ func (g *devTier) EmbedRows(ids []int32, dst []float32) bool {
 	return true
 }
 
-// embedKernel makes bs's gather (compose.GatherPacked at batchWidth rows)
-// and its id buffer where it has none, outside any Session. A launch over
-// fewer rows runs fewer workgroups. Callers hold mu.
+// embedKernel makes bs's gather (compose.GatherPacked at batchWidth rows,
+// through the tier's kernel cache) and its id buffer where it has none,
+// outside any Session. A launch over fewer rows runs fewer workgroups.
+// Callers hold mu.
 func (g *devTier) embedKernel(bs *blockScratch) bool {
 	defer g.scratchWin().close()
-	if bs.embK != nil {
+	if bs.emb != nil {
 		return true
 	}
 	r := bs.head
@@ -76,27 +77,16 @@ func (g *devTier) embedKernel(bs *blockScratch) bool {
 		g.LastErr = err.Error()
 		return false
 	}
-	ps, err := row.Plan(compose.Facts{Target: g.composeTarget()})
-	if err != nil || len(ps) != 1 {
+	k := g.rowKern(&row)
+	if k.k == nil {
 		return false
 	}
-	kk, err := ps[0].G.Emit(ps[0].S)
-	var k backend.Kernel
-	if err == nil {
-		kk.Comment = composedComment(kk.Comment)
-		k, err = g.dev.Compile(kk)
-	}
-	var ib backend.Buf
-	if err == nil {
-		if ib, err = g.dev.Alloc(batchWidth * 4); err != nil {
-			g.closeKern(k)
-		}
-	}
+	ib, err := g.dev.Alloc(batchWidth * 4)
 	if err != nil {
 		g.LastErr = err.Error()
 		return false
 	}
-	bs.embK, bs.embW, bs.embIds = k, ps[0].S.Group, ib
+	bs.emb, bs.embIds = &k, ib
 	return true
 }
 
@@ -150,7 +140,7 @@ func (g *devTier) materializeLocked(pe *embPend) {
 	if bs == nil || bs.head == nil || !g.embedKernel(bs) {
 		return
 	}
-	r, kern, ib := bs.head, bs.embK, bs.embIds
+	r, kern, ib := bs.head, bs.emb.k, bs.embIds
 	n := len(pe.ids)
 	if bs.embOut == nil {
 		b, err := g.dev.Alloc(batchWidth * r.k * 4)
@@ -168,7 +158,7 @@ func (g *devTier) materializeLocked(pe *embPend) {
 			return
 		}
 		threads := embedThreads(r, n)
-		if err = s.Launch(kern, (threads+bs.embW-1)/bs.embW, bs.embW, r.qs, r.d, r.sc, ib, ob); err != nil {
+		if err = s.Launch(kern, (threads+bs.emb.group-1)/bs.emb.group, bs.emb.group, r.qs, r.d, r.sc, ib, ob); err != nil {
 			return
 		}
 		err = s.Read(ob, f32b(pe.dst[:n*r.k]))

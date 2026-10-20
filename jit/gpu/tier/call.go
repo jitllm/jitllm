@@ -639,7 +639,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	if pe != nil {
 		hr := g.bs.head
 		gatherN = embedThreads(hr, R)
-		if !g.embedKernel(g.bs) || hr.k != p.NEmbd || len(pe.ids) > R || gatherN%g.bs.embW != 0 {
+		if !g.embedKernel(g.bs) || hr.k != p.NEmbd || len(pe.ids) > R || gatherN%g.bs.emb.group != 0 {
 			g.materializeLocked(pe)
 			pe = nil
 		}

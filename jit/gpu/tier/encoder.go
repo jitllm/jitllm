@@ -521,7 +521,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		g.subBytes.embIDs = embIDs(g.subBytes.embIDs, a.pe.ids, R, hr.nrows)
 		w(g.bs.embIds, g.subBytes.embIDs)
 		if err == nil {
-			err = lc.launch(g.bs.embK, a.gatherN/g.bs.embW, g.bs.embW, hr.qs, hr.d, hr.sc, g.bs.embIds, bs.x)
+			err = lc.launch(g.bs.emb.k, a.gatherN/g.bs.emb.group, g.bs.emb.group, hr.qs, hr.d, hr.sc, g.bs.embIds, bs.x)
 		}
 		g.EmbedLaunches++
 	} else {
