@@ -282,6 +282,12 @@ func (g *devTier) layersSession(s backend.Session) {
 						gst.kpool, gst.vpool, gst.tab, gst.prow = pl.k, pl.v, pl.tab, pk.pRow
 						gst.prowW, gst.scores, gst.wts, gst.parts = pk.pRowW, pk.sc, pk.wt, pk.part
 					}
+					if l.pool != nil {
+						// The step reads the session's half and writes the other.
+						par, _ := g.stepPar(sid, l)
+						gst.convIn, gst.convOut = l.pool.c[par], l.pool.c[1-par]
+						gst.convW, gst.recDesc = l.ssmConv1d, bs.dRows
+					}
 					if o.Kind == dkGatherHeads {
 						gst.perm = g.perms[[2]int{o.Heads, R}]
 					}

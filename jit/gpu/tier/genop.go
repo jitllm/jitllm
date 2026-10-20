@@ -47,22 +47,26 @@ const (
 	gaWQS     // the op's weight's payload, scale and scale-of-scale planes
 	gaWD
 	gaWSC
-	gaOpA    // the int8 operand the op's matvec reads, values
-	gaOpAX   // and scales
-	gaMBias  // the weight's own bias (mv.bias)
-	gaF16    // the binary16 operand a GEMM reads (the device's f16 plane)
-	gaQ8A    // an int8 output's values
-	gaQ8X    // its scales and sums
-	gaPerm   // the step's head-major order: each gathered row's source row (headPerm)
-	gaSplit  // a k split's partial plane (the tier's partBuf)
-	gaKPool  // the block's paged K pool
-	gaVPool  // its paged V pool
-	gaTab    // its page table
-	gaPRow   // the step's row descriptors (kernels.PRowWords a row)
-	gaPRowW  // the windowed descriptors, a sliding layer's
-	gaScores // the staged attention's score plane
-	gaWts    // its weight plane
-	gaParts  // the splits' partials the merge reads
+	gaOpA     // the int8 operand the op's matvec reads, values
+	gaOpAX    // and scales
+	gaMBias   // the weight's own bias (mv.bias)
+	gaF16     // the binary16 operand a GEMM reads (the device's f16 plane)
+	gaQ8A     // an int8 output's values
+	gaQ8X     // its scales and sums
+	gaPerm    // the step's head-major order: each gathered row's source row (headPerm)
+	gaSplit   // a k split's partial plane (the tier's partBuf)
+	gaKPool   // the block's paged K pool
+	gaVPool   // its paged V pool
+	gaTab     // its page table
+	gaPRow    // the step's row descriptors (kernels.PRowWords a row)
+	gaPRowW   // the windowed descriptors, a sliding layer's
+	gaScores  // the staged attention's score plane
+	gaWts     // its weight plane
+	gaParts   // the splits' partials the merge reads
+	gaConvIn  // a recurrent block's convolution window, the half the step reads
+	gaConvOut // the half it writes
+	gaConvW   // the convolution's weights
+	gaRecDesc // the step's recurrent descriptor
 )
 
 // genLaunch is one generated launch: threads for a flat launch, or groups of
@@ -249,6 +253,13 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		return g.genPrim(o, prog, rows)
 	case dkMatVec, dkMatVecRes, dkMatVecGate:
 		return g.genMatVecNodes(o, bs, rows)
+	case dkConv1d:
+		l := g.genConv(o, prog, bs, rows)
+		o.Why = whyNoForm
+		if l != nil {
+			o.Why = whyNone
+		}
+		return l
 	case dkAttend:
 		l := g.genAttend(o, prog, bs, rows)
 		o.Why = whyNoForm
@@ -258,7 +269,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		return l
 	case dkExpertMatVec, dkExpertMatVecE, dkQKV, dkQKVGemm, dkRouterLogits,
 		dkResIn, dkQKVSep, dkLatentAttend, dkView, dkTopK, dkRouteWeights, dkGroupByExpert, dkGateLogit,
-		dkGroupMask, dkRouterBias, dkExpertBias, dkExpertFetch, dkConv1d, dkScan, dkGatedNorm, dkSSMNorm, dkConvBias:
+		dkGroupMask, dkRouterBias, dkExpertBias, dkExpertFetch, dkScan, dkGatedNorm, dkSSMNorm, dkConvBias:
 		// No form in the composer's primitives yet: the op fails to
 		// generate, and its block does not place.
 		o.Why = whyNoForm
@@ -704,6 +715,9 @@ type genState struct {
 	kpool, vpool, tab, prow backend.Buf
 	// The windowed descriptors, and the staged attention's planes.
 	prowW, scores, wts, parts backend.Buf
+	// A recurrent block's window halves, its convolution weights, and the
+	// step's recurrent descriptor.
+	convIn, convOut, convW, recDesc backend.Buf
 	// The step's binary16 operand: its plane, and the conversion the step
 	// last made, by kernel and source (shared with the executor, so a
 	// conversion either one made is not made again).
@@ -785,6 +799,14 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.wts
 			case gaParts:
 				bufs[j] = st.parts
+			case gaConvIn:
+				bufs[j] = st.convIn
+			case gaConvOut:
+				bufs[j] = st.convOut
+			case gaConvW:
+				bufs[j] = st.convW
+			case gaRecDesc:
+				bufs[j] = st.recDesc
 			case gaQ8A:
 				bufs[j], _ = int8Of(st, o.Out[l.q8])
 			case gaQ8X:
@@ -1453,6 +1475,38 @@ func (g *devTier) genLayerNorm(o *devOp, bs *blockScratch, rows, w int, eps floa
 		}
 		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
 		copy(l.args[:], rb.args)
+		ls = append(ls, l)
+	}
+	return ls
+}
+
+// genConv is a recurrent block's causal convolution over a chunk or a
+// decode row: the rows against the sequence's window, then the window moved
+// to the chunk's end, into the half of the state the step writes. A ragged
+// step's runs have no form yet.
+func (g *devTier) genConv(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
+	r := bs.p.Recurrent
+	if g.genRag || r.Conv < 2 || len(o.In) != 1 || prog.vals[o.In[0]].Width != r.Chans {
+		return nil
+	}
+	cb := &rowBuild{r: compose.Row{Width: rows * r.Chans, Rows: 1}}
+	s, x, w := cb.buf(compose.BufRow, gaConvIn), cb.buf(compose.BufRow, gaIn0), cb.buf(compose.BufRow, gaConvW)
+	out := cb.buf(compose.BufOut, gaOut0)
+	cb.r.Store(out, cb.r.ConvRows(s, x, w, cb.buf(compose.BufU32, gaRecDesc), r.Conv, r.Chans, rows))
+	sb := &rowBuild{r: compose.Row{Width: (r.Conv - 1) * r.Chans, Rows: 1}}
+	ss, sx, sout := sb.buf(compose.BufRow, gaConvIn), sb.buf(compose.BufRow, gaIn0), sb.buf(compose.BufOut, gaConvOut)
+	v, at := sb.r.ConvShift(ss, sx, sb.buf(compose.BufU32, gaRecDesc), r.Conv, r.Chans, rows)
+	sb.r.StoreAt(sout, v, at)
+	var ls []genLaunch
+	for _, rb := range []*rowBuild{cb, sb} {
+		k := g.rowKern(&rb.r)
+		if k.k == nil {
+			return nil
+		}
+		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
+		copy(l.args[:], rb.args)
+		// The window's shift has its own grid; the rows' share the step's.
+		l.whole = rb == sb
 		ls = append(ls, l)
 	}
 	return ls
