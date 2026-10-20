@@ -75,3 +75,24 @@ func TestPagedScoresIsMains(t *testing.T) {
 		})
 	}
 }
+
+// TestPagedAccIsMains holds the composer's staged accumulate to main's
+// PagedStagedAcc over f32 V.
+func TestPagedAccIsMains(t *testing.T) {
+	for _, s := range stagedShapes {
+		name := fmt.Sprintf("r%d_h%d_kv%d_d%d_s%d_c%d", s.Rows, s.Heads, s.KVHeads, s.Dim, s.Splits, s.Chunk)
+		t.Run(name, func(t *testing.T) {
+			mk, err := mainkernels.PagedStagedAcc(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			g := &compose.Row{Width: mainkernels.PagedStagedAccThreads(s), Rows: 1}
+			wts, v := g.Buf(compose.BufRow), g.Buf(compose.BufRow)
+			g.Buf(compose.BufU32)
+			part := g.Buf(compose.BufOut)
+			table, desc := g.Buf(compose.BufU32), g.Buf(compose.BufU32)
+			g.PagedAcc(wts, v, part, table, desc, pagedOf(s))
+			same(t, name, []*ir.Kernel{mk}, emitAt(t, g, compose.Schedule{Group: 128, Flat: true, Target: sm70}))
+		})
+	}
+}

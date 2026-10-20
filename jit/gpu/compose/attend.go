@@ -222,3 +222,64 @@ func (g *Row) PagedScores(q, k, out, table, desc int, p Paged, scale float32) {
 		g.StoreAt(out, g.Select(valid, score, g.Const(-math.MaxFloat32)), ub(OpAdd, ob, u(h*S*C)))
 	}
 }
+
+// PagedAcc is the group element's weighted sum of V over its split's keys
+// (an element a (row, head group, split, value element), the element
+// fastest) for each query head of its group, into the merge's partials at
+// part. It walks the split's keys in blocks of 8, which start at a multiple
+// of 8 from a 32-aligned partition and so lie in one page: a block's page
+// is read once. A key outside the row's live range reads V within the
+// block's page and contributes 0 (its weight is 0 too, and 0*NaN is NaN).
+// V is the paged pool [page][Page][kvRow].
+func (g *Row) PagedAcc(wts, v, part, table, desc int, p Paged) {
+	const block = 8
+	u, ub := g.UConst, g.UBin
+	G := p.headGroup()
+	gqa, S, C, P := p.Heads/p.KVHeads, p.Splits, p.Chunk, p.Page
+	kvRow := p.KVHeads * p.Dim
+	flat := g.Column()
+	j := ub(OpRem, flat, u(p.Dim))
+	rest := ub(OpDiv, flat, u(p.Dim))
+	sp := ub(OpRem, rest, u(S))
+	rest = ub(OpDiv, rest, u(S))
+	hg := ub(OpRem, rest, u(p.Heads/G))
+	row := ub(OpDiv, rest, u(p.Heads/G))
+	h0 := ub(OpMul, hg, u(G))
+	ps := g.pagedSplitOf(desc, row, sp, S)
+	keys := ub(OpSub, ps.en, ps.st)
+	blocks := ub(OpDiv, ub(OpAdd, keys, u(block-1)), u(block))
+	col := ub(OpAdd, ub(OpMul, ub(OpDiv, h0, u(gqa)), u(p.Dim)), j)
+	lastTile := ub(OpMul, ub(OpDiv, ps.last, u(32)), u(32))
+	wb := ub(OpMul, ub(OpAdd, ub(OpMul, ub(OpAdd, ub(OpMul, row, u(p.Heads)), h0), u(S)), sp), u(C))
+	d0 := ub(OpSub, ps.st, ps.ks)
+	span := ub(OpSub, ps.en, ps.ks)
+	c := g.LoopN(blocks)
+	k0 := ub(OpMul, g.Iter(c), u(block))
+	bs := ub(OpAdd, ps.st, k0)
+	pid := g.pageOf(table, ps.tab, g.Select(ps.live, ub(OpMin, bs, lastTile), u(0)), P)
+	vb := ub(OpAdd, ub(OpMul, ub(OpAdd, ub(OpMul, pid, u(P)), g.pageRem(bs, P)), u(kvRow)), col)
+	dk := ub(OpAdd, d0, k0)
+	wk := ub(OpAdd, wb, k0)
+	acc := make([]int, G)
+	next := make([]int, G)
+	for h := range acc {
+		acc[h] = g.Fold(c, g.Const(0))
+		next[h] = acc[h]
+	}
+	for kk := 0; kk < block; kk++ {
+		live := g.Less(ub(OpAdd, dk, u(kk)), span)
+		v0 := g.Select(live, g.LoadAt(v, ub(OpAdd, vb, u(kk*kvRow))), g.Const(0))
+		for h := range next {
+			w := g.LoadAt(wts, ub(OpAdd, wk, u(h*S*C+kk)))
+			next[h] = g.Add(Node{Kind: NBinary, Op: OpFma, A: w, B: v0, C: next[h]})
+		}
+	}
+	for h := range acc {
+		g.SetFold(acc[h], next[h])
+	}
+	padded := (p.Dim + 31) / 32 * 32
+	pb := ub(OpMul, ub(OpAdd, ub(OpMul, ub(OpAdd, ub(OpMul, row, u(p.Heads)), h0), u(S)), sp), u(padded+64))
+	for h := range acc {
+		g.StoreAt(part, acc[h], ub(OpAdd, ub(OpAdd, pb, j), u(h*S*(padded+64))))
+	}
+}

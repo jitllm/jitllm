@@ -790,7 +790,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 	if err != nil {
 		return nil, err
 	}
-	g = g.tiled(s).inductions(s)
+	g = g.pipelined().tiled(s).inductions(s)
 	G := s.Group
 	if G < 32 || G&(G-1) != 0 {
 		return nil, fmt.Errorf("compose: a group of %d threads", G)

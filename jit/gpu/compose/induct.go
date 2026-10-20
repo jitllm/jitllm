@@ -189,6 +189,10 @@ func (g *Row) induct(c int, s Schedule) *Row {
 	// A cursor serves where several loads step together; one load reads at
 	// its iterator. A nested or unrolled loop's index, and a nested loop's
 	// start, always ride one.
+	// formed is whether the iterator's terms are formed anyway: read by a node
+	// that is no affine index (a clamp, a mask, a page's place). Then an
+	// index adds them as cheaply as a cursor steps, and no cursor serves.
+	formed := g.iterFormed(iter)
 	ridden := map[int]bool{}
 	// sole is the one index the iterator serves, where it serves one: its
 	// cursor replaces the loop's counter, unless it steps by one, when it is
@@ -231,7 +235,7 @@ func (g *Row) induct(c int, s Schedule) *Row {
 		if a == nil || a.terms[iter] == 0 {
 			continue
 		}
-		ridden[ix] = nested[ix] || unrolled && a.terms[iter] != 1 || init[ix] || loads[ix] > 1 || ix == sole && a.terms[iter] != 1
+		ridden[ix] = nested[ix] || unrolled && a.terms[iter] != 1 || init[ix] || loads[ix] > 1 && !formed || ix == sole && a.terms[iter] != 1
 		var base []int
 		for k, v := range a.terms {
 			if k != iter && v != 0 && !nested[k] && !g.isTileOff(k) {
@@ -256,7 +260,7 @@ func (g *Row) induct(c int, s Schedule) *Row {
 		f.uses = append(f.uses, ix)
 	}
 	fams = slices.DeleteFunc(fams, func(f *fam) bool {
-		return len(f.uses) < 2 && !slices.ContainsFunc(f.uses, func(ix int) bool { return ridden[ix] })
+		return (len(f.uses) < 2 || formed) && !slices.ContainsFunc(f.uses, func(ix int) bool { return ridden[ix] })
 	})
 	if len(fams) == 0 {
 		return g
@@ -416,6 +420,142 @@ func (g *Row) fixedPlace(n int) bool {
 		return true
 	case NUBinary:
 		return (nd.Op == OpAdd || nd.Op == OpMul) && g.fixedPlace(nd.A) && g.fixedPlace(nd.B)
+	}
+	return false
+}
+
+// pipelined is g with every indirection a loop's trips read one trip
+// ahead: a table load whose value addresses other loads and whose index
+// reads the loop's iterator (and nothing else of the loop) becomes a value
+// the loop carries, the first trip's loaded before it and each next trip's
+// at the end of the one before. g is copied before it is changed.
+func (g *Row) pipelined() *Row {
+	addr := make([]bool, len(g.Nodes))
+	var mark func(n int)
+	mark = func(n int) {
+		if addr[n] {
+			return
+		}
+		addr[n] = true
+		for _, o := range g.operands(n) {
+			mark(o)
+		}
+	}
+	for _, nd := range g.Nodes {
+		if nd.Kind == NLoad && nd.Indexed {
+			mark(nd.Ix)
+		}
+	}
+	var r *Row
+	for c := range g.Loops {
+		iter := -1
+		for i, nd := range g.Nodes {
+			if nd.Kind == NIter && nd.At == c {
+				iter = i
+			}
+		}
+		if iter < 0 {
+			continue
+		}
+		vary := g.varies(c)
+		for i, nd := range g.Nodes {
+			if nd.Kind != NLoad || !nd.Indexed || !addr[i] || g.Bufs[nd.Buf].Kind != BufU32 || !vary[nd.Ix] ||
+				!g.onlyIter(nd.Ix, iter, c) {
+				continue
+			}
+			if r == nil {
+				r = g.clone()
+			}
+			at := func(x int) int {
+				memo := map[int]int{}
+				var cp func(n int) int
+				cp = func(n int) int {
+					if n == iter {
+						return x
+					}
+					if !vary[n] {
+						return n
+					}
+					if v, ok := memo[n]; ok {
+						return v
+					}
+					m := r.Nodes[n]
+					switch m.Kind {
+					case NUBinary, NBinary, NLess:
+						m.A, m.B = cp(m.A), cp(m.B)
+					case NSelect:
+						m.A, m.B, m.C = cp(m.A), cp(m.B), cp(m.C)
+					case NUnary:
+						m.A = cp(m.A)
+					case NLoad:
+						m.Ix = cp(m.Ix)
+					}
+					v := r.Add(m)
+					memo[n] = v
+					return v
+				}
+				return r.LoadAt(nd.Buf, cp(nd.Ix))
+			}
+			first := at(r.UConst(0))
+			step := at(r.UBin(OpAdd, iter, r.UConst(1)))
+			r.Nodes[i] = Node{Kind: NFold, At: c, B: first, A: step}
+		}
+	}
+	if r == nil {
+		return g
+	}
+	return r
+}
+
+// onlyIter is whether index n reads loop c's iterator and no other value
+// of the loop (no fold of it).
+func (g *Row) onlyIter(n, iter, c int) bool {
+	seen := map[int]bool{}
+	var ok func(n int) bool
+	ok = func(n int) bool {
+		if seen[n] {
+			return true
+		}
+		seen[n] = true
+		if nd := g.Nodes[n]; nd.Kind == NFold && nd.At == c {
+			return false
+		}
+		for _, o := range g.operands(n) {
+			if !ok(o) {
+				return false
+			}
+		}
+		return true
+	}
+	return ok(n)
+}
+
+// iterFormed is whether a node that is no affine index reads an affine
+// expression of iterator node iter: its value is formed whatever cursors
+// there are.
+func (g *Row) iterFormed(iter int) bool {
+	aff := make([]bool, len(g.Nodes))
+	aff[iter] = true
+	for changed := true; changed; {
+		changed = false
+		for i, nd := range g.Nodes {
+			if aff[i] || nd.Kind != NUBinary || nd.Op != OpAdd && nd.Op != OpSub && nd.Op != OpMul {
+				continue
+			}
+			if aff[nd.A] || aff[nd.B] {
+				aff[i], changed = true, true
+			}
+		}
+	}
+	for i, nd := range g.Nodes {
+		if aff[i] || nd.Kind == NLoad || nd.Kind == NFold {
+			continue
+		}
+		for _, o := range g.operands(i) {
+			if aff[o] {
+				return true
+			}
+		}
 	}
 	return false
 }
