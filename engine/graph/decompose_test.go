@@ -78,6 +78,8 @@ func evalPrims(t *testing.T, g *Graph, in map[ValueID][]float32, w map[jlm.Role]
 					if a < at(ops[1], i) {
 						out[i] = 1
 					}
+				case MapFma:
+					out[i] = float32(math.FMA(float64(a), float64(at(ops[1], i)), float64(at(ops[2], i))))
 				default:
 					t.Fatalf("map %s", o.Attr.Fn)
 				}
@@ -145,6 +147,50 @@ func evalPrims(t *testing.T, g *Graph, in map[ValueID][]float32, w map[jlm.Role]
 			x, ix := v[o.In[0]], v[o.In[1]]
 			for j := range out {
 				out[j] = x[int(ix[j])]
+			}
+		case OpTile:
+			x := v[o.In[0]]
+			span := o.Attr.Span
+			if span == 0 {
+				span = len(x)
+			}
+			for i := range out {
+				out[i] = x[i%span]
+			}
+		case OpSlice:
+			// The whole-row form: Width elements from Offset.
+			copy(out, v[o.In[0]][o.Attr.Offset:o.Attr.Offset+o.Attr.Width])
+		case OpAdd:
+			a, b := v[o.In[0]], v[o.In[1]]
+			for i := range out {
+				out[i] = a[i] + b[i]
+			}
+		case OpHeadNorm:
+			// A weightless norm of each head: x * (1/sqrt(mean(x^2) + eps)),
+			// the mean accumulated in f64 as the oracle's does.
+			x, hd := v[o.In[0]], o.Attr.HeadDim
+			for h := 0; h < len(x)/hd; h++ {
+				var sum float64
+				for _, e := range x[h*hd : (h+1)*hd] {
+					sum += float64(e) * float64(e)
+				}
+				scale := 1 / math.Sqrt(sum/float64(hd)+o.Attr.Eps)
+				for i := 0; i < hd; i++ {
+					out[h*hd+i] = float32(float64(x[h*hd+i]) * scale)
+				}
+			}
+		case OpAct, OpActMul:
+			x := v[o.In[0]]
+			for i := range out {
+				e := float64(x[i])
+				switch {
+				case o.Kind == OpAct && o.Attr.Act == ActSiLU:
+					out[i] = float32(e / (1 + math.Exp(-e)))
+				case o.Kind == OpActMul && o.Attr.Act == ActSigmoid:
+					out[i] = float32(1/(1+math.Exp(-e))) * v[o.In[1]][i]
+				default:
+					t.Fatalf("activation %d of %s", o.Attr.Act, o.Kind)
+				}
 			}
 		case OpCombine:
 			continue
