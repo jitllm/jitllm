@@ -28,7 +28,9 @@ func TestComposedMatVecMatchesItsDefinition(t *testing.T) {
 	rng := rand.New(rand.NewSource(7))
 	for _, d := range devs {
 		defer d.Close()
-		for _, c := range []struct{ rows, k, toks int }{{64, 64, 1}, {33, 256, 3}, {128, 512, 5}} {
+		for _, c := range []struct{ rows, k, toks, tile, cols, split int }{{64, 64, 1, 1, 1, 1}, {33, 256, 3, 1, 1, 1},
+			{33, 256, 3, 3, 1, 1}, {128, 512, 5, 1, 1, 1}, {128, 512, 4, 4, 1, 1}, {128, 512, 4, 2, 2, 1},
+			{64, 256, 1, 1, 4, 1}, {64, 256, 8, 4, 2, 1}, {64, 256, 1, 1, 1, 4}, {64, 512, 4, 2, 2, 2}} {
 			const blockB = 34 // Q8_0: an f16 scale and 32 signed codes
 			nb := c.k / 32
 			src := make([]byte, c.rows*nb*blockB)
@@ -75,7 +77,7 @@ func TestComposedMatVecMatchesItsDefinition(t *testing.T) {
 			}
 			g.Store(bo, v)
 			const group = 128
-			k, err := g.Emit(compose.Schedule{Group: group, Flat: true})
+			k, err := g.Emit(compose.Schedule{Group: group, Flat: true, Tile: c.tile, TileCols: c.cols, Split: c.split})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -93,10 +95,31 @@ func TestComposedMatVecMatchesItsDefinition(t *testing.T) {
 				}
 				return buf
 			}
-			out := up(make([]byte, 4*c.rows*c.toks))
+			out := up(make([]byte, 4*c.rows*c.toks*c.split))
 			bufs := []backend.Buf{up(wordsLE(qs)), up(wordsLE(dw)), up(wordsLE(codes)), up(f32le(ax)), out}
-			if err := kern.Launch((c.rows*c.toks+group-1)/group, group, bufs...); err != nil {
+			if err := kern.Launch((c.rows/c.cols*c.toks/c.tile*c.split+group-1)/group, group, bufs...); err != nil {
 				t.Fatal(err)
+			}
+			if c.split > 1 {
+				// The segments' planes summed by a group of their own.
+				red := &compose.Row{Width: c.rows, Rows: c.toks}
+				in, o := red.Buf(compose.BufRow), red.Buf(compose.BufOut)
+				red.Store(o, red.SumPlanes(in, c.split))
+				rk, err := red.Emit(compose.Schedule{Group: group, Flat: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				rkern, err := d.Compile(rk)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sum := up(make([]byte, 4*c.rows*c.toks))
+				if err := rkern.Launch((c.rows*c.toks+group-1)/group, group, out, sum); err != nil {
+					t.Fatal(err)
+				}
+				rkern.Close()
+				bufs = append(bufs, sum)
+				out = sum
 			}
 			got := make([]byte, 4*c.rows*c.toks)
 			if err := out.Read(got); err != nil {

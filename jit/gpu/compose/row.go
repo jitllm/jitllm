@@ -186,6 +186,18 @@ type Schedule struct {
 	// ceil(Rows*Width/Group) workgroups: the element fastest, no element
 	// loop. Only a group with no row reduction takes it.
 	Flat bool
+	// Tile and TileCols, under Flat, are how many consecutive rows and
+	// elements one thread computes: a node is computed once for every row
+	// it does not read and every element it does not read (a weight word
+	// for every token, a token's operand for every weight row), a fold
+	// carries a value for each it does. Rows and Width must be multiples;
+	// 0 and 1 are one.
+	Tile, TileCols int
+	// Split, under Flat, divides loop 0's trips between that many
+	// threads, a segment each, the segment the slowest of the grid: a
+	// segment's stores write their own plane of Rows*Width further on, for
+	// a group that sums the planes (a matvec's k split).
+	Split int
 }
 
 // Key is a group's identity in a cache: its structure and its schedule,
@@ -196,7 +208,7 @@ type Key struct {
 
 // Encode is the group's structure and schedule as integers.
 func (g *Row) Encode(s Schedule) []uint32 {
-	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs)), b2u(s.Flat)}
+	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs)), b2u(s.Flat), uint32(s.Tile), uint32(s.TileCols), uint32(s.Split)}
 	for _, b := range g.Bufs {
 		e = append(e, uint32(b.Kind))
 	}
@@ -345,7 +357,21 @@ func (g *Row) Check() error {
 type env struct {
 	m  map[int]ir.Value
 	up *env
+	// Under a tile: the row (and its first element) and the column this
+	// env runs for, zero for the kernel's own; sh the envs a node is read
+	// from by what it depends on -- sh[0] one reading neither row nor
+	// column, sh[1] the row alone, sh[2] the column alone -- nil where this
+	// env is that one; cls what this env's nodes depend on (bit 1 the row,
+	// bit 2 the column); and t the tile's envs.
+	row, base, col ir.Value
+	sh             [3]*env
+	cls            uint8
+	t              *tile
 }
+
+// tile is every env of one tile: one a (row, column) pair, one a row, one
+// a column and one for neither, each a node is computed in once.
+type tile struct{ all []*env }
 
 func (e *env) get(n int) (ir.Value, bool) {
 	for x := e; x != nil; x = x.up {
@@ -354,6 +380,30 @@ func (e *env) get(n int) (ir.Value, bool) {
 		}
 	}
 	return 0, false
+}
+
+// at is e's row, row base and column, walking out to the env that states
+// them; zero where none does (the kernel's own).
+func (e *env) at() (row, base, col ir.Value) {
+	for x := e; x != nil; x = x.up {
+		if row == 0 && x.row != 0 {
+			row, base = x.row, x.base
+		}
+		if col == 0 && x.col != 0 {
+			col = x.col
+		}
+	}
+	return row, base, col
+}
+
+// tileOf is e's tile, nil outside one.
+func (e *env) tileOf() *tile {
+	for x := e; x != nil; x = x.up {
+		if x.t != nil {
+			return x.t
+		}
+	}
+	return nil
 }
 
 func newEnv(up *env) *env { return &env{m: map[int]ir.Value{}, up: up} }
@@ -382,6 +432,81 @@ func (g *Row) operands(n int) []int {
 		return []int{nd.B}
 	}
 	return nil
+}
+
+// rowDeps is which nodes depend on the group's row: the row index, a load
+// at the row's own place, and whatever reads them (a fixed point, since a
+// fold reads later nodes).
+func (g *Row) rowDeps() []bool {
+	v := make([]bool, len(g.Nodes))
+	for changed := true; changed; {
+		changed = false
+		for i, nd := range g.Nodes {
+			if v[i] {
+				continue
+			}
+			x := false
+			switch nd.Kind {
+			case NRowIdx:
+				x = true
+			case NLoad:
+				if !nd.Indexed {
+					k := g.Bufs[nd.Buf].Kind
+					x = k == BufRow || k == BufRowF16 || k == BufRowScalar || k == BufU32
+				}
+			case NFold:
+				for _, f := range g.Nodes {
+					if f.Kind == NFold && f.At == nd.At && (v[f.B] || f.A >= 0 && v[f.A]) {
+						x = true
+					}
+				}
+			}
+			for _, o := range g.operands(i) {
+				x = x || v[o]
+			}
+			if x {
+				v[i], changed = true, true
+			}
+		}
+	}
+	return v
+}
+
+// colDeps is which nodes depend on the element's column: the column, a
+// load at the element's own place, and whatever reads them.
+func (g *Row) colDeps() []bool {
+	v := make([]bool, len(g.Nodes))
+	for changed := true; changed; {
+		changed = false
+		for i, nd := range g.Nodes {
+			if v[i] {
+				continue
+			}
+			x := false
+			switch nd.Kind {
+			case NColumn:
+				x = true
+			case NLoad:
+				if !nd.Indexed {
+					k := g.Bufs[nd.Buf].Kind
+					x = k == BufRow || k == BufRowF16 || k == BufVec
+				}
+			case NFold:
+				for _, f := range g.Nodes {
+					if f.Kind == NFold && f.At == nd.At && (v[f.B] || f.A >= 0 && v[f.A]) {
+						x = true
+					}
+				}
+			}
+			for _, o := range g.operands(i) {
+				x = x || v[o]
+			}
+			if x {
+				v[i], changed = true, true
+			}
+		}
+	}
+	return v
 }
 
 // varies is which nodes change from trip to trip of loop c: its iterator,
@@ -450,17 +575,47 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 	// every row, the element fastest (the last thread's surplus clamped to
 	// the last element, which it recomputes: RULE 13).
 	var sh, r, rowBase, tid, width, last, flatIdx ir.Value
+	// seg is the thread's segment of loop 0 under a split, segTrip its
+	// trips.
+	var seg ir.Value
+	segTrip := 0
 	if s.Flat {
 		for i, nd := range g.Nodes {
 			if nd.Kind == NReduce && depth[i] > 0 {
 				return nil, fmt.Errorf("compose: a flat schedule over a row reduction")
 			}
 		}
+		tr, tc := max(s.Tile, 1), max(s.TileCols, 1)
+		if g.Rows%tr != 0 || g.Width%tc != 0 {
+			return nil, fmt.Errorf("compose: a tile of %dx%d over %dx%d", tr, tc, g.Rows, g.Width)
+		}
+		cols := g.Width / tc
+		split := max(s.Split, 1)
+		if split > 1 && (len(g.Loops) == 0 || g.Loops[0]%split != 0) {
+			return nil, fmt.Errorf("compose: a split of %d over a loop of %v trips", split, g.Loops)
+		}
 		flat := b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
-		flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(g.Rows*g.Width-1)))
+		flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(g.Rows/tr*cols*split-1)))
+		if split > 1 {
+			// The segment is the slowest: a plane of Rows*Width a segment.
+			per := b.Const(ir.U32, int64(g.Rows/tr*cols))
+			seg = b.Div(ir.U32, flat, per)
+			flat = b.Rem(ir.U32, flat, per)
+			segTrip = g.Loops[0] / split
+		}
 		width = b.Const(ir.U32, int64(g.Width))
-		flatIdx = b.Rem(ir.U32, flat, width)
-		r = b.Div(ir.U32, flat, width)
+		tcols := width
+		if tc > 1 {
+			tcols = b.Const(ir.U32, int64(cols))
+		}
+		flatIdx = b.Rem(ir.U32, flat, tcols)
+		r = b.Div(ir.U32, flat, tcols)
+		if tc > 1 {
+			flatIdx = b.Mul(ir.U32, flatIdx, b.Const(ir.U32, int64(tc)))
+		}
+		if tr > 1 {
+			r = b.Mul(ir.U32, r, b.Const(ir.U32, int64(tr)))
+		}
 		rowBase = b.Mul(ir.U32, r, width)
 	} else {
 		sh = b.Shared("red", ir.F32, G)
@@ -485,7 +640,25 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 	// loop emits fold loop c in scope e: first what its body reads that
 	// does not change from trip to trip, then the loop, its folds' values
 	// after it left in e.
+	rowDep, colDep := g.rowDeps(), g.colDeps()
+	clsOf := func(n int) uint8 {
+		c := uint8(0)
+		if rowDep[n] {
+			c |= 1
+		}
+		if colDep[n] {
+			c |= 2
+		}
+		return c
+	}
 	loop := func(c int, idx ir.Value, e *env) {
+		// The envs the loop runs for: e alone, or every env of e's tile, a
+		// fold carried in each env of its own class.
+		t := e.tileOf()
+		envs := []*env{e}
+		if t != nil {
+			envs = t.all
+		}
 		var folds []int
 		for i, nd := range g.Nodes {
 			if nd.Kind == NFold && nd.At == c {
@@ -508,69 +681,133 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			}
 			return false
 		}
-		seen := make([]bool, len(g.Nodes))
-		var hoist func(n int)
-		hoist = func(n int) {
-			if seen[n] {
-				return
-			}
-			seen[n] = true
-			if !vary[n] && !closed(n) {
-				elem(n, idx, e)
-				return
-			}
-			nd := g.Nodes[n]
-			if nd.Kind == NFold && nd.At != c {
-				// A loop nested in c's body: what its starts and steps read.
-				for _, f := range g.Nodes {
-					if f.Kind == NFold && f.At == nd.At {
-						hoist(f.B)
-						hoist(f.A)
-					}
+		owns := func(x *env, f int) bool { return t == nil || x.cls == clsOf(f) }
+		for _, ej := range envs {
+			seen := make([]bool, len(g.Nodes))
+			var hoist func(n int)
+			hoist = func(n int) {
+				if seen[n] {
+					return
 				}
-				return
+				seen[n] = true
+				if !vary[n] && !closed(n) {
+					elem(n, idx, ej)
+					return
+				}
+				nd := g.Nodes[n]
+				if nd.Kind == NFold && nd.At != c {
+					// A loop nested in c's body: what its starts and steps read.
+					for _, f := range g.Nodes {
+						if f.Kind == NFold && f.At == nd.At {
+							hoist(f.B)
+							hoist(f.A)
+						}
+					}
+					return
+				}
+				for _, o := range g.operands(n) {
+					hoist(o)
+				}
 			}
-			for _, o := range g.operands(n) {
-				hoist(o)
+			for _, f := range folds {
+				if owns(ej, f) {
+					hoist(g.Nodes[f].A)
+				}
 			}
-		}
-		inits := make([]ir.Value, len(folds))
-		for j, f := range folds {
-			inits[j] = elem(g.Nodes[f].B, idx, e)
-		}
-		for _, f := range folds {
-			hoist(g.Nodes[f].A)
 		}
 		zero, one := b.Const(ir.U32, 0), b.Const(ir.U32, 1)
-		b.Loop(int64(g.Loops[c]))
-		in := newEnv(e)
-		it := b.Phi(ir.U32, zero)
-		for i, nd := range g.Nodes {
-			if nd.Kind == NIter && nd.At == c {
-				in.m[i] = it
+		type carried struct {
+			f   int
+			in  *env // the body env it is read in
+			out *env // where its value after the loop goes
+			phi ir.Value
+		}
+		var cs []carried
+		for _, f := range folds {
+			for _, ej := range envs {
+				if owns(ej, f) {
+					cs = append(cs, carried{f: f, out: ej})
+				}
 			}
 		}
-		phis := make([]ir.Value, len(folds))
-		for j, f := range folds {
-			phis[j] = b.Phi(g.typeOf(f), inits[j])
-			in.m[f] = phis[j]
+		inits := make([]ir.Value, len(cs))
+		for i, x := range cs {
+			inits[i] = elem(g.Nodes[x.f].B, idx, x.out)
 		}
-		next := make([]ir.Value, len(folds))
-		for j, f := range folds {
-			next[j] = elem(g.Nodes[f].A, idx, in)
+		// Under a split, loop 0 runs its segment's trips from the segment's
+		// first.
+		trip, first := g.Loops[c], zero
+		if c == 0 && segTrip > 0 {
+			trip, first = segTrip, b.Mul(ir.U32, seg, b.Const(ir.U32, int64(segTrip)))
 		}
-		for j := range folds {
-			b.SetPhi(phis[j], next[j])
+		b.Loop(int64(trip))
+		// The body's envs, one a tile env, redirecting as theirs do.
+		ins := map[*env]*env{}
+		for _, ej := range envs {
+			ins[ej] = newEnv(ej)
+			ins[ej].cls = ej.cls
+		}
+		if t != nil {
+			nt := &tile{}
+			for _, ej := range envs {
+				x := ins[ej]
+				for k, to := range ej.sh {
+					if to != nil {
+						x.sh[k] = ins[to]
+					}
+				}
+				x.t = nt
+				nt.all = append(nt.all, x)
+			}
+		}
+		it := b.Phi(ir.U32, first)
+		for i, nd := range g.Nodes {
+			if nd.Kind == NIter && nd.At == c {
+				for _, in := range ins {
+					in.m[i] = it
+				}
+			}
+		}
+		for i := range cs {
+			x := &cs[i]
+			x.in = ins[x.out]
+			x.phi = b.Phi(g.typeOf(x.f), inits[i])
+			x.in.m[x.f] = x.phi
+		}
+		next := make([]ir.Value, len(cs))
+		for i, x := range cs {
+			next[i] = elem(g.Nodes[x.f].A, idx, x.in)
+		}
+		for i, x := range cs {
+			b.SetPhi(x.phi, next[i])
 		}
 		b.SetPhi(it, b.Add(ir.U32, it, one))
 		b.EndLoop()
-		for j, f := range folds {
-			e.m[f] = phis[j]
+		for _, x := range cs {
+			x.out.m[x.f] = x.phi
 		}
 	}
 	elem = func(n int, idx ir.Value, e *env) ir.Value {
+		// Under a tile, a node is computed in the env of what it reads.
+		switch dc := clsOf(n); {
+		case dc == 0 && e.sh[0] != nil:
+			return elem(n, idx, e.sh[0])
+		case dc == 1 && e.sh[1] != nil:
+			return elem(n, idx, e.sh[1])
+		case dc == 2 && e.sh[2] != nil:
+			return elem(n, idx, e.sh[2])
+		}
 		if v, ok := e.get(n); ok {
 			return v
+		}
+		// The row and column this env runs for: its tile's, or the kernel's.
+		r, rowBase := r, rowBase
+		er, eb, ec := e.at()
+		if er != 0 {
+			r, rowBase = er, eb
+		}
+		if ec != 0 {
+			idx = ec
 		}
 		nd := g.Nodes[n]
 		var v ir.Value
@@ -711,14 +948,78 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		return v
 	}
 	if s.Flat {
-		// One element a thread: every store at it, in one pass.
-		e := newEnv(nil)
-		for _, st := range g.Stores {
-			at := b.Add(ir.U32, rowBase, flatIdx)
-			if st.Indexed {
-				at = elem(st.Ix, flatIdx, e)
+		// A thread's tile of rows by elements: every store at each, in one
+		// pass, with the envs a node shared across rows or elements is
+		// computed in.
+		tr, tc := max(s.Tile, 1), max(s.TileCols, 1)
+		var outs []*env
+		if tr*tc == 1 {
+			outs = []*env{newEnv(nil)}
+		} else {
+			t := &tile{}
+			mk := func(cls uint8) *env {
+				x := newEnv(nil)
+				x.cls = cls
+				x.t = t
+				t.all = append(t.all, x)
+				return x
 			}
-			b.Store(params[st.Buf], at, elem(st.Val, flatIdx, e), 0)
+			none := mk(0)
+			rowAt := func(j int) ir.Value {
+				if j == 0 {
+					return r
+				}
+				return b.Add(ir.U32, r, b.Const(ir.U32, int64(j)))
+			}
+			colAt := func(j int) ir.Value {
+				if j == 0 {
+					return flatIdx
+				}
+				return b.Add(ir.U32, flatIdx, b.Const(ir.U32, int64(j)))
+			}
+			rowsE := make([]*env, tr)
+			for j := range rowsE {
+				x := mk(1)
+				x.row = rowAt(j)
+				x.base = b.Mul(ir.U32, x.row, width)
+				x.sh[0] = none
+				rowsE[j] = x
+			}
+			colsE := make([]*env, tc)
+			for j := range colsE {
+				x := mk(2)
+				x.col = colAt(j)
+				x.row, x.base = r, rowBase
+				x.sh[0] = none
+				colsE[j] = x
+			}
+			for jr := 0; jr < tr; jr++ {
+				for jc := 0; jc < tc; jc++ {
+					x := mk(3)
+					x.row, x.base, x.col = rowsE[jr].row, rowsE[jr].base, colsE[jc].col
+					x.sh = [3]*env{none, rowsE[jr], colsE[jc]}
+					outs = append(outs, x)
+				}
+			}
+			for _, x := range rowsE {
+				x.col = flatIdx
+			}
+		}
+		for _, e := range outs {
+			base, col := rowBase, flatIdx
+			if e.base != 0 {
+				base, col = e.base, e.col
+			}
+			for _, st := range g.Stores {
+				at := b.Add(ir.U32, base, col)
+				if st.Indexed {
+					at = elem(st.Ix, col, e)
+				}
+				if seg != 0 {
+					at = b.Add(ir.U32, at, b.Mul(ir.U32, seg, b.Const(ir.U32, int64(g.Rows*g.Width))))
+				}
+				b.Store(params[st.Buf], at, elem(st.Val, col, e), 0)
+			}
 		}
 		if emitErr != nil {
 			return nil, emitErr

@@ -21,9 +21,9 @@ type MatVecOperand struct {
 // its super-scale plane and, for a format with per-sub-block scales, that
 // plane (kernels.PackWeights' layout).
 type MatVecWeight struct {
-	T             kernels.Quant
-	K, Rows       int
-	QS, D, SC     int // the group's BufU32 buffers; SC -1 where the format has none
+	T         kernels.Quant
+	K, Rows   int
+	QS, D, SC int // the group's BufU32 buffers; SC -1 where the format has none
 }
 
 // MatVec is node: the product of the weight's row e (the element) with the
@@ -114,4 +114,15 @@ func (g *Row) floatMatVec(w MatVecWeight, a MatVecOperand, info kernels.QInfo) (
 	}
 	g.SetFold(acc, g.Bin(OpAdd, acc, dot))
 	return acc, nil
+}
+
+// SumPlanes is the element's sum over planes partial planes of buffer part
+// (BufRow, read by index), plane p at p*Rows*Width: what a split's segments
+// wrote, summed in segment order from zero.
+func (g *Row) SumPlanes(part, planes int) int {
+	u := g.UConst
+	at := g.UBin(OpAdd, g.UBin(OpMul, g.RowIdx(), u(g.Width)), g.Column())
+	return g.FoldSum(planes, func(p int) int {
+		return g.LoadAt(part, g.UBin(OpAdd, g.UBin(OpMul, p, u(g.Rows*g.Width)), at))
+	})
 }
