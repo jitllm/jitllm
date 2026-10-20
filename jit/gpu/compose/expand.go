@@ -12,7 +12,7 @@ import (
 func (g *Row) expanded() (*Row, []int, error) {
 	has := false
 	for _, n := range g.Nodes {
-		if n.Kind == NUnary && n.Op == OpAct || n.Kind == NBinary && n.Op == OpActMul {
+		if n.Kind == NUnary && n.Op == OpAct || n.Kind == NBinary && (n.Op == OpActMul || n.Op == OpDivExact) {
 			has = true
 			break
 		}
@@ -53,6 +53,8 @@ func (g *Row) expandActs() ([]int, error) {
 			at[i], err = x.act(at[n.A], n.Act)
 		case n.Kind == NBinary && n.Op == OpActMul:
 			at[i], err = x.actMul(n.Act, at[n.A], at[n.B])
+		case n.Kind == NBinary && n.Op == OpDivExact:
+			at[i] = x.divExact(old, n, at)
 		default:
 			at[i] = x.add(n) // its operands remapped below
 		}
@@ -63,13 +65,15 @@ func (g *Row) expandActs() ([]int, error) {
 	// The kept nodes' operands, back edges included, now that every old
 	// node has a place.
 	for i, n := range old {
-		if n.Kind == NUnary && n.Op == OpAct || n.Kind == NBinary && n.Op == OpActMul {
+		if n.Kind == NUnary && n.Op == OpAct || n.Kind == NBinary && (n.Op == OpActMul || n.Op == OpDivExact) {
 			continue
 		}
 		nd := &x.nodes[at[i]]
 		switch n.Kind {
-		case NUnary, NReduce:
+		case NUnary, NReduce, NWindow:
 			nd.A = at[n.A]
+		case NDot4:
+			nd.A, nd.B, nd.C = at[n.A], at[n.B], at[n.C]
 		case NBinary, NUBinary, NLess:
 			nd.A, nd.B = at[n.A], at[n.B]
 			if n.Kind == NBinary && n.Op == OpFma {
@@ -239,4 +243,31 @@ func (x *expander) actMul(k kernels.ActKind, g, u int) (int, error) {
 	}
 	a, err := x.act(g, k)
 	return x.mul(a, u), err
+}
+
+// divExact is node n, a correctly rounded quotient, in integer arithmetic
+// over its operands at their new places: by the constant 127, the
+// significand's division (Div127); otherwise rounded from an estimate --
+// the reciprocal of a correctly rounded quotient c/x from x/c refined by a
+// Newton step (two floats either side), any other quotient from the
+// division itself (three, SPIR-V's 2.5 ulp).
+func (x *expander) divExact(old []Node, n Node, at []int) int {
+	g := &Row{Nodes: x.nodes}
+	num, den := at[n.A], at[n.B]
+	var v int
+	switch dn := old[n.B]; {
+	case dn.Kind == NConst && dn.F == 127:
+		v = g.Div127(num)
+	case old[n.A].Kind == NConst && old[n.A].F == 1 && dn.Kind == NBinary && dn.Op == OpDivExact &&
+		old[dn.B].Kind == NConst:
+		// 1/(a/c): c/a estimates it; one Newton step against the rounded
+		// quotient den refines it.
+		y := g.Bin(OpDiv, g.Const(old[dn.B].F), at[dn.A])
+		y = g.Bin(OpAdd, y, g.Bin(OpMul, y, g.Bin(OpSub, g.Const(1), g.Bin(OpMul, den, y))))
+		v = g.RoundQuotient(num, den, y, 2)
+	default:
+		v = g.RoundQuotient(num, den, g.Bin(OpDiv, num, den), 3)
+	}
+	x.nodes = g.Nodes
+	return v
 }

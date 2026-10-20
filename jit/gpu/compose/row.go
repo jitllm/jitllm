@@ -147,6 +147,12 @@ const (
 	OpWord
 	// OpInt is float A truncated toward zero to a signed integer.
 	OpInt
+	// OpAsWord is signed integer A's bits as a word: no instruction, the
+	// value read as unsigned by what uses it.
+	OpAsWord
+	// OpDivExact is A/B correctly rounded, whatever the target's division
+	// allows (expandDivs writes it in integer arithmetic).
+	OpDivExact
 )
 
 // Red is a row reduction.
@@ -224,7 +230,7 @@ type Key struct {
 // Encode is the group's structure and schedule as integers.
 func (g *Row) Encode(s Schedule) []uint32 {
 	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs)), b2u(s.Flat), uint32(s.Tile), uint32(s.TileCols), uint32(s.Split),
-		uint32(s.Target.API), uint32(s.Target.SM), uint32(s.Target.Lanes)}
+		uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes)}
 	for _, b := range g.Bufs {
 		e = append(e, uint32(b.Kind))
 	}
@@ -983,6 +989,8 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 				v = b.Bitcast(ir.F32, a)
 			case OpWord:
 				v = b.Bitcast(ir.U32, a)
+			case OpAsWord:
+				v = a
 			case OpInt:
 				v = b.CvtI32(a)
 			case OpRsqrt:
@@ -1210,7 +1218,7 @@ func (g *Row) typeOf(n int) ir.Type {
 		}
 	case NUnary:
 		switch nd.Op {
-		case OpWord:
+		case OpWord, OpAsWord:
 			return ir.U32
 		case OpInt:
 			return ir.I32

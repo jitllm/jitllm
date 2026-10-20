@@ -61,14 +61,3 @@ func (g *Row) RoundQuotient(num, den, est int, reach int) int {
 	ok := func(p, then int) int { return g.Select(p, then, est) }
 	return ok(in(ea, 1, 254), ok(in(ed, 1, 254), ok(in(ub(OpShr, ny, u(23)), 2, 252), g.bits(pick))))
 }
-
-// Q8Scales is an int8 block's scale d = amax/127 and its inverse 127/amax,
-// both correctly rounded (the host's), the inverse 0 for an all-zero block:
-// the inverse's estimate refined by one Newton step, then rounded.
-func (g *Row) Q8Scales(amax int) (d, inv int) {
-	d = g.Div127(amax)
-	y := g.Bin(OpDiv, g.Const(127), amax)
-	y = g.Bin(OpAdd, y, g.Bin(OpMul, y, g.Bin(OpSub, g.Const(1), g.Bin(OpMul, d, y))))
-	inv = g.Select(g.Less(g.Const(0), d), g.RoundQuotient(g.Const(1), d, y, 2), g.Const(0))
-	return d, inv
-}

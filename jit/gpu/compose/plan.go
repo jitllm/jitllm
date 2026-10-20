@@ -1,6 +1,10 @@
 package compose
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/jitllm/jitllm/jit/gpu/ir"
+)
 
 // API is the target's kernel language.
 type API uint8
@@ -31,16 +35,15 @@ func APIOf(name string) API {
 // Target is the device a group is planned for: what the passes ask of it.
 type Target struct {
 	API API
-	// SM is a ptx target's compute capability times ten (70 for sm_70), 0
-	// elsewhere.
-	SM int
+	// ISA is the instruction set, as an id.
+	ISA ir.ISA
 	// Lanes is the subgroup width the device guarantees, 0 for none.
 	Lanes int
 }
 
 // IntMMA reports whether the target has an int8 matrix instruction (ptx's
 // mma.sync on s8, sm_75 on).
-func (t Target) IntMMA() bool { return t.API == APIPTX && t.SM >= 75 }
+func (t Target) IntMMA() bool { return t.ISA.Family == ir.FamilyPTX && t.ISA.Version >= 75 }
 
 // Step is the kind of step a group runs in.
 type Step uint8
@@ -81,12 +84,20 @@ type Planned struct {
 //     that do (an operand) -- runs flat, a tile of rows and elements a thread
 //     and loop 0 split between threads (contractSchedule), the split a
 //     rewrite of the group (SplitFold);
+//   - a group with a windowed reduction runs flat, a thread an element, 128
+//     to a workgroup (its windows meet in the workgroup);
 //   - any other group runs a workgroup a row, its width the narrowest power of
 //     two over the row, at most 256, or 1024 with a row reduction.
 func (g *Row) Plan(f Facts) ([]Planned, error) {
 	all := make([]int, len(g.Bufs))
 	for i := range all {
 		all[i] = i
+	}
+	if g.windowed() {
+		// Windows meet across a workgroup's consecutive threads: flat, a
+		// thread an element, 128 to a group.
+		return []Planned{{G: g, S: Schedule{Group: 128, Flat: true, Target: f.Target}, Bufs: all,
+			Threads: g.Rows * g.Width}}, nil
 	}
 	if !g.contraction() {
 		s := rowSchedule(g)
@@ -107,6 +118,16 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 		{G: first, S: s, Bufs: b1, Threads: threads * s.Split},
 		{G: second, S: Schedule{Group: s.Group, Flat: true, Target: f.Target}, Bufs: b2, Threads: g.Rows * g.Width},
 	}, nil
+}
+
+// windowed reports whether g holds a windowed reduction (NWindow).
+func (g *Row) windowed() bool {
+	for _, n := range g.Nodes {
+		if n.Kind == NWindow {
+			return true
+		}
+	}
+	return false
 }
 
 // contraction reports whether g is a contraction: one store, reading a sum

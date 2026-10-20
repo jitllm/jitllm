@@ -4,11 +4,9 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/jitllm/jitllm/engine/graph"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
@@ -235,21 +233,6 @@ func (rb *rowBuild) normed(o *devOp, x, w int, eps float32, layer bool) int {
 	return rb.bin(compose.OpAdd, rb.bin(compose.OpMul, rb.bin(compose.OpMul, c, rb.rmsOf(c, w, eps)), wt), bias)
 }
 
-// quantize gives the group the int8 epilogue of node v, a row of width w,
-// padded as a matrix of the plan reads it.
-func (rb *rowBuild) quantize(v, w int, p *nn.LayerPlan) {
-	kp := pad32(w)
-	if w == p.NEmbd {
-		kp = ePad(p)
-	}
-	win := p.ActWin
-	if win <= 0 {
-		win = 32
-	}
-	rb.r.Q8 = &compose.Q8{Val: v, A: rb.buf(compose.BufQ8, gaQ8A), X: rb.buf(compose.BufQ8X, gaQ8X),
-		Window: mainkernels.ClampWindow(win, kp), Pad: kp}
-}
-
 // genOp is op o's launches, or nil where the composer has no form for it
 // yet or the backend refused its kernel, o.Why saying which. Nil fails the
 // block: nothing else runs an op.
@@ -317,7 +300,8 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		eps = float32(o.A.Eps)
 	}
 	rb := &rowBuild{r: compose.Row{Width: w, Rows: rows}}
-	var q8 uint8 // which output holds an int8 value
+	var q8 uint8     // which output holds an int8 value
+	qOf := genArg(0) // the output it is the int8 operand of
 	switch o.Kind {
 	case dkAdd:
 		a, b := rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1)
@@ -394,8 +378,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		}
 		rb.store(y, gaOut0)
 		if o.Kind == dkNormQuant {
-			q8 = 1
-			rb.quantize(y, w, p)
+			q8, qOf = 1, gaOut0
 		}
 	case dkAddNorm, dkAddNormQuant:
 		// The residual's sum, normed; with its int8 operand.
@@ -407,8 +390,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		}
 		rb.store(y, gaOut1)
 		if o.Kind == dkAddNormQuant {
-			q8 = 2
-			rb.quantize(y, w, p)
+			q8, qOf = 2, gaOut1
 		}
 	case dkActQuant:
 		// act(gate) * up, and its int8 operand.
@@ -420,8 +402,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 			return nil
 		}
 		rb.store(y, gaOut0)
-		q8 = 1
-		rb.quantize(y, w, p)
+		q8, qOf = 1, gaOut0
 	case dkGatherHeads:
 		// A chunk's rows head-major: each head's slice of every row in turn,
 		// a group row a (head, row), read through the step's order.
@@ -452,19 +433,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		if o.OneRow && rows > 1 {
 			return nil
 		}
-		iw := prog.vals[o.In[0]].Width
-		kp := pad32(iw)
-		if iw == p.NEmbd {
-			kp = ePad(p)
-		}
-		win := p.ActWin
-		if win <= 0 {
-			win = 32
-		}
-		rb.r.Width = iw
-		x := rb.load(compose.BufRow, gaIn0)
-		rb.r.Q8 = &compose.Q8{Val: x, A: rb.buf(compose.BufQ8, gaQ8A), X: rb.buf(compose.BufQ8X, gaQ8X),
-			Window: mainkernels.ClampWindow(win, kp), Pad: kp}
+		return g.genQuant(o, prog, rows, gaIn0, gaQ8A, gaQ8X, 0, p.ActWin)
 	case dkRopeQ, dkRopeKRow:
 		// The rotary over each head's first NRot dimensions (NORM or NEOX
 		// pairs; XD-RoPE's NEOX pairs on two tables), the rest of the head
@@ -509,9 +478,63 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 	if k.k == nil {
 		return nil
 	}
-	l := genLaunch{k: k.k, groups: rb.r.Rows, width: k.group, n: uint8(len(rb.args)), q8: q8}
+	l := genLaunch{k: k.k, groups: rb.r.Rows, width: k.group, n: uint8(len(rb.args))}
 	copy(l.args[:], rb.args)
-	return []genLaunch{l}
+	if q8 == 0 {
+		return []genLaunch{l}
+	}
+	// The int8 operand of the output, by a group of its own (a fusion pass
+	// joins them).
+	qs := g.genQuant(o, prog, rows, qOf, gaQ8A, gaQ8X, q8, p.ActWin)
+	if qs == nil {
+		return nil
+	}
+	return append([]genLaunch{l}, qs...)
+}
+
+// genQuant is the int8 operand of the value at argument src as its own
+// group (compose.Row.Quantize8): rows of the value's width, quantized over
+// the session's window (32 where it states none) clamped to the row,
+// the codes and scales into the output q8 names (0 for the op's own int8
+// value). Callers hold g.mu.
+func (g *devTier) genQuant(o *devOp, prog *devProgram, rows int, src, a, ax genArg, q8 uint8, win int) []genLaunch {
+	var iw int
+	switch {
+	case src >= gaIn0 && src <= gaIn3:
+		iw = prog.vals[o.In[src-gaIn0]].Width
+	case src >= gaOut0 && src <= gaOut2:
+		iw = prog.vals[o.Out[src-gaOut0]].Width
+	default:
+		return nil
+	}
+	if iw%32 != 0 {
+		// A padded row (zero columns past its width) has no form yet.
+		o.Why = whyNoForm
+		return nil
+	}
+	if win <= 0 {
+		win = 32
+	}
+	if win > iw {
+		win = iw // the host's window ends at the row
+	}
+	rb := &rowBuild{r: compose.Row{Width: rows * iw / 4, Rows: 1}}
+	rb.r.Quantize8(rb.buf(compose.BufRow, src), rb.buf(compose.BufOutU32, a), rb.buf(compose.BufOut, ax), win)
+	ps, err := rb.r.Plan(compose.Facts{Target: g.composeTarget()})
+	if err != nil || len(ps) != 1 {
+		o.Why = whyNoForm
+		return nil
+	}
+	p := ps[0]
+	s := p.S
+	k, _ := g.genKern(append([]uint32{encRow}, p.G.Encode(s)...), func() (*ir.Kernel, error) { return p.G.Emit(s) })
+	if k == nil {
+		o.Why = whyNoKernel
+		return nil
+	}
+	gl := genLaunch{k: k, groups: (p.Threads + s.Group - 1) / s.Group, width: s.Group, q8: q8}
+	gl.n = uint8(copy(gl.args[:], rb.args))
+	return []genLaunch{gl}
 }
 
 // rowKernel is a composed row group's compiled kernel and its group size.
@@ -580,12 +603,7 @@ func (g *devTier) composeTarget() compose.Target {
 	if g.ctarget.API != compose.APINone {
 		return g.ctarget
 	}
-	t := compose.Target{API: compose.APIOf(g.dev.API())}
-	if isa := backend.ISAOf(g.dev); strings.HasPrefix(isa, "sm_") {
-		if sm, err := strconv.Atoi(isa[3:]); err == nil {
-			t.SM = sm
-		}
-	}
+	t := compose.Target{API: compose.APIOf(g.dev.API()), ISA: backend.ArchOf(g.dev)}
 	if ok, _ := backend.GuaranteedLanes(g.dev, ir.SubgroupLanes); ok {
 		t.Lanes = ir.SubgroupLanes
 	}

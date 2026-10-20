@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/jitllm/jitllm/jit/gpu/cuda"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // Device identity: is this enumerated device the same piece of hardware as that
@@ -172,3 +173,16 @@ func ISAOf(d Device) string {
 }
 
 func (c *cudaDev) ISA() string { return c.d.Target }
+
+// Archer is a Device that states its instruction set as an id.
+type Archer interface{ Arch() ir.ISA }
+
+// ArchOf is a device's instruction set, the zero ISA where it states none.
+func ArchOf(d Device) ir.ISA {
+	if a, ok := d.(Archer); ok {
+		return a.Arch()
+	}
+	return ir.ISA{}
+}
+
+func (c *cudaDev) Arch() ir.ISA { return c.d.Arch }

@@ -8,6 +8,8 @@ import (
 	"os"
 	"runtime"
 	"unsafe"
+
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // The exported runtime surface returns errors rather than panicking: a missing
@@ -28,7 +30,9 @@ type Device struct {
 	// It is read, not assumed: ptxas silently accepts a lower target and
 	// forgoes newer instructions.
 	Target string
-	slots  int
+	// Arch is the instruction set: the compute capability (ir.PTX).
+	Arch  ir.ISA
+	slots int
 	// uuid is the driver's own identity for this device, read once at open.
 	// uuidOK false is a refusal, never an all-zero UUID: see UUID.
 	uuid   [UUIDSize]byte
@@ -140,12 +144,13 @@ func openDevice(ord int) (*Device, error) {
 	}
 	d.name = deviceName(d.dev, ord)
 	d.uuid, d.uuidOK = deviceUUID(d.dev)
-	d.Target = "sm_86"
+	d.Target, d.Arch = "sm_86", ir.PTX(86)
 	if cuDeviceGetAttribute != nil {
 		var maj, min int32
 		if cuDeviceGetAttribute(&maj, attrCCMajor, d.dev) == 0 &&
 			cuDeviceGetAttribute(&min, attrCCMinor, d.dev) == 0 && maj > 0 {
 			d.Target = fmt.Sprintf("sm_%d%d", maj, min)
+			d.Arch = ir.PTX(int(maj)*10 + int(min))
 		}
 	}
 	// Threads the card can hold resident, asked rather than guessed: the
