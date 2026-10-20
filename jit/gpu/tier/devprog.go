@@ -1083,7 +1083,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 	if len(g.In) > 1 && p.PLEDim != 0 {
 		// The per-layer input: this block's rows of the model's table.
 		pl := prog.val(g.Values[g.In[1]].Name, f32(p.PLEDim), slotPLES)
-		prog.ops = append(prog.ops, devOp{Kind: dkPLESlice, Out: []devVal{pl}})
+		prog.ops = append(prog.ops, devOp{Kind: dkPLESlice, Out: []devVal{pl}, V: l.pleOff})
 		vals[g.In[1]] = pl
 	}
 	// The int8 operand of a matvec: the float row it reads, quantized once

@@ -88,6 +88,7 @@ const (
 	gaRagBaseW // the windowed descriptors' bases
 	gaPreDesc  // a chunk's staged prefill descriptors, padding rows emptied
 	gaPreDescW // and its windowed ones
+	gaPLEIn    // the step's per-layer inputs, every block's a row
 	gaMgBC    // a mixture's grouping over rows: the block counts,
 	gaMgOff   // the offsets,
 	gaMgCnt   // the totals,
@@ -464,6 +465,16 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		lo := rb.node(compose.Node{Kind: compose.NLoad, Buf: tb, At: 2 * o.N})
 		hi := rb.node(compose.Node{Kind: compose.NLoad, Buf: tb, At: 2*o.N + 1})
 		rb.store(rb.bin(compose.OpMin, rb.bin(compose.OpMax, x, lo), hi), gaOut0)
+	case dkPLESlice:
+		// This block's slice of each row's per-layer inputs: the row's
+		// inputs at the block's offset (its own word).
+		if o.V == nil || bs.pleIn == nil || p.PLEWidth < w {
+			return nil
+		}
+		src := rb.buf(compose.BufRow, gaPLEIn)
+		off := rb.r.LoadAt(rb.buf(compose.BufU32, gaV), rb.r.UConst(0))
+		at := rb.r.UBin(compose.OpAdd, rb.r.UBin(compose.OpAdd, rb.r.UBin(compose.OpMul, rb.r.RowIdx(), rb.r.UConst(p.PLEWidth)), off), rb.r.Column())
+		rb.store(rb.r.LoadAt(src, at), gaOut0)
 	case dkQTemp:
 		// Each row's query by its temperature: the table at its causal count
 		// (n's word 0 at one row, 1+r over rows), the count's position
@@ -940,6 +951,8 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.bs.pkv.pre.pDesc[0]
 			case gaPreDescW:
 				bufs[j] = st.bs.pkv.pre.pDesc[1]
+			case gaPLEIn:
+				bufs[j] = st.bs.pleIn
 			case gaMgBC, gaMgOff, gaMgCnt, gaMgEnds, gaMgColE, gaMgPerm, gaMgPos, gaMgTsel, gaMgHG, gaMgGA, gaMgGAX:
 				m := bs.mg
 				bufs[j] = [...]backend.Buf{m.bc, m.off, m.cnt, m.ends, m.colE, m.perm, m.pos, m.tsel, m.hg, m.ga, m.gax}[a-gaMgBC]
