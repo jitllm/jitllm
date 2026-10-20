@@ -897,7 +897,8 @@ func (o devOp) wants(p *devProgram, i int) devType {
 	if i < len(o.Need) && o.Need[i] != (devType{}) {
 		return o.Need[i]
 	}
-	if in.Layout == layoutHeads && (o.Kind == dkQuant || o.Kind == dkExpertMatVec && o.Heads > 0 && i == 2) {
+	if in.Layout == layoutHeads && (o.Kind == dkQuant || o.Kind == dkExpertMatVec && o.Heads > 0 && i == 2 ||
+		o.Kind == dkConcatHeads && i == 0 || o.Kind == dkGatherHeads && o.N == 1) {
 		return in // the head-major order the gather wrote, read in it
 	}
 	if o.Kind == dkGatherHeads {

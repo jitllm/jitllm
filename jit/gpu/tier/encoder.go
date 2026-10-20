@@ -326,7 +326,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					}
 					gst.router, gst.routerB, gst.selB, gst.routeW, gst.shRouter = l.router, l.routerB, l.expSelB, bs.rw, l.shRouter
 					if o.Kind == dkGatherHeads {
-						gst.perm = g.perms[[2]int{o.Heads, R}]
+						gst.perm = g.perms[headOrder(&o, R)]
 					}
 					runGen(lc, &o, R, fc.rows, &buf, &gst)
 					if o.Kind == dkScan && g.recShared && err == nil {

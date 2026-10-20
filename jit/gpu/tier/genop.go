@@ -612,8 +612,11 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		hw := iw / o.Heads
 		rb.r.Width, rb.r.Rows = hw, rows*o.Heads
 		src, perm := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufU32, gaPerm)
-		at := rb.r.UBin(compose.OpAdd, rb.r.UBin(compose.OpMul, rb.r.Load(perm), rb.r.UConst(hw)), rb.r.Column())
-		rb.store(rb.r.LoadAt(src, at), gaOut0)
+		// A row the order names past the source's is a zero row.
+		r := &rb.r
+		j, last := r.Load(perm), r.UConst(rows*o.Heads-1)
+		at := r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.UBin(compose.OpMin, j, last), r.UConst(hw)), r.Column())
+		rb.store(r.Select(r.Less(last, j), r.Const(0), r.LoadAt(src, at)), gaOut0)
 	case dkHeadNorm:
 		// Each head a row of the head's width: rows*heads rows.
 		hd := o.HD
@@ -1652,7 +1655,7 @@ func (g *devTier) genHeadCopy(o *devOp, prog *devProgram, bs *blockScratch, rows
 	if len(o.In) == 0 || len(o.Out) == 0 {
 		return nil
 	}
-	if rows > 1 && prog.latent {
+	if rows > 1 && prog.latent && o.Kind != dkConcatHeads {
 		for _, v := range append(append([]devVal(nil), o.In...), o.Out...) {
 			if prog.vals[v].Layout == layoutHeads {
 				return nil // a head-major input or output the row-major copy does not read
@@ -1687,6 +1690,28 @@ func (g *devTier) genHeadCopy(o *devOp, prog *devProgram, bs *blockScratch, rows
 		}
 		pw := prog.vals[o.In[1]].Width
 		la, lb := iw/nh, pw/nh
+		if prog.vals[o.In[0]].Layout == layoutHeads {
+			// The first part head-major (each head's rows together), the
+			// second token-major: each copied whole to its (token, head)
+			// place by a table of the places, the op's own.
+			at, bt := make([]uint32, nh*rows), make([]uint32, nh*rows)
+			for h := 0; h < nh; h++ {
+				for t := 0; t < rows; t++ {
+					hm, tm := h*rows+t, t*nh+h
+					at[hm], bt[tm] = uint32(tm*(la+lb)), uint32(tm*(la+lb)+la)
+				}
+			}
+			if o.Own[0], o.Own[1] = g.ownBuf(bs, o, 0, nh*rows, at), g.ownBuf(bs, o, 1, nh*rows, bt); o.Own[0] == nil || o.Own[1] == nil {
+				return nil
+			}
+			cp := func(n int, src, off genArg) *rowBuild {
+				cb := &rowBuild{r: compose.Row{Width: n, Rows: nh * rows}}
+				x, out, t := cb.buf(compose.BufRow, src), cb.buf(compose.BufOut, gaOut0), cb.buf(compose.BufU32, off)
+				cb.r.StoreAt(out, cb.r.Load(x), cb.r.UBin(compose.OpAdd, cb.r.Load(t), cb.r.Column()))
+				return cb
+			}
+			return g.launches(cp(la, gaIn0, gaOwn0), cp(lb, gaIn1, gaOwn1))
+		}
 		a, b := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufRow, gaIn1)
 		col := r.Column()
 		h, c := r.UBin(compose.OpDiv, col, u(la+lb)), r.UBin(compose.OpRem, col, u(la+lb))

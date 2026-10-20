@@ -92,7 +92,8 @@ func (g *devTier) ensureOrders(l *layer, R int, rag *ragStep) {
 	}
 	for i := range fc.prog.ops {
 		if o := &fc.prog.ops[i]; o.Kind == dkGatherHeads {
-			g.headPerm(o.Heads, R)
+			k := headOrder(o, R)
+			g.headPerm(k[0], k[1])
 		}
 	}
 }
@@ -116,3 +117,13 @@ func (g *devTier) ensureFused(lo, hi, R int, bs *blockScratch, rag *ragStep) {
 const ragGroupTok = 4
 
 func ragFew(n int) bool { return n >= 2 && n <= ragGroupTok }
+
+// headOrder is the order a head gather reads its rows through: the chunk's
+// rows head-major, or with N 1 back to the tokens' (the same order with
+// heads and rows swapped).
+func headOrder(o *devOp, R int) [2]int {
+	if o.N == 1 {
+		return [2]int{R, o.Heads}
+	}
+	return [2]int{o.Heads, R}
+}

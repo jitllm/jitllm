@@ -855,6 +855,30 @@ func (p *devProgram) headMajor() {
 		g := devOp{Kind: dkGatherHeads, Src: o.Src, In: []devVal{src}, Out: []devVal{h}, Heads: o.Heads}
 		p.ops = append(p.ops[:k], append([]devOp{g}, p.ops[k:]...)...)
 		j++
+		// The bank's rows come out head-major too: a head concat reads
+		// them so, anything else through the order back to the tokens'.
+		out := p.ops[j].Out[0]
+		hm := p.val(p.names[out]+".heads", devType{Elem: elemF32, Layout: layoutHeads, Width: p.vals[out].Width}, pool)
+		pool++
+		p.ops[j].Out[0] = hm
+		back := false
+		for i := j + 1; i < len(p.ops); i++ {
+			for x, v := range p.ops[i].In {
+				if v != out {
+					continue
+				}
+				if p.ops[i].Kind == dkConcatHeads && x == 0 {
+					p.ops[i].In[0] = hm
+				} else {
+					back = true
+				}
+			}
+		}
+		if back {
+			b := devOp{Kind: dkGatherHeads, Src: o.Src, In: []devVal{hm}, Out: []devVal{out}, Heads: o.Heads, N: 1}
+			p.ops = append(p.ops[:j+1], append([]devOp{b}, p.ops[j+1:]...)...)
+			j++
+		}
 	}
 }
 
