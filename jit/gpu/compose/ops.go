@@ -401,3 +401,47 @@ func (g *Row) RouterLogits(w, x, out, rows, k int) {
 	r := g.Add(Node{Kind: NReduce, Red: RedSum, A: g.Bin(OpMul, wv, xv)})
 	g.Stages = append(g.Stages, Stage{Width: 1, Stores: []Store{{Buf: out, Val: r, Indexed: true, Ix: row}}})
 }
+
+// ConvRows is a causal depthwise convolution over a chunk of rows (an
+// element a (row, channel), channel fastest): out[t][c] = sum_u W[u][c] *
+// Z[t+u][c], Z the sequence's window -- taps-1 planes at its in slot of the
+// state s (word 1 of the descriptor desc) -- followed by the rows x. Both
+// reads run and are clamped; the window or the row is selected.
+func (g *Row) ConvRows(s, x, w, desc, taps, chans, rows int) int {
+	u, ub := g.UConst, g.UBin
+	idx := g.Column()
+	t := ub(OpDiv, idx, u(chans))
+	c := ub(OpSub, idx, ub(OpMul, t, u(chans)))
+	pre := u(taps - 1)
+	base := ub(OpMul, g.LoadAt(desc, u(1)), u((taps-1)*chans))
+	acc := g.Const(0)
+	for k := 0; k < taps; k++ {
+		z := ub(OpAdd, t, u(k))
+		in := g.Less(z, pre)
+		sv := g.LoadAt(s, ub(OpAdd, base, ub(OpMin, ub(OpAdd, ub(OpMul, z, u(chans)), c), u((taps-1)*chans-1))))
+		xv := g.LoadAt(x, ub(OpMin, ub(OpAdd, ub(OpMul, ub(OpSub, z, pre), u(chans)), c), u(rows*chans-1)))
+		wv := g.LoadAt(w, ub(OpAdd, ub(OpMul, u(k), u(chans)), c))
+		acc = g.fma(wv, g.Select(in, sv, xv), acc)
+	}
+	return acc
+}
+
+// ConvShift is the convolution's next window (an element a (plane,
+// channel) of it): plane t is Z[m + t] of the window followed by the rows, m
+// the chunk's real rows (word 0 of desc), written at the sequence's in slot
+// of the next state (StoreAt the place it returns with the value).
+func (g *Row) ConvShift(s, x, desc, taps, chans, rows int) (val, at int) {
+	u, ub := g.UConst, g.UBin
+	n := (taps - 1) * chans
+	idx := g.Column()
+	t := ub(OpDiv, idx, u(chans))
+	c := ub(OpSub, idx, ub(OpMul, t, u(chans)))
+	m := g.LoadAt(desc, u(0))
+	base := ub(OpMul, g.LoadAt(desc, u(1)), u(n))
+	z := ub(OpAdd, m, t)
+	pre := u(taps - 1)
+	in := g.Less(z, pre)
+	sv := g.LoadAt(s, ub(OpAdd, base, ub(OpMin, ub(OpAdd, ub(OpMul, z, u(chans)), c), u(n-1))))
+	xv := g.LoadAt(x, ub(OpMin, ub(OpAdd, ub(OpMul, ub(OpSub, z, pre), u(chans)), c), u(rows*chans-1)))
+	return g.Select(in, sv, xv), ub(OpAdd, base, idx)
+}

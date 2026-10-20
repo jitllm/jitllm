@@ -154,3 +154,28 @@ func TestRouterIsMains(t *testing.T) {
 		})
 	}
 }
+
+// TestConvIsMains holds the composer's causal convolution and its window
+// shift to main's Conv1dRows and Conv1dShift.
+func TestConvIsMains(t *testing.T) {
+	for _, c := range []struct{ taps, chans, rows int }{{4, 64, 1}, {4, 256, 32}, {3, 96, 8}} {
+		name := fmt.Sprintf("t%d_c%d_r%d", c.taps, c.chans, c.rows)
+		t.Run(name, func(t *testing.T) {
+			mr, _ := mainkernels.Conv1dRows(c.taps, c.chans, c.rows)
+			ms, err := mainkernels.Conv1dShift(c.taps, c.chans, c.rows)
+			if err != nil {
+				t.Fatal(err)
+			}
+			flat := compose.Schedule{Group: 128, Flat: true, Target: sm70}
+			g := &compose.Row{Width: c.rows * c.chans, Rows: 1}
+			s, x, w, out, desc := g.Buf(compose.BufRow), g.Buf(compose.BufRow), g.Buf(compose.BufRow), g.Buf(compose.BufOut), g.Buf(compose.BufU32)
+			g.Store(out, g.ConvRows(s, x, w, desc, c.taps, c.chans, c.rows))
+			same(t, name+"/rows", []*ir.Kernel{mr}, emitAt(t, g, flat))
+			h := &compose.Row{Width: (c.taps - 1) * c.chans, Rows: 1}
+			hs, hx, hout, hdesc := h.Buf(compose.BufRow), h.Buf(compose.BufRow), h.Buf(compose.BufOut), h.Buf(compose.BufU32)
+			v, at := h.ConvShift(hs, hx, hdesc, c.taps, c.chans, c.rows)
+			h.StoreAt(hout, v, at)
+			same(t, name+"/shift", []*ir.Kernel{ms}, emitAt(t, h, flat))
+		})
+	}
+}
