@@ -83,3 +83,142 @@ func (g *Row) PagedSoftmax(scores, out, part, desc int, p Paged) {
 		g.StoreAt(part, l, ub(OpAdd, pb, u(padded+32+r)))
 	}
 }
+
+// headGroup is how many query heads of one KV head an item serves, so one K
+// or V load feeds that many products: one per 64 slots of a chunk up to 8,
+// rounded down to a divisor of the KV head's group.
+func (p Paged) headGroup() int {
+	gqa := p.Heads / p.KVHeads
+	g := min(8, gqa, max(1, p.Chunk/64))
+	for gqa%g != 0 {
+		g--
+	}
+	return g
+}
+
+// pageOf is the page holding position t of the row whose table starts at
+// tab: word tab + t/page of the table.
+func (g *Row) pageOf(table, tab, t, page int) int {
+	return g.LoadAt(table, g.UBin(OpAdd, tab, g.pageDiv(t, page)))
+}
+
+// pageDiv and pageRem are t/page and t%page, a shift and a mask where the
+// page is a power of two.
+func (g *Row) pageDiv(t, page int) int {
+	if page&(page-1) == 0 {
+		return g.UBin(OpShr, t, g.UConst(log2(page)))
+	}
+	return g.UBin(OpDiv, t, g.UConst(page))
+}
+
+func (g *Row) pageRem(t, page int) int {
+	if page&(page-1) == 0 {
+		return g.UBin(OpAnd, t, g.UConst(page-1))
+	}
+	return g.UBin(OpRem, t, g.UConst(page))
+}
+
+func log2(n int) int {
+	k := 0
+	for 1<<k < n {
+		k++
+	}
+	return k
+}
+
+// PagedScores is the scaled q.k of the group element's slot (an element a
+// (row, head group, split, slot), slot fastest) for each query head of its
+// group, stored into the score plane at out, [row][head][split][chunk], and
+// -MaxFloat32 where the slot holds no key of the row. K is the paged pool
+// [page][kvRow][Page] (an element of position t of page pid at
+// (pid*kvRow + e)*Page + t%Page); the key read is the slot's clamped into
+// the row's, so a masked slot reads the row's own pages. The dot runs in
+// chains of the head's dimensions, over blocks of 32 where the group's
+// products pass 512.
+func (g *Row) PagedScores(q, k, out, table, desc int, p Paged, scale float32) {
+	u, ub := g.UConst, g.UBin
+	G := p.headGroup()
+	gqa, S, C, P := p.Heads/p.KVHeads, p.Splits, p.Chunk, p.Page
+	kvRow := p.KVHeads * p.Dim
+	flat := g.Column()
+	slot := ub(OpRem, flat, u(C))
+	rest := ub(OpDiv, flat, u(C))
+	sp := ub(OpRem, rest, u(S))
+	rest = ub(OpDiv, rest, u(S))
+	hg := ub(OpRem, rest, u(p.Heads/G))
+	row := ub(OpDiv, rest, u(p.Heads/G))
+	ps := g.pagedSplitOf(desc, row, sp, S)
+	t := g.Select(ps.live, ub(OpMin, ub(OpMax, ub(OpAdd, ps.st, slot), ps.ks), ps.last), u(0))
+	pid := g.pageOf(table, ps.tab, t, P)
+	h0 := ub(OpMul, hg, u(G))
+	kvh := ub(OpMul, ub(OpDiv, h0, u(gqa)), u(p.Dim))
+	rh0 := ub(OpAdd, ub(OpMul, row, u(p.Heads)), h0)
+	qb := ub(OpMul, rh0, u(p.Dim))
+	kb := ub(OpAdd, ub(OpAdd, ub(OpMul, pid, u(P*kvRow)), ub(OpMul, kvh, u(P))), g.pageRem(t, P))
+	chains := max(1, 4/G)
+	acc := make([][]int, G)
+	for h := range acc {
+		acc[h] = make([]int, chains)
+		for c := range acc[h] {
+			acc[h][c] = g.Const(0)
+		}
+	}
+	// dims folds dimensions d0 + 0..n-1 into chains from cur, d0 + the block
+	// base at blk (an index, or -1 for none).
+	dims := func(cur [][]int, blk, n int) [][]int {
+		nx := make([][]int, G)
+		for h := range nx {
+			nx[h] = append([]int(nil), cur[h]...)
+		}
+		for d := 0; d < n; d++ {
+			dd := u(d)
+			if blk >= 0 {
+				dd = ub(OpAdd, blk, dd)
+			}
+			kv := g.LoadAt(k, ub(OpAdd, kb, ub(OpMul, dd, u(P))))
+			for h := range nx {
+				qv := g.LoadAt(q, ub(OpAdd, qb, ub(OpAdd, u(h*p.Dim), dd)))
+				nx[h][d%chains] = g.Add(Node{Kind: NBinary, Op: OpFma, A: qv, B: kv, C: nx[h][d%chains]})
+			}
+		}
+		return nx
+	}
+	const blk = 32
+	done := 0
+	if nb := p.Dim / blk; G*p.Dim > 512 && nb > 1 {
+		done = nb * blk
+		c := g.Loop(nb)
+		folds := make([][]int, G)
+		for h := range folds {
+			folds[h] = make([]int, chains)
+			for x := range folds[h] {
+				folds[h][x] = g.Fold(c, acc[h][x])
+			}
+		}
+		nx := dims(folds, ub(OpMul, g.Iter(c), u(blk)), blk)
+		for h := range folds {
+			for x := range folds[h] {
+				g.SetFold(folds[h][x], nx[h][x])
+			}
+		}
+		acc = folds
+	}
+	if done < p.Dim {
+		rest := dims(acc, u(done), p.Dim-done)
+		for h := range acc {
+			// Dimensions past the loop continue its chains: d%chains of
+			// the whole head.
+			acc[h] = rest[h]
+		}
+	}
+	valid := g.valid(ps, slot)
+	ob := ub(OpAdd, ub(OpMul, ub(OpAdd, ub(OpMul, rh0, u(S)), sp), u(C)), slot)
+	for h := range acc {
+		dot := acc[h][0]
+		for x := 1; x < chains; x++ {
+			dot = g.Bin(OpAdd, dot, acc[h][x])
+		}
+		score := g.Bin(OpMul, dot, g.Const(scale))
+		g.StoreAt(out, g.Select(valid, score, g.Const(-math.MaxFloat32)), ub(OpAdd, ob, u(h*S*C)))
+	}
+}

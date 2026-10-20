@@ -280,7 +280,8 @@ func (c *canon) atom(kind int64, a, b int32) affine {
 }
 
 func (c *canon) fieldAtom(f field) affine {
-	if f.m == 1 {
+	// (x mod m)/d is 0 where m is at most d.
+	if f.m != 0 && f.m <= f.d {
 		return affine{}
 	}
 	if f.d == 1 && f.m == 0 {

@@ -53,3 +53,25 @@ func TestPagedSoftmaxIsMains(t *testing.T) {
 		})
 	}
 }
+
+// TestPagedScoresIsMains holds the composer's staged scores, a thread a
+// slot, to main's PagedStagedScores at lanes 1 over f32 K.
+func TestPagedScoresIsMains(t *testing.T) {
+	for _, s := range stagedShapes {
+		name := fmt.Sprintf("r%d_h%d_kv%d_d%d_s%d_c%d", s.Rows, s.Heads, s.KVHeads, s.Dim, s.Splits, s.Chunk)
+		t.Run(name, func(t *testing.T) {
+			mk, err := mainkernels.PagedStagedScores(s, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := pagedOf(s)
+			g := &compose.Row{Width: mainkernels.PagedStagedScoreItems(s), Rows: 1}
+			q, k := g.Buf(compose.BufRow), g.Buf(compose.BufRow)
+			g.Buf(compose.BufU32)
+			out := g.Buf(compose.BufOut)
+			table, desc := g.Buf(compose.BufU32), g.Buf(compose.BufU32)
+			g.PagedScores(q, k, out, table, desc, p, s.Scale)
+			same(t, name, []*ir.Kernel{mk}, emitAt(t, g, compose.Schedule{Group: 128, Flat: true, Target: sm70}))
+		})
+	}
+}
