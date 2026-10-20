@@ -32,8 +32,10 @@ type layer struct {
 	progRun, progRunRows progReason
 	// progOne, progRows and progRag are prog with the rewrites that apply on
 	// a scratch at one row, on a prompt chunk and on a ragged step
-	// (devrewrite.go).
+	// (devrewrite.go); progRagFew the ragged step's of 2 to ragGroupTok
+	// live rows, whose matvecs carry every row in one thread.
 	progOne, progRows, progRag progFused
+	progRagFew                 [ragGroupTok - 1]progFused
 	wq, wk, wv, wo             *resident
 	// extra and mvExtra are the matrices the block holds beyond the
 	// positional list (nn.LayerWeights.All, matched by memory), uploaded and

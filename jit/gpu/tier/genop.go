@@ -1378,7 +1378,10 @@ func (g *devTier) genMatVecNodes(o *devOp, prog *devProgram, bs *blockScratch, r
 	// The product, into the output or a split's planes; a bank's slots are
 	// the group's rows, each reading its expert's sheet.
 	grows := rows
+	few := g.genRagLive > 0 && !bank && !kernels.IsFloat(m.q) && m.bias == nil && groupSplits(m.rows, max(m.split, 1))
 	switch {
+	case few:
+		grows = g.genRagLive
 	case heads:
 		grows = o.Heads * rows
 	case bank:
@@ -1394,6 +1397,8 @@ func (g *devTier) genMatVecNodes(o *devOp, prog *devProgram, bs *blockScratch, r
 	}
 	a := compose.MatVecOperand{Toks: grows}
 	switch {
+	case few:
+		a.Toks = rows
 	case heads:
 		w.Experts, w.Sel, w.SelPer = m.experts, rb.buf(compose.BufU32, gaHeadTiles), groupTok
 	case bank:
@@ -1448,7 +1453,7 @@ func (g *devTier) genMatVecNodes(o *devOp, prog *devProgram, bs *blockScratch, r
 		MMAMT: g.tiles.mmaMT, MMANT: g.tiles.mmaNT, NoMMA: g.NoMMA}
 	switch {
 	case g.genRag:
-		f.Step = compose.StepRagged
+		f.Step, f.RagGroup = compose.StepRagged, few
 	case rows == 1:
 		f.Step = compose.StepDecode
 	}
@@ -2078,4 +2083,12 @@ func (g *devTier) headTiles(bs *blockScratch, heads, rows int) bool {
 	}
 	bs.headTiles, bs.headTilesN = b, n
 	return true
+}
+
+// groupSplits reports whether a matvec of rows outputs reduces a k split of
+// split ways in one workgroup: 32 rows a segment's warp, the workgroup 128
+// to 1024 threads, whole rows to each.
+func groupSplits(rows, split int) bool {
+	w := min(max(32*split, 128), 1024)
+	return split == 1 || w%split == 0 && rows%(w/split) == 0
 }

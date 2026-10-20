@@ -12,6 +12,8 @@ import "fmt"
 // class keeps its own.
 func (l *layer) fusedFor(R int, rag *ragStep) *progFused {
 	switch {
+	case rag != nil && ragFew(len(rag.pos)):
+		return &l.progRagFew[len(rag.pos)-2]
 	case rag != nil:
 		return &l.progRag
 	case R > 1:
@@ -74,8 +76,11 @@ func (g *devTier) ensureFusedLocked(l *layer, prog *devProgram, bs *blockScratch
 		fc.rows = 1
 	}
 	g.curLayer, g.genRag = l, rag != nil
+	if rag != nil && ragFew(len(rag.pos)) {
+		g.genRagLive = len(rag.pos)
+	}
 	g.genProgram(fc.prog, bs, fc.rows)
-	g.curLayer, g.genRag = nil, false
+	g.curLayer, g.genRag, g.genRagLive = nil, false, 0
 }
 
 // ensureOrders builds the head-major orders block l's variant for R rows
@@ -103,3 +108,11 @@ func (g *devTier) ensureFused(lo, hi, R int, bs *blockScratch, rag *ragStep) {
 		}
 	}
 }
+
+// ragGroupTok is the widest ragged step whose matvecs carry every live row
+// in one thread: its dot products grow with the step, and past four rows the
+// tiled form is faster (gpu-kernels.md, "Measurements once cited in
+// jit/gpu/tier's comments").
+const ragGroupTok = 4
+
+func ragFew(n int) bool { return n >= 2 && n <= ragGroupTok }

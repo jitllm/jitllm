@@ -194,6 +194,8 @@ const (
 	NMMAGet
 	// NThread is the thread's number in the grid, unclamped.
 	NThread
+	// NLocal is the thread's number in its workgroup.
+	NLocal
 )
 
 // HintKind is what a hint states.
@@ -362,6 +364,11 @@ type Schedule struct {
 	// segment's stores write their own plane of Rows*Width further on, for
 	// a group that sums the planes (a matvec's k split).
 	Split int
+	// GroupSplit, under Split, puts a row's segments in one workgroup of
+	// Group threads (Group/Split rows a workgroup, the row fastest, the
+	// segment the thread over them): the partials meet in a workgroup array
+	// (GroupFold) and every row's tokens are one thread's (Tile is Rows).
+	GroupSplit bool
 	// MMA, under Flat, runs the group a warp a tile of MT*16 elements by
 	// NT*8 rows on the target's int8 matrix instruction (ir.OpMMA): a lane
 	// holds elements g, g+8 of each 16 and rows 2t, 2t+1 of each 8 (g its
@@ -402,7 +409,7 @@ type Key struct {
 // Encode is the group's structure and schedule as integers.
 func (g *Row) Encode(s Schedule) []uint32 {
 	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs)), b2u(s.Flat), uint32(s.Tile), uint32(s.TileCols), uint32(s.Split),
-		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes), uint32(s.Lanes), b2u(s.WorkRow), uint32(s.RowStride), uint32(s.ColStride), b2u(s.LaneLoops), uint32(s.Block), b2u(s.GroupRows)}
+		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes), uint32(s.Lanes), b2u(s.WorkRow), uint32(s.RowStride), uint32(s.ColStride), b2u(s.LaneLoops), uint32(s.Block), b2u(s.GroupRows), b2u(s.GroupSplit)}
 	for _, b := range g.Bufs {
 		e = append(e, uint32(b.Kind), uint32(b.N), uint32(b.Of), b2u(b.Over))
 	}
@@ -943,7 +950,7 @@ func (g *Row) colDeps() []bool {
 			}
 			x := false
 			switch nd.Kind {
-			case NColumn, NColOff, NWrite, NBarrier, NSubgroup, NThread:
+			case NColumn, NColOff, NWrite, NBarrier, NSubgroup, NThread, NLocal:
 				x = true
 			case NLoad:
 				if !nd.Indexed {
@@ -1190,6 +1197,21 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				flatIdx, r = b.And(ir.U32, flat, u(L-1)), b.Min(ir.U32, b.Div(ir.U32, flat, u(L)), u(g.Rows-1))
 			}
 			flatRaw = flat
+			width = u(g.Width)
+			rowBase = b.Mul(ir.U32, r, width)
+		} else if s.GroupSplit {
+			u := func(n int) ir.Value { return b.Const(ir.U32, int64(n)) }
+			rpg := G / split
+			if split < 2 || G%split != 0 || g.Width%rpg != 0 || tr != g.Rows || tc > 1 || g.HasLive || len(g.Loops) == 0 || g.Loops[0]%split != 0 {
+				return nil, fmt.Errorf("compose: a split of %d in a workgroup of %d over %dx%d", split, G, g.Rows, g.Width)
+			}
+			tid := b.TID()
+			local := b.Rem(ir.U32, tid, u(rpg))
+			seg = b.Div(ir.U32, tid, u(rpg))
+			segTrip = g.Loops[0] / split
+			flatIdx = b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), u(rpg)), local), u(g.Width-1))
+			r = u(0)
+			flatRaw, rawRow, rawCol = flatIdx, r, flatIdx
 			width = u(g.Width)
 			rowBase = b.Mul(ir.U32, r, width)
 		} else {
@@ -1842,6 +1864,8 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			v = b.SubgroupIndex()
 		case NThread:
 			v = b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
+		case NLocal:
+			v = b.TID()
 		case NMMA:
 			na, nb, _ := nd.MMA.Frags()
 			args := g.Frags[nd.At]
@@ -2030,7 +2054,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			default:
 				at = b.Add(ir.U32, base, col)
 			}
-			if seg != 0 {
+			if seg != 0 && !s.GroupSplit {
 				at = b.Add(ir.U32, at, b.Mul(ir.U32, seg, b.Const(ir.U32, int64(g.Rows*g.Width))))
 			}
 			if off != 0 {
@@ -2062,26 +2086,29 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				later[st.Ix] = later[st.Ix] || ndPhase[st.Ix] < stPhase[j]
 			}
 		}
-		for _, e := range outs {
-			base, col := rowBase, flatIdx
-			if e.base != 0 {
-				base, col = e.base, e.col
-			}
-			// The stores phase by phase, a barrier after a phase that stored
-			// into a workgroup array. A loop whose body stores runs where its
-			// first store's phase comes, unless what reads its values ran it.
-			ran := make([]bool, len(g.Loops))
-			last := 0
-			for _, p := range stPhase {
-				last = max(last, p)
-			}
-			for p := 0; p <= last; p++ {
-				shared := false
+		// The stores phase by phase, every env's, a barrier after a phase
+		// that stored into a workgroup array. A loop whose body stores runs
+		// where its first store's phase comes, unless what reads its values
+		// ran it.
+		last := 0
+		for _, p := range stPhase {
+			last = max(last, p)
+		}
+		ranAll := make([][]bool, len(outs))
+		for i := range ranAll {
+			ranAll[i] = make([]bool, len(g.Loops))
+		}
+		for p := 0; p <= last; p++ {
+			for ei, e := range outs {
+				base, col := rowBase, flatIdx
+				if e.base != 0 {
+					base, col = e.base, e.col
+				}
+				ran := ranAll[ei]
 				for j, st := range g.Stores {
 					if stPhase[j] != p {
 						continue
 					}
-					shared = shared || g.shared(st.Buf)
 					c := g.storeLoop(st)
 					if c < 0 {
 						emitStore(st, e, base, col)
@@ -2111,8 +2138,16 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 							elem(i, col, e)
 						}
 					}
-					b.Barrier()
 				}
+			}
+			if p < last {
+				b.Barrier()
+			}
+		}
+		for _, e := range outs {
+			col := flatIdx
+			if e.base != 0 {
+				col = e.col
 			}
 			for _, n := range g.Effects {
 				elem(n, col, e)
@@ -2360,7 +2395,7 @@ func (g *Row) typeOf(n int) ir.Type {
 	nd := g.Nodes[n]
 	switch nd.Kind {
 	case NColumn, NRowIdx, NUConst, NIter, NSegment, NColBase, NColOff, NRowBase, NRowOff, NRowTile, NColTile,
-		NWrite, NBarrier, NSubgroup, NThread:
+		NWrite, NBarrier, NSubgroup, NThread, NLocal:
 		return ir.U32
 	case NMMA:
 		return nd.MMA.Elem()

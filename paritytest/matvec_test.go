@@ -273,3 +273,43 @@ func TestGroupedMatVecIsMains(t *testing.T) {
 		}
 	}
 }
+
+// TestGroupMatVecIsMains holds the composer's matvec over a ragged step's
+// few tokens -- every token one thread's, decode's split reduced in the
+// workgroup -- to main's grouped matvec over a scratch of eight rows.
+func TestGroupMatVecIsMains(t *testing.T) {
+	for _, q := range []format{{kernels.Q8_0, mainkernels.Q8_0}, {kernels.TQ2, mainkernels.TQ2}} {
+		for _, rk := range [][2]int{{256, 256}, {128, 512}} {
+			for _, sp := range []int{1, 2, 8} {
+				for _, ntok := range []int{2, 3, 4} {
+					for _, epi := range []int{0, 1, 2} {
+						name := fmt.Sprintf("%v_%dx%d_s%d_t%dof8_epi%d", q.c, rk[0], rk[1], sp, ntok, epi)
+						t.Run(name, func(t *testing.T) {
+							mk, err := mainkernels.MatVec(mainkernels.MatVecShape{T: q.m, K: rk[1], Rows: rk[0], NTok: ntok, Tok: ntok, ActRows: 8,
+								Split: sp, GroupSplit: sp > 1, Bias: epi == 1, BiasRows: epi == 1, Gate: epi == 2, GateAct: mainkernels.ActSiLU})
+							if err != nil {
+								t.Fatal(err)
+							}
+							g := &compose.Row{Width: rk[0], Rows: ntok}
+							w := compose.MatVecWeight{T: q.c, K: rk[1], Rows: rk[0], QS: g.Buf(compose.BufU32), D: g.Buf(compose.BufU32), SC: -1}
+							a := compose.MatVecOperand{Toks: 8, A: g.Buf(compose.BufU32), AX: g.Buf(compose.BufRow)}
+							v, err := g.MatVec(w, a)
+							if err != nil {
+								t.Fatal(err)
+							}
+							switch epi {
+							case 1:
+								v = g.Bin(compose.OpAdd, v, g.Load(g.Buf(compose.BufRow)))
+							case 2:
+								gate := g.Add(compose.Node{Kind: compose.NUnary, Op: compose.OpAct, Act: kernels.ActSiLU, A: g.Load(g.Buf(compose.BufRow))})
+								v = g.Bin(compose.OpMul, gate, v)
+							}
+							g.Store(g.Buf(compose.BufOut), v)
+							same(t, name, []*ir.Kernel{mk}, plannedAll(t, g, compose.Facts{Target: sm70, Step: compose.StepRagged, RagGroup: true, DecodeSplit: sp}))
+						})
+					}
+				}
+			}
+		}
+	}
+}

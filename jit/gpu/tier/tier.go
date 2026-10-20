@@ -2047,6 +2047,9 @@ type devShared struct {
 	// genRag says the program being formed is a ragged step's (its matvecs
 	// take the ragged schedule).
 	genRag bool
+	// genRagLive is the ragged step's live rows where its matvecs carry
+	// them all in one thread (ragFew), else 0.
+	genRagLive int
 	conv   convScratch
 	// dh is Clef's decision head on this device (dechead.go), and ClefHeads
 	// how many requests it has answered.

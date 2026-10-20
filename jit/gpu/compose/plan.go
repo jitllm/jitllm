@@ -66,6 +66,10 @@ type Facts struct {
 	DecodeSplit, DecodeRowt int
 	// Over a ragged step: tokens and rows a thread, and the k split.
 	RagTok, RagRowT, RagSplit int
+	// RagGroup runs a ragged step's few tokens in one thread at decode's
+	// split, reduced in the workgroup (Schedule.GroupSplit) where the split
+	// and the rows allow it.
+	RagGroup bool
 	// The warp tile of the int8 matrix instruction: tiles of 16 elements
 	// and of 8 rows a warp; NoMMA, the caller's refusal of the instruction.
 	MMAMT, MMANT int
@@ -180,6 +184,13 @@ func (g *Row) PlanAt(s Schedule) ([]Planned, error) {
 	}
 	if s.Split <= 1 {
 		return []Planned{{G: g, S: s, Bufs: all, Threads: threads}}, nil
+	}
+	if s.GroupSplit {
+		r, err := g.GroupFold(s.Split, s.Group)
+		if err != nil {
+			return nil, err
+		}
+		return []Planned{{G: r, S: s, Bufs: all, Threads: g.Width / (s.Group / s.Split) * s.Group}}, nil
 	}
 	first, second, b1, b2, err := g.SplitFold(s.Split)
 	if err != nil {
@@ -316,6 +327,18 @@ func (g *Row) contractSchedule(f Facts) Schedule {
 		}
 		s.MMA, s.MT, s.NT = true, mt, nt
 		return s
+	}
+	if f.Step == StepRagged && f.RagGroup {
+		split := max(f.DecodeSplit, 1)
+		gw := min(max(32*split, 128), 1024)
+		switch {
+		case split == 1:
+			s.Tile = g.Rows
+			return s
+		case trips%split == 0 && gw%split == 0 && g.Width%(gw/split) == 0:
+			s.Group, s.Tile, s.Split, s.GroupSplit = gw, g.Rows, split, true
+			return s
+		}
 	}
 	var tok, rowt, split int
 	switch {

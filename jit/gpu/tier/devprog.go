@@ -2707,7 +2707,7 @@ func (g *GPU) BlockProgram(li int) (prog, why string) {
 		return "", l.progWhy
 	}
 	var out []string
-	for _, f := range [3]progFused{l.progOne, l.progRows, l.progRag} {
+	for _, f := range append([]progFused{l.progOne, l.progRows, l.progRag}, l.progRagFew[:]...) {
 		if f.prog != nil {
 			head := "rewrites: " + f.took.names(d.rewrites)
 			if f.err != nil {

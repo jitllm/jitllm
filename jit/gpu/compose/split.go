@@ -139,3 +139,73 @@ func usesOperand(nd Node, p *int, base *Node) bool {
 	}
 	return false
 }
+
+// GroupFold is the in-group split (Schedule.GroupSplit) as a rewrite of g:
+// g's one store reads a fold over loop 0, each thread folds its segment,
+// every row's partial goes into a workgroup array of group places a row at
+// the thread's own place, and after the barrier the thread sums its row's
+// segments, rows-per-group places apart, and computes the rest of the
+// store's value from the sum.
+func (g *Row) GroupFold(ways, group int) (*Row, error) {
+	if len(g.Stores) != 1 || len(g.Loops) == 0 || g.Q8 != nil || ways < 2 || group%ways != 0 {
+		return nil, fmt.Errorf("compose: an in-group split of %d stores, %d loops, %d ways", len(g.Stores), len(g.Loops), ways)
+	}
+	st := g.Stores[0]
+	fold := -1
+	var find func(n int) bool
+	find = func(n int) bool {
+		nd := g.Nodes[n]
+		if nd.Kind == NFold && nd.At == 0 {
+			fold = n
+			return true
+		}
+		for _, o := range g.operands(n) {
+			if find(o) {
+				return true
+			}
+		}
+		return false
+	}
+	if st.Indexed || !find(st.Val) {
+		return nil, fmt.Errorf("compose: an in-group split of a store that reads no fold of loop 0")
+	}
+	r := g.clone()
+	r.Stores = nil
+	u, ub := r.UConst, r.UBin
+	rpg := group / ways
+	local := r.Add(Node{Kind: NLocal})
+	at := func(n int) int { return ub(OpAdd, n, ub(OpMul, r.RowIdx(), u(group))) }
+	sh := r.Shared(group*g.Rows, false)
+	r.StoreAt(sh, fold, at(local))
+	read := sh
+	own := ub(OpRem, local, u(rpg))
+	sum := r.LoadAt(read, at(own))
+	for sg := 1; sg < ways; sg++ {
+		sum = r.Bin(OpAdd, sum, r.LoadAt(read, ub(OpAdd, at(own), u(sg*rpg))))
+	}
+	memo := map[int]int{fold: sum}
+	var redo func(n int) int
+	redo = func(n int) int {
+		if x, ok := memo[n]; ok {
+			return x
+		}
+		nd := r.Nodes[n]
+		changed := false
+		for _, p := range []*int{&nd.A, &nd.B, &nd.C, &nd.Ix} {
+			if !usesOperand(nd, p, &nd) {
+				continue
+			}
+			if x := redo(*p); x != *p {
+				*p, changed = x, true
+			}
+		}
+		x := n
+		if changed {
+			x = r.Add(nd)
+		}
+		memo[n] = x
+		return x
+	}
+	r.Store(st.Buf, redo(st.Val))
+	return r, nil
+}
