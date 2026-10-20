@@ -2736,27 +2736,10 @@ func freeScratch(bs *blockScratch, g *devShared) {
 		delete(bs.ragLin, n)
 	}
 	seen := map[backend.Buf]bool{}
-	seenK := map[backend.Kernel]bool{}
 	v := reflect.ValueOf(bs).Elem()
 	bufType := reflect.TypeOf((*backend.Buf)(nil)).Elem()
-	kernType := reflect.TypeOf((*backend.Kernel)(nil)).Elem()
 	for i := 0; i < v.NumField(); i++ {
 		f := v.Field(i)
-		// Only top-level backend.Kernel fields are closed: those are compiled
-		// for this scratch and owned by it. Matvec kernels come from g.kerns,
-		// a device-wide cache shared by every scratch, and reach the scratch
-		// inside `mv` values, which this type filter skips by construction.
-		// Do not turn this into a recursive walk: that would close cached
-		// kernels still in use (a use-after-free).
-		if f.Type() == kernType && !f.IsNil() {
-			k, ok := reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).
-				Elem().Interface().(backend.Kernel)
-			if ok && k != nil && !seenK[k] {
-				seenK[k] = true
-				g.closeKern(k)
-			}
-			continue
-		}
 		if f.Type() != bufType || f.IsNil() {
 			continue
 		}

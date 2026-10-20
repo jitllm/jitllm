@@ -577,9 +577,12 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		// the head go as two calls.
 		return refuse("a head folded into %d blocks of %d streams", hi-lo, bs.p.Streams())
 	}
+	rag := g.rag
+	// Every block's kernels are formed whatever the step's head and inputs
+	// then refuse.
+	g.ensureFused(lo, hi, bs.rows, bs, rag)
 	// The head reads one residual vector and writes one logit row. A ragged
 	// step's head is the decode scratch's; the batched one has none.
-	rag := g.rag
 	hb := bs
 	// A chunk projecting every row (nn.Head.RowLogits) runs the ragged step's
 	// per-row head, which reads the resident head through the decode scratch.

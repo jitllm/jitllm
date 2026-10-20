@@ -1,9 +1,11 @@
 package tier
 
 import (
-	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"strings"
 
+	"github.com/jitllm/jitllm/jit/gpu/backend"
+
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -461,10 +463,16 @@ func rwQKV(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) b
 	return false
 }
 
+// ropeQKVFuses: every head turned whole on every layer, k and v the whole
+// cached row, nothing between the rotary and the history.
+func ropeQKVFuses(p *nn.LayerPlan) bool {
+	return !p.MLA() && p.DS4 == nil && p.NRot > 0 && !partialRotary(p) && !p.NoPosEnc && !p.NoPEGlobal &&
+		!p.RopeSplit && !p.QSA() && !p.MSA() && !p.QKNormPost && p.NKVHead*p.HeadDim == p.KVRow()
+}
+
 // rwRopeQKV: q's rotary and the history write, one paged launch.
 func rwRopeQKV(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
-	pk := bs.pkv
-	if pk == nil || pk.ropeQKV == nil || g.NoFuse || bs.copyQ != nil {
+	if bs.pkv == nil || g.NoFuse || !ropeQKVFuses(&bs.p) {
 		return false
 	}
 	for i, o := range p.ops {
@@ -566,7 +574,7 @@ func rwMatVecGate(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq
 
 // rwActQuant: act_mul and the quantize of its product, one launch.
 func rwActQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
-	if bs.quantAct == nil || g.NoOperandFuse {
+	if ungatedFFN(&bs.p) || bs.p.NFFN == 0 || g.NoOperandFuse {
 		return false
 	}
 	for i, o := range p.ops {
@@ -602,7 +610,7 @@ func rwAddNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, ns
 	if residScaled(&bs.p) {
 		return false // a scaled residual: the fused kernel carries no scale
 	}
-	if bs.addRmsQ == nil || bs.normVar != nil {
+	if lnBlock(&bs.p) {
 		return false
 	}
 	i, j, ok := addNorm(p)
@@ -621,7 +629,7 @@ func rwAddNorm(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq in
 	if residScaled(&bs.p) {
 		return false // a scaled residual: the fused kernel carries no scale
 	}
-	if bs.addRms == nil || bs.normVar != nil {
+	if lnBlock(&bs.p) {
 		return false
 	}
 	i, j, ok := addNorm(p)
@@ -635,7 +643,7 @@ func rwAddNorm(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq in
 
 // rwNormQuant: a norm and the quantize of its row, one launch.
 func rwNormQuant(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
-	if bs.rmsQ == nil || bs.normVar != nil {
+	if lnBlock(&bs.p) {
 		return false
 	}
 	for i, o := range p.ops {
@@ -728,7 +736,7 @@ func rwGate2(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int)
 // attnPro reports that the attention half's operand prologue may run: the
 // norm and quantize of the block input fold into what reads them.
 func attnPro(l *layer, bs *blockScratch, g *devTier) bool {
-	return g.actInOn() && l.nAttnB == nil && l.nAttn != nil && bs.normVar == nil && !g.TableSplit
+	return g.actInOn() && l.nAttnB == nil && l.nAttn != nil && !lnBlock(&bs.p) && !g.TableSplit
 }
 
 // normQuantBefore reports that ops i-2 and i-1 are a norm of role and the
@@ -823,7 +831,7 @@ func rwFFNIn(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int)
 		return false // a one-row variant
 	}
 	if !g.actInOn() || l.mvg.kernIn == nil || (l.mvu.gatedIn == nil && l.mvu.kernIn == nil) || l.mvg.bias != nil || l.mvu.bias != nil ||
-		l.nFFNB != nil || l.nFFN == nil || bs.normVar != nil || g.TableSplit && (l.mvg.alt != nil || l.mvu.alt != nil) {
+		l.nFFNB != nil || l.nFFN == nil || lnBlock(&bs.p) || g.TableSplit && (l.mvg.alt != nil || l.mvu.alt != nil) {
 		return false
 	}
 	gi, ui, ai := gateUp(p)

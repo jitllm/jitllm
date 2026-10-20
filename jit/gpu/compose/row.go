@@ -36,6 +36,10 @@ type Row struct {
 	// its element loop unrolled, its nodes' Column its element, and what it
 	// reads of the row's own elements read by NAt.
 	Stages []Stage
+	// Live, where HasLive, is the rows a flat group writes at run time: word
+	// LiveAt of buffer LiveBuf (BufU32). The rest keep what they hold.
+	HasLive         bool
+	LiveBuf, LiveAt int
 }
 
 // Stage is one further element space of a row group: its width and the
@@ -269,6 +273,9 @@ func (g *Row) Encode(s Schedule) []uint32 {
 	if q := g.Q8; q != nil {
 		e = append(e, uint32(q.Val), uint32(q.A), uint32(q.X), uint32(q.Window), uint32(q.Pad))
 	}
+	if g.HasLive {
+		e = append(e, 0x11E, uint32(g.LiveBuf), uint32(g.LiveAt))
+	}
 	for _, st := range g.Stages {
 		e = append(e, 0x57A6, uint32(st.Width), uint32(len(st.Stores)))
 		for _, x := range st.Stores {
@@ -395,6 +402,9 @@ func (g *Row) Check() error {
 			s.Indexed && (s.Ix < 0 || s.Ix >= len(g.Nodes)) {
 			return fmt.Errorf("compose: a store of node %d into buffer %d", s.Val, s.Buf)
 		}
+	}
+	if g.HasLive && (g.LiveBuf < 0 || g.LiveBuf >= len(g.Bufs) || g.Bufs[g.LiveBuf].Kind != BufU32 || g.LiveAt < 0) {
+		return fmt.Errorf("compose: a live row count in buffer %d", g.LiveBuf)
 	}
 	for _, st := range g.Stages {
 		if st.Width < 1 {
@@ -838,7 +848,17 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			mma = &mmaTile{mt: mt, nt: nt, word: lt, g: lg, colBase: colBase, tokBase: tokBase,
 				tok0: b.Add(ir.U32, tokBase, b.Mul(ir.U32, lt, u(2)))}
 		} else {
-			flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(g.Rows/tr*cols*split-1)))
+			if g.HasLive {
+				if tr*tc > 1 || split > 1 {
+					return nil, fmt.Errorf("compose: live rows under a tile or a split")
+				}
+				live := b.Load(ir.U32, params[g.LiveBuf], b.Const(ir.U32, int64(g.LiveAt)), 0)
+				w := b.Const(ir.U32, int64(g.Width))
+				lim := b.Max(ir.U32, w, b.Min(ir.U32, b.Mul(ir.U32, live, w), b.Const(ir.U32, int64(g.Rows*g.Width))))
+				flat = b.Min(ir.U32, flat, b.Sub(ir.U32, lim, b.Const(ir.U32, 1)))
+			} else {
+				flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(g.Rows/tr*cols*split-1)))
+			}
 			flatRaw = flat
 			if split > 1 {
 				// The segment is the slowest: a plane of Rows*Width a segment.
@@ -852,8 +872,12 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			if tc > 1 {
 				tcols = b.Const(ir.U32, int64(cols))
 			}
-			flatIdx = b.Rem(ir.U32, flat, tcols)
-			r = b.Div(ir.U32, flat, tcols)
+			if g.Rows/tr == 1 {
+				flatIdx, r = flat, b.Const(ir.U32, 0)
+			} else {
+				flatIdx = b.Rem(ir.U32, flat, tcols)
+				r = b.Div(ir.U32, flat, tcols)
+			}
 			if tc > 1 {
 				flatIdx = b.Mul(ir.U32, flatIdx, b.Const(ir.U32, int64(tc)))
 			}
@@ -1335,11 +1359,7 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			case OpSqrt:
 				v = b.Sqrt(a)
 			case OpFloat:
-				if g.typeOf(nd.A) == ir.I32 {
-					v = b.CvtF32(a)
-				} else {
-					v = b.CvtF32(b.Bitcast(ir.I32, a))
-				}
+				v = b.CvtF32(a)
 			case OpHalf:
 				v = b.CvtF16H(a)
 			case OpBits:

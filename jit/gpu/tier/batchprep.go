@@ -113,8 +113,8 @@ func scoreStride(p *nn.LayerPlan, rows int) int {
 // weight traffic is set by Tok alone.
 const batchWidth = nn.MaxDevicePrefillChunk
 
-// prepBatch builds the batched scratch and the batched twin of every matvec,
-// on the first prompt that asks for one rather than at PrepLayer time.
+// prepBatch builds the batched scratch on the first prompt that asks for one
+// rather than at PrepLayer time.
 //
 // It is lazy because the scratch costs VRAM (mostly score buffers) that a
 // decode-only process never uses, and separate because Alloc and Compile cannot
@@ -160,131 +160,6 @@ func (g *devTier) prepBatch(width int) bool {
 			return false
 		}
 	}
-	defer g.scratchWin().close()
-	// The layer walk is not guarded by the scratch: ReleaseLayers deletes
-	// blocks, so a moved seam brings back blocks whose batched kernels are not
-	// compiled, and finding that mid-submission (where Compile is not allowed)
-	// would refuse every later batched prompt. The compiled kernels live in
-	// g.kerns keyed by shape, which holds every width; batKern is then a map
-	// lookup, safe inside a Session.
-	tok := g.bbs[width].tok
-	bb := g.bbs[width]
-	// The walk is ~25 kernel lookups a block, every prompt (0.9 ms of a
-	// 512-row Qwen3-0.6B prompt on a Volta-class card); it only has something
-	// to find after a block was placed or released.
-	if bb.walked == g.layerGen+1 {
-		return true
-	}
-	for _, l := range g.layers {
-		if l == nil || !l.ok {
-			continue
-		}
-		// Only this scratch set's blocks: another set's are prepared with its
-		// own batched scratch (gemma4.go), which this one may not be able to
-		// run -- MiniMax-M3's dense lead set has no mixture scratch for the
-		// blocks after it.
-		if g.geoUsed && l.geo != g.geoCur {
-			continue
-		}
-		// A recurrent block batches through GatedDeltaScan (or the fused rule,
-		// or Mamba-1's scan); a scratch that could not build one refuses here.
-		if l.linear && !bb.rec.ShortConv && bb.deltaScan == nil && bb.deltaFused == nil && bb.m1Scan == nil {
-			g.LastErr = "tier: batched prefill: no chunked delta rule for a recurrent block"
-			return false
-		}
-		// Every matvec a batched block can launch (prepLayer's list), or the rest
-		// would compile lazily inside the session.
-		for _, m := range []*mv{&l.mvq, &l.mvk, &l.mvv, &l.mvo, &l.mvg, &l.mvu, &l.mvd,
-			&l.mvsg, &l.mvsu, &l.mvsd, &l.mvSG, &l.mvBA, &l.mvSO,
-			&l.mvQA, &l.mvQB, &l.mvKVA, &l.mvKB, &l.mvVB,
-			&l.mvFA, &l.mvFB, &l.mvGA, &l.mvGB, &l.mvpg, &l.mvpp,
-			&l.mvIQ, &l.mvIK, &l.mvIW, &l.mvLL, &l.mvLR, &l.mvSI, &l.mvMQ,
-			&l.mvCKV, &l.mvCG, &l.mvICKV, &l.mvICG,
-			&l.mvHAD, &l.mvHAU, &l.mvHAI, &l.mvHFD, &l.mvHFU, &l.mvHFI, &l.mvNGK, &l.mvNGV} {
-			if m.kern == nil {
-				continue
-			}
-			if m.slots > 0 && l.mla && (m == &l.mvKB || m == &l.mvVB) {
-				// MLA's absorb banks run grouped with the head as the expert
-				// (mlabatch.go): every head's run is the whole chunk. A float
-				// bank reads the float activation (emitMLARows' grouped).
-				if bb.mlab == nil {
-					return false
-				}
-				if _, ok := g.groupedMV(*m, bb.mlab.nh, bb.mlab.nh*width); !ok {
-					return false
-				}
-				continue
-			}
-			if m.slots > 0 {
-				// A mixture runs grouped (moegroup.go): a streamed bank holds
-				// only the selection.
-				mg := bb.mg
-				// A hybrid block routes the rows on the device and runs their
-				// experts on the host, or, with an expert cache, the cached ones
-				// on the card through the grouped kernels over the cache
-				// (emitGroupedMoE, streamBank.splitRows): built here for every
-				// hybrid block, since a cache may be sized after placement. A
-				// kernel the shape refuses leaves that block's rows on the host.
-				hybrid := mg != nil && l.stream != nil && l.stream.hybrid
-				if hybrid {
-					if mg.volta && !kernels.IsFloat(m.q) {
-						bias, nsrc := moeVoltaArgs(l, m, mg)
-						g.voltaGroupedMV(*m, mg.nExp, mg.p, mg.unit, bias, nsrc)
-					} else if !mg.volta && !kernels.IsFloat(m.q) {
-						g.groupedMV(*m, mg.nExp, mg.p)
-					}
-					continue
-				}
-				if mg == nil || l.stream != nil {
-					// Named either way: a refusal with a stale LastErr reads as
-					// some other block's failure.
-					g.LastErr = "tier: batched mixture: a streamed bank"
-					if mg == nil {
-						g.LastErr = fmt.Sprintf("tier: batched mixture: a block has experts and this "+
-							"%d-row scratch has no mixture set", width)
-					}
-					return false
-				}
-				// A float bank has no scales to quantize against: the grouped
-				// matvec reads the sorted float rows (moeFloatHalf), on
-				// sm_70 too, where the tensor-core twin takes no float.
-				if kernels.IsFloat(m.q) {
-					if !g.moeFloatHalf(mg, &bb.p) {
-						return false
-					}
-					if _, ok := g.groupedMV(*m, mg.nExp, mg.p); !ok {
-						return false
-					}
-					continue
-				}
-				// On sm_70 the tensor-core twin or nothing: the scratch holds no
-				// dp4a half there (newMoeGroup), so a bank without a Volta form
-				// refuses the batch and the chunk goes row by row.
-				if mg.volta {
-					bias, nsrc := moeVoltaArgs(l, m, mg)
-					if _, ok := g.voltaGroupedMV(*m, mg.nExp, mg.p, mg.unit, bias, nsrc); !ok {
-						return false
-					}
-					continue
-				}
-				if _, ok := g.groupedMV(*m, mg.nExp, mg.p); !ok {
-					return false
-				}
-				continue
-			}
-			if _, ok := g.batchMV(*m, width, tok); !ok {
-				return false
-			}
-		}
-	}
-	// DeepSeek V4's grouped output at this width (ds4.go).
-	for _, l := range g.layers {
-		if l != nil && l.ok && !g.ds4Twins(l, width) {
-			return false
-		}
-	}
-	bb.walked = g.layerGen + 1
 	return true
 }
 

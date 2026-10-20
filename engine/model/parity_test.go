@@ -24,10 +24,11 @@ import (
 var (
 	parityProfiles = flag.String("parity-profiles", "cuda-sm70",
 		"the recorder profiles TestComposerParity compares on")
-	parityModel   = flag.String("parity-model", "", "TestComposerParity on this fixture alone, printing what it misses")
-	parityByShape = flag.Bool("parity-by-shape", false, "TestComposerParity groups what is missing by main's kernel name with its sizes elided")
-	parityExplain = flag.Bool("parity-explain", false, "with -parity-kernel, every composed instruction written out")
-	parityKernel  = flag.String("parity-kernel", "", "the main kernel name prefix to print: with -parity-model what it misses, else every model's kernels of that name")
+	parityModel    = flag.String("parity-model", "", "TestComposerParity on this fixture alone, printing what it misses")
+	parityByShape  = flag.Bool("parity-by-shape", false, "TestComposerParity groups what is missing by main's kernel name with its sizes elided")
+	parityExplain  = flag.Bool("parity-explain", false, "with -parity-kernel, every composed instruction written out")
+	parityPerModel = flag.Bool("parity-per-model", false, "TestComposerParity logs each model's instructions matched")
+	parityKernel   = flag.String("parity-kernel", "", "the main kernel name prefix to print: with -parity-model what it misses, else every model's kernels of that name")
 )
 
 // TestComposerParity holds what the composer emits to what main emits, with
@@ -114,6 +115,9 @@ func TestComposerParity(t *testing.T) {
 			}
 			if r.compErr != nil && *parityModel != "" {
 				t.Logf("%s on %s, composer: %v", r.name, pn, r.compErr)
+			}
+			if *parityPerModel {
+				t.Logf("model %s %d %d", r.name, r.ms, r.mt)
 			}
 			if *parityModel == "" && *parityKernel != "" {
 				for _, k := range r.main {
@@ -204,7 +208,19 @@ func parityKernels(t *testing.T, prof recorder.Profile, path string, main bool) 
 	if err := s.SetDevice(g); err != nil {
 		return nil, err
 	}
+	if !main && *parityPerModel {
+		defer func() {
+			if st := g.(*tier.GPU).Stats(); st.LastErr != "" || st.DeclineWhy != "" {
+				t.Logf("%s composer: last %q, declined %q", filepath.Base(path), st.LastErr, st.DeclineWhy)
+			}
+		}()
+	}
 	lg, err := s.Prefill(m.Vocab.Encode("Hello there", true))
+	if !main && *parityPerModel {
+		if st := g.(*tier.GPU).Stats(); st.LastErr != "" {
+			t.Logf("%s composer after the prefill: %q", filepath.Base(path), st.LastErr)
+		}
+	}
 	tok := int32(1)
 	if err == nil {
 		tok = Greedy(lg)

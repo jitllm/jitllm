@@ -592,7 +592,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				// A paged block whose call lacks its plan, or a causal block
 				// with no paged history.
 				why = progNotPaged
-			case l.prog.ropes && (bs.ropeQ == nil || l.noRope):
+			case l.prog.ropes && l.noRope:
 				why = progRotary
 			case g.TableSplit:
 				why = progTableSplit
