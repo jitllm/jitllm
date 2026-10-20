@@ -3,6 +3,7 @@ package graph
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"math/rand"
 	"testing"
 
@@ -78,6 +79,8 @@ func evalPrims(t *testing.T, g *Graph, in map[ValueID][]float32, w map[jlm.Role]
 					if a < at(ops[1], i) {
 						out[i] = 1
 					}
+				case MapFma:
+					out[i] = fma32(a, at(ops[1], i), at(ops[2], i))
 				default:
 					t.Fatalf("map %s", o.Attr.Fn)
 				}
@@ -145,6 +148,34 @@ func evalPrims(t *testing.T, g *Graph, in map[ValueID][]float32, w map[jlm.Role]
 			x, ix := v[o.In[0]], v[o.In[1]]
 			for j := range out {
 				out[j] = x[int(ix[j])]
+			}
+		case OpSlice:
+			// Of In[0], or of the bound vector where there is no input.
+			var x []float32
+			if len(o.In) > 0 {
+				x = v[o.In[0]]
+			} else {
+				x = w[o.Weight[0].Role]
+			}
+			a := o.Attr
+			if a.HeadDim == 0 {
+				copy(out, x[a.Offset:a.Offset+a.Width])
+				break
+			}
+			for h := 0; h < len(x)/a.HeadDim; h++ {
+				copy(out[h*a.Width:], x[h*a.HeadDim+a.Offset:h*a.HeadDim+a.Offset+a.Width])
+			}
+		case OpConcat:
+			off := 0
+			for _, id := range o.In {
+				off += copy(out[off:], v[id])
+			}
+		case OpNorm:
+			oracle.RMSNorm32(out, v[o.In[0]], w[o.Weight[0].Role], o.Attr.Eps)
+		case OpActMul:
+			g, up := v[o.In[0]], v[o.In[1]]
+			for i := range out {
+				out[i] = float32(refAct(t, o.Attr.Act, float64(g[i]))) * up[i]
 			}
 		case OpCombine:
 			continue
@@ -358,4 +389,34 @@ func TestASparseMixerRouteStaysWhole(t *testing.T) {
 	if d.Ops[0].Kind != OpRoute {
 		t.Fatalf("a sparsemixer route was decomposed into %s", d.Ops[0].Kind)
 	}
+}
+
+// fma32 is a*b+c with one rounding, exactly: the product and the sum held at
+// a precision no float32 pair can exceed, then rounded once.
+func fma32(a, b, c float32) float32 {
+	if isNonFinite(a) || isNonFinite(b) || isNonFinite(c) {
+		return a*b + c
+	}
+	z := new(big.Float).SetPrec(300).SetFloat64(float64(a))
+	z.Mul(z, new(big.Float).SetPrec(300).SetFloat64(float64(b)))
+	z.Add(z, new(big.Float).SetPrec(300).SetFloat64(float64(c)))
+	f, _ := z.Float32()
+	return f
+}
+
+func isNonFinite(x float32) bool { return math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) }
+
+// refAct is the activation an OpActMul applies to its first input, in float64.
+func refAct(t *testing.T, a Act, x float64) float64 {
+	t.Helper()
+	switch a {
+	case ActSiLU:
+		return oracle.SiLU(x)
+	case ActGELUTanh:
+		return oracle.GELUTanh(x)
+	case ActGELUErf:
+		return oracle.GELUErf(x)
+	}
+	t.Fatalf("act %d", a)
+	return 0
 }

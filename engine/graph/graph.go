@@ -88,7 +88,8 @@ const (
 	OpClamp
 	// OpSlice is Width elements of In[0] from Offset: of each head of
 	// HeadDim where HeadDim is set (Out is the heads' slices in head
-	// order), of the whole row where it is 0.
+	// order), of the whole row where it is 0. An op with no input slices
+	// the bound vector Weight[0] instead (a stored table's row).
 	OpSlice
 	// OpLatentAppend writes a latent row as this position's row of the
 	// block's KV (MLA): the cached key is the latent In[0] then the shared
@@ -224,10 +225,15 @@ const (
 	// whole row where Span is 0), largest first, equal values to the lower
 	// index (u32): OpTopK's order, for every element. A primitive.
 	OpRank
+	// OpConcat is its inputs joined end to end, In[0] first: Out[0] the
+	// sum of their widths. The same input twice repeats it (a row tiled
+	// across the groups of a wider operand, which an OpMap's broadcast,
+	// repeating each element, cannot express). A primitive.
+	OpConcat
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "concat"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -325,6 +331,10 @@ const (
 	MapSqrt                 // sqrt(a)
 	MapWhere                // b where a > 0, else c
 	MapLess                 // 1 where a < b, else 0
+
+	// MapFma is a * b + c with a single rounding (the fused multiply-add
+	// the host's accumulate kernels use).
+	MapFma
 )
 
 // Arity is how many operands f takes.
@@ -332,7 +342,7 @@ func (f MapFn) Arity() int {
 	switch f {
 	case MapExp, MapSigmoid, MapSoftplus, MapSqrt:
 		return 1
-	case MapWhere:
+	case MapWhere, MapFma:
 		return 3
 	case MapAdd, MapSub, MapMul, MapDiv, MapMax, MapMin, MapLess:
 		return 2
@@ -340,7 +350,7 @@ func (f MapFn) Arity() int {
 	return 0
 }
 
-var mapFnNames = [...]string{"?", "add", "sub", "mul", "div", "max", "min", "exp", "sigmoid", "softplus", "sqrt", "where", "less"}
+var mapFnNames = [...]string{"?", "add", "sub", "mul", "div", "max", "min", "exp", "sigmoid", "softplus", "sqrt", "where", "less", "fma"}
 
 func (f MapFn) String() string {
 	if int(f) < len(mapFnNames) {
