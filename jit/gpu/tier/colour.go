@@ -56,7 +56,9 @@ func colourVals(p *devProgram) ([numVals]int, error) {
 		}
 	}
 	for v, s := range p.slots {
-		if s == slotAuto {
+		// A value no op reads or writes any more (a rewrite folded it away)
+		// has nothing to colour.
+		if s == slotAuto && (first[v] >= 0 || last[v] >= 0) {
 			return need, fmt.Errorf("device program: value %s is read and never written", p.names[v])
 		}
 	}

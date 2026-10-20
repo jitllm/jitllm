@@ -51,7 +51,7 @@ func (g *devTier) lanesRoute(r compose.Route) bool {
 func (g *devTier) genRoute(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
 	o.Why = whyNoForm
 	l := g.curLayer
-	if l == nil || g.genRag || rows != 1 && (o.Kind == dkRouterBias || o.Kind == dkGroupByExpert) {
+	if l == nil || rows != 1 && (o.Kind == dkRouterBias || o.Kind == dkGroupByExpert) {
 		return nil
 	}
 	launch := func(rb *rowBuild, f compose.Facts) []genLaunch {
