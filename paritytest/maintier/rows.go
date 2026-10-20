@@ -253,7 +253,7 @@ func (g *devTier) prepRagged(bs *blockScratch, rowsHead *nn.Head, n int) bool {
 		// launches serve) where a shape refuses.
 		g.groupKern(l.mvo, n, bs.rows, groupRes, 0)
 		g.groupKern(l.mvd, n, bs.rows, groupRes, 0)
-		g.groupKern(l.mvu, n, bs.rows, groupGate, bs.p.Act)
+		g.groupKern(l.mvu, n, bs.rows, groupGate, kernels.ActKind(bs.p.Act))
 		g.groupQKV(l, n, bs.rows)
 	}
 	return g.prepRowsHead(bs, rowsHead, n)
@@ -1295,8 +1295,8 @@ func (g *devTier) actF16For(bs *blockScratch, m mv, ntok int) (act, conv backend
 	if (m.k/2)%128 == 0 && ntok <= bs.rows {
 		kn = bs.rows
 	}
-	k := g.fusedKern(ragKey{kind: "actmulf16t", q: bm.q, k: m.k, ntok: kn, act: bs.p.Act}, func() (*ir.Kernel, error) {
-		return kernels.ActMulF16T(bm.q, kn, m.k, bs.p.Act)
+	k := g.fusedKern(ragKey{kind: "actmulf16t", q: bm.q, k: m.k, ntok: kn, act: kernels.ActKind(bs.p.Act)}, func() (*ir.Kernel, error) {
+		return kernels.ActMulF16T(bm.q, kn, m.k, kernels.ActKind(bs.p.Act))
 	})
 	if k == nil {
 		return nil, nil, 0

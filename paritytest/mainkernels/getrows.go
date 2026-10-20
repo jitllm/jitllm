@@ -24,7 +24,7 @@ import (
 // in groups of 128; the grid is clamped to its last item, which only
 // re-stores the same values.
 func GetRowsPacked(q Quant, nrows, k, ntok int, scale float32) (*ir.Kernel, error) {
-	qi := infoOf(q)
+	qi := q.info()
 	switch {
 	case qi.float > 0:
 		return nil, fmt.Errorf("kernels: GetRowsPacked: %v is a float format", q)
@@ -194,7 +194,7 @@ func GetRowsPacked(q Quant, nrows, k, ntok int, scale float32) (*ir.Kernel, erro
 }
 
 // GetRowsThreads is how many threads GetRowsPacked launches.
-func GetRowsThreads(q Quant, k, ntok int) int { return ntok * (k / infoOf(q).sub) }
+func GetRowsThreads(q Quant, k, ntok int) int { return ntok * (k / q.info().sub) }
 
 // CopySpan copies n floats from src at a runtime offset: dst[i] = src[off[0]+i].
 // It moves one row of a chunk's residual into a one-row scratch -- the last

@@ -115,6 +115,16 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 	}
 	s := g.contractSchedule(f)
 	s.Target = f.Target
+	return g.PlanAt(s)
+}
+
+// PlanAt is the kernels a contraction runs as under schedule s: s itself,
+// or under a split the rewrite's two groups (SplitFold).
+func (g *Row) PlanAt(s Schedule) ([]Planned, error) {
+	all := make([]int, len(g.Bufs))
+	for i := range all {
+		all[i] = i
+	}
 	threads := g.Rows / max(s.Tile, 1) * (g.Width / max(s.TileCols, 1))
 	if s.MMA {
 		threads = g.Width / (16 * s.MT) * (g.Rows / (8 * s.NT)) * ir.SubgroupLanes
@@ -128,7 +138,7 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 	}
 	return []Planned{
 		{G: first, S: s, Bufs: b1, Threads: threads * s.Split},
-		{G: second, S: Schedule{Group: s.Group, Flat: true, Target: f.Target}, Bufs: b2, Threads: g.Rows * g.Width},
+		{G: second, S: Schedule{Group: s.Group, Flat: true, Target: s.Target}, Bufs: b2, Threads: g.Rows * g.Width},
 	}, nil
 }
 

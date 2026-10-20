@@ -52,7 +52,7 @@ func (g *devTier) fuseActIn(l *layer) {
 	// whatever the verdict, so a forced recipe and the trial both find it.
 	if mu := l.mvu; mu.gate2 != nil && l.nFFN != nil && !ungatedFFN(p) {
 		s := kernels.MatVecShape{Center: g.center, T: mu.q, K: mu.k, Rows: mu.rows, Split: mu.split,
-			GroupSplit: mu.group, Rowt: 1, Gate2: true, GateAct: p.Act, In: norm}
+			GroupSplit: mu.group, Rowt: 1, Gate2: true, GateAct: kernels.ActKind(p.Act), In: norm}
 		l.mvu.gate2In = g.inKernel(s)
 	}
 	// A site runs the prologue where the caller forced it (ActInSites) or
@@ -127,14 +127,14 @@ func (g *devTier) fuseActIn(l *layer) {
 	l.mvg.kernIn = g.inKernel(shape(l.mvg, norm))
 	if l.mvu.gated != nil {
 		s := shape(l.mvu, norm)
-		s.Rowt, s.Gate, s.GateAct = 1, true, p.Act
+		s.Rowt, s.Gate, s.GateAct = 1, true, kernels.ActKind(p.Act)
 		l.mvu.gatedIn = g.inKernel(s)
 	}
 	if l.mvu.gatedIn == nil && sites&actInDown != 0 {
 		// No gated up: up writes its row, and down forms act(gate)*up as it
 		// quantizes (QuantizeAct's arithmetic).
 		l.mvu.kernIn = g.inKernel(shape(l.mvu, norm))
-		if s, ok := res(l.mvd, kernels.ActIn{On: true, Gated: true, Act: p.Act, Window: win, Prefetch: pf}); ok {
+		if s, ok := res(l.mvd, kernels.ActIn{On: true, Gated: true, Act: kernels.ActKind(p.Act), Window: win, Prefetch: pf}); ok {
 			l.mvd.resActIn = g.inKernel(s)
 		}
 	}

@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
@@ -97,7 +95,7 @@ func MMAVoltaProbe() *ir.Kernel {
 // declined: these kernels multiply binary16 activations, which for a ternary
 // model is a different function.
 func Volta70OK(q Quant) bool {
-	return volta70Packed(q) && !infoOf(q).intAct
+	return volta70Packed(q) && !qtab[q].intAct
 }
 
 // GemmVoltaOK reports whether GemmVolta (and the ActF16T layout it reads)
@@ -108,7 +106,7 @@ func Volta70OK(q Quant) bool {
 // it loses bits as a subnormal), which no projection of a trained model
 // reaches -- and its sub-block takes the 8-bit formats' step order.
 func GemmVoltaOK(q Quant) bool {
-	return Volta70OK(q) || int(q) < kernels.Quants() && infoOf(q).float == 2
+	return Volta70OK(q) || int(q) < len(qtab) && qtab[q].float == 2
 }
 
 // byteOrder says a sub-block's m8n8k4 steps take consecutive elements
@@ -116,10 +114,10 @@ func GemmVoltaOK(q Quant) bool {
 func (qi qinfo) byteOrder() bool { return qi.bits == 8 || qi.float == 2 }
 
 func volta70Packed(q Quant) bool {
-	if int(q) >= kernels.Quants() {
+	if int(q) >= len(qtab) {
 		return false
 	}
-	qi := infoOf(q)
+	qi := qtab[q]
 	return qi.blockE != 0 && qi.float == 0 && (qi.codes == nil || qi.e8m0) &&
 		(qi.bits == 4 || (qi.bits == 8 && qi.hi == 0)) && DeviceWhyNot(q) == ""
 }
@@ -151,7 +149,7 @@ func ActF16(q Quant, ntok, k int) (*ir.Kernel, error) {
 	if !Volta70OK(q) {
 		return nil, fmt.Errorf("kernels: ActF16: %v has no Volta layout", q)
 	}
-	qi := infoOf(q)
+	qi := qtab[q]
 	if k%qi.sub != 0 {
 		return nil, fmt.Errorf("kernels: ActF16: k=%d is not a multiple of %d", k, qi.sub)
 	}
@@ -210,7 +208,7 @@ func ActMulF16T(q Quant, ntok, k int, kind ActKind) (*ir.Kernel, error) {
 	if !GemmVoltaOK(q) {
 		return nil, fmt.Errorf("kernels: ActMulF16T: %v has no Volta layout", q)
 	}
-	qi := infoOf(q)
+	qi := qtab[q]
 	if k%qi.sub != 0 || qi.sub%8 != 0 {
 		return nil, fmt.Errorf("kernels: ActMulF16T: k=%d is not a multiple of %d", k, qi.sub)
 	}
@@ -260,7 +258,7 @@ func actF16T(q Quant, ntok, k int) (*ir.Kernel, error) {
 	if !GemmVoltaOK(q) {
 		return nil, fmt.Errorf("kernels: ActF16T: %v has no Volta layout", q)
 	}
-	qi := infoOf(q)
+	qi := qtab[q]
 	if k%qi.sub != 0 || qi.sub%8 != 0 {
 		return nil, fmt.Errorf("kernels: ActF16T: k=%d is not a multiple of %d", k, qi.sub)
 	}
@@ -307,7 +305,7 @@ func ActF16TGather(q Quant, ntok, k, nsrc int) (*ir.Kernel, error) {
 	if !Volta70OK(q) {
 		return nil, fmt.Errorf("kernels: ActF16TGather: %v has no Volta layout", q)
 	}
-	qi := infoOf(q)
+	qi := qtab[q]
 	if k%qi.sub != 0 || qi.sub%8 != 0 || nsrc < 1 {
 		return nil, fmt.Errorf("kernels: ActF16TGather: k=%d (a multiple of %d), nsrc=%d", k, qi.sub, nsrc)
 	}
@@ -361,7 +359,7 @@ func MatVecMMA70(s MatVecShape) (*ir.Kernel, error) {
 	if !Volta70OK(s.T) {
 		return nil, fmt.Errorf("kernels: MatVecMMA70: %v has no Volta layout", s.T)
 	}
-	qi := infoOf(s.T)
+	qi := qtab[s.T]
 	if s.Experts > 1 {
 		return nil, fmt.Errorf("kernels: MatVecMMA70: experts are not supported")
 	}
@@ -563,7 +561,7 @@ func (v *voltaDeq) plus(x, base ir.Value) ir.Value {
 }
 
 func newVoltaDeq(b *ir.Builder, t Quant, pQS, pD, pSC ir.Value, rows int) *voltaDeq {
-	qi := infoOf(t)
+	qi := qtab[t]
 	c := func(v int64) ir.Value { return b.Const(ir.U32, v) }
 	steps, _ := voltaSteps(qi)
 	offBits := int64(0x6400) // 1024.0

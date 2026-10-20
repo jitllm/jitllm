@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
@@ -49,7 +47,7 @@ func GemmInt8Groups(s MatVecShape, t Int8Tile) int {
 // GemmVolta declines only for their int8 activations (TQ2), which are this
 // kernel's.
 func Int8OK(q Quant) bool {
-	return volta70Packed(q) && infoOf(q).codes == nil
+	return volta70Packed(q) && qtab[q].codes == nil
 }
 
 // int8Pos is where natural word w (k 4w..4w+3) of a row's 32-element trip
@@ -83,10 +81,10 @@ func int8Pos(w int) int { return (w%4)*2 + w/4 }
 // only the first adds the bias. The grid is exact (GemmInt8Groups workgroups
 // of t.Threads()).
 func GemmInt8(s MatVecShape, t Int8Tile) (*ir.Kernel, error) {
-	if int(s.T) >= kernels.Quants() || !Int8OK(s.T) {
+	if int(s.T) >= len(qtab) || !Int8OK(s.T) {
 		return nil, fmt.Errorf("kernels: GemmInt8: %v has no int8 decode", s.T)
 	}
-	qi := infoOf(s.T)
+	qi := qtab[s.T]
 	if t.MT < 1 || t.NT < 1 || t.WM < 1 || t.WN < 1 {
 		return nil, fmt.Errorf("kernels: GemmInt8: tile %+v", t)
 	}

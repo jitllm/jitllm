@@ -3,8 +3,6 @@ package mainkernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
@@ -95,10 +93,10 @@ func MMAProbe(sh ir.MMAShape) (*ir.Kernel, error) {
 // produce one complete integer dot for the per-sub-block scale to multiply, so
 // a 16-element sub-block takes m16n8k16 and a 32-element one m16n8k32.
 func MatVecMMA(s MatVecShape) (*ir.Kernel, error) {
-	if int(s.T) >= kernels.Quants() {
+	if int(s.T) >= len(qtab) {
 		return nil, fmt.Errorf("kernels: MatVecMMA: no layout for %s", s.T)
 	}
-	qi := infoOf(s.T)
+	qi := qtab[s.T]
 	if qi.blockE == 0 {
 		return nil, fmt.Errorf("kernels: MatVecMMA: no layout for %s", s.T)
 	}

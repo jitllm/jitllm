@@ -31,7 +31,7 @@ import (
 // every store coalesces; the reads are then permuted across a warp but still
 // contiguous in total, and cached.
 func Unpack(t Quant, nrows, k int) (*ir.Kernel, error) {
-	qi := infoOf(t)
+	qi := qtab[t]
 	if qi.blockE == 0 {
 		return nil, fmt.Errorf("kernels: Unpack: unknown format %d", t)
 	}
@@ -72,13 +72,13 @@ func UnpackSupported(t Quant) bool { return t == Q4_K }
 // It is exported so the tier reports the reason rather than keeping its own
 // copy of this table.
 func UnpackWhyNot(t Quant) string {
-	if infoOf(t).float > 0 {
+	if qtab[t].float > 0 {
 		return "a float format's pack is a copy of its rows; there is nothing to unpack"
 	}
-	if infoOf(t).blockB%4 != 0 {
+	if qtab[t].blockB%4 != 0 {
 		return fmt.Sprintf("its %d-byte block is not a multiple of 4, so the fields straddle "+
 			"u32 boundaries and the IR addresses buffers by element index, never by byte",
-			infoOf(t).blockB)
+			qtab[t].blockB)
 	}
 	return "its block is word-aligned and the kernel is simply not written yet"
 }
@@ -223,7 +223,7 @@ func unpackQ4K(nrows, k int) (*ir.Kernel, error) {
 // (row, super-block). The caller sizes the launch with it rather than
 // re-deriving the mapping.
 func UnpackThreads(t Quant, nrows, k int) int {
-	qi := infoOf(t)
+	qi := qtab[t]
 	if qi.blockE == 0 || k%qi.blockE != 0 {
 		return 0
 	}

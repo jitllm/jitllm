@@ -191,7 +191,7 @@ func (g *devTier) ffnKey(l *layer) string {
 	mg, md := l.mvg, l.mvd
 	return fmt.Sprintf("ffn/%v/%d/%d/%d/%v/%v/%d/%d/%d/%v/act%v/w%d/warp%v/in%v",
 		mg.q, mg.k, mg.rows, mg.split, mg.group, md.q, md.rows, md.split, md.rowt, md.group,
-		p.Act, max(p.ActWin, 32), g.warpNorm(), md.resIn != nil)
+		kernels.ActKind(p.Act), max(p.ActWin, 32), g.warpNorm(), md.resIn != nil)
 }
 
 // tuneFFN decides, on this card, the recipe each dense gated FFN shape runs:

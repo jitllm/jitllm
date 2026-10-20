@@ -3,8 +3,6 @@ package mainkernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
@@ -289,7 +287,7 @@ func RMSNormF16TRows(k, rows int, eps float32, addOne, add bool, q Quant, warp b
 	if !Volta70OK(q) {
 		return nil, fmt.Errorf("kernels: RMSNormF16TRows: %v has no binary16 layout", q)
 	}
-	qi := infoOf(q)
+	qi := qtab[q]
 	if k%qi.sub != 0 || qi.sub%8 != 0 {
 		return nil, fmt.Errorf("kernels: RMSNormF16TRows: k=%d is not a multiple of %d", k, qi.sub)
 	}
@@ -831,9 +829,9 @@ func act(b *ir.Builder, g ir.Value, k ActKind) ir.Value {
 		ax := b.Max(ir.F32, g, b.Sub(ir.F32, b.ConstF32(0), g))
 		z := b.Mul(ir.F32, b.ConstF32(0.70710678118654752), ax)
 		t := b.Div(ir.F32, one, b.Fma(b.ConstF32(GELUErfP), z, one))
-		p := b.ConstF32(kernels.GELUErfA[4])
+		p := b.ConstF32(GELUErfA[4])
 		for i := 3; i >= 0; i-- {
-			p = b.Fma(p, t, b.ConstF32(kernels.GELUErfA[i]))
+			p = b.Fma(p, t, b.ConstF32(GELUErfA[i]))
 		}
 		q := b.Mul(ir.F32, b.Mul(ir.F32, p, t), b.Exp(b.Sub(ir.F32, b.ConstF32(0), b.Mul(ir.F32, z, z))))
 		return b.Mul(ir.F32, b.ConstF32(0.5), b.Sub(ir.F32, b.Add(ir.F32, g, ax), b.Mul(ir.F32, ax, q)))
@@ -851,12 +849,12 @@ func act(b *ir.Builder, g ir.Value, k ActKind) ir.Value {
 func tanhRational(b *ir.Builder, x ir.Value) ir.Value {
 	x = b.Max(ir.F32, b.Min(ir.F32, x, b.ConstF32(TanhClamp)), b.ConstF32(-TanhClamp))
 	x2 := b.Mul(ir.F32, x, x)
-	p := b.ConstF32(kernels.TanhP[0])
-	for _, c := range kernels.TanhP[1:] {
+	p := b.ConstF32(TanhP[0])
+	for _, c := range TanhP[1:] {
 		p = b.Fma(p, x2, b.ConstF32(c))
 	}
-	q := b.ConstF32(kernels.TanhQ[0])
-	for _, c := range kernels.TanhQ[1:] {
+	q := b.ConstF32(TanhQ[0])
+	for _, c := range TanhQ[1:] {
 		q = b.Fma(q, x2, b.ConstF32(c))
 	}
 	return b.Div(ir.F32, b.Mul(ir.F32, p, x), q)

@@ -92,7 +92,7 @@ func GemmTile(s MatVecShape, t TileGemm) (*ir.Kernel, error) {
 	if max(s.Split, 1) > 1 {
 		return nil, fmt.Errorf("kernels: GemmTile: an unsplit shape only (split %d)", s.Split)
 	}
-	qi := infoOf(s.T)
+	qi := qtab[s.T]
 	if t.MT < 1 || t.NT < 1 || t.WM < 1 || t.WN < 1 || t.KB < 1 || t.Tall && t.MT%2 != 0 {
 		return nil, fmt.Errorf("kernels: GemmTile: tile %+v", t)
 	}

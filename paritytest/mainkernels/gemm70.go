@@ -146,7 +146,7 @@ func gemmVolta(s MatVecShape, t VoltaTile, into *gemmCtx) (*ir.Kernel, error) {
 	if !GemmVoltaOK(s.T) {
 		return nil, fmt.Errorf("kernels: GemmVolta: %v has no Volta layout", s.T)
 	}
-	qi := infoOf(s.T)
+	qi := qtab[s.T]
 	grouped := s.Experts > 1
 	fl := qi.float > 0
 	if fl && grouped {
@@ -747,7 +747,7 @@ func GemmVoltaSegments(segs []MatVecShape, tiles []VoltaTile) (*ir.Kernel, error
 	shA, shB := 0, 0
 	for i, sg := range segs {
 		t := tiles[i]
-		qi := infoOf(sg.T)
+		qi := qtab[sg.T]
 		kHalf := t.KB * qi.sub / 2
 		nbuf := 2
 		if t.Single {
@@ -795,11 +795,11 @@ func GemmVoltaSegmentsGrid(segs []MatVecShape, tiles []VoltaTile) (blocks []int,
 	for i, sg := range segs {
 		t := tiles[i]
 		switch {
-		case !GemmVoltaOK(sg.T) || infoOf(sg.T).float > 0:
+		case !GemmVoltaOK(sg.T) || qtab[sg.T].float > 0:
 			return nil, 0, fmt.Errorf("kernels: GemmVoltaSegments: segment %d: %v", i, sg.T)
 		case sg.Experts > 1 || max(sg.Split, 1) > 1:
 			return nil, 0, fmt.Errorf("kernels: GemmVoltaSegments: segment %d is split or grouped", i)
-		case sg.K != segs[0].K || sg.NTok != segs[0].NTok || infoOf(sg.T).sub != infoOf(segs[0].T).sub:
+		case sg.K != segs[0].K || sg.NTok != segs[0].NTok || qtab[sg.T].sub != qtab[segs[0].T].sub:
 			return nil, 0, fmt.Errorf("kernels: GemmVoltaSegments: segment %d reads another operand", i)
 		case t.Threads() != nth || t.F16K != tiles[0].F16K:
 			return nil, 0, fmt.Errorf("kernels: GemmVoltaSegments: segment %d's tile is another width", i)

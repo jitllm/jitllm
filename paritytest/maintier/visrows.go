@@ -468,7 +468,7 @@ func (g *devTier) towerTwins() bool {
 // non-causal set in use.
 func (g *devTier) ownActKern(l *layer) bool {
 	bs := g.bs
-	if bs == nil || (l.ungated == ungatedFFN(&bs.p) && l.act == bs.p.Act) {
+	if bs == nil || (l.ungated == ungatedFFN(&bs.p) && l.act == kernels.ActKind(bs.p.Act)) {
 		return true
 	}
 	k, err := kernels.ActMul(bs.rows*l.nffn, l.act)

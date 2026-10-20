@@ -614,8 +614,8 @@ func (g *devTier) retuneDecode() {
 				u.m.res = g.kernelMode(key.q, key.k, key.rows, best, 1, true, bestGrp)
 			}
 			if u.m.gated != nil || u.m.wantGated {
-				u.m.gated = g.gatedKernel(key.q, key.k, key.rows, best, bestGrp, g.bs.p.Act)
-				u.m.gate2 = g.gate2Kernel(key.q, key.k, key.rows, best, bestGrp, g.bs.p.Act)
+				u.m.gated = g.gatedKernel(key.q, key.k, key.rows, best, bestGrp, kernels.ActKind(g.bs.p.Act))
+				u.m.gate2 = g.gate2Kernel(key.q, key.k, key.rows, best, bestGrp, kernels.ActKind(g.bs.p.Act))
 			}
 		}
 		g.splits[key], g.groupSplit[key] = best, bestGrp
@@ -1026,7 +1026,7 @@ func (g *devTier) fuseMoE(l *layer) {
 	if g.bs.p.ExpertWeightIn {
 		return
 	}
-	act := g.bs.p.Act
+	act := kernels.ActKind(g.bs.p.Act)
 	if act != kernels.ActSiLU && act != kernels.ActGELU && act != kernels.ActSwiGLUOAI {
 		return
 	}
@@ -1275,7 +1275,7 @@ func (g *devTier) fuseGateUp(l *layer) {
 		why(fmt.Sprintf("gate and up cannot share a launch at split %d/%v (rowt %d/%d)", mg.split, mg.group, mg.rowt, mu.rowt))
 		return
 	}
-	in := kernels.ActIn{On: true, Gated: true, Act: g.bs.p.Act, Window: max(g.bs.p.ActWin, 32), Prefetch: 8}
+	in := kernels.ActIn{On: true, Gated: true, Act: kernels.ActKind(g.bs.p.Act), Window: max(g.bs.p.ActWin, 32), Prefetch: 8}
 	if g.ActInPrefetch != 0 {
 		in.Prefetch = max(g.ActInPrefetch, 0)
 	}

@@ -31,8 +31,9 @@ func Compare(main, composed []*ir.Kernel) (total, same int, missing []Miss) {
 		}
 	}
 	for _, k := range main {
+		live := liveOps(k)
 		for i, id := range in.Dataflow(k) {
-			if k.Ops[i].Kind == ir.OpParam {
+			if k.Ops[i].Kind == ir.OpParam || !live[i] {
 				continue
 			}
 			total++
@@ -45,6 +46,33 @@ func Compare(main, composed []*ir.Kernel) (total, same int, missing []Miss) {
 		}
 	}
 	return total, same, missing
+}
+
+// liveOps is which of k's instructions an effect reaches: the void ones
+// (stores, barriers, the loops) and every operand they read, transitively.
+// What nothing reads computes nothing, so it is not held to.
+func liveOps(k *ir.Kernel) []bool {
+	live := make([]bool, len(k.Ops))
+	var mark func(v ir.Value)
+	mark = func(v ir.Value) {
+		if v == 0 || int(v) > len(k.Ops) || live[v-1] {
+			return
+		}
+		live[v-1] = true
+		o := k.Ops[v-1]
+		for _, a := range o.Args {
+			mark(a)
+		}
+		for _, a := range o.Vargs {
+			mark(a)
+		}
+	}
+	for i, o := range k.Ops {
+		if o.Type == ir.Void {
+			mark(ir.Value(i + 1))
+		}
+	}
+	return live
 }
 
 // Interner names each distinct canonical form by a small integer, so equal

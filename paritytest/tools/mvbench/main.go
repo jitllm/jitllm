@@ -18,8 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
+	kernels "github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // gemma-2b's real decode shapes, from `jitllm info`.
@@ -121,7 +120,7 @@ func main() {
 		"per format that reads this many MiB, so cache pressure is matched across formats")
 	wideW := flag.Int("wallw", 0, "sweep the read-wall probe at 1,2,4,8 CONSECUTIVE words per "+
 		"thread and print nothing else. This IR has no vector load, so the question is whether "+
-		"the MSL compiler merges w consecutive scalar Loads -- see mainkernels.StreamWide")
+		"the MSL compiler merges w consecutive scalar Loads -- see kernels.StreamWide")
 	only := flag.String("only", "", "time only the shapes whose name has this prefix")
 	flag.Parse()
 	if *only != "" {
@@ -233,7 +232,7 @@ func main() {
 }
 
 // wallW is words per thread per step in the read-wall probe; see
-// mainkernels.StreamWide. 1 is the shipped probe.
+// kernels.StreamWide. 1 is the shipped probe.
 var wallW = 1
 
 // wallSpread > 0 strides a lane's own words instead of making them adjacent.
@@ -259,7 +258,7 @@ func streamWall(d backend.Device, rounds, wallMiB int) (float64, error) {
 		per = 1
 	}
 	n := threads * per
-	k, err := mainkernels.StreamWideSpread(per, wallW, wallSpread)
+	k, err := kernels.StreamWideSpread(per, wallW, wallSpread)
 	if err != nil {
 		return 0, err
 	}
@@ -348,7 +347,7 @@ func timeMatVecMode(d backend.Device, q kernels.Quant, nrows, k, split, rounds i
 	if err != nil {
 		return 0, 0, err
 	}
-	kk, err := mainkernels.MatVec(mainkernels.MatVecShape{T: q, K: k, Rows: nrows, Split: split, GroupSplit: groupSplit})
+	kk, err := kernels.MatVec(kernels.MatVecShape{T: q, K: k, Rows: nrows, Split: split, GroupSplit: groupSplit})
 	if err != nil {
 		return 0, 0, err
 	}
@@ -398,7 +397,7 @@ func timeMatVecMode(d backend.Device, q kernels.Quant, nrows, k, split, rounds i
 		if bFinal, err = up(make([]byte, nrows*4)); err != nil {
 			return 0, 0, err
 		}
-		rk, err := mainkernels.Reduce(nrows, split)
+		rk, err := kernels.Reduce(nrows, split)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -472,7 +471,7 @@ func timeMatVecMode(d backend.Device, q kernels.Quant, nrows, k, split, rounds i
 // per-shape table can be read against it: a shape whose whole time is near this
 // cannot be priced in isolation at all.
 func launchFloor(d backend.Device, rounds int) (time.Duration, error) {
-	k, err := mainkernels.Add(128)
+	k, err := kernels.Add(128)
 	if err != nil {
 		return 0, err
 	}
@@ -578,7 +577,7 @@ func timeBatched(d backend.Device, q kernels.Quant, nrows, k, ntok, tok, rowt, r
 		return 0, 0, err
 	}
 	// One flat pAX over all the tokens, the layout the kernel reads:
-	// mainkernels.Quantize writes all the scales, then all the per-16 sums, so
+	// kernels.Quantize writes all the scales, then all the per-16 sums, so
 	// token j's scales sit at j*nb and its sums at NTok*nb + j*(K/16).
 	var av []uint32
 	var as, asum []float32
@@ -595,11 +594,11 @@ func timeBatched(d backend.Device, q kernels.Quant, nrows, k, ntok, tok, rowt, r
 		as = append(as, s1...)
 		asum = append(asum, s2...)
 	}
-	shape := mainkernels.MatVecShape{T: q, K: k, Rows: nrows, Split: 1, NTok: ntok, Tok: tok, Rowt: rowt}
-	build := mainkernels.MatVec
+	shape := kernels.MatVecShape{T: q, K: k, Rows: nrows, Split: 1, NTok: ntok, Tok: tok, Rowt: rowt}
+	build := kernels.MatVec
 	if mma {
 		shape.MT, shape.NT = rowt, tok
-		build = mainkernels.MatVecMMA
+		build = kernels.MatVecMMA
 	}
 	kk, err := build(shape)
 	if err != nil {

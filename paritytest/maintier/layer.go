@@ -2670,7 +2670,7 @@ func declineReason(p *nn.LayerPlan) string {
 		// Every activation the host bakes has a device kernel (quick-GELU
 		// for CLIP towers, swiglu-oai for gpt-oss); what is left is a kind in a
 		// shape it does not exist in -- a gated kind in an ungated block.
-		return "the " + p.Act.String() + " activation in a " + map[bool]string{true: "ungated", false: "gated"}[ungatedFFN(p)] + " block"
+		return "the " + kernels.ActKind(p.Act).String() + " activation in a " + map[bool]string{true: "ungated", false: "gated"}[ungatedFFN(p)] + " block"
 	}
 	return ""
 }
@@ -2710,8 +2710,8 @@ func llama4WhyNot(p *nn.LayerPlan) string {
 			p.AttnTempFloor, p.AttnTempOffset)
 	case p.ExpertWeightIn && p.MoEBias:
 		return "a routed weight on the input of a biased expert"
-	case p.ExpertWeightIn && p.NExpert > 0 && p.Act != kernels.ActSiLU && p.Act != kernels.ActGELU:
-		return "a routed weight on the input of a " + p.Act.String() + " expert"
+	case p.ExpertWeightIn && p.NExpert > 0 && kernels.ActKind(p.Act) != kernels.ActSiLU && kernels.ActKind(p.Act) != kernels.ActGELU:
+		return "a routed weight on the input of a " + kernels.ActKind(p.Act).String() + " expert"
 	case (p.SWAChunked || p.NoPEGlobal || p.QKL2Norm) && (p.MLA() || p.NonCausal):
 		return "Llama 4's attention on a latent or non-causal block"
 	}
@@ -2836,13 +2836,13 @@ func actHasKernel(p *nn.LayerPlan) bool {
 	if ungatedFFN(p) {
 		// xIELU reads its numbers from a buffer (kernels.XIELU), so it is in
 		// no baked set.
-		if p.Act == kernels.ActXIELU {
+		if kernels.ActKind(p.Act) == kernels.ActXIELU {
 			return true
 		}
 		set = kernels.Ungated[:]
 	}
 	for _, k := range set {
-		if k == p.Act {
+		if k == kernels.ActKind(p.Act) {
 			return true
 		}
 	}
@@ -3073,7 +3073,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	}
 	l := &layer{nonCausal: p.NonCausal, windowed: p.Windowed, geo: geoOf(p), vFromK: p.VFromK}
 	if p.NonCausal {
-		l.nffn, l.ungated, l.act = p.NFFN, ungatedFFN(p), p.Act
+		l.nffn, l.ungated, l.act = p.NFFN, ungatedFFN(p), kernels.ActKind(p.Act)
 		l.noRope = p.NRot == 0 || p.NoPosEnc
 		if !g.ownActKern(l) {
 			return false
@@ -3758,9 +3758,9 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			k.res = g.kernelMode(k.q, k.k, k.rows, k.split, max(k.rowt, 1), true, k.group)
 		}
 		if i == 5 && e <= 1 && bias[i] == nil && !ungatedFFN(p) && k.kern != nil && k.rowt <= 1 &&
-			(p.Act == kernels.ActSiLU || p.Act == kernels.ActGELU) {
-			k.gated = g.gatedKernel(k.q, k.k, k.rows, k.split, k.group, p.Act)
-			k.gate2 = g.gate2Kernel(k.q, k.k, k.rows, k.split, k.group, p.Act)
+			(kernels.ActKind(p.Act) == kernels.ActSiLU || kernels.ActKind(p.Act) == kernels.ActGELU) {
+			k.gated = g.gatedKernel(k.q, k.k, k.rows, k.split, k.group, kernels.ActKind(p.Act))
+			k.gate2 = g.gate2Kernel(k.q, k.k, k.rows, k.split, k.group, kernels.ActKind(p.Act))
 			// nil at a partial-writing split; the retune builds it once the
 			// split it picks has a final-row form.
 			k.wantGated = true
@@ -3984,7 +3984,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		l.auxBytes += 4
 	}
 	// Apertus's xIELU numbers, four floats, the block's own.
-	if p.Act == kernels.ActXIELU {
+	if kernels.ActKind(p.Act) == kernels.ActXIELU {
 		if len(w.XIELU) != 4 {
 			g.LastErr = fmt.Sprintf("block %d: xIELU wants 4 numbers, the block carries %d", li, len(w.XIELU))
 			return false
@@ -5033,7 +5033,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				return nil, nil
 			}
 			// Optional: an activation with no gated form keeps two launches.
-			if k, err := kernels.QuantizeAct(rows*p.NFFN, kernels.ClampWindow(actWin, p.NFFN), p.Act); err == nil {
+			if k, err := kernels.QuantizeAct(rows*p.NFFN, kernels.ClampWindow(actWin, p.NFFN), kernels.ActKind(p.Act)); err == nil {
 				return k, nil
 			}
 			return nil, nil
@@ -5177,7 +5177,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if !p.ExpertWeightIn || p.NExpert == 0 {
 				return nil, nil
 			}
-			return kernels.ActMulWeighted(p.NExpertUsed*p.NFFNExp, p.NFFNExp, p.Act, false)
+			return kernels.ActMulWeighted(p.NExpertUsed*p.NFFNExp, p.NFFNExp, kernels.ActKind(p.Act), false)
 		}},
 		{&bs.copyQ, func() (*ir.Kernel, error) {
 			if p.MLA() || !partialRotary(p) {
@@ -5439,9 +5439,9 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				return nil, nil
 			}
 			if ungatedFFN(p) {
-				return kernels.Act(rows*p.NFFNShExp, p.Act)
+				return kernels.Act(rows*p.NFFNShExp, kernels.ActKind(p.Act))
 			}
-			return kernels.ActMul(rows*p.NFFNShExp, p.Act)
+			return kernels.ActMul(rows*p.NFFNShExp, kernels.ActKind(p.Act))
 		}},
 		{&bs.shQuant, func() (*ir.Kernel, error) {
 			if p.NFFNShExp == 0 {
@@ -5534,15 +5534,15 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 				// Ungated: the activation alone replaces ActMul's product, which
 				// would read a bs.g nothing wrote. xIELU's numbers are each
 				// block's buffer (layer.xielu).
-				if p.Act == kernels.ActXIELU {
+				if kernels.ActKind(p.Act) == kernels.ActXIELU {
 					return kernels.XIELU(rows * p.NFFN)
 				}
-				return kernels.Act(rows*p.NFFN, p.Act)
+				return kernels.Act(rows*p.NFFN, kernels.ActKind(p.Act))
 			}
 			if p.NFFN == 0 {
 				return nil, nil
 			}
-			return kernels.ActMul(rows*p.NFFN, p.Act)
+			return kernels.ActMul(rows*p.NFFN, kernels.ActKind(p.Act))
 		}},
 		// A second activation kernel because the element count is baked and a
 		// DeepSeek has both shapes in one model (dense lead blocks, then
@@ -5555,9 +5555,9 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			// and elementwise, so the slot boundary does not matter. Ungated
 			// experts (Nemotron 3) take the activation alone.
 			if ungatedFFN(p) {
-				return kernels.Act(p.NExpertUsed*p.NFFNExp, p.Act)
+				return kernels.Act(p.NExpertUsed*p.NFFNExp, kernels.ActKind(p.Act))
 			}
-			return kernels.ActMul(p.NExpertUsed*p.NFFNExp, p.Act)
+			return kernels.ActMul(p.NExpertUsed*p.NFFNExp, kernels.ActKind(p.Act))
 		}},
 		{&bs.rank, func() (*ir.Kernel, error) {
 			if p.NExpert == 0 {
@@ -5581,7 +5581,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			if p.PLEDim == 0 {
 				return nil, nil
 			}
-			return kernels.ActMul(rows*p.PLEDim, p.Act)
+			return kernels.ActMul(rows*p.PLEDim, kernels.ActKind(p.Act))
 		}},
 		{&bs.pleQuant, func() (*ir.Kernel, error) {
 			if p.PLEDim == 0 {
@@ -7857,7 +7857,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	// runs the matvec and the ActMul.
 	mvgate := func(m mv, r *resident, dst, gate backend.Buf) bool {
 		if rag != nil {
-			gm, ok := g.groupKern(m, len(rag.pos), R, groupGate, p.Act)
+			gm, ok := g.groupKern(m, len(rag.pos), R, groupGate, kernels.ActKind(p.Act))
 			if ok {
 				lamv(gm, gm.kern, gm.rows*gm.split, r.qs, dOf(r), r.sc, bs.a, bs.ax, dst, gate)
 				g.RagGateFused++
@@ -11348,7 +11348,7 @@ func nonCausalConflict(bs *blockScratch, p *nn.LayerPlan) string {
 		// The set of an ungated MLP has no gate buffer; a block's own width,
 		// gating and activation are otherwise its own (layer.nffn).
 		return fmt.Sprintf("a non-causal block's MLP (%s %s, %d wide) on a set built for (%s %s, %d wide)",
-			gated[ungatedFFN(p)], p.Act, p.NFFN, gated[ungatedFFN(a)], a.Act, a.NFFN)
+			gated[ungatedFFN(p)], kernels.ActKind(p.Act), p.NFFN, gated[ungatedFFN(a)], a.Act, a.NFFN)
 	case p.LayerNorm != a.LayerNorm:
 		return fmt.Sprintf("a non-causal block with LayerNorm %v on a set built with %v", p.LayerNorm, a.LayerNorm)
 	case p.NRot > 0 && !p.NoPosEnc && (a.NRot == 0 || a.NoPosEnc):

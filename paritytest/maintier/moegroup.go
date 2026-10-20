@@ -194,9 +194,9 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 	kern(&m.actMul, func() (*ir.Kernel, error) {
 		// Ungated experts (Nemotron 3) take the activation alone.
 		if ungatedFFN(p) {
-			return kernels.Act(np*p.NFFNExp, p.Act)
+			return kernels.Act(np*p.NFFNExp, kernels.ActKind(p.Act))
 		}
-		return kernels.ActMul(np*p.NFFNExp, p.Act)
+		return kernels.ActMul(np*p.NFFNExp, kernels.ActKind(p.Act))
 	})
 	kern(&m.combine, func() (*ir.Kernel, error) { return kernels.ExpertCombineGrouped(ew, k, rows) })
 	if p.DenseMoE {
@@ -204,7 +204,7 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 		buf(&m.rwS, rows*k*4)
 	}
 	if p.ExpertWeightIn {
-		kern(&m.actMulW, func() (*ir.Kernel, error) { return kernels.ActMulWeighted(np*p.NFFNExp, p.NFFNExp, p.Act, true) })
+		kern(&m.actMulW, func() (*ir.Kernel, error) { return kernels.ActMulWeighted(np*p.NFFNExp, p.NFFNExp, kernels.ActKind(p.Act), true) })
 		buf(&m.colPair, np*4)
 		buf(&m.ones, rows*k*4)
 		if err == nil {
