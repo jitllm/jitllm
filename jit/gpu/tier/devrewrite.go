@@ -304,6 +304,7 @@ func newDevRewrites() []devRewrite {
 		{"add-norm", rwAddNorm},
 		{"norm-quant", rwNormQuant},
 		{"route", rwRoute},
+		{"gated-add", rwGatedAdd},
 	}
 }
 

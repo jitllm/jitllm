@@ -1310,6 +1310,13 @@ func buildDevProgram(p *nn.LayerPlan, l *layer, page int) (*devProgram, string) 
 			if w == 0 {
 				return nil, "a matvec with no stated width"
 			}
+			if role == jlm.RoleShRouter && l.shRouter != nil && w == 1 {
+				// A shared expert's gate: the float row by the float vector.
+				out := prog.val(name(0), f32(1), slotShLogit)
+				prog.ops = append(prog.ops, devOp{Kind: dkGateLogit, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{out}, Role: role})
+				vals[o.Out[0]] = out
+				continue
+			}
 			if role == jlm.RoleRouter && l.router != nil {
 				// A mixture's router: the float row by the float matrix.
 				out := prog.val(name(0), f32(w), s)

@@ -319,7 +319,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						gst.recDt, gst.recA, gst.recD, gst.recCB = l.ssmDt, l.ssmA, l.ssmD, l.ssmCB
 						gst.recNorm, gst.recMid = l.ssmNorm, bs.dOutN
 					}
-					gst.router, gst.routerB, gst.selB, gst.routeW = l.router, l.routerB, l.expSelB, bs.rw
+					gst.router, gst.routerB, gst.selB, gst.routeW, gst.shRouter = l.router, l.routerB, l.expSelB, bs.rw, l.shRouter
 					if o.Kind == dkGatherHeads {
 						gst.perm = g.perms[[2]int{o.Heads, R}]
 					}

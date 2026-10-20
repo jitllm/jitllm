@@ -77,6 +77,7 @@ const (
 	gaRecNorm   // its output norm's weight
 	gaRecMid    // the scratch between its gated norm's two launches
 	gaRouter    // a mixture's router matrix
+	gaShRouter  // a shared expert's gate vector
 	gaRouterB   // its bias on the logits
 	gaSelB      // its selection bias
 	gaRouteW    // the route's weights (a fused route writes them with the selection)
@@ -358,7 +359,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 			o.Why = whyNone
 		}
 		return l
-	case dkRouterLogits, dkTopK, dkRouteWeights, dkRouterBias, dkGroupByExpert:
+	case dkRouterLogits, dkTopK, dkRouteWeights, dkRouterBias, dkGroupByExpert, dkGateLogit:
 		return g.genRoute(o, prog, bs, rows)
 	case dkView:
 		// A row's prefix read in place: at one row the value is its source's
@@ -370,7 +371,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		o.Why = whyNoForm
 		return nil
 	case dkExpertMatVecE, dkQKV, dkQKVGemm,
-		dkResIn, dkQKVSep, dkGateLogit,
+		dkResIn, dkQKVSep,
 		dkGroupMask, dkExpertBias, dkExpertFetch:
 		// No form in the composer's primitives yet: the op fails to
 		// generate, and its block does not place.
@@ -873,7 +874,7 @@ type genState struct {
 	// Its state's halves and its dt bias, decay rates, skip and convolution bias.
 	stateIn, stateOut, recDt, recA, recD, recCB backend.Buf
 	recNorm, recMid                             backend.Buf
-	router, routerB, selB, routeW               backend.Buf
+	router, routerB, selB, routeW, shRouter     backend.Buf
 	sink                                        backend.Buf
 	// once is what each once-kind's launch last read this step.
 	once [3]backend.Buf
@@ -984,6 +985,8 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.recMid
 			case gaRouter:
 				bufs[j] = st.router
+			case gaShRouter:
+				bufs[j] = st.shRouter
 			case gaRouterB:
 				bufs[j] = st.routerB
 			case gaSelB:

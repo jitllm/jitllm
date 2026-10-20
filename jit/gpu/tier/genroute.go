@@ -81,6 +81,15 @@ func (g *devTier) genRoute(o *devOp, prog *devProgram, bs *blockScratch, rows in
 		w, x, out := rb.buf(wk, gaRouter), rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufOut, gaOut0)
 		rb.r.RouterLogits(w, x, out, ex, k)
 		return launch(rb, compose.Facts{RowGroup: 128, Tree: true})
+	case dkGateLogit:
+		if l.shRouter == nil || len(o.In) != 1 {
+			return nil
+		}
+		k := prog.vals[o.In[0]].Width
+		rb := &rowBuild{r: compose.Row{Width: k, Rows: rows}}
+		w, x, out := rb.buf(compose.BufRow, gaShRouter), rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufOut, gaOut0)
+		rb.r.RouterLogits(w, x, out, 1, k)
+		return launch(rb, compose.Facts{RowGroup: 128, Tree: true})
 	case dkRouterBias:
 		if l.routerB == nil {
 			return nil

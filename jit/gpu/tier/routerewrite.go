@@ -334,3 +334,55 @@ func softmaxOf(p *devProgram, v devVal, writer, only func(devVal) int, is func(i
 	}
 	return x, []int{mx, cs, ex, rs, dv}, true
 }
+
+// rwGatedAdd: a shared expert's branch scaled by the sigmoid of its gate's
+// logit and added to the routed sum, as one gated add.
+func rwGatedAdd(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int) bool {
+	reader := func(v devVal) int {
+		if p.uses(v) != 1 {
+			return -1
+		}
+		for j, o := range p.ops {
+			for _, x := range o.In {
+				if x == v {
+					return j
+				}
+			}
+		}
+		return -1
+	}
+	for _, o := range p.ops {
+		if o.Kind != dkGateLogit {
+			continue
+		}
+		lg := o.Out[0]
+		sg := reader(lg)
+		if sg < 0 || p.ops[sg].Kind != dkMap || p.ops[sg].A.Fn != graph.MapSigmoid || len(p.ops[sg].In) != 1 {
+			continue
+		}
+		s := p.ops[sg].Out[0]
+		mu := reader(s)
+		if mu < 0 || p.ops[mu].Kind != dkMap || p.ops[mu].A.Fn != graph.MapMul || len(p.ops[mu].In) != 2 || p.ops[mu].In[1] != s {
+			continue
+		}
+		br, prod := p.ops[mu].In[0], p.ops[mu].Out[0]
+		ad := reader(prod)
+		if ad < 0 || p.ops[ad].Kind != dkAdd || len(p.ops[ad].In) != 2 {
+			continue
+		}
+		acc := p.ops[ad].In[0]
+		if acc == prod {
+			acc = p.ops[ad].In[1]
+		}
+		p.ops[ad] = devOp{Kind: dkGatedAdd, Src: p.ops[ad].Src, In: []devVal{acc, br, lg}, Out: p.ops[ad].Out}
+		ops := p.ops[:0]
+		for j, q := range p.ops {
+			if j != sg && j != mu {
+				ops = append(ops, q)
+			}
+		}
+		p.ops = ops
+		return true
+	}
+	return false
+}
