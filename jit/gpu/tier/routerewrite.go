@@ -62,7 +62,7 @@ func rwRoute(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq int)
 			}
 			lg, role, keyOps = x, jlm.RoleExpProbsB, append(ops, b)
 		}
-		if w := writer(lg); w < 0 || p.ops[w].Kind != dkRouterLogits {
+		if !logitsOf(p, writer, lg) {
 			continue
 		}
 		sel, top := o.Out[0], o.Out[1]
@@ -181,7 +181,7 @@ func gatedRoute(p *devProgram, i int, writer, only func(devVal) int, is func(int
 	default:
 		return false
 	}
-	if w := writer(lg); w < 0 || p.ops[w].Kind != dkRouterLogits {
+	if !logitsOf(p, writer, lg) {
 		return false
 	}
 	t := -1
@@ -385,4 +385,25 @@ func rwGatedAdd(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq i
 		return true
 	}
 	return false
+}
+
+// logitsOf reports whether v is the router's logits, or those plus the
+// router's bias, which it states as the router's bias op.
+func logitsOf(p *devProgram, writer func(devVal) int, v devVal) bool {
+	w := writer(v)
+	if w < 0 {
+		return false
+	}
+	if p.ops[w].Kind == dkRouterLogits || p.ops[w].Kind == dkRouterBias {
+		return true
+	}
+	o := p.ops[w]
+	if o.Kind != dkMap || o.A.Fn != graph.MapAdd || o.Role != jlm.RoleRouterBias || len(o.In) != 1 {
+		return false
+	}
+	if x := writer(o.In[0]); x < 0 || p.ops[x].Kind != dkRouterLogits {
+		return false
+	}
+	p.ops[w] = devOp{Kind: dkRouterBias, Src: o.Src, In: o.In, Out: o.Out, Role: o.Role}
+	return true
 }
