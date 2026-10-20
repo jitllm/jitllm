@@ -14,8 +14,8 @@ import (
 // mixture's over rows.
 func (g *devTier) genMoERows(o *devOp, prog *devProgram, bs *blockScratch, rows int) (ls []genLaunch, handled bool) {
 	m := bs.mg
-	if rows < 2 || !prog.experts || m == nil || m.rows != rows {
-		return nil, false
+	if rows < 2 || !prog.experts || m == nil || m.rows != rows || o.Heads > 0 {
+		return nil, false // a bank over heads selects by head, not by the route's grouping
 	}
 	launch := func(rb *rowBuild, colScale, colDiv int, once uint8) bool {
 		k := g.rowKern(&rb.r)

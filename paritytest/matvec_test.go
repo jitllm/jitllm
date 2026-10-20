@@ -255,11 +255,19 @@ func TestExpertMatVecIsMains(t *testing.T) {
 func TestGroupedMatVecIsMains(t *testing.T) {
 	for _, q := range []format{{kernels.Float32, mainkernels.Float32}, {kernels.Float16, mainkernels.Float16}, {kernels.Q8_0, mainkernels.Q8_0}, {kernels.MXFP4, mainkernels.MXFP4}, {kernels.Q4_0, mainkernels.Q4_0},
 		{kernels.Q5_0, mainkernels.Q5_0}, {kernels.Q5_1, mainkernels.Q5_1}, {kernels.Q4_K, mainkernels.Q4_K}, {kernels.Q5_K, mainkernels.Q5_K}, {kernels.Q6_K, mainkernels.Q6_K}, {kernels.Q3_K, mainkernels.Q3_K}} {
-		for _, rk := range [][2]int{{64, 256}, {96, 512}} {
-			for _, ep := range [][2]int{{8, 64}, {16, 128}} {
+		rks := [][2]int{{64, 256}, {96, 512}}
+		if kernels.IsFloat(q.c) {
+			rks = append(rks, [2]int{16, 16}, [2]int{16, 64})
+		}
+		for _, rk := range rks {
+			for _, ep := range [][2]int{{8, 64}, {16, 128}, {4, 128}} {
 				name := fmt.Sprintf("%v_%dx%d_e%d_np%d", q.c, rk[0], rk[1], ep[0], ep[1])
 				t.Run(name, func(t *testing.T) {
-					mk, err := mainkernels.MatVec(mainkernels.MatVecShape{T: q.m, K: rk[1], Rows: rk[0], Experts: ep[0], NTok: ep[1], Tok: 4, ActWin: 32})
+					sub := 0
+					if kernels.IsFloat(q.c) && rk[1] < 32 {
+						sub = rk[1]
+					}
+					mk, err := mainkernels.MatVec(mainkernels.MatVecShape{T: q.m, K: rk[1], Rows: rk[0], Experts: ep[0], NTok: ep[1], Tok: 4, ActWin: 32, Sub: sub})
 					if err != nil {
 						t.Fatal(err)
 					}
