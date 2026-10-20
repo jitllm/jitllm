@@ -24,7 +24,8 @@ type Miss struct {
 // the composer's matching one of main's at most. Constants are not counted
 // (constant): a constant op or constant-valued arithmetic is an immediate. Nor
 // is index arithmetic (indexOnly): its form is no part of what a kernel
-// computes, and every access is counted at its canonical address. It returns how many of
+// computes, and every access is counted at its canonical address. A kernel of
+// main's identical to an earlier one in every value counts once. It returns how many of
 // main's values there are (parameters aside), how many match, and the rest.
 func Compare(main, composed []*ir.Kernel) (total, same int, missing []Miss) {
 	in := NewInterner()
@@ -34,7 +35,17 @@ func Compare(main, composed []*ir.Kernel) (total, same int, missing []Miss) {
 			have[id]++
 		}
 	}
+	// A kernel main compiled again, identical in every value (once per
+	// scratch set), is one kernel: the composer forms it once.
+	once := map[string]bool{}
 	for _, k := range main {
+		ids := slices.Clone(in.Dataflow(k))
+		slices.Sort(ids)
+		key := fmt.Sprint(ids)
+		if once[key] {
+			continue
+		}
+		once[key] = true
 		live := liveOps(k)
 		ix := indexOnly(k, live)
 		// A value a kernel computes twice is one value: main's builder
