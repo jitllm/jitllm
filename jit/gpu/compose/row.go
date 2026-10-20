@@ -190,6 +190,9 @@ type Red uint8
 const (
 	RedSum Red = iota
 	RedMax
+	// RedArgmax is the index of the row's greatest element, the lowest
+	// where several are: an index.
+	RedArgmax
 )
 
 // Node is one value of the group's expression graph.
@@ -810,6 +813,8 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 	// every row, the element fastest (the last thread's surplus clamped to
 	// the last element, which it recomputes: RULE 13).
 	var sh, r, rowBase, tid, width, last, flatIdx ir.Value
+	// shi is the index plane an argmax's tree reduces beside sh.
+	var shi ir.Value
 	// seg is the thread's segment of loop 0 under a split, segTrip its
 	// trips.
 	var seg ir.Value
@@ -908,6 +913,11 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		}
 	} else {
 		sh = b.Shared("red", ir.F32, G)
+		for _, nd := range g.Nodes {
+			if nd.Kind == NReduce && nd.Red == RedArgmax && shi == 0 {
+				shi = b.Shared("redi", ir.U32, G)
+			}
+		}
 		r = b.Min(ir.U32, b.CTAID(), b.Const(ir.U32, int64(g.Rows-1)))
 		rowBase = b.Mul(ir.U32, r, b.Const(ir.U32, int64(g.Width)))
 		tid = b.TID()
@@ -1654,12 +1664,28 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			}
 		}
 		hoist(roots, p)
+		// An argmax starts at the thread's first element and its index.
+		var first ir.Value
+		for j, n := range reds {
+			if g.Nodes[n].Red == RedArgmax {
+				if first == 0 {
+					first = b.Min(ir.U32, tid, last)
+				}
+				fe := newEnv(nil)
+				fe.rows = true
+				inits[j] = elem(g.Nodes[n].A, first, fe)
+			}
+		}
 		zero := b.ConstF32(0)
 		b.Loop(iters)
 		i := b.Phi(ir.U32, tid)
 		accs := make([]ir.Value, len(reds))
-		for j := range reds {
+		accI := make([]ir.Value, len(reds))
+		for j, n := range reds {
 			accs[j] = b.Phi(ir.F32, inits[j])
+			if g.Nodes[n].Red == RedArgmax {
+				accI[j] = b.Phi(ir.U32, first)
+			}
 		}
 		idx := b.Min(ir.U32, i, last)
 		in := b.Lt(ir.U32, i, width)
@@ -1667,9 +1693,17 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		e.rows = true
 		for j, n := range reds {
 			x := elem(g.Nodes[n].A, idx, e)
-			if g.Nodes[n].Red == RedMax {
+			switch g.Nodes[n].Red {
+			case RedArgmax:
+				// Strictly greater: an index only rises in a thread, so a tie
+				// keeps the earlier.
+				take := b.Lt(ir.F32, accs[j], x)
+				nv, ni := b.Select(ir.F32, take, x, accs[j]), b.Select(ir.U32, take, idx, accI[j])
+				b.SetPhi(accs[j], b.Select(ir.F32, in, nv, accs[j]))
+				b.SetPhi(accI[j], b.Select(ir.U32, in, ni, accI[j]))
+			case RedMax:
 				b.SetPhi(accs[j], b.Select(ir.F32, in, b.Max(ir.F32, accs[j], x), accs[j]))
-			} else {
+			default:
 				b.SetPhi(accs[j], b.Add(ir.F32, accs[j], b.Select(ir.F32, in, x, zero)))
 			}
 		}
@@ -1683,9 +1717,12 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		b.SetPhi(i, b.Add(ir.U32, i, step))
 		b.EndLoop()
 		for j, n := range reds {
-			if g.Nodes[n].Red == RedMax {
+			switch g.Nodes[n].Red {
+			case RedArgmax:
+				rowVal[n] = argmaxTree(b, sh, shi, tid, accs[j], accI[j], G)
+			case RedMax:
 				rowVal[n] = groupReduce(b, sh, tid, accs[j], G, true, warp)
-			} else {
+			default:
 				rowVal[n] = groupReduce(b, sh, tid, accs[j], G, false, warp)
 			}
 		}
@@ -1753,6 +1790,10 @@ func (g *Row) typeOf(n int) ir.Type {
 		return ir.U32
 	case NIConst, NDot4:
 		return ir.I32
+	case NReduce:
+		if nd.Red == RedArgmax {
+			return ir.U32
+		}
 	case NUBinary:
 		return g.typeOf(nd.A)
 	case NFold:

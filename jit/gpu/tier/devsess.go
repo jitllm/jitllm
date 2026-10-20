@@ -615,7 +615,7 @@ func (g *devTier) cloneLane() (*lane, bool) {
 // cap are the model's and stay src's, and dst gets logits of its own to write.
 // Callers hold g.mu inside a scratch window.
 func (g *devTier) shareHead(dst, src *blockScratch) bool {
-	dst.head, dst.mvHead = src.head, src.mvHead
+	dst.head, dst.mvHead, dst.headProg = src.head, src.mvHead, src.headProg
 	dst.hNorm, dst.hNormB, dst.headCap = src.hNorm, src.hNormB, src.headCap
 	dst.headEmbeds, dst.embScale = src.headEmbeds, src.embScale
 	dst.headShared = true
@@ -642,7 +642,7 @@ func unshareHead(dst *blockScratch) {
 	if dst == nil || !dst.headShared {
 		return
 	}
-	dst.head, dst.mvHead = nil, mv{}
+	dst.head, dst.mvHead, dst.headProg = nil, mv{}, nil
 	dst.hNorm, dst.hNormB, dst.headCap = nil, nil, nil
 	dst.headShared = false
 }

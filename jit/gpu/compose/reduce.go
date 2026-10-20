@@ -47,3 +47,28 @@ func groupReduce(b *ir.Builder, sh, tid, x ir.Value, g int, max, warp bool) ir.V
 	}
 	return b.Load(ir.F32, sh, b.Const(ir.U32, 0), 0)
 }
+
+// argmaxTree combines each thread's (value, index) pair across the group in
+// threadgroup memory, halving the span a step: the other side wins where it
+// is greater, or equal at a lower index. Every thread reads the result.
+func argmaxTree(b *ir.Builder, sv, si, tid, v, i ir.Value, g int) ir.Value {
+	b.Store(sv, tid, v, 0)
+	b.Store(si, tid, i, 0)
+	b.Barrier()
+	top := b.Const(ir.U32, int64(g-1))
+	for s := g / 2; s >= 1; s /= 2 {
+		mv := b.Load(ir.F32, sv, tid, 0)
+		mi := b.Load(ir.U32, si, tid, 0)
+		o := b.Min(ir.U32, b.Add(ir.U32, tid, b.Const(ir.U32, int64(s))), top)
+		ov := b.Load(ir.F32, sv, o, 0)
+		oi := b.Load(ir.U32, si, o, 0)
+		gt, lt := b.Lt(ir.F32, mv, ov), b.Lt(ir.F32, ov, mv)
+		ri := b.Select(ir.U32, gt, oi, b.Select(ir.U32, lt, mi, b.Select(ir.U32, b.Lt(ir.U32, oi, mi), oi, mi)))
+		rv := b.Select(ir.F32, gt, ov, mv)
+		b.Barrier()
+		b.Store(sv, tid, rv, 0)
+		b.Store(si, tid, ri, 0)
+		b.Barrier()
+	}
+	return b.Load(ir.U32, si, b.Const(ir.U32, 0), 0)
+}

@@ -323,3 +323,18 @@ func (g *Row) NormApplyParts(x, w, part, k, parts int, eps float32, addOne bool)
 	}
 	return g.Bin(OpMul, g.Bin(OpMul, g.Load(x), scale), wt)
 }
+
+// Softcap is c*tanh(x/c), as c*(1 - 2/(exp(2x/c) + 1)), where x is not a
+// masked logit (below -1e30), which passes as it is.
+func (g *Row) Softcap(x int, c float32) int {
+	e := g.Add(Node{Kind: NUnary, Op: OpExp, A: g.Bin(OpMul, g.Const(2/c), x)})
+	t := g.Bin(OpSub, g.Const(1), g.Bin(OpDiv, g.Const(2), g.Bin(OpAdd, e, g.Const(1))))
+	return g.Select(g.Less(x, g.Const(-1e30)), x, g.Bin(OpMul, g.Const(c), t))
+}
+
+// Argmax stores at out (BufOutU32) each row's argmax of x: the index of its
+// greatest element, the lowest where several are.
+func (g *Row) Argmax(x, out int) {
+	r := g.Add(Node{Kind: NReduce, Red: RedArgmax, A: x})
+	g.Stages = append(g.Stages, Stage{Width: 1, Stores: []Store{{Buf: out, Val: r, Indexed: true, Ix: g.RowIdx()}}})
+}

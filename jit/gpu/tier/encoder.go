@@ -365,8 +365,12 @@ func (g *devTier) layersSession(s backend.Session) {
 			runProg(l, li, l.prog)
 			l.ran.note(formBlock, uint8(blockProgram))
 		}
-		if head != nil && err == nil {
-			err = fmt.Errorf("tier: the head has no composed form")
+		switch {
+		case head == nil || err != nil:
+		case rag == nil && !allRows && !fold && R == 1 && bs.headProg != nil:
+			g.runHead(lc, bs)
+		default:
+			err = fmt.Errorf("tier: the head has no composed form for this step")
 		}
 	}
 	// submit gets the sequence onto the device, by replaying a captured graph

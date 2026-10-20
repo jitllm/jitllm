@@ -3,7 +3,7 @@ package compose
 import "github.com/jitllm/jitllm/jit/gpu/ir"
 
 // simplify is k after the IR passes the former leaves to them: integer
-// constants folded, common subexpressions merged (cse) and identities removed (x+0, x*1, x*0, x%1, x-x), a split index
+// constants folded, common subexpressions merged (cse) and identities removed (x+0, x*1, x*0, x%1, x-x, min(x, 0)), a split index
 // recombined ((f/c)*c + f%c is f), an add of a constant whose one reader is
 // an access taken as that access's offset, and what no effect reads removed.
 func simplify(k *ir.Kernel) *ir.Kernel {
@@ -211,6 +211,11 @@ func foldInt(o *ir.Op, intConst func(ir.Value) (uint32, bool)) (ir.Value, bool) 
 		}
 	case ir.OpRem:
 		if ky && cy == 1 {
+			o.Imm = 0
+			return 0, true
+		}
+	case ir.OpMin:
+		if !signed && (kx && cx == 0 || ky && cy == 0) {
 			o.Imm = 0
 			return 0, true
 		}

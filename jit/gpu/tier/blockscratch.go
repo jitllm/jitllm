@@ -121,6 +121,8 @@ type blockScratch struct {
 	hNormB        backend.Buf // a LayerNorm head's bias (C6)
 	head          *resident
 	mvHead        mv
+	// headProg is the decode head's composed launches (PrepHead).
+	headProg []headLaunch
 	hRaw          []byte
 	hOut          []float32
 	att, prob, xb backend.Buf

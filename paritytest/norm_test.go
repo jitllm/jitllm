@@ -39,3 +39,30 @@ func TestTwoPassNormIsMains(t *testing.T) {
 		}
 	}
 }
+
+// TestArgmaxIsMains holds the composer's argmax to main's Argmax and
+// ArgmaxRows: a vocabulary at one row and over rows.
+func TestArgmaxIsMains(t *testing.T) {
+	for _, c := range []struct{ n, rows int }{{1000, 1}, {32000, 1}, {151936, 1}, {4096, 4}, {32000, 8}} {
+		name := fmt.Sprintf("n%d_r%d", c.n, c.rows)
+		t.Run(name, func(t *testing.T) {
+			var mk *ir.Kernel
+			var err error
+			if c.rows == 1 {
+				mk, err = mainkernels.Argmax(c.n)
+			} else {
+				mk, err = mainkernels.ArgmaxRows(c.n, c.rows)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			g := &compose.Row{Width: c.n, Rows: c.rows}
+			g.Argmax(g.Load(g.Buf(compose.BufRow)), g.Buf(compose.BufOutU32))
+			ps, err := g.Plan(compose.Facts{Target: sm70})
+			if err != nil {
+				t.Fatal(err)
+			}
+			same(t, name, []*ir.Kernel{mk}, emitAt(t, g, ps[0].S))
+		})
+	}
+}

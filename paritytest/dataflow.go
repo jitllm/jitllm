@@ -407,6 +407,18 @@ func (c *canon) index(i int) (affine, bool) {
 	}
 	var r affine
 	ok := true
+	zeroArg := func(j int) bool {
+		a := o.Args[j]
+		return a != 0 && c.k.Ops[a-1].Kind == ir.OpConst && c.k.Ops[a-1].Imm == 0
+	}
+	switch {
+	case o.Kind == ir.OpMin && o.Type == ir.U32 && (zeroArg(0) || zeroArg(1)):
+		// An unsigned minimum with 0 is 0.
+		r := affine{}
+		c.aff[i] = &r
+		c.busy[i] = false
+		return r, true
+	}
 	switch o.Kind {
 	case ir.OpConst:
 		r = affine{c: o.Imm}
@@ -506,7 +518,7 @@ func (c *canon) index(i int) (affine, bool) {
 		// An induction: phi(start, back) with back = phi + step, however
 		// the step is reached, is start + step*iteration. The back edge is
 		// read with the phi as an atom of its own; what that reading
-		// cached is dropped after.
+		// cached, forms and names, is dropped after.
 		ok = false
 		start, ok1 := arg(0)
 		if nx := int(o.Args[1]) - 1; ok1 && nx > i {
@@ -514,12 +526,21 @@ func (c *canon) index(i int) (affine, bool) {
 			for j, a := range c.aff {
 				unset[j] = a == nil
 			}
+			unnamed := make([]bool, len(c.ids))
+			for j, id := range c.ids {
+				unnamed[j] = id == 0
+			}
 			p := c.atom(atomCarried, int32(i), 0)
 			c.aff[i] = &p
 			back, ok2 := c.index(nx)
 			for j := range c.aff {
 				if unset[j] {
 					c.aff[j] = nil
+				}
+			}
+			for j := range c.ids {
+				if unnamed[j] {
+					c.ids[j] = 0
 				}
 			}
 			c.aff[i] = nil
