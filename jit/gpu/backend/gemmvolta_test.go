@@ -10,7 +10,6 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -29,7 +28,7 @@ func TestGemmVoltaMatchesTheReference(t *testing.T) {
 	ran := 0
 	for _, d := range devs {
 		defer d.Close()
-		for _, q := range []kernels.Quant{kernels.Q4_K, kernels.Q6_K, kernels.Q8_0, kernels.Q5_K, kernels.Q4_0, kernels.Q5_0, kernels.Q5_1} {
+		for _, q := range []mainkernels.Quant{mainkernels.Q4_K, mainkernels.Q6_K, mainkernels.Q8_0, mainkernels.Q5_K, mainkernels.Q4_0, mainkernels.Q5_0, mainkernels.Q5_1} {
 			for _, sh := range []struct {
 				rows, k, ntok, split int
 				tl                   mainkernels.VoltaTile
@@ -90,8 +89,8 @@ func TestGemmF16MatchesTheReference(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 		for _, f16k := range []int{16, 8} {
-			for _, q := range []kernels.Quant{kernels.Q4_K, kernels.Q6_K, kernels.Q8_0, kernels.Q5_K, kernels.Q4_0, kernels.Q5_0, kernels.Q5_1} {
-				sub, _, _, _ := kernels.Layout(q)
+			for _, q := range []mainkernels.Quant{mainkernels.Q4_K, mainkernels.Q6_K, mainkernels.Q8_0, mainkernels.Q5_K, mainkernels.Q4_0, mainkernels.Q5_0, mainkernels.Q5_1} {
+				sub, _, _, _ := mainkernels.Layout(q)
 				kb := max(32/sub, 1)
 				refused := false
 				for _, sh := range []struct {
@@ -156,7 +155,7 @@ func TestGemmVoltaSpeed(t *testing.T) {
 			rows, k, ntok := sh[0], sh[1], sh[2]
 			rng := rand.New(rand.NewSource(1))
 			g := newGPU(t, d)
-			qs, dw, scw, _ := kernels.PackWeights(kernels.Q4_K, rawWeights(kernels.Q4_K, rows, k, rng), rows, k)
+			qs, dw, scw, _ := mainkernels.PackWeights(mainkernels.Q4_K, rawWeights(mainkernels.Q4_K, rows, k, rng), rows, k)
 			bQS, bD, bSC := g.up(u32bytes(qs)), g.up(u32bytes(dw)), g.up(u32bytes(scw))
 			out := g.up(make([]byte, 8*rows*ntok*4))
 			bB := g.up(make([]byte, ntok*k*2))
@@ -177,7 +176,7 @@ func TestGemmVoltaSpeed(t *testing.T) {
 				t.Logf("%5dx%-5d t%d %-34s %8.1f us  %.2f TMAC/s", rows, k, ntok, name, float64(el.Microseconds()),
 					float64(rows)*float64(k)*float64(ntok)/el.Seconds()/1e12)
 			}
-			kk, _ := mainkernels.MatVecMMA70(mainkernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok, MT: 2, NT: 4})
+			kk, _ := mainkernels.MatVecMMA70(mainkernels.MatVecShape{T: mainkernels.Q4_K, K: k, Rows: rows, NTok: ntok, MT: 2, NT: 4})
 			if kern, err := d.Compile(kk); err == nil {
 				warps := rows / 64 * ntok / 32
 				time1("mma70 mt2 nt4", func() error { return kern.Launch((warps*32+127)/128, 128, bQS, bD, bSC, bB, out) })
@@ -195,7 +194,7 @@ func TestGemmVoltaSpeed(t *testing.T) {
 			}
 			for _, tl := range tiles {
 				for _, split := range []int{1, 2, 4} {
-					s := mainkernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok, Split: split}
+					s := mainkernels.MatVecShape{T: mainkernels.Q4_K, K: k, Rows: rows, NTok: ntok, Split: split}
 					kk, err := mainkernels.GemmVolta(s, tl)
 					if err != nil {
 						continue
@@ -237,8 +236,8 @@ func TestGemmF16DeepStageMatchesTheReference(t *testing.T) {
 			if ptxSM(d.Name()) < mmaMinSM(ir.MMAShape{M: 16, N: 8, K: f16k, Kind: ir.MMAF16}) {
 				continue
 			}
-			for _, q := range []kernels.Quant{kernels.Q4_K, kernels.Q6_K, kernels.Q8_0, kernels.Q5_K, kernels.Q4_0, kernels.Q5_1} {
-				sub, _, _, _ := kernels.Layout(q)
+			for _, q := range []mainkernels.Quant{mainkernels.Q4_K, mainkernels.Q6_K, mainkernels.Q8_0, mainkernels.Q5_K, mainkernels.Q4_0, mainkernels.Q5_1} {
+				sub, _, _, _ := mainkernels.Layout(q)
 				for _, sh := range []struct {
 					rows, k, ntok, split, depth int
 					tl                          mainkernels.VoltaTile

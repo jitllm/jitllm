@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -38,7 +37,7 @@ func TestQuantizeOnTheRoundingBoundary(t *testing.T) {
 		wantA := make([]uint32, k/4)
 		wantD := make([]float32, k/32)
 		wantS := make([]float32, k/16)
-		if err := kernels.PackActivationsInto(wantA, wantD, wantS, x, window); err != nil {
+		if err := mainkernels.PackActivationsInto(wantA, wantD, wantS, x, window); err != nil {
 			t.Fatal(err)
 		}
 		if moved := oldQuantMoves(x, window, wantA); moved < 200 {

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -48,11 +47,11 @@ func TestGemmTileMatchesTheReference(t *testing.T) {
 		if ok, _ := backend.LowersTile(d, tile16x8); ok {
 			talls = append(talls, true)
 		}
-		for _, q := range []kernels.Quant{kernels.Q4_K, kernels.Q6_K, kernels.Q8_0, kernels.Q5_K,
-			kernels.Q4_0, kernels.Q5_0, kernels.Q3_K, kernels.Q5_1} {
+		for _, q := range []mainkernels.Quant{mainkernels.Q4_K, mainkernels.Q6_K, mainkernels.Q8_0, mainkernels.Q5_K,
+			mainkernels.Q4_0, mainkernels.Q5_0, mainkernels.Q3_K, mainkernels.Q5_1} {
 			for _, sh := range gemmTileCases {
 				for _, isTall := range talls {
-					sub, _, _, _ := kernels.Layout(q)
+					sub, _, _, _ := mainkernels.Layout(q)
 					tl := sh.tl
 					tl.KB = max(tl.KB*32/sub, 1)
 					tl.Tall = isTall
@@ -107,9 +106,9 @@ func TestGemmTileGroupedMatchesPerExpert(t *testing.T) {
 	ran := 0
 	for _, d := range devs {
 		defer d.Close()
-		for _, q := range []kernels.Quant{kernels.Q4_K, kernels.MXFP4, kernels.Q6_K, kernels.Q8_0, kernels.Q5_0,
-			kernels.Q5_K, kernels.Q4_0, kernels.Q5_1} {
-			sub, _, _, _ := kernels.Layout(q)
+		for _, q := range []mainkernels.Quant{mainkernels.Q4_K, mainkernels.MXFP4, mainkernels.Q6_K, mainkernels.Q8_0, mainkernels.Q5_0,
+			mainkernels.Q5_K, mainkernels.Q4_0, mainkernels.Q5_1} {
+			sub, _, _, _ := mainkernels.Layout(q)
 			kb := max(32/sub, 1)
 			for _, c := range []struct {
 				rows, k, experts int
@@ -157,10 +156,10 @@ func TestGemmTileSpeed(t *testing.T) {
 		t.Skip("set JITLLM_GEMMTILE_BENCH=1")
 	}
 	type shape struct {
-		q       kernels.Quant
+		q       mainkernels.Quant
 		rows, k int
 	}
-	shapes := []shape{{kernels.Q4_K, 8192, 2048}, {kernels.Q4_K, 2048, 8192}, {kernels.Q4_K, 2048, 2048}, {kernels.Q4_K, 512, 2048}}
+	shapes := []shape{{mainkernels.Q4_K, 8192, 2048}, {mainkernels.Q4_K, 2048, 8192}, {mainkernels.Q4_K, 2048, 2048}, {mainkernels.Q4_K, 512, 2048}}
 	if v := os.Getenv("JITLLM_GEMMTILE_SHAPES"); v != "" {
 		shapes = nil
 		for _, f := range strings.Split(v, ",") {
@@ -169,8 +168,8 @@ func TestGemmTileSpeed(t *testing.T) {
 			if n, err := fmt.Sscanf(strings.Replace(f, ":", " ", 1), "%s %dx%d", &name, &sh.rows, &sh.k); n != 3 {
 				t.Fatalf("shape %q: %v", f, err)
 			}
-			for _, q := range []kernels.Quant{kernels.Q4_K, kernels.Q6_K, kernels.Q8_0, kernels.Q5_K,
-				kernels.Q4_0, kernels.Q5_0, kernels.Q3_K, kernels.Q5_1} {
+			for _, q := range []mainkernels.Quant{mainkernels.Q4_K, mainkernels.Q6_K, mainkernels.Q8_0, mainkernels.Q5_K,
+				mainkernels.Q4_0, mainkernels.Q5_0, mainkernels.Q3_K, mainkernels.Q5_1} {
 				if q.String() == name {
 					sh.q = q
 				}
@@ -195,7 +194,7 @@ func TestGemmTileSpeed(t *testing.T) {
 			q, rows, k := sh.q, sh.rows, sh.k
 			rng := rand.New(rand.NewSource(1))
 			g := newGPU(t, d)
-			qs, dw, scw, _ := kernels.PackWeights(q, rawWeights(q, rows, k, rng), rows, k)
+			qs, dw, scw, _ := mainkernels.PackWeights(q, rawWeights(q, rows, k, rng), rows, k)
 			bQS, bD, bSC := g.up(u32bytes(qs)), g.up(u32bytes(dw)), g.up(u32bytes(scw))
 			out := g.up(make([]byte, rows*ntok*4))
 			bB := g.up(make([]byte, ntok*k*2))
@@ -216,7 +215,7 @@ func TestGemmTileSpeed(t *testing.T) {
 				t.Logf("%v %5dx%-5d t%d %-34s %8.1f us  %.2f TFLOP/s", q, rows, k, ntok, name, float64(el.Microseconds()),
 					2*float64(rows)*float64(k)*float64(ntok)/el.Seconds()/1e12)
 			}
-			sub, _, _, _ := kernels.Layout(q)
+			sub, _, _, _ := mainkernels.Layout(q)
 			for _, tl := range []mainkernels.TileGemm{
 				{MT: 4, NT: 2, WM: 2, WN: 2, KB: 1}, {MT: 4, NT: 2, WM: 2, WN: 2, KB: 2},
 				{MT: 4, NT: 4, WM: 2, WN: 2, KB: 1}, {MT: 4, NT: 4, WM: 2, WN: 2, KB: 2},

@@ -8,7 +8,6 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -29,10 +28,10 @@ func TestMatVecPickMatchesTheReference(t *testing.T) {
 	ran := 0
 	for _, d := range devs {
 		defer d.Close()
-		for _, q := range []kernels.Quant{kernels.Q8_0, kernels.Q4_K, kernels.Q6_K, kernels.Q4_0, kernels.Q5_K, kernels.Q3_K} {
+		for _, q := range []mainkernels.Quant{mainkernels.Q8_0, mainkernels.Q4_K, mainkernels.Q6_K, mainkernels.Q4_0, mainkernels.Q5_K, mainkernels.Q3_K} {
 			rng := rand.New(rand.NewSource(int64(q) + 7))
 			raw := rawWeights(q, rows, k, rng)
-			qs, dw, scw, err := kernels.PackWeights(q, raw, rows, k)
+			qs, dw, scw, err := mainkernels.PackWeights(q, raw, rows, k)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -47,7 +46,7 @@ func TestMatVecPickMatchesTheReference(t *testing.T) {
 			for i := range x {
 				x[i] = float32(rng.NormFloat64())
 			}
-			av, as, asum, err := kernels.PackActivations(x)
+			av, as, asum, err := mainkernels.PackActivations(x)
 			if err != nil {
 				t.Fatal(err)
 			}

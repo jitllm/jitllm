@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -47,7 +46,7 @@ var int8M8Tiles = func() (out []mainkernels.Int8Tile) {
 // order. run launches a kernel into a fresh poisoned output of n floats per
 // split slice and returns the bytes. A format GemmInt8 has no decode for is
 // refused by name.
-func gemmInt8Case(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, ntok int, want []byte, tiles []mainkernels.Int8Tile,
+func gemmInt8Case(t *testing.T, d backend.Device, q mainkernels.Quant, nrows, k, ntok int, want []byte, tiles []mainkernels.Int8Tile,
 	run func(kern backend.Kernel, groups, w, n int) []byte) {
 	t.Helper()
 	if !mainkernels.Int8OK(q) {

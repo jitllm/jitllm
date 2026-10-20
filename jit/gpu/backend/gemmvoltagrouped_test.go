@@ -10,7 +10,6 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -43,9 +42,9 @@ func TestGemmVoltaGroupedMatchesPerExpert(t *testing.T) {
 	ran := 0
 	for _, d := range devs {
 		defer d.Close()
-		for _, q := range []kernels.Quant{kernels.Q4_K, kernels.MXFP4, kernels.Q6_K, kernels.Q8_0, kernels.Q5_0,
-			kernels.Q5_K, kernels.Q4_0, kernels.Q5_1} {
-			sub, _, _, _ := kernels.Layout(q)
+		for _, q := range []mainkernels.Quant{mainkernels.Q4_K, mainkernels.MXFP4, mainkernels.Q6_K, mainkernels.Q8_0, mainkernels.Q5_0,
+			mainkernels.Q5_K, mainkernels.Q4_0, mainkernels.Q5_1} {
+			sub, _, _, _ := mainkernels.Layout(q)
 			kb := max(32/sub, 1)
 			for _, c := range []struct {
 				rows, k, experts int
@@ -125,7 +124,7 @@ func groupedGemmCase(t *testing.T, d backend.Device, kern backend.Kernel, s main
 	rng := rand.New(rand.NewSource(int64(s.Rows*31 + s.K + int(s.T))))
 	g := newGPU(t, d)
 	defer g.free()
-	gt := map[kernels.Quant]quant.Type{kernels.MXFP4: quant.MXFP4}[s.T]
+	gt := map[mainkernels.Quant]quant.Type{mainkernels.MXFP4: quant.MXFP4}[s.T]
 	if gt == 0 {
 		gt = ggufOf[s.T]
 	}
@@ -137,7 +136,7 @@ func groupedGemmCase(t *testing.T, d backend.Device, kern backend.Kernel, s main
 	var qs, dw, scw []uint32
 	for e := range sheets {
 		raw := randWeights(s.T, s.Rows, s.K, rng)
-		q1, d1, s1, err := kernels.PackWeights(s.T, raw, s.Rows, s.K)
+		q1, d1, s1, err := mainkernels.PackWeights(s.T, raw, s.Rows, s.K)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -152,7 +151,7 @@ func groupedGemmCase(t *testing.T, d backend.Device, kern backend.Kernel, s main
 		// A sheet's scale plane is PackedWords' length, not padded: the base
 		// the kernel adds is e*nsc, and a one-word stand-in for an empty plane
 		// is only ever read at index 0 of a format with no plane.
-		_, _, nsc, err := kernels.PackedWords(s.T, s.Rows, s.K)
+		_, _, nsc, err := mainkernels.PackedWords(s.T, s.Rows, s.K)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -184,7 +183,7 @@ func groupedGemmCase(t *testing.T, d backend.Device, kern backend.Kernel, s main
 		copy(x[col*s.K:(col+1)*s.K], srcRows[int(perm[col])*s.K:])
 	}
 	n := s.Rows * s.NTok
-	sub, _, _, _ := kernels.Layout(s.T)
+	sub, _, _, _ := mainkernels.Layout(s.T)
 	at := s.NTok * s.K / sub
 	ak, err := mainkernels.ActF16T(s.T, s.NTok, s.K)
 	if err != nil {

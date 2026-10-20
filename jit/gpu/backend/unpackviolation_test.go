@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -62,11 +61,11 @@ func TestUnpackViolationsAreCaught(t *testing.T) {
 	rows, k := c.rows, c.k
 	want := struct{ qs, d, sc []uint32 }{}
 	var err error
-	want.qs, want.d, want.sc, err = kernels.PackWeights(kernels.Q4_K, c.src, rows, k)
+	want.qs, want.d, want.sc, err = mainkernels.PackWeights(mainkernels.Q4_K, c.src, rows, k)
 	if err != nil {
 		t.Fatal(err)
 	}
-	good, err := mainkernels.Unpack(kernels.Q4_K, rows, k)
+	good, err := mainkernels.Unpack(mainkernels.Q4_K, rows, k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +151,7 @@ func diffWords(want, got []uint32) int {
 // Unpacking in place would apply the transform twice to the last item, and
 // Validate sees it.
 func TestUnpackRefusesAnAliasedBuffer(t *testing.T) {
-	good, err := mainkernels.Unpack(kernels.Q4_K, 256, 2048)
+	good, err := mainkernels.Unpack(mainkernels.Q4_K, 256, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}

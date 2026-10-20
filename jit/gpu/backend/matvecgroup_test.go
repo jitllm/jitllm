@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -27,9 +26,9 @@ func TestGroupEpiloguesAreTheSeparateLaunches(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 		for _, c := range []struct {
-			q       kernels.Quant
+			q       mainkernels.Quant
 			rows, k int
-		}{{kernels.Q4_K, 2048, 2048}, {kernels.Q6_K, 512, 2048}, {kernels.Q4_K, 1024, 4096}} {
+		}{{mainkernels.Q4_K, 2048, 2048}, {mainkernels.Q6_K, 512, 2048}, {mainkernels.Q4_K, 1024, 4096}} {
 			for _, sp := range []struct {
 				split int
 				grp   bool
@@ -45,7 +44,7 @@ func TestGroupEpiloguesAreTheSeparateLaunches(t *testing.T) {
 	}
 }
 
-func groupEpiCase(t *testing.T, d backend.Device, name string, q kernels.Quant, rows, k, ntok, split int, grp bool, epi string) {
+func groupEpiCase(t *testing.T, d backend.Device, name string, q mainkernels.Quant, rows, k, ntok, split int, grp bool, epi string) {
 	t.Helper()
 	const actRows = 8
 	rng := rand.New(rand.NewSource(int64(len(name) + rows + ntok*7)))
@@ -55,12 +54,12 @@ func groupEpiCase(t *testing.T, d backend.Device, name string, q kernels.Quant, 
 	for i := range x {
 		x[i] = float32(rng.NormFloat64())
 	}
-	av, as, asum, err := kernels.PackActivations(x)
+	av, as, asum, err := mainkernels.PackActivations(x)
 	if err != nil {
 		t.Fatal(err)
 	}
 	bA, bAX := g.up(u32bytes(av)), g.up(f32bytes(append(append([]float32{}, as...), asum...)))
-	qs, dw, scw, err := kernels.PackWeights(q, rawWeights(q, rows, k, rng), rows, k)
+	qs, dw, scw, err := mainkernels.PackWeights(q, rawWeights(q, rows, k, rng), rows, k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,12 +84,12 @@ func groupEpiCase(t *testing.T, d backend.Device, name string, q kernels.Quant, 
 	base := mainkernels.MatVecShape{T: q, K: k, Rows: rows, NTok: ntok, Tok: ntok, ActRows: actRows,
 		Split: split, GroupSplit: grp}
 	fused := base
-	act := kernels.ActSiLU
+	act := mainkernels.ActSiLU
 	if epi == "res" {
 		fused.Bias, fused.BiasRows = true, true
 	} else {
 		if epi == "gelu" {
-			act = kernels.ActGELU
+			act = mainkernels.ActGELU
 		}
 		fused.Gate, fused.GateAct = true, act
 	}

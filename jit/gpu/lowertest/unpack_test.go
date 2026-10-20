@@ -4,11 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 	"github.com/jitllm/jitllm/jit/gpu/msl"
 	"github.com/jitllm/jitllm/jit/gpu/ptx"
 	"github.com/jitllm/jitllm/jit/gpu/spirv"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // Which formats the device can unpack is a list in the repo. A page-in with no
@@ -16,20 +15,20 @@ import (
 // format is either implemented and lowers on every backend, or it declines
 // with a reason.
 var (
-	unpackImplemented = []kernels.Quant{kernels.Q4_K}
-	unpackDeclined    = []kernels.Quant{
-		kernels.Q4_0, kernels.Q5_0, kernels.Q5_1, kernels.Q8_0, kernels.Q3_K, kernels.Q5_K,
-		kernels.Q6_K, kernels.TQ2, kernels.TQ2F,
+	unpackImplemented = []mainkernels.Quant{mainkernels.Q4_K}
+	unpackDeclined    = []mainkernels.Quant{
+		mainkernels.Q4_0, mainkernels.Q5_0, mainkernels.Q5_1, mainkernels.Q8_0, mainkernels.Q3_K, mainkernels.Q5_K,
+		mainkernels.Q6_K, mainkernels.TQ2, mainkernels.TQ2F,
 		// MXFP4's 17-byte block straddles words.
-		kernels.MXFP4,
+		mainkernels.MXFP4,
 		// A float format's pack is a copy of its rows.
-		kernels.Float32, kernels.Float16, kernels.BFloat16,
+		mainkernels.Float32, mainkernels.Float16, mainkernels.BFloat16,
 	}
 )
 
 // TestUnpackCoversExactlyWhatItClaims is the sweep.
 func TestUnpackCoversExactlyWhatItClaims(t *testing.T) {
-	seen := map[kernels.Quant]int{}
+	seen := map[mainkernels.Quant]int{}
 	for _, q := range unpackImplemented {
 		seen[q]++
 	}
@@ -39,13 +38,13 @@ func TestUnpackCoversExactlyWhatItClaims(t *testing.T) {
 	// The enum's length is pinned, so a new format needs a decision here.
 	n := 0
 	for {
-		if !quantExists(kernels.Quant(n)) {
+		if !quantExists(mainkernels.Quant(n)) {
 			break
 		}
 		n++
 	}
 	if n != len(seen) {
-		t.Fatalf("kernels.Quant has %d values and this file accounts for %d; a format added "+
+		t.Fatalf("mainkernels.Quant has %d values and this file accounts for %d; a format added "+
 			"without an entry above gets the 0.90 GB/s host packer and no red line", n, len(seen))
 	}
 	for q, c := range seen {
@@ -106,9 +105,9 @@ func TestUnpackCoversExactlyWhatItClaims(t *testing.T) {
 	}
 }
 
-// quantExists reports whether n is a value of kernels.Quant, by asking the
+// quantExists reports whether n is a value of mainkernels.Quant, by asking the
 // String method, which indexes a fixed array and panics past the end.
-func quantExists(q kernels.Quant) (ok bool) {
+func quantExists(q mainkernels.Quant) (ok bool) {
 	defer func() {
 		if recover() != nil {
 			ok = false

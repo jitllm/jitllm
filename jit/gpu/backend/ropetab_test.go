@@ -8,7 +8,6 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -58,7 +57,7 @@ var ropeTabGeoms = []struct {
 // and catastrophic above it.
 func ropeTabPositions() []int {
 	p := []int{0, 1, 2, 3, 5, 127, 128, 129, 1000, 4095, 16383, 16384,
-		65535, 131071, 1 << 21, 1<<21 + 1, 1 << 24, kernels.RopeTabMaxPos - 1}
+		65535, 131071, 1 << 21, 1<<21 + 1, 1 << 24, mainkernels.RopeTabMaxPos - 1}
 	return p
 }
 
@@ -79,19 +78,19 @@ func ropeTabCase(t *testing.T, d backend.Device) {
 			gg := newGPU(t, d)
 			defer gg.free()
 			planes := g.rope.TabPlanes(npairs)
-			if len(planes) != kernels.RopeTabBlock(npairs) {
+			if len(planes) != mainkernels.RopeTabBlock(npairs) {
 				t.Fatalf("planes are %d words, the layout says %d",
-					len(planes), kernels.RopeTabBlock(npairs))
+					len(planes), mainkernels.RopeTabBlock(npairs))
 			}
 			bPl := gg.up(f32bytes(planes))
-			bCo := gg.up(f32bytes(kernels.RopeTabConsts()))
+			bCo := gg.up(f32bytes(mainkernels.RopeTabConsts()))
 			bPos := gg.up(make([]byte, (g.rows+1)*4))
 			bOut := gg.up(make([]byte, g.rows*g.rope.NRot*4))
 
 			var worstHost, worstOracle float64
 			var atHost int
 			for _, p0 := range ropeTabPositions() {
-				if p0+g.rows > kernels.RopeTabMaxPos {
+				if p0+g.rows > mainkernels.RopeTabMaxPos {
 					continue
 				}
 				got := ropeTabRun(t, c, bPl, bCo, bPos, bOut, p0, g.rows, g.rope.NRot)
@@ -232,7 +231,7 @@ func ropeTabViolations(t *testing.T, d backend.Device) {
 	gg := newGPU(t, d)
 	defer gg.free()
 	bPl := gg.up(f32bytes(r.TabPlanes(npairs)))
-	bCo := gg.up(f32bytes(kernels.RopeTabConsts()))
+	bCo := gg.up(f32bytes(mainkernels.RopeTabConsts()))
 	bPos := gg.up(make([]byte, 8))
 	bOut := gg.up(make([]byte, r.NRot*4))
 
@@ -265,20 +264,20 @@ func ropeTabViolations(t *testing.T, d backend.Device) {
 		extra int
 	}{
 		{"quadrant-selection", "cosine's quadrant is taken from n instead of n+1",
-			kernels.RopeTabOneVecWord, 8, 0},
+			mainkernels.RopeTabOneVecWord, 8, 0},
 		{"sign-step", "bit 1 of the quadrant stops deciding the sign, so two of four quadrants are wrong",
-			kernels.RopeTabSignVecWord, 8, kernels.RopeTabTwoVecWord},
+			mainkernels.RopeTabSignVecWord, 8, mainkernels.RopeTabTwoVecWord},
 		// The last two are the device's own (no host tier reads those words;
 		// each stands in for an instruction the IR lacks). RopeTabMagicWord is
 		// absent because the device does not read it, so zeroing it would remove
 		// nothing.
 		{"no-mod-4-mask", "the digit products are never folded, so the angle is formed large",
-			kernels.RopeTabMod4MaskWord, 1, 0},
+			mainkernels.RopeTabMod4MaskWord, 1, 0},
 		{"no-round-to-integer", "n is truncated rather than rounded, so |r| leaves pi/4",
-			kernels.RopeTabHalfWord, 1, 0},
+			mainkernels.RopeTabHalfWord, 1, 0},
 	} {
 		t.Run(v.name, func(t *testing.T) {
-			cs := kernels.RopeTabConsts()
+			cs := mainkernels.RopeTabConsts()
 			for i := 0; i < v.n; i++ {
 				cs[v.word+i] = 0
 				if v.extra != 0 {
@@ -289,7 +288,7 @@ func ropeTabViolations(t *testing.T, d backend.Device) {
 				t.Fatal(err)
 			}
 			defer func() {
-				if err := bCo.Write(f32bytes(kernels.RopeTabConsts())); err != nil {
+				if err := bCo.Write(f32bytes(mainkernels.RopeTabConsts())); err != nil {
 					t.Fatal(err)
 				}
 			}()
@@ -361,7 +360,7 @@ func TestRopeTableLeavesThePaddedRowsAlone(t *testing.T) {
 			gg := newGPU(t, d)
 			defer gg.free()
 			bPl := gg.up(f32bytes(r.TabPlanes(npairs)))
-			bCo := gg.up(f32bytes(kernels.RopeTabConsts()))
+			bCo := gg.up(f32bytes(mainkernels.RopeTabConsts()))
 			bPos := gg.up(make([]byte, (rows+1)*4))
 			bOut := gg.up(make([]byte, rows*nrot*4))
 

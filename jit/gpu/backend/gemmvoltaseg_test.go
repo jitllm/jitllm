@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -35,9 +34,9 @@ func TestGemmVoltaSegmentsIsTheLaunches(t *testing.T) {
 			{MT: 4, NT: 4, WM: 2, WN: 2, KB: 1, F16K: 8},
 		} {
 			segs := []mainkernels.MatVecShape{
-				{T: kernels.Q4_K, K: 1024, Rows: 512, NTok: 128},
-				{T: kernels.Q4_K, K: 1024, Rows: 512, NTok: 128},
-				{T: kernels.Q8_0, K: 1024, Rows: 256, NTok: 128, Bias: true},
+				{T: mainkernels.Q4_K, K: 1024, Rows: 512, NTok: 128},
+				{T: mainkernels.Q4_K, K: 1024, Rows: 512, NTok: 128},
+				{T: mainkernels.Q8_0, K: 1024, Rows: 256, NTok: 128, Bias: true},
 			}
 			if gemmSegCase(t, d, segs, tl) {
 				ran++
@@ -94,7 +93,7 @@ func gemmSegCase(t *testing.T, d backend.Device, segs []mainkernels.MatVecShape,
 	ws := make([]w, len(segs))
 	refs, gots, swapped := make([]backend.Buf, len(segs)), make([]backend.Buf, len(segs)), make([]backend.Buf, len(segs))
 	for i, s := range segs {
-		qs, dw, scw, err := kernels.PackWeights(s.T, rawWeights(s.T, s.Rows, k, rng), s.Rows, k)
+		qs, dw, scw, err := mainkernels.PackWeights(s.T, rawWeights(s.T, s.Rows, k, rng), s.Rows, k)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -9,7 +9,6 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -46,7 +45,7 @@ func TestQuantizePaddedMatchesTheHost(t *testing.T) {
 		}
 		n := c.rows * kp
 		wantA, wantD, wantS := make([]uint32, n/4), make([]float32, n/32), make([]float32, n/16)
-		if err := kernels.PackActivationsInto(wantA, wantD, wantS, padded, window); err != nil {
+		if err := mainkernels.PackActivationsInto(wantA, wantD, wantS, padded, window); err != nil {
 			t.Fatal(err)
 		}
 		for _, d := range devs {

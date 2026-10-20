@@ -9,12 +9,11 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 // The gate for a device unpack is byte equality against the host packer
-// (kernels.PackWeightsInto), whose bytes every device matvec reads. An NMSE
+// (mainkernels.PackWeightsInto), whose bytes every device matvec reads. An NMSE
 // bound would admit a permuted layout, where every magnitude is right and every
 // position is wrong.
 //
@@ -116,7 +115,7 @@ func q4kCases(t *testing.T) []unpackCase {
 			name: fmt.Sprintf("ragged/%dx%d", rows, base.k),
 			rows: rows, k: base.k, src: base.src[:rows*base.k/256*144],
 		}
-		if got := mainkernels.UnpackThreads(kernels.Q4_K, c.rows, c.k) % 128; got == 0 {
+		if got := mainkernels.UnpackThreads(mainkernels.Q4_K, c.rows, c.k) % 128; got == 0 {
 			t.Fatalf("%s was meant to be ragged and its thread count is a multiple of 128; "+
 				"the surplus-thread clamp would go unexercised under a green line", c.name)
 		}
@@ -147,11 +146,11 @@ func TestUnpackMatchesHostPacker(t *testing.T) {
 			for _, c := range cases {
 				c := c
 				t.Run(c.name, func(t *testing.T) {
-					qs, dw, sc, err := kernels.PackWeights(kernels.Q4_K, c.src, c.rows, c.k)
+					qs, dw, sc, err := mainkernels.PackWeights(mainkernels.Q4_K, c.src, c.rows, c.k)
 					if err != nil {
 						t.Fatalf("host pack: %v", err)
 					}
-					kk, err := mainkernels.Unpack(kernels.Q4_K, c.rows, c.k)
+					kk, err := mainkernels.Unpack(mainkernels.Q4_K, c.rows, c.k)
 					if err != nil {
 						t.Fatalf("Unpack: %v", err)
 					}
@@ -226,7 +225,7 @@ func runUnpack(t *testing.T, d backend.Device, kk *ir.Kernel, c unpackCase,
 		t.Fatalf("upload src: %v", err)
 	}
 	const width = 128
-	threads := mainkernels.UnpackThreads(kernels.Q4_K, c.rows, c.k)
+	threads := mainkernels.UnpackThreads(mainkernels.Q4_K, c.rows, c.k)
 	if threads != c.rows*c.k/256 {
 		t.Fatalf("UnpackThreads says %d, the mapping is one thread per (row, super-block) = %d",
 			threads, c.rows*c.k/256)

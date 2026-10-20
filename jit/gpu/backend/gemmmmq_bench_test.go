@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -47,21 +46,21 @@ func TestGemmMMQSweep(t *testing.T) {
 		}
 		for _, sh := range []struct {
 			what    string
-			q       kernels.Quant
+			q       mainkernels.Quant
 			rows, k int
 		}{
-			{"q/o", kernels.Q4_K, 4096, 4096},
-			{"k", kernels.Q4_K, 1024, 4096},
-			{"v", kernels.Q6_K, 1024, 4096},
-			{"gate/up", kernels.Q4_K, 14336, 4096},
-			{"down q4k", kernels.Q4_K, 4096, 14336},
-			{"down q6k", kernels.Q6_K, 4096, 14336},
+			{"q/o", mainkernels.Q4_K, 4096, 4096},
+			{"k", mainkernels.Q4_K, 1024, 4096},
+			{"v", mainkernels.Q6_K, 1024, 4096},
+			{"gate/up", mainkernels.Q4_K, 14336, 4096},
+			{"down q4k", mainkernels.Q4_K, 4096, 14336},
+			{"down q6k", mainkernels.Q6_K, 4096, 14336},
 		} {
 			const ntok = 512
-			sub, _, _, _ := kernels.Layout(sh.q)
+			sub, _, _, _ := mainkernels.Layout(sh.q)
 			rng := rand.New(rand.NewSource(1))
 			g := newGPU(t, d)
-			qs, dw, scw, _ := kernels.PackWeights(sh.q, rawWeights(sh.q, sh.rows, sh.k, rng), sh.rows, sh.k)
+			qs, dw, scw, _ := mainkernels.PackWeights(sh.q, rawWeights(sh.q, sh.rows, sh.k, rng), sh.rows, sh.k)
 			if len(scw) == 0 {
 				scw = []uint32{0}
 			}

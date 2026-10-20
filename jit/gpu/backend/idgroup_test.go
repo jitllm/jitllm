@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -32,8 +31,8 @@ func TestIndexedGroupSplitMatchesTheReduce(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
-			for _, q := range []kernels.Quant{kernels.Q4_0, kernels.Q8_0, kernels.Q4_K, kernels.Q6_K,
-				kernels.MXFP4} {
+			for _, q := range []mainkernels.Quant{mainkernels.Q4_0, mainkernels.Q8_0, mainkernels.Q4_K, mainkernels.Q6_K,
+				mainkernels.MXFP4} {
 				for _, c := range []struct {
 					rows, k, experts, split int
 					slotAct                 bool
@@ -63,7 +62,7 @@ func TestIndexedGroupSplitMatchesTheReduce(t *testing.T) {
 	}
 }
 
-func idGroupCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, experts, split int,
+func idGroupCase(t *testing.T, d backend.Device, q mainkernels.Quant, rows, k, experts, split int,
 	slotAct bool, sel []uint32) {
 	if k%q.Elems() != 0 {
 		t.Skipf("k=%d is not a multiple of %d", k, q.Elems())
@@ -71,7 +70,7 @@ func idGroupCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	slots := len(sel)
 	rng := rand.New(rand.NewSource(int64(rows*31+k*7+split) + int64(q)))
 	raw := randWeights(q, experts*rows, k, rng)
-	if q == kernels.MXFP4 {
+	if q == mainkernels.MXFP4 {
 		// The E8M0 byte leads each 17-byte block; a random one reaches 2^128.
 		for i := 0; i < len(raw); i += 17 {
 			raw[i] = byte(120 + rng.Intn(14))
@@ -80,7 +79,7 @@ func idGroupCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	perExpert := len(raw) / experts
 	var qs, dw, scw []uint32
 	for e := 0; e < experts; e++ {
-		q1, d1, s1, err := kernels.PackWeights(q, raw[e*perExpert:(e+1)*perExpert], rows, k)
+		q1, d1, s1, err := mainkernels.PackWeights(q, raw[e*perExpert:(e+1)*perExpert], rows, k)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -101,7 +100,7 @@ func idGroupCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	var av []uint32
 	var as, asum []float32
 	for j := 0; j < nact; j++ {
-		a1, s1, u1, err := kernels.PackActivations(x[j*k : (j+1)*k])
+		a1, s1, u1, err := mainkernels.PackActivations(x[j*k : (j+1)*k])
 		if err != nil {
 			t.Fatal(err)
 		}

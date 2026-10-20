@@ -91,7 +91,7 @@ func TestComposedMMAMatchesMain(t *testing.T) {
 				}
 				return got
 			}
-			mk, err := mainkernels.MatVecMMA(mainkernels.MatVecShape{T: kernels.Q8_0, K: c.k, Rows: c.rows, NTok: c.toks,
+			mk, err := mainkernels.MatVecMMA(mainkernels.MatVecShape{T: mainkernels.Q8_0, K: c.k, Rows: c.rows, NTok: c.toks,
 				MT: c.mt, NT: c.nt, Bias: true})
 			if err != nil {
 				t.Fatal(err)

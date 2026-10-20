@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -25,7 +24,7 @@ func TestMatVecSegmentsIsTheSeparateLaunches(t *testing.T) {
 		t.Skip("no GPU backend on this host")
 	}
 	type seg struct {
-		q    kernels.Quant
+		q    mainkernels.Quant
 		rows int
 	}
 	for _, d := range devs {
@@ -34,10 +33,10 @@ func TestMatVecSegmentsIsTheSeparateLaunches(t *testing.T) {
 			segs []seg
 			k    int
 		}{
-			{[]seg{{kernels.Q4_K, 4096}, {kernels.Q4_K, 1024}, {kernels.Q6_K, 1024}}, 4096},
-			{[]seg{{kernels.Q8_0, 256}, {kernels.Q4_K, 64}, {kernels.Q8_0, 64}}, 512},
+			{[]seg{{mainkernels.Q4_K, 4096}, {mainkernels.Q4_K, 1024}, {mainkernels.Q6_K, 1024}}, 4096},
+			{[]seg{{mainkernels.Q8_0, 256}, {mainkernels.Q4_K, 64}, {mainkernels.Q8_0, 64}}, 512},
 			// Qwen2-1.5B's: two KV heads, a k that is six Q6_K super-blocks.
-			{[]seg{{kernels.Q4_K, 1536}, {kernels.Q4_K, 256}, {kernels.Q6_K, 256}}, 1536},
+			{[]seg{{mainkernels.Q4_K, 1536}, {mainkernels.Q4_K, 256}, {mainkernels.Q6_K, 256}}, 1536},
 		} {
 			for _, sp := range []struct {
 				split int
@@ -64,7 +63,7 @@ func TestMatVecSegmentsIsTheSeparateLaunches(t *testing.T) {
 	}
 }
 
-func rawWeights(q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
+func rawWeights(q mainkernels.Quant, rows, k int, rng *rand.Rand) []byte {
 	nb := k / q.Elems()
 	bb := q.BlockBytes()
 	raw := make([]byte, rows*nb*bb)
@@ -75,19 +74,19 @@ func rawWeights(q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
 	for blk := 0; blk < rows*nb; blk++ {
 		b := raw[blk*bb:]
 		switch q {
-		case kernels.Q8_0, kernels.Q4_0, kernels.Q5_0:
+		case mainkernels.Q8_0, mainkernels.Q4_0, mainkernels.Q5_0:
 			binary.LittleEndian.PutUint16(b, f16())
-		case kernels.Q6_K, kernels.Q3_K, kernels.TQ2:
+		case mainkernels.Q6_K, mainkernels.Q3_K, mainkernels.TQ2:
 			binary.LittleEndian.PutUint16(b[bb-2:], f16())
-		case kernels.TQ2F:
+		case mainkernels.TQ2F:
 			binary.LittleEndian.PutUint32(b[bb-4:], math.Float32bits(0.5+rng.Float32()))
-		case kernels.Q4_K, kernels.Q5_K, kernels.Q5_1:
+		case mainkernels.Q4_K, mainkernels.Q5_K, mainkernels.Q5_1:
 			binary.LittleEndian.PutUint16(b, f16())
 			binary.LittleEndian.PutUint16(b[2:], f16())
 		default:
 			// Random f16 scales are Inf or NaN one time in 32: a format with
 			// no arm here would compare NaN against NaN and say nothing.
-			if !kernels.IsFloat(q) && q != kernels.MXFP4 {
+			if !mainkernels.IsFloat(q) && q != mainkernels.MXFP4 {
 				panic("rawWeights: no scale planter for " + q.String())
 			}
 		}
@@ -106,7 +105,7 @@ func segCase(t *testing.T, d backend.Device, name string, shapes []mainkernels.M
 	for i := range x {
 		x[i] = float32(rng.NormFloat64())
 	}
-	av, as, asum, err := kernels.PackActivations(x)
+	av, as, asum, err := mainkernels.PackActivations(x)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +127,7 @@ func segCase(t *testing.T, d backend.Device, name string, shapes []mainkernels.M
 		width = mainkernels.GroupSplitWidth(split)
 	}
 	for i, s := range shapes {
-		qs, dw, scw, err := kernels.PackWeights(s.T, rawWeights(s.T, s.Rows, k, rng), s.Rows, k)
+		qs, dw, scw, err := mainkernels.PackWeights(s.T, rawWeights(s.T, s.Rows, k, rng), s.Rows, k)
 		if err != nil {
 			t.Fatal(err)
 		}

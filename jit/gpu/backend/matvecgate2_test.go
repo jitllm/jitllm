@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -28,10 +27,10 @@ func TestMatVecGate2IsTheTwoLaunches(t *testing.T) {
 	ran := 0
 	for _, d := range devs {
 		defer d.Close()
-		for _, q := range []kernels.Quant{kernels.Q8_0, kernels.Q4_K, kernels.Q6_K} {
+		for _, q := range []mainkernels.Quant{mainkernels.Q8_0, mainkernels.Q4_K, mainkernels.Q6_K} {
 			for _, sh := range [][2]int{{1024, 4096}, {256, 2048}, {96, 768}, {8192, 2048}} {
 				for _, sp := range []int{1, 2, 4, 8, 16, 32, 64} {
-					for _, a := range []kernels.ActKind{kernels.ActSiLU, kernels.ActGELU} {
+					for _, a := range []mainkernels.ActKind{mainkernels.ActSiLU, mainkernels.ActGELU} {
 						if sp > 1 && !mainkernels.GroupSplitOK(sh[0], sp) || (sh[1]/q.Elems()*q.Elems()/32)%sp != 0 {
 							continue
 						}
@@ -49,17 +48,17 @@ func TestMatVecGate2IsTheTwoLaunches(t *testing.T) {
 }
 
 // gate2Weights is a random q matrix of rows x k, raw GGUF blocks.
-func gate2Weights(q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
+func gate2Weights(q mainkernels.Quant, rows, k int, rng *rand.Rand) []byte {
 	nsuper := k / q.Elems()
 	raw := make([]byte, rows*nsuper*q.BlockBytes())
 	switch q {
-	case kernels.Q4_K:
+	case mainkernels.Q4_K:
 		exact := make([][]float64, rows)
 		for r := range exact {
 			exact[r] = make([]float64, k)
 		}
 		buildQ4K(raw, exact, rows, nsuper, rng)
-	case kernels.Q8_0:
+	case mainkernels.Q8_0:
 		for i := 0; i < len(raw); i += 34 {
 			binary.LittleEndian.PutUint16(raw[i:], uint16(0x2000|rng.Intn(0x0C00)))
 			for j := 2; j < 34; j++ {
@@ -82,14 +81,14 @@ func gate2Weights(q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
 	return raw
 }
 
-func gate2Case(t *testing.T, d backend.Device, name string, q kernels.Quant, rows, k, split int, a kernels.ActKind) {
+func gate2Case(t *testing.T, d backend.Device, name string, q mainkernels.Quant, rows, k, split int, a mainkernels.ActKind) {
 	rng := rand.New(rand.NewSource(int64(rows*7 + k + split)))
 	x := make([]float32, k)
 	for i := range x {
 		x[i] = float32(rng.NormFloat64())
 	}
 	pack := func(raw []byte) (qs, dw, scw []uint32) {
-		qs, dw, scw, err := kernels.PackWeights(q, raw, rows, k)
+		qs, dw, scw, err := mainkernels.PackWeights(q, raw, rows, k)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -100,7 +99,7 @@ func gate2Case(t *testing.T, d backend.Device, name string, q kernels.Quant, row
 	}
 	gq, gd, gsc := pack(gate2Weights(q, rows, k, rng))
 	uq, ud, usc := pack(gate2Weights(q, rows, k, rng))
-	av, as, asum, err := kernels.PackActivations(x)
+	av, as, asum, err := mainkernels.PackActivations(x)
 	if err != nil {
 		t.Fatal(err)
 	}

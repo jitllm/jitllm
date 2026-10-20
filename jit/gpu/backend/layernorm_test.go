@@ -7,7 +7,6 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -138,22 +137,22 @@ func actCase(t *testing.T, d backend.Device) {
 	bUp := g.up(f32bytes(up))
 	bOut := g.up(make([]byte, n*4))
 	raw := make([]byte, n*4)
-	ungated := func(k kernels.ActKind, v float64) float64 {
+	ungated := func(k mainkernels.ActKind, v float64) float64 {
 		switch k {
-		case kernels.ActGELU:
+		case mainkernels.ActGELU:
 			return 0.5 * v * (1 + math.Tanh(0.7978845608028654*(v+0.044715*v*v*v)))
-		case kernels.ActQuickGELU:
+		case mainkernels.ActQuickGELU:
 			return v / (1 + math.Exp(-1.702*v))
-		case kernels.ActReLU2:
+		case mainkernels.ActReLU2:
 			r := math.Max(v, 0)
 			return r * r
-		case kernels.ActReLU:
+		case mainkernels.ActReLU:
 			return math.Max(v, 0)
-		case kernels.ActSqrtSoftplus:
+		case mainkernels.ActSqrtSoftplus:
 			return math.Sqrt(math.Log1p(math.Exp(v)))
-		case kernels.ActGELUErf:
+		case mainkernels.ActGELUErf:
 			return 0.5 * v * (1 + math.Erf(v/math.Sqrt2))
-		case kernels.ActSqrtSigmoid:
+		case mainkernels.ActSqrtSigmoid:
 			m := math.Sqrt(math.Max(math.Abs(v), 1e-6))
 			if v < 0 {
 				m = -m
@@ -162,22 +161,22 @@ func actCase(t *testing.T, d backend.Device) {
 		}
 		return v / (1 + math.Exp(-v))
 	}
-	gated := func(k kernels.ActKind, v, u float64) float64 {
+	gated := func(k mainkernels.ActKind, v, u float64) float64 {
 		// Gemma 3n's identity is the product alone: there is no activation
 		// for the ungated arm to stand in.
-		if k == kernels.ActIdentity {
+		if k == mainkernels.ActIdentity {
 			return v * u
 		}
-		if k == kernels.ActSwiGLUOAI {
+		if k == mainkernels.ActSwiGLUOAI {
 			x := math.Min(v, 7)
 			return x / (1 + math.Exp(-1.702*x)) * (math.Max(math.Min(u, 7), -7) + 1)
 		}
-		if k == kernels.ActSwiGLUClamp {
+		if k == mainkernels.ActSwiGLUClamp {
 			x := math.Min(v, 10)
 			return x / (1 + math.Exp(-x)) * math.Max(math.Min(u, 10), -10)
 		}
-		if k == kernels.ActSitu {
-			b, lb := float64(kernels.SituBeta), float64(kernels.SituLinearBeta)
+		if k == mainkernels.ActSitu {
+			b, lb := float64(mainkernels.SituBeta), float64(mainkernels.SituLinearBeta)
 			return b * math.Tanh(v/b) / (1 + math.Exp(-v)) * lb * math.Tanh(u/lb)
 		}
 		return ungated(k, v) * u
@@ -214,13 +213,13 @@ func actCase(t *testing.T, d backend.Device) {
 		}
 	}
 	var outs [][]float64
-	for _, k := range kernels.Ungated {
+	for _, k := range mainkernels.Ungated {
 		kk, err := mainkernels.Act(n, k)
 		o := run("Act "+k.String(), kk, err, bIn, bOut)
 		check("Act "+k.String(), o, func(i int) float64 { return ungated(k, float64(in[i])) })
 		outs = append(outs, o)
 	}
-	for _, k := range kernels.Gated {
+	for _, k := range mainkernels.Gated {
 		kk, err := mainkernels.ActMul(n, k)
 		o := run("ActMul "+k.String(), kk, err, bIn, bUp, bOut)
 		check("ActMul "+k.String(), o, func(i int) float64 { return gated(k, float64(in[i]), float64(up[i])) })
@@ -250,7 +249,7 @@ func actCase(t *testing.T, d backend.Device) {
 				}
 			}
 			if same {
-				t.Fatalf("%v and %v produced identical output", kernels.Ungated[a], kernels.Ungated[b])
+				t.Fatalf("%v and %v produced identical output", mainkernels.Ungated[a], mainkernels.Ungated[b])
 			}
 		}
 	}

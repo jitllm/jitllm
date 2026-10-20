@@ -10,7 +10,6 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -131,7 +130,7 @@ func deltaFusedCase(t *testing.T, d backend.Device, c mainkernels.DeltaScan, m i
 
 	// The unfused chain, as emitLinear issues it.
 	mixed := buf(rows * chans)
-	k, err := mainkernels.Act(rows*chans, kernels.ActSiLU)
+	k, err := mainkernels.Act(rows*chans, mainkernels.ActSiLU)
 	lin(k, err, rows*chans, bConv, mixed)
 	bQ, bK, bV := buf(rows*qk), buf(rows*qk), buf(rows*vw)
 	k, err = mainkernels.SliceRows(qk, chans, 0, rows)

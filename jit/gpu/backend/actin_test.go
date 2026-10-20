@@ -10,7 +10,6 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -190,7 +189,7 @@ func actInCase(t *testing.T, d backend.Device, name string, shapes []mainkernels
 		return true
 	}
 	for i, s := range shapes {
-		qs, dw, scw, err := mainkernels.PackWeights(s.T, rawWeights(kernels.Quant(s.T), s.Rows, k, rng), s.Rows, k)
+		qs, dw, scw, err := mainkernels.PackWeights(s.T, rawWeights(mainkernels.Quant(s.T), s.Rows, k, rng), s.Rows, k)
 		if err != nil {
 			t.Fatal(err)
 		}

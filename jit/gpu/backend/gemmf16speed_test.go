@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -29,7 +28,7 @@ func TestGemmF16Speed(t *testing.T) {
 			rows, k, ntok := sh[0], sh[1], sh[2]
 			rng := rand.New(rand.NewSource(1))
 			g := newGPU(t, d)
-			qs, dw, scw, _ := kernels.PackWeights(kernels.Q4_K, rawWeights(kernels.Q4_K, rows, k, rng), rows, k)
+			qs, dw, scw, _ := mainkernels.PackWeights(mainkernels.Q4_K, rawWeights(mainkernels.Q4_K, rows, k, rng), rows, k)
 			bQS, bD, bSC := g.up(u32bytes(qs)), g.up(u32bytes(dw)), g.up(u32bytes(scw))
 			out := g.up(make([]byte, 8*rows*ntok*4))
 			bB := g.up(make([]byte, ntok*k*2))
@@ -52,7 +51,7 @@ func TestGemmF16Speed(t *testing.T) {
 					2*float64(rows)*float64(k)*float64(ntok)/el.Seconds()/1e12)
 			}
 			for _, tl := range [][2]int{{4, 4}, {2, 4}, {4, 2}} {
-				kk, err := mainkernels.MatVecMMA(mainkernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok, MT: tl[0], NT: tl[1], ActWin: 32})
+				kk, err := mainkernels.MatVecMMA(mainkernels.MatVecShape{T: mainkernels.Q4_K, K: k, Rows: rows, NTok: ntok, MT: tl[0], NT: tl[1], ActWin: 32})
 				if err != nil {
 					t.Log(err)
 					continue
@@ -68,7 +67,7 @@ func TestGemmF16Speed(t *testing.T) {
 				{MT: 4, NT: 4, WM: 2, WN: 2}, {MT: 4, NT: 2, WM: 2, WN: 2}, {MT: 2, NT: 4, WM: 2, WN: 2},
 				{MT: 4, NT: 8, WM: 2, WN: 2}, {MT: 2, NT: 2, WM: 2, WN: 2},
 			} {
-				s := mainkernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok}
+				s := mainkernels.MatVecShape{T: mainkernels.Q4_K, K: k, Rows: rows, NTok: ntok}
 				kk, err := mainkernels.GemmInt8(s, tl)
 				if err != nil {
 					t.Log(err)
@@ -93,7 +92,7 @@ func TestGemmF16Speed(t *testing.T) {
 			} {
 				for _, f16k := range []int{16, 8} {
 					tl.KB, tl.F16K = max(tl.KB, 1), f16k
-					s := mainkernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok}
+					s := mainkernels.MatVecShape{T: mainkernels.Q4_K, K: k, Rows: rows, NTok: ntok}
 					kk, err := mainkernels.GemmVolta(s, tl)
 					if err != nil {
 						continue

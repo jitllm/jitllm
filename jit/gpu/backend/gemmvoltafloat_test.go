@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -30,7 +29,7 @@ func TestGemmVoltaFloatWeights(t *testing.T) {
 	ran := 0
 	for _, d := range devs {
 		defer d.Close()
-		for _, q := range []kernels.Quant{kernels.BFloat16, kernels.Float16} {
+		for _, q := range []mainkernels.Quant{mainkernels.BFloat16, mainkernels.Float16} {
 			for _, sh := range []struct {
 				rows, k, ntok, split int
 				tl                   mainkernels.VoltaTile
@@ -79,7 +78,7 @@ func floatGemmCase(t *testing.T, d backend.Device, kern backend.Kernel, s mainke
 	for i := range w {
 		v := float32(rng.NormFloat64() * 0.05)
 		var h uint16
-		if s.T == kernels.BFloat16 {
+		if s.T == mainkernels.BFloat16 {
 			h = uint16(math.Float32bits(v) >> 16)
 			w[i] = float64(math.Float32frombits(uint32(h) << 16))
 		} else {

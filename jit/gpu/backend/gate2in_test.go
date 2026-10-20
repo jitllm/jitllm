@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -32,14 +31,14 @@ func TestGate2InIsTheTwoLaunches(t *testing.T) {
 		if !mainkernels.Gate2Exact(d.API()) {
 			continue // the tier offers Gate2 only where it is exact
 		}
-		for _, q := range []kernels.Quant{kernels.Q8_0, kernels.Q4_K, kernels.Q6_K} {
+		for _, q := range []mainkernels.Quant{mainkernels.Q8_0, mainkernels.Q4_K, mainkernels.Q6_K} {
 			for _, sh := range [][2]int{{1024, 4096}, {512, 2048}, {128, 768}} {
 				for _, sp := range []int{1, 4, 16} {
 					for _, win := range []int{32, 256} {
 						for _, warp := range []bool{false, true} {
-							a := kernels.ActSiLU
+							a := mainkernels.ActSiLU
 							if win == 256 {
-								a = kernels.ActGELU
+								a = mainkernels.ActGELU
 							}
 							if sp > 1 && !mainkernels.GroupSplitOK(sh[0], sp) || (sh[1]/32)%sp != 0 || sh[1]%win != 0 {
 								continue
@@ -60,7 +59,7 @@ func TestGate2InIsTheTwoLaunches(t *testing.T) {
 	t.Logf("%d cases bit-identical", ran)
 }
 
-func gate2InCase(t *testing.T, d backend.Device, name string, q kernels.Quant, rows, k, split, win int, warp bool, a kernels.ActKind) bool {
+func gate2InCase(t *testing.T, d backend.Device, name string, q mainkernels.Quant, rows, k, split, win int, warp bool, a mainkernels.ActKind) bool {
 	rng := rand.New(rand.NewSource(int64(rows*13 + k + split + win)))
 	x, nw := make([]float32, k), make([]float32, k)
 	for i := range x {
@@ -68,7 +67,7 @@ func gate2InCase(t *testing.T, d backend.Device, name string, q kernels.Quant, r
 		nw[i] = float32(rng.NormFloat64())
 	}
 	pack := func(raw []byte) (qs, dw, scw []uint32) {
-		qs, dw, scw, err := kernels.PackWeights(q, raw, rows, k)
+		qs, dw, scw, err := mainkernels.PackWeights(q, raw, rows, k)
 		if err != nil {
 			t.Fatal(err)
 		}

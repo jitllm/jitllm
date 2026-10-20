@@ -14,11 +14,10 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/paritytest/mainkernels"
 	"github.com/jitllm/jitllm/jit/gpu/msl"
 	"github.com/jitllm/jitllm/jit/gpu/ptx"
 	"github.com/jitllm/jitllm/jit/gpu/spirv"
-	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
 func all(t *testing.T) map[string]*ir.Kernel {
@@ -229,9 +228,7 @@ func all(t *testing.T) map[string]*ir.Kernel {
 	add("ropetable", func() (*ir.Kernel, error) { return mainkernels.RopeTable(128, 1) })
 	add("ropetable-rows", func() (*ir.Kernel, error) { return mainkernels.RopeTable(128, 8) })
 	add("copyat", func() (*ir.Kernel, error) { return mainkernels.CopyAt(256) })
-	add("attnscores", func() (*ir.Kernel, error) {
-		return mainkernels.AttnScoresTiled(8, 256, 256, 8, 2048, 0.0625, 1, 1, 1, 0)
-	})
+	add("attnscores", func() (*ir.Kernel, error) { return mainkernels.AttnScoresTiled(8, 256, 256, 8, 2048, 0.0625, 1, 1, 1, 0) })
 	// Both softmax arms: the warp reduction ships where the device has a
 	// subgroup shuffle and the scalar one is the fallback, so both must
 	// assemble everywhere.
@@ -290,16 +287,15 @@ func all(t *testing.T) map[string]*ir.Kernel {
 // (ir.Validate already refuses an undeclared width-dependent op); this list is
 // the other half, so a kernel that loses its shuffle by accident is also red.
 var widthDependent = map[string]int{
-	"flash/split1":       32,
-	"flash/split8":       32,
-	"softmax":            32, // the butterfly max and sum
-	"softmax-sink-warp":  32, // the same, with the sink folded in after
-	"softmax-sink-rows":  32,
-	"headnorm":           32, // the butterfly sum of squares
-	"headnormgated-silu": 32, // the same, with the gate as its epilogue
-	"subgroup/f32":       32, // every subgroup collective
-	"subgroup/i32":       32,
-	"subgroup/u32":       32,
+	"flash/split1":      32,
+	"flash/split8":      32,
+	"softmax":           32, // the butterfly max and sum
+	"softmax-sink-warp": 32, // the same, with the sink folded in after
+	"softmax-sink-rows": 32,
+	"headnorm":          32, // the butterfly sum of squares
+	"subgroup/f32":      32, // every subgroup collective
+	"subgroup/i32":      32,
+	"subgroup/u32":      32,
 	// The matvec-mma and mmaprobe entries are added by the sweep itself: they
 	// are built by mmaKernels and are PTX-only.
 }

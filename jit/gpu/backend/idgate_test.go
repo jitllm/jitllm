@@ -8,7 +8,6 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -32,8 +31,8 @@ func TestIndexedGateAndBiasMatchTheSeparateKernels(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
-			for _, q := range []kernels.Quant{kernels.Q4_0, kernels.Q8_0, kernels.Q4_K, kernels.MXFP4} {
-				for _, act := range []kernels.ActKind{kernels.ActSiLU, kernels.ActSwiGLUOAI} {
+			for _, q := range []mainkernels.Quant{mainkernels.Q4_0, mainkernels.Q8_0, mainkernels.Q4_K, mainkernels.MXFP4} {
+				for _, act := range []mainkernels.ActKind{mainkernels.ActSiLU, mainkernels.ActSwiGLUOAI} {
 					for _, c := range []struct {
 						rows, k, experts, split int
 						grp                     bool
@@ -55,7 +54,7 @@ func TestIndexedGateAndBiasMatchTheSeparateKernels(t *testing.T) {
 	}
 }
 
-func idGateCase(t *testing.T, d backend.Device, q kernels.Quant, act kernels.ActKind,
+func idGateCase(t *testing.T, d backend.Device, q mainkernels.Quant, act mainkernels.ActKind,
 	rows, k, experts, split int, grp bool, sel []uint32) {
 	if k%q.Elems() != 0 {
 		t.Skipf("k=%d is not a multiple of %d", k, q.Elems())
@@ -66,7 +65,7 @@ func idGateCase(t *testing.T, d backend.Device, q kernels.Quant, act kernels.Act
 	defer g.free()
 	pack := func() (backend.Buf, backend.Buf, backend.Buf) {
 		raw := randWeights(q, experts*rows, k, rng)
-		if q == kernels.MXFP4 {
+		if q == mainkernels.MXFP4 {
 			for i := 0; i < len(raw); i += 17 {
 				raw[i] = byte(120 + rng.Intn(14))
 			}
@@ -74,7 +73,7 @@ func idGateCase(t *testing.T, d backend.Device, q kernels.Quant, act kernels.Act
 		per := len(raw) / experts
 		var qs, dw, scw []uint32
 		for e := 0; e < experts; e++ {
-			q1, d1, s1, err := kernels.PackWeights(q, raw[e*per:(e+1)*per], rows, k)
+			q1, d1, s1, err := mainkernels.PackWeights(q, raw[e*per:(e+1)*per], rows, k)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -87,7 +86,7 @@ func idGateCase(t *testing.T, d backend.Device, q kernels.Quant, act kernels.Act
 	}
 	gQS, gD, gSC := pack()
 	uQS, uD, uSC := pack()
-	av, as, asum, err := kernels.PackActivations(randActs(k, rng))
+	av, as, asum, err := mainkernels.PackActivations(randActs(k, rng))
 	if err != nil {
 		t.Fatal(err)
 	}

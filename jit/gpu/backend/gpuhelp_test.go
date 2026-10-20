@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -16,26 +15,26 @@ import (
 // payload -- both kernels decode identical bytes identically -- but it does
 // need the scales to be finite, because random bits hit f16's Inf/NaN exponent
 // about one time in 32 and a NaN compares unequal to itself.
-var f16At = map[kernels.Quant][]int{
-	kernels.Q4_0: {0},
-	kernels.Q8_0: {0},
-	kernels.Q5_0: {0},
-	kernels.Q5_1: {0, 2}, // d, m
-	kernels.Q4_K: {0, 2},
-	kernels.Q5_K: {0, 2},
-	kernels.Q3_K: {108},
-	kernels.Q6_K: {208},
-	kernels.TQ2:  {64},
+var f16At = map[mainkernels.Quant][]int{
+	mainkernels.Q4_0: {0},
+	mainkernels.Q8_0: {0},
+	mainkernels.Q5_0: {0},
+	mainkernels.Q5_1: {0, 2}, // d, m
+	mainkernels.Q4_K: {0, 2},
+	mainkernels.Q5_K: {0, 2},
+	mainkernels.Q3_K: {108},
+	mainkernels.Q6_K: {208},
+	mainkernels.TQ2:  {64},
 }
 
 // f32At is where a format with an f32 scale keeps it (TQ2F).
-var f32At = map[kernels.Quant][]int{kernels.TQ2F: {64}}
+var f32At = map[mainkernels.Quant][]int{mainkernels.TQ2F: {64}}
 
-func randWeights(q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
+func randWeights(q mainkernels.Quant, rows, k int, rng *rand.Rand) []byte {
 	nblk := k / q.Elems()
 	bb := q.BlockBytes()
 	raw := make([]byte, rows*nblk*bb)
-	if kernels.IsFloat(q) { // random bits are NaNs and infinities
+	if mainkernels.IsFloat(q) { // random bits are NaNs and infinities
 		exact := make([][]float64, rows)
 		for r := range exact {
 			exact[r] = make([]float64, k)
@@ -45,7 +44,7 @@ func randWeights(q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
 	}
 	rng.Read(raw)
 	for i := 0; i < rows*nblk; i++ {
-		if q == kernels.MXFP4 {
+		if q == mainkernels.MXFP4 {
 			// An E8M0 exponent the scale plane holds exactly, or the packer
 			// refuses the tensor (random bytes reach 2^127).
 			raw[i*bb] = byte(120 + rng.Intn(10))
@@ -58,7 +57,7 @@ func randWeights(q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
 			continue
 		}
 		offs, ok := f16At[q]
-		if !ok && q != kernels.MXFP4 {
+		if !ok && q != mainkernels.MXFP4 {
 			// A format with no entry would keep random scales -- Inf or NaN
 			// one time in 32 -- and a NaN compares unequal in both arms.
 			panic("randWeights: no scale offsets for " + q.String())

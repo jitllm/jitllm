@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -30,7 +29,7 @@ func TestFloatMatVecBelowItsSubBlock(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
-			for _, q := range []kernels.Quant{kernels.Float32, kernels.Float16, kernels.BFloat16} {
+			for _, q := range []mainkernels.Quant{mainkernels.Float32, mainkernels.Float16, mainkernels.BFloat16} {
 				for _, c := range []struct{ rows, k, sub int }{
 					// MLA's own shapes on the fixture: NHead sheets of 16x16.
 					{16, 16, 16}, {64, 16, 16},
@@ -63,8 +62,8 @@ func TestFloatMatVecBelowItsSubBlockIsGated(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
-			narrowKCase(t, d, kernels.Float32, 16, 16, 16, true)
-			narrowKCase(t, d, kernels.Float32, 64, 64, 4, true)
+			narrowKCase(t, d, mainkernels.Float32, 16, 16, 16, true)
+			narrowKCase(t, d, mainkernels.Float32, 64, 64, 4, true)
 		})
 	}
 }
@@ -80,10 +79,10 @@ func TestMatVecSubIsRefusedWhereItCannotHold(t *testing.T) {
 		name string
 		s    mainkernels.MatVecShape
 	}{
-		{"quantized", mainkernels.MatVecShape{T: kernels.Q4_K, K: 256, Rows: 64, Sub: 16}},
-		{"not a multiple of four", mainkernels.MatVecShape{T: kernels.Float32, K: 18, Rows: 8, Sub: 18}},
-		{"does not divide k", mainkernels.MatVecShape{T: kernels.Float32, K: 20, Rows: 8, Sub: 8}},
-		{"wider than the format's own", mainkernels.MatVecShape{T: kernels.Float32, K: 64, Rows: 8, Sub: 64}},
+		{"quantized", mainkernels.MatVecShape{T: mainkernels.Q4_K, K: 256, Rows: 64, Sub: 16}},
+		{"not a multiple of four", mainkernels.MatVecShape{T: mainkernels.Float32, K: 18, Rows: 8, Sub: 18}},
+		{"does not divide k", mainkernels.MatVecShape{T: mainkernels.Float32, K: 20, Rows: 8, Sub: 8}},
+		{"wider than the format's own", mainkernels.MatVecShape{T: mainkernels.Float32, K: 64, Rows: 8, Sub: 64}},
 	} {
 		if _, err := mainkernels.MatVec(c.s); err == nil {
 			t.Fatalf("%s: MatVec accepted Sub=%d for %v K=%d", c.name, c.s.Sub, c.s.T, c.s.K)
@@ -93,7 +92,7 @@ func TestMatVecSubIsRefusedWhereItCannotHold(t *testing.T) {
 	}
 	// And the shape the whole field exists for is accepted, or the four
 	// refusals above would be a gate on a capability that does not exist.
-	if _, err := mainkernels.MatVec(mainkernels.MatVecShape{T: kernels.Float32, K: 16, Rows: 16, Sub: 16}); err != nil {
+	if _, err := mainkernels.MatVec(mainkernels.MatVecShape{T: mainkernels.Float32, K: 16, Rows: 16, Sub: 16}); err != nil {
 		t.Fatalf("the narrowed float shape was refused: %v", err)
 	}
 }
@@ -102,7 +101,7 @@ func TestMatVecSubIsRefusedWhereItCannotHold(t *testing.T) {
 // sub-block and compares against a float64 dot of the same values. violate
 // perturbs one weight the final narrowed step is the only reader of, and then
 // requires the comparison to fail.
-func narrowKCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, sub int, violate bool) {
+func narrowKCase(t *testing.T, d backend.Device, q mainkernels.Quant, rows, k, sub int, violate bool) {
 	t.Helper()
 	rng := rand.New(rand.NewSource(int64(rows*31337 + k*97 + sub + int(q))))
 	raw := make([]byte, rows*k*4)
@@ -114,7 +113,7 @@ func narrowKCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, sub i
 	// floatWeights writes q's own width; trim to it so the upload is the
 	// buffer the kernel reads.
 	w := 4
-	if q != kernels.Float32 {
+	if q != mainkernels.Float32 {
 		w = 2
 	}
 	raw = raw[:rows*k*w]
@@ -130,14 +129,14 @@ func narrowKCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, sub i
 		o := (rows-1)*k + (k - 1)
 		v := float32(exact[rows-1][k-1]) + 7
 		switch q {
-		case kernels.Float32:
+		case mainkernels.Float32:
 			binary.LittleEndian.PutUint32(raw[4*o:], math.Float32bits(v))
 		default:
 			binary.LittleEndian.PutUint16(raw[2*o:], uint16(math.Float32bits(v)>>16))
 		}
 	}
 
-	qs, dw, scw, err := kernels.PackWeights(q, raw, rows, k)
+	qs, dw, scw, err := mainkernels.PackWeights(q, raw, rows, k)
 	if err != nil {
 		t.Fatalf("PackWeights %v %dx%d: %v", q, rows, k, err)
 	}

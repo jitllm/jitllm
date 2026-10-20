@@ -9,7 +9,6 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -38,8 +37,8 @@ func TestMatVecMMAMatchesDot4(t *testing.T) {
 	// GemmInt8's M8 tiles run (int8M8Tiles); from sm_80 every arm runs.
 	for _, d := range mmaDevices(t, devs, ir.MMAS8Turing()) {
 		t.Run(d.API(), func(t *testing.T) {
-			for _, q := range []kernels.Quant{kernels.Q4_0, kernels.Q8_0, kernels.Q4_K,
-				kernels.Q3_K, kernels.Q5_K, kernels.Q6_K, kernels.MXFP4, kernels.Q5_0, kernels.Q5_1, kernels.TQ2, kernels.TQ2F} {
+			for _, q := range []mainkernels.Quant{mainkernels.Q4_0, mainkernels.Q8_0, mainkernels.Q4_K,
+				mainkernels.Q3_K, mainkernels.Q5_K, mainkernels.Q6_K, mainkernels.MXFP4, mainkernels.Q5_0, mainkernels.Q5_1, mainkernels.TQ2, mainkernels.TQ2F} {
 				for _, sp := range []struct{ rows, k, ntok, mt, nt int }{
 					{16, 256, 8, 1, 1},
 					{64, 256, 16, 2, 2},
@@ -61,7 +60,7 @@ func TestMatVecMMAMatchesDot4(t *testing.T) {
 	}
 }
 
-func mmaMVCase(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, ntok, mt, nt int) {
+func mmaMVCase(t *testing.T, d backend.Device, q mainkernels.Quant, nrows, k, ntok, mt, nt int) {
 	t.Helper()
 	// Both activation windows: ActWin 256 lets the k-quant fold accumulate in
 	// integer across a super-block (Q3_K and Q6_K only), 32 keeps the
@@ -73,7 +72,7 @@ func mmaMVCase(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, ntok, 
 	}
 }
 
-func mmaMVCaseWin(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, ntok, mt, nt, win int) {
+func mmaMVCaseWin(t *testing.T, d backend.Device, q mainkernels.Quant, nrows, k, ntok, mt, nt, win int) {
 	t.Helper()
 	shape := mainkernels.MatVecShape{T: q, K: k, Rows: nrows, NTok: ntok, MT: mt, NT: nt, ActWin: win}
 	mk, err := mainkernels.MatVecMMA(shape)
@@ -116,20 +115,20 @@ func mmaMVCaseWin(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 		for sb := 0; sb < nsuper; sb++ {
 			blk := (r*nsuper + sb) * q.BlockBytes()
 			switch q {
-			case kernels.Q4_0, kernels.Q8_0, kernels.Q5_0:
+			case mainkernels.Q4_0, mainkernels.Q8_0, mainkernels.Q5_0:
 				setF16(blk)
-			case kernels.Q4_K, kernels.Q5_K, kernels.Q5_1:
+			case mainkernels.Q4_K, mainkernels.Q5_K, mainkernels.Q5_1:
 				setF16(blk)
 				setF16(blk + 2)
-			case kernels.Q3_K:
+			case mainkernels.Q3_K:
 				setF16(blk + 108)
-			case kernels.Q6_K:
+			case mainkernels.Q6_K:
 				setF16(blk + 208)
-			case kernels.TQ2:
+			case mainkernels.TQ2:
 				setF16(blk + 64)
-			case kernels.TQ2F:
+			case mainkernels.TQ2F:
 				binary.LittleEndian.PutUint32(raw[blk+64:], math.Float32bits(0.5+rng.Float32()))
-			case kernels.MXFP4:
+			case mainkernels.MXFP4:
 				// An E8M0 exponent the f16 plane holds exactly, or the packer
 				// refuses the tensor.
 				raw[blk] = byte(120 + rng.Intn(10))
@@ -143,7 +142,7 @@ func mmaMVCaseWin(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 	for i := range x {
 		x[i] = float32(rng.NormFloat64())
 	}
-	qs, dw, scw, err := kernels.PackWeights(q, raw, nrows, k)
+	qs, dw, scw, err := mainkernels.PackWeights(q, raw, nrows, k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +153,7 @@ func mmaMVCaseWin(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 	av := make([]uint32, len(x)/4)
 	as := make([]float32, nbq)
 	asum := make([]float32, 2*nbq)
-	if err := kernels.PackActivationsInto(av, as, asum, x, win); err != nil {
+	if err := mainkernels.PackActivationsInto(av, as, asum, x, win); err != nil {
 		t.Fatal(err)
 	}
 
@@ -241,7 +240,7 @@ func mmaMVCaseWin(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 		if !math.IsNaN(csy2) && csy2 > 0 && diff != 0 {
 			// Two bars, chosen by whether centering is live for this format,
 			// read from the same Layout() the kernel reads.
-			if _, _, bk, barr := kernels.Layout(q); bk != 0 && !barr {
+			if _, _, bk, barr := mainkernels.Layout(q); bk != 0 && !barr {
 				t.Fatalf("centering at Tok=%d: %d/%d elements differ, worst |delta| %g, "+
 					"NMSE %.3e -- the centered dot must equal the uncentered one exactly",
 					tk, diff, nrows*ntok, cworst, cnmse)

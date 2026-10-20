@@ -11,7 +11,6 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -88,7 +87,7 @@ func TestMatVecMMA70MatchesTheReference(t *testing.T) {
 	ran := 0
 	for _, d := range devs {
 		defer d.Close()
-		for _, q := range []kernels.Quant{kernels.Q4_K, kernels.Q6_K, kernels.Q8_0, kernels.Q5_0, kernels.Q5_1} {
+		for _, q := range []mainkernels.Quant{mainkernels.Q4_K, mainkernels.Q6_K, mainkernels.Q8_0, mainkernels.Q5_0, mainkernels.Q5_1} {
 			for _, sh := range []struct {
 				rows, k, ntok, mt, nt, split int
 				bias                         bool
@@ -128,10 +127,10 @@ func TestMatVecMMA70MatchesTheReference(t *testing.T) {
 // rather than written out: a hand-written copy left a new format mapping to
 // the zero Type, which is F32, and Dequant32 then "decoded" packed blocks as
 // floats.
-var ggufOf = func() map[kernels.Quant]quant.Type {
-	m := map[kernels.Quant]quant.Type{}
+var ggufOf = func() map[mainkernels.Quant]quant.Type {
+	m := map[mainkernels.Quant]quant.Type{}
 	for _, t := range quant.PackedTypes {
-		if q, ok := kernels.QuantOf(t); ok {
+		if q, ok := mainkernels.QuantOf(t); ok {
 			m[q] = t
 		}
 	}
@@ -151,7 +150,7 @@ func mma70Case(t *testing.T, d backend.Device, kern backend.Kernel, s mainkernel
 	g := newGPU(t, d)
 	defer g.free()
 	raw := rawWeights(s.T, s.Rows, s.K, rng)
-	qs, dw, scw, err := kernels.PackWeights(s.T, raw, s.Rows, s.K)
+	qs, dw, scw, err := mainkernels.PackWeights(s.T, raw, s.Rows, s.K)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +183,7 @@ func mma70Case(t *testing.T, d backend.Device, kern backend.Kernel, s mainkernel
 			ref[tk*s.Rows+r] = acc
 		}
 	}
-	av, as, asum, err := kernels.PackActivations(x)
+	av, as, asum, err := mainkernels.PackActivations(x)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +241,7 @@ func mma70Case(t *testing.T, d backend.Device, kern backend.Kernel, s mainkernel
 	ak, err := mainkernels.ActF16(s.T, s.NTok, s.K)
 	at := s.NTok * s.K / 4
 	if tokMajor {
-		sub, _, _, _ := kernels.Layout(s.T)
+		sub, _, _, _ := mainkernels.Layout(s.T)
 		ak, err = mainkernels.ActF16T(s.T, s.NTok, s.K)
 		at = s.NTok * s.K / sub
 	}
@@ -297,12 +296,12 @@ func TestMMA70Speed(t *testing.T) {
 		const rows, k, ntok = 14336, 4096, 128
 		rng := rand.New(rand.NewSource(1))
 		g := newGPU(t, d)
-		qs, dw, scw, _ := kernels.PackWeights(kernels.Q4_K, rawWeights(kernels.Q4_K, rows, k, rng), rows, k)
+		qs, dw, scw, _ := mainkernels.PackWeights(mainkernels.Q4_K, rawWeights(mainkernels.Q4_K, rows, k, rng), rows, k)
 		x := make([]float32, ntok*k)
 		for i := range x {
 			x[i] = float32(rng.NormFloat64())
 		}
-		av, as, asum, _ := kernels.PackActivations(x)
+		av, as, asum, _ := mainkernels.PackActivations(x)
 		bQS, bD, bSC := g.up(u32bytes(qs)), g.up(u32bytes(dw)), g.up(u32bytes(scw))
 		bA, bAX := g.up(u32bytes(av)), g.up(f32bytes(append(append([]float32{}, as...), asum...)))
 		out := g.up(make([]byte, rows*ntok*4))
@@ -322,7 +321,7 @@ func TestMMA70Speed(t *testing.T) {
 				float64(rows)*k*ntok/el.Seconds()/1e12)
 		}
 		for _, tk := range []int{16} {
-			ref, _ := mainkernels.MatVec(mainkernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok, Tok: tk, Rowt: 4})
+			ref, _ := mainkernels.MatVec(mainkernels.MatVecShape{T: mainkernels.Q4_K, K: k, Rows: rows, NTok: ntok, Tok: tk, Rowt: 4})
 			rk, err := d.Compile(ref)
 			if err != nil {
 				t.Fatal(err)
@@ -330,13 +329,13 @@ func TestMMA70Speed(t *testing.T) {
 			th := rows / 4 * ntok / tk
 			time1("dp4a tok16 rowt4", func() { rk.Launch((th+127)/128, 128, bQS, bD, bSC, bA, bAX, out) })
 		}
-		ak, _ := mainkernels.ActF16(kernels.Q4_K, ntok, k)
+		ak, _ := mainkernels.ActF16(mainkernels.Q4_K, ntok, k)
 		ac, _ := d.Compile(ak)
 		at := ntok * k / 4
 		bX := g.up(f32bytes(x))
 		time1("actf16", func() { ac.Launch((at+127)/128, 128, bX, bB) })
 		for _, tl := range [][2]int{{2, 2}, {2, 4}, {4, 2}, {4, 4}, {2, 8}, {1, 8}, {4, 8}, {8, 2}} {
-			kk, err := mainkernels.MatVecMMA70(mainkernels.MatVecShape{T: kernels.Q4_K, K: k, Rows: rows, NTok: ntok, MT: tl[0], NT: tl[1]})
+			kk, err := mainkernels.MatVecMMA70(mainkernels.MatVecShape{T: mainkernels.Q4_K, K: k, Rows: rows, NTok: ntok, MT: tl[0], NT: tl[1]})
 			if err != nil {
 				t.Log(err)
 				continue

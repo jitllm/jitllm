@@ -8,7 +8,6 @@ import (
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -60,7 +59,7 @@ func TestFusedOperandsAreTheirTwoKernels(t *testing.T) {
 				t.Fatalf("%s: the fused kernel's bytes differ from the two launches'", name)
 			}
 		}
-		for _, kind := range []kernels.ActKind{kernels.ActSiLU, kernels.ActGELU, kernels.ActSwiGLUOAI} {
+		for _, kind := range []mainkernels.ActKind{mainkernels.ActSiLU, mainkernels.ActGELU, mainkernels.ActSwiGLUOAI} {
 			for _, n := range []int{32, 4096 + 32*3, 8192 * 3} {
 				for _, win := range []int{32, 256} {
 					if n%win != 0 {
@@ -91,7 +90,7 @@ func TestFusedOperandsAreTheirTwoKernels(t *testing.T) {
 		}
 		// The binary16 operand is the binary16 GEMMs' (PTX's and Metal's); a
 		// backend that does not lower ActF16T itself has no operand to fuse.
-		if probe, err := mainkernels.ActF16T(kernels.Q4_K, 1, 256); err == nil {
+		if probe, err := mainkernels.ActF16T(mainkernels.Q4_K, 1, 256); err == nil {
 			c, err := d.Compile(probe)
 			if err != nil {
 				t.Logf("%s: no binary16 operand here: %v", d.API(), err)
@@ -99,17 +98,17 @@ func TestFusedOperandsAreTheirTwoKernels(t *testing.T) {
 			}
 			c.Close()
 		}
-		for _, q := range []kernels.Quant{kernels.Q4_K, kernels.Q6_K, kernels.Q8_0, kernels.Q5_K, kernels.Q4_0} {
+		for _, q := range []mainkernels.Quant{mainkernels.Q4_K, mainkernels.Q6_K, mainkernels.Q8_0, mainkernels.Q5_K, mainkernels.Q4_0} {
 			for _, ntok := range []int{1, 3, 32} {
 				const k = 2048
 				n := ntok * k
 				name := fmt.Sprintf("%s/actmulf16t/%v/t%d", d.API(), q, ntok)
 				g := newGPU(t, d)
 				gb, ub := g.up(f32bytes(randActs(n, rng))), g.up(f32bytes(randActs(n, rng)))
-				sub, _, _, _ := kernels.Layout(q)
+				sub, _, _, _ := mainkernels.Layout(q)
 				threads := ntok * k / sub
-				fk := compile(kOf(mainkernels.ActMulF16T(q, ntok, k, kernels.ActSiLU)))
-				ak := compile(kOf(mainkernels.ActMul(n, kernels.ActSiLU)))
+				fk := compile(kOf(mainkernels.ActMulF16T(q, ntok, k, mainkernels.ActSiLU)))
+				ak := compile(kOf(mainkernels.ActMul(n, mainkernels.ActSiLU)))
 				ck := compile(kOf(mainkernels.ActF16T(q, ntok, k)))
 				b1, f2, b2 := poison(g, n/2), poison(g, n), poison(g, n/2)
 				launchFused(t, fk, mainkernels.ActMulF16TThreads(ntok, k), gb, ub, b1)

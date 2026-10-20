@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -25,10 +24,10 @@ func TestMatVecGateIsActMulAfterIt(t *testing.T) {
 	}
 	for _, d := range devs {
 		defer d.Close()
-		for _, q := range []kernels.Quant{kernels.Q8_0, kernels.Q4_K} {
+		for _, q := range []mainkernels.Quant{mainkernels.Q8_0, mainkernels.Q4_K} {
 			for _, sh := range [][2]int{{1024, 4096}, {256, 2048}} {
 				for _, sp := range []int{1, 4, 32} {
-					for _, a := range []kernels.ActKind{kernels.ActSiLU, kernels.ActGELU} {
+					for _, a := range []mainkernels.ActKind{mainkernels.ActSiLU, mainkernels.ActGELU} {
 						name := fmt.Sprintf("%s/%v/%dx%d/s%d/%v", d.API(), q, sh[0], sh[1], sp, a)
 						gateCase(t, d, name, q, sh[0], sh[1], sp, a)
 					}
@@ -38,11 +37,11 @@ func TestMatVecGateIsActMulAfterIt(t *testing.T) {
 	}
 }
 
-func gateCase(t *testing.T, d backend.Device, name string, q kernels.Quant, rows, k, split int, a kernels.ActKind) {
+func gateCase(t *testing.T, d backend.Device, name string, q mainkernels.Quant, rows, k, split int, a mainkernels.ActKind) {
 	rng := rand.New(rand.NewSource(int64(rows + k + split)))
 	nsuper := k / q.Elems()
 	raw := make([]byte, rows*nsuper*q.BlockBytes())
-	if q == kernels.Q4_K {
+	if q == mainkernels.Q4_K {
 		exact := make([][]float64, rows)
 		for r := range exact {
 			exact[r] = make([]float64, k)
@@ -64,11 +63,11 @@ func gateCase(t *testing.T, d backend.Device, name string, q kernels.Quant, rows
 	for i := range gate {
 		gate[i] = float32(rng.NormFloat64() * 3)
 	}
-	qs, dw, scw, err := kernels.PackWeights(q, raw, rows, k)
+	qs, dw, scw, err := mainkernels.PackWeights(q, raw, rows, k)
 	if err != nil {
 		t.Fatal(err)
 	}
-	av, as, asum, err := kernels.PackActivations(x)
+	av, as, asum, err := mainkernels.PackActivations(x)
 	if err != nil {
 		t.Fatal(err)
 	}

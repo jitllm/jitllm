@@ -12,7 +12,6 @@ import (
 
 	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -35,9 +34,9 @@ func TestMatVecRealWeights(t *testing.T) {
 	}
 	// Every packed format, derived from quant.PackedTypes rather than a
 	// hand-written list that could drift.
-	supported := map[quant.Type]kernels.Quant{}
+	supported := map[quant.Type]mainkernels.Quant{}
 	for _, t := range quant.PackedTypes {
-		if q, ok := kernels.QuantOf(t); ok {
+		if q, ok := mainkernels.QuantOf(t); ok {
 			supported[t] = q
 		}
 	}
@@ -79,15 +78,15 @@ func TestMatVecRealWeights(t *testing.T) {
 	}
 }
 
-func realCase(t *testing.T, d backend.Device, q kernels.Quant, w []byte, nrows, allRows, k, split, rowt int) {
-	sub, _, _, _ := kernels.Layout(q)
+func realCase(t *testing.T, d backend.Device, q mainkernels.Quant, w []byte, nrows, allRows, k, split, rowt int) {
+	sub, _, _, _ := mainkernels.Layout(q)
 	if (k/sub)%split != 0 {
 		t.Skipf("split %d does not divide %d sub-blocks", split, k/sub)
 	}
 	rowBytes := len(w) / allRows
 	w = w[:nrows*rowBytes]
 
-	qs, dw, scw, err := kernels.PackWeights(q, w, nrows, k)
+	qs, dw, scw, err := mainkernels.PackWeights(q, w, nrows, k)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +95,7 @@ func realCase(t *testing.T, d backend.Device, q kernels.Quant, w []byte, nrows, 
 	for i := range x {
 		x[i] = float32(rng.NormFloat64() / (0.2 + math.Abs(rng.NormFloat64())))
 	}
-	av, as, asum, err := kernels.PackActivations(x)
+	av, as, asum, err := mainkernels.PackActivations(x)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -27,20 +26,20 @@ func TestGemmVoltaGroupedSpeed(t *testing.T) {
 		}
 		for _, sh := range []struct {
 			name             string
-			q                kernels.Quant
+			q                mainkernels.Quant
 			rows, k, e, used int
 			pairs            int
 		}{
-			{"gpt-oss gate/up/down", kernels.MXFP4, 2880, 2880, 32, 4, 2048},
-			{"V2-Lite gate/up", kernels.Q4_K, 1408, 2048, 64, 6, 3072},
-			{"V2-Lite down q8", kernels.Q8_0, 2048, 1408, 64, 6, 3072},
-			{"Qwen3-30B gate/up", kernels.Q4_K, 768, 2048, 128, 8, 4096},
-			{"Mixtral gate/up", kernels.Q4_K, 14336, 4096, 8, 2, 1024},
+			{"gpt-oss gate/up/down", mainkernels.MXFP4, 2880, 2880, 32, 4, 2048},
+			{"V2-Lite gate/up", mainkernels.Q4_K, 1408, 2048, 64, 6, 3072},
+			{"V2-Lite down q8", mainkernels.Q8_0, 2048, 1408, 64, 6, 3072},
+			{"Qwen3-30B gate/up", mainkernels.Q4_K, 768, 2048, 128, 8, 4096},
+			{"Mixtral gate/up", mainkernels.Q4_K, 14336, 4096, 8, 2, 1024},
 		} {
 			rng := rand.New(rand.NewSource(1))
 			g := newGPU(t, d)
 			raw := randWeights(sh.q, sh.rows, sh.k, rng)
-			q1, d1, s1, err := kernels.PackWeights(sh.q, raw, sh.rows, sh.k)
+			q1, d1, s1, err := mainkernels.PackWeights(sh.q, raw, sh.rows, sh.k)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -106,7 +105,7 @@ func TestGemmVoltaGroupedSpeed(t *testing.T) {
 					}
 				}
 			}
-			sub, _, _, _ := kernels.Layout(sh.q)
+			sub, _, _, _ := mainkernels.Layout(sh.q)
 			kb := max(32/sub, 1)
 			for _, tl := range []mainkernels.VoltaTile{
 				{MT: 4, NT: 1, WM: 1, WN: 4, KB: kb}, {MT: 2, NT: 1, WM: 1, WN: 4, KB: kb},

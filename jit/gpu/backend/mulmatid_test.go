@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -25,8 +24,8 @@ func TestIndexedMatVecMatchesDense(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
-			for _, q := range []kernels.Quant{kernels.Q4_0, kernels.Q8_0, kernels.Q4_K, kernels.Q6_K,
-				kernels.Float32, kernels.BFloat16} {
+			for _, q := range []mainkernels.Quant{mainkernels.Q4_0, mainkernels.Q8_0, mainkernels.Q4_K, mainkernels.Q6_K,
+				mainkernels.Float32, mainkernels.BFloat16} {
 				for _, c := range []struct {
 					rows, k, experts, split int
 					sel                     []uint32
@@ -60,7 +59,7 @@ func TestIndexedMatVecMatchesDense(t *testing.T) {
 	}
 }
 
-func indexedCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, experts, split int, sel []uint32) {
+func indexedCase(t *testing.T, d backend.Device, q mainkernels.Quant, rows, k, experts, split int, sel []uint32) {
 	if k%q.Elems() != 0 {
 		t.Skipf("k=%d is not a multiple of %d", k, q.Elems())
 	}
@@ -77,7 +76,7 @@ func indexedCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	perExpert := len(raw) / experts
 	var qs, dw, scw []uint32
 	for e := 0; e < experts; e++ {
-		q1, d1, s1, err := kernels.PackWeights(q, raw[e*perExpert:(e+1)*perExpert], rows, k)
+		q1, d1, s1, err := mainkernels.PackWeights(q, raw[e*perExpert:(e+1)*perExpert], rows, k)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -85,7 +84,7 @@ func indexedCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 		dw = append(dw, d1...)
 		scw = append(scw, s1...)
 	}
-	av, as, asum, err := kernels.PackActivations(x)
+	av, as, asum, err := mainkernels.PackActivations(x)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +96,7 @@ func indexedCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	}
 	// dOf is the scale-plane slot: a float format's is the float activation.
 	dOf := func(d []uint32) backend.Buf {
-		if kernels.IsFloat(q) {
+		if mainkernels.IsFloat(q) {
 			return g.up(f32bytes(x))
 		}
 		return g.up(u32bytes(d))
@@ -113,7 +112,7 @@ func indexedCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	// sheet boundaries, which is the very layout confusion under test.
 	want := make([][]float32, experts)
 	for e := 0; e < experts; e++ {
-		q1, d1, s1, err := kernels.PackWeights(q, raw[e*perExpert:(e+1)*perExpert], rows, k)
+		q1, d1, s1, err := mainkernels.PackWeights(q, raw[e*perExpert:(e+1)*perExpert], rows, k)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -173,8 +172,8 @@ func TestIndexedMatVecPerSlotActivations(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
-			for _, q := range []kernels.Quant{kernels.Q4_0, kernels.Q8_0, kernels.Q4_K, kernels.Q6_K,
-				kernels.Float32, kernels.BFloat16} {
+			for _, q := range []mainkernels.Quant{mainkernels.Q4_0, mainkernels.Q8_0, mainkernels.Q4_K, mainkernels.Q6_K,
+				mainkernels.Float32, mainkernels.BFloat16} {
 				for _, c := range []struct {
 					rows, k, experts, split int
 					sel                     []uint32
@@ -196,7 +195,7 @@ func TestIndexedMatVecPerSlotActivations(t *testing.T) {
 	}
 }
 
-func slotActCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, experts, split int, sel []uint32) {
+func slotActCase(t *testing.T, d backend.Device, q mainkernels.Quant, rows, k, experts, split int, sel []uint32) {
 	if k%q.Elems() != 0 {
 		t.Skipf("k=%d is not a multiple of %d", k, q.Elems())
 	}
@@ -208,7 +207,7 @@ func slotActCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	raw := randWeights(q, bank, k, rng)
 	perExpert := len(raw) / experts
 	sheet := func(e int) (qs, d, sc []uint32) {
-		qs, d, sc, err := kernels.PackWeights(q, raw[e*perExpert:(e+1)*perExpert], rows, k)
+		qs, d, sc, err := mainkernels.PackWeights(q, raw[e*perExpert:(e+1)*perExpert], rows, k)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -240,7 +239,7 @@ func slotActCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	for j := 0; j < slots; j++ {
 		x := randActs(k, rng)
 		perSlotX[j], allX = x, append(allX, x...)
-		av, as, asum, err := kernels.PackActivations(x)
+		av, as, asum, err := mainkernels.PackActivations(x)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -253,7 +252,7 @@ func slotActCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	allAX := append(allScale, allSum...)
 	// The scale-plane slot: a float format's carries the float activations.
 	bD := g.up(u32bytes(dw))
-	if kernels.IsFloat(q) {
+	if mainkernels.IsFloat(q) {
 		bD = g.up(f32bytes(allX))
 	}
 	got := g.run(t, mainkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split,
@@ -266,7 +265,7 @@ func slotActCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	for j, e := range sel {
 		q1, d1, s1 := sheet(int(e))
 		eD := g.up(u32bytes(d1))
-		if kernels.IsFloat(q) {
+		if mainkernels.IsFloat(q) {
 			eD = g.up(f32bytes(perSlotX[j]))
 		}
 		want := g.run(t, mainkernels.MatVecShape{T: q, K: k, Rows: rows, Split: split}, rows, 1, split,
@@ -298,7 +297,7 @@ func TestIndexedMatVecMatchesACompactBank(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
-			for _, q := range []kernels.Quant{kernels.Q4_0, kernels.Q4_K, kernels.Q6_K} {
+			for _, q := range []mainkernels.Quant{mainkernels.Q4_0, mainkernels.Q4_K, mainkernels.Q6_K} {
 				for _, c := range []struct {
 					rows, k, experts, split int
 					sel                     []uint32
@@ -325,7 +324,7 @@ func TestIndexedMatVecMatchesACompactBank(t *testing.T) {
 	}
 }
 
-func compactCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, experts, split int, sel []uint32) {
+func compactCase(t *testing.T, d backend.Device, q mainkernels.Quant, rows, k, experts, split int, sel []uint32) {
 	if k%q.Elems() != 0 {
 		t.Skipf("k=%d is not a multiple of %d", k, q.Elems())
 	}
@@ -336,7 +335,7 @@ func compactCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 
 	pack := func(ids []uint32) (qs, dw, scw []uint32) {
 		for _, e := range ids {
-			q1, d1, s1, err := kernels.PackWeights(q, raw[int(e)*perExpert:(int(e)+1)*perExpert], rows, k)
+			q1, d1, s1, err := mainkernels.PackWeights(q, raw[int(e)*perExpert:(int(e)+1)*perExpert], rows, k)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -353,7 +352,7 @@ func compactCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	for i := range all {
 		all[i] = uint32(i)
 	}
-	av, as, asum, err := kernels.PackActivations(x)
+	av, as, asum, err := mainkernels.PackActivations(x)
 	if err != nil {
 		t.Fatal(err)
 	}

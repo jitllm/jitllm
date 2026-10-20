@@ -10,7 +10,6 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -31,8 +30,8 @@ func TestMatVecMatchesReference(t *testing.T) {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
 			t.Logf("device: %s", d.Name())
-			for _, q := range []kernels.Quant{kernels.Q4_0, kernels.Q8_0, kernels.Q4_K, kernels.MXFP4,
-				kernels.Q5_0, kernels.Q5_1, kernels.TQ2, kernels.TQ2F, kernels.Float32, kernels.Float16, kernels.BFloat16} {
+			for _, q := range []mainkernels.Quant{mainkernels.Q4_0, mainkernels.Q8_0, mainkernels.Q4_K, mainkernels.MXFP4,
+				mainkernels.Q5_0, mainkernels.Q5_1, mainkernels.TQ2, mainkernels.TQ2F, mainkernels.Float32, mainkernels.Float16, mainkernels.BFloat16} {
 				// Splits are covered explicitly: the end-to-end token check
 				// exercises them too, but a wrong split produces a plausible
 				// number rather than a crash, and this isolates it.
@@ -104,24 +103,24 @@ func TestMatVecMatchesReference(t *testing.T) {
 	}
 }
 
-func matvecCase(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, split int, withBias bool) {
+func matvecCase(t *testing.T, d backend.Device, q mainkernels.Quant, nrows, k, split int, withBias bool) {
 	matvecCaseRowt(t, d, q, nrows, k, split, withBias, 1)
 }
 
 // matvecCaseGroup is matvecCaseRowt with the in-group split reduction: the
 // Split segments of a row share a threadgroup and meet in threadgroup memory,
 // so there is no partial buffer and no Reduce launch.
-func matvecCaseGroup(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, split int, withBias bool) {
+func matvecCaseGroup(t *testing.T, d backend.Device, q mainkernels.Quant, nrows, k, split int, withBias bool) {
 	matvecCaseFull(t, d, q, nrows, k, split, withBias, 1, true)
 }
 
 // matvecCaseRowt is matvecCase with a decode row tile: rowt adjacent rows per
 // thread, so a lane's payload words are contiguous.
-func matvecCaseRowt(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, split int, withBias bool, rowt int) {
+func matvecCaseRowt(t *testing.T, d backend.Device, q mainkernels.Quant, nrows, k, split int, withBias bool, rowt int) {
 	matvecCaseFull(t, d, q, nrows, k, split, withBias, rowt, false)
 }
 
-func matvecCaseFull(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, split int, withBias bool, rowt int, groupSplit bool) {
+func matvecCaseFull(t *testing.T, d backend.Device, q mainkernels.Quant, nrows, k, split int, withBias bool, rowt int, groupSplit bool) {
 	if k%q.Elems() != 0 {
 		t.Skipf("k=%d is not a multiple of %d", k, q.Elems())
 	}
@@ -137,11 +136,11 @@ func matvecCaseFull(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, s
 		exact[r] = make([]float64, k)
 	}
 	switch {
-	case kernels.IsFloat(q):
+	case mainkernels.IsFloat(q):
 		floatWeights(q, raw, exact, nrows, k, rng)
-	case q == kernels.Q4_K:
+	case q == mainkernels.Q4_K:
 		buildQ4K(raw, exact, nrows, nsuper, rng)
-	case q == kernels.MXFP4:
+	case q == mainkernels.MXFP4:
 		// An E8M0 exponent and sixteen bytes of e2m1 codes; the value is the
 		// doubled e2m1 magnitude times 2^(e-128). Every code is drawn, so all
 		// sixteen table entries are read in every row.
@@ -158,14 +157,14 @@ func matvecCaseFull(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, s
 				}
 			}
 		}
-	case q == kernels.TQ2 || q == kernels.TQ2F:
+	case q == mainkernels.TQ2 || q == mainkernels.TQ2F:
 		// Random 2-bit codes (3 included, which the format reads as 2) under
 		// a sane scale, an f16 or an f32 one, decoded by the reference.
 		rng.Read(raw)
 		ref := make([]float64, 256)
 		for i := 0; i < nrows*nsuper; i++ {
 			blk := raw[i*bb : (i+1)*bb]
-			if q == kernels.TQ2 {
+			if q == mainkernels.TQ2 {
 				binary.LittleEndian.PutUint16(blk[64:], uint16(0x2000|rng.Intn(0x0C00)))
 			} else {
 				binary.LittleEndian.PutUint32(blk[64:], math.Float32bits(0.01+rng.Float32()))
@@ -175,7 +174,7 @@ func matvecCaseFull(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, s
 			}
 			copy(exact[i/nsuper][(i%nsuper)*256:], ref)
 		}
-	case q == kernels.Q5_0 || q == kernels.Q5_1:
+	case q == mainkernels.Q5_0 || q == mainkernels.Q5_1:
 		// Random planes under a sane scale (and, for Q5_1, a minimum drawn
 		// the way its quantizer writes one: -d times up to 31, or a little
 		// above zero), decoded by the reference dequantizer itself.
@@ -185,8 +184,8 @@ func matvecCaseFull(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, s
 			blk := raw[i*bb : (i+1)*bb]
 			h := uint16(0x2000 | rng.Intn(0x0C00))
 			binary.LittleEndian.PutUint16(blk, h)
-			if q == kernels.Q5_1 {
-				m := float32(kernels.F16(h)) * float32(rng.Intn(36)-31)
+			if q == mainkernels.Q5_1 {
+				m := float32(mainkernels.F16(h)) * float32(rng.Intn(36)-31)
 				binary.LittleEndian.PutUint16(blk[2:], quant.EncodeHalf(m))
 			}
 			if err := quant.Dequant(ggufOf[q], blk, ref); err != nil {
@@ -201,8 +200,8 @@ func matvecCaseFull(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, s
 				// A sane f16 scale: exponent near 1.0 so products stay in range.
 				h := uint16(0x2000 | rng.Intn(0x0C00))
 				binary.LittleEndian.PutUint16(blk, h)
-				dw := float64(kernels.F16(h))
-				if q == kernels.Q4_0 {
+				dw := float64(mainkernels.F16(h))
+				if q == mainkernels.Q4_0 {
 					for j := 0; j < 16; j++ {
 						lo, hi := rng.Intn(16), rng.Intn(16)
 						blk[2+j] = byte(lo | hi<<4)
@@ -235,11 +234,11 @@ func matvecCaseFull(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, s
 		}
 	}
 
-	qs, dw, scw, err := kernels.PackWeights(q, raw, nrows, k)
+	qs, dw, scw, err := mainkernels.PackWeights(q, raw, nrows, k)
 	if err != nil {
 		t.Fatal(err)
 	}
-	av, as, asum, err := kernels.PackActivations(x)
+	av, as, asum, err := mainkernels.PackActivations(x)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +287,7 @@ func matvecCaseFull(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, s
 	// A float format has no scale plane; its slot carries the float
 	// activation (mainkernels.MatVec).
 	var bD backend.Buf
-	if kernels.IsFloat(q) {
+	if mainkernels.IsFloat(q) {
 		bD = up(len(x)*4, f32bytes(x))
 	} else {
 		bD = up(len(dw)*4, u32bytes(dw))
@@ -358,7 +357,7 @@ func matvecCaseFull(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, s
 		for b := 0; b < nb; b++ {
 			da := float64(as[b])
 			for i := 0; i < 32; i++ {
-				if kernels.IsFloat(q) {
+				if mainkernels.IsFloat(q) {
 					want += exact[r][b*32+i] * float64(x[b*32+i])
 					continue
 				}
@@ -438,8 +437,8 @@ func buildQ4K(raw []byte, exact [][]float64, nrows, nsuper int, rng *rand.Rand) 
 			hm := uint16(0x1C00 | rng.Intn(0x0400))
 			binary.LittleEndian.PutUint16(blk[0:], hd)
 			binary.LittleEndian.PutUint16(blk[2:], hm)
-			d := float64(kernels.F16(hd))
-			dmin := float64(kernels.F16(hm))
+			d := float64(mainkernels.F16(hd))
+			dmin := float64(mainkernels.F16(hm))
 			for i := 0; i < 12; i++ {
 				blk[4+i] = byte(rng.Intn(256))
 			}
@@ -492,14 +491,14 @@ func TestFewSequenceDecodeKQuants(t *testing.T) {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
 			for _, c := range []struct {
-				q       kernels.Quant
+				q       mainkernels.Quant
 				rows, k int
 				splits  []int
 			}{
-				{kernels.Q4_K, 14336, 4096, []int{8, 16}},
-				{kernels.Q4_K, 4096, 14336, []int{14, 28}},
-				{kernels.Q6_K, 4096, 14336, []int{14, 28}},
-				{kernels.Q6_K, 2048, 4096, []int{1}},
+				{mainkernels.Q4_K, 14336, 4096, []int{8, 16}},
+				{mainkernels.Q4_K, 4096, 14336, []int{14, 28}},
+				{mainkernels.Q6_K, 4096, 14336, []int{14, 28}},
+				{mainkernels.Q6_K, 2048, 4096, []int{1}},
 			} {
 				for _, split := range c.splits {
 					for _, n := range []int{2, 8} {
@@ -533,7 +532,7 @@ func TestFewSequenceDecodeKQuants(t *testing.T) {
 //
 // It also sweeps Rowt, because batchMV ships a row tile (tier.defBatchRowt) combined
 // with NTok and Tok.
-func ntokCase(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, ntok, tok int) {
+func ntokCase(t *testing.T, d backend.Device, q mainkernels.Quant, nrows, k, ntok, tok int) {
 	for _, rowt := range []int{1, 2, 4} {
 		if nrows%rowt != 0 {
 			continue
@@ -547,7 +546,7 @@ func ntokCase(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, ntok, t
 	// A decode step of a few sequences: every token in one thread and the
 	// split reduced inside the group (tier.groupMV), so the kernel writes the
 	// final rows and the host sums nothing.
-	if tok == ntok && !kernels.IsFloat(q) {
+	if tok == ntok && !mainkernels.IsFloat(q) {
 		// 14 and 28 are what the tuner gives a Q4_K_M 8B's ffn matvecs.
 		for _, split := range []int{4, 14, 16, 28} {
 			if mainkernels.GroupSplitOK(nrows, split) && k/32%split == 0 {
@@ -560,12 +559,12 @@ func ntokCase(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, ntok, t
 	}
 }
 
-func ntokCaseRowt(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, ntok, tok, rowt, split int, grp bool, actRows int) {
+func ntokCaseRowt(t *testing.T, d backend.Device, q mainkernels.Quant, nrows, k, ntok, tok, rowt, split int, grp bool, actRows int) {
 	// Q4_0 for the offsets, which are format-independent; Q4_K and Q6_K
 	// because the in-group form is what a Q4_K_M model's decode step runs, and
 	// a k-quant's sub-block sums and Q6_K's second plane are not Q4_0's.
-	kq := q == kernels.Q4_K || q == kernels.Q6_K
-	if q != kernels.Q4_0 && !kernels.IsFloat(q) && !(kq && tok == ntok) {
+	kq := q == mainkernels.Q4_K || q == mainkernels.Q6_K
+	if q != mainkernels.Q4_0 && !mainkernels.IsFloat(q) && !(kq && tok == ntok) {
 		return
 	}
 	g := ""
@@ -596,11 +595,11 @@ func ntokCaseRowt(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 			exact[r] = make([]float64, k)
 		}
 		switch {
-		case kernels.IsFloat(q):
+		case mainkernels.IsFloat(q):
 			floatWeights(q, raw, exact, nrows, k, rng)
-		case q == kernels.Q4_K:
+		case q == mainkernels.Q4_K:
 			buildQ4K(raw, exact, nrows, k/q.Elems(), rng)
-		case q == kernels.Q6_K:
+		case q == mainkernels.Q6_K:
 			// Random planes and int8 scales under a sane f16 d, which is the
 			// block's last two bytes; the reference dequantizer is the oracle.
 			rng.Read(raw)
@@ -614,12 +613,12 @@ func ntokCaseRowt(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 				copy(exact[i/(k/q.Elems())][(i%(k/q.Elems()))*q.Elems():], ref)
 			}
 		}
-		for r := 0; r < nrows && q == kernels.Q4_0; r++ {
+		for r := 0; r < nrows && q == mainkernels.Q4_0; r++ {
 			for b := 0; b < nb; b++ {
 				blk := raw[(r*nb+b)*bb:]
 				h := uint16(0x2000 | rng.Intn(0x0C00))
 				binary.LittleEndian.PutUint16(blk, h)
-				dw := float64(kernels.F16(h))
+				dw := float64(mainkernels.F16(h))
 				for j := 0; j < 16; j++ {
 					lo, hi := rng.Intn(16), rng.Intn(16)
 					blk[2+j] = byte(lo | hi<<4)
@@ -628,7 +627,7 @@ func ntokCaseRowt(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 				}
 			}
 		}
-		qs, dw, scw, err := kernels.PackWeights(q, raw, nrows, k)
+		qs, dw, scw, err := mainkernels.PackWeights(q, raw, nrows, k)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -640,7 +639,7 @@ func ntokCaseRowt(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 		for i := range x {
 			x[i] = float32(rng.NormFloat64())
 		}
-		av, as, asum, err := kernels.PackActivations(x)
+		av, as, asum, err := mainkernels.PackActivations(x)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -666,7 +665,7 @@ func ntokCaseRowt(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 		}()
 		bQS := up(len(qs)*4, u32bytes(qs))
 		var bD backend.Buf
-		if kernels.IsFloat(q) { // the float activation, in the scale plane's slot
+		if mainkernels.IsFloat(q) { // the float activation, in the scale plane's slot
 			bD = up(len(x)*4, f32bytes(x))
 		} else {
 			bD = up(len(dw)*4, u32bytes(dw))
@@ -713,7 +712,7 @@ func ntokCaseRowt(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 					da := float64(as[col*nb+b])
 					for i := 0; i < 32; i++ {
 						ki := b*32 + i
-						if kernels.IsFloat(q) {
+						if mainkernels.IsFloat(q) {
 							want += exact[r][ki] * float64(x[col*k+ki])
 							continue
 						}
@@ -741,17 +740,17 @@ func ntokCaseRowt(t *testing.T, d backend.Device, q kernels.Quant, nrows, k, nto
 
 // floatWeights fills raw with row-major float weights of format q and exact
 // with the values they hold after rounding to it.
-func floatWeights(q kernels.Quant, raw []byte, exact [][]float64, nrows, k int, rng *rand.Rand) {
+func floatWeights(q mainkernels.Quant, raw []byte, exact [][]float64, nrows, k int, rng *rand.Rand) {
 	for r := 0; r < nrows; r++ {
 		for i := 0; i < k; i++ {
 			v, o := float32(rng.NormFloat64()), r*k+i
 			switch q {
-			case kernels.Float32:
+			case mainkernels.Float32:
 				binary.LittleEndian.PutUint32(raw[4*o:], math.Float32bits(v))
-			case kernels.Float16:
+			case mainkernels.Float16:
 				h := quant.EncodeHalf(v)
 				binary.LittleEndian.PutUint16(raw[2*o:], h)
-				v = kernels.F16(h)
+				v = mainkernels.F16(h)
 			default:
 				h := uint16(math.Float32bits(v) >> 16)
 				binary.LittleEndian.PutUint16(raw[2*o:], h)

@@ -8,7 +8,6 @@ import (
 
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -100,14 +99,14 @@ func TestImportedWeightsAreTheHostsOwnBytes(t *testing.T) {
 
 func importCaseRun(t *testing.T, d backend.Device) {
 	const rows, k = 64, 256
-	q := kernels.Q8_0
+	q := mainkernels.Q8_0
 	rng := rand.New(rand.NewSource(20260913))
 	w := randWeights(q, rows, k, rng)
 
 	// The arena is the owner, because it is the owner in the engine too: its
 	// regions are mmap'd, aligned and padded for exactly this call, and a Go
 	// []byte could not be handed to a driver that keeps the pointer.
-	a := kernels.NewArena(1 << 26)
+	a := mainkernels.NewArena(1 << 26)
 	defer a.Close()
 	p, err := a.Pack(0, q, w, rows, k)
 	if err != nil {
@@ -116,13 +115,13 @@ func importCaseRun(t *testing.T, d backend.Device) {
 	if p == nil {
 		t.Fatal("the arena declined a 64x256 Q8_0 tensor with a 64 MiB budget")
 	}
-	if align := backend.ImportAlign(d); uint64(align) > kernels.HostAlign() {
+	if align := backend.ImportAlign(d); uint64(align) > mainkernels.HostAlign() {
 		t.Skipf("the device wants %d-byte alignment and the arena lays out on %d",
-			align, kernels.HostAlign())
+			align, mainkernels.HostAlign())
 	}
 
 	x := randActs(k, rng)
-	av, as, asum, err := kernels.PackActivations(x)
+	av, as, asum, err := mainkernels.PackActivations(x)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,10 +162,10 @@ func importCaseRun(t *testing.T, d backend.Device) {
 		if len(v) == 0 {
 			return upload(v)
 		}
-		b, err := imp.Import(kernels.Ptr(v), int(kernels.PaddedBytes(len(v))))
+		b, err := imp.Import(mainkernels.Ptr(v), int(mainkernels.PaddedBytes(len(v))))
 		if err != nil {
-			t.Fatalf("Import(%d bytes at %#x): %v", kernels.PaddedBytes(len(v)),
-				kernels.Addr(v), err)
+			t.Fatalf("Import(%d bytes at %#x): %v", mainkernels.PaddedBytes(len(v)),
+				mainkernels.Addr(v), err)
 		}
 		return keep(b)
 	}

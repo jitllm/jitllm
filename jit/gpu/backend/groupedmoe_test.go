@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -24,7 +23,7 @@ func TestGroupedMatVecMatchesPerSlot(t *testing.T) {
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
-			for _, q := range []kernels.Quant{kernels.Q4_0, kernels.Q8_0, kernels.Q4_K, kernels.Q6_K, kernels.MXFP4} {
+			for _, q := range []mainkernels.Quant{mainkernels.Q4_0, mainkernels.Q8_0, mainkernels.Q4_K, mainkernels.Q6_K, mainkernels.MXFP4} {
 				for _, c := range []struct {
 					rows, k, experts, tok, split int
 					sel                          []uint32 // one per group
@@ -42,7 +41,7 @@ func TestGroupedMatVecMatchesPerSlot(t *testing.T) {
 			// (MLA's absorbs on a float fixture, a float mixture's experts),
 			// walking k below 32 where the bank is that narrow (Sub): the
 			// fixtures' absorbs are 16x16 sheets.
-			for _, q := range []kernels.Quant{kernels.Float32, kernels.Float16, kernels.BFloat16} {
+			for _, q := range []mainkernels.Quant{mainkernels.Float32, mainkernels.Float16, mainkernels.BFloat16} {
 				for _, c := range []struct {
 					rows, k, sub int
 					sel          []uint32
@@ -60,7 +59,7 @@ func TestGroupedMatVecMatchesPerSlot(t *testing.T) {
 
 // groupedFloatCase is groupedCase for a float bank: the activation is the float
 // rows, one a column, passed where a quantized format reads its scales.
-func groupedFloatCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, sub, experts int, sel []uint32) {
+func groupedFloatCase(t *testing.T, d backend.Device, q mainkernels.Quant, rows, k, sub, experts int, sel []uint32) {
 	const tok = 4
 	ntok := tok * len(sel)
 	rng := rand.New(rand.NewSource(int64(rows*7919 + k + int(q) + ntok)))
@@ -73,14 +72,14 @@ func groupedFloatCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, 
 	}
 	floatWeights(q, raw, exact, experts*rows, k, rng)
 	w := 4
-	if q != kernels.Float32 {
+	if q != mainkernels.Float32 {
 		w = 2
 	}
 	raw = raw[:experts*rows*k*w]
 	per := len(raw) / experts
 	var qs []uint32
 	for e := 0; e < experts; e++ {
-		q1, _, _, err := kernels.PackWeights(q, raw[e*per:(e+1)*per], rows, k)
+		q1, _, _, err := mainkernels.PackWeights(q, raw[e*per:(e+1)*per], rows, k)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -129,7 +128,7 @@ func groupedFloatCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, 
 	}
 }
 
-func groupedCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, experts, tok, split int, sel []uint32) {
+func groupedCase(t *testing.T, d backend.Device, q mainkernels.Quant, rows, k, experts, tok, split int, sel []uint32) {
 	if k%q.Elems() != 0 {
 		t.Skipf("k=%d is not a multiple of %d", k, q.Elems())
 	}
@@ -139,7 +138,7 @@ func groupedCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	per := len(raw) / experts
 	var qs, dw, scw []uint32
 	for e := 0; e < experts; e++ {
-		q1, d1, s1, err := kernels.PackWeights(q, raw[e*per:(e+1)*per], rows, k)
+		q1, d1, s1, err := mainkernels.PackWeights(q, raw[e*per:(e+1)*per], rows, k)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -151,7 +150,7 @@ func groupedCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k, exper
 	var allA []uint32
 	var allScale, allSum []float32
 	for j := 0; j < ntok; j++ {
-		av, as, asum, err := kernels.PackActivations(randActs(k, rng))
+		av, as, asum, err := mainkernels.PackActivations(randActs(k, rng))
 		if err != nil {
 			t.Fatal(err)
 		}

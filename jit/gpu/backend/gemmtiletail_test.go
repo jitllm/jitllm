@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -23,9 +22,9 @@ func TestGemmTileTailCoversThePrompt(t *testing.T) {
 		if ok, _ := backend.LowersTile(d, tile8); !ok {
 			continue
 		}
-		for _, q := range []kernels.Quant{kernels.Q4_K, kernels.Q6_K, kernels.Q8_0, kernels.Q4_0} {
+		for _, q := range []mainkernels.Quant{mainkernels.Q4_K, mainkernels.Q6_K, mainkernels.Q8_0, mainkernels.Q4_0} {
 			for _, c := range []struct{ rows, k, ntok int }{{128, 512, 96}, {192, 1024, 160}} {
-				sub, _, _, _ := kernels.Layout(q)
+				sub, _, _, _ := mainkernels.Layout(q)
 				kb := max(32/sub, 1)
 				lead := c.ntok - c.ntok%64
 				wide := mainkernels.TileGemm{MT: 4, NT: 4, WM: 2, WN: 2, KB: kb}

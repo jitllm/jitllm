@@ -9,7 +9,6 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -32,8 +31,8 @@ func TestGetRowsPackedMatchesDequant(t *testing.T) {
 	ran := 0
 	for _, d := range devs {
 		defer d.Close()
-		for _, q := range []kernels.Quant{kernels.Q4_0, kernels.Q5_0, kernels.Q5_1, kernels.Q8_0, kernels.Q3_K,
-			kernels.Q4_K, kernels.Q5_K, kernels.Q6_K, kernels.TQ2, kernels.TQ2F} {
+		for _, q := range []mainkernels.Quant{mainkernels.Q4_0, mainkernels.Q5_0, mainkernels.Q5_1, mainkernels.Q8_0, mainkernels.Q3_K,
+			mainkernels.Q4_K, mainkernels.Q5_K, mainkernels.Q6_K, mainkernels.TQ2, mainkernels.TQ2F} {
 			for _, c := range []struct {
 				rows, k int
 				ids     []uint32
@@ -68,7 +67,7 @@ func TestGetRowsPackedIsGated(t *testing.T) {
 	}
 	for _, d := range devs {
 		defer d.Close()
-		for _, q := range []kernels.Quant{kernels.Q8_0, kernels.Q4_K, kernels.Q6_K} {
+		for _, q := range []mainkernels.Quant{mainkernels.Q8_0, mainkernels.Q4_K, mainkernels.Q6_K} {
 			t.Run(fmt.Sprintf("%s/%v", d.API(), q), func(t *testing.T) {
 				getRowsCase(t, d, q, 37, 512, []uint32{0, 7, 20, 35}, 1, true)
 			})
@@ -76,7 +75,7 @@ func TestGetRowsPackedIsGated(t *testing.T) {
 	}
 }
 
-func getRowsCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k int, ids []uint32, scale float32, violate bool) {
+func getRowsCase(t *testing.T, d backend.Device, q mainkernels.Quant, rows, k int, ids []uint32, scale float32, violate bool) {
 	t.Helper()
 	kk, err := mainkernels.GetRowsPacked(q, rows, k, len(ids), scale)
 	if err != nil {
@@ -90,14 +89,14 @@ func getRowsCase(t *testing.T, d backend.Device, q kernels.Quant, rows, k int, i
 	rng := rand.New(rand.NewSource(int64(rows*31 + k + int(q))))
 	raw := rawWeights(q, rows, k, rng)
 	gg, ok := ggufOf[q]
-	if q == kernels.Q3_K {
+	if q == mainkernels.Q3_K {
 		// rawWeights plants no Q3_K scale; a random f16 there is NaN often.
 		gg, ok = quant.Q3_K, quant.PlantScales(quant.Q3_K, raw, rows+k)
 	}
 	if !ok {
 		t.Fatalf("%v: no GGUF twin to dequantize the source with", q)
 	}
-	qs, dw, scw, err := kernels.PackWeights(q, raw, rows, k)
+	qs, dw, scw, err := mainkernels.PackWeights(q, raw, rows, k)
 	if err != nil {
 		t.Fatal(err)
 	}
