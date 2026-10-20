@@ -338,8 +338,17 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		return l
 	case dkRouterLogits, dkTopK, dkRouteWeights, dkRouterBias, dkGroupByExpert:
 		return g.genRoute(o, prog, bs, rows)
+	case dkView:
+		// A row's prefix read in place: at one row the value is its source's
+		// own buffer (its slot is bound there), and nothing launches.
+		if rows == 1 {
+			o.Why = whyNothing
+			return nil
+		}
+		o.Why = whyNoForm
+		return nil
 	case dkExpertMatVecE, dkQKV, dkQKVGemm,
-		dkResIn, dkQKVSep, dkLatentAttend, dkView, dkGateLogit,
+		dkResIn, dkQKVSep, dkLatentAttend, dkGateLogit,
 		dkGroupMask, dkExpertBias, dkExpertFetch:
 		// No form in the composer's primitives yet: the op fails to
 		// generate, and its block does not place.
