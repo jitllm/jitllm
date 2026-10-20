@@ -1390,11 +1390,22 @@ func (g *devTier) genMatVecNodes(o *devOp, prog *devProgram, bs *blockScratch, r
 	}
 	// A prompt chunk's projection on the binary16 matrix instruction where
 	// the device lowers it, as main's batched matvec chooses.
+	if rows > 1 && !bank && !g.genRag && o.Kind == dkMatVec && g.PreferTiles {
+		if ls := g.genGemmTile(o, m, rows); ls != nil {
+			return ls
+		}
+	}
 	if rows > 1 && !bank && !g.genRag && o.Kind == dkMatVec && !g.PreferTiles && !g.PreferGemmInt8 {
 		if s, ok := g.gemm16Of(m, rows); ok {
 			if ls := g.genGemm16(o, s); ls != nil {
 				return ls
 			}
+		}
+	}
+	// Past the integer matrix instruction, the collective tiles.
+	if rows > 1 && !bank && !g.genRag && o.Kind == dkMatVec && !g.PreferGemmInt8 && !g.composeTarget().IntMMA() {
+		if ls := g.genGemmTile(o, m, rows); ls != nil {
+			return ls
 		}
 	}
 	// The product, into the output or a split's planes; a bank's slots are

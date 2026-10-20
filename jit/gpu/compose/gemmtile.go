@@ -14,14 +14,22 @@ import (
 // tiles; a trip stages KB sub-blocks of k, the weights dequantized to
 // binary16 and the tokens' binary16 operand (ActF16T) as it is, a trip
 // ahead in a second buffer. With Experts above one it is a grouped mixture:
-// a token block's expert at Sel, the token block varying slowest.
+// a token block's expert at Sel, the token block varying slowest. TokOff is
+// a dense launch's first token, a tail's after a wider block's lead.
 type GemmTile struct {
 	T                  kernels.Quant
 	Rows, K, NTok      int
 	MT, NT, WM, WN, KB int
 	Tall               bool
 	Experts            int
+	TokOff             int
 }
+
+// Toks is the tokens a workgroup covers.
+func (s GemmTile) Toks() int { return s.toks() }
+
+// BlockRows is the rows a workgroup covers.
+func (s GemmTile) BlockRows() int { return s.rows() }
 
 func (s GemmTile) rows() int { return s.WM * s.MT * 8 }
 func (s GemmTile) toks() int { return s.WN * s.NT * 8 }
@@ -43,7 +51,8 @@ const tilePad = 8
 // token block's expert.
 func (g *Row) GemmTile(s GemmTile, qs, d, sc, b, out, bias, sel int) error {
 	info := s.T.Info()
-	if info.Float > 0 || info.IntAct || info.D32 || info.Codes != nil && !info.E8M0 {
+	if info.BlockE == 0 || info.Float > 0 || info.IntAct || info.D32 || info.Codes != nil && !info.E8M0 ||
+		info.Bits != 4 && (info.Bits != 8 || info.Hi != 0) || kernels.DeviceWhyNot(s.T) != "" {
 		return fmt.Errorf("compose: a tile GEMM over %v has no node form yet", s.T)
 	}
 	u, ub := g.UConst, g.UBin
@@ -97,7 +106,10 @@ func (g *Row) GemmTile(s GemmTile, qs, d, sc, b, out, bias, sel int) error {
 		bn = ub(OpRem, grp, u(nB))
 		bm = ub(OpRem, ub(OpDiv, grp, u(nB)), u(mB))
 	}
-	rowBlk, tokBlk := mul(bm, BM), mul(bn, BN)
+	if grouped && s.TokOff != 0 {
+		return fmt.Errorf("compose: a grouped tile GEMM at token %d", s.TokOff)
+	}
+	rowBlk, tokBlk := mul(bm, BM), addc(mul(bn, BN), s.TokOff)
 	tid := g.Column()
 	var qBase, dBase, scBase int = -1, -1, -1
 	if grouped {

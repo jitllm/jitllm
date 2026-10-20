@@ -54,3 +54,31 @@ func TestGemmTileIsMains(t *testing.T) {
 		}
 	}
 }
+
+// TestGemmTileTailIsMains holds a tail launch, its tokens after a wider
+// block's lead, to main's.
+func TestGemmTileTailIsMains(t *testing.T) {
+	for _, q := range []format{{kernels.Q8_0, mainkernels.Q8_0}, {kernels.Q4_K, mainkernels.Q4_K}} {
+		for _, bias := range []bool{false, true} {
+			name := fmt.Sprintf("%v_b%v", q.c, bias)
+			t.Run(name, func(t *testing.T) {
+				ms := mainkernels.MatVecShape{T: q.m, K: 512, Rows: 64, NTok: 32, Bias: bias}
+				mk, err := mainkernels.GemmTile(ms, mainkernels.TileGemm{MT: 1, NT: 2, WM: 2, WN: 2, KB: 1, TokOff: 64})
+				if err != nil {
+					t.Fatal(err)
+				}
+				s := compose.GemmTile{T: q.c, Rows: 64, K: 512, NTok: 32, MT: 1, NT: 2, WM: 2, WN: 2, KB: 1, TokOff: 64}
+				g := &compose.Row{Width: s.Threads(), Rows: s.Groups()}
+				qs, d, sc, b, out := g.Buf(compose.BufU32), g.Buf(compose.BufU32), g.Buf(compose.BufU32), g.Buf(compose.BufU32), g.Buf(compose.BufTile)
+				bi := -1
+				if bias {
+					bi = g.Buf(compose.BufTile)
+				}
+				if err := g.GemmTile(s, qs, d, sc, b, out, bi, -1); err != nil {
+					t.Fatal(err)
+				}
+				same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{Target: metalM4}))
+			})
+		}
+	}
+}

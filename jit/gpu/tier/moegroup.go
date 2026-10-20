@@ -143,3 +143,15 @@ func (g *devTier) tileF32() bool {
 	}
 	return g.tileF32Cap == 1
 }
+
+// tileTall reports whether the device also lowers the 16-row tile: mma.sync's
+// own m16, which the 8-row tile runs with half its rows zero.
+func (g *devTier) tileTall() bool {
+	if g.tileTallCap == 0 {
+		g.tileTallCap = -1
+		if ok, _ := backend.LowersTile(g.dev, backend.TileShape{M: 16, N: 8, K: 8, Elem: ir.TileF16, Acc: ir.TileF32}); ok {
+			g.tileTallCap = 1
+		}
+	}
+	return g.tileTallCap == 1
+}

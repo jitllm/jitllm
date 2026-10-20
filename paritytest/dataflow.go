@@ -378,10 +378,33 @@ func (c *canon) fieldAtom(f field) affine {
 			return x
 		}
 	}
+	// A multiple of a power-of-two modulus adds nothing to the remainder,
+	// under the 32-bit wrap too.
+	if x, ok := c.in.affs[f.x]; ok && f.m > 0 && f.m&(f.m-1) == 0 {
+		y := affine{c: x.c & (f.m - 1)}
+		for _, t := range x.terms {
+			if t.coef%f.m != 0 {
+				y.terms = append(y.terms, t)
+			}
+		}
+		if y.c != x.c || len(y.terms) != len(x.terms) {
+			if y.isConst() {
+				return affine{c: y.c / f.d}
+			}
+			f.x = c.affineName(y)
+		}
+	}
 	id := c.in.name(form{tag: fAtom, imm: atomField, a: [4]int32{f.x, int32(f.d), int32(f.m)}})
 	if _, ok := c.in.fields[id]; !ok {
 		c.in.fields[id] = f
-		c.in.desc[id] = fmt.Sprintf("field(v%d,/%d,%%%d)", f.x, f.d, f.m)
+		x := fmt.Sprintf("v%d", f.x)
+		if a, ok := c.in.affs[f.x]; ok {
+			x = fmt.Sprint(a.c)
+			for _, t := range a.terms {
+				x += fmt.Sprintf(" + %d*%s", t.coef, c.in.desc[t.atom])
+			}
+		}
+		c.in.desc[id] = fmt.Sprintf("field(%s,/%d,%%%d)", x, f.d, f.m)
 	}
 	return affine{terms: []term{{id, 1}}}
 }
