@@ -1690,10 +1690,11 @@ func (g *devTier) genHeadCopy(o *devOp, prog *devProgram, bs *blockScratch, rows
 		}
 		pw := prog.vals[o.In[1]].Width
 		la, lb := iw/nh, pw/nh
-		if prog.vals[o.In[0]].Layout == layoutHeads {
-			// The first part head-major (each head's rows together), the
-			// second token-major: each copied whole to its (token, head)
-			// place by a table of the places, the op's own.
+		if prog.vals[o.In[0]].Layout == layoutHeads || rows == 1 {
+			// The first part head-major (each head's rows together; at one
+			// row the two orders are one), the second token-major: each
+			// copied whole to its (token, head) place by a table of the
+			// places, the op's own.
 			at, bt := make([]uint32, nh*rows), make([]uint32, nh*rows)
 			for h := 0; h < nh; h++ {
 				for t := 0; t < rows; t++ {
