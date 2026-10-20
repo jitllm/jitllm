@@ -20,22 +20,22 @@ import (
 
 // Fused kinds, past the program's base kinds.
 const (
-	dkMatVecRes  devKind = iota + numBaseKinds // a matvec carrying the residual add (mv.res)
-	dkMatVecGate                               // up's matvec writing act(gate)*up (mv.gated)
-	dkQKV                                        // q, k and v in one launch (layer.qkv)
-	dkRopeQKV                                    // q's rotary, k's into its page and v's copy (ropeQKV)
-	dkGate2                                      // gate and up in one launch writing act(gate)*up (mv.gate2)
-	dkGate2In                                    // the FFN norm, gate and up in one launch (mv.gate2In)
-	dkQKVIn                                      // the norm, its quantize and q, k and v, one launch (layer.qkvIn)
-	dkQKVSep                                     // q, k and v each normalising and quantizing (mv.kernIn)
-	dkResIn                                      // a matvec quantizing its own operand, with the residual (mv.resIn)
-	dkFFNIn                                      // gate and up normalising and quantizing the residual (mv.kernIn, gatedIn)
-	dkDownAct                                    // down forming act(gate)*up as it quantizes, with the residual (mv.resActIn)
-	dkNormF16                                    // a norm writing its row and the next GEMM's binary16 operand (rmsF16For)
-	dkAddNormF16                                 // the residual add, its norm and the operand (rmsF16For, add)
-	dkActF16                                     // act(gate)*up written as down's binary16 operand only (actF16For)
-	dkQKVGemm                                    // q, k and v as one binary16 grid over one operand (qkvGemm)
-	dkGatherHeads                                // a chunk's rows reordered head-major (headMajor)
+	dkMatVecRes   devKind = iota + numBaseKinds // a matvec carrying the residual add (mv.res)
+	dkMatVecGate                                // up's matvec writing act(gate)*up (mv.gated)
+	dkQKV                                       // q, k and v in one launch (layer.qkv)
+	dkRopeQKV                                   // q's rotary, k's into its page and v's copy (ropeQKV)
+	dkGate2                                     // gate and up in one launch writing act(gate)*up (mv.gate2)
+	dkGate2In                                   // the FFN norm, gate and up in one launch (mv.gate2In)
+	dkQKVIn                                     // the norm, its quantize and q, k and v, one launch (layer.qkvIn)
+	dkQKVSep                                    // q, k and v each normalising and quantizing (mv.kernIn)
+	dkResIn                                     // a matvec quantizing its own operand, with the residual (mv.resIn)
+	dkFFNIn                                     // gate and up normalising and quantizing the residual (mv.kernIn, gatedIn)
+	dkDownAct                                   // down forming act(gate)*up as it quantizes, with the residual (mv.resActIn)
+	dkNormF16                                   // a norm writing its row and the next GEMM's binary16 operand (rmsF16For)
+	dkAddNormF16                                // the residual add, its norm and the operand (rmsF16For, add)
+	dkActF16                                    // act(gate)*up written as down's binary16 operand only (actF16For)
+	dkQKVGemm                                   // q, k and v as one binary16 grid over one operand (qkvGemm)
+	dkGatherHeads                               // a chunk's rows reordered head-major (headMajor)
 	numKinds
 )
 
@@ -519,6 +519,7 @@ func rwMatVecGate(p *devProgram, l *layer, bs *blockScratch, g *devTier, R, nseq
 	}
 	return false
 }
+
 // gateUp finds gate's matvec followed by up's over the same operand, and the
 // act_mul reading them; -1s where the program has none.
 func gateUp(p *devProgram) (gi, ui, ai int) {

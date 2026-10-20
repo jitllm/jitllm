@@ -2,8 +2,8 @@ package tier
 
 import (
 	"github.com/jitllm/jitllm/engine/graph"
-	"github.com/jitllm/jitllm/jit/gpu/compose"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/jit/gpu/compose"
 )
 
 // composeProgram is prog's ops as the composer's program at rows, op i its
