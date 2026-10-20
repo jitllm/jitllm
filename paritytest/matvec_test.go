@@ -386,3 +386,29 @@ func TestSegmentsIsMains(t *testing.T) {
 		}
 	}
 }
+
+// TestGatherPackedIsMains holds the composer's gather of a packed matrix's
+// rows as floats to main's, format by format, scaled and not.
+func TestGatherPackedIsMains(t *testing.T) {
+	for _, q := range []format{{kernels.Q8_0, mainkernels.Q8_0}, {kernels.Q4_0, mainkernels.Q4_0}, {kernels.Q5_0, mainkernels.Q5_0},
+		{kernels.Q5_1, mainkernels.Q5_1}, {kernels.Q4_K, mainkernels.Q4_K}, {kernels.Q5_K, mainkernels.Q5_K}, {kernels.Q6_K, mainkernels.Q6_K},
+		{kernels.Q3_K, mainkernels.Q3_K}, {kernels.TQ2, mainkernels.TQ2}, {kernels.TQ2F, mainkernels.TQ2F}} {
+		for _, emb := range []float32{1, 8} {
+			name := fmt.Sprintf("%v_emb%v", q.c, emb)
+			t.Run(name, func(t *testing.T) {
+				nrows, k, ntok := 96, 512, 32
+				mk, err := mainkernels.GetRowsPacked(q.m, nrows, k, ntok, emb)
+				if err != nil {
+					t.Fatal(err)
+				}
+				g := &compose.Row{Width: k / q.c.Info().Sub, Rows: ntok}
+				w := compose.MatVecWeight{T: q.c, K: k, Rows: nrows, QS: g.Buf(compose.BufU32), D: g.Buf(compose.BufU32), SC: g.Buf(compose.BufU32)}
+				ids, out := g.Buf(compose.BufU32), g.Buf(compose.BufOut)
+				if err := g.GatherPacked(w, ids, out, emb); err != nil {
+					t.Fatal(err)
+				}
+				same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{}))
+			})
+		}
+	}
+}
