@@ -8,14 +8,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit/gpu/backend/recorder"
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/paritytest/maintier"
 )
 
 var (
 	irOut      = flag.String("ir-out", "", "TestDumpEmittedKernels writes <dir>/<profile>/<model>.ir here")
+	irMain     = flag.Bool("ir-main", false, "TestDumpEmittedKernels runs main's tier (paritytest/maintier), not the composer's")
 	irProfiles = flag.String("ir-profiles", "cuda-sm70,cuda-sm75,cuda-sm80,cuda-sm86,cuda-sm89,cuda-sm90,hip-gfx942,hip-gfx1030,hip-gfx1100,hip-gfx1201,vulkan,vulkan-irisxe,vulkan-lavapipe,metal-m4", "the recorder profiles TestDumpEmittedKernels stands in for")
 )
 
@@ -53,7 +56,11 @@ func TestDumpEmittedKernels(t *testing.T) {
 			if code == "" {
 				continue
 			}
+			code, irText, _ := strings.Cut(code, "\x00")
 			if err := os.WriteFile(filepath.Join(dir, name+".code"), []byte(code), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, name+".ir"), []byte(irText), 0o644); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -73,12 +80,26 @@ func emittedCode(t *testing.T, prof recorder.Profile, path string) (string, erro
 		return "", nil
 	}
 	rec := recorder.New(prof, 1<<40)
-	g, err := tier.New([]tier.Slot{{Dev: rec, Bytes: 1 << 40}}, append(testTierOpts(t),
-		tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))...)
-	if err != nil {
-		return "", err
+	// The composer's tier, or main's (its kernels the parity golden), on
+	// the same fake device.
+	var g nn.Device
+	if *irMain {
+		mg, err := maintier.New([]maintier.Slot{{Dev: rec, Bytes: 1 << 40}},
+			maintier.WithConfig(func(c *maintier.Config) { c.NoGraph = true }))
+		if err != nil {
+			return "", err
+		}
+		defer mg.Close()
+		g = mg
+	} else {
+		cg, err := tier.New([]tier.Slot{{Dev: rec, Bytes: 1 << 40}}, append(testTierOpts(t),
+			tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))...)
+		if err != nil {
+			return "", err
+		}
+		defer cg.Close()
+		g = cg
 	}
-	defer g.Close()
 	s := m.NewState(32)
 	defer s.Close()
 	if err := s.SetDevice(g); err != nil {
@@ -100,7 +121,7 @@ func emittedCode(t *testing.T, prof recorder.Profile, path string) (string, erro
 	if err == nil {
 		err = ferr
 	}
-	var b strings.Builder
+	var b, irb strings.Builder
 	// What was launched, in order (main's pre-made kernels, on main); then
 	// what the composer formed and the step never reached.
 	seen := map[*ir.Kernel]bool{}
@@ -115,6 +136,7 @@ func emittedCode(t *testing.T, prof recorder.Profile, path string) (string, erro
 			mark = " [composed]"
 		}
 		fmt.Fprintf(&b, "// kernel %d: %s%s\n%s\n", i, e.K.Name, mark, e.Code)
+		fmt.Fprintf(&irb, "// kernel %d: %s%s\n%s\n", i, e.K.Name, mark, recorder.Text(e.K))
 		i++
 	}
 	for _, e := range rec.Launched() {
@@ -123,5 +145,5 @@ func emittedCode(t *testing.T, prof recorder.Profile, path string) (string, erro
 	for _, e := range rec.Compiled(func(k *ir.Kernel) bool { return strings.HasPrefix(k.Comment, "composed") }) {
 		emit(e)
 	}
-	return b.String(), err
+	return b.String() + "\x00" + irb.String(), err
 }

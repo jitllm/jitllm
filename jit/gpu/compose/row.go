@@ -93,6 +93,12 @@ const (
 	// the body states. A loop nested in another's body (a fold whose body
 	// reads another loop's iterator) runs inside that body.
 	NFold
+	// NIConst is the signed 32-bit integer At.
+	NIConst
+	// NDot4 is C plus the dot product of the four signed bytes of word A
+	// with the four of word B, a signed 32-bit integer (At 1: no byte of
+	// either is -128, which a target may use).
+	NDot4
 )
 
 // Op is a unary or binary map.
@@ -119,6 +125,14 @@ const (
 	// OpPackF16 is A and B as two binary16 halves of one 32-bit word, A low:
 	// a value only a BufOutU32 store takes.
 	OpPackF16
+	// The bitwise ops of 32-bit words (NUBinary): and, xor, and the shifts
+	// of A by B. (The IR has no or: disjoint fields are joined by an add.)
+	OpAnd
+	OpXor
+	OpShl
+	OpShr
+	// OpHalf is the binary16 in word A's low half, as a float.
+	OpHalf
 )
 
 // Red is a row reduction.
@@ -166,6 +180,10 @@ type Q8 struct {
 type Schedule struct {
 	Group int
 	Warp  bool
+	// Flat runs a thread per element of every row, the grid
+	// ceil(Rows*Width/Group) workgroups: the element fastest, no element
+	// loop. Only a group with no row reduction takes it.
+	Flat bool
 }
 
 // Key is a group's identity in a cache: its structure and its schedule,
@@ -176,7 +194,7 @@ type Key struct {
 
 // Encode is the group's structure and schedule as integers.
 func (g *Row) Encode(s Schedule) []uint32 {
-	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs))}
+	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs)), b2u(s.Flat)}
 	for _, b := range g.Bufs {
 		e = append(e, uint32(b.Kind))
 	}
@@ -228,7 +246,7 @@ func (g *Row) depth() ([]int, bool) {
 				if n.Op == OpFma && n.Kind == NBinary {
 					v = max(v, d[n.C])
 				}
-			case NSelect:
+			case NSelect, NDot4:
 				v = max(d[n.A], d[n.B], d[n.C])
 			case NReduce:
 				v = d[n.A] + 1
@@ -273,7 +291,7 @@ func (g *Row) Check() error {
 			if n.Op == OpFma && n.Kind == NBinary {
 				in = append(in, n.C)
 			}
-		case NSelect:
+		case NSelect, NDot4:
 			in = []int{n.A, n.B, n.C}
 		case NIter:
 			if n.At < 0 || n.At >= len(g.Loops) {
@@ -287,7 +305,7 @@ func (g *Row) Check() error {
 			if n.A < 0 || n.A >= len(g.Nodes) {
 				return fmt.Errorf("compose: fold %d steps to node %d", i, n.A)
 			}
-			if g.isIndex(n.A) != g.isIndex(n.B) {
+			if g.typeOf(n.A) != g.typeOf(n.B) {
 				return fmt.Errorf("compose: fold %d steps to a value of another type than its start", i)
 			}
 			in = []int{n.B}
@@ -352,7 +370,7 @@ func (g *Row) operands(n int) []int {
 		return []int{nd.A, nd.B}
 	case NUBinary, NLess:
 		return []int{nd.A, nd.B}
-	case NSelect:
+	case NSelect, NDot4:
 		return []int{nd.A, nd.B, nd.C}
 	case NLoad:
 		if nd.Indexed {
@@ -424,13 +442,32 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		}
 		params[i] = b.Param(fmt.Sprintf("p%d", i), t)
 	}
-	sh := b.Shared("red", ir.F32, G)
-	r := b.Min(ir.U32, b.CTAID(), b.Const(ir.U32, int64(g.Rows-1)))
-	rowBase := b.Mul(ir.U32, r, b.Const(ir.U32, int64(g.Width)))
-	tid := b.TID()
-	width := b.Const(ir.U32, int64(g.Width))
-	last := b.Const(ir.U32, int64(g.Width-1))
 	depth, _ := g.depth()
+	// The row and, under the flat schedule, the element: a workgroup a row
+	// with the element looping over the group, or a thread an element of
+	// every row, the element fastest (the last thread's surplus clamped to
+	// the last element, which it recomputes: RULE 13).
+	var sh, r, rowBase, tid, width, last, flatIdx ir.Value
+	if s.Flat {
+		for i, nd := range g.Nodes {
+			if nd.Kind == NReduce && depth[i] > 0 {
+				return nil, fmt.Errorf("compose: a flat schedule over a row reduction")
+			}
+		}
+		flat := b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
+		flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(g.Rows*g.Width-1)))
+		width = b.Const(ir.U32, int64(g.Width))
+		flatIdx = b.Rem(ir.U32, flat, width)
+		r = b.Div(ir.U32, flat, width)
+		rowBase = b.Mul(ir.U32, r, width)
+	} else {
+		sh = b.Shared("red", ir.F32, G)
+		r = b.Min(ir.U32, b.CTAID(), b.Const(ir.U32, int64(g.Rows-1)))
+		rowBase = b.Mul(ir.U32, r, b.Const(ir.U32, int64(g.Width)))
+		tid = b.TID()
+		width = b.Const(ir.U32, int64(g.Width))
+		last = b.Const(ir.U32, int64(g.Width-1))
+	}
 	rowVal := make([]ir.Value, len(g.Nodes)) // a reduction's result, once its pass ran
 	var emitErr error
 	// half is the binary16 element at e of a BufRowF16 buffer: its word,
@@ -513,11 +550,7 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		}
 		phis := make([]ir.Value, len(folds))
 		for j, f := range folds {
-			t := ir.F32
-			if g.isIndex(f) {
-				t = ir.U32
-			}
-			phis[j] = b.Phi(t, inits[j])
+			phis[j] = b.Phi(g.typeOf(f), inits[j])
 			in.m[f] = phis[j]
 		}
 		next := make([]ir.Value, len(folds))
@@ -587,32 +620,42 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			return v
 		case NUBinary:
 			x, y := elem(nd.A, idx, e), elem(nd.B, idx, e)
+			t := g.typeOf(nd.A)
 			switch nd.Op {
 			case OpAdd:
-				v = b.Add(ir.U32, x, y)
+				v = b.Add(t, x, y)
 			case OpSub:
-				v = b.Sub(ir.U32, x, y)
+				v = b.Sub(t, x, y)
 			case OpMul:
-				v = b.Mul(ir.U32, x, y)
+				v = b.Mul(t, x, y)
 			case OpDiv:
-				v = b.Div(ir.U32, x, y)
+				v = b.Div(t, x, y)
 			case OpRem:
-				v = b.Rem(ir.U32, x, y)
+				v = b.Rem(t, x, y)
 			case OpMin:
-				v = b.Min(ir.U32, x, y)
+				v = b.Min(t, x, y)
+			case OpAnd:
+				v = b.And(t, x, y)
+			case OpXor:
+				v = b.Xor(t, x, y)
+			case OpShl:
+				v = b.Shl(t, x, y)
+			case OpShr:
+				v = b.Shr(t, x, y)
+			}
+		case NIConst:
+			v = b.Const(ir.I32, int64(nd.At))
+		case NDot4:
+			x, y, acc := elem(nd.A, idx, e), elem(nd.B, idx, e), elem(nd.C, idx, e)
+			if nd.At == 1 {
+				v = b.Dot4Bounded(x, y, acc)
+			} else {
+				v = b.Dot4(x, y, acc)
 			}
 		case NLess:
-			t := ir.U32
-			if !g.isIndex(nd.A) {
-				t = ir.F32 // of floats
-			}
-			v = b.Lt(t, elem(nd.A, idx, e), elem(nd.B, idx, e))
+			v = b.Lt(g.typeOf(nd.A), elem(nd.A, idx, e), elem(nd.B, idx, e))
 		case NSelect:
-			t := ir.F32
-			if g.isIndex(nd.A) {
-				t = ir.U32
-			}
-			v = b.Select(t, elem(nd.C, idx, e), elem(nd.A, idx, e), elem(nd.B, idx, e))
+			v = b.Select(g.typeOf(nd.A), elem(nd.C, idx, e), elem(nd.A, idx, e), elem(nd.B, idx, e))
 		case NReduce:
 			v = rowVal[n]
 		case NUnary:
@@ -623,7 +666,13 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			case OpSqrt:
 				v = b.Sqrt(a)
 			case OpFloat:
-				v = b.CvtF32(b.Bitcast(ir.I32, a))
+				if g.typeOf(nd.A) == ir.I32 {
+					v = b.CvtF32(a)
+				} else {
+					v = b.CvtF32(b.Bitcast(ir.I32, a))
+				}
+			case OpHalf:
+				v = b.CvtF16H(a)
 			case OpRsqrt:
 				v = b.Div(ir.F32, b.ConstF32(1), b.Sqrt(a))
 			case OpAbs:
@@ -656,6 +705,21 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 		}
 		e.m[n] = v
 		return v
+	}
+	if s.Flat {
+		// One element a thread: every store at it, in one pass.
+		e := newEnv(nil)
+		for _, st := range g.Stores {
+			at := b.Add(ir.U32, rowBase, flatIdx)
+			if st.Indexed {
+				at = elem(st.Ix, flatIdx, e)
+			}
+			b.Store(params[st.Buf], at, elem(st.Val, flatIdx, e), 0)
+		}
+		if emitErr != nil {
+			return nil, emitErr
+		}
+		return b.Done(), nil
 	}
 	passes := 0
 	for _, d := range depth {
@@ -742,19 +806,33 @@ func b2u(x bool) uint32 {
 func f2u(f float32) uint32 { return math.Float32bits(f) }
 
 // isIndex reports node n is an index (an integer), not a float.
-func (g *Row) isIndex(n int) bool {
+func (g *Row) isIndex(n int) bool { return g.typeOf(n) != ir.F32 }
+
+// typeOf is the IR type of node n's value: a float, an unsigned index or
+// word, or a signed integer (a dot product, a signed constant).
+func (g *Row) typeOf(n int) ir.Type {
 	nd := g.Nodes[n]
 	switch nd.Kind {
-	case NColumn, NRowIdx, NUConst, NUBinary, NIter:
-		return true
+	case NColumn, NRowIdx, NUConst, NIter:
+		return ir.U32
+	case NIConst, NDot4:
+		return ir.I32
+	case NUBinary:
+		return g.typeOf(nd.A)
 	case NFold:
-		return g.isIndex(nd.B)
-	case NLoad:
-		return g.Bufs[nd.Buf].Kind == BufU32
+		return g.typeOf(nd.B)
 	case NSelect:
-		return g.isIndex(nd.A)
+		return g.typeOf(nd.A)
+	case NLoad:
+		if g.Bufs[nd.Buf].Kind == BufU32 {
+			return ir.U32
+		}
+	case NBinary:
+		if nd.Op == OpPackF16 {
+			return ir.U32
+		}
 	}
-	return false
+	return ir.F32
 }
 
 // storePass is the pass a store writes in: once its value and its index have

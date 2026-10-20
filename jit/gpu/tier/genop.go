@@ -276,7 +276,9 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 	switch o.Kind {
 	case dkMap, dkReduce, dkSelectK, dkRank, dkTake, dkTile, dkConcat, dkRelayout:
 		return g.genPrim(o, prog, rows)
-	case dkMatVec, dkMatVecRes, dkMatVecGate, dkExpertMatVec, dkExpertMatVecE, dkQKV, dkQKVGemm, dkRouterLogits,
+	case dkMatVec, dkMatVecRes, dkMatVecGate:
+		return g.genMatVecNodes(o, rows)
+	case dkExpertMatVec, dkExpertMatVecE, dkQKV, dkQKVGemm, dkRouterLogits,
 		dkResIn, dkQKVSep, dkAttend, dkLatentAttend, dkView, dkTopK, dkRouteWeights, dkGroupByExpert, dkGateLogit,
 		dkGroupMask, dkRouterBias, dkExpertBias, dkExpertFetch, dkConv1d, dkScan, dkGatedNorm, dkSSMNorm, dkConvBias:
 		// No form in the composer's primitives yet: the op fails to
@@ -988,6 +990,67 @@ func (rb *rowBuild) gated(o *devOp, gt, up int) (int, bool) {
 		v = bound(v, u.UpTanh)
 	}
 	return rb.bin(compose.OpMul, a, v), true
+}
+
+// genMatVecNodes is a matvec op's kernel formed from primitive nodes
+// (compose.Row.MatVec): the weight's row e against the operand's token t, a
+// thread each under the flat schedule, the weight's bias, a residual add
+// (matvec_res) or a gate (act(gate) times the product, matvec_gate) as
+// further nodes after it. Callers hold g.mu.
+func (g *devTier) genMatVecNodes(o *devOp, rows int) []genLaunch {
+	l := g.curLayer
+	if l == nil || o.W < 0 || o.W >= len(l.ms) || *l.rs[o.W] == nil {
+		o.Why = whyNoWeight
+		return nil
+	}
+	m := *l.ms[o.W]
+	if m.experts > 1 || m.slots > 0 || m.pad {
+		o.Why = whyNoForm
+		return nil
+	}
+	rb := &rowBuild{r: compose.Row{Width: m.rows, Rows: rows}}
+	w := compose.MatVecWeight{T: m.q, K: m.k, Rows: m.rows,
+		QS: rb.buf(compose.BufU32, gaWQS), D: rb.buf(compose.BufU32, gaWD), SC: -1}
+	if m.q.Info().PerSuper > 1 {
+		w.SC = rb.buf(compose.BufU32, gaWSC)
+	}
+	a := compose.MatVecOperand{A: rb.buf(compose.BufU32, gaOpA), AX: rb.buf(compose.BufRow, gaOpAX), Toks: rows}
+	v, err := rb.r.MatVec(w, a)
+	if err != nil {
+		g.LastErr = err.Error()
+		o.Why = whyNoForm
+		return nil
+	}
+	if m.bias != nil {
+		v = rb.bin(compose.OpAdd, v, rb.load(compose.BufVec, gaMBias))
+	}
+	switch o.Kind {
+	case dkMatVecRes:
+		v = rb.bin(compose.OpAdd, v, rb.load(compose.BufRow, gaIn1))
+	case dkMatVecGate:
+		act, ok := kernAct(o.Act)
+		if !ok {
+			o.Why = whyEpilogue
+			return nil
+		}
+		gate := rb.node(compose.Node{Kind: compose.NUnary, Op: compose.OpAct, Act: act, A: rb.load(compose.BufRow, gaIn1)})
+		v = rb.bin(compose.OpMul, gate, v)
+	}
+	rb.store(v, gaOut0)
+	const group = 128
+	s := compose.Schedule{Group: group, Flat: true}
+	k, _ := g.genKern(append([]uint32{encRow}, rb.r.Encode(s)...), func() (*ir.Kernel, error) { return rb.r.Emit(s) })
+	if k == nil {
+		o.Why = whyNoKernel
+		return nil
+	}
+	gl := genLaunch{k: k, groups: (rows*m.rows + group - 1) / group, width: group}
+	if len(rb.args) > len(gl.args) {
+		o.Why = whyNoForm
+		return nil
+	}
+	gl.n = uint8(copy(gl.args[:], rb.args))
+	return []genLaunch{gl}
 }
 
 // genWhy is why a generator handed an op to a former: what the dump prints
