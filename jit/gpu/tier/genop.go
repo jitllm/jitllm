@@ -398,13 +398,23 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		if len(o.In) != 2 {
 			return nil
 		}
+		// An elementwise row: its int8 operand formed over its words, the
+		// row computed at each word's elements and stored there.
+		if w%32 != 0 {
+			o.Why = whyNoForm
+			return nil
+		}
+		rb.r.Width, rb.r.Rows = rows*w/4, 1
 		y, ok := rb.gated(o, rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1))
 		if !ok {
 			return nil
 		}
-		rb.store(y, gaOut0)
+		win := p.ActWin
+		if win <= 0 {
+			win = 32
+		}
 		q8 = 1
-		rb.quantStage(y, w, p.ActWin)
+		rb.r.Quantize8Words(y, rb.buf(compose.BufOut, gaOut0), rb.buf(compose.BufOutU32, gaQ8A), rb.buf(compose.BufOut, gaQ8X), min(win, w))
 	case dkGatherHeads:
 		// A chunk's rows head-major: each head's slice of every row in turn,
 		// a group row a (head, row), read through the step's order.
@@ -480,7 +490,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 	if k.k == nil {
 		return nil
 	}
-	l := genLaunch{k: k.k, groups: rb.r.Rows, width: k.group, n: uint8(len(rb.args)), q8: q8}
+	l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args)), q8: q8}
 	copy(l.args[:], rb.args)
 	return []genLaunch{l}
 }
@@ -547,6 +557,8 @@ func (g *devTier) genQuant(o *devOp, prog *devProgram, rows int, src, a, ax genA
 type rowKernel struct {
 	k     backend.Kernel
 	group int
+	// groups is the launch's workgroups: a row each, or the flat grid's.
+	groups int
 }
 
 // genEntry is a generated kernel in the device's one cache, with the
@@ -600,7 +612,11 @@ func (g *devTier) rowKern(r *compose.Row) rowKernel {
 	}
 	s := ps[0].S
 	k, _ := g.genKern(append([]uint32{encRow}, r.Encode(s)...), func() (*ir.Kernel, error) { return r.Emit(s) })
-	return rowKernel{k: k, group: s.Group}
+	groups := r.Rows
+	if s.Flat {
+		groups = (ps[0].Threads + s.Group - 1) / s.Group
+	}
+	return rowKernel{k: k, group: s.Group, groups: groups}
 }
 
 // composeTarget is this device as the composer's passes ask of it, stated

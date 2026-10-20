@@ -135,71 +135,49 @@ func (x *expander) clamp(v int, lo, hi float32) int {
 	return x.bin(OpMin, x.bin(OpMax, v, x.c(lo)), x.c(hi))
 }
 
-// sign is +1 or -1 by v's sign (zero takes +1).
-func (x *expander) sign(v int) int { return x.sel(x.less(v, x.c(0)), x.c(-1), x.c(1)) }
-
-// sigmoid is 1 / (1 + e^-v).
-func (x *expander) sigmoid(v int) int {
-	return x.bin(OpDiv, x.c(1), x.bin(OpAdd, x.c(1), x.un(OpExp, x.neg(v))))
+// fma is a*b + c with one rounding.
+func (x *expander) fma(a, b, c int) int {
+	return x.add(Node{Kind: NBinary, Op: OpFma, A: a, B: b, C: c})
 }
 
-// tanhExp is tanh by its definition, (e^2v - 1) / (e^2v + 1).
-func (x *expander) tanhExp(v int) int {
-	e := x.un(OpExp, x.mul(x.c(2), v))
-	return x.bin(OpDiv, x.bin(OpSub, e, x.c(1)), x.bin(OpAdd, e, x.c(1)))
-}
+// The forms below are the ones the host tiers evaluate (jit/cpu), term for
+// term and rounding for rounding, so a device and the host compute one
+// function: the same constants (the vocabulary's), the same order.
 
-// tanhRational is the engine's tanh where it must be bounded (the host
-// tiers' too): v P(v^2) / Q(v^2), v clamped to +-TanhClamp, P and Q the
-// vocabulary's coefficients, each a polynomial in v^2.
+// tanhRational is tanh(v) as v P(v^2)/Q(v^2) on v clamped to +-TanhClamp,
+// P and Q in Horner form by fused multiply-adds, highest power first.
 func (x *expander) tanhRational(v int) int {
 	v = x.clamp(v, -kernels.TanhClamp, kernels.TanhClamp)
 	v2 := x.mul(v, v)
-	poly := func(cs []float32) int {
-		// c0 v2^n + c1 v2^(n-1) + ... + cn, highest power first.
-		p := x.c(cs[0])
-		for _, c := range cs[1:] {
-			p = x.bin(OpAdd, x.mul(p, v2), x.c(c))
-		}
-		return p
+	p := x.c(kernels.TanhP[0])
+	for _, k := range kernels.TanhP[1:] {
+		p = x.fma(p, v2, x.c(k))
 	}
-	return x.bin(OpDiv, x.mul(v, poly(kernels.TanhP[:])), poly(kernels.TanhQ[:]))
+	q := x.c(kernels.TanhQ[0])
+	for _, k := range kernels.TanhQ[1:] {
+		q = x.fma(q, v2, x.c(k))
+	}
+	return x.bin(OpDiv, x.mul(p, v), q)
 }
 
-// erf is erf(v) by Abramowitz and Stegun 7.1.26 on |v|, odd in v: with
-// t = 1/(1 + p|v|), erf|v| = 1 - t (a1 + a2 t + ... + a5 t^4) e^-v^2, p and
-// a1..a5 the vocabulary's (kernels.GELUErfP, GELUErfA).
-func (x *expander) erf(v int) int {
-	a := x.abs(v)
-	t := x.bin(OpDiv, x.c(1), x.bin(OpAdd, x.c(1), x.mul(x.c(kernels.GELUErfP), a)))
-	p := x.c(kernels.GELUErfA[4])
-	for i := 3; i >= 0; i-- {
-		p = x.bin(OpAdd, x.mul(p, t), x.c(kernels.GELUErfA[i]))
-	}
-	e := x.bin(OpSub, x.c(1), x.mul(x.mul(t, p), x.un(OpExp, x.neg(x.mul(a, a)))))
-	return x.mul(x.sign(v), e)
-}
-
-// log1p is log(1 + u) for u in (0, 1], the IR having no logarithm: with
-// w = u / (2 + u), log(1 + u) = 2 atanh(w) = 2 (w + w^3/3 + w^5/5 + w^7/7 +
-// w^9/9), w at most 1/3.
-func (x *expander) log1p(u int) int {
-	w := x.bin(OpDiv, u, x.bin(OpAdd, x.c(2), u))
+// softplus is log(1 + e^z) with no logarithm among the primitives:
+// max(z, 0) + 2w(1 + w^2/3 + ... + w^8/9), w = e^-|z| / (2 + e^-|z|).
+func (x *expander) softplus(z int) int {
+	zero, two := x.c(0), x.c(2)
+	az := x.bin(OpMax, z, x.bin(OpSub, zero, z))
+	e := x.un(OpExp, x.bin(OpSub, zero, az))
+	w := x.bin(OpDiv, e, x.bin(OpAdd, two, e))
 	w2 := x.mul(w, w)
 	s := x.c(1.0 / 9)
 	for _, k := range []float32{1.0 / 7, 1.0 / 5, 1.0 / 3, 1} {
-		s = x.bin(OpAdd, x.mul(s, w2), x.c(k))
+		s = x.fma(s, w2, x.c(k))
 	}
-	return x.mul(x.c(2), x.mul(w, s))
+	return x.bin(OpAdd, x.bin(OpMax, z, zero), x.mul(two, x.mul(w, s)))
 }
 
-// softplus is log(1 + e^v) = max(v, 0) + log(1 + e^-|v|).
-func (x *expander) softplus(v int) int {
-	return x.bin(OpAdd, x.bin(OpMax, v, x.c(0)), x.log1p(x.un(OpExp, x.neg(x.abs(v)))))
-}
-
-// act is k(v) by its definition, or an error for a kind with no formula.
+// act is k(v), or an error for a kind with no formula.
 func (x *expander) act(v int, k kernels.ActKind) (int, error) {
+	one := x.c(1)
 	switch k {
 	case kernels.ActIdentity:
 		return v, nil
@@ -208,30 +186,46 @@ func (x *expander) act(v int, k kernels.ActKind) (int, error) {
 	case kernels.ActReLU2:
 		r := x.bin(OpMax, v, x.c(0))
 		return x.mul(r, r), nil
-	case kernels.ActSigmoid:
-		return x.sigmoid(v), nil
-	case kernels.ActSiLU:
-		return x.mul(v, x.sigmoid(v)), nil
-	case kernels.ActQuickGELU:
-		return x.mul(v, x.sigmoid(x.mul(x.c(1.702), v))), nil
-	case kernels.ActTanh:
-		return x.tanhRational(v), nil
-	case kernels.ActSoftplus:
-		return x.softplus(v), nil
+	case kernels.ActSiLU, kernels.ActQuickGELU:
+		// v / (1 + e^-z), z = v or 1.702v.
+		z := v
+		if k == kernels.ActQuickGELU {
+			z = x.mul(x.c(1.702), v)
+		}
+		return x.bin(OpDiv, v, x.bin(OpAdd, one, x.un(OpExp, x.neg(z)))), nil
 	case kernels.ActSqrtSoftplus:
 		return x.un(OpSqrt, x.softplus(v)), nil
 	case kernels.ActSqrtSigmoid:
 		// sigmoid(sign(v) sqrt(max(|v|, floor))).
-		m := x.un(OpSqrt, x.bin(OpMax, x.abs(v), x.c(kernels.SqrtSigmoidFloor)))
-		return x.sigmoid(x.mul(x.sign(v), m)), nil
+		av := x.bin(OpMax, v, x.neg(v))
+		m := x.un(OpSqrt, x.bin(OpMax, av, x.c(kernels.SqrtSigmoidFloor)))
+		sm := x.sel(x.less(v, x.c(0)), x.neg(m), m)
+		return x.bin(OpDiv, one, x.bin(OpAdd, one, x.un(OpExp, x.neg(sm)))), nil
+	case kernels.ActSigmoid:
+		return x.bin(OpDiv, one, x.bin(OpAdd, one, x.un(OpExp, x.neg(v)))), nil
+	case kernels.ActTanh:
+		return x.tanhRational(v), nil
+	case kernels.ActSoftplus:
+		return x.softplus(v), nil
 	case kernels.ActGELUErf:
-		// v/2 (1 + erf(v / sqrt 2)).
-		e := x.erf(x.mul(v, x.c(0.70710678118654752)))
-		return x.mul(x.mul(x.c(0.5), v), x.bin(OpAdd, x.c(1), e)), nil
+		// 0.5 ((v + |v|) - |v| q), q = 1 - erf(|v|/sqrt 2) by Abramowitz and
+		// Stegun 7.1.26: t = 1/(1 + p z), q = poly(t) t e^-z^2.
+		av := x.bin(OpMax, v, x.neg(v))
+		z := x.mul(x.c(0.70710678118654752), av)
+		t := x.bin(OpDiv, one, x.fma(x.c(kernels.GELUErfP), z, one))
+		p := x.c(kernels.GELUErfA[4])
+		for i := 3; i >= 0; i-- {
+			p = x.fma(p, t, x.c(kernels.GELUErfA[i]))
+		}
+		q := x.mul(x.mul(p, t), x.un(OpExp, x.neg(x.mul(z, z))))
+		return x.mul(x.c(0.5), x.bin(OpSub, x.bin(OpAdd, v, av), x.mul(av, q))), nil
 	case kernels.ActGELU:
-		// v/2 (1 + tanh(sqrt(2/pi) (v + 0.044715 v^3))).
+		// 0.5 v (1 + tanh u), u = sqrt(2/pi) (v + 0.044715 v^3), tanh u as
+		// 1 - 2/(e^2u + 1).
 		u := x.mul(x.c(0.7978845608028654), x.bin(OpAdd, v, x.mul(x.c(0.044715), x.mul(v, x.mul(v, v)))))
-		return x.mul(x.mul(x.c(0.5), v), x.bin(OpAdd, x.c(1), x.tanhExp(u))), nil
+		e := x.un(OpExp, x.mul(x.c(2), u))
+		th := x.bin(OpSub, one, x.bin(OpDiv, x.c(2), x.bin(OpAdd, e, one)))
+		return x.mul(x.mul(x.c(0.5), v), x.bin(OpAdd, one, th)), nil
 	}
 	return 0, fmt.Errorf("compose: no formula for the activation %v", k)
 }
@@ -251,7 +245,8 @@ func (x *expander) actMul(k kernels.ActKind, g, u int) (int, error) {
 		// b tanh(g/b) sigmoid(g) times b' tanh(u/b'), b and b' the
 		// vocabulary's bounds, tanh the bounded one.
 		bound := func(v int, c float32) int { return x.mul(x.c(c), x.tanhRational(x.mul(v, x.c(1/c)))) }
-		return x.mul(x.mul(bound(g, kernels.SituBeta), x.sigmoid(g)), bound(u, kernels.SituLinearBeta)), nil
+		sig := x.bin(OpDiv, x.c(1), x.bin(OpAdd, x.c(1), x.un(OpExp, x.neg(g))))
+		return x.mul(x.mul(bound(g, kernels.SituBeta), sig), bound(u, kernels.SituLinearBeta)), nil
 	}
 	a, err := x.act(g, k)
 	return x.mul(a, u), err

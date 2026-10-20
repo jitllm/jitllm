@@ -430,8 +430,8 @@ type env struct {
 	// where it was hoisted there.
 	rows bool
 	sh   [3]*env
-	cls            uint8
-	t              *tile
+	cls  uint8
+	t    *tile
 }
 
 // tile is every env of one tile: one a (row, column) pair, one a row, one
@@ -1354,7 +1354,6 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 	}
 	return b.Done(), nil
 }
-
 
 func b2u(x bool) uint32 {
 	if x {

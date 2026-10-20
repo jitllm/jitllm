@@ -78,3 +78,24 @@ func (g *Row) Quantize8Stage(y, a, ax, window int) {
 		{Buf: ax, Val: q.scale, Indexed: true, Ix: q.scaleAt},
 		{Buf: ax, Val: q.sum, Indexed: true, Ix: q.sumAt}}})
 }
+
+// Quantize8Words is the int8 operand of an elementwise row y as a flat group
+// of words: g's elements are the words of every row together (Width the
+// words, Rows 1), y an expression of the element's own loads, evaluated at
+// each of the word's four elements (NAt) -- stored there at out where out is
+// a buffer (BufOut; -1 for none) -- and quantized as Quantize8 quantizes.
+func (g *Row) Quantize8Words(y, out, a, ax, window int) {
+	u, ub := g.UConst, g.UBin
+	e := g.Column()
+	q := g.quantize8(e, g.Width/8, window, func(i int) int {
+		at := ub(OpAdd, ub(OpMul, e, u(4)), u(i))
+		v := g.Add(Node{Kind: NAt, A: y, Ix: at})
+		if out >= 0 {
+			g.StoreAt(out, v, at)
+		}
+		return v
+	})
+	g.StoreAt(a, q.codes, q.codesAt)
+	g.StoreAt(ax, q.scale, q.scaleAt)
+	g.StoreAt(ax, q.sum, q.sumAt)
+}
