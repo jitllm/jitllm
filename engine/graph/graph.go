@@ -88,7 +88,8 @@ const (
 	OpClamp
 	// OpSlice is Width elements of In[0] from Offset: of each head of
 	// HeadDim where HeadDim is set (Out is the heads' slices in head
-	// order), of the whole row where it is 0.
+	// order), of the whole row where it is 0. An op with no input slices
+	// the bound vector Weight[0] instead (a stored table's row).
 	OpSlice
 	// OpLatentAppend writes a latent row as this position's row of the
 	// block's KV (MLA): the cached key is the latent In[0] then the shared
@@ -230,10 +231,13 @@ const (
 	// group broadcast it states a row seen as several (a stream-major
 	// residual) without naming what the groups are.
 	OpTile
+	// OpConcat is its inputs joined end to end, In[0] first: Out[0] the
+	// sum of their widths. The same input twice repeats it. A primitive.
+	OpConcat
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {

@@ -49,6 +49,9 @@ func Decompose(g *Graph) *Graph {
 		if o.Kind == OpGateScalar && d.gateScalar(o) {
 			continue
 		}
+		if (o.Kind == OpAltPredict || o.Kind == OpAltCorrect) && d.altUp(o) {
+			continue
+		}
 		o.In = append([]ValueID(nil), o.In...)
 		if w, ok := weights[selOf(o)]; ok && (o.Kind == OpCombine || o.Kind == OpGather && o.Attr.WeightIn) {
 			o.In = append(o.In, w)

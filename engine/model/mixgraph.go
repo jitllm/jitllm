@@ -84,6 +84,7 @@ func (m *Model) mixtureWhy(li int) (graph.Facts, string) {
 	switch {
 	case c.SparseMixer != 0:
 		mx.Router = graph.RouterSparseMixer
+		mx.Margin = float64(c.SparseMixer)
 	case c.ExpertSigmoid:
 		mx.Router = graph.RouterSigmoid
 	case c.ExpertSqrtSoftplus:

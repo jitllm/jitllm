@@ -3,6 +3,7 @@ package graph
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"math/rand"
 	"testing"
 
@@ -179,8 +180,26 @@ func evalPrims(t *testing.T, g *Graph, in map[ValueID][]float32, w map[jlm.Role]
 				out[i] = x[i%span]
 			}
 		case OpSlice:
-			// The whole-row form: Width elements from Offset.
-			copy(out, v[o.In[0]][o.Attr.Offset:o.Attr.Offset+o.Attr.Width])
+			// Of In[0], or of the bound vector where there is no input.
+			var x []float32
+			if len(o.In) > 0 {
+				x = v[o.In[0]]
+			} else {
+				x = w[o.Weight[0].Role]
+			}
+			a := o.Attr
+			if a.HeadDim == 0 {
+				copy(out, x[a.Offset:a.Offset+a.Width])
+				break
+			}
+			for h := 0; h < len(x)/a.HeadDim; h++ {
+				copy(out[h*a.Width:], x[h*a.HeadDim+a.Offset:h*a.HeadDim+a.Offset+a.Width])
+			}
+		case OpConcat:
+			off := 0
+			for _, id := range o.In {
+				off += copy(out[off:], v[id])
+			}
 		case OpHeadNorm:
 			// A weightless norm of each head: x * (1/sqrt(mean(x^2) + eps)),
 			// the mean accumulated in f64 as the oracle's does.
@@ -195,18 +214,19 @@ func evalPrims(t *testing.T, g *Graph, in map[ValueID][]float32, w map[jlm.Role]
 					out[h*hd+i] = float32(float64(x[h*hd+i]) * scale)
 				}
 			}
-		case OpAct, OpActMul:
+		case OpAct:
 			x := v[o.In[0]]
 			for i := range out {
-				e := float64(x[i])
-				switch {
-				case o.Kind == OpAct && o.Attr.Act == ActSiLU:
-					out[i] = float32(e / (1 + math.Exp(-e)))
-				case o.Kind == OpActMul && o.Attr.Act == ActSigmoid:
-					out[i] = float32(1/(1+math.Exp(-e))) * v[o.In[1]][i]
-				default:
-					t.Fatalf("activation %d of %s", o.Attr.Act, o.Kind)
+				out[i] = float32(refAct(t, o.Attr.Act, float64(x[i])))
+			}
+		case OpActMul:
+			g, up := v[o.In[0]], v[o.In[1]]
+			for i := range out {
+				if o.Attr.Act == ActSigmoid {
+					out[i] = float32(1/(1+math.Exp(-float64(g[i])))) * up[i]
+					continue
 				}
+				out[i] = float32(refAct(t, o.Attr.Act, float64(g[i]))) * up[i]
 			}
 		case OpCombine:
 			continue
@@ -421,4 +441,34 @@ func TestASparseMixerRouteStaysWhole(t *testing.T) {
 	if d.Ops[0].Kind != OpRoute {
 		t.Fatalf("a sparsemixer route was decomposed into %s", d.Ops[0].Kind)
 	}
+}
+
+// fma32 is a*b+c with one rounding, exactly: the product and the sum held at
+// a precision no float32 pair can exceed, then rounded once.
+func fma32(a, b, c float32) float32 {
+	if isNonFinite(a) || isNonFinite(b) || isNonFinite(c) {
+		return a*b + c
+	}
+	z := new(big.Float).SetPrec(300).SetFloat64(float64(a))
+	z.Mul(z, new(big.Float).SetPrec(300).SetFloat64(float64(b)))
+	z.Add(z, new(big.Float).SetPrec(300).SetFloat64(float64(c)))
+	f, _ := z.Float32()
+	return f
+}
+
+func isNonFinite(x float32) bool { return math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) }
+
+// refAct is the activation an OpActMul applies to its first input, in float64.
+func refAct(t *testing.T, a Act, x float64) float64 {
+	t.Helper()
+	switch a {
+	case ActSiLU:
+		return oracle.SiLU(x)
+	case ActGELUTanh:
+		return oracle.GELUTanh(x)
+	case ActGELUErf:
+		return oracle.GELUErf(x)
+	}
+	t.Fatalf("act %d", a)
+	return 0
 }
