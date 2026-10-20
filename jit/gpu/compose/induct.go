@@ -190,6 +190,37 @@ func (g *Row) induct(c int, s Schedule) *Row {
 	// its iterator. A nested or unrolled loop's index, and a nested loop's
 	// start, always ride one.
 	ridden := map[int]bool{}
+	// sole is the one index the iterator serves, where it serves one: its
+	// cursor replaces the loop's counter.
+	sole := -1
+	{
+		var in []int
+		for _, ix := range cands {
+			if vary[ix] && !slices.Contains(in, ix) {
+				in = append(in, ix)
+			}
+		}
+		if len(in) == 1 {
+			tree := map[int]bool{}
+			var walk func(n int)
+			walk = func(n int) {
+				if tree[n] {
+					return
+				}
+				tree[n] = true
+				for _, o := range g.operands(n) {
+					walk(o)
+				}
+			}
+			walk(in[0])
+			sole = in[0]
+			for i := range g.Nodes {
+				if !tree[i] && slices.Contains(g.operands(i), iter) {
+					sole = -1
+				}
+			}
+		}
+	}
 	for _, ix := range cands {
 		if seen[ix] || !vary[ix] || ix == iter {
 			continue
@@ -199,7 +230,7 @@ func (g *Row) induct(c int, s Schedule) *Row {
 		if a == nil || a.terms[iter] == 0 {
 			continue
 		}
-		ridden[ix] = nested[ix] || unrolled && a.terms[iter] != 1 || init[ix] || loads[ix] > 1
+		ridden[ix] = nested[ix] || unrolled && a.terms[iter] != 1 || init[ix] || loads[ix] > 1 || ix == sole
 		var base []int
 		for k, v := range a.terms {
 			if k != iter && v != 0 && !nested[k] && !g.isTileOff(k) {

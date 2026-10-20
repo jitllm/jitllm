@@ -872,23 +872,26 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(g.Rows/tr*cols*split-1)))
 			}
 			flatRaw = flat
-			if split > 1 {
-				// The segment is the slowest: a plane of Rows*Width a segment.
-				per := b.Const(ir.U32, int64(g.Rows/tr*cols))
-				seg = b.Div(ir.U32, flat, per)
-				flat = b.Rem(ir.U32, flat, per)
-				segTrip = g.Loops[0] / split
-			}
 			width = b.Const(ir.U32, int64(g.Width))
 			tcols := width
 			if tc > 1 {
 				tcols = b.Const(ir.U32, int64(cols))
 			}
-			if g.Rows/tr == 1 {
+			// The element fastest, then the row, the segment slowest (a
+			// plane of Rows*Width a segment): the column first, the rest
+			// cut into row and segment.
+			switch {
+			case g.Rows/tr == 1 && split == 1:
 				flatIdx, r = flat, b.Const(ir.U32, 0)
-			} else {
+			default:
 				flatIdx = b.Rem(ir.U32, flat, tcols)
-				r = b.Div(ir.U32, flat, tcols)
+				rest := b.Div(ir.U32, flat, tcols)
+				r = rest
+				if split > 1 {
+					rows := b.Const(ir.U32, int64(g.Rows/tr))
+					r, seg = b.Rem(ir.U32, rest, rows), b.Div(ir.U32, rest, rows)
+					segTrip = g.Loops[0] / split
+				}
 			}
 			if tc > 1 {
 				flatIdx = b.Mul(ir.U32, flatIdx, b.Const(ir.U32, int64(tc)))

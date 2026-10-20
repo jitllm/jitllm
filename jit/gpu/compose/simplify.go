@@ -3,19 +3,13 @@ package compose
 import "github.com/jitllm/jitllm/jit/gpu/ir"
 
 // simplify is k after the IR passes the former leaves to them: integer
-// constants folded and identities removed (x+0, x*1, x*0), a split index
+// constants folded, common subexpressions merged (cse) and identities removed (x+0, x*1, x*0, x%1, x-x), a split index
 // recombined ((f/c)*c + f%c is f), an add of a constant whose one reader is
 // an access taken as that access's offset, and what no effect reads removed.
 func simplify(k *ir.Kernel) *ir.Kernel {
 	ops := append([]ir.Op(nil), k.Ops...)
 	for i := range ops {
 		ops[i].Vargs = append([]ir.Value(nil), ops[i].Vargs...)
-	}
-	readers := make([]int, len(ops)+1)
-	for _, o := range ops {
-		for _, a := range o.Args {
-			readers[a]++
-		}
 	}
 	repl := make([]ir.Value, len(ops)+1)
 	res := func(v ir.Value) ir.Value {
@@ -28,6 +22,64 @@ func simplify(k *ir.Kernel) *ir.Kernel {
 		o := &ops[v-1]
 		return uint32(o.Imm), o.Kind == ir.OpConst && (o.Type == ir.U32 || o.Type == ir.I32)
 	}
+	backEdges := func() {
+		for i := range ops {
+			if o := &ops[i]; o.Kind == ir.OpPhi && o.Args[1] != 0 {
+				o.Args[1] = res(o.Args[1])
+			}
+		}
+	}
+	fold := func() {
+		for i := range ops {
+			o := &ops[i]
+			for j, a := range o.Args {
+				if a != 0 && (o.Kind != ir.OpPhi || j == 0) {
+					o.Args[j] = res(a)
+				}
+			}
+			for j, a := range o.Vargs {
+				o.Vargs[j] = res(a)
+			}
+			if o.Type != ir.U32 && o.Type != ir.I32 {
+				continue
+			}
+			if v, ok := foldInt(o, intConst); ok {
+				if v != 0 {
+					repl[i+1] = v
+				} else {
+					*o = ir.Op{Kind: ir.OpConst, Type: o.Type, Imm: o.Imm}
+				}
+				continue
+			}
+		}
+		backEdges()
+	}
+	fold()
+	cse(ops, repl, res)
+	backEdges()
+	fold()
+	readers := make([]int, len(ops)+1)
+	live := liveOf(ops)
+	for i, o := range ops {
+		if !live[i+1] {
+			continue
+		}
+		for _, a := range o.Args {
+			readers[a]++
+		}
+	}
+	for i := range ops {
+		o := &ops[i]
+		for j, a := range o.Args {
+			if a != 0 && (o.Kind != ir.OpPhi || j == 0) {
+				o.Args[j] = res(a)
+			}
+		}
+		if f, ok := recombined(ops, o, readers); ok {
+			repl[i+1] = f
+		}
+	}
+	backEdges()
 	for i := range ops {
 		o := &ops[i]
 		for j, a := range o.Args {
@@ -37,25 +89,6 @@ func simplify(k *ir.Kernel) *ir.Kernel {
 		}
 		for j, a := range o.Vargs {
 			o.Vargs[j] = res(a)
-		}
-		if o.Type != ir.U32 && o.Type != ir.I32 {
-			continue
-		}
-		if v, ok := foldInt(o, intConst); ok {
-			if v != 0 {
-				repl[i+1] = v
-			} else {
-				*o = ir.Op{Kind: ir.OpConst, Type: o.Type, Imm: o.Imm}
-			}
-			continue
-		}
-		if f, ok := recombined(ops, o, readers); ok {
-			repl[i+1] = f
-		}
-	}
-	for i := range ops {
-		if o := &ops[i]; o.Kind == ir.OpPhi && o.Args[1] != 0 {
-			o.Args[1] = res(o.Args[1])
 		}
 	}
 	// An add of a constant whose one live reader is an access's index is that
@@ -107,6 +140,10 @@ func foldInt(o *ir.Op, intConst func(ir.Value) (uint32, bool)) (ir.Value, bool) 
 		return 0, false
 	}
 	x, y := o.Args[0], o.Args[1]
+	if x == y && (o.Kind == ir.OpSub || o.Kind == ir.OpXor) {
+		o.Imm = 0
+		return 0, true
+	}
 	cx, kx := intConst(x)
 	cy, ky := intConst(y)
 	signed := o.Type == ir.I32
@@ -171,6 +208,11 @@ func foldInt(o *ir.Op, intConst func(ir.Value) (uint32, bool)) (ir.Value, bool) 
 	case ir.OpDiv:
 		if ky && cy == 1 {
 			return x, true
+		}
+	case ir.OpRem:
+		if ky && cy == 1 {
+			o.Imm = 0
+			return 0, true
 		}
 	}
 	return 0, false
@@ -260,6 +302,78 @@ func hasEffect(k ir.Kind) bool {
 	switch k {
 	case ir.OpStore, ir.OpStoreV, ir.OpTileStore, ir.OpBarrier, ir.OpGridBarrier, ir.OpLoop, ir.OpEndLoop,
 		ir.OpParam, ir.OpShared, ir.OpPrefetch, ir.OpDepTask, ir.OpDepEpoch, ir.OpDepWait, ir.OpDepSignal, ir.OpDepExit:
+		return true
+	}
+	return false
+}
+
+// cseKey is a pure op by what it computes.
+type cseKey struct {
+	kind ir.Kind
+	typ  ir.Type
+	args [3]ir.Value
+	imm  int64
+}
+
+// cse is common-subexpression elimination over k's pure ops: a later op
+// computing what an earlier one visible to it does reads that one instead
+// (repl), a load of a buffer the kernel does not write among them. A value made in a loop's body is visible until the loop ends.
+func cse(ops []ir.Op, repl []ir.Value, res func(ir.Value) ir.Value) {
+	// A buffer the kernel never stores to reads the same at every load
+	// (RULE 13: no kernel reads what it writes within a phase).
+	stored := map[ir.Value]bool{}
+	for _, o := range ops {
+		if o.Kind == ir.OpStore || o.Kind == ir.OpStoreV || o.Kind == ir.OpTileStore {
+			stored[res(o.Args[0])] = true
+		}
+	}
+	seen := map[cseKey]ir.Value{}
+	var scopes [][]cseKey
+	for i := range ops {
+		o := &ops[i]
+		for j, a := range o.Args {
+			if a != 0 && (o.Kind != ir.OpPhi || j == 0) {
+				o.Args[j] = res(a)
+			}
+		}
+		for j, a := range o.Vargs {
+			o.Vargs[j] = res(a)
+		}
+		switch o.Kind {
+		case ir.OpLoop:
+			scopes = append(scopes, nil)
+			continue
+		case ir.OpEndLoop:
+			if n := len(scopes); n > 0 {
+				for _, k := range scopes[n-1] {
+					delete(seen, k)
+				}
+				scopes = scopes[:n-1]
+			}
+			continue
+		}
+		load := o.Kind == ir.OpLoad && ops[o.Args[0]-1].Kind == ir.OpParam && !stored[o.Args[0]]
+		if !pure(o.Kind) && !load || len(o.Vargs) > 0 || o.Tile != nil {
+			continue
+		}
+		k := cseKey{o.Kind, o.Type, o.Args, o.Imm}
+		if v, ok := seen[k]; ok {
+			repl[i+1] = v
+			continue
+		}
+		seen[k] = ir.Value(i + 1)
+		if n := len(scopes); n > 0 {
+			scopes[n-1] = append(scopes[n-1], k)
+		}
+	}
+}
+
+// pure is whether an op of kind k computes from its operands alone.
+func pure(k ir.Kind) bool {
+	switch k {
+	case ir.OpConst, ir.OpTID, ir.OpCTAID, ir.OpNTID, ir.OpAdd, ir.OpSub, ir.OpMul, ir.OpDiv, ir.OpRem, ir.OpShl,
+		ir.OpShr, ir.OpAnd, ir.OpXor, ir.OpMin, ir.OpMax, ir.OpExp, ir.OpSqrt, ir.OpCvtF32, ir.OpCvtF16H,
+		ir.OpPackF16, ir.OpCvtI32, ir.OpBitcast, ir.OpDot4, ir.OpFma, ir.OpLt, ir.OpSelect, ir.OpFunnel:
 		return true
 	}
 	return false
