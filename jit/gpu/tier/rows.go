@@ -628,7 +628,7 @@ func (g *devTier) prewarmFused(bs *blockScratch) {
 // instruction would be asked for. Callers hold g.mu.
 func (g *devTier) anyNarrow() bool {
 	narrow := func(q kernels.Quant) bool { return !kernels.IsFloat(q) || q.Info().Float == 2 }
-	if g.bs != nil && g.bs.head.t != 0 && narrow(g.bs.head.t) {
+	if g.bs != nil && g.bs.head != nil && g.bs.head.t != 0 && narrow(g.bs.head.t) {
 		return true
 	}
 	for _, l := range g.layers {

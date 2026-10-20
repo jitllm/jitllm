@@ -4,6 +4,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/compose"
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // groupTok is the padding of an expert's run of columns.
@@ -13,8 +14,10 @@ const groupTok = 4
 // p columns of (token, expert) pairs, each expert's run padded to groupTok.
 type moeGroup struct {
 	rows, k, nExp, p int
-	colPair, ones    backend.Buf
-	rwS              backend.Buf
+	// unit is what each expert's run of columns is padded to (groupUnit).
+	unit          int
+	colPair, ones backend.Buf
+	rwS           backend.Buf
 	rlog, rlogB, rsel, rtop, rw, rbm,
 	eg, eu, egB, euB, eact, edown, edownB backend.Buf
 	// The grouping's planes (compose.Group*): the block counts, offsets and
@@ -41,8 +44,9 @@ func (m *moeGroup) free() {
 func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 	defer g.scratchWin().close()
 	k, e, ew := p.NExpertUsed, p.NExpert, p.ExpWidth()
-	np := (rows*k + e*(groupTok-1) + groupTok - 1) / groupTok * groupTok
-	m := &moeGroup{rows: rows, k: k, nExp: e, p: np, endsH: make([]uint32, e)}
+	unit := g.groupUnit(rows, k, e)
+	np := (rows*k + e*(unit-1) + unit - 1) / unit * unit
+	m := &moeGroup{rows: rows, k: k, nExp: e, p: np, unit: unit, endsH: make([]uint32, e)}
 	nb, wide := compose.GroupBlocks(rows, k), max(ew, p.NFFNExp)
 	var err error
 	buf := func(dst *backend.Buf, n int) {
@@ -97,4 +101,29 @@ func ones32(n int) []float32 {
 		v[i] = 1
 	}
 	return v
+}
+
+// groupUnit is the columns each expert's run is padded to: a token group
+// (groupTok), or on a device that lowers the 8x8 binary16 tile, a staged
+// GEMM's tile of tokens -- 64 where the pairs reach 48 an expert, else 32.
+func (g *devTier) groupUnit(rows, k, nExp int) int {
+	if !g.tilesOK() {
+		return groupTok
+	}
+	if rows*k >= 48*nExp {
+		return 64
+	}
+	return 32
+}
+
+// tilesOK reports whether this device lowers the collective tile ops at the
+// 8x8 binary16 shape, asked once by compiling a probe. Callers hold g.mu.
+func (g *devTier) tilesOK() bool {
+	if g.tileCap == 0 {
+		g.tileCap = -1
+		if ok, _ := backend.LowersTile(g.dev, backend.TileShape{M: 8, N: 8, K: 8, Elem: ir.TileF16, Acc: ir.TileF32}); ok {
+			g.tileCap = 1
+		}
+	}
+	return g.tileCap == 1
 }
