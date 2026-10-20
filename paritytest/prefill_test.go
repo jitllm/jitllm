@@ -65,11 +65,10 @@ func TestPrefillIsMains(t *testing.T) {
 						t.Fatal(err)
 					}
 					items := c.rows * c.heads * max(1, c.splits)
-					g := &compose.Row{Width: items, Rows: 1}
-					f := compose.Facts{}
-					if lanes == 32 {
-						g = &compose.Row{Width: 32, Rows: items}
-						f.RowGroup = 32
+					g := &compose.Row{Width: 1, Rows: items}
+					f := compose.Facts{Target: sm70}
+					if lanes == 1 {
+						f.Target.Lanes = 0
 					}
 					a, out, part, desc, sink := g.Buf(compose.BufRow), g.Buf(compose.BufOut), g.Buf(compose.BufOut), g.Buf(compose.BufU32), -1
 					if c.sink && c.splits == 0 {

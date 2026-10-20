@@ -6,17 +6,18 @@ func (g *Row) SpanWord(desc, words, row, w int) int {
 	return g.LoadAt(desc, ub(OpAdd, ub(OpMul, row, u(words)), u(w)))
 }
 
-// SpanUniform is n, hinted to have one value over its row's group.
-func (g *Row) SpanUniform(n int) int {
-	return g.Add(Node{Kind: NHint, Hint: HintUniform, A: n})
-}
+// TileFirst is n, hinted to serve every row of a tile taken at its first.
+func (g *Row) TileFirst(n int) int { return g.Add(Node{Kind: NHint, Hint: HintTileFirst, A: n}) }
+
+// TileLast is n, hinted to serve every row of a tile taken at its last.
+func (g *Row) TileLast(n int) int { return g.Add(Node{Kind: NHint, Hint: HintTileLast, A: n}) }
 
 // SpanClamp is index t clamped into row row's keys [start, end), aligned
-// down to align where it is over one, position 0 for an empty span; hinted
-// to be any key of the row's table outside the keys.
+// down to align where it is over one, position 0 for an empty span: the
+// span's ends hinted to widen to a tile's, so the index is any key of the
+// row's table outside its keys.
 func (g *Row) SpanClamp(desc, words, row, start, end, t, align int) int {
-	n := g.clampInto(t, g.SpanWord(desc, words, row, start), g.SpanWord(desc, words, row, end), align)
-	return g.Add(Node{Kind: NHint, Hint: HintSpan, A: n, B: t, C: row, Buf: desc, At: align, H: [3]int32{int32(words), int32(start), int32(end)}})
+	return g.clampInto(t, g.TileFirst(g.SpanWord(desc, words, row, start)), g.TileLast(g.SpanWord(desc, words, row, end)), align)
 }
 
 func (g *Row) clampInto(t, lo, hi, align int) int {
@@ -29,9 +30,8 @@ func (g *Row) clampInto(t, lo, hi, align int) int {
 	return g.Select(live, ub(OpMin, ub(OpMax, t, lo), last), u(0))
 }
 
-// hulls widens every span hint under a row tile of schedule s to the
-// tile's -- a uniform value at the first row, a clamp into the first row's
-// start and the last row's end -- and drops every hint.
+// hulls takes every tile hint under a row tile of schedule s at the tile's
+// first or last row, and drops every hint.
 func (g *Row) hulls(s Schedule) *Row {
 	tr := max(s.Tile, 1)
 	widen := s.Flat && !s.MMA && tr > 1 && g.SpanGroup%tr == 0
@@ -45,12 +45,10 @@ func (g *Row) hulls(s Schedule) *Row {
 		}
 		n := nd.A
 		switch {
-		case widen && nd.Hint == HintUniform:
+		case widen && nd.Hint == HintTileFirst:
 			n = r.atRowOff(nd.A, 0)
-		case widen && nd.Hint == HintSpan:
-			words, start, end := int(nd.H[0]), int(nd.H[1]), int(nd.H[2])
-			first, last := r.atRowOff(nd.C, 0), r.atRowOff(nd.C, tr-1)
-			n = r.clampInto(r.atRowOff(nd.B, 0), r.SpanWord(nd.Buf, words, first, start), r.SpanWord(nd.Buf, words, last, end), nd.At)
+		case widen && nd.Hint == HintTileLast:
+			n = r.atRowOff(nd.A, tr-1)
 		}
 		r.Nodes[i] = r.Nodes[n]
 	}

@@ -44,7 +44,7 @@ type Row struct {
 	HasLive         bool
 	LiveBuf, LiveAt int
 	// SpanGroup is the aligned rows that share a table and whose spans do
-	// not decrease (HintUniform, HintSpan).
+	// not decrease (HintTileFirst, HintTileLast).
 	SpanGroup int
 }
 
@@ -171,13 +171,12 @@ const (
 type HintKind uint8
 
 const (
-	// HintUniform: A has one value over each aligned group of the rows
-	// whose span rows share it (Row.SpanGroup).
-	HintUniform HintKind = iota + 1
-	// HintSpan: A is index B clamped into row C's keys [H[1], H[2]) of
-	// descriptor buffer Buf (H[0] words a row), aligned down to At: equal to
-	// B inside the keys, any key of the row's table outside them.
-	HintSpan
+	// HintTileFirst and HintTileLast: A, taken at the first (last) row of
+	// any tile of an aligned group of Row.SpanGroup rows, serves every row of
+	// that tile -- a value the group's rows share, the start (end) of a span
+	// that only widens across them.
+	HintTileFirst HintKind = iota + 1
+	HintTileLast
 )
 
 // Op is a unary or binary map.
@@ -324,6 +323,9 @@ type Schedule struct {
 	// exactly (a group of fewer elements clamps its own, and stores at its
 	// own places): a row whose elements meet in workgroup arrays and lanes.
 	WorkRow bool
+	// LaneLoops, under Lanes, spreads a row of one element over the lanes,
+	// each loop's trips dealt across them (laneLoops).
+	LaneLoops bool
 }
 
 // Key is a group's identity in a cache: its structure and its schedule,
@@ -335,7 +337,7 @@ type Key struct {
 // Encode is the group's structure and schedule as integers.
 func (g *Row) Encode(s Schedule) []uint32 {
 	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs)), b2u(s.Flat), uint32(s.Tile), uint32(s.TileCols), uint32(s.Split),
-		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes), uint32(s.Lanes), b2u(s.WorkRow), uint32(s.RowStride), uint32(s.ColStride)}
+		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes), uint32(s.Lanes), b2u(s.WorkRow), uint32(s.RowStride), uint32(s.ColStride), b2u(s.LaneLoops)}
 	for _, b := range g.Bufs {
 		e = append(e, uint32(b.Kind), uint32(b.N), uint32(b.Of), b2u(b.Over))
 	}
@@ -872,6 +874,9 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 	if err != nil {
 		return nil, err
 	}
+	if g, err = g.laneLoops(s); err != nil {
+		return nil, err
+	}
 	g = g.pipelined().tiled(s).hulls(s).inductions(s)
 	if s.Lanes == 0 && g.loopReduces() {
 		return nil, fmt.Errorf("compose: a reduction in a loop's body off lane rows")
@@ -1318,9 +1323,17 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		}
 		open++
 		defer func() { open-- }()
-		if open > 1 && trip > 0 && trip <= unrollTrips && !split0 {
-			// A short loop in another's body runs unrolled: each trip's body
-			// at its iterator, the folds' values chained from trip to trip.
+		replicas := len(cs) == 0 && g.tripOf(c) < 0
+		for _, st := range g.Stores {
+			if g.storeLoop(st) == c && vary[st.Val] {
+				replicas = false
+			}
+		}
+		if (open > 1 || replicas) && trip > 0 && trip <= unrollTrips && !split0 {
+			// A short loop in another's body, or one that only places
+			// replicas of values made before it, runs unrolled: each trip's
+			// body at its iterator, the folds' values chained from trip to
+			// trip.
 			cur := inits
 			for j := 0; j < trip; j++ {
 				ins := body(b.Const(ir.U32, int64(j)))

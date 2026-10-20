@@ -88,8 +88,8 @@ func (g *Row) PrefillScores(s Prefill, q, k, out, tab, desc, mp, bt int) {
 	j, R := g.Column(), g.RowIdx()
 	row, h := ub(OpDiv, R, u(s.Heads)), ub(OpRem, R, u(s.Heads))
 	dr := g.rowOf(s, mp, row)
-	base := g.SpanUniform(g.baseOf(s, desc, bt, row))
-	tw := g.SpanUniform(g.descOf(desc, dr, kernels.PRowTab))
+	base := g.TileFirst(g.baseOf(s, desc, bt, row))
+	tw := g.TileFirst(g.descOf(desc, dr, kernels.PRowTab))
 	t := g.SpanClamp(desc, kernels.PRowWords, dr, kernels.PRowStart, kernels.PRowEnd, add(base, j), 1)
 	pid := g.LoadAt(tab, add(tw, ub(OpDiv, t, u(P))))
 	kb := add(add(mul(pid, u(P*kvRow)), mul(mul(ub(OpDiv, h, u(gqa)), u(s.Dim)), u(P))), ub(OpRem, t, u(P)))
@@ -103,26 +103,17 @@ func (g *Row) PrefillScores(s Prefill, q, k, out, tab, desc, mp, bt int) {
 	g.Store(out, g.Select(ok, g.capped(acc, s.Scale, s.Softcap), g.Add(Node{Kind: NUnary, Op: OpBits, A: u(0xFF800000)})))
 }
 
-// PrefillSoftmax is each (row, head, split) item's softmax over the slots of
-// its split its row attends: an item a row of 32 lanes over the items' rows,
-// or a thread an item of one row. The weights go to out over the slots the item's query
-// tile of qt rows attends, in whole blocks of 8; the maximum and the
-// denominator to the merge's partials, or in the direct form the weights
-// normalised (by the sink where sink >= 0).
+// PrefillSoftmax is each (row, head, split) item's softmax over the slots
+// of its split its row attends, an item a row of one element: the maximum
+// and the denominator to the merge's partials (its 32 replicas), the
+// weights to out over the slots the reader's tile of qt rows attends, in
+// whole blocks of 8; in the direct form the weights normalised, by the sink
+// where sink >= 0, and no partials.
 func (g *Row) PrefillSoftmax(s Prefill, a, out, part, desc, sink, mp, bt, qt int) {
 	u, ub := g.UConst, g.UBin
 	add := func(x, y int) int { return ub(OpAdd, x, y) }
 	C, S := s.Chunk, s.splits()
-	lanes := 1
-	if g.Rows > 1 {
-		lanes = g.Width
-	}
-	var item, lane, step int
-	if lanes == 32 {
-		item, lane, step = g.RowIdx(), g.Column(), u(32)
-	} else {
-		item, lane, step = g.Column(), u(0), u(1)
-	}
+	item := g.RowIdx()
 	sp := ub(OpRem, item, u(S))
 	row := ub(OpDiv, item, u(s.Heads*S))
 	c0 := add(g.baseOf(s, desc, bt, row), ub(OpMul, sp, u(C)))
@@ -138,60 +129,40 @@ func (g *Row) PrefillSoftmax(s Prefill, a, out, part, desc, sink, mp, bt, qt int
 	z1 := ub(OpMin, ub(OpMul, ub(OpDiv, add(te, u(7)), u(8)), u(8)), u(C))
 	z1 = g.Select(g.Less(ts, te), z1, z0)
 	pb := ub(OpMul, item, u(C))
-	count := func(x, y int) int {
-		n := ub(OpSub, y, x)
-		if lanes == 1 {
-			return n
-		}
-		return ub(OpShr, add(ub(OpSub, ub(OpMax, n, lane), lane), u(31)), u(5))
+	over := func(x, y int, body func(at int)) int {
+		c := g.LoopN(ub(OpSub, y, x))
+		body(add(add(pb, x), g.Iter(c)))
+		return c
 	}
-	minus := g.Const(-math.MaxFloat32)
-	first0 := add(add(pb, lo), lane)
-	reduce := func(x int, red Red) int {
-		if lanes != 32 {
-			return x
-		}
-		return g.Add(Node{Kind: NReduce, Red: red, A: x, At: 1})
-	}
-	c1 := g.LoopN(count(lo, e))
-	mx := g.Fold(c1, minus)
-	g.SetFold(mx, g.Bin(OpMax, mx, g.LoadAt(a, add(first0, ub(OpMul, g.Iter(c1), step)))))
-	m := reduce(mx, RedMax)
-	startW := add(add(pb, z0), lane)
+	var m int
+	c1 := over(lo, e, func(at int) {})
+	m = g.Fold(c1, g.Const(-math.MaxFloat32))
+	g.SetFold(m, g.Bin(OpMax, m, g.LoadAt(a, add(add(pb, lo), g.Iter(c1)))))
 	if s.Splits == 0 {
-		c2 := g.LoopN(count(lo, e))
+		c2 := g.LoopN(ub(OpSub, e, lo))
 		sum := g.Fold(c2, g.Const(0))
-		g.SetFold(sum, g.Bin(OpAdd, sum, g.exp(g.Bin(OpSub, g.LoadAt(a, add(first0, ub(OpMul, g.Iter(c2), step))), m))))
-		l, mm := reduce(sum, RedSum), m
+		g.SetFold(sum, g.Bin(OpAdd, sum, g.exp(g.Bin(OpSub, g.LoadAt(a, add(add(pb, lo), g.Iter(c2))), m))))
+		l, mm := sum, m
 		if s.Sink && sink >= 0 {
 			sv := g.LoadAt(sink, ub(OpRem, ub(OpRem, item, u(s.Heads*S)), u(s.Heads)))
 			mm = g.Bin(OpMax, m, sv)
 			l = g.Bin(OpAdd, g.Bin(OpMul, l, g.exp(g.Bin(OpSub, m, mm))), g.exp(g.Bin(OpSub, sv, mm)))
 		}
 		inv := g.Bin(OpDiv, g.Const(1), g.Bin(OpMax, l, g.Const(1e-30)))
-		c3 := g.LoopN(count(z0, z1))
-		wi := add(startW, ub(OpMul, g.Iter(c3), step))
-		g.StoreAt(out, g.Bin(OpMul, g.exp(g.Bin(OpSub, g.LoadAt(a, wi), mm)), inv), wi)
+		over(z0, z1, func(at int) { g.StoreAt(out, g.Bin(OpMul, g.exp(g.Bin(OpSub, g.LoadAt(a, at), mm)), inv), at) })
 		return
 	}
-	c2 := g.LoopN(count(z0, z1))
-	si := add(startW, ub(OpMul, g.Iter(c2), step))
+	c2 := g.LoopN(ub(OpSub, z1, z0))
+	at := add(add(pb, z0), g.Iter(c2))
 	sum := g.Fold(c2, g.Const(0))
-	w := g.exp(g.Bin(OpSub, g.LoadAt(a, si), m))
-	g.StoreAt(out, w, si)
+	w := g.exp(g.Bin(OpSub, g.LoadAt(a, at), m))
+	g.StoreAt(out, w, at)
 	g.SetFold(sum, g.Bin(OpAdd, sum, w))
-	l := reduce(sum, RedSum)
 	padded := (s.Dim + 31) / 32 * 32
 	pp := ub(OpMul, item, u(padded+64))
-	if lanes == 32 {
-		g.StoreAt(part, m, add(add(pp, lane), u(padded)))
-		g.StoreAt(part, l, add(add(pp, lane), u(padded+32)))
-		return
-	}
-	for r := 0; r < 32; r++ {
-		g.StoreAt(part, m, add(pp, u(padded+r)))
-		g.StoreAt(part, l, add(pp, u(padded+32+r)))
-	}
+	r := g.Loop(32)
+	g.StoreAt(part, m, add(add(pp, g.Iter(r)), u(padded)))
+	g.StoreAt(part, sum, add(add(pp, g.Iter(r)), u(padded+32)))
 }
 
 // PrefillAcc is each split's weighted sum of V a thread a (query tile of

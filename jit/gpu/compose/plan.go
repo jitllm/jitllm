@@ -135,6 +135,12 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 		return []Planned{{G: g, S: Schedule{Group: (g.Width + 31) / 32 * 32, Flat: true, WorkRow: true, Target: f.Target}, Bufs: all,
 			Threads: g.Rows * ((g.Width + 31) / 32 * 32)}}, nil
 	}
+	if L := f.Target.Lanes; L > 1 && g.Width == 1 && g.Rows > 1 && g.foldsReadAfter() {
+		// An item whose run-time loops fold what is read after them: its
+		// loops' trips over a subgroup's lanes, the folds' lanes combined.
+		s := Schedule{Group: L, Flat: true, Lanes: L, LaneLoops: true, Target: f.Target}
+		return []Planned{{G: g, S: s, Bufs: all, Threads: g.Rows * L}}, nil
+	}
 	if g.product() {
 		return g.PlanAt(g.productSchedule(f))
 	}
@@ -439,7 +445,7 @@ func (g *Row) productSchedule(f Facts) Schedule {
 func (g *Row) spanStride() int {
 	d := 1
 	for _, sp := range g.Nodes {
-		if sp.Kind != NHint || sp.Hint != HintSpan {
+		if sp.Kind != NHint {
 			continue
 		}
 		var walk func(n int) int
@@ -462,7 +468,7 @@ func (g *Row) spanStride() int {
 			}
 			return x
 		}
-		if x := walk(sp.C); x > 0 {
+		if x := walk(sp.A); x > 0 {
 			d = x
 		}
 	}
@@ -567,4 +573,24 @@ func (g *Row) selectedRowDeps() []bool {
 		x := g.Nodes[nd.Ix]
 		return x.Kind == NRowIdx || x.Kind == NUBinary && x.Op == OpDiv && g.Nodes[x.A].Kind == NRowIdx && g.Nodes[x.B].Kind == NUConst && g.Nodes[x.B].At == d
 	})
+}
+
+// foldsReadAfter reports whether a fold of a loop run for a run-time count,
+// a maximum or a sum, is read after its loop.
+func (g *Row) foldsReadAfter() bool {
+	for c := range g.Loops {
+		if g.tripOf(c) < 0 {
+			continue
+		}
+		body := g.bodyOf(c)
+		for f, nd := range g.Nodes {
+			if nd.Kind != NFold || nd.At != c {
+				continue
+			}
+			if _, ok := g.foldRed(f); ok && g.readAfter(f, body) {
+				return true
+			}
+		}
+	}
+	return false
 }
