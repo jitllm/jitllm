@@ -1,6 +1,7 @@
 package paritytest
 
 import (
+	"flag"
 	"fmt"
 	"testing"
 
@@ -30,6 +31,8 @@ func formed(t *testing.T, g *compose.Row, s compose.Schedule) []*ir.Kernel {
 	return ks
 }
 
+var explain = flag.Bool("explain", false, "write out every missing instruction of main's")
+
 // same holds the composed kernels to main's instruction by instruction.
 func same(t *testing.T, name string, main, composed []*ir.Kernel) {
 	t.Helper()
@@ -38,6 +41,21 @@ func same(t *testing.T, name string, main, composed []*ir.Kernel) {
 		return
 	}
 	in := NewInterner()
+	if *explain {
+		for _, m := range miss {
+			t.Logf("missing %%%d %s", m.Op, Explain(in, m.K, m.Op, 4))
+		}
+		for _, k := range composed {
+			for i := range k.Ops {
+				t.Logf("composed %%%d %s", i, Explain(in, k, i, 4))
+			}
+		}
+		for _, k := range main {
+			for i, o := range k.Ops {
+				t.Logf("main raw %%%d %v %v args %v imm %d", i, o.Kind, o.Type, o.Args, o.Imm)
+			}
+		}
+	}
 	first := ""
 	if len(miss) > 0 {
 		first = Explain(in, miss[0].K, miss[0].Op, 3)

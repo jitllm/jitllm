@@ -18,10 +18,11 @@ type Miss struct {
 	Op int
 }
 
-// Compare looks for each of main's instructions among the composer's by its
-// dataflow (Dataflow), as a multiset: an instruction of the composer's
-// matches one of main's at most. It returns how many of main's
-// instructions there are (parameters aside), how many match, and the rest.
+// Compare looks for each value main's kernels compute among the composer's
+// by its dataflow (Dataflow): each of a kernel's live instructions (liveOps),
+// a value computed twice in one kernel counted once, and an instruction of
+// the composer's matching one of main's at most. It returns how many of
+// main's values there are (parameters aside), how many match, and the rest.
 func Compare(main, composed []*ir.Kernel) (total, same int, missing []Miss) {
 	in := NewInterner()
 	have := map[int32]int{}
@@ -32,10 +33,15 @@ func Compare(main, composed []*ir.Kernel) (total, same int, missing []Miss) {
 	}
 	for _, k := range main {
 		live := liveOps(k)
+		// A value a kernel computes twice is one value: main's builder
+		// eliminates no common subexpression, and recomputing is no part of
+		// what it computes.
+		seen := map[int32]bool{}
 		for i, id := range in.Dataflow(k) {
-			if k.Ops[i].Kind == ir.OpParam || !live[i] {
+			if k.Ops[i].Kind == ir.OpParam || !live[i] || seen[id] {
 				continue
 			}
+			seen[id] = true
 			total++
 			if have[id] > 0 {
 				have[id]--
@@ -132,6 +138,9 @@ const (
 	// of x in mixed radix, which nested divisions and remainders by
 	// constants all reduce to.
 	atomField
+	// atomCarried stands for a phi while its back edge is evaluated: the
+	// edge as carried + c makes the phi an induction of step c.
+	atomCarried
 )
 
 // field is a field atom's x (an affine's name), d and m.
@@ -336,12 +345,29 @@ func (c *canon) index(i int) (affine, bool) {
 		if ok = ok1 && ok2 && y.isConst() && y.c >= 0 && y.c < 32; ok {
 			r = x.scale(1 << y.c)
 		}
-	case ir.OpDiv, ir.OpRem:
+	case ir.OpDiv, ir.OpRem, ir.OpShr, ir.OpAnd:
+		// An unsigned shift right by k is the quotient by 2^k, a mask of
+		// 2^k-1 the remainder; any other shift or mask is no field.
+		isDiv := o.Kind == ir.OpDiv || o.Kind == ir.OpShr
+		y, ok2 := arg(1)
+		switch o.Kind {
+		case ir.OpShr:
+			if ok2 = ok2 && y.isConst() && y.c >= 0 && y.c < 32; ok2 {
+				y = affine{c: 1 << y.c}
+			}
+		case ir.OpAnd:
+			if ok2 = ok2 && y.isConst() && y.c > 0 && (y.c+1)&y.c == 0; ok2 {
+				y = affine{c: y.c + 1}
+			}
+		}
+		if (o.Kind == ir.OpShr || o.Kind == ir.OpAnd) && (!ok2 || o.Type != ir.U32) {
+			ok = false
+			break
+		}
 		// By a constant past the dividend's bound, a quotient is zero and a
 		// remainder the dividend.
-		y, ok2 := arg(1)
 		if hi, okh := c.bound(int(o.Args[0]) - 1); ok2 && y.isConst() && y.c > 0 && okh && hi < uint64(y.c) {
-			if o.Kind == ir.OpDiv {
+			if isDiv {
 				r = affine{}
 			} else {
 				r, ok = arg(0)
@@ -361,7 +387,7 @@ func (c *canon) index(i int) (affine, bool) {
 				f = g
 			}
 		}
-		if o.Kind == ir.OpDiv {
+		if isDiv {
 			f.d *= y.c
 		} else {
 			mm := f.d * y.c
@@ -373,23 +399,33 @@ func (c *canon) index(i int) (affine, bool) {
 		}
 		r = c.fieldAtom(f)
 	case ir.OpPhi:
-		// An induction: phi(start, phi + step) is start + step*iteration.
+		// An induction: phi(start, back) with back = phi + step, however
+		// the step is reached, is start + step*iteration. The back edge is
+		// read with the phi as an atom of its own; what that reading
+		// cached is dropped after.
 		ok = false
 		start, ok1 := arg(0)
-		if nx := int(o.Args[1]) - 1; ok1 && nx > i && c.k.Ops[nx].Kind == ir.OpAdd {
-			n := c.k.Ops[nx]
-			for side := 0; side < 2 && !ok; side++ {
-				if int(n.Args[side])-1 != i {
-					continue
+		if nx := int(o.Args[1]) - 1; ok1 && nx > i {
+			unset := make([]bool, len(c.aff))
+			for j, a := range c.aff {
+				unset[j] = a == nil
+			}
+			p := c.atom(atomCarried, int32(i), 0)
+			c.aff[i] = &p
+			back, ok2 := c.index(nx)
+			for j := range c.aff {
+				if unset[j] {
+					c.aff[j] = nil
 				}
-				if st, ok2 := c.index(int(n.Args[1-side]) - 1); ok2 && st.isConst() {
-					trip := int64(0)
-					if lp := c.loop[i]; lp >= 0 {
-						trip = c.k.Ops[lp].Imm
-					}
-					it := c.atom(atomIter, int32(c.depth[i]), int32(trip))
-					r, ok = start.add(it.scale(st.c), 1), true
+			}
+			c.aff[i] = nil
+			if ok2 && len(back.terms) == 1 && back.terms[0] == p.terms[0] {
+				trip := int64(0)
+				if lp := c.loop[i]; lp >= 0 {
+					trip = c.k.Ops[lp].Imm
 				}
+				it := c.atom(atomIter, int32(c.depth[i]), int32(trip))
+				r, ok = start.add(it.scale(back.c), 1), true
 			}
 		}
 		if !ok {
