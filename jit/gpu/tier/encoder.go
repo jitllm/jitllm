@@ -262,9 +262,12 @@ func (g *devTier) layersSession(s backend.Session) {
 			// block's norm may fold it (foldAddNorm).
 			if len(o.Gen) == 1 && o.Gen[0].former == formAttend {
 				// The attention of this call's keys, or its run table's.
-				if pk.rag.n > 0 {
+				switch {
+				case pk.rag.n > 0:
 					o.Gen = g.ragAttendAt(&o, prog, bs)
-				} else {
+				case pk.pre.on:
+					o.Gen = g.preAttendAt(&o, prog, bs, fc.rows)
+				default:
 					o.Gen = g.attendAt(&o, prog, bs, fc.rows, pagedKeys(pk.rows))
 				}
 				if o.Gen == nil && err == nil {
@@ -545,6 +548,13 @@ func (g *devTier) layersSession(s backend.Session) {
 		w(pk.pRow, u32view(pk.desc))
 		if len(pk.descW) > 0 {
 			w(pk.pRowW, u32view(pk.descW))
+		}
+		if pp := &pk.pre; pp.on {
+			for i := range pp.desc {
+				if len(pp.desc[i]) > 0 {
+					w(pp.pDesc[i], u32view(pp.desc[i]))
+				}
+			}
 		}
 		if rr := &pk.rag; rr.n > 0 {
 			w(rr.pMap, u32view(rr.slots))

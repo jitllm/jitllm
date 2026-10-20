@@ -765,9 +765,12 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			return refuse("paged history: %v", e)
 		}
 		g.pagedStage(pk, p, pk.rows)
-		pk.rag.n = 0
-		if rag != nil {
+		pk.rag.n, pk.pre.on = 0, false
+		switch {
+		case rag != nil:
 			g.ragStage(bs, pk)
+		case R > 1:
+			g.preStage(bs, pk, nrow)
 		}
 	}
 

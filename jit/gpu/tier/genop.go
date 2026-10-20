@@ -86,6 +86,8 @@ const (
 	gaRagMap   // a ragged call's run table: each slot's row
 	gaRagBase  // each slot's partition base
 	gaRagBaseW // the windowed descriptors' bases
+	gaPreDesc  // a chunk's staged prefill descriptors, padding rows emptied
+	gaPreDescW // and its windowed ones
 	gaMgBC    // a mixture's grouping over rows: the block counts,
 	gaMgOff   // the offsets,
 	gaMgCnt   // the totals,
@@ -925,6 +927,10 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.bs.pkv.rag.pBase[0]
 			case gaRagBaseW:
 				bufs[j] = st.bs.pkv.rag.pBase[1]
+			case gaPreDesc:
+				bufs[j] = st.bs.pkv.pre.pDesc[0]
+			case gaPreDescW:
+				bufs[j] = st.bs.pkv.pre.pDesc[1]
 			case gaMgBC, gaMgOff, gaMgCnt, gaMgEnds, gaMgColE, gaMgPerm, gaMgPos, gaMgTsel, gaMgHG, gaMgGA, gaMgGAX:
 				m := bs.mg
 				bufs[j] = [...]backend.Buf{m.bc, m.off, m.cnt, m.ends, m.colE, m.perm, m.pos, m.tsel, m.hg, m.ga, m.gax}[a-gaMgBC]

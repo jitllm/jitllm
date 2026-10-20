@@ -164,53 +164,68 @@ const (
 	ragPassW   = 4096
 )
 
-// ragAttend is the run table's three launches for a layer: the scores, the
-// softmax and the accumulate into the attention's output, each slot's row
-// and base read from the table. win picks the windowed descriptor set.
-func (g *devTier) ragAttend(o *devOp, prog *devProgram, bs *blockScratch, win bool) []genLaunch {
+// stagedPrefill is the staged prefill's three launches for a layer: the
+// scores, the softmax and the accumulate into the attention's output. With
+// mapped each slot's row and base come from the run table, else the rows
+// are the chunk's and the base row 0's; set picks the windowed descriptors.
+func (g *devTier) stagedPrefill(bs *blockScratch, rows, c int, mapped bool, set int) []genLaunch {
 	p := &bs.p
 	pk := bs.pkv
-	rr := &pk.rag
-	set := 0
+	sq, kt, qt := g.tiles.qtile, g.tiles.ktile, ragAccTile
 	prow, pbase := gaPRow, gaRagBase
-	if win {
-		set, prow, pbase = 1, gaPRowW, gaRagBaseW
+	switch {
+	case !mapped && set == 1:
+		prow = gaPreDescW
+	case !mapped:
+		prow = gaPreDesc
+	case set == 1:
+		prow, pbase = gaPRowW, gaRagBaseW
 	}
-	c := rr.chunk[set]
-	s := compose.Prefill{Rows: rr.n, Heads: p.NHead, KVHeads: p.NKVHead, Dim: p.HeadDim, Page: g.kvPage(),
-		Chunk: c, Scale: float32(p.Scale()), Softcap: p.AttnSoftcap, Sink: p.AttnSinks, Map: true}
-	plane := rr.n * p.NHead * c
+	s := compose.Prefill{Rows: rows, Heads: p.NHead, KVHeads: p.NKVHead, Dim: p.HeadDim, Page: g.kvPage(),
+		Chunk: c, Scale: float32(p.Scale()), Softcap: p.AttnSoftcap, Sink: p.AttnSinks, Map: mapped}
+	plane := rows * p.NHead * c
 	if g.genInSub && (pk.scCap < plane || pk.wtCap < plane) ||
 		!g.regrow(&pk.sc, &pk.scCap, plane, 4, true, true) || !g.regrow(&pk.wt, &pk.wtCap, plane, 4, true, true) {
 		return nil
 	}
+	group := lcmInt(sq, qt)
+	if !mapped {
+		group = rows
+	}
 	u32 := compose.BufU32
-	sc := &rowBuild{r: compose.Row{Width: c, Rows: rr.n * p.NHead, SpanGroup: lcmInt(rr.sq, rr.qt)}}
+	tables := func(rb *rowBuild) (int, int) {
+		if !mapped {
+			return -1, -1
+		}
+		return rb.buf(u32, gaRagMap), rb.buf(u32, pbase)
+	}
+	sc := &rowBuild{r: compose.Row{Width: c, Rows: rows * p.NHead, SpanGroup: group}}
 	q, k := sc.buf(compose.BufRow, gaIn0), sc.buf(compose.BufRow, gaKPool)
 	out, tab, desc := sc.buf(compose.BufOut, gaScores), sc.buf(u32, gaTab), sc.buf(u32, prow)
-	mp, bt := sc.buf(u32, gaRagMap), sc.buf(u32, pbase)
+	mp, bt := tables(sc)
 	sc.r.PrefillScores(s, q, k, out, tab, desc, mp, bt)
 
-	sm := &rowBuild{r: compose.Row{Width: 1, Rows: rr.n * p.NHead}}
+	sm := &rowBuild{r: compose.Row{Width: 1, Rows: rows * p.NHead}}
 	a, w, part, sdesc := sm.buf(compose.BufRow, gaScores), sm.buf(compose.BufOut, gaWts), sm.buf(compose.BufOut, gaParts), sm.buf(u32, prow)
 	sink := -1
 	if p.AttnSinks {
 		sink = sm.buf(compose.BufRow, gaSink)
 	}
-	smp, sbt := sm.buf(u32, gaRagMap), sm.buf(u32, pbase)
-	sm.r.PrefillSoftmax(s, a, w, part, sdesc, sink, smp, sbt, rr.qt)
+	smp, sbt := tables(sm)
+	sm.r.PrefillSoftmax(s, a, w, part, sdesc, sink, smp, sbt, qt)
 
-	ac := &rowBuild{r: compose.Row{Width: p.HeadDim, Rows: rr.n * p.NHead, SpanGroup: lcmInt(rr.sq, rr.qt)}}
+	ac := &rowBuild{r: compose.Row{Width: p.HeadDim, Rows: rows * p.NHead, SpanGroup: group}}
 	aw, v, aout := ac.buf(compose.BufRow, gaWts), ac.buf(compose.BufRow, gaVPool), ac.buf(compose.BufOut, gaOut0)
-	atab, adesc, amp, abt := ac.buf(u32, gaTab), ac.buf(u32, prow), ac.buf(u32, gaRagMap), ac.buf(u32, pbase)
+	atab, adesc := ac.buf(u32, gaTab), ac.buf(u32, prow)
+	amp, abt := tables(ac)
 	ac.r.PrefillAcc(s, aw, v, aout, atab, adesc, amp, abt)
 
 	t := g.composeTarget()
 	var ls []genLaunch
 	for i, f := range []compose.Facts{
-		{Target: t, Step: compose.StepChunk, Tok: rr.sq, RowTile: rr.kt},
+		{Target: t, Step: compose.StepChunk, Tok: sq, RowTile: kt},
 		{Target: t},
-		{Target: t, Step: compose.StepChunk, Tok: rr.qt, RowTile: 1},
+		{Target: t, Step: compose.StepChunk, Tok: qt, RowTile: 1},
 	} {
 		rb := []*rowBuild{sc, sm, ac}[i]
 		kk := g.rowKernWith(&rb.r, f)
@@ -240,7 +255,76 @@ func (g *devTier) ragAttendAt(o *devOp, prog *devProgram, bs *blockScratch) []ge
 	if ls, ok := prog.attend[k]; ok {
 		return ls
 	}
-	ls := g.ragAttend(o, prog, bs, win)
+	ls := g.stagedPrefill(bs, rr.n, rr.chunk[set], true, set)
+	if ls != nil {
+		if prog.attend == nil {
+			prog.attend = map[attendKey][]genLaunch{}
+		}
+		prog.attend[k] = ls
+	}
+	return ls
+}
+
+// prePass is a prompt chunk's staged prefill: one sequence's rows in
+// position order, every padding row empty at the last real row's end in row
+// 0's table, in descriptor copies of its own; the chunk the span from row
+// 0's key aligned down covers.
+type prePass struct {
+	on    bool
+	desc  [2][]uint32
+	chunk [2]int
+	pDesc [2]backend.Buf
+	caps  [2]int
+}
+
+// preStage readies a chunk's staged prefill, or leaves it off where the
+// device takes another form or a span passes the pass width. Callers hold
+// g.mu, outside a submission.
+func (g *devTier) preStage(bs *blockScratch, pk *pagedScratch, nrow int) {
+	pp := &pk.pre
+	pp.on = false
+	if nrow < 1 || !g.ragStaged(bs) || len(pk.desc) == 0 {
+		return
+	}
+	W := kernels.PRowWords
+	for i, src := range [2][]uint32{pk.desc, pk.descW} {
+		pp.desc[i] = append(pp.desc[i][:0], src...)
+		if len(src) == 0 {
+			continue
+		}
+		end := src[(nrow-1)*W+kernels.PRowEnd]
+		for r := nrow; r < len(src)/W; r++ {
+			o := r * W
+			pp.desc[i][o+kernels.PRowTab], pp.desc[i][o+kernels.PRowStart], pp.desc[i][o+kernels.PRowEnd] = src[kernels.PRowTab], end, end
+		}
+		span := int(end) - int(src[kernels.PRowStart]&^63)
+		if span > ragPassW {
+			return
+		}
+		c := 64
+		for c < span {
+			c *= 2
+		}
+		pp.chunk[i] = c
+		if !g.regrow(&pp.pDesc[i], &pp.caps[i], len(src), 4, false, false) {
+			return
+		}
+	}
+	pp.on = true
+}
+
+// preAttendAt is a chunk's staged prefill launches, kept a chunk and set.
+func (g *devTier) preAttendAt(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
+	pp := &bs.pkv.pre
+	set := 0
+	if l := g.curLayer; l != nil && l.windowed {
+		set = 1
+	}
+	k := attendKey{op: o.Src[0], rows: -(1 << 20) - rows, keys: 2*pp.chunk[set] + set}
+	if ls, ok := prog.attend[k]; ok {
+		return ls
+	}
+	ls := g.stagedPrefill(bs, rows, pp.chunk[set], false, set)
 	if ls != nil {
 		if prog.attend == nil {
 			prog.attend = map[attendKey][]genLaunch{}
