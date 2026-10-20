@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
+	"math/bits"
 
 	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
@@ -260,6 +261,12 @@ type Schedule struct {
 	// the lane's fragment, element g (+8) and row g, words t (+4).
 	MMA    bool
 	MT, NT int
+	// Lanes, under Flat, runs a row over that many consecutive lanes of one
+	// subgroup, an element a lane (Width, a power of two the target's
+	// subgroup holds, or 1): the lane is the thread's own and the row clamped
+	// to the last, and a reduction is a butterfly over the lanes, every lane
+	// holding it -- a value in any scope, a loop's body too.
+	Lanes int
 }
 
 // Key is a group's identity in a cache: its structure and its schedule,
@@ -271,7 +278,7 @@ type Key struct {
 // Encode is the group's structure and schedule as integers.
 func (g *Row) Encode(s Schedule) []uint32 {
 	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs)), b2u(s.Flat), uint32(s.Tile), uint32(s.TileCols), uint32(s.Split),
-		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes)}
+		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes), uint32(s.Lanes)}
 	for _, b := range g.Bufs {
 		e = append(e, uint32(b.Kind))
 	}
@@ -438,7 +445,7 @@ func (g *Row) Check() error {
 		// not have yet: windowed reductions, float to integer, bit packing.
 		return fmt.Errorf("compose: an int8 operand has no primitive form yet")
 	}
-	if _, ok := g.depth(); !ok {
+	if _, ok := g.depth(); !ok && !g.loopReduces() {
 		return fmt.Errorf("compose: a reduction read through a fold of its own")
 	}
 	return nil
@@ -672,6 +679,15 @@ func (g *Row) operands(n int) []int {
 // rowDeps is which nodes depend on the group's row: the row index, a load
 // at the row's own place, and whatever reads them (a fixed point, since a
 // fold reads later nodes).
+// loopOperands is what node n reads for a loop's purposes: its operands, and a
+// reduction's operand, since a reduction of what a loop changes changes with it.
+func (g *Row) loopOperands(n int) []int {
+	if nd := g.Nodes[n]; nd.Kind == NReduce {
+		return []int{nd.A}
+	}
+	return g.operands(n)
+}
+
 func (g *Row) rowDeps() []bool {
 	v := make([]bool, len(g.Nodes))
 	for changed := true; changed; {
@@ -760,7 +776,7 @@ func (g *Row) varies(c int) []bool {
 					}
 				}
 			default:
-				for _, o := range g.operands(i) {
+				for _, o := range g.loopOperands(i) {
 					x = x || v[o]
 				}
 			}
@@ -794,6 +810,9 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		return nil, err
 	}
 	g = g.pipelined().tiled(s).inductions(s)
+	if s.Lanes == 0 && g.loopReduces() {
+		return nil, fmt.Errorf("compose: a reduction in a loop's body off lane rows")
+	}
 	G := s.Group
 	if G < 32 || G&(G-1) != 0 {
 		return nil, fmt.Errorf("compose: a group of %d threads", G)
@@ -832,7 +851,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 	}
 	if s.Flat {
 		for i, nd := range g.Nodes {
-			if nd.Kind == NReduce && depth[i] > 0 {
+			if nd.Kind == NReduce && depth[i] > 0 && s.Lanes == 0 {
 				return nil, fmt.Errorf("compose: a flat schedule over a row reduction")
 			}
 		}
@@ -869,6 +888,20 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			r, rowBase, flatIdx = tokBase, tokBase, colBase
 			mma = &mmaTile{mt: mt, nt: nt, word: lt, g: lg, colBase: colBase, tokBase: tokBase,
 				tok0: b.Add(ir.U32, tokBase, b.Mul(ir.U32, lt, u(2)))}
+		} else if s.Lanes > 0 {
+			L := s.Lanes
+			if L != g.Width || L&(L-1) != 0 || L > max(s.Target.Lanes, 1) || tr*tc > 1 || split > 1 || g.HasLive {
+				return nil, fmt.Errorf("compose: a row of %d over %d lanes on a subgroup of %d", g.Width, L, s.Target.Lanes)
+			}
+			u := func(n int) ir.Value { return b.Const(ir.U32, int64(n)) }
+			if L == 1 {
+				flatIdx, r = u(0), b.Min(ir.U32, flat, u(g.Rows-1))
+			} else {
+				flatIdx, r = b.And(ir.U32, flat, u(L-1)), b.Min(ir.U32, b.Div(ir.U32, flat, u(L)), u(g.Rows-1))
+			}
+			flatRaw = flat
+			width = u(g.Width)
+			rowBase = b.Mul(ir.U32, r, width)
 		} else {
 			if g.HasLive {
 				if tr*tc > 1 || split > 1 {
@@ -924,7 +957,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		width = b.Const(ir.U32, int64(g.Width))
 		last = b.Const(ir.U32, int64(g.Width-1))
 	}
-	overRows := s.Flat && mma == nil && max(s.Split, 1) == 1 && max(s.Tile, 1)*max(s.TileCols, 1) == 1 && g.Rows > 1
+	overRows := s.Flat && mma == nil && max(s.Split, 1) == 1 && s.Lanes == 0 && max(s.Tile, 1)*max(s.TileCols, 1) == 1 && g.Rows > 1
 	col := g.colDeps()
 	rowVal := make([]ir.Value, len(g.Nodes)) // a reduction's result, once its pass ran
 	// rowEnv holds the row's values that read no element (a norm's scale),
@@ -1064,7 +1097,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				_, ok := e.get(n)
 				return !ok
 			}
-			for _, o := range g.operands(n) {
+			for _, o := range g.loopOperands(n) {
 				if closed(o) {
 					return true
 				}
@@ -1095,13 +1128,21 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 					}
 					return
 				}
-				for _, o := range g.operands(n) {
+				for _, o := range g.loopOperands(n) {
 					hoist(o)
 				}
 			}
 			for _, f := range folds {
 				if owns(ej, f) {
 					hoist(g.Nodes[f].A)
+				}
+			}
+			if t == nil {
+				for _, st := range g.Stores {
+					if g.storeLoop(st) == c {
+						hoist(st.Val)
+						hoist(st.Ix)
+					}
 				}
 			}
 		}
@@ -1424,6 +1465,22 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 		case NSelect:
 			v = b.Select(g.typeOf(nd.A), elem(nd.C, idx, e), elem(nd.A, idx, e), elem(nd.B, idx, e))
 		case NReduce:
+			if s.Lanes > 0 {
+				v = elem(nd.A, idx, e)
+				for i := 0; i < bits.Len(uint(s.Lanes))-1; i++ {
+					m := s.Lanes >> (i + 1)
+					if nd.At == 1 {
+						m = 1 << i
+					}
+					o := b.ShuffleXor(ir.F32, v, int64(m))
+					if nd.Red == RedMax {
+						v = b.Max(ir.F32, v, o)
+					} else {
+						v = b.Add(ir.F32, v, o)
+					}
+				}
+				break
+			}
 			v = rowVal[n]
 		case NUnary:
 			a := elem(nd.A, idx, e)

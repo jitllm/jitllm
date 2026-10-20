@@ -109,6 +109,12 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 		return []Planned{{G: g, S: Schedule{Group: 128, Flat: true, Target: f.Target}, Bufs: all,
 			Threads: g.Rows * g.Width}}, nil
 	}
+	if g.loopReduces() {
+		// A reduction a loop's body reads is a value of the body: a row over
+		// one subgroup's lanes, the reduction their butterfly.
+		return []Planned{{G: g, S: Schedule{Group: 128, Flat: true, Lanes: g.Width, Target: f.Target}, Bufs: all,
+			Threads: g.Rows * g.Width}}, nil
+	}
 	if !g.contraction() && !g.reduces() && len(g.Stages) == 0 {
 		return []Planned{{G: g, S: Schedule{Group: 128, Flat: true, Target: f.Target}, Bufs: all,
 			Threads: g.Rows * g.Width}}, nil
@@ -151,6 +157,18 @@ func (g *Row) PlanAt(s Schedule) ([]Planned, error) {
 		{G: first, S: s, Bufs: b1, Threads: threads * s.Split},
 		{G: second, S: Schedule{Group: s.Group, Flat: true, Target: s.Target}, Bufs: b2, Threads: g.Rows * g.Width},
 	}, nil
+}
+
+// loopReduces reports whether a reduction reads a loop's iterator or carried value.
+func (g *Row) loopReduces() bool {
+	for c := range g.Loops {
+		for i, v := range g.varies(c) {
+			if v && g.Nodes[i].Kind == NReduce {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (g *Row) reduces() bool {

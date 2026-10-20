@@ -275,7 +275,7 @@ func (g *Row) storeLoop(st Store) int {
 		if nd := g.Nodes[n]; nd.Kind == NIter {
 			c = nd.At
 		}
-		for _, o := range g.operands(n) {
+		for _, o := range g.loopOperands(n) {
 			if x := in(o); x > c {
 				c = x
 			}

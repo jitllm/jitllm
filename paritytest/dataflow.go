@@ -611,6 +611,10 @@ func (c *canon) instrName(i int) int32 {
 	c.busy[i] = true
 	defer func() { c.busy[i] = false }()
 	f := form{tag: fInstr, kind: o.Kind, typ: o.Type, d: c.depth[i]}
+	if o.Kind == ir.OpConst {
+		// A constant is its value wherever it is defined.
+		f.d = 0
+	}
 	if o.Tile != nil {
 		f.tile = *o.Tile
 	}
