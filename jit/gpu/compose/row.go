@@ -127,6 +127,13 @@ const (
 	// recomputed there from what it reads (RULE 13: no stage reads what
 	// another wrote).
 	NAt
+	// Under a tile, the column is NColBase, the tile's first, plus NColOff,
+	// the env's place in the tile (a constant), and the row NRowBase plus
+	// NRowOff: what the tile's envs share apart from what they do not.
+	NColBase
+	NColOff
+	NRowBase
+	NRowOff
 )
 
 // Op is a unary or binary map.
@@ -442,6 +449,8 @@ type env struct {
 	// env is that one; cls what this env's nodes depend on (bit 1 the row,
 	// bit 2 the column); and t the tile's envs.
 	row, base, col ir.Value
+	// rowOff and colOff are this env's place in its tile.
+	rowOff, colOff int
 	// slot is the thread's place in its window space (NWindow): its
 	// element less the first of its workgroup's span.
 	slot ir.Value
@@ -665,7 +674,7 @@ func (g *Row) rowDeps() []bool {
 			}
 			x := false
 			switch nd.Kind {
-			case NRowIdx:
+			case NRowIdx, NRowOff:
 				x = true
 			case NLoad:
 				if !nd.Indexed {
@@ -673,11 +682,7 @@ func (g *Row) rowDeps() []bool {
 					x = k == BufRow || k == BufRowF16 || k == BufRowScalar || k == BufU32
 				}
 			case NFold:
-				for _, f := range g.Nodes {
-					if f.Kind == NFold && f.At == nd.At && (v[f.B] || f.A >= 0 && v[f.A]) {
-						x = true
-					}
-				}
+				x = v[nd.B] || nd.A >= 0 && v[nd.A]
 			}
 			for _, o := range g.operands(i) {
 				x = x || v[o]
@@ -702,7 +707,7 @@ func (g *Row) colDeps() []bool {
 			}
 			x := false
 			switch nd.Kind {
-			case NColumn:
+			case NColumn, NColOff:
 				x = true
 			case NLoad:
 				if !nd.Indexed {
@@ -710,11 +715,7 @@ func (g *Row) colDeps() []bool {
 					x = k == BufRow || k == BufRowF16 || k == BufVec
 				}
 			case NFold:
-				for _, f := range g.Nodes {
-					if f.Kind == NFold && f.At == nd.At && (v[f.B] || f.A >= 0 && v[f.A]) {
-						x = true
-					}
-				}
+				x = v[nd.B] || nd.A >= 0 && v[nd.A]
 			}
 			for _, o := range g.operands(i) {
 				x = x || v[o]
@@ -763,8 +764,18 @@ func (g *Row) varies(c int) []bool {
 	return v
 }
 
-// Emit forms the group's kernel under schedule s.
+// Emit forms the group's kernel under schedule s and runs the IR passes over
+// it.
 func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
+	k, err := g.form(s)
+	if err != nil {
+		return nil, err
+	}
+	return simplify(k), nil
+}
+
+// form is the group's kernel under schedule s as the former emits it.
+func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 	if err := g.Check(); err != nil {
 		return nil, err
 	}
@@ -774,7 +785,7 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 	if err != nil {
 		return nil, err
 	}
-	g = g.inductions(s)
+	g = g.tiled(s).inductions(s)
 	G := s.Group
 	if G < 32 || G&(G-1) != 0 {
 		return nil, fmt.Errorf("compose: a group of %d threads", G)
@@ -1246,6 +1257,12 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			v = b.ConstF32(nd.F)
 		case NColumn:
 			v = idx
+		case NColBase:
+			v = flatIdx
+		case NRowBase:
+			v = r
+		case NColOff, NRowOff:
+			v = b.Const(ir.U32, int64(e.tileOff(nd.Kind == NRowOff)))
 		case NRowIdx:
 			v = r
 		case NUConst:
@@ -1448,6 +1465,7 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			for j := range rowsE {
 				x := mk(1)
 				x.row = rowAt(j)
+				x.rowOff = j
 				x.base = b.Mul(ir.U32, x.row, width)
 				x.sh[0] = none
 				rowsE[j] = x
@@ -1456,6 +1474,7 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 			for j := range colsE {
 				x := mk(2)
 				x.col = colAt(j)
+				x.colOff = j
 				x.row, x.base = r, rowBase
 				x.sh[0] = none
 				colsE[j] = x
@@ -1464,6 +1483,7 @@ func (g *Row) Emit(s Schedule) (*ir.Kernel, error) {
 				for jc := 0; jc < tc; jc++ {
 					x := mk(3)
 					x.row, x.base, x.col = rowsE[jr].row, rowsE[jr].base, colsE[jc].col
+					x.rowOff, x.colOff = jr, jc
 					x.sh = [3]*env{none, rowsE[jr], colsE[jc]}
 					outs = append(outs, x)
 				}
@@ -1673,7 +1693,7 @@ func (g *Row) isIndex(n int) bool { return g.typeOf(n) != ir.F32 }
 func (g *Row) typeOf(n int) ir.Type {
 	nd := g.Nodes[n]
 	switch nd.Kind {
-	case NColumn, NRowIdx, NUConst, NIter, NSegment:
+	case NColumn, NRowIdx, NUConst, NIter, NSegment, NColBase, NColOff, NRowBase, NRowOff:
 		return ir.U32
 	case NIConst, NDot4:
 		return ir.I32
@@ -1710,4 +1730,17 @@ func (g *Row) storePass(st Store, depth []int) int {
 		d = max(d, depth[st.Ix])
 	}
 	return d
+}
+
+// tileOff is e's place in its tile: its row's, or its column's.
+func (e *env) tileOff(row bool) int {
+	for x := e; x != nil; x = x.up {
+		if row && x.rowOff != 0 {
+			return x.rowOff
+		}
+		if !row && x.colOff != 0 {
+			return x.colOff
+		}
+	}
+	return 0
 }

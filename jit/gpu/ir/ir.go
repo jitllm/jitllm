@@ -321,6 +321,15 @@ func (b *Builder) Param(name string, elem Type) Value {
 // value -- use ConstF32 rather than writing one by hand.
 func (b *Builder) Const(t Type, v int64) Value { return b.emit(Op{Kind: OpConst, Type: t, Imm: v}) }
 
+// IntConst is v's value where v is an integer constant.
+func (b *Builder) IntConst(v Value) (int64, bool) {
+	if v == 0 || int(v) > len(b.k.Ops) {
+		return 0, false
+	}
+	o := b.k.Ops[v-1]
+	return o.Imm, o.Kind == OpConst && (o.Type == U32 || o.Type == I32)
+}
+
 // ConstF32 makes a float constant from its value. An F32 Const's Imm is the
 // bit pattern on every backend; use this rather than writing one by hand.
 func (b *Builder) ConstF32(v float32) Value {

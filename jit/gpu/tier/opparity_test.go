@@ -54,10 +54,20 @@ func opKernels(t *testing.T, prof recorder.Profile, o devOp, ins, outs []int, ve
 func sameAsMain(t *testing.T, main, composed []*ir.Kernel) {
 	t.Helper()
 	total, n, miss := paritytest.Compare(main, composed)
+	ctotal, cn, extra := paritytest.Compare(composed, main)
+	in := paritytest.NewInterner()
+	if *opExplain {
+		for _, m := range extra {
+			t.Logf("extra %%%d %s", m.Op, paritytest.Explain(in, m.K, m.Op, 4))
+		}
+	}
+	if n == total && cn != ctotal {
+		t.Errorf("every value of main's, and %d of the composer's %d more: first %%%d %s", ctotal-cn, ctotal,
+			extra[0].Op, paritytest.Explain(in, extra[0].K, extra[0].Op, 3))
+	}
 	if n == total {
 		return
 	}
-	in := paritytest.NewInterner()
 	if *opExplain {
 		for _, m := range miss {
 			t.Logf("missing %%%d %s", m.Op, paritytest.Explain(in, m.K, m.Op, 4))

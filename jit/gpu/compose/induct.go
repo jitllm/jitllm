@@ -1,8 +1,11 @@
 package compose
 
 import (
+	"maps"
 	"slices"
 	"sort"
+
+	"github.com/jitllm/jitllm/jit/gpu/ir"
 )
 
 // affNode is an index as a sum of terms over nodes: coef*node each, plus c.
@@ -53,22 +56,51 @@ func (g *Row) induct(c int, s Schedule) *Row {
 		return v
 	}
 	nested := make([]bool, len(g.Nodes))
+	inLoop := make([]bool, len(g.Loops))
 	for c2 := range g.Loops {
 		if c2 == c {
 			continue
 		}
-		in := false
 		for _, nd := range g.Nodes {
 			if nd.Kind == NFold && nd.At == c2 && (reads(nd.B) || nd.A >= 0 && reads(nd.A)) {
-				in = true
+				inLoop[c2] = true
 			}
 		}
-		if !in {
+		if !inLoop[c2] {
 			continue
 		}
 		v2 := g.varies(c2)
 		for i := range nested {
 			nested[i] = nested[i] || v2[i]
+		}
+	}
+	// unrolled is whether loop c runs unrolled in another's body: there a
+	// step wider than one is an add from the trip before, a unit step the
+	// access's offset.
+	unrolled := false
+	if g.Loops[c] <= unrollTrips && (c > 0 || s.Split <= 1) {
+		for c0 := range g.Loops {
+			if c0 != c && g.foldReadsIter(c, c0) {
+				unrolled = true
+			}
+		}
+	}
+	// offs is which nodes read a tile offset: an invariant sum holding one is
+	// read through, so the offset reaches the uses and not the fold.
+	offs := make([]bool, len(g.Nodes))
+	for changed := true; changed; {
+		changed = false
+		for i := range g.Nodes {
+			if offs[i] {
+				continue
+			}
+			x := g.isTileOff(i)
+			for _, o := range g.operands(i) {
+				x = x || offs[o]
+			}
+			if x {
+				offs[i], changed = true, true
+			}
 		}
 	}
 	memo := map[int]*affNode{}
@@ -80,7 +112,7 @@ func (g *Row) induct(c int, s Schedule) *Row {
 		nd := g.Nodes[n]
 		var r *affNode
 		switch {
-		case n == iter || nested[n] && !vary[n] || !vary[n] && !nested[n]:
+		case (n == iter || nested[n] && !vary[n] || !vary[n] && !nested[n]) && !(nd.Kind == NUBinary && offs[n]):
 			if nd.Kind == NUConst {
 				r = &affNode{terms: map[int]int64{}, c: int64(nd.At)}
 			} else {
@@ -130,18 +162,34 @@ func (g *Row) induct(c int, s Schedule) *Row {
 	}
 	var fams []*fam
 	seen := map[int]bool{}
+	// The indices: what a load reads at, and where a fold of a loop nested
+	// in c starts.
+	var cands []int
+	init := map[int]bool{}
 	for _, nd := range g.Nodes {
-		if nd.Kind != NLoad || !nd.Indexed || seen[nd.Ix] || !vary[nd.Ix] || !nested[nd.Ix] {
+		switch {
+		case nd.Kind == NLoad && nd.Indexed:
+			cands = append(cands, nd.Ix)
+		case nd.Kind == NFold && nd.At != c && inLoop[nd.At] && g.typeOf(nd.B) == ir.U32:
+			cands = append(cands, nd.B)
+			init[nd.B] = true
+		}
+	}
+	for _, ix := range cands {
+		if seen[ix] || !vary[ix] {
 			continue
 		}
-		seen[nd.Ix] = true
-		a := aff(nd.Ix)
+		seen[ix] = true
+		a := aff(ix)
 		if a == nil || a.terms[iter] == 0 {
+			continue
+		}
+		if !nested[ix] && !(unrolled && a.terms[iter] != 1) && !init[ix] {
 			continue
 		}
 		var base []int
 		for k, v := range a.terms {
-			if k != iter && v != 0 && !nested[k] {
+			if k != iter && v != 0 && !nested[k] && !g.isTileOff(k) {
 				base = append(base, k)
 			}
 		}
@@ -160,7 +208,7 @@ func (g *Row) induct(c int, s Schedule) *Row {
 			f = &fam{stride: a.terms[iter], base: base, coefs: coefs, c: a.c}
 			fams = append(fams, f)
 		}
-		f.uses = append(f.uses, nd.Ix)
+		f.uses = append(f.uses, ix)
 	}
 	if len(fams) == 0 {
 		return g
@@ -198,8 +246,9 @@ func (g *Row) induct(c int, s Schedule) *Row {
 		for _, n := range f.uses {
 			a := aff(n)
 			rest := -1
-			for k, v := range a.terms {
-				if nested[k] && k != iter && v != 0 {
+			for _, k := range slices.Sorted(maps.Keys(a.terms)) {
+				v := a.terms[k]
+				if (nested[k] || g.isTileOff(k)) && k != iter && v != 0 {
 					t := scaled(k, v)
 					if rest < 0 {
 						rest = t
@@ -219,6 +268,22 @@ func (g *Row) induct(c int, s Schedule) *Row {
 				r.Nodes[n] = Node{Kind: NUBinary, Op: OpAdd, A: fold, B: u(0)}
 			} else {
 				r.Nodes[n] = Node{Kind: NUBinary, Op: OpAdd, A: fold, B: rest}
+			}
+		}
+		// A cursor of a loop in c's body that starts here and steps the whole
+		// stride over its trips: this one steps by where that one ends.
+		for _, n := range f.uses {
+			if r.Nodes[n].B != u(0) && r.Nodes[r.Nodes[n].B].At != 0 {
+				continue
+			}
+			for i, nd := range r.Nodes {
+				if nd.Kind != NFold || nd.At == c || nd.B != n || nd.A < 0 {
+					continue
+				}
+				if st := r.Nodes[nd.A]; st.Kind == NUBinary && st.Op == OpAdd && st.A == i && r.Nodes[st.B].Kind == NUConst &&
+					int64(r.Loops[nd.At]*r.Nodes[st.B].At) == f.stride {
+					r.SetFold(fold, i)
+				}
 			}
 		}
 	}
@@ -241,3 +306,54 @@ func (g *Row) clone() *Row {
 	}
 	return &c
 }
+
+// foldReadsIter is whether a fold of loop c starts or steps by loop c0's
+// iterator: c runs in c0's body.
+func (g *Row) foldReadsIter(c, c0 int) bool {
+	memo := map[int]bool{}
+	var reads func(n int) bool
+	reads = func(n int) bool {
+		if v, ok := memo[n]; ok {
+			return v
+		}
+		memo[n] = false
+		nd := g.Nodes[n]
+		v := nd.Kind == NIter && nd.At == c0
+		for _, o := range g.operands(n) {
+			v = v || reads(o)
+		}
+		memo[n] = v
+		return v
+	}
+	for _, nd := range g.Nodes {
+		if nd.Kind == NFold && nd.At == c && (reads(nd.B) || nd.A >= 0 && reads(nd.A)) {
+			return true
+		}
+	}
+	return false
+}
+
+// tiled is g with its column and row split for schedule s's tile: each the
+// tile's first plus the env's place in it (NColBase + NColOff, NRowBase +
+// NRowOff), so what reads only the first is shared by the tile's envs.
+func (g *Row) tiled(s Schedule) *Row {
+	tr, tc := max(s.Tile, 1), max(s.TileCols, 1)
+	if !s.Flat || s.MMA || tr*tc == 1 {
+		return g
+	}
+	r := g.clone()
+	for i, nd := range g.Nodes {
+		switch {
+		case nd.Kind == NColumn && tc > 1:
+			r.Nodes[i] = Node{Kind: NUBinary, Op: OpAdd, A: r.Add(Node{Kind: NColBase}), B: r.Add(Node{Kind: NColOff})}
+		case nd.Kind == NRowIdx && tr > 1:
+			r.Nodes[i] = Node{Kind: NUBinary, Op: OpAdd, A: r.Add(Node{Kind: NRowBase}), B: r.Add(Node{Kind: NRowOff})}
+		}
+	}
+	r.liftOffsets()
+	return r
+}
+
+// isTileOff is whether node n is an env's place in its tile: a part of an
+// index each env adds to what the tile shares.
+func (g *Row) isTileOff(n int) bool { k := g.Nodes[n].Kind; return k == NColOff || k == NRowOff }

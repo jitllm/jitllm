@@ -21,7 +21,8 @@ type Miss struct {
 // Compare looks for each value main's kernels compute among the composer's
 // by its dataflow (Dataflow): each of a kernel's live instructions (liveOps),
 // a value computed twice in one kernel counted once, and an instruction of
-// the composer's matching one of main's at most. It returns how many of
+// the composer's matching one of main's at most. Constants are not counted
+// (constant): a constant op or constant-valued arithmetic is an immediate. It returns how many of
 // main's values there are (parameters aside), how many match, and the rest.
 func Compare(main, composed []*ir.Kernel) (total, same int, missing []Miss) {
 	in := NewInterner()
@@ -38,7 +39,7 @@ func Compare(main, composed []*ir.Kernel) (total, same int, missing []Miss) {
 		// what it computes.
 		seen := map[int32]bool{}
 		for i, id := range in.Dataflow(k) {
-			if k.Ops[i].Kind == ir.OpParam || !live[i] || seen[id] {
+			if k.Ops[i].Kind == ir.OpParam || !live[i] || seen[id] || in.constant(k, i, id) {
 				continue
 			}
 			seen[id] = true
@@ -168,6 +169,17 @@ func (in *Interner) Dataflow(k *ir.Kernel) []int32 {
 		out[i] = c.name(i)
 	}
 	return out
+}
+
+// constant is whether value id is a constant: a constant op, or integer
+// arithmetic whose canonical form is one -- a value any compiler folds, an
+// immediate rather than an instruction.
+func (in *Interner) constant(k *ir.Kernel, i int, id int32) bool {
+	if k.Ops[i].Kind == ir.OpConst {
+		return true
+	}
+	a, ok := in.affs[id]
+	return ok && a.isConst()
 }
 
 // affine is c + sum coef*atom, its terms sorted by atom.

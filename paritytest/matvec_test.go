@@ -37,10 +37,27 @@ var explain = flag.Bool("explain", false, "write out every missing instruction o
 func same(t *testing.T, name string, main, composed []*ir.Kernel) {
 	t.Helper()
 	total, n, miss := Compare(main, composed)
+	ctotal, cn, extra := Compare(composed, main)
+	in := NewInterner()
+	if *explain {
+		for _, m := range extra {
+			t.Logf("extra %%%d %s", m.Op, Explain(in, m.K, m.Op, 4))
+		}
+		if len(extra) > 0 && n == total {
+			for _, k := range composed {
+				for i := range k.Ops {
+					t.Logf("composed %%%d %s", i, Explain(in, k, i, 4))
+				}
+			}
+		}
+	}
+	if n == total && cn != ctotal {
+		t.Errorf("%s: every value of main's, and %d of the composer's %d more: first %%%d %s", name, ctotal-cn, ctotal,
+			extra[0].Op, Explain(in, extra[0].K, extra[0].Op, 3))
+	}
 	if n == total {
 		return
 	}
-	in := NewInterner()
 	if *explain {
 		for _, m := range miss {
 			t.Logf("missing %%%d %s", m.Op, Explain(in, m.K, m.Op, 4))
