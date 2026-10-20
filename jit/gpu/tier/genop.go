@@ -530,33 +530,8 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		if o.Kind == dkRopeKRow {
 			offArg = gaKOff
 		}
-		xd := ra.Layout == graph.RopeXD
-		heads := iw / ra.HeadDim
-		var ls []genLaunch
-		if ra.NRot < ra.HeadDim {
-			// The dimensions the pairs do not turn reach the destination
-			// as they are, the pairs then written over them.
-			cb := &rowBuild{r: compose.Row{Width: iw, Rows: rows}}
-			src, off := cb.buf(compose.BufRow, gaIn0), cb.buf(compose.BufU32, offArg)
-			cb.r.StoreAt(cb.buf(compose.BufOut, gaOut0), cb.r.Load(src), cb.r.UBin(compose.OpAdd, cb.r.Load(off), cb.r.Column()))
-			ck := g.rowKern(&cb.r)
-			if ck.k == nil {
-				return nil
-			}
-			l := genLaunch{k: ck.k, groups: ck.groups, width: ck.group, n: uint8(len(cb.args))}
-			copy(l.args[:], cb.args)
-			ls = append(ls, l)
-		}
-		rb.r.Width = heads * ra.NRot / 2
-		in, cs, off := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufVec, gaCS), rb.buf(compose.BufU32, offArg)
-		rb.r.RotaryPairs(in, cs, off, rb.buf(compose.BufOut, gaOut0), heads, ra.HeadDim, ra.NRot, ra.Layout == graph.RopeNeox || xd, xd)
-		k := g.rowKern(&rb.r)
-		if k.k == nil {
-			return nil
-		}
-		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
-		copy(l.args[:], rb.args)
-		return append(ls, l)
+		return g.ropePairs(rows, iw, ra.HeadDim, ra.NRot, ra.Layout == graph.RopeNeox || ra.Layout == graph.RopeXD,
+			ra.Layout == graph.RopeXD, gaIn0, offArg, gaOut0)
 	case dkSplitQG:
 		// A gated query's interleaved heads apart: each head's q, then its
 		// gate, of 2*hd a head in, hd a head out.
@@ -1367,19 +1342,24 @@ func (g *devTier) genPagedWrite(o *devOp, prog *devProgram, bs *blockScratch, ro
 	if turn && (p.NRot <= 0 || p.NoPosEnc || p.RopeSplit || p.NRot%2 != 0 || p.NRot > p.HeadDim) {
 		return nil
 	}
-	kr := &rowBuild{r: compose.Row{Width: kw, Rows: rows}}
-	in := kr.buf(compose.BufRow, kArg)
-	var cs int
-	if turn {
-		cs = kr.buf(compose.BufVec, gaCS)
+	// K into the pool as it is where nothing turns it, or where the pairs
+	// leave a tail; then the pairs turned into place, a thread a pair.
+	var ks []*rowBuild
+	if !turn || p.NRot < p.HeadDim {
+		kr := &rowBuild{r: compose.Row{Width: kw, Rows: rows}}
+		in := kr.buf(compose.BufRow, kArg)
+		desc, tab := kr.buf(compose.BufU32, gaPRow), kr.buf(compose.BufU32, gaTab)
+		pid, off := kr.r.PagedPos(desc, tab, P)
+		kr.r.StoreAt(kr.buf(compose.BufOut, gaKPool), kr.r.Load(in), kr.r.PagedK(pid, off, kw, P))
+		ks = append(ks, kr)
 	}
-	desc, tab := kr.buf(compose.BufU32, gaPRow), kr.buf(compose.BufU32, gaTab)
-	pid, off := kr.r.PagedPos(desc, tab, P)
-	x := kr.r.Load(in)
 	if turn {
-		x = kr.r.Rotary(in, cs, p.HeadDim, p.NRot, p.RopeNeox, false)
+		kp := &rowBuild{r: compose.Row{Width: p.NKVHead * p.NRot / 2, Rows: rows}}
+		in, cs := kp.buf(compose.BufRow, kArg), kp.buf(compose.BufVec, gaCS)
+		desc, tab := kp.buf(compose.BufU32, gaPRow), kp.buf(compose.BufU32, gaTab)
+		kp.r.PagedRotaryPairs(in, cs, desc, tab, kp.buf(compose.BufOut, gaKPool), p.NKVHead, p.HeadDim, p.NRot, p.RopeNeox, P)
+		ks = append(ks, kp)
 	}
-	kr.r.StoreAt(kr.buf(compose.BufOut, gaKPool), x, kr.r.PagedK(pid, off, kw, P))
 
 	vr := &rowBuild{r: compose.Row{Width: vw, Rows: rows}}
 	vin := vr.buf(compose.BufRow, vArg)
@@ -1397,7 +1377,7 @@ func (g *devTier) genPagedWrite(o *devOp, prog *devProgram, bs *blockScratch, ro
 			vr.r.UBin(compose.OpAdd, vr.r.PagedRow(vpid, voff, P, kw, 0), vr.r.Column()))
 	}
 	var out []genLaunch
-	for _, rb := range []*rowBuild{kr, vr} {
+	for _, rb := range append(ks, vr) {
 		k := g.rowKern(&rb.r)
 		if k.k == nil {
 			return nil
@@ -1508,17 +1488,11 @@ func (g *devTier) genRopeQKV(o *devOp, prog *devProgram, bs *blockScratch, rows 
 	if kv == nil {
 		return nil
 	}
-	qb := &rowBuild{r: compose.Row{Width: qw, Rows: rows}}
-	in, cs, off := qb.buf(compose.BufRow, gaIn0), qb.buf(compose.BufVec, gaCS), qb.buf(compose.BufU32, gaQOff)
-	v := qb.r.Rotary(in, cs, p.HeadDim, p.NRot, p.RopeNeox, false)
-	qb.r.StoreAt(qb.buf(compose.BufOut, gaOut0), v, qb.r.UBin(compose.OpAdd, qb.r.Load(off), qb.r.Column()))
-	k := g.rowKern(&qb.r)
-	if k.k == nil {
+	q := g.ropePairs(rows, qw, p.HeadDim, p.NRot, p.RopeNeox, false, gaIn0, gaQOff, gaOut0)
+	if q == nil {
 		return nil
 	}
-	l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(qb.args))}
-	copy(l.args[:], qb.args)
-	return append([]genLaunch{l}, kv...)
+	return append(q, kv...)
 }
 
 // genLayerNorm is a LayerNorm in three launches, each row's statistics in
@@ -1801,4 +1775,38 @@ func (g *devTier) genSSMRow(o *devOp, prog *devProgram, bs *blockScratch, rows i
 	l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
 	copy(l.args[:], rb.args)
 	return []genLaunch{l}
+}
+
+// ropePairs is the rotary over each head's first nrot dimensions of rows
+// rows of width iw (src), a thread a pair (NORM or NEOX pairs; two tables
+// where split), each row landing at its offset (off) in dst; the
+// dimensions the pairs do not turn copied there first.
+func (g *devTier) ropePairs(rows, iw, hd, nrot int, neox, split bool, src, off, dst genArg) []genLaunch {
+	heads := iw / hd
+	var ls []genLaunch
+	add := func(rb *rowBuild) bool {
+		k := g.rowKern(&rb.r)
+		if k.k == nil {
+			return false
+		}
+		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
+		copy(l.args[:], rb.args)
+		ls = append(ls, l)
+		return true
+	}
+	if nrot < hd {
+		cb := &rowBuild{r: compose.Row{Width: iw, Rows: rows}}
+		x, o := cb.buf(compose.BufRow, src), cb.buf(compose.BufU32, off)
+		cb.r.StoreAt(cb.buf(compose.BufOut, dst), cb.r.Load(x), cb.r.UBin(compose.OpAdd, cb.r.Load(o), cb.r.Column()))
+		if !add(cb) {
+			return nil
+		}
+	}
+	rb := &rowBuild{r: compose.Row{Width: heads * nrot / 2, Rows: rows}}
+	in, cs, o := rb.buf(compose.BufRow, src), rb.buf(compose.BufVec, gaCS), rb.buf(compose.BufU32, off)
+	rb.r.RotaryPairs(in, cs, o, rb.buf(compose.BufOut, dst), heads, hd, nrot, neox, split)
+	if !add(rb) {
+		return nil
+	}
+	return ls
 }

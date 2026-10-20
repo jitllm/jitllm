@@ -617,3 +617,30 @@ type vecKey struct {
 func (g *Row) LoadVec(b, ix, w, c int) int {
 	return g.Add(Node{Kind: NLoad, Buf: b, Indexed: true, Ix: ix, Vec: uint8(w), Comp: uint8(c)})
 }
+
+// PagedRotaryPairs turns each head's first nrot dimensions of the group's
+// rows of K (src, heads*hd a row) a thread a pair (NORM or NEOX pairs) into
+// the row's place in the paged K pool out ([width][page] a page), the place
+// its descriptor at desc and the page ids at tab name.
+func (g *Row) PagedRotaryPairs(src, cs, desc, tab, out, heads, hd, nrot int, neox bool, page int) {
+	u, ub := g.UConst, g.UBin
+	pairs := nrot / 2
+	e, row := g.Column(), g.RowIdx()
+	p, h := ub(OpRem, e, u(pairs)), ub(OpDiv, e, u(pairs))
+	head := ub(OpMul, h, u(hd))
+	stride := 1
+	var base int
+	if neox {
+		base, stride = ub(OpAdd, head, p), pairs
+	} else {
+		base = ub(OpAdd, head, ub(OpMul, p, u(2)))
+	}
+	at := ub(OpAdd, ub(OpMul, p, u(2)), ub(OpMul, row, u(nrot)))
+	x := ub(OpAdd, base, ub(OpMul, row, u(heads*hd)))
+	c, s := g.LoadAt(cs, at), g.LoadAt(cs, ub(OpAdd, at, u(1)))
+	x0, x1 := g.LoadAt(src, x), g.LoadAt(src, ub(OpAdd, x, u(stride)))
+	pid, off := g.PagedPos(desc, tab, page)
+	o := ub(OpAdd, ub(OpMul, pid, u(page*heads*hd)), ub(OpAdd, ub(OpMul, base, u(page)), off))
+	g.StoreAt(out, g.Bin(OpSub, g.Bin(OpMul, x0, c), g.Bin(OpMul, x1, s)), o)
+	g.StoreAt(out, g.Bin(OpAdd, g.Bin(OpMul, x0, s), g.Bin(OpMul, x1, c)), ub(OpAdd, o, u(stride*page)))
+}
