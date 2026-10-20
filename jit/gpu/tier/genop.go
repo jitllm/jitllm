@@ -110,7 +110,7 @@ const (
 	gaOwn5
 	gaOwn6
 	gaOwn7
-	gaSeg0 // a segmented launch's weights: gaSeg0 + 4*segment + its payload, scales, sub-scales or bias
+	gaSeg0   // a segmented launch's weights: gaSeg0 + 4*segment + its payload, scales, sub-scales or bias
 	gaSegEnd = gaSeg0 + 4*maxSegs
 )
 
