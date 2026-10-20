@@ -319,7 +319,10 @@ func (b *buf) host(write bool) {
 // dead: each buffer it wrote written again -- by a later launch that stores
 // at places no loaded value moves (not a cache row at a table's offset) and
 // does not read it, or by the host -- before any launch or the host read it. What is read at
-// the end of the recording -- a cache, a state -- counts as read.
+// the end of the recording -- a cache, a state -- counts as read, unless
+// every earlier launch of the same kernel was dead: the recording's end is
+// one more step of the same loop, and a launch whose output each step
+// overwrote unread is dead at the last step too.
 func (d *Device) LiveLaunched() []Emitted {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -332,7 +335,7 @@ func (d *Device) LiveLaunched() []Emitted {
 		v, ok := need[b]
 		return !ok || v
 	}
-	live := make([]bool, len(d.irs))
+	live, atEnd, deadOnce := make([]bool, len(d.irs)), make([]bool, len(d.irs)), make([]bool, len(d.irs))
 	for e := len(d.events) - 1; e >= 0; e-- {
 		ev := d.events[e]
 		if ev.k < 0 {
@@ -340,19 +343,27 @@ func (d *Device) LiveLaunched() []Emitted {
 			continue
 		}
 		r, w := reads[ev.k], writes[ev.k]
-		alive := false
+		alive, read := false, false
 		for j, b := range ev.bufs {
 			if b == nil || j >= len(w) || !w[j] {
 				continue
 			}
 			if needed(b) {
 				alive = true
+				if _, ok := need[b]; ok {
+					read = true
+				}
 			}
 		}
 		if !alive {
+			deadOnce[ev.k] = true
 			continue
 		}
-		live[ev.k] = true
+		if read {
+			live[ev.k] = true
+		} else {
+			atEnd[ev.k] = true
+		}
 		for j, b := range ev.bufs {
 			if b == nil || j >= len(w) {
 				continue
@@ -369,7 +380,7 @@ func (d *Device) LiveLaunched() []Emitted {
 	}
 	out := make([]Emitted, 0, len(d.order))
 	for _, i := range d.order {
-		if live[i] {
+		if live[i] || atEnd[i] && !deadOnce[i] {
 			out = append(out, Emitted{K: d.irs[i], Code: d.code[i]})
 		}
 	}
