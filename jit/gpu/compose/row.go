@@ -50,6 +50,9 @@ type Row struct {
 	// SpanGroup is the aligned rows that share a table and whose spans do
 	// not decrease (HintTileFirst, HintTileLast).
 	SpanGroup int
+	// Effects are writes made for their effect alone, each element's
+	// after its stores (Effect).
+	Effects []int
 }
 
 // Stage is one further element space of a row group: its width and the
@@ -421,6 +424,9 @@ func (g *Row) Encode(s Schedule) []uint32 {
 	}
 	for _, s := range g.Stores {
 		e = append(e, uint32(s.Buf), uint32(s.Val), b2u(s.Indexed), uint32(s.Ix))
+	}
+	for _, n := range g.Effects {
+		e = append(e, 0xEFF, uint32(n))
 	}
 	if q := g.Q8; q != nil {
 		e = append(e, uint32(q.Val), uint32(q.A), uint32(q.X), uint32(q.Window), uint32(q.Pad))
@@ -2107,6 +2113,9 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 					}
 					b.Barrier()
 				}
+			}
+			for _, n := range g.Effects {
+				elem(n, col, e)
 			}
 		}
 		if emitErr != nil {

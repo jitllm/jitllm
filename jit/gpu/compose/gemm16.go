@@ -357,3 +357,40 @@ func (g *Row) Gemm16(s Gemm16, qs, d, sc, b, out int) error {
 	}
 	return nil
 }
+
+// ActF16T is rows of k floats at x as the binary16 operand Gemm16 reads at
+// out, token-major: a (token, sub-block) of the format's an element of the
+// group (Width tokens*k/sub, Rows 1), its values packed two to a word in the
+// order the instruction's steps take them -- an 8-bit or binary16 format's
+// in byte order, a narrower one's halves interleaved.
+func (g *Row) ActF16T(t kernels.Quant, k, x, out int) error {
+	info := t.Info()
+	sub := info.Sub
+	if k%sub != 0 || sub%8 != 0 {
+		return fmt.Errorf("compose: a binary16 operand of k=%d over %v", k, t)
+	}
+	u, ub := g.UConst, g.UBin
+	order := [4]int{0, 2, 1, 3}
+	elem := func(s, j int) int { return (s/2)*4 + order[j] + (s%2)*(sub/2) }
+	if info.Bits == 8 || info.Float == 2 {
+		elem = func(s, j int) int { return 4*s + order[j] }
+	}
+	e := g.Column()
+	in := ub(OpMul, e, u(sub))
+	var v []int
+	for o := 0; o < sub; o += 4 {
+		at := ub(OpAdd, in, u(o))
+		for i := 0; i < 4; i++ {
+			v = append(v, g.LoadVec(x, at, 4, i))
+		}
+	}
+	var w []int
+	for s := 0; s < sub/4; s++ {
+		w = append(w, g.Bin(OpPackF16, v[elem(s, 0)], v[elem(s, 1)]), g.Bin(OpPackF16, v[elem(s, 2)], v[elem(s, 3)]))
+	}
+	base := ub(OpMul, e, u(sub/2))
+	for o := 0; o < len(w); o += 4 {
+		g.Effect(g.WriteVec(out, ub(OpAdd, base, u(o)), -1, w[o:o+4]...))
+	}
+	return nil
+}

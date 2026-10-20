@@ -51,3 +51,27 @@ func TestGemm16IsMains(t *testing.T) {
 		})
 	}
 }
+
+// TestActF16TIsMains holds the composer's token-major binary16 operand to
+// main's ActF16T over byte-ordered and interleaved formats.
+func TestActF16TIsMains(t *testing.T) {
+	for _, c := range []struct {
+		q       kernels.Quant
+		mq      mainkernels.Quant
+		ntok, k int
+	}{{kernels.Q8_0, mainkernels.Q8_0, 64, 64}, {kernels.Q8_0, mainkernels.Q8_0, 32, 256}, {kernels.Q4_0, mainkernels.Q4_0, 64, 128}} {
+		name := fmt.Sprintf("%v_%dx%d", c.q, c.ntok, c.k)
+		t.Run(name, func(t *testing.T) {
+			mk, err := mainkernels.ActF16T(c.mq, c.ntok, c.k)
+			if err != nil {
+				t.Fatal(err)
+			}
+			g := &compose.Row{Width: c.ntok * c.k / c.q.Info().Sub, Rows: 1}
+			x, out := g.Buf(compose.BufRow), g.Buf(compose.BufOutU32)
+			if err := g.ActF16T(c.q, c.k, x, out); err != nil {
+				t.Fatal(err)
+			}
+			same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{Target: sm80}))
+		})
+	}
+}

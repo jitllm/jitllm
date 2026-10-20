@@ -27,6 +27,10 @@ func (g *Row) WriteTile(b, ix, stride, t int, tt ir.TileType, major bool, after 
 	return g.Add(Node{Kind: NWrite, Buf: b, Ix: ix, A: t, B: stride, C: after, Tile: tt, Major: major})
 }
 
+// Effect makes write w part of every element's work: made after the
+// element's stores, though nothing reads it.
+func (g *Row) Effect(w int) { g.Effects = append(g.Effects, w) }
+
 // Barrier is the workgroup's barrier after token after (-1 none).
 func (g *Row) Barrier(after int) int { return g.Add(Node{Kind: NBarrier, A: after}) }
 
