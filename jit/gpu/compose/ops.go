@@ -263,7 +263,8 @@ func (g *Row) tripOf(c int) int {
 }
 
 // storeLoop is the loop whose body a store runs in: the one whose iterator
-// its index or value reads (not through a fold's result), -1 for none.
+// its index or value reads (not through a fold's result, but through a
+// cursor, which stands for it), -1 for none.
 func (g *Row) storeLoop(st Store) int {
 	memo := map[int]int{}
 	var in func(n int) int
@@ -273,7 +274,7 @@ func (g *Row) storeLoop(st Store) int {
 		}
 		memo[n] = -1
 		c := -1
-		if nd := g.Nodes[n]; nd.Kind == NIter {
+		if nd := g.Nodes[n]; nd.Kind == NIter || g.cursor(n) {
 			c = nd.At
 		}
 		for _, o := range g.loopOperands(n) {
@@ -289,6 +290,17 @@ func (g *Row) storeLoop(st Store) int {
 		c = max(c, in(st.Ix))
 	}
 	return c
+}
+
+// cursor is whether fold n steps by a constant: an iterator scaled and
+// offset, which past its loop is no value.
+func (g *Row) cursor(n int) bool {
+	nd := g.Nodes[n]
+	if nd.Kind != NFold || nd.A < 0 {
+		return false
+	}
+	st := g.Nodes[nd.A]
+	return st.Kind == NUBinary && st.Op == OpAdd && st.A == n && g.Nodes[st.B].Kind == NUConst
 }
 
 // PartFold is the group element's part of a row's fold: element p of parts

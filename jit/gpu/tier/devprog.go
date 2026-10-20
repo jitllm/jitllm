@@ -1372,12 +1372,12 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 				low := mv(".dt_low", qx, posLowA, slotDLow, l.ms[posLowA].rows)
 				b, c := mv(".b", qx, posGateA, slotM1B, l.ms[posGateA].rows), mv(".c", qx, posGateB, slotM1C, l.ms[posGateB].rows)
 				if l.m1DtN != nil {
-					norm := func(v devVal, s devSlot) devVal {
+					norm := func(v devVal, s devSlot, w backend.Buf) devVal {
 						n := prog.val(prog.names[v]+".n", prog.vals[v], s)
-						prog.ops = append(prog.ops, devOp{Kind: dkSSMNorm, Src: []int{i}, In: []devVal{v}, Out: []devVal{n}})
+						prog.ops = append(prog.ops, devOp{Kind: dkSSMNorm, Src: []int{i}, In: []devVal{v}, Out: []devVal{n}, V: w})
 						return n
 					}
-					low, b, c = norm(low, slotM1LowN), norm(b, slotM1BN), norm(c, slotM1CN)
+					low, b, c = norm(low, slotM1LowN, l.m1DtN), norm(b, slotM1BN, l.m1BN), norm(c, slotM1CN, l.m1CN)
 				}
 				lq := prog.val(prog.names[low]+".q8", devType{Elem: elemQ8, Layout: layoutRow, Width: prog.vals[low].Width}, slotLRQ8)
 				prog.ops = append(prog.ops, devOp{Kind: dkQuant, Src: []int{i}, In: []devVal{low}, Out: []devVal{lq}})

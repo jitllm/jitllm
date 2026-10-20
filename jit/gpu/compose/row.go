@@ -43,6 +43,11 @@ type Row struct {
 	// LiveAt of buffer LiveBuf (BufU32). The rest keep what they hold.
 	HasLive         bool
 	LiveBuf, LiveAt int
+	// Spans are the group's indices into descriptor spans (Span), and
+	// SpanGroup the aligned rows that share a table and whose spans do not
+	// decrease.
+	Spans     []Span
+	SpanGroup int
 }
 
 // Stage is one further element space of a row group: its width and the
@@ -155,6 +160,10 @@ const (
 	// NShuffle is A's value at the lane At away (an xor of the lane) in the
 	// subgroup, under lane rows.
 	NShuffle
+	// NRowTile and NColTile are the thread's tile among the tiles, before a
+	// strided tile spaces it (Schedule.RowStride, ColStride).
+	NRowTile
+	NColTile
 )
 
 // Op is a unary or binary map.
@@ -265,6 +274,11 @@ type Schedule struct {
 	// carries a value for each it does. Rows and Width must be multiples;
 	// 0 and 1 are one.
 	Tile, TileCols int
+	// RowStride and ColStride space a tile's rows and elements that far
+	// apart (0 and 1 are adjacent): tile t's first row is
+	// t/RowStride*Tile*RowStride + t%RowStride, its rows that plus
+	// j*RowStride, and the same for its elements.
+	RowStride, ColStride int
 	// Target is the device the kernel is formed for: a lowering whose best
 	// form depends on it reads it here.
 	Target Target
@@ -304,7 +318,7 @@ type Key struct {
 // Encode is the group's structure and schedule as integers.
 func (g *Row) Encode(s Schedule) []uint32 {
 	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs)), b2u(s.Flat), uint32(s.Tile), uint32(s.TileCols), uint32(s.Split),
-		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes), uint32(s.Lanes), b2u(s.WorkRow)}
+		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes), uint32(s.Lanes), b2u(s.WorkRow), uint32(s.RowStride), uint32(s.ColStride)}
 	for _, b := range g.Bufs {
 		e = append(e, uint32(b.Kind), uint32(b.N), uint32(b.Of), b2u(b.Over))
 	}
@@ -334,6 +348,13 @@ func (g *Row) Encode(s Schedule) []uint32 {
 		}
 		for c := range g.Loops {
 			e = append(e, uint32(g.tripOf(c)))
+		}
+	}
+	if len(g.Spans) > 0 {
+		e = append(e, 0x5BA2, uint32(g.SpanGroup), uint32(len(g.Spans)))
+		for _, s := range g.Spans {
+			e = append(e, uint32(s.Clamp), uint32(s.T), uint32(s.Row), b2u(s.Uniform), uint32(s.Desc), uint32(s.Words),
+				uint32(s.Start), uint32(s.End), uint32(s.Align))
 		}
 	}
 	return e
@@ -835,7 +856,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 	if err != nil {
 		return nil, err
 	}
-	g = g.pipelined().tiled(s).inductions(s)
+	g = g.pipelined().tiled(s).hulls(s).inductions(s)
 	if s.Lanes == 0 && g.loopReduces() {
 		return nil, fmt.Errorf("compose: a reduction in a loop's body off lane rows")
 	}
@@ -865,6 +886,8 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 	// every row, the element fastest (the last thread's surplus clamped to
 	// the last element, which it recomputes: RULE 13).
 	var sh, r, rowBase, tid, width, last, flatIdx ir.Value
+	rs, cs := 1, 1
+	var rawRow, rawCol ir.Value
 	// shi is the index plane an argmax's tree reduces beside sh.
 	var shi ir.Value
 	// seg is the thread's segment of loop 0 under a split, segTrip its
@@ -895,6 +918,9 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			return nil, fmt.Errorf("compose: a tile of %dx%d over %dx%d", tr, tc, g.Rows, g.Width)
 		}
 		cols := g.Width / tc
+		if rs, cs = max(s.RowStride, 1), max(s.ColStride, 1); g.Rows/tr%rs != 0 || cols%cs != 0 {
+			return nil, fmt.Errorf("compose: a tile of %dx%d strided %dx%d over %dx%d", tr, tc, rs, cs, g.Rows, g.Width)
+		}
 		split := max(s.Split, 1)
 		if s.MMA && (!s.Target.IntMMA() || tr*tc > 1 || split > 1 || g.Width%(16*max(s.MT, 1)) != 0 || g.Rows%(8*max(s.NT, 1)) != 0) {
 			return nil, fmt.Errorf("compose: a %dx%d warp tile over %dx%d, tile %dx%d split %d, on %v",
@@ -984,12 +1010,9 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 					segTrip = g.Loops[0] / split
 				}
 			}
-			if tc > 1 {
-				flatIdx = b.Mul(ir.U32, flatIdx, b.Const(ir.U32, int64(tc)))
-			}
-			if tr > 1 {
-				r = b.Mul(ir.U32, r, b.Const(ir.U32, int64(tr)))
-			}
+			rawRow, rawCol = r, flatIdx
+			flatIdx = strided(b, flatIdx, tc, cs)
+			r = strided(b, r, tr, rs)
 			rowBase = b.Mul(ir.U32, r, width)
 		}
 	} else {
@@ -1408,8 +1431,14 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			v = flatIdx
 		case NRowBase:
 			v = r
-		case NColOff, NRowOff:
-			v = b.Const(ir.U32, int64(e.tileOff(nd.Kind == NRowOff)))
+		case NColOff:
+			v = b.Const(ir.U32, int64(e.tileOff(false)/cs))
+		case NRowOff:
+			v = b.Const(ir.U32, int64(e.tileOff(true)/rs))
+		case NRowTile:
+			v = rawRow
+		case NColTile:
+			v = rawCol
 		case NRowIdx:
 			v = r
 		case NUConst:
@@ -1623,19 +1652,19 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				if j == 0 {
 					return r
 				}
-				return b.Add(ir.U32, r, b.Const(ir.U32, int64(j)))
+				return b.Add(ir.U32, r, b.Const(ir.U32, int64(j*rs)))
 			}
 			colAt := func(j int) ir.Value {
 				if j == 0 {
 					return flatIdx
 				}
-				return b.Add(ir.U32, flatIdx, b.Const(ir.U32, int64(j)))
+				return b.Add(ir.U32, flatIdx, b.Const(ir.U32, int64(j*cs)))
 			}
 			rowsE := make([]*env, tr)
 			for j := range rowsE {
 				x := mk(1)
 				x.row = rowAt(j)
-				x.rowOff = j
+				x.rowOff = j * rs
 				x.base = b.Mul(ir.U32, x.row, width)
 				x.sh[0] = none
 				rowsE[j] = x
@@ -1644,7 +1673,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 			for j := range colsE {
 				x := mk(2)
 				x.col = colAt(j)
-				x.colOff = j
+				x.colOff = j * cs
 				x.row, x.base = r, rowBase
 				x.sh[0] = none
 				colsE[j] = x
@@ -1653,7 +1682,7 @@ func (g *Row) form(s Schedule) (*ir.Kernel, error) {
 				for jc := 0; jc < tc; jc++ {
 					x := mk(3)
 					x.row, x.base, x.col = rowsE[jr].row, rowsE[jr].base, colsE[jc].col
-					x.rowOff, x.colOff = jr, jc
+					x.rowOff, x.colOff = jr*rs, jc*cs
 					x.sh = [3]*env{none, rowsE[jr], colsE[jc]}
 					outs = append(outs, x)
 				}
@@ -1976,7 +2005,7 @@ func (g *Row) isIndex(n int) bool { return g.typeOf(n) != ir.F32 }
 func (g *Row) typeOf(n int) ir.Type {
 	nd := g.Nodes[n]
 	switch nd.Kind {
-	case NColumn, NRowIdx, NUConst, NIter, NSegment, NColBase, NColOff, NRowBase, NRowOff:
+	case NColumn, NRowIdx, NUConst, NIter, NSegment, NColBase, NColOff, NRowBase, NRowOff, NRowTile, NColTile:
 		return ir.U32
 	case NIConst, NDot4:
 		return ir.I32
@@ -2030,4 +2059,17 @@ func (e *env) tileOff(row bool) int {
 		}
 	}
 	return 0
+}
+
+// strided is tile t's first place, the tile n places spaced stride apart:
+// t/stride*n*stride + t%stride.
+func strided(b *ir.Builder, t ir.Value, n, stride int) ir.Value {
+	switch {
+	case n == 1:
+		return t
+	case stride == 1:
+		return b.Mul(ir.U32, t, b.Const(ir.U32, int64(n)))
+	}
+	k := b.Const(ir.U32, int64(stride))
+	return b.Add(ir.U32, b.Mul(ir.U32, b.Div(ir.U32, t, k), b.Const(ir.U32, int64(n*stride))), b.Rem(ir.U32, t, k))
 }

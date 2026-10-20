@@ -18,8 +18,9 @@ type offSplit struct {
 // liftOffsets rewrites every index that reads a tile offset as its shared
 // core plus its offsets: (x + o)*k is x*k + o*k, (x + o) + y is (x + y) + o.
 // The core is formed once for the tile and each env adds a constant, which
-// the access takes as its offset.
-func (g *Row) liftOffsets() {
+// the access takes as its offset. A strided tile's place is a value of its
+// own, each env's, which its readers read whole.
+func (g *Row) liftOffsets(sc Schedule) {
 	n0 := len(g.Nodes)
 	memo := make([]*offSplit, n0)
 	var split func(n int) *offSplit
@@ -30,7 +31,7 @@ func (g *Row) liftOffsets() {
 		nd := g.Nodes[n]
 		s := &offSplit{core: n}
 		switch {
-		case g.isTileOff(n):
+		case g.isTileOff(n) && !(nd.Kind == NColOff && sc.ColStride > 1 || nd.Kind == NRowOff && sc.RowStride > 1):
 			s = &offSplit{core: -1, terms: map[int]int64{n: 1}}
 		case nd.Kind == NUConst:
 			s = &offSplit{core: -1, c: int64(nd.At)}

@@ -76,9 +76,6 @@ const (
 	gaRecCB    // its convolution's bias
 	gaRecNorm  // its output norm's weight
 	gaRecMid   // the scratch between its gated norm's two launches
-	gaM1DtN    // a selective scan's dt, B and C norms' weights
-	gaM1BN
-	gaM1CN
 	gaRouter  // a mixture's router matrix
 	gaRouterB // its bias on the logits
 	gaSelB    // its selection bias
@@ -771,7 +768,6 @@ type genState struct {
 	// Its state's halves and its dt bias, decay rates, skip and convolution bias.
 	stateIn, stateOut, recDt, recA, recD, recCB backend.Buf
 	recNorm, recMid                             backend.Buf
-	m1DtN, m1BN, m1CN                           backend.Buf
 	router, routerB, selB, routeW               backend.Buf
 	sink                                        backend.Buf
 	// once is what each once-kind's launch last read this step.
@@ -881,12 +877,6 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.recNorm
 			case gaRecMid:
 				bufs[j] = st.recMid
-			case gaM1DtN:
-				bufs[j] = st.m1DtN
-			case gaM1BN:
-				bufs[j] = st.m1BN
-			case gaM1CN:
-				bufs[j] = st.m1CN
 			case gaRouter:
 				bufs[j] = st.router
 			case gaRouterB:
@@ -1813,8 +1803,7 @@ func (g *devTier) genSSMRow(o *devOp, prog *devProgram, bs *blockScratch, rows i
 		x, b := rb.load(compose.BufRow, gaIn0), rb.load(compose.BufVec, gaRecCB)
 		rb.store(rb.node(compose.Node{Kind: compose.NUnary, Op: compose.OpAct, Act: kernels.ActSiLU, A: rb.bin(compose.OpAdd, x, b)}), gaOut0)
 	} else {
-		wa := map[devSlot]genArg{slotM1LowN: gaM1DtN, slotM1BN: gaM1BN, slotM1CN: gaM1CN}[prog.slots[o.Out[0]]]
-		if wa == 0 {
+		if o.V == nil {
 			return nil
 		}
 		lanes := g.composeTarget().Lanes
@@ -1822,7 +1811,7 @@ func (g *devTier) genSSMRow(o *devOp, prog *devProgram, bs *blockScratch, rows i
 			lanes = 1
 		}
 		rb = &rowBuild{r: compose.Row{Width: lanes, Rows: rows}}
-		x, nw, y := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufRow, wa), rb.buf(compose.BufOut, gaOut0)
+		x, nw, y := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufRow, gaV), rb.buf(compose.BufOut, gaOut0)
 		rb.r.LaneRMSNorm(x, nw, y, w, 1, float32(bs.p.RMSEps))
 		f.RowGroup = max(lanes, 32)
 	}

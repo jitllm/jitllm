@@ -303,7 +303,6 @@ func (g *devTier) layersSession(s backend.Session) {
 						}
 						gst.recDt, gst.recA, gst.recD, gst.recCB = l.ssmDt, l.ssmA, l.ssmD, l.ssmCB
 						gst.recNorm, gst.recMid = l.ssmNorm, bs.dOutN
-						gst.m1DtN, gst.m1BN, gst.m1CN = l.m1DtN, l.m1BN, l.m1CN
 					}
 					gst.router, gst.routerB, gst.selB, gst.routeW = l.router, l.routerB, l.expSelB, bs.rw
 					if o.Kind == dkGatherHeads {

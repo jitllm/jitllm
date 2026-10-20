@@ -349,6 +349,7 @@ func (g *Row) clone() *Row {
 	c.Stores = append([]Store(nil), g.Stores...)
 	c.Loops = append([]int(nil), g.Loops...)
 	c.Trip = append([]int(nil), g.Trip...)
+	c.Spans = append([]Span(nil), g.Spans...)
 	c.Stages = make([]Stage, len(g.Stages))
 	for i, st := range g.Stages {
 		c.Stages[i] = Stage{Width: st.Width, Stores: append([]Store(nil), st.Stores...)}
@@ -395,15 +396,31 @@ func (g *Row) tiled(s Schedule) *Row {
 		return g
 	}
 	r := g.clone()
+	// A strided tile's first place and step, as nodes: the tile t's first
+	// t/k*n*k + t%k and its j-th that plus j*k.
+	place := func(row bool) Node {
+		base, tile, off, n, k := NColBase, NColTile, NColOff, tc, s.ColStride
+		if row {
+			base, tile, off, n, k = NRowBase, NRowTile, NRowOff, tr, s.RowStride
+		}
+		if k <= 1 {
+			return Node{Kind: NUBinary, Op: OpAdd, A: r.Add(Node{Kind: base}), B: r.Add(Node{Kind: off})}
+		}
+		u, ub := r.UConst, r.UBin
+		t := r.Add(Node{Kind: tile})
+		first := ub(OpAdd, ub(OpMul, ub(OpDiv, t, u(k)), u(n*k)), ub(OpRem, t, u(k)))
+		return Node{Kind: NUBinary, Op: OpAdd, A: first, B: ub(OpMul, r.Add(Node{Kind: off}), u(k))}
+	}
 	for i, nd := range g.Nodes {
 		switch {
 		case nd.Kind == NColumn && tc > 1:
-			r.Nodes[i] = Node{Kind: NUBinary, Op: OpAdd, A: r.Add(Node{Kind: NColBase}), B: r.Add(Node{Kind: NColOff})}
+			r.Nodes[i] = place(false)
 		case nd.Kind == NRowIdx && tr > 1:
-			r.Nodes[i] = Node{Kind: NUBinary, Op: OpAdd, A: r.Add(Node{Kind: NRowBase}), B: r.Add(Node{Kind: NRowOff})}
+			r.Nodes[i] = place(true)
 		}
 	}
-	r.liftOffsets()
+	r = r.divmods(s)
+	r.liftOffsets(s)
 	return r
 }
 
