@@ -244,6 +244,9 @@ func (g *devTier) layersSession(s backend.Session) {
 			if R > 1 && o.OneRow {
 				continue // what reads it over rows produces it itself
 			}
+			if len(o.Gen) == 0 && o.Why == whyNothing {
+				continue
+			}
 			// An op about to write the row the last binary16 conversion read
 			// voids it: the next GEMM converts the row's new value. An op
 			// that makes the conversion itself sets it after writing.
@@ -295,6 +298,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						gst.recNorm, gst.recMid = l.ssmNorm, bs.dOutN
 						gst.m1DtN, gst.m1BN, gst.m1CN = l.m1DtN, l.m1BN, l.m1CN
 					}
+					gst.router, gst.routerB, gst.selB, gst.routeW = l.router, l.routerB, l.expSelB, bs.rw
 					if o.Kind == dkGatherHeads {
 						gst.perm = g.perms[[2]int{o.Heads, R}]
 					}

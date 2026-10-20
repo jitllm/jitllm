@@ -130,21 +130,28 @@ func TestLayerNormPartsIsMains(t *testing.T) {
 // RouterMatVecOf and RouterMatVecTok: a workgroup of 128 a logit, the
 // partials through a tree.
 func TestRouterIsMains(t *testing.T) {
-	for _, c := range []struct{ e, k, ntok int }{{8, 64, 1}, {64, 2048, 1}, {8, 64, 32}, {128, 512, 4}} {
-		name := fmt.Sprintf("e%d_k%d_t%d", c.e, c.k, c.ntok)
+	for _, c := range []struct {
+		e, k, ntok int
+		f16        bool
+	}{{8, 64, 1, false}, {64, 2048, 1, false}, {8, 64, 32, false}, {128, 512, 4, false}, {8, 64, 1, true}, {8, 4096, 1, true}, {8, 64, 32, true}} {
+		name := fmt.Sprintf("e%d_k%d_t%d_f16%v", c.e, c.k, c.ntok, c.f16)
 		t.Run(name, func(t *testing.T) {
 			var mk *ir.Kernel
 			var err error
 			if c.ntok == 1 {
-				mk, err = mainkernels.RouterMatVecOf(c.e, c.k, false)
+				mk, err = mainkernels.RouterMatVecOf(c.e, c.k, c.f16)
 			} else {
-				mk, err = mainkernels.RouterMatVecTok(c.e, c.k, c.ntok, false)
+				mk, err = mainkernels.RouterMatVecTok(c.e, c.k, c.ntok, c.f16)
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
 			g := &compose.Row{Width: c.k, Rows: c.e * c.ntok}
-			w, x, out := g.Buf(compose.BufRow), g.Buf(compose.BufRow), g.Buf(compose.BufOut)
+			wk := compose.BufRow
+			if c.f16 {
+				wk = compose.BufRowF16
+			}
+			w, x, out := g.Buf(wk), g.Buf(compose.BufRow), g.Buf(compose.BufOut)
 			g.RouterLogits(w, x, out, c.e, c.k)
 			ps, err := g.Plan(compose.Facts{Target: sm70, RowGroup: 128, Tree: true})
 			if err != nil {

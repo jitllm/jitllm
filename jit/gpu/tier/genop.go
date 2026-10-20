@@ -79,6 +79,10 @@ const (
 	gaM1DtN    // a selective scan's dt, B and C norms' weights
 	gaM1BN
 	gaM1CN
+	gaRouter  // a mixture's router matrix
+	gaRouterB // its bias on the logits
+	gaSelB    // its selection bias
+	gaRouteW  // the route's weights (a fused route writes them with the selection)
 )
 
 // genLaunch is one generated launch: threads for a flat launch, or groups of
@@ -263,8 +267,8 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 	switch o.Kind {
 	case dkMap, dkReduce, dkSelectK, dkRank, dkTake, dkTile, dkConcat, dkRelayout:
 		return g.genPrim(o, prog, rows)
-	case dkMatVec, dkMatVecRes, dkMatVecGate:
-		return g.genMatVecNodes(o, bs, rows)
+	case dkMatVec, dkMatVecRes, dkMatVecGate, dkExpertMatVec:
+		return g.genMatVecNodes(o, prog, bs, rows)
 	case dkConvBias, dkSSMNorm:
 		l := g.genSSMRow(o, prog, bs, rows)
 		o.Why = whyNoForm
@@ -300,9 +304,11 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 			o.Why = whyNone
 		}
 		return l
-	case dkExpertMatVec, dkExpertMatVecE, dkQKV, dkQKVGemm, dkRouterLogits,
-		dkResIn, dkQKVSep, dkLatentAttend, dkView, dkTopK, dkRouteWeights, dkGroupByExpert, dkGateLogit,
-		dkGroupMask, dkRouterBias, dkExpertBias, dkExpertFetch:
+	case dkRouterLogits, dkTopK, dkRouteWeights, dkRouterBias, dkGroupByExpert:
+		return g.genRoute(o, prog, bs, rows)
+	case dkExpertMatVecE, dkQKV, dkQKVGemm,
+		dkResIn, dkQKVSep, dkLatentAttend, dkView, dkGateLogit,
+		dkGroupMask, dkExpertBias, dkExpertFetch:
 		// No form in the composer's primitives yet: the op fails to
 		// generate, and its block does not place.
 		o.Why = whyNoForm
@@ -763,6 +769,7 @@ type genState struct {
 	stateIn, stateOut, recDt, recA, recD, recCB backend.Buf
 	recNorm, recMid                             backend.Buf
 	m1DtN, m1BN, m1CN                           backend.Buf
+	router, routerB, selB, routeW               backend.Buf
 	// The step's binary16 operand: its plane, and the conversion the step
 	// last made, by kernel and source (shared with the executor, so a
 	// conversion either one made is not made again).
@@ -874,6 +881,14 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				bufs[j] = st.m1BN
 			case gaM1CN:
 				bufs[j] = st.m1CN
+			case gaRouter:
+				bufs[j] = st.router
+			case gaRouterB:
+				bufs[j] = st.routerB
+			case gaSelB:
+				bufs[j] = st.selB
+			case gaRouteW:
+				bufs[j] = st.routeW
 			case gaQ8A:
 				bufs[j], _ = int8Of(st, o.Out[l.q8])
 			case gaQ8X:
@@ -1001,9 +1016,9 @@ func (g *devTier) genPairs(o *devOp, prog *devProgram, bs *blockScratch, rows in
 		if moe {
 			return nil // over rows the grouped matvec quantizes what it reads
 		}
-		x := rb.load(compose.BufRow, gaIn0)
-		rb.r.Q8 = &compose.Q8{Val: x, A: rb.buf(compose.BufQ8, gaQ8A), X: rb.buf(compose.BufQ8X, gaQ8X),
-			Window: min(max(p.ActWin, 32), pad32(w)), Pad: pad32(w)}
+		// The slots' rows quantized as one flat row, a window never crossing
+		// a slot.
+		return g.genQuant(o, prog, cap, gaIn0, gaQ8A, gaQ8X, 0, p.ActWin)
 	default:
 		return nil
 	}
@@ -1171,14 +1186,15 @@ func (rb *rowBuild) gated(o *devOp, gt, up int) (int, bool) {
 // and the kernels compose plans for the group on this target (Plan): its
 // schedule and, under a k split, the rewrite into the segments' planes and
 // their sum. Callers hold g.mu.
-func (g *devTier) genMatVecNodes(o *devOp, bs *blockScratch, rows int) []genLaunch {
+func (g *devTier) genMatVecNodes(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
 	l := g.curLayer
 	if l == nil || o.W < 0 || o.W >= len(l.ms) || *l.rs[o.W] == nil {
 		o.Why = whyNoWeight
 		return nil
 	}
 	m := *l.ms[o.W]
-	if m.experts > 1 || m.slots > 0 || m.pad {
+	bank := o.Kind == dkExpertMatVec
+	if bank != (m.experts > 1) || m.pad || bank && (rows != 1 || g.genRag || len(o.In) < 2) {
 		o.Why = whyNoForm
 		return nil
 	}
@@ -1188,8 +1204,13 @@ func (g *devTier) genMatVecNodes(o *devOp, bs *blockScratch, rows int) []genLaun
 		o.Why = whyNoForm
 		return nil
 	}
-	// The product, into the output or a split's planes.
-	rb := &rowBuild{r: compose.Row{Width: m.rows, Rows: rows}}
+	// The product, into the output or a split's planes; a bank's slots are
+	// the group's rows, each reading its expert's sheet.
+	grows := rows
+	if bank {
+		grows = prog.vals[o.In[1]].Width
+	}
+	rb := &rowBuild{r: compose.Row{Width: m.rows, Rows: grows}}
 	w := compose.MatVecWeight{T: m.q, K: m.k, Rows: m.rows, QS: rb.buf(compose.BufU32, gaWQS), D: -1, SC: -1}
 	if !kernels.IsFloat(m.q) {
 		w.D = rb.buf(compose.BufU32, gaWD)
@@ -1197,9 +1218,19 @@ func (g *devTier) genMatVecNodes(o *devOp, bs *blockScratch, rows int) []genLaun
 	if m.q.Info().PerSuper > 1 {
 		w.SC = rb.buf(compose.BufU32, gaWSC)
 	}
-	a := compose.MatVecOperand{Toks: rows}
+	a := compose.MatVecOperand{Toks: grows}
+	if bank {
+		w.Experts, w.Sel = m.experts, rb.buf(compose.BufU32, gaIn1)
+		// The gate and up read the row, the down a slot's own activation.
+		if prog.vals[o.In[0]].Layout != layoutPairs {
+			a.One, a.Toks = true, 1
+		}
+	}
 	if kernels.IsFloat(m.q) {
 		// A float weight reads the float row the program states.
+		if bank {
+			o.FIn = 3
+		}
 		if o.FIn == 0 {
 			o.Why = whyNoFloat
 			return nil
@@ -1252,7 +1283,7 @@ func (g *devTier) genMatVecNodes(o *devOp, bs *blockScratch, rows int) []genLaun
 	var out []genLaunch
 	for _, p := range ps {
 		if p.S.Split > 1 {
-			need := m.rows * rows * p.S.Split
+			need := m.rows * grows * p.S.Split
 			if g.genInSub && g.partCap < need || !g.genInSub && !g.sizePart(need) {
 				o.Why = whySplit
 				return nil
@@ -1298,6 +1329,9 @@ const (
 	whyLayout
 	whyShape
 	whyNoForm
+	// whyNothing is an op formed with nothing to launch at this step (a
+	// grouping a row does not need).
+	whyNothing
 )
 
 func (w genWhy) String() string {
@@ -1307,7 +1341,7 @@ func (w genWhy) String() string {
 		"no float row stated", "a history that is not paged, or a row wider than its heads",
 		"rows whose head-major layout the program does not state",
 		"values whose widths the primitive does not take",
-		"an op with no form in the composer's primitives yet"}[w]
+		"an op with no form in the composer's primitives yet", "nothing to launch at this step"}[w]
 }
 
 // genPagedWrite is a block's new K and V rows into its paged history: K
@@ -1444,35 +1478,6 @@ func (g *devTier) genHeadCopy(o *devOp, prog *devProgram, bs *blockScratch, rows
 	default:
 		return nil
 	}
-	k := g.rowKern(r)
-	if k.k == nil {
-		return nil
-	}
-	l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
-	copy(l.args[:], rb.args)
-	return []genLaunch{l}
-}
-
-// genCombine is a decode step's weighted sum of its selected experts' rows:
-// each column the slots' fused multiply-adds in slot order from zero (the
-// pairs' rows and the weights the op's two inputs). Callers hold g.mu.
-func (g *devTier) genCombine(o *devOp, prog *devProgram, bs *blockScratch) []genLaunch {
-	if len(o.In) != 2 || len(o.Out) != 1 {
-		return nil
-	}
-	n, slots := prog.vals[o.Out[0]].Width, prog.vals[o.In[1]].Width
-	if n < 1 || slots < 1 || prog.vals[o.In[0]].Width != n {
-		return nil
-	}
-	rb := &rowBuild{r: compose.Row{Width: n, Rows: 1}}
-	r := &rb.r
-	e, w := rb.buf(compose.BufRow, gaIn0), rb.buf(compose.BufRow, gaIn1)
-	acc := r.Const(0)
-	for j := 0; j < slots; j++ {
-		x := r.LoadAt(e, r.UBin(compose.OpAdd, r.UConst(j*n), r.Column()))
-		acc = r.Add(compose.Node{Kind: compose.NBinary, Op: compose.OpFma, A: r.LoadAt(w, r.UConst(j)), B: x, C: acc})
-	}
-	rb.store(acc, gaOut0)
 	k := g.rowKern(r)
 	if k.k == nil {
 		return nil

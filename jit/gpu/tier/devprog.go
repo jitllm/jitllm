@@ -1526,7 +1526,7 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			}
 			ex, k := o.Attr.Experts, o.Attr.TopK
 			logits := prog.val(name(0)+".logits", f32(ex), slotRLogits)
-			prog.ops = append(prog.ops, devOp{Kind: dkRouterLogits, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{logits}})
+			prog.ops = append(prog.ops, devOp{Kind: dkRouterLogits, Src: []int{i}, In: []devVal{in(0)}, Out: []devVal{logits}, A: o.Attr})
 			for _, w := range o.Weight[1:] {
 				if w.Role != jlm.RoleRouterBias {
 					continue
@@ -1551,9 +1551,9 @@ func buildDevProgram(p *nn.LayerPlan, l *layer) (*devProgram, string) {
 			sel := prog.val(name(0), devType{Elem: elemU32, Layout: layoutRow, Width: k}, slotSel)
 			top := prog.val(name(0)+".top", f32(k), slotTop)
 			prog.pad[sel], prog.pad[top] = 1, 1 // k+1 a row apart: the bin the rank kernel writes past the k
-			prog.ops = append(prog.ops, devOp{Kind: dkTopK, Src: []int{i}, In: rank, Out: []devVal{sel, top}, Role: selBias})
+			prog.ops = append(prog.ops, devOp{Kind: dkTopK, Src: []int{i}, In: rank, Out: []devVal{sel, top}, Role: selBias, A: o.Attr})
 			rw := prog.val(name(0)+".weights", f32(k), slotRW)
-			prog.ops = append(prog.ops, devOp{Kind: dkRouteWeights, Src: []int{i}, In: []devVal{top, logits}, Out: []devVal{rw}})
+			prog.ops = append(prog.ops, devOp{Kind: dkRouteWeights, Src: []int{i}, In: []devVal{top, logits}, Out: []devVal{rw}, A: o.Attr})
 			vals[o.Out[0]] = sel
 			routeW[sel] = rw
 			prog.ops = append(prog.ops, devOp{Kind: dkGroupByExpert, Src: []int{i}, In: []devVal{sel}})
