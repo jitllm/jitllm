@@ -92,6 +92,8 @@ func (g *devTier) genPrim(o *devOp, prog *devProgram, rows int) []genLaunch {
 			y = r.Select(r.Less(r.Const(0), ops[0]), ops[1], ops[2])
 		case graph.MapLess:
 			y = r.Select(r.Less(ops[0], ops[1]), r.Const(1), r.Const(0))
+		case graph.MapFma:
+			y = rb.node(compose.Node{Kind: compose.NBinary, Op: compose.OpFma, A: ops[0], B: ops[1], C: ops[2]})
 		default:
 			o.Why = whyShape
 			return nil
@@ -187,15 +189,96 @@ func (g *devTier) genPrim(o *devOp, prog *devProgram, rows int) []genLaunch {
 		r.StoreAt(rb.buf(compose.BufOutU32, gaOut0), idx, at)
 		r.StoreAt(rb.buf(compose.BufOut, gaOut1), val, at)
 	case dkTake:
-		out, n, iw := w(o.Out[0]), w(o.In[0]), st(o.In[1])
-		if len(o.In) != 2 || index(o.In[0]) || !index(o.In[1]) || iw < out {
+		// From a value (In[0], indices In[1]) or from the op's bound vector
+		// (indices In[0]): one source row for every row.
+		ixv := o.In[len(o.In)-1]
+		out, iw := w(o.Out[0]), st(ixv)
+		vec := len(o.In) == 1
+		if vec && o.V == nil || !vec && (len(o.In) != 2 || index(o.In[0])) || !index(ixv) || iw < out {
 			o.Why = whyShape
 			return nil
 		}
 		*r = compose.Row{Width: out, Rows: rows}
 		col := r.Column()
-		ix := r.LoadAt(inBuf(1), r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.RowIdx(), u(iw)), col))
-		x := r.LoadAt(inBuf(0), r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.RowIdx(), u(st(o.In[0]))), r.UBin(compose.OpMin, ix, u(n-1))))
+		ix := r.LoadAt(inBuf(len(o.In)-1), r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.RowIdx(), u(iw)), col))
+		var x int
+		if vec {
+			x = r.LoadAt(rb.buf(compose.BufVec, gaV), ix)
+		} else {
+			n := w(o.In[0])
+			x = r.LoadAt(inBuf(0), r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.RowIdx(), u(st(o.In[0]))), r.UBin(compose.OpMin, ix, u(n-1))))
+		}
+		r.StoreAt(rb.buf(compose.BufOut, gaOut0), x, r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.RowIdx(), u(st(o.Out[0]))), col))
+	case dkConcat:
+		// Each input's span of the output in order; a value listed twice is
+		// one buffer read at two spans.
+		out := w(o.Out[0])
+		*r = compose.Row{Width: out, Rows: rows}
+		col := r.Column()
+		bufOf := map[devVal]int{}
+		var off []int
+		total := 0
+		for j, v := range o.In {
+			if index(v) {
+				o.Why = whyShape
+				return nil
+			}
+			if _, ok := bufOf[v]; !ok {
+				if j > int(gaIn3-gaIn0) {
+					o.Why = whyShape // a launch reads its inputs from its first four arguments
+					return nil
+				}
+				bufOf[v] = rb.buf(compose.BufRow, gaIn0+genArg(j))
+			}
+			off = append(off, total)
+			total += w(v)
+		}
+		if total != out {
+			o.Why = whyShape
+			return nil
+		}
+		load := func(j int) int {
+			v := o.In[j]
+			ix := r.UBin(compose.OpMin, r.UBin(compose.OpSub, col, u(off[j])), u(w(v)-1))
+			return r.LoadAt(bufOf[v], r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.RowIdx(), u(st(v))), ix))
+		}
+		x := load(len(o.In) - 1)
+		for j := len(o.In) - 2; j >= 0; j-- {
+			x = r.Select(r.Less(col, u(off[j+1])), load(j), x)
+		}
+		r.StoreAt(rb.buf(compose.BufOut, gaOut0), x, r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.RowIdx(), u(st(o.Out[0]))), col))
+	case dkRelayout:
+		// Between a row of the value's width a row (row-major) and blocks of
+		// HD stream-major across the rows: block k of row r at
+		// (k*rows + r)*HD, rows the variant's.
+		n, b := w(o.In[0]), o.HD
+		if b < 1 || n%b != 0 || w(o.Out[0]) != n || len(o.In) != 1 {
+			o.Why = whyShape
+			return nil
+		}
+		*r = compose.Row{Width: n, Rows: rows}
+		col := r.Column()
+		row := r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.RowIdx(), u(n)), col)
+		blocked := r.UBin(compose.OpAdd, r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.UBin(compose.OpDiv, col, u(b)), u(rows*b)),
+			r.UBin(compose.OpMul, r.RowIdx(), u(b))), r.UBin(compose.OpRem, col, u(b)))
+		from, to := blocked, row
+		if o.N == 1 {
+			from, to = row, blocked
+		}
+		r.StoreAt(rb.buf(compose.BufOut, gaOut0), r.LoadAt(inBuf(0), from), to)
+	case dkTile:
+		out, n := w(o.Out[0]), w(o.In[0])
+		span := o.A.Span
+		if span == 0 {
+			span = n
+		}
+		if span < 1 || span > n || out%span != 0 {
+			o.Why = whyShape
+			return nil
+		}
+		*r = compose.Row{Width: out, Rows: rows}
+		col := r.Column()
+		x := r.LoadAt(inBuf(0), r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.RowIdx(), u(st(o.In[0]))), r.UBin(compose.OpRem, col, u(span))))
 		r.StoreAt(rb.buf(compose.BufOut, gaOut0), x, r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.RowIdx(), u(st(o.Out[0]))), col))
 	default:
 		return nil

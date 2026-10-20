@@ -75,8 +75,6 @@ func (k devKind) String() string {
 		return "q_temp"
 	case dkSplitQG:
 		return "split_qg"
-	case dkGateOut:
-		return "gate_out"
 	case dkPLESlice:
 		return "ple_slice"
 	case dkRopeKRow:
@@ -91,8 +89,6 @@ func (k devKind) String() string {
 		return "stream_scale"
 	case dkStreamFinish:
 		return "stream_finish"
-	case dkResidJoin3:
-		return "resid_join3"
 	case dkGaussTopK:
 		return "gauss_topk"
 	case dkStreamNorm:
@@ -173,8 +169,6 @@ func (k devKind) String() string {
 		return "scale"
 	case dkClamp:
 		return "clamp"
-	case dkSubNorm:
-		return "sub_norm"
 	case dkRouterLogits:
 		return "router_logits"
 	case dkRouterBias:
@@ -189,8 +183,6 @@ func (k devKind) String() string {
 		return "expert_matvec"
 	case dkExpertBias:
 		return "expert_bias"
-	case dkScaleWeights:
-		return "scale_weights"
 	case dkCombine:
 		return "combine"
 	case dkGateLogit:
@@ -239,6 +231,12 @@ func (k devKind) String() string {
 		return "rank"
 	case dkTake:
 		return "take"
+	case dkTile:
+		return "tile"
+	case dkConcat:
+		return "concat"
+	case dkRelayout:
+		return "relayout"
 	case dkNormQuant:
 		return "norm_quant"
 	case dkAddNorm:

@@ -46,6 +46,7 @@ func (g *devTier) ensureFusedLocked(l *layer, prog *devProgram, bs *blockScratch
 	// Inside a submission they are never grown: a launch already recorded
 	// may read the buffers a growth would free.
 	fc.valErr = nil
+	fc.prog.floatSources()
 	need, err := colourVals(fc.prog)
 	switch {
 	case err != nil:
@@ -54,6 +55,15 @@ func (g *devTier) ensureFusedLocked(l *layer, prog *devProgram, bs *blockScratch
 		fc.valErr = fmt.Errorf("tier: a block's program values outgrow their buffers inside a submission")
 	case !g.genInSub && !g.sizeVals(need, max(R, bs.rows)):
 		fc.valErr = fmt.Errorf("tier: a block's program values do not fit")
+	}
+	// The int8 operand: as wide as the widest row the program quantizes.
+	if a, ax := operandNeed(fc.prog, max(R, bs.rows)); fc.valErr == nil && (a > bs.aCap || ax > bs.axCap) {
+		switch {
+		case g.genInSub:
+			fc.valErr = fmt.Errorf("tier: a block's program operand outgrows its buffer inside a submission")
+		case !g.regrow(&bs.a, &bs.aCap, a, 1, true, true) || !g.regrow(&bs.ax, &bs.axCap, ax, 1, true, true):
+			fc.valErr = fmt.Errorf("tier: a block's program operand does not fit")
+		}
 	}
 	fc.qkv, fc.gu, fc.down, fc.dense = fc.prog.forms()
 	fc.bs = bs

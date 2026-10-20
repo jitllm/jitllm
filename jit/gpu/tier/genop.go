@@ -120,14 +120,9 @@ func kernAct(a graph.Act) (kernels.ActKind, bool) {
 // genProgram generates the launches of every op of prog it can, for a
 // variant of rows rows over scratch bs. Callers hold g.mu.
 func (g *devTier) genProgram(prog *devProgram, bs *blockScratch, rows int) {
+	prog.floatSources()
 	for i := range prog.ops {
 		o := &prog.ops[i]
-		if o.FIn == 0 && (o.Kind == dkMatVec || o.Kind == dkMatVecRes || o.Kind == dkMatVecGate) && len(o.In) < 4 {
-			if f, ok := prog.floatSource(i, o.In[0]); ok {
-				o.In = append(o.In, f)
-				o.FIn = int8(len(o.In))
-			}
-		}
 		if o.Act == 0 {
 			o.Act = o.A.Act // an activation its emit site did not record
 		}
@@ -135,6 +130,21 @@ func (g *devTier) genProgram(prog *devProgram, bs *blockScratch, rows int) {
 			o.GC = g.constBuf(float32(o.Alpha))
 		}
 		o.Gen = g.genOp(o, prog, bs, rows)
+	}
+}
+
+// floatSources states each matvec's float row as an input of its own (FIn):
+// what a float-format weight's kernel reads beside the int8 operand. It runs
+// before the values are coloured, so the colouring sees the read.
+func (p *devProgram) floatSources() {
+	for i := range p.ops {
+		o := &p.ops[i]
+		if o.FIn == 0 && (o.Kind == dkMatVec || o.Kind == dkMatVecRes || o.Kind == dkMatVecGate) && len(o.In) < 4 {
+			if f, ok := p.floatSource(i, o.In[0]); ok {
+				o.In = append(o.In, f)
+				o.FIn = int8(len(o.In))
+			}
+		}
 	}
 }
 
@@ -264,7 +274,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 	// The formers take their ops whatever their values' layouts: a former
 	// lays out its own rows (a bank's pairs, a history's pages).
 	switch o.Kind {
-	case dkMap, dkReduce, dkSelectK, dkRank, dkTake:
+	case dkMap, dkReduce, dkSelectK, dkRank, dkTake, dkTile, dkConcat, dkRelayout:
 		return g.genPrim(o, prog, rows)
 	case dkMatVec, dkMatVecRes, dkMatVecGate:
 		if rows == 1 {
@@ -311,7 +321,7 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		// shape and the device's tuning, the history's row writes, and a
 		// latent attention's slices of its rows.
 		return []genLaunch{{former: formAttend}}
-	case dkTopK, dkRouteWeights, dkCombine, dkGroupByExpert, dkGateLogit, dkGroupMask, dkScaleWeights, dkRouterBias,
+	case dkTopK, dkRouteWeights, dkCombine, dkGroupByExpert, dkGateLogit, dkGroupMask, dkRouterBias,
 		dkExpertBias, dkExpertFetch:
 		if o.Kind == dkCombine && rows == 1 {
 			if l := g.genCombine(o, prog, bs); l != nil {
@@ -391,20 +401,11 @@ func (g *devTier) genOp(o *devOp, prog *devProgram, bs *blockScratch, rows int) 
 		rb.store(y, gaOut0)
 	case dkMul:
 		rb.store(rb.bin(compose.OpMul, rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1)), gaOut0)
-	case dkGateOut:
-		// sigmoid(gate) * the row.
-		sig := rb.node(compose.Node{Kind: compose.NUnary, Op: compose.OpAct, Act: kernels.ActSigmoid, A: rb.load(compose.BufRow, gaIn0)})
-		rb.store(rb.bin(compose.OpMul, sig, rb.load(compose.BufRow, gaIn1)), gaOut0)
 	case dkGatedAdd:
 		// acc + sigmoid(the row's logit) * the branch.
 		acc, br := rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1)
 		sig := rb.node(compose.Node{Kind: compose.NUnary, Op: compose.OpAct, Act: kernels.ActSigmoid, A: rb.load(compose.BufRowScalar, gaIn2)})
 		rb.store(rb.bin(compose.OpAdd, acc, rb.bin(compose.OpMul, sig, br)), gaOut0)
-	case dkResidJoin3:
-		// (x + y + z) / sqrt(2).
-		x, y, z := rb.load(compose.BufRow, gaIn0), rb.load(compose.BufRow, gaIn1), rb.load(compose.BufRow, gaIn2)
-		s := rb.bin(compose.OpAdd, rb.bin(compose.OpAdd, x, y), z)
-		rb.store(rb.bin(compose.OpMul, s, rb.node(compose.Node{Kind: compose.NConst, F: float32(1 / math.Sqrt2)})), gaOut0)
 	case dkClamp:
 		b := float32(o.Alpha)
 		if b <= 0 {
@@ -1148,8 +1149,14 @@ func (rb *rowBuild) gated(o *devOp, gt, up int) (int, bool) {
 	u := o.A.GLU
 	if !u.Bounded() {
 		a, ok := kernAct(o.Act)
-		if !ok || kernels.ActMulOK(a) != nil {
+		if !ok {
 			return 0, false
+		}
+		if kernels.ActMulOK(a) != nil {
+			// An activation with an element form and no gated one (a
+			// sigmoid gate): act(gate) times up. One with no element form
+			// either compose refuses at emit (ActElemOK).
+			return rb.bin(compose.OpMul, rb.node(compose.Node{Kind: compose.NUnary, Op: compose.OpAct, Act: a, A: gt}), up), true
 		}
 		return rb.node(compose.Node{Kind: compose.NBinary, Op: compose.OpActMul, Act: a, A: gt, B: up}), true
 	}
@@ -1383,6 +1390,21 @@ func (g *devTier) genPagedWrite(o *devOp, prog *devProgram, bs *blockScratch, ro
 // chunk of a program with latent attention, whose rows the executor keeps
 // head-major where the program types them row-major.
 func (g *devTier) genHeadCopy(o *devOp, prog *devProgram, bs *blockScratch, rows int) []genLaunch {
+	if o.Kind == dkSlice && len(o.In) == 0 && len(o.Out) == 1 && o.V != nil && o.A.HeadDim == 0 {
+		// A slice of a bound vector: every row reads the same elements.
+		w := prog.vals[o.Out[0]].Width
+		rb := &rowBuild{r: compose.Row{Width: w, Rows: rows}}
+		r := &rb.r
+		x := r.LoadAt(rb.buf(compose.BufVec, gaV), r.UBin(compose.OpAdd, r.Column(), r.UConst(o.A.Offset)))
+		r.StoreAt(rb.buf(compose.BufOut, gaOut0), x, r.UBin(compose.OpAdd, r.UBin(compose.OpMul, r.RowIdx(), r.UConst(prog.stride(o.Out[0]))), r.Column()))
+		k := g.rowKern(r)
+		if k.k == nil {
+			return nil
+		}
+		l := genLaunch{k: k.k, groups: rows, width: k.group, n: uint8(len(rb.args))}
+		copy(l.args[:], rb.args)
+		return []genLaunch{l}
+	}
 	if rows > 1 && prog.latent || len(o.In) == 0 || len(o.Out) == 0 {
 		return nil
 	}

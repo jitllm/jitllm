@@ -91,10 +91,13 @@ type blockScratch struct {
 	parts             int
 	x, x2, h, mvOut   backend.Buf
 	part, a, ax       backend.Buf
-	qr, q, k, v       backend.Buf
-	roff              backend.Buf // RoPE-q destination offsets, one per row
-	kpos              backend.Buf // RoPE-k destination offsets: positions when K is transposed
-	hNorm, logits     backend.Buf
+	// aCap and axCap are a's and ax's sizes in bytes: the prologue grows them
+	// to the widest operand a program quantizes (sizeOperands).
+	aCap, axCap   int
+	qr, q, k, v   backend.Buf
+	roff          backend.Buf // RoPE-q destination offsets, one per row
+	kpos          backend.Buf // RoPE-k destination offsets: positions when K is transposed
+	hNorm, logits backend.Buf
 	// headCap and logitsCap are the head's final softcap (nn.Head.Softcap):
 	// the capped logits land in their own buffer, since no kernel may write
 	// what it reads. Both nil on every model without one.

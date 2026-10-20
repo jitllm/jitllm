@@ -255,6 +255,7 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	}
 	al(&bs.a, rows*wide)           // one byte per activation: packed int8
 	al(&bs.ax, 3*rows*(wide/32)*4) // scale per 32, sum per 16
+	bs.aCap, bs.axCap = rows*wide, 3*rows*(wide/32)*4
 	if p.NExpert > 0 {
 		k := p.NExpertUsed
 		al(&bs.rlogits, p.NExpert*4)

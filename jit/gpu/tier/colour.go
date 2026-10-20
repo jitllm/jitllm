@@ -60,7 +60,31 @@ func colourVals(p *devProgram) ([numVals]int, error) {
 			return need, fmt.Errorf("device program: value %s is read and never written", p.names[v])
 		}
 	}
+	// RULE 13 over the coloured slots: no op reads a buffer it writes.
+	for i, o := range p.ops {
+		for _, w := range o.Out {
+			for _, r := range o.In {
+				if s := p.slots[w]; s >= slotVal0 && s < slotVal0+numVals && p.slots[r] == s {
+					return need, fmt.Errorf("device program: op %d (%s) reads and writes %s", i, o.Kind, s)
+				}
+			}
+		}
+	}
 	return need, nil
+}
+
+// operandNeed is the bytes of int8 values and of their scales the widest
+// operand p quantizes takes over rows rows (bs.a's and bs.ax's layout).
+func operandNeed(p *devProgram, rows int) (int, int) {
+	w := 0
+	for _, o := range p.ops {
+		for _, v := range o.Out {
+			if p.vals[v].Elem == elemQ8 {
+				w = max(w, pad32(p.vals[v].Width))
+			}
+		}
+	}
+	return rows * w, 3 * rows * (w / 32) * 4
 }
 
 // valsFit reports whether the lane's value buffers already hold need over

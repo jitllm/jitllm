@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
+	"math"
 	"slices"
 
 	"github.com/jitllm/jitllm/engine/nn"
@@ -610,6 +612,24 @@ func weightList(dst []nn.Weight, w *nn.LayerWeights, bound []jlm.Role) []nn.Weig
 	for _, a := range w.All {
 		if slices.Contains(bound, a.Role) && !holds(ws[:numPositional], a) {
 			ws = append(ws, a)
+		}
+	}
+	// A bound role the block stores as a vector (a one-row projection, a
+	// gate's dot): a matrix of one row, in f32.
+	for _, r := range bound {
+		if slices.ContainsFunc(ws, func(x nn.Weight) bool { return x.Role == r }) {
+			continue
+		}
+		for _, v := range w.Vecs {
+			if v.Role != r {
+				continue
+			}
+			b := make([]byte, 4*len(v.V))
+			for i, f := range v.V {
+				binary.LittleEndian.PutUint32(b[4*i:], math.Float32bits(f))
+			}
+			ws = append(ws, nn.Weight{T: quant.F32, Data: b, Rows: 1, K: len(v.V), Role: r})
+			break
 		}
 	}
 	return ws

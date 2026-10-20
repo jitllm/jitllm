@@ -596,6 +596,12 @@ type Config struct {
 	// device cannot meet is counted (RewritesUnmet) and explained, never
 	// dropped silently.
 	Rewrites graph.Choices
+	// OpTrace, where set, is called after every graph op a block's device
+	// program runs, with the values that op read and wrote, row-major, each
+	// rows rows: what a test compares against the graph's golden
+	// (model.TestComposerMatchesTheGolden). Each call reads the device back,
+	// so a traced run is slow and runs its launches one at a time.
+	OpTrace func(block int, g *graph.Graph, ops []int, vals map[graph.ValueID][]float32, rows int)
 	// NoGraph issues the token's launches one driver call at a time instead of
 	// replaying a captured graph: the other arm of that comparison, a field so
 	// both arms can be live in one process.

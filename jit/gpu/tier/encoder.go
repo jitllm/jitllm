@@ -3,9 +3,11 @@ package tier
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"slices"
 	"time"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/gpu/backend"
@@ -1492,12 +1494,6 @@ func (g *devTier) layersSession(s backend.Session) {
 					lc.la(bs.gscore, p.ExpertGroups, at(o.In[0]), bs.rgs)
 					lc.la(bs.gmask, bs.nExpert, at(o.In[0]), bs.rgs, at(o.Out[0]))
 				}
-			case dkScaleWeights:
-				if rowsMoE {
-					lg(mg.ewScale, R*mg.k, 128, at(o.In[0]), mg.rsel, o.V, at(o.Out[0]))
-					break
-				}
-				lc.la(bs.ewScale, bs.nUsed, at(o.In[0]), at(o.In[1]), o.V, at(o.Out[0]))
 			case dkRouterBias:
 				if rowsMoE {
 					lg(mg.biasR, R*mg.nExp, 128, at(o.In[0]), mg.zsel, o.V, at(o.Out[0]))
@@ -1727,7 +1723,15 @@ func (g *devTier) layersSession(s backend.Session) {
 				lc.la(bs.m1Bias, R*bs.rec.Chans, at(o.In[0]), l.ssmCB, at(o.Out[0]))
 			}
 		}
+		// A traced run reads each graph op's values back (Config.OpTrace).
+		var tr *opTracer
+		if g.OpTrace != nil && prog.graph != nil && err == nil {
+			tr = &opTracer{g: g, s: s, prog: prog, rows: bs.rows, R: R, li: li, ne: p.NEmbd, at: at, src: -1}
+		}
 		for oi, o := range prog.ops[first:] {
+			if tr != nil && err == nil {
+				tr.begin(o.Src)
+			}
 			if skipNext {
 				skipNext = false
 				continue
@@ -1909,13 +1913,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				addRes(at(o.In[0]), at(o.In[1]), at(o.Out[0]))
 			case dkSplitQG:
 				lc.la(bs.splitQG, R*qdim, at(o.In[0]), at(o.Out[0]), at(o.Out[1]))
-			case dkSubNorm:
-				k := bs.subQA
-				if o.Role == jlm.RoleFFNSubNorm {
-					k = bs.subQF
-				}
-				laRows(k, at(o.In[0]), o.V, at(o.Out[0]), bs.a, bs.ax)
-				fsrc = at(o.Out[0])
 			case dkRopeKRow:
 				kro := bs.zero
 				if R > 1 {
@@ -2353,6 +2350,9 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				return
 			}
+		}
+		if tr != nil && err == nil {
+			tr.flush()
 		}
 		// A recurrence's state parity flips once its launches are queued, and
 		// only while the submission is good: a block past a failure must not
@@ -4024,4 +4024,77 @@ func blockAct(bs *blockScratch, l *layer) backend.Kernel {
 		return l.actK
 	}
 	return bs.actMul
+}
+
+// opTracer reads a block's graph-op values back as its program runs
+// (Config.OpTrace): each graph op's inputs before its first device op, its
+// outputs after its last. Built only for a traced run.
+type opTracer struct {
+	g       *devTier
+	s       backend.Session
+	prog    *devProgram
+	rows, R int
+	li, ne  int
+	at      func(devVal) backend.Buf
+	src     int
+	ops     []int
+	vals    map[graph.ValueID][]float32
+}
+
+// begin starts the graph op a device op lowers, flushing the one before.
+func (t *opTracer) begin(src []int) {
+	if len(src) == 0 || src[0] == t.src || src[0] >= len(t.prog.graph.Ops) {
+		return
+	}
+	t.flush()
+	t.src, t.ops, t.vals = src[0], append([]int(nil), src...), map[graph.ValueID][]float32{}
+	for _, gi := range t.ops {
+		t.read(t.prog.graph.Ops[gi].In)
+	}
+}
+
+// flush reads the current graph op's outputs and hands the op to the trace.
+func (t *opTracer) flush() {
+	if t.src < 0 {
+		return
+	}
+	for _, gi := range t.ops {
+		t.read(t.prog.graph.Ops[gi].Out)
+	}
+	t.g.OpTrace(t.li, t.prog.graph, t.ops, t.vals, t.R)
+	t.src = -1
+}
+
+// read reads the device values of graph values ids, row-major: a residual of
+// several streams is stream-major across the rows on the device.
+func (t *opTracer) read(ids []graph.ValueID) {
+	for _, id := range ids {
+		dv, ok := t.prog.gvals[id]
+		if !ok {
+			continue
+		}
+		n, st := t.prog.vals[dv].Width, t.prog.stride(dv)
+		raw := make([]byte, 4*st*t.rows)
+		if t.s.Read(t.at(dv), raw) != nil {
+			continue
+		}
+		sl := t.prog.slots[dv]
+		streams := (sl == slotX || sl == slotX2) && n > t.ne && n%t.ne == 0
+		f := make([]float32, n*t.R)
+		for r := 0; r < t.R; r++ {
+			for c := 0; c < n; c++ {
+				i := r*st + c
+				if streams {
+					i = (c/t.ne)*t.rows*t.ne + r*t.ne + c%t.ne
+				}
+				u := binary.LittleEndian.Uint32(raw[4*i:])
+				if t.prog.vals[dv].Elem == elemU32 {
+					f[r*n+c] = float32(u) // an index row, as the golden holds it
+				} else {
+					f[r*n+c] = math.Float32frombits(u)
+				}
+			}
+		}
+		t.vals[id] = f
+	}
 }
