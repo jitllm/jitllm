@@ -2,11 +2,16 @@ package cost
 
 import (
 	"bytes"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit"
 )
 
 // TestHardwareTableIsGenerated holds the compiled-in hardware table to the
@@ -85,6 +90,48 @@ func TestRendererWritesEveryField(t *testing.T) {
 	for _, c := range classNames {
 		if !strings.Contains(src, c+":") {
 			t.Errorf("the table leaves out the class %s", c)
+		}
+	}
+}
+
+// TestEveryKnownHardwarePrices prices the board's fixture with every
+// profile in the table, the whole model on that device, as a router would
+// before sending a request there: each estimate positive and finite, and
+// among the GPUs the step's memory time no longer on twice the bandwidth.
+// (Its whole time need not order so: the composed argmax runs on one
+// thread, and a thread's speed is not a card's bandwidth.)
+func TestEveryKnownHardwarePrices(t *testing.T) {
+	f, err := jlm.Open(testmodels.Path(*composeModel + ".jlm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	s := jit.Step{Rows: 1, Page: 64, Keys: 9}
+	type priced struct {
+		name string
+		bw   float64
+		secs float64
+	}
+	var gpus []priced
+	for _, p := range Hardware() {
+		c, err := Estimate(jit.Default(), f, s, func(jit.Part) Device { return p.Device })
+		if err != nil {
+			t.Errorf("%s on %s: %v", p.Name, p.API, err)
+			continue
+		}
+		if !(c.Seconds > 0) || math.IsInf(c.Seconds, 0) || c.Unknown > 0 {
+			t.Errorf("%s on %s: %+v", p.Name, p.API, c)
+		}
+		t.Logf("%-42s %-6s %9.1f us a step, %8.1f us of it memory", p.Name, p.API, c.Seconds*1e6, c.MemSeconds*1e6)
+		if p.Device.Kind == jit.DeviceGPU {
+			gpus = append(gpus, priced{p.Name, p.Device.Bandwidth, c.MemSeconds})
+		}
+	}
+	for _, a := range gpus {
+		for _, b := range gpus {
+			if a.bw > 2*b.bw && a.secs > b.secs {
+				t.Errorf("%s reads %.0f GB/s and its step's memory takes %.1f us, %s %.0f GB/s and %.1f us", a.name, a.bw/1e9, a.secs*1e6, b.name, b.bw/1e9, b.secs*1e6)
+			}
 		}
 	}
 }
