@@ -16,7 +16,7 @@ func (cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 	if k.Seq == nil {
 		return Lowered{}, fmt.Errorf("the x86 lowering of %s: the kernel is not ordered", k.Name)
 	}
-	e := &x86Lowerer{k: k, a: &x86.Buf{}, top: map[int]int{}, end: map[int]int{}, home: k.homes(), words: k.vectorWords()}
+	e := &x86Lowerer{k: k, a: &x86.Buf{}, top: map[int]int{}, end: map[int]int{}, preset: map[int]bool{}, home: k.homes(), words: k.vectorWords()}
 	for _, en := range k.Seq {
 		if e.err != nil {
 			break
@@ -50,7 +50,9 @@ type x86Lowerer struct {
 	words    map[int]bool
 	a        *x86.Buf
 	top, end map[int]int
-	err      error
+	// preset is the loops whose counter was set as an earlier loop began.
+	preset map[int]bool
+	err    error
 }
 
 func (e *x86Lowerer) fail(format string, args ...any) {
@@ -457,8 +459,14 @@ func (e *x86Lowerer) enter(c int) {
 		if n := k.Nodes[l.Count-1]; n.Op == OpConst {
 			a.MOVimm(ctr, n.Imm)
 			runtime = false
-		} else if src := e.reg(l.Count - 1); src != ctr {
+		} else if src := e.reg(l.Count - 1); src != ctr && !e.preset[c] {
 			a.MOVQ(ctr, src)
+		}
+		if t := c + 1; l.Lanes > 0 && t < len(k.Loops) && k.Loops[t].Of == c+1 && k.passes() && k.Loops[t].Count > 0 {
+			if tc, src := e.counter(t), e.reg(k.Loops[t].Count-1); tc != ctr && tc != src && k.Nodes[k.Loops[t].Count-1].Op != OpConst {
+				a.MOVQ(tc, src)
+				e.preset[t] = true
+			}
 		}
 	} else {
 		a.MOVimm(ctr, int64(l.Trip))

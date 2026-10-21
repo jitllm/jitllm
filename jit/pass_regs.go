@@ -43,6 +43,11 @@ type Regs struct {
 	// constant block is held in for the whole call, loaded first in word
 	// order; a word it does not name is loaded where each read is.
 	Resident map[int]int
+	// Walks are the registers that copies of an address a kernel walks in
+	// several passes take first; in such a kernel a vector loop's tail
+	// counts in the second counter or the first of these free, set as the
+	// pass starts.
+	Walks []int
 }
 
 func (Regs) Name() string { return "regs" }
@@ -232,12 +237,19 @@ func (b *binder86) gprs() error {
 			}
 		}
 	}
+	passes := k.passes()
 	for _, e := range k.Seq {
 		switch e.Kind {
 		case EntryLoop:
 			for _, cu := range k.Loops[e.I].Cursors {
 				if cu.Take && k.Ptrs[cu.Ptr-1].Reg == 0 {
-					r := b.take(p.Spare)
+					r := -1
+					if passes {
+						r = b.take(p.Walks)
+					}
+					if r < 0 {
+						r = b.take(p.Spare)
+					}
 					if r < 0 {
 						return errors.New("no register for a copy of an address")
 					}
@@ -262,6 +274,26 @@ func (b *binder86) gprs() error {
 		l := &k.Loops[c]
 		if l.Reg != 0 || l.once() {
 			continue
+		}
+		if passes && k.vectorTail(c) {
+			copies := map[int]bool{}
+			for _, d := range []int{c, l.Of - 1} {
+				for _, cu := range k.Loops[d].Cursors {
+					if cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Reg > 0 {
+						copies[k.Ptrs[cu.Ptr-1].Reg-1] = true
+					}
+				}
+			}
+			for _, r := range append([]int{p.Counters[1]}, p.Walks...) {
+				if !held[r] && !copies[r] && !b.used[r] {
+					l.Reg = r + 1
+					b.used[r] = true
+					break
+				}
+			}
+			if l.Reg != 0 {
+				continue
+			}
 		}
 		for _, r := range []int{p.Counters[0], p.Counters[1]} {
 			if !held[r] && (!b.used[r] || b.counterFree(r, c)) {
@@ -575,7 +607,7 @@ func (b *binder86) vectors() error {
 		}
 		first := -1
 		switch nd.Op {
-		case OpAdd, OpSub, OpMul, OpMin, OpMax, OpHSum, OpHMax, OpHMin, OpBitcast, OpBroadcast, OpSqrt, OpAnd, OpGtW, OpAndNot, OpOr, OpAddSub:
+		case OpAdd, OpSub, OpMul, OpMin, OpMax, OpHSum, OpHMax, OpHMin, OpBitcast, OpBroadcast, OpSqrt, OpAnd, OpGtW, OpAndNot, OpOr, OpAddSub, OpFirstLane:
 			first = nd.A
 		case OpDiv:
 			first = nd.B
@@ -959,6 +991,25 @@ func (k *Kernel) zeroOperand(i int) bool {
 			if *a == i && j != i {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// passes reports whether the kernel walks an address in several passes:
+// copies of one buffer's address taken by more than one loop.
+func (k *Kernel) passes() bool {
+	taken := map[Operand]int{}
+	for _, l := range k.Loops {
+		for _, cu := range l.Cursors {
+			if cu.Take {
+				taken[k.Bufs[cu.Buf].Operand]++
+			}
+		}
+	}
+	for _, n := range taken {
+		if n > 1 {
+			return true
 		}
 	}
 	return false

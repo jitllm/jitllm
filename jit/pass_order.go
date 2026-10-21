@@ -11,7 +11,9 @@ import (
 // value no loop moves before the first loop that needs it, and in each loop
 // its values in the order they depend on each other, each inner loop where
 // a value first needs what it carries, and its stores; the sums a loop
-// carries start just before it, and a choice another sum carries a value
+// carries start just before it, as does a zero its tail keeps lanes with,
+// its stores before its sums' steps, and a
+// choice another sum carries a value
 // with steps once the trip's other reads of it have run. A vector's lanes
 // rearranged are made just after it is loaded. A float zero is made where it is read. A loop advances the
 // address it stores through itself first, then its pointers in the order
@@ -224,15 +226,6 @@ func (o *orderer) scope(c int) {
 			}
 		}
 	}
-	for _, f := range k.foldsOf(c) {
-		if _, wait := o.after[f]; !wait {
-			o.need(k.Nodes[f].A, c)
-		}
-	}
-	for f := range o.after {
-		o.need(k.Nodes[f].A, c)
-	}
-	o.after, o.scopeOf = outer, scope
 	for i, s := range k.Stores {
 		if s.At != c || s.Barrier || s.Run {
 			continue
@@ -242,6 +235,15 @@ func (o *orderer) scope(c int) {
 		}
 		o.seq = append(o.seq, Entry{Kind: EntryStore, I: i})
 	}
+	for _, f := range k.foldsOf(c) {
+		if _, wait := o.after[f]; !wait {
+			o.need(k.Nodes[f].A, c)
+		}
+	}
+	for f := range o.after {
+		o.need(k.Nodes[f].A, c)
+	}
+	o.after, o.scopeOf = outer, scope
 }
 
 // reads reports whether loop d's code reads node i: a node homed in d or a
@@ -353,6 +355,15 @@ func (o *orderer) loop(d int) {
 	for _, f := range o.k.foldsOf(d) {
 		o.done[f] = true
 		o.seq = append(o.seq, Entry{Kind: EntryNode, I: f})
+	}
+	k := o.k
+	for i, nd := range k.Nodes {
+		if nd.Op != OpFirstLane || o.done[nd.B] || !k.isZero(nd.B) {
+			continue
+		}
+		if t := o.home[i]; t >= 0 && k.Loops[t].Of == d+1 && k.Loops[d].Lanes > 0 {
+			o.node(nd.B)
+		}
 	}
 	o.seq = append(o.seq, Entry{Kind: EntryLoop, I: d})
 	o.scope(d)

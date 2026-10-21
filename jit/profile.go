@@ -85,7 +85,8 @@ func cpuProfile() Profile {
 			Spare:    []int{int(x86.RSI), int(x86.R11), int(x86.R8), int(x86.R9), int(x86.R12), int(x86.R13)},
 			Counters: [2]int{int(x86.R10), int(x86.R11)}, Outer: int(x86.RAX),
 			Kept: []int{int(x86.R9), int(x86.RDX), int(x86.R12), int(x86.R13)}, Vectors: 16, Scratch: int(x86.RAX),
-			Resident: map[int]int{0: 9, 1: 10, 2: 11, 3: 12, 4: 13, 5: 14, 6: 15, 7: 8, 9: 7}},
+			Resident: map[int]int{0: 9, 1: 10, 2: 11, 3: 12, 4: 13, 5: 14, 6: 15, 7: 8, 9: 7},
+			Walks:    []int{int(x86.R11), int(x86.R8)}},
 	}}
 }
 

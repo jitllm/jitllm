@@ -11,7 +11,8 @@ import (
 // elements of its iteration Lanes iterations a trip, one in each lane, and
 // the trips that do not fill a vector after it in a loop of one a trip. A
 // sum the loop carries becomes a sum in each lane, the tail adding into its
-// first lane, its term kept to that lane where it is not zero in the others,
+// first lane, its term kept to that lane where it is not zero in the others
+// (a store of the term stores the kept term, the same in that lane),
 // and the lanes are summed where the sum is read. A loop that
 // stores a pair of values at 2i and 2i+1 stores the two vectors' lanes
 // zipped, the low pairs then the high.
@@ -133,7 +134,7 @@ func (k *Kernel) vectorize(c, L int) {
 	t := k.insertLoop(c+1, tail)
 	ti := k.add(Node{Op: OpIter, At: t, Type: U})
 	sub := map[int]int{k.iterOf(c): k.bin(OpAdd, U, done, ti)}
-	carries := map[int]int{}
+	carries, kept := map[int]int{}, map[int]int{}
 	for _, f := range k.foldsOf(c) {
 		if v := k.carriedBy(f); v >= 0 {
 			carries[v] = f
@@ -157,6 +158,7 @@ func (k *Kernel) vectorize(c, L int) {
 		if st := &k.Nodes[k.Nodes[ft].A]; st.Op == OpAdd && st.A == ft && !k.zeroKept(st.B, t) {
 			term := st.B
 			st.B = k.add(Node{Op: OpFirstLane, Type: ir.F32, A: term, B: k.add(Node{Op: OpConst, Type: ir.F32})})
+			kept[term] = st.B
 		}
 		h := k.add(Node{Op: OpHSum, Type: k.Nodes[f].Type, A: ft})
 		hs := k.homes()
@@ -186,6 +188,9 @@ func (k *Kernel) vectorize(c, L int) {
 		n := s
 		n.At = t
 		n.Val = k.copyKeep(s.Val, sub)
+		if v, ok := kept[n.Val]; ok {
+			n.Val = v
+		}
 		if s.Ax != nil {
 			n.Ax = make([]int, len(s.Ax))
 			for j, a := range s.Ax {
