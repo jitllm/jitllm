@@ -209,13 +209,23 @@ func merge(p, c *Nest, v Operand, st int) *Nest {
 	return m
 }
 
-// adds reports whether a naive map's function is the sum of two operands.
+// adds reports whether a map stores, at its element and nothing else, the
+// sum of two reads at its element.
 func (n *Nest) adds() bool {
-	if n.Prim == nil || len(n.Prim.Expr) != 3 {
+	if len(n.Stores) != 1 || len(n.Loops) != 0 {
 		return false
 	}
-	e := n.Prim.Expr
-	return e[0].Op == ExprIn && e[1].Op == ExprIn && e[2].Op == OpAdd && e[2].A == 0 && e[2].B == 1
+	s := n.Stores[0]
+	v := n.Nodes[s.Val]
+	if s.Barrier || s.At != -1 || !n.atElement(s.Ix) || v.Op != OpAdd {
+		return false
+	}
+	for _, a := range []int{v.A, v.B} {
+		if l := n.Nodes[a]; l.Op != OpLoad || !n.atElement(l.A) {
+			return false
+		}
+	}
+	return true
 }
 
 // joinsAtStores finds a value p writes by several stores an element, all of

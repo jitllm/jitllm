@@ -9,10 +9,10 @@ import (
 	"testing"
 )
 
-// buildsFromDefinitions is what a pass must never do: lower a primitive, or
-// instance a primitive's expressions into a kernel. A pass takes nests and
-// returns rewritten nests.
-var buildsFromDefinitions = regexp.MustCompile(`\blower\(|\.instance\(`)
+// buildsFromDefinitions is what a pass must never do: read a primitive's
+// definition, lower a primitive, or instance a primitive's expressions into a
+// kernel. A pass takes nests and returns rewritten nests.
+var buildsFromDefinitions = regexp.MustCompile(`\blower\(|\.instance\(|\.Prim\b`)
 
 // passFiles are the composer's files outside the decomposition and the naive
 // lowering.
@@ -42,6 +42,8 @@ func passFiles(t *testing.T, dir string) map[string]string {
 // definitionBuilders is every pass file still building kernels from
 // primitives' definitions: the rework's list, which only shrinks.
 var definitionBuilders = map[string]bool{
+	"coarsen.go":   true,
+	"nest.go":      true,
 	"splitkeys.go": true,
 	"stage.go":     true,
 }
