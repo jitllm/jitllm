@@ -336,6 +336,10 @@ func (e *x86Lowerer) node(i int) {
 	case OpSqrt:
 		a.VSQRTPS(e.reg(i), e.reg(nd.A))
 	case OpBroadcast:
+		if x := k.Nodes[nd.A]; x.Mem {
+			a.VBROADCASTSS(e.reg(i), e.addr(x.Buf, x.A, x.Ptr))
+			return
+		}
 		a.VBROADCASTSSReg(e.reg(i), e.reg(nd.A))
 	case OpZip:
 		if nd.Tmp == 0 {

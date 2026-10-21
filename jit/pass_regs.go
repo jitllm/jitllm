@@ -483,10 +483,38 @@ func (b *binder86) vectors() error {
 		held[r] = -1
 	}
 	shared := map[int]int{}
+	hs0 := k.homes()
+	kept := map[int]map[int]bool{}
+	for i, nd := range k.Nodes {
+		if nd.Hint == 0 || i >= len(hs0) {
+			continue
+		}
+		for c := hs0[i]; c >= 0; c = k.Loops[c].Parent {
+			if kept[c] == nil {
+				kept[c] = map[int]bool{}
+			}
+			kept[c][nd.Hint-1] = true
+		}
+	}
+	span := map[int][2]int{}
+	for p, e := range k.Seq {
+		switch e.Kind {
+		case EntryLoop:
+			span[e.I] = [2]int{p, len(k.Seq)}
+		case EntryEnd:
+			span[e.I] = [2]int{span[e.I][0], p}
+		}
+	}
 	reserved := map[int]bool{}
-	for _, nd := range k.Nodes {
-		if nd.Hint > 0 {
-			reserved[nd.Hint-1] = true
+	bar := func(i int) {
+		clear(reserved)
+		d, l := b.def[i], b.last[i]
+		for c, rs := range kept {
+			if sp := span[c]; sp[0] <= l && d <= sp[1] {
+				for r := range rs {
+					reserved[r] = true
+				}
+			}
 		}
 	}
 	lowest := func(ch, home int) int {
@@ -579,6 +607,7 @@ func (b *binder86) vectors() error {
 			free(pos, false)
 			continue
 		}
+		bar(i)
 		reg := -1
 		if nd.Hint > 0 || nd.Share > 0 && shared[nd.Share] > 0 {
 			free(pos, false)

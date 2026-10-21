@@ -2,8 +2,9 @@ package jit
 
 import "github.com/jitllm/jitllm/jit/ir"
 
-// FoldLoads takes a load of a whole vector, one its loop moves, that its one
-// reader can read from memory as that reader's operand: the second multiplicand of a sum's step in a vector
+// FoldLoads takes a load its one reader broadcasts as the broadcast's, and
+// a load of a whole vector, one its loop moves, that its one reader can
+// read from memory as that reader's operand: the second multiplicand of a sum's step in a vector
 // loop -- the first where the second is a load that must be widened -- or
 // the second operand of a map's operation, an integer and's among them, in
 // a vector loop no scalar tail follows.
@@ -17,6 +18,15 @@ func (p FoldLoads) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		hs := k.homes()
 		for i, nd := range k.Nodes {
 			var b int
+			if nd.Op == OpBroadcast {
+				if ld := k.Nodes[nd.A]; ld.Op == OpLoad && !ld.Mem && !k.Bufs[ld.Buf].Half && k.uses(nd.A) == 1 {
+					if m == nil {
+						m = k.clone()
+					}
+					m.Nodes[nd.A].Mem = true
+				}
+				continue
+			}
 			switch nd.Op {
 			case OpFma, OpMul, OpAdd:
 				b = nd.B

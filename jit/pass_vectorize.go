@@ -492,7 +492,7 @@ func (k *Kernel) broadcastInto(c int) {
 		if hs[i] >= 0 && k.within(hs[i], c) || k.Nodes[i].Op == OpBroadcast {
 			for _, a := range k.args(&k.Nodes[i]) {
 				x := *a
-				if x >= len(hs) || hs[x] >= 0 && k.within(hs[x], c) || k.Nodes[x].Type != ir.F32 || !k.computedFrom(x, OpHSum) && !k.computedFrom(x, OpHMax) && !k.computedFrom(x, OpHMin) {
+				if x >= len(hs) || hs[x] >= 0 && k.within(hs[x], c) || k.Nodes[x].Type != ir.F32 || k.Nodes[x].Op == OpBroadcast || !k.computedFrom(x, OpHSum) && !k.computedFrom(x, OpHMax) && !k.computedFrom(x, OpHMin) {
 					continue
 				}
 				b, ok := made[x]
