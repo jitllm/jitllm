@@ -1,6 +1,7 @@
 package jit
 
 import (
+	"maps"
 	"slices"
 	"sort"
 
@@ -236,11 +237,8 @@ func (o *orderer) need(i, c int) {
 		o.stages(nd.A, nd.B, c)
 	}
 	for _, a := range k.evalArgs(&nd, o.pending()) {
-		switch {
-		case k.Nodes[*a].Op == OpFold:
-		case k.hornerStep(*a):
-			o.need(*a, c)
-		default:
+		switch k.Nodes[*a].Op {
+		case OpAnd, OpAndNot, OpOr, OpXor:
 			for _, b := range k.evalArgs(&k.Nodes[*a], o.pending()) {
 				if !o.constLoad(*b) {
 					o.need(*b, c)
@@ -263,9 +261,9 @@ func (o *orderer) need(i, c int) {
 }
 
 // pending is the depths evalArgs orders operands by, a value already made
-// and a load of constants leaves. An operation's operands' own operands are
-// made first, a Horner step whole, then the operands by what is left to
-// make of them.
+// and a load of constants leaves. The operands of an operation's bitwise
+// operands are made first, then the operands by what is left to make of
+// them.
 func (o *orderer) pending() map[int]int {
 	memo := map[int]int{}
 	for i := range o.k.Nodes {
@@ -528,29 +526,36 @@ func (o *orderer) loop(d int) {
 }
 
 // byFirstRead is the nodes keep admits in the order loop d's code first
-// reads them: by the depth of their shallowest reader in d, a node's
-// index between alike.
+// reads them: loop d is ordered aside, with them taken as made, and each
+// placed by its first reader there.
 func (o *orderer) byFirstRead(d int, keep func(int) bool) []int {
 	k := o.k
-	memo := map[int]int{}
-	first := map[int]int{}
 	var out []int
 	for i := range k.Nodes {
-		if !keep(i) {
+		if keep(i) {
+			out = append(out, i)
+		}
+	}
+	if len(out) < 2 {
+		return out
+	}
+	dry := orderer{k: k, done: maps.Clone(o.done), loopDone: maps.Clone(o.loopDone), home: o.home, depths: map[int]int{}, words: o.words,
+		after: map[int][]int{}, scopeOf: o.scopeOf}
+	for _, i := range out {
+		dry.done[i] = true
+	}
+	dry.loop(d)
+	first := map[int]int{}
+	for _, i := range out {
+		first[i] = len(dry.seq)
+	}
+	for p, e := range dry.seq {
+		if e.Kind != EntryNode {
 			continue
 		}
-		out = append(out, i)
-		first[i] = -1
-		for j, nd := range k.Nodes {
-			if h, ok := o.home[j]; !ok || h < 0 || !k.within(h, d) {
-				continue
-			}
-			for _, a := range k.args(&nd) {
-				if *a == i {
-					if dp := k.depth(j, memo); first[i] < 0 || dp < first[i] {
-						first[i] = dp
-					}
-				}
+		for _, a := range k.args(&k.Nodes[e.I]) {
+			if f, ok := first[*a]; ok && p < f {
+				first[*a] = p
 			}
 		}
 	}
@@ -956,21 +961,6 @@ func (k *Kernel) readCount(i int) int {
 		}
 	}
 	return n
-}
-
-// hornerStep reports whether node i is an fma multiplying an fma only it
-// reads.
-func (k *Kernel) hornerStep(i int) bool {
-	nd := k.Nodes[i]
-	if nd.Op != OpFma {
-		return false
-	}
-	for _, x := range []int{nd.A, nd.B} {
-		if k.Nodes[x].Op == OpFma && k.uses(x) == 1 {
-			return true
-		}
-	}
-	return false
 }
 
 // stages makes the two values a zip interleaves stage by stage: from the
