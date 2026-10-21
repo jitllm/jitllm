@@ -75,9 +75,7 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if p.Resident != nil {
 			w.residents(p.Resident, moved)
 		}
-		w.zerosPerLoop()
-		w.copiesAside()
-		late := w.lateWords()
+		late := w.lateParams()
 		for range len(k.Nodes) {
 			m := w.clone()
 			b := binder86{k: m, p: p, used: map[int]bool{}, late: late}
@@ -1178,20 +1176,19 @@ func (k *Kernel) madeCount(i int) int {
 }
 
 // lateWords loads each address word only accesses after every loop read
-// where the first of them is, in a kernel with no tile pass; it reports
-// the words it moved.
-func (k *Kernel) lateWords() map[int]bool {
+// where the first of them is, in a kernel with no tile pass.
+func (k *Kernel) lateWords() {
 	last := -1
 	for p, e := range k.Seq {
 		switch {
 		case e.Kind == EntryLoop && k.Loops[e.I].Walk:
-			return nil
+			return
 		case e.Kind == EntryEnd:
 			last = p
 		}
 	}
 	if last < 0 {
-		return nil
+		return
 	}
 	first := func(i int) int {
 		base := func(b int) bool { return k.Bufs[b].Base == i+1 }
@@ -1221,7 +1218,6 @@ func (k *Kernel) lateWords() map[int]bool {
 		}
 		return -1
 	}
-	late := map[int]bool{}
 	for _, e := range slices.Clone(k.Seq) {
 		if e.Kind != EntryNode || k.Nodes[e.I].Op != OpParam || !k.isBaseNode(e.I) {
 			continue
@@ -1234,7 +1230,22 @@ func (k *Kernel) lateWords() map[int]bool {
 		k.Seq = slices.Delete(k.Seq, from, from+1)
 		at = first(e.I)
 		k.Seq = slices.Insert(k.Seq, at, e)
-		late[e.I] = true
+	}
+}
+
+// lateParams is the address words the sequence loads after every loop.
+func (k *Kernel) lateParams() map[int]bool {
+	last := -1
+	for p, e := range k.Seq {
+		if e.Kind == EntryEnd {
+			last = p
+		}
+	}
+	late := map[int]bool{}
+	for p, e := range k.Seq {
+		if last >= 0 && p > last && e.Kind == EntryNode && k.Nodes[e.I].Op == OpParam && k.isBaseNode(e.I) {
+			late[e.I] = true
+		}
 	}
 	return late
 }

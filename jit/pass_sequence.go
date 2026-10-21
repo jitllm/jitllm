@@ -51,3 +51,33 @@ func refineSeq(name string, ks []*Kernel, f func(*Kernel)) ([]*Kernel, error) {
 		return []*Kernel{m}, true, nil
 	})
 }
+
+// ZerosPerLoop makes a float zero read in several loops in each of them,
+// where it is first read there.
+type ZerosPerLoop struct{}
+
+func (ZerosPerLoop) Name() string { return "zerosperloop" }
+
+func (p ZerosPerLoop) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
+	return refineSeq(p.Name(), ks, (*Kernel).zerosPerLoop)
+}
+
+// CopiesAside copies aside each value a later value of its Share label
+// overwrites while it is still read.
+type CopiesAside struct{}
+
+func (CopiesAside) Name() string { return "copiesaside" }
+
+func (p CopiesAside) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
+	return refineSeq(p.Name(), ks, (*Kernel).copiesAside)
+}
+
+// LateWords loads each address word only accesses after every loop read
+// where the first of them is, in a kernel with no tile pass.
+type LateWords struct{}
+
+func (LateWords) Name() string { return "latewords" }
+
+func (p LateWords) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
+	return refineSeq(p.Name(), ks, (*Kernel).lateWords)
+}
