@@ -33,6 +33,7 @@ func (p Order) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		o := orderer{k: m, done: map[int]bool{}, loopDone: map[int]bool{}, home: map[int]int{}, depths: map[int]int{}, words: m.vectorWords()}
 		o.run()
 		m.Seq = m.interleave(o.seq)
+		m.constRuns()
 		m.orderCursors()
 		return []*Kernel{m}, true, nil
 	})
@@ -551,4 +552,48 @@ func (k *Kernel) startsOnly(i int) bool {
 func (k *Kernel) isZero(i int) bool {
 	nd := k.Nodes[i]
 	return nd.Op == OpConst && nd.Type == ir.F32 && nd.Imm == 0
+}
+
+// constRuns loads, outside every loop, the constants of a run of
+// operations that each read one constant just loaded before the run.
+func (k *Kernel) constRuns() {
+	isConst := func(e Entry) bool {
+		if e.Kind != EntryNode {
+			return false
+		}
+		nd := k.Nodes[e.I]
+		return nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandConsts
+	}
+	reads := func(e Entry, c int) bool {
+		if e.Kind != EntryNode {
+			return false
+		}
+		for _, a := range k.args(&k.Nodes[e.I]) {
+			if *a == c {
+				return true
+			}
+		}
+		return false
+	}
+	depth := 0
+	for p := 0; p+3 < len(k.Seq); p++ {
+		switch k.Seq[p].Kind {
+		case EntryLoop:
+			depth++
+			continue
+		case EntryEnd:
+			depth--
+			continue
+		}
+		if depth > 0 || !isConst(k.Seq[p]) || !reads(k.Seq[p+1], k.Seq[p].I) {
+			continue
+		}
+		run := p
+		for q := p + 2; q+1 < len(k.Seq) && isConst(k.Seq[q]) && reads(k.Seq[q+1], k.Seq[q].I) && reads(k.Seq[q+1], k.Seq[q-1].I); q += 2 {
+			c := k.Seq[q]
+			copy(k.Seq[run+2:q+1], k.Seq[run+1:q])
+			k.Seq[run+1] = c
+			run++
+		}
+	}
 }

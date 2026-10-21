@@ -300,7 +300,8 @@ type Node struct {
 	Copy int
 	// Hint, where a pass set it, is 1 + the vector register the value is
 	// to take. Values of one Share label take one register, an earlier one
-	// copied aside where it is read after a later one is made.
+	// copied aside where it is read after a later one is made; a Share of
+	// -1 is a load of a resident word made where it is read.
 	Hint, Share int
 }
 

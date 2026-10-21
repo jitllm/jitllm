@@ -758,7 +758,7 @@ func (k *Kernel) copiesAside() {
 		first := map[int]int{}
 		done := true
 		for p, e := range k.Seq {
-			if e.Kind != EntryNode || k.Nodes[e.I].Share == 0 {
+			if e.Kind != EntryNode || k.Nodes[e.I].Share <= 0 {
 				continue
 			}
 			l := k.Nodes[e.I].Share
@@ -814,7 +814,7 @@ func (k *Kernel) readFrom(t, p int) bool {
 // constant block, is held in.
 func (b *binder86) resident(i int) (int, bool) {
 	nd := b.k.Nodes[i]
-	if nd.Op != OpLoad || !b.k.Bufs[nd.Buf].Shared {
+	if nd.Op != OpLoad || !b.k.Bufs[nd.Buf].Shared || nd.Share < 0 {
 		return 0, false
 	}
 	r, ok := b.p.Resident[int(b.k.Nodes[nd.A].Imm)]
@@ -1009,8 +1009,8 @@ func (k *Kernel) reload(best int, moved map[int]bool) {
 }
 
 // residents loads the shared constant block's resident words by word as
-// the call starts, after its argument words, and each other word where it
-// is read.
+// the call starts, after its argument words, and each other word, and a
+// resident word read outside every loop, where it is read.
 func (k *Kernel) residents(res map[int]int, moved map[int]bool) {
 	var loads []int
 	for _, e := range k.Seq {
@@ -1055,6 +1055,37 @@ func (k *Kernel) residents(res map[int]int, moved map[int]bool) {
 		if nd.Op == OpLoad && k.Bufs[nd.Buf].Shared && !moved[e.I] {
 			k.reload(e.I, moved)
 		}
+	}
+	hs := k.homes()
+	for _, l := range loads {
+		var outside []int
+		for j, x := range k.Nodes {
+			for _, a := range k.args(&x) {
+				if *a == l && j < len(hs) && hs[j] < 0 && x.Op != OpFold {
+					outside = append(outside, j)
+					break
+				}
+			}
+		}
+		if len(outside) == 0 {
+			continue
+		}
+		c := k.add(k.Nodes[l])
+		k.Nodes[c].Share = -1
+		first := len(k.Seq)
+		for p, e := range k.Seq {
+			if e.Kind == EntryNode && slices.Contains(outside, e.I) && p < first {
+				first = p
+			}
+		}
+		for _, j := range outside {
+			for _, a := range k.args(&k.Nodes[j]) {
+				if *a == l {
+					*a = c
+				}
+			}
+		}
+		k.Seq = append(k.Seq[:first], append([]Entry{{Kind: EntryNode, I: c}}, k.Seq[first:]...)...)
 	}
 }
 
