@@ -17,9 +17,8 @@ import (
 // its stores before its sums' steps, and a
 // choice another sum carries a value
 // with steps once the trip's other reads of it have run. A vector's lanes
-// rearranged are made just after it is loaded. A float zero is made where it is read. A loop advances the
-// address it stores through itself first, then its pointers in the order
-// its code first reaches them. A pair's heads run statement by statement
+// rearranged are made just after it is loaded. A float zero is made where
+// it is read. A pair's heads run statement by statement
 // side by side, each head's statements from where it reads a finished sum
 // on run whole, head after head.
 type Order struct{}
@@ -35,10 +34,6 @@ func (p Order) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		o := orderer{k: m, done: map[int]bool{}, loopDone: map[int]bool{}, home: map[int]int{}, depths: map[int]int{}, words: m.vectorWords()}
 		o.run()
 		m.Seq = m.interleave(o.seq)
-		m.constRuns()
-		m.constsBeforeSiblings()
-		m.spreadFirst()
-		m.orderCursors()
 		return []*Kernel{m}, true, nil
 	})
 }
@@ -906,40 +901,6 @@ func (k *Kernel) constRuns() {
 			k.Seq[run+1] = c
 			run++
 		}
-	}
-}
-
-// spreadFirst makes, as each trip of a jammed loop starts, the broadcasts
-// every vector's copy reads, with the loads only they read, in the order
-// the sequence made them.
-func (k *Kernel) spreadFirst() {
-	for c, l := range k.Loops {
-		if l.Wide == 0 {
-			continue
-		}
-		start := slices.Index(k.Seq, Entry{Kind: EntryLoop, I: c})
-		end := slices.Index(k.Seq, Entry{Kind: EntryEnd, I: c})
-		if start < 0 || end < 0 {
-			continue
-		}
-		spread := map[int]bool{}
-		for _, e := range k.Seq[start+1 : end] {
-			if e.Kind == EntryNode && k.Nodes[e.I].Op == OpBroadcast {
-				spread[e.I] = true
-				if a := k.Nodes[e.I].A; k.Nodes[a].Op == OpLoad && k.readCount(a) == 1 {
-					spread[a] = true
-				}
-			}
-		}
-		var first, rest []Entry
-		for _, e := range k.Seq[start+1 : end] {
-			if e.Kind == EntryNode && spread[e.I] {
-				first = append(first, e)
-			} else {
-				rest = append(rest, e)
-			}
-		}
-		copy(k.Seq[start+1:end], append(first, rest...))
 	}
 }
 
