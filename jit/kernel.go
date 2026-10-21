@@ -170,6 +170,9 @@ type Buf struct {
 	// Half is a buffer of binary16 elements: a load widens one to a float,
 	// a store keeps a word's low half.
 	Half bool
+	// Shared is the device's constant block, the same words in every
+	// kernel that reads it.
+	Shared bool
 }
 
 type Op uint8

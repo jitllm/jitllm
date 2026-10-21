@@ -146,6 +146,8 @@ func (e *x86Lowerer) node(i int) {
 			return
 		}
 		switch {
+		case home < 0 && nd.Type != ir.F32:
+			a.VPBROADCASTD(e.reg(i), m)
 		case home < 0:
 			a.VBROADCASTSS(e.reg(i), m)
 		case e.lanes(home) > 0:

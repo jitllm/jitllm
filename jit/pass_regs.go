@@ -1,7 +1,9 @@
 package jit
 
 import (
+	"cmp"
 	"errors"
+	"slices"
 
 	"github.com/jitllm/jitllm/jit/ir"
 )
@@ -36,6 +38,10 @@ type Regs struct {
 	// a vector, the splats taking the last vector registers in the order
 	// they are made.
 	Scratch int
+	// Resident is the vector register each word of the device's shared
+	// constant block is held in for the whole call, loaded first in word
+	// order; a word it does not name is loaded where each read is.
+	Resident map[int]int
 }
 
 func (Regs) Name() string { return "regs" }
@@ -47,6 +53,9 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 		w := k.clone()
 		moved := map[int]bool{}
+		if p.Resident != nil {
+			w.residents(p.Resident, moved)
+		}
 		for range len(k.Nodes) {
 			m := w.clone()
 			b := binder86{k: m, p: p, used: map[int]bool{}}
@@ -524,6 +533,14 @@ func (b *binder86) vectors() error {
 			continue
 		}
 		reg := -1
+		if r, ok := b.resident(i); ok {
+			reg = r
+			free(pos, false)
+			if err := give(i, reg); err != nil {
+				return err
+			}
+			continue
+		}
 		if f, ok := stepOf[i]; ok && k.Nodes[f].Reg > 0 {
 			reg = k.Nodes[f].Reg - 1
 		}
@@ -572,6 +589,17 @@ func (b *binder86) vectors() error {
 		}
 	}
 	return k.copyRegs(cp, len(splats))
+}
+
+// resident is the register node i, a load of a resident word of the shared
+// constant block, is held in.
+func (b *binder86) resident(i int) (int, bool) {
+	nd := b.k.Nodes[i]
+	if nd.Op != OpLoad || !b.k.Bufs[nd.Buf].Shared {
+		return 0, false
+	}
+	r, ok := b.p.Resident[int(b.k.Nodes[nd.A].Imm)]
+	return r, ok
 }
 
 // copyRegs gives each value of a pair's later head the register of its
@@ -681,9 +709,33 @@ func (k *Kernel) rematerialize(moved map[int]bool) bool {
 	if best < 0 {
 		return false
 	}
+	k.reload(best, moved)
+	return true
+}
+
+// reload loads constant best where each of its readers reads it.
+func (k *Kernel) reload(best int, moved map[int]bool) {
+	pos := map[int]int{}
+	for p, e := range k.Seq {
+		if e.Kind == EntryNode {
+			pos[e.I] = p
+		}
+	}
+	var rs []int
+	for j, x := range k.Nodes {
+		if _, in := pos[j]; !in {
+			continue
+		}
+		for _, a := range k.args(&x) {
+			if *a == best {
+				rs = append(rs, j)
+				break
+			}
+		}
+	}
 	moved[best] = true
 	place := map[int]int{}
-	for _, r := range readers(best) {
+	for _, r := range rs {
 		c := k.add(k.Nodes[best])
 		moved[c] = true
 		for _, a := range k.args(&k.Nodes[r]) {
@@ -704,7 +756,41 @@ func (k *Kernel) rematerialize(moved map[int]bool) bool {
 		out = append(out, e)
 	}
 	k.Seq = out
-	return true
+}
+
+// residents orders the loads of the shared constant block's resident words
+// by word, where they stand, and loads each other word where it is read.
+func (k *Kernel) residents(res map[int]int, moved map[int]bool) {
+	var at, loads []int
+	for p, e := range k.Seq {
+		if e.Kind != EntryNode {
+			continue
+		}
+		nd := k.Nodes[e.I]
+		if nd.Op != OpLoad || !k.Bufs[nd.Buf].Shared {
+			continue
+		}
+		if _, ok := res[int(k.Nodes[nd.A].Imm)]; ok {
+			at = append(at, p)
+			loads = append(loads, e.I)
+			moved[e.I] = true
+		}
+	}
+	slices.SortStableFunc(loads, func(a, b int) int {
+		return cmp.Compare(k.Nodes[k.Nodes[a].A].Imm, k.Nodes[k.Nodes[b].A].Imm)
+	})
+	for j, p := range at {
+		k.Seq[p].I = loads[j]
+	}
+	for _, e := range slices.Clone(k.Seq) {
+		if e.Kind != EntryNode {
+			continue
+		}
+		nd := k.Nodes[e.I]
+		if nd.Op == OpLoad && k.Bufs[nd.Buf].Shared && !moved[e.I] {
+			k.reload(e.I, moved)
+		}
+	}
 }
 
 // zeroOperand reports whether float zero node i is an operand the code

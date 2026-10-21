@@ -1,6 +1,10 @@
 package jit
 
-import "github.com/jitllm/jitllm/jit/x86"
+import (
+	"math"
+
+	"github.com/jitllm/jitllm/jit/x86"
+)
 
 // gpuProfile is main's passes on a GPU at a step of rows rows, in order.
 func gpuProfile() Profile {
@@ -59,7 +63,7 @@ func cpuProfile() Profile {
 		Unroll{Vectors: 4},
 		Chains{N: 4},
 		Simplify{},
-		Consts{},
+		Consts{Shared: mainBlock()},
 		Args{Fields: mainArgs()},
 		Simplify{},
 		Cursors{},
@@ -72,8 +76,18 @@ func cpuProfile() Profile {
 			112: int(x86.RSI), 120: int(x86.R8), 128: int(x86.R9), 136: int(x86.R12)},
 			Spare:    []int{int(x86.RSI), int(x86.R11), int(x86.R8), int(x86.R9), int(x86.R12), int(x86.R13)},
 			Counters: [2]int{int(x86.R10), int(x86.R11)}, Outer: int(x86.RAX),
-			Kept: []int{int(x86.R9), int(x86.RDX), int(x86.R12), int(x86.R13)}, Vectors: 16, Scratch: int(x86.RAX)},
+			Kept: []int{int(x86.R9), int(x86.RDX), int(x86.R12), int(x86.R13)}, Vectors: 16, Scratch: int(x86.RAX),
+			Resident: map[int]int{0: 9, 1: 10, 2: 11, 3: 12, 4: 13, 5: 14, 6: 15, 7: 8, 9: 7}},
 	}}
+}
+
+// mainBlock is main's host constant block, its words 0 to 10.
+func mainBlock() []uint32 {
+	var out []uint32
+	for _, v := range []float32{float32(math.Log2E), -0.693359375, 2.12194440e-4, 1.0 / 120, 1.0 / 24, 1.0 / 6, 0.5, 1, -87.3} {
+		out = append(out, math.Float32bits(v))
+	}
+	return append(out, 127, math.Float32bits(88))
 }
 
 // mainArgs is main's host argument block: Out, W, A, AScale, Rows, K, Scr,
