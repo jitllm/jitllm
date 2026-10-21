@@ -23,6 +23,9 @@ import (
 // then each level's read bandwidth on one P-core and on every P-core, each
 // class's instruction rate, and an empty call's cost.
 func Host() (cost.Device, error) {
+	if cpu.HostTier() != cpu.TierAVX2 {
+		return cost.Device{}, fmt.Errorf("probe: the host's measuring kernels need AVX2 and FMA; this host is %v", cpu.HostTier())
+	}
 	workers := max(1, len(sched.PCores()))
 	d := cost.Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: workers, Lanes: 8}}
 	sizes, err := cacheSizes()
