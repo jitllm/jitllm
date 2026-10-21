@@ -63,7 +63,7 @@ func cpuProfile() Profile {
 		Exp{Scratch: [2]int{1, 2}},
 		FMA{},
 		FirstTerm{},
-		Vectorize{Lanes: 8},
+		Vectorize{Lanes: 8, Pairs: [5]int{0, 2, 3, 4, 5}},
 		InPlace{},
 		Unroll{Vectors: 4},
 		Chains{N: 4},

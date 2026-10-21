@@ -17,8 +17,8 @@ type Args struct {
 }
 
 // ArgFields are the byte offsets of the argument words: the buffers written
-// in order, the first weight's, table's or history's address (or the row a
-// kernel narrows into binary16), the activations a weight is read beside, the
+// in order, the first weight's or paged history's address (a table read at
+// addresses it loads; or the row a kernel narrows into binary16), the activations a weight is read beside, the
 // value a sum over the history's width reads beside it, a block
 // of constants (or an input of fixed words), the other buffers read in order; a vector loop's count and
 // its tail's, and the other counts in order.
@@ -218,7 +218,7 @@ func (k *Kernel) bindBufs(f ArgFields) {
 			}
 		case o.Kind == OperandConsts || k.fixedWords(o):
 			fl = f.Consts
-		case (o.Kind == OperandWeight || o.Kind == OperandTable || narrows) && !weighted:
+		case (o.Kind == OperandWeight || o.Kind == OperandTable && k.indirect(o, offsets[o]) || narrows) && !weighted:
 			fl, weighted = f.Weight, true
 		case weight && f.Act > 0 && !acts && o.Kind != OperandVector:
 			fl, acts = f.Act, true
@@ -403,6 +403,40 @@ func (k *Kernel) splitFrom(i int) int {
 		}
 		return i
 	}
+}
+
+// indirect reports whether the kernel reads operand o at an address made
+// from a value it loads or from the span of a page it is called for, in
+// its indices or in off, 1 + the node the caller adds to them: a paged
+// history.
+func (k *Kernel) indirect(o Operand, off int) bool {
+	var fromLoad func(i int) bool
+	fromLoad = func(i int) bool {
+		nd := k.Nodes[i]
+		if nd.Op == OpLoad || nd.Op == OpSpan {
+			return true
+		}
+		if nd.Op == OpFold {
+			return false
+		}
+		for _, a := range k.args(&nd) {
+			if fromLoad(*a) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, nd := range k.Nodes {
+		if nd.Op != OpLoad || k.Bufs[nd.Buf].Operand != o {
+			continue
+		}
+		for _, a := range k.args(&nd) {
+			if fromLoad(*a) {
+				return true
+			}
+		}
+	}
+	return off > 0 && fromLoad(off-1)
 }
 
 // fixedWords reports whether operand o is an input of fixed words: a block

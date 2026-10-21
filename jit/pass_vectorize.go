@@ -17,6 +17,10 @@ import (
 // zipped, the low pairs then the high.
 type Vectorize struct {
 	Lanes int
+	// Pairs, where set, are the registers of a complex product's values:
+	// the second operand, its pairs' first lanes, their second lanes, the
+	// row and its pairs swapped.
+	Pairs [5]int
 }
 
 func (Vectorize) Name() string { return "vectorize" }
@@ -27,7 +31,7 @@ func (p Vectorize) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		changed := false
 		for c := 0; c < len(m.Loops); c++ {
 			if cp, ok := m.complexPairOf(c, p.Lanes); ok {
-				m.vectorizeComplex(c, p.Lanes, cp)
+				m.vectorizeComplex(c, p.Lanes, cp, p.Pairs)
 				changed = true
 				continue
 			}
@@ -402,7 +406,7 @@ func (k *Kernel) complexPairOf(cl, L int) (complexPair, bool) {
 // each lane its element times its pair's first of the other operand, plus
 // or minus the pair's other element times the pair's second, as
 // addsub(x * even(t), swap(x) * odd(t)).
-func (k *Kernel) vectorizeComplex(c, L int, cp complexPair) {
+func (k *Kernel) vectorizeComplex(c, L int, cp complexPair, regs [5]int) {
 	g := newAlg(k)
 	it := k.iterOf(c)
 	halves := map[int]int{}
@@ -423,10 +427,16 @@ func (k *Kernel) vectorizeComplex(c, L int, cp complexPair) {
 		}
 		return nd
 	}
-	x := k.add(at(k.Nodes[cp.a]))
-	t := k.add(at(k.Nodes[cp.c]))
-	p := k.bin(OpMul, ir.F32, x, k.add(Node{Op: OpDupEven, Type: ir.F32, A: t}))
-	q := k.bin(OpMul, ir.F32, k.add(Node{Op: OpSwapPairs, Type: ir.F32, A: x}), k.add(Node{Op: OpDupOdd, Type: ir.F32, A: t}))
+	hint := func(n, r int) int {
+		if regs != [5]int{} {
+			k.Nodes[n].Hint = r + 1
+		}
+		return n
+	}
+	x := hint(k.add(at(k.Nodes[cp.a])), regs[3])
+	t := hint(k.add(at(k.Nodes[cp.c])), regs[0])
+	p := k.bin(OpMul, ir.F32, x, hint(k.add(Node{Op: OpDupEven, Type: ir.F32, A: t}), regs[1]))
+	q := k.bin(OpMul, ir.F32, hint(k.add(Node{Op: OpSwapPairs, Type: ir.F32, A: x}), regs[4]), hint(k.add(Node{Op: OpDupOdd, Type: ir.F32, A: t}), regs[2]))
 	s := k.Stores[cp.lo]
 	if s.Ax != nil {
 		s.Ax = append([]int(nil), s.Ax...)
