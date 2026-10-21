@@ -51,6 +51,10 @@ type Regs struct {
 	// Lanes, where set, is 1 + the register a lane sum, maximum or minimum
 	// takes for its scratch where it is free.
 	Lanes int
+	// Scalars, where set, is 1 + the first of the registers a constant read
+	// outside every loop takes, each its own, upward; Keep is 1 + the
+	// register of the zero a tail keeps lanes with.
+	Scalars, Keep int
 }
 
 func (Regs) Name() string { return "regs" }
@@ -486,6 +490,7 @@ func (b *binder86) vectors() error {
 		held[r] = -1
 	}
 	shared := map[int]int{}
+	next := b.p.Scalars - 1
 	hs0 := k.homes()
 	kept := map[int]map[int]bool{}
 	for i, nd := range k.Nodes {
@@ -612,6 +617,13 @@ func (b *binder86) vectors() error {
 		}
 		bar(i)
 		reg := -1
+		if r := b.scalar(i, hs, &next); r >= 0 && !busy[r] {
+			free(pos, false)
+			if err := give(i, r); err != nil {
+				return err
+			}
+			continue
+		}
 		if nd.Hint > 0 || nd.Share > 0 && shared[nd.Share] > 0 {
 			free(pos, false)
 			want := nd.Hint - 1
@@ -807,6 +819,37 @@ func (b *binder86) resident(i int) (int, bool) {
 	}
 	r, ok := b.p.Resident[int(b.k.Nodes[nd.A].Imm)]
 	return r, ok
+}
+
+// scalar is the register node i takes as a constant read outside every
+// loop, the next of the scalar registers, or as the zero a tail keeps
+// lanes with; -1 for the rest.
+func (b *binder86) scalar(i int, hs []int, next *int) int {
+	k := b.k
+	nd := k.Nodes[i]
+	if b.p.Keep > 0 && k.isZero(i) {
+		for _, r := range k.Nodes {
+			if r.Op == OpFirstLane && r.B == i {
+				return b.p.Keep - 1
+			}
+		}
+	}
+	if *next < 0 || nd.Op != OpLoad || k.Bufs[nd.Buf].Operand.Kind != OperandConsts || nd.Type != ir.F32 || hs[i] >= 0 || nd.Hint > 0 {
+		return -1
+	}
+	if _, ok := b.resident(i); ok {
+		return -1
+	}
+	for j, r := range k.Nodes {
+		for _, a := range k.args(&r) {
+			if *a == i && (r.Op == OpFold || j < len(hs) && hs[j] >= 0) {
+				return -1
+			}
+		}
+	}
+	r := *next
+	*next++
+	return r
 }
 
 // copyRegs gives each value of a pair's later head the register of its
