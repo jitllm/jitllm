@@ -238,6 +238,82 @@ var hardware = []Profile{
 		},
 	},
 	{
+		Name:   "Intel(R) Atom(TM) CPU C3558 @ 2.20GHz",
+		API:    "amd64",
+		Source: "probe",
+		Device: Device{
+			Device: jit.Device{
+				Kind:  jit.DeviceCPU,
+				Slots: 4,
+				Lanes: 4,
+			},
+			Bandwidth: 1.336e+10,
+			Thread:    6.228e+09,
+			Launch:    1.235e-08,
+			Latency:   1.429e-07,
+			Start:     1.206e-06,
+			Caches: [3]Cache{
+				0: {
+					Bytes: 24 << 10,
+					Rate: Rate{
+						Thread: 1.527e+10,
+						Total:  5.941e+10,
+					},
+					Latency: 1.377e-09,
+				},
+				1: {
+					Bytes: 2 << 20,
+					Rate: Rate{
+						Thread: 1.477e+10,
+						Total:  5.863e+10,
+					},
+					Latency: 7.345e-09,
+					Start:   5.912e-07,
+					Retain:  0.1392,
+					Cycle:   0.1388,
+				},
+			},
+			Rates: [NumClasses]Rate{
+				ClassFloat: {
+					Thread: 2.19e+09,
+					Total:  8.719e+09,
+				},
+				ClassSpecial: {
+					Thread: 1.153e+08,
+					Total:  4.595e+08,
+				},
+				ClassInt: {
+					Thread: 2.962e+09,
+					Total:  1.18e+10,
+				},
+				ClassIndex: {
+					Thread: 3.632e+09,
+					Total:  1.444e+10,
+				},
+				ClassLanes: {
+					Thread: 2.965e+09,
+					Total:  1.181e+10,
+				},
+				ClassMem: {
+					Thread: 4.772e+08,
+					Total:  1.856e+09,
+				},
+			},
+			Issue: Rate{
+				Thread: 4.125e+09,
+				Total:  1.646e+10,
+			},
+			Delay: [NumClasses]float64{
+				ClassFloat:   1.37e-09,
+				ClassSpecial: 9.136e-09,
+				ClassInt:     4.567e-10,
+				ClassIndex:   4.766e-10,
+				ClassLanes:   4.571e-10,
+				ClassMem:     1.377e-09,
+			},
+		},
+	},
+	{
 		Name:   "Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz",
 		API:    "amd64",
 		Source: "probe",
@@ -318,6 +394,91 @@ var hardware = []Profile{
 				ClassIndex:   4.181e-10,
 				ClassLanes:   4.184e-10,
 				ClassMem:     1.75e-09,
+			},
+		},
+	},
+	{
+		Name:   "Intel(R) Xeon(R) D-2123IT CPU @ 2.20GHz",
+		API:    "amd64",
+		Source: "probe",
+		Device: Device{
+			Device: jit.Device{
+				Kind:  jit.DeviceCPU,
+				Slots: 4,
+				Lanes: 8,
+			},
+			Bandwidth: 2.731e+10,
+			Thread:    1.268e+10,
+			Launch:    4.84e-09,
+			Latency:   9.68e-08,
+			Start:     2.444e-07,
+			Caches: [3]Cache{
+				0: {
+					Bytes: 32 << 10,
+					Rate: Rate{
+						Thread: 1.594e+11,
+						Total:  2.391e+11,
+					},
+					Latency: 1.456e-09,
+				},
+				1: {
+					Bytes: 1 << 20,
+					Rate: Rate{
+						Thread: 8.113e+10,
+						Total:  2.062e+11,
+					},
+					Latency: 4.691e-09,
+					Start:   7.709e-08,
+				},
+				2: {
+					Bytes: 8448 << 10,
+					Rate: Rate{
+						Thread: 2.273e+10,
+						Total:  7.394e+10,
+					},
+					Latency: 2.355e-08,
+					Start:   4.653e-08,
+					Retain:  0.9538,
+					Cycle:   0.74,
+				},
+			},
+			Rates: [NumClasses]Rate{
+				ClassFloat: {
+					Thread: 5.405e+09,
+					Total:  1.035e+10,
+				},
+				ClassSpecial: {
+					Thread: 5.967e+08,
+					Total:  1.589e+09,
+				},
+				ClassInt: {
+					Thread: 8.942e+09,
+					Total:  3.158e+10,
+				},
+				ClassIndex: {
+					Thread: 8.787e+09,
+					Total:  3.139e+10,
+				},
+				ClassLanes: {
+					Thread: 2.984e+09,
+					Total:  6.431e+09,
+				},
+				ClassMem: {
+					Thread: 4.981e+09,
+					Total:  7.472e+09,
+				},
+			},
+			Issue: Rate{
+				Thread: 1.108e+10,
+				Total:  3.953e+10,
+			},
+			Delay: [NumClasses]float64{
+				ClassFloat:   1.404e-09,
+				ClassSpecial: 3.721e-09,
+				ClassInt:     3.351e-10,
+				ClassIndex:   3.351e-10,
+				ClassLanes:   3.351e-10,
+				ClassMem:     1.456e-09,
 			},
 		},
 	},
