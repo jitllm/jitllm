@@ -119,14 +119,14 @@ func (a attention) prims() []Prim {
 	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], tableRows, tablePages}, ops[1:]...) }
 	hd := &Heads{Rows: R, Query: H, Key: a.kv, Dim: D}
 	return []Prim{
-		{Kind: PrimReduce, Shape: []int{R, H, C, D}, N: R * H * C, K: D, In: tables(a.q, tableKeys), Out: dots, Combine: OpAdd,
+		{Kind: PrimReduce, Shape: []int{R, H, C, D}, N: R * H * C, K: D, In: tables(a.q, tableKeys), Out: dots, Combine: OpFma,
 			Expr: dx.e, Range: rng(2), Heads: hd},
 		{Kind: PrimMap, Shape: keys, N: R * H * C, In: tables(dots), Out: scores, Expr: sx.e, Range: rng(2), Heads: hd},
 		{Kind: PrimReduce, Shape: keys, N: R * H, K: C, In: tables(scores), Out: maxes, Combine: OpMax,
 			Init: int64(math.Float32bits(minus)), Expr: mx.e, Range: rng(2), Heads: hd},
 		{Kind: PrimMap, Shape: keys, N: R * H * C, In: tables(scores, maxes), Out: weights, Expr: wx.e, Range: rng(2), Heads: hd},
 		{Kind: PrimReduce, Shape: keys, N: R * H, K: C, In: tables(weights), Out: sums, Combine: OpAdd, Expr: lx.e, Range: rng(2), Heads: hd},
-		{Kind: PrimReduce, Shape: []int{R, H, D, C}, N: R * H * D, K: C, In: tables(weights, tableValues), Out: values, Combine: OpAdd,
+		{Kind: PrimReduce, Shape: []int{R, H, D, C}, N: R * H * D, K: C, In: tables(weights, tableValues), Out: values, Combine: OpFma,
 			Expr: vx.e, Range: rng(3), Heads: hd},
 		{Kind: PrimMap, Shape: dims, N: R * H * D, In: []Operand{values, sums}, Out: a.out, Expr: ox.e, Heads: hd},
 	}

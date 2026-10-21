@@ -80,6 +80,7 @@ func ProfileFor(t Target, rows int) Profile {
 		Coarsen{Unit: 4},
 		Parts{Kinds: []PrimKind{PrimMap}},
 		SplitKeys{Align: 32, Pad: 32, Copies: 32},
+		Stage{Unroll: 4, Chains: 4, Runs: true, Mask: true},
 		Split{Slots: 30720, Max: 32, Block: 32, Kinds: contract},
 		Blocks{Size: 32, Kinds: contract},
 	}}

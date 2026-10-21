@@ -27,11 +27,13 @@ type Nest struct {
 	Passes []string
 }
 
-// Loop runs Trip times; Parent is the loop it sits in, -1 for the element.
-// A Spread loop deals its trips over the workgroup's threads, its iteration
-// the thread plus the trip times the group.
+// Loop runs Trip times, or where Count is set node Count-1's value times;
+// Parent is the loop it sits in, -1 for the element. A Spread loop deals
+// its trips over the workgroup's threads, its iteration the thread plus the
+// trip times the group.
 type Loop struct {
 	Trip   int
+	Count  int
 	Parent int
 	Spread bool
 	// Elem, where set, is 1 + the node that is the spread loop's element.
@@ -43,13 +45,17 @@ type BufKind uint8
 const (
 	BufIn BufKind = iota
 	BufOut
+	// BufShared is workgroup memory of Size words.
+	BufShared
 )
 
-// Buf is a kernel parameter: what it binds to and how its words are typed.
+// Buf is a kernel parameter, or workgroup memory: what it binds to and how
+// its words are typed.
 type Buf struct {
 	Kind    BufKind
 	Elem    ir.Type
 	Operand Operand
+	Size    int
 }
 
 type Op uint8
@@ -97,6 +103,8 @@ const (
 	OpLocal
 	// OpFlat is the thread's index in the launch, unclamped.
 	OpFlat
+	// OpShuffle is A of the lane whose index is this one's xor Imm.
+	OpShuffle
 )
 
 // Node is one scalar value. Load reads Bufs[Buf] at index A.
@@ -111,11 +119,12 @@ type Node struct {
 
 // Store writes node Val at index Ix of Bufs[Buf]: each trip of loop At, or
 // at the element's end where At is -1. A Barrier store writes nothing and
-// waits for the workgroup.
+// waits for the workgroup; a Run store writes nothing and runs loop At.
 type Store struct {
 	Buf, Ix, Val int
 	At           int
 	Barrier      bool
+	Run          bool
 }
 
 func (n *Nest) add(nd Node) int {

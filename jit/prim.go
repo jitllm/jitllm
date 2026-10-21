@@ -101,7 +101,9 @@ type PrimStore struct {
 //   - Contract: Out[r] = sum over k of In[0][r*K + k] * In[1][k], Rows rows.
 //   - Map: Out[OutAt(e)] = Expr of In[j][At[j](e)], for the N elements e.
 //   - Reduce: Out[OutAt(o)] = Combine over k of Expr of In[j][At[j](o*K + k)],
-//     for the N outputs o, begun at Init (StartConst) or the first term.
+//     for the N outputs o, begun at Init (StartConst) or the first term; a
+//     Combine of OpFma sums products, each term's product fused onto the
+//     sum.
 type Prim struct {
 	Kind    PrimKind
 	In      []Operand
@@ -144,9 +146,9 @@ type Range struct {
 }
 
 // Part is a split range: coordinate Split its partition, Axis the
-// position in it.
+// position in it, partitions starting at multiples of Align.
 type Part struct {
-	Axis, Split int
+	Axis, Split, Align int
 }
 
 // outShape is a primitive's output space: a map's elements, a reduction's

@@ -38,6 +38,10 @@ func (e *emitter) run() (*ir.Kernel, error) {
 	e.iter, e.phi, e.shared = map[int]ir.Value{}, map[int]ir.Value{}, map[int]ir.Value{}
 	e.homes()
 	for i, bf := range n.Bufs {
+		if bf.Kind == BufShared {
+			e.params = append(e.params, b.Shared(fmt.Sprintf("s%d", i), bf.Elem, bf.Size))
+			continue
+		}
 		e.params = append(e.params, b.Param(fmt.Sprintf("p%d", i), bf.Elem))
 	}
 	for i, nd := range n.Nodes {
@@ -46,22 +50,26 @@ func (e *emitter) run() (*ir.Kernel, error) {
 		}
 	}
 	var flat ir.Value
-	if n.Work {
+	if n.Work && len(n.Space) > 1 {
+		e.coords = e.workCoords()
+	} else if n.Work {
 		flat = b.Min(ir.U32, b.CTAID(), b.Const(ir.U32, int64(n.elements()-1)))
 	} else {
 		flat = b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
 		e.flat = flat
 		flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(n.elements()-1)))
 	}
-	e.coords = make([]ir.Value, len(n.Space))
-	rest := flat
-	for d := len(n.Space) - 1; d > 0; d-- {
-		ext := b.Const(ir.U32, int64(n.Space[d]))
-		e.coords[d] = b.Rem(ir.U32, rest, ext)
-		rest = b.Div(ir.U32, rest, ext)
-	}
-	if len(n.Space) > 0 {
-		e.coords[0] = rest
+	if e.coords == nil {
+		e.coords = make([]ir.Value, len(n.Space))
+		rest := flat
+		for d := len(n.Space) - 1; d > 0; d-- {
+			ext := b.Const(ir.U32, int64(n.Space[d]))
+			e.coords[d] = b.Rem(ir.U32, rest, ext)
+			rest = b.Div(ir.U32, rest, ext)
+		}
+		if len(n.Space) > 0 {
+			e.coords[0] = rest
+		}
 	}
 	for _, st := range n.Stores {
 		switch {
@@ -80,6 +88,32 @@ func (e *emitter) run() (*ir.Kernel, error) {
 		return nil, e.err
 	}
 	return b.Done()
+}
+
+// workCoords is a workgroup's coordinates from its index: an axis of one
+// extent zero, the outermost other axis held to its extent, the rest its
+// remainders.
+func (e *emitter) workCoords() []ir.Value {
+	n, b := e.n, e.b
+	outer := 0
+	for outer < len(n.Space)-1 && n.Space[outer] == 1 {
+		outer++
+	}
+	c := make([]ir.Value, len(n.Space))
+	rest := b.CTAID()
+	for d := len(n.Space) - 1; d >= 0; d-- {
+		ext := int64(n.Space[d])
+		switch {
+		case ext == 1:
+			c[d] = b.Const(ir.U32, 0)
+		case d == outer:
+			c[d] = b.Min(ir.U32, rest, b.Const(ir.U32, ext-1))
+		default:
+			c[d] = b.Rem(ir.U32, rest, b.Const(ir.U32, ext))
+			rest = b.Div(ir.U32, rest, b.Const(ir.U32, ext))
+		}
+	}
+	return c
 }
 
 func (e *emitter) fail(format string, args ...any) {
@@ -186,6 +220,8 @@ func (e *emitter) get(i int) ir.Value {
 		v = e.groupReduce(i, e.get(nd.A), nd.Op == OpGroupMax)
 	case OpExchange:
 		v = e.exchange(i)
+	case OpShuffle:
+		v = b.ShuffleXor(nd.Type, e.get(nd.A), nd.Imm)
 	case OpLocal:
 		x := e.get(nd.A)
 		if e.n.Work {
@@ -308,8 +344,14 @@ func (e *emitter) emitLoop(c int) {
 		inits[j] = e.get(n.Nodes[f].B)
 	}
 	l := n.Loops[c]
+	var count ir.Value
+	if l.Count > 0 {
+		count = e.get(l.Count - 1)
+	}
 	start, step := b.Const(ir.U32, 0), b.Const(ir.U32, 1)
-	if l.Spread {
+	if l.Count > 0 {
+		b.LoopN(count)
+	} else if l.Spread {
 		start, step = e.thread(), b.Const(ir.U32, int64(n.Group))
 		b.Loop(int64((l.Trip + n.Group - 1) / n.Group))
 	} else {
@@ -327,7 +369,7 @@ func (e *emitter) emitLoop(c int) {
 		steps[j] = e.get(n.Nodes[f].A)
 	}
 	for _, st := range n.Stores {
-		if st.At == c {
+		if st.At == c && !st.Run && !st.Barrier {
 			ix, v := e.get(st.Ix), e.get(st.Val)
 			b.Store(e.params[st.Buf], ix, v, 0)
 		}
@@ -378,10 +420,13 @@ func (e *emitter) body(c int) []int {
 		walk(n.Nodes[f].A)
 	}
 	for _, st := range n.Stores {
-		if !st.Barrier && n.within(st.At, c) {
+		if !st.Barrier && !st.Run && n.within(st.At, c) {
 			walk(st.Ix)
 			walk(st.Val)
 		}
+	}
+	if l := n.Loops[c]; l.Count > 0 {
+		walk(l.Count - 1)
 	}
 	return out
 }

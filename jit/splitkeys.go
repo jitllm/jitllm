@@ -175,7 +175,7 @@ func (sp splitting) partition(p *Prim) (Prim, bool) {
 	}
 	q := *p
 	q.Shape, q.Expr, q.Range = shape, x.e, nil
-	q.Part = &Part{Axis: a + 1, Split: a}
+	q.Part = &Part{Axis: a + 1, Split: a, Align: p.Range.Align}
 	if q.Kind == PrimReduce {
 		q.N, q.K = q.N/p.Shape[a]*sp.S, sp.J
 	} else {
@@ -217,7 +217,7 @@ func (s SplitKeys) split(ch []*Nest, t Target) (int, []*Nest, bool) {
 		switch {
 		case p.Kind == PrimMap && reads(p, mx.Out) && hasOp(p.Expr, OpExp):
 			wt = p
-		case wt != nil && p.Kind == PrimReduce && p.Combine == OpAdd && reads(p, wt.Out) && reads(out, p.Out):
+		case wt != nil && p.Kind == PrimReduce && (p.Combine == OpAdd || p.Combine == OpFma) && reads(p, wt.Out) && reads(out, p.Out):
 			if len(p.outShape()) == len(out.Shape) {
 				vl = p
 			} else {

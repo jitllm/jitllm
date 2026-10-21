@@ -134,7 +134,7 @@ func lowerReduce(p Prim) *Nest {
 		k = n.bin(OpAdd, ir.U32, k, n.u32(first))
 	}
 	acc := n.add(Node{Op: OpFold, At: c, Type: t, B: init})
-	n.Nodes[acc].A = n.bin(p.Combine, t, acc, term(k))
+	n.Nodes[acc].A = n.combine(p.Combine, t, acc, term(k))
 	out := n.buf(Buf{Kind: BufOut, Elem: elemOf(p.Out.Elem), Operand: p.Out})
 	ix := n.access(o, p.OutAt)
 	if len(p.Index) > 0 {
@@ -218,6 +218,8 @@ type scope struct {
 	load   func(j, ix int) int
 	at     func(j int, ax, ext []int) int
 	live   func() int
+	// node, where set, is node i in place of its expression where it says.
+	node func(i int, vals []int) (int, bool)
 }
 
 // scope is p's function's default scope at element e of coordinates c:
@@ -247,6 +249,12 @@ func (n *Nest) scope(p Prim, e int, c []int) scope {
 func (n *Nest) instance(p Prim, es []Expr, s scope) []int {
 	vals := make([]int, len(es))
 	for i, x := range es {
+		if s.node != nil {
+			if v, ok := s.node(i, vals); ok {
+				vals[i] = v
+				continue
+			}
+		}
 		switch x.Op {
 		case ExprIn:
 			vals[i] = s.load(x.In, s.elem)
@@ -271,4 +279,14 @@ func (n *Nest) instance(p Prim, es []Expr, s scope) []int {
 		}
 	}
 	return vals
+}
+
+// combine is acc combined with term v; by OpFma, of a product term, the
+// product's factors fused onto acc.
+func (n *Nest) combine(op Op, t ir.Type, acc, v int) int {
+	if op == OpFma {
+		m := n.Nodes[v]
+		return n.add(Node{Op: OpFma, Type: t, A: m.A, B: m.B, C: acc})
+	}
+	return n.bin(op, t, acc, v)
 }
