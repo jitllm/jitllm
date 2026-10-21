@@ -68,6 +68,7 @@ func ropeTableAgainstMain(t *testing.T, code *jit.Code) (int, string) {
 		}
 		rows := []uint32{1, uint32(pos)}
 		block := make([]uint64, 64)
+		var pn runtime.Pinner
 		for _, a := range code.Args {
 			var p unsafe.Pointer
 			switch {
@@ -89,12 +90,10 @@ func ropeTableAgainstMain(t *testing.T, code *jit.Code) (int, string) {
 			default:
 				t.Fatalf("argument word %d binds %q", a.Field, a.Operand.Name)
 			}
-			block[a.Field/8] = uint64(uintptr(p))
+			block[a.Field/8] = pin(&pn, p)
 		}
 		c.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
-		runtime.KeepAlive(rows)
-		runtime.KeepAlive(planes)
-		runtime.KeepAlive(konst)
+		pn.Unpin()
 		runtime.KeepAlive(code)
 		for i := range want {
 			d := int(math.Float32bits(got[i])) - int(math.Float32bits(want[i]))
@@ -159,9 +158,9 @@ func TestComposedSamplingRuns(t *testing.T) {
 					want, wantV = i, logits[i]
 				}
 			}
-			var token [8]int32
-			var best [8]float32
+			token, best := make([]int32, 8), make([]float32, 8)
 			block := make([]uint64, 64)
+			var pn runtime.Pinner
 			for _, a := range code.Args {
 				switch {
 				case a.Length:
@@ -169,19 +168,19 @@ func TestComposedSamplingRuns(t *testing.T) {
 				case a.Value || a.Moving:
 					t.Fatalf("argument word %d is a value the test does not compute", a.Field)
 				case a.Words != nil:
-					block[a.Field/8] = uint64(uintptr(unsafe.Pointer(&a.Words[a.Offset])))
+					block[a.Field/8] = pin(&pn, unsafe.Pointer(&a.Words[a.Offset]))
 				case a.Operand.Name == "logits":
-					block[a.Field/8] = uint64(uintptr(unsafe.Pointer(&logits[a.Offset])))
+					block[a.Field/8] = pin(&pn, unsafe.Pointer(&logits[a.Offset]))
 				case a.Operand.Name == "token":
-					block[a.Field/8] = uint64(uintptr(unsafe.Pointer(&token[a.Offset])))
+					block[a.Field/8] = pin(&pn, unsafe.Pointer(&token[a.Offset]))
 				case a.Operand.Name == "best":
-					block[a.Field/8] = uint64(uintptr(unsafe.Pointer(&best[a.Offset])))
+					block[a.Field/8] = pin(&pn, unsafe.Pointer(&best[a.Offset]))
 				default:
 					t.Fatalf("argument word %d binds %q", a.Field, a.Operand.Name)
 				}
 			}
 			c.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
-			runtime.KeepAlive(logits)
+			pn.Unpin()
 			runtime.KeepAlive(code)
 			if int(token[0]) != want || best[0] != wantV {
 				t.Errorf("n %d trial %d: token %d best %v, want %d %v", n, trial, token[0], best[0], want, wantV)
@@ -244,12 +243,12 @@ func TestComposedRoPERuns(t *testing.T) {
 					}
 				}
 				block := make([]uint64, 64)
-				block[row.Field/8] = uint64(uintptr(unsafe.Pointer(&x[row.Offset])))
-				block[table.Field/8] = uint64(uintptr(unsafe.Pointer(&cs[table.Offset])))
+				var pn runtime.Pinner
+				block[row.Field/8] = pin(&pn, unsafe.Pointer(&x[row.Offset]))
+				block[table.Field/8] = pin(&pn, unsafe.Pointer(&cs[table.Offset]))
 				block[heads.Field/8] = uint64(n)
 				c.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
-				runtime.KeepAlive(x)
-				runtime.KeepAlive(cs)
+				pn.Unpin()
 				for i := range want {
 					if x[i] != want[i] {
 						t.Errorf("%s kernel %d, %d heads: word %d %v, want %v", pp.Part, ci, n, i, x[i], want[i])
@@ -299,6 +298,7 @@ func TestComposedSoftmaxRuns(t *testing.T) {
 		}
 		row := append([]float32(nil), dots...)
 		block := make([]uint64, 64)
+		var pn runtime.Pinner
 		for _, a := range code.Args {
 			var p unsafe.Pointer
 			switch {
@@ -317,10 +317,10 @@ func TestComposedSoftmaxRuns(t *testing.T) {
 			default:
 				t.Fatalf("argument word %d binds %q, not the row in place", a.Field, a.Operand.Name)
 			}
-			block[a.Field/8] = uint64(uintptr(p))
+			block[a.Field/8] = pin(&pn, p)
 		}
 		c.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
-		runtime.KeepAlive(row)
+		pn.Unpin()
 		runtime.KeepAlive(code)
 		m := math.Inf(-1)
 		for _, x := range dots[:n] {
@@ -391,8 +391,9 @@ func TestComposedAttnValuesRun(t *testing.T) {
 				w := make([][]float32, len(weights))
 				o := make([][]float32, len(weights))
 				block := make([]uint64, 64)
+				var pn runtime.Pinner
 				block[count.Field/8] = uint64(n)
-				block[values.Field/8] = uint64(uintptr(unsafe.Pointer(&v[values.Offset])))
+				block[values.Field/8] = pin(&pn, unsafe.Pointer(&v[values.Offset]))
 				for h := range w {
 					w[h] = make([]float32, n)
 					for i := range w[h] {
@@ -402,13 +403,11 @@ func TestComposedAttnValuesRun(t *testing.T) {
 					for i := range o[h] {
 						o[h][i] = float32(math.NaN())
 					}
-					block[weights[h].Field/8] = uint64(uintptr(unsafe.Pointer(&w[h][weights[h].Offset])))
-					block[outs[h].Field/8] = uint64(uintptr(unsafe.Pointer(&o[h][outs[h].Offset])))
+					block[weights[h].Field/8] = pin(&pn, unsafe.Pointer(&w[h][weights[h].Offset]))
+					block[outs[h].Field/8] = pin(&pn, unsafe.Pointer(&o[h][outs[h].Offset]))
 				}
 				c.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
-				runtime.KeepAlive(v)
-				runtime.KeepAlive(w)
-				runtime.KeepAlive(o)
+				pn.Unpin()
 				for h := range w {
 					for d := range dim {
 						var want, mag float64
@@ -435,4 +434,12 @@ func TestComposedAttnValuesRun(t *testing.T) {
 		t.Fatal("no host weighted-values kernel in the plan")
 	}
 	t.Logf("%d histories", ran)
+}
+
+// pin is p's address for an argument word, its object pinned until Unpin:
+// the word is an integer the collector neither sees nor moves with a stack,
+// and a buffer that does not escape lives on one.
+func pin(pn *runtime.Pinner, p unsafe.Pointer) uint64 {
+	pn.Pin(p)
+	return uint64(uintptr(p))
 }
