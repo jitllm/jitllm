@@ -540,7 +540,9 @@ var globalAllowlist = map[string]string{
 	"jit_old/gpu/metal.*":  "process: the Metal framework's selectors and entry points, bound once at load; the stat counters and kernel timing are debt, to move onto the device",
 
 	// jit_old/gpu/tier: the tier is being refactored elsewhere; narrow this to its caches when that lands
-	"jit_old/gpu/tier.binaryIDOnce": "process: a memoised hash of the running executable, the same for every tier",
+	"paritytest/maintier.*":      "reference: a frozen copy of main's tier, the board's comparison; its process state is main's, kept as main had it",
+	"paritytest/mainkernels.*":   "reference: a frozen copy of main's kernels, the board's comparison; its tables are main's, kept as main had them",
+	"paritytest/tools/mvbench.*": "tool: a benchmark command's flags and results",
 
 	// tables exported as data: nothing writes them after init, but any importer could
 	"common/discover.BalanceSteps":   "table: exported list, written once",

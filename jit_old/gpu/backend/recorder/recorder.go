@@ -46,27 +46,28 @@ type Profile struct {
 }
 
 // Profiles are the devices the engine has run on, by name.
-var Profiles = map[string]Profile{
-	// NVIDIA, by compute capability: SMs and resident threads an SM.
-	"cuda-sm70": {Name: "cuda-sm70", API: "ptx", ISA: "sm_70", Arch: ir.PTX(70), Lanes: ir.SubgroupLanes, Cores: 80, ThreadsPerCore: 2048, MaxGroup: 1024},  // Tesla V100
-	"cuda-sm75": {Name: "cuda-sm75", API: "ptx", ISA: "sm_75", Arch: ir.PTX(75), Lanes: ir.SubgroupLanes, Cores: 40, ThreadsPerCore: 1024, MaxGroup: 1024},  // Tesla T4
-	"cuda-sm80": {Name: "cuda-sm80", API: "ptx", ISA: "sm_80", Arch: ir.PTX(80), Lanes: ir.SubgroupLanes, Cores: 108, ThreadsPerCore: 2048, MaxGroup: 1024}, // A100
-	"cuda-sm86": {Name: "cuda-sm86", API: "ptx", ISA: "sm_86", Arch: ir.PTX(86), Lanes: ir.SubgroupLanes, Cores: 20, ThreadsPerCore: 1536, MaxGroup: 1024},  // RTX 3050 Ti Laptop
-	"cuda-sm89": {Name: "cuda-sm89", API: "ptx", ISA: "sm_89", Arch: ir.PTX(89), Lanes: ir.SubgroupLanes, Cores: 58, ThreadsPerCore: 1536, MaxGroup: 1024},  // L4
-	"cuda-sm90": {Name: "cuda-sm90", API: "ptx", ISA: "sm_90", Arch: ir.PTX(90), Lanes: ir.SubgroupLanes, Cores: 132, ThreadsPerCore: 2048, MaxGroup: 1024}, // H100
-	// AMD through HIP, by gfx arch: compute units and resident threads a CU.
-	"hip-gfx942":  {Name: "hip-gfx942", API: "amdgcn", ISA: "gfx942", Arch: ir.GFX(942), Lanes: ir.SubgroupLanes, Cores: 304, ThreadsPerCore: 2048, MaxGroup: 1024},   // MI300X
-	"hip-gfx1030": {Name: "hip-gfx1030", API: "amdgcn", ISA: "gfx1030", Arch: ir.GFX(1030), Lanes: ir.SubgroupLanes, Cores: 80, ThreadsPerCore: 2048, MaxGroup: 1024}, // RX 6900
-	"hip-gfx1100": {Name: "hip-gfx1100", API: "amdgcn", ISA: "gfx1100", Arch: ir.GFX(1100), Lanes: ir.SubgroupLanes, Cores: 96, ThreadsPerCore: 2048, MaxGroup: 1024}, // RX 7900
-	"hip-gfx1201": {Name: "hip-gfx1201", API: "amdgcn", ISA: "gfx1201", Arch: ir.GFX(1201), Lanes: ir.SubgroupLanes, Cores: 64, ThreadsPerCore: 2048, MaxGroup: 1024}, // RX 9070
-	// Vulkan: a discrete card with 32-lane subgroups and no cooperative
-	// matrices; Intel's Iris Xe, integrated; lavapipe, on the CPU, which
-	// promises no subgroup width.
-	"vulkan":          {Name: "vulkan", API: "spirv", Arch: ir.SPIRV(), Lanes: ir.SubgroupLanes, Cores: 20, ThreadsPerCore: 1024, MaxGroup: 1024, MaxBuffer: 1 << 32},
-	"vulkan-irisxe":   {Name: "vulkan-irisxe", API: "spirv", Arch: ir.SPIRV(), Lanes: ir.SubgroupLanes, Cores: 96, ThreadsPerCore: 448, MaxGroup: 1024, Unified: true, MaxBuffer: 1 << 32},
-	"vulkan-lavapipe": {Name: "vulkan-lavapipe", API: "spirv", Arch: ir.SPIRV(), Cores: 6, ThreadsPerCore: 1024, MaxGroup: 1024, Unified: true, MaxBuffer: 1 << 31},
-	// Apple M4: 10 GPU cores, unified memory.
-	"metal-m4": {Name: "metal-m4", API: "msl", Arch: ir.MSL(), Lanes: ir.SubgroupLanes, Cores: 10, ThreadsPerCore: 1024, MaxGroup: 1024, Unified: true, MaxBuffer: 1 << 34},
+func Profiles() map[string]Profile {
+	return map[string]Profile{
+		// NVIDIA, by compute capability: SMs and resident threads an SM.
+		"cuda-sm70": {Name: "cuda-sm70", API: "ptx", ISA: "sm_70", Arch: ir.PTX(70), Lanes: ir.SubgroupLanes, Cores: 80, ThreadsPerCore: 2048, MaxGroup: 1024},  // Tesla V100
+		"cuda-sm75": {Name: "cuda-sm75", API: "ptx", ISA: "sm_75", Arch: ir.PTX(75), Lanes: ir.SubgroupLanes, Cores: 40, ThreadsPerCore: 1024, MaxGroup: 1024},  // Tesla T4
+		"cuda-sm80": {Name: "cuda-sm80", API: "ptx", ISA: "sm_80", Arch: ir.PTX(80), Lanes: ir.SubgroupLanes, Cores: 108, ThreadsPerCore: 2048, MaxGroup: 1024}, // A100
+		"cuda-sm86": {Name: "cuda-sm86", API: "ptx", ISA: "sm_86", Arch: ir.PTX(86), Lanes: ir.SubgroupLanes, Cores: 20, ThreadsPerCore: 1536, MaxGroup: 1024},  // RTX 3050 Ti Laptop
+		"cuda-sm89": {Name: "cuda-sm89", API: "ptx", ISA: "sm_89", Arch: ir.PTX(89), Lanes: ir.SubgroupLanes, Cores: 58, ThreadsPerCore: 1536, MaxGroup: 1024},  // L4
+		"cuda-sm90": {Name: "cuda-sm90", API: "ptx", ISA: "sm_90", Arch: ir.PTX(90), Lanes: ir.SubgroupLanes, Cores: 132, ThreadsPerCore: 2048, MaxGroup: 1024}, // H100
+		// AMD through HIP, by gfx arch: compute units and resident threads a CU.
+		"hip-gfx942":  {Name: "hip-gfx942", API: "amdgcn", ISA: "gfx942", Arch: ir.GFX(942), Lanes: ir.SubgroupLanes, Cores: 304, ThreadsPerCore: 2048, MaxGroup: 1024},   // MI300X
+		"hip-gfx1030": {Name: "hip-gfx1030", API: "amdgcn", ISA: "gfx1030", Arch: ir.GFX(1030), Lanes: ir.SubgroupLanes, Cores: 80, ThreadsPerCore: 2048, MaxGroup: 1024}, // RX 6900
+		"hip-gfx1100": {Name: "hip-gfx1100", API: "amdgcn", ISA: "gfx1100", Arch: ir.GFX(1100), Lanes: ir.SubgroupLanes, Cores: 96, ThreadsPerCore: 2048, MaxGroup: 1024}, // RX 7900
+		"hip-gfx1201": {Name: "hip-gfx1201", API: "amdgcn", ISA: "gfx1201", Arch: ir.GFX(1201), Lanes: ir.SubgroupLanes, Cores: 64, ThreadsPerCore: 2048, MaxGroup: 1024}, // RX 9070
+		// Vulkan: a discrete card with 32-lane subgroups and no cooperative
+		// matrices; Intel's Iris Xe, integrated; lavapipe, on the CPU, which
+		// promises no subgroup width.
+		"vulkan":          {Name: "vulkan", API: "spirv", Arch: ir.SPIRV(), Lanes: ir.SubgroupLanes, Cores: 20, ThreadsPerCore: 1024, MaxGroup: 1024, MaxBuffer: 1 << 32},
+		"vulkan-irisxe":   {Name: "vulkan-irisxe", API: "spirv", Arch: ir.SPIRV(), Lanes: ir.SubgroupLanes, Cores: 96, ThreadsPerCore: 448, MaxGroup: 1024, Unified: true, MaxBuffer: 1 << 32},
+		"vulkan-lavapipe": {Name: "vulkan-lavapipe", API: "spirv", Arch: ir.SPIRV(), Cores: 6, ThreadsPerCore: 1024, MaxGroup: 1024, Unified: true, MaxBuffer: 1 << 31},
+		// Apple M4: 10 GPU cores, unified memory.
+		"metal-m4": {Name: "metal-m4", API: "msl", Arch: ir.MSL(), Lanes: ir.SubgroupLanes, Cores: 10, ThreadsPerCore: 1024, MaxGroup: 1024, Unified: true, MaxBuffer: 1 << 34}}
 }
 
 // Device records the kernels compiled and launched on it.

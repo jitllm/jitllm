@@ -32,7 +32,7 @@ func Decompose(g *Graph) *Graph {
 				continue
 			}
 		case OpLaurel:
-			if d.laurel(o) {
+			if d.lowRankResidual(o) {
 				continue
 			}
 		}
@@ -209,10 +209,10 @@ func (d *Graph) gaussTopK(o Op) bool {
 	return true
 }
 
-// laurel writes op o, In[0] + norm(R(L(In[0]))), as primitives: the two
+// lowRankResidual writes op o, In[0] + norm(R(L(In[0]))), as primitives: the two
 // matrices by role, the norm over the second's output, and the add of the
 // input. It stays whole where a binding is missing or the widths do not chain.
-func (d *Graph) laurel(o Op) bool {
+func (d *Graph) lowRankResidual(o Op) bool {
 	if len(o.In) != 1 || len(o.Out) != 1 {
 		return false
 	}

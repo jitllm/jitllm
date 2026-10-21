@@ -137,7 +137,7 @@ func sameAsMain(t *testing.T, main, composed []*ir.Kernel) {
 // TestElementwiseIsMains holds the tier's lowering of the elementwise ops
 // and the quantizers to main's kernels for them on a ptx target.
 func TestElementwiseIsMains(t *testing.T) {
-	prof := recorder.Profiles["cuda-sm70"]
+	prof := recorder.Profiles()["cuda-sm70"]
 	for _, w := range []int{64, 256, 2048} {
 		for _, rows := range []int{1, 32} {
 			plan := nn.LayerPlan{ActWin: 32, NEmbd: w}
@@ -183,7 +183,7 @@ func TestElementwiseIsMains(t *testing.T) {
 // RoPERows (after its CopyAtRows where the rotary is partial), NORM and
 // NEOX, whole and partial, at decode and a chunk's rows.
 func TestRotaryIsMains(t *testing.T) {
-	prof := recorder.Profiles["cuda-sm70"]
+	prof := recorder.Profiles()["cuda-sm70"]
 	for _, c := range []struct{ heads, hd, nrot int }{{4, 64, 64}, {8, 128, 128}, {4, 64, 32}, {2, 128, 64}} {
 		for _, neox := range []bool{false, true} {
 			for _, rows := range []int{1, 32} {
@@ -219,7 +219,7 @@ func TestRotaryIsMains(t *testing.T) {
 // after an add, with the int8 operand -- to main's warp norms on a ptx
 // target with 32 lanes, at decode and at a chunk's rows.
 func TestNormsAreMains(t *testing.T) {
-	prof := recorder.Profiles["cuda-sm70"]
+	prof := recorder.Profiles()["cuda-sm70"]
 	const eps = 1e-6
 	for _, w := range []int{64, 256, 1024, 2048} {
 		for _, rows := range []int{1, 32} {
@@ -265,7 +265,7 @@ func TestRowWindowNormQuantIsMains(t *testing.T) {
 		prof string
 		main func(k, rows int, eps float32, addOne, add bool, window int) (*ir.Kernel, error)
 	}{{"cuda-sm70", mainkernels.RMSNormQuantRowsWarp}, {"hip-gfx942", mainkernels.RMSNormQuantRows}} {
-		prof := recorder.Profiles[pc.prof]
+		prof := recorder.Profiles()[pc.prof]
 		for _, w := range []int{64, 256, 512, 2048, 8192} {
 			for _, rows := range []int{1, 8, 32} {
 				plan := nn.LayerPlan{RMSEps: eps, ActWin: 1 << 16, NEmbd: 256} // BitNet's: a window past every row, rows wider than the embedding

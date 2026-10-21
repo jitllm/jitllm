@@ -35,7 +35,7 @@ func TestDumpEmittedKernels(t *testing.T) {
 	}
 	paths, _ := filepath.Glob(filepath.Join(testmodels.Dir(), "synth-*.jlm"))
 	for _, pn := range strings.Split(*irProfiles, ",") {
-		prof, ok := recorder.Profiles[pn]
+		prof, ok := recorder.Profiles()[pn]
 		if !ok {
 			t.Fatalf("no recorder profile %q", pn)
 		}

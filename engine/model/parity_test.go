@@ -49,7 +49,7 @@ func TestComposerParity(t *testing.T) {
 		t.Fatalf("no synth-*.jlm under %s (set JITLLM_MODELS)", testmodels.Dir())
 	}
 	for _, pn := range strings.Split(*parityProfiles, ",") {
-		prof, ok := recorder.Profiles[pn]
+		prof, ok := recorder.Profiles()[pn]
 		if !ok {
 			t.Fatalf("no recorder profile %q", pn)
 		}

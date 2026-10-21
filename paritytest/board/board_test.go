@@ -30,7 +30,7 @@ var (
 func mainDecode(t *testing.T, name, profile string) []*ir.Kernel {
 	t.Helper()
 	path := testmodels.Path(name + ".jlm")
-	prof, ok := recorder.Profiles[profile]
+	prof, ok := recorder.Profiles()[profile]
 	if !ok {
 		t.Fatalf("no recorder profile %q", profile)
 	}
