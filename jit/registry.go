@@ -74,7 +74,7 @@ func Default() *Registry {
 	}
 }
 
-func (r *Registry) decompose(f *jlm.File, part Part, s Step, d Device) ([]Prim, error) {
+func (r *Registry) decompose(f *jlm.File, part Part, of int, s Step, d Device) ([]Prim, error) {
 	c := &Context{Graph: part.Graph, Part: part.Kind, Formats: formats(f, part), Step: s, Int8: r.Profiles[d.Kind].Int8,
 		formed: map[graph.ValueID]bool{}}
 	var prims []Prim
@@ -87,7 +87,26 @@ func (r *Registry) decompose(f *jlm.File, part Part, s Step, d Device) ([]Prim, 
 		if err != nil {
 			return nil, fmt.Errorf("op %d (%s): %w", i, o.Kind, err)
 		}
+		for j := range ps {
+			ps[j].own(of)
+		}
 		prims = append(prims, ps...)
 	}
 	return prims, nil
+}
+
+// own marks p's operands as part of's, the step's tables aside.
+func (p *Prim) own(of int) {
+	mark := func(o *Operand) {
+		if o.Kind != OperandTable || o.PerPart {
+			o.Of = of
+		}
+	}
+	for i := range p.In {
+		mark(&p.In[i])
+	}
+	mark(&p.Out)
+	for i := range p.Stores {
+		mark(&p.Stores[i].Out)
+	}
 }

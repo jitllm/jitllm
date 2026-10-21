@@ -100,7 +100,8 @@ func (s SplitRange) split(ch []*Kernel, d Device) (int, []*Kernel, bool) {
 	J := g.chunk
 	D := h.Dim
 	stride := (D+s.Pad-1)/s.Pad*s.Pad + 2*s.Copies
-	part := Operand{Kind: OperandScratch, Name: norm.Name + ".part"}
+	no := norm.Bufs[norm.Stores[0].Buf].Operand
+	part := Operand{Kind: OperandScratch, Name: no.Name + ".part", Of: no.Of}
 	split := map[Operand]*member{}
 	for i := range mem {
 		split[mem[i].out] = &mem[i]
@@ -124,7 +125,9 @@ func (s SplitRange) split(ch []*Kernel, d Device) (int, []*Kernel, bool) {
 		}
 		ns = append(ns, k)
 	}
-	ns = append(ns, s.copies(h, S, stride, part, mx.out, sm.out), s.merge(norm, h, S, stride, part, vl.out, sm.out))
+	cp, mg := s.copies(h, S, stride, part, mx.out, sm.out), s.merge(norm, h, S, stride, part, vl.out, sm.out)
+	cp.Part, cp.Of, mg.Of = norm.Part, norm.Of, norm.Of
+	ns = append(ns, cp, mg)
 	return len(mem) + 1, ns, true
 }
 

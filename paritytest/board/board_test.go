@@ -222,11 +222,12 @@ func TestBoard(t *testing.T) {
 			t.Logf("no one kernel holds all of %s", k.Name)
 		}
 	}
+	din := paritytest.NewInterner()
+	keyOf := func(k *ir.Kernel) string { return fmt.Sprint(din.Dataflow(paritytest.Simplified([]*ir.Kernel{k})[0])) }
 	distinct := func(ks []*ir.Kernel) int {
-		in := paritytest.NewInterner()
 		keys := map[string]bool{}
-		for _, k := range paritytest.Simplified(ks) {
-			keys[fmt.Sprint(in.Dataflow(k))] = true
+		for _, k := range ks {
+			keys[keyOf(k)] = true
 		}
 		return len(keys)
 	}

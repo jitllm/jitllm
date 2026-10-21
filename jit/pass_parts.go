@@ -56,7 +56,7 @@ func (p Parts) merge(parts []*Kernel) *Kernel {
 	for _, n := range parts {
 		N = max(N, n.elements())
 	}
-	m := &Kernel{Name: "parts", Space: []int{N}, Group: parts[0].Group, Kind: parts[0].Kind, Part: parts[0].Part}
+	m := &Kernel{Name: "parts", Space: []int{N}, Group: parts[0].Group, Kind: parts[0].Kind, Part: parts[0].Part, Of: parts[0].Of}
 	flat := m.add(Node{Op: OpFlat, Type: ir.U32})
 	for _, n := range parts {
 		el := m.bin(OpMin, ir.U32, flat, m.u32(n.elements()-1))

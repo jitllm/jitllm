@@ -2,6 +2,7 @@ package jit
 
 import (
 	"flag"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -28,7 +29,7 @@ func TestComposeIR(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := Device{Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 32}
-	prims, err := r.decompose(f, parts[0], Step{Rows: 1, Page: 64, Keys: 5}, d)
+	prims, err := r.decompose(f, parts[1], 1, Step{Rows: 1, Page: 64, Keys: 5}, d)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,4 +102,48 @@ func (k *Kernel) reachesNode(root, x int) bool {
 		return false
 	}
 	return walk(root)
+}
+
+// TestRunSizes passes the fixture's parts as one run and writes out, after
+// each pass, the kernels' sizes by part.
+func TestRunSizes(t *testing.T) {
+	f, err := jlm.Open(testmodels.Path(*composeModel + ".jlm"))
+	if err != nil {
+		t.Skip(err)
+	}
+	defer f.Close()
+	r := Default()
+	parts, err := front(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Device{Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 32}
+	var ks []*Kernel
+	for i, part := range parts {
+		prims, err := r.decompose(f, part, i, Step{Rows: 1, Page: 64, Keys: 5}, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range prims {
+			k, err := generate(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			k.Part, k.Of = part.Kind, i
+			ks = append(ks, k)
+		}
+	}
+	for _, ps := range r.Profiles[DeviceGPU].Passes {
+		ks, err = ps.Apply(ks, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var line []string
+		for _, k := range ks {
+			if k.Of == 1 || k.Of == 2 {
+				line = append(line, fmt.Sprintf("%d:%s/%d", k.Of, k.Name, len(k.Nodes)))
+			}
+		}
+		t.Logf("%-10s %s", ps.Name(), strings.Join(line, " "))
+	}
 }

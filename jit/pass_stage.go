@@ -12,11 +12,11 @@ type Stage struct{}
 func (Stage) Name() string { return "stage" }
 
 func (p Stage) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
-	others := map[Operand]bool{}
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		if !k.Work || len(k.Space) != 3 || k.Heads == nil {
 			return nil, false, nil
 		}
+		others := map[Operand]bool{}
 		for _, o := range ks {
 			if o == k {
 				continue

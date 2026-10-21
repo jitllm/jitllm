@@ -29,6 +29,8 @@ type Kernel struct {
 	Positions *Positions
 	Heads     *Heads
 	Part      PartKind
+	// Of is the model's part the kernel belongs to, by its index.
+	Of int
 	// Rows is 1 + the node of how many of the leading axis's rows are live;
 	// Clamp, where a pass set it, 1 + the node of the elements a launch
 	// holds its threads to.

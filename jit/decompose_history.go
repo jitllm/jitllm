@@ -24,8 +24,8 @@ var (
 	tableQOff   = Operand{Kind: OperandTable, Name: "q.off", Elem: ir.U32}
 	tableRows   = Operand{Kind: OperandTable, Name: "rows", Elem: ir.U32}
 	tablePages  = Operand{Kind: OperandTable, Name: "pages", Elem: ir.U32}
-	tableKeys   = Operand{Kind: OperandTable, Name: "kv.k"}
-	tableValues = Operand{Kind: OperandTable, Name: "kv.v"}
+	tableKeys   = Operand{Kind: OperandTable, Name: "kv.k", PerPart: true}
+	tableValues = Operand{Kind: OperandTable, Name: "kv.v", PerPart: true}
 )
 
 // decomposeRope turns each head's first NRot elements in pairs by the

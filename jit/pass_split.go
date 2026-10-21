@@ -44,7 +44,8 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 	if S == 1 {
 		return nil, false, nil
 	}
-	planes := Operand{Kind: OperandScratch, Name: n.Name + ".planes"}
+	out := n.Bufs[n.Stores[st].Buf].Operand
+	planes := Operand{Kind: OperandScratch, Name: out.Name + ".planes", Of: out.Of}
 	shape := append([]int{S}, n.Space...)
 	p := n.clone()
 	p.Name = n.Name + ".part"
@@ -69,19 +70,19 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 	ax := append([]int{seg}, p.Stores[st].Ax...)
 	p.Stores[st] = Store{Buf: b, Val: val, At: -1, Ax: ax}
 
-	m := &Kernel{Name: n.Name + ".combine", Kind: n.Kind, Space: append([]int(nil), n.Space...), Group: n.Group}
+	m := &Kernel{Name: n.Name + ".combine", Kind: n.Kind, Space: append([]int(nil), n.Space...), Group: n.Group, Part: n.Part, Of: n.Of}
 	coords := make([]int, len(m.Space))
 	for i := range coords {
 		coords[i] = m.add(Node{Op: OpCoord, A: i, Type: ir.U32})
 	}
 	in := m.buf(Buf{Kind: BufIn, Elem: ir.F32, Operand: planes, Shape: shape})
-	out := m.buf(n.Bufs[n.Stores[st].Buf])
+	ob := m.buf(n.Bufs[n.Stores[st].Buf])
 	l := m.loop(S, -1)
 	it := m.add(Node{Op: OpIter, At: l, Type: ir.U32})
 	acc := m.add(Node{Op: OpFold, At: l, Type: n.Nodes[f].Type, B: m.f32(0)})
 	x := m.add(Node{Op: OpLoad, Type: ir.F32, Buf: in, Ax: append([]int{it}, coords...)})
 	m.Nodes[acc].A = m.bin(OpAdd, ir.F32, acc, x)
-	m.Stores = append(m.Stores, Store{Buf: out, Val: acc, At: -1, Ax: coords})
+	m.Stores = append(m.Stores, Store{Buf: ob, Val: acc, At: -1, Ax: coords})
 	return []*Kernel{p, m}, true, nil
 }
 

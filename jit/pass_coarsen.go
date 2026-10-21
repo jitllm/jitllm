@@ -169,7 +169,7 @@ func (c Coarsen) form(members []*Kernel, host *Kernel) (*Kernel, bool) {
 		th := k.m.add(Node{Op: OpThread, Type: ir.U32})
 		k.u = k.m.bin(OpMin, ir.U32, k.m.bin(OpAdd, ir.U32, th, k.m.u32(0)), k.m.u32(T-1))
 	} else {
-		k.m = &Kernel{Name: "chain", Kind: members[0].Kind, Space: []int{T}, Group: members[0].Group, Part: members[0].Part}
+		k.m = &Kernel{Name: "chain", Kind: members[0].Kind, Space: []int{T}, Group: members[0].Group, Part: members[0].Part, Of: members[0].Of}
 		k.u = k.m.add(Node{Op: OpCoord, A: 0, Type: ir.U32})
 	}
 	k.local = k.m.add(Node{Op: OpLocal, Type: ir.U32, A: k.u})

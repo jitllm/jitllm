@@ -44,6 +44,10 @@ type Operand struct {
 	// Temp is a value a decomposition passes between its own primitives,
 	// read by nothing past them.
 	Temp bool
+	// Of is the model's part the operand belongs to; a table of the step
+	// belongs to none unless it is a part's own state (PerPart).
+	Of      int
+	PerPart bool
 }
 
 // Expr is one node of a primitive's scalar function: an operation on earlier

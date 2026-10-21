@@ -51,7 +51,7 @@ func (w WorkFuse) fuse(ms []*Kernel, d Device) *Kernel {
 	h := *ms[0].Heads
 	g := w.Work.geometry(h, d.Lanes)
 	pa := partAxis(ms[0])
-	k := &Kernel{Name: "stage", Kind: PrimReduce, Work: true, Group: g.warps * d.Lanes, Heads: &h, Part: ms[0].Part,
+	k := &Kernel{Name: "stage", Kind: PrimReduce, Work: true, Group: g.warps * d.Lanes, Heads: &h, Part: ms[0].Part, Of: ms[0].Of,
 		Space: []int{ms[0].Space[0], ms[0].Space[1], ms[0].Space[pa]}}
 	outer := []int{k.add(Node{Op: OpCoord, A: 0, Type: ir.U32}), k.add(Node{Op: OpCoord, A: 1, Type: ir.U32}),
 		k.add(Node{Op: OpCoord, A: 2, Type: ir.U32})}
