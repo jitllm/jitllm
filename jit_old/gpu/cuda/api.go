@@ -46,6 +46,9 @@ type Device struct {
 	// see Module.Resident.
 	sms  int
 	coop bool
+	// l2 is CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE, bytes, 0 where the driver
+	// would not say.
+	l2 int
 	// mapHost is whether the device can address registered host memory
 	// (CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY and HOST_REGISTER_SUPPORTED),
 	// and integrated whether its memory is the host's
@@ -64,6 +67,7 @@ const (
 	attrSMCount = 16 // CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT
 	attrMaxTPM  = 39 // CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR
 	attrMaxGrid = 5  // CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X
+	attrL2      = 38 // CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE
 
 	attrIntegrated   = 18 // CU_DEVICE_ATTRIBUTE_INTEGRATED
 	attrCanMapHost   = 19 // CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY
@@ -163,6 +167,10 @@ func openDevice(ord int) (*Device, error) {
 			d.slots = int(sm) * int(tpm)
 		}
 		d.sms = int(sm)
+		var l2 int32
+		if cuDeviceGetAttribute(&l2, attrL2, d.dev) == 0 && l2 > 0 {
+			d.l2 = int(l2)
+		}
 		var coop int32
 		d.coop = cuLaunchCooperativeKernel != nil && cuOccupancy != nil &&
 			cuDeviceGetAttribute(&coop, attrCoopLaunch, d.dev) == 0 && coop != 0
@@ -188,6 +196,10 @@ func (d *Device) Slots() int { return d.slots }
 
 // Multiprocessors is CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT.
 func (d *Device) Multiprocessors() int { return d.sms }
+
+// L2Bytes is CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE, 0 where the driver would not
+// say.
+func (d *Device) L2Bytes() int { return d.l2 }
 
 // Ordinal is the CUDA device this context was opened on.
 func (d *Device) Ordinal() int { return d.ord }

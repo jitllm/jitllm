@@ -878,6 +878,8 @@ func (c *cudaDev) Slots() int { return c.d.Slots() }
 
 func (c *cudaDev) Multiprocessors() int { return c.d.Multiprocessors() }
 
+func (c *cudaDev) L2Bytes() int { return c.d.L2Bytes() }
+
 // Mem is free and total device memory. It is an optional interface rather than
 // a Device method so a backend that cannot say need not invent a number.
 // CUDA's figure is machine-wide; Vulkan's (VK_EXT_memory_budget) accounts for

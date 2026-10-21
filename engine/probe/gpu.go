@@ -22,12 +22,13 @@ import (
 // rate and latency, its memory's latency, how many loads a thread keeps in
 // flight in a loop using each as it goes, and its float rate and delay.
 // No per-thread read rate: a thread's loads are bound by their latency,
-// which the estimate takes from the kernel's loads themselves. The caches
-// are found from one thread's chase over sets growing by halves: the
-// nearest, a multiprocessor's own, is the largest set under twice the
-// smallest set's latency, the last the largest past it under the midpoint
-// of its latency and the memory's; its latency is the median over the sets
-// past twice the nearest. Read rates cannot find them: the
+// which the estimate takes from the kernel's loads themselves. The nearest
+// cache, a multiprocessor's own, is found from one thread's chase over sets
+// growing by halves: the largest set under twice the smallest set's
+// latency. The last cache is the size the runtime states where it states
+// one (CUDA), else the largest set past the nearest under the midpoint of
+// its latency and the memory's; its latency is the median over the sets
+// past twice the nearest and within the TLB's reach. Read rates cannot find them: the
 // multiprocessors' nearest caches together can hold more than the last.
 // The last's rate is every workgroup reading one set of half its size, so
 // each multiprocessor reads more than its own cache holds. The last cache is found
@@ -143,9 +144,13 @@ func GPU(d backend.Device) (cost.Device, error) {
 			l2lat = min(l2lat, pt.lat)
 		}
 	}
-	for _, pt := range sweep {
-		if pt.set > l1 && pt.lat < (l2lat+out.Latency)/2 {
-			l2 = pt.set
+	if st, ok := d.(backend.L2Device); ok && st.L2Bytes() > 0 {
+		l2 = int64(st.L2Bytes())
+	} else {
+		for _, pt := range sweep {
+			if pt.set > l1 && pt.lat < (l2lat+out.Latency)/2 {
+				l2 = pt.set
+			}
 		}
 	}
 	if l1 > 0 {
@@ -162,7 +167,7 @@ func GPU(d backend.Device) (cost.Device, error) {
 	}
 	var plateau []float64
 	for _, pt := range sweep {
-		if pt.set > 2*l1 && pt.set <= l2 {
+		if pt.set > 2*l1 && pt.set <= min(l2, tlbReach) {
 			plateau = append(plateau, pt.lat)
 		}
 	}
@@ -237,6 +242,11 @@ func GPU(d backend.Device) (cost.Device, error) {
 // defaultSlots is the resident threads taken for a device whose runtime
 // will not say (Vulkan, Metal): the figure the device tier takes for it.
 const defaultSlots = 16384
+
+// tlbReach is the largest set a chase measures a cache's latency over: past
+// a few megabytes a random walk waits for page walks as much as for the
+// cache (an A100's or an H100's L2 read 96 MiB and 256 KiB that way).
+const tlbReach = 4 << 20
 
 // gpuProbe holds the device the probe measures and what it allocated, and
 // the launch that keeps it loaded between timed ones.
