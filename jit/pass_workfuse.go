@@ -175,6 +175,7 @@ func (w WorkFuse) phase(k, m *Kernel, outer []int) {
 		}
 		if l >= 0 {
 			k.Loops[l].Range, k.Loops[l].Span = true, walk(p.Span-1)+1
+			k.Loops[l].End, k.Loops[l].Align = walk(p.End)+1, p.Align
 		}
 	}
 }

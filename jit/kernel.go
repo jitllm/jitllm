@@ -60,6 +60,9 @@ type Loop struct {
 	Span   int
 	Unit   int
 	Bound  Bound
+	// End and Align are the range's: 1 + the node of its end, and the
+	// alignment its positions start at.
+	End, Align int
 	Spread bool
 	// Elem, where set, is 1 + the node that is the spread loop's element.
 	Elem int

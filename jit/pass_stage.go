@@ -49,13 +49,15 @@ func (p Stage) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				size = max(size, b.Size)
 			}
 		}
-		plane := m.buf(Buf{Kind: BufShared, Elem: ir.F32, Size: size})
+		J := 0
+		for i := range staged {
+			J = max(J, m.Bufs[i].Shape[3])
+		}
+		plane := m.buf(Buf{Kind: BufShared, Elem: ir.F32, Size: size, Shape: []int{size / J, J}})
 		base := m.bin(OpMul, ir.U32, group, m.u32(G))
-		local := func(b int, ax []int) int {
+		local := func(b int, ax []int) []int {
 			sh := m.Bufs[b].Shape
-			h := m.bin(OpSub, ir.U32, ax[1], base)
-			j := m.bin(OpMin, ir.U32, ax[3], m.u32(sh[3]-1))
-			return m.bin(OpAdd, ir.U32, j, m.bin(OpMul, ir.U32, h, m.u32(sh[3])))
+			return []int{m.bin(OpSub, ir.U32, ax[1], base), m.bin(OpMin, ir.U32, ax[3], m.u32(sh[3]-1))}
 		}
 		for i := range m.Nodes {
 			nd := m.Nodes[i]
@@ -63,7 +65,7 @@ func (p Stage) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				continue
 			}
 			if staged[nd.Buf] {
-				m.Nodes[i] = Node{Op: OpLoad, Type: ir.F32, Buf: plane, A: local(nd.Buf, nd.Ax)}
+				m.Nodes[i] = Node{Op: OpLoad, Type: ir.F32, Buf: plane, Ax: local(nd.Buf, nd.Ax)}
 			} else if m.Bufs[nd.Buf].Plane {
 				m.Nodes[i].Buf = plane
 			}
@@ -74,7 +76,7 @@ func (p Stage) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				continue
 			}
 			if staged[s.Buf] {
-				s.Ix, s.Buf, s.Ax = local(s.Buf, s.Ax), plane, nil
+				s.Ax, s.Buf = local(s.Buf, s.Ax), plane
 			} else if m.Bufs[s.Buf].Plane {
 				s.Buf = plane
 			}

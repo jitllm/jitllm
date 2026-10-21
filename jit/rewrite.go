@@ -273,7 +273,7 @@ func (k *Kernel) compact() {
 		}
 	}
 	for _, l := range k.Loops {
-		for _, x := range []int{l.Count, l.Span, l.Elem} {
+		for _, x := range []int{l.Count, l.Span, l.Elem, l.End} {
 			if x > 0 {
 				walk(x - 1)
 			}
@@ -324,7 +324,7 @@ func (k *Kernel) compact() {
 	}
 	for i := range k.Loops {
 		l := &k.Loops[i]
-		l.Count, l.Span, l.Elem = re(l.Count), re(l.Span), re(l.Elem)
+		l.Count, l.Span, l.Elem, l.End = re(l.Count), re(l.Span), re(l.Elem), re(l.End)
 	}
 	if p := k.Positions; p != nil {
 		q := *p

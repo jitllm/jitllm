@@ -16,6 +16,7 @@ func gpuProfile() Profile {
 		Unroll{Full: 32, Factor: 4, Over: BoundWarps},
 		Chains{N: 4},
 		Trips{},
+		Mask{},
 		Fuse{Pairs: []Pair{{From: PrimMap, To: PrimMap, AtStores: true}, {From: PrimContract, To: PrimMap, Additive: true}}},
 		Threads{Group: 128},
 		WorkRow{Group: 1024},
