@@ -7,7 +7,8 @@ import "github.com/jitllm/jitllm/jit/ir"
 // loop over positions bound as Over, Factor trips a trip. Where Vectors is
 // set, a vector loop that carries a sum and stores nothing, or that runs a
 // fixed count of at least Vectors trips, runs Vectors vectors a trip, the
-// vectors left in a loop of one a trip after it.
+// vectors left in a loop of one a trip after it; a sum's vector loop of
+// fewer fixed trips runs them all in one.
 type Unroll struct {
 	Full    int
 	Factor  int
@@ -26,6 +27,11 @@ func (p Unroll) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				l := m.Loops[c]
 				sum := len(m.foldsOf(c)) > 0 && !m.storesAt(c)
 				fixed := l.Count == 0 && l.Trip >= p.Vectors && len(m.foldsOf(c)) == 0
+				if l.Lanes > 0 && l.Copies == 0 && !m.hasInner(c) && sum && l.Count == 0 && l.Trip > 1 && l.Trip < p.Vectors {
+					m.unrollShort(c)
+					changed = true
+					continue
+				}
 				if l.Lanes > 0 && l.Copies == 0 && !m.hasInner(c) && (sum || fixed) {
 					m.unrollVectors(c, p.Vectors)
 					changed = true
@@ -236,4 +242,25 @@ func (k *Kernel) storeCopy(s Store, sub map[int]int, at int) Store {
 		n.Ix = k.copyOf(s.Ix, sub)
 	}
 	return n
+}
+
+// unrollShort runs vector loop c's fixed trips, fewer than a trip of the
+// unrolled form, as copies in one trip.
+func (k *Kernel) unrollShort(c int) {
+	n := k.Loops[c].Trip
+	L := k.Loops[c].Lanes
+	it := k.iterOf(c)
+	for _, f := range k.foldsOf(c) {
+		step := k.Nodes[f].A
+		acc := f
+		for j := 0; j < n; j++ {
+			at := it
+			if j > 0 {
+				at = k.bin(OpAdd, ir.U32, it, k.u32(j*L))
+			}
+			acc = k.copyOf(step, map[int]int{f: acc, it: at})
+		}
+		k.Nodes[f].A = acc
+	}
+	k.Loops[c].Copies, k.Loops[c].Trip = n, 1
 }

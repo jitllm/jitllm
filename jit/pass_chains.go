@@ -18,9 +18,9 @@ func (p Chains) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			m := k.clone()
 			changed := false
 			for c, l := range m.Loops {
-				if l.Copies == p.N {
+				if l.Copies > 1 && l.Copies <= p.N {
 					for _, f := range m.foldsOf(c) {
-						if m.chainFold(c, f, p.N) {
+						if m.chainFold(c, f, l.Copies, p.N) {
 							changed = true
 						}
 					}
@@ -90,8 +90,8 @@ func (k *Kernel) reassociate(v, n int) (int, bool) {
 }
 
 // chainFold splits fold f of loop c, a chain of n adds into it a trip, into
-// n folds.
-func (k *Kernel) chainFold(c, f, n int) bool {
+// chains folds, add j into fold j; a fold no add goes into is its start.
+func (k *Kernel) chainFold(c, f, n, chains int) bool {
 	var links []int
 	x := k.Nodes[f].A
 	for len(links) < n {
@@ -112,7 +112,7 @@ func (k *Kernel) chainFold(c, f, n int) bool {
 		return false
 	}
 	t, init := k.Nodes[f].Type, k.Nodes[f].B
-	sums := make([]int, n)
+	sums := make([]int, n, chains)
 	for j := 0; j < n; j++ {
 		link := links[n-1-j]
 		if j == 0 {
@@ -132,6 +132,11 @@ func (k *Kernel) chainFold(c, f, n int) bool {
 		}
 	}
 	k.Nodes[f].A = links[n-1]
+	for len(sums) < chains {
+		e := k.add(Node{Op: OpFold, At: c, Type: t, B: init})
+		k.Nodes[e].A = e
+		sums = append(sums, e)
+	}
 	last := f
 	family := map[int]bool{c: true}
 	for {

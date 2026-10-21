@@ -45,6 +45,8 @@ func cpuProfile() Profile {
 		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimMap, Then: true}}},
 		RunLengths{Widths: true},
 		Simplify{},
+		Spans{Page: 64},
+		Simplify{},
 		InPlace{},
 		Halves{KeepsPayload: true},
 		Axpy{},
@@ -71,7 +73,7 @@ func cpuProfile() Profile {
 
 // mainArgs is main's host argument block: Out, W, A, AScale, Rows, K, Scr,
 // and the paired kernels' Out2 and AScale2.
-var mainArgs = ArgFields{Out: []int{0, 120}, Weight: 8, Act: 16, Consts: 56, In: []int{24, 136}, Vectors: 40, Tail: 32, Counts: []int{32, 40}}
+var mainArgs = ArgFields{Out: []int{0, 120}, Weight: 8, Act: 16, Query: 112, Consts: 56, In: []int{24, 136}, Vectors: 40, Tail: 32, Counts: []int{32, 40}}
 
 // mainWorkgroups is main's layout of a range's partitions over workgroups.
 var mainWorkgroups = Workgroups{MinWarps: 4, MaxWarps: 8, Shared: 32 << 10, GroupDims: 96, Chunk: 2048, SlotThreads: 1280, PerSplit: 8}

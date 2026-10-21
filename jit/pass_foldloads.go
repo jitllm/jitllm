@@ -2,7 +2,9 @@ package jit
 
 // FoldLoads takes a load its one reader can read from memory as that
 // reader's operand: the second multiplicand of a sum's step in a vector
-// loop, or of a map's operation in a vector loop no scalar tail follows.
+// loop -- the first where the second is a load that must be widened -- or
+// the second operand of a map's operation in a vector loop no scalar tail
+// follows.
 type FoldLoads struct{}
 
 func (FoldLoads) Name() string { return "foldloads" }
@@ -19,9 +21,15 @@ func (p FoldLoads) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			default:
 				continue
 			}
-			ld := k.Nodes[b]
-			if ld.Op != OpLoad || ld.Mem || k.uses(b) != 1 {
-				continue
+			foldable := func(x int) bool {
+				ld := k.Nodes[x]
+				return ld.Op == OpLoad && !ld.Mem && !k.Bufs[ld.Buf].Half && k.uses(x) == 1
+			}
+			if !foldable(b) {
+				if nd.Op != OpFma || !foldable(nd.A) || k.Nodes[nd.B].Op != OpLoad {
+					continue
+				}
+				b = nd.A
 			}
 			c := hs[i]
 			if c < 0 || k.Loops[c].Lanes == 0 {

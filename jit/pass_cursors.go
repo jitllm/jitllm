@@ -167,6 +167,9 @@ func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (l
 			}
 		}
 		step := g.times(stride, lin{"": int64(max(1, k.Loops[c].Lanes) * max(1, k.Loops[c].Copies))})
+		if k.Loops[c].once() {
+			step = lin{}
+		}
 		trips := lin{"": int64(k.Loops[c].Trip)}
 		if k.Loops[c].Count > 0 {
 			trips = g.of(k.Loops[c].Count - 1)

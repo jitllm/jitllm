@@ -18,13 +18,15 @@ type Args struct {
 
 // ArgFields are the byte offsets of the argument words: the buffers written
 // in order, a weight's or the history's address (or the row a kernel
-// narrows into binary16), the activations a weight is read beside, a block
+// narrows into binary16), the activations a weight is read beside, the
+// value a sum over the history's width reads beside it, a block
 // of constants, the other buffers read in order; a vector loop's count and
 // its tail's, and the other counts in order.
 type ArgFields struct {
 	Out           []int
 	Weight        int
 	Act           int
+	Query         int
 	Consts        int
 	In            []int
 	Vectors, Tail int
@@ -175,6 +177,10 @@ func (k *Kernel) bindBufs(f ArgFields) {
 		}
 	}
 	sort.SliceStable(order, func(i, j int) bool { return k.firstBuf(order[i]) < k.firstBuf(order[j]) })
+	query := map[Operand]bool{}
+	for _, o := range order {
+		query[o] = k.queries(o)
+	}
 	offsets := map[Operand]int{}
 	for _, o := range order {
 		offsets[o] = k.split(byOp[o])
@@ -209,6 +215,8 @@ func (k *Kernel) bindBufs(f ArgFields) {
 			fl = f.Weight
 		case weight && f.Act > 0 && !acts && o.Kind != OperandVector:
 			fl, acts = f.Act, true
+		case f.Query > 0 && query[o] && o.Kind != OperandTable:
+			fl = f.Query
 		default:
 			fl = f.In[min(ins, len(f.In)-1)]
 			ins++
@@ -319,6 +327,43 @@ func (k *Kernel) computedFrom(i int, op Op) bool {
 	}
 	for _, a := range k.args(&nd) {
 		if k.computedFrom(*a, op) {
+			return true
+		}
+	}
+	return false
+}
+
+// queries reports whether operand o is read beside the history by a sum
+// over the history's width: its loads and the history's both in the step
+// of a sum whose loop runs over the history's last coordinate.
+func (k *Kernel) queries(o Operand) bool {
+	for f, nd := range k.Nodes {
+		if nd.Op != OpFold {
+			continue
+		}
+		var reads, history bool
+		var walk func(i int)
+		seen := map[int]bool{}
+		walk = func(i int) {
+			if seen[i] || i == f {
+				return
+			}
+			seen[i] = true
+			x := k.Nodes[i]
+			if x.Op == OpLoad {
+				b := k.Bufs[x.Buf]
+				reads = reads || b.Operand == o
+				history = history || b.Half && len(x.Ax) > 0 && k.varies(x.Ax[len(x.Ax)-1], nd.At)
+			}
+			if x.Op == OpFold {
+				return
+			}
+			for _, a := range k.args(&x) {
+				walk(*a)
+			}
+		}
+		walk(nd.A)
+		if reads && history {
 			return true
 		}
 	}

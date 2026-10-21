@@ -64,7 +64,7 @@ func (k *Kernel) cse() bool {
 			ops = append(ops, *a)
 		}
 		key := fmt.Sprint(nd.Op, nd.Type, ops, nd.At, nd.Buf, nd.Imm)
-		if nd.Op == OpConst || nd.Op == OpCoord || nd.Op == OpParam || nd.Op == OpLength {
+		if nd.Op == OpConst || nd.Op == OpCoord || nd.Op == OpParam || nd.Op == OpLength || nd.Op == OpSpan {
 			key = fmt.Sprint(nd.Op, nd.Type, nd.A, nd.Imm)
 		}
 		if nd.Op == OpIter {

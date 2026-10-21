@@ -201,6 +201,10 @@ func (e *x86Lowerer) node(i int) {
 			a.VFMADD231PSMem(e.reg(i), e.reg(nd.A), e.addr(b.Buf, b.A, b.Ptr))
 			return
 		}
+		if x := k.Nodes[nd.A]; x.Mem {
+			a.VFMADD231PSMem(e.reg(i), e.reg(nd.B), e.addr(x.Buf, x.A, x.Ptr))
+			return
+		}
 		a.VFMADD231PS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 	case OpHSum:
 		r := e.reg(i)
@@ -291,6 +295,9 @@ func (e *x86Lowerer) enter(c int) {
 			a.MOVQ(e.ptrReg(cu.Buf, cu.Ptr), e.ptrReg(cu.Buf, 0))
 		}
 	}
+	if l.once() {
+		return
+	}
 	ctr := e.counter(c)
 	runtime := true
 	if l.Count > 0 {
@@ -320,6 +327,9 @@ func (e *x86Lowerer) leave(c int) {
 		if cu.Elems != 0 {
 			a.ADDimm(e.ptrReg(cu.Buf, cu.Ptr), int32(cu.Elems*elemBytes(k.Bufs[cu.Buf])))
 		}
+	}
+	if l.once() {
+		return
 	}
 	a.DEC(e.counter(c))
 	a.JNZ(e.top[c])

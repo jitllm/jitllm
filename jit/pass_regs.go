@@ -16,8 +16,8 @@ import (
 // in the order the sequence makes them: a result its first operand's where
 // the operand dies there (an fma's the addend's, a sum's step the sum's), a
 // sum that carries another on that one's, else the lowest free besides its
-// operands -- within a trip of a loop that adds several sums, a register one
-// sum's value freed goes to no other sum's; within a trip of an innermost
+// operands -- within a trip of a loop of several trips that adds several
+// sums, a register one sum's value freed goes to no other sum's; within a trip of an innermost
 // loop, a register freed by an operation that wrote its result elsewhere
 // goes to nothing else; and a register that held a sum goes to no value of
 // a loop that runs after the sum's.
@@ -230,7 +230,7 @@ func (b *binder86) gprs() error {
 	}
 	for c := range k.Loops {
 		l := &k.Loops[c]
-		if l.Reg != 0 {
+		if l.Reg != 0 || l.once() {
 			continue
 		}
 		for _, r := range []int{p.Counters[0], p.Counters[1]} {
@@ -348,7 +348,7 @@ func (b *binder86) vectors() error {
 	chain := k.chains()
 	stepOf := map[int]int{}
 	for i, nd := range k.Nodes {
-		if nd.Op == OpFold {
+		if nd.Op == OpFold && nd.A != i {
 			stepOf[nd.A] = i
 		}
 	}
@@ -486,7 +486,7 @@ func (k *Kernel) chains() map[int]int {
 	hs := k.homes()
 	for c, l := range k.Loops {
 		folds := k.foldsOf(c)
-		if l.Copies < 2 || len(folds) < 2 {
+		if l.Copies < 2 || len(folds) < 2 || l.once() {
 			continue
 		}
 		for j, f := range folds {

@@ -236,6 +236,10 @@ const (
 	OpGtW
 	// OpAndNot is A with the bits of B cleared.
 	OpAndNot
+	// OpSpan is, for a call that runs one span of a range's positions
+	// within a page, the span's first position where Imm is 0, its length
+	// where Imm is 1: values the caller computes.
+	OpSpan
 )
 
 // Node is one value: a scalar, or inside a loop of Lanes a vector of them.
@@ -335,7 +339,7 @@ func (n *Kernel) elements() int {
 
 var opNames = [...]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
 	"less", "select", "sqrt", "exp", "shl", "shr", "and", "xor", "cvtf32", "cvti32", "thread", "groupsum", "groupmax", "exchange",
-	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot"}
+	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "span"}
 
 func (o Op) String() string {
 	if int(o) < len(opNames) {
@@ -382,3 +386,6 @@ func (k *Kernel) groups() int {
 	}
 	return (k.elements() + k.Group - 1) / k.Group
 }
+
+// once reports whether a loop runs one fixed trip: its body, no count.
+func (l Loop) once() bool { return l.Count == 0 && l.Trip == 1 }

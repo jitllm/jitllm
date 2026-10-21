@@ -78,7 +78,12 @@ func (k *Kernel) consecutive(b, ix int, ax []int, it, c int) bool {
 				return false
 			}
 		}
-		return ax[len(ax)-1] == it
+		last := ax[len(ax)-1]
+		if last == it {
+			return true
+		}
+		nd := k.Nodes[last]
+		return nd.Op == OpAdd && (nd.B == it && !k.varies(nd.A, c) || nd.A == it && !k.varies(nd.B, c))
 	}
 	if ix == it {
 		return true
