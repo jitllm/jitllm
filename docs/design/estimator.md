@@ -21,7 +21,8 @@ estimator.
   `go run ./scripts/genhardware -probe engine/cost/hardware_table.go` probes
   a machine into it, and a box without the source runs the compiled command
   and its table comes back.
-- `engine/probe` -- the probes: host (amd64), GPU (CUDA, Metal).
+- `engine/probe` -- the probes: host (amd64 with AVX2, arm64), GPU (CUDA,
+  Metal).
 - `paritytest/board/estimate_test.go` (`TestEstimateMatchesTheHost`),
   `paritytest/board/estimate_gpu_test.go` (`TestEstimateMatchesTheGPU`) --
   the validation.
@@ -144,7 +145,7 @@ larger than the caches lives in.
   read low for the same kernel shape as well.
 - **The M4's launch cost** reads 1.5 us on most runs and 3.3 us on some,
   the same within a run: where macOS places the encoding thread.
-- **Arm64 and the SSE tier** have no host probe yet, so the M4's CPU, arm64
-  servers and the Atoms are not in the table.
+- **The SSE tier** has no host probe yet (its measuring kernels use FMA),
+  so the Atoms are not in the table.
 - **Per-kernel times on the host** carry the clock's cost (taken off) and
   rdtsc ordering; a call shorter than about 20 ns is within its noise.
