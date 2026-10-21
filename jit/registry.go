@@ -64,7 +64,7 @@ type Registry struct {
 // Default is the registry whose profiles are set to main's choices.
 func Default() *Registry {
 	return &Registry{
-		Decompositions: map[graph.OpKind]Decomposition{},
+		Decompositions: decompositions(),
 		Profiles:       map[DeviceKind]Profile{DeviceGPU: {}, DeviceCPU: {}},
 		Lowerings:      map[DeviceKind]Lowering{DeviceGPU: gpuLowering{}, DeviceCPU: cpuLowering{}},
 	}
