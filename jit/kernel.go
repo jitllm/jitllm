@@ -290,6 +290,7 @@ const (
 	OpFirstLane
 	// OpCopy is A in another register.
 	OpCopy
+	numOps
 )
 
 // Node is one value: a scalar, or inside a loop of Lanes a vector of them.
@@ -404,9 +405,9 @@ func (n *Kernel) elements() int {
 	return e
 }
 
-var opNames = [...]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
+var opNames = [numOps]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
 	"less", "select", "sqrt", "exp", "shl", "shr", "and", "xor", "cvtf32", "cvti32", "thread", "groupsum", "groupmax", "exchange",
-	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "round", "span", "hmax", "hmin", "eq", "or", "lanes", "sar", "dupeven", "dupodd", "swappairs", "addsub", "firstlane", "copy"}
+	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "unpack", "upper", "round", "span", "hmax", "hmin", "eq", "or", "lanes", "sar", "dupeven", "dupodd", "swappairs", "addsub", "firstlane", "copy"}
 
 func (o Op) String() string {
 	if int(o) < len(opNames) {

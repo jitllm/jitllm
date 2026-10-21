@@ -94,3 +94,23 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 func (c *Context) pages() int {
 	return c.Step.Rows * ((c.Step.Keys + c.Step.Page - 1) / c.Step.Page)
 }
+
+// stepWord is word w of a table the engine writes for a step, at step s,
+// where the step decides it: a decode row attends its s.Keys positions
+// from the first, its page table from the table's start, and the table
+// holds the pages in order.
+func stepWord(o Operand, w int, s Step) (float64, bool) {
+	if o.Kind == tablePages.Kind && o.Name == tablePages.Name {
+		return float64(w), true
+	}
+	if o.Kind != tableRows.Kind || o.Name != tableRows.Name {
+		return 0, false
+	}
+	switch w % rowWords {
+	case rowTab, rowStart:
+		return 0, true
+	case rowEnd:
+		return float64(s.Keys), true
+	}
+	return float64(max(0, s.Keys-1)), true
+}

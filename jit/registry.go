@@ -24,14 +24,20 @@ func (k DeviceKind) String() string {
 }
 
 // Device is what the composer knows of a device: its backend, the threads
-// it holds resident and the width of a subgroup or a vector.
+// it holds resident and the width of a subgroup or a vector, and what an
+// estimate weighs, as a probe measured it.
 type Device struct {
 	Kind         DeviceKind
 	Slots, Lanes int
-	// Bandwidth is the bytes a second the device moves, Launch the seconds
-	// a launch costs, Link the bytes a second it exchanges with another
-	// device: what an estimate weighs.
-	Bandwidth, Launch, Link float64
+	// Bandwidth is the bytes a second the device's memory serves all its
+	// threads, Thread what one thread gets alone; Launch the seconds a
+	// launch or a call costs; Link the bytes a second it exchanges with
+	// another device.
+	Bandwidth, Thread, Launch, Link float64
+	// Caches are its cache levels, nearest first.
+	Caches [3]Cache
+	// Rates are the instructions a second it issues of each class.
+	Rates [NumClasses]Rate
 }
 
 // Lowered is a kernel in its backend's form.
