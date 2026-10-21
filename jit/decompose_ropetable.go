@@ -110,7 +110,8 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	cv = neg(cv, x.op(OpAdd, U, nb, cw(ropeOneVec)))
 	ms := x.load(1, x.u(uint32(8*stride)))
 	at := x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, r, x.u(uint32(P))), p), x.u(2))
-	cvs, svs := x.op(OpMul, F, cv, ms), x.op(OpMul, F, sv, ms)
+	svs := x.op(OpMul, F, sv, ms)
+	cvs := x.op(OpMul, F, cv, ms)
 	at1 := x.op(OpAdd, U, at, x.u(1))
 
 	var live exprs

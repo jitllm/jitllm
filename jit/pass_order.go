@@ -231,6 +231,9 @@ func (o *orderer) need(i, c int) {
 		o.loop(o.childOf(h, c))
 		return
 	}
+	if nd.Op == OpZip {
+		o.stages(nd.A, nd.B, c)
+	}
 	for _, a := range k.evalArgs(&nd, o.pending()) {
 		switch {
 		case k.Nodes[*a].Op == OpFold:
@@ -962,4 +965,35 @@ func (k *Kernel) hornerStep(i int) bool {
 		}
 	}
 	return false
+}
+
+// stages makes the two values a zip interleaves stage by stage: from the
+// deepest pair of like operations down their paths, each pair's values in
+// the order they were made in the decomposition.
+func (o *orderer) stages(a, b, c int) {
+	k := o.k
+	var pairs [][2]int
+	for !o.done[a] && !o.done[b] && a != b && k.Nodes[a].Op == k.Nodes[b].Op {
+		pairs = append(pairs, [2]int{a, b})
+		na, nb := k.Nodes[a], k.Nodes[b]
+		next := false
+		for j, x := range k.args(&na) {
+			y := *k.args(&nb)[j]
+			if *x != y && !o.done[*x] && !o.done[y] && k.Nodes[*x].Op == k.Nodes[y].Op && arity(k.Nodes[*x].Op) > 0 {
+				a, b, next = *x, y, true
+				break
+			}
+		}
+		if !next {
+			break
+		}
+	}
+	for p := len(pairs) - 1; p >= 0; p-- {
+		x, y := pairs[p][0], pairs[p][1]
+		if y < x {
+			x, y = y, x
+		}
+		o.need(x, c)
+		o.need(y, c)
+	}
 }
