@@ -203,7 +203,10 @@ Each step ends with its gate green and the board measured.
    definition reads, no op names outside decompositions); the board opening the
    model and composing it.
 2. **Decompositions** for every op synth-ernie45 runs: blocks, head, tables.
-3. **Naive IR and both lowerings**, every kernel naive on both devices.
+3. **Naive IR** for every part, lowered on cuda-sm70 once its elements are
+   bound to threads. The x86 lowering grows with the CPU passes in step 5:
+   the design lowers after the last pass, and a scalar lowering of naive IR
+   would be thrown away against main's vector kernels.
 4. **cuda-sm70 passes**, one difference at a time, in the table's order:
    matvecs, residual fusion, norm and int8 chain, activation chain, rotary and
    history, attention, then the head and the tables.
