@@ -23,12 +23,12 @@ type Args struct {
 // of constants, the other buffers read in order; a vector loop's count and
 // its tail's, and the other counts in order.
 type ArgFields struct {
-	Out           []int
-	Weight        int
-	Act           int
-	Query         int
+	Out    []int
+	Weight int
+	Act    int
+	Query  int
 	// Second is, for a field, the field of a pair's second head's buffer.
-	Second map[int]int
+	Second        map[int]int
 	Consts        int
 	In            []int
 	Vectors, Tail int
