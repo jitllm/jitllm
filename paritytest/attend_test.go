@@ -35,52 +35,8 @@ func emitPlanned(t *testing.T, p compose.Planned) []*ir.Kernel {
 	return []*ir.Kernel{k}
 }
 
-// TestPagedSoftmaxIsMains holds the composer's staged softmax, a thread an
-// item, to main's PagedStagedSoftmax at lanes 1.
-func TestPagedSoftmaxIsMains(t *testing.T) {
-	for _, s := range stagedShapes {
-		name := fmt.Sprintf("r%d_h%d_kv%d_d%d_s%d_c%d", s.Rows, s.Heads, s.KVHeads, s.Dim, s.Splits, s.Chunk)
-		t.Run(name, func(t *testing.T) {
-			mk, err := mainkernels.PagedStagedSoftmax(s, 1)
-			if err != nil {
-				t.Fatal(err)
-			}
-			g := &compose.Row{Width: s.Rows * s.Heads * s.Splits, Rows: 1}
-			scores := g.Buf(compose.BufRow)
-			g.Buf(compose.BufU32)
-			out, part := g.Buf(compose.BufOut), g.Buf(compose.BufOut)
-			g.Buf(compose.BufU32)
-			desc := g.Buf(compose.BufU32)
-			g.PagedSoftmax(scores, out, part, desc, pagedOf(s))
-			same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{Target: sm70}))
-		})
-	}
-}
-
-// TestPagedScoresIsMains holds the composer's staged scores, a thread a
-// slot, to main's PagedStagedScores at lanes 1 over f32 K.
-func TestPagedScoresIsMains(t *testing.T) {
-	for _, s := range stagedShapes {
-		name := fmt.Sprintf("r%d_h%d_kv%d_d%d_s%d_c%d", s.Rows, s.Heads, s.KVHeads, s.Dim, s.Splits, s.Chunk)
-		t.Run(name, func(t *testing.T) {
-			mk, err := mainkernels.PagedStagedScores(s, 1)
-			if err != nil {
-				t.Fatal(err)
-			}
-			p := pagedOf(s)
-			g := &compose.Row{Width: mainkernels.PagedStagedScoreItems(s), Rows: 1}
-			q, k := g.Buf(compose.BufRow), g.Buf(compose.BufRow)
-			g.Buf(compose.BufU32)
-			out := g.Buf(compose.BufOut)
-			table, desc := g.Buf(compose.BufU32), g.Buf(compose.BufU32)
-			g.PagedScores(q, k, out, table, desc, p, s.Scale, s.Softcap)
-			same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{Target: sm70}))
-		})
-	}
-}
-
-// TestPagedLanesAreMains holds the composer's staged softmax and a latent
-// row's scores, an item a subgroup, to main's at lanes 32: two splits a
+// TestPagedLanesAreMains holds the softmax and scores prims over a
+// subgroup, a latent row's slot an item, to main's at lanes 32: two splits a
 // 64-thread group, four slots a 128-thread one, a head past a whole number
 // of lanes included.
 func TestPagedLanesAreMains(t *testing.T) {
@@ -94,16 +50,11 @@ func TestPagedLanesAreMains(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			p := pagedOf(s)
-			p.Lanes = 32
-			g := &compose.Row{Width: 32, Rows: s.Rows * s.Heads * s.Splits}
-			scores := g.Buf(compose.BufRow)
-			g.Buf(compose.BufU32)
-			out, part := g.Buf(compose.BufOut), g.Buf(compose.BufOut)
-			g.Buf(compose.BufU32)
-			desc := g.Buf(compose.BufU32)
-			g.PagedSoftmax(scores, out, part, desc, p)
-			same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{Target: sm70, RowGroup: 64, GroupRows: true}))
+			gs, err := softmaxProgram(s).Lower()
+			if err != nil {
+				t.Fatal(err)
+			}
+			same(t, name, []*ir.Kernel{mk}, planned(t, &gs[0].Row, compose.Facts{Target: sm70, RowGroup: 64, GroupRows: true}))
 		})
 		if s.MLA == 0 {
 			continue
@@ -113,36 +64,26 @@ func TestPagedLanesAreMains(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			p := pagedOf(s)
-			p.Lanes = 32
-			g := &compose.Row{Width: 32, Rows: mainkernels.PagedStagedScoreItems(s)}
-			q, k := g.Buf(compose.BufRow), g.Buf(compose.BufRow)
-			g.Buf(compose.BufU32)
-			out := g.Buf(compose.BufOut)
-			table, desc := g.Buf(compose.BufU32), g.Buf(compose.BufU32)
-			g.PagedScores(q, k, out, table, desc, p, s.Scale, s.Softcap)
-			same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{Target: sm70, GroupRows: true}))
-		})
-	}
-}
-
-// TestPagedAccIsMains holds the composer's staged accumulate to main's
-// PagedStagedAcc over f32 V.
-func TestPagedAccIsMains(t *testing.T) {
-	for _, s := range stagedShapes {
-		name := fmt.Sprintf("r%d_h%d_kv%d_d%d_s%d_c%d", s.Rows, s.Heads, s.KVHeads, s.Dim, s.Splits, s.Chunk)
-		t.Run(name, func(t *testing.T) {
-			mk, err := mainkernels.PagedStagedAcc(s)
+			pa := pagedOf(s)
+			pa.Lanes = 32
+			p := &compose.Program{Rows: s.Rows, Vals: []compose.Value{{Buf: -1}, {Buf: -1}, {Elem: compose.ValU32, Buf: -1}, {Elem: compose.ValU32, Buf: -1}, {Buf: -1}}}
+			p.Prims = []compose.Prim{{Kind: compose.PrimScores, In: []int{0, 1, 2, 3}, Out: []int{4}, Paged: pa, Scale: s.Scale, Softcap: s.Softcap}}
+			gs, err := p.Lower()
 			if err != nil {
 				t.Fatal(err)
 			}
-			g := &compose.Row{Width: mainkernels.PagedStagedAccThreads(s), Rows: 1}
-			wts, v := g.Buf(compose.BufRow), g.Buf(compose.BufRow)
-			g.Buf(compose.BufU32)
-			part := g.Buf(compose.BufOut)
-			table, desc := g.Buf(compose.BufU32), g.Buf(compose.BufU32)
-			g.PagedAcc(wts, v, part, table, desc, pagedOf(s))
-			same(t, name, []*ir.Kernel{mk}, planned(t, g, compose.Facts{Target: sm70}))
+			ls, err := gs[0].Launches(sm70)
+			if err != nil || len(ls) != 1 {
+				t.Fatalf("%d launches: %v", len(ls), err)
+			}
+			if want := mainkernels.PagedStagedScoreItems(s) * 32; ls[0].Groups*ls[0].Width != want {
+				t.Fatalf("%d groups of %d threads, main's %d threads", ls[0].Groups, ls[0].Width, want)
+			}
+			k, err := ls[0].Emit()
+			if err != nil {
+				t.Fatal(err)
+			}
+			same(t, name, []*ir.Kernel{mk}, []*ir.Kernel{k})
 		})
 	}
 }

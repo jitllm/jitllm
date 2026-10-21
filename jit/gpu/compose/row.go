@@ -951,6 +951,9 @@ func (g *Row) rowDeps() []bool {
 			switch nd.Kind {
 			case NRowIdx, NRowOff:
 				x = true
+			case NReduce:
+				// A reduction over a row's columns is the row's.
+				x = v[nd.A]
 			case NLoad:
 				if !nd.Indexed {
 					k := g.Bufs[nd.Buf].Kind
@@ -1248,23 +1251,27 @@ func (g *Row) emitIn(b *ir.Builder, params []ir.Value, s Schedule, cta func() ir
 			rowBase = b.Mul(ir.U32, r, width)
 		} else if s.Lanes > 0 {
 			L := s.Lanes
-			if L != g.Width || L&(L-1) != 0 || L > max(s.Target.Lanes, 1) || tr*tc > 1 || split > 1 || g.HasLive {
+			if L != g.Width || L&(L-1) != 0 || L > max(s.Target.Lanes, 1) || tc > 1 || split > 1 || g.HasLive {
 				return nil, fmt.Errorf("compose: a row of %d over %d lanes on a subgroup of %d", g.Width, L, s.Target.Lanes)
 			}
 			u := func(n int) ir.Value { return b.Const(ir.U32, int64(n)) }
+			rows := g.Rows / tr
 			switch {
 			case L == G:
 				// A workgroup a row.
-				flatIdx, r = b.And(ir.U32, b.TID(), u(L-1)), b.Min(ir.U32, cta(), u(g.Rows-1))
+				flatIdx, r = b.And(ir.U32, b.TID(), u(L-1)), b.Min(ir.U32, cta(), u(rows-1))
 			case L == 1:
-				flatIdx, r = u(0), b.Min(ir.U32, flat, u(g.Rows-1))
+				flatIdx, r = u(0), b.Min(ir.U32, flat, u(rows-1))
 			case s.GroupRows:
 				// G/L rows a workgroup, a row's lanes consecutive threads.
 				flatIdx = b.Rem(ir.U32, b.TID(), u(L))
-				r = b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, cta(), u(G/L)), b.Div(ir.U32, b.TID(), u(L))), u(g.Rows-1))
+				r = b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, cta(), u(G/L)), b.Div(ir.U32, b.TID(), u(L))), u(rows-1))
 			default:
-				flatIdx, r = b.And(ir.U32, flat, u(L-1)), b.Min(ir.U32, b.Div(ir.U32, flat, u(L)), u(g.Rows-1))
+				flatIdx, r = b.And(ir.U32, flat, u(L-1)), b.Min(ir.U32, b.Div(ir.U32, flat, u(L)), u(rows-1))
 			}
+			// A tile of rows a lane group: its envs the tile's rows.
+			rawRow, rawCol = r, flatIdx
+			r = strided(b, r, tr, rs)
 			flatRaw = flat
 			width = u(g.Width)
 			rowBase = b.Mul(ir.U32, r, width)

@@ -106,7 +106,6 @@ func (g *devTier) attendKeys(o *devOp, prog *devProgram, bs *blockScratch, rows,
 		prow = gaPRowW
 	}
 	scale, cap := g.scoreScale(p), p.AttnSoftcap
-	G := pa.HeadGroup()
 	// Where the device guarantees a subgroup, a split's softmax takes one,
 	// and so does a latent row's slot, hundreds of floats a key.
 	lanes := g.composeTarget().Lanes == ir.SubgroupLanes
@@ -117,13 +116,7 @@ func (g *devTier) attendKeys(o *devOp, prog *devProgram, bs *blockScratch, rows,
 			ps.Lanes = ir.SubgroupLanes
 		}
 	}
-	items := rows * (pa.Heads / G) * pa.Splits * pa.Chunk
 
-	if ps.Lanes > 1 {
-		// A latent row's scores over a subgroup: the composer's lane form
-		// of the scores prim is not built yet.
-		return g.stagedBuilt(items, ps, ss, pa, prow, vpool, vd, scale, cap)
-	}
 	// The staged chain as the composer's program: scores, softmax,
 	// accumulation and merge, each lowered alone and planned by the shape.
 	args := []genArg{gaIn0, gaKPool, vpool, gaTab, prow, gaScores, gaWts, gaParts, gaOut0}
@@ -133,7 +126,7 @@ func (g *devTier) attendKeys(o *devOp, prog *devProgram, bs *blockScratch, rows,
 	}
 	vals[3].Elem, vals[4].Elem = compose.ValU32, compose.ValU32
 	pr := &compose.Program{Rows: rows, Vals: vals, Prims: []compose.Prim{
-		{Kind: compose.PrimScores, In: []int{0, 1, 3, 4}, Out: []int{5}, Paged: pa, Scale: scale, Softcap: cap},
+		{Kind: compose.PrimScores, In: []int{0, 1, 3, 4}, Out: []int{5}, Paged: ps, Scale: scale, Softcap: cap},
 		{Kind: compose.PrimSoftmax, In: []int{5, 4}, Out: []int{6, 7}, Paged: pa},
 		{Kind: compose.PrimAcc, In: []int{6, 2, 3, 4}, Out: []int{7}, Paged: pa},
 		{Kind: compose.PrimMerge, In: []int{7}, Out: []int{8}, Paged: pa},
@@ -164,61 +157,6 @@ func (g *devTier) attendKeys(o *devOp, prog *devProgram, bs *blockScratch, rows,
 			}
 			ls = append(ls, l)
 		}
-	}
-	return ls
-}
-
-// stagedBuilt is the staged chain as the hand-shaped builders form it: what
-// a latent row over a subgroup still takes.
-func (g *devTier) stagedBuilt(items int, ps, ss, pa compose.Paged, prow, vpool genArg, vd int, scale, cap float32) []genLaunch {
-	rows, G := pa.Rows, pa.HeadGroup()
-	sc := &rowBuild{r: compose.Row{Width: items, Rows: 1}}
-	if ps.Lanes > 1 {
-		sc.r = compose.Row{Width: ps.Lanes, Rows: items}
-	}
-	q, k := sc.buf(compose.BufRow, gaIn0), sc.buf(compose.BufRow, gaKPool)
-	sc.buf(compose.BufU32, prow)
-	out := sc.buf(compose.BufOut, gaScores)
-	tab, desc := sc.buf(compose.BufU32, gaTab), sc.buf(compose.BufU32, prow)
-	sc.r.PagedScores(q, k, out, tab, desc, ps, scale, cap)
-
-	sm := &rowBuild{r: compose.Row{Width: rows * pa.Heads * pa.Splits, Rows: 1}}
-	if ss.Lanes > 1 {
-		sm.r = compose.Row{Width: ss.Lanes, Rows: rows * pa.Heads * pa.Splits}
-	}
-	scores := sm.buf(compose.BufRow, gaScores)
-	sm.buf(compose.BufU32, prow)
-	wts, part := sm.buf(compose.BufOut, gaWts), sm.buf(compose.BufOut, gaParts)
-	sm.buf(compose.BufU32, gaTab)
-	sm.r.PagedSoftmax(scores, wts, part, sm.buf(compose.BufU32, prow), ss)
-
-	ac := &rowBuild{r: compose.Row{Width: rows * (pa.Heads / G) * pa.Splits * vd, Rows: 1}}
-	w, v := ac.buf(compose.BufRow, gaWts), ac.buf(compose.BufRow, vpool)
-	ac.buf(compose.BufU32, prow)
-	apart := ac.buf(compose.BufOut, gaParts)
-	atab, adesc := ac.buf(compose.BufU32, gaTab), ac.buf(compose.BufU32, prow)
-	ac.r.PagedAcc(w, v, apart, atab, adesc, pa)
-
-	mg := &rowBuild{r: compose.Row{Width: rows * pa.Heads * vd, Rows: 1}}
-	mpart, mout := mg.buf(compose.BufRow, gaParts), mg.buf(compose.BufOut, gaOut0)
-	mg.r.PagedMerge(mpart, mout, -1, pa)
-
-	var ls []genLaunch
-	for i, rb := range []*rowBuild{sc, sm, ac, mg} {
-		f := compose.Facts{}
-		switch {
-		case i == 0 && ps.Lanes > 1:
-			f.GroupRows = true
-		case i == 1 && ss.Lanes > 1:
-			f.RowGroup, f.GroupRows = 64, true
-		}
-		k := g.rowKernWith(&rb.r, f)
-		if k.k == nil {
-			return nil
-		}
-		l := genLaunch{k: k.k, groups: k.groups, width: k.group, n: uint8(len(rb.args))}
-		copy(l.args[:], rb.args)
-		ls = append(ls, l)
 	}
 	return ls
 }

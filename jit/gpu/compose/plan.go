@@ -185,6 +185,10 @@ func (g *Row) PlanAt(s Schedule) ([]Planned, error) {
 		all[i] = i
 	}
 	threads := g.Rows / max(s.Tile, 1) * (g.Width / max(s.TileCols, 1))
+	if s.LaneLoops {
+		// Each element a row, its row over the lanes.
+		threads = g.Rows * g.Width / max(s.Tile, 1) * s.Lanes
+	}
 	if s.MMA {
 		threads = g.Width / (16 * s.MT) * (g.Rows / (8 * s.NT)) * ir.SubgroupLanes
 	}

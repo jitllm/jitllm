@@ -614,4 +614,9 @@ func (b *builder) scores(o Prim) {
 	// over 4/G chains.
 	G := p.HeadGroup()
 	b.g.Sched = &Schedule{Group: 128, Flat: true, TileCols: G, TileDigit: 3, Unroll: 32, UnrollOver: 512, Chains: max(1, 4/G)}
+	if p.Lanes > 1 {
+		// A slot over a subgroup: its dimensions dealt over the lanes, one
+		// chain a head, the head group a tile of rows.
+		b.g.Sched = &Schedule{Group: 128, Flat: true, Lanes: p.Lanes, LaneLoops: true, GroupRows: true, Tile: G, TileDigit: 3, Unroll: 1}
+	}
 }

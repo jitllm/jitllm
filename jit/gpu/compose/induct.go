@@ -406,8 +406,8 @@ func (g *Row) tiled(s Schedule) *Row {
 		return g
 	}
 	r := g.clone()
-	if s.TileDigit > 0 && tr == 1 {
-		if ok := r.tileDigit(s.TileDigit-1, tc); ok {
+	if s.TileDigit > 0 && (tr == 1) != (tc == 1) {
+		if ok := r.tileDigit(s.TileDigit-1, tr, tc); ok {
 			r = r.divmods(s)
 			r.liftOffsets(s)
 			return r
@@ -635,21 +635,26 @@ func (g *Row) iterFormed(iter int) bool {
 // split taken of the thread's tile with digit i's radix tc times smaller,
 // digit i that new digit times tc plus the element's place in the tile.
 // False where the group has no such split of its column.
-func (r *Row) tileDigit(i, tc int) bool {
+func (r *Row) tileDigit(i, tr, tc int) bool {
+	of, tile, off, n := NColumn, NColTile, NColOff, tc
+	if tr > 1 {
+		of, tile, off, n = NRowIdx, NRowTile, NRowOff, tr
+	}
+	tc = n
 	for _, d := range r.Digits {
-		if r.Nodes[d.Of].Kind != NColumn || i >= len(d.Radix) || d.Radix[i]%tc != 0 {
+		if r.Nodes[d.Of].Kind != of || i >= len(d.Radix) || d.Radix[i]%tc != 0 {
 			continue
 		}
 		radix := append([]int(nil), d.Radix...)
 		radix[i] /= tc
-		q := r.Add(Node{Kind: NColTile})
+		q := r.Add(Node{Kind: tile})
 		var out []int
 		for _, x := range radix {
 			out = append(out, r.UBin(OpRem, q, r.UConst(x)))
 			q = r.UBin(OpDiv, q, r.UConst(x))
 		}
 		out = append(out, q)
-		out[i] = r.UBin(OpAdd, r.UBin(OpMul, out[i], r.UConst(tc)), r.Add(Node{Kind: NColOff}))
+		out[i] = r.UBin(OpAdd, r.UBin(OpMul, out[i], r.UConst(tc)), r.Add(Node{Kind: off}))
 		for j, n := range d.Out {
 			r.Nodes[n] = r.Nodes[out[j]]
 		}

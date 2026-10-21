@@ -13,10 +13,19 @@ import (
 // combination.
 func (g *Row) laneLoops(s Schedule) (*Row, error) {
 	L := s.Lanes
-	if !s.LaneLoops || g.Width != 1 || L < 2 || L&(L-1) != 0 {
+	if !s.LaneLoops || L < 2 || L&(L-1) != 0 || g.Width != 1 && g.Rows != 1 {
 		return g, nil
 	}
 	r := g.clone()
+	if r.Width > 1 {
+		// A flat row: each element its own row first.
+		for i, nd := range r.Nodes {
+			if nd.Kind == NColumn {
+				r.Nodes[i] = Node{Kind: NRowIdx}
+			}
+		}
+		r.Rows, r.Width = r.Width, 1
+	}
 	r.Width = L
 	for i, nd := range r.Nodes {
 		if nd.Kind == NColumn {
@@ -31,12 +40,13 @@ func (g *Row) laneLoops(s Schedule) (*Row, error) {
 	}
 	for c, trip := range g.Loops {
 		var iter int
+		ragged := false
 		switch {
 		case trip > 0:
-			if trip%L != 0 {
-				return nil, fmt.Errorf("compose: %d trips over %d lanes", trip, L)
-			}
-			r.Loops[c] = trip / L
+			// Trips past a whole number of lanes: the last trip's lanes past
+			// the end read the last element and add nothing.
+			ragged = trip%L != 0
+			r.Loops[c] = (trip + L - 1) / L
 		default:
 			n := g.Trip[c]
 			r.Trip[c] = ub(OpShr, ub(OpAdd, ub(OpSub, ub(OpMax, n, lane), lane), u(L-1)), u(bits.TrailingZeros(uint(L))))
@@ -53,7 +63,26 @@ func (g *Row) laneLoops(s Schedule) (*Row, error) {
 				r.Nodes[i].A = ub(OpAdd, i, u(L))
 				continue
 			}
-			r.Nodes[i] = Node{Kind: NUBinary, Op: OpAdd, A: lane, B: ub(OpMul, iter, u(L))}
+			if !ragged {
+				r.Nodes[i] = Node{Kind: NUBinary, Op: OpAdd, A: lane, B: ub(OpMul, iter, u(L))}
+				continue
+			}
+			x := ub(OpAdd, lane, ub(OpMul, iter, u(L)))
+			r.Nodes[i] = Node{Kind: NUBinary, Op: OpMin, A: x, B: u(trip - 1)}
+			in := r.Less(x, u(trip))
+			for f, nd := range g.Nodes {
+				if nd.Kind != NFold || nd.At != c {
+					continue
+				}
+				// A product step's second factor selected to zero: the one
+				// a tile's heads share, so selected once.
+				st := r.Nodes[nd.A]
+				if st.Kind != NBinary || st.Op != OpFma || st.C != f {
+					return nil, fmt.Errorf("compose: a fold of %d trips over %d lanes whose step is not a product's sum", trip, L)
+				}
+				st.B = r.Select(in, st.B, r.Const(0))
+				r.Nodes[nd.A] = st
+			}
 		}
 		for f, nd := range g.Nodes {
 			if nd.Kind != NFold || nd.At != c {
@@ -124,6 +153,9 @@ func (g *Row) bodyOf(c int) []bool {
 // foldRed is fold f's combine: the operation its step applies to itself.
 func (g *Row) foldRed(f int) (Red, bool) {
 	st := g.Nodes[g.Nodes[f].A]
+	if st.Kind == NBinary && st.Op == OpFma && st.C == f {
+		return RedSum, true // f + a*b
+	}
 	if st.Kind != NBinary || st.A != f && st.B != f {
 		return 0, false
 	}

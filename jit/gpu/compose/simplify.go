@@ -69,6 +69,14 @@ func simplify(k *ir.Kernel) *ir.Kernel {
 				*o = ir.Op{Kind: ir.OpConst, Type: o.Type, Imm: c}
 				continue
 			}
+			if v, ok := foldBounded(ops, o, intConst); ok {
+				if v != 0 {
+					repl[i+1] = v
+				} else {
+					*o = ir.Op{Kind: ir.OpConst, Type: o.Type, Imm: o.Imm}
+				}
+				continue
+			}
 			canonOrder(ops, o)
 			if o.Type != ir.U32 && o.Type != ir.I32 {
 				continue
@@ -601,4 +609,112 @@ func rangeQuotient(ops []ir.Op, o *ir.Op) (int64, bool) {
 		return 0, false
 	}
 	return int64(c / d), true
+}
+
+// foldBounded is o without its instruction where an unsigned value's bound
+// decides it: a comparison below a constant the value never reaches is
+// true, a minimum with a constant the value never passes is the value, and
+// a selection on a constant predicate is its side. Zero with o.Imm the
+// constant, as foldInt.
+func foldBounded(ops []ir.Op, o *ir.Op, intConst func(ir.Value) (uint32, bool)) (ir.Value, bool) {
+	switch {
+	case o.Kind == ir.OpSelect && o.Args[0] != 0:
+		if p := ops[o.Args[0]-1]; p.Kind == ir.OpConst && p.Type == ir.Pred {
+			if p.Imm != 0 {
+				return o.Args[1], true
+			}
+			return o.Args[2], true
+		}
+	case o.Kind == ir.OpLt && o.Args[0] != 0 && o.Args[1] != 0 && ops[o.Args[0]-1].Type == ir.U32:
+		if c, ok := intConst(o.Args[1]); ok {
+			if hi, ok := upper(ops, o.Args[0], 8); ok && hi < uint64(c) {
+				o.Imm = 1
+				return 0, true
+			}
+		}
+	case o.Kind == ir.OpMin && o.Type == ir.U32 && o.Args[0] != 0 && o.Args[1] != 0:
+		for _, xy := range [2][2]ir.Value{{o.Args[0], o.Args[1]}, {o.Args[1], o.Args[0]}} {
+			if c, ok := intConst(xy[1]); ok {
+				if hi, ok := upper(ops, xy[0], 8); ok && hi <= uint64(c) {
+					return xy[0], true
+				}
+			}
+		}
+	}
+	return 0, false
+}
+
+// upper is an unsigned value's largest, where its operations bound it.
+func upper(ops []ir.Op, v ir.Value, depth int) (uint64, bool) {
+	if v == 0 || depth == 0 {
+		return 0, false
+	}
+	o := &ops[v-1]
+	if o.Type != ir.U32 {
+		return 0, false
+	}
+	c := func(a ir.Value) (uint64, bool) {
+		if a == 0 || ops[a-1].Kind != ir.OpConst {
+			return 0, false
+		}
+		return uint64(uint32(ops[a-1].Imm)), true
+	}
+	if o.Kind == ir.OpConst {
+		return uint64(uint32(o.Imm)), true
+	}
+	x, y := o.Args[0], o.Args[1]
+	switch o.Kind {
+	case ir.OpRem:
+		if d, ok := c(y); ok && d > 0 {
+			hi := d - 1
+			if h, ok := upper(ops, x, depth-1); ok {
+				hi = min(hi, h)
+			}
+			return hi, true
+		}
+	case ir.OpAnd:
+		if m, ok := c(y); ok {
+			return m, true
+		}
+		if m, ok := c(x); ok {
+			return m, true
+		}
+	case ir.OpMin:
+		hx, ox := upper(ops, x, depth-1)
+		hy, oy := upper(ops, y, depth-1)
+		switch {
+		case ox && oy:
+			return min(hx, hy), true
+		case ox:
+			return hx, true
+		case oy:
+			return hy, true
+		}
+	case ir.OpAdd, ir.OpMul:
+		hx, ox := upper(ops, x, depth-1)
+		hy, oy := upper(ops, y, depth-1)
+		if !ox || !oy {
+			return 0, false
+		}
+		r := hx + hy
+		if o.Kind == ir.OpMul {
+			r = hx * hy
+		}
+		if r <= math.MaxUint32 {
+			return r, true
+		}
+	case ir.OpDiv, ir.OpShr:
+		hx, ox := upper(ops, x, depth-1)
+		d, oy := c(y)
+		if !ox || !oy {
+			return 0, false
+		}
+		if o.Kind == ir.OpShr {
+			return hx >> (d & 31), true
+		}
+		if d > 0 {
+			return hx / d, true
+		}
+	}
+	return 0, false
 }
