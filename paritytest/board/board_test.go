@@ -202,8 +202,36 @@ func TestBoard(t *testing.T) {
 		}
 		t.Logf("missing %4d of %s", r.n, r.name)
 	}
-	t.Logf("%s on %s: %d of main's %d instructions (%.1f%%), %d of main's %d kernels identical",
-		*boardModel, *boardProfile, same, total, 100*float64(same)/float64(max(total, 1)), identical, len(seen))
+	whole := 0
+	for _, k := range main {
+		if !seen[k.Name] {
+			continue
+		}
+		seen[k.Name] = false
+		kt, _, _ := paritytest.Compare([]*ir.Kernel{k}, nil)
+		found := false
+		for _, m := range mine {
+			if _, s, _ := paritytest.Compare([]*ir.Kernel{k}, []*ir.Kernel{m}); s == kt {
+				found = true
+				break
+			}
+		}
+		if found {
+			whole++
+		} else {
+			t.Logf("no one kernel holds all of %s", k.Name)
+		}
+	}
+	distinct := func(ks []*ir.Kernel) int {
+		in := paritytest.NewInterner()
+		keys := map[string]bool{}
+		for _, k := range paritytest.Simplified(ks) {
+			keys[fmt.Sprint(in.Dataflow(k))] = true
+		}
+		return len(keys)
+	}
+	t.Logf("%s on %s: %d of main's %d instructions (%.1f%%), %d of main's %d kernels identical, %d held whole by one kernel; %d distinct kernels against main's %d",
+		*boardModel, *boardProfile, same, total, 100*float64(same)/float64(max(total, 1)), identical, len(seen), whole, distinct(mine), distinct(main))
 }
 
 func TestAttendAttrs(t *testing.T) {
