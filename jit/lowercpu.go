@@ -75,6 +75,7 @@ func (e *x86Lowerer) addr(b, ix, ptr int) x86.Mem {
 	if nd.Op != OpConst {
 		e.fail("an access of %s at a computed index", k.Bufs[b].Operand.Name)
 	}
+
 	return x86.At(e.ptrReg(b, ptr), int32(nd.Imm)*int32(elemBytes(k.Bufs[b])))
 }
 
@@ -137,7 +138,9 @@ func (e *x86Lowerer) node(i int) {
 		m := e.addr(nd.Buf, nd.A, nd.Ptr)
 		if k.Bufs[nd.Buf].Half {
 			if e.lanes(home) == 0 {
-				e.fail("a scalar load of binary16")
+				a.VPINSRWLoad(e.reg(i), e.reg(i), m, 0)
+				a.VCVTPH2PSReg(e.reg(i), e.reg(i))
+				return
 			}
 			a.VCVTPH2PS(e.reg(i), m)
 			return
@@ -191,6 +194,15 @@ func (e *x86Lowerer) node(i int) {
 	case OpAndNot:
 		a.VPANDNx(e.reg(i), e.reg(nd.B), e.reg(nd.A))
 	case OpMul, OpAdd, OpShr, OpAnd, OpShl:
+		if b := k.Nodes[nd.B]; e.words[i] && b.Mem && (nd.Op == OpAdd || nd.Op == OpAnd) {
+			m := e.addr(b.Buf, b.A, b.Ptr)
+			if nd.Op == OpAdd {
+				a.VPADDDMem(e.reg(i), e.reg(nd.A), m)
+			} else {
+				a.VPANDMem(e.reg(i), e.reg(nd.A), m)
+			}
+			return
+		}
 		if e.words[i] && nd.Op == OpAnd {
 			a.VPANDx(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 			return

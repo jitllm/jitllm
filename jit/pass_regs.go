@@ -20,7 +20,8 @@ import (
 // sums, a register one sum's value freed goes to no other sum's; within a trip of an innermost
 // loop, a register freed by an operation that wrote its result elsewhere
 // goes to nothing else; and a register that held a sum goes to no value of
-// a loop that runs after the sum's. A pair's later head takes its first
+// a loop that runs after the sum's -- each but where no other register is
+// free. A pair's later head takes its first
 // head's registers, moved past them. Where the floats do not fit, a constant
 // the loops read is loaded where each read is, the earliest read first,
 // until they do.
@@ -46,7 +47,7 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 		w := k.clone()
 		moved := map[int]bool{}
-		for {
+		for range len(k.Nodes) {
 			m := w.clone()
 			b := binder86{k: m, p: p, used: map[int]bool{}}
 			b.lives()
@@ -60,6 +61,7 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				return nil, false, nil
 			}
 		}
+		return nil, false, nil
 	})
 }
 
@@ -347,46 +349,55 @@ func (k *Kernel) vectorWords() map[int]bool {
 			}
 		}
 	}
-	for changed := true; changed; {
-		changed = false
-		for i := range k.Nodes {
-			if !out[i] {
-				continue
-			}
-			nd := k.Nodes[i]
-			if nd.Op == OpLoad || nd.Op == OpFold {
-				continue
-			}
-			for _, a := range k.args(&nd) {
-				if data(*a) && k.Nodes[*a].Op != OpConst && !out[*a] && k.Nodes[*a].Type != ir.Pred {
-					out[*a], changed = true, true
+	for grew := true; grew; {
+		before := len(out)
+		for changed := true; changed; {
+			changed = false
+			for i := range k.Nodes {
+				if !out[i] {
+					continue
+				}
+				nd := k.Nodes[i]
+				if nd.Op == OpLoad || nd.Op == OpFold {
+					continue
+				}
+				for _, a := range k.args(&nd) {
+					if data(*a) && k.Nodes[*a].Op != OpConst && !out[*a] && k.Nodes[*a].Type != ir.Pred {
+						out[*a], changed = true, true
+					}
 				}
 			}
 		}
-	}
-	for changed := true; changed; {
-		changed = false
-		for i, nd := range k.Nodes {
-			if out[i] || nd.Type == ir.F32 {
-				continue
-			}
-			v := nd.Op == OpHalf || nd.Op == OpRoundI32 || nd.Op == OpLess && (k.Nodes[nd.A].Type == ir.F32 || out[nd.A] || out[nd.B])
-			if !v && (nd.Op == OpAnd || nd.Op == OpGtW || nd.Op == OpAndNot || nd.Op == OpXor || nd.Op == OpShr || nd.Op == OpShl || (nd.Type == ir.I32 || nd.Type == ir.U32) && nd.Op != OpConst && nd.Op != OpLoad) {
-				for _, a := range k.args(&nd) {
-					v = v || out[*a]
+		for changed := true; changed; {
+			changed = false
+			for i, nd := range k.Nodes {
+				if out[i] || nd.Type == ir.F32 {
+					continue
 				}
-			}
-			if !v && nd.Type == ir.I32 && nd.Op == OpFold {
-				v = true
-			}
-			if v {
-				out[i] = true
-				changed = true
-				for x, a := range k.args(&nd) {
-					if k.Nodes[*a].Op == OpConst && !out[*a] && !(x == 1 && (nd.Op == OpShl || nd.Op == OpShr)) {
-						out[*a] = true
+				v := nd.Op == OpHalf || nd.Op == OpRoundI32 || nd.Op == OpLess && (k.Nodes[nd.A].Type == ir.F32 || out[nd.A] || out[nd.B])
+				if !v && (nd.Op == OpAnd || nd.Op == OpGtW || nd.Op == OpAndNot || nd.Op == OpXor || nd.Op == OpShr || nd.Op == OpShl || (nd.Type == ir.I32 || nd.Type == ir.U32) && nd.Op != OpConst && nd.Op != OpLoad) {
+					for _, a := range k.args(&nd) {
+						v = v || out[*a]
 					}
 				}
+				if !v && nd.Type == ir.I32 && nd.Op == OpFold {
+					v = true
+				}
+				if v {
+					out[i] = true
+					changed = true
+				}
+			}
+		}
+		grew = len(out) > before
+	}
+	for i, nd := range k.Nodes {
+		if !out[i] || nd.Op == OpLoad || nd.Op == OpFold {
+			continue
+		}
+		for x, a := range k.args(&nd) {
+			if k.Nodes[*a].Op == OpConst && k.Nodes[*a].Type != ir.F32 && !(x == 1 && (nd.Op == OpShl || nd.Op == OpShr)) {
+				out[*a] = true
 			}
 		}
 	}
@@ -434,6 +445,11 @@ func (b *binder86) vectors() error {
 				continue
 			}
 			return r
+		}
+		for r := range busy {
+			if !busy[r] {
+				return r
+			}
 		}
 		return -1
 	}
