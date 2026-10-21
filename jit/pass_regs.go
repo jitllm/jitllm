@@ -1065,7 +1065,31 @@ func (k *Kernel) rematerialize(moved map[int]bool) bool {
 	return true
 }
 
-// reload loads constant best where each of its readers reads it.
+// wholeVector reports whether load i reads a word of fixed words that the
+// words after it repeat for a vector's lanes, so the vector there is the
+// word in every lane.
+func (k *Kernel) wholeVector(i int) bool {
+	nd := k.Nodes[i]
+	ws := k.Bufs[nd.Buf].Words
+	ix := k.Nodes[nd.A]
+	if nd.Op != OpLoad || ws == nil || ix.Op != OpConst || nd.Ptr != 0 {
+		return false
+	}
+	w := int(ix.Imm)
+	if w+8 > len(ws) {
+		return false
+	}
+	for j := w; j < w+8; j++ {
+		if ws[j] != ws[w] {
+			return false
+		}
+	}
+	return true
+}
+
+// reload loads constant best where each of its readers reads it, as an
+// integer and's or add's memory operand where the table holds a vector of
+// it there.
 func (k *Kernel) reload(best int, moved map[int]bool) {
 	pos := map[int]int{}
 	for p, e := range k.Seq {
@@ -1087,6 +1111,7 @@ func (k *Kernel) reload(best int, moved map[int]bool) {
 	}
 	moved[best] = true
 	place := map[int]int{}
+	words := k.vectorWords()
 	for _, r := range rs {
 		c := k.add(k.Nodes[best])
 		moved[c] = true
@@ -1094,6 +1119,10 @@ func (k *Kernel) reload(best int, moved map[int]bool) {
 			if *a == best {
 				*a = c
 			}
+		}
+		if x := k.Nodes[r]; (x.Op == OpAnd || x.Op == OpAdd) && x.B == c && words[r] && k.wholeVector(c) {
+			k.Nodes[c].Mem = true
+			continue
 		}
 		place[pos[r]] = c
 	}
@@ -1110,9 +1139,6 @@ func (k *Kernel) reload(best int, moved map[int]bool) {
 	k.Seq = out
 }
 
-// residents loads the shared constant block's resident words by word as
-// the call starts, after its argument words, and each other word, and a
-// resident word read outside every loop, where it is read.
 // readInLoop reports whether a node homed in a loop reads node i.
 func (k *Kernel) readInLoop(i int) bool {
 	hs := k.homes()
@@ -1204,6 +1230,9 @@ func (k *Kernel) lateWords() map[int]bool {
 	return late
 }
 
+// residents loads the shared constant block's resident words by word as
+// the call starts, after its argument words, and each other word, and a
+// resident word read outside every loop, where it is read.
 func (k *Kernel) residents(res map[int]int, moved map[int]bool) {
 	var loads []int
 	for _, e := range k.Seq {
