@@ -1,16 +1,27 @@
-# The composer's estimator
+# The estimator
 
-The estimator prices a kernel from its final IR, before anything is lowered
-or run: the tool a tuner, a placement search and an auto-tuner ask "which
-form, where, at what cost". It runs no model code. What it knows of a
-device comes from `engine/probe`, which initialises the device and measures
-it with generated kernels of its own; whether the estimate is right is held
-by tests that run the composed step and time it, never by the estimator.
+The estimator prices the composer's final IR, before anything is lowered or
+run: the tool a tuner, a placement search, an auto-tuner and a router ask
+"which form, where, at what cost". It lives outside the composer, in
+`engine/cost`, and runs no model code. It reads a model as its header (the
+configuration and tensor index, `jit.Model`; a container is one) and a
+device as numbers: a profile from the hardware table compiled into the
+engine, one per hardware model and backend, so any node prices any device
+in the table without the hardware -- ahead of sending a request to another
+node. The table is measured into by `engine/probe`, which initialises a
+device and times generated kernels of its own; whether the estimate is right
+is held by tests that run the composed step and time it, never by the
+estimator.
 
-- `jit/estimate_model.go` -- the model.
-- `jit/estimate.go` -- `Estimate`, `Suggest`, `EstimateCodes` (each call's
-  estimate beside the values, reaches and storage it assumed).
-- `engine/probe/host_amd64.go`, `engine/probe/gpu.go` -- the probes.
+- `engine/cost/model.go` -- the model; `engine/cost/estimate.go` --
+  `Estimate`, `Suggest` and `EstimateCodes` (each call's estimate beside
+  the values, reaches and storage it assumed), over a `Former` (the
+  composer's `*jit.Registry`, or a cache of kernels formed before).
+- `engine/cost/hardware_table.go` -- the table, `cost.Known(name, api)`;
+  `go run ./scripts/genhardware -probe engine/cost/hardware_table.go` probes
+  a machine into it, and a box without the source runs the compiled command
+  and its table comes back.
+- `engine/probe` -- the probes: host (amd64), GPU (CUDA, Metal).
 - `paritytest/board/estimate_test.go` (`TestEstimateMatchesTheHost`),
   `paritytest/board/estimate_gpu_test.go` (`TestEstimateMatchesTheGPU`) --
   the validation.
@@ -133,6 +144,7 @@ larger than the caches lives in.
   read low for the same kernel shape as well.
 - **The M4's launch cost** reads 1.5 us on most runs and 3.3 us on some,
   the same within a run: where macOS places the encoding thread.
-- **Arm64 and the SSE tier** have no host probe yet.
+- **Arm64 and the SSE tier** have no host probe yet, so the M4's CPU, arm64
+  servers and the Atoms are not in the table.
 - **Per-kernel times on the host** carry the clock's cost (taken off) and
   rdtsc ordering; a call shorter than about 20 ns is within its noise.
