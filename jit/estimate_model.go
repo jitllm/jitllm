@@ -48,19 +48,26 @@ func (r Rate) at(threads float64) float64 {
 	return min(r.Total, r.Thread*threads)
 }
 
-// Cache is one level of a device's caches: its capacity and the bytes a
-// second it serves.
+// Cache is one level of a device's caches: its capacity, the bytes a
+// second it serves, and the seconds a read it serves waits.
 type Cache struct {
-	Bytes int64
-	Rate  Rate
+	Bytes   int64
+	Rate    Rate
+	Latency float64
 }
 
 // Cost is an estimate of a placement from its final IR, nothing lowered:
 // the bytes its kernels move by where they are served from, the
 // instructions they issue by class, their launches and the bytes carried
 // between devices, and the seconds the devices' descriptions make of them.
-// Seconds is the larger of each kernel's memory and compute time plus its
-// launch, summed; Unknown counts loops whose trips the step does not
+// A kernel's compute time is its busiest class's, or all its instructions'
+// at the rate a mix issues, whichever is longer; its chain time is its
+// longest fold's: the trips of one entry into the fold's loop, each waiting
+// for the instructions between the fold and its next value.
+// Seconds is the largest of each kernel's memory time, compute time and
+// longest chain of dependent reads' waits, plus its launch and the wait
+// for its code where the code is not in the nearest cache -- its first
+// line, and past the second level its page's translation too -- summed; Unknown counts loops whose trips the step does not
 // decide, taken as one.
 type Cost struct {
 	Bytes, Carried int64
@@ -71,6 +78,7 @@ type Cost struct {
 	Launches                                  int
 	Seconds                                   float64
 	MemSeconds, ComputeSeconds, LaunchSeconds float64
+	WaitSeconds, FetchSeconds, ChainSeconds   float64
 	Unknown                                   int
 }
 
@@ -88,6 +96,9 @@ func (c Cost) add(o Cost) Cost {
 	c.MemSeconds += o.MemSeconds
 	c.ComputeSeconds += o.ComputeSeconds
 	c.LaunchSeconds += o.LaunchSeconds
+	c.WaitSeconds += o.WaitSeconds
+	c.FetchSeconds += o.FetchSeconds
+	c.ChainSeconds += o.ChainSeconds
 	c.Unknown += o.Unknown
 	return c
 }
@@ -97,43 +108,100 @@ func (c Cost) add(o Cost) Cost {
 type costModel struct {
 	d Device
 	s Step
+	// reach is, by buffer, the bytes the last kernel estimated reaches
+	// past its address.
+	reach map[int]int64
 	// recent is the operands last touched, most recent last, with their
 	// bytes: a reuse distance stack.
 	recent []touch
 }
 
+// touch is an operand's bytes or, where code is set, a kernel's code.
 type touch struct {
 	o     Operand
+	code  *Kernel
 	bytes int64
 }
 
 // level is where operand o's bytes are served from: the nearest cache the
 // operand and everything touched since its last use fit in, 3 for memory.
+// A buffer larger than a cache displaces half of it, not all: a cache's
+// replacement keeps lines that were reused from a stream read once.
 func (m *costModel) level(o Operand, bytes int64) int {
-	var since int64
+	return m.levelOf(touch{o: o, bytes: bytes})
+}
+
+func (m *costModel) levelOf(x touch) int {
 	for i := len(m.recent) - 1; i >= 0; i-- {
-		t := m.recent[i]
-		if t.o == o {
-			for l, c := range m.d.Caches {
-				if c.Bytes > 0 && since+bytes <= c.Bytes {
-					return l
-				}
-			}
-			return 3
+		if t := m.recent[i]; t.o != x.o || t.code != x.code {
+			continue
 		}
-		since += t.bytes
+		for l, c := range m.d.Caches {
+			if c.Bytes <= 0 {
+				continue
+			}
+			since := x.bytes
+			for _, t := range m.recent[i+1:] {
+				since += min(t.bytes, c.Bytes/2)
+			}
+			if since <= c.Bytes {
+				return l
+			}
+		}
+		return 3
 	}
 	return 3
 }
 
 func (m *costModel) touch(o Operand, bytes int64) {
+	m.touchOf(touch{o: o, bytes: bytes})
+}
+
+func (m *costModel) touchOf(x touch) {
 	for i, t := range m.recent {
-		if t.o == o {
+		if t.o == x.o && t.code == x.code {
 			m.recent = append(m.recent[:i], m.recent[i+1:]...)
 			break
 		}
 	}
-	m.recent = append(m.recent, touch{o, bytes})
+	m.recent = append(m.recent, x)
+}
+
+// codeBytes is the bytes an instruction of a device's code takes on
+// average: x86's encodings with their VEX prefixes, and a GPU's fixed
+// sixteen.
+func codeBytes(kind DeviceKind) int64 {
+	if kind == DeviceGPU {
+		return 16
+	}
+	return 6
+}
+
+// code is the bytes of kernel k's code: an instruction for each live node
+// and store in each copy an unrolling made of its loop, and a loop's count
+// and branch.
+func (e *estimator) code(live map[int]bool, kind DeviceKind) int64 {
+	k := e.k
+	copies := func(h int) int64 {
+		n := int64(1)
+		for c := h; c >= 0; c = k.Loops[c].Parent {
+			n *= int64(max(1, k.Loops[c].Copies))
+		}
+		return n
+	}
+	var n int64
+	for i := range k.Nodes {
+		if live[i] {
+			n += copies(e.homes[i])
+		}
+	}
+	for _, s := range k.Stores {
+		n += copies(s.At)
+	}
+	for c := range k.Loops {
+		n += 3 * copies(k.Loops[c].Parent)
+	}
+	return n * codeBytes(kind)
 }
 
 // rate is level l's rate for threads running together.
@@ -142,6 +210,95 @@ func (m *costModel) rate(l int, threads float64) float64 {
 		return m.d.Caches[l].Rate.at(threads)
 	}
 	return Rate{Thread: m.d.Thread, Total: m.d.Bandwidth}.at(threads)
+}
+
+// latency is the seconds a read level l serves waits.
+func (m *costModel) latency(l int) float64 {
+	if l < 3 {
+		return m.d.Caches[l].Latency
+	}
+	return m.d.Latency
+}
+
+// chain is the longest a fold of the kernel e counts makes its loop wait:
+// a trip's critical path from the fold to the value it carries to the next
+// trip, by the delay of each instruction's class, times the trips of an
+// entry into the loop.
+func (m *costModel) chain(e *estimator, live map[int]bool, words map[int]bool) float64 {
+	k := e.k
+	var out float64
+	for f, nd := range k.Nodes {
+		if !live[f] || nd.Op != OpFold || nd.At < 0 {
+			continue
+		}
+		memo := map[int]float64{}
+		var path func(i int) float64
+		path = func(i int) float64 {
+			if i == f {
+				return 0
+			}
+			if v, ok := memo[i]; ok {
+				return v
+			}
+			memo[i] = -1
+			x := k.Nodes[i]
+			best := -1.0
+			for _, a := range k.args(&x) {
+				best = max(best, path(*a))
+			}
+			if best < 0 {
+				return -1
+			}
+			switch {
+			case x.Op == OpLoad:
+				best += m.d.Caches[0].Latency
+			default:
+				if cl, ok := classOf(k, i, words); ok {
+					best += m.d.Delay[cl]
+				}
+			}
+			memo[i] = best
+			return best
+		}
+		if step := path(nd.A); step > 0 {
+			out = max(out, step*e.maxTrips(nd.At))
+		}
+	}
+	return out
+}
+
+// wait is the longest chain of dependent reads in kernel k: each load
+// waits for the loads its index reads, then for the level its buffer is
+// served from.
+func (m *costModel) wait(k *Kernel, live map[int]bool, served map[int]int) float64 {
+	memo := make([]float64, len(k.Nodes))
+	state := make([]uint8, len(k.Nodes))
+	var chain func(i int) float64
+	chain = func(i int) float64 {
+		if state[i] != 0 {
+			return memo[i]
+		}
+		state[i] = 1
+		nd := k.Nodes[i]
+		var w float64
+		for _, a := range k.args(&nd) {
+			w = max(w, chain(*a))
+		}
+		if nd.Op == OpLoad {
+			if l, ok := served[nd.Buf]; ok {
+				w += m.latency(l)
+			}
+		}
+		memo[i] = w
+		return w
+	}
+	var out float64
+	for i := range k.Nodes {
+		if live[i] {
+			out = max(out, chain(i))
+		}
+	}
+	return out
 }
 
 // cost is kernel k's estimate in the run.
@@ -210,9 +367,16 @@ func (m *costModel) cost(k *Kernel) Cost {
 		note(s.Buf, n*w, e.footprint([]int{s.Ix}, s.Ax, s.At, s.Buf)*w, e.storeReach(s, w), true)
 		c.Issued[ClassMem] += int64(n)
 	}
+	m.reach = map[int]int64{}
+	served := map[int]int{}
 	for _, b := range order {
 		u := uses[b]
 		buf := k.Bufs[b]
+		if !math.IsInf(u.hull.hi, 1) {
+			m.reach[b] = int64(u.hull.hi)
+		} else if !math.IsInf(u.touched, 1) {
+			m.reach[b] = int64(u.touched)
+		}
 		if shape := buf.Shape; shape != nil {
 			n := int64(elemBytes(buf))
 			for _, x := range shape {
@@ -226,6 +390,9 @@ func (m *costModel) cost(k *Kernel) Cost {
 		if !u.write {
 			l = m.level(buf.Operand, uniq)
 		}
+		if !u.write {
+			served[b] = l
+		}
 		c.Bytes += uniq
 		c.Served[l] += uniq
 		c.MemSeconds += float64(uniq) / m.rate(l, threads)
@@ -236,13 +403,28 @@ func (m *costModel) cost(k *Kernel) Cost {
 		}
 		m.touch(buf.Operand, uniq)
 	}
+	var all float64
 	for cl, n := range c.Issued {
 		if r := m.d.Rates[cl].at(threads); r > 0 && n > 0 {
-			c.ComputeSeconds += float64(n) / r
+			c.ComputeSeconds = max(c.ComputeSeconds, float64(n)/r)
 		}
+		all += float64(n)
+	}
+	if r := m.d.Issue.at(threads); r > 0 {
+		c.ComputeSeconds = max(c.ComputeSeconds, all/r)
 	}
 	c.LaunchSeconds = m.d.Launch
-	c.Seconds = max(c.MemSeconds, c.ComputeSeconds) + c.LaunchSeconds
+	c.WaitSeconds = m.wait(k, live, served)
+	code := touch{code: k, bytes: e.code(live, m.d.Kind)}
+	if l := m.levelOf(code); l > 0 {
+		c.FetchSeconds = m.latency(l)
+		if l > 1 {
+			c.FetchSeconds *= 2
+		}
+	}
+	m.touchOf(code)
+	c.ChainSeconds = m.chain(&e, live, words)
+	c.Seconds = max(c.MemSeconds, c.ComputeSeconds, c.WaitSeconds, c.ChainSeconds) + c.LaunchSeconds + c.FetchSeconds
 	c.Unknown = e.unknown
 	return c
 }

@@ -140,3 +140,16 @@ func ropeConsts() []uint32 {
 	w[ropeMod4], w[ropeHalf] = 4*ropeGrid-1, f(0.5)
 	return w
 }
+
+// ropeWord is a word of the rotary table's positions at step s: the live
+// rows first, then each row's position, a decode row's the last of its
+// history.
+func ropeWord(o Operand, w int, s Step) (float64, bool) {
+	if o.Kind != tablePos.Kind || o.Name != tablePos.Name {
+		return 0, false
+	}
+	if w == 0 {
+		return float64(s.Rows), true
+	}
+	return float64(max(0, s.Keys-1)), true
+}

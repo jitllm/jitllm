@@ -96,10 +96,18 @@ func (c *Context) pages() int {
 }
 
 // stepWord is word w of a table the engine writes for a step, at step s,
-// where the step decides it: a decode row attends its s.Keys positions
-// from the first, its page table from the table's start, and the table
-// holds the pages in order.
+// where the step decides it: the history's and the rotary table's.
 func stepWord(o Operand, w int, s Step) (float64, bool) {
+	if v, ok := historyWord(o, w, s); ok {
+		return v, true
+	}
+	return ropeWord(o, w, s)
+}
+
+// historyWord is a word of the history's tables at step s: a decode row
+// attends its s.Keys positions from the first, its page table from the
+// table's start, and the table holds the pages in order.
+func historyWord(o Operand, w int, s Step) (float64, bool) {
 	if o.Kind == tablePages.Kind && o.Name == tablePages.Name {
 		return float64(w), true
 	}

@@ -7,6 +7,7 @@ package probe
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"runtime"
 	"slices"
@@ -45,6 +46,16 @@ func Host() (jit.Device, error) {
 		return d, err
 	}
 	defer read.Close()
+	chase, err := chaseKernel()
+	if err != nil {
+		return d, err
+	}
+	walk, err := cpu.Map(chase)
+	if err != nil {
+		return d, err
+	}
+	defer walk.Close()
+	nearer := int64(0)
 	for l, c := range sizes {
 		if l >= len(d.Caches) {
 			break
@@ -53,11 +64,23 @@ func Host() (jit.Device, error) {
 		if c.shared {
 			all /= int64(workers)
 		}
-		d.Caches[l] = jit.Cache{Bytes: c.bytes, Rate: jit.Rate{Thread: readRate(read, c.bytes/2, 1), Total: readRate(read, all, workers)}}
+		set := c.bytes / 2
+		if nearer > 0 {
+			set = min(set, 2*nearer)
+		}
+		lat, err := chaseLatency(walk, set)
+		if err != nil {
+			return d, err
+		}
+		d.Caches[l] = jit.Cache{Bytes: c.bytes, Rate: jit.Rate{Thread: readRate(read, c.bytes/2, 1), Total: readRate(read, all, workers)}, Latency: lat}
+		nearer = c.bytes
 	}
 	const dram = 512 << 20
 	d.Thread = readRate(read, dram/int64(workers), 1)
 	d.Bandwidth = readRate(read, dram/int64(workers), workers)
+	if d.Latency, err = chaseLatency(walk, dram); err != nil {
+		return d, err
+	}
 	for cl := jit.Class(0); cl < jit.NumClasses; cl++ {
 		code, err := rateKernel(cl)
 		if err != nil {
@@ -70,9 +93,30 @@ func Host() (jit.Device, error) {
 		if err != nil {
 			return d, err
 		}
-		d.Rates[cl] = jit.Rate{Thread: issueRate(k, 1), Total: issueRate(k, workers)}
+		d.Rates[cl] = jit.Rate{Thread: issueRate(k, 8, 1), Total: issueRate(k, 8, workers)}
+		k.Close()
+		code, err = chainKernel(cl)
+		if err != nil {
+			return d, err
+		}
+		k, err = cpu.Map(code)
+		if err != nil {
+			return d, err
+		}
+		d.Delay[cl] = 1 / issueRate(k, 8, 1)
 		k.Close()
 	}
+	code, err = mixKernel()
+	if err != nil {
+		return d, err
+	}
+	mix, err := cpu.Map(code)
+	if err != nil {
+		return d, err
+	}
+	d.Issue = jit.Rate{Thread: issueRate(mix, 24, 1), Total: issueRate(mix, 24, workers)}
+	mix.Close()
+	d.Delay[jit.ClassMem] = d.Caches[0].Latency
 	if cl := jit.ClassMem; d.Rates[cl].Thread == 0 && d.Caches[0].Bytes > 0 {
 		d.Rates[cl] = jit.Rate{Thread: d.Caches[0].Rate.Thread / 32, Total: d.Caches[0].Rate.Total / 32}
 	}
@@ -183,6 +227,49 @@ func readKernel() ([]byte, error) {
 	return a.Bytes()
 }
 
+// chaseKernel follows [1] pointers from the address in [0], each read
+// waiting for the one before.
+func chaseKernel() ([]byte, error) {
+	var a x86.Buf
+	a.MOVLoad(x86.RSI, x86.At(x86.RDI, 0))
+	a.MOVLoad(x86.RCX, x86.At(x86.RDI, 8))
+	top := a.Label()
+	a.Bind(top)
+	a.MOVLoad(x86.RSI, x86.At(x86.RSI, 0))
+	a.DEC(x86.RCX)
+	a.JNZ(top)
+	a.RET()
+	return a.Bytes()
+}
+
+// chaseLatency is the seconds one read waits walking a random cycle
+// through the cache lines of set bytes, so the prefetchers cannot run
+// ahead. A cache's set is twice the level before it, past that level and
+// within the TLB's reach, and the set is on huge pages where the kernel
+// grants them, as the engine's frames ask, so the walk waits for the cache
+// and not for page walks.
+func chaseLatency(k *cpu.Code, set int64) (float64, error) {
+	const line = 64
+	lines := int(max(2, set/line))
+	raw, free, err := hugeBuffer(lines * line)
+	if err != nil {
+		return 0, err
+	}
+	defer free()
+	buf := unsafe.Slice((*uint64)(unsafe.Pointer(&raw[0])), len(raw)/8)
+	order := rand.Perm(lines)
+	for i, at := range order {
+		next := order[(i+1)%lines]
+		buf[at*line/8] = uint64(uintptr(unsafe.Pointer(&buf[next*line/8])))
+	}
+	steps := max(1<<20, 4*lines)
+	block := [2]uint64{uint64(uintptr(unsafe.Pointer(&buf[order[0]*line/8]))), uint64(steps)}
+	secs := parallel(1, func(int) {
+		k.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
+	})
+	return secs / float64(steps), nil
+}
+
 // rateKernel runs [0] trips of eight independent instructions of class cl
 // on registers, nil for a class with no instruction measured alone. The
 // index class adds to four of the call-clobbered general registers.
@@ -220,6 +307,70 @@ func rateKernel(cl jit.Class) ([]byte, error) {
 	return a.Bytes()
 }
 
+// chainKernel runs [0] trips of eight instructions of class cl, each
+// using the one before's result, nil for a class rateKernel has none of.
+// The index chain subtracts a register: a core may fold a chain of
+// immediate adds in its renamer, which an index computed from registers
+// does not get.
+func chainKernel(cl jit.Class) ([]byte, error) {
+	var a x86.Buf
+	var op func()
+	switch cl {
+	case jit.ClassFloat:
+		op = func() { a.VFMADD231PS(x86.Y0, x86.Y14, x86.Y15) }
+	case jit.ClassSpecial:
+		op = func() { a.VDIVPS(x86.Y0, x86.Y0, x86.Y15) }
+	case jit.ClassInt:
+		op = func() { a.VPADDD(x86.Y0, x86.Y0, x86.Y15) }
+	case jit.ClassLanes:
+		op = func() { a.VPERMILPS(x86.Y0, x86.Y0, 0xB1) }
+	case jit.ClassIndex:
+		op = func() { a.SUBQ(x86.R8, x86.R9) }
+	default:
+		return nil, nil
+	}
+	a.MOVLoad(x86.RCX, x86.At(x86.RDI, 0))
+	for r := range 16 {
+		a.VPXOR(x86.Y0+x86.Reg(r), x86.Y0+x86.Reg(r), x86.Y0+x86.Reg(r))
+	}
+	top := a.Label()
+	a.Bind(top)
+	for range 8 {
+		op()
+	}
+	a.DEC(x86.RCX)
+	a.JNZ(top)
+	a.VZEROUPPER()
+	a.RET()
+	return a.Bytes()
+}
+
+// mixKernel runs [0] trips of twenty-four instructions: eight float
+// chains, as many as a float rate needs to hide its latency, and eight
+// each of the index and memory classes, which take ports of their own, so
+// that the rate is what the core renames a second rather than any class's
+// units.
+func mixKernel() ([]byte, error) {
+	var a x86.Buf
+	a.MOVLoad(x86.RCX, x86.At(x86.RDI, 0))
+	for r := range 16 {
+		a.VPXOR(x86.Y0+x86.Reg(r), x86.Y0+x86.Reg(r), x86.Y0+x86.Reg(r))
+	}
+	regs := [4]x86.Reg{x86.R8, x86.R9, x86.R10, x86.R11}
+	top := a.Label()
+	a.Bind(top)
+	for j := range 8 {
+		a.VFMADD231PS(x86.Y0+x86.Reg(j), x86.Y14, x86.Y15)
+		a.ADDimm(regs[j%4], 1)
+		a.VMOVDQULoad(x86.Y8+x86.Reg(j%4), x86.At(x86.RDI, int32(8*(j%4))))
+	}
+	a.DEC(x86.RCX)
+	a.JNZ(top)
+	a.VZEROUPPER()
+	a.RET()
+	return a.Bytes()
+}
+
 // readRate is the bytes a second threads reading set bytes each, over and
 // over, get together: the median of the timed rounds.
 func readRate(k *cpu.Code, set int64, threads int) float64 {
@@ -243,14 +394,15 @@ func readRate(k *cpu.Code, set int64, threads int) float64 {
 	return float64(set) * float64(reps) * float64(threads) / secs
 }
 
-// issueRate is the instructions a second threads issue together.
-func issueRate(k *cpu.Code, threads int) float64 {
+// issueRate is the instructions a second threads issue together, each trip
+// perTrip of them; the block is wide enough for a kernel's loads to read.
+func issueRate(k *cpu.Code, perTrip float64, threads int) float64 {
 	const trips = 1 << 22
 	run := func(int) {
-		block := [1]uint64{trips}
+		block := [8]uint64{trips}
 		k.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
 	}
-	return 8 * trips * float64(threads) / parallel(threads, run)
+	return perTrip * trips * float64(threads) / parallel(threads, run)
 }
 
 // callCost is the seconds an empty call costs.

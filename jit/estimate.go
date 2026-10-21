@@ -38,6 +38,80 @@ func (r *Registry) Estimate(f *jlm.File, s Step, p Placement) (Cost, error) {
 	return total, errors.Join(errs...)
 }
 
+// CodeCost is one call's estimate at a step, beside the call and what the
+// estimate assumed of it: the words it passes by value, by field, and for
+// each word that holds an address the bytes the call reaches past it.
+type CodeCost struct {
+	Code   Code
+	Part   int
+	Device Device
+	Cost   Cost
+	Values map[int]uint64
+	Reach  map[int]int64
+}
+
+// EstimateCodes is each call's estimate when placement p runs at step s,
+// in the order the step makes them, in the steady state of decoding: the
+// caches as a step before this one left them.
+func (r *Registry) EstimateCodes(f *jlm.File, s Step, p Placement) ([]CodeCost, error) {
+	parts, err := front(f)
+	if err != nil {
+		return nil, err
+	}
+	run := make([]PartPlan, len(parts))
+	for i, part := range parts {
+		run[i] = PartPlan{Part: part, Device: p(part)}
+	}
+	var out []CodeCost
+	var errs []error
+	for i := 0; i < len(run); {
+		j := i + 1
+		for j < len(run) && run[j].Device == run[i].Device {
+			j++
+		}
+		d := run[i].Device
+		ks, err := r.passRun(f, run[i:j], i, s)
+		errs = append(errs, err)
+		m := costModel{d: d, s: s}
+		for _, k := range ks {
+			m.cost(k)
+		}
+		for _, k := range ks {
+			c := m.cost(k)
+			codes, err := r.lower([]*Kernel{k}, d)
+			if err != nil || len(codes) != 1 {
+				errs = append(errs, err)
+				continue
+			}
+			e := estimator{k: k, s: s, trips: map[int]float64{}, homes: k.homes()}
+			cc := CodeCost{Code: codes[0].Code, Part: k.Of, Device: d, Cost: c, Values: map[int]uint64{}, Reach: map[int]int64{}}
+			for _, a := range k.Args {
+				switch {
+				case a.Buf < 0:
+					if v, ok := e.eval(a.Node-1, 0); ok {
+						cc.Values[a.Field] = uint64(v)
+					}
+				case k.Bufs[a.Buf].Word > 0:
+					w := 0.0
+					if off := k.Bufs[a.Buf].Offset; off > 0 {
+						if v, ok := e.eval(off-1, 0); ok {
+							w = v
+						}
+					}
+					if v, ok := stepWord(k.Bufs[a.Buf].Operand, int(w), s); ok {
+						cc.Values[a.Field] = uint64(v)
+					}
+				default:
+					cc.Reach[a.Field] = max(cc.Reach[a.Field], m.reach[a.Buf])
+				}
+			}
+			out = append(out, cc)
+		}
+		i = j
+	}
+	return out, errors.Join(errs...)
+}
+
 // seam is what carrying a part's boundary value to the next part costs
 // where the two sit on different devices.
 func seam(a, b PartPlan, s Step) Cost {

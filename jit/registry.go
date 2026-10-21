@@ -32,12 +32,18 @@ type Device struct {
 	// Bandwidth is the bytes a second the device's memory serves all its
 	// threads, Thread what one thread gets alone; Launch the seconds a
 	// launch or a call costs; Link the bytes a second it exchanges with
-	// another device.
-	Bandwidth, Thread, Launch, Link float64
+	// another device; Latency the seconds a read that misses every cache
+	// waits for memory.
+	Bandwidth, Thread, Launch, Link, Latency float64
 	// Caches are its cache levels, nearest first.
 	Caches [3]Cache
-	// Rates are the instructions a second it issues of each class.
+	// Rates are the instructions a second it issues of each class, Issue
+	// of a mix of the classes, whose instructions run beside each other.
 	Rates [NumClasses]Rate
+	Issue Rate
+	// Delay is the seconds an instruction of each class takes before an
+	// instruction using its result can start.
+	Delay [NumClasses]float64
 }
 
 // Lowered is a kernel in its backend's form.
