@@ -21,7 +21,9 @@ import (
 // loop, a register freed by an operation that wrote its result elsewhere
 // goes to nothing else; and a register that held a sum goes to no value of
 // a loop that runs after the sum's. A pair's later head takes its first
-// head's registers, moved past them.
+// head's registers, moved past them. Where the floats do not fit, a constant
+// each loop reads once a trip is loaded where each reads it, the earliest
+// read first, until they do.
 type Regs struct {
 	Fields   map[int]int
 	Spare    []int
@@ -42,13 +44,22 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if k.Seq == nil {
 			return nil, false, nil
 		}
-		m := k.clone()
-		b := binder86{k: m, p: p, used: map[int]bool{}}
-		b.lives()
-		if b.gprs() != nil || b.vectors() != nil {
-			return nil, false, nil
+		w := k.clone()
+		moved := map[int]bool{}
+		for {
+			m := w.clone()
+			b := binder86{k: m, p: p, used: map[int]bool{}}
+			b.lives()
+			if b.gprs() != nil {
+				return nil, false, nil
+			}
+			if b.vectors() == nil {
+				return []*Kernel{m}, true, nil
+			}
+			if !w.rematerialize(moved) {
+				return nil, false, nil
+			}
 		}
-		return []*Kernel{m}, true, nil
 	})
 }
 
@@ -71,9 +82,9 @@ func (b *binder86) take(pool []int) int {
 	return -1
 }
 
-// lives finds where each value is made and where it is last read: a sum is
-// made where its loop starts, and a value read in a loop it was made
-// outside of lives to that loop's end.
+// lives finds where each value is made and where it is last read: a value
+// read in a loop the sequence makes it outside of lives to that loop's end,
+// as a sum does in its own loop.
 func (b *binder86) lives() {
 	k := b.k
 	hs := k.homes()
@@ -86,8 +97,15 @@ func (b *binder86) lives() {
 			b.end[e.I] = pos
 		}
 	}
+	start := map[int]int{}
+	for p, e := range k.Seq {
+		if e.Kind == EntryLoop {
+			start[e.I] = p
+		}
+	}
 	use := func(v, pos, home int) {
-		if _, ok := b.def[v]; !ok {
+		d, ok := b.def[v]
+		if !ok {
 			return
 		}
 		h := hs[v]
@@ -95,7 +113,7 @@ func (b *binder86) lives() {
 			h = k.Nodes[v].At
 		}
 		for c := home; c >= 0; c = k.Loops[c].Parent {
-			outside := h < 0 || !k.within(h, c)
+			outside := d < start[c] || d > b.end[c]
 			if outside || k.Nodes[v].Op == OpFold && h == c {
 				if e, ok := b.end[c]; ok && e > pos {
 					pos = e
@@ -302,7 +320,7 @@ func (k *Kernel) needsVector(i int) bool {
 		return false
 	}
 	if nd.Type == ir.F32 || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandWeight {
-		return nd.Op != OpConst
+		return nd.Op != OpConst || nd.Imm == 0 && k.zeroOperand(i)
 	}
 	return k.vectorWords()[i]
 }
@@ -318,17 +336,20 @@ func (k *Kernel) vectorWords() map[int]bool {
 			if out[i] || nd.Type == ir.F32 {
 				continue
 			}
-			v := nd.Op == OpHalf
-			if !v && (nd.Op == OpAnd || nd.Op == OpGtW || nd.Op == OpAndNot) {
+			v := nd.Op == OpHalf || nd.Op == OpRoundI32 || nd.Op == OpLess && k.Nodes[nd.A].Type == ir.F32
+			if !v && (nd.Op == OpAnd || nd.Op == OpGtW || nd.Op == OpAndNot || nd.Type == ir.I32 && nd.Op != OpConst) {
 				for _, a := range k.args(&nd) {
 					v = v || out[*a]
 				}
 			}
+			if !v && nd.Type == ir.I32 && nd.Op == OpFold {
+				v = true
+			}
 			if v {
 				out[i] = true
 				changed = true
-				for _, a := range k.args(&nd) {
-					if k.Nodes[*a].Op == OpConst && !out[*a] {
+				for x, a := range k.args(&nd) {
+					if k.Nodes[*a].Op == OpConst && !out[*a] && !(x == 1 && (nd.Op == OpShl || nd.Op == OpShr)) {
 						out[*a] = true
 					}
 				}
@@ -397,9 +418,18 @@ func (b *binder86) vectors() error {
 			splats = append(splats, e.I)
 		}
 	}
+	scratch := b.p.Scratch
+	if b.used[scratch] {
+		for _, r := range b.p.Spare {
+			if !b.used[r] {
+				scratch = r
+				break
+			}
+		}
+	}
 	for j, i := range splats {
 		r := b.p.Vectors - len(splats) + j
-		k.Nodes[i].Reg, k.Nodes[i].Tmp = r+1, b.p.Scratch+1
+		k.Nodes[i].Reg, k.Nodes[i].Tmp = r+1, scratch+1
 		busy[r] = true
 	}
 	cp := k.copies()
@@ -408,7 +438,7 @@ func (b *binder86) vectors() error {
 			free(pos, false)
 			continue
 		}
-		if e.Kind == EntryNode && k.Nodes[e.I].Op == OpConst {
+		if e.Kind == EntryNode && k.Nodes[e.I].Op == OpConst && k.Nodes[e.I].Type != ir.F32 {
 			continue
 		}
 		if e.Kind == EntryNode && k.Nodes[e.I].Op == OpFold {
@@ -455,6 +485,9 @@ func (b *binder86) vectors() error {
 			first = nd.B
 		case OpFma:
 			first = nd.C
+			if b.last[nd.C] != pos || !k.needsVector(nd.C) {
+				first = nd.A
+			}
 		}
 		if reg < 0 && first >= 0 && k.Nodes[first].Reg > 0 && k.needsVector(first) && (b.last[first] == pos || nd.Op == OpBitcast) {
 			reg = k.Nodes[first].Reg - 1
@@ -467,6 +500,13 @@ func (b *binder86) vectors() error {
 		}
 		if err := give(i, reg); err != nil {
 			return err
+		}
+		if nd.Op == OpSelect {
+			t := lowest(0, hs[i])
+			if t < 0 {
+				return errors.New("no register for a select")
+			}
+			k.Nodes[i].Tmp = t + 1
 		}
 		if nd.Op == OpHSum {
 			t := lowest(0, hs[i])
@@ -540,4 +580,97 @@ func (k *Kernel) chains() map[int]int {
 		}
 	}
 	return out
+}
+
+// rematerialize loads a constant inside each loop that reads it once a
+// trip, where it is read, rather than once before the loops: the constant
+// read first in its loops' trips. False where none is left to move.
+func (k *Kernel) rematerialize(moved map[int]bool) bool {
+	pos := map[int]int{}
+	for p, e := range k.Seq {
+		if e.Kind == EntryNode {
+			pos[e.I] = p
+		}
+	}
+	hs := k.homes()
+	readers := func(i int) []int {
+		var out []int
+		for j, x := range k.Nodes {
+			if _, in := pos[j]; !in {
+				continue
+			}
+			for _, a := range k.args(&x) {
+				if *a == i {
+					out = append(out, j)
+				}
+			}
+		}
+		return out
+	}
+	best, at := -1, -1
+	for i, nd := range k.Nodes {
+		p, in := pos[i]
+		if !in || moved[i] || nd.Op != OpLoad || k.Bufs[nd.Buf].Operand.Kind != OperandConsts || hs[i] >= 0 {
+			continue
+		}
+		rs := readers(i)
+		perLoop := map[int]int{}
+		ok := len(rs) > 0
+		first := -1
+		for _, r := range rs {
+			perLoop[hs[r]]++
+			if hs[r] < 0 || perLoop[hs[r]] > 1 {
+				ok = false
+			}
+			if rp := pos[r]; first < 0 || rp < first {
+				first = rp
+			}
+		}
+		if ok && first > p && (at < 0 || first < at) {
+			best, at = i, first
+		}
+	}
+	if best < 0 {
+		return false
+	}
+	moved[best] = true
+	place := map[int]int{}
+	for _, r := range readers(best) {
+		c := k.add(k.Nodes[best])
+		moved[c] = true
+		for _, a := range k.args(&k.Nodes[r]) {
+			if *a == best {
+				*a = c
+			}
+		}
+		place[pos[r]] = c
+	}
+	var out []Entry
+	for p, e := range k.Seq {
+		if e.Kind == EntryNode && e.I == best {
+			continue
+		}
+		if c, ok := place[p]; ok {
+			out = append(out, Entry{Kind: EntryNode, I: c})
+		}
+		out = append(out, e)
+	}
+	k.Seq = out
+	return true
+}
+
+// zeroOperand reports whether float zero node i is an operand the code
+// computes with, not only a sum's start.
+func (k *Kernel) zeroOperand(i int) bool {
+	for j, nd := range k.Nodes {
+		if nd.Op == OpFold {
+			continue
+		}
+		for _, a := range k.args(&nd) {
+			if *a == i && j != i {
+				return true
+			}
+		}
+	}
+	return false
 }

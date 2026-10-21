@@ -88,9 +88,10 @@ func (k *Kernel) bindCounts(f ArgFields) {
 			if ln < 0 && k.computedFrom(n, OpParam) {
 				continue
 			}
-			if ln >= 0 {
-				n = ln
+			if ln < 0 {
+				ln = k.splitFrom(n)
 			}
+			n = ln
 			if bound[n] {
 				continue
 			}
@@ -386,4 +387,20 @@ func (k *Kernel) queries(o Operand) bool {
 		}
 	}
 	return false
+}
+
+// splitFrom is the length node i splits into trips: i with its shifts,
+// masks and constant multiples taken off.
+func (k *Kernel) splitFrom(i int) int {
+	for {
+		nd := k.Nodes[i]
+		switch nd.Op {
+		case OpShr, OpShl, OpAnd, OpMul:
+			if k.Nodes[nd.B].Op == OpConst {
+				i = nd.A
+				continue
+			}
+		}
+		return i
+	}
 }

@@ -9,8 +9,8 @@ import (
 // Simplify folds what the IR's structure decides: equal nodes merged, the
 // integer arithmetic of constants done, identities removed, a loop of one
 // trip and no carried value dropped, and what a loop's iteration is known
-// to satisfy, being below its count and a range's position inside it,
-// taken as decided.
+// to satisfy, being below its count and a range's position inside it and
+// below its end, taken as decided.
 type Simplify struct{}
 
 func (Simplify) Name() string { return "simplify" }
@@ -208,7 +208,7 @@ func (k *Kernel) foldDecided() bool {
 				changed = true
 			}
 		case OpLess:
-			if it := k.Nodes[a]; it.Op == OpIter && k.countOf(b) == it.At {
+			if it := k.Nodes[a]; it.Op == OpIter && k.countOf(b) == it.At || k.belowEnd(a, b) {
 				k.Nodes[i] = Node{Op: OpConst, Type: ir.Pred, Imm: 1}
 				changed = true
 			}
@@ -376,4 +376,19 @@ func (k *Kernel) multipleOf(a, b int) (int, bool) {
 		return nd.A, true
 	}
 	return 0, false
+}
+
+// belowEnd reports whether node pos, a range's first plus an iteration of
+// a loop counting end less first, is below node end.
+func (k *Kernel) belowEnd(pos, end int) bool {
+	p := k.Nodes[pos]
+	if p.Op != OpAdd || k.Nodes[p.B].Op != OpIter {
+		return false
+	}
+	l := k.Loops[k.Nodes[p.B].At]
+	if l.Count == 0 {
+		return false
+	}
+	cnt := k.Nodes[l.Count-1]
+	return cnt.Op == OpSub && cnt.A == end && cnt.B == p.A
 }

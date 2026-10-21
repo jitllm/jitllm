@@ -1,13 +1,17 @@
 package jit
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/jitllm/jitllm/jit/ir"
+)
 
 // Order writes a kernel as the sequence its code runs: the argument words
 // first, in the order of their fields but a vector loop's counts last, a
 // value no loop moves before the first loop that needs it, and in each loop
 // its values in the order they depend on each other, each inner loop where
 // a value first needs what it carries, and its stores; the sums a loop
-// carries start just before it. A loop advances the
+// carries start just before it. A float zero is made where it is read. A loop advances the
 // address it stores through itself first, then its pointers in the order
 // its code first reaches them. A pair's heads run statement by statement
 // side by side, each head's statements from where it reads a finished sum
@@ -116,7 +120,7 @@ func (o *orderer) need(i, c int) {
 	}
 	k := o.k
 	nd := k.Nodes[i]
-	if nd.Op == OpConst && !o.words[i] || nd.Op == OpIter {
+	if nd.Op == OpConst && !o.words[i] && !(nd.Type == ir.F32 && nd.Imm == 0) || nd.Op == OpIter {
 		return
 	}
 	if nd.Op == OpFold {
@@ -157,14 +161,14 @@ func (o *orderer) scope(c int) {
 	}
 	for _, d := range inner {
 		for _, f := range k.foldsOf(d) {
-			if b := k.Nodes[f].B; k.Nodes[b].Op != OpFold {
+			if b := k.Nodes[f].B; k.Nodes[b].Op != OpFold && !k.startsOnly(b) {
 				o.need(b, c)
 			}
 		}
 	}
 	for _, d := range inner {
 		for i := range k.Nodes {
-			if h, ok := o.home[i]; ok && h == c && o.reads(d, i) && !o.counts(d)[i] {
+			if h, ok := o.home[i]; ok && h == c && k.Nodes[i].Op != OpFold && !k.isZero(i) && o.reads(d, i) && !o.counts(d)[i] {
 				o.need(i, c)
 			}
 		}
@@ -459,4 +463,27 @@ func (k *Kernel) interleave(seq []Entry) []Entry {
 	}
 	flush()
 	return out
+}
+
+// startsOnly reports whether node i is a load of constants only sums start
+// from: the sum's start loads it.
+func (k *Kernel) startsOnly(i int) bool {
+	nd := k.Nodes[i]
+	if nd.Op != OpLoad || k.Bufs[nd.Buf].Operand.Kind != OperandConsts {
+		return false
+	}
+	for j, x := range k.Nodes {
+		for _, a := range k.args(&x) {
+			if *a == i && !(x.Op == OpFold && x.B == i && j != i) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// isZero reports whether node i is a float zero, made where it is read.
+func (k *Kernel) isZero(i int) bool {
+	nd := k.Nodes[i]
+	return nd.Op == OpConst && nd.Type == ir.F32 && nd.Imm == 0
 }

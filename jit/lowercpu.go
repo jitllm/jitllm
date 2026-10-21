@@ -124,6 +124,8 @@ func (e *x86Lowerer) node(i int) {
 			a.VPXOR(r, r, r)
 		case init.Op == OpLoad && e.home[nd.B] < 0:
 			a.VBROADCASTSS(e.reg(i), e.addr(init.Buf, init.A, init.Ptr))
+		case init.Op == OpConst && e.words[nd.B] && init.Reg > 0:
+			a.VMOVAPSReg(e.reg(i), e.reg(nd.B))
 		default:
 			e.fail("a sum from %s", init.Op)
 		}
@@ -153,6 +155,11 @@ func (e *x86Lowerer) node(i int) {
 			e.fail("a bitcast into another register")
 		}
 	case OpConst:
+		if nd.Type == ir.F32 && nd.Imm == 0 && nd.Reg > 0 {
+			r := e.reg(i)
+			a.VPXOR(r, r, r)
+			return
+		}
 		if !e.words[i] {
 			return
 		}
@@ -167,11 +174,29 @@ func (e *x86Lowerer) node(i int) {
 		a.VCVTPS2PH(e.reg(i), e.reg(nd.A), e.lanes(e.home[i]) > 0, 0)
 	case OpGtW:
 		a.VPCMPGTWx(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+	case OpLess:
+		a.VCMPPS(e.reg(i), e.reg(nd.A), e.reg(nd.B), 1)
+	case OpSelect:
+		if nd.Tmp == 0 {
+			e.fail("a select with no scratch register")
+		}
+		t := x86.Reg(nd.Tmp - 1)
+		a.VPANDN(t, e.reg(nd.A), e.reg(nd.C))
+		a.VPAND(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+		a.VPOR(e.reg(i), e.reg(i), t)
 	case OpAndNot:
 		a.VPANDNx(e.reg(i), e.reg(nd.B), e.reg(nd.A))
 	case OpMul, OpAdd, OpShr, OpAnd, OpShl:
 		if e.words[i] && nd.Op == OpAnd {
 			a.VPANDx(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+			return
+		}
+		if e.words[i] && nd.Op == OpAdd {
+			a.VPADDD(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+			return
+		}
+		if e.words[i] && nd.Op == OpShl {
+			a.VPSLLD(e.reg(i), e.reg(nd.A), byte(k.Nodes[nd.B].Imm))
 			return
 		}
 		if nd.Type != ir.F32 {
@@ -194,6 +219,10 @@ func (e *x86Lowerer) node(i int) {
 		}
 	case OpSub, OpDiv, OpMin, OpMax:
 		x, y := e.reg(nd.A), e.reg(nd.B)
+		if nd.Type == ir.I32 && nd.Op == OpMin {
+			a.VPMINSD(e.reg(i), x, y)
+			return
+		}
 		switch nd.Op {
 		case OpSub:
 			a.VSUBPS(e.reg(i), x, y)
@@ -208,7 +237,20 @@ func (e *x86Lowerer) node(i int) {
 		a.VSQRTPS(e.reg(i), e.reg(nd.A))
 	case OpBroadcast:
 		a.VBROADCASTSSReg(e.reg(i), e.reg(nd.A))
+	case OpRoundI32:
+		a.VCVTPS2DQ(e.reg(i), e.reg(nd.A))
+	case OpCvtF32:
+		a.VCVTDQ2PS(e.reg(i), e.reg(nd.A))
 	case OpFma:
+		if c := k.Nodes[nd.C]; c.Op != OpLoad || !c.Mem {
+			if r := e.reg(i); r != e.reg(nd.C) {
+				if r != e.reg(nd.A) {
+					a.VMOVAPSReg(r, e.reg(nd.A))
+				}
+				a.VFMADD213PS(r, e.reg(nd.B), e.reg(nd.C))
+				return
+			}
+		}
 		if e.reg(i) != e.reg(nd.C) {
 			e.fail("an fma whose result is not its addend's register")
 		}
