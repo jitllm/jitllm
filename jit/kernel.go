@@ -40,6 +40,9 @@ type Positions struct {
 	Axis, Loop, Align int
 	First, End        int
 	Live, Pos         []int
+	// Span and Part, where a split set them, are 1 + the nodes of the live
+	// positions in the partition and of the partition's coordinate.
+	Span, Part int
 }
 
 // Loop runs Trip times, or where Count is set node Count-1's value times;

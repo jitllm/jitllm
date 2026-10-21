@@ -5,6 +5,7 @@ func gpuProfile() Profile {
 	contract := []PrimKind{PrimContract}
 	return Profile{Int8: &Int8Form{Window: 32, Word: 4, Sums: 16}, Passes: []Pass{
 		RunLengths{Grain: 128, Align: 32},
+		SplitRange{Pad: 32, Copies: 32, Work: mainWorkgroups},
 		Fuse{Pairs: []Pair{{From: PrimMap, To: PrimMap, AtStores: true}, {From: PrimContract, To: PrimMap, Additive: true}}},
 		Threads{Group: 128},
 		WorkRow{Group: 1024},
@@ -21,3 +22,6 @@ func gpuProfile() Profile {
 func cpuProfile() Profile {
 	return Profile{}
 }
+
+// mainWorkgroups is main's layout of a range's partitions over workgroups.
+var mainWorkgroups = Workgroups{MinWarps: 4, MaxWarps: 8, Shared: 32 << 10, GroupDims: 96, Chunk: 2048, SlotThreads: 1280, PerSplit: 8}
