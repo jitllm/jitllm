@@ -63,7 +63,7 @@ func (r *Registry) Compose(f *jlm.File, s Step, p Placement) (*Plan, error) {
 
 // form is one part on device d: decomposed, generated, passed and lowered.
 func (r *Registry) form(f *jlm.File, part Part, s Step, d Device) ([]Code, error) {
-	prims, err := r.decompose(f, part, s)
+	prims, err := r.decompose(f, part, s, d)
 	if err != nil {
 		return nil, err
 	}

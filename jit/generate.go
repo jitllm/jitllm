@@ -22,10 +22,19 @@ func generate(p Prim) (*Kernel, error) {
 		coords[i] = k.add(Node{Op: OpCoord, A: i, Type: ir.U32})
 	}
 	terms, c := coords, -1
+	first := p.Kind != PrimMap && p.Start == StartFirst
 	if p.Kind != PrimMap {
 		k.Name = "reduce"
-		c = k.loop(p.Shape[len(p.Shape)-1], -1)
-		terms = append(append([]int(nil), coords...), k.add(Node{Op: OpIter, At: c, Type: ir.U32}))
+		K := p.Shape[len(p.Shape)-1]
+		if first {
+			K--
+		}
+		c = k.loop(K, -1)
+		it := k.add(Node{Op: OpIter, At: c, Type: ir.U32})
+		if first {
+			it = k.bin(OpAdd, ir.U32, it, k.u32(1))
+		}
+		terms = append(append([]int(nil), coords...), it)
 	}
 	g := &generator{k: k, p: &p, flat: map[Operand]int{}, shaped: map[Operand]int{}}
 	if r := p.Facts.Range; r != nil {
@@ -58,7 +67,11 @@ func generate(p Prim) (*Kernel, error) {
 		return k, nil
 	}
 	t := elemOf(p.Type)
-	acc := k.add(Node{Op: OpFold, At: c, Type: t, B: k.add(Node{Op: OpConst, Type: t, Imm: p.Init})})
+	init := k.add(Node{Op: OpConst, Type: t, Imm: p.Init})
+	if first {
+		init = g.value(p.Expr, append(append([]int(nil), coords...), k.u32(0)))
+	}
+	acc := k.add(Node{Op: OpFold, At: c, Type: t, B: init})
 	term := vals[len(vals)-1]
 	if p.Kind == PrimContract {
 		m := k.Nodes[term]
@@ -68,6 +81,11 @@ func generate(p Prim) (*Kernel, error) {
 		k.Nodes[acc].A = k.add(Node{Op: OpFma, Type: t, A: m.A, B: m.B, C: acc})
 	} else {
 		k.Nodes[acc].A = k.bin(p.Combine, t, acc, term)
+	}
+	if len(p.Index) > 0 {
+		b := k.buf(Buf{Kind: BufOut, Elem: elemOf(p.Out.Elem), Operand: p.Out})
+		k.Stores = append(k.Stores, Store{Buf: b, Ix: g.value(p.Index, coords), Val: acc, At: -1})
+		return k, nil
 	}
 	b := k.buf(Buf{Kind: BufOut, Elem: elemOf(p.Out.Elem), Operand: p.Out, Shape: append([]int(nil), out...)})
 	k.Stores = append(k.Stores, Store{Buf: b, Val: acc, At: -1, Ax: append([]int(nil), coords...)})

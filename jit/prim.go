@@ -41,6 +41,9 @@ type Operand struct {
 	Format jlm.Type
 	Name   string
 	Elem   ir.Type
+	// Temp is a value a decomposition passes between its own primitives,
+	// read by nothing past them.
+	Temp bool
 }
 
 // Expr is one node of a primitive's scalar function: an operation on earlier
@@ -80,6 +83,9 @@ type PrimStore struct {
 //   - Reduce: the last axis of Shape is combined by Combine from Init, the
 //     rest is the output.
 //   - Contract: a Reduce of products, each term's product summed.
+//
+// A reduction begins from Init, or from its first term where Start says;
+// it stores at Index, an expression of its output's coordinates, where set.
 type Prim struct {
 	Kind    PrimKind
 	Shape   []int
@@ -88,10 +94,19 @@ type Prim struct {
 	Expr    []Expr
 	Combine Op
 	Init    int64
+	Start   Start
 	Type    ir.Type
 	Stores  []PrimStore
+	Index   []Expr
 	Facts   Facts
 }
+
+type Start uint8
+
+const (
+	StartConst Start = iota
+	StartFirst
+)
 
 // Facts are what a decomposition knows that a pass needs, carried as data.
 type Facts struct {

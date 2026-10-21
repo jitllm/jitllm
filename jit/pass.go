@@ -9,10 +9,20 @@ type Pass interface {
 	Apply(ks []*Kernel, d Device) ([]*Kernel, error)
 }
 
-// Profile is a device's passes in order, any of them turned off by name.
+// Profile is a device's choices: what its parts' decompositions carry, and
+// its passes in order, any of them turned off by name.
 type Profile struct {
+	Int8   *Int8Form
 	Passes []Pass
 	Off    map[string]bool
+}
+
+// Int8Form is the int8 form a device keeps of a block's contraction inputs
+// produced by a row's op: windows of Window by an exact scale amax/127,
+// codes rounded half away from zero packed Word to a word, the codes' sums
+// a Sums.
+type Int8Form struct {
+	Window, Word, Sums int
 }
 
 func (p Profile) run(ks []*Kernel, d Device) ([]*Kernel, error) {

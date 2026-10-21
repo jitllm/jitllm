@@ -83,8 +83,26 @@ func decomposeMatVec(o graph.Op, c *Context) ([]Prim, error) {
 	var x exprs
 	r, row, k := x.coord(0), x.coord(1), x.coord(2)
 	x.op(OpMul, ir.F32, x.at(0, []int{w.Rows, w.K}, row, k), x.at(1, c.rows(o.In[0]), r, k))
-	return []Prim{{Kind: PrimContract, Shape: []int{c.Step.Rows, w.Rows, w.K}, In: []Operand{wo, c.value(o.In[0])},
-		Out: c.value(o.Out[0]), Expr: x.e}}, nil
+	var prims []Prim
+	if v := o.In[0]; c.Int8 != nil && c.Part == PartBlock && !c.formed[v] && c.producedByRow(v) && c.width(v)%c.Int8.Window == 0 {
+		c.formed[v] = true
+		prims = c.int8(v)
+	}
+	return append(prims, Prim{Kind: PrimContract, Shape: []int{c.Step.Rows, w.Rows, w.K}, In: []Operand{wo, c.value(o.In[0])},
+		Out: c.value(o.Out[0]), Expr: x.e}), nil
+}
+
+// producedByRow reports whether value v is the output of an op computing a
+// row from the row alone: a norm or a gated activation.
+func (c *Context) producedByRow(v graph.ValueID) bool {
+	for _, o := range c.Graph.Ops {
+		for _, out := range o.Out {
+			if out == v {
+				return o.Kind == graph.OpNorm || o.Kind == graph.OpActMul
+			}
+		}
+	}
+	return false
 }
 
 func decomposeAdd(o graph.Op, c *Context) ([]Prim, error) {
