@@ -65,20 +65,40 @@ func (o *orderer) run() {
 		}
 	}
 	var params, late []int
+	made := map[int][]int{}
 	for i, nd := range k.Nodes {
 		if nd.Op != OpParam || !live[i] && !o.isBase(i) {
 			continue
 		}
-		if vecCount[i] {
+		if ms := k.madeCounts(i); ms != nil {
+			made[i] = ms
+			late = append(late, i)
+		} else if vecCount[i] {
 			late = append(late, i)
 		} else {
 			params = append(params, i)
 		}
 	}
-	sort.SliceStable(params, func(a, b int) bool { return k.Nodes[params[a]].Imm < k.Nodes[params[b]].Imm })
+	consts := func(i int) bool {
+		for _, b := range k.Bufs {
+			if b.Base == i+1 && b.Operand.Kind == OperandConsts {
+				return true
+			}
+		}
+		return false
+	}
+	sort.SliceStable(params, func(a, b int) bool {
+		if ca, cb := consts(params[a]), consts(params[b]); ca != cb {
+			return cb
+		}
+		return k.Nodes[params[a]].Imm < k.Nodes[params[b]].Imm
+	})
 	sort.SliceStable(late, func(a, b int) bool { return o.countLoop(late[a]) < o.countLoop(late[b]) })
 	for _, i := range append(params, late...) {
 		o.node(i)
+		for _, m := range made[i] {
+			o.node(m)
+		}
 	}
 	hs := k.homes()
 	for i := range k.Nodes {
@@ -105,6 +125,52 @@ func (o *orderer) isBase(i int) bool {
 		}
 	}
 	return false
+}
+
+// madeCounts is, for a word every reader of which is the count of a vector
+// loop or of its tail and read by nothing else, those counts, the vector
+// loop's last; nil for any other node.
+func (k *Kernel) madeCounts(i int) []int {
+	var tails, vectors []int
+	for j := range k.Nodes {
+		direct := false
+		for _, a := range k.args(&k.Nodes[j]) {
+			direct = direct || *a == i
+		}
+		if !direct {
+			continue
+		}
+		c := k.countedBy(j)
+		if c < 0 || k.readCount(j) > 0 {
+			return nil
+		}
+		switch {
+		case k.Loops[c].Lanes > 0:
+			vectors = append(vectors, j)
+		case k.vectorTail(c):
+			tails = append(tails, j)
+		default:
+			return nil
+		}
+	}
+	if len(vectors) != 1 {
+		return nil
+	}
+	return append(tails, vectors...)
+}
+
+// countedBy is the one loop node j is the count of, -1 for none.
+func (k *Kernel) countedBy(j int) int {
+	c := -1
+	for d, l := range k.Loops {
+		if l.Count == j+1 {
+			if c >= 0 {
+				return -1
+			}
+			c = d
+		}
+	}
+	return c
 }
 
 func (o *orderer) countLoop(i int) int {

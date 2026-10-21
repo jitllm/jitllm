@@ -72,9 +72,10 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 		w.zerosPerLoop()
 		w.copiesAside()
+		late := w.lateWords()
 		for range len(k.Nodes) {
 			m := w.clone()
-			b := binder86{k: m, p: p, used: map[int]bool{}}
+			b := binder86{k: m, p: p, used: map[int]bool{}, late: late}
 			b.lives()
 			if b.gprs() != nil {
 				return nil, false, nil
@@ -94,6 +95,7 @@ type binder86 struct {
 	k    *Kernel
 	p    Regs
 	used map[int]bool
+	late map[int]bool
 	def  map[int]int
 	last map[int]int
 	end  map[int]int
@@ -199,6 +201,19 @@ func (b *binder86) gprs() error {
 		switch {
 		case nd.Op == OpParam && read && len(ls) == 1 && k.Loops[ls[0]].Walk:
 			r = b.take([]int{p.Outer})
+		case nd.Op == OpParam && k.madeCounts(i) != nil:
+			r = b.take([]int{p.Counters[0]})
+		case nd.Op != OpParam && k.madeCount(i) >= 0:
+			c := k.madeCount(i)
+			if k.Loops[c].Lanes > 0 && b.last[nd.A] == b.def[i] && k.Nodes[nd.A].Reg == p.Counters[0]+1 {
+				r = p.Counters[0]
+			} else {
+				r = b.take([]int{p.Counters[1]})
+			}
+			if r >= 0 {
+				k.Loops[c].Reg = r + 1
+				direct[c] = true
+			}
 		case nd.Op == OpParam && read && len(ls) == 1 && !k.isBaseNode(i) && b.uses(i) == 0:
 			c := ls[0]
 			switch l := k.Loops[c]; {
@@ -213,8 +228,10 @@ func (b *binder86) gprs() error {
 				k.Loops[c].Reg = r + 1
 				direct[c] = true
 			}
-		case nd.Op == OpParam && k.isBaseNode(i):
+		case nd.Op == OpParam && k.isBaseNode(i) && !b.late[i]:
 			r = b.take(p.Fields[int(nd.Imm)])
+		case b.late[i]:
+			r = b.take(p.Spare)
 		case nd.Op == OpParam:
 			r = b.take(p.Kept)
 		default:
@@ -1047,6 +1064,81 @@ func (k *Kernel) reload(best int, moved map[int]bool) {
 // residents loads the shared constant block's resident words by word as
 // the call starts, after its argument words, and each other word, and a
 // resident word read outside every loop, where it is read.
+// madeCount is the loop node i is the made count of, as madeCounts finds
+// them, -1 for none.
+func (k *Kernel) madeCount(i int) int {
+	nd := k.Nodes[i]
+	if nd.Op == OpParam || nd.Op == OpConst || k.Nodes[nd.A].Op != OpParam {
+		return -1
+	}
+	if !slices.Contains(k.madeCounts(nd.A), i) {
+		return -1
+	}
+	return k.countedBy(i)
+}
+
+// lateWords loads each address word only accesses after every loop read
+// where the first of them is, in a kernel with no tile pass; it reports
+// the words it moved.
+func (k *Kernel) lateWords() map[int]bool {
+	last := -1
+	for p, e := range k.Seq {
+		switch {
+		case e.Kind == EntryLoop && k.Loops[e.I].Walk:
+			return nil
+		case e.Kind == EntryEnd:
+			last = p
+		}
+	}
+	if last < 0 {
+		return nil
+	}
+	first := func(i int) int {
+		base := func(b int) bool { return k.Bufs[b].Base == i+1 }
+		for p, e := range k.Seq {
+			switch e.Kind {
+			case EntryNode:
+				nd := k.Nodes[e.I]
+				if nd.Op == OpLoad && base(nd.Buf) {
+					return p
+				}
+				for _, a := range k.args(&nd) {
+					if *a == i {
+						return p
+					}
+				}
+			case EntryStore:
+				if base(k.Stores[e.I].Buf) {
+					return p
+				}
+			case EntryLoop:
+				for _, cu := range k.Loops[e.I].Cursors {
+					if base(cu.Buf) {
+						return p
+					}
+				}
+			}
+		}
+		return -1
+	}
+	late := map[int]bool{}
+	for _, e := range slices.Clone(k.Seq) {
+		if e.Kind != EntryNode || k.Nodes[e.I].Op != OpParam || !k.isBaseNode(e.I) {
+			continue
+		}
+		at := first(e.I)
+		if at <= last {
+			continue
+		}
+		from := slices.Index(k.Seq, e)
+		k.Seq = slices.Delete(k.Seq, from, from+1)
+		at = first(e.I)
+		k.Seq = slices.Insert(k.Seq, at, e)
+		late[e.I] = true
+	}
+	return late
+}
+
 func (k *Kernel) residents(res map[int]int, moved map[int]bool) {
 	var loads []int
 	for _, e := range k.Seq {
