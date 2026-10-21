@@ -22,8 +22,9 @@ var composerImports = map[string]bool{
 	module + "format/quant": true,
 }
 
-// decomposition is the one file that may name a graph op kind.
-const decomposition = "jit/decompose.go"
+// decomposition is the prefix of the files that may name a graph op kind:
+// the decompositions.
+const decomposition = "jit/decompose"
 
 func TestJITIsTheComposerAlone(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
@@ -87,7 +88,7 @@ func composerViolations(t *testing.T, root, dir string) []string {
 				out = append(out, rel+": imports "+path)
 			}
 		}
-		named := rel == decomposition
+		named := strings.HasPrefix(rel, decomposition)
 		ast.Inspect(f, func(n ast.Node) bool {
 			switch x := n.(type) {
 			case *ast.SelectorExpr:
@@ -96,7 +97,7 @@ func composerViolations(t *testing.T, root, dir string) []string {
 					break
 				}
 				switch {
-				case pkgOf[id.Name] == module+"engine/graph" && strings.HasPrefix(x.Sel.Name, "Op") && !named:
+				case pkgOf[id.Name] == module+"engine/graph" && strings.HasPrefix(x.Sel.Name, "Op") && x.Sel.Name != "Op" && x.Sel.Name != "OpKind" && !named:
 					out = append(out, rel+": names graph."+x.Sel.Name+" outside the decomposition")
 				case pkgOf[id.Name] == module+"format/jlm" && strings.HasPrefix(x.Sel.Name, "Arch"):
 					out = append(out, rel+": names jlm."+x.Sel.Name)

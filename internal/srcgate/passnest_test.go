@@ -19,8 +19,7 @@ var buildsFromDefinitions = regexp.MustCompile(`\bgenerate\(|\.instance\(|\.Prim
 // naive IR's generation.
 func passFiles(t *testing.T, dir string) map[string]string {
 	t.Helper()
-	keep := map[string]bool{"decompose.go": true, "generate.go": true, "block.go": true, "attend.go": true,
-		"history.go": true, "quantize.go": true, "prim.go": true}
+	keep := map[string]bool{"generate.go": true, "compose.go": true, "prim.go": true}
 	out := map[string]string{}
 	ents, err := os.ReadDir(dir)
 	if err != nil {
@@ -28,7 +27,7 @@ func passFiles(t *testing.T, dir string) map[string]string {
 	}
 	for _, e := range ents {
 		n := e.Name()
-		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") || keep[n] {
+		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") || keep[n] || strings.HasPrefix(n, "decompose") {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join(dir, n))
@@ -42,12 +41,7 @@ func passFiles(t *testing.T, dir string) map[string]string {
 
 // definitionBuilders is every pass file still building kernels from
 // primitives' definitions: the rework's list, which only shrinks.
-var definitionBuilders = map[string]bool{
-	"coarsen.go":   true,
-	"nest.go":      true,
-	"splitkeys.go": true,
-	"stage.go":     true,
-}
+var definitionBuilders = map[string]bool{}
 
 func TestPassesRewriteNests(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))

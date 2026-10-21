@@ -3,6 +3,7 @@ package board
 import (
 	"flag"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -109,64 +110,55 @@ func dump(t *testing.T, k *ir.Kernel) {
 	}
 }
 
-// composed is every kernel the composer forms for the model's blocks at one
-// row, and each block's error.
-func composed(t *testing.T, name string, tg jit.Target) ([]jit.Kernel, []error) {
+// keys is the history the board's decode step attends: the prompt and the
+// token decoded.
+func keys(t *testing.T, name string) int {
 	t.Helper()
-	path := testmodels.Path(name + ".jlm")
-	m, err := model.Open(path, model.WithJITOptions(nn.WithTune(nn.TuneOff)))
+	m, err := model.Open(testmodels.Path(name+".jlm"), model.WithJITOptions(nn.WithTune(nn.TuneOff)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	f, err := jlm.Open(path)
+	return len(m.Vocab.Encode(prompt, true)) + 1
+}
+
+// composed is the composer's plan for the model with every part on d, and
+// what it could not form.
+func composed(t *testing.T, name string, d jit.Device) (*jit.Plan, error) {
+	t.Helper()
+	f, err := jlm.Open(testmodels.Path(name + ".jlm"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	var ks []jit.Kernel
-	var errs []error
-	keys := len(m.Vocab.Encode(prompt, true)) + 1
-	for li := 0; li < m.Blocks(); li++ {
-		g := m.BlockGraph(li)
-		if g == nil {
-			continue
-		}
-		formats := map[jlm.Role]jlm.Type{}
-		for _, o := range g.Ops {
-			for _, w := range o.Weight {
-				if e, ok := f.Find(w.Role, int32(li), -1); ok {
-					formats[w.Role] = e.Type
-				}
-			}
-		}
-		k, err := jit.Compose(jit.Block{Graph: g, Rows: 1, Formats: formats, Page: 64, Keys: keys}, tg, jit.ProfileFor(tg, 1))
-		ks = append(ks, k...)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("block %d: %w", li, err))
-		}
-	}
-	return ks, errs
+	step := jit.Step{Rows: 1, Page: 64, Keys: keys(t, name)}
+	return jit.Default().Compose(f, step, func(jit.Part) jit.Device { return d })
 }
 
+var sm70 = jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
+
 func TestBoard(t *testing.T) {
-	tg := jit.Target{Device: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
 	main := mainDecode(t, *boardModel, *boardProfile)
-	ks, errs := composed(t, *boardModel, tg)
-	for _, err := range errs {
-		t.Log(err)
+	plan, err := composed(t, *boardModel, sm70)
+	if err != nil {
+		t.Logf("not formed: %v", err)
 	}
 	var mine []*ir.Kernel
-	for _, k := range ks {
-		mine = append(mine, paritytest.Old(k.IR))
-		if *boardMine != "" && strings.HasPrefix(k.IR.Name, *boardMine) {
-			old := mine[len(mine)-1]
-			in := paritytest.NewInterner()
-			for i := range old.Ops {
-				t.Logf("  mine %%%d %s", i+1, paritytest.Explain(in, old, i, *boardDepth))
+	for _, pp := range plan.Parts {
+		for _, c := range pp.Codes {
+			if c.GPU == nil {
+				continue
 			}
+			old := paritytest.Old(c.GPU)
+			mine = append(mine, old)
+			if *boardMine != "" && strings.HasPrefix(c.Name, *boardMine) {
+				in := paritytest.NewInterner()
+				for i := range old.Ops {
+					t.Logf("  mine %%%d %s", i+1, paritytest.Explain(in, old, i, *boardDepth))
+				}
+			}
+			t.Logf("%-8s %-24s %4d ops passes %v", pp.Part, c.Name, len(c.GPU.Ops), c.Passes)
 		}
-		t.Logf("composed %-24s %4d ops passes %v", k.IR.Name, len(k.IR.Ops), k.Passes)
 	}
 	total, same, miss := paritytest.Compare(main, mine)
 	byKernel := map[string]int{}
@@ -185,14 +177,33 @@ func TestBoard(t *testing.T) {
 			}
 		}
 	}
+	identical := 0
+	type row struct {
+		name string
+		n    int
+	}
+	var rows []row
+	seen := map[string]bool{}
 	for _, k := range main {
+		if seen[k.Name] {
+			continue
+		}
+		seen[k.Name] = true
 		if n := byKernel[k.Name]; n > 0 {
-			t.Logf("missing %4d of %-28s", n, k.Name)
-			byKernel[k.Name] = 0
+			rows = append(rows, row{k.Name, n})
+		} else {
+			identical++
 		}
 	}
-	t.Logf("%s on %s: %d of main's %d instructions (%.1f%%), %d blocks with ops not formed",
-		*boardModel, *boardProfile, same, total, 100*float64(same)/float64(max(total, 1)), len(errs))
+	sort.Slice(rows, func(i, j int) bool { return rows[i].n > rows[j].n })
+	for i, r := range rows {
+		if i == 10 {
+			break
+		}
+		t.Logf("missing %4d of %s", r.n, r.name)
+	}
+	t.Logf("%s on %s: %d of main's %d instructions (%.1f%%), %d of main's %d kernels identical",
+		*boardModel, *boardProfile, same, total, 100*float64(same)/float64(max(total, 1)), identical, len(seen))
 }
 
 func TestAttendAttrs(t *testing.T) {
