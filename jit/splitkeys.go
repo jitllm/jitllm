@@ -175,7 +175,7 @@ func (sp splitting) partition(p *Prim) (Prim, bool) {
 	}
 	q := *p
 	q.Shape, q.Expr, q.Range = shape, x.e, nil
-	q.Part = &Part{Axis: a + 1, Split: a, Align: p.Range.Align}
+	q.Part = &Part{Axis: a + 1, Split: a, Align: p.Range.Align, End: p.Range.End}
 	if q.Kind == PrimReduce {
 		q.N, q.K = q.N/p.Shape[a]*sp.S, sp.J
 	} else {

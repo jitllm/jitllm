@@ -63,7 +63,7 @@ func (a attention) prims() []Prim {
 	}
 	// held is a position kept inside what the row attends.
 	held := func(x *exprs, pos, first int) int {
-		last := x.op(OpSub, U, x.op(OpMax, U, row(x, rowEnd), x.u(1)), x.u(1))
+		last := x.op(OpSub, U, x.op(OpMax, U, x.add(Expr{Op: ExprLive}), x.u(1)), x.u(1))
 		return x.op(OpMin, U, x.op(OpMax, U, pos, first), last)
 	}
 	page := func(x *exprs, t int) (pid, off int) {

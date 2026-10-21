@@ -146,9 +146,11 @@ type Range struct {
 }
 
 // Part is a split range: coordinate Split its partition, Axis the
-// position in it, partitions starting at multiples of Align.
+// position in it, partitions starting at multiples of Align, End the
+// range's.
 type Part struct {
 	Axis, Split, Align int
+	End                []Expr
 }
 
 // outShape is a primitive's output space: a map's elements, a reduction's

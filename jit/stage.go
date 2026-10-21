@@ -221,18 +221,19 @@ func (st *stager) coords(p *Prim, hl int, at map[int]int) []int {
 
 // runs is the scope's hook finding a held position's page once a run:
 // a position held as min(max(x, first), last) and then divided or reduced
-// by a page of a multiple of Align, x of the position's coordinate.
+// by a page of a multiple of Align, x of the position's coordinate, the
+// run's start held to the range's last aligned run.
 func (st *stager) runs(p *Prim, sc *scope, start, lane int) {
 	if !st.s.Runs {
 		return
 	}
 	n, es, key, A := st.n, p.Expr, p.Part.Axis, p.Part.Align
-	held := func(i int) (x, last int, ok bool) {
+	held := func(i int) (x int, ok bool) {
 		m := es[i]
 		if m.Op != OpMin || es[m.A].Op != OpMax || !depends(es, es[m.A].A, key) {
-			return 0, 0, false
+			return 0, false
 		}
-		return es[m.A].A, m.B, true
+		return es[m.A].A, true
 	}
 	base := *sc
 	sc.node = func(i int, vals []int) (int, bool) {
@@ -241,7 +242,7 @@ func (st *stager) runs(p *Prim, sc *scope, start, lane int) {
 			return 0, false
 		}
 		page := int(es[e.B].Imm)
-		x, last, ok := held(e.A)
+		x, ok := held(e.A)
 		if !ok || page%A != 0 {
 			return 0, false
 		}
@@ -253,7 +254,9 @@ func (st *stager) runs(p *Prim, sc *scope, start, lane int) {
 		rs := base
 		rs.coords = rc
 		xr := n.instance(*p, es[:x+1], rs)[x]
-		aligned := n.bin(OpMul, ir.U32, n.bin(OpDiv, ir.U32, vals[last], n.u32(A)), n.u32(A))
+		end := st.value(p, p.Part.End, base)
+		last := n.bin(OpSub, ir.U32, n.bin(OpMax, ir.U32, end, n.u32(1)), n.u32(1))
+		aligned := n.bin(OpMul, ir.U32, n.bin(OpDiv, ir.U32, last, n.u32(A)), n.u32(A))
 		h := n.bin(OpMin, ir.U32, xr, aligned)
 		v := n.bin(e.Op, ir.U32, h, vals[e.B])
 		if e.Op == OpRem {
