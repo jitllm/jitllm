@@ -185,7 +185,7 @@ func (o *orderer) scope(c int) {
 	}
 	for _, d := range inner {
 		for _, f := range k.foldsOf(d) {
-			if b := k.Nodes[f].B; k.Nodes[b].Op != OpFold && !k.startsOnly(b) {
+			if b := k.Nodes[f].B; k.Nodes[b].Op != OpFold && !k.startsOnly(b) && !k.isZero(b) {
 				o.need(b, c)
 			}
 		}
