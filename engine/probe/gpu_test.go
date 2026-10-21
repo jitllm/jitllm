@@ -3,8 +3,8 @@ package probe
 import (
 	"testing"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/cost"
-	"github.com/jitllm/jitllm/jit_old/gpu/backend"
 )
 
 // TestGPUMeasures probes every device the backends open and holds what it

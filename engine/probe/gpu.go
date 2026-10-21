@@ -8,11 +8,11 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/backend/metal"
 	"github.com/jitllm/jitllm/engine/cost"
 	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/jit_old/gpu/backend"
-	"github.com/jitllm/jitllm/jit_old/gpu/ir"
-	"github.com/jitllm/jitllm/jit_old/gpu/metal"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // GPU measures device d: what a launch costs the host and a kernel the
@@ -84,7 +84,10 @@ func GPU(d backend.Device) (cost.Device, error) {
 			traffic = 16 << 20
 		}
 		per := max(1, int(traffic/4)/threads)
-		k := gpuReadKernel(fmt.Sprintf("probe_read_%d_%d_%v", threads, set, whole), threads, per, int(set/4-1), width, whole)
+		k, err := gpuReadKernel(fmt.Sprintf("probe_read_%d_%d_%v", threads, set, whole), threads, per, int(set/4-1), width, whole)
+		if err != nil {
+			return 0, err
+		}
 		secs, err := p.time(k, max(1, threads/width), min(width, threads), 8, in, sums)
 		return float64(per*threads*4) / secs, err
 	}
@@ -97,16 +100,23 @@ func GPU(d backend.Device) (cost.Device, error) {
 	if out.Bandwidth, err = read(big, threads); err != nil {
 		return out, err
 	}
-	warm := gpuReadKernel("probe_warm", threads, max(1, int(big/4)/threads), int(big/4-1), width, false)
+	warm, err := gpuReadKernel("probe_warm", threads, max(1, int(big/4)/threads), int(big/4-1), width, false)
+	if err != nil {
+		return out, err
+	}
 	wk, err := p.compile(warm)
 	if err != nil {
 		return out, err
 	}
 	loaded := &warmLaunch{k: wk, groups: max(1, threads/width), width: min(width, threads), bufs: []backend.Buf{in, sums}}
-	if out.Floor, err = p.time(empty.Done(), 1, width, 64, scratch); err != nil {
+	ek, err := empty.Done()
+	if err != nil {
 		return out, err
 	}
-	if out.Launch, err = p.wall(empty.Done(), 1, width, 256, scratch); err != nil {
+	if out.Floor, err = p.time(ek, 1, width, 64, scratch); err != nil {
+		return out, err
+	}
+	if out.Launch, err = p.wall(ek, 1, width, 256, scratch); err != nil {
 		return out, err
 	}
 
@@ -208,7 +218,10 @@ func GPU(d backend.Device) (cost.Device, error) {
 			if cl == cost.ClassGroup {
 				trips /= 16
 			}
-			k := gpuOpKernel(fmt.Sprintf("probe_op%d_%d_%d_%d", cl, chains, deep, threads), chains, deep, trips, min(width, threads), op)
+			k, err := gpuOpKernel(fmt.Sprintf("probe_op%d_%d_%d_%d", cl, chains, deep, threads), chains, deep, trips, min(width, threads), op)
+			if err != nil {
+				return 0, err
+			}
 			secs, err := p.time(k, max(1, threads/width), min(width, threads), 4, sums)
 			return max(1, op.per) * float64(chains*deep*trips*threads) / secs, err
 		}
@@ -428,7 +441,11 @@ func (p *gpuProbe) chase(set int64, buf backend.Buf) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	secs, err := p.time(b.Done(), 1, 1, 3, buf, sink)
+	k, err := b.Done()
+	if err != nil {
+		return 0, err
+	}
+	secs, err := p.time(k, 1, 1, 3, buf, sink)
 	return secs / steps, err
 }
 
@@ -437,7 +454,7 @@ func (p *gpuProbe) chase(set int64, buf backend.Buf) (float64, error) {
 // so a set smaller than the reads is read over and over; and stores each
 // sum. Where whole is set each workgroup reads the whole set, strided by
 // its width.
-func gpuReadKernel(name string, threads, per, mask, width int, whole bool) *ir.Kernel {
+func gpuReadKernel(name string, threads, per, mask, width int, whole bool) (*ir.Kernel, error) {
 	b := ir.New(name, [3]int{min(width, threads), 1, 1})
 	in, out := b.Param("in", ir.F32), b.Param("out", ir.F32)
 	t := b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
@@ -489,7 +506,7 @@ func groupSum(b *ir.Builder, sh, tid, x ir.Value) ir.Value {
 // gpuOpKernel runs, in each thread of workgroups of width, chains
 // independent chains of trips of op, deep of them a chain a trip, and
 // stores their sum.
-func gpuOpKernel(name string, chains, deep, trips, width int, op gpuOp) *ir.Kernel {
+func gpuOpKernel(name string, chains, deep, trips, width int, op gpuOp) (*ir.Kernel, error) {
 	b := ir.New(name, [3]int{width, 1, 1})
 	out := b.Param("out", ir.F32)
 	var sh ir.Value

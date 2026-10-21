@@ -3,7 +3,7 @@ package probe
 import (
 	"strings"
 
-	"github.com/jitllm/jitllm/jit_old/gpu/backend"
+	"github.com/jitllm/jitllm/backend"
 )
 
 // GPUName is device d's hardware model, as the hardware table names it: the

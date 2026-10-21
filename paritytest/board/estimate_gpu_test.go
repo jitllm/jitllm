@@ -9,14 +9,13 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/cost"
 	"github.com/jitllm/jitllm/engine/probe"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/ir"
-	"github.com/jitllm/jitllm/jit_old/gpu/backend"
-	"github.com/jitllm/jitllm/paritytest"
 )
 
 // TestEstimateMatchesTheGPU holds the composer's estimate of a decode step
@@ -83,9 +82,9 @@ func TestEstimateMatchesTheGPU(t *testing.T) {
 		if cc.Code.GPU == nil {
 			continue
 		}
-		k := paritytest.Old(cc.Code.GPU)
+		k := *cc.Code.GPU
 		k.Name = fmt.Sprintf("est%02d_%s", i, k.Name)
-		kern, err := dev.Compile(k)
+		kern, err := dev.Compile(&k)
 		if err != nil {
 			t.Fatalf("%s: %v", k.Name, err)
 		}

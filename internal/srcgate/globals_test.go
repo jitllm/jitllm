@@ -539,6 +539,33 @@ var globalAllowlist = map[string]string{
 	"jit_old/gpu/vulkan.*": "process: the dlopen'd Vulkan loader's entry points, bound once",
 	"jit_old/gpu/metal.*":  "process: the Metal framework's selectors and entry points, bound once at load; the stat counters and kernel timing are debt, to move onto the device",
 
+	// backend: the device runtime, a copy of jit_old/gpu/backend and its drivers
+	"backend.allocRefused":   "counter: refused allocations across every device, read by gates with no device in hand",
+	"backend.compiles":       "counter: kernels compiled across every device, read by gates and a report with no device in hand",
+	"backend.hostReads":      "counter: host reads across every device, read by gates with no device in hand",
+	"backend.hostReadBytes":  "counter: host reads across every device, read by gates with no device in hand",
+	"backend.ownedDevices":   "counter: CUDA devices open across the process",
+	"backend.ownedQueues":    "counter: CUDA queues open across the process",
+	"backend.ownerCalls":     "counter: owner-thread calls across every device, read by gates",
+	"backend.postedCalls":    "counter: owner-thread posts across every device, read by gates",
+	"backend.cudaCopies":     "cache: scratch pool holding no state between uses",
+	"backend.cudaCopyLists":  "cache: scratch pool holding no state between uses",
+	"backend.cudaWrites":     "cache: scratch pool holding no state between uses",
+	"backend.restriction":    "process: which devices this process may open, installed by test support",
+	"backend.verbose":        "process: log verbosity",
+	"backend.cudaTiming":     "debt: device-clock timing switch, read by cmd/jitllm through a free function; belongs on the CUDA device",
+	"backend.cudaKernTiming": "debt: device-clock timing switch, read by cmd/jitllm through a free function; belongs on the CUDA device",
+	"backend.graphTimes":     "debt: replay times accumulated for cmd/jitllm's report; belongs on the CUDA device",
+	"backend.kernTimes":      "debt: kernel times accumulated for cmd/jitllm's report; belongs on the CUDA device",
+	"backend.mtlResidency":   "debt: a Metal open option read from a package var; belongs in the open options",
+	"backend.mtlUnretained":  "debt: a Metal open option read from a package var; belongs in the open options",
+
+	// backend: driver bindings, loaded once with the library
+	"backend/cuda.*":   "process: the dlopen'd CUDA driver's entry points, bound once under loadOnce",
+	"backend/hip.*":    "process: the dlopen'd HIP runtime, bound once",
+	"backend/vulkan.*": "process: the dlopen'd Vulkan loader's entry points, bound once",
+	"backend/metal.*":  "process: the Metal framework's selectors and entry points, bound once at load; the stat counters and kernel timing are debt, to move onto the device",
+
 	// jit_old/gpu/tier: the tier is being refactored elsewhere; narrow this to its caches when that lands
 	"paritytest/maintier.*":      "reference: a frozen copy of main's tier, the board's comparison; its process state is main's, kept as main had it",
 	"paritytest/mainkernels.*":   "reference: a frozen copy of main's kernels, the board's comparison; its tables are main's, kept as main had them",
