@@ -94,6 +94,81 @@ var hardware = []Profile{
 	},
 	{
 		Name:   "Apple M4",
+		API:    "arm64",
+		Source: "probe",
+		Device: Device{
+			Device: jit.Device{
+				Kind:  jit.DeviceCPU,
+				Slots: 4,
+				Lanes: 4,
+			},
+			Bandwidth: 7.389e+10,
+			Thread:    6.493e+10,
+			Launch:    1.835e-09,
+			Latency:   1.075e-07,
+			Start:     8.703e-07,
+			Caches: [3]Cache{
+				0: {
+					Bytes: 128 << 10,
+					Rate: Rate{
+						Thread: 1.685e+11,
+						Total:  3.656e+11,
+					},
+					Latency: 1.078e-09,
+				},
+				1: {
+					Bytes: 16 << 20,
+					Rate: Rate{
+						Thread: 1.054e+11,
+						Total:  3.209e+11,
+					},
+					Latency: 5.484e-09,
+					Start:   2.225e-08,
+					Retain:  0.04421,
+				},
+			},
+			Rates: [NumClasses]Rate{
+				ClassFloat: {
+					Thread: 8.064e+09,
+					Total:  1.678e+10,
+				},
+				ClassSpecial: {
+					Thread: 3.935e+09,
+					Total:  6.019e+09,
+				},
+				ClassInt: {
+					Thread: 1.574e+10,
+					Total:  2.631e+10,
+				},
+				ClassIndex: {
+					Thread: 1.029e+10,
+					Total:  2.277e+10,
+				},
+				ClassLanes: {
+					Thread: 1.049e+10,
+					Total:  1.462e+10,
+				},
+				ClassMem: {
+					Thread: 5.266e+09,
+					Total:  1.143e+10,
+				},
+			},
+			Issue: Rate{
+				Thread: 2.413e+10,
+				Total:  5.159e+10,
+			},
+			Delay: [NumClasses]float64{
+				ClassFloat:   8.374e-10,
+				ClassSpecial: 2.294e-09,
+				ClassInt:     5.726e-10,
+				ClassIndex:   2.546e-10,
+				ClassLanes:   7.626e-10,
+				ClassMem:     1.078e-09,
+			},
+		},
+	},
+	{
+		Name:   "Apple M4",
 		API:    "msl",
 		Source: "probe",
 		Device: Device{
@@ -103,62 +178,62 @@ var hardware = []Profile{
 				Lanes: 32,
 			},
 			Units:     10,
-			Bandwidth: 1.012e+11,
-			Launch:    1.503e-06,
-			Latency:   2.371e-07,
-			Floor:     1.326e-06,
-			Overlap:   6.467,
+			Bandwidth: 8.382e+10,
+			Launch:    1.366e-06,
+			Latency:   2.519e-07,
+			Floor:     1.291e-06,
+			Overlap:   6.463,
 			Caches: [3]Cache{
 				0: {
 					Bytes: 256 << 10,
 					Rate: Rate{
-						Total: 4.507e+12,
+						Total: 4.51e+12,
 					},
-					Latency: 3.768e-08,
+					Latency: 3.766e-08,
 					Kernel:  true,
 				},
 				1: {
-					Bytes: 6 << 20,
+					Bytes: 4 << 20,
 					Rate: Rate{
-						Total: 8.913e+11,
+						Total: 7.544e+11,
 					},
-					Latency: 9.309e-08,
+					Latency: 1.132e-07,
 				},
 			},
 			Rates: [NumClasses]Rate{
 				ClassFloat: {
-					Thread: 5.91e+08,
-					Total:  1.449e+12,
+					Thread: 5.986e+08,
+					Total:  1.468e+12,
 				},
 				ClassSpecial: {
-					Thread: 1.769e+08,
-					Total:  3.127e+11,
+					Thread: 1.776e+08,
+					Total:  3.135e+11,
 				},
 				ClassInt: {
-					Thread: 7.816e+08,
-					Total:  8.912e+11,
+					Thread: 7.87e+08,
+					Total:  8.955e+11,
 				},
 				ClassIndex: {
-					Thread: 4.45e+08,
-					Total:  4.492e+11,
+					Thread: 4.494e+08,
+					Total:  4.515e+11,
 				},
 				ClassLanes: {
-					Thread: 5.91e+08,
-					Total:  1.283e+12,
+					Thread: 5.986e+08,
+					Total:  1.296e+12,
 				},
 				ClassGroup: {
-					Thread: 9.138e+06,
-					Total:  6.061e+10,
+					Thread: 9.223e+06,
+					Total:  6.104e+10,
 				},
 			},
 			Delay: [NumClasses]float64{
-				ClassFloat:   2.088e-09,
-				ClassSpecial: 8.9e-09,
-				ClassInt:     2.546e-09,
-				ClassIndex:   3.668e-09,
-				ClassLanes:   2.56e-09,
-				ClassGroup:   1.076e-07,
-				ClassMem:     3.768e-08,
+				ClassFloat:   2.066e-09,
+				ClassSpecial: 8.879e-09,
+				ClassInt:     2.538e-09,
+				ClassIndex:   3.65e-09,
+				ClassLanes:   2.541e-09,
+				ClassGroup:   1.074e-07,
+				ClassMem:     3.766e-08,
 			},
 		},
 	},

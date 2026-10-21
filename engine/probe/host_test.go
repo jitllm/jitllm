@@ -7,9 +7,11 @@ import (
 )
 
 // TestHostMeasures probes the host and holds what it measures to the
-// order physics allows: every level's bandwidth positive, nearer caches
-// faster and nearer than farther ones and than memory, all threads at least one's
-// rate, and an empty call under a microsecond.
+// order physics allows: every level's bandwidth positive, a nearer cache
+// nearer than a farther one and than memory and no more than a fifth slower
+// to read (an Apple core streams its L2 nearly as fast as its L1, and one
+// thread's L1 rate reads below it), all threads at least most of one's rate,
+// and an empty call under a microsecond.
 func TestHostMeasures(t *testing.T) {
 	d, err := Host()
 	if err != nil {
@@ -34,12 +36,18 @@ func TestHostMeasures(t *testing.T) {
 		if c.Bytes == 0 {
 			continue
 		}
-		if c.Rate.Thread <= prev || c.Rate.Total < c.Rate.Thread*0.7 {
+		if c.Rate.Thread < 0.8*prev || c.Rate.Total < c.Rate.Thread*0.7 {
 			t.Errorf("L%d: %.1f GB/s one thread, %.1f all, after %.1f farther out", l+1, c.Rate.Thread/1e9, c.Rate.Total/1e9, prev/1e9)
 		}
 		prev = c.Rate.Thread
 	}
-	if d.Thread <= 0 || d.Thread >= d.Caches[len(d.Caches)-1].Rate.Thread || d.Bandwidth < d.Thread*0.7 {
+	far := d.Caches[0]
+	for _, c := range d.Caches {
+		if c.Bytes > 0 {
+			far = c
+		}
+	}
+	if d.Thread <= 0 || d.Thread >= far.Rate.Thread || d.Bandwidth < d.Thread*0.7 {
 		t.Errorf("memory %.1f GB/s one thread, %.1f all", d.Thread/1e9, d.Bandwidth/1e9)
 	}
 	wait := d.Latency
