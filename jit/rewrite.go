@@ -63,7 +63,7 @@ func (n *Kernel) args(nd *Node) []*int {
 // arity is how many operands an op reads, a fold its step and its start.
 func arity(op Op) int {
 	switch op {
-	case OpConst, OpCoord, OpIter, OpThread, OpFlat, OpParam:
+	case OpConst, OpCoord, OpIter, OpThread, OpFlat, OpParam, OpLength:
 		return 0
 	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal, OpShuffle, OpBroadcast:
 		return 1

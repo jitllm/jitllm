@@ -8,8 +8,14 @@ import "github.com/jitllm/jitllm/jit/ir"
 // first rounded down to Align. What the range attends stays the live
 // length's, a run-time value. A Grain of 0 is the exact length: a range on a
 // loop counts its live positions, the end less the first, at run time.
+//
+// Where Widths is set, a kernel that consumes none of its reductions itself
+// takes the width it runs over at run time too, so one kernel serves every
+// width: its outermost loops, and its reductions' loops, that run over a
+// row of a value, a head's own width aside.
 type RunLengths struct {
 	Grain, Align int
+	Widths       bool
 }
 
 func (RunLengths) Name() string { return "runlengths" }
@@ -55,6 +61,14 @@ func (p RunLengths) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		m.Passes = append(m.Passes, p.Name())
 		out[i] = m
 	}
+	if p.Widths {
+		for i, k := range out {
+			if m := k.runWidths(); m != nil {
+				m.Passes = append(m.Passes, p.Name())
+				out[i] = m
+			}
+		}
+	}
 	for i, k := range out {
 		var m *Kernel
 		for b, buf := range k.Bufs {
@@ -77,4 +91,82 @@ func (p RunLengths) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 	}
 	return out, nil
+}
+
+// runWidths is k with its widths taken at run time, nil where none is.
+func (k *Kernel) runWidths() *Kernel {
+	for i, nd := range k.Nodes {
+		if nd.Op == OpFold && k.readOutside(i) {
+			return nil
+		}
+	}
+	var m *Kernel
+	for c, l := range k.Loops {
+		if l.Range || l.Count > 0 || l.Lanes > 0 {
+			continue
+		}
+		if l.Parent >= 0 && len(k.foldsOf(c)) == 0 {
+			continue
+		}
+		if h := k.Heads; h != nil && l.Trip == h.Dim {
+			continue
+		}
+		if !k.rowOfValue(c) {
+			continue
+		}
+		if m == nil {
+			m = k.clone()
+		}
+		m.Loops[c].Count = m.add(Node{Op: OpLength, Type: ir.U32, Imm: int64(l.Trip)}) + 1
+	}
+	return m
+}
+
+// readOutside reports whether a node other than its own step, or a loop's
+// count, reads fold f: the reduction consumed in its kernel.
+func (k *Kernel) readOutside(f int) bool {
+	step := k.Nodes[f].A
+	for i, nd := range k.Nodes {
+		if i == step || i == f {
+			continue
+		}
+		for _, a := range k.args(&nd) {
+			if *a == f {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// rowOfValue reports whether loop c's iteration is a coordinate of a
+// value's row the kernel reads or writes.
+func (k *Kernel) rowOfValue(c int) bool {
+	it := k.iterOf(c)
+	if it < 0 {
+		return false
+	}
+	isValue := func(b int) bool {
+		o := k.Bufs[b].Operand
+		return o.Kind == OperandValue || o.Kind == OperandScratch
+	}
+	for _, nd := range k.Nodes {
+		if nd.Op == OpLoad && nd.Ax != nil && isValue(nd.Buf) {
+			for _, a := range nd.Ax {
+				if a == it {
+					return true
+				}
+			}
+		}
+	}
+	for _, s := range k.Stores {
+		if s.Ax != nil && !s.Barrier && !s.Run && isValue(s.Buf) {
+			for _, a := range s.Ax {
+				if a == it {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

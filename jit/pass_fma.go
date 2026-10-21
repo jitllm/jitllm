@@ -1,14 +1,37 @@
 package jit
 
+import "github.com/jitllm/jitllm/jit/ir"
+
 // FMA fuses a sum's step that adds a product, acc + a*b, into one
-// multiply-add, fma(a, b, acc).
-type FMA struct{}
+// multiply-add, fma(a, b, acc); where All is set, any float add of a product.
+type FMA struct {
+	All bool
+}
 
 func (FMA) Name() string { return "fma" }
 
 func (p FMA) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		var m *Kernel
+		if p.All {
+			for i, nd := range k.Nodes {
+				if nd.Op != OpAdd || nd.Type != ir.F32 {
+					continue
+				}
+				acc, prod := nd.A, nd.B
+				if k.Nodes[prod].Op != OpMul {
+					acc, prod = prod, acc
+				}
+				if pr := k.Nodes[prod]; pr.Op != OpMul || pr.Type != ir.F32 {
+					continue
+				}
+				if m == nil {
+					m = k.clone()
+				}
+				pr := m.Nodes[prod]
+				m.Nodes[i] = Node{Op: OpFma, Type: ir.F32, A: pr.A, B: pr.B, C: acc}
+			}
+		}
 		for i, nd := range k.Nodes {
 			if nd.Op != OpFold {
 				continue

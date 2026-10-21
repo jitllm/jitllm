@@ -201,6 +201,9 @@ const (
 	OpParam
 	// OpBroadcast is scalar A in every lane.
 	OpBroadcast
+	// OpLength is a length the caller passes at run time, Imm for this
+	// model.
+	OpLength
 )
 
 // Node is one value: a scalar, or inside a loop of Lanes a vector of them.
@@ -290,7 +293,7 @@ func (n *Kernel) elements() int {
 
 var opNames = [...]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
 	"less", "select", "sqrt", "exp", "shl", "shr", "and", "xor", "cvtf32", "cvti32", "thread", "groupsum", "groupmax", "exchange",
-	"local", "flat", "shuffle", "param", "broadcast"}
+	"local", "flat", "shuffle", "param", "broadcast", "length"}
 
 func (o Op) String() string {
 	if int(o) < len(opNames) {

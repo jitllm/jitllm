@@ -122,7 +122,11 @@ func (o *orderer) need(i, c int) {
 		o.loop(o.childOf(h, c))
 		return
 	}
-	for _, a := range k.args(&nd) {
+	args := k.args(&nd)
+	if nd.Op == OpFma {
+		args = []*int{&nd.C, &nd.A, &nd.B}
+	}
+	for _, a := range args {
 		o.need(*a, c)
 	}
 	o.node(i)

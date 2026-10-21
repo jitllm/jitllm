@@ -40,9 +40,12 @@ func gpuProfile() Profile {
 func cpuProfile() Profile {
 	return Profile{Passes: []Pass{
 		Serial{},
-		RunLengths{},
+		Simplify{},
+		RunLengths{Widths: true},
 		Simplify{},
 		InPlace{},
+		Axpy{},
+		FMA{All: true},
 		Vectorize{Lanes: 8},
 		Consts{},
 		Args{Fields: mainArgs},
