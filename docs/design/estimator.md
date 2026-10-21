@@ -17,7 +17,9 @@ by tests that run the composed step and time it, never by the estimator.
 
 ## What a kernel costs
 
-Counts come from the IR at the step: each instruction's runs (element count
+Counts come from the IR at the step, an instruction the device's compiler
+folds (a constant, or pure arithmetic on constants) never issued: each
+instruction's runs (element count
 times the trips of its loops, trips evaluated from the step's descriptors,
 page table and rotary positions, per element where a count reads its
 coordinates), each buffer's distinct bytes (bounded by its shape, the bytes
@@ -66,12 +68,20 @@ size cycling through it keeps; memory's rate, latency and stream start; each
 class's issue rate and the delay of a dependent chain, a mix's issue rate,
 an empty call's cost.
 
-GPU: the host's launch rate and a kernel's floor on the device clock; memory
+GPU, on any backend with a per-kernel device clock (CUDA's events,
+Metal's command buffers' stamps): the host's launch rate and a kernel's
+floor; memory
 rate and latency; L1 and L2 found from one thread's chase over growing sets
 (read rates cannot find them: the multiprocessors' L1s together can hold
 more than the L2), L2's rate from every workgroup reading one set; loads in
 flight a thread; each class's rate and delay, the group sum built as the
-composer's lowering builds it; the multiprocessor count.
+composer's lowering builds it, each class's instruction one the device's
+compiler cannot fold (the integer class a shift and an exclusive or, since
+an integer multiply is slow on some devices); the multiprocessor count
+(CUDA's, the IORegistry's GPU cores on Metal). Instruction-class
+measurements run behind a read of the whole memory, so a one-thread kernel
+is timed at a loaded device's clock. A device whose runtime states no
+resident threads takes the device tier's 16384.
 
 ## How well it holds
 
@@ -81,7 +91,8 @@ synth-ernie45, one decode step, `scripts/cap`:
 |---|---|---|---|---|
 | laptop, one P-core (i9-12900HK, AVX2) | caches swept between steps | 1.00-1.03 | 53-54 of 64 | 1.28-1.42x |
 | laptop, one P-core | steady (step after step) | 0.92-1.20 | 40-57 of 64 | 1.26-1.83x |
-| V100-SXM2-16GB (cato, CUDA, sm_70) | steady | 1.38 (0.99 without the argmax) | 65 of 65 | 1.08x |
+| V100-SXM2-16GB (cato, CUDA, sm_70) | steady | 1.38 (0.99 without the argmax) | 65 of 65 | 1.08-1.12x |
+| Apple M4 (Metal) | steady | 3.36; the head 0.98 | 36 of 65 | 1.75x |
 
 The laptop's steady regime moves with the probe: this fixture's weights are
 about the size of its L3, so the answer turns on the replacement numbers,
@@ -100,6 +111,12 @@ larger than the caches lives in.
   values, reads 0.59: the device expands those divisions into sequences the
   IR's instruction count cannot see.
 - **Barriers** are not priced; the attention stage, with eight, reads 0.83.
+- **Apple's GPU.** Memory-bound kernels hold (the head 0.98), but the
+  in-order schedule overprices small kernels 1.2-3x there: one thread's
+  measured issue rate (0.5 G/s) is several times slower than the kernels'
+  own time implies, and kernels shorter than the measured floor are timed.
+  Whether Metal's per-dispatch stamps or the one-thread probe is off is
+  unresolved.
 - **Arm64 and the SSE tier** have no host probe yet.
 - **Per-kernel times on the host** carry the clock's cost (taken off) and
   rdtsc ordering; a call shorter than about 20 ns is within its noise.

@@ -17,7 +17,7 @@ import (
 )
 
 // TestEstimateMatchesTheGPU holds the composer's estimate of a decode step
-// on the first CUDA device, weighed with the device as the probe measures
+// on the first device whose backend has a per-kernel clock (CUDA, Metal), weighed with the device as the probe measures
 // it, to the step's composed kernels launched in order in one session on
 // one buffer per storage the estimate assumed, each kernel's time read from
 // the device's clock: the median of rounds' means over many steps. It
@@ -31,14 +31,15 @@ func TestEstimateMatchesTheGPU(t *testing.T) {
 		}
 	}()
 	var dev backend.Device
+	var clock probe.KernelTimer
 	for _, d := range devs {
-		if d.API() == "ptx" && d.Slots() > 0 {
-			dev = d
+		if c, ok := probe.Timer(d); ok {
+			dev, clock = d, c
 			break
 		}
 	}
 	if dev == nil {
-		t.Skip("no CUDA device")
+		t.Skip("no device with a clock to time kernels on")
 	}
 	d, err := probe.GPU(dev)
 	if err != nil {
@@ -142,23 +143,23 @@ func TestEstimateMatchesTheGPU(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	backend.SetCUDAKernelTiming(true)
-	backend.CUDAKernelTimes()
+	clock.Arm(true)
+	clock.Times()
 	const rounds, steps = 11, 20
 	means := map[string][]float64{}
 	for range rounds {
 		for range steps {
 			if err := step(); err != nil {
-				backend.SetCUDAKernelTiming(false)
+				clock.Arm(false)
 				t.Fatal(err)
 			}
 		}
-		us, n := backend.CUDAKernelTimes()
+		us, n := clock.Times()
 		for name, x := range us {
 			means[name] = append(means[name], x/float64(n[name]))
 		}
 	}
-	backend.SetCUDAKernelTiming(false)
+	clock.Arm(false)
 	var est, got float64
 	var logs []float64
 	for i, r := range runs {

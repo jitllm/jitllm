@@ -358,8 +358,9 @@ func (m *costModel) chain(e *estimator, live map[int]bool, words map[int]bool) f
 // any loop, each waiting for the ones it reads by its class's delay, a
 // load by the mean latency of its buffer's reads: what one thread takes
 // with nothing else to issue.
-func (m *costModel) critical(k *Kernel, live, words map[int]bool, reads map[int]float64) float64 {
-	homes := k.homes()
+func (m *costModel) critical(e *estimator, live, words map[int]bool, reads map[int]float64) float64 {
+	k := e.k
+	homes := e.homes
 	memo := make([]float64, len(k.Nodes))
 	done := make([]bool, len(k.Nodes))
 	var depth func(i int) float64
@@ -378,6 +379,7 @@ func (m *costModel) critical(k *Kernel, live, words map[int]bool, reads map[int]
 		switch {
 		case nd.Op == OpLoad:
 			d += reads[nd.Buf]
+		case e.folded(i):
 		default:
 			if cl, ok := classOf(k, i, words); ok {
 				d += m.d.Delay[cl]
@@ -406,6 +408,9 @@ func (m *costModel) inOrder(e *estimator, live, words map[int]bool, reads map[in
 	k := e.k
 	cost := func(i int) (issue, delay float64) {
 		nd := k.Nodes[i]
+		if e.folded(i) {
+			return 0, 0
+		}
 		cl, ok := classOf(k, i, words)
 		if nd.Op == OpLoad {
 			cl, ok = ClassMem, true
@@ -595,7 +600,7 @@ func (m *costModel) cost(k *Kernel) Cost {
 			c.Issued[ClassMem] += int64(n)
 			continue
 		}
-		if cl, ok := classOf(k, i, words); ok {
+		if cl, ok := classOf(k, i, words); ok && !e.folded(i) {
 			c.Issued[cl] += int64(n)
 		}
 	}
@@ -724,7 +729,7 @@ func (m *costModel) cost(k *Kernel) Cost {
 		}
 	}
 	m.touchOf(code)
-	c.ChainSeconds = max(m.chain(&e, live, words), m.critical(k, live, words, reads))
+	c.ChainSeconds = max(m.chain(&e, live, words), m.critical(&e, live, words, reads))
 	if m.d.Kind == DeviceGPU {
 		c.ChainSeconds = max(c.ChainSeconds, m.inOrder(&e, live, words, reads))
 	}
@@ -761,6 +766,8 @@ type estimator struct {
 	// lane is the thread of the element's group eval takes.
 	lane   int
 	byElem map[int]bool
+	// fold memoises folded: 1 folded, 2 not, 3 being decided.
+	fold   []int8
 	runsIn map[int]float64
 	// folding is the folds whose interval is being taken: a fold's step
 	// that reads the fold adds nothing to it.
@@ -1251,6 +1258,46 @@ func (e *estimator) constant(i int) bool {
 		return true
 	}
 	return walk(i)
+}
+
+// folded reports whether node i is a value the device's compiler computes
+// before the kernel runs: a constant, or pure arithmetic on constants. Such
+// an instruction becomes an immediate and is never issued.
+func (e *estimator) folded(i int) bool {
+	k := e.k
+	if i >= len(k.Nodes) {
+		return false
+	}
+	if e.fold == nil {
+		e.fold = make([]int8, len(k.Nodes))
+	}
+	switch e.fold[i] {
+	case 1:
+		return true
+	case 2, 3:
+		return false
+	}
+	e.fold[i] = 3
+	nd := k.Nodes[i]
+	ok := true
+	switch nd.Op {
+	case OpConst:
+	case OpLoad, OpParam, OpLength, OpCoord, OpThread, OpLocal, OpFlat, OpIter, OpFold, OpSpan, OpLanes,
+		OpGroupSum, OpGroupMax, OpExchange:
+		ok = false
+	default:
+		for _, a := range k.args(&nd) {
+			if !e.folded(*a) {
+				ok = false
+				break
+			}
+		}
+	}
+	e.fold[i] = 2
+	if ok {
+		e.fold[i] = 1
+	}
+	return ok
 }
 
 // maxTrips is the most trips loop c makes for any element.

@@ -11,6 +11,7 @@ import (
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit_old/gpu/backend"
 	"github.com/jitllm/jitllm/jit_old/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/metal"
 )
 
 // GPU measures device d: what a launch costs the host and a kernel the
@@ -32,15 +33,17 @@ import (
 // near the peak, the last more than two and a half times the memory's
 // rate; its rate is read at half its size, its latency the shortest of a
 // chase over sets past the nearest caches. Reads of the whole memory warm
-// the device first, and each measurement runs for milliseconds, so the
-// device's clock has risen to its load before the timed launches. Every measuring kernel is
+// the device first, and on a device with its own clock a read of the whole
+// memory goes before each timed launch of an instruction class, whose
+// values live in registers, so a measurement of one thread runs at the
+// clock a loaded device runs at. Every measuring kernel is
 // generated IR, compiled for the device in front of it, and timed on the
 // device's clock where the backend has one.
 func GPU(d backend.Device) (jit.Device, error) {
 	const lanes, width = 32, 256
 	out := jit.Device{Kind: jit.DeviceGPU, Slots: d.Slots(), Lanes: lanes}
 	if out.Slots == 0 {
-		return out, fmt.Errorf("probe: %s states no resident threads", d.Name())
+		out.Slots = defaultSlots
 	}
 	if u, ok := d.(backend.MultiprocessorDevice); ok {
 		out.Units = u.Multiprocessors()
@@ -97,6 +100,12 @@ func GPU(d backend.Device) (jit.Device, error) {
 	if out.Bandwidth, err = read(big, threads); err != nil {
 		return out, err
 	}
+	warm := gpuReadKernel("probe_warm", threads, max(1, int(big/4)/threads), int(big/4-1), width, false)
+	wk, err := p.compile(warm)
+	if err != nil {
+		return out, err
+	}
+	loaded := &warmLaunch{k: wk, groups: max(1, threads/width), width: min(width, threads), bufs: []backend.Buf{in, sums}}
 
 	if out.Latency, err = p.chase(big/2, in); err != nil {
 		return out, err
@@ -172,8 +181,8 @@ func GPU(d backend.Device) (jit.Device, error) {
 			return b.Fma(x, b.ConstF32(0.999), b.ConstF32(0.001))
 		}},
 		jit.ClassSpecial: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value { return b.Exp(x) }},
-		jit.ClassInt: {t: ir.U32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
-			return b.Add(ir.U32, b.Mul(ir.U32, x, x), b.Const(ir.U32, 1))
+		jit.ClassInt: {t: ir.U32, per: 2, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
+			return b.Xor(ir.U32, x, b.Shr(ir.U32, x, b.Const(ir.U32, 1)))
 		}},
 		jit.ClassIndex: {t: ir.U32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
 			return b.Add(ir.U32, b.Mul(ir.U32, x, x), b.Const(ir.U32, 1))
@@ -181,6 +190,8 @@ func GPU(d backend.Device) (jit.Device, error) {
 		jit.ClassLanes: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value { return b.ShuffleXor(ir.F32, x, 1) }},
 		jit.ClassGroup: {t: ir.F32, op: groupSum, shared: true},
 	}
+	p.warm = loaded
+	defer func() { p.warm = nil }()
 	for cl, op := range ops {
 		rate := func(chains, deep, threads int) (float64, error) {
 			trips := 1 << 12
@@ -192,7 +203,7 @@ func GPU(d backend.Device) (jit.Device, error) {
 			}
 			k := gpuOpKernel(fmt.Sprintf("probe_op%d_%d_%d_%d", cl, chains, deep, threads), chains, deep, trips, min(width, threads), op)
 			secs, err := p.time(k, max(1, threads/width), min(width, threads), 4, sums)
-			return float64(chains*deep*trips*threads) / secs, err
+			return max(1, op.per) * float64(chains*deep*trips*threads) / secs, err
 		}
 		chains := 8
 		if cl == jit.ClassGroup {
@@ -221,11 +232,26 @@ func GPU(d backend.Device) (jit.Device, error) {
 	return out, nil
 }
 
-// gpuProbe holds the device the probe measures and what it allocated.
+// defaultSlots is the resident threads taken for a device whose runtime
+// will not say (Vulkan, Metal): the figure the device tier takes for it.
+const defaultSlots = 16384
+
+// gpuProbe holds the device the probe measures and what it allocated, and
+// the launch that keeps it loaded between timed ones.
 type gpuProbe struct {
 	d    backend.Device
 	bufs []backend.Buf
 	ks   []backend.Kernel
+	warm *warmLaunch
+}
+
+// warmLaunch is a kernel reading the whole memory, launched before each
+// timed launch so a measurement of one thread starts at the clock a loaded
+// device runs at rather than the one an idle device falls to.
+type warmLaunch struct {
+	k             backend.Kernel
+	groups, width int
+	bufs          []backend.Buf
 }
 
 func (p *gpuProbe) close() {
@@ -255,8 +281,9 @@ func (p *gpuProbe) compile(k *ir.Kernel) (backend.Kernel, error) {
 	return c, nil
 }
 
-// time is the median device seconds of n launches of k after one that
-// warms it: on CUDA's clock, else the wall's around each waited launch.
+// time is the device seconds a launch of k takes, after one that warms it:
+// the mean of n on the device's own clock where its backend has one, else
+// the median of the wall's around each waited launch.
 func (p *gpuProbe) time(k *ir.Kernel, groups, width, n int, bufs ...backend.Buf) (float64, error) {
 	c, err := p.compile(k)
 	if err != nil {
@@ -265,24 +292,55 @@ func (p *gpuProbe) time(k *ir.Kernel, groups, width, n int, bufs ...backend.Buf)
 	if err := c.Launch(groups, width, bufs...); err != nil {
 		return 0, err
 	}
-	if p.d.API() != "ptx" {
-		var times []float64
-		for range n {
-			t0 := time.Now()
-			if err := c.Launch(groups, width, bufs...); err != nil {
-				return 0, err
-			}
-			times = append(times, time.Since(t0).Seconds())
-		}
-		slices.Sort(times)
-		return times[len(times)/2], nil
+	if t, ok := Timer(p.d); ok {
+		return p.timed(t, k.Name, c, groups, width, n, bufs...)
 	}
-	backend.SetCUDAKernelTiming(true)
-	defer backend.SetCUDAKernelTiming(false)
-	backend.CUDAKernelTimes()
+	var times []float64
+	for range n {
+		t0 := time.Now()
+		if err := c.Launch(groups, width, bufs...); err != nil {
+			return 0, err
+		}
+		times = append(times, time.Since(t0).Seconds())
+	}
+	slices.Sort(times)
+	return times[len(times)/2], nil
+}
+
+// KernelTimer is a backend's per-kernel device clock: arming it, and each
+// kernel's summed microseconds and launches since the last read, by name.
+type KernelTimer struct {
+	Arm   func(bool)
+	Times func() (us map[string]float64, n map[string]int)
+}
+
+// Timer is device d's per-kernel clock, where its backend has one: CUDA's
+// event pairs, Metal's command buffers' own stamps.
+func Timer(d backend.Device) (KernelTimer, bool) {
+	switch d.API() {
+	case "ptx":
+		return KernelTimer{backend.SetCUDAKernelTiming, backend.CUDAKernelTimes}, true
+	case "msl":
+		return KernelTimer{metal.SetKernelTiming, metal.KernelTimes}, true
+	}
+	return KernelTimer{}, false
+}
+
+// timed is the mean device seconds of n launches of c in one session, on
+// clock t.
+func (p *gpuProbe) timed(t KernelTimer, name string, c backend.Kernel, groups, width, n int, bufs ...backend.Buf) (float64, error) {
+	t.Arm(true)
+	defer t.Arm(false)
+	t.Times()
 	var errs error
 	p.d.Session(func(s backend.Session) {
 		for range n {
+			if w := p.warm; w != nil {
+				if err := s.Launch(w.k, w.groups, w.width, w.bufs...); err != nil {
+					errs = err
+					return
+				}
+			}
 			if err := s.Launch(c, groups, width, bufs...); err != nil {
 				errs = err
 				return
@@ -293,11 +351,11 @@ func (p *gpuProbe) time(k *ir.Kernel, groups, width, n int, bufs ...backend.Buf)
 	if errs != nil {
 		return 0, errs
 	}
-	us, cnt := backend.CUDAKernelTimes()
-	if cnt[k.Name] == 0 {
-		return 0, fmt.Errorf("probe: %s was not timed", k.Name)
+	us, cnt := t.Times()
+	if cnt[name] == 0 {
+		return 0, fmt.Errorf("probe: %s was not timed", name)
 	}
-	return us[k.Name] / float64(cnt[k.Name]) / 1e6, nil
+	return us[name] / float64(cnt[name]) / 1e6, nil
 }
 
 // wall is the seconds a launch of k costs n back to back in one session:
@@ -379,15 +437,19 @@ func gpuReadKernel(name string, threads, per, mask, width int, whole bool) *ir.K
 	return b.Done()
 }
 
-// gpuOp is an instruction of a class a probe chains, one the device's
+// gpuOp is instructions of a class a probe chains, ones the device's
 // compiler cannot fold across a chain (a multiply-add of the value by
-// itself, not an add of a constant): its value's type,
-// and the instruction applied to a value, given the workgroup memory the
-// kernel declares where shared is set, and the thread's index.
+// itself, a shift and an exclusive or, not an add of a constant): its
+// value's type, the instructions applied to a value, given the workgroup
+// memory the kernel declares where shared is set and the thread's index,
+// and how many instructions that is where more than one. The integer class
+// is a shift and an exclusive or, the index class a multiply-add: an
+// integer multiply is slower than the rest on some devices.
 type gpuOp struct {
 	t      ir.Type
 	op     func(b *ir.Builder, sh, tid, x ir.Value) ir.Value
 	shared bool
+	per    float64
 }
 
 // groupSum is a workgroup's sum the way the composer's GPU lowering forms

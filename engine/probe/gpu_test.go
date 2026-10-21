@@ -22,8 +22,8 @@ func TestGPUMeasures(t *testing.T) {
 	}
 	for _, dev := range devs {
 		t.Run(dev.API(), func(t *testing.T) {
-			if dev.Slots() == 0 {
-				t.Skipf("%s states no resident threads", dev.Name())
+			if _, ok := Timer(dev); !ok {
+				t.Skipf("%s: %s has no device clock to time kernels on", dev.Name(), dev.API())
 			}
 			d, err := GPU(dev)
 			if err != nil {
