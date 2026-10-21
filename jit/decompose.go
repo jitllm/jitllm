@@ -12,13 +12,14 @@ import (
 // primitives over coordinates: a value of the step is [rows][width].
 func decompositions() map[graph.OpKind]Decomposition {
 	return map[graph.OpKind]Decomposition{
-		graph.OpNorm:     decomposeNorm,
-		graph.OpMatVec:   decomposeMatVec,
-		graph.OpAdd:      decomposeAdd,
-		graph.OpActMul:   decomposeActMul,
-		graph.OpRope:     decomposeRope,
-		graph.OpKVAppend: decomposeKVAppend,
-		graph.OpAttend:   decomposeAttend,
+		graph.OpNorm:      decomposeNorm,
+		graph.OpMatVec:    decomposeMatVec,
+		graph.OpAdd:       decomposeAdd,
+		graph.OpActMul:    decomposeActMul,
+		graph.OpRope:      decomposeRope,
+		graph.OpKVAppend:  decomposeKVAppend,
+		graph.OpAttend:    decomposeAttend,
+		graph.OpRopeTable: decomposeRopeTable,
 	}
 }
 

@@ -46,6 +46,9 @@ func generate(p Prim) (*Kernel, error) {
 		g.pos = pos
 		k.Positions = pos
 	}
+	if len(p.Facts.Rows) > 0 {
+		k.Rows = g.value(p.Facts.Rows, terms) + 1
+	}
 	vals := g.values(p.Expr, terms)
 	if p.Kind == PrimMap {
 		if len(p.Stores) == 0 {

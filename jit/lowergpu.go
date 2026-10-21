@@ -61,18 +61,39 @@ func (e *lowerer) run() (*ir.Kernel, error) {
 	} else {
 		flat = b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
 		e.flat = flat
-		flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(n.elements()-1)))
+		if n.Clamp > 0 {
+			flat = b.Min(ir.U32, flat, b.Sub(ir.U32, e.get(n.Clamp-1), b.Const(ir.U32, 1)))
+		} else {
+			flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(n.elements()-1)))
+		}
 	}
 	if e.coords == nil {
 		e.coords = make([]ir.Value, len(n.Space))
 		rest := flat
+		lead := make([]int, len(n.Space)+1)
+		lead[0] = 1
+		for d, x := range n.Space {
+			lead[d+1] = lead[d] * x
+		}
 		for d := len(n.Space) - 1; d > 0; d-- {
+			if n.Space[d] == 1 {
+				e.coords[d] = b.Const(ir.U32, 0)
+				continue
+			}
+			if lead[d] == 1 {
+				e.coords[d] = rest
+				rest = b.Const(ir.U32, 0)
+				continue
+			}
 			ext := b.Const(ir.U32, int64(n.Space[d]))
 			e.coords[d] = b.Rem(ir.U32, rest, ext)
 			rest = b.Div(ir.U32, rest, ext)
 		}
 		if len(n.Space) > 0 {
 			e.coords[0] = rest
+			if n.Space[0] == 1 {
+				e.coords[0] = b.Const(ir.U32, 0)
+			}
 		}
 	}
 	for _, st := range n.Stores {

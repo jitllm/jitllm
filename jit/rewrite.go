@@ -279,6 +279,11 @@ func (k *Kernel) compact() {
 			}
 		}
 	}
+	for _, x := range []int{k.Rows, k.Clamp} {
+		if x > 0 {
+			walk(x - 1)
+		}
+	}
 	if p := k.Positions; p != nil {
 		for _, x := range append(append([]int{p.First, p.End}, p.Live...), p.Pos...) {
 			walk(x)
@@ -326,6 +331,7 @@ func (k *Kernel) compact() {
 		l := &k.Loops[i]
 		l.Count, l.Span, l.Elem, l.End = re(l.Count), re(l.Span), re(l.Elem), re(l.End)
 	}
+	k.Rows, k.Clamp = re(k.Rows), re(k.Clamp)
 	if p := k.Positions; p != nil {
 		q := *p
 		q.First, q.End = at[p.First], at[p.End]

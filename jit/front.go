@@ -14,6 +14,7 @@ type PartKind uint8
 const (
 	PartBlock PartKind = iota
 	PartHead
+	PartTable
 )
 
 // Part is one placeable part of the model and its graph.
@@ -24,18 +25,22 @@ type Part struct {
 }
 
 func (p Part) String() string {
-	if p.Kind == PartHead {
+	switch p.Kind {
+	case PartHead:
 		return "head"
+	case PartTable:
+		return "table"
 	}
 	return fmt.Sprintf("block %d", p.Block)
 }
 
-// front is the model's graph from its container: every block, then the
-// head. What the container states, the front end reads; what it does not,
-// the front end refuses.
+// front is the model's graph from its container: the step's rotary table,
+// every block, then the head. What the container states, the front end
+// reads; what it does not, the front end refuses.
 func front(f *jlm.File) ([]Part, error) {
 	c := f.Config()
-	var parts []Part
+	rt := graph.RopeTable{NRot: int(c.NRot)}
+	parts := []Part{{Kind: PartTable, Block: -1, Graph: rt.Build()}}
 	for li := 0; li < int(c.NLayer); li++ {
 		g, err := blockGraph(f, li)
 		if err != nil {
@@ -105,7 +110,7 @@ func headGraph(f *jlm.File) (*graph.Graph, error) {
 func formats(f *jlm.File, p Part) map[jlm.Role]jlm.Type {
 	out := map[jlm.Role]jlm.Type{}
 	block := int32(p.Block)
-	if p.Kind == PartHead {
+	if p.Kind != PartBlock {
 		block = jlm.DenseBlock
 	}
 	for _, o := range p.Graph.Ops {

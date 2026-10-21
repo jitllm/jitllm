@@ -22,6 +22,7 @@ func gpuProfile() Profile {
 		Prefetch{},
 		Fuse{Pairs: []Pair{{From: PrimMap, To: PrimMap, AtStores: true}, {From: PrimContract, To: PrimMap, Additive: true}}},
 		Threads{Group: 128},
+		LiveRows{},
 		WorkRow{Group: 1024},
 		Coarsen{Unit: 4},
 		Parts{Kinds: []PrimKind{PrimMap}},

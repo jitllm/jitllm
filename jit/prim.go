@@ -115,6 +115,9 @@ type Facts struct {
 	Range *Range
 	// Heads is the primitive's space as attention's.
 	Heads *Heads
+	// Rows is how many of the leading axis's rows are live, an expression
+	// the step's tables give at run time.
+	Rows []Expr
 }
 
 // Range is axis Axis of the primitive's Shape as positions: coordinate k at

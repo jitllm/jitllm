@@ -29,6 +29,10 @@ type Kernel struct {
 	Positions *Positions
 	Heads     *Heads
 	Part      PartKind
+	// Rows is 1 + the node of how many of the leading axis's rows are live;
+	// Clamp, where a pass set it, 1 + the node of the elements a launch
+	// holds its threads to.
+	Rows, Clamp int
 }
 
 // Positions is a primitive's Range on its kernel: the space axis whose
