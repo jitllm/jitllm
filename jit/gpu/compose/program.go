@@ -86,6 +86,12 @@ const (
 	// Out[1] the item's maximum and sum, 32 copies each past its padded
 	// numerators (the merge's partial layout).
 	PrimSoftmax
+	// PrimScores is each (row, head, split, slot)'s score: the head's query
+	// In[0] dot the slot's key in the paged pool In[1] (through the page
+	// table In[2] and the row descriptors In[3]), scaled by Scale, capped
+	// by Softcap where set, -inf where the row does not attend; into
+	// Out[0], Paged.Chunk slots an item.
+	PrimScores
 	// PrimAcc is each (row, head, split, value element)'s sum over its
 	// split's keys of the weight In[0] (Paged.Chunk slots an item) times the
 	// key's value in the paged pool In[1], through the page table In[2] and
@@ -115,6 +121,8 @@ type Prim struct {
 	Layer   bool
 	Win     int
 	Paged   Paged
+	Scale   float32
+	Softcap float32
 	Rope    RopeAttrs
 	KV      KVAttrs
 	W       MatVecWeight
@@ -196,6 +204,11 @@ func (p *Program) Lower() ([]Group, error) {
 		}
 		if o.Kind == PrimQuant {
 			gs = append(gs, b.quantAlone(o))
+			continue
+		}
+		if o.Kind == PrimScores {
+			b.scores(o)
+			gs = append(gs, b.g)
 			continue
 		}
 		if o.Kind == PrimAcc {
@@ -530,13 +543,8 @@ func (b *builder) acc(o Prim) {
 	table, desc := b.buf(BufU32, Bind{BindVal, o.In[2]}), b.buf(BufU32, Bind{BindVal, o.In[3]})
 	part := b.buf(BufOut, Bind{BindVal, o.Out[0]})
 	kvRow, gqa := p.KVHeads*p.Dim, p.Heads/p.KVHeads
-	flat := r.Column()
-	j := ub(OpRem, flat, u(vd))
-	rest := ub(OpDiv, flat, u(vd))
-	sp := ub(OpRem, rest, u(S))
-	rest = ub(OpDiv, rest, u(S))
-	h := ub(OpRem, rest, u(p.Heads))
-	row := ub(OpDiv, rest, u(p.Heads))
+	dg := r.DigitsOf(r.Column(), vd, S, p.Heads)
+	j, sp, h, row := dg[0], dg[1], dg[2], dg[3]
 	ps := r.pagedSplitOf(desc, row, sp, S)
 	col := j
 	if p.MLA == 0 {
@@ -558,5 +566,51 @@ func (b *builder) acc(o Prim) {
 	r.StoreAt(part, acc, ub(OpAdd, ub(OpMul, item, u(padded+64)), j))
 	// Main's schedule by the shape: a KV head's HeadGroup query heads a
 	// thread, sharing each value read, their columns S*vd apart.
-	b.g.Sched = &Schedule{Group: 128, Flat: true, TileCols: p.HeadGroup(), ColStride: S * vd, Block: 8, Split: 1}
+	b.g.Sched = &Schedule{Group: 128, Flat: true, TileCols: p.HeadGroup(), TileDigit: 3, Block: 8, Split: 1}
+}
+
+// scores is a staged scores' naive group: an element a (row, head, split,
+// slot), its key's page from the slot's place held inside the row's keys,
+// a loop over the head's dimensions folding q times k, scaled, capped and
+// masked.
+func (b *builder) scores(o Prim) {
+	p := o.Paged
+	S, C, P := max(1, p.Splits), p.Chunk, p.Page
+	b.g.Row = Row{Width: p.Rows * p.Heads * S * C, Rows: 1}
+	r := &b.g.Row
+	u, ub := r.UConst, r.UBin
+	q, k := b.buf(BufRow, Bind{BindVal, o.In[0]}), b.buf(BufRow, Bind{BindVal, o.In[1]})
+	table, desc := b.buf(BufU32, Bind{BindVal, o.In[2]}), b.buf(BufU32, Bind{BindVal, o.In[3]})
+	out := b.buf(BufOut, Bind{BindVal, o.Out[0]})
+	kvRow, gqa := p.KVHeads*p.Dim, p.Heads/p.KVHeads
+	dg := r.DigitsOf(r.Column(), C, S, p.Heads)
+	slot, sp, h, row := dg[0], dg[1], dg[2], dg[3]
+	ps := r.pagedSplitOf(desc, row, sp, S)
+	t := r.Select(ps.live, ub(OpMin, ub(OpMax, ub(OpAdd, ps.st, slot), ps.ks), ps.last), u(0))
+	pid := r.pageOf(table, ps.tab, t, P)
+	rh := ub(OpAdd, ub(OpMul, row, u(p.Heads)), h)
+	qb := ub(OpMul, rh, u(p.Dim))
+	kb := ub(OpAdd, ub(OpAdd, ub(OpMul, pid, u(P*kvRow)), ub(OpMul, ub(OpMul, ub(OpDiv, h, u(gqa)), u(p.Dim)), u(P))), r.pageRem(t, P))
+	step := P
+	if p.MLA > 0 {
+		kb, step = ub(OpMul, ub(OpAdd, ub(OpMul, pid, u(P)), r.pageRem(t, P)), u(kvRow)), 1
+	}
+	c := r.Loop(p.Dim)
+	d := r.Iter(c)
+	acc := r.Fold(c, r.Const(0))
+	kv := r.LoadAt(k, ub(OpAdd, kb, ub(OpMul, d, u(step))))
+	qv := r.LoadAt(q, ub(OpAdd, qb, d))
+	r.SetFold(acc, r.Add(Node{Kind: NBinary, Op: OpFma, A: qv, B: kv, C: acc}))
+	score := r.Bin(OpMul, acc, r.Const(o.Scale))
+	if o.Softcap > 0 {
+		e := r.Add(Node{Kind: NUnary, Op: OpExp, A: r.Bin(OpMul, r.Const(2/o.Softcap), score)})
+		score = r.Bin(OpMul, r.Const(o.Softcap), r.Bin(OpSub, r.Const(1), r.Bin(OpDiv, r.Const(2), r.Bin(OpAdd, e, r.Const(1)))))
+	}
+	ob := ub(OpAdd, ub(OpMul, ub(OpAdd, ub(OpMul, rh, u(S)), sp), u(C)), slot)
+	r.StoreAt(out, r.Select(r.valid(ps, slot), score, r.Const(-math.MaxFloat32)), ob)
+	// Main's schedule by the shape: HeadGroup heads a thread sharing each
+	// key read, the dimensions unrolled (in blocks of 32 past 512 products)
+	// over 4/G chains.
+	G := p.HeadGroup()
+	b.g.Sched = &Schedule{Group: 128, Flat: true, TileCols: G, TileDigit: 3, Unroll: 32, UnrollOver: 512, Chains: max(1, 4/G)}
 }

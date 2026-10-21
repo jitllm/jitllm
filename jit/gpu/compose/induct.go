@@ -350,6 +350,7 @@ func (g *Row) clone() *Row {
 	c.Loops = append([]int(nil), g.Loops...)
 	c.Trip = append([]int(nil), g.Trip...)
 	c.Ranges = append([]Range(nil), g.Ranges...)
+	c.Digits = append([]Digits(nil), g.Digits...)
 	c.Effects = append([]int(nil), g.Effects...)
 	c.Frags = make([][]int, len(g.Frags))
 	for i, f := range g.Frags {
@@ -405,6 +406,13 @@ func (g *Row) tiled(s Schedule) *Row {
 		return g
 	}
 	r := g.clone()
+	if s.TileDigit > 0 && tr == 1 {
+		if ok := r.tileDigit(s.TileDigit-1, tc); ok {
+			r = r.divmods(s)
+			r.liftOffsets(s)
+			return r
+		}
+	}
 	// A strided tile's first place and step, as nodes: the tile t's first
 	// t/k*n*k + t%k and its j-th that plus j*k.
 	place := func(row bool) Node {
@@ -619,6 +627,33 @@ func (g *Row) iterFormed(iter int) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+// tileDigit tiles digit i of the column's mixed-radix split by tc: the
+// split taken of the thread's tile with digit i's radix tc times smaller,
+// digit i that new digit times tc plus the element's place in the tile.
+// False where the group has no such split of its column.
+func (r *Row) tileDigit(i, tc int) bool {
+	for _, d := range r.Digits {
+		if r.Nodes[d.Of].Kind != NColumn || i >= len(d.Radix) || d.Radix[i]%tc != 0 {
+			continue
+		}
+		radix := append([]int(nil), d.Radix...)
+		radix[i] /= tc
+		q := r.Add(Node{Kind: NColTile})
+		var out []int
+		for _, x := range radix {
+			out = append(out, r.UBin(OpRem, q, r.UConst(x)))
+			q = r.UBin(OpDiv, q, r.UConst(x))
+		}
+		out = append(out, q)
+		out[i] = r.UBin(OpAdd, r.UBin(OpMul, out[i], r.UConst(tc)), r.Add(Node{Kind: NColOff}))
+		for j, n := range d.Out {
+			r.Nodes[n] = r.Nodes[out[j]]
+		}
+		return true
 	}
 	return false
 }

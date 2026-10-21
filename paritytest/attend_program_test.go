@@ -105,3 +105,32 @@ func TestAccPrimIsMains(t *testing.T) {
 		})
 	}
 }
+
+// TestScoresPrimIsMains holds the scores prim, lowered naively and through
+// the passes, to main's staged scores at lanes 1 over f32 K.
+func TestScoresPrimIsMains(t *testing.T) {
+	for _, s := range stagedShapes {
+		name := fmt.Sprintf("r%d_h%d_kv%d_d%d_m%d_s%d_c%d", s.Rows, s.Heads, s.KVHeads, s.Dim, s.MLA, s.Splits, s.Chunk)
+		t.Run(name, func(t *testing.T) {
+			mk, err := mainkernels.PagedStagedScores(s, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := &compose.Program{Rows: s.Rows, Vals: []compose.Value{{Buf: -1}, {Buf: -1}, {Elem: compose.ValU32, Buf: -1}, {Elem: compose.ValU32, Buf: -1}, {Buf: -1}}}
+			p.Prims = []compose.Prim{{Kind: compose.PrimScores, In: []int{0, 1, 2, 3}, Out: []int{4}, Paged: pagedOf(s), Scale: s.Scale, Softcap: s.Softcap}}
+			gs, err := p.Lower()
+			if err != nil {
+				t.Fatal(err)
+			}
+			ls, err := gs[0].Launches(sm70)
+			if err != nil || len(ls) != 1 {
+				t.Fatalf("%d launches: %v", len(ls), err)
+			}
+			k, err := ls[0].Emit()
+			if err != nil {
+				t.Fatal(err)
+			}
+			same(t, name, []*ir.Kernel{mk}, []*ir.Kernel{k})
+		})
+	}
+}

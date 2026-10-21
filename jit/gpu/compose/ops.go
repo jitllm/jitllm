@@ -199,6 +199,30 @@ func (g *Row) Loop(trip int) int {
 	return len(g.Loops) - 1
 }
 
+// Digits is index node Of split into mixed-radix digits: Out[i] for i <
+// len(Radix) the i-th digit (least significant first), Out[len(Radix)] the
+// quotient past them.
+type Digits struct {
+	Of    int
+	Radix []int
+	Out   []int
+}
+
+// DigitsOf is x split into digits of the radices, least significant first,
+// then the quotient past them: each digit the remainder of the quotient so
+// far, recorded for the tile pass.
+func (g *Row) DigitsOf(x int, radix ...int) []int {
+	var out []int
+	q := x
+	for _, r := range radix {
+		out = append(out, g.UBin(OpRem, q, g.UConst(r)))
+		q = g.UBin(OpDiv, q, g.UConst(r))
+	}
+	out = append(out, q)
+	g.Digits = append(g.Digits, Digits{Of: x, Radix: append([]int(nil), radix...), Out: out})
+	return out
+}
+
 // Iter is loop c's iterator: 0, 1, ... up to its trip count.
 func (g *Row) Iter(c int) int { return g.Add(Node{Kind: NIter, At: c}) }
 

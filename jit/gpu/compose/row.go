@@ -47,6 +47,9 @@ type Row struct {
 	LiveBuf, LiveAt int
 	// Ranges are the range loops' coordinates, by loop (RangeLoop).
 	Ranges []Range
+	// Digits are the group's index splits into mixed-radix digits
+	// (DigitsOf), what the tile pass tiles one digit of (TileDigit).
+	Digits []Digits
 	// SpanGroup is the aligned rows that share a table and whose spans do
 	// not decrease (HintTileFirst, HintTileLast).
 	SpanGroup int
@@ -412,6 +415,14 @@ type Schedule struct {
 	// Block cuts each range loop into aligned blocks of that many places
 	// (blocks), 0 and 1 for none.
 	Block int
+	// Unroll, UnrollOver and Chains are the unroll pass's (unrolled): a
+	// constant loop unrolled whole up to UnrollOver trips times TileCols,
+	// past it in blocks of Unroll trips; each fold as Chains chains.
+	Unroll, UnrollOver, Chains int
+	// TileDigit, where set, is 1 + the digit of the column's mixed-radix
+	// split (Row.Digits) the tile's TileCols elements tile, in place of
+	// the flat column.
+	TileDigit int
 }
 
 // Key is a group's identity in a cache: its structure and its schedule,
@@ -423,7 +434,8 @@ type Key struct {
 // Encode is the group's structure and schedule as integers.
 func (g *Row) Encode(s Schedule) []uint32 {
 	e := []uint32{1, uint32(g.Width), uint32(g.Rows), uint32(s.Group), b2u(s.Warp), uint32(len(g.Bufs)), b2u(s.Flat), uint32(s.Tile), uint32(s.TileCols), uint32(s.Split),
-		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes), uint32(s.Lanes), b2u(s.WorkRow), uint32(s.RowStride), uint32(s.ColStride), b2u(s.LaneLoops), uint32(s.Block), b2u(s.GroupRows), b2u(s.GroupSplit)}
+		b2u(s.MMA), uint32(s.MT), uint32(s.NT), uint32(s.Target.API), s.Target.ISA.Word(), uint32(s.Target.Lanes), uint32(s.Lanes), b2u(s.WorkRow), uint32(s.RowStride), uint32(s.ColStride), b2u(s.LaneLoops), uint32(s.Block), b2u(s.GroupRows), b2u(s.GroupSplit),
+		uint32(s.Unroll), uint32(s.UnrollOver), uint32(s.Chains), uint32(s.TileDigit)}
 	for _, b := range g.Bufs {
 		e = append(e, uint32(b.Kind), uint32(b.N), uint32(b.Of), b2u(b.Over))
 	}
@@ -476,6 +488,12 @@ func (g *Row) Encode(s Schedule) []uint32 {
 	for c, rg := range g.Ranges {
 		if rg.ok {
 			e = append(e, 0x2A6E, uint32(c), uint32(rg.S), uint32(rg.Lo), uint32(rg.Hi), uint32(rg.Origin), uint32(rg.Ext))
+		}
+	}
+	for _, d := range g.Digits {
+		e = append(e, 0xD161, uint32(d.Of), uint32(len(d.Radix)))
+		for _, x := range d.Radix {
+			e = append(e, uint32(x))
 		}
 	}
 	return e
@@ -1098,7 +1116,7 @@ func (g *Row) prepared(s Schedule) (*Row, error) {
 	if g, err = g.laneLoops(s); err != nil {
 		return nil, err
 	}
-	g = g.centred(s).blocks(s).pipelined().tiled(s).hulls(s).inductions(s)
+	g = g.centred(s).blocks(s).unrolled(s).pipelined().tiled(s).hulls(s).inductions(s)
 	if s.Lanes == 0 && g.loopReduces() {
 		return nil, fmt.Errorf("compose: a reduction in a loop's body off lane rows")
 	}

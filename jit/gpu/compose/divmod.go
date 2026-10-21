@@ -48,16 +48,23 @@ func (r *Row) divmod(i, tr, tc int) (int, bool) {
 	if n, ok := r.nested(nd, d); ok {
 		return n, true
 	}
-	// (x + c) by d where x is a multiple of g dividing d and 0 <= c < g:
-	// x mod d is a multiple of g at most d-g, so c rides past the division.
-	if a := r.Nodes[nd.A]; a.Kind == NUBinary && a.Op == OpAdd && r.Nodes[a.B].Kind == NUConst {
-		c := int64(r.Nodes[a.B].At)
-		if g := gcd(r.multipleOf(a.A), d); c > 0 && c < g {
-			q := r.UBin(nd.Op, a.A, nd.B)
-			if nd.Op == OpDiv {
-				return q, true
+	// (x + y) by d where x is a multiple of g dividing d and 0 <= y < g (a
+	// constant, or a value whose range is known): x mod d is a multiple of
+	// g at most d-g, so y rides past the division.
+	if a := r.Nodes[nd.A]; a.Kind == NUBinary && a.Op == OpAdd {
+		for _, xy := range [2][2]int{{a.A, a.B}, {a.B, a.A}} {
+			x, y := xy[0], xy[1]
+			lo, hi, known := r.rangeOf(y, tr, tc)
+			if c := r.Nodes[y]; c.Kind == NUConst {
+				lo, hi, known = int64(c.At), int64(c.At), true
 			}
-			return r.UBin(OpAdd, q, a.B), true
+			if g := gcd(r.multipleOf(x), d); known && lo >= 0 && hi > 0 && hi < g {
+				q := r.UBin(nd.Op, x, nd.B)
+				if nd.Op == OpDiv {
+					return q, true
+				}
+				return r.UBin(OpAdd, q, y), true
+			}
 		}
 	}
 	l := r.linear(nd.A)
