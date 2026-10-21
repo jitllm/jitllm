@@ -6,9 +6,12 @@ import "github.com/jitllm/jitllm/jit/ir"
 // segments threads of their own writing partial planes, and a combine that
 // sums the planes. The segments double while they stay under Max, the
 // threads under twice Slots (the device's where Slots is 0), and the trips
-// divide into Block-wide blocks a segment.
+// divide into Block-wide blocks a segment. Where Parts is set the segments
+// are instead the most, at most Parts and a power of two, that divide the
+// trips.
 type Split struct {
 	Slots, Max, Block int
+	Parts             int
 	Kinds             []PrimKind
 }
 
@@ -20,7 +23,7 @@ func (s Split) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 
 func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 	c, f, term, st, ok := splittable(n)
-	if !ok || !covers(s.Kinds, n.Kind) {
+	if !ok || n.Work || !covers(s.Kinds, n.Kind) {
 		return nil, false, nil
 	}
 	T, E := n.Loops[c].Trip, n.elements()
@@ -29,7 +32,13 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 		slots = d.Slots
 	}
 	S := 1
-	for S < s.Max && E*S < 2*slots && T%(s.Block*S*2) == 0 {
+	if s.Parts > 0 {
+		S = s.Parts
+		for S > 1 && T%S != 0 {
+			S /= 2
+		}
+	}
+	for s.Parts == 0 && S < s.Max && E*S < 2*slots && T%(s.Block*S*2) == 0 {
 		S *= 2
 	}
 	if S == 1 {

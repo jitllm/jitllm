@@ -3,11 +3,14 @@ package jit
 // Pair is a producer's kind a consumer's may be fused into. Additive asks
 // that the consumer add a term to the producer's value; AtStores fuses a
 // consumer of a value the producer writes at several places an element, the
-// consumer computed at each of the producer's stores.
+// consumer computed at each of the producer's stores; Unrolled fuses a
+// reduction into a consumer reading it at leading coordinates of its own,
+// the reduction's terms unrolled at each read.
 type Pair struct {
 	From, To PrimKind
 	Additive bool
 	AtStores bool
+	Unrolled bool
 }
 
 // Fuse inlines a consumer into its producer where their pair is allowed, the
@@ -30,6 +33,13 @@ func (f Fuse) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				m = merge(p, c, v, st)
 			} else if v, ok := f.joinsAtStores(p, c, out); ok {
 				m = mergeAtStores(p, c, v)
+			} else if v, ok := f.joinsUnrolled(p, c, out); ok {
+				u := unrolled(p, c, v)
+				u.Passes = append(append([]string(nil), c.Passes...), f.Name())
+				out[ci] = u
+				out = append(out[:pi], out[pi+1:]...)
+				ci--
+				break
 			}
 			if m != nil {
 				m.Passes = append(append([]string(nil), p.Passes...), f.Name())
@@ -48,11 +58,81 @@ func (f Fuse) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 
 func (f Fuse) allows(p, c *Kernel, atStores bool) bool {
 	for _, pr := range f.Pairs {
-		if pr.From == p.Kind && pr.To == c.Kind && pr.AtStores == atStores && (!pr.Additive || c.adds()) {
+		if pr.From == p.Kind && pr.To == c.Kind && pr.AtStores == atStores && !pr.Unrolled && (!pr.Additive || c.adds()) {
 			return true
 		}
 	}
 	return false
+}
+
+// joinsUnrolled finds a reduction's output c alone reads, each read at
+// leading coordinates of c's own.
+func (f Fuse) joinsUnrolled(p, c *Kernel, ks []*Kernel) (Operand, bool) {
+	allowed := false
+	for _, pr := range f.Pairs {
+		allowed = allowed || pr.Unrolled && pr.From == p.Kind && pr.To == c.Kind
+	}
+	fd, ok := p.fold()
+	if !allowed || !ok || p.Work || c.Work || len(c.Loops) > 0 || len(p.Stores) != 1 || !p.storesOwn(p.Stores[0]) ||
+		p.Stores[0].Val != fd || p.Loops[0].Count > 0 {
+		return Operand{}, false
+	}
+	o := p.Bufs[p.Stores[0].Buf].Operand
+	if !soleReader(ks, c, o) {
+		return Operand{}, false
+	}
+	any := false
+	for _, nd := range c.Nodes {
+		if nd.Op != OpLoad || c.Bufs[nd.Buf].Operand != o {
+			continue
+		}
+		if len(nd.Ax) != len(p.Space) {
+			return Operand{}, false
+		}
+		for i, a := range nd.Ax {
+			if x := c.Nodes[a]; x.Op != OpCoord || x.A != i {
+				return Operand{}, false
+			}
+		}
+		any = true
+	}
+	return o, any
+}
+
+// unrolled is c with each read of p's output v p's sum at the read's
+// coordinates, its terms unrolled from its start.
+func unrolled(p, c *Kernel, v Operand) *Kernel {
+	m := c.clone()
+	m.Name = p.Name + "+" + c.Name
+	f, _ := p.fold()
+	it := p.iterOf(0)
+	for i, nd := range c.Nodes {
+		if nd.Op != OpLoad || c.Bufs[nd.Buf].Operand != v {
+			continue
+		}
+		ax := nd.Ax
+		coord := func(j int, x Node) (int, bool) {
+			if x.Op == OpCoord {
+				return ax[x.A], true
+			}
+			return 0, false
+		}
+		acc := copyInto(m, p, p.Nodes[f].B, coord)
+		for j := 0; j < p.Loops[0].Trip; j++ {
+			at, a := m.u32(j), acc
+			acc = copyInto(m, p, p.Nodes[f].A, func(k int, x Node) (int, bool) {
+				switch {
+				case k == f:
+					return a, true
+				case k == it:
+					return at, true
+				}
+				return coord(k, x)
+			})
+		}
+		m.redirect(i, acc, acc)
+	}
+	return m
 }
 
 func (f Fuse) joins(p, c *Kernel, ks []*Kernel) (Operand, int, bool) {
