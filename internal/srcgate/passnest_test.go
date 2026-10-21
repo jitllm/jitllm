@@ -9,16 +9,17 @@ import (
 	"testing"
 )
 
-// buildsFromDefinitions is what a pass must never do: read a primitive's
-// definition, lower a primitive, or instance a primitive's expressions into a
-// kernel. A pass takes nests and returns rewritten nests.
-var buildsFromDefinitions = regexp.MustCompile(`\blower\(|\.instance\(|\.Prim\b`)
+// buildsFromDefinitions is what a pass, and the lowering after the last
+// pass, must never do: read a primitive's definition, generate a primitive's
+// naive IR, or instance a primitive's expressions. A pass takes IR and
+// returns rewritten IR.
+var buildsFromDefinitions = regexp.MustCompile(`\bgenerate\(|\.instance\(|\.Prim\b`)
 
-// passFiles are the composer's files outside the decomposition and the naive
-// lowering.
+// passFiles are the composer's files outside the decompositions and the
+// naive IR's generation.
 func passFiles(t *testing.T, dir string) map[string]string {
 	t.Helper()
-	keep := map[string]bool{"decompose.go": true, "lower.go": true, "block.go": true, "attend.go": true,
+	keep := map[string]bool{"decompose.go": true, "generate.go": true, "block.go": true, "attend.go": true,
 		"history.go": true, "quantize.go": true, "prim.go": true}
 	out := map[string]string{}
 	ents, err := os.ReadDir(dir)

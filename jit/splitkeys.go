@@ -310,7 +310,7 @@ func (s SplitKeys) split(ch []*Nest, t Target) (int, []*Nest, bool) {
 
 	var ns []*Nest
 	for _, p := range append(parts, copies, merge) {
-		lowered, err := lower(p)
+		lowered, err := generate(p)
 		if err != nil {
 			return 0, nil, false
 		}

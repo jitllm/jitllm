@@ -3,290 +3,453 @@ package jit
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
-func lower(p Prim) ([]*Nest, error) {
-	switch p.Kind {
-	case PrimContract:
-		return []*Nest{lowerContract(p)}, nil
-	case PrimMap:
-		return []*Nest{lowerMap(p)}, nil
-	case PrimReduce:
-		return []*Nest{lowerReduce(p)}, nil
+func lower(n *Nest, t Target) (*ir.Kernel, error) {
+	if t.Device != DeviceGPU {
+		return nil, fmt.Errorf("no lowerer for device %d", t.Device)
 	}
-	return nil, fmt.Errorf("jit: no lowering of primitive %d", p.Kind)
+	e := &lowerer{n: n, b: ir.New(n.Name, [3]int{n.Group, 1, 1})}
+	return e.run()
 }
 
-// lowerContract is a thread an output element and a loop over K.
-func lowerContract(p Prim) *Nest {
-	n := &Nest{Name: "contract", Space: []int{p.Rows}, Group: defaultGroup}
-	a := n.buf(Buf{Kind: BufIn, Elem: storageElem(p.In[0]), Operand: p.In[0]})
-	b := n.buf(Buf{Kind: BufIn, Elem: ir.F32, Operand: p.In[1]})
-	out := n.buf(Buf{Kind: BufOut, Elem: ir.F32, Operand: p.Out})
-	r := n.add(Node{Op: OpCoord, A: 0, Type: ir.U32})
-	c := n.loop(p.K, -1)
-	k := n.add(Node{Op: OpIter, At: c, Type: ir.U32})
-	acc := n.add(Node{Op: OpFold, At: c, Type: ir.F32, B: n.f32(0)})
-	w := n.load(a, n.bin(OpAdd, ir.U32, n.bin(OpMul, ir.U32, r, n.u32(p.K)), k))
-	x := n.load(b, k)
-	n.Nodes[acc].A = n.add(Node{Op: OpFma, Type: ir.F32, A: w, B: x, C: acc})
-	n.Stores = append(n.Stores, Store{Buf: out, Ix: r, Val: acc, At: -1})
-	return n
+type lowerer struct {
+	n      *Nest
+	b      *ir.Builder
+	params []ir.Value
+	val    []ir.Value
+	home   []int
+	coords []ir.Value
+	flat   ir.Value
+	tid    ir.Value
+	shared map[int]ir.Value
+	open   []int
+	iter   map[int]ir.Value
+	phi    map[int]ir.Value
+	done   []bool
+	err    error
 }
 
-const defaultGroup = 128
-
-// storageElem is the word type an operand's storage holds: a weight's
-// payload is words, whatever its format.
-func storageElem(o Operand) ir.Type {
-	if o.Kind == OperandWeight {
-		return ir.U32
+func (e *lowerer) run() (*ir.Kernel, error) {
+	n, b := e.n, e.b
+	e.val = make([]ir.Value, len(n.Nodes))
+	e.done = make([]bool, len(n.Loops))
+	e.iter, e.phi, e.shared = map[int]ir.Value{}, map[int]ir.Value{}, map[int]ir.Value{}
+	e.homes()
+	for i, bf := range n.Bufs {
+		if bf.Kind == BufShared {
+			e.params = append(e.params, b.Shared(fmt.Sprintf("s%d", i), bf.Elem, bf.Size))
+			continue
+		}
+		e.params = append(e.params, b.Param(fmt.Sprintf("p%d", i), bf.Elem))
 	}
-	return elemOf(o.Elem)
-}
-
-// load is buffer b's element at ix as the value it stores: a word of a
-// verbatim f32 weight is its float.
-func (n *Nest) load(b, ix int) int {
-	bf := n.Bufs[b]
-	v := n.add(Node{Op: OpLoad, Type: bf.Elem, Buf: b, A: ix})
-	if bf.Elem == ir.U32 && bf.Operand.Kind == OperandWeight && bf.Operand.Format == jlm.TypeF32 {
-		v = n.add(Node{Op: OpBitcast, Type: ir.F32, A: v})
+	for i, nd := range n.Nodes {
+		if nd.Op == OpGroupSum || nd.Op == OpGroupMax || nd.Op == OpExchange {
+			e.shared[i] = b.Shared(fmt.Sprintf("r%d", i), ir.F32, n.Group)
+		}
 	}
-	return v
-}
-
-// access is index i reaching an operand through a.
-func (n *Nest) access(i int, a Access) int {
-	if a.Mul > 1 {
-		i = n.bin(OpMul, ir.U32, i, n.u32(a.Mul))
-	}
-	if a.Div > 1 {
-		i = n.bin(OpDiv, ir.U32, i, n.u32(a.Div))
-	}
-	if a.Mod > 0 {
-		i = n.bin(OpRem, ir.U32, i, n.u32(a.Mod))
-	}
-	if a.Off != 0 {
-		i = n.bin(OpAdd, ir.U32, i, n.u32(a.Off))
-	}
-	return i
-}
-
-func elemOf(t ir.Type) ir.Type {
-	if t == ir.Void {
-		return ir.F32
-	}
-	return t
-}
-
-// lowerMap is a thread an element.
-func lowerMap(p Prim) *Nest {
-	n := &Nest{Name: "map", Space: []int{p.N}, Group: defaultGroup}
-	e := n.add(Node{Op: OpCoord, A: 0, Type: ir.U32})
-	var vals []int
-	if p.Shape != nil {
-		vals = n.instance(p, p.Expr, n.scope(p, e, n.decode(e, p.Shape)))
+	var flat ir.Value
+	if n.Work && len(n.Space) > 1 {
+		e.coords = e.workCoords()
+	} else if n.Work {
+		flat = b.Min(ir.U32, b.CTAID(), b.Const(ir.U32, int64(n.elements()-1)))
 	} else {
-		vals = n.exprs(p, e, func(j int) int { return n.access(e, p.At[j]) })
+		flat = b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
+		e.flat = flat
+		flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(n.elements()-1)))
 	}
-	if len(p.Stores) == 0 {
-		out := n.buf(Buf{Kind: BufOut, Elem: elemOf(p.Out.Elem), Operand: p.Out})
-		n.Stores = append(n.Stores, Store{Buf: out, Ix: n.access(e, p.OutAt), Val: vals[len(vals)-1], At: -1})
-		return n
-	}
-	for _, s := range p.Stores {
-		out := n.buf(Buf{Kind: BufOut, Elem: elemOf(s.Out.Elem), Operand: s.Out})
-		n.Stores = append(n.Stores, Store{Buf: out, Ix: vals[s.Index], Val: vals[s.Value], At: -1})
-	}
-	return n
-}
-
-// lowerReduce is a thread an output and a loop over its K terms.
-func lowerReduce(p Prim) *Nest {
-	n := &Nest{Name: "reduce", Space: []int{p.N}, Group: defaultGroup}
-	o := n.add(Node{Op: OpCoord, A: 0, Type: ir.U32})
-	t := elemOf(p.Type)
-	var outer []int
-	if p.Shape != nil {
-		outer = n.decode(o, p.outShape())
-	}
-	term := func(k int) int {
-		el := n.bin(OpAdd, ir.U32, n.bin(OpMul, ir.U32, o, n.u32(p.K)), k)
-		var vals []int
-		if p.Shape != nil {
-			vals = n.instance(p, p.Expr, n.scope(p, el, append(append([]int(nil), outer...), k)))
-		} else {
-			vals = n.exprs(p, el, func(j int) int { return n.access(el, p.At[j]) })
+	if e.coords == nil {
+		e.coords = make([]ir.Value, len(n.Space))
+		rest := flat
+		for d := len(n.Space) - 1; d > 0; d-- {
+			ext := b.Const(ir.U32, int64(n.Space[d]))
+			e.coords[d] = b.Rem(ir.U32, rest, ext)
+			rest = b.Div(ir.U32, rest, ext)
 		}
-		return vals[len(vals)-1]
-	}
-	trips, first := p.K, 0
-	init := n.add(Node{Op: OpConst, Type: t, Imm: p.Init})
-	if p.Start == StartFirst {
-		init, trips, first = term(n.u32(0)), p.K-1, 1
-	}
-	c := n.loop(trips, -1)
-	k := n.add(Node{Op: OpIter, At: c, Type: ir.U32})
-	if first > 0 {
-		k = n.bin(OpAdd, ir.U32, k, n.u32(first))
-	}
-	acc := n.add(Node{Op: OpFold, At: c, Type: t, B: init})
-	n.Nodes[acc].A = n.combine(p.Combine, t, acc, term(k))
-	out := n.buf(Buf{Kind: BufOut, Elem: elemOf(p.Out.Elem), Operand: p.Out})
-	ix := n.access(o, p.OutAt)
-	if len(p.Index) > 0 {
-		var vals []int
-		if p.Shape != nil {
-			vals = n.instance(p, p.Index, n.scope(p, o, outer))
-		} else {
-			vals = n.exprs(Prim{Expr: p.Index}, o, nil)
+		if len(n.Space) > 0 {
+			e.coords[0] = rest
 		}
-		ix = vals[len(vals)-1]
 	}
-	n.Stores = append(n.Stores, Store{Buf: out, Ix: ix, Val: acc, At: -1})
-	return n
-}
-
-// expr is p's function as nodes, its last node's value.
-func (n *Nest) expr(p Prim, index func(j int) int) int {
-	vals := n.exprs(p, -1, index)
-	return vals[len(vals)-1]
-}
-
-// exprs is p's function as nodes at element e, operand j at index(j) or at
-// a node, each operand one buffer however often it is read.
-func (n *Nest) exprs(p Prim, e int, index func(j int) int) []int {
-	bufs := map[Operand]int{}
-	bufOf := func(o Operand) int {
-		b, ok := bufs[o]
-		if !ok {
-			b = n.buf(Buf{Kind: BufIn, Elem: storageElem(o), Operand: o})
-			bufs[o] = b
-		}
-		return b
-	}
-	vals := make([]int, len(p.Expr))
-	for i, x := range p.Expr {
-		switch x.Op {
-		case ExprIn:
-			vals[i] = n.load(bufOf(p.In[x.In]), index(x.In))
-		case ExprLoad:
-			vals[i] = n.load(bufOf(p.In[x.In]), vals[x.A])
-		case ExprElem:
-			vals[i] = e
-		case OpConst:
-			vals[i] = n.add(Node{Op: OpConst, Type: x.Type, Imm: x.Imm})
+	for _, st := range n.Stores {
+		switch {
+		case st.At >= 0:
+			if !e.done[st.At] {
+				e.lowerLoop(st.At)
+			}
+		case st.Barrier:
+			b.Barrier()
 		default:
-			vals[i] = n.add(Node{Op: x.Op, Type: x.Type, A: vals[x.A], B: vals[x.B], C: vals[x.C]})
+			ix, v := e.storeIndex(st), e.get(st.Val)
+			b.Store(e.params[st.Buf], ix, v, 0)
 		}
 	}
-	return vals
+	if e.err != nil {
+		return nil, e.err
+	}
+	return b.Done()
 }
 
-// decode is flat index e's coordinates in a space of extents ext, the last
-// fastest.
-func (n *Nest) decode(e int, ext []int) []int {
-	c := make([]int, len(ext))
-	for d := len(ext) - 1; d > 0; d-- {
-		c[d] = n.bin(OpRem, ir.U32, e, n.u32(ext[d]))
-		e = n.bin(OpDiv, ir.U32, e, n.u32(ext[d]))
+// workCoords is a workgroup's coordinates from its index: an axis of one
+// extent zero, the outermost other axis held to its extent, the rest its
+// remainders.
+func (e *lowerer) workCoords() []ir.Value {
+	n, b := e.n, e.b
+	outer := 0
+	for outer < len(n.Space)-1 && n.Space[outer] == 1 {
+		outer++
 	}
-	if len(ext) > 0 {
-		c[0] = e
+	c := make([]ir.Value, len(n.Space))
+	rest := b.CTAID()
+	for d := len(n.Space) - 1; d >= 0; d-- {
+		ext := int64(n.Space[d])
+		switch {
+		case ext == 1:
+			c[d] = b.Const(ir.U32, 0)
+		case d == outer:
+			c[d] = b.Min(ir.U32, rest, b.Const(ir.U32, ext-1))
+		default:
+			c[d] = b.Rem(ir.U32, rest, b.Const(ir.U32, ext))
+			rest = b.Div(ir.U32, rest, b.Const(ir.U32, ext))
+		}
 	}
 	return c
 }
 
-// flatten is coordinates c's flat index in a space of extents ext.
-func (n *Nest) flatten(c, ext []int) int {
-	ix := c[0]
-	for d := 1; d < len(ext); d++ {
-		ix = n.bin(OpAdd, ir.U32, n.bin(OpMul, ir.U32, ix, n.u32(ext[d])), c[d])
+func (e *lowerer) fail(format string, args ...any) {
+	if e.err == nil {
+		e.err = fmt.Errorf(format, args...)
+	}
+}
+
+// homes is each node's loop: the deepest loop whose trips both reach it
+// and change it. Everything else runs outside, after a loop where it reads
+// the loop's folds.
+func (e *lowerer) homes() {
+	n := e.n
+	e.home = make([]int, len(n.Nodes))
+	depth := make([]int, len(n.Loops))
+	for c := range n.Loops {
+		for h := c; h >= 0; h = n.Loops[h].Parent {
+			depth[c]++
+		}
+	}
+	for i := range e.home {
+		e.home[i] = -1
+	}
+	for i, nd := range n.Nodes {
+		if nd.Op == OpIter || nd.Op == OpFold {
+			e.home[i] = nd.At
+		}
+	}
+	for c := range n.Loops {
+		for _, i := range e.body(c) {
+			if n.Nodes[i].Op == OpFold && n.Nodes[i].At == c || !n.varies(i, c) {
+				continue
+			}
+			if h := e.home[i]; h < 0 || depth[c] > depth[h] {
+				e.home[i] = c
+			}
+		}
+	}
+}
+
+func (e *lowerer) isOpen(c int) bool {
+	for _, o := range e.open {
+		if o == c {
+			return true
+		}
+	}
+	return false
+}
+
+// get is node i's value where the lowerer stands, its loop emitted first
+// where it is a fold read after the loop.
+func (e *lowerer) get(i int) ir.Value {
+	nd := e.n.Nodes[i]
+	if h := e.home[i]; h >= 0 && !e.isOpen(h) {
+		if nd.Op != OpFold || e.n.Loops[h].Parent != e.innermost() {
+			e.fail("node %d read outside its loop %d", i, h)
+			return 0
+		}
+		if !e.done[h] {
+			e.lowerLoop(h)
+		}
+		return e.phi[i]
+	}
+	if e.val[i] != 0 {
+		return e.val[i]
+	}
+	b := e.b
+	var v ir.Value
+	switch nd.Op {
+	case OpConst:
+		v = b.Const(nd.Type, nd.Imm)
+	case OpCoord:
+		v = e.coords[nd.A]
+	case OpThread:
+		v = e.thread()
+	case OpFlat:
+		v = e.flat
+	case OpIter:
+		v = e.iter[nd.At]
+	case OpFold:
+		v = e.phi[i]
+	case OpLoad:
+		ix := nd.A
+		if nd.Ax != nil {
+			v = b.Load(nd.Type, e.params[nd.Buf], e.flatten(nd.Buf, nd.Ax), nd.Imm)
+			break
+		}
+		v = b.Load(nd.Type, e.params[nd.Buf], e.get(ix), nd.Imm)
+	case OpBitcast:
+		v = b.Bitcast(nd.Type, e.get(nd.A))
+	case OpSqrt:
+		v = b.Sqrt(e.get(nd.A))
+	case OpExp:
+		v = b.Exp(e.get(nd.A))
+	case OpCvtF32:
+		v = b.CvtF32(e.get(nd.A))
+	case OpCvtI32:
+		v = b.CvtI32(e.get(nd.A))
+	case OpFma:
+		x, y, z := e.get(nd.A), e.get(nd.B), e.get(nd.C)
+		v = b.Fma(x, y, z)
+	case OpLess:
+		x, y := e.get(nd.A), e.get(nd.B)
+		v = b.Lt(e.n.Nodes[nd.A].Type, x, y)
+	case OpSelect:
+		x, y, z := e.get(nd.A), e.get(nd.B), e.get(nd.C)
+		v = b.Select(nd.Type, x, y, z)
+	case OpGroupSum, OpGroupMax:
+		v = e.groupReduce(i, e.get(nd.A), nd.Op == OpGroupMax)
+	case OpExchange:
+		v = e.exchange(i)
+	case OpShuffle:
+		v = b.ShuffleXor(nd.Type, e.get(nd.A), nd.Imm)
+	case OpLocal:
+		x := e.get(nd.A)
+		if e.n.Work {
+			v = b.Sub(ir.U32, x, b.Const(ir.U32, 0))
+		} else {
+			v = b.Sub(ir.U32, x, b.Mul(ir.U32, b.CTAID(), b.NTID()))
+		}
+	case OpAdd, OpSub, OpMul, OpDiv, OpRem, OpMin, OpMax, OpShl, OpShr, OpAnd, OpXor:
+		x, y := e.get(nd.A), e.get(nd.B)
+		v = binary(b, nd.Op, nd.Type, x, y)
+	default:
+		e.fail("node %d: op %d", i, nd.Op)
+		return 0
+	}
+	if nd.Op != OpIter && nd.Op != OpFold {
+		e.val[i] = v
+	}
+	return v
+}
+
+// flatten is coordinates ax of buffer bf's shape as its flat index.
+func (e *lowerer) flatten(bf int, ax []int) ir.Value {
+	b, sh := e.b, e.n.Bufs[bf].Shape
+	ix := e.get(ax[0])
+	for d := 1; d < len(ax); d++ {
+		ix = b.Add(ir.U32, b.Mul(ir.U32, ix, b.Const(ir.U32, int64(sh[d]))), e.get(ax[d]))
 	}
 	return ix
 }
 
-// scope is where a primitive's function is instanced: its element and
-// coordinates, and how its operands, its range and its reads at
-// coordinates are reached.
-type scope struct {
-	elem   int
-	coords []int
-	load   func(j, ix int) int
-	at     func(j int, ax, ext []int) int
-	live   func() int
-	// node, where set, is node i in place of its expression where it says.
-	node func(i int, vals []int) (int, bool)
+func (e *lowerer) storeIndex(st Store) ir.Value {
+	if st.Ax != nil {
+		return e.flatten(st.Buf, st.Ax)
+	}
+	return e.get(st.Ix)
 }
 
-// scope is p's function's default scope at element e of coordinates c:
-// every operand a buffer, a read at coordinates at its flat index.
-func (n *Nest) scope(p Prim, e int, c []int) scope {
-	bufs := map[Operand]int{}
-	var s scope
-	s.elem, s.coords = e, c
-	s.load = func(j, ix int) int {
-		o := p.In[j]
-		b, ok := bufs[o]
-		if !ok {
-			b = n.buf(Buf{Kind: BufIn, Elem: storageElem(o), Operand: o})
-			bufs[o] = b
+func (e *lowerer) thread() ir.Value {
+	if e.tid == 0 {
+		e.tid = e.b.TID()
+	}
+	return e.tid
+}
+
+// groupReduce is x combined over the workgroup: a butterfly in each
+// subgroup, each subgroup's result to its slot, and a butterfly over the
+// slots.
+func (e *lowerer) groupReduce(i int, x ir.Value, max bool) ir.Value {
+	b := e.b
+	comb := func(p, q ir.Value) ir.Value {
+		if max {
+			return b.Max(ir.F32, p, q)
 		}
-		return n.load(b, ix)
+		return b.Add(ir.F32, p, q)
 	}
-	s.at = func(j int, ax, ext []int) int { return s.load(j, n.flatten(ax, ext)) }
-	s.live = func() int {
-		vals := n.instance(p, p.Range.End, s)
-		return vals[len(vals)-1]
+	butterfly := func(v ir.Value) ir.Value {
+		for m := ir.SubgroupLanes / 2; m >= 1; m /= 2 {
+			v = comb(v, b.ShuffleXor(ir.F32, v, int64(m)))
+		}
+		return v
 	}
-	return s
+	sh, tid := e.shared[i], e.thread()
+	b.Store(sh, b.Shr(ir.U32, tid, b.Const(ir.U32, 5)), butterfly(x), 0)
+	b.Barrier()
+	return butterfly(b.Load(ir.F32, sh, b.And(ir.U32, tid, b.Const(ir.U32, ir.SubgroupLanes-1)), 0))
 }
 
-// instance is expressions es of p as nodes in scope s.
-func (n *Nest) instance(p Prim, es []Expr, s scope) []int {
-	vals := make([]int, len(es))
-	for i, x := range es {
-		if s.node != nil {
-			if v, ok := s.node(i, vals); ok {
-				vals[i] = v
-				continue
+// exchange is a thread's value through its workgroup slot, combined over
+// its group's slots.
+func (e *lowerer) exchange(i int) ir.Value {
+	b, nd := e.b, e.n.Nodes[i]
+	x := e.get(nd.A)
+	sh := e.shared[i]
+	b.Store(sh, e.thread(), x, 0)
+	b.Barrier()
+	base := e.get(nd.B)
+	var acc ir.Value
+	if nd.C >= 0 {
+		acc = e.get(nd.C)
+	}
+	for s := 0; s < int(nd.Imm); s++ {
+		v := b.Load(ir.F32, sh, base, int64(s))
+		if acc == 0 {
+			acc = v
+			continue
+		}
+		acc = binary(b, Op(nd.At), ir.F32, acc, v)
+	}
+	return acc
+}
+
+func binary(b *ir.Builder, op Op, t ir.Type, x, y ir.Value) ir.Value {
+	switch op {
+	case OpAdd:
+		return b.Add(t, x, y)
+	case OpSub:
+		return b.Sub(t, x, y)
+	case OpMul:
+		return b.Mul(t, x, y)
+	case OpDiv:
+		return b.Div(t, x, y)
+	case OpRem:
+		return b.Rem(t, x, y)
+	case OpMin:
+		return b.Min(t, x, y)
+	case OpShl:
+		return b.Shl(t, x, y)
+	case OpShr:
+		return b.Shr(t, x, y)
+	case OpAnd:
+		return b.And(t, x, y)
+	case OpXor:
+		return b.Xor(t, x, y)
+	}
+	return b.Max(t, x, y)
+}
+
+func (e *lowerer) innermost() int {
+	if len(e.open) == 0 {
+		return -1
+	}
+	return e.open[len(e.open)-1]
+}
+
+// lowerLoop is loop c: what its trips read that does not change from trip to
+// trip first, then the loop with its folds as phis and its stores.
+func (e *lowerer) lowerLoop(c int) {
+	n, b := e.n, e.b
+	folds := n.foldsOf(c)
+	for _, i := range e.body(c) {
+		if h := e.home[i]; !e.inside(h, c) {
+			e.get(i)
+		}
+	}
+	inits := make([]ir.Value, len(folds))
+	for j, f := range folds {
+		inits[j] = e.get(n.Nodes[f].B)
+	}
+	l := n.Loops[c]
+	var count ir.Value
+	if l.Count > 0 {
+		count = e.get(l.Count - 1)
+	}
+	start, step := b.Const(ir.U32, 0), b.Const(ir.U32, 1)
+	if l.Count > 0 {
+		b.LoopN(count)
+	} else if l.Spread {
+		start, step = e.thread(), b.Const(ir.U32, int64(n.Group))
+		b.Loop(int64((l.Trip + n.Group - 1) / n.Group))
+	} else {
+		b.Loop(int64(l.Trip))
+	}
+	it := b.Phi(ir.U32, start)
+	e.iter[c] = it
+	for j, f := range folds {
+		e.phi[f] = b.Phi(n.Nodes[f].Type, inits[j])
+	}
+	e.open = append(e.open, c)
+	saved := append([]ir.Value(nil), e.val...)
+	steps := make([]ir.Value, len(folds))
+	for j, f := range folds {
+		steps[j] = e.get(n.Nodes[f].A)
+	}
+	for _, st := range n.Stores {
+		if st.At == c && !st.Run && !st.Barrier {
+			ix, v := e.storeIndex(st), e.get(st.Val)
+			b.Store(e.params[st.Buf], ix, v, 0)
+		}
+	}
+	for j, f := range folds {
+		b.SetPhi(e.phi[f], steps[j])
+	}
+	b.SetPhi(it, b.Add(ir.U32, it, step))
+	b.EndLoop()
+	e.open = e.open[:len(e.open)-1]
+	for i := range e.val {
+		if e.inside(e.home[i], c) {
+			e.val[i] = saved[i]
+		}
+	}
+	e.done[c] = true
+}
+
+// inside reports whether loop h is c or sits in it.
+func (e *lowerer) inside(h, c int) bool { return e.n.within(h, c) }
+
+// body is every node loop c's trips compute: what its folds' steps and its
+// stores read, through inner loops' starts and steps.
+func (e *lowerer) body(c int) []int {
+	n := e.n
+	seen := map[int]bool{}
+	var out []int
+	var walk func(i int)
+	walk = func(i int) {
+		if seen[i] {
+			return
+		}
+		seen[i] = true
+		nd := n.Nodes[i]
+		if nd.Op == OpFold {
+			if nd.At != c && n.within(nd.At, c) {
+				walk(nd.A)
+				walk(nd.B)
+			}
+		} else {
+			for _, a := range n.args(&nd) {
+				walk(*a)
 			}
 		}
-		switch x.Op {
-		case ExprIn:
-			vals[i] = s.load(x.In, s.elem)
-		case ExprLoad:
-			vals[i] = s.load(x.In, vals[x.A])
-		case ExprElem:
-			vals[i] = s.elem
-		case ExprCoord:
-			vals[i] = s.coords[x.A]
-		case ExprAt:
-			ax := make([]int, len(x.Ax))
-			for k, a := range x.Ax {
-				ax[k] = vals[a]
+		out = append(out, i)
+	}
+	for _, f := range n.foldsOf(c) {
+		walk(n.Nodes[f].A)
+	}
+	for _, st := range n.Stores {
+		if !st.Barrier && !st.Run && n.within(st.At, c) {
+			for _, p := range n.storeArgs(&st) {
+				walk(*p)
 			}
-			vals[i] = s.at(x.In, ax, x.Ext)
-		case ExprLive:
-			vals[i] = s.live()
-		case OpConst:
-			vals[i] = n.add(Node{Op: OpConst, Type: x.Type, Imm: x.Imm})
-		default:
-			vals[i] = n.add(Node{Op: x.Op, Type: x.Type, A: vals[x.A], B: vals[x.B], C: vals[x.C]})
 		}
 	}
-	return vals
-}
-
-// combine is acc combined with term v; by OpFma, of a product term, the
-// product's factors fused onto acc.
-func (n *Nest) combine(op Op, t ir.Type, acc, v int) int {
-	if op == OpFma {
-		m := n.Nodes[v]
-		return n.add(Node{Op: OpFma, Type: t, A: m.A, B: m.B, C: acc})
+	if l := n.Loops[c]; l.Count > 0 {
+		walk(l.Count - 1)
 	}
-	return n.bin(op, t, acc, v)
+	return out
 }

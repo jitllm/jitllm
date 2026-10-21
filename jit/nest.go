@@ -20,11 +20,25 @@ type Nest struct {
 	Stores []Store
 	Bufs   []Buf
 	Group  int
-	// Kind is the primitive the nest lowered, Prim its definition while no
+	// Kind is the primitive the nest was generated from, Prim its definition while no
 	// pass has changed it, Passes what changed it.
 	Kind   PrimKind
 	Prim   *Prim
 	Passes []string
+	// Positions and Heads are facts the primitive carried.
+	Positions *Positions
+	Heads     *Heads
+}
+
+// Positions is a primitive's Range on its kernel: the space axis whose
+// coordinate is a position, or where Loop is set the loop whose iteration
+// is; positions start at the range's First rounded down to Align. First and
+// End are the nodes of the range's bounds, Live the nodes standing for its
+// live end.
+type Positions struct {
+	Axis, Loop, Align int
+	First, End        int
+	Live              []int
 }
 
 // Loop runs Trip times, or where Count is set node Count-1's value times;
@@ -56,6 +70,8 @@ type Buf struct {
 	Elem    ir.Type
 	Operand Operand
 	Size    int
+	// Shape, where set, is the extents loads' and stores' coordinates index.
+	Shape []int
 }
 
 type Op uint8
@@ -107,7 +123,8 @@ const (
 	OpShuffle
 )
 
-// Node is one scalar value. Load reads Bufs[Buf] at index A.
+// Node is one scalar value. Load reads Bufs[Buf] at index A, or where Ax
+// is set at the coordinates Ax of the buffer's Shape.
 type Node struct {
 	Op      Op
 	Type    ir.Type
@@ -115,6 +132,7 @@ type Node struct {
 	At      int
 	Buf     int
 	Imm     int64
+	Ax      []int
 }
 
 // Store writes node Val at index Ix of Bufs[Buf]: each trip of loop At, or
@@ -125,6 +143,9 @@ type Store struct {
 	At           int
 	Barrier      bool
 	Run          bool
+	// Ax, where set, is the coordinates of the buffer's Shape in place of
+	// Ix.
+	Ax []int
 }
 
 func (n *Nest) add(nd Node) int {
@@ -155,7 +176,13 @@ func (n *Nest) clone() *Nest {
 	c.Space = append([]int(nil), n.Space...)
 	c.Loops = append([]Loop(nil), n.Loops...)
 	c.Nodes = append([]Node(nil), n.Nodes...)
+	for i := range c.Nodes {
+		c.Nodes[i].Ax = append([]int(nil), c.Nodes[i].Ax...)
+	}
 	c.Stores = append([]Store(nil), n.Stores...)
+	for i := range c.Stores {
+		c.Stores[i].Ax = append([]int(nil), c.Stores[i].Ax...)
+	}
 	c.Bufs = append([]Buf(nil), n.Bufs...)
 	c.Passes = append([]string(nil), n.Passes...)
 	c.Prim = nil

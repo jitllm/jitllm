@@ -16,22 +16,38 @@ func (n *Nest) redirect(from, to, keep int) {
 		}
 	}
 	for i := range n.Stores {
-		if n.Stores[i].Barrier {
+		if n.Stores[i].Barrier || n.Stores[i].Run {
 			continue
 		}
-		if n.Stores[i].Ix == from {
-			n.Stores[i].Ix = to
-		}
-		if n.Stores[i].Val == from {
-			n.Stores[i].Val = to
+		for _, p := range n.storeArgs(&n.Stores[i]) {
+			if *p == from {
+				*p = to
+			}
 		}
 	}
+}
+
+// storeArgs is a store's node fields.
+func (n *Nest) storeArgs(s *Store) []*int {
+	out := []*int{&s.Ix, &s.Val}
+	for i := range s.Ax {
+		out = append(out, &s.Ax[i])
+	}
+	return out
 }
 
 // args is node nd's operand fields, a fold's start and step among them.
 func (n *Nest) args(nd *Node) []*int {
 	if nd.Op == OpExchange {
 		return exchangeArgs(nd)
+	}
+	if nd.Op == OpLoad && nd.Ax != nil {
+		nd.Ax = append([]int(nil), nd.Ax...)
+		out := make([]*int, len(nd.Ax))
+		for i := range nd.Ax {
+			out[i] = &nd.Ax[i]
+		}
+		return out
 	}
 	switch arity(nd.Op) {
 	case 0:

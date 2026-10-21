@@ -1,6 +1,6 @@
 // Package jit is the composer: a block's graph ops decomposed into
-// primitives, each lowered naively to a loop nest, transformed by registered
-// passes, and emitted for the device in front of it.
+// primitives, each generated as naive IR, the IR transformed by registered
+// passes, and after the last pass lowered for the device in front of it.
 package jit
 
 import (
@@ -34,7 +34,7 @@ func Compose(b Block, t Target, p Profile) ([]Kernel, error) {
 	prims, derr := decompose(b, p)
 	var prog []*Nest
 	for _, pr := range prims {
-		nests, err := lower(pr)
+		nests, err := generate(pr)
 		if err != nil {
 			return nil, err
 		}
@@ -50,7 +50,7 @@ func Compose(b Block, t Target, p Profile) ([]Kernel, error) {
 	}
 	var out []Kernel
 	for _, n := range prog {
-		k, err := emit(n, t)
+		k, err := lower(n, t)
 		if err != nil {
 			return nil, fmt.Errorf("jit: %s: %w\n%s", n.Name, err, n)
 		}
