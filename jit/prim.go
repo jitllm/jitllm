@@ -137,6 +137,9 @@ type Facts struct {
 	// Quarter is a reduction the expression makes of an angle to quarter
 	// turns.
 	Quarter *Quarter
+	// Least, where set, is a value every element the primitive stores is at
+	// least.
+	Least float32
 }
 
 // Quarter is an angle Sum + Rest in quarter turns reduced: Turn its nearest

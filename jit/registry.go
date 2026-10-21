@@ -46,15 +46,14 @@ type Lowering interface {
 }
 
 // Context is what a decomposition sees beside its op: the part's graph and
-// kind, its weights' storage formats, the step, the int8 form the part's
-// device keeps and the forms it chooses.
+// kind, its weights' storage formats, the step, and the int8 form the
+// part's device keeps.
 type Context struct {
 	Graph   *graph.Graph
 	Part    PartKind
 	Formats map[jlm.Role]jlm.Type
 	Step    Step
 	Int8    *Int8Form
-	Forms   Forms
 	formed  map[graph.ValueID]bool
 }
 
@@ -80,7 +79,7 @@ func Default() *Registry {
 }
 
 func (r *Registry) decompose(f *jlm.File, part Part, of int, s Step, d Device) ([]Prim, error) {
-	c := &Context{Graph: part.Graph, Part: part.Kind, Formats: formats(f, part), Step: s, Int8: r.Profiles[d.Kind].Int8, Forms: r.Profiles[d.Kind].Forms,
+	c := &Context{Graph: part.Graph, Part: part.Kind, Formats: formats(f, part), Step: s, Int8: r.Profiles[d.Kind].Int8,
 		formed: map[graph.ValueID]bool{}}
 	var prims []Prim
 	for i, o := range part.Graph.Ops {

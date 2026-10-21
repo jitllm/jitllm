@@ -49,6 +49,7 @@ func generate(p Prim) (*Kernel, error) {
 	if len(p.Facts.Rows) > 0 {
 		k.Rows = g.value(p.Facts.Rows, terms) + 1
 	}
+	k.Least = p.Facts.Least
 	vals := g.values(p.Expr, terms)
 	if q := p.Facts.Quarter; q != nil {
 		k.Quarter = &Quarter{Sum: vals[q.Sum], Rest: vals[q.Rest], Turn: vals[q.Turn], Part: vals[q.Part], Bound: q.Bound}
