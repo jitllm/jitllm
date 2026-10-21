@@ -283,10 +283,14 @@ func (e *x86Lowerer) node(i int) {
 			return
 		}
 		if (e.words[i] || nd.Type == ir.F32) && nd.Op == OpAnd {
+			x, y := e.reg(nd.A), e.reg(nd.B)
+			if e.reg(i) == y {
+				x, y = y, x
+			}
 			if e.half(i) {
-				a.VPANDx(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+				a.VPANDx(e.reg(i), x, y)
 			} else {
-				a.VPAND(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+				a.VPAND(e.reg(i), x, y)
 			}
 			return
 		}

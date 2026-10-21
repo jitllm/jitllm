@@ -32,7 +32,8 @@ func (p BitMask) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				m = k.clone()
 			}
 			up := m.bin(OpShl, and.Type, and.A, m.u32(31-bits.TrailingZeros32(bit)))
-			m.Nodes[i] = Node{Op: OpSar, Type: and.Type, A: up, B: m.u32(31)}
+			m.Nodes[up].Hint = nd.Hint
+			m.Nodes[i] = Node{Op: OpSar, Type: and.Type, A: up, B: m.u32(31), Hint: nd.Hint}
 		}
 		if m == nil {
 			return nil, false, nil

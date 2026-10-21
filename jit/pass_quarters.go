@@ -15,7 +15,8 @@ import (
 // Sum and the values made in its place (Sum mod 4, the part), of Rest, of
 // the turn, and of the temporaries: the sums' later terms, Sum + M and its
 // difference, Sum mod 4 plus Rest, the turn as a float and the part's
-// multiples.
+// multiples; and where also set, of the masks made of the turn's bits: its
+// shifts and the predicates on its bits.
 type Quarters struct {
 	Regs []int
 }
@@ -45,7 +46,7 @@ func (p Quarters) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			m.Nodes[mg].Hint = p.Regs[0] + 1
 			m.hintMultipliers(part, p.Regs[1:3])
 		}
-		if len(p.Regs) == 7 {
+		if len(p.Regs) >= 7 {
 			sum, rest, tn, tmp := p.Regs[3]+1, p.Regs[4]+1, p.Regs[5]+1, p.Regs[6]+1
 			m.hintSum(q.Sum, sum, tmp)
 			m.hintSum(q.Rest, rest, tmp)
@@ -54,6 +55,9 @@ func (p Quarters) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 			m.Nodes[m4].Hint, m.Nodes[part].Hint, m.Nodes[turn].Hint = sum, sum, tn
 			m.hintMultiples(part, tmp)
+		}
+		if len(p.Regs) == 8 {
+			m.hintBits(turn, p.Regs[7]+1)
 		}
 		m.Quarter = nil
 		m.compact()
@@ -133,6 +137,30 @@ func (k *Kernel) hintMultiples(part, tmp int) {
 		k.Nodes[i].Hint = tmp
 		if c := k.Nodes[nd.C]; c.Op == OpMul {
 			k.Nodes[nd.C].Hint = tmp
+		}
+	}
+}
+
+// hintBits gives the masks made of the turn's bits register r: a shift of
+// the turn, or of the turn plus a word, and a predicate on a bit of it.
+func (k *Kernel) hintBits(turn, r int) {
+	of := map[int]bool{turn: true}
+	for i, nd := range k.Nodes {
+		if nd.Op == OpBitcast && nd.A == turn {
+			of[i] = true
+		}
+	}
+	for i, nd := range k.Nodes {
+		if nd.Op == OpAdd && of[nd.A] {
+			of[i] = true
+		}
+	}
+	for i, nd := range k.Nodes {
+		switch {
+		case nd.Op == OpShl && of[nd.A]:
+			k.Nodes[i].Hint = r
+		case nd.Op == OpLess && k.Nodes[nd.B].Op == OpAnd && of[k.Nodes[nd.B].A]:
+			k.Nodes[i].Hint = r
 		}
 	}
 }

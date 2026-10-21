@@ -44,7 +44,7 @@ func gpuProfile() Profile {
 // cpuProfile is main's passes on the host.
 func cpuProfile() Profile {
 	return Profile{Passes: []Pass{
-		Quarters{Regs: []int{4, 6, 7, 8, 10, 12, 9}},
+		Quarters{Regs: []int{4, 6, 7, 8, 10, 12, 9, 15}},
 		Prescale{},
 		Bounds{},
 		Serial{},
@@ -64,12 +64,12 @@ func cpuProfile() Profile {
 		FMA{},
 		FirstTerm{},
 		Jam{Lanes: 8, Sums: 8, Walk: true, Spread: []int{15, 13}, Rows: 14},
-		Vectorize{Lanes: 8, Pairs: [5]int{0, 2, 3, 4, 5}, Carry: []int{9, 10, 8}, Keep: true, Quads: true},
+		Vectorize{Lanes: 8, Pairs: [5]int{0, 2, 3, 4, 5}, Carry: []int{9, 10, 8}, Keep: true, Quads: true, QuadRegs: []int{13, 15, 9}},
 		InPlace{},
 		Unroll{Vectors: 4},
 		Chains{N: 4},
 		Simplify{ConstLast: true},
-		XorSwap{},
+		XorSwap{Reg: 14},
 		BitMask{},
 		BitSelect{Regs: []int{5, 6, 7}},
 		Induction{Tail: 13},
@@ -108,14 +108,15 @@ func mainArgs() ArgFields {
 	return ArgFields{Out: []int{0, 120}, Weight: 8, Act: 16, Query: 112, Second: map[int]int{0: 120, 112: 128, 24: 136}, Consts: 56, In: []int{24, 136}, Vectors: 40, Tail: 32, Counts: []int{32, 40}}
 }
 
-// mainSampleArgs is main's convention for the sampler's words: the logits
-// in Q32, their count in K, the value in Out and the index in ASum.
+// mainSampleArgs is main's convention for a sample part's words: the
+// elements in Q32, their count in K, the value in Out and the index in
+// ASum.
 func mainSampleArgs() ArgFields {
 	return ArgFields{Out: []int{0}, Index: 96, Consts: 56, In: []int{112}, Vectors: 40, Tail: 32, Counts: []int{40}}
 }
 
-// mainTableArgs is main's convention for the rotary table's words: the
-// table in Out, the planes in AScale, the position in K.
+// mainTableArgs is main's convention for a table part's words: the table
+// in Out, its input planes in AScale, the one input word in K.
 func mainTableArgs() ArgFields {
 	return ArgFields{Out: []int{0}, Consts: 56, In: []int{24}, Word: 40, Vectors: 40, Tail: 32, Counts: []int{32}}
 }

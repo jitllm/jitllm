@@ -718,7 +718,7 @@ func (b *binder86) vectors() error {
 			}
 			first := -1
 			switch nd.Op {
-			case OpAdd, OpSub, OpMul, OpMin, OpMax, OpHSum, OpHMax, OpHMin, OpBitcast, OpBroadcast, OpSqrt, OpAnd, OpGtW, OpAndNot, OpOr, OpAddSub, OpFirstLane:
+			case OpAdd, OpSub, OpMul, OpMin, OpMax, OpHSum, OpHMax, OpHMin, OpBitcast, OpBroadcast, OpSqrt, OpAnd, OpGtW, OpAndNot, OpOr, OpAddSub, OpFirstLane, OpXor, OpShl, OpShr, OpSar:
 				first = nd.A
 			case OpCvtF32:
 				if k.Nodes[nd.A].Op != OpFold {

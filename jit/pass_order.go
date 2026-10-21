@@ -233,7 +233,7 @@ func (o *orderer) need(i, c int) {
 		o.loop(o.childOf(h, c))
 		return
 	}
-	if nd.Op == OpZip {
+	if nd.Op == OpZip || nd.Op == OpUnpack {
 		o.stages(nd.A, nd.B, c)
 	}
 	for _, a := range k.evalArgs(&nd, o.pending()) {
@@ -964,14 +964,18 @@ func (k *Kernel) readCount(i int) int {
 }
 
 // stages makes the two values a zip interleaves stage by stage: from the
-// deepest pair of like operations down their paths, each pair's values in
-// the order they were made in the decomposition.
+// deepest pair of like operations down their paths, below the first
+// through values each read once, each pair's values in the order they were made in the
+// decomposition.
 func (o *orderer) stages(a, b, c int) {
 	k := o.k
 	var pairs [][2]int
 	for !o.done[a] && !o.done[b] && a != b && k.Nodes[a].Op == k.Nodes[b].Op {
 		pairs = append(pairs, [2]int{a, b})
 		na, nb := k.Nodes[a], k.Nodes[b]
+		if len(pairs) > 1 && (k.uses(a) != 1 || k.uses(b) != 1) {
+			break
+		}
 		next := false
 		for j, x := range k.args(&na) {
 			y := *k.args(&nb)[j]
