@@ -109,8 +109,15 @@ func TestEveryTensorHasARole(t *testing.T) {
 			// kernel for, and the refusal for that belongs to configOf.
 			// DeepSeek V4's token table is I32 ids in the file and F32 in the
 			// container: sourceOf rewrites it (ds4HashTable) rather than
-			// storing the file's type.
-			if _, err := typeOf(f.Tensors[i].Type); err != nil && supported && role != jlm.RoleHashExperts {
+			// storing the file's type. A ternary type with no code (TQ1_0,
+			// I2_S) is checked as what the converter re-packs it to.
+			ty := f.Tensors[i].Type
+			if _, rt, ok, err := ternaryGGUF(ty, f.Bytes(&f.Tensors[i]), elemsOf(f.Tensors[i].Dims)); err != nil {
+				t.Errorf("%s: %q: %v", filepath.Base(p), n, err)
+			} else if ok {
+				ty = rt
+			}
+			if _, err := typeOf(ty); err != nil && supported && role != jlm.RoleHashExperts {
 				t.Errorf("%s: %q: %v", filepath.Base(p), n, err)
 			}
 		}
