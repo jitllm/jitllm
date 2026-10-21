@@ -28,7 +28,7 @@ type Kernel struct {
 	// the model's part the kernel belongs to.
 	// Alts are values computed two ways, a node and the node a device may
 	// take for it, until a pass takes them or the second is dropped.
-	Alts [][2]int
+	Alts      [][2]int
 	Positions *Positions
 	Heads     *Heads
 	Part      PartKind
