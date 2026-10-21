@@ -1,6 +1,11 @@
 package jit
 
-import "github.com/jitllm/jitllm/jit/ir"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/jitllm/jitllm/jit/ir"
+)
 
 // Nest is one kernel's computation: an element space, sequential loops in
 // it, scalar nodes, and the stores each element makes.
@@ -13,6 +18,9 @@ type Nest struct {
 	Stores []Store
 	Bufs   []Buf
 	Group  int
+	// Kind is the primitive the nest lowered, Passes what changed it.
+	Kind   PrimKind
+	Passes []string
 }
 
 // Loop runs Trip times; Parent is the loop it sits in, -1 for the element.
@@ -56,6 +64,9 @@ const (
 	OpMax
 	OpFma
 	OpBitcast
+	// OpLess is A < B, a predicate; OpSelect is B where A holds, else C.
+	OpLess
+	OpSelect
 )
 
 // Node is one scalar value. Load reads Bufs[Buf] at index A.
@@ -112,4 +123,16 @@ func (n *Nest) elements() int {
 		e *= s
 	}
 	return e
+}
+
+func (n *Nest) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s space %v loops %v\n", n.Name, n.Space, n.Loops)
+	for i, nd := range n.Nodes {
+		fmt.Fprintf(&b, "  %d: op %d %s a %d b %d c %d at %d buf %d imm %d\n", i, nd.Op, nd.Type, nd.A, nd.B, nd.C, nd.At, nd.Buf, nd.Imm)
+	}
+	for _, s := range n.Stores {
+		fmt.Fprintf(&b, "  store buf %d ix %d val %d at %d\n", s.Buf, s.Ix, s.Val, s.At)
+	}
+	return b.String()
 }

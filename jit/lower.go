@@ -11,6 +11,8 @@ func lower(p Prim) ([]*Nest, error) {
 	switch p.Kind {
 	case PrimContract:
 		return []*Nest{lowerContract(p)}, nil
+	case PrimMap:
+		return []*Nest{lowerMap(p)}, nil
 	}
 	return nil, fmt.Errorf("jit: no lowering of primitive %d", p.Kind)
 }
@@ -52,4 +54,21 @@ func (n *Nest) load(b, ix int) int {
 		v = n.add(Node{Op: OpBitcast, Type: ir.F32, A: v})
 	}
 	return v
+}
+
+// lowerMap is a thread an element.
+func lowerMap(p Prim) *Nest {
+	n := &Nest{Name: "map", Space: []int{p.Rows}, Group: defaultGroup}
+	var ins []int
+	for _, o := range p.In {
+		ins = append(ins, n.buf(Buf{Kind: BufIn, Elem: ir.F32, Operand: o}))
+	}
+	out := n.buf(Buf{Kind: BufOut, Elem: ir.F32, Operand: p.Out})
+	e := n.add(Node{Op: OpCoord, A: 0, Type: ir.U32})
+	v := n.load(ins[0], e)
+	for _, b := range ins[1:] {
+		v = n.bin(p.Fn, ir.F32, v, n.load(b, e))
+	}
+	n.Stores = append(n.Stores, Store{Buf: out, Ix: e, Val: v, At: -1})
+	return n
 }

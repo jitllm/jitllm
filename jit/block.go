@@ -29,25 +29,28 @@ type Kernel struct {
 // it cannot form is an error, beside the kernels of those it formed.
 func Compose(b Block, t Target, p Profile) ([]Kernel, error) {
 	prims, derr := decompose(b)
-	var out []Kernel
+	var prog []*Nest
 	for _, pr := range prims {
 		nests, err := lower(pr)
 		if err != nil {
 			return nil, err
 		}
 		for _, n := range nests {
-			formed, err := p.run(n, t)
-			if err != nil {
-				return nil, err
-			}
-			for _, f := range formed {
-				k, err := emit(f.nest, t)
-				if err != nil {
-					return nil, fmt.Errorf("jit: %s: %w", f.nest.Name, err)
-				}
-				out = append(out, Kernel{IR: k, Passes: f.passes})
-			}
+			n.Kind = pr.Kind
 		}
+		prog = append(prog, nests...)
+	}
+	prog, err := p.run(prog, t)
+	if err != nil {
+		return nil, err
+	}
+	var out []Kernel
+	for _, n := range prog {
+		k, err := emit(n, t)
+		if err != nil {
+			return nil, fmt.Errorf("jit: %s: %w\n%s", n.Name, err, n)
+		}
+		out = append(out, Kernel{IR: k, Passes: n.Passes})
 	}
 	return out, derr
 }

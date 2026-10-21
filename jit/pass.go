@@ -15,11 +15,11 @@ type Target struct {
 	Lanes int
 }
 
-// Pass transforms one nest into the nests it becomes; applied false where
-// the nest is not its to change.
+// Pass transforms the program's nests, naming itself in each nest it
+// changes.
 type Pass interface {
 	Name() string
-	Apply(n *Nest, t Target) (out []*Nest, applied bool, err error)
+	Apply(prog []*Nest, t Target) ([]*Nest, error)
 }
 
 // Profile is the passes in the order they run, each switched on or off.
@@ -28,37 +28,50 @@ type Profile struct {
 	Off    map[string]bool
 }
 
-type formed struct {
-	nest   *Nest
-	passes []string
-}
-
-func (p Profile) run(n *Nest, t Target) ([]formed, error) {
-	cur := []formed{{nest: n}}
+func (p Profile) run(prog []*Nest, t Target) ([]*Nest, error) {
 	for _, ps := range p.Passes {
 		if p.Off[ps.Name()] {
 			continue
 		}
-		var next []formed
-		for _, f := range cur {
-			out, applied, err := ps.Apply(f.nest, t)
-			if err != nil {
-				return nil, err
-			}
-			if !applied {
-				next = append(next, f)
-				continue
-			}
-			for _, o := range out {
-				next = append(next, formed{nest: o, passes: append(append([]string(nil), f.passes...), ps.Name())})
-			}
+		var err error
+		if prog, err = ps.Apply(prog, t); err != nil {
+			return nil, err
 		}
-		cur = next
 	}
-	return cur, nil
+	return prog, nil
 }
 
-// ProfileFor is the passes target t runs, set to main's choices.
-func ProfileFor(t Target) Profile {
-	return Profile{}
+// eachNest is a pass over one nest at a time: f's nests in its place where
+// it applied.
+func eachNest(name string, prog []*Nest, f func(*Nest) ([]*Nest, bool, error)) ([]*Nest, error) {
+	var out []*Nest
+	for _, n := range prog {
+		ns, applied, err := f(n)
+		if err != nil {
+			return nil, err
+		}
+		if !applied {
+			out = append(out, n)
+			continue
+		}
+		for _, m := range ns {
+			m.Passes = append(append([]string(nil), n.Passes...), name)
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// ProfileFor is the passes target t runs at a step of rows, set to main's
+// choices.
+func ProfileFor(t Target, rows int) Profile {
+	var pairs []Pair
+	if rows == 1 {
+		pairs = append(pairs, Pair{From: PrimContract, To: PrimMap})
+	}
+	return Profile{Passes: []Pass{
+		Fuse{Pairs: pairs},
+		Split{Slots: 30720, Max: 32, Block: 32},
+		Blocks{Size: 32},
+	}}
 }

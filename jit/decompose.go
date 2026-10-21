@@ -38,6 +38,12 @@ func decomposeOp(b Block, o graph.Op) ([]Prim, error) {
 		return []Prim{{Kind: PrimContract, Rows: w.Rows, K: w.K,
 			In:  []Operand{{Kind: OperandWeight, Role: w.Role, Format: f, Name: w.Role.String()}, value(o.In[0])},
 			Out: value(o.Out[0])}}, nil
+	case graph.OpAdd:
+		if len(o.In) != 2 || len(o.Out) != 1 {
+			return nil, fmt.Errorf("an add of %d operands", len(o.In))
+		}
+		w := b.Graph.Values[o.Out[0]].Width
+		return []Prim{{Kind: PrimMap, Fn: OpAdd, Rows: w, In: []Operand{value(o.In[0]), value(o.In[1])}, Out: value(o.Out[0])}}, nil
 	}
 	return nil, errNoDecomposition
 }

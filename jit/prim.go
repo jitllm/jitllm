@@ -36,10 +36,12 @@ type Operand struct {
 }
 
 // Prim is one primitive. Contract is Out[i] = sum over k of A[i, k] * B[k],
-// A row-major over K, over Rows output elements.
+// A row-major over K, over Rows output elements. Map is Out[i] = Fn of the
+// inputs' elements i, over Rows elements.
 type Prim struct {
 	Kind    PrimKind
 	In      []Operand
 	Out     Operand
 	Rows, K int
+	Fn      Op
 }

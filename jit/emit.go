@@ -68,49 +68,35 @@ func (e *emitter) fail(format string, args ...any) {
 	}
 }
 
-// homes is each node's innermost loop: the deepest loop whose iteration or
-// fold it reads.
+// homes is each node's loop: the deepest loop whose trips both reach it
+// and change it. Everything else runs outside, after a loop where it reads
+// the loop's folds.
 func (e *emitter) homes() {
 	n := e.n
 	e.home = make([]int, len(n.Nodes))
-	depth := func(c int) int {
-		d := 0
-		for ; c >= 0; c = n.Loops[c].Parent {
-			d++
+	depth := make([]int, len(n.Loops))
+	for c := range n.Loops {
+		for h := c; h >= 0; h = n.Loops[h].Parent {
+			depth[c]++
 		}
-		return d
 	}
-	deeper := func(a, b int) int {
-		if depth(b) > depth(a) {
-			return b
-		}
-		return a
-	}
-	for i := range n.Nodes {
-		e.home[i] = -2
-	}
-	var visit func(i int) int
-	visit = func(i int) int {
-		if e.home[i] != -2 {
-			return e.home[i]
-		}
+	for i := range e.home {
 		e.home[i] = -1
-		nd := n.Nodes[i]
-		h := -1
-		switch nd.Op {
-		case OpIter, OpFold:
-			h = nd.At
-		case OpConst, OpCoord:
-		default:
-			for _, a := range operands(nd) {
-				h = deeper(h, visit(a))
+	}
+	for i, nd := range n.Nodes {
+		if nd.Op == OpIter || nd.Op == OpFold {
+			e.home[i] = nd.At
+		}
+	}
+	for c := range n.Loops {
+		for _, i := range e.body(c, n.foldsOf(c)) {
+			if n.Nodes[i].Op == OpFold && n.Nodes[i].At == c || !n.varies(i, c) {
+				continue
+			}
+			if h := e.home[i]; h < 0 || depth[c] > depth[h] {
+				e.home[i] = c
 			}
 		}
-		e.home[i] = h
-		return h
-	}
-	for i := range n.Nodes {
-		visit(i)
 	}
 }
 
@@ -120,7 +106,7 @@ func operands(nd Node) []int {
 		return nil
 	case OpLoad, OpBitcast:
 		return []int{nd.A}
-	case OpFma:
+	case OpFma, OpSelect:
 		return []int{nd.A, nd.B, nd.C}
 	}
 	return []int{nd.A, nd.B}
@@ -170,6 +156,12 @@ func (e *emitter) get(i int) ir.Value {
 	case OpFma:
 		x, y, z := e.get(nd.A), e.get(nd.B), e.get(nd.C)
 		v = b.Fma(x, y, z)
+	case OpLess:
+		x, y := e.get(nd.A), e.get(nd.B)
+		v = b.Lt(e.n.Nodes[nd.A].Type, x, y)
+	case OpSelect:
+		x, y, z := e.get(nd.A), e.get(nd.B), e.get(nd.C)
+		v = b.Select(nd.Type, x, y, z)
 	case OpAdd, OpSub, OpMul, OpDiv, OpRem, OpMin, OpMax:
 		x, y := e.get(nd.A), e.get(nd.B)
 		v = binary(b, nd.Op, nd.Type, x, y)
