@@ -116,6 +116,8 @@ type Loop struct {
 	// Nonempty, where a guard set it, is a loop the caller never runs for
 	// no trips, entered without a test.
 	Nonempty bool
+	// Of, where a split set it, is 1 + the loop this one takes trips of.
+	Of int
 }
 
 // Cursor is pointer Ptr of buffer Buf advanced Elems elements a trip: 0 the

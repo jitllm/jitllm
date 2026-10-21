@@ -7,8 +7,8 @@ import (
 )
 
 // Axpy writes a map that adds a row into the row it stores over as the add
-// family's one form, x + c*y with c a constant of the call: so the kernel
-// that adds serves every scaled add.
+// family's one form, fma(c, y, x) with c a constant of the call: so the
+// kernel that adds serves every scaled add.
 type Axpy struct{}
 
 func (Axpy) Name() string { return "axpy" }
@@ -32,7 +32,7 @@ func (p Axpy) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 		m := k.clone()
 		one := m.add(Node{Op: OpConst, Type: ir.F32, Imm: int64(math.Float32bits(1))})
-		m.Nodes[st.Val] = Node{Op: OpAdd, Type: ir.F32, A: x, B: m.bin(OpMul, ir.F32, one, y)}
+		m.Nodes[st.Val] = Node{Op: OpFma, Type: ir.F32, A: one, B: y, C: x}
 		return []*Kernel{m}, true, nil
 	})
 }

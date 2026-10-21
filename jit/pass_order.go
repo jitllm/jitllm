@@ -17,7 +17,7 @@ func (p Order) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			return nil, false, nil
 		}
 		m := k.clone()
-		o := orderer{k: m, done: map[int]bool{}, loopDone: map[int]bool{}, home: map[int]int{}}
+		o := orderer{k: m, done: map[int]bool{}, loopDone: map[int]bool{}, home: map[int]int{}, depths: map[int]int{}}
 		o.run()
 		m.Seq = o.seq
 		return []*Kernel{m}, true, nil
@@ -30,6 +30,7 @@ type orderer struct {
 	done     map[int]bool
 	loopDone map[int]bool
 	home     map[int]int
+	depths   map[int]int
 }
 
 func (o *orderer) run() {
@@ -123,11 +124,7 @@ func (o *orderer) need(i, c int) {
 		o.loop(o.childOf(h, c))
 		return
 	}
-	args := k.args(&nd)
-	if nd.Op == OpFma {
-		args = []*int{&nd.C, &nd.A, &nd.B}
-	}
-	for _, a := range args {
+	for _, a := range k.evalArgs(&nd, o.depths) {
 		o.need(*a, c)
 	}
 	o.node(i)
@@ -271,6 +268,9 @@ func (o *orderer) readsNode(i, x int) bool {
 		return true
 	}
 	nd := o.k.Nodes[i]
+	if nd.Op == OpFold {
+		return false
+	}
 	for _, a := range o.k.args(&nd) {
 		if o.readsNode(*a, x) {
 			return true

@@ -23,6 +23,7 @@ func (p Simplify) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			step := m.cse()
 			step = m.foldDecided() || step
 			step = m.dropUnitLoops() || step
+			step = m.dropEmptyLoops() || step
 			if !step {
 				break
 			}
@@ -287,6 +288,13 @@ func (k *Kernel) removeLoop(c int) {
 	}
 	for i := range k.Loops {
 		k.Loops[i].Parent = re(k.Loops[i].Parent)
+		if of := k.Loops[i].Of; of > 0 {
+			if of-1 == c {
+				k.Loops[i].Of = 0
+			} else {
+				k.Loops[i].Of = re(of-1) + 1
+			}
+		}
 	}
 	k.Loops = append(k.Loops[:c:c], k.Loops[c+1:]...)
 	for i := range k.Nodes {
@@ -315,4 +323,35 @@ func (k *Kernel) removeLoop(c int) {
 	if k.Seq != nil {
 		k.Seq = seq
 	}
+}
+
+// dropEmptyLoops removes each loop of no static trips and nothing inside
+// it: what it carries is where it started, what it stores is never stored.
+func (k *Kernel) dropEmptyLoops() bool {
+	for c, l := range k.Loops {
+		if l.Trip != 0 || l.Count != 0 || len(k.innerLoops(c)) > 0 {
+			continue
+		}
+		for _, f := range k.foldsOf(c) {
+			k.redirectAll(f, k.Nodes[f].B)
+		}
+		var keep []Store
+		for _, s := range k.Stores {
+			if s.At != c {
+				keep = append(keep, s)
+			}
+		}
+		k.Stores = keep
+		for i := range k.Nodes {
+			if k.Nodes[i].Op == OpIter && k.Nodes[i].At == c {
+				k.Nodes[i] = Node{Op: OpConst, Type: ir.U32}
+			}
+			if k.Nodes[i].Op == OpFold && k.Nodes[i].At == c {
+				k.Nodes[i] = Node{Op: OpConst, Type: k.Nodes[i].Type}
+			}
+		}
+		k.removeLoop(c)
+		return true
+	}
+	return false
 }

@@ -7,7 +7,8 @@ package jit
 // picks the pointer up where it was left when its accesses start there; and
 // where a later loop, or the next trip of the loop around, needs the
 // address as it was, the loops advance a copy taken as the first of them
-// starts.
+// starts. Where a scope makes several passes over a row of a value, each
+// pass reads and writes the row through a copy of its own.
 type Cursors struct{}
 
 func (Cursors) Name() string { return "cursors" }
@@ -59,9 +60,10 @@ func newCursorer(k *Kernel, b int) *cursorer {
 func (cu *cursorer) run() bool {
 	k := cu.k
 	live := k.live()
+	hs := k.homes()
 	for i, nd := range k.Nodes {
 		if nd.Op == OpLoad && live[i] && k.Bufs[nd.Buf].Base == cu.base {
-			cu.as = append(cu.as, cAccess{access: access{node: i, store: -1}, home: k.loopOf(i), ix: cu.g.of(nd.A)})
+			cu.as = append(cu.as, cAccess{access: access{node: i, store: -1}, home: hs[i], ix: cu.g.of(nd.A)})
 		}
 	}
 	for i, s := range k.Stores {
@@ -128,6 +130,14 @@ func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (l
 			loops = append(loops, c)
 		}
 	}
+	family := func(c int) int {
+		if of := k.Loops[c].Of; of > 0 {
+			return of - 1
+		}
+		return c
+	}
+	passes := cu.passes(loops, family) > 1 && cu.row()
+	pass, start := -1, copyLin(at)
 	for li, c := range loops {
 		var mine []int
 		var mix []lin
@@ -164,6 +174,14 @@ func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (l
 		after := g.merged(addLin(at, g.times(trips, step)))
 		q, take := ptr, fresh
 		aside := !fresh && cu.laterNeeds(loops[li+1:], as, ix, after)
+		if passes {
+			aside = false
+			if family(c) != pass {
+				pass, at = family(c), copyLin(start)
+				after = g.merged(addLin(at, g.times(trips, step)))
+				q, take = cu.newPtr(), true
+			}
+		}
 		if aside {
 			q, take = cu.newPtr(), true
 		}
@@ -189,9 +207,44 @@ func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (l
 		}
 		fresh = false
 	}
+	if passes {
+		return lin{}, true
+	}
 	moved := copyLin(at)
 	moved.add(pos, -1)
 	return g.merged(moved), true
+}
+
+// passes is how many passes the loops make over rows of values: the
+// families of loops split from one that read or write one.
+func (cu *cursorer) passes(loops []int, family func(int) int) int {
+	k := cu.k
+	hs := k.homes()
+	fams := map[int]bool{}
+	isRow := func(b int) bool {
+		o := k.Bufs[b].Operand
+		return o.Kind == OperandValue || o.Kind == OperandScratch
+	}
+	for _, c := range loops {
+		for i, nd := range k.Nodes {
+			if nd.Op == OpLoad && isRow(nd.Buf) && hs[i] >= 0 && k.within(hs[i], c) {
+				fams[family(c)] = true
+			}
+		}
+		for _, s := range k.Stores {
+			if !s.Barrier && !s.Run && isRow(s.Buf) && s.At >= 0 && k.within(s.At, c) {
+				fams[family(c)] = true
+			}
+		}
+	}
+	return len(fams)
+}
+
+// row reports whether the buffer is a row of a value rather than a
+// weight, a table or constants.
+func (cu *cursorer) row() bool {
+	o := cu.k.Bufs[cu.buf].Operand
+	return o.Kind == OperandValue || o.Kind == OperandScratch
 }
 
 // laterNeeds reports whether a loop of loops reaches an access whose index,

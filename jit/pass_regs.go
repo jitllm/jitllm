@@ -15,9 +15,10 @@ import (
 // cursor's copy takes the first spare register free. Values take registers
 // in the order the sequence makes them: a result its first operand's where
 // the operand dies there (an fma's the addend's, a sum's step the sum's), a
-// sum that carries another on that one's, else the lowest free -- and
-// within a trip of a loop that adds several sums, a register one sum's value
-// freed goes to no other sum's.
+// sum that carries another on that one's, else the lowest free -- within a
+// trip of a loop that adds several sums, a register one sum's value freed
+// goes to no other sum's, and a register that held a sum goes to no value
+// of a loop that runs after the sum's.
 type Regs struct {
 	Fields   map[int]int
 	Spare    []int
@@ -186,10 +187,31 @@ func (b *binder86) gprs() error {
 			}
 		}
 	}
-	for _, l := range k.Loops {
+	lastLoop := map[int]int{}
+	for c, l := range k.Loops {
 		for _, cu := range l.Cursors {
-			if cu.Take && k.Ptrs[cu.Ptr-1].Reg == 0 {
-				k.Ptrs[cu.Ptr-1].Reg = b.take(p.Spare) + 1
+			if cu.Ptr > 0 {
+				lastLoop[cu.Ptr] = c
+			}
+		}
+	}
+	for _, e := range k.Seq {
+		switch e.Kind {
+		case EntryLoop:
+			for _, cu := range k.Loops[e.I].Cursors {
+				if cu.Take && k.Ptrs[cu.Ptr-1].Reg == 0 {
+					r := b.take(p.Spare)
+					if r < 0 {
+						return errors.New("no register for a copy of an address")
+					}
+					k.Ptrs[cu.Ptr-1].Reg = r + 1
+				}
+			}
+		case EntryEnd:
+			for ptr, c := range lastLoop {
+				if c == e.I && k.Ptrs[ptr-1].Reg > 0 {
+					b.used[k.Ptrs[ptr-1].Reg-1] = false
+				}
 			}
 		}
 	}
@@ -298,14 +320,23 @@ func (b *binder86) vectors() error {
 			}
 		}
 	}
-	lowest := func(ch int) int {
+	held := make([]int, b.p.Vectors)
+	for r := range held {
+		held[r] = -1
+	}
+	lowest := func(ch, home int) int {
 		for r := range busy {
-			if !busy[r] && (tag[r] == 0 || tag[r] == ch) {
-				return r
+			if busy[r] || tag[r] != 0 && tag[r] != ch {
+				continue
 			}
+			if h := held[r]; home >= 0 && h >= 0 && !k.within(h, home) {
+				continue
+			}
+			return r
 		}
 		return -1
 	}
+	hs := k.homes()
 	give := func(i, r int) error {
 		if r < 0 {
 			return errors.New("more floats live at once than the vector registers")
@@ -323,9 +354,10 @@ func (b *binder86) vectors() error {
 					k.Nodes[f].Reg = k.Nodes[init].Reg
 					continue
 				}
-				if err := give(f, lowest(0)); err != nil {
+				if err := give(f, lowest(0, -1)); err != nil {
 					return err
 				}
+				held[k.Nodes[f].Reg-1] = e.I
 			}
 			continue
 		case EntryEnd:
@@ -350,8 +382,10 @@ func (b *binder86) vectors() error {
 		}
 		first := -1
 		switch nd.Op {
-		case OpAdd, OpSub, OpMul, OpDiv, OpMin, OpMax, OpHSum, OpBitcast:
+		case OpAdd, OpSub, OpMul, OpMin, OpMax, OpHSum, OpBitcast, OpBroadcast, OpSqrt:
 			first = nd.A
+		case OpDiv:
+			first = nd.B
 		case OpFma:
 			first = nd.C
 		}
@@ -360,13 +394,13 @@ func (b *binder86) vectors() error {
 		}
 		free(pos)
 		if reg < 0 {
-			reg = lowest(chain[i])
+			reg = lowest(chain[i], hs[i])
 		}
 		if err := give(i, reg); err != nil {
 			return err
 		}
 		if nd.Op == OpHSum {
-			t := lowest(0)
+			t := lowest(0, hs[i])
 			if t < 0 {
 				return errors.New("no register for a lane sum")
 			}

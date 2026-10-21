@@ -104,6 +104,9 @@ func (k *Kernel) lengthIn(i int) int {
 	if nd.Op == OpLength {
 		return i
 	}
+	if nd.Op == OpFold {
+		return -1
+	}
 	for _, a := range k.args(&nd) {
 		if l := k.lengthIn(*a); l >= 0 {
 			return l
@@ -170,9 +173,9 @@ func (k *Kernel) bindBufs(f ArgFields) {
 	}
 	sort.SliceStable(order, func(i, j int) bool { return k.firstBuf(order[i]) < k.firstBuf(order[j]) })
 	outs, ins := 0, 0
-	weight := false
+	acts, weight := false, false
 	for _, o := range order {
-		if o.Kind == OperandWeight {
+		if o.Kind == OperandWeight || o.Kind == OperandVector {
 			weight = true
 		}
 	}
@@ -186,8 +189,8 @@ func (k *Kernel) bindBufs(f ArgFields) {
 			fl = f.Consts
 		case o.Kind == OperandWeight || o.Kind == OperandTable:
 			fl = f.Weight
-		case weight && f.Act > 0:
-			fl = f.Act
+		case weight && f.Act > 0 && !acts && o.Kind != OperandVector:
+			fl, acts = f.Act, true
 		default:
 			fl = f.In[min(ins, len(f.In)-1)]
 			ins++
@@ -293,6 +296,9 @@ func (k *Kernel) computedFrom(i int, op Op) bool {
 	nd := k.Nodes[i]
 	if nd.Op == op {
 		return true
+	}
+	if nd.Op == OpFold {
+		return false
 	}
 	for _, a := range k.args(&nd) {
 		if k.computedFrom(*a, op) {

@@ -41,11 +41,12 @@ func cpuProfile() Profile {
 	return Profile{Passes: []Pass{
 		Serial{},
 		Simplify{},
+		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimMap, Then: true}}},
 		RunLengths{Widths: true},
 		Simplify{},
 		InPlace{},
 		Axpy{},
-		FMA{All: true},
+		FMA{},
 		Vectorize{Lanes: 8},
 		Unroll{Vectors: 4},
 		Chains{N: 4},

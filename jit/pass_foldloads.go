@@ -10,6 +10,7 @@ func (FoldLoads) Name() string { return "foldloads" }
 func (p FoldLoads) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		var m *Kernel
+		hs := k.homes()
 		for i, nd := range k.Nodes {
 			var b int
 			switch nd.Op {
@@ -22,7 +23,7 @@ func (p FoldLoads) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			if ld.Op != OpLoad || ld.Mem || k.uses(b) != 1 {
 				continue
 			}
-			c := k.loopOf(i)
+			c := hs[i]
 			if c < 0 || k.Loops[c].Lanes == 0 {
 				continue
 			}

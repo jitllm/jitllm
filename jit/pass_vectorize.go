@@ -92,7 +92,10 @@ func (k *Kernel) vectorize(c, L int) {
 	U := ir.U32
 	shift := bits.TrailingZeros(uint(L))
 	var tailCount, done int
-	tail := Loop{Parent: l.Parent, Range: l.Range}
+	tail := Loop{Parent: l.Parent, Range: l.Range, Of: c + 1}
+	if l.Of > 0 {
+		tail.Of = l.Of
+	}
 	if l.Count > 0 {
 		n := l.Count - 1
 		vec := k.bin(OpShr, U, n, k.u32(shift))
@@ -106,6 +109,7 @@ func (k *Kernel) vectorize(c, L int) {
 		done = k.u32(l.Trip / L * L)
 	}
 	k.Loops[c].Lanes = L
+	k.broadcastInto(c)
 	t := k.insertLoop(c+1, tail)
 	ti := k.add(Node{Op: OpIter, At: t, Type: U})
 	sub := map[int]int{k.iterOf(c): k.bin(OpAdd, U, done, ti)}
@@ -115,8 +119,9 @@ func (k *Kernel) vectorize(c, L int) {
 		sub[f] = ft
 		k.Nodes[ft].A = k.copyOf(step, sub)
 		h := k.add(Node{Op: OpHSum, Type: k.Nodes[f].Type, A: ft})
+		hs := k.homes()
 		for i := range k.Nodes {
-			if i == step || i == ft || i == h || k.loopOf(i) == c {
+			if i == step || i == ft || i == h || i < len(hs) && hs[i] >= 0 && (k.within(hs[i], c) || k.within(hs[i], t)) {
 				continue
 			}
 			for _, a := range k.args(&k.Nodes[i]) {
@@ -152,4 +157,27 @@ func (k *Kernel) vectorize(c, L int) {
 		stores = append(stores, n)
 	}
 	k.Stores = append(k.Stores[:last+1:last+1], append(stores, k.Stores[last+1:]...)...)
+}
+
+// broadcastInto puts each value made from a lane sum that vector loop c
+// reads, made outside it, in every lane once before the loop.
+func (k *Kernel) broadcastInto(c int) {
+	hs := k.homes()
+	made := map[int]int{}
+	for i := range k.Nodes {
+		if hs[i] >= 0 && k.within(hs[i], c) || k.Nodes[i].Op == OpBroadcast {
+			for _, a := range k.args(&k.Nodes[i]) {
+				x := *a
+				if x >= len(hs) || hs[x] >= 0 && k.within(hs[x], c) || k.Nodes[x].Type != ir.F32 || !k.computedFrom(x, OpHSum) {
+					continue
+				}
+				b, ok := made[x]
+				if !ok {
+					b = k.add(Node{Op: OpBroadcast, Type: ir.F32, A: x})
+					made[x] = b
+				}
+				*a = b
+			}
+		}
+	}
 }

@@ -144,6 +144,22 @@ func (e *x86Lowerer) node(i int) {
 		} else {
 			a.VADDPS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 		}
+	case OpSub, OpDiv, OpMin, OpMax:
+		x, y := e.reg(nd.A), e.reg(nd.B)
+		switch nd.Op {
+		case OpSub:
+			a.VSUBPS(e.reg(i), x, y)
+		case OpDiv:
+			a.VDIVPS(e.reg(i), x, y)
+		case OpMin:
+			a.VMINPS(e.reg(i), x, y)
+		case OpMax:
+			a.VMAXPS(e.reg(i), x, y)
+		}
+	case OpSqrt:
+		a.VSQRTPS(e.reg(i), e.reg(nd.A))
+	case OpBroadcast:
+		a.VBROADCASTSSReg(e.reg(i), e.reg(nd.A))
 	case OpFma:
 		if e.reg(i) != e.reg(nd.C) {
 			e.fail("an fma whose result is not its addend's register")

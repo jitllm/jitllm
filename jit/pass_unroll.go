@@ -5,8 +5,9 @@ import "github.com/jitllm/jitllm/jit/ir"
 // Unroll unrolls a workgroup's loops: a loop nested in a phase of at most
 // Full trips with one fold and no stores of its own, all of its trips; a
 // loop over positions bound as Over, Factor trips a trip. Where Vectors is
-// set, a vector loop that carries a sum and stores nothing runs Vectors
-// vectors a trip, the vectors left in a loop of one a trip after it.
+// set, a vector loop that carries a sum and stores nothing, or that runs a
+// fixed count of at least Vectors trips, runs Vectors vectors a trip, the
+// vectors left in a loop of one a trip after it.
 type Unroll struct {
 	Full    int
 	Factor  int
@@ -23,7 +24,9 @@ func (p Unroll) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			changed := false
 			for c := 0; c < len(m.Loops); c++ {
 				l := m.Loops[c]
-				if l.Lanes > 0 && l.Copies == 0 && len(m.foldsOf(c)) > 0 && !m.storesAt(c) && !m.hasInner(c) {
+				sum := len(m.foldsOf(c)) > 0 && !m.storesAt(c)
+				fixed := l.Count == 0 && l.Trip >= p.Vectors && len(m.foldsOf(c)) == 0
+				if l.Lanes > 0 && l.Copies == 0 && !m.hasInner(c) && (sum || fixed) {
 					m.unrollVectors(c, p.Vectors)
 					changed = true
 					c++
@@ -127,7 +130,10 @@ func (k *Kernel) unrollVectors(c, n int) {
 	it := k.iterOf(c)
 	var rem Loop
 	var done int
-	rem.Parent, rem.Lanes, rem.Range = l.Parent, L, l.Range
+	rem.Parent, rem.Lanes, rem.Range, rem.Of = l.Parent, L, l.Range, c+1
+	if l.Of > 0 {
+		rem.Of = l.Of
+	}
 	if l.Count > 0 {
 		v := l.Count - 1
 		k.Loops[c].Count = k.bin(OpShr, U, v, k.u32(bitsOf(n))) + 1
@@ -141,6 +147,9 @@ func (k *Kernel) unrollVectors(c, n int) {
 	k.Loops[c].Copies = n
 	r := k.insertLoop(c+1, rem)
 	ri := k.add(Node{Op: OpIter, At: r, Type: U})
+	if k.storesAt(c) {
+		k.unrollStores(c, r, n, done)
+	}
 	for _, f := range k.foldsOf(c) {
 		step := k.Nodes[f].A
 		acc := f
@@ -154,8 +163,9 @@ func (k *Kernel) unrollVectors(c, n int) {
 		k.Nodes[f].A = acc
 		fr := k.add(Node{Op: OpFold, At: r, Type: k.Nodes[f].Type, B: f})
 		k.Nodes[fr].A = k.copyOf(step, map[int]int{f: fr, it: k.bin(OpAdd, U, done, ri)})
+		hs := k.homes()
 		for i := range k.Nodes {
-			if i == fr || k.loopOf(i) == c || k.loopOf(i) == r {
+			if i == fr || i < len(hs) && hs[i] >= 0 && (k.within(hs[i], c) || k.within(hs[i], r)) {
 				continue
 			}
 			for _, a := range k.args(&k.Nodes[i]) {
@@ -178,4 +188,52 @@ func bitsOf(n int) int {
 		b++
 	}
 	return b
+}
+
+// unrollStores writes loop c's stores once for each of n copies, copy j
+// at iteration j*Lanes on, and the remainder loop r's once more.
+func (k *Kernel) unrollStores(c, r, n, done int) {
+	U := ir.U32
+	L := k.Loops[c].Lanes
+	it := k.iterOf(c)
+	ri := k.iterOf(r)
+	var out []Store
+	for _, s := range k.Stores {
+		if s.At != c || s.Barrier || s.Run {
+			out = append(out, s)
+			continue
+		}
+		for j := 0; j < n; j++ {
+			at := it
+			if j > 0 {
+				at = k.bin(OpAdd, U, it, k.u32(j*L))
+			}
+			out = append(out, k.storeCopy(s, map[int]int{it: at}, c))
+		}
+	}
+	for _, s := range k.Stores {
+		if s.At == c && !s.Barrier && !s.Run {
+			if ri < 0 {
+				ri = k.add(Node{Op: OpIter, At: r, Type: U})
+			}
+			out = append(out, k.storeCopy(s, map[int]int{it: k.bin(OpAdd, U, done, ri)}, r))
+		}
+	}
+	k.Stores = out
+}
+
+// storeCopy is store s with its nodes copied under sub, run in loop at.
+func (k *Kernel) storeCopy(s Store, sub map[int]int, at int) Store {
+	n := s
+	n.At = at
+	n.Val = k.copyOf(s.Val, sub)
+	if s.Ax != nil {
+		n.Ax = make([]int, len(s.Ax))
+		for j, a := range s.Ax {
+			n.Ax[j] = k.copyOf(a, sub)
+		}
+	} else {
+		n.Ix = k.copyOf(s.Ix, sub)
+	}
+	return n
 }

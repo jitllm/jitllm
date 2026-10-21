@@ -5,12 +5,16 @@ package jit
 // consumer of a value the producer writes at several places an element, the
 // consumer computed at each of the producer's stores; Unrolled fuses a
 // reduction into a consumer reading it at leading coordinates of its own,
-// the reduction's terms unrolled at each read.
+// the reduction's terms unrolled at each read. Then fuses, on a device
+// whose code runs a call at a time, a consumer reading what the producer
+// stores once its loops are done, the same at every trip of the
+// consumer's: the consumer's code after the producer's in one kernel.
 type Pair struct {
 	From, To PrimKind
 	Additive bool
 	AtStores bool
 	Unrolled bool
+	Then     bool
 }
 
 // Fuse inlines a consumer into its producer where their pair is allowed, the
@@ -29,7 +33,10 @@ func (f Fuse) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		for pi := ci - 1; pi >= 0; pi-- {
 			p := out[pi]
 			var m *Kernel
-			if v, st, ok := f.joins(p, c, out); ok {
+			if v, st, ok := f.joinsThen(p, c, out); ok {
+				m = merge(p, c, v, st)
+				m.Kind = c.Kind
+			} else if v, st, ok := f.joins(p, c, out); ok {
 				m = merge(p, c, v, st)
 			} else if v, ok := f.joinsAtStores(p, c, out); ok {
 				m = mergeAtStores(p, c, v)
@@ -56,8 +63,47 @@ func (f Fuse) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return out, nil
 }
 
+// joinsThen finds what p stores after its loops, for every call alike,
+// that c alone reads, nothing in c's loops moving where it reads it.
+func (f Fuse) joinsThen(p, c *Kernel, ks []*Kernel) (Operand, int, bool) {
+	allowed := false
+	for _, pr := range f.Pairs {
+		allowed = allowed || pr.Then && pr.From == p.Kind && pr.To == c.Kind
+	}
+	if !allowed || p.Work || c.Work || p.Group > 0 || c.Group > 0 || !sameSpace(p, c) || len(p.Loops) == 0 {
+		return Operand{}, 0, false
+	}
+	for i, s := range p.Stores {
+		if s.Barrier || s.Run || s.At != -1 {
+			continue
+		}
+		o := p.Bufs[s.Buf].Operand
+		if !soleReader(ks, c, o) {
+			continue
+		}
+		fixed := true
+		any := false
+		hs := c.homes()
+		for j, nd := range c.Nodes {
+			if nd.Op == OpLoad && c.Bufs[nd.Buf].Operand == o {
+				any = true
+				if hs[j] >= 0 {
+					fixed = false
+				}
+			}
+		}
+		if any && fixed {
+			return o, i, true
+		}
+	}
+	return Operand{}, 0, false
+}
+
 func (f Fuse) allows(p, c *Kernel, atStores bool) bool {
 	for _, pr := range f.Pairs {
+		if pr.Then {
+			continue
+		}
 		if pr.From == p.Kind && pr.To == c.Kind && pr.AtStores == atStores && !pr.Unrolled && (!pr.Additive || c.adds()) {
 			return true
 		}

@@ -405,8 +405,14 @@ func (n *Kernel) insertLoop(at int, l Loop) int {
 	}
 	for i := range n.Loops {
 		n.Loops[i].Parent = sh(n.Loops[i].Parent)
+		if n.Loops[i].Of > 0 {
+			n.Loops[i].Of = sh(n.Loops[i].Of-1) + 1
+		}
 	}
 	l.Parent = sh(l.Parent)
+	if l.Of > 0 {
+		l.Of = sh(l.Of-1) + 1
+	}
 	n.Loops = append(n.Loops[:at:at], append([]Loop{l}, n.Loops[at:]...)...)
 	for i := range n.Nodes {
 		nd := &n.Nodes[i]
@@ -534,4 +540,42 @@ func (n *Kernel) reachesFold(i, f int) bool {
 		return false
 	}
 	return walk(i)
+}
+
+// depth is the length of the longest chain of operations node i is made
+// from, a sum and a leaf 0.
+func (n *Kernel) depth(i int, memo map[int]int) int {
+	if d, ok := memo[i]; ok {
+		return d
+	}
+	memo[i] = 0
+	nd := n.Nodes[i]
+	if nd.Op == OpFold || arity(nd.Op) == 0 {
+		return 0
+	}
+	d := 0
+	for _, a := range n.args(&nd) {
+		d = max(d, n.depth(*a, memo)+1)
+	}
+	memo[i] = d
+	return d
+}
+
+// evalArgs is node nd's operands in the order its code evaluates them: the
+// deeper first, the earlier of two alike; an fma's addend first.
+func (n *Kernel) evalArgs(nd *Node, memo map[int]int) []*int {
+	args := n.args(nd)
+	if nd.Op == OpFma {
+		args = []*int{&nd.C, &nd.A, &nd.B}
+	}
+	out := append([]*int(nil), args...)
+	if nd.Op == OpFma {
+		return out
+	}
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && n.depth(*out[j], memo) > n.depth(*out[j-1], memo); j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
 }

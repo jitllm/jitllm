@@ -5,18 +5,35 @@ import "github.com/jitllm/jitllm/jit/ir"
 // Consts places a kernel's float constants, zero aside, in a block of words
 // its call points to, each read from its word where it was used: for a
 // device whose instructions take no float immediate. The words are in the
-// order the kernel's nodes first hold them.
+// order the code first reads them, each store's value evaluated its deeper
+// operand first.
 type Consts struct{}
 
 func (Consts) Name() string { return "consts" }
 
 func (p Consts) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
-		live := k.live()
 		var at []int
-		for i, nd := range k.Nodes {
-			if nd.Op == OpConst && nd.Type == ir.F32 && uint32(nd.Imm) != 0 && live[i] {
+		seen := map[int]bool{}
+		memo := map[int]int{}
+		var walk func(i int)
+		walk = func(i int) {
+			if seen[i] {
+				return
+			}
+			seen[i] = true
+			nd := k.Nodes[i]
+			if nd.Op == OpConst && nd.Type == ir.F32 && uint32(nd.Imm) != 0 {
 				at = append(at, i)
+				return
+			}
+			for _, a := range k.evalArgs(&nd, memo) {
+				walk(*a)
+			}
+		}
+		for _, s := range k.Stores {
+			if !s.Barrier && !s.Run {
+				walk(s.Val)
 			}
 		}
 		if len(at) == 0 {
