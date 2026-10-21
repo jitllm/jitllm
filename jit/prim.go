@@ -132,9 +132,6 @@ type Facts struct {
 	// Rows is how many of the leading axis's rows are live, an expression
 	// the step's tables give at run time.
 	Rows []Expr
-	// Alts are values the expression computes two ways: the value of the
-	// first index, and the second's, which a device may take for it.
-	Alts [][2]int
 }
 
 // Range is axis Axis of the primitive's Shape as positions: coordinate k at

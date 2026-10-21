@@ -10,8 +10,10 @@ import (
 
 // decomposeAttend is decode attention over the paged history: per row and
 // query head, each key's dot with the query, the scores masked outside what
-// the row attends, their maximum, the weights and their sum, the weighted
-// values and the normalized row.
+// the row attends, their maximum, the weights and their sum, then the
+// weighted values and the row they make divided by the sum, or where the
+// device's forms normalize, the weights divided by the sum and the row
+// they weight.
 func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
 	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 || a.Window != 0 || a.Softcap != 0 || a.TempScale != 0 ||
@@ -101,15 +103,36 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	l := ox.at(1, heads, ox.coord(0), ox.coord(1))
 	ox.op(OpMul, F, nv, ox.op(OpDiv, F, ox.f(1), ox.op(OpMax, F, l, ox.f(1e-30))))
 
+	// The normalized form divides the weights by their sum and sums the
+	// values of the divided weights into the row.
+	normed := tmp("normed")
+	var nx exprs
+	nw := nx.at(0, keys, nx.coord(0), nx.coord(1), nx.coord(2))
+	nl := nx.at(3, heads, nx.coord(0), nx.coord(1))
+	nx.op(OpMul, F, nw, nx.op(OpDiv, F, nx.f(1), nl))
+
+	var ux exprs
+	uh, ud, uk := ux.coord(1), ux.coord(2), ux.coord(3)
+	upos, ufirst := position(&ux)
+	upid, uoff := page(&ux, held(&ux, upos, ufirst))
+	ud2 := ux.op(OpAdd, U, ux.op(OpMul, U, ux.op(OpDiv, U, uh, ux.u(uint32(gqa))), ux.u(uint32(D))), ud)
+	ux.op(OpMul, F, ux.at(0, keys, ux.coord(0), uh, uk), ux.at(3, pool, upid, uoff, ud2))
+
 	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], tableRows, tablePages}, ops[1:]...) }
-	return []Prim{
+	prims := []Prim{
 		{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(c.value(o.In[0]), tableKeys), Out: dots, Expr: dx.e, Facts: rng(2)},
 		{Kind: PrimMap, Shape: keys, In: tables(dots), Out: scores, Expr: sx.e, Facts: rng(2)},
 		{Kind: PrimReduce, Shape: keys, In: tables(scores), Out: maxes, Combine: OpMax, Init: int64(math.Float32bits(minus)),
 			Expr: mx.e, Facts: rng(2)},
 		{Kind: PrimMap, Shape: keys, In: tables(scores, maxes), Out: weights, Expr: wx.e, Facts: rng(2)},
 		{Kind: PrimReduce, Shape: keys, In: tables(weights), Out: sums, Combine: OpAdd, Expr: lx.e, Facts: rng(2)},
-		{Kind: PrimContract, Shape: []int{R, H, D, C}, In: tables(weights, tableValues), Out: values, Expr: vx.e, Facts: rng(3)},
-		{Kind: PrimMap, Shape: dims, In: []Operand{values, sums}, Out: out, Expr: ox.e, Facts: Facts{Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D}}},
-	}, nil
+	}
+	if c.Forms.Normalized {
+		return append(prims,
+			Prim{Kind: PrimMap, Shape: keys, In: tables(weights, sums), Out: normed, Expr: nx.e, Facts: rng(2)},
+			Prim{Kind: PrimContract, Shape: []int{R, H, D, C}, In: tables(normed, tableValues), Out: out, Expr: ux.e, Facts: rng(3)}), nil
+	}
+	return append(prims,
+		Prim{Kind: PrimContract, Shape: []int{R, H, D, C}, In: tables(weights, tableValues), Out: values, Expr: vx.e, Facts: rng(3)},
+		Prim{Kind: PrimMap, Shape: dims, In: []Operand{values, sums}, Out: out, Expr: ox.e, Facts: Facts{Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D}}}), nil
 }

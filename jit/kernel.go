@@ -26,9 +26,6 @@ type Kernel struct {
 	Passes []string
 	// Positions and Heads are facts the primitive carried, Part the kind of
 	// the model's part the kernel belongs to.
-	// Alts are values computed two ways, a node and the node a device may
-	// take for it, until a pass takes them or the second is dropped.
-	Alts      [][2]int
 	Positions *Positions
 	Heads     *Heads
 	Part      PartKind
@@ -269,6 +266,8 @@ const (
 	OpSwapPairs
 	// OpAddSub is A less B in the even lanes, A plus B in the odd.
 	OpAddSub
+	// OpFirstLane is A's first lane and B's, a zero, in the rest.
+	OpFirstLane
 )
 
 // Node is one value: a scalar, or inside a loop of Lanes a vector of them.
@@ -361,7 +360,6 @@ func (n *Kernel) clone() *Kernel {
 	}
 	c.Bufs = append([]Buf(nil), n.Bufs...)
 	c.Passes = append([]string(nil), n.Passes...)
-	c.Alts = append([][2]int(nil), n.Alts...)
 	return &c
 }
 
@@ -375,7 +373,7 @@ func (n *Kernel) elements() int {
 
 var opNames = [...]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
 	"less", "select", "sqrt", "exp", "shl", "shr", "and", "xor", "cvtf32", "cvti32", "thread", "groupsum", "groupmax", "exchange",
-	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "round", "span", "hmax", "hmin", "eq", "or", "lanes", "sar", "dupeven", "dupodd", "swappairs", "addsub"}
+	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "round", "span", "hmax", "hmin", "eq", "or", "lanes", "sar", "dupeven", "dupodd", "swappairs", "addsub", "firstlane"}
 
 func (o Op) String() string {
 	if int(o) < len(opNames) {

@@ -13,8 +13,20 @@ type Pass interface {
 // its passes in order, any of them turned off by name.
 type Profile struct {
 	Int8   *Int8Form
+	Forms  Forms
 	Passes []Pass
 	Off    map[string]bool
+}
+
+// Forms are the device's choices of the IR a decomposition generates where
+// two forms compute one value. Rounding: a value rounded to nearest is made
+// by the device's rounding convert, a range reduced by the magic sum,
+// rather than by a truncating convert of it plus a half on a fixed-point
+// grid. Normalized: a weighted sum divided by its weights' total divides
+// the weights, rather than the sum.
+type Forms struct {
+	Rounding   bool
+	Normalized bool
 }
 
 // Int8Form is the int8 form a device keeps of a block's contraction inputs

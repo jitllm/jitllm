@@ -2,8 +2,9 @@ package jit
 
 import "github.com/jitllm/jitllm/jit/ir"
 
-// FMA fuses a sum's step that adds a product, acc + a*b, into one
-// multiply-add, fma(a, b, acc); where All is set, any float add of a product.
+// FMA fuses a sum's step that adds a product nothing else reads, acc + a*b,
+// into one multiply-add, fma(a, b, acc); where All is set, any float add of
+// such a product.
 type FMA struct {
 	All bool
 }
@@ -22,7 +23,7 @@ func (p FMA) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				if k.Nodes[prod].Op != OpMul {
 					acc, prod = prod, acc
 				}
-				if pr := k.Nodes[prod]; pr.Op != OpMul || pr.Type != ir.F32 {
+				if pr := k.Nodes[prod]; pr.Op != OpMul || pr.Type != ir.F32 || k.uses(prod) != 1 {
 					continue
 				}
 				if m == nil {
@@ -46,7 +47,7 @@ func (p FMA) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			} else if s.A != i {
 				continue
 			}
-			if pr := k.Nodes[prod]; pr.Op != OpMul || pr.Type != nd.Type {
+			if pr := k.Nodes[prod]; pr.Op != OpMul || pr.Type != nd.Type || k.uses(prod) != 1 {
 				continue
 			}
 			if m == nil {

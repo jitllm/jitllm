@@ -11,7 +11,8 @@ import (
 // elements of its iteration Lanes iterations a trip, one in each lane, and
 // the trips that do not fill a vector after it in a loop of one a trip. A
 // sum the loop carries becomes a sum in each lane, the tail adding into its
-// first lane, and the lanes are summed where the sum is read. A loop that
+// first lane, its term kept to that lane where it is not zero in the others,
+// and the lanes are summed where the sum is read. A loop that
 // stores a pair of values at 2i and 2i+1 stores the two vectors' lanes
 // zipped, the low pairs then the high.
 type Vectorize struct {
@@ -149,6 +150,10 @@ func (k *Kernel) vectorize(c, L int) {
 		step := k.Nodes[f].A
 		sub[f] = ft
 		k.Nodes[ft].A = k.copyOf(step, sub)
+		if st := &k.Nodes[k.Nodes[ft].A]; st.Op == OpAdd && st.A == ft && !k.zeroKept(st.B, t) {
+			term := st.B
+			st.B = k.add(Node{Op: OpFirstLane, Type: ir.F32, A: term, B: k.add(Node{Op: OpConst, Type: ir.F32})})
+		}
 		h := k.add(Node{Op: OpHSum, Type: k.Nodes[f].Type, A: ft})
 		hs := k.homes()
 		for i := range k.Nodes {
@@ -194,6 +199,25 @@ func (k *Kernel) vectorize(c, L int) {
 		hi := Store{Buf: a.Buf, At: c, Ix: k.bin(OpAdd, U, a.Ix, k.u32(L)), Val: k.add(Node{Op: OpZip, Type: ir.F32, A: a.Val, B: b.Val, Imm: 1})}
 		k.Stores[pair[0]], k.Stores[pair[1]] = lo, hi
 	}
+}
+
+// zeroKept reports whether node i is zero in the lanes past the first
+// where the loads of tail t, which fill the first lane alone, are.
+func (k *Kernel) zeroKept(i, t int) bool {
+	nd := k.Nodes[i]
+	switch nd.Op {
+	case OpLoad:
+		return k.varies(i, t)
+	case OpConst:
+		return nd.Imm == 0
+	case OpMul:
+		return k.zeroKept(nd.A, t) || k.zeroKept(nd.B, t)
+	case OpAdd, OpSub:
+		return k.zeroKept(nd.A, t) && k.zeroKept(nd.B, t)
+	case OpFma:
+		return (k.zeroKept(nd.A, t) || k.zeroKept(nd.B, t)) && k.zeroKept(nd.C, t)
+	}
+	return false
 }
 
 // vectorizeExtreme continues fold f, the largest or least of loop c's

@@ -9,12 +9,17 @@ package jit
 // whose code runs a call at a time, a consumer reading what the producer
 // stores once its loops are done, the same at every trip of the
 // consumer's: the consumer's code after the producer's in one kernel.
+// Alongside fuses a reduction over what the producer stores along one of
+// its loops, element for element, into that loop, its terms the values
+// stored as they are made; Combine, where set, is the one combine it fuses.
 type Pair struct {
-	From, To PrimKind
-	Additive bool
-	AtStores bool
-	Unrolled bool
-	Then     bool
+	From, To  PrimKind
+	Additive  bool
+	AtStores  bool
+	Unrolled  bool
+	Then      bool
+	Alongside bool
+	Combine   Op
 }
 
 // Fuse inlines a consumer into its producer where their pair is allowed, the
@@ -33,7 +38,9 @@ func (f Fuse) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		for pi := ci - 1; pi >= 0; pi-- {
 			p := out[pi]
 			var m *Kernel
-			if v, st, ok := f.joinsThen(p, c, out); ok {
+			if v, st, pl, ok := f.joinsAlongside(p, c); ok {
+				m = mergeAlongside(p, c, v, st, pl)
+			} else if v, st, ok := f.joinsThen(p, c, out); ok {
 				m = merge(p, c, v, st)
 				m.Kind = c.Kind
 			} else if v, st, ok := f.joins(p, c, out); ok {
@@ -101,7 +108,7 @@ func (f Fuse) joinsThen(p, c *Kernel, ks []*Kernel) (Operand, int, bool) {
 
 func (f Fuse) allows(p, c *Kernel, atStores bool) bool {
 	for _, pr := range f.Pairs {
-		if pr.Then {
+		if pr.Then || pr.Alongside {
 			continue
 		}
 		if pr.From == p.Kind && pr.To == c.Kind && pr.AtStores == atStores && !pr.Unrolled && (!pr.Additive || c.adds()) {
@@ -236,6 +243,12 @@ func conflicts(p, c *Kernel) bool {
 // graft copies c's nodes into m: its reads of v as node val, its
 // coordinates through coord where set, its buffers and loops m's.
 func graft(m, c *Kernel, v Operand, val int, coord func(i int) (int, bool)) (nodeOf []int, bufOf []int, loopOf []int) {
+	return graftOnto(m, c, v, val, coord, nil)
+}
+
+// graftOnto is graft with each of c's loops in onto run as the loop of m
+// it names.
+func graftOnto(m, c *Kernel, v Operand, val int, coord func(i int) (int, bool), onto map[int]int) (nodeOf []int, bufOf []int, loopOf []int) {
 	bufOf = make([]int, len(c.Bufs))
 	for i, b := range c.Bufs {
 		bufOf[i] = -1
@@ -253,6 +266,10 @@ func graft(m, c *Kernel, v Operand, val int, coord func(i int) (int, bool)) (nod
 	}
 	loopOf = make([]int, len(c.Loops))
 	for i, l := range c.Loops {
+		if x, ok := onto[i]; ok {
+			loopOf[i] = x
+			continue
+		}
 		if l.Parent >= 0 {
 			l.Parent = loopOf[l.Parent]
 		}
@@ -278,6 +295,11 @@ func graft(m, c *Kernel, v Operand, val int, coord func(i int) (int, bool)) (nod
 				nodeOf[i] = x
 				return x
 			}
+		case nd.Op == OpIter:
+			if x, ok := onto[nd.At]; ok && m.iterOf(x) >= 0 {
+				nodeOf[i] = m.iterOf(x)
+				return nodeOf[i]
+			}
 		}
 		if nd.Op == OpIter || nd.Op == OpFold {
 			nd.At = loopOf[nd.At]
@@ -297,11 +319,111 @@ func graft(m, c *Kernel, v Operand, val int, coord func(i int) (int, bool)) (nod
 		walk(i)
 	}
 	for i, l := range c.Loops {
-		if l.Count > 0 {
+		if _, ok := onto[i]; !ok && l.Count > 0 {
 			m.Loops[loopOf[i]].Count = walk(l.Count-1) + 1
 		}
 	}
 	return nodeOf, bufOf, loopOf
+}
+
+// joinsAlongside finds what p stores along one of its innermost loops at
+// its own element and c, a reduction of one loop over the same terms,
+// reads at its own element and nothing else p writes: the stored operand,
+// the store and the loop.
+func (f Fuse) joinsAlongside(p, c *Kernel) (Operand, int, int, bool) {
+	fd, ok := c.fold()
+	allowed := false
+	for _, pr := range f.Pairs {
+		allowed = allowed || ok && pr.Alongside && pr.From == p.Kind && pr.To == c.Kind &&
+			(pr.Combine == 0 || c.Nodes[c.Nodes[fd].A].Op == pr.Combine)
+	}
+	if !allowed || p.Work || c.Work || p.Group > 0 || c.Group > 0 || !sameSpace(p, c) {
+		return Operand{}, 0, 0, false
+	}
+	own := func(k *Kernel, ax []int, it int) bool {
+		if it < 0 || len(ax) != len(k.Space)+1 || ax[len(ax)-1] != it {
+			return false
+		}
+		for i, a := range ax[:len(ax)-1] {
+			if nd := k.Nodes[a]; nd.Op != OpCoord || nd.A != i {
+				return false
+			}
+		}
+		return true
+	}
+	writes := map[Operand]bool{}
+	for _, s := range p.Stores {
+		if !s.Barrier && !s.Run {
+			writes[p.Bufs[s.Buf].Operand] = true
+		}
+	}
+	for si, s := range p.Stores {
+		if s.Barrier || s.Run || s.At < 0 || len(p.innerLoops(s.At)) > 0 || !own(p, s.Ax, p.iterOf(s.At)) {
+			continue
+		}
+		o := p.Bufs[s.Buf].Operand
+		reads, ok := false, true
+		for _, nd := range c.Nodes {
+			if nd.Op != OpLoad {
+				continue
+			}
+			switch b := c.Bufs[nd.Buf].Operand; {
+			case b == o:
+				reads = true
+				ok = ok && own(c, nd.Ax, c.iterOf(0))
+			case writes[b]:
+				ok = false
+			}
+		}
+		pl, cl := p.Loops[s.At], c.Loops[0]
+		if !reads || !ok || pl.Trip != cl.Trip || (pl.Count > 0) != (cl.Count > 0) ||
+			pl.Count > 0 && !sameExpr(p, pl.Count-1, c, cl.Count-1) {
+			continue
+		}
+		return o, si, s.At, true
+	}
+	return Operand{}, 0, 0, false
+}
+
+// mergeAlongside is p with c's reduction carried by p's loop pl, its reads
+// of v the value p's store st stores there.
+func mergeAlongside(p, c *Kernel, v Operand, st, pl int) *Kernel {
+	m := p.clone()
+	m.Name, m.Kind = p.Name+"+"+c.Name, PrimReduce
+	coords := map[int]int{}
+	for i, nd := range m.Nodes {
+		if nd.Op == OpCoord {
+			coords[nd.A] = i
+		}
+	}
+	nodeOf, bufOf, loopOf := graftOnto(m, c, v, p.Stores[st].Val, func(a int) (int, bool) { x, ok := coords[a]; return x, ok }, map[int]int{0: pl})
+	graftStores(m, c, nodeOf, bufOf, loopOf)
+	return m
+}
+
+// sameExpr reports whether node i of a and node j of b compute one value:
+// the same operations on the same operands, loads of the same operands.
+func sameExpr(a *Kernel, i int, b *Kernel, j int) bool {
+	x, y := a.Nodes[i], b.Nodes[j]
+	if x.Op != y.Op || x.Type != y.Type || x.Imm != y.Imm || x.Op == OpIter || x.Op == OpFold {
+		return false
+	}
+	if x.Op == OpLoad && a.Bufs[x.Buf].Operand != b.Bufs[y.Buf].Operand {
+		return false
+	}
+	if x.Op == OpCoord {
+		return x.A == y.A
+	}
+	ax, bx := a.args(&x), b.args(&y)
+	if len(ax) != len(bx) {
+		return false
+	}
+	for k := range ax {
+		if !sameExpr(a, *ax[k], b, *bx[k]) {
+			return false
+		}
+	}
+	return true
 }
 
 func sameShape(a, b []int) bool {
