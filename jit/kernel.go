@@ -26,6 +26,8 @@ type Kernel struct {
 	Passes []string
 	// Positions and Heads are facts the primitive carried, Part the kind of
 	// the model's part the kernel belongs to.
+	// Quarter is the primitive's Facts.Quarter, as nodes.
+	Quarter *Quarter
 	Positions *Positions
 	Heads     *Heads
 	Part      PartKind
@@ -366,6 +368,10 @@ func (n *Kernel) clone() *Kernel {
 	}
 	c.Bufs = append([]Buf(nil), n.Bufs...)
 	c.Passes = append([]string(nil), n.Passes...)
+	if n.Quarter != nil {
+		q := *n.Quarter
+		c.Quarter = &q
+	}
 	return &c
 }
 

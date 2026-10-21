@@ -50,6 +50,9 @@ func generate(p Prim) (*Kernel, error) {
 		k.Rows = g.value(p.Facts.Rows, terms) + 1
 	}
 	vals := g.values(p.Expr, terms)
+	if q := p.Facts.Quarter; q != nil {
+		k.Quarter = &Quarter{Sum: vals[q.Sum], Rest: vals[q.Rest], Turn: vals[q.Turn], Part: vals[q.Part], Bound: q.Bound}
+	}
 	if p.Kind == PrimMap {
 		if len(p.Stores) == 0 {
 			b := k.buf(Buf{Kind: BufOut, Elem: elemOf(p.Out.Elem), Operand: p.Out, Shape: append([]int(nil), out...)})
@@ -172,7 +175,7 @@ func (g *generator) buffer(m map[Operand]int, in int, ext []int) int {
 	if b, ok := m[o]; ok {
 		return b
 	}
-	b := g.k.buf(Buf{Kind: BufIn, Elem: storageElem(o), Operand: o, Shape: append([]int(nil), ext...)})
+	b := g.k.buf(Buf{Kind: BufIn, Elem: storageElem(o), Operand: o, Shape: append([]int(nil), ext...), Words: g.p.Facts.Words[in]})
 	m[o] = b
 	return b
 }

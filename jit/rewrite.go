@@ -410,6 +410,13 @@ func (k *Kernel) compact() {
 		}
 		k.Seq = seq
 	}
+	if q := k.Quarter; q != nil {
+		if at[q.Sum] < 0 || at[q.Rest] < 0 || at[q.Turn] < 0 || at[q.Part] < 0 {
+			k.Quarter = nil
+		} else {
+			k.Quarter = &Quarter{Sum: at[q.Sum], Rest: at[q.Rest], Turn: at[q.Turn], Part: at[q.Part], Bound: q.Bound}
+		}
+	}
 	if p := k.Positions; p != nil {
 		q := *p
 		q.First, q.End = at[p.First], at[p.End]

@@ -19,13 +19,9 @@ type Profile struct {
 }
 
 // Forms are the device's choices of the IR a decomposition generates where
-// two forms compute one value. Rounding: a value rounded to nearest is made
-// by the device's rounding convert, a range reduced by the magic sum,
-// rather than by a truncating convert of it plus a half on a fixed-point
-// grid. Normalized: a weighted sum divided by its weights' total divides
-// the weights, rather than the sum.
+// two forms compute one value. Normalized: a weighted sum divided by its
+// weights' total divides the weights, rather than the sum.
 type Forms struct {
-	Rounding   bool
 	Normalized bool
 }
 

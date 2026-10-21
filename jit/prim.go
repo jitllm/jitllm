@@ -132,6 +132,20 @@ type Facts struct {
 	// Rows is how many of the leading axis's rows are live, an expression
 	// the step's tables give at run time.
 	Rows []Expr
+	// Words are the contents of inputs whose words are fixed, by input.
+	Words map[int][]uint32
+	// Quarter is a reduction the expression makes of an angle to quarter
+	// turns.
+	Quarter *Quarter
+}
+
+// Quarter is an angle Sum + Rest in quarter turns reduced: Turn its nearest
+// whole quarter turn, of which only the two low bits are read and either
+// neighbour may be taken at a tie, and Part the angle's Sum mod 4 less Turn.
+// Sum is at most Bound in magnitude; the four are expressions.
+type Quarter struct {
+	Sum, Rest, Turn, Part int
+	Bound                 float64
 }
 
 // Range is axis Axis of the primitive's Shape as positions: coordinate k at

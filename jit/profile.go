@@ -43,7 +43,8 @@ func gpuProfile() Profile {
 
 // cpuProfile is main's passes on the host.
 func cpuProfile() Profile {
-	return Profile{Forms: Forms{Rounding: true, Normalized: true}, Passes: []Pass{
+	return Profile{Forms: Forms{Normalized: true}, Passes: []Pass{
+		Quarters{},
 		Serial{},
 		Simplify{ConstLast: true},
 		RunLengths{},

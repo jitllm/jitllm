@@ -2,6 +2,7 @@ package jit
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/ir"
@@ -38,17 +39,19 @@ const (
 	ropeCosC4   = 8
 	ropeNegHalf = 9
 	ropeOne     = 10
+	ropeDigit   = 11
 	ropeSignVec = 12
 	ropeOneVec  = 20
+	ropeTwoVec  = 28
 	ropeMod4    = 36
 	ropeHalf    = 37
 )
 
 // decomposeRopeTable is a step's rotary table: for each row and pair, the
 // pair's angle as the sum of the position's digits times the model's
-// planes, a range reduction to a quadrant and a remainder (by the magic sum
-// with a rounding convert where the device's forms round, else in the
-// 2^-12 grid with a truncating one), the remainder's
+// planes, a range reduction to a quadrant and a remainder in the 2^-12
+// grid with a truncating convert (stated as a Quarter, which a device may
+// reduce another way), the remainder's
 // sine and cosine by polynomials, swapped and signed by the quadrant, each
 // times the table's scale.
 func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
@@ -81,18 +84,10 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 		return acc
 	}
 	s, co := sum(0), sum(ropeDigits)
-	var n, f int
-	if c.Forms.Rounding {
-		magic := cf(ropeMagic)
-		m4 := x.op(OpSub, F, s, x.op(OpSub, F, x.op(OpAdd, F, s, magic), magic))
-		n = x.un(OpRoundI32, I, x.op(OpAdd, F, m4, co))
-		f = x.op(OpSub, F, m4, x.un(OpCvtF32, F, n))
-	} else {
-		si := x.un(OpBitcast, U, x.un(OpCvtI32, I, x.op(OpMul, F, s, x.f(ropeGrid))))
-		rem := x.op(OpMul, F, x.un(OpCvtF32, F, x.op(OpAnd, U, si, cw(ropeMod4))), x.f(1.0/ropeGrid))
-		n = x.un(OpCvtI32, I, x.op(OpAdd, F, x.op(OpAdd, F, rem, co), cf(ropeHalf)))
-		f = x.op(OpSub, F, rem, x.un(OpCvtF32, F, n))
-	}
+	si := x.un(OpBitcast, U, x.un(OpCvtI32, I, x.op(OpMul, F, s, x.f(ropeGrid))))
+	rem := x.op(OpMul, F, x.un(OpCvtF32, F, x.op(OpAnd, U, si, cw(ropeMod4))), x.f(1.0/ropeGrid))
+	n := x.un(OpCvtI32, I, x.op(OpAdd, F, x.op(OpAdd, F, rem, co), cf(ropeHalf)))
+	f := x.op(OpSub, F, rem, x.un(OpCvtF32, F, n))
 	nb := x.un(OpBitcast, U, n)
 	hi, lo := cf(ropePio2Hi), cf(ropePio2Lo)
 	fma := func(a, b, z int) int { return x.add(Expr{Op: OpFma, Type: F, A: a, B: b, C: z}) }
@@ -123,5 +118,24 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	out := Operand{Kind: OperandTable, Name: tableAngles.Name}
 	return []Prim{{Kind: PrimMap, Shape: []int{R, P}, In: []Operand{tablePos, tablePlanes, tableRopeKon}, Expr: x.e,
 		Stores: []PrimStore{{Out: out, Index: at, Value: cvs}, {Out: out, Index: at1, Value: svs}},
-		Facts:  Facts{Rows: live.e}}}, nil
+		Facts: Facts{Rows: live.e, Words: map[int][]uint32{2: ropeConsts()},
+			Quarter: &Quarter{Sum: s, Rest: co, Turn: n, Part: f, Bound: 1 << (ropeDigitBits + 4)}}}}, nil
+}
+
+// ropeConsts is the rotary table's constant block, word for word.
+func ropeConsts() []uint32 {
+	f := math.Float32bits
+	hi := float32(math.Pi / 2)
+	w := make([]uint32, ropeHalf+1)
+	w[ropeMagic] = f(1 << 25)
+	w[ropePio2Hi], w[ropePio2Lo] = f(hi), f(float32(math.Pi/2-float64(hi)))
+	w[ropeSinC7], w[ropeSinC5], w[ropeSinC3] = f(-1.9515295891e-4), f(8.3321608736e-3), f(-1.6666654611e-1)
+	w[ropeCosC8], w[ropeCosC6], w[ropeCosC4] = f(2.443315711809948e-5), f(-1.388731625493765e-3), f(4.166664568298827e-2)
+	w[ropeNegHalf], w[ropeOne] = f(-0.5), f(1)
+	w[ropeDigit] = 1<<ropeDigitBits - 1
+	for i := range ropeLanes {
+		w[ropeSignVec+i], w[ropeOneVec+i], w[ropeTwoVec+i] = 0x80000000, 1, 2
+	}
+	w[ropeMod4], w[ropeHalf] = 4*ropeGrid-1, f(0.5)
+	return w
 }

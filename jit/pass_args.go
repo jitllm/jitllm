@@ -20,7 +20,7 @@ type Args struct {
 // in order, the first weight's, table's or history's address (or the row a
 // kernel narrows into binary16), the activations a weight is read beside, the
 // value a sum over the history's width reads beside it, a block
-// of constants, the other buffers read in order; a vector loop's count and
+// of constants (or an input of fixed words), the other buffers read in order; a vector loop's count and
 // its tail's, and the other counts in order.
 type ArgFields struct {
 	Out    []int
@@ -216,7 +216,7 @@ func (k *Kernel) bindBufs(f ArgFields) {
 			} else {
 				fl = f.Out[0]
 			}
-		case o.Kind == OperandConsts:
+		case o.Kind == OperandConsts || k.fixedWords(o):
 			fl = f.Consts
 		case (o.Kind == OperandWeight || o.Kind == OperandTable || narrows) && !weighted:
 			fl, weighted = f.Weight, true
@@ -403,4 +403,15 @@ func (k *Kernel) splitFrom(i int) int {
 		}
 		return i
 	}
+}
+
+// fixedWords reports whether operand o is an input of fixed words: a block
+// of constants.
+func (k *Kernel) fixedWords(o Operand) bool {
+	for _, b := range k.Bufs {
+		if b.Operand == o && b.Words != nil {
+			return true
+		}
+	}
+	return false
 }
