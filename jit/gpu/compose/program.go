@@ -86,6 +86,12 @@ const (
 	// Out[1] the item's maximum and sum, 32 copies each past its padded
 	// numerators (the merge's partial layout).
 	PrimSoftmax
+	// PrimAcc is each (row, head, split, value element)'s sum over its
+	// split's keys of the weight In[0] (Paged.Chunk slots an item) times the
+	// key's value in the paged pool In[1], through the page table In[2] and
+	// the row descriptors In[3]; into the partials Out[0] (padded numerators
+	// a split, the merge's layout).
+	PrimAcc
 	// PrimMerge is each (row, head, value element)'s output from the splits'
 	// partials In[0] (each split's numerators, then its maximum and sum):
 	// the splits weighted by exp of their maximum less the greatest, the
@@ -167,6 +173,8 @@ type Group struct {
 	// Segs, where set, are the group's members as one segmented launch
 	// (Siblings): its Row and Binds are unused.
 	Segs []Group
+	// Sched, where set, is the schedule the group's shape states.
+	Sched *Schedule
 	// Contract says the group holds a contraction, planned under Facts;
 	// any other is planned under the target alone.
 	Contract bool
@@ -188,6 +196,11 @@ func (p *Program) Lower() ([]Group, error) {
 		}
 		if o.Kind == PrimQuant {
 			gs = append(gs, b.quantAlone(o))
+			continue
+		}
+		if o.Kind == PrimAcc {
+			b.acc(o)
+			gs = append(gs, b.g)
 			continue
 		}
 		if o.Kind == PrimMerge {
@@ -501,4 +514,49 @@ func (b *builder) softmax(o Prim) {
 	c3 := r.Loop(32)
 	r.StoreAt(part, m, ub(OpAdd, ub(OpAdd, pb, r.Iter(c3)), u(padded)))
 	r.StoreAt(part, l, ub(OpAdd, ub(OpAdd, pb, r.Iter(c3)), u(padded+32)))
+}
+
+// acc is a staged accumulation's naive group: an element a (row, head,
+// split, value element), a loop over its split's keys, each key's page
+// looked up and its value times its weight summed.
+func (b *builder) acc(o Prim) {
+	p := o.Paged
+	vd := p.valueDim()
+	S, C, P := max(1, p.Splits), p.Chunk, p.Page
+	b.g.Row = Row{Width: p.Rows * p.Heads * S * vd, Rows: 1}
+	r := &b.g.Row
+	u, ub := r.UConst, r.UBin
+	wts, v := b.buf(BufRow, Bind{BindVal, o.In[0]}), b.buf(BufRow, Bind{BindVal, o.In[1]})
+	table, desc := b.buf(BufU32, Bind{BindVal, o.In[2]}), b.buf(BufU32, Bind{BindVal, o.In[3]})
+	part := b.buf(BufOut, Bind{BindVal, o.Out[0]})
+	kvRow, gqa := p.KVHeads*p.Dim, p.Heads/p.KVHeads
+	flat := r.Column()
+	j := ub(OpRem, flat, u(vd))
+	rest := ub(OpDiv, flat, u(vd))
+	sp := ub(OpRem, rest, u(S))
+	rest = ub(OpDiv, rest, u(S))
+	h := ub(OpRem, rest, u(p.Heads))
+	row := ub(OpDiv, rest, u(p.Heads))
+	ps := r.pagedSplitOf(desc, row, sp, S)
+	col := j
+	if p.MLA == 0 {
+		col = ub(OpAdd, ub(OpMul, ub(OpDiv, h, u(gqa)), u(p.Dim)), j)
+	}
+	// The split's keys, cut in blocks of eight by the block pass: every
+	// block masked from the row's first key, a value through its page's
+	// remainder selected, the page from the block's first key held at the
+	// last 32-aligned tile.
+	st := r.Add(Node{Kind: NHint, Hint: HintMultiple, A: ps.st, At: 32})
+	c, t := r.RangeLoopForm(st, st, ps.en, C, BlockForm{All: true, Base: ps.ks + 1, Paged: true, Align: 32})
+	pid := r.pageOf(table, ps.tab, r.KeyAt(t, ps.live, ps.last), P)
+	vv := r.LoadAt(v, ub(OpAdd, ub(OpMul, ub(OpAdd, ub(OpMul, pid, u(P)), r.pageRem(t, P)), u(kvRow)), col))
+	item := ub(OpAdd, ub(OpMul, ub(OpAdd, ub(OpMul, row, u(p.Heads)), h), u(S)), sp)
+	w := r.LoadAt(wts, ub(OpAdd, ub(OpMul, item, u(C)), ub(OpSub, t, st)))
+	acc := r.Fold(c, r.Const(0))
+	r.SetFold(acc, r.Add(Node{Kind: NBinary, Op: OpFma, A: w, B: vv, C: acc}))
+	padded := (vd + 31) / 32 * 32
+	r.StoreAt(part, acc, ub(OpAdd, ub(OpMul, item, u(padded+64)), j))
+	// Main's schedule by the shape: a KV head's HeadGroup query heads a
+	// thread, sharing each value read, their columns S*vd apart.
+	b.g.Sched = &Schedule{Group: 128, Flat: true, TileCols: p.HeadGroup(), ColStride: S * vd, Block: 8, Split: 1}
 }

@@ -38,12 +38,27 @@ func (g *Row) divmods(s Schedule) *Row {
 // constant that divmods simplifies.
 func (r *Row) divmod(i, tr, tc int) (int, bool) {
 	nd := r.Nodes[i]
+	if n, ok := r.maskCarry(nd); ok {
+		return n, true
+	}
 	if nd.Kind != NUBinary || nd.Op != OpDiv && nd.Op != OpRem || r.Nodes[nd.B].Kind != NUConst || r.Nodes[nd.B].At <= 0 {
 		return 0, false
 	}
 	d := int64(r.Nodes[nd.B].At)
 	if n, ok := r.nested(nd, d); ok {
 		return n, true
+	}
+	// (x + c) by d where x is a multiple of g dividing d and 0 <= c < g:
+	// x mod d is a multiple of g at most d-g, so c rides past the division.
+	if a := r.Nodes[nd.A]; a.Kind == NUBinary && a.Op == OpAdd && r.Nodes[a.B].Kind == NUConst {
+		c := int64(r.Nodes[a.B].At)
+		if g := gcd(r.multipleOf(a.A), d); c > 0 && c < g {
+			q := r.UBin(nd.Op, a.A, nd.B)
+			if nd.Op == OpDiv {
+				return q, true
+			}
+			return r.UBin(OpAdd, q, a.B), true
+		}
 	}
 	l := r.linear(nd.A)
 	if l.c < 0 {
@@ -272,4 +287,26 @@ func (r *Row) byCommon(nd Node, l linSum, d int64) (int, bool) {
 		return r.UBin(OpAdd, in, r.UConst(int(c))), true
 	}
 	return in, true
+}
+
+// maskCarry is (x + c) & (d-1) as (x & (d-1)) + c, d a power of two, where x
+// is a multiple of g dividing d and 0 <= c < g: the mask form of divmod's
+// carry rule.
+func (r *Row) maskCarry(nd Node) (int, bool) {
+	if nd.Kind != NUBinary || nd.Op != OpAnd || r.Nodes[nd.B].Kind != NUConst {
+		return 0, false
+	}
+	d := int64(r.Nodes[nd.B].At) + 1
+	if d < 2 || d&(d-1) != 0 {
+		return 0, false
+	}
+	a := r.Nodes[nd.A]
+	if a.Kind != NUBinary || a.Op != OpAdd || r.Nodes[a.B].Kind != NUConst {
+		return 0, false
+	}
+	c := int64(r.Nodes[a.B].At)
+	if g := gcd(r.multipleOf(a.A), d); c <= 0 || c >= g {
+		return 0, false
+	}
+	return r.UBin(OpAdd, r.UBin(OpAnd, a.A, nd.B), a.B), true
 }

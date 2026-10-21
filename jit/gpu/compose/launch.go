@@ -34,7 +34,15 @@ func (g *Group) Launches(t Target) ([]Launch, error) {
 		f = g.Facts
 		f.Target = t
 	}
-	ps, err := g.Row.Plan(f)
+	var ps []Planned
+	var err error
+	if g.Sched != nil {
+		s := *g.Sched
+		s.Target = t
+		ps, err = g.Row.PlanAt(s)
+	} else {
+		ps, err = g.Row.Plan(f)
+	}
 	if err != nil {
 		return nil, err
 	}

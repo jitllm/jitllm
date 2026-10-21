@@ -6,19 +6,51 @@ package compose
 type Range struct {
 	S, Lo, Hi, Origin, Ext int
 	ok                     bool
+	Form                   BlockForm
+}
+
+// BlockForm is how the key-block pass cuts a range, its parameters: the
+// zero form peels the block holding Lo and the one past the last whole
+// block, masked, holds an affine read's block start inside the extent and
+// selects every float read outside [Lo, Hi).
+type BlockForm struct {
+	// All masks every block, one loop of them from Lo.
+	All bool
+	// Base, where set, is 1 + the node a place's liveness counts from
+	// (Lo otherwise).
+	Base int
+	// Paged selects only the reads a place's index reaches through more
+	// than a sum (a page's remainder), leaving an affine read as it is.
+	Paged bool
+	// Align, where set, aligns a page's clamp to it (the block otherwise).
+	Align int
 }
 
 // RangeLoop is a loop over the coordinate's [lo, hi), every place it names
 // inside [origin, origin+ext): the loop and the coordinate's value in its
 // body.
 func (g *Row) RangeLoop(origin, lo, hi, ext int) (c, s int) {
+	return g.RangeLoopForm(origin, lo, hi, ext, BlockForm{})
+}
+
+// RangeLoopForm is RangeLoop cut by the block pass in form f.
+func (g *Row) RangeLoopForm(origin, lo, hi, ext int, f BlockForm) (c, s int) {
 	c = g.LoopN(g.UBin(OpSub, hi, lo))
 	s = g.UBin(OpAdd, lo, g.Iter(c))
 	for len(g.Ranges) <= c {
 		g.Ranges = append(g.Ranges, Range{})
 	}
-	g.Ranges[c] = Range{S: s, Lo: lo, Hi: hi, Origin: origin, Ext: ext, ok: true}
+	g.Ranges[c] = Range{S: s, Lo: lo, Hi: hi, Origin: origin, Ext: ext, ok: true, Form: f}
 	return c, s
+}
+
+// KeyAt is key t's page index clamped by the row's own facts: live where
+// the row has a key, t held at or below last; under key blocks the block's
+// first key, held at or below last aligned (BlockForm.Align), serves the
+// block.
+func (g *Row) KeyAt(t, live, last int) int {
+	sel := g.Select(live, g.UBin(OpMin, t, last), g.UConst(0))
+	return g.Add(Node{Kind: NHint, Hint: HintKey, A: sel, B: t, C: live, Ix: last, At: 1})
 }
 
 // KeyClamp is key t clamped into [lo, hi), hinted to be read only for its
@@ -72,9 +104,18 @@ func (r *Row) blockLoop(c int, rg Range, B int) {
 	for _, f := range folds {
 		steps[f] = r.Nodes[f].A
 	}
+	f := rg.Form
 	aB := ub(OpAdd, rg.Origin, ub(OpMul, ub(OpDiv, ub(OpSub, rg.Lo, rg.Origin), u(B)), u(B)))
 	nb := r.Select(r.Less(rg.Lo, rg.Hi), ub(OpDiv, ub(OpAdd, ub(OpSub, rg.Hi, aB), u(B-1)), u(B)), u(0))
+	if f.All {
+		aB = rg.Lo
+		nb = ub(OpDiv, ub(OpAdd, ub(OpSub, rg.Hi, rg.Lo), u(B-1)), u(B))
+	}
 	mid := ub(OpSub, ub(OpMax, nb, u(2)), u(2))
+	base := rg.Lo
+	if f.Base > 0 {
+		base = f.Base - 1
+	}
 	// block is the block from bs, its B places in order, the folds' values
 	// from vals.
 	block := func(bs int, masked bool, vals map[int]int) map[int]int {
@@ -94,7 +135,16 @@ func (r *Row) blockLoop(c int, rg Range, B int) {
 			if kk > 0 {
 				sk = ub(OpAdd, bs, u(kk))
 			}
-			live := r.Less(ub(OpSub, sk, rg.Lo), ub(OpSub, rg.Hi, rg.Lo))
+			live := r.Less(ub(OpSub, sk, base), ub(OpSub, rg.Hi, base))
+			if f.All {
+				// Every block from Lo: its place's offset from the base an
+				// invariant, the block's step and the place in it.
+				off := ub(OpAdd, ub(OpSub, rg.Lo, base), ub(OpMul, iter, u(B)))
+				if kk > 0 {
+					off = ub(OpAdd, off, u(kk))
+				}
+				live = r.Less(off, ub(OpSub, rg.Hi, base))
+			}
 			memo := map[int]int{}
 			var at func(n int) int
 			at = func(n int) int {
@@ -114,16 +164,28 @@ func (r *Row) blockLoop(c int, rg Range, B int) {
 				var m int
 				switch {
 				case nd.Kind == NHint && nd.Hint == HintKey:
-					if p, ok := page[n]; ok {
+					switch p, ok := page[n]; {
+					case ok:
 						m = p
-					} else {
+					case nd.At == 1:
+						al := B
+						if f.Align > 0 {
+							al = f.Align
+						}
+						last := ub(OpMul, ub(OpDiv, nd.Ix, u(al)), u(al))
+						m = r.Select(nd.C, ub(OpMin, start(nd.B), last), u(0))
+						page[n] = m
+					default:
 						m = r.clampInto(start(nd.B), nd.C, nd.Ix, B)
 						page[n] = m
 					}
+				case nd.Kind == NLoad && nd.Indexed && masked && f.Paged && r.affineIn(nd.Ix, rg.S):
+					// An affine read of a paged form is read as it is.
+					m = r.copyWith(n, at)
 				case nd.Kind == NLoad && nd.Indexed && masked:
 					ix := r.Nodes[n].Ix
 					var at2 func(x int) int
-					if r.affineIn(ix, rg.S) {
+					if r.affineIn(ix, rg.S) && !f.Paged {
 						held := ub(OpAdd, rg.Origin, ub(OpMin, ub(OpSub, bs, rg.Origin), u(rg.Ext-B)))
 						if kk > 0 {
 							held = ub(OpAdd, held, u(kk))
@@ -165,6 +227,20 @@ func (r *Row) blockLoop(c int, rg Range, B int) {
 			vals = next
 		}
 		return vals
+	}
+	if f.All {
+		own := map[int]int{}
+		for _, fo := range folds {
+			own[fo] = fo
+		}
+		steps := block(ub(OpAdd, aB, ub(OpMul, iter, u(B))), true, own)
+		for _, fo := range folds {
+			r.Nodes[fo].A = steps[fo]
+		}
+		r.Trip[c] = nb
+		r.Ranges[c].ok = false
+		r.Nodes[rg.S] = Node{Kind: NUConst}
+		return
 	}
 	first := map[int]int{}
 	for _, f := range folds {

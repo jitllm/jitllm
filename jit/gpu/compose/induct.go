@@ -398,6 +398,10 @@ func (g *Row) foldReadsIter(c, c0 int) bool {
 func (g *Row) tiled(s Schedule) *Row {
 	tr, tc := max(s.Tile, 1), max(s.TileCols, 1)
 	if !s.Flat || s.MMA || tr*tc == 1 {
+		if s.Flat && !s.MMA && s.Block > 1 {
+			// A key block's places still simplify by what they are multiples of.
+			return g.divmods(s)
+		}
 		return g
 	}
 	r := g.clone()
