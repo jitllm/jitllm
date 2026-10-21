@@ -1016,7 +1016,7 @@ func (k *Kernel) rematerialize(moved map[int]bool) bool {
 				first = rp
 			}
 		}
-		if ok && first > p && (at < 0 || first < at) {
+		if ok && first > p && (at < 0 || first > at) {
 			best, at = i, first
 		}
 	}

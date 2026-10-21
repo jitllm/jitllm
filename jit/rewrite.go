@@ -638,16 +638,13 @@ func (n *Kernel) depth(i int, memo map[int]int) int {
 }
 
 // evalArgs is node nd's operands in the order its code evaluates them: the
-// deeper first, the earlier of two alike; an fma's addend first.
+// deeper first, the earlier of two alike, an fma's addend the earliest.
 func (n *Kernel) evalArgs(nd *Node, memo map[int]int) []*int {
 	args := n.args(nd)
 	if nd.Op == OpFma {
 		args = []*int{&nd.C, &nd.A, &nd.B}
 	}
 	out := append([]*int(nil), args...)
-	if nd.Op == OpFma {
-		return out
-	}
 	for i := 1; i < len(out); i++ {
 		for j := i; j > 0 && n.depth(*out[j], memo) > n.depth(*out[j-1], memo); j-- {
 			out[j], out[j-1] = out[j-1], out[j]
