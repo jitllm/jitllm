@@ -32,6 +32,9 @@ func (w *wbuf) str(s string) { w.u32(uint32(len(s))); w.b = append(w.b, s...) }
 type rbuf struct {
 	b   []byte
 	err error
+	// all, where set, is the section as one string: str slices it rather
+	// than allocating each string apart.
+	all string
 }
 
 // want is the one bounds check. A container is untrusted input: every
@@ -85,7 +88,13 @@ func (r *rbuf) str() string {
 	if !r.want(n) {
 		return ""
 	}
-	s := string(r.b[:n])
+	var s string
+	if r.all != "" {
+		at := len(r.all) - len(r.b)
+		s = r.all[at : at+n]
+	} else {
+		s = string(r.b[:n])
+	}
 	r.b = r.b[n:]
 	return s
 }
@@ -732,7 +741,7 @@ func decodeVocab(b []byte) (*Vocab, error) {
 	if len(b) == 0 {
 		return nil, nil
 	}
-	r := &rbuf{b: b}
+	r := &rbuf{b: b, all: string(b)}
 	v := &Vocab{Kind: VocabKind(r.u8())}
 	if n := r.count(4); n > 0 {
 		v.Tokens = make([]string, n)
