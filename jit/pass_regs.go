@@ -48,6 +48,9 @@ type Regs struct {
 	// counts in the second counter or the first of these free, set as the
 	// pass starts.
 	Walks []int
+	// Lanes, where set, is 1 + the register a lane sum, maximum or minimum
+	// takes for its scratch where it is free.
+	Lanes int
 }
 
 func (Regs) Name() string { return "regs" }
@@ -677,6 +680,9 @@ func (b *binder86) vectors() error {
 		}
 		if nd.Op == OpHSum || nd.Op == OpHMax || nd.Op == OpHMin {
 			t := lowest(0, hs[i])
+			if r := b.p.Lanes - 1; r >= 0 && !busy[r] && !reserved[r] {
+				t = r
+			}
 			if t < 0 {
 				return errors.New("no register for a lane sum")
 			}
