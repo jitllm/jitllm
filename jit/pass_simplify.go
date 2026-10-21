@@ -155,7 +155,7 @@ func (k *Kernel) foldDecided() bool {
 	}
 	for i := range k.Nodes {
 		nd := k.Nodes[i]
-		if nd.Type == ir.F32 && nd.Op != OpSelect {
+		if nd.Type == ir.F32 && nd.Op != OpSelect && nd.Op != OpBitcast {
 			continue
 		}
 		a, b := nd.A, nd.B
@@ -196,6 +196,12 @@ func (k *Kernel) foldDecided() bool {
 				to(i, a)
 			} else if x, ok := k.multipleOf(a, b); ok {
 				to(i, x)
+			}
+		case OpBitcast:
+			if x := k.Nodes[a]; nd.Type == ir.F32 && x.Op == OpLoad && x.Type == ir.U32 && k.uses(a) == 1 && k.Bufs[x.Buf].Operand.Kind == OperandTable {
+				x.Type = ir.F32
+				k.Nodes[i] = x
+				changed = true
 			}
 		case OpShr:
 			if x := k.Nodes[a]; x.Op == OpShr && k.Nodes[x.B].Op == OpConst && k.Nodes[b].Op == OpConst {

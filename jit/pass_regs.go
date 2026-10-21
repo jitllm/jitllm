@@ -22,8 +22,8 @@ import (
 // goes to nothing else; and a register that held a sum goes to no value of
 // a loop that runs after the sum's. A pair's later head takes its first
 // head's registers, moved past them. Where the floats do not fit, a constant
-// each loop reads once a trip is loaded where each reads it, the earliest
-// read first, until they do.
+// the loops read is loaded where each read is, the earliest read first,
+// until they do.
 type Regs struct {
 	Fields   map[int]int
 	Spare    []int
@@ -326,18 +326,52 @@ func (k *Kernel) needsVector(i int) bool {
 }
 
 // vectorWords is the words held in vector registers: the halves a float is
-// narrowed to, what is made from them, and the constants they are made
-// with.
+// narrowed to, the integers a float is rounded or converted to or from and
+// a float's bits, masks, what is made from them, what they are made of, and
+// the constants they are made with.
 func (k *Kernel) vectorWords() map[int]bool {
 	out := map[int]bool{}
+	data := func(i int) bool {
+		nd := k.Nodes[i]
+		return nd.Type != ir.F32 && nd.Op != OpParam && nd.Op != OpIter && nd.Op != OpLength && nd.Op != OpSpan && nd.Op != OpCoord
+	}
+	for i, nd := range k.Nodes {
+		switch {
+		case nd.Op == OpCvtF32 || nd.Op == OpBitcast && nd.Type == ir.F32:
+			if data(nd.A) && k.Nodes[nd.A].Op != OpConst {
+				out[nd.A] = true
+			}
+		case nd.Op == OpBitcast || nd.Op == OpCvtI32:
+			if k.Nodes[nd.A].Type == ir.F32 {
+				out[i] = true
+			}
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for i := range k.Nodes {
+			if !out[i] {
+				continue
+			}
+			nd := k.Nodes[i]
+			if nd.Op == OpLoad || nd.Op == OpFold {
+				continue
+			}
+			for _, a := range k.args(&nd) {
+				if data(*a) && k.Nodes[*a].Op != OpConst && !out[*a] && k.Nodes[*a].Type != ir.Pred {
+					out[*a], changed = true, true
+				}
+			}
+		}
+	}
 	for changed := true; changed; {
 		changed = false
 		for i, nd := range k.Nodes {
 			if out[i] || nd.Type == ir.F32 {
 				continue
 			}
-			v := nd.Op == OpHalf || nd.Op == OpRoundI32 || nd.Op == OpLess && k.Nodes[nd.A].Type == ir.F32
-			if !v && (nd.Op == OpAnd || nd.Op == OpGtW || nd.Op == OpAndNot || nd.Type == ir.I32 && nd.Op != OpConst) {
+			v := nd.Op == OpHalf || nd.Op == OpRoundI32 || nd.Op == OpLess && (k.Nodes[nd.A].Type == ir.F32 || out[nd.A] || out[nd.B])
+			if !v && (nd.Op == OpAnd || nd.Op == OpGtW || nd.Op == OpAndNot || nd.Op == OpXor || nd.Op == OpShr || nd.Op == OpShl || (nd.Type == ir.I32 || nd.Type == ir.U32) && nd.Op != OpConst && nd.Op != OpLoad) {
 				for _, a := range k.args(&nd) {
 					v = v || out[*a]
 				}
@@ -501,7 +535,7 @@ func (b *binder86) vectors() error {
 		if err := give(i, reg); err != nil {
 			return err
 		}
-		if nd.Op == OpSelect {
+		if nd.Op == OpSelect || nd.Op == OpZip {
 			t := lowest(0, hs[i])
 			if t < 0 {
 				return errors.New("no register for a select")
@@ -582,9 +616,9 @@ func (k *Kernel) chains() map[int]int {
 	return out
 }
 
-// rematerialize loads a constant inside each loop that reads it once a
-// trip, where it is read, rather than once before the loops: the constant
-// read first in its loops' trips. False where none is left to move.
+// rematerialize loads a constant where each of its readers in the loops
+// reads it, rather than once before the loops: the constant read first in
+// its loops' trips. False where none is left to move.
 func (k *Kernel) rematerialize(moved map[int]bool) bool {
 	pos := map[int]int{}
 	for p, e := range k.Seq {
@@ -610,16 +644,14 @@ func (k *Kernel) rematerialize(moved map[int]bool) bool {
 	best, at := -1, -1
 	for i, nd := range k.Nodes {
 		p, in := pos[i]
-		if !in || moved[i] || nd.Op != OpLoad || k.Bufs[nd.Buf].Operand.Kind != OperandConsts || hs[i] >= 0 {
+		if o := k.Bufs[nd.Buf].Operand.Kind; !in || moved[i] || nd.Op != OpLoad || o != OperandConsts && o != OperandTable || hs[i] >= 0 {
 			continue
 		}
 		rs := readers(i)
-		perLoop := map[int]int{}
 		ok := len(rs) > 0
 		first := -1
 		for _, r := range rs {
-			perLoop[hs[r]]++
-			if hs[r] < 0 || perLoop[hs[r]] > 1 {
+			if hs[r] < 0 {
 				ok = false
 			}
 			if rp := pos[r]; first < 0 || rp < first {

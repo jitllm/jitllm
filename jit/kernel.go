@@ -236,6 +236,9 @@ const (
 	OpGtW
 	// OpAndNot is A with the bits of B cleared.
 	OpAndNot
+	// OpZip is A's and B's lanes alternating, A first: the low half of the
+	// pairs where Imm is 0, the high where 1.
+	OpZip
 	// OpRoundI32 is float A rounded to the nearest integer, ties to even.
 	OpRoundI32
 	// OpSpan is, for a call that runs one span of a range's positions
@@ -347,7 +350,7 @@ func (n *Kernel) elements() int {
 
 var opNames = [...]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
 	"less", "select", "sqrt", "exp", "shl", "shr", "and", "xor", "cvtf32", "cvti32", "thread", "groupsum", "groupmax", "exchange",
-	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "round", "span"}
+	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "round", "span"}
 
 func (o Op) String() string {
 	if int(o) < len(opNames) {

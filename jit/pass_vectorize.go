@@ -10,7 +10,9 @@ import (
 // elements of its iteration Lanes iterations a trip, one in each lane, and
 // the trips that do not fill a vector after it in a loop of one a trip. A
 // sum the loop carries becomes a sum in each lane, the tail adding into its
-// first lane, and the lanes are summed where the sum is read.
+// first lane, and the lanes are summed where the sum is read. A loop that
+// stores a pair of values at 2i and 2i+1 stores the two vectors' lanes
+// zipped, the low pairs then the high.
 type Vectorize struct {
 	Lanes int
 }
@@ -48,12 +50,13 @@ func (k *Kernel) vectorizable(c int) bool {
 	}
 	it := k.iterOf(c)
 	stores := 0
+	_, paired := k.pairStores(c)
 	for _, s := range k.Stores {
 		if s.At != c || s.Barrier || s.Run {
 			continue
 		}
 		stores++
-		if !k.consecutive(s.Buf, s.Ix, s.Ax, it, c) {
+		if !paired && !k.consecutive(s.Buf, s.Ix, s.Ax, it, c) {
 			return false
 		}
 	}
@@ -162,6 +165,39 @@ func (k *Kernel) vectorize(c, L int) {
 		stores = append(stores, n)
 	}
 	k.Stores = append(k.Stores[:last+1:last+1], append(stores, k.Stores[last+1:]...)...)
+	if pair, ok := k.pairStores(c); ok {
+		a, b := k.Stores[pair[0]], k.Stores[pair[1]]
+		lo := Store{Buf: a.Buf, At: c, Ix: a.Ix, Val: k.add(Node{Op: OpZip, Type: ir.F32, A: a.Val, B: b.Val})}
+		hi := Store{Buf: a.Buf, At: c, Ix: k.bin(OpAdd, U, a.Ix, k.u32(L)), Val: k.add(Node{Op: OpZip, Type: ir.F32, A: a.Val, B: b.Val, Imm: 1})}
+		k.Stores[pair[0]], k.Stores[pair[1]] = lo, hi
+	}
+}
+
+// pairStores is loop c's two stores, where they are a pair: one buffer at
+// 2i and 2i+1 for iteration i, flat.
+func (k *Kernel) pairStores(c int) ([2]int, bool) {
+	it := k.iterOf(c)
+	var at []int
+	for i, s := range k.Stores {
+		if s.At == c && !s.Barrier && !s.Run {
+			at = append(at, i)
+		}
+	}
+	if it < 0 || len(at) != 2 || k.Stores[at[0]].Ax != nil || k.Stores[at[1]].Ax != nil ||
+		k.Bufs[k.Stores[at[0]].Buf].Operand != k.Bufs[k.Stores[at[1]].Buf].Operand {
+		return [2]int{}, false
+	}
+	g := newAlg(k)
+	x, y := g.of(k.Stores[at[0]].Ix), g.of(k.Stores[at[1]].Ix)
+	w, rx := g.coef(x, g.id(atom{node: it}))
+	if two, ok := w.constant(); !ok || two != 2 || g.moves(rx, c) {
+		return [2]int{}, false
+	}
+	y.add(x, -1)
+	if one, ok := g.merged(y).constant(); !ok || one != 1 {
+		return [2]int{}, false
+	}
+	return [2]int{at[0], at[1]}, true
 }
 
 // broadcastInto puts each value made from a lane sum that vector loop c

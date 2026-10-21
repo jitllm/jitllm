@@ -3,7 +3,7 @@ package jit
 // InPlace stores a map's output over an input it reads at the element it
 // writes, of the same shape and type, that no later kernel reads: the
 // output takes the input's storage, in the kernel and in every later
-// kernel that reads it.
+// kernel that reads it, each head's copy of it too.
 type InPlace struct{}
 
 func (InPlace) Name() string { return "inplace" }
@@ -40,14 +40,25 @@ func (p InPlace) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			continue
 		}
 		from, to := ob.Operand, k.Bufs[in].Operand
+		same := func(o Operand) (int, bool) {
+			c := o.Copy
+			o.Copy = from.Copy
+			return c, o == from
+		}
 		for j := i; j < len(out); j++ {
-			if !usesOperand(out[j], from) {
+			touched := false
+			for _, b := range out[j].Bufs {
+				_, ok := same(b.Operand)
+				touched = touched || ok
+			}
+			if !touched {
 				continue
 			}
 			m := out[j].clone()
 			for b := range m.Bufs {
-				if m.Bufs[b].Operand == from {
+				if c, ok := same(m.Bufs[b].Operand); ok {
 					m.Bufs[b].Operand = to
+					m.Bufs[b].Operand.Copy = c
 				}
 			}
 			m.Passes = append(m.Passes, p.Name())

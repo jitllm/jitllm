@@ -175,6 +175,10 @@ func (e *x86Lowerer) node(i int) {
 	case OpGtW:
 		a.VPCMPGTWx(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 	case OpLess:
+		if k.Nodes[nd.A].Type != ir.F32 {
+			a.VPCMPGTD(e.reg(i), e.reg(nd.B), e.reg(nd.A))
+			return
+		}
 		a.VCMPPS(e.reg(i), e.reg(nd.A), e.reg(nd.B), 1)
 	case OpSelect:
 		if nd.Tmp == 0 {
@@ -197,6 +201,14 @@ func (e *x86Lowerer) node(i int) {
 		}
 		if e.words[i] && nd.Op == OpShl {
 			a.VPSLLD(e.reg(i), e.reg(nd.A), byte(k.Nodes[nd.B].Imm))
+			return
+		}
+		if e.words[i] && nd.Op == OpShr {
+			a.VPSRLD(e.reg(i), e.reg(nd.A), byte(k.Nodes[nd.B].Imm))
+			return
+		}
+		if e.words[i] && nd.Op == OpMul {
+			a.VPMULLD(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 			return
 		}
 		if nd.Type != ir.F32 {
@@ -237,8 +249,20 @@ func (e *x86Lowerer) node(i int) {
 		a.VSQRTPS(e.reg(i), e.reg(nd.A))
 	case OpBroadcast:
 		a.VBROADCASTSSReg(e.reg(i), e.reg(nd.A))
+	case OpZip:
+		if nd.Tmp == 0 {
+			e.fail("a zip with no scratch register")
+		}
+		t := x86.Reg(nd.Tmp - 1)
+		a.VUNPCKLPS(t, e.reg(nd.A), e.reg(nd.B))
+		a.VUNPCKHPS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+		a.VPERM2F128(e.reg(i), t, e.reg(i), byte(0x20+0x11*nd.Imm))
 	case OpRoundI32:
 		a.VCVTPS2DQ(e.reg(i), e.reg(nd.A))
+	case OpCvtI32:
+		a.VCVTTPS2DQ(e.reg(i), e.reg(nd.A))
+	case OpXor:
+		a.VPXOR(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 	case OpCvtF32:
 		a.VCVTDQ2PS(e.reg(i), e.reg(nd.A))
 	case OpFma:

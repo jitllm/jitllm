@@ -739,3 +739,13 @@ func (a *Buf) VPANDNx(dst, src1, src2 Reg) { a.vopL(0xDF, p66, m0F, 0, false, ds
 func (a *Buf) VPCMPGTWx(dst, src1, src2 Reg) {
 	a.vopL(0x65, p66, m0F, 0, false, dst, src1, src2)
 }
+
+func (a *Buf) VUNPCKLPS(dst, src1, src2 Reg) { a.vop(0x14, pNone, m0F, 0, dst, src1, src2) }
+func (a *Buf) VUNPCKHPS(dst, src1, src2 Reg) { a.vop(0x15, pNone, m0F, 0, dst, src1, src2) }
+
+func (a *Buf) VPERM2F128(dst, src1, src2 Reg, imm byte) {
+	a.vex(dst, src1, src2, noIndex, true, p66, m0F3A, 0)
+	a.u8(0x06)
+	a.modrmReg(dst, src2)
+	a.u8(imm)
+}
