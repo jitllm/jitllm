@@ -264,7 +264,7 @@ func TestComposedRoPERuns(t *testing.T) {
 
 // TestComposedSoftmaxRuns runs the host's fused softmax kernel on one head
 // at offset zero, its counts the vector and tail of the row's length, held
-// to the softmax: the exponentials of the row less its maximum, and each
+// to the softmax in place: each exponential of the row less its maximum
 // over their sum.
 func TestComposedSoftmaxRuns(t *testing.T) {
 	plan, err := composed(t, *boardModel, func(jit.Part) jit.Device { return host })
@@ -290,11 +290,10 @@ func TestComposedSoftmaxRuns(t *testing.T) {
 	worst := 0.0
 	for _, n := range []int{1, 3, 5, 7, 8, 9, 16, 17, 100} {
 		dots := make([]float32, n+8)
-		for i := range dots {
+		for i := range dots[:n] {
 			dots[i] = float32(4 * rng.NormFloat64())
 		}
-		exps := make([]float32, n+8)
-		normed := make([]float32, n+8)
+		row := append([]float32(nil), dots...)
 		block := make([]uint64, 64)
 		for _, a := range code.Args {
 			var p unsafe.Pointer
@@ -309,21 +308,15 @@ func TestComposedSoftmaxRuns(t *testing.T) {
 				t.Fatalf("argument word %d is a value the test does not compute", a.Field)
 			case a.Words != nil:
 				p = unsafe.Pointer(&a.Words[0])
-			case a.Operand.Name == "attn.dots":
-				p = unsafe.Pointer(&dots[0])
-			case a.Operand.Name == "attn.weights":
-				p = unsafe.Pointer(&exps[0])
-			case a.Operand.Name == "attn.normed":
-				p = unsafe.Pointer(&normed[0])
+			case a.Operand.Name == "attn.dots" && code.Writes(a.Operand):
+				p = unsafe.Pointer(&row[0])
 			default:
-				t.Fatalf("argument word %d binds %q", a.Field, a.Operand.Name)
+				t.Fatalf("argument word %d binds %q, not the row in place", a.Field, a.Operand.Name)
 			}
 			block[a.Field/8] = uint64(uintptr(p))
 		}
 		c.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
-		runtime.KeepAlive(dots)
-		runtime.KeepAlive(exps)
-		runtime.KeepAlive(normed)
+		runtime.KeepAlive(row)
 		runtime.KeepAlive(code)
 		m := math.Inf(-1)
 		for _, x := range dots[:n] {
@@ -334,16 +327,15 @@ func TestComposedSoftmaxRuns(t *testing.T) {
 			sum += math.Exp(float64(x) - m)
 		}
 		for i := range n {
-			e := math.Exp(float64(dots[i]) - m)
-			for _, d := range []float64{math.Abs(float64(exps[i])-e) / e, math.Abs(float64(normed[i])-e/sum) / (e / sum)} {
-				if d > 1e-5 || math.IsNaN(d) {
-					t.Errorf("n %d position %d: exp %v normed %v, want %v %v", n, i, exps[i], normed[i], e, e/sum)
-				}
-				worst = max(worst, d)
+			w := math.Exp(float64(dots[i])-m) / sum
+			d := math.Abs(float64(row[i])-w) / w
+			if d > 1e-5 || math.IsNaN(d) {
+				t.Errorf("n %d position %d: %v, want %v", n, i, row[i], w)
 			}
+			worst = max(worst, d)
 		}
-		for i := n; i < len(normed); i++ {
-			if normed[i] != 0 || exps[i] != 0 {
+		for i := n; i < len(row); i++ {
+			if row[i] != dots[i] {
 				t.Errorf("n %d: position %d past the row written", n, i)
 			}
 		}

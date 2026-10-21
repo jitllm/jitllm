@@ -59,6 +59,7 @@ func cpuProfile() Profile {
 		Axpy{},
 		Exp{},
 		FMA{},
+		FirstTerm{},
 		Vectorize{Lanes: 8},
 		InPlace{},
 		Unroll{Vectors: 4},
