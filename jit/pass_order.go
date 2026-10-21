@@ -327,10 +327,11 @@ func (o *orderer) scope(c int) {
 		if t := o.tailOf(d); t >= 0 {
 			o.startsTogether(c, d, t)
 		}
-		for i := range k.Nodes {
-			if h, ok := o.home[i]; ok && h == c && k.Nodes[i].Op != OpFold && !k.isZero(i) && o.reads(d, i) && !o.counts(d)[i] {
-				o.need(i, c)
-			}
+		for _, i := range o.byFirstRead(d, func(i int) bool {
+			h, ok := o.home[i]
+			return ok && h == c && k.Nodes[i].Op != OpFold && !k.isZero(i) && o.reads(d, i) && !o.counts(d)[i]
+		}) {
+			o.need(i, c)
 		}
 		o.countsFor(c, d)
 		o.loop(d)
@@ -514,6 +515,37 @@ func (o *orderer) loop(d int) {
 	o.seq = append(o.seq, Entry{Kind: EntryLoop, I: d})
 	o.scope(d)
 	o.seq = append(o.seq, Entry{Kind: EntryEnd, I: d})
+}
+
+// byFirstRead is the nodes keep admits in the order loop d's code first
+// reads them: by the depth of their shallowest reader in d, a node's
+// index between alike.
+func (o *orderer) byFirstRead(d int, keep func(int) bool) []int {
+	k := o.k
+	memo := map[int]int{}
+	first := map[int]int{}
+	var out []int
+	for i := range k.Nodes {
+		if !keep(i) {
+			continue
+		}
+		out = append(out, i)
+		first[i] = -1
+		for j, nd := range k.Nodes {
+			if h, ok := o.home[j]; !ok || h < 0 || !k.within(h, d) {
+				continue
+			}
+			for _, a := range k.args(&nd) {
+				if *a == i {
+					if dp := k.depth(j, memo); first[i] < 0 || dp < first[i] {
+						first[i] = dp
+					}
+				}
+			}
+		}
+	}
+	slices.SortStableFunc(out, func(a, b int) int { return first[a] - first[b] })
+	return out
 }
 
 // tailOf is the loop that continues vector loop d, -1 for none.

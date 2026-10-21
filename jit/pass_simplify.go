@@ -222,6 +222,9 @@ func (k *Kernel) foldDecided() bool {
 		case OpBitcast:
 			if x := k.Nodes[a]; nd.Type == ir.F32 && x.Op == OpLoad && x.Type == ir.U32 && k.uses(a) == 1 && k.Bufs[x.Buf].Operand.Kind == OperandTable {
 				x.Type = ir.F32
+				if nd.Hint > 0 {
+					x.Hint = nd.Hint
+				}
 				k.Nodes[i] = x
 				changed = true
 			} else if x.Type == nd.Type {

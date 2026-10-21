@@ -418,7 +418,7 @@ func (n *Kernel) String() string {
 		fmt.Fprintf(&b, "  buf %d kind %d %s elem %s shape %v size %d\n", i, bf.Kind, bf.Operand.Name, bf.Elem, bf.Shape, bf.Size)
 	}
 	for i, nd := range n.Nodes {
-		fmt.Fprintf(&b, "  %d: %s.%s a %d b %d c %d at %d buf %d imm %d ax %v reg %d tmp %d mem %v ptr %d\n", i, nd.Op, nd.Type, nd.A, nd.B, nd.C, nd.At, nd.Buf, nd.Imm, nd.Ax, nd.Reg, nd.Tmp, nd.Mem, nd.Ptr)
+		fmt.Fprintf(&b, "  %d: %s.%s a %d b %d c %d at %d buf %d imm %d ax %v reg %d tmp %d mem %v ptr %d hint %d share %d\n", i, nd.Op, nd.Type, nd.A, nd.B, nd.C, nd.At, nd.Buf, nd.Imm, nd.Ax, nd.Reg, nd.Tmp, nd.Mem, nd.Ptr, nd.Hint, nd.Share)
 	}
 	for _, s := range n.Stores {
 		fmt.Fprintf(&b, "  store buf %d ix %d ax %v val %d at %d barrier %v run %v\n", s.Buf, s.Ix, s.Ax, s.Val, s.At, s.Barrier, s.Run)

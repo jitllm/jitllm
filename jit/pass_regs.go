@@ -52,6 +52,11 @@ type Regs struct {
 	// Lanes are the registers a lane sum, maximum or minimum takes for its
 	// scratch, the first of them free.
 	Lanes []int
+	// Hoist, where set, is the registers below which a value made outside
+	// every loop and read in one is held, the rest the loops' own; a
+	// constant the loops read is loaded where it is read where they do not
+	// fit.
+	Hoist int
 	// Scalars, where set, is 1 + the first of the registers a constant read
 	// outside every loop takes, each its own, upward; Keep is 1 + the
 	// register of the zero a tail keeps lanes with.
@@ -545,6 +550,22 @@ func (b *binder86) vectors() error {
 			span[e.I] = [2]int{span[e.I][0], p}
 		}
 	}
+	depth := make([]int, len(k.Seq))
+	for p, d := 0, 0; p < len(k.Seq); p++ {
+		switch k.Seq[p].Kind {
+		case EntryLoop:
+			d++
+		case EntryEnd:
+			d--
+		}
+		depth[p] = d
+	}
+	var hinted []int
+	for i, nd := range k.Nodes {
+		if _, made := b.def[i]; made && nd.Hint > 0 {
+			hinted = append(hinted, i)
+		}
+	}
 	reserved := map[int]bool{}
 	bar := func(i int) {
 		clear(reserved)
@@ -554,6 +575,11 @@ func (b *binder86) vectors() error {
 				for r := range rs {
 					reserved[r] = true
 				}
+			}
+		}
+		for _, h := range hinted {
+			if h != i && d < b.def[h] && b.def[h] <= l {
+				reserved[k.Nodes[h].Hint-1] = true
 			}
 		}
 	}
@@ -704,6 +730,18 @@ func (b *binder86) vectors() error {
 				reg = lowest(chain[i], hs[i])
 			}
 			free(pos, innermost(hs[i]))
+			if h := b.p.Hoist; h > 0 && reg >= h && depth[pos] == 0 && k.readInLoop(i) {
+				reg = -1
+				for r := range h {
+					if !busy[r] && !reserved[r] {
+						reg = r
+						break
+					}
+				}
+				if reg < 0 {
+					return errors.New("more values held across the loops than the registers below the body's")
+				}
+			}
 		}
 		if err := give(i, reg); err != nil {
 			return err
@@ -1002,7 +1040,7 @@ func (k *Kernel) rematerialize(moved map[int]bool) bool {
 	best, at := -1, -1
 	for i, nd := range k.Nodes {
 		p, in := pos[i]
-		if o := k.Bufs[nd.Buf].Operand.Kind; !in || moved[i] || nd.Op != OpLoad || o != OperandConsts && o != OperandTable || hs[i] >= 0 {
+		if o := k.Bufs[nd.Buf].Operand.Kind; !in || moved[i] || nd.Op != OpLoad || nd.Hint > 0 || o != OperandConsts && k.Bufs[nd.Buf].Words == nil || hs[i] >= 0 {
 			continue
 		}
 		rs := readers(i)
@@ -1075,6 +1113,22 @@ func (k *Kernel) reload(best int, moved map[int]bool) {
 // residents loads the shared constant block's resident words by word as
 // the call starts, after its argument words, and each other word, and a
 // resident word read outside every loop, where it is read.
+// readInLoop reports whether a node homed in a loop reads node i.
+func (k *Kernel) readInLoop(i int) bool {
+	hs := k.homes()
+	for j := range k.Nodes {
+		if j >= len(hs) || hs[j] < 0 {
+			continue
+		}
+		for _, a := range k.args(&k.Nodes[j]) {
+			if *a == i {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // madeCount is the loop node i is the made count of, as madeCounts finds
 // them, -1 for none.
 func (k *Kernel) madeCount(i int) int {
