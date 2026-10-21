@@ -209,6 +209,8 @@ func (e *x86Lowerer) node(i int) {
 		a.VPANDN(e.reg(i), e.reg(nd.B), e.reg(nd.A))
 	case OpOr:
 		a.VPOR(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+	case OpSar:
+		a.VPSRAD(e.reg(i), e.reg(nd.A), byte(k.Nodes[nd.B].Imm))
 	case OpEq:
 		a.VCMPPS(e.reg(i), e.reg(nd.A), e.reg(nd.B), 0)
 	case OpHMax, OpHMin:

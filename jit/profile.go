@@ -63,6 +63,8 @@ func cpuProfile() Profile {
 		Unroll{Vectors: 4},
 		Chains{N: 4},
 		Simplify{ConstLast: true},
+		XorSwap{},
+		BitMask{},
 		BitSelect{},
 		Induction{},
 		Consts{Shared: mainBlock()},

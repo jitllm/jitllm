@@ -386,7 +386,7 @@ func (k *Kernel) vectorWords() map[int]bool {
 					continue
 				}
 				v := nd.Op == OpHalf || nd.Op == OpRoundI32 || nd.Op == OpLess && (k.Nodes[nd.A].Type == ir.F32 || out[nd.A] || out[nd.B])
-				if !v && (nd.Op == OpAnd || nd.Op == OpGtW || nd.Op == OpAndNot || nd.Op == OpXor || nd.Op == OpShr || nd.Op == OpShl || (nd.Type == ir.I32 || nd.Type == ir.U32) && nd.Op != OpConst && nd.Op != OpLoad) {
+				if !v && (nd.Op == OpAnd || nd.Op == OpGtW || nd.Op == OpAndNot || nd.Op == OpXor || nd.Op == OpShr || nd.Op == OpShl || nd.Op == OpSar || (nd.Type == ir.I32 || nd.Type == ir.U32) && nd.Op != OpConst && nd.Op != OpLoad) {
 					for _, a := range k.args(&nd) {
 						v = v || out[*a]
 					}
@@ -407,7 +407,7 @@ func (k *Kernel) vectorWords() map[int]bool {
 			continue
 		}
 		for x, a := range k.args(&nd) {
-			if k.Nodes[*a].Op == OpConst && k.Nodes[*a].Type != ir.F32 && !(x == 1 && (nd.Op == OpShl || nd.Op == OpShr)) {
+			if k.Nodes[*a].Op == OpConst && k.Nodes[*a].Type != ir.F32 && !(x == 1 && (nd.Op == OpShl || nd.Op == OpShr || nd.Op == OpSar)) {
 				out[*a] = true
 			}
 		}
@@ -571,7 +571,17 @@ func (b *binder86) vectors() error {
 			return err
 		}
 		if nd.Op == OpSelect || nd.Op == OpZip {
+			var held []int
+			for _, a := range k.args(&nd) {
+				if r := k.Nodes[*a].Reg - 1; r >= 0 && k.needsVector(*a) && !busy[r] {
+					busy[r] = true
+					held = append(held, r)
+				}
+			}
 			t := lowest(0, hs[i])
+			for _, r := range held {
+				busy[r] = false
+			}
 			if t < 0 {
 				return errors.New("no register for a select")
 			}
