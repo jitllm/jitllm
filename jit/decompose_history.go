@@ -58,8 +58,8 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 		Stores: []PrimStore{{Out: out, Ax: []int{r, at}, Ext: sh, Value: y0}, {Out: out, Ax: []int{r, at2}, Ext: sh, Value: y1}}}}, nil
 }
 
-// decomposeKVAppend writes each row's key into its page of the key pool, a
-// page [width][page], and its value into the value pool, a page [page][width].
+// decomposeKVAppend writes each row's key and value into its page of the key
+// and value pools, each a page of positions of the width.
 func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.In) != 2 || c.Step.Page <= 0 {
 		return nil, fmt.Errorf("a history append of %d values over pages of %d", len(o.In), c.Step.Page)
@@ -82,15 +82,15 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 		var x exprs
 		d := x.coord(1)
 		pid, off := slot(&x)
-		var ix int
-		if i == 0 {
-			ix = x.op(OpAdd, U, x.op(OpMul, U, pid, x.u(uint32(page*w))), x.op(OpAdd, U, x.op(OpMul, U, d, x.u(uint32(page))), off))
-		} else {
-			ix = x.op(OpAdd, U, x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, pid, x.u(uint32(page))), off), x.u(uint32(w))), d)
-		}
 		val := x.at(0, sh, x.coord(0), d)
 		prims = append(prims, Prim{Kind: PrimMap, Shape: sh, In: []Operand{c.value(v), tableRows, tablePages}, Expr: x.e,
-			Stores: []PrimStore{{Out: pool, Index: ix, Value: val}}})
+			Stores: []PrimStore{{Out: pool, Ax: []int{pid, off, d}, Ext: []int{c.pages(), page, w}, Value: val}}})
 	}
 	return prims, nil
+}
+
+// pages bounds the pages of the history a step reads: every row's whole
+// history at the step's longest.
+func (c *Context) pages() int {
+	return c.Step.Rows * ((c.Step.Keys + c.Step.Page - 1) / c.Step.Page)
 }

@@ -63,10 +63,10 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	pos, first := position(&dx)
 	pid, off := page(&dx, held(&dx, pos, first))
 	kh := dx.op(OpDiv, U, h, dx.u(uint32(gqa)))
-	kat := dx.op(OpAdd, U, dx.op(OpMul, U, pid, dx.u(uint32(pg*kw))),
-		dx.op(OpAdd, U, dx.op(OpMul, U, dx.op(OpAdd, U, dx.op(OpMul, U, kh, dx.u(uint32(D))), d), dx.u(uint32(pg))), off))
+	pool := []int{c.pages(), pg, kw}
+	kd := dx.op(OpAdd, U, dx.op(OpMul, U, kh, dx.u(uint32(D))), d)
 	qat := dx.op(OpAdd, U, dx.op(OpMul, U, dx.op(OpAdd, U, dx.op(OpMul, U, dx.coord(0), dx.u(uint32(H))), h), dx.u(uint32(D))), d)
-	dx.op(OpMul, F, dx.load(0, qat), dx.load(3, kat))
+	dx.op(OpMul, F, dx.load(0, qat), dx.at(3, pool, pid, off, kd))
 
 	var sx exprs
 	spos, sfirst := position(&sx)
@@ -92,10 +92,9 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	vpos, vfirst := position(&vx)
 	vpid, voff := page(&vx, held(&vx, vpos, vfirst))
 	vkh := vx.op(OpDiv, U, vh, vx.u(uint32(gqa)))
-	vat := vx.op(OpAdd, U, vx.op(OpMul, U, vx.op(OpAdd, U, vx.op(OpMul, U, vpid, vx.u(uint32(pg))), voff), vx.u(uint32(kw))),
-		vx.op(OpAdd, U, vx.op(OpMul, U, vkh, vx.u(uint32(D))), vd))
+	vd2 := vx.op(OpAdd, U, vx.op(OpMul, U, vkh, vx.u(uint32(D))), vd)
 	w := vx.at(0, keys, vx.coord(0), vh, vk)
-	vx.op(OpMul, F, w, vx.load(3, vat))
+	vx.op(OpMul, F, w, vx.at(3, pool, vpid, voff, vd2))
 
 	var ox exprs
 	nv := ox.at(0, dims, ox.coord(0), ox.coord(1), ox.coord(2))
