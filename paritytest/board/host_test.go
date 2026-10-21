@@ -154,10 +154,12 @@ func TestBoardHost(t *testing.T) {
 		t.Logf("not formed: %v", err)
 	}
 	var mine [][]byte
+	var passes [][]string
 	for _, pp := range plan.Parts {
 		for _, c := range pp.Codes {
 			if c.CPU != nil {
 				mine = append(mine, c.CPU)
+				passes = append(passes, c.Passes)
 			}
 		}
 	}
@@ -165,6 +167,7 @@ func TestBoardHost(t *testing.T) {
 		name           string
 		total, matched int
 		same           bool
+		passes         []string
 	}
 	var rows []row
 	same, total, matched := 0, 0, 0
@@ -173,13 +176,13 @@ func TestBoardHost(t *testing.T) {
 		want := disassemble(t, c.Code)
 		r.total = len(want)
 		var near []string
-		for _, m := range mine {
+		for x, m := range mine {
 			if bytes.Equal(m, c.Code) {
 				r.same = true
 			}
 			got := disassemble(t, m)
 			if n := lcs(want, got); n > r.matched || near == nil {
-				r.matched, near = max(r.matched, n), got
+				r.matched, near, r.passes = max(r.matched, n), got, passes[x]
 			}
 		}
 		if *hostDiff != "" && strings.HasPrefix(r.name, *hostDiff) {
@@ -207,7 +210,7 @@ func TestBoardHost(t *testing.T) {
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].total-rows[i].matched > rows[j].total-rows[j].matched })
 	for _, r := range rows {
-		t.Logf("%-22s %4d of %4d instructions identical=%v", r.name, r.matched, r.total, r.same)
+		t.Logf("%-22s %4d of %4d instructions identical=%v passes %v", r.name, r.matched, r.total, r.same, r.passes)
 	}
 	t.Logf("%s on the host (%s): %d of main's %d instructions (%.1f%%), %d of main's %d kernels identical; %d composed kernels",
 		*boardModel, cpu.HostTier(), matched, total, 100*float64(matched)/float64(max(total, 1)), same, len(rows), len(mine))
