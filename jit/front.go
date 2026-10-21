@@ -2,6 +2,7 @@ package jit
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -55,7 +56,7 @@ const stated = jlm.FlagTiedEmbd | jlm.FlagRopeNeox | jlm.FlagGELU
 
 func blockGraph(f *jlm.File, li int) (*graph.Graph, error) {
 	c := f.Config()
-	if c.Flags&^stated != 0 || c.NExpert != 0 || len(c.LayerKinds) != 0 || c.SWAWindow != 0 {
+	if c.Flags&^stated != 0 || c.NExpert != 0 || len(c.LayerKinds) != 0 || c.SWAWindow != 0 || c.YarnFactor != 0 || c.YarnLogMul != 0 {
 		return nil, fmt.Errorf("the container states what the front end does not read (flags %#x)", uint32(c.Flags&^stated))
 	}
 	for _, r := range []jlm.Role{jlm.RoleAttnNorm, jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV, jlm.RoleAttnOut,
@@ -73,9 +74,15 @@ func blockGraph(f *jlm.File, li int) (*graph.Graph, error) {
 	if c.Flags&jlm.FlagGELU != 0 {
 		act = graph.ActGELUTanh
 	}
+	// The score's scale is the container's where it states one, else
+	// 1/sqrt of the head's width.
+	scale := 1 / math.Sqrt(float64(c.HeadDimAt(li)))
+	if c.AttnScale != 0 {
+		scale = float64(c.AttnScale)
+	}
 	d := graph.Dense{Block: li, NEmbd: int(c.NEmbd), NHead: int(c.NHead), NKVHead: int(c.NKVHeadAt(li)),
 		HeadDim: int(c.HeadDimAt(li)), NFFN: int(c.NFFNAt(li)), Eps: float64(c.RMSEps), NRot: int(c.NRot),
-		Base: float64(c.RopeBase), Layout: layout, Act: act}
+		Base: float64(c.RopeBase), Layout: layout, Act: act, Scale: scale}
 	return d.Build(), nil
 }
 
