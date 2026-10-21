@@ -100,6 +100,9 @@ func (k *Kernel) redirectAll(from, to int) {
 	for i := range k.Bufs {
 		re(&k.Bufs[i].Base)
 		re(&k.Bufs[i].Offset)
+		for j := range k.Bufs[i].Dims {
+			re(&k.Bufs[i].Dims[j])
+		}
 	}
 	for i := range k.Args {
 		re(&k.Args[i].Node)
@@ -190,6 +193,11 @@ func (k *Kernel) foldDecided() bool {
 				to(i, a)
 			} else if k.isConst(a, 0) {
 				to(i, a)
+			}
+		case OpShr:
+			if x := k.Nodes[a]; x.Op == OpShr && k.Nodes[x.B].Op == OpConst && k.Nodes[b].Op == OpConst {
+				k.Nodes[i] = Node{Op: OpShr, Type: nd.Type, A: x.A, B: k.u32(int(k.Nodes[x.B].Imm + k.Nodes[b].Imm))}
+				changed = true
 			}
 		case OpRem:
 			if k.isConst(b, 1) || k.isConst(a, 0) {

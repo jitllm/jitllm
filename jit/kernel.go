@@ -41,6 +41,8 @@ type Kernel struct {
 	// Args, where a binding to the call's arguments set them, are the words
 	// a call passes and what the caller computes each from.
 	Args []Arg
+	// Ptrs are the copies of buffers' addresses cursors advance.
+	Ptrs []Ptr
 }
 
 // Arg is the call's argument word at byte offset Field: the address of
@@ -104,19 +106,31 @@ type Loop struct {
 	// Lanes, where a vectorization set it, is the consecutive iterations a
 	// trip covers, one in each lane.
 	Lanes int
+	// Copies, where an unrolling set it, is how many vectors a trip covers,
+	// copy j of the body at iteration j*Lanes on.
+	Copies int
 	// Cursors are the buffers' addresses a trip advances; Reg, where a
 	// register binding set it, is 1 + the register counting the trips.
 	Cursors []Cursor
 	Reg     int
+	// Nonempty, where a guard set it, is a loop the caller never runs for
+	// no trips, entered without a test.
+	Nonempty bool
 }
 
-// Cursor is buffer Buf's address advanced Elems elements a trip: its own
-// register, or where Copy is set a copy taken before the loop's first trip,
-// in register Reg (1 + the register, where a binding set it).
+// Cursor is pointer Ptr of buffer Buf advanced Elems elements a trip: 0 the
+// buffer's address itself, else 1 + the kernel's copy, taken from the
+// buffer's address as the loop starts where Take is set.
 type Cursor struct {
 	Buf, Elems int
-	Copy       bool
-	Reg        int
+	Ptr        int
+	Take       bool
+}
+
+// Ptr is a copy of buffer Buf's address a loop advances in its place, in
+// register Reg (1 + the register, where a binding set it).
+type Ptr struct {
+	Buf, Reg int
 }
 
 type BufKind uint8
@@ -148,6 +162,9 @@ type Buf struct {
 	Reg int
 	// Words is a block of constants' contents, the caller's to supply.
 	Words []uint32
+	// Dims, where a run-time length set them, are 1 + the node of each
+	// extent of Shape the caller passes, 0 for one that is fixed.
+	Dims []int
 }
 
 type Op uint8
@@ -204,6 +221,8 @@ const (
 	// OpLength is a length the caller passes at run time, Imm for this
 	// model.
 	OpLength
+	// OpHSum is the sum of A's lanes.
+	OpHSum
 )
 
 // Node is one value: a scalar, or inside a loop of Lanes a vector of them.
@@ -219,8 +238,12 @@ type Node struct {
 	Imm     int64
 	Ax      []int
 	// Reg, where a register binding set it, is 1 + the register holding
-	// the value.
-	Reg int
+	// the value; a load's Ptr, where a cursor set it, is the pointer it
+	// reads from (see Cursor). Tmp is 1 + a register the value's code
+	// needs besides its own.
+	Reg, Ptr, Tmp int
+	// Mem is a load its one reader takes as a memory operand.
+	Mem bool
 }
 
 // Store writes node Val at index Ix of Bufs[Buf]: each trip of loop At, or
@@ -234,6 +257,8 @@ type Store struct {
 	// Ax, where set, is the coordinates of the buffer's Shape in place of
 	// Ix.
 	Ax []int
+	// Ptr, where a cursor set it, is the pointer the store writes through.
+	Ptr int
 }
 
 func (n *Kernel) add(nd Node) int {
@@ -270,6 +295,10 @@ func (n *Kernel) clone() *Kernel {
 	}
 	c.Seq = append([]Entry(nil), n.Seq...)
 	c.Args = append([]Arg(nil), n.Args...)
+	c.Ptrs = append([]Ptr(nil), n.Ptrs...)
+	for i := range c.Bufs {
+		c.Bufs[i].Dims = append([]int(nil), c.Bufs[i].Dims...)
+	}
 	c.Nodes = append([]Node(nil), n.Nodes...)
 	for i := range c.Nodes {
 		c.Nodes[i].Ax = append([]int(nil), c.Nodes[i].Ax...)
@@ -293,7 +322,7 @@ func (n *Kernel) elements() int {
 
 var opNames = [...]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
 	"less", "select", "sqrt", "exp", "shl", "shr", "and", "xor", "cvtf32", "cvti32", "thread", "groupsum", "groupmax", "exchange",
-	"local", "flat", "shuffle", "param", "broadcast", "length"}
+	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum"}
 
 func (o Op) String() string {
 	if int(o) < len(opNames) {
@@ -312,7 +341,7 @@ func (n *Kernel) String() string {
 		fmt.Fprintf(&b, "  buf %d kind %d %s elem %s shape %v size %d\n", i, bf.Kind, bf.Operand.Name, bf.Elem, bf.Shape, bf.Size)
 	}
 	for i, nd := range n.Nodes {
-		fmt.Fprintf(&b, "  %d: %s.%s a %d b %d c %d at %d buf %d imm %d ax %v\n", i, nd.Op, nd.Type, nd.A, nd.B, nd.C, nd.At, nd.Buf, nd.Imm, nd.Ax)
+		fmt.Fprintf(&b, "  %d: %s.%s a %d b %d c %d at %d buf %d imm %d ax %v reg %d tmp %d mem %v ptr %d\n", i, nd.Op, nd.Type, nd.A, nd.B, nd.C, nd.At, nd.Buf, nd.Imm, nd.Ax, nd.Reg, nd.Tmp, nd.Mem, nd.Ptr)
 	}
 	for _, s := range n.Stores {
 		fmt.Fprintf(&b, "  store buf %d ix %d ax %v val %d at %d barrier %v run %v\n", s.Buf, s.Ix, s.Ax, s.Val, s.At, s.Barrier, s.Run)

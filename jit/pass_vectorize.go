@@ -6,10 +6,11 @@ import (
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
-// Vectorize runs an innermost loop that carries no value and reads and
-// writes consecutive elements of its iteration Lanes iterations a trip, one
-// in each lane, and the trips that do not fill a vector after it in a loop
-// of one a trip.
+// Vectorize runs an innermost loop that reads and writes consecutive
+// elements of its iteration Lanes iterations a trip, one in each lane, and
+// the trips that do not fill a vector after it in a loop of one a trip. A
+// sum the loop carries becomes a sum in each lane, the tail adding into its
+// first lane, and the lanes are summed where the sum is read.
 type Vectorize struct {
 	Lanes int
 }
@@ -20,10 +21,11 @@ func (p Vectorize) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		m := k.clone()
 		changed := false
-		for c := range m.Loops {
+		for c := 0; c < len(m.Loops); c++ {
 			if m.vectorizable(c) {
 				m.vectorize(c, p.Lanes)
 				changed = true
+				c++
 			}
 		}
 		if !changed {
@@ -35,8 +37,14 @@ func (p Vectorize) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 
 func (k *Kernel) vectorizable(c int) bool {
 	l := k.Loops[c]
-	if l.Lanes > 0 || len(k.innerLoops(c)) > 0 || len(k.foldsOf(c)) > 0 || k.iterOf(c) < 0 {
+	if l.Lanes > 0 || len(k.innerLoops(c)) > 0 || k.iterOf(c) < 0 {
 		return false
+	}
+	folds := k.foldsOf(c)
+	for _, f := range folds {
+		if !k.sumFold(f) || k.Nodes[f].Type != ir.F32 {
+			return false
+		}
 	}
 	it := k.iterOf(c)
 	stores := 0
@@ -49,7 +57,7 @@ func (k *Kernel) vectorizable(c int) bool {
 			return false
 		}
 	}
-	if stores == 0 {
+	if stores == 0 && len(folds) == 0 {
 		return false
 	}
 	for i, nd := range k.Nodes {
@@ -98,10 +106,31 @@ func (k *Kernel) vectorize(c, L int) {
 		done = k.u32(l.Trip / L * L)
 	}
 	k.Loops[c].Lanes = L
-	t := len(k.Loops)
-	k.Loops = append(k.Loops, tail)
+	t := k.insertLoop(c+1, tail)
 	ti := k.add(Node{Op: OpIter, At: t, Type: U})
 	sub := map[int]int{k.iterOf(c): k.bin(OpAdd, U, done, ti)}
+	for _, f := range k.foldsOf(c) {
+		ft := k.add(Node{Op: OpFold, At: t, Type: k.Nodes[f].Type, B: f})
+		step := k.Nodes[f].A
+		sub[f] = ft
+		k.Nodes[ft].A = k.copyOf(step, sub)
+		h := k.add(Node{Op: OpHSum, Type: k.Nodes[f].Type, A: ft})
+		for i := range k.Nodes {
+			if i == step || i == ft || i == h || k.loopOf(i) == c {
+				continue
+			}
+			for _, a := range k.args(&k.Nodes[i]) {
+				if *a == f {
+					*a = h
+				}
+			}
+		}
+		for i := range k.Stores {
+			if k.Stores[i].Val == f {
+				k.Stores[i].Val = h
+			}
+		}
+	}
 	var stores []Store
 	last := -1
 	for i, s := range k.Stores {

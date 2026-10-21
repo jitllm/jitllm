@@ -17,12 +17,13 @@ type Args struct {
 }
 
 // ArgFields are the byte offsets of the argument words: the buffers written
-// in order, a weight's or the history's address, a block of constants, the
-// other buffers read in order; a vector loop's count and its tail's, and the
-// other counts in order.
+// in order, a weight's or the history's address, the activations a weight
+// is read beside, a block of constants, the other buffers read in order; a
+// vector loop's count and its tail's, and the other counts in order.
 type ArgFields struct {
 	Out           []int
 	Weight        int
+	Act           int
 	Consts        int
 	In            []int
 	Vectors, Tail int
@@ -53,33 +54,79 @@ func (k *Kernel) fixed(i int) bool {
 	return true
 }
 
-// bindCounts makes each loop count the call fixes an argument word.
+// bindCounts makes each loop count the call fixes an argument word, the
+// loops taken outermost first. A loop that carries a sum takes the length
+// it was split from whole, its own count derived in the kernel; any other
+// loop takes its count.
 func (k *Kernel) bindCounts(f ArgFields) {
 	next := 0
 	field := func(c int) int {
 		l := k.Loops[c]
-		if l.Lanes > 0 {
+		if l.Lanes > 0 && len(k.foldsOf(c)) == 0 {
 			return f.Vectors
 		}
-		for t, o := range k.Loops {
-			if o.Lanes > 0 && o.Parent == l.Parent && t < c && o.Range == l.Range && k.tailOf(t) == c {
-				return f.Tail
-			}
+		if len(k.foldsOf(c)) == 0 && k.vectorTail(c) {
+			return f.Tail
 		}
 		v := f.Counts[min(next, len(f.Counts)-1)]
 		next++
 		return v
 	}
-	for c := range k.Loops {
+	bound := map[int]bool{}
+	for _, c := range k.preorder() {
 		n := k.Loops[c].Count - 1
-		if n < 0 || k.Nodes[n].Op == OpConst || k.Nodes[n].Op == OpParam || !k.fixed(n) {
+		if n < 0 || bound[n] || k.Nodes[n].Op == OpConst || k.Nodes[n].Op == OpParam || !k.fixed(n) {
 			continue
 		}
+		if len(k.foldsOf(c)) > 0 {
+			ln := k.lengthIn(n)
+			if ln < 0 && k.computedFrom(n, OpParam) {
+				continue
+			}
+			if ln >= 0 {
+				n = ln
+			}
+			if bound[n] {
+				continue
+			}
+		}
+		bound[n] = true
 		fl := field(c)
 		pv := k.add(Node{Op: OpParam, Type: ir.U32, Imm: int64(fl)})
 		k.redirectAll(n, pv)
 		k.Args = append(k.Args, Arg{Field: fl, Buf: -1, Node: n + 1})
 	}
+}
+
+// lengthIn is the run-time length node i is computed from, -1 for none.
+func (k *Kernel) lengthIn(i int) int {
+	nd := k.Nodes[i]
+	if nd.Op == OpLength {
+		return i
+	}
+	for _, a := range k.args(&nd) {
+		if l := k.lengthIn(*a); l >= 0 {
+			return l
+		}
+	}
+	return -1
+}
+
+// preorder is the loops, each before the loops inside it, siblings in
+// order.
+func (k *Kernel) preorder() []int {
+	var out []int
+	var walk func(p int)
+	walk = func(p int) {
+		for c, l := range k.Loops {
+			if l.Parent == p {
+				out = append(out, c)
+				walk(c)
+			}
+		}
+	}
+	walk(-1)
+	return out
 }
 
 // tailOf is the loop taking vector loop c's remaining trips, or -1.
@@ -123,6 +170,12 @@ func (k *Kernel) bindBufs(f ArgFields) {
 	}
 	sort.SliceStable(order, func(i, j int) bool { return k.firstBuf(order[i]) < k.firstBuf(order[j]) })
 	outs, ins := 0, 0
+	weight := false
+	for _, o := range order {
+		if o.Kind == OperandWeight {
+			weight = true
+		}
+	}
 	for _, o := range order {
 		var fl int
 		switch {
@@ -133,6 +186,8 @@ func (k *Kernel) bindBufs(f ArgFields) {
 			fl = f.Consts
 		case o.Kind == OperandWeight || o.Kind == OperandTable:
 			fl = f.Weight
+		case weight && f.Act > 0:
+			fl = f.Act
 		default:
 			fl = f.In[min(ins, len(f.In)-1)]
 			ins++
@@ -174,41 +229,33 @@ func (k *Kernel) firstBuf(o Operand) int {
 // offset the caller adds, 1 + its node (0 for none); each access is left a
 // flat index from the buffer's address.
 func (k *Kernel) split(as []access) int {
-	type lin struct {
-		terms map[int]int64
-		c     int64
-	}
+	g := newAlg(k)
 	ls := make([]lin, len(as))
 	for i, a := range as {
-		var t map[int]int64
-		var c int64
 		if a.node >= 0 {
 			nd := k.Nodes[a.node]
-			t, c = k.flatTerms(nd.Buf, nd.A, nd.Ax)
+			ls[i] = g.flat(nd.Buf, nd.A, nd.Ax)
 		} else {
 			s := k.Stores[a.store]
-			t, c = k.flatTerms(s.Buf, s.Ix, s.Ax)
+			ls[i] = g.flat(s.Buf, s.Ix, s.Ax)
 		}
-		ls[i] = lin{t, c}
 	}
-	fixed := map[int]int64{}
-	for n, c := range ls[0].terms {
-		if k.fixed(n) {
-			fixed[n] = c
+	fixed := lin{}
+	for m, v := range ls[0] {
+		if m != "" && g.still(lin{m: 1}) {
+			fixed[m] = v
 		}
 	}
 	for _, l := range ls[1:] {
-		for n, c := range fixed {
-			if l.terms[n] != c {
-				delete(fixed, n)
+		for m, v := range fixed {
+			if l[m] != v {
+				delete(fixed, m)
 			}
 		}
 	}
 	for i, a := range as {
-		for n := range fixed {
-			delete(ls[i].terms, n)
-		}
-		ix := k.sumOf(ls[i].terms, ls[i].c)
+		ls[i].add(fixed, -1)
+		ix := g.build(ls[i])
 		if a.node >= 0 {
 			k.Nodes[a.node].A, k.Nodes[a.node].Ax = ix, nil
 		} else {
@@ -218,98 +265,39 @@ func (k *Kernel) split(as []access) int {
 	if len(fixed) == 0 {
 		return 0
 	}
-	return k.sumOf(fixed, 0) + 1
+	return g.build(fixed) + 1
 }
 
-// flatTerms is an access's flat index as a sum of nodes times constants and
-// a constant: index ix, or coordinates ax of buffer b's shape.
-func (k *Kernel) flatTerms(b, ix int, ax []int) (map[int]int64, int64) {
+// flat is an access's flat index: index ix, or coordinates ax of buffer
+// b's shape, its extents the caller's where the shape's dims say so.
+func (g *alg) flat(b, ix int, ax []int) lin {
 	if ax == nil {
-		return k.terms(ix)
+		return g.of(ix)
 	}
-	sh := k.Bufs[b].Shape
-	out, c := map[int]int64{}, int64(0)
-	stride := int64(1)
+	bf := g.k.Bufs[b]
+	out := lin{}
+	stride := lin{"": 1}
 	for j := len(ax) - 1; j >= 0; j-- {
-		t, tc := k.terms(ax[j])
-		for n, v := range t {
-			out[n] += v * stride
+		out.add(g.merged(g.times(g.of(ax[j]), stride)), 1)
+		ext := lin{"": int64(bf.Shape[j])}
+		if j < len(bf.Dims) && bf.Dims[j] > 0 {
+			ext = g.of(bf.Dims[j] - 1)
 		}
-		c += tc * stride
-		stride *= int64(sh[j])
+		stride = g.times(stride, ext)
 	}
-	return out, c
+	return g.merged(out)
 }
 
-// terms is integer node i as a sum of nodes times constants and a
-// constant.
-func (k *Kernel) terms(i int) (map[int]int64, int64) {
+// computedFrom reports whether node i is computed from a node of op.
+func (k *Kernel) computedFrom(i int, op Op) bool {
 	nd := k.Nodes[i]
-	if nd.Type == ir.F32 {
-		return map[int]int64{i: 1}, 0
+	if nd.Op == op {
+		return true
 	}
-	switch nd.Op {
-	case OpConst:
-		return map[int]int64{}, nd.Imm
-	case OpAdd, OpSub:
-		a, ac := k.terms(nd.A)
-		b, bc := k.terms(nd.B)
-		sign := int64(1)
-		if nd.Op == OpSub {
-			sign = -1
-		}
-		for n, v := range b {
-			a[n] += sign * v
-			if a[n] == 0 {
-				delete(a, n)
-			}
-		}
-		return a, ac + sign*bc
-	case OpMul, OpShl:
-		x, y := nd.A, nd.B
-		if k.Nodes[x].Op == OpConst && nd.Op == OpMul {
-			x, y = y, x
-		}
-		if c := k.Nodes[y]; c.Op == OpConst {
-			f := c.Imm
-			if nd.Op == OpShl {
-				f = 1 << c.Imm
-			}
-			t, tc := k.terms(x)
-			for n := range t {
-				t[n] *= f
-			}
-			return t, tc * f
+	for _, a := range k.args(&nd) {
+		if k.computedFrom(*a, op) {
+			return true
 		}
 	}
-	return map[int]int64{i: 1}, 0
-}
-
-// sumOf is the node of the sum of terms and c, in the order of the terms'
-// nodes.
-func (k *Kernel) sumOf(terms map[int]int64, c int64) int {
-	var ns []int
-	for n := range terms {
-		ns = append(ns, n)
-	}
-	sort.Ints(ns)
-	acc := -1
-	for _, n := range ns {
-		v := n
-		if f := terms[n]; f != 1 {
-			v = k.bin(OpMul, ir.U32, n, k.u32(int(f)))
-		}
-		if acc < 0 {
-			acc = v
-		} else {
-			acc = k.bin(OpAdd, ir.U32, acc, v)
-		}
-	}
-	switch {
-	case acc < 0:
-		return k.u32(int(c))
-	case c != 0:
-		return k.bin(OpAdd, ir.U32, acc, k.u32(int(c)))
-	}
-	return acc
+	return false
 }

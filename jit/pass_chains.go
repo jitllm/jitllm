@@ -2,7 +2,10 @@ package jit
 
 // Chains reassociates a workgroup thread's chain of multiply-adds from a
 // constant, n of them, into N chains interleaved -- term t into chain t mod
-// N, each from the constant -- summed pairwise.
+// N, each from the constant -- summed pairwise. In a loop whose trip adds N
+// copies of its body into one sum, the sum becomes N sums, copy j into sum
+// j, the first carried on by the loops that continue it, and the N summed
+// pairwise where the last of them is read.
 type Chains struct {
 	N int
 }
@@ -11,6 +14,23 @@ func (Chains) Name() string { return "chains" }
 
 func (p Chains) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
+		if !k.Work && p.N > 1 {
+			m := k.clone()
+			changed := false
+			for c, l := range m.Loops {
+				if l.Copies == p.N {
+					for _, f := range m.foldsOf(c) {
+						if m.chainFold(c, f, p.N) {
+							changed = true
+						}
+					}
+				}
+			}
+			if !changed {
+				return nil, false, nil
+			}
+			return []*Kernel{m}, true, nil
+		}
 		if !k.Work || p.N < 2 {
 			return nil, false, nil
 		}
@@ -67,4 +87,112 @@ func (k *Kernel) reassociate(v, n int) (int, bool) {
 		acc = next
 	}
 	return acc[0], true
+}
+
+// chainFold splits fold f of loop c, a chain of n adds into it a trip, into
+// n folds.
+func (k *Kernel) chainFold(c, f, n int) bool {
+	var links []int
+	x := k.Nodes[f].A
+	for len(links) < n {
+		nd := k.Nodes[x]
+		var prev int
+		switch {
+		case nd.Op == OpFma:
+			prev = nd.C
+		case nd.Op == OpAdd:
+			prev = nd.A
+		default:
+			return false
+		}
+		links = append(links, x)
+		x = prev
+	}
+	if x != f {
+		return false
+	}
+	t, init := k.Nodes[f].Type, k.Nodes[f].B
+	sums := make([]int, n)
+	for j := 0; j < n; j++ {
+		link := links[n-1-j]
+		if j == 0 {
+			sums[0] = f
+		} else {
+			sums[j] = k.add(Node{Op: OpFold, At: c, Type: t, B: init})
+		}
+		nd := k.Nodes[link]
+		if nd.Op == OpFma {
+			nd.C = sums[j]
+		} else {
+			nd.A = sums[j]
+		}
+		k.Nodes[link] = nd
+		if j > 0 {
+			k.Nodes[sums[j]].A = link
+		}
+	}
+	k.Nodes[f].A = links[n-1]
+	last := f
+	family := map[int]bool{c: true}
+	for {
+		next := -1
+		for i, nd := range k.Nodes {
+			if nd.Op == OpFold && nd.B == last && i != last {
+				next = i
+			}
+		}
+		if next < 0 {
+			break
+		}
+		last = next
+		family[k.Nodes[last].At] = true
+	}
+	hs := k.homes()
+	acc := append([]int{last}, sums[1:]...)
+	for len(acc) > 1 {
+		var nx []int
+		for j := 0; j+1 < len(acc); j += 2 {
+			nx = append(nx, k.bin(OpAdd, t, acc[j], acc[j+1]))
+		}
+		if len(acc)%2 == 1 {
+			nx = append(nx, acc[len(acc)-1])
+		}
+		acc = nx
+	}
+	total := acc[0]
+	for i := range k.Nodes {
+		nd := &k.Nodes[i]
+		if nd.Op == OpFold || i == total || i < len(hs) && hs[i] >= 0 && family[hs[i]] {
+			continue
+		}
+		if k.isCombine(i, last, sums) {
+			continue
+		}
+		for _, a := range k.args(nd) {
+			if *a == last {
+				*a = total
+			}
+		}
+	}
+	return true
+}
+
+// isCombine reports whether node i is one of the adds summing the chains.
+func (k *Kernel) isCombine(i, last int, sums []int) bool {
+	nd := k.Nodes[i]
+	if nd.Op != OpAdd {
+		return false
+	}
+	in := func(x int) bool {
+		if x == last {
+			return true
+		}
+		for _, s := range sums {
+			if s == x {
+				return true
+			}
+		}
+		return k.Nodes[x].Op == OpAdd && k.isCombine(x, last, sums)
+	}
+	return in(nd.A) && in(nd.B)
 }

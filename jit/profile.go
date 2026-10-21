@@ -47,15 +47,20 @@ func cpuProfile() Profile {
 		Axpy{},
 		FMA{All: true},
 		Vectorize{Lanes: 8},
+		Unroll{Vectors: 4},
+		Chains{N: 4},
+		Simplify{},
 		Consts{},
 		Args{Fields: mainArgs},
 		Simplify{},
 		Cursors{},
 		Simplify{},
+		Guards{},
+		FoldLoads{},
 		Order{},
 		Regs{Fields: map[int]int{0: int(x86.RCX), 8: int(x86.RDX), 16: int(x86.RSI), 24: int(x86.RDX), 56: int(x86.RBX),
 			112: int(x86.RSI), 120: int(x86.R8), 128: int(x86.R9), 136: int(x86.R12)},
-			Spare:    []int{int(x86.RSI), int(x86.R8), int(x86.R9), int(x86.R11), int(x86.R12), int(x86.R13)},
+			Spare:    []int{int(x86.RSI), int(x86.R11), int(x86.R8), int(x86.R9), int(x86.R12), int(x86.R13)},
 			Counters: [2]int{int(x86.R10), int(x86.R11)}, Outer: int(x86.RAX),
 			Kept: []int{int(x86.R9), int(x86.RDX), int(x86.R12), int(x86.R13)}, Vectors: 16},
 	}}
@@ -63,7 +68,7 @@ func cpuProfile() Profile {
 
 // mainArgs is main's host argument block: Out, W, A, AScale, Rows, K, Scr,
 // and the paired kernels' Out2 and AScale2.
-var mainArgs = ArgFields{Out: []int{0, 120}, Weight: 8, Consts: 56, In: []int{24, 136}, Vectors: 40, Tail: 32, Counts: []int{32, 40}}
+var mainArgs = ArgFields{Out: []int{0, 120}, Weight: 8, Act: 16, Consts: 56, In: []int{24, 136}, Vectors: 40, Tail: 32, Counts: []int{32, 40}}
 
 // mainWorkgroups is main's layout of a range's partitions over workgroups.
 var mainWorkgroups = Workgroups{MinWarps: 4, MaxWarps: 8, Shared: 32 << 10, GroupDims: 96, Chunk: 2048, SlotThreads: 1280, PerSplit: 8}

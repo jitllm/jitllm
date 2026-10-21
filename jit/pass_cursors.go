@@ -1,11 +1,13 @@
 package jit
 
 // Cursors replaces a loop's indexing of a buffer by an address the loop
-// advances: where every access in the loop is its iteration times a stride
-// plus the same part, the address moves the stride each trip and each
-// access reads at a constant displacement from it. A loop picks up the
-// address where the loop before it left it when its accesses start there;
-// it advances a copy where a later loop needs the address as it was.
+// advances. Each access becomes a constant displacement from a pointer: the
+// buffer's address, or a copy of it. A loop advances the pointer the stride
+// a trip less what its inner loops already advanced it; a loop after it
+// picks the pointer up where it was left when its accesses start there; and
+// where a later loop, or the next trip of the loop around, needs the
+// address as it was, the loops advance a copy taken as the first of them
+// starts.
 type Cursors struct{}
 
 func (Cursors) Name() string { return "cursors" }
@@ -18,7 +20,10 @@ func (p Cursors) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		m := k.clone()
 		changed := false
 		for _, a := range m.Args {
-			if a.Buf >= 0 && m.cursor(a.Buf, -1) {
+			if a.Buf < 0 {
+				continue
+			}
+			if newCursorer(m, a.Buf).run() {
 				changed = true
 			}
 		}
@@ -29,191 +34,230 @@ func (p Cursors) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	})
 }
 
-// cursorAccess is an access of a buffer in a loop: its index's stride over
-// the loop's iteration and the rest of its terms.
-type cursorAccess struct {
+// cAccess is one load or store of the buffer: where it sits and its index.
+type cAccess struct {
 	access
-	stride int64
-	rest   map[int]int64
-	c      int64
+	home int
+	ix   lin
 }
 
-// cursor advances buffer b's address through the loops inside loop parent.
-func (k *Kernel) cursor(b, parent int) bool {
-	base := k.Bufs[b].Base
-	var loops []int
-	for c, l := range k.Loops {
-		if l.Parent == parent {
-			loops = append(loops, c)
-		}
-	}
-	type plan struct {
-		c       int
-		as      []cursorAccess
-		stride  int64
-		advance map[int]int64
-		adv     int64
-	}
-	var plans []plan
-	for _, c := range loops {
-		as, ok := k.accessesIn(b, base, c)
-		if !ok || len(as) == 0 {
-			continue
-		}
-		s := as[0].stride
-		for _, a := range as {
-			if a.stride != s {
-				s = 0
-			}
-		}
-		if s == 0 {
-			continue
-		}
-		l := k.Loops[c]
-		step := int64(max(1, l.Lanes)) * s
-		adv := map[int]int64{}
-		var advc int64
-		if l.Count > 0 {
-			adv[l.Count-1] = step
-		} else {
-			advc = int64(l.Trip) * step
-		}
-		plans = append(plans, plan{c: c, as: as, stride: s, advance: adv, adv: advc})
-	}
-	if len(plans) == 0 {
-		return false
-	}
-	at, atc := map[int]int64{}, int64(0)
-	for i, pl := range plans {
-		rest := pl.as[0].rest
-		cont := k.sameTerms(rest, at)
-		copyOf := !cont
-		if cont {
-			after := addTerms(at, pl.advance)
-			for _, later := range plans[i+1:] {
-				if !k.sameTerms(later.as[0].rest, after) {
-					copyOf = true
-				}
-			}
-		}
-		if copyOf && len(rest) > 0 {
-			continue
-		}
-		from, fromc := at, atc
-		if copyOf {
-			from, fromc = map[int]int64{}, 0
-		}
-		for _, a := range pl.as {
-			if !k.sameTerms(a.rest, from) {
-				return false
-			}
-			disp := k.u32(int(a.c - fromc))
-			if a.node >= 0 {
-				k.Nodes[a.node].A, k.Nodes[a.node].At = disp, pl.c+1
-			} else {
-				k.Stores[a.store].Ix = disp
-			}
-		}
-		k.Loops[pl.c].Cursors = append(k.Loops[pl.c].Cursors, Cursor{Buf: b, Elems: int(pl.stride) * max(1, k.Loops[pl.c].Lanes), Copy: copyOf})
-		if !copyOf {
-			at, atc = addTerms(at, pl.advance), atc+pl.adv
-		}
-	}
-	return true
+type cursorer struct {
+	k      *Kernel
+	g      *alg
+	base   int
+	buf    int
+	as     []cAccess
+	disp   map[int]int64
+	ptr    map[int]int
+	cursor map[int]Cursor
 }
 
-// accessesIn is buffer b's accesses directly in loop c, each its index's
-// stride over c's iteration and the rest; false where an access is not of
-// that form.
-func (k *Kernel) accessesIn(b, base, c int) ([]cursorAccess, bool) {
-	it := k.iterOf(c)
-	var out []cursorAccess
-	add := func(a access, ix int) bool {
-		t, tc := k.terms(ix)
-		s := t[it]
-		delete(t, it)
-		for n := range t {
-			if k.varies(n, c) {
-				return false
-			}
-		}
-		out = append(out, cursorAccess{access: a, stride: s, rest: t, c: tc})
-		return true
-	}
+func newCursorer(k *Kernel, b int) *cursorer {
+	return &cursorer{k: k, g: newAlg(k), base: k.Bufs[b].Base, buf: b, disp: map[int]int64{}, ptr: map[int]int{}, cursor: map[int]Cursor{}}
+}
+
+func (cu *cursorer) run() bool {
+	k := cu.k
+	live := k.live()
 	for i, nd := range k.Nodes {
-		if nd.Op == OpLoad && k.Bufs[nd.Buf].Base == base && k.loopOf(i) == c {
-			if !add(access{node: i, store: -1}, nd.A) {
-				return nil, false
-			}
+		if nd.Op == OpLoad && live[i] && k.Bufs[nd.Buf].Base == cu.base {
+			cu.as = append(cu.as, cAccess{access: access{node: i, store: -1}, home: k.loopOf(i), ix: cu.g.of(nd.A)})
 		}
 	}
 	for i, s := range k.Stores {
-		if s.Barrier || s.Run || s.At != c || k.Bufs[s.Buf].Base != base {
-			continue
-		}
-		if !add(access{node: -1, store: i}, s.Ix) {
-			return nil, false
+		if !s.Barrier && !s.Run && k.Bufs[s.Buf].Base == cu.base {
+			cu.as = append(cu.as, cAccess{access: access{node: -1, store: i}, home: s.At, ix: cu.g.of(s.Ix)})
 		}
 	}
-	return out, true
-}
-
-// loopOf is the innermost loop node i varies in, -1 for none.
-func (k *Kernel) loopOf(i int) int {
-	best := -1
-	for c := range k.Loops {
-		if k.varies(i, c) && (best < 0 || k.within(c, best)) {
-			best = c
-		}
-	}
-	return best
-}
-
-func addTerms(a, b map[int]int64) map[int]int64 {
-	out := map[int]int64{}
-	for n, v := range a {
-		out[n] += v
-	}
-	for n, v := range b {
-		out[n] += v
-		if out[n] == 0 {
-			delete(out, n)
-		}
-	}
-	return out
-}
-
-// sameTerms reports whether two sums of terms are the same value: equal
-// once each term is written as its own terms.
-func (k *Kernel) sameTerms(a, b map[int]int64) bool {
-	ea, eb := k.expand(a), k.expand(b)
-	if len(ea) != len(eb) {
+	if len(cu.as) == 0 {
 		return false
 	}
-	for n, v := range ea {
-		if eb[n] != v {
-			return false
+	all := make([]int, len(cu.as))
+	ix := make([]lin, len(cu.as))
+	for i := range cu.as {
+		all[i] = i
+		ix[i] = cu.as[i].ix
+	}
+	ptrs := len(k.Ptrs)
+	if _, ok := cu.walk(-1, 0, false, lin{}, all, ix); !ok {
+		k.Ptrs = k.Ptrs[:ptrs]
+		return false
+	}
+	for c, l := range cu.cursor {
+		k.Loops[c].Cursors = append(k.Loops[c].Cursors, l)
+	}
+	for i, a := range cu.as {
+		d := k.u32(int(cu.disp[i]))
+		if a.node >= 0 {
+			k.Nodes[a.node].A, k.Nodes[a.node].At, k.Nodes[a.node].Ptr = d, a.home+1, cu.ptr[i]
+		} else {
+			k.Stores[a.store].Ix, k.Stores[a.store].Ptr = d, cu.ptr[i]
 		}
 	}
 	return true
 }
 
-func (k *Kernel) expand(a map[int]int64) map[int]int64 {
-	out := map[int]int64{}
-	for n, v := range a {
-		t, _ := k.terms(n)
-		if len(t) == 1 && t[n] == 1 {
-			out[n] += v
+// in reports whether access a sits in loop c or a loop inside it.
+func (cu *cursorer) in(a, c int) bool {
+	h := cu.as[a].home
+	return h >= 0 && cu.k.within(h, c)
+}
+
+// walk lays the accesses as, their indices ix with the iterations of the
+// loops around scope p taken out, on pointer ptr standing at pos as the
+// scope starts; with fresh set, ptr is a copy the scope's first loop takes.
+// It returns how far the scope moves the pointer.
+func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (lin, bool) {
+	k, g := cu.k, cu.g
+	at := copyLin(pos)
+	for j, a := range as {
+		if cu.as[a].home != p {
 			continue
 		}
-		for m, w := range t {
-			out[m] += v * w
+		d := copyLin(ix[j])
+		d.add(at, -1)
+		c, ok := g.merged(d).constant()
+		if !ok {
+			return nil, false
+		}
+		cu.disp[a], cu.ptr[a] = c, ptr
+	}
+	var loops []int
+	for c, l := range k.Loops {
+		if l.Parent == p {
+			loops = append(loops, c)
 		}
 	}
-	for n, v := range out {
-		if v == 0 {
-			delete(out, n)
+	for li, c := range loops {
+		var mine []int
+		var mix []lin
+		for j, a := range as {
+			if cu.in(a, c) {
+				mine = append(mine, a)
+				mix = append(mix, ix[j])
+			}
+		}
+		if len(mine) == 0 {
+			continue
+		}
+		it := k.iterOf(c)
+		var stride lin
+		rest := make([]lin, len(mine))
+		for j := range mine {
+			var w lin
+			if it >= 0 {
+				w, rest[j] = g.coef(mix[j], g.id(atom{node: it}))
+			} else {
+				w, rest[j] = lin{}, copyLin(mix[j])
+			}
+			if j == 0 {
+				stride = w
+			} else if !stride.equal(w) {
+				return nil, false
+			}
+		}
+		step := g.times(stride, lin{"": int64(max(1, k.Loops[c].Lanes) * max(1, k.Loops[c].Copies))})
+		trips := lin{"": int64(k.Loops[c].Trip)}
+		if k.Loops[c].Count > 0 {
+			trips = g.of(k.Loops[c].Count - 1)
+		}
+		after := g.merged(addLin(at, g.times(trips, step)))
+		q, take := ptr, fresh
+		aside := !fresh && cu.laterNeeds(loops[li+1:], as, ix, after)
+		if aside {
+			q, take = cu.newPtr(), true
+		}
+		net, ok := cu.walk(c, q, false, at, mine, rest)
+		if !ok {
+			return nil, false
+		}
+		bump := g.merged(addLin(step, scaleLin(net, -1)))
+		if _, ok := bump.constant(); !ok {
+			if _, ok = cu.walk(c, cu.newPtr(), true, at, mine, rest); !ok {
+				return nil, false
+			}
+			bump = step
+			if _, ok := bump.constant(); !ok {
+				return nil, false
+			}
+		}
+		if b, _ := bump.constant(); b != 0 || take {
+			cu.cursor[c] = Cursor{Buf: cu.buf, Elems: int(b), Ptr: q, Take: take}
+		}
+		if !aside {
+			at, ptr = after, q
+		}
+		fresh = false
+	}
+	moved := copyLin(at)
+	moved.add(pos, -1)
+	return g.merged(moved), true
+}
+
+// laterNeeds reports whether a loop of loops reaches an access whose index,
+// its iterations aside, is not where the pointer will stand when the loop
+// starts: will after the loop before, each loop then moving it its trips
+// times its stride.
+func (cu *cursorer) laterNeeds(loops, as []int, ix []lin, will lin) bool {
+	g, k := cu.g, cu.k
+	for _, c := range loops {
+		var stride lin
+		seen := false
+		for j, a := range as {
+			if !cu.in(a, c) {
+				continue
+			}
+			r := copyLin(ix[j])
+			if it := k.iterOf(c); it >= 0 {
+				var w lin
+				w, r = g.coef(r, g.id(atom{node: it}))
+				if !seen {
+					stride, seen = w, true
+				}
+			}
+			for d := range k.Loops {
+				if d != c && k.within(d, c) {
+					if it := k.iterOf(d); it >= 0 {
+						_, r = g.coef(r, g.id(atom{node: it}))
+					}
+				}
+			}
+			r.add(will, -1)
+			if _, ok := g.merged(r).constant(); !ok {
+				return true
+			}
+		}
+		if seen {
+			trips := lin{"": int64(k.Loops[c].Trip)}
+			if k.Loops[c].Count > 0 {
+				trips = g.of(k.Loops[c].Count - 1)
+			}
+			step := g.times(stride, lin{"": int64(max(1, k.Loops[c].Lanes) * max(1, k.Loops[c].Copies))})
+			will = g.merged(addLin(will, g.times(trips, step)))
 		}
 	}
+	return false
+}
+
+func (cu *cursorer) newPtr() int {
+	cu.k.Ptrs = append(cu.k.Ptrs, Ptr{Buf: cu.buf})
+	return len(cu.k.Ptrs)
+}
+
+func copyLin(l lin) lin {
+	out := lin{}
+	out.add(l, 1)
+	return out
+}
+
+func addLin(a, b lin) lin {
+	out := copyLin(a)
+	out.add(b, 1)
+	return out
+}
+
+func scaleLin(a lin, f int64) lin {
+	out := lin{}
+	out.add(a, f)
 	return out
 }

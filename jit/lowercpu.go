@@ -16,7 +16,7 @@ func (cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 	if k.Seq == nil {
 		return Lowered{}, fmt.Errorf("the x86 lowering of %s: the kernel is not ordered", k.Name)
 	}
-	e := &x86Lowerer{k: k, a: &x86.Buf{}, top: map[int]int{}, end: map[int]int{}}
+	e := &x86Lowerer{k: k, a: &x86.Buf{}, top: map[int]int{}, end: map[int]int{}, home: k.homes()}
 	for _, en := range k.Seq {
 		if e.err != nil {
 			break
@@ -46,6 +46,7 @@ func (cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 
 type x86Lowerer struct {
 	k        *Kernel
+	home     []int
 	a        *x86.Buf
 	top, end map[int]int
 	err      error
@@ -65,30 +66,27 @@ func (e *x86Lowerer) reg(i int) x86.Reg {
 	return x86.Reg(max(r-1, 0))
 }
 
-// addr is the memory operand of buffer b at constant index node ix, read or
-// written in loop at: from the cursor the innermost loop around it keeps
-// for the buffer, else from the buffer's address.
-func (e *x86Lowerer) addr(b, ix, at int) x86.Mem {
+// addr is the memory operand of buffer b at constant index node ix through
+// pointer ptr: the buffer's address, or one of the kernel's copies.
+func (e *x86Lowerer) addr(b, ix, ptr int) x86.Mem {
 	k := e.k
 	nd := k.Nodes[ix]
 	if nd.Op != OpConst {
 		e.fail("an access of %s at a computed index", k.Bufs[b].Operand.Name)
 	}
-	r := k.Bufs[b].Reg
-	for c := at; c >= 0; c = k.Loops[c].Parent {
-		for _, cu := range k.Loops[c].Cursors {
-			if k.Bufs[cu.Buf].Base == k.Bufs[b].Base && cu.Copy {
-				r = cu.Reg
-			}
-		}
-		if r != k.Bufs[b].Reg {
-			break
-		}
+	return x86.At(e.ptrReg(b, ptr), int32(nd.Imm)*int32(elemBytes(k.Bufs[b].Elem)))
+}
+
+// ptrReg is the register of buffer b's pointer ptr.
+func (e *x86Lowerer) ptrReg(b, ptr int) x86.Reg {
+	r := e.k.Bufs[b].Reg
+	if ptr > 0 {
+		r = e.k.Ptrs[ptr-1].Reg
 	}
 	if r == 0 {
-		e.fail("%s has no register", k.Bufs[b].Operand.Name)
+		e.fail("%s has no register", e.k.Bufs[b].Operand.Name)
 	}
-	return x86.At(x86.Reg(max(r-1, 0)), int32(nd.Imm)*int32(elemBytes(k.Bufs[b].Elem)))
+	return x86.Reg(max(r-1, 0))
 }
 
 func elemBytes(t ir.Type) int {
@@ -110,8 +108,11 @@ func (e *x86Lowerer) node(i int) {
 	case OpParam:
 		a.MOVLoad(e.reg(i), x86.At(x86.RDI, int32(nd.Imm)))
 	case OpLoad:
-		home := k.loopOf(i)
-		m := e.addr(nd.Buf, nd.A, home)
+		if nd.Mem {
+			return
+		}
+		home := e.home[i]
+		m := e.addr(nd.Buf, nd.A, nd.Ptr)
 		switch {
 		case home < 0:
 			a.VBROADCASTSS(e.reg(i), m)
@@ -120,23 +121,82 @@ func (e *x86Lowerer) node(i int) {
 		default:
 			a.VMOVSSLoad(e.reg(i), m)
 		}
-	case OpMul:
-		a.VMULPS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
-	case OpAdd:
-		a.VADDPS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+	case OpBitcast:
+		if e.reg(i) != e.reg(nd.A) {
+			e.fail("a bitcast into another register")
+		}
+	case OpMul, OpAdd, OpShr, OpAnd, OpShl:
+		if nd.Type != ir.F32 {
+			e.integer(i)
+			return
+		}
+		if b := k.Nodes[nd.B]; b.Mem {
+			m := e.addr(b.Buf, b.A, b.Ptr)
+			if nd.Op == OpMul {
+				a.VMULPSMem(e.reg(i), e.reg(nd.A), m)
+			} else {
+				a.VADDPSMem(e.reg(i), e.reg(nd.A), m)
+			}
+			return
+		}
+		if nd.Op == OpMul {
+			a.VMULPS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+		} else {
+			a.VADDPS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+		}
 	case OpFma:
 		if e.reg(i) != e.reg(nd.C) {
 			e.fail("an fma whose result is not its addend's register")
 		}
+		if b := k.Nodes[nd.B]; b.Mem {
+			a.VFMADD231PSMem(e.reg(i), e.reg(nd.A), e.addr(b.Buf, b.A, b.Ptr))
+			return
+		}
 		a.VFMADD231PS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+	case OpHSum:
+		r := e.reg(i)
+		if r != e.reg(nd.A) || nd.Tmp == 0 {
+			e.fail("a lane sum out of its operand's register")
+		}
+		t := x86.Reg(nd.Tmp - 1)
+		a.VEXTRACTF128(t, r, 1)
+		a.VADDPSx(r, r, t)
+		a.VHADDPSx(r, r, r)
+		a.VHADDPSx(r, r, r)
 	default:
 		e.fail("node %d: no x86 form of %s.%s", i, nd.Op, nd.Type)
 	}
 }
 
+// integer is an integer node on a word register: the operand moved in
+// where the result has a register of its own, the operation on it.
+func (e *x86Lowerer) integer(i int) {
+	k, a := e.k, e.a
+	nd := k.Nodes[i]
+	b := k.Nodes[nd.B]
+	if b.Op != OpConst {
+		e.fail("node %d: %s of a computed word", i, nd.Op)
+		return
+	}
+	dst := e.reg(i)
+	if src := e.reg(nd.A); src != dst {
+		a.MOVQ(dst, src)
+	}
+	switch nd.Op {
+	case OpShr:
+		a.SHRimm(dst, byte(b.Imm))
+	case OpShl:
+		a.SHLimm(dst, byte(b.Imm))
+	case OpAnd:
+		a.ANDimm8(dst, int8(b.Imm))
+	default:
+		e.fail("node %d: no word form of %s", i, nd.Op)
+	}
+}
+
 func (e *x86Lowerer) store(i int) {
 	s := e.k.Stores[i]
-	m := e.addr(s.Buf, s.Ix, s.At)
+	m := e.addr(s.Buf, s.Ix, s.Ptr)
 	if e.lanes(s.At) > 0 {
 		e.a.VMOVDQUStore(m, e.reg(s.Val))
 		return
@@ -155,9 +215,23 @@ func (e *x86Lowerer) counter(c int) x86.Reg {
 func (e *x86Lowerer) enter(c int) {
 	k, a := e.k, e.a
 	l := k.Loops[c]
+	for _, f := range k.foldsOf(c) {
+		init := k.Nodes[k.Nodes[f].B]
+		switch {
+		case init.Op == OpFold:
+			if k.Nodes[f].Reg != init.Reg {
+				e.fail("a sum carried on out of its register")
+			}
+		case init.Op == OpConst && init.Imm == 0:
+			r := e.reg(f)
+			a.VPXOR(r, r, r)
+		default:
+			e.fail("a sum from %s", init.Op)
+		}
+	}
 	for _, cu := range l.Cursors {
-		if cu.Copy {
-			a.MOVQ(x86.Reg(cu.Reg-1), x86.Reg(k.Bufs[cu.Buf].Reg-1))
+		if cu.Take {
+			a.MOVQ(e.ptrReg(cu.Buf, cu.Ptr), e.ptrReg(cu.Buf, 0))
 		}
 	}
 	ctr := e.counter(c)
@@ -174,7 +248,7 @@ func (e *x86Lowerer) enter(c int) {
 		runtime = false
 	}
 	e.end[c] = a.Label()
-	if runtime {
+	if runtime && !l.Nonempty {
 		a.TESTQ(ctr, ctr)
 		a.JZ(e.end[c])
 	}
@@ -186,11 +260,9 @@ func (e *x86Lowerer) leave(c int) {
 	k, a := e.k, e.a
 	l := k.Loops[c]
 	for _, cu := range l.Cursors {
-		r := k.Bufs[cu.Buf].Reg
-		if cu.Copy {
-			r = cu.Reg
+		if cu.Elems != 0 {
+			a.ADDimm(e.ptrReg(cu.Buf, cu.Ptr), int32(cu.Elems*elemBytes(k.Bufs[cu.Buf].Elem)))
 		}
-		a.ADDimm(x86.Reg(r-1), int32(cu.Elems*elemBytes(k.Bufs[cu.Buf].Elem)))
 	}
 	a.DEC(e.counter(c))
 	a.JNZ(e.top[c])

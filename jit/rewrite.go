@@ -65,7 +65,7 @@ func arity(op Op) int {
 	switch op {
 	case OpConst, OpCoord, OpIter, OpThread, OpFlat, OpParam, OpLength:
 		return 0
-	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal, OpShuffle, OpBroadcast:
+	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal, OpShuffle, OpBroadcast, OpHSum:
 		return 1
 	case OpFma, OpSelect:
 		return 3
@@ -288,7 +288,7 @@ func (k *Kernel) compact() {
 		}
 	}
 	for _, b := range k.Bufs {
-		for _, x := range []int{b.Base, b.Offset} {
+		for _, x := range append([]int{b.Base, b.Offset}, b.Dims...) {
 			if x > 0 {
 				walk(x - 1)
 			}
@@ -349,6 +349,9 @@ func (k *Kernel) compact() {
 	k.Rows, k.Clamp = re(k.Rows), re(k.Clamp)
 	for i := range k.Bufs {
 		k.Bufs[i].Base, k.Bufs[i].Offset = re(k.Bufs[i].Base), re(k.Bufs[i].Offset)
+		for j := range k.Bufs[i].Dims {
+			k.Bufs[i].Dims[j] = re(k.Bufs[i].Dims[j])
+		}
 	}
 	for i := range k.Args {
 		k.Args[i].Node = re(k.Args[i].Node)
@@ -379,4 +382,156 @@ func (k *Kernel) compact() {
 		q.Span, q.Part = re(p.Span), re(p.Part)
 		k.Positions = &q
 	}
+}
+
+// loopOf is the innermost loop node i varies in, -1 for none.
+func (n *Kernel) loopOf(i int) int {
+	best := -1
+	for c := range n.Loops {
+		if n.varies(i, c) && (best < 0 || n.within(c, best)) {
+			best = c
+		}
+	}
+	return best
+}
+
+// insertLoop puts l at index at, the loops from at on one later.
+func (n *Kernel) insertLoop(at int, l Loop) int {
+	sh := func(x int) int {
+		if x >= at {
+			return x + 1
+		}
+		return x
+	}
+	for i := range n.Loops {
+		n.Loops[i].Parent = sh(n.Loops[i].Parent)
+	}
+	l.Parent = sh(l.Parent)
+	n.Loops = append(n.Loops[:at:at], append([]Loop{l}, n.Loops[at:]...)...)
+	for i := range n.Nodes {
+		nd := &n.Nodes[i]
+		switch {
+		case nd.Op == OpIter || nd.Op == OpFold:
+			nd.At = sh(nd.At)
+		case nd.Op == OpLoad && nd.At > 0:
+			nd.At = sh(nd.At-1) + 1
+		}
+	}
+	for i := range n.Stores {
+		if n.Stores[i].At >= 0 {
+			n.Stores[i].At = sh(n.Stores[i].At)
+		}
+	}
+	if p := n.Positions; p != nil && p.Loop >= 0 {
+		q := *p
+		q.Loop = sh(p.Loop)
+		n.Positions = &q
+	}
+	for i := range n.Seq {
+		if e := &n.Seq[i]; e.Kind == EntryLoop || e.Kind == EntryEnd {
+			e.I = sh(e.I)
+		}
+	}
+	return at
+}
+
+// homes is, for each node, the innermost loop whose trips change it: an
+// iteration's loop, a cursor's load's loop, a sum's loop for the nodes of
+// the sum's step, and for a sum read after its loop the loop around it.
+// -1 for a node no loop changes.
+func (n *Kernel) homes() []int {
+	step := map[int]int{}
+	for f, nd := range n.Nodes {
+		if nd.Op != OpFold {
+			continue
+		}
+		var walk func(i int)
+		walk = func(i int) {
+			if i == f {
+				return
+			}
+			if _, ok := step[i]; ok {
+				return
+			}
+			x := n.Nodes[i]
+			if x.Op == OpFold || !n.reachesFold(i, f) {
+				return
+			}
+			step[i] = nd.At
+			for _, a := range n.args(&x) {
+				walk(*a)
+			}
+		}
+		walk(nd.A)
+	}
+	out := make([]int, len(n.Nodes))
+	done := make([]bool, len(n.Nodes))
+	inner := func(a, b int) int {
+		switch {
+		case a < 0:
+			return b
+		case b < 0:
+			return a
+		case n.within(a, b):
+			return a
+		}
+		return b
+	}
+	var home func(i int) int
+	home = func(i int) int {
+		if done[i] {
+			return out[i]
+		}
+		done[i], out[i] = true, -1
+		nd := n.Nodes[i]
+		h := -1
+		switch {
+		case nd.Op == OpIter:
+			h = nd.At
+		case nd.Op == OpFold:
+			h = n.Loops[nd.At].Parent
+		case nd.Op == OpLoad && nd.At > 0:
+			h = nd.At - 1
+		}
+		if c, ok := step[i]; ok {
+			h = inner(h, c)
+		}
+		if nd.Op != OpFold {
+			for _, a := range n.args(&nd) {
+				h = inner(h, home(*a))
+			}
+		}
+		out[i] = h
+		return h
+	}
+	for i := range n.Nodes {
+		home(i)
+	}
+	return out
+}
+
+// reachesFold reports whether node i reads fold f.
+func (n *Kernel) reachesFold(i, f int) bool {
+	seen := map[int]bool{}
+	var walk func(i int) bool
+	walk = func(i int) bool {
+		if i == f {
+			return true
+		}
+		if seen[i] {
+			return false
+		}
+		seen[i] = true
+		nd := n.Nodes[i]
+		if nd.Op == OpFold {
+			return false
+		}
+		for _, a := range n.args(&nd) {
+			if walk(*a) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(i)
 }

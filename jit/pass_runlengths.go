@@ -117,9 +117,45 @@ func (k *Kernel) runWidths() *Kernel {
 		if m == nil {
 			m = k.clone()
 		}
-		m.Loops[c].Count = m.add(Node{Op: OpLength, Type: ir.U32, Imm: int64(l.Trip)}) + 1
+		ln := m.add(Node{Op: OpLength, Type: ir.U32, A: c, Imm: int64(l.Trip)})
+		m.Loops[c].Count = ln + 1
+		m.sizeBy(c, ln)
 	}
 	return m
+}
+
+// sizeBy makes each extent of a buffer's shape that loop c's iteration
+// runs over, of the loop's trips, the run-time length ln.
+func (k *Kernel) sizeBy(c, ln int) {
+	it := k.iterOf(c)
+	mark := func(b int, ax []int) {
+		bf := &k.Bufs[b]
+		for j, a := range ax {
+			if a == it && j < len(bf.Shape) && bf.Shape[j] == k.Loops[c].Trip {
+				if bf.Dims == nil {
+					bf.Dims = make([]int, len(bf.Shape))
+				}
+				bf.Dims[j] = ln + 1
+			}
+		}
+	}
+	for _, nd := range k.Nodes {
+		if nd.Op == OpLoad && nd.Ax != nil {
+			mark(nd.Buf, nd.Ax)
+		}
+	}
+	for _, s := range k.Stores {
+		if s.Ax != nil && !s.Barrier && !s.Run {
+			mark(s.Buf, s.Ax)
+		}
+	}
+	for b := range k.Bufs {
+		for o := range k.Bufs {
+			if k.Bufs[o].Operand == k.Bufs[b].Operand && k.Bufs[o].Dims != nil && k.Bufs[b].Dims == nil && sameShape(k.Bufs[o].Shape, k.Bufs[b].Shape) {
+				k.Bufs[b].Dims = append([]int(nil), k.Bufs[o].Dims...)
+			}
+		}
+	}
 }
 
 // readOutside reports whether a node other than its own step, or a loop's

@@ -4,17 +4,36 @@ import "github.com/jitllm/jitllm/jit/ir"
 
 // Unroll unrolls a workgroup's loops: a loop nested in a phase of at most
 // Full trips with one fold and no stores of its own, all of its trips; a
-// loop over positions bound as Over, Factor trips a trip.
+// loop over positions bound as Over, Factor trips a trip. Where Vectors is
+// set, a vector loop that carries a sum and stores nothing runs Vectors
+// vectors a trip, the vectors left in a loop of one a trip after it.
 type Unroll struct {
-	Full   int
-	Factor int
-	Over   Bound
+	Full    int
+	Factor  int
+	Over    Bound
+	Vectors int
 }
 
 func (Unroll) Name() string { return "unroll" }
 
 func (p Unroll) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
+		if !k.Work && p.Vectors > 1 {
+			m := k.clone()
+			changed := false
+			for c := 0; c < len(m.Loops); c++ {
+				l := m.Loops[c]
+				if l.Lanes > 0 && l.Copies == 0 && len(m.foldsOf(c)) > 0 && !m.storesAt(c) && !m.hasInner(c) {
+					m.unrollVectors(c, p.Vectors)
+					changed = true
+					c++
+				}
+			}
+			if !changed {
+				return nil, false, nil
+			}
+			return []*Kernel{m}, true, nil
+		}
 		if !k.Work {
 			return nil, false, nil
 		}
@@ -96,4 +115,67 @@ func (k *Kernel) unrollBy(c, u int) {
 // copied, the rest shared; a fold is replaced or shared, never copied.
 func (k *Kernel) copyFolded(i int, sub map[int]int) int {
 	return k.copyOf(i, sub)
+}
+
+// unrollVectors runs vector loop c n vectors a trip, its body copied n
+// times, copy j at iteration j*Lanes on, and the vectors left in a loop
+// after it that carries its sums on.
+func (k *Kernel) unrollVectors(c, n int) {
+	U := ir.U32
+	l := k.Loops[c]
+	L := l.Lanes
+	it := k.iterOf(c)
+	var rem Loop
+	var done int
+	rem.Parent, rem.Lanes, rem.Range = l.Parent, L, l.Range
+	if l.Count > 0 {
+		v := l.Count - 1
+		k.Loops[c].Count = k.bin(OpShr, U, v, k.u32(bitsOf(n))) + 1
+		rem.Count = k.bin(OpAnd, U, v, k.u32(n-1)) + 1
+		done = k.bin(OpMul, U, k.Loops[c].Count-1, k.u32(n*L))
+	} else {
+		rem.Trip = l.Trip % n
+		k.Loops[c].Trip = l.Trip / n
+		done = k.u32(l.Trip / n * n * L)
+	}
+	k.Loops[c].Copies = n
+	r := k.insertLoop(c+1, rem)
+	ri := k.add(Node{Op: OpIter, At: r, Type: U})
+	for _, f := range k.foldsOf(c) {
+		step := k.Nodes[f].A
+		acc := f
+		for j := 0; j < n; j++ {
+			at := it
+			if j > 0 {
+				at = k.bin(OpAdd, U, it, k.u32(j*L))
+			}
+			acc = k.copyOf(step, map[int]int{f: acc, it: at})
+		}
+		k.Nodes[f].A = acc
+		fr := k.add(Node{Op: OpFold, At: r, Type: k.Nodes[f].Type, B: f})
+		k.Nodes[fr].A = k.copyOf(step, map[int]int{f: fr, it: k.bin(OpAdd, U, done, ri)})
+		for i := range k.Nodes {
+			if i == fr || k.loopOf(i) == c || k.loopOf(i) == r {
+				continue
+			}
+			for _, a := range k.args(&k.Nodes[i]) {
+				if *a == f {
+					*a = fr
+				}
+			}
+		}
+		for i := range k.Stores {
+			if k.Stores[i].Val == f {
+				k.Stores[i].Val = fr
+			}
+		}
+	}
+}
+
+func bitsOf(n int) int {
+	b := 0
+	for 1<<b < n {
+		b++
+	}
+	return b
 }

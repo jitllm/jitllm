@@ -57,9 +57,10 @@ func (o *orderer) run() {
 	for _, i := range append(params, late...) {
 		o.node(i)
 	}
+	hs := k.homes()
 	for i := range k.Nodes {
 		if live[i] {
-			o.home[i] = k.loopOf(i)
+			o.home[i] = hs[i]
 		}
 	}
 	o.scope(-1)
@@ -151,12 +152,23 @@ func (o *orderer) scope(c int) {
 		}
 	}
 	for _, d := range inner {
+		for _, f := range k.foldsOf(d) {
+			if b := k.Nodes[f].B; k.Nodes[b].Op != OpFold {
+				o.need(b, c)
+			}
+		}
+	}
+	for _, d := range inner {
 		for i := range k.Nodes {
-			if h, ok := o.home[i]; ok && h == c && o.reads(d, i) {
+			if h, ok := o.home[i]; ok && h == c && o.reads(d, i) && !o.counts(d)[i] {
 				o.need(i, c)
 			}
 		}
+		o.countsFor(c, d)
 		o.loop(d)
+	}
+	for _, f := range k.foldsOf(c) {
+		o.need(k.Nodes[f].A, c)
 	}
 	for i, s := range k.Stores {
 		if s.At != c || s.Barrier || s.Run {
@@ -189,6 +201,79 @@ func (o *orderer) reads(d, i int) bool {
 					return true
 				}
 			}
+		}
+	}
+	return false
+}
+
+// counts is the nodes the counts of loop d and the loops in it are made
+// from.
+func (o *orderer) counts(d int) map[int]bool {
+	k := o.k
+	out := map[int]bool{}
+	var walk func(i int)
+	walk = func(i int) {
+		if out[i] {
+			return
+		}
+		out[i] = true
+		nd := k.Nodes[i]
+		for _, a := range k.args(&nd) {
+			walk(*a)
+		}
+	}
+	for e, l := range k.Loops {
+		if l.Count > 0 && k.within(e, d) {
+			walk(l.Count - 1)
+		}
+	}
+	return out
+}
+
+// countsFor emits, in scope c, the counts of loop d and the loops in it,
+// in the order of their loops, a count made by one operation from a value a
+// later count still reads after that count.
+func (o *orderer) countsFor(c, d int) {
+	k := o.k
+	var cs []int
+	for _, e := range k.preorder() {
+		if l := k.Loops[e]; l.Count > 0 && k.within(e, d) {
+			if n := l.Count - 1; o.home[n] == c && !o.done[n] {
+				cs = append(cs, n)
+			}
+		}
+	}
+	var front, last []int
+	for j, x := range cs {
+		n := k.Nodes[x]
+		deferred := false
+		if arity(n.Op) == 2 && k.Nodes[n.B].Op == OpConst {
+			for _, later := range cs[j+1:] {
+				if later != x && o.readsNode(later, n.A) {
+					deferred = true
+				}
+			}
+		}
+		if deferred {
+			last = append(last, x)
+		} else {
+			front = append(front, x)
+		}
+	}
+	for _, n := range append(front, last...) {
+		o.need(n, c)
+	}
+}
+
+// readsNode reports whether node i is computed from node x.
+func (o *orderer) readsNode(i, x int) bool {
+	if i == x {
+		return true
+	}
+	nd := o.k.Nodes[i]
+	for _, a := range o.k.args(&nd) {
+		if o.readsNode(*a, x) {
+			return true
 		}
 	}
 	return false
