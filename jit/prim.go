@@ -71,14 +71,22 @@ type Expr struct {
 	A, B, C int
 	In      int
 	Imm     int64
+	// Ax and Ext are an ExprAt's coordinates and the extents they index.
+	Ax, Ext []int
 }
 
 // ExprIn reads operand In at its access; ExprLoad reads it at node A;
-// ExprElem is the element's index.
+// ExprElem is the element's index; ExprCoord is coordinate A of the
+// primitive's Shape; ExprAt reads operand In at the element of coordinates
+// Ax in a space of extents Ext; ExprLive is the first position past the
+// attended Range.
 const (
-	ExprIn   Op = 255
-	ExprLoad Op = 254
-	ExprElem Op = 253
+	ExprIn    Op = 255
+	ExprLoad  Op = 254
+	ExprElem  Op = 253
+	ExprCoord Op = 252
+	ExprAt    Op = 251
+	ExprLive  Op = 250
 )
 
 // PrimStore is one store a primitive's element makes: operand Out at
@@ -88,7 +96,8 @@ type PrimStore struct {
 	Index, Value int
 }
 
-// Prim is one primitive.
+// Prim is one primitive. Where Shape is set, a map's elements and a
+// reduction's terms are its coordinates, a reduction's over the last.
 //   - Contract: Out[r] = sum over k of In[0][r*K + k] * In[1][k], Rows rows.
 //   - Map: Out[OutAt(e)] = Expr of In[j][At[j](e)], for the N elements e.
 //   - Reduce: Out[OutAt(o)] = Combine over k of Expr of In[j][At[j](o*K + k)],
@@ -101,6 +110,7 @@ type Prim struct {
 	OutAt   Access
 	N, K    int
 	Rows    int
+	Shape   []int
 	Expr    []Expr
 	Combine Op
 	Start   Start
@@ -111,13 +121,41 @@ type Prim struct {
 	// expression of the output (ExprElem).
 	Stores []PrimStore
 	Index  []Expr
-	// Span, a fact for passes, is a reduction's live terms: an expression of
-	// its output (ExprElem) whose last node is how many of its first terms
-	// can be live, the rest masked to its start.
+	// Range, a fact for passes, is the positions axis Range.Axis attends;
+	// Part, a range split, its partition axis and the positions in one.
+	Range *Range
+	Part  *Part
+	// Span, a fact for passes, is how many of the positions along the
+	// Range's axis are live from its start: an expression of the
+	// coordinates; past it each term is the start or the element unread.
 	Span []Expr
-	// Heads, a fact for passes, is a reduction's output as attention's:
+	// Heads, a fact for passes, is the primitive's space as attention's:
 	// its rows, query heads, key heads and head width.
 	Heads *Heads
+}
+
+// Range is an axis of positions, coordinate k at First rounded down to
+// Align plus k, the attended ones First up to End: First and End expressions
+// of the coordinates.
+type Range struct {
+	Axis       int
+	Align      int
+	First, End []Expr
+}
+
+// Part is a split range: coordinate Split its partition, Axis the
+// position in it.
+type Part struct {
+	Axis, Split int
+}
+
+// outShape is a primitive's output space: a map's elements, a reduction's
+// terms less the reduced axis.
+func (p *Prim) outShape() []int {
+	if p.Kind == PrimReduce {
+		return p.Shape[:len(p.Shape)-1]
+	}
+	return p.Shape
 }
 
 type Heads struct {

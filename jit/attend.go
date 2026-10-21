@@ -24,6 +24,14 @@ type attention struct {
 	q, out                               Operand
 }
 
+func (x *exprs) coord(a int) int { return x.add(Expr{Op: ExprCoord, A: a}) }
+
+func (x *exprs) at(j int, ext []int, ax ...int) int {
+	return x.add(Expr{Op: ExprAt, In: j, Ax: ax, Ext: ext})
+}
+
+func (x *exprs) load(j, ix int) int { return x.add(Expr{Op: ExprLoad, In: j, A: ix}) }
+
 func (a attention) prims() []Prim {
 	U, F := ir.U32, ir.F32
 	R, H, C, D := a.rows, a.heads, a.capacity, a.dim
@@ -33,106 +41,93 @@ func (a attention) prims() []Prim {
 	}
 	dots, scores, maxes, weights, sums, values := tmp("dots"), tmp("scores"), tmp("max"), tmp("weights"), tmp("sum"), tmp("values")
 	minus := math.Float32frombits(0xff7fffff)
+	keys, heads, dims := []int{R, H, C}, []int{R, H}, []int{R, H, D}
 
-	// key is position j of row r's keys, held inside what the row attends,
-	// and whether the row attends it.
-	key := func(x *exprs, r, j int) (t, valid int) {
-		at := func(w int) int {
-			return x.add(Expr{Op: ExprLoad, In: 1, A: x.op(OpAdd, U, x.op(OpMul, U, r, x.u(rowWords)), x.u(uint32(w)))})
-		}
-		first, end := at(rowStart), at(rowEnd)
-		base := x.op(OpMul, U, x.op(OpDiv, U, first, x.u(keyAlign)), x.u(keyAlign))
-		raw := x.op(OpAdd, U, base, j)
-		valid = x.op(OpLess, ir.Pred, x.op(OpSub, U, raw, first), x.op(OpSub, U, end, first))
-		last := x.op(OpSub, U, x.op(OpMax, U, end, x.u(1)), x.u(1))
-		return x.op(OpMin, U, x.op(OpMax, U, raw, first), last), valid
+	// Every primitive reads the rows' descriptors as operand 1 and the
+	// pages as 2, row r its coordinate 0.
+	row := func(x *exprs, w int) int {
+		return x.load(1, x.op(OpAdd, U, x.op(OpMul, U, x.coord(0), x.u(rowWords)), x.u(uint32(w))))
 	}
-	page := func(x *exprs, r, t int) (pid, off int) {
-		tab := x.add(Expr{Op: ExprLoad, In: 1, A: x.op(OpAdd, U, x.op(OpMul, U, r, x.u(rowWords)), x.u(rowTab))})
-		pid = x.add(Expr{Op: ExprLoad, In: 2, A: x.op(OpAdd, U, tab, x.op(OpDiv, U, t, x.u(uint32(a.page))))})
+	bound := func(w int) []Expr {
+		var x exprs
+		row(&x, w)
+		return x.e
+	}
+	rng := func(axis int) *Range {
+		return &Range{Axis: axis, Align: keyAlign, First: bound(rowStart), End: bound(rowEnd)}
+	}
+	// position is key k's position, its first the row's first rounded down.
+	position := func(x *exprs, k int) (pos, first int) {
+		first = row(x, rowStart)
+		return x.op(OpAdd, U, x.op(OpMul, U, x.op(OpDiv, U, first, x.u(keyAlign)), x.u(keyAlign)), k), first
+	}
+	// held is a position kept inside what the row attends.
+	held := func(x *exprs, pos, first int) int {
+		last := x.op(OpSub, U, x.op(OpMax, U, row(x, rowEnd), x.u(1)), x.u(1))
+		return x.op(OpMin, U, x.op(OpMax, U, pos, first), last)
+	}
+	page := func(x *exprs, t int) (pid, off int) {
+		pid = x.load(2, x.op(OpAdd, U, row(x, rowTab), x.op(OpDiv, U, t, x.u(uint32(a.page)))))
 		return pid, x.op(OpRem, U, t, x.u(uint32(a.page)))
-	}
-	// split is an element of (row, head, key) as its parts.
-	split := func(x *exprs, e int) (r, h, j int) {
-		j = x.op(OpRem, U, e, x.u(uint32(C)))
-		h = x.op(OpRem, U, x.op(OpDiv, U, e, x.u(uint32(C))), x.u(uint32(H)))
-		return x.op(OpDiv, U, e, x.u(uint32(C*H))), h, j
 	}
 
 	var dx exprs
-	el := dx.add(Expr{Op: ExprElem})
-	d := dx.op(OpRem, U, el, dx.u(uint32(D)))
-	r, h, j := split(&dx, dx.op(OpDiv, U, el, dx.u(uint32(D))))
-	t, _ := key(&dx, r, j)
-	pid, off := page(&dx, r, t)
+	h, k, d := dx.coord(1), dx.coord(2), dx.coord(3)
+	pos, first := position(&dx, k)
+	pid, off := page(&dx, held(&dx, pos, first))
 	kh := dx.op(OpDiv, U, h, dx.u(uint32(gqa)))
 	kat := dx.op(OpAdd, U, dx.op(OpMul, U, pid, dx.u(uint32(a.page*kw))),
 		dx.op(OpAdd, U, dx.op(OpMul, U, dx.op(OpAdd, U, dx.op(OpMul, U, kh, dx.u(uint32(D))), d), dx.u(uint32(a.page))), off))
-	qat := dx.op(OpAdd, U, dx.op(OpMul, U, dx.op(OpAdd, U, dx.op(OpMul, U, r, dx.u(uint32(H))), h), dx.u(uint32(D))), d)
-	dx.op(OpMul, F, dx.add(Expr{Op: ExprLoad, In: 0, A: qat}), dx.add(Expr{Op: ExprLoad, In: 3, A: kat}))
+	qat := dx.op(OpAdd, U, dx.op(OpMul, U, dx.op(OpAdd, U, dx.op(OpMul, U, dx.coord(0), dx.u(uint32(H))), h), dx.u(uint32(D))), d)
+	dx.op(OpMul, F, dx.load(0, qat), dx.load(3, kat))
 
 	var sx exprs
-	se := sx.add(Expr{Op: ExprElem})
-	sr, _, sj := split(&sx, se)
-	_, svalid := key(&sx, sr, sj)
-	sx.sel(F, svalid, sx.op(OpMul, F, sx.add(Expr{Op: ExprLoad, In: 0, A: se}), sx.f(a.scale)), sx.f(minus))
+	spos, sfirst := position(&sx, sx.coord(2))
+	live := sx.add(Expr{Op: ExprLive})
+	valid := sx.op(OpLess, ir.Pred, sx.op(OpSub, U, spos, sfirst), sx.op(OpSub, U, live, sfirst))
+	dot := sx.at(0, keys, sx.coord(0), sx.coord(1), sx.coord(2))
+	sx.sel(F, valid, sx.op(OpMul, F, dot, sx.f(a.scale)), sx.f(minus))
 
 	var mx exprs
-	mx.in(0)
+	mx.at(0, keys, mx.coord(0), mx.coord(1), mx.coord(2))
 
 	var wx exprs
-	we := wx.add(Expr{Op: ExprElem})
-	wr, _, wj := split(&wx, we)
-	_, wvalid := key(&wx, wr, wj)
-	m := wx.add(Expr{Op: ExprLoad, In: 3, A: wx.op(OpDiv, U, we, wx.u(uint32(C)))})
-	wx.sel(F, wvalid, wx.un(OpExp, F, wx.op(OpSub, F, wx.add(Expr{Op: ExprLoad, In: 0, A: we}), m)), wx.f(0))
+	wpos, _ := position(&wx, wx.coord(2))
+	below := wx.op(OpLess, ir.Pred, wpos, wx.add(Expr{Op: ExprLive}))
+	s := wx.at(0, keys, wx.coord(0), wx.coord(1), wx.coord(2))
+	m := wx.at(3, heads, wx.coord(0), wx.coord(1))
+	wx.sel(F, below, wx.un(OpExp, F, wx.op(OpSub, F, s, m)), wx.f(0))
 
 	var lx exprs
-	lx.in(0)
+	lx.at(0, keys, lx.coord(0), lx.coord(1), lx.coord(2))
 
 	var vx exprs
-	ve := vx.add(Expr{Op: ExprElem})
-	vd := vx.op(OpRem, U, vx.op(OpDiv, U, ve, vx.u(uint32(C))), vx.u(uint32(D)))
-	vrh := vx.op(OpDiv, U, vx.op(OpDiv, U, ve, vx.u(uint32(C))), vx.u(uint32(D)))
-	vj := vx.op(OpRem, U, ve, vx.u(uint32(C)))
-	vr, vh := vx.op(OpDiv, U, vrh, vx.u(uint32(H))), vx.op(OpRem, U, vrh, vx.u(uint32(H)))
-	vt, _ := key(&vx, vr, vj)
-	vpid, voff := page(&vx, vr, vt)
+	vh, vd, vk := vx.coord(1), vx.coord(2), vx.coord(3)
+	vpos, vfirst := position(&vx, vk)
+	vpid, voff := page(&vx, held(&vx, vpos, vfirst))
 	vkh := vx.op(OpDiv, U, vh, vx.u(uint32(gqa)))
 	vat := vx.op(OpAdd, U, vx.op(OpMul, U, vx.op(OpAdd, U, vx.op(OpMul, U, vpid, vx.u(uint32(a.page))), voff), vx.u(uint32(kw))),
 		vx.op(OpAdd, U, vx.op(OpMul, U, vkh, vx.u(uint32(D))), vd))
-	w := vx.add(Expr{Op: ExprLoad, In: 0, A: vx.op(OpAdd, U, vx.op(OpMul, U, vrh, vx.u(uint32(C))), vj)})
-	vx.op(OpMul, F, w, vx.add(Expr{Op: ExprLoad, In: 3, A: vat}))
+	w := vx.at(0, keys, vx.coord(0), vh, vk)
+	vx.op(OpMul, F, w, vx.load(3, vat))
 
 	var ox exprs
-	oe := ox.add(Expr{Op: ExprElem})
-	l := ox.add(Expr{Op: ExprLoad, In: 1, A: ox.op(OpDiv, U, oe, ox.u(uint32(D)))})
-	ox.op(OpMul, F, ox.add(Expr{Op: ExprLoad, In: 0, A: oe}), ox.op(OpDiv, F, ox.f(1), ox.op(OpMax, F, l, ox.f(1e-30))))
+	nv := ox.at(0, dims, ox.coord(0), ox.coord(1), ox.coord(2))
+	l := ox.at(1, heads, ox.coord(0), ox.coord(1))
+	ox.op(OpMul, F, nv, ox.op(OpDiv, F, ox.f(1), ox.op(OpMax, F, l, ox.f(1e-30))))
 
 	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], tableRows, tablePages}, ops[1:]...) }
-	// span is the live keys of the output whose row is r(o): the row's
-	// attended span from its aligned first position.
-	span := func(per int) []Expr {
-		var x exprs
-		o := x.add(Expr{Op: ExprElem})
-		r := x.op(OpDiv, U, o, x.u(uint32(per)))
-		at := func(w int) int {
-			return x.add(Expr{Op: ExprLoad, In: 1, A: x.op(OpAdd, U, x.op(OpMul, U, r, x.u(rowWords)), x.u(uint32(w)))})
-		}
-		first, end := at(rowStart), at(rowEnd)
-		base := x.op(OpMul, U, x.op(OpDiv, U, first, x.u(keyAlign)), x.u(keyAlign))
-		x.sel(U, x.op(OpLess, ir.Pred, first, end), x.op(OpSub, U, end, base), x.u(0))
-		return x.e
-	}
+	hd := &Heads{Rows: R, Query: H, Key: a.kv, Dim: D}
 	return []Prim{
-		{Kind: PrimReduce, N: R * H * C, K: D, In: tables(a.q, tableKeys), Out: dots, Combine: OpAdd, Expr: dx.e},
-		{Kind: PrimMap, N: R * H * C, In: tables(dots), Out: scores, Expr: sx.e},
-		{Kind: PrimReduce, N: R * H, K: C, In: []Operand{scores, tableRows}, At: []Access{atElement, atElement}, Out: maxes, Combine: OpMax,
-			Init: int64(math.Float32bits(minus)), Expr: mx.e, Span: span(H), Heads: &Heads{Rows: R, Query: H, Key: a.kv, Dim: D}},
-		{Kind: PrimMap, N: R * H * C, In: tables(scores, maxes), Out: weights, Expr: wx.e},
-		{Kind: PrimReduce, N: R * H, K: C, In: []Operand{weights, tableRows}, At: []Access{atElement, atElement}, Out: sums, Combine: OpAdd,
-			Expr: lx.e, Span: span(H)},
-		{Kind: PrimReduce, N: R * H * D, K: C, In: tables(weights, tableValues), Out: values, Combine: OpAdd, Expr: vx.e, Span: span(H * D)},
-		{Kind: PrimMap, N: R * H * D, In: []Operand{values, sums}, Out: a.out, Expr: ox.e},
+		{Kind: PrimReduce, Shape: []int{R, H, C, D}, N: R * H * C, K: D, In: tables(a.q, tableKeys), Out: dots, Combine: OpAdd,
+			Expr: dx.e, Range: rng(2), Heads: hd},
+		{Kind: PrimMap, Shape: keys, N: R * H * C, In: tables(dots), Out: scores, Expr: sx.e, Range: rng(2), Heads: hd},
+		{Kind: PrimReduce, Shape: keys, N: R * H, K: C, In: tables(scores), Out: maxes, Combine: OpMax,
+			Init: int64(math.Float32bits(minus)), Expr: mx.e, Range: rng(2), Heads: hd},
+		{Kind: PrimMap, Shape: keys, N: R * H * C, In: tables(scores, maxes), Out: weights, Expr: wx.e, Range: rng(2), Heads: hd},
+		{Kind: PrimReduce, Shape: keys, N: R * H, K: C, In: tables(weights), Out: sums, Combine: OpAdd, Expr: lx.e, Range: rng(2), Heads: hd},
+		{Kind: PrimReduce, Shape: []int{R, H, D, C}, N: R * H * D, K: C, In: tables(weights, tableValues), Out: values, Combine: OpAdd,
+			Expr: vx.e, Range: rng(3), Heads: hd},
+		{Kind: PrimMap, Shape: dims, N: R * H * D, In: []Operand{values, sums}, Out: a.out, Expr: ox.e, Heads: hd},
 	}
 }
