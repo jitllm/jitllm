@@ -35,6 +35,7 @@ func (p Order) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		o.run()
 		m.Seq = m.interleave(o.seq)
 		m.constRuns()
+		m.constsBeforeSiblings()
 		m.spreadFirst()
 		m.orderCursors()
 		return []*Kernel{m}, true, nil
@@ -230,10 +231,71 @@ func (o *orderer) need(i, c int) {
 		o.loop(o.childOf(h, c))
 		return
 	}
-	for _, a := range k.evalArgs(&nd, o.depths) {
+	if c < 0 {
+		for _, a := range k.evalArgs(&nd, o.pending()) {
+			if k.Nodes[*a].Op == OpFold {
+				continue
+			}
+			for _, b := range k.evalArgs(&k.Nodes[*a], o.pending()) {
+				if !o.constLoad(*b) {
+					o.need(*b, c)
+				}
+			}
+		}
+	}
+	for _, a := range k.evalArgs(&nd, o.pending()) {
 		o.need(*a, c)
 	}
+	if nd.Share > 0 {
+		o.beforeShare(i, c)
+	}
 	o.node(i)
+}
+
+// pending is the depths evalArgs orders operands by, a value already made
+// and a load of constants leaves. Outside every loop an operation's
+// operands' own operands are made first, then the operands by what is
+// left to make of them.
+func (o *orderer) pending() map[int]int {
+	memo := map[int]int{}
+	for i := range o.k.Nodes {
+		if o.done[i] || o.constLoad(i) {
+			memo[i] = 0
+		}
+	}
+	return memo
+}
+
+// constLoad reports whether node i loads a constant from the constant
+// block.
+func (o *orderer) constLoad(i int) bool {
+	nd := o.k.Nodes[i]
+	return nd.Op == OpLoad && o.k.Bufs[nd.Buf].Operand.Kind == OperandConsts
+}
+
+// beforeShare makes, in scope c, the readers of a value made earlier with
+// node i's Share label whose operands are all made: i takes that value's
+// register.
+func (o *orderer) beforeShare(i, c int) {
+	k := o.k
+	for x, xn := range k.Nodes {
+		if x == i || xn.Share != k.Nodes[i].Share || !o.done[x] {
+			continue
+		}
+		for r := range k.Nodes {
+			if o.done[r] || r == i || o.home[r] != c {
+				continue
+			}
+			reads, ready := false, true
+			for _, a := range k.args(&k.Nodes[r]) {
+				reads = reads || *a == x
+				ready = ready && (o.done[*a] || k.Nodes[*a].Op == OpConst)
+			}
+			if reads && ready {
+				o.node(r)
+			}
+		}
+	}
 }
 
 // childOf is the loop directly inside c that holds loop h.
@@ -262,6 +324,9 @@ func (o *orderer) scope(c int) {
 		}
 	}
 	for _, d := range inner {
+		if t := o.tailOf(d); t >= 0 {
+			o.startsTogether(c, d, t)
+		}
 		for i := range k.Nodes {
 			if h, ok := o.home[i]; ok && h == c && k.Nodes[i].Op != OpFold && !k.isZero(i) && o.reads(d, i) && !o.counts(d)[i] {
 				o.need(i, c)
@@ -302,7 +367,16 @@ func (o *orderer) scope(c int) {
 		for _, a := range k.storeArgs(&s) {
 			o.need(*a, c)
 		}
-		o.seq = append(o.seq, Entry{Kind: EntryStore, I: i})
+		if c >= 0 {
+			o.seq = append(o.seq, Entry{Kind: EntryStore, I: i})
+		}
+	}
+	if c < 0 {
+		for i, s := range k.Stores {
+			if s.At == c && !s.Barrier && !s.Run {
+				o.seq = append(o.seq, Entry{Kind: EntryStore, I: i})
+			}
+		}
 	}
 	for _, f := range k.foldsOf(c) {
 		if _, wait := o.after[f]; !wait {
@@ -422,6 +496,9 @@ func (o *orderer) loop(d int) {
 	}
 	o.loopDone[d] = true
 	for _, f := range o.k.foldsOf(d) {
+		if o.done[f] {
+			continue
+		}
 		o.done[f] = true
 		o.seq = append(o.seq, Entry{Kind: EntryNode, I: f})
 	}
@@ -437,6 +514,50 @@ func (o *orderer) loop(d int) {
 	o.seq = append(o.seq, Entry{Kind: EntryLoop, I: d})
 	o.scope(d)
 	o.seq = append(o.seq, Entry{Kind: EntryEnd, I: d})
+}
+
+// tailOf is the loop that continues vector loop d, -1 for none.
+func (o *orderer) tailOf(d int) int {
+	if o.k.Loops[d].Lanes == 0 {
+		return -1
+	}
+	return o.k.tailOf(d)
+}
+
+// startsTogether makes, in scope c, vector loop d's and its tail t's
+// starts before d: the values the loops read that earlier code computes,
+// then for each loop its sums in their order, each making its start, and
+// the constants it reads; a sum the tail carries on from d's stays where
+// it is.
+func (o *orderer) startsTogether(c, d, t int) {
+	k := o.k
+	constant := func(i int) bool {
+		nd := k.Nodes[i]
+		return nd.Op == OpConst || nd.Op == OpLanes || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandConsts || k.startsOnly(i)
+	}
+	reads := func(e int, consts bool) {
+		for i := range k.Nodes {
+			if h, ok := o.home[i]; ok && h == c && k.Nodes[i].Op != OpFold && !k.isZero(i) && constant(i) == consts && o.reads(e, i) && !o.counts(e)[i] {
+				o.need(i, c)
+			}
+		}
+	}
+	reads(d, false)
+	reads(t, false)
+	for _, e := range []int{d, t} {
+		for _, f := range k.foldsOf(e) {
+			b := k.Nodes[f].B
+			if k.Nodes[b].Op == OpFold || o.done[f] {
+				continue
+			}
+			if !k.isZero(b) && !k.startsOnly(b) {
+				o.need(b, c)
+			}
+			o.done[f] = true
+			o.seq = append(o.seq, Entry{Kind: EntryNode, I: f})
+		}
+		reads(e, true)
+	}
 }
 
 // orderCursors orders each loop's cursors: a buffer the loop stores to
@@ -624,6 +745,77 @@ func (k *Kernel) startsOnly(i int) bool {
 func (k *Kernel) isZero(i int) bool {
 	nd := k.Nodes[i]
 	return nd.Op == OpConst && nd.Type == ir.F32 && nd.Imm == 0
+}
+
+// constsBeforeSiblings loads, outside every loop, a constant that one
+// operation reads before the values the operation's reader reads beside
+// it that were made after the operation's other operands.
+func (k *Kernel) constsBeforeSiblings() {
+	depth := make([]int, len(k.Seq))
+	d := 0
+	pos := map[int]int{}
+	for p, e := range k.Seq {
+		switch e.Kind {
+		case EntryLoop:
+			d++
+		case EntryEnd:
+			d--
+		case EntryNode:
+			pos[e.I] = p
+		}
+		depth[p] = d
+	}
+	readers := func(i int) []int {
+		var out []int
+		for j := range k.Nodes {
+			for _, a := range k.args(&k.Nodes[j]) {
+				if *a == i {
+					out = append(out, j)
+					break
+				}
+			}
+		}
+		return out
+	}
+	for p := 0; p < len(k.Seq); p++ {
+		e := k.Seq[p]
+		if e.Kind != EntryNode || depth[p] != 0 {
+			continue
+		}
+		nd := k.Nodes[e.I]
+		if nd.Op != OpLoad || k.Bufs[nd.Buf].Operand.Kind != OperandConsts {
+			continue
+		}
+		rs := readers(e.I)
+		if len(rs) != 1 {
+			continue
+		}
+		ps := readers(rs[0])
+		if len(ps) != 1 {
+			continue
+		}
+		after := -1
+		for _, a := range k.args(&k.Nodes[rs[0]]) {
+			if q, ok := pos[*a]; ok && *a != e.I {
+				after = max(after, q)
+			}
+		}
+		first := p
+		for _, a := range k.args(&k.Nodes[ps[0]]) {
+			if q, ok := pos[*a]; ok && *a != rs[0] && q < first && q > after && depth[q] == 0 {
+				first = q
+			}
+		}
+		if first < p {
+			copy(k.Seq[first+1:p+1], k.Seq[first:p])
+			k.Seq[first] = e
+			for q, x := range k.Seq {
+				if x.Kind == EntryNode {
+					pos[x.I] = q
+				}
+			}
+		}
+	}
 }
 
 // constRuns loads, outside every loop, the constants of a run of

@@ -64,15 +64,15 @@ func cpuProfile() Profile {
 		FMA{},
 		FirstTerm{},
 		Jam{Lanes: 8, Sums: 8, Walk: true, Spread: []int{15, 13}, Rows: 14},
-		Vectorize{Lanes: 8, Pairs: [5]int{0, 2, 3, 4, 5}},
+		Vectorize{Lanes: 8, Pairs: [5]int{0, 2, 3, 4, 5}, Carry: []int{9, 10, 8}},
 		InPlace{},
 		Unroll{Vectors: 4},
 		Chains{N: 4},
 		Simplify{ConstLast: true},
 		XorSwap{},
 		BitMask{},
-		BitSelect{},
-		Induction{},
+		BitSelect{Regs: []int{5, 6, 7}},
+		Induction{Tail: 13},
 		Consts{Shared: mainBlock()},
 		Args{Fields: mainArgs(), Parts: map[PartKind]ArgFields{PartSample: mainSampleArgs()}},
 		Simplify{ConstLast: true},
@@ -87,7 +87,7 @@ func cpuProfile() Profile {
 			Counters: [2]int{int(x86.R10), int(x86.R11)}, Outer: int(x86.RAX),
 			Kept: []int{int(x86.R9), int(x86.RDX), int(x86.R12), int(x86.R13)}, Vectors: 16, Scratch: int(x86.RAX),
 			Resident: map[int]int{0: 9, 1: 10, 2: 11, 3: 12, 4: 13, 5: 14, 6: 15, 7: 8, 9: 7},
-			Walks:    []int{int(x86.R11), int(x86.R8)}, Lanes: 2, Scalars: 6, Keep: 7},
+			Walks:    []int{int(x86.R11), int(x86.R8)}, Lanes: []int{1, 4}, Scalars: 6, Keep: 7},
 	}}
 }
 

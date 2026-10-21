@@ -6,8 +6,11 @@ import "github.com/jitllm/jitllm/jit/ir"
 // as data rather than as an address: a sum of the loop from 0, one more
 // each trip; in a vector loop from each lane's index, the lanes more each
 // trip; and in the loop that takes a vector loop's remaining trips, where
-// it reads the trips done and its own, on from the vector loop's.
-type Induction struct{}
+// it reads the trips done and its own, on from the vector loop's. Tail,
+// where set, is 1 + the register of that loop's step.
+type Induction struct {
+	Tail int
+}
 
 func (Induction) Name() string { return "induction" }
 
@@ -54,7 +57,11 @@ func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 					}
 				}
 			}
-			m.Nodes[f].A = m.bin(OpAdd, ir.I32, f, m.add(Node{Op: OpConst, Type: ir.I32, Imm: step}))
+			st := m.add(Node{Op: OpConst, Type: ir.I32, Imm: step})
+			if from != it {
+				m.Nodes[st].Hint = p.Tail
+			}
+			m.Nodes[f].A = m.bin(OpAdd, ir.I32, f, st)
 			if l.Lanes > 0 {
 				vec[c] = f
 			}

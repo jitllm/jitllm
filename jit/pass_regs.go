@@ -49,9 +49,9 @@ type Regs struct {
 	// counts in the second counter or the first of these free, set as the
 	// pass starts.
 	Walks []int
-	// Lanes, where set, is 1 + the register a lane sum, maximum or minimum
-	// takes for its scratch where it is free.
-	Lanes int
+	// Lanes are the registers a lane sum, maximum or minimum takes for its
+	// scratch, the first of them free.
+	Lanes []int
 	// Scalars, where set, is 1 + the first of the registers a constant read
 	// outside every loop takes, each its own, upward; Keep is 1 + the
 	// register of the zero a tail keeps lanes with.
@@ -454,7 +454,7 @@ func (k *Kernel) vectorWords() map[int]bool {
 				if out[i] || nd.Type == ir.F32 {
 					continue
 				}
-				v := nd.Op == OpHalf || nd.Op == OpRoundI32 || nd.Op == OpLess && (k.Nodes[nd.A].Type == ir.F32 || out[nd.A] || out[nd.B])
+				v := nd.Op == OpHalf || nd.Op == OpRoundI32 || (nd.Op == OpLess || nd.Op == OpEq) && (k.Nodes[nd.A].Type == ir.F32 || out[nd.A] || out[nd.B])
 				if !v && (nd.Op == OpAnd || nd.Op == OpGtW || nd.Op == OpAndNot || nd.Op == OpXor || nd.Op == OpShr || nd.Op == OpShl || nd.Op == OpSar || (nd.Type == ir.I32 || nd.Type == ir.U32) && nd.Op != OpConst && nd.Op != OpLoad) {
 					for _, a := range k.args(&nd) {
 						v = v || out[*a]
@@ -617,7 +617,11 @@ func (b *binder86) vectors() error {
 				k.Nodes[f].Reg = k.Nodes[init].Reg
 				continue
 			}
-			if err := give(f, lowest(0, -1)); err != nil {
+			want := lowest(0, -1)
+			if h := k.Nodes[f].Hint - 1; h >= 0 && !busy[h] {
+				want = h
+			}
+			if err := give(f, want); err != nil {
 				return err
 			}
 			held[k.Nodes[f].Reg-1] = k.Nodes[f].At
@@ -660,41 +664,36 @@ func (b *binder86) vectors() error {
 			if want < 0 || busy[want] {
 				want = lowest(chain[i], hs[i])
 			}
-			if err := give(i, want); err != nil {
-				return err
-			}
-			continue
-		}
-		if r, ok := b.resident(i); ok {
+			reg = want
+		} else if r, ok := b.resident(i); ok {
 			reg = r
 			free(pos, false)
 			if err := give(i, reg); err != nil {
 				return err
 			}
 			continue
-		}
-		if f, ok := stepOf[i]; ok && k.Nodes[f].Reg > 0 {
-			reg = k.Nodes[f].Reg - 1
-		}
-		first := -1
-		switch nd.Op {
-		case OpAdd, OpSub, OpMul, OpMin, OpMax, OpHSum, OpHMax, OpHMin, OpBitcast, OpBroadcast, OpSqrt, OpAnd, OpGtW, OpAndNot, OpOr, OpAddSub, OpFirstLane:
-			first = nd.A
-		case OpDiv:
-			first = nd.B
-		case OpFma:
-			first = nd.C
-			if b.last[nd.C] != pos || !k.needsVector(nd.C) {
-				first = nd.A
-			}
-		}
-		if reg < 0 && first >= 0 && k.Nodes[first].Reg > 0 && k.needsVector(first) && (b.last[first] == pos || nd.Op == OpBitcast) {
-			reg = k.Nodes[first].Reg - 1
-		}
-		if reg >= 0 {
-			free(pos, innermost(hs[i]))
 		} else {
-			reg = lowest(chain[i], hs[i])
+			if f, ok := stepOf[i]; ok && k.Nodes[f].Reg > 0 {
+				reg = k.Nodes[f].Reg - 1
+			}
+			first := -1
+			switch nd.Op {
+			case OpAdd, OpSub, OpMul, OpMin, OpMax, OpHSum, OpHMax, OpHMin, OpBitcast, OpBroadcast, OpSqrt, OpAnd, OpGtW, OpAndNot, OpOr, OpAddSub, OpFirstLane:
+				first = nd.A
+			case OpDiv:
+				first = nd.B
+			case OpFma:
+				first = nd.C
+				if b.last[nd.C] != pos || !k.needsVector(nd.C) {
+					first = nd.A
+				}
+			}
+			if reg < 0 && first >= 0 && k.Nodes[first].Reg > 0 && k.needsVector(first) && (b.last[first] == pos || nd.Op == OpBitcast) {
+				reg = k.Nodes[first].Reg - 1
+			}
+			if reg < 0 {
+				reg = lowest(chain[i], hs[i])
+			}
 			free(pos, innermost(hs[i]))
 		}
 		if err := give(i, reg); err != nil {
@@ -719,8 +718,11 @@ func (b *binder86) vectors() error {
 		}
 		if nd.Op == OpHSum || nd.Op == OpHMax || nd.Op == OpHMin {
 			t := lowest(0, hs[i])
-			if r := b.p.Lanes - 1; r >= 0 && !busy[r] && !reserved[r] {
-				t = r
+			for _, r := range b.p.Lanes {
+				if !busy[r] && !reserved[r] {
+					t = r
+					break
+				}
 			}
 			if t < 0 {
 				return errors.New("no register for a lane sum")

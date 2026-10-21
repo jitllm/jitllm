@@ -1,6 +1,7 @@
 package jit
 
 import (
+	"maps"
 	"math"
 	"math/bits"
 
@@ -22,6 +23,10 @@ type Vectorize struct {
 	// the second operand, its pairs' first lanes, their second lanes, the
 	// row and its pairs swapped.
 	Pairs [5]int
+	// Carry, where set, are the registers of a carried extreme's tail
+	// value, the tail's carried value and the copy of the lanes' extremes
+	// the comparison after the loops reads.
+	Carry []int
 }
 
 func (Vectorize) Name() string { return "vectorize" }
@@ -37,7 +42,7 @@ func (p Vectorize) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				continue
 			}
 			if m.vectorizable(c) {
-				m.vectorize(c, p.Lanes)
+				m.vectorize(c, p.Lanes, p.Carry)
 				changed = true
 				c++
 			}
@@ -108,7 +113,7 @@ func (k *Kernel) consecutive(b, ix int, ax []int, it, c int) bool {
 	return nd.Op == OpAdd && (nd.B == it && !k.varies(nd.A, c) || nd.A == it && !k.varies(nd.B, c))
 }
 
-func (k *Kernel) vectorize(c, L int) {
+func (k *Kernel) vectorize(c, L int, carry []int) {
 	l := k.Loops[c]
 	U := ir.U32
 	shift := bits.TrailingZeros(uint(L))
@@ -141,7 +146,7 @@ func (k *Kernel) vectorize(c, L int) {
 		}
 	}
 	for v, cf := range carries {
-		k.vectorizeCarry(c, t, v, cf, sub)
+		k.vectorizeCarry(c, t, v, cf, sub, carry)
 	}
 	for _, f := range k.foldsOf(c) {
 		if _, ok := carries[f]; ok || k.carriedBy(f) >= 0 {
@@ -254,15 +259,35 @@ func (k *Kernel) vectorizeExtreme(c, t, f int, sub map[int]int) {
 // fold cf, the value v carries, in each lane, and in tail t on folds of
 // their own from v's start, cf from each lane's first term's: after the loops the lanes' extreme, the least
 // carried value of the lanes that hold it, and the tail's where its own is
-// beyond it.
-func (k *Kernel) vectorizeCarry(c, t, v, cf int, sub map[int]int) {
+// beyond it. The lanes' extreme is taken in place, the comparison reading
+// a copy of the lanes' values made by their own combine; the extreme and
+// the value after the loops share the lanes' register, the carried values
+// after them the carried lanes'.
+func (k *Kernel) vectorizeCarry(c, t, v, cf int, sub map[int]int, carry []int) {
 	ct := k.Nodes[cf].Type
 	op := k.Nodes[k.Nodes[v].A].Op
 	vt := k.add(Node{Op: OpFold, At: t, Type: ir.F32, B: k.Nodes[v].B})
 	cft := k.add(Node{Op: OpFold, At: t, Type: ct, B: k.add(Node{Op: OpConst, Type: ct})})
+	if len(carry) == 3 {
+		k.Nodes[vt].Hint, k.Nodes[cft].Hint = carry[0]+1, carry[1]+1
+	}
 	sub[v], sub[cf] = vt, cft
-	k.Nodes[vt].A = k.copyOf(k.Nodes[v].A, sub)
-	k.Nodes[cft].A = k.copyOf(k.Nodes[cf].A, sub)
+	from := maps.Clone(sub)
+	k.Nodes[vt].A = k.copyKeep(k.Nodes[v].A, sub)
+	k.Nodes[cft].A = k.copyKeep(k.Nodes[cf].A, sub)
+	if len(carry) == 3 {
+		label := 1
+		for _, nd := range k.Nodes {
+			label = max(label, nd.Share+1)
+		}
+		hs := k.homes()
+		for x, y := range sub {
+			if _, ok := from[x]; !ok && k.Nodes[x].Op == OpLoad && x < len(hs) && hs[x] == c {
+				k.Nodes[x].Share, k.Nodes[y].Share = label, label
+				label++
+			}
+		}
+	}
 	lanes0 := k.add(Node{Op: OpLanes, Type: ir.U32, Imm: int64(k.Loops[c].Lanes)})
 	k.Nodes[cf].B = k.copyOf(k.Nodes[k.Nodes[cf].A].B, map[int]int{k.iterOf(c): lanes0})
 	lanes, least := OpHMax, int64(math.MaxInt32)
@@ -270,12 +295,29 @@ func (k *Kernel) vectorizeCarry(c, t, v, cf int, sub map[int]int) {
 		lanes = OpHMin
 	}
 	first := len(k.Nodes)
-	m := k.add(Node{Op: OpBroadcast, Type: ir.F32, A: k.add(Node{Op: lanes, Type: ir.F32, A: v})})
-	held := k.add(Node{Op: OpSelect, Type: ct, A: k.add(Node{Op: OpEq, Type: ir.Pred, A: v, B: m}), B: cf,
+	kept := v
+	if len(carry) == 3 {
+		kept = k.add(Node{Op: op, Type: ir.F32, A: v, B: v, Hint: carry[2] + 1})
+	}
+	ext := k.add(Node{Op: lanes, Type: ir.F32, A: v})
+	m := k.add(Node{Op: OpBroadcast, Type: ir.F32, A: ext})
+	held := k.add(Node{Op: OpSelect, Type: ct, A: k.add(Node{Op: OpEq, Type: ir.Pred, A: kept, B: m}), B: cf,
 		C: k.add(Node{Op: OpConst, Type: ct, Imm: least})})
 	ci := k.add(Node{Op: OpHMin, Type: ct, A: held})
 	val := k.bin(op, ir.F32, vt, m)
 	car := k.add(Node{Op: OpSelect, Type: ct, A: k.add(Node{Op: OpLess, Type: ir.Pred, A: m, B: vt}), B: cft, C: ci})
+	if len(carry) == 3 {
+		label := 1
+		for _, nd := range k.Nodes {
+			label = max(label, nd.Share+1)
+		}
+		for _, i := range []int{v, ext, m, val} {
+			k.Nodes[i].Share = label
+		}
+		for _, i := range []int{cf, held, ci, car} {
+			k.Nodes[i].Share = label + 1
+		}
+	}
 	k.readAfter(c, t, map[int]int{v: val, cf: car}, first)
 }
 
