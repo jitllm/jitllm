@@ -19,8 +19,10 @@ estimator.
   composer's `*jit.Registry`, or a cache of kernels formed before).
 - `engine/cost/hardware_table.go` -- the table, `cost.Known(name, api)`;
   `go run ./scripts/genhardware -probe engine/cost/hardware_table.go` probes
-  a machine into it, and a box without the source runs the compiled command
-  and its table comes back.
+  a machine into it, merging by the file's syntax (an entry replaced by its
+  hardware model and backend, or added). A box without the source runs the
+  compiled command into a new file, which comes back and goes in with
+  `go run ./scripts/genhardware -merge FILE engine/cost/hardware_table.go`.
 - `engine/probe` -- the probes: host (amd64 with AVX2, arm64), GPU (CUDA,
   Metal).
 - `paritytest/board/estimate_test.go` (`TestEstimateMatchesTheHost`),

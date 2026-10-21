@@ -33,21 +33,6 @@ func Known(name, api string) (Profile, bool) {
 // Hardware is every profile in the table.
 func Hardware() []Profile { return slices.Clone(hardware) }
 
-// Merge is table with each of ps in place of the entry of its name and
-// backend, or added where it has none.
-func Merge(table, ps []Profile) []Profile {
-	out := slices.Clone(table)
-	for _, p := range ps {
-		i := slices.IndexFunc(out, func(q Profile) bool { return q.Name == p.Name && q.API == p.API })
-		if i < 0 {
-			out = append(out, p)
-			continue
-		}
-		out[i] = p
-	}
-	return out
-}
-
 // RenderHardware is the Go source of the table of profiles ps: one entry per
 // hardware model and backend, by name, each field that is not zero on a
 // line of its own and a device's kind always, numbers to four significant

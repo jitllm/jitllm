@@ -1,13 +1,17 @@
-// Command genhardware measures this machine into the estimator's hardware
-// table:
+// Command genhardware measures machines into the estimator's hardware table:
 //
 //	go run ./scripts/genhardware -probe engine/cost/hardware_table.go
 //
-// probes the host and each device with a clock to time kernels on, once per
-// hardware model, puts each profile in the table in place of the entry of
-// its name and backend or beside the others, and writes the table. A machine
-// without the source runs the compiled command, which carries the table it
-// was built with, and its table comes back.
+// probes this machine's host and each device with a clock to time kernels
+// on, once per hardware model, and merges the profiles into the table: each
+// in place of the entry of its hardware model and backend, or beside the
+// others. The merge reads the table's syntax, not the table the command was
+// built with, so the file given is what it adds to. On a machine without the
+// source, the compiled command probes into a new file, which comes back and
+// is merged:
+//
+//	genhardware -probe m4.go                         # on the machine
+//	go run ./scripts/genhardware -merge m4.go engine/cost/hardware_table.go
 package main
 
 import (
@@ -22,23 +26,47 @@ import (
 )
 
 func main() {
-	measure := flag.Bool("probe", false, "probe this machine into the table")
+	measure := flag.Bool("probe", false, "probe this machine into TABLE")
+	from := flag.String("merge", "", "merge the profiles of this table file into TABLE")
 	flag.Parse()
-	if !*measure || flag.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: genhardware -probe TABLE")
+	if *measure == (*from != "") || flag.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: genhardware -probe TABLE | genhardware -merge FROM TABLE")
 		os.Exit(2)
 	}
-	ps, err := probeMachine()
-	if err == nil {
-		var b []byte
-		if b, err = cost.RenderHardware(cost.Merge(cost.Hardware(), ps)); err == nil {
-			err = os.WriteFile(flag.Arg(0), b, 0o644)
-		}
-	}
-	if err != nil {
+	if err := run(*measure, *from, flag.Arg(0)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func run(measure bool, from, table string) error {
+	var add []byte
+	if measure {
+		ps, err := probeMachine()
+		if err != nil {
+			return err
+		}
+		if add, err = cost.RenderHardware(ps); err != nil {
+			return err
+		}
+	} else {
+		var err error
+		if add, err = os.ReadFile(from); err != nil {
+			return err
+		}
+	}
+	into, err := os.ReadFile(table)
+	if os.IsNotExist(err) {
+		into, err = cost.RenderHardware(nil)
+	}
+	if err != nil {
+		return err
+	}
+	b, err := merge(into, add)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(table, b, 0o644)
 }
 
 // probeMachine is this machine's profiles: its host, and each device with a
