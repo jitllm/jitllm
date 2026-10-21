@@ -60,6 +60,16 @@ In plan mode the composer suggests a placement from what its passes know --
 bytes moved, kernel costs, fusable runs, memory needed -- and the engine accepts
 it or forces its own (every decision forcible, the engine's `With...()` rule).
 
+Where plan mode cannot decide, the engine proposes several placements and the
+composer estimates each: it takes every candidate through the front end, the
+decompositions and the passes to final IR, and estimates its efficiency from
+that IR alone -- bytes each kernel reads and writes, launches, transfers at the
+device seams, memory per device, the work a kernel's binding leaves each
+thread -- without lowering and without touching a backend. The estimate is a
+function of the IR and the device's description, so ranking candidates costs
+no compilation and no device time; the engine picks, and only the chosen
+placement is lowered.
+
 ### Decomposition
 
 `decompose` is the only code that names a graph op kind. Each op kind has one
@@ -198,4 +208,5 @@ Each step ends with its gate green and the board measured.
    matvecs, residual fusion, norm and int8 chain, activation chain, rotary and
    history, attention, then the head and the tables.
 5. **CPU passes and the x86 lowering**, kernel by kernel to byte identity.
-6. **Plan mode**: a suggested placement from the passes' costs.
+6. **Plan mode and estimates**: a suggested placement from the passes' costs,
+   and the estimate of an engine-proposed placement from final IR, unlowered.
