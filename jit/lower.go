@@ -122,7 +122,12 @@ func lowerReduce(p Prim) *Nest {
 	acc := n.add(Node{Op: OpFold, At: c, Type: t, B: init})
 	n.Nodes[acc].A = n.bin(p.Combine, t, acc, term(k))
 	out := n.buf(Buf{Kind: BufOut, Elem: elemOf(p.Out.Elem), Operand: p.Out})
-	n.Stores = append(n.Stores, Store{Buf: out, Ix: n.access(o, p.OutAt), Val: acc, At: -1})
+	ix := n.access(o, p.OutAt)
+	if len(p.Index) > 0 {
+		vals := n.exprs(Prim{Expr: p.Index}, o, nil)
+		ix = vals[len(vals)-1]
+	}
+	n.Stores = append(n.Stores, Store{Buf: out, Ix: ix, Val: acc, At: -1})
 	return n
 }
 

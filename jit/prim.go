@@ -106,6 +106,20 @@ type Prim struct {
 	Start   Start
 	Init    int64
 	Type    ir.Type
-	// Stores, where set, are a map's stores in place of Out at OutAt.
+	// Stores, where set, are a map's stores in place of Out at OutAt;
+	// Index, where set, is where a reduction stores its output: an
+	// expression of the output (ExprElem).
 	Stores []PrimStore
+	Index  []Expr
+	// Span, a fact for passes, is a reduction's live terms: an expression of
+	// its output (ExprElem) whose last node is how many of its first terms
+	// can be live, the rest masked to its start.
+	Span []Expr
+	// Heads, a fact for passes, is a reduction's output as attention's:
+	// its rows, query heads, key heads and head width.
+	Heads *Heads
+}
+
+type Heads struct {
+	Rows, Query, Key, Dim int
 }

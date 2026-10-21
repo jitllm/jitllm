@@ -79,6 +79,7 @@ func ProfileFor(t Target, rows int) Profile {
 		WorkRow{Group: 1024},
 		Coarsen{Unit: 4},
 		Parts{Kinds: []PrimKind{PrimMap}},
+		SplitKeys{Align: 32, Pad: 32, Copies: 32},
 		Split{Slots: 30720, Max: 32, Block: 32, Kinds: contract},
 		Blocks{Size: 32, Kinds: contract},
 	}}

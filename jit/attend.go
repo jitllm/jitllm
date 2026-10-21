@@ -110,14 +110,29 @@ func (a attention) prims() []Prim {
 	ox.op(OpMul, F, ox.add(Expr{Op: ExprLoad, In: 0, A: oe}), ox.op(OpDiv, F, ox.f(1), ox.op(OpMax, F, l, ox.f(1e-30))))
 
 	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], tableRows, tablePages}, ops[1:]...) }
+	// span is the live keys of the output whose row is r(o): the row's
+	// attended span from its aligned first position.
+	span := func(per int) []Expr {
+		var x exprs
+		o := x.add(Expr{Op: ExprElem})
+		r := x.op(OpDiv, U, o, x.u(uint32(per)))
+		at := func(w int) int {
+			return x.add(Expr{Op: ExprLoad, In: 1, A: x.op(OpAdd, U, x.op(OpMul, U, r, x.u(rowWords)), x.u(uint32(w)))})
+		}
+		first, end := at(rowStart), at(rowEnd)
+		base := x.op(OpMul, U, x.op(OpDiv, U, first, x.u(keyAlign)), x.u(keyAlign))
+		x.sel(U, x.op(OpLess, ir.Pred, first, end), x.op(OpSub, U, end, base), x.u(0))
+		return x.e
+	}
 	return []Prim{
 		{Kind: PrimReduce, N: R * H * C, K: D, In: tables(a.q, tableKeys), Out: dots, Combine: OpAdd, Expr: dx.e},
 		{Kind: PrimMap, N: R * H * C, In: tables(dots), Out: scores, Expr: sx.e},
-		{Kind: PrimReduce, N: R * H, K: C, In: []Operand{scores}, At: []Access{atElement}, Out: maxes, Combine: OpMax,
-			Init: int64(math.Float32bits(minus)), Expr: mx.e},
+		{Kind: PrimReduce, N: R * H, K: C, In: []Operand{scores, tableRows}, At: []Access{atElement, atElement}, Out: maxes, Combine: OpMax,
+			Init: int64(math.Float32bits(minus)), Expr: mx.e, Span: span(H), Heads: &Heads{Rows: R, Query: H, Key: a.kv, Dim: D}},
 		{Kind: PrimMap, N: R * H * C, In: tables(scores, maxes), Out: weights, Expr: wx.e},
-		{Kind: PrimReduce, N: R * H, K: C, In: []Operand{weights}, At: []Access{atElement}, Out: sums, Combine: OpAdd, Expr: lx.e},
-		{Kind: PrimReduce, N: R * H * D, K: C, In: tables(weights, tableValues), Out: values, Combine: OpAdd, Expr: vx.e},
+		{Kind: PrimReduce, N: R * H, K: C, In: []Operand{weights, tableRows}, At: []Access{atElement, atElement}, Out: sums, Combine: OpAdd,
+			Expr: lx.e, Span: span(H)},
+		{Kind: PrimReduce, N: R * H * D, K: C, In: tables(weights, tableValues), Out: values, Combine: OpAdd, Expr: vx.e, Span: span(H * D)},
 		{Kind: PrimMap, N: R * H * D, In: []Operand{values, sums}, Out: a.out, Expr: ox.e},
 	}
 }
