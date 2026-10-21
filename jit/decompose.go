@@ -13,13 +13,19 @@ func decompose(b Block, p Profile) ([]Prim, error) {
 	var prims []Prim
 	var errs []error
 	quantized := map[graph.ValueID]bool{}
+	rowLocal := map[graph.ValueID]bool{}
 	for i, o := range b.Graph.Ops {
-		if o.Kind == graph.OpMatVec && p.QuantizeActivations && len(o.In) == 1 && !quantized[o.In[0]] {
+		if o.Kind == graph.OpMatVec && p.QuantizeActivations && len(o.In) == 1 && rowLocal[o.In[0]] && !quantized[o.In[0]] {
 			v := o.In[0]
 			quantized[v] = true
 			name := b.Graph.Values[v].Name
 			prims = append(prims, quantize(Operand{Kind: OperandValue, Value: v, Name: name}, b.Graph.Values[v].Width, b.Rows,
 				Operand{Kind: OperandScratch, Name: name + ".q8a"}, Operand{Kind: OperandScratch, Name: name + ".q8x"})...)
+		}
+		if o.Kind == graph.OpNorm || o.Kind == graph.OpActMul {
+			for _, v := range o.Out {
+				rowLocal[v] = true
+			}
 		}
 		ps, err := decomposeOp(b, o)
 		if err != nil {
@@ -56,6 +62,22 @@ func decomposeOp(b Block, o graph.Op) ([]Prim, error) {
 		return []Prim{{Kind: PrimMap, N: b.Rows * w, In: []Operand{value(o.In[0]), value(o.In[1])},
 			At: []Access{atElement, atElement}, Out: value(o.Out[0]),
 			Expr: []Expr{{Op: ExprIn, In: 0}, {Op: ExprIn, In: 1}, {Op: OpAdd, Type: ir.F32, A: 0, B: 1}}}}, nil
+	case graph.OpActMul:
+		if len(o.In) != 2 || len(o.Out) != 1 {
+			return nil, fmt.Errorf("an act_mul of %d operands", len(o.In))
+		}
+		var x exprs
+		g := x.in(0)
+		switch o.Attr.Act {
+		case graph.ActSiLU:
+			g = x.op(OpDiv, ir.F32, g, x.op(OpAdd, ir.F32, x.f(1), x.un(OpExp, ir.F32, x.op(OpSub, ir.F32, x.f(0), g))))
+		default:
+			return nil, fmt.Errorf("no formula for activation %d yet", o.Attr.Act)
+		}
+		x.op(OpMul, ir.F32, g, x.in(1))
+		w := b.Graph.Values[o.Out[0]].Width
+		return []Prim{{Kind: PrimMap, N: b.Rows * w, In: []Operand{value(o.In[0]), value(o.In[1])},
+			At: []Access{atElement, atElement}, Out: value(o.Out[0]), Expr: x.e}}, nil
 	case graph.OpNorm:
 		if len(o.Weight) != 1 || len(o.In) != 1 || len(o.Out) != 1 {
 			return nil, fmt.Errorf("a norm of %d weights", len(o.Weight))

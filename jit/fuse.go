@@ -1,8 +1,10 @@
 package jit
 
-// Pair is a producer's primitive kind a consumer's may be fused into.
+// Pair is a producer's primitive kind a consumer's may be fused into;
+// Additive asks that the consumer add a term to the producer's value.
 type Pair struct {
 	From, To PrimKind
+	Additive bool
 }
 
 // Fuse inlines a consumer into its producer where their pair is allowed, the
@@ -39,7 +41,7 @@ func (f Fuse) Apply(prog []*Nest, t Target) ([]*Nest, error) {
 func (f Fuse) joins(p, c *Nest, prog []*Nest) (v Operand, st int, ok bool) {
 	allowed := false
 	for _, pr := range f.Pairs {
-		allowed = allowed || pr.From == p.Kind && pr.To == c.Kind
+		allowed = allowed || pr.From == p.Kind && pr.To == c.Kind && (!pr.Additive || c.adds())
 	}
 	if !allowed || !sameSpace(p, c) {
 		return Operand{}, 0, false
@@ -198,4 +200,13 @@ func merge(p, c *Nest, v Operand, st int) *Nest {
 		m.Stores = append(m.Stores, Store{Buf: bufOf[s.Buf], Ix: nodeOf[s.Ix], Val: nodeOf[s.Val], At: at})
 	}
 	return m
+}
+
+// adds reports whether a naive map's function is the sum of two operands.
+func (n *Nest) adds() bool {
+	if n.Prim == nil || len(n.Prim.Expr) != 3 {
+		return false
+	}
+	e := n.Prim.Expr
+	return e[0].Op == ExprIn && e[1].Op == ExprIn && e[2].Op == OpAdd && e[2].A == 0 && e[2].B == 1
 }
