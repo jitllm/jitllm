@@ -20,9 +20,9 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/cost"
 	"github.com/jitllm/jitllm/engine/probe"
-	"github.com/jitllm/jitllm/jit_old/gpu/backend"
 )
 
 func main() {
