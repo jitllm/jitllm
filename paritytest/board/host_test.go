@@ -141,6 +141,8 @@ func TestHostDecodeEmitters(t *testing.T) {
 
 var host = jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}
 
+var hostDiff = flag.String("host-diff", "", "TestBoardHost writes out main's kernels with this name prefix beside the composed kernel nearest each")
+
 // TestBoardHost holds the kernels the composer forms for the host to the
 // code main's host JIT ran for the same decode step: each main kernel
 // identical where one composed kernel is its bytes, and its instructions
@@ -170,11 +172,31 @@ func TestBoardHost(t *testing.T) {
 		r := row{name: emitterOf(*em, c.Code)}
 		want := disassemble(t, c.Code)
 		r.total = len(want)
+		var near []string
 		for _, m := range mine {
 			if bytes.Equal(m, c.Code) {
 				r.same = true
 			}
-			r.matched = max(r.matched, lcs(want, disassemble(t, m)))
+			got := disassemble(t, m)
+			if n := lcs(want, got); n > r.matched || near == nil {
+				r.matched, near = max(r.matched, n), got
+			}
+		}
+		if *hostDiff != "" && strings.HasPrefix(r.name, *hostDiff) {
+			for i := 0; i < max(len(want), len(near)); i++ {
+				var w, g string
+				if i < len(want) {
+					w = want[i]
+				}
+				if i < len(near) {
+					g = near[i]
+				}
+				mark := " "
+				if w != g {
+					mark = "*"
+				}
+				t.Logf("%s %-44s %s", mark, w, g)
+			}
 		}
 		if r.same {
 			same++

@@ -35,7 +35,36 @@ type Kernel struct {
 	// Clamp, where a pass set it, 1 + the node of the elements a launch
 	// holds its threads to.
 	Rows, Clamp int
+	// Seq, where a schedule set it, is the kernel as a sequence: each node,
+	// store and loop in the order the code runs them.
+	Seq []Entry
+	// Args, where a binding to the call's arguments set them, are the words
+	// a call passes and what the caller computes each from.
+	Args []Arg
 }
+
+// Arg is the call's argument word at byte offset Field: the address of
+// buffer Buf, offset by the buffer's Offset, or where Buf is -1 the value
+// of node Node-1, a count of the call computed by the caller.
+type Arg struct {
+	Field, Buf, Node int
+}
+
+// Entry is one entry of a kernel's sequence: node I, store I, the start of
+// loop I or its end.
+type Entry struct {
+	Kind EntryKind
+	I    int
+}
+
+type EntryKind uint8
+
+const (
+	EntryNode EntryKind = iota
+	EntryStore
+	EntryLoop
+	EntryEnd
+)
 
 // Positions is a primitive's Range on its kernel: the space axis whose
 // coordinate is a position, or where Loop is set the loop whose iteration
@@ -72,6 +101,22 @@ type Loop struct {
 	Spread     bool
 	// Elem, where set, is 1 + the node that is the spread loop's element.
 	Elem int
+	// Lanes, where a vectorization set it, is the consecutive iterations a
+	// trip covers, one in each lane.
+	Lanes int
+	// Cursors are the buffers' addresses a trip advances; Reg, where a
+	// register binding set it, is 1 + the register counting the trips.
+	Cursors []Cursor
+	Reg     int
+}
+
+// Cursor is buffer Buf's address advanced Elems elements a trip: its own
+// register, or where Copy is set a copy taken before the loop's first trip,
+// in register Reg (1 + the register, where a binding set it).
+type Cursor struct {
+	Buf, Elems int
+	Copy       bool
+	Reg        int
 }
 
 type BufKind uint8
@@ -94,6 +139,15 @@ type Buf struct {
 	Shape []int
 	// Plane is workgroup memory a staging may fold into its plane.
 	Plane bool
+	// Base, where a binding to the call's arguments set it, is 1 + the node
+	// that is the buffer's address, and Offset 1 + the node of the elements
+	// the caller adds to it for each call; loads and stores index from it.
+	Base, Offset int
+	// Reg, where a register binding set it, is 1 + the register holding the
+	// address.
+	Reg int
+	// Words is a block of constants' contents, the caller's to supply.
+	Words []uint32
 }
 
 type Op uint8
@@ -143,9 +197,15 @@ const (
 	OpFlat
 	// OpShuffle is A of the lane whose index is this one's xor Imm.
 	OpShuffle
+	// OpParam is the word at byte offset Imm of the call's arguments.
+	OpParam
+	// OpBroadcast is scalar A in every lane.
+	OpBroadcast
 )
 
-// Node is one scalar value. Load reads Bufs[Buf] at index A, or where Ax
+// Node is one value: a scalar, or inside a loop of Lanes a vector of them.
+// A load's At, where a cursor set it, is 1 + the loop whose address it reads
+// from. Load reads Bufs[Buf] at index A, or where Ax
 // is set at the coordinates Ax of the buffer's Shape.
 type Node struct {
 	Op      Op
@@ -155,6 +215,9 @@ type Node struct {
 	Buf     int
 	Imm     int64
 	Ax      []int
+	// Reg, where a register binding set it, is 1 + the register holding
+	// the value.
+	Reg int
 }
 
 // Store writes node Val at index Ix of Bufs[Buf]: each trip of loop At, or
@@ -199,6 +262,11 @@ func (n *Kernel) clone() *Kernel {
 	c := *n
 	c.Space = append([]int(nil), n.Space...)
 	c.Loops = append([]Loop(nil), n.Loops...)
+	for i := range c.Loops {
+		c.Loops[i].Cursors = append([]Cursor(nil), c.Loops[i].Cursors...)
+	}
+	c.Seq = append([]Entry(nil), n.Seq...)
+	c.Args = append([]Arg(nil), n.Args...)
 	c.Nodes = append([]Node(nil), n.Nodes...)
 	for i := range c.Nodes {
 		c.Nodes[i].Ax = append([]int(nil), c.Nodes[i].Ax...)
@@ -220,14 +288,31 @@ func (n *Kernel) elements() int {
 	return e
 }
 
+var opNames = [...]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
+	"less", "select", "sqrt", "exp", "shl", "shr", "and", "xor", "cvtf32", "cvti32", "thread", "groupsum", "groupmax", "exchange",
+	"local", "flat", "shuffle", "param", "broadcast"}
+
+func (o Op) String() string {
+	if int(o) < len(opNames) {
+		return opNames[o]
+	}
+	return fmt.Sprintf("op%d", o)
+}
+
 func (n *Kernel) String() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s space %v work %v loops %v\n", n.Name, n.Space, n.Work, n.Loops)
+	fmt.Fprintf(&b, "%s space %v work %v group %d passes %v\n", n.Name, n.Space, n.Work, n.Group, n.Passes)
+	for i, l := range n.Loops {
+		fmt.Fprintf(&b, "  loop %d %+v\n", i, l)
+	}
+	for i, bf := range n.Bufs {
+		fmt.Fprintf(&b, "  buf %d kind %d %s elem %s shape %v size %d\n", i, bf.Kind, bf.Operand.Name, bf.Elem, bf.Shape, bf.Size)
+	}
 	for i, nd := range n.Nodes {
-		fmt.Fprintf(&b, "  %d: op %d %s a %d b %d c %d at %d buf %d imm %d\n", i, nd.Op, nd.Type, nd.A, nd.B, nd.C, nd.At, nd.Buf, nd.Imm)
+		fmt.Fprintf(&b, "  %d: %s.%s a %d b %d c %d at %d buf %d imm %d ax %v\n", i, nd.Op, nd.Type, nd.A, nd.B, nd.C, nd.At, nd.Buf, nd.Imm, nd.Ax)
 	}
 	for _, s := range n.Stores {
-		fmt.Fprintf(&b, "  store buf %d ix %d val %d at %d\n", s.Buf, s.Ix, s.Val, s.At)
+		fmt.Fprintf(&b, "  store buf %d ix %d ax %v val %d at %d barrier %v run %v\n", s.Buf, s.Ix, s.Ax, s.Val, s.At, s.Barrier, s.Run)
 	}
 	return b.String()
 }

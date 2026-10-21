@@ -2,6 +2,9 @@ package jit
 
 import (
 	"flag"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,6 +17,7 @@ var (
 	composeShow  = flag.String("compose-show", "", "TestComposeIR writes out the IR of the kernels with this name prefix, stopping after the pass of this name (after:NAME)")
 	composeHost  = flag.Bool("compose-host", false, "TestComposeIR forms the block on the host")
 	composePart  = flag.Int("compose-part", 1, "the part TestComposeIR forms")
+	composeIndex = flag.Int("compose-index", -1, "TestComposeIR writes out the IR of the kernel at this index")
 )
 
 // TestComposeIR forms the fixture's first block on a GPU, stopping where
@@ -55,14 +59,23 @@ func TestComposeIR(t *testing.T) {
 			break
 		}
 	}
-	for _, k := range ks {
-		t.Logf("%s %v loops %d passes %v", k.Name, k.Space, len(k.Loops), k.Passes)
-		if name != "" && strings.HasPrefix(k.Name, name) {
+	for i, k := range ks {
+		t.Logf("%d %s %v loops %d passes %v", i, k.Name, k.Space, len(k.Loops), k.Passes)
+		if name != "" && strings.HasPrefix(k.Name, name) || i == *composeIndex {
 			t.Log(k.String())
 			for i, l := range k.Loops {
 				t.Logf("loop %d %+v", i, l)
 			}
 			t.Logf("order %v", k.topOrder())
+			if *composeHost {
+				t.Logf("seq %v", k.Seq)
+				l, err := cpuLowering{}.Lower(k, d)
+				if err != nil {
+					t.Log(err)
+				} else {
+					t.Log(objdump(t, l.CPU))
+				}
+			}
 
 		}
 	}
@@ -155,4 +168,16 @@ func TestSuggestPlacesFromTheIR(t *testing.T) {
 	for _, part := range parts {
 		t.Logf("suggested: %s on %d", part, p(part).Kind)
 	}
+}
+
+func objdump(t *testing.T, code []byte) string {
+	f := filepath.Join(t.TempDir(), "k.bin")
+	if err := os.WriteFile(f, code, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("objdump", "-D", "-b", "binary", "-mi386:x86-64", "--no-show-raw-insn", f).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
 }

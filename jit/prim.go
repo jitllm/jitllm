@@ -29,6 +29,8 @@ const (
 	OperandScratch
 	// OperandTable is one of the step's tables.
 	OperandTable
+	// OperandConsts is a kernel's block of constants.
+	OperandConsts
 )
 
 // Operand is a tensor a primitive reads or writes: a graph value, a weight

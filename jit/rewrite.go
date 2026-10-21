@@ -63,9 +63,9 @@ func (n *Kernel) args(nd *Node) []*int {
 // arity is how many operands an op reads, a fold its step and its start.
 func arity(op Op) int {
 	switch op {
-	case OpConst, OpCoord, OpIter, OpThread, OpFlat:
+	case OpConst, OpCoord, OpIter, OpThread, OpFlat, OpParam:
 		return 0
-	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal, OpShuffle:
+	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal, OpShuffle, OpBroadcast:
 		return 1
 	case OpFma, OpSelect:
 		return 3
@@ -92,6 +92,9 @@ func (n *Kernel) varies(i, c int) bool {
 		seen[i] = true
 		nd := n.Nodes[i]
 		if (nd.Op == OpIter || nd.Op == OpFold) && n.within(nd.At, c) {
+			return true
+		}
+		if nd.Op == OpLoad && nd.At > 0 && n.within(nd.At-1, c) {
 			return true
 		}
 		if nd.Op == OpFold {
@@ -284,6 +287,18 @@ func (k *Kernel) compact() {
 			walk(x - 1)
 		}
 	}
+	for _, b := range k.Bufs {
+		for _, x := range []int{b.Base, b.Offset} {
+			if x > 0 {
+				walk(x - 1)
+			}
+		}
+	}
+	for _, a := range k.Args {
+		if a.Node > 0 {
+			walk(a.Node - 1)
+		}
+	}
 	if p := k.Positions; p != nil {
 		for _, x := range append(append([]int{p.First, p.End}, p.Live...), p.Pos...) {
 			walk(x)
@@ -332,6 +347,25 @@ func (k *Kernel) compact() {
 		l.Count, l.Span, l.Elem, l.End = re(l.Count), re(l.Span), re(l.Elem), re(l.End)
 	}
 	k.Rows, k.Clamp = re(k.Rows), re(k.Clamp)
+	for i := range k.Bufs {
+		k.Bufs[i].Base, k.Bufs[i].Offset = re(k.Bufs[i].Base), re(k.Bufs[i].Offset)
+	}
+	for i := range k.Args {
+		k.Args[i].Node = re(k.Args[i].Node)
+	}
+	if k.Seq != nil {
+		var seq []Entry
+		for _, st := range k.Seq {
+			if st.Kind == EntryNode {
+				if at[st.I] < 0 {
+					continue
+				}
+				st.I = at[st.I]
+			}
+			seq = append(seq, st)
+		}
+		k.Seq = seq
+	}
 	if p := k.Positions; p != nil {
 		q := *p
 		q.First, q.End = at[p.First], at[p.End]

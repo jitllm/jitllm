@@ -6,7 +6,8 @@ import "github.com/jitllm/jitllm/jit/ir"
 // time one: the range's extent padded up to a multiple of Grain, so one
 // kernel serves every step of the class, its positions counted from the
 // first rounded down to Align. What the range attends stays the live
-// length's, a run-time value.
+// length's, a run-time value. A Grain of 0 is the exact length: a range on a
+// loop counts its live positions, the end less the first, at run time.
 type RunLengths struct {
 	Grain, Align int
 }
@@ -25,6 +26,15 @@ func (p RunLengths) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		m := k.clone()
 		mp := *pos
 		m.Positions = &mp
+		if p.Grain == 0 {
+			if mp.Loop < 0 {
+				continue
+			}
+			m.Loops[mp.Loop].Count = m.bin(OpSub, ir.U32, mp.End, mp.First) + 1
+			m.Passes = append(m.Passes, p.Name())
+			out[i] = m
+			continue
+		}
 		if mp.Axis >= 0 {
 			C := m.Space[mp.Axis]
 			m.Space[mp.Axis] = (C + p.Grain - 1) / p.Grain * p.Grain
