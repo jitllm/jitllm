@@ -74,7 +74,7 @@ func cpuProfile() Profile {
 		BitSelect{Regs: []int{5, 6, 7}},
 		Induction{Tail: 13},
 		Consts{Shared: mainBlock()},
-		Args{Fields: mainArgs(), Parts: map[PartKind]ArgFields{PartSample: mainSampleArgs()}},
+		Args{Fields: mainArgs(), Parts: map[PartKind]ArgFields{PartSample: mainSampleArgs(), PartTable: mainTableArgs()}},
 		Simplify{ConstLast: true},
 		Cursors{},
 		Simplify{ConstLast: true},
@@ -110,6 +110,12 @@ func mainArgs() ArgFields {
 // in Q32, their count in K, the value in Out and the index in ASum.
 func mainSampleArgs() ArgFields {
 	return ArgFields{Out: []int{0}, Index: 96, Consts: 56, In: []int{112}, Vectors: 40, Tail: 32, Counts: []int{40}}
+}
+
+// mainTableArgs is main's convention for the rotary table's words: the
+// table in Out, the planes in AScale, the position in K.
+func mainTableArgs() ArgFields {
+	return ArgFields{Out: []int{0}, Consts: 56, In: []int{24}, Word: 40, Vectors: 40, Tail: 32, Counts: []int{32}}
 }
 
 // mainWorkgroups is main's layout of a range's partitions over workgroups.

@@ -71,7 +71,10 @@ func ropeTableAgainstMain(t *testing.T, code *jit.Code) (int, string) {
 		for _, a := range code.Args {
 			var p unsafe.Pointer
 			switch {
-			case a.Value || a.Moving:
+			case a.Word && a.Operand.Name == "rope.pos":
+				block[a.Field/8] = uint64(rows[a.Offset])
+				continue
+			case a.Value || a.Moving || a.Word:
 				t.Fatalf("argument word %d is a value the test does not compute", a.Field)
 			case a.Words != nil:
 				p = unsafe.Pointer(&a.Words[a.Offset])

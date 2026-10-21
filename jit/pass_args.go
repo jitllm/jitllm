@@ -24,10 +24,12 @@ type Args struct {
 // value a sum over the history's width reads beside it, a block
 // of constants (or an input of fixed words), the other buffers read in order; a vector loop's count and
 // its tail's, and the other counts in order. Index, where set, is the word
-// of a buffer of integers written.
+// of a buffer of integers written; Word, where set, the word an input read
+// at one fixed word alone is passed in, by value.
 type ArgFields struct {
 	Out    []int
 	Index  int
+	Word   int
 	Weight int
 	Act    int
 	Query  int
@@ -215,6 +217,14 @@ func (k *Kernel) bindBufs(f ArgFields) {
 		}
 	}
 	for _, o := range kept {
+		if f.Word > 0 && !written[o] && k.oneWord(byOp[o]) {
+			for _, a := range byOp[o] {
+				k.Bufs[k.Nodes[a.node].Buf].Word = f.Word + 1
+				k.Bufs[k.Nodes[a.node].Buf].Offset = offsets[o]
+			}
+			k.Args = append(k.Args, Arg{Field: f.Word, Buf: k.Nodes[byOp[o][0].node].Buf})
+			continue
+		}
 		var fl int
 		switch {
 		case written[o] && f.Index > 0 && k.integers(o):
@@ -264,6 +274,26 @@ func (k *Kernel) bindBufs(f ArgFields) {
 		}
 		k.Args = append(k.Args, Arg{Field: fl, Buf: first})
 	}
+}
+
+// oneWord reports whether accesses as are loads of one word at a fixed
+// index.
+func (k *Kernel) oneWord(as []access) bool {
+	ix := -1
+	for _, a := range as {
+		if a.node < 0 {
+			return false
+		}
+		i := k.Nodes[a.node].A
+		if !k.fixed(i) {
+			return false
+		}
+		if ix >= 0 && !sameExpr(k, i, k, ix) {
+			return false
+		}
+		ix = i
+	}
+	return ix >= 0
 }
 
 // integers reports whether the buffers of operand o hold integers.

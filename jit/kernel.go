@@ -183,6 +183,9 @@ type Buf struct {
 	// Shared is the device's constant block, the same words in every
 	// kernel that reads it.
 	Shared bool
+	// Word, where a binding set it, is 1 + the argument word the buffer's
+	// one word is passed in, by value.
+	Word int
 }
 
 type Op uint8

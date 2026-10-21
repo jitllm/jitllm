@@ -48,12 +48,14 @@ func (c *Code) Writes(o Operand) bool {
 // address of Operand's storage Offset elements in, with Words the contents
 // of a constant block; or a value the caller computes, a run-time length
 // where Length is set, of static extent Extent. Moving is set where the
-// offset is the caller's to compute.
+// offset is the caller's to compute. Word is set where the word at Offset
+// is passed itself, by value, rather than its address.
 type CallArg struct {
 	Field   int
 	Operand Operand
 	Offset  int
 	Moving  bool
+	Word    bool
 	Words   []uint32
 	Value   bool
 	Length  bool
@@ -191,7 +193,7 @@ func (r *Registry) lower(ks []*Kernel, d Device) ([]ownedCode, error) {
 		for _, a := range k.Args {
 			if a.Buf >= 0 {
 				b := k.Bufs[a.Buf]
-				ca := CallArg{Field: a.Field, Operand: b.Operand, Words: b.Words}
+				ca := CallArg{Field: a.Field, Operand: b.Operand, Words: b.Words, Word: b.Word > 0}
 				if b.Offset > 0 {
 					if nd := k.Nodes[b.Offset-1]; nd.Op == OpConst {
 						ca.Offset = int(nd.Imm)

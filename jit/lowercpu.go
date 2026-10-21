@@ -78,6 +78,9 @@ func (e *x86Lowerer) addr(b, ix, ptr int) x86.Mem {
 		e.fail("an access of %s at a computed index", k.Bufs[b].Operand.Name)
 	}
 
+	if w := k.Bufs[b].Word; w > 0 {
+		return x86.At(x86.RDI, int32(w-1)+int32(nd.Imm)*int32(elemBytes(k.Bufs[b])))
+	}
 	return x86.At(e.ptrReg(b, ptr), int32(nd.Imm)*int32(elemBytes(k.Bufs[b])))
 }
 
