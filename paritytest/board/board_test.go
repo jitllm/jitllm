@@ -7,13 +7,13 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit"
-	"github.com/jitllm/jitllm/paritytest"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit_old/gpu/backend/recorder"
 	"github.com/jitllm/jitllm/jit_old/gpu/ir"
+	"github.com/jitllm/jitllm/paritytest"
 	"github.com/jitllm/jitllm/paritytest/maintier"
 )
 

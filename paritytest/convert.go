@@ -1,8 +1,8 @@
 package paritytest
 
 import (
-	oldir "github.com/jitllm/jitllm/jit_old/gpu/ir"
 	"github.com/jitllm/jitllm/jit/ir"
+	oldir "github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // Old is a kernel of the composer's IR as main's IR, the comparator's: the
