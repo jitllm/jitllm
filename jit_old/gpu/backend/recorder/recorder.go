@@ -323,7 +323,18 @@ func (b *buf) host(write bool) {
 // every earlier launch of the same kernel was dead: the recording's end is
 // one more step of the same loop, and a launch whose output each step
 // overwrote unread is dead at the last step too.
-func (d *Device) LiveLaunched() []Emitted {
+func (d *Device) LiveLaunched() []Emitted { return d.LiveLaunchedFrom(0) }
+
+// Mark is where the recording stands: LiveLaunchedFrom keeps what ran
+// after it.
+func (d *Device) Mark() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.events)
+}
+
+// LiveLaunchedFrom is LiveLaunched of the launches from mark on.
+func (d *Device) LiveLaunchedFrom(mark int) []Emitted {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	reads, writes, fixed := make([][]bool, len(d.irs)), make([][]bool, len(d.irs)), make([][]bool, len(d.irs))
@@ -336,6 +347,7 @@ func (d *Device) LiveLaunched() []Emitted {
 		return !ok || v
 	}
 	live, atEnd, deadOnce := make([]bool, len(d.irs)), make([]bool, len(d.irs)), make([]bool, len(d.irs))
+	after := make([]bool, len(d.irs))
 	for e := len(d.events) - 1; e >= 0; e-- {
 		ev := d.events[e]
 		if ev.k < 0 {
@@ -364,6 +376,9 @@ func (d *Device) LiveLaunched() []Emitted {
 		} else {
 			atEnd[ev.k] = true
 		}
+		if e >= mark {
+			after[ev.k] = true
+		}
 		for j, b := range ev.bufs {
 			if b == nil || j >= len(w) {
 				continue
@@ -380,7 +395,7 @@ func (d *Device) LiveLaunched() []Emitted {
 	}
 	out := make([]Emitted, 0, len(d.order))
 	for _, i := range d.order {
-		if live[i] || atEnd[i] && !deadOnce[i] {
+		if after[i] && (live[i] || atEnd[i] && !deadOnce[i]) {
 			out = append(out, Emitted{K: d.irs[i], Code: d.code[i]})
 		}
 	}

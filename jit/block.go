@@ -1,0 +1,53 @@
+// Package jit is the composer: a block's graph ops decomposed into
+// primitives, each lowered naively to a loop nest, transformed by registered
+// passes, and emitted for the device in front of it.
+package jit
+
+import (
+	"fmt"
+
+	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/jit/ir"
+)
+
+// Block is what the composer forms kernels for: one block's graph at a step
+// of Rows rows, its weights' storage formats by role.
+type Block struct {
+	Graph   *graph.Graph
+	Rows    int
+	Formats map[jlm.Role]jlm.Type
+}
+
+// Kernel is one formed kernel and the passes that formed it.
+type Kernel struct {
+	IR     *ir.Kernel
+	Passes []string
+}
+
+// Compose forms every kernel of block b on target t under profile p. An op
+// it cannot form is an error, beside the kernels of those it formed.
+func Compose(b Block, t Target, p Profile) ([]Kernel, error) {
+	prims, derr := decompose(b)
+	var out []Kernel
+	for _, pr := range prims {
+		nests, err := lower(pr)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range nests {
+			formed, err := p.run(n, t)
+			if err != nil {
+				return nil, err
+			}
+			for _, f := range formed {
+				k, err := emit(f.nest, t)
+				if err != nil {
+					return nil, fmt.Errorf("jit: %s: %w", f.nest.Name, err)
+				}
+				out = append(out, Kernel{IR: k, Passes: f.passes})
+			}
+		}
+	}
+	return out, derr
+}
