@@ -227,3 +227,34 @@ func TestEngineTakesOrForcesThePlacement(t *testing.T) {
 		t.Logf("%s: %d parts, %d transfers", name, len(plan.Parts), len(plan.Transfers))
 	}
 }
+
+// TestEveryKernelRecordsItsPasses composes the fixture on each device and
+// holds every kernel formed to naming the passes that formed it.
+func TestEveryKernelRecordsItsPasses(t *testing.T) {
+	f, err := jlm.Open(testmodels.Path(*composeModel + ".jlm"))
+	if err != nil {
+		t.Skip(err)
+	}
+	defer f.Close()
+	r := Default()
+	s := Step{Rows: 1, Page: 64, Keys: 5}
+	for _, d := range []Device{{Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 32}, {Kind: DeviceCPU, Slots: 6, Lanes: 8}} {
+		plan, err := r.Compose(f, s, func(Part) Device { return d })
+		if plan == nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, pp := range plan.Parts {
+			for _, c := range pp.Codes {
+				n++
+				if len(c.Passes) == 0 {
+					t.Errorf("device %d: %s %s records no pass", d.Kind, pp.Part, c.Name)
+				}
+			}
+		}
+		if n == 0 {
+			t.Errorf("device %d formed no kernel", d.Kind)
+		}
+		t.Logf("device %d: %d kernels, each naming its passes", d.Kind, n)
+	}
+}
