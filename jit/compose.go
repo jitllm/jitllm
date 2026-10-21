@@ -21,11 +21,22 @@ type Step struct {
 // Placement is the device each part of the model runs on.
 type Placement func(Part) Device
 
-// Code is one kernel as its backend runs it, and the passes that formed it.
+// Code is one kernel as its backend runs it: the passes that formed it, the
+// buffers it binds in its parameters' order, and on a GPU the workgroups a
+// launch runs.
 type Code struct {
 	Name   string
 	Passes []string
 	Lowered
+	Binds  []Binding
+	Groups int
+}
+
+// Binding is a buffer a kernel binds: its operand and whether the kernel
+// writes it.
+type Binding struct {
+	Operand Operand
+	Writes  bool
 }
 
 // PartPlan is one part of the model on its device: its kernels in launch
@@ -36,9 +47,19 @@ type PartPlan struct {
 	Codes  []Code
 }
 
-// Plan is the model on its placement.
+// Transfer is a value carried between consecutive parts on different
+// devices: the boundary value of part From read by part To.
+type Transfer struct {
+	From, To int
+	Value    Operand
+	Words    int
+}
+
+// Plan is the model on its placement: each part's launches, and the
+// transfers at the seams between devices.
 type Plan struct {
-	Parts []PartPlan
+	Parts     []PartPlan
+	Transfers []Transfer
 }
 
 // Compose forms the model in f at step s on placement p. A part it cannot
@@ -51,6 +72,16 @@ func (r *Registry) Compose(f *jlm.File, s Step, p Placement) (*Plan, error) {
 	plan := &Plan{}
 	for _, part := range parts {
 		plan.Parts = append(plan.Parts, PartPlan{Part: part, Device: p(part)})
+	}
+	for i := 1; i < len(parts); i++ {
+		a, b := plan.Parts[i-1], plan.Parts[i]
+		if a.Device == b.Device || len(a.Part.Graph.Out) == 0 {
+			continue
+		}
+		v := a.Part.Graph.Out[0]
+		plan.Transfers = append(plan.Transfers, Transfer{From: i - 1, To: i,
+			Value: Operand{Kind: OperandValue, Value: v, Name: a.Part.Graph.Values[v].Name, Of: i - 1},
+			Words: s.Rows * a.Part.Graph.Values[v].Width})
 	}
 	var errs []error
 	for i := 0; i < len(parts); {
@@ -69,6 +100,17 @@ func (r *Registry) Compose(f *jlm.File, s Step, p Placement) (*Plan, error) {
 // formRun is a run of consecutive parts on one device: each decomposed and
 // generated, the run passed as one, each part's kernels lowered.
 func (r *Registry) formRun(f *jlm.File, run []PartPlan, first int, s Step) error {
+	ks, err := r.passRun(f, run, first, s)
+	codes, lerr := r.lower(ks, run[0].Device)
+	for _, c := range codes {
+		run[c.of-first].Codes = append(run[c.of-first].Codes, c.Code)
+	}
+	return errors.Join(err, lerr)
+}
+
+// passRun is a run's final IR: its parts decomposed and generated, the run
+// passed as one.
+func (r *Registry) passRun(f *jlm.File, run []PartPlan, first int, s Step) ([]*Kernel, error) {
 	d := run[0].Device
 	var ks []*Kernel
 	var errs []error
@@ -81,29 +123,12 @@ func (r *Registry) formRun(f *jlm.File, run []PartPlan, first int, s Step) error
 		for _, p := range prims {
 			k, err := generate(p)
 			if err != nil {
-				return fmt.Errorf("%s: %w", pp.Part, err)
+				return nil, fmt.Errorf("%s: %w", pp.Part, err)
 			}
 			k.Part, k.Of = pp.Part.Kind, first+i
 			ks = append(ks, k)
 		}
 	}
-	codes, err := r.form(ks, d)
-	if err != nil {
-		errs = append(errs, err)
-	}
-	for _, c := range codes {
-		run[c.of-first].Codes = append(run[c.of-first].Codes, c.Code)
-	}
-	return errors.Join(errs...)
-}
-
-type ownedCode struct {
-	Code
-	of int
-}
-
-// form is a run's kernels on device d: passed and lowered.
-func (r *Registry) form(ks []*Kernel, d Device) ([]ownedCode, error) {
 	prof, ok := r.Profiles[d.Kind]
 	if !ok {
 		return nil, fmt.Errorf("jit: no profile for %s", d.Kind)
@@ -112,6 +137,16 @@ func (r *Registry) form(ks []*Kernel, d Device) ([]ownedCode, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ks, errors.Join(errs...)
+}
+
+type ownedCode struct {
+	Code
+	of int
+}
+
+// lower is a run's final IR on device d as its backend's code.
+func (r *Registry) lower(ks []*Kernel, d Device) ([]ownedCode, error) {
 	low, ok := r.Lowerings[d.Kind]
 	if !ok {
 		return nil, fmt.Errorf("jit: no lowering for %s", d.Kind)
@@ -124,7 +159,13 @@ func (r *Registry) form(ks []*Kernel, d Device) ([]ownedCode, error) {
 			errs = append(errs, fmt.Errorf("jit: lowering %s: %w", k.Name, err))
 			continue
 		}
-		codes = append(codes, ownedCode{Code: Code{Name: k.Name, Passes: k.Passes, Lowered: l}, of: k.Of})
+		c := Code{Name: k.Name, Passes: k.Passes, Lowered: l, Groups: k.groups()}
+		for _, b := range k.Bufs {
+			if b.Kind != BufShared {
+				c.Binds = append(c.Binds, Binding{Operand: b.Operand, Writes: b.Kind == BufOut})
+			}
+		}
+		codes = append(codes, ownedCode{Code: c, of: k.Of})
 	}
 	return codes, errors.Join(errs...)
 }

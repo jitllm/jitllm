@@ -28,6 +28,10 @@ func (k DeviceKind) String() string {
 type Device struct {
 	Kind         DeviceKind
 	Slots, Lanes int
+	// Bandwidth is the bytes a second the device moves, Launch the seconds
+	// a launch costs, Link the bytes a second it exchanges with another
+	// device: what an estimate weighs.
+	Bandwidth, Launch, Link float64
 }
 
 // Lowered is a kernel in its backend's form.

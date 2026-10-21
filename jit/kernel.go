@@ -241,3 +241,14 @@ const (
 	BoundSpread
 	BoundWarps
 )
+
+// groups is how many workgroups a launch of k runs.
+func (k *Kernel) groups() int {
+	if k.Work {
+		return k.elements()
+	}
+	if k.Group <= 0 {
+		return 0
+	}
+	return (k.elements() + k.Group - 1) / k.Group
+}

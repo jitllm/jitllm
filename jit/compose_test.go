@@ -2,7 +2,6 @@ package jit
 
 import (
 	"flag"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -104,46 +103,51 @@ func (k *Kernel) reachesNode(root, x int) bool {
 	return walk(root)
 }
 
-// TestRunSizes passes the fixture's parts as one run and writes out, after
-// each pass, the kernels' sizes by part.
-func TestRunSizes(t *testing.T) {
+// TestSuggestPlacesFromTheIR estimates placements from final IR and holds
+// plan mode's suggestion to costing no more than any of them, and to the
+// estimate of the placement it returns.
+func TestSuggestPlacesFromTheIR(t *testing.T) {
 	f, err := jlm.Open(testmodels.Path(*composeModel + ".jlm"))
 	if err != nil {
 		t.Skip(err)
 	}
 	defer f.Close()
 	r := Default()
-	parts, err := front(f)
+	gpu := Device{Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 32, Bandwidth: 800e9, Launch: 4e-6, Link: 12e9}
+	cpu := Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, Bandwidth: 40e9, Launch: 3e-6, Link: 12e9}
+	s := Step{Rows: 1, Page: 64, Keys: 5}
+	forced := map[string]Placement{
+		"card":          func(Part) Device { return gpu },
+		"host":          func(Part) Device { return cpu },
+		"head on host":  func(p Part) Device { return map[bool]Device{true: cpu, false: gpu}[p.Kind == PartHead] },
+		"table on host": func(p Part) Device { return map[bool]Device{true: cpu, false: gpu}[p.Kind == PartTable] },
+	}
+	p, c, err := r.Suggest(f, s, []Device{gpu, cpu})
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := Device{Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 32}
-	var ks []*Kernel
-	for i, part := range parts {
-		prims, err := r.decompose(f, part, i, Step{Rows: 1, Page: 64, Keys: 5}, d)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, p := range prims {
-			k, err := generate(p)
-			if err != nil {
-				t.Fatal(err)
-			}
-			k.Part, k.Of = part.Kind, i
-			ks = append(ks, k)
-		}
+	again, err := r.Estimate(f, s, p)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, ps := range r.Profiles[DeviceGPU].Passes {
-		ks, err = ps.Apply(ks, d)
+	if d := again.Seconds - c.Seconds; d > 1e-12 || d < -1e-12 {
+		t.Errorf("suggested %+v, its estimate %+v", c, again)
+	}
+	for name, q := range forced {
+		e, err := r.Estimate(f, s, q)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var line []string
-		for _, k := range ks {
-			if k.Of == 1 || k.Of == 2 {
-				line = append(line, fmt.Sprintf("%d:%s/%d", k.Of, k.Name, len(k.Nodes)))
-			}
+		if e.Bytes == 0 || e.Launches == 0 {
+			t.Errorf("%s: an empty estimate %+v", name, e)
 		}
-		t.Logf("%-10s %s", ps.Name(), strings.Join(line, " "))
+		if e.Seconds < c.Seconds-1e-12 {
+			t.Errorf("%s at %+v beats the suggestion %+v", name, e, c)
+		}
+		t.Logf("%-13s %+v", name, e)
+	}
+	parts, _ := front(f)
+	for _, part := range parts {
+		t.Logf("suggested: %s on %d", part, p(part).Kind)
 	}
 }
