@@ -59,8 +59,8 @@ func (s SplitRange) split(ch []*Kernel, d Device) (int, []*Kernel, bool) {
 	if len(mem) == 0 || len(mem) == len(ch) {
 		return 0, nil, false
 	}
-	norm := ch[len(mem)]
-	if norm.Kind != PrimMap || len(norm.Loops) != 0 || len(norm.Stores) != 1 {
+	last := ch[len(mem)]
+	if last.Kind != PrimMap || len(last.Loops) != 0 || len(last.Stores) != 1 {
 		return 0, nil, false
 	}
 	var mx, wt, sm, vl *member
@@ -79,8 +79,8 @@ func (s SplitRange) split(ch []*Kernel, d Device) (int, []*Kernel, bool) {
 		switch {
 		case m.loop < 0 && m.k.reads(mx.out) && hasNode(m.k, OpExp):
 			wt = m
-		case wt != nil && isFold && m.loop >= 0 && m.k.reads(wt.out) && norm.reads(m.out) && m.k.sumFold(f):
-			if len(m.k.Space) == len(norm.Space) {
+		case wt != nil && isFold && m.loop >= 0 && m.k.reads(wt.out) && last.reads(m.out) && m.k.sumFold(f):
+			if len(m.k.Space) == len(last.Space) {
 				vl = m
 			} else {
 				sm = m
@@ -100,7 +100,7 @@ func (s SplitRange) split(ch []*Kernel, d Device) (int, []*Kernel, bool) {
 	J := g.chunk
 	D := h.Dim
 	stride := (D+s.Pad-1)/s.Pad*s.Pad + 2*s.Copies
-	no := norm.Bufs[norm.Stores[0].Buf].Operand
+	no := last.Bufs[last.Stores[0].Buf].Operand
 	part := Operand{Kind: OperandScratch, Name: no.Name + ".part", Of: no.Of}
 	split := map[Operand]*member{}
 	for i := range mem {
@@ -125,8 +125,8 @@ func (s SplitRange) split(ch []*Kernel, d Device) (int, []*Kernel, bool) {
 		}
 		ns = append(ns, k)
 	}
-	cp, mg := s.copies(h, S, stride, part, mx.out, sm.out), s.merge(norm, h, S, stride, part, vl.out, sm.out)
-	cp.Part, cp.Of, mg.Of = norm.Part, norm.Of, norm.Of
+	cp, mg := s.copies(h, S, stride, part, mx.out, sm.out), s.merge(last, h, S, stride, part, vl.out, sm.out)
+	cp.Part, cp.Of, mg.Of = last.Part, last.Of, last.Of
 	ns = append(ns, cp, mg)
 	return len(mem) + 1, ns, true
 }
@@ -296,12 +296,12 @@ func (s SplitRange) copies(h Heads, S, stride int, part, maxes, sums Operand) *K
 	return k
 }
 
-// merge is the normalization norm with its reads of the weighted sums and
+// merge is the normalization last with its reads of the weighted sums and
 // the sums the split's combine: the partitions weighted by exp of their
 // maximum less the greatest.
-func (s SplitRange) merge(norm *Kernel, h Heads, S, stride int, part, values, sums Operand) *Kernel {
+func (s SplitRange) merge(last *Kernel, h Heads, S, stride int, part, values, sums Operand) *Kernel {
 	U, F := ir.U32, ir.F32
-	k := &Kernel{Name: "map", Kind: PrimMap, Space: []int{h.Rows * h.Query * h.Dim}, Heads: &h, Part: norm.Part}
+	k := &Kernel{Name: "map", Kind: PrimMap, Space: []int{h.Rows * h.Query * h.Dim}, Heads: &h, Part: last.Part}
 	e := k.add(Node{Op: OpCoord, A: 0, Type: U})
 	rh, d := k.bin(OpDiv, U, e, k.u32(h.Dim)), k.bin(OpRem, U, e, k.u32(h.Dim))
 	pb := k.buf(Buf{Kind: BufIn, Elem: F, Operand: part})
@@ -322,28 +322,28 @@ func (s SplitRange) merge(norm *Kernel, h Heads, S, stride int, part, values, su
 		num := k.load(pb, k.bin(OpAdd, U, at(p, 0), d))
 		N = k.add(Node{Op: OpFma, Type: F, A: num, B: x, C: N})
 	}
-	coords := k.decode(e, norm.Space)
-	st := norm.Stores[0]
+	coords := k.decode(e, last.Space)
+	st := last.Stores[0]
 	leaf := func(i int, nd Node) (int, bool) {
 		switch {
 		case nd.Op == OpCoord:
 			return coords[nd.A], true
-		case nd.Op == OpLoad && norm.Bufs[nd.Buf].Operand == sums:
+		case nd.Op == OpLoad && last.Bufs[nd.Buf].Operand == sums:
 			return L, true
-		case nd.Op == OpLoad && norm.Bufs[nd.Buf].Operand == values:
+		case nd.Op == OpLoad && last.Bufs[nd.Buf].Operand == values:
 			return N, true
 		}
 		return 0, false
 	}
-	v := copyInto(k, norm, st.Val, leaf)
-	ns := Store{Buf: k.bufLike(norm.Bufs[st.Buf]), Val: v, At: -1}
+	v := copyInto(k, last, st.Val, leaf)
+	ns := Store{Buf: k.bufLike(last.Bufs[st.Buf]), Val: v, At: -1}
 	for _, a := range st.Ax {
-		ns.Ax = append(ns.Ax, copyInto(k, norm, a, leaf))
+		ns.Ax = append(ns.Ax, copyInto(k, last, a, leaf))
 	}
 	if st.Ax == nil {
-		ns.Ix = copyInto(k, norm, st.Ix, leaf)
+		ns.Ix = copyInto(k, last, st.Ix, leaf)
 	}
 	k.Stores = []Store{ns}
-	k.Passes = append([]string(nil), norm.Passes...)
+	k.Passes = append([]string(nil), last.Passes...)
 	return k
 }
