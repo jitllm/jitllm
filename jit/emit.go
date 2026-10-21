@@ -40,7 +40,7 @@ func (e *emitter) run() (*ir.Kernel, error) {
 		e.params = append(e.params, b.Param(fmt.Sprintf("p%d", i), bf.Elem))
 	}
 	for i, nd := range n.Nodes {
-		if nd.Op == OpGroupSum || nd.Op == OpGroupMax {
+		if nd.Op == OpGroupSum || nd.Op == OpGroupMax || nd.Op == OpExchange {
 			e.shared[i] = b.Shared(fmt.Sprintf("r%d", i), ir.F32, n.Group)
 		}
 	}
@@ -62,14 +62,17 @@ func (e *emitter) run() (*ir.Kernel, error) {
 		e.coords[0] = rest
 	}
 	for _, st := range n.Stores {
-		if st.At >= 0 {
+		switch {
+		case st.At >= 0:
 			if !e.done[st.At] {
 				e.emitLoop(st.At)
 			}
-			continue
+		case st.Barrier:
+			b.Barrier()
+		default:
+			ix, v := e.get(st.Ix), e.get(st.Val)
+			b.Store(e.params[st.Buf], ix, v, 0)
 		}
-		ix, v := e.get(st.Ix), e.get(st.Val)
-		b.Store(e.params[st.Buf], ix, v, 0)
 	}
 	if e.err != nil {
 		return nil, e.err
@@ -177,6 +180,15 @@ func (e *emitter) get(i int) ir.Value {
 		v = b.Select(nd.Type, x, y, z)
 	case OpGroupSum, OpGroupMax:
 		v = e.groupReduce(i, e.get(nd.A), nd.Op == OpGroupMax)
+	case OpExchange:
+		v = e.exchange(i)
+	case OpLocal:
+		x := e.get(nd.A)
+		if e.n.Work {
+			v = b.Sub(ir.U32, x, b.Const(ir.U32, 0))
+		} else {
+			v = b.Sub(ir.U32, x, b.Mul(ir.U32, b.CTAID(), b.NTID()))
+		}
 	case OpAdd, OpSub, OpMul, OpDiv, OpRem, OpMin, OpMax, OpShl, OpShr, OpAnd, OpXor:
 		x, y := e.get(nd.A), e.get(nd.B)
 		v = binary(b, nd.Op, nd.Type, x, y)
@@ -218,6 +230,30 @@ func (e *emitter) groupReduce(i int, x ir.Value, max bool) ir.Value {
 	b.Store(sh, b.Shr(ir.U32, tid, b.Const(ir.U32, 5)), butterfly(x), 0)
 	b.Barrier()
 	return butterfly(b.Load(ir.F32, sh, b.And(ir.U32, tid, b.Const(ir.U32, ir.SubgroupLanes-1)), 0))
+}
+
+// exchange is a thread's value through its workgroup slot, combined over
+// its group's slots.
+func (e *emitter) exchange(i int) ir.Value {
+	b, nd := e.b, e.n.Nodes[i]
+	x := e.get(nd.A)
+	sh := e.shared[i]
+	b.Store(sh, e.thread(), x, 0)
+	b.Barrier()
+	base := e.get(nd.B)
+	var acc ir.Value
+	if nd.C >= 0 {
+		acc = e.get(nd.C)
+	}
+	for s := 0; s < int(nd.Imm); s++ {
+		v := b.Load(ir.F32, sh, base, int64(s))
+		if acc == 0 {
+			acc = v
+			continue
+		}
+		acc = binary(b, Op(nd.At), ir.F32, acc, v)
+	}
+	return acc
 }
 
 func binary(b *ir.Builder, op Op, t ir.Type, x, y ir.Value) ir.Value {
@@ -338,7 +374,7 @@ func (e *emitter) body(c int) []int {
 		walk(n.Nodes[f].A)
 	}
 	for _, st := range n.Stores {
-		if n.within(st.At, c) {
+		if !st.Barrier && n.within(st.At, c) {
 			walk(st.Ix)
 			walk(st.Val)
 		}

@@ -85,6 +85,7 @@ func (w WorkRow) join(r *Nest, c, f int, m *Nest, sum Operand) *Nest {
 	n.Loops[l].Spread = true
 	j := n.add(Node{Op: OpIter, At: l, Type: ir.U32})
 	jc := n.bin(OpMin, ir.U32, j, n.u32(K-1))
+	n.Loops[l].Elem = jc + 1
 	row := n.add(Node{Op: OpCoord, A: 0, Type: ir.U32})
 	el := n.bin(OpAdd, ir.U32, n.bin(OpMul, ir.U32, row, n.u32(K)), jc)
 	bufOf := map[int]int{}

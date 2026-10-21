@@ -944,3 +944,45 @@ func simplified(ks []*ir.Kernel) []*ir.Kernel {
 	}
 	return out
 }
+
+// Frontier is where the composer's kernels part from main's: each of main's
+// missing values whose operands the composer does compute -- the first
+// instruction of each divergence, not every one downstream of it.
+func Frontier(main, composed []*ir.Kernel) []Miss {
+	main, composed = simplified(main), simplified(composed)
+	in := NewInterner()
+	have := map[int32]bool{}
+	for _, k := range composed {
+		for _, id := range in.Dataflow(k) {
+			have[id] = true
+		}
+	}
+	var out []Miss
+	for _, k := range main {
+		df := in.Dataflow(k)
+		live := liveOps(k)
+		for i, id := range df {
+			o := k.Ops[i]
+			if o.Kind == ir.OpParam || !live[i] || have[id] || in.constant(k, i, id) {
+				continue
+			}
+			frontier := true
+			for _, a := range append(o.Args[:], o.Vargs...) {
+				if a == 0 || int(a) > len(k.Ops) {
+					continue
+				}
+				j := int(a) - 1
+				if !have[df[j]] && !in.constant(k, j, df[j]) && k.Ops[j].Kind != ir.OpParam {
+					frontier = false
+				}
+			}
+			if frontier {
+				out = append(out, Miss{K: k, Op: i})
+			}
+		}
+	}
+	return out
+}
+
+// Simplified is kernels as Compare holds them.
+func Simplified(ks []*ir.Kernel) []*ir.Kernel { return simplified(ks) }

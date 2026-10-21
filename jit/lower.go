@@ -60,6 +60,9 @@ func (n *Nest) load(b, ix int) int {
 
 // access is index i reaching an operand through a.
 func (n *Nest) access(i int, a Access) int {
+	if a.Mul > 1 {
+		i = n.bin(OpMul, ir.U32, i, n.u32(a.Mul))
+	}
 	if a.Div > 1 {
 		i = n.bin(OpDiv, ir.U32, i, n.u32(a.Div))
 	}
@@ -118,16 +121,16 @@ func lowerReduce(p Prim) *Nest {
 // expr is p's function as nodes, operand j loaded at index(j), each operand
 // one buffer however often it is read.
 func (n *Nest) expr(p Prim, index func(j int) int) int {
-	bufs := map[int]int{}
+	bufs := map[Operand]int{}
 	vals := make([]int, len(p.Expr))
 	for i, x := range p.Expr {
 		switch x.Op {
 		case ExprIn:
-			b, ok := bufs[x.In]
+			o := p.In[x.In]
+			b, ok := bufs[o]
 			if !ok {
-				o := p.In[x.In]
 				b = n.buf(Buf{Kind: BufIn, Elem: storageElem(o), Operand: o})
-				bufs[x.In] = b
+				bufs[o] = b
 			}
 			vals[i] = n.load(b, index(x.In))
 		case OpConst:

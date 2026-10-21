@@ -39,12 +39,14 @@ type Operand struct {
 	Format jlm.Type
 	Name   string
 	Elem   ir.Type
+	// Temp is a value inside a fused chain, never stored past it.
+	Temp bool
 }
 
-// Access is where an index reaches an operand: (i/Div)%Mod + Off, Div 0 as
-// one and Mod 0 as none.
+// Access is where an index reaches an operand: (i*Mul/Div)%Mod + Off, Mul
+// and Div 0 as one, Mod 0 as none.
 type Access struct {
-	Div, Mod, Off int
+	Mul, Div, Mod, Off int
 }
 
 var atElement = Access{}

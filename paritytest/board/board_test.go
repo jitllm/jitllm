@@ -97,6 +97,8 @@ func TestBlockGraph(t *testing.T) {
 var (
 	boardDump    = flag.String("board-dump", "", "TestMainDecodeKernels writes out every op of main's kernels with this name prefix")
 	boardExplain = flag.String("board-explain", "", "TestBoard writes out what main's kernels with this name prefix miss")
+	boardMine    = flag.String("board-mine", "", "TestBoard writes out every op of the composed kernels with this name prefix")
+	boardDepth   = flag.Int("board-depth", 3, "how deep -board-explain and -board-mine write an instruction's operands")
 )
 
 func dump(t *testing.T, k *ir.Kernel) {
@@ -154,6 +156,13 @@ func TestBoard(t *testing.T) {
 	var mine []*ir.Kernel
 	for _, k := range ks {
 		mine = append(mine, paritytest.Old(k.IR))
+		if *boardMine != "" && strings.HasPrefix(k.IR.Name, *boardMine) {
+			old := mine[len(mine)-1]
+			in := paritytest.NewInterner()
+			for i := range old.Ops {
+				t.Logf("  mine %%%d %s", i+1, paritytest.Explain(in, old, i, *boardDepth))
+			}
+		}
 		t.Logf("composed %-24s %4d ops passes %v", k.IR.Name, len(k.IR.Ops), k.Passes)
 	}
 	total, same, miss := paritytest.Compare(main, mine)
@@ -162,7 +171,15 @@ func TestBoard(t *testing.T) {
 	for _, m := range miss {
 		byKernel[m.K.Name]++
 		if *boardExplain != "" && strings.HasPrefix(m.K.Name, *boardExplain) {
-			t.Logf("%s misses %%%d %s", m.K.Name, m.Op+1, paritytest.Explain(in, m.K, m.Op, 3))
+			t.Logf("%s misses %%%d %s", m.K.Name, m.Op+1, paritytest.Explain(in, m.K, m.Op, *boardDepth))
+		}
+	}
+	if *boardExplain != "" {
+		fin := paritytest.NewInterner()
+		for _, m := range paritytest.Frontier(main, mine) {
+			if strings.HasPrefix(m.K.Name, *boardExplain) {
+				t.Logf("%s parts at %%%d %s", m.K.Name, m.Op+1, paritytest.Explain(fin, m.K, m.Op, *boardDepth))
+			}
 		}
 	}
 	for _, k := range main {

@@ -92,7 +92,7 @@ func (n *Nest) reads(o Operand) bool {
 
 func (n *Nest) writes(o Operand) bool {
 	for _, s := range n.Stores {
-		if n.Bufs[s.Buf].Operand == o {
+		if !s.Barrier && n.Bufs[s.Buf].Operand == o {
 			return true
 		}
 	}
@@ -122,6 +122,9 @@ func conflicts(p, c *Nest) bool {
 		}
 	}
 	for _, s := range c.Stores {
+		if s.Barrier {
+			continue
+		}
 		o := c.Bufs[s.Buf].Operand
 		if p.reads(o) || p.writes(o) {
 			return true
@@ -187,6 +190,10 @@ func merge(p, c *Nest, v Operand, st int) *Nest {
 		at := s.At
 		if at >= 0 {
 			at = loopOf[at]
+		}
+		if s.Barrier {
+			m.Stores = append(m.Stores, Store{Barrier: true, At: at})
+			continue
 		}
 		m.Stores = append(m.Stores, Store{Buf: bufOf[s.Buf], Ix: nodeOf[s.Ix], Val: nodeOf[s.Val], At: at})
 	}

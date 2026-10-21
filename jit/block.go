@@ -28,7 +28,7 @@ type Kernel struct {
 // Compose forms every kernel of block b on target t under profile p. An op
 // it cannot form is an error, beside the kernels of those it formed.
 func Compose(b Block, t Target, p Profile) ([]Kernel, error) {
-	prims, derr := decompose(b)
+	prims, derr := decompose(b, p)
 	var prog []*Nest
 	for _, pr := range prims {
 		nests, err := lower(pr)
@@ -37,6 +37,7 @@ func Compose(b Block, t Target, p Profile) ([]Kernel, error) {
 		}
 		for _, n := range nests {
 			n.Kind = pr.Kind
+			n.Prim = &pr
 		}
 		prog = append(prog, nests...)
 	}

@@ -22,10 +22,14 @@ type Pass interface {
 	Apply(prog []*Nest, t Target) ([]*Nest, error)
 }
 
-// Profile is the passes in the order they run, each switched on or off.
+// Profile is the passes in the order they run, each switched on or off,
+// and the choices the decomposition takes from it. QuantizeActivations
+// gives a contract's activation its int8 form whatever the weight's format,
+// as main does.
 type Profile struct {
-	Passes []Pass
-	Off    map[string]bool
+	Passes              []Pass
+	Off                 map[string]bool
+	QuantizeActivations bool
 }
 
 func (p Profile) run(prog []*Nest, t Target) ([]*Nest, error) {
@@ -70,9 +74,10 @@ func ProfileFor(t Target, rows int) Profile {
 		pairs = append(pairs, Pair{From: PrimContract, To: PrimMap})
 	}
 	contract := []PrimKind{PrimContract}
-	return Profile{Passes: []Pass{
+	return Profile{QuantizeActivations: true, Passes: []Pass{
 		Fuse{Pairs: pairs},
 		WorkRow{Group: 1024},
+		Coarsen{Unit: 4},
 		Split{Slots: 30720, Max: 32, Block: 32, Kinds: contract},
 		Blocks{Size: 32, Kinds: contract},
 	}}

@@ -16,6 +16,9 @@ func (n *Nest) redirect(from, to, keep int) {
 		}
 	}
 	for i := range n.Stores {
+		if n.Stores[i].Barrier {
+			continue
+		}
 		if n.Stores[i].Ix == from {
 			n.Stores[i].Ix = to
 		}
@@ -27,6 +30,9 @@ func (n *Nest) redirect(from, to, keep int) {
 
 // args is node nd's operand fields, a fold's start and step among them.
 func (n *Nest) args(nd *Node) []*int {
+	if nd.Op == OpExchange {
+		return exchangeArgs(nd)
+	}
 	switch arity(nd.Op) {
 	case 0:
 		return nil
@@ -43,12 +49,20 @@ func arity(op Op) int {
 	switch op {
 	case OpConst, OpCoord, OpIter, OpThread:
 		return 0
-	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax:
+	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal:
 		return 1
 	case OpFma, OpSelect:
 		return 3
 	}
 	return 2
+}
+
+// exchangeArgs is an exchange's operand fields, its start where it has one.
+func exchangeArgs(nd *Node) []*int {
+	if nd.C < 0 {
+		return []*int{&nd.A, &nd.B}
+	}
+	return []*int{&nd.A, &nd.B, &nd.C}
 }
 
 // varies reports whether node i changes from trip to trip of loop c.

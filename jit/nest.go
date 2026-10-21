@@ -20,8 +20,10 @@ type Nest struct {
 	Stores []Store
 	Bufs   []Buf
 	Group  int
-	// Kind is the primitive the nest lowered, Passes what changed it.
+	// Kind is the primitive the nest lowered, Prim its definition while no
+	// pass has changed it, Passes what changed it.
 	Kind   PrimKind
+	Prim   *Prim
 	Passes []string
 }
 
@@ -32,6 +34,8 @@ type Loop struct {
 	Trip   int
 	Parent int
 	Spread bool
+	// Elem, where set, is 1 + the node that is the spread loop's element.
+	Elem int
 }
 
 type BufKind uint8
@@ -85,6 +89,12 @@ const (
 	// OpGroupSum and OpGroupMax combine A over the workgroup's threads.
 	OpGroupSum
 	OpGroupMax
+	// OpExchange is A to the thread's slot of a workgroup array, a barrier,
+	// and the Imm slots from B combined by At, begun at node C (-1 for the
+	// first slot).
+	OpExchange
+	// OpLocal is element A's place in its workgroup.
+	OpLocal
 )
 
 // Node is one scalar value. Load reads Bufs[Buf] at index A.
@@ -98,10 +108,12 @@ type Node struct {
 }
 
 // Store writes node Val at index Ix of Bufs[Buf]: each trip of loop At, or
-// at the element's end where At is -1.
+// at the element's end where At is -1. A Barrier store writes nothing and
+// waits for the workgroup.
 type Store struct {
 	Buf, Ix, Val int
 	At           int
+	Barrier      bool
 }
 
 func (n *Nest) add(nd Node) int {
@@ -135,6 +147,7 @@ func (n *Nest) clone() *Nest {
 	c.Stores = append([]Store(nil), n.Stores...)
 	c.Bufs = append([]Buf(nil), n.Bufs...)
 	c.Passes = append([]string(nil), n.Passes...)
+	c.Prim = nil
 	return &c
 }
 

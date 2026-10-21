@@ -9,10 +9,18 @@ import (
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
-func decompose(b Block) ([]Prim, error) {
+func decompose(b Block, p Profile) ([]Prim, error) {
 	var prims []Prim
 	var errs []error
+	quantized := map[graph.ValueID]bool{}
 	for i, o := range b.Graph.Ops {
+		if o.Kind == graph.OpMatVec && p.QuantizeActivations && len(o.In) == 1 && !quantized[o.In[0]] {
+			v := o.In[0]
+			quantized[v] = true
+			name := b.Graph.Values[v].Name
+			prims = append(prims, quantize(Operand{Kind: OperandValue, Value: v, Name: name}, b.Graph.Values[v].Width, b.Rows,
+				Operand{Kind: OperandScratch, Name: name + ".q8a"}, Operand{Kind: OperandScratch, Name: name + ".q8x"})...)
+		}
 		ps, err := decomposeOp(b, o)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("op %d (%s): %w", i, o.Kind, err))
@@ -53,7 +61,7 @@ func decomposeOp(b Block, o graph.Op) ([]Prim, error) {
 			return nil, fmt.Errorf("a norm of %d weights", len(o.Weight))
 		}
 		w := b.Graph.Values[o.Out[0]].Width
-		sum := Operand{Kind: OperandScratch, Name: b.Graph.Values[o.Out[0]].Name + ".sumsq"}
+		sum := Operand{Kind: OperandScratch, Name: b.Graph.Values[o.Out[0]].Name + ".sumsq", Temp: true}
 		wt := Operand{Kind: OperandVector, Role: o.Weight[0].Role, Name: o.Weight[0].Role.String()}
 		f := func(x float32) int64 { return int64(math.Float32bits(x)) }
 		return []Prim{
