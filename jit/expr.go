@@ -38,3 +38,5 @@ func (x *exprs) at(j int, ext []int, ax ...int) int {
 func (x *exprs) load(j, ix int) int { return x.add(Expr{Op: ExprLoad, In: j, A: ix}) }
 
 func (x *exprs) live() int { return x.add(Expr{Op: ExprLive}) }
+
+func (x *exprs) pos() int { return x.add(Expr{Op: ExprPos}) }

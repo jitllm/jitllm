@@ -38,7 +38,7 @@ func generate(p Prim) (*Kernel, error) {
 	}
 	g := &generator{k: k, p: &p, flat: map[Operand]int{}, shaped: map[Operand]int{}}
 	if r := p.Facts.Range; r != nil {
-		pos := &Positions{Axis: r.Axis, Loop: -1, Align: r.Align}
+		pos := &Positions{Axis: r.Axis, Loop: -1, Align: 1}
 		if p.Kind != PrimMap && r.Axis == len(p.Shape)-1 {
 			pos.Axis, pos.Loop = -1, c
 		}
@@ -124,6 +124,16 @@ func (g *generator) values(es []Expr, coords []int) []int {
 			vals[i] = k.add(Node{Op: OpLoad, Type: k.Bufs[b].Elem, Buf: b, Ax: ax})
 			if o := k.Bufs[b].Operand; o.Kind == OperandWeight && o.Format == jlm.TypeF32 {
 				vals[i] = k.add(Node{Op: OpBitcast, Type: ir.F32, A: vals[i]})
+			}
+		case ExprPos:
+			r := g.p.Facts.Range
+			if r == nil {
+				vals[i] = k.u32(0)
+				continue
+			}
+			vals[i] = k.bin(OpAdd, ir.U32, g.value(r.First, coords), coords[r.Axis])
+			if g.pos != nil {
+				g.pos.Pos = append(g.pos.Pos, vals[i])
 			}
 		case ExprLive:
 			if g.p.Facts.Range == nil {

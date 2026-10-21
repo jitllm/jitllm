@@ -33,13 +33,13 @@ type Kernel struct {
 
 // Positions is a primitive's Range on its kernel: the space axis whose
 // coordinate is a position, or where Loop is set the loop whose iteration
-// is; positions start at the range's First rounded down to Align. First and
-// End are the nodes of the range's bounds, Live the nodes standing for its
-// live end.
+// is; positions start at the range's First, rounded down to Align where a
+// pass aligned them. First and End are the nodes of the range's bounds, Live
+// the nodes standing for its live end, Pos the positions' nodes.
 type Positions struct {
 	Axis, Loop, Align int
 	First, End        int
-	Live              []int
+	Live, Pos         []int
 }
 
 // Loop runs Trip times, or where Count is set node Count-1's value times;

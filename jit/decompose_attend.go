@@ -8,14 +8,6 @@ import (
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
-// keyAlign is where a row's keys are counted from: its first attended
-// position rounded down to it. keyGrain is what a step's longest history is
-// rounded up to.
-const (
-	keyAlign = 32
-	keyGrain = 128
-)
-
 // decomposeAttend is decode attention over the paged history: per row and
 // query head, each key's dot with the query, the scores masked outside what
 // the row attends, their maximum, the weights and their sum, the weighted
@@ -28,7 +20,7 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	U, F := ir.U32, ir.F32
 	R, H, D := c.Step.Rows, a.NHead, a.HeadDim
-	C := (c.Step.Keys + keyGrain - 1) / keyGrain * keyGrain
+	C := c.Step.Keys
 	gqa, kw, pg := a.NHead/a.NKVHead, a.NKVHead*a.HeadDim, c.Step.Page
 	out := c.value(o.Out[0])
 	tmp := func(name string) Operand { return Operand{Kind: OperandScratch, Name: out.Name + "." + name} }
@@ -47,14 +39,12 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 		return x.e
 	}
 	rng := func(axis int) Facts {
-		return Facts{Range: &Range{Axis: axis, Align: keyAlign, First: bound(rowStart), End: bound(rowEnd)},
+		return Facts{Range: &Range{Axis: axis, First: bound(rowStart), End: bound(rowEnd)},
 			Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D}}
 	}
-	// position is key k's position, counted from the row's first rounded
-	// down.
-	position := func(x *exprs, k int) (pos, first int) {
-		first = row(x, rowStart)
-		return x.op(OpAdd, U, x.op(OpMul, U, x.op(OpDiv, U, first, x.u(keyAlign)), x.u(keyAlign)), k), first
+	// position is the key's position and the row's first.
+	position := func(x *exprs) (pos, first int) {
+		return x.pos(), row(x, rowStart)
 	}
 	// held is a position kept inside what the row attends.
 	held := func(x *exprs, pos, first int) int {
@@ -67,8 +57,8 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	}
 
 	var dx exprs
-	h, k, d := dx.coord(1), dx.coord(2), dx.coord(3)
-	pos, first := position(&dx, k)
+	h, d := dx.coord(1), dx.coord(3)
+	pos, first := position(&dx)
 	pid, off := page(&dx, held(&dx, pos, first))
 	kh := dx.op(OpDiv, U, h, dx.u(uint32(gqa)))
 	kat := dx.op(OpAdd, U, dx.op(OpMul, U, pid, dx.u(uint32(pg*kw))),
@@ -77,7 +67,7 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	dx.op(OpMul, F, dx.load(0, qat), dx.load(3, kat))
 
 	var sx exprs
-	spos, sfirst := position(&sx, sx.coord(2))
+	spos, sfirst := position(&sx)
 	valid := sx.op(OpLess, ir.Pred, sx.op(OpSub, U, spos, sfirst), sx.op(OpSub, U, sx.live(), sfirst))
 	dot := sx.at(0, keys, sx.coord(0), sx.coord(1), sx.coord(2))
 	sx.sel(F, valid, sx.op(OpMul, F, dot, sx.f(float32(a.Scale))), sx.f(minus))
@@ -86,7 +76,7 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	mx.at(0, keys, mx.coord(0), mx.coord(1), mx.coord(2))
 
 	var wx exprs
-	wpos, _ := position(&wx, wx.coord(2))
+	wpos, _ := position(&wx)
 	below := wx.op(OpLess, ir.Pred, wpos, wx.live())
 	s := wx.at(0, keys, wx.coord(0), wx.coord(1), wx.coord(2))
 	m := wx.at(3, heads, wx.coord(0), wx.coord(1))
@@ -97,7 +87,7 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 
 	var vx exprs
 	vh, vd, vk := vx.coord(1), vx.coord(2), vx.coord(3)
-	vpos, vfirst := position(&vx, vk)
+	vpos, vfirst := position(&vx)
 	vpid, voff := page(&vx, held(&vx, vpos, vfirst))
 	vkh := vx.op(OpDiv, U, vh, vx.u(uint32(gqa)))
 	vat := vx.op(OpAdd, U, vx.op(OpMul, U, vx.op(OpAdd, U, vx.op(OpMul, U, vpid, vx.u(uint32(pg))), voff), vx.u(uint32(kw))),

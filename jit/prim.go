@@ -60,12 +60,13 @@ type Expr struct {
 // The leaves: ExprCoord is coordinate A of the primitive's Shape; ExprAt
 // reads operand In at the coordinates Ax of a space of extents Ext; ExprLoad
 // reads it at the flat index node A; ExprLive is the first position past
-// the attended range.
+// the attended range; ExprPos is the position at the range's coordinate.
 const (
 	ExprCoord Op = 255 - iota
 	ExprAt
 	ExprLoad
 	ExprLive
+	ExprPos
 )
 
 // PrimStore is one store a map's element makes: operand Out at the
@@ -117,11 +118,10 @@ type Facts struct {
 }
 
 // Range is axis Axis of the primitive's Shape as positions: coordinate k at
-// First rounded down to Align plus k, attended from First up to End, both
-// expressions of the coordinates.
+// First plus k, attended from First up to End, both expressions of the
+// coordinates.
 type Range struct {
 	Axis       int
-	Align      int
 	First, End []Expr
 }
 

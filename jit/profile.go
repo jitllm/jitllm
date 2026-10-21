@@ -4,6 +4,7 @@ package jit
 func gpuProfile() Profile {
 	contract := []PrimKind{PrimContract}
 	return Profile{Int8: &Int8Form{Window: 32, Word: 4, Sums: 16}, Passes: []Pass{
+		RunLengths{Grain: 128, Align: 32},
 		Fuse{Pairs: []Pair{{From: PrimMap, To: PrimMap, AtStores: true}, {From: PrimContract, To: PrimMap, Additive: true}}},
 		Threads{Group: 128},
 		WorkRow{Group: 1024},
