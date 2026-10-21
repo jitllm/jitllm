@@ -122,9 +122,9 @@ func keys(t *testing.T, name string) int {
 	return len(m.Vocab.Encode(prompt, true)) + 1
 }
 
-// composed is the composer's plan for the model with every part on d, and
-// what it could not form.
-func composed(t *testing.T, name string, d jit.Device) (*jit.Plan, error) {
+// composed is the composer's plan for the model on placement p, and what it
+// could not form.
+func composed(t *testing.T, name string, p jit.Placement) (*jit.Plan, error) {
 	t.Helper()
 	f, err := jlm.Open(testmodels.Path(name + ".jlm"))
 	if err != nil {
@@ -132,14 +132,26 @@ func composed(t *testing.T, name string, d jit.Device) (*jit.Plan, error) {
 	}
 	defer f.Close()
 	step := jit.Step{Rows: 1, Page: 64, Keys: keys(t, name)}
-	return jit.Default().Compose(f, step, func(jit.Part) jit.Device { return d })
+	return jit.Default().Compose(f, step, p)
 }
 
-var sm70 = jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
+var (
+	sm70 = jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
+	host = jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}
+)
+
+// onCard is main's placement with a card: every part on it, the sampling
+// of the logits on the host.
+func onCard(p jit.Part) jit.Device {
+	if p.Kind == jit.PartSample {
+		return host
+	}
+	return sm70
+}
 
 func TestBoard(t *testing.T) {
 	main := mainDecode(t, *boardModel, *boardProfile)
-	plan, err := composed(t, *boardModel, sm70)
+	plan, err := composed(t, *boardModel, onCard)
 	if err != nil {
 		t.Logf("not formed: %v", err)
 	}

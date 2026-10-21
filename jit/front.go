@@ -15,6 +15,8 @@ const (
 	PartBlock PartKind = iota
 	PartHead
 	PartTable
+	// PartSample is the step's sampling of the head's logits.
+	PartSample
 )
 
 // Part is one placeable part of the model and its graph.
@@ -30,12 +32,14 @@ func (p Part) String() string {
 		return "head"
 	case PartTable:
 		return "table"
+	case PartSample:
+		return "sample"
 	}
 	return fmt.Sprintf("block %d", p.Block)
 }
 
 // front is the model's graph from its container: the step's rotary table,
-// every block, then the head. What the container states, the front end
+// every block, the head, then the sampling of its logits. What the container states, the front end
 // reads; what it does not, the front end refuses.
 func front(f *jlm.File) ([]Part, error) {
 	c := f.Config()
@@ -52,7 +56,8 @@ func front(f *jlm.File) ([]Part, error) {
 	if err != nil {
 		return nil, fmt.Errorf("jit: head: %w", err)
 	}
-	return append(parts, Part{Kind: PartHead, Block: -1, Graph: h}), nil
+	sm := graph.Sample{NVocab: int(c.NVocab)}
+	return append(parts, Part{Kind: PartHead, Block: -1, Graph: h}, Part{Kind: PartSample, Block: -1, Graph: sm.Build()}), nil
 }
 
 // stated is the container's facts the front end reads; anything else a

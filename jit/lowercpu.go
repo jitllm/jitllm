@@ -122,6 +122,8 @@ func (e *x86Lowerer) node(i int) {
 		case init.Op == OpConst && init.Imm == 0:
 			r := e.reg(i)
 			a.VPXOR(r, r, r)
+		case init.Op == OpLoad && e.home[nd.B] < 0:
+			a.VBROADCASTSS(e.reg(i), e.addr(init.Buf, init.A, init.Ptr))
 		default:
 			e.fail("a sum from %s", init.Op)
 		}

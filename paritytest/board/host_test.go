@@ -139,8 +139,6 @@ func TestHostDecodeEmitters(t *testing.T) {
 	}
 }
 
-var host = jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}
-
 var hostDiff = flag.String("host-diff", "", "TestBoardHost writes out main's kernels with this name prefix beside the composed kernel nearest each")
 
 // TestBoardHost holds the kernels the composer forms for the host to the
@@ -149,7 +147,7 @@ var hostDiff = flag.String("host-diff", "", "TestBoardHost writes out main's ker
 // matched as the longest run in order one composed kernel shares with it.
 func TestBoardHost(t *testing.T) {
 	em := cpu.EmittersFor(cpu.HostTier())
-	plan, err := composed(t, *boardModel, host)
+	plan, err := composed(t, *boardModel, func(jit.Part) jit.Device { return host })
 	if err != nil {
 		t.Logf("not formed: %v", err)
 	}

@@ -181,3 +181,49 @@ func objdump(t *testing.T, code []byte) string {
 	}
 	return string(out)
 }
+
+// TestEngineTakesOrForcesThePlacement composes the fixture on plan mode's
+// suggestion and on a placement the engine forces, each part landing where
+// its placement put it.
+func TestEngineTakesOrForcesThePlacement(t *testing.T) {
+	f, err := jlm.Open(testmodels.Path(*composeModel + ".jlm"))
+	if err != nil {
+		t.Skip(err)
+	}
+	defer f.Close()
+	r := Default()
+	gpu := Device{Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 32, Bandwidth: 800e9, Launch: 4e-6, Link: 12e9}
+	cpu := Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, Bandwidth: 40e9, Launch: 3e-6, Link: 12e9}
+	s := Step{Rows: 1, Page: 64, Keys: 5}
+	suggested, _, err := r.Suggest(f, s, []Device{gpu, cpu})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forced := func(p Part) Device {
+		if p.Kind == PartSample {
+			return cpu
+		}
+		return gpu
+	}
+	for name, p := range map[string]Placement{"suggested": suggested, "forced": forced} {
+		plan, err := r.Compose(f, s, p)
+		if plan == nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for i, pp := range plan.Parts {
+			if pp.Device != p(pp.Part) {
+				t.Errorf("%s: %s on %d, placed on %d", name, pp.Part, pp.Device.Kind, p(pp.Part).Kind)
+			}
+			if i > 0 && plan.Parts[i-1].Device != pp.Device {
+				seen := false
+				for _, tr := range plan.Transfers {
+					seen = seen || tr.From == i-1 && tr.To == i
+				}
+				if !seen {
+					t.Errorf("%s: no transfer between %s and %s", name, plan.Parts[i-1].Part, pp.Part)
+				}
+			}
+		}
+		t.Logf("%s: %d parts, %d transfers", name, len(plan.Parts), len(plan.Transfers))
+	}
+}

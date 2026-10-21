@@ -20,6 +20,7 @@ func decompositions() map[graph.OpKind]Decomposition {
 		graph.OpKVAppend:  decomposeKVAppend,
 		graph.OpAttend:    decomposeAttend,
 		graph.OpRopeTable: decomposeRopeTable,
+		graph.OpTopK:      decomposeTopK,
 	}
 }
 
