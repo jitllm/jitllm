@@ -1,10 +1,13 @@
 package jit
 
 // Pair is a producer's primitive kind a consumer's may be fused into;
-// Additive asks that the consumer add a term to the producer's value.
+// Additive asks that the consumer add a term to the producer's value. AtStores
+// fuses a consumer of a value the producer writes at several places an
+// element: the consumer computed at each of the producer's stores.
 type Pair struct {
 	From, To PrimKind
 	Additive bool
+	AtStores bool
 }
 
 // Fuse inlines a consumer into its producer where their pair is allowed, the
@@ -25,6 +28,10 @@ func (f Fuse) Apply(prog []*Nest, t Target) ([]*Nest, error) {
 			v, st, ok := f.joins(p, c, out)
 			if ok {
 				out[pi] = merge(p, c, v, st)
+			} else if v, ok = f.joinsAtStores(p, c, out); ok {
+				out[pi] = mergeAtStores(p, c, v)
+			}
+			if ok {
 				out[pi].Passes = append(append([]string(nil), p.Passes...), f.Name())
 				out = append(out[:ci], out[ci+1:]...)
 				ci--
@@ -209,4 +216,85 @@ func (n *Nest) adds() bool {
 	}
 	e := n.Prim.Expr
 	return e[0].Op == ExprIn && e[1].Op == ExprIn && e[2].Op == OpAdd && e[2].A == 0 && e[2].B == 1
+}
+
+// joinsAtStores finds a value p writes by several stores an element, all of
+// it, that c alone reads, at its own element.
+func (f Fuse) joinsAtStores(p, c *Nest, prog []*Nest) (Operand, bool) {
+	allowed := false
+	for _, pr := range f.Pairs {
+		allowed = allowed || pr.AtStores && pr.From == p.Kind && pr.To == c.Kind
+	}
+	if !allowed || p.Work || c.Work || len(p.Space) != 1 || len(c.Space) != 1 {
+		return Operand{}, false
+	}
+	count := map[Operand]int{}
+	for _, s := range p.Stores {
+		if !s.Barrier && s.At == -1 {
+			count[p.Bufs[s.Buf].Operand]++
+		}
+	}
+	for o, k := range count {
+		if o.Kind != OperandValue || k < 2 || k*p.elements() != c.elements() || !c.readsAtElement(o) || !soleReader(prog, c, o) {
+			continue
+		}
+		return o, true
+	}
+	return Operand{}, false
+}
+
+// mergeAtStores is p with c computed at each of p's stores of v: c's
+// element the store's place, its read of v the stored node.
+func mergeAtStores(p, c *Nest, v Operand) *Nest {
+	m := p.clone()
+	m.Name = p.Name + "+" + c.Name
+	var kept []Store
+	var at [][2]int
+	for _, s := range m.Stores {
+		if !s.Barrier && s.At == -1 && m.Bufs[s.Buf].Operand == v {
+			at = append(at, [2]int{s.Ix, s.Val})
+			continue
+		}
+		kept = append(kept, s)
+	}
+	m.Stores = kept
+	bufOf := map[int]int{}
+	for i, b := range c.Bufs {
+		if b.Operand == v {
+			continue
+		}
+		j := -1
+		for k, mb := range m.Bufs {
+			if mb.Operand == b.Operand && mb.Kind == b.Kind {
+				j = k
+			}
+		}
+		if j < 0 {
+			j = m.buf(b)
+		}
+		bufOf[i] = j
+	}
+	for _, s := range at {
+		nodeOf := make([]int, len(c.Nodes))
+		for i, nd := range c.Nodes {
+			switch {
+			case nd.Op == OpCoord:
+				nodeOf[i] = s[0]
+				continue
+			case nd.Op == OpLoad && c.Bufs[nd.Buf].Operand == v:
+				nodeOf[i] = s[1]
+				continue
+			case nd.Op == OpLoad:
+				nd.Buf = bufOf[nd.Buf]
+			}
+			for _, a := range c.args(&nd) {
+				*a = nodeOf[*a]
+			}
+			nodeOf[i] = m.add(nd)
+		}
+		for _, st := range c.Stores {
+			m.Stores = append(m.Stores, Store{Buf: bufOf[st.Buf], Ix: nodeOf[st.Ix], Val: nodeOf[st.Val], At: -1})
+		}
+	}
+	return m
 }

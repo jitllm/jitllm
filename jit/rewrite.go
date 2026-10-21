@@ -47,7 +47,7 @@ func (n *Nest) args(nd *Node) []*int {
 // arity is how many operands an op reads, a fold its step and its start.
 func arity(op Op) int {
 	switch op {
-	case OpConst, OpCoord, OpIter, OpThread:
+	case OpConst, OpCoord, OpIter, OpThread, OpFlat:
 		return 0
 	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal:
 		return 1

@@ -95,6 +95,8 @@ const (
 	OpExchange
 	// OpLocal is element A's place in its workgroup.
 	OpLocal
+	// OpFlat is the thread's index in the launch, unclamped.
+	OpFlat
 )
 
 // Node is one scalar value. Load reads Bufs[Buf] at index A.

@@ -62,6 +62,22 @@ func decomposeOp(b Block, o graph.Op) ([]Prim, error) {
 		return []Prim{{Kind: PrimMap, N: b.Rows * w, In: []Operand{value(o.In[0]), value(o.In[1])},
 			At: []Access{atElement, atElement}, Out: value(o.Out[0]),
 			Expr: []Expr{{Op: ExprIn, In: 0}, {Op: ExprIn, In: 1}, {Op: OpAdd, Type: ir.F32, A: 0, B: 1}}}}, nil
+	case graph.OpRope:
+		a := o.Attr
+		w := b.Graph.Values[o.In[0]].Width
+		if len(o.In) != 1 || len(o.Out) != 1 || a.HeadDim <= 0 || w%a.HeadDim != 0 || a.NRot != a.HeadDim || a.Freqs ||
+			a.Sections != [4]int{} || a.Mscale != 0 || a.Layout != graph.RopeNorm && a.Layout != graph.RopeNeox {
+			return nil, fmt.Errorf("a rotary of %d of %d, layout %d", a.NRot, a.HeadDim, a.Layout)
+		}
+		return []Prim{rope(value(o.In[0]), value(o.Out[0]), b.Rows, w, a.HeadDim, a.NRot, a.Layout == graph.RopeNeox, b.queryRope(o))}, nil
+	case graph.OpKVAppend:
+		if len(o.In) != 2 || b.Page <= 0 {
+			return nil, fmt.Errorf("a history append of %d values over pages of %d", len(o.In), b.Page)
+		}
+		return []Prim{
+			appendKey(value(o.In[0]), b.Rows, b.Graph.Values[o.In[0]].Width, b.Page),
+			appendValue(value(o.In[1]), b.Rows, b.Graph.Values[o.In[1]].Width, b.Page),
+		}, nil
 	case graph.OpActMul:
 		if len(o.In) != 2 || len(o.Out) != 1 {
 			return nil, fmt.Errorf("an act_mul of %d operands", len(o.In))
@@ -110,3 +126,14 @@ func decomposeOp(b Block, o graph.Op) ([]Prim, error) {
 }
 
 var errNoDecomposition = errors.New("no decomposition into primitives yet")
+
+// queryRope reports whether rope o turns what attention reads as its query:
+// those rows land at the step's q offset.
+func (b Block) queryRope(o graph.Op) bool {
+	for _, a := range b.Graph.Ops {
+		if a.Kind == graph.OpAttend && len(a.In) > 0 && a.In[0] == o.Out[0] {
+			return true
+		}
+	}
+	return false
+}

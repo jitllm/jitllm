@@ -69,7 +69,7 @@ func eachNest(name string, prog []*Nest, f func(*Nest) ([]*Nest, bool, error)) (
 // ProfileFor is the passes target t runs at a step of rows, set to main's
 // choices.
 func ProfileFor(t Target, rows int) Profile {
-	var pairs []Pair
+	pairs := []Pair{{From: PrimMap, To: PrimMap, AtStores: true}}
 	if rows == 1 {
 		pairs = append(pairs, Pair{From: PrimContract, To: PrimMap, Additive: true})
 	}
@@ -78,6 +78,7 @@ func ProfileFor(t Target, rows int) Profile {
 		Fuse{Pairs: pairs},
 		WorkRow{Group: 1024},
 		Coarsen{Unit: 4},
+		Parts{Kinds: []PrimKind{PrimMap}},
 		Split{Slots: 30720, Max: 32, Block: 32, Kinds: contract},
 		Blocks{Size: 32, Kinds: contract},
 	}}

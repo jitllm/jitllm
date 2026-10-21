@@ -86,9 +86,16 @@ func elemOf(t ir.Type) ir.Type {
 func lowerMap(p Prim) *Nest {
 	n := &Nest{Name: "map", Space: []int{p.N}, Group: defaultGroup}
 	e := n.add(Node{Op: OpCoord, A: 0, Type: ir.U32})
-	v := n.expr(p, func(j int) int { return n.access(e, p.At[j]) })
-	out := n.buf(Buf{Kind: BufOut, Elem: elemOf(p.Out.Elem), Operand: p.Out})
-	n.Stores = append(n.Stores, Store{Buf: out, Ix: n.access(e, p.OutAt), Val: v, At: -1})
+	vals := n.exprs(p, e, func(j int) int { return n.access(e, p.At[j]) })
+	if len(p.Stores) == 0 {
+		out := n.buf(Buf{Kind: BufOut, Elem: elemOf(p.Out.Elem), Operand: p.Out})
+		n.Stores = append(n.Stores, Store{Buf: out, Ix: n.access(e, p.OutAt), Val: vals[len(vals)-1], At: -1})
+		return n
+	}
+	for _, s := range p.Stores {
+		out := n.buf(Buf{Kind: BufOut, Elem: elemOf(s.Out.Elem), Operand: s.Out})
+		n.Stores = append(n.Stores, Store{Buf: out, Ix: vals[s.Index], Val: vals[s.Value], At: -1})
+	}
 	return n
 }
 
@@ -118,26 +125,38 @@ func lowerReduce(p Prim) *Nest {
 	return n
 }
 
-// expr is p's function as nodes, operand j loaded at index(j), each operand
-// one buffer however often it is read.
+// expr is p's function as nodes, its last node's value.
 func (n *Nest) expr(p Prim, index func(j int) int) int {
+	vals := n.exprs(p, -1, index)
+	return vals[len(vals)-1]
+}
+
+// exprs is p's function as nodes at element e, operand j at index(j) or at
+// a node, each operand one buffer however often it is read.
+func (n *Nest) exprs(p Prim, e int, index func(j int) int) []int {
 	bufs := map[Operand]int{}
+	bufOf := func(o Operand) int {
+		b, ok := bufs[o]
+		if !ok {
+			b = n.buf(Buf{Kind: BufIn, Elem: storageElem(o), Operand: o})
+			bufs[o] = b
+		}
+		return b
+	}
 	vals := make([]int, len(p.Expr))
 	for i, x := range p.Expr {
 		switch x.Op {
 		case ExprIn:
-			o := p.In[x.In]
-			b, ok := bufs[o]
-			if !ok {
-				b = n.buf(Buf{Kind: BufIn, Elem: storageElem(o), Operand: o})
-				bufs[o] = b
-			}
-			vals[i] = n.load(b, index(x.In))
+			vals[i] = n.load(bufOf(p.In[x.In]), index(x.In))
+		case ExprLoad:
+			vals[i] = n.load(bufOf(p.In[x.In]), vals[x.A])
+		case ExprElem:
+			vals[i] = e
 		case OpConst:
 			vals[i] = n.add(Node{Op: OpConst, Type: x.Type, Imm: x.Imm})
 		default:
 			vals[i] = n.add(Node{Op: x.Op, Type: x.Type, A: vals[x.A], B: vals[x.B], C: vals[x.C]})
 		}
 	}
-	return vals[len(vals)-1]
+	return vals
 }

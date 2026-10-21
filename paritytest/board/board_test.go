@@ -137,7 +137,7 @@ func composed(t *testing.T, name string, tg jit.Target) ([]jit.Kernel, []error) 
 				}
 			}
 		}
-		k, err := jit.Compose(jit.Block{Graph: g, Rows: 1, Formats: formats}, tg, jit.ProfileFor(tg, 1))
+		k, err := jit.Compose(jit.Block{Graph: g, Rows: 1, Formats: formats, Page: 64}, tg, jit.ProfileFor(tg, 1))
 		ks = append(ks, k...)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("block %d: %w", li, err))

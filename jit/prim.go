@@ -27,6 +27,9 @@ const (
 	// OperandVector is a vector weight, floats.
 	OperandVector
 	OperandScratch
+	// OperandTable is one of the step's tables: the rotary's angles, the
+	// rows' history descriptors and page table, the history's pools.
+	OperandTable
 )
 
 // Operand is a tensor a primitive reads or writes: a graph value, a weight
@@ -70,8 +73,20 @@ type Expr struct {
 	Imm     int64
 }
 
-// ExprIn marks an Expr that reads an operand.
-const ExprIn Op = 255
+// ExprIn reads operand In at its access; ExprLoad reads it at node A;
+// ExprElem is the element's index.
+const (
+	ExprIn   Op = 255
+	ExprLoad Op = 254
+	ExprElem Op = 253
+)
+
+// PrimStore is one store a primitive's element makes: operand Out at
+// expression node Index, the value node Value.
+type PrimStore struct {
+	Out          Operand
+	Index, Value int
+}
 
 // Prim is one primitive.
 //   - Contract: Out[r] = sum over k of In[0][r*K + k] * In[1][k], Rows rows.
@@ -91,4 +106,6 @@ type Prim struct {
 	Start   Start
 	Init    int64
 	Type    ir.Type
+	// Stores, where set, are a map's stores in place of Out at OutAt.
+	Stores []PrimStore
 }

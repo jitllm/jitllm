@@ -21,6 +21,7 @@ type emitter struct {
 	val    []ir.Value
 	home   []int
 	coords []ir.Value
+	flat   ir.Value
 	tid    ir.Value
 	shared map[int]ir.Value
 	open   []int
@@ -49,6 +50,7 @@ func (e *emitter) run() (*ir.Kernel, error) {
 		flat = b.Min(ir.U32, b.CTAID(), b.Const(ir.U32, int64(n.elements()-1)))
 	} else {
 		flat = b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
+		e.flat = flat
 		flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(n.elements()-1)))
 	}
 	e.coords = make([]ir.Value, len(n.Space))
@@ -153,6 +155,8 @@ func (e *emitter) get(i int) ir.Value {
 		v = e.coords[nd.A]
 	case OpThread:
 		v = e.thread()
+	case OpFlat:
+		v = e.flat
 	case OpIter:
 		v = e.iter[nd.At]
 	case OpFold:
