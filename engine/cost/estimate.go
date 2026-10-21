@@ -1,41 +1,54 @@
-package jit
+package cost
 
 import (
 	"errors"
 	"fmt"
 
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/jit"
 )
 
-// Estimate is placement p's cost at step s, from the IR its passes leave.
-func (r *Registry) Estimate(f *jlm.File, s Step, p Placement) (Cost, error) {
-	parts, err := front(f)
+// Estimate is placement p's cost at step s, from the IR r's passes leave.
+func Estimate(r *jit.Registry, f *jlm.File, s jit.Step, p Placement) (Cost, error) {
+	parts, run, devs, err := placed(f, p)
 	if err != nil {
 		return Cost{}, err
-	}
-	run := make([]PartPlan, len(parts))
-	for i, part := range parts {
-		run[i] = PartPlan{Part: part, Device: p(part)}
 	}
 	var total Cost
 	var errs []error
 	for i := 0; i < len(run); {
 		j := i + 1
-		for j < len(run) && run[j].Device == run[i].Device {
+		for j < len(run) && devs[j] == devs[i] {
 			j++
 		}
-		ks, err := r.passRun(f, run[i:j], i, s)
+		ks, err := r.Kernels(f, run[i:j], i, s)
 		errs = append(errs, err)
-		m := costModel{d: run[i].Device, s: s, alias: partAliases(parts)}
+		m := costModel{d: devs[i], s: s, alias: partAliases(parts)}
 		for _, k := range ks {
 			total = total.add(m.cost(k))
 		}
 		i = j
 	}
 	for i := 1; i < len(run); i++ {
-		total = total.add(seam(run[i-1], run[i], s))
+		total = total.add(seam(run[i-1].Part, devs[i-1], devs[i], s))
 	}
 	return total, errors.Join(errs...)
+}
+
+// placed is model f's parts on placement p: each part's plan for the
+// composer, and the device it is priced on.
+func placed(f *jlm.File, p Placement) ([]jit.Part, []jit.PartPlan, []Device, error) {
+	parts, err := jit.Front(f)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	run := make([]jit.PartPlan, len(parts))
+	devs := make([]Device, len(parts))
+	for i, part := range parts {
+		devs[i] = p(part)
+		run[i] = jit.PartPlan{Part: part, Device: devs[i].Device}
+	}
+	return parts, run, devs, nil
 }
 
 // CodeCost is one call's estimate at a step, beside the call and what the
@@ -46,13 +59,13 @@ func (r *Registry) Estimate(f *jlm.File, s Step, p Placement) (Cost, error) {
 // operand for every value the estimate takes as one buffer, a block's
 // residual the one the block before it wrote.
 type CodeCost struct {
-	Code    Code
+	Code    jit.Code
 	Part    int
 	Device  Device
 	Cost    Cost
 	Values  map[int]uint64
 	Reach   map[int]int64
-	Storage map[int]Operand
+	Storage map[int]jit.Operand
 	Binds   []BindCost
 }
 
@@ -60,7 +73,7 @@ type CodeCost struct {
 // the storage it is, the bytes the code reaches in it, and the constants it
 // holds, where it is a block of them.
 type BindCost struct {
-	Storage Operand
+	Storage jit.Operand
 	Reach   int64
 	Words   []uint32
 }
@@ -70,24 +83,20 @@ type BindCost struct {
 // state of decoding, the caches as a step before this one left them; else
 // with nothing the step reads in any cache, as after reads of more than
 // the caches hold.
-func (r *Registry) EstimateCodes(f *jlm.File, s Step, p Placement, steady bool) ([]CodeCost, error) {
-	parts, err := front(f)
+func EstimateCodes(r *jit.Registry, f *jlm.File, s jit.Step, p Placement, steady bool) ([]CodeCost, error) {
+	parts, run, devs, err := placed(f, p)
 	if err != nil {
 		return nil, err
-	}
-	run := make([]PartPlan, len(parts))
-	for i, part := range parts {
-		run[i] = PartPlan{Part: part, Device: p(part)}
 	}
 	var out []CodeCost
 	var errs []error
 	for i := 0; i < len(run); {
 		j := i + 1
-		for j < len(run) && run[j].Device == run[i].Device {
+		for j < len(run) && devs[j] == devs[i] {
 			j++
 		}
-		d := run[i].Device
-		ks, err := r.passRun(f, run[i:j], i, s)
+		d := devs[i]
+		ks, err := r.Kernels(f, run[i:j], i, s)
 		errs = append(errs, err)
 		m := costModel{d: d, s: s, alias: partAliases(parts)}
 		for _, k := range ks {
@@ -97,18 +106,18 @@ func (r *Registry) EstimateCodes(f *jlm.File, s Step, p Placement, steady bool) 
 		}
 		for _, k := range ks {
 			c := m.cost(k)
-			codes, err := r.lower([]*Kernel{k}, d)
+			codes, err := r.Lower([]*jit.Kernel{k}, d.Device)
 			if err != nil || len(codes) != 1 {
 				errs = append(errs, err)
 				continue
 			}
-			e := estimator{k: k, s: s, trips: map[int]float64{}, homes: k.homes()}
-			cc := CodeCost{Code: codes[0].Code, Part: k.Of, Device: d, Cost: c, Values: map[int]uint64{}, Reach: map[int]int64{}, Storage: map[int]Operand{}}
+			e := estimator{k: k, s: s, trips: map[int]float64{}, homes: k.Homes()}
+			cc := CodeCost{Code: codes[0].Code, Part: k.Of, Device: d, Cost: c, Values: map[int]uint64{}, Reach: map[int]int64{}, Storage: map[int]jit.Operand{}}
 			for b, buf := range k.Bufs {
-				if buf.Kind == BufShared {
+				if buf.Kind == jit.BufShared {
 					continue
 				}
-				n := int64(elemBytes(buf))
+				n := int64(jit.ElemBytes(buf))
 				for _, x := range buf.Shape {
 					n *= int64(x)
 				}
@@ -130,7 +139,7 @@ func (r *Registry) EstimateCodes(f *jlm.File, s Step, p Placement, steady bool) 
 							w = v
 						}
 					}
-					if v, ok := stepWord(k.Bufs[a.Buf].Operand, int(w), s); ok {
+					if v, ok := jit.StepWord(k.Bufs[a.Buf].Operand, int(w), s); ok {
 						cc.Values[a.Field] = uint64(v)
 					}
 				default:
@@ -145,15 +154,15 @@ func (r *Registry) EstimateCodes(f *jlm.File, s Step, p Placement, steady bool) 
 	return out, errors.Join(errs...)
 }
 
-// seam is what carrying a part's boundary value to the next part costs
-// where the two sit on different devices.
-func seam(a, b PartPlan, s Step) Cost {
-	if a.Device == b.Device || len(a.Part.Graph.Out) == 0 {
+// seam is what carrying part a's boundary value to the next part costs,
+// a on device da and the next on db, where the two devices differ.
+func seam(a jit.Part, da, db Device, s jit.Step) Cost {
+	if da == db || len(a.Graph.Out) == 0 {
 		return Cost{}
 	}
-	n := int64(4 * s.Rows * a.Part.Graph.Values[a.Part.Graph.Out[0]].Width)
+	n := int64(4 * s.Rows * a.Graph.Values[a.Graph.Out[0]].Width)
 	c := Cost{Carried: n}
-	if l := min(a.Device.Link, b.Device.Link); l > 0 {
+	if l := min(da.Link, db.Link); l > 0 {
 		c.Seconds = float64(n) / l
 	}
 	return c
@@ -162,11 +171,11 @@ func seam(a, b PartPlan, s Step) Cost {
 // Suggest is plan mode: a placement over devices at step s, each part on
 // the device that makes the model's estimate least, the seams' transfers
 // counted.
-func (r *Registry) Suggest(f *jlm.File, s Step, devices []Device) (Placement, Cost, error) {
+func Suggest(r *jit.Registry, f *jlm.File, s jit.Step, devices []Device) (Placement, Cost, error) {
 	if len(devices) == 0 {
-		return nil, Cost{}, fmt.Errorf("jit: no device to place on")
+		return nil, Cost{}, fmt.Errorf("cost: no device to place on")
 	}
-	parts, err := front(f)
+	parts, err := jit.Front(f)
 	if err != nil {
 		return nil, Cost{}, err
 	}
@@ -175,7 +184,7 @@ func (r *Registry) Suggest(f *jlm.File, s Step, devices []Device) (Placement, Co
 	for i, part := range parts {
 		own[i] = make([]Cost, m)
 		for j, d := range devices {
-			ks, err := r.passRun(f, []PartPlan{{Part: part, Device: d}}, i, s)
+			ks, err := r.Kernels(f, []jit.PartPlan{{Part: part, Device: d.Device}}, i, s)
 			if err != nil {
 				own[i][j] = Cost{Seconds: 1e30}
 				continue
@@ -197,7 +206,7 @@ func (r *Registry) Suggest(f *jlm.File, s Step, devices []Device) (Placement, Co
 			}
 			from[i][j] = -1
 			for q := range devices {
-				c := best[i-1][q].add(seam(PartPlan{Part: parts[i-1], Device: devices[q]}, PartPlan{Part: parts[i], Device: devices[j]}, s)).add(own[i][j])
+				c := best[i-1][q].add(seam(parts[i-1], devices[q], devices[j], s)).add(own[i][j])
 				if from[i][j] < 0 || c.Seconds < best[i][j].Seconds {
 					best[i][j], from[i][j] = c, q
 				}
@@ -219,5 +228,5 @@ func (r *Registry) Suggest(f *jlm.File, s Step, devices []Device) (Placement, Co
 	for i, part := range parts {
 		at[[2]int{int(part.Kind), part.Block}] = devices[pick[i]]
 	}
-	return func(p Part) Device { return at[[2]int{int(p.Kind), p.Block}] }, best[n-1][end], nil
+	return func(p jit.Part) Device { return at[[2]int{int(p.Kind), p.Block}] }, best[n-1][end], nil
 }

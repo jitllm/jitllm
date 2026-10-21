@@ -94,7 +94,7 @@ func (k *Kernel) vectorizable(c int) bool {
 		return false
 	}
 	for i, nd := range k.Nodes {
-		if nd.Op == OpLoad && k.varies(i, c) && !k.consecutive(nd.Buf, nd.A, nd.Ax, it, c) {
+		if nd.Op == OpLoad && k.Varies(i, c) && !k.consecutive(nd.Buf, nd.A, nd.Ax, it, c) {
 			return false
 		}
 	}
@@ -107,7 +107,7 @@ func (k *Kernel) vectorizable(c int) bool {
 func (k *Kernel) consecutive(b, ix int, ax []int, it, c int) bool {
 	if ax != nil {
 		for _, a := range ax[:len(ax)-1] {
-			if k.varies(a, c) {
+			if k.Varies(a, c) {
 				return false
 			}
 		}
@@ -116,13 +116,13 @@ func (k *Kernel) consecutive(b, ix int, ax []int, it, c int) bool {
 			return true
 		}
 		nd := k.Nodes[last]
-		return nd.Op == OpAdd && (nd.B == it && !k.varies(nd.A, c) || nd.A == it && !k.varies(nd.B, c))
+		return nd.Op == OpAdd && (nd.B == it && !k.Varies(nd.A, c) || nd.A == it && !k.Varies(nd.B, c))
 	}
 	if ix == it {
 		return true
 	}
 	nd := k.Nodes[ix]
-	return nd.Op == OpAdd && (nd.B == it && !k.varies(nd.A, c) || nd.A == it && !k.varies(nd.B, c))
+	return nd.Op == OpAdd && (nd.B == it && !k.Varies(nd.A, c) || nd.A == it && !k.Varies(nd.B, c))
 }
 
 func (k *Kernel) vectorize(c, L int, carry []int, quads bool, quadRegs []int) {
@@ -178,12 +178,12 @@ func (k *Kernel) vectorize(c, L int, carry []int, quads bool, quadRegs []int) {
 			kept[term] = st.B
 		}
 		h := k.add(Node{Op: OpHSum, Type: k.Nodes[f].Type, A: ft})
-		hs := k.homes()
+		hs := k.Homes()
 		for i := range k.Nodes {
 			if i == step || i == ft || i == h || i < len(hs) && hs[i] >= 0 && (k.within(hs[i], c) || k.within(hs[i], t)) {
 				continue
 			}
-			for _, a := range k.args(&k.Nodes[i]) {
+			for _, a := range k.Operands(&k.Nodes[i]) {
 				if *a == f {
 					*a = h
 				}
@@ -251,7 +251,7 @@ func (k *Kernel) zeroKept(i, t int) bool {
 	nd := k.Nodes[i]
 	switch nd.Op {
 	case OpLoad:
-		return k.varies(i, t)
+		return k.Varies(i, t)
 	case OpConst:
 		return nd.Imm == 0
 	case OpMul:
@@ -310,7 +310,7 @@ func (k *Kernel) vectorizeCarry(c, t, v, cf int, sub map[int]int, carry []int) {
 		for _, nd := range k.Nodes {
 			label = max(label, nd.Share+1)
 		}
-		hs := k.homes()
+		hs := k.Homes()
 		for x, y := range sub {
 			if _, ok := from[x]; !ok && k.Nodes[x].Op == OpLoad && x < len(hs) && hs[x] == c {
 				k.Nodes[x].Share, k.Nodes[y].Share = label, label
@@ -354,7 +354,7 @@ func (k *Kernel) vectorizeCarry(c, t, v, cf int, sub map[int]int, carry []int) {
 // readAfter points each reader of a fold in sub outside loops c and t, the
 // nodes from first on aside, at its replacement.
 func (k *Kernel) readAfter(c, t int, sub map[int]int, first int) {
-	hs := k.homes()
+	hs := k.Homes()
 	for i := range k.Nodes {
 		if i >= first || i < len(hs) && hs[i] >= 0 && (k.within(hs[i], c) || k.within(hs[i], t)) {
 			continue
@@ -362,7 +362,7 @@ func (k *Kernel) readAfter(c, t int, sub map[int]int, first int) {
 		if nd := k.Nodes[i]; nd.Op == OpFold && (nd.At == c || nd.At == t) {
 			continue
 		}
-		for _, a := range k.args(&k.Nodes[i]) {
+		for _, a := range k.Operands(&k.Nodes[i]) {
 			if r, ok := sub[*a]; ok {
 				*a = r
 			}
@@ -451,7 +451,7 @@ func (k *Kernel) complexPairOf(cl, L int) (complexPair, bool) {
 	}
 	load := func(i int) (Node, bool) {
 		nd := k.Nodes[i]
-		return nd, nd.Op == OpLoad && k.varies(i, cl)
+		return nd, nd.Op == OpLoad && k.Varies(i, cl)
 	}
 	la, oka := load(a)
 	lb, okb := load(b)
@@ -558,11 +558,11 @@ func (k *Kernel) pairStores(c int) ([2]int, bool) {
 // broadcastInto puts each value made from a lane sum, maximum or minimum
 // that vector loop c reads, made outside it, in every lane once before the loop.
 func (k *Kernel) broadcastInto(c int) {
-	hs := k.homes()
+	hs := k.Homes()
 	made := map[int]int{}
 	for i := range k.Nodes {
 		if hs[i] >= 0 && k.within(hs[i], c) {
-			for _, a := range k.args(&k.Nodes[i]) {
+			for _, a := range k.Operands(&k.Nodes[i]) {
 				x := *a
 				if x >= len(hs) || hs[x] >= 0 && k.within(hs[x], c) || k.Nodes[x].Type != ir.F32 || k.Nodes[x].Op == OpBroadcast || !k.computedFrom(x, OpHSum) && !k.computedFrom(x, OpHMax) && !k.computedFrom(x, OpHMin) {
 					continue

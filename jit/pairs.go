@@ -21,7 +21,7 @@ func (k *Kernel) copies() []int {
 			if nd.Op == OpLoad {
 				c = k.Bufs[nd.Buf].Operand.Copy
 			}
-			for _, a := range k.args(&nd) {
+			for _, a := range k.Operands(&nd) {
 				if *a != i {
 					c = max(c, out[*a])
 				}
@@ -39,7 +39,7 @@ func (k *Kernel) copies() []int {
 				if j == i {
 					continue
 				}
-				for _, a := range k.args(&nd) {
+				for _, a := range k.Operands(&nd) {
 					if *a == i {
 						readers++
 						if c < 0 || out[j] == c {
@@ -72,7 +72,7 @@ func (k *Kernel) headless(i int) bool {
 		if nd.Op == OpLoad || nd.Op == OpParam {
 			return false
 		}
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			if !walk(*a) {
 				return false
 			}
@@ -156,7 +156,7 @@ func (k *Kernel) sameShapeAs(i, j int, twin func(int) (int, bool)) bool {
 			return false
 		}
 	}
-	x, y := k.args(&a), k.args(&b)
+	x, y := k.Operands(&a), k.Operands(&b)
 	if len(x) != len(y) {
 		return false
 	}

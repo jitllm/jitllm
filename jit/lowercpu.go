@@ -19,7 +19,7 @@ func (l cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 	if k.Seq == nil {
 		return Lowered{}, fmt.Errorf("the x86 lowering of %s: the kernel is not ordered", k.Name)
 	}
-	e := &x86Lowerer{k: k, a: &x86.Buf{}, top: map[int]int{}, end: map[int]int{}, preset: map[int]bool{}, home: k.homes(), words: k.vectorWords(), shuffles: l.Shuffles}
+	e := &x86Lowerer{k: k, a: &x86.Buf{}, top: map[int]int{}, end: map[int]int{}, preset: map[int]bool{}, home: k.Homes(), words: k.VectorWords(), shuffles: l.Shuffles}
 	for _, en := range k.Seq {
 		if e.err != nil {
 			break
@@ -83,9 +83,9 @@ func (e *x86Lowerer) addr(b, ix, ptr int) x86.Mem {
 	}
 
 	if w := k.Bufs[b].Word; w > 0 {
-		return x86.At(x86.RDI, int32(w-1)+int32(nd.Imm)*int32(elemBytes(k.Bufs[b])))
+		return x86.At(x86.RDI, int32(w-1)+int32(nd.Imm)*int32(ElemBytes(k.Bufs[b])))
 	}
-	return x86.At(e.ptrReg(b, ptr), int32(nd.Imm)*int32(elemBytes(k.Bufs[b])))
+	return x86.At(e.ptrReg(b, ptr), int32(nd.Imm)*int32(ElemBytes(k.Bufs[b])))
 }
 
 // ptrReg is the register of buffer b's pointer ptr.
@@ -100,8 +100,8 @@ func (e *x86Lowerer) ptrReg(b, ptr int) x86.Reg {
 	return x86.Reg(max(r-1, 0))
 }
 
-// elemBytes is the bytes of one of buffer b's elements.
-func elemBytes(b Buf) int {
+// ElemBytes is the bytes of one of buffer b's elements.
+func ElemBytes(b Buf) int {
 	if b.Half {
 		return 2
 	}
@@ -113,7 +113,7 @@ func elemBytes(b Buf) int {
 func (e *x86Lowerer) feedsHalves(i int) bool {
 	n := 0
 	for r, nd := range e.k.Nodes {
-		for _, a := range e.k.args(&nd) {
+		for _, a := range e.k.Operands(&nd) {
 			if *a == i {
 				if !e.half(r) {
 					return false
@@ -526,7 +526,7 @@ func (e *x86Lowerer) leave(c int) {
 	l := k.Loops[c]
 	for _, cu := range l.Cursors {
 		if cu.Elems != 0 {
-			a.ADDimm(e.ptrReg(cu.Buf, cu.Ptr), int32(cu.Elems*elemBytes(k.Bufs[cu.Buf])))
+			a.ADDimm(e.ptrReg(cu.Buf, cu.Ptr), int32(cu.Elems*ElemBytes(k.Bufs[cu.Buf])))
 		}
 	}
 	if l.once() {

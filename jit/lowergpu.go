@@ -74,14 +74,14 @@ func (e *lowerer) run() (*ir.Kernel, error) {
 	if n.Work && len(n.Space) > 1 {
 		e.coords = e.workCoords()
 	} else if n.Work {
-		flat = b.Min(ir.U32, b.CTAID(), b.Const(ir.U32, int64(n.elements()-1)))
+		flat = b.Min(ir.U32, b.CTAID(), b.Const(ir.U32, int64(n.Elements()-1)))
 	} else {
 		flat = b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID())
 		e.flat = flat
 		if n.Clamp > 0 {
 			flat = b.Min(ir.U32, flat, b.Sub(ir.U32, e.get(n.Clamp-1), b.Const(ir.U32, 1)))
 		} else {
-			flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(n.elements()-1)))
+			flat = b.Min(ir.U32, flat, b.Const(ir.U32, int64(n.Elements()-1)))
 		}
 	}
 	if e.coords == nil {
@@ -186,7 +186,7 @@ func (e *lowerer) homes() {
 	}
 	for c := range n.Loops {
 		for _, i := range e.body(c) {
-			if n.Nodes[i].Op == OpFold && n.Nodes[i].At == c || !n.varies(i, c) {
+			if n.Nodes[i].Op == OpFold && n.Nodes[i].At == c || !n.Varies(i, c) {
 				continue
 			}
 			if h := e.home[i]; h < 0 || depth[c] > depth[h] {
@@ -476,7 +476,7 @@ func (e *lowerer) body(c int) []int {
 				walk(nd.B)
 			}
 		} else {
-			for _, a := range n.args(&nd) {
+			for _, a := range n.Operands(&nd) {
 				walk(*a)
 			}
 		}

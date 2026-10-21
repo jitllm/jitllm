@@ -95,9 +95,9 @@ func (c *Context) pages() int {
 	return c.Step.Rows * ((c.Step.Keys + c.Step.Page - 1) / c.Step.Page)
 }
 
-// stepWord is word w of a table the engine writes for a step, at step s,
+// StepWord is word w of a table the engine writes for a step, at step s,
 // where the step decides it: the history's and the rotary table's.
-func stepWord(o Operand, w int, s Step) (float64, bool) {
+func StepWord(o Operand, w int, s Step) (float64, bool) {
 	if v, ok := historyWord(o, w, s); ok {
 		return v, true
 	}

@@ -38,10 +38,10 @@ func (p Part) String() string {
 	return fmt.Sprintf("block %d", p.Block)
 }
 
-// front is the model's graph from its container: the step's rotary table,
-// every block, the head, then the sampling of its logits. What the container states, the front end
-// reads; what it does not, the front end refuses.
-func front(f *jlm.File) ([]Part, error) {
+// Front is the model's graph from its container: the step's rotary table,
+// every block, the head, then the sampling of its logits. What the container states, the Front end
+// reads; what it does not, the Front end refuses.
+func Front(f *jlm.File) ([]Part, error) {
 	c := f.Config()
 	rt := graph.RopeTable{NRot: int(c.NRot)}
 	parts := []Part{{Kind: PartTable, Block: -1, Graph: rt.Build()}}

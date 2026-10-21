@@ -9,6 +9,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/cost"
 	"github.com/jitllm/jitllm/engine/probe"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -50,14 +51,14 @@ func TestEstimateMatchesTheGPU(t *testing.T) {
 	c := d.Caches[1]
 	t.Logf("L1 %d KiB %.0f ns, %.1f loads in flight", d.Caches[0].Bytes>>10, d.Caches[0].Latency*1e9, d.Overlap)
 	t.Logf("%s: %d slots, launch %.2f us, floor %.2f us; L2 %d KiB %.0f GB/s %.0f ns; memory %.0f GB/s %.0f ns; float %.0f G/s",
-		dev.Name(), d.Slots, d.Launch*1e6, d.Floor*1e6, c.Bytes>>10, c.Rate.Total/1e9, c.Latency*1e9, d.Bandwidth/1e9, d.Latency*1e9, d.Rates[jit.ClassFloat].Total/1e9)
+		dev.Name(), d.Slots, d.Launch*1e6, d.Floor*1e6, c.Bytes>>10, c.Rate.Total/1e9, c.Latency*1e9, d.Bandwidth/1e9, d.Latency*1e9, d.Rates[cost.ClassFloat].Total/1e9)
 	f, err := jlm.Open(testmodels.Path(*boardModel + ".jlm"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
 	s := jit.Step{Rows: 1, Page: 64, Keys: keys(t, *boardModel)}
-	ccs, err := jit.Default().EstimateCodes(f, s, func(jit.Part) jit.Device { return d }, true)
+	ccs, err := cost.EstimateCodes(jit.Default(), f, s, func(jit.Part) cost.Device { return d }, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +75,7 @@ func TestEstimateMatchesTheGPU(t *testing.T) {
 		groups int
 		width  int
 		bufs   []backend.Buf
-		cost   jit.Cost
+		cost   cost.Cost
 		at     int
 	}
 	var runs []launch

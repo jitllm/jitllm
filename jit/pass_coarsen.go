@@ -51,7 +51,7 @@ func (c Coarsen) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 
 // terms is a member's finest elements: its elements times its loop's trips.
 func terms(k *Kernel) int {
-	t := k.elements()
+	t := k.Elements()
 	if len(k.Loops) == 1 {
 		t *= k.Loops[0].Trip + firstTerm(k)
 	}
@@ -117,7 +117,7 @@ func (c Coarsen) chain(ks []*Kernel, i int) int {
 		E = max(E, terms(k))
 	}
 	for _, k := range ks[i:j] {
-		if E/k.elements() == c.Unit {
+		if E/k.Elements() == c.Unit {
 			return j - i
 		}
 	}
@@ -147,8 +147,8 @@ func (c Coarsen) form(members []*Kernel, host *Kernel) (*Kernel, bool) {
 		return nil, false
 	}
 	for _, k := range members {
-		g := E / k.elements()
-		if E%k.elements() != 0 || g%U != 0 && U%g != 0 {
+		g := E / k.Elements()
+		if E%k.Elements() != 0 || g%U != 0 && U%g != 0 {
 			return nil, false
 		}
 	}
@@ -207,7 +207,7 @@ func (c Coarsen) form(members []*Kernel, host *Kernel) (*Kernel, bool) {
 // indices is the flat elements of member n the thread computes.
 func (k *coarse) indices(n *Kernel) []int {
 	m, U := k.m, k.c.Unit
-	g := k.E / n.elements()
+	g := k.E / n.Elements()
 	switch {
 	case g < U:
 		var out []int
@@ -310,7 +310,7 @@ func alike(a *Kernel, x int, b *Kernel, y int) bool {
 	if p.Op == OpCoord {
 		return p.A == q.A
 	}
-	pa, qa := a.args(&p), b.args(&q)
+	pa, qa := a.Operands(&p), b.Operands(&q)
 	if len(pa) != len(qa) {
 		return false
 	}
@@ -325,7 +325,7 @@ func alike(a *Kernel, x int, b *Kernel, y int) bool {
 // produce is member n's value stored by s at its coordinates coords.
 func (k *coarse) produce(n *Kernel, s Store, coords []int) int {
 	key := fmt.Sprint(n.Name, &n.Nodes[0], s.Val, coords)
-	g := k.E / n.elements()
+	g := k.E / n.Elements()
 	if n.Kind == PrimReduce && g > k.c.Unit {
 		key = fmt.Sprint(n.Name, &n.Nodes[0], s.Val)
 	}

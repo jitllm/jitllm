@@ -9,7 +9,7 @@ func (n *Kernel) redirect(from, to, keep int) {
 			continue
 		}
 		nd := &n.Nodes[i]
-		for _, p := range n.args(nd) {
+		for _, p := range n.Operands(nd) {
 			if *p == from {
 				*p = to
 			}
@@ -36,8 +36,8 @@ func (n *Kernel) storeArgs(s *Store) []*int {
 	return out
 }
 
-// args is node nd's operand fields, a fold's start and step among them.
-func (n *Kernel) args(nd *Node) []*int {
+// Operands is node nd's operand fields, a fold's start and step among them.
+func (n *Kernel) Operands(nd *Node) []*int {
 	if nd.Op == OpExchange {
 		return exchangeArgs(nd)
 	}
@@ -81,8 +81,8 @@ func exchangeArgs(nd *Node) []*int {
 	return []*int{&nd.A, &nd.B, &nd.C}
 }
 
-// varies reports whether node i changes from trip to trip of loop c.
-func (n *Kernel) varies(i, c int) bool {
+// Varies reports whether node i changes from trip to trip of loop c.
+func (n *Kernel) Varies(i, c int) bool {
 	seen := map[int]bool{}
 	var walk func(i int) bool
 	walk = func(i int) bool {
@@ -100,7 +100,7 @@ func (n *Kernel) varies(i, c int) bool {
 		if nd.Op == OpFold {
 			return false
 		}
-		for _, a := range n.args(&nd) {
+		for _, a := range n.Operands(&nd) {
 			if walk(*a) {
 				return true
 			}
@@ -137,7 +137,7 @@ func (n *Kernel) copyOf(i int, sub map[int]int) int {
 			return i
 		}
 		changed := false
-		for _, p := range n.args(&nd) {
+		for _, p := range n.Operands(&nd) {
 			if v := walk(*p); v != *p {
 				*p, changed = v, true
 			}
@@ -165,7 +165,7 @@ func (n *Kernel) copyKeep(i int, sub map[int]int) int {
 			return i
 		}
 		changed := false
-		for _, p := range n.args(&nd) {
+		for _, p := range n.Operands(&nd) {
 			if v := walk(*p); v != *p {
 				*p, changed = v, true
 			}
@@ -286,13 +286,13 @@ func copyInto(dst, src *Kernel, root int, leaf func(i int, nd Node) (int, bool))
 			}
 			v := dst.add(Node{})
 			memo[i] = v
-			for _, a := range src.args(&nd) {
+			for _, a := range src.Operands(&nd) {
 				*a = walk(*a)
 			}
 			dst.Nodes[v] = nd
 			return v
 		}
-		args := src.args(&nd)
+		args := src.Operands(&nd)
 		for _, a := range args {
 			*a = walk(*a)
 		}
@@ -332,7 +332,7 @@ func (k *Kernel) compact() {
 		}
 		live[i] = true
 		nd := k.Nodes[i]
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			walk(*a)
 		}
 	}
@@ -391,7 +391,7 @@ func (k *Kernel) compact() {
 		}
 	}
 	for i := range nodes {
-		for _, a := range k.args(&nodes[i]) {
+		for _, a := range k.Operands(&nodes[i]) {
 			*a = at[*a]
 		}
 	}
@@ -464,7 +464,7 @@ func (k *Kernel) compact() {
 func (n *Kernel) loopOf(i int) int {
 	best := -1
 	for c := range n.Loops {
-		if n.varies(i, c) && (best < 0 || n.within(c, best)) {
+		if n.Varies(i, c) && (best < 0 || n.within(c, best)) {
 			best = c
 		}
 	}
@@ -517,11 +517,11 @@ func (n *Kernel) insertLoop(at int, l Loop) int {
 	return at
 }
 
-// homes is, for each node, the innermost loop whose trips change it: an
+// Homes is, for each node, the innermost loop whose trips change it: an
 // iteration's loop, a cursor's load's loop, a sum's loop for the nodes of
 // the sum's step, and for a sum read after its loop the loop around it.
 // -1 for a node no loop changes.
-func (n *Kernel) homes() []int {
+func (n *Kernel) Homes() []int {
 	step := map[int]int{}
 	for f, nd := range n.Nodes {
 		if nd.Op != OpFold {
@@ -540,7 +540,7 @@ func (n *Kernel) homes() []int {
 				return
 			}
 			step[i] = nd.At
-			for _, a := range n.args(&x) {
+			for _, a := range n.Operands(&x) {
 				walk(*a)
 			}
 		}
@@ -579,7 +579,7 @@ func (n *Kernel) homes() []int {
 			h = inner(h, c)
 		}
 		if nd.Op != OpFold {
-			for _, a := range n.args(&nd) {
+			for _, a := range n.Operands(&nd) {
 				h = inner(h, home(*a))
 			}
 		}
@@ -608,7 +608,7 @@ func (n *Kernel) reachesFold(i, f int) bool {
 		if nd.Op == OpFold {
 			return false
 		}
-		for _, a := range n.args(&nd) {
+		for _, a := range n.Operands(&nd) {
 			if walk(*a) {
 				return true
 			}
@@ -631,7 +631,7 @@ func (n *Kernel) depth(i int, memo map[int]int) int {
 		return 0
 	}
 	d := 0
-	for _, a := range n.args(&nd) {
+	for _, a := range n.Operands(&nd) {
 		step := 1
 		if nd.Op == OpFma && n.Nodes[*a].Op == OpFma && n.uses(*a) == 1 && *a != nd.C {
 			step = 0
@@ -646,7 +646,7 @@ func (n *Kernel) depth(i int, memo map[int]int) int {
 // deeper first, the earlier of two alike, an fma's addend the earliest; a
 // Horner step's accumulator before all.
 func (n *Kernel) evalArgs(nd *Node, memo map[int]int) []*int {
-	args := n.args(nd)
+	args := n.Operands(nd)
 	if nd.Op == OpFma {
 		args = []*int{&nd.C, &nd.A, &nd.B}
 		for _, x := range []*int{&nd.A, &nd.B} {

@@ -15,7 +15,7 @@ func (FoldLoads) Name() string { return "foldloads" }
 func (p FoldLoads) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		var m *Kernel
-		hs := k.homes()
+		hs := k.Homes()
 		for i, nd := range k.Nodes {
 			var b int
 			if nd.Op == OpBroadcast {
@@ -49,7 +49,7 @@ func (p FoldLoads) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				b = nd.A
 			}
 			c := hs[i]
-			if c < 0 || k.Loops[c].Lanes == 0 || !k.varies(b, c) {
+			if c < 0 || k.Loops[c].Lanes == 0 || !k.Varies(b, c) {
 				continue
 			}
 			sum := nd.Op == OpFma && k.Nodes[nd.C].Op == OpFold
@@ -72,7 +72,7 @@ func (p FoldLoads) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 func (k *Kernel) uses(i int) int {
 	n := 0
 	for _, nd := range k.Nodes {
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			if *a == i {
 				n++
 			}

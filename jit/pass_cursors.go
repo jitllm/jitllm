@@ -73,8 +73,8 @@ func newCursorer(k *Kernel, b int) *cursorer {
 
 func (cu *cursorer) run() bool {
 	k := cu.k
-	live := k.live()
-	hs := k.homes()
+	live := k.Live()
+	hs := k.Homes()
 	for i, nd := range k.Nodes {
 		if nd.Op == OpLoad && live[i] && k.Bufs[nd.Buf].Base == cu.base {
 			cu.as = append(cu.as, cAccess{access: access{node: i, store: -1}, home: hs[i], ix: cu.g.of(nd.A)})
@@ -236,7 +236,7 @@ func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (l
 // families of loops split from one that read or write one.
 func (cu *cursorer) passes(loops []int, family func(int) int) int {
 	k := cu.k
-	hs := k.homes()
+	hs := k.Homes()
 	fams := map[int]bool{}
 	isRow := func(b int) bool {
 		o := k.Bufs[b].Operand

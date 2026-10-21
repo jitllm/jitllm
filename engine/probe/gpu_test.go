@@ -3,7 +3,7 @@ package probe
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/engine/cost"
 	"github.com/jitllm/jitllm/jit_old/gpu/backend"
 )
 
@@ -36,7 +36,7 @@ func TestGPUMeasures(t *testing.T) {
 			t.Logf("%s: %d slots, launch %.2f us, a kernel's floor %.2f us", dev.Name(), d.Slots, d.Launch*1e6, d.Floor*1e6)
 			t.Logf("L2 %d KiB: %.0f GB/s, %.0f ns a read", c.Bytes>>10, c.Rate.Total/1e9, c.Latency*1e9)
 			t.Logf("memory: %.0f GB/s, %.0f ns a read", d.Bandwidth/1e9, d.Latency*1e9)
-			names := [jit.NumClasses]string{"float", "special", "int", "index", "lanes", "group", "mem"}
+			names := [cost.NumClasses]string{"float", "special", "int", "index", "lanes", "group", "mem"}
 			for cl, r := range d.Rates {
 				t.Logf("%-8s %8.0f G/s all, %6.2f G/s a thread, %6.2f ns before its result is used", names[cl], r.Total/1e9, r.Thread/1e9, d.Delay[cl]*1e9)
 			}

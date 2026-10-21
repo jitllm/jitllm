@@ -40,7 +40,7 @@ func (k *Kernel) countReaders(i int) int {
 		if j == i {
 			continue
 		}
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			if *a == i {
 				n++
 			}

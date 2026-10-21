@@ -90,7 +90,7 @@ func (f Fuse) joinsThen(p, c *Kernel, ks []*Kernel) (Operand, int, bool) {
 		}
 		fixed := true
 		any := false
-		hs := c.homes()
+		hs := c.Homes()
 		for j, nd := range c.Nodes {
 			if nd.Op == OpLoad && c.Bufs[nd.Buf].Operand == o {
 				any = true
@@ -308,7 +308,7 @@ func graftOnto(m, c *Kernel, v Operand, val int, coord func(i int) (int, bool), 
 			nd.Buf = bufOf[nd.Buf]
 		}
 		nodeOf[i] = m.add(Node{})
-		args := m.args(&nd)
+		args := m.Operands(&nd)
 		for _, a := range args {
 			*a = walk(*a)
 		}
@@ -414,7 +414,7 @@ func sameExpr(a *Kernel, i int, b *Kernel, j int) bool {
 	if x.Op == OpCoord {
 		return x.A == y.A
 	}
-	ax, bx := a.args(&x), b.args(&y)
+	ax, bx := a.Operands(&x), b.Operands(&y)
 	if len(ax) != len(bx) {
 		return false
 	}
@@ -487,7 +487,7 @@ func (f Fuse) joinsAtStores(p, c *Kernel, ks []*Kernel) (Operand, bool) {
 		}
 	}
 	for o, n := range count {
-		if o.Kind != OperandValue || n < 2 || n*p.elements() != c.elements() || !c.readsOwn(o) || !soleReader(ks, c, o) {
+		if o.Kind != OperandValue || n < 2 || n*p.Elements() != c.Elements() || !c.readsOwn(o) || !soleReader(ks, c, o) {
 			continue
 		}
 		return o, true

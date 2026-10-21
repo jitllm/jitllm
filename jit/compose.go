@@ -95,7 +95,7 @@ type Plan struct {
 // Compose forms the model in f at step s on placement p. A part it cannot
 // form is an error, beside the parts it formed.
 func (r *Registry) Compose(f *jlm.File, s Step, p Placement) (*Plan, error) {
-	parts, err := front(f)
+	parts, err := Front(f)
 	if err != nil {
 		return nil, err
 	}
@@ -130,17 +130,17 @@ func (r *Registry) Compose(f *jlm.File, s Step, p Placement) (*Plan, error) {
 // formRun is a run of consecutive parts on one device: each decomposed and
 // generated, the run passed as one, each part's kernels lowered.
 func (r *Registry) formRun(f *jlm.File, run []PartPlan, first int, s Step) error {
-	ks, err := r.passRun(f, run, first, s)
-	codes, lerr := r.lower(ks, run[0].Device)
+	ks, err := r.Kernels(f, run, first, s)
+	codes, lerr := r.Lower(ks, run[0].Device)
 	for _, c := range codes {
-		run[c.of-first].Codes = append(run[c.of-first].Codes, c.Code)
+		run[c.Part-first].Codes = append(run[c.Part-first].Codes, c.Code)
 	}
 	return errors.Join(err, lerr)
 }
 
-// passRun is a run's final IR: its parts decomposed and generated, the run
+// Kernels is a run's final IR: its parts decomposed and generated, the run
 // passed as one.
-func (r *Registry) passRun(f *jlm.File, run []PartPlan, first int, s Step) ([]*Kernel, error) {
+func (r *Registry) Kernels(f *jlm.File, run []PartPlan, first int, s Step) ([]*Kernel, error) {
 	d := run[0].Device
 	var ks []*Kernel
 	var errs []error
@@ -170,18 +170,19 @@ func (r *Registry) passRun(f *jlm.File, run []PartPlan, first int, s Step) ([]*K
 	return ks, errors.Join(errs...)
 }
 
-type ownedCode struct {
+// PartCode is a kernel's code and the part of the model it belongs to.
+type PartCode struct {
 	Code
-	of int
+	Part int
 }
 
-// lower is a run's final IR on device d as its backend's code.
-func (r *Registry) lower(ks []*Kernel, d Device) ([]ownedCode, error) {
+// Lower is a run's final IR on device d as its backend's code.
+func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 	low, ok := r.Lowerings[d.Kind]
 	if !ok {
 		return nil, fmt.Errorf("jit: no lowering for %s", d.Kind)
 	}
-	var codes []ownedCode
+	var codes []PartCode
 	var errs []error
 	for _, k := range ks {
 		l, err := low.Lower(k, d)
@@ -212,7 +213,7 @@ func (r *Registry) lower(ks []*Kernel, d Device) ([]ownedCode, error) {
 				c.Binds = append(c.Binds, Binding{Operand: b.Operand, Writes: b.Kind == BufOut})
 			}
 		}
-		codes = append(codes, ownedCode{Code: c, of: k.Of})
+		codes = append(codes, PartCode{Code: c, Part: k.Of})
 	}
 	return codes, errors.Join(errs...)
 }

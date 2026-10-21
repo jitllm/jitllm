@@ -9,7 +9,7 @@ func (DeadStores) Name() string { return "deadstores" }
 func (p DeadStores) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	read := map[Operand]bool{}
 	for _, k := range ks {
-		for i := range k.live() {
+		for i := range k.Live() {
 			if nd := k.Nodes[i]; nd.Op == OpLoad {
 				read[k.Bufs[nd.Buf].Operand] = true
 			}
@@ -34,8 +34,8 @@ func (p DeadStores) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	})
 }
 
-// live is the nodes k's stores and loop counts reach.
-func (k *Kernel) live() map[int]bool {
+// Live is the nodes k's stores and loop counts reach.
+func (k *Kernel) Live() map[int]bool {
 	seen := map[int]bool{}
 	var walk func(i int)
 	walk = func(i int) {
@@ -44,7 +44,7 @@ func (k *Kernel) live() map[int]bool {
 		}
 		seen[i] = true
 		nd := k.Nodes[i]
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			walk(*a)
 		}
 	}

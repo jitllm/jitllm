@@ -62,7 +62,7 @@ func (p Args) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 // fixed reports whether no loop of k moves node i.
 func (k *Kernel) fixed(i int) bool {
 	for c := range k.Loops {
-		if k.varies(i, c) {
+		if k.Varies(i, c) {
 			return false
 		}
 	}
@@ -123,7 +123,7 @@ func (k *Kernel) lengthIn(i int) int {
 	if nd.Op == OpFold {
 		return -1
 	}
-	for _, a := range k.args(&nd) {
+	for _, a := range k.Operands(&nd) {
 		if l := k.lengthIn(*a); l >= 0 {
 			return l
 		}
@@ -165,7 +165,7 @@ type access struct {
 
 // bindBufs gives each buffer the code reads or writes an address word.
 func (k *Kernel) bindBufs(f ArgFields) {
-	live := k.live()
+	live := k.Live()
 	byOp := map[Operand][]access{}
 	var order []Operand
 	note := func(b int, a access) {
@@ -198,7 +198,7 @@ func (k *Kernel) bindBufs(f ArgFields) {
 	for _, o := range order {
 		offsets[o] = k.split(byOp[o])
 	}
-	code := k.live()
+	code := k.Live()
 	var kept []Operand
 	for _, o := range order {
 		in := written[o]
@@ -394,7 +394,7 @@ func (k *Kernel) computedFrom(i int, op Op) bool {
 	if nd.Op == OpFold {
 		return false
 	}
-	for _, a := range k.args(&nd) {
+	for _, a := range k.Operands(&nd) {
 		if k.computedFrom(*a, op) {
 			return true
 		}
@@ -422,12 +422,12 @@ func (k *Kernel) queries(o Operand) bool {
 			if x.Op == OpLoad {
 				b := k.Bufs[x.Buf]
 				reads = reads || b.Operand == o
-				history = history || b.Half && len(x.Ax) > 0 && k.varies(x.Ax[len(x.Ax)-1], nd.At)
+				history = history || b.Half && len(x.Ax) > 0 && k.Varies(x.Ax[len(x.Ax)-1], nd.At)
 			}
 			if x.Op == OpFold {
 				return
 			}
-			for _, a := range k.args(&x) {
+			for _, a := range k.Operands(&x) {
 				walk(*a)
 			}
 		}
@@ -469,7 +469,7 @@ func (k *Kernel) indirect(o Operand, off int) bool {
 		if nd.Op == OpFold {
 			return false
 		}
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			if fromLoad(*a) {
 				return true
 			}
@@ -480,7 +480,7 @@ func (k *Kernel) indirect(o Operand, off int) bool {
 		if nd.Op != OpLoad || k.Bufs[nd.Buf].Operand != o {
 			continue
 		}
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			if fromLoad(*a) {
 				return true
 			}

@@ -19,7 +19,7 @@ func (ShiftChain) Name() string { return "shiftchain" }
 func (p ShiftChain) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		var m *Kernel
-		vw := k.vectorWords()
+		vw := k.VectorWords()
 		for x := range k.Nodes {
 			if !vw[x] {
 				continue

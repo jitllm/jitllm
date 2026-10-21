@@ -173,12 +173,12 @@ func (k *Kernel) unrollVectors(c, n int) {
 		k.Nodes[f].A = acc
 		fr := k.add(Node{Op: OpFold, At: r, Type: k.Nodes[f].Type, B: f})
 		k.Nodes[fr].A = k.copyOf(step, map[int]int{f: fr, it: k.bin(OpAdd, U, done, ri)})
-		hs := k.homes()
+		hs := k.Homes()
 		for i := range k.Nodes {
 			if i == fr || i < len(hs) && hs[i] >= 0 && (k.within(hs[i], c) || k.within(hs[i], r)) {
 				continue
 			}
-			for _, a := range k.args(&k.Nodes[i]) {
+			for _, a := range k.Operands(&k.Nodes[i]) {
 				if *a == f {
 					*a = fr
 				}

@@ -301,7 +301,7 @@ func (g *alg) moves(l lin, c int) bool {
 	for m := range l {
 		for _, a := range monoIDs(m) {
 			for _, n := range g.nodes(a) {
-				if g.k.varies(n, c) {
+				if g.k.Varies(n, c) {
 					return true
 				}
 			}

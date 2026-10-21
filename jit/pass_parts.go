@@ -54,12 +54,12 @@ func (p Parts) joins(group []*Kernel, n *Kernel) bool {
 func (p Parts) merge(parts []*Kernel) *Kernel {
 	N := 0
 	for _, n := range parts {
-		N = max(N, n.elements())
+		N = max(N, n.Elements())
 	}
 	m := &Kernel{Name: "parts", Space: []int{N}, Group: parts[0].Group, Kind: parts[0].Kind, Part: parts[0].Part, Of: parts[0].Of}
 	flat := m.add(Node{Op: OpFlat, Type: ir.U32})
 	for _, n := range parts {
-		el := m.bin(OpMin, ir.U32, flat, m.u32(n.elements()-1))
+		el := m.bin(OpMin, ir.U32, flat, m.u32(n.Elements()-1))
 		coords := m.decode(el, n.Space)
 		leaf := func(i int, nd Node) (int, bool) {
 			if nd.Op == OpCoord {

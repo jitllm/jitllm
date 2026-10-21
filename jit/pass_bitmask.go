@@ -47,7 +47,7 @@ func (p BitMask) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 func (k *Kernel) onlyMasks(i int) bool {
 	n := 0
 	for _, nd := range k.Nodes {
-		for x, a := range k.args(&nd) {
+		for x, a := range k.Operands(&nd) {
 			if *a != i {
 				continue
 			}

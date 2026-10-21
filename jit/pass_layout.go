@@ -24,7 +24,7 @@ func (p Layout) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			c := fd.At
 			for _, nd := range k.Nodes {
 				b := k.Bufs[nd.Buf]
-				if nd.Op == OpLoad && len(nd.Ax) == 3 && b.Operand.Kind == OperandTable && k.varies(nd.Ax[2], c) && !k.varies(nd.Ax[1], c) {
+				if nd.Op == OpLoad && len(nd.Ax) == 3 && b.Operand.Kind == OperandTable && k.Varies(nd.Ax[2], c) && !k.Varies(nd.Ax[1], c) {
 					flip[b.Operand] = true
 				}
 			}

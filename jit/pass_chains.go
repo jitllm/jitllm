@@ -152,7 +152,7 @@ func (k *Kernel) chainFold(c, f, n, chains int) bool {
 		last = next
 		family[k.Nodes[last].At] = true
 	}
-	hs := k.homes()
+	hs := k.Homes()
 	acc := append([]int{last}, sums[1:]...)
 	for len(acc) > 1 {
 		var nx []int
@@ -173,7 +173,7 @@ func (k *Kernel) chainFold(c, f, n, chains int) bool {
 		if k.isCombine(i, last, sums) {
 			continue
 		}
-		for _, a := range k.args(nd) {
+		for _, a := range k.Operands(nd) {
 			if *a == last {
 				*a = total
 			}

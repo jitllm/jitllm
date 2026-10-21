@@ -254,7 +254,7 @@ func (k *Kernel) redirectOutside(f, to, c, from int) {
 		if nd.Op == OpFold && nd.At != c {
 			return
 		}
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			walk(*a)
 		}
 	}
@@ -272,7 +272,7 @@ func (k *Kernel) redirectOutside(f, to, c, from int) {
 		if inside[i] || i >= from {
 			continue
 		}
-		for _, a := range k.args(&k.Nodes[i]) {
+		for _, a := range k.Operands(&k.Nodes[i]) {
 			if *a == f {
 				*a = to
 			}

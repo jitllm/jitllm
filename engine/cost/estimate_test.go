@@ -1,38 +1,31 @@
-package jit
+package cost
 
 import (
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit"
 )
-
-func TestEveryOpHasAName(t *testing.T) {
-	for op := Op(0); op < numOps; op++ {
-		if opNames[op] == "" {
-			t.Errorf("op %d has no name", op)
-		}
-	}
-}
 
 // estimateRun is each kernel's estimate when the whole model runs on d at
 // step s, in order.
-func estimateRun(t *testing.T, d Device, s Step) ([]*Kernel, []Cost) {
+func estimateRun(t *testing.T, d Device, s jit.Step) ([]*jit.Kernel, []Cost) {
 	t.Helper()
 	f, err := jlm.Open(testmodels.Path(*composeModel + ".jlm"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	parts, err := front(f)
+	parts, err := jit.Front(f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var run []PartPlan
+	var run []jit.PartPlan
 	for _, p := range parts {
-		run = append(run, PartPlan{Part: p, Device: d})
+		run = append(run, jit.PartPlan{Part: p, Device: d.Device})
 	}
-	ks, err := Default().passRun(f, run, 0, s)
+	ks, err := jit.Default().Kernels(f, run, 0, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,10 +38,10 @@ func estimateRun(t *testing.T, d Device, s Step) ([]*Kernel, []Cost) {
 }
 
 var (
-	testCPU = Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, Bandwidth: 40e9, Thread: 15e9, Launch: 50e-9,
+	testCPU = Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}, Bandwidth: 40e9, Thread: 15e9, Launch: 50e-9,
 		Caches: [3]Cache{{Bytes: 32 << 10, Rate: Rate{Thread: 100e9}}, {Bytes: 1 << 20, Rate: Rate{Thread: 50e9}}, {Bytes: 12 << 20, Rate: Rate{Thread: 30e9}}},
 		Rates:  [NumClasses]Rate{ClassFloat: {Thread: 8e9}}}
-	testGPU = Device{Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 32, Bandwidth: 800e9, Thread: 2e7, Launch: 4e-6,
+	testGPU = Device{Device: jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, Bandwidth: 800e9, Thread: 2e7, Launch: 4e-6,
 		Caches: [3]Cache{{Bytes: 6 << 20, Rate: Rate{Total: 2.5e12}}}, Rates: [NumClasses]Rate{ClassFloat: {Total: 14e12}}}
 )
 
@@ -56,7 +49,7 @@ var (
 // trips from the step on both devices.
 func TestEstimateDecidesEveryTrip(t *testing.T) {
 	for _, d := range []Device{testCPU, testGPU} {
-		_, cs := estimateRun(t, d, Step{Rows: 1, Page: 64, Keys: 5})
+		_, cs := estimateRun(t, d, jit.Step{Rows: 1, Page: 64, Keys: 5})
 		for i, c := range cs {
 			if c.Unknown > 0 {
 				t.Errorf("%v kernel %d: %d loops whose trips the step does not decide", d.Kind, i, c.Unknown)
@@ -72,7 +65,7 @@ func TestEstimateGrowsWithTheHistory(t *testing.T) {
 	for _, d := range []Device{testCPU, testGPU} {
 		var bytes []int64
 		for _, keys := range []int{8, 16, 24} {
-			_, cs := estimateRun(t, d, Step{Rows: 1, Page: 64, Keys: keys})
+			_, cs := estimateRun(t, d, jit.Step{Rows: 1, Page: 64, Keys: keys})
 			var n int64
 			for _, c := range cs {
 				n += c.Bytes
@@ -90,7 +83,7 @@ func TestEstimateGrowsWithTheHistory(t *testing.T) {
 // wrote to its caches where the device has them, and to its memory where
 // it has none.
 func TestEstimateServesReuseFromCache(t *testing.T) {
-	s := Step{Rows: 1, Page: 64, Keys: 5}
+	s := jit.Step{Rows: 1, Page: 64, Keys: 5}
 	_, cached := estimateRun(t, testCPU, s)
 	bare := testCPU
 	bare.Caches = [3]Cache{}
@@ -113,14 +106,14 @@ func TestEstimateServesReuseFromCache(t *testing.T) {
 // writes and the row it reads.
 func TestEstimateReadsTheHeadOnce(t *testing.T) {
 	for _, d := range []Device{testCPU, testGPU} {
-		ks, cs := estimateRun(t, d, Step{Rows: 1, Page: 64, Keys: 5})
+		ks, cs := estimateRun(t, d, jit.Step{Rows: 1, Page: 64, Keys: 5})
 		var weight, out, got int64
 		for i, k := range ks {
 			for _, b := range k.Bufs {
-				if b.Operand.Kind != OperandWeight || b.Shape == nil {
+				if b.Operand.Kind != jit.OperandWeight || b.Shape == nil {
 					continue
 				}
-				n := int64(elemBytes(b))
+				n := int64(jit.ElemBytes(b))
 				for _, x := range b.Shape {
 					n *= int64(x)
 				}
@@ -134,27 +127,5 @@ func TestEstimateReadsTheHeadOnce(t *testing.T) {
 			t.Errorf("%v: the head's kernel moves %d bytes for a weight of %d", d.Kind, got, weight)
 		}
 		t.Logf("%v: the head's kernel moves %d bytes, its weight %d", d.Kind, got, weight)
-	}
-}
-
-// TestGPUEntryNamesAreIdentifiers holds every composed GPU kernel's entry
-// to a name a backend accepts: PTX refuses "reduce+map" and "reduce.part".
-func TestGPUEntryNamesAreIdentifiers(t *testing.T) {
-	ks, _ := estimateRun(t, testGPU, Step{Rows: 1, Page: 64, Keys: 9})
-	for _, k := range ks {
-		l, err := gpuLowering{}.Lower(k, testGPU)
-		if err != nil {
-			t.Fatal(err)
-		}
-		name := l.GPU.Name
-		for i, r := range name {
-			if !(r == '_' || 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || i > 0 && '0' <= r && r <= '9') {
-				t.Errorf("%s lowers to the entry %q", k.Name, name)
-				break
-			}
-		}
-	}
-	if entryName("reduce+map.part") != "reduce_map_part" || entryName("2x") != "k2x" {
-		t.Errorf("entryName: %q %q", entryName("reduce+map.part"), entryName("2x"))
 	}
 }

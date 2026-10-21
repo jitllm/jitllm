@@ -162,12 +162,12 @@ func (k *Kernel) sizeBy(c, ln int) {
 // count, reads fold f: the reduction consumed in its kernel.
 func (k *Kernel) readOutside(f int) bool {
 	step := k.Nodes[f].A
-	hs := k.homes()
+	hs := k.Homes()
 	for i, nd := range k.Nodes {
 		if i == step || i == f || i < len(hs) && hs[i] >= 0 && k.within(hs[i], k.Nodes[f].At) {
 			continue
 		}
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			if *a == f {
 				return true
 			}

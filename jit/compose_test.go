@@ -30,7 +30,7 @@ func TestComposeIR(t *testing.T) {
 	}
 	defer f.Close()
 	r := Default()
-	parts, err := front(f)
+	parts, err := Front(f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func (k *Kernel) reachesNode(root, x int) bool {
 		}
 		seen[i] = true
 		nd := k.Nodes[i]
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			if walk(*a) {
 				return true
 			}
@@ -121,55 +121,6 @@ func (k *Kernel) reachesNode(root, x int) bool {
 		return false
 	}
 	return walk(root)
-}
-
-// TestSuggestPlacesFromTheIR estimates placements from final IR and holds
-// plan mode's suggestion to costing no more than any of them, and to the
-// estimate of the placement it returns.
-func TestSuggestPlacesFromTheIR(t *testing.T) {
-	f, err := jlm.Open(testmodels.Path(*composeModel + ".jlm"))
-	if err != nil {
-		t.Skip(err)
-	}
-	defer f.Close()
-	r := Default()
-	gpu := Device{Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 32, Bandwidth: 800e9, Launch: 4e-6, Link: 12e9}
-	cpu := Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, Bandwidth: 40e9, Launch: 3e-6, Link: 12e9}
-	s := Step{Rows: 1, Page: 64, Keys: 5}
-	forced := map[string]Placement{
-		"card":          func(Part) Device { return gpu },
-		"host":          func(Part) Device { return cpu },
-		"head on host":  func(p Part) Device { return map[bool]Device{true: cpu, false: gpu}[p.Kind == PartHead] },
-		"table on host": func(p Part) Device { return map[bool]Device{true: cpu, false: gpu}[p.Kind == PartTable] },
-	}
-	p, c, err := r.Suggest(f, s, []Device{gpu, cpu})
-	if err != nil {
-		t.Fatal(err)
-	}
-	again, err := r.Estimate(f, s, p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if d := again.Seconds - c.Seconds; d > 1e-12 || d < -1e-12 {
-		t.Errorf("suggested %+v, its estimate %+v", c, again)
-	}
-	for name, q := range forced {
-		e, err := r.Estimate(f, s, q)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if e.Bytes == 0 || e.Launches == 0 {
-			t.Errorf("%s: an empty estimate %+v", name, e)
-		}
-		if e.Seconds < c.Seconds-1e-12 {
-			t.Errorf("%s at %+v beats the suggestion %+v", name, e, c)
-		}
-		t.Logf("%-13s %+v", name, e)
-	}
-	parts, _ := front(f)
-	for _, part := range parts {
-		t.Logf("suggested: %s on %d", part, p(part).Kind)
-	}
 }
 
 func objdump(t *testing.T, code []byte) string {
@@ -182,52 +133,6 @@ func objdump(t *testing.T, code []byte) string {
 		t.Fatal(err)
 	}
 	return string(out)
-}
-
-// TestEngineTakesOrForcesThePlacement composes the fixture on plan mode's
-// suggestion and on a placement the engine forces, each part landing where
-// its placement put it.
-func TestEngineTakesOrForcesThePlacement(t *testing.T) {
-	f, err := jlm.Open(testmodels.Path(*composeModel + ".jlm"))
-	if err != nil {
-		t.Skip(err)
-	}
-	defer f.Close()
-	r := Default()
-	gpu := Device{Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 32, Bandwidth: 800e9, Launch: 4e-6, Link: 12e9}
-	cpu := Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, Bandwidth: 40e9, Launch: 3e-6, Link: 12e9}
-	s := Step{Rows: 1, Page: 64, Keys: 5}
-	suggested, _, err := r.Suggest(f, s, []Device{gpu, cpu})
-	if err != nil {
-		t.Fatal(err)
-	}
-	forced := func(p Part) Device {
-		if p.Kind == PartSample {
-			return cpu
-		}
-		return gpu
-	}
-	for name, p := range map[string]Placement{"suggested": suggested, "forced": forced} {
-		plan, err := r.Compose(f, s, p)
-		if plan == nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		for i, pp := range plan.Parts {
-			if pp.Device != p(pp.Part) {
-				t.Errorf("%s: %s on %d, placed on %d", name, pp.Part, pp.Device.Kind, p(pp.Part).Kind)
-			}
-			if i > 0 && plan.Parts[i-1].Device != pp.Device {
-				seen := false
-				for _, tr := range plan.Transfers {
-					seen = seen || tr.From == i-1 && tr.To == i
-				}
-				if !seen {
-					t.Errorf("%s: no transfer between %s and %s", name, plan.Parts[i-1].Part, pp.Part)
-				}
-			}
-		}
-		t.Logf("%s: %d parts, %d transfers", name, len(plan.Parts), len(plan.Transfers))
-	}
 }
 
 // TestEveryKernelRecordsItsPasses composes the fixture on each device and

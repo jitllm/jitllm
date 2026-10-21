@@ -24,7 +24,7 @@ func (n *Kernel) prefetch() bool {
 	feeds := map[int]bool{}
 	for _, nd := range n.Nodes {
 		if nd.Op == OpLoad {
-			for _, a := range n.args(&nd) {
+			for _, a := range n.Operands(&nd) {
 				n.mark(*a, feeds)
 			}
 		}
@@ -37,7 +37,7 @@ func (n *Kernel) prefetch() bool {
 		}
 		for i := range n.Nodes {
 			nd := n.Nodes[i]
-			if nd.Op != OpLoad || !feeds[i] || !n.varies(i, c) || !n.addressOfIteration(&nd, c) {
+			if nd.Op != OpLoad || !feeds[i] || !n.Varies(i, c) || !n.addressOfIteration(&nd, c) {
 				continue
 			}
 			first := n.copyOf(i, map[int]int{it: n.u32(0)})
@@ -60,7 +60,7 @@ func (n *Kernel) mark(i int, seen map[int]bool) {
 	if nd.Op == OpFold {
 		return
 	}
-	for _, a := range n.args(&nd) {
+	for _, a := range n.Operands(&nd) {
 		n.mark(*a, seen)
 	}
 }
@@ -71,7 +71,7 @@ func (n *Kernel) ofIteration(i, c int) bool {
 	if nd.Op == OpFold {
 		return !n.within(nd.At, c)
 	}
-	for _, a := range n.args(&nd) {
+	for _, a := range n.Operands(&nd) {
 		if !n.ofIteration(*a, c) {
 			return false
 		}
@@ -82,7 +82,7 @@ func (n *Kernel) ofIteration(i, c int) bool {
 // addressOfIteration reports whether load nd's address reads no fold of
 // loop c.
 func (n *Kernel) addressOfIteration(nd *Node, c int) bool {
-	for _, a := range n.args(nd) {
+	for _, a := range n.Operands(nd) {
 		if !n.ofIteration(*a, c) {
 			return false
 		}

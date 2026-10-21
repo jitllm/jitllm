@@ -59,7 +59,7 @@ func (p Spans) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 // position by the page.
 func (k *Kernel) pages(c, page int) bool {
 	for _, nd := range k.Nodes {
-		if nd.Op == OpDiv && k.isConst(nd.B, int64(page)) && k.varies(nd.A, c) {
+		if nd.Op == OpDiv && k.isConst(nd.B, int64(page)) && k.Varies(nd.A, c) {
 			return true
 		}
 	}

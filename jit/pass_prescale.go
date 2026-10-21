@@ -117,7 +117,7 @@ func (m *Kernel) scalesBy(v Operand) (int, Operand, bool) {
 			if nd.Op == OpCoord && nd.A == last || nd.Op == OpLoad && m.Bufs[nd.Buf].Operand == v {
 				moves = true
 			}
-			for _, a := range m.args(&nd) {
+			for _, a := range m.Operands(&nd) {
 				walk(*a)
 			}
 		}

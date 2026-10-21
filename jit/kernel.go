@@ -397,7 +397,7 @@ func (n *Kernel) clone() *Kernel {
 	return &c
 }
 
-func (n *Kernel) elements() int {
+func (n *Kernel) Elements() int {
 	e := 1
 	for _, s := range n.Space {
 		e *= s
@@ -447,12 +447,12 @@ const (
 // groups is how many workgroups a launch of k runs.
 func (k *Kernel) groups() int {
 	if k.Work {
-		return k.elements()
+		return k.Elements()
 	}
 	if k.Group <= 0 {
 		return 0
 	}
-	return (k.elements() + k.Group - 1) / k.Group
+	return (k.Elements() + k.Group - 1) / k.Group
 }
 
 // once reports whether a loop runs one fixed trip: its body, no count.

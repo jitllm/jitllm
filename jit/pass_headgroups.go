@@ -86,7 +86,7 @@ func (r *replica) copy(i int) int {
 	nd := r.k.Nodes[i]
 	v := r.k.add(Node{})
 	r.memo[i] = v
-	for _, a := range r.k.args(&nd) {
+	for _, a := range r.k.Operands(&nd) {
 		*a = r.copy(*a)
 	}
 	r.k.Nodes[v] = nd
@@ -103,7 +103,7 @@ func (r *replica) reaches(i int, seen map[int]bool) bool {
 	}
 	seen[i] = true
 	nd := r.k.Nodes[i]
-	for _, a := range r.k.args(&nd) {
+	for _, a := range r.k.Operands(&nd) {
 		if r.reaches(*a, seen) {
 			return true
 		}

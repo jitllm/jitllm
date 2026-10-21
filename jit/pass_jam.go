@@ -47,7 +47,7 @@ func (k *Kernel) jammable(o, i int) bool {
 	if it < 0 {
 		return false
 	}
-	hs := k.homes()
+	hs := k.Homes()
 	consecutive := func(ax []int) bool {
 		if ax == nil {
 			return false
@@ -86,7 +86,7 @@ func (k *Kernel) jam(o, i int, p Jam) *Kernel {
 	m := k.clone()
 	it := m.iterOf(o)
 	n := m.Loops[o].Trip / L
-	hs := m.homes()
+	hs := m.Homes()
 	var lanes []int
 	for x, nd := range m.Nodes {
 		if nd.Op == OpLoad && x < len(hs) && hs[x] == i && !m.readsNode(x, it) {

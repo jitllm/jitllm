@@ -11,7 +11,7 @@ func (FirstTerm) Name() string { return "firstterm" }
 func (p FirstTerm) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		var m *Kernel
-		hs := k.homes()
+		hs := k.Homes()
 		for f, nd := range k.Nodes {
 			if nd.Op != OpFold || k.Nodes[nd.B].Op != OpConst || k.extremeTerm(f) < 0 || len(k.Loops[nd.At].Cursors) > 0 {
 				continue
@@ -56,7 +56,7 @@ func (k *Kernel) readAlongside(f int, hs []int) bool {
 		if i == k.Nodes[f].A {
 			continue
 		}
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			if *a != f {
 				continue
 			}

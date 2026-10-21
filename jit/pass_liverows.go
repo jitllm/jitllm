@@ -15,7 +15,7 @@ func (p LiveRows) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			return nil, false, nil
 		}
 		m := k.clone()
-		E := m.elements()
+		E := m.Elements()
 		inner := E / m.Space[0]
 		live := m.bin(OpMin, ir.U32, m.bin(OpMul, ir.U32, m.Rows-1, m.u32(inner)), m.u32(E))
 		m.Clamp = m.bin(OpMax, ir.U32, m.u32(inner), live) + 1

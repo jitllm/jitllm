@@ -72,7 +72,7 @@ func (p InPlace) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 // readsAt reports whether k reads operand o where store st writes it: the
 // store is over its own input.
 func (k *Kernel) readsAt(o Operand, st Store) bool {
-	hs := k.homes()
+	hs := k.Homes()
 	for i, nd := range k.Nodes {
 		if nd.Op == OpLoad && k.Bufs[nd.Buf].Operand == o && sameInts(nd.Ax, st.Ax) && (st.At < 0 || hs[i] >= 0 && k.within(hs[i], st.At)) {
 			return true
@@ -84,7 +84,7 @@ func (k *Kernel) readsAt(o Operand, st Store) bool {
 // readsAfter reports whether k reads operand o other than where store st
 // writes it: in a loop after st's, or in st's at another element.
 func (k *Kernel) readsAfter(o Operand, st Store) bool {
-	hs := k.homes()
+	hs := k.Homes()
 	for i, nd := range k.Nodes {
 		if nd.Op != OpLoad || k.Bufs[nd.Buf].Operand != o {
 			continue

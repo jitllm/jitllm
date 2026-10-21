@@ -1,10 +1,11 @@
-package jit
+package cost
 
 import (
 	"math"
 	"slices"
 
 	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
@@ -130,7 +131,7 @@ func (c Cost) add(o Cost) Cost {
 // what each leaves in the device's caches for the next.
 type costModel struct {
 	d Device
-	s Step
+	s jit.Step
 	// reach is, by buffer, the bytes the last kernel estimated reaches
 	// past its address.
 	reach map[int]int64
@@ -145,7 +146,7 @@ type costModel struct {
 
 // partAliases is each part's boundary value's storage: the output of the
 // part before it, and that one's in turn.
-func partAliases(parts []Part) map[[2]int][2]int {
+func partAliases(parts []jit.Part) map[[2]int][2]int {
 	out := map[[2]int][2]int{}
 	for i := 1; i < len(parts); i++ {
 		a, b := parts[i-1].Graph, parts[i].Graph
@@ -163,21 +164,21 @@ func partAliases(parts []Part) map[[2]int][2]int {
 
 // key is the storage operand o names: a graph value by its part and id
 // alone, a boundary value as the value it is the storage of.
-func (m *costModel) key(o Operand) Operand {
-	if o.Kind != OperandValue {
+func (m *costModel) key(o jit.Operand) jit.Operand {
+	if o.Kind != jit.OperandValue {
 		return o
 	}
 	at := [2]int{o.Of, int(o.Value)}
 	if x, ok := m.alias[at]; ok {
 		at = x
 	}
-	return Operand{Kind: OperandValue, Of: at[0], Value: graph.ValueID(at[1])}
+	return jit.Operand{Kind: jit.OperandValue, Of: at[0], Value: graph.ValueID(at[1])}
 }
 
 // touch is an operand's bytes or, where code is set, a kernel's code.
 type touch struct {
-	o     Operand
-	code  *Kernel
+	o     jit.Operand
+	code  *jit.Kernel
 	bytes int64
 }
 
@@ -222,7 +223,7 @@ func (m *costModel) serve(x touch) [4]float64 {
 	return out
 }
 
-func (m *costModel) touch(o Operand, bytes int64) {
+func (m *costModel) touch(o jit.Operand, bytes int64) {
 	m.touchOf(touch{o: o, bytes: bytes})
 }
 
@@ -240,8 +241,8 @@ func (m *costModel) touchOf(x touch) {
 const sectorBytes = 32
 
 // lineBytes is the bytes a cache moves at once: a host's line, a GPU L1's.
-func lineBytes(kind DeviceKind) int64 {
-	if kind == DeviceGPU {
+func lineBytes(kind jit.DeviceKind) int64 {
+	if kind == jit.DeviceGPU {
 		return 128
 	}
 	return 64
@@ -250,8 +251,8 @@ func lineBytes(kind DeviceKind) int64 {
 // codeBytes is the bytes an instruction of a device's code takes on
 // average: x86's encodings with their VEX prefixes, and a GPU's fixed
 // sixteen.
-func codeBytes(kind DeviceKind) int64 {
-	if kind == DeviceGPU {
+func codeBytes(kind jit.DeviceKind) int64 {
+	if kind == jit.DeviceGPU {
 		return 16
 	}
 	return 6
@@ -260,7 +261,7 @@ func codeBytes(kind DeviceKind) int64 {
 // code is the bytes of kernel k's code: an instruction for each live node
 // and store in each copy an unrolling made of its loop, and a loop's count
 // and branch.
-func (e *estimator) code(live map[int]bool, kind DeviceKind) int64 {
+func (e *estimator) code(live map[int]bool, kind jit.DeviceKind) int64 {
 	k := e.k
 	copies := func(h int) int64 {
 		n := int64(1)
@@ -316,7 +317,7 @@ func (m *costModel) chain(e *estimator, live map[int]bool, words map[int]bool) f
 	k := e.k
 	var out float64
 	for f, nd := range k.Nodes {
-		if !live[f] || nd.Op != OpFold || nd.At < 0 {
+		if !live[f] || nd.Op != jit.OpFold || nd.At < 0 {
 			continue
 		}
 		memo := map[int]float64{}
@@ -331,14 +332,14 @@ func (m *costModel) chain(e *estimator, live map[int]bool, words map[int]bool) f
 			memo[i] = -1
 			x := k.Nodes[i]
 			best := -1.0
-			for _, a := range k.args(&x) {
+			for _, a := range k.Operands(&x) {
 				best = max(best, path(*a))
 			}
 			if best < 0 {
 				return -1
 			}
 			switch {
-			case x.Op == OpLoad:
+			case x.Op == jit.OpLoad:
 				best += m.d.Caches[0].Latency
 			default:
 				if cl, ok := classOf(k, i, words); ok {
@@ -372,13 +373,13 @@ func (m *costModel) critical(e *estimator, live, words map[int]bool, reads map[i
 		done[i] = true
 		nd := k.Nodes[i]
 		var d float64
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			if *a < len(k.Nodes) && (*a >= len(homes) || homes[*a] < 0) {
 				d = max(d, depth(*a))
 			}
 		}
 		switch {
-		case nd.Op == OpLoad:
+		case nd.Op == jit.OpLoad:
 			d += reads[nd.Buf]
 		case e.folded(i):
 		default:
@@ -424,8 +425,8 @@ func (m *costModel) inOrder(e *estimator, live, words map[int]bool, reads map[in
 		}
 		memo[i] = false
 		nd := k.Nodes[i]
-		v := nd.Op == OpFold
-		for _, a := range k.args(&nd) {
+		v := nd.Op == jit.OpFold
+		for _, a := range k.Operands(&nd) {
 			v = v || carried(*a)
 		}
 		memo[i] = v
@@ -437,7 +438,7 @@ func (m *costModel) inOrder(e *estimator, live, words map[int]bool, reads map[in
 			return 0, 0
 		}
 		cl, ok := classOf(k, i, words)
-		if nd.Op == OpLoad {
+		if nd.Op == jit.OpLoad {
 			cl, ok = ClassMem, true
 		}
 		if !ok {
@@ -447,7 +448,7 @@ func (m *costModel) inOrder(e *estimator, live, words map[int]bool, reads map[in
 			issue = 1 / r
 		}
 		delay = m.d.Delay[cl]
-		if nd.Op == OpLoad {
+		if nd.Op == jit.OpLoad {
 			if lat, ok := reads[nd.Buf]; ok {
 				delay = lat
 			}
@@ -502,7 +503,7 @@ func (m *costModel) inOrder(e *estimator, live, words map[int]bool, reads map[in
 			issue, delay := cost(i)
 			start := t + issue
 			nd := k.Nodes[i]
-			for _, a := range k.args(&nd) {
+			for _, a := range k.Operands(&nd) {
 				if r, ok := ready[*a]; ok {
 					start = max(start, r)
 				} else if *a < len(k.Nodes) && scope(*a) != of && within(scope(*a), of) {
@@ -526,10 +527,10 @@ func (m *costModel) inOrder(e *estimator, live, words map[int]bool, reads map[in
 // longest of them.
 func (m *costModel) exposed(e *estimator, live map[int]bool, wait map[int]float64) float64 {
 	k := e.k
-	elems := float64(max(1, k.elements()))
+	elems := float64(max(1, k.Elements()))
 	var out float64
 	for i, nd := range k.Nodes {
-		if !live[i] || nd.Op != OpLoad || k.Bufs[nd.Buf].Kind == BufShared {
+		if !live[i] || nd.Op != jit.OpLoad || k.Bufs[nd.Buf].Kind == jit.BufShared {
 			continue
 		}
 		out = max(out, e.runs(i)/elems*wait[nd.Buf]/max(1, m.d.Overlap))
@@ -540,7 +541,7 @@ func (m *costModel) exposed(e *estimator, live map[int]bool, wait map[int]float6
 // wait is the longest chain of dependent reads in kernel k: each load
 // waits for the loads its index reads, then for the levels its buffer is
 // served from, each by its share.
-func (m *costModel) wait(k *Kernel, live map[int]bool, served map[int][4]float64) float64 {
+func (m *costModel) wait(k *jit.Kernel, live map[int]bool, served map[int][4]float64) float64 {
 	memo := make([]float64, len(k.Nodes))
 	state := make([]uint8, len(k.Nodes))
 	var chain func(i int) float64
@@ -551,10 +552,10 @@ func (m *costModel) wait(k *Kernel, live map[int]bool, served map[int][4]float64
 		state[i] = 1
 		nd := k.Nodes[i]
 		var w float64
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			w = max(w, chain(*a))
 		}
-		if nd.Op == OpLoad {
+		if nd.Op == jit.OpLoad {
 			for l, f := range served[nd.Buf] {
 				w += f * m.latency(l)
 			}
@@ -572,11 +573,11 @@ func (m *costModel) wait(k *Kernel, live map[int]bool, served map[int][4]float64
 }
 
 // cost is kernel k's estimate in the run.
-func (m *costModel) cost(k *Kernel) Cost {
-	e := estimator{k: k, s: m.s, trips: map[int]float64{}, homes: k.homes()}
+func (m *costModel) cost(k *jit.Kernel) Cost {
+	e := estimator{k: k, s: m.s, trips: map[int]float64{}, homes: k.Homes()}
 	threads := float64(1)
-	if m.d.Kind == DeviceGPU {
-		threads = float64(max(1, k.elements()))
+	if m.d.Kind == jit.DeviceGPU {
+		threads = float64(max(1, k.Elements()))
 		if k.Work {
 			threads *= float64(max(1, k.Group))
 		}
@@ -602,8 +603,8 @@ func (m *costModel) cost(k *Kernel) Cost {
 		u.hull = span{min(u.hull.lo, h.lo), max(u.hull.hi, h.hi)}
 		u.write = u.write || write
 	}
-	live := k.live()
-	words := k.vectorWords()
+	live := k.Live()
+	words := k.VectorWords()
 	// over is the bytes a GPU kernel's subgroups move past what their
 	// lanes read: a lane whose place is a sector or more from its
 	// neighbour's moves a sector of its own, served from the first cache
@@ -614,12 +615,12 @@ func (m *costModel) cost(k *Kernel) Cost {
 			continue
 		}
 		n := e.runs(i)
-		if nd.Op == OpLoad {
-			if k.Bufs[nd.Buf].Kind == BufShared {
+		if nd.Op == jit.OpLoad {
+			if k.Bufs[nd.Buf].Kind == jit.BufShared {
 				continue
 			}
 			w := e.width(i, nd.Buf)
-			if m.d.Kind == DeviceGPU {
+			if m.d.Kind == jit.DeviceGPU {
 				if st := e.laneStride(i); st > w {
 					over += n * (min(st, sectorBytes) - min(w, sectorBytes))
 				}
@@ -633,11 +634,11 @@ func (m *costModel) cost(k *Kernel) Cost {
 		}
 	}
 	for _, s := range k.Stores {
-		if s.Barrier || s.Run || k.Bufs[s.Buf].Kind == BufShared {
+		if s.Barrier || s.Run || k.Bufs[s.Buf].Kind == jit.BufShared {
 			continue
 		}
 		n := e.within(s.At)
-		b := float64(elemBytes(k.Bufs[s.Buf]))
+		b := float64(jit.ElemBytes(k.Bufs[s.Buf]))
 		w := b
 		if s.At >= 0 {
 			w = b * float64(max(1, max(k.Loops[s.At].Lanes, k.Loops[s.At].Wide)))
@@ -664,7 +665,7 @@ func (m *costModel) cost(k *Kernel) Cost {
 			m.reach[b] = int64(u.touched)
 		}
 		if shape := buf.Shape; shape != nil {
-			n := int64(elemBytes(buf))
+			n := int64(jit.ElemBytes(buf))
 			for _, x := range shape {
 				n *= int64(x)
 			}
@@ -713,7 +714,7 @@ func (m *costModel) cost(k *Kernel) Cost {
 		c.Served[l] += int64(over)
 		c.MemSeconds += over / m.rate(l, threads)
 	}
-	if m.d.Kind == DeviceGPU {
+	if m.d.Kind == jit.DeviceGPU {
 		c.MemSeconds = 0
 		var through float64
 		for l := len(c.Served) - 1; l >= 0; l-- {
@@ -728,8 +729,8 @@ func (m *costModel) cost(k *Kernel) Cost {
 	}
 	c.MemSeconds += start
 	share := 1.0
-	if m.d.Kind == DeviceGPU && m.d.Units > 0 {
-		groups := max(1, k.elements())
+	if m.d.Kind == jit.DeviceGPU && m.d.Units > 0 {
+		groups := max(1, k.Elements())
 		if !k.Work {
 			groups = (groups + max(1, k.Group) - 1) / max(1, k.Group)
 		}
@@ -747,7 +748,7 @@ func (m *costModel) cost(k *Kernel) Cost {
 	}
 	c.LaunchSeconds = m.d.Launch
 	c.WaitSeconds = m.wait(k, live, served)
-	if m.d.Kind == DeviceGPU {
+	if m.d.Kind == jit.DeviceGPU {
 		c.WaitSeconds = max(c.WaitSeconds, m.exposed(&e, live, reads))
 	}
 	code := touch{code: k, bytes: e.code(live, m.d.Kind)}
@@ -758,12 +759,12 @@ func (m *costModel) cost(k *Kernel) Cost {
 	}
 	m.touchOf(code)
 	c.ChainSeconds = max(m.chain(&e, live, words), m.critical(&e, live, words, reads))
-	if m.d.Kind == DeviceGPU {
+	if m.d.Kind == jit.DeviceGPU {
 		c.ChainSeconds = max(c.ChainSeconds, m.inOrder(&e, live, words, reads))
 	}
 	work := max(c.MemSeconds, c.ComputeSeconds, c.WaitSeconds, c.ChainSeconds) + c.FetchSeconds
 	c.Seconds = work + c.LaunchSeconds
-	if m.d.Kind == DeviceGPU {
+	if m.d.Kind == jit.DeviceGPU {
 		c.FloorSeconds = m.d.Floor
 		c.Seconds = max(work+c.FloorSeconds, c.LaunchSeconds)
 	}
@@ -783,8 +784,8 @@ func (m *costModel) fit(bytes int64) int {
 
 // estimator counts how often a kernel's code runs at a step.
 type estimator struct {
-	k       *Kernel
-	s       Step
+	k       *jit.Kernel
+	s       jit.Step
 	trips   map[int]float64
 	homes   []int
 	unknown int
@@ -838,7 +839,7 @@ func (e *estimator) within(c int) float64 {
 		}
 		return n
 	}
-	elems := max(1, k.elements())
+	elems := max(1, k.Elements())
 	varies := false
 	for d := c; d >= 0; d = k.Loops[d].Parent {
 		varies = varies || e.countByElem(d)
@@ -891,11 +892,11 @@ func (e *estimator) countByElem(c int) bool {
 			}
 			seen[i] = true
 			nd := k.Nodes[i]
-			if nd.Op == OpCoord {
+			if nd.Op == jit.OpCoord {
 				reads = true
 				return
 			}
-			for _, a := range k.args(&nd) {
+			for _, a := range k.Operands(&nd) {
 				walk(*a)
 			}
 		}
@@ -926,22 +927,22 @@ func (e *estimator) footprint(ix, ax []int, h, b int) float64 {
 		seen[i] = true
 		nd := k.Nodes[i]
 		switch nd.Op {
-		case OpCoord:
+		case jit.OpCoord:
 			axes[nd.A] = true
-		case OpIter:
+		case jit.OpIter:
 			for c := nd.At; c >= 0; c = k.Loops[c].Parent {
 				loops[c] = true
 			}
-		case OpThread, OpLocal:
+		case jit.OpThread, jit.OpLocal:
 			thread = true
-		case OpFlat:
+		case jit.OpFlat:
 			flat = true
 		}
-		if nd.Op == OpLoad && nd.Ax == nil {
+		if nd.Op == jit.OpLoad && nd.Ax == nil {
 			walk(nd.A)
 			return
 		}
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			walk(*a)
 		}
 	}
@@ -1029,36 +1030,36 @@ func (e *estimator) eval(i, depth int) (float64, bool) {
 		return 0
 	}
 	switch nd.Op {
-	case OpConst, OpLength:
+	case jit.OpConst, jit.OpLength:
 		return float64(nd.Imm), true
-	case OpCoord:
+	case jit.OpCoord:
 		if nd.A < len(e.elem) {
 			return float64(e.elem[nd.A]), true
 		}
 		return 0, true
-	case OpThread, OpLocal:
+	case jit.OpThread, jit.OpLocal:
 		return float64(e.lane), true
-	case OpFlat:
+	case jit.OpFlat:
 		x := 0
 		for a, c := range e.elem {
 			x = x*max(1, k.Space[a]) + c
 		}
 		return float64(x), true
-	case OpIter:
+	case jit.OpIter:
 		return 0, true
-	case OpSpan:
+	case jit.OpSpan:
 		if nd.Imm == 1 {
 			return float64(min(e.s.Page, e.s.Keys)), true
 		}
 		return 0, true
-	case OpParam:
+	case jit.OpParam:
 		for _, a := range k.Args {
 			if a.Buf < 0 && a.Field == int(nd.Imm) && a.Node > 0 {
 				return e.eval(a.Node-1, depth+1)
 			}
 		}
 		return 0, false
-	case OpLoad:
+	case jit.OpLoad:
 		if nd.Ax != nil {
 			return 0, false
 		}
@@ -1074,8 +1075,8 @@ func (e *estimator) eval(i, depth int) (float64, bool) {
 			}
 			ix += off
 		}
-		return stepWord(buf.Operand, int(ix), e.s)
-	case OpSelect:
+		return jit.StepWord(buf.Operand, int(ix), e.s)
+	case jit.OpSelect:
 		p, ok := e.eval(nd.A, depth+1)
 		if !ok {
 			return 0, false
@@ -1084,39 +1085,39 @@ func (e *estimator) eval(i, depth int) (float64, bool) {
 			return e.eval(nd.B, depth+1)
 		}
 		return e.eval(nd.C, depth+1)
-	case OpLess:
+	case jit.OpLess:
 		return bin(func(a, b float64) float64 { return truth(a < b) })
-	case OpEq:
+	case jit.OpEq:
 		return bin(func(a, b float64) float64 { return truth(a == b) })
-	case OpAdd:
+	case jit.OpAdd:
 		return bin(func(a, b float64) float64 { return a + b })
-	case OpSub:
+	case jit.OpSub:
 		return bin(func(a, b float64) float64 { return max(0, a-b) })
-	case OpMul:
+	case jit.OpMul:
 		return bin(func(a, b float64) float64 { return a * b })
-	case OpDiv:
+	case jit.OpDiv:
 		return bin(func(a, b float64) float64 {
 			if b == 0 {
 				return 0
 			}
 			return float64(int64(a) / int64(b))
 		})
-	case OpRem:
+	case jit.OpRem:
 		return bin(func(a, b float64) float64 {
 			if b == 0 {
 				return 0
 			}
 			return float64(int64(a) % int64(b))
 		})
-	case OpShr:
+	case jit.OpShr:
 		return bin(func(a, b float64) float64 { return float64(int64(a) >> uint(b)) })
-	case OpShl:
+	case jit.OpShl:
 		return bin(func(a, b float64) float64 { return float64(int64(a) << uint(b)) })
-	case OpAnd:
+	case jit.OpAnd:
 		return bin(func(a, b float64) float64 { return float64(int64(a) & int64(b)) })
-	case OpMin:
+	case jit.OpMin:
 		return bin(func(a, b float64) float64 { return min(a, b) })
-	case OpMax:
+	case jit.OpMax:
 		return bin(func(a, b float64) float64 { return max(a, b) })
 	}
 	return 0, false
@@ -1167,22 +1168,22 @@ func (e *estimator) ival(i, depth int) span {
 	a := func() span { return e.ival(nd.A, depth+1) }
 	b := func() span { return e.ival(nd.B, depth+1) }
 	switch nd.Op {
-	case OpConst, OpLength:
+	case jit.OpConst, jit.OpLength:
 		return span{float64(nd.Imm), float64(nd.Imm)}
-	case OpCoord:
+	case jit.OpCoord:
 		return span{0, float64(max(1, k.Space[nd.A]) - 1)}
-	case OpThread, OpLocal:
+	case jit.OpThread, jit.OpLocal:
 		return span{0, float64(max(1, k.Group) - 1)}
-	case OpFlat:
-		return span{0, float64(max(1, k.elements()*max(1, k.Group)) - 1)}
-	case OpIter:
+	case jit.OpFlat:
+		return span{0, float64(max(1, k.Elements()*max(1, k.Group)) - 1)}
+	case jit.OpIter:
 		return span{0, max(0, e.maxTrips(nd.At)-1)}
-	case OpParam:
+	case jit.OpParam:
 		if v, ok := e.eval(i, 0); ok {
 			return span{v, v}
 		}
 		return anywhere
-	case OpLoad:
+	case jit.OpLoad:
 		if nd.Ax != nil {
 			return anywhere
 		}
@@ -1201,54 +1202,54 @@ func (e *estimator) ival(i, depth int) span {
 			off = v
 		}
 		for x := w.lo; x <= w.hi; x++ {
-			v, ok := stepWord(buf.Operand, int(x+off), e.s)
+			v, ok := jit.StepWord(buf.Operand, int(x+off), e.s)
 			if !ok {
 				return anywhere
 			}
 			out.lo, out.hi = min(out.lo, v), max(out.hi, v)
 		}
 		return out
-	case OpAdd:
+	case jit.OpAdd:
 		x, y := a(), b()
 		return span{x.lo + y.lo, x.hi + y.hi}
-	case OpSub:
+	case jit.OpSub:
 		x, y := a(), b()
 		return span{max(0, x.lo-y.hi), max(0, x.hi-y.lo)}
-	case OpMul:
+	case jit.OpMul:
 		x, y := a(), b()
 		return span{x.lo * y.lo, x.hi * y.hi}
-	case OpDiv, OpShr:
+	case jit.OpDiv, jit.OpShr:
 		x, y := a(), b()
-		if nd.Op == OpShr {
+		if nd.Op == jit.OpShr {
 			y = span{math.Exp2(y.lo), math.Exp2(y.hi)}
 		}
 		if y.lo <= 0 {
 			return anywhere
 		}
 		return span{math.Floor(x.lo / y.hi), math.Floor(x.hi / y.lo)}
-	case OpShl:
+	case jit.OpShl:
 		x, y := a(), b()
 		return span{x.lo * math.Exp2(y.lo), x.hi * math.Exp2(y.hi)}
-	case OpRem:
+	case jit.OpRem:
 		x, y := a(), b()
 		if y.lo == y.hi && y.lo > 0 && math.Floor(x.lo/y.lo) == math.Floor(x.hi/y.lo) {
 			m := math.Floor(x.lo/y.lo) * y.lo
 			return span{x.lo - m, x.hi - m}
 		}
 		return span{0, max(0, y.hi-1)}
-	case OpAnd:
+	case jit.OpAnd:
 		x, y := a(), b()
 		return span{0, min(x.hi, y.hi)}
-	case OpMin:
+	case jit.OpMin:
 		x, y := a(), b()
 		return span{min(x.lo, y.lo), min(x.hi, y.hi)}
-	case OpMax:
+	case jit.OpMax:
 		x, y := a(), b()
 		return span{max(x.lo, y.lo), max(x.hi, y.hi)}
-	case OpSelect:
+	case jit.OpSelect:
 		x, y := e.ival(nd.B, depth+1), e.ival(nd.C, depth+1)
 		return span{min(x.lo, y.lo), max(x.hi, y.hi)}
-	case OpFold:
+	case jit.OpFold:
 		if e.folding == nil {
 			e.folding = map[int]bool{}
 		}
@@ -1275,10 +1276,10 @@ func (e *estimator) constant(i int) bool {
 		seen[i] = true
 		nd := k.Nodes[i]
 		switch nd.Op {
-		case OpCoord, OpThread, OpLocal, OpFlat, OpIter, OpFold:
+		case jit.OpCoord, jit.OpThread, jit.OpLocal, jit.OpFlat, jit.OpIter, jit.OpFold:
 			return false
 		}
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			if !walk(*a) {
 				return false
 			}
@@ -1309,12 +1310,12 @@ func (e *estimator) folded(i int) bool {
 	nd := k.Nodes[i]
 	ok := true
 	switch nd.Op {
-	case OpConst:
-	case OpLoad, OpParam, OpLength, OpCoord, OpThread, OpLocal, OpFlat, OpIter, OpFold, OpSpan, OpLanes,
-		OpGroupSum, OpGroupMax, OpExchange:
+	case jit.OpConst:
+	case jit.OpLoad, jit.OpParam, jit.OpLength, jit.OpCoord, jit.OpThread, jit.OpLocal, jit.OpFlat, jit.OpIter, jit.OpFold, jit.OpSpan, jit.OpLanes,
+		jit.OpGroupSum, jit.OpGroupMax, jit.OpExchange:
 		ok = false
 	default:
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			if !e.folded(*a) {
 				ok = false
 				break
@@ -1330,12 +1331,12 @@ func (e *estimator) folded(i int) bool {
 
 // maxTrips is the most trips loop c makes for any element.
 func (e *estimator) maxTrips(c int) float64 {
-	if !e.countByElem(c) || e.k.elements() > 1<<16 {
+	if !e.countByElem(c) || e.k.Elements() > 1<<16 {
 		return e.loopTrips(c)
 	}
 	saved, savedTrips := e.elem, e.trips
 	best := 0.0
-	for x := range max(1, e.k.elements()) {
+	for x := range max(1, e.k.Elements()) {
 		e.elem, e.trips = e.coords(x), map[int]float64{}
 		best = max(best, e.loopTrips(c))
 	}
@@ -1389,7 +1390,7 @@ func (e *estimator) laneStride(i int) float64 {
 	}
 	if k.Work {
 		e.lane = 1
-	} else if k.elements() > 1 {
+	} else if k.Elements() > 1 {
 		e.elem = e.coords(1)
 	} else {
 		return 0
@@ -1398,7 +1399,7 @@ func (e *estimator) laneStride(i int) float64 {
 	if !ok {
 		return 0
 	}
-	return math.Abs(b-a) * float64(elemBytes(k.Bufs[nd.Buf]))
+	return math.Abs(b-a) * float64(jit.ElemBytes(k.Bufs[nd.Buf]))
 }
 
 // reach is the bytes load i's places span: its index's hull in elements
@@ -1409,16 +1410,16 @@ func (e *estimator) reach(i, ix int, ax []int, b int, w float64) span {
 		return anywhere
 	}
 	h := e.hull([]int{ix}, ax, b)
-	eb := float64(elemBytes(e.k.Bufs[b]))
+	eb := float64(jit.ElemBytes(e.k.Bufs[b]))
 	return span{h.lo * eb, h.hi*eb + w}
 }
 
-func (e *estimator) storeReach(s Store, w float64) span {
+func (e *estimator) storeReach(s jit.Store, w float64) span {
 	if s.Ptr > 0 || e.walked(s.At, s.Buf) {
 		return anywhere
 	}
 	h := e.hull([]int{s.Ix}, s.Ax, s.Buf)
-	eb := float64(elemBytes(e.k.Bufs[s.Buf]))
+	eb := float64(jit.ElemBytes(e.k.Bufs[s.Buf]))
 	return span{h.lo * eb, h.hi*eb + w}
 }
 
@@ -1426,9 +1427,9 @@ func (e *estimator) storeReach(s Store, w float64) span {
 // buffer's elements in a vector loop, one element else.
 func (e *estimator) width(i, b int) float64 {
 	k := e.k
-	w := float64(elemBytes(k.Bufs[b]))
+	w := float64(jit.ElemBytes(k.Bufs[b]))
 	h := e.homes[i]
-	if h >= 0 && k.Nodes[i].Op == OpLoad && k.varies(i, h) {
+	if h >= 0 && k.Nodes[i].Op == jit.OpLoad && k.Varies(i, h) {
 		w *= float64(max(1, max(k.Loops[h].Lanes, k.Loops[h].Wide)))
 	}
 	return w
@@ -1436,24 +1437,24 @@ func (e *estimator) width(i, b int) float64 {
 
 // classOf is the class node i's instruction counts in, false for a value
 // that is no instruction: a constant, a coordinate, an argument word.
-func classOf(k *Kernel, i int, words map[int]bool) (Class, bool) {
+func classOf(k *jit.Kernel, i int, words map[int]bool) (Class, bool) {
 	nd := k.Nodes[i]
 	switch nd.Op {
-	case OpConst, OpCoord, OpIter, OpFold, OpParam, OpLength, OpSpan, OpLanes, OpThread, OpLocal, OpFlat:
+	case jit.OpConst, jit.OpCoord, jit.OpIter, jit.OpFold, jit.OpParam, jit.OpLength, jit.OpSpan, jit.OpLanes, jit.OpThread, jit.OpLocal, jit.OpFlat:
 		return 0, false
-	case OpGroupSum, OpGroupMax, OpExchange:
+	case jit.OpGroupSum, jit.OpGroupMax, jit.OpExchange:
 		return ClassGroup, true
-	case OpHSum, OpHMax, OpHMin, OpShuffle, OpBroadcast, OpZip, OpUnpack, OpUpper, OpDupEven, OpDupOdd, OpSwapPairs, OpFirstLane:
+	case jit.OpHSum, jit.OpHMax, jit.OpHMin, jit.OpShuffle, jit.OpBroadcast, jit.OpZip, jit.OpUnpack, jit.OpUpper, jit.OpDupEven, jit.OpDupOdd, jit.OpSwapPairs, jit.OpFirstLane:
 		return ClassLanes, true
-	case OpDiv, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpRoundI32, OpHalf:
+	case jit.OpDiv, jit.OpSqrt, jit.OpExp, jit.OpCvtF32, jit.OpCvtI32, jit.OpRoundI32, jit.OpHalf:
 		if nd.Type == ir.F32 || k.Nodes[nd.A].Type == ir.F32 || words[i] {
 			return ClassSpecial, true
 		}
-		if nd.Op == OpDiv && k.Nodes[nd.B].Op != OpConst {
+		if nd.Op == jit.OpDiv && k.Nodes[nd.B].Op != jit.OpConst {
 			return ClassSpecial, true
 		}
-	case OpRem:
-		if k.Nodes[nd.B].Op != OpConst {
+	case jit.OpRem:
+		if k.Nodes[nd.B].Op != jit.OpConst {
 			return ClassSpecial, true
 		}
 	}

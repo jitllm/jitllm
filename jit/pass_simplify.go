@@ -82,7 +82,7 @@ func (k *Kernel) cse() bool {
 			}
 		}
 		var ops []int
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			ops = append(ops, *a)
 		}
 		key := fmt.Sprint(nd.Op, nd.Type, ops, nd.At, nd.Buf, nd.Imm)

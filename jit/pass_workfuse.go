@@ -124,7 +124,7 @@ func (w WorkFuse) phase(k, m *Kernel, outer []int) {
 			nd.Buf = k.bufLike(m.Bufs[nd.Buf])
 		}
 		nodeOf[i] = k.add(Node{})
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			*a = walk(*a)
 		}
 		k.Nodes[nodeOf[i]] = nd

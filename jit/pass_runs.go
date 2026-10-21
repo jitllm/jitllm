@@ -71,7 +71,7 @@ func (k *Kernel) bodyOf(c int) []int {
 		if nd.Op == OpFold && nd.At != c {
 			return
 		}
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			walk(*a)
 		}
 		out = append(out, i)

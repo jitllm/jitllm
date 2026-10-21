@@ -58,7 +58,7 @@ func (k *Kernel) loadsFrom(root int, o Operand) []int {
 		if nd.Op == OpLoad && k.Bufs[nd.Buf].Operand == o {
 			out = append(out, i)
 		}
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			walk(*a)
 		}
 	}
@@ -112,7 +112,7 @@ func (k *Kernel) same(a, b int) bool {
 	if x.Op == OpConst || x.Op == OpCoord || x.Op == OpIter || x.Op == OpThread {
 		return x.A == y.A
 	}
-	xa, ya := k.args(&x), k.args(&y)
+	xa, ya := k.Operands(&x), k.Operands(&y)
 	if len(xa) != len(ya) {
 		return false
 	}

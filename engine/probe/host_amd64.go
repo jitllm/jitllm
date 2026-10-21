@@ -12,6 +12,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/cost"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/x86"
@@ -21,9 +22,9 @@ import (
 // Host measures the host CPU: its caches' sizes from the operating system,
 // then each level's read bandwidth on one P-core and on every P-core, each
 // class's instruction rate, and an empty call's cost.
-func Host() (jit.Device, error) {
+func Host() (cost.Device, error) {
 	workers := max(1, len(sched.PCores()))
-	d := jit.Device{Kind: jit.DeviceCPU, Slots: workers, Lanes: 8}
+	d := cost.Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: workers, Lanes: 8}}
 	sizes, err := cacheSizes()
 	if err != nil {
 		return d, err
@@ -66,7 +67,7 @@ func Host() (jit.Device, error) {
 			return d, err
 		}
 		rate := readRate(read, set, 1)
-		d.Caches[l] = jit.Cache{Bytes: c.bytes, Rate: jit.Rate{Thread: rate, Total: readRate(read, all, workers)}, Latency: lat}
+		d.Caches[l] = cost.Cache{Bytes: c.bytes, Rate: cost.Rate{Thread: rate, Total: readRate(read, all, workers)}, Latency: lat}
 		if nearer > 0 {
 			d.Caches[l].Start = streamStart(read, rate, evict[:2*nearer])
 		}
@@ -88,7 +89,7 @@ func Host() (jit.Device, error) {
 	if d.Latency, err = chaseLatency(walk, dram); err != nil {
 		return d, err
 	}
-	for cl := jit.Class(0); cl < jit.NumClasses; cl++ {
+	for cl := cost.Class(0); cl < cost.NumClasses; cl++ {
 		code, err := rateKernel(cl)
 		if err != nil {
 			return d, err
@@ -100,7 +101,7 @@ func Host() (jit.Device, error) {
 		if err != nil {
 			return d, err
 		}
-		d.Rates[cl] = jit.Rate{Thread: issueRate(k, 8, 1), Total: issueRate(k, 8, workers)}
+		d.Rates[cl] = cost.Rate{Thread: issueRate(k, 8, 1), Total: issueRate(k, 8, workers)}
 		k.Close()
 		code, err = chainKernel(cl)
 		if err != nil {
@@ -121,11 +122,11 @@ func Host() (jit.Device, error) {
 	if err != nil {
 		return d, err
 	}
-	d.Issue = jit.Rate{Thread: issueRate(mix, 24, 1), Total: issueRate(mix, 24, workers)}
+	d.Issue = cost.Rate{Thread: issueRate(mix, 24, 1), Total: issueRate(mix, 24, workers)}
 	mix.Close()
-	d.Delay[jit.ClassMem] = d.Caches[0].Latency
-	if cl := jit.ClassMem; d.Rates[cl].Thread == 0 && d.Caches[0].Bytes > 0 {
-		d.Rates[cl] = jit.Rate{Thread: d.Caches[0].Rate.Thread / 32, Total: d.Caches[0].Rate.Total / 32}
+	d.Delay[cost.ClassMem] = d.Caches[0].Latency
+	if cl := cost.ClassMem; d.Rates[cl].Thread == 0 && d.Caches[0].Bytes > 0 {
+		d.Rates[cl] = cost.Rate{Thread: d.Caches[0].Rate.Thread / 32, Total: d.Caches[0].Rate.Total / 32}
 	}
 	var empty x86.Buf
 	empty.RET()
@@ -280,19 +281,19 @@ func chaseLatency(k *cpu.Code, set int64) (float64, error) {
 // rateKernel runs [0] trips of eight independent instructions of class cl
 // on registers, nil for a class with no instruction measured alone. The
 // index class adds to four of the call-clobbered general registers.
-func rateKernel(cl jit.Class) ([]byte, error) {
+func rateKernel(cl cost.Class) ([]byte, error) {
 	var a x86.Buf
 	var op func(r x86.Reg)
 	switch cl {
-	case jit.ClassFloat:
+	case cost.ClassFloat:
 		op = func(r x86.Reg) { a.VFMADD231PS(r, x86.Y14, x86.Y15) }
-	case jit.ClassSpecial:
+	case cost.ClassSpecial:
 		op = func(r x86.Reg) { a.VDIVPS(r, x86.Y14, x86.Y15) }
-	case jit.ClassInt:
+	case cost.ClassInt:
 		op = func(r x86.Reg) { a.VPADDD(r, r, x86.Y15) }
-	case jit.ClassLanes:
+	case cost.ClassLanes:
 		op = func(r x86.Reg) { a.VPERMILPS(r, r, 0xB1) }
-	case jit.ClassIndex:
+	case cost.ClassIndex:
 		regs := [4]x86.Reg{x86.R8, x86.R9, x86.R10, x86.R11}
 		op = func(r x86.Reg) { a.ADDimm(regs[(r-x86.Y0)%4], 1) }
 	default:
@@ -319,19 +320,19 @@ func rateKernel(cl jit.Class) ([]byte, error) {
 // The index chain subtracts a register: a core may fold a chain of
 // immediate adds in its renamer, which an index computed from registers
 // does not get.
-func chainKernel(cl jit.Class) ([]byte, error) {
+func chainKernel(cl cost.Class) ([]byte, error) {
 	var a x86.Buf
 	var op func()
 	switch cl {
-	case jit.ClassFloat:
+	case cost.ClassFloat:
 		op = func() { a.VFMADD231PS(x86.Y0, x86.Y14, x86.Y15) }
-	case jit.ClassSpecial:
+	case cost.ClassSpecial:
 		op = func() { a.VDIVPS(x86.Y0, x86.Y0, x86.Y15) }
-	case jit.ClassInt:
+	case cost.ClassInt:
 		op = func() { a.VPADDD(x86.Y0, x86.Y0, x86.Y15) }
-	case jit.ClassLanes:
+	case cost.ClassLanes:
 		op = func() { a.VPERMILPS(x86.Y0, x86.Y0, 0xB1) }
-	case jit.ClassIndex:
+	case cost.ClassIndex:
 		op = func() { a.SUBQ(x86.R8, x86.R9) }
 	default:
 		return nil, nil
@@ -383,7 +384,7 @@ func mixKernel() ([]byte, error) {
 // made, the buffer read again and timed, its time placed between all of it
 // served by c and all of it by the level beyond, which serves at rate
 // after start.
-func retention(k *cpu.Code, c jit.Cache, rate, start float64, evict []byte) float64 {
+func retention(k *cpu.Code, c cost.Cache, rate, start float64, evict []byte) float64 {
 	n := max(256, c.Bytes/8&^255)
 	buf := make([]byte, n)
 	for i := range buf {
@@ -413,7 +414,7 @@ func retention(k *cpu.Code, c jit.Cache, rate, start float64, evict []byte) floa
 // cycling is the share of cache c's capacity a buffer twice its size,
 // read over and over, finds in it: each pass's time placed between all of
 // it served by c and all of it by the level beyond, at rate.
-func cycling(k *cpu.Code, c jit.Cache, rate float64, evict []byte) float64 {
+func cycling(k *cpu.Code, c cost.Cache, rate float64, evict []byte) float64 {
 	n := min(int64(len(evict)), 2*c.Bytes) &^ 255
 	at := [2]uint64{uint64(uintptr(unsafe.Pointer(&evict[0]))), uint64(n / 256)}
 	var times []float64

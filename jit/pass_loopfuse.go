@@ -75,7 +75,7 @@ func (k *Kernel) foldsRead(s Store) []int {
 			out = append(out, i)
 			return
 		}
-		for _, x := range k.args(&nd) {
+		for _, x := range k.Operands(&nd) {
 			walk(*x)
 		}
 	}

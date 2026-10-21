@@ -1,10 +1,8 @@
-package probe
+package cost
 
 import (
 	"encoding/json"
 	"fmt"
-
-	"github.com/jitllm/jitllm/jit"
 )
 
 // ProfileVersion is the layout of a Profile's measurements. A reader
@@ -16,10 +14,10 @@ const ProfileVersion = 1
 // it there: data another node can price that device with, ahead of sending
 // it work, without the device, its runtime or its compiler.
 type Profile struct {
-	Version int        `json:"version"`
-	Name    string     `json:"name"`
-	API     string     `json:"api"`
-	Device  jit.Device `json:"device"`
+	Version int    `json:"version"`
+	Name    string `json:"name"`
+	API     string `json:"api"`
+	Device  Device `json:"device"`
 }
 
 // Encode is the profile as it travels between nodes.
@@ -36,7 +34,7 @@ func DecodeProfile(b []byte) (Profile, error) {
 		return Profile{}, err
 	}
 	if p.Version != ProfileVersion {
-		return Profile{}, fmt.Errorf("probe: a profile of version %d; this build reads %d", p.Version, ProfileVersion)
+		return Profile{}, fmt.Errorf("cost: a profile of version %d; this build reads %d", p.Version, ProfileVersion)
 	}
 	return p, nil
 }

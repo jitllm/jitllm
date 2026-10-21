@@ -25,7 +25,7 @@ func (Consts) Name() string { return "consts" }
 
 func (p Consts) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
-		vw := k.vectorWords()
+		vw := k.VectorWords()
 		var at []int
 		floats := false
 		seen := map[int]bool{}
@@ -121,7 +121,7 @@ func (p Consts) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				if k.Nodes[r].Op == OpLoad || !vw[r] && k.Nodes[r].Type != ir.F32 && k.Nodes[r].Type != ir.Pred {
 					continue
 				}
-				for _, a := range m.args(&m.Nodes[r]) {
+				for _, a := range m.Operands(&m.Nodes[r]) {
 					if *a == i {
 						*a = l
 					}
@@ -169,12 +169,12 @@ func (k *Kernel) fromTables(at []int) (*Kernel, []int) {
 			continue
 		}
 		l := m.add(ld)
-		vw := k.vectorWords()
+		vw := k.VectorWords()
 		for r := range k.Nodes {
 			if k.Nodes[r].Op == OpLoad || !vw[r] && k.Nodes[r].Type != ir.F32 && k.Nodes[r].Type != ir.Pred {
 				continue
 			}
-			for _, a := range m.args(&m.Nodes[r]) {
+			for _, a := range m.Operands(&m.Nodes[r]) {
 				if *a == i {
 					*a = l
 				}

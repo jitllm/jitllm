@@ -31,7 +31,7 @@ func (p Order) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			return nil, false, nil
 		}
 		m := k.clone()
-		o := orderer{k: m, done: map[int]bool{}, loopDone: map[int]bool{}, home: map[int]int{}, depths: map[int]int{}, words: m.vectorWords()}
+		o := orderer{k: m, done: map[int]bool{}, loopDone: map[int]bool{}, home: map[int]int{}, depths: map[int]int{}, words: m.VectorWords()}
 		o.run()
 		m.Seq = m.interleave(o.seq)
 		return []*Kernel{m}, true, nil
@@ -54,7 +54,7 @@ type orderer struct {
 
 func (o *orderer) run() {
 	k := o.k
-	live := k.live()
+	live := k.Live()
 	vecCount := map[int]bool{}
 	for _, l := range k.Loops {
 		if l.Count > 0 && (l.Lanes > 0 || o.isTail(l)) {
@@ -97,7 +97,7 @@ func (o *orderer) run() {
 			o.node(m)
 		}
 	}
-	hs := k.homes()
+	hs := k.Homes()
 	for i := range k.Nodes {
 		if live[i] {
 			o.home[i] = hs[i]
@@ -131,7 +131,7 @@ func (k *Kernel) madeCounts(i int) []int {
 	var tails, vectors []int
 	for j := range k.Nodes {
 		direct := false
-		for _, a := range k.args(&k.Nodes[j]) {
+		for _, a := range k.Operands(&k.Nodes[j]) {
 			direct = direct || *a == i
 		}
 		if !direct {
@@ -290,7 +290,7 @@ func (o *orderer) beforeShare(i, c int) {
 				continue
 			}
 			reads, ready := false, true
-			for _, a := range k.args(&k.Nodes[r]) {
+			for _, a := range k.Operands(&k.Nodes[r]) {
 				reads = reads || *a == x
 				ready = ready && (o.done[*a] || k.Nodes[*a].Op == OpConst)
 			}
@@ -356,7 +356,7 @@ func (o *orderer) scope(c int) {
 			if h, ok := o.home[i]; !ok || h != c || i == step || o.done[i] {
 				continue
 			}
-			for _, a := range k.args(&nd) {
+			for _, a := range k.Operands(&nd) {
 				if *a == f {
 					o.after[f] = append(o.after[f], i)
 					break
@@ -399,7 +399,7 @@ func (o *orderer) reads(d, i int) bool {
 	k := o.k
 	for j, nd := range k.Nodes {
 		if h, ok := o.home[j]; ok && h >= 0 && k.within(h, d) {
-			for _, a := range k.args(&nd) {
+			for _, a := range k.Operands(&nd) {
 				if *a == i {
 					return true
 				}
@@ -430,7 +430,7 @@ func (o *orderer) counts(d int) map[int]bool {
 		}
 		out[i] = true
 		nd := k.Nodes[i]
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			walk(*a)
 		}
 	}
@@ -486,7 +486,7 @@ func (o *orderer) readsNode(i, x int) bool {
 	if nd.Op == OpFold {
 		return false
 	}
-	for _, a := range o.k.args(&nd) {
+	for _, a := range o.k.Operands(&nd) {
 		if o.readsNode(*a, x) {
 			return true
 		}
@@ -548,7 +548,7 @@ func (o *orderer) byFirstRead(d int, keep func(int) bool) []int {
 		if e.Kind != EntryNode {
 			continue
 		}
-		for _, a := range k.args(&k.Nodes[e.I]) {
+		for _, a := range k.Operands(&k.Nodes[e.I]) {
 			if f, ok := first[*a]; ok && p < f {
 				first[*a] = p
 			}
@@ -691,7 +691,7 @@ func (k *Kernel) interleave(seq []Entry) []Entry {
 			}
 		}
 	}
-	hs := k.homes()
+	hs := k.Homes()
 	finishing := map[int]bool{}
 	var fin func(i int) bool
 	fin = func(i int) bool {
@@ -704,7 +704,7 @@ func (k *Kernel) interleave(seq []Entry) []Entry {
 			return false
 		}
 		v := false
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			x := k.Nodes[*a]
 			if x.Op == OpFold && x.At != hs[i] && !(hs[i] >= 0 && k.within(hs[i], x.At)) || fin(*a) {
 				v = true
@@ -774,7 +774,7 @@ func (k *Kernel) startsOnly(i int) bool {
 		return false
 	}
 	for j, x := range k.Nodes {
-		for _, a := range k.args(&x) {
+		for _, a := range k.Operands(&x) {
 			if *a == i && !(x.Op == OpFold && x.B == i && j != i) {
 				return false
 			}
@@ -810,7 +810,7 @@ func (k *Kernel) constsBeforeSiblings() {
 	readers := func(i int) []int {
 		var out []int
 		for j := range k.Nodes {
-			for _, a := range k.args(&k.Nodes[j]) {
+			for _, a := range k.Operands(&k.Nodes[j]) {
 				if *a == i {
 					out = append(out, j)
 					break
@@ -837,13 +837,13 @@ func (k *Kernel) constsBeforeSiblings() {
 			continue
 		}
 		after := -1
-		for _, a := range k.args(&k.Nodes[rs[0]]) {
+		for _, a := range k.Operands(&k.Nodes[rs[0]]) {
 			if q, ok := pos[*a]; ok && *a != e.I {
 				after = max(after, q)
 			}
 		}
 		first := p
-		for _, a := range k.args(&k.Nodes[ps[0]]) {
+		for _, a := range k.Operands(&k.Nodes[ps[0]]) {
 			if q, ok := pos[*a]; ok && *a != rs[0] && q < first && q > after && depth[q] == 0 {
 				first = q
 			}
@@ -874,7 +874,7 @@ func (k *Kernel) constRuns() {
 		if e.Kind != EntryNode {
 			return false
 		}
-		for _, a := range k.args(&k.Nodes[e.I]) {
+		for _, a := range k.Operands(&k.Nodes[e.I]) {
 			if *a == c {
 				return true
 			}
@@ -908,7 +908,7 @@ func (k *Kernel) constRuns() {
 func (k *Kernel) readCount(i int) int {
 	n := 0
 	for j := range k.Nodes {
-		for _, a := range k.args(&k.Nodes[j]) {
+		for _, a := range k.Operands(&k.Nodes[j]) {
 			if *a == i {
 				n++
 			}
@@ -938,8 +938,8 @@ func (o *orderer) stages(a, b, c int) {
 			break
 		}
 		next := false
-		for j, x := range k.args(&na) {
-			y := *k.args(&nb)[j]
+		for j, x := range k.Operands(&na) {
+			y := *k.Operands(&nb)[j]
 			if *x != y && !o.done[*x] && !o.done[y] && k.Nodes[*x].Op == k.Nodes[y].Op && arity(k.Nodes[*x].Op) > 0 {
 				a, b, next = *x, y, true
 				break

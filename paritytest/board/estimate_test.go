@@ -8,6 +8,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/cost"
 	"github.com/jitllm/jitllm/engine/probe"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -43,9 +44,9 @@ func TestEstimateMatchesTheHost(t *testing.T) {
 	t.Run("cold", func(t *testing.T) { estimateStep(t, d, f, false) })
 }
 
-func estimateStep(t *testing.T, d jit.Device, f *jlm.File, steady bool) {
+func estimateStep(t *testing.T, d cost.Device, f *jlm.File, steady bool) {
 	s := jit.Step{Rows: 1, Page: 64, Keys: keys(t, *boardModel)}
-	ccs, err := jit.Default().EstimateCodes(f, s, func(jit.Part) jit.Device { return d }, steady)
+	ccs, err := cost.EstimateCodes(jit.Default(), f, s, func(jit.Part) cost.Device { return d }, steady)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +64,7 @@ func estimateStep(t *testing.T, d jit.Device, f *jlm.File, steady bool) {
 		name  string
 		est   float64
 		wait  float64
-		cost  jit.Cost
+		cost  cost.Cost
 		ops   []string
 		times []float64
 	}

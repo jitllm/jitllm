@@ -26,7 +26,7 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 	if !ok || n.Work || !covers(s.Kinds, n.Kind) {
 		return nil, false, nil
 	}
-	T, E := n.Loops[c].Trip, n.elements()
+	T, E := n.Loops[c].Trip, n.Elements()
 	slots := s.Slots
 	if slots == 0 {
 		slots = d.Slots
@@ -104,7 +104,7 @@ func splittable(n *Kernel) (c, f, term, st int, ok bool) {
 	}
 	nd := n.Nodes[f]
 	if nd.Op != OpFold || n.Loops[nd.At].Parent != -1 || len(n.foldsOf(nd.At)) != 1 || !n.sumFold(f) ||
-		term >= 0 && n.varies(term, nd.At) {
+		term >= 0 && n.Varies(term, nd.At) {
 		return 0, 0, 0, 0, false
 	}
 	return nd.At, f, term, 0, true

@@ -17,7 +17,7 @@ func (Induction) Name() string { return "induction" }
 func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		var m *Kernel
-		live := k.live()
+		live := k.Live()
 		vec := map[int]int{}
 		for c := range k.Loops {
 			it := k.iterOf(c)
@@ -51,7 +51,7 @@ func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 			f := m.add(Node{Op: OpFold, At: c, Type: ir.I32, B: start})
 			for _, r := range data {
-				for _, a := range m.args(&m.Nodes[r]) {
+				for _, a := range m.Operands(&m.Nodes[r]) {
 					if *a == from {
 						*a = f
 					}
@@ -77,7 +77,7 @@ func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 func (k *Kernel) addresses(i int) bool {
 	for _, nd := range k.Nodes {
 		if nd.Op == OpLoad {
-			for _, a := range k.args(&nd) {
+			for _, a := range k.Operands(&nd) {
 				if k.readsNode(*a, i) {
 					return true
 				}
@@ -108,7 +108,7 @@ func (k *Kernel) readsNode(i, x int) bool {
 	if nd.Op == OpFold {
 		return false
 	}
-	for _, a := range k.args(&nd) {
+	for _, a := range k.Operands(&nd) {
 		if k.readsNode(*a, x) {
 			return true
 		}
@@ -122,7 +122,7 @@ func (k *Kernel) readByLive(i int, live map[int]bool) bool {
 		if !live[j] {
 			continue
 		}
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			if *a == i {
 				return true
 			}
@@ -139,7 +139,7 @@ func (k *Kernel) dataReaders(i int, live map[int]bool) []int {
 		if !live[j] || nd.Op == OpLoad || k.addresses(j) {
 			continue
 		}
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			if *a == i {
 				out = append(out, j)
 				break

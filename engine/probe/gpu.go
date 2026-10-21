@@ -8,6 +8,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/cost"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit_old/gpu/backend"
 	"github.com/jitllm/jitllm/jit_old/gpu/ir"
@@ -40,9 +41,9 @@ import (
 // clock a loaded device runs at. Every measuring kernel is
 // generated IR, compiled for the device in front of it, and timed on the
 // device's clock where the backend has one.
-func GPU(d backend.Device) (jit.Device, error) {
+func GPU(d backend.Device) (cost.Device, error) {
 	const lanes, width = 32, 256
-	out := jit.Device{Kind: jit.DeviceGPU, Slots: d.Slots(), Lanes: lanes}
+	out := cost.Device{Device: jit.Device{Kind: jit.DeviceGPU, Slots: d.Slots(), Lanes: lanes}}
 	if out.Slots == 0 {
 		out.Slots = defaultSlots
 	}
@@ -157,7 +158,7 @@ func GPU(d backend.Device) (jit.Device, error) {
 			return out, err
 		}
 		out.Overlap = max(1, lat*alone/4)
-		out.Caches[0] = jit.Cache{Bytes: l1, Rate: jit.Rate{Total: peak}, Latency: lat, Kernel: true}
+		out.Caches[0] = cost.Cache{Bytes: l1, Rate: cost.Rate{Total: peak}, Latency: lat, Kernel: true}
 	}
 	var plateau []float64
 	for _, pt := range sweep {
@@ -174,22 +175,22 @@ func GPU(d backend.Device) (jit.Device, error) {
 		if err != nil {
 			return out, err
 		}
-		out.Caches[1] = jit.Cache{Bytes: l2, Rate: jit.Rate{Total: rate}, Latency: l2lat}
+		out.Caches[1] = cost.Cache{Bytes: l2, Rate: cost.Rate{Total: rate}, Latency: l2lat}
 	}
 
-	ops := map[jit.Class]gpuOp{
-		jit.ClassFloat: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
+	ops := map[cost.Class]gpuOp{
+		cost.ClassFloat: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
 			return b.Fma(x, b.ConstF32(0.999), b.ConstF32(0.001))
 		}},
-		jit.ClassSpecial: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value { return b.Exp(x) }},
-		jit.ClassInt: {t: ir.U32, per: 2, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
+		cost.ClassSpecial: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value { return b.Exp(x) }},
+		cost.ClassInt: {t: ir.U32, per: 2, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
 			return b.Xor(ir.U32, x, b.Shr(ir.U32, x, b.Const(ir.U32, 1)))
 		}},
-		jit.ClassIndex: {t: ir.U32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
+		cost.ClassIndex: {t: ir.U32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value {
 			return b.Add(ir.U32, b.Mul(ir.U32, x, x), b.Const(ir.U32, 1))
 		}},
-		jit.ClassLanes: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value { return b.ShuffleXor(ir.F32, x, 1) }},
-		jit.ClassGroup: {t: ir.F32, op: groupSum, shared: true},
+		cost.ClassLanes: {t: ir.F32, op: func(b *ir.Builder, _, _, x ir.Value) ir.Value { return b.ShuffleXor(ir.F32, x, 1) }},
+		cost.ClassGroup: {t: ir.F32, op: groupSum, shared: true},
 	}
 	p.warm = loaded
 	defer func() { p.warm = nil }()
@@ -199,7 +200,7 @@ func GPU(d backend.Device) (jit.Device, error) {
 			if threads <= width {
 				trips = 1 << 15
 			}
-			if cl == jit.ClassGroup {
+			if cl == cost.ClassGroup {
 				trips /= 16
 			}
 			k := gpuOpKernel(fmt.Sprintf("probe_op%d_%d_%d_%d", cl, chains, deep, threads), chains, deep, trips, min(width, threads), op)
@@ -207,7 +208,7 @@ func GPU(d backend.Device) (jit.Device, error) {
 			return max(1, op.per) * float64(chains*deep*trips*threads) / secs, err
 		}
 		chains := 8
-		if cl == jit.ClassGroup {
+		if cl == cost.ClassGroup {
 			chains = 1
 		}
 		total, err := rate(chains, 1, threads)
@@ -215,7 +216,7 @@ func GPU(d backend.Device) (jit.Device, error) {
 			return out, err
 		}
 		alone := width
-		if cl != jit.ClassGroup {
+		if cl != cost.ClassGroup {
 			alone = lanes
 		}
 		one, err := rate(chains, 1, alone)
@@ -226,10 +227,10 @@ func GPU(d backend.Device) (jit.Device, error) {
 		if err != nil {
 			return out, err
 		}
-		out.Rates[cl] = jit.Rate{Thread: one / float64(alone), Total: total}
+		out.Rates[cl] = cost.Rate{Thread: one / float64(alone), Total: total}
 		out.Delay[cl] = float64(alone) / chain
 	}
-	out.Delay[jit.ClassMem] = out.Caches[0].Latency
+	out.Delay[cost.ClassMem] = out.Caches[0].Latency
 	return out, nil
 }
 

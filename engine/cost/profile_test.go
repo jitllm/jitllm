@@ -1,4 +1,4 @@
-package probe
+package cost
 
 import (
 	"strings"
@@ -14,12 +14,12 @@ import (
 // node is the estimate made where it was measured, to the bit. A profile
 // of another version is refused.
 func TestProfileTravels(t *testing.T) {
-	d := jit.Device{Kind: jit.DeviceGPU, Slots: 163840, Lanes: 32, Units: 80,
+	d := Device{Device: jit.Device{Kind: jit.DeviceGPU, Slots: 163840, Lanes: 32}, Units: 80,
 		Bandwidth: 869e9, Launch: 2.9e-6, Latency: 2.82e-7, Floor: 7.5e-6, Overlap: 2.2}
-	d.Caches[0] = jit.Cache{Bytes: 96 << 10, Rate: jit.Rate{Total: 5.5e12}, Latency: 2.6e-8, Kernel: true}
-	d.Caches[1] = jit.Cache{Bytes: 6 << 20, Rate: jit.Rate{Total: 3.1e12}, Latency: 1.46e-7, Retain: 0.31, Cycle: 0.05}
+	d.Caches[0] = Cache{Bytes: 96 << 10, Rate: Rate{Total: 5.5e12}, Latency: 2.6e-8, Kernel: true}
+	d.Caches[1] = Cache{Bytes: 6 << 20, Rate: Rate{Total: 3.1e12}, Latency: 1.46e-7, Retain: 0.31, Cycle: 0.05}
 	for cl := range d.Rates {
-		d.Rates[cl] = jit.Rate{Thread: 0.7e9 / float64(cl+1), Total: 7.8e12 / float64(cl+1)}
+		d.Rates[cl] = Rate{Thread: 0.7e9 / float64(cl+1), Total: 7.8e12 / float64(cl+1)}
 		d.Delay[cl] = 2.6e-9 * float64(cl+1)
 	}
 	b, err := Profile{Name: "Tesla V100-SXM2-16GB", API: "ptx", Device: d}.Encode()
@@ -39,11 +39,11 @@ func TestProfileTravels(t *testing.T) {
 	}
 	defer f.Close()
 	s := jit.Step{Rows: 1, Page: 64, Keys: 9}
-	here, err := jit.Default().Estimate(f, s, func(jit.Part) jit.Device { return d })
+	here, err := Estimate(jit.Default(), f, s, func(jit.Part) Device { return d })
 	if err != nil {
 		t.Fatal(err)
 	}
-	there, err := jit.Default().Estimate(f, s, func(jit.Part) jit.Device { return p.Device })
+	there, err := Estimate(jit.Default(), f, s, func(jit.Part) Device { return p.Device })
 	if err != nil {
 		t.Fatal(err)
 	}

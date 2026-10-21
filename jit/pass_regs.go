@@ -119,7 +119,7 @@ func (b *binder86) take(pool []int) int {
 // as a sum does in its own loop.
 func (b *binder86) lives() {
 	k := b.k
-	hs := k.homes()
+	hs := k.Homes()
 	b.def, b.last, b.end = map[int]int{}, map[int]int{}, map[int]int{}
 	for pos, e := range k.Seq {
 		switch e.Kind {
@@ -162,7 +162,7 @@ func (b *binder86) lives() {
 				use(nd.B, pos, k.Loops[nd.At].Parent)
 				continue
 			}
-			for _, a := range k.args(&nd) {
+			for _, a := range k.Operands(&nd) {
 				use(*a, pos, hs[e.I])
 			}
 		case EntryStore:
@@ -189,7 +189,7 @@ func (b *binder86) gprs() error {
 		}
 	}
 	direct := map[int]bool{}
-	words := k.vectorWords()
+	words := k.VectorWords()
 	for _, e := range k.Seq {
 		if e.Kind != EntryNode {
 			continue
@@ -372,7 +372,7 @@ func (b *binder86) counterFree(r, c int) bool {
 func (b *binder86) uses(i int) int {
 	n := 0
 	for _, nd := range b.k.Nodes {
-		for _, a := range b.k.args(&nd) {
+		for _, a := range b.k.Operands(&nd) {
 			if *a == i {
 				n++
 			}
@@ -410,14 +410,14 @@ func (k *Kernel) needsVector(i int) bool {
 	if nd.Type == ir.F32 || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandWeight {
 		return nd.Op != OpConst || nd.Imm == 0 && k.zeroOperand(i)
 	}
-	return k.vectorWords()[i]
+	return k.VectorWords()[i]
 }
 
-// vectorWords is the words held in vector registers: the halves a float is
+// VectorWords is the words held in vector registers: the halves a float is
 // narrowed to, the integers a float is rounded or converted to or from and
 // a float's bits, masks, what is made from them, what they are made of, and
 // the constants they are made with.
-func (k *Kernel) vectorWords() map[int]bool {
+func (k *Kernel) VectorWords() map[int]bool {
 	out := map[int]bool{}
 	data := func(i int) bool {
 		nd := k.Nodes[i]
@@ -449,7 +449,7 @@ func (k *Kernel) vectorWords() map[int]bool {
 				if nd.Op == OpLoad || nd.Op == OpFold {
 					continue
 				}
-				for _, a := range k.args(&nd) {
+				for _, a := range k.Operands(&nd) {
 					if data(*a) && k.Nodes[*a].Op != OpConst && !out[*a] && k.Nodes[*a].Type != ir.Pred {
 						out[*a], changed = true, true
 					}
@@ -464,7 +464,7 @@ func (k *Kernel) vectorWords() map[int]bool {
 				}
 				v := nd.Op == OpHalf || nd.Op == OpRoundI32 || (nd.Op == OpLess || nd.Op == OpEq) && (k.Nodes[nd.A].Type == ir.F32 || out[nd.A] || out[nd.B])
 				if !v && (nd.Op == OpAnd || nd.Op == OpGtW || nd.Op == OpAndNot || nd.Op == OpXor || nd.Op == OpShr || nd.Op == OpShl || nd.Op == OpSar || (nd.Type == ir.I32 || nd.Type == ir.U32) && nd.Op != OpConst && nd.Op != OpLoad) {
-					for _, a := range k.args(&nd) {
+					for _, a := range k.Operands(&nd) {
 						v = v || out[*a]
 					}
 				}
@@ -483,7 +483,7 @@ func (k *Kernel) vectorWords() map[int]bool {
 		if !out[i] || nd.Op == OpLoad || nd.Op == OpFold {
 			continue
 		}
-		for x, a := range k.args(&nd) {
+		for x, a := range k.Operands(&nd) {
 			if k.Nodes[*a].Op == OpConst && k.Nodes[*a].Type != ir.F32 && !(x == 1 && (nd.Op == OpShl || nd.Op == OpShr || nd.Op == OpSar)) {
 				out[*a] = true
 			}
@@ -526,7 +526,7 @@ func (b *binder86) vectors() error {
 	}
 	shared := map[int]int{}
 	next := b.p.Scalars - 1
-	hs0 := k.homes()
+	hs0 := k.Homes()
 	kept := map[int]map[int]bool{}
 	for i, nd := range k.Nodes {
 		if nd.Hint == 0 || i >= len(hs0) {
@@ -604,7 +604,7 @@ func (b *binder86) vectors() error {
 		}
 		return -1
 	}
-	hs := k.homes()
+	hs := k.Homes()
 	give := func(i, r int) error {
 		if r < 0 {
 			return fmt.Errorf("more floats live at once than the vector registers, at node %d (%s)", i, k.Nodes[i].Op)
@@ -755,7 +755,7 @@ func (b *binder86) vectors() error {
 		}
 		if nd.Op == OpSelect || nd.Op == OpZip {
 			var held []int
-			for _, a := range k.args(&nd) {
+			for _, a := range k.Operands(&nd) {
 				if r := k.Nodes[*a].Reg - 1; r >= 0 && k.needsVector(*a) && !busy[r] {
 					busy[r] = true
 					held = append(held, r)
@@ -795,7 +795,7 @@ func (b *binder86) vectors() error {
 // zerosPerLoop makes a float zero read in several loops in each of them,
 // where it is first read there.
 func (k *Kernel) zerosPerLoop() {
-	hs := k.homes()
+	hs := k.Homes()
 	for z := range k.Nodes {
 		if !k.isZero(z) || !k.needsVector(z) {
 			continue
@@ -806,7 +806,7 @@ func (k *Kernel) zerosPerLoop() {
 			if e.Kind != EntryNode || e.I >= len(hs) || hs[e.I] < 0 {
 				continue
 			}
-			for _, a := range k.args(&k.Nodes[e.I]) {
+			for _, a := range k.Operands(&k.Nodes[e.I]) {
 				if *a != z {
 					continue
 				}
@@ -873,7 +873,7 @@ func (k *Kernel) copiesAside() {
 func (k *Kernel) entryArgs(e Entry) []*int {
 	switch e.Kind {
 	case EntryNode:
-		return k.args(&k.Nodes[e.I])
+		return k.Operands(&k.Nodes[e.I])
 	case EntryStore:
 		return k.storeArgs(&k.Stores[e.I])
 	}
@@ -924,7 +924,7 @@ func (b *binder86) scalar(i int, hs []int, next *int) int {
 		return -1
 	}
 	for j, r := range k.Nodes {
-		for _, a := range k.args(&r) {
+		for _, a := range k.Operands(&r) {
 			if *a == i && (r.Op == OpFold || j < len(hs) && hs[j] >= 0) {
 				return -1
 			}
@@ -982,7 +982,7 @@ func (k *Kernel) copyRegs(cp []int, splats int) error {
 // t's operand holds t's own register, if that operand is hinted; 0 where
 // there is none.
 func (k *Kernel) operandReg(t, i int) int {
-	ta, ia := k.args(&k.Nodes[t]), k.args(&k.Nodes[i])
+	ta, ia := k.Operands(&k.Nodes[t]), k.Operands(&k.Nodes[i])
 	for x := range ta {
 		if x < len(ia) && k.Nodes[*ta[x]].Reg == k.Nodes[t].Reg && k.Nodes[*ia[x]].Hint > 0 {
 			return k.Nodes[*ia[x]].Hint
@@ -995,7 +995,7 @@ func (k *Kernel) operandReg(t, i int) int {
 // the sum it is added into; 0 for the rest.
 func (k *Kernel) chains() map[int]int {
 	out := map[int]int{}
-	hs := k.homes()
+	hs := k.Homes()
 	for c, l := range k.Loops {
 		folds := k.foldsOf(c)
 		if l.Copies < 2 || len(folds) < 2 || l.once() {
@@ -1009,7 +1009,7 @@ func (k *Kernel) chains() map[int]int {
 					return
 				}
 				out[i] = j + 1
-				for _, a := range k.args(&nd) {
+				for _, a := range k.Operands(&nd) {
 					walk(*a)
 				}
 			}
@@ -1029,14 +1029,14 @@ func (k *Kernel) rematerialize(moved map[int]bool) bool {
 			pos[e.I] = p
 		}
 	}
-	hs := k.homes()
+	hs := k.Homes()
 	readers := func(i int) []int {
 		var out []int
 		for j, x := range k.Nodes {
 			if _, in := pos[j]; !in {
 				continue
 			}
-			for _, a := range k.args(&x) {
+			for _, a := range k.Operands(&x) {
 				if *a == i {
 					out = append(out, j)
 				}
@@ -1109,7 +1109,7 @@ func (k *Kernel) reload(best int, moved map[int]bool) {
 		if _, in := pos[j]; !in {
 			continue
 		}
-		for _, a := range k.args(&x) {
+		for _, a := range k.Operands(&x) {
 			if *a == best {
 				rs = append(rs, j)
 				break
@@ -1118,11 +1118,11 @@ func (k *Kernel) reload(best int, moved map[int]bool) {
 	}
 	moved[best] = true
 	place := map[int]int{}
-	words := k.vectorWords()
+	words := k.VectorWords()
 	for _, r := range rs {
 		c := k.add(k.Nodes[best])
 		moved[c] = true
-		for _, a := range k.args(&k.Nodes[r]) {
+		for _, a := range k.Operands(&k.Nodes[r]) {
 			if *a == best {
 				*a = c
 			}
@@ -1148,12 +1148,12 @@ func (k *Kernel) reload(best int, moved map[int]bool) {
 
 // readInLoop reports whether a node homed in a loop reads node i.
 func (k *Kernel) readInLoop(i int) bool {
-	hs := k.homes()
+	hs := k.Homes()
 	for j := range k.Nodes {
 		if j >= len(hs) || hs[j] < 0 {
 			continue
 		}
-		for _, a := range k.args(&k.Nodes[j]) {
+		for _, a := range k.Operands(&k.Nodes[j]) {
 			if *a == i {
 				return true
 			}
@@ -1199,7 +1199,7 @@ func (k *Kernel) lateWords() {
 				if nd.Op == OpLoad && base(nd.Buf) {
 					return p
 				}
-				for _, a := range k.args(&nd) {
+				for _, a := range k.Operands(&nd) {
 					if *a == i {
 						return p
 					}
@@ -1298,11 +1298,11 @@ func (k *Kernel) residents(res map[int]int, moved map[int]bool) {
 			k.reload(e.I, moved)
 		}
 	}
-	hs := k.homes()
+	hs := k.Homes()
 	for _, l := range loads {
 		var outside []int
 		for j, x := range k.Nodes {
-			for _, a := range k.args(&x) {
+			for _, a := range k.Operands(&x) {
 				if *a == l && j < len(hs) && hs[j] < 0 && x.Op != OpFold {
 					outside = append(outside, j)
 					break
@@ -1321,7 +1321,7 @@ func (k *Kernel) residents(res map[int]int, moved map[int]bool) {
 			}
 		}
 		for _, j := range outside {
-			for _, a := range k.args(&k.Nodes[j]) {
+			for _, a := range k.Operands(&k.Nodes[j]) {
 				if *a == l {
 					*a = c
 				}
@@ -1338,7 +1338,7 @@ func (k *Kernel) zeroOperand(i int) bool {
 		if nd.Op == OpFold {
 			continue
 		}
-		for _, a := range k.args(&nd) {
+		for _, a := range k.Operands(&nd) {
 			if *a == i && j != i {
 				return true
 			}
