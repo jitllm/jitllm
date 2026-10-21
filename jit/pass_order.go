@@ -209,7 +209,8 @@ func (o *orderer) node(i int) {
 }
 
 // need emits node i and what it reads, within scope c: a value of an inner
-// loop emits that loop.
+// loop emits that loop; an operation's twin, the same operation on the same
+// operands with another immediate, right after it.
 func (o *orderer) need(i, c int) {
 	if o.done[i] {
 		return
@@ -254,6 +255,11 @@ func (o *orderer) need(i, c int) {
 		o.beforeShare(i, c)
 	}
 	o.node(i)
+	for j, x := range k.Nodes {
+		if j != i && !o.done[j] && x.Op == nd.Op && x.A == nd.A && x.B == nd.B && x.C == nd.C && x.Imm != nd.Imm && arity(x.Op) == 2 && o.home[j] == c {
+			o.node(j)
+		}
+	}
 }
 
 // pending is the depths evalArgs orders operands by, a value already made

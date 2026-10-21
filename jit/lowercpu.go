@@ -9,14 +9,17 @@ import (
 
 // cpuLowering lowers an ordered, bound kernel to x86 through jit/x86: each
 // entry of its sequence the instructions that do it, the call's arguments
-// addressed from RDI.
-type cpuLowering struct{}
+// addressed from RDI. Shuffles, where set, interleaves within lanes by a
+// shuffle and a permute rather than an unpack.
+type cpuLowering struct {
+	Shuffles bool
+}
 
-func (cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
+func (l cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 	if k.Seq == nil {
 		return Lowered{}, fmt.Errorf("the x86 lowering of %s: the kernel is not ordered", k.Name)
 	}
-	e := &x86Lowerer{k: k, a: &x86.Buf{}, top: map[int]int{}, end: map[int]int{}, preset: map[int]bool{}, home: k.homes(), words: k.vectorWords()}
+	e := &x86Lowerer{k: k, a: &x86.Buf{}, top: map[int]int{}, end: map[int]int{}, preset: map[int]bool{}, home: k.homes(), words: k.vectorWords(), shuffles: l.Shuffles}
 	for _, en := range k.Seq {
 		if e.err != nil {
 			break
@@ -51,8 +54,9 @@ type x86Lowerer struct {
 	a        *x86.Buf
 	top, end map[int]int
 	// preset is the loops whose counter was set as an earlier loop began.
-	preset map[int]bool
-	err    error
+	preset   map[int]bool
+	err      error
+	shuffles bool
 }
 
 func (e *x86Lowerer) fail(format string, args ...any) {
@@ -352,6 +356,18 @@ func (e *x86Lowerer) node(i int) {
 		a.VUNPCKLPS(t, e.reg(nd.A), e.reg(nd.B))
 		a.VUNPCKHPS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 		a.VPERM2F128(e.reg(i), t, e.reg(i), byte(0x20+0x11*nd.Imm))
+	case OpUnpack:
+		switch {
+		case e.shuffles:
+			a.VSHUFPS(e.reg(i), e.reg(nd.A), e.reg(nd.B), byte(0x44+0xAA*nd.Imm))
+			a.VPERMILPS(e.reg(i), e.reg(i), 0xD8)
+		case nd.Imm == 0:
+			a.VUNPCKLPS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+		default:
+			a.VUNPCKHPS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+		}
+	case OpUpper:
+		a.VEXTRACTF128(e.reg(i), e.reg(nd.A), 1)
 	case OpRoundI32:
 		a.VCVTPS2DQ(e.reg(i), e.reg(nd.A))
 	case OpCvtI32:
@@ -429,6 +445,10 @@ func (e *x86Lowerer) store(i int) {
 	wide := e.lanes(s.At) > 0
 	if v := e.k.Nodes[s.Val]; v.Op == OpFold && e.k.Loops[v.At].Wide > 0 {
 		wide = true
+	}
+	if s.Narrow {
+		e.a.VMOVDQUStorex(m, e.reg(s.Val))
+		return
 	}
 	if e.k.Bufs[s.Buf].Half {
 		if wide {

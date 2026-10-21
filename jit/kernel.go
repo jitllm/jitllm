@@ -257,6 +257,11 @@ const (
 	// OpZip is A's and B's lanes alternating, A first: the low half of the
 	// pairs where Imm is 0, the high where 1.
 	OpZip
+	// OpUnpack is, in each 128-bit lane, A's and B's lanes alternating, A
+	// first: of the lane's low halves where Imm is 0, its high where 1.
+	OpUnpack
+	// OpUpper is A's upper 128 bits in its lower.
+	OpUpper
 	// OpRoundI32 is float A rounded to the nearest integer, ties to even.
 	OpRoundI32
 	// OpSpan is, for a call that runs one span of a range's positions
@@ -332,6 +337,8 @@ type Store struct {
 	// Copy, where a pairing set it, is the head of the pair a copied store
 	// is for.
 	Copy int
+	// Narrow stores the value's low 128 bits.
+	Narrow bool
 }
 
 func (n *Kernel) add(nd Node) int {

@@ -70,7 +70,7 @@ func TestComposeIR(t *testing.T) {
 			t.Logf("order %v", k.topOrder())
 			if *composeHost {
 				t.Logf("seq %v", k.Seq)
-				l, err := cpuLowering{}.Lower(k, d)
+				l, err := r.Lowerings[DeviceCPU].Lower(k, d)
 				if err != nil {
 					t.Log(err)
 				} else {

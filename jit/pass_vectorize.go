@@ -30,6 +30,9 @@ type Vectorize struct {
 	// Keep keeps a vector loop of fixed trips at the top of its kernel a
 	// loop, counted at run time, though it makes one trip.
 	Keep bool
+	// Quads stores a pair's zipped vectors as the 128-bit lanes of the two
+	// in-lane interleaves, in order, with no exchange across lanes.
+	Quads bool
 }
 
 func (Vectorize) Name() string { return "vectorize" }
@@ -45,7 +48,7 @@ func (p Vectorize) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				continue
 			}
 			if m.vectorizable(c) {
-				m.vectorize(c, p.Lanes, p.Carry)
+				m.vectorize(c, p.Lanes, p.Carry, p.Quads)
 				if l := &m.Loops[c]; p.Keep && l.Parent < 0 && l.Count == 0 && l.Trip == 1 {
 					l.Kept = true
 				}
@@ -119,7 +122,7 @@ func (k *Kernel) consecutive(b, ix int, ax []int, it, c int) bool {
 	return nd.Op == OpAdd && (nd.B == it && !k.varies(nd.A, c) || nd.A == it && !k.varies(nd.B, c))
 }
 
-func (k *Kernel) vectorize(c, L int, carry []int) {
+func (k *Kernel) vectorize(c, L int, carry []int, quads bool) {
 	l := k.Loops[c]
 	U := ir.U32
 	shift := bits.TrailingZeros(uint(L))
@@ -213,7 +216,20 @@ func (k *Kernel) vectorize(c, L int, carry []int) {
 		stores = append(stores, n)
 	}
 	k.Stores = append(k.Stores[:last+1:last+1], append(stores, k.Stores[last+1:]...)...)
-	if pair, ok := k.pairStores(c); ok {
+	if pair, ok := k.pairStores(c); ok && quads && L == 8 {
+		a, b := k.Stores[pair[0]], k.Stores[pair[1]]
+		u := k.add(Node{Op: OpUnpack, Type: ir.F32, A: a.Val, B: b.Val})
+		v := k.add(Node{Op: OpUnpack, Type: ir.F32, A: a.Val, B: b.Val, Imm: 1})
+		at := func(w int) int { return k.bin(OpAdd, U, a.Ix, k.u32(w)) }
+		q := []Store{
+			{Buf: a.Buf, At: c, Ix: a.Ix, Val: u, Narrow: true},
+			{Buf: a.Buf, At: c, Ix: at(4), Val: v, Narrow: true},
+			{Buf: a.Buf, At: c, Ix: at(8), Val: k.add(Node{Op: OpUpper, Type: ir.F32, A: u}), Narrow: true},
+			{Buf: a.Buf, At: c, Ix: at(12), Val: k.add(Node{Op: OpUpper, Type: ir.F32, A: v}), Narrow: true},
+		}
+		lo, hi := min(pair[0], pair[1]), max(pair[0], pair[1])
+		k.Stores = append(k.Stores[:lo:lo], append(append(q, k.Stores[lo+1:hi]...), k.Stores[hi+1:]...)...)
+	} else if ok {
 		a, b := k.Stores[pair[0]], k.Stores[pair[1]]
 		lo := Store{Buf: a.Buf, At: c, Ix: a.Ix, Val: k.add(Node{Op: OpZip, Type: ir.F32, A: a.Val, B: b.Val})}
 		hi := Store{Buf: a.Buf, At: c, Ix: k.bin(OpAdd, U, a.Ix, k.u32(L)), Val: k.add(Node{Op: OpZip, Type: ir.F32, A: a.Val, B: b.Val, Imm: 1})}

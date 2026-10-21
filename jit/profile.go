@@ -64,7 +64,7 @@ func cpuProfile() Profile {
 		FMA{},
 		FirstTerm{},
 		Jam{Lanes: 8, Sums: 8, Walk: true, Spread: []int{15, 13}, Rows: 14},
-		Vectorize{Lanes: 8, Pairs: [5]int{0, 2, 3, 4, 5}, Carry: []int{9, 10, 8}, Keep: true},
+		Vectorize{Lanes: 8, Pairs: [5]int{0, 2, 3, 4, 5}, Carry: []int{9, 10, 8}, Keep: true, Quads: true},
 		InPlace{},
 		Unroll{Vectors: 4},
 		Chains{N: 4},
