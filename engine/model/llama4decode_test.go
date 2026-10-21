@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestSynthLlama4Q8DecodeOnDevice holds the device's DECODE mixture on the

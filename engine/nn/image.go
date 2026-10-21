@@ -5,10 +5,10 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
-// The image path on generated code (jit/cpu/imgproc_const.go has every
+// The image path on generated code (jit_old/cpu/imgproc_const.go has every
 // kernel's contract): the decoded picture's rows into the processors'
 // layouts, the antialiased resize's two passes, the normalisation's table
 // lookup, the strided copies of the patch gather and the bilinear path, and
@@ -250,7 +250,7 @@ func Copy32JIT(dst []float32, dRow, dEl int, src []float32, sRow, sEl, rows, n i
 }
 
 // PixelRowJIT converts one row of n pixels of a decoded picture
-// (jit/cpu/imgproc_const.go's PixelRow): src is the row in format f (the luma
+// (jit_old/cpu/imgproc_const.go's PixelRow): src is the row in format f (the luma
 // for PixYCbCr, whose cb and cr rows start at the chroma sample of the row's
 // first x, x0, sub its horizontal chroma shift). PixOver8 writes 3n bytes to
 // out8; PixPlanes writes n floats to each of planes.

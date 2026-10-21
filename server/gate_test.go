@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
 )
 
 // A gate records the sessions running on a device and never holds one back:

@@ -58,8 +58,8 @@ relocation or paging.
 
 | Directory | Contents |
 |---|---|
-| [`jit/cpu`](../jit/cpu/) | the x86-64 and ARM64 code generators |
-| [`jit/gpu`](../jit/gpu/) | the kernel IR, its PTX/SPIR-V/MSL lowerings, the backends and the device tier |
+| [`jit_old/cpu`](../jit_old/cpu/) | the x86-64 and ARM64 code generators |
+| [`jit_old/gpu`](../jit_old/gpu/) | the kernel IR, its PTX/SPIR-V/MSL lowerings, the backends and the device tier |
 | [`engine/model`](../engine/model/) | the graphs, paging, placement and sampling |
 | [`format/jlm`](../format/jlm/) | the container and its pager |
 | [`convert`](../convert/) | GGUF and safetensors to `.jlm`, the catalog and the Hugging Face client |

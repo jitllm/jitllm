@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // voltaLane is where lane l sits in ir.MMAVolta(): its quad-pair q, the A row /

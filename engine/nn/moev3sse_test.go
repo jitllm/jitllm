@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // TestMoERouteJITOnTheForcedSSETier runs the whole DeepSeek-V3 router -- the
@@ -19,7 +19,7 @@ import (
 func TestMoERouteJITOnTheForcedSSETier(t *testing.T) {
 	skipOnAnSSEHost(t, "that the router's two caches are keyed by tier; the SSE router "+
 		"itself is held to the oracle here by TestMoERouteJITMatchesTheOracle and "+
-		"jit/cpu's TestMoERouteMatchesTheOracle")
+		"jit_old/cpu's TestMoERouteMatchesTheOracle")
 	// Warm both caches on the host tier first.
 	for _, cfg := range moeV3NNCfgs() {
 		r := NewMoERouteFor(cfg.n, cfg.k, cfg.g)

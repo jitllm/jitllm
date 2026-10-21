@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 	"github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -291,7 +291,7 @@ func TestMoERouteJITRunsTheGatingItWasAskedFor(t *testing.T) {
 
 // TestMoERouteJITIsTheOldRouterAtItsDefault: a softmax gate with no bias, no
 // groups and no scale must give MoETopK32JIT's answer bit for bit on the same
-// probabilities. It is the behavioural half of jit/cpu's byte-identity gate,
+// probabilities. It is the behavioural half of jit_old/cpu's byte-identity gate,
 // taken through the entry point engine/model/moe.go will keep using.
 func TestMoERouteJITIsTheOldRouterAtItsDefault(t *testing.T) {
 	const n, k = 64, 6
@@ -405,9 +405,9 @@ func TestRouterFloorMatchesTheKernel(t *testing.T) {
 		v    float32
 	}{
 		{"internal/oracle", oracle.MoESumFloorForTest},
-		{"jit/gpu/kernels", kernelMoESumFloorForTest},
-		{"jit/cpu constant", cpu.MoESumFloor()},
-		{"jit/cpu block word", host[wordsBefore]},
+		{"jit_old/gpu/kernels", kernelMoESumFloorForTest},
+		{"jit_old/cpu constant", cpu.MoESumFloor()},
+		{"jit_old/cpu block word", host[wordsBefore]},
 	}
 	for _, g := range got[1:] {
 		if g.v != got[0].v {
@@ -421,6 +421,6 @@ func TestRouterFloorMatchesTheKernel(t *testing.T) {
 	t.Logf("all four agree at %v", got[0].v)
 }
 
-// kernelMoESumFloorForTest is jit/gpu/kernels' constant, named here so the
+// kernelMoESumFloorForTest is jit_old/gpu/kernels' constant, named here so the
 // comparison above reads as one line rather than an import in the middle of it.
 const kernelMoESumFloorForTest = mainkernels.MoESumFloor

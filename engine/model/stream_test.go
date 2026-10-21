@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestStreamedExpertBankMatchesTheResidentOne compares a mixture's routed bank

@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 
 	"github.com/jitllm/jitllm/format/jlm"
 

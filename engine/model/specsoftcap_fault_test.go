@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestSpecSoftcapGateDiscriminates runs TestSpecOverAFinalSoftcap's device

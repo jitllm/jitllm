@@ -3,7 +3,7 @@ package mainkernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // SubgroupProbeOuts is how many t-typed results SubgroupProbe writes per

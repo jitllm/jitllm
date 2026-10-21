@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestMLAOnEveryDevice runs Multi-head Latent Attention on the device, end to

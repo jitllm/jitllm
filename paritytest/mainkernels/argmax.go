@@ -3,14 +3,14 @@ package mainkernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // ArgmaxGroup is Argmax's one workgroup.
 const ArgmaxGroup = 1024
 
 // Argmax writes the index of the largest of n floats to pOut[0], the lowest
-// index winning a tie -- the host's rule (jit/cpu/argmax.go), so a greedy
+// index winning a tie -- the host's rule (jit_old/cpu/argmax.go), so a greedy
 // decode takes the same token on either side of the bus.
 //
 // It keeps greedy decode from bringing the logits home: the next token is one

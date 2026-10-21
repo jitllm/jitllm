@@ -4,7 +4,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit_old/gpu/kernels"
 )
 
 // A File's weight memory -- its page frames and its dense region -- lives off

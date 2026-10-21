@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestSynthLlama4OnEveryDevice runs the Llama 4 fixture with every block and the

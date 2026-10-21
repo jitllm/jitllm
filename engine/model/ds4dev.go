@@ -5,7 +5,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// DeepSeek V4 on a device (ds4.go is the graph, jit/gpu/tier/ds4.go its
+// DeepSeek V4 on a device (ds4.go is the graph, jit_old/gpu/tier/ds4.go its
 // device side): the plan the blocks are offered with, the weights, the token
 // ids a hash block routes by, and the entries that travel with a block's rows.
 

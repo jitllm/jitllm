@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // The gates of docs/design/vision-as-blocks.md: a picture runs through the

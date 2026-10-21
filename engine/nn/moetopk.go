@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit_old/cpu"
+	"github.com/jitllm/jitllm/jit_old/gpu/kernels"
 )
 
 // The mixture-of-experts router, generated. Like the greedy argmax it is a
@@ -140,7 +140,7 @@ type MoEGate struct {
 	// relative 2*SparseMixer of it (its jitter_eps), not renormalised. It runs
 	// the plain top-k kernel at Norm off and then cpu's SparseMixer weights
 	// kernel; the gating, bias, groups, renormalisation and scale fields must
-	// all be off (jit/cpu/sparsemixer_const.go has the contract).
+	// all be off (jit_old/cpu/sparsemixer_const.go has the contract).
 	SparseMixer float32
 }
 

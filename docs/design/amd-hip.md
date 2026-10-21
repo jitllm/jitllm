@@ -1,7 +1,7 @@
 # A native AMD backend: HIP through goffi, kernels from the IR
 
 **Status: built and gated offline; not yet run on an AMD card.** The binding
-(`jit/gpu/hip`), the lowering (`jit/gpu/amdgpu`), the device (`backend.hipDev`)
+(`jit_old/gpu/hip`), the lowering (`jit_old/gpu/amdgpu`), the device (`backend.hipDev`)
 and the `hip:N` naming through the tier, the CLI and the server are in. Every
 kernel `lowertest` registers (125) compiles to a code object for gfx90a, gfx942,
 gfx1030, gfx1100 and gfx1201 through comgr with no GPU present, under comgr 3
@@ -25,10 +25,10 @@ Two more, stated by the user and binding:
    HIP calls (`hipGetDeviceCount`, `hipGetDevicePropertiesR0600` for
    `gcnArchName`, `hipDeviceGetAttribute`, `hipDeviceGetUuid`). Gate:
    `hip.TestNoExternalCommands` refuses an `os/exec` import in every
-   production file under `jit/`, `engine/`, `format/`, `tok/` and `convert/`
+   production file under `jit_old/`, `engine/`, `format/`, `tok/` and `convert/`
    (the commands under `cmd/`, `ui/` and `scripts/` are programs, not the
    engine).
-2. **ROCm is discovered and loaded at run time**, as `jit/gpu/cuda` finds
+2. **ROCm is discovered and loaded at run time**, as `jit_old/gpu/cuda` finds
    libcuda. Sonames first (`libamdhip64.so.7`, `.so.6`, `.so`;
    `libamd_comgr.so.3`, `.so.2`, `.so`), through the loader's own search path,
    then `/opt/rocm/lib`, every `/opt/rocm-*/lib` newest version first, and
@@ -56,7 +56,7 @@ There were two ways to hand comgr something to turn into a code object:
 
 **LLVM IR, as text.** It is what PTX is to ptxas: a virtual-register assembly
 the vendor's back end owns instruction selection, register allocation and
-scheduling for -- exactly the division `jit/gpu/ir`'s package comment draws ("the
+scheduling for -- exactly the division `jit_old/gpu/ir`'s package comment draws ("the
 device driver owns instruction selection, register allocation and scheduling on
 every target"). Writing GCN assembly would mean writing that back end, four
 times over (gfx9, gfx10, gfx11, gfx12 differ in encodings, wave size and hazards).
@@ -262,7 +262,7 @@ The offline gate needs only comgr. ROCm's packages extract without root:
 
     curl -O https://repo.radeon.com/rocm/apt/6.4.1/pool/main/c/comgr/comgr_3.0.0.60401-83~24.04_amd64.deb
     dpkg-deb -x comgr_*.deb rocm
-    JITLLM_ROCM=$PWD/rocm/opt/rocm-6.4.1/lib ./scripts/cap 8G -- go test ./jit/gpu/lowertest -run AMDGPU
+    JITLLM_ROCM=$PWD/rocm/opt/rocm-6.4.1/lib ./scripts/cap 8G -- go test ./jit_old/gpu/lowertest -run AMDGPU
 
 ## Running the gates on a host with an AMD card
 
@@ -272,7 +272,7 @@ installed (`/opt/rocm`). From the repo root on that host:
 
     JITLLM_MODELS=/path/to/models ./scripts/hip-gates.sh
 
-which runs, under `scripts/cap`, the offline gates, `jit/gpu/backend`'s kernel
+which runs, under `scripts/cap`, the offline gates, `jit_old/gpu/backend`'s kernel
 gates with `-run` over every oracle comparison, and the model gates
 (`TestEveryModelRunsGenerated`, `TestGreedyMatchesLlamaCpp`,
 `TestBatchMatchesForward`, `TestDecodeDoesNotAllocate`, the relocation and paging

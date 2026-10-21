@@ -3,7 +3,7 @@ package mainkernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // The batched mixture's grouping, on the device. A chunk's router picks k

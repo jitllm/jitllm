@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // TestLnMatchesTheDefinition holds Ln32JIT to math.Log at every ragged width

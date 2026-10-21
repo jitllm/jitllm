@@ -1,6 +1,6 @@
 package maintier
 
-import "github.com/jitllm/jitllm/jit/gpu/backend"
+import "github.com/jitllm/jitllm/jit_old/gpu/backend"
 
 // A hybrid's restore points on the card: the prefix cache keeps a linear
 // block's recurrent summary at the positions a prompt may resume from

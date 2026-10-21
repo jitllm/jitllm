@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // embedDevCos is how close a device's embedding must sit to the host's: the

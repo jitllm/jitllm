@@ -10,10 +10,10 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
-// arm64 without FEAT_DotProd at the model level (jit/cpu/sdotemu.go): a
+// arm64 without FEAT_DotProd at the model level (jit_old/cpu/sdotemu.go): a
 // Cortex-A53/A57/A72/A73 widens every SDOT to SMULL/SMLAL/ADDP/SADALP. Each gate
 // forces the probe before a model opens (nn.NewJIT emits at construction) and
 // asserts the widened kernels were actually emitted.

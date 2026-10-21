@@ -23,7 +23,7 @@ dev/probe/gpu/probe
 /jpt-gpu
 /ptxdump
 /mvbench
-/jit/gpu/mvbench
+/jit_old/gpu/mvbench
 /tui/tui
 
 # Containers are derived from their GGUF by `jitllm convert` (and by the test
@@ -44,8 +44,8 @@ testdata/testdata
 # -- because the rules here were anchored to the root (/mvbench) and the
 # binaries sat beside their source. These match anywhere, and the source of
 # each lives in dev/tools/<name>/ rather than next to its own output.
-/jit/gpu/jpt-gpu
-/jit/gpu/jitllm-gpu
+/jit_old/gpu/jpt-gpu
+/jit_old/gpu/jitllm-gpu
 /dev/probe/gpu/jitllmprobe
 /ui/shots
 

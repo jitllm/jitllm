@@ -1,15 +1,15 @@
 # Device KV paging
 
-**Status: the device KV is paged** (jit/gpu/tier/pagedattn.go): decode,
+**Status: the device KV is paged** (jit_old/gpu/tier/pagedattn.go): decode,
 prefill chunks and LayersRows batches read and write pages on CUDA, Vulkan and
 Metal. A prefill chunk runs the paged prefill kernels
-(jit/gpu/tier/pagedprefill.go); a ragged batch step reads through paged
+(jit_old/gpu/tier/pagedprefill.go); a ragged batch step reads through paged
 FlashDecodeKV. MLA's latent cache is paged too: one row-major latent row a
 position, float32, the value its first KVLoraRank floats; decode runs the
 staged kernels at that value width, a prompt the FMA or m8n8k4 prefill pair
 (neither flash form nor the m16n8k16 scores reads a latent row). A history
 past the pool sends its oldest pages home and streams them back for each
-token's attention (jit/gpu/tier/kvevict.go, pagedstream.go; "Errors and
+token's attention (jit_old/gpu/tier/kvevict.go, pagedstream.go; "Errors and
 eviction" below). The contiguous cache it replaced is gone, with
 the capacity machinery that managed it (per-session capacities, parked
 scratches, regrowth); only a vision tower keeps a contiguous buffer, for
@@ -222,7 +222,7 @@ plane from the staged path, and what eviction's streaming (below) runs on.
 rows write into it and a zero-length row reads only it, so nothing reads memory
 nobody wrote (RULE 13) and every read is finite.
 
-**What building the kernels settled** (jit/gpu/kernels/paged.go, pagedstaged.go):
+**What building the kernels settled** (jit_old/gpu/kernels/paged.go, pagedstaged.go):
 
 - The window is the descriptor's `keyStart` and nothing else: a paged shape
   refuses a baked Window, Chunked or KStride, so there is one source of truth.
@@ -381,7 +381,7 @@ the first device runs.
   completed. Sessions step on a device at once (slice 6), so a released page
   is fenced at the ticket the next submission takes and freed once every
   submission holding that ticket or an earlier one has completed -- at once
-  when none is in flight (`jit/gpu/tier/inflight.go`). A page sent home, a
+  when none is in flight (`jit_old/gpu/tier/inflight.go`). A page sent home, a
   pool grown, shrunk or compacted, and every table renumbering wait for the
   submissions in flight first (quiesce); a call whose history has pages at
   home streams them through free pages, and so runs alone on the device.
@@ -490,7 +490,7 @@ measured against is deleted.
 1. **Accounting and errors.** Scratch charged; reservation before a submission,
    publication after; typed errors. Gate: injected allocation failures leave
    history, placement and counters as they were.
-2. **Paged kernels**, behind the table contract above, in jit/gpu/kernels.
+2. **Paged kernels**, behind the table contract above, in jit_old/gpu/kernels.
    Gate: shuffled pages, page edges, poisoned tails, MLA, f16 V, windows,
    sinks, on every backend, asserting the paged kernel ran.
 3. **Tier integration**: the pool, page tables, growth by append; delete the

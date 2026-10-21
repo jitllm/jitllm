@@ -43,7 +43,7 @@ func NextUse(li, cur, lo, hi int) int {
 //
 // The scan is ordered rather than over a map, so the choice never depends on
 // hash order. Inside [lo, hi) distances are distinct; blocks outside tie at
-// Never, and jit/gpu/tier breaks those ties on the lowest index.
+// Never, and jit_old/gpu/tier breaks those ties on the lowest index.
 func CyclicVictim(cur, lo, hi int, held func(int) bool) int {
 	best, bestD := -1, -1
 	for li := lo; li < hi; li++ {

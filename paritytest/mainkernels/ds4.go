@@ -3,11 +3,11 @@ package mainkernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // DeepSeek V4 on the device (nn.LayerPlan.DS4; engine/model/ds4.go is the
-// graph and jit/gpu/tier/ds4.go the wiring).
+// graph and jit_old/gpu/tier/ds4.go the wiring).
 //
 // The residual is DS4Streams streams, stream-major: stream k of row r at
 // (k*rows + r)*d. Each sublayer is wrapped in a hyper-connection:
@@ -64,7 +64,7 @@ func HCFlat(d, rows int) (*ir.Kernel, error) {
 	return b.Done(), nil
 }
 
-// HCMix is the hyper-connection mixer, one thread a row (jit/cpu/hc_const.go
+// HCMix is the hyper-connection mixer, one thread a row (jit_old/cpu/hc_const.go
 // is the contract the host kernels share):
 //
 //	pre[i]  = sigma(m[i]*s[i] + b[i]) + eps

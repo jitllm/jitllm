@@ -3,7 +3,7 @@ package mainkernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // Unpack turns raw GGUF bytes into the device weight layout, on the device.

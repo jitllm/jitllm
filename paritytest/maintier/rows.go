@@ -6,8 +6,8 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 	kernels "github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 
@@ -642,7 +642,7 @@ func (g *devTier) ragStepMV(m mv, R, n int) (mv, bool) {
 // token, so its dot products grow with the step and past four sequences the
 // tiled twins win: on an 8B Q4_K_M model groupMV leads at two and four
 // sessions and loses at eight (gpu-kernels.md, "Measurements once cited in
-// jit/gpu/tier's comments").
+// jit_old/gpu/tier's comments").
 const groupTokMax = 4
 
 // groupMV is m's decode matvec carrying every token of a small step in one

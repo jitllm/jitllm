@@ -139,7 +139,7 @@ it covers most of the family with no new architecture.
   under an embedding mode with no pooling, so no output projection runs);
   the head (`engine/model/decideclef.go`) runs on the host's generated
   kernels, or on the device holding the output projection
-  (`engine/model/decideclefdev.go`, `jit/gpu/tier/dechead.go`).
+  (`engine/model/decideclefdev.go`, `jit_old/gpu/tier/dechead.go`).
 
 ### d1-3B (LiquidAI/d1-3B; GGUF LiquidAI/d1-3B-GGUF Q4_K_M/Q8_0/BF16 + mmproj)
 
@@ -330,7 +330,7 @@ through it, and consecutive requests share what did not change. A Decider with
 a cache runs a batch's requests alone (a batch session's page has no single
 sequence to name it). On a device the pages are named where they live: the
 card's pool names a page by the cache's key and maps it into another
-sequence's table (`jit/gpu/tier/kvshare.go`), and a linear block's restore
+sequence's table (`jit_old/gpu/tier/kvshare.go`), and a linear block's restore
 points are snapshots on the card (`recshare.go`), so a warm prompt moves no
 history across the bus. Gates:
 `TestDecisionReusesThePrefix` (warm answers bit for bit a cold Decider's; the
@@ -385,7 +385,7 @@ its sessions go, `jitllm decide` and `jitllm embed` take `-devices`).
   round, LayerNorm and RMSNorm rows, a gather-add, L2 rows, a gathered row
   dot, the scorer's features and the final combination) -- plain f32 kernels,
   one thread an output, the basic form RULE 8 asks for -- over the head's
-  matrices uploaded once in f32 (`jit/gpu/tier/dechead.go`). The program is
+  matrices uploaded once in f32 (`jit_old/gpu/tier/dechead.go`). The program is
   compiled and kept per request shape (rows, questions, options; the last
   eight), so a warm request allocates nothing. Measured on the V100 (cards 6
   and 7): the device's head against the host's over the same rows 0.0014

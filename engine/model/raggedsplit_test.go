@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/metal"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/metal"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestRaggedStepKernelSplit is the measurement docs/design/ragged-prefill.md

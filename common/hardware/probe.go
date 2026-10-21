@@ -2,7 +2,7 @@
 // do with it" -- the desktop equivalent of `jitllm hardware`.
 //
 // It reports rather than probing on its own account: every field is read from
-// where the engine reads it (sched, jit/cpu, backend.Open, tier), so the answer
+// where the engine reads it (sched, jit_old/cpu, backend.Open, tier), so the answer
 // cannot disagree with what a decode would do. Nothing is timed; the memory
 // wall is a separate, explicit button.
 //
@@ -24,9 +24,9 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/cpu"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 
 	"github.com/jitllm/jitllm/common/session"
 )
@@ -262,7 +262,7 @@ func describe(d backend.Device) GPU {
 
 // isa names what the native emitter emits, and whether this CPU can run it.
 //
-// jit/cpu probes the feature (CPUID leaf 7.1, AT_HWCAP or sysctl) and declines
+// jit_old/cpu probes the feature (CPUID leaf 7.1, AT_HWCAP or sysctl) and declines
 // the quantized row-major kernels when it is absent, so this is a measured
 // capability.
 func isa() string {

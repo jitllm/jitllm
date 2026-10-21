@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/ptx"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ptx"
 	kernels "github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 

@@ -3,7 +3,7 @@
 package nn
 
 import (
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 	"math"
 	"math/rand"
 	"testing"

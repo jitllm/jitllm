@@ -3,7 +3,7 @@ package mainkernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // MMAProbe is a bare int8 GEMM through one warp-level matrix instruction, used

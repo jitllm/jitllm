@@ -142,7 +142,7 @@ comes before any code.
 Distributed inference across machines. The interface belongs in core with no
 dependency on libp2p or any transport; an implementation lives outside, the
 dependency pointing inward -- the shape `nn.Device` already has (declared in
-`engine/nn`, implemented in `jit/gpu`).
+`engine/nn`, implemented in `jit_old/gpu`).
 
 What that protects: `go.mod` has one require (goffi) and libp2p is about 150
 modules; and there is no cgo, since goffi reaches the drivers through dlopen.
@@ -249,7 +249,7 @@ of the gain (GEMM 1.03x -> 0.24x). Neither idea below is measured here.
    1-bit BitDelta GEMM (3.34x) builds the fp16 operands in registers -- a bit
    permutation plus one `lop3` that sets sign bits of a packed constant --
    instead of unpack, convert, store to shared memory and reload. Check
-   whether the device prefill GEMM (`jit/gpu/kernels/mma.go`) stages
+   whether the device prefill GEMM (`jit_old/gpu/kernels/mma.go`) stages
    unpacked weights through shared memory; if it does, unpacking Q4_K/Q6_K
    directly into the mma fragments is a prefill lever, not a decode one.
 

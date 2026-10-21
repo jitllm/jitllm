@@ -3,7 +3,7 @@ package mainkernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // PagedAttnAccMMAWarps is how many warps PagedAttnAccMMA launches (groups of

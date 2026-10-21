@@ -38,12 +38,12 @@ shape. The second at least fails loudly.
 
 ## Why: the tier holds one sequence's state and nothing says so
 
-    jit/gpu/tier/layer.go:39    kc, vc backend.Buf  // on the LAYER, keyed by
+    jit_old/gpu/tier/layer.go:39    kc, vc backend.Buf  // on the LAYER, keyed by
                                                     // block index
     engine/nn/device.go:331            Layers(lo, hi, pos, n, x, cs, head) bool
 
 `Layers` takes a POSITION and carries no state identity, and nothing anywhere in
-`jit/gpu/tier` keys device state by State or session. So two sequences write the
+`jit_old/gpu/tier` keys device state by State or session. So two sequences write the
 same cache at the same positions. The scratch has the same shape: `g.bs`,
 `g.vbs` and `g.bbs[w]` are one set per DEVICE, and a concurrent forward clobbers
 another's intermediates.
@@ -194,7 +194,7 @@ The gates:
 
 The scratch is charged to the budget the blocks use, and the prompt chunk's
 and the ragged step's are reserved when the first block is placed
-(`jit/gpu/tier/scratch.go`; `docs/engineering-history/placement.md` 15x). What
+(`jit_old/gpu/tier/scratch.go`; `docs/engineering-history/placement.md` 15x). What
 is not done: a growth commits the caches before it rebuilds the scratch, so a
 scratch that fails to build after them leaves a session's caches and kernels at
 different capacities.
@@ -356,7 +356,7 @@ the hybrid checks above beside the latent ones.
 
 Two `model.State`s attached to one tier -- the app's chat and an API request
 -- step on one device at the same time, each with exactly the answers it gives
-alone. The device's tier is three parts (`jit/gpu/tier/devsess.go`):
+alone. The device's tier is three parts (`jit_old/gpu/tier/devsess.go`):
 
     devShared   everything every session reads: blocks and their residency,
                 kernels and their caches, the paged KV pool and its tables, the
@@ -389,7 +389,7 @@ the way takes g.mu for the build (`subLock`), and its counters are its own
 until it completes. What changes something every submission may read -- a
 buffer a recording names, a block's weights, a KV page another sequence's
 table names, a recurrent pool -- first waits for every submission in flight
-(`quiesce`, `jit/gpu/tier/inflight.go`), and every wait comes before a
+(`quiesce`, `jit_old/gpu/tier/inflight.go`), and every wait comes before a
 submission's prologue, never between the prologue and the submission: a wait
 there let another session's prologue send this session's history home under
 descriptors already built (it read 0.45 NMSE). A block a submission is about

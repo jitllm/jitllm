@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // TestForcedSSETierRunsTheHybridKernels is the hybrid's three entry points --
@@ -17,7 +17,7 @@ import (
 // engine/model/delta.go makes -- under the forced SSE tier, computing against the
 // float64 oracle, with no AVX2 kernel mapped while the force is on.
 //
-// It is the caller's half of the kernel gates: jit/cpu proves the SSE kernels
+// It is the caller's half of the kernel gates: jit_old/cpu proves the SSE kernels
 // on hand-built Args, and this proves nn selects them and builds their Args
 // the way they read them.
 //

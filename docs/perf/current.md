@@ -575,7 +575,7 @@ same cards through `CUDA_VISIBLE_DEVICES`. jitllm reads the v28 `.jlm`
 converted from the GGUF llama.cpp reads.
 
 **What jitllm does across cards.** A layer split: `-devices` names the cards
-(and backends) and the router (`jit/gpu/tier/multi.go`) offers each block to
+(and backends) and the router (`jit_old/gpu/tier/multi.go`) offers each block to
 them fastest first, so the cards run a token one after another and the
 residual goes home and out again at each change of card; a prompt is
 pipelined across them in 512-row pieces; `-placement` pins any block or the
@@ -2241,7 +2241,7 @@ have reported the drift as a result. Re-measure on a rested box before building
 on it.
 
 **PREFILL IS JIT-COMPILED ON BOTH ARCHITECTURES, so the gap is not a missing
-tier.** `EmitGEMM` exists in `jit/cpu/gemm.go` (amd64) and `jit/cpu/gemm_arm64.go`,
+tier.** `EmitGEMM` exists in `jit_old/cpu/gemm.go` (amd64) and `jit_old/cpu/gemm_arm64.go`,
 reached through `nn.JIT.MatMul`, with `EmitGEMMK` for the k-quants. What is
 missing is arm64's `SMMLA`: RULE 5j records that i8mm is useless for DECODE
 because there is one activation vector, and the same rule notes it is a PREFILL
@@ -2708,7 +2708,7 @@ CPU win (llama-2-7b) and the Linux GPU win (tinyllama) cannot be made to land on
 here. A card that fits the 7B would settle it; this one cannot.
 
 **★ 1e. AND THE PER-SHAPE TABLE HAS THREE DEVICE COLUMNS, NOT TWO -- I READ THE WRONG ONE.**
-`jit/gpu/cmd/mvbench` prints one block per backend present, and on this box that is PTX first and
+`jit_old/gpu/cmd/mvbench` prints one block per backend present, and on this box that is PTX first and
 SPIR-V second. Quoting the second block's rows as CUDA understated CUDA by 10-18 points and made the
 Metal gap look smaller than it is. Each figure is against a read wall measured in the SAME process:
 

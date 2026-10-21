@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestGemma4RealMatchesTransformers holds Gemma 4 E2B's real tower and head

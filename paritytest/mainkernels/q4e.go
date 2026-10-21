@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // Qwen3.8-Flash-Next on the device (nn.LayerPlan.Q4E; engine/model/q4e.go is
-// the graph and jit/gpu/tier/q4e.go the wiring).
+// the graph and jit_old/gpu/tier/q4e.go the wiring).
 //
 // The residual is h streams, stream-major as DeepSeek V4's: stream k
 // of row r at (k*rows + r)*d. A sublayer's mix:

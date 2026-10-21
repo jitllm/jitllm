@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // TestGreedyMatchesLlamaCppSSE is the llama.cpp golden gate over every model

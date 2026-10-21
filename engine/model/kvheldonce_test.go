@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // kvDuplicates counts the pages of st's history held twice: a page the

@@ -344,7 +344,7 @@ func TestBF16IsWidenedExactly(t *testing.T) {
 			t.Errorf("bf16 %04x -> f32 %08x, want %08x", p, w, uint32(p)<<16)
 		}
 	}
-	// And it is selected: a BF16 model must arrive as TypeF32, because jit/cpu
+	// And it is selected: a BF16 model must arrive as TypeF32, because jit_old/cpu
 	// emits a native matvec for F32 and F16 only and a BF16 weight would reach
 	// the oracle. See hfTypeOf.
 	m := newSynth()

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // On arm64 no one packed matvec wins every shape, so each shape is timed. The

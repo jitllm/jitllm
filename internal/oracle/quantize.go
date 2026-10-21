@@ -5,7 +5,7 @@ import (
 	"math"
 )
 
-// q8Block is jit/cpu.Q8Block, which this package cannot import (the cpu tests
+// q8Block is jit_old/cpu.Q8Block, which this package cannot import (the cpu tests
 // import it).
 const q8Block = 32
 

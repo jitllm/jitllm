@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit_old/gpu/kernels"
 )
 
 // expertSource is a three-block mixture: blocks 0 and 1 carry expert banks

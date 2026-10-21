@@ -775,7 +775,7 @@ func all2names[T any](m map[string]T) []string {
 // A dtype with no path is refused by name: there is no quantiser here, so an
 // unquantised checkpoint stays unquantised.
 //
-// BF16 is widened to F32 on purpose: jit/cpu emits native matvecs for F32 and
+// BF16 is widened to F32 on purpose: jit_old/cpu emits native matvecs for F32 and
 // F16 only (cpu.SupportedNative), and widening is exact (bf16 is f32's top 16
 // bits) at 2x the bytes. A native BF16 kernel would remove both.
 func hfTypeOf(d safetensors.DType) (t jlm.Type, widen bool, err error) {

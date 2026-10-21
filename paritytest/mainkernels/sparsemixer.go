@@ -1,9 +1,9 @@
 package mainkernels
 
-import "github.com/jitllm/jitllm/jit/gpu/ir"
+import "github.com/jitllm/jitllm/jit_old/gpu/ir"
 
 // expertWeightsSparseMixer is Phi-3.5-MoE's router weights, the device twin of
-// jit/cpu's sparsemixer kernel (sparsemixer_const.go has the arithmetic).
+// jit_old/cpu's sparsemixer kernel (sparsemixer_const.go has the arithmetic).
 // ExpertRank's plain rank has already put the top two logits in pTop's slots 0
 // and 1, so this needs only the logits row:
 //

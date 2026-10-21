@@ -14,11 +14,11 @@ Studied checkout: `91e2ad656ebddf9ad0d5645e3f5544c8045f0bbc`. No files changed; 
 
 Counts are physical lines, including comments and blanks, excluding `_test.go`. Mixed files include their validation, shape definitions, and helpers. Consequently, these are reproducible **source-file counts**, not a claim that every counted line emits an instruction.
 
-An important correction to the requested inventory: **this checkout has no AVX-512 emitter tier.** It probes AVX-512 capabilities, but its tiers are SSE, AVX2, and NEON. AVX-VNNI is a dot-product choice inside AVX2; it is not AVX-512. See [tier.go:5](../../jit/cpu/tier.go), [features_amd64.go:60](../../jit/cpu/features_amd64.go), and [prevnni.go:25](../../jit/cpu/prevnni.go).
+An important correction to the requested inventory: **this checkout has no AVX-512 emitter tier.** It probes AVX-512 capabilities, but its tiers are SSE, AVX2, and NEON. AVX-VNNI is a dot-product choice inside AVX2; it is not AVX-512. See [tier.go:5](../../jit_old/cpu/tier.go), [features_amd64.go:60](../../jit_old/cpu/features_amd64.go), and [prevnni.go:25](../../jit_old/cpu/prevnni.go).
 
 ### Host emitters
 
-All filenames in this table are relative to `jit/cpu/`; numbers following filenames are their line counts.
+All filenames in this table are relative to `jit_old/cpu/`; numbers following filenames are their line counts.
 
 | Tier | Family | Files and lines | Total |
 |---|---|---|---:|
@@ -43,7 +43,7 @@ All filenames in this table are relative to `jit/cpu/`; numbers following filena
 
 **Host family subtotal: 23,811 lines.**
 
-The table’s dispatch contract is explicit in [emitters.go:28](../../jit/cpu/emitters.go). SSE deliberately uses existing generated fused kernels where optional wide/tiled forms are unavailable; those refusal wrappers are not additional kernel implementations ([emitters.go:119](../../jit/cpu/emitters.go)).
+The table’s dispatch contract is explicit in [emitters.go:28](../../jit_old/cpu/emitters.go). SSE deliberately uses existing generated fused kernels where optional wide/tiled forms are unavailable; those refusal wrappers are not additional kernel implementations ([emitters.go:119](../../jit_old/cpu/emitters.go)).
 
 Additional host infrastructure, excluded from that subtotal:
 
@@ -53,13 +53,13 @@ Additional host infrastructure, excluded from that subtotal:
 | Dot-product instruction selection | `prevnni.go` — **237** |
 | Shared layouts, constants and shape policies | `actkind.go` 32; `elem_const.go` 124; `imgproc_const.go` 327; `resample_const.go` 88; `ropetab_const.go` 87; `rowconst.go` 46; `rowmode.go` 13; `sample_const.go` 87; `topk_const.go` 210; `sparsemixer_const.go` 63; `xielu_const.go` 45; `hc_const.go` 40; `dplane.go` 53; `scstream.go` 71; `fusedgroup.go` 72; `codes.go` 33 — **1,391** |
 
-All non-test Go files directly under `jit/cpu` total **31,883 lines**. The remaining 3,302 lines are dispatch, mapping/execution, probes, drivers, hooks and unsupported-platform wrappers. They are not counted as template-removal opportunities.
+All non-test Go files directly under `jit_old/cpu` total **31,883 lines**. The remaining 3,302 lines are dispatch, mapping/execution, probes, drivers, hooks and unsupported-platform wrappers. They are not counted as template-removal opportunities.
 
 ### Device emitters
 
-All filenames below are relative to `jit/gpu/kernels/`.
+All filenames below are relative to `jit_old/gpu/kernels/`.
 
-**The ordinary families produce shared IR once for all three backends.** They must not be counted three times. Matrix-unit variants differ: fragment MMA is PTX-only; collective tiles target MSL/SPIR-V, subject to supported shapes. The capability split is explicitly tested in [mmacap_test.go:14](../../jit/gpu/lowertest/mmacap_test.go).
+**The ordinary families produce shared IR once for all three backends.** They must not be counted three times. Matrix-unit variants differ: fragment MMA is PTX-only; collective tiles target MSL/SPIR-V, subject to supported shapes. The capability split is explicitly tested in [mmacap_test.go:14](../../jit_old/gpu/lowertest/mmacap_test.go).
 
 | Family | Files and lines | Total |
 |---|---|---:|
@@ -78,18 +78,18 @@ Additional device-kernel support:
 - **761 lines:** `actkind.go` 139, `config.go` 23, `decodeplan.go` 142, `divrn.go` 102, `quantof.go` 32, `ropetab_const.go` 171, `scstream.go` 85, `tile.go` 67.
 - **1,318 lines:** packing/allocation and test switches: `pack.go` 649, `arena.go` 529, `arena_unix.go` 43, `arena_other.go` 27, `benchknob.go` 26, `benchknob_off.go` 7, `pagedfault.go` 29, `pagedfault_off.go` 8.
 
-All non-test Go files directly under `jit/gpu/kernels` total **17,703 lines**.
+All non-test Go files directly under `jit_old/gpu/kernels` total **17,703 lines**.
 
 ### IR and backend lowering
 
 | Layer/backend | Files and lines | Total |
 |---|---|---:|
-| Typed IR, builder, validation, fragment/collective matrix contracts | `jit/gpu/ir/ir.go` 757; `tile.go` 410 | 1,167 |
-| CUDA/PTX | `jit/gpu/ptx/lower.go` 486; `buf.go` 121 | 607 |
-| Vulkan/SPIR-V | `jit/gpu/spirv/lower.go` 695; `spirv.go` 141; `tile.go` 236 | 1,072 |
-| Metal/MSL | `jit/gpu/msl/msl.go` 472; `tile.go` 140 | 612 |
+| Typed IR, builder, validation, fragment/collective matrix contracts | `jit_old/gpu/ir/ir.go` 757; `tile.go` 410 | 1,167 |
+| CUDA/PTX | `jit_old/gpu/ptx/lower.go` 486; `buf.go` 121 | 607 |
+| Vulkan/SPIR-V | `jit_old/gpu/spirv/lower.go` 695; `spirv.go` 141; `tile.go` 236 | 1,072 |
+| Metal/MSL | `jit_old/gpu/msl/msl.go` 472; `tile.go` 140 | 612 |
 
-These lowerers are already the shared backend mechanism. I would leave them outside the initial factoring effort. PTX performs an ordered walk of IR; driver compilation owns physical allocation and scheduling ([lower.go:9](../../jit/gpu/ptx/lower.go)).
+These lowerers are already the shared backend mechanism. I would leave them outside the initial factoring effort. PTX performs an ordered walk of IR; driver compilation owns physical allocation and scheduling ([lower.go:9](../../jit_old/gpu/ptx/lower.go)).
 
 ### Where `engine/nn` consumes the emitters
 
@@ -135,17 +135,17 @@ These ranges describe **net source reduction**, retaining format-specific arithm
 
 Representative evidence:
 
-**Packed matrices.** The fused and token-tiled emitters repeat format decomposition, masks, scale-plane handling, register assignment, argument loads and row-loop construction. Compare [packedfused.go:56](../../jit/cpu/packedfused.go) with [packedtiled.go:94](../../jit/cpu/packedtiled.go). Their different register-lifetime plans must remain separate.
+**Packed matrices.** The fused and token-tiled emitters repeat format decomposition, masks, scale-plane handling, register assignment, argument loads and row-loop construction. Compare [packedfused.go:56](../../jit_old/cpu/packedfused.go) with [packedtiled.go:94](../../jit_old/cpu/packedtiled.go). Their different register-lifetime plans must remain separate.
 
-The three row-major K-GEMMs repeat tile validation, scratch geometry, accumulator construction and loop scaffolding: [gemmk.go:46](../../jit/cpu/gemmk.go), [gemmk.go:286](../../jit/cpu/gemmk.go), [gemmk.go:507](../../jit/cpu/gemmk.go).
+The three row-major K-GEMMs repeat tile validation, scratch geometry, accumulator construction and loop scaffolding: [gemmk.go:46](../../jit_old/cpu/gemmk.go), [gemmk.go:286](../../jit_old/cpu/gemmk.go), [gemmk.go:507](../../jit_old/cpu/gemmk.go).
 
-**Device staging.** `GemmVolta` and `GemmTile` independently spell closely related shape checks, dense/grouped block mapping, parameter setup and dequant staging. Both already call `newVoltaDeq`; that decoder is not additional removable duplication. See [gemm70.go:96](../../jit/gpu/kernels/gemm70.go) and [gemmtile.go:73](../../jit/gpu/kernels/gemmtile.go).
+**Device staging.** `GemmVolta` and `GemmTile` independently spell closely related shape checks, dense/grouped block mapping, parameter setup and dequant staging. Both already call `newVoltaDeq`; that decoder is not additional removable duplication. See [gemm70.go:96](../../jit_old/gpu/kernels/gemm70.go) and [gemmtile.go:73](../../jit_old/gpu/kernels/gemmtile.go).
 
-**Row reductions.** `EmitRMSNorm` and `emitRowStat` repeat the four-chain walk, vector remainder, scalar remainder and horizontal fold. Their arithmetic differs: RMS uses FMA; variance uses subtract, multiply and add. The useful common unit is the **walk and exact fold schedule**, not one interchangeable reduction expression. See [norm.go:16](../../jit/cpu/norm.go), [layernorm.go:29](../../jit/cpu/layernorm.go), [elem_a64.go:68](../../jit/cpu/elem_a64.go), and [sse_norm.go:173](../../jit/cpu/sse_norm.go).
+**Row reductions.** `EmitRMSNorm` and `emitRowStat` repeat the four-chain walk, vector remainder, scalar remainder and horizontal fold. Their arithmetic differs: RMS uses FMA; variance uses subtract, multiply and add. The useful common unit is the **walk and exact fold schedule**, not one interchangeable reduction expression. See [norm.go:16](../../jit_old/cpu/norm.go), [layernorm.go:29](../../jit_old/cpu/layernorm.go), [elem_a64.go:68](../../jit_old/cpu/elem_a64.go), and [sse_norm.go:173](../../jit_old/cpu/sse_norm.go).
 
-**Attention.** SSE already has a useful factoring example, `attnScoreRowSSE`; the AVX2/NEON single/paired/tiled forms retain more independently written traversal. See [sse_attn.go:114](../../jit/cpu/sse_attn.go), [attn.go:20](../../jit/cpu/attn.go), and [attn.go:187](../../jit/cpu/attn.go).
+**Attention.** SSE already has a useful factoring example, `attnScoreRowSSE`; the AVX2/NEON single/paired/tiled forms retain more independently written traversal. See [sse_attn.go:114](../../jit_old/cpu/sse_attn.go), [attn.go:20](../../jit_old/cpu/attn.go), and [attn.go:187](../../jit_old/cpu/attn.go).
 
-`FlashAttentionMerge`, `FlashAttentionMergeWide` and `FlashAttentionMergeRun` share the mathematical combination of partial maxima, denominators and numerators. However, their operation ordering differs. Extract smaller ordered fragments first; merging them into one reordered builder would fail the requested gate. See [flash.go:378](../../jit/gpu/kernels/flash.go), [flash.go:435](../../jit/gpu/kernels/flash.go), and [mergerun.go:22](../../jit/gpu/kernels/mergerun.go).
+`FlashAttentionMerge`, `FlashAttentionMergeWide` and `FlashAttentionMergeRun` share the mathematical combination of partial maxima, denominators and numerators. However, their operation ordering differs. Extract smaller ordered fragments first; merging them into one reordered builder would fail the requested gate. See [flash.go:378](../../jit_old/gpu/kernels/flash.go), [flash.go:435](../../jit_old/gpu/kernels/flash.go), and [mergerun.go:22](../../jit_old/gpu/kernels/mergerun.go).
 
 ## 3. Template parameters and special cases
 
@@ -162,25 +162,25 @@ A practical template is an **emission-time control structure with explicit instr
 
 ### Special cases that must survive
 
-1. **Register budgets are algorithmic choices.** Q5-style secondary planes reduce the fused row group from 16 to 8 because the wider allocation needs 17 vector registers. Preserve that choice and its allocation order ([fusedgroup.go:14](../../jit/cpu/fusedgroup.go)).
+1. **Register budgets are algorithmic choices.** Q5-style secondary planes reduce the fused row group from 16 to 8 because the wider allocation needs 17 vector registers. Preserve that choice and its allocation order ([fusedgroup.go:14](../../jit_old/cpu/fusedgroup.go)).
 
-2. **VNNI and pre-VNNI signed dots are different sequences.** Q8 centring cannot simply use the unsigned saturating multiply-add path. `signed` and `signedFix` deliberately preserve the existing final arithmetic ([prevnni.go:87](../../jit/cpu/prevnni.go)).
+2. **VNNI and pre-VNNI signed dots are different sequences.** Q8 centring cannot simply use the unsigned saturating multiply-add path. `signed` and `signedFix` deliberately preserve the existing final arithmetic ([prevnni.go:87](../../jit_old/cpu/prevnni.go)).
 
-3. **Integer and float folds are separate schedules.** Stationary GEMM’s integer accumulation depends on format/window/dot kind and is explicitly not universally bit-identical to the fused float path ([packedgemm.go:184](../../jit/cpu/packedgemm.go)). Preserve each variant against its own golden.
+3. **Integer and float folds are separate schedules.** Stationary GEMM’s integer accumulation depends on format/window/dot kind and is explicitly not universally bit-identical to the fused float path ([packedgemm.go:184](../../jit_old/cpu/packedgemm.go)). Preserve each variant against its own golden.
 
-4. **Reduction tails are not ordinary map tails.** LayerNorm’s vector variance tail must clear inactive lanes after subtracting the mean; SSE uses scalar instructions instead. SSE’s eight-XMM fold mirrors four YMM chains in a specific order ([layernorm.go:37](../../jit/cpu/layernorm.go), [sse_norm.go:130](../../jit/cpu/sse_norm.go)).
+4. **Reduction tails are not ordinary map tails.** LayerNorm’s vector variance tail must clear inactive lanes after subtracting the mean; SSE uses scalar instructions instead. SSE’s eight-XMM fold mirrors four YMM chains in a specific order ([layernorm.go:37](../../jit_old/cpu/layernorm.go), [sse_norm.go:130](../../jit_old/cpu/sse_norm.go)).
 
 5. **Host attention is not uniformly online-softmax attention.** It has separate score and accumulation kernels consumed through `nn.AttnSet`. Device flash kernels implement the online-softmax pattern; a template must not silently convert host attention to it ([engine/nn/attn.go:1](../../engine/nn/attn.go)).
 
-6. **Fragment MMA and collective matrices have different ownership.** `OpMMA` exposes lane fragments; collective tile operations leave lane layout to the driver. Preserve separate inner policies ([ir.go:132](../../jit/gpu/ir/ir.go)).
+6. **Fragment MMA and collective matrices have different ownership.** `OpMMA` exposes lane fragments; collective tile operations leave lane layout to the driver. Preserve separate inner policies ([ir.go:132](../../jit_old/gpu/ir/ir.go)).
 
 7. **Paging and surplus-thread safety are part of the pattern.** Clamping loads, masking scores, descriptor interpretation and out-of-place writes must remain in their current positions. Multiplication by zero cannot replace masking potentially poisoned values.
 
 ### Host allocation versus device IR
 
-On the host, the emitter owns **physical registers**. For example, the packed fused emitter allocates registers in sequence, and the tiled emitter borrows dead activation/payload registers for its epilogue. A template must accept those exact assignments and lifetimes, not recalculate a “better” allocation ([packedfused.go:99](../../jit/cpu/packedfused.go), [packedtiled.go:176](../../jit/cpu/packedtiled.go)).
+On the host, the emitter owns **physical registers**. For example, the packed fused emitter allocates registers in sequence, and the tiled emitter borrows dead activation/payload registers for its epilogue. A template must accept those exact assignments and lifetimes, not recalculate a “better” allocation ([packedfused.go:99](../../jit_old/cpu/packedfused.go), [packedtiled.go:176](../../jit_old/cpu/packedtiled.go)).
 
-On devices, the builder assigns SSA IDs by append order. Moving a constant creation earlier changes IDs and downstream text even when the computation is equivalent ([ir.go:253](../../jit/gpu/ir/ir.go)). Callbacks therefore need to preserve **when** each IR operation is emitted. Precomputing callback arguments can itself break equality.
+On devices, the builder assigns SSA IDs by append order. Moving a constant creation earlier changes IDs and downstream text even when the computation is equivalent ([ir.go:253](../../jit_old/gpu/ir/ir.go)). Callbacks therefore need to preserve **when** each IR operation is emitted. Precomputing callback arguments can itself break equality.
 
 An exact-output template has no reason to slow the generated instruction stream. Its possible costs are **emission time, Go allocation, binary size, and preparation/cache behaviour**. A template that homogenises schedules, adds runtime branches, changes memory operands or expands live ranges is a different change and should fail the refactor gate.
 
@@ -198,9 +198,9 @@ These are ranked hypotheses, not performance claims. Every item below changes ge
 
 Code anchors:
 
-- Existing composition: [elem.go:188](../../jit/gpu/kernels/elem.go), [elem.go:1034](../../jit/gpu/kernels/elem.go), [matvec.go:1222](../../jit/gpu/kernels/matvec.go).
-- Existing host tuning: [tune.go:379](../../engine/nn/tune.go), [prefetch.go:1](../../engine/nn/prefetch.go); device choices: [decodeplan.go:1](../../jit/gpu/kernels/decodeplan.go).
-- Existing shared decoder: [mma70.go:422](../../jit/gpu/kernels/mma70.go); shared scale-stream emission: [scstream.go:1](../../jit/gpu/kernels/scstream.go).
+- Existing composition: [elem.go:188](../../jit_old/gpu/kernels/elem.go), [elem.go:1034](../../jit_old/gpu/kernels/elem.go), [matvec.go:1222](../../jit_old/gpu/kernels/matvec.go).
+- Existing host tuning: [tune.go:379](../../engine/nn/tune.go), [prefetch.go:1](../../engine/nn/prefetch.go); device choices: [decodeplan.go:1](../../jit_old/gpu/kernels/decodeplan.go).
+- Existing shared decoder: [mma70.go:422](../../jit_old/gpu/kernels/mma70.go); shared scale-stream emission: [scstream.go:1](../../jit_old/gpu/kernels/scstream.go).
 
 Two historical results limit expectations: increasing decode row tiling regressed on both measured GPUs, and the Metal investigation distinguished dispatch overhead from the smaller portion fusion could recover. Templates make these experiments easier; they do not reverse the evidence ([gpu-kernels.md:4110](../../docs/engineering-history/gpu-kernels.md), [gpu-kernels.md:4921](../../docs/engineering-history/gpu-kernels.md)).
 
@@ -210,9 +210,9 @@ The useful connection to the composer goal is a catalogue of **legal specialised
 
 ### Existing gates are a starting point, not sufficient coverage
 
-- `TestPrimaryTableIsTodaysEmitters` compares a table entry with the **current direct function**. Both can change together and still pass; it is a wiring gate, not a historical-output golden ([emitters_test.go:218](../../jit/cpu/emitters_test.go)).
-- `TestDenseKernelsUnchanged` captures combined PTX/MSL/SPIR-V hashes for `all(t)`, using an eight-byte digest prefix. It does not cover every specialised matrix inventory or record each output independently ([golden_test.go:19](../../jit/gpu/lowertest/golden_test.go)).
-- `TestContiguousPrefillIRUnchanged` records a valuable shape sweep, but only that family. Its IR hash does not include `Kernel.Comment` ([prefillgolden_test.go:20](../../jit/gpu/kernels/prefillgolden_test.go)).
+- `TestPrimaryTableIsTodaysEmitters` compares a table entry with the **current direct function**. Both can change together and still pass; it is a wiring gate, not a historical-output golden ([emitters_test.go:218](../../jit_old/cpu/emitters_test.go)).
+- `TestDenseKernelsUnchanged` captures combined PTX/MSL/SPIR-V hashes for `all(t)`, using an eight-byte digest prefix. It does not cover every specialised matrix inventory or record each output independently ([golden_test.go:19](../../jit_old/gpu/lowertest/golden_test.go)).
+- `TestContiguousPrefillIRUnchanged` records a valuable shape sweep, but only that family. Its IR hash does not include `Kernel.Comment` ([prefillgolden_test.go:20](../../jit_old/gpu/kernels/prefillgolden_test.go)).
 
 ### Capture before changing any emitter
 
@@ -248,7 +248,7 @@ Build the manifest from the **union of existing emitter, backend and integration
 
 Host runtime lengths do not necessarily produce different kernels: capture each distinct emitter configuration, and exercise runtime lengths separately in execution tests.
 
-Add a coverage check requiring every emitter-table field and registered device family to have manifest entries. Report case counts and fail if a case disappears. Examples to build from are [emitterCalls](../../jit/cpu/emitters_test.go), [lowertest.all](../../jit/gpu/lowertest/lower_test.go), and [contiguousPrefill](../../jit/gpu/kernels/prefillgolden_test.go).
+Add a coverage check requiring every emitter-table field and registered device family to have manifest entries. Report case counts and fail if a case disappears. Examples to build from are [emitterCalls](../../jit_old/cpu/emitters_test.go), [lowertest.all](../../jit_old/gpu/lowertest/lower_test.go), and [contiguousPrefill](../../jit_old/gpu/kernels/prefillgolden_test.go).
 
 ### Diff and acceptance
 
@@ -299,7 +299,7 @@ This family has visible duplication, small bounded interfaces, extensive ragged-
 
 ### Exact-output and execution gates
 
-For the first family, the golden width manifest should include the union of existing norm/row-stat lists, all widths **1–65**, and boundaries around larger unroll widths, plus the existing large widths through 8,192. Include LayerNorm bias both ways and all three row-stat modes. Existing SSE coverage already supplies widths 1–40 and many larger boundaries ([ssenorm_test.go:92](../../jit/cpu/ssenorm_test.go)).
+For the first family, the golden width manifest should include the union of existing norm/row-stat lists, all widths **1–65**, and boundaries around larger unroll widths, plus the existing large widths through 8,192. Include LayerNorm bias both ways and all three row-stat modes. Existing SSE coverage already supplies widths 1–40 and many larger boundaries ([ssenorm_test.go:92](../../jit_old/cpu/ssenorm_test.go)).
 
 Required checks:
 
@@ -310,7 +310,7 @@ Required checks:
 - `TestEveryModelRunsGenerated`, `TestBatchMatchesForward`, `TestGreedyMatchesLlamaCpp`, and `TestDecodeDoesNotAllocate` on the applicable hosts.
 - Gate mutation checks described above.
 
-The existing correctness tests explicitly cover heavy-tailed inputs and output guards ([norm_test.go:27](../../jit/cpu/norm_test.go), [layernorm_test.go:14](../../jit/cpu/layernorm_test.go), [rowstat_test.go:81](../../jit/cpu/rowstat_test.go)).
+The existing correctness tests explicitly cover heavy-tailed inputs and output guards ([norm_test.go:27](../../jit_old/cpu/norm_test.go), [layernorm_test.go:14](../../jit_old/cpu/layernorm_test.go), [rowstat_test.go:81](../../jit_old/cpu/rowstat_test.go)).
 
 ### What proves “no slower”
 

@@ -45,7 +45,7 @@ type memoryStatusEx struct {
 }
 
 // GlobalMemoryStatusEx is not in Go's syscall package, and the engine takes no
-// dependency for one call, so it is reached through kernel32 as jit/cpu
+// dependency for one call, so it is reached through kernel32 as jit_old/cpu
 // reaches VirtualAlloc.
 var procGlobalMemoryStatusEx = syscall.NewLazyDLL("kernel32.dll").NewProc("GlobalMemoryStatusEx")
 

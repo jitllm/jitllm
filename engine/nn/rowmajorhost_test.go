@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // requireRowMajorHost skips a gate over the GGUF row-major family when this CPU
@@ -23,6 +23,6 @@ func requireRowMajorHost(t testing.TB, qt quant.Type) {
 	t.Skipf("ROW-MAJOR %v IS NOT RUNNABLE ON THIS HOST (%s, no AVX-VNNI) -- this "+
 		"gate covered nothing here. The row-major family has no pre-VNNI form by "+
 		"decision (native_amd64.go); the PACKED family is what a container uses "+
-		"and jit/cpu's prevnni.go is where its AVX2 sequence lives.",
+		"and jit_old/cpu's prevnni.go is where its AVX2 sequence lives.",
 		qt, cpu.NativeArch())
 }

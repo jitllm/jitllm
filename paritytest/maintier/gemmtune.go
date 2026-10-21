@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
 	kernels "github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 

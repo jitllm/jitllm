@@ -7,7 +7,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // skipOnAnSSEHost skips a gate that warms the host's own tier and then forces
@@ -31,7 +31,7 @@ func TestMoETopK32JITIsKeyedByTier(t *testing.T) {
 	skipOnAnSSEHost(t, "that a forced SSE call maps its own top-k rather than the warmed "+
 		"AVX2 one, and that the two tiers agree bit for bit; the SSE kernel itself is "+
 		"held to the Go loops here by TestMoETopK32JITMatchesTheGoLoops and "+
-		"jit/cpu's TestMoETopKMatchesTheGoLoops")
+		"jit_old/cpu's TestMoETopKMatchesTheGoLoops")
 	const n, k = 128, 8
 	rng := rand.New(rand.NewSource(11))
 	p := make([]float32, n)

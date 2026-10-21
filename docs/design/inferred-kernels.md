@@ -133,7 +133,7 @@ about not holding 40 mappings we will drop ten tokens later."* If emitting is
 microseconds, a disk cache of machine code buys nothing measurable and costs a
 great deal:
 
-    it must be keyed on the description AND the CPU feature probe (jit/cpu
+    it must be keyed on the description AND the CPU feature probe (jit_old/cpu
     probes CPUID leaf 7.1 for VNNI, AT_HWCAP for DotProd) AND the shape AND the
     engine version -- and a STALE HIT IS WRONG MACHINE CODE, not a slow path
 

@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit_old/gpu/kernels"
 )
 
 // Source is a model, described in this format's own terms, ready to be

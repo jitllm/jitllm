@@ -8,7 +8,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // TestElementwiseEntryPointsComputeOnTheSSETier runs every package-level

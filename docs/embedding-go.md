@@ -61,7 +61,7 @@ func main() {
 | `Model.NewEmbedder` | embeddings |
 | `model.Scheduler`, `model.Step`, `model.StepRuns` | several sequences or sessions in one batched step, on a device or the host |
 
-See the [model API](../engine/model/) and the [device tier](../jit/gpu/tier/).
+See the [model API](../engine/model/) and the [device tier](../jit_old/gpu/tier/).
 
 The desktop app (model downloads, conversion, text and image chat, memory and
 device views) is a separate module in [ui/](../ui/). Install it from a release

@@ -14,7 +14,7 @@ import (
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestDecodeDoesNotAllocate holds a warm decode token at ZERO heap

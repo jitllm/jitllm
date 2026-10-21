@@ -3,11 +3,11 @@ package mainkernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // RopeTable builds the rotary table on the device: the fourth transcription of
-// jit/cpu's rope table kernel (AVX2, SSE and NEON are the others), so the
+// jit_old/cpu's rope table kernel (AVX2, SSE and NEON are the others), so the
 // device does not depend on a table built by the host.
 //
 // The arithmetic is the host's, not a GPU sin/cos: driver transcendentals

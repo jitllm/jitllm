@@ -15,8 +15,8 @@ import (
 
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // speedCmd is llama-bench's pp/tg measurement: a prompt of -p tokens and a

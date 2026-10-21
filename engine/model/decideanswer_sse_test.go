@@ -5,7 +5,7 @@ package model
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // TestDecisionAnswerMatchesTheOracleSSE is the answer sweep on the SSE tier,

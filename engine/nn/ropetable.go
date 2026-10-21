@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // Rope is a model's rotary configuration: per-model constants that travel
@@ -90,7 +90,7 @@ func (f *JIT) RopeTable(r Rope, cs []float32, pos int) {
 // (buildRopeTab); the kernel does the position-dependent part. It lands within
 // one float32 ulp at 1.0 of the float64 table at every position tested, and
 // the device kernel (kernels.RopeTable) transcribes it from the same planes
-// (TabPlanes). See jit/cpu/ropetab.go for the precision analysis and
+// (TabPlanes). See jit_old/cpu/ropetab.go for the precision analysis and
 // engine/nn/ropetab_test.go for the gate.
 func (r Rope) Table(cs []float32, pos int) {
 	npairs := r.NRot / 2

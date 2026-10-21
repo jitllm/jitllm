@@ -14,7 +14,7 @@
 
 ## ★ RULE 15: PLACEMENT IS A RANKING BY READS PER RESIDENT BYTE, AND THE UNIT IS NOT ALWAYS A BLOCK.
 
-`jit/gpu/tier/place.go` already says the ranking: placing a unit removes
+`jit_old/gpu/tier/place.go` already says the ranking: placing a unit removes
 `Uses*Bytes` of per-token host traffic and costs `Bytes` of device memory, so
 value per cost is **Uses alone** -- how many times per token each of those bytes
 is read. Not Uses/Bytes, which over-values whatever is small.
@@ -683,7 +683,7 @@ identically on the commit before any of this work:
     vulkan  no error at all -- "The capital of France is... (a) (a(("
 
 ★ **WHY NOTHING SAW IT: EVERY PAGING GATE RUNS ON A FAKE DEVICE.**
-`jit/gpu/tier`'s pager is covered by `fakeDev` and `recBuf`, whose device memory
+`jit_old/gpu/tier`'s pager is covered by `fakeDev` and `recBuf`, whose device memory
 is a Go slice nothing else reuses -- so a page-in that reads the wrong host
 bytes copies them faithfully and every counter agrees. RULE 11c in the pager:
 the kernels were gated and the tier's wiring of them was not, one level down
@@ -1853,9 +1853,9 @@ llama.cpp `llama-batched-bench` in the same pass:
     jitllm   757.8   973.1  1177.8  1294.3   (128 was refused)
     llama.cpp 656.3  843.6   730.0   934.5
 
-### Figures moved out of jit/gpu/tier comments
+### Figures moved out of jit_old/gpu/tier comments
 
-These figures stood in source comments under `jit/gpu/tier/` until a comment
+These figures stood in source comments under `jit_old/gpu/tier/` until a comment
 cleanup trimmed them, and were recorded nowhere else. They are kept here
 verbatim, grouped by the symbol each one justified. "This box" is the laptop
 (RTX 3050 Ti 4 GiB, Iris Xe, 31 GiB RAM); V100s are the 8x V100 server's.
@@ -2331,7 +2331,7 @@ gemma-2-2b's chunk was refused by `cuMemAlloc` and the prompt went a row at a
 time (0 folds, `TestPrefillFoldsTheHead`), and a server step of
 `model.MaxStepRows` rows on a full card was an error.
 
-`jit/gpu/tier/scratch.go` charges them and reserves them.
+`jit_old/gpu/tier/scratch.go` charges them and reserves them.
 
 **Charged by measurement.** Every backend counts the bytes its buffers hold
 (`backend.AllocCounter`), and a window around every build or free of a scratch
@@ -3886,7 +3886,7 @@ were the session's alone ("two sessions' pages never alias",
 device-kv-paging.md), so a device block's history went home to be cached and
 came back up to be restored -- on the V100 a warm d1 decision took 2x a cold
 one, most of it those migrations. A layer's page now carries the cache's key
-and a count of the sequences holding it (`jit/gpu/tier/kvshare.go`): sealing
+and a count of the sequences holding it (`jit_old/gpu/tier/kvshare.go`): sealing
 names it (`PublishKV`), a restore puts it into the sequence's table
 (`MapKV`), a write into one copies that page on the card first (`cowPages`),
 a sequence letting it go drops its hold, and the unheld named pages are the
@@ -4135,7 +4135,7 @@ the host, and device-side paging.
 
 ★ **THE CONTROL SURFACE IS DONE, AND "done" MEANS THE LIBRARIES READ
 NO ENVIRONMENT AT ALL.** Sixty-seven JITLLM_* names were read inside `sched`,
-`nn`, `gguf`, `bench`, `jit/cpu`, `jit/gpu/{tier,backend,vulkan,kernels}` and
+`nn`, `gguf`, `bench`, `jit_old/cpu`, `jit_old/gpu/{tier,backend,vulkan,kernels}` and
 `model` -- many at package-variable initialisation, which no caller could reach
 even in principle. They are `With...()` options now:
 
@@ -4306,7 +4306,7 @@ on an open error, so the refusal would otherwise have turned the whole suite
 green in 0.001 s.
 
 CPU and GPU. The GPU tier is built: CUDA, Vulkan and Metal, reached through
-goffi (`jit/gpu/ffi`) with no cgo, one `backend.Device` interface over three implementations.
+goffi (`jit_old/gpu/ffi`) with no cgo, one `backend.Device` interface over three implementations.
 That interface earned itself by having three; **do not add a fourth abstraction
 in advance of a second implementation of anything.**
 

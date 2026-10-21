@@ -5,8 +5,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/compose"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/compose"
 )
 
 // deviceReadWall measures the first device of api's read bandwidth in this

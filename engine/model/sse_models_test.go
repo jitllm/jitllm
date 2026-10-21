@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // The SSE tier at the model level: every gate here forces the tier before a

@@ -3,7 +3,7 @@ package mainkernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // TileProbe is the smallest kernel that exercises a collective matrix end to
@@ -13,7 +13,7 @@ import (
 // The chain is what matters: a cooperative value must survive from one MulAdd
 // to the next without a memory round trip, which a single MMA would not test.
 // The device's shapes are a list it enumerates
-// (jit/gpu/vulkan.CooperativeMatrixShapes) and operand, accumulator and
+// (jit_old/gpu/vulkan.CooperativeMatrixShapes) and operand, accumulator and
 // storage types must all match, so one numeric probe checks them all.
 //
 // A and B are row-major, k tiles of them laid end to end. The reference is

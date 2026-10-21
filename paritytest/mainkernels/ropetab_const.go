@@ -5,8 +5,8 @@ import "math"
 // The rotary table's constant block and its layout: the {cos, sin} pair per
 // rotary pair, formed by a kernel rather than math.Cos/math.Sin in Go. One
 // copy of the layout for four tiers (AVX2, SSE, NEON and the device); it
-// lives here because jit/cpu imports this package, and
-// jit/cpu/ropetab_const.go re-exports every name.
+// lives here because jit_old/cpu imports this package, and
+// jit_old/cpu/ropetab_const.go re-exports every name.
 //
 // The position is four 7-bit digits, pos = sum_i d_i * 128^i, and each digit's
 // angle is folded mod 4 quarter-turns at setup, U_i = fmod(g*128^i*2/pi, 4),
@@ -18,7 +18,7 @@ import "math"
 //	word 8*S                mscale (rope.scaling.attn_factor, or 1)
 //
 // The exactness argument in full: docs/engineering-history/gpu-kernels.md,
-// "jit/gpu/kernels/ropetab_const.go".
+// "jit_old/gpu/kernels/ropetab_const.go".
 
 // RopeTabDigits is how many base-128 digits of the position the kernel folds.
 // Four cover positions below 2^28 (three would stop at 2^21) for two more

@@ -9,9 +9,9 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/sched"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/metal"
-	"github.com/jitllm/jitllm/jit/gpu/vulkan"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/metal"
+	"github.com/jitllm/jitllm/jit_old/gpu/vulkan"
 	kernels "github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 

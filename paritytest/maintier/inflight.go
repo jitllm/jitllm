@@ -3,7 +3,7 @@ package maintier
 import (
 	"slices"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
 )
 
 // Submissions in flight.

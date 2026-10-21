@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // bitnetDevViolations are BitNet's features taken out of the model while only

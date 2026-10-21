@@ -18,7 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // The KV cache is paged, and its pages are its own.
@@ -92,7 +92,7 @@ func (NoStore) Set(string, int, int, io.Reader) error { return nil }
 func (NoStore) Drop(string) error { return nil }
 
 // kvKeyTile is how far past a row's causal width the score kernel may write, and
-// therefore the alignment a page boundary has to respect. jit/gpu/tier carries
+// therefore the alignment a page boundary has to respect. jit_old/gpu/tier carries
 // the same constant for the score-row padding it forces (sstride = MaxSeq + it).
 const kvKeyTile = 32
 

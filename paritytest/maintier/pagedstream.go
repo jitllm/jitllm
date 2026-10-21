@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 	kernels "github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 

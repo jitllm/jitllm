@@ -17,8 +17,8 @@ import (
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/capabilities"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/cpu"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
 )
 
 // `jitllm doctor [-json] [model.jlm]` says whether this machine and this build

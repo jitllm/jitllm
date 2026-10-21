@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit_old/gpu/kernels"
 )
 
 // TestNoTensorIsInGGUFLayout is the assertion behind "the container carries the

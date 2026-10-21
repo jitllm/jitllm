@@ -5,8 +5,8 @@ package nn
 import (
 	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit_old/cpu"
+	"github.com/jitllm/jitllm/jit_old/gpu/kernels"
 )
 
 // MaxGroup is how many matvecs one MatVecPackedGroup call runs.

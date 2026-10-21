@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestSpecOverAFinalSoftcap is speculation over a model with a final logit

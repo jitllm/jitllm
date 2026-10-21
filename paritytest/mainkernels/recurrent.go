@@ -3,7 +3,7 @@ package mainkernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // The recurrent half of a hybrid block, as device kernels.
@@ -332,7 +332,7 @@ func GatedDeltaStepTiledStride(vHeads, vDim, kDim, kHeads, stride int) (*ir.Kern
 // This tree holds the state as [vDim][kDim] (the reference holds
 // [kDim][vDim]), so the decay varies along i, the index both loops walk, and
 // is indexed by the value head, not the key head. See oracle.GatedDeltaChan
-// and jit/cpu/delta.go.
+// and jit_old/cpu/delta.go.
 func GatedDeltaStepChan(vHeads, vDim, kDim, rep int) (*ir.Kernel, error) {
 	return gatedDeltaStep(vHeads, vDim, kDim, rep, true, 0, 0)
 }
@@ -436,7 +436,7 @@ func gatedDeltaStep(vHeads, vDim, kDim, rep int, perChan bool, tiledK, stride in
 //	beta[h]  = sigma(bRaw[h])
 //
 // softplus is computed without a logarithm (the IR has none), with the host's
-// identity from jit/cpu/gate.go:
+// identity from jit_old/cpu/gate.go:
 //
 //	softplus(z) = max(z,0) + log(1 + exp(-|z|))
 //
@@ -1115,7 +1115,7 @@ func DeltaDecayBoundRows(n, rows int, lb float32) (*ir.Kernel, error) {
 
 // ssdGateOf is Mamba-2's dt = softplus(raw + bias) and decay = exp(A*dt),
 // the softplus DeltaGate's (deltaDecay's) operation for operation, so the
-// fused kernel forms the floats jit/cpu's SSDGate does.
+// fused kernel forms the floats jit_old/cpu's SSDGate does.
 func ssdGateOf(b *ir.Builder, raw, bias, a ir.Value) (decay, dt ir.Value) {
 	dt = softplusOf(b, raw, bias)
 	return b.Exp(b.Mul(ir.F32, a, dt)), dt

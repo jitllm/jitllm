@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestSixtyFourRequestsWhoseHistoryStreams is the load that killed jitllmd on

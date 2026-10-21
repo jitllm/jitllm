@@ -5,7 +5,7 @@ package nn
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // TestLogSoftmaxMatchesTheOracleOnTheSSETier is the same gate under the forced

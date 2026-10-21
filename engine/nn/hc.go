@@ -8,10 +8,10 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
-// DeepSeek V4's two small kernels (jit/cpu/hc_const.go has the contracts):
+// DeepSeek V4's two small kernels (jit_old/cpu/hc_const.go has the contracts):
 // the hyper-connection mixer and the compressor's pool over positions. Both
 // are package-level like the router: they are not a layer's, and a model asks
 // for one shape of each for its whole life.

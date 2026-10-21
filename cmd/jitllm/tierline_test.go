@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // TestISALineFollowsTheTier: `jitllm hardware`'s isa line describes the tier

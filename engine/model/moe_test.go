@@ -208,7 +208,7 @@ func maxAbs(a, b []float32) float64 {
 // moeTopKRef is the Go top-k selection engine/model/moe.go used before it became a
 // generated kernel, kept here because the mirror must not call the kernel it is
 // the reference for. Same tie rule: `p[e] > p[best]` scanning ascending, so the
-// lowest index wins. jit/cpu/moetopkref_test.go carries the same
+// lowest index wins. jit_old/cpu/moetopkref_test.go carries the same
 // transcription for the kernel's own gate; this copy lets the mirror select on a
 // negated vector (faultBottomK).
 func moeTopKRef(p []float32, dst []int) []int {

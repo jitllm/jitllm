@@ -36,7 +36,7 @@ import (
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/cmd/goheap"
 	"github.com/jitllm/jitllm/internal/localserver"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 	"github.com/jitllm/jitllm/server"
 )
 

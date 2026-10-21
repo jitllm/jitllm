@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
 )
 
 // serialises reports whether a session of b is recorded on a device gate a

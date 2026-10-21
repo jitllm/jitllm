@@ -10,7 +10,7 @@ import (
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestStepAcrossSessionsLatentMatchesEachAlone is the step gate on multi-head

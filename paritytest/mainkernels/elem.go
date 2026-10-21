@@ -3,7 +3,7 @@ package mainkernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // The ops between the matvecs, so the residual stream stays on the device
@@ -25,7 +25,7 @@ func QuantizeThreads(nb int) int { return nb * 8 }
 // Eight threads a block each own four values and one packed word; the block's
 // (or window's) maximum and the per-16 sums meet in shared memory.
 //
-// It quantizes exactly as jit/cpu's generated quantizer does: the scale and its
+// It quantizes exactly as jit_old/cpu's generated quantizer does: the scale and its
 // reciprocal by two correctly rounded divisions (quantScales), then half away
 // from zero, built as trunc(f + copysign(0.5, f)) with no branch. Any
 // difference is a slightly different int8 near a boundary, which diverges deep

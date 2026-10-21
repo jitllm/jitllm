@@ -322,7 +322,7 @@ a 127 scale times 16 sub-blocks, or 33M against int32's 2.1B.
 stays 32 there. Whether a `VPMADDWD`-based tail could reach the same place is unmeasured.
 
 **★ 5h. arm64's Q3_K IS ISSUE-BOUND ON ITS UNPACK, AND THE PER-FORMAT TABLE SAYS SO IN ONE LINE.**
-`jit/cpu/cmd/fmtbench` prices each format's decode matvec against a read wall measured in the SAME
+`jit_old/cpu/cmd/fmtbench` prices each format's decode matvec against a read wall measured in the SAME
 process, every set sized 280 MB so nothing is measured out of cache. On the M4 at four P-cores:
 
     format   GB/s   of wall     bytes per 256 elements
@@ -415,7 +415,7 @@ the setup before extending the series.**
 
 **★ 5k. llama.cpp's Q3_K KERNEL IS 13.5% FASTER THAN jitllm's ON ONE M4 CORE, AND jitllm IS THE ONE WITH
 BETTER IPC.** `scripts/ref/q3kbench.c` compiles llama.cpp's own `ggml_vec_dot_q3_K_q8_K` NEON body
-and times it exactly as `jit/cpu/cmd/fmtbench` times jitllm's: one thread, 280 MB DRAM-resident, 1.5 s
+and times it exactly as `jit_old/cpu/cmd/fmtbench` times jitllm's: one thread, 280 MB DRAM-resident, 1.5 s
 soak, median of fifteen.
 
     jitllm Q3_K       12.6 GB/s
@@ -846,7 +846,7 @@ waiting on something.
 ★ THE BUG IS THE PART WORTH KEEPING. Freeing four adjacent registers for the quad meant moving the
 scale destinations onto `tmp[3..5]`, and `emitA64KScales` names those internally -- `tmp[4]` is `res`,
 which holds the assembled scale bytes and is `widen16`'s own SOURCE. The model answered fluent
-nonsense: token 9613, sixteen times. **`go test ./jit/cpu` passed on the M4, the NMSE checks passed,
+nonsense: token 9613, sixteen times. **`go test ./jit_old/cpu` passed on the M4, the NMSE checks passed,
 and the throughput measurement came back a clean 0.9996 with IQR 0.004** -- a broken kernel runs at
 exactly the same speed. Only the end-to-end token-id check saw it, which is the third time in this
 file that a green suite has covered a wrong answer (RULE 7a's rotary layout, RULE 12i's softmax).
@@ -1041,7 +1041,7 @@ where RULE 2d's clamp gate is a no-op (macOS has no /proc/cpuinfo, RULE 12q), th
 only instrument left. **Run it first, not last.**
 
 **The kernels are kept, on correctness, which IS established independently of any rate.** Full
-`jit/cpu` and `model` suites PASS on the M4; `TestGreedyMatchesLlamaCpp` PASS against llama.cpp's
+`jit_old/cpu` and `model` suites PASS on the M4; `TestGreedyMatchesLlamaCpp` PASS against llama.cpp's
 own ids for tinyllama, gemma and the MoE. Run against violations per RULE 12m: emitting the integer
 fold at window 32 fails at NMSE 4.7e+28, and the must-pass control -- reading d_a from block 7
 instead of block 0, legitimate at window 256 -- passes.
@@ -1784,7 +1784,7 @@ refusal: a Cortex-A53/A57/A72/A73 (Raspberry Pi 3 and 4, many boards and older p
 quantized container -- "no host kernel reads <tensor>" from `engine/model/forward.go`. RULE 8 makes
 that a missing basic kernel.
 
-**What was built** (`jit/cpu/sdotemu.go`): the assembler widens every `SDOT` and `SDOTelem` in
+**What was built** (`jit_old/cpu/sdotemu.go`): the assembler widens every `SDOT` and `SDOTelem` in
 place when the probe says the chip lacks the feature --
 
     smull   t0.8h, vn.8b,  vm.8b        smull2  t1.8h, vn.16b, vm.16b
@@ -1801,13 +1801,13 @@ the correction constant vK in the token-tiled matmul, which rebuilds vK before i
 widened. The activation quantization, the layouts and the dispatch are unchanged; the probe is the
 switch, so `SupportedNative` and `SupportedPackedNative` no longer ask it.
 
-**The gates.** `jit/cpu.TestNoDotProdKernelsEmitNoSDOT` scans 101 kernel families (row-major at
+**The gates.** `jit_old/cpu.TestNoDotProdKernelsEmitNoSDOT` scans 101 kernel families (row-major at
 both windows, GEMM, packed, fused, fused-windowed, tiled at every tok, stationary) for SDOT
 encodings: present with the feature, absent without it, 19756 SDOTs widened.
 `TestNoDotProdMatchesDotBitForBit` runs the packed and fused decode kernels for every
 `quant.PackedTypes` entry at one to three outer steps of k and one to three tiles of rows, with a
 NaN guard after the output: the widened arm equals the SDOT arm bit for bit and stays within the
-oracle. The whole `jit/cpu` suite also runs widened, under `qemu-aarch64-static -cpu cortex-a72`
+oracle. The whole `jit_old/cpu` suite also runs widened, under `qemu-aarch64-static -cpu cortex-a72`
 (the probe reads no ASIMDDP in qemu's auxv, and a stray SDOT would SIGILL there) and with
 `JITLLM_FORCE_NO_DOTPROD=1` on a chip that has it. Violation runs: dropping SMULL2's high eight
 products (the tail) and doubling one sub-block's scale in the widened packed kernel both fail.
@@ -1819,14 +1819,14 @@ prefill logits, bit for bit, in one process.
 
 **The six instructions became four, and the decode kernels chain.** The sequence above was replaced
 by `smull`, `smull2`, `addp t0.8h`, `sadalp vd.4s`: adding a product PAIR in int16 is exact because
-one operand of every dot in `jit/cpu` is an activation or query quantized at amax/127, so a pair is
+one operand of every dot in `jit_old/cpu` is an activation or query quantized at amax/127, so a pair is
 at most 2*128*127 = 32512. On top of that the container decode kernels (`emitA64Packed`: the tiled
 matvec, the fused one and its integer fold) chain the two dots a row group takes per payload word --
 the low and the high nibble, or the two halves of a merged Q5/Q6 plane -- into one int16 pair with
 `smlal`/`smlal2` and fold it once (`A64.DotChain`), and broadcast each activation element once per
 word, before the row-group loop, instead of a `dup` per dot. `DotChainCap` is the bound:
 2*links*|w|max*127 <= 32767, so a nibble chains eight, a merged Q6 plane (63) two, an int8 weight
-one; the kernels use two. `jit/cpu.TestNoDotProdChainCapIsTheOverflowBound` runs the worst case
+one; the kernels use two. `jit_old/cpu.TestNoDotProdChainCapIsTheOverflowBound` runs the worst case
 (every product +|w|*127) exact at the cap and wrapped one link past it.
 
 Instructions spent beyond the SDOT kernel, per SDOT (`TestNoDotProdChainsTheDecodeDots`,
@@ -1937,7 +1937,7 @@ MECHANISM -- NOT, AS THIS RULE FIRST SAID, THE REASON.** Comparing unique KV
 bytes against streaming weight bytes locates where to look; it does not identify
 a bottleneck, and I wrote it as though it did.** At depth 1536
 K+V is 69 MB per token against ~490 MB of weights. `EmitAttnScores` advances the
-K cursor by `kvStride*4` per position (`jit/cpu/attn.go:65`) and reads `hd`
+K cursor by `kvStride*4` per position (`jit_old/cpu/attn.go:65`) and reads `hd`
 floats from each; `EmitAttnAcc` walks V the same way. On tinyllama that is **256
 useful bytes out of every 1024-byte stride**, and the pool splits over QUERY
 heads with `kvh = hh/gqa`, so a worker holding heads 0-5 reads the same quarter
@@ -2111,7 +2111,7 @@ read of V**: each walk touches a different half of every vector.
 
 **★ THE GATE IS BIT EQUALITY AT TWO LEVELS, BECAUSE THE KERNELS CHANGE NO
 ARITHMETIC.** Same FMA operands, same chain assignment, same reduction tree, same
-position order. `jit/cpu`'s gate holds the paired kernels to two single-head
+position order. `jit_old/cpu`'s gate holds the paired kernels to two single-head
 calls bit for bit across nine shapes including npos 1, 2, 1536 and 1537; the
 model gate holds whole decode to the unpaired path across all four sharing modes
 and three chunk widths. Violations that fire: a weight cursor advanced once for
@@ -2377,7 +2377,7 @@ rested box.
 `nn.Rope.Table` was the last Go transcendental arithmetic on the token path:
 `math.Cos`, `math.Sin` and `math.Mod` in a loop of NRot/2 on every token, and
 once per PROMPT POSITION in a prefill -- a 512-token chunk ran 65536 of them.
-It is `cpu.EmitRopeTable` now (`jit/cpu/ropetab.go`, `sse_ropetab.go`,
+It is `cpu.EmitRopeTable` now (`jit_old/cpu/ropetab.go`, `sse_ropetab.go`,
 `ropetab_a64.go`), with no Go arm outside the `jitllmtest` build.
 
 **The design is `exp.go`'s and the reasoning is `exp.go`'s**: range-reduce,
@@ -2550,7 +2550,7 @@ kernel "none"), and nothing asked it: `PackedSupported` checked no feature,
 `SupportedNative` answered true for F32/F16 with the comment "AVX2 only",
 `Features.UsableAVX2()` had no caller outside tests, and
 `TestEveryElementwiseOpIsGenerated` mapped each kernel without calling it --
-green on the host where the same kernels faulted. The shipped `jit/cpu` test
+green on the host where the same kernels faulted. The shipped `jit_old/cpu` test
 binary passed five arm64 encoding tests there and died in
 `TestABKQuantAccs/Q4_K` on VBROADCASTI128, a second emitter family.
 
@@ -2573,7 +2573,7 @@ token), and the GGUF row-major quantized family does not exist on this tier.
 
 ### Forced on the AVX2 laptop (`cpu.ForceTierForTest(cpu.TierSSE)`, tag jitllmtest)
 
-`jit/cpu` and `nn` green with and without the tag. The model gates, each with the
+`jit_old/cpu` and `nn` green with and without the tag. The model gates, each with the
 tier forced before any model opens and `MappedByTier()[TierAVX2]` asserted not
 to move:
 
@@ -2631,7 +2631,7 @@ reference's cache.
           every op is generated for it
     packed Q4_0 sse ... MXFP4 sse   decode coreset p, 4 core(s) 0,1,2,3
 
-- **Whole suites, unfiltered:** `jit/cpu` PASS (was 5 FAIL: the float and packed
+- **Whole suites, unfiltered:** `jit_old/cpu` PASS (was 5 FAIL: the float and packed
   matvec gates now take `cpu.Native()`'s kernel, which is the SSE one there;
   the GGUF activation packer skips by name). `nn` PASS with and without
   jitllmtest, after two fixes: `TestPreVNNIMatchesVNNIBitForBit` and its
@@ -2827,11 +2827,11 @@ measured 0.0257% of a token, with a test that fails above 0.01%.
 **"EVERY" IS A LIST IN THE REPO, NOT A SENTENCE HERE.** Five green lines answer
 it, and each fails against a violation:
 
-    jit/cpu        TestEveryElementwiseOpIsGenerated       13 ops, emitted and
+    jit_old/cpu        TestEveryElementwiseOpIsGenerated       13 ops, emitted and
                    mapped executable ON THE HOST ARCH -- so amd64 and the M4 each
                    answer for themselves, and the darwin cross-build catches a
                    name that exists on one and not the other
-    jit/cpu        TestEveryBlockOpIsGenerated             the SHAPED kernels,
+    jit_old/cpu        TestEveryBlockOpIsGenerated             the SHAPED kernels,
                    which are a separate list because their device twins differ in
                    kind: the gated delta rule and the causal convolution both
                    read a buffer they write, which RULE 13 forbids on a device,
@@ -3394,7 +3394,7 @@ The Xeon entries above ordered it: jitllm read 3.7% more bytes a token than
 llama.cpp because a Q4_K super-block's sixteen 6-bit scale/min fields took a byte
 each (16 bytes, 148 a super-block) where the GGUF packs them in 12.
 
-**The layout (`kernels.ScStream`, jit/gpu/kernels/scstream.go).** The fields run
+**The layout (`kernels.ScStream`, jit_old/gpu/kernels/scstream.go).** The fields run
 in consumption order -- sub-block 0's scale, its minimum, sub-block 1's scale, ...
 -- as one 96-bit stream, three words a super-block per row, [word][row] as
 before. Fourteen fields sit inside a word and read as the two shifts a byte cost;
@@ -3405,7 +3405,7 @@ Q5_K 176, both +0.0% over their GGUF; Llama-3.1-8B's container went
 5,284,728,832 -> 5,198,925,824 bytes.
 
 **Readers.** The host kernels unroll a super-block, so field positions are
-emit-time constants (`jit/cpu/scstream.go`: `scField`, `scStep`). The SC cursor
+emit-time constants (`jit_old/cpu/scstream.go`: `scField`, `scStep`). The SC cursor
 steps three plane strides a super-block, and a straddling field reads the next
 word -- on amd64 by stepping the cursor there and back around the load, because
 no general-purpose register is free (R14 is g); arm64 uses a spare X register.
@@ -3666,7 +3666,7 @@ pool runs, and what `cmd/jitllm` ships on that box -- so the gate has a
 
 Recorded in the design document (ARCHITECTURE.md §7, tier T1) before any kernel existed, moved here
 when that file was retired. The four input distributions are what
-`jit/cpu/matvec_test.go` and `exec_a64_test.go` still sweep; the calibration numbers behind the bound
+`jit_old/cpu/matvec_test.go` and `exec_a64_test.go` still sweep; the calibration numbers behind the bound
 were written down nowhere else.
 
 **The bound is four orders of magnitude tighter than ggml's 2.38e-7**, because that budget exists to
@@ -3685,7 +3685,7 @@ instead -- `nn.TestMatMulPackedMatchesTheRowLoopExactly` is one.)
 drives the block scale up and every other value toward zero quantized magnitude), and all +/-1 (which
 saturates the int8 range and exercises `vpmaddubsw`'s int16 headroom of 1.6%: 2*127*127 = 32,258
 against 32,767). The unsigned-weight form overflows that headroom -- 2*255*127 = 64,770 -- which is why
-the pre-VNNI and SSE tiers carry their own centring (`jit/cpu/prevnni.go`, `sse_packed.go`).
+the pre-VNNI and SSE tiers carry their own centring (`jit_old/cpu/prevnni.go`, `sse_packed.go`).
 
 **f16 accumulation measured 11x and 185x OVER the whole quantization budget**: NMSE 2.70e-6 at
 K=4096 and 1.10e-5 at K=16384. f16 as KV STORAGE is a separate question, measured under the f16 KV
@@ -3694,12 +3694,12 @@ entry at the top of this file.
 The companion tier was disassembly: the probe emitter's one bug was VEX.R taken from bit 0 of the
 register number instead of bit 3, which silently turns `ymm3` into `ymm11`, and one disassembly found
 it. That lives on as encoding tables checked against the system assembler and objdump
-(`jit/cpu/asm_test.go`, `vexenc_test.go`, `scripts/vexref.sh`) rather than as per-kernel golden files.
+(`jit_old/cpu/asm_test.go`, `vexenc_test.go`, `scripts/vexref.sh`) rather than as per-kernel golden files.
 
 ## The design-phase measurements behind owning an emitter
 
 From the design probes (C, one pinned P-core of the i9-12900HK, clang-18), moved from ARCHITECTURE.md
-§0 when that file was retired. The EVEX finding is also the package comment of `jit/cpu/asm.go`; the numbers are
+§0 when that file was retired. The EVEX finding is also the package comment of `jit_old/cpu/asm.go`; the numbers are
 only here.
 
 - **Go's assembler encodes VPDPBUSD as EVEX only**, and this chip has AVX-VNNI without AVX-512, so a
@@ -3715,12 +3715,12 @@ only here.
   (29.3 against 35.1 Gmac/s); at twelve accumulators in a 6x2 register tile it reached 226 Gmac/s,
   90.3% of hardware peak. The tile sweep spanned 5.11x (1x1 at 44 Gmac/s), and the "obvious" 4x4
   spilled to 121 because AVX2 has sixteen YMM registers. The shipped emitter's own sweep is
-  `jit/cpu` `TestGEMMTileSweep` (1.63x, per `gpu-kernels.md`).
+  `jit_old/cpu` `TestGEMMTileSweep` (1.63x, per `gpu-kernels.md`).
 
 ## Darwin runs generated code without MAP_JIT, and the hardened runtime is what kills it
 
 Measured on the M4 mini while bringing up the arm64 emitter; moved from ARCHITECTURE.md §5b when
-that file was retired and checked against `jit/cpu/exec_darwin.go` and the arm64 test runner (a local helper, not in the repo) then. Both
+that file was retired and checked against `jit_old/cpu/exec_darwin.go` and the arm64 test runner (a local helper, not in the repo) then. Both
 carry the conclusion in comments; the four-way table was only in the retired file.
 
 An earlier draft of the design said darwin needs `MAP_JIT` plus `pthread_jit_write_protect_np` around
@@ -4059,7 +4059,7 @@ paying for the threads the tests before it had left masked. The engine now integ
 its own vocabulary instead: `cmd/jitllm` aligns `GOMAXPROCS` to the engine's
 width at startup, `PCores`/`ECores`/`SMTSiblings` intersect `sched_getaffinity`
 so a narrower `taskset` yields fewer workers, and `LockOSThread` survives only
-where an API genuinely binds state to a thread (CUDA contexts, `jit/gpu/cuda`).
+where an API genuinely binds state to a thread (CUDA contexts, `jit_old/gpu/cuda`).
 
 **Measure at the thread count that SHIPS.** A win measured on one core has
 evaporated or reversed at the real thread count eight times here — the single
@@ -4121,7 +4121,7 @@ clean models.
 **The `model` gates run on amd64 and nothing ran them on the M4, so arm64 decode
 produced garbage for every quantized model and eleven green kernel gates said
 nothing.** A local helper (`scripts/local-mac-arm.sh`, not in the repo) ships a
-cross-compiled test binary to that box and has existed the whole time; what got run there was `./engine/nn` and `./jit/cpu` --
+cross-compiled test binary to that box and has existed the whole time; what got run there was `./engine/nn` and `./jit_old/cpu` --
 KERNEL packages. The one class of bug that lives above a kernel and below a
 model was therefore uncovered on half the target hardware.
 
@@ -4139,7 +4139,7 @@ BOX.** The rule above had been satisfied only in the kernel packages; the model
 gates it names were still a command nobody had run since the arm64 decode bug
 they were written for. Cross-compiled here, codesigned and run there:
 
-    ./jit/cpu   470 run, 349 pass, 121 skip, 0 fail   (skips are TOOLING, below)
+    ./jit_old/cpu   470 run, 349 pass, 121 skip, 0 fail   (skips are TOOLING, below)
     ./engine/nn         66 run,  62 pass,   4 skip, 0 fail   (skips are amd64-only by
                                                        construction -- the
                                                        batched MoE dispatch)
@@ -4170,7 +4170,7 @@ violations fail on Metal at logit NMSE **2.1 to 2.7** against a clean arm's
 an off-by-one in the per-head sheet.
 
 ★★★ **AND DOING IT FOUND A GATE THAT HAD RUN ON NO HOST AT ALL, WHICH IS THIS
-RULE AND RULE 10 IN ONE FILE.** `jit/cpu/quantacta64_test.go` is
+RULE AND RULE 10 IN ONE FILE.** `jit_old/cpu/quantacta64_test.go` is
 `//go:build arm64`, so on the Linux box `TestQuantActArgmaxA64Disassembles` and
 `TestA64QuantActArgmaxEncodings` **do not compile** -- `go test -run` prints
 "no tests to run" and exits 0 -- and over ssh the Mac hands a login PATH with no
@@ -4187,7 +4187,7 @@ clean** (143 wide + 1068 narrow + 66 argmax) and **8 NEON encodings** --
 matched.
 
 ★ **SO THE TWO HOSTS COVER DIFFERENT HALVES AND NEITHER HALF IS EMPTY NOW.** The
-121 `jit/cpu` skips are all tooling -- no GNU objdump, no llvm-mc -- and the
+121 `jit_old/cpu` skips are all tooling -- no GNU objdump, no llvm-mc -- and the
 ENCODING gates they guard do run on Linux under clang-18. Linux pins what the
 bytes decode to; the M4 pins what they do when executed. A gate that skips on
 both is the one to hunt, and the way to find it is to diff the skip lists rather
@@ -4315,7 +4315,7 @@ MADE IT SIX EMITTERS AND NOT SIXTEEN.** `kernels.DSlots(q)` is how many ROWS
 share one 32-bit d word -- **1** (a k-quant's scale beside its minimum), **2**
 (the v14 narrow f16) or **4** (an E8M0 byte) -- and `DIndex` returns
 `(idx, slot)` for all three. The parity lives on the row index, so the slot is
-known at EMIT time exactly as v14's was, and `jit/cpu.DRowBytes(t)` is
+known at EMIT time exactly as v14's was, and `jit_old/cpu.DRowBytes(t)` is
 `4/DSlotsOf(t)` everywhere a cursor advances.
 
 ★ **THE ONE TRAP, AND THE GATE THAT CAUGHT IT: THE DEVICE IR MUST SHIFT, NOT
@@ -4425,8 +4425,8 @@ base, so the half is known at EMIT time and no unroll exists:
 
 `kernels.DIndex` is the one function the packer and all five readers derive
 from. **THE READERS ARE FIVE AND THE DEVICE HAS TWO OF THEM:**
-`internal/oracle/packed.go` (the oracle), `jit/gpu/kernels/matvec.go`, `jit/gpu/kernels/mma.go`, the
-amd64 emitters and `jit/cpu/packed_a64.go`.
+`internal/oracle/packed.go` (the oracle), `jit_old/gpu/kernels/matvec.go`, `jit_old/gpu/kernels/mma.go`, the
+amd64 emitters and `jit_old/cpu/packed_a64.go`.
 
 ★★ **AND MISSING mma.go IS WHAT SANK THE FIRST ATTEMPT, AT A LINE WHOSE OWN
 COMMENT SAYS IT HAD HAPPENED BEFORE.** The change reached `matvec.go` and not
@@ -5027,7 +5027,7 @@ Each entry below is a comment that stood in the named source file,
 verbatim. The source keeps the contract, the layout and the invariants
 and points here for the derivation, the transcript and the reasons.
 
-### jit/cpu/topk.go: EmitMoETopK
+### jit_old/cpu/topk.go: EmitMoETopK
 
 The mixture-of-experts router's selection, renormalisation and ordering, as
 one generated kernel. This is the AVX2 tier; sse_topk.go and topk_a64.go are
@@ -5073,7 +5073,7 @@ eligible is tracked explicitly: the improve condition is `eligible && (p >
 max || lane empty)`, so a -Inf candidate beside NaN pads is still chosen and
 the kernel is total over every finite input and both infinities.
 
-### jit/cpu/ropetab.go: EmitRopeTable
+### jit_old/cpu/ropetab.go: EmitRopeTable
 
 The rotary table, generated: the {cos, sin} pair every rotary pair of one
 position needs. This is the AVX2 tier; sse_ropetab.go and ropetab_a64.go are
@@ -5115,7 +5115,7 @@ Registers, fixed for the whole kernel:
 	Y4  the mod-4 magic   Y5  mscale   Y6  pi/2 hi   Y7  pi/2 lo
 	Y8..Y15  the body's working set
 
-### jit/cpu/hc_const.go
+### jit_old/cpu/hc_const.go
 
 DeepSeek V4's two small kernels, the hyper-connection mixer and the
 compressor's pool. This file holds what every tier shares: the constant
@@ -5156,7 +5156,7 @@ channel:
 	Cols    S, at least one
 	RowStr  4*W, the slot stride in bytes
 
-### jit/cpu/sample.go: EmitSampleSegMax
+### jit_old/cpu/sample.go: EmitSampleSegMax
 
 EmitSampleSegMax generates the ordering's one primitive: the largest ELIGIBLE
 element of each of Rows consecutive segments, with the lowest id winning a

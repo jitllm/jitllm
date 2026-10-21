@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// The router entry point's gate. jit/cpu/moetopk_test.go gates the KERNELS
+// The router entry point's gate. jit_old/cpu/moetopk_test.go gates the KERNELS
 // over the whole shape matrix and every tie shape; this gates the SEAM -- that
 // MoETopK32JIT puts the right pointers in the right Args fields, that it sizes
 // its scratch the way NewMoERoute does, and that it refuses rather than

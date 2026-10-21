@@ -6,8 +6,8 @@ import (
 	"io"
 	"sort"
 
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/cpu"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // registerReport prints what each compiled kernel cost the host and each

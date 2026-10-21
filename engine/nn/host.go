@@ -1,6 +1,6 @@
 package nn
 
-import "github.com/jitllm/jitllm/jit/cpu"
+import "github.com/jitllm/jitllm/jit_old/cpu"
 
 // HostRefusal is why this host cannot run the engine, or nil: cpu.Baseline,
 // asked through the package model.Open already depends on.

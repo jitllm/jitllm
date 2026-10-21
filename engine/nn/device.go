@@ -15,7 +15,7 @@ import (
 
 // Device is an optional accelerator that can serve a decode matvec.
 //
-// It is declared here and implemented in jit/gpu so that the core module keeps
+// It is declared here and implemented in jit_old/gpu so that the core module keeps
 // no dependency on the FFI layer: go.mod has one require and there is no cgo
 // (goffi reaches the drivers through dlopen).
 //
@@ -1478,7 +1478,7 @@ type RowsRoomer interface {
 }
 
 // KVShareDevice is a device whose KV pages the prefix cache can name and map
-// (jit/gpu/tier/kvshare.go): PublishKV names the session's page of block li
+// (jit_old/gpu/tier/kvshare.go): PublishKV names the session's page of block li
 // by key, held by the session; MapKV puts the page key names into the
 // session's page, the sequence then written to end at least, no byte moved,
 // and is false when no page answers to key. A write into a named page copies
@@ -1492,7 +1492,7 @@ type KVShareDevice interface {
 }
 
 // RecShareDevice is a device that keeps a linear block's restore points where
-// its state lives (jit/gpu/tier/recshare.go): SnapRec copies the session's
+// its state lives (jit_old/gpu/tier/recshare.go): SnapRec copies the session's
 // state of block li into the snapshot named key, HasRec says one is kept, and
 // LoadRec copies it into the session's state. Nothing crosses the bus.
 type RecShareDevice interface {

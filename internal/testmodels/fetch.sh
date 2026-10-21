@@ -121,7 +121,7 @@ DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf          bartowski/DeepSeek-R1-Distill
 Mistral-7B-Instruct-v0.3-Q4_K_M.gguf               bartowski/Mistral-7B-Instruct-v0.3-GGUF                Mistral-7B-Instruct-v0.3-Q4_K_M.gguf                                            4372812000   default
 Mistral-7B-Instruct-v0.3/tokenizer_config.json     mistralai/Mistral-7B-Instruct-v0.3                     tokenizer_config.json                                                           140874       default
 olmoe-1b-7b-0924-instruct-Q4_K_M.gguf              allenai/OLMoE-1B-7B-0924-Instruct-GGUF                 olmoe-1b-7b-0924-instruct-q4_k_m.gguf                                           4213512672   default
-# the same file under the name format/jlm and jit/gpu/tier ask for (alias)
+# the same file under the name format/jlm and jit_old/gpu/tier ask for (alias)
 olmoe-1b-7b-Q4_K_M.gguf                            allenai/OLMoE-1B-7B-0924-Instruct-GGUF                 olmoe-1b-7b-0924-instruct-q4_k_m.gguf                                           4213512672   default
 granite/granite-3.3-2b-instruct-Q4_K_M.gguf        ibm-granite/granite-3.3-2b-instruct-GGUF               granite-3.3-2b-instruct-Q4_K_M.gguf                                             1545303328   default
 granite/granite-3.1-1b-a400m-instruct-Q4_K_M.gguf  bartowski/granite-3.1-1b-a400m-instruct-GGUF           granite-3.1-1b-a400m-instruct-Q4_K_M.gguf                                       821847360    default

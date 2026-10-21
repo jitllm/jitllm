@@ -11,7 +11,7 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // bitnetRealModels are the trained BitNet b1.58 checkpoints, each relative to

@@ -12,15 +12,15 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 
 	"github.com/jitllm/jitllm/engine/sched"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/vulkan"
+	"github.com/jitllm/jitllm/jit_old/cpu"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/vulkan"
 )
 
 // hardware reports what compute this machine offers jitllm.
 //
 // It reports rather than probes: every line is read from where the engine reads
-// it (sched for topology, jit/cpu for what the emitter generates, backend.Open
+// it (sched for topology, jit_old/cpu for what the emitter generates, backend.Open
 // for devices), so it cannot disagree with what a decode does. Nothing is
 // timed; `jitllm bench` prints the memory wall.
 func hardware() error {
@@ -89,7 +89,7 @@ func reportMem() {
 var fastPath = quant.PackedTypes
 
 func reportJIT() {
-	// Show what a run would emit: jit/cpu reads no environment, so apply the
+	// Show what a run would emit: jit_old/cpu reads no environment, so apply the
 	// same pins a run would.
 	num := func(k string) int {
 		n, _ := strconv.Atoi(os.Getenv(k))
@@ -133,9 +133,9 @@ func reportJIT() {
 }
 
 // isa names what the row-major emitter emits, and whether this CPU can run it.
-// jit/cpu probes (CPUID leaf 7.1 EAX[4] on amd64, AT_HWCAP or sysctl on arm64)
+// jit_old/cpu probes (CPUID leaf 7.1 EAX[4] on amd64, AT_HWCAP or sysctl on arm64)
 // On amd64 SupportedNative declines when the feature is absent; arm64 widens
-// SDOT instead (jit/cpu/sdotemu.go) and runs every kernel. This line is about
+// SDOT instead (jit_old/cpu/sdotemu.go) and runs every kernel. This line is about
 // the GGUF row-major family only; the packed line is what a container runs.
 func isa() string {
 	switch cpu.NativeArch() {

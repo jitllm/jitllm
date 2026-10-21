@@ -23,7 +23,7 @@ func opNamed(t *testing.T, g *Graph, name string) int {
 }
 
 // kernelSparseMixer is the device kernel's arithmetic
-// (jit/gpu/kernels/sparsemixer.go) in float32 with the sums in expert order:
+// (jit_old/gpu/kernels/sparsemixer.go) in float32 with the sums in expert order:
 // the picks, then 1/SUM of each pick's kept terms.
 func kernelSparseMixer(s []float32, eps float32) (sel [2]int, w [2]float32) {
 	thr := float32(2 * float64(eps))

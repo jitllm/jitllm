@@ -179,7 +179,7 @@ jobs:
   # whose kernels or OS differ: x86-64 (AVX2 and, via -tags jitllmtest, the SSE tier),
   # arm64 Linux and arm64 macOS (the NEON emitters, run natively); and Windows
   # x64, where the release ships too: the same x86 kernels, but its own
-  # executable memory (jit/cpu/exec_windows.go), files, paths and locks.
+  # executable memory (jit_old/cpu/exec_windows.go), files, paths and locks.
   test:
     strategy:
       fail-fast: false
@@ -203,7 +203,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: ${{ env.GO_SUMS }}
-      # The encoding gates in jit/cpu skip without a disassembler/assembler,
+      # The encoding gates in jit_old/cpu skip without a disassembler/assembler,
       # and a skip proves nothing: objdump for x86, clang + llvm-mc +
       # llvm-objdump for arm64.
       - name: disassemblers (linux)

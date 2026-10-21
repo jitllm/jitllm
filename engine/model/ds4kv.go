@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"errors"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // DeepSeek V4's compressed history (ds4.go): a compressed block keeps, beside

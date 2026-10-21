@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit_old/gpu/kernels"
 )
 
 // TestMatVecPackedTakesALongerActivation hands MatVecPacked an activation

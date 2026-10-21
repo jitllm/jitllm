@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestStepNMSEBand is the instrument denseStepBand was set from, not a gate:

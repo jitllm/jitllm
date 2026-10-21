@@ -5,7 +5,7 @@ import (
 	"math"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // A multi-axis rotary: a position with more than one coordinate, each turning

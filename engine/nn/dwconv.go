@@ -5,7 +5,7 @@ package nn
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // AddDWConv generates the depthwise convolution row of shape s (cpu.DWShape)

@@ -3,7 +3,7 @@ package model
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // KVType is the KV cache's element format, forced per model with WithKVType

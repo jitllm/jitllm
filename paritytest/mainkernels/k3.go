@@ -3,11 +3,11 @@ package mainkernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // Kimi-K3's residual attention on the device (nn.LayerPlan.K3;
-// engine/model/k3.go is the graph and jit/gpu/tier/k3.go the wiring).
+// engine/model/k3.go is the graph and jit_old/gpu/tier/k3.go the wiring).
 //
 // The residual is streams of d, stream-major for `rows` rows (stream k of row
 // r at (k*rows + r)*d): stream 0 the running residual, stream 1+j checkpoint

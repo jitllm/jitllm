@@ -5,7 +5,7 @@ package nn
 import (
 	"unsafe"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // The greedy sampler's argmax, generated. It is a package-level kernel rather

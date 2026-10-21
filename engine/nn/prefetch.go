@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // The fused packed kernel's software-prefetch distance is measured per host,

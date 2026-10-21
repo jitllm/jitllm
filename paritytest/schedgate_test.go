@@ -17,7 +17,7 @@ var handSchedule = regexp.MustCompile(`compose\.Schedule\{|\bPlanAt\(|\bemitAt\(
 
 func TestNoHandPickedSchedules(t *testing.T) {
 	var files []string
-	for _, glob := range []string{"*_test.go", "../jit/gpu/tier/*.go"} {
+	for _, glob := range []string{"*_test.go", "../jit_old/gpu/tier/*.go"} {
 		m, err := filepath.Glob(glob)
 		if err != nil {
 			t.Fatal(err)

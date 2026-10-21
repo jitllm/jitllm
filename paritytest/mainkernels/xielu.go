@@ -3,11 +3,11 @@ package mainkernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // XIELU is Apertus's xIELU over n elements, out of place, the device twin of
-// jit/cpu's EmitXIELU (xielu_const.go there has the arithmetic):
+// jit_old/cpu's EmitXIELU (xielu_const.go there has the arithmetic):
 //
 //	x > 0:   alpha_p*x*x + beta*x
 //	x <= 0:  (g(m) + (m - x))*alpha_n + beta*x,   m = min(x, eps)

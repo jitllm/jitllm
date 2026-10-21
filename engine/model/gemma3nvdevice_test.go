@@ -4,10 +4,10 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
-// Gemma 3n's MobileNet-V5 on the device (jit/gpu/tier/conv.go) against the
+// Gemma 3n's MobileNet-V5 on the device (jit_old/gpu/tier/conv.go) against the
 // host, block by block and end to end.
 
 // g3nvBlocks is the host's tower over the golden's picture: the stem's output

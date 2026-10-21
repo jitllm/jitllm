@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestGroupedMixtureRunsAtARaggedWidth: a prompt chunk through a mixture whose

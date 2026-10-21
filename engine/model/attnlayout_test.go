@@ -9,7 +9,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // TestAttnLayoutProbe prices a head-major KV cache layout against row-major.

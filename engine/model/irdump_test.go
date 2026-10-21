@@ -10,9 +10,9 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/backend/recorder"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend/recorder"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 	"github.com/jitllm/jitllm/paritytest/maintier"
 )
 

@@ -29,7 +29,7 @@
       "note": "the CLI: flags, environment, doctor, capabilities"
     },
     "jit-cpu": {
-      "module": ".", "packages": ["./jit/cpu/..."], "cap": "8G",
+      "module": ".", "packages": ["./jit_old/cpu/..."], "cap": "8G",
       "note": "every host emitter against the oracle at ragged widths (RULE 8), and no assembly but the trampolines"
     },
     "nn": {
@@ -74,16 +74,16 @@
       "note": "every graph feature on the device, every block placed against the host (RULE 11c)"
     },
     "gpu-lowering": {
-      "module": ".", "packages": ["./jit/gpu/ir/...", "./jit/gpu/ptx/...", "./jit/gpu/spirv/...", "./jit/gpu/msl/...", "./jit/gpu/amdgpu/...", "./jit/gpu/lowertest/...", "./jit/gpu/kernels/..."], "cap": "8G",
+      "module": ".", "packages": ["./jit_old/gpu/ir/...", "./jit_old/gpu/ptx/...", "./jit_old/gpu/spirv/...", "./jit_old/gpu/msl/...", "./jit_old/gpu/amdgpu/...", "./jit_old/gpu/lowertest/...", "./jit_old/gpu/kernels/..."], "cap": "8G",
       "note": "the IR and its four lowerings; runs with no GPU"
     },
     "gpu-backend": {
-      "module": ".", "packages": ["./jit/gpu/backend/...", "./jit/gpu/cuda/...", "./jit/gpu/vulkan/...", "./jit/gpu/metal/...", "./jit/gpu/hip/...", "./jit/gpu/ffi/..."], "cap": "8G",
+      "module": ".", "packages": ["./jit_old/gpu/backend/...", "./jit_old/gpu/cuda/...", "./jit_old/gpu/vulkan/...", "./jit_old/gpu/metal/...", "./jit_old/gpu/hip/...", "./jit_old/gpu/ffi/..."], "cap": "8G",
       "needs": {"device": true},
       "note": "the backends against the oracle on a real device"
     },
     "gpu-tier": {
-      "module": ".", "packages": ["./jit/gpu/tier/..."], "cap": "16G",
+      "module": ".", "packages": ["./jit_old/gpu/tier/..."], "cap": "16G",
       "needs": {"device": true},
       "note": "placement, budgets and multi-device"
     },
@@ -119,21 +119,21 @@
     {"prefix": "engine/nn/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["nn", "jit-cpu", "model-correctness", "five-principles", "vet"]},
     {"prefix": "engine/grammar/", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["nn", "server", "vet"]},
     {"prefix": "engine/sched/", "evidence": "docs/engineering-history/scheduling-and-measurement.md", "checks": ["sched", "five-principles", "vet"]},
-    {"prefix": "jit/cpu/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["jit-cpu", "nn", "model-correctness", "five-principles", "vet"]},
-    {"prefix": "jit/gpu/ir/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/gpu/ptx/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/gpu/spirv/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/gpu/msl/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/gpu/amdgpu/", "evidence": "docs/design/amd-hip.md", "checks": ["gpu-lowering", "gpu-backend", "vet"]},
-    {"prefix": "jit/gpu/lowertest/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "vet"]},
-    {"prefix": "jit/gpu/kernels/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "five-principles", "vet"]},
-    {"prefix": "jit/gpu/backend/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "relocation", "capabilities", "vet"]},
-    {"prefix": "jit/gpu/cuda/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/gpu/vulkan/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/gpu/metal/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
-    {"prefix": "jit/gpu/hip/", "evidence": "docs/design/amd-hip.md", "checks": ["gpu-backend", "vet"]},
-    {"prefix": "jit/gpu/ffi/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "vet"]},
-    {"prefix": "jit/gpu/tier/", "evidence": "docs/engineering-history/placement.md", "checks": ["gpu-tier", "relocation", "device-model", "five-principles", "vet"]},
+    {"prefix": "jit_old/cpu/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["jit-cpu", "nn", "model-correctness", "five-principles", "vet"]},
+    {"prefix": "jit_old/gpu/ir/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
+    {"prefix": "jit_old/gpu/ptx/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
+    {"prefix": "jit_old/gpu/spirv/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
+    {"prefix": "jit_old/gpu/msl/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "vet"]},
+    {"prefix": "jit_old/gpu/amdgpu/", "evidence": "docs/design/amd-hip.md", "checks": ["gpu-lowering", "gpu-backend", "vet"]},
+    {"prefix": "jit_old/gpu/lowertest/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "vet"]},
+    {"prefix": "jit_old/gpu/kernels/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-lowering", "gpu-backend", "device-model", "five-principles", "vet"]},
+    {"prefix": "jit_old/gpu/backend/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "relocation", "capabilities", "vet"]},
+    {"prefix": "jit_old/gpu/cuda/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
+    {"prefix": "jit_old/gpu/vulkan/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
+    {"prefix": "jit_old/gpu/metal/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
+    {"prefix": "jit_old/gpu/hip/", "evidence": "docs/design/amd-hip.md", "checks": ["gpu-backend", "vet"]},
+    {"prefix": "jit_old/gpu/ffi/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "vet"]},
+    {"prefix": "jit_old/gpu/tier/", "evidence": "docs/engineering-history/placement.md", "checks": ["gpu-tier", "relocation", "device-model", "five-principles", "vet"]},
     {"prefix": "format/jlm/", "evidence": "docs/engineering-history/placement.md", "checks": ["format", "five-principles", "model-correctness", "capabilities", "vet"]},
     {"prefix": "format/quant/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["format", "jit-cpu", "capabilities", "srcgate", "vet"]},
     {"prefix": "convert/", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["convert", "srcgate", "capabilities", "model-correctness", "vet"]},

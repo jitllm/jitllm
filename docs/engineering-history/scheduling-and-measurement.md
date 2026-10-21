@@ -150,7 +150,7 @@ So:
 **★ 3b. THE RULE IS ENFORCED BY A HOOK, BECAUSE WRITING IT DOWN DID NOT WORK.**
 
 It was violated twice on the same day, killing the desktop both times. The second time the offending
-command was `gofmt -w jit/ && go test ./jit/ -run='TestEncodings|TestObjdump'` — two trivial tests,
+command was `gofmt -w jit_old/ && go test ./jit_old/ -run='TestEncodings|TestObjdump'` — two trivial tests,
 which is exactly why it felt safe. It is not the test that is heavy, it is `go test`: the package
 gets compiled first, at whatever parallelism the toolchain feels like.
 
@@ -1675,7 +1675,7 @@ shared pools (154 -> 106). It is the trade, and `WithServingSplit(false)` /
 Both cases are work proposed or built beside machinery that already did it.
 
 - **A device expert cache.** It was proposed as new work. `streamBank` in
-  `jit/gpu/tier/layer.go` already is one: the host side of a block whose routed
+  `jit_old/gpu/tier/layer.go` already is one: the host side of a block whose routed
   experts are assembled per token, with its own residency. The task was to read
   it and extend it, not to write a second cache beside it.
 - **Decision prefixes.** The decision branch reused the prefix cache through

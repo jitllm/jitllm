@@ -8,9 +8,9 @@ import (
 
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/cpu"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // hotFloor is the occupancy a hot kernel family must keep on a device, as a
@@ -35,11 +35,11 @@ var hotFloors = []hotFloor{
 
 // hostStagers are the host emitters that address the stack by design: the
 // k-quant matvecs keep loop-invariant bases and a block's unpacked scales in
-// the System V red zone (jit/cpu/matvec.go, "The loop-invariant bases live in
+// the System V red zone (jit_old/cpu/matvec.go, "The loop-invariant bases live in
 // the RED ZONE"), and the SSE packed tile stages its scale planes there
-// (jit/cpu/sse_packed.go). Every other host kernel holds its values in
+// (jit_old/cpu/sse_packed.go). Every other host kernel holds its values in
 // registers, and one that starts addressing the stack has outgrown the file.
-// The set is every emitter in jit/cpu that writes At(RSP, ...).
+// The set is every emitter in jit_old/cpu that writes At(RSP, ...).
 var hostStagers = map[string]bool{
 	"cpu.emitMatVec4":              true,
 	"cpu.emitQ3KMatVec":            true,

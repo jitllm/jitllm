@@ -3,16 +3,16 @@
 
     scripts/kernel-inventory.py > docs/kernel-inventory.csv
     scripts/kernel-inventory.py --summary          # the counts the .md quotes
-    scripts/kernel-inventory.py --skip jit/gpu/kernels/x.go ...   # leave a file out
+    scripts/kernel-inventory.py --skip jit_old/gpu/kernels/x.go ...   # leave a file out
     scripts/kernel-inventory.py --root DIR         # read another checkout, e.g.
                                                    # a `git archive <commit>` export
 
 Every row is derived from the source, nothing is carried over:
 
-  kind              cpu  -- a top-level exported `func Emit...` in jit/cpu
+  kind              cpu  -- a top-level exported `func Emit...` in jit_old/cpu
                           whose result is []byte or ([]byte, error): a
                           machine-code generator
-                    gpu  -- a top-level exported func in jit/gpu/kernels
+                    gpu  -- a top-level exported func in jit_old/gpu/kernels
                           whose result carries *ir.Kernel: an IR constructor
   symbol, file,     the declaration as written; a name declared once per
   line              architecture file appears once per declaration
@@ -31,8 +31,8 @@ import sys
 from collections import defaultdict
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-CPU = "jit/cpu"
-GPU = "jit/gpu/kernels"
+CPU = "jit_old/cpu"
+GPU = "jit_old/gpu/kernels"
 ARCHES = {"amd64", "arm64", "386", "arm", "riscv64", "ppc64le", "s390x", "wasm", "loong64", "mips64"}
 OSES = {"linux", "darwin", "windows", "freebsd", "openbsd", "netbsd", "android", "ios", "js", "wasip1"}
 
@@ -147,7 +147,7 @@ def emitter_slots():
 
 
 def callers(symbols):
-    """Non-test packages outside jit/gpu/kernels that name kernels.<sym> --
+    """Non-test packages outside jit_old/gpu/kernels that name kernels.<sym> --
     a call or a function value; comments are stripped first."""
     found = defaultdict(set)
     pat = re.compile(r"\bkernels\.(" + "|".join(sorted(symbols, key=len, reverse=True)) + r")\b")
@@ -183,8 +183,8 @@ def main():
         gpu = [r for r in rs if r[0] == "gpu"]
         gen, query, flag = emitter_slots()
         print(f"cpu.Emitters: {len(gen)} generator slots, {len(query)} queries {query}, flags {flag}")
-        print(f"jit/cpu: {len(cpu)} declarations, {len(set(r[1] for r in cpu))} unique names")
-        print(f"jit/gpu/kernels: {len(gpu)} constructors")
+        print(f"jit_old/cpu: {len(cpu)} declarations, {len(set(r[1] for r in cpu))} unique names")
+        print(f"jit_old/gpu/kernels: {len(gpu)} constructors")
         calls = callers({r[1] for r in gpu})
         for r in gpu:
             print(f"  {r[1]:28} {r[2]}:{r[3]}  <- {', '.join(sorted(calls.get(r[1], ()))) or '(no non-test caller outside the package)'}")

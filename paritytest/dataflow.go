@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/jitllm/jitllm/jit/gpu/compose"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/compose"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // Miss is one of main's instructions the composer's kernels do not hold:

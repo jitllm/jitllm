@@ -1,5 +1,5 @@
 #!/bin/sh
-# Ground truth for jit/cpu/asm_test.go: assemble instructions with the system
+# Ground truth for jit_old/cpu/asm_test.go: assemble instructions with the system
 # assembler and print their bytes. No one's memory is involved.
 #
 #   printf '%s\n' "vpaddd ymm1, ymm2, ymm3" | scripts/vexref.sh

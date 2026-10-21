@@ -39,8 +39,8 @@ Things to know before using or changing it:
 - [engine/model](https://github.com/jitllm/jitllm/tree/main/engine/model): the inference engine (Open, State, Prefill/Forward, batching, Scheduler, KV stores, prefix cache, embeddings, vision)
 - [engine/nn](https://github.com/jitllm/jitllm/tree/main/engine/nn): the kernel entry points the graph calls, and per-shape kernel selection
 - [engine/sched](https://github.com/jitllm/jitllm/tree/main/engine/sched): the worker pool, core sets and memory budgets
-- [jit/cpu](https://github.com/jitllm/jitllm/tree/main/jit/cpu): the x86-64 (SSE, AVX2, VNNI) and ARM64 code generators
-- [jit/gpu](https://github.com/jitllm/jitllm/tree/main/jit/gpu): the kernel IR, the PTX/SPIR-V/MSL lowering, the CUDA/Vulkan/Metal backends and the device tier (placement, budgets, multi-GPU)
+- [jit_old/cpu](https://github.com/jitllm/jitllm/tree/main/jit_old/cpu): the x86-64 (SSE, AVX2, VNNI) and ARM64 code generators
+- [jit_old/gpu](https://github.com/jitllm/jitllm/tree/main/jit_old/gpu): the kernel IR, the PTX/SPIR-V/MSL lowering, the CUDA/Vulkan/Metal backends and the device tier (placement, budgets, multi-GPU)
 - [format/jlm](https://github.com/jitllm/jitllm/tree/main/format/jlm): the `.jlm` container and its pager (O_DIRECT reads, block and expert pages)
 - [convert](https://github.com/jitllm/jitllm/tree/main/convert): GGUF and safetensors to `.jlm`, the supported architecture list (`convert.archOf`) and the model catalog
 - [tok](https://github.com/jitllm/jitllm/tree/main/tok): tokenizers (BPE, SentencePiece, WordPiece), pre-tokenizer tables and the Jinja chat-template engine

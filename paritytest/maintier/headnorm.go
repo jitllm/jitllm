@@ -5,7 +5,7 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
 )
 
 // The resident head is the model's: one projection per device, and a second

@@ -73,7 +73,7 @@ apart, and the k-quant model is the slow one.** Format is now the biggest single
 term. **A control is only valid while the thing it controls for is still the
 binding constraint.**
 
-**★ THE SASS SAYS THE SAME THING WITHOUT ANY RATIO.** `jit/gpu/cmd/ptxdump` +
+**★ THE SASS SAYS THE SAME THING WITHOUT ANY RATIO.** `jit_old/gpu/cmd/ptxdump` +
 ptxas + cuobjdump, tinyllama's shipping prefill shape (Q3_K, k=2048, rows=5632,
 NTok=128, MT=4, NT=4):
 
@@ -475,7 +475,7 @@ copy, scores, softmax, the weighted sum, the FFN gate, the residual add) is a ge
 residual stream never returns to the host inside a block.
 
 A block, not a token, for two reasons. The device never learns what a transformer is beyond one
-repeating unit -- `engine/model/` keeps the graph, and nothing in `jit/gpu` knows about embedding lookup,
+repeating unit -- `engine/model/` keeps the graph, and nothing in `jit_old/gpu` knows about embedding lookup,
 sampling or tied output weights. And **the CPU/GPU split falls out for free**: `PrepLayer` is per
 block and may decline, so a model too big for the card runs its first N blocks on the device and the
 rest on the CPU, with no separate placement policy. On a 4 GB card that is the difference between
@@ -565,7 +565,7 @@ per surplus thread -- both produced correct numbers in every head but the LAST, 
 clamp piles onto, so a spot check of head 0 passes and the failure reads like a GQA indexing bug.
 Aliasing is a property of the ops, so it is checked rather than remembered.
 
-**★ 12e. `jit/gpu/lowertest` ASSEMBLES EVERY SHIPPED KERNEL WITH THE VENDORS' OWN TOOLS.** PTX
+**★ 12e. `jit_old/gpu/lowertest` ASSEMBLES EVERY SHIPPED KERNEL WITH THE VENDORS' OWN TOOLS.** PTX
 refuses a divide with no rounding modifier, and nothing caught `div.f32` until a kernel that divides
 reached real hardware, where the entire symptom was `CUresult=218`, "a PTX JIT compilation failed",
 with no line number. The lowerers had unit tests for the ops they knew about; what was missing was a
@@ -1845,12 +1845,12 @@ at all -- which is RULE 8a's own failure mode: a graph change on the CPU alone
 removes the capability from the device, not as an error but as an absence.
 
 `kernels.RopeTable` is the fourth transcription of the host kernel that landed
-alongside it (jit/cpu/ropetab.go and its SSE and NEON twins are the other
+alongside it (jit_old/cpu/ropetab.go and its SSE and NEON twins are the other
 three): the same four-digit position decomposition, the same folded planes, the
 same degree 7/8 minimax pair on |r| <= pi/4. It calls nothing of the vendor's.
 The planes are DATA -- `nn.Rope.TabPlanes`, folded in float64 once per model at
-load -- so `jit/gpu/kernels` borrows nothing from `jit/cpu` but the layout,
-which moved down into `kernels/ropetab_const.go` because `jit/cpu` already
+load -- so `jit_old/gpu/kernels` borrows nothing from `jit_old/cpu` but the layout,
+which moved down into `kernels/ropetab_const.go` because `jit_old/cpu` already
 imports that package and the other direction is a cycle.
 
 **Measured against the host kernel's own table, on real hardware, all three
@@ -2398,9 +2398,9 @@ kshim against event nodes there puts the matvecs level (10,279 against 10,282
 us a token, event overhead subtracted) and jitllm's elementwise chain ~250 us
 above llama.cpp's.
 
-### Figures moved out of jit/gpu/tier comments
+### Figures moved out of jit_old/gpu/tier comments
 
-These figures stood in source comments under `jit/gpu/tier/` until a comment
+These figures stood in source comments under `jit_old/gpu/tier/` until a comment
 cleanup trimmed them, and were recorded nowhere else. They are kept here
 verbatim, grouped by the symbol each one justified. Unnamed "this card" in the
 original comments is the laptop's RTX 3050 Ti; V100 is the 8x V100 server's
@@ -2626,7 +2626,7 @@ on gemma's shapes, what the rule cost (the case for `tuneSplit`):
 Moved from ARCHITECTURE.md (§5a and §5a-bis) when that file was retired; nothing
 else recorded them. Paths and names were checked against the tree at that move. At the time the
 driver libraries were reached through purego and the tier lived in a second Go module; today the FFI
-is goffi (`jit/gpu/ffi`) and there is one module. Every number below is from the tier's first measurements and predates
+is goffi (`jit_old/gpu/ffi`) and there is one module. Every number below is from the tier's first measurements and predates
 whole-block submission (RULE 12), so it describes kernels, not tokens.
 
 **The design said the GPU tier needed no generated code, and the first prefill probe reversed that.**
@@ -2647,14 +2647,14 @@ CPU reference:
 **18.7x from the tile alone**, against 1.63x for the same sweep on the CPU (`TestGEMMTileSweep`).
 ptxas owns register allocation, but the TILE is a source-level decision the generator makes. The probe
 also measured codegen plus ptxas at 8-28 ms per shape against ~18 us for the CPU emitter; the driver's
-on-disk cache keyed on the PTX text (`~/.nv/ComputeCache`, see `jit/gpu/cuda/api.go`) is what makes a
+on-disk cache keyed on the PTX text (`~/.nv/ComputeCache`, see `jit_old/gpu/cuda/api.go`) is what makes a
 second process pay 0.108 ms instead of 36.7. One more constraint came out of the probe and is why the
 PTX emitter writes `.version 7.8`: nvcc 12.9 emitted `.version 8.8`, which driver 550.163.01 (CUDA
 12.4, maximum ISA 8.4) rejected at RUN time with "compiled with an unsupported toolchain".
 
-**Then the IR.** `jit/gpu/ir` is a typed IR (about two dozen ops on that day) lowered by three
-backends: `ptx` (run through `jit/gpu/cuda`), `spirv` (`jit/gpu/vulkan`) and `msl`
-(`jit/gpu/metal`). Verified on the RTX 3050 Ti (PTX and Vulkan), Intel Iris Xe, llvmpipe and the
+**Then the IR.** `jit_old/gpu/ir` is a typed IR (about two dozen ops on that day) lowered by three
+backends: `ptx` (run through `jit_old/gpu/cuda`), `spirv` (`jit_old/gpu/vulkan`) and `msl`
+(`jit_old/gpu/metal`). Verified on the RTX 3050 Ti (PTX and Vulkan), Intel Iris Xe, llvmpipe and the
 Apple M4. Three things it established:
 
 1. **Buffers are indexed by element, not addressed by byte pointer.** Byte-pointer arithmetic is a
@@ -2667,7 +2667,7 @@ Apple M4. Three things it established:
 3. **`spirv-val` is a gate, not a lint.** Two emitter bugs -- `OpVariable` with its result type and
    result id swapped, and `PackedVectorFormat4x8Bit` written as 1 where it is 0 -- each crashed
    NVIDIA's compiler inside `vkCreateComputePipelines` with a SIGSEGV and no diagnostic; the validator
-   named each in one line. `jit/gpu/spirv/spirv_test.go` runs it when it is installed.
+   named each in one line. `jit_old/gpu/spirv/spirv_test.go` runs it when it is installed.
 
 **Bit-exact across five GPU stacks and three vendors, not within tolerance.** int8 x int8 into int32 is
 integer arithmetic, so two correct backends agree to the last bit, and a tolerance would have hidden
@@ -2962,7 +2962,7 @@ launched 64 wide) is refused by name on cuda:0, vulkan:0 and vulkan:1
 (`TestStagedPagedPrefillGateDiscriminates`).
 
 To find any other kernel with the mismatch, every `engine/model` test that
-opens a device tier (270), and the `jit/gpu/tier` and `jit/gpu/backend`
+opens a device tier (270), and the `jit_old/gpu/tier` and `jit_old/gpu/backend`
 packages, ran with every refusal logged: on the RTX 3050 Ti's cuda:0 and
 vulkan:0, and on the V100 box in eight slices, one card each (cuda:0 and
 vulkan:k), plus the tier package. The log held the deliberate violations and
@@ -3145,7 +3145,7 @@ tier chooses, so nothing else here has a decode rate behind it yet.
 ### The decode plan through the tier, and the harness bias it exposed
 
 With kernels.ChooseDecodePlan choosing each paged decode's path, splits,
-width and merge (jit/gpu/tier/pagedattn.go, pagedPlanFor), the V100 first read
+width and merge (jit_old/gpu/tier/pagedattn.go, pagedPlanFor), the V100 first read
 2.7% slower than the old split rule at 512 keys -- and every single piece put
 back (splits, merge, vector V) read the same 0.972, as did two tiers holding
 the SAME plan. The harness was the variable: its one-tier A/A decoded 640
@@ -3803,7 +3803,7 @@ that `fuseQKV` fuses -- split 1, or in-group -- on any model, dense too
 (Llama-3.2-1B: `JITLLM_GPU_TUNE=0 JITLLM_GPU_SPLIT=2 JITLLM_GPU_FORCE_GROUP=1
 jitllm run -devices vulkan:2`; the same on vulkan:0, vulkan:1 and cuda:0 gave
 the host's ids). The kernel gate reproduced it without a model:
-`JITLLM_VK_DEVICE=2 go test ./jit/gpu/backend -run
+`JITLLM_VK_DEVICE=2 go test ./jit_old/gpu/backend -run
 TestMatVecSegmentsIsTheSeparateLaunches` faulted on its first spirv case.
 spirv-val passed the module, the validation layer reported nothing, and the
 fault was a load through a null base.
@@ -3902,7 +3902,7 @@ so `TestSoftwareVulkanIsDeclined` narrows it to lavapipe in a child process.
 **And the skip is loud now.** `enumerate` remembers the process's first device
 count and returns `vulkan.ErrDevicesVanished` for an enumeration that comes
 back shorter. `engine/model`'s device arms skip through `noDevice`, which fails
-on that error; `engine/model`, `jit/gpu/backend` and `jit/gpu/tier` fail the
+on that error; `engine/model`, `jit_old/gpu/backend` and `jit_old/gpu/tier` fail the
 binary from `TestMain` when any enumeration shrank, for a skip `noDevice` does
 not reach. Against the unfixed engine the latent sequence that had skipped
 four Vulkan arms failed them ("was there earlier in this process and is gone
@@ -4489,7 +4489,7 @@ number without a counter.** RULE 10, caught by the counter rather than by care.
 
   ★★★★★ **AND THE EIGHT POINTS ARE TWO TERMS, NOT ONE -- MEASURED BY
   THE GPU's OWN CLOCK, AND THE ON-DEVICE HALF IS PER LAYER RATHER THAN PER
-  BYTE.** Every counter in `jit/gpu/metal` is a CPU timer: they bound
+  BYTE.** Every counter in `jit_old/gpu/metal` is a CPU timer: they bound
   SUBMISSION and cannot tell a device that is streaming from one idling between
   two dependent dispatches. `MTLCommandBuffer.GPUStartTime/GPUEndTime` bracket
   execution ON the device, so `token wall - GPU busy` is a measurement rather
@@ -5256,7 +5256,7 @@ number without a counter.** RULE 10, caught by the counter rather than by care.
 
 - **★ A DEVICE BUFFER THAT IS NEVER FREED IS INVISIBLE TO EVERY PAGING GATE, AND
   WAS FOR THE LIFE OF THE TIER.** `func (b *fakeBuf) Free() {}` -- every fake
-  buffer in `jit/gpu/tier`'s tests discarded it, so the gates asserted a block
+  buffer in `jit_old/gpu/tier`'s tests discarded it, so the gates asserted a block
   was PAGED OUT and never that its memory came BACK. Once fixed, it
   found four leaks immediately (Close never freeing g.layers, blockScratch
   having no free path at all, PrepLayer overwriting a resident block without
@@ -5330,7 +5330,7 @@ Qwen-family tower ran a block on any device here. Had it placed, every call
 would have run all 65536 rows for a picture of 1024: kernels bake their row
 count.
 
-`jit/gpu/tier/visrows.go`: the set is built for `visCap` rows, which `capped`
+`jit_old/gpu/tier/visrows.go`: the set is built for `visCap` rows, which `capped`
 hands every tower plan as its MaxSeq. Placement starts at `visStart` (1024)
 or the tower's MaxSeq when smaller (a fixed-grid tower's picture).
 `ReserveRows` (`nn.RowsReserver`), called by `State.encodeBlocks` before a
@@ -5840,16 +5840,16 @@ replayed like a decode step, and a recording is the session's, so each new
 session captures it once (about 1 ms on the V100), and the head runs as its
 own call.
 
-## Measurements once cited in jit/gpu/tier's comments
+## Measurements once cited in jit_old/gpu/tier's comments
 
 The tier's comments state the engineering reason and the class of card; the
 measurements they used to carry, with the machine that produced them, are
 here verbatim.
 
-- `groupTokMax` (`jit/gpu/tier/rows.go`): "Llama-3.1-8B Q4_K_M on a V100,
+- `groupTokMax` (`jit_old/gpu/tier/rows.go`): "Llama-3.1-8B Q4_K_M on a V100,
   tok/s together, groupMV against the tiled twin: 2 sessions 203 / 146, 4
   307 / 270, 8 363 / 488."
-- `dropSession` (`jit/gpu/tier/layer.go`), on why the scratch's bound is not
+- `dropSession` (`jit_old/gpu/tier/layer.go`), on why the scratch's bound is not
   reset: "(measured: pp512 on a V100 17.4k tok/s on the first prompt of a
   process and 13.7-14.0k on every one after)". The bisection is "The prompt
   lost 22% on the V100, and none of it was a kernel" above.
@@ -5876,15 +5876,15 @@ Each entry below is a comment that stood in the named source file,
 verbatim. The source keeps the contract, the layout and the invariants
 and points here for the derivation, the transcript and the reasons.
 
-### jit/gpu/kernels/ropetab_const.go
+### jit_old/gpu/kernels/ropetab_const.go
 
 The rotary table's constant block and its layout: the {cos, sin} pair per
 rotary pair, formed by a kernel rather than math.Cos/math.Sin in Go.
 
 One copy of the layout for four tiers (AVX2, SSE, NEON and the device): the
 layout is the ABI between the emitters and nn. It lives here rather than in
-jit/cpu because jit/cpu already imports this package, so a device kernel
-importing jit/cpu would close a cycle; jit/cpu/ropetab_const.go re-exports
+jit_old/cpu because jit_old/cpu already imports this package, so a device kernel
+importing jit_old/cpu would close a cycle; jit_old/cpu/ropetab_const.go re-exports
 every name.
 
 The precision lives in the constants. The angle is pos*g radians with pos up

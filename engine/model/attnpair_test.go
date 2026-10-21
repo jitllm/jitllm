@@ -9,7 +9,7 @@ import (
 // TestPairedAttentionIsBitIdentical holds decode with the paired attention
 // kernels to decode without them, logit for logit.
 //
-// The paired kernels share a load and change no arithmetic, and jit/cpu's gate
+// The paired kernels share a load and change no arithmetic, and jit_old/cpu's gate
 // holds them bit-identical to two single-head calls, so decode must match too;
 // anything else means the pairing is wrong (a pair across a kv-head boundary, a
 // dropped odd tail, a task boundary splitting a pair). All four settings run,

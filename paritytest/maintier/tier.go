@@ -1,4 +1,4 @@
-// Package tier is jitllm's GPU decode tier: an nn.Device backed by the generated device kernels (jit/gpu).
+// Package tier is jitllm's GPU decode tier: an nn.Device backed by the generated device kernels (jit_old/gpu).
 //
 // tier.GPU is a router over one devTier per card, each with its own residency
 // map, budget, kernels, staging buffers and lock. It places a model's blocks
@@ -24,7 +24,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
 	kernels "github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 

@@ -7,10 +7,10 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
-// The n-gram hash (jit/cpu/ngram_const.go has the contract): Qwen3.8-Flash-
+// The n-gram hash (jit_old/cpu/ngram_const.go has the contract): Qwen3.8-Flash-
 // Next's table rows for one position, on generated integer code.
 
 type ngramKey struct {

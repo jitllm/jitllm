@@ -284,10 +284,10 @@ softmax + plain top-k + `FlagNoExpertNorm`. Only **V3** needs the new router.
 split between selection score and weight score means:
 
 - a wider key and a wider emitter signature in **three host tiers** — AVX2
-  (`jit/cpu/topk*.go`), SSE (`jit/cpu/sse_complete.go:146` lists `MoETopK` as a
-  required SSE kernel) and arm64 (`jit/cpu/topk_a64.go`);
+  (`jit_old/cpu/topk*.go`), SSE (`jit_old/cpu/sse_complete.go:146` lists `MoETopK` as a
+  required SSE kernel) and arm64 (`jit_old/cpu/topk_a64.go`);
 - **one** IR kernel change on the device side — `kernels.ExpertRank` /
-  `kernels.ExpertWeights` in `jit/gpu/kernels/moe.go` lower to PTX, SPIR-V and
+  `kernels.ExpertWeights` in `jit_old/gpu/kernels/moe.go` lower to PTX, SPIR-V and
   MSL from one definition, so the device is one edit, not three;
 - 4-5 `jlm.Config` fields (`ExpertGroups`, `ExpertGroupsUsed`,
   `ExpertWeightsScale`, a gating-function enum) and a version bump.
@@ -411,7 +411,7 @@ that counts names would miss:
   `RoleSSMConv1d`, `RoleSSMA`, `RoleSSMDtBias`, `RoleSSMNorm`, `RoleSSMOut`,
   `RoleSSMOutGate` (`format/jlm/schema.go:245-253`).
 - The device kernels: `kernels.Conv1dRows`, `Conv1dShift`, `GatedDeltaStep`,
-  `DeltaGate` (`jit/gpu/kernels/recurrent.go`), all out-of-place so
+  `DeltaGate` (`jit_old/gpu/kernels/recurrent.go`), all out-of-place so
   `ir.Validate`'s no-read-your-own-write rule holds.
 - The state machinery: the double-buffered `recPair` and its swap, `MigrateRec`
   / `syncRecFromDevice` / `pushRecToDevice`, a hybrid's single KV restore point,
@@ -434,7 +434,7 @@ own keys: `kda.head_dim`, `attention.decay_lora_rank`,
 `attention.iclr_lora_rank`, `attention.gate_lora_rank`.
 
 **What jitllm has.** `kernels.GatedDeltaStep(vHeads, vDim, kDim, rep)`
-(`jit/gpu/kernels/recurrent.go:146`) — per-head SCALAR `decay` and `beta`, a
+(`jit_old/gpu/kernels/recurrent.go:146`) — per-head SCALAR `decay` and `beta`, a
 rank-one state update `S <- S*decay + beta*(v - S*decay*k)*k^T`, out of place,
 with the state-buffer swap owned by the caller. That is Gated DeltaNet.
 
@@ -606,9 +606,9 @@ touches twenty non-test files:
     internal/oracle/packed.go   the reference decoder the kernels are gated against
     format/quant/dequant.go, types.go
     format/jlm/schema.go, format/jlm/write.go  a container type code -> a Version bump
-    jit/gpu/kernels/{matvec,mma,pack,quantof}.go     the device side
-    jit/cpu/{codes,matvec,packact,packed_a64,packed_other,prevnni}.go
-    jit/cpu/{sse_budget,sse_helpers,sse_norm,sse_packed,sse_quantact}.go
+    jit_old/gpu/kernels/{matvec,mma,pack,quantof}.go     the device side
+    jit_old/cpu/{codes,matvec,packact,packed_a64,packed_other,prevnni}.go
+    jit_old/cpu/{sse_budget,sse_helpers,sse_norm,sse_packed,sse_quantact}.go
     convert/library/models.go, ui/catalog/quant.go
 
 Note `mma.go` in that list: AGENTS.md records three separate incidents of a
@@ -742,7 +742,7 @@ device's streamed eviction path).
   universal inverted residuals, multi-query attention with a downsampled key
   and value) under TF SAME padding, the fusion adapter over two stages, the
   embedder; on a device each block is a program of generated kernels
-  (`jit/gpu/tier/conv.go`), the activation changing shape from block to
+  (`jit_old/gpu/tier/conv.go`), the activation changing shape from block to
   block. The text side gained the vision embedder's hard tokens (the
   end-of-image marker is one) and the per-layer table's zero padding trimmed.
 

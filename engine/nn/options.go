@@ -4,7 +4,7 @@ package nn
 
 import (
 	"github.com/jitllm/jitllm/engine/sched"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // Option configures a JIT. The package reads no environment: cmd/jitllm reads

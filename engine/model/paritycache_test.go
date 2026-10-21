@@ -14,8 +14,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend/recorder"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend/recorder"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // Main's recording never changes with the composer: it is kept on disk per
@@ -41,7 +41,7 @@ func mainSourceKey(t *testing.T) string {
 			rel, _ := filepath.Rel(root, p)
 			if d.IsDir() {
 				switch rel {
-				case ".git", ".claude", "jit/gpu/compose", "jit/gpu/tier", "models":
+				case ".git", ".claude", "jit_old/gpu/compose", "jit_old/gpu/tier", "models":
 					return filepath.SkipDir
 				}
 				return nil

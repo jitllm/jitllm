@@ -7,10 +7,10 @@ import (
 	"github.com/jitllm/jitllm/engine/sched"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
-// One binary: importing jit/gpu costs only libc and libdl, since the CUDA,
+// One binary: importing jit_old/gpu costs only libc and libdl, since the CUDA,
 // Vulkan and Metal drivers are dlopen'd. The no-cgo property is untouched:
 // goffi reaches the drivers through dlopen.
 

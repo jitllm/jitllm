@@ -3,7 +3,7 @@ package model
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestTheSameWorkCrossesTheSeamEverySession asserts that two sessions on one

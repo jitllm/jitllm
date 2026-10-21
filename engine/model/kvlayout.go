@@ -4,7 +4,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // kvLayout is where a (sequence slot, position, kv head) lives in the host KV

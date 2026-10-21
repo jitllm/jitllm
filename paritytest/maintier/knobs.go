@@ -3,7 +3,7 @@ package maintier
 import (
 	"time"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
 )
 
 // This package, and backend, vulkan and kernels below it, read no

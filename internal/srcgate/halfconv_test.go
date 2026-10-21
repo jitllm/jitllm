@@ -14,10 +14,10 @@ import (
 
 // TestNoGoHalfConversionOnTheKVPath keeps binary16 conversion on the engine's
 // run-time paths in generated code (RULE 8): no production file under engine/
-// or jit/gpu/tier may call quant.EncodeHalf or quant.DecodeHalf. The f16 KV
+// or jit_old/gpu/tier may call quant.EncodeHalf or quant.DecodeHalf. The f16 KV
 // cache's store and a device's packed-V pages go through nn.NarrowF16 and
 // nn.WidenF16; the Go functions stay the reference those kernels are gated
-// against (jit/cpu/f16narrow_test.go) and the converter's arithmetic, which
+// against (jit_old/cpu/f16narrow_test.go) and the converter's arithmetic, which
 // runs once per file, not per token.
 func TestNoGoHalfConversionOnTheKVPath(t *testing.T) {
 	testmodels.SourceTree(t)
@@ -25,7 +25,7 @@ func TestNoGoHalfConversionOnTheKVPath(t *testing.T) {
 	fset := token.NewFileSet()
 	checked := 0
 	var found []string
-	for _, dir := range []string{"engine", filepath.Join("jit", "gpu", "tier")} {
+	for _, dir := range []string{"engine", filepath.Join("jit_old", "gpu", "tier")} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err

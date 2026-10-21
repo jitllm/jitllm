@@ -80,7 +80,7 @@ A zero `Sampler` (or `model.Greedy`) is greedy. Call `Observe` for each prompt a
 Open the devices with the device tier and hand them to a state. The spec is the same [device grammar](/docs/guides/devices/#the-device-grammar) the CLI takes.
 
 ```go
-import "github.com/jitllm/jitllm/jit/gpu/tier"
+import "github.com/jitllm/jitllm/jit_old/gpu/tier"
 
 g, err := tier.OpenWith(tier.WithDevices("auto"))
 if err != nil {

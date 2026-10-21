@@ -11,7 +11,7 @@ import (
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
 )
 
 // testFuncs is every Test function declared in the module's *_test.go files
@@ -128,7 +128,7 @@ func TestMaintainedGateFires(t *testing.T) {
 	cases := map[string]func(*maintained){
 		"unknown gate":      func(m *maintained) { m.Backends[0].Verified[0].Evidence = []string{"TestNoSuchGate"} },
 		"no evidence":       func(m *maintained) { m.InputFormats[0].Evidence = nil },
-		"missing package":   func(m *maintained) { m.Backends[0].Package = "jit/nowhere" },
+		"missing package":   func(m *maintained) { m.Backends[0].Package = "jit_old/nowhere" },
 		"unknown device":    func(m *maintained) { m.Backends[len(m.Backends)-1].Name = "rocm2" },
 		"silent unverified": func(m *maintained) { m.Backends[len(m.Backends)-1].Note = "" },
 		"dropped backend":   func(m *maintained) { m.Backends = m.Backends[:len(m.Backends)-1] },

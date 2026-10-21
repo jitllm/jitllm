@@ -89,7 +89,7 @@ func TestRopeTableAgreesWithF64(t *testing.T) {
 	}
 
 	// A one-ulp table is the floor for a generated table (see
-	// jit/cpu/ropetab.go), so the question is whether an argmax moved further
+	// jit_old/cpu/ropetab.go), so the question is whether an argmax moved further
 	// than this model's own logit movement w can push it: a perturbation of w
 	// cannot separate a pair more than w apart. tieMargin is the floor of w.
 	ran := 0

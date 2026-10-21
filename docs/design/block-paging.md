@@ -10,7 +10,7 @@ statement about code that exists.
     a discrete card      pages by COPY, through slots, as the rest of this file
                          describes -- and the copy is now of the RAW
                          GGUF BYTES, with the bit extraction done by a kernel on
-                         the card (jit/gpu/kernels/unpack.go, Q4_K). The host
+                         the card (jit_old/gpu/kernels/unpack.go, Q4_K). The host
                          repack that was 88% of a 70B token is gone from the
                          covered formats and the GGUF mapping is the backing
                          store, so that case needs no arena and no spill file
@@ -28,13 +28,13 @@ statement about code that exists.
     device sm_86 [ptx]: 2/80 blocks, 1.22 GiB resident
 
 The card ran 2.5% of the model and idled through the other 97.5%, on precisely
-the model that needed an accelerator. `jit/gpu/tier` DECLINED a block that did
+the model that needed an accelerator. `jit_old/gpu/tier` DECLINED a block that did
 not fit and the block fell to the host PERMANENTLY -- placement decided once, at
 load. So an accelerator smaller than the model bought almost nothing.
 
 ## What landed
 
-`jit/gpu/tier/page.go`. A device holds N block slots; a block that does not fit
+`jit_old/gpu/tier/page.go`. A device holds N block slots; a block that does not fit
 evicts another block instead of being declined.
 
     slots = (budget - the permanent parts) / the WIDEST block's packed weights
@@ -526,22 +526,22 @@ card runs the model at all, and on this model the knob has two settings.
 
 ## The gates
 
-    jit/gpu/tier/page_test.go   six gates, each run against a violation in
+    jit_old/gpu/tier/page_test.go   six gates, each run against a violation in
                                    the same function, failure text logged
-    jit/gpu/tier/import_test.go five gates on the zero-copy path: what is
+    jit_old/gpu/tier/import_test.go five gates on the zero-copy path: what is
                                    wrapped, what is charged, what the pager does
                                    with a block it cannot reclaim, what SetBudget
                                    does to one, and the arena's term in
                                    HostReserved
-    jit/gpu/backend/import_test.go  the hardware gate, on every device the host
+    jit_old/gpu/backend/import_test.go  the hardware gate, on every device the host
                                    has. The assertion is a MUTATION of the host
                                    bytes with no upload of any kind: an imported
                                    buffer's next launch must see it and an
                                    uploaded one must not -- the copy arm is the
                                    violation, not a control
-    jit/gpu/metal/import_test.go    -contents must BE the pointer handed in,
+    jit_old/gpu/metal/import_test.go    -contents must BE the pointer handed in,
                                    plus the four shapes the driver refuses
-    jit/gpu/kernels/arena_test.go   every packed array starts AND ends on a
+    jit_old/gpu/kernels/arena_test.go   every packed array starts AND ends on a
                                    HostAlign() boundary; the length half is what
                                    Apple Silicon needs
     engine/sched/cyclic_test.go        the policy, simulated: MRU keeps a prefix and

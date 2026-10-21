@@ -15,9 +15,9 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/backend/recorder"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend/recorder"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 	"github.com/jitllm/jitllm/paritytest"
 	"github.com/jitllm/jitllm/paritytest/maintier"
 )
@@ -150,7 +150,7 @@ func TestComposerParity(t *testing.T) {
 			if *parityModel == "" && *parityKernel != "" {
 				n := 0
 				for _, m := range r.miss {
-					if (*parityKernel == "*" || strings.HasPrefix(m.K.Name, *parityKernel)) {
+					if *parityKernel == "*" || strings.HasPrefix(m.K.Name, *parityKernel) {
 						n++
 					}
 				}

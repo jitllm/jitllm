@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // TestISAFollowsTheTier: the machine page's isa field is the tier report off

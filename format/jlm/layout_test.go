@@ -3,7 +3,7 @@ package jlm
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit_old/gpu/kernels"
 )
 
 // TestLayoutMatchesThePacker holds Layout -- the on-disk specification a reader

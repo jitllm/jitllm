@@ -6,7 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // QuantizeKVRows is the q8 cache's append: n head rows of hd float32 (row r at

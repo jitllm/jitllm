@@ -7,8 +7,8 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 	kernels "github.com/jitllm/jitllm/paritytest/mainkernels"
 )
 

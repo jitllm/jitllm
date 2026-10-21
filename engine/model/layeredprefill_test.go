@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestLayeredPrefillPagesEachBlockOncePerChunk prefills a prompt of two

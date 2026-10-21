@@ -1,6 +1,6 @@
 package mainkernels
 
-import "github.com/jitllm/jitllm/jit/gpu/ir"
+import "github.com/jitllm/jitllm/jit_old/gpu/ir"
 
 // GridProbePhases is how many phases GridProbe runs.
 const GridProbePhases = 8

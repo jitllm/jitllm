@@ -5,8 +5,8 @@ import (
 	"encoding/gob"
 	"sync"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/backend"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // sharedKerns is every kernel compileShared handed out, across devices: a

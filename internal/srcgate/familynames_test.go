@@ -37,7 +37,7 @@ func TestNoFamilyNamedMechanisms(t *testing.T) {
 	allowed := readAllowed(t, filepath.Join("testdata", "family_names.txt"))
 	found := map[string]bool{}
 	// The compiler's packages, relative to the module root.
-	for _, dir := range [...]string{"jit/gpu/tier", "engine/graph", "engine/nn"} {
+	for _, dir := range [...]string{"jit_old/gpu/tier", "engine/graph", "engine/nn"} {
 		for _, name := range familyIdents(t, filepath.Join(root, dir)) {
 			key := dir + "." + name
 			found[key] = true

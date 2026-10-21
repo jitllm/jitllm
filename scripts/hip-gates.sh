@@ -18,13 +18,13 @@ step() {
 	"$@" 2>&1 | tee -a "$log"
 }
 
-step ./scripts/cap 8G -- go test ./jit/gpu/hip -count=1 -v -run 'TestRealROCmLoadsOrSaysWhy'
-step ./scripts/cap 8G -- go test ./jit/gpu/amdgpu ./jit/gpu/hip -count=1
-step ./scripts/cap 8G -- go test ./jit/gpu/lowertest -count=1 -v -run 'AMDGPU'
+step ./scripts/cap 8G -- go test ./jit_old/gpu/hip -count=1 -v -run 'TestRealROCmLoadsOrSaysWhy'
+step ./scripts/cap 8G -- go test ./jit_old/gpu/amdgpu ./jit_old/gpu/hip -count=1
+step ./scripts/cap 8G -- go test ./jit_old/gpu/lowertest -count=1 -v -run 'AMDGPU'
 # Every backend kernel gate runs on every device backend.Open returns, the
 # HIP device among them; TestHIP* are its own.
-step ./scripts/cap 16G -- go test ./jit/gpu/backend -count=1 -v
-step ./scripts/cap 8G -- go test ./jit/gpu/tier -count=1
+step ./scripts/cap 16G -- go test ./jit_old/gpu/backend -count=1 -v
+step ./scripts/cap 8G -- go test ./jit_old/gpu/tier -count=1
 # The model gates. gpu:0 is the first device backend.Open returns, which on a
 # host with no CUDA is the HIP device.
 : "${JITLLM_MODELS:?set JITLLM_MODELS to the model directory (docs/testing.md)}"

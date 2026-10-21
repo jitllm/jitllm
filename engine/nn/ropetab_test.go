@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // The rotary table's gates. The oracle is math.Cos and math.Sin in float64

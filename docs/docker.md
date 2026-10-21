@@ -15,7 +15,7 @@ are not in it: they live in a volume mounted at `/models`.
 
 Why Debian and not a distroless static base: the binaries are pure Go
 (`CGO_ENABLED=0`) but not static. CUDA and Vulkan are opened at run time
-through goffi (`jit/gpu/ffi`), which links the binary against glibc's dynamic
+through goffi (`jit_old/gpu/ffi`), which links the binary against glibc's dynamic
 loader, so the image needs glibc, and it needs `ldconfig` for the NVIDIA
 Container Toolkit to register the driver libraries it mounts.
 

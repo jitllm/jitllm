@@ -75,20 +75,20 @@ case_gguf() {
 
 # 6. The device stops declining quick-GELU and runs GELU-tanh instead.
 case_decline() {
-  sed -i 's/\tcase p.Act != nn.ActSiLU \&\& p.Act != nn.ActGELU:/\tcase false:/' jit/gpu/tier/layer.go
+  sed -i 's/\tcase p.Act != nn.ActSiLU \&\& p.Act != nn.ActGELU:/\tcase false:/' jit_old/gpu/tier/layer.go
   run "the device accepts a quick-GELU block and bakes GELU-tanh" \
-      'TestQuickGELUIsDeclinedByTheDevice|TestDeclineReasonReachesLastErr' ./jit/gpu/tier
+      'TestQuickGELUIsDeclinedByTheDevice|TestDeclineReasonReachesLastErr' ./jit_old/gpu/tier
   run "  and the model-level gate sees it too" \
       'TestLlavaTowerIsDeclinedByTheDevice' ./engine/model
-  restore jit/gpu/tier/layer.go
+  restore jit_old/gpu/tier/layer.go
 }
 
 # 7. The quick-GELU kernel emits SiLU.
 case_kernel() {
-  sed -i 's/^\tcase ActQuickGELU:$/\tcase ActQuickGELU + 100:/' jit/cpu/act.go
+  sed -i 's/^\tcase ActQuickGELU:$/\tcase ActQuickGELU + 100:/' jit_old/cpu/act.go
   run "EmitAct(ActQuickGELU) falls through to SiLU" \
-      'TestQuickGELUMatchesItsDefinition|TestUngatedActivationsAreAllDistinct' ./jit/cpu
-  restore jit/cpu/act.go
+      'TestQuickGELUMatchesItsDefinition|TestUngatedActivationsAreAllDistinct' ./jit_old/cpu
+  restore jit_old/cpu/act.go
 }
 
 for c in act cls preln pos gguf decline kernel; do

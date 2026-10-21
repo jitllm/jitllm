@@ -19,7 +19,7 @@ builds:
     binary: jitllm
     env:
       # There is no cgo anywhere: CUDA, Vulkan and Metal are opened at run time
-      # through goffi (jit/gpu/ffi), and every kernel is generated in process. So one Linux
+      # through goffi (jit_old/gpu/ffi), and every kernel is generated in process. So one Linux
       # runner cross-builds every target.
       - CGO_ENABLED=0
     flags:
@@ -207,7 +207,7 @@ snapshot:
 #
 # With no secrets set this block is disabled and the darwin binaries keep the
 # ad-hoc signature Go's linker gives every darwin/arm64 binary. That signature
-# carries no hardened runtime, and jit/cpu/exec_darwin.go measures that such a
+# carries no hardened runtime, and jit_old/cpu/exec_darwin.go measures that such a
 # binary runs generated code with no codesign step at all. The release
 # workflow's smoke job runs the shipped darwin archive on a macOS runner to
 # prove it for each release.

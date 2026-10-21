@@ -1,7 +1,7 @@
 package nn
 
 // ClefHead is Clef's joint schema head as a device runs it
-// (engine/model/decideclef.go has the graph; jit/gpu/tier/dechead.go runs it).
+// (engine/model/decideclef.go has the graph; jit_old/gpu/tier/dechead.go runs it).
 // Every matrix is f32, row-major, one row per output; the model dequantizes
 // them once when the head is first offered, and the device keeps them for the
 // life of the value (keyed by its pointer).

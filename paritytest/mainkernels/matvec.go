@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // Quant is the weight format the device kernels understand.

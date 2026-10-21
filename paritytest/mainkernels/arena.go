@@ -21,7 +21,7 @@ import (
 //
 // It is a second copy of a block's bytes, and the device layout is wider than
 // the file's for some formats, so retention is budgeted and defaults to zero;
-// see NewArena. The bytes are meaningless to jit/cpu (transposed and
+// see NewArena. The bytes are meaningless to jit_old/cpu (transposed and
 // normalised to value = scale*q - bias).
 //
 // It does not know what a transformer is: an entry is one tensor, keyed on the

@@ -8,7 +8,7 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // forcedPreVNNI builds a JIT as though this host had no AVX-VNNI, and reports

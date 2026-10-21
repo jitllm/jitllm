@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/dev/bench"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestPagedKVAB is the attention's end-to-end A/B: the decode plan

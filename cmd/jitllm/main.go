@@ -4,7 +4,7 @@
 //
 //	jitllm run -devices auto|all|cpu|gpu[:N]|cuda:0|vulkan:1[=BYTES],... [-vram BYTES] model.jlm prompt...
 //
-// jit/gpu is imported unconditionally. The drivers are dlopen'd rather than
+// jit_old/gpu is imported unconditionally. The drivers are dlopen'd rather than
 // linked, which is what keeps the build free of cgo.
 //
 // The verify subcommand decodes the same prompt on both tiers, compares token
@@ -40,8 +40,8 @@ import (
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/cpu"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -49,8 +49,8 @@ import (
 //
 // sched.DecodeCores picks the physical P-cores and the pool starts one worker
 // each, while GOMAXPROCS defaults to NumCPU. Several places size work off
-// GOMAXPROCS (jlm's reader fan-out, jit/gpu/kernels/pack.go,
-// jit/gpu/tier/tier.go), so the two must agree.
+// GOMAXPROCS (jlm's reader fan-out, jit_old/gpu/kernels/pack.go,
+// jit_old/gpu/tier/tier.go), so the two must agree.
 //
 // It is set here rather than in sched because GOMAXPROCS is process-global and
 // a library must not take that decision from whatever embeds it. An explicit
@@ -1978,7 +1978,7 @@ func jitOptions() []nn.Option {
 		o = append(o, nn.WithoutGEMM(true))
 	}
 	cpuConfigure()
-	// The arm64 measurement probes (jit/cpu Probes), per JIT.
+	// The arm64 measurement probes (jit_old/cpu Probes), per JIT.
 	pr := func(k string) int {
 		v, _ := strconv.Atoi(os.Getenv(k))
 		return v
@@ -1989,7 +1989,7 @@ func jitOptions() []nn.Option {
 	return o
 }
 
-// cpuConfigure hands jit/cpu its one process-wide knob: the perf map for the
+// cpuConfigure hands jit_old/cpu its one process-wide knob: the perf map for the
 // profiler, a single file named for the process.
 func cpuConfigure() {
 	if os.Getenv("JITLLM_PERFMAP") != "" {

@@ -521,7 +521,7 @@
     {
       "name": "cpu-amd64-avx2",
       "kind": "host",
-      "package": "jit/cpu",
+      "package": "jit_old/cpu",
       "implemented": true,
       "verified": [
         {
@@ -542,7 +542,7 @@
     {
       "name": "cpu-amd64-sse",
       "kind": "host",
-      "package": "jit/cpu",
+      "package": "jit_old/cpu",
       "implemented": true,
       "verified": [
         {
@@ -558,7 +558,7 @@
     {
       "name": "cpu-arm64",
       "kind": "host",
-      "package": "jit/cpu",
+      "package": "jit_old/cpu",
       "implemented": true,
       "verified": [
         {
@@ -574,7 +574,7 @@
     {
       "name": "cuda",
       "kind": "device",
-      "package": "jit/gpu/cuda",
+      "package": "jit_old/gpu/cuda",
       "implemented": true,
       "verified": [
         {
@@ -638,7 +638,7 @@
     {
       "name": "vulkan",
       "kind": "device",
-      "package": "jit/gpu/vulkan",
+      "package": "jit_old/gpu/vulkan",
       "implemented": true,
       "verified": [
         {
@@ -653,7 +653,7 @@
     {
       "name": "metal",
       "kind": "device",
-      "package": "jit/gpu/metal",
+      "package": "jit_old/gpu/metal",
       "implemented": true,
       "verified": [
         {
@@ -668,7 +668,7 @@
     {
       "name": "hip",
       "kind": "device",
-      "package": "jit/gpu/hip",
+      "package": "jit_old/gpu/hip",
       "implemented": true,
       "verified": [],
       "note": "built and gated offline (every kernel compiles for gfx90a, gfx942, gfx1030, gfx1100 and gfx1201 through comgr); not yet run on an AMD card -- the device gates (TestHIPDeviceRunsTheIR) skip without one. An AMD card without ROCm runs through vulkan. See docs/design/amd-hip.md"

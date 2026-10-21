@@ -9,13 +9,13 @@ import (
 
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // Two States on one tier step on the device at the same time: each is its
 // own session (tier.GPU.Attach), runs in a lane of its own and submits on a
-// queue of its own (jit/gpu/tier/devsess.go), and the device's shared state
-// waits only where it must (jit/gpu/tier/inflight.go). These gates hold the
+// queue of its own (jit_old/gpu/tier/devsess.go), and the device's shared state
+// waits only where it must (jit_old/gpu/tier/inflight.go). These gates hold the
 // sessions to the answers each gives alone, and check the configuration was
 // selected: their steps overlapped, and the device saw a submission start
 // while another's was running on the device (tier.Stats.RanBeside).

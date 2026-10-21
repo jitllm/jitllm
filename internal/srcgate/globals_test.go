@@ -145,7 +145,7 @@ func Get() int { flag := 1; flag = 2; return flag + tbl["a"] + len(names) + set[
 }
 
 // allowed is the allowlist entry covering key, an exact name or a path.Match
-// pattern ("jit/gpu/vulkan.vk*"), or "".
+// pattern ("jit_old/gpu/vulkan.vk*"), or "".
 func allowed(key string) string {
 	if _, ok := globalAllowlist[key]; ok {
 		return key
@@ -495,52 +495,52 @@ var globalAllowlist = map[string]string{
 	"internal/testdevices.*":         "process: test support, which restricts the devices a test binary may open",
 	"internal/testmodels/fresh.done": "cache: models converted once per test binary",
 
-	// jit/cpu
-	"jit/cpu.baselineErr":  "cache: the baseline emitter's self-check, run once",
-	"jit/cpu.baselineOnce": "cache: the baseline emitter's self-check, run once",
-	"jit/cpu.dotEmulated":  "counter: SDOTs widened across every JIT, read by gates (the emitters are free functions)",
-	"jit/cpu.dotOnce":      "process: the CPU's dot-product feature probe",
-	"jit/cpu.hasDot":       "process: the CPU's dot-product feature probe",
-	"jit/cpu.features":     "process: the CPU's feature probe",
-	"jit/cpu.featuresOnce": "process: the CPU's feature probe",
-	"jit/cpu.hostTier":     "process: the CPU's tier, from its feature probe",
-	"jit/cpu.forceTier":    "process: an input to the feature probe, set by a test before any JIT is built",
-	"jit/cpu.tierForced":   "process: an input to the feature probe, set by a test before any JIT is built",
-	"jit/cpu.probeMu":      "process: serialises the feature probe",
-	"jit/cpu.mapped":       "process: bytes of executable memory mapped, a ledger of address space",
-	"jit/cpu.regLedger":    "process: executable mappings by address, for the fault handler",
-	"jit/cpu.perfMap*":     "process: the profiler's perf map is one file named for the process",
-	"jit/cpu.qa*":          "counter: activation quantizer paths taken across every JIT, read by gates (the quantizer is a free function)",
+	// jit_old/cpu
+	"jit_old/cpu.baselineErr":  "cache: the baseline emitter's self-check, run once",
+	"jit_old/cpu.baselineOnce": "cache: the baseline emitter's self-check, run once",
+	"jit_old/cpu.dotEmulated":  "counter: SDOTs widened across every JIT, read by gates (the emitters are free functions)",
+	"jit_old/cpu.dotOnce":      "process: the CPU's dot-product feature probe",
+	"jit_old/cpu.hasDot":       "process: the CPU's dot-product feature probe",
+	"jit_old/cpu.features":     "process: the CPU's feature probe",
+	"jit_old/cpu.featuresOnce": "process: the CPU's feature probe",
+	"jit_old/cpu.hostTier":     "process: the CPU's tier, from its feature probe",
+	"jit_old/cpu.forceTier":    "process: an input to the feature probe, set by a test before any JIT is built",
+	"jit_old/cpu.tierForced":   "process: an input to the feature probe, set by a test before any JIT is built",
+	"jit_old/cpu.probeMu":      "process: serialises the feature probe",
+	"jit_old/cpu.mapped":       "process: bytes of executable memory mapped, a ledger of address space",
+	"jit_old/cpu.regLedger":    "process: executable mappings by address, for the fault handler",
+	"jit_old/cpu.perfMap*":     "process: the profiler's perf map is one file named for the process",
+	"jit_old/cpu.qa*":          "counter: activation quantizer paths taken across every JIT, read by gates (the quantizer is a free function)",
 
-	// jit/gpu/backend
-	"jit/gpu/backend.allocRefused":   "counter: refused allocations across every device, read by gates with no device in hand",
-	"jit/gpu/backend.compiles":       "counter: kernels compiled across every device, read by gates and a report with no device in hand",
-	"jit/gpu/backend.hostReads":      "counter: host reads across every device, read by gates with no device in hand",
-	"jit/gpu/backend.hostReadBytes":  "counter: host reads across every device, read by gates with no device in hand",
-	"jit/gpu/backend.ownedDevices":   "counter: CUDA devices open across the process",
-	"jit/gpu/backend.ownedQueues":    "counter: CUDA queues open across the process",
-	"jit/gpu/backend.ownerCalls":     "counter: owner-thread calls across every device, read by gates",
-	"jit/gpu/backend.postedCalls":    "counter: owner-thread posts across every device, read by gates",
-	"jit/gpu/backend.cudaCopies":     "cache: scratch pool holding no state between uses",
-	"jit/gpu/backend.cudaCopyLists":  "cache: scratch pool holding no state between uses",
-	"jit/gpu/backend.cudaWrites":     "cache: scratch pool holding no state between uses",
-	"jit/gpu/backend.restriction":    "process: which devices this process may open, installed by test support",
-	"jit/gpu/backend.verbose":        "process: log verbosity",
-	"jit/gpu/backend.cudaTiming":     "debt: device-clock timing switch, read by cmd/jitllm through a free function; belongs on the CUDA device",
-	"jit/gpu/backend.cudaKernTiming": "debt: device-clock timing switch, read by cmd/jitllm through a free function; belongs on the CUDA device",
-	"jit/gpu/backend.graphTimes":     "debt: replay times accumulated for cmd/jitllm's report; belongs on the CUDA device",
-	"jit/gpu/backend.kernTimes":      "debt: kernel times accumulated for cmd/jitllm's report; belongs on the CUDA device",
-	"jit/gpu/backend.mtlResidency":   "debt: a Metal open option read from a package var; belongs in the open options",
-	"jit/gpu/backend.mtlUnretained":  "debt: a Metal open option read from a package var; belongs in the open options",
+	// jit_old/gpu/backend
+	"jit_old/gpu/backend.allocRefused":   "counter: refused allocations across every device, read by gates with no device in hand",
+	"jit_old/gpu/backend.compiles":       "counter: kernels compiled across every device, read by gates and a report with no device in hand",
+	"jit_old/gpu/backend.hostReads":      "counter: host reads across every device, read by gates with no device in hand",
+	"jit_old/gpu/backend.hostReadBytes":  "counter: host reads across every device, read by gates with no device in hand",
+	"jit_old/gpu/backend.ownedDevices":   "counter: CUDA devices open across the process",
+	"jit_old/gpu/backend.ownedQueues":    "counter: CUDA queues open across the process",
+	"jit_old/gpu/backend.ownerCalls":     "counter: owner-thread calls across every device, read by gates",
+	"jit_old/gpu/backend.postedCalls":    "counter: owner-thread posts across every device, read by gates",
+	"jit_old/gpu/backend.cudaCopies":     "cache: scratch pool holding no state between uses",
+	"jit_old/gpu/backend.cudaCopyLists":  "cache: scratch pool holding no state between uses",
+	"jit_old/gpu/backend.cudaWrites":     "cache: scratch pool holding no state between uses",
+	"jit_old/gpu/backend.restriction":    "process: which devices this process may open, installed by test support",
+	"jit_old/gpu/backend.verbose":        "process: log verbosity",
+	"jit_old/gpu/backend.cudaTiming":     "debt: device-clock timing switch, read by cmd/jitllm through a free function; belongs on the CUDA device",
+	"jit_old/gpu/backend.cudaKernTiming": "debt: device-clock timing switch, read by cmd/jitllm through a free function; belongs on the CUDA device",
+	"jit_old/gpu/backend.graphTimes":     "debt: replay times accumulated for cmd/jitllm's report; belongs on the CUDA device",
+	"jit_old/gpu/backend.kernTimes":      "debt: kernel times accumulated for cmd/jitllm's report; belongs on the CUDA device",
+	"jit_old/gpu/backend.mtlResidency":   "debt: a Metal open option read from a package var; belongs in the open options",
+	"jit_old/gpu/backend.mtlUnretained":  "debt: a Metal open option read from a package var; belongs in the open options",
 
-	// jit/gpu: driver bindings, loaded once with the library
-	"jit/gpu/cuda.*":   "process: the dlopen'd CUDA driver's entry points, bound once under loadOnce",
-	"jit/gpu/hip.*":    "process: the dlopen'd HIP runtime, bound once",
-	"jit/gpu/vulkan.*": "process: the dlopen'd Vulkan loader's entry points, bound once",
-	"jit/gpu/metal.*":  "process: the Metal framework's selectors and entry points, bound once at load; the stat counters and kernel timing are debt, to move onto the device",
+	// jit_old/gpu: driver bindings, loaded once with the library
+	"jit_old/gpu/cuda.*":   "process: the dlopen'd CUDA driver's entry points, bound once under loadOnce",
+	"jit_old/gpu/hip.*":    "process: the dlopen'd HIP runtime, bound once",
+	"jit_old/gpu/vulkan.*": "process: the dlopen'd Vulkan loader's entry points, bound once",
+	"jit_old/gpu/metal.*":  "process: the Metal framework's selectors and entry points, bound once at load; the stat counters and kernel timing are debt, to move onto the device",
 
-	// jit/gpu/tier: the tier is being refactored elsewhere; narrow this to its caches when that lands
-	"jit/gpu/tier.binaryIDOnce": "process: a memoised hash of the running executable, the same for every tier",
+	// jit_old/gpu/tier: the tier is being refactored elsewhere; narrow this to its caches when that lands
+	"jit_old/gpu/tier.binaryIDOnce": "process: a memoised hash of the running executable, the same for every tier",
 
 	// tables exported as data: nothing writes them after init, but any importer could
 	"common/discover.BalanceSteps":   "table: exported list, written once",
@@ -554,11 +554,11 @@ var globalAllowlist = map[string]string{
 	"format/quant.*":                 "table: exported dequantization tables and the packed-type list, written once",
 	"internal/oracle.MoEDivergences": "table: exported list, written once",
 	"internal/oracle.MoEFaults":      "table: exported list, written once",
-	"jit/gpu/kernels.GELUErfA":       "table: exported constants of an approximation, written once",
-	"jit/gpu/kernels.TanhP":          "table: exported constants of an approximation, written once",
-	"jit/gpu/kernels.TanhQ":          "table: exported constants of an approximation, written once",
-	"jit/gpu/kernels.Gated":          "table: exported list of activation kinds, written once",
-	"jit/gpu/kernels.Ungated":        "table: exported list of activation kinds, written once",
+	"jit_old/gpu/kernels.GELUErfA":   "table: exported constants of an approximation, written once",
+	"jit_old/gpu/kernels.TanhP":      "table: exported constants of an approximation, written once",
+	"jit_old/gpu/kernels.TanhQ":      "table: exported constants of an approximation, written once",
+	"jit_old/gpu/kernels.Gated":      "table: exported list of activation kinds, written once",
+	"jit_old/gpu/kernels.Ungated":    "table: exported list of activation kinds, written once",
 	"tok/pretok.LlamaCppDefault":     "table: exported pre-tokenizer description, written once",
 	"tok/pretok.Table":               "table: the generated pre-tokenizer cache, written once",
 	"ui/app.Mono":                    "ui: the window's mono face",
@@ -572,8 +572,8 @@ var globalAllowlist = map[string]string{
 	"engine/sched.procRoot":          "seam: where /proc is read from, pointed at a fake tree by a test",
 	"engine/sched.sysRoot":           "seam: where /sys is read from, pointed at a fake tree by a test",
 	"format/jlm.migrations":          "seam: the container migrations, replaced by a test",
-	"jit/cpu.force*":                 "process: the machine description a test overrides to simulate another CPU (an input to the feature probe; a JIT reads the probe once at construction)",
-	"jit/cpu.sseEmitters":            "seam: the SSE emitter table, replaced by a test",
+	"jit_old/cpu.force*":             "process: the machine description a test overrides to simulate another CPU (an input to the feature probe; a JIT reads the probe once at construction)",
+	"jit_old/cpu.sseEmitters":        "seam: the SSE emitter table, replaced by a test",
 	"engine/nn.ropeTabConsts":        "debt: the rotary-table kernel's constants, swapped by a gate as its violation; belongs on the JIT",
 	"cmd/jitllm.addrOpts":            "debt: a test seam for the service address options; belongs on the command's context",
 	"server/cmd/jitllmd.addrOpts":    "debt: a test seam for the service address options; belongs on the command's context",

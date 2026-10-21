@@ -10,8 +10,8 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
-	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit_old/cpu"
+	"github.com/jitllm/jitllm/jit_old/gpu/kernels"
 )
 
 // TestFamily2RunsOnTheForcedSSETier drives every nn entry point of the SSE

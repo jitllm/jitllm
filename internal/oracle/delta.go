@@ -4,7 +4,7 @@ import "math"
 
 // The hybrid's three recurrent ops, in float64: the reference the generated
 // gated delta rule, causal convolution and gates are gated against on every
-// tier. The kernels are jit/cpu's EmitGatedDelta, EmitConv1d and EmitDeltaGate
+// tier. The kernels are jit_old/cpu's EmitGatedDelta, EmitConv1d and EmitDeltaGate
 // and their SSE twins; the Args layout they take is documented there.
 
 // GatedDelta applies one token of the gated delta rule to one head, n = len(o)

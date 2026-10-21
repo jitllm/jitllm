@@ -11,7 +11,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit_old/gpu/kernels"
 )
 
 // TestLayoutRate prices the same weight in the two host layouts: GGUF's

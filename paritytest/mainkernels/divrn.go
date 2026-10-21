@@ -1,6 +1,6 @@
 package mainkernels
 
-import "github.com/jitllm/jitllm/jit/gpu/ir"
+import "github.com/jitllm/jitllm/jit_old/gpu/ir"
 
 // divRN is num/den rounded to nearest even, the IEEE quotient the host's
 // VDIVPS and FDIV return, on every backend. ir.OpDiv is that on PTX (div.rn)

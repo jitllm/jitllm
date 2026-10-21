@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // TestDecisionDeviceAB is the paired, interleaved A/B harness for the

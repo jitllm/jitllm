@@ -324,7 +324,7 @@ func users(g *Graph) (use [][]int, producer []int) {
 }
 
 // Gate2In is the FFN chain the device runs as one launch (the gate2in
-// recipe, jit/gpu/tier/recipe.go): a norm of the residual whose output only
+// recipe, jit_old/gpu/tier/recipe.go): a norm of the residual whose output only
 // two matvecs read, their outputs only an act_mul reads, its output only a
 // matvec reads, and that matvec's output only the residual add reads. Matched
 // by those edges, in any block graph that has them.

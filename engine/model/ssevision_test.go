@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/format/jlm"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // TestEveryTowerRunsSSE runs every tower family's preprocessing and encode on

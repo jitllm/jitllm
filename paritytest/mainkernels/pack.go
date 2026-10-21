@@ -486,7 +486,7 @@ func PackActivationsInto(a []uint32, as, sum []float32, x []float32, window int)
 	var q [32]int8
 	for b := 0; b < nb; b++ {
 		blk := x[b*32 : b*32+32]
-		// Bit-for-bit the same steps as jit/cpu.QuantizeQ8Window.
+		// Bit-for-bit the same steps as jit_old/cpu.QuantizeQ8Window.
 		w0 := (b / per) * per * 32
 		w1 := w0 + per*32
 		if w1 > len(x) {

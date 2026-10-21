@@ -11,7 +11,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // gpuOptions turns the device tier's environment variables into tier.Options.
@@ -20,7 +20,7 @@ import (
 // so an embedded caller can configure each tier through options.
 //
 // JITLLM_DEVICE_FAIL_AT is deliberately not here: it is read by
-// jit/gpu/tier/fault.go, compiled only under `-tags jitllmfault`, so no release
+// jit_old/gpu/tier/fault.go, compiled only under `-tags jitllmfault`, so no release
 // binary can be made to pretend its GPU broke.
 func gpuOptions() []tier.Option {
 	var o []tier.Option

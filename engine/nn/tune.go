@@ -18,7 +18,7 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // Interleave width is chosen by measuring real tokens, then cached per

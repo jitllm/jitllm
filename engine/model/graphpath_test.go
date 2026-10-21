@@ -7,7 +7,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit_old/gpu/tier"
 )
 
 // pathsRun runs a prompt, a few decoded tokens and a ragged step across two

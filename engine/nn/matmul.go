@@ -9,7 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // MatMul is the GGUF row-major prefill path: one pass over the weights serving

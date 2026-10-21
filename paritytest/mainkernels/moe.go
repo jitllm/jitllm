@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // The mixture-of-experts router, on the device.
@@ -276,7 +276,7 @@ func ExpertGroupMask(r MoERoute) (*ir.Kernel, error) {
 //
 // and expert e is selected iff rank(e) < k, at slot rank(e). The second term
 // is the tie rule: equal keys go to the lower index, as ggml_argsort and the
-// host router (jit/cpu/topk.go) do, and it makes ranks distinct so stores never
+// host router (jit_old/cpu/topk.go) do, and it makes ranks distinct so stores never
 // collide.
 //
 // There is no conditional store, so unselected threads store into a spare slot

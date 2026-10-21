@@ -6,7 +6,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit_old/gpu/kernels"
 )
 
 // MemStore keeps pages in host memory, keyed by (cache, layer, index).

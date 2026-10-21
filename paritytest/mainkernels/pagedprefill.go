@@ -5,7 +5,7 @@ import (
 	"math"
 	"math/bits"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit_old/gpu/ir"
 )
 
 // The staged prefill over paged KV (docs/design/device-kv-paging.md): a

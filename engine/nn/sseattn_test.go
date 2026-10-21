@@ -9,7 +9,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/cpu"
+	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
 // TestSSEAttnUnderTheForcedTier is the attention family's nn gate: with the

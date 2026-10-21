@@ -259,7 +259,7 @@ coreset A/B: pe 0.864x, smt 0.965x, all 0.807x against p).
   next. `cmd/jitllm` aligns `GOMAXPROCS` to the engine's width,
   `PCores`/`ECores`/`SMTSiblings` intersect `sched_getaffinity` so a narrower
   `taskset` yields fewer workers, and `LockOSThread` survives only where an API
-  binds state to a thread (CUDA contexts, `jit/gpu/cuda`).
+  binds state to a thread (CUDA contexts, `jit_old/gpu/cuda`).
 - **The shipped per-region dispatch cost** is `model.TestFusionCeiling`'s
   2.70 us on Linux and 3.008 us on the M4.
 - **Measure at the thread count that SHIPS.** A win measured on one core has
@@ -436,7 +436,7 @@ A new architecture adds one row here and its narrative in
 | qwen2moe | softmax top-k not renormalised, sigmoid-gated shared expert | as glm4moe | MC "qwen2moe" |
 | ernie4_5-moe | softmax router with a bias on the probability, renormalised | as glm4moe | MC "ernie4_5-moe and ernie4_5" |
 | hunyuan (hunyuan-moe, hunyuan-dense) | q/k norm after the rotary, run by folding k's weight into q's at conversion | as glm4moe, `TestBatchSeamMovesCarryEveryRowHunyuan`, `tok.TestHunyuanSplitsAsItsTokenizerDoes` | MC "hunyuan" |
-| hunyuan_vl (HunyuanOCR) | hunyuan's dense block under XD-RoPE: four coordinates (sequence, column, row, picture) assigned per ELEMENT of each head, so a NEOX pair's two halves turn by two tables (`nn.XDRopeRuns`, `RoPESplit` on every host tier and the device IR), and k's norm after the rotary as well as q's; a picture's rows keep their sequence positions | `TestHunyuanVLTextMatchesTransformers`, `TestHunyuanVLLaysTheImageOutAsTransformersDoes`, `TestHunyuanVLPrefixCacheKeysOnPositions`, `TestHunyuanVLKeepsTheFivePrinciples`, `TestQwenVLRealMatchesTransformers` (HunyuanOCR), `jit/cpu.TestEmitRoPESplitMatchesReference` | MC "HunyuanVL" |
+| hunyuan_vl (HunyuanOCR) | hunyuan's dense block under XD-RoPE: four coordinates (sequence, column, row, picture) assigned per ELEMENT of each head, so a NEOX pair's two halves turn by two tables (`nn.XDRopeRuns`, `RoPESplit` on every host tier and the device IR), and k's norm after the rotary as well as q's; a picture's rows keep their sequence positions | `TestHunyuanVLTextMatchesTransformers`, `TestHunyuanVLLaysTheImageOutAsTransformersDoes`, `TestHunyuanVLPrefixCacheKeysOnPositions`, `TestHunyuanVLKeepsTheFivePrinciples`, `TestQwenVLRealMatchesTransformers` (HunyuanOCR), `jit_old/cpu.TestEmitRoPESplitMatchesReference` | MC "HunyuanVL" |
 | smollm3, arcee, seed_oss, olmo2 (OLMo 3), exaone4, mistral3 | switches over llama's block: NoPE period, squared ReLU, post-norm block, attention temperature on every layer | `TestC6MatchesTransformers`, `convert.TestDenseSafetensorsMatchesItsGGUF`, `TestSafetensorsDenseFamilySelected` | MC "The dense llama family" |
 | minimax-m2 | OLMoE's q/k norm, partial NEOX rotary, V3's sigmoid router without a shared expert | as glm4moe | MC "minimax-m2" |
 | gemma4 | layers of two attention geometries, a dense MLP beside a mixture, per-layer embeddings and KV sharing on the E-models | `TestGemma4MatchesTransformers`, `TestGemma4FeaturesAreLoadBearing`, `TestGemma4OnEveryDevice`, `TestBatchSeamMovesCarryEveryRowGemma4` | MC "gemma4" |
@@ -453,7 +453,7 @@ A new architecture adds one row here and its narrative in
 | qwen4exp (Qwen3.8-Flash-Next) | qwen35's gated delta rule with a sigmoid gate on its gated norm, beside qwen3next's gated attention under interleaved M-RoPE; four hyper-connection streams (stream-major), each sublayer reading a low-rank sigmoid-gated mean of the grouped-normed streams and placed into every stream at 2*sigmoid(inject/4), the head the mix alone with no norm; QSA on every attention block (the indexer's raw key one more cached head, each complete block of four positions pooled, normed and turned at its start, the best budget/4 blocks and the tail kept); a 512-expert softmax top-10 mixture with a sigmoid-gated shared expert; one n-gram block (16 heads hashing 2- and 3-grams with an end-of-sequence reset, rows of a 28.8 GB IQ4_NL table read a row at a time, a per-stream signed-root gate and a dilated convolution whose history is the block's recurrent tail) | `TestQwen4ExpMatchesTransformers`, `TestQwen4ExpFeaturesAreLoadBearing`, `TestQwen4ExpOnEveryDevice`, `TestQwen4ExpDeviceRunsTheChunkWhole`, `TestQwen4ExpQSATurnsByTheMarks`, `TestBatchSeamMovesCarryEveryRowQwen4Exp`, `TestPrefixCacheRestoresQwen4Exp`, `backend.TestQ4EKernelsMatchTheLoops`, `cpu.TestNGramHashMatchesReference`, `nn.TestRowIQ4NLMatchesTheDecoder`, `jlm.TestRowTableIsReadARowAtATime`, `TestGreedyMatchesLlamaCpp` (UD-Q4_K_XL) | MC "qwen4exp: Qwen3.8-Flash-Next", "qwen4exp: what was built" |
 | mamba2, granitehybrid, nemotron_h (nemotron_h_moe), falcon-h1, lfm2 (lfm2moe), mamba (FalconMamba), jamba | state-space layers as a layer kind (`jlm.LayerSSD`): the delta rule's state with the key dot removed; lfm2's short convolutions; Mamba-1's selective scan | `TestSSMFamiliesMatchTransformers`, `TestSSDFeaturesAreLoadBearing`, `TestSSMFamiliesOnEveryDevice`, `TestSSMFamiliesPageWithTheSameAnswer`, `TestSSMRealModelsTeacherForced`, `TestBatchSeamMovesCarryEveryRowSSM` | MC "The state-space hybrids" |
 | modern-bert (Laya) | a pre-norm encoder with no biases, GeGLU, NEOX rotary at two bases, global every third layer and a symmetric window on the rest; Laya's decision head (a type row per question type, two biased pre-norm blocks at max(1, d/64) heads, a scorer at each option's [MASK]) after it. On the device as non-causal blocks through an encoder segment's placement (`engine/model/encdev.go`) | `TestLayaMatchesReference` (random fixture and the real checkpoint, held to Laya's own code; host and every device), `TestLayaFeaturesAreLoadBearing` (host and every device), `TestLayaPagesWithTheSameAnswer`, `TestDecisionMatchesLlamaCpp`, `TestDecisionOnEveryDevice`, `TestDecisionRelocatesBetweenDevices`, `TestDecisionEncodeDoesNotAllocate` | MC "Decision models"; `docs/design/decision-models.md` |
-| clef (Clef-Flash) | qwen35's backbone (the arch "clef" converts into qwen3next's container) with Clef's joint schema head (`jlm.DecisionClef`, its tensors a role group of their own at `DenseBlock` with the head block in `Index`): one prompt per request, every row's final residual kept (`State.rowTap`), each question's and option's span mean-pooled, two routing blocks (the options cross-attend the normed memory), four joint blocks (the questions self-attend, then cross-attend the raw memory), a prior from the output embedding's rows, a cosine and a scorer over [f, o, f*o, |f-o|]; on the host's generated kernels, and on the device holding the output projection as a program of `kernels.DH*` launches (`jit/gpu/tier/dechead.go`) | `TestClefMatchesReference` (random fixture held to Clef's own code), `TestClefFeaturesAreLoadBearing`, `TestClefMediaMatchesReference` (pictures and a video), `TestDecisionMatchesLlamaCpp` (the release and the fixture), `TestDecisionOnEveryDevice`, `TestDecisionRelocatesMidPrompt`, `TestDecisionMovesBetweenCards`, `TestDecisionDistributes`, `TestDecisionPagesWithTheSameAnswer`, `TestDecisionBatchMatchesAlone`, `TestDecisionDoesNotAllocate` | MC "Decision models"; `docs/design/decision-models.md` |
+| clef (Clef-Flash) | qwen35's backbone (the arch "clef" converts into qwen3next's container) with Clef's joint schema head (`jlm.DecisionClef`, its tensors a role group of their own at `DenseBlock` with the head block in `Index`): one prompt per request, every row's final residual kept (`State.rowTap`), each question's and option's span mean-pooled, two routing blocks (the options cross-attend the normed memory), four joint blocks (the questions self-attend, then cross-attend the raw memory), a prior from the output embedding's rows, a cosine and a scorer over [f, o, f*o, |f-o|]; on the host's generated kernels, and on the device holding the output projection as a program of `kernels.DH*` launches (`jit_old/gpu/tier/dechead.go`) | `TestClefMatchesReference` (random fixture held to Clef's own code), `TestClefFeaturesAreLoadBearing`, `TestClefMediaMatchesReference` (pictures and a video), `TestDecisionMatchesLlamaCpp` (the release and the fixture), `TestDecisionOnEveryDevice`, `TestDecisionRelocatesMidPrompt`, `TestDecisionMovesBetweenCards`, `TestDecisionDistributes`, `TestDecisionPagesWithTheSameAnswer`, `TestDecisionBatchMatchesAlone`, `TestDecisionDoesNotAllocate` | MC "Decision models"; `docs/design/decision-models.md` |
 | lfm2 with decision.type lfm2-d1-omni (`jlm.ArchLFM2Enc`, d1-omni; its mmproj's d1omni_a, the first audio tower: a log-mel front end, FastConformer blocks with relative-position attention as tower blocks after the vision blocks, on a device as nn.ConvConformer programs) | LFM2 made an encoder: a centred 3-tap convolution, no causal mask, a media prefix that reads only itself; Laya's head and scorer after it, in a non-causal set of its own on a device (`nn.LayerPlan.HeadSet`); the head's blocks cut from the file's per-layer arrays at conversion | `TestD1OmniMatchesReference`, `TestD1OmniFeaturesAreLoadBearing`, `TestD1OmniKeepsThePrinciples`, `TestD1OmniDecidesOverPicturesAsItsReference`, `TestD1OmniOnEveryDevice`, `TestDecisionRelocatesBetweenDevices`, `backend.TestConv3CentredMatchesTheLoop`, `TestD1OmniHearsAsItsReference`, `TestD1OmniAudioFeaturesAreLoadBearing`, `TestD1OmniVoiceMatchesLlamaCpp`, `nn.TestLnMatchesTheDefinition`, `TestD1OmniHearsOnEveryDevice`, `backend.TestConformerKernelsMatchTheLoops` | MC "d1-omni: an LFM2 encoder under Laya's head" |
 | bert, nomic-bert | embedding encoders (post-norm, `engine/model/encoder.go`; on the device with the norms after the residual adds, `nn.LayerPlan.PostResidNorm`); qwen3-embedding and EmbeddingGemma are qwen3/gemma3 with pooling bits | `TestEmbeddingsMatchReference`, `TestEmbeddingGateDiscriminates`, `TestEmbeddingsOnEveryDevice` | MC "Embedding models" |
 | clip | the vision tower's blocks (see the projectors) | the projectors' gates | MC "Vision as blocks" |
@@ -609,7 +609,7 @@ of the device, *"the naive fallback is still jitted on the chosen device"*.
   missing extensions (`nn.HostRefusal`), and a host with no code generator at
   all refuses too (`nn.Available`).
 - **No pregenerated assembly.** The only `.s` files in the project are the
-  Go-to-generated-code call boundary, `jit/cpu/trampoline_{amd64,arm64}.s`
+  Go-to-generated-code call boundary, `jit_old/cpu/trampoline_{amd64,arm64}.s`
   (stated by the user). Every kernel is emitted at run time for the
   host in front of it. `cpu.TestNoAssemblyBesidesTheTrampolines` enforces it.
 - **Gate the tail.** Every kernel gate sweeps ragged widths (1 through a few
@@ -644,7 +644,7 @@ precision").
 ## RULE 8a: a BLOCK is the unit, and it must stay orchestrable.
 
 The device never learns what a transformer is beyond one repeating unit:
-`engine/model/` keeps the graph and nothing in `jit/gpu` knows about embedding lookup,
+`engine/model/` keeps the graph and nothing in `jit_old/gpu` knows about embedding lookup,
 sampling or tied output weights. That is what makes `PrepLayer` able to decline
 per block, and it is why a model too big for the card runs its first N blocks on
 the device and the rest on the host.
@@ -670,7 +670,7 @@ never from which model or family the block came from.
   tests Kimi-K3; the structure is "experts in a latent" (the graph binds
   `RoleFFNRoutedDown`). Name the mechanism by what it does: an op is
   `attend_latent`, not `mla`.
-- **No new identifier in the compiler's packages (jit/gpu/tier, engine/graph,
+- **No new identifier in the compiler's packages (jit_old/gpu/tier, engine/graph,
   engine/nn) names a family or one family's mechanism** (k3, q4e, ds4,
   altRouter, mla, msa, qsa, gemma, qwen, ...).
   `srcgate.TestNoFamilyNamedMechanisms` fails on one, and on a ratchet-list
@@ -979,7 +979,7 @@ budget.
 - **The test suite converts** (`engine/model/jlm_helper_test.go`) because it has
   to run what ships; an open error is a failure, never a `t.Skipf`.
 - **Three GPU backends, one interface.** CUDA, Vulkan and Metal are reached
-  through goffi (`jit/gpu/ffi`) with no cgo, one `backend.Device` interface over
+  through goffi (`jit_old/gpu/ffi`) with no cgo, one `backend.Device` interface over
   three implementations. **Do not add a fourth abstraction in advance of a second
   implementation of anything.**
 - **Models live on a dedicated model disk** (`JITLLM_MODELS`) — never `~`, never `/tmp`.

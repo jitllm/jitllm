@@ -29,24 +29,24 @@ Inspected against the working tree based on `b1ce938`. This is an engineering ta
 | Vision transformer blocks | Generated projections, normalization, attention and activations | The same families specialized for vision rows and plan | Shape-specific batching can use the ordinary generated projection path. Image preprocessing itself is ordinary host code. |
 | Output head and sampling | Projection, `Argmax`, `SampleSegMax`, `SampleDraw`, `SamplePenalty` | Prepared output-head projection and optional norm | Sampling is generated CPU computation; a GPU sampling kernel is not required for this path. Missing mandatory CPU generation is rejected. |
 
-Sources by family: [CPU dispatch](../jit/cpu/emitters.go), [CPU orchestration](../engine/nn/jit.go), [packed matvec](../engine/nn/packed.go), [packed matmul](../engine/nn/packedmm.go), [normalization/elementwise](../engine/nn/norm.go), [GPU matrix generation](../jit/gpu/kernels/matvec.go), [GPU attention](../jit/gpu/kernels/attn.go), [GPU elements](../jit/gpu/kernels/elem.go), [GPU MoE](../jit/gpu/kernels/moe.go), [GPU recurrence](../jit/gpu/kernels/recurrent.go), [MoE scheduling](../engine/model/moe.go), [MLA](../engine/model/mla.go), [KV layout](../engine/model/kvlayout.go).
+Sources by family: [CPU dispatch](../jit_old/cpu/emitters.go), [CPU orchestration](../engine/nn/jit.go), [packed matvec](../engine/nn/packed.go), [packed matmul](../engine/nn/packedmm.go), [normalization/elementwise](../engine/nn/norm.go), [GPU matrix generation](../jit_old/gpu/kernels/matvec.go), [GPU attention](../jit_old/gpu/kernels/attn.go), [GPU elements](../jit_old/gpu/kernels/elem.go), [GPU MoE](../jit_old/gpu/kernels/moe.go), [GPU recurrence](../jit_old/gpu/kernels/recurrent.go), [MoE scheduling](../engine/model/moe.go), [MLA](../engine/model/mla.go), [KV layout](../engine/model/kvlayout.go).
 
 ## What the runtime can build without a specialized kernel
 
 | Missing specialization | What is fully generated today | Where the choice is implemented |
 |---|---|---|
-| AVX-VNNI instruction | An AVX2 multiply/add dot-product sequence | [`HostDotKind` and dot emitter](../jit/cpu/prevnni.go) |
-| AVX2 host tier, but the SSE floor is available | Independent legacy SSE machine code for the supported operation set | [`EmittersFor` and SSE table](../jit/cpu/emitters.go) |
+| AVX-VNNI instruction | An AVX2 multiply/add dot-product sequence | [`HostDotKind` and dot emitter](../jit_old/cpu/prevnni.go) |
+| AVX2 host tier, but the SSE floor is available | Independent legacy SSE machine code for the supported operation set | [`EmittersFor` and SSE table](../jit_old/cpu/emitters.go) |
 | CPU wide/fused packed sweep | Row-tile and tail machine-code kernels | [`MatVecPacked`](../engine/nn/packed.go) |
 | Requested CPU token tile | A smaller successful generated tile; applicable per-token composition | [`packedmm.go`](../engine/nn/packedmm.go), [`State.mm`](../engine/model/prefill.go) |
-| GPU integer tensor-core kernel / lowering | Ordinary batched dot-product kernel generated from IR | `batchMV` → `batchMVDot4` in [batchprep.go](../jit/gpu/tier/batchprep.go) |
-| GPU attention matrix-instruction path | Tiled FMA score kernel, including sliding-window form | `initScratch` in [scratchinit.go](../jit/gpu/tier/scratchinit.go) |
-| Suitable GPU subgroup softmax | Scalar device kernel generated and compiled for the row shape | `pickSoftmax` in [scratchinit.go](../jit/gpu/tier/scratchinit.go) |
-| Native packed-dot instruction in Metal's exposed compute model | Generated MSL helper arithmetic for IR `Dot4`, including bounded-input variants | [MSL lowerer](../jit/gpu/msl/msl.go) |
-| A single fused attention kernel | Generated score + softmax + value-accumulation kernels, assembled into layer execution | `initScratch` in [scratchinit.go](../jit/gpu/tier/scratchinit.go) and `layersOnce` in [call.go](../jit/gpu/tier/call.go) |
-| A single fused dense / MoE / recurrent / MLA block kernel | The model-specific sequence of generated primitives, with buffers, shapes and state bindings prepared at runtime | [`LayerPlan`](../engine/nn/device.go), [`planFor`](../engine/model/forward.go), `PrepLayer` in [prep.go](../jit/gpu/tier/prep.go), `emitLinear` in [mixers.go](../jit/gpu/tier/mixers.go), `emitMLA` in [mladecode.go](../jit/gpu/tier/mladecode.go) |
+| GPU integer tensor-core kernel / lowering | Ordinary batched dot-product kernel generated from IR | `batchMV` → `batchMVDot4` in [batchprep.go](../jit_old/gpu/tier/batchprep.go) |
+| GPU attention matrix-instruction path | Tiled FMA score kernel, including sliding-window form | `initScratch` in [scratchinit.go](../jit_old/gpu/tier/scratchinit.go) |
+| Suitable GPU subgroup softmax | Scalar device kernel generated and compiled for the row shape | `pickSoftmax` in [scratchinit.go](../jit_old/gpu/tier/scratchinit.go) |
+| Native packed-dot instruction in Metal's exposed compute model | Generated MSL helper arithmetic for IR `Dot4`, including bounded-input variants | [MSL lowerer](../jit_old/gpu/msl/msl.go) |
+| A single fused attention kernel | Generated score + softmax + value-accumulation kernels, assembled into layer execution | `initScratch` in [scratchinit.go](../jit_old/gpu/tier/scratchinit.go) and `layersOnce` in [call.go](../jit_old/gpu/tier/call.go) |
+| A single fused dense / MoE / recurrent / MLA block kernel | The model-specific sequence of generated primitives, with buffers, shapes and state bindings prepared at runtime | [`LayerPlan`](../engine/nn/device.go), [`planFor`](../engine/model/forward.go), `PrepLayer` in [prep.go](../jit_old/gpu/tier/prep.go), `emitLinear` in [mixers.go](../jit_old/gpu/tier/mixers.go), `emitMLA` in [mladecode.go](../jit_old/gpu/tier/mladecode.go) |
 | Device admission for a supported block | Host execution using generated CPU kernels | `offerRange` in [forward.go](../engine/model/forward.go) |
-| An unknown quant format or new model operation | **No automatic semantic fallback.** Add the format/operation definition and its generator or composition before it can run. | [Packed formats](../format/quant/types.go), [GPU format mapping](../jit/gpu/kernels/quantof.go), [activation definitions](../jit/gpu/kernels/actkind.go) |
+| An unknown quant format or new model operation | **No automatic semantic fallback.** Add the format/operation definition and its generator or composition before it can run. | [Packed formats](../format/quant/types.go), [GPU format mapping](../jit_old/gpu/kernels/quantof.go), [activation definitions](../jit_old/gpu/kernels/actkind.go) |
 
 The generated compute layer is real capability: it supplies the operation when a larger optimized implementation is absent. It does not automatically reproduce the optimized implementation's memory traffic, fusion, precision, or speed. For example, generated three-stage attention computes attention, but it does not gain Flash Attention's online-softmax memory behavior merely by being generated.
 
@@ -56,7 +56,7 @@ The generated compute layer is real capability: it supplies the operation when a
 |---|---|---|
 | x86-64 SSE | Native executable bytes | SSE2/SSE3/SSSE3/SSE4.1 baseline; optional generators may decline. |
 | x86-64 AVX2 | Native executable bytes, optionally AVX-VNNI dot sequences | AVX2/FMA/F16C baseline. AVX-512 detection exists, but no AVX-512 compute tier is selected. |
-| ARM64 | Native NEON executable bytes | Packed quantized dot kernels use SDOT where the chip has FEAT_DotProd and widen it to SMULL/SADDLP/ADDP where it does not (`jit/cpu/sdotemu.go`); the two give the same bits. |
+| ARM64 | Native NEON executable bytes | Packed quantized dot kernels use SDOT where the chip has FEAT_DotProd and widen it to SMULL/SADDLP/ADDP where it does not (`jit_old/cpu/sdotemu.go`); the two give the same bits. |
 | CUDA | Generated PTX loaded by the driver | Fragment MMA paths are available where their format, shape and target requirements pass. |
 | Vulkan | Generated SPIR-V and a runtime compute pipeline | Ordinary compute paths work independently of fragment MMA. Collective matrix support in the lowerer is not the same as production `MatVecMMA` dispatch. |
 | Metal | Generated MSL compiled into a runtime pipeline | Dot-product arithmetic and scalar/subgroup compute are generated. Collective tile support likewise does not imply every production projection uses it. |

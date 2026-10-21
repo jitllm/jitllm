@@ -134,7 +134,7 @@ recipe can buy without adding traffic.
 
 ## The first slice, as built
 
-`jit/gpu/tier/recipe.go`. `timeRecipes` is the one trial: N arms
+`jit_old/gpu/tier/recipe.go`. `timeRecipes` is the one trial: N arms
 interleaved in one process, the order rotated each round, 20 paired rounds
 after one discarded, each challenger's per-round ratio to the incumbent,
 median and IQR gate. `tuneActIn` runs on it (its three sites, two recipes
@@ -455,7 +455,7 @@ twin read as kernels.ActF16's m16n8 fragments, and Qwen2.5-VL-3B's tower read
 NMSE 4.4 on sm_70 with every kernel gate green (PR #255).
 
 The device program is the level that encoder skips. The graph says what a
-block computes; the kernel IR (`jit/gpu/ir`) says how one kernel runs. Between
+block computes; the kernel IR (`jit_old/gpu/ir`) says how one kernel runs. Between
 them sits a list of device ops, each one kernel, over typed values, that
 rewrites fuse and the tier launches.
 
@@ -601,7 +601,7 @@ blocks as the gap).
 
 **What to take from MLIR and IREE next.** Read against the sparse checkouts of
 `llvm-project/mlir` and IREE's `DispatchCreation`, `Dialect/Flow` and
-`Codegen/Common`, with the program as built (`jit/gpu/tier/devprog.go`,
+`Codegen/Common`, with the program as built (`jit_old/gpu/tier/devprog.go`,
 `devrewrite.go`): twenty-odd rewrites, each a Go function that matches op
 indices and decides legality itself, run in list order to a fixed point,
 each application cloned, checked and undone on refusal. In the order to

@@ -6,7 +6,7 @@ import (
 	"math"
 	"os"
 
-	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit_old/gpu/kernels"
 )
 
 // Container migrations. The reader opens one version (Version); a container

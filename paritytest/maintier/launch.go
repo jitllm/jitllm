@@ -1,6 +1,6 @@
 package maintier
 
-import "github.com/jitllm/jitllm/jit/gpu/backend"
+import "github.com/jitllm/jitllm/jit_old/gpu/backend"
 
 // launcher is a submission's launch path: its session, and the slice every
 // launch's buffer list is copied into before the call reaches the session. A

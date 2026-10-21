@@ -37,7 +37,7 @@ pinned to the performance cores (AGENTS.md RULE 3 and RULE 5).
 `.github/scripts/test-model-free.sh` (the program is `scripts/modelfree`) is
 what CI runs on Linux, macOS and Windows: vet aside, every package of the
 five modules but `./dev/bench`, `./ui/stage` (CI's ui job runs it) and, on
-macOS, `./jit/gpu/backend`, with no GPU and no model but the committed
+macOS, `./jit_old/gpu/backend`, with no GPU and no model but the committed
 stories260K, and a summary that lists every skip and the reason it printed.
 It sets `JITLLM_MODEL_FREE=1`, under which a test that reports a missing model
 through `testmodels.Missing` skips; without it that test fails
