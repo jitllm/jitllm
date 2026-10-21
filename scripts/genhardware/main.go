@@ -28,21 +28,22 @@ import (
 func main() {
 	measure := flag.Bool("probe", false, "probe this machine into TABLE")
 	from := flag.String("merge", "", "merge the profiles of this table file into TABLE")
+	host := flag.Bool("host", true, "probe the host CPU too: off on a machine whose CPU is no fixed hardware model, a cloud VM's")
 	flag.Parse()
 	if *measure == (*from != "") || flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "usage: genhardware -probe TABLE | genhardware -merge FROM TABLE")
 		os.Exit(2)
 	}
-	if err := run(*measure, *from, flag.Arg(0)); err != nil {
+	if err := run(*measure, *host, *from, flag.Arg(0)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(measure bool, from, table string) error {
+func run(measure, host bool, from, table string) error {
 	var add []byte
 	if measure {
-		ps, err := probeMachine()
+		ps, err := probeMachine(host)
 		if err != nil {
 			return err
 		}
@@ -69,16 +70,16 @@ func run(measure bool, from, table string) error {
 	return os.WriteFile(table, b, 0o644)
 }
 
-// probeMachine is this machine's profiles: its host, and each device with a
-// clock to time kernels on, once per hardware model.
-func probeMachine() ([]cost.Profile, error) {
+// probeMachine is this machine's profiles: its host where host is set, and
+// each device with a clock to time kernels on, once per hardware model.
+func probeMachine(host bool) ([]cost.Profile, error) {
 	var out []cost.Profile
-	if name, err := probe.HostName(); err != nil {
-		fmt.Fprintln(os.Stderr, "host:", err)
-	} else if d, err := probe.Host(); err != nil {
-		fmt.Fprintln(os.Stderr, "host:", err)
-	} else {
-		out = append(out, cost.Profile{Name: name, API: runtime.GOARCH, Source: "probe", Device: d})
+	if host {
+		if p, err := probeHost(); err != nil {
+			fmt.Fprintln(os.Stderr, "host:", err)
+		} else {
+			out = append(out, p)
+		}
 	}
 	devs := backend.Open()
 	defer func() {
@@ -105,4 +106,17 @@ func probeMachine() ([]cost.Profile, error) {
 		return nil, fmt.Errorf("genhardware: nothing on this machine was measured")
 	}
 	return out, nil
+}
+
+// probeHost is the host CPU's profile.
+func probeHost() (cost.Profile, error) {
+	name, err := probe.HostName()
+	if err != nil {
+		return cost.Profile{}, err
+	}
+	d, err := probe.Host()
+	if err != nil {
+		return cost.Profile{}, err
+	}
+	return cost.Profile{Name: name, API: runtime.GOARCH, Source: "probe", Device: d}, nil
 }
