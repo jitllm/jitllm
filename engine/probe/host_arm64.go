@@ -6,7 +6,7 @@ import (
 )
 
 // hostLanes is a NEON vector's floats.
-const hostLanes = 4
+func hostLanes() int { return 4 }
 
 // hostCheck accepts every arm64 host: the measuring kernels are base NEON.
 func hostCheck() error { return nil }
