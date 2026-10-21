@@ -214,8 +214,8 @@ func GPU(d backend.Device) (jit.Device, error) {
 			return out, err
 		}
 		alone := width
-		if cl != jit.ClassGroup && cl != jit.ClassLanes {
-			alone = 1
+		if cl != jit.ClassGroup {
+			alone = lanes
 		}
 		one, err := rate(chains, 1, alone)
 		if err != nil {
