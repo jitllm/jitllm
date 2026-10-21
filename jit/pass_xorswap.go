@@ -22,7 +22,7 @@ func (p XorSwap) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				if m == nil {
 					m = k.clone()
 				}
-				diff := m.bin(OpAnd, a.Type, m.bin(OpXor, a.Type, a.C, a.B), a.A)
+				diff := m.bin(OpAnd, a.Type, a.A, m.bin(OpXor, a.Type, a.C, a.B))
 				m.Nodes[i] = Node{Op: OpXor, Type: a.Type, A: a.C, B: diff}
 				m.Nodes[j] = Node{Op: OpXor, Type: a.Type, A: a.B, B: diff}
 				break

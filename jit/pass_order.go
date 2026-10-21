@@ -231,11 +231,12 @@ func (o *orderer) need(i, c int) {
 		o.loop(o.childOf(h, c))
 		return
 	}
-	if c < 0 {
-		for _, a := range k.evalArgs(&nd, o.pending()) {
-			if k.Nodes[*a].Op == OpFold {
-				continue
-			}
+	for _, a := range k.evalArgs(&nd, o.pending()) {
+		switch {
+		case k.Nodes[*a].Op == OpFold:
+		case k.hornerStep(*a):
+			o.need(*a, c)
+		default:
 			for _, b := range k.evalArgs(&k.Nodes[*a], o.pending()) {
 				if !o.constLoad(*b) {
 					o.need(*b, c)
@@ -253,9 +254,9 @@ func (o *orderer) need(i, c int) {
 }
 
 // pending is the depths evalArgs orders operands by, a value already made
-// and a load of constants leaves. Outside every loop an operation's
-// operands' own operands are made first, then the operands by what is
-// left to make of them.
+// and a load of constants leaves. An operation's operands' own operands are
+// made first, a Horner step whole, then the operands by what is left to
+// make of them.
 func (o *orderer) pending() map[int]int {
 	memo := map[int]int{}
 	for i := range o.k.Nodes {
@@ -946,4 +947,19 @@ func (k *Kernel) readCount(i int) int {
 		}
 	}
 	return n
+}
+
+// hornerStep reports whether node i is an fma multiplying an fma only it
+// reads.
+func (k *Kernel) hornerStep(i int) bool {
+	nd := k.Nodes[i]
+	if nd.Op != OpFma {
+		return false
+	}
+	for _, x := range []int{nd.A, nd.B} {
+		if k.Nodes[x].Op == OpFma && k.uses(x) == 1 {
+			return true
+		}
+	}
+	return false
 }
