@@ -28,7 +28,9 @@ func (a attention) prims() []Prim {
 	U, F := ir.U32, ir.F32
 	R, H, C, D := a.rows, a.heads, a.capacity, a.dim
 	gqa, kw := a.heads/a.kv, a.kv*a.dim
-	tmp := func(name string) Operand { return Operand{Kind: OperandScratch, Name: a.out.Name + "." + name, Temp: true} }
+	tmp := func(name string) Operand {
+		return Operand{Kind: OperandScratch, Name: a.out.Name + "." + name, Temp: true}
+	}
 	dots, scores, maxes, weights, sums, values := tmp("dots"), tmp("scores"), tmp("max"), tmp("weights"), tmp("sum"), tmp("values")
 	minus := math.Float32frombits(0xff7fffff)
 
