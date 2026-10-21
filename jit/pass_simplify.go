@@ -194,6 +194,8 @@ func (k *Kernel) foldDecided() bool {
 				to(i, a)
 			} else if k.isConst(a, 0) {
 				to(i, a)
+			} else if x, ok := k.multipleOf(a, b); ok {
+				to(i, x)
 			}
 		case OpShr:
 			if x := k.Nodes[a]; x.Op == OpShr && k.Nodes[x.B].Op == OpConst && k.Nodes[b].Op == OpConst {
@@ -354,4 +356,24 @@ func (k *Kernel) dropEmptyLoops() bool {
 		return true
 	}
 	return false
+}
+
+// multipleOf is x where node a is x*m + j, m node b's constant and j a
+// constant below it: what a divided by m is.
+func (k *Kernel) multipleOf(a, b int) (int, bool) {
+	mb := k.Nodes[b]
+	if mb.Op != OpConst || mb.Imm <= 0 {
+		return 0, false
+	}
+	nd := k.Nodes[a]
+	j := int64(0)
+	if nd.Op == OpAdd {
+		if c := k.Nodes[nd.B]; c.Op == OpConst && c.Imm >= 0 && c.Imm < mb.Imm {
+			j, nd = c.Imm, k.Nodes[nd.A]
+		}
+	}
+	if nd.Op == OpMul && k.isConst(nd.B, mb.Imm) && j < mb.Imm {
+		return nd.A, true
+	}
+	return 0, false
 }

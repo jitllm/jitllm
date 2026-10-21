@@ -112,6 +112,19 @@ func (e *x86Lowerer) node(i int) {
 	switch nd.Op {
 	case OpParam:
 		a.MOVLoad(e.reg(i), x86.At(x86.RDI, int32(nd.Imm)))
+	case OpFold:
+		init := k.Nodes[nd.B]
+		switch {
+		case init.Op == OpFold:
+			if nd.Reg != init.Reg {
+				e.fail("a sum carried on out of its register")
+			}
+		case init.Op == OpConst && init.Imm == 0:
+			r := e.reg(i)
+			a.VPXOR(r, r, r)
+		default:
+			e.fail("a sum from %s", init.Op)
+		}
 	case OpLoad:
 		if nd.Mem {
 			return
@@ -276,20 +289,6 @@ func (e *x86Lowerer) counter(c int) x86.Reg {
 func (e *x86Lowerer) enter(c int) {
 	k, a := e.k, e.a
 	l := k.Loops[c]
-	for _, f := range k.foldsOf(c) {
-		init := k.Nodes[k.Nodes[f].B]
-		switch {
-		case init.Op == OpFold:
-			if k.Nodes[f].Reg != init.Reg {
-				e.fail("a sum carried on out of its register")
-			}
-		case init.Op == OpConst && init.Imm == 0:
-			r := e.reg(f)
-			a.VPXOR(r, r, r)
-		default:
-			e.fail("a sum from %s", init.Op)
-		}
-	}
 	for _, cu := range l.Cursors {
 		if cu.Take {
 			a.MOVQ(e.ptrReg(cu.Buf, cu.Ptr), e.ptrReg(cu.Buf, 0))

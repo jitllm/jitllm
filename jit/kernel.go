@@ -261,6 +261,9 @@ type Node struct {
 	Reg, Ptr, Tmp int
 	// Mem is a load its one reader takes as a memory operand.
 	Mem bool
+	// Copy, where a pairing set it, is the head of the pair a copied value
+	// is for.
+	Copy int
 }
 
 // Store writes node Val at index Ix of Bufs[Buf]: each trip of loop At, or
@@ -276,6 +279,9 @@ type Store struct {
 	Ax []int
 	// Ptr, where a cursor set it, is the pointer the store writes through.
 	Ptr int
+	// Copy, where a pairing set it, is the head of the pair a copied store
+	// is for.
+	Copy int
 }
 
 func (n *Kernel) add(nd Node) int {

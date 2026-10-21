@@ -20,7 +20,8 @@ import (
 // sums, a register one sum's value freed goes to no other sum's; within a trip of an innermost
 // loop, a register freed by an operation that wrote its result elsewhere
 // goes to nothing else; and a register that held a sum goes to no value of
-// a loop that runs after the sum's.
+// a loop that runs after the sum's. A pair's later head takes its first
+// head's registers, moved past them.
 type Regs struct {
 	Fields   map[int]int
 	Spare    []int
@@ -81,10 +82,6 @@ func (b *binder86) lives() {
 		switch e.Kind {
 		case EntryNode:
 			b.def[e.I] = pos
-		case EntryLoop:
-			for _, f := range k.foldsOf(e.I) {
-				b.def[f] = pos
-			}
 		case EntryEnd:
 			b.end[e.I] = pos
 		}
@@ -111,6 +108,10 @@ func (b *binder86) lives() {
 		switch e.Kind {
 		case EntryNode:
 			nd := k.Nodes[e.I]
+			if nd.Op == OpFold {
+				use(nd.B, pos, k.Loops[nd.At].Parent)
+				continue
+			}
 			for _, a := range k.args(&nd) {
 				use(*a, pos, hs[e.I])
 			}
@@ -123,9 +124,6 @@ func (b *binder86) lives() {
 			l := k.Loops[e.I]
 			if l.Count > 0 {
 				use(l.Count-1, pos, l.Parent)
-			}
-			for _, f := range k.foldsOf(e.I) {
-				use(k.Nodes[f].B, pos, l.Parent)
 			}
 		}
 	}
@@ -404,23 +402,30 @@ func (b *binder86) vectors() error {
 		k.Nodes[i].Reg, k.Nodes[i].Tmp = r+1, b.p.Scratch+1
 		busy[r] = true
 	}
+	cp := k.copies()
 	for pos, e := range k.Seq {
+		if e.Kind == EntryNode && cp[e.I] > 0 {
+			free(pos, false)
+			continue
+		}
 		if e.Kind == EntryNode && k.Nodes[e.I].Op == OpConst {
+			continue
+		}
+		if e.Kind == EntryNode && k.Nodes[e.I].Op == OpFold {
+			f := e.I
+			init := k.Nodes[f].B
+			if k.Nodes[init].Op == OpFold && k.Nodes[init].Reg > 0 {
+				k.Nodes[f].Reg = k.Nodes[init].Reg
+				continue
+			}
+			if err := give(f, lowest(0, -1)); err != nil {
+				return err
+			}
+			held[k.Nodes[f].Reg-1] = k.Nodes[f].At
 			continue
 		}
 		switch e.Kind {
 		case EntryLoop:
-			for _, f := range k.foldsOf(e.I) {
-				init := k.Nodes[f].B
-				if k.Nodes[init].Op == OpFold && k.Nodes[init].Reg > 0 {
-					k.Nodes[f].Reg = k.Nodes[init].Reg
-					continue
-				}
-				if err := give(f, lowest(0, -1)); err != nil {
-					return err
-				}
-				held[k.Nodes[f].Reg-1] = e.I
-			}
 			continue
 		case EntryEnd:
 			free(pos, false)
@@ -474,6 +479,36 @@ func (b *binder86) vectors() error {
 			if _, step := stepOf[i]; !step {
 				busy[reg] = false
 			}
+		}
+	}
+	return k.copyRegs(cp, len(splats))
+}
+
+// copyRegs gives each value of a pair's later head the register of its
+// first head's twin plus the registers the first head takes, times the
+// head.
+func (k *Kernel) copyRegs(cp []int, splats int) error {
+	n := 0
+	for i := range k.Nodes {
+		if cp[i] == 0 && k.Nodes[i].Reg > 0 && k.needsVector(i) && k.Nodes[i].Op != OpConst {
+			n = max(n, k.Nodes[i].Reg, k.Nodes[i].Tmp)
+		}
+	}
+	tw := k.twins(cp)
+	for i := range k.Nodes {
+		if cp[i] == 0 || !k.needsVector(i) {
+			continue
+		}
+		t, ok := tw[i]
+		if !ok || t < 0 || k.Nodes[t].Reg == 0 {
+			return errors.New("a pair's later head with no twin")
+		}
+		k.Nodes[i].Reg = k.Nodes[t].Reg + cp[i]*n
+		if k.Nodes[t].Tmp > 0 {
+			k.Nodes[i].Tmp = k.Nodes[t].Tmp + cp[i]*n
+		}
+		if k.Nodes[i].Reg > 16-splats || k.Nodes[i].Tmp > 16-splats {
+			return errors.New("a pair's heads take more vector registers than there are")
 		}
 	}
 	return nil

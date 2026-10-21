@@ -27,6 +27,8 @@ type ArgFields struct {
 	Weight        int
 	Act           int
 	Query         int
+	// Second is, for a field, the field of a pair's second head's buffer.
+	Second map[int]int
 	Consts        int
 	In            []int
 	Vectors, Tail int
@@ -208,7 +210,11 @@ func (k *Kernel) bindBufs(f ArgFields) {
 		switch {
 		case written[o]:
 			fl = f.Out[min(outs, len(f.Out)-1)]
-			outs++
+			if o.Copy == 0 {
+				outs++
+			} else {
+				fl = f.Out[0]
+			}
 		case o.Kind == OperandConsts:
 			fl = f.Consts
 		case o.Kind == OperandWeight || o.Kind == OperandTable || narrows:
@@ -220,6 +226,11 @@ func (k *Kernel) bindBufs(f ArgFields) {
 		default:
 			fl = f.In[min(ins, len(f.In)-1)]
 			ins++
+		}
+		if o.Copy > 0 {
+			if f2, ok := f.Second[fl]; ok {
+				fl = f2
+			}
 		}
 		base := k.add(Node{Op: OpParam, Type: ir.U32, Imm: int64(fl)})
 		bufs := map[int]bool{}
@@ -253,9 +264,9 @@ func (k *Kernel) firstBuf(o Operand) int {
 	return len(k.Bufs)
 }
 
-// split moves the part of the accesses' indices no loop moves into an
-// offset the caller adds, 1 + its node (0 for none); each access is left a
-// flat index from the buffer's address.
+// split moves the part of the accesses' indices no loop moves, and the
+// least constant they share, into an offset the caller adds, 1 + its node
+// (0 for none); each access is left a flat index from the buffer's address.
 func (k *Kernel) split(as []access) int {
 	g := newAlg(k)
 	ls := make([]lin, len(as))
@@ -280,6 +291,13 @@ func (k *Kernel) split(as []access) int {
 				delete(fixed, m)
 			}
 		}
+	}
+	least := ls[0][""]
+	for _, l := range ls[1:] {
+		least = min(least, l[""])
+	}
+	if least != 0 {
+		fixed[""] = least
 	}
 	for i, a := range as {
 		ls[i].add(fixed, -1)

@@ -50,6 +50,9 @@ type Operand struct {
 	// belongs to none unless it is a part's own state (PerPart).
 	Of      int
 	PerPart bool
+	// Copy, where a pairing set it, is the head of a pair whose rows these
+	// are, 0 for the first.
+	Copy int
 }
 
 // Expr is one node of a primitive's scalar function: an operation on earlier

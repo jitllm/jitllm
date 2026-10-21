@@ -6,9 +6,12 @@ import "sort"
 // first, in the order of their fields but a vector loop's counts last, a
 // value no loop moves before the first loop that needs it, and in each loop
 // its values in the order they depend on each other, each inner loop where
-// a value first needs what it carries, and its stores. A loop advances the
+// a value first needs what it carries, and its stores; the sums a loop
+// carries start just before it. A loop advances the
 // address it stores through itself first, then its pointers in the order
-// its code first reaches them.
+// its code first reaches them. A pair's heads run statement by statement
+// side by side, each head's statements from where it reads a finished sum
+// on run whole, head after head.
 type Order struct{}
 
 func (Order) Name() string { return "order" }
@@ -21,7 +24,7 @@ func (p Order) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		m := k.clone()
 		o := orderer{k: m, done: map[int]bool{}, loopDone: map[int]bool{}, home: map[int]int{}, depths: map[int]int{}, words: m.vectorWords()}
 		o.run()
-		m.Seq = o.seq
+		m.Seq = m.interleave(o.seq)
 		m.orderCursors()
 		return []*Kernel{m}, true, nil
 	})
@@ -288,6 +291,10 @@ func (o *orderer) loop(d int) {
 		return
 	}
 	o.loopDone[d] = true
+	for _, f := range o.k.foldsOf(d) {
+		o.done[f] = true
+		o.seq = append(o.seq, Entry{Kind: EntryNode, I: f})
+	}
 	o.seq = append(o.seq, Entry{Kind: EntryLoop, I: d})
 	o.scope(d)
 	o.seq = append(o.seq, Entry{Kind: EntryEnd, I: d})
@@ -342,4 +349,114 @@ func (k *Kernel) orderCursors() {
 			return ai < aj
 		})
 	}
+}
+
+// interleave puts each statement of a pair's later head beside its first
+// head's twin, but after the run of finishing statements -- those reading a
+// sum after its loop -- a twin belongs to.
+func (k *Kernel) interleave(seq []Entry) []Entry {
+	cp := k.copies()
+	later := false
+	for _, c := range cp {
+		later = later || c > 0
+	}
+	if !later {
+		return seq
+	}
+	tw := k.twins(cp)
+	of := map[int][]int{}
+	for i, t := range tw {
+		if t >= 0 {
+			of[t] = append(of[t], i)
+		}
+	}
+	for t := range of {
+		sort.Slice(of[t], func(a, b int) bool { return cp[of[t][a]] < cp[of[t][b]] })
+	}
+	storeOf := map[int][]int{}
+	for i, s := range k.Stores {
+		if s.Barrier || s.Run || k.Bufs[s.Buf].Operand.Copy == 0 {
+			continue
+		}
+		for j, o := range k.Stores {
+			if k.Bufs[o.Buf].Operand.Copy == 0 && !o.Barrier && !o.Run && tw[s.Val] == o.Val && o.At == s.At {
+				storeOf[j] = append(storeOf[j], i)
+				break
+			}
+		}
+	}
+	hs := k.homes()
+	finishing := map[int]bool{}
+	var fin func(i int) bool
+	fin = func(i int) bool {
+		if v, ok := finishing[i]; ok {
+			return v
+		}
+		finishing[i] = false
+		nd := k.Nodes[i]
+		if nd.Op == OpFold {
+			return false
+		}
+		v := false
+		for _, a := range k.args(&nd) {
+			x := k.Nodes[*a]
+			if x.Op == OpFold && x.At != hs[i] && !(hs[i] >= 0 && k.within(hs[i], x.At)) || fin(*a) {
+				v = true
+			}
+		}
+		finishing[i] = v
+		return v
+	}
+	isLater := func(e Entry) bool {
+		switch e.Kind {
+		case EntryNode:
+			return cp[e.I] > 0
+		case EntryStore:
+			s := k.Stores[e.I]
+			return !s.Barrier && !s.Run && k.Bufs[s.Buf].Operand.Copy > 0
+		}
+		return false
+	}
+	isFinish := func(e Entry) bool {
+		switch e.Kind {
+		case EntryNode:
+			return fin(e.I)
+		case EntryStore:
+			s := k.Stores[e.I]
+			return !s.Barrier && !s.Run && fin(s.Val)
+		}
+		return false
+	}
+	var out, pending []Entry
+	flush := func() {
+		out = append(out, pending...)
+		pending = nil
+	}
+	for _, e := range seq {
+		if isLater(e) {
+			continue
+		}
+		if len(pending) > 0 && !isFinish(e) {
+			flush()
+		}
+		out = append(out, e)
+		var copies []Entry
+		switch e.Kind {
+		case EntryNode:
+			for _, c := range of[e.I] {
+				copies = append(copies, Entry{Kind: EntryNode, I: c})
+			}
+		case EntryStore:
+			for _, c := range storeOf[e.I] {
+				copies = append(copies, Entry{Kind: EntryStore, I: c})
+			}
+		}
+		if isFinish(e) {
+			pending = append(pending, copies...)
+		} else {
+			out = append(out, copies...)
+		}
+	}
+	flush()
+	return out
 }
