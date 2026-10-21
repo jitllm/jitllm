@@ -17,6 +17,8 @@ func gpuProfile() Profile {
 		Chains{N: 4},
 		Trips{},
 		Mask{},
+		Runs{},
+		Prefetch{},
 		Fuse{Pairs: []Pair{{From: PrimMap, To: PrimMap, AtStores: true}, {From: PrimContract, To: PrimMap, Additive: true}}},
 		Threads{Group: 128},
 		WorkRow{Group: 1024},
