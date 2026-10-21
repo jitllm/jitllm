@@ -51,7 +51,7 @@ func front(f *jlm.File) ([]Part, error) {
 
 // stated is the container's facts the front end reads; anything else a
 // model states is refused until the front end reads it.
-const stated = jlm.FlagTiedEmbd | jlm.FlagRopeNeox
+const stated = jlm.FlagTiedEmbd | jlm.FlagRopeNeox | jlm.FlagGELU
 
 func blockGraph(f *jlm.File, li int) (*graph.Graph, error) {
 	c := f.Config()
@@ -68,9 +68,14 @@ func blockGraph(f *jlm.File, li int) (*graph.Graph, error) {
 	if c.Flags&jlm.FlagRopeNeox != 0 {
 		layout = graph.RopeNeox
 	}
+	// The container's feed-forward is SiLU unless it states GELU.
+	act := graph.ActSiLU
+	if c.Flags&jlm.FlagGELU != 0 {
+		act = graph.ActGELUTanh
+	}
 	d := graph.Dense{Block: li, NEmbd: int(c.NEmbd), NHead: int(c.NHead), NKVHead: int(c.NKVHeadAt(li)),
 		HeadDim: int(c.HeadDimAt(li)), NFFN: int(c.NFFNAt(li)), Eps: float64(c.RMSEps), NRot: int(c.NRot),
-		Base: float64(c.RopeBase), Layout: layout, Act: graph.ActSiLU}
+		Base: float64(c.RopeBase), Layout: layout, Act: act}
 	return d.Build(), nil
 }
 
