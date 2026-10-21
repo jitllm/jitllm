@@ -368,6 +368,13 @@ func (k *Kernel) compact() {
 		}
 	}
 	k.Nodes = nodes
+	var alts [][2]int
+	for _, a := range k.Alts {
+		if at[a[0]] >= 0 && at[a[1]] >= 0 {
+			alts = append(alts, [2]int{at[a[0]], at[a[1]]})
+		}
+	}
+	k.Alts = alts
 	for i := range k.Stores {
 		s := &k.Stores[i]
 		if s.Barrier || s.Run {

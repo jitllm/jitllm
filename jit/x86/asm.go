@@ -285,8 +285,9 @@ func (a *Buf) vshiftImm(op byte, ext, dst, src Reg, imm byte) {
 func (a *Buf) VMOVDQULoad(dst Reg, m Mem)  { a.vopMem(0x6F, pF3, m0F, 0, dst, Y0, m) }
 func (a *Buf) VMOVDQUStore(m Mem, src Reg) { a.vopMem(0x7F, pF3, m0F, 0, src, Y0, m) }
 
-func (a *Buf) VPBROADCASTD(dst Reg, m Mem) { a.vopMem(0x58, p66, m0F38, 0, dst, Y0, m) }
-func (a *Buf) VBROADCASTSS(dst Reg, m Mem) { a.vopMem(0x18, p66, m0F38, 0, dst, Y0, m) }
+func (a *Buf) VPBROADCASTD(dst Reg, m Mem)  { a.vopMem(0x58, p66, m0F38, 0, dst, Y0, m) }
+func (a *Buf) VPBROADCASTDReg(dst, src Reg) { a.vop(0x58, p66, m0F38, 0, dst, Y0, src) }
+func (a *Buf) VBROADCASTSS(dst Reg, m Mem)  { a.vopMem(0x18, p66, m0F38, 0, dst, Y0, m) }
 
 func (a *Buf) VCVTDQ2PS(dst, src Reg) { a.vop(0x5B, pNone, m0F, 0, dst, Y0, src) }
 

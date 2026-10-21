@@ -27,6 +27,7 @@ const (
 
 // The constant block's words.
 const (
+	ropeMagic   = 0
 	ropePio2Hi  = 1
 	ropePio2Lo  = 2
 	ropeSinC7   = 3
@@ -45,7 +46,8 @@ const (
 
 // decomposeRopeTable is a step's rotary table: for each row and pair, the
 // pair's angle as the sum of the position's digits times the model's
-// planes, a range reduction to a quadrant and a remainder, the remainder's
+// planes, a range reduction to a quadrant and a remainder (in the 2^-12
+// grid with a truncating convert, or by the magic sum with a rounding one), the remainder's
 // sine and cosine by polynomials, swapped and signed by the quadrant, each
 // times the table's scale.
 func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
@@ -82,6 +84,10 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	rem := x.op(OpMul, F, x.un(OpCvtF32, F, x.op(OpAnd, U, si, cw(ropeMod4))), x.f(1.0/ropeGrid))
 	n := x.un(OpCvtI32, I, x.op(OpAdd, F, x.op(OpAdd, F, rem, co), cf(ropeHalf)))
 	f := x.op(OpSub, F, rem, x.un(OpCvtF32, F, n))
+	magic := cf(ropeMagic)
+	m4 := x.op(OpSub, F, s, x.op(OpSub, F, x.op(OpAdd, F, s, magic), magic))
+	n2 := x.un(OpRoundI32, I, x.op(OpAdd, F, m4, co))
+	f2 := x.op(OpSub, F, m4, x.un(OpCvtF32, F, n2))
 	nb := x.un(OpBitcast, U, n)
 	hi, lo := cf(ropePio2Hi), cf(ropePio2Lo)
 	fma := func(a, b, z int) int { return x.add(Expr{Op: OpFma, Type: F, A: a, B: b, C: z}) }
@@ -112,5 +118,5 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	out := Operand{Kind: OperandTable, Name: tableAngles.Name}
 	return []Prim{{Kind: PrimMap, Shape: []int{R, P}, In: []Operand{tablePos, tablePlanes, tableRopeKon}, Expr: x.e,
 		Stores: []PrimStore{{Out: out, Index: at, Value: cvs}, {Out: out, Index: at1, Value: svs}},
-		Facts:  Facts{Rows: live.e}}}, nil
+		Facts:  Facts{Rows: live.e, Alts: [][2]int{{n, n2}, {f, f2}}}}}, nil
 }

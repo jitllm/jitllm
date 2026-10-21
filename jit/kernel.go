@@ -26,6 +26,9 @@ type Kernel struct {
 	Passes []string
 	// Positions and Heads are facts the primitive carried, Part the kind of
 	// the model's part the kernel belongs to.
+	// Alts are values computed two ways, a node and the node a device may
+	// take for it, until a pass takes them or the second is dropped.
+	Alts [][2]int
 	Positions *Positions
 	Heads     *Heads
 	Part      PartKind
@@ -351,6 +354,7 @@ func (n *Kernel) clone() *Kernel {
 	}
 	c.Bufs = append([]Buf(nil), n.Bufs...)
 	c.Passes = append([]string(nil), n.Passes...)
+	c.Alts = append([][2]int(nil), n.Alts...)
 	return &c
 }
 

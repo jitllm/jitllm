@@ -100,6 +100,22 @@ func elemBytes(b Buf) int {
 }
 
 // lanes is how many lanes loop c's code runs, 0 outside any loop.
+// feedsHalves reports whether every reader of node i is made from halves.
+func (e *x86Lowerer) feedsHalves(i int) bool {
+	n := 0
+	for r, nd := range e.k.Nodes {
+		for _, a := range e.k.args(&nd) {
+			if *a == i {
+				if !e.half(r) {
+					return false
+				}
+				n++
+			}
+		}
+	}
+	return n > 0
+}
+
 // half reports whether node i is made from halves: a narrowed value's
 // words, which sit in a vector's low 128 bits.
 func (e *x86Lowerer) half(i int) bool {
@@ -182,7 +198,11 @@ func (e *x86Lowerer) node(i int) {
 		}
 		a.MOVimm32(t, int32(uint32(nd.Imm)))
 		a.MOVDToX(e.reg(i), t)
-		a.PSHUFD(e.reg(i), e.reg(i), 0)
+		if e.feedsHalves(i) {
+			a.PSHUFD(e.reg(i), e.reg(i), 0)
+		} else {
+			a.VPBROADCASTDReg(e.reg(i), e.reg(i))
+		}
 	case OpHalf:
 		a.VCVTPS2PH(e.reg(i), e.reg(nd.A), e.lanes(e.home[i]) > 0, 0)
 	case OpGtW:

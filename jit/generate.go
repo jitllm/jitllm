@@ -50,6 +50,9 @@ func generate(p Prim) (*Kernel, error) {
 		k.Rows = g.value(p.Facts.Rows, terms) + 1
 	}
 	vals := g.values(p.Expr, terms)
+	for _, a := range p.Facts.Alts {
+		k.Alts = append(k.Alts, [2]int{vals[a[0]], vals[a[1]]})
+	}
 	if p.Kind == PrimMap {
 		if len(p.Stores) == 0 {
 			b := k.buf(Buf{Kind: BufOut, Elem: elemOf(p.Out.Elem), Operand: p.Out, Shape: append([]int(nil), out...)})
