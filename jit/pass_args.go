@@ -17,8 +17,8 @@ type Args struct {
 }
 
 // ArgFields are the byte offsets of the argument words: the buffers written
-// in order, a weight's or the history's address (or the row a kernel
-// narrows into binary16), the activations a weight is read beside, the
+// in order, the first weight's, table's or history's address (or the row a
+// kernel narrows into binary16), the activations a weight is read beside, the
 // value a sum over the history's width reads beside it, a block
 // of constants, the other buffers read in order; a vector loop's count and
 // its tail's, and the other counts in order.
@@ -200,7 +200,7 @@ func (k *Kernel) bindBufs(f ArgFields) {
 		}
 	}
 	outs, ins := 0, 0
-	acts, weight := false, false
+	acts, weight, weighted := false, false, false
 	for _, o := range kept {
 		if o.Kind == OperandWeight || o.Kind == OperandVector {
 			weight = true
@@ -218,8 +218,8 @@ func (k *Kernel) bindBufs(f ArgFields) {
 			}
 		case o.Kind == OperandConsts:
 			fl = f.Consts
-		case o.Kind == OperandWeight || o.Kind == OperandTable || narrows:
-			fl = f.Weight
+		case (o.Kind == OperandWeight || o.Kind == OperandTable || narrows) && !weighted:
+			fl, weighted = f.Weight, true
 		case weight && f.Act > 0 && !acts && o.Kind != OperandVector:
 			fl, acts = f.Act, true
 		case f.Query > 0 && query[o] && o.Kind != OperandTable:

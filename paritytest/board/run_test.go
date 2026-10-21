@@ -3,33 +3,119 @@
 package board
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"runtime"
 	"testing"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit_old/cpu"
+	"github.com/jitllm/jitllm/jit_old/gpu/kernels"
 )
+
+// hostCode is the one kernel the host plan forms for parts of kind k.
+func hostCode(t *testing.T, k jit.PartKind) *jit.Code {
+	t.Helper()
+	plan, err := composed(t, *boardModel, func(jit.Part) jit.Device { return host })
+	if plan == nil {
+		t.Fatal(err)
+	}
+	for _, pp := range plan.Parts {
+		if pp.Part.Kind == k && len(pp.Codes) == 1 && pp.Codes[0].CPU != nil {
+			return &pp.Codes[0]
+		}
+	}
+	t.Fatalf("no host kernel for part kind %d in the plan", k)
+	return nil
+}
+
+// TestComposedRopeTableRuns runs the host's composed rotary table on the
+// planes the engine folds, held to main's host kernel on the same planes:
+// the same arithmetic gives the same bits.
+func TestComposedRopeTableRuns(t *testing.T) {
+	worst, bad := ropeTableAgainstMain(t, hostCode(t, jit.PartTable))
+	if bad != "" {
+		t.Error(bad)
+	}
+	t.Logf("worst %d ulp from main's host table", worst)
+}
+
+// ropeTableAgainstMain runs a composed host rotary table against main's on
+// the same planes: the worst distance in ulp, and the first word past one.
+func ropeTableAgainstMain(t *testing.T, code *jit.Code) (int, string) {
+	c, err := cpu.Map(code.CPU)
+	if err != nil {
+		t.Fatal(err)
+	}
+	npairs := 8
+	r := nn.Rope{NRot: 2 * npairs, Base: 10000}
+	planes := r.TabPlanes(npairs)
+	var konst []uint32
+	for _, v := range kernels.RopeTabConsts() {
+		konst = append(konst, math.Float32bits(v))
+	}
+	worst, bad := 0, ""
+	for _, pos := range []int{0, 1, 7, 127, 128, 129, 1000, 4097, 16383, 100000, kernels.RopeTabMaxPos - 1} {
+		want := make([]float32, 2*npairs)
+		r.Table(want, pos)
+		got := make([]float32, 2*npairs+8)
+		for i := range got {
+			got[i] = float32(math.NaN())
+		}
+		rows := []uint32{1, uint32(pos)}
+		block := make([]uint64, 64)
+		for _, a := range code.Args {
+			var p unsafe.Pointer
+			switch {
+			case a.Value || a.Moving:
+				t.Fatalf("argument word %d is a value the test does not compute", a.Field)
+			case a.Words != nil:
+				p = unsafe.Pointer(&a.Words[a.Offset])
+			case a.Operand.Name == "rope.pos":
+				p = unsafe.Pointer(&rows[a.Offset])
+			case a.Operand.Name == "rope.planes":
+				p = unsafe.Pointer(&planes[a.Offset])
+			case a.Operand.Name == "rope.const":
+				p = unsafe.Pointer(&konst[a.Offset])
+			case a.Operand.Name == "rope.cs":
+				p = unsafe.Pointer(&got[a.Offset])
+			default:
+				t.Fatalf("argument word %d binds %q", a.Field, a.Operand.Name)
+			}
+			block[a.Field/8] = uint64(uintptr(p))
+		}
+		c.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
+		runtime.KeepAlive(rows)
+		runtime.KeepAlive(planes)
+		runtime.KeepAlive(konst)
+		runtime.KeepAlive(code)
+		for i := range want {
+			d := int(math.Float32bits(got[i])) - int(math.Float32bits(want[i]))
+			if d < 0 {
+				d = -d
+			}
+			if (math.IsNaN(float64(got[i])) || d > 1) && bad == "" {
+				bad = fmt.Sprintf("position %d word %d: %v, main's %v", pos, i, got[i], want[i])
+			}
+			worst = max(worst, d)
+		}
+		for i := 2 * npairs; i < len(got); i++ {
+			if !math.IsNaN(float64(got[i])) && bad == "" {
+				bad = fmt.Sprintf("position %d: word %d past the table written", pos, i)
+			}
+		}
+	}
+	return worst, bad
+}
 
 // TestComposedSamplingRuns runs the host's composed sampling kernel on
 // rows of every tail length and against ties, held to the greedy rule: the
 // largest logit, the first of equal ones.
 func TestComposedSamplingRuns(t *testing.T) {
-	plan, err := composed(t, *boardModel, func(jit.Part) jit.Device { return host })
-	if plan == nil {
-		t.Fatal(err)
-	}
-	var code *jit.Code
-	for _, pp := range plan.Parts {
-		if pp.Part.Kind == jit.PartSample && len(pp.Codes) == 1 {
-			code = &pp.Codes[0]
-		}
-	}
-	if code == nil || code.CPU == nil {
-		t.Fatal("no host sampling kernel in the plan")
-	}
+	code := hostCode(t, jit.PartSample)
 	c, err := cpu.Map(code.CPU)
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +162,7 @@ func TestComposedSamplingRuns(t *testing.T) {
 				switch {
 				case a.Length:
 					block[a.Field/8] = uint64(n)
-				case a.Value:
+				case a.Value || a.Moving:
 					t.Fatalf("argument word %d is a value the test does not compute", a.Field)
 				case a.Words != nil:
 					block[a.Field/8] = uint64(uintptr(unsafe.Pointer(&a.Words[a.Offset])))

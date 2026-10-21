@@ -37,11 +37,13 @@ type Code struct {
 // CallArg is one argument word of a host call, at byte offset Field: the
 // address of Operand's storage Offset elements in, with Words the contents
 // of a constant block; or a value the caller computes, a run-time length
-// where Length is set, of static extent Extent.
+// where Length is set, of static extent Extent. Moving is set where the
+// offset is the caller's to compute.
 type CallArg struct {
 	Field   int
 	Operand Operand
 	Offset  int
+	Moving  bool
 	Words   []uint32
 	Value   bool
 	Length  bool
@@ -179,7 +181,15 @@ func (r *Registry) lower(ks []*Kernel, d Device) ([]ownedCode, error) {
 		for _, a := range k.Args {
 			if a.Buf >= 0 {
 				b := k.Bufs[a.Buf]
-				c.Args = append(c.Args, CallArg{Field: a.Field, Operand: b.Operand, Offset: b.Offset, Words: b.Words})
+				ca := CallArg{Field: a.Field, Operand: b.Operand, Words: b.Words}
+				if b.Offset > 0 {
+					if nd := k.Nodes[b.Offset-1]; nd.Op == OpConst {
+						ca.Offset = int(nd.Imm)
+					} else {
+						ca.Moving = true
+					}
+				}
+				c.Args = append(c.Args, ca)
 				continue
 			}
 			nd := k.Nodes[a.Node-1]
