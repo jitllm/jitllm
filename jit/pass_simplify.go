@@ -10,8 +10,11 @@ import (
 // integer arithmetic of constants done, identities removed, a loop of one
 // trip and no carried value dropped, and what a loop's iteration is known
 // to satisfy, being below its count and a range's position inside it and
-// below its end, taken as decided.
-type Simplify struct{}
+// below its end, taken as decided. With ConstLast, a commutative float
+// operation reads a constant as its second operand.
+type Simplify struct {
+	ConstLast bool
+}
 
 func (Simplify) Name() string { return "simplify" }
 
@@ -24,6 +27,7 @@ func (p Simplify) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			step = m.foldDecided() || step
 			step = m.dropUnitLoops() || step
 			step = m.dropEmptyLoops() || step
+			step = p.ConstLast && m.constLast() || step
 			if !step {
 				break
 			}
@@ -35,6 +39,24 @@ func (p Simplify) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 		return []*Kernel{m}, true, nil
 	})
+}
+
+// constLast swaps a commutative float operation's constant first operand
+// for its second.
+func (k *Kernel) constLast() bool {
+	changed := false
+	for i, nd := range k.Nodes {
+		switch nd.Op {
+		case OpAdd, OpMul, OpMin, OpMax:
+		default:
+			continue
+		}
+		if nd.Type == ir.F32 && k.Nodes[nd.A].Op == OpConst && k.Nodes[nd.B].Op != OpConst {
+			k.Nodes[i].A, k.Nodes[i].B = nd.B, nd.A
+			changed = true
+		}
+	}
+	return changed
 }
 
 // cse merges each node into the first node equal to it: the same op, type,
