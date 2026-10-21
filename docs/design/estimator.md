@@ -40,7 +40,10 @@ A kernel's time is the largest of:
   a thread times the mean latency of its buffer's reads over the loads a
   thread keeps in flight (a subgroup issues in order);
 - **chains**: the longest fold's trips times its step's critical path, or
-  the critical path through the code outside any loop;
+  the critical path through the code outside any loop; on a GPU, one
+  thread's schedule with its subgroup issuing in order, each instruction a
+  slot after the last and no sooner than its operands are done, a loop its
+  per-thread trips times a trip;
 
 plus the wait for its code's first line where the code left the nearest
 cache, and the call (host) or the device's per-kernel floor, or the host's
@@ -78,7 +81,7 @@ synth-ernie45, one decode step, `scripts/cap`:
 |---|---|---|---|---|
 | laptop, one P-core (i9-12900HK, AVX2) | caches swept between steps | 1.00-1.03 | 53-54 of 64 | 1.28-1.42x |
 | laptop, one P-core | steady (step after step) | 0.92-1.20 | 40-57 of 64 | 1.26-1.83x |
-| V100-SXM2-16GB (cato, CUDA, sm_70) | steady | 0.62 (0.91 without the argmax) | 62 of 65 | 1.12-1.14x |
+| V100-SXM2-16GB (cato, CUDA, sm_70) | steady | 1.38 (0.99 without the argmax) | 65 of 65 | 1.08x |
 
 The laptop's steady regime moves with the probe: this fixture's weights are
 about the size of its L3, so the answer turns on the replacement numbers,
@@ -89,13 +92,14 @@ larger than the caches lives in.
 
 - **One-thread kernels on the GPU.** The composed argmax runs 103,424 logits
   on one thread (2.6 ms a step on the V100, most of the step); the estimate
-  is 0.54 of it. Both the kernel (a reduction across the device) and the
-  estimate (the overlap a device compiler finds in its loop) are owed.
+  is 1.49 of it: the in-order schedule takes the IR's order, and the device
+  compiler unrolls and hoists the loads of a loop that simple. The kernel
+  is owed a reduction across the device.
 - **One warp of straight-line code.** A quantize kernel of about 2,300 PTX
   instructions on 32 threads, with float and integer divisions by run-time
-  values, runs 0.39 of the estimate: a warp issuing in order through
-  expansions the IR's instruction count cannot see.
-- **Barriers** are not priced; the attention stage, with eight, reads 0.70.
+  values, reads 0.59: the device expands those divisions into sequences the
+  IR's instruction count cannot see.
+- **Barriers** are not priced; the attention stage, with eight, reads 0.83.
 - **Arm64 and the SSE tier** have no host probe yet.
 - **Per-kernel times on the host** carry the clock's cost (taken off) and
   rdtsc ordering; a call shorter than about 20 ns is within its noise.

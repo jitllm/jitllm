@@ -76,7 +76,8 @@ type Cache struct {
 // longest fold's: the trips of one entry into the fold's loop, each waiting
 // for the instructions between the fold and its next value, or the longest
 // path through its instructions outside any loop, each waiting for those
-// it reads.
+// it reads -- on a GPU, the schedule of one thread whose subgroup issues
+// in order.
 // A kernel's memory time is its bytes at the rate of the level each is
 // served from, and the longest start of a stream among them: a level's
 // start, or for a buffer of a few lines its lines read one at a time. A
@@ -394,6 +395,96 @@ func (m *costModel) critical(k *Kernel, live, words map[int]bool, reads map[int]
 	return out
 }
 
+// inOrder is the seconds one GPU thread takes through kernel e counts,
+// its subgroup issuing in order: each instruction, in the kernel's order,
+// issues a slot after the one before it at the rate one thread issues its
+// class, and no sooner than the instructions it reads are done, each its
+// class's delay after it issued, a load its buffer's mean read latency. A
+// loop takes the thread's trips of it times a trip, a spread loop's trips
+// dealt over the group; what it computes is done when it ends.
+func (m *costModel) inOrder(e *estimator, live, words map[int]bool, reads map[int]float64) float64 {
+	k := e.k
+	cost := func(i int) (issue, delay float64) {
+		nd := k.Nodes[i]
+		cl, ok := classOf(k, i, words)
+		if nd.Op == OpLoad {
+			cl, ok = ClassMem, true
+		}
+		if !ok {
+			return 0, 0
+		}
+		if r := m.d.Rates[cl].Thread; r > 0 {
+			issue = 1 / r
+		}
+		delay = m.d.Delay[cl]
+		if nd.Op == OpLoad {
+			if lat, ok := reads[nd.Buf]; ok {
+				delay = lat
+			}
+		}
+		return issue, delay
+	}
+	scope := func(i int) int {
+		if i < len(e.homes) {
+			return e.homes[i]
+		}
+		return -1
+	}
+	// within reports whether loop c sits in loop of, or is it.
+	within := func(c, of int) bool {
+		for ; c >= 0; c = k.Loops[c].Parent {
+			if c == of {
+				return true
+			}
+		}
+		return of < 0
+	}
+	var run func(of int) float64
+	run = func(of int) float64 {
+		ready := map[int]float64{}
+		var t, end float64
+		seen := map[int]bool{}
+		for i := range k.Nodes {
+			if !live[i] {
+				continue
+			}
+			h := scope(i)
+			if h != of {
+				child := h
+				for child >= 0 && k.Loops[child].Parent != of {
+					child = k.Loops[child].Parent
+				}
+				if child < 0 || !within(h, of) || seen[child] {
+					continue
+				}
+				seen[child] = true
+				trips := e.maxTrips(child)
+				if k.Loops[child].Spread {
+					trips = math.Ceil(trips / float64(max(1, k.Group)))
+				}
+				t += trips * run(child)
+				end = max(end, t)
+				continue
+			}
+			issue, delay := cost(i)
+			start := t + issue
+			nd := k.Nodes[i]
+			for _, a := range k.args(&nd) {
+				if r, ok := ready[*a]; ok {
+					start = max(start, r)
+				} else if *a < len(k.Nodes) && scope(*a) != of && within(scope(*a), of) {
+					start = max(start, t)
+				}
+			}
+			t = start
+			ready[i] = start + delay
+			end = max(end, ready[i])
+		}
+		return max(t, end)
+	}
+	return run(-1)
+}
+
 // exposed is the seconds a GPU kernel's threads wait for their loads: a
 // subgroup issues in order, so a thread waits for each run of a load
 // before what uses it, but for the device's Overlap of them at once, while
@@ -634,6 +725,9 @@ func (m *costModel) cost(k *Kernel) Cost {
 	}
 	m.touchOf(code)
 	c.ChainSeconds = max(m.chain(&e, live, words), m.critical(k, live, words, reads))
+	if m.d.Kind == DeviceGPU {
+		c.ChainSeconds = max(c.ChainSeconds, m.inOrder(&e, live, words, reads))
+	}
 	work := max(c.MemSeconds, c.ComputeSeconds, c.WaitSeconds, c.ChainSeconds) + c.FetchSeconds
 	c.Seconds = work + c.LaunchSeconds
 	if m.d.Kind == DeviceGPU {
