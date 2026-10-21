@@ -47,6 +47,7 @@ func TestComposeIR(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		k.Part, k.Of = parts[*composePart].Kind, *composePart
 		ks = append(ks, k)
 	}
 	name, stop, _ := strings.Cut(*composeShow, "@")

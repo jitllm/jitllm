@@ -11,9 +11,11 @@ import (
 // every buffer the code reads or writes an address word, the part of its
 // indices no loop moves added by the caller, the kernel indexing from the
 // address it is given. Fields is the device's convention for which word
-// each takes.
+// each takes, Parts its convention for the kernels of a kind of part where
+// the caller of that part sets another.
 type Args struct {
 	Fields ArgFields
+	Parts  map[PartKind]ArgFields
 }
 
 // ArgFields are the byte offsets of the argument words: the buffers written
@@ -21,9 +23,11 @@ type Args struct {
 // addresses it loads; or the row a kernel narrows into binary16), the activations a weight is read beside, the
 // value a sum over the history's width reads beside it, a block
 // of constants (or an input of fixed words), the other buffers read in order; a vector loop's count and
-// its tail's, and the other counts in order.
+// its tail's, and the other counts in order. Index, where set, is the word
+// of a buffer of integers written.
 type ArgFields struct {
 	Out    []int
+	Index  int
 	Weight int
 	Act    int
 	Query  int
@@ -43,8 +47,12 @@ func (p Args) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			return nil, false, nil
 		}
 		m := k.clone()
-		m.bindCounts(p.Fields)
-		m.bindBufs(p.Fields)
+		f := p.Fields
+		if pf, ok := p.Parts[k.Part]; ok {
+			f = pf
+		}
+		m.bindCounts(f)
+		m.bindBufs(f)
 		return []*Kernel{m}, true, nil
 	})
 }
@@ -209,6 +217,8 @@ func (k *Kernel) bindBufs(f ArgFields) {
 	for _, o := range kept {
 		var fl int
 		switch {
+		case written[o] && f.Index > 0 && k.integers(o):
+			fl = f.Index
 		case written[o]:
 			fl = f.Out[min(outs, len(f.Out)-1)]
 			if o.Copy == 0 {
@@ -254,6 +264,16 @@ func (k *Kernel) bindBufs(f ArgFields) {
 		}
 		k.Args = append(k.Args, Arg{Field: fl, Buf: first})
 	}
+}
+
+// integers reports whether the buffers of operand o hold integers.
+func (k *Kernel) integers(o Operand) bool {
+	for _, b := range k.Bufs {
+		if b.Operand == o {
+			return b.Elem == ir.I32 || b.Elem == ir.U32
+		}
+	}
+	return false
 }
 
 func (k *Kernel) firstBuf(o Operand) int {

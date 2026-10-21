@@ -1,13 +1,19 @@
 package jit
 
-import "github.com/jitllm/jitllm/jit/ir"
+import (
+	"slices"
+
+	"github.com/jitllm/jitllm/jit/ir"
+)
 
 // Consts places a kernel's float constants, zero aside, in a block of words
 // its call points to, each read from its word where it was used: for a
 // device whose instructions take no float immediate. A kernel that has the
 // block places its integer constants held in vectors there too, read from
-// it where a vector reads them, and each lane's index as that many words. The words are in the order the code
-// first reads them, each store's value evaluated its deeper operand first.
+// it where a vector reads them, and each lane's index as that many words,
+// one table for every read of it. The tables come first, then the integer
+// words, then the float words, each in the order the code first reads
+// them, each store's value evaluated its deeper operand first.
 // A kernel whose constants are the words of Shared reads Shared instead,
 // and a constant a block of fixed words the kernel reads holds is read
 // from that block.
@@ -68,11 +74,27 @@ func (p Consts) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			m = k.clone()
 		}
 		b := m.buf(Buf{Kind: BufIn, Elem: ir.F32, Operand: Operand{Kind: OperandConsts, Name: k.Name + ".consts"}})
+		rank := func(i int) int {
+			switch nd := m.Nodes[i]; {
+			case nd.Op == OpLanes:
+				return 0
+			case nd.Type != ir.F32:
+				return 1
+			}
+			return 2
+		}
+		slices.SortStableFunc(at, func(x, y int) int { return rank(x) - rank(y) })
 		slot := map[uint32]int{}
+		tables := map[int64]int{}
 		for _, i := range at {
 			nd := m.Nodes[i]
 			if nd.Op == OpLanes {
+				if w, ok := tables[nd.Imm]; ok {
+					m.Nodes[i] = Node{Op: OpLoad, Type: nd.Type, Buf: b, A: m.u32(w), Imm: nd.Imm, Hint: nd.Hint, Share: nd.Share}
+					continue
+				}
 				w := len(m.Bufs[b].Words)
+				tables[nd.Imm] = w
 				for j := range nd.Imm {
 					m.Bufs[b].Words = append(m.Bufs[b].Words, uint32(j))
 					if _, ok := slot[uint32(j)]; !ok {

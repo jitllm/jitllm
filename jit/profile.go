@@ -74,7 +74,7 @@ func cpuProfile() Profile {
 		BitSelect{},
 		Induction{},
 		Consts{Shared: mainBlock()},
-		Args{Fields: mainArgs()},
+		Args{Fields: mainArgs(), Parts: map[PartKind]ArgFields{PartSample: mainSampleArgs()}},
 		Simplify{ConstLast: true},
 		Cursors{},
 		Simplify{ConstLast: true},
@@ -104,6 +104,12 @@ func mainBlock() []uint32 {
 // Q32, and the paired kernels' Out2, Q2 and AScale2.
 func mainArgs() ArgFields {
 	return ArgFields{Out: []int{0, 120}, Weight: 8, Act: 16, Query: 112, Second: map[int]int{0: 120, 112: 128, 24: 136}, Consts: 56, In: []int{24, 136}, Vectors: 40, Tail: 32, Counts: []int{32, 40}}
+}
+
+// mainSampleArgs is main's convention for the sampler's words: the logits
+// in Q32, their count in K, the value in Out and the index in ASum.
+func mainSampleArgs() ArgFields {
+	return ArgFields{Out: []int{0}, Index: 96, Consts: 56, In: []int{112}, Vectors: 40, Tail: 32, Counts: []int{40}}
 }
 
 // mainWorkgroups is main's layout of a range's partitions over workgroups.
