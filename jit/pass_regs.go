@@ -3,6 +3,7 @@ package jit
 import (
 	"cmp"
 	"errors"
+	"fmt"
 	"slices"
 
 	"github.com/jitllm/jitllm/jit/ir"
@@ -56,6 +57,7 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if p.Resident != nil {
 			w.residents(p.Resident, moved)
 		}
+		w.copiesAside()
 		for range len(k.Nodes) {
 			m := w.clone()
 			b := binder86{k: m, p: p, used: map[int]bool{}}
@@ -447,9 +449,16 @@ func (b *binder86) vectors() error {
 	for r := range held {
 		held[r] = -1
 	}
+	shared := map[int]int{}
+	reserved := map[int]bool{}
+	for _, nd := range k.Nodes {
+		if nd.Hint > 0 {
+			reserved[nd.Hint-1] = true
+		}
+	}
 	lowest := func(ch, home int) int {
 		for r := range busy {
-			if busy[r] || tag[r] != 0 && tag[r] != ch {
+			if busy[r] || reserved[r] || tag[r] != 0 && tag[r] != ch {
 				continue
 			}
 			if h := held[r]; home >= 0 && h >= 0 && !k.within(h, home) {
@@ -467,10 +476,13 @@ func (b *binder86) vectors() error {
 	hs := k.homes()
 	give := func(i, r int) error {
 		if r < 0 {
-			return errors.New("more floats live at once than the vector registers")
+			return fmt.Errorf("more floats live at once than the vector registers, at node %d (%s)", i, k.Nodes[i].Op)
 		}
 		busy[r], tag[r] = true, 0
 		k.Nodes[i].Reg = r + 1
+		if l := k.Nodes[i].Share; l > 0 && shared[l] == 0 {
+			shared[l] = r + 1
+		}
 		return nil
 	}
 	var splats []int
@@ -535,6 +547,20 @@ func (b *binder86) vectors() error {
 			continue
 		}
 		reg := -1
+		if nd.Hint > 0 || nd.Share > 0 && shared[nd.Share] > 0 {
+			free(pos, false)
+			want := nd.Hint - 1
+			if nd.Share > 0 {
+				want = shared[nd.Share] - 1
+			}
+			if want < 0 || busy[want] {
+				want = lowest(chain[i], hs[i])
+			}
+			if err := give(i, want); err != nil {
+				return err
+			}
+			continue
+		}
 		if r, ok := b.resident(i); ok {
 			reg = r
 			free(pos, false)
@@ -601,6 +627,72 @@ func (b *binder86) vectors() error {
 		}
 	}
 	return k.copyRegs(cp, len(splats))
+}
+
+// copiesAside copies, for each value that shares a register with a later
+// one and is read after the later one is made, that value where it is
+// made, its readers after the later one reading the copy.
+func (k *Kernel) copiesAside() {
+	for {
+		pos := map[int]int{}
+		for p, e := range k.Seq {
+			if e.Kind == EntryNode {
+				pos[e.I] = p
+			}
+		}
+		first := map[int]int{}
+		done := true
+		for p, e := range k.Seq {
+			if e.Kind != EntryNode || k.Nodes[e.I].Share == 0 {
+				continue
+			}
+			l := k.Nodes[e.I].Share
+			t, ok := first[l]
+			first[l] = e.I
+			if !ok || !k.readFrom(t, p+1) {
+				continue
+			}
+			c := k.add(Node{Op: OpCopy, Type: k.Nodes[t].Type, A: t})
+			for q := p + 1; q < len(k.Seq); q++ {
+				for _, a := range k.entryArgs(k.Seq[q]) {
+					if *a == t {
+						*a = c
+					}
+				}
+			}
+			at := pos[t]
+			k.Seq = append(k.Seq[:at+1], append([]Entry{{Kind: EntryNode, I: c}}, k.Seq[at+1:]...)...)
+			done = false
+			break
+		}
+		if done {
+			return
+		}
+	}
+}
+
+// entryArgs is what sequence entry e reads.
+func (k *Kernel) entryArgs(e Entry) []*int {
+	switch e.Kind {
+	case EntryNode:
+		return k.args(&k.Nodes[e.I])
+	case EntryStore:
+		return k.storeArgs(&k.Stores[e.I])
+	}
+	return nil
+}
+
+// readFrom reports whether an entry from sequence position p on reads
+// node t.
+func (k *Kernel) readFrom(t, p int) bool {
+	for ; p < len(k.Seq); p++ {
+		for _, a := range k.entryArgs(k.Seq[p]) {
+			if *a == t {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // resident is the register node i, a load of a resident word of the shared

@@ -235,6 +235,8 @@ func (e *x86Lowerer) node(i int) {
 		a.VMOVSHDUP(e.reg(i), e.reg(nd.A))
 	case OpSwapPairs:
 		a.VPERMILPS(e.reg(i), e.reg(nd.A), 0xB1)
+	case OpCopy:
+		a.VMOVAPSReg(e.reg(i), e.reg(nd.A))
 	case OpFirstLane:
 		a.VPBLENDD(e.reg(i), e.reg(nd.B), e.reg(nd.A), 1)
 	case OpAddSub:

@@ -268,6 +268,8 @@ const (
 	OpAddSub
 	// OpFirstLane is A's first lane and B's, a zero, in the rest.
 	OpFirstLane
+	// OpCopy is A in another register.
+	OpCopy
 )
 
 // Node is one value: a scalar, or inside a loop of Lanes a vector of them.
@@ -292,6 +294,10 @@ type Node struct {
 	// Copy, where a pairing set it, is the head of the pair a copied value
 	// is for.
 	Copy int
+	// Hint, where a pass set it, is 1 + the vector register the value is
+	// to take. Values of one Share label take one register, an earlier one
+	// copied aside where it is read after a later one is made.
+	Hint, Share int
 }
 
 // Store writes node Val at index Ix of Bufs[Buf]: each trip of loop At, or
@@ -373,7 +379,7 @@ func (n *Kernel) elements() int {
 
 var opNames = [...]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
 	"less", "select", "sqrt", "exp", "shl", "shr", "and", "xor", "cvtf32", "cvti32", "thread", "groupsum", "groupmax", "exchange",
-	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "round", "span", "hmax", "hmin", "eq", "or", "lanes", "sar", "dupeven", "dupodd", "swappairs", "addsub", "firstlane"}
+	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "round", "span", "hmax", "hmin", "eq", "or", "lanes", "sar", "dupeven", "dupodd", "swappairs", "addsub", "firstlane", "copy"}
 
 func (o Op) String() string {
 	if int(o) < len(opNames) {
