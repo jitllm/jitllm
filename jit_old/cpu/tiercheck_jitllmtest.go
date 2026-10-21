@@ -19,6 +19,7 @@ import "fmt"
 // gate relies on that. What is never right is a kernel that needs
 // instructions the host reports it lacks.
 func checkTier(c *Code) {
+	recordCall(c)
 	if c.tier != TierAVX2 || HostTier() == TierAVX2 || HostTier() == TierNEON {
 		return
 	}
