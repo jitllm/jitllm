@@ -553,7 +553,7 @@ func (g *devTier) genKeep(o *devOp, prog *devProgram, bs *blockScratch, rows int
 	slot := C.Fold(cc, cp.u(0))
 	C.SetFold(slot, cp.ub(compose.OpAdd, slot, C.LoadAt(fl, cp.ub(compose.OpAdd, cbase, cu))))
 	kk := cp.u(sz.keep)
-	at := C.Select(C.Less(cp.u(0), C.Load(fl)), cp.ub(compose.OpMin, slot, kk), kk)
+	at := C.Select(C.Less(cp.u(0), C.LoadAt(fl, cp.ub(compose.OpAdd, cbase, cbi))), cp.ub(compose.OpMin, slot, kk), kk)
 	C.StoreAt(list, cbi, cp.ub(compose.OpAdd, cp.ub(compose.OpMul, crh, cp.u(sz.keep+1)), at))
 	return g.launches(s.rowBuild, cp.rowBuild)
 }

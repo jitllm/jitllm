@@ -93,6 +93,20 @@ func (g *devTier) primOf(o *devOp, prog *devProgram, pb *progBuild, bs *blockScr
 			return ext
 		}
 		pr.Kind = compose.PrimAdd
+	case dkMap:
+		// Rows at their width, no padding past it, each operand dividing
+		// the result.
+		fn, ok := mapFnOf(o.A.Fn)
+		out := prog.vals[o.Out[0]].Width
+		if !ok || prog.stride(o.Out[0]) != out {
+			return ext
+		}
+		for _, v := range o.In {
+			if n := prog.vals[v].Width; n == 0 || out%n != 0 || prog.stride(v) != n {
+				return ext
+			}
+		}
+		pr.Kind, pr.Map, pr.Bound, pr.Alpha = compose.PrimMap, fn, o.V != nil, float32(o.A.Const)
 	case dkAdd:
 		if len(o.In) != 2 || o.Alpha != 0 && o.Alpha != 1 && o.GC == nil {
 			return ext
@@ -319,4 +333,37 @@ func (g *devTier) groupLaunch(pb *progBuild, nvals int, gr *compose.Group) ([]ge
 		out = append(out, l)
 	}
 	return out, true
+}
+
+// mapFnOf is the graph's map as the composer's.
+func mapFnOf(f graph.MapFn) (compose.MapFn, bool) {
+	switch f {
+	case graph.MapAdd:
+		return compose.MapAdd, true
+	case graph.MapSub:
+		return compose.MapSub, true
+	case graph.MapMul:
+		return compose.MapMul, true
+	case graph.MapDiv:
+		return compose.MapDiv, true
+	case graph.MapMax:
+		return compose.MapMax, true
+	case graph.MapMin:
+		return compose.MapMin, true
+	case graph.MapExp:
+		return compose.MapExp, true
+	case graph.MapSigmoid:
+		return compose.MapSigmoid, true
+	case graph.MapSoftplus:
+		return compose.MapSoftplus, true
+	case graph.MapSqrt:
+		return compose.MapSqrt, true
+	case graph.MapWhere:
+		return compose.MapWhere, true
+	case graph.MapLess:
+		return compose.MapLess, true
+	case graph.MapFma:
+		return compose.MapFma, true
+	}
+	return 0, false
 }

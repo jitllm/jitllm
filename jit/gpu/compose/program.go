@@ -109,6 +109,12 @@ const (
 	// row of the prim's bound bank (its vector) In[1]'s word for it names:
 	// In[1] a word a row, Width of them a program row.
 	PrimGatherAdd
+	// PrimMap is Map of its operands at each element of Out[0]: In's
+	// values (one narrower than Out[0] read at its element's place over
+	// the ratio, a word one as a float), then the prim's bound vector where
+	// Bound (every row's, at the column), then Alpha where they fall one
+	// short.
+	PrimMap
 	// PrimExtern is an op the composer does not form here: its operands
 	// and results, which no pass moves anything across.
 	PrimExtern
@@ -132,6 +138,8 @@ type Prim struct {
 	KV      KVAttrs
 	W       MatVecWeight
 	Bias    bool
+	Map     MapFn
+	Bound   bool
 	// Alone is a hint: what reads the prim's result does not fuse into it.
 	Alone bool
 	// Epi is a hint: the consumer kinds that may fuse into the prim, a bit
@@ -238,6 +246,13 @@ func (p *Program) Lower() ([]Group, error) {
 			in, sel := b.buf(BufRow, Bind{BindVal, o.In[0]}), b.buf(BufU32, Bind{BindVal, o.In[1]})
 			bank := b.buf(BufRow, Bind{BindVec, i})
 			r.StoreAt(b.buf(BufOut, Bind{BindVal, o.Out[0]}), r.IndexedBias(in, sel, bank, n), r.Column())
+			gs = append(gs, b.g)
+			continue
+		}
+		if o.Kind == PrimMap {
+			if err := b.mapPrim(i); err != nil {
+				return nil, err
+			}
 			gs = append(gs, b.g)
 			continue
 		}
@@ -641,4 +656,99 @@ func (b *builder) scores(o Prim) {
 		// chain a head, the head group a tile of rows.
 		b.g.Sched = &Schedule{Group: 128, Flat: true, Lanes: p.Lanes, LaneLoops: true, GroupRows: true, Tile: G, TileDigit: 3, Unroll: 1}
 	}
+}
+
+// MapFn is an elementwise map's function.
+type MapFn uint8
+
+const (
+	MapAdd MapFn = iota + 1
+	MapSub
+	MapMul
+	MapDiv
+	MapMax
+	MapMin
+	MapExp
+	MapSigmoid
+	MapSoftplus
+	MapSqrt
+	MapWhere // In[1] where In[0] > 0, else In[2]
+	MapLess  // 1 where In[0] < In[1], else 0
+	MapFma
+)
+
+// Arity is how many operands f takes.
+func (f MapFn) Arity() int {
+	switch f {
+	case MapExp, MapSigmoid, MapSoftplus, MapSqrt:
+		return 1
+	case MapWhere, MapFma:
+		return 3
+	case MapAdd, MapSub, MapMul, MapDiv, MapMax, MapMin, MapLess:
+		return 2
+	}
+	return 0
+}
+
+// mapPrim is map prim i's naive group: a row of Out[0]'s width a program
+// row, each operand loaded at the element, the map, the store.
+func (b *builder) mapPrim(i int) error {
+	o := b.p.Prims[i]
+	out := b.p.Vals[o.Out[0]].Width
+	b.g.Row = Row{Width: out, Rows: b.p.Rows}
+	r := &b.g.Row
+	var ops []int
+	for _, v := range o.In {
+		n := b.p.Vals[v].Width
+		if n <= 0 || out%n != 0 {
+			return fmt.Errorf("compose: a map over %d of an operand of %d", out, n)
+		}
+		var x int
+		switch {
+		case b.p.Vals[v].Elem == ValU32:
+			ix := r.Column()
+			if n != out {
+				ix = r.UBin(OpDiv, ix, r.UConst(out/n))
+			}
+			x = r.Add(Node{Kind: NUnary, Op: OpFloat, A: r.LoadAt(b.buf(BufU32, Bind{BindVal, v}), r.UBin(OpAdd, r.UBin(OpMul, r.RowIdx(), r.UConst(n)), ix))})
+		case n == out:
+			x = b.in(v)
+		default:
+			ix := r.UBin(OpAdd, r.UBin(OpMul, r.RowIdx(), r.UConst(n)), r.UBin(OpDiv, r.Column(), r.UConst(out/n)))
+			x = r.LoadAt(b.buf(BufRow, Bind{BindVal, v}), ix)
+		}
+		ops = append(ops, x)
+	}
+	if o.Bound {
+		ops = append(ops, r.Load(b.buf(BufVec, Bind{BindVec, i})))
+	}
+	if len(ops) == o.Map.Arity()-1 {
+		ops = append(ops, b.c(o.Alpha))
+	}
+	if len(ops) != o.Map.Arity() {
+		return fmt.Errorf("compose: a map of %d operands taking %d", len(ops), o.Map.Arity())
+	}
+	var y int
+	switch o.Map {
+	case MapAdd, MapSub, MapMul, MapDiv, MapMax, MapMin:
+		y = r.Bin([...]Op{MapAdd: OpAdd, MapSub: OpSub, MapMul: OpMul, MapDiv: OpDiv, MapMax: OpMax, MapMin: OpMin}[o.Map], ops[0], ops[1])
+	case MapExp:
+		y = r.Add(Node{Kind: NUnary, Op: OpExp, A: ops[0]})
+	case MapSqrt:
+		y = r.Add(Node{Kind: NUnary, Op: OpSqrt, A: ops[0]})
+	case MapSigmoid:
+		y = r.Add(Node{Kind: NUnary, Op: OpAct, Act: kernels.ActSigmoid, A: ops[0]})
+	case MapSoftplus:
+		y = r.Add(Node{Kind: NUnary, Op: OpAct, Act: kernels.ActSoftplus, A: ops[0]})
+	case MapWhere:
+		y = r.Select(r.Less(r.Const(0), ops[0]), ops[1], ops[2])
+	case MapLess:
+		y = r.Select(r.Less(ops[0], ops[1]), r.Const(1), r.Const(0))
+	case MapFma:
+		y = r.Add(Node{Kind: NBinary, Op: OpFma, A: ops[0], B: ops[1], C: ops[2]})
+	default:
+		return fmt.Errorf("compose: a map of function %d", o.Map)
+	}
+	r.Store(b.buf(BufOut, Bind{BindVal, o.Out[0]}), y)
+	return nil
 }
