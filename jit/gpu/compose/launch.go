@@ -29,11 +29,8 @@ func (g *Group) Launches(t Target) ([]Launch, error) {
 	if len(g.Segs) > 0 {
 		return g.segmented(t)
 	}
-	f := Facts{Target: t}
-	if g.Contract {
-		f = g.Facts
-		f.Target = t
-	}
+	f := g.Facts
+	f.Target = t
 	var ps []Planned
 	var err error
 	if g.Sched != nil {

@@ -228,6 +228,7 @@ func (p *Program) Lower() ([]Group, error) {
 		}
 		if o.Kind == PrimSoftmax {
 			b.g.Row = Row{Width: 1, Rows: o.Paged.Rows * o.Paged.Heads * o.Paged.Splits}
+			b.g.Facts = o.Facts
 			b.softmax(o)
 			gs = append(gs, b.g)
 			continue

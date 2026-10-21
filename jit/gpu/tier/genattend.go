@@ -119,6 +119,59 @@ func (g *devTier) attendKeys(o *devOp, prog *devProgram, bs *blockScratch, rows,
 	}
 	items := rows * (pa.Heads / G) * pa.Splits * pa.Chunk
 
+	if ps.Lanes > 1 {
+		// A latent row's scores over a subgroup: the composer's lane form
+		// of the scores prim is not built yet.
+		return g.stagedBuilt(items, ps, ss, pa, prow, vpool, vd, scale, cap)
+	}
+	// The staged chain as the composer's program: scores, softmax,
+	// accumulation and merge, each lowered alone and planned by the shape.
+	args := []genArg{gaIn0, gaKPool, vpool, gaTab, prow, gaScores, gaWts, gaParts, gaOut0}
+	vals := make([]compose.Value, len(args))
+	for i := range vals {
+		vals[i] = compose.Value{Buf: -1}
+	}
+	vals[3].Elem, vals[4].Elem = compose.ValU32, compose.ValU32
+	pr := &compose.Program{Rows: rows, Vals: vals, Prims: []compose.Prim{
+		{Kind: compose.PrimScores, In: []int{0, 1, 3, 4}, Out: []int{5}, Paged: pa, Scale: scale, Softcap: cap},
+		{Kind: compose.PrimSoftmax, In: []int{5, 4}, Out: []int{6, 7}, Paged: pa},
+		{Kind: compose.PrimAcc, In: []int{6, 2, 3, 4}, Out: []int{7}, Paged: pa},
+		{Kind: compose.PrimMerge, In: []int{7}, Out: []int{8}, Paged: pa},
+	}}
+	if ss.Lanes > 1 {
+		pr.Prims[1].Facts = compose.Facts{RowGroup: 64, GroupRows: true}
+	}
+	gs, err := pr.Lower()
+	if err != nil {
+		g.LastErr = err.Error()
+		return nil
+	}
+	var ls []genLaunch
+	for gi := range gs {
+		cls, err := gs[gi].Launches(g.composeTarget())
+		if err != nil {
+			g.LastErr = err.Error()
+			return nil
+		}
+		for _, cl := range cls {
+			k, _ := g.genKern(append([]uint32{encRow}, cl.Key...), cl.Emit)
+			if k == nil || len(cl.Binds) > len(genLaunch{}.args) {
+				return nil
+			}
+			l := genLaunch{k: k, groups: cl.Groups, width: cl.Width, n: uint8(len(cl.Binds))}
+			for j, bd := range cl.Binds {
+				l.args[j] = args[bd.Index]
+			}
+			ls = append(ls, l)
+		}
+	}
+	return ls
+}
+
+// stagedBuilt is the staged chain as the hand-shaped builders form it: what
+// a latent row over a subgroup still takes.
+func (g *devTier) stagedBuilt(items int, ps, ss, pa compose.Paged, prow, vpool genArg, vd int, scale, cap float32) []genLaunch {
+	rows, G := pa.Rows, pa.HeadGroup()
 	sc := &rowBuild{r: compose.Row{Width: items, Rows: 1}}
 	if ps.Lanes > 1 {
 		sc.r = compose.Row{Width: ps.Lanes, Rows: items}
