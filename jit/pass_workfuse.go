@@ -28,6 +28,7 @@ func (w WorkFuse) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 		k := w.fuse(ks[i:j], d)
 		k.Passes = []string{w.Name()}
+		k.compact()
 		out = append(out, k)
 		i = j - 1
 	}
@@ -135,6 +136,16 @@ func (w WorkFuse) phase(k, m *Kernel, outer []int) {
 	for i, l := range m.Loops {
 		if l.Count > 0 {
 			k.Loops[loopOf[i]].Count = walk(l.Count-1) + 1
+		}
+	}
+	for i, l := range m.Loops {
+		if l.Parent < 0 && len(axisLoop) == 0 {
+			k.Stores = append(k.Stores, Store{Run: true, At: loopOf[i]})
+		}
+	}
+	for a := range m.Space {
+		if l, ok := axisLoop[a]; ok && k.Loops[l].Parent < 0 {
+			k.Stores = append(k.Stores, Store{Run: true, At: l})
 		}
 	}
 	at := parent

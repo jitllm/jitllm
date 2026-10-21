@@ -248,3 +248,95 @@ func (k *Kernel) bufLike(b Buf) int {
 	}
 	return k.buf(b)
 }
+
+// compact drops the nodes nothing reaches: neither a store, nor a loop's
+// count, live span or element, nor a fact.
+func (k *Kernel) compact() {
+	live := map[int]bool{}
+	var walk func(i int)
+	walk = func(i int) {
+		if i < 0 || i >= len(k.Nodes) || live[i] {
+			return
+		}
+		live[i] = true
+		nd := k.Nodes[i]
+		for _, a := range k.args(&nd) {
+			walk(*a)
+		}
+	}
+	for i := range k.Stores {
+		s := k.Stores[i]
+		if !s.Barrier && !s.Run {
+			for _, a := range k.storeArgs(&s) {
+				walk(*a)
+			}
+		}
+	}
+	for _, l := range k.Loops {
+		for _, x := range []int{l.Count, l.Span, l.Elem} {
+			if x > 0 {
+				walk(x - 1)
+			}
+		}
+	}
+	if p := k.Positions; p != nil {
+		for _, x := range append(append([]int{p.First, p.End}, p.Live...), p.Pos...) {
+			walk(x)
+		}
+		for _, x := range []int{p.Span, p.Part} {
+			if x > 0 {
+				walk(x - 1)
+			}
+		}
+	}
+	if len(live) == len(k.Nodes) {
+		return
+	}
+	at := make([]int, len(k.Nodes))
+	var nodes []Node
+	for i, nd := range k.Nodes {
+		at[i] = -1
+		if live[i] {
+			at[i] = len(nodes)
+			nodes = append(nodes, nd)
+		}
+	}
+	for i := range nodes {
+		for _, a := range k.args(&nodes[i]) {
+			*a = at[*a]
+		}
+	}
+	k.Nodes = nodes
+	for i := range k.Stores {
+		s := &k.Stores[i]
+		if s.Barrier || s.Run {
+			continue
+		}
+		for _, a := range k.storeArgs(s) {
+			*a = at[*a]
+		}
+	}
+	re := func(x int) int {
+		if x > 0 {
+			return at[x-1] + 1
+		}
+		return x
+	}
+	for i := range k.Loops {
+		l := &k.Loops[i]
+		l.Count, l.Span, l.Elem = re(l.Count), re(l.Span), re(l.Elem)
+	}
+	if p := k.Positions; p != nil {
+		q := *p
+		q.First, q.End = at[p.First], at[p.End]
+		q.Live, q.Pos = nil, nil
+		for _, x := range p.Live {
+			q.Live = append(q.Live, at[x])
+		}
+		for _, x := range p.Pos {
+			q.Pos = append(q.Pos, at[x])
+		}
+		q.Span, q.Part = re(p.Span), re(p.Part)
+		k.Positions = &q
+	}
+}

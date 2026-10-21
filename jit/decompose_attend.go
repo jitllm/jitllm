@@ -23,7 +23,9 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	C := c.Step.Keys
 	gqa, kw, pg := a.NHead/a.NKVHead, a.NKVHead*a.HeadDim, c.Step.Page
 	out := c.value(o.Out[0])
-	tmp := func(name string) Operand { return Operand{Kind: OperandScratch, Name: out.Name + "." + name, Temp: true} }
+	tmp := func(name string) Operand {
+		return Operand{Kind: OperandScratch, Name: out.Name + "." + name, Temp: true}
+	}
 	dots, scores, maxes, weights, sums, values := tmp("dots"), tmp("scores"), tmp("max"), tmp("weights"), tmp("sum"), tmp("values")
 	minus := math.Float32frombits(0xff7fffff)
 	keys, heads, dims := []int{R, H, C}, []int{R, H}, []int{R, H, D}

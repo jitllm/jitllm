@@ -54,6 +54,7 @@ func eachKernel(name string, ks []*Kernel, f func(k *Kernel) ([]*Kernel, bool, e
 		}
 		for _, n := range ns {
 			n.Passes = append(append([]string(nil), k.Passes...), name)
+			n.compact()
 		}
 		out = append(out, ns...)
 	}
