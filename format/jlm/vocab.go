@@ -141,6 +141,24 @@ type PreOp struct {
 // "left right" string is ambiguous once either side contains a space.
 type Merge struct{ Left, Right string }
 
+// Merges is a vocabulary's merge rules in order, as one string table.
+type Merges struct{ t Strings }
+
+// NewMerges is a table of m.
+func NewMerges(m []Merge) Merges {
+	s := make([]string, 0, 2*len(m))
+	for _, x := range m {
+		s = append(s, x.Left, x.Right)
+	}
+	return Merges{t: NewStrings(s)}
+}
+
+// Len is the number of merges.
+func (m Merges) Len() int { return m.t.Len() / 2 }
+
+// At is merge i.
+func (m Merges) At(i int) Merge { return Merge{Left: m.t.At(2 * i), Right: m.t.At(2*i + 1)} }
+
 // ChatTemplate is one named template. A model may ship several -- a default and
 // a tool-calling variant, say -- where the source format has room for exactly
 // one and unnamed.
@@ -149,10 +167,10 @@ type ChatTemplate struct{ Name, Body string }
 // Vocab is the container's tokenizer.
 type Vocab struct {
 	Kind   VocabKind
-	Tokens []string
+	Tokens Strings
 	Scores []float32    // SPM; empty for BPE
 	Kinds  []TokenKind  // parallel to Tokens
-	Merges []Merge      // BPE
+	Merges Merges       // BPE
 	Added  []AddedToken // tokens added after training, with their own handling
 
 	// Special ids, -1 when the model has none. Pad, Sep and Mask are carried

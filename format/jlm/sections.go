@@ -32,9 +32,6 @@ func (w *wbuf) str(s string) { w.u32(uint32(len(s))); w.b = append(w.b, s...) }
 type rbuf struct {
 	b   []byte
 	err error
-	// all, where set, is the section as one string: str slices it rather
-	// than allocating each string apart.
-	all string
 }
 
 // want is the one bounds check. A container is untrusted input: every
@@ -88,13 +85,7 @@ func (r *rbuf) str() string {
 	if !r.want(n) {
 		return ""
 	}
-	var s string
-	if r.all != "" {
-		at := len(r.all) - len(r.b)
-		s = r.all[at : at+n]
-	} else {
-		s = string(r.b[:n])
-	}
+	s := string(r.b[:n])
 	r.b = r.b[n:]
 	return s
 }
@@ -660,9 +651,9 @@ func encodeVocab(v *Vocab) []byte {
 	}
 	w := &wbuf{}
 	w.u8(uint8(v.Kind))
-	w.u32(uint32(len(v.Tokens)))
-	for _, t := range v.Tokens {
-		w.str(t)
+	w.u32(uint32(v.Tokens.Len()))
+	for i := range v.Tokens.Len() {
+		w.str(v.Tokens.At(i))
 	}
 	w.u32(uint32(len(v.Scores)))
 	for _, s := range v.Scores {
@@ -672,8 +663,9 @@ func encodeVocab(v *Vocab) []byte {
 	for _, k := range v.Kinds {
 		w.u8(uint8(k))
 	}
-	w.u32(uint32(len(v.Merges)))
-	for _, m := range v.Merges {
+	w.u32(uint32(v.Merges.Len()))
+	for i := range v.Merges.Len() {
+		m := v.Merges.At(i)
 		w.str(m.Left)
 		w.str(m.Right)
 	}
@@ -741,13 +733,14 @@ func decodeVocab(b []byte) (*Vocab, error) {
 	if len(b) == 0 {
 		return nil, nil
 	}
-	r := &rbuf{b: b, all: string(b)}
+	r := &rbuf{b: b}
 	v := &Vocab{Kind: VocabKind(r.u8())}
 	if n := r.count(4); n > 0 {
-		v.Tokens = make([]string, n)
-		for i := range v.Tokens {
-			v.Tokens[i] = r.str()
+		t, err := readStrings(r, n)
+		if err != nil {
+			return nil, err
 		}
+		v.Tokens = t
 	}
 	if n := r.count(4); n > 0 {
 		v.Scores = make([]float32, n)
@@ -762,11 +755,11 @@ func decodeVocab(b []byte) (*Vocab, error) {
 		}
 	}
 	if n := r.count(8); n > 0 {
-		v.Merges = make([]Merge, n)
-		for i := range v.Merges {
-			v.Merges[i].Left = r.str()
-			v.Merges[i].Right = r.str()
+		t, err := readStrings(r, 2*n)
+		if err != nil {
+			return nil, err
 		}
+		v.Merges = Merges{t: t}
 	}
 	if n := r.count(13); n > 0 {
 		v.Added = make([]AddedToken, n)
@@ -828,17 +821,17 @@ func decodeVocab(b []byte) (*Vocab, error) {
 		return nil, r.err
 	}
 	for _, id := range v.Stop {
-		if id < 0 || int(id) >= len(v.Tokens) {
-			return nil, fmt.Errorf("jlm: stop id %d is outside a %d-token vocabulary", id, len(v.Tokens))
+		if id < 0 || int(id) >= v.Tokens.Len() {
+			return nil, fmt.Errorf("jlm: stop id %d is outside a %d-token vocabulary", id, v.Tokens.Len())
 		}
 	}
 	// The parallel arrays must be parallel, checked here rather than at the
 	// first out-of-range index deep into a prompt.
-	if len(v.Kinds) != 0 && len(v.Kinds) != len(v.Tokens) {
-		return nil, fmt.Errorf("jlm: vocab has %d tokens and %d kinds", len(v.Tokens), len(v.Kinds))
+	if len(v.Kinds) != 0 && len(v.Kinds) != v.Tokens.Len() {
+		return nil, fmt.Errorf("jlm: vocab has %d tokens and %d kinds", v.Tokens.Len(), len(v.Kinds))
 	}
-	if len(v.Scores) != 0 && len(v.Scores) != len(v.Tokens) {
-		return nil, fmt.Errorf("jlm: vocab has %d tokens and %d scores", len(v.Tokens), len(v.Scores))
+	if len(v.Scores) != 0 && len(v.Scores) != v.Tokens.Len() {
+		return nil, fmt.Errorf("jlm: vocab has %d tokens and %d scores", v.Tokens.Len(), len(v.Scores))
 	}
 	return v, nil
 }

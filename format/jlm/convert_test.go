@@ -239,7 +239,7 @@ func TestContainerCarriesTheTokenizer(t *testing.T) {
 	}
 	v := c.Vocab()
 	t.Logf("tokenizer round-tripped over %d probes; %d tokens, %d merges, %d pre stages, %d templates",
-		len(probes), len(v.Tokens), len(v.Merges), len(v.Pre), len(v.Templates))
+		len(probes), v.Tokens.Len(), v.Merges.Len(), len(v.Pre), len(v.Templates))
 }
 
 // TestVersionIsRefusedNotMisparsed: the magic says "is this ours", the version

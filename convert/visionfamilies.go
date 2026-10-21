@@ -295,8 +295,8 @@ func imgBreakRow(s *jlm.Source) error {
 	}
 	id := -1
 	if s.Vocab != nil {
-		for i, tok := range s.Vocab.Tokens {
-			if tok == "[IMG_BREAK]" {
+		for i := range s.Vocab.Tokens.Len() {
+			if s.Vocab.Tokens.At(i) == "[IMG_BREAK]" {
 				id = i
 				break
 			}

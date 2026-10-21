@@ -27,9 +27,9 @@ func TestGemma4EncodesAsItsTokenizerDoes(t *testing.T) {
 	}
 	defer f.Close()
 	vc := vocabOf(t, f)
-	if vc.Kind != jlm.VocabBPESPM || !vc.ByteFallback || vc.AddSpacePrefix || len(vc.Merges) == 0 {
+	if vc.Kind != jlm.VocabBPESPM || !vc.ByteFallback || vc.AddSpacePrefix || vc.Merges.Len() == 0 {
 		t.Fatalf("the vocabulary is %v (byte fallback %v, space prefix %v, %d merges), want bpe-spm "+
-			"with byte fallback and no space prefix", vc.Kind, vc.ByteFallback, vc.AddSpacePrefix, len(vc.Merges))
+			"with byte fallback and no space prefix", vc.Kind, vc.ByteFallback, vc.AddSpacePrefix, vc.Merges.Len())
 	}
 	v, err := New(vc)
 	if err != nil {

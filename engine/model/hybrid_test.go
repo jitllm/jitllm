@@ -270,7 +270,7 @@ func hybridModelOpt(t *testing.T, o hyOpt) *Model {
 	src := &jlm.Source{
 		Config: cfg,
 		Vocab: &jlm.Vocab{
-			Kind: jlm.VocabBPE, Tokens: toks, Scores: scores, Kinds: kindsTok,
+			Kind: jlm.VocabBPE, Tokens: jlm.NewStrings(toks), Scores: scores, Kinds: kindsTok,
 			BOS: 0, EOS: 1, Unk: -1, Pad: -1, Sep: -1, Mask: -1,
 		},
 		Tensors: tensors,

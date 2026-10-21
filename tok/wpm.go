@@ -37,7 +37,8 @@ func newWPM(vc *jlm.Vocab, v *Vocab) error {
 			w.lower, w.strip = op.CaseFold, !op.LetterMarks
 		}
 	}
-	for i, t := range v.text {
+	for i := range v.text.Len() {
+		t := v.text.At(i)
 		if len(t) > w.maxLen {
 			w.maxLen = len(t)
 		}
@@ -45,7 +46,7 @@ func newWPM(vc *jlm.Vocab, v *Vocab) error {
 			w.special = append(w.special, int32(i))
 		}
 	}
-	sort.SliceStable(w.special, func(a, b int) bool { return len(v.text[w.special[a]]) > len(v.text[w.special[b]]) })
+	sort.SliceStable(w.special, func(a, b int) bool { return len(v.text.At(int(w.special[a]))) > len(v.text.At(int(w.special[b]))) })
 	v.wpm = w
 	return nil
 }
@@ -61,7 +62,7 @@ func (v *Vocab) encodeWPM(text string, addSpecial bool) []int32 {
 	for i := 0; i < len(text); {
 		hit := int32(-1)
 		for _, id := range v.wpm.special {
-			if strings.HasPrefix(text[i:], v.text[id]) {
+			if strings.HasPrefix(text[i:], v.text.At(int(id))) {
 				hit = id
 				break
 			}
@@ -72,7 +73,7 @@ func (v *Vocab) encodeWPM(text string, addSpecial bool) []int32 {
 		}
 		out = v.wordPieces(text[last:i], out)
 		out = append(out, hit)
-		i += len(v.text[hit])
+		i += len(v.text.At(int(hit)))
 		last = i
 	}
 	out = v.wordPieces(text[last:], out)
@@ -91,7 +92,7 @@ func (v *Vocab) wordPieces(text string, out []int32) []int32 {
 			hi := min(len(w), i+v.wpm.maxLen)
 			j := hi
 			for ; j > i; j-- {
-				if id, ok := v.ids[w[i:j]]; ok {
+				if id, ok := v.ids.find(w[i:j]); ok {
 					out = append(out, id)
 					break
 				}
@@ -179,10 +180,10 @@ func isCJK(r rune) bool {
 func (v *Vocab) decodeWPM(ids []int32) string {
 	var b strings.Builder
 	for _, id := range ids {
-		if id < 0 || int(id) >= len(v.text) || v.kind[id] == typeControl {
+		if id < 0 || int(id) >= v.text.Len() || v.kind[id] == typeControl {
 			continue
 		}
-		b.WriteString(strings.ReplaceAll(v.text[id], spaceMark, " "))
+		b.WriteString(strings.ReplaceAll(v.text.At(int(id)), spaceMark, " "))
 	}
 	return strings.TrimPrefix(b.String(), " ")
 }

@@ -66,12 +66,12 @@ func TestSectionsRoundTrip(t *testing.T) {
 
 	voc := &Vocab{
 		Kind:   VocabBPE,
-		Tokens: []string{"<unk>", "Ġthe", "🙂", "with space"},
+		Tokens: NewStrings([]string{"<unk>", "Ġthe", "🙂", "with space"}),
 		Scores: []float32{0, -1, -2, -3},
 		Kinds:  []TokenKind{TokenUnknown, TokenNormal, TokenNormal, TokenUserDefined},
 		// A merge whose side contains a space, which the joined "left right"
 		// form cannot represent.
-		Merges: []Merge{{"Ġt", "he"}, {"with", " space"}},
+		Merges: NewMerges([]Merge{{"Ġt", "he"}, {"with", " space"}}),
 		Added:  []AddedToken{{ID: 3, Content: "<|im_start|>", Special: true, LStrip: true, SingleWord: true}},
 		BOS:    1, EOS: 2, Unk: 0, Pad: -1, Sep: -1, Mask: -1, Stop: []int32{3, 1},
 		AddBOS: true, AddEOS: false, AddSpacePrefix: true, ByteFallback: true, IgnoreMerges: true,
@@ -105,7 +105,7 @@ func TestSectionsRoundTrip(t *testing.T) {
 	// An id the token table does not hold is refused, not carried to a
 	// generation loop that compares against it forever.
 	bad := *voc
-	bad.Stop = []int32{int32(len(voc.Tokens))}
+	bad.Stop = []int32{int32(voc.Tokens.Len())}
 	if _, err := decodeVocab(encodeVocab(&bad)); err == nil {
 		t.Error("a stop id past the token table was accepted")
 	}
@@ -115,7 +115,7 @@ func TestSectionsRoundTrip(t *testing.T) {
 // (RULE 9).
 func TestSectionsRefuseGarbage(t *testing.T) {
 	full := encodeVocab(&Vocab{
-		Kind: VocabSPM, Tokens: []string{"a", "b"}, Scores: []float32{0, 1},
+		Kind: VocabSPM, Tokens: NewStrings([]string{"a", "b"}), Scores: []float32{0, 1},
 		Kinds: []TokenKind{TokenNormal, TokenNormal}, PreName: "x",
 	})
 	// Every truncation of a valid section.

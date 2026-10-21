@@ -196,7 +196,7 @@ func smallSource(t *testing.T) *jlm.Source {
 			Flags: jlm.FlagTiedEmbd,
 		},
 		Vocab: &jlm.Vocab{
-			Kind: jlm.VocabSPM, Tokens: []string{"<unk>", "▁a", "▁b", "🙂"},
+			Kind: jlm.VocabSPM, Tokens: jlm.NewStrings([]string{"<unk>", "▁a", "▁b", "🙂"}),
 			Scores: []float32{0, -1, -2, -3},
 			Kinds:  []jlm.TokenKind{jlm.TokenUnknown, jlm.TokenNormal, jlm.TokenNormal, jlm.TokenNormal},
 			BOS:    0, EOS: -1, Unk: 0, Pad: -1, Sep: -1, Mask: -1,

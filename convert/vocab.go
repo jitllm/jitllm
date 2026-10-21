@@ -48,13 +48,14 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 	if !ok {
 		return nil, fmt.Errorf("convert: a tokenizer with no token list")
 	}
-	v.Tokens = make([]string, 0, toks.Len())
+	tokens := make([]string, 0, toks.Len())
 	if err := toks.EachString(func(i int, s []byte) bool {
-		v.Tokens = append(v.Tokens, string(s))
+		tokens = append(tokens, string(s))
 		return true
 	}); err != nil {
 		return nil, err
 	}
+	v.Tokens = jlm.NewStrings(tokens)
 	if sc, err := f.KV["tokenizer.ggml.scores"].Float32s(); err == nil {
 		v.Scores = sc
 	}
@@ -95,9 +96,9 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 		if !ok {
 			continue
 		}
-		if n >= uint64(len(v.Tokens)) {
+		if n >= uint64(v.Tokens.Len()) {
 			return nil, fmt.Errorf("convert: tokenizer.ggml.%s_token_id %d is outside a %d-token vocabulary",
-				k, n, len(v.Tokens))
+				k, n, v.Tokens.Len())
 		}
 		v.Stop = addStop(v.Stop, v.EOS, int32(n))
 	}
@@ -117,16 +118,17 @@ func VocabOf(f *meta.File) (*jlm.Vocab, error) {
 	// Merges become pairs here, split on the first space: a merge whose left
 	// half is the space character is written "Ġ Ġ".
 	if m, ok := f.KV["tokenizer.ggml.merges"]; ok {
-		v.Merges = make([]jlm.Merge, 0, m.Len())
+		merges := make([]jlm.Merge, 0, m.Len())
 		if err := m.EachString(func(i int, s []byte) bool {
 			str := string(s)
 			if sp := strings.IndexByte(str, ' '); sp > 0 {
-				v.Merges = append(v.Merges, jlm.Merge{Left: str[:sp], Right: str[sp+1:]})
+				merges = append(merges, jlm.Merge{Left: str[:sp], Right: str[sp+1:]})
 			}
 			return true
 		}); err != nil {
 			return nil, err
 		}
+		v.Merges = jlm.NewMerges(merges)
 	}
 
 	v.Templates = ggufTemplates(f.KV)

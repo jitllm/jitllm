@@ -226,7 +226,8 @@ func TestWithTokenizerIsSelected(t *testing.T) {
 	// A vocabulary that gains a multi-digit token fails here, pointing at the
 	// arm that needs re-deriving.
 	multi := 0
-	for s := range base.ids {
+	for i := range base.text.Len() {
+		s := base.text.At(i)
 		rs := []rune(s)
 		if len(rs) < 2 {
 			continue
@@ -266,7 +267,7 @@ func TestWithTokenizerIsSelected(t *testing.T) {
 		t.Helper()
 		out := make([]int32, len(pieces))
 		for i, p := range pieces {
-			id, ok := base.ids[p]
+			id, ok := base.ids.find(p)
 			if !ok {
 				t.Fatalf("%s has no %q token; the expectation cannot be derived from the vocabulary", name, p)
 			}

@@ -15,7 +15,7 @@ func Representable(v *Vocab, text string) string {
 	for _, r := range text {
 		ok := true
 		for _, c := range []byte(string(r)) {
-			if _, has := v.ids[string(byteToRune[c])]; !has {
+			if _, has := v.ids.find(string(byteToRune[c])); !has {
 				ok = false
 			}
 		}

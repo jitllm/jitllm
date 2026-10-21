@@ -47,7 +47,7 @@ func qkSource(flags Flags, normOn func(b int32) bool) *Source {
 			NFFN: k, NVocab: rows, NCtx: 64, RMSEps: 1e-6, RopeBase: 10000, EmbdScale: 1, AttnFactor: 1,
 			Flags: FlagTiedEmbd | flags, LayerKinds: []LayerKind{LayerFullAttn, LayerLinearAttn},
 		},
-		Vocab: &Vocab{Kind: VocabBPE, Tokens: []string{"a", "b"}, Scores: []float32{0, 0},
+		Vocab: &Vocab{Kind: VocabBPE, Tokens: NewStrings([]string{"a", "b"}), Scores: []float32{0, 0},
 			Kinds: []TokenKind{TokenNormal, TokenNormal}, BOS: 0, EOS: 1, Unk: -1, Pad: -1, Sep: -1, Mask: -1},
 		Tensors: ts,
 	}

@@ -72,10 +72,10 @@ func byteDecode(s string, out *strings.Builder) {
 // wins over everything else: the model's own tokenizer.json knows something
 // tokenizer.ggml.pre cannot say.
 func newBPE(vc *jlm.Vocab, v *Vocab, override []pretok.Op) error {
-	if len(vc.Merges) == 0 {
+	if vc.Merges.Len() == 0 {
 		return fmt.Errorf("tok: a byte-level BPE tokenizer with no merges")
 	}
-	b := &bpeState{pairs: make(map[uint64]bpeMerge, len(vc.Merges))}
+	b := &bpeState{pairs: make(map[uint64]bpeMerge, vc.Merges.Len())}
 	b.pre = vc.PreName
 	// The stages come from the container, resolved at conversion. The
 	// generated pretok table is consulted only for a container written before
@@ -99,10 +99,11 @@ func newBPE(vc *jlm.Vocab, v *Vocab, override []pretok.Op) error {
 	// ambiguous when a half contains a space). A merge whose halves or result
 	// are not tokens is refused, as HF tokenizers refuses it; an id table cannot
 	// represent such a merge anyway.
-	for i, m := range vc.Merges {
-		l, lok := v.ids[m.Left]
-		r, rok := v.ids[m.Right]
-		id, ok := v.ids[m.Left+m.Right]
+	for i := range vc.Merges.Len() {
+		m := vc.Merges.At(i)
+		l, lok := v.ids.find(m.Left)
+		r, rok := v.ids.find(m.Right)
+		id, ok := v.ids.find2(m.Left, m.Right)
 		if !lok || !rok || !ok {
 			return fmt.Errorf("tok: merge %d (%q + %q) names a string that is not a token", i, m.Left, m.Right)
 		}
@@ -110,7 +111,7 @@ func newBPE(vc *jlm.Vocab, v *Vocab, override []pretok.Op) error {
 	}
 	for c := 0; c < 256; c++ {
 		b.byteID[c] = -1
-		if id, ok := v.ids[string(byteToRune[c])]; ok {
+		if id, ok := v.ids.find(string(byteToRune[c])); ok {
 			b.byteID[c] = id
 		}
 	}
@@ -163,12 +164,12 @@ func (v *Vocab) indexSpecial() {
 	}
 	// Longest first, so a special token that is a prefix of another cannot win.
 	for i := 1; i < len(v.special); i++ {
-		for j := i; j > 0 && len(v.text[v.special[j]]) > len(v.text[v.special[j-1]]); j-- {
+		for j := i; j > 0 && len(v.text.At(int(v.special[j]))) > len(v.text.At(int(v.special[j-1]))); j-- {
 			v.special[j], v.special[j-1] = v.special[j-1], v.special[j]
 		}
 	}
 	for _, id := range v.special {
-		if s := v.text[id]; s != "" {
+		if s := v.text.At(int(id)); s != "" {
 			v.specialAt[s[0]] = append(v.specialAt[s[0]], id)
 		}
 	}
@@ -190,7 +191,7 @@ func (v *Vocab) partitionSpecial(text string, control bool) []specialRun {
 			if !control && v.kind[id] == typeControl {
 				continue
 			}
-			if s := v.text[id]; strings.HasPrefix(text[i:], s) {
+			if s := v.text.At(int(id)); strings.HasPrefix(text[i:], s) {
 				hit, hlen = id, len(s)
 				break // special is sorted longest first
 			}
@@ -274,7 +275,7 @@ func (v *Vocab) mergeWord(word string, out []int32, sc *bpeScratch) []int32 {
 		for i := 0; i < len(word); i++ {
 			sc.buf = utf8.AppendRune(sc.buf, byteToRune[word[i]])
 		}
-		if id, ok := v.ids[string(sc.buf)]; ok {
+		if id, ok := v.ids.findBytes(sc.buf); ok {
 			return append(out, id)
 		}
 	}
@@ -389,13 +390,13 @@ func (q *bpeQ) pop() bpeBigram {
 func (v *Vocab) decodeBPE(ids []int32) string {
 	var b strings.Builder
 	for _, id := range ids {
-		if id < 0 || int(id) >= len(v.text) {
+		if id < 0 || int(id) >= v.text.Len() {
 			continue
 		}
 		if k := v.kind[id]; k == typeControl || k == typeUnused {
 			continue
 		}
-		byteDecode(v.text[id], &b)
+		byteDecode(v.text.At(int(id)), &b)
 	}
 	return b.String()
 }

@@ -66,10 +66,10 @@ func TestChatTemplateIsAppliedAndSpecialsAreNotDoubled(t *testing.T) {
 			// The naive pairing must parse specials too (EncodeSpecial), or on a
 			// SentencePiece vocabulary both sides encode "<bos>" as prose.
 			naive := m.Vocab.EncodeSpecial(text, true)
-			if cv.BOS >= 0 && int(cv.BOS) < len(cv.Tokens) && strings.HasPrefix(text, cv.Tokens[cv.BOS]) &&
+			if cv.BOS >= 0 && int(cv.BOS) < cv.Tokens.Len() && strings.HasPrefix(text, cv.Tokens.At(int(cv.BOS))) &&
 				ids[0] != cv.BOS {
 				t.Errorf("%s: the template renders %q first and the chat ids start %d, not its id %d",
-					name, cv.Tokens[cv.BOS], ids[0], cv.BOS)
+					name, cv.Tokens.At(int(cv.BOS)), ids[0], cv.BOS)
 			}
 			count := func(ids []int32, id int32) int {
 				n := 0

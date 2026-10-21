@@ -63,7 +63,7 @@ func migrateSource(audio, unfolded bool) *Source {
 		Config: &Config{Arch: ArchLlama, NLayer: 1, NEmbd: k, NHead: 1, NKVHead: 1, HeadDim: k, NRot: k,
 			NFFN: k, NVocab: rows, NCtx: 128, RMSEps: 1e-5, RopeBase: 10000, EmbdScale: 1, AttnFactor: 1,
 			Flags: FlagTiedEmbd},
-		Vocab: &Vocab{Kind: VocabSPM, Tokens: []string{"<unk>", "a", "b", "c", "d", "e", "f", "g"},
+		Vocab: &Vocab{Kind: VocabSPM, Tokens: NewStrings([]string{"<unk>", "a", "b", "c", "d", "e", "f", "g"}),
 			Scores: make([]float32, rows), Kinds: make([]TokenKind, rows),
 			BOS: 0, EOS: -1, Unk: 0, Pad: -1, Sep: -1, Mask: -1},
 	}

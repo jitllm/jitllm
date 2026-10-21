@@ -121,7 +121,6 @@ func hfVocabOf(dir hfDir, nvocab uint32) (*jlm.Vocab, error) {
 	if err != nil {
 		return nil, err
 	}
-	v.Tokens = toks
 	v.Kinds = make([]jlm.TokenKind, len(toks))
 	for i := range v.Kinds {
 		v.Kinds[i] = jlm.TokenNormal
@@ -138,7 +137,7 @@ func hfVocabOf(dir hfDir, nvocab uint32) (*jlm.Vocab, error) {
 		// lands in a pad slot, and the slot takes its name so Text(id) and an
 		// SPM encoder can find it.
 		if int(a.ID) >= len(tj.Model.Vocab) {
-			v.Tokens[a.ID] = a.Content
+			toks[a.ID] = a.Content
 		}
 		// Control is matched literally and never merged, which is what an added
 		// token is for; a non-special added token is user-defined and gets the
@@ -154,6 +153,7 @@ func hfVocabOf(dir hfDir, nvocab uint32) (*jlm.Vocab, error) {
 			Normalized: a.Normalized, SingleWord: a.SingleWord,
 		})
 	}
+	v.Tokens = jlm.NewStrings(toks)
 
 	merges, err := hfMerges(p, tj.Model.Merges)
 	if err != nil {
@@ -161,9 +161,9 @@ func hfVocabOf(dir hfDir, nvocab uint32) (*jlm.Vocab, error) {
 	}
 	if spm {
 		hfSPMKinds(v, int(len(tj.Model.Vocab)))
-		v.Scores = hfSPMScores(v.Tokens, merges)
+		v.Scores = hfSPMScores(toks, merges)
 	} else {
-		v.Merges = merges
+		v.Merges = jlm.NewMerges(merges)
 		// The pipeline comes from the artefact through the same parser
 		// scripts/gentok runs; an op it cannot build is a refusal naming it.
 		ops, err := pretok.ParsePreTokenizer(strings.NewReader(string(b)))
@@ -183,8 +183,8 @@ func hfVocabOf(dir hfDir, nvocab uint32) (*jlm.Vocab, error) {
 	if err != nil {
 		return nil, err
 	}
-	index := make(map[string]int32, len(v.Tokens))
-	for i, s := range v.Tokens {
+	index := make(map[string]int32, len(toks))
+	for i, s := range toks {
 		if _, dup := index[s]; !dup {
 			index[s] = int32(i)
 		}
@@ -324,8 +324,8 @@ func hfSPMShape(byteFallback bool, norm, pre json.RawMessage) (spm, prefix bool,
 // hfSPMKinds marks the byte tokens, which is what tok's SPM decoder keys on:
 // "<0x0A>" is a newline only while its kind says it is a byte.
 func hfSPMKinds(v *jlm.Vocab, nvocab int) {
-	for i := 0; i < nvocab && i < len(v.Tokens); i++ {
-		s := v.Tokens[i]
+	for i := 0; i < nvocab && i < v.Tokens.Len(); i++ {
+		s := v.Tokens.At(i)
 		if v.Kinds[i] == jlm.TokenNormal && len(s) == 6 && strings.HasPrefix(s, "<0x") && s[5] == '>' {
 			v.Kinds[i] = jlm.TokenByte
 		}
@@ -591,9 +591,9 @@ func hfStops(dir hfDir, v *jlm.Vocab) ([]int32, error) {
 	}
 	var stop []int32
 	for _, id := range ids {
-		if id < 0 || id >= int64(len(v.Tokens)) {
+		if id < 0 || id >= int64(v.Tokens.Len()) {
 			return nil, fmt.Errorf("convert: %s: eos_token_id %d is outside a %d-token vocabulary",
-				dir.path(name), id, len(v.Tokens))
+				dir.path(name), id, v.Tokens.Len())
 		}
 		stop = addStop(stop, v.EOS, int32(id))
 	}

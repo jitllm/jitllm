@@ -213,7 +213,7 @@ func TestSynthModelConverts(t *testing.T) {
 		t.Errorf("post_attention_layernorm landed as %d ffn_norm, %d post_attn_norm, %d post_ffn_norm",
 			seen[jlm.RoleFFNNorm], seen[jlm.RolePostAttnNorm], seen[jlm.RolePostFFNNorm])
 	}
-	if s.Vocab == nil || len(s.Vocab.Tokens) != sNVocab || len(s.Vocab.Merges) != 1 {
+	if s.Vocab == nil || s.Vocab.Tokens.Len() != sNVocab || s.Vocab.Merges.Len() != 1 {
 		t.Fatalf("vocab %+v", s.Vocab)
 	}
 	// ignore_merges is a field of tokenizer.json, not a family guess.

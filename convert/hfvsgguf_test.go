@@ -242,27 +242,27 @@ func TestSafetensorsTokenizerMatchesItsGGUF(t *testing.T) {
 	if a.Kind != b.Kind {
 		t.Fatalf("kind %v against %v", a.Kind, b.Kind)
 	}
-	if len(a.Tokens) != len(b.Tokens) {
-		t.Fatalf("%d tokens against %d", len(a.Tokens), len(b.Tokens))
+	if a.Tokens.Len() != b.Tokens.Len() {
+		t.Fatalf("%d tokens against %d", a.Tokens.Len(), b.Tokens.Len())
 	}
 	diff := 0
-	for i := range a.Tokens {
-		if a.Tokens[i] != b.Tokens[i] {
+	for i := range a.Tokens.Len() {
+		if a.Tokens.At(i) != b.Tokens.At(i) {
 			if diff < 5 {
-				t.Errorf("token %d: %q against %q", i, a.Tokens[i], b.Tokens[i])
+				t.Errorf("token %d: %q against %q", i, a.Tokens.At(i), b.Tokens.At(i))
 			}
 			diff++
 		}
 	}
 	if diff != 0 {
-		t.Fatalf("%d of %d tokens differ", diff, len(a.Tokens))
+		t.Fatalf("%d of %d tokens differ", diff, a.Tokens.Len())
 	}
-	if len(a.Merges) != len(b.Merges) {
-		t.Fatalf("%d merges against %d", len(a.Merges), len(b.Merges))
+	if a.Merges.Len() != b.Merges.Len() {
+		t.Fatalf("%d merges against %d", a.Merges.Len(), b.Merges.Len())
 	}
-	for i := range a.Merges {
-		if a.Merges[i] != b.Merges[i] {
-			t.Fatalf("merge %d: %v against %v", i, a.Merges[i], b.Merges[i])
+	for i := range a.Merges.Len() {
+		if a.Merges.At(i) != b.Merges.At(i) {
+			t.Fatalf("merge %d: %v against %v", i, a.Merges.At(i), b.Merges.At(i))
 		}
 	}
 	// The pipeline must denote the same stages in the same order: Digits
@@ -296,7 +296,7 @@ func TestSafetensorsTokenizerMatchesItsGGUF(t *testing.T) {
 	// What the GGUF has no room for at all.
 	t.Logf("%d tokens, %d merges, %d stages agree; PreName %q against %q; "+
 		"safetensors also carries %d added tokens the GGUF has no field for",
-		len(a.Tokens), len(a.Merges), len(a.Pre), a.PreName, b.PreName, len(a.Added))
+		a.Tokens.Len(), a.Merges.Len(), len(a.Pre), a.PreName, b.PreName, len(a.Added))
 	if len(a.Added) == 0 {
 		t.Error("no added tokens came across, and this model ships some")
 	}

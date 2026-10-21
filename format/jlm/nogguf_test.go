@@ -68,7 +68,7 @@ func TestContainerFromNoGGUFAtAll(t *testing.T) {
 			Flags: jlm.FlagTiedEmbd,
 		},
 		Vocab: &jlm.Vocab{
-			Kind: jlm.VocabSPM, Tokens: vocab,
+			Kind: jlm.VocabSPM, Tokens: jlm.NewStrings(vocab),
 			Scores: []float32{0, -1, -2, -3},
 			Kinds:  []jlm.TokenKind{jlm.TokenUnknown, jlm.TokenNormal, jlm.TokenNormal, jlm.TokenNormal},
 			BOS:    0, EOS: -1, Unk: 0, Pad: -1, Sep: -1, Mask: -1,
@@ -147,5 +147,5 @@ func TestContainerFromNoGGUFAtAll(t *testing.T) {
 		t.Fatalf("checked %d of %d tensors -- this gate proved nothing", checked, len(tensors))
 	}
 	t.Logf("%d tensors, %d tokens and a typed config, built and read with no GGUF in the path",
-		checked, len(c.Vocab().Tokens))
+		checked, c.Vocab().Tokens.Len())
 }

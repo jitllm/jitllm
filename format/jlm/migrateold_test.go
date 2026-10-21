@@ -67,7 +67,7 @@ func oldSource() *Source {
 		Config: &Config{Arch: ArchQwen3MoE, NLayer: 2, NEmbd: k, NHead: 1, NKVHead: 1,
 			HeadDim: k, NRot: k, NFFN: k, NVocab: 8, NCtx: 128, RMSEps: 1e-5, RopeBase: 10000,
 			EmbdScale: 1, AttnFactor: 1, NExpert: nExp, NExpertUsed: 2},
-		Vocab: &Vocab{Kind: VocabBPE, Tokens: []string{"a", "b", "c", "d", "e", "f", "g", "h"},
+		Vocab: &Vocab{Kind: VocabBPE, Tokens: NewStrings([]string{"a", "b", "c", "d", "e", "f", "g", "h"}),
 			Kinds: make([]TokenKind, 8), BOS: -1, EOS: -1, Unk: -1, Pad: -1, Sep: -1, Mask: -1},
 		Tensors: ts,
 	}

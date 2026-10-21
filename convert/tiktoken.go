@@ -66,15 +66,16 @@ func hfTiktokenVocab(dir hfDir, nvocab uint32) (*jlm.Vocab, error) {
 	if v.Pre, err = containerPreOps(ops); err != nil {
 		return nil, fmt.Errorf("convert: %s: %w", p, err)
 	}
-	v.Tokens = make([]string, nvocab)
+	tokens := make([]string, nvocab)
 	v.Kinds = make([]jlm.TokenKind, nvocab)
 	for r, t := range byRank {
-		v.Tokens[r], v.Kinds[r] = pretok.ByteLevel(t), jlm.TokenNormal
+		tokens[r], v.Kinds[r] = pretok.ByteLevel(t), jlm.TokenNormal
 	}
 
 	// The merges are recovered from the ranks, as llama.cpp's converter does
 	// (QwenModel.bpe): a token of rank r is the merge of the two parts that
 	// BPE with every rank below r leaves it in, and only two can be left.
+	var merges []jlm.Merge
 	for r, t := range byRank {
 		if len(t) < 2 {
 			continue
@@ -84,8 +85,9 @@ func hfTiktokenVocab(dir hfDir, nvocab uint32) (*jlm.Vocab, error) {
 			return nil, fmt.Errorf("convert: %s: token %d (%q) is not the merge of two "+
 				"lower-ranked tokens; BPE with ranks below it leaves %d parts", p, r, t, len(parts))
 		}
-		v.Merges = append(v.Merges, jlm.Merge{Left: pretok.ByteLevel(parts[0]), Right: pretok.ByteLevel(parts[1])})
+		merges = append(merges, jlm.Merge{Left: pretok.ByteLevel(parts[0]), Right: pretok.ByteLevel(parts[1])})
 	}
+	v.Merges = jlm.NewMerges(merges)
 
 	tc, err := readHFTokenizerConfig(dir)
 	if err != nil {
@@ -100,9 +102,10 @@ func hfTiktokenVocab(dir hfDir, nvocab uint32) (*jlm.Vocab, error) {
 		if a, ok := tc.AddedTokensDecoder[strconv.Itoa(int(id))]; ok {
 			content = a.Content
 		}
-		v.Tokens[id], v.Kinds[id] = content, jlm.TokenControl
+		tokens[id], v.Kinds[id] = content, jlm.TokenControl
 		v.Added = append(v.Added, jlm.AddedToken{ID: int32(id), Content: content, Special: true})
 	}
+	v.Tokens = jlm.NewStrings(tokens)
 	// tokenization_kimi.py reads added_tokens_decoder only for its 256
 	// reserved rows after the base vocabulary. An entry past those and past
 	// the embedding names a row neither the tokenizer nor the model has --

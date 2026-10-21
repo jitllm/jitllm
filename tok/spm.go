@@ -40,8 +40,8 @@ const (
 
 // Vocab is a loaded SPM vocabulary.
 type Vocab struct {
-	ids   map[string]int32
-	text  []string
+	ids   index
+	text  jlm.Strings
 	score []float32
 	kind  []int32
 
@@ -143,23 +143,16 @@ func New(vc *jlm.Vocab, options ...Option) (*Vocab, error) {
 			return nil, fmt.Errorf("tok: WithTokenizer: %w", err)
 		}
 	}
-	n := len(vc.Tokens)
+	n := vc.Tokens.Len()
 	if n == 0 {
 		return nil, fmt.Errorf("tok: the container's tokenizer has no tokens")
 	}
 	v := &Vocab{
-		ids:            make(map[string]int32, n),
-		text:           make([]string, n),
+		ids:            newIndex(vc.Tokens),
+		text:           vc.Tokens,
 		AddBOS:         vc.AddBOS,
 		AddEOS:         vc.AddEOS,
 		AddSpacePrefix: vc.AddSpacePrefix,
-	}
-	for i, str := range vc.Tokens {
-		v.text[i] = str
-		// First id wins. Duplicate token strings exist in some vocabularies.
-		if _, dup := v.ids[str]; !dup {
-			v.ids[str] = int32(i)
-		}
 	}
 	v.kind = make([]int32, n)
 	for i, k := range vc.Kinds {
@@ -200,7 +193,7 @@ func New(vc *jlm.Vocab, options ...Option) (*Vocab, error) {
 	// its own <0xNN> token (token_type 6), or Unk when the vocabulary lacks it.
 	const hex = "0123456789ABCDEF"
 	for b := 0; b < 256; b++ {
-		id, ok := v.ids["<0x"+string(hex[b>>4])+string(hex[b&15])+">"]
+		id, ok := v.ids.find("<0x" + string(hex[b>>4]) + string(hex[b&15]) + ">")
 		if !ok {
 			v.byteTok[b] = -1
 			continue
@@ -216,7 +209,8 @@ func New(vc *jlm.Vocab, options ...Option) (*Vocab, error) {
 	// whitespace runs are user-defined tokens matched before any merge.
 	v.indexSpecial()
 	v.spaceGlue = map[string]bool{}
-	for _, t := range v.text {
+	for i := range v.text.Len() {
+		t := v.text.At(i)
 		// From byte 1, not len(spaceMark): a token need not open with a space
 		// mark, and gemma-3's ">▁</" has its only one at byte 1.
 		for k := 1; k < len(t); {
@@ -234,7 +228,7 @@ func New(vc *jlm.Vocab, options ...Option) (*Vocab, error) {
 }
 
 // Size is the vocabulary size.
-func (v *Vocab) Size() int { return len(v.text) }
+func (v *Vocab) Size() int { return v.text.Len() }
 
 // ID is llama.cpp's lookup_token: the id whose token text is exactly this
 // string, or false. It is not Encode: BPE-merging a marker's text can land on a
@@ -243,10 +237,10 @@ func (v *Vocab) Size() int { return len(v.text) }
 // Failing a raw lookup it compares against the decoded piece, which is what
 // makes it work on a byte-level BPE vocabulary ("\n\n" is stored as "\u010a\u010a").
 func (v *Vocab) ID(text string) (int32, bool) {
-	if id, ok := v.ids[text]; ok {
+	if id, ok := v.ids.find(text); ok {
 		return id, true
 	}
-	for i := range v.text {
+	for i := range v.text.Len() {
 		if v.Decode([]int32{int32(i)}) == text {
 			return int32(i), true
 		}
@@ -256,10 +250,10 @@ func (v *Vocab) ID(text string) (int32, bool) {
 
 // Text returns the raw token string for an id.
 func (v *Vocab) Text(id int32) string {
-	if id < 0 || int(id) >= len(v.text) {
+	if id < 0 || int(id) >= v.text.Len() {
 		return ""
 	}
-	return v.text[id]
+	return v.text.At(int(id))
 }
 
 // utf8Len is llama.cpp's utf8_len, byte for byte. utf8.DecodeRune is not a
@@ -356,7 +350,7 @@ var eogNames = []string{"<|eot_id|>", "<|im_end|>", "<|end|>", "<|return|>", "<|
 // llama.cpp, </s> is not a stop on a vocabulary with gemma4's
 // <|tool_response>.
 func eogOf(v *Vocab, stated []int32) []int32 {
-	has := func(n string) bool { _, ok := v.ids[n]; return ok }
+	has := func(n string) bool { _, ok := v.ids.find(n); return ok }
 	harmony := (has("<|return|>") && has("<|call|>")) || (has("<|calls|>") && has("<|flush|>"))
 	toolResponse := has("<|tool_response>")
 	var out []int32
@@ -370,12 +364,12 @@ func eogOf(v *Vocab, stated []int32) []int32 {
 		add(id)
 	}
 	for _, n := range eogNames {
-		if id, ok := v.ids[n]; ok {
+		if id, ok := v.ids.find(n); ok {
 			add(id)
 		}
 	}
 	drop := func(n string) {
-		if id, ok := v.ids[n]; ok {
+		if id, ok := v.ids.find(n); ok {
 			out = slices.DeleteFunc(out, func(x int32) bool { return x == id })
 		}
 	}
@@ -464,7 +458,7 @@ func (v *Vocab) encodeSPMRun(text string, prefix bool, out []int32) []int32 {
 			return
 		}
 		s := work[syms[left].off : syms[right].off+syms[right].n]
-		id, ok := v.ids[s]
+		id, ok := v.ids.find(s)
 		if !ok {
 			return
 		}
@@ -517,7 +511,7 @@ func (v *Vocab) encodeSPMRun(text string, prefix bool, out []int32) []int32 {
 // unreachable here; the byte fallback only sees a single character the
 // vocabulary lacks.
 func (v *Vocab) emitSymbol(s string, out []int32) []int32 {
-	if id, ok := v.ids[s]; ok {
+	if id, ok := v.ids.find(s); ok {
 		return append(out, id)
 	}
 	for j := 0; j < len(s); j++ {
@@ -540,20 +534,20 @@ func (v *Vocab) Decode(ids []int32) string {
 	}
 	var b strings.Builder
 	for _, id := range ids {
-		if id < 0 || int(id) >= len(v.text) {
+		if id < 0 || int(id) >= v.text.Len() {
 			continue
 		}
 		switch v.kind[id] {
 		case typeControl, typeUnused:
 			continue
 		case typeByte:
-			s := v.text[id]
+			s := v.text.At(int(id))
 			if len(s) == 6 && s[0] == '<' { // <0xNN>
 				b.WriteByte(hexByte(s[3], s[4]))
 				continue
 			}
 		}
-		b.WriteString(strings.ReplaceAll(v.text[id], spaceMark, " "))
+		b.WriteString(strings.ReplaceAll(v.text.At(int(id)), spaceMark, " "))
 	}
 	return b.String()
 }
@@ -575,7 +569,7 @@ func nibble(c byte) byte {
 // Piece is the bytes token id adds to decoded text, false for a token that
 // adds none: a control or unused token, or an id outside the vocabulary.
 func (v *Vocab) Piece(id int32) (string, bool) {
-	if id < 0 || int(id) >= len(v.text) {
+	if id < 0 || int(id) >= v.text.Len() {
 		return "", false
 	}
 	if k := v.kind[id]; k == typeControl || k == typeUnused {
@@ -589,11 +583,11 @@ func (v *Vocab) Piece(id int32) (string, bool) {
 // own text ([TOOL_CALLS], <|call|>), which Decode drops, and Decode's piece for
 // every other. A tool call written in control tokens is read from it.
 func (v *Vocab) Literal(id int32) string {
-	if id < 0 || int(id) >= len(v.text) {
+	if id < 0 || int(id) >= v.text.Len() {
 		return ""
 	}
 	if k := v.kind[id]; k == typeControl || k == typeUnused {
-		return v.text[id]
+		return v.text.At(int(id))
 	}
 	one := [1]int32{id}
 	return v.Decode(one[:])

@@ -94,7 +94,7 @@ func TestStopSetRoundTrips(t *testing.T) {
 		}
 		dir := testmodels.Path("hunyuanvl/hf/HunyuanOCR")
 		need(t, dir)
-		hv, err := hfVocabOf(dirFiles(dir), uint32(len(gv.Tokens)))
+		hv, err := hfVocabOf(dirFiles(dir), uint32(gv.Tokens.Len()))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -111,7 +111,7 @@ func TestStopSetRoundTrips(t *testing.T) {
 // does not hold is a broken file, refused where a person is in front of it;
 // and the two other shapes transformers accepts are read.
 func TestStopSetRefusesAnIdOutsideTheVocabulary(t *testing.T) {
-	v := &jlm.Vocab{Tokens: []string{"a", "b", "c"}, EOS: 2}
+	v := &jlm.Vocab{Tokens: jlm.NewStrings([]string{"a", "b", "c"}), EOS: 2}
 	stated := func(files map[string]string) ([]int32, error) {
 		m := fstest.MapFS{}
 		for name, body := range files {

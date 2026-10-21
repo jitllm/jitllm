@@ -52,7 +52,7 @@ func spmOneHeapRun(v *Vocab, text string, prefix bool) []int32 {
 			return
 		}
 		s := work[syms[left].off : syms[right].off+syms[right].n]
-		if id, ok := v.ids[s]; ok {
+		if id, ok := v.ids.find(s); ok {
 			h.push(bigram{left: left, right: right, score: v.score[id], size: len(s)})
 		}
 	}

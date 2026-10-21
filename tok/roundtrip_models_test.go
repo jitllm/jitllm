@@ -45,10 +45,14 @@ func TestEveryVocabularyGivesTheBytesBack(t *testing.T) {
 		}
 		vc := f.Vocab()
 		f.Close()
-		if vc == nil || len(vc.Tokens) == 0 {
+		if vc == nil || vc.Tokens.Len() == 0 {
 			return nil
 		}
-		key := strings.Join(vc.Tokens[:min(len(vc.Tokens), 300)], "\x00")
+		var head []string
+		for i := range min(vc.Tokens.Len(), 300) {
+			head = append(head, vc.Tokens.At(i))
+		}
+		key := strings.Join(head, "\x00")
 		if seen[key] {
 			return nil
 		}

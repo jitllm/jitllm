@@ -36,14 +36,15 @@ type spmBPE struct {
 }
 
 func newSPMBPE(vc *jlm.Vocab, v *Vocab) error {
-	if len(vc.Merges) == 0 {
+	if vc.Merges.Len() == 0 {
 		return fmt.Errorf("tok: a SentencePiece-style BPE tokenizer with no merges")
 	}
-	b := &spmBPE{pairs: make(map[uint64]bpeMerge, len(vc.Merges))}
-	for i, m := range vc.Merges {
-		l, lok := v.ids[m.Left]
-		r, rok := v.ids[m.Right]
-		id, ok := v.ids[m.Left+m.Right]
+	b := &spmBPE{pairs: make(map[uint64]bpeMerge, vc.Merges.Len())}
+	for i := range vc.Merges.Len() {
+		m := vc.Merges.At(i)
+		l, lok := v.ids.find(m.Left)
+		r, rok := v.ids.find(m.Right)
+		id, ok := v.ids.find2(m.Left, m.Right)
 		if !lok || !rok || !ok {
 			return fmt.Errorf("tok: merge %d (%q + %q) names a string that is not a token", i, m.Left, m.Right)
 		}
@@ -74,7 +75,7 @@ func (v *Vocab) encodeSPMBPERun(text string, out []int32) []int32 {
 	offs := make([]int32, 0, len(work)+1)
 	for i := 0; i < len(work); {
 		_, n := utf8.DecodeRuneInString(work[i:])
-		id, ok := v.ids[work[i:i+n]]
+		id, ok := v.ids.find(work[i : i+n])
 		if !ok {
 			id = -1
 		}

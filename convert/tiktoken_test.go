@@ -38,34 +38,34 @@ func TestTiktokenVocabMatchesLlamaCpp(t *testing.T) {
 		t.Fatal(err)
 	}
 	const base = 163584
-	if len(ref.Tokens) < base {
-		t.Fatalf("llama.cpp's table has %d tokens", len(ref.Tokens))
+	if ref.Tokens.Len() < base {
+		t.Fatalf("llama.cpp's table has %d tokens", ref.Tokens.Len())
 	}
 	bad := 0
 	for i := 0; i < base; i++ {
-		if ours.Tokens[i] != ref.Tokens[i] {
+		if ours.Tokens.At(i) != ref.Tokens.At(i) {
 			if bad++; bad <= 5 {
-				t.Errorf("token %d: ours %q, llama.cpp %q", i, ours.Tokens[i], ref.Tokens[i])
+				t.Errorf("token %d: ours %q, llama.cpp %q", i, ours.Tokens.At(i), ref.Tokens.At(i))
 			}
 		}
 	}
-	if len(ours.Merges) != len(ref.Merges) {
-		t.Errorf("%d merges, llama.cpp %d", len(ours.Merges), len(ref.Merges))
+	if ours.Merges.Len() != ref.Merges.Len() {
+		t.Errorf("%d merges, llama.cpp %d", ours.Merges.Len(), ref.Merges.Len())
 	}
-	for i := 0; i < min(len(ours.Merges), len(ref.Merges)); i++ {
-		if ours.Merges[i] != ref.Merges[i] {
+	for i := 0; i < min(ours.Merges.Len(), ref.Merges.Len()); i++ {
+		if ours.Merges.At(i) != ref.Merges.At(i) {
 			if bad++; bad <= 10 {
-				t.Errorf("merge %d: ours %v, llama.cpp %v", i, ours.Merges[i], ref.Merges[i])
+				t.Errorf("merge %d: ours %v, llama.cpp %v", i, ours.Merges.At(i), ref.Merges.At(i))
 			}
 		}
 	}
 	for _, id := range []int32{ours.BOS, ours.EOS} {
-		if id < base || ours.Tokens[id] != ref.Tokens[id] || ours.Kinds[id] != jlm.TokenControl {
-			t.Errorf("special %d: ours %q, llama.cpp %q", id, ours.Tokens[id], ref.Tokens[id])
+		if id < base || ours.Tokens.At(int(id)) != ref.Tokens.At(int(id)) || ours.Kinds[id] != jlm.TokenControl {
+			t.Errorf("special %d: ours %q, llama.cpp %q", id, ours.Tokens.At(int(id)), ref.Tokens.At(int(id)))
 		}
 	}
 	t.Logf("%d tokens and %d merges agree; BOS %d %q, EOS %d %q; llama.cpp pre %q ignore_merges %v",
-		base, len(ours.Merges), ours.BOS, ours.Tokens[ours.BOS], ours.EOS, ours.Tokens[ours.EOS],
+		base, ours.Merges.Len(), ours.BOS, ours.Tokens.At(int(ours.BOS)), ours.EOS, ours.Tokens.At(int(ours.EOS)),
 		ref.PreName, ref.IgnoreMerges)
 }
 

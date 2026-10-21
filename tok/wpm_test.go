@@ -19,7 +19,7 @@ func wpmVocab(lower, keepMarks bool) *jlm.Vocab {
 	for i := 0; i < 4; i++ {
 		kinds[i] = jlm.TokenControl
 	}
-	return &jlm.Vocab{Kind: jlm.VocabWPM, Tokens: toks, Kinds: kinds,
+	return &jlm.Vocab{Kind: jlm.VocabWPM, Tokens: jlm.NewStrings(toks), Kinds: kinds,
 		BOS: 2, EOS: 3, Unk: 1, Sep: 3, Pad: 0, Mask: -1, AddBOS: true, AddEOS: true,
 		Pre: []jlm.PreOp{{Kind: jlm.PreBert, CaseFold: lower, LetterMarks: keepMarks}}}
 }

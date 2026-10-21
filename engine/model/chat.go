@@ -353,10 +353,10 @@ func (m *Model) specialText() (bos, eos string) {
 		return "", ""
 	}
 	at := func(id int32) string {
-		if id < 0 || int(id) >= len(v.Tokens) {
+		if id < 0 || int(id) >= v.Tokens.Len() {
 			return ""
 		}
-		return v.Tokens[id]
+		return v.Tokens.At(int(id))
 	}
 	return at(v.BOS), at(v.EOS)
 }

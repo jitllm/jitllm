@@ -72,10 +72,10 @@ func (c *ChatStream) piece(id int32) string {
 	if c.v.wpm == nil {
 		return c.v.Decode(one[:])
 	}
-	if id < 0 || int(id) >= len(c.v.text) || c.v.kind[id] == typeControl {
+	if id < 0 || int(id) >= c.v.text.Len() || c.v.kind[id] == typeControl {
 		return ""
 	}
-	s := strings.ReplaceAll(c.v.text[id], spaceMark, " ")
+	s := strings.ReplaceAll(c.v.text.At(int(id)), spaceMark, " ")
 	if !c.started && s != "" {
 		c.started = true
 		s = strings.TrimPrefix(s, " ")

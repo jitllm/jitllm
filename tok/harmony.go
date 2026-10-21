@@ -23,14 +23,14 @@ func harmonyOf(v *Vocab) harmony {
 		dst  *int32
 	}{{"<|start|>", &h.start}, {"<|channel|>", &h.channel}, {"<|message|>", &h.message},
 		{"<|end|>", &h.end}, {"<|return|>", &h.ret}, {"<|call|>", &h.call}} {
-		id, ok := v.ids[x.name]
+		id, ok := v.ids.find(x.name)
 		if !ok {
 			return harmony{}
 		}
 		*x.dst = id
 	}
 	h.constrain = -1
-	if id, ok := v.ids["<|constrain|>"]; ok {
+	if id, ok := v.ids.find("<|constrain|>"); ok {
 		h.constrain = id
 	}
 	h.ok = true

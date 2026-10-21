@@ -123,7 +123,7 @@ func TestDeepseekConverts(t *testing.T) {
 	if c.Flags.Has(jlm.FlagTiedEmbd) {
 		t.Error("lm_head.weight is present and FlagTiedEmbd is set")
 	}
-	if s.Vocab == nil || len(s.Vocab.Tokens) != int(c.NVocab) {
+	if s.Vocab == nil || s.Vocab.Tokens.Len() != int(c.NVocab) {
 		t.Fatalf("vocab %v", s.Vocab)
 	}
 }
