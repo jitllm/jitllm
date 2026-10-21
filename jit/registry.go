@@ -75,7 +75,7 @@ func Default() *Registry {
 	}
 }
 
-func (r *Registry) decompose(f *jlm.File, part Part, of int, s Step, d Device) ([]Prim, error) {
+func (r *Registry) decompose(f Model, part Part, of int, s Step, d Device) ([]Prim, error) {
 	c := &Context{Graph: part.Graph, Part: part.Kind, Formats: formats(f, part), Step: s, Int8: r.Profiles[d.Kind].Int8,
 		formed: map[graph.ValueID]bool{}}
 	var prims []Prim

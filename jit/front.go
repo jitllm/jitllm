@@ -38,10 +38,25 @@ func (p Part) String() string {
 	return fmt.Sprintf("block %d", p.Block)
 }
 
+// Model is what the composer reads of a model: its configuration and its
+// tensors' index entries, never their bytes. A container is one; a model's
+// header shipped to another node is another.
+type Model interface {
+	Config() *jlm.Config
+	Find(role jlm.Role, block, index int32) (*jlm.Entry, bool)
+}
+
+// has reports whether model m holds a tensor of role at block and index.
+func has(m Model, role jlm.Role, block, index int32) bool {
+	_, ok := m.Find(role, block, index)
+	return ok
+}
+
 // Front is the model's graph from its container: the step's rotary table,
-// every block, the head, then the sampling of its logits. What the container states, the Front end
-// reads; what it does not, the Front end refuses.
-func Front(f *jlm.File) ([]Part, error) {
+// every block, the head, then the sampling of its logits. What the
+// container states, the front end reads; what it does not, the front end
+// refuses.
+func Front(f Model) ([]Part, error) {
 	c := f.Config()
 	rt := graph.RopeTable{NRot: int(c.NRot)}
 	parts := []Part{{Kind: PartTable, Block: -1, Graph: rt.Build()}}
@@ -64,14 +79,14 @@ func Front(f *jlm.File) ([]Part, error) {
 // model states is refused until the front end reads it.
 const stated = jlm.FlagTiedEmbd | jlm.FlagRopeNeox | jlm.FlagGELU
 
-func blockGraph(f *jlm.File, li int) (*graph.Graph, error) {
+func blockGraph(f Model, li int) (*graph.Graph, error) {
 	c := f.Config()
 	if c.Flags&^stated != 0 || c.NExpert != 0 || len(c.LayerKinds) != 0 || c.SWAWindow != 0 || c.YarnFactor != 0 || c.YarnLogMul != 0 {
 		return nil, fmt.Errorf("the container states what the front end does not read (flags %#x)", uint32(c.Flags&^stated))
 	}
 	for _, r := range []jlm.Role{jlm.RoleAttnNorm, jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV, jlm.RoleAttnOut,
 		jlm.RoleFFNNorm, jlm.RoleFFNGate, jlm.RoleFFNUp, jlm.RoleFFNDown} {
-		if !f.Has(r, int32(li), -1) {
+		if !has(f, r, int32(li), -1) {
 			return nil, fmt.Errorf("no %s", r)
 		}
 	}
@@ -98,13 +113,13 @@ func blockGraph(f *jlm.File, li int) (*graph.Graph, error) {
 
 // headGraph is the final norm and the vocabulary's projection, the
 // embedding's rows where the container ties them.
-func headGraph(f *jlm.File) (*graph.Graph, error) {
+func headGraph(f Model) (*graph.Graph, error) {
 	c := f.Config()
 	out := jlm.RoleOutput
 	if c.Flags&jlm.FlagTiedEmbd != 0 {
 		out = jlm.RoleTokenEmbd
 	}
-	if !f.Has(jlm.RoleOutputNorm, jlm.DenseBlock, -1) || !f.Has(out, jlm.DenseBlock, -1) {
+	if !has(f, jlm.RoleOutputNorm, jlm.DenseBlock, -1) || !has(f, out, jlm.DenseBlock, -1) {
 		return nil, fmt.Errorf("no output norm or projection")
 	}
 	h := graph.Head{NEmbd: int(c.NEmbd), NVocab: int(c.NVocab), Eps: float64(c.RMSEps), Out: out}
@@ -112,7 +127,7 @@ func headGraph(f *jlm.File) (*graph.Graph, error) {
 }
 
 // formats is each of a part's weights' storage format.
-func formats(f *jlm.File, p Part) map[jlm.Role]jlm.Type {
+func formats(f Model, p Part) map[jlm.Role]jlm.Type {
 	out := map[jlm.Role]jlm.Type{}
 	block := int32(p.Block)
 	if p.Kind != PartBlock {

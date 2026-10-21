@@ -4,12 +4,25 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit"
 )
 
-// Estimate is placement p's cost at step s, from the IR r's passes leave.
-func Estimate(r *jit.Registry, f *jlm.File, s jit.Step, p Placement) (Cost, error) {
+// Former is what pricing needs of the composer: a run of a model's parts as
+// final IR. A registry forms it; a cache of kernels formed before can serve
+// it too.
+type Former interface {
+	Kernels(m jit.Model, run []jit.PartPlan, first int, s jit.Step) ([]*jit.Kernel, error)
+}
+
+// Composer is a Former that also lowers the kernels it forms, for an
+// estimate held beside the code it prices.
+type Composer interface {
+	Former
+	Lower(ks []*jit.Kernel, d jit.Device) ([]jit.PartCode, error)
+}
+
+// Estimate is placement p's cost at step s, from the IR r forms of model f.
+func Estimate(r Former, f jit.Model, s jit.Step, p Placement) (Cost, error) {
 	parts, run, devs, err := placed(f, p)
 	if err != nil {
 		return Cost{}, err
@@ -37,7 +50,7 @@ func Estimate(r *jit.Registry, f *jlm.File, s jit.Step, p Placement) (Cost, erro
 
 // placed is model f's parts on placement p: each part's plan for the
 // composer, and the device it is priced on.
-func placed(f *jlm.File, p Placement) ([]jit.Part, []jit.PartPlan, []Device, error) {
+func placed(f jit.Model, p Placement) ([]jit.Part, []jit.PartPlan, []Device, error) {
 	parts, err := jit.Front(f)
 	if err != nil {
 		return nil, nil, nil, err
@@ -83,7 +96,7 @@ type BindCost struct {
 // state of decoding, the caches as a step before this one left them; else
 // with nothing the step reads in any cache, as after reads of more than
 // the caches hold.
-func EstimateCodes(r *jit.Registry, f *jlm.File, s jit.Step, p Placement, steady bool) ([]CodeCost, error) {
+func EstimateCodes(r Composer, f jit.Model, s jit.Step, p Placement, steady bool) ([]CodeCost, error) {
 	parts, run, devs, err := placed(f, p)
 	if err != nil {
 		return nil, err
@@ -171,7 +184,7 @@ func seam(a jit.Part, da, db Device, s jit.Step) Cost {
 // Suggest is plan mode: a placement over devices at step s, each part on
 // the device that makes the model's estimate least, the seams' transfers
 // counted.
-func Suggest(r *jit.Registry, f *jlm.File, s jit.Step, devices []Device) (Placement, Cost, error) {
+func Suggest(r Former, f jit.Model, s jit.Step, devices []Device) (Placement, Cost, error) {
 	if len(devices) == 0 {
 		return nil, Cost{}, fmt.Errorf("cost: no device to place on")
 	}

@@ -8,8 +8,6 @@ package jit
 import (
 	"errors"
 	"fmt"
-
-	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // Step is the shape of one step the engine runs: rows a step, the history's
@@ -94,7 +92,7 @@ type Plan struct {
 
 // Compose forms the model in f at step s on placement p. A part it cannot
 // form is an error, beside the parts it formed.
-func (r *Registry) Compose(f *jlm.File, s Step, p Placement) (*Plan, error) {
+func (r *Registry) Compose(f Model, s Step, p Placement) (*Plan, error) {
 	parts, err := Front(f)
 	if err != nil {
 		return nil, err
@@ -129,7 +127,7 @@ func (r *Registry) Compose(f *jlm.File, s Step, p Placement) (*Plan, error) {
 
 // formRun is a run of consecutive parts on one device: each decomposed and
 // generated, the run passed as one, each part's kernels lowered.
-func (r *Registry) formRun(f *jlm.File, run []PartPlan, first int, s Step) error {
+func (r *Registry) formRun(f Model, run []PartPlan, first int, s Step) error {
 	ks, err := r.Kernels(f, run, first, s)
 	codes, lerr := r.Lower(ks, run[0].Device)
 	for _, c := range codes {
@@ -140,7 +138,7 @@ func (r *Registry) formRun(f *jlm.File, run []PartPlan, first int, s Step) error
 
 // Kernels is a run's final IR: its parts decomposed and generated, the run
 // passed as one.
-func (r *Registry) Kernels(f *jlm.File, run []PartPlan, first int, s Step) ([]*Kernel, error) {
+func (r *Registry) Kernels(f Model, run []PartPlan, first int, s Step) ([]*Kernel, error) {
 	d := run[0].Device
 	var ks []*Kernel
 	var errs []error
