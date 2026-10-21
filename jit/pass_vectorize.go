@@ -1,6 +1,7 @@
 package jit
 
 import (
+	"math"
 	"math/bits"
 
 	"github.com/jitllm/jitllm/jit/ir"
@@ -44,9 +45,10 @@ func (k *Kernel) vectorizable(c int) bool {
 	}
 	folds := k.foldsOf(c)
 	for _, f := range folds {
-		if !k.sumFold(f) || k.Nodes[f].Type != ir.F32 {
-			return false
+		if k.Nodes[f].Type == ir.F32 && (k.sumFold(f) || k.extremeTerm(f) >= 0) || k.carriedBy(f) >= 0 {
+			continue
 		}
+		return false
 	}
 	it := k.iterOf(c)
 	stores := 0
@@ -121,7 +123,23 @@ func (k *Kernel) vectorize(c, L int) {
 	t := k.insertLoop(c+1, tail)
 	ti := k.add(Node{Op: OpIter, At: t, Type: U})
 	sub := map[int]int{k.iterOf(c): k.bin(OpAdd, U, done, ti)}
+	carries := map[int]int{}
 	for _, f := range k.foldsOf(c) {
+		if v := k.carriedBy(f); v >= 0 {
+			carries[v] = f
+		}
+	}
+	for v, cf := range carries {
+		k.vectorizeCarry(c, t, v, cf, sub)
+	}
+	for _, f := range k.foldsOf(c) {
+		if _, ok := carries[f]; ok || k.carriedBy(f) >= 0 {
+			continue
+		}
+		if k.extremeTerm(f) >= 0 {
+			k.vectorizeExtreme(c, t, f, sub)
+			continue
+		}
 		ft := k.add(Node{Op: OpFold, At: t, Type: k.Nodes[f].Type, B: f})
 		step := k.Nodes[f].A
 		sub[f] = ft
@@ -173,6 +191,80 @@ func (k *Kernel) vectorize(c, L int) {
 	}
 }
 
+// vectorizeExtreme continues fold f, the largest or least of loop c's
+// terms, in tail t with each term in every lane, and takes its lanes'
+// largest or least where it is read after.
+func (k *Kernel) vectorizeExtreme(c, t, f int, sub map[int]int) {
+	st := k.Nodes[k.Nodes[f].A]
+	ft := k.add(Node{Op: OpFold, At: t, Type: ir.F32, B: f})
+	sub[f] = ft
+	term := k.add(Node{Op: OpBroadcast, Type: ir.F32, A: k.copyOf(k.extremeTerm(f), sub)})
+	a, b := term, ft
+	if st.A == f {
+		a, b = ft, term
+	}
+	k.Nodes[ft].A = k.bin(st.Op, ir.F32, a, b)
+	lanes := OpHMax
+	if st.Op == OpMin {
+		lanes = OpHMin
+	}
+	h := k.add(Node{Op: lanes, Type: ir.F32, A: ft})
+	k.readAfter(c, t, map[int]int{f: h}, h)
+}
+
+// vectorizeCarry runs fold v, the largest or least of loop c's terms, and
+// fold cf, the value v carries, in each lane, and in tail t on folds of
+// their own from v's start, cf from each lane's first term's: after the loops the lanes' extreme, the least
+// carried value of the lanes that hold it, and the tail's where its own is
+// beyond it.
+func (k *Kernel) vectorizeCarry(c, t, v, cf int, sub map[int]int) {
+	ct := k.Nodes[cf].Type
+	op := k.Nodes[k.Nodes[v].A].Op
+	vt := k.add(Node{Op: OpFold, At: t, Type: ir.F32, B: k.Nodes[v].B})
+	cft := k.add(Node{Op: OpFold, At: t, Type: ct, B: k.add(Node{Op: OpConst, Type: ct})})
+	sub[v], sub[cf] = vt, cft
+	k.Nodes[vt].A = k.copyOf(k.Nodes[v].A, sub)
+	k.Nodes[cft].A = k.copyOf(k.Nodes[cf].A, sub)
+	lanes0 := k.add(Node{Op: OpLanes, Type: ir.U32, Imm: int64(k.Loops[c].Lanes)})
+	k.Nodes[cf].B = k.copyOf(k.Nodes[k.Nodes[cf].A].B, map[int]int{k.iterOf(c): lanes0})
+	lanes, least := OpHMax, int64(math.MaxInt32)
+	if op == OpMin {
+		lanes = OpHMin
+	}
+	first := len(k.Nodes)
+	m := k.add(Node{Op: OpBroadcast, Type: ir.F32, A: k.add(Node{Op: lanes, Type: ir.F32, A: v})})
+	held := k.add(Node{Op: OpSelect, Type: ct, A: k.add(Node{Op: OpEq, Type: ir.Pred, A: v, B: m}), B: cf,
+		C: k.add(Node{Op: OpConst, Type: ct, Imm: least})})
+	ci := k.add(Node{Op: OpHMin, Type: ct, A: held})
+	val := k.bin(op, ir.F32, vt, m)
+	car := k.add(Node{Op: OpSelect, Type: ct, A: k.add(Node{Op: OpLess, Type: ir.Pred, A: m, B: vt}), B: cft, C: ci})
+	k.readAfter(c, t, map[int]int{v: val, cf: car}, first)
+}
+
+// readAfter points each reader of a fold in sub outside loops c and t, the
+// nodes from first on aside, at its replacement.
+func (k *Kernel) readAfter(c, t int, sub map[int]int, first int) {
+	hs := k.homes()
+	for i := range k.Nodes {
+		if i >= first || i < len(hs) && hs[i] >= 0 && (k.within(hs[i], c) || k.within(hs[i], t)) {
+			continue
+		}
+		if nd := k.Nodes[i]; nd.Op == OpFold && (nd.At == c || nd.At == t) {
+			continue
+		}
+		for _, a := range k.args(&k.Nodes[i]) {
+			if r, ok := sub[*a]; ok {
+				*a = r
+			}
+		}
+	}
+	for i := range k.Stores {
+		if r, ok := sub[k.Stores[i].Val]; ok {
+			k.Stores[i].Val = r
+		}
+	}
+}
+
 // pairStores is loop c's two stores, where they are a pair: one buffer at
 // 2i and 2i+1 for iteration i, flat.
 func (k *Kernel) pairStores(c int) ([2]int, bool) {
@@ -200,8 +292,8 @@ func (k *Kernel) pairStores(c int) ([2]int, bool) {
 	return [2]int{at[0], at[1]}, true
 }
 
-// broadcastInto puts each value made from a lane sum that vector loop c
-// reads, made outside it, in every lane once before the loop.
+// broadcastInto puts each value made from a lane sum, maximum or minimum
+// that vector loop c reads, made outside it, in every lane once before the loop.
 func (k *Kernel) broadcastInto(c int) {
 	hs := k.homes()
 	made := map[int]int{}
@@ -209,7 +301,7 @@ func (k *Kernel) broadcastInto(c int) {
 		if hs[i] >= 0 && k.within(hs[i], c) || k.Nodes[i].Op == OpBroadcast {
 			for _, a := range k.args(&k.Nodes[i]) {
 				x := *a
-				if x >= len(hs) || hs[x] >= 0 && k.within(hs[x], c) || k.Nodes[x].Type != ir.F32 || !k.computedFrom(x, OpHSum) {
+				if x >= len(hs) || hs[x] >= 0 && k.within(hs[x], c) || k.Nodes[x].Type != ir.F32 || !k.computedFrom(x, OpHSum) && !k.computedFrom(x, OpHMax) && !k.computedFrom(x, OpHMin) {
 					continue
 				}
 				b, ok := made[x]

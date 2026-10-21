@@ -1,10 +1,12 @@
 package jit
 
+import "github.com/jitllm/jitllm/jit/ir"
+
 // FoldLoads takes a load its one reader can read from memory as that
 // reader's operand: the second multiplicand of a sum's step in a vector
 // loop -- the first where the second is a load that must be widened -- or
-// the second operand of a map's operation in a vector loop no scalar tail
-// follows.
+// the second operand of a map's operation, an integer and's among them, in
+// a vector loop no scalar tail follows.
 type FoldLoads struct{}
 
 func (FoldLoads) Name() string { return "foldloads" }
@@ -17,6 +19,11 @@ func (p FoldLoads) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			var b int
 			switch nd.Op {
 			case OpFma, OpMul, OpAdd:
+				b = nd.B
+			case OpAnd:
+				if nd.Type == ir.F32 {
+					continue
+				}
 				b = nd.B
 			default:
 				continue

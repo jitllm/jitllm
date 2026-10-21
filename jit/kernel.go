@@ -248,6 +248,15 @@ const (
 	// within a page, the span's first position where Imm is 0, its length
 	// where Imm is 1: values the caller computes.
 	OpSpan
+	// OpHMax and OpHMin are the largest and the least of A's lanes.
+	OpHMax
+	OpHMin
+	// OpEq is A == B, a predicate.
+	OpEq
+	// OpOr is A's bits or B's.
+	OpOr
+	// OpLanes is each lane's index, of Imm lanes.
+	OpLanes
 )
 
 // Node is one value: a scalar, or inside a loop of Lanes a vector of them.
@@ -353,7 +362,7 @@ func (n *Kernel) elements() int {
 
 var opNames = [...]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
 	"less", "select", "sqrt", "exp", "shl", "shr", "and", "xor", "cvtf32", "cvti32", "thread", "groupsum", "groupmax", "exchange",
-	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "round", "span"}
+	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "round", "span", "hmax", "hmin", "eq", "or", "lanes"}
 
 func (o Op) String() string {
 	if int(o) < len(opNames) {

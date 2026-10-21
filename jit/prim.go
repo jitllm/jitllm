@@ -108,7 +108,12 @@ type Prim struct {
 	Type    ir.Type
 	Stores  []PrimStore
 	Index   []Expr
-	Facts   Facts
+	// Carry is, for a reduction by OpMax, a value carried with the result:
+	// a term above the result so far brings its own, an equal one does not,
+	// and the first term's starts it. CarryOut is where it is stored.
+	Carry    []Expr
+	CarryOut Operand
+	Facts    Facts
 }
 
 type Start uint8

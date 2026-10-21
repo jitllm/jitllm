@@ -30,6 +30,22 @@ type Code struct {
 	Lowered
 	Binds  []Binding
 	Groups int
+	// Args is a host call's argument words.
+	Args []CallArg
+}
+
+// CallArg is one argument word of a host call, at byte offset Field: the
+// address of Operand's storage Offset elements in, with Words the contents
+// of a constant block; or a value the caller computes, a run-time length
+// where Length is set, of static extent Extent.
+type CallArg struct {
+	Field   int
+	Operand Operand
+	Offset  int
+	Words   []uint32
+	Value   bool
+	Length  bool
+	Extent  int
 }
 
 // Binding is a buffer a kernel binds: its operand and whether the kernel
@@ -160,6 +176,15 @@ func (r *Registry) lower(ks []*Kernel, d Device) ([]ownedCode, error) {
 			continue
 		}
 		c := Code{Name: k.Name, Passes: k.Passes, Lowered: l, Groups: k.groups()}
+		for _, a := range k.Args {
+			if a.Buf >= 0 {
+				b := k.Bufs[a.Buf]
+				c.Args = append(c.Args, CallArg{Field: a.Field, Operand: b.Operand, Offset: b.Offset, Words: b.Words})
+				continue
+			}
+			nd := k.Nodes[a.Node-1]
+			c.Args = append(c.Args, CallArg{Field: a.Field, Value: true, Length: nd.Op == OpLength, Extent: int(nd.Imm)})
+		}
 		for _, b := range k.Bufs {
 			if b.Kind != BufShared {
 				c.Binds = append(c.Binds, Binding{Operand: b.Operand, Writes: b.Kind == BufOut})

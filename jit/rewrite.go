@@ -63,9 +63,9 @@ func (n *Kernel) args(nd *Node) []*int {
 // arity is how many operands an op reads, a fold its step and its start.
 func arity(op Op) int {
 	switch op {
-	case OpConst, OpCoord, OpIter, OpThread, OpFlat, OpParam, OpLength, OpSpan:
+	case OpConst, OpCoord, OpIter, OpThread, OpFlat, OpParam, OpLength, OpSpan, OpLanes:
 		return 0
-	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal, OpShuffle, OpBroadcast, OpHSum, OpHalf, OpRoundI32:
+	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal, OpShuffle, OpBroadcast, OpHSum, OpHMax, OpHMin, OpHalf, OpRoundI32:
 		return 1
 	case OpFma, OpSelect:
 		return 3
@@ -157,6 +157,47 @@ func (n *Kernel) copyOf(i int, sub map[int]int) int {
 func (n *Kernel) sumFold(f int) bool {
 	st := n.Nodes[n.Nodes[f].A]
 	return st.Op == OpFma && st.C == f || st.Op == OpAdd && st.A == f
+}
+
+// extremeTerm is the term fold f's step takes the largest or least of with
+// it, -1 where the step is not such a choice.
+func (n *Kernel) extremeTerm(f int) int {
+	st := n.Nodes[n.Nodes[f].A]
+	if (st.Op != OpMax && st.Op != OpMin) || st.Type != ir.F32 {
+		return -1
+	}
+	switch f {
+	case st.A:
+		return st.B
+	case st.B:
+		return st.A
+	}
+	return -1
+}
+
+// carriedBy is the fold whose choice fold f carries a value with: f's step
+// selects a new value where that fold's term is above it, as a select or
+// as its bits, -1 where f is not carried.
+func (n *Kernel) carriedBy(f int) int {
+	st := n.Nodes[n.Nodes[f].A]
+	pred := -1
+	switch {
+	case st.Op == OpSelect && st.C == f:
+		pred = st.A
+	case st.Op == OpOr:
+		set, clear := n.Nodes[st.A], n.Nodes[st.B]
+		if set.Op == OpAnd && clear.Op == OpAndNot && clear.A == f && clear.B == set.B {
+			pred = set.B
+		}
+	}
+	if pred < 0 {
+		return -1
+	}
+	won := n.Nodes[pred]
+	if won.Op != OpLess || n.Nodes[won.A].Op != OpFold || n.extremeTerm(won.A) != won.B {
+		return -1
+	}
+	return won.A
 }
 
 // foldsOf is loop c's folds.

@@ -100,6 +100,12 @@ func elemBytes(b Buf) int {
 }
 
 // lanes is how many lanes loop c's code runs, 0 outside any loop.
+// half reports whether node i is made from halves: a narrowed value's
+// words, which sit in a vector's low 128 bits.
+func (e *x86Lowerer) half(i int) bool {
+	return e.k.computedFrom(i, OpHalf)
+}
+
 func (e *x86Lowerer) lanes(c int) int {
 	if c < 0 {
 		return 0
@@ -123,6 +129,8 @@ func (e *x86Lowerer) node(i int) {
 		case init.Op == OpConst && init.Imm == 0:
 			r := e.reg(i)
 			a.VPXOR(r, r, r)
+		case init.Op == OpLoad && e.home[nd.B] < 0 && init.Imm > 0:
+			a.VMOVDQULoad(e.reg(i), e.addr(init.Buf, init.A, init.Ptr))
 		case init.Op == OpLoad && e.home[nd.B] < 0:
 			a.VBROADCASTSS(e.reg(i), e.addr(init.Buf, init.A, init.Ptr))
 		case init.Op == OpConst && e.words[nd.B] && init.Reg > 0:
@@ -184,7 +192,7 @@ func (e *x86Lowerer) node(i int) {
 			a.VPCMPGTD(e.reg(i), e.reg(nd.B), e.reg(nd.A))
 			return
 		}
-		a.VCMPPS(e.reg(i), e.reg(nd.A), e.reg(nd.B), 1)
+		a.VCMPPS(e.reg(i), e.reg(nd.B), e.reg(nd.A), 14)
 	case OpSelect:
 		if nd.Tmp == 0 {
 			e.fail("a select with no scratch register")
@@ -194,7 +202,33 @@ func (e *x86Lowerer) node(i int) {
 		a.VPAND(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 		a.VPOR(e.reg(i), e.reg(i), t)
 	case OpAndNot:
-		a.VPANDNx(e.reg(i), e.reg(nd.B), e.reg(nd.A))
+		if e.half(i) {
+			a.VPANDNx(e.reg(i), e.reg(nd.B), e.reg(nd.A))
+			return
+		}
+		a.VPANDN(e.reg(i), e.reg(nd.B), e.reg(nd.A))
+	case OpOr:
+		a.VPOR(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+	case OpEq:
+		a.VCMPPS(e.reg(i), e.reg(nd.A), e.reg(nd.B), 0)
+	case OpHMax, OpHMin:
+		r, x := e.reg(i), e.reg(nd.A)
+		if nd.Tmp == 0 {
+			e.fail("a lane reduction with no scratch register")
+		}
+		t := x86.Reg(nd.Tmp - 1)
+		step := a.VMAXPS
+		if nd.Op == OpHMin {
+			a.VEXTRACTI128(t, x, 1)
+			step = a.VPMINSD
+		} else {
+			a.VEXTRACTF128(t, x, 1)
+		}
+		step(r, x, t)
+		a.VSHUFPS(t, r, r, 0x4E)
+		step(r, r, t)
+		a.VSHUFPS(t, r, r, 0xB1)
+		step(r, r, t)
 	case OpMul, OpAdd, OpShr, OpAnd, OpShl:
 		if b := k.Nodes[nd.B]; e.words[i] && b.Mem && (nd.Op == OpAdd || nd.Op == OpAnd) {
 			m := e.addr(b.Buf, b.A, b.Ptr)
@@ -205,8 +239,12 @@ func (e *x86Lowerer) node(i int) {
 			}
 			return
 		}
-		if e.words[i] && nd.Op == OpAnd {
-			a.VPANDx(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+		if (e.words[i] || nd.Type == ir.F32) && nd.Op == OpAnd {
+			if e.half(i) {
+				a.VPANDx(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+			} else {
+				a.VPAND(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+			}
 			return
 		}
 		if e.words[i] && nd.Op == OpAdd {

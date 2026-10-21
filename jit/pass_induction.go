@@ -4,7 +4,9 @@ import "github.com/jitllm/jitllm/jit/ir"
 
 // Induction carries a loop's iteration as a value where the code reads it
 // as data rather than as an address: a sum of the loop from 0, one more
-// each trip.
+// each trip; in a vector loop from each lane's index, the lanes more each
+// trip; and in the loop that takes a vector loop's remaining trips, where
+// it reads the trips done and its own, on from the vector loop's.
 type Induction struct{}
 
 func (Induction) Name() string { return "induction" }
@@ -13,17 +15,49 @@ func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		var m *Kernel
 		live := k.live()
+		vec := map[int]int{}
 		for c := range k.Loops {
 			it := k.iterOf(c)
-			if it < 0 || !k.readByLive(it, live) || k.addresses(it) {
+			if it < 0 {
+				continue
+			}
+			l := k.Loops[c]
+			from, data := it, k.dataReaders(it, live)
+			v, cont := vec[l.Of-1]
+			if l.Lanes == 0 && l.Of > 0 && cont {
+				for d, nd := range k.Nodes {
+					if nd.Op == OpAdd && nd.B == it && live[d] {
+						if dr := k.dataReaders(d, live); len(dr) > 0 {
+							from, data = d, dr
+						}
+					}
+				}
+			}
+			if len(data) == 0 {
 				continue
 			}
 			if m == nil {
 				m = k.clone()
 			}
-			f := m.add(Node{Op: OpFold, At: c, Type: ir.I32, B: m.add(Node{Op: OpConst, Type: ir.I32})})
-			m.redirect(it, f, f)
-			m.Nodes[f].A = m.bin(OpAdd, ir.I32, f, m.add(Node{Op: OpConst, Type: ir.I32, Imm: 1}))
+			start, step := m.add(Node{Op: OpConst, Type: ir.I32}), int64(1)
+			switch {
+			case l.Lanes > 0:
+				start, step = m.add(Node{Op: OpLanes, Type: ir.I32, Imm: int64(l.Lanes)}), int64(l.Lanes)
+			case from != it:
+				start = v
+			}
+			f := m.add(Node{Op: OpFold, At: c, Type: ir.I32, B: start})
+			for _, r := range data {
+				for _, a := range m.args(&m.Nodes[r]) {
+					if *a == from {
+						*a = f
+					}
+				}
+			}
+			m.Nodes[f].A = m.bin(OpAdd, ir.I32, f, m.add(Node{Op: OpConst, Type: ir.I32, Imm: step}))
+			if l.Lanes > 0 {
+				vec[c] = f
+			}
 		}
 		if m == nil {
 			return nil, false, nil
@@ -88,4 +122,22 @@ func (k *Kernel) readByLive(i int, live map[int]bool) bool {
 		}
 	}
 	return false
+}
+
+// dataReaders is the live nodes that read node i as data: not a load, and
+// feeding no address.
+func (k *Kernel) dataReaders(i int, live map[int]bool) []int {
+	var out []int
+	for j, nd := range k.Nodes {
+		if !live[j] || nd.Op == OpLoad || k.addresses(j) {
+			continue
+		}
+		for _, a := range k.args(&nd) {
+			if *a == i {
+				out = append(out, j)
+				break
+			}
+		}
+	}
+	return out
 }

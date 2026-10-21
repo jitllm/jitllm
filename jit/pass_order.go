@@ -11,7 +11,8 @@ import (
 // value no loop moves before the first loop that needs it, and in each loop
 // its values in the order they depend on each other, each inner loop where
 // a value first needs what it carries, and its stores; the sums a loop
-// carries start just before it. A float zero is made where it is read. A loop advances the
+// carries start just before it, and a choice another sum carries a value
+// with steps once the trip's other reads of it have run. A float zero is made where it is read. A loop advances the
 // address it stores through itself first, then its pointers in the order
 // its code first reaches them. A pair's heads run statement by statement
 // side by side, each head's statements from where it reads a finished sum
@@ -42,6 +43,10 @@ type orderer struct {
 	home     map[int]int
 	depths   map[int]int
 	words    map[int]bool
+	// after is, for a fold of the loop being written that other values of
+	// its trip read, those values: its step runs once they have.
+	after   map[int][]int
+	scopeOf int
 }
 
 func (o *orderer) run() {
@@ -106,9 +111,20 @@ func (o *orderer) countLoop(i int) int {
 }
 
 func (o *orderer) node(i int) {
-	if !o.done[i] {
-		o.done[i] = true
-		o.seq = append(o.seq, Entry{Kind: EntryNode, I: i})
+	if o.done[i] {
+		return
+	}
+	o.done[i] = true
+	o.seq = append(o.seq, Entry{Kind: EntryNode, I: i})
+	for f, rs := range o.after {
+		ready := true
+		for _, r := range rs {
+			ready = ready && o.done[r]
+		}
+		if ready {
+			delete(o.after, f)
+			o.need(o.k.Nodes[f].A, o.scopeOf)
+		}
 	}
 }
 
@@ -175,9 +191,40 @@ func (o *orderer) scope(c int) {
 		o.countsFor(c, d)
 		o.loop(d)
 	}
+	outer, scope := o.after, o.scopeOf
+	o.after, o.scopeOf = map[int][]int{}, c
+	carried := map[int]bool{}
 	for _, f := range k.foldsOf(c) {
+		if v := k.carriedBy(f); v >= 0 {
+			carried[v] = true
+		}
+	}
+	for _, f := range k.foldsOf(c) {
+		if !carried[f] {
+			continue
+		}
+		step := k.Nodes[f].A
+		for i, nd := range k.Nodes {
+			if h, ok := o.home[i]; !ok || h != c || i == step || o.done[i] {
+				continue
+			}
+			for _, a := range k.args(&nd) {
+				if *a == f {
+					o.after[f] = append(o.after[f], i)
+					break
+				}
+			}
+		}
+	}
+	for _, f := range k.foldsOf(c) {
+		if _, wait := o.after[f]; !wait {
+			o.need(k.Nodes[f].A, c)
+		}
+	}
+	for f := range o.after {
 		o.need(k.Nodes[f].A, c)
 	}
+	o.after, o.scopeOf = outer, scope
 	for i, s := range k.Stores {
 		if s.At != c || s.Barrier || s.Run {
 			continue

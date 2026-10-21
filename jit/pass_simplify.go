@@ -224,6 +224,12 @@ func (k *Kernel) foldDecided() bool {
 				x.Type = ir.F32
 				k.Nodes[i] = x
 				changed = true
+			} else if x.Type == nd.Type {
+				to(i, a)
+			} else if nd.Type != ir.F32 && x.Type != ir.F32 && (x.Op == OpConst || x.Op == OpLanes) {
+				x.Type = nd.Type
+				k.Nodes[i] = x
+				changed = true
 			}
 		case OpShr:
 			if x := k.Nodes[a]; x.Op == OpShr && k.Nodes[x.B].Op == OpConst && k.Nodes[b].Op == OpConst {

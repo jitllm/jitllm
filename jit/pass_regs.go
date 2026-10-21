@@ -348,6 +348,8 @@ func (k *Kernel) vectorWords() map[int]bool {
 	}
 	for i, nd := range k.Nodes {
 		switch {
+		case nd.Op == OpLanes || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandConsts && nd.Type != ir.F32:
+			out[i] = true
 		case nd.Op == OpCvtF32 || nd.Op == OpBitcast && nd.Type == ir.F32:
 			if data(nd.A) && k.Nodes[nd.A].Op != OpConst {
 				out[nd.A] = true
@@ -546,7 +548,7 @@ func (b *binder86) vectors() error {
 		}
 		first := -1
 		switch nd.Op {
-		case OpAdd, OpSub, OpMul, OpMin, OpMax, OpHSum, OpBitcast, OpBroadcast, OpSqrt, OpAnd, OpGtW, OpAndNot:
+		case OpAdd, OpSub, OpMul, OpMin, OpMax, OpHSum, OpHMax, OpHMin, OpBitcast, OpBroadcast, OpSqrt, OpAnd, OpGtW, OpAndNot, OpOr:
 			first = nd.A
 		case OpDiv:
 			first = nd.B
@@ -560,7 +562,7 @@ func (b *binder86) vectors() error {
 			reg = k.Nodes[first].Reg - 1
 		}
 		if reg >= 0 {
-			free(pos, false)
+			free(pos, first >= 0 && k.Nodes[first].Reg-1 != reg && innermost(hs[i]))
 		} else {
 			reg = lowest(chain[i], hs[i])
 			free(pos, innermost(hs[i]))
@@ -575,7 +577,7 @@ func (b *binder86) vectors() error {
 			}
 			k.Nodes[i].Tmp = t + 1
 		}
-		if nd.Op == OpHSum {
+		if nd.Op == OpHSum || nd.Op == OpHMax || nd.Op == OpHMin {
 			t := lowest(0, hs[i])
 			if t < 0 {
 				return errors.New("no register for a lane sum")

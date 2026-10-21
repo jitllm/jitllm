@@ -82,8 +82,19 @@ func generate(p Prim) (*Kernel, error) {
 			return nil, fmt.Errorf("jit: a contraction's term is not a product")
 		}
 		k.Nodes[acc].A = k.add(Node{Op: OpFma, Type: t, A: m.A, B: m.B, C: acc})
+	} else if len(p.Carry) > 0 {
+		k.Nodes[acc].A = k.bin(p.Combine, t, term, acc)
 	} else {
 		k.Nodes[acc].A = k.bin(p.Combine, t, acc, term)
+	}
+	if len(p.Carry) > 0 {
+		ct := elemOf(p.CarryOut.Elem)
+		first := g.value(p.Carry, append(append([]int(nil), coords...), k.u32(0)))
+		carried := k.add(Node{Op: OpFold, At: c, Type: ct, B: first})
+		won := k.add(Node{Op: OpLess, Type: ir.Pred, A: acc, B: term})
+		k.Nodes[carried].A = k.add(Node{Op: OpSelect, Type: ct, A: won, B: g.value(p.Carry, terms), C: carried})
+		b := k.buf(Buf{Kind: BufOut, Elem: ct, Operand: p.CarryOut, Shape: append([]int(nil), out...)})
+		k.Stores = append(k.Stores, Store{Buf: b, Val: carried, At: -1, Ax: append([]int(nil), coords...)})
 	}
 	if len(p.Index) > 0 {
 		b := k.buf(Buf{Kind: BufOut, Elem: elemOf(p.Out.Elem), Operand: p.Out})

@@ -5,7 +5,7 @@ import "github.com/jitllm/jitllm/jit/ir"
 // Unroll unrolls a workgroup's loops: a loop nested in a phase of at most
 // Full trips with one fold and no stores of its own, all of its trips; a
 // loop over positions bound as Over, Factor trips a trip. Where Vectors is
-// set, a vector loop that carries a sum and stores nothing, or that runs a
+// set, a vector loop that carries sums alone and stores nothing, or that runs a
 // fixed count of at least Vectors trips, runs Vectors vectors a trip, the
 // vectors left in a loop of one a trip after it; a sum's vector loop of
 // fewer fixed trips runs them all in one.
@@ -26,6 +26,9 @@ func (p Unroll) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			for c := 0; c < len(m.Loops); c++ {
 				l := m.Loops[c]
 				sum := len(m.foldsOf(c)) > 0 && !m.storesAt(c)
+				for _, f := range m.foldsOf(c) {
+					sum = sum && m.sumFold(f)
+				}
 				fixed := l.Count == 0 && l.Trip >= p.Vectors && len(m.foldsOf(c)) == 0
 				if l.Lanes > 0 && l.Copies == 0 && !m.hasInner(c) && sum && l.Count == 0 && l.Trip > 1 && l.Trip < p.Vectors {
 					m.unrollShort(c)
