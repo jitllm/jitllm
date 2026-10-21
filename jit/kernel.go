@@ -53,6 +53,10 @@ type Loop struct {
 	Trip   int
 	Count  int
 	Parent int
+	// Range is a loop over a range's positions, Span 1 + the node of how
+	// many are live.
+	Range bool
+	Span  int
 	Spread bool
 	// Elem, where set, is 1 + the node that is the spread loop's element.
 	Elem int

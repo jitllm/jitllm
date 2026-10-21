@@ -277,6 +277,7 @@ func (s SplitRange) copies(h Heads, S, stride int, part, maxes, sums Operand) *K
 	U := ir.U32
 	k := &Kernel{Name: "map", Kind: PrimMap, Space: []int{h.Rows, h.Query, S, s.Copies}, Heads: &h}
 	c := k.coordNodes()
+	k.Positions = &Positions{Axis: -1, Loop: -1, Part: c[2] + 1}
 	heads := []int{h.Rows, h.Query, S}
 	mb := k.buf(Buf{Kind: BufIn, Elem: ir.F32, Operand: maxes, Shape: heads})
 	lb := k.buf(Buf{Kind: BufIn, Elem: ir.F32, Operand: sums, Shape: heads})
