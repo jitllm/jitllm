@@ -440,6 +440,6 @@ func logitsOf(p *devProgram, writer func(devVal) int, v devVal) bool {
 	if x := writer(o.In[0]); x < 0 || p.ops[x].Kind != dkRouterLogits {
 		return false
 	}
-	p.ops[w] = devOp{Kind: dkRouterBias, Src: o.Src, In: o.In, Out: o.Out, Role: o.Role}
+	p.ops[w] = devOp{Kind: dkRouterBias, Src: o.Src, In: o.In, Out: o.Out, Role: o.Role, V: o.V}
 	return true
 }

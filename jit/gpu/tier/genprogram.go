@@ -67,6 +67,12 @@ func (g *devTier) primOf(o *devOp, prog *devProgram, pb *progBuild, bs *blockScr
 	switch o.Kind {
 	case dkKVWrite, dkKVCopy:
 		return g.kvPrim(o, prog, pb, bs, rows, ext)
+	case dkExpertBias:
+		// Each selected pair's row plus its expert's bias row.
+		if o.V == nil || len(o.In) != 2 || len(o.Out) != 1 || prog.vals[o.In[1]].Elem != elemU32 {
+			return ext
+		}
+		return compose.Prim{Kind: compose.PrimGatherAdd, In: ext.In, Out: ext.Out}
 	}
 	for _, v := range append(append([]devVal(nil), o.In...), o.Out...) {
 		if prog.vals[v].Layout != layoutRow {
@@ -82,6 +88,11 @@ func (g *devTier) primOf(o *devOp, prog *devProgram, pb *progBuild, bs *blockScr
 	p := &bs.p
 	pr := compose.Prim{In: ext.In, Out: ext.Out, Alpha: float32(o.Alpha)}
 	switch o.Kind {
+	case dkRouterBias:
+		if o.V == nil || len(o.In) != 1 {
+			return ext
+		}
+		pr.Kind = compose.PrimAdd
 	case dkAdd:
 		if len(o.In) != 2 || o.Alpha != 0 && o.Alpha != 1 && o.GC == nil {
 			return ext

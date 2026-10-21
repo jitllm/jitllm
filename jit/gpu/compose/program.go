@@ -45,7 +45,8 @@ type PrimKind uint8
 
 const (
 	// PrimAdd is In[0] + Alpha*In[1] (a bound scalar, Const, where Alpha
-	// is neither 0 nor 1: one rounding).
+	// is neither 0 nor 1: one rounding); with one operand, In[0] plus the
+	// prim's bound vector.
 	PrimAdd PrimKind = iota
 	PrimMul
 	PrimCopy
@@ -104,6 +105,10 @@ const (
 	// weighted sums (and the sink In[1]'s exp, where present) the
 	// normaliser.
 	PrimMerge
+	// PrimGatherAdd is In[0], rows of Out[0]'s width, each row plus the
+	// row of the prim's bound bank (its vector) In[1]'s word for it names:
+	// In[1] a word a row, Width of them a program row.
+	PrimGatherAdd
 	// PrimExtern is an op the composer does not form here: its operands
 	// and results, which no pass moves anything across.
 	PrimExtern
@@ -226,6 +231,16 @@ func (p *Program) Lower() ([]Group, error) {
 			gs = append(gs, b.g)
 			continue
 		}
+		if o.Kind == PrimGatherAdd {
+			n, k := p.Vals[o.Out[0]].Width, p.Vals[o.In[1]].Width
+			b.g.Row = Row{Width: p.Rows * k * n, Rows: 1}
+			r := &b.g.Row
+			in, sel := b.buf(BufRow, Bind{BindVal, o.In[0]}), b.buf(BufU32, Bind{BindVal, o.In[1]})
+			bank := b.buf(BufRow, Bind{BindVec, i})
+			r.StoreAt(b.buf(BufOut, Bind{BindVal, o.Out[0]}), r.IndexedBias(in, sel, bank, n), r.Column())
+			gs = append(gs, b.g)
+			continue
+		}
 		if o.Kind == PrimSoftmax {
 			b.g.Row = Row{Width: 1, Rows: o.Paged.Rows * o.Paged.Heads * o.Paged.Splits}
 			b.g.Facts = o.Facts
@@ -309,7 +324,14 @@ func (b *builder) lowerPrim(i int) error {
 	var y int
 	switch o.Kind {
 	case PrimAdd:
-		x, z := b.in(o.In[0]), b.in(o.In[1])
+		x := b.in(o.In[0])
+		var z int
+		if len(o.In) == 1 {
+			// The prim's bound vector, every row's.
+			z = r.Load(b.buf(BufVec, Bind{BindVec, i}))
+		} else {
+			z = b.in(o.In[1])
+		}
 		if o.Alpha != 0 && o.Alpha != 1 {
 			al := r.Load(b.buf(BufScalar, Bind{BindConst, i}))
 			y = r.Add(Node{Kind: NBinary, Op: OpFma, A: al, B: z, C: x})
