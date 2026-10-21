@@ -122,8 +122,15 @@ larger than the caches lives in.
   848 integer instructions a thread, all of which NVIDIA's compiler keeps):
   2.8x over. One 1024-thread workgroup runs 53 G integer operations a second
   on the M4, a uniform chain no more than 1.5x that, so the kernel's 2.7 us
-  of work leaves room for a fifth of the instructions. Seeing which needs
-  Apple's ISA (a binary archive through `applegpu`'s disassembler).
+  of work leaves room for a fifth of the instructions. The compiled kernel,
+  found in Metal's shader cache (`com.apple.metal/*/functions.data`, a
+  Mach-O for the AGX CPU type per function), has 2,636 bytes of code: at
+  most 1,318 instructions at two bytes each, 400-650 at the usual four to
+  six, against 1,656 in NVIDIA's SASS for the same IR. `applegpu`'s
+  disassembler decodes the M1's encodings and recognises too few of the
+  M4's to count them, so the exact count is not yet in hand. The probe's
+  one-workgroup integer rate (53 G/s, a third of the core's 128 lanes) may
+  read low for the same kernel shape as well.
 - **The M4's launch cost** reads 1.5 us on most runs and 3.3 us on some,
   the same within a run: where macOS places the encoding thread.
 - **Arm64 and the SSE tier** have no host probe yet.
