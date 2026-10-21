@@ -561,9 +561,9 @@ func (o *orderer) startsTogether(c, d, t int) {
 }
 
 // orderCursors orders each loop's cursors: a buffer the loop stores to
-// through its own address first, then in the order the sequence first
-// reaches each pointer. A tile's pass, which takes every copy before it
-// reaches any, keeps its argument words' order.
+// through its own address first (but in a loop kept at one trip), then in
+// the order the sequence first reaches each pointer. A tile's pass, which
+// takes every copy before it reaches any, keeps its argument words' order.
 func (k *Kernel) orderCursors() {
 	first := map[[2]int]int{}
 	for pos, e := range k.Seq {
@@ -594,7 +594,7 @@ func (k *Kernel) orderCursors() {
 		rank := func(cu Cursor) (int, int) {
 			stored := 1
 			for _, s := range k.Stores {
-				if s.At == c && !s.Barrier && !s.Run && s.Ptr == 0 && cu.Ptr == 0 && k.Bufs[s.Buf].Base == k.Bufs[cu.Buf].Base {
+				if s.At == c && !s.Barrier && !s.Run && s.Ptr == 0 && cu.Ptr == 0 && k.Bufs[s.Buf].Base == k.Bufs[cu.Buf].Base && !k.Loops[c].Kept {
 					stored = 0
 				}
 			}

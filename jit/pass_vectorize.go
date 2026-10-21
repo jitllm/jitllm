@@ -27,6 +27,9 @@ type Vectorize struct {
 	// value, the tail's carried value and the copy of the lanes' extremes
 	// the comparison after the loops reads.
 	Carry []int
+	// Keep keeps a vector loop of fixed trips at the top of its kernel a
+	// loop, counted at run time, though it makes one trip.
+	Keep bool
 }
 
 func (Vectorize) Name() string { return "vectorize" }
@@ -43,6 +46,9 @@ func (p Vectorize) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 			if m.vectorizable(c) {
 				m.vectorize(c, p.Lanes, p.Carry)
+				if l := &m.Loops[c]; p.Keep && l.Parent < 0 && l.Count == 0 && l.Trip == 1 {
+					l.Kept = true
+				}
 				changed = true
 				c++
 			}

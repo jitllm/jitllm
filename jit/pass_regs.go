@@ -256,6 +256,11 @@ func (b *binder86) gprs() error {
 	}
 	for c := range k.Loops {
 		l := &k.Loops[c]
+		if l.Kept && l.Reg == 0 {
+			if r := b.take([]int{p.Outer}); r >= 0 {
+				l.Reg = r + 1
+			}
+		}
 		if !l.Walk || l.Reg != 0 || l.once() {
 			continue
 		}
@@ -680,6 +685,10 @@ func (b *binder86) vectors() error {
 			switch nd.Op {
 			case OpAdd, OpSub, OpMul, OpMin, OpMax, OpHSum, OpHMax, OpHMin, OpBitcast, OpBroadcast, OpSqrt, OpAnd, OpGtW, OpAndNot, OpOr, OpAddSub, OpFirstLane:
 				first = nd.A
+			case OpCvtF32:
+				if k.Nodes[nd.A].Op != OpFold {
+					first = nd.A
+				}
 			case OpDiv:
 				first = nd.B
 			case OpFma:

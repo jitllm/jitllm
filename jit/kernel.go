@@ -116,6 +116,8 @@ type Loop struct {
 	// Walk is set on a tile's pass: it walks copies of its cursors and of
 	// its count, so each tile starts where the first did.
 	Walk bool
+	// Kept is set on a loop that stays a loop at one trip.
+	Kept bool
 	// Copies, where an unrolling set it, is how many vectors a trip covers,
 	// copy j of the body at iteration j*Lanes on.
 	Copies int
@@ -446,4 +448,4 @@ func (k *Kernel) groups() int {
 }
 
 // once reports whether a loop runs one fixed trip: its body, no count.
-func (l Loop) once() bool { return l.Count == 0 && l.Trip == 1 }
+func (l Loop) once() bool { return l.Count == 0 && l.Trip == 1 && !l.Kept }
