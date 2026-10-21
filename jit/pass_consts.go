@@ -67,7 +67,7 @@ func (p Consts) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 						slot[uint32(j)] = w + int(j)
 					}
 				}
-				m.Nodes[i] = Node{Op: OpLoad, Type: nd.Type, Buf: b, A: m.u32(w), Imm: nd.Imm}
+				m.Nodes[i] = Node{Op: OpLoad, Type: nd.Type, Buf: b, A: m.u32(w), Imm: nd.Imm, Hint: nd.Hint, Share: nd.Share}
 				continue
 			}
 			v := uint32(nd.Imm)
@@ -77,7 +77,7 @@ func (p Consts) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				slot[v] = w
 				m.Bufs[b].Words = append(m.Bufs[b].Words, v)
 			}
-			ld := Node{Op: OpLoad, Type: nd.Type, Buf: b, A: m.u32(w)}
+			ld := Node{Op: OpLoad, Type: nd.Type, Buf: b, A: m.u32(w), Hint: nd.Hint, Share: nd.Share}
 			if nd.Type == ir.F32 {
 				m.Nodes[i] = ld
 				continue
@@ -122,7 +122,7 @@ func (k *Kernel) shared(block []uint32, at []int) (*Kernel, bool) {
 	b := m.buf(Buf{Kind: BufIn, Elem: ir.F32, Shared: true, Words: append([]uint32(nil), block...), Operand: Operand{Kind: OperandConsts, Name: "shared.consts"}})
 	for _, i := range at {
 		nd := m.Nodes[i]
-		m.Nodes[i] = Node{Op: OpLoad, Type: nd.Type, Buf: b, A: m.u32(word[uint32(nd.Imm)])}
+		m.Nodes[i] = Node{Op: OpLoad, Type: nd.Type, Buf: b, A: m.u32(word[uint32(nd.Imm)]), Hint: nd.Hint, Share: nd.Share}
 	}
 	return m, true
 }

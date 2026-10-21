@@ -57,6 +57,7 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if p.Resident != nil {
 			w.residents(p.Resident, moved)
 		}
+		w.zerosPerLoop()
 		w.copiesAside()
 		for range len(k.Nodes) {
 			m := w.clone()
@@ -438,7 +439,7 @@ func (b *binder86) vectors() error {
 				r := k.Nodes[v].Reg - 1
 				busy[r] = false
 				tag[r] = chain[v]
-				if spent {
+				if spent && !k.isZero(v) {
 					tag[r] = -1
 				}
 			}
@@ -588,7 +589,7 @@ func (b *binder86) vectors() error {
 			reg = k.Nodes[first].Reg - 1
 		}
 		if reg >= 0 {
-			free(pos, first >= 0 && k.Nodes[first].Reg-1 != reg && innermost(hs[i]))
+			free(pos, innermost(hs[i]))
 		} else {
 			reg = lowest(chain[i], hs[i])
 			free(pos, innermost(hs[i]))
@@ -627,6 +628,41 @@ func (b *binder86) vectors() error {
 		}
 	}
 	return k.copyRegs(cp, len(splats))
+}
+
+// zerosPerLoop makes a float zero read in several loops in each of them,
+// where it is first read there.
+func (k *Kernel) zerosPerLoop() {
+	hs := k.homes()
+	for z := range k.Nodes {
+		if !k.isZero(z) || !k.needsVector(z) {
+			continue
+		}
+		made := map[int]int{}
+		for p := 0; p < len(k.Seq); p++ {
+			e := k.Seq[p]
+			if e.Kind != EntryNode || e.I >= len(hs) || hs[e.I] < 0 {
+				continue
+			}
+			for _, a := range k.args(&k.Nodes[e.I]) {
+				if *a != z {
+					continue
+				}
+				c := hs[e.I]
+				if len(made) == 0 {
+					made[c] = z
+				}
+				n, ok := made[c]
+				if !ok {
+					n = k.add(k.Nodes[z])
+					made[c] = n
+					k.Seq = append(k.Seq[:p], append([]Entry{{Kind: EntryNode, I: n}}, k.Seq[p:]...)...)
+					p++
+				}
+				*a = n
+			}
+		}
+	}
 }
 
 // copiesAside copies, for each value that shares a register with a later
