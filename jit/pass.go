@@ -17,8 +17,6 @@ type Profile struct {
 	Off    map[string]bool
 }
 
-
-
 // Int8Form is the int8 form a device keeps of a block's contraction inputs
 // produced by a row's op: windows of Window by an exact scale amax/127,
 // codes rounded half away from zero packed Word to a word, the codes' sums
