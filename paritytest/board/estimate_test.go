@@ -18,7 +18,8 @@ import (
 
 // TestEstimateMatchesTheHost holds the composer's estimate of a decode
 // step on the host, weighed with the host as the probe measures it, to
-// the step's composed kernels run in order on one buffer per operand: each
+// the step's composed kernels run in order on one buffer per storage the
+// estimate assumed: each
 // call timed over many steps, its median beside its estimate. It runs the
 // steps back to back, the steady state of decoding, and with reads of
 // twice the caches between them, as a model larger than the caches leaves
@@ -70,7 +71,8 @@ func estimateStep(t *testing.T, d jit.Device, f *jlm.File, steady bool) {
 	for _, cc := range ccs {
 		for _, a := range cc.Code.Args {
 			if a.Words == nil {
-				size[a.Operand] = max(size[a.Operand], int64(a.Offset)*4+cc.Reach[a.Field])
+				at := cc.Storage[a.Field]
+				size[at] = max(size[at], int64(a.Offset)*4+cc.Reach[a.Field])
 			}
 		}
 	}
@@ -95,13 +97,14 @@ func estimateStep(t *testing.T, d jit.Device, f *jlm.File, steady bool) {
 			if a.Value || a.Word || a.Length {
 				t.Fatalf("%s: argument word %d has no value at the step", cc.Code.Name, a.Field)
 			}
-			buf, ok := store[a.Operand]
+			at := cc.Storage[a.Field]
+			buf, ok := store[at]
 			if a.Words != nil || !ok {
-				buf = fill(a, max(size[a.Operand], int64(len(a.Words))*4), s)
+				buf = fill(a, max(size[at], int64(len(a.Words))*4), s)
 				keep = append(keep, buf)
 			}
 			if a.Words == nil {
-				store[a.Operand] = buf
+				store[at] = buf
 			}
 			block[a.Field/8] = uint64(uintptr(unsafe.Pointer(&buf[0])))
 		}

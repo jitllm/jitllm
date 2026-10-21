@@ -186,6 +186,9 @@ func (d *Device) MaxGrid() int { return d.maxGrid }
 // driver would not say.
 func (d *Device) Slots() int { return d.slots }
 
+// Multiprocessors is CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT.
+func (d *Device) Multiprocessors() int { return d.sms }
+
 // Ordinal is the CUDA device this context was opened on.
 func (d *Device) Ordinal() int { return d.ord }
 

@@ -1,0 +1,101 @@
+# The composer's estimator
+
+The estimator prices a kernel from its final IR, before anything is lowered
+or run: the tool a tuner, a placement search and an auto-tuner ask "which
+form, where, at what cost". It runs no model code. What it knows of a
+device comes from `engine/probe`, which initialises the device and measures
+it with generated kernels of its own; whether the estimate is right is held
+by tests that run the composed step and time it, never by the estimator.
+
+- `jit/estimate_model.go` -- the model.
+- `jit/estimate.go` -- `Estimate`, `Suggest`, `EstimateCodes` (each call's
+  estimate beside the values, reaches and storage it assumed).
+- `engine/probe/host_amd64.go`, `engine/probe/gpu.go` -- the probes.
+- `paritytest/board/estimate_test.go` (`TestEstimateMatchesTheHost`),
+  `paritytest/board/estimate_gpu_test.go` (`TestEstimateMatchesTheGPU`) --
+  the validation.
+
+## What a kernel costs
+
+Counts come from the IR at the step: each instruction's runs (element count
+times the trips of its loops, trips evaluated from the step's descriptors,
+page table and rotary positions, per element where a count reads its
+coordinates), each buffer's distinct bytes (bounded by its shape, the bytes
+touched, its loads' footprints and the interval its index takes) at the
+element's real width.
+
+A kernel's time is the largest of:
+
+- **memory**: each buffer's bytes at the rate of the levels serving it, plus
+  the longest stream start among its buffers (a few lines read one at a
+  time where that is shorter). On a GPU the levels are one pipeline -- every
+  byte from farther out passes through each nearer level -- so it is the
+  busiest level's time, and a load whose lanes sit a sector or more apart
+  moves a sector a lane through the first cache a launch does not start
+  empty;
+- **compute**: the busiest instruction class at its rate, or all of them at
+  the rate a mix issues; a GPU kernel at the share of the multiprocessors
+  its workgroups fill;
+- **waits**: the longest chain of dependent reads; on a GPU each load's runs
+  a thread times the mean latency of its buffer's reads over the loads a
+  thread keeps in flight (a subgroup issues in order);
+- **chains**: the longest fold's trips times its step's critical path, or
+  the critical path through the code outside any loop;
+
+plus the wait for its code's first line where the code left the nearest
+cache, and the call (host) or the device's per-kernel floor, or the host's
+launch where launches issue slower (GPU).
+
+Where a buffer is served from is a reuse-distance stack across the step's
+kernels. A cache holds a buffer whose bytes, with everything touched since
+its last use, fit it; past that it keeps the fraction its replacement keeps,
+`Retain` to the power of how far over the level those bytes are, and no more
+of a buffer larger than itself than its `Cycle` share. A GPU's L1 starts
+each launch empty and serves only the kernel's own re-reads. A part's
+boundary value is the storage of the value the part before it wrote.
+
+## What the probes measure
+
+Host (amd64): each cache's size from the OS, read rate on one P-core and all,
+latency (a chase on huge pages within the TLB's reach), stream start,
+retention after twice its size is read, and the share a buffer twice its
+size cycling through it keeps; memory's rate, latency and stream start; each
+class's issue rate and the delay of a dependent chain, a mix's issue rate,
+an empty call's cost.
+
+GPU: the host's launch rate and a kernel's floor on the device clock; memory
+rate and latency; L1 and L2 found from one thread's chase over growing sets
+(read rates cannot find them: the multiprocessors' L1s together can hold
+more than the L2), L2's rate from every workgroup reading one set; loads in
+flight a thread; each class's rate and delay, the group sum built as the
+composer's lowering builds it; the multiprocessor count.
+
+## How well it holds
+
+synth-ernie45, one decode step, `scripts/cap`:
+
+| host | regime | step estimate / measured | calls within 2x | median error |
+|---|---|---|---|---|
+| laptop, one P-core (i9-12900HK, AVX2) | caches swept between steps | 1.00-1.03 | 53-54 of 64 | 1.28-1.42x |
+| laptop, one P-core | steady (step after step) | 0.92-1.20 | 40-57 of 64 | 1.26-1.83x |
+| V100-SXM2-16GB (cato, CUDA, sm_70) | steady | 0.62 (0.91 without the argmax) | 62 of 65 | 1.12-1.14x |
+
+The laptop's steady regime moves with the probe: this fixture's weights are
+about the size of its L3, so the answer turns on the replacement numbers,
+which a shared desktop measures noisily. The cold regime is the one a model
+larger than the caches lives in.
+
+## Open
+
+- **One-thread kernels on the GPU.** The composed argmax runs 103,424 logits
+  on one thread (2.6 ms a step on the V100, most of the step); the estimate
+  is 0.54 of it. Both the kernel (a reduction across the device) and the
+  estimate (the overlap a device compiler finds in its loop) are owed.
+- **One warp of straight-line code.** A quantize kernel of about 2,300 PTX
+  instructions on 32 threads, with float and integer divisions by run-time
+  values, runs 0.39 of the estimate: a warp issuing in order through
+  expansions the IR's instruction count cannot see.
+- **Barriers** are not priced; the attention stage, with eight, reads 0.70.
+- **Arm64 and the SSE tier** have no host probe yet.
+- **Per-kernel times on the host** carry the clock's cost (taken off) and
+  rdtsc ordering; a call shorter than about 20 ns is within its noise.

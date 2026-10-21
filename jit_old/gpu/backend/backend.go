@@ -147,6 +147,10 @@ type Unified interface {
 // OrdinalDevice is a Device that knows its index among its backend's devices.
 type OrdinalDevice interface{ Ordinal() int }
 
+// MultiprocessorDevice is a Device that can say how many multiprocessors
+// it runs workgroups on.
+type MultiprocessorDevice interface{ Multiprocessors() int }
+
 type Device interface {
 	// Name is the hardware; API is which of PTX/SPIR-V/MSL got it there.
 	Name() string

@@ -1,6 +1,7 @@
 package jit
 
 import (
+	"github.com/jitllm/jitllm/engine/graph"
 	"math"
 
 	"github.com/jitllm/jitllm/jit/ir"
@@ -55,11 +56,14 @@ func (r Rate) at(threads float64) float64 {
 // of twice its size since the buffer's last use: 0 for a cache that keeps
 // only the most recent, more for one whose replacement resists a stream;
 // and the share of its capacity a buffer larger than it, read over and
-// over, finds in it.
+// over, finds in it. Kernel is set on a cache a launch starts empty, a
+// GPU's L1: it serves a kernel's re-reads and nothing a kernel before it
+// read.
 type Cache struct {
 	Bytes                         int64
 	Rate                          Rate
 	Latency, Start, Retain, Cycle float64
+	Kernel                        bool
 }
 
 // Cost is an estimate of a placement from its final IR, nothing lowered:
@@ -67,16 +71,22 @@ type Cache struct {
 // instructions they issue by class, their launches and the bytes carried
 // between devices, and the seconds the devices' descriptions make of them.
 // A kernel's compute time is its busiest class's, or all its instructions'
-// at the rate a mix issues, whichever is longer; its chain time is its
+// at the rate a mix issues, whichever is longer, a GPU kernel's at the
+// share of the multiprocessors its workgroups fill; its chain time is its
 // longest fold's: the trips of one entry into the fold's loop, each waiting
-// for the instructions between the fold and its next value.
+// for the instructions between the fold and its next value, or the longest
+// path through its instructions outside any loop, each waiting for those
+// it reads.
 // A kernel's memory time is its bytes at the rate of the level each is
 // served from, and the longest start of a stream among them: a level's
-// start, or for a buffer of a few lines its lines read one at a time.
+// start, or for a buffer of a few lines its lines read one at a time. A
+// GPU's levels run as one pipeline, every byte from farther out passing
+// through each nearer level: its memory time is its busiest level's.
 // Seconds is the largest of each kernel's memory time, compute time and
-// longest chain of dependent reads' waits, plus its launch and the wait
-// for its code's first line where the code is not in the nearest cache,
-// summed; Unknown counts loops whose trips the step does not decide, taken
+// longest chain of dependent reads' waits, plus the wait for its code's
+// first line where the code is not in the nearest cache: that and its call
+// on the host; on a GPU, that and the device's floor, or the launch where
+// the host issues launches slower, summed; Unknown counts loops whose trips the step does not decide, taken
 // as one.
 type Cost struct {
 	Bytes, Carried int64
@@ -88,6 +98,7 @@ type Cost struct {
 	Seconds                                   float64
 	MemSeconds, ComputeSeconds, LaunchSeconds float64
 	WaitSeconds, FetchSeconds, ChainSeconds   float64
+	FloorSeconds                              float64
 	Unknown                                   int
 }
 
@@ -108,6 +119,7 @@ func (c Cost) add(o Cost) Cost {
 	c.WaitSeconds += o.WaitSeconds
 	c.FetchSeconds += o.FetchSeconds
 	c.ChainSeconds += o.ChainSeconds
+	c.FloorSeconds += o.FloorSeconds
 	c.Unknown += o.Unknown
 	return c
 }
@@ -123,6 +135,41 @@ type costModel struct {
 	// recent is the operands last touched, most recent last, with their
 	// bytes: a reuse distance stack.
 	recent []touch
+	// alias is, by part and value, the part and value whose storage a
+	// part's boundary value is: a block reads the residual the one before
+	// it wrote.
+	alias map[[2]int][2]int
+}
+
+// partAliases is each part's boundary value's storage: the output of the
+// part before it, and that one's in turn.
+func partAliases(parts []Part) map[[2]int][2]int {
+	out := map[[2]int][2]int{}
+	for i := 1; i < len(parts); i++ {
+		a, b := parts[i-1].Graph, parts[i].Graph
+		if len(a.Out) == 0 || len(b.In) == 0 {
+			continue
+		}
+		from := [2]int{i - 1, int(a.Out[0])}
+		if x, ok := out[from]; ok {
+			from = x
+		}
+		out[[2]int{i, int(b.In[0])}] = from
+	}
+	return out
+}
+
+// key is the storage operand o names: a graph value by its part and id
+// alone, a boundary value as the value it is the storage of.
+func (m *costModel) key(o Operand) Operand {
+	if o.Kind != OperandValue {
+		return o
+	}
+	at := [2]int{o.Of, int(o.Value)}
+	if x, ok := m.alias[at]; ok {
+		at = x
+	}
+	return Operand{Kind: OperandValue, Of: at[0], Value: graph.ValueID(at[1])}
 }
 
 // touch is an operand's bytes or, where code is set, a kernel's code.
@@ -156,7 +203,7 @@ func (m *costModel) serve(x touch) [4]float64 {
 	}
 	left := 1.0
 	for l, c := range m.d.Caches {
-		if c.Bytes <= 0 {
+		if c.Bytes <= 0 || c.Kernel {
 			continue
 		}
 		keep := 1.0
@@ -185,6 +232,17 @@ func (m *costModel) touchOf(x touch) {
 		}
 	}
 	m.recent = append(m.recent, x)
+}
+
+// sectorBytes is the bytes a GPU moves for a lane at least: a sector.
+const sectorBytes = 32
+
+// lineBytes is the bytes a cache moves at once: a host's line, a GPU L1's.
+func lineBytes(kind DeviceKind) int64 {
+	if kind == DeviceGPU {
+		return 128
+	}
+	return 64
 }
 
 // codeBytes is the bytes an instruction of a device's code takes on
@@ -295,6 +353,66 @@ func (m *costModel) chain(e *estimator, live map[int]bool, words map[int]bool) f
 	return out
 }
 
+// critical is the longest path through kernel k's instructions outside
+// any loop, each waiting for the ones it reads by its class's delay, a
+// load by the mean latency of its buffer's reads: what one thread takes
+// with nothing else to issue.
+func (m *costModel) critical(k *Kernel, live, words map[int]bool, reads map[int]float64) float64 {
+	homes := k.homes()
+	memo := make([]float64, len(k.Nodes))
+	done := make([]bool, len(k.Nodes))
+	var depth func(i int) float64
+	depth = func(i int) float64 {
+		if done[i] {
+			return memo[i]
+		}
+		done[i] = true
+		nd := k.Nodes[i]
+		var d float64
+		for _, a := range k.args(&nd) {
+			if *a < len(k.Nodes) && (*a >= len(homes) || homes[*a] < 0) {
+				d = max(d, depth(*a))
+			}
+		}
+		switch {
+		case nd.Op == OpLoad:
+			d += reads[nd.Buf]
+		default:
+			if cl, ok := classOf(k, i, words); ok {
+				d += m.d.Delay[cl]
+			}
+		}
+		memo[i] = d
+		return d
+	}
+	var out float64
+	for i := range k.Nodes {
+		if live[i] && (i >= len(homes) || homes[i] < 0) {
+			out = max(out, depth(i))
+		}
+	}
+	return out
+}
+
+// exposed is the seconds a GPU kernel's threads wait for their loads: a
+// subgroup issues in order, so a thread waits for each run of a load
+// before what uses it, but for the device's Overlap of them at once, while
+// different loads of a trip are in flight together. Each load's runs a
+// thread times the latency of its buffer's reads, over the overlap; the
+// longest of them.
+func (m *costModel) exposed(e *estimator, live map[int]bool, wait map[int]float64) float64 {
+	k := e.k
+	elems := float64(max(1, k.elements()))
+	var out float64
+	for i, nd := range k.Nodes {
+		if !live[i] || nd.Op != OpLoad || k.Bufs[nd.Buf].Kind == BufShared {
+			continue
+		}
+		out = max(out, e.runs(i)/elems*wait[nd.Buf]/max(1, m.d.Overlap))
+	}
+	return out
+}
+
 // wait is the longest chain of dependent reads in kernel k: each load
 // waits for the loads its index reads, then for the levels its buffer is
 // served from, each by its share.
@@ -341,19 +459,20 @@ func (m *costModel) cost(k *Kernel) Cost {
 	}
 	c := Cost{Launches: 1}
 	type use struct {
-		touched, unique float64
-		hull            span
-		write           bool
+		touched, unique, loads float64
+		hull                   span
+		write                  bool
 	}
 	uses := map[int]*use{}
 	order := []int{}
-	note := func(b int, touched, unique float64, h span, write bool) {
+	note := func(b int, loads, touched, unique float64, h span, write bool) {
 		u, ok := uses[b]
 		if !ok {
 			u = &use{hull: span{math.Inf(1), math.Inf(-1)}}
 			uses[b] = u
 			order = append(order, b)
 		}
+		u.loads += loads
 		u.touched += touched
 		u.unique += unique
 		u.hull = span{min(u.hull.lo, h.lo), max(u.hull.hi, h.hi)}
@@ -361,6 +480,11 @@ func (m *costModel) cost(k *Kernel) Cost {
 	}
 	live := k.live()
 	words := k.vectorWords()
+	// over is the bytes a GPU kernel's subgroups move past what their
+	// lanes read: a lane whose place is a sector or more from its
+	// neighbour's moves a sector of its own, served from the first cache
+	// a launch does not start empty.
+	var over float64
 	for i, nd := range k.Nodes {
 		if !live[i] {
 			continue
@@ -371,7 +495,12 @@ func (m *costModel) cost(k *Kernel) Cost {
 				continue
 			}
 			w := e.width(i, nd.Buf)
-			note(nd.Buf, n*w, e.footprint([]int{nd.A}, nd.Ax, e.homes[i], nd.Buf)*w, e.reach(i, nd.A, nd.Ax, nd.Buf, w), false)
+			if m.d.Kind == DeviceGPU {
+				if st := e.laneStride(i); st > w {
+					over += n * (min(st, sectorBytes) - min(w, sectorBytes))
+				}
+			}
+			note(nd.Buf, n, n*w, e.footprint([]int{nd.A}, nd.Ax, e.homes[i], nd.Buf)*w, e.reach(i, nd.A, nd.Ax, nd.Buf, w), false)
 			c.Issued[ClassMem] += int64(n)
 			continue
 		}
@@ -392,11 +521,15 @@ func (m *costModel) cost(k *Kernel) Cost {
 		if s.Narrow {
 			w = 16
 		}
-		note(s.Buf, n*w, e.footprint([]int{s.Ix}, s.Ax, s.At, s.Buf)*w, e.storeReach(s, w), true)
+		note(s.Buf, 0, n*w, e.footprint([]int{s.Ix}, s.Ax, s.At, s.Buf)*w, e.storeReach(s, w), true)
 		c.Issued[ClassMem] += int64(n)
 	}
 	m.reach = map[int]int64{}
 	served := map[int][4]float64{}
+	// reads is, by buffer, the mean latency of a read the kernel makes of
+	// it: a read of each line its bytes span from where they are served,
+	// every other read from the nearest cache.
+	reads := map[int]float64{}
 	var start float64
 	for _, b := range order {
 		u := uses[b]
@@ -418,7 +551,7 @@ func (m *costModel) cost(k *Kernel) Cost {
 		var from [4]float64
 		from[m.fit(uniq)] = 1
 		if !u.write {
-			from = m.serve(touch{o: buf.Operand, bytes: uniq})
+			from = m.serve(touch{o: m.key(buf.Operand), bytes: uniq})
 			served[b] = from
 		}
 		for l, f := range from {
@@ -438,12 +571,49 @@ func (m *costModel) cost(k *Kernel) Cost {
 			c.Served[near] += int64(again)
 			c.MemSeconds += again / m.rate(near, threads)
 		}
-		m.touch(buf.Operand, uniq)
+		if u.loads > 0 {
+			var far float64
+			for l, f := range from {
+				far += f * m.latency(l)
+			}
+			lines := min(u.loads, math.Ceil(float64(uniq)/float64(lineBytes(m.d.Kind))))
+			reads[b] = (lines*far + (u.loads-lines)*m.latency(0)) / u.loads
+		}
+		m.touch(m.key(buf.Operand), uniq)
+	}
+	if over > 0 {
+		l := 0
+		for l < len(m.d.Caches) && m.d.Caches[l].Kernel {
+			l++
+		}
+		c.Served[l] += int64(over)
+		c.MemSeconds += over / m.rate(l, threads)
+	}
+	if m.d.Kind == DeviceGPU {
+		c.MemSeconds = 0
+		var through float64
+		for l := len(c.Served) - 1; l >= 0; l-- {
+			if l < len(m.d.Caches) && m.d.Caches[l].Bytes <= 0 {
+				continue
+			}
+			through += float64(c.Served[l])
+			if r := m.rate(l, threads); r > 0 {
+				c.MemSeconds = max(c.MemSeconds, through/r)
+			}
+		}
 	}
 	c.MemSeconds += start
+	share := 1.0
+	if m.d.Kind == DeviceGPU && m.d.Units > 0 {
+		groups := max(1, k.elements())
+		if !k.Work {
+			groups = (groups + max(1, k.Group) - 1) / max(1, k.Group)
+		}
+		share = float64(min(groups, m.d.Units)) / float64(m.d.Units)
+	}
 	var all float64
 	for cl, n := range c.Issued {
-		if r := m.d.Rates[cl].at(threads); r > 0 && n > 0 {
+		if r := min(m.d.Rates[cl].at(threads), share*m.d.Rates[cl].Total); r > 0 && n > 0 {
 			c.ComputeSeconds = max(c.ComputeSeconds, float64(n)/r)
 		}
 		all += float64(n)
@@ -453,6 +623,9 @@ func (m *costModel) cost(k *Kernel) Cost {
 	}
 	c.LaunchSeconds = m.d.Launch
 	c.WaitSeconds = m.wait(k, live, served)
+	if m.d.Kind == DeviceGPU {
+		c.WaitSeconds = max(c.WaitSeconds, m.exposed(&e, live, reads))
+	}
 	code := touch{code: k, bytes: e.code(live, m.d.Kind)}
 	for l, f := range m.serve(code) {
 		if l > 0 {
@@ -460,8 +633,13 @@ func (m *costModel) cost(k *Kernel) Cost {
 		}
 	}
 	m.touchOf(code)
-	c.ChainSeconds = m.chain(&e, live, words)
-	c.Seconds = max(c.MemSeconds, c.ComputeSeconds, c.WaitSeconds, c.ChainSeconds) + c.LaunchSeconds + c.FetchSeconds
+	c.ChainSeconds = max(m.chain(&e, live, words), m.critical(k, live, words, reads))
+	work := max(c.MemSeconds, c.ComputeSeconds, c.WaitSeconds, c.ChainSeconds) + c.FetchSeconds
+	c.Seconds = work + c.LaunchSeconds
+	if m.d.Kind == DeviceGPU {
+		c.FloorSeconds = m.d.Floor
+		c.Seconds = max(work+c.FloorSeconds, c.LaunchSeconds)
+	}
 	c.Unknown = e.unknown
 	return c
 }
@@ -485,7 +663,9 @@ type estimator struct {
 	unknown int
 	// elem is the element whose counts eval reads; byElem the loops whose
 	// counts read an element's coordinates, and runsIn each loop's runs.
-	elem   []int
+	elem []int
+	// lane is the thread of the element's group eval takes.
+	lane   int
 	byElem map[int]bool
 	runsIn map[int]float64
 	// folding is the folds whose interval is being taken: a fold's step
@@ -727,7 +907,15 @@ func (e *estimator) eval(i, depth int) (float64, bool) {
 			return float64(e.elem[nd.A]), true
 		}
 		return 0, true
-	case OpThread, OpLocal, OpFlat, OpIter:
+	case OpThread, OpLocal:
+		return float64(e.lane), true
+	case OpFlat:
+		x := 0
+		for a, c := range e.elem {
+			x = x*max(1, k.Space[a]) + c
+		}
+		return float64(x), true
+	case OpIter:
 		return 0, true
 	case OpSpan:
 		if nd.Imm == 1 {
@@ -998,6 +1186,52 @@ func (e *estimator) walked(h, b int) bool {
 	return false
 }
 
+// laneStride is the bytes between the places load i reads for two
+// neighbouring lanes of a subgroup at the first trip: the next thread of
+// a group where a group shares the element, the next element else; 0 where
+// the step does not decide it.
+func (e *estimator) laneStride(i int) float64 {
+	k := e.k
+	nd := k.Nodes[i]
+	at := func() (float64, bool) {
+		if nd.Ax == nil {
+			return e.eval(nd.A, 0)
+		}
+		sh := k.Bufs[nd.Buf].Shape
+		if len(sh) != len(nd.Ax) {
+			return 0, false
+		}
+		var x float64
+		for j, a := range nd.Ax {
+			v, ok := e.eval(a, 0)
+			if !ok {
+				return 0, false
+			}
+			x = x*float64(sh[j]) + v
+		}
+		return x, true
+	}
+	elem, lane := e.elem, e.lane
+	defer func() { e.elem, e.lane = elem, lane }()
+	e.elem, e.lane = e.coords(0), 0
+	a, ok := at()
+	if !ok {
+		return 0
+	}
+	if k.Work {
+		e.lane = 1
+	} else if k.elements() > 1 {
+		e.elem = e.coords(1)
+	} else {
+		return 0
+	}
+	b, ok := at()
+	if !ok {
+		return 0
+	}
+	return math.Abs(b-a) * float64(elemBytes(k.Bufs[nd.Buf]))
+}
+
 // reach is the bytes load i's places span: its index's hull in elements
 // of buffer b, widened by the w bytes one run reads; unbounded where a
 // cursor walks the buffer.
@@ -1044,6 +1278,13 @@ func classOf(k *Kernel, i int, words map[int]bool) (Class, bool) {
 		return ClassLanes, true
 	case OpDiv, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpRoundI32, OpHalf:
 		if nd.Type == ir.F32 || k.Nodes[nd.A].Type == ir.F32 || words[i] {
+			return ClassSpecial, true
+		}
+		if nd.Op == OpDiv && k.Nodes[nd.B].Op != OpConst {
+			return ClassSpecial, true
+		}
+	case OpRem:
+		if k.Nodes[nd.B].Op != OpConst {
 			return ClassSpecial, true
 		}
 	}

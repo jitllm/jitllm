@@ -26,7 +26,7 @@ func (r *Registry) Estimate(f *jlm.File, s Step, p Placement) (Cost, error) {
 		}
 		ks, err := r.passRun(f, run[i:j], i, s)
 		errs = append(errs, err)
-		m := costModel{d: run[i].Device, s: s}
+		m := costModel{d: run[i].Device, s: s, alias: partAliases(parts)}
 		for _, k := range ks {
 			total = total.add(m.cost(k))
 		}
@@ -40,14 +40,29 @@ func (r *Registry) Estimate(f *jlm.File, s Step, p Placement) (Cost, error) {
 
 // CodeCost is one call's estimate at a step, beside the call and what the
 // estimate assumed of it: the words it passes by value, by field, and for
-// each word that holds an address the bytes the call reaches past it.
+// each word that holds an address the bytes the call reaches past it; and
+// for each of the code's bindings, the bytes it reaches and its constants.
+// Storage is, by field, the storage an address word points into: one
+// operand for every value the estimate takes as one buffer, a block's
+// residual the one the block before it wrote.
 type CodeCost struct {
-	Code   Code
-	Part   int
-	Device Device
-	Cost   Cost
-	Values map[int]uint64
-	Reach  map[int]int64
+	Code    Code
+	Part    int
+	Device  Device
+	Cost    Cost
+	Values  map[int]uint64
+	Reach   map[int]int64
+	Storage map[int]Operand
+	Binds   []BindCost
+}
+
+// BindCost is what the estimate of a code assumed of one of its bindings:
+// the storage it is, the bytes the code reaches in it, and the constants it
+// holds, where it is a block of them.
+type BindCost struct {
+	Storage Operand
+	Reach   int64
+	Words   []uint32
 }
 
 // EstimateCodes is each call's estimate when placement p runs at step s,
@@ -74,7 +89,7 @@ func (r *Registry) EstimateCodes(f *jlm.File, s Step, p Placement, steady bool) 
 		d := run[i].Device
 		ks, err := r.passRun(f, run[i:j], i, s)
 		errs = append(errs, err)
-		m := costModel{d: d, s: s}
+		m := costModel{d: d, s: s, alias: partAliases(parts)}
 		for _, k := range ks {
 			if steady {
 				m.cost(k)
@@ -88,7 +103,20 @@ func (r *Registry) EstimateCodes(f *jlm.File, s Step, p Placement, steady bool) 
 				continue
 			}
 			e := estimator{k: k, s: s, trips: map[int]float64{}, homes: k.homes()}
-			cc := CodeCost{Code: codes[0].Code, Part: k.Of, Device: d, Cost: c, Values: map[int]uint64{}, Reach: map[int]int64{}}
+			cc := CodeCost{Code: codes[0].Code, Part: k.Of, Device: d, Cost: c, Values: map[int]uint64{}, Reach: map[int]int64{}, Storage: map[int]Operand{}}
+			for b, buf := range k.Bufs {
+				if buf.Kind == BufShared {
+					continue
+				}
+				n := int64(elemBytes(buf))
+				for _, x := range buf.Shape {
+					n *= int64(x)
+				}
+				if buf.Shape == nil {
+					n = 0
+				}
+				cc.Binds = append(cc.Binds, BindCost{Storage: m.key(buf.Operand), Reach: max(m.reach[b], n, int64(4*len(buf.Words))), Words: buf.Words})
+			}
 			for _, a := range k.Args {
 				switch {
 				case a.Buf < 0:
@@ -107,6 +135,7 @@ func (r *Registry) EstimateCodes(f *jlm.File, s Step, p Placement, steady bool) 
 					}
 				default:
 					cc.Reach[a.Field] = max(cc.Reach[a.Field], m.reach[a.Buf])
+					cc.Storage[a.Field] = m.key(k.Bufs[a.Buf].Operand)
 				}
 			}
 			out = append(out, cc)
@@ -151,7 +180,7 @@ func (r *Registry) Suggest(f *jlm.File, s Step, devices []Device) (Placement, Co
 				own[i][j] = Cost{Seconds: 1e30}
 				continue
 			}
-			m := costModel{d: d, s: s}
+			m := costModel{d: d, s: s, alias: partAliases(parts)}
 			for _, k := range ks {
 				own[i][j] = own[i][j].add(m.cost(k))
 			}

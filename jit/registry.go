@@ -29,13 +29,18 @@ func (k DeviceKind) String() string {
 type Device struct {
 	Kind         DeviceKind
 	Slots, Lanes int
+	// Units is the multiprocessors a GPU runs workgroups on, 0 where
+	// nothing measured them.
+	Units int
 	// Bandwidth is the bytes a second the device's memory serves all its
 	// threads, Thread what one thread gets alone; Launch the seconds a
 	// launch or a call costs; Link the bytes a second it exchanges with
 	// another device; Latency the seconds a read that misses every cache
 	// waits for memory, Start what a short stream from memory waits beyond
-	// its bytes at the memory's rate.
-	Bandwidth, Thread, Launch, Link, Latency, Start float64
+	// its bytes at the memory's rate; Floor the seconds a GPU kernel holds
+	// the device beyond its work, launches issued back to back; Overlap the
+	// loads a GPU thread has in flight in a loop that uses each as it goes.
+	Bandwidth, Thread, Launch, Link, Latency, Start, Floor, Overlap float64
 	// Caches are its cache levels, nearest first.
 	Caches [3]Cache
 	// Rates are the instructions a second it issues of each class, Issue
