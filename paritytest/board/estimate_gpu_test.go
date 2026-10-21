@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"strings"
 	"testing"
-	"unicode"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/probe"
@@ -82,12 +80,7 @@ func TestEstimateMatchesTheGPU(t *testing.T) {
 			continue
 		}
 		k := paritytest.Old(cc.Code.GPU)
-		k.Name = fmt.Sprintf("est%02d_%s", i, strings.Map(func(r rune) rune {
-			if r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) {
-				return r
-			}
-			return '_'
-		}, k.Name))
+		k.Name = fmt.Sprintf("est%02d_%s", i, k.Name)
 		kern, err := dev.Compile(k)
 		if err != nil {
 			t.Fatalf("%s: %v", k.Name, err)

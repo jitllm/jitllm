@@ -136,3 +136,25 @@ func TestEstimateReadsTheHeadOnce(t *testing.T) {
 		t.Logf("%v: the head's kernel moves %d bytes, its weight %d", d.Kind, got, weight)
 	}
 }
+
+// TestGPUEntryNamesAreIdentifiers holds every composed GPU kernel's entry
+// to a name a backend accepts: PTX refuses "reduce+map" and "reduce.part".
+func TestGPUEntryNamesAreIdentifiers(t *testing.T) {
+	ks, _ := estimateRun(t, testGPU, Step{Rows: 1, Page: 64, Keys: 9})
+	for _, k := range ks {
+		l, err := gpuLowering{}.Lower(k, testGPU)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := l.GPU.Name
+		for i, r := range name {
+			if !(r == '_' || 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || i > 0 && '0' <= r && r <= '9') {
+				t.Errorf("%s lowers to the entry %q", k.Name, name)
+				break
+			}
+		}
+	}
+	if entryName("reduce+map.part") != "reduce_map_part" || entryName("2x") != "k2x" {
+		t.Errorf("entryName: %q %q", entryName("reduce+map.part"), entryName("2x"))
+	}
+}

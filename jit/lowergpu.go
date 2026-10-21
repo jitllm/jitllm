@@ -2,6 +2,7 @@ package jit
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/jitllm/jitllm/jit/ir"
 )
@@ -13,9 +14,25 @@ func (gpuLowering) Lower(n *Kernel, d Device) (Lowered, error) {
 	if n.Group <= 0 {
 		return Lowered{}, fmt.Errorf("no workgroup: the profile binds none")
 	}
-	e := &lowerer{n: n, b: ir.New(n.Name, [3]int{n.Group, 1, 1})}
+	e := &lowerer{n: n, b: ir.New(entryName(n.Name), [3]int{n.Group, 1, 1})}
 	k, err := e.run()
 	return Lowered{GPU: k}, err
+}
+
+// entryName is a kernel's name as a backend's entry point can carry it:
+// letters, digits and underscores, every other character an underscore,
+// and not led by a digit.
+func entryName(name string) string {
+	out := strings.Map(func(r rune) rune {
+		if r == '_' || 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' {
+			return r
+		}
+		return '_'
+	}, name)
+	if out == "" || '0' <= out[0] && out[0] <= '9' {
+		out = "k" + out
+	}
+	return out
 }
 
 type lowerer struct {
