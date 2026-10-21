@@ -5,11 +5,11 @@ import "github.com/jitllm/jitllm/jit/ir"
 // Split cuts a sum over a loop into contiguous segments, each element's
 // segments threads of their own writing partial planes, and a combine that
 // sums the planes. The segments double while they stay under Max, the
-// threads under twice the device's slots, and the trips divide into
-// Block-wide blocks a segment.
+// threads under twice Slots (the device's where Slots is 0), and the trips
+// divide into Block-wide blocks a segment.
 type Split struct {
-	Max, Block int
-	Kinds      []PrimKind
+	Slots, Max, Block int
+	Kinds             []PrimKind
 }
 
 func (Split) Name() string { return "split" }
@@ -24,8 +24,12 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 		return nil, false, nil
 	}
 	T, E := n.Loops[c].Trip, n.elements()
+	slots := s.Slots
+	if slots == 0 {
+		slots = d.Slots
+	}
 	S := 1
-	for S < s.Max && E*S < 2*d.Slots && T%(s.Block*S*2) == 0 {
+	for S < s.Max && E*S < 2*slots && T%(s.Block*S*2) == 0 {
 		S *= 2
 	}
 	if S == 1 {

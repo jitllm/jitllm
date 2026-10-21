@@ -4,9 +4,11 @@ package jit
 func gpuProfile() Profile {
 	contract := []PrimKind{PrimContract}
 	return Profile{Passes: []Pass{
+		Int8{Window: 32, Word: 4, Sums: 16, Parts: []PartKind{PartBlock}},
 		Fuse{Pairs: []Pair{{From: PrimMap, To: PrimMap, AtStores: true}, {From: PrimContract, To: PrimMap, Additive: true}}},
 		Threads{Group: 128},
-		Split{Max: 32, Block: 32, Kinds: contract},
+		WorkRow{Group: 1024},
+		Split{Slots: 30720, Max: 32, Block: 32, Kinds: contract},
 		Blocks{Size: 32, Kinds: contract},
 	}}
 }

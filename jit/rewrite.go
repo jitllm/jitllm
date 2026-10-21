@@ -194,3 +194,57 @@ func (n *Kernel) flat(first int) int {
 	}
 	return ix
 }
+
+// copyInto is src's node root as nodes of dst: each node src reaches from
+// root copied, its operands first, a load into dst's buffer of the same
+// operand, kind and shape; leaf, where it answers, stands for a node,
+// given the node with its operands already copied.
+func copyInto(dst, src *Kernel, root int, leaf func(i int, nd Node) (int, bool)) int {
+	memo := map[int]int{}
+	var walk func(i int) int
+	walk = func(i int) int {
+		if v, ok := memo[i]; ok {
+			return v
+		}
+		nd := src.Nodes[i]
+		if nd.Op == OpFold {
+			if v, ok := leaf(i, nd); ok {
+				memo[i] = v
+				return v
+			}
+			v := dst.add(Node{})
+			memo[i] = v
+			for _, a := range src.args(&nd) {
+				*a = walk(*a)
+			}
+			dst.Nodes[v] = nd
+			return v
+		}
+		args := src.args(&nd)
+		for _, a := range args {
+			*a = walk(*a)
+		}
+		if v, ok := leaf(i, nd); ok {
+			memo[i] = v
+			return v
+		}
+		if nd.Op == OpLoad {
+			nd.Buf = dst.bufLike(src.Bufs[nd.Buf])
+		}
+		v := dst.add(nd)
+		memo[i] = v
+		return v
+	}
+	return walk(root)
+}
+
+// bufLike is k's buffer of b's operand, kind and shape, added where k has
+// none.
+func (k *Kernel) bufLike(b Buf) int {
+	for i, x := range k.Bufs {
+		if x.Operand == b.Operand && x.Kind == b.Kind && sameShape(x.Shape, b.Shape) {
+			return i
+		}
+	}
+	return k.buf(b)
+}

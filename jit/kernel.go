@@ -24,9 +24,11 @@ type Kernel struct {
 	// changed it.
 	Kind   PrimKind
 	Passes []string
-	// Positions and Heads are facts the primitive carried.
+	// Positions and Heads are facts the primitive carried, Part the kind of
+	// the model's part the kernel belongs to.
 	Positions *Positions
 	Heads     *Heads
+	Part      PartKind
 }
 
 // Positions is a primitive's Range on its kernel: the space axis whose

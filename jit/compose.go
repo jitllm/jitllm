@@ -73,6 +73,7 @@ func (r *Registry) form(f *jlm.File, part Part, s Step, d Device) ([]Code, error
 		if err != nil {
 			return nil, err
 		}
+		k.Part = part.Kind
 		ks = append(ks, k)
 	}
 	prof, ok := r.Profiles[d.Kind]
