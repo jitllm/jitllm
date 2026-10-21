@@ -12,6 +12,8 @@ import (
 var (
 	composeModel = flag.String("compose-model", "synth-ernie45", "the fixture TestComposeIR forms")
 	composeShow  = flag.String("compose-show", "", "TestComposeIR writes out the IR of the kernels with this name prefix, stopping after the pass of this name (after:NAME)")
+	composeHost  = flag.Bool("compose-host", false, "TestComposeIR forms the block on the host")
+	composePart  = flag.Int("compose-part", 1, "the part TestComposeIR forms")
 )
 
 // TestComposeIR forms the fixture's first block on a GPU, stopping where
@@ -28,7 +30,10 @@ func TestComposeIR(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := Device{Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 32}
-	prims, err := r.decompose(f, parts[1], 1, Step{Rows: 1, Page: 64, Keys: 5}, d)
+	if *composeHost {
+		d = Device{Kind: DeviceCPU, Slots: 6, Lanes: 8}
+	}
+	prims, err := r.decompose(f, parts[*composePart], *composePart, Step{Rows: 1, Page: 64, Keys: 5}, d)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +46,7 @@ func TestComposeIR(t *testing.T) {
 		ks = append(ks, k)
 	}
 	name, stop, _ := strings.Cut(*composeShow, "@")
-	for _, ps := range r.Profiles[DeviceGPU].Passes {
+	for _, ps := range r.Profiles[d.Kind].Passes {
 		ks, err = ps.Apply(ks, d)
 		if err != nil {
 			t.Fatal(err)

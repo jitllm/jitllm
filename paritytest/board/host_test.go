@@ -7,14 +7,17 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit_old/cpu"
 )
 
@@ -134,4 +137,96 @@ func TestHostDecodeEmitters(t *testing.T) {
 			}
 		}
 	}
+}
+
+var host = jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}
+
+// TestBoardHost holds the kernels the composer forms for the host to the
+// code main's host JIT ran for the same decode step: each main kernel
+// identical where one composed kernel is its bytes, and its instructions
+// matched as the longest run in order one composed kernel shares with it.
+func TestBoardHost(t *testing.T) {
+	em := cpu.EmittersFor(cpu.HostTier())
+	plan, err := composed(t, *boardModel, host)
+	if err != nil {
+		t.Logf("not formed: %v", err)
+	}
+	var mine [][]byte
+	for _, pp := range plan.Parts {
+		for _, c := range pp.Codes {
+			if c.CPU != nil {
+				mine = append(mine, c.CPU)
+			}
+		}
+	}
+	type row struct {
+		name           string
+		total, matched int
+		same           bool
+	}
+	var rows []row
+	same, total, matched := 0, 0, 0
+	for _, c := range hostDecode(t, *boardModel) {
+		r := row{name: emitterOf(*em, c.Code)}
+		want := disassemble(t, c.Code)
+		r.total = len(want)
+		for _, m := range mine {
+			if bytes.Equal(m, c.Code) {
+				r.same = true
+			}
+			r.matched = max(r.matched, lcs(want, disassemble(t, m)))
+		}
+		if r.same {
+			same++
+		}
+		total += r.total
+		matched += r.matched
+		rows = append(rows, r)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].total-rows[i].matched > rows[j].total-rows[j].matched })
+	for _, r := range rows {
+		t.Logf("%-22s %4d of %4d instructions identical=%v", r.name, r.matched, r.total, r.same)
+	}
+	t.Logf("%s on the host (%s): %d of main's %d instructions (%.1f%%), %d of main's %d kernels identical; %d composed kernels",
+		*boardModel, cpu.HostTier(), matched, total, 100*float64(matched)/float64(max(total, 1)), same, len(rows), len(mine))
+}
+
+// disassemble is code's instructions, each its mnemonic and operands.
+func disassemble(t *testing.T, code []byte) []string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "k*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(code); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command("objdump", "-D", "-b", "binary", "-mi386:x86-64", "--no-show-raw-insn", f.Name()).Output()
+	if err != nil {
+		t.Fatalf("the board reads code through objdump: %v", err)
+	}
+	var ins []string
+	for _, l := range strings.Split(string(out), "\n") {
+		if _, rest, ok := strings.Cut(l, ":\t"); ok && strings.HasPrefix(strings.TrimSpace(l), strings.TrimSpace(strings.SplitN(l, ":", 2)[0])) {
+			ins = append(ins, strings.Join(strings.Fields(rest), " "))
+		}
+	}
+	return ins
+}
+
+// lcs is the length of the longest sequence a and b share in order.
+func lcs(a, b []string) int {
+	prev, cur := make([]int, len(b)+1), make([]int, len(b)+1)
+	for i := range a {
+		for j := range b {
+			if a[i] == b[j] {
+				cur[j+1] = prev[j] + 1
+			} else {
+				cur[j+1] = max(cur[j], prev[j+1])
+			}
+		}
+		prev, cur = cur, prev
+	}
+	return prev[len(b)]
 }
