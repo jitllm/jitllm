@@ -2,6 +2,7 @@ package jit
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -257,5 +258,64 @@ func TestEveryKernelRecordsItsPasses(t *testing.T) {
 			t.Errorf("device %d formed no kernel", d.Kind)
 		}
 		t.Logf("device %d: %d kernels, each naming its passes", d.Kind, n)
+	}
+}
+
+// runProbe records, for each call, the parts whose kernels it was given.
+type runProbe struct{ calls *[][]int }
+
+func (runProbe) Name() string { return "runprobe" }
+
+func (p runProbe) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
+	seen := map[int]bool{}
+	var of []int
+	for _, k := range ks {
+		if !seen[k.Of] {
+			seen[k.Of] = true
+			of = append(of, k.Of)
+		}
+	}
+	*p.calls = append(*p.calls, of)
+	return ks, nil
+}
+
+// TestPassesSeeRuns holds the passes to seeing each run of consecutive
+// parts placed on one device in one call, and a part placed elsewhere
+// cutting the run in two.
+func TestPassesSeeRuns(t *testing.T) {
+	f, err := jlm.Open(testmodels.Path(*composeModel + ".jlm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	gpu := Device{Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 32}
+	cpu := Device{Kind: DeviceCPU, Slots: 6, Lanes: 8}
+	for _, tc := range []struct {
+		name string
+		host func(Part) bool
+		want [][]int
+	}{
+		{"all on the card", func(p Part) bool { return false }, [][]int{{0, 1, 2, 3, 4, 5}}},
+		{"block 1 on the host", func(p Part) bool { return p.Kind == PartBlock && p.Block == 1 }, [][]int{{0, 1}, {2}, {3, 4, 5}}},
+	} {
+		var calls [][]int
+		r := Default()
+		for kind, prof := range r.Profiles {
+			prof.Passes = append([]Pass{runProbe{&calls}}, prof.Passes...)
+			r.Profiles[kind] = prof
+		}
+		place := func(p Part) Device {
+			if tc.host(p) {
+				return cpu
+			}
+			return gpu
+		}
+		if _, err := r.Compose(f, Step{Rows: 1, Page: 64, Keys: 5}, place); err != nil {
+			t.Fatal(err)
+		}
+		if fmt.Sprint(calls) != fmt.Sprint(tc.want) {
+			t.Errorf("%s: the passes saw parts %v, want %v", tc.name, calls, tc.want)
+		}
+		t.Logf("%s: runs %v", tc.name, calls)
 	}
 }

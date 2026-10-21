@@ -257,3 +257,49 @@ func TestAttendAttrs(t *testing.T) {
 		t.Logf("%s in %v out %v weights %v attr %+v", o.Kind, o.In, o.Out, o.Weight, o.Attr)
 	}
 }
+
+// TestBoardComparesDataflow holds the board's comparison to what kernels
+// compute rather than how they are written: a dead instruction added to
+// every composed kernel leaves the count whole, and one add made a multiply
+// takes from it.
+func TestBoardComparesDataflow(t *testing.T) {
+	main := mainDecode(t, *boardModel, *boardProfile)
+	plan, err := composed(t, *boardModel, onCard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mine []*ir.Kernel
+	for _, pp := range plan.Parts {
+		for _, c := range pp.Codes {
+			if c.GPU != nil {
+				mine = append(mine, paritytest.Old(c.GPU))
+			}
+		}
+	}
+	total, same, _ := paritytest.Compare(main, mine)
+	dead := make([]*ir.Kernel, len(mine))
+	for i, k := range mine {
+		c := *k
+		c.Ops = append(append([]ir.Op(nil), k.Ops...), ir.Op{Kind: ir.OpAdd, Type: ir.F32, Args: [3]ir.Value{1, 1}})
+		dead[i] = &c
+	}
+	if _, s, _ := paritytest.Compare(main, dead); s != same {
+		t.Errorf("a dead instruction moved the count: %d, was %d", s, same)
+	}
+	mut := append([]*ir.Kernel(nil), mine...)
+	changed := false
+	for i, k := range mine {
+		for j, op := range k.Ops {
+			if !changed && op.Kind == ir.OpAdd && op.Type == ir.F32 {
+				c := *k
+				c.Ops = append([]ir.Op(nil), k.Ops...)
+				c.Ops[j].Kind = ir.OpMul
+				mut[i], changed = &c, true
+			}
+		}
+	}
+	if _, s, _ := paritytest.Compare(main, mut); !changed || s >= same {
+		t.Errorf("an add made a multiply left the count at %d of %d", s, total)
+	}
+	t.Logf("%d of %d; a dead instruction kept it, an add made a multiply took it down", same, total)
+}
