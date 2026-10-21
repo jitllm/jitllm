@@ -51,9 +51,11 @@ type CodeCost struct {
 }
 
 // EstimateCodes is each call's estimate when placement p runs at step s,
-// in the order the step makes them, in the steady state of decoding: the
-// caches as a step before this one left them.
-func (r *Registry) EstimateCodes(f *jlm.File, s Step, p Placement) ([]CodeCost, error) {
+// in the order the step makes them: where steady is set, in the steady
+// state of decoding, the caches as a step before this one left them; else
+// with nothing the step reads in any cache, as after reads of more than
+// the caches hold.
+func (r *Registry) EstimateCodes(f *jlm.File, s Step, p Placement, steady bool) ([]CodeCost, error) {
 	parts, err := front(f)
 	if err != nil {
 		return nil, err
@@ -74,7 +76,9 @@ func (r *Registry) EstimateCodes(f *jlm.File, s Step, p Placement) ([]CodeCost, 
 		errs = append(errs, err)
 		m := costModel{d: d, s: s}
 		for _, k := range ks {
-			m.cost(k)
+			if steady {
+				m.cost(k)
+			}
 		}
 		for _, k := range ks {
 			c := m.cost(k)

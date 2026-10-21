@@ -17,9 +17,9 @@ func TestHostMeasures(t *testing.T) {
 	}
 	t.Logf("workers %d, call %.1f ns", d.Slots, d.Launch*1e9)
 	for l, c := range d.Caches {
-		t.Logf("L%d %8d KiB: %6.1f GB/s one thread, %6.1f all, %5.1f ns a read", l+1, c.Bytes>>10, c.Rate.Thread/1e9, c.Rate.Total/1e9, c.Latency*1e9)
+		t.Logf("L%d %8d KiB: %6.1f GB/s one thread, %6.1f all, %5.1f ns a read, %6.1f ns a stream's start, keeps %.2f, %.2f cycling", l+1, c.Bytes>>10, c.Rate.Thread/1e9, c.Rate.Total/1e9, c.Latency*1e9, c.Start*1e9, c.Retain, c.Cycle)
 	}
-	t.Logf("memory: %6.1f GB/s one thread, %6.1f all, %5.1f ns a read", d.Thread/1e9, d.Bandwidth/1e9, d.Latency*1e9)
+	t.Logf("memory: %6.1f GB/s one thread, %6.1f all, %5.1f ns a read, %6.1f ns a stream's start", d.Thread/1e9, d.Bandwidth/1e9, d.Latency*1e9, d.Start*1e9)
 	names := [jit.NumClasses]string{"float", "special", "int", "index", "lanes", "group", "mem"}
 	for cl, r := range d.Rates {
 		t.Logf("%-8s %7.2f G/s one thread, %7.2f all, %5.2f ns before its result is used", names[cl], r.Thread/1e9, r.Total/1e9, d.Delay[cl]*1e9)

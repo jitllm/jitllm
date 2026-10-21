@@ -55,29 +55,45 @@ func Host() (jit.Device, error) {
 		return d, err
 	}
 	defer walk.Close()
+	largest := sizes[len(sizes)-1].bytes
+	evict := make([]byte, 2*largest)
 	nearer := int64(0)
 	for l, c := range sizes {
 		if l >= len(d.Caches) {
 			break
 		}
-		all := c.bytes / 2
-		if c.shared {
-			all /= int64(workers)
-		}
 		set := c.bytes / 2
 		if nearer > 0 {
 			set = min(set, 2*nearer)
+		}
+		all := set
+		if c.shared {
+			all = max(min(set, c.bytes/2/int64(workers)), min(set, 2*nearer))
 		}
 		lat, err := chaseLatency(walk, set)
 		if err != nil {
 			return d, err
 		}
-		d.Caches[l] = jit.Cache{Bytes: c.bytes, Rate: jit.Rate{Thread: readRate(read, c.bytes/2, 1), Total: readRate(read, all, workers)}, Latency: lat}
+		rate := readRate(read, set, 1)
+		d.Caches[l] = jit.Cache{Bytes: c.bytes, Rate: jit.Rate{Thread: rate, Total: readRate(read, all, workers)}, Latency: lat}
+		if nearer > 0 {
+			d.Caches[l].Start = streamStart(read, rate, evict[:2*nearer])
+		}
 		nearer = c.bytes
 	}
 	const dram = 512 << 20
 	d.Thread = readRate(read, dram/int64(workers), 1)
 	d.Bandwidth = readRate(read, dram/int64(workers), workers)
+	d.Start = streamStart(read, d.Thread, evict)
+	for l := 1; l < len(sizes) && l < len(d.Caches); l++ {
+		c := d.Caches[l]
+		rate, start := d.Thread, d.Start
+		if l+1 < len(sizes) && l+1 < len(d.Caches) {
+			rate, start = d.Caches[l+1].Rate.Thread, d.Caches[l+1].Start
+		}
+		d.Caches[l].Retain = retention(read, c, rate, start, evict)
+		d.Caches[l].Cycle = cycling(read, c, rate, evict)
+	}
 	if d.Latency, err = chaseLatency(walk, dram); err != nil {
 		return d, err
 	}
@@ -369,6 +385,101 @@ func mixKernel() ([]byte, error) {
 	a.VZEROUPPER()
 	a.RET()
 	return a.Bytes()
+}
+
+// retention is the fraction of a buffer an eighth of cache c's size that
+// c still serves after reads of twice its size: the buffer read, the reads
+// made, the buffer read again and timed, its time placed between all of it
+// served by c and all of it by the level beyond, which serves at rate
+// after start.
+func retention(k *cpu.Code, c jit.Cache, rate, start float64, evict []byte) float64 {
+	n := max(256, c.Bytes/8&^255)
+	buf := make([]byte, n)
+	for i := range buf {
+		buf[i] = byte(i)
+	}
+	at := [2]uint64{uint64(uintptr(unsafe.Pointer(&buf[0]))), uint64(n / 256)}
+	out := [2]uint64{uint64(uintptr(unsafe.Pointer(&evict[0]))), uint64(min(int64(len(evict)), 2*c.Bytes) / 256)}
+	clock := clockCost()
+	var times []float64
+	for range 4 * rounds {
+		k.Call((*cpu.Args)(unsafe.Pointer(&at[0])))
+		k.Call((*cpu.Args)(unsafe.Pointer(&out[0])))
+		t0 := time.Now()
+		k.Call((*cpu.Args)(unsafe.Pointer(&at[0])))
+		times = append(times, time.Since(t0).Seconds()-clock)
+	}
+	runtime.KeepAlive(buf)
+	slices.Sort(times)
+	hit := float64(n)/c.Rate.Thread + c.Start
+	miss := float64(n)/rate + start
+	if miss <= hit {
+		return 0
+	}
+	return min(1, max(0, (miss-times[len(times)/2])/(miss-hit)))
+}
+
+// cycling is the share of cache c's capacity a buffer twice its size,
+// read over and over, finds in it: each pass's time placed between all of
+// it served by c and all of it by the level beyond, at rate.
+func cycling(k *cpu.Code, c jit.Cache, rate float64, evict []byte) float64 {
+	n := min(int64(len(evict)), 2*c.Bytes) &^ 255
+	at := [2]uint64{uint64(uintptr(unsafe.Pointer(&evict[0]))), uint64(n / 256)}
+	var times []float64
+	for range 2 * rounds {
+		t0 := time.Now()
+		k.Call((*cpu.Args)(unsafe.Pointer(&at[0])))
+		times = append(times, time.Since(t0).Seconds())
+	}
+	runtime.KeepAlive(evict)
+	slices.Sort(times)
+	hit, miss := float64(n)/c.Rate.Thread, float64(n)/rate
+	if miss <= hit {
+		return 0
+	}
+	h := min(1, max(0, (miss-times[len(times)/2])/(miss-hit)))
+	return h * float64(n) / float64(c.Bytes)
+}
+
+// clockCost is the seconds reading the clock twice adds to what it times.
+func clockCost() float64 {
+	var times []float64
+	for range 1000 {
+		t0 := time.Now()
+		times = append(times, time.Since(t0).Seconds())
+	}
+	slices.Sort(times)
+	return times[len(times)/2]
+}
+
+// streamStart is the seconds a short read from a level waits beyond its
+// bytes at the level's rate: a 32 KB buffer read, then evict read so the
+// buffer leaves every nearer level, then the buffer read again and timed,
+// the prefetchers starting cold on it.
+func streamStart(k *cpu.Code, rate float64, evict []byte) float64 {
+	const n = 32 << 10
+	buf := make([]byte, n)
+	for i := range buf {
+		buf[i] = byte(i)
+	}
+	for i := range evict {
+		evict[i] = byte(i)
+	}
+	at := [2]uint64{uint64(uintptr(unsafe.Pointer(&buf[0]))), n / 256}
+	out := [2]uint64{uint64(uintptr(unsafe.Pointer(&evict[0]))), uint64(len(evict) / 256)}
+	clock := clockCost()
+	var times []float64
+	for range 4 * rounds {
+		k.Call((*cpu.Args)(unsafe.Pointer(&at[0])))
+		k.Call((*cpu.Args)(unsafe.Pointer(&out[0])))
+		t0 := time.Now()
+		k.Call((*cpu.Args)(unsafe.Pointer(&at[0])))
+		times = append(times, time.Since(t0).Seconds()-clock)
+	}
+	runtime.KeepAlive(buf)
+	runtime.KeepAlive(evict)
+	slices.Sort(times)
+	return max(0, times[len(times)/2]-n/rate)
 }
 
 // readRate is the bytes a second threads reading set bytes each, over and

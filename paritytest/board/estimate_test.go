@@ -19,8 +19,11 @@ import (
 // TestEstimateMatchesTheHost holds the composer's estimate of a decode
 // step on the host, weighed with the host as the probe measures it, to
 // the step's composed kernels run in order on one buffer per operand: each
-// call timed over many steps, its median beside its estimate. It reports each call's ratio and
-// the step's, and the spread of the calls' ratios.
+// call timed over many steps, its median beside its estimate. It runs the
+// steps back to back, the steady state of decoding, and with reads of
+// twice the caches between them, as a model larger than the caches leaves
+// them, each against the estimate of that state. It reports each call's
+// ratio and the step's, and the spread of the calls' ratios.
 func TestEstimateMatchesTheHost(t *testing.T) {
 	d, err := probe.Host()
 	if err != nil {
@@ -31,11 +34,28 @@ func TestEstimateMatchesTheHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
+	for l, c := range d.Caches {
+		t.Logf("L%d %d KiB %.1f GB/s %.1f ns, start %.1f ns, keeps %.2f, %.2f cycling", l+1, c.Bytes>>10, c.Rate.Thread/1e9, c.Latency*1e9, c.Start*1e9, c.Retain, c.Cycle)
+	}
+	t.Logf("memory %.1f GB/s %.1f ns, start %.1f ns", d.Thread/1e9, d.Latency*1e9, d.Start*1e9)
+	t.Run("steady", func(t *testing.T) { estimateStep(t, d, f, true) })
+	t.Run("cold", func(t *testing.T) { estimateStep(t, d, f, false) })
+}
+
+func estimateStep(t *testing.T, d jit.Device, f *jlm.File, steady bool) {
 	s := jit.Step{Rows: 1, Page: 64, Keys: keys(t, *boardModel)}
-	ccs, err := jit.Default().EstimateCodes(f, s, func(jit.Part) jit.Device { return d })
+	ccs, err := jit.Default().EstimateCodes(f, s, func(jit.Part) jit.Device { return d }, steady)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var evict []byte
+	if !steady {
+		evict = make([]byte, 2*d.Caches[len(d.Caches)-1].Bytes)
+		for i := range evict {
+			evict[i] = byte(i)
+		}
+	}
+	sink := byte(0)
 	type call struct {
 		code  *cpu.Code
 		block []uint64
@@ -113,11 +133,10 @@ func TestEstimateMatchesTheHost(t *testing.T) {
 	slices.Sort(floor)
 	clock := floor[len(floor)/2] - d.Launch
 	t.Logf("the clock reads add %.1f ns to a call; taken off each", clock*1e9)
-	for l, c := range d.Caches {
-		t.Logf("L%d %d KiB %.1f GB/s %.1f ns", l+1, c.Bytes>>10, c.Rate.Thread/1e9, c.Latency*1e9)
-	}
-	t.Logf("memory %.1f GB/s %.1f ns", d.Thread/1e9, d.Latency*1e9)
 	for step := range 400 {
+		for i := 0; i < len(evict); i += 64 {
+			sink += evict[i]
+		}
 		for _, c := range calls {
 			t0 := time.Now()
 			c.code.Call((*cpu.Args)(unsafe.Pointer(&c.block[0])))
@@ -127,6 +146,7 @@ func TestEstimateMatchesTheHost(t *testing.T) {
 		}
 	}
 	runtime.KeepAlive(keep)
+	runtime.KeepAlive(sink)
 	var est, got float64
 	var logs []float64
 	for i, c := range calls {

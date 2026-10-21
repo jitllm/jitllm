@@ -33,8 +33,9 @@ type Device struct {
 	// threads, Thread what one thread gets alone; Launch the seconds a
 	// launch or a call costs; Link the bytes a second it exchanges with
 	// another device; Latency the seconds a read that misses every cache
-	// waits for memory.
-	Bandwidth, Thread, Launch, Link, Latency float64
+	// waits for memory, Start what a short stream from memory waits beyond
+	// its bytes at the memory's rate.
+	Bandwidth, Thread, Launch, Link, Latency, Start float64
 	// Caches are its cache levels, nearest first.
 	Caches [3]Cache
 	// Rates are the instructions a second it issues of each class, Issue

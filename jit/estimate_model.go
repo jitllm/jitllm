@@ -49,11 +49,17 @@ func (r Rate) at(threads float64) float64 {
 }
 
 // Cache is one level of a device's caches: its capacity, the bytes a
-// second it serves, and the seconds a read it serves waits.
+// second it serves, the seconds a read it serves waits, the seconds a
+// short stream of reads from it waits beyond its bytes at its rate while
+// the prefetchers start, and the fraction of a buffer it keeps after reads
+// of twice its size since the buffer's last use: 0 for a cache that keeps
+// only the most recent, more for one whose replacement resists a stream;
+// and the share of its capacity a buffer larger than it, read over and
+// over, finds in it.
 type Cache struct {
-	Bytes   int64
-	Rate    Rate
-	Latency float64
+	Bytes                         int64
+	Rate                          Rate
+	Latency, Start, Retain, Cycle float64
 }
 
 // Cost is an estimate of a placement from its final IR, nothing lowered:
@@ -64,11 +70,14 @@ type Cache struct {
 // at the rate a mix issues, whichever is longer; its chain time is its
 // longest fold's: the trips of one entry into the fold's loop, each waiting
 // for the instructions between the fold and its next value.
+// A kernel's memory time is its bytes at the rate of the level each is
+// served from, and the longest start of a stream among them: a level's
+// start, or for a buffer of a few lines its lines read one at a time.
 // Seconds is the largest of each kernel's memory time, compute time and
 // longest chain of dependent reads' waits, plus its launch and the wait
-// for its code where the code is not in the nearest cache -- its first
-// line, and past the second level its page's translation too -- summed; Unknown counts loops whose trips the step does not
-// decide, taken as one.
+// for its code's first line where the code is not in the nearest cache,
+// summed; Unknown counts loops whose trips the step does not decide, taken
+// as one.
 type Cost struct {
 	Bytes, Carried int64
 	// Served is the bytes by level: 0..2 the caches nearest first, 3 the
@@ -123,34 +132,45 @@ type touch struct {
 	bytes int64
 }
 
-// level is where operand o's bytes are served from: the nearest cache the
-// operand and everything touched since its last use fit in, 3 for memory.
-// A buffer larger than a cache displaces half of it, not all: a cache's
-// replacement keeps lines that were reused from a stream read once.
-func (m *costModel) level(o Operand, bytes int64) int {
-	return m.levelOf(touch{o: o, bytes: bytes})
-}
-
-func (m *costModel) levelOf(x touch) int {
-	for i := len(m.recent) - 1; i >= 0; i-- {
-		if t := m.recent[i]; t.o != x.o || t.code != x.code {
+// serve is the fraction of x's bytes each level serves, the caches
+// nearest first and memory last. A level holds them all where they and
+// everything touched since their last use fit in it; past that, the
+// fraction its replacement keeps falls as Retain to the power of how many
+// times over the level those bytes are, and a buffer larger than the level
+// finds no more of itself there than the Cycle share of the level.
+func (m *costModel) serve(x touch) [4]float64 {
+	var out [4]float64
+	i := len(m.recent) - 1
+	for ; i >= 0; i-- {
+		if t := m.recent[i]; t.o == x.o && t.code == x.code {
+			break
+		}
+	}
+	if i < 0 {
+		out[3] = 1
+		return out
+	}
+	since := x.bytes
+	for _, t := range m.recent[i+1:] {
+		since += t.bytes
+	}
+	left := 1.0
+	for l, c := range m.d.Caches {
+		if c.Bytes <= 0 {
 			continue
 		}
-		for l, c := range m.d.Caches {
-			if c.Bytes <= 0 {
-				continue
-			}
-			since := x.bytes
-			for _, t := range m.recent[i+1:] {
-				since += min(t.bytes, c.Bytes/2)
-			}
-			if since <= c.Bytes {
-				return l
-			}
+		keep := 1.0
+		if over := float64(since)/float64(c.Bytes) - 1; over > 0 {
+			keep = math.Pow(c.Retain, over)
 		}
-		return 3
+		if x.bytes > c.Bytes {
+			keep = min(keep, c.Cycle*float64(c.Bytes)/float64(x.bytes))
+		}
+		out[l] = left * keep
+		left -= out[l]
 	}
-	return 3
+	out[3] = left
+	return out
 }
 
 func (m *costModel) touch(o Operand, bytes int64) {
@@ -212,6 +232,14 @@ func (m *costModel) rate(l int, threads float64) float64 {
 	return Rate{Thread: m.d.Thread, Total: m.d.Bandwidth}.at(threads)
 }
 
+// start is the seconds a stream from level l waits to start.
+func (m *costModel) start(l int) float64 {
+	if l < 3 {
+		return m.d.Caches[l].Start
+	}
+	return m.d.Start
+}
+
 // latency is the seconds a read level l serves waits.
 func (m *costModel) latency(l int) float64 {
 	if l < 3 {
@@ -268,9 +296,9 @@ func (m *costModel) chain(e *estimator, live map[int]bool, words map[int]bool) f
 }
 
 // wait is the longest chain of dependent reads in kernel k: each load
-// waits for the loads its index reads, then for the level its buffer is
-// served from.
-func (m *costModel) wait(k *Kernel, live map[int]bool, served map[int]int) float64 {
+// waits for the loads its index reads, then for the levels its buffer is
+// served from, each by its share.
+func (m *costModel) wait(k *Kernel, live map[int]bool, served map[int][4]float64) float64 {
 	memo := make([]float64, len(k.Nodes))
 	state := make([]uint8, len(k.Nodes))
 	var chain func(i int) float64
@@ -285,8 +313,8 @@ func (m *costModel) wait(k *Kernel, live map[int]bool, served map[int]int) float
 			w = max(w, chain(*a))
 		}
 		if nd.Op == OpLoad {
-			if l, ok := served[nd.Buf]; ok {
-				w += m.latency(l)
+			for l, f := range served[nd.Buf] {
+				w += f * m.latency(l)
 			}
 		}
 		memo[i] = w
@@ -368,7 +396,8 @@ func (m *costModel) cost(k *Kernel) Cost {
 		c.Issued[ClassMem] += int64(n)
 	}
 	m.reach = map[int]int64{}
-	served := map[int]int{}
+	served := map[int][4]float64{}
+	var start float64
 	for _, b := range order {
 		u := uses[b]
 		buf := k.Bufs[b]
@@ -386,16 +415,24 @@ func (m *costModel) cost(k *Kernel) Cost {
 		}
 		u.unique = min(u.unique, u.touched, max(0, u.hull.hi-u.hull.lo))
 		uniq := int64(u.unique)
-		l := m.fit(uniq)
+		var from [4]float64
+		from[m.fit(uniq)] = 1
 		if !u.write {
-			l = m.level(buf.Operand, uniq)
+			from = m.serve(touch{o: buf.Operand, bytes: uniq})
+			served[b] = from
 		}
-		if !u.write {
-			served[b] = l
+		for l, f := range from {
+			if f <= 0 {
+				continue
+			}
+			c.Served[l] += int64(f * float64(uniq))
+			c.MemSeconds += f * float64(uniq) / m.rate(l, threads)
+			if !u.write && uniq > 0 && f > 0.05 {
+				lines := math.Ceil(f * float64(uniq) / 64)
+				start = max(start, min(m.start(l), lines*m.latency(l)))
+			}
 		}
 		c.Bytes += uniq
-		c.Served[l] += uniq
-		c.MemSeconds += float64(uniq) / m.rate(l, threads)
 		if again := u.touched - u.unique; again > 0 {
 			near := m.fit(uniq)
 			c.Served[near] += int64(again)
@@ -403,6 +440,7 @@ func (m *costModel) cost(k *Kernel) Cost {
 		}
 		m.touch(buf.Operand, uniq)
 	}
+	c.MemSeconds += start
 	var all float64
 	for cl, n := range c.Issued {
 		if r := m.d.Rates[cl].at(threads); r > 0 && n > 0 {
@@ -416,10 +454,9 @@ func (m *costModel) cost(k *Kernel) Cost {
 	c.LaunchSeconds = m.d.Launch
 	c.WaitSeconds = m.wait(k, live, served)
 	code := touch{code: k, bytes: e.code(live, m.d.Kind)}
-	if l := m.levelOf(code); l > 0 {
-		c.FetchSeconds = m.latency(l)
-		if l > 1 {
-			c.FetchSeconds *= 2
+	for l, f := range m.serve(code) {
+		if l > 0 {
+			c.FetchSeconds += f * m.latency(l)
 		}
 	}
 	m.touchOf(code)
