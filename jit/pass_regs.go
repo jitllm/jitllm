@@ -551,7 +551,7 @@ func (b *binder86) vectors() error {
 		if nd.Hint > 0 || nd.Share > 0 && shared[nd.Share] > 0 {
 			free(pos, false)
 			want := nd.Hint - 1
-			if nd.Share > 0 {
+			if nd.Share > 0 && shared[nd.Share] > 0 {
 				want = shared[nd.Share] - 1
 			}
 			if want < 0 || busy[want] {
@@ -898,11 +898,12 @@ func (k *Kernel) reload(best int, moved map[int]bool) {
 	k.Seq = out
 }
 
-// residents orders the loads of the shared constant block's resident words
-// by word, where they stand, and loads each other word where it is read.
+// residents loads the shared constant block's resident words by word as
+// the call starts, after its argument words, and each other word where it
+// is read.
 func (k *Kernel) residents(res map[int]int, moved map[int]bool) {
-	var at, loads []int
-	for p, e := range k.Seq {
+	var loads []int
+	for _, e := range k.Seq {
 		if e.Kind != EntryNode {
 			continue
 		}
@@ -911,7 +912,6 @@ func (k *Kernel) residents(res map[int]int, moved map[int]bool) {
 			continue
 		}
 		if _, ok := res[int(k.Nodes[nd.A].Imm)]; ok {
-			at = append(at, p)
 			loads = append(loads, e.I)
 			moved[e.I] = true
 		}
@@ -919,8 +919,23 @@ func (k *Kernel) residents(res map[int]int, moved map[int]bool) {
 	slices.SortStableFunc(loads, func(a, b int) int {
 		return cmp.Compare(k.Nodes[k.Nodes[a].A].Imm, k.Nodes[k.Nodes[b].A].Imm)
 	})
-	for j, p := range at {
-		k.Seq[p].I = loads[j]
+	if len(loads) > 0 {
+		var seq []Entry
+		start := 0
+		for _, e := range k.Seq {
+			if e.Kind == EntryNode && moved[e.I] {
+				continue
+			}
+			seq = append(seq, e)
+			if e.Kind == EntryNode && k.Nodes[e.I].Op == OpParam && start == len(seq)-1 {
+				start = len(seq)
+			}
+		}
+		head := make([]Entry, 0, len(loads))
+		for _, l := range loads {
+			head = append(head, Entry{Kind: EntryNode, I: l})
+		}
+		k.Seq = append(append(append([]Entry(nil), seq[:start]...), head...), seq[start:]...)
 	}
 	for _, e := range slices.Clone(k.Seq) {
 		if e.Kind != EntryNode {

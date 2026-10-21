@@ -520,11 +520,10 @@ func (k *Kernel) interleave(seq []Entry) []Entry {
 	return out
 }
 
-// startsOnly reports whether node i is a load of constants only sums start
-// from: the sum's start loads it.
+// startsOnly reports whether node i is a load, at the buffer's own address
+// or of constants, only sums start from: the sum's start loads it.
 func (k *Kernel) startsOnly(i int) bool {
-	nd := k.Nodes[i]
-	if nd.Op != OpLoad || k.Bufs[nd.Buf].Operand.Kind != OperandConsts {
+	if nd := k.Nodes[i]; nd.Op != OpLoad || nd.Ptr > 0 && k.Bufs[nd.Buf].Operand.Kind != OperandConsts {
 		return false
 	}
 	for j, x := range k.Nodes {

@@ -10,11 +10,12 @@ import (
 // [-87.3, 88], n = round(x*log2e), r = x - n*ln2 with ln2 in two parts so
 // n*hi is exact, exp(r) by Horner on ((((c5 r + c4) r + c3) r + c2) r + 1) r
 // + 1, and 2^n made in the exponent field as (n + 127) << 23. Where
-// Scratch is set, the value is worked in the register of the value it is
-// made from and the result returned there, and the reduction's and the
-// polynomial's values take Scratch[0], the exponent's Scratch[1].
+// Scratch is set, the value is worked in Scratch[0], the register of the
+// value it is made from, and the result returned there, and the
+// reduction's and the polynomial's values take Scratch[1], the exponent's
+// Scratch[2].
 type Exp struct {
-	Scratch [2]int
+	Scratch [3]int
 }
 
 func (Exp) Name() string { return "exp" }
@@ -38,11 +39,11 @@ func (p Exp) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	})
 }
 
-func (k *Kernel) expand(i int, scratch [2]int) {
+func (k *Kernel) expand(i int, scratch [3]int) {
 	F, I := ir.F32, ir.I32
 	hint := func(n, s int) int {
-		if scratch != [2]int{} {
-			k.Nodes[n].Hint = scratch[s] + 1
+		if scratch != [3]int{} {
+			k.Nodes[n].Hint = scratch[s+1] + 1
 		}
 		return n
 	}
@@ -50,10 +51,11 @@ func (k *Kernel) expand(i int, scratch [2]int) {
 	fma := func(a, b, z int) int { return k.add(Node{Op: OpFma, Type: F, A: a, B: b, C: z}) }
 	x := k.Nodes[i].A
 	share := i + 1
-	if in := k.Nodes[x]; scratch != [2]int{} && arity(in.Op) == 2 {
+	if in := k.Nodes[x]; scratch != [3]int{} && arity(in.Op) == 2 {
 		for _, o := range []int{in.A, in.B} {
 			if k.Nodes[o].Op == OpLoad && k.Nodes[o].Type == F {
 				k.Nodes[o].Share, k.Nodes[x].Share = share, share
+				k.Nodes[o].Hint = scratch[0] + 1
 				break
 			}
 		}
@@ -72,7 +74,7 @@ func (k *Kernel) expand(i int, scratch [2]int) {
 	}
 	e := hint(k.bin(OpShl, I, hint(k.bin(OpAdd, I, n, k.add(Node{Op: OpConst, Type: I, Imm: 127})), 1), k.add(Node{Op: OpConst, Type: I, Imm: 23})), 1)
 	k.Nodes[i] = Node{Op: OpMul, Type: F, A: q, B: k.un(OpBitcast, F, e)}
-	if scratch != [2]int{} {
+	if scratch != [3]int{} {
 		k.Nodes[i].Share = share
 	}
 }

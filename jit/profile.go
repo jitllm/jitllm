@@ -60,7 +60,7 @@ func cpuProfile() Profile {
 		InPlace{},
 		Halves{KeepsPayload: true},
 		Axpy{},
-		Exp{Scratch: [2]int{1, 2}},
+		Exp{Scratch: [3]int{0, 1, 2}},
 		FMA{},
 		FirstTerm{},
 		Vectorize{Lanes: 8, Pairs: [5]int{0, 2, 3, 4, 5}},

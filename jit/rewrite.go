@@ -152,6 +152,34 @@ func (n *Kernel) copyOf(i int, sub map[int]int) int {
 	return walk(i)
 }
 
+// copyKeep is copyOf with each copy kept in sub, so a later copy of the
+// same nodes reuses it.
+func (n *Kernel) copyKeep(i int, sub map[int]int) int {
+	var walk func(i int) int
+	walk = func(i int) int {
+		if v, ok := sub[i]; ok {
+			return v
+		}
+		nd := n.Nodes[i]
+		if nd.Op == OpFold {
+			return i
+		}
+		changed := false
+		for _, p := range n.args(&nd) {
+			if v := walk(*p); v != *p {
+				*p, changed = v, true
+			}
+		}
+		if !changed {
+			return i
+		}
+		v := n.add(nd)
+		sub[i] = v
+		return v
+	}
+	return walk(i)
+}
+
 // sumFold reports whether fold f's step adds into it: an fma onto it or an
 // add of it.
 func (n *Kernel) sumFold(f int) bool {

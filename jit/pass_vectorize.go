@@ -153,7 +153,7 @@ func (k *Kernel) vectorize(c, L int) {
 		ft := k.add(Node{Op: OpFold, At: t, Type: k.Nodes[f].Type, B: f})
 		step := k.Nodes[f].A
 		sub[f] = ft
-		k.Nodes[ft].A = k.copyOf(step, sub)
+		k.Nodes[ft].A = k.copyKeep(step, sub)
 		if st := &k.Nodes[k.Nodes[ft].A]; st.Op == OpAdd && st.A == ft && !k.zeroKept(st.B, t) {
 			term := st.B
 			st.B = k.add(Node{Op: OpFirstLane, Type: ir.F32, A: term, B: k.add(Node{Op: OpConst, Type: ir.F32})})
@@ -185,14 +185,14 @@ func (k *Kernel) vectorize(c, L int) {
 		last = i
 		n := s
 		n.At = t
-		n.Val = k.copyOf(s.Val, sub)
+		n.Val = k.copyKeep(s.Val, sub)
 		if s.Ax != nil {
 			n.Ax = make([]int, len(s.Ax))
 			for j, a := range s.Ax {
-				n.Ax[j] = k.copyOf(a, sub)
+				n.Ax[j] = k.copyKeep(a, sub)
 			}
 		} else {
-			n.Ix = k.copyOf(s.Ix, sub)
+			n.Ix = k.copyKeep(s.Ix, sub)
 		}
 		stores = append(stores, n)
 	}
