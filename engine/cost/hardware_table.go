@@ -553,6 +553,76 @@ var hardware = []Profile{
 		},
 	},
 	{
+		Name:   "Tesla T4",
+		API:    "ptx",
+		Source: "probe",
+		Device: Device{
+			Device: jit.Device{
+				Kind:  jit.DeviceGPU,
+				Slots: 40960,
+				Lanes: 32,
+			},
+			Units:     40,
+			Bandwidth: 2.136e+11,
+			Launch:    3.14e-06,
+			Latency:   3.173e-07,
+			Floor:     6.565e-06,
+			Overlap:   2.906,
+			Caches: [3]Cache{
+				0: {
+					Bytes: 48 << 10,
+					Rate: Rate{
+						Total: 3.397e+12,
+					},
+					Latency: 2.687e-08,
+					Kernel:  true,
+				},
+				1: {
+					Bytes: 4 << 20,
+					Rate: Rate{
+						Total: 1.445e+12,
+					},
+					Latency: 1.47e-07,
+				},
+			},
+			Rates: [NumClasses]Rate{
+				ClassFloat: {
+					Thread: 7.67e+08,
+					Total:  3.982e+12,
+				},
+				ClassSpecial: {
+					Thread: 1.702e+08,
+					Total:  9.917e+11,
+				},
+				ClassInt: {
+					Thread: 7.593e+08,
+					Total:  4.031e+12,
+				},
+				ClassIndex: {
+					Thread: 7.689e+08,
+					Total:  3.988e+12,
+				},
+				ClassLanes: {
+					Thread: 2.462e+08,
+					Total:  1.008e+12,
+				},
+				ClassGroup: {
+					Thread: 4.146e+06,
+					Total:  7.555e+10,
+				},
+			},
+			Delay: [NumClasses]float64{
+				ClassFloat:   2.534e-09,
+				ClassSpecial: 2.644e-08,
+				ClassInt:     2.579e-09,
+				ClassIndex:   2.533e-09,
+				ClassLanes:   1.456e-08,
+				ClassGroup:   2.353e-07,
+				ClassMem:     2.687e-08,
+			},
+		},
+	},
+	{
 		Name:   "Tesla V100-SXM2-16GB",
 		API:    "ptx",
 		Source: "probe",
