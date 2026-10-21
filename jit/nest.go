@@ -8,11 +8,13 @@ import (
 )
 
 // Nest is one kernel's computation: an element space, sequential loops in
-// it, scalar nodes, and the stores each element makes.
+// it, scalar nodes, and the stores each element makes, in order.
 type Nest struct {
 	Name string
-	// Space is the element space's extents, the last fastest.
+	// Space is the element space's extents, the last fastest. Under Work an
+	// element is a workgroup of Group threads, else a thread.
 	Space  []int
+	Work   bool
 	Loops  []Loop
 	Nodes  []Node
 	Stores []Store
@@ -24,9 +26,12 @@ type Nest struct {
 }
 
 // Loop runs Trip times; Parent is the loop it sits in, -1 for the element.
+// A Spread loop deals its trips over the workgroup's threads, its iteration
+// the thread plus the trip times the group.
 type Loop struct {
 	Trip   int
 	Parent int
+	Spread bool
 }
 
 type BufKind uint8
@@ -67,6 +72,19 @@ const (
 	// OpLess is A < B, a predicate; OpSelect is B where A holds, else C.
 	OpLess
 	OpSelect
+	OpSqrt
+	OpExp
+	OpShl
+	OpShr
+	OpAnd
+	OpXor
+	OpCvtF32
+	OpCvtI32
+	// OpThread is the thread's index in its workgroup.
+	OpThread
+	// OpGroupSum and OpGroupMax combine A over the workgroup's threads.
+	OpGroupSum
+	OpGroupMax
 )
 
 // Node is one scalar value. Load reads Bufs[Buf] at index A.
@@ -79,8 +97,8 @@ type Node struct {
 	Imm     int64
 }
 
-// Store writes node Val at index Ix of Bufs[Buf], after loop At's last trip
-// (-1 for the element's end).
+// Store writes node Val at index Ix of Bufs[Buf]: each trip of loop At, or
+// at the element's end where At is -1.
 type Store struct {
 	Buf, Ix, Val int
 	At           int
@@ -96,6 +114,8 @@ func (n *Nest) u32(v int) int { return n.add(Node{Op: OpConst, Type: ir.U32, Imm
 func (n *Nest) f32(bits uint32) int { return n.add(Node{Op: OpConst, Type: ir.F32, Imm: int64(bits)}) }
 
 func (n *Nest) bin(op Op, t ir.Type, a, b int) int { return n.add(Node{Op: op, Type: t, A: a, B: b}) }
+
+func (n *Nest) un(op Op, t ir.Type, a int) int { return n.add(Node{Op: op, Type: t, A: a}) }
 
 func (n *Nest) loop(trip, parent int) int {
 	n.Loops = append(n.Loops, Loop{Trip: trip, Parent: parent})
@@ -114,6 +134,7 @@ func (n *Nest) clone() *Nest {
 	c.Nodes = append([]Node(nil), n.Nodes...)
 	c.Stores = append([]Store(nil), n.Stores...)
 	c.Bufs = append([]Buf(nil), n.Bufs...)
+	c.Passes = append([]string(nil), n.Passes...)
 	return &c
 }
 
@@ -127,7 +148,7 @@ func (n *Nest) elements() int {
 
 func (n *Nest) String() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s space %v loops %v\n", n.Name, n.Space, n.Loops)
+	fmt.Fprintf(&b, "%s space %v work %v loops %v\n", n.Name, n.Space, n.Work, n.Loops)
 	for i, nd := range n.Nodes {
 		fmt.Fprintf(&b, "  %d: op %d %s a %d b %d c %d at %d buf %d imm %d\n", i, nd.Op, nd.Type, nd.A, nd.B, nd.C, nd.At, nd.Buf, nd.Imm)
 	}

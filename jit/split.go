@@ -9,6 +9,7 @@ import "github.com/jitllm/jitllm/jit/ir"
 // segment.
 type Split struct {
 	Slots, Max, Block int
+	Kinds             []PrimKind
 }
 
 func (Split) Name() string { return "split" }
@@ -19,7 +20,7 @@ func (s Split) Apply(prog []*Nest, t Target) ([]*Nest, error) {
 
 func (s Split) apply(n *Nest) ([]*Nest, bool, error) {
 	c, f, term, st, ok := splittable(n)
-	if !ok {
+	if !ok || !covers(s.Kinds, n.Kind) {
 		return nil, false, nil
 	}
 	T, E := n.Loops[c].Trip, n.elements()

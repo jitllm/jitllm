@@ -5,7 +5,8 @@ import "github.com/jitllm/jitllm/jit/ir"
 // Blocks runs a sum loop Size trips at a time: each block's trips unrolled
 // as one chain from zero, the chain added into the sum once a block.
 type Blocks struct {
-	Size int
+	Size  int
+	Kinds []PrimKind
 }
 
 func (Blocks) Name() string { return "blocks" }
@@ -16,6 +17,9 @@ func (b Blocks) Apply(prog []*Nest, t Target) ([]*Nest, error) {
 
 func (b Blocks) apply(n *Nest) ([]*Nest, bool, error) {
 	B := b.Size
+	if !covers(b.Kinds, n.Kind) {
+		return nil, false, nil
+	}
 	var r *Nest
 	for c := range n.Loops {
 		folds := n.foldsOf(c)

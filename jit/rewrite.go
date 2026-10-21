@@ -27,17 +27,28 @@ func (n *Nest) redirect(from, to, keep int) {
 
 // args is node nd's operand fields, a fold's start and step among them.
 func (n *Nest) args(nd *Node) []*int {
-	switch nd.Op {
-	case OpConst, OpCoord, OpIter:
+	switch arity(nd.Op) {
+	case 0:
 		return nil
-	case OpFold:
-		return []*int{&nd.A, &nd.B}
-	case OpLoad, OpBitcast:
+	case 1:
 		return []*int{&nd.A}
-	case OpFma, OpSelect:
+	case 3:
 		return []*int{&nd.A, &nd.B, &nd.C}
 	}
 	return []*int{&nd.A, &nd.B}
+}
+
+// arity is how many operands an op reads, a fold its step and its start.
+func arity(op Op) int {
+	switch op {
+	case OpConst, OpCoord, OpIter, OpThread:
+		return 0
+	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax:
+		return 1
+	case OpFma, OpSelect:
+		return 3
+	}
+	return 2
 }
 
 // varies reports whether node i changes from trip to trip of loop c.

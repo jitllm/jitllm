@@ -94,7 +94,10 @@ func TestBlockGraph(t *testing.T) {
 	t.Log(m.BlockGraph(0).String())
 }
 
-var boardDump = flag.String("board-dump", "", "TestMainDecodeKernels writes out every op of main's kernels with this name prefix")
+var (
+	boardDump    = flag.String("board-dump", "", "TestMainDecodeKernels writes out every op of main's kernels with this name prefix")
+	boardExplain = flag.String("board-explain", "", "TestBoard writes out what main's kernels with this name prefix miss")
+)
 
 func dump(t *testing.T, k *ir.Kernel) {
 	for i, o := range k.Ops {
@@ -155,8 +158,12 @@ func TestBoard(t *testing.T) {
 	}
 	total, same, miss := paritytest.Compare(main, mine)
 	byKernel := map[string]int{}
+	in := paritytest.NewInterner()
 	for _, m := range miss {
 		byKernel[m.K.Name]++
+		if *boardExplain != "" && strings.HasPrefix(m.K.Name, *boardExplain) {
+			t.Logf("%s misses %%%d %s", m.K.Name, m.Op+1, paritytest.Explain(in, m.K, m.Op, 3))
+		}
 	}
 	for _, k := range main {
 		if n := byKernel[k.Name]; n > 0 {

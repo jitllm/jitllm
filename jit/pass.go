@@ -69,9 +69,21 @@ func ProfileFor(t Target, rows int) Profile {
 	if rows == 1 {
 		pairs = append(pairs, Pair{From: PrimContract, To: PrimMap})
 	}
+	contract := []PrimKind{PrimContract}
 	return Profile{Passes: []Pass{
 		Fuse{Pairs: pairs},
-		Split{Slots: 30720, Max: 32, Block: 32},
-		Blocks{Size: 32},
+		WorkRow{Group: 1024},
+		Split{Slots: 30720, Max: 32, Block: 32, Kinds: contract},
+		Blocks{Size: 32, Kinds: contract},
 	}}
+}
+
+// covers reports whether a pass's kinds include k.
+func covers(kinds []PrimKind, k PrimKind) bool {
+	for _, x := range kinds {
+		if x == k {
+			return true
+		}
+	}
+	return false
 }
