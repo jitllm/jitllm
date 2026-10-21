@@ -7,6 +7,7 @@ func gpuProfile() Profile {
 		RunLengths{Grain: 128, Align: 32},
 		SplitRange{Pad: 32, Copies: 32, Work: mainWorkgroups},
 		WorkFuse{Work: mainWorkgroups},
+		HeadGroups{Work: mainWorkgroups},
 		Fuse{Pairs: []Pair{{From: PrimMap, To: PrimMap, AtStores: true}, {From: PrimContract, To: PrimMap, Additive: true}}},
 		Threads{Group: 128},
 		WorkRow{Group: 1024},
