@@ -61,6 +61,7 @@ func cpuProfile() Profile {
 		Exp{},
 		FMA{},
 		Vectorize{Lanes: 8},
+		InPlace{},
 		Unroll{Vectors: 4},
 		Chains{N: 4},
 		Simplify{ConstLast: true},

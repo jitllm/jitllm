@@ -187,3 +187,77 @@ func TestComposedSamplingRuns(t *testing.T) {
 	}
 	t.Logf("%d rows, the longest %d", ran, extent)
 }
+
+// TestComposedRoPERuns runs each host kernel of the block that turns a
+// row in place by the rotary table, on head counts the call passes, held to
+// the rotation of each pair: x0 c - x1 s and x0 s + x1 c.
+func TestComposedRoPERuns(t *testing.T) {
+	plan, err := composed(t, *boardModel, func(jit.Part) jit.Device { return host })
+	if plan == nil {
+		t.Fatal(err)
+	}
+	ran := 0
+	for _, pp := range plan.Parts {
+		for ci := range pp.Codes {
+			code := &pp.Codes[ci]
+			var table, row, heads *jit.CallArg
+			for ai := range code.Args {
+				a := &code.Args[ai]
+				switch {
+				case a.Operand.Name == "rope.cs" && !code.Writes(a.Operand):
+					table = a
+				case a.Length:
+					heads = a
+				case !a.Value && a.Words == nil && code.Writes(a.Operand):
+					row = a
+				}
+			}
+			if table == nil || row == nil || heads == nil || len(code.Args) != 3 {
+				continue
+			}
+			c, err := cpu.Map(code.CPU)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rng := rand.New(rand.NewSource(2))
+			const hd = 16
+			for _, n := range []int{1, 2, heads.Extent} {
+				x := make([]float32, heads.Extent*hd+8)
+				for i := range x {
+					x[i] = float32(rng.NormFloat64())
+				}
+				cs := make([]float32, hd)
+				for i := range cs {
+					cs[i] = float32(rng.NormFloat64())
+				}
+				want := append([]float32(nil), x...)
+				for h := range n {
+					for p := range hd / 2 {
+						x0, x1 := x[h*hd+2*p], x[h*hd+2*p+1]
+						co, si := cs[2*p], cs[2*p+1]
+						want[h*hd+2*p] = x0*co - x1*si
+						want[h*hd+2*p+1] = x0*si + x1*co
+					}
+				}
+				block := make([]uint64, 64)
+				block[row.Field/8] = uint64(uintptr(unsafe.Pointer(&x[row.Offset])))
+				block[table.Field/8] = uint64(uintptr(unsafe.Pointer(&cs[table.Offset])))
+				block[heads.Field/8] = uint64(n)
+				c.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
+				runtime.KeepAlive(x)
+				runtime.KeepAlive(cs)
+				for i := range want {
+					if x[i] != want[i] {
+						t.Errorf("%s kernel %d, %d heads: word %d %v, want %v", pp.Part, ci, n, i, x[i], want[i])
+						break
+					}
+				}
+				ran++
+			}
+		}
+	}
+	if ran == 0 {
+		t.Fatal("no host rotary kernel in the plan")
+	}
+	t.Logf("%d rotations", ran)
+}

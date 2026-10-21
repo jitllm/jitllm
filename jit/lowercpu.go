@@ -229,6 +229,14 @@ func (e *x86Lowerer) node(i int) {
 		a.VPANDN(e.reg(i), e.reg(nd.B), e.reg(nd.A))
 	case OpOr:
 		a.VPOR(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+	case OpDupEven:
+		a.VMOVSLDUP(e.reg(i), e.reg(nd.A))
+	case OpDupOdd:
+		a.VMOVSHDUP(e.reg(i), e.reg(nd.A))
+	case OpSwapPairs:
+		a.VPERMILPS(e.reg(i), e.reg(nd.A), 0xB1)
+	case OpAddSub:
+		a.VADDSUBPS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 	case OpSar:
 		a.VPSRAD(e.reg(i), e.reg(nd.A), byte(k.Nodes[nd.B].Imm))
 	case OpEq:

@@ -7,8 +7,8 @@ import "github.com/jitllm/jitllm/jit/ir"
 // loop over positions bound as Over, Factor trips a trip. Where Vectors is
 // set, a vector loop that carries sums alone and stores nothing, or that runs a
 // fixed count of at least Vectors trips, runs Vectors vectors a trip, the
-// vectors left in a loop of one a trip after it; a sum's vector loop of
-// fewer fixed trips runs them all in one.
+// vectors left in a loop of one a trip after it; a vector loop of fewer
+// fixed trips that carries sums alone or only stores runs them all in one.
 type Unroll struct {
 	Full    int
 	Factor  int
@@ -30,7 +30,8 @@ func (p Unroll) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 					sum = sum && m.sumFold(f)
 				}
 				fixed := l.Count == 0 && l.Trip >= p.Vectors && len(m.foldsOf(c)) == 0
-				if l.Lanes > 0 && l.Copies == 0 && !m.hasInner(c) && sum && l.Count == 0 && l.Trip > 1 && l.Trip < p.Vectors {
+				stores := len(m.foldsOf(c)) == 0 && m.storesAt(c)
+				if l.Lanes > 0 && l.Copies == 0 && !m.hasInner(c) && (sum || stores) && l.Count == 0 && l.Trip > 1 && l.Trip < p.Vectors {
 					m.unrollShort(c)
 					changed = true
 					continue
@@ -265,5 +266,27 @@ func (k *Kernel) unrollShort(c int) {
 		}
 		k.Nodes[f].A = acc
 	}
+	var out []Store
+	for _, s := range k.Stores {
+		out = append(out, s)
+		if s.At != c || s.Barrier || s.Run {
+			continue
+		}
+		for j := 1; j < n; j++ {
+			sub := map[int]int{it: k.bin(OpAdd, ir.U32, it, k.u32(j*L))}
+			ns := s
+			ns.Val = k.copyOf(s.Val, sub)
+			if s.Ax != nil {
+				ns.Ax = make([]int, len(s.Ax))
+				for x, a := range s.Ax {
+					ns.Ax[x] = k.copyOf(a, sub)
+				}
+			} else {
+				ns.Ix = k.copyOf(s.Ix, sub)
+			}
+			out = append(out, ns)
+		}
+	}
+	k.Stores = out
 	k.Loops[c].Copies, k.Loops[c].Trip = n, 1
 }

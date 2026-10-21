@@ -176,8 +176,8 @@ func (k *Kernel) readOutside(f int) bool {
 	return false
 }
 
-// rowOfValue reports whether loop c's iteration is a coordinate of a
-// value's row the kernel reads or writes.
+// rowOfValue reports whether loop c's iteration moves a coordinate of a
+// value's row the kernel reads or writes by a constant step.
 func (k *Kernel) rowOfValue(c int) bool {
 	it := k.iterOf(c)
 	if it < 0 {
@@ -187,22 +187,27 @@ func (k *Kernel) rowOfValue(c int) bool {
 		o := k.Bufs[b].Operand
 		return o.Kind == OperandValue || o.Kind == OperandScratch
 	}
-	for _, nd := range k.Nodes {
-		if nd.Op == OpLoad && nd.Ax != nil && isValue(nd.Buf) {
-			for _, a := range nd.Ax {
-				if a == it {
-					return true
-				}
+	g := newAlg(k)
+	moves := func(ax []int) bool {
+		for _, a := range ax {
+			if a == it {
+				return true
 			}
+			w, _ := g.coef(g.of(a), g.id(atom{node: it}))
+			if n, ok := w.constant(); ok && n > 0 {
+				return true
+			}
+		}
+		return false
+	}
+	for _, nd := range k.Nodes {
+		if nd.Op == OpLoad && nd.Ax != nil && isValue(nd.Buf) && moves(nd.Ax) {
+			return true
 		}
 	}
 	for _, s := range k.Stores {
-		if s.Ax != nil && !s.Barrier && !s.Run && isValue(s.Buf) {
-			for _, a := range s.Ax {
-				if a == it {
-					return true
-				}
-			}
+		if s.Ax != nil && !s.Barrier && !s.Run && isValue(s.Buf) && moves(s.Ax) {
+			return true
 		}
 	}
 	return false

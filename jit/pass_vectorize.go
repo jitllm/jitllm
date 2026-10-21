@@ -25,6 +25,11 @@ func (p Vectorize) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		m := k.clone()
 		changed := false
 		for c := 0; c < len(m.Loops); c++ {
+			if cp, ok := m.complexPairOf(c, p.Lanes); ok {
+				m.vectorizeComplex(c, p.Lanes, cp)
+				changed = true
+				continue
+			}
 			if m.vectorizable(c) {
 				m.vectorize(c, p.Lanes)
 				changed = true
@@ -263,6 +268,153 @@ func (k *Kernel) readAfter(c, t int, sub map[int]int, first int) {
 			k.Stores[i].Val = r
 		}
 	}
+}
+
+// complexPair is a loop's product of two interleaved pairs as complex
+// numbers: stores lo and hi of a*c - b*s and a*s + b*c, a and b the loads
+// of one buffer at 2i and 2i+1, c and s of another.
+type complexPair struct{ a, c, lo, hi int }
+
+// complexPairOf is innermost loop cl's complex product, where its pairs
+// fill whole vectors of lanes L.
+func (k *Kernel) complexPairOf(cl, L int) (complexPair, bool) {
+	l := k.Loops[cl]
+	it := k.iterOf(cl)
+	if l.Lanes > 0 || l.Count > 0 || it < 0 || len(k.innerLoops(cl)) > 0 || len(k.foldsOf(cl)) > 0 || 2*l.Trip%L != 0 {
+		return complexPair{}, false
+	}
+	var st []int
+	for i, s := range k.Stores {
+		if s.At == cl && !s.Barrier && !s.Run {
+			st = append(st, i)
+		}
+	}
+	if len(st) != 2 {
+		return complexPair{}, false
+	}
+	g := newAlg(k)
+	last := func(ix int, ax []int) int {
+		if ax != nil {
+			return ax[len(ax)-1]
+		}
+		return ix
+	}
+	same := func(x, y []int) bool {
+		if len(x) != len(y) {
+			return false
+		}
+		for i := range x[:max(0, len(x)-1)] {
+			if x[i] != y[i] {
+				return false
+			}
+		}
+		return true
+	}
+	// pair reports whether index lo moves two a trip and hi is one past it.
+	pair := func(lo, hi int) bool {
+		w, _ := g.coef(g.of(lo), g.id(atom{node: it}))
+		if two, ok := w.constant(); !ok || two != 2 {
+			return false
+		}
+		d := g.of(hi)
+		d.add(g.of(lo), -1)
+		one, ok := g.merged(d).constant()
+		return ok && one == 1
+	}
+	s0, s1 := k.Stores[st[0]], k.Stores[st[1]]
+	if k.Bufs[s0.Buf].Operand != k.Bufs[s1.Buf].Operand || !same(s0.Ax, s1.Ax) {
+		return complexPair{}, false
+	}
+	if !pair(last(s0.Ix, s0.Ax), last(s1.Ix, s1.Ax)) {
+		s0, s1, st[0], st[1] = s1, s0, st[1], st[0]
+		if !pair(last(s0.Ix, s0.Ax), last(s1.Ix, s1.Ax)) {
+			return complexPair{}, false
+		}
+	}
+	mul := func(i int) (int, int, bool) {
+		nd := k.Nodes[i]
+		return nd.A, nd.B, nd.Op == OpMul && nd.Type == ir.F32
+	}
+	y0, y1 := k.Nodes[s0.Val], k.Nodes[s1.Val]
+	if y0.Op != OpSub || y1.Op != OpAdd {
+		return complexPair{}, false
+	}
+	a, c, ok1 := mul(y0.A)
+	b, s, ok2 := mul(y0.B)
+	if !ok1 || !ok2 {
+		return complexPair{}, false
+	}
+	load := func(i int) (Node, bool) {
+		nd := k.Nodes[i]
+		return nd, nd.Op == OpLoad && k.varies(i, cl)
+	}
+	la, oka := load(a)
+	lb, okb := load(b)
+	lc, okc := load(c)
+	ls, oks := load(s)
+	if !oka || !okb || !okc || !oks {
+		return complexPair{}, false
+	}
+	of := func(nd Node) Operand { return k.Bufs[nd.Buf].Operand }
+	if of(la) != of(lb) {
+		a, c, la, lc = c, a, lc, la
+		b, s, lb, ls = s, b, ls, lb
+	}
+	if of(la) != of(lb) || of(lc) != of(ls) || of(la) == of(lc) || !same(la.Ax, lb.Ax) || !same(lc.Ax, ls.Ax) ||
+		!pair(last(la.A, la.Ax), last(lb.A, lb.Ax)) || !pair(last(lc.A, lc.Ax), last(ls.A, ls.Ax)) {
+		return complexPair{}, false
+	}
+	is := func(i, x, y int) bool {
+		p, q, ok := mul(i)
+		return ok && (p == x && q == y || p == y && q == x)
+	}
+	if !(is(y1.A, a, s) && is(y1.B, b, c) || is(y1.A, b, c) && is(y1.B, a, s)) {
+		return complexPair{}, false
+	}
+	return complexPair{a: a, c: c, lo: st[0], hi: st[1]}, true
+}
+
+// vectorizeComplex runs loop c's complex product over elements, L a trip:
+// each lane its element times its pair's first of the other operand, plus
+// or minus the pair's other element times the pair's second, as
+// addsub(x * even(t), swap(x) * odd(t)).
+func (k *Kernel) vectorizeComplex(c, L int, cp complexPair) {
+	g := newAlg(k)
+	it := k.iterOf(c)
+	halves := map[int]int{}
+	half := func(ix int) int {
+		if h, ok := halves[ix]; ok {
+			return h
+		}
+		_, rest := g.coef(g.of(ix), g.id(atom{node: it}))
+		halves[ix] = k.bin(OpAdd, ir.U32, g.build(rest), it)
+		return halves[ix]
+	}
+	at := func(nd Node) Node {
+		if nd.Ax != nil {
+			nd.Ax = append([]int(nil), nd.Ax...)
+			nd.Ax[len(nd.Ax)-1] = half(nd.Ax[len(nd.Ax)-1])
+		} else {
+			nd.A = half(nd.A)
+		}
+		return nd
+	}
+	x := k.add(at(k.Nodes[cp.a]))
+	t := k.add(at(k.Nodes[cp.c]))
+	p := k.bin(OpMul, ir.F32, x, k.add(Node{Op: OpDupEven, Type: ir.F32, A: t}))
+	q := k.bin(OpMul, ir.F32, k.add(Node{Op: OpSwapPairs, Type: ir.F32, A: x}), k.add(Node{Op: OpDupOdd, Type: ir.F32, A: t}))
+	s := k.Stores[cp.lo]
+	if s.Ax != nil {
+		s.Ax = append([]int(nil), s.Ax...)
+		s.Ax[len(s.Ax)-1] = half(s.Ax[len(s.Ax)-1])
+	} else {
+		s.Ix = half(s.Ix)
+	}
+	s.Val = k.bin(OpAddSub, ir.F32, p, q)
+	k.Stores[cp.lo] = s
+	k.Stores = append(k.Stores[:cp.hi:cp.hi], k.Stores[cp.hi+1:]...)
+	k.Loops[c].Trip = 2 * k.Loops[c].Trip / L
+	k.Loops[c].Lanes = L
 }
 
 // pairStores is loop c's two stores, where they are a pair: one buffer at

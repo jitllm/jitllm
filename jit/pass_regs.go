@@ -548,7 +548,7 @@ func (b *binder86) vectors() error {
 		}
 		first := -1
 		switch nd.Op {
-		case OpAdd, OpSub, OpMul, OpMin, OpMax, OpHSum, OpHMax, OpHMin, OpBitcast, OpBroadcast, OpSqrt, OpAnd, OpGtW, OpAndNot, OpOr:
+		case OpAdd, OpSub, OpMul, OpMin, OpMax, OpHSum, OpHMax, OpHMin, OpBitcast, OpBroadcast, OpSqrt, OpAnd, OpGtW, OpAndNot, OpOr, OpAddSub:
 			first = nd.A
 		case OpDiv:
 			first = nd.B

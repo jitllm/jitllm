@@ -34,6 +34,16 @@ type Code struct {
 	Args []CallArg
 }
 
+// Writes reports whether the kernel writes operand o.
+func (c *Code) Writes(o Operand) bool {
+	for _, b := range c.Binds {
+		if b.Operand == o && b.Writes {
+			return true
+		}
+	}
+	return false
+}
+
 // CallArg is one argument word of a host call, at byte offset Field: the
 // address of Operand's storage Offset elements in, with Words the contents
 // of a constant block; or a value the caller computes, a run-time length

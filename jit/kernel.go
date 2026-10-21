@@ -262,6 +262,13 @@ const (
 	OpLanes
 	// OpSar is A shifted right by B, its sign kept.
 	OpSar
+	// OpDupEven and OpDupOdd are A's even and odd lanes, each in its pair
+	// of lanes; OpSwapPairs is A with each pair of lanes swapped.
+	OpDupEven
+	OpDupOdd
+	OpSwapPairs
+	// OpAddSub is A less B in the even lanes, A plus B in the odd.
+	OpAddSub
 )
 
 // Node is one value: a scalar, or inside a loop of Lanes a vector of them.
@@ -368,7 +375,7 @@ func (n *Kernel) elements() int {
 
 var opNames = [...]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
 	"less", "select", "sqrt", "exp", "shl", "shr", "and", "xor", "cvtf32", "cvti32", "thread", "groupsum", "groupmax", "exchange",
-	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "round", "span", "hmax", "hmin", "eq", "or", "lanes", "sar"}
+	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "round", "span", "hmax", "hmin", "eq", "or", "lanes", "sar", "dupeven", "dupodd", "swappairs", "addsub"}
 
 func (o Op) String() string {
 	if int(o) < len(opNames) {
