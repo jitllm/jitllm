@@ -379,10 +379,15 @@ func (e *x86Lowerer) node(i int) {
 	case OpFma:
 		if c := k.Nodes[nd.C]; c.Op != OpLoad || !c.Mem {
 			if r := e.reg(i); r != e.reg(nd.C) {
-				if r != e.reg(nd.A) {
+				switch r {
+				case e.reg(nd.A):
+					a.VFMADD213PS(r, e.reg(nd.B), e.reg(nd.C))
+				case e.reg(nd.B):
+					a.VFMADD213PS(r, e.reg(nd.A), e.reg(nd.C))
+				default:
 					a.VMOVAPSReg(r, e.reg(nd.A))
+					a.VFMADD213PS(r, e.reg(nd.B), e.reg(nd.C))
 				}
-				a.VFMADD213PS(r, e.reg(nd.B), e.reg(nd.C))
 				return
 			}
 		}

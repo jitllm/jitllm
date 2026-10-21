@@ -560,6 +560,12 @@ func (b *binder86) vectors() error {
 		}
 		depth[p] = d
 	}
+	inner := map[int]bool{}
+	for p, e := range k.Seq {
+		if e.Kind == EntryNode && depth[p] > 0 && k.Nodes[e.I].Hint > 0 {
+			inner[k.Nodes[e.I].Hint-1] = true
+		}
+	}
 	var hinted []int
 	for i, nd := range k.Nodes {
 		if _, made := b.def[i]; made && nd.Hint > 0 {
@@ -694,6 +700,9 @@ func (b *binder86) vectors() error {
 			}
 			if want < 0 || busy[want] {
 				want = lowest(chain[i], hs[i])
+			}
+			if depth[pos] == 0 && nd.Op == OpLoad && inner[want] && k.readInLoop(i) {
+				return errors.New("a constant held across the loops on a register a loop's value is hinted to")
 			}
 			reg = want
 		} else if r, ok := b.resident(i); ok {
@@ -1040,7 +1049,7 @@ func (k *Kernel) rematerialize(moved map[int]bool) bool {
 	best, at := -1, -1
 	for i, nd := range k.Nodes {
 		p, in := pos[i]
-		if o := k.Bufs[nd.Buf].Operand.Kind; !in || moved[i] || nd.Op != OpLoad || nd.Hint > 0 || o != OperandConsts && k.Bufs[nd.Buf].Words == nil || hs[i] >= 0 {
+		if o := k.Bufs[nd.Buf].Operand.Kind; !in || moved[i] || nd.Op != OpLoad || o != OperandConsts && k.Bufs[nd.Buf].Words == nil || hs[i] >= 0 {
 			continue
 		}
 		rs := readers(i)

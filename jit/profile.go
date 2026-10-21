@@ -44,7 +44,7 @@ func gpuProfile() Profile {
 // cpuProfile is main's passes on the host.
 func cpuProfile() Profile {
 	return Profile{Passes: []Pass{
-		Quarters{Regs: []int{4, 6, 7}},
+		Quarters{Regs: []int{4, 6, 7, 8, 10, 12, 9}},
 		Prescale{},
 		Bounds{},
 		Serial{},
@@ -81,6 +81,7 @@ func cpuProfile() Profile {
 		Guards{},
 		FoldLoads{},
 		ShiftChain{Regs: []int{8, 9, 0, 1, 2, 3}},
+		Horner{Acc: []int{11, 14}, Coef: 13, Var: 10},
 		Order{},
 		Regs{Fields: map[int][]int{0: {int(x86.RCX)}, 8: {int(x86.RDX)}, 16: {int(x86.RSI)}, 24: {int(x86.RDX), int(x86.R8)},
 			56: {int(x86.RBX)}, 112: {int(x86.RSI)}, 120: {int(x86.R8), int(x86.R10)}, 128: {int(x86.R9)}, 136: {int(x86.R12)}},
