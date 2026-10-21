@@ -57,7 +57,7 @@ func cpuProfile() Profile {
 		Chains{N: 4},
 		Simplify{},
 		Consts{},
-		Args{Fields: mainArgs},
+		Args{Fields: mainArgs()},
 		Simplify{},
 		Cursors{},
 		Simplify{},
@@ -73,8 +73,10 @@ func cpuProfile() Profile {
 }
 
 // mainArgs is main's host argument block: Out, W, A, AScale, Rows, K, Scr,
-// and the paired kernels' Out2 and AScale2.
-var mainArgs = ArgFields{Out: []int{0, 120}, Weight: 8, Act: 16, Query: 112, Second: map[int]int{0: 120, 112: 128, 24: 136}, Consts: 56, In: []int{24, 136}, Vectors: 40, Tail: 32, Counts: []int{32, 40}}
+// Q32, and the paired kernels' Out2, Q2 and AScale2.
+func mainArgs() ArgFields {
+	return ArgFields{Out: []int{0, 120}, Weight: 8, Act: 16, Query: 112, Second: map[int]int{0: 120, 112: 128, 24: 136}, Consts: 56, In: []int{24, 136}, Vectors: 40, Tail: 32, Counts: []int{32, 40}}
+}
 
 // mainWorkgroups is main's layout of a range's partitions over workgroups.
 var mainWorkgroups = Workgroups{MinWarps: 4, MaxWarps: 8, Shared: 32 << 10, GroupDims: 96, Chunk: 2048, SlotThreads: 1280, PerSplit: 8}
