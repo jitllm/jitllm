@@ -172,12 +172,14 @@ func (e *lowerer) isOpen(c int) bool {
 func (e *lowerer) get(i int) ir.Value {
 	nd := e.n.Nodes[i]
 	if h := e.home[i]; h >= 0 && !e.isOpen(h) {
-		if nd.Op != OpFold || e.n.Loops[h].Parent != e.innermost() {
+		p := e.n.Loops[h].Parent
+		switch {
+		case nd.Op == OpFold && e.done[h] && (p < 0 || e.isOpen(p)):
+		case nd.Op == OpFold && p == e.innermost():
+			e.lowerLoop(h)
+		default:
 			e.fail("node %d read outside its loop %d", i, h)
 			return 0
-		}
-		if !e.done[h] {
-			e.lowerLoop(h)
 		}
 		return e.phi[i]
 	}
