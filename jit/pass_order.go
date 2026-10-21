@@ -6,7 +6,9 @@ import "sort"
 // first, in the order of their fields but a vector loop's counts last, a
 // value no loop moves before the first loop that needs it, and in each loop
 // its values in the order they depend on each other, each inner loop where
-// a value first needs what it carries, and its stores.
+// a value first needs what it carries, and its stores. A loop advances the
+// address it stores through itself first, then its pointers in the order
+// its code first reaches them.
 type Order struct{}
 
 func (Order) Name() string { return "order" }
@@ -17,9 +19,10 @@ func (p Order) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			return nil, false, nil
 		}
 		m := k.clone()
-		o := orderer{k: m, done: map[int]bool{}, loopDone: map[int]bool{}, home: map[int]int{}, depths: map[int]int{}}
+		o := orderer{k: m, done: map[int]bool{}, loopDone: map[int]bool{}, home: map[int]int{}, depths: map[int]int{}, words: m.vectorWords()}
 		o.run()
 		m.Seq = o.seq
+		m.orderCursors()
 		return []*Kernel{m}, true, nil
 	})
 }
@@ -31,6 +34,7 @@ type orderer struct {
 	loopDone map[int]bool
 	home     map[int]int
 	depths   map[int]int
+	words    map[int]bool
 }
 
 func (o *orderer) run() {
@@ -109,7 +113,7 @@ func (o *orderer) need(i, c int) {
 	}
 	k := o.k
 	nd := k.Nodes[i]
-	if nd.Op == OpConst || nd.Op == OpIter {
+	if nd.Op == OpConst && !o.words[i] || nd.Op == OpIter {
 		return
 	}
 	if nd.Op == OpFold {
@@ -287,4 +291,55 @@ func (o *orderer) loop(d int) {
 	o.seq = append(o.seq, Entry{Kind: EntryLoop, I: d})
 	o.scope(d)
 	o.seq = append(o.seq, Entry{Kind: EntryEnd, I: d})
+}
+
+// orderCursors orders each loop's cursors: a buffer the loop stores to
+// through its own address first, then in the order the sequence first
+// reaches each pointer.
+func (k *Kernel) orderCursors() {
+	first := map[[2]int]int{}
+	for pos, e := range k.Seq {
+		var b, ptr int
+		switch e.Kind {
+		case EntryNode:
+			nd := k.Nodes[e.I]
+			if nd.Op != OpLoad {
+				continue
+			}
+			b, ptr = nd.Buf, nd.Ptr
+		case EntryStore:
+			s := k.Stores[e.I]
+			b, ptr = s.Buf, s.Ptr
+		default:
+			continue
+		}
+		key := [2]int{k.Bufs[b].Base, ptr}
+		if _, ok := first[key]; !ok {
+			first[key] = pos
+		}
+	}
+	for c := range k.Loops {
+		cs := k.Loops[c].Cursors
+		rank := func(cu Cursor) (int, int) {
+			stored := 1
+			for _, s := range k.Stores {
+				if s.At == c && !s.Barrier && !s.Run && s.Ptr == 0 && cu.Ptr == 0 && k.Bufs[s.Buf].Base == k.Bufs[cu.Buf].Base {
+					stored = 0
+				}
+			}
+			at, ok := first[[2]int{k.Bufs[cu.Buf].Base, cu.Ptr}]
+			if !ok {
+				at = len(k.Seq)
+			}
+			return stored, at
+		}
+		sort.SliceStable(cs, func(i, j int) bool {
+			si, ai := rank(cs[i])
+			sj, aj := rank(cs[j])
+			if si != sj {
+				return si < sj
+			}
+			return ai < aj
+		})
+	}
 }

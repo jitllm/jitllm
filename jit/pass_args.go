@@ -17,9 +17,10 @@ type Args struct {
 }
 
 // ArgFields are the byte offsets of the argument words: the buffers written
-// in order, a weight's or the history's address, the activations a weight
-// is read beside, a block of constants, the other buffers read in order; a
-// vector loop's count and its tail's, and the other counts in order.
+// in order, a weight's or the history's address (or the row a kernel
+// narrows into binary16), the activations a weight is read beside, a block
+// of constants, the other buffers read in order; a vector loop's count and
+// its tail's, and the other counts in order.
 type ArgFields struct {
 	Out           []int
 	Weight        int
@@ -160,10 +161,12 @@ func (k *Kernel) bindBufs(f ArgFields) {
 		byOp[o] = append(byOp[o], a)
 	}
 	written := map[Operand]bool{}
+	narrows := false
 	for i, s := range k.Stores {
 		if !s.Barrier && !s.Run && k.Bufs[s.Buf].Kind != BufShared {
 			note(s.Buf, access{node: -1, store: i})
 			written[k.Bufs[s.Buf].Operand] = true
+			narrows = narrows || k.Bufs[s.Buf].Half
 		}
 	}
 	for i, nd := range k.Nodes {
@@ -172,14 +175,29 @@ func (k *Kernel) bindBufs(f ArgFields) {
 		}
 	}
 	sort.SliceStable(order, func(i, j int) bool { return k.firstBuf(order[i]) < k.firstBuf(order[j]) })
+	offsets := map[Operand]int{}
+	for _, o := range order {
+		offsets[o] = k.split(byOp[o])
+	}
+	code := k.live()
+	var kept []Operand
+	for _, o := range order {
+		in := written[o]
+		for _, a := range byOp[o] {
+			in = in || a.node >= 0 && code[a.node]
+		}
+		if in {
+			kept = append(kept, o)
+		}
+	}
 	outs, ins := 0, 0
 	acts, weight := false, false
-	for _, o := range order {
+	for _, o := range kept {
 		if o.Kind == OperandWeight || o.Kind == OperandVector {
 			weight = true
 		}
 	}
-	for _, o := range order {
+	for _, o := range kept {
 		var fl int
 		switch {
 		case written[o]:
@@ -187,7 +205,7 @@ func (k *Kernel) bindBufs(f ArgFields) {
 			outs++
 		case o.Kind == OperandConsts:
 			fl = f.Consts
-		case o.Kind == OperandWeight || o.Kind == OperandTable:
+		case o.Kind == OperandWeight || o.Kind == OperandTable || narrows:
 			fl = f.Weight
 		case weight && f.Act > 0 && !acts && o.Kind != OperandVector:
 			fl, acts = f.Act, true
@@ -196,7 +214,6 @@ func (k *Kernel) bindBufs(f ArgFields) {
 			ins++
 		}
 		base := k.add(Node{Op: OpParam, Type: ir.U32, Imm: int64(fl)})
-		off := k.split(byOp[o])
 		bufs := map[int]bool{}
 		for _, a := range byOp[o] {
 			if a.node >= 0 {
@@ -209,7 +226,7 @@ func (k *Kernel) bindBufs(f ArgFields) {
 		for b := range k.Bufs {
 			if bufs[b] {
 				k.Bufs[b].Base = base + 1
-				k.Bufs[b].Offset = off
+				k.Bufs[b].Offset = offsets[o]
 				if first < 0 {
 					first = b
 				}

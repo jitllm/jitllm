@@ -167,6 +167,9 @@ type Buf struct {
 	// Dims, where a run-time length set them, are 1 + the node of each
 	// extent of Shape the caller passes, 0 for one that is fixed.
 	Dims []int
+	// Half is a buffer of binary16 elements: a load widens one to a float,
+	// a store keeps a word's low half.
+	Half bool
 }
 
 type Op uint8
@@ -225,6 +228,14 @@ const (
 	OpLength
 	// OpHSum is the sum of A's lanes.
 	OpHSum
+	// OpHalf is float A as binary16 in a word's low half, rounded to
+	// nearest even, a NaN keeping its payload's high bits.
+	OpHalf
+	// OpGtW is, in each half of the words, 0xFFFF where A's signed half is
+	// greater than B's, else 0.
+	OpGtW
+	// OpAndNot is A with the bits of B cleared.
+	OpAndNot
 )
 
 // Node is one value: a scalar, or inside a loop of Lanes a vector of them.
@@ -324,7 +335,7 @@ func (n *Kernel) elements() int {
 
 var opNames = [...]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
 	"less", "select", "sqrt", "exp", "shl", "shr", "and", "xor", "cvtf32", "cvti32", "thread", "groupsum", "groupmax", "exchange",
-	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum"}
+	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot"}
 
 func (o Op) String() string {
 	if int(o) < len(opNames) {

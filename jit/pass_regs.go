@@ -15,10 +15,12 @@ import (
 // cursor's copy takes the first spare register free. Values take registers
 // in the order the sequence makes them: a result its first operand's where
 // the operand dies there (an fma's the addend's, a sum's step the sum's), a
-// sum that carries another on that one's, else the lowest free -- within a
-// trip of a loop that adds several sums, a register one sum's value freed
-// goes to no other sum's, and a register that held a sum goes to no value
-// of a loop that runs after the sum's.
+// sum that carries another on that one's, else the lowest free besides its
+// operands -- within a trip of a loop that adds several sums, a register one
+// sum's value freed goes to no other sum's; within a trip of an innermost
+// loop, a register freed by an operation that wrote its result elsewhere
+// goes to nothing else; and a register that held a sum goes to no value of
+// a loop that runs after the sum's.
 type Regs struct {
 	Fields   map[int]int
 	Spare    []int
@@ -26,6 +28,10 @@ type Regs struct {
 	Outer    int
 	Kept     []int
 	Vectors  int
+	// Scratch is the word a constant is made in before it is splat into
+	// a vector, the splats taking the last vector registers in the order
+	// they are made.
+	Scratch int
 }
 
 func (Regs) Name() string { return "regs" }
@@ -135,13 +141,14 @@ func (b *binder86) gprs() error {
 		}
 	}
 	direct := map[int]bool{}
+	words := k.vectorWords()
 	for _, e := range k.Seq {
 		if e.Kind != EntryNode {
 			continue
 		}
 		i := e.I
 		nd := k.Nodes[i]
-		if nd.Op != OpParam && (nd.Type == ir.F32 || nd.Op == OpConst || nd.Op == OpLoad) {
+		if nd.Op != OpParam && (nd.Type == ir.F32 || nd.Op == OpConst || nd.Op == OpLoad || words[i]) {
 			continue
 		}
 		r := -1
@@ -289,11 +296,48 @@ func (k *Kernel) vectorTail(c int) bool {
 	return false
 }
 
-// needsVector reports whether node i is a float the code holds in a vector
-// register.
+// needsVector reports whether node i is a value the code holds in a vector
+// register: a float, a weight's word, or a word of halves.
 func (k *Kernel) needsVector(i int) bool {
 	nd := k.Nodes[i]
-	return (nd.Type == ir.F32 || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandWeight) && nd.Op != OpConst && !nd.Mem
+	if nd.Mem {
+		return false
+	}
+	if nd.Type == ir.F32 || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandWeight {
+		return nd.Op != OpConst
+	}
+	return k.vectorWords()[i]
+}
+
+// vectorWords is the words held in vector registers: the halves a float is
+// narrowed to, what is made from them, and the constants they are made
+// with.
+func (k *Kernel) vectorWords() map[int]bool {
+	out := map[int]bool{}
+	for changed := true; changed; {
+		changed = false
+		for i, nd := range k.Nodes {
+			if out[i] || nd.Type == ir.F32 {
+				continue
+			}
+			v := nd.Op == OpHalf
+			if !v && (nd.Op == OpAnd || nd.Op == OpGtW || nd.Op == OpAndNot) {
+				for _, a := range k.args(&nd) {
+					v = v || out[*a]
+				}
+			}
+			if v {
+				out[i] = true
+				changed = true
+				for _, a := range k.args(&nd) {
+					if k.Nodes[*a].Op == OpConst && !out[*a] {
+						out[*a] = true
+					}
+				}
+			}
+		}
+	}
+	return out
 }
 
 // vectors binds the floats by a scan of the sequence.
@@ -308,7 +352,7 @@ func (b *binder86) vectors() error {
 			stepOf[nd.A] = i
 		}
 	}
-	free := func(pos int) {
+	free := func(pos int, spent bool) {
 		for v, l := range b.last {
 			if _, step := stepOf[v]; step {
 				continue
@@ -317,9 +361,13 @@ func (b *binder86) vectors() error {
 				r := k.Nodes[v].Reg - 1
 				busy[r] = false
 				tag[r] = chain[v]
+				if spent {
+					tag[r] = -1
+				}
 			}
 		}
 	}
+	innermost := func(c int) bool { return c >= 0 && len(k.innerLoops(c)) == 0 }
 	held := make([]int, b.p.Vectors)
 	for r := range held {
 		held[r] = -1
@@ -345,7 +393,21 @@ func (b *binder86) vectors() error {
 		k.Nodes[i].Reg = r + 1
 		return nil
 	}
+	var splats []int
+	for _, e := range k.Seq {
+		if e.Kind == EntryNode && k.Nodes[e.I].Op == OpConst && k.needsVector(e.I) {
+			splats = append(splats, e.I)
+		}
+	}
+	for j, i := range splats {
+		r := b.p.Vectors - len(splats) + j
+		k.Nodes[i].Reg, k.Nodes[i].Tmp = r+1, b.p.Scratch+1
+		busy[r] = true
+	}
 	for pos, e := range k.Seq {
+		if e.Kind == EntryNode && k.Nodes[e.I].Op == OpConst {
+			continue
+		}
 		switch e.Kind {
 		case EntryLoop:
 			for _, f := range k.foldsOf(e.I) {
@@ -361,19 +423,19 @@ func (b *binder86) vectors() error {
 			}
 			continue
 		case EntryEnd:
-			free(pos)
+			free(pos, false)
 			for r := range tag {
 				tag[r] = 0
 			}
 			continue
 		case EntryStore:
-			free(pos)
+			free(pos, false)
 			continue
 		}
 		i := e.I
 		nd := k.Nodes[i]
 		if !k.needsVector(i) {
-			free(pos)
+			free(pos, false)
 			continue
 		}
 		reg := -1
@@ -382,7 +444,7 @@ func (b *binder86) vectors() error {
 		}
 		first := -1
 		switch nd.Op {
-		case OpAdd, OpSub, OpMul, OpMin, OpMax, OpHSum, OpBitcast, OpBroadcast, OpSqrt:
+		case OpAdd, OpSub, OpMul, OpMin, OpMax, OpHSum, OpBitcast, OpBroadcast, OpSqrt, OpAnd, OpGtW, OpAndNot:
 			first = nd.A
 		case OpDiv:
 			first = nd.B
@@ -392,9 +454,11 @@ func (b *binder86) vectors() error {
 		if reg < 0 && first >= 0 && k.Nodes[first].Reg > 0 && k.needsVector(first) && (b.last[first] == pos || nd.Op == OpBitcast) {
 			reg = k.Nodes[first].Reg - 1
 		}
-		free(pos)
-		if reg < 0 {
+		if reg >= 0 {
+			free(pos, false)
+		} else {
 			reg = lowest(chain[i], hs[i])
+			free(pos, innermost(hs[i]))
 		}
 		if err := give(i, reg); err != nil {
 			return err

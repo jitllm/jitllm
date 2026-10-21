@@ -65,7 +65,7 @@ func arity(op Op) int {
 	switch op {
 	case OpConst, OpCoord, OpIter, OpThread, OpFlat, OpParam, OpLength:
 		return 0
-	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal, OpShuffle, OpBroadcast, OpHSum:
+	case OpLoad, OpBitcast, OpSqrt, OpExp, OpCvtF32, OpCvtI32, OpGroupSum, OpGroupMax, OpLocal, OpShuffle, OpBroadcast, OpHSum, OpHalf:
 		return 1
 	case OpFma, OpSelect:
 		return 3

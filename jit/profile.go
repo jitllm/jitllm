@@ -46,6 +46,7 @@ func cpuProfile() Profile {
 		RunLengths{Widths: true},
 		Simplify{},
 		InPlace{},
+		Halves{KeepsPayload: true},
 		Axpy{},
 		FMA{},
 		Vectorize{Lanes: 8},
@@ -64,7 +65,7 @@ func cpuProfile() Profile {
 			112: int(x86.RSI), 120: int(x86.R8), 128: int(x86.R9), 136: int(x86.R12)},
 			Spare:    []int{int(x86.RSI), int(x86.R11), int(x86.R8), int(x86.R9), int(x86.R12), int(x86.R13)},
 			Counters: [2]int{int(x86.R10), int(x86.R11)}, Outer: int(x86.RAX),
-			Kept: []int{int(x86.R9), int(x86.RDX), int(x86.R12), int(x86.R13)}, Vectors: 16},
+			Kept: []int{int(x86.R9), int(x86.RDX), int(x86.R12), int(x86.R13)}, Vectors: 16, Scratch: int(x86.RAX)},
 	}}
 }
 

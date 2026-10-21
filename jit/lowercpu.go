@@ -16,7 +16,7 @@ func (cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 	if k.Seq == nil {
 		return Lowered{}, fmt.Errorf("the x86 lowering of %s: the kernel is not ordered", k.Name)
 	}
-	e := &x86Lowerer{k: k, a: &x86.Buf{}, top: map[int]int{}, end: map[int]int{}, home: k.homes()}
+	e := &x86Lowerer{k: k, a: &x86.Buf{}, top: map[int]int{}, end: map[int]int{}, home: k.homes(), words: k.vectorWords()}
 	for _, en := range k.Seq {
 		if e.err != nil {
 			break
@@ -47,6 +47,7 @@ func (cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 type x86Lowerer struct {
 	k        *Kernel
 	home     []int
+	words    map[int]bool
 	a        *x86.Buf
 	top, end map[int]int
 	err      error
@@ -74,7 +75,7 @@ func (e *x86Lowerer) addr(b, ix, ptr int) x86.Mem {
 	if nd.Op != OpConst {
 		e.fail("an access of %s at a computed index", k.Bufs[b].Operand.Name)
 	}
-	return x86.At(e.ptrReg(b, ptr), int32(nd.Imm)*int32(elemBytes(k.Bufs[b].Elem)))
+	return x86.At(e.ptrReg(b, ptr), int32(nd.Imm)*int32(elemBytes(k.Bufs[b])))
 }
 
 // ptrReg is the register of buffer b's pointer ptr.
@@ -89,7 +90,11 @@ func (e *x86Lowerer) ptrReg(b, ptr int) x86.Reg {
 	return x86.Reg(max(r-1, 0))
 }
 
-func elemBytes(t ir.Type) int {
+// elemBytes is the bytes of one of buffer b's elements.
+func elemBytes(b Buf) int {
+	if b.Half {
+		return 2
+	}
 	return 4
 }
 
@@ -113,6 +118,13 @@ func (e *x86Lowerer) node(i int) {
 		}
 		home := e.home[i]
 		m := e.addr(nd.Buf, nd.A, nd.Ptr)
+		if k.Bufs[nd.Buf].Half {
+			if e.lanes(home) == 0 {
+				e.fail("a scalar load of binary16")
+			}
+			a.VCVTPH2PS(e.reg(i), m)
+			return
+		}
 		switch {
 		case home < 0:
 			a.VBROADCASTSS(e.reg(i), m)
@@ -125,7 +137,28 @@ func (e *x86Lowerer) node(i int) {
 		if e.reg(i) != e.reg(nd.A) {
 			e.fail("a bitcast into another register")
 		}
+	case OpConst:
+		if !e.words[i] {
+			return
+		}
+		t := x86.Reg(nd.Tmp - 1)
+		if nd.Tmp == 0 {
+			e.fail("a splat with no scratch word")
+		}
+		a.MOVimm32(t, int32(uint32(nd.Imm)))
+		a.MOVDToX(e.reg(i), t)
+		a.PSHUFD(e.reg(i), e.reg(i), 0)
+	case OpHalf:
+		a.VCVTPS2PH(e.reg(i), e.reg(nd.A), e.lanes(e.home[i]) > 0, 0)
+	case OpGtW:
+		a.VPCMPGTWx(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+	case OpAndNot:
+		a.VPANDNx(e.reg(i), e.reg(nd.B), e.reg(nd.A))
 	case OpMul, OpAdd, OpShr, OpAnd, OpShl:
+		if e.words[i] && nd.Op == OpAnd {
+			a.VPANDx(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+			return
+		}
 		if nd.Type != ir.F32 {
 			e.integer(i)
 			return
@@ -213,6 +246,14 @@ func (e *x86Lowerer) integer(i int) {
 func (e *x86Lowerer) store(i int) {
 	s := e.k.Stores[i]
 	m := e.addr(s.Buf, s.Ix, s.Ptr)
+	if e.k.Bufs[s.Buf].Half {
+		if e.lanes(s.At) > 0 {
+			e.a.VMOVDQUStorex(m, e.reg(s.Val))
+		} else {
+			e.a.VPEXTRWStore(m, e.reg(s.Val), 0)
+		}
+		return
+	}
 	if e.lanes(s.At) > 0 {
 		e.a.VMOVDQUStore(m, e.reg(s.Val))
 		return
@@ -277,7 +318,7 @@ func (e *x86Lowerer) leave(c int) {
 	l := k.Loops[c]
 	for _, cu := range l.Cursors {
 		if cu.Elems != 0 {
-			a.ADDimm(e.ptrReg(cu.Buf, cu.Ptr), int32(cu.Elems*elemBytes(k.Bufs[cu.Buf].Elem)))
+			a.ADDimm(e.ptrReg(cu.Buf, cu.Ptr), int32(cu.Elems*elemBytes(k.Bufs[cu.Buf])))
 		}
 	}
 	a.DEC(e.counter(c))
