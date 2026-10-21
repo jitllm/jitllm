@@ -9,7 +9,8 @@ import (
 
 // Simplify is the composer's IR pass on k: constants folded (integer and
 // float arithmetic of constants, a binary16 pack of two, a conversion or
-// reinterpretation of one), a commutative float op's operands in canonical
+// reinterpretation of one, a quotient its operand's range fixes, a
+// run-time trip that is a constant), a commutative float op's operands in canonical
 // order (canonOrder), identities removed, an addend that is a
 // multiple of a power-of-two modulus dropped from what the remainder reads,
 // common subexpressions merged and what no effect reads removed.
@@ -54,6 +55,17 @@ func simplify(k *ir.Kernel) *ir.Kernel {
 				o.Vargs[j] = res(a)
 			}
 			if c, ok := foldConst(ops, o); ok {
+				*o = ir.Op{Kind: ir.OpConst, Type: o.Type, Imm: c}
+				continue
+			}
+			if o.Kind == ir.OpLoop && o.Imm < 0 && o.Args[0] != 0 {
+				// A run-time trip that is a constant is a loop of that trip.
+				if c, ok := intConst(o.Args[0]); ok {
+					o.Imm, o.Args[0] = int64(c), 0
+				}
+				continue
+			}
+			if c, ok := rangeQuotient(ops, o); ok {
 				*o = ir.Op{Kind: ir.OpConst, Type: o.Type, Imm: c}
 				continue
 			}
@@ -154,7 +166,7 @@ func simplify(k *ir.Kernel) *ir.Kernel {
 // (non-zero), or o's constant in o.Imm (zero).
 func foldInt(o *ir.Op, intConst func(ir.Value) (uint32, bool)) (ir.Value, bool) {
 	switch o.Kind {
-	case ir.OpAdd, ir.OpSub, ir.OpMul, ir.OpDiv, ir.OpRem, ir.OpMin, ir.OpAnd, ir.OpXor, ir.OpShl, ir.OpShr:
+	case ir.OpAdd, ir.OpSub, ir.OpMul, ir.OpDiv, ir.OpRem, ir.OpMin, ir.OpMax, ir.OpAnd, ir.OpXor, ir.OpShl, ir.OpShr:
 	default:
 		return 0, false
 	}
@@ -237,6 +249,14 @@ func foldInt(o *ir.Op, intConst func(ir.Value) (uint32, bool)) (ir.Value, bool) 
 		if !signed && (kx && cx == 0 || ky && cy == 0) {
 			o.Imm = 0
 			return 0, true
+		}
+	case ir.OpMax:
+		// An unsigned maximum with 0 is the other.
+		if !signed && ky && cy == 0 {
+			return x, true
+		}
+		if !signed && kx && cx == 0 {
+			return y, true
 		}
 	}
 	return 0, false
@@ -532,4 +552,53 @@ func canonOrder(ops []ir.Op, o *ir.Op) {
 	if rank(o.Args[1]) < rank(o.Args[0]) {
 		o.Args[0], o.Args[1] = o.Args[1], o.Args[0]
 	}
+}
+
+// rangeQuotient is an unsigned quotient's constant where its dividend is
+// a constant c less a value y in [0, d) (a remainder by d, or a mask of d-1
+// for d a power of two), constants added on either side, and c is one less
+// than a multiple of d: every such y gives c/d.
+func rangeQuotient(ops []ir.Op, o *ir.Op) (int64, bool) {
+	if o.Kind != ir.OpDiv || o.Type != ir.U32 || o.Args[0] == 0 || o.Args[1] == 0 {
+		return 0, false
+	}
+	k := func(v ir.Value) (uint64, bool) {
+		x := ops[v-1]
+		return uint64(uint32(x.Imm)), x.Kind == ir.OpConst
+	}
+	d, ok := k(o.Args[1])
+	if !ok || d < 2 {
+		return 0, false
+	}
+	bounded := func(v ir.Value) bool {
+		y := ops[v-1]
+		if y.Args[1] == 0 {
+			return false
+		}
+		m, ok := k(y.Args[1])
+		return ok && (y.Kind == ir.OpRem && m == d || y.Kind == ir.OpAnd && m == d-1 && d&(d-1) == 0)
+	}
+	// c is the dividend's constant part, the value it reads once negated.
+	var c uint64
+	var walk func(v ir.Value, neg bool) bool
+	walk = func(v ir.Value, neg bool) bool {
+		x := ops[v-1]
+		if n, ok := k(v); ok && !neg {
+			c += n
+			return true
+		}
+		switch {
+		case neg && bounded(v):
+			return true
+		case x.Kind == ir.OpAdd && !neg && x.Args[1] != 0:
+			return walk(x.Args[0], false) && walk(x.Args[1], false)
+		case x.Kind == ir.OpSub && !neg && x.Args[1] != 0:
+			return walk(x.Args[0], false) && walk(x.Args[1], true)
+		}
+		return false
+	}
+	if !walk(o.Args[0], false) || c%d != d-1 || c > math.MaxUint32 {
+		return 0, false
+	}
+	return int64(c / d), true
 }

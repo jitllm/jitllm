@@ -148,7 +148,10 @@ func (g *Row) Plan(f Facts) ([]Planned, error) {
 	if L := f.Target.Lanes; L > 1 && g.Width == 1 && g.Rows > 1 && g.foldsReadAfter() {
 		// An item whose run-time loops fold what is read after them: its
 		// loops' trips over a subgroup's lanes, the folds' lanes combined.
-		s := Schedule{Group: L, Flat: true, Lanes: L, LaneLoops: true, Target: f.Target}
+		s := Schedule{Group: L, Flat: true, Lanes: L, LaneLoops: true, Target: f.Target, GroupRows: f.GroupRows}
+		if f.RowGroup > 0 {
+			s.Group = f.RowGroup
+		}
 		return []Planned{{G: g, S: s, Bufs: all, Threads: g.Rows * L}}, nil
 	}
 	if g.product() {

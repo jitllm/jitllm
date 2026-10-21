@@ -43,9 +43,17 @@ func (g *Row) laneLoops(s Schedule) (*Row, error) {
 		}
 		iter = r.Add(Node{Kind: NIter, At: c})
 		for i, nd := range g.Nodes {
-			if nd.Kind == NIter && nd.At == c {
-				r.Nodes[i] = Node{Kind: NUBinary, Op: OpAdd, A: lane, B: ub(OpMul, iter, u(L))}
+			if nd.Kind != NIter || nd.At != c {
+				continue
 			}
+			if g.compared(i) {
+				// An index a comparison reads is carried: started at the
+				// lane, stepped by the lanes a trip.
+				r.Nodes[i] = Node{Kind: NFold, At: c, B: lane}
+				r.Nodes[i].A = ub(OpAdd, i, u(L))
+				continue
+			}
+			r.Nodes[i] = Node{Kind: NUBinary, Op: OpAdd, A: lane, B: ub(OpMul, iter, u(L))}
 		}
 		for f, nd := range g.Nodes {
 			if nd.Kind != NFold || nd.At != c {
@@ -188,4 +196,14 @@ func (n *Node) replaceOperand(from, to int) {
 			n.A = to
 		}
 	}
+}
+
+// compared reports whether a comparison reads node n.
+func (g *Row) compared(n int) bool {
+	for i, nd := range g.Nodes {
+		if nd.Kind == NLess && g.readsNode(i, n) {
+			return true
+		}
+	}
+	return false
 }

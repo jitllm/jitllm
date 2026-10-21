@@ -2,6 +2,7 @@ package compose
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
@@ -79,6 +80,18 @@ const (
 	// each of KV.Heads heads turned by the table In[2] where KV.Turn, the
 	// rest as it is; V packed in binary16 pairs where KV.F16.
 	PrimKVWrite
+	// PrimSoftmax is each (row, head, split) item's softmax over the slots
+	// of its split its row attends: In[0] the scores, Paged.Chunk slots an
+	// item, In[1] the row descriptors; Out[0] the weights at the slots,
+	// Out[1] the item's maximum and sum, 32 copies each past its padded
+	// numerators (the merge's partial layout).
+	PrimSoftmax
+	// PrimMerge is each (row, head, value element)'s output from the splits'
+	// partials In[0] (each split's numerators, then its maximum and sum):
+	// the splits weighted by exp of their maximum less the greatest, the
+	// weighted sums (and the sink In[1]'s exp, where present) the
+	// normaliser.
+	PrimMerge
 	// PrimExtern is an op the composer does not form here: its operands
 	// and results, which no pass moves anything across.
 	PrimExtern
@@ -95,6 +108,7 @@ type Prim struct {
 	Eps     float32
 	Layer   bool
 	Win     int
+	Paged   Paged
 	Rope    RopeAttrs
 	KV      KVAttrs
 	W       MatVecWeight
@@ -174,6 +188,22 @@ func (p *Program) Lower() ([]Group, error) {
 		}
 		if o.Kind == PrimQuant {
 			gs = append(gs, b.quantAlone(o))
+			continue
+		}
+		if o.Kind == PrimMerge {
+			b.g.Row = Row{Width: o.Paged.Rows * o.Paged.Heads * o.Paged.valueDim(), Rows: 1}
+			sink := -1
+			if len(o.In) > 1 {
+				sink = b.buf(BufRow, Bind{BindVal, o.In[1]})
+			}
+			b.g.Row.PagedMerge(b.buf(BufRow, Bind{BindVal, o.In[0]}), b.buf(BufOut, Bind{BindVal, o.Out[0]}), sink, o.Paged)
+			gs = append(gs, b.g)
+			continue
+		}
+		if o.Kind == PrimSoftmax {
+			b.g.Row = Row{Width: 1, Rows: o.Paged.Rows * o.Paged.Heads * o.Paged.Splits}
+			b.softmax(o)
+			gs = append(gs, b.g)
 			continue
 		}
 		if o.Kind == PrimRope || o.Kind == PrimKVWrite {
@@ -440,4 +470,35 @@ func (p *Program) lowerParts(i int) ([]Group, error) {
 		})
 	}
 	return gs, nil
+}
+
+// softmax is a staged softmax's naive group: an item a row of one element,
+// a loop over its split's keys for the maximum, one over the chunk for the
+// weights and their sum, and the partials' 32 copies.
+func (b *builder) softmax(o Prim) {
+	r, p := &b.g.Row, o.Paged
+	u, ub := r.UConst, r.UBin
+	scores := b.buf(BufRow, Bind{BindVal, o.In[0]})
+	desc := b.buf(BufU32, Bind{BindVal, o.In[1]})
+	out, part := b.buf(BufOut, Bind{BindVal, o.Out[0]}), b.buf(BufOut, Bind{BindVal, o.Out[1]})
+	item := r.RowIdx()
+	sp := ub(OpRem, item, u(p.Splits))
+	row := ub(OpDiv, item, u(p.Heads*p.Splits))
+	ps := r.pagedSplitOf(desc, row, sp, p.Splits)
+	base := ub(OpMul, item, u(p.Chunk))
+	c1 := r.LoopN(ub(OpSub, ps.en, ps.st))
+	m := r.Fold(c1, r.Const(-math.MaxFloat32))
+	r.SetFold(m, r.Bin(OpMax, m, r.LoadAt(scores, ub(OpAdd, base, r.Iter(c1)))))
+	c2 := r.Loop(p.Chunk)
+	si := r.Iter(c2)
+	at := ub(OpAdd, base, si)
+	w := r.Select(r.valid(ps, si), r.Add(Node{Kind: NUnary, Op: OpExp, A: r.Bin(OpSub, r.LoadAt(scores, at), m)}), r.Const(0))
+	r.StoreAt(out, w, at)
+	l := r.Fold(c2, r.Const(0))
+	r.SetFold(l, r.Bin(OpAdd, l, w))
+	padded := (p.valueDim() + 31) / 32 * 32
+	pb := ub(OpMul, item, u(padded+64))
+	c3 := r.Loop(32)
+	r.StoreAt(part, m, ub(OpAdd, ub(OpAdd, pb, r.Iter(c3)), u(padded)))
+	r.StoreAt(part, l, ub(OpAdd, ub(OpAdd, pb, r.Iter(c3)), u(padded+32)))
 }
