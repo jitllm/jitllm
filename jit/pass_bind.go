@@ -168,7 +168,7 @@ func (b *binder) warps(c, in int) {
 	k.Loops[c].Trip = 1
 	folds := k.foldsOf(in)
 	G := len(folds)
-	plane := k.buf(Buf{Kind: BufShared, Elem: ir.F32, Size: b.W * G * D})
+	plane := k.buf(Buf{Kind: BufShared, Elem: ir.F32, Size: b.W * G * D, Plane: true})
 	var add []Store
 	add = append(add, Store{Run: true, At: in}, Store{Barrier: true, At: -1})
 	totals := make([]int, G)

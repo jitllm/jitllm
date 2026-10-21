@@ -82,6 +82,8 @@ type Buf struct {
 	Size    int
 	// Shape, where set, is the extents loads' and stores' coordinates index.
 	Shape []int
+	// Plane is workgroup memory a staging may fold into its plane.
+	Plane bool
 }
 
 type Op uint8
