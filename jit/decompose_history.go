@@ -21,6 +21,7 @@ const (
 // the page table, the history's key and value pools.
 var (
 	tableAngles = Operand{Kind: OperandTable, Name: "rope.cs"}
+	tableQOff   = Operand{Kind: OperandTable, Name: "q.off", Elem: ir.U32}
 	tableRows   = Operand{Kind: OperandTable, Name: "rows", Elem: ir.U32}
 	tablePages  = Operand{Kind: OperandTable, Name: "pages", Elem: ir.U32}
 	tableKeys   = Operand{Kind: OperandTable, Name: "kv.k"}
