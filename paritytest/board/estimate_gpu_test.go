@@ -1,10 +1,12 @@
 package board
 
 import (
+	"flag"
 	"fmt"
 	"math"
 	"slices"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/probe"
@@ -17,8 +19,8 @@ import (
 )
 
 // TestEstimateMatchesTheGPU holds the composer's estimate of a decode step
-// on the first device whose backend has a per-kernel clock (CUDA, Metal), weighed with the device as the probe measures
-// it, to the step's composed kernels launched in order in one session on
+// on the first device whose backend has a per-kernel clock (CUDA, Metal),
+// weighed with the device as the probe measures it, to the step's composed kernels launched in order in one session on
 // one buffer per storage the estimate assumed, each kernel's time read from
 // the device's clock: the median of rounds' means over many steps. It
 // reports each kernel's ratio and the step's, and the spread of the
@@ -181,7 +183,67 @@ func TestEstimateMatchesTheGPU(t *testing.T) {
 	slices.Sort(logs)
 	t.Logf("step on the device's clock: estimate %.1f us measured %.1f us ratio %.2f; kernels within 2x: %d of %d, median error %.2fx",
 		est*1e6, got*1e6, est/got, countBelow(logs, 1), len(logs), math.Exp2(logs[len(logs)/2]))
+	if !*checkClock {
+		return
+	}
+	wall := func(f func(se backend.Session) error) (float64, error) {
+		var err error
+		var secs float64
+		dev.Session(func(se backend.Session) {
+			if err = se.Sync(); err != nil {
+				return
+			}
+			t0 := time.Now()
+			if err = f(se); err == nil {
+				err = se.Sync()
+			}
+			secs = time.Since(t0).Seconds()
+		})
+		return secs, err
+	}
+	secs, err := wall(func(se backend.Session) error {
+		for range steps {
+			for _, r := range runs {
+				if err := se.Launch(r.k, r.groups, r.width, r.bufs...); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("clock: a step %.1f us on the wall, unstamped, against %.1f us of stamps", secs/steps*1e6, got*1e6)
+	const reps = 200
+	for i, r := range runs {
+		one := func(se backend.Session) error {
+			for range reps {
+				if err := se.Launch(r.k, r.groups, r.width, r.bufs...); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		w, err := wall(one)
+		if err != nil {
+			t.Fatal(err)
+		}
+		clock.Arm(true)
+		clock.Times()
+		if _, err := wall(one); err != nil {
+			clock.Arm(false)
+			t.Fatal(err)
+		}
+		us, n := clock.Times()
+		clock.Arm(false)
+		xs := means[r.name]
+		t.Logf("clock %2d %-22s stamped in the step %8.3f us, stamped alone %8.3f us, wall alone %8.3f us",
+			i, r.name, xs[len(xs)/2], us[r.name]/float64(max(1, n[r.name])), w/reps*1e6)
+	}
 }
+
+var checkClock = flag.Bool("estimate-clock", false, "time each kernel of TestEstimateMatchesTheGPU back to back on the wall beside its stamps")
 
 // deviceFill is n bytes of storage for operand o at step s: its constants,
 // the step's descriptors and page table, zeros for another table of words

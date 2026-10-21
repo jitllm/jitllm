@@ -3,6 +3,7 @@ package jit
 import (
 	"github.com/jitllm/jitllm/engine/graph"
 	"math"
+	"slices"
 
 	"github.com/jitllm/jitllm/jit/ir"
 )
@@ -401,11 +402,35 @@ func (m *costModel) critical(e *estimator, live, words map[int]bool, reads map[i
 // its subgroup issuing in order: each instruction, in the kernel's order,
 // issues a slot after the one before it at the rate one thread issues its
 // class, and no sooner than the instructions it reads are done, each its
-// class's delay after it issued, a load its buffer's mean read latency. A
-// loop takes the thread's trips of it times a trip, a spread loop's trips
-// dealt over the group; what it computes is done when it ends.
+// class's delay after it issued, a load its buffer's mean read latency --
+// over the loads a thread keeps in flight where the load is in a loop and
+// its place reads nothing the loop carries. A loop takes the thread's trips
+// of it times a trip, a spread loop's trips dealt over the group; what it
+// computes is done when it ends.
 func (m *costModel) inOrder(e *estimator, live, words map[int]bool, reads map[int]float64) float64 {
 	k := e.k
+	// carried reports whether node i reads a value a loop carries: a load
+	// at such a place waits for the trip before it, where a load at any
+	// other is issued ahead of its use, the device's Overlap of them in
+	// flight.
+	memo := map[int]bool{}
+	var carried func(i int) bool
+	carried = func(i int) bool {
+		if i < 0 || i >= len(k.Nodes) {
+			return false
+		}
+		if v, ok := memo[i]; ok {
+			return v
+		}
+		memo[i] = false
+		nd := k.Nodes[i]
+		v := nd.Op == OpFold
+		for _, a := range k.args(&nd) {
+			v = v || carried(*a)
+		}
+		memo[i] = v
+		return v
+	}
 	cost := func(i int) (issue, delay float64) {
 		nd := k.Nodes[i]
 		if e.folded(i) {
@@ -425,6 +450,9 @@ func (m *costModel) inOrder(e *estimator, live, words map[int]bool, reads map[in
 		if nd.Op == OpLoad {
 			if lat, ok := reads[nd.Buf]; ok {
 				delay = lat
+			}
+			if e.homes[i] >= 0 && !carried(nd.A) && !slices.ContainsFunc(nd.Ax, carried) {
+				delay /= max(1, m.d.Overlap)
 			}
 		}
 		return issue, delay

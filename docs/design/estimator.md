@@ -44,8 +44,10 @@ A kernel's time is the largest of:
 - **chains**: the longest fold's trips times its step's critical path, or
   the critical path through the code outside any loop; on a GPU, one
   thread's schedule with its subgroup issuing in order, each instruction a
-  slot after the last and no sooner than its operands are done, a loop its
-  per-thread trips times a trip;
+  slot after the last and no sooner than its operands are done -- a load in
+  a loop whose place reads nothing the loop carries issued ahead, its
+  latency over the loads a thread keeps in flight -- a loop its per-thread
+  trips times a trip;
 
 plus the wait for its code's first line where the code left the nearest
 cache, and the call (host) or the device's per-kernel floor, or the host's
@@ -70,7 +72,7 @@ an empty call's cost.
 
 GPU, on any backend with a per-kernel device clock (CUDA's events,
 Metal's command buffers' stamps): the host's launch rate and a kernel's
-floor; memory
+floor, both after reads of the whole memory have woken the device; memory
 rate and latency; L1 and L2 found from one thread's chase over growing sets
 (read rates cannot find them: the multiprocessors' L1s together can hold
 more than the L2), L2's rate from every workgroup reading one set; loads in
@@ -91,8 +93,13 @@ synth-ernie45, one decode step, `scripts/cap`:
 |---|---|---|---|---|
 | laptop, one P-core (i9-12900HK, AVX2) | caches swept between steps | 1.00-1.03 | 53-54 of 64 | 1.28-1.42x |
 | laptop, one P-core | steady (step after step) | 0.92-1.20 | 40-57 of 64 | 1.26-1.83x |
-| V100-SXM2-16GB (cato, CUDA, sm_70) | steady | 1.38 (0.99 without the argmax) | 65 of 65 | 1.08-1.12x |
-| Apple M4 (Metal) | steady | 3.36; the head 0.98 | 36 of 65 | 1.75x |
+| V100-SXM2-16GB (cato, CUDA, sm_70) | steady | 0.88 | 65 of 65 | 1.07x |
+| Apple M4 (Metal) | steady | 1.18-1.20 | 59 of 65 | 1.06-1.08x |
+
+The device clocks were checked against the wall (`-estimate-clock`): on the
+M4, Metal's per-dispatch stamps and 200 back-to-back launches in one
+command buffer agree within 10-25% kernel by kernel, so the stamps measure
+what the kernels take.
 
 The laptop's steady regime moves with the probe: this fixture's weights are
 about the size of its L3, so the answer turns on the replacement numbers,
@@ -102,21 +109,23 @@ larger than the caches lives in.
 ## Open
 
 - **One-thread kernels on the GPU.** The composed argmax runs 103,424 logits
-  on one thread (2.6 ms a step on the V100, most of the step); the estimate
-  is 1.49 of it: the in-order schedule takes the IR's order, and the device
-  compiler unrolls and hoists the loads of a loop that simple. The kernel
-  is owed a reduction across the device.
+  on one thread (2.6 ms a step on the V100, 1.2 ms on the M4); the estimate
+  reads 0.86 and 1.21 of it. The kernel is owed a reduction across the
+  device.
 - **One warp of straight-line code.** A quantize kernel of about 2,300 PTX
   instructions on 32 threads, with float and integer divisions by run-time
   values, reads 0.59: the device expands those divisions into sequences the
   IR's instruction count cannot see.
 - **Barriers** are not priced; the attention stage, with eight, reads 0.83.
-- **Apple's GPU.** Memory-bound kernels hold (the head 0.98), but the
-  in-order schedule overprices small kernels 1.2-3x there: one thread's
-  measured issue rate (0.5 G/s) is several times slower than the kernels'
-  own time implies, and kernels shorter than the measured floor are timed.
-  Whether Metal's per-dispatch stamps or the one-thread probe is off is
-  unresolved.
+- **Apple's compiler removes work the IR counts.** The M4's six outliers
+  are one kernel, the activation quantize (one workgroup of 1024 threads,
+  848 integer instructions a thread, all of which NVIDIA's compiler keeps):
+  2.8x over. One 1024-thread workgroup runs 53 G integer operations a second
+  on the M4, a uniform chain no more than 1.5x that, so the kernel's 2.7 us
+  of work leaves room for a fifth of the instructions. Seeing which needs
+  Apple's ISA (a binary archive through `applegpu`'s disassembler).
+- **The M4's launch cost** reads 1.5 us on most runs and 3.3 us on some,
+  the same within a run: where macOS places the encoding thread.
 - **Arm64 and the SSE tier** have no host probe yet.
 - **Per-kernel times on the host** carry the clock's cost (taken off) and
   rdtsc ordering; a call shorter than about 20 ns is within its noise.

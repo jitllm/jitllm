@@ -15,7 +15,8 @@ import (
 )
 
 // GPU measures device d: what a launch costs the host and a kernel the
-// device beyond its work, the read rate of all its threads, its nearest
+// device beyond its work, both after reads of the whole memory have woken
+// it, the read rate of all its threads, its nearest
 // cache's size on one multiprocessor and its last cache's size, each one's
 // rate and latency, its memory's latency, how many loads a thread keeps in
 // flight in a loop using each as it goes, and its float rate and delay.
@@ -56,12 +57,6 @@ func GPU(d backend.Device) (jit.Device, error) {
 	empty.Param("p", ir.F32)
 	scratch, err := p.alloc(4 * width)
 	if err != nil {
-		return out, err
-	}
-	if out.Floor, err = p.time(empty.Done(), 1, width, 64, scratch); err != nil {
-		return out, err
-	}
-	if out.Launch, err = p.wall(empty.Done(), 1, width, 256, scratch); err != nil {
 		return out, err
 	}
 
@@ -106,6 +101,12 @@ func GPU(d backend.Device) (jit.Device, error) {
 		return out, err
 	}
 	loaded := &warmLaunch{k: wk, groups: max(1, threads/width), width: min(width, threads), bufs: []backend.Buf{in, sums}}
+	if out.Floor, err = p.time(empty.Done(), 1, width, 64, scratch); err != nil {
+		return out, err
+	}
+	if out.Launch, err = p.wall(empty.Done(), 1, width, 256, scratch); err != nil {
+		return out, err
+	}
 
 	if out.Latency, err = p.chase(big/2, in); err != nil {
 		return out, err
@@ -359,28 +360,35 @@ func (p *gpuProbe) timed(t KernelTimer, name string, c backend.Kernel, groups, w
 }
 
 // wall is the seconds a launch of k costs n back to back in one session:
-// the rate the host issues launches at, where the kernel takes less.
+// the rate the host issues launches at, where the kernel takes less; the
+// median of rounds sessions.
 func (p *gpuProbe) wall(k *ir.Kernel, groups, width, n int, bufs ...backend.Buf) (float64, error) {
 	c, err := p.compile(k)
 	if err != nil {
 		return 0, err
 	}
-	var errs error
-	var secs float64
-	p.d.Session(func(s backend.Session) {
-		if errs = s.Sync(); errs != nil {
-			return
-		}
-		t0 := time.Now()
-		for range n {
-			if errs = s.Launch(c, groups, width, bufs...); errs != nil {
+	var times []float64
+	for range rounds {
+		var errs error
+		p.d.Session(func(s backend.Session) {
+			if errs = s.Sync(); errs != nil {
 				return
 			}
+			t0 := time.Now()
+			for range n {
+				if errs = s.Launch(c, groups, width, bufs...); errs != nil {
+					return
+				}
+			}
+			errs = s.Sync()
+			times = append(times, time.Since(t0).Seconds()/float64(n))
+		})
+		if errs != nil {
+			return 0, errs
 		}
-		errs = s.Sync()
-		secs = time.Since(t0).Seconds()
-	})
-	return secs / float64(n), errs
+	}
+	slices.Sort(times)
+	return times[len(times)/2], nil
 }
 
 // chase is the seconds one read waits, a single thread walking a random
