@@ -1,5 +1,7 @@
 package jit
 
+import "slices"
+
 // Cursors replaces a loop's indexing of a buffer by an address the loop
 // advances. Each access becomes a constant displacement from a pointer: the
 // buffer's address, or a copy of it. A loop advances the pointer the stride
@@ -30,6 +32,18 @@ func (p Cursors) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 		if !changed {
 			return nil, false, nil
+		}
+		field := map[int]int{}
+		for _, a := range m.Args {
+			if a.Buf >= 0 {
+				field[a.Buf] = a.Field
+			}
+		}
+		for c := range m.Loops {
+			if !m.Loops[c].Walk {
+				continue
+			}
+			slices.SortStableFunc(m.Loops[c].Cursors, func(a, b Cursor) int { return field[a.Buf] - field[b.Buf] })
 		}
 		return []*Kernel{m}, true, nil
 	})
@@ -176,7 +190,7 @@ func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (l
 		}
 		after := g.merged(addLin(at, g.times(trips, step)))
 		q, take := ptr, fresh
-		aside := !fresh && cu.laterNeeds(loops[li+1:], as, ix, after)
+		aside := !fresh && (k.Loops[c].Walk || cu.laterNeeds(loops[li+1:], as, ix, after))
 		if passes {
 			aside = false
 			if family(c) != pass {

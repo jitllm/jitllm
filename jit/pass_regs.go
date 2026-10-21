@@ -10,8 +10,9 @@ import (
 )
 
 // Regs binds an ordered kernel's values to registers. An argument word
-// takes its field's register, or the first spare one free; a count only one
-// loop reads is that loop's counter, a vector loop's and its tail's the two
+// takes the first of its field's registers free, or the first spare one
+// free; a count only one loop reads is that loop's counter -- a tile pass's
+// is kept in the outer register and the pass counts a copy of it -- a vector loop's and its tail's the two
 // counters and a scalar loop's the outer one; a count other counts are made
 // from is kept in a register of its own, as is each count made. A loop
 // whose count is held elsewhere counts in the first counter free, and a
@@ -29,7 +30,7 @@ import (
 // the loops read is loaded where each read is, the earliest read first,
 // until they do.
 type Regs struct {
-	Fields   map[int]int
+	Fields   map[int][]int
 	Spare    []int
 	Counters [2]int
 	Outer    int
@@ -196,6 +197,8 @@ func (b *binder86) gprs() error {
 		r := -1
 		ls, read := readers[i]
 		switch {
+		case nd.Op == OpParam && read && len(ls) == 1 && k.Loops[ls[0]].Walk:
+			r = b.take([]int{p.Outer})
 		case nd.Op == OpParam && read && len(ls) == 1 && !k.isBaseNode(i) && b.uses(i) == 0:
 			c := ls[0]
 			switch l := k.Loops[c]; {
@@ -211,9 +214,7 @@ func (b *binder86) gprs() error {
 				direct[c] = true
 			}
 		case nd.Op == OpParam && k.isBaseNode(i):
-			if f, ok := p.Fields[int(nd.Imm)]; ok && !b.used[f] {
-				r = b.take([]int{f})
-			}
+			r = b.take(p.Fields[int(nd.Imm)])
 		case nd.Op == OpParam:
 			r = b.take(p.Kept)
 		default:
@@ -234,6 +235,15 @@ func (b *binder86) gprs() error {
 			if k.Bufs[j].Base == i+1 {
 				k.Bufs[j].Reg = r + 1
 			}
+		}
+	}
+	for c := range k.Loops {
+		l := &k.Loops[c]
+		if !l.Walk || l.Reg != 0 || l.once() {
+			continue
+		}
+		if r := b.take([]int{p.Counters[0], p.Counters[1]}); r >= 0 {
+			l.Reg = r + 1
 		}
 	}
 	lastLoop := map[int]int{}
@@ -854,11 +864,12 @@ func (b *binder86) scalar(i int, hs []int, next *int) int {
 
 // copyRegs gives each value of a pair's later head the register of its
 // first head's twin plus the registers the first head takes, times the
-// head.
+// head; a value with a hint takes its hint, and one whose twin took the
+// register of one of its operands takes its own operand's.
 func (k *Kernel) copyRegs(cp []int, splats int) error {
 	n := 0
 	for i := range k.Nodes {
-		if cp[i] == 0 && k.Nodes[i].Reg > 0 && k.needsVector(i) && k.Nodes[i].Op != OpConst {
+		if cp[i] == 0 && k.Nodes[i].Reg > 0 && k.needsVector(i) && k.Nodes[i].Op != OpConst && k.Nodes[i].Hint == 0 {
 			n = max(n, k.Nodes[i].Reg, k.Nodes[i].Tmp)
 		}
 	}
@@ -867,9 +878,21 @@ func (k *Kernel) copyRegs(cp []int, splats int) error {
 		if cp[i] == 0 || !k.needsVector(i) {
 			continue
 		}
+		if h := k.Nodes[i].Hint; h > 0 {
+			k.Nodes[i].Reg = h
+		}
+	}
+	for i := range k.Nodes {
+		if cp[i] == 0 || !k.needsVector(i) || k.Nodes[i].Hint > 0 {
+			continue
+		}
 		t, ok := tw[i]
 		if !ok || t < 0 || k.Nodes[t].Reg == 0 {
 			return errors.New("a pair's later head with no twin")
+		}
+		if r := k.operandReg(t, i); r > 0 {
+			k.Nodes[i].Reg = r
+			continue
 		}
 		k.Nodes[i].Reg = k.Nodes[t].Reg + cp[i]*n
 		if k.Nodes[t].Tmp > 0 {
@@ -880,6 +903,19 @@ func (k *Kernel) copyRegs(cp []int, splats int) error {
 		}
 	}
 	return nil
+}
+
+// operandReg is the register of node i's operand in the place where twin
+// t's operand holds t's own register, if that operand is hinted; 0 where
+// there is none.
+func (k *Kernel) operandReg(t, i int) int {
+	ta, ia := k.args(&k.Nodes[t]), k.args(&k.Nodes[i])
+	for x := range ta {
+		if x < len(ia) && k.Nodes[*ta[x]].Reg == k.Nodes[t].Reg && k.Nodes[*ia[x]].Hint > 0 {
+			return k.Nodes[*ia[x]].Hint
+		}
+	}
+	return 0
 }
 
 // chains is, for each value in a trip of a loop adding several sums, 1 +

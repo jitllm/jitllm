@@ -1,6 +1,7 @@
 package jit
 
 import (
+	"slices"
 	"sort"
 
 	"github.com/jitllm/jitllm/jit/ir"
@@ -34,6 +35,7 @@ func (p Order) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		o.run()
 		m.Seq = m.interleave(o.seq)
 		m.constRuns()
+		m.spreadFirst()
 		m.orderCursors()
 		return []*Kernel{m}, true, nil
 	})
@@ -373,7 +375,8 @@ func (o *orderer) loop(d int) {
 
 // orderCursors orders each loop's cursors: a buffer the loop stores to
 // through its own address first, then in the order the sequence first
-// reaches each pointer.
+// reaches each pointer. A tile's pass, which takes every copy before it
+// reaches any, keeps its argument words' order.
 func (k *Kernel) orderCursors() {
 	first := map[[2]int]int{}
 	for pos, e := range k.Seq {
@@ -397,6 +400,9 @@ func (k *Kernel) orderCursors() {
 		}
 	}
 	for c := range k.Loops {
+		if k.Loops[c].Walk {
+			continue
+		}
 		cs := k.Loops[c].Cursors
 		rank := func(cu Cursor) (int, int) {
 			stored := 1
@@ -596,4 +602,58 @@ func (k *Kernel) constRuns() {
 			run++
 		}
 	}
+}
+
+// spreadFirst makes, as each trip of a jammed loop starts, the broadcasts
+// every vector's copy reads, with the loads only they read, in the order
+// the sequence made them.
+func (k *Kernel) spreadFirst() {
+	for c, l := range k.Loops {
+		if l.Wide == 0 {
+			continue
+		}
+		start := slices.Index(k.Seq, Entry{Kind: EntryLoop, I: c})
+		end := slices.Index(k.Seq, Entry{Kind: EntryEnd, I: c})
+		if start < 0 || end < 0 {
+			continue
+		}
+		spread := map[int]bool{}
+		for _, e := range k.Seq[start+1 : end] {
+			if e.Kind == EntryNode && k.Nodes[e.I].Op == OpBroadcast {
+				spread[e.I] = true
+				if a := k.Nodes[e.I].A; k.Nodes[a].Op == OpLoad && k.readCount(a) == 1 {
+					spread[a] = true
+				}
+			}
+		}
+		var first, rest []Entry
+		for _, e := range k.Seq[start+1 : end] {
+			if e.Kind == EntryNode && spread[e.I] {
+				first = append(first, e)
+			} else {
+				rest = append(rest, e)
+			}
+		}
+		copy(k.Seq[start+1:end], append(first, rest...))
+	}
+}
+
+// readCount is how many nodes and stores read node i.
+func (k *Kernel) readCount(i int) int {
+	n := 0
+	for j := range k.Nodes {
+		for _, a := range k.args(&k.Nodes[j]) {
+			if *a == i {
+				n++
+			}
+		}
+	}
+	for j := range k.Stores {
+		for _, a := range k.storeArgs(&k.Stores[j]) {
+			if *a == i {
+				n++
+			}
+		}
+	}
+	return n
 }

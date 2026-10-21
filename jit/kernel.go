@@ -110,6 +110,12 @@ type Loop struct {
 	// Lanes, where a vectorization set it, is the consecutive iterations a
 	// trip covers, one in each lane.
 	Lanes int
+	// Wide, where a jam set it, is the lanes the loop's values hold along an
+	// axis outside it: they are vectors though its trips are not lanes.
+	Wide int
+	// Walk is set on a tile's pass: it walks copies of its cursors and of
+	// its count, so each tile starts where the first did.
+	Walk bool
 	// Copies, where an unrolling set it, is how many vectors a trip covers,
 	// copy j of the body at iteration j*Lanes on.
 	Copies int

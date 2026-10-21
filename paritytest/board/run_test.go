@@ -11,6 +11,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit_old/cpu"
 	"github.com/jitllm/jitllm/jit_old/gpu/kernels"
@@ -341,4 +342,94 @@ func TestComposedSoftmaxRuns(t *testing.T) {
 		}
 	}
 	t.Logf("worst relative %.2g", worst)
+}
+
+// TestComposedAttnValuesRun runs the host's weighted-values kernels, one
+// key head's query heads over a history of f16 value rows, held to each
+// head's sum of its weights times the rows in f32.
+func TestComposedAttnValuesRun(t *testing.T) {
+	plan, err := composed(t, *boardModel, func(jit.Part) jit.Device { return host })
+	if plan == nil {
+		t.Fatal(err)
+	}
+	const dim, stride = 16, 32
+	ran := 0
+	for _, pp := range plan.Parts {
+		for ci := range pp.Codes {
+			code := &pp.Codes[ci]
+			var count, values *jit.CallArg
+			weights, outs := map[int]*jit.CallArg{}, map[int]*jit.CallArg{}
+			for ai := range code.Args {
+				a := &code.Args[ai]
+				switch {
+				case a.Value:
+					count = a
+				case a.Operand.Name == "kv.v":
+					values = a
+				case a.Operand.Name == "attn.dots":
+					weights[a.Operand.Copy] = a
+				case a.Operand.Name == "attn" && code.Writes(a.Operand):
+					outs[a.Operand.Copy] = a
+				}
+			}
+			if count == nil || values == nil || len(weights) == 0 || len(weights) != len(outs) || len(code.Args) != 2+2*len(weights) {
+				continue
+			}
+			c, err := cpu.Map(code.CPU)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rng := rand.New(rand.NewSource(3))
+			for _, n := range []int{1, 2, 7, 40} {
+				v := make([]uint16, n*stride)
+				for i := range v {
+					v[i] = quant.EncodeHalf(float32(rng.NormFloat64()))
+				}
+				w := make([][]float32, len(weights))
+				o := make([][]float32, len(weights))
+				block := make([]uint64, 64)
+				block[count.Field/8] = uint64(n)
+				block[values.Field/8] = uint64(uintptr(unsafe.Pointer(&v[values.Offset])))
+				for h := range w {
+					w[h] = make([]float32, n)
+					for i := range w[h] {
+						w[h][i] = rng.Float32()
+					}
+					o[h] = make([]float32, dim+8)
+					for i := range o[h] {
+						o[h][i] = float32(math.NaN())
+					}
+					block[weights[h].Field/8] = uint64(uintptr(unsafe.Pointer(&w[h][weights[h].Offset])))
+					block[outs[h].Field/8] = uint64(uintptr(unsafe.Pointer(&o[h][outs[h].Offset])))
+				}
+				c.Call((*cpu.Args)(unsafe.Pointer(&block[0])))
+				runtime.KeepAlive(v)
+				runtime.KeepAlive(w)
+				runtime.KeepAlive(o)
+				for h := range w {
+					for d := range dim {
+						var want, mag float64
+						for p := range n {
+							term := float64(w[h][p]) * quant.DecodeHalf(v[p*stride+d])
+							want += term
+							mag += math.Abs(term)
+						}
+						if got := float64(o[h][d]); !(math.Abs(got-want) <= 1e-6*mag) {
+							t.Errorf("%s kernel %d, %d positions: head %d dim %d %v, want %v", pp.Part, ci, n, h, d, got, want)
+						}
+					}
+					for d := dim; d < len(o[h]); d++ {
+						if !math.IsNaN(float64(o[h][d])) {
+							t.Errorf("%s kernel %d: head %d wrote word %d past the head", pp.Part, ci, h, d)
+						}
+					}
+				}
+				ran++
+			}
+		}
+	}
+	if ran == 0 {
+		t.Fatal("no host weighted-values kernel in the plan")
+	}
+	t.Logf("%d histories", ran)
 }

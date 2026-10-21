@@ -51,7 +51,7 @@ func (p Vectorize) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 
 func (k *Kernel) vectorizable(c int) bool {
 	l := k.Loops[c]
-	if l.Lanes > 0 || len(k.innerLoops(c)) > 0 || k.iterOf(c) < 0 {
+	if l.Lanes > 0 || l.Wide > 0 || len(k.innerLoops(c)) > 0 || k.iterOf(c) < 0 {
 		return false
 	}
 	folds := k.foldsOf(c)

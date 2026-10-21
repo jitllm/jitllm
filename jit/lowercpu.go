@@ -128,7 +128,7 @@ func (e *x86Lowerer) lanes(c int) int {
 	if c < 0 {
 		return 0
 	}
-	return e.k.Loops[c].Lanes
+	return max(e.k.Loops[c].Lanes, e.k.Loops[c].Wide)
 }
 
 func (e *x86Lowerer) node(i int) {
@@ -423,15 +423,19 @@ func (e *x86Lowerer) integer(i int) {
 func (e *x86Lowerer) store(i int) {
 	s := e.k.Stores[i]
 	m := e.addr(s.Buf, s.Ix, s.Ptr)
+	wide := e.lanes(s.At) > 0
+	if v := e.k.Nodes[s.Val]; v.Op == OpFold && e.k.Loops[v.At].Wide > 0 {
+		wide = true
+	}
 	if e.k.Bufs[s.Buf].Half {
-		if e.lanes(s.At) > 0 {
+		if wide {
 			e.a.VMOVDQUStorex(m, e.reg(s.Val))
 		} else {
 			e.a.VPEXTRWStore(m, e.reg(s.Val), 0)
 		}
 		return
 	}
-	if e.lanes(s.At) > 0 {
+	if wide {
 		e.a.VMOVDQUStore(m, e.reg(s.Val))
 		return
 	}
