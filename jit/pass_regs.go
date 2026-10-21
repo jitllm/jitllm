@@ -285,7 +285,7 @@ func (b *binder86) gprs() error {
 				}
 			}
 			for _, r := range append([]int{p.Counters[1]}, p.Walks...) {
-				if !held[r] && !copies[r] && !b.used[r] {
+				if !held[r] && !copies[r] && (!b.used[r] || b.counterFree(r, c)) {
 					l.Reg = r + 1
 					b.used[r] = true
 					break
