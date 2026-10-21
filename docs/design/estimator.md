@@ -107,8 +107,8 @@ synth-ernie45, one decode step, `scripts/cap`:
 |---|---|---|---|---|
 | laptop, one P-core (i9-12900HK, AVX2) | caches swept between steps | 1.00-1.03 | 53-54 of 64 | 1.28-1.42x |
 | laptop, one P-core | steady (step after step) | 0.92-1.20 | 40-57 of 64 | 1.26-1.83x |
-| V100-SXM2-16GB (cato, CUDA, sm_70) | steady | 0.88 | 65 of 65 | 1.07x |
-| Apple M4 (Metal) | steady | 1.18-1.20 | 59 of 65 | 1.06-1.08x |
+| V100-SXM2-16GB (cato, CUDA, sm_70) | steady | 0.94-0.96 | 67 of 67 | 1.09x |
+| Apple M4 (Metal) | steady | 0.97 | 60 of 67 | 1.22x |
 
 The device clocks were checked against the wall (`-estimate-clock`): on the
 M4, Metal's per-dispatch stamps and 200 back-to-back launches in one
@@ -122,10 +122,10 @@ larger than the caches lives in.
 
 ## Open
 
-- **One-thread kernels on the GPU.** The composed argmax runs 103,424 logits
-  on one thread (2.6 ms a step on the V100, 1.2 ms on the M4); the estimate
-  reads 0.86 and 1.21 of it. The kernel is owed a reduction across the
-  device.
+- **A short loop on many threads reads low.** The argmax split across the
+  device (`jit.SplitExtreme`: 1024 segments of 101 logits, their 1024
+  results in 32 groups, then one) reads 0.71-0.76 of its segments' kernel on
+  the V100 and 0.18 on the M4, where 1024 threads walk 101 loads each.
 - **One warp of straight-line code.** A quantize kernel of about 2,300 PTX
   instructions on 32 threads, with float and integer divisions by run-time
   values, reads 0.59: the device expands those divisions into sequences the
