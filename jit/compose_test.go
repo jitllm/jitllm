@@ -58,7 +58,7 @@ func TestComposeIR(t *testing.T) {
 				t.Logf("loop %d %+v", i, l)
 			}
 			t.Logf("order %v", k.topOrder())
-			k.explainFuse(t, 2, 3)
+
 		}
 	}
 }

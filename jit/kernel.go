@@ -59,6 +59,7 @@ type Loop struct {
 	Range  bool
 	Span   int
 	Unit   int
+	Bound  Bound
 	Spread bool
 	// Elem, where set, is 1 + the node that is the spread loop's element.
 	Elem int
@@ -221,3 +222,13 @@ func (n *Kernel) String() string {
 	}
 	return b.String()
 }
+
+// Bound is how a binding dealt a loop's trips to a workgroup's threads.
+type Bound uint8
+
+const (
+	Unbound Bound = iota
+	BoundRuns
+	BoundSpread
+	BoundWarps
+)

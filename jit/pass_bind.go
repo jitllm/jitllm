@@ -31,7 +31,7 @@ func (p Bind) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		changed := false
 		for c := range m.Loops {
 			l := m.Loops[c]
-			if l.Parent >= 0 || len(m.itersOf(c)) == 0 && len(m.foldsOf(c)) == 0 {
+			if l.Parent >= 0 || l.Bound != Unbound || len(m.itersOf(c)) == 0 && len(m.foldsOf(c)) == 0 {
 				continue
 			}
 			inner := m.innerLoops(c)
@@ -103,7 +103,7 @@ func (b *binder) runs(c int) {
 		return k.bin(OpAdd, ir.U32, run, b.lane)
 	})
 	k.Loops[c].Trip = (k.Loops[c].Trip + T - 1) / T
-	k.Loops[c].Unit = T
+	k.Loops[c].Unit, k.Loops[c].Bound = T, BoundRuns
 }
 
 // spread is a position a thread over the workgroup, and the loop's sums
@@ -115,7 +115,7 @@ func (b *binder) spread(c int) {
 		return k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, it, k.u32(T)), b.tid)
 	})
 	k.Loops[c].Trip = (k.Loops[c].Trip + T - 1) / T
-	k.Loops[c].Unit = T
+	k.Loops[c].Unit, k.Loops[c].Bound = T, BoundSpread
 	folds := k.foldsOf(c)
 	if len(folds) == 0 {
 		return
@@ -163,7 +163,7 @@ func (b *binder) warps(c, in int) {
 		return k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, it, k.u32(b.W)), b.warp)
 	})
 	k.Loops[in].Trip = (k.Loops[in].Trip + b.W - 1) / b.W
-	k.Loops[in].Unit = b.W
+	k.Loops[in].Unit, k.Loops[in].Bound = b.W, BoundWarps
 	k.Loops[in].Parent = -1
 	k.Loops[c].Trip = 1
 	folds := k.foldsOf(in)
