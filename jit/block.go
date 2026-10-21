@@ -17,8 +17,9 @@ type Block struct {
 	Graph   *graph.Graph
 	Rows    int
 	Formats map[jlm.Role]jlm.Type
-	// Page is the history's positions a page.
-	Page int
+	// Page is the history's positions a page; Keys the longest history a
+	// row of the step attends.
+	Page, Keys int
 }
 
 // Kernel is one formed kernel and the passes that formed it.

@@ -106,7 +106,8 @@ func lowerReduce(p Prim) *Nest {
 	t := elemOf(p.Type)
 	term := func(k int) int {
 		el := n.bin(OpAdd, ir.U32, n.bin(OpMul, ir.U32, o, n.u32(p.K)), k)
-		return n.expr(p, func(j int) int { return n.access(el, p.At[j]) })
+		vals := n.exprs(p, el, func(j int) int { return n.access(el, p.At[j]) })
+		return vals[len(vals)-1]
 	}
 	trips, first := p.K, 0
 	init := n.add(Node{Op: OpConst, Type: t, Imm: p.Init})

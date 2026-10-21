@@ -78,6 +78,15 @@ func decomposeOp(b Block, o graph.Op) ([]Prim, error) {
 			appendKey(value(o.In[0]), b.Rows, b.Graph.Values[o.In[0]].Width, b.Page),
 			appendValue(value(o.In[1]), b.Rows, b.Graph.Values[o.In[1]].Width, b.Page),
 		}, nil
+	case graph.OpAttend:
+		a := o.Attr
+		if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 || a.Window != 0 || a.Softcap != 0 || a.TempScale != 0 ||
+			a.NHead <= 0 || a.NKVHead <= 0 || a.NHead%a.NKVHead != 0 || b.Page <= 0 || b.Keys <= 0 {
+			return nil, fmt.Errorf("an attention of %d heads over %d, window %d, softcap %v", a.NHead, a.NKVHead, a.Window, a.Softcap)
+		}
+		return attention{rows: b.Rows, heads: a.NHead, kv: a.NKVHead, dim: a.HeadDim, page: b.Page,
+			capacity: (b.Keys + keyGrain - 1) / keyGrain * keyGrain, scale: float32(a.Scale),
+			q: value(o.In[0]), out: value(o.Out[0])}.prims(), nil
 	case graph.OpActMul:
 		if len(o.In) != 2 || len(o.Out) != 1 {
 			return nil, fmt.Errorf("an act_mul of %d operands", len(o.In))

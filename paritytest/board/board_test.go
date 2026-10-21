@@ -17,6 +17,8 @@ import (
 	"github.com/jitllm/jitllm/paritytest/maintier"
 )
 
+const prompt = "Hello there"
+
 var (
 	boardModel   = flag.String("board-model", "synth-ernie45", "the fixture the board runs")
 	boardProfile = flag.String("board-profile", "cuda-sm70", "the recorder profile main's kernels are taken on")
@@ -48,7 +50,7 @@ func mainDecode(t *testing.T, name, profile string) []*ir.Kernel {
 	if err := s.SetDevice(dev); err != nil {
 		t.Fatal(err)
 	}
-	lg, err := s.Prefill(m.Vocab.Encode("Hello there", true))
+	lg, err := s.Prefill(m.Vocab.Encode(prompt, true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,6 +126,7 @@ func composed(t *testing.T, name string, tg jit.Target) ([]jit.Kernel, []error) 
 	defer f.Close()
 	var ks []jit.Kernel
 	var errs []error
+	keys := len(m.Vocab.Encode(prompt, true)) + 1
 	for li := 0; li < m.Blocks(); li++ {
 		g := m.BlockGraph(li)
 		if g == nil {
@@ -137,7 +140,7 @@ func composed(t *testing.T, name string, tg jit.Target) ([]jit.Kernel, []error) 
 				}
 			}
 		}
-		k, err := jit.Compose(jit.Block{Graph: g, Rows: 1, Formats: formats, Page: 64}, tg, jit.ProfileFor(tg, 1))
+		k, err := jit.Compose(jit.Block{Graph: g, Rows: 1, Formats: formats, Page: 64, Keys: keys}, tg, jit.ProfileFor(tg, 1))
 		ks = append(ks, k...)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("block %d: %w", li, err))
@@ -190,4 +193,15 @@ func TestBoard(t *testing.T) {
 	}
 	t.Logf("%s on %s: %d of main's %d instructions (%.1f%%), %d blocks with ops not formed",
 		*boardModel, *boardProfile, same, total, 100*float64(same)/float64(max(total, 1)), len(errs))
+}
+
+func TestAttendAttrs(t *testing.T) {
+	m, err := model.Open(testmodels.Path(*boardModel+".jlm"), model.WithJITOptions(nn.WithTune(nn.TuneOff)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	for _, o := range m.BlockGraph(0).Ops {
+		t.Logf("%s in %v out %v weights %v attr %+v", o.Kind, o.In, o.Out, o.Weight, o.Attr)
+	}
 }
