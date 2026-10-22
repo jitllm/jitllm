@@ -1147,9 +1147,10 @@ func (g *Row) bind(b *ir.Builder, have func(i int) (ir.Value, bool)) []ir.Value 
 		}
 		t := bufType(bf.Kind)
 		if g.shared(i) {
-			params[i] = b.Shared(fmt.Sprintf("s%d", i), t, bf.N)
 			if bf.Of > 0 {
 				params[i] = params[bf.Of-1]
+			} else {
+				params[i] = b.Shared(fmt.Sprintf("s%d", i), t, bf.N)
 			}
 			continue
 		}
