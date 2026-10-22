@@ -72,21 +72,3 @@ func decomposeMatVecQ8(o graph.Op, c *Context, wo Operand) ([]Prim, error) {
 			Facts: Facts{Extents: map[int]int{1: nb * half, 2: R * (c.width(v)/q.Window + ns)}}},
 	), nil
 }
-
-// q8Element is element col of row row of a Q8_0 weight of rows rows, its
-// quants input qi and its scales input di: the row's signed byte times its
-// block's scale.
-func q8Element(x *exprs, qi, di, row, col, rows int) int {
-	U, I, F := ir.U32, ir.I32, ir.F32
-	word := x.load(qi, x.op(OpAdd, U, x.op(OpMul, U, x.op(OpShr, U, col, x.u(2)), x.u(uint32(rows))), row))
-	// The byte, its sign extended by flipping the top bit and taking 128
-	// away: no device shift keeps a sign.
-	b := x.op(OpAnd, U, x.op(OpShr, U, word, x.op(OpMul, U, x.op(OpAnd, U, col, x.u(3)), x.u(8))), x.u(255))
-	signed := x.op(OpAdd, U, x.op(OpXor, U, b, x.u(0x80)), x.u(0xffffff80))
-	q := x.un(OpCvtF32, F, x.un(OpBitcast, I, signed))
-	half := (rows + 1) / 2
-	at := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpShr, U, col, x.u(5)), x.u(uint32(half))), x.op(OpShr, U, row, x.u(1)))
-	sw := x.load(di, at)
-	scale := x.un(OpWidenHalf, F, x.op(OpShr, U, sw, x.op(OpMul, U, x.op(OpAnd, U, row, x.u(1)), x.u(16))))
-	return x.op(OpMul, F, q, scale)
-}

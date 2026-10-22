@@ -32,8 +32,13 @@ var (
 // step's angles: an element a pair, both turned values stored.
 func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
-	if len(o.In) != 1 || len(o.Out) != 1 || a.HeadDim <= 0 || c.width(o.In[0])%a.HeadDim != 0 || a.NRot != a.HeadDim || a.Freqs ||
-		a.Sections != [4]int{} || a.Mscale != 0 || a.Layout != graph.RopeNorm && a.Layout != graph.RopeNeox {
+	// The angles are the step's table, built from the engine's rotary: its
+	// per-pair factors (Freqs) and its cos/sin scale (Mscale) are in it. A
+	// row of the plan carries one coordinate, on which sectioned and XD
+	// rotaries turn every pair by the row's position: NEOX's pairs for XD.
+	if len(o.In) != 1 || len(o.Out) != 1 || a.HeadDim <= 0 || c.width(o.In[0])%a.HeadDim != 0 ||
+		a.NRot <= 0 || a.NRot%2 != 0 || a.NRot > a.HeadDim ||
+		a.Layout != graph.RopeNorm && a.Layout != graph.RopeNeox && a.Layout != graph.RopeXD {
 		return nil, fmt.Errorf("a rotary of %d of %d, layout %d", a.NRot, a.HeadDim, a.Layout)
 	}
 	U, F := ir.U32, ir.F32
@@ -43,7 +48,7 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	var x exprs
 	r, h, p := x.coord(0), x.coord(1), x.coord(2)
 	first, step := x.op(OpMul, U, p, x.u(2)), 1
-	if a.Layout == graph.RopeNeox {
+	if a.Layout != graph.RopeNorm {
 		first, step = p, pairs
 	}
 	at := x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(hd))), first)
@@ -54,8 +59,19 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	y0 := x.op(OpSub, F, x.op(OpMul, F, x0, co), x.op(OpMul, F, x1, si))
 	y1 := x.op(OpAdd, F, x.op(OpMul, F, x0, si), x.op(OpMul, F, x1, co))
 	out := c.value(o.Out[0])
-	return []Prim{{Kind: PrimMap, Shape: []int{R, W / hd, pairs}, In: []Operand{c.value(o.In[0]), tableAngles}, Expr: x.e,
-		Stores: []PrimStore{{Out: out, Ax: []int{r, at}, Ext: sh, Value: y0}, {Out: out, Ax: []int{r, at2}, Ext: sh, Value: y1}}}}, nil
+	prims := []Prim{{Kind: PrimMap, Shape: []int{R, W / hd, pairs}, In: []Operand{c.value(o.In[0]), tableAngles}, Expr: x.e,
+		Stores: []PrimStore{{Out: out, Ax: []int{r, at}, Ext: sh, Value: y0}, {Out: out, Ax: []int{r, at2}, Ext: sh, Value: y1}}}}
+	// A partial rotary turns the first NRot of each head; the rest of the
+	// head is the input's.
+	if tail := hd - a.NRot; tail > 0 {
+		var t exprs
+		tr, th, tj := t.coord(0), t.coord(1), t.coord(2)
+		ta := t.op(OpAdd, U, t.op(OpAdd, U, t.op(OpMul, U, th, t.u(uint32(hd))), t.u(uint32(a.NRot))), tj)
+		v := t.at(0, sh, tr, ta)
+		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, W / hd, tail}, In: []Operand{c.value(o.In[0])}, Expr: t.e,
+			Stores: []PrimStore{{Out: out, Ax: []int{tr, ta}, Ext: sh, Value: v}}})
+	}
+	return prims, nil
 }
 
 // decomposeKVAppend writes each row's key and value into its page of the key

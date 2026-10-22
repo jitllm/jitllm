@@ -13,6 +13,7 @@ import (
 func decompositions() map[graph.OpKind]Decomposition {
 	return map[graph.OpKind]Decomposition{
 		graph.OpNorm:      decomposeNorm,
+		graph.OpHeadNorm:  decomposeHeadNorm,
 		graph.OpMatVec:    decomposeMatVec,
 		graph.OpAdd:       decomposeAdd,
 		graph.OpActMul:    decomposeActMul,
@@ -69,6 +70,43 @@ func decomposeNorm(o graph.Op, c *Context) ([]Prim, error) {
 	}, nil
 }
 
+// decomposeHeadNorm is an RMS norm over each head of a row: the row seen as
+// heads of HeadDim, each head's sum of squares, then each element scaled by
+// its head's reciprocal root mean square and the weight every head shares,
+// ones where there is none.
+func decomposeHeadNorm(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.Weight) > 1 || len(o.In) != 1 || len(o.Out) != 1 {
+		return nil, fmt.Errorf("a head norm of %d weights", len(o.Weight))
+	}
+	F := ir.F32
+	rows := c.rows(o.In[0])
+	R, W, D := rows[0], rows[1], o.Attr.HeadDim
+	if D <= 0 || W%D != 0 {
+		return nil, fmt.Errorf("a head norm of heads of %d over a row of %d", D, W)
+	}
+	sh := []int{R, W / D, D}
+	sum := Operand{Kind: OperandScratch, Name: c.Graph.Values[o.Out[0]].Name + ".sumsq"}
+
+	var s exprs
+	xs := s.at(0, sh, s.coord(0), s.coord(1), s.coord(2))
+	s.op(OpMul, F, xs, xs)
+
+	var m exprs
+	r, h, i := m.coord(0), m.coord(1), m.coord(2)
+	ms := m.op(OpMul, F, m.at(1, sh[:2], r, h), m.f(1/float32(D)))
+	inv := m.op(OpDiv, F, m.f(1), m.un(OpSqrt, F, m.op(OpAdd, F, ms, m.f(float32(o.Attr.Eps)))))
+	y := m.op(OpMul, F, m.at(0, sh, r, h, i), inv)
+	in := []Operand{c.value(o.In[0]), sum}
+	if len(o.Weight) == 1 {
+		m.op(OpMul, F, y, m.at(2, []int{D}, i))
+		in = append(in, Operand{Kind: OperandVector, Role: o.Weight[0].Role, Name: o.Weight[0].Role.String()})
+	}
+	return []Prim{
+		{Kind: PrimReduce, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: sum, Combine: OpAdd, Expr: s.e},
+		{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: m.e},
+	}, nil
+}
+
 // decomposeMatVec is each output row's sum over K of the weight's row times
 // the input.
 func decomposeMatVec(o graph.Op, c *Context) ([]Prim, error) {
@@ -88,7 +126,11 @@ func decomposeMatVec(o graph.Op, c *Context) ([]Prim, error) {
 	case jlm.TypeQ8:
 		return decomposeMatVecQ8(o, c, wo)
 	default:
-		return nil, fmt.Errorf("a matvec over %s weights has no decomposition yet", wo.Format)
+		p, err := decomposeMatVecDecoded(w.Rows, w.K, wo, c.value(o.In[0]), c.value(o.Out[0]), c.Step.Rows)
+		if err != nil {
+			return nil, fmt.Errorf("a matvec over %s weights: %w", wo.Format, err)
+		}
+		return []Prim{p}, nil
 	}
 	var x exprs
 	r, row, k := x.coord(0), x.coord(1), x.coord(2)

@@ -57,6 +57,16 @@ type Model interface {
 // composing a model without it.
 func unread(f Model, block int32, read ...jlm.Role) error {
 	for _, e := range f.Entries() {
+		// The rotary's factors are the step's table's, built from the
+		// engine's rotary as main's host runs it (rope_factors_long unread
+		// there too); a vision tensor is the tower's segment.
+		switch e.Role {
+		case jlm.RoleRopeFreqs, jlm.RoleRopeFactorsShort, jlm.RoleRopeFactorsLong:
+			continue
+		}
+		if e.Role.Vision() {
+			continue
+		}
 		if e.Block == block && !slices.Contains(read, e.Role) {
 			return fmt.Errorf("the container holds %s, which the front end does not read", e.Role)
 		}
