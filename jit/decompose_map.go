@@ -192,9 +192,13 @@ func decomposeSlice(o graph.Op, c *Context) ([]Prim, error) {
 		if sh[1] != a.Width {
 			return nil, fmt.Errorf("a slice of %d from a table into %d", a.Width, sh[1])
 		}
+		w := o.Weight[0]
+		if a.Offset+a.Width > w.K*max(1, w.Rows) {
+			return nil, fmt.Errorf("a slice of %d from %d of a table of %d", a.Width, a.Offset, w.K*max(1, w.Rows))
+		}
 		x.load(0, x.op(OpAdd, U, x.u(uint32(a.Offset)), e))
-		return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{{Kind: OperandVector, Role: o.Weight[0].Role, Name: o.Weight[0].Role.String()}},
-			Out: c.value(o.Out[0]), Expr: x.e}}, nil
+		return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{{Kind: OperandVector, Role: w.Role, Name: w.Role.String()}},
+			Out: c.value(o.Out[0]), Expr: x.e, Facts: Facts{Extents: map[int]int{0: w.K * max(1, w.Rows)}}}}, nil
 	}
 	in := c.rows(o.In[0])
 	col := x.op(OpAdd, U, x.u(uint32(a.Offset)), e)

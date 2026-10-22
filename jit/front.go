@@ -26,6 +26,15 @@ type Part struct {
 	Kind  PartKind
 	Block int
 	Graph *graph.Graph
+	// Feeds are the inputs past the first that an earlier part writes: a
+	// block's per-layer input, the embedding's. The first is the part
+	// before's first output.
+	Feeds []Feed
+}
+
+// Feed is a part's input In that part From writes as its output Out.
+type Feed struct {
+	In, From, Out int
 }
 
 func (p Part) String() string {
@@ -115,17 +124,27 @@ func Front(f Model) ([]Part, error) {
 		rt := graph.RopeTable{NRot: r.NRot, Name: tableName(i)}
 		parts = append(parts, Part{Kind: PartTable, Block: -1, Graph: rt.Build()})
 	}
+	embed := len(parts)
 	parts = append(parts, Part{Kind: PartEmbed, Block: -1, Graph: em})
 	for li := 0; li < int(c.NLayer); li++ {
 		g := f.BlockGraph(li)
 		if g == nil {
 			return nil, fmt.Errorf("jit: block %d has no graph", li)
 		}
+		// A second input is the block's per-layer input, the embedding's
+		// output after its row.
+		var feeds []Feed
+		if len(g.In) > 1 {
+			if len(g.In) != 2 || len(em.Out) != 1+int(c.NLayer) || em.Values[em.Out[1+li]].Width != g.Values[g.In[1]].Width {
+				return nil, fmt.Errorf("jit: block %d reads %d inputs the input rows do not write", li, len(g.In))
+			}
+			feeds = []Feed{{In: 1, From: embed, Out: 1 + li}}
+		}
 		// Main's device takes a block's composite ops as their primitives
 		// (graph.Decompose, as its tier prepares the block); so does the
 		// composer, and its recurrent mixers too (graph.DecomposeRecurrent),
 		// which main's device runs whole.
-		parts = append(parts, Part{Kind: PartBlock, Block: li, Graph: graph.DecomposeRecurrent(graph.Decompose(g), c)})
+		parts = append(parts, Part{Kind: PartBlock, Block: li, Graph: graph.DecomposeRecurrent(graph.Decompose(g), c), Feeds: feeds})
 	}
 	var bound []jlm.Role
 	for _, g := range []*graph.Graph{em, h} {

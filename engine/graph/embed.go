@@ -9,12 +9,17 @@ import "github.com/jitllm/jitllm/format/jlm"
 //
 // Streams, where above one, makes the row a residual of that many streams,
 // stream-major, the input row stream 0 and the others zero (Kimi-K3's
-// residual attention).
+// residual attention) or, where AltUp, its projections matched to its
+// magnitude (Gemma 3n's). PLE, where set, adds each layer's input as an
+// output after the row (Out[1+layer]), from the row before its streams.
 type Embed struct {
 	NEmbd, NVocab int
 	Scale         float64
 	Positions     int
 	Streams       int
+	AltUp         bool
+	PLE           *PLE
+	Eps           float64
 }
 
 func (e *Embed) Build() *Graph {
@@ -39,7 +44,13 @@ func (e *Embed) Build() *Graph {
 		g.op(Op{Kind: OpAdd, In: []ValueID{x, p}, Out: []ValueID{y}})
 		x = y
 	}
-	if e.Streams > 1 {
+	var ple []ValueID
+	if e.PLE != nil {
+		ple = e.PLE.inputs(g, x, e.NEmbd, e.Eps)
+	}
+	if e.Streams > 1 && e.AltUp {
+		x = g.altExpand(x, e.Streams, e.NEmbd)
+	} else if e.Streams > 1 {
 		rest := (e.Streams - 1) * e.NEmbd
 		t := g.value("streams.tiled", rest)
 		g.op(Op{Kind: OpTile, In: []ValueID{x}, Out: []ValueID{t}, Attr: Attrs{Span: e.NEmbd}})
@@ -49,6 +60,6 @@ func (e *Embed) Build() *Graph {
 		g.op(Op{Kind: OpConcat, In: []ValueID{x, z}, Out: []ValueID{y}})
 		x = y
 	}
-	g.Out = []ValueID{x}
+	g.Out = append([]ValueID{x}, ple...)
 	return g
 }

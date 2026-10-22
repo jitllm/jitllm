@@ -21,16 +21,19 @@ type Head struct {
 	LogitScale float64
 	// Streams, where above one, is a residual of that many streams the
 	// head reads Bank checkpoints and the running residual of, by Kimi-K3's
-	// residual attention (OpStreamMix's bank, RoleOutputResScore), before
-	// its norm.
+	// residual attention (OpStreamMix's bank, RoleOutputResScore), or where
+	// AltUp collapses by Gemma 3n's unembedding, before its norm.
 	Streams, Bank int
+	AltUp         bool
 }
 
 func (h *Head) Build() *Graph {
 	g := &Graph{Block: -1}
 	x := g.value("x", max(1, h.Streams)*h.NEmbd)
 	g.In = []ValueID{x}
-	if h.Streams > 1 {
+	if h.Streams > 1 && h.AltUp {
+		x = g.altCollapse(x, h.Streams, h.NEmbd)
+	} else if h.Streams > 1 {
 		row := g.value("collapsed", h.NEmbd)
 		g.op(Op{Kind: OpStreamMix, In: []ValueID{x}, Out: []ValueID{row}, Weight: []Binding{{Role: jlm.RoleOutputResScore, K: h.NEmbd}},
 			Attr: Attrs{Streams: h.Streams, Eps: h.Eps, Groups: h.Bank}})

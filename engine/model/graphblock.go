@@ -919,6 +919,9 @@ func (m *Model) HeadGraph() *graph.Graph {
 	if c.ResAttn() {
 		h.Streams, h.Bank = c.Streams(), c.resBankFinal()
 	}
+	if c.AltUp != 0 {
+		h.Streams, h.AltUp = c.Streams(), true
+	}
 	return h.Build()
 }
 
@@ -931,6 +934,13 @@ func (m *Model) EmbedGraph() *graph.Graph {
 	}
 	if m.Cfg.ResAttn() {
 		e.Streams = m.Cfg.Streams()
+	}
+	if m.Cfg.AltUp != 0 {
+		e.Streams, e.AltUp = m.Cfg.Streams(), true
+	}
+	if t, ok := m.container.Find(jlm.RolePLETokEmbd, jlm.DenseBlock, -1); ok && m.Cfg.PLEDim != 0 {
+		e.PLE = &graph.PLE{Layers: m.Cfg.NLayer, Dim: m.Cfg.PLEDim, Rows: int(t.Dims[1])}
+		e.Eps = m.Cfg.RMSEps
 	}
 	return e.Build()
 }

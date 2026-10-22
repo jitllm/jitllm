@@ -3,6 +3,8 @@ package jit
 import (
 	"fmt"
 	"math"
+	"strconv"
+	"strings"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/ir"
@@ -38,15 +40,25 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, fmt.Errorf("an attention of %d heads over %d, window %d, softcap %v", a.NHead, a.NKVHead, a.Window, a.Softcap)
 	}
 	kw := a.NKVHead * a.HeadDim
-	return attend(o, c, c.value(o.In[0]), c.value(o.Out[0]), attendGeom{D: a.HeadDim, KW: kw, Values: tableValues}), nil
+	g := attendGeom{D: a.HeadDim, KW: kw, Keys: tableKeys, Values: tableValues}
+	// A block sharing another's history (the state kv@N) reads block N's
+	// pools as it left them.
+	if len(o.Reads) == 1 && strings.HasPrefix(o.Reads[0].Name, "kv@") {
+		n, err := strconv.Atoi(strings.TrimPrefix(o.Reads[0].Name, "kv@"))
+		if err != nil || c.Graph.Block < 0 {
+			return nil, fmt.Errorf("an attention over the history %q", o.Reads[0].Name)
+		}
+		g.Keys.Of, g.Values.Of = c.blockPart(n), c.blockPart(n)
+	}
+	return attend(o, c, c.value(o.In[0]), c.value(o.Out[0]), g), nil
 }
 
 // attendGeom is an attention's shape over the history's pools: D a key
 // head's width and a value head's (the work passes take one head width), KW
-// a pool row's, the values read from Values.
+// a pool row's, the keys read from Keys and the values from Values.
 type attendGeom struct {
-	D, KW  int
-	Values Operand
+	D, KW        int
+	Keys, Values Operand
 }
 
 // attend is decodeAttend's primitives for the query q (rows by heads by
@@ -197,7 +209,7 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 		var gx exprs
 		gx.op(OpMax, F, gx.at(0, heads, gx.coord(0), gx.coord(1)), gx.at(1, []int{H}, gx.coord(1)))
 		return []Prim{
-			{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(q, tableKeys), Out: dots, Expr: dx.e, Facts: scored},
+			{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(q, g.Keys), Out: dots, Expr: dx.e, Facts: scored},
 			scoreMap(keys, tables(dots), scores, sx.e, rng(2), temp),
 			maxReduce,
 			{Kind: PrimMap, Shape: heads, In: []Operand{raw, sinkVec(o)}, Out: maxes, Expr: gx.e},
@@ -208,7 +220,7 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 		}
 	}
 	return []Prim{
-		{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(q, tableKeys), Out: dots, Expr: dx.e, Facts: scored},
+		{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(q, g.Keys), Out: dots, Expr: dx.e, Facts: scored},
 		scoreMap(keys, tables(dots), scores, sx.e, rng(2), temp),
 		{Kind: PrimReduce, Shape: keys, In: tables(scores), Out: maxes, Combine: OpMax, Init: int64(math.Float32bits(minus)),
 			Expr: mx.e, Facts: rng(2)},

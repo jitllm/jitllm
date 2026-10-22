@@ -104,7 +104,7 @@ func decomposeAttendLatent(o graph.Op, c *Context) ([]Prim, error) {
 	}
 
 	shared := graph.Op{Attr: graph.Attrs{NHead: H, NKVHead: 1, HeadDim: w, Scale: a.Scale}}
-	prims = append(prims, attend(shared, c, query, oLat, attendGeom{D: w, KW: w, Values: tableKeys})...)
+	prims = append(prims, attend(shared, c, query, oLat, attendGeom{D: w, KW: w, Keys: tableKeys, Values: tableKeys})...)
 
 	var vx exprs
 	vr, vh, vd, vl := vx.coord(0), vx.coord(1), vx.coord(2), vx.coord(3)

@@ -202,6 +202,16 @@ func boundaries(ks []*Kernel, run []PartPlan, first int) {
 		}
 		alias[Operand{Kind: OperandValue, Value: b.In[0], Of: first + i}] = from
 	}
+	for i, pp := range run {
+		for _, fd := range pp.Part.Feeds {
+			if fd.From < first || fd.From >= first+len(run) {
+				continue
+			}
+			src := run[fd.From-first].Part.Graph
+			alias[Operand{Kind: OperandValue, Value: pp.Part.Graph.In[fd.In], Of: first + i}] =
+				Operand{Kind: OperandValue, Value: src.Out[fd.Out], Of: fd.From}
+		}
+	}
 	for _, k := range ks {
 		for bi := range k.Bufs {
 			o := &k.Bufs[bi].Operand

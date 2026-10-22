@@ -114,6 +114,11 @@ func NewStorageKeys(parts []Part) StorageKeys {
 		}
 		out[[2]int{i, int(b.In[0])}] = from
 	}
+	for i, p := range parts {
+		for _, f := range p.Feeds {
+			out[[2]int{i, int(p.Graph.In[f.In])}] = [2]int{f.From, int(parts[f.From].Graph.Out[f.Out])}
+		}
+	}
 	return StorageKeys{alias: out}
 }
 

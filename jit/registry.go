@@ -53,8 +53,14 @@ type Context struct {
 	Int8    *Int8Form
 	// Rotaries is the model's rotaries, each a table of the step.
 	Rotaries []graph.Rotary
-	formed   map[graph.ValueID]bool
+	// Of is the part's index in the model's parts, the blocks consecutive.
+	Of     int
+	formed map[graph.ValueID]bool
 }
+
+// blockPart is the part of block li, for a block part's decomposition: the
+// blocks are consecutive parts.
+func (c *Context) blockPart(li int) int { return c.Of - c.Graph.Block + li }
 
 // Decomposition is one op kind's primitives.
 type Decomposition func(o graph.Op, c *Context) ([]Prim, error)
@@ -85,7 +91,7 @@ func Default() *Registry {
 
 func (r *Registry) decompose(f Model, part Part, of int, s Step, d Device) ([]Prim, error) {
 	c := &Context{Graph: part.Graph, Part: part.Kind, Formats: formats(f, part), Step: s, Int8: r.Profiles[d.Kind].Int8,
-		Rotaries: f.Rotaries(), formed: map[graph.ValueID]bool{}}
+		Rotaries: f.Rotaries(), Of: of, formed: map[graph.ValueID]bool{}}
 	if q := c.Int8; q != nil && s.ActWindow > 0 && s.ActWindow != q.Window {
 		w := *q
 		w.Window = s.ActWindow
@@ -109,9 +115,14 @@ func (r *Registry) decompose(f Model, part Part, of int, s Step, d Device) ([]Pr
 	return prims, nil
 }
 
-// own marks p's operands as part of's, the step's tables aside.
+// own marks p's operands as part of's, the step's tables aside, and a
+// part's own table that a decomposition named another part's (a shared
+// history) left that part's.
 func (p *Prim) own(of int) {
 	mark := func(o *Operand) {
+		if o.Kind == OperandTable && o.PerPart && o.Of != 0 {
+			return
+		}
 		if o.Kind != OperandTable || o.PerPart {
 			o.Of = of
 		}
