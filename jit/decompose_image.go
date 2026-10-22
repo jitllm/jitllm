@@ -11,10 +11,11 @@ import (
 // patches.
 const RequestGrid = 0
 
-// decomposePatchify is each row's patch of the picture, gathered: row
-// Offset+p patch p of a grid RequestGrid patches wide, its element c
-// channel c/(P*P), row (c/P)%P and column c%P of the patch, zero past 3*P*P
-// and in the rows before Offset.
+// decomposePatchify is each row's patch of the picture, gathered: a row
+// past the Offset before it the patch its position less Offset names, of a
+// grid RequestGrid patches wide, its element c channel c/(P*P), row (c/P)%P
+// and column c%P of the patch; zero past 3*P*P and in the rows before
+// Offset.
 func decomposePatchify(o graph.Op, c *Context) ([]Prim, error) {
 	P := o.Attr.Span
 	if len(o.In) != 1 || len(o.Out) != 1 || P < 1 || c.width(o.In[0]) != 3*P*P || c.width(o.Out[0]) < 3*P*P {
@@ -27,7 +28,7 @@ func decomposePatchify(o graph.Op, c *Context) ([]Prim, error) {
 	row, col := x.coord(0), x.coord(1)
 	u := func(v int) int { return x.u(uint32(v)) }
 	lead := o.Attr.Offset
-	r := x.op(OpSub, U, x.op(OpMax, U, row, u(lead)), u(lead))
+	r := x.op(OpSub, U, x.op(OpMax, U, x.load(2, x.op(OpAdd, U, row, u(1))), u(lead)), u(lead))
 	gw := x.op(OpMax, U, x.load(1, x.u(RequestGrid)), u(1))
 	py, pxi := x.op(OpDiv, U, r, gw), x.op(OpRem, U, r, gw)
 	pp := uint32(P * P)
@@ -41,8 +42,25 @@ func decomposePatchify(o graph.Op, c *Context) ([]Prim, error) {
 	if lead > 0 {
 		x.sel(F, x.op(OpLess, ir.Pred, row, u(lead)), x.f(0), v)
 	}
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), tableRequest}, Out: c.value(o.Out[0]), Expr: x.e,
-		Facts: Facts{Extents: map[int]int{1: RequestRows + R}}}}, nil
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), tableRequest, tablePos}, Out: c.value(o.Out[0]), Expr: x.e,
+		Facts: Facts{Extents: map[int]int{1: RequestRows + R, 2: R + 1}}}}, nil
+}
+
+// decomposeFold is each Span consecutive rows as one: output row g is
+// input rows g*Span to g*Span+Span-1, each a run of the input's width.
+func decomposeFold(o graph.Op, c *Context) ([]Prim, error) {
+	k := o.Attr.Span
+	if len(o.In) != 1 || len(o.Out) != 1 || k < 2 || c.width(o.Out[0]) != k*c.width(o.In[0]) {
+		return nil, fmt.Errorf("a fold of %d operands by %d", len(o.In), k)
+	}
+	U := ir.U32
+	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
+	E := ish[1]
+	var x exprs
+	g, j := x.coord(0), x.coord(1)
+	row := x.op(OpAdd, U, x.op(OpMul, U, g, x.u(uint32(k))), x.op(OpDiv, U, j, x.u(uint32(E))))
+	x.at(0, ish, x.op(OpMin, U, row, x.u(uint32(ish[0]-1))), x.op(OpRem, U, j, x.u(uint32(E))))
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }
 
 // decomposeRegroup is space-to-depth over the grid of rows RequestGrid

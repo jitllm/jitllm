@@ -176,7 +176,11 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	sum.Least = 1
 	scored := rng(2)
 	scored.Extents[0] = R * H * D
-	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], tableRows, tablePages}, ops[1:]...) }
+	desc := tableRows
+	if a.RowWindows {
+		desc = tableWindows
+	}
+	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], desc, tablePages}, ops[1:]...) }
 	// The score map reads the mask as its fourth operand.
 	withMask := func(d Operand) []Operand {
 		if g.Mask != nil {

@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
@@ -70,11 +71,25 @@ func (c towerComposing) gridRope() bool {
 	}
 	return tc.Rope && 2*nn.RopeRuns(tc.towerRope().Runs) == tc.HeadDim
 }
+
+// BlockGraph is block li's graph, its attention inside each row's window
+// where the block is a windowed one (every block but each WinPattern'th).
 func (c towerComposing) BlockGraph(li int) *graph.Graph {
-	if li < 0 || li >= len(c.t.graphs) {
+	if li < 0 || li >= len(c.t.graphs) || c.t.graphs[li] == nil {
 		return nil
 	}
-	return c.t.graphs[li]
+	g := c.t.graphs[li]
+	if p := c.t.Cfg.WinPattern; p == 0 || (li+1)%p == 0 {
+		return g
+	}
+	w := *g
+	w.Ops = slices.Clone(g.Ops)
+	for i := range w.Ops {
+		if w.Ops[i].Kind == graph.OpAttend {
+			w.Ops[i].Attr.RowWindows = true
+		}
+	}
+	return &w
 }
 
 // towerVectorRoles is each block vector's vision role by the role its graph
@@ -86,6 +101,7 @@ var towerVectorRoles = map[jlm.Role]jlm.Role{
 	jlm.RoleAttnVBias: jlm.RoleVAttnVBias, jlm.RoleAttnOutBias: jlm.RoleVAttnOutBias,
 	jlm.RolePostAttnNorm: jlm.RoleVPostAttnNorm, jlm.RolePostFFNNorm: jlm.RoleVPostFFNNorm,
 	jlm.RoleAttnQNorm: jlm.RoleVAttnQNorm, jlm.RoleAttnKNorm: jlm.RoleVAttnKNorm, jlm.RoleVClamp: jlm.RoleVClamp,
+	jlm.RoleVFFNGateBias: jlm.RoleVFFNGateBias,
 }
 
 // towerBiasOf is each MLP matrix's bias role, by the matrix's own.
@@ -131,7 +147,7 @@ func (c towerComposing) EmbedGraph() *graph.Graph {
 	t, tc := c.t, c.t.Cfg
 	if tc.CLS && (tc.CLSLast || t.opt.towerCLSLast) || tc.PosBuckets > 0 || tc.PosSide > 0 || tc.PosAxis > 0 ||
 		t.posW != nil && (tc.Dynamic() || tc.Kind == jlm.ProjPhi4 || tc.Kind == jlm.ProjLFM2) || t.embdNorm != nil ||
-		tc.WinPattern > 0 || len(tc.Deep) > 0 || tc.Rope && !c.gridRope() {
+		len(tc.Deep) > 0 || tc.Rope && !c.gridRope() {
 		return nil
 	}
 	e := graph.TowerEntry{NEmbd: tc.NEmbd, Patch: tc.PatchSz, K: t.patchW.k, PatchBias: t.patchB != nil,
@@ -155,10 +171,49 @@ func (c towerComposing) HeadGraph() *graph.Graph {
 	case tc.Kind == jlm.ProjMLP && t.projW2.e != nil && tc.Scale <= 1 && (t.projB != nil) == (t.projB2 != nil),
 		tc.Kind == jlm.ProjQwen2VL && t.projW2.e != nil && t.projNorm == nil && (t.projB != nil) == (t.projB2 != nil):
 		h.Hidden, h.Act = t.projW.rows, graph.ActGELUTanh
+	case tc.Kind == jlm.ProjQwen25VL && t.projW2.e != nil && t.projNorm == nil && (t.projB != nil) == (t.projB2 != nil):
+		// Its rows are the picture's in window order (TowerPicture): each
+		// merge unit's rows consecutive, the merged rows put back in raster
+		// order.
+		h.Hidden, h.Act, h.RMS, h.Fold, h.Take = t.projW.rows, graph.ActGELUTanh, tc.RMS, true, true
 	default:
 		return nil
 	}
 	return h.Build()
+}
+
+// TowerPicture is picture px's step on the tower's plan, a grid gh x gw
+// patches: each row's patch (window order where the tower attends inside
+// windows, each merge unit's patches consecutive), each row's window, and
+// the merged rows' raster order.
+func (t *Tower) TowerPicture(px []float32, gh, gw int) *run.Picture {
+	c := t.Cfg
+	p := &run.Picture{Pixels: px, Grid: gw, Rows: gh * gw}
+	if c.CLS {
+		p.Rows++
+	}
+	if c.WinPattern == 0 {
+		return p
+	}
+	ord, segs := windowLayout(c, gh, gw)
+	sc := c.Scale
+	p.Pos = make([]int32, len(ord))
+	p.Windows = make([]int32, 2*len(ord))
+	for r, q := range ord {
+		p.Pos[r] = int32(q)
+	}
+	for i := 0; i < len(segs); i += 2 {
+		for r := segs[i]; r < segs[i+1]; r++ {
+			p.Windows[2*r], p.Windows[2*r+1] = int32(segs[i]), int32(segs[i+1])
+		}
+	}
+	mw, nt := gw/sc, len(ord)/(sc*sc)
+	p.Take = make([]int32, nt)
+	for i := 0; i < nt; i++ {
+		q := ord[i*sc*sc]
+		p.Take[(q/gw/sc)*mw+(q%gw)/sc] = int32(i)
+	}
+	return p
 }
 
 // towerRefusal names why the tower has no composed plan, nil where it has

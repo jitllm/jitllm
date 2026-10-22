@@ -39,7 +39,7 @@ func towerRoles(l *layer) map[jlm.Role]graph.Shape {
 }
 
 // towerVectors is block l's vectors by the role each plays.
-func towerVectors(l *layer) [14]nn.Vector {
+func towerVectors(l *layer) [15]nn.Vector {
 	return [...]nn.Vector{
 		{Role: jlm.RoleAttnNorm, V: l.attnNorm}, {Role: jlm.RoleAttnNormBias, V: l.attnNormB},
 		{Role: jlm.RoleFFNNorm, V: l.ffnNorm}, {Role: jlm.RoleFFNNormBias, V: l.ffnNormB},
@@ -48,6 +48,7 @@ func towerVectors(l *layer) [14]nn.Vector {
 		{Role: jlm.RoleFFNUpBias, V: l.upB}, {Role: jlm.RoleFFNDownBias, V: l.downB},
 		{Role: jlm.RoleAttnQNorm, V: l.qNorm}, {Role: jlm.RoleAttnKNorm, V: l.kNorm},
 		{Role: jlm.RolePostAttnNorm, V: l.postAttnNorm}, {Role: jlm.RolePostFFNNorm, V: l.postFFNNorm},
+		{Role: jlm.RoleVFFNGateBias, V: l.gateB},
 	}
 }
 
@@ -57,13 +58,13 @@ func towerGraph(sc *Config, l *layer, li int) *graph.Graph {
 	// A windowed block's mask is the picture's (SetKeyRuns), not the
 	// block's: its graph is the dense block's, and the attention reads the
 	// windows the picture staged.
-	if l.mn != nil || l.gateB != nil {
+	if l.mn != nil {
 		return nil
 	}
 	d := graph.Dense{Block: li, NEmbd: sc.NEmbd, NHead: sc.NHead, NKVHead: sc.NKVHead, HeadDim: sc.HeadDim,
 		NFFN: sc.NFFN, Eps: sc.RMSEps, Scale: sc.AttnScale, Act: graphAct(sc.Act),
 		LayerNorm: sc.LayerNorm, NormBias: l.attnNormB != nil, FFNNormBias: l.ffnNormB != nil,
-		QKVBias: l.bq != nil, OutBias: l.bo != nil, UpBias: l.upB != nil, DownBias: l.downB != nil,
+		QKVBias: l.bq != nil, OutBias: l.bo != nil, UpBias: l.upB != nil, DownBias: l.downB != nil, GateBias: l.gateB != nil,
 		Ungated: l.gate.e == nil, NonCausal: true, NoRope: sc.NRot == 0,
 		QKNorm: l.qNorm != nil, VNorm: sc.VNorm, PostNorm: l.postAttnNorm != nil}
 	if l.clamp != nil {

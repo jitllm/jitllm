@@ -167,25 +167,34 @@ func (s *State) windowOrder(gh, gw int) {
 		s.vis.ord, s.vis.segs = nil, nil
 		return
 	}
+	s.vis.ord, s.vis.segs = appendWindowLayout(s.vis.ord[:0], s.vis.segs[:0], c, gh, gw)
+}
+
+// windowLayout is windowOrder's order and windows for a gh x gw grid.
+func windowLayout(c TowerConfig, gh, gw int) (ord, segs []int) {
+	return appendWindowLayout(nil, nil, c, gh, gw)
+}
+
+func appendWindowLayout(ord, segs []int, c TowerConfig, gh, gw int) ([]int, []int) {
 	sc := c.Scale
 	mh, mw := gh/sc, gw/sc
 	win := c.WinSize / c.PatchSz / sc
-	s.vis.ord, s.vis.segs = s.vis.ord[:0], s.vis.segs[:0]
 	for wy := 0; wy < mh; wy += win {
 		for wx := 0; wx < mw; wx += win {
-			lo := len(s.vis.ord)
+			lo := len(ord)
 			for y := wy; y < min(wy+win, mh); y++ {
 				for x := wx; x < min(wx+win, mw); x++ {
 					for dy := 0; dy < sc; dy++ {
 						for dx := 0; dx < sc; dx++ {
-							s.vis.ord = append(s.vis.ord, (y*sc+dy)*gw+x*sc+dx)
+							ord = append(ord, (y*sc+dy)*gw+x*sc+dx)
 						}
 					}
 				}
 			}
-			s.vis.segs = append(s.vis.segs, lo, len(s.vis.ord))
+			segs = append(segs, lo, len(ord))
 		}
 	}
+	return ord, segs
 }
 
 // unwindow puts the merged rows, emitted in window order, back into raster

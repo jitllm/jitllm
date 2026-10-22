@@ -46,22 +46,30 @@ func (e *TowerEntry) Build() *Graph {
 }
 
 // TowerHead is a vision tower's projection: the LayerNorm after the blocks
-// where PostNorm, the class row dropped where Class, the grid regrouped
-// Scale x Scale into rows where Scale is above one, and the projector's
-// matrix (RoleVProj, its bias where ProjBias) to the text model's width --
-// or where Hidden, that matrix to Hidden wide, Act, and a second matrix
-// (RoleVProj2, its bias where ProjBias) to the text model's.
+// where PostNorm (an RMSNorm where RMS), the class row dropped where Class,
+// the grid regrouped Scale x Scale into rows where Scale is above one -- or
+// where Fold its rows taken Scale*Scale at a time, a tower whose rows hold
+// each group consecutively -- and the projector's matrix (RoleVProj, its
+// bias where ProjBias) to the text model's width, or where Hidden that
+// matrix to Hidden wide, Act, and a second matrix (RoleVProj2, its bias
+// where ProjBias) to the text model's; the output's rows in the request's
+// order where Take.
 type TowerHead struct {
-	NEmbd, Scale, ProjDim, Hidden int
-	PostNorm, Class, ProjBias     bool
-	Act                           Act
-	Eps                           float64
+	NEmbd, Scale, ProjDim, Hidden  int
+	PostNorm, RMS, Class, ProjBias bool
+	Fold, Take                     bool
+	Act                            Act
+	Eps                            float64
 }
 
 func (h *TowerHead) Build() *Graph {
 	g := &Graph{Block: -1}
 	x := g.Input("x", h.NEmbd)
-	if h.PostNorm {
+	switch {
+	case h.PostNorm && h.RMS:
+		x = g.row("post_norm", h.NEmbd, Op{Kind: OpNorm, In: []ValueID{x},
+			Weight: []Binding{{Role: jlm.RoleVPostNorm, K: h.NEmbd, Rows: 1}}, Attr: Attrs{Eps: h.Eps}})
+	case h.PostNorm:
 		x = g.row("post_norm", h.NEmbd, Op{Kind: OpLayerNorm, In: []ValueID{x},
 			Weight: []Binding{{Role: jlm.RoleVPostNorm, K: h.NEmbd}, {Role: jlm.RoleVPostNormBias, K: h.NEmbd}}, Attr: Attrs{Eps: h.Eps}})
 	}
@@ -69,7 +77,11 @@ func (h *TowerHead) Build() *Graph {
 		x = g.row("patch_rows", h.NEmbd, Op{Kind: OpDropRows, In: []ValueID{x}, Attr: Attrs{Offset: 1}})
 	}
 	w := h.NEmbd
-	if h.Scale > 1 {
+	switch {
+	case h.Scale > 1 && h.Fold:
+		w *= h.Scale * h.Scale
+		x = g.row("folded", w, Op{Kind: OpFold, In: []ValueID{x}, Attr: Attrs{Span: h.Scale * h.Scale}})
+	case h.Scale > 1:
 		w *= h.Scale * h.Scale
 		x = g.row("regrouped", w, Op{Kind: OpRegroup, In: []ValueID{x}, Attr: Attrs{Span: h.Scale}})
 	}
@@ -86,6 +98,10 @@ func (h *TowerHead) Build() *Graph {
 	}
 	y := mv("proj", x, w, h.Hidden, jlm.RoleVProj, jlm.RoleVProjBias)
 	y = g.row("proj_act", h.Hidden, Op{Kind: OpAct, In: []ValueID{y}, Attr: Attrs{Act: h.Act}})
-	g.Out = []ValueID{mv("proj2", y, h.Hidden, h.ProjDim, jlm.RoleVProj2, jlm.RoleVProj2Bias)}
+	y = mv("proj2", y, h.Hidden, h.ProjDim, jlm.RoleVProj2, jlm.RoleVProj2Bias)
+	if h.Take {
+		y = g.row("ordered", h.ProjDim, Op{Kind: OpTakeRows, In: []ValueID{y}})
+	}
+	g.Out = []ValueID{y}
 	return g
 }

@@ -23,9 +23,12 @@ var (
 	tableAngles = Operand{Kind: OperandTable, Name: "rope.cs"}
 	tableQOff   = Operand{Kind: OperandTable, Name: "q.off", Elem: ir.U32}
 	tableRows   = Operand{Kind: OperandTable, Name: "rows", Elem: ir.U32}
-	tablePages  = Operand{Kind: OperandTable, Name: "pages", Elem: ir.U32}
-	tableKeys   = Operand{Kind: OperandTable, Name: "kv.k", PerPart: true}
-	tableValues = Operand{Kind: OperandTable, Name: "kv.v", PerPart: true}
+	// tableWindows is the rows' descriptors with each row's window as its
+	// attended range (graph.Attrs.RowWindows).
+	tableWindows = Operand{Kind: OperandTable, Name: "rows.win", Elem: ir.U32}
+	tablePages   = Operand{Kind: OperandTable, Name: "pages", Elem: ir.U32}
+	tableKeys    = Operand{Kind: OperandTable, Name: "kv.k", PerPart: true}
+	tableValues  = Operand{Kind: OperandTable, Name: "kv.v", PerPart: true}
 )
 
 // rotaryTable is the step's table a rotary op turns by: the model's one

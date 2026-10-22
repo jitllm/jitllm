@@ -258,11 +258,12 @@ func TestD1OmniPlanMatchesReference(t *testing.T) {
 // and past).
 func TestPlanEncodesPicturesAsTheHost(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		open func(testing.TB, ...Option) (*Model, *Tower)
+		name   string
+		open   func(testing.TB, ...Option) (*Model, *Tower)
 		gh, gw int // a dynamic tower's grid; 0 for a fixed tower's square
 	}{{"smolvlm", openTower, 0, 0}, {"llava", openLlava, 0, 0},
-		{"qwen2vl", func(tb testing.TB, _ ...Option) (*Model, *Tower) { m := openQwen2VL(tb); return m, m.Tower() }, 16, 20}} {
+		{"qwen2vl", func(tb testing.TB, _ ...Option) (*Model, *Tower) { m := openQwen2VL(tb); return m, m.Tower() }, 16, 20},
+		{"qwen25vl", openQwen25VL, 16, 20}} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, tw := tc.open(t, noTune)
 			defer m.Close()
@@ -361,13 +362,17 @@ func planEncodesAsTheHost(t *testing.T, m *Model, tw *Tower, gh, gw int) {
 					t.Fatal(err)
 				}
 			}
-			if err := s.PictureEach(px, gw, n, forced); err != nil {
+			pic := tw.TowerPicture(px, gh, gw)
+			if pic.Rows != n {
+				t.Fatalf("the picture's step is %d rows, the host's %d", pic.Rows, n)
+			}
+			if err := s.PictureEach(pic, forced); err != nil {
 				t.Fatal(err)
 			}
 			if checked != len(want) {
 				t.Fatalf("%d of %d parts checked", checked, len(want))
 			}
-			got, err := s.Picture(px, gw, n, tokens)
+			got, err := s.Picture(pic, tokens)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -378,4 +383,18 @@ func planEncodesAsTheHost(t *testing.T, m *Model, tw *Tower, gh, gw int) {
 			}
 		})
 	}
+}
+
+// openQwen25VL is Qwen2.5-VL-3B's pair, converted and opened.
+func openQwen25VL(t testing.TB, opts ...Option) (*Model, *Tower) {
+	t.Helper()
+	text, proj := testmodels.Path("Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"), testmodels.Path("mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf")
+	if !vlmAvailable(text, proj) {
+		testmodels.Missing(t, "%s and its mmproj", text)
+	}
+	m, err := Open(jlmOfPair(t, text, proj), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m, m.Tower()
 }

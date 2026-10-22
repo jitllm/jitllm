@@ -401,10 +401,12 @@ type Session struct {
 	// request is a decision's words (jit.SourceRequest); marks its markers.
 	request []byte
 	marks   []int32
-	// pixels is a picture's step's input, in place of the tokens' rows;
-	// blank its tokens, one a live row.
-	pixels         []float32
+	// pic is a picture's step (Picture), its pixels the input in place of
+	// the tokens' rows; blank its tokens, one a live row; wins its rows'
+	// window descriptors (jit.SourceWindows).
+	pic            *Picture
 	blank          []int32
+	wins           []byte
 	logits         []float32
 	raw, tb, input []byte
 	err            error
@@ -579,20 +581,36 @@ func (s *Session) Decide(toks []int32, qt int, markers []int32) ([]float32, erro
 	return s.logits[:len(markers)*s.r.outW], nil
 }
 
-// Picture runs a vision tower's plan over a picture of patches a grid gw
-// wide, px its pixels [y][x][channel], as one bidirectional step of rows
-// live rows (the patches, and the rows the tower puts before them), each
-// row's position its own, and returns the head's first out rows: the
-// projected rows, a slice the next step overwrites.
-func (s *Session) Picture(px []float32, gw, rows, out int) ([]float32, error) {
+// Picture is a picture's step for a vision tower's plan.
+type Picture struct {
+	// Pixels is the picture, [y][x][channel].
+	Pixels []float32
+	// Grid is the patch grid's width; Rows the step's live rows, the patches
+	// and any rows the tower puts before them.
+	Grid, Rows int
+	// Pos is each row's position, nil for its index: a tower whose rows are
+	// its patches in another order than raster names each row's patch.
+	Pos []int32
+	// Windows is each row's window, [lo, hi) of the rows, where a block
+	// attends inside windows (graph.Attrs.RowWindows).
+	Windows []int32
+	// Take is each output row's row of the head's last value before it, nil
+	// for none (graph.OpTakeRows): window-ordered rows back in raster order.
+	Take []int32
+}
+
+// Picture runs a vision tower's plan over picture p as one bidirectional
+// step and returns the head's first out rows: the projected rows, a slice
+// the next step overwrites.
+func (s *Session) Picture(p *Picture, out int) ([]float32, error) {
 	r := s.r
-	if out < 1 || out > rows {
-		return nil, fmt.Errorf("run: %d rows out of %d", out, rows)
+	if out < 1 || out > p.Rows {
+		return nil, fmt.Errorf("run: %d rows out of %d", out, p.Rows)
 	}
-	if err := s.picture(px, gw, rows); err != nil {
+	if err := s.picture(p); err != nil {
 		return nil, err
 	}
-	defer func() { s.pixels, s.bidir = nil, false }()
+	defer func() { s.pic, s.bidir = nil, false }()
 	r.dev.Session(s.launchAll)
 	if s.err != nil {
 		return nil, s.err
@@ -600,21 +618,40 @@ func (s *Session) Picture(px []float32, gw, rows, out int) ([]float32, error) {
 	return s.logits[:out*r.outW], nil
 }
 
-// picture readies a picture's step: its pixels the input, a blank token a
-// live row, the grid's width the request.
-func (s *Session) picture(px []float32, gw, n int) error {
-	r := s.r
-	if n < 1 || n > r.step.Rows || gw < 1 {
-		return fmt.Errorf("run: %d rows of a grid %d wide in a step of %d rows", n, gw, r.step.Rows)
+// PictureEach is Picture a launch at a time, after(i) called once launch i
+// has finished, its storages readable.
+func (s *Session) PictureEach(p *Picture, after func(i int)) error {
+	if err := s.picture(p); err != nil {
+		return err
 	}
-	if r.input < 0 || 4*len(px) > len(s.input) {
-		return fmt.Errorf("run: %d pixels; the step takes %d bytes", len(px), len(s.input))
+	defer func() { s.pic, s.bidir = nil, false }()
+	return s.each(after)
+}
+
+// picture readies picture p's step: its pixels the input, a blank token a
+// live row, the grid's width and the output's order the request.
+func (s *Session) picture(p *Picture) error {
+	r, n := s.r, p.Rows
+	if n < 1 || n > r.step.Rows || p.Grid < 1 || p.Pos != nil && len(p.Pos) < n || p.Windows != nil && len(p.Windows) < 2*n ||
+		len(p.Take) > r.step.Rows {
+		return fmt.Errorf("run: %d rows of a grid %d wide in a step of %d rows (%d positions, %d window bounds, %d taken)",
+			n, p.Grid, r.step.Rows, len(p.Pos), len(p.Windows), len(p.Take))
+	}
+	if r.input < 0 || len(p.Pixels) == 0 || 4*len(p.Pixels) > len(s.input) {
+		return fmt.Errorf("run: %d pixels; the step takes %d bytes", len(p.Pixels), len(s.input))
 	}
 	if len(s.blank) < n {
 		s.blank = make([]int32, r.step.Rows)
 	}
-	binary.LittleEndian.PutUint32(s.request[4*jit.RequestGrid:], uint32(gw))
-	s.in, s.at, s.err, s.pixels, s.bidir = s.blank[:n], 0, nil, px, true
+	if s.wins == nil {
+		s.wins = make([]byte, len(s.rows))
+	}
+	put := binary.LittleEndian.PutUint32
+	put(s.request[4*jit.RequestGrid:], uint32(p.Grid))
+	for i, t := range p.Take {
+		put(s.request[4*(jit.RequestRows+i):], uint32(t))
+	}
+	s.in, s.at, s.err, s.pic, s.bidir = s.blank[:n], 0, nil, p, true
 	return nil
 }
 
@@ -693,6 +730,17 @@ func (s *Session) tables(se backend.Session) error {
 		put(w[4*jit.RowWrite:], uint32(s.at+j))
 		put(s.pos[4*(1+i):], uint32(s.at+j))
 		put(s.toks[4*i:], uint32(s.in[j]))
+		if p := s.pic; p != nil {
+			if p.Pos != nil {
+				put(s.pos[4*(1+i):], uint32(p.Pos[j]))
+			}
+			v := s.wins[4*jit.RowWords*i:]
+			copy(v[:4*jit.RowWords], w[:4*jit.RowWords])
+			if p.Windows != nil {
+				put(v[4*jit.RowStart:], uint32(p.Windows[2*j]))
+				put(v[4*jit.RowEnd:], uint32(p.Windows[2*j+1]))
+			}
+		}
 	}
 	var err error
 	for i, st := range r.plan.Storages {
@@ -705,9 +753,11 @@ func (s *Session) tables(se backend.Session) error {
 			err = se.WriteAt(s.bufs[i], 0, s.toks)
 		case jit.SourceRequest:
 			err = se.WriteAt(s.bufs[i], 0, s.request)
+		case jit.SourceWindows:
+			err = se.WriteAt(s.bufs[i], 0, s.wins)
 		case jit.SourceInput:
-			if s.pixels != nil {
-				err = se.WriteAt(s.bufs[i], 0, s.input[:copy(s.input, unsafe.Slice((*byte)(unsafe.Pointer(&s.pixels[0])), 4*len(s.pixels)))])
+			if px := s.pic; px != nil {
+				err = se.WriteAt(s.bufs[i], 0, s.input[:copy(s.input, unsafe.Slice((*byte)(unsafe.Pointer(&px.Pixels[0])), 4*len(px.Pixels)))])
 			} else if err = s.inputRows(); err == nil {
 				err = se.WriteAt(s.bufs[i], 0, s.input)
 			}
@@ -818,16 +868,6 @@ func (s *Session) SetStorage(i int, b []byte) error { return s.bufs[i].Write(b) 
 func (s *Session) StepEach(tok int32, pos int, after func(i int)) error {
 	s.one[0] = tok
 	s.in, s.at = s.one[:], pos
-	return s.each(after)
-}
-
-// PictureEach is Picture a launch at a time, after(i) called once launch i
-// has finished, its storages readable.
-func (s *Session) PictureEach(px []float32, gw, rows int, after func(i int)) error {
-	if err := s.picture(px, gw, rows); err != nil {
-		return err
-	}
-	defer func() { s.pixels, s.bidir = nil, false }()
 	return s.each(after)
 }
 

@@ -318,10 +318,12 @@ const (
 	// OpDropRows is In[0] from row Offset on: output row r is input row
 	// r+Offset.
 	OpDropRows
+	// OpFold is each Span consecutive rows of In[0] as one row.
+	OpFold
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan", "state_delta", "index_select", "block_select", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan", "state_delta", "index_select", "block_select", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -553,6 +555,10 @@ type Attrs struct {
 	Request bool
 	// Grid is OpRopeTable's (RopeTable.Grid).
 	Grid bool
+	// RowWindows makes OpAttend read each row's attended range from the
+	// step's window table, not its history descriptor: a vision tower's
+	// window attention, a row's keys its window's rows.
+	RowWindows bool
 	// Bound is OpClamp's.
 	Bound float64
 	// Offset and Width are OpSlice's; Offset is the leading rows of

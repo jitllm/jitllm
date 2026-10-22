@@ -52,11 +52,14 @@ const (
 	// SourceRequest is a step's request, the caller's words: a decision's
 	// question type, then its marker count, then a marker row a step row.
 	SourceRequest
+	// SourceWindows is the rows' descriptors as SourceRows lays them, each
+	// row's attended range its window.
+	SourceWindows
 	numSources
 )
 
 var sourceNames = [numSources]string{"step", "weight", "input", "rows", "pages", "query offset",
-	"rotary positions", "rotary planes", "keys", "values", "words", "transfer", "tokens", "state", "request"}
+	"rotary positions", "rotary planes", "keys", "values", "words", "transfer", "tokens", "state", "request", "windows"}
 
 func (s Source) String() string {
 	if s < numSources {
@@ -141,7 +144,7 @@ func (s StorageKeys) Key(o Operand) Operand {
 var tableSources = map[string]Source{
 	tableRows.Name: SourceRows, tablePages.Name: SourcePages, tableQOff.Name: SourceQueryOffset,
 	tablePos.Name: SourceRopePositions, tablePlanes.Name: SourceRopePlanes,
-	tableKeys.Name: SourceKeys, tableValues.Name: SourceValues, tableIdxKeys.Name: SourceKeys, tableRequest.Name: SourceRequest, tableAngles.Name: SourceStep,
+	tableKeys.Name: SourceKeys, tableValues.Name: SourceValues, tableIdxKeys.Name: SourceKeys, tableRequest.Name: SourceRequest, tableWindows.Name: SourceWindows, tableAngles.Name: SourceStep,
 	tableTokens.Name: SourceTokens,
 }
 

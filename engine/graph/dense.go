@@ -87,6 +87,10 @@ type Dense struct {
 	// projections.
 	LayerNorm, NormBias, FFNNormBias, Parallel, SharedNorm bool
 	OutBias, UpBias, DownBias, Ungated                     bool
+	// GateBias is a gated MLP's gate bias, RoleVFFNGateBias: a vision
+	// tower's (Qwen2.5-VL's) is the only block that carries one; UpBias and
+	// DownBias bind on a gated MLP too.
+	GateBias bool
 	Clamp                                                  float64
 	// ClampTable, where set, is the role of a bounds table every linear's
 	// input and output is clamped by (Gemma 4's clipped linears): matrix s
@@ -605,8 +609,8 @@ func (d *Dense) Build() *Graph {
 		g.op(Op{Kind: OpAct, In: []ValueID{up}, Out: []ValueID{p}, Weight: ws, Attr: Attrs{Act: d.Act}})
 		dn = mv("ffn_out", p, jlm.RoleFFNDown, d.NEmbd, opt(d.DownBias, jlm.RoleFFNDownBias))
 	} else {
-		gt := mv("gate", f, jlm.RoleFFNGate, d.NFFN, 0)
-		up := mv("up", f, jlm.RoleFFNUp, d.NFFN, 0)
+		gt := mv("gate", f, jlm.RoleFFNGate, d.NFFN, opt(d.GateBias, jlm.RoleVFFNGateBias))
+		up := mv("up", f, jlm.RoleFFNUp, d.NFFN, opt(d.UpBias, jlm.RoleFFNUpBias))
 		if d.SparseStd != 0 {
 			gs := g.value("gate_sparse", d.NFFN)
 			g.op(Op{Kind: OpGaussTopK, In: []ValueID{gt}, Out: []ValueID{gs}, Attr: Attrs{Bound: d.SparseStd}})
@@ -617,7 +621,7 @@ func (d *Dense) Build() *Graph {
 		if d.SubNorm {
 			p = norm("ffn_sub", p, jlm.RoleFFNSubNorm)
 		}
-		dn = mv("ffn_out", p, jlm.RoleFFNDown, d.NEmbd, 0)
+		dn = mv("ffn_out", p, jlm.RoleFFNDown, d.NEmbd, opt(d.DownBias, jlm.RoleFFNDownBias))
 	}
 	if d.PostNorm {
 		dn = norm("ffn_post", dn, jlm.RolePostFFNNorm)
