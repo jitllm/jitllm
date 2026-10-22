@@ -31,7 +31,7 @@ func gpuProfile() Profile {
 		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimReduce, Unrolled: true}}},
 		Threads{Group: 128},
 		LiveRows{},
-		WorkRow{Group: 1024},
+		WorkRow{Group: 1024, Heads: 32},
 		Coarsen{Unit: 4},
 		Parts{Kinds: []PrimKind{PrimMap}},
 		Split{Slots: 30720, Max: 32, Block: 32, Kinds: contract},

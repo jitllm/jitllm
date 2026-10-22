@@ -345,6 +345,9 @@ func (e *lowerer) groupReduce(i int, x ir.Value, max bool) ir.Value {
 		}
 		return v
 	}
+	if e.n.Group <= ir.SubgroupLanes {
+		return butterfly(x)
+	}
 	sh, tid := e.shared[i], e.thread()
 	b.Store(sh, b.Shr(ir.U32, tid, b.Const(ir.U32, 5)), butterfly(x), 0)
 	b.Barrier()
