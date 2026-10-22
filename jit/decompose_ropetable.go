@@ -68,6 +68,19 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	cw := func(w int) int { return x.load(2, x.u(uint32(w))) }
 	cf := func(w int) int { return x.un(OpBitcast, F, cw(w)) }
 	pos := x.load(0, x.op(OpAdd, U, r, x.u(1)))
+	in := []Operand{tablePos, Operand{}, tableRopeKon}
+	ext := map[int]int{0: 1 + R, 1: 8*stride + 1}
+	if o.Attr.Grid {
+		// The position is a cell of the grid the request's first word
+		// wide; the pair's axis, after the planes' scale, picks its row (0)
+		// or its column.
+		gw := x.op(OpMax, U, x.load(3, x.u(RequestGrid)), x.u(1))
+		axis := x.un(OpCvtI32, I, x.load(1, x.op(OpAdd, U, p, x.u(uint32(8*stride+1)))))
+		row := x.op(OpLess, ir.Pred, x.un(OpBitcast, U, axis), x.u(1))
+		pos = x.sel(U, row, x.op(OpDiv, U, pos, gw), x.op(OpRem, U, pos, gw))
+		in = append(in, tableRequest)
+		ext[1], ext[3] = 8*stride+1+P, RequestRows+R
+	}
 	var d [ropeDigits]int
 	for i := range d {
 		v := pos
@@ -119,9 +132,10 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	live.load(0, live.u(0))
 	out := Operand{Kind: OperandTable, Name: c.Graph.Values[o.Out[0]].Name}
 	planes := Operand{Kind: OperandTable, Name: tablePlanes.Name + strings.TrimPrefix(out.Name, tableAngles.Name)}
-	return []Prim{{Kind: PrimMap, Shape: []int{R, P}, In: []Operand{tablePos, planes, tableRopeKon}, Expr: x.e,
+	in[1] = planes
+	return []Prim{{Kind: PrimMap, Shape: []int{R, P}, In: in, Expr: x.e,
 		Stores: []PrimStore{{Out: out, Index: at, Value: cvs, Extent: 2 * R * P}, {Out: out, Index: at1, Value: svs, Extent: 2 * R * P}},
-		Facts: Facts{Rows: live.e, Words: map[int][]uint32{2: ropeConsts()}, Extents: map[int]int{0: 1 + R, 1: 8*stride + 1},
+		Facts: Facts{Rows: live.e, Words: map[int][]uint32{2: ropeConsts()}, Extents: ext,
 			Quarter: &Quarter{Sum: s, Rest: co, Turn: n, Part: f, Bound: 1 << (ropeDigitBits + 4)}}}}, nil
 }
 

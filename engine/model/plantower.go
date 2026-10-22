@@ -39,8 +39,37 @@ func (c towerComposing) Blocks() int         { return len(c.t.graphs) }
 func (c towerComposing) ActWindow() int      { return c.m.ActWindow() }
 
 func (c towerComposing) SeamGraph(int) *graph.Graph { return nil }
-func (c towerComposing) Rotaries() []graph.Rotary   { return nil }
-func (c towerComposing) Ropes() []nn.Rope           { return nil }
+
+// Rotaries is the tower's 2-D rotary where it turns q and k: each row's
+// position a cell of the picture's grid, a pair turned by the cell's row or
+// column (towerRope's runs).
+func (c towerComposing) Rotaries() []graph.Rotary {
+	if !c.gridRope() {
+		return nil
+	}
+	r := c.t.Cfg.towerRope()
+	return []graph.Rotary{{NRot: 2 * nn.RopeRuns(r.Runs), Base: r.Base, Grid: true}}
+}
+
+// Ropes is the engine's rotary for Rotaries' table.
+func (c towerComposing) Ropes() []nn.Rope {
+	if !c.gridRope() {
+		return nil
+	}
+	return []nn.Rope{c.t.Cfg.towerRope()}
+}
+
+// gridRope reports whether the tower turns by towerRope's (row, column)
+// runs over the whole head; a tower that turns another way (Pixtral's,
+// Llama 4's, Gemma 4's, Kimi-VL's) has no stated table yet.
+func (c towerComposing) gridRope() bool {
+	tc := c.t.Cfg
+	switch tc.Kind {
+	case jlm.ProjPixtral, jlm.ProjLlama4, jlm.ProjGemma4V, jlm.ProjKimiVL:
+		return false
+	}
+	return tc.Rope && 2*nn.RopeRuns(tc.towerRope().Runs) == tc.HeadDim
+}
 func (c towerComposing) BlockGraph(li int) *graph.Graph {
 	if li < 0 || li >= len(c.t.graphs) {
 		return nil
@@ -101,7 +130,8 @@ func (c towerComposing) Find(role jlm.Role, block, index int32) (*jlm.Entry, boo
 func (c towerComposing) EmbedGraph() *graph.Graph {
 	t, tc := c.t, c.t.Cfg
 	if tc.CLS && (tc.CLSLast || t.opt.towerCLSLast) || tc.PosBuckets > 0 || tc.PosSide > 0 || tc.PosAxis > 0 ||
-		tc.Dynamic() || t.embdNorm != nil {
+		t.posW != nil && (tc.Dynamic() || tc.Kind == jlm.ProjPhi4 || tc.Kind == jlm.ProjLFM2) || t.embdNorm != nil ||
+		tc.WinPattern > 0 || len(tc.Deep) > 0 || tc.Rope && !c.gridRope() {
 		return nil
 	}
 	e := graph.TowerEntry{NEmbd: tc.NEmbd, Patch: tc.PatchSz, K: t.patchW.k, PatchBias: t.patchB != nil,
@@ -113,15 +143,17 @@ func (c towerComposing) EmbedGraph() *graph.Graph {
 }
 
 // HeadGraph is the tower's projector: idefics3's (its post-norm, its
-// regroup and one matrix) or llava's (the class row dropped, a matrix, the
-// tanh GELU llama.cpp's projector runs, a matrix).
+// regroup and one matrix), llava's (the class row dropped, a matrix, the
+// tanh GELU llama.cpp's projector runs, a matrix) or Qwen2-VL's merger (its
+// norm, the 2x2 regroup, the same two matrices).
 func (c towerComposing) HeadGraph() *graph.Graph {
 	t, tc := c.t, c.t.Cfg
 	h := graph.TowerHead{NEmbd: tc.NEmbd, Scale: tc.Scale, ProjDim: tc.ProjDim, PostNorm: t.postLnW != nil,
 		Class: tc.CLS, ProjBias: t.projB != nil, Eps: tc.Eps}
 	switch {
 	case tc.Kind == jlm.ProjIdefics3 && t.projW2.e == nil:
-	case tc.Kind == jlm.ProjMLP && t.projW2.e != nil && tc.Scale <= 1 && (t.projB != nil) == (t.projB2 != nil):
+	case tc.Kind == jlm.ProjMLP && t.projW2.e != nil && tc.Scale <= 1 && (t.projB != nil) == (t.projB2 != nil),
+		tc.Kind == jlm.ProjQwen2VL && t.projW2.e != nil && t.projNorm == nil && (t.projB != nil) == (t.projB2 != nil):
 		h.Hidden, h.Act = t.projW.rows, graph.ActGELUTanh
 	default:
 		return nil

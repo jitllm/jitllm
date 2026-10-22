@@ -551,6 +551,8 @@ type Attrs struct {
 	Pooling uint8
 	// Request makes OpEmbed index its table by the step's request.
 	Request bool
+	// Grid is OpRopeTable's (RopeTable.Grid).
+	Grid bool
 	// Bound is OpClamp's.
 	Bound float64
 	// Offset and Width are OpSlice's; Offset is the leading rows of

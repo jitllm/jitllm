@@ -140,7 +140,7 @@ func Front(f Model) ([]Part, error) {
 		if r.NRot == 0 {
 			continue
 		}
-		rt := graph.RopeTable{NRot: r.NRot, Name: tableName(i)}
+		rt := graph.RopeTable{NRot: r.NRot, Name: tableName(i), Grid: r.Grid}
 		parts = append(parts, Part{Kind: PartTable, Block: -1, Graph: rt.Build()})
 	}
 	var seamRoles []jlm.Role

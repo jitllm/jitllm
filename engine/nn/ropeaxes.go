@@ -225,3 +225,34 @@ func runFreqs(r Rope, npairs int) []float64 {
 	}
 	return out
 }
+
+// Planes is the folded block the device's rotary table reads for the whole
+// of r's table: TabPlanes at NRot/2 pairs, or for a multi-axis rotary each
+// run's planes at its pairs' places, the scale after them, then each pair's
+// axis.
+func (r Rope) Planes() []float32 {
+	if len(r.Runs) == 0 {
+		return r.TabPlanes(r.NRot / 2)
+	}
+	const planes, lanes = 8, 8
+	P := RopeRuns(r.Runs)
+	stride := (P + lanes - 1) &^ (lanes - 1)
+	out := make([]float32, planes*stride+1+P)
+	off := 0
+	for _, u := range r.Runs {
+		if u.Pairs <= 0 {
+			continue
+		}
+		b := ropeTabFor(r.runRope(u), u.Pairs).block
+		rs := (u.Pairs + lanes - 1) &^ (lanes - 1)
+		for i := range planes {
+			copy(out[i*stride+off:i*stride+off+u.Pairs], b[i*rs:i*rs+u.Pairs])
+		}
+		out[planes*stride] = b[planes*rs]
+		for j := range u.Pairs {
+			out[planes*stride+1+off+j] = float32(u.Axis)
+		}
+		off += u.Pairs
+	}
+	return out
+}

@@ -104,12 +104,16 @@ func New(f Source, dev backend.Device, gpu jit.Device, keys int, opts ...Option)
 		o(r)
 	}
 	r.planes = map[string][]float32{}
+	rots := f.Rotaries()
 	for i, rope := range f.Ropes() {
 		name := "rope.planes"
 		if i > 0 {
 			name = fmt.Sprintf("rope.planes.%d", i)
 		}
 		r.planes[name] = rope.TabPlanes(rope.NRot / 2)
+		if i < len(rots) && rots[i].Grid {
+			r.planes[name] = rope.Planes()
+		}
 	}
 	if r.reg == nil {
 		r.reg = jit.Default()

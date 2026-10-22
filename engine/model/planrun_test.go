@@ -251,42 +251,50 @@ func TestD1OmniPlanMatchesReference(t *testing.T) {
 // holds it to the host's Encode on every device a backend opens. Both sides
 // quantize the Q8_0 matrices' activations to int8, whose roundings compound
 // through the blocks (main's device gate stops after one block for it), so
-// each part is held teacher-forced, the host's input in, to main's one-block
-// bound, and the free-running picture to a decade above its reading.
+// each part is held teacher-forced, the host's input in, to 5e-6 (a tenth of
+// main's one-block bound; the worst clean part reads 1.6e-6, and Qwen2-VL's
+// rotary with its axes swapped 3.1e-5 at block 0), and the free-running
+// picture to 5e-2 (32 blocks of Qwen2-VL read 1.6e-2, the violations 0.12
+// and past).
 func TestPlanEncodesPicturesAsTheHost(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		open func(testing.TB, ...Option) (*Model, *Tower)
-	}{{"smolvlm", openTower}, {"llava", openLlava}} {
+		gh, gw int // a dynamic tower's grid; 0 for a fixed tower's square
+	}{{"smolvlm", openTower, 0, 0}, {"llava", openLlava, 0, 0},
+		{"qwen2vl", func(tb testing.TB, _ ...Option) (*Model, *Tower) { m := openQwen2VL(tb); return m, m.Tower() }, 16, 20}} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, tw := tc.open(t, noTune)
 			defer m.Close()
-			planEncodesAsTheHost(t, m, tw)
+			planEncodesAsTheHost(t, m, tw, tc.gh, tc.gw)
 		})
 	}
 }
 
 // planEncodesAsTheHost is TestPlanEncodesPicturesAsTheHost on one tower.
-func planEncodesAsTheHost(t *testing.T, m *Model, tw *Tower) {
+func planEncodesAsTheHost(t *testing.T, m *Model, tw *Tower, gh, gw int) {
 	c := tw.Cfg
-	px := make([]float32, c.ImageSz*c.ImageSz*3)
+	if gh == 0 {
+		gh, gw = c.ImageSz/c.PatchSz, c.ImageSz/c.PatchSz
+	}
+	px := make([]float32, gh*gw*c.PatchSz*c.PatchSz*3)
 	for i := range px {
 		px[i] = float32((i*37)%255)/127.5 - 1
 	}
 	host := tw.testState()
 	var want [][]float32
 	host.vis.afterBlock = func(_ int, x []float32) { want = append(want, slices.Clone(x)) }
-	out, err := host.Encode(px)
+	out, err := host.EncodeGrid(px, gh, gw)
 	host.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
 	want = append(want, slices.Clone(out))
-	side := c.ImageSz / c.PatchSz
-	n := side * side
+	n := gh * gw
 	if c.CLS {
 		n++
 	}
+	tokens := len(out) / c.ProjDim
 	src := m.TowerComposing()
 	if err := src.(towerComposing).towerRefusal(); err != nil {
 		t.Fatal(err)
@@ -314,16 +322,19 @@ func planEncodesAsTheHost(t *testing.T, m *Model, tw *Tower) {
 			}
 			defer s.Close()
 			p := r.Plan()
-			if len(p.Parts) != len(want) {
-				t.Fatalf("%d parts, the host stops at %d", len(p.Parts), len(want))
-			}
 			// Each part's output read once its last launch has run, held to
-			// the host's, then replaced by it.
-			last := map[int]int{}
+			// the host's, then replaced by it; a rotary table has no host
+			// stop.
+			last, stop := map[int]int{}, map[int]int{}
 			k := 0
 			for pi, pp := range p.Parts {
 				k += len(pp.Codes)
-				last[k-1] = pi
+				if pp.Part.Kind != jit.PartTable {
+					last[k-1], stop[pi] = pi, len(stop)
+				}
+			}
+			if len(stop) != len(want) {
+				t.Fatalf("%d parts, the host stops at %d", len(stop), len(want))
 			}
 			checked := 0
 			forced := func(i int) {
@@ -337,12 +348,12 @@ func planEncodesAsTheHost(t *testing.T, m *Model, tw *Tower) {
 					t.Errorf("%v: its output has no storage", p.Parts[pi].Part)
 					return
 				}
-				b, w := s.Storage(at), want[pi]
+				b, w := s.Storage(at), want[stop[pi]]
 				got := unsafe.Slice((*float32)(unsafe.Pointer(&b[0])), len(b)/4)[:len(w)]
 				nmse, worst := nmseOf(got, w)
 				t.Logf("%v, the host's input in: NMSE %.3g, worst %.3g", p.Parts[pi].Part, nmse, worst)
-				if !(nmse <= 5e-5) {
-					t.Errorf("%v: NMSE %.3g against the host, past main's one-block bound 5e-5", p.Parts[pi].Part, nmse)
+				if !(nmse <= 5e-6) {
+					t.Errorf("%v: NMSE %.3g against the host, past 5e-6", p.Parts[pi].Part, nmse)
 				}
 				checked++
 				copy(got, w)
@@ -350,19 +361,19 @@ func planEncodesAsTheHost(t *testing.T, m *Model, tw *Tower) {
 					t.Fatal(err)
 				}
 			}
-			if err := s.PictureEach(px, side, n, forced); err != nil {
+			if err := s.PictureEach(px, gw, n, forced); err != nil {
 				t.Fatal(err)
 			}
 			if checked != len(want) {
 				t.Fatalf("%d of %d parts checked", checked, len(want))
 			}
-			got, err := s.Picture(px, side, n, c.Tokens())
+			got, err := s.Picture(px, gw, n, tokens)
 			if err != nil {
 				t.Fatal(err)
 			}
 			nmse, worst := nmseOf(got, out)
-			t.Logf("free-running: %d rows of %d, NMSE %.3g against the host, worst %.3g", c.Tokens(), c.ProjDim, nmse, worst)
-			if !(nmse <= 1e-2) {
+			t.Logf("free-running: %d rows of %d, NMSE %.3g against the host, worst %.3g", tokens, c.ProjDim, nmse, worst)
+			if !(nmse <= 5e-2) {
 				t.Errorf("free-running: NMSE %.3g against the host", nmse)
 			}
 		})
