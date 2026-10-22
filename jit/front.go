@@ -122,7 +122,7 @@ func Front(f Model) ([]Part, error) {
 		// (graph.Decompose, as its tier prepares the block); so does the
 		// composer, and its recurrent mixers too (graph.DecomposeRecurrent),
 		// which main's device runs whole.
-		parts = append(parts, Part{Kind: PartBlock, Block: li, Graph: graph.DecomposeRecurrent(graph.Decompose(g))})
+		parts = append(parts, Part{Kind: PartBlock, Block: li, Graph: graph.DecomposeRecurrent(graph.Decompose(g), c)})
 	}
 	var bound []jlm.Role
 	for _, g := range []*graph.Graph{em, h} {

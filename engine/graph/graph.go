@@ -247,10 +247,18 @@ const (
 	// its oldest row and takes the row. A primitive with a state of its own:
 	// a recurrent mixer's convolution (DecomposeRecurrent).
 	OpStateConv
+	// OpStateScan is Mamba-2's selective state update over In[0], the
+	// convolved row C | B | x (NKVHead heads of HeadDim for C and for B,
+	// then NHead value heads of x), with In[1] each value head's dt and
+	// In[2] its decay: value head v, paired with key head v/rep (v%NKVHead
+	// where KeyTiled), turns its state S (x's width by HeadDim) into
+	// S*decay + (x*dt) B and puts out S C + D x, D its Weight[0] entry. A
+	// primitive with a state of its own (DecomposeRecurrent).
+	OpStateScan
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -465,6 +473,10 @@ type Attrs struct {
 	// Taps is OpConv's kernel, and OpNGram's convolution's; Dil the
 	// latter's spacing between taps.
 	Taps, Dil int
+	// KeyTiled is OpStateScan's pairing of value head v with key head v %
+	// key heads (jlm.FlagDeltaKeyTiled) rather than v / (value heads per
+	// key head).
+	KeyTiled bool
 	// Bound is OpClamp's.
 	Bound float64
 	// Offset and Width are OpSlice's.

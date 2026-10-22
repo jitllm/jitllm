@@ -161,11 +161,19 @@ func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (r
 			}
 			return 0, false
 		}
+		// A block's residual: after its FFN, or after its mixer where it
+		// has no FFN (Mamba-2's).
+		resid := func(li int) []float32 {
+			if h := traced[fmt.Sprint(li, "ffn_resid")]; h != nil {
+				return h
+			}
+			return traced[fmt.Sprint(li, "attn_resid")]
+		}
 		hostIn := func(li int) []float32 {
 			if li == 0 {
 				return traced[fmt.Sprint(-1, "embd")]
 			}
-			return traced[fmt.Sprint(li-1, "ffn_resid")]
+			return resid(li - 1)
 		}
 		worstBlock, worstAt := 0.0, -1
 		if err := s.StepEach(ids[0], 0, func(i int) {
@@ -181,7 +189,7 @@ func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (r
 			}
 			if li := blockOf(p); li >= 0 && li <= last {
 				if st, ok := residOf(p); ok {
-					h := traced[fmt.Sprint(li, "ffn_resid")]
+					h := resid(li)
 					if g := s.Storage(st); h != nil && len(g) >= 4*len(h) {
 						x := make([]float32, len(h))
 						for k := range x {
