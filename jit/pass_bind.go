@@ -42,6 +42,9 @@ func (p Bind) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				b.spread(c)
 			case !l.Range && len(inner) == 1 && m.Loops[inner[0]].Range && l.Trip <= b.L:
 				b.warps(c, inner[0])
+			case !l.Range && len(inner) == 1 && m.Loops[inner[0]].Range && l.Trip <= b.W*b.L &&
+				m.Loops[inner[0]].Parent == c:
+				b.warpsWide(c, inner[0])
 			case !l.Range && len(inner) == 0 && len(m.foldsOf(c)) == 0 && m.Group%l.Trip == 0:
 				b.lanes(c)
 			default:
@@ -175,6 +178,69 @@ func (b *binder) warps(c, in int) {
 	for i, f := range folds {
 		slot := k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, b.warp, k.u32(G)), k.u32(i)), k.u32(D)), d)
 		add = append(add, Store{Buf: plane, Ix: slot, Val: f, At: -1})
+		t := k.Nodes[f].Type
+		acc := k.add(k.Nodes[k.Nodes[f].B])
+		for w := 0; w < b.W; w++ {
+			acc = k.bin(OpAdd, t, acc, k.load(plane, k.bin(OpAdd, ir.U32, k.u32((w*G+i)*D), d2)))
+		}
+		totals[i] = acc
+	}
+	add = append(add, Store{Barrier: true, At: -1})
+	var out []Store
+	placed := false
+	for _, s := range k.Stores {
+		if s.At == c {
+			if !placed {
+				out = append(out, add...)
+				placed = true
+			}
+			if s.Run {
+				continue
+			}
+			s.At = -1
+			r := replica{k: k, sub: map[int]int{d: d2}, memo: map[int]int{}}
+			for i, f := range folds {
+				r.sub[f] = totals[i]
+			}
+			s.Val = r.copy(s.Val)
+			s.Ix = r.copy(s.Ix)
+		}
+		out = append(out, s)
+	}
+	k.Stores = out
+}
+
+// warpsWide is warps for an axis wider than a warp: the axis a loop of
+// ceil(D/L) trips, a lane an element of it a trip, the loop within it over
+// warps inside it; each trip's sums to workgroup memory, combined after the
+// loop by a thread an element of the axis, which the workgroup's threads
+// cover.
+func (b *binder) warpsWide(c, in int) {
+	k := b.k
+	D := k.Loops[c].Trip
+	var d int
+	b.setIter(c, func(it int) int {
+		d = k.bin(OpMin, ir.U32, k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, it, k.u32(b.L)), b.lane), k.u32(D-1))
+		return d
+	})
+	k.Loops[c].Trip = (D + b.L - 1) / b.L
+	b.setIter(in, func(it int) int {
+		return k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, it, k.u32(b.W)), b.warp)
+	})
+	k.Loops[in].Trip = (k.Loops[in].Trip + b.W - 1) / b.W
+	k.Loops[in].Unit, k.Loops[in].Bound = b.W, BoundWarps
+	d2 := k.bin(OpMin, ir.U32, b.tid, k.u32(D-1))
+	folds := k.foldsOf(in)
+	G := len(folds)
+	// Each trip's sums are written while later trips still read what the
+	// loop reads: they take workgroup memory of their own, not the plane
+	// Stage shares with the temporaries.
+	plane := k.buf(Buf{Kind: BufShared, Elem: ir.F32, Size: b.W * G * D})
+	var add []Store
+	totals := make([]int, G)
+	for i, f := range folds {
+		slot := k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, b.warp, k.u32(G)), k.u32(i)), k.u32(D)), d)
+		add = append(add, Store{Buf: plane, Ix: slot, Val: f, At: c})
 		t := k.Nodes[f].Type
 		acc := k.add(k.Nodes[k.Nodes[f].B])
 		for w := 0; w < b.W; w++ {
