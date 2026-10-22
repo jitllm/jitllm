@@ -253,12 +253,12 @@ type Session struct {
 	args [][]backend.Buf
 	// rows, pos and toks are the step's tables, written each step.
 	rows, pos, toks []byte
-	tok       int32
-	at        int
-	logits    []float32
-	raw, tb   []byte
-	err       error
-	launchAll func(backend.Session)
+	tok             int32
+	at              int
+	logits          []float32
+	raw, tb         []byte
+	err             error
+	launchAll       func(backend.Session)
 }
 
 // NewSession is an empty sequence: its pools, page table and step buffers.
@@ -324,6 +324,24 @@ func (s *Session) Step(tok int32, pos int) ([]float32, int32, error) {
 // kernel launched, the logits and the token read back.
 func (s *Session) launch(se backend.Session) {
 	r := s.r
+	if s.err = s.tables(se); s.err != nil {
+		return
+	}
+	for i, l := range r.runs {
+		if s.err = se.Launch(l.k, l.groups, l.width, s.args[i]...); s.err != nil {
+			return
+		}
+	}
+	if s.err = se.Read(s.bufs[r.logits], s.raw); s.err != nil {
+		return
+	}
+	s.err = se.Read(s.bufs[r.token], s.tb)
+}
+
+// tables writes the step's tables and its input: the row table, the
+// rotary's positions, the tokens.
+func (s *Session) tables(se backend.Session) error {
+	r := s.r
 	put := binary.LittleEndian.PutUint32
 	put(s.rows[4*jit.RowTab:], 0)
 	put(s.rows[4*jit.RowStart:], 0)
@@ -348,19 +366,10 @@ func (s *Session) launch(se backend.Session) {
 			}
 		}
 		if err != nil {
-			s.err = err
-			return
+			return err
 		}
 	}
-	for i, l := range r.runs {
-		if s.err = se.Launch(l.k, l.groups, l.width, s.args[i]...); s.err != nil {
-			return
-		}
-	}
-	if s.err = se.Read(s.bufs[r.logits], s.raw); s.err != nil {
-		return
-	}
-	s.err = se.Read(s.bufs[r.token], s.tb)
+	return nil
 }
 
 // inputRow is the token's row of the embedding, as the container stores it.
@@ -426,4 +435,44 @@ func floatBytes(f []float32) []byte {
 		return nil
 	}
 	return append([]byte(nil), unsafe.Slice((*byte)(unsafe.Pointer(&f[0])), 4*len(f))...)
+}
+
+// Plan is the runner's composed plan.
+func (r *Runner) Plan() *jit.Plan { return r.plan }
+
+// Storage is storage i's bytes as the session's buffer holds them: a
+// diagnostic, copied out of the device, which allocates.
+func (s *Session) Storage(i int) []byte {
+	x := make([]byte, s.r.sizes[i])
+	s.bufs[i].Read(x)
+	return x
+}
+
+// SetStorage writes b over the start of storage i: a diagnostic, with
+// StepEach, to hold a kernel to inputs of the caller's choosing.
+func (s *Session) SetStorage(i int, b []byte) error { return s.bufs[i].Write(b) }
+
+// StepEach is a step a kernel at a time, waiting for each, after(i) called
+// once kernel i has finished: a diagnostic, as Model.Trace is the host's, to
+// read what each kernel wrote. Its logits and token are not read back.
+func (s *Session) StepEach(tok int32, pos int, after func(i int)) error {
+	r := s.r
+	s.tok, s.at = tok, pos
+	var err error
+	r.dev.Session(func(se backend.Session) { err = s.tables(se) })
+	if err != nil {
+		return err
+	}
+	for i, l := range r.runs {
+		r.dev.Session(func(se backend.Session) {
+			if err = se.Launch(l.k, l.groups, l.width, s.args[i]...); err == nil {
+				err = se.Sync()
+			}
+		})
+		if err != nil {
+			return err
+		}
+		after(i)
+	}
+	return nil
 }

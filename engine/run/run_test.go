@@ -23,8 +23,8 @@ var (
 // -run-model) through the runner
 // on every device a backend opens, at a capacity inside the attention's
 // first split count and one past it: a prompt, then the host's choices, each
-// position's logits held to the engine's host decode in the coherence band
-// and its token to the host's, no kernel writing past its storage, and a
+// position's logits held to the engine's host decode, its KV cache f32 as
+// the plan's is, and its token to the host's, no kernel writing past its storage, and a
 // warm step allocating nothing. Workgroup memory is poisoned, so a kernel
 // reading a slot no thread wrote fails every run.
 func TestRunnerDecodesAsTheHost(t *testing.T) {
@@ -37,24 +37,15 @@ func TestRunnerDecodesAsTheHost(t *testing.T) {
 	if err := f.LoadAll(); err != nil {
 		t.Fatal(err)
 	}
-	m, err := model.Open(path, model.WithJITOptions(nn.WithTune(nn.TuneOff)))
+	// The host's KV cache is f32 as the plan's pools are: its shipping f16
+	// cache alone moves stories15M-q8_0's logits by 6.6e-4.
+	m, err := model.Open(path, model.WithJITOptions(nn.WithTune(nn.TuneOff)), model.WithKVType(model.KVF32))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
 	c := f.Config()
 	rope := nn.Rope{NRot: int(c.NRot), Base: float64(c.RopeBase)}
-	// An f32 model is held to the host near exactly. A Q8_0 weight's matvec
-	// reads its input as int8, which rounds differently on the host: the
-	// coherence band (RULE 11c), where main's own device path differs from
-	// the host by 6.6e-4 on stories15M-q8_0 and picks the same near-tied
-	// token the host does not.
-	bound, tie := 1e-5, float32(0)
-	for _, e := range f.Entries() {
-		if e.Type == jlm.TypeQ8 {
-			bound, tie = 1e-3, 0.05
-		}
-	}
 	ids := m.Vocab.Encode("Hello there", true)
 	const more = 6
 	devs := backend.Open()
@@ -104,17 +95,12 @@ func TestRunnerDecodesAsTheHost(t *testing.T) {
 						}
 					}
 					nmse := num / den
-					if !(nmse < bound) {
+					if !(nmse < 1e-5) {
 						t.Fatalf("position %d: logits NMSE %.3g against the host", pos, nmse)
 					}
 					worst = max(worst, nmse)
-					// A different token is a tie only where the host itself
-					// nearly chose it.
 					if int(token) != best {
-						if margin := want[best] - want[token]; margin >= tie {
-							t.Fatalf("position %d: token %d, the host's %d by a margin of %.3f", pos, token, best, margin)
-						}
-						t.Logf("position %d: token %d, the host's %d, a tie of %.4f", pos, token, best, want[best]-want[token])
+						t.Fatalf("position %d: token %d, the host's %d", pos, token, best)
 					}
 					tok = int32(best)
 					if pos+1 < len(ids) {
