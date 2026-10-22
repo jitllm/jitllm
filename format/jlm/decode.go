@@ -73,6 +73,20 @@ func (l TypeLayout) scStream() bool { return l.HasMin && l.SuperSub == 8 }
 // DecodeElement is element c of row r of a packed tensor of rows rows: its
 // code, scaled, less its bias.
 func DecodeElement[V any](a Arith[V], l TypeLayout, rows int, r, c V) V {
+	code, scale, bias := DecodeParts(a, l, rows, r, c)
+	q := a.Float(code)
+	if l.Signed {
+		q = a.Int(code)
+	}
+	return a.FSub(a.FMul(scale, q), bias)
+}
+
+// DecodeParts is element c of row r taken apart: its integer code, a u32
+// (a signed format's sign-extended, its bits an int32), and its
+// sub-block's scale and bias, the element being scale*code - bias. A
+// matvec over int8 activations dots the codes and applies the scale and
+// the bias once a sub-block.
+func DecodeParts[V any](a Arith[V], l TypeLayout, rows int, r, c V) (code, scale, bias V) {
 	u := a.U
 	R := u(uint32(rows))
 	sub, bits, hi := l.Sub, l.Planes[0], l.Planes[1]
@@ -81,7 +95,7 @@ func DecodeElement[V any](a Arith[V], l TypeLayout, rows int, r, c V) V {
 	super := a.Div(si, u(uint32(l.SuperSub)))
 
 	// The super-scale, and the minimum where the d word carries one.
-	var scale, dmin V
+	var dmin V
 	n := l.dSlots()
 	slot := u(0)
 	di := a.Add(a.Mul(super, R), r)
@@ -103,7 +117,6 @@ func DecodeElement[V any](a Arith[V], l TypeLayout, rows int, r, c V) V {
 	}
 
 	// The sub-block's own scale and minimum, and the bias.
-	var bias V
 	switch {
 	case l.scStream():
 		s8 := a.Rem(si, u(8))
@@ -166,15 +179,15 @@ func DecodeElement[V any](a Arith[V], l TypeLayout, rows int, r, c V) V {
 			hb := a.And(a.Shr(hv, hsh), u(uint32(1)<<hi-1))
 			q = a.Add(q, a.Shl(hb, u(uint32(bits))))
 		}
-		return a.FSub(a.FMul(scale, a.Float(q)), bias)
+		return q, scale, bias
 	}
 	v := a.Word(PlaneQS, a.Add(base, a.Mul(a.Div(e, u(4)), R)))
 	by := a.And(a.Shr(v, a.Mul(a.Rem(e, u(4)), u(8))), u(0xff))
 	if l.Signed {
 		// The byte's sign extended: its top bit flipped, 128 taken away.
-		return a.FSub(a.FMul(scale, a.Int(a.Sub(a.Xor(by, u(0x80)), u(0x80)))), bias)
+		return a.Sub(a.Xor(by, u(0x80)), u(0x80)), scale, bias
 	}
-	return a.FSub(a.FMul(scale, a.Float(by)), bias)
+	return by, scale, bias
 }
 
 // Words is how many words each plane of a packed tensor of rows rows of k

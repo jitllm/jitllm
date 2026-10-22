@@ -126,6 +126,11 @@ func decomposeMatVec(o graph.Op, c *Context) ([]Prim, error) {
 	case jlm.TypeQ8:
 		return decomposeMatVecQ8(o, c, wo)
 	default:
+		if l, ok := jlm.Layout(wo.Format); ok {
+			if prims, ok := decomposeMatVecInt8(o, c, wo, l); ok {
+				return prims, nil
+			}
+		}
 		p, err := decomposeMatVecDecoded(w.Rows, w.K, wo, c.value(o.In[0]), c.value(o.Out[0]), c.Step.Rows)
 		if err != nil {
 			return nil, fmt.Errorf("a matvec over %s weights: %w", wo.Format, err)

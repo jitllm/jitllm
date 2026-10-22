@@ -17,8 +17,8 @@ import (
 )
 
 // TestPlanCoversEveryModel runs every model TestEveryModelRunsGenerated
-// audits (auditModels, the same size rule, JITLLM_PLAN_MODEL a substring in
-// place of JITLLM_AUDIT_MODEL) through the composed plan on each device a
+// audits (auditModels, the same size rule, JITLLM_SLOW=1 admitting every
+// size; JITLLM_PLAN_MODEL a substring narrowing them) through the composed plan on each device a
 // backend opens, against the host, its KV cache f32 as the plan's pools are.
 // Per model it reports whether main opens it, whether the composer forms it
 // or the op that refuses it, each block's residuals at position 0 against
@@ -43,7 +43,7 @@ func TestPlanCoversEveryModel(t *testing.T) {
 	var mainRefuses, refused, formed, wrong []string
 	refusals := map[string]int{}
 	for _, src := range auditModels(t) {
-		if pick != "" && !strings.Contains(src.path, pick) || pick == "" && !slow && src.size > 2<<30 {
+		if pick != "" && !strings.Contains(src.path, pick) || !slow && src.size > 2<<30 {
 			continue
 		}
 		path := src.path

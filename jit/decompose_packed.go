@@ -3,6 +3,7 @@ package jit
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/ir"
 )
@@ -123,4 +124,65 @@ func decomposeMatVecDecoded(rows, k int, wo Operand, x, out Operand, R int) (Pri
 	}
 	e.op(OpMul, ir.F32, w, xv)
 	return Prim{Kind: PrimReduce, Shape: []int{R, rows, k}, In: in, Out: out, Combine: OpAdd, Expr: e.e, Facts: facts}, nil
+}
+
+// decomposeMatVecInt8 is a matvec over a packed weight against its input's
+// int8 form, main's arithmetic: each sub-block's integer dot of the
+// weight's codes and the input's, then the sum over sub-blocks of the
+// input's window scale times the weight's scale times that dot, less the
+// weight's bias times the input's codes' sum over the sub-block. ok is false
+// where the format's sub-blocks do not sit in the form's windows.
+func decomposeMatVecInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout) (prims []Prim, ok bool) {
+	w, q, v := o.Weight[0], c.Int8, o.In[0]
+	if q == nil || q.Word != 4 || q.Window%l.Sub != 0 || l.Sub%q.Sums != 0 || w.K%(l.Sub*l.SuperSub) != 0 ||
+		c.width(v)%q.Window != 0 {
+		return nil, false
+	}
+	if !c.formed[v] {
+		c.formed[v] = true
+		prims = c.int8(v)
+	}
+	U, I, F := ir.U32, ir.I32, ir.F32
+	R, rows, K := c.Step.Rows, w.Rows, w.K
+	nsub, nwd, nw, ns := K/l.Sub, K/q.Word, c.width(v)/q.Window, c.width(v)/q.Sums
+	x := c.value(v)
+	words := Operand{Kind: OperandScratch, Name: x.Name + ".q8a", Elem: U}
+	scales := Operand{Kind: OperandScratch, Name: x.Name + ".q8x"}
+	dot := Operand{Kind: OperandScratch, Name: c.value(o.Out[0]).Name + ".dot", Elem: I, Temp: true}
+
+	// Each sub-block's integer dot: the weight's codes against the input's.
+	var d exprs
+	r, row, s, j := d.coord(0), d.coord(1), d.coord(2), d.coord(3)
+	col := d.op(OpAdd, U, d.op(OpMul, U, s, d.u(uint32(l.Sub))), j)
+	in := []Operand{words}
+	facts := Facts{Extents: map[int]int{0: R * nwd}}
+	p := packedOperands(&d, wo, l, rows, K, &in, &facts)
+	code, _, _ := jlm.DecodeParts[int](p, l, rows, row, col)
+	xw := d.load(0, d.op(OpAdd, U, d.op(OpMul, U, r, d.u(uint32(nwd))), d.op(OpShr, U, col, d.u(2))))
+	xb := d.op(OpAnd, U, d.op(OpShr, U, xw, d.op(OpMul, U, d.op(OpAnd, U, col, d.u(3)), d.u(8))), d.u(0xff))
+	xc := d.op(OpSub, U, d.op(OpXor, U, xb, d.u(0x80)), d.u(0x80))
+	d.op(OpMul, I, d.un(OpBitcast, I, code), d.un(OpBitcast, I, xc))
+	prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{R, rows, nsub, l.Sub}, In: in, Out: dot, Combine: OpAdd, Type: I,
+		Expr: d.e, Facts: facts})
+
+	// The sum over sub-blocks: the window's scale times the weight's scale
+	// times the dot, less the bias times the window's scale times the codes'
+	// sum.
+	var e exprs
+	er, erow, es := e.coord(0), e.coord(1), e.coord(2)
+	ein := []Operand{dot, scales}
+	efacts := Facts{Extents: map[int]int{0: R * rows * nsub, 1: R * (nw + ns)}}
+	ep := packedOperands(&e, wo, l, rows, K, &ein, &efacts)
+	first := e.op(OpMul, U, es, e.u(uint32(l.Sub)))
+	_, scale, bias := jlm.DecodeParts[int](ep, l, rows, erow, first)
+	df := e.un(OpCvtF32, F, e.at(0, []int{R, rows, nsub}, er, erow, es))
+	xs := e.load(1, e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(nw))), e.op(OpDiv, U, first, e.u(uint32(q.Window)))))
+	sumAt := e.op(OpAdd, U, e.u(uint32(R*nw)), e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(ns))), e.op(OpDiv, U, first, e.u(uint32(q.Sums)))))
+	csum := e.load(1, sumAt)
+	for t := 1; t < l.Sub/q.Sums; t++ {
+		csum = e.op(OpAdd, F, csum, e.load(1, e.op(OpAdd, U, sumAt, e.u(uint32(t)))))
+	}
+	e.op(OpMul, F, xs, e.op(OpSub, F, e.op(OpMul, F, scale, df), e.op(OpMul, F, bias, csum)))
+	return append(prims, Prim{Kind: PrimReduce, Shape: []int{R, rows, nsub}, In: ein, Out: c.value(o.Out[0]), Combine: OpAdd,
+		Expr: e.e, Facts: efacts}), true
 }
