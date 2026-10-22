@@ -33,11 +33,12 @@ func planDecodes(t *testing.T, path string, chunks bool) {
 	}
 	defer host.Close()
 	var ids []int32
-	for k := 1; len(ids) <= 2*planChunk+planChunk/2; k++ {
+	const chunk = 32
+	for k := 1; len(ids) <= 2*chunk+chunk/2; k++ {
 		ids = host.Vocab.Encode(strings.Repeat("The capital of France is Paris. ", k)+"Hello there", true)
 	}
-	if len(ids) >= 3*planChunk {
-		t.Fatalf("a prompt of %d tokens, want two chunks of %d and a part", len(ids), planChunk)
+	if len(ids) >= 3*chunk {
+		t.Fatalf("a prompt of %d tokens, want two chunks of %d and a part", len(ids), chunk)
 	}
 	devs := backend.Open()
 	defer func() {
@@ -51,7 +52,7 @@ func planDecodes(t *testing.T, path string, chunks bool) {
 	gpu := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
 	for _, dev := range devs {
 		t.Run(dev.API(), func(t *testing.T) {
-			m, err := Open(path, noTune, WithPlanDevice(dev, gpu))
+			m, err := Open(path, noTune, WithPlanDevice(dev, gpu), WithPlanChunk(chunk))
 			if err != nil {
 				t.Fatal(err)
 			}

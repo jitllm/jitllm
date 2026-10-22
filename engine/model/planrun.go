@@ -121,12 +121,16 @@ func (m *Model) runner(keys int) (*run.Runner, error) {
 	return r, nil
 }
 
-// planChunk is how many of a prompt's tokens a step of the plan runs.
-const planChunk = 32
+// WithPlanChunk runs a planned model's prompt n tokens a step (n of 2 or
+// more), on a plan of n rows sharing the decode plan's sequence. The
+// default is a token a step: the composed step of several rows has no
+// matrix-matrix form yet, and on the V100 Qwen3-0.6B prefills at 141 tok/s
+// in chunks of 32 against 294 a token at a time.
+func WithPlanChunk(n int) Option { return func(l *loadOpts) { l.opt.planChunk = n } }
 
 // chunkRunner is the model's plan at a capacity of keys positions in steps
-// of planChunk rows, composed and compiled once; a model whose plan has no
-// step of several rows says why, once.
+// of WithPlanChunk's rows, composed and compiled once; a model whose plan
+// has no step of several rows says why, once.
 func (m *Model) chunkRunner(keys int) (*run.Runner, error) {
 	m.planMu.Lock()
 	defer m.planMu.Unlock()
@@ -139,7 +143,7 @@ func (m *Model) chunkRunner(keys int) (*run.Runner, error) {
 	if m.chunkRunners == nil {
 		m.chunkRunners, m.chunkErrs = map[int]*run.Runner{}, map[int]error{}
 	}
-	r, err := run.New(m.Composing(), m.opt.planDev, m.opt.planGPU, keys, run.WithRows(planChunk))
+	r, err := run.New(m.Composing(), m.opt.planDev, m.opt.planGPU, keys, run.WithRows(m.opt.planChunk))
 	if err != nil {
 		m.chunkErrs[keys] = err
 		return nil, err
@@ -187,14 +191,15 @@ func (s *State) planForward(token int32) ([]float32, error) {
 	return s.logits, nil
 }
 
-// planPrefill is Prefill on the runner: up to planChunk tokens a step on
-// the chunk runner, its session the decode session's sequence, or a step a
-// token where the plan composes no step of several rows.
+// planPrefill is Prefill on the runner: a step a token, or with
+// WithPlanChunk up to its rows a step on the chunk runner, its session the
+// decode session's sequence, where the plan composes a step of several.
 func (s *State) planPrefill(tokens []int32) ([]float32, error) {
 	if s.planErr != nil {
 		return nil, s.planErr
 	}
-	if len(tokens) > 1 && s.planChunk == nil {
+	chunk := s.m.opt.planChunk
+	if chunk > 1 && len(tokens) > 1 && s.planChunk == nil {
 		if r, err := s.m.chunkRunner(s.maxSeq); err == nil {
 			if s.planChunk, err = r.NewSessionOf(s.planSess); err != nil {
 				return nil, err
@@ -208,10 +213,11 @@ func (s *State) planPrefill(tokens []int32) ([]float32, error) {
 			if out, err = s.planForward(tokens[0]); err != nil {
 				return nil, err
 			}
+			s.promptRows++
 			tokens = tokens[1:]
 			continue
 		}
-		n := min(len(tokens), planChunk)
+		n := min(len(tokens), chunk)
 		logits, _, err := s.planChunk.Rows(tokens[:n], s.bpos[0])
 		if err != nil {
 			return nil, err
@@ -221,6 +227,7 @@ func (s *State) planPrefill(tokens []int32) ([]float32, error) {
 		s.tok = tokens[n-1]
 		s.bpos[0] += n
 		s.pos = max(s.pos, s.bpos[0])
+		s.promptRows += n
 		tokens = tokens[n:]
 	}
 	return out, nil

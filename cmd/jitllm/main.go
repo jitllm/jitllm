@@ -1792,6 +1792,16 @@ func modelOptions() []model.Option {
 	} else if p != nil {
 		o = append(o, p)
 	}
+	// JITLLM_PLAN_CHUNK is a planned model's prompt tokens a step
+	// (model.WithPlanChunk); unset, a token a step.
+	if v := os.Getenv("JITLLM_PLAN_CHUNK"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			fmt.Fprintf(os.Stderr, "jitllm: JITLLM_PLAN_CHUNK=%s: want a count of tokens\n", v)
+			os.Exit(2)
+		}
+		o = append(o, model.WithPlanChunk(n))
+	}
 	if os.Getenv("JITLLM_PROFILE") != "" {
 		o = append(o, model.WithProfile(true))
 	}
