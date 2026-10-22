@@ -76,6 +76,9 @@ type Model interface {
 	// Rotaries is every rotary the blocks turn by, the model's own first;
 	// each is a table of the step.
 	Rotaries() []graph.Rotary
+	// Tower says the model is a vision tower's segment: its tensors are the
+	// container's vision tensors, and the text model's are not its.
+	Tower() bool
 }
 
 // tableName is rotary i's table: rope.cs for the first, rope.cs.i past it.
@@ -93,12 +96,13 @@ func unread(f Model, block int32, read ...jlm.Role) error {
 	for _, e := range f.Entries() {
 		// The rotary's factors are the step's table's, built from the
 		// engine's rotary as main's host runs it (rope_factors_long unread
-		// there too); a vision tensor is the tower's segment.
+		// there too); a vision tensor is the tower's segment, and the text
+	// model's tensors are not the tower's.
 		switch e.Role {
 		case jlm.RoleRopeFreqs, jlm.RoleRopeFactorsShort, jlm.RoleRopeFactorsLong:
 			continue
 		}
-		if e.Role.Vision() {
+		if e.Role.Vision() != f.Tower() {
 			continue
 		}
 		if e.Block == block && !slices.Contains(read, e.Role) {

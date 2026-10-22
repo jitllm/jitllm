@@ -1,8 +1,10 @@
 package model
 
 import (
+	"slices"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/run"
@@ -152,35 +154,198 @@ func TestPlanDecidesAsTheHost(t *testing.T) {
 				t.Skip("no device")
 			}
 			gpu := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
+			// A step the request fills, and one it leaves rows past: a row
+			// past the live ones repeats the last, and an op that reads its
+			// neighbours (d1-omni's convolution) must too.
 			for _, dev := range devs {
-				r, err := run.New(m.Composing(), dev, gpu, len(ids), run.WithRows(len(ids)))
-				if err != nil {
-					t.Fatal(err)
-				}
-				s, err := r.NewSession()
-				if err != nil {
-					t.Fatal(err)
-				}
-				for qt := range 3 {
-					if err := hostEncode(e, ids); err != nil {
-						t.Fatal(err)
-					}
-					want := make([]float32, len(markers))
-					if err := e.layaScores(want, len(ids), jlm.QuestionType(qt), rows); err != nil {
-						t.Fatal(err)
-					}
-					got, err := s.Decide(ids, qt, markers)
+				for _, step := range []int{len(ids), len(ids) + 40} {
+					r, err := run.New(m.Composing(), dev, gpu, step, run.WithRows(step))
 					if err != nil {
 						t.Fatal(err)
 					}
-					nmse, _ := nmseOf(got, want)
-					t.Logf("%s, question type %d: scores %v, the host's %v, NMSE %.3g", dev.API(), qt, got, want, nmse)
-					if !(nmse <= c.bound) {
-						t.Errorf("%s, question type %d: NMSE %.3g against the host", dev.API(), qt, nmse)
+					s, err := r.NewSession()
+					if err != nil {
+						t.Fatal(err)
 					}
+					for qt := range 3 {
+						if err := hostEncode(e, ids); err != nil {
+							t.Fatal(err)
+						}
+						want := make([]float32, len(markers))
+						if err := e.layaScores(want, len(ids), jlm.QuestionType(qt), rows); err != nil {
+							t.Fatal(err)
+						}
+						got, err := s.Decide(ids, qt, markers)
+						if err != nil {
+							t.Fatal(err)
+						}
+						nmse, _ := nmseOf(got, want)
+						t.Logf("%s, %d rows, question type %d: scores %v, the host's %v, NMSE %.3g", dev.API(), step, qt, got, want, nmse)
+						if !(nmse <= c.bound) {
+							t.Errorf("%s, %d rows, question type %d: NMSE %.3g against the host", dev.API(), step, qt, nmse)
+						}
+					}
+					s.Close()
+					r.Close()
 				}
-				s.Close()
-				r.Close()
+			}
+		})
+	}
+}
+
+// TestLayaPlanMatchesReference is TestLayaMatchesReference on the
+// composer's plan: a model opened with WithPlanDevice answers the
+// reference's requests through the Decider -- its template, its sequences,
+// its markers -- at the host's tolerance, on every device a backend opens.
+func TestLayaPlanMatchesReference(t *testing.T) {
+	devs := backend.Open()
+	defer func() {
+		for _, d := range devs {
+			d.Close()
+		}
+	}()
+	if len(devs) == 0 {
+		t.Skip("no device")
+	}
+	gpu := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
+	for _, c := range layaCases {
+		t.Run(c.name, func(t *testing.T) {
+			for _, dev := range devs {
+				t.Run(dev.API(), func(t *testing.T) {
+					m := openDecision(t, c.gguf, jlm.DecisionLaya, noTune, WithPlanDevice(dev, gpu))
+					defer m.Close()
+					layaMatchesReference(t, m, c.gold, c.tol, layaArm{name: "plan " + dev.API(), plan: true})
+				})
+			}
+		})
+	}
+}
+
+// TestD1OmniPlanMatchesReference is TestD1OmniMatchesReference with the
+// readout on the composer's plan, on every device a backend opens.
+func TestD1OmniPlanMatchesReference(t *testing.T) {
+	devs := backend.Open()
+	defer func() {
+		for _, d := range devs {
+			d.Close()
+		}
+	}()
+	if len(devs) == 0 {
+		t.Skip("no device")
+	}
+	gpu := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
+	for _, dev := range devs {
+		t.Run(dev.API(), func(t *testing.T) {
+			m := openDecision(t, d1OmniModel, jlm.DecisionD1Omni, noTune, WithPlanDevice(dev, gpu))
+			defer m.Close()
+			d1OmniMatchesReference(t, m)
+		})
+	}
+}
+
+// TestPlanEncodesPicturesAsTheHost composes SmolVLM's tower -- the patches
+// gathered from the picture through the patch embedding, its positions'
+// rows, the blocks, the post-norm, the regroup and the projector -- and
+// holds it to the host's Encode on every device a backend opens. Both sides
+// quantize the Q8_0 matrices' activations to int8, whose roundings compound
+// through the blocks (main's device gate stops after one block for it), so
+// each part is held teacher-forced, the host's input in, to main's one-block
+// bound, and the free-running picture to a decade above its reading.
+func TestPlanEncodesPicturesAsTheHost(t *testing.T) {
+	m, tw := openTower(t, noTune)
+	defer m.Close()
+	c := tw.Cfg
+	px := make([]float32, c.ImageSz*c.ImageSz*3)
+	for i := range px {
+		px[i] = float32((i*37)%255)/127.5 - 1
+	}
+	host := tw.testState()
+	var want [][]float32
+	host.vis.afterBlock = func(_ int, x []float32) { want = append(want, slices.Clone(x)) }
+	out, err := host.Encode(px)
+	host.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = append(want, slices.Clone(out))
+	side := c.ImageSz / c.PatchSz
+	src := m.TowerComposing()
+	if err := src.(towerComposing).towerRefusal(); err != nil {
+		t.Fatal(err)
+	}
+	devs := backend.Open()
+	defer func() {
+		for _, d := range devs {
+			d.Close()
+		}
+	}()
+	if len(devs) == 0 {
+		t.Skip("no device")
+	}
+	gpu := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
+	for _, dev := range devs {
+		t.Run(dev.API(), func(t *testing.T) {
+			r, err := run.New(src, dev, gpu, side*side, run.WithRows(side*side))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close()
+			s, err := r.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			p := r.Plan()
+			if len(p.Parts) != len(want) {
+				t.Fatalf("%d parts, the host stops at %d", len(p.Parts), len(want))
+			}
+			// Each part's output read once its last launch has run, held to
+			// the host's, then replaced by it.
+			last := map[int]int{}
+			k := 0
+			for pi, pp := range p.Parts {
+				k += len(pp.Codes)
+				last[k-1] = pi
+			}
+			checked := 0
+			forced := func(i int) {
+				pi, ok := last[i]
+				if !ok {
+					return
+				}
+				key := jit.Operand{Kind: jit.OperandValue, Of: pi, Value: p.Parts[pi].Part.Graph.Out[0]}
+				at := slices.IndexFunc(p.Storages, func(st jit.Storage) bool { return st.Key == key })
+				if at < 0 {
+					t.Errorf("%v: its output has no storage", p.Parts[pi].Part)
+					return
+				}
+				b, w := s.Storage(at), want[pi]
+				got := unsafe.Slice((*float32)(unsafe.Pointer(&b[0])), len(b)/4)[:len(w)]
+				nmse, worst := nmseOf(got, w)
+				t.Logf("%v, the host's input in: NMSE %.3g, worst %.3g", p.Parts[pi].Part, nmse, worst)
+				if !(nmse <= 5e-5) {
+					t.Errorf("%v: NMSE %.3g against the host, past main's one-block bound 5e-5", p.Parts[pi].Part, nmse)
+				}
+				checked++
+				copy(got, w)
+				if err := s.SetStorage(at, b); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.PictureEach(px, side, side, forced); err != nil {
+				t.Fatal(err)
+			}
+			if checked != len(want) {
+				t.Fatalf("%d of %d parts checked", checked, len(want))
+			}
+			got, err := s.Picture(px, side, side, c.Tokens())
+			if err != nil {
+				t.Fatal(err)
+			}
+			nmse, worst := nmseOf(got, out)
+			t.Logf("free-running: %d rows of %d, NMSE %.3g against the host, worst %.3g", c.Tokens(), c.ProjDim, nmse, worst)
+			if !(nmse <= 1e-2) {
+				t.Errorf("free-running: NMSE %.3g against the host", nmse)
 			}
 		})
 	}

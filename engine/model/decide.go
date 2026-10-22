@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/jitllm/jitllm/engine/run"
 	"image"
 	"slices"
 	"sort"
@@ -78,6 +79,11 @@ const levRatings = 9
 // Decider asks a decision model questions. It holds one State and is one
 // request at a time; build one per concurrent caller.
 type Decider struct {
+	// plans are the composer's sessions a planned model (WithPlanDevice)
+	// answers an encoder readout's questions on, by their rows; planMarks
+	// is a question's markers as the request states them.
+	plans     map[int]*run.Session
+	planMarks []int32
 	// kev is Kev's head scratch (decidekev.go).
 	kev *kevRun
 	// dotOut is dot's output word.
@@ -294,6 +300,10 @@ func (d *Decider) PromptRestored() int { return d.restored }
 
 // Close releases the Decider's State.
 func (d *Decider) Close() error {
+	for k, s := range d.plans {
+		s.Close()
+		delete(d.plans, k)
+	}
 	if d.emb != nil {
 		if d.omniVis != nil {
 			d.omniVis.Close()

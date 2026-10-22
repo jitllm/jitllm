@@ -50,6 +50,13 @@ func readD1OmniGold(t *testing.T, req string) d1OmniGold {
 func TestD1OmniMatchesReference(t *testing.T) {
 	m := openDecision(t, d1OmniModel, jlm.DecisionD1Omni)
 	defer m.Close()
+	d1OmniMatchesReference(t, m)
+}
+
+// d1OmniMatchesReference is TestD1OmniMatchesReference on model m: the
+// trunk's rows are the host's, the logits and probabilities those m's
+// Decider gives, on the composer's plan where m was opened on one.
+func d1OmniMatchesReference(t *testing.T, m *Model) {
 	d, err := m.NewDecider(0)
 	if err != nil {
 		t.Fatal(err)
@@ -110,6 +117,9 @@ func TestD1OmniMatchesReference(t *testing.T) {
 				}
 			}
 			t.Logf("worst difference from the reference: trunk %.2e, logit %.2e, probability %.2e", worstT, worstL, worstP)
+			if m.opt.planDev != nil && len(d.plans) == 0 {
+				t.Errorf("the questions never ran on the plan")
+			}
 			// F16 weights rounded alike on both sides (D1OMNI_F16): what is
 			// left is f32 order (worst 4.6e-5 on the trunk, 2.8e-5 on a logit).
 			if worstT > 5e-4 || worstL > 3e-4 || worstP > 1e-4 {

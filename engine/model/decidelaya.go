@@ -218,6 +218,9 @@ func pyQuote(s string) string {
 // each option's marker -- the engine's half of a question, which makes no
 // heap allocation once warm (TestDecisionDoesNotAllocate).
 func (d *Decider) layaForward(ids []int32, qt jlm.QuestionType, markers []int, v int) ([]float32, error) {
+	if d.m.opt.planDev != nil {
+		return d.planScores(ids, qt, markers, v)
+	}
 	if err := d.emb.mbEncode(ids); err != nil {
 		return nil, err
 	}

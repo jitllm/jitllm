@@ -1244,10 +1244,11 @@ type Model struct {
 	// WithPlanDevice (planrun.go).
 	planMu  sync.Mutex
 	runners map[int]*run.Runner
-	// chunkRunners are the plan at a capacity in steps of planChunk rows,
-	// a prompt's; chunkErrs why a capacity has none.
-	chunkRunners map[int]*run.Runner
-	chunkErrs    map[int]error
+	// chunkRunners are the plan at a capacity in steps of several rows (a
+	// prompt's, an encoder's), by capacity and rows; chunkErrs why one has
+	// none.
+	chunkRunners map[[2]int]*run.Runner
+	chunkErrs    map[[2]int]error
 	// spareJIT is a closed State's JIT, recycled for the next State: one
 	// built per State re-emitted its kernels and regrew its scratch, most
 	// of what a request allocated.

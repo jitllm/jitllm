@@ -184,6 +184,12 @@ func d1OmniOptions(q *DecisionQuestion, yesNo, spoken bool) []string {
 // d1OmniForward encodes ids, runs the head at the markers and returns the
 // scores.
 func (d *Decider) d1OmniForward(ids []int32, qt jlm.QuestionType, markers []int, v int) ([]float32, error) {
+	if d.m.opt.planDev != nil {
+		if len(d.omniPre) > 0 {
+			return nil, fmt.Errorf("model: a decision over pictures does not run on the composer's plan yet")
+		}
+		return d.planScores(ids, qt, markers, v)
+	}
 	if err := d.emb.lfm2Encode(ids, d.omniPre); err != nil {
 		return nil, err
 	}

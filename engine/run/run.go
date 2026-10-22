@@ -397,10 +397,14 @@ type Session struct {
 	// request is a decision's words (jit.SourceRequest); marks its markers.
 	request []byte
 	marks   []int32
-	logits          []float32
-	raw, tb, input  []byte
-	err             error
-	launchAll       func(backend.Session)
+	// pixels is a picture's step's input, in place of the tokens' rows;
+	// blank its tokens, one a live row.
+	pixels         []float32
+	blank          []int32
+	logits         []float32
+	raw, tb, input []byte
+	err            error
+	launchAll      func(backend.Session)
 	// rec is the step's launches recorded once, on a device that records
 	// (backend.Recorder), and replayed each step.
 	rec backend.Recording
@@ -452,6 +456,9 @@ func (r *Runner) newSession(h *Session) (*Session, error) {
 	s := &Session{r: r, bufs: make([]backend.Buf, len(st)), own: make([]bool, len(st)),
 		rows: make([]byte, 4*jit.RowWords*R), pos: make([]byte, 4*(1+R)), toks: make([]byte, 4*R), tb: make([]byte, 4*R),
 		logits: make([]float32, R*r.outW), input: make([]byte, 4*R*r.nembd), request: make([]byte, 4*(jit.RequestRows+R))}
+	if r.input >= 0 {
+		s.input = make([]byte, max(int64(len(s.input)), r.sizes[r.input]))
+	}
 	s.raw = unsafe.Slice((*byte)(unsafe.Pointer(&s.logits[0])), 4*len(s.logits))
 	slot, slots := r.reuse()
 	for _, sz := range slots {
@@ -568,6 +575,45 @@ func (s *Session) Decide(toks []int32, qt int, markers []int32) ([]float32, erro
 	return s.logits[:len(markers)*s.r.outW], nil
 }
 
+// Picture runs a vision tower's plan over a picture of gh x gw patches, px
+// its pixels [y][x][channel], as one bidirectional step of a row a patch,
+// each row's position its patch's, and returns the head's first out rows:
+// the projected rows, a slice the next step overwrites.
+func (s *Session) Picture(px []float32, gh, gw, out int) ([]float32, error) {
+	r := s.r
+	n := gh * gw
+	if out < 1 || out > n {
+		return nil, fmt.Errorf("run: %d rows out of a %dx%d grid", out, gh, gw)
+	}
+	if err := s.picture(px, gh, gw); err != nil {
+		return nil, err
+	}
+	defer func() { s.pixels, s.bidir = nil, false }()
+	r.dev.Session(s.launchAll)
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.logits[:out*r.outW], nil
+}
+
+// picture readies a picture's step: its pixels the input, a blank token a
+// patch, the grid's width the request.
+func (s *Session) picture(px []float32, gh, gw int) error {
+	r, n := s.r, gh*gw
+	if n < 1 || n > r.step.Rows {
+		return fmt.Errorf("run: a %dx%d grid in a step of %d rows", gh, gw, r.step.Rows)
+	}
+	if r.input < 0 || 4*len(px) > len(s.input) || len(px)%n != 0 {
+		return fmt.Errorf("run: %d pixels over %d patches; the step takes %d bytes", len(px), n, len(s.input))
+	}
+	if len(s.blank) < n {
+		s.blank = make([]int32, r.step.Rows)
+	}
+	binary.LittleEndian.PutUint32(s.request[4*jit.RequestGrid:], uint32(gw))
+	s.in, s.at, s.err, s.pixels, s.bidir = s.blank[:n], 0, nil, px, true
+	return nil
+}
+
 // Encode runs a sequence toks as one step and returns its head's output:
 // the embedding, a slice the next step overwrites. Where bidir every row
 // reads every other (an encoder's, a non-causal decoder's); else each reads
@@ -656,7 +702,10 @@ func (s *Session) tables(se backend.Session) error {
 		case jit.SourceRequest:
 			err = se.WriteAt(s.bufs[i], 0, s.request)
 		case jit.SourceInput:
-			if err = s.inputRows(); err == nil {
+			if s.pixels != nil {
+				copy(s.input, unsafe.Slice((*byte)(unsafe.Pointer(&s.pixels[0])), 4*len(s.pixels)))
+				err = se.WriteAt(s.bufs[i], 0, s.input)
+			} else if err = s.inputRows(); err == nil {
 				err = se.WriteAt(s.bufs[i], 0, s.input)
 			}
 		}
@@ -764,9 +813,25 @@ func (s *Session) SetStorage(i int, b []byte) error { return s.bufs[i].Write(b) 
 // once kernel i has finished: a diagnostic, as Model.Trace is the host's, to
 // read what each kernel wrote. Its logits and token are not read back.
 func (s *Session) StepEach(tok int32, pos int, after func(i int)) error {
-	r := s.r
 	s.one[0] = tok
 	s.in, s.at = s.one[:], pos
+	return s.each(after)
+}
+
+// PictureEach is Picture a launch at a time, after(i) called once launch i
+// has finished, its storages readable.
+func (s *Session) PictureEach(px []float32, gh, gw int, after func(i int)) error {
+	if err := s.picture(px, gh, gw); err != nil {
+		return err
+	}
+	defer func() { s.pixels, s.bidir = nil, false }()
+	return s.each(after)
+}
+
+// each runs the step's launches one at a time, after(i) once launch i has
+// finished.
+func (s *Session) each(after func(i int)) error {
+	r := s.r
 	var err error
 	r.dev.Session(func(se backend.Session) { err = s.tables(se) })
 	if err != nil {

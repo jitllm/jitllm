@@ -300,10 +300,22 @@ const (
 	// against the rows Taps/2 before to Taps/2 after, zero past the live
 	// rows -- a bidirectional model's short convolution (LFM2's encoder).
 	OpRowConv
+	// OpPatchify is a picture's patches as rows: In[0] is the picture,
+	// [y][x][channel] over the step's rows, a grid of Span x Span patches
+	// whose width in patches is the request's first word; row r is patch r
+	// in raster order, its Span*Span*3 elements channel-planar (a convolution
+	// whose stride is its kernel, as a matrix product), zero past them to
+	// the output's width.
+	OpPatchify
+	// OpRegroup is space-to-depth over the step's grid of rows (the
+	// request's first word its width): row g of the output is the Span x Span
+	// block of rows at g's place, each Span*Span slot in raster order a run
+	// of the input's width.
+	OpRegroup
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan", "state_delta", "index_select", "block_select", "pool", "take_rows", "row_conv"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan", "state_delta", "index_select", "block_select", "pool", "take_rows", "row_conv", "patchify", "regroup"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {

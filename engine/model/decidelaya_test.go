@@ -49,6 +49,8 @@ var layaCases = []struct {
 type layaArm struct {
 	name string
 	gpu  *tier.GPU // nil: the host
+	// plan is a model opened on the composer's plan (WithPlanDevice).
+	plan bool
 }
 
 // layaArms is the host and each device present; the devices close with t.
@@ -63,7 +65,7 @@ func layaArms(t *testing.T) []layaArm {
 			continue
 		}
 		t.Cleanup(func() { g.Close() })
-		arms = append(arms, layaArm{spec, g})
+		arms = append(arms, layaArm{name: spec, gpu: g})
 	}
 	return arms
 }
@@ -180,7 +182,10 @@ func layaMatchesReference(t *testing.T, m *Model, gold string, tol float64, arm 
 				}
 			}
 			t.Logf("%s: worst logit difference from the reference: %.6f", arm.name, worst)
-			if arm.gpu == nil && d.emb.jit.FloatMatMulCalls() == 0 {
+			if arm.plan && len(d.plans) == 0 {
+				t.Errorf("the questions never ran on the plan")
+			}
+			if arm.gpu == nil && !arm.plan && d.emb.jit.FloatMatMulCalls() == 0 {
 				t.Errorf("the encoder's float matrices never ran the float GEMM")
 			}
 		})

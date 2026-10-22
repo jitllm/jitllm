@@ -135,6 +135,9 @@ func (c composing) EmbedGraph() *graph.Graph {
 
 func (c composing) ActWindow() int { return c.m.ActWindow() }
 
+// Tower is false: the text model's view.
+func (c composing) Tower() bool { return false }
+
 // Rotaries is the model's rotaries as its rotary ops state them: the
 // model's own, then the sliding layers' where it trains two.
 func (c composing) Rotaries() []graph.Rotary {
@@ -199,23 +202,30 @@ func WithPlanChunk(n int) Option { return func(l *loadOpts) { l.opt.planChunk = 
 // of WithPlanChunk's rows, composed and compiled once; a model whose plan
 // has no step of several rows says why, once.
 func (m *Model) chunkRunner(keys int) (*run.Runner, error) {
+	return m.planRunner(keys, m.opt.planChunk)
+}
+
+// planRunner is the model's plan at a capacity of keys positions in steps
+// of rows, composed and compiled once, or why it has none.
+func (m *Model) planRunner(keys, rows int) (*run.Runner, error) {
 	m.planMu.Lock()
 	defer m.planMu.Unlock()
-	if r := m.chunkRunners[keys]; r != nil {
+	at := [2]int{keys, rows}
+	if r := m.chunkRunners[at]; r != nil {
 		return r, nil
 	}
-	if err := m.chunkErrs[keys]; err != nil {
+	if err := m.chunkErrs[at]; err != nil {
 		return nil, err
 	}
 	if m.chunkRunners == nil {
-		m.chunkRunners, m.chunkErrs = map[int]*run.Runner{}, map[int]error{}
+		m.chunkRunners, m.chunkErrs = map[[2]int]*run.Runner{}, map[[2]int]error{}
 	}
-	r, err := run.New(m.Composing(), m.opt.planDev, m.opt.planGPU, keys, run.WithRows(m.opt.planChunk))
+	r, err := run.New(m.Composing(), m.opt.planDev, m.opt.planGPU, keys, run.WithRows(rows))
 	if err != nil {
-		m.chunkErrs[keys] = err
+		m.chunkErrs[at] = err
 		return nil, err
 	}
-	m.chunkRunners[keys] = r
+	m.chunkRunners[at] = r
 	return r, nil
 }
 
@@ -297,6 +307,43 @@ func (s *State) planPrefill(tokens []int32) ([]float32, error) {
 		s.promptRows += n
 		tokens = tokens[n:]
 	}
+	return out, nil
+}
+
+// planScores is an encoder readout's question on the composer's plan: the
+// encoder over ids in one bidirectional step and the head's score at each
+// marker, into variant v's scratch. A step's rows are a power of two at or
+// past the sequence's, each a runner composed once.
+func (d *Decider) planScores(ids []int32, qt jlm.QuestionType, markers []int, v int) ([]float32, error) {
+	rows := 64
+	for rows < len(ids) {
+		rows *= 2
+	}
+	s := d.plans[rows]
+	if s == nil {
+		r, err := d.m.planRunner(rows, rows)
+		if err != nil {
+			return nil, err
+		}
+		if s, err = r.NewSession(); err != nil {
+			return nil, err
+		}
+		if d.plans == nil {
+			d.plans = map[int]*run.Session{}
+		}
+		d.plans[rows] = s
+	}
+	d.planMarks = d.planMarks[:0]
+	for _, m := range markers {
+		d.planMarks = append(d.planMarks, int32(m))
+	}
+	got, err := s.Decide(ids, int(qt), d.planMarks)
+	if err != nil {
+		return nil, err
+	}
+	out := d.variantScores(v, len(markers))
+	copy(out, got)
+	d.input += len(ids)
 	return out, nil
 }
 

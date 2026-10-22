@@ -615,7 +615,8 @@ func decomposeStateDelta(o graph.Op, c *Context) ([]Prim, error) {
 // live rows: each channel's centre tap on its own row first, then its
 // other taps in order on the rows before and after, a row past the live
 // ones zero -- the host's order (lfConv). The live count is the positions
-// table's first word.
+// table's first word; a row past the live ones is the last live row's, as
+// every row op of the step repeats it (run.Session.tables).
 func decomposeRowConv(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 {
 		return nil, fmt.Errorf("a row convolution of %d operands", len(o.In))
@@ -634,10 +635,11 @@ func decomposeRowConv(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, fmt.Errorf("a row convolution over %s taps", wo.Format)
 	}
 	var x exprs
-	r, ch := x.coord(0), x.coord(1)
+	ch := x.coord(1)
 	in := []Operand{c.value(o.In[0]), tablePos}
 	facts := Facts{Extents: map[int]int{1: R + 1}}
-	live := x.load(1, x.u(0))
+	live := x.op(OpMax, U, x.load(1, x.u(0)), x.u(1))
+	r := x.op(OpMin, U, x.coord(0), x.op(OpSub, U, live, x.u(1)))
 	tap := func(t int) int {
 		v, _ := weightElement(&x, wo, C, T, &in, &facts, ch, x.u(uint32(t)))
 		return v

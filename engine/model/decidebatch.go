@@ -237,6 +237,17 @@ func (d *Decider) runJobs(jobs []*batchJob) error {
 		}
 		return nil
 	}
+	if (d.kind == jlm.DecisionLaya || d.kind == jlm.DecisionD1Omni) && d.m.opt.planDev != nil {
+		// The plan's step is one sequence: each job its own.
+		for _, j := range jobs {
+			s, err := d.planScores(j.ids, j.qt, j.markers, 0)
+			if err != nil {
+				return err
+			}
+			j.scores = append(j.scores[:0], s...)
+		}
+		return nil
+	}
 	if d.kind == jlm.DecisionLaya || d.kind == jlm.DecisionD1Omni {
 		return d.layaPacked(jobs)
 	}

@@ -42,6 +42,7 @@ func (h header) SeamGraph(int) *graph.Graph { return nil }
 func (h header) EmbedGraph() *graph.Graph { return h.embed }
 
 func (h header) Rotaries() []graph.Rotary { return h.rotaries }
+func (h header) Tower() bool              { return false }
 
 func (h header) Find(role jlm.Role, block, index int32) (*jlm.Entry, bool) {
 	e, ok := h.by[[3]int32{int32(role), block, index}]
