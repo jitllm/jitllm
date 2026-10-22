@@ -381,13 +381,18 @@ func (l *lowerer) arith(i int, o ir.Op) error {
 			l.name[i+1] = a
 			return nil
 		}
-		l.def(i, ir.F32, "float(%s)", a)
+		// The IR's conversion is of a signed integer, whatever type the
+		// operand's name carries.
+		l.def(i, ir.F32, "float(as_type<int>(%s))", a)
 	case ir.OpCvtI32:
 		l.def(i, ir.I32, "int(%s)", a)
 	case ir.OpBitcast:
-		if o.Type == ir.F32 {
+		switch o.Type {
+		case ir.F32:
 			l.def(i, ir.F32, "as_type<float>(%s)", a)
-		} else {
+		case ir.I32:
+			l.def(i, ir.I32, "as_type<int>(%s)", a)
+		default:
 			l.def(i, ir.U32, "as_type<uint>(%s)", a)
 		}
 	case ir.OpPackF16:

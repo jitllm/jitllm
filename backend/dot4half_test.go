@@ -107,3 +107,61 @@ func halfToFloat(h uint16) float32 {
 	}
 	return math.Float32frombits(sign<<31 | (exp+112)<<23 | frac<<13)
 }
+
+// TestSignedConversionAgreesEverywhere converts words bitcast to i32 to
+// floats on every device a backend opens: the IR's conversion is of a signed
+// integer, so a word with its top bit set is negative. Metal once converted
+// it unsigned, and a Q8_0 embedding's negative bytes became 4.29e9 times
+// their scale.
+func TestSignedConversionAgreesEverywhere(t *testing.T) {
+	w := []uint32{0xffffff80, 0xffffffff, 0x7f, 0x80000000, 0x7fffffff, 0}
+	n := len(w)
+	b := ir.New("cvtsigned", [3]int{32, 1, 1})
+	pw, pf := b.Param("w", ir.U32), b.Param("f", ir.F32)
+	i := b.Min(ir.U32, b.TID(), b.Const(ir.U32, int64(n-1)))
+	b.Store(pf, i, b.CvtF32(b.Bitcast(ir.I32, b.Load(ir.U32, pw, i, 0))), 0)
+	k := built(t, b)
+	devs := backend.Open()
+	defer func() {
+		for _, d := range devs {
+			d.Close()
+		}
+	}()
+	if len(devs) == 0 {
+		t.Skip("no device")
+	}
+	in := make([]byte, 4*n)
+	for j, v := range w {
+		binary.LittleEndian.PutUint32(in[4*j:], v)
+	}
+	for _, dev := range devs {
+		kern, err := dev.Compile(k)
+		if err != nil {
+			t.Fatalf("%s: %v", dev.API(), err)
+		}
+		bw, err := dev.Alloc(len(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		bf, err := dev.Alloc(len(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := bw.Write(in); err != nil {
+			t.Fatal(err)
+		}
+		if err := kern.Launch(1, 32, bw, bf); err != nil {
+			t.Fatalf("%s: %v", dev.API(), err)
+		}
+		out := make([]byte, len(in))
+		bf.Read(out)
+		for j, v := range w {
+			if got, want := math.Float32frombits(binary.LittleEndian.Uint32(out[4*j:])), float32(int32(v)); got != want {
+				t.Errorf("%s %s: %#08x as i32 converts to %v, want %v", dev.API(), dev.Name(), v, got, want)
+			}
+		}
+		bw.Free()
+		bf.Free()
+		kern.Close()
+	}
+}
