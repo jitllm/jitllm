@@ -17,7 +17,7 @@ func (p Mask) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		m := k.clone()
 		changed := false
 		for c, l := range m.Loops {
-			if !l.Range || l.Bound == Unbound || l.Span == 0 {
+			if !l.Range || l.Span == 0 {
 				continue
 			}
 			for b := range m.Bufs {
