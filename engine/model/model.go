@@ -15,6 +15,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/run"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit_old/gpu/kernels"
@@ -1239,6 +1240,10 @@ type Model struct {
 	// prompt (promptBuf).
 	spareMu sync.Mutex
 	spare   *promptBuf
+	// runners is the composer's plan by capacity, on a model opened
+	// WithPlanDevice (planrun.go).
+	planMu  sync.Mutex
+	runners map[int]*run.Runner
 	// spareJIT is a closed State's JIT, recycled for the next State: one
 	// built per State re-emitted its kernels and regrew its scratch, most
 	// of what a request allocated.
@@ -2125,6 +2130,7 @@ func (m *Model) Close() error {
 	m.spareJIT = nil
 	m.spareMu.Unlock()
 	j.Close()
+	m.closeRunners()
 	err := m.container.Close()
 	m.devMu.Lock()
 	m.forgetters, m.owners = nil, nil

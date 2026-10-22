@@ -6,7 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit"
 )
 
 // This package reads no environment. cmd/jitllm reads the JITLLM_* names and
@@ -19,6 +21,10 @@ import (
 // modelOpts is the resolved set of per-model knobs. It is copied onto the Model
 // at Open and onto the Tower beside it, so two models cannot collide.
 type modelOpts struct {
+	// planDev and planGPU are WithPlanDevice's device and the composer's
+	// description of it (planrun.go).
+	planDev backend.Device
+	planGPU jit.Device
 	// devSample is WithDeviceSample's setting (devsample.go).
 	devSample DeviceSampleMode
 	// profile arms the per-op nanosecond counters OpProfile reports. The

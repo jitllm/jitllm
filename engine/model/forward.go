@@ -12,6 +12,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/run"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/format/quant"
@@ -91,8 +92,12 @@ type State struct {
 	// (m.Cfg) for every session a caller makes, the vision tower's for the
 	// State an image is encoded in (vision.go). The blocks are the model's
 	// either way; only their geometry differs.
-	c   *Config
-	pos int
+	c *Config
+	// planSess is the State's session on the composer's plan, on a model
+	// opened WithPlanDevice (planrun.go); planErr is why it has none.
+	planSess *run.Session
+	planErr  error
+	pos      int
 	// sampleArgs, sampleVals and sampleIDs are ForwardSample's device
 	// sampler block and the candidates it returns, reused across tokens.
 	// SampledOnDevice counts the tokens whose candidates came home in place
@@ -942,6 +947,9 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 	// Read at construction too, because an embedded caller may never call
 	// SetMemBudget; it overrides this with the caller's number.
 	s.memBudget = sched.MemBudget()
+	if m.opt.planDev != nil {
+		s.openPlan()
+	}
 	return s
 }
 
@@ -1013,6 +1021,10 @@ func (s *State) dev() nn.LayerDevice {
 // `defer st.Close()` gives that order).
 func (s *State) Close() error {
 	s.m.live.remove(s)
+	if s.planSess != nil {
+		s.planSess.Close()
+		s.planSess = nil
+	}
 	// A move prepared and never committed gives its target's copies back.
 	if s.pending != nil {
 		s.pending.Cancel()
@@ -3578,6 +3590,9 @@ func (s *State) Forward(token int32) ([]float32, error) {
 	defer s.m.enterPager()()
 	if int(token) < 0 || int(token) >= s.c.NVocab {
 		return nil, errToken{token, s.c.NVocab}
+	}
+	if s.planSess != nil || s.planErr != nil {
+		return s.planForward(token)
 	}
 	if err := s.retireErr; err != nil {
 		s.retireErr = nil

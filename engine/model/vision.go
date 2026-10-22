@@ -1217,6 +1217,9 @@ func (s *State) visWindowed(li int) bool {
 // each square is its own pass through the blocks, since attention never
 // crosses a tile.
 func (s *State) Encode(px []float32) ([]float32, error) {
+	if err := s.planRefuses("Encode"); err != nil {
+		return nil, err
+	}
 	if s.vis == nil {
 		return nil, fmt.Errorf("model: Encode on a State that is not the vision segment's (State.Vision)")
 	}
@@ -1261,6 +1264,9 @@ func (s *State) encodeOne(px []float32) ([]float32, error) {
 // position table is read by bucket (TowerConfig.PosBuckets) or whose grid
 // follows the picture takes a grid other than its square one.
 func (s *State) EncodeGrid(px []float32, gh, gw int) ([]float32, error) {
+	if err := s.planRefuses("EncodeGrid"); err != nil {
+		return nil, err
+	}
 	defer s.m.enterPager()()
 	return s.encodeGrid(px, gh, gw)
 }

@@ -1467,6 +1467,9 @@ func (kc *kvCache) dropTail(n int) {
 // asserts. RoPE is applied before the cache write, so a stored key carries its
 // absolute position and only a prefix is reusable.
 func (s *State) PrefillCached(tokens []int32) ([]float32, error) {
+	if err := s.planRefuses("PrefillCached"); err != nil {
+		return nil, err
+	}
 	defer s.m.enterPager()()
 	if s.batched {
 		return nil, errBatch{}
@@ -1497,6 +1500,9 @@ func (s *State) PrefillCached(tokens []int32) ([]float32, error) {
 // on rows after them, which the run's name covers, and a restore that ended
 // inside it would leave the tail a chunk that cuts the run.
 func (s *State) PrefillCachedMixed(spans ...Span) ([]float32, error) {
+	if err := s.planRefuses("PrefillCachedMixed"); err != nil {
+		return nil, err
+	}
 	defer s.m.enterPager()()
 	if s.batched {
 		return nil, errBatch{}
@@ -1613,6 +1619,9 @@ func (s *State) prefillCachedKey(key []int32, rows int, run func(n int) ([]float
 // with the last logits, so the next request finds this prompt too. A server's
 // step loop restores this way and then runs the rest as a row.
 func (s *State) RestorePrefix(tokens []int32) (int, error) {
+	if err := s.planRefuses("RestorePrefix"); err != nil {
+		return 0, err
+	}
 	defer s.m.enterPager()()
 	if s.batched {
 		return 0, errBatch{}

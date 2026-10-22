@@ -105,7 +105,9 @@ func TestRunnerDecodesAsTheHost(t *testing.T) {
 						t.Fatal(err)
 					}
 				})
-				if allocs != 0 {
+				// The race detector's instrumentation allocates: the count is
+				// the build's without it.
+				if allocs != 0 && !raceEnabled {
 					t.Errorf("a warm step allocates %.1f objects", allocs)
 				}
 				t.Logf("%d positions on %s, one plan for %d keys: worst logits NMSE %.3g, %.0f allocations a step", n, dev.Name(), capacity, worst, allocs)

@@ -17,6 +17,9 @@ import (
 // position, so rows with different prompt lengths simply sit at different
 // positions.
 func (s *State) ForwardBatchGreedy(tokens []int32) ([]int32, error) {
+	if err := s.planRefuses("ForwardBatchGreedy"); err != nil {
+		return nil, err
+	}
 	defer s.m.enterPager()()
 	if err := s.batchStepOK(tokens); err != nil {
 		return nil, err

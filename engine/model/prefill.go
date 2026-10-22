@@ -34,6 +34,9 @@ func (s *State) Prefill(tokens []int32) ([]float32, error) {
 	if s.batched {
 		return nil, errBatch{}
 	}
+	if s.planSess != nil || s.planErr != nil {
+		return s.planPrefill(tokens)
+	}
 	if err := s.retireErr; err != nil {
 		s.retireErr = nil
 		return nil, err
@@ -46,6 +49,9 @@ func (s *State) Prefill(tokens []int32) ([]float32, error) {
 // through the token path, so a warm prompt allocates nothing (the mixed
 // path's per-row sources do).
 func (s *State) prefillBidir(tokens []int32) ([]float32, error) {
+	if err := s.planRefuses("a bidirectional prompt"); err != nil {
+		return nil, err
+	}
 	defer s.m.enterPager()()
 	if s.batched {
 		return nil, errBatch{}
@@ -79,6 +85,9 @@ func (s *State) prefillBidir(tokens []int32) ([]float32, error) {
 // The row must be at position 0, i.e. a retired slot; Retire is the only thing
 // that resets a row's positions.
 func (s *State) PrefillSeq(slot int, tokens []int32) ([]float32, error) {
+	if err := s.planRefuses("PrefillSeq"); err != nil {
+		return nil, err
+	}
 	defer s.m.enterPager()()
 	if !s.batched {
 		return nil, errBatch{}
@@ -183,11 +192,17 @@ func named(spans []Span) []Span {
 // embedding runs. It is the prefill half of the embedding seam; see
 // ForwardEmbd.
 func (s *State) PrefillMixed(spans ...Span) ([]float32, error) {
+	if err := s.planRefuses("PrefillMixed"); err != nil {
+		return nil, err
+	}
 	return s.PrefillSeqMixed(0, spans...)
 }
 
 // PrefillSeqMixed is PrefillMixed into one batch slot.
 func (s *State) PrefillSeqMixed(slot int, spans ...Span) ([]float32, error) {
+	if err := s.planRefuses("PrefillSeqMixed"); err != nil {
+		return nil, err
+	}
 	defer s.m.enterPager()()
 	spans, err := s.pictureRows(named(spans), 0)
 	if err != nil {

@@ -172,6 +172,9 @@ func StepRuns(runs []Run) ([][]float32, error) {
 		if r.State == nil || (len(r.Tokens) == 0 && r.Spans == nil && r.Encode == nil) {
 			return nil, fmt.Errorf("model: run %d has no State, or no tokens, spans or picture", i)
 		}
+		if err := r.State.planRefuses("StepRuns"); err != nil {
+			return nil, err
+		}
 		if slices.IndexFunc(runs[:i], func(o Run) bool { return o.State == r.State }) >= 0 {
 			return nil, fmt.Errorf("model: run %d's State is in an earlier run: a State takes one run a step", i)
 		}

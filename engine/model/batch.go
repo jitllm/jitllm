@@ -47,6 +47,9 @@ func (s *State) ForwardBatch(tokens []int32) ([]float32, error) {
 //
 // Each sequence's position moves on by the rows it took.
 func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float32, error) {
+	if err := s.planRefuses("a batch of rows"); err != nil {
+		return nil, err
+	}
 	defer s.m.enterPager()()
 	c := s.c
 	if !s.batched {

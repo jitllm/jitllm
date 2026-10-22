@@ -244,7 +244,10 @@ Each step ends with its gate green and the board measured.
       compiled once at a capacity, with the weights, word blocks and rotary
       planes every sequence shares uploaded once; a `Session` is a
       sequence's pools, page table, tables, input row and step buffers. A
-      warm step allocates nothing. Next, `model.State` running decode
-      through it on a model opened with a `With...()` option; relocation and
-      paging come back as re-planning when placement changes, gated by the
-      five principles' tests, before it replaces the tier.
+      warm step allocates nothing. `model.WithPlanDevice` opens a model
+      whose States decode through it: Forward and Prefill step on the
+      runner, a runner per capacity kept by the model, and every other entry
+      point refuses by name (`TestPlanDecodesAsTheHost`). Next: the front end
+      reading every feature the container states, prompt rows, and
+      relocation and paging as re-planning when placement changes, gated by
+      the five principles' tests, before it replaces the tier.
