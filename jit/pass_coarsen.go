@@ -79,6 +79,37 @@ func (k *Kernel) fold() (int, bool) {
 	return fs[0], true
 }
 
+// readsUnnamed reports whether k reads one of written at a place no
+// member's store names as read resolves it -- a gather's computed index, or
+// coordinates of another rank than the producer's -- which the formed
+// kernel would read from memory it writes itself.
+func readsUnnamed(k *Kernel, members []*Kernel, written map[Operand]bool) bool {
+	for _, nd := range k.Nodes {
+		o := k.Bufs[nd.Buf].Operand
+		if nd.Op != OpLoad || !written[o] {
+			continue
+		}
+		named := false
+		for _, p := range members {
+			for _, s := range p.Stores {
+				if s.Barrier || s.Run || p.Bufs[s.Buf].Operand != o {
+					continue
+				}
+				if p.storesOwn(s) && nd.Ax != nil && len(nd.Ax) == len(p.Space) {
+					named = true
+				}
+				if same, ok := sameIndex(k, nd, p, s); ok && same {
+					named = true
+				}
+			}
+		}
+		if !named {
+			return true
+		}
+	}
+	return false
+}
+
 // readsMatrix is whether k reads a weight matrix: a projection, whose rows
 // are the work to spread, not a row's chain.
 func readsMatrix(k *Kernel) bool {
@@ -112,7 +143,7 @@ func (c Coarsen) chain(ks []*Kernel, i int) int {
 			for _, b := range k.Bufs {
 				linked = linked || b.Kind == BufIn && written[b.Operand]
 			}
-			if !linked {
+			if !linked || readsUnnamed(k, ks[i:j], written) {
 				break
 			}
 		}
@@ -420,10 +451,10 @@ func (k *coarse) value(i int) ([]uint32, bool) {
 
 // produce is member n's value stored by s at its coordinates coords.
 func (k *coarse) produce(n *Kernel, s Store, coords []int) int {
-	key := fmt.Sprint(n.Name, &n.Nodes[0], s.Val, k.keys(coords))
+	key := fmt.Sprintf("%p %d %v", n, s.Val, k.keys(coords))
 	g := k.E / n.Elements()
 	if n.Kind == PrimReduce && g > k.c.Unit {
-		key = fmt.Sprint(n.Name, &n.Nodes[0], s.Val)
+		key = fmt.Sprintf("%p %d", n, s.Val)
 	}
 	if v, ok := k.memo[key]; ok {
 		return v
@@ -468,6 +499,12 @@ func (k *coarse) reduce(n *Kernel, s Store, coords []int, g int) int {
 		return acc
 	}
 	tg := g / K
+	if t != ir.F32 {
+		// The exchange between threads is f32; an integer sum over threads
+		// (a top-k's ranks) leaves the chain unformed.
+		k.err = fmt.Errorf("an exchange of %v", t)
+		return m.u32(0)
+	}
 	if tg > U || U%tg != 0 {
 		k.err = fmt.Errorf("a reduction of %d terms over %d", K, g)
 		return m.u32(0)
