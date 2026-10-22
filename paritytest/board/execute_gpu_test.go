@@ -22,7 +22,11 @@ import (
 // descriptors, the page table, the query offset, the rotary positions and
 // planes), the input token's row of the embedding, an empty history the steps
 // fill -- at the size the plan states, or the engine's own for what it owns,
-// and every kernel launched in order. The prompt and then the host's choices are fed: each
+// and every kernel launched in order. The plan is composed once, at the
+// session's capacity, as the engine runs it: the attention reads each step's
+// bounds from the row descriptors, so one plan serves every shorter history.
+// The capacities are one inside the attention's first split count and one
+// past it. The prompt and then the host's choices are fed: each
 // position's logits are held to the engine's host decode of the same tokens,
 // and its token to the host's choice.
 func TestComposedDecodeRunsOnTheGPU(t *testing.T) {
@@ -56,45 +60,52 @@ func TestComposedDecodeRunsOnTheGPU(t *testing.T) {
 		t.Skip("no device")
 	}
 	for _, dev := range devs {
-		t.Run(dev.API(), func(t *testing.T) {
-			st := m.NewState(len(ids) + more + 8)
-			defer st.Close()
-			run := newStepRun(t, f, parts, dev)
-			defer run.free()
-			worst := 0.0
-			tok := ids[0]
-			for pos := range len(ids) + more {
-				want, err := st.Forward(tok)
-				if err != nil {
-					t.Fatal(err)
-				}
-				got, token := run.step(pos, tok)
-				var num, den float64
-				best := 0
-				for i := range want {
-					d := float64(got[i]) - float64(want[i])
-					num += d * d
-					den += float64(want[i]) * float64(want[i])
-					if want[i] > want[best] {
-						best = i
-					}
-				}
-				nmse := num / den
-				if !(nmse < 1e-5) {
-					t.Fatalf("position %d: logits NMSE %.3g against the host", pos, nmse)
-				}
-				worst = max(worst, nmse)
-				if token != best {
-					t.Fatalf("position %d: token %d, the host's %d", pos, token, best)
-				}
-				tok = int32(best)
-				if pos+1 < len(ids) {
-					tok = ids[pos+1]
-				}
-			}
-			t.Logf("%d positions on %s, worst logits NMSE %.3g against the host", len(ids)+more, dev.Name(), worst)
-		})
+		for _, capacity := range []int{16, 300} {
+			t.Run(fmt.Sprintf("%s/%d", dev.API(), capacity), func(t *testing.T) {
+				decodeOn(t, m, f, parts, dev, ids, more, capacity)
+			})
+		}
 	}
+}
+
+// decodeOn is the gate's run on one device at one capacity.
+func decodeOn(t *testing.T, m *model.Model, f *jlm.File, parts []jit.Part, dev backend.Device, ids []int32, more, capacity int) {
+	st := m.NewState(len(ids) + more + 8)
+	defer st.Close()
+	run := newStepRun(t, f, parts, dev, jit.Step{Rows: 1, Page: 64, Keys: capacity})
+	defer run.free()
+	worst := 0.0
+	tok := ids[0]
+	for pos := range len(ids) + more {
+		want, err := st.Forward(tok)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, token := run.step(pos, tok)
+		var num, den float64
+		best := 0
+		for i := range want {
+			d := float64(got[i]) - float64(want[i])
+			num += d * d
+			den += float64(want[i]) * float64(want[i])
+			if want[i] > want[best] {
+				best = i
+			}
+		}
+		nmse := num / den
+		if !(nmse < 1e-5) {
+			t.Fatalf("position %d: logits NMSE %.3g against the host", pos, nmse)
+		}
+		worst = max(worst, nmse)
+		if token != best {
+			t.Fatalf("position %d: token %d, the host's %d", pos, token, best)
+		}
+		tok = int32(best)
+		if pos+1 < len(ids) {
+			tok = ids[pos+1]
+		}
+	}
+	t.Logf("%d positions on %s, one plan for %d keys, worst logits NMSE %.3g against the host", len(ids)+more, dev.Name(), capacity, worst)
 }
 
 // stepRun is a device's storages across steps, by key: one buffer each, the
@@ -104,6 +115,10 @@ type stepRun struct {
 	f     *jlm.File
 	parts []jit.Part
 	dev   backend.Device
+	// plan is the step composed once at the capacity s, and its kernels.
+	s     jit.Step
+	plan  *jit.Plan
+	kerns []backend.Kernel
 	bufs  map[jit.Operand]backend.Buf
 	size  map[jit.Operand]int64
 	once  map[jit.Operand]bool
@@ -112,8 +127,8 @@ type stepRun struct {
 	each func(i int, name string, wrote []jit.Operand)
 }
 
-func newStepRun(t *testing.T, f *jlm.File, parts []jit.Part, dev backend.Device) *stepRun {
-	return &stepRun{t: t, f: f, parts: parts, dev: dev, bufs: map[jit.Operand]backend.Buf{},
+func newStepRun(t *testing.T, f *jlm.File, parts []jit.Part, dev backend.Device, s jit.Step) *stepRun {
+	return &stepRun{t: t, f: f, parts: parts, dev: dev, s: s, bufs: map[jit.Operand]backend.Buf{},
 		size: map[jit.Operand]int64{}, once: map[jit.Operand]bool{}}
 }
 
@@ -121,17 +136,41 @@ func (r *stepRun) free() {
 	for _, b := range r.bufs {
 		b.Free()
 	}
+	for _, k := range r.kerns {
+		k.Close()
+	}
 }
 
 // step composes and runs the decode step of token tok at position pos, and
 // returns its logits and token.
 func (r *stepRun) step(pos int, tok int32) ([]float32, int) {
 	t := r.t
-	s := jit.Step{Rows: 1, Page: 64, Keys: pos + 1}
-	plan, err := jit.Default().Compose(r.f, s, func(jit.Part) jit.Device { return sm70 })
-	if err != nil {
-		t.Fatal(err)
+	s := r.s
+	if pos >= s.Keys {
+		t.Fatalf("position %d past the plan's %d keys", pos, s.Keys)
 	}
+	if r.plan == nil {
+		plan, err := jit.Default().Compose(r.f, s, func(jit.Part) jit.Device { return sm70 })
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.plan = plan
+		for _, pp := range plan.Parts {
+			for _, c := range pp.Codes {
+				if c.GPU == nil {
+					t.Fatalf("part %v formed %s for the host", pp.Part, c.Name)
+				}
+				k := *c.GPU
+				k.Name = fmt.Sprintf("x%02d_%s", len(r.kerns), k.Name)
+				kern, err := r.dev.Compile(&k)
+				if err != nil {
+					t.Fatalf("%s: %v", k.Name, err)
+				}
+				r.kerns = append(r.kerns, kern)
+			}
+		}
+	}
+	plan := r.plan
 	for _, st := range plan.Storages {
 		r.fill(st, r.bytes(st, s), r.source(st, pos, tok))
 	}
@@ -147,17 +186,8 @@ func (r *stepRun) step(pos int, tok int32) ([]float32, int) {
 	i := 0
 	for _, pp := range plan.Parts {
 		for _, c := range pp.Codes {
-			if c.GPU == nil {
-				t.Fatalf("part %v formed %s for the host", pp.Part, c.Name)
-			}
-			k := *c.GPU
-			k.Name = fmt.Sprintf("x%02d_%s", i, k.Name)
+			kern := r.kerns[i]
 			i++
-			kern, err := r.dev.Compile(&k)
-			if err != nil {
-				t.Fatalf("%s: %v", k.Name, err)
-			}
-			defer kern.Close()
 			var bs []backend.Buf
 			var wrote []jit.Operand
 			for _, b := range c.Binds {
@@ -174,7 +204,7 @@ func (r *stepRun) step(pos int, tok int32) ([]float32, int) {
 					token = at
 				}
 			}
-			runs = append(runs, launch{kern, k.Name, c.Groups, k.Group[0], bs, wrote})
+			runs = append(runs, launch{kern, c.Name, c.Groups, c.GPU.Group[0], bs, wrote})
 		}
 	}
 	var lerr error
