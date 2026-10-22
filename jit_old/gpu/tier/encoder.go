@@ -232,7 +232,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		// A traced run reads each graph op's values back (Config.OpTrace).
 		var tr *opTracer
 		if g.OpTrace != nil && prog.graph != nil && err == nil {
-			tr = &opTracer{g: g, s: s, prog: prog, rows: bs.rows, R: R, li: li, ne: p.NEmbd, at: at, src: -1}
+			tr = &opTracer{g: g, s: s, prog: prog, rows: bs.rows, R: R, li: li, ne: p.NEmbd, buf: buf, src: -1}
 		}
 		for oi, o := range prog.ops[first:] {
 			if tr != nil && err == nil {
@@ -715,10 +715,13 @@ type opTracer struct {
 	prog    *devProgram
 	rows, R int
 	li, ne  int
-	at      func(devVal) backend.Buf
-	src     int
-	ops     []int
-	vals    map[graph.ValueID][]float32
+	// buf is a copy of the run's slots: holding the run's own array, or a
+	// closure over it, moved that array to the heap on every block of every
+	// token, traced or not.
+	buf  [numSlots]backend.Buf
+	src  int
+	ops  []int
+	vals map[graph.ValueID][]float32
 }
 
 // begin starts the graph op a device op lowers, flushing the one before.
@@ -755,7 +758,7 @@ func (t *opTracer) read(ids []graph.ValueID) {
 		}
 		n, st := t.prog.vals[dv].Width, t.prog.stride(dv)
 		raw := make([]byte, 4*st*t.rows)
-		if t.s.Read(t.at(dv), raw) != nil {
+		if t.s.Read(t.buf[t.prog.slots[dv]], raw) != nil {
 			continue
 		}
 		sl := t.prog.slots[dv]

@@ -1144,6 +1144,11 @@ func runGen(lc *launcher, o *devOp, R, rows int, buf *[numSlots]backend.Buf, st 
 				// would recompute that row and leave the rest unwritten.
 				*lc.err = fmt.Errorf("tier: op %s launched %d groups over %d rows", o.Kind, groups, l.groups)
 			}
+			for i, b := range bufs[:l.n] {
+				if b == nil && *lc.err == nil {
+					*lc.err = fmt.Errorf("tier: op %s binds no buffer at argument %d of %d", o.Kind, i, l.n)
+				}
+			}
 			if *lc.err == nil {
 				*lc.err = lc.launch(l.k, groups, l.width, bufs[:l.n]...)
 			}
