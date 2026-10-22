@@ -1476,6 +1476,50 @@ per cycle" was the scavenger: live heap +32 KiB over four cycles and the tier's
 device ledger back to its placement figure, against +108 MiB of RSS.
 `docs/engineering-history/scheduling-and-measurement.md` has both.
 
+## What a request allocates, and what the collector scans
+
+The decode gates hold a warm token at zero allocations; this is the rest of a
+process's life, counted on Llama-3.2-1B Q4_K_M on the laptop's host
+(`runtime.MemStats` around each phase, a heap profile diffed across it).
+
+| phase | allocations | MB | scannable heap after |
+|---|---|---|---|
+| Open, vocabulary as `[]string`, `[]Merge`, `map[string]int32` | 624,824 | 43.0 | 20.8 MB |
+| Open, vocabulary as `jlm.Strings` and `tok.index` | 13,258 | 40.4 | 0.7 MB |
+| a fresh request (NewState, 641-token prefill, 32 tokens, Close), a JIT per State | 2,493 | 8.54 | |
+| the same, the closed State's JIT recycled | 264 | 0.91 | |
+| a pooled request (Reset, the same prompt and tokens): the server's path | 8 | 0.00 | |
+
+**The scannable heap is what a cycle costs.** The collector marks pointers,
+not bytes: 90 MB of a State's scratch and KV pages is pointer-free and costs a
+cycle nothing to mark, while a vocabulary's hundreds of thousands of string
+headers and map buckets cost every cycle for the life of the model. A
+`map[string]int32` is the shape to avoid for a table that lives with a model;
+`jlm.Strings` is one string and its offsets, and `tok.index` is open
+addressing over it with half the hash in each slot, so a miss is an integer
+compare. Its encode is 1.01-1.03x a map's in long runs: Go's map hashes and
+probes a short string faster than a seeded `maphash` did (1.2-1.6x per
+lookup), which an inlinable short-string hash brought to 1.1-1.2x.
+
+**A short benchmark of a smaller heap measures pacing.** The same encode read
+1.10 slower in a five-encode process and 1.01-1.03 in a forty-encode one: with
+20 MB less live heap the collector's goal is lower, so a process that allocates
+collects more often in its first seconds.
+
+**KV pages on the heap cost the collector nothing measurable.** A 24k-token
+prompt on the host grew the heap to 884 MB of committed pages; 12 cycles in
+500 s, four of them the runtime's two-minute forced collection, each pause at
+most 0.26 ms and each mark 3-20 ms. Pages are pointer-free and decode
+allocates nothing, so nothing triggers a cycle; what moving them off the heap
+would buy is RULE 2f's memory-limit arithmetic at a context near the limit,
+not the cycles.
+
+**A JIT holds the model's state and a session's.** Its kernels, scratch and
+tuners are a function of the model's options; its device, lookahead, spin,
+rotary dose and counters are what a session sets. `nn.JIT.Recycle` puts the
+second back and keeps the first. A State's Close may run twice, so it hands
+its JIT back once.
+
 ## RULE 3 as it stood in AGENTS.md: the cap, and why -race needs 24G
 
 ### ★ RULE 3: every heavy job runs under `scripts/cap`. NO EXCEPTIONS, INCLUDING SUBAGENTS.
