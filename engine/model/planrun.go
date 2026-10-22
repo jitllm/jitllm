@@ -28,6 +28,10 @@ type composing struct {
 
 func (c composing) BlockGraph(li int) *graph.Graph { return c.m.BlockGraph(li) }
 
+func (c composing) HeadGraph() *graph.Graph { return c.m.HeadGraph() }
+
+func (c composing) EmbedGraph() *graph.Graph { return c.m.EmbedGraph() }
+
 func (c composing) ActWindow() int { return c.m.ActWindow() }
 
 // Composing is the model as the composer and the plan's runner read it: one

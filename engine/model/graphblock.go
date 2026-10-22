@@ -904,6 +904,34 @@ func (m *Model) BlockGraph(li int) *graph.Graph {
 	return m.graphs[li].g
 }
 
+// HeadGraph is the head as this package's host runs it: the final norm (a
+// LayerNorm, with its bias, where the model's are), the vocabulary's
+// projection (the embedding where tied) with its bias, the final softcap and
+// the logit scale.
+func (m *Model) HeadGraph() *graph.Graph {
+	c := m.Cfg
+	h := graph.Head{NEmbd: c.NEmbd, NVocab: c.NVocab, Eps: c.RMSEps, Out: jlm.RoleOutput, LayerNorm: c.LayerNorm,
+		NormBias: m.stored(jlm.RoleOutputNormBias), OutBias: m.stored(jlm.RoleOutputBias),
+		Softcap: float64(c.FinalSoftcap), LogitScale: c.LogitScale}
+	if c.TiedEmbd {
+		h.Out = jlm.RoleTokenEmbd
+	}
+	return h.Build()
+}
+
+// EmbedGraph is a step's input rows as this package's host makes them: the
+// token's embedding row times the model's embedding scale.
+func (m *Model) EmbedGraph() *graph.Graph {
+	e := graph.Embed{NEmbd: m.Cfg.NEmbd, NVocab: m.Cfg.NVocab, Scale: m.Cfg.EmbdScale}
+	return e.Build()
+}
+
+// stored reports whether the container holds the model-wide tensor of role.
+func (m *Model) stored(role jlm.Role) bool {
+	_, ok := m.container.Find(role, jlm.DenseBlock, -1)
+	return ok
+}
+
 // GraphBlocks counts the blocks a State ran through the block graph's
 // lowering: the forced path's evidence (RULE 10).
 func (s *State) GraphBlocks() int { return s.graphRuns }

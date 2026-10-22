@@ -12,12 +12,13 @@ import (
 
 // header is a model as a node another node routes to would send it: the
 // container's configuration, its tensor index with offsets dropped, and its
-// block graphs, no file behind it.
+// graphs, no file behind it.
 type header struct {
-	cfg    *jlm.Config
-	by     map[[3]int32]*jlm.Entry
-	all    []jlm.Entry
-	blocks []*graph.Graph
+	cfg         *jlm.Config
+	by          map[[3]int32]*jlm.Entry
+	all         []jlm.Entry
+	blocks      []*graph.Graph
+	head, embed *graph.Graph
 }
 
 func (h header) Config() *jlm.Config { return h.cfg }
@@ -31,13 +32,17 @@ func (h header) BlockGraph(li int) *graph.Graph {
 	return h.blocks[li]
 }
 
+func (h header) HeadGraph() *graph.Graph { return h.head }
+
+func (h header) EmbedGraph() *graph.Graph { return h.embed }
+
 func (h header) Find(role jlm.Role, block, index int32) (*jlm.Entry, bool) {
 	e, ok := h.by[[3]int32{int32(role), block, index}]
 	return e, ok
 }
 
 // TestHeaderPricesAsTheContainer holds a model's header, copied out of its
-// container with every offset dropped, its block graphs with it, and the
+// container with every offset dropped, its graphs with it, and the
 // model closed, to pricing the model as the container does.
 func TestHeaderPricesAsTheContainer(t *testing.T) {
 	m, err := model.Open(testmodels.Path("synth-ernie45.jlm"))
@@ -46,7 +51,7 @@ func TestHeaderPricesAsTheContainer(t *testing.T) {
 	}
 	f := m.Composing()
 	cfg := *f.Config()
-	h := header{cfg: &cfg, by: map[[3]int32]*jlm.Entry{}}
+	h := header{cfg: &cfg, by: map[[3]int32]*jlm.Entry{}, head: f.HeadGraph(), embed: f.EmbedGraph()}
 	for _, e := range f.Entries() {
 		e.QSOff, e.DOff, e.SCOff = 0, 0, 0
 		h.by[[3]int32{int32(e.Role), e.Block, e.Index}] = &e

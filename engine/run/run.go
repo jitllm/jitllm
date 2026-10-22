@@ -126,11 +126,12 @@ func New(f Source, dev backend.Device, gpu jit.Device, keys int, rope nn.Rope, o
 			l := launch{k: kern, groups: code.Groups, width: k.Group[0]}
 			for _, b := range code.Binds {
 				l.at = append(l.at, b.Storage)
-				if b.Writes && b.Operand.Kind == jit.OperandValue {
-					switch b.Operand.Name {
-					case "logits":
+				if b.Writes && b.Operand.Kind == jit.OperandValue && len(pp.Part.Graph.Out) > 0 &&
+					b.Operand.Value == pp.Part.Graph.Out[0] {
+					switch pp.Part.Kind {
+					case jit.PartHead:
 						r.logits = b.Storage
-					case "token":
+					case jit.PartSample:
 						r.token = b.Storage
 					}
 				}

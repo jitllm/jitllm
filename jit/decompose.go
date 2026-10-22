@@ -18,6 +18,8 @@ func decompositions() map[graph.OpKind]Decomposition {
 		graph.OpAdd:       decomposeAdd,
 		graph.OpActMul:    decomposeActMul,
 		graph.OpAct:       decomposeAct,
+		graph.OpMap:       decomposeMap,
+		graph.OpLayerNorm: decomposeLayerNorm,
 		graph.OpRope:      decomposeRope,
 		graph.OpKVAppend:  decomposeKVAppend,
 		graph.OpAttend:    decomposeAttend,

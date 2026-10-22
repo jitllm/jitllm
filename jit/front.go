@@ -43,13 +43,16 @@ func (p Part) String() string {
 }
 
 // Model is what the composer reads of a model: its configuration, its
-// tensors' index entries, never their bytes, and each block's graph as the
-// engine builds it from the container, nil for a block it has none of.
+// tensors' index entries, never their bytes, and its graphs as the engine
+// builds them from the container -- each block's (nil for a block it has
+// none of), the head's and the input rows'.
 type Model interface {
 	Config() *jlm.Config
 	Find(role jlm.Role, block, index int32) (*jlm.Entry, bool)
 	Entries() []jlm.Entry
 	BlockGraph(li int) *graph.Graph
+	HeadGraph() *graph.Graph
+	EmbedGraph() *graph.Graph
 }
 
 // unread is the first tensor of block (jlm.DenseBlock for none) whose role
@@ -80,18 +83,17 @@ func has(m Model, role jlm.Role, block, index int32) bool {
 	return ok
 }
 
-// Front is the model's graph: the step's rotary table, its input rows'
-// embedding, every block's graph as the model states it, the head, then the
-// sampling of its logits. What the head and the embedding do not read, the
-// front end refuses.
+// Front is the model's graph: the step's rotary table, its input rows,
+// every block's graph as the model states it, the head, then the sampling of
+// its logits. A model-wide tensor no graph binds, the front end refuses.
 func Front(f Model) ([]Part, error) {
 	c := f.Config()
 	rt := graph.RopeTable{NRot: int(c.NRot)}
-	if c.EmbdScale != 0 && c.EmbdScale != 1 {
-		return nil, fmt.Errorf("jit: the container scales the embedding by %v, which the front end does not read", c.EmbdScale)
+	em, h := f.EmbedGraph(), f.HeadGraph()
+	if em == nil || h == nil {
+		return nil, fmt.Errorf("jit: the model states no head or input rows")
 	}
-	em := graph.Embed{NEmbd: int(c.NEmbd), NVocab: int(c.NVocab)}
-	parts := []Part{{Kind: PartTable, Block: -1, Graph: rt.Build()}, {Kind: PartEmbed, Block: -1, Graph: em.Build()}}
+	parts := []Part{{Kind: PartTable, Block: -1, Graph: rt.Build()}, {Kind: PartEmbed, Block: -1, Graph: em}}
 	for li := 0; li < int(c.NLayer); li++ {
 		g := f.BlockGraph(li)
 		if g == nil {
@@ -99,38 +101,19 @@ func Front(f Model) ([]Part, error) {
 		}
 		parts = append(parts, Part{Kind: PartBlock, Block: li, Graph: g})
 	}
-	h, err := headGraph(f)
-	if err != nil {
+	var bound []jlm.Role
+	for _, g := range []*graph.Graph{em, h} {
+		for _, o := range g.Ops {
+			for _, w := range o.Weight {
+				bound = append(bound, w.Role)
+			}
+		}
+	}
+	if err := unread(f, jlm.DenseBlock, bound...); err != nil {
 		return nil, fmt.Errorf("jit: head: %w", err)
 	}
 	sm := graph.Sample{NVocab: int(c.NVocab)}
 	return append(parts, Part{Kind: PartHead, Block: -1, Graph: h}, Part{Kind: PartSample, Block: -1, Graph: sm.Build()}), nil
-}
-
-// headGraph is the final norm and the vocabulary's projection, the
-// embedding's rows where the container ties them.
-func headGraph(f Model) (*graph.Graph, error) {
-	c := f.Config()
-	out := jlm.RoleOutput
-	if c.Flags&jlm.FlagTiedEmbd != 0 {
-		out = jlm.RoleTokenEmbd
-	}
-	if !has(f, jlm.RoleOutputNorm, jlm.DenseBlock, -1) || !has(f, out, jlm.DenseBlock, -1) {
-		return nil, fmt.Errorf("no output norm or projection")
-	}
-	if err := unread(f, jlm.DenseBlock, jlm.RoleTokenEmbd, jlm.RoleOutputNorm, out); err != nil {
-		return nil, err
-	}
-	switch {
-	case c.Flags&jlm.FlagLayerNorm != 0:
-		return nil, fmt.Errorf("the output norm is a LayerNorm, which the head does not read")
-	case c.FinalSoftcap != 0:
-		return nil, fmt.Errorf("the container softcaps the logits by %v, which the head does not read", c.FinalSoftcap)
-	case c.LogitScale != 0 && c.LogitScale != 1:
-		return nil, fmt.Errorf("the container scales the logits by %v, which the head does not read", c.LogitScale)
-	}
-	h := graph.Head{NEmbd: int(c.NEmbd), NVocab: int(c.NVocab), Eps: float64(c.RMSEps), Out: out}
-	return h.Build(), nil
 }
 
 // formats is each of a part's weights' storage format.
