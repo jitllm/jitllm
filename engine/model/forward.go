@@ -1071,7 +1071,11 @@ func (s *State) Close() error {
 		return s.jit.Close()
 	}
 	s.keepSpare()
-	return s.m.keepJIT(s.jit)
+	// Close may run twice: the JIT goes back once, or a second Close would
+	// hand the next State a JIT another State already holds.
+	j := s.jit
+	s.jit = nil
+	return s.m.keepJIT(j)
 }
 
 // SetDevice attaches an optional accelerator to this State's matvecs. Nil, the

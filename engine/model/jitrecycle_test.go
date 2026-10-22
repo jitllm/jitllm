@@ -16,10 +16,10 @@ func (declining) MatVec(out []float32, t quant.Type, w []byte, x []float32, nrow
 }
 
 // TestASessionRecyclesTheJITItClosed holds the JIT a closed State hands the
-// next to a fresh one: the second session gets the first one's JIT, with no
-// device although the first had attached one, its counters where a fresh
-// JIT's start, and the same logits to the bit; a session opened beside it
-// builds its own.
+// next to a fresh one. The first session is closed twice, as Close allows;
+// the second gets its JIT, without the device the first attached and with a
+// fresh JIT's counts, and gives the same logits to the bit; a session opened
+// beside it builds its own.
 func TestASessionRecyclesTheJITItClosed(t *testing.T) {
 	m, err := Open(jlmOf(t, testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")), noTune)
 	if err != nil {
@@ -48,6 +48,9 @@ func TestASessionRecyclesTheJITItClosed(t *testing.T) {
 	want := run(s1)
 	s1.jit.SetDevice(declining{})
 	s1.jit.SetLookahead(false)
+	if err := s1.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err := s1.Close(); err != nil {
 		t.Fatal(err)
 	}

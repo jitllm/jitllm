@@ -1204,6 +1204,9 @@ func (m *Model) takeJIT() *nn.JIT {
 // keepJIT gives a closing State's JIT to the model, or closes it when the
 // model already holds one.
 func (m *Model) keepJIT(j *nn.JIT) error {
+	if j == nil {
+		return nil
+	}
 	m.spareMu.Lock()
 	if m.spareJIT == nil {
 		m.spareJIT = j
