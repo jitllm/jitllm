@@ -61,6 +61,11 @@ func (x *exprs) inverse(amax, d int) int {
 	return x.sel(F, pos, v, x.f(0))
 }
 
+// window is how many of value v's elements share a scale: the form's
+// window, the whole row where the row is narrower (a window stated as the
+// model's widest row).
+func (c *Context) window(v graph.ValueID) int { return min(c.Int8.Window, c.width(v)) }
+
 // int8 is value v's int8 form, rows of w, as primitives: each window's
 // amax, its scale, then each word -- its window's inverse scale, its
 // elements' codes packed, and the codes' sum -- and the sums a Sums. The
@@ -71,7 +76,8 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	U, F, I := ir.U32, ir.F32, ir.I32
 	sh := c.rows(v)
 	R, W := sh[0], sh[1]
-	nw, nwd, ns := W/q.Window, W/q.Word, W/q.Sums
+	ww := c.window(v)
+	nw, nwd, ns := W/ww, W/q.Word, W/q.Sums
 	x := c.value(v)
 	temp := func(name string, t ir.Type) Operand {
 		return Operand{Kind: OperandScratch, Name: x.Name + "." + name, Elem: t, Temp: true}
@@ -83,7 +89,7 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	flat := func(e *exprs, r, i, n int) int { return e.op(OpAdd, U, e.op(OpMul, U, r, e.u(uint32(n))), i) }
 
 	var a exprs
-	a.abs(a.at(0, sh, a.coord(0), a.op(OpAdd, U, a.op(OpMul, U, a.coord(1), a.u(uint32(q.Window))), a.coord(2))))
+	a.abs(a.at(0, sh, a.coord(0), a.op(OpAdd, U, a.op(OpMul, U, a.coord(1), a.u(uint32(ww))), a.coord(2))))
 
 	var d exprs
 	ds := d.scale(d.at(0, win, d.coord(0), d.coord(1)))
@@ -93,7 +99,7 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	// from zero, the codes packed a byte each, and their sum.
 	var p exprs
 	pr, pw := p.coord(0), p.coord(1)
-	pwin := p.op(OpDiv, U, p.op(OpMul, U, pw, p.u(uint32(q.Word))), p.u(uint32(q.Window)))
+	pwin := p.op(OpDiv, U, p.op(OpMul, U, pw, p.u(uint32(q.Word))), p.u(uint32(ww)))
 	inv := p.inverse(p.at(1, win, pr, pwin), p.load(2, flat(&p, pr, pwin, nw)))
 	packed, sum := -1, -1
 	for j := 0; j < q.Word; j++ {
@@ -119,7 +125,7 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 
 	ext := R * (nw + ns)
 	return []Prim{
-		{Kind: PrimReduce, Shape: []int{R, nw, q.Window}, In: []Operand{x}, Out: amax, Combine: OpMax, Expr: a.e},
+		{Kind: PrimReduce, Shape: []int{R, nw, ww}, In: []Operand{x}, Out: amax, Combine: OpMax, Expr: a.e},
 		{Kind: PrimMap, Shape: win, In: []Operand{amax}, Expr: d.e, Stores: []PrimStore{{Out: scales, Index: dix, Value: ds, Extent: ext}}},
 		{Kind: PrimMap, Shape: []int{R, nwd}, In: []Operand{x, amax, scales}, Expr: p.e, Facts: Facts{Extents: map[int]int{2: ext}},
 			Stores: []PrimStore{{Out: words, Index: wix, Value: packed, Extent: R * nwd},

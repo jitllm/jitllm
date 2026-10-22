@@ -134,8 +134,11 @@ func decomposeMatVecDecoded(rows, k int, wo Operand, x, out Operand, R int) (Pri
 // where the format's sub-blocks do not sit in the form's windows.
 func decomposeMatVecInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout) (prims []Prim, ok bool) {
 	w, q, v := o.Weight[0], c.Int8, o.In[0]
-	if q == nil || q.Word != 4 || q.Window%l.Sub != 0 || l.Sub%q.Sums != 0 || w.K%(l.Sub*l.SuperSub) != 0 ||
-		c.width(v)%q.Window != 0 {
+	if q == nil || q.Word != 4 || l.Sub%q.Sums != 0 || w.K%(l.Sub*l.SuperSub) != 0 {
+		return nil, false
+	}
+	win := c.window(v)
+	if win%l.Sub != 0 || c.width(v)%win != 0 {
 		return nil, false
 	}
 	if !c.formed[v] {
@@ -144,7 +147,7 @@ func decomposeMatVecInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout) (
 	}
 	U, I, F := ir.U32, ir.I32, ir.F32
 	R, rows, K := c.Step.Rows, w.Rows, w.K
-	nsub, nwd, nw, ns := K/l.Sub, K/q.Word, c.width(v)/q.Window, c.width(v)/q.Sums
+	nsub, nwd, nw, ns := K/l.Sub, K/q.Word, c.width(v)/win, c.width(v)/q.Sums
 	x := c.value(v)
 	words := Operand{Kind: OperandScratch, Name: x.Name + ".q8a", Elem: U}
 	scales := Operand{Kind: OperandScratch, Name: x.Name + ".q8x"}
@@ -176,7 +179,7 @@ func decomposeMatVecInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout) (
 	first := e.op(OpMul, U, es, e.u(uint32(l.Sub)))
 	_, scale, bias := jlm.DecodeParts[int](ep, l, rows, erow, first)
 	df := e.un(OpCvtF32, F, e.at(0, []int{R, rows, nsub}, er, erow, es))
-	xs := e.load(1, e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(nw))), e.op(OpDiv, U, first, e.u(uint32(q.Window)))))
+	xs := e.load(1, e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(nw))), e.op(OpDiv, U, first, e.u(uint32(win)))))
 	sumAt := e.op(OpAdd, U, e.u(uint32(R*nw)), e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(ns))), e.op(OpDiv, U, first, e.u(uint32(q.Sums)))))
 	csum := e.load(1, sumAt)
 	for t := 1; t < l.Sub/q.Sums; t++ {

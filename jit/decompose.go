@@ -17,6 +17,7 @@ func decompositions() map[graph.OpKind]Decomposition {
 		graph.OpMatVec:    decomposeMatVec,
 		graph.OpAdd:       decomposeAdd,
 		graph.OpActMul:    decomposeActMul,
+		graph.OpAct:       decomposeAct,
 		graph.OpRope:      decomposeRope,
 		graph.OpKVAppend:  decomposeKVAppend,
 		graph.OpAttend:    decomposeAttend,
@@ -210,13 +211,12 @@ func decomposeActMul(o graph.Op, c *Context) ([]Prim, error) {
 	sh := c.rows(o.Out[0])
 	var x exprs
 	r, i := x.coord(0), x.coord(1)
-	g := x.at(0, sh, r, i)
-	switch o.Attr.Act {
-	case graph.ActSiLU:
+	if o.Attr.Act == graph.ActSiLU {
+		g := x.at(0, sh, r, i)
 		g = x.op(OpDiv, F, g, x.op(OpAdd, F, x.f(1), x.un(OpExp, F, x.op(OpSub, F, x.f(0), g))))
-	default:
-		return nil, fmt.Errorf("no formula for activation %d yet", o.Attr.Act)
+		x.op(OpMul, F, g, x.at(1, sh, r, i))
+	} else if _, err := x.actMul(o.Attr.Act, x.at(0, sh, r, i), x.at(1, sh, r, i)); err != nil {
+		return nil, err
 	}
-	x.op(OpMul, F, g, x.at(1, sh, r, i))
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), c.value(o.In[1])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }
