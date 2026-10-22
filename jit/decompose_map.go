@@ -163,3 +163,15 @@ func decomposeLayerNorm(o graph.Op, c *Context) ([]Prim, error) {
 		{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: m.e},
 	}, nil
 }
+
+// decomposeScale is the row times the stored scalar.
+func decomposeScale(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 {
+		return nil, fmt.Errorf("a scale of %d operands, %d weights", len(o.In), len(o.Weight))
+	}
+	sh := c.rows(o.Out[0])
+	var x exprs
+	x.op(OpMul, ir.F32, x.at(0, sh, x.coord(0), x.coord(1)), x.at(1, []int{1}, x.u(0)))
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]),
+		{Kind: OperandVector, Role: o.Weight[0].Role, Name: o.Weight[0].Role.String()}}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
+}

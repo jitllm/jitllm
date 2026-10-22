@@ -32,6 +32,7 @@ func decompositions() map[graph.OpKind]Decomposition {
 		graph.OpExpertMatVec: decomposeExpertMatVec,
 		graph.OpRank:         decomposeRank,
 		graph.OpClamp:        decomposeClamp,
+		graph.OpScale:        decomposeScale,
 		graph.OpEmbed:        decomposeEmbed,
 	}
 }
@@ -205,13 +206,23 @@ func (c *Context) producedByRow(v graph.ValueID) bool {
 }
 
 func decomposeAdd(o graph.Op, c *Context) ([]Prim, error) {
-	if len(o.In) != 2 || len(o.Out) != 1 || o.Attr.Alpha != 0 && o.Attr.Alpha != 1 || o.Attr.Scale != 0 {
-		return nil, fmt.Errorf("an add of %d operands, alpha %v, scale %v", len(o.In), o.Attr.Alpha, o.Attr.Scale)
+	if len(o.In) != 2 || len(o.Out) != 1 {
+		return nil, fmt.Errorf("an add of %d operands", len(o.In))
 	}
+	F := ir.F32
 	sh := c.rows(o.Out[0])
 	var x exprs
 	r, i := x.coord(0), x.coord(1)
-	x.op(OpAdd, ir.F32, x.at(0, sh, r, i), x.at(1, sh, r, i))
+	a, b := x.at(0, sh, r, i), x.at(1, sh, r, i)
+	if al := o.Attr.Alpha; al != 0 && al != 1 {
+		// Granite's residual scale: x + Alpha*y.
+		b = x.op(OpMul, F, b, x.f(float32(al)))
+	}
+	sum := x.op(OpAdd, F, a, b)
+	if o.Attr.Scale != 0 {
+		// A scaled add, (x + y) * Scale.
+		x.op(OpMul, F, sum, x.f(float32(o.Attr.Scale)))
+	}
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), c.value(o.In[1])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }
 
