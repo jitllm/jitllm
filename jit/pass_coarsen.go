@@ -13,8 +13,9 @@ import (
 // the thread's unit, a coarser reduction as each thread's partial over its
 // own terms exchanged through a workgroup slot and combined over its group's
 // slots. What is not a temporary is stored. Where the chain
-// reads the last phase of a workgroup row, it joins that row as a further
-// phase, the row's value recomputed from the phase's own expression.
+// reads the last phase of a workgroup row -- one workgroup, so the phase
+// sees every element the row wrote -- it joins that row as a further phase,
+// the row's value recomputed from the phase's own expression.
 type Coarsen struct {
 	Unit int
 }
@@ -78,15 +79,27 @@ func (k *Kernel) fold() (int, bool) {
 	return fs[0], true
 }
 
+// readsMatrix is whether k reads a weight matrix: a projection, whose rows
+// are the work to spread, not a row's chain.
+func readsMatrix(k *Kernel) bool {
+	for _, b := range k.Bufs {
+		if b.Kind == BufIn && b.Operand.Kind == OperandWeight {
+			return true
+		}
+	}
+	return false
+}
+
 // chain is how many kernels from i form a chain: naive maps and reductions
-// of one part, each after the first reading what an earlier one wrote, one
-// of them at the unit's granularity. Zero for none.
+// of one part, none reading a weight matrix, each after the first reading
+// what an earlier one wrote, one of them at the unit's granularity. Zero for
+// none.
 func (c Coarsen) chain(ks []*Kernel, i int) int {
 	written := map[Operand]bool{}
 	j := i
 	for ; j < len(ks); j++ {
 		k := ks[j]
-		if k.Work || k.Part != ks[i].Part || k.Kind != PrimMap && k.Kind != PrimReduce || len(k.Loops) > 1 {
+		if k.Work || k.Part != ks[i].Part || k.Kind != PrimMap && k.Kind != PrimReduce || len(k.Loops) > 1 || readsMatrix(k) {
 			break
 		}
 		if k.Kind == PrimReduce {
@@ -155,7 +168,8 @@ func (c Coarsen) form(members []*Kernel, host *Kernel) (*Kernel, bool) {
 	T := E / U
 	k := &coarse{c: c, members: members, E: E, T: T, memo: map[string]int{}}
 	if host != nil {
-		if host.Space[0] != 1 || T > host.Group {
+		// The phase reads what the host's whole row wrote: one workgroup.
+		if host.Elements() != 1 || T > host.Group {
 			return nil, false
 		}
 		k.m = host.clone()
