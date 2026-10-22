@@ -232,8 +232,19 @@ Each step ends with its gate green and the board measured.
    2. *The execution gate*: synth-ernie45's composed decode steps on CUDA from
       that plan alone, every source real, from an empty history to a few
       positions, held to the engine's host logits in the coherence band
-      (RULE 11c) and to its tokens. `TestComposedDecodeRunsOnTheGPU` runs it
-      on every backend a host opens from `Plan.Storages` alone, each buffer a
-      poisoned guard past its stated size.
+      (RULE 11c) and to its tokens. `engine/run.TestRunnerDecodesAsTheHost`
+      runs it on every backend a host opens from `Plan.Storages` alone, each
+      buffer poisoned and a poisoned guard past its stated size. One plan,
+      composed at a session's capacity, serves every shorter history: the
+      attention reads each step's bounds from the row descriptors, and the
+      code changes only where the capacity changes the attention's splits.
    3. *The engine runs the plan* for decode on one device in place of the
       tier, for that model; then prompt rows, then the other devices.
+      `engine/run` is the runner: a `Runner` is the plan composed and
+      compiled once at a capacity, with the weights, word blocks and rotary
+      planes every sequence shares uploaded once; a `Session` is a
+      sequence's pools, page table, tables, input row and step buffers. A
+      warm step allocates nothing. Next, `model.State` running decode
+      through it on a model opened with a `With...()` option; relocation and
+      paging come back as re-planning when placement changes, gated by the
+      five principles' tests, before it replaces the tier.
