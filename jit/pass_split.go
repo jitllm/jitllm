@@ -8,10 +8,14 @@ import "github.com/jitllm/jitllm/jit/ir"
 // threads under twice Slots (the device's where Slots is 0), and the trips
 // divide into Block-wide blocks a segment. Where Parts is set the segments
 // are instead the most, at most Parts and a power of two, that divide the
-// trips.
+// trips. Where Group is set and the elements allow, a row's segments are
+// instead one workgroup's (main's GroupSplit): 32 rows by the segments,
+// 128 to 1024 threads, each segment's sum through workgroup memory and the
+// row written whole, with no partial planes and no combine.
 type Split struct {
 	Slots, Max, Block int
 	Parts             int
+	Group             bool
 	Kinds             []PrimKind
 }
 
@@ -43,6 +47,11 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 	}
 	if S == 1 {
 		return nil, false, nil
+	}
+	if s.Group {
+		if g, ok := groupSplit(n, c, f, term, st, S); ok {
+			return []*Kernel{g}, true, nil
+		}
 	}
 	out := n.Bufs[n.Stores[st].Buf].Operand
 	planes := Operand{Kind: OperandScratch, Name: out.Name + ".planes", Of: out.Of}
@@ -88,6 +97,66 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 	m.Nodes[acc].A = m.bin(OpAdd, t, acc, x)
 	m.Stores = append(m.Stores, Store{Buf: ob, Val: acc, At: -1, Ax: coords})
 	return []*Kernel{p, m}, true, nil
+}
+
+// groupSplit is n's sum over loop c in S segments within one workgroup:
+// G = 32*S threads (128 to 1024), rpg = G/S elements a workgroup, thread t
+// segment t/rpg of element t%rpg; each segment's partial to workgroup
+// memory, a barrier, and every thread of an element its segments' sum
+// stored at the element. False where the elements do not fill whole
+// workgroups.
+func groupSplit(n *Kernel, c, f, term, st, S int) (*Kernel, bool) {
+	G := min(max(32*S, 128), 1024)
+	E, T := n.Elements(), n.Loops[c].Trip
+	if G%S != 0 || E%(G/S) != 0 || T%S != 0 {
+		return nil, false
+	}
+	rpg := G / S
+	g := n.clone()
+	g.Name = n.Name + ".group"
+	g.Work, g.Group, g.Space = true, G, []int{E / rpg}
+	U := ir.U32
+	tid := g.add(Node{Op: OpThread, Type: U})
+	seg := g.bin(OpDiv, U, tid, g.u32(rpg))
+	rl := g.bin(OpRem, U, tid, g.u32(rpg))
+	var old []int
+	for i, nd := range n.Nodes {
+		if nd.Op == OpCoord {
+			old = append(old, i)
+		}
+	}
+	e := g.bin(OpAdd, U, g.bin(OpMul, U, g.add(Node{Op: OpCoord, A: 0, Type: U}), g.u32(rpg)), rl)
+	coords := g.decode(e, n.Space)
+	for _, i := range old {
+		a := n.Nodes[i].A
+		g.redirect(i, coords[a], coords[a])
+	}
+	g.Loops[c].Trip = T / S
+	if it := g.iterOf(c); it >= 0 {
+		k := g.bin(OpAdd, U, g.bin(OpMul, U, seg, g.u32(T/S)), it)
+		g.redirect(it, k, k)
+	}
+	t := n.Nodes[f].Type
+	val := f
+	if term >= 0 {
+		first := g.add(Node{Op: OpLess, Type: ir.Pred, A: seg, B: g.u32(1)})
+		val = g.bin(OpAdd, t, f, g.add(Node{Op: OpSelect, Type: t, A: first, B: term, C: g.add(Node{Op: OpConst, Type: t})}))
+	}
+	sh := g.buf(Buf{Kind: BufShared, Elem: t, Size: G})
+	final := g.Stores[st]
+	g.Stores = []Store{{Buf: sh, Ix: tid, Val: val, At: -1}, {Barrier: true, At: -1}}
+	sum := -1
+	for i := range S {
+		x := g.add(Node{Op: OpLoad, Type: t, Buf: sh, A: g.bin(OpAdd, U, rl, g.u32(i*rpg))})
+		if sum < 0 {
+			sum = x
+			continue
+		}
+		sum = g.bin(OpAdd, t, sum, x)
+	}
+	final.Val = sum
+	g.Stores = append(g.Stores, final)
+	return g, true
 }
 
 // splittable finds the element's sum: a top-level loop with one fold, a sum,
