@@ -267,10 +267,18 @@ const (
 	// puts out S q. A primitive with a state of its own
 	// (DecomposeRecurrent).
 	OpStateDelta
+	// OpIndexSelect is an attention indexer's selection: In[0] the query
+	// (NHead heads of HeadDim), In[1] each head's weight, In[2] the row's
+	// key (HeadDim), which joins the idx history (version n to n+1). Each
+	// attended position t scores sum_h w_h relu(q_h . k_t), and Out[0] is
+	// the TopK the row keeps, the higher score first and of two equal the
+	// earlier position -- every position where the row attends at most
+	// TopK. A primitive with a history of its own (DecomposeRecurrent).
+	OpIndexSelect
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan", "state_delta"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan", "state_delta", "index_select"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {

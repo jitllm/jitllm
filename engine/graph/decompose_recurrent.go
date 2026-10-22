@@ -56,6 +56,9 @@ func DecomposeRecurrent(g *Graph, c *jlm.Config) *Graph {
 		if o.Kind == OpRecurrent && o.Attr.Mixer == uint8(jlm.LayerLinearAttn) && d.delta(o, c) {
 			continue
 		}
+		if o.Kind == OpIndex && d.index(o, g, c) {
+			continue
+		}
 		d.op(o)
 	}
 	return d
@@ -344,5 +347,72 @@ func (d *Graph) delta(o Op, c *jlm.Config) bool {
 	gated := val("gated", inner)
 	d.op(Op{Kind: OpActMul, In: []ValueID{z, normed}, Out: []ValueID{gated}, Attr: Attrs{Act: act}})
 	d.op(Op{Kind: OpMatVec, In: []ValueID{gated}, Out: []ValueID{o.Out[0]}, Weight: []Binding{out}})
+	return true
+}
+
+// idxEps is the indexer key norm's epsilon, hardcoded in the reference.
+const idxEps = 1e-6
+
+// index writes an MLA block's indexer o (DeepSeek V3.2's, over the normed
+// row and the query latent) as the host's indexer.go runs it: the key the
+// row's projection, LayerNormed, the first NRot of it turned in NEOX pairs
+// by the block's rotary; the query the latent's projection, each head
+// turned the same way; each head's weight the row's projection over
+// sqrt(heads*HeadDim); then the selection. It is false for the GQA form
+// (MiniMax's), whose key is one more kv head of the row.
+func (d *Graph) index(o Op, g *Graph, c *jlm.Config) bool {
+	a := o.Attr
+	if len(o.In) != 2 || len(o.Out) != 1 || len(o.Weight) != 5 || a.NHead < 1 || a.HeadDim < 1 || a.TopK < 1 {
+		return false
+	}
+	w := map[jlm.Role]Binding{}
+	for _, b := range o.Weight {
+		w[b.Role] = b
+	}
+	qb, k, proj, kn, knb := w[jlm.RoleIdxQB], w[jlm.RoleIdxK], w[jlm.RoleIdxProj], w[jlm.RoleIdxKNorm], w[jlm.RoleIdxKNormB]
+	H, D := a.NHead, a.HeadDim
+	if qb.Rows != H*D || k.Rows != D || proj.Rows != H || kn.K != D || knb.K != D {
+		return false
+	}
+	var rope *Attrs
+	if !c.Flags.Has(jlm.FlagNoPosEnc) {
+		for _, r := range g.Ops {
+			if r.Kind == OpRope {
+				at := r.Attr
+				rope = &at
+				break
+			}
+		}
+		if rope == nil || rope.NRot > D {
+			return false
+		}
+		rope.HeadDim, rope.Layout = D, RopeNeox
+	}
+	name := d.Values[o.Out[0]].Name
+	val := func(s string, n int) ValueID { return d.value(name+"."+s, n) }
+	mv := func(s string, b Binding, x ValueID) ValueID {
+		v := val(s, b.Rows)
+		d.op(Op{Kind: OpMatVec, In: []ValueID{x}, Out: []ValueID{v}, Weight: []Binding{b}})
+		return v
+	}
+	turn := func(s string, x ValueID) ValueID {
+		if rope == nil {
+			return x
+		}
+		v := val(s, d.Values[x].Width)
+		d.op(Op{Kind: OpRope, In: []ValueID{x}, Out: []ValueID{v}, Attr: *rope})
+		return v
+	}
+	kv := mv("k", k, o.In[0])
+	kl := val("k_normed", D)
+	d.op(Op{Kind: OpLayerNorm, In: []ValueID{kv}, Out: []ValueID{kl}, Weight: []Binding{{Role: kn.Role, K: D}, {Role: knb.Role, K: D}},
+		Attr: Attrs{Eps: idxEps}})
+	key := turn("k_rot", kl)
+	q := turn("q_rot", mv("q", qb, o.In[1]))
+	ws := val("w_scaled", H)
+	d.op(Op{Kind: OpMap, In: []ValueID{mv("w", proj, o.In[0])}, Out: []ValueID{ws},
+		Attr: Attrs{Fn: MapMul, Const: float64(float32(1 / math.Sqrt(float64(H*D))))}})
+	d.op(Op{Kind: OpIndexSelect, In: []ValueID{q, ws, key}, Out: []ValueID{o.Out[0]}, Reads: o.Reads, Writes: o.Writes,
+		Attr: Attrs{NHead: H, HeadDim: D, TopK: a.TopK}})
 	return true
 }

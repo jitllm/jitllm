@@ -94,7 +94,8 @@ func TestPlanCoversEveryModel(t *testing.T) {
 
 // planCover is one model's row: the first block's and the last block's
 // residuals at position 0 and the worst logits over a prompt, per device;
-// bad where the first block is wrong outright; why, the composer's refusal.
+// bad where a block or the prompt's logits are wrong outright; why, the
+// composer's refusal.
 func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (row string, bad bool, why string) {
 	ids := m.Vocab.Encode("The capital of France is", true)
 	traced := map[string][]float32{}
@@ -239,7 +240,10 @@ func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (r
 			}
 		}
 		row += fmt.Sprintf("%s: worst block %.2g (block %d of %d, teacher-forced), logits %.2g, top-1 %d/%d; ", dev.API(), worstBlock, worstAt, last+1, worst, agree, len(ids))
-		if !(worstBlock <= 1e-3) || worstAt < 0 {
+		// The prompt's logits too: a block right at position 0 says nothing
+		// of a history or a selection read past it. Quantized models carry
+		// the host's KV rounding into it, up to 0.02 on the V100 sweep.
+		if !(worstBlock <= 1e-3) || worstAt < 0 || !(worst <= 0.05) {
 			bad = true
 		}
 		s.Close()

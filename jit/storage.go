@@ -138,7 +138,7 @@ func (s StorageKeys) Key(o Operand) Operand {
 var tableSources = map[string]Source{
 	tableRows.Name: SourceRows, tablePages.Name: SourcePages, tableQOff.Name: SourceQueryOffset,
 	tablePos.Name: SourceRopePositions, tablePlanes.Name: SourceRopePlanes,
-	tableKeys.Name: SourceKeys, tableValues.Name: SourceValues, tableAngles.Name: SourceStep,
+	tableKeys.Name: SourceKeys, tableValues.Name: SourceValues, tableIdxKeys.Name: SourceKeys, tableAngles.Name: SourceStep,
 	tableTokens.Name: SourceTokens,
 }
 

@@ -53,7 +53,7 @@ func decomposeLatentAppend(o graph.Op, c *Context) ([]Prim, error) {
 // up-projection.
 func decomposeAttendLatent(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
-	if len(o.In) != 2 || len(o.Out) != 1 || len(o.Weight) != 2 || a.NHead <= 0 || c.Step.Page <= 0 || c.Step.Keys <= 0 {
+	if len(o.In) != 2 && len(o.In) != 3 || len(o.Out) != 1 || len(o.Weight) != 2 || a.NHead <= 0 || c.Step.Page <= 0 || c.Step.Keys <= 0 {
 		return nil, fmt.Errorf("a latent attention of %d operands, %d weights", len(o.In), len(o.Weight))
 	}
 	U, F := ir.U32, ir.F32
@@ -104,7 +104,13 @@ func decomposeAttendLatent(o graph.Op, c *Context) ([]Prim, error) {
 	}
 
 	shared := graph.Op{Attr: graph.Attrs{NHead: H, NKVHead: 1, HeadDim: w, Scale: a.Scale}}
-	prims = append(prims, attend(shared, c, query, oLat, attendGeom{D: w, KW: w, Keys: tableKeys, Values: tableKeys})...)
+	g := attendGeom{D: w, KW: w, Keys: tableKeys, Values: tableKeys}
+	if len(o.In) == 3 {
+		// An indexer's selection: the positions its mask keeps.
+		m := maskOf(c, o.In[2])
+		g.Mask = &m
+	}
+	prims = append(prims, attend(shared, c, query, oLat, g)...)
 
 	var vx exprs
 	vr, vh, vd, vl := vx.coord(0), vx.coord(1), vx.coord(2), vx.coord(3)
