@@ -184,7 +184,20 @@ func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (r
 			}
 			return resid(li - 1)
 		}
-		worstBlock, worstAt := 0.0, -1
+		// A seam a kernel spans -- part p's kernel writing what part p+1
+		// reads, as a coarsened chain quantizes the next block's input with
+		// the residual it writes -- cannot take the host's residual between
+		// them: the block after it runs on the plan's own, and its error is
+		// the run's, reported apart and bounded through the logits.
+		fused := map[int]bool{}
+		for _, cd := range codes {
+			for _, b := range cd.c.Binds {
+				if b.Writes && (b.Operand.Kind == jit.OperandValue || b.Operand.Kind == jit.OperandScratch) && b.Operand.Of > cd.part {
+					fused[b.Operand.Of] = true
+				}
+			}
+		}
+		worstBlock, worstAt, worstFused := 0.0, -1, 0.0
 		if err := s.StepEach(ids[0], 0, func(i int) {
 			p := codes[i].part
 			if i != lastOf[p] {
@@ -204,7 +217,10 @@ func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (r
 						for k := range x {
 							x[k] = math.Float32frombits(binary.LittleEndian.Uint32(g[4*k:]))
 						}
-						if e := nmse(x, h); !(e <= worstBlock) {
+						switch e := nmse(x, h); {
+						case fused[p]:
+							worstFused = max(worstFused, e)
+						case !(e <= worstBlock):
 							worstBlock, worstAt = e, li
 						}
 					}
@@ -246,6 +262,9 @@ func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (r
 			}
 		}
 		row += fmt.Sprintf("%s: worst block %.2g (block %d of %d, teacher-forced), logits %.2g, top-1 %d/%d; ", dev.API(), worstBlock, worstAt, last+1, worst, agree, len(ids))
+		if len(fused) > 0 {
+			row += fmt.Sprintf("%d seams fused, worst block past one %.2g; ", len(fused), worstFused)
+		}
 		// The prompt's logits too: a block right at position 0 says nothing
 		// of a history or a selection read past it. A quantized model's
 		// device and host disagree by its activations' rounding -- main's
