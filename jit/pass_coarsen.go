@@ -510,6 +510,13 @@ func (k *coarse) reduce(n *Kernel, s Store, coords []int, g int) int {
 		return m.u32(0)
 	}
 	count, slots := U/tg, g/U
+	// The exchange is the workgroup's: the threads sharing an output must
+	// be one workgroup's, which a host's row is (form) and a chain of
+	// threads in workgroups of Group is only where its slots fit them.
+	if wg := m.Group; k.host == nil && wg > 0 && (slots > wg || wg%slots != 0) {
+		k.err = fmt.Errorf("a reduction over %d threads in workgroups of %d", slots, wg)
+		return m.u32(0)
+	}
 	o := m.bin(OpDiv, ir.U32, k.u, m.u32(slots))
 	oc := m.decode(o, n.Space)
 	j0 := m.bin(OpMul, ir.U32, m.bin(OpRem, ir.U32, k.u, m.u32(slots)), m.u32(count))

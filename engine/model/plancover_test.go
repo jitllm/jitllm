@@ -245,9 +245,13 @@ func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (r
 		}
 		row += fmt.Sprintf("%s: worst block %.2g (block %d of %d, teacher-forced), logits %.2g, top-1 %d/%d; ", dev.API(), worstBlock, worstAt, last+1, worst, agree, len(ids))
 		// The prompt's logits too: a block right at position 0 says nothing
-		// of a history or a selection read past it. Quantized models carry
-		// the host's KV rounding into it, up to 0.02 on the V100 sweep.
-		if !(worstBlock <= 1e-3) || worstAt < 0 || !(worst <= 0.05) {
+		// of a history or a selection read past it. A quantized model's
+		// device and host disagree by its activations' rounding -- main's
+		// own device reads OLMo-2-1B at 0.115 against its host -- so the
+		// logits are bounded loosely and the top-1 held at all but two
+		// positions; a selection that keeps every block reads 0.51 and 13 of
+		// 19.
+		if !(worstBlock <= 1e-3) || worstAt < 0 || !(worst <= 0.25) || agree < len(ids)-2 {
 			bad = true
 		}
 		s.Close()
