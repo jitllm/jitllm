@@ -129,10 +129,10 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 	return prims, nil
 }
 
-// pages bounds the pages of the history a step reads: every row's whole
-// history at the step's longest.
+// pages bounds the pages of the history a step reads: every history's
+// whole, at the step's longest.
 func (c *Context) pages() int {
-	return c.Step.Rows * ((c.Step.Keys + c.Step.Page - 1) / c.Step.Page)
+	return c.Step.Histories() * ((c.Step.Keys + c.Step.Page - 1) / c.Step.Page)
 }
 
 // StepWord is word w of a table the engine writes for a step, at step s,

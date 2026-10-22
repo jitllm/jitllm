@@ -17,6 +17,19 @@ import (
 type Step struct {
 	Rows, Page, Keys int
 	ActWindow        int
+	// Seqs is how many sequences the rows are of, each its own history
+	// (Keys positions): one for a prompt's chunk or an encoder's sequence,
+	// 0 for a sequence a row.
+	Seqs int
+}
+
+// Histories is how many histories a step's rows read: Seqs, or a row's
+// own each.
+func (s Step) Histories() int {
+	if s.Seqs > 0 {
+		return s.Seqs
+	}
+	return s.Rows
 }
 
 // Placement is the device each part of the model runs on.

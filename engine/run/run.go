@@ -11,9 +11,11 @@
 package run
 
 import (
+	"cmp"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
@@ -83,7 +85,7 @@ func WithDirectLaunches() Option { return func(rn *Runner) { rn.direct = true } 
 
 // WithRows composes the plan for steps of up to n rows of one sequence: a
 // prompt's chunk at a time (Session.Rows), each row its own position.
-func WithRows(n int) Option { return func(r *Runner) { r.step.Rows = max(1, n) } }
+func WithRows(n int) Option { return func(r *Runner) { r.step.Rows, r.step.Seqs = max(1, n), 1 } }
 
 // WithGuard has every buffer n poisoned bytes past its size, which
 // Session.Overrun checks: a gate's view of a kernel writing past what the
@@ -117,7 +119,7 @@ func New(f Source, dev backend.Device, gpu jit.Device, keys int, opts ...Option)
 		return nil, err
 	}
 	r.plan = plan
-	r.kvPages = r.step.Rows * ((r.step.Keys + r.step.Page - 1) / r.step.Page)
+	r.kvPages = r.step.Histories() * ((r.step.Keys + r.step.Page - 1) / r.step.Page)
 	r.shared = make([]backend.Buf, len(plan.Storages))
 	r.sizes = make([]int64, len(plan.Storages))
 	for i, st := range plan.Storages {
@@ -289,6 +291,61 @@ func (r *Runner) weight(st jit.Storage) ([]byte, error) {
 
 // alloc is a buffer of n bytes and the runner's guard, poisoned, with data
 // at its start.
+// reuse assigns the step's own storages to shared buffers: each lives from
+// the first launch that binds it to the last, written before it is read
+// (jit.SourceStep), and two whose lives do not meet share one, as large as
+// the larger. It returns each storage's buffer and the buffers' sizes. The
+// logits and the token are read after the step and keep their own, and a
+// runner with a guard shares nothing, so each guard is its storage's.
+func (r *Runner) reuse() (map[int]int, []int64) {
+	slot := map[int]int{}
+	if r.guard > 0 {
+		return slot, nil
+	}
+	first, last := map[int]int{}, map[int]int{}
+	for li, l := range r.runs {
+		for _, at := range l.at {
+			st := r.plan.Storages[at]
+			if st.Source != jit.SourceStep || r.shared[at] != nil || at == r.logits || at == r.token {
+				continue
+			}
+			if _, ok := first[at]; !ok {
+				first[at] = li
+			}
+			last[at] = li
+		}
+	}
+	order := make([]int, 0, len(first))
+	for at := range first {
+		order = append(order, at)
+	}
+	slices.SortFunc(order, func(a, b int) int { return cmp.Or(cmp.Compare(first[a], first[b]), cmp.Compare(a, b)) })
+	// A slot is free from the launch after the last that used it; a
+	// storage takes the least free slot that holds it, else the largest
+	// free one, grown, else a new one.
+	var sizes []int64
+	var busy []int
+	for _, at := range order {
+		need, k := r.sizes[at], -1
+		for j := range sizes {
+			if busy[j] >= first[at] {
+				continue
+			}
+			fits, kfits := sizes[j] >= need, k >= 0 && sizes[k] >= need
+			switch {
+			case k < 0, fits && !kfits, fits && kfits && sizes[j] < sizes[k], !fits && !kfits && sizes[j] > sizes[k]:
+				k = j
+			}
+		}
+		if k < 0 {
+			k = len(sizes)
+			sizes, busy = append(sizes, 0), append(busy, 0)
+		}
+		slot[at], sizes[k], busy[k] = k, max(sizes[k], need), last[at]
+	}
+	return slot, sizes
+}
+
 func (r *Runner) alloc(n int64, data []byte) (backend.Buf, error) {
 	b, err := r.dev.Alloc(int(n) + r.guard)
 	if err != nil {
@@ -344,6 +401,8 @@ type Session struct {
 	// rec is the step's launches recorded once, on a device that records
 	// (backend.Recorder), and replayed each step.
 	rec backend.Recording
+	// slots are the buffers the step's own storages share (Runner.reuse).
+	slots []backend.Buf
 }
 
 // Restart makes s an empty sequence again: its recurrent state zero, its
@@ -368,9 +427,22 @@ func (r *Runner) NewSession() (*Session, error) {
 		rows: make([]byte, 4*jit.RowWords*R), pos: make([]byte, 4*(1+R)), toks: make([]byte, 4*R), tb: make([]byte, 4*R),
 		logits: make([]float32, R*r.outW), input: make([]byte, 4*R*r.nembd)}
 	s.raw = unsafe.Slice((*byte)(unsafe.Pointer(&s.logits[0])), 4*len(s.logits))
+	slot, slots := r.reuse()
+	for _, sz := range slots {
+		b, err := r.alloc(sz, nil)
+		if err != nil {
+			s.Close()
+			return nil, err
+		}
+		s.slots = append(s.slots, b)
+	}
 	for i := range st {
 		if r.shared[i] != nil {
 			s.bufs[i] = r.shared[i]
+			continue
+		}
+		if k, ok := slot[i]; ok {
+			s.bufs[i] = s.slots[k]
 			continue
 		}
 		var data []byte
@@ -590,6 +662,10 @@ func (s *Session) Close() {
 		}
 		s.bufs[i] = nil
 	}
+	for _, b := range s.slots {
+		b.Free()
+	}
+	s.slots = nil
 }
 
 func wordBytes(w []uint32) []byte {
