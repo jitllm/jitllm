@@ -190,6 +190,51 @@ func DecodeParts[V any](a Arith[V], l TypeLayout, rows int, r, c V) (code, scale
 	return by, scale, bias
 }
 
+// DecodeWord is the codes of elements c to c+3 of row r, c a multiple of
+// four, one byte each in a word as a four-way byte dot reads them: the
+// fields of one word of the primary plane at one shift, and the secondary
+// plane's bits above each. ok is false where a code is not such a field --
+// a format's code table, or a field of eight bits or more past its sign.
+func DecodeWord[V any](a Arith[V], l TypeLayout, rows int, r, c V) (codes V, ok bool) {
+	if !l.WordCodes() {
+		return codes, false
+	}
+	bits, hi := l.Planes[0], l.Planes[1]
+	u := a.U
+	R := u(uint32(rows))
+	sub := l.Sub
+	pw, hw := sub*bits/32, sub*hi/32
+	si, e := a.Div(c, u(uint32(sub))), a.Rem(c, u(uint32(sub)))
+	base := a.Add(a.Mul(si, u(uint32((pw+hw)*rows))), r)
+	if bits == 8 {
+		return a.Word(PlaneQS, a.Add(base, a.Mul(a.Div(e, u(4)), R))), true
+	}
+	fields := 8 / bits
+	h := sub / fields
+	bytes := func(m uint32) V { return u(m | m<<8 | m<<16 | m<<24) }
+	f, rem := a.Div(e, u(uint32(h))), a.Rem(e, u(uint32(h)))
+	v := a.Word(PlaneQS, a.Add(base, a.Mul(a.Div(rem, u(4)), R)))
+	q := a.And(a.Shr(v, a.Mul(f, u(uint32(bits)))), bytes(uint32(1)<<bits-1))
+	if hi > 0 {
+		lanes := 8 / hi
+		g := a.Div(e, u(4))
+		hv := a.Word(PlaneQS, a.Add(base, a.Mul(a.Add(u(uint32(pw)), a.Div(g, u(uint32(lanes)))), R)))
+		hb := a.And(a.Shr(hv, a.Mul(a.Rem(g, u(uint32(lanes))), u(uint32(hi)))), bytes(uint32(1)<<hi-1))
+		q = a.Add(q, a.Shl(hb, u(uint32(bits))))
+	}
+	return q, true
+}
+
+// WordCodes reports whether DecodeWord states the format: its codes fields
+// of a byte or less, no code table, four of them in one word.
+func (l TypeLayout) WordCodes() bool {
+	bits := l.Planes[0]
+	if l.Codes != nil || l.Sub%4 != 0 || bits > 8 || 8%bits != 0 {
+		return false
+	}
+	return bits == 8 || l.Sub/(8/bits)%4 == 0
+}
+
 // Words is how many words each plane of a packed tensor of rows rows of k
 // holds: the payload, the super-scales, the per-sub-block scales.
 func (l TypeLayout) Words(rows, k int) (qs, d, sc int) {

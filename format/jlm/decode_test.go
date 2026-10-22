@@ -153,3 +153,42 @@ func TestDecodeVerbatimMatchesTheDecoders(t *testing.T) {
 		}
 	}
 }
+
+// TestDecodeWordIsFourCodes holds DecodeWord, for every packed type it
+// states, to DecodeParts' codes of the four elements, a byte each: a signed
+// code as its two's-complement byte.
+func TestDecodeWordIsFourCodes(t *testing.T) {
+	rng := rand.New(rand.NewPCG(3, 4))
+	stated := 0
+	for c := TypeNone + 1; c.Valid(); c++ {
+		l, ok := Layout(c)
+		if !ok {
+			continue
+		}
+		const rows = 3
+		k := 2 * l.Sub * l.SuperSub
+		nq, nd, nsc := l.Words(rows, k)
+		p := planes{qs: make([]byte, 4*nq), d: make([]byte, 4*nd), sc: make([]byte, 4*nsc)}
+		for i := range p.qs {
+			p.qs[i] = byte(rng.Uint32())
+		}
+		if _, ok := DecodeWord[gv](p, l, rows, gv{}, gv{}); !ok {
+			continue
+		}
+		stated++
+		for r := 0; r < rows; r++ {
+			for col := 0; col < k; col += 4 {
+				w, _ := DecodeWord[gv](p, l, rows, gv{u: uint32(r)}, gv{u: uint32(col)})
+				for j := 0; j < 4; j++ {
+					code, _, _ := DecodeParts[gv](p, l, rows, gv{u: uint32(r)}, gv{u: uint32(col + j)})
+					if got, want := byte(w.u>>(8*j)), byte(code.u); got != want {
+						t.Fatalf("%s row %d element %d: the word's byte %d, the element's code %d", c, r, col+j, got, want)
+					}
+				}
+			}
+		}
+	}
+	if stated < 5 {
+		t.Fatalf("DecodeWord states %d types", stated)
+	}
+}

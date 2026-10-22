@@ -153,19 +153,29 @@ func decomposeMatVecInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout) (
 	scales := Operand{Kind: OperandScratch, Name: x.Name + ".q8x"}
 	dot := Operand{Kind: OperandScratch, Name: c.value(o.Out[0]).Name + ".dot", Elem: I, Temp: true}
 
-	// Each sub-block's integer dot: the weight's codes against the input's.
+	// Each sub-block's integer dot: the weight's codes against the input's,
+	// four a word where the format's codes are fields of one.
 	var d exprs
 	r, row, s, j := d.coord(0), d.coord(1), d.coord(2), d.coord(3)
-	col := d.op(OpAdd, U, d.op(OpMul, U, s, d.u(uint32(l.Sub))), j)
 	in := []Operand{words}
 	facts := Facts{Extents: map[int]int{0: R * nwd}}
 	p := packedOperands(&d, wo, l, rows, K, &in, &facts)
-	code, _, _ := jlm.DecodeParts[int](p, l, rows, row, col)
-	xw := d.load(0, d.op(OpAdd, U, d.op(OpMul, U, r, d.u(uint32(nwd))), d.op(OpShr, U, col, d.u(2))))
-	xb := d.op(OpAnd, U, d.op(OpShr, U, xw, d.op(OpMul, U, d.op(OpAnd, U, col, d.u(3)), d.u(8))), d.u(0xff))
-	xc := d.op(OpSub, U, d.op(OpXor, U, xb, d.u(0x80)), d.u(0x80))
-	d.op(OpMul, I, d.un(OpBitcast, I, code), d.un(OpBitcast, I, xc))
-	prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{R, rows, nsub, l.Sub}, In: in, Out: dot, Combine: OpAdd, Type: I,
+	per := l.Sub
+	if l.WordCodes() {
+		per = l.Sub / 4
+		col := d.op(OpAdd, U, d.op(OpMul, U, s, d.u(uint32(l.Sub))), d.op(OpMul, U, j, d.u(4)))
+		w, _ := jlm.DecodeWord[int](p, l, rows, row, col)
+		xw := d.load(0, d.op(OpAdd, U, d.op(OpMul, U, r, d.u(uint32(nwd))), d.op(OpShr, U, col, d.u(2))))
+		d.add(Expr{Op: OpDot4, Type: I, A: w, B: xw, C: d.i(0)})
+	} else {
+		col := d.op(OpAdd, U, d.op(OpMul, U, s, d.u(uint32(l.Sub))), j)
+		code, _, _ := jlm.DecodeParts[int](p, l, rows, row, col)
+		xw := d.load(0, d.op(OpAdd, U, d.op(OpMul, U, r, d.u(uint32(nwd))), d.op(OpShr, U, col, d.u(2))))
+		xb := d.op(OpAnd, U, d.op(OpShr, U, xw, d.op(OpMul, U, d.op(OpAnd, U, col, d.u(3)), d.u(8))), d.u(0xff))
+		xc := d.op(OpSub, U, d.op(OpXor, U, xb, d.u(0x80)), d.u(0x80))
+		d.op(OpMul, I, d.un(OpBitcast, I, code), d.un(OpBitcast, I, xc))
+	}
+	prims = append(prims, Prim{Kind: PrimReduce, Shape: []int{R, rows, nsub, per}, In: in, Out: dot, Combine: OpAdd, Type: I,
 		Expr: d.e, Facts: facts})
 
 	// The sum over sub-blocks: the window's scale times the weight's scale
