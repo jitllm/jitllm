@@ -10,8 +10,9 @@ import (
 // tableTokens is the step's tokens, a word a row, which the engine writes.
 var tableTokens = Operand{Kind: OperandTable, Name: "tokens", Elem: ir.U32}
 
-// decomposeEmbed is each row's token's row of the embedding, every element
-// decoded from the weight's format.
+// decomposeEmbed is each row's token's row of the embedding, or its
+// position's row of a position table, every element decoded from the
+// weight's format.
 func decomposeEmbed(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.Weight) != 1 || len(o.In) != 0 || len(o.Out) != 1 {
 		return nil, fmt.Errorf("an embedding of %d weights and %d inputs", len(o.Weight), len(o.In))
@@ -27,6 +28,12 @@ func decomposeEmbed(o graph.Op, c *Context) ([]Prim, error) {
 	tok := x.load(0, r)
 	in := []Operand{tableTokens}
 	facts := Facts{Extents: map[int]int{0: R}}
+	if o.Attr.Positional {
+		// The step's positions follow its live row count.
+		tok = x.load(0, x.op(OpAdd, ir.U32, r, x.u(1)))
+		in[0] = tablePos
+		facts.Extents[0] = R + 1
+	}
 	if _, err := weightElement(&x, wo, w.Rows, W, &in, &facts, tok, i); err != nil {
 		return nil, fmt.Errorf("an embedding of %s weights: %w", wo.Format, err)
 	}

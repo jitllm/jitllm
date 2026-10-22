@@ -923,6 +923,9 @@ func (m *Model) HeadGraph() *graph.Graph {
 // token's embedding row times the model's embedding scale.
 func (m *Model) EmbedGraph() *graph.Graph {
 	e := graph.Embed{NEmbd: m.Cfg.NEmbd, NVocab: m.Cfg.NVocab, Scale: m.Cfg.EmbdScale}
+	if p, ok := m.container.Find(jlm.RolePosEmbd, jlm.DenseBlock, -1); ok {
+		e.Positions = int(p.Dims[1])
+	}
 	return e.Build()
 }
 

@@ -3770,7 +3770,11 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 			if err := inner(); err != nil {
 				return err
 			}
-			return m.addPos(s.x, s.prow, pos)
+			if err := m.addPos(s.x, s.prow, pos); err != nil {
+				return err
+			}
+			m.trace(-1, "embd_pos", s.x)
+			return nil
 		}
 	}
 	// AltUp's streams ride the fill as well (altup.go): every restart begins

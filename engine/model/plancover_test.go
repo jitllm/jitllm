@@ -171,6 +171,10 @@ func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (r
 		}
 		hostIn := func(li int) []float32 {
 			if li == 0 {
+				// After a learned position row where the model has one.
+				if h := traced[fmt.Sprint(-1, "embd_pos")]; h != nil {
+					return h
+				}
 				return traced[fmt.Sprint(-1, "embd")]
 			}
 			return resid(li - 1)

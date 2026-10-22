@@ -105,11 +105,28 @@ func (x *exprs) actMul(a graph.Act, g, u int) (int, error) {
 
 // decomposeAct is an ungated activation, elementwise.
 func decomposeAct(o graph.Op, c *Context) ([]Prim, error) {
-	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 {
+	if xi := o.Attr.Act == graph.ActXIELU; len(o.In) != 1 || len(o.Out) != 1 || xi != (len(o.Weight) == 1) || len(o.Weight) > 1 {
 		return nil, fmt.Errorf("an act of %d operands, %d weights", len(o.In), len(o.Weight))
 	}
 	sh := c.rows(o.Out[0])
 	var x exprs
+	if o.Attr.Act == graph.ActXIELU {
+		// Apertus's xIELU, its four numbers alpha_p, alpha_n, beta and eps
+		// in their effective form: alpha_p x^2 + beta x above zero, else
+		// (expm1(min(x, eps)) - x) alpha_n + beta x.
+		F := ir.F32
+		v := x.at(0, sh, x.coord(0), x.coord(1))
+		p := func(i uint32) int { return x.load(1, x.u(i)) }
+		ap, an, beta, eps := p(0), p(1), p(2), p(3)
+		bx := x.op(OpMul, F, beta, v)
+		pos := x.op(OpAdd, F, x.op(OpMul, F, x.op(OpMul, F, ap, v), v), bx)
+		em := x.op(OpSub, F, x.un(OpExp, F, x.op(OpMin, F, v, eps)), x.f(1))
+		neg := x.op(OpAdd, F, x.op(OpMul, F, x.op(OpSub, F, em, v), an), bx)
+		x.sel(F, x.op(OpLess, ir.Pred, x.f(0), v), pos, neg)
+		w := o.Weight[0]
+		return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), {Kind: OperandVector, Role: w.Role, Name: w.Role.String()}},
+			Out: c.value(o.Out[0]), Expr: x.e, Facts: Facts{Extents: map[int]int{1: 4}}}}, nil
+	}
 	if _, err := x.act(x.at(0, sh, x.coord(0), x.coord(1)), o.Attr.Act); err != nil {
 		return nil, err
 	}

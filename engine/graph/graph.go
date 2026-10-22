@@ -238,7 +238,8 @@ const (
 	// of NRot/2 pairs, the pair's cos and sin, Out[0] two elements a pair.
 	OpRopeTable
 	// OpEmbed is a step's input rows: each row's token's row of Weight[0],
-	// the token a word of the step's own a row.
+	// the token a word of the step's own a row; where Positional, each
+	// row's position's row (a learned position table).
 	OpEmbed
 	// OpStateConv is a causal depthwise convolution of In[0] over the
 	// block's window, the last Taps-1 rows it saw: each channel's Taps taps
@@ -488,6 +489,8 @@ type Attrs struct {
 	// key heads (jlm.FlagDeltaKeyTiled) rather than v / (value heads per
 	// key head).
 	KeyTiled bool
+	// Positional makes OpEmbed index its table by the row's position.
+	Positional bool
 	// Bound is OpClamp's.
 	Bound float64
 	// Offset and Width are OpSlice's.
