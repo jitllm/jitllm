@@ -480,10 +480,10 @@ func (l *lowerer) block(lo, hi int) error {
 		case ir.OpShared:
 			l.val[v] = l.shared[v]
 		case ir.OpBarrier:
-			// Execution scope Workgroup(2); memory scope Workgroup(2); semantics
-			// AcquireRelease(0x8) | WorkgroupMemory(0x100). Anything weaker does
-			// not order the shared writes the barrier exists to order.
-			inst(&l.m.funcs, opControlBarrier, l.u32c(2), l.u32c(2), l.u32c(0x108))
+			// A kernel reads after a barrier what its workgroup wrote to a
+			// storage buffer before it, as well as to shared memory.
+			inst(&l.m.funcs, opControlBarrier, l.u32c(scopeWorkgroup), l.u32c(scopeWorkgroup),
+				l.u32c(semAcqRel|semUniform|semWorkgroupMem))
 		case ir.OpGridBarrier:
 			l.gridBarrier(l.val[o.Args[0]])
 		case ir.OpDepTask, ir.OpDepEpoch, ir.OpDepWait, ir.OpDepSignal, ir.OpDepExit:
