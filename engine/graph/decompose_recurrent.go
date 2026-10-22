@@ -32,7 +32,8 @@ import (
 // dt = softplus(dt's projection + dt_bias); the scan, each channel a value
 // head; silu(z) times its output; the output projection.
 //
-// Mamba-2's mixer (jlm.LayerSSD), the host's ssdAttn: xBC, z and dt the
+// Mamba-2's mixer (jlm.LayerSSD, and Falcon-H1's beside its attention,
+// jlm.LayerSSDAttn), the host's ssdAttn: xBC, z and dt the
 // row's projections; xBC convolved over the window, its bias added, SiLU;
 // dt = softplus(dt + dt_bias), decay = exp(A dt); the scan; silu(z) times
 // its output; the RMS norm over each of c.SSM.Groups groups with its slice
@@ -44,7 +45,8 @@ func DecomposeRecurrent(g *Graph, c *jlm.Config) *Graph {
 		if o.Kind == OpRecurrent && o.Attr.Mixer == uint8(jlm.LayerShortConv) && d.shortConv(o) {
 			continue
 		}
-		if o.Kind == OpRecurrent && o.Attr.Mixer == uint8(jlm.LayerSSD) && d.ssd(o, c) {
+		ssd := o.Attr.Mixer == uint8(jlm.LayerSSD) || o.Attr.Mixer == uint8(jlm.LayerSSDAttn)
+		if o.Kind == OpRecurrent && ssd && d.ssd(o, c) {
 			continue
 		}
 		if o.Kind == OpRecurrent && o.Attr.Mixer == uint8(jlm.LayerMamba1) && d.mamba1(o, c) {
