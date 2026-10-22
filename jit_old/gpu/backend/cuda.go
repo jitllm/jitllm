@@ -386,7 +386,7 @@ func (s *cudaSession) Launch(k Kernel, groups, width int, bufs ...Buf) error {
 		}
 	}
 	if err := m.LaunchArgs(st, groups, width, args); err != nil {
-		return err
+		return fmt.Errorf("%s, %d groups of %d, %d arguments: %w", ck.name, groups, width, len(bufs), err)
 	}
 	ck.noteRan()
 	name := ck.name
