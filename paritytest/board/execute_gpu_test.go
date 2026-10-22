@@ -8,7 +8,6 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
-	"github.com/jitllm/jitllm/engine/cost"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -18,11 +17,12 @@ import (
 
 // TestComposedDecodeRunsOnTheGPU runs the composer's decode steps of the
 // board's fixture on every device a backend opens, from the plan alone: each
-// storage the plan binds built from its source -- the container's weights and
-// norms, the tables the engine writes (the row descriptors, the page table,
-// the query offset, the rotary positions and planes), the input token's row
-// of the embedding, an empty history the steps fill -- and every kernel
-// launched in order. The prompt and then the host's choices are fed: each
+// of the plan's storages built from the source the plan states for it -- the
+// container's weights and norms, the tables the engine writes (the row
+// descriptors, the page table, the query offset, the rotary positions and
+// planes), the input token's row of the embedding, an empty history the steps
+// fill -- at the size the plan states, or the engine's own for what it owns,
+// and every kernel launched in order. The prompt and then the host's choices are fed: each
 // position's logits are held to the engine's host decode of the same tokens,
 // and its token to the host's choice.
 func TestComposedDecodeRunsOnTheGPU(t *testing.T) {
@@ -97,8 +97,8 @@ func TestComposedDecodeRunsOnTheGPU(t *testing.T) {
 	}
 }
 
-// stepRun is a device's storages across steps: one buffer per storage the
-// plans bind, the history among them, kept from step to step.
+// stepRun is a device's storages across steps, by key: one buffer each, the
+// history among them, kept from step to step.
 type stepRun struct {
 	t     *testing.T
 	f     *jlm.File
@@ -128,24 +128,12 @@ func (r *stepRun) free() {
 func (r *stepRun) step(pos int, tok int32) ([]float32, int) {
 	t := r.t
 	s := jit.Step{Rows: 1, Page: 64, Keys: pos + 1}
-	d := cost.Device{Device: sm70}
-	ccs, err := cost.EstimateCodes(jit.Default(), r.f, s, func(jit.Part) cost.Device { return d }, true)
+	plan, err := jit.Default().Compose(r.f, s, func(jit.Part) jit.Device { return sm70 })
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Every storage at its widest binding of the step before any launch
-	// holds a buffer: one grown between two kernels' bindings would leave the
-	// first holding the freed one.
-	written := map[jit.Operand]bool{}
-	need := map[jit.Operand]int64{}
-	for _, cc := range ccs {
-		for j, b := range cc.Code.Binds {
-			at := cc.Binds[j].Storage
-			if b.Writes {
-				written[at] = true
-			}
-			need[at] = max(need[at], cc.Binds[j].Reach)
-		}
+	for _, st := range plan.Storages {
+		r.fill(st, r.bytes(st, s), r.source(st, pos, tok))
 	}
 	type launch struct {
 		k             backend.Kernel
@@ -156,41 +144,38 @@ func (r *stepRun) step(pos int, tok int32) ([]float32, int) {
 	}
 	var runs []launch
 	var logits, token jit.Operand
-	for i, cc := range ccs {
-		if cc.Code.GPU == nil {
-			t.Fatalf("part %v formed %s for the host", r.parts[cc.Part], cc.Code.Name)
-		}
-		k := *cc.Code.GPU
-		k.Name = fmt.Sprintf("x%02d_%s", i, k.Name)
-		kern, err := r.dev.Compile(&k)
-		if err != nil {
-			t.Fatalf("%s: %v", k.Name, err)
-		}
-		defer kern.Close()
-		var bs []backend.Buf
-		var wrote []jit.Operand
-		for j, b := range cc.Code.Binds {
-			at := cc.Binds[j].Storage
-			if w := cc.Binds[j].Words; w != nil {
-				at.Name += fmt.Sprintf("#%d", i)
-				r.fill(at, max(cc.Binds[j].Reach, int64(4*len(w))), wordBytes(w))
-			} else {
-				r.fill(at, need[at], r.source(at, b.Operand.Name, written[at], pos, tok))
+	i := 0
+	for _, pp := range plan.Parts {
+		for _, c := range pp.Codes {
+			if c.GPU == nil {
+				t.Fatalf("part %v formed %s for the host", pp.Part, c.Name)
 			}
-			bs = append(bs, r.bufs[at])
-			if b.Writes {
+			k := *c.GPU
+			k.Name = fmt.Sprintf("x%02d_%s", i, k.Name)
+			i++
+			kern, err := r.dev.Compile(&k)
+			if err != nil {
+				t.Fatalf("%s: %v", k.Name, err)
+			}
+			defer kern.Close()
+			var bs []backend.Buf
+			var wrote []jit.Operand
+			for _, b := range c.Binds {
+				at := plan.Storages[b.Storage].Key
+				bs = append(bs, r.bufs[at])
+				if !b.Writes {
+					continue
+				}
 				wrote = append(wrote, at)
-			}
-			if b.Writes && at.Kind == jit.OperandValue {
-				switch b.Operand.Name {
-				case "logits":
+				switch {
+				case b.Operand.Kind == jit.OperandValue && b.Operand.Name == "logits":
 					logits = at
-				case "token":
+				case b.Operand.Kind == jit.OperandValue && b.Operand.Name == "token":
 					token = at
 				}
 			}
+			runs = append(runs, launch{kern, k.Name, c.Groups, k.Group[0], bs, wrote})
 		}
-		runs = append(runs, launch{kern, k.Name, cc.Code.Groups, k.Group[0], bs, wrote})
 	}
 	var lerr error
 	if r.each != nil {
@@ -218,6 +203,19 @@ func (r *stepRun) step(pos int, tok int32) ([]float32, int) {
 	if lerr != nil {
 		t.Fatal(lerr)
 	}
+	for _, l := range runs {
+		for _, at := range l.wrote {
+			b := make([]byte, r.size[at]+guard)
+			if err := r.bufs[at].Read(b); err != nil {
+				t.Fatal(err)
+			}
+			for i := r.size[at]; i < int64(len(b)); i++ {
+				if b[i] != 0xff {
+					t.Fatalf("%s wrote byte %d of storage %v, past the %d the plan states", l.name, i, at, r.size[at])
+				}
+			}
+		}
+	}
 	if r.size[logits] == 0 || r.size[token] == 0 {
 		t.Fatal("the step writes no logits or no token")
 	}
@@ -236,22 +234,55 @@ func (r *stepRun) step(pos int, tok int32) ([]float32, int) {
 	return out, int(int32(binary.LittleEndian.Uint32(tb)))
 }
 
-// fill makes storage at a buffer of at least n bytes and writes data into it
-// where data is set.
-func (r *stepRun) fill(at jit.Operand, n int64, data []byte) {
-	n = max(n, int64(len(data))) + 4096
+// bytes is storage st's size at step s: what the plan states, or for what
+// the engine owns, the engine's own -- the step's pages of the history, the
+// pools those pages are, the model's rotary planes.
+func (r *stepRun) bytes(st jit.Storage, s jit.Step) int64 {
+	c := r.f.Config()
+	pages := int64(s.Rows * ((s.Keys + s.Page - 1) / s.Page))
+	switch st.Source {
+	case jit.SourcePages:
+		return 4 * pages
+	case jit.SourceKeys, jit.SourceValues:
+		return 4 * pages * int64(s.Page) * int64(c.NKVHead*c.HeadDim)
+	case jit.SourceRopePlanes:
+		return int64(4 * len(r.planes()))
+	}
+	if st.Bytes == 0 && st.Source != jit.SourceTransfer {
+		r.t.Fatalf("the plan states no size for %s storage %v", st.Source, st.Key)
+	}
+	return st.Bytes
+}
+
+func (r *stepRun) planes() []float32 {
+	c := r.f.Config()
+	return nn.Rope{NRot: int(c.NRot), Base: float64(c.RopeBase)}.TabPlanes(int(c.NRot) / 2)
+}
+
+// guard is the poisoned bytes past each storage's size: a kernel writing
+// past what the plan states for it changes them (RULE 13).
+const guard = 4096
+
+// fill makes storage st's buffer at least n bytes and a guard, keeping what
+// the steps before wrote in it, and writes data into it where data is set.
+func (r *stepRun) fill(st jit.Storage, n int64, data []byte) {
+	at := st.Key
+	n = max(n, int64(len(data)))
 	if b, ok := r.bufs[at]; !ok || r.size[at] < n {
-		nb, err := r.dev.Alloc(int(n))
+		nb, err := r.dev.Alloc(int(n + guard))
 		if err != nil {
 			r.t.Fatal(err)
 		}
-		init := make([]byte, n)
+		init := make([]byte, n+guard)
+		for i := n; i < n+guard; i++ {
+			init[i] = 0xff
+		}
 		if ok {
-			// A storage that grows keeps what the steps before wrote: the
-			// history is one.
-			if err := b.Read(init[:r.size[at]]); err != nil {
+			old := make([]byte, r.size[at]+guard)
+			if err := b.Read(old); err != nil {
 				r.t.Fatal(err)
 			}
+			copy(init, old[:r.size[at]])
 			b.Free()
 		}
 		if err := nb.Write(init); err != nil {
@@ -264,63 +295,27 @@ func (r *stepRun) fill(at jit.Operand, n int64, data []byte) {
 			r.t.Fatal(err)
 		}
 	}
-	if fixed(at) {
+	switch st.Source {
+	case jit.SourceWeight, jit.SourceWords, jit.SourcePages, jit.SourceRopePlanes:
 		r.once[at] = true
 	}
 }
 
-// fixed is a source that does not change from step to step.
-func fixed(at jit.Operand) bool {
-	return at.Kind == jit.OperandWeight || at.Kind == jit.OperandVector || at.Kind == jit.OperandConsts ||
-		at.Kind == jit.OperandTable && (at.Name == "pages" || at.Name == "rope.planes" || at.Name == "kv.k" || at.Name == "kv.v")
-}
-
-// source is what the engine puts in storage at, bound as the operand named
-// name, before the step at position pos runs token tok: nil for what the step
-// writes before it reads.
-func (r *stepRun) source(at jit.Operand, name string, written bool, pos int, tok int32) []byte {
+// source is what the engine puts in storage st before the step at position
+// pos runs token tok: nil for what the step writes before it reads, and for
+// the history, which the steps fill.
+func (r *stepRun) source(st jit.Storage, pos int, tok int32) []byte {
 	t, f, c := r.t, r.f, r.f.Config()
-	u32s := func(w ...uint32) []byte { return wordBytes(w) }
-	switch at.Kind {
-	case jit.OperandWeight, jit.OperandVector:
-		blk := int32(-1)
-		if at.Of >= 0 && at.Of < len(r.parts) {
-			blk = int32(r.parts[at.Of].Block)
-		}
-		e, ok := f.Find(at.Role, blk, -1)
+	row := make([]uint32, jit.RowWords)
+	switch st.Source {
+	case jit.SourceWeight:
+		e, ok := f.Find(st.Role, int32(st.Block), -1)
 		if !ok {
-			t.Fatalf("no tensor %v of block %d in the container", at.Role, blk)
+			t.Fatalf("no tensor %v of block %d in the container", st.Role, st.Block)
 		}
 		qs, _, _ := f.Span(e)
 		return qs
-	case jit.OperandTable:
-		switch at.Name {
-		case "rows":
-			return u32s(0, 0, uint32(pos+1), uint32(pos))
-		case "pages":
-			w := make([]uint32, 64)
-			for i := range w {
-				w[i] = uint32(i)
-			}
-			return u32s(w...)
-		case "q.off":
-			return u32s(0)
-		case "rope.pos":
-			return u32s(1, uint32(pos))
-		case "rope.planes":
-			p := nn.Rope{NRot: int(c.NRot), Base: float64(c.RopeBase)}.TabPlanes(int(c.NRot) / 2)
-			return unsafe.Slice((*byte)(unsafe.Pointer(&p[0])), 4*len(p))
-		case "kv.k", "kv.v", "rope.cs":
-			return nil
-		}
-		t.Fatalf("a table %q this gate has no source for", at.Name)
-	case jit.OperandValue:
-		if written {
-			return nil
-		}
-		if name != "x" {
-			t.Fatalf("value %q is read and nothing in the step writes it", name)
-		}
+	case jit.SourceInput:
 		e, ok := f.Find(jlm.RoleTokenEmbd, -1, -1)
 		if !ok {
 			t.Fatal("no token embedding")
@@ -328,10 +323,28 @@ func (r *stepRun) source(at jit.Operand, name string, written bool, pos int, tok
 		qs, _, _ := f.Span(e)
 		w := 4 * int(c.NEmbd)
 		return qs[int(tok)*w : int(tok+1)*w]
-	case jit.OperandScratch:
+	case jit.SourceRows:
+		row[jit.RowTab], row[jit.RowStart], row[jit.RowEnd], row[jit.RowWrite] = 0, 0, uint32(pos+1), uint32(pos)
+		return wordBytes(row)
+	case jit.SourcePages:
+		w := make([]uint32, 64)
+		for i := range w {
+			w[i] = uint32(i)
+		}
+		return wordBytes(w)
+	case jit.SourceQueryOffset:
+		return wordBytes([]uint32{0})
+	case jit.SourceRopePositions:
+		return wordBytes([]uint32{1, uint32(pos)})
+	case jit.SourceRopePlanes:
+		p := r.planes()
+		return unsafe.Slice((*byte)(unsafe.Pointer(&p[0])), 4*len(p))
+	case jit.SourceWords:
+		return wordBytes(st.Words)
+	case jit.SourceStep, jit.SourceKeys, jit.SourceValues:
 		return nil
 	}
-	t.Fatalf("a %v storage this gate has no source for", at.Kind)
+	t.Fatalf("a %s storage this gate has no source for", st.Source)
 	return nil
 }
 
