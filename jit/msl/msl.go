@@ -303,7 +303,7 @@ func (l *lowerer) block(lo, hi int) error {
 			l.name[i+1] = fmt.Sprintf("jitllm_sh%d", i+1)
 			l.line("threadgroup %s %s[%d];", tname(o.Type), l.name[i+1], o.Imm)
 		case ir.OpBarrier:
-			l.line("threadgroup_barrier(mem_flags::mem_threadgroup);")
+			l.line("threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);")
 		case ir.OpGridBarrier:
 			l.line("jitllm_grid_barrier((device atomic_uint*)%s, jitllm_tid, jitllm_ngroups);", l.n(o.Args[0]))
 		case ir.OpDepTask, ir.OpDepEpoch, ir.OpDepWait, ir.OpDepSignal, ir.OpDepExit:

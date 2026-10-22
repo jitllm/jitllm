@@ -39,8 +39,6 @@ const (
 
 	coopRowMajor = 0
 	coopColMajor = 1
-
-	scopeSubgroupID = 3
 )
 
 // hasTiles reports whether the kernel contains a collective value, which is
@@ -148,7 +146,7 @@ func (l *lowerer) tileType(t ir.TileType) uint32 {
 	}
 	id := l.m.id()
 	inst(&l.m.types, opTypeCooperativeMatrixKHR, id, l.compType(t.Elem),
-		l.u32c(scopeSubgroupID), l.u32c(uint32(t.Rows)), l.u32c(uint32(t.Cols)), l.u32c(use))
+		l.u32c(scopeSubgroup), l.u32c(uint32(t.Rows)), l.u32c(uint32(t.Cols)), l.u32c(use))
 	l.tiles[t] = id
 	return id
 }
