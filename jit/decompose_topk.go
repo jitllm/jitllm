@@ -11,7 +11,7 @@ import (
 // decomposeTopK is the largest element of a row and where it is, the
 // lower index of two equal: the row's maximum carrying its index.
 func decomposeTopK(o graph.Op, c *Context) ([]Prim, error) {
-	if o.Attr.TopK > 1 || o.Attr.Span != 0 {
+	if o.Attr.TopK > 1 || o.Attr.Span != 0 || len(o.Out) > 0 && c.Graph.Values[o.Out[0]].Elem == graph.ElemU32 {
 		return decomposeTopKRanked(o, c)
 	}
 	if o.Attr.TopK != 1 || o.Attr.Span != 0 || len(o.In) != 1 || len(o.Out) != 2 {

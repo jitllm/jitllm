@@ -8,6 +8,17 @@ import (
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
+// scoreMap is the score primitive, reading the temperature's table as its
+// fourth operand where there is one.
+func scoreMap(shape []int, in []Operand, out Operand, e []Expr, f Facts, temp []uint32) Prim {
+	if temp != nil {
+		in = append(in, Operand{Kind: OperandTable, Name: fmt.Sprintf("temp.%d.%x", len(temp), temp[:min(4, len(temp))]), Elem: ir.U32})
+		f.Words = map[int][]uint32{len(in) - 1: temp}
+		f.Extents[len(in)-1] = len(temp)
+	}
+	return Prim{Kind: PrimMap, Shape: shape, In: in, Out: out, Expr: e, Facts: f}
+}
+
 // decomposeAttend is decode attention over the paged history: per row and
 // query head, each key's dot with the query, scaled and softcapped where the
 // op is, the scores masked outside what the row attends, their maximum, the
@@ -17,7 +28,7 @@ import (
 // the Window positions ending at the query's, or the query's aligned chunk.
 func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
-	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 || a.Window < 0 || a.Softcap < 0 || a.TempScale != 0 ||
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 || a.Window < 0 || a.Softcap < 0 || a.TempScale != 0 && (a.TempFloor < 1 || a.TempOffs < 0) ||
 		a.NHead <= 0 || a.NKVHead <= 0 || a.NHead%a.NKVHead != 0 || c.Step.Page <= 0 || c.Step.Keys <= 0 {
 		return nil, fmt.Errorf("an attention of %d heads over %d, window %d, softcap %v", a.NHead, a.NKVHead, a.Window, a.Softcap)
 	}
@@ -97,6 +108,19 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	valid := sx.op(OpLess, ir.Pred, sx.op(OpSub, U, spos, sfirst), sx.op(OpSub, U, sx.live(), sfirst))
 	dot := sx.at(0, keys, sx.coord(0), sx.coord(1), sx.coord(2))
 	score := sx.op(OpMul, F, dot, sx.f(float32(a.Scale)))
+	var temp []uint32
+	if a.TempScale != 0 {
+		// The query's temperature, main's table (l4TempTab): entry k is
+		// 1 + s*ln(1+k), k = (pos+off)/floor for the query's position.
+		fl, off := int(a.TempFloor), int(a.TempOffs)
+		n := (C-1+off)/fl + 1
+		for k := range n {
+			temp = append(temp, math.Float32bits(float32(1+a.TempScale*math.Log(1+float64(k)))))
+		}
+		q := sx.op(OpSub, U, sx.op(OpMax, U, row(&sx, rowEnd), sx.u(1)), sx.u(1))
+		k := sx.op(OpMin, U, sx.op(OpDiv, U, sx.op(OpAdd, U, q, sx.u(uint32(off))), sx.u(uint32(fl))), sx.u(uint32(n-1)))
+		score = sx.op(OpMul, F, score, sx.un(OpBitcast, F, sx.load(3, k)))
+	}
 	if c := float32(a.Softcap); c > 0 {
 		e := sx.un(OpExp, F, sx.op(OpMul, F, sx.f(2/c), score))
 		score = sx.op(OpMul, F, sx.f(c), sx.op(OpSub, F, sx.f(1), sx.op(OpDiv, F, sx.f(2), sx.op(OpAdd, F, e, sx.f(1)))))
@@ -137,7 +161,7 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], tableRows, tablePages}, ops[1:]...) }
 	return []Prim{
 		{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(c.value(o.In[0]), tableKeys), Out: dots, Expr: dx.e, Facts: scored},
-		{Kind: PrimMap, Shape: keys, In: tables(dots), Out: scores, Expr: sx.e, Facts: rng(2)},
+		scoreMap(keys, tables(dots), scores, sx.e, rng(2), temp),
 		{Kind: PrimReduce, Shape: keys, In: tables(scores), Out: maxes, Combine: OpMax, Init: int64(math.Float32bits(minus)),
 			Expr: mx.e, Facts: rng(2)},
 		{Kind: PrimMap, Shape: keys, In: tables(scores, maxes), Out: weights, Expr: wx.e, Facts: rng(2)},
