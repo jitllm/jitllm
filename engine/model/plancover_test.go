@@ -66,7 +66,10 @@ func TestPlanCoversEveryModel(t *testing.T) {
 			continue
 		}
 		cover := planCover
-		if m.IsEncoder() || m.Cfg.Pooling != jlm.PoolNone {
+		switch {
+		case m.Decision() == jlm.DecisionLaya || m.Decision() == jlm.DecisionD1Omni:
+			cover = decideCover
+		case m.IsEncoder() || m.Cfg.Pooling != jlm.PoolNone:
 			cover = encodeCover
 		}
 		row, bad, why := cover(t, m, devs, gpu)
@@ -337,4 +340,62 @@ func encodeCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) 
 		r.Close()
 	}
 	return row, bad, ""
+}
+
+// decideCover is a Laya decision model's row: its composed scores at three
+// markers of a text past its window, for each question type, held to the
+// host's mbEncode and layaScores per device.
+func decideCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (row string, bad bool, why string) {
+	var ids []int32
+	for k := 1; len(ids) <= m.Cfg.SWAWindow+8; k++ {
+		ids = m.Vocab.Encode(strings.Repeat("Is the capital of France Paris? ", k)+"Answer with one of the options below.", true)
+	}
+	dc, err := m.NewDecider(len(ids) + 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dc.Close()
+	markers := []int32{1, int32(len(ids) / 2), int32(len(ids) - 2)}
+	rows := []int{int(markers[0]), int(markers[1]), int(markers[2])}
+	for _, dev := range devs {
+		r, err := run.New(m.Composing(), dev, gpu, len(ids), run.WithRows(len(ids)))
+		if err != nil {
+			return "", false, strings.SplitN(err.Error(), "\n", 2)[0]
+		}
+		s, err := r.NewSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+		worst := 0.0
+		for qt := range 3 {
+			if err := hostEncode(dc.emb, ids); err != nil {
+				t.Fatal(err)
+			}
+			want := make([]float32, len(markers))
+			if err := dc.emb.layaScores(want, len(ids), jlm.QuestionType(qt), rows); err != nil {
+				t.Fatal(err)
+			}
+			got, err := s.Decide(ids, qt, markers)
+			if err != nil {
+				t.Fatal(err)
+			}
+			worst = max(worst, nmse(got, want))
+		}
+		row += fmt.Sprintf("%s: decision scores of %d tokens %.2g; ", dev.API(), len(ids), worst)
+		if !(worst <= 1e-6) {
+			bad = true
+		}
+		s.Close()
+		r.Close()
+	}
+	return row, bad, ""
+}
+
+// hostEncode is the host's encoder pass over ids for a decision model with
+// Laya's head: an LFM2 encoder's or ModernBERT's.
+func hostEncode(e *Embedder, ids []int32) error {
+	if e.m.enc.lf != nil {
+		return e.lfm2Encode(ids, nil)
+	}
+	return e.mbEncode(ids)
 }

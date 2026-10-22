@@ -19,6 +19,9 @@ const (
 	PartSample
 	// PartEmbed is the step's input rows, each row's token's embedding.
 	PartEmbed
+	// PartSeam is a model-wide graph between two blocks: its residual in
+	// and out, its weights the model's (a decision head's prologue).
+	PartSeam
 )
 
 // Part is one placeable part of the model and its graph.
@@ -47,6 +50,8 @@ func (p Part) String() string {
 		return "sample"
 	case PartEmbed:
 		return "embed"
+	case PartSeam:
+		return fmt.Sprintf("seam before block %d", p.Block)
 	}
 	return fmt.Sprintf("block %d", p.Block)
 }
@@ -60,6 +65,12 @@ type Model interface {
 	Find(role jlm.Role, block, index int32) (*jlm.Entry, bool)
 	Entries() []jlm.Entry
 	BlockGraph(li int) *graph.Graph
+	// Blocks is how many block parts the model runs, the config's layers
+	// and any blocks its head states after them (a decision head's).
+	Blocks() int
+	// SeamGraph is a model-wide graph the residual runs through before
+	// block li, nil for none.
+	SeamGraph(li int) *graph.Graph
 	HeadGraph() *graph.Graph
 	EmbedGraph() *graph.Graph
 	// Rotaries is every rotary the blocks turn by, the model's own first;
@@ -128,9 +139,10 @@ func Front(f Model) ([]Part, error) {
 		rt := graph.RopeTable{NRot: r.NRot, Name: tableName(i)}
 		parts = append(parts, Part{Kind: PartTable, Block: -1, Graph: rt.Build()})
 	}
+	var seamRoles []jlm.Role
 	embed := len(parts)
 	parts = append(parts, Part{Kind: PartEmbed, Block: -1, Graph: em})
-	for li := 0; li < int(c.NLayer); li++ {
+	for li := 0; li < f.Blocks(); li++ {
 		g := f.BlockGraph(li)
 		if g == nil {
 			return nil, fmt.Errorf("jit: block %d has no graph", li)
@@ -148,9 +160,21 @@ func Front(f Model) ([]Part, error) {
 		// (graph.Decompose, as its tier prepares the block); so does the
 		// composer, and its recurrent mixers too (graph.DecomposeRecurrent),
 		// which main's device runs whole.
+		if s := f.SeamGraph(li); s != nil {
+			parts = append(parts, Part{Kind: PartSeam, Block: li, Graph: graph.Decompose(s)})
+			bound := map[jlm.Role]bool{}
+			for _, o := range s.Ops {
+				for _, w := range o.Weight {
+					bound[w.Role] = true
+				}
+			}
+			for r := range bound {
+				seamRoles = append(seamRoles, r)
+			}
+		}
 		parts = append(parts, Part{Kind: PartBlock, Block: li, Graph: graph.DecomposeRecurrent(graph.Decompose(g), c), Feeds: feeds})
 	}
-	var bound []jlm.Role
+	bound := seamRoles
 	for _, g := range []*graph.Graph{em, h} {
 		for _, o := range g.Ops {
 			for _, w := range o.Weight {

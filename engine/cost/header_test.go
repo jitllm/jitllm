@@ -35,6 +35,10 @@ func (h header) BlockGraph(li int) *graph.Graph {
 
 func (h header) HeadGraph() *graph.Graph { return h.head }
 
+func (h header) Blocks() int { return int(h.cfg.NLayer) }
+
+func (h header) SeamGraph(int) *graph.Graph { return nil }
+
 func (h header) EmbedGraph() *graph.Graph { return h.embed }
 
 func (h header) Rotaries() []graph.Rotary { return h.rotaries }

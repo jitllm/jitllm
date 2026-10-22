@@ -20,6 +20,8 @@ type Embed struct {
 	NEmbd, NVocab int
 	Scale         float64
 	TypeRow, Norm bool
+	// NoNormBias is an input norm with no bias (RoleTokenEmbdNormBias).
+	NoNormBias bool
 	Positions     int
 	Streams       int
 	AltUp         bool
@@ -59,8 +61,11 @@ func (e *Embed) Build() *Graph {
 	}
 	if e.Norm {
 		y := g.value("x_normed", e.NEmbd)
-		g.op(Op{Kind: OpLayerNorm, In: []ValueID{x}, Out: []ValueID{y}, Weight: []Binding{{Role: jlm.RoleTokenEmbdNorm, K: e.NEmbd},
-			{Role: jlm.RoleTokenEmbdNormBias, K: e.NEmbd}}, Attr: Attrs{Eps: e.Eps}})
+		ws := []Binding{{Role: jlm.RoleTokenEmbdNorm, K: e.NEmbd}}
+		if !e.NoNormBias {
+			ws = append(ws, Binding{Role: jlm.RoleTokenEmbdNormBias, K: e.NEmbd})
+		}
+		g.op(Op{Kind: OpLayerNorm, In: []ValueID{x}, Out: []ValueID{y}, Weight: ws, Attr: Attrs{Eps: e.Eps}})
 		x = y
 	}
 	var ple []ValueID

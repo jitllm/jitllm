@@ -394,6 +394,9 @@ type Session struct {
 	one             [1]int32
 	at              int
 	bidir           bool
+	// request is a decision's words (jit.SourceRequest); marks its markers.
+	request []byte
+	marks   []int32
 	logits          []float32
 	raw, tb, input  []byte
 	err             error
@@ -448,7 +451,7 @@ func (r *Runner) newSession(h *Session) (*Session, error) {
 	R := r.step.Rows
 	s := &Session{r: r, bufs: make([]backend.Buf, len(st)), own: make([]bool, len(st)),
 		rows: make([]byte, 4*jit.RowWords*R), pos: make([]byte, 4*(1+R)), toks: make([]byte, 4*R), tb: make([]byte, 4*R),
-		logits: make([]float32, R*r.outW), input: make([]byte, 4*R*r.nembd)}
+		logits: make([]float32, R*r.outW), input: make([]byte, 4*R*r.nembd), request: make([]byte, 4*(jit.RequestRows+R))}
 	s.raw = unsafe.Slice((*byte)(unsafe.Pointer(&s.logits[0])), 4*len(s.logits))
 	slot, slots := r.reuse()
 	for _, sz := range slots {
@@ -539,6 +542,32 @@ func (s *Session) Rows(toks []int32, pos int) ([]float32, int32, error) {
 	return s.logits[(n-1)*r.outW : n*r.outW], int32(binary.LittleEndian.Uint32(s.tb[4*(n-1):])), nil
 }
 
+// Decide runs a decision model's request as one bidirectional step: its
+// tokens toks, its question type qt and its option markers, rows of toks.
+// It returns the scorer's value at each marker, a slice the next step
+// overwrites.
+func (s *Session) Decide(toks []int32, qt int, markers []int32) ([]float32, error) {
+	n := len(toks)
+	if len(markers) < 1 || len(markers) > s.r.step.Rows {
+		return nil, fmt.Errorf("run: %d markers in a step of %d rows", len(markers), s.r.step.Rows)
+	}
+	for _, m := range markers {
+		if m < 0 || int(m) >= n {
+			return nil, fmt.Errorf("run: marker row %d of %d", m, n)
+		}
+	}
+	put := binary.LittleEndian.PutUint32
+	put(s.request[4*jit.RequestType:], uint32(qt))
+	put(s.request[4*jit.RequestCount:], uint32(len(markers)))
+	for i := range s.r.step.Rows {
+		put(s.request[4*(jit.RequestRows+i):], uint32(markers[min(i, len(markers)-1)]))
+	}
+	if _, err := s.Encode(toks, true); err != nil {
+		return nil, err
+	}
+	return s.logits[:len(markers)*s.r.outW], nil
+}
+
 // Encode runs a sequence toks as one step and returns its head's output:
 // the embedding, a slice the next step overwrites. Where bidir every row
 // reads every other (an encoder's, a non-causal decoder's); else each reads
@@ -624,6 +653,8 @@ func (s *Session) tables(se backend.Session) error {
 			err = se.WriteAt(s.bufs[i], 0, s.pos)
 		case jit.SourceTokens:
 			err = se.WriteAt(s.bufs[i], 0, s.toks)
+		case jit.SourceRequest:
+			err = se.WriteAt(s.bufs[i], 0, s.request)
 		case jit.SourceInput:
 			if err = s.inputRows(); err == nil {
 				err = se.WriteAt(s.bufs[i], 0, s.input)

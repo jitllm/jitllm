@@ -51,12 +51,16 @@ func (s *Scorer) Build() *Graph {
 }
 
 // DecisionPrologue is a decision head's first block's prologue (Laya's):
-// the encoder's last row LayerNormed against RoleOutputNorm, no bias, then
-// the request's question type's row of RoleTokenTypes added.
-func DecisionPrologue(nEmbd, types int, eps float64) func(d *Graph, x ValueID) ValueID {
+// the encoder's last row LayerNormed against RoleOutputNorm, no bias -- or
+// RMS-normed where rms (d1-omni's LFM2 trunk) -- then the request's question
+// type's row of RoleTokenTypes added.
+func DecisionPrologue(nEmbd, types int, eps float64, rms bool) func(d *Graph, x ValueID) ValueID {
 	return func(g *Graph, x ValueID) ValueID {
-		n := g.row("final_norm", nEmbd, Op{Kind: OpLayerNorm, In: []ValueID{x},
-			Weight: []Binding{{Role: jlm.RoleOutputNorm, K: nEmbd}}, Attr: Attrs{Eps: eps}})
+		norm := Op{Kind: OpLayerNorm, In: []ValueID{x}, Weight: []Binding{{Role: jlm.RoleOutputNorm, K: nEmbd}}, Attr: Attrs{Eps: eps}}
+		if rms {
+			norm.Kind, norm.Weight[0].Rows = OpNorm, 1
+		}
+		n := g.row("final_norm", nEmbd, norm)
 		t := g.row("type_row", nEmbd, Op{Kind: OpEmbed, Weight: []Binding{{Role: jlm.RoleTokenTypes, K: nEmbd, Rows: types}},
 			Attr: Attrs{Request: true}})
 		return g.row("x_typed", nEmbd, Op{Kind: OpAdd, In: []ValueID{n, t}})

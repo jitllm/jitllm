@@ -30,6 +30,20 @@ type composing struct {
 // BlockGraph is block li's graph: an encoder's own (encgraph.go) where the
 // model is one, nil where its family states none.
 func (c composing) BlockGraph(li int) *graph.Graph {
+	if e := c.m.enc; e != nil && e.mb != nil {
+		// ModernBERT's trunk or an LFM2 encoder's (d1-omni's), then the
+		// decision head's blocks.
+		mb, trunk := e.mb, c.trunk()
+		switch {
+		case li < trunk && e.lf != nil:
+			return e.lf.blocks[li].g
+		case li < trunk:
+			return mb.blocks[li].g
+		case li-trunk < len(mb.head):
+			return mb.head[li-trunk].g
+		}
+		return nil
+	}
 	if e := c.m.enc; e != nil {
 		if li < len(e.graphs) && e.graphs[li] != nil {
 			return e.graphs[li].g
@@ -39,9 +53,45 @@ func (c composing) BlockGraph(li int) *graph.Graph {
 	return c.m.BlockGraph(li)
 }
 
+// Blocks is the config's layers, and a ModernBERT decision head's blocks
+// after them.
+func (c composing) Blocks() int {
+	if e := c.m.enc; e != nil && e.mb != nil {
+		return c.trunk() + len(e.mb.head)
+	}
+	return c.m.Cfg.NLayer
+}
+
+// trunk is a decision model's encoder blocks: an LFM2 encoder's or
+// ModernBERT's.
+func (c composing) trunk() int {
+	if e := c.m.enc; e.lf != nil {
+		return len(e.lf.blocks)
+	}
+	return len(c.m.enc.mb.blocks)
+}
+
+// SeamGraph is ModernBERT's decision prologue before its head's first
+// block: the trunk's final norm and the question type's row.
+func (c composing) SeamGraph(li int) *graph.Graph {
+	e := c.m.enc
+	if e == nil || e.mb == nil || len(e.mb.head) == 0 || li != c.trunk() {
+		return nil
+	}
+	d := c.m.Cfg.NEmbd
+	g := &graph.Graph{Block: -1}
+	x := g.Input("x", d)
+	g.Out = []graph.ValueID{graph.DecisionPrologue(d, len(e.mb.types)/d, c.m.Cfg.RMSEps, e.lf != nil)(g, x)}
+	return g
+}
+
 // HeadGraph is the vocabulary's head, or an encoder's pooling into its
 // embedding.
 func (c composing) HeadGraph() *graph.Graph {
+	if e := c.m.enc; e != nil && e.mb != nil && len(e.mb.head) > 0 {
+		s := graph.Scorer{NEmbd: c.m.Cfg.NEmbd, Eps: c.m.Cfg.RMSEps}
+		return s.Build()
+	}
 	if c.m.enc != nil {
 		p := graph.Pooled{NEmbd: c.m.Cfg.NEmbd, Pooling: uint8(c.m.Cfg.Pooling)}
 		return p.Build()
@@ -61,6 +111,17 @@ func (c composing) HeadGraph() *graph.Graph {
 // EmbedGraph is the input rows: an encoder's are the token's row, the
 // token type's first, the position's where it has a table, LayerNormed.
 func (c composing) EmbedGraph() *graph.Graph {
+	if e := c.m.enc; e != nil && e.lf != nil {
+		// An LFM2 encoder's: the token's row alone.
+		g := graph.Embed{NEmbd: c.m.Cfg.NEmbd, NVocab: c.m.Cfg.NVocab}
+		return g.Build()
+	}
+	if e := c.m.enc; e != nil && e.mb != nil {
+		// ModernBERT's: the token's row, LayerNormed without a bias.
+		cfg := c.m.Cfg
+		g := graph.Embed{NEmbd: cfg.NEmbd, NVocab: cfg.NVocab, Norm: true, NoNormBias: true, Eps: cfg.RMSEps}
+		return g.Build()
+	}
 	if e := c.m.enc; e != nil {
 		cfg := c.m.Cfg
 		g := graph.Embed{NEmbd: cfg.NEmbd, NVocab: cfg.NVocab, TypeRow: e.typ0 != nil, Norm: true, Eps: cfg.RMSEps}
@@ -87,6 +148,12 @@ func (c composing) Rotaries() []graph.Rotary {
 // Ropes is the engine's rotaries in Rotaries' order, each table's planes:
 // an encoder's own where it turns q and k.
 func (c composing) Ropes() []nn.Rope {
+	if e := c.m.enc; e != nil && e.lf != nil {
+		return []nn.Rope{e.lf.rope}
+	}
+	if e := c.m.enc; e != nil && e.mb != nil {
+		return []nn.Rope{e.mb.ropeG, e.mb.ropeL}
+	}
 	if e := c.m.enc; e != nil && e.rope != nil {
 		return []nn.Rope{*e.rope}
 	}

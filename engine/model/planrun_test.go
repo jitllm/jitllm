@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/run"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
 )
@@ -107,6 +109,79 @@ func planDecodes(t *testing.T, path string, chunks bool) {
 				t.Errorf("a warm Forward on the plan allocates %.1f objects", allocs)
 			}
 			t.Logf("%s: %d positions, worst logits NMSE %.3g, %.0f allocations a token", dev.Name(), len(ids)+more, worst, allocs)
+		})
+	}
+}
+
+// TestPlanDecidesAsTheHost composes a decision model with Laya's head --
+// ModernBERT's trunk, or d1-omni's LFM2 encoder with its centred short
+// convolutions, then the head's blocks after the prologue (the trunk's
+// final norm and the question type's row) and the scorer at the request's
+// markers -- and holds its scores for questions of each type to the host's
+// encode and layaScores on every device a backend opens.
+func TestPlanDecidesAsTheHost(t *testing.T) {
+	for _, c := range []struct {
+		name, gguf string
+		kind       jlm.DecisionKind
+		bound      float64
+	}{{"fixture", "laya/fixture/laya-fixture.gguf", jlm.DecisionLaya, 1e-9}, {"laya", "laya/gguf/Laya-BF16.gguf", jlm.DecisionLaya, 1e-6},
+		{"d1-omni", d1OmniModel, jlm.DecisionD1Omni, 1e-6}} {
+		t.Run(c.name, func(t *testing.T) {
+			m := openDecision(t, c.gguf, c.kind, noTune)
+			defer m.Close()
+			// Past the local layers' window, so the window bites.
+			var ids []int32
+			for k := 1; len(ids) <= m.Cfg.SWAWindow+8; k++ {
+				ids = m.Vocab.Encode(strings.Repeat("Is the capital of France Paris? ", k)+"Answer with one of the options below.", true)
+			}
+			dc, err := m.NewDecider(len(ids) + 8)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer dc.Close()
+			e := dc.emb
+			markers := []int32{1, int32(len(ids) / 2), int32(len(ids) - 2)}
+			rows := []int{int(markers[0]), int(markers[1]), int(markers[2])}
+			devs := backend.Open()
+			defer func() {
+				for _, d := range devs {
+					d.Close()
+				}
+			}()
+			if len(devs) == 0 {
+				t.Skip("no device")
+			}
+			gpu := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
+			for _, dev := range devs {
+				r, err := run.New(m.Composing(), dev, gpu, len(ids), run.WithRows(len(ids)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				s, err := r.NewSession()
+				if err != nil {
+					t.Fatal(err)
+				}
+				for qt := range 3 {
+					if err := hostEncode(e, ids); err != nil {
+						t.Fatal(err)
+					}
+					want := make([]float32, len(markers))
+					if err := e.layaScores(want, len(ids), jlm.QuestionType(qt), rows); err != nil {
+						t.Fatal(err)
+					}
+					got, err := s.Decide(ids, qt, markers)
+					if err != nil {
+						t.Fatal(err)
+					}
+					nmse, _ := nmseOf(got, want)
+					t.Logf("%s, question type %d: scores %v, the host's %v, NMSE %.3g", dev.API(), qt, got, want, nmse)
+					if !(nmse <= c.bound) {
+						t.Errorf("%s, question type %d: NMSE %.3g against the host", dev.API(), qt, nmse)
+					}
+				}
+				s.Close()
+				r.Close()
+			}
 		})
 	}
 }

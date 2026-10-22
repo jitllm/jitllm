@@ -43,7 +43,7 @@ func DecomposeRecurrent(g *Graph, c *jlm.Config) *Graph {
 	d := &Graph{Version: g.Version, Block: g.Block, Values: append([]Value(nil), g.Values...),
 		In: append([]ValueID(nil), g.In...), Out: append([]ValueID(nil), g.Out...)}
 	for _, o := range g.Ops {
-		if o.Kind == OpRecurrent && o.Attr.Mixer == uint8(jlm.LayerShortConv) && d.shortConv(o) {
+		if o.Kind == OpRecurrent && o.Attr.Mixer == uint8(jlm.LayerShortConv) && d.shortConv(o, c) {
 			continue
 		}
 		ssd := o.Attr.Mixer == uint8(jlm.LayerSSD) || o.Attr.Mixer == uint8(jlm.LayerSSDAttn)
@@ -69,7 +69,7 @@ func DecomposeRecurrent(g *Graph, c *jlm.Config) *Graph {
 
 // shortConv writes LFM2's mixer o as primitives, false where o does not
 // bind what it reads.
-func (d *Graph) shortConv(o Op) bool {
+func (d *Graph) shortConv(o Op, cfg *jlm.Config) bool {
 	w := map[jlm.Role]Binding{}
 	for _, b := range o.Weight {
 		w[b.Role] = b
@@ -96,7 +96,13 @@ func (d *Graph) shortConv(o Op) bool {
 	x, b, c := mv("x", bx), mv("b", bb), mv("c", bc)
 	gated := mul("bx", b, x)
 	cv := val("conv")
-	d.op(Op{Kind: OpStateConv, In: []ValueID{gated}, Out: []ValueID{cv}, Weight: []Binding{conv}, Attr: Attrs{Taps: conv.K}})
+	kind := OpStateConv
+	if cfg.Flags.Has(jlm.FlagNonCausal) {
+		// A bidirectional model's convolution is centred over the
+		// sequence's rows (LFM2's encoder).
+		kind = OpRowConv
+	}
+	d.op(Op{Kind: kind, In: []ValueID{gated}, Out: []ValueID{cv}, Weight: []Binding{conv}, Attr: Attrs{Taps: conv.K}})
 	y := mul("y", c, cv)
 	d.op(Op{Kind: OpMatVec, In: []ValueID{y}, Out: []ValueID{o.Out[0]}, Weight: []Binding{out}})
 	return true

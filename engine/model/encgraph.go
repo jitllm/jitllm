@@ -190,9 +190,9 @@ func (m *Model) buildMBGraphs(c *jlm.File, mb *modernBERT) error {
 			LayerNorm: true, NoPreNorm: !hasNorm, NonCausal: true, NRot: cfg.NRot, Base: mb.ropeG.Base,
 			Layout: graph.RopeNeox}
 		if !b.global {
-			// The local blocks: the window is a radius on a bidirectional
-			// attention, half the stated width each side.
-			d.Window, d.Base = cfg.SWAWindow/2, mb.ropeL.Base
+			// The local blocks: a bidirectional window of the stated width,
+			// half of it each side (graph.Attrs.Bidir).
+			d.Window, d.Base = cfg.SWAWindow, mb.ropeL.Base
 		}
 		g := d.Build()
 		f := graph.Facts{Config: d, Inventory: inv}
@@ -271,7 +271,7 @@ func (m *Model) buildHeadGraphs(c *jlm.File, mb *modernBERT) error {
 		bi := cfg.NLayer + i
 		inv := entryRoles(c, bi)
 		dn := graph.Dense{Block: bi, NEmbd: d, NHead: heads, NKVHead: heads, HeadDim: d / heads,
-			NFFN: inv[jlm.RoleFFNUp].Rows, Eps: cfg.RMSEps, Scale: 1 / math.Sqrt(float64(d/heads)), Act: graph.ActGELUErf,
+			NFFN: inv[jlm.RoleFFNUp].Rows, Eps: cfg.RMSEps, Scale: 1 / math.Sqrt(float64(d/heads)), Act: graph.ActReLU,
 			LayerNorm: true, NormBias: true, FFNNormBias: true, QKVBias: true, OutBias: true, UpBias: true,
 			DownBias: true, Ungated: true, NoRope: true, NonCausal: true}
 		g := dn.Build()

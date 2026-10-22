@@ -49,11 +49,14 @@ const (
 	// SourceState is a part's recurrent state, a sequence's own: zero at
 	// its start, kept from step to step.
 	SourceState
+	// SourceRequest is a step's request, the caller's words: a decision's
+	// question type, then its marker count, then a marker row a step row.
+	SourceRequest
 	numSources
 )
 
 var sourceNames = [numSources]string{"step", "weight", "input", "rows", "pages", "query offset",
-	"rotary positions", "rotary planes", "keys", "values", "words", "transfer", "tokens", "state"}
+	"rotary positions", "rotary planes", "keys", "values", "words", "transfer", "tokens", "state", "request"}
 
 func (s Source) String() string {
 	if s < numSources {
@@ -138,7 +141,7 @@ func (s StorageKeys) Key(o Operand) Operand {
 var tableSources = map[string]Source{
 	tableRows.Name: SourceRows, tablePages.Name: SourcePages, tableQOff.Name: SourceQueryOffset,
 	tablePos.Name: SourceRopePositions, tablePlanes.Name: SourceRopePlanes,
-	tableKeys.Name: SourceKeys, tableValues.Name: SourceValues, tableIdxKeys.Name: SourceKeys, tableAngles.Name: SourceStep,
+	tableKeys.Name: SourceKeys, tableValues.Name: SourceValues, tableIdxKeys.Name: SourceKeys, tableRequest.Name: SourceRequest, tableAngles.Name: SourceStep,
 	tableTokens.Name: SourceTokens,
 }
 
@@ -213,7 +216,8 @@ func (p *Plan) storages(parts []Part) error {
 					i = len(p.Storages)
 					at[key] = i
 					st := Storage{Key: key, Role: key.Role, Block: -1, Region: key.Region, Words: words}
-					if key.Of >= 0 && key.Of < len(parts) {
+					// A weight of a part that is not a block's is the model's.
+					if key.Of >= 0 && key.Of < len(parts) && parts[key.Of].Kind == PartBlock {
 						st.Block = parts[key.Of].Block
 					}
 					p.Storages = append(p.Storages, st)

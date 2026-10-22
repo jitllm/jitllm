@@ -239,7 +239,9 @@ const (
 	OpRopeTable
 	// OpEmbed is a step's input rows: each row's token's row of Weight[0],
 	// the token a word of the step's own a row; where Positional, each
-	// row's position's row (a learned position table).
+	// row's position's row (a learned position table); where Request, the
+	// row the step's request names, every row's (a decision's question
+	// type's).
 	OpEmbed
 	// OpStateConv is a causal depthwise convolution of In[0] over the
 	// block's window, the last Taps-1 rows it saw: each channel's Taps taps
@@ -289,10 +291,19 @@ const (
 	// it in every row: their mean, the first's or the last's (Pooling, a
 	// jlm.Pooling). A primitive: an encoder's sequence into its embedding.
 	OpPool
+	// OpTakeRows is the rows of In[0] the step's request names, in its
+	// order, Out[0]'s first rows (a decision's option markers); the rows
+	// past them repeat the last.
+	OpTakeRows
+	// OpRowConv is a centred depthwise convolution of In[0] across the
+	// step's live rows: each channel's Taps taps (Weight[0], channel-major)
+	// against the rows Taps/2 before to Taps/2 after, zero past the live
+	// rows -- a bidirectional model's short convolution (LFM2's encoder).
+	OpRowConv
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan", "state_delta", "index_select", "block_select", "pool"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan", "state_delta", "index_select", "block_select", "pool", "take_rows", "row_conv"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -475,6 +486,9 @@ type Attrs struct {
 	BidirOff bool
 	// Bidir makes the attention non-causal over the whole sequence: every
 	// position attends to every other (an embedding model's encoder pass).
+	// With a Window it is the window's full width: a position attends the
+	// keys within Window/2 of it either side (EmbeddingGemma's, ModernBERT's
+	// local layers).
 	Bidir   bool
 	Softcap float64
 	Act     Act
@@ -515,6 +529,8 @@ type Attrs struct {
 	Positional bool
 	// Pooling is OpPool's: a jlm.Pooling.
 	Pooling uint8
+	// Request makes OpEmbed index its table by the step's request.
+	Request bool
 	// Bound is OpClamp's.
 	Bound float64
 	// Offset and Width are OpSlice's.

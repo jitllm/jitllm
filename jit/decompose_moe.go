@@ -610,3 +610,49 @@ func decomposeStateDelta(o graph.Op, c *Context) ([]Prim, error) {
 			Stores: []PrimStore{{Out: state, Index: cx, Value: cv, Extent: N}}},
 	}, nil
 }
+
+// decomposeRowConv is a centred depthwise convolution across the step's
+// live rows: each channel's centre tap on its own row first, then its
+// other taps in order on the rows before and after, a row past the live
+// ones zero -- the host's order (lfConv). The live count is the positions
+// table's first word.
+func decomposeRowConv(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 {
+		return nil, fmt.Errorf("a row convolution of %d operands", len(o.In))
+	}
+	U, F := ir.U32, ir.F32
+	sh := c.rows(o.In[0])
+	R, C, T := sh[0], sh[1], o.Attr.Taps
+	if T < 1 || T%2 == 0 || o.Weight[0].K != T || o.Weight[0].Rows != C {
+		return nil, fmt.Errorf("a row convolution of %d taps over %d channels", T, C)
+	}
+	wo, err := c.weight(o.Weight[0])
+	if err != nil {
+		return nil, err
+	}
+	if !jlm.Verbatim(wo.Format) {
+		return nil, fmt.Errorf("a row convolution over %s taps", wo.Format)
+	}
+	var x exprs
+	r, ch := x.coord(0), x.coord(1)
+	in := []Operand{c.value(o.In[0]), tablePos}
+	facts := Facts{Extents: map[int]int{1: R + 1}}
+	live := x.load(1, x.u(0))
+	tap := func(t int) int {
+		v, _ := weightElement(&x, wo, C, T, &in, &facts, ch, x.u(uint32(t)))
+		return v
+	}
+	h := T / 2
+	acc := x.op(OpMul, F, x.at(0, sh, r, ch), tap(h))
+	for t := 0; t < T; t++ {
+		if t == h {
+			continue
+		}
+		// Row r+t-h, held in the step's rows; zero past the live ones.
+		at := x.op(OpSub, U, x.op(OpAdd, U, r, x.u(uint32(t))), x.u(uint32(h)))
+		ok := x.op(OpLess, ir.Pred, at, live)
+		v := x.at(0, sh, x.op(OpMin, U, at, x.u(uint32(R-1))), ch)
+		acc = x.op(OpAdd, F, acc, x.sel(F, ok, x.op(OpMul, F, v, tap(t)), x.f(0)))
+	}
+	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}, nil
+}
