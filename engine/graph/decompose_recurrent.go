@@ -11,6 +11,12 @@ import "github.com/jitllm/jitllm/format/jlm"
 // input row's projections, B*x convolved over the window, C times that,
 // then the output projection.
 //
+// Mamba-1's mixer (jlm.LayerMamba1), the host's mamba1Attn: x and z the
+// row's projections; x convolved, its bias added, SiLU; dt's low rank, B
+// and C its projections, each RMS-normed where the block binds a norm;
+// dt = softplus(dt's projection + dt_bias); the scan, each channel a value
+// head; silu(z) times its output; the output projection.
+//
 // Mamba-2's mixer (jlm.LayerSSD), the host's ssdAttn: xBC, z and dt the
 // row's projections; xBC convolved over the window, its bias added, SiLU;
 // dt = softplus(dt + dt_bias), decay = exp(A dt); the scan; silu(z) times
@@ -24,6 +30,9 @@ func DecomposeRecurrent(g *Graph, c *jlm.Config) *Graph {
 			continue
 		}
 		if o.Kind == OpRecurrent && o.Attr.Mixer == uint8(jlm.LayerSSD) && d.ssd(o, c) {
+			continue
+		}
+		if o.Kind == OpRecurrent && o.Attr.Mixer == uint8(jlm.LayerMamba1) && d.mamba1(o, c) {
 			continue
 		}
 		d.op(o)
@@ -112,8 +121,14 @@ func (d *Graph) ssd(o Op, c *jlm.Config) bool {
 	d.op(Op{Kind: OpAct, In: []ValueID{cbv}, Out: []ValueID{xs}, Attr: Attrs{Act: ActSiLU}})
 	dt := map1("dt", MapSoftplus, mapw("dt_b", MapAdd, dtr, dtb, vh), vh)
 	decay := map1("decay", MapExp, mapw("a_dt", MapMul, dt, a, vh), vh)
+	slice := func(s string, off, n int) ValueID {
+		v := val(s, n)
+		d.op(Op{Kind: OpSlice, In: []ValueID{xs}, Out: []ValueID{v}, Attr: Attrs{Offset: off, Width: n}})
+		return v
+	}
+	cs, bs, xv := slice("c", 0, kh*kd), slice("b", kh*kd, kh*kd), slice("x", 2*kh*kd, inner)
 	y := val("y", inner)
-	d.op(Op{Kind: OpStateScan, In: []ValueID{xs, dt, decay}, Out: []ValueID{y}, Weight: []Binding{{Role: skip.Role, K: vh}},
+	d.op(Op{Kind: OpStateScan, In: []ValueID{xv, bs, cs, dt, decay}, Out: []ValueID{y}, Weight: []Binding{{Role: skip.Role, K: vh}},
 		Attr: Attrs{NHead: vh, NKVHead: kh, HeadDim: kd, KeyTiled: c.Flags.Has(jlm.FlagDeltaKeyTiled)}})
 	gated := val("gated", inner)
 	d.op(Op{Kind: OpActMul, In: []ValueID{z, y}, Out: []ValueID{gated}, Attr: Attrs{Act: ActSiLU}})
@@ -124,5 +139,63 @@ func (d *Graph) ssd(o Op, c *jlm.Config) bool {
 		last = mapw("norm_w", MapMul, nv, nrm, inner)
 	}
 	d.op(Op{Kind: OpMatVec, In: []ValueID{last}, Out: []ValueID{o.Out[0]}, Weight: []Binding{out}})
+	return true
+}
+
+// mamba1 writes Mamba-1's mixer o as primitives, false where o does not
+// bind what it reads.
+func (d *Graph) mamba1(o Op, c *jlm.Config) bool {
+	w := map[jlm.Role]Binding{}
+	for _, b := range o.Weight {
+		w[b.Role] = b
+	}
+	in, gate, conv, out := w[jlm.RoleAttnQKV], w[jlm.RoleAttnGate], w[jlm.RoleSSMConv1d], w[jlm.RoleSSMOut]
+	cb, a, skip, dtb := w[jlm.RoleSSMConvBias], w[jlm.RoleSSMA], w[jlm.RoleSSMD], w[jlm.RoleSSMDtBias]
+	xdt, xb, xc, dtp := w[jlm.RoleSSMXDt], w[jlm.RoleSSMXB], w[jlm.RoleSSMXC], w[jlm.RoleSSMDtProj]
+	nd, hasNorm := w[jlm.RoleSSMDtNorm]
+	nb, nc := w[jlm.RoleSSMBNorm], w[jlm.RoleSSMCNorm]
+	inner, kd := in.Rows, int(c.SSM.StateSize)
+	if len(o.In) != 1 || len(o.Out) != 1 || inner < 1 || kd < 1 || gate.Rows != inner || conv.Rows != inner || conv.K < 2 ||
+		cb.K != inner || xb.Rows != kd || xc.Rows != kd || xdt.Rows < 1 || dtp.K != xdt.Rows || dtp.Rows != inner ||
+		a.Rows != inner || a.K != kd || skip.Role == 0 || dtb.Role == 0 || out.K != inner ||
+		hasNorm && (nb.Role == 0 || nc.Role == 0) {
+		return false
+	}
+	name := d.Values[o.Out[0]].Name
+	val := func(s string, n int) ValueID { return d.value(name+"."+s, n) }
+	mv := func(s string, b Binding, x ValueID) ValueID {
+		v := val(s, b.Rows)
+		d.op(Op{Kind: OpMatVec, In: []ValueID{x}, Out: []ValueID{v}, Weight: []Binding{b}})
+		return v
+	}
+	norm := func(s string, x ValueID, b Binding, n int) ValueID {
+		if !hasNorm {
+			return x
+		}
+		v := val(s, n)
+		d.op(Op{Kind: OpNorm, In: []ValueID{x}, Out: []ValueID{v}, Weight: []Binding{{Role: b.Role, K: n}}, Attr: Attrs{Eps: float64(c.RMSEps)}})
+		return v
+	}
+	add := func(s string, x ValueID, b Binding, n int) ValueID {
+		v := val(s, n)
+		d.op(Op{Kind: OpMap, In: []ValueID{x}, Out: []ValueID{v}, Weight: []Binding{{Role: b.Role, K: n}}, Attr: Attrs{Fn: MapAdd}})
+		return v
+	}
+	x, z := mv("x", in, o.In[0]), mv("z", gate, o.In[0])
+	cv := val("conv", inner)
+	d.op(Op{Kind: OpStateConv, In: []ValueID{x}, Out: []ValueID{cv}, Weight: []Binding{conv}, Attr: Attrs{Taps: conv.K}})
+	xs := val("conv_silu", inner)
+	d.op(Op{Kind: OpAct, In: []ValueID{add("conv_b", cv, cb, inner)}, Out: []ValueID{xs}, Attr: Attrs{Act: ActSiLU}})
+	low := norm("dt_low_n", mv("dt_low", xdt, xs), nd, xdt.Rows)
+	bs := norm("b_n", mv("b", xb, xs), nb, kd)
+	cs := norm("c_n", mv("c", xc, xs), nc, kd)
+	dt := val("dt", inner)
+	d.op(Op{Kind: OpMap, In: []ValueID{add("dt_b", mv("dt_raw", dtp, low), dtb, inner)}, Out: []ValueID{dt}, Attr: Attrs{Fn: MapSoftplus}})
+	y := val("y", inner)
+	d.op(Op{Kind: OpStateScan, In: []ValueID{xs, bs, cs, dt}, Out: []ValueID{y}, Weight: []Binding{{Role: skip.Role, K: inner}, a},
+		Attr: Attrs{NHead: inner, NKVHead: 1, HeadDim: kd}})
+	gated := val("gated", inner)
+	d.op(Op{Kind: OpActMul, In: []ValueID{z, y}, Out: []ValueID{gated}, Attr: Attrs{Act: ActSiLU}})
+	d.op(Op{Kind: OpMatVec, In: []ValueID{gated}, Out: []ValueID{o.Out[0]}, Weight: []Binding{out}})
 	return true
 }

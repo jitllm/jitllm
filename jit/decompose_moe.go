@@ -435,25 +435,32 @@ func decomposeStateConv(o graph.Op, c *Context) ([]Prim, error) {
 	}, nil
 }
 
-// decomposeStateScan is Mamba-2's selective state update over the part's
-// state ("rec.ssm", value heads by x's width by HeadDim): the advanced
-// state into a scratch, its rows against C, the output with D times x,
-// and the state copied back, so no kernel reads the state while writing it.
+// decomposeStateScan is a selective state update over the part's state
+// ("rec.ssm", value heads by x's head width by HeadDim): the advanced state
+// into a scratch, its rows against C, the output with D times x, and the
+// state copied back, so no kernel reads the state while writing it.
 func decomposeStateScan(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
-	if len(o.In) != 3 || len(o.Out) != 1 || len(o.Weight) != 1 || c.Step.Rows != 1 || a.NHead < 1 || a.NKVHead < 1 ||
-		a.HeadDim < 1 || a.NHead%a.NKVHead != 0 {
+	// Four inputs take the decay from A (Weight[1]), five from In[4].
+	vec := len(o.In) == 4
+	nw := 1
+	if vec {
+		nw = 2
+	}
+	if len(o.In) != 4 && len(o.In) != 5 || len(o.Out) != 1 || len(o.Weight) != nw ||
+		c.Step.Rows != 1 || a.NHead < 1 || a.NKVHead < 1 || a.HeadDim < 1 || a.NHead%a.NKVHead != 0 {
 		return nil, fmt.Errorf("a state scan of %d operands over %d rows", len(o.In), c.Step.Rows)
 	}
 	U, F := ir.U32, ir.F32
 	vh, kh, kd := a.NHead, a.NKVHead, a.HeadDim
 	inner := c.width(o.Out[0])
-	if inner%vh != 0 || c.width(o.In[0]) != inner+2*kh*kd || c.width(o.In[1]) != vh || c.width(o.In[2]) != vh {
+	if inner%vh != 0 || c.width(o.In[0]) != inner || c.width(o.In[1]) != kh*kd || c.width(o.In[2]) != kh*kd ||
+		c.width(o.In[3]) != vh || !vec && c.width(o.In[4]) != vh {
 		return nil, fmt.Errorf("a state scan of %d value heads over %d", vh, c.width(o.In[0]))
 	}
 	vd, rep := inner/vh, vh/kh
 	N := vh * vd * kd
-	xs, dt, decay := c.value(o.In[0]), c.value(o.In[1]), c.value(o.In[2])
+	xs, bs, cs, dt := c.value(o.In[0]), c.value(o.In[1]), c.value(o.In[2]), c.value(o.In[3])
 	state := Operand{Kind: OperandTable, Name: "rec.ssm", PerPart: true}
 	name := c.value(o.Out[0]).Name
 	next := Operand{Kind: OperandScratch, Name: name + ".state"}
@@ -472,10 +479,32 @@ func decomposeStateScan(o graph.Op, c *Context) ([]Prim, error) {
 	// S*decay + (x*dt)*B.
 	var n exprs
 	v, j, i := n.coord(0), n.coord(1), n.coord(2)
-	xv := n.load(0, n.op(OpAdd, U, n.u(uint32(2*kh*kd)), n.op(OpAdd, U, n.op(OpMul, U, v, n.u(uint32(vd))), j)))
-	b := n.load(0, n.op(OpAdd, U, n.u(uint32(kh*kd)), n.op(OpAdd, U, n.op(OpMul, U, key(&n, v), n.u(uint32(kd))), i)))
+	ins := []Operand{xs, bs, dt, state}
+	facts := Facts{Extents: map[int]int{0: inner, 1: kh * kd, 2: vh, 3: N}}
+	xv := n.load(0, n.op(OpAdd, U, n.op(OpMul, U, v, n.u(uint32(vd))), j))
+	b := n.load(1, n.op(OpAdd, U, n.op(OpMul, U, key(&n, v), n.u(uint32(kd))), i))
+	dv := n.load(2, v)
 	sv := n.load(3, flat(&n, v, j, i))
-	n.op(OpAdd, F, n.op(OpMul, F, sv, n.load(2, v)), n.op(OpMul, F, n.op(OpMul, F, xv, n.load(1, v)), b))
+	var decay int
+	if vec {
+		wa, err := c.weight(o.Weight[1])
+		if err != nil {
+			return nil, err
+		}
+		if !jlm.Verbatim(wa.Format) || o.Weight[1].Rows != vh || o.Weight[1].K != kd {
+			return nil, fmt.Errorf("a state scan's decay of %s over %d by %d", wa.Format, o.Weight[1].Rows, o.Weight[1].K)
+		}
+		av, err := weightElement(&n, wa, vh, kd, &ins, &facts, v, i)
+		if err != nil {
+			return nil, err
+		}
+		decay = n.un(OpExp, F, n.op(OpMul, F, dv, av))
+	} else {
+		ins = append(ins, c.value(o.In[4]))
+		facts.Extents[4] = vh
+		decay = n.load(4, v)
+	}
+	n.op(OpAdd, F, n.op(OpMul, F, sv, decay), n.op(OpMul, F, n.op(OpMul, F, xv, dv), b))
 
 	// The advanced state's rows against C.
 	var r exprs
@@ -486,20 +515,18 @@ func decomposeStateScan(o graph.Op, c *Context) ([]Prim, error) {
 	// The output: the rows' sum and D times x.
 	var y exprs
 	ye := y.coord(1)
-	yx := y.load(0, y.op(OpAdd, U, y.u(uint32(2*kh*kd)), ye))
-	y.op(OpAdd, F, y.load(1, ye), y.op(OpMul, F, y.load(2, y.op(OpDiv, U, ye, y.u(uint32(vd)))), yx))
+	y.op(OpAdd, F, y.load(1, ye), y.op(OpMul, F, y.load(2, y.op(OpDiv, U, ye, y.u(uint32(vd)))), y.load(0, ye)))
 
 	var k exprs
 	kx := flat(&k, k.coord(0), k.coord(1), k.coord(2))
 	kv := k.load(0, kx)
 	D := Operand{Kind: OperandVector, Role: o.Weight[0].Role, Name: o.Weight[0].Role.String()}
 	return []Prim{
-		{Kind: PrimMap, Shape: sh, In: []Operand{xs, dt, decay, state}, Out: next, Expr: n.e,
-			Facts: Facts{Extents: map[int]int{0: c.width(o.In[0]), 1: vh, 2: vh, 3: N}}},
-		{Kind: PrimReduce, Shape: sh, In: []Operand{next, xs}, Out: acc, Combine: OpAdd, Expr: r.e,
-			Facts: Facts{Extents: map[int]int{0: N, 1: c.width(o.In[0])}}},
+		{Kind: PrimMap, Shape: sh, In: ins, Out: next, Expr: n.e, Facts: facts},
+		{Kind: PrimReduce, Shape: sh, In: []Operand{next, cs}, Out: acc, Combine: OpAdd, Expr: r.e,
+			Facts: Facts{Extents: map[int]int{0: N, 1: kh * kd}}},
 		{Kind: PrimMap, Shape: []int{1, inner}, In: []Operand{xs, acc, D}, Out: c.value(o.Out[0]), Expr: y.e,
-			Facts: Facts{Extents: map[int]int{0: c.width(o.In[0]), 1: inner, 2: vh}}},
+			Facts: Facts{Extents: map[int]int{0: inner, 1: inner, 2: vh}}},
 		{Kind: PrimMap, Shape: sh, In: []Operand{next}, Expr: k.e, Facts: Facts{Extents: map[int]int{0: N}},
 			Stores: []PrimStore{{Out: state, Index: kx, Value: kv, Extent: N}}},
 	}, nil

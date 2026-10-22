@@ -175,3 +175,43 @@ func decomposeScale(o graph.Op, c *Context) ([]Prim, error) {
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]),
 		{Kind: OperandVector, Role: o.Weight[0].Role, Name: o.Weight[0].Role.String()}}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }
+
+// decomposeSlice copies Width elements from Offset: of each row, of each
+// head of HeadDim where it is set, or of the bound vector where the op has
+// no input.
+func decomposeSlice(o graph.Op, c *Context) ([]Prim, error) {
+	a := o.Attr
+	if len(o.Out) != 1 || a.Width < 1 || len(o.In) > 1 || (len(o.In) == 0) != (len(o.Weight) == 1) {
+		return nil, fmt.Errorf("a slice of %d operands, %d weights", len(o.In), len(o.Weight))
+	}
+	U := ir.U32
+	sh := c.rows(o.Out[0])
+	var x exprs
+	r, e := x.coord(0), x.coord(1)
+	if len(o.In) == 0 {
+		if sh[1] != a.Width {
+			return nil, fmt.Errorf("a slice of %d from a table into %d", a.Width, sh[1])
+		}
+		x.load(0, x.op(OpAdd, U, x.u(uint32(a.Offset)), e))
+		return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{{Kind: OperandVector, Role: o.Weight[0].Role, Name: o.Weight[0].Role.String()}},
+			Out: c.value(o.Out[0]), Expr: x.e}}, nil
+	}
+	in := c.rows(o.In[0])
+	col := x.op(OpAdd, U, x.u(uint32(a.Offset)), e)
+	want := a.Width
+	if a.HeadDim > 0 {
+		if in[1]%a.HeadDim != 0 || a.Offset+a.Width > a.HeadDim {
+			return nil, fmt.Errorf("a slice of %d from %d in heads of %d", a.Width, a.Offset, a.HeadDim)
+		}
+		want = in[1] / a.HeadDim * a.Width
+		h := x.op(OpDiv, U, e, x.u(uint32(a.Width)))
+		col = x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(a.HeadDim))), x.op(OpAdd, U, x.u(uint32(a.Offset)), x.op(OpRem, U, e, x.u(uint32(a.Width)))))
+	} else if a.Offset+a.Width > in[1] {
+		return nil, fmt.Errorf("a slice of %d from %d of %d", a.Width, a.Offset, in[1])
+	}
+	if sh[1] != want {
+		return nil, fmt.Errorf("a slice of %d into %d", want, sh[1])
+	}
+	x.at(0, in, r, col)
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
+}

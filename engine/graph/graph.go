@@ -247,13 +247,15 @@ const (
 	// its oldest row and takes the row. A primitive with a state of its own:
 	// a recurrent mixer's convolution (DecomposeRecurrent).
 	OpStateConv
-	// OpStateScan is Mamba-2's selective state update over In[0], the
-	// convolved row C | B | x (NKVHead heads of HeadDim for C and for B,
-	// then NHead value heads of x), with In[1] each value head's dt and
-	// In[2] its decay: value head v, paired with key head v/rep (v%NKVHead
-	// where KeyTiled), turns its state S (x's width by HeadDim) into
-	// S*decay + (x*dt) B and puts out S C + D x, D its Weight[0] entry. A
-	// primitive with a state of its own (DecomposeRecurrent).
+	// OpStateScan is a selective state update: In[0] is x, NHead value
+	// heads; In[1] and In[2] are B and C, NKVHead key heads of HeadDim;
+	// In[3] each value head's dt. Value head v, paired with key head v/rep
+	// (v%NKVHead where KeyTiled), turns its state S (x's head width by
+	// HeadDim) into S*decay + (x*dt) B and puts out S C + D x, D its
+	// Weight[0] entry. The decay is In[4], one a value head (Mamba-2's), or
+	// where there is no In[4] exp(dt A) for each of the state's columns, A
+	// Weight[1] with a row a value head (Mamba-1's). A primitive with a
+	// state of its own (DecomposeRecurrent).
 	OpStateScan
 	numOps
 )
