@@ -66,6 +66,12 @@ type Registry struct {
 	Lowerings      map[DeviceKind]Lowering
 }
 
+// PoisonWorkgroupMemory has the GPU lowering poison every workgroup array
+// at kernel start: a gate's choice, never a shipping one.
+func (r *Registry) PoisonWorkgroupMemory() {
+	r.Lowerings[DeviceGPU] = gpuLowering{Poison: true}
+}
+
 // Default is the registry whose profiles are set to main's choices.
 func Default() *Registry {
 	return &Registry{

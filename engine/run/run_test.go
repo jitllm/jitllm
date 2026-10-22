@@ -25,7 +25,8 @@ var (
 // first split count and one past it: a prompt, then the host's choices, each
 // position's logits held to the engine's host decode in the coherence band
 // and its token to the host's, no kernel writing past its storage, and a
-// warm step allocating nothing.
+// warm step allocating nothing. Workgroup memory is poisoned, so a kernel
+// reading a slot no thread wrote fails every run.
 func TestRunnerDecodesAsTheHost(t *testing.T) {
 	path := testmodels.Path(*runModel + ".jlm")
 	f, err := jlm.Open(path)
@@ -68,7 +69,9 @@ func TestRunnerDecodesAsTheHost(t *testing.T) {
 	for _, dev := range devs {
 		for _, capacity := range []int{16, 300} {
 			t.Run(fmt.Sprintf("%s/%d", dev.API(), capacity), func(t *testing.T) {
-				r, err := run.New(f, dev, gpu, capacity, rope, run.WithGuard(4096))
+				reg := jit.Default()
+				reg.PoisonWorkgroupMemory()
+				r, err := run.New(f, dev, gpu, capacity, rope, run.WithGuard(4096), run.WithComposer(reg))
 				if err != nil {
 					t.Fatal(err)
 				}

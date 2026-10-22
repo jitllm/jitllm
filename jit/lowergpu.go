@@ -7,14 +7,19 @@ import (
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
-// gpuLowering lowers a kernel to the GPU IR.
-type gpuLowering struct{}
+// gpuLowering lowers a kernel to the GPU IR. Poison writes NaN into every
+// workgroup array before the kernel's first use of it (RULE 13): workgroup
+// memory holds whatever earlier work left there, so a read of a slot no
+// thread wrote is reproducible only poisoned.
+type gpuLowering struct {
+	Poison bool
+}
 
-func (gpuLowering) Lower(n *Kernel, d Device) (Lowered, error) {
+func (g gpuLowering) Lower(n *Kernel, d Device) (Lowered, error) {
 	if n.Group <= 0 {
 		return Lowered{}, fmt.Errorf("no workgroup: the profile binds none")
 	}
-	e := &lowerer{n: n, b: ir.New(entryName(n.Name), [3]int{n.Group, 1, 1})}
+	e := &lowerer{n: n, b: ir.New(entryName(n.Name), [3]int{n.Group, 1, 1}), poison: g.Poison}
 	k, err := e.run()
 	return Lowered{GPU: k}, err
 }
@@ -38,6 +43,7 @@ func entryName(name string) string {
 type lowerer struct {
 	n      *Kernel
 	b      *ir.Builder
+	poison bool
 	params []ir.Value
 	val    []ir.Value
 	home   []int
@@ -69,6 +75,9 @@ func (e *lowerer) run() (*ir.Kernel, error) {
 		if nd.Op == OpGroupSum || nd.Op == OpGroupMax || nd.Op == OpExchange {
 			e.shared[i] = b.Shared(fmt.Sprintf("r%d", i), ir.F32, n.Group)
 		}
+	}
+	if e.poison {
+		e.poisonShared()
 	}
 	var flat ir.Value
 	if n.Work && len(n.Space) > 1 {
@@ -340,6 +349,34 @@ func (e *lowerer) groupReduce(i int, x ir.Value, max bool) ir.Value {
 	b.Store(sh, b.Shr(ir.U32, tid, b.Const(ir.U32, 5)), butterfly(x), 0)
 	b.Barrier()
 	return butterfly(b.Load(ir.F32, sh, b.And(ir.U32, tid, b.Const(ir.U32, ir.SubgroupLanes-1)), 0))
+}
+
+// poisonShared has every thread write NaN to its slots of each workgroup
+// array, then waits for the workgroup.
+func (e *lowerer) poisonShared() {
+	b, n := e.b, e.n
+	fill := func(sh ir.Value, elem ir.Type, size int) {
+		for j := 0; j < size; j += n.Group {
+			at := b.Min(ir.U32, b.Add(ir.U32, b.TID(), b.Const(ir.U32, int64(j))), b.Const(ir.U32, int64(size-1)))
+			b.Store(sh, at, b.Bitcast(elem, b.Const(ir.U32, 0x7fc00000)), 0)
+		}
+	}
+	poisoned := false
+	for i, bf := range n.Bufs {
+		if bf.Kind == BufShared {
+			fill(e.params[i], bf.Elem, bf.Size)
+			poisoned = true
+		}
+	}
+	for i := range n.Nodes {
+		if sh, ok := e.shared[i]; ok {
+			fill(sh, ir.F32, n.Group)
+			poisoned = true
+		}
+	}
+	if poisoned {
+		b.Barrier()
+	}
 }
 
 // exchange is a thread's value through its workgroup slot, combined over
