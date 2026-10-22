@@ -42,13 +42,15 @@ func (p RunLengths) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			continue
 		}
 		if mp.Axis >= 0 {
-			C := m.Space[mp.Axis]
-			m.Space[mp.Axis] = (C + p.Grain - 1) / p.Grain * p.Grain
+			// What the kernel writes at its own place is padded with its
+			// space, asked before the space grows past the buffers' shapes.
 			for _, s := range m.Stores {
-				if !s.Barrier && !s.Run && m.storesOwn(s) {
+				if m.storesOwn(s) {
 					padded[m.Bufs[s.Buf].Operand] = mp.Axis
 				}
 			}
+			C := m.Space[mp.Axis]
+			m.Space[mp.Axis] = (C + p.Grain - 1) / p.Grain * p.Grain
 		} else {
 			C := m.Loops[mp.Loop].Trip
 			m.Loops[mp.Loop].Trip = (C + p.Grain - 1) / p.Grain * p.Grain
