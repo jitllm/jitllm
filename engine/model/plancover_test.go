@@ -13,6 +13,7 @@ import (
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/run"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit"
 )
 
@@ -65,7 +66,7 @@ func TestPlanCoversEveryModel(t *testing.T) {
 			continue
 		}
 		cover := planCover
-		if m.IsEncoder() {
+		if m.IsEncoder() || m.Cfg.Pooling != jlm.PoolNone {
 			cover = encodeCover
 		}
 		row, bad, why := cover(t, m, devs, gpu)
@@ -265,13 +266,17 @@ func nmse(got, want []float32) float64 {
 	return num / den
 }
 
-// encodeCover is an encoder's row: its composed embedding of a sentence,
-// one step of every row, held to the host's Embedder per device.
+// encodeCover is an encoder's row: its composed embedding of a text, one
+// step of every row, held to the host's Embedder per device.
 func encodeCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (row string, bad bool, why string) {
-	ids := m.EmbedIDs("The capital of France is Paris, and the capital of Germany is Berlin.")
+	// Long enough to pass EmbeddingGemma's window, 256 either side.
+	ids := m.EmbedIDs(strings.Repeat("The capital of France is Paris, and the capital of Germany is Berlin. ", 20))
 	e, err := m.NewEmbedder()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if n := e.MaxTokens(); n > 0 && len(ids) > n {
+		ids = ids[:n]
 	}
 	want, err := e.Embed(ids)
 	if err != nil {
@@ -288,7 +293,7 @@ func encodeCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := s.Encode(ids)
+		got, err := s.Encode(ids, m.IsEncoder() || m.Cfg.NonCausal)
 		if err != nil {
 			t.Fatal(err)
 		}

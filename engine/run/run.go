@@ -436,11 +436,12 @@ func (s *Session) Rows(toks []int32, pos int) ([]float32, int32, error) {
 	return s.logits[(n-1)*r.outW : n*r.outW], int32(binary.LittleEndian.Uint32(s.tb[4*(n-1):])), nil
 }
 
-// Encode runs an encoder's sequence toks as one step, every row reading
-// every other, and returns its head's output: the embedding, a slice the
-// next step overwrites.
-func (s *Session) Encode(toks []int32) ([]float32, error) {
-	s.bidir = true
+// Encode runs a sequence toks as one step and returns its head's output:
+// the embedding, a slice the next step overwrites. Where bidir every row
+// reads every other (an encoder's, a non-causal decoder's); else each reads
+// those before it.
+func (s *Session) Encode(toks []int32, bidir bool) ([]float32, error) {
+	s.bidir = bidir
 	defer func() { s.bidir = false }()
 	if _, _, err := s.Rows(toks, 0); err != nil {
 		return nil, err

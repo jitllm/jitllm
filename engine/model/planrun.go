@@ -46,6 +46,15 @@ func (c composing) HeadGraph() *graph.Graph {
 		p := graph.Pooled{NEmbd: c.m.Cfg.NEmbd, Pooling: uint8(c.m.Cfg.Pooling)}
 		return p.Build()
 	}
+	// A decoder that embeds pools its normed rows, through its dense heads
+	// where it has them (embedstate.go).
+	if cfg := c.m.Cfg; cfg.Pooling != jlm.PoolNone {
+		p := graph.Pooled{NEmbd: cfg.NEmbd, Pooling: uint8(cfg.Pooling), OutNorm: true, Eps: cfg.RMSEps}
+		if e := c.m.dense1.e; e != nil {
+			p.Dense = c.m.dense1.rows
+		}
+		return p.Build()
+	}
 	return c.m.HeadGraph()
 }
 

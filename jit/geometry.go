@@ -34,7 +34,9 @@ func (w Workgroups) geometry(h Heads, lanes int) workGeom {
 	gqa := max(1, h.Query/max(1, h.Key))
 	words := w.Shared / 4
 	g.group = gqa
-	for g.group > 1 && (gqa%g.group != 0 || g.group*(g.warps*h.Dim+2*lanes*g.warps) > words || g.group*g.ds > w.GroupDims) {
+	// Each head of the group holds its warps' partial values in a plane of
+	// workgroup memory, and Bind's per-trip sums a second one beside it.
+	for g.group > 1 && (gqa%g.group != 0 || g.group*(2*g.warps*h.Dim+2*lanes*g.warps) > words || g.group*g.ds > w.GroupDims) {
 		g.group--
 	}
 	T := lanes * g.warps

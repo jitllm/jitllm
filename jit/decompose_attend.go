@@ -217,7 +217,10 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 
 // history is how a primitive reads the paged history of a row: the rows'
 // descriptors its operand 1 and the page table its operand 2, row r its
-// coordinate 0, the attended positions those a's window keeps.
+// coordinate 0, the attended positions those a's window keeps -- the
+// Window ending at the row's end, or for a bidirectional op the symmetric
+// window of Window/2 either side of the row's own position (EmbeddingGemma's
+// sliding layers).
 type history struct {
 	a        graph.Attrs
 	pageSize int
@@ -237,6 +240,10 @@ func (hs history) start(x *exprs) int {
 	if a.Window == 0 {
 		return first
 	}
+	if a.Bidir {
+		half := x.u(uint32(a.Window / 2))
+		return x.op(OpMax, U, first, x.op(OpSub, U, x.op(OpMax, U, hs.row(x, rowWrite), half), half))
+	}
 	W := x.u(uint32(a.Window))
 	end := hs.row(x, rowEnd)
 	var from int
@@ -255,11 +262,22 @@ func (hs history) span(axis int) *Range {
 		if w == rowStart {
 			hs.start(&x)
 		} else {
-			hs.row(&x, w)
+			hs.end(&x)
 		}
 		return x.e
 	}
 	return &Range{Axis: axis, First: bound(rowStart), End: bound(rowEnd)}
+}
+
+// end is one past the last position the row attends: its end, or within
+// a symmetric window the window's.
+func (hs history) end(x *exprs) int {
+	end := hs.row(x, rowEnd)
+	if a := hs.a; a.Window > 0 && a.Bidir {
+		U := ir.U32
+		return x.op(OpMin, U, end, x.op(OpAdd, U, hs.row(x, rowWrite), x.u(uint32(a.Window/2+1))))
+	}
+	return end
 }
 
 // position is the key's position and the row's first.

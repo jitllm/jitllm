@@ -81,17 +81,31 @@ func (h *Head) Build() *Graph {
 
 // Pooled is an encoder's head: the step's live rows pooled into one row
 // (Pooling, a jlm.Pooling), then scaled to unit L2 norm as
-// sentence-transformers does, a 1e-12 floor on the norm.
+// sentence-transformers does, a 1e-12 floor on the norm. A decoder that
+// embeds (EmbeddingGemma) RMS-norms each row against RoleOutputNorm first
+// where OutNorm, and takes the pooled row through its two dense heads
+// (RoleEmbdDense1, Dense rows, then RoleEmbdDense2) where Dense is set.
 type Pooled struct {
 	NEmbd   int
 	Pooling uint8
+	OutNorm bool
+	Eps     float64
+	Dense   int
 }
 
 func (p *Pooled) Build() *Graph {
 	g := &Graph{Block: -1}
 	x := g.value("x", p.NEmbd)
 	g.In = []ValueID{x}
+	if p.OutNorm {
+		x = g.row("out_normed", p.NEmbd, Op{Kind: OpNorm, In: []ValueID{x}, Weight: []Binding{{Role: jlm.RoleOutputNorm, K: p.NEmbd, Rows: 1}},
+			Attr: Attrs{Eps: p.Eps}})
+	}
 	pooled := g.row("pooled", p.NEmbd, Op{Kind: OpPool, In: []ValueID{x}, Attr: Attrs{Pooling: p.Pooling}})
+	if p.Dense > 0 {
+		mid := g.row("dense1", p.Dense, Op{Kind: OpMatVec, In: []ValueID{pooled}, Weight: []Binding{{Role: jlm.RoleEmbdDense1, K: p.NEmbd, Rows: p.Dense}}})
+		pooled = g.row("dense2", p.NEmbd, Op{Kind: OpMatVec, In: []ValueID{mid}, Weight: []Binding{{Role: jlm.RoleEmbdDense2, K: p.Dense, Rows: p.NEmbd}}})
+	}
 	// An RMS norm of no weight is v/sqrt(mean(v^2)); 1/sqrt(n) turns the
 	// mean into the sum, the floor squared and taken per element.
 	n := float64(p.NEmbd)
