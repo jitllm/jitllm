@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
@@ -263,4 +264,40 @@ func decomposeConcat(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, fmt.Errorf("a concatenation of %d into %d", off, osh[1])
 	}
 	return prims, nil
+}
+
+// decomposePool is the step's live rows pooled into every row: the first
+// row's, the last live one's, or their mean -- their sum in order over the
+// live count. The live count is the positions table's first word.
+func decomposePool(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 1 || len(o.Out) != 1 || c.width(o.In[0]) != c.width(o.Out[0]) {
+		return nil, fmt.Errorf("a pool of %d operands", len(o.In))
+	}
+	U, F := ir.U32, ir.F32
+	sh := c.rows(o.Out[0])
+	R, W := sh[0], sh[1]
+	in := []Operand{c.value(o.In[0]), tablePos}
+	facts := Facts{Extents: map[int]int{1: R + 1}}
+	live := func(x *exprs) int { return x.op(OpMax, U, x.load(1, x.u(0)), x.u(1)) }
+	if p := jlm.Pooling(o.Attr.Pooling); p == jlm.PoolCLS || p == jlm.PoolLast {
+		var x exprs
+		row := x.u(0)
+		if p == jlm.PoolLast {
+			row = x.op(OpSub, U, live(&x), x.u(1))
+		}
+		x.at(0, sh, row, x.coord(1))
+		return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}, nil
+	}
+	sum := Operand{Kind: OperandScratch, Name: c.value(o.Out[0]).Name + ".sum", Temp: true}
+	var s exprs
+	u := s.coord(2)
+	v := s.at(0, sh, s.op(OpMin, U, u, s.u(uint32(R-1))), s.coord(1))
+	s.sel(F, s.op(OpLess, ir.Pred, u, live(&s)), v, s.f(0))
+	var m exprs
+	n := m.un(OpCvtF32, F, m.un(OpBitcast, ir.I32, live(&m)))
+	m.op(OpDiv, F, m.at(0, []int{R, W}, m.coord(0), m.coord(1)), n)
+	return []Prim{
+		{Kind: PrimReduce, Shape: []int{R, W, R}, In: in, Out: sum, Combine: OpAdd, Expr: s.e, Facts: facts},
+		{Kind: PrimMap, Shape: sh, In: []Operand{sum, tablePos}, Out: c.value(o.Out[0]), Expr: m.e, Facts: facts},
+	}, nil
 }

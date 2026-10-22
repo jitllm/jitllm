@@ -27,11 +27,41 @@ type composing struct {
 	m *Model
 }
 
-func (c composing) BlockGraph(li int) *graph.Graph { return c.m.BlockGraph(li) }
+// BlockGraph is block li's graph: an encoder's own (encgraph.go) where the
+// model is one, nil where its family states none.
+func (c composing) BlockGraph(li int) *graph.Graph {
+	if e := c.m.enc; e != nil {
+		if li < len(e.graphs) && e.graphs[li] != nil {
+			return e.graphs[li].g
+		}
+		return nil
+	}
+	return c.m.BlockGraph(li)
+}
 
-func (c composing) HeadGraph() *graph.Graph { return c.m.HeadGraph() }
+// HeadGraph is the vocabulary's head, or an encoder's pooling into its
+// embedding.
+func (c composing) HeadGraph() *graph.Graph {
+	if c.m.enc != nil {
+		p := graph.Pooled{NEmbd: c.m.Cfg.NEmbd, Pooling: uint8(c.m.Cfg.Pooling)}
+		return p.Build()
+	}
+	return c.m.HeadGraph()
+}
 
-func (c composing) EmbedGraph() *graph.Graph { return c.m.EmbedGraph() }
+// EmbedGraph is the input rows: an encoder's are the token's row, the
+// token type's first, the position's where it has a table, LayerNormed.
+func (c composing) EmbedGraph() *graph.Graph {
+	if e := c.m.enc; e != nil {
+		cfg := c.m.Cfg
+		g := graph.Embed{NEmbd: cfg.NEmbd, NVocab: cfg.NVocab, TypeRow: e.typ0 != nil, Norm: true, Eps: cfg.RMSEps}
+		if e.rope == nil {
+			g.Positions = e.pos.rows
+		}
+		return g.Build()
+	}
+	return c.m.EmbedGraph()
+}
 
 func (c composing) ActWindow() int { return c.m.ActWindow() }
 
@@ -45,8 +75,12 @@ func (c composing) Rotaries() []graph.Rotary {
 	return out
 }
 
-// Ropes is the engine's rotaries in Rotaries' order, each table's planes.
+// Ropes is the engine's rotaries in Rotaries' order, each table's planes:
+// an encoder's own where it turns q and k.
 func (c composing) Ropes() []nn.Rope {
+	if e := c.m.enc; e != nil && e.rope != nil {
+		return []nn.Rope{*e.rope}
+	}
 	out := []nn.Rope{c.m.rope}
 	if c.m.ropeSWA != nil {
 		out = append(out, *c.m.ropeSWA)

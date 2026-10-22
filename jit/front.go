@@ -121,6 +121,10 @@ func Front(f Model) ([]Part, error) {
 	}
 	var parts []Part
 	for i, r := range rots {
+		// A model that turns nothing (BERT's) has no table to fill.
+		if r.NRot == 0 {
+			continue
+		}
 		rt := graph.RopeTable{NRot: r.NRot, Name: tableName(i)}
 		parts = append(parts, Part{Kind: PartTable, Block: -1, Graph: rt.Build()})
 	}
@@ -157,8 +161,14 @@ func Front(f Model) ([]Part, error) {
 	if err := unread(f, jlm.DenseBlock, bound...); err != nil {
 		return nil, fmt.Errorf("jit: head: %w", err)
 	}
+	parts = append(parts, Part{Kind: PartHead, Block: -1, Graph: h})
+	// A head that is not the vocabulary's logits (an encoder's embedding)
+	// is the model's output: nothing is sampled from it.
+	if len(h.Out) == 0 || h.Values[h.Out[0]].Width != int(c.NVocab) {
+		return parts, nil
+	}
 	sm := graph.Sample{NVocab: int(c.NVocab)}
-	return append(parts, Part{Kind: PartHead, Block: -1, Graph: h}, Part{Kind: PartSample, Block: -1, Graph: sm.Build()}), nil
+	return append(parts, Part{Kind: PartSample, Block: -1, Graph: sm.Build()}), nil
 }
 
 // formats is each of a part's weights' storage format.

@@ -12,9 +12,14 @@ import "github.com/jitllm/jitllm/format/jlm"
 // residual attention) or, where AltUp, its projections matched to its
 // magnitude (Gemma 3n's). PLE, where set, adds each layer's input as an
 // output after the row (Out[1+layer]), from the row before its streams.
+//
+// An encoder's (BERT's) adds the token-type table's first row before the
+// position's where TypeRow, and LayerNorms the sum where Norm
+// (RoleTokenEmbdNorm and its bias).
 type Embed struct {
 	NEmbd, NVocab int
 	Scale         float64
+	TypeRow, Norm bool
 	Positions     int
 	Streams       int
 	AltUp         bool
@@ -36,12 +41,26 @@ func (e *Embed) Build() *Graph {
 		g.op(Op{Kind: OpMap, In: []ValueID{x}, Out: []ValueID{y}, Attr: Attrs{Fn: MapMul, Const: e.Scale}})
 		x = y
 	}
+	if e.TypeRow {
+		t := g.value("type_row", e.NEmbd)
+		g.op(Op{Kind: OpSlice, Out: []ValueID{t}, Weight: []Binding{{Role: jlm.RoleTokenTypes, K: e.NEmbd}},
+			Attr: Attrs{Offset: 0, Width: e.NEmbd}})
+		y := g.value("x_type", e.NEmbd)
+		g.op(Op{Kind: OpAdd, In: []ValueID{x, t}, Out: []ValueID{y}})
+		x = y
+	}
 	if e.Positions > 0 {
 		p := g.value("pos_embd", e.NEmbd)
 		g.op(Op{Kind: OpEmbed, Out: []ValueID{p}, Weight: []Binding{{Role: jlm.RolePosEmbd, K: e.NEmbd, Rows: e.Positions}},
 			Attr: Attrs{Positional: true}})
 		y := g.value("x_pos", e.NEmbd)
 		g.op(Op{Kind: OpAdd, In: []ValueID{x, p}, Out: []ValueID{y}})
+		x = y
+	}
+	if e.Norm {
+		y := g.value("x_normed", e.NEmbd)
+		g.op(Op{Kind: OpLayerNorm, In: []ValueID{x}, Out: []ValueID{y}, Weight: []Binding{{Role: jlm.RoleTokenEmbdNorm, K: e.NEmbd},
+			{Role: jlm.RoleTokenEmbdNormBias, K: e.NEmbd}}, Attr: Attrs{Eps: e.Eps}})
 		x = y
 	}
 	var ple []ValueID

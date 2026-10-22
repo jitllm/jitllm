@@ -1,6 +1,10 @@
 package graph
 
-import "github.com/jitllm/jitllm/format/jlm"
+import (
+	"math"
+
+	"github.com/jitllm/jitllm/format/jlm"
+)
 
 // Head is a model's head: the final norm and the vocabulary's projection,
 // Out the projection's role (the embedding's where the model ties them),
@@ -72,5 +76,26 @@ func (h *Head) Build() *Graph {
 		l = m("scaled", MapMul, 1/s, l)
 	}
 	g.Out = []ValueID{l}
+	return g
+}
+
+// Pooled is an encoder's head: the step's live rows pooled into one row
+// (Pooling, a jlm.Pooling), then scaled to unit L2 norm as
+// sentence-transformers does, a 1e-12 floor on the norm.
+type Pooled struct {
+	NEmbd   int
+	Pooling uint8
+}
+
+func (p *Pooled) Build() *Graph {
+	g := &Graph{Block: -1}
+	x := g.value("x", p.NEmbd)
+	g.In = []ValueID{x}
+	pooled := g.row("pooled", p.NEmbd, Op{Kind: OpPool, In: []ValueID{x}, Attr: Attrs{Pooling: p.Pooling}})
+	// An RMS norm of no weight is v/sqrt(mean(v^2)); 1/sqrt(n) turns the
+	// mean into the sum, the floor squared and taken per element.
+	n := float64(p.NEmbd)
+	normed := g.row("normed", p.NEmbd, Op{Kind: OpHeadNorm, In: []ValueID{pooled}, Attr: Attrs{Eps: 1e-24 / n, HeadDim: p.NEmbd}})
+	g.Out = []ValueID{g.mapc("embedding", p.NEmbd, MapMul, float64(float32(1/math.Sqrt(n))), normed)}
 	return g
 }

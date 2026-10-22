@@ -55,9 +55,12 @@ type Runner struct {
 	// word block, the rotary planes; nil for a session's own.
 	shared []backend.Buf
 	// sizes is each storage's bytes at the capacity.
-	sizes          []int64
-	logits, token  int
-	nvocab, nembd  int
+	sizes         []int64
+	logits, token int
+	nvocab, nembd int
+	// outW is the head's output width: the vocabulary's, or an encoder's
+	// embedding's.
+	outW           int
 	input, kvPages int
 }
 
@@ -166,7 +169,16 @@ func New(f Source, dev backend.Device, gpu jit.Device, keys int, opts ...Option)
 			r.runs = append(r.runs, l)
 		}
 	}
-	if r.logits < 0 || r.token < 0 {
+	// An encoder's plan samples nothing: its head's output, one row of
+	// its width, is the model's.
+	sampled := false
+	for _, pp := range plan.Parts {
+		if pp.Part.Kind == jit.PartHead && len(pp.Part.Graph.Out) > 0 {
+			r.outW = pp.Part.Graph.Values[pp.Part.Graph.Out[0]].Width
+		}
+		sampled = sampled || pp.Part.Kind == jit.PartSample
+	}
+	if r.logits < 0 || sampled && r.token < 0 {
 		r.Close()
 		return nil, fmt.Errorf("run: the plan writes no logits or no token")
 	}
@@ -324,6 +336,7 @@ type Session struct {
 	in              []int32
 	one             [1]int32
 	at              int
+	bidir           bool
 	logits          []float32
 	raw, tb, input  []byte
 	err             error
@@ -353,7 +366,7 @@ func (r *Runner) NewSession() (*Session, error) {
 	R := r.step.Rows
 	s := &Session{r: r, bufs: make([]backend.Buf, len(st)), own: make([]bool, len(st)),
 		rows: make([]byte, 4*jit.RowWords*R), pos: make([]byte, 4*(1+R)), toks: make([]byte, 4*R), tb: make([]byte, 4*R),
-		logits: make([]float32, R*r.nvocab), input: make([]byte, 4*R*r.nembd)}
+		logits: make([]float32, R*r.outW), input: make([]byte, 4*R*r.nembd)}
 	s.raw = unsafe.Slice((*byte)(unsafe.Pointer(&s.logits[0])), 4*len(s.logits))
 	for i := range st {
 		if r.shared[i] != nil {
@@ -420,7 +433,19 @@ func (s *Session) Rows(toks []int32, pos int) ([]float32, int32, error) {
 	if s.err != nil {
 		return nil, 0, s.err
 	}
-	return s.logits[(n-1)*r.nvocab : n*r.nvocab], int32(binary.LittleEndian.Uint32(s.tb[4*(n-1):])), nil
+	return s.logits[(n-1)*r.outW : n*r.outW], int32(binary.LittleEndian.Uint32(s.tb[4*(n-1):])), nil
+}
+
+// Encode runs an encoder's sequence toks as one step, every row reading
+// every other, and returns its head's output: the embedding, a slice the
+// next step overwrites.
+func (s *Session) Encode(toks []int32) ([]float32, error) {
+	s.bidir = true
+	defer func() { s.bidir = false }()
+	if _, _, err := s.Rows(toks, 0); err != nil {
+		return nil, err
+	}
+	return s.logits[:s.r.outW], nil
 }
 
 // launch is a step on the device: the tables and the input written, every
@@ -447,7 +472,7 @@ func (s *Session) launch(se backend.Session) {
 	if s.err != nil {
 		return
 	}
-	if s.err = se.Read(s.bufs[r.logits], s.raw); s.err != nil {
+	if s.err = se.Read(s.bufs[r.logits], s.raw); s.err != nil || r.token < 0 {
 		return
 	}
 	s.err = se.Read(s.bufs[r.token], s.tb)
@@ -477,7 +502,11 @@ func (s *Session) tables(se backend.Session) error {
 		w := s.rows[4*jit.RowWords*i:]
 		put(w[4*jit.RowTab:], 0)
 		put(w[4*jit.RowStart:], 0)
-		put(w[4*jit.RowEnd:], uint32(s.at+j+1))
+		end := s.at + j + 1
+		if s.bidir {
+			end = s.at + n
+		}
+		put(w[4*jit.RowEnd:], uint32(end))
 		put(w[4*jit.RowWrite:], uint32(s.at+j))
 		put(s.pos[4*(1+i):], uint32(s.at+j))
 		put(s.toks[4*i:], uint32(s.in[j]))

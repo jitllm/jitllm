@@ -285,10 +285,14 @@ const (
 	// there are at most TopK. Out[0] is the selection. A primitive with a
 	// history of its own (DecomposeRecurrent).
 	OpBlockSelect
+	// OpPool is the step's live rows of In[0] pooled into one row, Out[0]
+	// it in every row: their mean, the first's or the last's (Pooling, a
+	// jlm.Pooling). A primitive: an encoder's sequence into its embedding.
+	OpPool
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan", "state_delta", "index_select", "block_select"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan", "state_delta", "index_select", "block_select", "pool"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -509,6 +513,8 @@ type Attrs struct {
 	KeyTiled bool
 	// Positional makes OpEmbed index its table by the row's position.
 	Positional bool
+	// Pooling is OpPool's: a jlm.Pooling.
+	Pooling uint8
 	// Bound is OpClamp's.
 	Bound float64
 	// Offset and Width are OpSlice's.

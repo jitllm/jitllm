@@ -64,13 +64,11 @@ func TestPlanCoversEveryModel(t *testing.T) {
 			mainRefuses = append(mainRefuses, src.name)
 			continue
 		}
-		// An encoder has no decoding State: plan mode decodes.
+		cover := planCover
 		if m.IsEncoder() {
-			m.Close()
-			t.Logf("%-40s an encoder: plan mode composes decoders", src.name)
-			continue
+			cover = encodeCover
 		}
-		row, bad, why := planCover(t, m, devs, gpu)
+		row, bad, why := cover(t, m, devs, gpu)
 		m.Close()
 		switch {
 		case why != "":
@@ -265,4 +263,44 @@ func nmse(got, want []float32) float64 {
 		den += float64(want[i]) * float64(want[i])
 	}
 	return num / den
+}
+
+// encodeCover is an encoder's row: its composed embedding of a sentence,
+// one step of every row, held to the host's Embedder per device.
+func encodeCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (row string, bad bool, why string) {
+	ids := m.EmbedIDs("The capital of France is Paris, and the capital of Germany is Berlin.")
+	e, err := m.NewEmbedder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := e.Embed(ids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = append([]float32(nil), want...)
+	e.Close()
+	for _, dev := range devs {
+		r, err := run.New(m.Composing(), dev, gpu, len(ids), run.WithRows(len(ids)))
+		if err != nil {
+			return "", false, strings.SplitN(err.Error(), "\n", 2)[0]
+		}
+		s, err := r.NewSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.Encode(ids)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := nmse(got, want)
+		row += fmt.Sprintf("%s: embedding of %d tokens %.2g; ", dev.API(), len(ids), e)
+		// A Q8_0 encoder's int8 activations on a device that takes them
+		// reach 1e-4 (MiniLM-L6-v2 on CUDA), about 0.99995 in cosine.
+		if !(e <= 1e-3) {
+			bad = true
+		}
+		s.Close()
+		r.Close()
+	}
+	return row, bad, ""
 }
