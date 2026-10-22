@@ -855,7 +855,7 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 
 	// One kernel per quantization type the model actually contains, emitted
 	// eagerly — the shapes are all known from the header before the first token.
-	s.jit = m.newJIT()
+	s.jit = m.takeJIT()
 	// One pair of attention kernels per model: the head dimension and the KV
 	// stride are the same for every layer, and the kernels bake the layout's
 	// stride. The cache width is decided here, after the kernels exist: a
@@ -1071,7 +1071,7 @@ func (s *State) Close() error {
 		return s.jit.Close()
 	}
 	s.keepSpare()
-	return s.jit.Close()
+	return s.m.keepJIT(s.jit)
 }
 
 // SetDevice attaches an optional accelerator to this State's matvecs. Nil, the

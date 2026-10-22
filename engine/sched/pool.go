@@ -790,3 +790,10 @@ func (p *Pool) ResetRegions() {
 	p.nParallel.Store(0)
 	p.nSerial.Store(0)
 }
+
+// ResetAffine zeroes the count of regions dispatched node-affine.
+func (p *Pool) ResetAffine() {
+	if p != nil {
+		p.nAffine.Store(0)
+	}
+}

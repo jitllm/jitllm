@@ -11,3 +11,4 @@ type Device interface {
 }
 
 func (f *JIT) SetDevice(Device) {}
+func (f *JIT) Device() Device    { return nil }

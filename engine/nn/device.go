@@ -32,6 +32,14 @@ type Device interface {
 	MatVec(out []float32, t quant.Type, w []byte, x []float32, nrows, k int) bool
 }
 
+// Device is the accelerator SetDevice attached, nil for none.
+func (f *JIT) Device() Device {
+	if f == nil {
+		return nil
+	}
+	return f.device
+}
+
 // SetDevice attaches an accelerator. Passing nil detaches it.
 func (f *JIT) SetDevice(d Device) {
 	if f == nil {

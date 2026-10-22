@@ -1188,6 +1188,31 @@ func (s *State) keepSpare() {
 	s.bx, s.bcs, s.bcsSWA = nil, nil, nil
 }
 
+// takeJIT is the model's recycled JIT, or a new one.
+func (m *Model) takeJIT() *nn.JIT {
+	m.spareMu.Lock()
+	j := m.spareJIT
+	m.spareJIT = nil
+	m.spareMu.Unlock()
+	if j == nil {
+		return m.newJIT()
+	}
+	j.Recycle()
+	return j
+}
+
+// keepJIT gives a closing State's JIT to the model, or closes it when the
+// model already holds one.
+func (m *Model) keepJIT(j *nn.JIT) error {
+	m.spareMu.Lock()
+	if m.spareJIT == nil {
+		m.spareJIT = j
+		j = nil
+	}
+	m.spareMu.Unlock()
+	return j.Close()
+}
+
 // allOnDevice reports whether every block of this State runs on a device.
 func (s *State) allOnDevice() bool {
 	for li := s.lo; li < s.hi; li++ {

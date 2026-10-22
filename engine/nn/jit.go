@@ -277,6 +277,8 @@ type JIT struct {
 	// look is the fused runs' idle work (lookahead.go); lookOff turns it off.
 	look    lookahead
 	lookOff bool
+	// ropeGo0 is the rotary dose the options chose, for Recycle.
+	ropeGo0 bool
 	// narrow is the decode pool and wide, when non-nil, the prefill pool;
 	// pool is whichever of them the current phase runs on. See BeginPrefill.
 	narrow, wide *sched.Pool
@@ -345,6 +347,7 @@ func NewJIT(maxK, maxRows int, types []quant.Type, opts ...Option) *JIT {
 	tier := cpu.HostTier()
 	f := &JIT{
 		cfg:         cfg,
+		ropeGo0:     cfg.RopeGo,
 		tier:        tier,
 		em:          cpu.EmittersWith(tier, cpu.EmitOpts{Prefetch: cfg.Prefetch, A64Prefetch: cfg.A64Prefetch, Probes: cfg.Probes}),
 		actWindow:   window,
@@ -730,6 +733,27 @@ func (f *JIT) Types() []quant.Type {
 		}
 	}
 	return out
+}
+
+// Recycle readies a JIT a closed session used for the next one. Its kernels,
+// scratch and tuners stay; what a session sets on it -- its device, the
+// lookahead, the pool's spin, the rotary dose -- and its counters go back to
+// what NewJIT gave.
+func (f *JIT) Recycle() {
+	if f == nil {
+		return
+	}
+	f.SetDevice(nil)
+	f.SetAhead(nil)
+	f.lookOff = false
+	f.look.lines.Store(0)
+	f.cfg.RopeGo = f.ropeGo0
+	f.mixAffine = 0
+	if f.pool != nil {
+		f.pool.SetSpinning(true)
+		f.pool.ResetRegions()
+		f.pool.ResetAffine()
+	}
 }
 
 // Close releases the executable mappings.

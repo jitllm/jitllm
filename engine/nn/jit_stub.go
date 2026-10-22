@@ -191,6 +191,7 @@ type AheadSet struct {
 }
 
 func (f *JIT) SetAhead(s *AheadSet) {}
+func (f *JIT) Recycle()             {}
 func (f *JIT) SetLookahead(on bool) {}
 func (f *JIT) AheadLines() int64    { return 0 }
 

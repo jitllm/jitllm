@@ -1239,6 +1239,10 @@ type Model struct {
 	// prompt (promptBuf).
 	spareMu sync.Mutex
 	spare   *promptBuf
+	// spareJIT is a closed State's JIT, recycled for the next State: one
+	// built per State re-emitted its kernels and regrew its scratch, most
+	// of what a request allocated.
+	spareJIT *nn.JIT
 	// step is the host step scratch across sessions (stepBuf).
 	step *stepBuf
 	// kvPool is the host KV pages closed States gave back (kvPagePool).
@@ -2116,6 +2120,11 @@ func (m *Model) Close() error {
 	for _, o := range owners {
 		o.ReleaseModel(m.id)
 	}
+	m.spareMu.Lock()
+	j := m.spareJIT
+	m.spareJIT = nil
+	m.spareMu.Unlock()
+	j.Close()
 	err := m.container.Close()
 	m.devMu.Lock()
 	m.forgetters, m.owners = nil, nil
