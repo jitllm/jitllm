@@ -3,7 +3,8 @@ package jit
 import "github.com/jitllm/jitllm/jit/ir"
 
 // Affine simplifies the index arithmetic of a kernel's global loads, exact
-// in the u32 ring: equal nodes merged, constants carried outward --
+// in the u32 ring: equal nodes merged, the arithmetic of constants done,
+// constants carried outward --
 // (a+c1)*c2 as a*c2 + c1*c2, (a+c1)+b as (a+b)+c1 -- and folded, so the
 // unrolled steps of a walk share one address and differ by a constant, and
 // a load of a+c reads a at c past it, the constant the access's immediate
@@ -18,6 +19,7 @@ func (p Affine) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		changed := false
 		for {
 			step := m.cse()
+			step = m.foldConstants() || step
 			step = m.constantsOutward() || step
 			if !step {
 				break
@@ -36,6 +38,58 @@ func (p Affine) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	})
 }
 
+// foldConstants does the u32 arithmetic of two constants.
+func (k *Kernel) foldConstants() bool {
+	changed := false
+	for i, nd := range k.Nodes {
+		if nd.Type != ir.U32 {
+			continue
+		}
+		switch nd.Op {
+		case OpAdd, OpSub, OpMul, OpDiv, OpRem, OpShr, OpShl, OpAnd, OpXor, OpMin, OpMax:
+		default:
+			continue
+		}
+		a, b := k.Nodes[nd.A], k.Nodes[nd.B]
+		if a.Op != OpConst || b.Op != OpConst || a.Type != ir.U32 || b.Type != ir.U32 {
+			continue
+		}
+		x, y := uint32(a.Imm), uint32(b.Imm)
+		var v uint32
+		switch nd.Op {
+		case OpAdd:
+			v = x + y
+		case OpSub:
+			v = x - y
+		case OpMul:
+			v = x * y
+		case OpDiv, OpRem:
+			if y == 0 {
+				continue
+			}
+			v = x / y
+			if nd.Op == OpRem {
+				v = x % y
+			}
+		case OpShr:
+			v = x >> (y & 31)
+		case OpShl:
+			v = x << (y & 31)
+		case OpAnd:
+			v = x & y
+		case OpXor:
+			v = x ^ y
+		case OpMin:
+			v = min(x, y)
+		case OpMax:
+			v = max(x, y)
+		}
+		k.Nodes[i] = Node{Op: OpConst, Type: ir.U32, Imm: int64(v)}
+		changed = true
+	}
+	return changed
+}
+
 // addConst is node i as x + c for a constant c, when it is one.
 func (k *Kernel) addConst(i int) (x int, c uint32, ok bool) {
 	nd := k.Nodes[i]
@@ -52,7 +106,7 @@ func (k *Kernel) globalIndex() map[int]bool {
 	var walk func(i int)
 	walk = func(i int) {
 		nd := k.Nodes[i]
-		if out[i] || nd.Type != ir.U32 || nd.Op != OpAdd && nd.Op != OpMul {
+		if out[i] || nd.Type != ir.U32 || nd.Op != OpAdd && nd.Op != OpMul && nd.Op != OpDiv && nd.Op != OpRem {
 			return
 		}
 		out[i] = true
@@ -91,6 +145,32 @@ func (k *Kernel) constantsOutward() bool {
 		a, b := nd.A, nd.B
 		ca, aok := cst(a)
 		cb, bok := cst(b)
+		if (nd.Op == OpDiv || nd.Op == OpRem) && bok && cb > 0 {
+			// (y+c) % m is c % m, (y+c)/m is y/m + c/m, y a multiple of m.
+			y, c, ok := k.addConst(a)
+			if !ok {
+				y, c = a, 0
+			}
+			if !k.divisibleBy(y, cb) {
+				continue
+			}
+			if nd.Op == OpRem {
+				set(i, Node{Op: OpConst, Type: U, Imm: int64(c % cb)})
+				continue
+			}
+			if q, ok := k.dividedBy(y, cb); ok {
+				if c/cb == 0 {
+					k.redirectAll(i, q)
+					changed = true
+				} else {
+					set(i, Node{Op: OpAdd, Type: U, A: q, B: k.u32(int(c / cb))})
+				}
+			}
+			continue
+		}
+		if nd.Op != OpAdd && nd.Op != OpMul {
+			continue
+		}
 		switch {
 		case aok && bok && nd.Op == OpAdd:
 			set(i, Node{Op: OpConst, Type: U, Imm: int64(ca + cb)})
@@ -123,6 +203,45 @@ func (k *Kernel) constantsOutward() bool {
 		}
 	}
 	return changed
+}
+
+// divisibleBy reports whether node i is a multiple of m by its structure.
+func (k *Kernel) divisibleBy(i int, m uint32) bool {
+	nd := k.Nodes[i]
+	switch {
+	case nd.Type != ir.U32:
+		return false
+	case nd.Op == OpConst:
+		return uint32(nd.Imm)%m == 0
+	case nd.Op == OpMul:
+		return k.divisibleBy(nd.A, m) || k.divisibleBy(nd.B, m)
+	case nd.Op == OpAdd:
+		return k.divisibleBy(nd.A, m) && k.divisibleBy(nd.B, m)
+	}
+	return false
+}
+
+// dividedBy is node i, a multiple of m, divided by m where its structure
+// states it: a product with a constant multiple of m, or a sum of such.
+func (k *Kernel) dividedBy(i int, m uint32) (int, bool) {
+	nd := k.Nodes[i]
+	switch {
+	case nd.Op == OpConst:
+		return k.u32(int(uint32(nd.Imm) / m)), true
+	case nd.Op == OpMul && k.Nodes[nd.B].Op == OpConst && uint32(k.Nodes[nd.B].Imm)%m == 0:
+		return k.bin(OpMul, ir.U32, nd.A, k.u32(int(uint32(k.Nodes[nd.B].Imm)/m))), true
+	case nd.Op == OpAdd:
+		x, ok := k.dividedBy(nd.A, m)
+		if !ok {
+			return 0, false
+		}
+		y, ok := k.dividedBy(nd.B, m)
+		if !ok {
+			return 0, false
+		}
+		return k.bin(OpAdd, ir.U32, x, y), true
+	}
+	return 0, false
 }
 
 // immediates moves a load's constant term into its offset: a flat index
