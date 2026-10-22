@@ -11,11 +11,12 @@ import "github.com/jitllm/jitllm/jit/ir"
 // trips. Where Group is set and the elements allow, a row's segments are
 // instead one workgroup's (main's GroupSplit): 32 rows by the segments,
 // 128 to 1024 threads, each segment's sum through workgroup memory and the
-// row written whole, with no partial planes and no combine.
+// row written whole, with no partial planes and no combine. Where Matrix is
+// set it cuts only a sum over a weight matrix -- a projection's.
 type Split struct {
 	Slots, Max, Block int
 	Parts             int
-	Group             bool
+	Group, Matrix     bool
 	Kinds             []PrimKind
 }
 
@@ -27,7 +28,7 @@ func (s Split) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 
 func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 	c, f, term, st, ok := splittable(n)
-	if !ok || n.Work || !covers(s.Kinds, n.Kind) {
+	if !ok || n.Work || !covers(s.Kinds, n.Kind) || s.Matrix && !readsMatrix(n) {
 		return nil, false, nil
 	}
 	T, E := n.Loops[c].Trip, n.Elements()
