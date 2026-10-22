@@ -36,7 +36,7 @@ func Estimate(r Former, f jit.Model, s jit.Step, p Placement) (Cost, error) {
 		}
 		ks, err := r.Kernels(f, run[i:j], i, s)
 		errs = append(errs, err)
-		m := costModel{d: devs[i], s: s, alias: partAliases(parts)}
+		m := costModel{d: devs[i], s: s, keys: jit.NewStorageKeys(parts)}
 		for _, k := range ks {
 			total = total.add(m.cost(k))
 		}
@@ -111,7 +111,7 @@ func EstimateCodes(r Composer, f jit.Model, s jit.Step, p Placement, steady bool
 		d := devs[i]
 		ks, err := r.Kernels(f, run[i:j], i, s)
 		errs = append(errs, err)
-		m := costModel{d: d, s: s, alias: partAliases(parts)}
+		m := costModel{d: d, s: s, keys: jit.NewStorageKeys(parts)}
 		for _, k := range ks {
 			if steady {
 				m.cost(k)
@@ -137,7 +137,7 @@ func EstimateCodes(r Composer, f jit.Model, s jit.Step, p Placement, steady bool
 				if buf.Shape == nil {
 					n = 0
 				}
-				cc.Binds = append(cc.Binds, BindCost{Storage: m.key(buf.Operand), Reach: max(m.reach[b], n, int64(4*len(buf.Words))), Words: buf.Words})
+				cc.Binds = append(cc.Binds, BindCost{Storage: m.keys.Key(buf.Operand), Reach: max(m.reach[b], n, int64(4*len(buf.Words))), Words: buf.Words})
 			}
 			for _, a := range k.Args {
 				switch {
@@ -157,7 +157,7 @@ func EstimateCodes(r Composer, f jit.Model, s jit.Step, p Placement, steady bool
 					}
 				default:
 					cc.Reach[a.Field] = max(cc.Reach[a.Field], m.reach[a.Buf])
-					cc.Storage[a.Field] = m.key(k.Bufs[a.Buf].Operand)
+					cc.Storage[a.Field] = m.keys.Key(k.Bufs[a.Buf].Operand)
 				}
 			}
 			out = append(out, cc)
@@ -202,7 +202,7 @@ func Suggest(r Former, f jit.Model, s jit.Step, devices []Device) (Placement, Co
 				own[i][j] = Cost{Seconds: 1e30}
 				continue
 			}
-			m := costModel{d: d, s: s, alias: partAliases(parts)}
+			m := costModel{d: d, s: s, keys: jit.NewStorageKeys(parts)}
 			for _, k := range ks {
 				own[i][j] = own[i][j].add(m.cost(k))
 			}

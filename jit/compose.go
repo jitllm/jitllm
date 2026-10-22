@@ -65,6 +65,12 @@ type CallArg struct {
 type Binding struct {
 	Operand Operand
 	Writes  bool
+	// Bytes is what the kernel reaches of it, 0 where its buffer states no
+	// extent; Storage is its storage in the plan's Storages.
+	Bytes   int64
+	Storage int
+	// Words is a block of constants' contents, the caller's to supply.
+	Words []uint32
 }
 
 // PartPlan is one part of the model on its device: its kernels in launch
@@ -88,6 +94,9 @@ type Transfer struct {
 type Plan struct {
 	Parts     []PartPlan
 	Transfers []Transfer
+	// Storages is every buffer the step binds: what each holds and where
+	// its contents come from.
+	Storages []Storage
 }
 
 // Compose forms the model in f at step s on placement p. A part it cannot
@@ -122,6 +131,7 @@ func (r *Registry) Compose(f Model, s Step, p Placement) (*Plan, error) {
 		}
 		i = j
 	}
+	errs = append(errs, plan.storages(parts))
 	return plan, errors.Join(errs...)
 }
 
@@ -208,7 +218,7 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 		}
 		for _, b := range k.Bufs {
 			if b.Kind != BufShared {
-				c.Binds = append(c.Binds, Binding{Operand: b.Operand, Writes: b.Kind == BufOut})
+				c.Binds = append(c.Binds, Binding{Operand: b.Operand, Writes: b.Kind == BufOut, Bytes: b.bytes(), Words: b.Words})
 			}
 		}
 		codes = append(codes, PartCode{Code: c, Part: k.Of})

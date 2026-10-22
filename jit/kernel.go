@@ -165,6 +165,9 @@ type Buf struct {
 	Size    int
 	// Shape, where set, is the extents loads' and stores' coordinates index.
 	Shape []int
+	// Extent, where Shape is not set, is how many elements a flat index
+	// reaches.
+	Extent int
 	// Plane is workgroup memory a staging may fold into its plane.
 	Plane bool
 	// Base, where a binding to the call's arguments set it, is 1 + the node

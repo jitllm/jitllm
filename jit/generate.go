@@ -61,6 +61,9 @@ func generate(p Prim) (*Kernel, error) {
 		}
 		for _, s := range p.Stores {
 			b := k.buf(Buf{Kind: BufOut, Elem: elemOf(s.Out.Elem), Operand: s.Out, Shape: append([]int(nil), s.Ext...)})
+			if s.Ax == nil {
+				k.Bufs[b].Extent = s.Extent
+			}
 			st := Store{Buf: b, Val: vals[s.Value], At: -1}
 			if s.Ax != nil {
 				for _, a := range s.Ax {
@@ -101,7 +104,7 @@ func generate(p Prim) (*Kernel, error) {
 		k.Stores = append(k.Stores, Store{Buf: b, Val: carried, At: -1, Ax: append([]int(nil), coords...)})
 	}
 	if len(p.Index) > 0 {
-		b := k.buf(Buf{Kind: BufOut, Elem: elemOf(p.Out.Elem), Operand: p.Out})
+		b := k.buf(Buf{Kind: BufOut, Elem: elemOf(p.Out.Elem), Operand: p.Out, Extent: p.Facts.OutExtent})
 		k.Stores = append(k.Stores, Store{Buf: b, Ix: g.value(p.Index, coords), Val: acc, At: -1})
 		return k, nil
 	}
@@ -177,6 +180,9 @@ func (g *generator) buffer(m map[Operand]int, in int, ext []int) int {
 		return b
 	}
 	b := g.k.buf(Buf{Kind: BufIn, Elem: storageElem(o), Operand: o, Shape: append([]int(nil), ext...), Words: g.p.Facts.Words[in]})
+	if ext == nil {
+		g.k.Bufs[b].Extent = g.p.Facts.Extents[in]
+	}
 	m[o] = b
 	return b
 }

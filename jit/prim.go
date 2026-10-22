@@ -85,6 +85,8 @@ type PrimStore struct {
 	Out          Operand
 	Ax, Ext      []int
 	Index, Value int
+	// Extent is how many elements Index reaches, where Ax is not set.
+	Extent int
 }
 
 // Prim is one primitive over the coordinates of Shape:
@@ -134,6 +136,11 @@ type Facts struct {
 	Rows []Expr
 	// Words are the contents of inputs whose words are fixed, by input.
 	Words map[int][]uint32
+	// Extents are how many elements the flat loads of an input reach, by
+	// input, where no shaped load states it; OutExtent is how many a
+	// reduction stored at Index reaches.
+	Extents   map[int]int
+	OutExtent int
 	// Quarter is a reduction the expression makes of an angle to quarter
 	// turns.
 	Quarter *Quarter

@@ -29,7 +29,7 @@ func estimateRun(t *testing.T, d Device, s jit.Step) ([]*jit.Kernel, []Cost) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := costModel{d: d, s: s, alias: partAliases(parts)}
+	m := costModel{d: d, s: s, keys: jit.NewStorageKeys(parts)}
 	var cs []Cost
 	for _, k := range ks {
 		cs = append(cs, m.cost(k))

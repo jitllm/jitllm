@@ -43,7 +43,7 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	rng := func(axis int) Facts {
 		return Facts{Range: &Range{Axis: axis, First: bound(rowStart), End: bound(rowEnd)},
-			Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D}}
+			Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D}, Extents: map[int]int{1: R * rowWords, 2: c.pages()}}
 	}
 	// position is the key's position and the row's first.
 	position := func(x *exprs) (pos, first int) {
@@ -104,9 +104,11 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 
 	sum := rng(2)
 	sum.Least = 1
+	scored := rng(2)
+	scored.Extents[0] = R * H * D
 	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], tableRows, tablePages}, ops[1:]...) }
 	return []Prim{
-		{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(c.value(o.In[0]), tableKeys), Out: dots, Expr: dx.e, Facts: rng(2)},
+		{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(c.value(o.In[0]), tableKeys), Out: dots, Expr: dx.e, Facts: scored},
 		{Kind: PrimMap, Shape: keys, In: tables(dots), Out: scores, Expr: sx.e, Facts: rng(2)},
 		{Kind: PrimReduce, Shape: keys, In: tables(scores), Out: maxes, Combine: OpMax, Init: int64(math.Float32bits(minus)),
 			Expr: mx.e, Facts: rng(2)},

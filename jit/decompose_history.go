@@ -84,6 +84,7 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 		pid, off := slot(&x)
 		val := x.at(0, sh, x.coord(0), d)
 		prims = append(prims, Prim{Kind: PrimMap, Shape: sh, In: []Operand{c.value(v), tableRows, tablePages}, Expr: x.e,
+			Facts:  Facts{Extents: map[int]int{1: c.Step.Rows * rowWords, 2: c.pages()}},
 			Stores: []PrimStore{{Out: pool, Ax: []int{pid, off, d}, Ext: []int{c.pages(), page, w}, Value: val}}})
 	}
 	return prims, nil

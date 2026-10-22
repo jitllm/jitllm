@@ -117,14 +117,15 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	var fi exprs
 	fi.op(OpAdd, U, flat(&fi, fi.coord(0), fi.coord(1), ns), fi.u(uint32(R*nw)))
 
+	ext := R * (nw + ns)
 	return []Prim{
 		{Kind: PrimReduce, Shape: []int{R, nw, q.Window}, In: []Operand{x}, Out: amax, Combine: OpMax, Expr: a.e},
-		{Kind: PrimMap, Shape: win, In: []Operand{amax}, Expr: d.e, Stores: []PrimStore{{Out: scales, Index: dix, Value: ds}}},
-		{Kind: PrimMap, Shape: win, In: []Operand{amax, scales}, Out: inv, Expr: r.e},
+		{Kind: PrimMap, Shape: win, In: []Operand{amax}, Expr: d.e, Stores: []PrimStore{{Out: scales, Index: dix, Value: ds, Extent: ext}}},
+		{Kind: PrimMap, Shape: win, In: []Operand{amax, scales}, Out: inv, Expr: r.e, Facts: Facts{Extents: map[int]int{1: ext}}},
 		{Kind: PrimMap, Shape: sh, In: []Operand{x, inv}, Out: codes, Expr: k.e},
 		{Kind: PrimMap, Shape: []int{R, nwd}, In: []Operand{codes}, Out: words, Expr: p.e},
 		{Kind: PrimReduce, Shape: []int{R, nwd, q.Word}, In: []Operand{codes}, Out: wsum, Combine: OpAdd, Type: I, Expr: s.e},
 		{Kind: PrimReduce, Shape: []int{R, ns, per}, In: []Operand{wsum}, Out: scales, Combine: OpAdd, Start: StartFirst,
-			Expr: f.e, Index: fi.e},
+			Expr: f.e, Index: fi.e, Facts: Facts{OutExtent: ext}},
 	}
 }

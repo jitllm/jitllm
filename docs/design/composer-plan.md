@@ -220,13 +220,20 @@ Each step ends with its gate green and the board measured.
       container stores; a table the engine builds (the KV pages and the page
       table, the row descriptors, the rotary position and planes, the quant
       offsets); the step's own scratch; or a value one kernel writes and
-      another reads -- beside the launches in order.
+      another reads -- beside the launches in order. `Plan.Storages` is it:
+      each storage's key, `Source` and bytes, every binding naming its
+      storage. A buffer reached through a flat index states its extent where
+      it is made (`Buf.Extent`, `Facts.Extents`, `PrimStore.Extent`);
+      `TestEveryStorageStatesWhatItsKernelsReach` holds every stated size on
+      the GPU to the estimate's reach. The engine sizes what it owns: the
+      history's pools and page table and the model's rotary planes. The host
+      is not held yet: the estimate's reach over a host kernel's flat index
+      is a loose bound.
    2. *The execution gate*: synth-ernie45's composed decode steps on CUDA from
       that plan alone, every source real, from an empty history to a few
       positions, held to the engine's host logits in the coherence band
       (RULE 11c) and to its tokens. `TestComposedDecodeRunsOnTheGPU` runs it
-      on every backend a host opens, the sources derived in the gate from each
-      storage's kind and name (`stepRun.source`): that function is the
-      contract 7.1 moves into the composer's output.
+      on every backend a host opens from `Plan.Storages` alone, each buffer a
+      poisoned guard past its stated size.
    3. *The engine runs the plan* for decode on one device in place of the
       tier, for that model; then prompt rows, then the other devices.

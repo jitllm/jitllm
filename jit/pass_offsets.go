@@ -34,7 +34,7 @@ func (p Offsets) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			if m == nil {
 				m = k.clone()
 			}
-			t := m.buf(Buf{Kind: BufIn, Elem: ir.U32, Operand: p.Table})
+			t := m.buf(Buf{Kind: BufIn, Elem: ir.U32, Operand: p.Table, Extent: 1})
 			off := m.load(t, m.u32(0))
 			ix := s.Ix
 			if s.Ax != nil {

@@ -118,8 +118,8 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	live.load(0, live.u(0))
 	out := Operand{Kind: OperandTable, Name: tableAngles.Name}
 	return []Prim{{Kind: PrimMap, Shape: []int{R, P}, In: []Operand{tablePos, tablePlanes, tableRopeKon}, Expr: x.e,
-		Stores: []PrimStore{{Out: out, Index: at, Value: cvs}, {Out: out, Index: at1, Value: svs}},
-		Facts: Facts{Rows: live.e, Words: map[int][]uint32{2: ropeConsts()},
+		Stores: []PrimStore{{Out: out, Index: at, Value: cvs, Extent: 2 * R * P}, {Out: out, Index: at1, Value: svs, Extent: 2 * R * P}},
+		Facts: Facts{Rows: live.e, Words: map[int][]uint32{2: ropeConsts()}, Extents: map[int]int{0: 1 + R, 1: 8*stride + 1},
 			Quarter: &Quarter{Sum: s, Rest: co, Turn: n, Part: f, Bound: 1 << (ropeDigitBits + 4)}}}}, nil
 }
 

@@ -4,7 +4,6 @@ import (
 	"math"
 	"slices"
 
-	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/ir"
 )
@@ -138,41 +137,8 @@ type costModel struct {
 	// recent is the operands last touched, most recent last, with their
 	// bytes: a reuse distance stack.
 	recent []touch
-	// alias is, by part and value, the part and value whose storage a
-	// part's boundary value is: a block reads the residual the one before
-	// it wrote.
-	alias map[[2]int][2]int
-}
-
-// partAliases is each part's boundary value's storage: the output of the
-// part before it, and that one's in turn.
-func partAliases(parts []jit.Part) map[[2]int][2]int {
-	out := map[[2]int][2]int{}
-	for i := 1; i < len(parts); i++ {
-		a, b := parts[i-1].Graph, parts[i].Graph
-		if len(a.Out) == 0 || len(b.In) == 0 {
-			continue
-		}
-		from := [2]int{i - 1, int(a.Out[0])}
-		if x, ok := out[from]; ok {
-			from = x
-		}
-		out[[2]int{i, int(b.In[0])}] = from
-	}
-	return out
-}
-
-// key is the storage operand o names: a graph value by its part and id
-// alone, a boundary value as the value it is the storage of.
-func (m *costModel) key(o jit.Operand) jit.Operand {
-	if o.Kind != jit.OperandValue {
-		return o
-	}
-	at := [2]int{o.Of, int(o.Value)}
-	if x, ok := m.alias[at]; ok {
-		at = x
-	}
-	return jit.Operand{Kind: jit.OperandValue, Of: at[0], Value: graph.ValueID(at[1])}
+	// keys is the storage each operand lands in.
+	keys jit.StorageKeys
 }
 
 // touch is an operand's bytes or, where code is set, a kernel's code.
@@ -676,7 +642,7 @@ func (m *costModel) cost(k *jit.Kernel) Cost {
 		var from [4]float64
 		from[m.fit(uniq)] = 1
 		if !u.write {
-			from = m.serve(touch{o: m.key(buf.Operand), bytes: uniq})
+			from = m.serve(touch{o: m.keys.Key(buf.Operand), bytes: uniq})
 			served[b] = from
 		}
 		for l, f := range from {
@@ -704,7 +670,7 @@ func (m *costModel) cost(k *jit.Kernel) Cost {
 			lines := min(u.loads, math.Ceil(float64(uniq)/float64(lineBytes(m.d.Kind))))
 			reads[b] = (lines*far + (u.loads-lines)*m.latency(0)) / u.loads
 		}
-		m.touch(m.key(buf.Operand), uniq)
+		m.touch(m.keys.Key(buf.Operand), uniq)
 	}
 	if over > 0 {
 		l := 0

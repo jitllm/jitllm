@@ -121,7 +121,7 @@ func (s SplitRange) split(ch []*Kernel, d Device) (int, []*Kernel, bool) {
 			ix := k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, rh, k.u32(S)), coords[3]),
 				k.u32(stride)), coords[2])
 			st.Ax, st.Ix = nil, ix
-			st.Buf = k.buf(Buf{Kind: BufOut, Elem: ir.F32, Operand: part})
+			st.Buf = k.buf(Buf{Kind: BufOut, Elem: ir.F32, Operand: part, Extent: h.Rows * h.Query * S * stride})
 		}
 		ns = append(ns, k)
 	}
@@ -284,7 +284,7 @@ func (s SplitRange) copies(h Heads, S, stride int, part, maxes, sums Operand) *K
 	heads := []int{h.Rows, h.Query, S}
 	mb := k.buf(Buf{Kind: BufIn, Elem: ir.F32, Operand: maxes, Shape: heads})
 	lb := k.buf(Buf{Kind: BufIn, Elem: ir.F32, Operand: sums, Shape: heads})
-	pb := k.buf(Buf{Kind: BufOut, Elem: ir.F32, Operand: part})
+	pb := k.buf(Buf{Kind: BufOut, Elem: ir.F32, Operand: part, Extent: h.Rows * h.Query * S * stride})
 	rh := k.bin(OpAdd, U, k.bin(OpMul, U, c[0], k.u32(h.Query)), c[1])
 	at := func(off int) int {
 		return k.bin(OpAdd, U, k.bin(OpAdd, U, k.bin(OpMul, U, k.bin(OpAdd, U, k.bin(OpMul, U, rh, k.u32(S)), c[2]), k.u32(stride)),
@@ -304,7 +304,7 @@ func (s SplitRange) merge(last *Kernel, h Heads, S, stride int, part, values, su
 	k := &Kernel{Name: "map", Kind: PrimMap, Space: []int{h.Rows * h.Query * h.Dim}, Heads: &h, Part: last.Part}
 	e := k.add(Node{Op: OpCoord, A: 0, Type: U})
 	rh, d := k.bin(OpDiv, U, e, k.u32(h.Dim)), k.bin(OpRem, U, e, k.u32(h.Dim))
-	pb := k.buf(Buf{Kind: BufIn, Elem: F, Operand: part})
+	pb := k.buf(Buf{Kind: BufIn, Elem: F, Operand: part, Extent: h.Rows * h.Query * S * stride})
 	at := func(p, off int) int {
 		return k.bin(OpAdd, U, k.bin(OpMul, U, k.bin(OpAdd, U, k.bin(OpMul, U, rh, k.u32(S)), k.u32(p)), k.u32(stride)), k.u32(off))
 	}
