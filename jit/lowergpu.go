@@ -348,7 +348,18 @@ func (e *lowerer) groupReduce(i int, x ir.Value, max bool) ir.Value {
 	sh, tid := e.shared[i], e.thread()
 	b.Store(sh, b.Shr(ir.U32, tid, b.Const(ir.U32, 5)), butterfly(x), 0)
 	b.Barrier()
-	return butterfly(b.Load(ir.F32, sh, b.And(ir.U32, tid, b.Const(ir.U32, ir.SubgroupLanes-1)), 0))
+	lane := b.And(ir.U32, tid, b.Const(ir.U32, ir.SubgroupLanes-1))
+	warps := (e.n.Group + ir.SubgroupLanes - 1) / ir.SubgroupLanes
+	if warps >= ir.SubgroupLanes {
+		return butterfly(b.Load(ir.F32, sh, lane, 0))
+	}
+	// Only the workgroup's warps wrote a slot: a lane past them reads the
+	// last one written (a maximum's identity) or adds nothing.
+	v := b.Load(ir.F32, sh, b.Min(ir.U32, lane, b.Const(ir.U32, int64(warps-1))), 0)
+	if !max {
+		v = b.Select(ir.F32, b.Lt(ir.U32, lane, b.Const(ir.U32, int64(warps))), v, b.Const(ir.F32, 0))
+	}
+	return butterfly(v)
 }
 
 // poisonShared has every thread write NaN to its slots of each workgroup

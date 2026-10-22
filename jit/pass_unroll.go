@@ -3,7 +3,8 @@ package jit
 import "github.com/jitllm/jitllm/jit/ir"
 
 // Unroll unrolls a workgroup's loops: a loop nested in a phase of at most
-// Full trips with one fold and no stores of its own, all of its trips; a
+// Full trips with one fold and no stores of its own, all of its trips --
+// never a loop over positions, whose trips the live span decides; a
 // loop over positions bound as Over, Factor trips a trip. Where Vectors is
 // set, a vector loop that carries sums alone and stores nothing, or that runs a
 // fixed count of at least Vectors trips, runs Vectors vectors a trip, the
@@ -56,7 +57,7 @@ func (p Unroll) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			l := m.Loops[c]
 			folds := m.foldsOf(c)
 			switch {
-			case p.Full > 0 && l.Parent >= 0 && l.Count == 0 && l.Trip > 0 && l.Trip <= p.Full && len(folds) > 0 && !m.storesAt(c) &&
+			case p.Full > 0 && l.Parent >= 0 && !l.Range && l.Count == 0 && l.Trip > 0 && l.Trip <= p.Full && len(folds) > 0 && !m.storesAt(c) &&
 				!m.hasInner(c) && len(m.itersOf(c)) > 0:
 				for _, f := range folds {
 					m.unrollFull(c, f)

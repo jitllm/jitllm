@@ -9,13 +9,15 @@ import (
 )
 
 // decomposeAttend is decode attention over the paged history: per row and
-// query head, each key's dot with the query, the scores masked outside what
-// the row attends, their maximum, the weights and their sum (at least one,
-// its largest term exp 0), the weighted values and the row they make
-// divided by the sum.
+// query head, each key's dot with the query, scaled and softcapped where the
+// op is, the scores masked outside what the row attends, their maximum, the
+// weights and their sum (at least one, its largest term exp 0), the weighted
+// values and the row they make divided by the sum. A windowed op attends
+// from the window's first position, the host's (engine/model/kvpage.go):
+// the Window positions ending at the query's, or the query's aligned chunk.
 func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
-	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 || a.Window != 0 || a.Softcap != 0 || a.TempScale != 0 ||
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 || a.Window < 0 || a.Softcap < 0 || a.TempScale != 0 ||
 		a.NHead <= 0 || a.NKVHead <= 0 || a.NHead%a.NKVHead != 0 || c.Step.Page <= 0 || c.Step.Keys <= 0 {
 		return nil, fmt.Errorf("an attention of %d heads over %d, window %d, softcap %v", a.NHead, a.NKVHead, a.Window, a.Softcap)
 	}
@@ -36,9 +38,30 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	row := func(x *exprs, w int) int {
 		return x.load(1, x.op(OpAdd, U, x.op(OpMul, U, x.coord(0), x.u(rowWords)), x.u(uint32(w))))
 	}
+	// start is the first position the row attends: its first, or past it
+	// the window's.
+	start := func(x *exprs) int {
+		first := row(x, rowStart)
+		if a.Window == 0 {
+			return first
+		}
+		W := x.u(uint32(a.Window))
+		end := row(x, rowEnd)
+		var from int
+		if a.Chunked {
+			from = x.op(OpMul, U, x.op(OpDiv, U, x.op(OpSub, U, x.op(OpMax, U, end, x.u(1)), x.u(1)), W), W)
+		} else {
+			from = x.op(OpSub, U, x.op(OpMax, U, end, W), W)
+		}
+		return x.op(OpMax, U, first, from)
+	}
 	bound := func(w int) []Expr {
 		var x exprs
-		row(&x, w)
+		if w == rowStart {
+			start(&x)
+		} else {
+			row(&x, w)
+		}
 		return x.e
 	}
 	rng := func(axis int) Facts {
@@ -47,7 +70,7 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	// position is the key's position and the row's first.
 	position := func(x *exprs) (pos, first int) {
-		return x.pos(), row(x, rowStart)
+		return x.pos(), start(x)
 	}
 	// held is a position kept inside what the row attends.
 	held := func(x *exprs, pos, first int) int {
@@ -73,7 +96,12 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	spos, sfirst := position(&sx)
 	valid := sx.op(OpLess, ir.Pred, sx.op(OpSub, U, spos, sfirst), sx.op(OpSub, U, sx.live(), sfirst))
 	dot := sx.at(0, keys, sx.coord(0), sx.coord(1), sx.coord(2))
-	sx.sel(F, valid, sx.op(OpMul, F, dot, sx.f(float32(a.Scale))), sx.f(minus))
+	score := sx.op(OpMul, F, dot, sx.f(float32(a.Scale)))
+	if c := float32(a.Softcap); c > 0 {
+		e := sx.un(OpExp, F, sx.op(OpMul, F, sx.f(2/c), score))
+		score = sx.op(OpMul, F, sx.f(c), sx.op(OpSub, F, sx.f(1), sx.op(OpDiv, F, sx.f(2), sx.op(OpAdd, F, e, sx.f(1)))))
+	}
+	sx.sel(F, valid, score, sx.f(minus))
 
 	var mx exprs
 	mx.at(0, keys, mx.coord(0), mx.coord(1), mx.coord(2))
