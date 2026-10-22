@@ -262,6 +262,9 @@ type Session struct {
 	raw, tb         []byte
 	err             error
 	launchAll       func(backend.Session)
+	// rec is the step's launches recorded once, on a device that records
+	// (backend.Recorder), and replayed each step.
+	rec backend.Recording
 }
 
 // NewSession is an empty sequence: its pools, page table and step buffers.
@@ -330,15 +333,37 @@ func (s *Session) launch(se backend.Session) {
 	if s.err = s.tables(se); s.err != nil {
 		return
 	}
-	for i, l := range r.runs {
-		if s.err = se.Launch(l.k, l.groups, l.width, s.args[i]...); s.err != nil {
-			return
+	// The kernels and their arguments are the session's, and what a step
+	// changes is in its tables: a device that records replays the step's
+	// launches as one submission, recorded on the first step.
+	if rec, ok := se.(backend.Recorder); ok {
+		if s.rec == nil {
+			if s.rec, s.err = backend.Record(rec, func() { s.err = s.launches(se) }); s.err != nil {
+				s.rec = nil
+				return
+			}
 		}
+		s.err = rec.Replay(s.rec)
+	} else {
+		s.err = s.launches(se)
+	}
+	if s.err != nil {
+		return
 	}
 	if s.err = se.Read(s.bufs[r.logits], s.raw); s.err != nil {
 		return
 	}
 	s.err = se.Read(s.bufs[r.token], s.tb)
+}
+
+// launches launches every kernel of the step in order.
+func (s *Session) launches(se backend.Session) error {
+	for i, l := range s.r.runs {
+		if err := se.Launch(l.k, l.groups, l.width, s.args[i]...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // tables writes the step's tables and its input: the row table, the
@@ -417,6 +442,10 @@ func (s *Session) Overrun() error {
 
 // Close frees the session's own buffers.
 func (s *Session) Close() {
+	if s.rec != nil {
+		s.rec.Free()
+		s.rec = nil
+	}
 	for i, b := range s.bufs {
 		if s.own[i] && b != nil {
 			b.Free()
