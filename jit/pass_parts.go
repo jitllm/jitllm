@@ -47,8 +47,35 @@ func (p Parts) joins(group []*Kernel, n *Kernel) bool {
 		if g.Group != n.Group || conflicts(g, n) || conflicts(n, g) {
 			return false
 		}
+		// A part whose threads work together addresses its workgroup by its
+		// own grid, which a wider part's would overrun: such parts join at
+		// one width only.
+		if (shares(g) || shares(n)) && g.Elements() != n.Elements() {
+			return false
+		}
 	}
 	return true
+}
+
+// shares reports whether k's threads work together through their
+// workgroup: its memory, an exchange between them or a barrier.
+func shares(k *Kernel) bool {
+	for _, b := range k.Bufs {
+		if b.Kind == BufShared {
+			return true
+		}
+	}
+	for _, nd := range k.Nodes {
+		if nd.Op == OpExchange {
+			return true
+		}
+	}
+	for _, s := range k.Stores {
+		if s.Barrier {
+			return true
+		}
+	}
+	return false
 }
 
 func (p Parts) merge(parts []*Kernel) *Kernel {
