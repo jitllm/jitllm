@@ -378,3 +378,59 @@ func decomposeClamp(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	return []Prim{p}, nil
 }
+
+// decomposeStateConv is a causal depthwise convolution over the part's
+// window state ("rec.conv", Taps-1 rows of the channels): each channel's
+// row and window against its taps, the newest tap the row's; then the
+// window less its oldest row and with the row, into a scratch row and
+// back, so no kernel reads the window while writing it.
+func decomposeStateConv(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || c.Step.Rows != 1 {
+		return nil, fmt.Errorf("a state convolution of %d operands over %d rows", len(o.In), c.Step.Rows)
+	}
+	U, F := ir.U32, ir.F32
+	C, T := c.width(o.In[0]), o.Attr.Taps
+	if T < 2 || o.Weight[0].K != T || o.Weight[0].Rows != C {
+		return nil, fmt.Errorf("a state convolution of %d taps over %d channels", T, C)
+	}
+	wo, err := c.weight(o.Weight[0])
+	if err != nil {
+		return nil, err
+	}
+	if !jlm.Verbatim(wo.Format) {
+		return nil, fmt.Errorf("a state convolution over %s taps", wo.Format)
+	}
+	state := Operand{Kind: OperandTable, Name: "rec.conv", PerPart: true}
+	next := Operand{Kind: OperandScratch, Name: c.value(o.Out[0]).Name + ".window"}
+	in := c.value(o.In[0])
+	W := (T - 1) * C
+
+	var x exprs
+	ch := x.coord(1)
+	tapIn := []Operand{in, state}
+	facts := Facts{Extents: map[int]int{1: W}}
+	tap := func(t int) int {
+		v, _ := weightElement(&x, wo, C, T, &tapIn, &facts, ch, x.u(uint32(t)))
+		return v
+	}
+	acc := x.op(OpMul, F, x.at(0, []int{1, C}, x.coord(0), ch), tap(T-1))
+	for t := 0; t < T-1; t++ {
+		acc = x.op(OpAdd, F, acc, x.op(OpMul, F, x.load(1, x.op(OpAdd, U, x.u(uint32(t*C)), ch)), tap(t)))
+	}
+
+	var n exprs
+	nt, nc := n.coord(0), n.coord(1)
+	older := n.load(1, n.op(OpAdd, U, n.op(OpMul, U, n.op(OpMin, U, n.op(OpAdd, U, nt, n.u(1)), n.u(uint32(T-2))), n.u(uint32(C))), nc))
+	n.sel(F, n.op(OpLess, ir.Pred, n.op(OpAdd, U, nt, n.u(1)), n.u(uint32(T-1))), older, n.at(0, []int{1, C}, n.u(0), nc))
+
+	var k exprs
+	kt, kc := k.coord(0), k.coord(1)
+	ix := k.op(OpAdd, U, k.op(OpMul, U, kt, k.u(uint32(C))), kc)
+	v := k.load(0, ix)
+	return []Prim{
+		{Kind: PrimMap, Shape: []int{1, C}, In: tapIn, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts},
+		{Kind: PrimMap, Shape: []int{T - 1, C}, In: []Operand{in, state}, Out: next, Expr: n.e, Facts: Facts{Extents: map[int]int{1: W}}},
+		{Kind: PrimMap, Shape: []int{T - 1, C}, In: []Operand{next}, Expr: k.e, Facts: Facts{Extents: map[int]int{0: W}},
+			Stores: []PrimStore{{Out: state, Index: ix, Value: v, Extent: W}}},
+	}, nil
+}

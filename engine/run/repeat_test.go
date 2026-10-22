@@ -18,8 +18,9 @@ var repeatModel = flag.String("repeat-model", "stories15M-q8_0", "the model Test
 // again on every device, every launch's outputs held to the same step's
 // before it: a kernel that races, or reads memory nothing wrote, differs
 // from one step to the next where a comparison against the host may land
-// inside its tolerance. The first step is not compared, since a buffer a
-// launch writes in part still holds what the step before it left.
+// inside its tolerance. Each step restarts the sequence, its recurrent
+// state zero; the first step is not compared, since a buffer a launch
+// writes in part still holds what the step before it left.
 func TestEveryLaunchRepeatsItself(t *testing.T) {
 	m, err := model.Open(testmodels.Path(*repeatModel + ".jlm"))
 	if err != nil {
@@ -43,18 +44,25 @@ func TestEveryLaunchRepeatsItself(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer r.Close()
-			s, err := r.NewSession()
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer s.Close()
 			var codes []*jit.Code
 			for pi := range r.Plan().Parts {
 				for ci := range r.Plan().Parts[pi].Codes {
 					codes = append(codes, &r.Plan().Parts[pi].Codes[ci])
 				}
 			}
+			s, err := r.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			// Each step restarts the sequence: a recurrent state takes every
+			// step, where a history's position is only rewritten. The other
+			// buffers carry over, so a kernel reading what nothing wrote this
+			// step reads the step before's.
 			step := func() [][][]byte {
+				if err := s.Restart(); err != nil {
+					t.Fatal(err)
+				}
 				out := make([][][]byte, len(codes))
 				if err := s.StepEach(1, 0, func(i int) {
 					for _, b := range codes[i].Binds {

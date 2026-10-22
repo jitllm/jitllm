@@ -321,6 +321,20 @@ type Session struct {
 	rec backend.Recording
 }
 
+// Restart makes s an empty sequence again: its recurrent state zero, its
+// other buffers as they are (a history's positions are rewritten as the
+// sequence reaches them).
+func (s *Session) Restart() error {
+	for i, st := range s.r.plan.Storages {
+		if st.Source == jit.SourceState {
+			if err := s.bufs[i].Write(make([]byte, s.r.sizes[i])); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // NewSession is an empty sequence: its pools, page table and step buffers.
 func (r *Runner) NewSession() (*Session, error) {
 	st := r.plan.Storages
@@ -343,6 +357,8 @@ func (r *Runner) NewSession() (*Session, error) {
 			data = wordBytes(w)
 		case jit.SourceQueryOffset:
 			data = wordBytes([]uint32{0})
+		case jit.SourceState:
+			data = make([]byte, r.sizes[i])
 		}
 		b, err := r.alloc(r.sizes[i], data)
 		if err != nil {

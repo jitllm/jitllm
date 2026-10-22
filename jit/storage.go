@@ -45,11 +45,14 @@ const (
 	SourceTransfer
 	// SourceTokens is the step's tokens, a word a row.
 	SourceTokens
+	// SourceState is a part's recurrent state, a sequence's own: zero at
+	// its start, kept from step to step.
+	SourceState
 	numSources
 )
 
 var sourceNames = [numSources]string{"step", "weight", "input", "rows", "pages", "query offset",
-	"rotary positions", "rotary planes", "keys", "values", "words", "transfer", "tokens"}
+	"rotary positions", "rotary planes", "keys", "values", "words", "transfer", "tokens", "state"}
 
 func (s Source) String() string {
 	if s < numSources {
@@ -144,6 +147,9 @@ func sourceOf(key Operand, written bool, words []uint32) (Source, error) {
 		return SourceWeight, nil
 	case key.Kind == OperandTable:
 		name := key.Name
+		if strings.HasPrefix(name, "rec.") {
+			return SourceState, nil
+		}
 		// A second rotary's table and planes are the first's sources.
 		for _, t := range []Operand{tableAngles, tablePlanes} {
 			if strings.HasPrefix(name, t.Name+".") {

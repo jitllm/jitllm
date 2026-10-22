@@ -208,6 +208,13 @@ func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (r
 		}); err != nil {
 			t.Fatal(err)
 		}
+		// The untouched decode is a sequence of its own: a recurrent state
+		// has taken the teacher-forced step, which a history's position
+		// would only have rewritten.
+		s.Close()
+		if s, err = r.NewSession(); err != nil {
+			t.Fatal(err)
+		}
 		worst, agree := 0.0, 0
 		for pos, id := range ids {
 			l, tok, err := s.Step(id, pos)
