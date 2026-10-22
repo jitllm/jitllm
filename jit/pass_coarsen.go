@@ -145,6 +145,7 @@ type coarse struct {
 	u       int
 	local   int
 	memo    map[string]int
+	values  map[int][]uint32
 	host    *Kernel
 	hostVal map[Operand]Store
 	err     error
@@ -166,7 +167,7 @@ func (c Coarsen) form(members []*Kernel, host *Kernel) (*Kernel, bool) {
 		}
 	}
 	T := E / U
-	k := &coarse{c: c, members: members, E: E, T: T, memo: map[string]int{}}
+	k := &coarse{c: c, members: members, E: E, T: T, memo: map[string]int{}, values: map[int][]uint32{}}
 	if host != nil {
 		// The phase reads what the host's whole row wrote: one workgroup.
 		if host.Elements() != 1 || T > host.Group {
@@ -336,9 +337,90 @@ func alike(a *Kernel, x int, b *Kernel, y int) bool {
 	return true
 }
 
+// keys names each coordinate by its value: a coordinate that is a function
+// of the thread's unit alone, by its value at every unit, so two
+// expressions of one value -- (4u+j)/32 for each j of a unit's four
+// elements -- are one; any other by its node.
+func (k *coarse) keys(coords []int) []string {
+	out := make([]string, len(coords))
+	for i, c := range coords {
+		if v, ok := k.value(c); ok {
+			out[i] = fmt.Sprint(v)
+			continue
+		}
+		out[i] = fmt.Sprint("n", c)
+	}
+	return out
+}
+
+// value is node i of the formed kernel at each of the T units, or false
+// where it is not a function of the unit alone.
+func (k *coarse) value(i int) ([]uint32, bool) {
+	if v, ok := k.values[i]; ok {
+		return v, v != nil
+	}
+	k.values[i] = nil
+	nd := k.m.Nodes[i]
+	out := make([]uint32, k.T)
+	switch {
+	case i == k.u:
+		for t := range out {
+			out[t] = uint32(t)
+		}
+	case nd.Op == OpConst && nd.Type == ir.U32:
+		for t := range out {
+			out[t] = uint32(nd.Imm)
+		}
+	case nd.Type == ir.U32 && (nd.Op == OpAdd || nd.Op == OpSub || nd.Op == OpMul || nd.Op == OpDiv || nd.Op == OpRem || nd.Op == OpMin ||
+		nd.Op == OpMax || nd.Op == OpShl || nd.Op == OpShr || nd.Op == OpAnd):
+		a, ok := k.value(nd.A)
+		if !ok {
+			return nil, false
+		}
+		b, ok := k.value(nd.B)
+		if !ok {
+			return nil, false
+		}
+		for t := range out {
+			x, y := a[t], b[t]
+			switch nd.Op {
+			case OpAdd:
+				out[t] = x + y
+			case OpSub:
+				out[t] = x - y
+			case OpMul:
+				out[t] = x * y
+			case OpDiv, OpRem:
+				if y == 0 {
+					return nil, false
+				}
+				if nd.Op == OpDiv {
+					out[t] = x / y
+				} else {
+					out[t] = x % y
+				}
+			case OpMin:
+				out[t] = min(x, y)
+			case OpMax:
+				out[t] = max(x, y)
+			case OpShl:
+				out[t] = x << (y & 31)
+			case OpShr:
+				out[t] = x >> (y & 31)
+			case OpAnd:
+				out[t] = x & y
+			}
+		}
+	default:
+		return nil, false
+	}
+	k.values[i] = out
+	return out, true
+}
+
 // produce is member n's value stored by s at its coordinates coords.
 func (k *coarse) produce(n *Kernel, s Store, coords []int) int {
-	key := fmt.Sprint(n.Name, &n.Nodes[0], s.Val, coords)
+	key := fmt.Sprint(n.Name, &n.Nodes[0], s.Val, k.keys(coords))
 	g := k.E / n.Elements()
 	if n.Kind == PrimReduce && g > k.c.Unit {
 		key = fmt.Sprint(n.Name, &n.Nodes[0], s.Val)
