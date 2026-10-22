@@ -9,19 +9,36 @@ import (
 	"github.com/jitllm/jitllm/jit"
 )
 
-// TestPlanDecodesAsTheHost opens synth-ernie45 on the host and WithPlanDevice
-// on every device a backend opens, and holds the planned model's Prefill of a
-// prompt and Forward of the host's choices after it to the host's logits in
-// the coherence band and its tokens; a batch entry point on the planned
-// model refuses, and a warm Forward allocates nothing.
+// TestPlanDecodesAsTheHost opens a model on the host and WithPlanDevice on
+// every device a backend opens, and holds the planned model's Prefill of a
+// prompt -- two chunks of rows and a part of one, or on a recurrent model a
+// step a token -- and Forward of the host's choices after it to the host's
+// logits in the coherence band and its tokens; a batch entry point on the
+// planned model refuses, and a warm Forward allocates nothing.
 func TestPlanDecodesAsTheHost(t *testing.T) {
-	path := testmodels.Path("synth-ernie45.jlm")
+	for _, c := range []struct {
+		name   string
+		chunks bool
+	}{{"synth-ernie45", true}, {"synth-lfm2", false}} {
+		t.Run(c.name, func(t *testing.T) { planDecodes(t, testmodels.Path(c.name+".jlm"), c.chunks) })
+	}
+}
+
+// planDecodes is TestPlanDecodesAsTheHost on the model at path, its prompt
+// in chunks of rows where chunks.
+func planDecodes(t *testing.T, path string, chunks bool) {
 	host, err := Open(path, noTune)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer host.Close()
-	ids := host.Vocab.Encode("Hello there", true)
+	var ids []int32
+	for k := 1; len(ids) <= 2*planChunk+planChunk/2; k++ {
+		ids = host.Vocab.Encode(strings.Repeat("The capital of France is Paris. ", k)+"Hello there", true)
+	}
+	if len(ids) >= 3*planChunk {
+		t.Fatalf("a prompt of %d tokens, want two chunks of %d and a part", len(ids), planChunk)
+	}
 	devs := backend.Open()
 	defer func() {
 		for _, d := range devs {
@@ -40,7 +57,7 @@ func TestPlanDecodesAsTheHost(t *testing.T) {
 			}
 			defer m.Close()
 			const more = 6
-			hs, ps := host.NewState(len(ids)+more+8), m.NewState(64)
+			hs, ps := host.NewState(len(ids)+more+8), m.NewState(len(ids)+more+32)
 			defer hs.Close()
 			defer ps.Close()
 			want, err := hs.Prefill(ids)
@@ -50,6 +67,9 @@ func TestPlanDecodesAsTheHost(t *testing.T) {
 			got, err := ps.Prefill(ids)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if (ps.planChunk != nil) != chunks {
+				t.Fatalf("the prompt ran in chunks: %v, want %v", ps.planChunk != nil, chunks)
 			}
 			worst := 0.0
 			for i := range more {

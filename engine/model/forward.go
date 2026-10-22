@@ -97,6 +97,10 @@ type State struct {
 	// opened WithPlanDevice (planrun.go); planErr is why it has none.
 	planSess *run.Session
 	planErr  error
+	// planChunk is the session of the prompt's chunks, sharing planSess's
+	// sequence; nil until a prompt of several tokens, and while the plan
+	// composes no step of several rows (a recurrent mixer's).
+	planChunk *run.Session
 	pos      int
 	// sampleArgs, sampleVals and sampleIDs are ForwardSample's device
 	// sampler block and the candidates it returns, reused across tokens.
@@ -1021,6 +1025,10 @@ func (s *State) dev() nn.LayerDevice {
 // `defer st.Close()` gives that order).
 func (s *State) Close() error {
 	s.m.live.remove(s)
+	if s.planChunk != nil {
+		s.planChunk.Close()
+		s.planChunk = nil
+	}
 	if s.planSess != nil {
 		s.planSess.Close()
 		s.planSess = nil

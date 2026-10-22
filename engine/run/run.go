@@ -420,8 +420,31 @@ func (s *Session) Restart() error {
 }
 
 // NewSession is an empty sequence: its pools, page table and step buffers.
-func (r *Runner) NewSession() (*Session, error) {
+func (r *Runner) NewSession() (*Session, error) { return r.newSession(nil) }
+
+// NewSessionOf is a session on r of h's sequence: h's history pools and
+// recurrent state, each storage of r's plan that one of h's plan matches
+// by key, so either runner's steps move the one sequence on. A prompt's
+// chunks run on a runner of several rows (WithRows) and its decode on one
+// of a row.
+func (r *Runner) NewSessionOf(h *Session) (*Session, error) { return r.newSession(h) }
+
+// sequence reports whether a storage of source src is a sequence's own,
+// kept from step to step.
+func sequence(src jit.Source) bool {
+	return src == jit.SourceKeys || src == jit.SourceValues || src == jit.SourceState
+}
+
+func (r *Runner) newSession(h *Session) (*Session, error) {
 	st := r.plan.Storages
+	of := map[jit.Operand]int{}
+	if h != nil {
+		for j, x := range h.r.plan.Storages {
+			if sequence(x.Source) {
+				of[x.Key] = j
+			}
+		}
+	}
 	R := r.step.Rows
 	s := &Session{r: r, bufs: make([]backend.Buf, len(st)), own: make([]bool, len(st)),
 		rows: make([]byte, 4*jit.RowWords*R), pos: make([]byte, 4*(1+R)), toks: make([]byte, 4*R), tb: make([]byte, 4*R),
@@ -443,6 +466,14 @@ func (r *Runner) NewSession() (*Session, error) {
 		}
 		if k, ok := slot[i]; ok {
 			s.bufs[i] = s.slots[k]
+			continue
+		}
+		if j, ok := of[st[i].Key]; ok && sequence(st[i].Source) {
+			if h.r.sizes[j] < r.sizes[i] {
+				s.Close()
+				return nil, fmt.Errorf("run: %s storage %q is %d bytes in the sequence's plan, %d here", st[i].Source, st[i].Key.Name, h.r.sizes[j], r.sizes[i])
+			}
+			s.bufs[i] = h.bufs[j]
 			continue
 		}
 		var data []byte

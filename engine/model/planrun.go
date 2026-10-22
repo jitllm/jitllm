@@ -121,12 +121,43 @@ func (m *Model) runner(keys int) (*run.Runner, error) {
 	return r, nil
 }
 
+// planChunk is how many of a prompt's tokens a step of the plan runs.
+const planChunk = 32
+
+// chunkRunner is the model's plan at a capacity of keys positions in steps
+// of planChunk rows, composed and compiled once; a model whose plan has no
+// step of several rows says why, once.
+func (m *Model) chunkRunner(keys int) (*run.Runner, error) {
+	m.planMu.Lock()
+	defer m.planMu.Unlock()
+	if r := m.chunkRunners[keys]; r != nil {
+		return r, nil
+	}
+	if err := m.chunkErrs[keys]; err != nil {
+		return nil, err
+	}
+	if m.chunkRunners == nil {
+		m.chunkRunners, m.chunkErrs = map[int]*run.Runner{}, map[int]error{}
+	}
+	r, err := run.New(m.Composing(), m.opt.planDev, m.opt.planGPU, keys, run.WithRows(planChunk))
+	if err != nil {
+		m.chunkErrs[keys] = err
+		return nil, err
+	}
+	m.chunkRunners[keys] = r
+	return r, nil
+}
+
 func (m *Model) closeRunners() {
 	m.planMu.Lock()
 	defer m.planMu.Unlock()
 	for k, r := range m.runners {
 		r.Close()
 		delete(m.runners, k)
+	}
+	for k, r := range m.chunkRunners {
+		r.Close()
+		delete(m.chunkRunners, k)
 	}
 }
 
@@ -156,14 +187,41 @@ func (s *State) planForward(token int32) ([]float32, error) {
 	return s.logits, nil
 }
 
-// planPrefill is Prefill on the runner: a step a token.
+// planPrefill is Prefill on the runner: up to planChunk tokens a step on
+// the chunk runner, its session the decode session's sequence, or a step a
+// token where the plan composes no step of several rows.
 func (s *State) planPrefill(tokens []int32) ([]float32, error) {
+	if s.planErr != nil {
+		return nil, s.planErr
+	}
+	if len(tokens) > 1 && s.planChunk == nil {
+		if r, err := s.m.chunkRunner(s.maxSeq); err == nil {
+			if s.planChunk, err = r.NewSessionOf(s.planSess); err != nil {
+				return nil, err
+			}
+		}
+	}
 	var out []float32
-	for _, t := range tokens {
-		var err error
-		if out, err = s.planForward(t); err != nil {
+	for len(tokens) > 0 {
+		if s.planChunk == nil || len(tokens) == 1 {
+			var err error
+			if out, err = s.planForward(tokens[0]); err != nil {
+				return nil, err
+			}
+			tokens = tokens[1:]
+			continue
+		}
+		n := min(len(tokens), planChunk)
+		logits, _, err := s.planChunk.Rows(tokens[:n], s.bpos[0])
+		if err != nil {
 			return nil, err
 		}
+		copy(s.logits, logits)
+		out = s.logits
+		s.tok = tokens[n-1]
+		s.bpos[0] += n
+		s.pos = max(s.pos, s.bpos[0])
+		tokens = tokens[n:]
 	}
 	return out, nil
 }
