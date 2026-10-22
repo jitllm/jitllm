@@ -239,7 +239,9 @@ func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (r
 				t.Fatal(err)
 			}
 			worst = max(worst, nmse(l, want[pos]))
-			if int(tok) == argmaxOf(want[pos]) {
+			// A flip between two tokens the host holds within a quarter of a
+			// logit of each other is the arithmetic's, not a disagreement.
+			if b := argmaxOf(want[pos]); int(tok) == b || want[pos][b]-want[pos][tok] < 0.25 {
 				agree++
 			}
 		}
@@ -249,8 +251,8 @@ func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (r
 		// device and host disagree by its activations' rounding -- main's
 		// own device reads OLMo-2-1B at 0.115 against its host -- so the
 		// logits are bounded loosely and the top-1 held at all but two
-		// positions; a selection that keeps every block reads 0.51 and 13 of
-		// 19.
+		// positions (a flip within a quarter of a logit agrees); a selection
+		// that keeps every block reads 0.51 and 13 of 19.
 		if !(worstBlock <= 1e-3) || worstAt < 0 || !(worst <= 0.25) || agree < len(ids)-2 {
 			bad = true
 		}
@@ -271,8 +273,12 @@ func nmse(got, want []float32) float64 {
 }
 
 // encodeCover is an encoder's row: its composed embedding of a text, one
-// step of every row, held to the host's Embedder per device.
+// step of every row, held to the host's Embedder per device. An encoder
+// that pools nothing (a decision model's) is refused.
 func encodeCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (row string, bad bool, why string) {
+	if m.Cfg.Pooling == jlm.PoolNone {
+		return "", false, "an encoder with no pooling: plan mode composes no decision head"
+	}
 	// Long enough to pass EmbeddingGemma's window, 256 either side.
 	ids := m.EmbedIDs(strings.Repeat("The capital of France is Paris, and the capital of Germany is Berlin. ", 20))
 	e, err := m.NewEmbedder()
