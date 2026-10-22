@@ -240,6 +240,12 @@ func TestBoard(t *testing.T) {
 	}
 	t.Logf("%s on %s: %d of main's %d instructions (%.1f%%), %d of main's %d kernels identical, %d held whole by one kernel; %d distinct kernels against main's %d",
 		*boardModel, *boardProfile, same, total, 100*float64(same)/float64(max(total, 1)), identical, len(seen), whole, distinct(mine), distinct(main))
+	// What the composer emits beyond main's: the board above counts main's
+	// instructions found in the composed kernels, and a kernel four times
+	// main's size still holds all of them.
+	ours, ourSame, _ := paritytest.Compare(mine, main)
+	t.Logf("%s on %s: the composer emits %d instructions, %d of them beyond main's",
+		*boardModel, *boardProfile, ours, ours-ourSame)
 }
 
 func TestAttendAttrs(t *testing.T) {
