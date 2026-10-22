@@ -43,6 +43,17 @@ func TestRunnerDecodesAsTheHost(t *testing.T) {
 	defer m.Close()
 	c := f.Config()
 	rope := nn.Rope{NRot: int(c.NRot), Base: float64(c.RopeBase)}
+	// An f32 model is held to the host near exactly. A Q8_0 weight's matvec
+	// reads its input as int8, which rounds differently on the host: the
+	// coherence band (RULE 11c), where main's own device path differs from
+	// the host by 6.6e-4 on stories15M-q8_0 and picks the same near-tied
+	// token the host does not.
+	bound, tie := 1e-5, float32(0)
+	for _, e := range f.Entries() {
+		if e.Type == jlm.TypeQ8 {
+			bound, tie = 1e-3, 0.05
+		}
+	}
 	ids := m.Vocab.Encode("Hello there", true)
 	const more = 6
 	devs := backend.Open()
@@ -89,18 +100,15 @@ func TestRunnerDecodesAsTheHost(t *testing.T) {
 							best = i
 						}
 					}
-					// The coherence band (RULE 11c): an int8 activation rounds
-					// differently on the host, which moves a quantized model's
-					// logits by up to 7e-4 on main's own device path too.
 					nmse := num / den
-					if !(nmse < 1e-3) {
+					if !(nmse < bound) {
 						t.Fatalf("position %d: logits NMSE %.3g against the host", pos, nmse)
 					}
 					worst = max(worst, nmse)
 					// A different token is a tie only where the host itself
 					// nearly chose it.
 					if int(token) != best {
-						if margin := want[best] - want[token]; margin >= 0.05 {
+						if margin := want[best] - want[token]; margin >= tie {
 							t.Fatalf("position %d: token %d, the host's %d by a margin of %.3f", pos, token, best, margin)
 						}
 						t.Logf("position %d: token %d, the host's %d, a tie of %.4f", pos, token, best, want[best]-want[token])
