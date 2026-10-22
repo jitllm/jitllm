@@ -62,9 +62,10 @@ func (x *exprs) inverse(amax, d int) int {
 }
 
 // int8 is value v's int8 form, rows of w, as primitives: each window's
-// amax, its scale, the scale's inverse, each element's code, the codes
-// packed into words, each word's sum and the sums a Sums. The words and the
-// scales -- the windows' first, the sums' after -- are what it keeps.
+// amax, its scale, then each word -- its window's inverse scale, its
+// elements' codes packed, and the codes' sum -- and the sums a Sums. The
+// words and the scales -- the windows' first, the sums' after -- are what it
+// keeps.
 func (c *Context) int8(v graph.ValueID) []Prim {
 	q := c.Int8
 	U, F, I := ir.U32, ir.F32, ir.I32
@@ -75,7 +76,7 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	temp := func(name string, t ir.Type) Operand {
 		return Operand{Kind: OperandScratch, Name: x.Name + "." + name, Elem: t, Temp: true}
 	}
-	amax, inv, codes, wsum := temp("amax", F), temp("inv", F), temp("q", I), temp("wsum", I)
+	amax, wsum := temp("amax", F), temp("wsum", I)
 	words := Operand{Kind: OperandScratch, Name: x.Name + ".q8a", Elem: U}
 	scales := Operand{Kind: OperandScratch, Name: x.Name + ".q8x"}
 	win := []int{R, nw}
@@ -88,28 +89,27 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	ds := d.scale(d.at(0, win, d.coord(0), d.coord(1)))
 	dix := flat(&d, d.coord(0), d.coord(1), nw)
 
-	var r exprs
-	r.inverse(r.at(0, win, r.coord(0), r.coord(1)), r.load(1, flat(&r, r.coord(0), r.coord(1), nw)))
-
-	var k exprs
-	t := k.op(OpMul, F, k.at(0, sh, k.coord(0), k.coord(1)), k.at(1, win, k.coord(0), k.op(OpDiv, U, k.coord(1), k.u(uint32(q.Window)))))
-	half := k.un(OpBitcast, F, k.op(OpAdd, U, k.op(OpAnd, U, k.un(OpBitcast, U, t), k.u(0x80000000)), k.u(0x3f000000)))
-	k.un(OpCvtI32, I, k.op(OpAdd, F, t, half))
-
+	// A word: its window's inverse, each element's code rounded half away
+	// from zero, the codes packed a byte each, and their sum.
 	var p exprs
-	packed := -1
+	pr, pw := p.coord(0), p.coord(1)
+	pwin := p.op(OpDiv, U, p.op(OpMul, U, pw, p.u(uint32(q.Word))), p.u(uint32(q.Window)))
+	inv := p.inverse(p.at(1, win, pr, pwin), p.load(2, flat(&p, pr, pwin, nw)))
+	packed, sum := -1, -1
 	for j := 0; j < q.Word; j++ {
-		e := p.at(0, sh, p.coord(0), p.op(OpAdd, U, p.op(OpMul, U, p.coord(1), p.u(uint32(q.Word))), p.u(uint32(j))))
-		b := p.op(OpAnd, U, e, p.u(255))
-		if j > 0 {
-			packed = p.op(OpAdd, U, packed, p.op(OpShl, U, b, p.u(uint32(8*j))))
+		e := p.op(OpAdd, U, p.op(OpMul, U, pw, p.u(uint32(q.Word))), p.u(uint32(j)))
+		t := p.op(OpMul, F, p.at(0, sh, pr, e), inv)
+		half := p.un(OpBitcast, F, p.op(OpAdd, U, p.op(OpAnd, U, p.un(OpBitcast, U, t), p.u(0x80000000)), p.u(0x3f000000)))
+		code := p.un(OpCvtI32, I, p.op(OpAdd, F, t, half))
+		b := p.op(OpAnd, U, p.un(OpBitcast, U, code), p.u(255))
+		if j == 0 {
+			packed, sum = b, code
 			continue
 		}
-		packed = b
+		packed = p.op(OpAdd, U, packed, p.op(OpShl, U, b, p.u(uint32(8*j))))
+		sum = p.op(OpAdd, I, sum, code)
 	}
-
-	var s exprs
-	s.at(0, sh, s.coord(0), s.op(OpAdd, U, s.op(OpMul, U, s.coord(1), s.u(uint32(q.Word))), s.coord(2)))
+	wix := flat(&p, pr, pw, nwd)
 
 	per := q.Sums / q.Word
 	var f exprs
@@ -121,10 +121,9 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	return []Prim{
 		{Kind: PrimReduce, Shape: []int{R, nw, q.Window}, In: []Operand{x}, Out: amax, Combine: OpMax, Expr: a.e},
 		{Kind: PrimMap, Shape: win, In: []Operand{amax}, Expr: d.e, Stores: []PrimStore{{Out: scales, Index: dix, Value: ds, Extent: ext}}},
-		{Kind: PrimMap, Shape: win, In: []Operand{amax, scales}, Out: inv, Expr: r.e, Facts: Facts{Extents: map[int]int{1: ext}}},
-		{Kind: PrimMap, Shape: sh, In: []Operand{x, inv}, Out: codes, Expr: k.e},
-		{Kind: PrimMap, Shape: []int{R, nwd}, In: []Operand{codes}, Out: words, Expr: p.e},
-		{Kind: PrimReduce, Shape: []int{R, nwd, q.Word}, In: []Operand{codes}, Out: wsum, Combine: OpAdd, Type: I, Expr: s.e},
+		{Kind: PrimMap, Shape: []int{R, nwd}, In: []Operand{x, amax, scales}, Expr: p.e, Facts: Facts{Extents: map[int]int{2: ext}},
+			Stores: []PrimStore{{Out: words, Index: wix, Value: packed, Extent: R * nwd},
+				{Out: wsum, Ax: []int{pr, pw}, Ext: []int{R, nwd}, Value: sum}}},
 		{Kind: PrimReduce, Shape: []int{R, ns, per}, In: []Operand{wsum}, Out: scales, Combine: OpAdd, Start: StartFirst,
 			Expr: f.e, Index: fi.e, Facts: Facts{OutExtent: ext}},
 	}

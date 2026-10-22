@@ -43,6 +43,7 @@ type Runner struct {
 	planes []float32
 	guard  int
 	reg    *jit.Registry
+	direct bool
 	runs   []launch
 	// shared is, by storage, the buffer every session binds: a weight, a
 	// word block, the rotary planes; nil for a session's own.
@@ -66,6 +67,10 @@ type Option func(*Runner)
 // WithComposer composes the plan with r in place of jit.Default(): another
 // profile of passes, for a gate holding one pass to its absence.
 func WithComposer(r *jit.Registry) Option { return func(rn *Runner) { rn.reg = r } }
+
+// WithDirectLaunches launches every kernel of every step instead of
+// replaying a recording: a profile's view, each kernel timed on its own.
+func WithDirectLaunches() Option { return func(rn *Runner) { rn.direct = true } }
 
 // WithGuard has every buffer n poisoned bytes past its size, which
 // Session.Overrun checks: a gate's view of a kernel writing past what the
@@ -336,7 +341,7 @@ func (s *Session) launch(se backend.Session) {
 	// The kernels and their arguments are the session's, and what a step
 	// changes is in its tables: a device that records replays the step's
 	// launches as one submission, recorded on the first step.
-	if rec, ok := se.(backend.Recorder); ok {
+	if rec, ok := se.(backend.Recorder); ok && !r.direct {
 		if s.rec == nil {
 			if s.rec, s.err = backend.Record(rec, func() { s.err = s.launches(se) }); s.err != nil {
 				s.rec = nil
