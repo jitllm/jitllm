@@ -8,6 +8,11 @@ import (
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
+// sinkVec is an attention's per-head sinks.
+func sinkVec(o graph.Op) Operand {
+	return Operand{Kind: OperandVector, Role: o.Weight[0].Role, Name: o.Weight[0].Role.String()}
+}
+
 // scoreMap is the score primitive, reading the temperature's table as its
 // fourth operand where there is one.
 func scoreMap(shape []int, in []Operand, out Operand, e []Expr, f Facts, temp []uint32) Prim {
@@ -28,7 +33,7 @@ func scoreMap(shape []int, in []Operand, out Operand, e []Expr, f Facts, temp []
 // the Window positions ending at the query's, or the query's aligned chunk.
 func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
-	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 || a.Window < 0 || a.Softcap < 0 || a.TempScale != 0 && (a.TempFloor < 1 || a.TempOffs < 0) ||
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) > 1 || a.Window < 0 || a.Softcap < 0 || a.TempScale != 0 && (a.TempFloor < 1 || a.TempOffs < 0) ||
 		a.NHead <= 0 || a.NKVHead <= 0 || a.NHead%a.NKVHead != 0 || c.Step.Page <= 0 || c.Step.Keys <= 0 {
 		return nil, fmt.Errorf("an attention of %d heads over %d, window %d, softcap %v", a.NHead, a.NKVHead, a.Window, a.Softcap)
 	}
@@ -152,6 +157,14 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	var ox exprs
 	nv := ox.at(0, dims, ox.coord(0), ox.coord(1), ox.coord(2))
 	l := ox.at(1, heads, ox.coord(0), ox.coord(1))
+	outIn := []Operand{values, sums}
+	if len(o.Weight) == 1 {
+		// A sink is one more logit a head in the denominator alone: the
+		// sum gains exp(sink - max), the max taken with the sink.
+		m := ox.at(2, heads, ox.coord(0), ox.coord(1))
+		l = ox.op(OpAdd, F, l, ox.un(OpExp, F, ox.op(OpSub, F, ox.at(3, []int{H}, ox.coord(1)), m)))
+		outIn = append(outIn, maxes, sinkVec(o))
+	}
 	ox.op(OpMul, F, nv, ox.op(OpDiv, F, ox.f(1), ox.op(OpMax, F, l, ox.f(1e-30))))
 
 	sum := rng(2)
@@ -159,6 +172,25 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	scored := rng(2)
 	scored.Extents[0] = R * H * D
 	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], tableRows, tablePages}, ops[1:]...) }
+	maxReduce := Prim{Kind: PrimReduce, Shape: keys, In: tables(scores), Out: maxes, Combine: OpMax, Init: int64(math.Float32bits(minus)),
+		Expr: mx.e, Facts: rng(2)}
+	if len(o.Weight) == 1 {
+		// The keys' max first, then the max with the sink.
+		raw := tmp("keymax")
+		maxReduce.Out = raw
+		var gx exprs
+		gx.op(OpMax, F, gx.at(0, heads, gx.coord(0), gx.coord(1)), gx.at(1, []int{H}, gx.coord(1)))
+		return []Prim{
+			{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(c.value(o.In[0]), tableKeys), Out: dots, Expr: dx.e, Facts: scored},
+			scoreMap(keys, tables(dots), scores, sx.e, rng(2), temp),
+			maxReduce,
+			{Kind: PrimMap, Shape: heads, In: []Operand{raw, sinkVec(o)}, Out: maxes, Expr: gx.e},
+			{Kind: PrimMap, Shape: keys, In: tables(scores, maxes), Out: weights, Expr: wx.e, Facts: rng(2)},
+			{Kind: PrimReduce, Shape: keys, In: tables(weights), Out: sums, Combine: OpAdd, Expr: lx.e, Facts: sum},
+			{Kind: PrimContract, Shape: []int{R, H, D, C}, In: tables(weights, tableValues), Out: values, Expr: vx.e, Facts: rng(3)},
+			{Kind: PrimMap, Shape: dims, In: outIn, Out: out, Expr: ox.e, Facts: Facts{Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D}}},
+		}, nil
+	}
 	return []Prim{
 		{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(c.value(o.In[0]), tableKeys), Out: dots, Expr: dx.e, Facts: scored},
 		scoreMap(keys, tables(dots), scores, sx.e, rng(2), temp),
