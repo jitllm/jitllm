@@ -71,6 +71,9 @@ type Binding struct {
 	Storage int
 	// Words is a block of constants' contents, the caller's to supply.
 	Words []uint32
+	// Read is whether a live load of the kernel reads it: a binding a
+	// rewrite left unread is still bound, and is no reader of its storage.
+	Read bool
 }
 
 // PartPlan is one part of the model on its device: its kernels in launch
@@ -216,9 +219,15 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 			nd := k.Nodes[a.Node-1]
 			c.Args = append(c.Args, CallArg{Field: a.Field, Value: true, Length: nd.Op == OpLength, Extent: int(nd.Imm)})
 		}
-		for _, b := range k.Bufs {
+		read := map[int]bool{}
+		for i := range k.Live() {
+			if nd := k.Nodes[i]; nd.Op == OpLoad {
+				read[nd.Buf] = true
+			}
+		}
+		for bi, b := range k.Bufs {
 			if b.Kind != BufShared {
-				c.Binds = append(c.Binds, Binding{Operand: b.Operand, Writes: b.Kind == BufOut, Bytes: b.bytes(), Words: b.Words})
+				c.Binds = append(c.Binds, Binding{Operand: b.Operand, Writes: b.Kind == BufOut, Bytes: b.bytes(), Words: b.Words, Read: read[bi]})
 			}
 		}
 		codes = append(codes, PartCode{Code: c, Part: k.Of})

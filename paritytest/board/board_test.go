@@ -140,10 +140,10 @@ var (
 	host = jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}
 )
 
-// onCard is main's placement with a card: every part on it, the sampling
-// of the logits on the host.
+// onCard is main's placement with a card: every part on it, the input
+// rows' embedding and the sampling of the logits on the host.
 func onCard(p jit.Part) jit.Device {
-	if p.Kind == jit.PartSample {
+	if p.Kind == jit.PartSample || p.Kind == jit.PartEmbed {
 		return host
 	}
 	return sm70

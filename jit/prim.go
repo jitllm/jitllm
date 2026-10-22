@@ -53,6 +53,10 @@ type Operand struct {
 	// Copy, where a pairing set it, is the head of a pair whose rows these
 	// are, 0 for the first.
 	Copy int
+	// Region is which of a weight's stored regions it is, in
+	// jlm.File.Span's order: its quants (an unquantized weight's values),
+	// its scales, its sub-scales.
+	Region int
 }
 
 // Expr is one node of a primitive's scalar function: an operation on earlier

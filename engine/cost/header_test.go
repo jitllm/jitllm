@@ -14,9 +14,12 @@ import (
 type header struct {
 	cfg *jlm.Config
 	by  map[[3]int32]*jlm.Entry
+	all []jlm.Entry
 }
 
 func (h header) Config() *jlm.Config { return h.cfg }
+
+func (h header) Entries() []jlm.Entry { return h.all }
 
 func (h header) Find(role jlm.Role, block, index int32) (*jlm.Entry, bool) {
 	e, ok := h.by[[3]int32{int32(role), block, index}]
@@ -36,6 +39,7 @@ func TestHeaderPricesAsTheContainer(t *testing.T) {
 	for _, e := range f.Entries() {
 		e.QSOff, e.DOff, e.SCOff = 0, 0, 0
 		h.by[[3]int32{int32(e.Role), e.Block, e.Index}] = &e
+		h.all = append(h.all, e)
 	}
 	d := Device{Device: jit.Device{Kind: jit.DeviceGPU, Slots: 163840, Lanes: 32}, Units: 80, Bandwidth: 869e9, Launch: 2.9e-6, Floor: 7.5e-6}
 	d.Caches[1] = Cache{Bytes: 6 << 20, Rate: Rate{Total: 3.1e12}, Latency: 1.46e-7}

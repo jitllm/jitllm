@@ -30,6 +30,7 @@ type Runner struct {
 	plan   *jit.Plan
 	planes []float32
 	guard  int
+	reg    *jit.Registry
 	runs   []launch
 	// shared is, by storage, the buffer every session binds: a weight, a
 	// word block, the rotary planes; nil for a session's own.
@@ -50,6 +51,10 @@ type launch struct {
 // Option configures a Runner.
 type Option func(*Runner)
 
+// WithComposer composes the plan with r in place of jit.Default(): another
+// profile of passes, for a gate holding one pass to its absence.
+func WithComposer(r *jit.Registry) Option { return func(rn *Runner) { rn.reg = r } }
+
 // WithGuard has every buffer n poisoned bytes past its size, which
 // Session.Overrun checks: a gate's view of a kernel writing past what the
 // plan states (RULE 13).
@@ -66,7 +71,10 @@ func New(f *jlm.File, dev backend.Device, gpu jit.Device, keys int, rope nn.Rope
 		o(r)
 	}
 	r.planes = rope.TabPlanes(int(c.NRot) / 2)
-	plan, err := jit.Default().Compose(f, r.step, func(jit.Part) jit.Device { return gpu })
+	if r.reg == nil {
+		r.reg = jit.Default()
+	}
+	plan, err := r.reg.Compose(f, r.step, func(jit.Part) jit.Device { return gpu })
 	if err != nil {
 		return nil, err
 	}
@@ -113,9 +121,9 @@ func New(f *jlm.File, dev backend.Device, gpu jit.Device, keys int, rope nn.Rope
 			r.runs = append(r.runs, l)
 		}
 	}
-	if r.logits < 0 || r.token < 0 || r.input < 0 {
+	if r.logits < 0 || r.token < 0 {
 		r.Close()
-		return nil, fmt.Errorf("run: the plan writes no logits or token, or reads no input")
+		return nil, fmt.Errorf("run: the plan writes no logits or no token")
 	}
 	for i, st := range plan.Storages {
 		var data []byte
@@ -164,23 +172,31 @@ func (r *Runner) bytes(st jit.Storage) (int64, error) {
 	return st.Bytes, nil
 }
 
-// weight is a weight's bytes in the container, its block paged in.
+// weight is the region of a weight a storage names, in the container, its
+// block paged in.
 func (r *Runner) weight(st jit.Storage) ([]byte, error) {
 	e, ok := r.f.Find(st.Role, int32(st.Block), -1)
 	if !ok {
 		return nil, fmt.Errorf("run: no tensor %v of block %d in the container", st.Role, st.Block)
 	}
-	if qs, _, _ := r.f.Span(e); qs != nil {
-		return qs, nil
+	region := func() []byte {
+		qs, d, sc := r.f.Span(e)
+		return [3][]byte{qs, d, sc}[st.Region]
+	}
+	if st.Region < 0 || st.Region > 2 {
+		return nil, fmt.Errorf("run: tensor %v of block %d has no region %d", st.Role, st.Block, st.Region)
+	}
+	if b := region(); b != nil {
+		return b, nil
 	}
 	if err := r.f.EnsurePage(r.f.BlockOf(e)); err != nil {
 		return nil, err
 	}
-	qs, _, _ := r.f.Span(e)
-	if qs == nil {
-		return nil, fmt.Errorf("run: tensor %v of block %d is not resident", st.Role, st.Block)
+	b := region()
+	if b == nil {
+		return nil, fmt.Errorf("run: region %d of tensor %v of block %d is not resident", st.Region, st.Role, st.Block)
 	}
-	return qs, nil
+	return b, nil
 }
 
 // alloc is a buffer of n bytes and the runner's guard, poisoned, with data
@@ -226,8 +242,8 @@ type Session struct {
 	bufs []backend.Buf
 	own  []bool
 	args [][]backend.Buf
-	// rows, pos and the input are the step's tables, written each step.
-	rows, pos []byte
+	// rows, pos and toks are the step's tables, written each step.
+	rows, pos, toks []byte
 	tok       int32
 	at        int
 	logits    []float32
@@ -240,7 +256,7 @@ type Session struct {
 func (r *Runner) NewSession() (*Session, error) {
 	st := r.plan.Storages
 	s := &Session{r: r, bufs: make([]backend.Buf, len(st)), own: make([]bool, len(st)),
-		rows: make([]byte, 4*jit.RowWords), pos: make([]byte, 8), tb: make([]byte, 4),
+		rows: make([]byte, 4*jit.RowWords), pos: make([]byte, 8), toks: make([]byte, 4), tb: make([]byte, 4),
 		logits: make([]float32, r.nvocab)}
 	s.raw = unsafe.Slice((*byte)(unsafe.Pointer(&s.logits[0])), 4*len(s.logits))
 	for i := range st {
@@ -306,19 +322,21 @@ func (s *Session) launch(se backend.Session) {
 	put(s.rows[4*jit.RowWrite:], uint32(s.at))
 	put(s.pos, 1)
 	put(s.pos[4:], uint32(s.at))
-	row, err := s.inputRow()
-	if err != nil {
-		s.err = err
-		return
-	}
+	put(s.toks, uint32(s.tok))
+	var err error
 	for i, st := range r.plan.Storages {
 		switch st.Source {
 		case jit.SourceRows:
 			err = se.WriteAt(s.bufs[i], 0, s.rows)
 		case jit.SourceRopePositions:
 			err = se.WriteAt(s.bufs[i], 0, s.pos)
+		case jit.SourceTokens:
+			err = se.WriteAt(s.bufs[i], 0, s.toks)
 		case jit.SourceInput:
-			err = se.WriteAt(s.bufs[i], 0, row)
+			var row []byte
+			if row, err = s.inputRow(); err == nil {
+				err = se.WriteAt(s.bufs[i], 0, row)
+			}
 		}
 		if err != nil {
 			s.err = err

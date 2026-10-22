@@ -200,8 +200,8 @@ func TestPassesSeeRuns(t *testing.T) {
 		host func(Part) bool
 		want [][]int
 	}{
-		{"all on the card", func(p Part) bool { return false }, [][]int{{0, 1, 2, 3, 4, 5}}},
-		{"block 1 on the host", func(p Part) bool { return p.Kind == PartBlock && p.Block == 1 }, [][]int{{0, 1}, {2}, {3, 4, 5}}},
+		{"all on the card", func(p Part) bool { return false }, [][]int{{0, 1, 2, 3, 4, 5, 6}}},
+		{"block 1 on the host", func(p Part) bool { return p.Kind == PartBlock && p.Block == 1 }, [][]int{{0, 1, 2}, {3}, {4, 5, 6}}},
 	} {
 		var calls [][]int
 		r := Default()

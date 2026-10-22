@@ -42,11 +42,13 @@ const (
 	// SourceTransfer is a value the part before wrote on another device,
 	// carried between them (Plan.Transfers).
 	SourceTransfer
+	// SourceTokens is the step's tokens, a word a row.
+	SourceTokens
 	numSources
 )
 
 var sourceNames = [numSources]string{"step", "weight", "input", "rows", "pages", "query offset",
-	"rotary positions", "rotary planes", "keys", "values", "words", "transfer"}
+	"rotary positions", "rotary planes", "keys", "values", "words", "transfer", "tokens"}
 
 func (s Source) String() string {
 	if s < numSources {
@@ -78,12 +80,13 @@ const (
 type Storage struct {
 	Key    Operand
 	Source Source
-	// Role and Block are a weight's tensor; Block is -1 for one outside the
-	// blocks.
-	Role  jlm.Role
-	Block int
-	Bytes int64
-	Words []uint32
+	// Role and Block are a weight's tensor, Block -1 for one outside the
+	// blocks, and Region which of its stored regions (Operand.Region).
+	Role   jlm.Role
+	Block  int
+	Region int
+	Bytes  int64
+	Words  []uint32
 }
 
 // StorageKeys names the storage an operand lands in: a graph value by its
@@ -127,6 +130,7 @@ var tableSources = map[string]Source{
 	tableRows.Name: SourceRows, tablePages.Name: SourcePages, tableQOff.Name: SourceQueryOffset,
 	tablePos.Name: SourceRopePositions, tablePlanes.Name: SourceRopePlanes,
 	tableKeys.Name: SourceKeys, tableValues.Name: SourceValues, tableAngles.Name: SourceStep,
+	tableTokens.Name: SourceTokens,
 }
 
 // sourceOf is where storage key's contents come from: written says a kernel
@@ -174,7 +178,7 @@ func (b Buf) bytes() int64 {
 func (p *Plan) storages(parts []Part) error {
 	keys := NewStorageKeys(parts)
 	at := map[Operand]int{}
-	written := map[int]bool{}
+	written, read := map[int]bool{}, map[int]bool{}
 	for pi := range p.Parts {
 		for ci := range p.Parts[pi].Codes {
 			c := &p.Parts[pi].Codes[ci]
@@ -189,7 +193,7 @@ func (p *Plan) storages(parts []Part) error {
 				if !ok {
 					i = len(p.Storages)
 					at[key] = i
-					st := Storage{Key: key, Role: key.Role, Block: -1, Words: words}
+					st := Storage{Key: key, Role: key.Role, Block: -1, Region: key.Region, Words: words}
 					if key.Of >= 0 && key.Of < len(parts) {
 						st.Block = parts[key.Of].Block
 					}
@@ -198,6 +202,7 @@ func (p *Plan) storages(parts []Part) error {
 				b.Storage = i
 				p.Storages[i].Bytes = max(p.Storages[i].Bytes, b.Bytes)
 				written[i] = written[i] || b.Writes
+				read[i] = read[i] || b.Read
 			}
 		}
 	}
@@ -212,7 +217,8 @@ func (p *Plan) storages(parts []Part) error {
 			s.Source = SourceTransfer
 			continue
 		}
-		src, err := sourceOf(s.Key, written[i], s.Words)
+		// A storage no kernel reads is the step's own whatever it held.
+		src, err := sourceOf(s.Key, written[i] || !read[i] && s.Words == nil, s.Words)
 		if err != nil {
 			errs = append(errs, err)
 			continue

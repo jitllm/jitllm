@@ -3,6 +3,7 @@ package jit
 import (
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -17,6 +18,8 @@ const (
 	PartTable
 	// PartSample is the step's sampling of the head's logits.
 	PartSample
+	// PartEmbed is the step's input rows, each row's token's embedding.
+	PartEmbed
 )
 
 // Part is one placeable part of the model and its graph.
@@ -34,6 +37,8 @@ func (p Part) String() string {
 		return "table"
 	case PartSample:
 		return "sample"
+	case PartEmbed:
+		return "embed"
 	}
 	return fmt.Sprintf("block %d", p.Block)
 }
@@ -44,6 +49,19 @@ func (p Part) String() string {
 type Model interface {
 	Config() *jlm.Config
 	Find(role jlm.Role, block, index int32) (*jlm.Entry, bool)
+	Entries() []jlm.Entry
+}
+
+// unread is the first tensor of block (jlm.DenseBlock for none) whose role
+// the front end does not read: what it does not read, it refuses rather than
+// composing a model without it.
+func unread(f Model, block int32, read ...jlm.Role) error {
+	for _, e := range f.Entries() {
+		if e.Block == block && !slices.Contains(read, e.Role) {
+			return fmt.Errorf("the container holds %s, which the front end does not read", e.Role)
+		}
+	}
+	return nil
 }
 
 // has reports whether model m holds a tensor of role at block and index.
@@ -53,13 +71,18 @@ func has(m Model, role jlm.Role, block, index int32) bool {
 }
 
 // Front is the model's graph from its container: the step's rotary table,
-// every block, the head, then the sampling of its logits. What the
+// its input rows' embedding, every block, the head, then the sampling of
+// its logits. What the
 // container states, the front end reads; what it does not, the front end
 // refuses.
 func Front(f Model) ([]Part, error) {
 	c := f.Config()
 	rt := graph.RopeTable{NRot: int(c.NRot)}
-	parts := []Part{{Kind: PartTable, Block: -1, Graph: rt.Build()}}
+	if c.EmbdScale != 0 && c.EmbdScale != 1 {
+		return nil, fmt.Errorf("jit: the container scales the embedding by %v, which the front end does not read", c.EmbdScale)
+	}
+	em := graph.Embed{NEmbd: int(c.NEmbd), NVocab: int(c.NVocab)}
+	parts := []Part{{Kind: PartTable, Block: -1, Graph: rt.Build()}, {Kind: PartEmbed, Block: -1, Graph: em.Build()}}
 	for li := 0; li < int(c.NLayer); li++ {
 		g, err := blockGraph(f, li)
 		if err != nil {
@@ -84,11 +107,15 @@ func blockGraph(f Model, li int) (*graph.Graph, error) {
 	if c.Flags&^stated != 0 || c.NExpert != 0 || len(c.LayerKinds) != 0 || c.SWAWindow != 0 || c.YarnFactor != 0 || c.YarnLogMul != 0 {
 		return nil, fmt.Errorf("the container states what the front end does not read (flags %#x)", uint32(c.Flags&^stated))
 	}
-	for _, r := range []jlm.Role{jlm.RoleAttnNorm, jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV, jlm.RoleAttnOut,
-		jlm.RoleFFNNorm, jlm.RoleFFNGate, jlm.RoleFFNUp, jlm.RoleFFNDown} {
+	roles := []jlm.Role{jlm.RoleAttnNorm, jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV, jlm.RoleAttnOut,
+		jlm.RoleFFNNorm, jlm.RoleFFNGate, jlm.RoleFFNUp, jlm.RoleFFNDown}
+	for _, r := range roles {
 		if !has(f, r, int32(li), -1) {
 			return nil, fmt.Errorf("no %s", r)
 		}
+	}
+	if err := unread(f, int32(li), roles...); err != nil {
+		return nil, err
 	}
 	layout := graph.RopeNorm
 	if c.Flags&jlm.FlagRopeNeox != 0 {
@@ -121,6 +148,9 @@ func headGraph(f Model) (*graph.Graph, error) {
 	}
 	if !has(f, jlm.RoleOutputNorm, jlm.DenseBlock, -1) || !has(f, out, jlm.DenseBlock, -1) {
 		return nil, fmt.Errorf("no output norm or projection")
+	}
+	if err := unread(f, jlm.DenseBlock, jlm.RoleTokenEmbd, jlm.RoleOutputNorm, out); err != nil {
+		return nil, err
 	}
 	h := graph.Head{NEmbd: int(c.NEmbd), NVocab: int(c.NVocab), Eps: float64(c.RMSEps), Out: out}
 	return h.Build(), nil

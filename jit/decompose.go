@@ -21,6 +21,7 @@ func decompositions() map[graph.OpKind]Decomposition {
 		graph.OpAttend:    decomposeAttend,
 		graph.OpRopeTable: decomposeRopeTable,
 		graph.OpTopK:      decomposeTopK,
+		graph.OpEmbed:     decomposeEmbed,
 	}
 }
 
@@ -79,7 +80,11 @@ func decomposeMatVec(o graph.Op, c *Context) ([]Prim, error) {
 	if err != nil {
 		return nil, err
 	}
-	if wo.Format != jlm.TypeF32 {
+	switch wo.Format {
+	case jlm.TypeF32:
+	case jlm.TypeQ8:
+		return decomposeMatVecQ8(o, c, wo)
+	default:
 		return nil, fmt.Errorf("a matvec over %s weights has no decomposition yet", wo.Format)
 	}
 	var x exprs

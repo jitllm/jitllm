@@ -9,8 +9,9 @@ import (
 
 // TestPlanStatesEverySource holds a decode step's plan on the GPU to the
 // buffer plan the engine fills: every storage has a source, the step's input
-// is one storage, a weight names its tensor, every storage the plan sizes
-// has a size, and every source a decode reads appears.
+// is its tokens -- one storage, and no input row for the engine to fill -- a
+// weight names its tensor, every storage the plan sizes has a size, and
+// every source a decode reads appears.
 func TestPlanStatesEverySource(t *testing.T) {
 	f, err := jlm.Open(testmodels.Path("synth-ernie45.jlm"))
 	if err != nil {
@@ -34,10 +35,10 @@ func TestPlanStatesEverySource(t *testing.T) {
 			}
 		}
 	}
-	if seen[SourceInput] != 1 {
-		t.Errorf("%d input storages, want one", seen[SourceInput])
+	if seen[SourceTokens] != 1 || seen[SourceInput] != 0 {
+		t.Errorf("%d token storages and %d input rows, want one and none", seen[SourceTokens], seen[SourceInput])
 	}
-	for _, s := range []Source{SourceStep, SourceWeight, SourceInput, SourceRows, SourcePages, SourceQueryOffset,
+	for _, s := range []Source{SourceStep, SourceWeight, SourceTokens, SourceRows, SourcePages, SourceQueryOffset,
 		SourceRopePositions, SourceRopePlanes, SourceKeys, SourceValues, SourceWords} {
 		if seen[s] == 0 {
 			t.Errorf("no %s storage in a decode step's plan", s)
