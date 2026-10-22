@@ -2,9 +2,10 @@ package jit
 
 import "github.com/jitllm/jitllm/jit/ir"
 
-// FMA fuses a sum's step that adds a product nothing else reads, acc + a*b,
-// into one multiply-add, fma(a, b, acc); where All is set, any float add of
-// such a product.
+// FMA fuses a float sum's step that adds a product nothing else reads,
+// acc + a*b, into one multiply-add, fma(a, b, acc); where All is set, any
+// float add of such a product. OpFma is a float operation: an integer sum
+// keeps its multiply and add.
 type FMA struct {
 	All bool
 }
@@ -38,7 +39,7 @@ func (p FMA) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				continue
 			}
 			s := k.Nodes[nd.A]
-			if s.Op != OpAdd || s.Type != nd.Type {
+			if nd.Type != ir.F32 || s.Op != OpAdd || s.Type != nd.Type {
 				continue
 			}
 			prod := s.B
