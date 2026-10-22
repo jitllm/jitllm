@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
@@ -83,7 +84,7 @@ func decomposeAttendLatent(o graph.Op, c *Context) ([]Prim, error) {
 	qr, qh, ql, qn := qx.coord(0), qx.coord(1), qx.coord(2), qx.coord(3)
 	qin := []Operand{c.value(o.In[0])}
 	qf := Facts{Extents: map[int]int{0: R * H * nope}}
-	kv, err := weightElement(&qx, kbo, H*lat, nope, &qin, &qf, qx.op(OpAdd, U, qx.op(OpMul, U, qh, qx.u(uint32(lat))), ql), qn)
+	kv, err := sheetElement(&qx, kbo, H, lat, nope, &qin, &qf, qh, ql, qn)
 	if err != nil {
 		return nil, err
 	}
@@ -109,10 +110,26 @@ func decomposeAttendLatent(o graph.Op, c *Context) ([]Prim, error) {
 	vr, vh, vd, vl := vx.coord(0), vx.coord(1), vx.coord(2), vx.coord(3)
 	vin := []Operand{oLat}
 	vf := Facts{Extents: map[int]int{0: R * H * w}}
-	vv, err := weightElement(&vx, vbo, H*dv, lat, &vin, &vf, vx.op(OpAdd, U, vx.op(OpMul, U, vh, vx.u(uint32(dv))), vd), vl)
+	vv, err := sheetElement(&vx, vbo, H, dv, lat, &vin, &vf, vh, vd, vl)
 	if err != nil {
 		return nil, err
 	}
 	vx.op(OpMul, F, vv, vx.at(0, []int{R, H, w}, vr, vh, vl))
 	return append(prims, Prim{Kind: PrimReduce, Shape: []int{R, H, dv, lat}, In: vin, Out: out, Combine: OpAdd, Expr: vx.e, Facts: vf}), nil
+}
+
+// sheetElement is element (row, col) of sheet sheet of a bank of n sheets,
+// each rows by k: a verbatim bank's rows end to end, a packed one read
+// through its bank's own reading rules, as a mixture's experts are.
+func sheetElement(x *exprs, wo Operand, n, rows, k int, in *[]Operand, facts *Facts, sheet, row, col int) (int, error) {
+	if jlm.Verbatim(wo.Format) {
+		return weightElement(x, wo, n*rows, k, in, facts, x.op(OpAdd, ir.U32, x.op(OpMul, ir.U32, sheet, x.u(uint32(rows))), row), col)
+	}
+	l, ok := jlm.Layout(wo.Format)
+	if !ok || k%(l.Sub*l.SuperSub) != 0 {
+		return 0, fmt.Errorf("no reading rules for a bank of rows of %d", k)
+	}
+	p := packedOperands(x, wo, l, rows, k, in, facts)
+	p.bank(sheet, n)
+	return jlm.DecodeElement[int](p, l, rows, row, col), nil
 }
