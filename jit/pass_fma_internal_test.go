@@ -47,3 +47,46 @@ func TestFMAFusesOnlyFloatSums(t *testing.T) {
 		}
 	}
 }
+
+// TestFMAFoldsAnAddIntoTheByteDot holds the fma pass to running acc +
+// dot4(a, b, 0) as dot4(a, b, acc), and to leaving a dot that does not
+// start from zero, or that something else reads, as it is.
+func TestFMAFoldsAnAddIntoTheByteDot(t *testing.T) {
+	chain := func(start int64, shared bool) *Kernel {
+		k := &Kernel{Name: "dots", Space: []int{1}}
+		a := k.add(Node{Op: OpConst, Type: ir.U32, Imm: 0x01020304})
+		b := k.add(Node{Op: OpConst, Type: ir.U32, Imm: 0x05060708})
+		acc := k.add(Node{Op: OpConst, Type: ir.I32, Imm: 9})
+		from := k.add(Node{Op: OpConst, Type: ir.I32, Imm: start})
+		dot := k.add(Node{Op: OpDot4, Type: ir.I32, A: a, B: b, C: from})
+		sum := k.add(Node{Op: OpAdd, Type: ir.I32, A: acc, B: dot})
+		at := k.add(Node{Op: OpCoord, Type: ir.U32})
+		k.Bufs = append(k.Bufs, Buf{Kind: BufOut, Elem: ir.I32, Operand: Operand{Kind: OperandScratch, Name: "out"}, Shape: []int{2}})
+		k.Stores = append(k.Stores, Store{Buf: 0, Val: sum, At: -1, Ax: []int{at}})
+		if shared {
+			k.Stores = append(k.Stores, Store{Buf: 0, Val: dot, At: -1, Ax: []int{at}})
+		}
+		return k
+	}
+	folded := func(k *Kernel) bool {
+		ks, err := FMA{}.Apply([]*Kernel{k}, Device{Kind: DeviceGPU})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, nd := range ks[0].Nodes {
+			if nd.Op == OpAdd {
+				return false
+			}
+		}
+		return true
+	}
+	if !folded(chain(0, false)) {
+		t.Error("acc + dot4(a, b, 0) kept its add")
+	}
+	if folded(chain(7, false)) {
+		t.Error("acc + dot4(a, b, 7) lost its add")
+	}
+	if folded(chain(0, true)) {
+		t.Error("a dot something else reads lost its add")
+	}
+}
