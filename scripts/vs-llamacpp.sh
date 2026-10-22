@@ -402,10 +402,13 @@ if [ -n "${JITLLM_VS_AA:-}" ]; then
   lcpp_run() { jitllm_run; }
   echo "  A/A self-control: jitllm in both arms"
 fi
+# JITLLM_VS_B_ENV is environment for the B arm alone, space-separated
+# NAME=VALUE pairs: JITLLM_PLAN_DEVICE=ptx:0 runs the B build's composed plan
+# against the A build's own path.
 if [ -n "${JITLLM_VS_B:-}" ]; then
   [ -x "$JITLLM_VS_B" ] || { echo "JITLLM_VS_B=$JITLLM_VS_B is not an executable" >&2; exit 1; }
-  lcpp_run() { local JITLLM="$JITLLM_VS_B"; jitllm_run; }
-  echo "  B arm: $JITLLM_VS_B (jitllm), not llama.cpp"
+  lcpp_run() { local JITLLM="$JITLLM_VS_B"; ( if [ -n "${JITLLM_VS_B_ENV:-}" ]; then export ${JITLLM_VS_B_ENV}; fi; jitllm_run ); }
+  echo "  B arm: $JITLLM_VS_B (jitllm${JITLLM_VS_B_ENV:+, $JITLLM_VS_B_ENV}), not llama.cpp"
 fi
 
 # ★ THE CLAMP GATE. This laptop's sustained-power limit (PL1) intermittently

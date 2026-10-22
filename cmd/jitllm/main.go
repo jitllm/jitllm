@@ -1786,6 +1786,12 @@ func loadOpts(t []tok.Option, budget uint64) []model.Option {
 // They are read here and nowhere else; see jitOptions.
 func modelOptions() []model.Option {
 	var o []model.Option
+	if p, err := planDevice(); err != nil {
+		fmt.Fprintf(os.Stderr, "jitllm: %v\n", err)
+		os.Exit(2)
+	} else if p != nil {
+		o = append(o, p)
+	}
 	if os.Getenv("JITLLM_PROFILE") != "" {
 		o = append(o, model.WithProfile(true))
 	}
