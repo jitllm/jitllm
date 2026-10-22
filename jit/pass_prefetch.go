@@ -65,11 +65,16 @@ func (n *Kernel) mark(i int, seen map[int]bool) {
 	}
 }
 
-// ofIteration reports whether node i reads no fold of loop c.
+// ofIteration reports whether node i reads no fold of loop c and no
+// iteration but c's and those of the loops around it: what a copy of it
+// before loop c can read.
 func (n *Kernel) ofIteration(i, c int) bool {
 	nd := n.Nodes[i]
-	if nd.Op == OpFold {
+	switch nd.Op {
+	case OpFold:
 		return !n.within(nd.At, c)
+	case OpIter:
+		return n.within(c, nd.At)
 	}
 	for _, a := range n.Operands(&nd) {
 		if !n.ofIteration(*a, c) {
