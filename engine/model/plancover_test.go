@@ -97,7 +97,12 @@ func TestPlanCoversEveryModel(t *testing.T) {
 // bad where a block or the prompt's logits are wrong outright; why, the
 // composer's refusal.
 func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (row string, bad bool, why string) {
-	ids := m.Vocab.Encode("The capital of France is", true)
+	// Long enough that a block selection selects (MiniMax-M3's fixture
+	// keeps 2 blocks of 4) and short of the runner's 32 positions.
+	ids := m.Vocab.Encode("The capital of France is Paris. The capital of Germany is Berlin. The capital of Italy is", true)
+	if len(ids) > 30 {
+		ids = ids[:30]
+	}
 	traced := map[string][]float32{}
 	m.Trace(func(l int, name string, v []float32) {
 		k := fmt.Sprint(l, name)

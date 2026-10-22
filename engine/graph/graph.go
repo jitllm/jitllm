@@ -275,10 +275,20 @@ const (
 	// earlier position -- every position where the row attends at most
 	// TopK. A primitive with a history of its own (DecomposeRecurrent).
 	OpIndexSelect
+	// OpBlockSelect is a block-selecting indexer's selection (MiniMax Sparse
+	// Attention): In[0] the query, NHead groups of HeadDim, one a kv group;
+	// In[1] the row's key (HeadDim), which joins the idx history (version
+	// n to n+1). Per group each attended position scores q_g . k_t, each
+	// block of Block positions ranks by its best score (of two equal, the
+	// one whose best is earlier), the Local blocks ending at the query's
+	// are kept, and with them the best blocks up to TopK; every block where
+	// there are at most TopK. Out[0] is the selection. A primitive with a
+	// history of its own (DecomposeRecurrent).
+	OpBlockSelect
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan", "state_delta", "index_select"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan", "state_delta", "index_select", "block_select"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {

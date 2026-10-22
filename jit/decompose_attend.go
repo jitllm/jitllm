@@ -35,12 +35,20 @@ func scoreMap(shape []int, in []Operand, out Operand, e []Expr, f Facts, temp []
 // the Window positions ending at the query's, or the query's aligned chunk.
 func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
-	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) > 1 || a.Window < 0 || a.Softcap < 0 || a.TempScale != 0 && (a.TempFloor < 1 || a.TempOffs < 0) ||
+	if len(o.In) != 1 && len(o.In) != 2 || len(o.Out) != 1 || len(o.Weight) > 1 || a.Window < 0 || a.Softcap < 0 || a.TempScale != 0 && (a.TempFloor < 1 || a.TempOffs < 0) ||
 		a.NHead <= 0 || a.NKVHead <= 0 || a.NHead%a.NKVHead != 0 || c.Step.Page <= 0 || c.Step.Keys <= 0 {
 		return nil, fmt.Errorf("an attention of %d heads over %d, window %d, softcap %v", a.NHead, a.NKVHead, a.Window, a.Softcap)
 	}
 	kw := a.NKVHead * a.HeadDim
 	g := attendGeom{D: a.HeadDim, KW: kw, Keys: tableKeys, Values: tableValues}
+	if len(o.In) == 2 {
+		// A block selection: the positions each kv group's mask keeps.
+		m := maskOf(c, o.In[1])
+		g.Mask, g.MaskGroups = &m, a.NKVHead
+		if a.TempScale != 0 {
+			return nil, fmt.Errorf("a selected attention with a temperature")
+		}
+	}
 	// A block sharing another's history (the state kv@N) reads block N's
 	// pools as it left them.
 	if len(o.Reads) == 1 && strings.HasPrefix(o.Reads[0].Name, "kv@") {
@@ -59,9 +67,11 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 type attendGeom struct {
 	D, KW        int
 	Keys, Values Operand
-	// Mask, where set, is an indexer's keep mask (decomposeIndexSelect):
-	// a position it does not keep scores as the least float.
-	Mask *Operand
+	// Mask, where set, is an indexer's keep mask (decomposeIndexSelect,
+	// decomposeBlockSelect), MaskGroups groups of the query heads each a
+	// row of it: a position it does not keep scores as the least float.
+	Mask       *Operand
+	MaskGroups int
 }
 
 // attend is decodeAttend's primitives for the query q (rows by heads by
@@ -120,7 +130,9 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 		score = sx.op(OpMul, F, sx.f(c), sx.op(OpSub, F, sx.f(1), sx.op(OpDiv, F, sx.f(2), sx.op(OpAdd, F, e, sx.f(1)))))
 	}
 	if g.Mask != nil {
-		keep := sx.at(3, []int{R, C}, sx.coord(0), sx.coord(2))
+		G := max(1, g.MaskGroups)
+		grp := sx.op(OpDiv, U, sx.coord(1), sx.u(uint32(H/G)))
+		keep := sx.at(3, []int{R, G, C}, sx.coord(0), grp, sx.coord(2))
 		score = sx.sel(F, sx.op(OpLess, ir.Pred, sx.f(0.5), keep), score, sx.f(minus))
 	}
 	sx.sel(F, valid, score, sx.f(minus))

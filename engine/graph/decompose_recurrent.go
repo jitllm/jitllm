@@ -59,6 +59,9 @@ func DecomposeRecurrent(g *Graph, c *jlm.Config) *Graph {
 		if o.Kind == OpIndex && d.index(o, g, c) {
 			continue
 		}
+		if o.Kind == OpIndex && d.blockSelect(o, g, c) {
+			continue
+		}
 		d.op(o)
 	}
 	return d
@@ -414,5 +417,64 @@ func (d *Graph) index(o Op, g *Graph, c *jlm.Config) bool {
 		Attr: Attrs{Fn: MapMul, Const: float64(float32(1 / math.Sqrt(float64(H*D))))}})
 	d.op(Op{Kind: OpIndexSelect, In: []ValueID{q, ws, key}, Out: []ValueID{o.Out[0]}, Reads: o.Reads, Writes: o.Writes,
 		Attr: Attrs{NHead: H, HeadDim: D, TopK: a.TopK}})
+	return true
+}
+
+// blockSelect writes a GQA block's indexer o (MiniMax Sparse Attention,
+// over the normed row alone) as the host's msa.go runs it: the query the
+// row's projection, each group RMS-normed against RoleIdxQNorm and turned by
+// the block's rotary; the key the row's projection, RMS-normed against
+// RoleIdxKNorm and turned the same way; then the selection. It is false for
+// QSA's pooled form.
+func (d *Graph) blockSelect(o Op, g *Graph, c *jlm.Config) bool {
+	a := o.Attr
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 4 || a.Pooled || a.NHead < 1 || a.HeadDim < 1 ||
+		a.TopK < 1 || a.Block < 1 || a.Local < 0 {
+		return false
+	}
+	w := map[jlm.Role]Binding{}
+	for _, b := range o.Weight {
+		w[b.Role] = b
+	}
+	qp, kp, qn, kn := w[jlm.RoleIdxQ], w[jlm.RoleIdxK], w[jlm.RoleIdxQNorm], w[jlm.RoleIdxKNorm]
+	G, D := a.NHead, a.HeadDim
+	if qp.Rows != G*D || kp.Rows != D || qn.K != D || kn.K != D {
+		return false
+	}
+	var rope *Attrs
+	if c.NRot > 0 && !c.Flags.Has(jlm.FlagNoPosEnc) {
+		for _, r := range g.Ops {
+			if r.Kind == OpRope {
+				at := r.Attr
+				rope = &at
+				break
+			}
+		}
+		if rope == nil || rope.NRot > D {
+			return false
+		}
+		rope.HeadDim = D
+	}
+	name := d.Values[o.Out[0]].Name
+	val := func(s string, n int) ValueID { return d.value(name+"."+s, n) }
+	turn := func(s string, x ValueID) ValueID {
+		if rope == nil {
+			return x
+		}
+		v := val(s, d.Values[x].Width)
+		d.op(Op{Kind: OpRope, In: []ValueID{x}, Out: []ValueID{v}, Attr: *rope})
+		return v
+	}
+	q, k := val("q", G*D), val("k", D)
+	d.op(Op{Kind: OpMatVec, In: []ValueID{o.In[0]}, Out: []ValueID{q}, Weight: []Binding{qp}})
+	d.op(Op{Kind: OpMatVec, In: []ValueID{o.In[0]}, Out: []ValueID{k}, Weight: []Binding{kp}})
+	qh, kh := val("q_normed", G*D), val("k_normed", D)
+	d.op(Op{Kind: OpHeadNorm, In: []ValueID{q}, Out: []ValueID{qh}, Weight: []Binding{{Role: qn.Role, K: D}},
+		Attr: Attrs{Eps: float64(c.RMSEps), HeadDim: D}})
+	d.op(Op{Kind: OpNorm, In: []ValueID{k}, Out: []ValueID{kh}, Weight: []Binding{{Role: kn.Role, K: D}},
+		Attr: Attrs{Eps: float64(c.RMSEps)}})
+	d.op(Op{Kind: OpBlockSelect, In: []ValueID{turn("q_rot", qh), turn("k_rot", kh)}, Out: []ValueID{o.Out[0]},
+		Reads: []StateRef{{"idx", 0}}, Writes: []StateRef{{"idx", 1}},
+		Attr: Attrs{NHead: G, HeadDim: D, TopK: a.TopK, Block: a.Block, Local: a.Local}})
 	return true
 }
