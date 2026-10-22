@@ -62,6 +62,9 @@ func (x *exprs) act(v int, a graph.Act) (int, error) {
 		return x.op(OpMul, F, r, r), nil
 	case graph.ActSiLU:
 		return x.op(OpDiv, F, v, x.op(OpAdd, F, one, x.un(OpExp, F, x.neg(v)))), nil
+	case graph.ActQuickGELU:
+		z := x.op(OpMul, F, x.f(1.702), v)
+		return x.op(OpDiv, F, v, x.op(OpAdd, F, one, x.un(OpExp, F, x.neg(z)))), nil
 	case graph.ActSigmoid:
 		return x.sigmoid(v), nil
 	case graph.ActGELUErf:

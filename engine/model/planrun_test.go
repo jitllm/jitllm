@@ -243,17 +243,31 @@ func TestD1OmniPlanMatchesReference(t *testing.T) {
 	}
 }
 
-// TestPlanEncodesPicturesAsTheHost composes SmolVLM's tower -- the patches
-// gathered from the picture through the patch embedding, its positions'
-// rows, the blocks, the post-norm, the regroup and the projector -- and
+// TestPlanEncodesPicturesAsTheHost composes each tower -- SmolVLM's (the
+// patches gathered from the picture through the patch embedding, its
+// positions' rows, the blocks, the post-norm, the regroup and the
+// projector) and llava-phi-3's (a class row before the patches, a pre-norm,
+// quick-GELU blocks, the class row dropped, a two-matrix projector) -- and
 // holds it to the host's Encode on every device a backend opens. Both sides
 // quantize the Q8_0 matrices' activations to int8, whose roundings compound
 // through the blocks (main's device gate stops after one block for it), so
 // each part is held teacher-forced, the host's input in, to main's one-block
 // bound, and the free-running picture to a decade above its reading.
 func TestPlanEncodesPicturesAsTheHost(t *testing.T) {
-	m, tw := openTower(t, noTune)
-	defer m.Close()
+	for _, tc := range []struct {
+		name string
+		open func(testing.TB, ...Option) (*Model, *Tower)
+	}{{"smolvlm", openTower}, {"llava", openLlava}} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, tw := tc.open(t, noTune)
+			defer m.Close()
+			planEncodesAsTheHost(t, m, tw)
+		})
+	}
+}
+
+// planEncodesAsTheHost is TestPlanEncodesPicturesAsTheHost on one tower.
+func planEncodesAsTheHost(t *testing.T, m *Model, tw *Tower) {
 	c := tw.Cfg
 	px := make([]float32, c.ImageSz*c.ImageSz*3)
 	for i := range px {
@@ -269,6 +283,10 @@ func TestPlanEncodesPicturesAsTheHost(t *testing.T) {
 	}
 	want = append(want, slices.Clone(out))
 	side := c.ImageSz / c.PatchSz
+	n := side * side
+	if c.CLS {
+		n++
+	}
 	src := m.TowerComposing()
 	if err := src.(towerComposing).towerRefusal(); err != nil {
 		t.Fatal(err)
@@ -285,7 +303,7 @@ func TestPlanEncodesPicturesAsTheHost(t *testing.T) {
 	gpu := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
 	for _, dev := range devs {
 		t.Run(dev.API(), func(t *testing.T) {
-			r, err := run.New(src, dev, gpu, side*side, run.WithRows(side*side))
+			r, err := run.New(src, dev, gpu, n, run.WithRows(n))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -332,13 +350,13 @@ func TestPlanEncodesPicturesAsTheHost(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := s.PictureEach(px, side, side, forced); err != nil {
+			if err := s.PictureEach(px, side, n, forced); err != nil {
 				t.Fatal(err)
 			}
 			if checked != len(want) {
 				t.Fatalf("%d of %d parts checked", checked, len(want))
 			}
-			got, err := s.Picture(px, side, side, c.Tokens())
+			got, err := s.Picture(px, side, n, c.Tokens())
 			if err != nil {
 				t.Fatal(err)
 			}

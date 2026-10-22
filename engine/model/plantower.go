@@ -95,30 +95,37 @@ func (c towerComposing) Find(role jlm.Role, block, index int32) (*jlm.Entry, boo
 	return c.File.Find(v, block, index)
 }
 
-// EmbedGraph is the tower's entry: the patches through the patch
-// embedding, their positions' rows and its pre-norm.
+// EmbedGraph is the tower's entry: its class row first where it has one,
+// the patches through the patch embedding, their positions' rows and its
+// pre-norm.
 func (c towerComposing) EmbedGraph() *graph.Graph {
 	t, tc := c.t, c.t.Cfg
-	if tc.CLS || tc.PosBuckets > 0 || tc.PosSide > 0 || tc.PosAxis > 0 || tc.Dynamic() || t.embdNorm != nil {
+	if tc.CLS && (tc.CLSLast || t.opt.towerCLSLast) || tc.PosBuckets > 0 || tc.PosSide > 0 || tc.PosAxis > 0 ||
+		tc.Dynamic() || t.embdNorm != nil {
 		return nil
 	}
 	e := graph.TowerEntry{NEmbd: tc.NEmbd, Patch: tc.PatchSz, K: t.patchW.k, PatchBias: t.patchB != nil,
-		PreNorm: t.preLnW != nil, Eps: tc.Eps}
+		Class: tc.CLS, PreNorm: t.preLnW != nil, Eps: tc.Eps}
 	if t.posW != nil {
 		e.Positions = len(t.posW) / tc.NEmbd
 	}
 	return e.Build()
 }
 
-// HeadGraph is the tower's projector: idefics3's, its post-norm, its
-// regroup and one matrix.
+// HeadGraph is the tower's projector: idefics3's (its post-norm, its
+// regroup and one matrix) or llava's (the class row dropped, a matrix, the
+// tanh GELU llama.cpp's projector runs, a matrix).
 func (c towerComposing) HeadGraph() *graph.Graph {
 	t, tc := c.t, c.t.Cfg
-	if tc.Kind != jlm.ProjIdefics3 || t.projW2.e != nil {
+	h := graph.TowerHead{NEmbd: tc.NEmbd, Scale: tc.Scale, ProjDim: tc.ProjDim, PostNorm: t.postLnW != nil,
+		Class: tc.CLS, ProjBias: t.projB != nil, Eps: tc.Eps}
+	switch {
+	case tc.Kind == jlm.ProjIdefics3 && t.projW2.e == nil:
+	case tc.Kind == jlm.ProjMLP && t.projW2.e != nil && tc.Scale <= 1 && (t.projB != nil) == (t.projB2 != nil):
+		h.Hidden, h.Act = t.projW.rows, graph.ActGELUTanh
+	default:
 		return nil
 	}
-	h := graph.TowerHead{NEmbd: tc.NEmbd, Scale: tc.Scale, ProjDim: tc.ProjDim, PostNorm: t.postLnW != nil,
-		ProjBias: t.projB != nil, Eps: tc.Eps}
 	return h.Build()
 }
 

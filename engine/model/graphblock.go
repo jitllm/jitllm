@@ -122,7 +122,7 @@ func (m *Model) blockAct(roles map[jlm.Role]graph.Shape) graph.Act {
 // where it states none.
 func graphAct(a nn.ActKind) graph.Act {
 	for _, g := range []graph.Act{graph.ActSiLU, graph.ActGELUTanh, graph.ActGELUErf, graph.ActReLU2,
-		graph.ActReLU, graph.ActSwiGLUOAI, graph.ActSwiGLUClamp, graph.ActSitu} {
+		graph.ActReLU, graph.ActSwiGLUOAI, graph.ActSwiGLUClamp, graph.ActSitu, graph.ActQuickGELU} {
 		if n, _ := nnActOf(g); n == a {
 			return g
 		}
@@ -1990,6 +1990,8 @@ func nnActOf(a graph.Act) (nn.ActKind, bool) {
 		return nn.ActSwiGLUClamp, true
 	case graph.ActSitu:
 		return nn.ActSitu, true
+	case graph.ActQuickGELU:
+		return nn.ActQuickGELU, true
 	}
 	return 0, false
 }

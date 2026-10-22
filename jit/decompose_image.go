@@ -11,9 +11,10 @@ import (
 // patches.
 const RequestGrid = 0
 
-// decomposePatchify is each row's patch of the picture, gathered: patch r
-// of a grid RequestGrid patches wide, its element c channel c/(P*P), row
-// (c/P)%P and column c%P of the patch, zero past 3*P*P.
+// decomposePatchify is each row's patch of the picture, gathered: row
+// Offset+p patch p of a grid RequestGrid patches wide, its element c
+// channel c/(P*P), row (c/P)%P and column c%P of the patch, zero past 3*P*P
+// and in the rows before Offset.
 func decomposePatchify(o graph.Op, c *Context) ([]Prim, error) {
 	P := o.Attr.Span
 	if len(o.In) != 1 || len(o.Out) != 1 || P < 1 || c.width(o.In[0]) != 3*P*P || c.width(o.Out[0]) < 3*P*P {
@@ -23,8 +24,10 @@ func decomposePatchify(o graph.Op, c *Context) ([]Prim, error) {
 	sh, ish := c.rows(o.Out[0]), c.rows(o.In[0])
 	R, PW := sh[0], uint32(3*P*P)
 	var x exprs
-	r, col := x.coord(0), x.coord(1)
+	row, col := x.coord(0), x.coord(1)
 	u := func(v int) int { return x.u(uint32(v)) }
+	lead := o.Attr.Offset
+	r := x.op(OpSub, U, x.op(OpMax, U, row, u(lead)), u(lead))
 	gw := x.op(OpMax, U, x.load(1, x.u(RequestGrid)), u(1))
 	py, pxi := x.op(OpDiv, U, r, gw), x.op(OpRem, U, r, gw)
 	pp := uint32(P * P)
@@ -34,7 +37,10 @@ func decomposePatchify(o graph.Op, c *Context) ([]Prim, error) {
 	pix := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, y, x.op(OpMul, U, gw, u(P))), xx), u(3)), ch)
 	at := x.op(OpMin, U, x.op(OpDiv, U, pix, x.u(PW)), u(R-1))
 	v := x.at(0, ish, at, x.op(OpRem, U, pix, x.u(PW)))
-	x.sel(F, x.op(OpLess, ir.Pred, col, x.u(PW)), v, x.f(0))
+	v = x.sel(F, x.op(OpLess, ir.Pred, col, x.u(PW)), v, x.f(0))
+	if lead > 0 {
+		x.sel(F, x.op(OpLess, ir.Pred, row, u(lead)), x.f(0), v)
+	}
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), tableRequest}, Out: c.value(o.Out[0]), Expr: x.e,
 		Facts: Facts{Extents: map[int]int{1: RequestRows + R}}}}, nil
 }
@@ -62,4 +68,33 @@ func decomposeRegroup(o graph.Op, c *Context) ([]Prim, error) {
 	x.at(0, ish, x.op(OpMin, U, p, u(R-1)), e)
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), tableRequest}, Out: c.value(o.Out[0]), Expr: x.e,
 		Facts: Facts{Extents: map[int]int{1: RequestRows + R}}}}, nil
+}
+
+// decomposeLeadRow is the input with its first Offset rows each the
+// weight's row.
+func decomposeLeadRow(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || o.Attr.Offset < 1 || o.Weight[0].K != c.width(o.In[0]) {
+		return nil, fmt.Errorf("a lead row of %d operands, %d weights", len(o.In), len(o.Weight))
+	}
+	sh := c.rows(o.Out[0])
+	w := o.Weight[0]
+	var x exprs
+	r, i := x.coord(0), x.coord(1)
+	in, lead := x.at(0, sh, r, i), x.at(1, []int{sh[1]}, i)
+	x.sel(ir.F32, x.op(OpLess, ir.Pred, r, x.u(uint32(o.Attr.Offset))), lead, in)
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), {Kind: OperandVector, Role: w.Role, Name: w.Role.String()}},
+		Out: c.value(o.Out[0]), Expr: x.e}}, nil
+}
+
+// decomposeDropRows is the input from row Offset on.
+func decomposeDropRows(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 1 || len(o.Out) != 1 || o.Attr.Offset < 1 || c.width(o.In[0]) != c.width(o.Out[0]) {
+		return nil, fmt.Errorf("a row drop of %d operands", len(o.In))
+	}
+	U := ir.U32
+	sh := c.rows(o.Out[0])
+	var x exprs
+	at := x.op(OpMin, U, x.op(OpAdd, U, x.coord(0), x.u(uint32(o.Attr.Offset))), x.u(uint32(sh[0]-1)))
+	x.at(0, sh, at, x.coord(1))
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }
