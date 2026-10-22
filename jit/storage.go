@@ -3,6 +3,7 @@ package jit
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -142,7 +143,14 @@ func sourceOf(key Operand, written bool, words []uint32) (Source, error) {
 	case key.Kind == OperandWeight || key.Kind == OperandVector:
 		return SourceWeight, nil
 	case key.Kind == OperandTable:
-		s, ok := tableSources[key.Name]
+		name := key.Name
+		// A second rotary's table and planes are the first's sources.
+		for _, t := range []Operand{tableAngles, tablePlanes} {
+			if strings.HasPrefix(name, t.Name+".") {
+				name = t.Name
+			}
+		}
+		s, ok := tableSources[name]
 		if !ok {
 			return 0, fmt.Errorf("jit: table %q has no source", key.Name)
 		}

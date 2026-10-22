@@ -51,7 +51,9 @@ type Context struct {
 	Formats map[jlm.Role]jlm.Type
 	Step    Step
 	Int8    *Int8Form
-	formed  map[graph.ValueID]bool
+	// Rotaries is the model's rotaries, each a table of the step.
+	Rotaries []graph.Rotary
+	formed   map[graph.ValueID]bool
 }
 
 // Decomposition is one op kind's primitives.
@@ -83,7 +85,7 @@ func Default() *Registry {
 
 func (r *Registry) decompose(f Model, part Part, of int, s Step, d Device) ([]Prim, error) {
 	c := &Context{Graph: part.Graph, Part: part.Kind, Formats: formats(f, part), Step: s, Int8: r.Profiles[d.Kind].Int8,
-		formed: map[graph.ValueID]bool{}}
+		Rotaries: f.Rotaries(), formed: map[graph.ValueID]bool{}}
 	if q := c.Int8; q != nil && s.ActWindow > 0 && s.ActWindow != q.Window {
 		w := *q
 		w.Window = s.ActWindow

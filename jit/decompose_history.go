@@ -28,6 +28,25 @@ var (
 	tableValues = Operand{Kind: OperandTable, Name: "kv.v", PerPart: true}
 )
 
+// rotaryTable is the step's table a rotary op turns by: the model's one
+// where it has one, else the rotary its width and base name, its factors
+// telling two apart.
+func (c *Context) rotaryTable(a graph.Attrs) (Operand, error) {
+	if len(c.Rotaries) <= 1 {
+		return tableAngles, nil
+	}
+	found := -1
+	for i, r := range c.Rotaries {
+		if r.NRot == a.NRot && r.Base == a.Base && (found < 0 || r.Freqs == a.Freqs) {
+			found = i
+		}
+	}
+	if found < 0 {
+		return Operand{}, fmt.Errorf("a rotary of %d at base %v the model states no table of", a.NRot, a.Base)
+	}
+	return Operand{Kind: OperandTable, Name: tableName(found)}, nil
+}
+
 // decomposeRope turns each head's first NRot elements in pairs by the
 // step's angles: an element a pair, both turned values stored.
 func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
@@ -59,7 +78,11 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	y0 := x.op(OpSub, F, x.op(OpMul, F, x0, co), x.op(OpMul, F, x1, si))
 	y1 := x.op(OpAdd, F, x.op(OpMul, F, x0, si), x.op(OpMul, F, x1, co))
 	out := c.value(o.Out[0])
-	prims := []Prim{{Kind: PrimMap, Shape: []int{R, W / hd, pairs}, In: []Operand{c.value(o.In[0]), tableAngles}, Expr: x.e,
+	table, err := c.rotaryTable(a)
+	if err != nil {
+		return nil, err
+	}
+	prims := []Prim{{Kind: PrimMap, Shape: []int{R, W / hd, pairs}, In: []Operand{c.value(o.In[0]), table}, Expr: x.e,
 		Stores: []PrimStore{{Out: out, Ax: []int{r, at}, Ext: sh, Value: y0}, {Out: out, Ax: []int{r, at2}, Ext: sh, Value: y1}}}}
 	// A partial rotary turns the first NRot of each head; the rest of the
 	// head is the input's.

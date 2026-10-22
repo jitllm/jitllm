@@ -7,7 +7,6 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/model"
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/run"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
@@ -28,8 +27,6 @@ func TestEveryLaunchRepeatsItself(t *testing.T) {
 	}
 	defer m.Close()
 	src := m.Composing()
-	c := src.Config()
-	rope := nn.Rope{NRot: int(c.NRot), Base: float64(c.RopeBase)}
 	devs := backend.Open()
 	defer func() {
 		for _, d := range devs {
@@ -41,7 +38,7 @@ func TestEveryLaunchRepeatsItself(t *testing.T) {
 	}
 	for _, dev := range devs {
 		t.Run(dev.API(), func(t *testing.T) {
-			r, err := run.New(src, dev, gpu, 32, rope)
+			r, err := run.New(src, dev, gpu, 32)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -19,6 +19,7 @@ type header struct {
 	all         []jlm.Entry
 	blocks      []*graph.Graph
 	head, embed *graph.Graph
+	rotaries    []graph.Rotary
 }
 
 func (h header) Config() *jlm.Config { return h.cfg }
@@ -36,6 +37,8 @@ func (h header) HeadGraph() *graph.Graph { return h.head }
 
 func (h header) EmbedGraph() *graph.Graph { return h.embed }
 
+func (h header) Rotaries() []graph.Rotary { return h.rotaries }
+
 func (h header) Find(role jlm.Role, block, index int32) (*jlm.Entry, bool) {
 	e, ok := h.by[[3]int32{int32(role), block, index}]
 	return e, ok
@@ -51,7 +54,7 @@ func TestHeaderPricesAsTheContainer(t *testing.T) {
 	}
 	f := m.Composing()
 	cfg := *f.Config()
-	h := header{cfg: &cfg, by: map[[3]int32]*jlm.Entry{}, head: f.HeadGraph(), embed: f.EmbedGraph()}
+	h := header{cfg: &cfg, by: map[[3]int32]*jlm.Entry{}, head: f.HeadGraph(), embed: f.EmbedGraph(), rotaries: f.Rotaries()}
 	for _, e := range f.Entries() {
 		e.QSOff, e.DOff, e.SCOff = 0, 0, 0
 		h.by[[3]int32{int32(e.Role), e.Block, e.Index}] = &e

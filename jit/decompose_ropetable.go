@@ -3,6 +3,7 @@ package jit
 import (
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/jit/ir"
@@ -116,8 +117,9 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 
 	var live exprs
 	live.load(0, live.u(0))
-	out := Operand{Kind: OperandTable, Name: tableAngles.Name}
-	return []Prim{{Kind: PrimMap, Shape: []int{R, P}, In: []Operand{tablePos, tablePlanes, tableRopeKon}, Expr: x.e,
+	out := Operand{Kind: OperandTable, Name: c.Graph.Values[o.Out[0]].Name}
+	planes := Operand{Kind: OperandTable, Name: tablePlanes.Name + strings.TrimPrefix(out.Name, tableAngles.Name)}
+	return []Prim{{Kind: PrimMap, Shape: []int{R, P}, In: []Operand{tablePos, planes, tableRopeKon}, Expr: x.e,
 		Stores: []PrimStore{{Out: out, Index: at, Value: cvs, Extent: 2 * R * P}, {Out: out, Index: at1, Value: svs, Extent: 2 * R * P}},
 		Facts: Facts{Rows: live.e, Words: map[int][]uint32{2: ropeConsts()}, Extents: map[int]int{0: 1 + R, 1: 8*stride + 1},
 			Quarter: &Quarter{Sum: s, Rest: co, Turn: n, Part: f, Bound: 1 << (ropeDigitBits + 4)}}}}, nil

@@ -53,6 +53,17 @@ type Model interface {
 	BlockGraph(li int) *graph.Graph
 	HeadGraph() *graph.Graph
 	EmbedGraph() *graph.Graph
+	// Rotaries is every rotary the blocks turn by, the model's own first;
+	// each is a table of the step.
+	Rotaries() []graph.Rotary
+}
+
+// tableName is rotary i's table: rope.cs for the first, rope.cs.i past it.
+func tableName(i int) string {
+	if i == 0 {
+		return "rope.cs"
+	}
+	return fmt.Sprintf("rope.cs.%d", i)
 }
 
 // unread is the first tensor of block (jlm.DenseBlock for none) whose role
@@ -88,12 +99,20 @@ func has(m Model, role jlm.Role, block, index int32) bool {
 // its logits. A model-wide tensor no graph binds, the front end refuses.
 func Front(f Model) ([]Part, error) {
 	c := f.Config()
-	rt := graph.RopeTable{NRot: int(c.NRot)}
 	em, h := f.EmbedGraph(), f.HeadGraph()
 	if em == nil || h == nil {
 		return nil, fmt.Errorf("jit: the model states no head or input rows")
 	}
-	parts := []Part{{Kind: PartTable, Block: -1, Graph: rt.Build()}, {Kind: PartEmbed, Block: -1, Graph: em}}
+	rots := f.Rotaries()
+	if len(rots) == 0 {
+		rots = []graph.Rotary{{NRot: int(c.NRot)}}
+	}
+	var parts []Part
+	for i, r := range rots {
+		rt := graph.RopeTable{NRot: r.NRot, Name: tableName(i)}
+		parts = append(parts, Part{Kind: PartTable, Block: -1, Graph: rt.Build()})
+	}
+	parts = append(parts, Part{Kind: PartEmbed, Block: -1, Graph: em})
 	for li := 0; li < int(c.NLayer); li++ {
 		g := f.BlockGraph(li)
 		if g == nil {

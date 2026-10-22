@@ -44,8 +44,6 @@ func TestRunnerDecodesAsTheHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	c := f.Config()
-	rope := nn.Rope{NRot: int(c.NRot), Base: float64(c.RopeBase)}
 	ids := m.Vocab.Encode("Hello there", true)
 	const more = 6
 	devs := backend.Open()
@@ -62,7 +60,7 @@ func TestRunnerDecodesAsTheHost(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%d", dev.API(), capacity), func(t *testing.T) {
 				reg := jit.Default()
 				reg.PoisonWorkgroupMemory()
-				r, err := run.New(m.Composing(), dev, gpu, capacity, rope, run.WithGuard(4096), run.WithComposer(reg))
+				r, err := run.New(m.Composing(), dev, gpu, capacity, run.WithGuard(4096), run.WithComposer(reg))
 				if err != nil {
 					t.Fatal(err)
 				}

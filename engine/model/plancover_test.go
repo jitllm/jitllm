@@ -117,7 +117,7 @@ func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (r
 	host.Close()
 	last := m.Cfg.NLayer - 1
 	for _, dev := range devs {
-		r, err := run.New(m.Composing(), dev, gpu, 32, m.rope)
+		r, err := run.New(m.Composing(), dev, gpu, 32)
 		if err != nil {
 			return "", false, strings.SplitN(err.Error(), "\n", 2)[0]
 		}
@@ -145,14 +145,16 @@ func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (r
 		for i, cd := range codes {
 			lastOf[cd.part] = i
 		}
+		// A part's residual is its graph's stated output, whatever it is
+		// named (Gemma 4's is the scaled x_out).
 		residOf := func(part int) (int, bool) {
-			name := "x_out"
-			if part < 2 {
-				name = "x"
+			g := plan.Parts[part].Part.Graph
+			if len(g.Out) == 0 {
+				return 0, false
 			}
 			for i := lastOf[part]; i >= 0; i-- {
 				for _, b := range codes[i].c.Binds {
-					if b.Writes && b.Operand.Name == name && codes[i].part == part {
+					if b.Writes && b.Operand.Kind == jit.OperandValue && b.Operand.Value == g.Out[0] && codes[i].part == part {
 						return b.Storage, true
 					}
 				}
@@ -171,7 +173,13 @@ func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (r
 			if i != lastOf[p] {
 				return
 			}
-			if li := p - 2; li >= 0 && li <= last {
+			blockOf := func(p int) int {
+				if p < len(plan.Parts) && plan.Parts[p].Part.Kind == jit.PartBlock {
+					return plan.Parts[p].Part.Block
+				}
+				return -1
+			}
+			if li := blockOf(p); li >= 0 && li <= last {
 				if st, ok := residOf(p); ok {
 					h := traced[fmt.Sprint(li, "ffn_resid")]
 					if g := s.Storage(st); h != nil && len(g) >= 4*len(h) {
@@ -185,7 +193,7 @@ func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (r
 					}
 				}
 			}
-			if li := p + 1 - 2; li >= 0 && li <= last {
+			if li := blockOf(p + 1); li >= 0 && li <= last {
 				if st, ok := residOf(p); ok && hostIn(li) != nil {
 					in := hostIn(li)
 					b := make([]byte, 4*len(in))

@@ -5,6 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/run"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit"
@@ -34,6 +35,25 @@ func (c composing) EmbedGraph() *graph.Graph { return c.m.EmbedGraph() }
 
 func (c composing) ActWindow() int { return c.m.ActWindow() }
 
+// Rotaries is the model's rotaries as its rotary ops state them: the
+// model's own, then the sliding layers' where it trains two.
+func (c composing) Rotaries() []graph.Rotary {
+	var out []graph.Rotary
+	for _, r := range c.Ropes() {
+		out = append(out, graph.Rotary{NRot: r.NRot, Base: r.Base, Freqs: len(r.Freqs) > 0})
+	}
+	return out
+}
+
+// Ropes is the engine's rotaries in Rotaries' order, each table's planes.
+func (c composing) Ropes() []nn.Rope {
+	out := []nn.Rope{c.m.rope}
+	if c.m.ropeSWA != nil {
+		out = append(out, *c.m.ropeSWA)
+	}
+	return out
+}
+
 // Composing is the model as the composer and the plan's runner read it: one
 // mapping from the container to the block graphs, the one this package's
 // own graph path runs.
@@ -47,7 +67,7 @@ func (m *Model) runner(keys int) (*run.Runner, error) {
 	if r := m.runners[keys]; r != nil {
 		return r, nil
 	}
-	r, err := run.New(m.Composing(), m.opt.planDev, m.opt.planGPU, keys, m.rope)
+	r, err := run.New(m.Composing(), m.opt.planDev, m.opt.planGPU, keys)
 	if err != nil {
 		return nil, err
 	}

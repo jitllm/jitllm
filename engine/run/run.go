@@ -36,6 +36,8 @@ type Source interface {
 	ExpertPaged(e *jlm.Entry) bool
 	ExpertPage(e *jlm.Entry, x int) int
 	Sheet(e *jlm.Entry, x int) (qs, d, sc []byte)
+	// Ropes is the engine's rotaries in jit.Model.Rotaries' order.
+	Ropes() []nn.Rope
 }
 
 // Runner is a model's plan on one device.
@@ -44,7 +46,7 @@ type Runner struct {
 	dev    backend.Device
 	step   jit.Step
 	plan   *jit.Plan
-	planes []float32
+	planes map[string][]float32
 	guard  int
 	reg    *jit.Registry
 	direct bool
@@ -83,15 +85,23 @@ func WithGuard(n int) Option { return func(r *Runner) { r.guard = n } }
 
 // New composes the model in f for gpu, the composer's description of dev, at
 // a capacity of keys positions a sequence, compiles it on dev and uploads what
-// every sequence shares. rope is the model's rotary.
-func New(f Source, dev backend.Device, gpu jit.Device, keys int, rope nn.Rope, opts ...Option) (*Runner, error) {
+// every sequence shares. Each of the model's rotaries (Source.Ropes) fills
+// its table's planes.
+func New(f Source, dev backend.Device, gpu jit.Device, keys int, opts ...Option) (*Runner, error) {
 	c := f.Config()
 	r := &Runner{f: f, dev: dev, step: jit.Step{Rows: 1, Page: 64, Keys: keys, ActWindow: f.ActWindow()}, logits: -1, token: -1, input: -1,
 		nvocab: int(c.NVocab), nembd: int(c.NEmbd)}
 	for _, o := range opts {
 		o(r)
 	}
-	r.planes = rope.TabPlanes(int(c.NRot) / 2)
+	r.planes = map[string][]float32{}
+	for i, rope := range f.Ropes() {
+		name := "rope.planes"
+		if i > 0 {
+			name = fmt.Sprintf("rope.planes.%d", i)
+		}
+		r.planes[name] = rope.TabPlanes(rope.NRot / 2)
+	}
 	if r.reg == nil {
 		r.reg = jit.Default()
 	}
@@ -158,7 +168,12 @@ func New(f Source, dev backend.Device, gpu jit.Device, keys int, rope nn.Rope, o
 		case jit.SourceWords:
 			data = wordBytes(st.Words)
 		case jit.SourceRopePlanes:
-			data = floatBytes(r.planes)
+			p, ok := r.planes[st.Key.Name]
+			if !ok {
+				r.Close()
+				return nil, fmt.Errorf("run: no rotary fills table %q", st.Key.Name)
+			}
+			data = floatBytes(p)
 		default:
 			continue
 		}
@@ -184,7 +199,7 @@ func (r *Runner) bytes(st jit.Storage) (int64, error) {
 	case jit.SourceKeys, jit.SourceValues:
 		return 4 * pages * int64(r.step.Page) * int64(c.NKVHead*c.HeadDim), nil
 	case jit.SourceRopePlanes:
-		return int64(4 * len(r.planes)), nil
+		return int64(4 * len(r.planes[st.Key.Name])), nil
 	case jit.SourceTransfer:
 		return 0, fmt.Errorf("run: a plan of one device carries no value between devices")
 	}
