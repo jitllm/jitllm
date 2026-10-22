@@ -61,11 +61,15 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 		k := p.bin(OpAdd, ir.U32, p.bin(OpMul, ir.U32, seg, p.u32(T/S)), it)
 		p.redirect(it, k, k)
 	}
-	b := p.buf(Buf{Kind: BufOut, Elem: ir.F32, Operand: planes, Shape: shape})
+	// The planes hold the sum's own type: an integer dot's sum is summed
+	// as integers.
+	t := n.Nodes[f].Type
+	zero := func(k *Kernel) int { return k.add(Node{Op: OpConst, Type: t}) }
+	b := p.buf(Buf{Kind: BufOut, Elem: t, Operand: planes, Shape: shape})
 	val := f
 	if term >= 0 {
 		first := p.add(Node{Op: OpLess, Type: ir.Pred, A: seg, B: p.u32(1)})
-		val = p.bin(OpAdd, ir.F32, f, p.add(Node{Op: OpSelect, Type: ir.F32, A: first, B: term, C: p.f32(0)}))
+		val = p.bin(OpAdd, t, f, p.add(Node{Op: OpSelect, Type: t, A: first, B: term, C: zero(p)}))
 	}
 	ax := append([]int{seg}, p.Stores[st].Ax...)
 	p.Stores[st] = Store{Buf: b, Val: val, At: -1, Ax: ax}
@@ -75,13 +79,13 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 	for i := range coords {
 		coords[i] = m.add(Node{Op: OpCoord, A: i, Type: ir.U32})
 	}
-	in := m.buf(Buf{Kind: BufIn, Elem: ir.F32, Operand: planes, Shape: shape})
+	in := m.buf(Buf{Kind: BufIn, Elem: t, Operand: planes, Shape: shape})
 	ob := m.buf(n.Bufs[n.Stores[st].Buf])
 	l := m.loop(S, -1)
 	it := m.add(Node{Op: OpIter, At: l, Type: ir.U32})
-	acc := m.add(Node{Op: OpFold, At: l, Type: n.Nodes[f].Type, B: m.f32(0)})
-	x := m.add(Node{Op: OpLoad, Type: ir.F32, Buf: in, Ax: append([]int{it}, coords...)})
-	m.Nodes[acc].A = m.bin(OpAdd, ir.F32, acc, x)
+	acc := m.add(Node{Op: OpFold, At: l, Type: t, B: zero(m)})
+	x := m.add(Node{Op: OpLoad, Type: t, Buf: in, Ax: append([]int{it}, coords...)})
+	m.Nodes[acc].A = m.bin(OpAdd, t, acc, x)
 	m.Stores = append(m.Stores, Store{Buf: ob, Val: acc, At: -1, Ax: coords})
 	return []*Kernel{p, m}, true, nil
 }
