@@ -215,3 +215,48 @@ func decomposeSlice(o graph.Op, c *Context) ([]Prim, error) {
 	x.at(0, in, r, col)
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }
+
+// decomposeTile is the row repeated: element i of the output its input's
+// element i mod Span (the whole row where Span is 0).
+func decomposeTile(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 0 {
+		return nil, fmt.Errorf("a tile of %d operands", len(o.In))
+	}
+	in, sh := c.rows(o.In[0]), c.rows(o.Out[0])
+	span := o.Attr.Span
+	if span == 0 {
+		span = in[1]
+	}
+	if span < 1 || span > in[1] || sh[1]%span != 0 {
+		return nil, fmt.Errorf("a tile of %d over a row of %d into %d", span, in[1], sh[1])
+	}
+	var x exprs
+	x.at(0, in, x.coord(0), x.op(OpRem, ir.U32, x.coord(1), x.u(uint32(span))))
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
+}
+
+// decomposeConcat is its inputs end to end: each input's elements at its
+// offset, one store a input.
+func decomposeConcat(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) < 1 || len(o.Out) != 1 || len(o.Weight) != 0 {
+		return nil, fmt.Errorf("a concatenation of %d operands", len(o.In))
+	}
+	out := c.value(o.Out[0])
+	osh := c.rows(o.Out[0])
+	var prims []Prim
+	off := 0
+	for _, v := range o.In {
+		sh := c.rows(v)
+		var x exprs
+		r, i := x.coord(0), x.coord(1)
+		val := x.at(0, sh, r, i)
+		at := x.op(OpAdd, ir.U32, x.u(uint32(off)), i)
+		prims = append(prims, Prim{Kind: PrimMap, Shape: sh, In: []Operand{c.value(v)}, Expr: x.e,
+			Stores: []PrimStore{{Out: out, Ax: []int{r, at}, Ext: osh, Value: val}}})
+		off += sh[1]
+	}
+	if off != osh[1] {
+		return nil, fmt.Errorf("a concatenation of %d into %d", off, osh[1])
+	}
+	return prims, nil
+}

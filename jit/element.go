@@ -63,8 +63,13 @@ func sameSpace(a, b *Kernel) bool {
 	return true
 }
 
-// soleReader reports whether c is the only kernel of ks reading o.
+// soleReader reports whether c is the only kernel of ks reading o. A value
+// another part reads is a part's output, which the engine reads too (the
+// logits, a residual at a device seam): never solely c's.
 func soleReader(ks []*Kernel, c *Kernel, o Operand) bool {
+	if o.Kind == OperandValue && o.Of != c.Of {
+		return false
+	}
 	for _, k := range ks {
 		if k != c && k.reads(o) {
 			return false

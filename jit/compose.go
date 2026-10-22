@@ -173,6 +173,7 @@ func (r *Registry) Kernels(f Model, run []PartPlan, first int, s Step) ([]*Kerne
 			ks = append(ks, k)
 		}
 	}
+	boundaries(ks, run, first)
 	prof, ok := r.Profiles[d.Kind]
 	if !ok {
 		return nil, fmt.Errorf("jit: no profile for %s", d.Kind)
@@ -182,6 +183,34 @@ func (r *Registry) Kernels(f Model, run []PartPlan, first int, s Step) ([]*Kerne
 		return nil, err
 	}
 	return ks, errors.Join(errs...)
+}
+
+// boundaries names each part's input in ks as the operand the run's part
+// before it wrote it as (the storage both are, StorageKeys): a pass that
+// joins kernels across the boundary then sees one buffer, its writes and
+// its reads, where two names would hide a race between them.
+func boundaries(ks []*Kernel, run []PartPlan, first int) {
+	alias := map[Operand]Operand{}
+	for i := 1; i < len(run); i++ {
+		a, b := run[i-1].Part.Graph, run[i].Part.Graph
+		if len(a.Out) == 0 || len(b.In) == 0 {
+			continue
+		}
+		from := Operand{Kind: OperandValue, Value: a.Out[0], Of: first + i - 1}
+		if x, ok := alias[from]; ok {
+			from = x
+		}
+		alias[Operand{Kind: OperandValue, Value: b.In[0], Of: first + i}] = from
+	}
+	for _, k := range ks {
+		for bi := range k.Bufs {
+			o := &k.Bufs[bi].Operand
+			if x, ok := alias[Operand{Kind: OperandValue, Value: o.Value, Of: o.Of}]; ok && o.Kind == OperandValue {
+				o.Value, o.Of = x.Value, x.Of
+				o.Name = run[x.Of-first].Part.Graph.Values[x.Value].Name
+			}
+		}
+	}
 }
 
 // PartCode is a kernel's code and the part of the model it belongs to.

@@ -120,6 +120,9 @@ func (p *Prim) own(of int) {
 		mark(&p.In[i])
 	}
 	mark(&p.Out)
+	if p.Carry != nil {
+		mark(&p.CarryOut)
+	}
 	for i := range p.Stores {
 		mark(&p.Stores[i].Out)
 	}

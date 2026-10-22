@@ -1,9 +1,9 @@
 package graph
 
 // streamMix writes the low-rank gated read of a residual of several streams
-// as primitives, or returns false for the forms it does not state (the
-// Sinkhorn-normalised mix, and the softmax bank over scores, which binds one
-// weight and writes no placement).
+// as primitives, or returns false for the form it does not state (the
+// Sinkhorn-normalised mix). The softmax bank over scores, which binds one
+// weight and writes no placement, is bankMix's.
 //
 // The op reads In[0], Streams streams of d stream-major, and binds the
 // streams' grouped norm (Weight[0], Streams*d), a down projection to the low
@@ -21,7 +21,7 @@ package graph
 func (d *Graph) streamMix(o Op) bool {
 	a := o.Attr
 	h := a.Streams
-	if !a.Sinkhorn && a.Groups != 0 {
+	if !a.Sinkhorn && len(o.Weight) == 1 {
 		return d.bankMix(o)
 	}
 	if a.Sinkhorn || a.Groups != 0 || h < 1 || len(o.In) != 1 || len(o.Out) < 1 || len(o.Out) > 2 ||
@@ -111,12 +111,18 @@ func (d *Graph) streamPlace(o Op) bool {
 func (d *Graph) bankMix(o Op) bool {
 	a := o.Attr
 	h, nb := a.Streams, a.Groups
-	if nb < 1 || nb >= h || len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 {
+	if nb < 0 || nb >= h || len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 {
 		return false
 	}
 	w := d.Values[o.Out[0]].Width
 	if w < 1 || d.Values[o.In[0]].Width != h*w || d.Values[o.In[0]].Elem != ElemF32 || o.Weight[0].K != w || o.Weight[0].Rows != 0 {
 		return false
+	}
+	if nb == 0 {
+		// An empty bank: the softmax over the running residual alone is
+		// exactly one, so the row is stream 0.
+		d.op(Op{Kind: OpSlice, In: []ValueID{o.In[0]}, Out: []ValueID{o.Out[0]}, Attr: Attrs{Offset: 0, Width: w}})
+		return true
 	}
 	p := prims{d: d}
 	terms := make([]ValueID, nb+1)

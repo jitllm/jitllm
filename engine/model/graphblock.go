@@ -916,6 +916,9 @@ func (m *Model) HeadGraph() *graph.Graph {
 	if c.TiedEmbd {
 		h.Out = jlm.RoleTokenEmbd
 	}
+	if c.ResAttn() {
+		h.Streams, h.Bank = c.Streams(), c.resBankFinal()
+	}
 	return h.Build()
 }
 
@@ -925,6 +928,9 @@ func (m *Model) EmbedGraph() *graph.Graph {
 	e := graph.Embed{NEmbd: m.Cfg.NEmbd, NVocab: m.Cfg.NVocab, Scale: m.Cfg.EmbdScale}
 	if p, ok := m.container.Find(jlm.RolePosEmbd, jlm.DenseBlock, -1); ok {
 		e.Positions = int(p.Dims[1])
+	}
+	if m.Cfg.ResAttn() {
+		e.Streams = m.Cfg.Streams()
 	}
 	return e.Build()
 }

@@ -124,6 +124,15 @@ func New(f Source, dev backend.Device, gpu jit.Device, keys int, opts ...Option)
 			r.input = i
 		}
 	}
+	// The logits and the token are the head's and the sample's outputs,
+	// whichever kernel writes them: a fusion may join a part's last kernel
+	// to the next part's first.
+	outOf := map[jit.Operand]jit.PartKind{}
+	for i, pp := range plan.Parts {
+		if len(pp.Part.Graph.Out) > 0 {
+			outOf[jit.Operand{Kind: jit.OperandValue, Value: pp.Part.Graph.Out[0], Of: i}] = pp.Part.Kind
+		}
+	}
 	for _, pp := range plan.Parts {
 		for _, code := range pp.Codes {
 			if code.GPU == nil {
@@ -140,9 +149,9 @@ func New(f Source, dev backend.Device, gpu jit.Device, keys int, opts ...Option)
 			l := launch{k: kern, groups: code.Groups, width: k.Group[0]}
 			for _, b := range code.Binds {
 				l.at = append(l.at, b.Storage)
-				if b.Writes && b.Operand.Kind == jit.OperandValue && len(pp.Part.Graph.Out) > 0 &&
-					b.Operand.Value == pp.Part.Graph.Out[0] {
-					switch pp.Part.Kind {
+				if kind, ok := outOf[jit.Operand{Kind: jit.OperandValue, Value: b.Operand.Value, Of: b.Operand.Of}]; ok &&
+					b.Writes && b.Operand.Kind == jit.OperandValue {
+					switch kind {
 					case jit.PartHead:
 						r.logits = b.Storage
 					case jit.PartSample:

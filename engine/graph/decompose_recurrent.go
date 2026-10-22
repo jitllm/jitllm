@@ -18,13 +18,14 @@ import (
 // The gated delta rule (jlm.LayerLinearAttn), the host's linearAttn: q,
 // k and v the row's projection; z the output gate's projection, low rank
 // where the block binds ssm_g_a; the convolution and SiLU; beta the
-// sigmoid of its logits and the decay exp(A softplus(alpha + dt_bias)),
-// alpha deinterleaved from the logits' row (Qwen3-Next) or its own low-rank
-// projection a value head's state columns wide (Kimi Delta Attention); q
-// and k L2-normed per key head, q scaled twice by 1/sqrt(HeadDim) and k
-// once; the rule; each value head RMS-normed against ssm_norm, gated by
-// silu(z) or, for KDA and where the container states it, sigmoid(z); the
-// output projection.
+// sigmoid of its logits and the decay exp(A softplus(alpha + dt_bias)) --
+// exp(lb sigmoid(-A (alpha + dt_bias))) where Kimi-K3 states a lower bound
+// lb -- alpha deinterleaved from the logits' row (Qwen3-Next) or its own
+// low-rank projection a value head's state columns wide (Kimi Delta
+// Attention); q and k L2-normed per key head, q scaled twice by
+// 1/sqrt(HeadDim) and k once; the rule; each value head RMS-normed against
+// ssm_norm, gated by silu(z) or, for KDA and where the container states
+// it, sigmoid(z); the output projection.
 //
 // Mamba-1's mixer (jlm.LayerMamba1), the host's mamba1Attn: x and z the
 // row's projections; x convolved, its bias added, SiLU; dt's low rank, B
@@ -225,7 +226,7 @@ func (d *Graph) mamba1(o Op, c *jlm.Config) bool {
 const kdaL2Eps = 1e-6
 
 // delta writes the gated delta rule o as primitives, false where o does not
-// bind what it reads or c states a decay bound (Kimi-K3's).
+// bind what it reads, or c states a decay bound on a scalar decay.
 func (d *Graph) delta(o Op, c *jlm.Config) bool {
 	w := map[jlm.Role]Binding{}
 	for _, b := range o.Weight {
@@ -242,7 +243,7 @@ func (d *Graph) delta(o Op, c *jlm.Config) bool {
 	inner := int(c.SSM.Inner)
 	if len(o.In) != 1 || len(o.Out) != 1 || kh < 1 || kd < 1 || vh < 1 || vh%kh != 0 || inner%vh != 0 ||
 		in.Rows != inner+2*kh*kd || conv.Rows != in.Rows || conv.K < 2 || out.K != inner || nrm.K != inner/vh ||
-		hasGate == lowGate || c.KDALowerBound != 0 {
+		hasGate == lowGate || c.KDALowerBound != 0 && !chans {
 		return false
 	}
 	rep, vd := vh/kh, inner/vh
@@ -303,8 +304,17 @@ func (d *Graph) delta(o Op, c *jlm.Config) bool {
 	xs := val("conv_silu", in.Rows)
 	d.op(Op{Kind: OpAct, In: []ValueID{cv}, Out: []ValueID{xs}, Attr: Attrs{Act: ActSiLU}})
 
-	sp := mapv("alpha_sp", MapSoftplus, decayW, 0, mapw("alpha_dt", MapAdd, alpha, dtb, decayW))
-	decay := mapv("decay", MapExp, decayW, 0, mapw("a_sp", MapMul, sp, a, decayW))
+	ad := mapw("alpha_dt", MapAdd, alpha, dtb, decayW)
+	var decay ValueID
+	if lb := c.KDALowerBound; lb != 0 {
+		// Kimi-K3's lower bound: exp(lb sigmoid(-A z)), A the stored
+		// -exp(A_log).
+		neg := mapv("a_z_neg", MapMul, decayW, -1, mapw("a_z", MapMul, ad, a, decayW))
+		decay = mapv("decay", MapExp, decayW, 0, mapv("bounded", MapMul, decayW, float64(lb), mapv("a_z_sig", MapSigmoid, decayW, 0, neg)))
+	} else {
+		sp := mapv("alpha_sp", MapSoftplus, decayW, 0, ad)
+		decay = mapv("decay", MapExp, decayW, 0, mapw("a_sp", MapMul, sp, a, decayW))
+	}
 	beta := mapv("beta", MapSigmoid, vh, 0, braw)
 
 	eps := float64(c.RMSEps)

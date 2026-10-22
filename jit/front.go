@@ -103,6 +103,9 @@ func Front(f Model) ([]Part, error) {
 	if em == nil || h == nil {
 		return nil, fmt.Errorf("jit: the model states no head or input rows")
 	}
+	// Their composite ops as primitives, as a block's: a residual of
+	// several streams filled and collapsed.
+	em, h = graph.Decompose(em), graph.Decompose(h)
 	rots := f.Rotaries()
 	if len(rots) == 0 {
 		rots = []graph.Rotary{{NRot: int(c.NRot)}}

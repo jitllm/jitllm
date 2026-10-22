@@ -19,13 +19,24 @@ type Head struct {
 	Softcap float64
 	// LogitScale divides the logits; 0 and 1 are none.
 	LogitScale float64
+	// Streams, where above one, is a residual of that many streams the
+	// head reads Bank checkpoints and the running residual of, by Kimi-K3's
+	// residual attention (OpStreamMix's bank, RoleOutputResScore), before
+	// its norm.
+	Streams, Bank int
 }
 
 func (h *Head) Build() *Graph {
 	g := &Graph{Block: -1}
-	x := g.value("x", h.NEmbd)
-	n := g.value("normed", h.NEmbd)
+	x := g.value("x", max(1, h.Streams)*h.NEmbd)
 	g.In = []ValueID{x}
+	if h.Streams > 1 {
+		row := g.value("collapsed", h.NEmbd)
+		g.op(Op{Kind: OpStreamMix, In: []ValueID{x}, Out: []ValueID{row}, Weight: []Binding{{Role: jlm.RoleOutputResScore, K: h.NEmbd}},
+			Attr: Attrs{Streams: h.Streams, Eps: h.Eps, Groups: h.Bank}})
+		x = row
+	}
+	n := g.value("normed", h.NEmbd)
 	norm := Op{Kind: OpNorm, In: []ValueID{x}, Out: []ValueID{n},
 		Weight: []Binding{{Role: jlm.RoleOutputNorm, K: h.NEmbd, Rows: 1}}, Attr: Attrs{Eps: h.Eps}}
 	if h.LayerNorm {

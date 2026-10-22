@@ -39,6 +39,8 @@ func decompositions() map[graph.OpKind]Decomposition {
 		graph.OpLatentAppend: decomposeLatentAppend,
 		graph.OpAttendLatent: decomposeAttendLatent,
 		graph.OpSlice:        decomposeSlice,
+		graph.OpTile:         decomposeTile,
+		graph.OpConcat:       decomposeConcat,
 		graph.OpEmbed:        decomposeEmbed,
 	}
 }
