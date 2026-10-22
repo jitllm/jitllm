@@ -5,8 +5,10 @@ import "github.com/jitllm/jitllm/jit/ir"
 // Stage moves a workgroup's temporaries -- values it alone writes and reads
 // -- into one plane of workgroup memory: an element at the coordinates that
 // are not the workgroup's own, a head counted from the workgroup's first,
-// each other coordinate held to its extent. Workgroup memory a binding made
-// for the warps' sums, live after the temporaries, shares the plane.
+// each other coordinate held to its extent. A temporary's heads are its own
+// count (a binding's slices of a head make several rows of one). Workgroup
+// memory a binding made for the warps' sums, live after the temporaries,
+// shares the plane.
 type Stage struct{}
 
 func (Stage) Name() string { return "stage" }
@@ -25,7 +27,6 @@ func (p Stage) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				others[b.Operand] = true
 			}
 		}
-		G := k.Heads.Query / k.Space[1]
 		m := k.clone()
 		group := -1
 		for i, nd := range m.Nodes {
@@ -38,7 +39,7 @@ func (p Stage) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		for i, b := range m.Bufs {
 			if b.Operand.Temp && b.Shape != nil && b.Kind != BufShared && !others[b.Operand] && len(b.Shape) == 4 {
 				staged[i] = true
-				size = max(size, G*b.Shape[3])
+				size = max(size, b.Shape[1]/k.Space[1]*b.Shape[3])
 			}
 		}
 		if len(staged) == 0 || group < 0 {
@@ -54,9 +55,9 @@ func (p Stage) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			J = max(J, m.Bufs[i].Shape[3])
 		}
 		plane := m.buf(Buf{Kind: BufShared, Elem: ir.F32, Size: size, Shape: []int{size / J, J}})
-		base := m.bin(OpMul, ir.U32, group, m.u32(G))
 		local := func(b int, ax []int) []int {
 			sh := m.Bufs[b].Shape
+			base := m.bin(OpMul, ir.U32, group, m.u32(sh[1]/k.Space[1]))
 			return []int{m.bin(OpSub, ir.U32, ax[1], base), m.bin(OpMin, ir.U32, ax[3], m.u32(sh[3]-1))}
 		}
 		for i := range m.Nodes {

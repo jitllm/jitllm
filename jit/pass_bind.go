@@ -5,7 +5,10 @@ import "github.com/jitllm/jitllm/jit/ir"
 // Bind deals a workgroup's phase loops to its threads by their structure:
 //   - a loop over positions holding a reduction of an axis of its own: a
 //     position a thread, lanes over consecutive positions and warps over
-//     runs of them;
+//     runs of them; where the axis is wider than a warp, main's slices:
+//     the warps over slices of the axis (a warp per 32 of it, as many as
+//     divide the warps) times runs of positions, each slice's partial a
+//     row of its own that what reads the reduction sums;
 //   - a loop over positions with nothing nested: a position a thread, its
 //     sums combined over the lanes by a butterfly, each warp's to a
 //     workgroup array a lane, and the warps' first lanes combined;
@@ -37,7 +40,11 @@ func (p Bind) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			inner := m.innerLoops(c)
 			switch {
 			case l.Range && len(inner) > 0 && !m.Loops[inner[0]].Range:
-				b.runs(c)
+				if wd, ok := b.slices(c, inner); ok {
+					b.runsSliced(c, inner[0], wd)
+				} else {
+					b.runs(c)
+				}
 			case l.Range && len(inner) == 0:
 				b.spread(c)
 			case !l.Range && len(inner) == 1 && m.Loops[inner[0]].Range && l.Trip <= b.L:
@@ -107,6 +114,95 @@ func (b *binder) runs(c int) {
 	})
 	k.Loops[c].Trip = (k.Loops[c].Trip + T - 1) / T
 	k.Loops[c].Unit, k.Loops[c].Bound = T, BoundRuns
+}
+
+// slices is how many slices of the axis loop c's reduction runs over: a
+// warp per lane-width of it, as many as divide the warps, where that is
+// more than one, the slices whole, and loop c stores only rows of the
+// workgroup's temporaries -- what a slice's partial can be a row of.
+func (b *binder) slices(c int, inner []int) (int, bool) {
+	k := b.k
+	if len(inner) != 1 || len(k.foldsOf(inner[0])) == 0 || len(k.innerLoops(inner[0])) != 0 {
+		return 0, false
+	}
+	D := k.Loops[inner[0]].Trip
+	wd := min(b.W, (D+b.L-1)/b.L)
+	for wd > 0 && b.W%wd != 0 {
+		wd++
+	}
+	if wd <= 1 || D%wd != 0 {
+		return 0, false
+	}
+	for _, s := range k.Stores {
+		if s.At != c || s.Barrier || s.Run {
+			continue
+		}
+		if bf := k.Bufs[s.Buf]; !bf.Operand.Temp || len(bf.Shape) != 4 || len(s.Ax) != 4 {
+			return 0, false
+		}
+	}
+	return wd, true
+}
+
+// runsSliced is runs with loop in, the reduction's axis, cut into wd
+// slices: lanes over consecutive positions, the warps over the slices times
+// runs of positions; each slice's partial stored as a row of its own, the
+// rows a slice of each head's, and every read of the stored rows their sum.
+func (b *binder) runsSliced(c, in, wd int) {
+	k := b.k
+	wk := b.W / wd
+	ds := k.Loops[in].Trip / wd
+	kg := k.bin(OpRem, ir.U32, b.warp, k.u32(wk))
+	slice := k.bin(OpDiv, ir.U32, b.warp, k.u32(wk))
+	T := wk * b.L
+	b.setIter(c, func(it int) int {
+		run := k.bin(OpMul, ir.U32, k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, it, k.u32(wk)), kg), k.u32(b.L))
+		return k.bin(OpAdd, ir.U32, run, b.lane)
+	})
+	k.Loops[c].Trip = (k.Loops[c].Trip + T - 1) / T
+	k.Loops[c].Unit, k.Loops[c].Bound = T, BoundRuns
+	b.setIter(in, func(it int) int {
+		return k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, slice, k.u32(ds)), it)
+	})
+	k.Loops[in].Trip = ds
+	sliced := map[Operand]bool{}
+	for i, s := range k.Stores {
+		if s.At != c || s.Barrier || s.Run {
+			continue
+		}
+		sliced[k.Bufs[s.Buf].Operand] = true
+		ax := append([]int(nil), s.Ax...)
+		ax[1] = k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, ax[1], k.u32(wd)), slice)
+		k.Stores[i].Ax = ax
+	}
+	for i := range k.Bufs {
+		if sliced[k.Bufs[i].Operand] {
+			sh := append([]int(nil), k.Bufs[i].Shape...)
+			sh[1] *= wd
+			k.Bufs[i].Shape = sh
+		}
+	}
+	var loads []int
+	for i, nd := range k.Nodes {
+		if nd.Op == OpLoad && sliced[k.Bufs[nd.Buf].Operand] {
+			loads = append(loads, i)
+		}
+	}
+	for _, i := range loads {
+		nd := k.Nodes[i]
+		sum := -1
+		for s := range wd {
+			ax := append([]int(nil), nd.Ax...)
+			ax[1] = k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, nd.Ax[1], k.u32(wd)), k.u32(s))
+			ld := k.add(Node{Op: OpLoad, Type: nd.Type, Buf: nd.Buf, Ax: ax})
+			if sum < 0 {
+				sum = ld
+				continue
+			}
+			sum = k.bin(OpAdd, nd.Type, sum, ld)
+		}
+		k.redirect(i, sum, sum)
+	}
 }
 
 // spread is a position a thread over the workgroup, and the loop's sums
