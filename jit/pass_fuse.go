@@ -119,15 +119,18 @@ func (f Fuse) allows(p, c *Kernel, atStores bool) bool {
 }
 
 // joinsUnrolled finds a reduction's output c alone reads, each read at
-// leading coordinates of c's own.
+// leading coordinates of c's own -- or, where c is a reduction too, at its
+// coordinates and its own loop's iteration, a short reduction (Trip at most
+// unrolledTrips) summed once a trip of c's.
 func (f Fuse) joinsUnrolled(p, c *Kernel, ks []*Kernel) (Operand, bool) {
 	allowed := false
 	for _, pr := range f.Pairs {
 		allowed = allowed || pr.Unrolled && pr.From == p.Kind && pr.To == c.Kind
 	}
 	fd, ok := p.fold()
-	if !allowed || !ok || p.Work || c.Work || len(c.Loops) > 0 || len(p.Stores) != 1 || !p.storesOwn(p.Stores[0]) ||
-		p.Stores[0].Val != fd || p.Loops[0].Count > 0 {
+	if !allowed || !ok || p.Work || c.Work || len(c.Loops) > 0 && c.Kind != PrimReduce || len(p.Stores) != 1 ||
+		!p.storesOwn(p.Stores[0]) || p.Stores[0].Val != fd || p.Loops[0].Count > 0 ||
+		c.Kind == PrimReduce && (len(p.Loops) != 1 || p.Loops[0].Trip > unrolledTrips) {
 		return Operand{}, false
 	}
 	o := p.Bufs[p.Stores[0].Buf].Operand
@@ -143,7 +146,8 @@ func (f Fuse) joinsUnrolled(p, c *Kernel, ks []*Kernel) (Operand, bool) {
 			return Operand{}, false
 		}
 		for i, a := range nd.Ax {
-			if x := c.Nodes[a]; x.Op != OpCoord || x.A != i {
+			x := c.Nodes[a]
+			if !(x.Op == OpCoord && x.A == i || c.Kind == PrimReduce && x.Op == OpIter) {
 				return Operand{}, false
 			}
 		}
@@ -151,6 +155,10 @@ func (f Fuse) joinsUnrolled(p, c *Kernel, ks []*Kernel) (Operand, bool) {
 	}
 	return o, any
 }
+
+// unrolledTrips is the longest reduction joinsUnrolled sums inside another's
+// loop, every trip of it written out.
+const unrolledTrips = 32
 
 // unrolled is c with each read of p's output v p's sum at the read's
 // coordinates, its terms unrolled from its start.
