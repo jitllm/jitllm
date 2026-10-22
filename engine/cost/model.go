@@ -1033,6 +1033,8 @@ func (e *estimator) eval(i, depth int) (float64, bool) {
 		if !ok {
 			return 0, false
 		}
+		// A load reads its index plus its immediate offset.
+		ix += float64(nd.Imm)
 		buf := k.Bufs[nd.Buf]
 		if buf.Offset > 0 {
 			off, ok := e.eval(buf.Offset-1, depth+1)
@@ -1159,13 +1161,13 @@ func (e *estimator) ival(i, depth int) span {
 		}
 		out := span{math.Inf(1), math.Inf(-1)}
 		buf := k.Bufs[nd.Buf]
-		off := 0.0
+		off := float64(nd.Imm)
 		if buf.Offset > 0 {
 			v, ok := e.eval(buf.Offset-1, 0)
 			if !ok {
 				return anywhere
 			}
-			off = v
+			off += v
 		}
 		for x := w.lo; x <= w.hi; x++ {
 			v, ok := jit.StepWord(buf.Operand, int(x+off), e.s)
