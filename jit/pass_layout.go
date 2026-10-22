@@ -65,8 +65,9 @@ func (p Layout) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 		}
 		for b := range m.Bufs {
-			if flip[m.Bufs[b].Operand] {
-				m.Bufs[b].Shape = nil
+			if bf := &m.Bufs[b]; flip[bf.Operand] && bf.Shape != nil {
+				bf.Extent = bf.Shape[0] * bf.Shape[1] * bf.Shape[2]
+				bf.Shape = nil
 			}
 		}
 		m.Passes = append(m.Passes, p.Name())

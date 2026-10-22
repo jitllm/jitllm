@@ -34,8 +34,9 @@ const (
 	SourceRopePositions
 	// SourceRopePlanes is the model's rotary planes (nn.Rope.TabPlanes).
 	SourceRopePlanes
-	// SourceKeys and SourceValues are a part's history pools, the
-	// engine's: pages of Step.Page positions, kept from step to step.
+	// SourceKeys and SourceValues are a part's history pools: pages of
+	// Step.Page positions of the width its kernels store, kept from step to
+	// step.
 	SourceKeys
 	SourceValues
 	// SourceWords is a block of constants the plan carries.
@@ -62,10 +63,9 @@ func (s Source) String() string {
 }
 
 // Engine reports whether the engine sizes the storage from what it owns --
-// its history and page table, the model's rotary -- rather than from the
-// plan's Bytes.
+// its page table, the model's rotary -- rather than from the plan's Bytes.
 func (s Source) Engine() bool {
-	return s == SourcePages || s == SourceKeys || s == SourceValues || s == SourceRopePlanes
+	return s == SourcePages || s == SourceRopePlanes
 }
 
 // A row's history descriptor: the words the engine writes for each row of a

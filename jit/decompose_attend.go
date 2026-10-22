@@ -37,11 +37,27 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 		a.NHead <= 0 || a.NKVHead <= 0 || a.NHead%a.NKVHead != 0 || c.Step.Page <= 0 || c.Step.Keys <= 0 {
 		return nil, fmt.Errorf("an attention of %d heads over %d, window %d, softcap %v", a.NHead, a.NKVHead, a.Window, a.Softcap)
 	}
+	kw := a.NKVHead * a.HeadDim
+	return attend(o, c, c.value(o.In[0]), c.value(o.Out[0]), attendGeom{D: a.HeadDim, KW: kw, Values: tableValues}), nil
+}
+
+// attendGeom is an attention's shape over the history's pools: D a key
+// head's width and a value head's (the work passes take one head width), KW
+// a pool row's, the values read from Values.
+type attendGeom struct {
+	D, KW  int
+	Values Operand
+}
+
+// attend is decodeAttend's primitives for the query q (rows by heads by
+// g.D) into out (the same), o's attributes its heads, scale, window,
+// softcap, temperature and sinks.
+func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
+	a := o.Attr
 	U, F := ir.U32, ir.F32
-	R, H, D := c.Step.Rows, a.NHead, a.HeadDim
+	R, H, D := c.Step.Rows, a.NHead, g.D
 	C := c.Step.Keys
-	gqa, kw, pg := a.NHead/a.NKVHead, a.NKVHead*a.HeadDim, c.Step.Page
-	out := c.value(o.Out[0])
+	gqa, kw, pg := a.NHead/a.NKVHead, g.KW, c.Step.Page
 	tmp := func(name string) Operand {
 		return Operand{Kind: OperandScratch, Name: out.Name + "." + name, Temp: true}
 	}
@@ -181,24 +197,24 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 		var gx exprs
 		gx.op(OpMax, F, gx.at(0, heads, gx.coord(0), gx.coord(1)), gx.at(1, []int{H}, gx.coord(1)))
 		return []Prim{
-			{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(c.value(o.In[0]), tableKeys), Out: dots, Expr: dx.e, Facts: scored},
+			{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(q, tableKeys), Out: dots, Expr: dx.e, Facts: scored},
 			scoreMap(keys, tables(dots), scores, sx.e, rng(2), temp),
 			maxReduce,
 			{Kind: PrimMap, Shape: heads, In: []Operand{raw, sinkVec(o)}, Out: maxes, Expr: gx.e},
 			{Kind: PrimMap, Shape: keys, In: tables(scores, maxes), Out: weights, Expr: wx.e, Facts: rng(2)},
 			{Kind: PrimReduce, Shape: keys, In: tables(weights), Out: sums, Combine: OpAdd, Expr: lx.e, Facts: sum},
-			{Kind: PrimContract, Shape: []int{R, H, D, C}, In: tables(weights, tableValues), Out: values, Expr: vx.e, Facts: rng(3)},
+			{Kind: PrimContract, Shape: []int{R, H, D, C}, In: tables(weights, g.Values), Out: values, Expr: vx.e, Facts: rng(3)},
 			{Kind: PrimMap, Shape: dims, In: outIn, Out: out, Expr: ox.e, Facts: Facts{Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D}}},
-		}, nil
+		}
 	}
 	return []Prim{
-		{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(c.value(o.In[0]), tableKeys), Out: dots, Expr: dx.e, Facts: scored},
+		{Kind: PrimContract, Shape: []int{R, H, C, D}, In: tables(q, tableKeys), Out: dots, Expr: dx.e, Facts: scored},
 		scoreMap(keys, tables(dots), scores, sx.e, rng(2), temp),
 		{Kind: PrimReduce, Shape: keys, In: tables(scores), Out: maxes, Combine: OpMax, Init: int64(math.Float32bits(minus)),
 			Expr: mx.e, Facts: rng(2)},
 		{Kind: PrimMap, Shape: keys, In: tables(scores, maxes), Out: weights, Expr: wx.e, Facts: rng(2)},
 		{Kind: PrimReduce, Shape: keys, In: tables(weights), Out: sums, Combine: OpAdd, Expr: lx.e, Facts: sum},
-		{Kind: PrimContract, Shape: []int{R, H, D, C}, In: tables(weights, tableValues), Out: values, Expr: vx.e, Facts: rng(3)},
+		{Kind: PrimContract, Shape: []int{R, H, D, C}, In: tables(weights, g.Values), Out: values, Expr: vx.e, Facts: rng(3)},
 		{Kind: PrimMap, Shape: dims, In: []Operand{values, sums}, Out: out, Expr: ox.e, Facts: Facts{Heads: &Heads{Rows: R, Query: H, Key: a.NKVHead, Dim: D}}},
-	}, nil
+	}
 }

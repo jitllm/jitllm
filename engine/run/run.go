@@ -191,13 +191,10 @@ func New(f Source, dev backend.Device, gpu jit.Device, keys int, opts ...Option)
 // bytes is storage st's size at the runner's capacity: what the plan states,
 // or for what the engine owns, the engine's own.
 func (r *Runner) bytes(st jit.Storage) (int64, error) {
-	c := r.f.Config()
 	pages := int64(r.step.Rows * ((r.step.Keys + r.step.Page - 1) / r.step.Page))
 	switch st.Source {
 	case jit.SourcePages:
 		return 4 * pages, nil
-	case jit.SourceKeys, jit.SourceValues:
-		return 4 * pages * int64(r.step.Page) * int64(c.NKVHead*c.HeadDim), nil
 	case jit.SourceRopePlanes:
 		return int64(4 * len(r.planes[st.Key.Name])), nil
 	case jit.SourceTransfer:
