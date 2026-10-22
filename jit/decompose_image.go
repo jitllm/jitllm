@@ -116,3 +116,100 @@ func decomposeDropRows(o graph.Op, c *Context) ([]Prim, error) {
 	x.at(0, sh, at, x.coord(1))
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }
+
+// decomposePosResample is each row's position-table row resampled to the
+// grid: the row's cell, on each axis the source coordinate by the op's
+// chain and its filter's taps' weights and clamped indices, then the sum of
+// every tap pair's weight product times its table row, in the taps' order.
+func decomposePosResample(o graph.Op, c *Context) ([]Prim, error) {
+	a := o.Attr
+	if len(o.In) != 0 || len(o.Out) != 1 || len(o.Weight) != 1 || a.Span < 2 || o.Weight[0].Rows != a.Span*a.Span ||
+		a.Chain < graph.ChainAligned || a.Chain > graph.ChainGridSample || a.Filter < graph.FilterBilinear || a.Filter > graph.FilterCubic {
+		return nil, fmt.Errorf("a position resample of %d weights, chain %d, filter %d", len(o.Weight), a.Chain, a.Filter)
+	}
+	wo, err := c.weight(o.Weight[0])
+	if err != nil {
+		return nil, err
+	}
+	U, F, I := ir.U32, ir.F32, ir.I32
+	sh := c.rows(o.Out[0])
+	R, E, S := sh[0], sh[1], a.Span
+	var x exprs
+	r, e := x.coord(0), x.coord(1)
+	in := []Operand{tablePos, tableRequest}
+	facts := Facts{Extents: map[int]int{0: R + 1, 1: RequestRows + R}}
+	lead := uint32(a.Offset)
+	gw := x.op(OpMax, U, x.load(1, x.u(RequestGrid)), x.u(1))
+	live := x.op(OpMax, U, x.load(0, x.u(0)), x.u(lead+1))
+	gh := x.op(OpMax, U, x.op(OpDiv, U, x.op(OpSub, U, live, x.u(lead)), gw), x.u(1))
+	q := x.op(OpSub, U, x.op(OpMax, U, x.load(0, x.op(OpAdd, U, r, x.u(1))), x.u(lead)), x.u(lead))
+	f := func(v float32) int { return x.f(v) }
+	side := f(float32(S))
+	type tap struct{ w, i int }
+	axis := func(cell, size int) []tap {
+		i, n := x.un(OpCvtF32, F, cell), x.un(OpCvtF32, F, size)
+		var v int
+		switch a.Chain {
+		case graph.ChainAligned:
+			v = x.op(OpDiv, F, x.op(OpMul, F, i, f(float32(S-1))), x.op(OpMax, F, x.op(OpSub, F, n, f(1)), f(1)))
+		case graph.ChainHalfPixel:
+			v = x.op(OpAdd, F, x.op(OpMul, F, x.op(OpAdd, F, i, f(0.5)), x.op(OpDiv, F, side, n)), f(-0.5))
+		default:
+			v = x.op(OpAdd, F, x.op(OpAdd, F, x.op(OpMul, F, x.op(OpDiv, F, x.op(OpAdd, F, i, f(0.5)), n), f(2)), f(-1)), f(1))
+			v = x.op(OpDiv, F, x.op(OpAdd, F, x.op(OpMul, F, v, side), f(-1)), f(2))
+		}
+		if a.Filter == graph.FilterLinear {
+			v = x.op(OpMax, F, v, f(0))
+		}
+		// floor(v): the truncation, one less where it lies above v.
+		tr := x.un(OpCvtI32, I, v)
+		above := x.op(OpLess, ir.Pred, v, x.un(OpCvtF32, F, tr))
+		fl := x.sel(I, above, x.op(OpSub, I, tr, x.un(OpBitcast, I, x.u(1))), tr)
+		t := x.op(OpSub, F, v, x.un(OpCvtF32, F, fl))
+		abs := func(v int) int { return x.op(OpMax, F, v, x.op(OpSub, F, f(0), v)) }
+		conv1 := func(v int) int {
+			return x.op(OpAdd, F, x.op(OpMul, F, x.op(OpMul, F, x.op(OpSub, F, x.op(OpMul, F, f(1.25), v), f(2.25)), v), v), f(1))
+		}
+		conv2 := func(v int) int {
+			b := x.op(OpAdd, F, x.op(OpMul, F, f(-0.75), v), f(3.75))
+			return x.op(OpAdd, F, x.op(OpMul, F, x.op(OpSub, F, x.op(OpMul, F, b, v), f(6)), v), f(3))
+		}
+		var ws []int
+		off := 0
+		switch a.Filter {
+		case graph.FilterBilinear:
+			ws = []int{x.op(OpMax, F, x.op(OpSub, F, f(1), abs(t)), f(0)), x.op(OpMax, F, x.op(OpSub, F, f(1), abs(x.op(OpSub, F, t, f(1)))), f(0))}
+		case graph.FilterLinear:
+			ws = []int{x.op(OpSub, F, f(1), t), t}
+		default:
+			off = -1
+			ws = []int{conv2(x.op(OpAdd, F, t, f(1))), conv1(t), conv1(x.op(OpSub, F, f(1), t)), conv2(x.op(OpSub, F, f(2), t))}
+		}
+		out := make([]tap, len(ws))
+		for k, w := range ws {
+			j := x.op(OpAdd, I, fl, x.un(OpBitcast, I, x.u(uint32(int32(k+off)))))
+			j = x.op(OpMin, I, x.op(OpMax, I, j, x.un(OpBitcast, I, x.u(0))), x.un(OpBitcast, I, x.u(uint32(S-1))))
+			out[k] = tap{w, x.un(OpBitcast, U, j)}
+		}
+		return out
+	}
+	ys := axis(x.op(OpDiv, U, q, gw), gh)
+	xs := axis(x.op(OpRem, U, q, gw), gw)
+	acc := -1
+	for _, ty := range ys {
+		for _, tx := range xs {
+			row := x.op(OpAdd, U, x.op(OpMul, U, ty.i, x.u(uint32(S))), tx.i)
+			v, err := weightElement(&x, wo, S*S, E, &in, &facts, row, e)
+			if err != nil {
+				return nil, fmt.Errorf("a position table of %s: %w", wo.Format, err)
+			}
+			term := x.op(OpMul, F, x.op(OpMul, F, ty.w, tx.w), v)
+			if acc < 0 {
+				acc = term
+			} else {
+				acc = x.op(OpAdd, F, acc, term)
+			}
+		}
+	}
+	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}, nil
+}

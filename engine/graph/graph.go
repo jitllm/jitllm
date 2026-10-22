@@ -320,10 +320,16 @@ const (
 	OpDropRows
 	// OpFold is each Span consecutive rows of In[0] as one row.
 	OpFold
+	// OpPosResample is each row's position-table row resampled to the
+	// step's grid: Weight[0] a Span x Span table, the row's cell (its
+	// position less Offset, a grid the request's first word wide and the
+	// live rows past Offset tall) mapped to a source coordinate on each axis
+	// by Chain and read through Filter's taps.
+	OpPosResample
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan", "state_delta", "index_select", "block_select", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan", "state_delta", "index_select", "block_select", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "pos_resample"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -555,6 +561,9 @@ type Attrs struct {
 	Request bool
 	// Grid is OpRopeTable's (RopeTable.Grid).
 	Grid bool
+	// Chain and Filter are OpPosResample's: the coordinate's convention
+	// and the taps that read it.
+	Chain, Filter uint8
 	// RowWindows makes OpAttend read each row's attended range from the
 	// step's window table, not its history descriptor: a vision tower's
 	// window attention, a row's keys its window's rows.

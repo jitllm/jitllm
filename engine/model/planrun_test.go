@@ -263,7 +263,8 @@ func TestPlanEncodesPicturesAsTheHost(t *testing.T) {
 		gh, gw int // a dynamic tower's grid; 0 for a fixed tower's square
 	}{{"smolvlm", openTower, 0, 0}, {"llava", openLlava, 0, 0},
 		{"qwen2vl", func(tb testing.TB, _ ...Option) (*Model, *Tower) { m := openQwen2VL(tb); return m, m.Tower() }, 16, 20},
-		{"qwen25vl", openQwen25VL, 16, 20}} {
+		{"qwen25vl", openQwen25VL, 16, 20},
+		{"qwen35", openPairTower("Qwen3.5-0.8B-f16.gguf", "mmproj-Qwen3.5-0.8B-f16.gguf"), 16, 20}} {
 		t.Run(tc.name, func(t *testing.T) {
 			m, tw := tc.open(t, noTune)
 			defer m.Close()
@@ -386,15 +387,21 @@ func planEncodesAsTheHost(t *testing.T, m *Model, tw *Tower, gh, gw int) {
 }
 
 // openQwen25VL is Qwen2.5-VL-3B's pair, converted and opened.
-func openQwen25VL(t testing.TB, opts ...Option) (*Model, *Tower) {
-	t.Helper()
-	text, proj := testmodels.Path("Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf"), testmodels.Path("mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf")
-	if !vlmAvailable(text, proj) {
-		testmodels.Missing(t, "%s and its mmproj", text)
+var openQwen25VL = openPairTower("Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf")
+
+// openPairTower opens a text model and its mmproj, converted into one
+// container, and hands back the model and its tower.
+func openPairTower(text, proj string) func(testing.TB, ...Option) (*Model, *Tower) {
+	return func(t testing.TB, opts ...Option) (*Model, *Tower) {
+		t.Helper()
+		text, proj := testmodels.Path(text), testmodels.Path(proj)
+		if !vlmAvailable(text, proj) {
+			testmodels.Missing(t, "%s and its mmproj", text)
+		}
+		m, err := Open(jlmOfPair(t, text, proj), opts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m, m.Tower()
 	}
-	m, err := Open(jlmOfPair(t, text, proj), opts...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return m, m.Tower()
 }

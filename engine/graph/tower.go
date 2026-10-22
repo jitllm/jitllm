@@ -12,6 +12,10 @@ type TowerEntry struct {
 	NEmbd, Patch, K, Positions int
 	PatchBias, Class, PreNorm  bool
 	Eps                        float64
+	// Resample, where its Chain is set, reads the position table (Positions
+	// rows, a square) resampled to the picture's grid in place of each
+	// row's own row.
+	Resample Attrs
 }
 
 func (e *TowerEntry) Build() *Graph {
@@ -33,8 +37,12 @@ func (e *TowerEntry) Build() *Graph {
 	}
 	if e.Positions > 0 {
 		pos := g.value("pos_embd", e.NEmbd)
-		g.op(Op{Kind: OpEmbed, Out: []ValueID{pos}, Weight: []Binding{{Role: jlm.RoleVPosEmbd, K: e.NEmbd, Rows: e.Positions}},
-			Attr: Attrs{Positional: true}})
+		o := Op{Kind: OpEmbed, Out: []ValueID{pos}, Weight: []Binding{{Role: jlm.RoleVPosEmbd, K: e.NEmbd, Rows: e.Positions}},
+			Attr: Attrs{Positional: true}}
+		if e.Resample.Chain != 0 {
+			o.Kind, o.Attr = OpPosResample, e.Resample
+		}
+		g.op(o)
 		x = g.row("x_pos", e.NEmbd, Op{Kind: OpAdd, In: []ValueID{x, pos}})
 	}
 	if e.PreNorm {
@@ -44,6 +52,31 @@ func (e *TowerEntry) Build() *Graph {
 	g.Out = []ValueID{x}
 	return g
 }
+
+// A position table's resample to the grid (OpPosResample): the source
+// coordinate of output index i on an axis of size n over a table of side s,
+// each step one float32 rounding.
+const (
+	// ChainAligned is i*(s-1)/(n-1): aligned corners.
+	ChainAligned uint8 = iota + 1
+	// ChainHalfPixel is (i+0.5)*(s/n) - 0.5.
+	ChainHalfPixel
+	// ChainGridSample is ((((i+0.5)/n*2 - 1) + 1)*s - 1)/2: grid_sample's
+	// normalised coordinate, unnormalised.
+	ChainGridSample
+)
+
+// The taps reading a source coordinate x, fl = floor(x) and t = x - fl.
+const (
+	// FilterBilinear is two taps at fl and fl+1, max(1-|t|, 0) and
+	// max(1-|t-1|, 0).
+	FilterBilinear uint8 = iota + 1
+	// FilterLinear is two taps, 1-t and t, x clamped below at 0 first.
+	FilterLinear
+	// FilterCubic is four taps at fl-1 to fl+2, the cubic convolution at
+	// A = -0.75.
+	FilterCubic
+)
 
 // TowerHead is a vision tower's projection: the LayerNorm after the blocks
 // where PostNorm (an RMSNorm where RMS), the class row dropped where Class,

@@ -145,8 +145,8 @@ func (c towerComposing) Find(role jlm.Role, block, index int32) (*jlm.Entry, boo
 // pre-norm.
 func (c towerComposing) EmbedGraph() *graph.Graph {
 	t, tc := c.t, c.t.Cfg
-	if tc.CLS && (tc.CLSLast || t.opt.towerCLSLast) || tc.PosBuckets > 0 || tc.PosSide > 0 || tc.PosAxis > 0 ||
-		t.posW != nil && (tc.Dynamic() || tc.Kind == jlm.ProjPhi4 || tc.Kind == jlm.ProjLFM2) || t.embdNorm != nil ||
+	if tc.CLS && (tc.CLSLast || t.opt.towerCLSLast) || tc.PosBuckets > 0 || tc.PosAxis > 0 ||
+		t.posW != nil && tc.PosSide == 0 && (tc.Dynamic() || tc.Kind == jlm.ProjPhi4 || tc.Kind == jlm.ProjLFM2) || t.embdNorm != nil ||
 		len(tc.Deep) > 0 || tc.Rope && !c.gridRope() {
 		return nil
 	}
@@ -154,6 +154,28 @@ func (c towerComposing) EmbedGraph() *graph.Graph {
 		Class: tc.CLS, PreNorm: t.preLnW != nil, Eps: tc.Eps}
 	if t.posW != nil {
 		e.Positions = len(t.posW) / tc.NEmbd
+	}
+	if tc.PosSide > 0 {
+		// The host's posLerp: Qwen3-VL's bilinear with aligned corners,
+		// HunyuanVL's half-pixel bilinear, Kimi-VL's half-pixel bicubic,
+		// GLM-4.xV's grid_sample bicubic.
+		r := graph.Attrs{Span: tc.PosSide, Chain: graph.ChainGridSample, Filter: graph.FilterBilinear}
+		switch {
+		case tc.Kind == jlm.ProjHunyuanVL:
+			r.Filter = graph.FilterLinear
+		case tc.PosBicubic:
+			r.Filter = graph.FilterCubic
+		}
+		switch {
+		case r.Filter == graph.FilterBilinear:
+			r.Chain = graph.ChainAligned
+		case tc.Kind == jlm.ProjKimiVL || r.Filter == graph.FilterLinear:
+			r.Chain = graph.ChainHalfPixel
+		}
+		if e.Positions != tc.PosSide*tc.PosSide {
+			return nil
+		}
+		e.Resample = r
 	}
 	return e.Build()
 }
@@ -170,6 +192,8 @@ func (c towerComposing) HeadGraph() *graph.Graph {
 	case tc.Kind == jlm.ProjIdefics3 && t.projW2.e == nil:
 	case tc.Kind == jlm.ProjMLP && t.projW2.e != nil && tc.Scale <= 1 && (t.projB != nil) == (t.projB2 != nil),
 		tc.Kind == jlm.ProjQwen2VL && t.projW2.e != nil && t.projNorm == nil && (t.projB != nil) == (t.projB2 != nil):
+		h.Hidden, h.Act = t.projW.rows, graph.ActGELUTanh
+	case tc.Kind == jlm.ProjQwen3VL && len(tc.Deep) == 0 && t.projW2.e != nil && t.projNorm == nil && (t.projB != nil) == (t.projB2 != nil):
 		h.Hidden, h.Act = t.projW.rows, graph.ActGELUTanh
 	case tc.Kind == jlm.ProjQwen25VL && t.projW2.e != nil && t.projNorm == nil && (t.projB != nil) == (t.projB2 != nil):
 		// Its rows are the picture's in window order (TowerPicture): each
