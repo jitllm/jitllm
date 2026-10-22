@@ -28,6 +28,8 @@ type composing struct {
 
 func (c composing) BlockGraph(li int) *graph.Graph { return c.m.BlockGraph(li) }
 
+func (c composing) ActWindow() int { return c.m.ActWindow() }
+
 // Composing is the model as the composer and the plan's runner read it: one
 // mapping from the container to the block graphs, the one this package's
 // own graph path runs.

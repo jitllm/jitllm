@@ -26,6 +26,9 @@ import (
 // and the container's bytes behind each entry.
 type Source interface {
 	jit.Model
+	// ActWindow is how many activations share one int8 scale: the
+	// engine's decision for this model (Model.ActWindow).
+	ActWindow() int
 	Span(e *jlm.Entry) (qs, d, sc []byte)
 	EnsurePage(i int) error
 	BlockOf(e *jlm.Entry) int
@@ -74,7 +77,7 @@ func WithGuard(n int) Option { return func(r *Runner) { r.guard = n } }
 // every sequence shares. rope is the model's rotary.
 func New(f Source, dev backend.Device, gpu jit.Device, keys int, rope nn.Rope, opts ...Option) (*Runner, error) {
 	c := f.Config()
-	r := &Runner{f: f, dev: dev, step: jit.Step{Rows: 1, Page: 64, Keys: keys}, logits: -1, token: -1, input: -1,
+	r := &Runner{f: f, dev: dev, step: jit.Step{Rows: 1, Page: 64, Keys: keys, ActWindow: f.ActWindow()}, logits: -1, token: -1, input: -1,
 		nvocab: int(c.NVocab), nembd: int(c.NEmbd)}
 	for _, o := range opts {
 		o(r)

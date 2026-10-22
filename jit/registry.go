@@ -84,6 +84,11 @@ func Default() *Registry {
 func (r *Registry) decompose(f Model, part Part, of int, s Step, d Device) ([]Prim, error) {
 	c := &Context{Graph: part.Graph, Part: part.Kind, Formats: formats(f, part), Step: s, Int8: r.Profiles[d.Kind].Int8,
 		formed: map[graph.ValueID]bool{}}
+	if q := c.Int8; q != nil && s.ActWindow > 0 && s.ActWindow != q.Window {
+		w := *q
+		w.Window = s.ActWindow
+		c.Int8 = &w
+	}
 	var prims []Prim
 	for i, o := range part.Graph.Ops {
 		d, ok := r.Decompositions[o.Kind]

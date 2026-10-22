@@ -11,9 +11,12 @@ import (
 )
 
 // Step is the shape of one step the engine runs: rows a step, the history's
-// positions a page, and the longest history a row attends.
+// positions a page, the longest history a row attends, and, where not 0,
+// how many activations share one int8 scale -- the engine's decision
+// (Model.ActWindow), in place of the profile's.
 type Step struct {
 	Rows, Page, Keys int
+	ActWindow        int
 }
 
 // Placement is the device each part of the model runs on.

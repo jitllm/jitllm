@@ -330,6 +330,19 @@ func (f *JIT) quantSince(t0 int64) {
 // is the widest matvec input and maxRows the tallest output. A model's segments
 // -- its text blocks and its vision tower -- share one: a JIT holds an attention
 // set per geometry (AttnSetFor), so nothing about a tower needs a second.
+// ActWindowFor is the activation amax window a JIT of these weight types and
+// options decides: the options' own, else 256 where every matvec type is a
+// k-quant this host's kernels hoist the scale of, else 32.
+func ActWindowFor(types []quant.Type, opts ...Option) int { return actWindow(types, newConfig(opts)) }
+
+func actWindow(types []quant.Type, cfg Config) int {
+	if cfg.ActWindow > 0 {
+		// The graph's own window (BitNet's per-token quantization).
+		return cfg.ActWindow
+	}
+	return cpu.WideActWindow(types)
+}
+
 func NewJIT(maxK, maxRows int, types []quant.Type, opts ...Option) *JIT {
 	cfg := newConfig(opts)
 	// There is deliberately no switch to turn the JIT off: there is no tier to
@@ -339,11 +352,7 @@ func NewJIT(maxK, maxRows int, types []quant.Type, opts ...Option) *JIT {
 	// llama.cpp's block_q8_K), 32 otherwise, since Q4_0/Q8_0 blocks are 32
 	// wide. The layout is the same either way; a wider window only makes
 	// consecutive (d, -sum*biasC/8) pairs share a d, which a kernel may hoist.
-	window := cpu.WideActWindow(types)
-	if cfg.ActWindow > 0 {
-		// The graph's own window (BitNet's per-token quantization).
-		window = cfg.ActWindow
-	}
+	window := actWindow(types, cfg)
 	tier := cpu.HostTier()
 	f := &JIT{
 		cfg:         cfg,

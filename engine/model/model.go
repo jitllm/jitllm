@@ -4254,9 +4254,22 @@ func (m *Model) hasPostNorm() bool {
 // text blocks and the tower's; F32 joins the types where the model has a tower,
 // for the bilinear preprocessors' resize (image.go).
 func (m *Model) newJIT() *nn.JIT {
-	maxK, maxRows := 0, m.Cfg.NVocab
+	maxK, maxRows, types, opts := m.jitInputs()
+	return nn.NewJIT(maxK, maxRows, types, opts...)
+}
+
+// ActWindow is how many activations share one int8 scale in this model's
+// matvecs: its JIT's decision, which its devices take too.
+func (m *Model) ActWindow() int {
+	_, _, types, opts := m.jitInputs()
+	return nn.ActWindowFor(types, opts...)
+}
+
+// jitInputs is what a JIT of this model is built from: the widest matvec
+// input, the tallest output, the weight types and the options.
+func (m *Model) jitInputs() (maxK, maxRows int, types []quant.Type, opts []nn.Option) {
+	maxK, maxRows = 0, m.Cfg.NVocab
 	seen := map[quant.Type]bool{}
-	var types []quant.Type
 	add := func(t quant.Type) {
 		if !seen[t] {
 			seen[t] = true
@@ -4276,10 +4289,10 @@ func (m *Model) newJIT() *nn.JIT {
 	if m.tower != nil {
 		add(quant.F32)
 	}
-	opts := append(m.jit[:len(m.jit):len(m.jit)], nn.WithServingSplit(!m.opt.noServingSplit))
+	opts = append(m.jit[:len(m.jit):len(m.jit)], nn.WithServingSplit(!m.opt.noServingSplit))
 	if m.Cfg.TokenAct {
 		// One window over the widest row: each row's blocks share its scale.
 		opts = append(append([]nn.Option(nil), opts...), nn.WithActWindow((maxK+31)/32*32))
 	}
-	return nn.NewJIT(maxK, maxRows, types, opts...)
+	return maxK, maxRows, types, opts
 }
