@@ -1,0 +1,232 @@
+package model
+
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"math"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/engine/run"
+	"github.com/jitllm/jitllm/jit"
+)
+
+// TestPlanCoversEveryModel runs every model TestEveryModelRunsGenerated
+// audits (auditModels, the same size rule, JITLLM_PLAN_MODEL a substring in
+// place of JITLLM_AUDIT_MODEL) through the composed plan on each device a
+// backend opens, against the host, its KV cache f32 as the plan's pools are.
+// Per model it reports whether main opens it, whether the composer forms it
+// or the op that refuses it, each block's residuals at position 0 against
+// the host's traced ones -- a wrong kernel shows at block 0, an amplified
+// rounding grows with the depth (RULE 11c) -- and the logits over a prompt.
+//
+// It fails a model the composer forms whose first block is wrong outright: a
+// residual off by more than 1e-3 or not finite.
+func TestPlanCoversEveryModel(t *testing.T) {
+	pick := os.Getenv("JITLLM_PLAN_MODEL")
+	slow := os.Getenv("JITLLM_SLOW") != ""
+	devs := backend.Open()
+	defer func() {
+		for _, d := range devs {
+			d.Close()
+		}
+	}()
+	if len(devs) == 0 {
+		t.Skip("no device")
+	}
+	gpu := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
+	var mainRefuses, refused, formed, wrong []string
+	refusals := map[string]int{}
+	for _, src := range auditModels(t) {
+		if pick != "" && !strings.Contains(src.path, pick) || pick == "" && !slow && src.size > 2<<30 {
+			continue
+		}
+		path := src.path
+		if src.hf {
+			path = jlmOfSafetensors(t, src.path)
+		} else {
+			p, err := jlmOfErr(src.path)
+			if err != nil {
+				if !errors.Is(err, convert.ErrNotImplemented) {
+					mainRefuses = append(mainRefuses, src.name)
+				}
+				continue
+			}
+			path = p
+		}
+		m, err := Open(path, WithJITOptions(nn.WithTune(nn.TuneOff)), WithKVType(KVF32))
+		if err != nil {
+			mainRefuses = append(mainRefuses, src.name)
+			continue
+		}
+		// An encoder has no decoding State: plan mode decodes.
+		if m.IsEncoder() {
+			m.Close()
+			t.Logf("%-40s an encoder: plan mode composes decoders", src.name)
+			continue
+		}
+		row, bad, why := planCover(t, m, devs, gpu)
+		m.Close()
+		switch {
+		case why != "":
+			refused = append(refused, src.name)
+			refusals[why]++
+			t.Logf("%-40s refused: %s", src.name, why)
+		case bad:
+			wrong = append(wrong, src.name)
+			t.Errorf("%-40s %s", src.name, row)
+		default:
+			formed = append(formed, src.name)
+			t.Logf("%-40s %s", src.name, row)
+		}
+	}
+	t.Logf("of %d models main opens, %d form and decode, %d form and are wrong, %d are refused; main refuses %d",
+		len(formed)+len(wrong)+len(refused), len(formed), len(wrong), len(refused), len(mainRefuses))
+	for why, n := range refusals {
+		t.Logf("  %3d refused: %s", n, why)
+	}
+}
+
+// planCover is one model's row: the first block's and the last block's
+// residuals at position 0 and the worst logits over a prompt, per device;
+// bad where the first block is wrong outright; why, the composer's refusal.
+func planCover(t *testing.T, m *Model, devs []backend.Device, gpu jit.Device) (row string, bad bool, why string) {
+	ids := m.Vocab.Encode("The capital of France is", true)
+	traced := map[string][]float32{}
+	m.Trace(func(l int, name string, v []float32) {
+		k := fmt.Sprint(l, name)
+		if _, ok := traced[k]; !ok {
+			traced[k] = append([]float32(nil), v...)
+		}
+	})
+	host := m.NewState(32)
+	var want [][]float32
+	for _, id := range ids {
+		l, err := host.Forward(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, append([]float32(nil), l...))
+		m.Trace(nil)
+	}
+	host.Close()
+	last := m.Cfg.NLayer - 1
+	for _, dev := range devs {
+		r, err := run.New(m.Composing(), dev, gpu, 32, m.rope)
+		if err != nil {
+			return "", false, strings.SplitN(err.Error(), "\n", 2)[0]
+		}
+		s, err := r.NewSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan := r.Plan()
+		var codes []struct {
+			part int
+			c    *jit.Code
+		}
+		for pi := range plan.Parts {
+			for ci := range plan.Parts[pi].Codes {
+				codes = append(codes, struct {
+					part int
+					c    *jit.Code
+				}{pi, &plan.Parts[pi].Codes[ci]})
+			}
+		}
+		// Each block teacher-forced: its input the host's own residual,
+		// written after the part before it, and its output held to the
+		// host's, so no block inherits another's error.
+		lastOf := map[int]int{}
+		for i, cd := range codes {
+			lastOf[cd.part] = i
+		}
+		residOf := func(part int) (int, bool) {
+			name := "x_out"
+			if part < 2 {
+				name = "x"
+			}
+			for i := lastOf[part]; i >= 0; i-- {
+				for _, b := range codes[i].c.Binds {
+					if b.Writes && b.Operand.Name == name && codes[i].part == part {
+						return b.Storage, true
+					}
+				}
+			}
+			return 0, false
+		}
+		hostIn := func(li int) []float32 {
+			if li == 0 {
+				return traced[fmt.Sprint(-1, "embd")]
+			}
+			return traced[fmt.Sprint(li-1, "ffn_resid")]
+		}
+		worstBlock, worstAt := 0.0, -1
+		if err := s.StepEach(ids[0], 0, func(i int) {
+			p := codes[i].part
+			if i != lastOf[p] {
+				return
+			}
+			if li := p - 2; li >= 0 && li <= last {
+				if st, ok := residOf(p); ok {
+					h := traced[fmt.Sprint(li, "ffn_resid")]
+					if g := s.Storage(st); h != nil && len(g) >= 4*len(h) {
+						x := make([]float32, len(h))
+						for k := range x {
+							x[k] = math.Float32frombits(binary.LittleEndian.Uint32(g[4*k:]))
+						}
+						if e := nmse(x, h); !(e <= worstBlock) {
+							worstBlock, worstAt = e, li
+						}
+					}
+				}
+			}
+			if li := p + 1 - 2; li >= 0 && li <= last {
+				if st, ok := residOf(p); ok && hostIn(li) != nil {
+					in := hostIn(li)
+					b := make([]byte, 4*len(in))
+					for k, v := range in {
+						binary.LittleEndian.PutUint32(b[4*k:], math.Float32bits(v))
+					}
+					if err := s.SetStorage(st, b); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		}); err != nil {
+			t.Fatal(err)
+		}
+		worst, agree := 0.0, 0
+		for pos, id := range ids {
+			l, tok, err := s.Step(id, pos)
+			if err != nil {
+				t.Fatal(err)
+			}
+			worst = max(worst, nmse(l, want[pos]))
+			if int(tok) == argmaxOf(want[pos]) {
+				agree++
+			}
+		}
+		row += fmt.Sprintf("%s: worst block %.2g (block %d of %d, teacher-forced), logits %.2g, top-1 %d/%d; ", dev.API(), worstBlock, worstAt, last+1, worst, agree, len(ids))
+		if !(worstBlock <= 1e-3) || worstAt < 0 {
+			bad = true
+		}
+		s.Close()
+		r.Close()
+	}
+	return row, bad, ""
+}
+
+func nmse(got, want []float32) float64 {
+	var num, den float64
+	for i := range want {
+		d := float64(got[i]) - float64(want[i])
+		num += d * d
+		den += float64(want[i]) * float64(want[i])
+	}
+	return num / den
+}
