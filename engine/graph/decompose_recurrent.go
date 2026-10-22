@@ -1,6 +1,10 @@
 package graph
 
-import "github.com/jitllm/jitllm/format/jlm"
+import (
+	"math"
+
+	"github.com/jitllm/jitllm/format/jlm"
+)
 
 // DecomposeRecurrent is g with each recurrent mixer whose kind it states
 // written as primitives, the mixer's own state an OpStateConv's window;
@@ -10,6 +14,17 @@ import "github.com/jitllm/jitllm/format/jlm"
 // LFM2's gated short convolution (jlm.LayerShortConv): B, C and x the
 // input row's projections, B*x convolved over the window, C times that,
 // then the output projection.
+//
+// The gated delta rule (jlm.LayerLinearAttn), the host's linearAttn: q,
+// k and v the row's projection; z the output gate's projection, low rank
+// where the block binds ssm_g_a; the convolution and SiLU; beta the
+// sigmoid of its logits and the decay exp(A softplus(alpha + dt_bias)),
+// alpha deinterleaved from the logits' row (Qwen3-Next) or its own low-rank
+// projection a value head's state columns wide (Kimi Delta Attention); q
+// and k L2-normed per key head, q scaled twice by 1/sqrt(HeadDim) and k
+// once; the rule; each value head RMS-normed against ssm_norm, gated by
+// silu(z) or, for KDA and where the container states it, sigmoid(z); the
+// output projection.
 //
 // Mamba-1's mixer (jlm.LayerMamba1), the host's mamba1Attn: x and z the
 // row's projections; x convolved, its bias added, SiLU; dt's low rank, B
@@ -33,6 +48,9 @@ func DecomposeRecurrent(g *Graph, c *jlm.Config) *Graph {
 			continue
 		}
 		if o.Kind == OpRecurrent && o.Attr.Mixer == uint8(jlm.LayerMamba1) && d.mamba1(o, c) {
+			continue
+		}
+		if o.Kind == OpRecurrent && o.Attr.Mixer == uint8(jlm.LayerLinearAttn) && d.delta(o, c) {
 			continue
 		}
 		d.op(o)
@@ -196,6 +214,123 @@ func (d *Graph) mamba1(o Op, c *jlm.Config) bool {
 		Attr: Attrs{NHead: inner, NKVHead: 1, HeadDim: kd}})
 	gated := val("gated", inner)
 	d.op(Op{Kind: OpActMul, In: []ValueID{z, y}, Out: []ValueID{gated}, Attr: Attrs{Act: ActSiLU}})
+	d.op(Op{Kind: OpMatVec, In: []ValueID{gated}, Out: []ValueID{o.Out[0]}, Weight: []Binding{out}})
+	return true
+}
+
+// kdaL2Eps is Kimi Delta Attention's L2-norm epsilon, hardcoded in its
+// reference where the delta rule takes rms_norm_eps.
+const kdaL2Eps = 1e-6
+
+// delta writes the gated delta rule o as primitives, false where o does not
+// bind what it reads or c states a decay bound (Kimi-K3's).
+func (d *Graph) delta(o Op, c *jlm.Config) bool {
+	w := map[jlm.Role]Binding{}
+	for _, b := range o.Weight {
+		w[b.Role] = b
+	}
+	in, conv, out, ba := w[jlm.RoleAttnQKV], w[jlm.RoleSSMConv1d], w[jlm.RoleSSMOut], w[jlm.RoleSSMBA]
+	a, dtb, nrm := w[jlm.RoleSSMA], w[jlm.RoleSSMDtBias], w[jlm.RoleSSMNorm]
+	gate, hasGate := w[jlm.RoleAttnGate]
+	ga, lowGate := w[jlm.RoleSSMGA]
+	gb := w[jlm.RoleSSMGB]
+	fa, chans := w[jlm.RoleSSMFA]
+	fb := w[jlm.RoleSSMFB]
+	kh, kd, vh := int(c.SSM.Groups), int(c.SSM.StateSize), int(c.SSM.NHeadV)
+	inner := int(c.SSM.Inner)
+	if len(o.In) != 1 || len(o.Out) != 1 || kh < 1 || kd < 1 || vh < 1 || vh%kh != 0 || inner%vh != 0 ||
+		in.Rows != inner+2*kh*kd || conv.Rows != in.Rows || conv.K < 2 || out.K != inner || nrm.K != inner/vh ||
+		hasGate == lowGate || c.KDALowerBound != 0 {
+		return false
+	}
+	rep, vd := vh/kh, inner/vh
+	decayW := vh
+	if chans {
+		decayW = vh * kd
+		if ba.Rows != vh || fb.Rows != decayW || fb.K != fa.Rows {
+			return false
+		}
+	} else if ba.Rows != 2*vh {
+		return false
+	}
+	if a.K != decayW || dtb.K != decayW || lowGate && (gb.K != ga.Rows || gb.Rows != inner) || hasGate && gate.Rows != inner {
+		return false
+	}
+	name := d.Values[o.Out[0]].Name
+	val := func(s string, n int) ValueID { return d.value(name+"."+s, n) }
+	mv := func(s string, b Binding, x ValueID) ValueID {
+		v := val(s, b.Rows)
+		d.op(Op{Kind: OpMatVec, In: []ValueID{x}, Out: []ValueID{v}, Weight: []Binding{b}})
+		return v
+	}
+	mapv := func(s string, f MapFn, n int, k float64, x ...ValueID) ValueID {
+		v := val(s, n)
+		d.op(Op{Kind: OpMap, In: x, Out: []ValueID{v}, Attr: Attrs{Fn: f, Const: k}})
+		return v
+	}
+	mapw := func(s string, f MapFn, x ValueID, b Binding, n int) ValueID {
+		v := val(s, n)
+		d.op(Op{Kind: OpMap, In: []ValueID{x}, Out: []ValueID{v}, Weight: []Binding{{Role: b.Role, K: b.K}}, Attr: Attrs{Fn: f}})
+		return v
+	}
+	slice := func(s string, x ValueID, off, n, head int) ValueID {
+		width := n
+		if head > 0 {
+			width = d.Values[x].Width / head * n
+		}
+		v := val(s, width)
+		d.op(Op{Kind: OpSlice, In: []ValueID{x}, Out: []ValueID{v}, Attr: Attrs{Offset: off, Width: n, HeadDim: head}})
+		return v
+	}
+	mixed := mv("qkv", in, o.In[0])
+	var z ValueID
+	if lowGate {
+		z = mv("z", gb, mv("z_low", ga, o.In[0]))
+	} else {
+		z = mv("z", gate, o.In[0])
+	}
+	var alpha, braw ValueID
+	if chans {
+		alpha, braw = mv("alpha", fb, mv("alpha_low", fa, o.In[0])), mv("b", ba, o.In[0])
+	} else {
+		bav := mv("ba", ba, o.In[0])
+		braw, alpha = slice("b", bav, 0, rep, 2*rep), slice("alpha", bav, rep, rep, 2*rep)
+	}
+	cv := val("conv", in.Rows)
+	d.op(Op{Kind: OpStateConv, In: []ValueID{mixed}, Out: []ValueID{cv}, Weight: []Binding{conv}, Attr: Attrs{Taps: conv.K}})
+	xs := val("conv_silu", in.Rows)
+	d.op(Op{Kind: OpAct, In: []ValueID{cv}, Out: []ValueID{xs}, Attr: Attrs{Act: ActSiLU}})
+
+	sp := mapv("alpha_sp", MapSoftplus, decayW, 0, mapw("alpha_dt", MapAdd, alpha, dtb, decayW))
+	decay := mapv("decay", MapExp, decayW, 0, mapw("a_sp", MapMul, sp, a, decayW))
+	beta := mapv("beta", MapSigmoid, vh, 0, braw)
+
+	eps := float64(c.RMSEps)
+	if chans {
+		eps = kdaL2Eps
+	}
+	scale := 1 / math.Sqrt(float64(kd))
+	l2 := func(s string, off int) ValueID {
+		x := slice(s, xs, off, kh*kd, 0)
+		v := val(s+"_l2", kh*kd)
+		d.op(Op{Kind: OpHeadNorm, In: []ValueID{x}, Out: []ValueID{v}, Attr: Attrs{Eps: eps / float64(kd), HeadDim: kd}})
+		return mapv(s+"_scaled", MapMul, kh*kd, scale, v)
+	}
+	q := mapv("q_scaled2", MapMul, kh*kd, scale, l2("q", 0))
+	k := l2("k", kh*kd)
+	v := slice("v", xs, 2*kh*kd, inner, 0)
+	y := val("y", inner)
+	d.op(Op{Kind: OpStateDelta, In: []ValueID{q, k, v, decay, beta}, Out: []ValueID{y},
+		Attr: Attrs{NHead: vh, NKVHead: kh, HeadDim: kd, KeyTiled: c.Flags.Has(jlm.FlagDeltaKeyTiled)}})
+	normed := val("normed", inner)
+	d.op(Op{Kind: OpHeadNorm, In: []ValueID{y}, Out: []ValueID{normed}, Weight: []Binding{{Role: nrm.Role, K: vd}},
+		Attr: Attrs{Eps: float64(c.RMSEps), HeadDim: vd}})
+	act := ActSiLU
+	if chans || c.Flags2.Has(jlm.Flag2DeltaSigmoidGate) {
+		act = ActSigmoid
+	}
+	gated := val("gated", inner)
+	d.op(Op{Kind: OpActMul, In: []ValueID{z, normed}, Out: []ValueID{gated}, Attr: Attrs{Act: act}})
 	d.op(Op{Kind: OpMatVec, In: []ValueID{gated}, Out: []ValueID{o.Out[0]}, Weight: []Binding{out}})
 	return true
 }

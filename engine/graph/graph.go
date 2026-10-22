@@ -257,10 +257,19 @@ const (
 	// Weight[1] with a row a value head (Mamba-1's). A primitive with a
 	// state of its own (DecomposeRecurrent).
 	OpStateScan
+	// OpStateDelta is the gated delta rule: In[0] and In[1] are q and k,
+	// NKVHead key heads of HeadDim; In[2] is v, NHead value heads; In[3]
+	// the decay, one a value head or one for each of a value head's HeadDim
+	// state columns; In[4] each value head's beta. Value head h, paired
+	// with key head h/rep (h%NKVHead where KeyTiled), decays its state S
+	// (v's head width by HeadDim), takes d = (v - S k) beta, adds k d and
+	// puts out S q. A primitive with a state of its own
+	// (DecomposeRecurrent).
+	OpStateDelta
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "gated_delta", "route", "gather", "expert_matvec", "combine", "gate_scalar", "layer_norm", "act", "clamp", "slice", "latent_append", "attend_latent", "recurrent", "scale", "index", "stream_mix", "stream_place", "ngram", "alt_predict", "alt_correct", "laurel", "gauss_top_k", "compressed_attend", "predict", "cross_attend", "conv", "affine", "rel_attend", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "state_scan", "state_delta"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {

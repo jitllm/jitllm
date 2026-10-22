@@ -531,3 +531,82 @@ func decomposeStateScan(o graph.Op, c *Context) ([]Prim, error) {
 			Stores: []PrimStore{{Out: state, Index: kx, Value: kv, Extent: N}}},
 	}, nil
 }
+
+// decomposeStateDelta is the gated delta rule over the part's state
+// ("rec.delta", value heads by v's head width by HeadDim), in the host's
+// order: the state decayed into a scratch, its rows against k, the update
+// by k and d = (v - S k) beta into a second scratch, its rows against q as
+// the output, and the state copied back.
+func decomposeStateDelta(o graph.Op, c *Context) ([]Prim, error) {
+	a := o.Attr
+	if len(o.In) != 5 || len(o.Out) != 1 || c.Step.Rows != 1 || a.NHead < 1 || a.NKVHead < 1 || a.HeadDim < 1 ||
+		a.NHead%a.NKVHead != 0 {
+		return nil, fmt.Errorf("a delta rule of %d operands over %d rows", len(o.In), c.Step.Rows)
+	}
+	U, F := ir.U32, ir.F32
+	vh, kh, kd := a.NHead, a.NKVHead, a.HeadDim
+	inner := c.width(o.Out[0])
+	dw := c.width(o.In[3])
+	if inner%vh != 0 || c.width(o.In[0]) != kh*kd || c.width(o.In[1]) != kh*kd || c.width(o.In[2]) != inner ||
+		dw != vh && dw != vh*kd || c.width(o.In[4]) != vh {
+		return nil, fmt.Errorf("a delta rule of %d value heads over %d", vh, inner)
+	}
+	vd, rep := inner/vh, vh/kh
+	N := vh * vd * kd
+	q, k, v, decay, beta := c.value(o.In[0]), c.value(o.In[1]), c.value(o.In[2]), c.value(o.In[3]), c.value(o.In[4])
+	state := Operand{Kind: OperandTable, Name: "rec.delta", PerPart: true}
+	name := c.value(o.Out[0]).Name
+	decayed := Operand{Kind: OperandScratch, Name: name + ".decayed"}
+	sk := Operand{Kind: OperandScratch, Name: name + ".sk", Temp: true}
+	next := Operand{Kind: OperandScratch, Name: name + ".state"}
+	key := func(x *exprs, h int) int {
+		if a.KeyTiled {
+			return x.op(OpRem, U, h, x.u(uint32(kh)))
+		}
+		return x.op(OpDiv, U, h, x.u(uint32(rep)))
+	}
+	keyAt := func(x *exprs, h, i int) int {
+		return x.op(OpAdd, U, x.op(OpMul, U, key(x, h), x.u(uint32(kd))), i)
+	}
+	flat := func(x *exprs, h, j, i int) int {
+		return x.op(OpAdd, U, x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(vd))), j), x.u(uint32(kd))), i)
+	}
+	sh := []int{vh, vd, kd}
+
+	var m exprs
+	mh, mj, mi := m.coord(0), m.coord(1), m.coord(2)
+	di := mh
+	if dw != vh {
+		di = m.op(OpAdd, U, m.op(OpMul, U, mh, m.u(uint32(kd))), mi)
+	}
+	m.op(OpMul, F, m.load(0, flat(&m, mh, mj, mi)), m.load(1, di))
+
+	var s exprs
+	sh0, sj, si := s.coord(0), s.coord(1), s.coord(2)
+	s.op(OpMul, F, s.load(0, flat(&s, sh0, sj, si)), s.load(1, keyAt(&s, sh0, si)))
+
+	var u exprs
+	uh, uj, ui := u.coord(0), u.coord(1), u.coord(2)
+	vj := u.op(OpAdd, U, u.op(OpMul, U, uh, u.u(uint32(vd))), uj)
+	dv := u.op(OpMul, F, u.op(OpSub, F, u.load(2, vj), u.load(3, vj)), u.load(4, uh))
+	u.op(OpAdd, F, u.load(0, flat(&u, uh, uj, ui)), u.op(OpMul, F, dv, u.load(1, keyAt(&u, uh, ui))))
+
+	var r exprs
+	rh, rj, ri := r.coord(0), r.coord(1), r.coord(2)
+	r.op(OpMul, F, r.load(0, flat(&r, rh, rj, ri)), r.load(1, keyAt(&r, rh, ri)))
+
+	var cp exprs
+	cx := flat(&cp, cp.coord(0), cp.coord(1), cp.coord(2))
+	cv := cp.load(0, cx)
+	return []Prim{
+		{Kind: PrimMap, Shape: sh, In: []Operand{state, decay}, Out: decayed, Expr: m.e, Facts: Facts{Extents: map[int]int{0: N, 1: dw}}},
+		{Kind: PrimReduce, Shape: sh, In: []Operand{decayed, k}, Out: sk, Combine: OpAdd, Expr: s.e,
+			Facts: Facts{Extents: map[int]int{0: N, 1: kh * kd}}},
+		{Kind: PrimMap, Shape: sh, In: []Operand{decayed, k, v, sk, beta}, Out: next, Expr: u.e,
+			Facts: Facts{Extents: map[int]int{0: N, 1: kh * kd, 2: inner, 3: inner, 4: vh}}},
+		{Kind: PrimReduce, Shape: sh, In: []Operand{next, q}, Out: c.value(o.Out[0]), Combine: OpAdd, Expr: r.e,
+			Facts: Facts{Extents: map[int]int{0: N, 1: kh * kd}}},
+		{Kind: PrimMap, Shape: sh, In: []Operand{next}, Expr: cp.e, Facts: Facts{Extents: map[int]int{0: N}},
+			Stores: []PrimStore{{Out: state, Index: cx, Value: cv, Extent: N}}},
+	}, nil
+}
