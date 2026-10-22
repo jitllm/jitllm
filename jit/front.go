@@ -2,7 +2,6 @@ package jit
 
 import (
 	"fmt"
-	"math"
 	"slices"
 
 	"github.com/jitllm/jitllm/engine/graph"
@@ -43,13 +42,14 @@ func (p Part) String() string {
 	return fmt.Sprintf("block %d", p.Block)
 }
 
-// Model is what the composer reads of a model: its configuration and its
-// tensors' index entries, never their bytes. A container is one; a model's
-// header shipped to another node is another.
+// Model is what the composer reads of a model: its configuration, its
+// tensors' index entries, never their bytes, and each block's graph as the
+// engine builds it from the container, nil for a block it has none of.
 type Model interface {
 	Config() *jlm.Config
 	Find(role jlm.Role, block, index int32) (*jlm.Entry, bool)
 	Entries() []jlm.Entry
+	BlockGraph(li int) *graph.Graph
 }
 
 // unread is the first tensor of block (jlm.DenseBlock for none) whose role
@@ -70,11 +70,10 @@ func has(m Model, role jlm.Role, block, index int32) bool {
 	return ok
 }
 
-// Front is the model's graph from its container: the step's rotary table,
-// its input rows' embedding, every block, the head, then the sampling of
-// its logits. What the
-// container states, the front end reads; what it does not, the front end
-// refuses.
+// Front is the model's graph: the step's rotary table, its input rows'
+// embedding, every block's graph as the model states it, the head, then the
+// sampling of its logits. What the head and the embedding do not read, the
+// front end refuses.
 func Front(f Model) ([]Part, error) {
 	c := f.Config()
 	rt := graph.RopeTable{NRot: int(c.NRot)}
@@ -84,9 +83,9 @@ func Front(f Model) ([]Part, error) {
 	em := graph.Embed{NEmbd: int(c.NEmbd), NVocab: int(c.NVocab)}
 	parts := []Part{{Kind: PartTable, Block: -1, Graph: rt.Build()}, {Kind: PartEmbed, Block: -1, Graph: em.Build()}}
 	for li := 0; li < int(c.NLayer); li++ {
-		g, err := blockGraph(f, li)
-		if err != nil {
-			return nil, fmt.Errorf("jit: block %d: %w", li, err)
+		g := f.BlockGraph(li)
+		if g == nil {
+			return nil, fmt.Errorf("jit: block %d has no graph", li)
 		}
 		parts = append(parts, Part{Kind: PartBlock, Block: li, Graph: g})
 	}
@@ -96,60 +95,6 @@ func Front(f Model) ([]Part, error) {
 	}
 	sm := graph.Sample{NVocab: int(c.NVocab)}
 	return append(parts, Part{Kind: PartHead, Block: -1, Graph: h}, Part{Kind: PartSample, Block: -1, Graph: sm.Build()}), nil
-}
-
-// stated is the container's facts the front end reads; anything else a
-// model states is refused until the front end reads it.
-const stated = jlm.FlagTiedEmbd | jlm.FlagRopeNeox | jlm.FlagGELU
-
-func blockGraph(f Model, li int) (*graph.Graph, error) {
-	c := f.Config()
-	if c.Flags&^stated != 0 || c.NExpert != 0 || len(c.LayerKinds) != 0 || c.SWAWindow != 0 || c.YarnFactor != 0 || c.YarnLogMul != 0 {
-		return nil, fmt.Errorf("the container states what the front end does not read (flags %#x)", uint32(c.Flags&^stated))
-	}
-	roles := []jlm.Role{jlm.RoleAttnNorm, jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV, jlm.RoleAttnOut,
-		jlm.RoleFFNNorm, jlm.RoleFFNGate, jlm.RoleFFNUp, jlm.RoleFFNDown}
-	for _, r := range roles {
-		if !has(f, r, int32(li), -1) {
-			return nil, fmt.Errorf("no %s", r)
-		}
-	}
-	// q, k and v carry biases where the container holds all three.
-	biases := []jlm.Role{jlm.RoleAttnQBias, jlm.RoleAttnKBias, jlm.RoleAttnVBias}
-	qkvBias := has(f, biases[0], int32(li), -1)
-	for _, r := range biases {
-		if has(f, r, int32(li), -1) != qkvBias {
-			return nil, fmt.Errorf("the container holds some of q, k and v's biases and not all")
-		}
-	}
-	if qkvBias {
-		roles = append(roles, biases...)
-	}
-	if err := unread(f, int32(li), roles...); err != nil {
-		return nil, err
-	}
-	// Rotary sections (M-RoPE) give a pair a coordinate of the row's; a
-	// text row's coordinates are all its position, so on text they turn
-	// as the plain rotary does. A picture's rows are a vision part's.
-	layout := graph.RopeNorm
-	if c.Flags&jlm.FlagRopeNeox != 0 {
-		layout = graph.RopeNeox
-	}
-	// The container's feed-forward is SiLU unless it states GELU.
-	act := graph.ActSiLU
-	if c.Flags&jlm.FlagGELU != 0 {
-		act = graph.ActGELUTanh
-	}
-	// The score's scale is the container's where it states one, else
-	// 1/sqrt of the head's width.
-	scale := 1 / math.Sqrt(float64(c.HeadDimAt(li)))
-	if c.AttnScale != 0 {
-		scale = float64(c.AttnScale)
-	}
-	d := graph.Dense{Block: li, NEmbd: int(c.NEmbd), NHead: int(c.NHead), NKVHead: int(c.NKVHeadAt(li)),
-		HeadDim: int(c.HeadDimAt(li)), NFFN: int(c.NFFNAt(li)), Eps: float64(c.RMSEps), NRot: int(c.NRot),
-		Base: float64(c.RopeBase), Layout: layout, Act: act, Scale: scale, QKVBias: qkvBias}
-	return d.Build(), nil
 }
 
 // headGraph is the final norm and the vocabulary's projection, the
@@ -165,6 +110,14 @@ func headGraph(f Model) (*graph.Graph, error) {
 	}
 	if err := unread(f, jlm.DenseBlock, jlm.RoleTokenEmbd, jlm.RoleOutputNorm, out); err != nil {
 		return nil, err
+	}
+	switch {
+	case c.Flags&jlm.FlagLayerNorm != 0:
+		return nil, fmt.Errorf("the output norm is a LayerNorm, which the head does not read")
+	case c.FinalSoftcap != 0:
+		return nil, fmt.Errorf("the container softcaps the logits by %v, which the head does not read", c.FinalSoftcap)
+	case c.LogitScale != 0 && c.LogitScale != 1:
+		return nil, fmt.Errorf("the container scales the logits by %v, which the head does not read", c.LogitScale)
 	}
 	h := graph.Head{NEmbd: int(c.NEmbd), NVocab: int(c.NVocab), Eps: float64(c.RMSEps), Out: out}
 	return h.Build(), nil

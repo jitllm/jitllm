@@ -4,8 +4,6 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/cost"
-	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/ir"
 )
@@ -17,11 +15,7 @@ import (
 // parameters bound to one buffer. A kernel with a barrier orders its phases
 // itself.
 func TestNoGPUKernelReadsWhatItWrites(t *testing.T) {
-	f, err := jlm.Open(testmodels.Path(*boardModel + ".jlm"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
+	f := composing(t, *boardModel+".jlm")
 	d := cost.Device{Device: sm70}
 	ccs, err := cost.EstimateCodes(jit.Default(), f, jit.Step{Rows: 1, Page: 64, Keys: 9}, func(jit.Part) cost.Device { return d }, true)
 	if err != nil {

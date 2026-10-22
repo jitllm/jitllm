@@ -1,10 +1,9 @@
-package jit
+package jit_test
 
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit"
 )
 
 // TestPlanStatesEverySource holds a decode step's plan on the GPU to the
@@ -13,33 +12,29 @@ import (
 // weight names its tensor, every storage the plan sizes has a size, and
 // every source a decode reads appears.
 func TestPlanStatesEverySource(t *testing.T) {
-	f, err := jlm.Open(testmodels.Path("synth-ernie45.jlm"))
+	f := composing(t, "synth-ernie45.jlm")
+	d := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
+	plan, err := jit.Default().Compose(f, jit.Step{Rows: 1, Page: 64, Keys: 5}, func(jit.Part) jit.Device { return d })
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	d := Device{Kind: DeviceGPU, Slots: 80 * 2048, Lanes: 32}
-	plan, err := Default().Compose(f, Step{Rows: 1, Page: 64, Keys: 5}, func(Part) Device { return d })
-	if err != nil {
-		t.Fatal(err)
-	}
-	seen := map[Source]int{}
+	seen := map[jit.Source]int{}
 	for _, st := range plan.Storages {
 		seen[st.Source]++
-		if !st.Source.Engine() && st.Source != SourceTransfer && st.Bytes == 0 {
+		if !st.Source.Engine() && st.Source != jit.SourceTransfer && st.Bytes == 0 {
 			t.Errorf("%s storage %q of part %d states no size", st.Source, st.Key.Name, st.Key.Of)
 		}
-		if st.Source == SourceWeight {
+		if st.Source == jit.SourceWeight {
 			if _, ok := f.Find(st.Role, int32(st.Block), -1); !ok {
 				t.Errorf("weight %v of block %d is not in the container", st.Role, st.Block)
 			}
 		}
 	}
-	if seen[SourceTokens] != 1 || seen[SourceInput] != 0 {
-		t.Errorf("%d token storages and %d input rows, want one and none", seen[SourceTokens], seen[SourceInput])
+	if seen[jit.SourceTokens] != 1 || seen[jit.SourceInput] != 0 {
+		t.Errorf("%d token storages and %d input rows, want one and none", seen[jit.SourceTokens], seen[jit.SourceInput])
 	}
-	for _, s := range []Source{SourceStep, SourceWeight, SourceTokens, SourceRows, SourcePages, SourceQueryOffset,
-		SourceRopePositions, SourceRopePlanes, SourceKeys, SourceValues, SourceWords} {
+	for _, s := range []jit.Source{jit.SourceStep, jit.SourceWeight, jit.SourceTokens, jit.SourceRows, jit.SourcePages, jit.SourceQueryOffset,
+		jit.SourceRopePositions, jit.SourceRopePlanes, jit.SourceKeys, jit.SourceValues, jit.SourceWords} {
 		if seen[s] == 0 {
 			t.Errorf("no %s storage in a decode step's plan", s)
 		}

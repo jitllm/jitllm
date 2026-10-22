@@ -71,7 +71,7 @@ func TestRunnerDecodesAsTheHost(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/%d", dev.API(), capacity), func(t *testing.T) {
 				reg := jit.Default()
 				reg.PoisonWorkgroupMemory()
-				r, err := run.New(f, dev, gpu, capacity, rope, run.WithGuard(4096), run.WithComposer(reg))
+				r, err := run.New(m.Composing(), dev, gpu, capacity, rope, run.WithGuard(4096), run.WithComposer(reg))
 				if err != nil {
 					t.Fatal(err)
 				}

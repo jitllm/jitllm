@@ -3,8 +3,6 @@ package cost
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
 )
 
@@ -17,11 +15,7 @@ import (
 // correlation of its terms (a 256-byte row read to 26 MB), so its reach is a
 // bound, not a measure.
 func TestEveryStorageStatesWhatItsKernelsReach(t *testing.T) {
-	f, err := jlm.Open(testmodels.Path(*composeModel + ".jlm"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
+	f := composing(t, *composeModel+".jlm")
 	s := jit.Step{Rows: 1, Page: 64, Keys: 9}
 	for _, d := range []Device{{Device: jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}}} {
 		plan, err := jit.Default().Compose(f, s, func(jit.Part) jit.Device { return d.Device })

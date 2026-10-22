@@ -10,8 +10,6 @@ import (
 
 	"github.com/jitllm/jitllm/engine/cost"
 	"github.com/jitllm/jitllm/engine/probe"
-	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/x86"
 	"github.com/jitllm/jitllm/jit_old/cpu"
@@ -31,11 +29,7 @@ func TestEstimateMatchesTheHost(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	f, err := jlm.Open(testmodels.Path(*boardModel + ".jlm"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
+	f := composing(t, *boardModel+".jlm")
 	for l, c := range d.Caches {
 		t.Logf("L%d %d KiB %.1f GB/s %.1f ns, start %.1f ns, keeps %.2f, %.2f cycling", l+1, c.Bytes>>10, c.Rate.Thread/1e9, c.Latency*1e9, c.Start*1e9, c.Retain, c.Cycle)
 	}
@@ -44,7 +38,7 @@ func TestEstimateMatchesTheHost(t *testing.T) {
 	t.Run("cold", func(t *testing.T) { estimateStep(t, d, f, false) })
 }
 
-func estimateStep(t *testing.T, d cost.Device, f *jlm.File, steady bool) {
+func estimateStep(t *testing.T, d cost.Device, f jit.Model, steady bool) {
 	s := jit.Step{Rows: 1, Page: 64, Keys: keys(t, *boardModel)}
 	ccs, err := cost.EstimateCodes(jit.Default(), f, s, func(jit.Part) cost.Device { return d }, steady)
 	if err != nil {

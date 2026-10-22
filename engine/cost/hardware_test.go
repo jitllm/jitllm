@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
 )
 
@@ -101,11 +99,7 @@ func TestRendererWritesEveryField(t *testing.T) {
 // (Its whole time need not order so: the composed argmax runs on one
 // thread, and a thread's speed is not a card's bandwidth.)
 func TestEveryKnownHardwarePrices(t *testing.T) {
-	f, err := jlm.Open(testmodels.Path(*composeModel + ".jlm"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
+	f := composing(t, *composeModel+".jlm")
 	s := jit.Step{Rows: 1, Page: 64, Keys: 9}
 	type priced struct {
 		name string

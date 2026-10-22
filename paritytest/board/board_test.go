@@ -9,7 +9,6 @@ import (
 
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit_old/gpu/backend/recorder"
@@ -126,11 +125,7 @@ func keys(t *testing.T, name string) int {
 // could not form.
 func composed(t *testing.T, name string, p jit.Placement) (*jit.Plan, error) {
 	t.Helper()
-	f, err := jlm.Open(testmodels.Path(name + ".jlm"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
+	f := composing(t, name+".jlm")
 	step := jit.Step{Rows: 1, Page: 64, Keys: keys(t, name)}
 	return jit.Default().Compose(f, step, p)
 }
@@ -302,4 +297,16 @@ func TestBoardComparesDataflow(t *testing.T) {
 		t.Errorf("an add made a multiply left the count at %d of %d", s, total)
 	}
 	t.Logf("%d of %d; a dead instruction kept it, an add made a multiply took it down", same, total)
+}
+
+// composing is fixture name as the composer reads it: the container and the
+// block graphs the engine builds from it.
+func composing(t *testing.T, name string) jit.Model {
+	t.Helper()
+	m, err := model.Open(testmodels.Path(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close() })
+	return m.Composing()
 }

@@ -4,7 +4,9 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/run"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit"
 )
 
@@ -17,6 +19,20 @@ func WithPlanDevice(dev backend.Device, gpu jit.Device) Option {
 	return func(l *loadOpts) { l.opt.planDev, l.opt.planGPU = dev, gpu }
 }
 
+// composing is the model as the composer reads it: its container, and each
+// block's graph as buildGraphs built it from the container.
+type composing struct {
+	*jlm.File
+	m *Model
+}
+
+func (c composing) BlockGraph(li int) *graph.Graph { return c.m.BlockGraph(li) }
+
+// Composing is the model as the composer and the plan's runner read it: one
+// mapping from the container to the block graphs, the one this package's
+// own graph path runs.
+func (m *Model) Composing() run.Source { return composing{m.container, m} }
+
 // runner is the model's plan at a capacity of keys positions, composed and
 // compiled once.
 func (m *Model) runner(keys int) (*run.Runner, error) {
@@ -25,7 +41,7 @@ func (m *Model) runner(keys int) (*run.Runner, error) {
 	if r := m.runners[keys]; r != nil {
 		return r, nil
 	}
-	r, err := run.New(m.container, m.opt.planDev, m.opt.planGPU, keys, m.rope)
+	r, err := run.New(m.Composing(), m.opt.planDev, m.opt.planGPU, keys, m.rope)
 	if err != nil {
 		return nil, err
 	}

@@ -3,7 +3,7 @@ package cost
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
 )
@@ -12,11 +12,7 @@ import (
 // step s, in order.
 func estimateRun(t *testing.T, d Device, s jit.Step) ([]*jit.Kernel, []Cost) {
 	t.Helper()
-	f, err := jlm.Open(testmodels.Path(*composeModel + ".jlm"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
+	f := composing(t, *composeModel+".jlm")
 	parts, err := jit.Front(f)
 	if err != nil {
 		t.Fatal(err)
@@ -128,4 +124,16 @@ func TestEstimateReadsTheHeadOnce(t *testing.T) {
 		}
 		t.Logf("%v: the head's kernel moves %d bytes, its weight %d", d.Kind, got, weight)
 	}
+}
+
+// composing is fixture name as the composer reads it: the container and the
+// block graphs the engine builds from it.
+func composing(t *testing.T, name string) jit.Model {
+	t.Helper()
+	m, err := model.Open(testmodels.Path(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Close() })
+	return m.Composing()
 }

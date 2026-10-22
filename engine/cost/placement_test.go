@@ -4,8 +4,6 @@ import (
 	"flag"
 	"testing"
 
-	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
 )
 
@@ -15,11 +13,7 @@ var composeModel = flag.String("compose-model", "synth-ernie45", "the fixture th
 // plan mode's suggestion to costing no more than any of them, and to the
 // estimate of the placement it returns.
 func TestSuggestPlacesFromTheIR(t *testing.T) {
-	f, err := jlm.Open(testmodels.Path(*composeModel + ".jlm"))
-	if err != nil {
-		t.Skip(err)
-	}
-	defer f.Close()
+	f := composing(t, *composeModel+".jlm")
 	r := jit.Default()
 	gpu := Device{Device: jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, Bandwidth: 800e9, Launch: 4e-6, Link: 12e9}
 	cpu := Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}, Bandwidth: 40e9, Launch: 3e-6, Link: 12e9}
@@ -64,11 +58,7 @@ func TestSuggestPlacesFromTheIR(t *testing.T) {
 // suggestion and on a placement the engine forces, each part landing where
 // its placement put it.
 func TestEngineTakesOrForcesThePlacement(t *testing.T) {
-	f, err := jlm.Open(testmodels.Path(*composeModel + ".jlm"))
-	if err != nil {
-		t.Skip(err)
-	}
-	defer f.Close()
+	f := composing(t, *composeModel+".jlm")
 	r := jit.Default()
 	gpu := Device{Device: jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, Bandwidth: 800e9, Launch: 4e-6, Link: 12e9}
 	cpu := Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}, Bandwidth: 40e9, Launch: 3e-6, Link: 12e9}

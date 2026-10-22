@@ -22,9 +22,18 @@ import (
 	"github.com/jitllm/jitllm/jit"
 )
 
+// Source is a model the runner composes and fills: the composer's input,
+// and the container's bytes behind each entry.
+type Source interface {
+	jit.Model
+	Span(e *jlm.Entry) (qs, d, sc []byte)
+	EnsurePage(i int) error
+	BlockOf(e *jlm.Entry) int
+}
+
 // Runner is a model's plan on one device.
 type Runner struct {
-	f      *jlm.File
+	f      Source
 	dev    backend.Device
 	step   jit.Step
 	plan   *jit.Plan
@@ -63,7 +72,7 @@ func WithGuard(n int) Option { return func(r *Runner) { r.guard = n } }
 // New composes the model in f for gpu, the composer's description of dev, at
 // a capacity of keys positions a sequence, compiles it on dev and uploads what
 // every sequence shares. rope is the model's rotary.
-func New(f *jlm.File, dev backend.Device, gpu jit.Device, keys int, rope nn.Rope, opts ...Option) (*Runner, error) {
+func New(f Source, dev backend.Device, gpu jit.Device, keys int, rope nn.Rope, opts ...Option) (*Runner, error) {
 	c := f.Config()
 	r := &Runner{f: f, dev: dev, step: jit.Step{Rows: 1, Page: 64, Keys: keys}, logits: -1, token: -1, input: -1,
 		nvocab: int(c.NVocab), nembd: int(c.NEmbd)}

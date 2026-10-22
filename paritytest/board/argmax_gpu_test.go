@@ -8,8 +8,6 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/cost"
-	"github.com/jitllm/jitllm/format/jlm"
-	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/ir"
 )
@@ -20,11 +18,7 @@ import (
 // maximum planted at a random place, at the first and at the last, and two
 // equal maxima far apart and near, of which the lower index is the answer.
 func TestComposedArgmaxRunsOnTheGPU(t *testing.T) {
-	f, err := jlm.Open(testmodels.Path(*boardModel + ".jlm"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
+	f := composing(t, *boardModel+".jlm")
 	s := jit.Step{Rows: 1, Page: 64, Keys: 9}
 	d := cost.Device{Device: sm70}
 	ccs, err := cost.EstimateCodes(jit.Default(), f, s, func(jit.Part) cost.Device { return d }, true)
