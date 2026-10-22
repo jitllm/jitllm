@@ -72,6 +72,9 @@ func decomposeNorm(o graph.Op, c *Context) ([]Prim, error) {
 // decomposeMatVec is each output row's sum over K of the weight's row times
 // the input.
 func decomposeMatVec(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.Weight) == 2 && len(o.In) == 1 && len(o.Out) == 1 {
+		return decomposeBiased(o, c)
+	}
 	if len(o.Weight) != 1 || len(o.In) != 1 || len(o.Out) != 1 {
 		return nil, fmt.Errorf("a matvec of %d weights", len(o.Weight))
 	}
@@ -97,6 +100,34 @@ func decomposeMatVec(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	return append(prims, Prim{Kind: PrimContract, Shape: []int{c.Step.Rows, w.Rows, w.K}, In: []Operand{wo, c.value(o.In[0])},
 		Out: c.value(o.Out[0]), Expr: x.e}), nil
+}
+
+// decomposeBiased is a matvec with a bias: the product, then each output
+// element plus the bias's.
+func decomposeBiased(o graph.Op, c *Context) ([]Prim, error) {
+	b := o.Weight[1]
+	if f := c.Formats[b.Role]; f != jlm.TypeF32 {
+		return nil, fmt.Errorf("a bias %s stored as %s", b.Role, f)
+	}
+	inner := o
+	inner.Weight = o.Weight[:1]
+	prims, err := decomposeMatVec(inner, c)
+	if err != nil {
+		return nil, err
+	}
+	out := c.value(o.Out[0])
+	raw := Operand{Kind: OperandScratch, Name: out.Name + ".raw"}
+	for i := range prims {
+		if prims[i].Out == out {
+			prims[i].Out = raw
+		}
+	}
+	sh := c.rows(o.Out[0])
+	var x exprs
+	r, i := x.coord(0), x.coord(1)
+	x.op(OpAdd, ir.F32, x.at(0, sh, r, i), x.at(1, []int{sh[1]}, i))
+	bias := Operand{Kind: OperandVector, Role: b.Role, Name: b.Role.String()}
+	return append(prims, Prim{Kind: PrimMap, Shape: sh, In: []Operand{raw, bias}, Out: out, Expr: x.e}), nil
 }
 
 // producedByRow reports whether value v is the output of an op computing a

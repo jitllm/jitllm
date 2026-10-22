@@ -114,9 +114,23 @@ func blockGraph(f Model, li int) (*graph.Graph, error) {
 			return nil, fmt.Errorf("no %s", r)
 		}
 	}
+	// q, k and v carry biases where the container holds all three.
+	biases := []jlm.Role{jlm.RoleAttnQBias, jlm.RoleAttnKBias, jlm.RoleAttnVBias}
+	qkvBias := has(f, biases[0], int32(li), -1)
+	for _, r := range biases {
+		if has(f, r, int32(li), -1) != qkvBias {
+			return nil, fmt.Errorf("the container holds some of q, k and v's biases and not all")
+		}
+	}
+	if qkvBias {
+		roles = append(roles, biases...)
+	}
 	if err := unread(f, int32(li), roles...); err != nil {
 		return nil, err
 	}
+	// Rotary sections (M-RoPE) give a pair a coordinate of the row's; a
+	// text row's coordinates are all its position, so on text they turn
+	// as the plain rotary does. A picture's rows are a vision part's.
 	layout := graph.RopeNorm
 	if c.Flags&jlm.FlagRopeNeox != 0 {
 		layout = graph.RopeNeox
@@ -134,7 +148,7 @@ func blockGraph(f Model, li int) (*graph.Graph, error) {
 	}
 	d := graph.Dense{Block: li, NEmbd: int(c.NEmbd), NHead: int(c.NHead), NKVHead: int(c.NKVHeadAt(li)),
 		HeadDim: int(c.HeadDimAt(li)), NFFN: int(c.NFFNAt(li)), Eps: float64(c.RMSEps), NRot: int(c.NRot),
-		Base: float64(c.RopeBase), Layout: layout, Act: act, Scale: scale}
+		Base: float64(c.RopeBase), Layout: layout, Act: act, Scale: scale, QKVBias: qkvBias}
 	return d.Build(), nil
 }
 
