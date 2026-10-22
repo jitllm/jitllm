@@ -58,15 +58,13 @@ func (x *exprs) mapFn(f graph.MapFn, a []int) (int, error) {
 
 // decomposeMap is an elementwise function of its operands -- its inputs,
 // then its bound vector, then its constant -- an operand narrower than the
-// output read at element i/(w/n).
+// output read at element i/(w/n), an index row read as its float.
 func decomposeMap(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.Out) != 1 || len(o.Weight) > 1 {
 		return nil, fmt.Errorf("a map of %d outputs, %d weights", len(o.Out), len(o.Weight))
 	}
-	for _, v := range append(append([]graph.ValueID(nil), o.In...), o.Out...) {
-		if c.Graph.Values[v].Elem != graph.ElemF32 {
-			return nil, fmt.Errorf("a map over %s values", c.Graph.Values[v].Name)
-		}
+	if c.Graph.Values[o.Out[0]].Elem != graph.ElemF32 {
+		return nil, fmt.Errorf("a map to %s values", c.Graph.Values[o.Out[0]].Name)
 	}
 	sh := c.rows(o.Out[0])
 	R, W := sh[0], sh[1]
@@ -88,6 +86,10 @@ func decomposeMap(o graph.Op, c *Context) ([]Prim, error) {
 		a, err := at(len(in), c.width(v))
 		if err != nil {
 			return nil, err
+		}
+		if c.Graph.Values[v].Elem == graph.ElemU32 {
+			// An index row reads as its float, as main's map takes it.
+			a = x.un(OpCvtF32, ir.F32, x.un(OpBitcast, ir.I32, a))
 		}
 		in, args = append(in, c.value(v)), append(args, a)
 	}

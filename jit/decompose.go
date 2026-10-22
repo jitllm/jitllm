@@ -12,25 +12,36 @@ import (
 // primitives over coordinates: a value of the step is [rows][width].
 func decompositions() map[graph.OpKind]Decomposition {
 	return map[graph.OpKind]Decomposition{
-		graph.OpNorm:      decomposeNorm,
-		graph.OpHeadNorm:  decomposeHeadNorm,
-		graph.OpMatVec:    decomposeMatVec,
-		graph.OpAdd:       decomposeAdd,
-		graph.OpActMul:    decomposeActMul,
-		graph.OpAct:       decomposeAct,
-		graph.OpMap:       decomposeMap,
-		graph.OpLayerNorm: decomposeLayerNorm,
-		graph.OpRope:      decomposeRope,
-		graph.OpKVAppend:  decomposeKVAppend,
-		graph.OpAttend:    decomposeAttend,
-		graph.OpRopeTable: decomposeRopeTable,
-		graph.OpTopK:      decomposeTopK,
-		graph.OpEmbed:     decomposeEmbed,
+		graph.OpNorm:         decomposeNorm,
+		graph.OpHeadNorm:     decomposeHeadNorm,
+		graph.OpMatVec:       decomposeMatVec,
+		graph.OpAdd:          decomposeAdd,
+		graph.OpActMul:       decomposeActMul,
+		graph.OpAct:          decomposeAct,
+		graph.OpMap:          decomposeMap,
+		graph.OpLayerNorm:    decomposeLayerNorm,
+		graph.OpRope:         decomposeRope,
+		graph.OpKVAppend:     decomposeKVAppend,
+		graph.OpAttend:       decomposeAttend,
+		graph.OpRopeTable:    decomposeRopeTable,
+		graph.OpTopK:         decomposeTopK,
+		graph.OpReduce:       decomposeReduce,
+		graph.OpTake:         decomposeTake,
+		graph.OpGather:       decomposeGather,
+		graph.OpCombine:      decomposeCombine,
+		graph.OpExpertMatVec: decomposeExpertMatVec,
+		graph.OpRank:         decomposeRank,
+		graph.OpClamp:        decomposeClamp,
+		graph.OpEmbed:        decomposeEmbed,
 	}
 }
 
 func (c *Context) value(v graph.ValueID) Operand {
-	return Operand{Kind: OperandValue, Value: v, Name: c.Graph.Values[v].Name}
+	o := Operand{Kind: OperandValue, Value: v, Name: c.Graph.Values[v].Name}
+	if c.Graph.Values[v].Elem == graph.ElemU32 {
+		o.Elem = ir.U32
+	}
+	return o
 }
 
 func (c *Context) width(v graph.ValueID) int { return c.Graph.Values[v].Width }

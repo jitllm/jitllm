@@ -17,15 +17,20 @@ type packed struct {
 	in     *[]Operand
 	facts  *Facts
 	codes  int
+	// sheet, where it is set (not -1), is the node of a bank's sheet the
+	// words are read from, words each plane's count a sheet.
+	sheet int
+	words [3]int
 }
 
 // packedOperands appends weight wo's three planes to a primitive's inputs,
 // sized for a tensor of rows rows of k, and is the arithmetic that reads
 // them.
 func packedOperands(x *exprs, wo Operand, l jlm.TypeLayout, rows, k int, in *[]Operand, facts *Facts) *packed {
-	p := &packed{x: x, in: in, facts: facts, codes: -1}
+	p := &packed{x: x, in: in, facts: facts, codes: -1, sheet: -1}
 	n := [3]int{}
 	n[0], n[1], n[2] = l.Words(rows, k)
+	p.words = n
 	for i := range p.planes {
 		if n[i] == 0 {
 			p.planes[i] = -1
@@ -66,7 +71,22 @@ func (p *packed) FAdd(a, b int) int    { return p.x.op(OpAdd, ir.F32, a, b) }
 // a code), where the signed conversion is exact.
 func (p *packed) Float(a int) int { return p.Int(a) }
 
-func (p *packed) Word(pl jlm.Plane, i int) int { return p.x.load(p.planes[pl], i) }
+func (p *packed) Word(pl jlm.Plane, i int) int {
+	if p.sheet >= 0 {
+		i = p.Add(i, p.Mul(p.sheet, p.U(uint32(p.words[pl]))))
+	}
+	return p.x.load(p.planes[pl], i)
+}
+
+// bank makes p read sheet node sheet of a bank of sheets sheets.
+func (p *packed) bank(sheet, sheets int) {
+	p.sheet = sheet
+	for i, pl := range p.planes {
+		if pl >= 0 {
+			p.facts.Extents[pl] = sheets * p.words[i]
+		}
+	}
+}
 
 // Code is entry q of the format's code table, its sixteen bytes four words
 // of constants.
@@ -97,7 +117,7 @@ func weightElement(x *exprs, wo Operand, rows, k int, in *[]Operand, facts *Fact
 		if wo.Format == jlm.TypeF32 {
 			width = 4
 		}
-		p := &packed{x: x, in: in, facts: facts, codes: -1, planes: [3]int{len(*in), -1, -1}}
+		p := &packed{x: x, in: in, facts: facts, codes: -1, sheet: -1, planes: [3]int{len(*in), -1, -1}}
 		facts.Extents[len(*in)] = (rows*k*width + 3) / 4
 		*in = append(*in, wo)
 		return jlm.DecodeVerbatim[int](p, wo.Format, k, row, col), nil

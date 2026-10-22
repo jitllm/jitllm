@@ -32,6 +32,10 @@ type Source interface {
 	Span(e *jlm.Entry) (qs, d, sc []byte)
 	EnsurePage(i int) error
 	BlockOf(e *jlm.Entry) int
+	// A mixture's bank paged an expert at a time (jlm.File.ExpertPaged).
+	ExpertPaged(e *jlm.Entry) bool
+	ExpertPage(e *jlm.Entry, x int) int
+	Sheet(e *jlm.Entry, x int) (qs, d, sc []byte)
 }
 
 // Runner is a model's plan on one device.
@@ -190,6 +194,32 @@ func (r *Runner) bytes(st jit.Storage) (int64, error) {
 	return st.Bytes, nil
 }
 
+// bank is a paged bank's region whole, its sheets back to back, each
+// expert's page paged in and its plane copied out. Every expert of the bank
+// is resident on the device; paging experts through the device is not done
+// here.
+func (r *Runner) bank(e *jlm.Entry, st jit.Storage) ([]byte, error) {
+	var out []byte
+	for x := 0; ; x++ {
+		p := r.f.ExpertPage(e, x)
+		if p < 0 {
+			if x == 0 {
+				return nil, fmt.Errorf("run: bank %v of block %d has no expert pages", st.Role, st.Block)
+			}
+			return out, nil
+		}
+		if err := r.f.EnsurePage(p); err != nil {
+			return nil, err
+		}
+		qs, d, sc := r.f.Sheet(e, x)
+		b := [3][]byte{qs, d, sc}[st.Region]
+		if qs == nil {
+			return nil, fmt.Errorf("run: expert %d of bank %v of block %d is not resident", x, st.Role, st.Block)
+		}
+		out = append(out, b...)
+	}
+}
+
 // weight is the region of a weight a storage names, in the container, its
 // block paged in.
 func (r *Runner) weight(st jit.Storage) ([]byte, error) {
@@ -203,6 +233,9 @@ func (r *Runner) weight(st jit.Storage) ([]byte, error) {
 	}
 	if st.Region < 0 || st.Region > 2 {
 		return nil, fmt.Errorf("run: tensor %v of block %d has no region %d", st.Role, st.Block, st.Region)
+	}
+	if r.f.ExpertPaged(e) {
+		return r.bank(e, st)
 	}
 	if b := region(); b != nil {
 		return b, nil
