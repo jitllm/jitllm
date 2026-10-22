@@ -1412,7 +1412,9 @@ func classOf(k *jit.Kernel, i int, words map[int]bool) (Class, bool) {
 		return ClassGroup, true
 	case jit.OpHSum, jit.OpHMax, jit.OpHMin, jit.OpShuffle, jit.OpBroadcast, jit.OpZip, jit.OpUnpack, jit.OpUpper, jit.OpDupEven, jit.OpDupOdd, jit.OpSwapPairs, jit.OpFirstLane:
 		return ClassLanes, true
-	case jit.OpDiv, jit.OpSqrt, jit.OpExp, jit.OpCvtF32, jit.OpCvtI32, jit.OpRoundI32, jit.OpHalf:
+	case jit.OpDot4:
+		return ClassInt, true
+	case jit.OpDiv, jit.OpSqrt, jit.OpExp, jit.OpCvtF32, jit.OpCvtI32, jit.OpRoundI32, jit.OpHalf, jit.OpWidenHalf:
 		if nd.Type == ir.F32 || k.Nodes[nd.A].Type == ir.F32 || words[i] {
 			return ClassSpecial, true
 		}

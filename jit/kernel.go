@@ -293,6 +293,11 @@ const (
 	OpFirstLane
 	// OpCopy is A in another register.
 	OpCopy
+	// OpDot4 is C plus the sum of the products of A's and B's signed bytes,
+	// lane by lane of the four in each word.
+	OpDot4
+	// OpWidenHalf is word A's low binary16 half as a float.
+	OpWidenHalf
 	numOps
 )
 
@@ -410,7 +415,7 @@ func (n *Kernel) Elements() int {
 
 var opNames = [numOps]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
 	"less", "select", "sqrt", "exp", "shl", "shr", "and", "xor", "cvtf32", "cvti32", "thread", "groupsum", "groupmax", "exchange",
-	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "unpack", "upper", "round", "span", "hmax", "hmin", "eq", "or", "lanes", "sar", "dupeven", "dupodd", "swappairs", "addsub", "firstlane", "copy"}
+	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "unpack", "upper", "round", "span", "hmax", "hmin", "eq", "or", "lanes", "sar", "dupeven", "dupodd", "swappairs", "addsub", "firstlane", "copy", "dot4", "widenhalf"}
 
 func (o Op) String() string {
 	if int(o) < len(opNames) {

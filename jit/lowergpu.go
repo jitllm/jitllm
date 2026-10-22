@@ -259,6 +259,10 @@ func (e *lowerer) get(i int) ir.Value {
 	case OpFma:
 		x, y, z := e.get(nd.A), e.get(nd.B), e.get(nd.C)
 		v = b.Fma(x, y, z)
+	case OpDot4:
+		v = b.Dot4(e.get(nd.A), e.get(nd.B), e.get(nd.C))
+	case OpWidenHalf:
+		v = b.CvtF16H(e.get(nd.A))
 	case OpLess:
 		x, y := e.get(nd.A), e.get(nd.B)
 		v = b.Lt(e.n.Nodes[nd.A].Type, x, y)
