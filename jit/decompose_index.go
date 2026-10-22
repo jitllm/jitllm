@@ -54,7 +54,7 @@ func decomposeIndexSelect(o graph.Op, c *Context) ([]Prim, error) {
 	var sx exprs
 	sh := sx.coord(2)
 	dot := sx.at(0, []int{R, H, C}, sx.coord(0), sh, sx.coord(1))
-	sx.op(OpMul, F, sx.op(OpMax, F, dot, sx.f(0)), sx.at(3, []int{H}, sh))
+	sx.op(OpMul, F, sx.op(OpMax, F, dot, sx.f(0)), sx.at(3, []int{R, H}, sx.coord(0), sh))
 
 	// The attended count: the row's end past its first.
 	count := func(x *exprs) int { return x.op(OpSub, U, hs.row(x, rowEnd), hs.start(x)) }

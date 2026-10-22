@@ -78,6 +78,10 @@ func WithComposer(r *jit.Registry) Option { return func(rn *Runner) { rn.reg = r
 // replaying a recording: a profile's view, each kernel timed on its own.
 func WithDirectLaunches() Option { return func(rn *Runner) { rn.direct = true } }
 
+// WithRows composes the plan for steps of up to n rows of one sequence: a
+// prompt's chunk at a time (Session.Rows), each row its own position.
+func WithRows(n int) Option { return func(r *Runner) { r.step.Rows = max(1, n) } }
+
 // WithGuard has every buffer n poisoned bytes past its size, which
 // Session.Overrun checks: a gate's view of a kernel writing past what the
 // plan states (RULE 13).
@@ -314,12 +318,14 @@ type Session struct {
 	bufs []backend.Buf
 	own  []bool
 	args [][]backend.Buf
-	// rows, pos and toks are the step's tables, written each step.
+	// rows, pos and toks are the step's tables, written each step; in is
+	// the step's tokens, its live rows, at the first's position.
 	rows, pos, toks []byte
-	tok             int32
+	in              []int32
+	one             [1]int32
 	at              int
 	logits          []float32
-	raw, tb         []byte
+	raw, tb, input  []byte
 	err             error
 	launchAll       func(backend.Session)
 	// rec is the step's launches recorded once, on a device that records
@@ -344,9 +350,10 @@ func (s *Session) Restart() error {
 // NewSession is an empty sequence: its pools, page table and step buffers.
 func (r *Runner) NewSession() (*Session, error) {
 	st := r.plan.Storages
+	R := r.step.Rows
 	s := &Session{r: r, bufs: make([]backend.Buf, len(st)), own: make([]bool, len(st)),
-		rows: make([]byte, 4*jit.RowWords), pos: make([]byte, 8), toks: make([]byte, 4), tb: make([]byte, 4),
-		logits: make([]float32, r.nvocab)}
+		rows: make([]byte, 4*jit.RowWords*R), pos: make([]byte, 4*(1+R)), toks: make([]byte, 4*R), tb: make([]byte, 4*R),
+		logits: make([]float32, R*r.nvocab), input: make([]byte, 4*R*r.nembd)}
 	s.raw = unsafe.Slice((*byte)(unsafe.Pointer(&s.logits[0])), 4*len(s.logits))
 	for i := range st {
 		if r.shared[i] != nil {
@@ -387,19 +394,33 @@ func (r *Runner) NewSession() (*Session, error) {
 // Step runs token tok at position pos and returns the step's logits, a
 // slice the next Step overwrites, and its token.
 func (s *Session) Step(tok int32, pos int) ([]float32, int32, error) {
+	s.one[0] = tok
+	return s.Rows(s.one[:], pos)
+}
+
+// Rows runs tokens toks at positions pos, pos+1, ... as one step, as many
+// as the runner's rows (WithRows), and returns the last one's logits, a
+// slice the next step overwrites, and its token.
+func (s *Session) Rows(toks []int32, pos int) ([]float32, int32, error) {
 	r := s.r
-	if pos < 0 || pos >= r.step.Keys {
-		return nil, 0, fmt.Errorf("run: position %d outside a capacity of %d", pos, r.step.Keys)
+	n := len(toks)
+	if n < 1 || n > r.step.Rows {
+		return nil, 0, fmt.Errorf("run: %d rows in a step of %d", n, r.step.Rows)
 	}
-	if tok < 0 || int(tok) >= r.nvocab {
-		return nil, 0, fmt.Errorf("run: token %d outside a vocabulary of %d", tok, r.nvocab)
+	if pos < 0 || pos+n > r.step.Keys {
+		return nil, 0, fmt.Errorf("run: positions %d to %d outside a capacity of %d", pos, pos+n-1, r.step.Keys)
 	}
-	s.tok, s.at, s.err = tok, pos, nil
+	for _, tok := range toks {
+		if tok < 0 || int(tok) >= r.nvocab {
+			return nil, 0, fmt.Errorf("run: token %d outside a vocabulary of %d", tok, r.nvocab)
+		}
+	}
+	s.in, s.at, s.err = toks, pos, nil
 	r.dev.Session(s.launchAll)
 	if s.err != nil {
 		return nil, 0, s.err
 	}
-	return s.logits, int32(binary.LittleEndian.Uint32(s.tb)), nil
+	return s.logits[(n-1)*r.nvocab : n*r.nvocab], int32(binary.LittleEndian.Uint32(s.tb[4*(n-1):])), nil
 }
 
 // launch is a step on the device: the tables and the input written, every
@@ -447,13 +468,20 @@ func (s *Session) launches(se backend.Session) error {
 func (s *Session) tables(se backend.Session) error {
 	r := s.r
 	put := binary.LittleEndian.PutUint32
-	put(s.rows[4*jit.RowTab:], 0)
-	put(s.rows[4*jit.RowStart:], 0)
-	put(s.rows[4*jit.RowEnd:], uint32(s.at+1))
-	put(s.rows[4*jit.RowWrite:], uint32(s.at))
-	put(s.pos, 1)
-	put(s.pos[4:], uint32(s.at))
-	put(s.toks, uint32(s.tok))
+	n := len(s.in)
+	put(s.pos, uint32(n))
+	// A row past the live ones repeats the last: the threads a launch holds
+	// to its live rows do its work again, writing what it wrote.
+	for i := range r.step.Rows {
+		j := min(i, n-1)
+		w := s.rows[4*jit.RowWords*i:]
+		put(w[4*jit.RowTab:], 0)
+		put(w[4*jit.RowStart:], 0)
+		put(w[4*jit.RowEnd:], uint32(s.at+j+1))
+		put(w[4*jit.RowWrite:], uint32(s.at+j))
+		put(s.pos[4*(1+i):], uint32(s.at+j))
+		put(s.toks[4*i:], uint32(s.in[j]))
+	}
 	var err error
 	for i, st := range r.plan.Storages {
 		switch st.Source {
@@ -464,9 +492,8 @@ func (s *Session) tables(se backend.Session) error {
 		case jit.SourceTokens:
 			err = se.WriteAt(s.bufs[i], 0, s.toks)
 		case jit.SourceInput:
-			var row []byte
-			if row, err = s.inputRow(); err == nil {
-				err = se.WriteAt(s.bufs[i], 0, row)
+			if err = s.inputRows(); err == nil {
+				err = se.WriteAt(s.bufs[i], 0, s.input)
 			}
 		}
 		if err != nil {
@@ -476,22 +503,27 @@ func (s *Session) tables(se backend.Session) error {
 	return nil
 }
 
-// inputRow is the token's row of the embedding, as the container stores it.
-func (s *Session) inputRow() ([]byte, error) {
+// inputRows copies each row's token's row of the embedding, as the
+// container stores it, into s.input.
+func (s *Session) inputRows() error {
 	f := s.r.f
 	e, ok := f.Find(jlm.RoleTokenEmbd, -1, -1)
 	if !ok {
-		return nil, errors.New("run: the container has no token embedding")
+		return errors.New("run: the container has no token embedding")
 	}
 	if e.Type != jlm.TypeF32 {
-		return nil, fmt.Errorf("run: a token embedding of %v; the input row is copied only from f32", e.Type)
+		return fmt.Errorf("run: a token embedding of %v; the input row is copied only from f32", e.Type)
 	}
 	qs, _, _ := f.Span(e)
 	if qs == nil {
-		return nil, errors.New("run: the token embedding is not resident")
+		return errors.New("run: the token embedding is not resident")
 	}
 	w := 4 * s.r.nembd
-	return qs[int(s.tok)*w : int(s.tok+1)*w], nil
+	for i := range s.r.step.Rows {
+		tok := int(s.in[min(i, len(s.in)-1)])
+		copy(s.input[i*w:(i+1)*w], qs[tok*w:(tok+1)*w])
+	}
+	return nil
 }
 
 // Overrun is the first storage a kernel wrote past its size into the
@@ -565,7 +597,8 @@ func (s *Session) SetStorage(i int, b []byte) error { return s.bufs[i].Write(b) 
 // read what each kernel wrote. Its logits and token are not read back.
 func (s *Session) StepEach(tok int32, pos int, after func(i int)) error {
 	r := s.r
-	s.tok, s.at = tok, pos
+	s.one[0] = tok
+	s.in, s.at = s.one[:], pos
 	var err error
 	r.dev.Session(func(se backend.Session) { err = s.tables(se) })
 	if err != nil {

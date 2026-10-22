@@ -123,3 +123,88 @@ func TestRunnerDecodesAsTheHost(t *testing.T) {
 		}
 	}
 }
+
+// TestRunnerStepsRowsAsItDecodes runs a prompt a chunk of rows at a time,
+// each row its own position and history, and holds each chunk's last
+// row's logits to the plan's a row at a time after the same tokens.
+func TestRunnerStepsRowsAsItDecodes(t *testing.T) {
+	path := testmodels.Path(*runModel + ".jlm")
+	m, err := model.Open(path, model.WithJITOptions(nn.WithTune(nn.TuneOff)), model.WithKVType(model.KVF32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	ids := m.Vocab.Encode("The capital of France is Paris. The capital of Germany is", true)
+	devs := backend.Open()
+	defer func() {
+		for _, d := range devs {
+			d.Close()
+		}
+	}()
+	if len(devs) == 0 {
+		t.Skip("no device")
+	}
+	for _, dev := range devs {
+		for _, rows := range []int{4, 7} {
+			t.Run(fmt.Sprintf("%s/%d", dev.API(), rows), func(t *testing.T) {
+				reg := jit.Default()
+				reg.PoisonWorkgroupMemory()
+				r, err := run.New(m.Composing(), dev, gpu, 32, run.WithRows(rows), run.WithGuard(4096), run.WithComposer(reg))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer r.Close()
+				s, err := r.NewSession()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer s.Close()
+				// The reference is the plan a row at a time, which the decode
+				// gates hold to the host: a chunk's rows run the same plan's
+				// primitives, its own rows wider.
+				one, err := run.New(m.Composing(), dev, gpu, 32)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer one.Close()
+				os, err := one.NewSession()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer os.Close()
+				worst, chunks := 0.0, 0
+				for at := 0; at < len(ids); at += rows {
+					chunk := ids[at:min(at+rows, len(ids))]
+					var want []float32
+					for i, tok := range chunk {
+						l, _, err := os.Step(tok, at+i)
+						if err != nil {
+							t.Fatal(err)
+						}
+						want = append(want[:0], l...)
+					}
+					got, _, err := s.Rows(chunk, at)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var num, den float64
+					for i := range want {
+						d := float64(got[i]) - float64(want[i])
+						num += d * d
+						den += float64(want[i]) * float64(want[i])
+					}
+					if nmse := num / den; !(nmse < 1e-5) {
+						t.Fatalf("positions %d to %d: logits NMSE %.3g against a row at a time", at, at+len(chunk)-1, nmse)
+					} else {
+						worst = max(worst, nmse)
+					}
+					chunks++
+				}
+				if err := s.Overrun(); err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("%d tokens in %d steps of up to %d rows on %s: worst logits NMSE %.3g", len(ids), chunks, rows, dev.Name(), worst)
+			})
+		}
+	}
+}
