@@ -27,6 +27,10 @@ type modelOpts struct {
 	planGPU jit.Device
 	// planChunk is WithPlanChunk's rows a prompt step; 0 is a token a step.
 	planChunk int
+	// planPictureRows is WithPlanPictureRows' rows of a picture's step.
+	planPictureRows int
+	// planBudget is WithPlanBudget's bytes of the plan's device.
+	planBudget uint64
 	// devSample is WithDeviceSample's setting (devsample.go).
 	devSample DeviceSampleMode
 	// profile arms the per-op nanosecond counters OpProfile reports. The

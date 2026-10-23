@@ -38,7 +38,7 @@ func TestSectionsRoundTrip(t *testing.T) {
 		ProjDim: 576, Scale: 4, Eps: 1e-6, Projector: ProjIdefics3,
 		Mean: [3]float32{0.5, 0.5, 0.5}, Std: [3]float32{0.5, 0.5, 0.5}, Flags: FlagGELU,
 	}
-	gv, err := decodeVision(encodeVision(vis))
+	gv, err := decodeVision(encodeVision(vis, Version), Version)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestSectionsRoundTrip(t *testing.T) {
 		v.MinTiles, v.MaxTiles, v.WinPattern, v.WinSize = tail.MinTiles, tail.MaxTiles, tail.WinPattern, tail.WinSize
 		v.MinPixels, v.MaxPixels = tail.MinPixels, tail.MaxPixels
 		v.TileSize, v.Tolerance = tail.TileSize, tail.Tolerance
-		gv, err := decodeVision(encodeVision(&v))
+		gv, err := decodeVision(encodeVision(&v, Version), Version)
 		if err != nil {
 			t.Fatal(err)
 		}

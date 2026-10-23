@@ -2,6 +2,7 @@ package tier
 
 import (
 	"fmt"
+	devpage "github.com/jitllm/jitllm/engine/page"
 	"os"
 	"strconv"
 	"strings"
@@ -786,15 +787,6 @@ func cardName(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// hostPoolName is what a report calls the pool an integrated GPU spends from.
-const hostPoolName = "host RAM"
-
-// minBudget is the floor a derived budget lands on when the device says it has
-// almost nothing left. It deliberately holds nothing useful, so the tier
-// declines blocks in the ordinary way rather than claiming room the card does
-// not have.
-const minBudget = 64 << 20
-
 // planSlots gives every device a budget and the pool it spends from. asks[i] is
 // device i's own `=BYTES` from the spec, or 0 when it said nothing.
 //
@@ -889,7 +881,7 @@ func planSlots(devs []backend.Device, asks []uint64, o openOpts) []Slot {
 			if !id.Known() {
 				continue
 			}
-			pools[g] = r.poolFor(id.Key, p)
+			pools[g] = r.PoolFor(id.Key, p)
 		}
 		for i := range devs {
 			if p := pools[group[i]]; p != nil && !p.Host() && slots[i].Bytes < p.Limit() {
@@ -903,32 +895,19 @@ func planSlots(devs []backend.Device, asks []uint64, o openOpts) []Slot {
 	return slots
 }
 
-// hostShare is how much of the host's weight budget devices whose memory is the
-// host's may hold between them: all of it, less the headroom budgetFor leaves
-// on a card (an eighth, at least 256 MiB, at most 1 GiB and at most half). The
-// device and the host are one pool, so a model that fits the host budget
-// belongs on the device. Nothing is counted twice: the host loses what the
-// device actually holds (HostReserved), never this ceiling. The headroom is
-// what the host side keeps when the device is full -- the pager's frames for
-// the blocks the device declined, and its own scratch.
-//
-// A quarter of the host budget stood here; on a 16 GiB M4 it was 1.92 GiB and
-// put the last block and the head of a 2.26 GiB model on the CPU by default.
-//
-// A per-device budget in the spec (`vulkan:1=8G`) overrides it. An explicit
-// -vram (WithBudget) is taken at face value for the pool too, and unified
-// devices share that number rather than each getting it.
-func hostShare(host, budget uint64) uint64 {
-	if budget > 0 {
-		return budget
-	}
-	if host == 0 {
-		// sched.MemBudget returns 0 when it cannot read a limit at all, which
-		// is "unknown" and not "unlimited".
-		return defaultBudget
-	}
-	return host - min(max(host/8, 256<<20), maxHeadroom, host/2)
+// hostShare is the host's weight budget's share devices on its memory may
+// hold (page.HostShare).
+func hostShare(host, budget uint64) uint64 { return devpage.HostShare(host, budget, defaultBudget) }
+
+// budgetFor is what one device may spend on resident weights, and why
+// (page.BudgetFor).
+func budgetFor(d backend.Device, ask uint64, src string) (uint64, string) {
+	free, total, err := d.Mem()
+	return devpage.BudgetFor(free, total, err, ask, src, defaultBudget)
 }
+
+// minBudget is page.MinBudget, the floor a derived budget lands on.
+const minBudget = devpage.MinBudget
 
 // unifiedTotal is the memory the first unified device says the GPU may hold,
 // or 0 for none: the host's own statement of it (Metal's
@@ -953,47 +932,6 @@ func whyShare(o openOpts) string {
 	}
 	return "the host budget less its headroom, shared by every device on the host's memory"
 }
-
-// budgetFor is what one device may spend on resident weights, and why: free
-// memory less headroom, unless the caller asked for a figure.
-//
-// The headroom is an eighth of free, at least 256 MiB, at most half and at most
-// 1 GiB. It covers staging buffers, compiled modules and driver allocations,
-// and it is a fraction because `free` is a snapshot of a machine where others
-// may allocate next; overshooting VRAM fails rather than degrades. "At most
-// half" is for a nearly full card, which then declines blocks per layer. "At
-// most 1 GiB" is because an eighth of a big card is a whole block: on a 16 GiB
-// card it cost a large mixture two blocks to the host, while the peak beyond
-// the charged budget (with the widest batched mixture scratch) was ~0.5 GiB.
-func budgetFor(d backend.Device, ask uint64, src string) (uint64, string) {
-	if ask > 0 {
-		return ask, src
-	}
-	free, total, err := d.Mem()
-	if err != nil {
-		return defaultBudget, fmt.Sprintf("the default: %v", err)
-	}
-	if free == 0 {
-		return minBudget, fmt.Sprintf("the floor: the device reports 0 of %.2f GiB free",
-			float64(total)/(1<<30))
-	}
-	head := min(free/8, maxHeadroom)
-	if head < 256<<20 {
-		head = 256 << 20
-	}
-	if head > free/2 {
-		head = free / 2
-	}
-	limit := free - head
-	if limit < minBudget {
-		limit = minBudget
-	}
-	return limit, fmt.Sprintf("%.2f GiB free less %.2f GiB headroom",
-		float64(free)/(1<<30), float64(head)/(1<<30))
-}
-
-// maxHeadroom caps budgetFor's headroom; see there.
-const maxHeadroom = 1 << 30
 
 func unified(d backend.Device) bool {
 	u, ok := d.(backend.Unified)

@@ -91,10 +91,15 @@ type Storage struct {
 	Key    Operand
 	Source Source
 	// Role and Block are a weight's tensor, Block -1 for one outside the
-	// blocks, and Region which of its stored regions (Operand.Region).
+	// blocks, Index the index it is found at (-1 any: Part.Index), and
+	// Region which of its stored regions (Operand.Region).
 	Role   jlm.Role
 	Block  int
+	Index  int32
 	Region int
+	// Segment is the segment of the part that binds it first: a weight's
+	// is the view its Role and Block are found in (Model.Segment).
+	Segment Segment
 	Bytes  int64
 	Words  []uint32
 }
@@ -111,7 +116,7 @@ func NewStorageKeys(parts []Part) StorageKeys {
 	out := map[[2]int][2]int{}
 	for i := 1; i < len(parts); i++ {
 		a, b := parts[i-1].Graph, parts[i].Graph
-		if len(a.Out) == 0 || len(b.In) == 0 {
+		if len(a.Out) == 0 || len(b.In) == 0 || fed(parts[i], 0) {
 			continue
 		}
 		from := [2]int{i - 1, int(a.Out[0])}
@@ -218,11 +223,17 @@ func (p *Plan) storages(parts []Part) error {
 				if !ok {
 					i = len(p.Storages)
 					at[key] = i
-					st := Storage{Key: key, Role: key.Role, Block: -1, Region: key.Region, Words: words}
+					st := Storage{Key: key, Role: key.Role, Block: -1, Index: -1, Region: key.Region, Words: words}
 					// A weight of a part that is not a block's is the model's.
 					if key.Of >= 0 && key.Of < len(parts) && parts[key.Of].Kind == PartBlock {
 						st.Block = parts[key.Of].Block
 					}
+					if key.Of >= 0 && key.Of < len(parts) {
+						st.Index = parts[key.Of].Index()
+					}
+					// The binding part's: a table no part owns (its key's
+					// Of is 0) is not part 0's segment's.
+					st.Segment = p.Parts[pi].Part.Segment
 					p.Storages = append(p.Storages, st)
 				}
 				b.Storage = i

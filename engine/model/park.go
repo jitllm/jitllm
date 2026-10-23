@@ -27,6 +27,9 @@ type ParkStats struct {
 
 // Park preempts the session. Parking a parked State does nothing.
 func (s *State) Park() (ParkStats, error) {
+	if err := s.planRefuses("parking a sequence (Park)"); err != nil {
+		return ParkStats{}, err
+	}
 	return s.park()
 }
 
@@ -89,6 +92,9 @@ func (s *State) park() (ParkStats, error) {
 // the blocks it brought home are offered to the device again, their history
 // with them. It returns how many pages came back.
 func (s *State) Resume() (int, error) {
+	if err := s.planRefuses("resuming a parked sequence (Resume)"); err != nil {
+		return 0, err
+	}
 	if !s.parked {
 		return 0, nil
 	}

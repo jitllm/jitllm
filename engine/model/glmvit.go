@@ -57,7 +57,7 @@ func (t *Tower) loadGLM4V(c0 *jlm.File, get func(jlm.Role, int32) (tensor, error
 		return fmt.Errorf("model: OpenTower: the position table is %d floats, not a square of %d-wide rows",
 			len(t.posW), E)
 	}
-	c.PosSide, c.PosBicubic = side, true
+	c.PosSide = side
 	if t.postLnW == nil || t.postLnB != nil {
 		return fmt.Errorf("model: OpenTower: a glm4v tower needs its post RMSNorm (v.post_ln, weight only)")
 	}

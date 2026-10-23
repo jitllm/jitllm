@@ -2,6 +2,7 @@ package tier
 
 import (
 	"fmt"
+	devpage "github.com/jitllm/jitllm/engine/page"
 	"math"
 
 	"github.com/jitllm/jitllm/engine/graph"
@@ -1550,12 +1551,12 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		// admitted shape of k.
 		l.pg = nil
 	} else {
-		l.pg = &page{ws: append([]nn.Weight(nil), ws...), bytes: pb, round: pr, in: true,
+		l.pg = &page{ws: append([]nn.Weight(nil), ws...), Rec: devpage.Rec{Bytes: pb, Round: pr, In: true},
 			// Kept so a page-in can ask again: ws points into a reused host frame.
 			ensure: w.Ensure}
 		g.pagesIn++
 		// Inside the else because ReleaseLayers refunds pageBytes only when
-		// l.pg.in was true.
+		// l.pg.In was true.
 		g.pageBytes += pb + pr
 	}
 	// Re-preparing a block frees the layer it replaces. Only the per-layer

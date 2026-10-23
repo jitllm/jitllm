@@ -13,6 +13,7 @@ import (
 	"github.com/jitllm/jitllm/jit"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
 var (
@@ -28,7 +29,7 @@ var (
 func TestComposeIR(t *testing.T) {
 	f := composing(t, *composeModel+".jlm")
 	r := jit.Default()
-	parts, err := jit.Front(f)
+	parts, err := jit.Front(f, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,6 +180,7 @@ func TestPassesSeeRuns(t *testing.T) {
 // block graphs the engine builds from it.
 func composing(t *testing.T, name string) jit.Model {
 	t.Helper()
+	fresh.Must(t, testmodels.Path(name))
 	m, err := model.Open(testmodels.Path(name))
 	if err != nil {
 		t.Fatal(err)

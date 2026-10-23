@@ -51,7 +51,7 @@ func Estimate(r Former, f jit.Model, s jit.Step, p Placement) (Cost, error) {
 // placed is model f's parts on placement p: each part's plan for the
 // composer, and the device it is priced on.
 func placed(f jit.Model, p Placement) ([]jit.Part, []jit.PartPlan, []Device, error) {
-	parts, err := jit.Front(f)
+	parts, err := jit.Front(f, false)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -188,7 +188,7 @@ func Suggest(r Former, f jit.Model, s jit.Step, devices []Device) (Placement, Co
 	if len(devices) == 0 {
 		return nil, Cost{}, fmt.Errorf("cost: no device to place on")
 	}
-	parts, err := jit.Front(f)
+	parts, err := jit.Front(f, false)
 	if err != nil {
 		return nil, Cost{}, err
 	}

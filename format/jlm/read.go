@@ -249,7 +249,7 @@ func openAt(path string, want uint32, opts ...OpenOption) (*File, error) {
 		closeDirect(direct)
 		return nil, err
 	}
-	if f.vis, err = decodeVision(f.meta[h.VisOff : h.VisOff+h.VisLen]); err != nil {
+	if f.vis, err = decodeVision(f.meta[h.VisOff:h.VisOff+h.VisLen], want); err != nil {
 		fh.Close()
 		closeDirect(direct)
 		return nil, err

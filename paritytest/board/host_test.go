@@ -17,6 +17,7 @@ import (
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit_old/cpu"
 )
@@ -25,6 +26,7 @@ import (
 // a short prompt, each once.
 func hostDecode(t *testing.T, name string) []cpu.Called {
 	t.Helper()
+	fresh.Must(t, testmodels.Path(name+".jlm"))
 	m, err := model.Open(testmodels.Path(name+".jlm"), model.WithJITOptions(nn.WithTune(nn.TuneOff)))
 	if err != nil {
 		t.Fatal(err)

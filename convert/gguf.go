@@ -66,6 +66,9 @@ func FromGGUFs(src, mmproj, dst string, fp jlm.Fingerprint, opts ...Option) (*jl
 	if fp.Writer == "" {
 		fp.Writer = jlm.WriterID()
 	}
+	if err := stateTower(s); err != nil {
+		return nil, err
+	}
 	return jlm.Write(dst, s, fp)
 }
 

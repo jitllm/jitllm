@@ -205,10 +205,10 @@ func (g *devTier) releaseBlock(li int) {
 	// The same free path as a page-out (layer.tensors()); a release also
 	// gives up the KV cache and the block itself.
 	freed := g.dropTensors(l)
-	if l.pg != nil && l.pg.in {
-		l.pg.in = false
+	if l.pg != nil && l.pg.In {
+		l.pg.In = false
 		g.pagesIn--
-		g.pageBytes -= min(g.pageBytes, freed+l.pg.round)
+		g.pageBytes -= min(g.pageBytes, freed+l.pg.Round)
 	}
 	// The KV cache is charged to the budget at PrepLayer, so releasing has
 	// to give it back or the card leaks budget every migration.

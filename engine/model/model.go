@@ -1244,11 +1244,18 @@ type Model struct {
 	// WithPlanDevice (planrun.go).
 	planMu  sync.Mutex
 	runners map[int]*run.Runner
+	// planRes is the model's weights on the plan's device, every runner's.
+	planRes *run.Residency
 	// chunkRunners are the plan at a capacity in steps of several rows (a
 	// prompt's, an encoder's), by capacity and rows; chunkErrs why one has
 	// none.
 	chunkRunners map[[2]int]*run.Runner
 	chunkErrs    map[[2]int]error
+	// towerOnce lowers the tower to the plan's vision segment once
+	// (towerView): towerSeg it, or towerErr why it is not stated as ops.
+	towerOnce sync.Once
+	towerSeg  *towerComposing
+	towerErr  error
 	// spareJIT is a closed State's JIT, recycled for the next State: one
 	// built per State re-emitted its kernels and regrew its scratch, most
 	// of what a request allocated.

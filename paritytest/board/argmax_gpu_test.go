@@ -25,7 +25,7 @@ func TestComposedArgmaxRunsOnTheGPU(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parts, err := jit.Front(f)
+	parts, err := jit.Front(f, false)
 	if err != nil {
 		t.Fatal(err)
 	}

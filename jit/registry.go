@@ -51,8 +51,10 @@ type Context struct {
 	Formats map[jlm.Role]jlm.Type
 	Step    Step
 	Int8    *Int8Form
-	// Rotaries is the model's rotaries, each a table of the step.
-	Rotaries []graph.Rotary
+	// Rotaries is the part's segment's rotaries, each a table of the step,
+	// the first named the model's RotaryBase'th (tableName).
+	Rotaries   []graph.Rotary
+	RotaryBase int
 	// Of is the part's index in the model's parts, the blocks consecutive.
 	Of     int
 	formed map[graph.ValueID]bool
@@ -90,8 +92,14 @@ func Default() *Registry {
 }
 
 func (r *Registry) decompose(f Model, part Part, of int, s Step, d Device) ([]Prim, error) {
-	c := &Context{Graph: part.Graph, Part: part.Kind, Formats: formats(f, part), Step: s, Int8: r.Profiles[d.Kind].Int8,
-		Rotaries: f.Rotaries(), Of: of, formed: map[graph.ValueID]bool{}}
+	view, rots, base := f, f.Rotaries(), 0
+	if part.Segment == SegmentVision {
+		view, base = f.Segment(), len(textRotaries(f))
+		rots = view.Rotaries()
+	}
+	s = s.stepOf(part.Segment)
+	c := &Context{Graph: part.Graph, Part: part.Kind, Formats: formats(view, part), Step: s, Int8: r.Profiles[d.Kind].Int8,
+		Rotaries: rots, RotaryBase: base, Of: of, formed: map[graph.ValueID]bool{}}
 	if q := c.Int8; q != nil && s.ActWindow > 0 && s.ActWindow != q.Window {
 		w := *q
 		w.Window = s.ActWindow

@@ -336,6 +336,9 @@ func (s *State) UnshareKV() {
 }
 
 func (s *State) ShareKV(st *SharedStore) error {
+	if err := s.planRefuses("sharing a prefix's KV pages (ShareKV)"); err != nil {
+		return err
+	}
 	switch {
 	case st == nil:
 		return fmt.Errorf("model: ShareKV wants a store")

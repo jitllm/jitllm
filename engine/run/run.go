@@ -32,7 +32,14 @@ type Source interface {
 	// engine's decision for this model (Model.ActWindow).
 	ActWindow() int
 	Span(e *jlm.Entry) (qs, d, sc []byte)
-	EnsurePage(i int) error
+	// The container's pager (jlm.File): a page is held while its bytes are
+	// copied out, so no other read can evict and refill its frame meanwhile.
+	Hold(b int, rs []jlm.Range) (jlm.Lease, error)
+	HoldFilled(b int) (jlm.Lease, bool)
+	PageBounds(b int) (off, size uint64)
+	InDense(e *jlm.Entry) bool
+	SpanLen(e *jlm.Entry) (qs, d, sc uint64)
+	SheetSpan(e *jlm.Entry) (qs, d, sc, sheets uint64, err error)
 	BlockOf(e *jlm.Entry) int
 	// A mixture's bank paged an expert at a time (jlm.File.ExpertPaged).
 	ExpertPaged(e *jlm.Entry) bool
@@ -62,14 +69,32 @@ type Runner struct {
 	nvocab, nembd int
 	// outW is the head's output width: the vocabulary's, or an encoder's
 	// embedding's.
-	outW           int
-	input, kvPages int
+	outW          int
+	input, pixels int
+	// res is the weights on the device, shared where WithResidency gave it
+	// (ownRes unset); wst is a weight storage's region there, need each
+	// launch's blocks and wargs where its arguments name block weights.
+	res    *Residency
+	ownRes bool
+	wst    []*wstore
+	need   [][]int
+	wargs  [][]warg
+	scan   [2][2]int
+}
+
+// warg is argument j of a launch, block weight s.
+type warg struct {
+	j int
+	s *wstore
 }
 
 type launch struct {
 	k             backend.Kernel
 	groups, width int
 	at            []int
+	// seg is the segment of the part it is of: a picture's step launches
+	// the vision segment's, a token's the text model's.
+	seg jit.Segment
 }
 
 // Option configures a Runner.
@@ -87,6 +112,11 @@ func WithDirectLaunches() Option { return func(rn *Runner) { rn.direct = true } 
 // prompt's chunk at a time (Session.Rows), each row its own position.
 func WithRows(n int) Option { return func(r *Runner) { r.step.Rows, r.step.Seqs = max(1, n), 1 } }
 
+// WithPictureRows composes the model's vision segment into the plan for
+// pictures of up to n rows (Session.Picture): its parts the one model's, a
+// picture's rows written into the text step's input rows at its place.
+func WithPictureRows(n int) Option { return func(r *Runner) { r.step.Picture = n } }
+
 // WithGuard has every buffer n poisoned bytes past its size, which
 // Session.Overrun checks: a gate's view of a kernel writing past what the
 // plan states (RULE 13).
@@ -98,21 +128,38 @@ func WithGuard(n int) Option { return func(r *Runner) { r.guard = n } }
 // its table's planes.
 func New(f Source, dev backend.Device, gpu jit.Device, keys int, opts ...Option) (*Runner, error) {
 	c := f.Config()
-	r := &Runner{f: f, dev: dev, step: jit.Step{Rows: 1, Page: 64, Keys: keys, ActWindow: f.ActWindow()}, logits: -1, token: -1, input: -1,
+	r := &Runner{f: f, dev: dev, step: jit.Step{Rows: 1, Page: 64, Keys: keys, ActWindow: f.ActWindow()}, logits: -1, token: -1, input: -1, pixels: -1,
 		nvocab: int(c.NVocab), nembd: int(c.NEmbd)}
 	for _, o := range opts {
 		o(r)
 	}
 	r.planes = map[string][]float32{}
+	plane := func(i int) string {
+		if i == 0 {
+			return "rope.planes"
+		}
+		return fmt.Sprintf("rope.planes.%d", i)
+	}
 	rots := f.Rotaries()
 	for i, rope := range f.Ropes() {
-		name := "rope.planes"
-		if i > 0 {
-			name = fmt.Sprintf("rope.planes.%d", i)
-		}
-		r.planes[name] = rope.TabPlanes(rope.NRot / 2)
+		r.planes[plane(i)] = rope.TabPlanes(rope.NRot / 2)
 		if i < len(rots) && rots[i].Grid {
-			r.planes[name] = rope.Planes()
+			r.planes[plane(i)] = rope.Planes()
+		}
+	}
+	// The vision segment's rotaries' planes, named after the text model's.
+	if r.step.Picture > 0 {
+		v, ok := f.Segment().(Source)
+		if !ok {
+			return nil, fmt.Errorf("run: the model states no vision segment the runner reads")
+		}
+		base := max(1, len(rots))
+		vr := v.Rotaries()
+		for i, rope := range v.Ropes() {
+			r.planes[plane(base+i)] = rope.TabPlanes(rope.NRot / 2)
+			if i < len(vr) && vr[i].Grid {
+				r.planes[plane(base+i)] = rope.Planes()
+			}
 		}
 	}
 	if r.reg == nil {
@@ -123,7 +170,6 @@ func New(f Source, dev backend.Device, gpu jit.Device, keys int, opts ...Option)
 		return nil, err
 	}
 	r.plan = plan
-	r.kvPages = r.step.Histories() * ((r.step.Keys + r.step.Page - 1) / r.step.Page)
 	r.shared = make([]backend.Buf, len(plan.Storages))
 	r.sizes = make([]int64, len(plan.Storages))
 	for i, st := range plan.Storages {
@@ -133,7 +179,9 @@ func New(f Source, dev backend.Device, gpu jit.Device, keys int, opts ...Option)
 			return nil, err
 		}
 		r.sizes[i] = n
-		if st.Source == jit.SourceInput {
+		if st.Source == jit.SourceInput && st.Segment == jit.SegmentVision {
+			r.pixels = i
+		} else if st.Source == jit.SourceInput {
 			r.input = i
 		}
 	}
@@ -142,7 +190,7 @@ func New(f Source, dev backend.Device, gpu jit.Device, keys int, opts ...Option)
 	// to the next part's first.
 	outOf := map[jit.Operand]jit.PartKind{}
 	for i, pp := range plan.Parts {
-		if len(pp.Part.Graph.Out) > 0 {
+		if len(pp.Part.Graph.Out) > 0 && pp.Part.Segment == jit.SegmentText {
 			outOf[jit.Operand{Kind: jit.OperandValue, Value: pp.Part.Graph.Out[0], Of: i}] = pp.Part.Kind
 		}
 	}
@@ -159,7 +207,7 @@ func New(f Source, dev backend.Device, gpu jit.Device, keys int, opts ...Option)
 				r.Close()
 				return nil, fmt.Errorf("run: %s: %w", k.Name, err)
 			}
-			l := launch{k: kern, groups: code.Groups, width: k.Group[0]}
+			l := launch{k: kern, groups: code.Groups, width: k.Group[0], seg: pp.Part.Segment}
 			for _, b := range code.Binds {
 				l.at = append(l.at, b.Storage)
 				if kind, ok := outOf[jit.Operand{Kind: jit.OperandValue, Value: b.Operand.Value, Of: b.Operand.Of}]; ok &&
@@ -179,7 +227,7 @@ func New(f Source, dev backend.Device, gpu jit.Device, keys int, opts ...Option)
 	// its width, is the model's.
 	sampled := false
 	for _, pp := range plan.Parts {
-		if pp.Part.Kind == jit.PartHead && len(pp.Part.Graph.Out) > 0 {
+		if pp.Part.Kind == jit.PartHead && pp.Part.Segment == jit.SegmentText && len(pp.Part.Graph.Out) > 0 {
 			r.outW = pp.Part.Graph.Values[pp.Part.Graph.Out[0]].Width
 		}
 		sampled = sampled || pp.Part.Kind == jit.PartSample
@@ -188,14 +236,29 @@ func New(f Source, dev backend.Device, gpu jit.Device, keys int, opts ...Option)
 		r.Close()
 		return nil, fmt.Errorf("run: the plan writes no logits or no token")
 	}
+	if r.res == nil {
+		r.res, r.ownRes = NewResidency(f, dev, nil, 0), true
+		r.res.guard = r.guard
+	}
+	if r.res.guard != r.guard {
+		return nil, fmt.Errorf("run: a runner guards %d bytes past its buffers and the weights it binds %d", r.guard, r.res.guard)
+	}
+	r.wst = make([]*wstore, len(plan.Storages))
 	for i, st := range plan.Storages {
 		var data []byte
+		release := func() {}
 		switch st.Source {
 		case jit.SourceWeight:
-			if data, err = r.weight(st); err != nil {
+			// On the device's thread, where the weights' state changes.
+			r.dev.Session(func(se backend.Session) { r.wst[i], err = r.res.add(se, st) })
+			if err != nil {
 				r.Close()
 				return nil, err
 			}
+			// A region of the container may be longer than the kernels
+			// read of it: it is aligned.
+			r.sizes[i] = max(r.sizes[i], int64(r.wst[i].bytes))
+			continue
 		case jit.SourceWords:
 			data = wordBytes(st.Words)
 		case jit.SourceRopePlanes:
@@ -211,21 +274,68 @@ func New(f Source, dev backend.Device, gpu jit.Device, keys int, opts ...Option)
 		// A region of the container may be longer than the kernels read
 		// of it: it is aligned.
 		r.sizes[i] = max(r.sizes[i], int64(len(data)))
-		if r.shared[i], err = r.alloc(r.sizes[i], data); err != nil {
+		r.shared[i], err = r.alloc(r.sizes[i], data)
+		// Copied to the device: its page may go.
+		release()
+		if err != nil {
 			r.Close()
 			return nil, err
 		}
 	}
+	r.dev.Session(func(se backend.Session) { err = r.res.fill(se) })
+	if err != nil {
+		r.Close()
+		return nil, err
+	}
+	for _, l := range r.runs {
+		var need []int
+		var wa []warg
+		for j, at := range l.at {
+			s := r.wst[at]
+			if s == nil || r.f.InDense(s.e) {
+				continue
+			}
+			wa = append(wa, warg{j, s})
+			if b := r.f.BlockOf(s.e); !slices.Contains(need, b) {
+				need = append(need, b)
+			}
+		}
+		r.need, r.wargs = append(r.need, need), append(r.wargs, wa)
+	}
+	// Each segment's step scans its own blocks, in order: a page-in during
+	// one evicts the other's first (page.Pick: outside the scan, never used
+	// in it again).
+	for _, seg := range []jit.Segment{jit.SegmentText, jit.SegmentVision} {
+		lo, hi := -1, -1
+		for i, l := range r.runs {
+			for _, b := range r.need[i] {
+				if l.seg == seg {
+					if lo < 0 || b < lo {
+						lo = b
+					}
+					hi = max(hi, b+1)
+				}
+			}
+		}
+		r.scan[seg] = [2]int{max(lo, 0), max(hi, 0)}
+	}
 	return r, nil
 }
+
+// Residency is the weights the runner's plan binds.
+func (r *Runner) Residency() *Residency { return r.res }
 
 // bytes is storage st's size at the runner's capacity: what the plan states,
 // or for what the engine owns, the engine's own.
 func (r *Runner) bytes(st jit.Storage) (int64, error) {
-	pages := int64(r.step.Rows * ((r.step.Keys + r.step.Page - 1) / r.step.Page))
 	switch st.Source {
 	case jit.SourcePages:
-		return 4 * pages, nil
+		// The vision segment's table is a picture's one sequence's, the
+		// same in every plan of the model; the text's its step's.
+		if st.Segment == jit.SegmentVision {
+			return 4 * int64(r.visionPages()), nil
+		}
+		return 4 * int64(r.step.Rows*((r.step.Keys+r.step.Page-1)/r.step.Page)), nil
 	case jit.SourceRopePlanes:
 		return int64(4 * len(r.planes[st.Key.Name])), nil
 	case jit.SourceTransfer:
@@ -237,60 +347,78 @@ func (r *Runner) bytes(st jit.Storage) (int64, error) {
 	return st.Bytes, nil
 }
 
-// bank is a paged bank's region whole, its sheets back to back, each
-// expert's page paged in and its plane copied out. Every expert of the bank
-// is resident on the device; paging experts through the device is not done
-// here.
-func (r *Runner) bank(e *jlm.Entry, st jit.Storage) ([]byte, error) {
+// bank is a paged bank's region whole, its sheets back to back: each
+// expert's page held while its plane is copied out, the block's own page
+// held throughout where it is in, as the old engine path assembles a bank
+// (model.sheetOf). Every expert of the bank is resident on the device;
+// paging experts through the device is not done here.
+func bank(f Source, e *jlm.Entry, region int) ([]byte, error) {
+	if lb, ok := f.HoldFilled(f.BlockOf(e)); ok {
+		defer lb.Release()
+	}
 	var out []byte
 	for x := 0; ; x++ {
-		p := r.f.ExpertPage(e, x)
+		p := f.ExpertPage(e, x)
 		if p < 0 {
 			if x == 0 {
-				return nil, fmt.Errorf("run: bank %v of block %d has no expert pages", st.Role, st.Block)
+				return nil, fmt.Errorf("run: bank %v of block %d has no expert pages", e.Role, e.Block)
 			}
 			return out, nil
 		}
-		if err := r.f.EnsurePage(p); err != nil {
+		off, size := f.PageBounds(p)
+		l, err := f.Hold(p, []jlm.Range{{Off: off, N: size}})
+		if err != nil {
 			return nil, err
 		}
-		qs, d, sc := r.f.Sheet(e, x)
-		b := [3][]byte{qs, d, sc}[st.Region]
+		qs, d, sc := f.Sheet(e, x)
 		if qs == nil {
-			return nil, fmt.Errorf("run: expert %d of bank %v of block %d is not resident", x, st.Role, st.Block)
+			l.Release()
+			return nil, fmt.Errorf("run: expert %d of bank %v of block %d is not resident", x, e.Role, e.Block)
 		}
-		out = append(out, b...)
+		out = append(out, [3][]byte{qs, d, sc}[region]...)
+		l.Release()
 	}
 }
 
-// weight is the region of a weight a storage names, in the container, its
-// block paged in.
-func (r *Runner) weight(st jit.Storage) ([]byte, error) {
-	e, ok := r.f.Find(st.Role, int32(st.Block), -1)
-	if !ok {
-		return nil, fmt.Errorf("run: no tensor %v of block %d in the container", st.Role, st.Block)
+// regionOf is region i of e in the container: in the dense region, or in
+// its block's page, held until release runs.
+func regionOf(f Source, e *jlm.Entry, i int) (data []byte, release func(), err error) {
+	none := func() {}
+	if f.ExpertPaged(e) {
+		b, err := bank(f, e, i)
+		return b, none, err
 	}
 	region := func() []byte {
-		qs, d, sc := r.f.Span(e)
-		return [3][]byte{qs, d, sc}[st.Region]
+		qs, d, sc := f.Span(e)
+		return [3][]byte{qs, d, sc}[i]
 	}
-	if st.Region < 0 || st.Region > 2 {
-		return nil, fmt.Errorf("run: tensor %v of block %d has no region %d", st.Role, st.Block, st.Region)
+	if f.InDense(e) {
+		if b := region(); b != nil {
+			return b, none, nil
+		}
+		return nil, none, fmt.Errorf("run: region %d of tensor %v is not in the dense region", i, e.Role)
 	}
-	if r.f.ExpertPaged(e) {
-		return r.bank(e, st)
-	}
-	if b := region(); b != nil {
-		return b, nil
-	}
-	if err := r.f.EnsurePage(r.f.BlockOf(e)); err != nil {
-		return nil, err
+	blk := f.BlockOf(e)
+	off, size := f.PageBounds(blk)
+	l, err := f.Hold(blk, []jlm.Range{{Off: off, N: size}})
+	if err != nil {
+		return nil, none, err
 	}
 	b := region()
 	if b == nil {
-		return nil, fmt.Errorf("run: region %d of tensor %v of block %d is not resident", st.Region, st.Role, st.Block)
+		l.Release()
+		return nil, none, fmt.Errorf("run: region %d of tensor %v of block %d is not resident", i, e.Role, e.Block)
 	}
-	return b, nil
+	return b, l.Release, nil
+}
+
+// visionPages is the page table a picture's step reads: its one sequence's
+// pages.
+func (r *Runner) visionPages() int {
+	if r.step.Picture == 0 {
+		return 0
+	}
+	return (r.step.Picture + r.step.Page - 1) / r.step.Page
 }
 
 // alloc is a buffer of n bytes and the runner's guard, poisoned, with data
@@ -301,16 +429,27 @@ func (r *Runner) weight(st jit.Storage) ([]byte, error) {
 // the larger. It returns each storage's buffer and the buffers' sizes. The
 // logits and the token are read after the step and keep their own, and a
 // runner with a guard shares nothing, so each guard is its storage's.
-func (r *Runner) reuse() (map[int]int, []int64) {
+func (r *Runner) reuse(skip func(at int) bool) (map[int]int, []int64) {
 	slot := map[int]int{}
 	if r.guard > 0 {
 		return slot, nil
+	}
+	// A storage both segments bind (a picture's projected rows, which the
+	// token steps after its own read) lives across steps: its own buffer.
+	segs := map[int]map[jit.Segment]bool{}
+	for _, l := range r.runs {
+		for _, at := range l.at {
+			if segs[at] == nil {
+				segs[at] = map[jit.Segment]bool{}
+			}
+			segs[at][l.seg] = true
+		}
 	}
 	first, last := map[int]int{}, map[int]int{}
 	for li, l := range r.runs {
 		for _, at := range l.at {
 			st := r.plan.Storages[at]
-			if st.Source != jit.SourceStep || r.shared[at] != nil || at == r.logits || at == r.token {
+			if st.Source != jit.SourceStep || r.shared[at] != nil || at == r.logits || at == r.token || len(segs[at]) > 1 || skip != nil && skip(at) {
 				continue
 			}
 			if _, ok := first[at]; !ok {
@@ -383,6 +522,10 @@ func (r *Runner) Close() {
 			r.shared[i] = nil
 		}
 	}
+	if r.ownRes && r.res != nil {
+		r.res.Close()
+	}
+	r.res = nil
 }
 
 // Session is one sequence on a runner.
@@ -413,7 +556,20 @@ type Session struct {
 	launchAll      func(backend.Session)
 	// rec is the step's launches recorded once, on a device that records
 	// (backend.Recorder), and replayed each step.
-	rec backend.Recording
+	// recs is each segment's launches recorded once, on a device that
+	// records (backend.Recorder), and replayed each step of that segment;
+	// seg is the segment the step in progress launches.
+	recs [2]backend.Recording
+	seg  jit.Segment
+	// recGen is the residency's generation each recording was made at, and
+	// bound each launch's: a page moved since is a buffer the recording or
+	// the arguments no longer name.
+	recGen [2]int
+	bound  []int
+	// charged is what the session's own buffers cost the device's account.
+	charged uint64
+	// zero is Reset's zeros, reused.
+	zero []byte
 	// slots are the buffers the step's own storages share (Runner.reuse).
 	slots []backend.Buf
 }
@@ -458,15 +614,59 @@ func (r *Runner) newSession(h *Session) (*Session, error) {
 			}
 		}
 	}
-	R := r.step.Rows
+	// The vision segment is the same in every plan of the model, and a
+	// sequence's picture's step runs on its first session: a session of the
+	// sequence binds that one's vision storages, its projected rows among
+	// them, rather than a copy.
+	vis := map[jit.Operand]int{}
+	if h != nil {
+		for j, x := range h.r.plan.Storages {
+			if x.Segment == jit.SegmentVision && x.Source != jit.SourceWeight {
+				vis[x.Key] = j
+			}
+		}
+	}
+	shareVis := func(at int) bool {
+		_, ok := vis[st[at].Key]
+		return ok && st[at].Segment == jit.SegmentVision
+	}
+	R := max(r.step.Rows, r.step.Picture)
 	s := &Session{r: r, bufs: make([]backend.Buf, len(st)), own: make([]bool, len(st)),
-		rows: make([]byte, 4*jit.RowWords*R), pos: make([]byte, 4*(1+R)), toks: make([]byte, 4*R), tb: make([]byte, 4*R),
-		logits: make([]float32, R*r.outW), input: make([]byte, 4*R*r.nembd), request: make([]byte, 4*(jit.RequestRows+R))}
-	if r.input >= 0 {
-		s.input = make([]byte, max(int64(len(s.input)), r.sizes[r.input]))
+		rows: make([]byte, 4*jit.RowWords*R), pos: make([]byte, 4*(1+R)), toks: make([]byte, 4*R), tb: make([]byte, 4*r.step.Rows),
+		logits: make([]float32, r.step.Rows*r.outW), input: make([]byte, 4*R*r.nembd), request: make([]byte, 4*(jit.RequestRows+R))}
+	for _, at := range []int{r.input, r.pixels} {
+		if at >= 0 {
+			s.input = make([]byte, max(int64(len(s.input)), r.sizes[at]))
+		}
 	}
 	s.raw = unsafe.Slice((*byte)(unsafe.Pointer(&s.logits[0])), 4*len(s.logits))
-	slot, slots := r.reuse()
+	slot, slots := r.reuse(shareVis)
+	// The session's own buffers are the permanent part: blocks page out to
+	// make room for them before they are made, never the other way.
+	var own uint64
+	for _, n := range slots {
+		own += uint64(n)
+	}
+	for i := range st {
+		_, slotted := slot[i]
+		_, ofSeq := of[st[i].Key]
+		if r.wst[i] == nil && r.shared[i] == nil && !slotted && !(ofSeq && sequence(st[i].Source)) && !shareVis(i) {
+			own += uint64(r.sizes[i] + int64(r.guard))
+		}
+	}
+	for range slots {
+		own += uint64(r.guard)
+	}
+	var err error
+	r.dev.Session(func(se backend.Session) {
+		if err = r.res.reclaim(se, own, -1, 0, 0); err == nil {
+			r.res.charge(own)
+			s.charged = own
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
 	for _, sz := range slots {
 		b, err := r.alloc(sz, nil)
 		if err != nil {
@@ -476,8 +676,21 @@ func (r *Runner) newSession(h *Session) (*Session, error) {
 		s.slots = append(s.slots, b)
 	}
 	for i := range st {
+		if r.wst[i] != nil {
+			s.bufs[i] = r.wst[i].buf
+			continue
+		}
 		if r.shared[i] != nil {
 			s.bufs[i] = r.shared[i]
+			continue
+		}
+		if shareVis(i) {
+			j := vis[st[i].Key]
+			if h.r.sizes[j] < r.sizes[i] {
+				s.Close()
+				return nil, fmt.Errorf("run: vision storage %q is %d bytes in the sequence's plan, %d here", st[i].Key.Name, h.r.sizes[j], r.sizes[i])
+			}
+			s.bufs[i] = h.bufs[j]
 			continue
 		}
 		if k, ok := slot[i]; ok {
@@ -495,7 +708,7 @@ func (r *Runner) newSession(h *Session) (*Session, error) {
 		var data []byte
 		switch st[i].Source {
 		case jit.SourcePages:
-			w := make([]uint32, r.kvPages)
+			w := make([]uint32, r.sizes[i]/4)
 			for p := range w {
 				w[p] = uint32(p)
 			}
@@ -519,6 +732,10 @@ func (r *Runner) newSession(h *Session) (*Session, error) {
 		}
 		s.args = append(s.args, a)
 	}
+	s.bound = make([]int, len(r.runs))
+	for i := range s.bound {
+		s.bound[i] = r.res.gen
+	}
 	s.launchAll = s.launch
 	return s, nil
 }
@@ -534,6 +751,11 @@ func (s *Session) Step(tok int32, pos int) ([]float32, int32, error) {
 // as the runner's rows (WithRows), and returns the last one's logits, a
 // slice the next step overwrites, and its token.
 func (s *Session) Rows(toks []int32, pos int) ([]float32, int32, error) {
+	return s.SpanRows(toks, pos, nil)
+}
+
+// step is Rows with the step's picture rows named.
+func (s *Session) step(toks []int32, pos int) ([]float32, int32, error) {
 	r := s.r
 	n := len(toks)
 	if n < 1 || n > r.step.Rows {
@@ -599,23 +821,17 @@ type Picture struct {
 	Take []int32
 }
 
-// Picture runs a vision tower's plan over picture p as one bidirectional
-// step and returns the head's first out rows: the projected rows, a slice
-// the next step overwrites.
-func (s *Session) Picture(p *Picture, out int) ([]float32, error) {
-	r := s.r
-	if out < 1 || out > p.Rows {
-		return nil, fmt.Errorf("run: %d rows out of %d", out, p.Rows)
-	}
+// Picture runs the model's vision segment over picture p as one
+// bidirectional step of the session: its projected rows stay on the
+// device, for the token steps that take them at the picture's place
+// (SpanRows).
+func (s *Session) Picture(p *Picture) error {
 	if err := s.picture(p); err != nil {
-		return nil, err
+		return err
 	}
-	defer func() { s.pic, s.bidir = nil, false }()
-	r.dev.Session(s.launchAll)
-	if s.err != nil {
-		return nil, s.err
-	}
-	return s.logits[:out*r.outW], nil
+	defer s.endPicture()
+	s.r.dev.Session(s.launchAll)
+	return s.err
 }
 
 // PictureEach is Picture a launch at a time, after(i) called once launch i
@@ -624,24 +840,30 @@ func (s *Session) PictureEach(p *Picture, after func(i int)) error {
 	if err := s.picture(p); err != nil {
 		return err
 	}
-	defer func() { s.pic, s.bidir = nil, false }()
+	defer s.endPicture()
 	return s.each(after)
 }
+
+// endPicture ends a picture's step: the session's next is a token's.
+func (s *Session) endPicture() { s.pic, s.bidir, s.seg = nil, false, jit.SegmentText }
 
 // picture readies picture p's step: its pixels the input, a blank token a
 // live row, the grid's width and the output's order the request.
 func (s *Session) picture(p *Picture) error {
 	r, n := s.r, p.Rows
-	if n < 1 || n > r.step.Rows || p.Grid < 1 || p.Pos != nil && len(p.Pos) < n || p.Windows != nil && len(p.Windows) < 2*n ||
-		len(p.Take) > r.step.Rows {
-		return fmt.Errorf("run: %d rows of a grid %d wide in a step of %d rows (%d positions, %d window bounds, %d taken)",
-			n, p.Grid, r.step.Rows, len(p.Pos), len(p.Windows), len(p.Take))
+	if r.step.Picture == 0 {
+		return fmt.Errorf("run: the plan composes no vision segment (WithPictureRows)")
 	}
-	if r.input < 0 || len(p.Pixels) == 0 || 4*len(p.Pixels) > len(s.input) {
+	if n < 1 || n > r.step.Picture || p.Grid < 1 || p.Pos != nil && len(p.Pos) < n || p.Windows != nil && len(p.Windows) < 2*n ||
+		len(p.Take) > r.step.Picture {
+		return fmt.Errorf("run: %d rows of a grid %d wide in a picture's step of %d rows (%d positions, %d window bounds, %d taken)",
+			n, p.Grid, r.step.Picture, len(p.Pos), len(p.Windows), len(p.Take))
+	}
+	if r.pixels < 0 || len(p.Pixels) == 0 || 4*len(p.Pixels) > len(s.input) {
 		return fmt.Errorf("run: %d pixels; the step takes %d bytes", len(p.Pixels), len(s.input))
 	}
 	if len(s.blank) < n {
-		s.blank = make([]int32, r.step.Rows)
+		s.blank = make([]int32, r.step.Picture)
 	}
 	if s.wins == nil {
 		s.wins = make([]byte, len(s.rows))
@@ -651,8 +873,30 @@ func (s *Session) picture(p *Picture) error {
 	for i, t := range p.Take {
 		put(s.request[4*(jit.RequestRows+i):], uint32(t))
 	}
-	s.in, s.at, s.err, s.pic, s.bidir = s.blank[:n], 0, nil, p, true
+	s.in, s.at, s.err, s.pic, s.bidir, s.seg = s.blank[:n], 0, nil, p, true, jit.SegmentVision
 	return nil
+}
+
+// SpanRows is Rows over a prompt's span where some rows are a picture's: row
+// i takes the picture's projected row from[i] (its last Picture's) in place
+// of its token's, a negative from[i] its token's own; from nil is Rows.
+func (s *Session) SpanRows(toks []int32, pos int, from []int32) ([]float32, int32, error) {
+	r := s.r
+	if from != nil && (r.step.Picture == 0 || len(from) != len(toks)) {
+		return nil, 0, fmt.Errorf("run: %d picture rows for %d tokens in a plan of %d picture rows", len(from), len(toks), r.step.Picture)
+	}
+	if r.step.Picture > 0 {
+		for i := range r.step.Rows {
+			w := jit.SpliceNone
+			if from != nil {
+				if f := from[min(i, len(from)-1)]; f >= 0 && int(f) < r.step.Picture {
+					w = uint32(f)
+				}
+			}
+			binary.LittleEndian.PutUint32(s.request[4*(jit.RequestRows+i):], w)
+		}
+	}
+	return s.step(toks, pos)
 }
 
 // Encode runs a sequence toks as one step and returns its head's output:
@@ -678,18 +922,28 @@ func (s *Session) launch(se backend.Session) {
 	// The kernels and their arguments are the session's, and what a step
 	// changes is in its tables: a device that records replays the step's
 	// launches as one submission, recorded on the first step.
-	if rec, ok := se.(backend.Recorder); ok && !r.direct {
-		if s.rec == nil {
-			if s.rec, s.err = backend.Record(rec, func() { s.err = s.launches(se) }); s.err != nil {
-				s.rec = nil
+	// A step whose blocks page binds other buffers from step to step: it is
+	// launched, not replayed, while any block is out.
+	res := r.res
+	if rec, ok := se.(backend.Recorder); ok && !r.direct && res.pagesIn == len(res.blocks) {
+		if s.recs[s.seg] != nil && s.recGen[s.seg] != res.gen {
+			s.recs[s.seg].Free()
+			s.recs[s.seg] = nil
+		}
+		if s.recs[s.seg] == nil {
+			s.recGen[s.seg] = res.gen
+			if s.recs[s.seg], s.err = backend.Record(rec, func() { s.err = s.launches(se) }); s.err != nil {
+				s.recs[s.seg] = nil
 				return
 			}
 		}
-		s.err = rec.Replay(s.rec)
+		s.err = rec.Replay(s.recs[s.seg])
 	} else {
 		s.err = s.launches(se)
 	}
-	if s.err != nil {
+	// A picture's step leaves its rows on the device for the token steps
+	// that take them; it reads nothing back.
+	if s.err != nil || s.seg == jit.SegmentVision {
 		return
 	}
 	if s.err = se.Read(s.bufs[r.logits], s.raw); s.err != nil || r.token < 0 {
@@ -698,9 +952,37 @@ func (s *Session) launch(se backend.Session) {
 	s.err = se.Read(s.bufs[r.token], s.tb)
 }
 
+// bind pages in the blocks launch i binds and, where a page moved since it
+// last ran, names their buffers in its arguments.
+func (s *Session) bind(se backend.Session, i int) error {
+	r := s.r
+	res := r.res
+	if len(r.need[i]) == 0 {
+		return nil
+	}
+	lo, hi := r.scan[r.runs[i].seg][0], r.scan[r.runs[i].seg][1]
+	if err := res.ensure(se, r.need[i], lo, hi); err != nil {
+		return err
+	}
+	if s.bound[i] == res.gen {
+		return nil
+	}
+	for _, a := range r.wargs[i] {
+		s.args[i][a.j] = a.s.buf
+	}
+	s.bound[i] = res.gen
+	return nil
+}
+
 // launches launches every kernel of the step in order.
 func (s *Session) launches(se backend.Session) error {
 	for i, l := range s.r.runs {
+		if l.seg != s.seg {
+			continue
+		}
+		if err := s.bind(se, i); err != nil {
+			return err
+		}
 		if err := se.Launch(l.k, l.groups, l.width, s.args[i]...); err != nil {
 			return err
 		}
@@ -715,9 +997,13 @@ func (s *Session) tables(se backend.Session) error {
 	put := binary.LittleEndian.PutUint32
 	n := len(s.in)
 	put(s.pos, uint32(n))
+	rows := r.step.Rows
+	if s.seg == jit.SegmentVision {
+		rows = r.step.Picture
+	}
 	// A row past the live ones repeats the last: the threads a launch holds
 	// to its live rows do its work again, writing what it wrote.
-	for i := range r.step.Rows {
+	for i := range rows {
 		j := min(i, n-1)
 		w := s.rows[4*jit.RowWords*i:]
 		put(w[4*jit.RowTab:], 0)
@@ -743,23 +1029,33 @@ func (s *Session) tables(se backend.Session) error {
 		}
 	}
 	var err error
+	// Each table at its storage's own size: one segment's alone may be
+	// shorter than the step's buffers.
+	at := func(i int, b []byte) []byte { return b[:min(int64(len(b)), r.sizes[i])] }
 	for i, st := range r.plan.Storages {
 		switch st.Source {
 		case jit.SourceRows:
-			err = se.WriteAt(s.bufs[i], 0, s.rows)
+			err = se.WriteAt(s.bufs[i], 0, at(i, s.rows))
 		case jit.SourceRopePositions:
-			err = se.WriteAt(s.bufs[i], 0, s.pos)
+			err = se.WriteAt(s.bufs[i], 0, at(i, s.pos))
 		case jit.SourceTokens:
-			err = se.WriteAt(s.bufs[i], 0, s.toks)
+			err = se.WriteAt(s.bufs[i], 0, at(i, s.toks))
 		case jit.SourceRequest:
-			err = se.WriteAt(s.bufs[i], 0, s.request)
+			err = se.WriteAt(s.bufs[i], 0, at(i, s.request))
 		case jit.SourceWindows:
-			err = se.WriteAt(s.bufs[i], 0, s.wins)
+			if s.wins != nil {
+				err = se.WriteAt(s.bufs[i], 0, at(i, s.wins))
+			}
 		case jit.SourceInput:
-			if px := s.pic; px != nil {
+			// The vision segment's input is a picture's pixels, written by
+			// its step; the text's its tokens' rows, by theirs.
+			switch px := s.pic; {
+			case st.Segment == jit.SegmentVision && px != nil:
 				err = se.WriteAt(s.bufs[i], 0, s.input[:copy(s.input, unsafe.Slice((*byte)(unsafe.Pointer(&px.Pixels[0])), 4*len(px.Pixels)))])
-			} else if err = s.inputRows(); err == nil {
-				err = se.WriteAt(s.bufs[i], 0, s.input)
+			case st.Segment == jit.SegmentText && px == nil:
+				if err = s.inputRows(); err == nil {
+					err = se.WriteAt(s.bufs[i], 0, s.input[:r.sizes[i]])
+				}
 			}
 		}
 		if err != nil {
@@ -814,11 +1110,40 @@ func (s *Session) Overrun() error {
 	return nil
 }
 
+// Reset forgets the sequence: its recurrent state zeroed, as a new
+// session's is, and its history to be written over from position 0 by the
+// next steps. A session of the sequence (NewSessionOf) binds the same state,
+// so one reset serves both.
+func (s *Session) Reset() error {
+	r := s.r
+	var err error
+	r.dev.Session(func(se backend.Session) {
+		for i, st := range r.plan.Storages {
+			if st.Source != jit.SourceState || s.bufs[i] == nil {
+				continue
+			}
+			if n := int(r.sizes[i]); len(s.zero) < n {
+				s.zero = make([]byte, n)
+			}
+			if err = se.WriteAt(s.bufs[i], 0, s.zero[:r.sizes[i]]); err != nil {
+				return
+			}
+		}
+	})
+	return err
+}
+
 // Close frees the session's own buffers.
 func (s *Session) Close() {
-	if s.rec != nil {
-		s.rec.Free()
-		s.rec = nil
+	if s.charged > 0 && s.r.res != nil {
+		s.r.dev.Session(func(backend.Session) { s.r.res.refund(s.charged) })
+		s.charged = 0
+	}
+	for i, rec := range s.recs {
+		if rec != nil {
+			rec.Free()
+			s.recs[i] = nil
+		}
 	}
 	for i, b := range s.bufs {
 		if s.own[i] && b != nil {
@@ -881,7 +1206,13 @@ func (s *Session) each(after func(i int)) error {
 		return err
 	}
 	for i, l := range r.runs {
+		if l.seg != s.seg {
+			continue
+		}
 		r.dev.Session(func(se backend.Session) {
+			if err = s.bind(se, i); err != nil {
+				return
+			}
 			if err = se.Launch(l.k, l.groups, l.width, s.args[i]...); err == nil {
 				err = se.Sync()
 			}

@@ -97,6 +97,9 @@ func (m *Model) IsEncoder() bool { return m.enc != nil }
 // carries no pooling is refused: its last residual has no readout the weights
 // were trained for.
 func (m *Model) NewEmbedder() (*Embedder, error) {
+	if m.opt.planDev != nil {
+		return nil, fmt.Errorf("model: %s embeddings do not run on the composer's plan yet", m.Cfg.Arch)
+	}
 	if !m.IsEmbedding() {
 		return nil, fmt.Errorf("model: %s is not an embedding model (its container sets no pooling)", m.Cfg.Arch)
 	}

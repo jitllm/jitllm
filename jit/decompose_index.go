@@ -133,7 +133,9 @@ func decomposeBlockSelect(o graph.Op, c *Context) ([]Prim, error) {
 	// n is the attended count; nb its blocks; own the query's block.
 	n := func(x *exprs) int { return x.op(OpSub, U, hs.row(x, rowEnd), hs.start(x)) }
 	nb := func(x *exprs) int { return x.op(OpDiv, U, x.op(OpAdd, U, n(x), x.u(uint32(B-1))), x.u(uint32(B))) }
-	own := func(x *exprs) int { return x.op(OpDiv, U, x.op(OpSub, U, x.op(OpMax, U, n(x), x.u(1)), x.u(1)), x.u(uint32(B))) }
+	own := func(x *exprs) int {
+		return x.op(OpDiv, U, x.op(OpSub, U, x.op(OpMax, U, n(x), x.u(1)), x.u(1)), x.u(uint32(B)))
+	}
 	// forced is 1 where block b is one of the Local ending at the query's.
 	forced := func(x *exprs, b int) int {
 		in := x.sel(F, x.op(OpLess, ir.Pred, x.op(OpSub, U, own(x), b), x.u(uint32(a.Local))), x.f(1), x.f(0))

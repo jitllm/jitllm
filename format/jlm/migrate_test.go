@@ -68,7 +68,7 @@ func migrateSource(audio, unfolded bool) *Source {
 			BOS: 0, EOS: -1, Unk: 0, Pad: -1, Sep: -1, Mask: -1},
 	}
 	if audio {
-		src.Vision = &Vision{NEmbd: k, ProjDim: k, Eps: 1e-5, Projector: ProjD1OmniA,
+		src.Vision = &Vision{NEmbd: k, NHead: 1, ProjDim: k, Eps: 1e-5, Projector: ProjD1OmniA,
 			Audio: &Audio{NLayer: 1, NEmbd: k, NHead: 1, NFFN: k, ConvKernel: 3, MelBins: 8,
 				SubChannels: 4, ProjDim: k, ResWidth: 4, Eps: 1e-5, Projector: ProjD1OmniA,
 				SampleRate: 16000, NFFT: 512, Window: 400, Hop: 160}}
@@ -86,6 +86,14 @@ func migrateSource(audio, unfolded bool) *Source {
 		}
 	}
 	src.Tensors = ts
+	if src.Vision != nil {
+		// Stated as a conversion states them, so the upgrade must too.
+		c, err := ConventionsOf(src.Vision)
+		if err != nil {
+			panic(err)
+		}
+		src.Vision.Conv = c
+	}
 	return src
 }
 
@@ -109,10 +117,7 @@ func TestUpgradeIsAFreshConversion(t *testing.T) {
 			}
 			old := func() string {
 				p := filepath.Join(t.TempDir(), "old"+Ext)
-				if _, err := Write(p, migrateSource(audio, true), fp); err != nil {
-					t.Fatal(err)
-				}
-				if err := setVersion(p, 29); err != nil {
+				if _, err := writeAt(p, migrateSource(audio, true), fp, 29); err != nil {
 					t.Fatal(err)
 				}
 				return p

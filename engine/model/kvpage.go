@@ -1060,6 +1060,9 @@ func kvBytesOf(p []float32) []byte {
 // evicts pages the store already holds, so without one the cap would silently
 // do nothing (and evicting anyway would lose history).
 func (s *State) SetKVBudget(b uint64) error {
+	if err := s.planRefuses("a host KV budget (SetKVBudget)"); err != nil {
+		return err
+	}
 	if b > 0 {
 		if _, ok := s.kv.store.(NoStore); ok {
 			return fmt.Errorf("model: a KV budget needs a store to evict into -- " +

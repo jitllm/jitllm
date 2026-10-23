@@ -1021,10 +1021,101 @@ type Vision struct {
 	TileSize  uint32
 	Tolerance float32
 
+	// Conv is the conventions a tower's tensors do not show, stated by its
+	// converter (v31) so its graph is read without its family's name; each
+	// is 0 where unstated, which a plan refuses.
+	Conv VisionConv
+
 	// Audio is the container's audio tower, nil for none: its blocks follow
 	// the vision blocks in the tower's page array (see Audio). The last
 	// optional tail of the record.
 	Audio *Audio
+}
+
+// VisionConv is a tower's conventions: its norms' kind, its projector's
+// activation, where its class row sits, how its position table is read at
+// another grid, and how its 2-D rotary turns a head.
+type VisionConv struct {
+	Norm      VisionNorm
+	ProjAct   VisionAct
+	Class     VisionClass
+	PosChain  ResampleChain
+	PosFilter ResampleFilter
+	Rope      *VisionRope // nil for a tower that turns nothing
+}
+
+// Stated reports whether a converter stated the conventions.
+func (c VisionConv) Stated() bool { return c.Norm != 0 }
+
+// VisionNorm is the kind of a tower's norms.
+type VisionNorm uint8
+
+const (
+	VisionLayerNorm VisionNorm = iota + 1
+	VisionRMSNorm
+)
+
+// VisionAct is the activation between a projector's two matrices.
+type VisionAct uint8
+
+const (
+	VisionGELUTanh VisionAct = iota + 1
+	VisionGELUErf
+)
+
+// VisionClass is where a tower's class row sits in its sequence.
+type VisionClass uint8
+
+const (
+	ClassFirst VisionClass = iota + 1
+	ClassLast
+)
+
+// ResampleChain is how output index i of an axis of size n maps to a
+// source coordinate on a table of side s, each step one float32 rounding.
+type ResampleChain uint8
+
+const (
+	// ChainAligned is i*(s-1)/(n-1): aligned corners.
+	ChainAligned ResampleChain = iota + 1
+	// ChainHalfPixel is (i+0.5)*(s/n) - 0.5.
+	ChainHalfPixel
+	// ChainGridSample is ((((i+0.5)/n*2 - 1) + 1)*s - 1)/2: grid_sample's
+	// normalised coordinate, unnormalised.
+	ChainGridSample
+)
+
+// ResampleFilter is the taps reading a source coordinate x, fl = floor(x)
+// and t = x - fl.
+type ResampleFilter uint8
+
+const (
+	// FilterBilinear is two taps at fl and fl+1, max(1-|t|, 0) and
+	// max(1-|t-1|, 0).
+	FilterBilinear ResampleFilter = iota + 1
+	// FilterLinear is two taps, 1-t and t, x clamped below at 0 first.
+	FilterLinear
+	// FilterCubic is four taps at fl-1 to fl+2, the cubic convolution at
+	// A = -0.75.
+	FilterCubic
+)
+
+// VisionRope is a tower's 2-D rotary: each head's first pairs in Runs, run u
+// turned by coordinate u.Axis of the patch's grid cell (0 its row, 1 its
+// column) plus Offset, its pairs at frequency indices u.Freq, u.Freq+u.Step,
+// ..., index i the angle base^(-2i/FreqDim); NEOX's halves where Neox, else
+// adjacent elements.
+type VisionRope struct {
+	Base    float32
+	FreqDim uint32
+	Offset  uint32
+	Neox    bool
+	Runs    []VisionRun
+}
+
+// VisionRun is a run of a VisionRope's pairs.
+type VisionRun struct {
+	Pairs, Axis, Freq, Step uint32
 }
 
 // Projector is how tower embeddings become language-model tokens.

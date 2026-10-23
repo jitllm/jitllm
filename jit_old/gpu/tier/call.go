@@ -577,7 +577,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		// reads whatever now lives there without faulting. submit() pages the
 		// range in first; this asserts it, and is why nothing else may call
 		// layersOnce.
-		if l.pg != nil && !l.pg.in {
+		if l.pg != nil && !l.pg.In {
 			g.LastErr = fmt.Sprintf("block %d is paged out", li)
 			return false
 		}

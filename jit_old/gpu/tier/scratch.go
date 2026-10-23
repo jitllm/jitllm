@@ -78,12 +78,12 @@ func (g *devTier) settleRounding() {
 	case d > 0:
 		g.rounding += uint64(d)
 		g.used += uint64(d)
-		g.pool.take(uint64(d))
+		g.pool.Take(uint64(d))
 	case d < 0:
 		n := min(uint64(-d), g.rounding, g.used)
 		g.rounding -= n
 		g.used -= n
-		g.pool.give(n)
+		g.pool.Give(n)
 		g.roomGen.Add(1)
 	}
 }
@@ -126,12 +126,12 @@ func (g *devTier) settleScratch(d int64) {
 	case d > 0:
 		g.scratch += uint64(d)
 		g.used += uint64(d)
-		g.pool.take(uint64(d))
+		g.pool.Take(uint64(d))
 	case d < 0:
 		n := min(uint64(-d), g.scratch, g.used)
 		g.scratch -= n
 		g.used -= n
-		g.pool.give(n)
+		g.pool.Give(n)
 		g.roomGen.Add(1)
 	}
 }

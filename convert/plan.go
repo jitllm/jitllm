@@ -75,6 +75,9 @@ func PlanShards(meta fs.FS, name string, shards []*safetensors.File, opts ...Opt
 	if o.q8 {
 		quantizeMatrices(s.Tensors)
 	}
+	if err := stateTower(s); err != nil {
+		return nil, err
+	}
 	h, size, err := jlm.Plan(s, jlm.Fingerprint{Writer: jlm.WriterID()})
 	if err != nil {
 		return nil, err

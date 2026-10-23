@@ -163,6 +163,9 @@ func StreamGGUFs(src, mmproj Remote, dst string, fp jlm.Fingerprint, opts ...Opt
 	if fp.Writer == "" {
 		fp.Writer = jlm.WriterID()
 	}
+	if err := stateTower(s); err != nil {
+		return nil, err
+	}
 	return jlm.Write(dst, s, fp)
 }
 

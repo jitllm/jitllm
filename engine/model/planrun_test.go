@@ -1,6 +1,9 @@
 package model
 
 import (
+	"fmt"
+	"github.com/jitllm/jitllm/engine/graph"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -256,15 +259,20 @@ func TestD1OmniPlanMatchesReference(t *testing.T) {
 // rotary with its axes swapped 3.1e-5 at block 0), and the free-running
 // picture to 5e-2 (32 blocks of Qwen2-VL read 1.6e-2, the violations 0.12
 // and past).
+// towerCases are the towers the plan composes: how each opens, and a
+// dynamic tower's grid (0 for a fixed tower's square).
+var towerCases = []struct {
+	name   string
+	open   func(testing.TB, ...Option) (*Model, *Tower)
+	gh, gw int
+}{{"smolvlm", openTower, 0, 0}, {"llava", openLlava, 0, 0},
+	{"qwen2vl", func(tb testing.TB, _ ...Option) (*Model, *Tower) { m := openQwen2VL(tb); return m, m.Tower() }, 16, 20},
+	{"qwen25vl", openQwen25VL, 16, 20},
+	{"qwen35", openPairTower("Qwen3.5-0.8B-f16.gguf", "mmproj-Qwen3.5-0.8B-f16.gguf"), 16, 20},
+	{"qwen3vl", openPairTower("Qwen3-VL-2B-Instruct-f16.gguf", "mmproj-Qwen3-VL-2B-Instruct-f16.gguf"), 16, 20}}
+
 func TestPlanEncodesPicturesAsTheHost(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		open   func(testing.TB, ...Option) (*Model, *Tower)
-		gh, gw int // a dynamic tower's grid; 0 for a fixed tower's square
-	}{{"smolvlm", openTower, 0, 0}, {"llava", openLlava, 0, 0},
-		{"qwen2vl", func(tb testing.TB, _ ...Option) (*Model, *Tower) { m := openQwen2VL(tb); return m, m.Tower() }, 16, 20},
-		{"qwen25vl", openQwen25VL, 16, 20},
-		{"qwen35", openPairTower("Qwen3.5-0.8B-f16.gguf", "mmproj-Qwen3.5-0.8B-f16.gguf"), 16, 20}} {
+	for _, tc := range towerCases {
 		t.Run(tc.name, func(t *testing.T) {
 			m, tw := tc.open(t, noTune)
 			defer m.Close()
@@ -291,15 +299,23 @@ func planEncodesAsTheHost(t *testing.T, m *Model, tw *Tower, gh, gw int) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The plan's rows are each projected row then each deepstack tap's;
+	// the host's the projected rows, then each tap's.
+	taps := len(c.Deep)
+	tokens := len(out) / (c.ProjDim * (1 + taps))
+	if taps > 0 {
+		lay := make([]float32, len(out))
+		for r := range tokens {
+			for j := range 1 + taps {
+				copy(lay[(r*(1+taps)+j)*c.ProjDim:], out[(j*tokens+r)*c.ProjDim:(j*tokens+r+1)*c.ProjDim])
+			}
+		}
+		out = lay
+	}
 	want = append(want, slices.Clone(out))
 	n := gh * gw
 	if c.CLS {
 		n++
-	}
-	tokens := len(out) / c.ProjDim
-	src := m.TowerComposing()
-	if err := src.(towerComposing).towerRefusal(); err != nil {
-		t.Fatal(err)
 	}
 	devs := backend.Open()
 	defer func() {
@@ -313,7 +329,8 @@ func planEncodesAsTheHost(t *testing.T, m *Model, tw *Tower, gh, gw int) {
 	gpu := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
 	for _, dev := range devs {
 		t.Run(dev.API(), func(t *testing.T) {
-			r, err := run.New(src, dev, gpu, n, run.WithRows(n))
+			// The one model's plan: its text parts and its vision segment.
+			r, err := run.New(m.Composing(), dev, gpu, n+64, run.WithPictureRows(n))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -324,19 +341,39 @@ func planEncodesAsTheHost(t *testing.T, m *Model, tw *Tower, gh, gw int) {
 			}
 			defer s.Close()
 			p := r.Plan()
-			// Each part's output read once its last launch has run, held to
-			// the host's, then replaced by it; a rotary table has no host
-			// stop.
+			// Each vision part's output read once its last launch has run,
+			// held to the old engine path's, then replaced by it; a rotary
+			// table has no stop, and a seam's residual is the block's.
 			last, stop := map[int]int{}, map[int]int{}
+			head, text := -1, 0
 			k := 0
 			for pi, pp := range p.Parts {
 				k += len(pp.Codes)
-				if pp.Part.Kind != jit.PartTable {
+				if pp.Part.Segment != jit.SegmentVision {
+					text++
+					continue
+				}
+				if pp.Part.Kind != jit.PartTable && pp.Part.Kind != jit.PartSeam {
 					last[k-1], stop[pi] = pi, len(stop)
 				}
+				if pp.Part.Kind == jit.PartHead {
+					head = pi
+				}
+			}
+			if text == 0 || head < 0 {
+				t.Fatalf("the plan holds %d text parts and no vision head (%d): not the one model's", text, head)
 			}
 			if len(stop) != len(want) {
-				t.Fatalf("%d parts, the host stops at %d", len(stop), len(want))
+				t.Fatalf("%d vision parts, the old path stops at %d", len(stop), len(want))
+			}
+			outOf := func(pi int) (int, []float32) {
+				key := jit.Operand{Kind: jit.OperandValue, Of: pi, Value: p.Parts[pi].Part.Graph.Out[0]}
+				at := slices.IndexFunc(p.Storages, func(st jit.Storage) bool { return st.Key == key })
+				if at < 0 {
+					t.Fatalf("%v: its output has no storage", p.Parts[pi].Part)
+				}
+				b := s.Storage(at)
+				return at, unsafe.Slice((*float32)(unsafe.Pointer(&b[0])), len(b)/4)
 			}
 			checked := 0
 			forced := func(i int) {
@@ -344,28 +381,26 @@ func planEncodesAsTheHost(t *testing.T, m *Model, tw *Tower, gh, gw int) {
 				if !ok {
 					return
 				}
-				key := jit.Operand{Kind: jit.OperandValue, Of: pi, Value: p.Parts[pi].Part.Graph.Out[0]}
-				at := slices.IndexFunc(p.Storages, func(st jit.Storage) bool { return st.Key == key })
-				if at < 0 {
-					t.Errorf("%v: its output has no storage", p.Parts[pi].Part)
-					return
+				at, all := outOf(pi)
+				w := want[stop[pi]]
+				if len(all) < len(w) {
+					t.Fatalf("%v (part %d): its output's storage %d holds %d floats, the old path's %d (%+v)", p.Parts[pi].Part, pi, at, len(all), len(w), p.Storages[at])
 				}
-				b, w := s.Storage(at), want[stop[pi]]
-				got := unsafe.Slice((*float32)(unsafe.Pointer(&b[0])), len(b)/4)[:len(w)]
+				got := all[:len(w)]
 				nmse, worst := nmseOf(got, w)
-				t.Logf("%v, the host's input in: NMSE %.3g, worst %.3g", p.Parts[pi].Part, nmse, worst)
+				t.Logf("%v, the old path's input in: NMSE %.3g, worst %.3g", p.Parts[pi].Part, nmse, worst)
 				if !(nmse <= 5e-6) {
-					t.Errorf("%v: NMSE %.3g against the host, past 5e-6", p.Parts[pi].Part, nmse)
+					t.Errorf("%v: NMSE %.3g against the old path, past 5e-6", p.Parts[pi].Part, nmse)
 				}
 				checked++
 				copy(got, w)
-				if err := s.SetStorage(at, b); err != nil {
+				if err := s.SetStorage(at, unsafe.Slice((*byte)(unsafe.Pointer(&all[0])), 4*len(all))); err != nil {
 					t.Fatal(err)
 				}
 			}
 			pic := tw.TowerPicture(px, gh, gw)
 			if pic.Rows != n {
-				t.Fatalf("the picture's step is %d rows, the host's %d", pic.Rows, n)
+				t.Fatalf("the picture's step is %d rows, the old path's %d", pic.Rows, n)
 			}
 			if err := s.PictureEach(pic, forced); err != nil {
 				t.Fatal(err)
@@ -373,14 +408,92 @@ func planEncodesAsTheHost(t *testing.T, m *Model, tw *Tower, gh, gw int) {
 			if checked != len(want) {
 				t.Fatalf("%d of %d parts checked", checked, len(want))
 			}
-			got, err := s.Picture(pic, tokens)
-			if err != nil {
+			if err := s.Picture(pic); err != nil {
 				t.Fatal(err)
 			}
+			_, all := outOf(head)
+			got := all[:len(out)]
 			nmse, worst := nmseOf(got, out)
-			t.Logf("free-running: %d rows of %d, NMSE %.3g against the host, worst %.3g", tokens, c.ProjDim, nmse, worst)
+			t.Logf("free-running: %d rows of %d, NMSE %.3g against the old path, worst %.3g", tokens, c.ProjDim, nmse, worst)
 			if !(nmse <= 5e-2) {
-				t.Errorf("free-running: NMSE %.3g against the host", nmse)
+				t.Errorf("free-running: NMSE %.3g against the old path", nmse)
+			}
+		})
+	}
+}
+
+// TestPlanPrefillsPicturesAsTheOldPath prefills a prompt with a picture in
+// it -- tokens, the picture's span, tokens -- through State.PrefillMixed on
+// the model's one plan, against the old engine path's, for the towers whose
+// text model turns by a plain rotary; a multi-axis text rotary is refused by
+// name.
+func TestPlanPrefillsPicturesAsTheOldPath(t *testing.T) {
+	devs := backend.Open()
+	defer func() {
+		for _, d := range devs {
+			d.Close()
+		}
+	}()
+	if len(devs) == 0 {
+		t.Skip("no device")
+	}
+	gpu := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
+	for _, tc := range towerCases {
+		t.Run(tc.name, func(t *testing.T) {
+			old, tw := tc.open(t, noTune)
+			defer old.Close()
+			c := tw.Cfg
+			gh, gw := tc.gh, tc.gw
+			if gh == 0 {
+				gh, gw = c.ImageSz/c.PatchSz, c.ImageSz/c.PatchSz
+			}
+			px := make([]float32, gh*gw*c.PatchSz*c.PatchSz*3)
+			for i := range px {
+				px[i] = float32((i*37)%255)/127.5 - 1
+			}
+			rows := gh * gw / (max(c.Scale, 1) * max(c.Scale, 1))
+			pic := &Picture{Pixels: px, GH: gh, GW: gw, Rows: rows}
+			before, after := old.Vocab.Encode("Describe the picture:", true), old.Vocab.Encode(" It shows", false)
+			spans := []Span{{Tokens: before}, {Picture: pic}, {Tokens: after}}
+			n := len(before) + rows + len(after)
+			// A row a step, and steps of several rows: a picture's rows
+			// spliced into either as the text's own.
+			for _, arm := range []struct {
+				dev   backend.Device
+				chunk int
+			}{{devs[0], 0}, {devs[0], 16}, {devs[len(devs)-1], 16}} {
+				dev := arm.dev
+				t.Run(fmt.Sprintf("%s/chunk%d", dev.API(), arm.chunk), func(t *testing.T) {
+					pm, err := Open(old.container.Path, noTune, WithPlanDevice(dev, gpu), WithPlanPictureRows(gh*gw+1), WithPlanChunk(arm.chunk))
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer pm.Close()
+					ps := pm.NewState(n + 8)
+					defer ps.Close()
+					got, err := ps.PrefillMixed(spans...)
+					if old.Cfg.RopeSections != [4]int{} || old.Cfg.RopeInterleaved {
+						if err == nil || !strings.Contains(err.Error(), "multi-axis text rotary") {
+							t.Fatalf("a picture on a multi-axis text rotary: %v, want its refusal", err)
+						}
+						return
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					hs := old.NewState(n + 8)
+					defer hs.Close()
+					want, err := hs.PrefillMixed(spans...)
+					if err != nil {
+						t.Fatal(err)
+					}
+					nmse, worst := nmseOf(got, want)
+					t.Logf("%d rows (%d of them the picture's): logits NMSE %.3g against the old path, worst %.3g, top-1 %d and %d",
+						n, rows, nmse, worst, Greedy(got), Greedy(want))
+					if !(nmse <= 5e-2) || Greedy(got) != Greedy(want) && want[Greedy(got)] < want[Greedy(want)]-0.25 {
+						t.Errorf("the prompt's logits stand %.3g from the old path's", nmse)
+					}
+				})
 			}
 		})
 	}
@@ -404,4 +517,137 @@ func openPairTower(text, proj string) func(testing.TB, ...Option) (*Model, *Towe
 		}
 		return m, m.Tower()
 	}
+}
+
+// TestTowerIsStructural lowers each tower, then again with its projector
+// renamed to one no table knows, and requires the same graphs, rotary and
+// tensors: the tower's graph is read from what its container states and
+// stores, never from its family's name.
+func TestTowerIsStructural(t *testing.T) {
+	for _, tc := range towerCases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, tw := tc.open(t, noTune)
+			defer m.Close()
+			lowered := func() string {
+				// A fresh lowering each time: the model's cached one would
+				// read the first name twice.
+				src, err := m.lowerTower()
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Every field of every graph: its values, its ops' kinds,
+				// operands, bindings and attributes.
+				var b strings.Builder
+				full := func(g *graph.Graph) {
+					if g != nil {
+						fmt.Fprintf(&b, "%+v\n", *g)
+					}
+				}
+				full(src.EmbedGraph())
+				full(src.HeadGraph())
+				for li := range src.Blocks() + 1 {
+					full(src.BlockGraph(li))
+					full(src.SeamGraph(li))
+				}
+				fmt.Fprintf(&b, "%+v %+v", src.Rotaries(), src.Ropes())
+				return b.String()
+			}
+			want := lowered()
+			v := m.container.Vision()
+			p, k, name := v.Projector, tw.Cfg.Kind, tw.Cfg.Projector
+			v.Projector, tw.Cfg.Kind, tw.Cfg.Projector = 0x7fff, 0x7fff, "renamed"
+			defer func() { v.Projector, tw.Cfg.Kind, tw.Cfg.Projector = p, k, name }()
+			if got := lowered(); got != want {
+				t.Errorf("the tower lowers otherwise under another name")
+			}
+		})
+	}
+}
+
+// TestPlanRefusesTheOldEnginePath opens models on the composer's plan and
+// requires every entry the plan does not compose to refuse by name rather
+// than run the old engine path: a token step past Forward's (greedy,
+// sampled, from an embedding), a speculative step, an embedding, a decision
+// readout the plan does not compose, a picture.
+func TestPlanRefusesTheOldEnginePath(t *testing.T) {
+	devs := backend.Open()
+	defer func() {
+		for _, d := range devs {
+			d.Close()
+		}
+	}()
+	if len(devs) == 0 {
+		t.Skip("no device")
+	}
+	dev, gpu := devs[0], jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
+	refused := func(t *testing.T, what string, err error) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), "the composer's plan") {
+			t.Errorf("%s on the plan: %v, want a refusal naming the plan", what, err)
+		}
+	}
+	t.Run("token steps", func(t *testing.T) {
+		m, err := Open(testmodels.Path("synth-ernie45.jlm"), noTune, WithPlanDevice(dev, gpu))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer m.Close()
+		s := m.NewState(64)
+		defer s.Close()
+		// A greedy token is the plan's own sample step's: the argmax of the
+		// logits the plan returns, the lowest index on a tie.
+		logits, err := s.Forward(1)
+		if err != nil {
+			t.Fatalf("Forward, which the plan runs: %v", err)
+		}
+		best := 0
+		for i, v := range logits {
+			if v > logits[best] {
+				best = i
+			}
+		}
+		if s.planTok != int32(best) {
+			t.Errorf("the plan sampled %d, the argmax of its logits is %d", s.planTok, best)
+		}
+		if _, err := s.ForwardGreedy(int32(best)); err != nil {
+			t.Fatalf("ForwardGreedy, whose token the plan samples: %v", err)
+		}
+		_, err = s.ForwardSample(1, &Sampler{Temp: 0.7})
+		refused(t, "ForwardSample at a temperature", err)
+		_, err = s.ForwardEmbd(make([]float32, m.Cfg.NEmbd))
+		refused(t, "ForwardEmbd", err)
+		_, err = s.Park()
+		refused(t, "Park", err)
+		_, err = s.Resume()
+		refused(t, "Resume", err)
+		refused(t, "ShareKV", s.ShareKV(nil))
+		refused(t, "SetKVBudget", s.SetKVBudget(1<<20))
+		b := m.NewBatch(2, 64)
+		defer b.Close()
+		_, err = b.Forward(1)
+		refused(t, "Forward on a batch of two sequences", err)
+	})
+	t.Run("embedding", func(t *testing.T) {
+		m, err := Open(jlmOf(t, testmodels.Path(filepath.Join("embed", "all-minilm-l6.gguf"))), noTune, WithPlanDevice(dev, gpu))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer m.Close()
+		_, err = m.NewEmbedder()
+		refused(t, "NewEmbedder", err)
+	})
+	t.Run("decision", func(t *testing.T) {
+		m := openDecision(t, "vllm-d3/vllm-d3-edge-Q8_0.gguf", jlm.DecisionVllmD3, noTune, WithPlanDevice(dev, gpu))
+		defer m.Close()
+		_, err := m.NewDecider(0)
+		refused(t, "a vllm-d3 Decider", err)
+	})
+	t.Run("picture", func(t *testing.T) {
+		m, _ := openTower(t, noTune, WithPlanDevice(dev, gpu))
+		defer m.Close()
+		s := m.NewState(64)
+		defer s.Close()
+		_, err := s.Vision()
+		refused(t, "Vision", err)
+	})
 }

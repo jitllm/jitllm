@@ -76,17 +76,6 @@ func (c TowerConfig) gemma4Resize(w, h int) (rw, rh int, err error) {
 	return tw, th, nil
 }
 
-// gemma4Rope is the tower's 2-D rotary over the head the converter laid out:
-// NEOX pairs over the whole head, the first HeadDim/4 turned by the column
-// and the next by the row, each from base^0 (the reference's per-half
-// frequencies, base^(-2i/(HeadDim/2))). The base is 100, the loader's
-// constant as llama.cpp's is.
-func (c TowerConfig) gemma4Rope() nn.Rope {
-	q := c.HeadDim / 4
-	return nn.Rope{NRot: c.HeadDim / 2, Base: 100, Neox: true,
-		Runs: []nn.RopeRun{{Pairs: q, Axis: 0}, {Pairs: q, Axis: 1}}}
-}
-
 // gemma4Head is what Gemma 4's head reads beyond the projection: the
 // standardisation, folded with the sqrt(NEmbd) before it, and the weightless
 // norms' ones.

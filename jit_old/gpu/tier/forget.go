@@ -104,7 +104,7 @@ func (g *devTier) applyForget(lo, hi uintptr) {
 		}
 		delete(g.stage, k)
 		g.stageBytes -= st.bytes()
-		g.Config.stage.give(st.bytes())
+		g.Config.stage.Give(st.bytes())
 	}
 	// A recording that launched the head names its buffers.
 	if head {

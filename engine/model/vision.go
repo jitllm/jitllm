@@ -95,9 +95,10 @@ type TowerConfig struct {
 	// PosSide is a learned position table's side when the table is resampled
 	// to each picture's grid (Qwen3-VL, qwen3vit.go); zero otherwise.
 	PosSide int
-	// PosBicubic says the table is resampled bicubic (GLM-4.xV, grid_sample
-	// with align_corners False), not bilinear with aligned corners.
-	PosBicubic bool
+	// conv is the conventions the container states for what the tensors do
+	// not show (jlm.VisionConv): the norms' kind, the class row's place, the
+	// rotary, the position table's resample, the projector's activation.
+	conv jlm.VisionConv
 	// TokenLimit is Kimi-VL's processor's in_token_limit: a picture of more
 	// whole patches is scaled down to it (kimivit.go).
 	TokenLimit int
@@ -488,11 +489,18 @@ func buildTower(c0 *jlm.File) (*Tower, error) {
 	default:
 		c.Act = nn.ActSiLU
 	}
+	// What the tensors do not show, as the converter stated it.
+	if !v.Conv.Stated() {
+		return nil, fmt.Errorf("model: OpenTower: the container states no conventions for its tower; reconvert or upgrade it")
+	}
+	c.conv = v.Conv
 	c.CLS = c0.Has(jlm.RoleVClassEmbd, jlm.DenseBlock, -1)
-	c.CLSLast = v.Projector == jlm.ProjLlama4
+	c.CLSLast = v.Conv.Class == jlm.ClassLast
 	c.Rope = v.Flags.Has(jlm.FlagVisionRope)
-	c.RMS = v.Projector == jlm.ProjQwen25VL || v.Projector == jlm.ProjPixtral || v.Projector == jlm.ProjGemma4V ||
-		v.Projector == jlm.ProjGLM4V
+	if c.Rope && v.Conv.Rope == nil {
+		return nil, fmt.Errorf("model: OpenTower: the tower turns its heads and states no rotary")
+	}
+	c.RMS = v.Conv.Norm == jlm.VisionRMSNorm
 	c.WinPattern, c.WinSize = int(v.WinPattern), int(v.WinSize)
 	if c.WinPattern > 0 && c.WinSize <= 0 {
 		return nil, fmt.Errorf("model: OpenTower: window attention every %d blocks with no window size", c.WinPattern)
@@ -1229,6 +1237,9 @@ func (s *State) Encode(px []float32) ([]float32, error) {
 
 // encode is Encode for a caller that holds the pager (enterPager).
 func (s *State) encode(px []float32) ([]float32, error) {
+	if err := s.planRefuses("this picture's encode"); err != nil {
+		return nil, err
+	}
 	c := s.vis.t.Cfg
 	if c.Dynamic() {
 		gh, gw := s.patchGrid()
@@ -1879,7 +1890,7 @@ func (s *State) project(patches []float32) ([]float32, error) {
 	}
 	s.visBiasRows(v.hid, t.projB, nt)
 	act := nn.ActGELU
-	if c.Kind == jlm.ProjLFM2 && s.tfault() != faultLFM2TanhGELU {
+	if c.conv.ProjAct == jlm.VisionGELUErf && s.tfault() != faultLFM2TanhGELU {
 		act = nn.ActGELUErf
 	}
 	s.actAll(v.hid[:nt*t.projW.rows], act)
@@ -1994,33 +2005,44 @@ func (s *State) ResetRegions() { s.jit.ResetRegions() }
 // GPUBlocks is how many of this State's blocks a device took.
 func (s *State) GPUBlocks() int { return s.devCount() }
 
-// towerRope is the ViT's 2-D rotary as a multi-axis table (nn.Rope.Runs): a
-// half-head rotary whose HeadDim/4 frequencies turn the first quarter of a
-// head's pairs by the patch's grid row and then, from the first frequency
-// again, the second quarter by its column, NEOX-paired (i, i+HeadDim/2). HF
-// builds VisionRotaryEmbedding with dim = head_dim/2 and uses each frequency
-// twice; llama.cpp's ggml_rope_multi in vision mode restarts the frequency
-// per section, which is the same table.
+// towerRope is the ViT's 2-D rotary as a multi-axis table (nn.Rope.Runs), as
+// the container states it (jlm.VisionRope): each run of a head's pairs
+// turned by its patch's grid row or column at its frequencies. A fault is a
+// rewrite of the stated rotary: Pixtral's frequencies each half from the
+// first, the two coordinates swapped.
 func (c TowerConfig) towerRope() nn.Rope {
-	switch c.Kind {
-	case jlm.ProjPixtral:
-		return c.pixtralRope()
-	case jlm.ProjLlama4:
-		return c.llama4Rope()
-	case jlm.ProjGemma4V:
-		return c.gemma4Rope()
-	case jlm.ProjKimiVL:
-		return c.kimiRope()
+	r := c.conv.Rope
+	rope := nn.Rope{NRot: int(r.FreqDim), Base: float64(r.Base), Neox: r.Neox}
+	for _, u := range r.Runs {
+		rope.Runs = append(rope.Runs, nn.RopeRun{Pairs: int(u.Pairs), Axis: int(u.Axis), Freq: int(u.Freq), Step: int(u.Step)})
 	}
-	quart := c.HeadDim / 4
-	return nn.Rope{NRot: c.HeadDim / 2, Base: 10000, Neox: true,
-		Runs: []nn.RopeRun{{Pairs: quart, Axis: 0}, {Pairs: quart, Axis: 1}}}
+	switch c.fault {
+	case faultPixtralFreq:
+		q := c.HeadDim / 4
+		rope = nn.Rope{NRot: c.HeadDim / 2, Base: rope.Base, Neox: rope.Neox,
+			Runs: []nn.RopeRun{{Pairs: q, Axis: 0}, {Pairs: q, Axis: 1}}}
+	case faultKimiAxes, faultGemma4RowFirst, faultLlama4RowFirst:
+		for i := range rope.Runs {
+			rope.Runs[i].Axis = 1 - rope.Runs[i].Axis
+		}
+	}
+	return rope
+}
+
+// ropeOffset is what the tower's rotary adds to a patch's grid coordinates
+// (Llama 4 counts from one).
+func (c TowerConfig) ropeOffset() int {
+	if c.fault == faultLlama4FromZero {
+		return 0
+	}
+	return int(c.conv.Rope.Offset)
 }
 
 // visRope is every row's {cos, sin} row -- HeadDim floats, the row's patch's
-// (grid row, grid column) on towerRope's two axes -- built once per grid by
-// the generated table kernel. The text block's rotation turns q and k by it
-// (visPrep) on the host, and the device by the same rows (Layers' cs).
+// (grid row, grid column) plus the rotary's offset, (0, 0) for a class row --
+// on towerRope's runs, built once per grid by the generated table kernel.
+// The text block's rotation turns q and k by it (visPrep) on the host, and
+// the device by the same rows (Layers' cs).
 func (s *State) visRope(n int) []float32 {
 	v := s.vis
 	c := v.t.Cfg
@@ -2032,26 +2054,19 @@ func (s *State) visRope(n int) []float32 {
 		v.ropeSC = make([]float32, n*c.HeadDim)
 	}
 	v.ropeSC = v.ropeSC[:n*c.HeadDim]
-	r := c.towerRope()
+	r, off := c.towerRope(), c.ropeOffset()
+	lead := 0
+	if c.CLS && !c.CLSLast {
+		lead = 1
+	}
+	var pos [2]int
 	for i := 0; i < n; i++ {
-		if c.Kind == jlm.ProjLlama4 {
-			var pos [2]int
-			llama4Coords(s.tfault(), i, gh*gw, gw, pos[:])
-			s.jit.RopeTableAt(r, v.ropeSC[i*c.HeadDim:(i+1)*c.HeadDim], pos[:])
-			continue
+		pos = [2]int{}
+		if j := i - lead; j >= 0 && j < gh*gw {
+			p := s.patchAt(j)
+			pos = [2]int{p/gw + off, p%gw + off}
 		}
-		if c.Kind == jlm.ProjGemma4V {
-			// (column, row): the column turns the first half.
-			p := s.patchAt(i)
-			pos := []int{p % gw, p / gw}
-			if s.tfault() == faultGemma4RowFirst {
-				pos[0], pos[1] = pos[1], pos[0]
-			}
-			s.jit.RopeTableAt(r, v.ropeSC[i*c.HeadDim:(i+1)*c.HeadDim], pos)
-			continue
-		}
-		p := s.patchAt(i)
-		s.jit.RopeTableAt(r, v.ropeSC[i*c.HeadDim:(i+1)*c.HeadDim], []int{p / gw, p % gw})
+		s.jit.RopeTableAt(r, v.ropeSC[i*c.HeadDim:(i+1)*c.HeadDim], pos[:])
 	}
 	v.ropeAt = [2]int{gh, gw}
 	return v.ropeSC
@@ -2141,6 +2156,11 @@ func (s *State) visWeights(li int) nn.LayerWeights {
 func (s *State) Vision() (*State, error) {
 	if s.vis != nil {
 		return s, nil
+	}
+	// A picture on the plan is a step of the model's vision segment
+	// (State.planPicture); the old engine path's vision segment is refused.
+	if err := s.planRefuses("a picture"); err != nil {
+		return nil, err
 	}
 	if s.m.tower == nil {
 		return nil, fmt.Errorf("model: this model has no vision tower")

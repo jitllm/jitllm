@@ -9,6 +9,7 @@ import (
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/run"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"github.com/jitllm/jitllm/jit"
 )
 
@@ -22,6 +23,7 @@ var repeatModel = flag.String("repeat-model", "stories15M-q8_0", "the model Test
 // state zero; the first step is not compared, since a buffer a launch
 // writes in part still holds what the step before it left.
 func TestEveryLaunchRepeatsItself(t *testing.T) {
+	fresh.Must(t, testmodels.Path(*repeatModel+".jlm"))
 	m, err := model.Open(testmodels.Path(*repeatModel + ".jlm"))
 	if err != nil {
 		t.Fatal(err)

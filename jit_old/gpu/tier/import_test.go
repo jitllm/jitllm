@@ -175,7 +175,7 @@ func TestUnifiedImportDoesNotCopyAndDoesNotCharge(t *testing.T) {
 	l := one.layers[0]
 	weights := one.used - (l.kvBytes + l.auxBytes + one.kvPoolBytes())
 	pool := one.pool.Used()
-	pgBytes, pageBytes := l.pg.bytes, one.pageBytes
+	pgBytes, pageBytes := l.pg.Bytes, one.pageBytes
 	one.mu.Unlock()
 	if weights != 0 {
 		t.Fatalf("%d bytes of weights charged to a device that imported all of them "+
@@ -473,7 +473,7 @@ func TestDropArenaUnwrapsBeforeItUnmaps(t *testing.T) {
 			}
 			one := g.devs[0]
 			one.mu.Lock()
-			resident := one.layers[0].pg.in
+			resident := one.layers[0].pg.In
 			one.mu.Unlock()
 			if unified && resident {
 				t.Fatal("the block is still resident after its arena entry was UNMAPPED: its " +

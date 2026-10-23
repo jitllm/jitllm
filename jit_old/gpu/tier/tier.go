@@ -14,6 +14,7 @@ package tier
 import (
 	"errors"
 	"fmt"
+	devpage "github.com/jitllm/jitllm/engine/page"
 	"reflect"
 	"runtime"
 	"sync"
@@ -1620,98 +1621,16 @@ func (s *Stats) add(o Stats) {
 	}
 }
 
-// Pool is a weight budget that every device spending the same bytes shares.
-//
-// An integrated GPU's heap is system memory, so a budget of its own beside the
-// host's would spend the same bytes twice; a discrete card's VRAM is genuinely
-// separate. So a device does not own a budget, it maps to one:
-//
-//	pool "host"   host RAM   <- the iGPU's weights and KV, and the host's own
-//	pool "sm_86"  4 GiB VRAM <- the discrete card's weights and KV
-//	(on Apple Silicon there is exactly one pool and everything is in it)
-//
-// backend.Device.UnifiedMemory() says which pool a device belongs to. The iGPU
-// is not refused: its execution units are real, and it is charged to the host
-// pool.
-//
-// A device also keeps its own limit, and both are checked: the pool stops two
-// devices double-spending one heap, the per-device limit is what -vram means
-// for one card.
-type Pool struct {
-	mu    sync.Mutex
-	name  string
-	used  uint64
-	limit uint64
-	// host marks the pool whose bytes are the host's own memory; its used
-	// bytes are what GPU.HostReserved reads, and so what the host's weight
-	// budget is reduced by.
-	host bool
-}
+// Pool is a weight budget every device spending the same bytes shares
+// (devpage.Pool).
+type Pool = devpage.Pool
 
-// NewPool is a named budget. limit 0 means unbounded, which is what a caller
-// that wants the per-device limits to be the only gate passes.
-func NewPool(name string, limit uint64) *Pool { return &Pool{name: name, limit: limit} }
+// NewPool is a named budget (devpage.NewPool).
+func NewPool(name string, limit uint64) *Pool { return devpage.NewPool(name, limit) }
 
-// NewHostPool is the budget for devices whose memory is the host's: an
-// integrated GPU, a CPU rasteriser, every device on Apple Silicon. limit is the
-// share of the host's own budget those devices may hold between them; the host
-// takes off its own only what they hold (see GPU.HostReserved).
-func NewHostPool(limit uint64) *Pool {
-	return &Pool{name: hostPoolName, limit: limit, host: true}
-}
-
-func (p *Pool) Name() string { return p.name }
-
-// Host reports that this pool's bytes come out of host RAM.
-func (p *Pool) Host() bool { return p != nil && p.host }
-
-func (p *Pool) Used() uint64 { p.mu.Lock(); defer p.mu.Unlock(); return p.used }
-
-func (p *Pool) Limit() uint64 { return p.limit }
-
-// SetLimit retargets the heap this pool stands for, at runtime. It does not
-// evict: a pool is an account, not an owner, and only a device knows which of
-// its blocks can be given back. GPU.SetBudget lowers the limits and then asks
-// each device to trim.
-func (p *Pool) SetLimit(n uint64) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.limit = n
-}
-
-// room reports whether n more bytes would fit, without taking them. PrepLayer
-// prices a whole block before uploading any of it (see blockBytes), so the
-// check and the charge are separate operations.
-func (p *Pool) room(n uint64) bool {
-	if p == nil || p.limit == 0 {
-		return true
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.used+n <= p.limit
-}
-
-func (p *Pool) take(n uint64) {
-	if p == nil {
-		return
-	}
-	p.mu.Lock()
-	p.used += n
-	p.mu.Unlock()
-}
-
-func (p *Pool) give(n uint64) {
-	if p == nil {
-		return
-	}
-	p.mu.Lock()
-	if p.used >= n {
-		p.used -= n
-	} else {
-		p.used = 0
-	}
-	p.mu.Unlock()
-}
+// NewHostPool is the budget for devices whose memory is the host's
+// (devpage.NewHostPool).
+func NewHostPool(limit uint64) *Pool { return devpage.NewHostPool(limit) }
 
 // room reports whether n more bytes of weights would fit: in this device's own
 // budget and in the pool its memory comes from (see Pool). Callers hold the
@@ -1722,7 +1641,7 @@ func (g *devTier) room(n uint64) bool {
 	// blocks out never sees the room it made.
 	g.settleRounding()
 	n += g.reserved()
-	return g.used+n <= g.limit && g.pool.room(n)
+	return g.used+n <= g.limit && g.pool.Room(n)
 }
 
 // roomSeat is room for a session's history on a block that has live sessions
@@ -1732,7 +1651,7 @@ func (g *devTier) roomSeat(need uint64, live int, hist uint64) bool {
 	if g.Sessions > 1 && live < g.Sessions {
 		res := g.reserved()
 		credit := min(hist, res)
-		return g.used+res-credit+need <= g.limit && g.pool.room(res-credit+need)
+		return g.used+res-credit+need <= g.limit && g.pool.Room(res-credit+need)
 	}
 	return g.room(need)
 }
@@ -1741,7 +1660,7 @@ func (g *devTier) roomSeat(need uint64, live int, hist uint64) bool {
 func (g *devTier) charge(n uint64) {
 	g.used += n
 	g.explicit += int64(n)
-	g.pool.take(n)
+	g.pool.Take(n)
 	g.settleRounding()
 }
 
@@ -1758,7 +1677,7 @@ func (g *devTier) refund(n uint64) {
 	}
 	g.used -= n
 	g.explicit -= int64(n)
-	g.pool.give(n)
+	g.pool.Give(n)
 	g.settleRounding()
 }
 
@@ -3372,7 +3291,7 @@ func (g *devTier) takeStage(key resKey) (qs, d, sc []uint32) {
 	}
 	delete(g.stage, key)
 	g.stageBytes -= st.bytes()
-	g.Config.stage.give(st.bytes())
+	g.Config.stage.Give(st.bytes())
 	return st.qs, st.d, st.sc
 }
 
@@ -3382,7 +3301,7 @@ func (s *staged) bytes() uint64 { return uint64(len(s.qs)+len(s.d)+len(s.sc)) * 
 func (g *devTier) DropStage() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.Config.stage.give(g.stageBytes)
+	g.Config.stage.Give(g.stageBytes)
 	g.stage, g.stageBytes = nil, 0
 }
 
@@ -3909,7 +3828,7 @@ func (g *devTier) prewarm(block int, q kernels.Quant, w []byte, nrows, k int) bo
 	}
 	g.stage[key] = st
 	g.stageBytes += st.bytes()
-	g.Config.stage.take(st.bytes())
+	g.Config.stage.Take(st.bytes())
 	g.TPrewarm += took
 	return true
 }

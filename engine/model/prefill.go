@@ -192,8 +192,8 @@ func named(spans []Span) []Span {
 // embedding runs. It is the prefill half of the embedding seam; see
 // ForwardEmbd.
 func (s *State) PrefillMixed(spans ...Span) ([]float32, error) {
-	if err := s.planRefuses("PrefillMixed"); err != nil {
-		return nil, err
+	if s.planSess != nil || s.planErr != nil {
+		return s.planPrefillMixed(spans)
 	}
 	return s.PrefillSeqMixed(0, spans...)
 }
@@ -425,6 +425,9 @@ func (s *State) SetPrefillInterrupt(f func() bool) { s.interrupt = f }
 // nil, is every row's multi-axis rotary position (spanRope); nil rows advance
 // like text (ropeOf).
 func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int32, rp [][4]int) ([]float32, error) {
+	if err := s.planRefuses("this prompt"); err != nil {
+		return nil, err
+	}
 	m, c := s.m, s.c
 	// src nil: every row is a vocabulary lookup of ids, with no function a
 	// row (prefillInto), so a warm prompt makes no closure per token.

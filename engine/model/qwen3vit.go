@@ -102,14 +102,14 @@ func (s *State) posLerp(x []float32, gh, gw, n int) {
 	v := s.vis
 	c := v.t.Cfg
 	E, side := c.NEmbd, c.PosSide
-	// Bilinear reads 2x2 table rows per patch, the bicubics 4x4. HunyuanVL's
-	// is bilinear without aligned corners.
+	// The stated filter: bilinear reads 2x2 table rows per patch, the
+	// bicubics 4x4. The fault reads a bicubic table bilinearly.
 	f := nn.AxisBilinear
 	switch {
 	case c.fault == faultBilinearTable:
-	case c.Kind == jlm.ProjHunyuanVL:
+	case c.conv.PosFilter == jlm.FilterLinear:
 		f = nn.AxisLinear
-	case c.PosBicubic:
+	case c.conv.PosFilter == jlm.FilterCubic:
 		f = nn.AxisCubic
 	}
 	per := nn.AxisTapCount(f)
@@ -168,10 +168,14 @@ func (s *State) posLerp(x []float32, gh, gw, n int) {
 // each in its reference's order, every step it does not take an identity.
 func (c TowerConfig) axisChain(size int, f nn.AxisFilter) [9]float32 {
 	side := float32(c.PosSide)
-	switch {
-	case f == nn.AxisBilinear:
+	chain := c.conv.PosChain
+	if c.fault == faultBilinearTable {
+		chain = jlm.ChainAligned
+	}
+	switch chain {
+	case jlm.ChainAligned:
 		return [9]float32{0, side - 1, float32(max(size-1, 1)), 1, 0, 0, 1, 0, 1}
-	case c.Kind == jlm.ProjKimiVL || f == nn.AxisLinear:
+	case jlm.ChainHalfPixel:
 		return [9]float32{0.5, side / float32(size), 1, 1, -0.5, 0, 1, 0, 1}
 	}
 	return [9]float32{0.5, 1, float32(size), 2, -1, 1, side, -1, 2}

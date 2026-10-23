@@ -540,7 +540,7 @@ func layoutOf(src *Source, fp Fingerprint, ver uint32) (*layout, error) {
 
 	// --- layout -------------------------------------------------------------
 	cfgb := encodeConfigAt(src.Config, ver)
-	visb := encodeVision(src.Vision)
+	visb := encodeVision(src.Vision, ver)
 	vocb := encodeVocab(src.Vocab)
 	fpb := encodeFP(fp)
 	// The table's size does not depend on the offsets it holds -- they are

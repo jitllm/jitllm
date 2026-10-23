@@ -213,3 +213,28 @@ func decomposePosResample(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}, nil
 }
+
+// SpliceNone is a step row's request word naming no picture row.
+const SpliceNone = ^uint32(0)
+
+// decomposeSplice is the step's input rows with a picture's rows in place:
+// row r takes row RequestRows+r of the request of the projector's rows (a
+// picture's step's, Step.Picture of them), where the word is not SpliceNone.
+func decomposeSplice(o graph.Op, c *Context) ([]Prim, error) {
+	P := c.Step.Picture
+	if len(o.In) != 2 || len(o.Out) != 1 || P < 1 || c.width(o.In[1]) < c.width(o.In[0]) {
+		return nil, fmt.Errorf("a splice of %d operands over pictures of %d rows", len(o.In), P)
+	}
+	U, F := ir.U32, ir.F32
+	sh := c.rows(o.Out[0])
+	// A picture's row is its projected row first, Wp wide with its taps'.
+	R, Wp := sh[0], c.width(o.In[1])
+	var x exprs
+	r, e := x.coord(0), x.coord(1)
+	at := x.load(2, x.op(OpAdd, U, x.u(RequestRows), r))
+	none := x.op(OpLess, ir.Pred, x.u(SpliceNone-1), at)
+	pic := x.at(1, []int{P, Wp}, x.op(OpMin, U, at, x.u(uint32(P-1))), e)
+	x.sel(F, none, x.at(0, sh, r, e), pic)
+	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), c.value(o.In[1]), tableRequest}, Out: c.value(o.Out[0]),
+		Expr: x.e, Facts: Facts{Extents: map[int]int{1: P * Wp, 2: RequestRows + R}}}}, nil
+}

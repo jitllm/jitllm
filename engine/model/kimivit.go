@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
 )
 
@@ -53,7 +52,7 @@ func (t *Tower) loadKimiVL(vec func(jlm.Role, int32) ([]float32, error)) error {
 		return fmt.Errorf("model: OpenTower: the position table is %d floats, not a square of %d-wide rows",
 			len(t.posW), c.NEmbd)
 	}
-	c.PosSide, c.PosBicubic = side, true
+	c.PosSide = side
 	if c.HeadDim%4 != 0 {
 		return fmt.Errorf("model: OpenTower: a kimivl head of %d does not split into (column, row) pairs", c.HeadDim)
 	}
@@ -72,21 +71,6 @@ func (t *Tower) loadKimiVL(vec func(jlm.Role, int32) ([]float32, error)) error {
 			len(t.projNorm), len(t.projNormB), c.NEmbd)
 	}
 	return nil
-}
-
-// kimiRope is MoonViT's 2-D rotary as runs over the whole head, NORM-paired:
-// pair 2j by the column (axis 1) and 2j+1 by the row (axis 0), both at
-// frequency index 2j of a HeadDim-wide table, which is base^(-4j/HeadDim).
-func (c TowerConfig) kimiRope() nn.Rope {
-	runs := make([]nn.RopeRun, c.HeadDim/2)
-	for p := range runs {
-		ax := 1 - p%2
-		if c.fault == faultKimiAxes {
-			ax = p % 2 // the violation: the row on the even pairs
-		}
-		runs[p] = nn.RopeRun{Pairs: 1, Axis: ax, Freq: p / 2 * 2}
-	}
-	return nn.Rope{NRot: c.HeadDim, Base: 10000, Runs: runs}
 }
 
 // kimiResize is the size a w x h picture is resampled to before its pad:

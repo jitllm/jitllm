@@ -160,6 +160,9 @@ func (s *State) advanceSeqs(took []int) {
 // A recurrent block steps the rows in position order through the slot's one
 // state, as a prefill would (nn.RowsDevice).
 func (s *State) prefillSeqDevice(slot int, tokens []int32) ([]float32, error) {
+	if err := s.planRefuses("this prompt"); err != nil {
+		return nil, err
+	}
 	if len(tokens) == 0 {
 		return nil, errEmptyPrompt{}
 	}

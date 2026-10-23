@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit_old/gpu/backend/recorder"
 	"github.com/jitllm/jitllm/jit_old/gpu/ir"
@@ -88,6 +89,7 @@ func describe(k *ir.Kernel) string {
 }
 
 func TestBlockGraph(t *testing.T) {
+	fresh.Must(t, testmodels.Path(*boardModel+".jlm"))
 	m, err := model.Open(testmodels.Path(*boardModel+".jlm"), model.WithJITOptions(nn.WithTune(nn.TuneOff)))
 	if err != nil {
 		t.Fatal(err)
@@ -113,6 +115,7 @@ func dump(t *testing.T, k *ir.Kernel) {
 // token decoded.
 func keys(t *testing.T, name string) int {
 	t.Helper()
+	fresh.Must(t, testmodels.Path(name+".jlm"))
 	m, err := model.Open(testmodels.Path(name+".jlm"), model.WithJITOptions(nn.WithTune(nn.TuneOff)))
 	if err != nil {
 		t.Fatal(err)
@@ -249,6 +252,7 @@ func TestBoard(t *testing.T) {
 }
 
 func TestAttendAttrs(t *testing.T) {
+	fresh.Must(t, testmodels.Path(*boardModel+".jlm"))
 	m, err := model.Open(testmodels.Path(*boardModel+".jlm"), model.WithJITOptions(nn.WithTune(nn.TuneOff)))
 	if err != nil {
 		t.Fatal(err)
@@ -309,6 +313,7 @@ func TestBoardComparesDataflow(t *testing.T) {
 // block graphs the engine builds from it.
 func composing(t *testing.T, name string) jit.Model {
 	t.Helper()
+	fresh.Must(t, testmodels.Path(name))
 	m, err := model.Open(testmodels.Path(name))
 	if err != nil {
 		t.Fatal(err)

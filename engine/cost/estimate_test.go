@@ -5,6 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 	"github.com/jitllm/jitllm/jit"
 )
 
@@ -13,7 +14,7 @@ import (
 func estimateRun(t *testing.T, d Device, s jit.Step) ([]*jit.Kernel, []Cost) {
 	t.Helper()
 	f := composing(t, *composeModel+".jlm")
-	parts, err := jit.Front(f)
+	parts, err := jit.Front(f, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,6 +131,7 @@ func TestEstimateReadsTheHeadOnce(t *testing.T) {
 // block graphs the engine builds from it.
 func composing(t *testing.T, name string) jit.Model {
 	t.Helper()
+	fresh.Must(t, testmodels.Path(name))
 	m, err := model.Open(testmodels.Path(name))
 	if err != nil {
 		t.Fatal(err)

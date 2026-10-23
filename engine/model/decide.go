@@ -186,6 +186,12 @@ func (m *Model) NewDecider(maxSeq int) (*Decider, error) {
 	if kind == jlm.DecisionNone {
 		return nil, fmt.Errorf("model: %s is not a decision model: its container states no decision readout", m.Cfg.Arch)
 	}
+	// On the plan, a decision whose readout the plan composes (Laya's head
+	// over its encoder, d1-omni's); every other one's readout is the old
+	// engine path's, and is refused.
+	if m.opt.planDev != nil && kind != jlm.DecisionLaya && kind != jlm.DecisionD1Omni {
+		return nil, fmt.Errorf("model: the %v decision readout does not run on the composer's plan yet", kind)
+	}
 	if m.Vocab == nil {
 		return nil, fmt.Errorf("model: a decision model needs its tokenizer: %v", m.TokErr)
 	}

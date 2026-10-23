@@ -1,6 +1,8 @@
 package model
 
 import (
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/jit"
 	"strings"
 	"testing"
 
@@ -43,6 +45,28 @@ func TestPagingDoesNotChangeTheAnswer(t *testing.T) {
 	}
 }
 
+// TestPlanPagesWithTheSameAnswer is TestPagingDoesNotChangeTheAnswer on the
+// composer's plan, on every device: the same budgets, the same ids.
+func TestPlanPagesWithTheSameAnswer(t *testing.T) {
+	devs := backend.Open()
+	defer func() {
+		for _, d := range devs {
+			d.Close()
+		}
+	}()
+	if len(devs) == 0 {
+		t.Fatal("no device: the plan's paging gate proved nothing")
+	}
+	gpu := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
+	for _, name := range principleModels() {
+		for _, dev := range devs {
+			t.Run(name+"/"+dev.API(), func(t *testing.T) {
+				pagingDoesNotChangeTheAnswer(t, jlmOf(t, testmodels.Path(name)), WithPlanDevice(dev, gpu))
+			})
+		}
+	}
+}
+
 // pagingDoesNotChangeTheAnswer is TestPagingDoesNotChangeTheAnswer on one model.
 // A frame count at or past the model's block count holds it whole and pages
 // nothing, so a fixture of three or four blocks runs the counts below it.
@@ -53,6 +77,7 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 	// arms different reduction orders, which flips tinyllama's 0.082 tie at
 	// token 7 -- a difference in tuning, read as one in paging.
 	ids := func(frames int) ([]int32, int, int64) {
+		devIns, devBlocks := 0, 0
 		m, err := Open(path, append([]Option{noTune}, opts...)...)
 		if err != nil {
 			t.Fatal(err)
@@ -64,6 +89,17 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 		in := m.Vocab.Encode("The capital of France is", true)
 		st := m.NewState(len(in) + 8 + 1)
 		defer st.Close()
+		// On the composer's plan the device holds the same count of blocks
+		// as the host's frames: its budget is what no page-out gives back
+		// and frames of its widest block.
+		res := m.PlanResidency()
+		if frames > 0 && res != nil {
+			m.SetPlanBudget(res.Permanent() + uint64(frames)*res.Widest())
+		}
+		ins0 := 0
+		if res != nil {
+			ins0 = res.PageIns
+		}
 		logits, err := st.Prefill(in)
 		if err != nil {
 			t.Fatal(err)
@@ -82,6 +118,17 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 			}
 		}
 		got, faults, _ := m.PageStats()
+		if frames > 0 && res != nil && res.Resident() >= res.Blocks() {
+			// Blocks narrower than the widest fit more of them in the
+			// frames' bytes, as the host's check above allows.
+			t.Logf("%2d frames' bytes hold all %d of the plan's device blocks", frames, res.Blocks())
+		} else if frames > 0 && res != nil {
+			devIns, devBlocks = res.PageIns-ins0, res.Blocks()
+			if devIns <= devBlocks {
+				t.Fatalf("%d frames: the plan's device paged in %d blocks over %d tokens of a %d-block model -- it did not page", frames, devIns, 8+len(in), devBlocks)
+			}
+			t.Logf("%2d frames: the plan's device paged in %d blocks", frames, devIns)
+		}
 		return out, got, faults
 	}
 

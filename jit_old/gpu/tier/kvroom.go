@@ -60,14 +60,8 @@ func (g *devTier) kvRoom() (positions, page int) {
 			grow = min(grow, free-kvTightMargin)
 		}
 	}
-	if g.pool != nil && g.pool.limit > 0 {
-		g.pool.mu.Lock()
-		if g.pool.used < g.pool.limit {
-			grow = min(grow, g.pool.limit-g.pool.used)
-		} else {
-			grow = 0
-		}
-		g.pool.mu.Unlock()
+	if g.pool != nil && g.pool.Limit() > 0 {
+		grow = min(grow, g.pool.Free())
 	}
 	// The one page eviction keeps free to stream through is not room.
 	pages := max(free-1, 0) + int(grow/max(per, 1))

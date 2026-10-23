@@ -97,11 +97,17 @@ type State struct {
 	// opened WithPlanDevice (planrun.go); planErr is why it has none.
 	planSess *run.Session
 	planErr  error
+	// planTok is the plan's sampled token of its last step.
+	planTok int32
+	// planBlank is a picture's rows' tokens on the plan, which their
+	// projected rows replace (run.Session.SpanRows), planFrom each one's
+	// picture row.
+	planBlank, planFrom []int32
 	// planChunk is the session of the prompt's chunks, sharing planSess's
 	// sequence; nil until a prompt of several tokens, and while the plan
 	// composes no step of several rows (a recurrent mixer's).
 	planChunk *run.Session
-	pos      int
+	pos       int
 	// sampleArgs, sampleVals and sampleIDs are ForwardSample's device
 	// sampler block and the candidates it returns, reused across tokens.
 	// SampledOnDevice counts the tokens whose candidates came home in place
@@ -3490,6 +3496,12 @@ func (s *State) SeqPos(i int) int { return s.bpos[i] }
 // positions: either left behind would give the next sequence the previous
 // one's history.
 func (s *State) Reset() {
+	if s.planSess != nil {
+		// The plan's recurrent state zeroed; an error is the next step's.
+		if err := s.planSess.Reset(); err != nil {
+			s.planErr = err
+		}
+	}
 	s.pos = 0
 	for i := range s.bpos {
 		s.bpos[i] = 0
@@ -3621,6 +3633,13 @@ func (s *State) Forward(token int32) ([]float32, error) {
 // (tanh saturates in float32 and can tie logits), so its token is Greedy over
 // exactly the logits Forward would return.
 func (s *State) ForwardGreedy(token int32) (int32, error) {
+	// On the plan, its own sample step's token.
+	if s.planSess != nil || s.planErr != nil {
+		if _, err := s.planForward(token); err != nil {
+			return 0, err
+		}
+		return s.planTok, nil
+	}
 	h := s.head
 	// Not with a head bias, which is added on the host (finishLogits).
 	onDev := h != nil && s.m.outB == nil
@@ -3654,6 +3673,9 @@ func (s *State) ForwardGreedy(token int32) (int32, error) {
 func (s *State) ForwardSample(token int32, smp *Sampler) (int32, error) {
 	if smp == nil || smp.Temp <= 0 {
 		return s.ForwardGreedy(token)
+	}
+	if err := s.planRefuses("a sampled token"); err != nil {
+		return 0, err
 	}
 	h := s.head
 	onDev := h != nil && s.m.outB == nil && s.c.LogitScale == 1 && smp.Bounded(s.c.NVocab) &&
@@ -3709,6 +3731,11 @@ func (s *State) ForwardSample(token int32, smp *Sampler) (int32, error) {
 // fill is a closure because the device-failure path calls it again to restart
 // the token on the host (Layers may have written part of s.x).
 func (s *State) forward(fill func() error) ([]float32, error) {
+	// The old engine path's token step: on the plan, every entry that
+	// reaches it refuses rather than running it.
+	if err := s.planRefuses("this token step"); err != nil {
+		return nil, err
+	}
 	s.touch()
 	// A State that led a host step across sessions lent the model its gate
 	// scratch (returnStep -> takeHostBatch), and the token it runs alone

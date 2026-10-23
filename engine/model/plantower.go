@@ -1,209 +1,369 @@
 package model
 
 import (
+	"errors"
 	"fmt"
-	"slices"
+	"math"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/run"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/jit"
 )
 
-// towerComposing is a vision tower as the composer reads it: its blocks'
-// graphs (towergraph.go), the patches in and the projector out, each graph
-// role found as the container stores it -- a block's matrices through the
-// loaded block (a tower's MLP matrices are told apart by shape), its vectors
-// under their vision roles.
+// towerComposing is a vision tower as the composer reads it, lowered from
+// what its container states and stores and never from its family's name:
+// the vision section's numbers and flags, the conventions its converter
+// stated for what the tensors do not show (jlm.VisionConv), and the tensors
+// themselves -- which exist, their shapes. A part no op states is refused by
+// what it is, and a stored tensor no graph binds refuses the tower.
 type towerComposing struct {
 	*jlm.File
-	m   *Model
-	t   *Tower
-	cfg jlm.Config
+	m      *Model
+	cfg    jlm.Config
+	entry  *graph.Graph
+	head   *graph.Graph
+	blocks []*graph.Graph
+	seams  []*graph.Graph
+	rope   *jlm.VisionRope
+	hd     int
+	// roles is each block's container role by the role its graph binds.
+	roles []map[jlm.Role]jlm.Role
 }
 
-// TowerComposing is the model's tower as the composer and the plan's runner
-// read it, nil where the container carries none.
-func (m *Model) TowerComposing() run.Source {
-	t := m.tower
-	if t == nil {
-		return nil
+// towerView is the model's tower as the plan's vision segment reads it,
+// lowered once, or the structural reason a part of it is not stated as ops.
+// It is the one model's segment (composing.Segment), never a plan of its own.
+func (m *Model) towerView() (*towerComposing, error) {
+	m.towerOnce.Do(func() { m.towerSeg, m.towerErr = m.lowerTower() })
+	return m.towerSeg, m.towerErr
+}
+
+func (m *Model) lowerTower() (*towerComposing, error) {
+	v := m.container.Vision()
+	if v == nil || m.tower == nil {
+		return nil, errors.New("model: the container carries no tower")
+	}
+	if !v.Conv.Stated() {
+		return nil, errors.New("model: the container states no conventions for its tower; reconvert or upgrade it")
+	}
+	tc := towerComposing{File: m.container, m: m}
+	if err := tc.lower(v); err != nil {
+		return nil, err
+	}
+	if err := tc.everyTensorBound(); err != nil {
+		return nil, err
 	}
 	cfg := *m.container.Config()
-	cfg.NEmbd, cfg.NLayer, cfg.NVocab, cfg.NRot = uint32(t.Cfg.NEmbd), uint32(len(t.graphs)), 0, 0
-	return towerComposing{File: m.container, m: m, t: t, cfg: cfg}
+	cfg.NEmbd, cfg.NLayer, cfg.NVocab, cfg.NRot = v.NEmbd, uint32(len(tc.blocks)), 0, 0
+	tc.cfg = cfg
+	return &tc, nil
+}
+
+// dense is the tower-wide tensor of role r, nil where the container has
+// none.
+func (c *towerComposing) dense(r jlm.Role) *jlm.Entry {
+	e, ok := c.File.Find(r, jlm.DenseBlock, -1)
+	if !ok {
+		return nil
+	}
+	return e
+}
+
+// lower states the tower's graphs.
+func (c *towerComposing) lower(v *jlm.Vision) error {
+	conv := v.Conv
+	E, H, L := int(v.NEmbd), int(v.NHead), int(v.NLayer)
+	if E == 0 || H == 0 || L == 0 || E%H != 0 {
+		return fmt.Errorf("model: a tower of %d blocks, %d wide, %d heads", L, E, H)
+	}
+	c.hd = E / H
+	P, S, eps, proj := int(v.PatchSize), max(int(v.Scale), 1), float64(v.Eps), int(v.ProjDim)
+	rms := conv.Norm == jlm.VisionRMSNorm
+	var act graph.Act
+	switch {
+	case v.Flags.Has(jlm.FlagGELU) && v.Flags.Has(jlm.FlagQuickGELU):
+		return errors.New("model: a tower stating GELU and quick-GELU at once")
+	case v.Flags.Has(jlm.FlagGELU):
+		act = graph.ActGELUTanh
+	case v.Flags.Has(jlm.FlagQuickGELU):
+		act = graph.ActQuickGELU
+	default:
+		act = graph.ActSiLU
+	}
+	if v.Flags.Has(jlm.FlagVisionRope) {
+		r := conv.Rope
+		if r == nil {
+			return errors.New("model: the tower turns its heads and states no rotary")
+		}
+		pairs := 0
+		for _, u := range r.Runs {
+			pairs += int(u.Pairs)
+		}
+		if 2*pairs != c.hd || r.Offset != 0 {
+			return fmt.Errorf("model: a tower rotary of %d pairs offset %d over heads of %d, which no op states yet", pairs, r.Offset, c.hd)
+		}
+		c.rope = r
+	}
+	for li := range L {
+		g, roles, err := c.block(li, E, H, int(v.NFFN), eps, act, rms)
+		if err != nil {
+			return fmt.Errorf("model: tower block %d: %w", li, err)
+		}
+		if p := int(v.WinPattern); p > 0 && (li+1)%p != 0 {
+			for i := range g.Ops {
+				if g.Ops[i].Kind == graph.OpAttend {
+					g.Ops[i].Attr.RowWindows = true
+				}
+			}
+		}
+		c.blocks = append(c.blocks, g)
+		c.roles = append(c.roles, roles)
+	}
+	// The entry: the patches, the class row, the position table read at the
+	// row's position or resampled to the grid, the pre-norm.
+	patch := c.dense(jlm.RoleVPatchEmbd)
+	if patch == nil || patch.NDim != 2 || int(patch.Dims[1]) != E || int(patch.Dims[0]) < 3*P*P {
+		return fmt.Errorf("model: no flat patch embedding of patches of %d to %d", P, E)
+	}
+	class := c.dense(jlm.RoleVClassEmbd) != nil
+	if class && conv.Class != jlm.ClassFirst {
+		return errors.New("model: a class row after the patches, which no op states yet")
+	}
+	en := graph.TowerEntry{NEmbd: E, Patch: P, K: int(patch.Dims[0]), PatchBias: c.dense(jlm.RoleVPatchBias) != nil,
+		Class: class, PreNorm: c.dense(jlm.RoleVPreNorm) != nil, Eps: eps}
+	if en.PreNorm && (rms || c.dense(jlm.RoleVPreNormBias) == nil) {
+		return errors.New("model: a pre-norm that is not a LayerNorm with its bias")
+	}
+	if pos := c.dense(jlm.RoleVPosEmbd); pos != nil {
+		en.Positions = int(pos.Dims[1])
+		fixed := (int(v.ImageSize) / max(P, 1)) * (int(v.ImageSize) / max(P, 1))
+		if class {
+			fixed++
+		}
+		switch {
+		case conv.PosChain != 0:
+			side := int(math.Sqrt(float64(en.Positions)))
+			if side*side != en.Positions {
+				return fmt.Errorf("model: a resampled position table of %d rows", en.Positions)
+			}
+			en.Resample = graph.Attrs{Span: side, Chain: uint8(conv.PosChain), Filter: uint8(conv.PosFilter)}
+		case v.MaxPixels != 0 || en.Positions != fixed:
+			return fmt.Errorf("model: a position table of %d rows read at a grid it does not state", en.Positions)
+		}
+	}
+	c.entry = en.Build()
+	// The deepstack taps: a merger over the residual after block b, its
+	// tensors the tower's at index b.
+	c.seams = make([]*graph.Graph, L+1)
+	taps := 0
+	for b := range L {
+		fc1, ok := c.File.Find(jlm.RoleVDsFC1, jlm.DenseBlock, int32(b))
+		if !ok {
+			continue
+		}
+		fc2, ok := c.File.Find(jlm.RoleVDsFC2, jlm.DenseBlock, int32(b))
+		if S < 2 || !ok || int(fc1.Dims[0]) != E*S*S || int(fc2.Dims[1]) != proj {
+			return fmt.Errorf("model: a deepstack tap after block %d not of the grouped rows to %d", b, proj)
+		}
+		tap := graph.TowerTap{Block: b, NEmbd: E, Scale: S, Hidden: int(fc1.Dims[1]), ProjDim: proj, Eps: eps}
+		c.seams[b+1] = tap.Build()
+		taps++
+	}
+	// The projector: the post-norm, the class row dropped, the grid grouped
+	// Scale x Scale (spatially, or as consecutive rows where the rows are in
+	// window order, then put back in raster order), one or two matrices.
+	win := v.WinPattern > 0
+	h := graph.TowerHead{NEmbd: E, Scale: S, ProjDim: proj, PostNorm: c.dense(jlm.RoleVPostNorm) != nil, RMS: rms,
+		Class: class, ProjBias: c.dense(jlm.RoleVProjBias) != nil, Taps: taps, Eps: eps, Fold: win, Take: win}
+	if h.PostNorm && !rms && c.dense(jlm.RoleVPostNormBias) == nil {
+		return errors.New("model: a LayerNorm after the blocks with no bias")
+	}
+	p1, p2 := c.dense(jlm.RoleVProj), c.dense(jlm.RoleVProj2)
+	if p1 == nil {
+		return errors.New("model: no projector matrix")
+	}
+	if int(p1.Dims[0]) != E*S*S {
+		return fmt.Errorf("model: a projector reading %d of the grouped %d, a pooled grid no op states yet", p1.Dims[0], E*S*S)
+	}
+	if p2 != nil {
+		if h.ProjBias != (c.dense(jlm.RoleVProj2Bias) != nil) {
+			return errors.New("model: a two-matrix projector with one bias")
+		}
+		h.Hidden = int(p1.Dims[1])
+		switch conv.ProjAct {
+		case jlm.VisionGELUTanh:
+			h.Act = graph.ActGELUTanh
+		case jlm.VisionGELUErf:
+			h.Act = graph.ActGELUErf
+		default:
+			return errors.New("model: a two-matrix projector with no stated activation")
+		}
+	}
+	if int(p1.Dims[1]) != proj && p2 == nil || p2 != nil && int(p2.Dims[1]) != proj {
+		return fmt.Errorf("model: a projector that does not reach the text model's %d", proj)
+	}
+	c.head = h.Build()
+	return nil
+}
+
+// block is tower block li as a dense non-causal block over what the
+// container stores for it, and its graph roles' container roles: the MLP's
+// matrices told apart by shape (SmolVLM's names its expansion fc2).
+func (c *towerComposing) block(li, E, H, nffn int, eps float64, act graph.Act, rms bool) (*graph.Graph, map[jlm.Role]jlm.Role, error) {
+	bi := int32(li)
+	has := func(r jlm.Role) bool { return c.File.Has(r, bi, -1) }
+	get := func(r jlm.Role) *jlm.Entry {
+		e, ok := c.File.Find(r, bi, -1)
+		if !ok {
+			return nil
+		}
+		return e
+	}
+	q, k, vv, o := get(jlm.RoleVAttnQ), get(jlm.RoleVAttnK), get(jlm.RoleVAttnV), get(jlm.RoleVAttnOut)
+	f1, f2 := get(jlm.RoleVFC1), get(jlm.RoleVFC2)
+	if q == nil || k == nil || vv == nil || o == nil || f1 == nil || f2 == nil {
+		return nil, nil, errors.New("no attention and MLP matrices, a block no op states yet")
+	}
+	for _, m := range []*jlm.Entry{q, k, vv, o} {
+		if int(m.Dims[0]) != E {
+			return nil, nil, errors.New("an attention matrix stored wider than the residual")
+		}
+	}
+	up, down := f1, f2
+	if int(f2.Dims[1]) == nffn && int(f1.Dims[0]) == nffn {
+		up, down = f2, f1
+	}
+	if int(up.Dims[1]) != nffn || int(up.Dims[0]) != E || int(down.Dims[0]) != nffn || int(down.Dims[1]) != E {
+		return nil, nil, errors.New("an MLP that does not expand to its width and back")
+	}
+	biasOf := map[jlm.Role]jlm.Role{jlm.RoleVFC1: jlm.RoleVFC1Bias, jlm.RoleVFC2: jlm.RoleVFC2Bias}
+	normB, ffnB := has(jlm.RoleVAttnNormBias), has(jlm.RoleVFFNNormBias)
+	if rms && (normB || ffnB) || !rms && (!normB || !ffnB) {
+		return nil, nil, errors.New("norms whose biases are not their stated kind's")
+	}
+	hd := E / H
+	d := graph.Dense{Block: li, NEmbd: E, NHead: H, NKVHead: H, HeadDim: hd, NFFN: nffn, Eps: eps,
+		Scale: 1 / math.Sqrt(float64(hd)), Act: act, LayerNorm: !rms, NonCausal: true, NoRope: c.rope == nil,
+		NormBias: normB, FFNNormBias: ffnB, QKVBias: has(jlm.RoleVAttnQBias), OutBias: has(jlm.RoleVAttnOutBias),
+		UpBias: has(biasOf[up.Role]), DownBias: has(biasOf[down.Role]),
+		Ungated: !has(jlm.RoleVFFNGate), GateBias: has(jlm.RoleVFFNGateBias)}
+	if r := c.rope; r != nil {
+		d.NRot, d.Layout = hd, graph.RopeNorm
+		if r.Neox {
+			d.Layout = graph.RopeNeox
+		}
+	}
+	roles := map[jlm.Role]jlm.Role{
+		jlm.RoleAttnQ: jlm.RoleVAttnQ, jlm.RoleAttnK: jlm.RoleVAttnK, jlm.RoleAttnV: jlm.RoleVAttnV, jlm.RoleAttnOut: jlm.RoleVAttnOut,
+		jlm.RoleAttnQBias: jlm.RoleVAttnQBias, jlm.RoleAttnKBias: jlm.RoleVAttnKBias, jlm.RoleAttnVBias: jlm.RoleVAttnVBias,
+		jlm.RoleAttnOutBias: jlm.RoleVAttnOutBias, jlm.RoleAttnNorm: jlm.RoleVAttnNorm, jlm.RoleAttnNormBias: jlm.RoleVAttnNormBias,
+		jlm.RoleFFNNorm: jlm.RoleVFFNNorm, jlm.RoleFFNNormBias: jlm.RoleVFFNNormBias,
+		jlm.RoleFFNUp: up.Role, jlm.RoleFFNDown: down.Role, jlm.RoleFFNUpBias: biasOf[up.Role], jlm.RoleFFNDownBias: biasOf[down.Role],
+		jlm.RoleFFNGate: jlm.RoleVFFNGate, jlm.RoleVFFNGateBias: jlm.RoleVFFNGateBias,
+	}
+	return d.Build(), roles, nil
+}
+
+// everyTensorBound refuses a tower that stores a tensor no graph binds: a
+// part of the tower the lowering does not state is a refusal, never a
+// tensor quietly left out.
+func (c towerComposing) everyTensorBound() error {
+	bound := map[[3]int32]bool{}
+	add := func(g *graph.Graph, block, index int32) {
+		if g == nil {
+			return
+		}
+		for _, o := range g.Ops {
+			for _, w := range o.Weight {
+				if e, ok := c.Find(w.Role, block, index); ok {
+					bound[[3]int32{int32(e.Role), e.Block, e.Index}] = true
+				}
+			}
+		}
+	}
+	add(c.entry, jlm.DenseBlock, -1)
+	add(c.head, jlm.DenseBlock, -1)
+	for li, g := range c.blocks {
+		add(g, int32(li), -1)
+	}
+	for _, g := range c.seams {
+		if g != nil {
+			add(g, jlm.DenseBlock, int32(g.Block))
+		}
+	}
+	for _, e := range c.Entries() {
+		// The audio tower is another segment; a video's second patch plane
+		// is read only for a video.
+		if !e.Role.Vision() || jlm.AudioRole(e.Role) || bound[[3]int32{int32(e.Role), e.Block, e.Index}] ||
+			e.Role == jlm.RoleVPatchEmbd && e.Index > 0 {
+			continue
+		}
+		return fmt.Errorf("model: the tower stores %v (block %d, index %d), which no op of its graphs binds", e.Role, e.Block, e.Index)
+	}
+	return nil
 }
 
 func (c towerComposing) Config() *jlm.Config { return &c.cfg }
 func (c towerComposing) Tower() bool         { return true }
-func (c towerComposing) Blocks() int         { return len(c.t.graphs) }
+func (c towerComposing) Segment() jit.Model  { return nil }
+func (c towerComposing) Blocks() int         { return len(c.blocks) }
 func (c towerComposing) ActWindow() int      { return c.m.ActWindow() }
 
-func (c towerComposing) SeamGraph(int) *graph.Graph { return nil }
+func (c towerComposing) EmbedGraph() *graph.Graph { return c.entry }
+func (c towerComposing) HeadGraph() *graph.Graph  { return c.head }
 
-// Rotaries is the tower's 2-D rotary where it turns q and k: each row's
-// position a cell of the picture's grid, a pair turned by the cell's row or
-// column (towerRope's runs).
-func (c towerComposing) Rotaries() []graph.Rotary {
-	if !c.gridRope() {
-		return nil
-	}
-	r := c.t.Cfg.towerRope()
-	return []graph.Rotary{{NRot: 2 * nn.RopeRuns(r.Runs), Base: r.Base, Grid: true}}
-}
-
-// Ropes is the engine's rotary for Rotaries' table.
-func (c towerComposing) Ropes() []nn.Rope {
-	if !c.gridRope() {
-		return nil
-	}
-	return []nn.Rope{c.t.Cfg.towerRope()}
-}
-
-// gridRope reports whether the tower turns by towerRope's (row, column)
-// runs over the whole head; a tower that turns another way (Pixtral's,
-// Llama 4's, Gemma 4's, Kimi-VL's) has no stated table yet.
-func (c towerComposing) gridRope() bool {
-	tc := c.t.Cfg
-	switch tc.Kind {
-	case jlm.ProjPixtral, jlm.ProjLlama4, jlm.ProjGemma4V, jlm.ProjKimiVL:
-		return false
-	}
-	return tc.Rope && 2*nn.RopeRuns(tc.towerRope().Runs) == tc.HeadDim
-}
-
-// BlockGraph is block li's graph, its attention inside each row's window
-// where the block is a windowed one (every block but each WinPattern'th).
 func (c towerComposing) BlockGraph(li int) *graph.Graph {
-	if li < 0 || li >= len(c.t.graphs) || c.t.graphs[li] == nil {
+	if li < 0 || li >= len(c.blocks) {
 		return nil
 	}
-	g := c.t.graphs[li]
-	if p := c.t.Cfg.WinPattern; p == 0 || (li+1)%p == 0 {
-		return g
-	}
-	w := *g
-	w.Ops = slices.Clone(g.Ops)
-	for i := range w.Ops {
-		if w.Ops[i].Kind == graph.OpAttend {
-			w.Ops[i].Attr.RowWindows = true
-		}
-	}
-	return &w
+	return c.blocks[li]
 }
 
-// towerVectorRoles is each block vector's vision role by the role its graph
-// binds.
-var towerVectorRoles = map[jlm.Role]jlm.Role{
-	jlm.RoleAttnNorm: jlm.RoleVAttnNorm, jlm.RoleAttnNormBias: jlm.RoleVAttnNormBias,
-	jlm.RoleFFNNorm: jlm.RoleVFFNNorm, jlm.RoleFFNNormBias: jlm.RoleVFFNNormBias,
-	jlm.RoleAttnQBias: jlm.RoleVAttnQBias, jlm.RoleAttnKBias: jlm.RoleVAttnKBias,
-	jlm.RoleAttnVBias: jlm.RoleVAttnVBias, jlm.RoleAttnOutBias: jlm.RoleVAttnOutBias,
-	jlm.RolePostAttnNorm: jlm.RoleVPostAttnNorm, jlm.RolePostFFNNorm: jlm.RoleVPostFFNNorm,
-	jlm.RoleAttnQNorm: jlm.RoleVAttnQNorm, jlm.RoleAttnKNorm: jlm.RoleVAttnKNorm, jlm.RoleVClamp: jlm.RoleVClamp,
-	jlm.RoleVFFNGateBias: jlm.RoleVFFNGateBias,
+func (c towerComposing) SeamGraph(li int) *graph.Graph {
+	if li < 0 || li >= len(c.seams) {
+		return nil
+	}
+	return c.seams[li]
 }
 
-// towerBiasOf is each MLP matrix's bias role, by the matrix's own.
-var towerBiasOf = map[jlm.Role]jlm.Role{jlm.RoleVFC1: jlm.RoleVFC1Bias, jlm.RoleVFC2: jlm.RoleVFC2Bias}
+// Rotaries is the stated rotary: each row's position a cell of the
+// picture's grid.
+func (c towerComposing) Rotaries() []graph.Rotary {
+	if c.rope == nil {
+		return nil
+	}
+	return []graph.Rotary{{NRot: c.hd, Base: float64(c.rope.Base), Grid: true}}
+}
 
-// Find is a tensor of the tower: a block's by the role its graph binds, a
-// tower-wide one (jlm.DenseBlock) as the container stores it.
+// Ropes is the engine's rotary for Rotaries' table, the stated runs.
+func (c towerComposing) Ropes() []nn.Rope {
+	r := c.rope
+	if r == nil {
+		return nil
+	}
+	rope := nn.Rope{NRot: int(r.FreqDim), Base: float64(r.Base), Neox: r.Neox}
+	for _, u := range r.Runs {
+		rope.Runs = append(rope.Runs, nn.RopeRun{Pairs: int(u.Pairs), Axis: int(u.Axis), Freq: int(u.Freq), Step: int(u.Step)})
+	}
+	return []nn.Rope{rope}
+}
+
+// Find is a tensor of the tower: a block's by the role its graph binds, as
+// the block stores it; a tower-wide one as the container stores it.
 func (c towerComposing) Find(role jlm.Role, block, index int32) (*jlm.Entry, bool) {
 	if block == jlm.DenseBlock {
 		return c.File.Find(role, block, index)
 	}
-	if block < 0 || int(block) >= len(c.t.graphs) {
+	if block < 0 || int(block) >= len(c.roles) {
 		return nil, false
 	}
-	l := &c.m.layers[c.t.base+int(block)]
-	mats := map[jlm.Role]*tensor{jlm.RoleAttnQ: &l.wq, jlm.RoleAttnK: &l.wk, jlm.RoleAttnV: &l.wv, jlm.RoleAttnOut: &l.wo,
-		jlm.RoleFFNGate: &l.gate, jlm.RoleFFNUp: &l.up, jlm.RoleFFNDown: &l.down}
-	if t, ok := mats[role]; ok {
-		return t.e, t.e != nil
-	}
-	v, ok := towerVectorRoles[role]
-	switch role {
-	case jlm.RoleFFNUpBias, jlm.RoleFFNDownBias:
-		m := l.up.e
-		if role == jlm.RoleFFNDownBias {
-			m = l.down.e
-		}
-		if m == nil {
-			return nil, false
-		}
-		v, ok = towerBiasOf[m.Role]
-	}
+	r, ok := c.roles[block][role]
 	if !ok {
 		return nil, false
 	}
-	return c.File.Find(v, block, index)
-}
-
-// EmbedGraph is the tower's entry: its class row first where it has one,
-// the patches through the patch embedding, their positions' rows and its
-// pre-norm.
-func (c towerComposing) EmbedGraph() *graph.Graph {
-	t, tc := c.t, c.t.Cfg
-	if tc.CLS && (tc.CLSLast || t.opt.towerCLSLast) || tc.PosBuckets > 0 || tc.PosAxis > 0 ||
-		t.posW != nil && tc.PosSide == 0 && (tc.Dynamic() || tc.Kind == jlm.ProjPhi4 || tc.Kind == jlm.ProjLFM2) || t.embdNorm != nil ||
-		len(tc.Deep) > 0 || tc.Rope && !c.gridRope() {
-		return nil
-	}
-	e := graph.TowerEntry{NEmbd: tc.NEmbd, Patch: tc.PatchSz, K: t.patchW.k, PatchBias: t.patchB != nil,
-		Class: tc.CLS, PreNorm: t.preLnW != nil, Eps: tc.Eps}
-	if t.posW != nil {
-		e.Positions = len(t.posW) / tc.NEmbd
-	}
-	if tc.PosSide > 0 {
-		// The host's posLerp: Qwen3-VL's bilinear with aligned corners,
-		// HunyuanVL's half-pixel bilinear, Kimi-VL's half-pixel bicubic,
-		// GLM-4.xV's grid_sample bicubic.
-		r := graph.Attrs{Span: tc.PosSide, Chain: graph.ChainGridSample, Filter: graph.FilterBilinear}
-		switch {
-		case tc.Kind == jlm.ProjHunyuanVL:
-			r.Filter = graph.FilterLinear
-		case tc.PosBicubic:
-			r.Filter = graph.FilterCubic
-		}
-		switch {
-		case r.Filter == graph.FilterBilinear:
-			r.Chain = graph.ChainAligned
-		case tc.Kind == jlm.ProjKimiVL || r.Filter == graph.FilterLinear:
-			r.Chain = graph.ChainHalfPixel
-		}
-		if e.Positions != tc.PosSide*tc.PosSide {
-			return nil
-		}
-		e.Resample = r
-	}
-	return e.Build()
-}
-
-// HeadGraph is the tower's projector: idefics3's (its post-norm, its
-// regroup and one matrix), llava's (the class row dropped, a matrix, the
-// tanh GELU llama.cpp's projector runs, a matrix) or Qwen2-VL's merger (its
-// norm, the 2x2 regroup, the same two matrices).
-func (c towerComposing) HeadGraph() *graph.Graph {
-	t, tc := c.t, c.t.Cfg
-	h := graph.TowerHead{NEmbd: tc.NEmbd, Scale: tc.Scale, ProjDim: tc.ProjDim, PostNorm: t.postLnW != nil,
-		Class: tc.CLS, ProjBias: t.projB != nil, Eps: tc.Eps}
-	switch {
-	case tc.Kind == jlm.ProjIdefics3 && t.projW2.e == nil:
-	case tc.Kind == jlm.ProjMLP && t.projW2.e != nil && tc.Scale <= 1 && (t.projB != nil) == (t.projB2 != nil),
-		tc.Kind == jlm.ProjQwen2VL && t.projW2.e != nil && t.projNorm == nil && (t.projB != nil) == (t.projB2 != nil):
-		h.Hidden, h.Act = t.projW.rows, graph.ActGELUTanh
-	case tc.Kind == jlm.ProjQwen3VL && len(tc.Deep) == 0 && t.projW2.e != nil && t.projNorm == nil && (t.projB != nil) == (t.projB2 != nil):
-		h.Hidden, h.Act = t.projW.rows, graph.ActGELUTanh
-	case tc.Kind == jlm.ProjQwen25VL && t.projW2.e != nil && t.projNorm == nil && (t.projB != nil) == (t.projB2 != nil):
-		// Its rows are the picture's in window order (TowerPicture): each
-		// merge unit's rows consecutive, the merged rows put back in raster
-		// order.
-		h.Hidden, h.Act, h.RMS, h.Fold, h.Take = t.projW.rows, graph.ActGELUTanh, tc.RMS, true, true
-	default:
-		return nil
-	}
-	return h.Build()
+	return c.File.Find(r, block, index)
 }
 
 // TowerPicture is picture px's step on the tower's plan, a grid gh x gw
@@ -213,7 +373,7 @@ func (c towerComposing) HeadGraph() *graph.Graph {
 func (t *Tower) TowerPicture(px []float32, gh, gw int) *run.Picture {
 	c := t.Cfg
 	p := &run.Picture{Pixels: px, Grid: gw, Rows: gh * gw}
-	if c.CLS {
+	if t.container.Has(jlm.RoleVClassEmbd, jlm.DenseBlock, -1) {
 		p.Rows++
 	}
 	if c.WinPattern == 0 {
@@ -238,18 +398,4 @@ func (t *Tower) TowerPicture(px []float32, gh, gw int) *run.Picture {
 		p.Take[(q/gw/sc)*mw+(q%gw)/sc] = int32(i)
 	}
 	return p
-}
-
-// towerRefusal names why the tower has no composed plan, nil where it has
-// one.
-func (c towerComposing) towerRefusal() error {
-	if c.EmbedGraph() == nil || c.HeadGraph() == nil {
-		return fmt.Errorf("model: the %s tower's entry or projector is not stated for the composer", c.t.Cfg.Projector)
-	}
-	for li, g := range c.t.graphs {
-		if g == nil {
-			return fmt.Errorf("model: the %s tower's block %d is not stated as a graph", c.t.Cfg.Projector, li)
-		}
-	}
-	return nil
 }

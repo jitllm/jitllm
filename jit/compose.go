@@ -21,6 +21,19 @@ type Step struct {
 	// (Keys positions): one for a prompt's chunk or an encoder's sequence,
 	// 0 for a sequence a row.
 	Seqs int
+	// Picture is the rows a picture's step of the model's vision segment
+	// runs over (its patches and the rows before them), 0 for a plan that
+	// composes no vision segment.
+	Picture int
+}
+
+// stepOf is the step a part of segment seg is composed for: a vision
+// segment's a picture's, one bidirectional sequence of Picture rows.
+func (s Step) stepOf(seg Segment) Step {
+	if seg != SegmentVision {
+		return s
+	}
+	return Step{Rows: s.Picture, Page: s.Page, Keys: s.Picture, ActWindow: s.ActWindow, Seqs: 1, Picture: s.Picture}
 }
 
 // Histories is how many histories a step's rows read: Seqs, or a row's
@@ -121,7 +134,7 @@ type Plan struct {
 // Compose forms the model in f at step s on placement p. A part it cannot
 // form is an error, beside the parts it formed.
 func (r *Registry) Compose(f Model, s Step, p Placement) (*Plan, error) {
-	parts, err := Front(f)
+	parts, err := Front(f, s.Picture > 0)
 	if err != nil {
 		return nil, err
 	}
@@ -140,9 +153,11 @@ func (r *Registry) Compose(f Model, s Step, p Placement) (*Plan, error) {
 			Words: s.Rows * a.Part.Graph.Values[v].Width})
 	}
 	var errs []error
+	// A run is consecutive parts on one device and of one segment: a
+	// picture's step and a token's are launched apart.
 	for i := 0; i < len(parts); {
 		j := i + 1
-		for j < len(parts) && plan.Parts[j].Device == plan.Parts[i].Device {
+		for j < len(parts) && plan.Parts[j].Device == plan.Parts[i].Device && parts[j].Segment == parts[i].Segment {
 			j++
 		}
 		if err := r.formRun(f, plan.Parts[i:j], i, s); err != nil {
@@ -206,7 +221,10 @@ func boundaries(ks []*Kernel, run []PartPlan, first int) {
 	alias := map[Operand]Operand{}
 	for i := 1; i < len(run); i++ {
 		a, b := run[i-1].Part.Graph, run[i].Part.Graph
-		if len(a.Out) == 0 || len(b.In) == 0 {
+		// An input a feed names is that feed's, wherever its part runs
+		// (a picture's rows, from the vision segment's run): never the
+		// part before's output.
+		if len(a.Out) == 0 || len(b.In) == 0 || fed(run[i].Part, 0) {
 			continue
 		}
 		from := Operand{Kind: OperandValue, Value: a.Out[0], Of: first + i - 1}
@@ -234,6 +252,16 @@ func boundaries(ks []*Kernel, run []PartPlan, first int) {
 			}
 		}
 	}
+}
+
+// fed reports whether part p's input in is named by one of its feeds.
+func fed(p Part, in int) bool {
+	for _, f := range p.Feeds {
+		if f.In == in {
+			return true
+		}
+	}
+	return false
 }
 
 // PartCode is a kernel's code and the part of the model it belongs to.

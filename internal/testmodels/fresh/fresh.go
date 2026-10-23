@@ -32,9 +32,10 @@ type result struct {
 
 // Container makes the container at path one this build reads, once per
 // process: a container that does not open and has X.gguf beside it is
-// reconverted from that. A container that opens, a path that is not a
-// container, an absent one and one with no single GGUF beside it (a merged
-// vision container) are left alone, and the caller's load says what is wrong.
+// reconverted from that, or from the safetensors directory X beside it. A
+// container that opens, a path that is not a container, an absent one and
+// one with no single source beside it (a merged vision container) are left
+// alone, and the caller's load says what is wrong.
 func Container(path string) error {
 	if !strings.HasSuffix(path, jlm.Ext) {
 		return nil
@@ -62,16 +63,28 @@ func reconvert(path string) error {
 	if _, err := os.Stat(path); err != nil {
 		return nil
 	}
+	// The source beside it: X.gguf, or a safetensors directory X.
 	src := strings.TrimSuffix(path, jlm.Ext) + ".gguf"
+	from := func(dst string) error {
+		_, err := convert.FromGGUFs(src, "", dst, jlm.Fingerprint{Host: "test"})
+		return err
+	}
 	if _, err := os.Stat(src); err != nil {
-		return nil
+		src = strings.TrimSuffix(path, jlm.Ext)
+		if fi, err := os.Stat(src); err != nil || !fi.IsDir() {
+			return nil
+		}
+		from = func(dst string) error {
+			_, err := convert.FromSafetensors(src, dst, jlm.Fingerprint{Host: "test"})
+			return err
+		}
 	}
 	// A private name and a rename: another test binary must not open a
 	// half-written container. The private name keeps the extension, as the
 	// converter writes nothing else.
 	tmp := filepath.Join(filepath.Dir(path),
 		fmt.Sprintf(".%s.%d%s", strings.TrimSuffix(filepath.Base(path), jlm.Ext), os.Getpid(), jlm.Ext))
-	if _, err := convert.FromGGUFs(src, "", tmp, jlm.Fingerprint{Host: "test"}); err != nil {
+	if err := from(tmp); err != nil {
 		os.Remove(tmp)
 		return fmt.Errorf("%s does not open (%v), and reconverting it from %s failed: %w",
 			filepath.Base(path), openErr, filepath.Base(src), err)

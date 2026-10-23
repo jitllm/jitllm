@@ -74,29 +74,16 @@ func (c TowerConfig) pixtralResize(w, h int) (rw, rh int, err error) {
 }
 
 // ropeNeox reports whether the tower's 2-D rotary pairs a head's dimensions
-// (i, i+HeadDim/2), as Qwen-VL's does, rather than (2i, 2i+1), as the
-// Pixtral GGUF's permuted q and k want.
+// (i, i+HeadDim/2) rather than (2i, 2i+1), as its container states
+// (jlm.VisionRope.Neox).
 func (c TowerConfig) ropeNeox() bool {
-	return c.Kind != jlm.ProjPixtral && c.Kind != jlm.ProjLlama4 && c.Kind != jlm.ProjKimiVL
+	return c.conv.Rope == nil || c.conv.Rope.Neox
 }
 
 // The gates' violations (towerFault values faultPixtralFreq and faultPixtralMerge): Qwen-VL's frequencies
 // (each half from the first) where Pixtral's take the even and the odd, and
 // the merger handed the unfold's channel-major order its columns no longer
 // are in.
-
-// pixtralRope is Pixtral's 2-D rotary as a multi-axis table: the first
-// HeadDim/4 pairs turned by the grid row at the even frequency indices of
-// base^(-2i/HeadDim), the next HeadDim/4 by the column at the odd ones.
-func (c TowerConfig) pixtralRope() nn.Rope {
-	q := c.HeadDim / 4
-	if c.fault == faultPixtralFreq {
-		return nn.Rope{NRot: c.HeadDim / 2, Base: 10000,
-			Runs: []nn.RopeRun{{Pairs: q, Axis: 0}, {Pairs: q, Axis: 1}}}
-	}
-	return nn.Rope{NRot: c.HeadDim, Base: 10000,
-		Runs: []nn.RopeRun{{Pairs: q, Axis: 0, Freq: 0, Step: 2}, {Pairs: q, Axis: 1, Freq: 1, Step: 2}}}
-}
 
 // pixtralRows is how many rows a gh x gw patch grid becomes: the merged grid
 // and a break row after each merged row but the last.

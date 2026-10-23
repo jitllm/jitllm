@@ -40,34 +40,6 @@ import (
 // The block -- LayerNorms with biases, biased q/k/v/o, a GELU MLP with biases
 // -- is the kit every CLIP tower runs.
 
-// llama4Rope is the tower's 2-D rotary as a multi-axis table: NRot is half
-// a head, so frequency index i is base^(-4i/HeadDim), and each run of
-// HeadDim/4 adjacent pairs starts from index 0 -- the column's first, then
-// the row's.
-func (c TowerConfig) llama4Rope() nn.Rope {
-	q := c.HeadDim / 4
-	return nn.Rope{NRot: c.HeadDim / 2, Base: 10000,
-		Runs: []nn.RopeRun{{Pairs: q, Axis: 0}, {Pairs: q, Axis: 1}}}
-}
-
-// llama4Coords is the rotary position of residual row i of a tile of np
-// patches, gw a side: (column+1, row+1) for a patch, (0, 0) -- no turn -- for
-// the class token, which is the last row.
-func llama4Coords(f towerFault, i, np, gw int, dst []int) {
-	if i >= np {
-		dst[0], dst[1] = 0, 0
-		return
-	}
-	switch f {
-	case faultLlama4FromZero:
-		dst[0], dst[1] = i%gw, i/gw
-	case faultLlama4RowFirst:
-		dst[0], dst[1] = i/gw+1, i%gw+1
-	default:
-		dst[0], dst[1] = i%gw+1, i/gw+1
-	}
-}
-
 // llama4Canvases is find_supported_resolutions: every (rows, columns) of up
 // to max tiles, in the reference's order -- tile counts from max down, each
 // count's factor pairs ascending, grouped by aspect ratio in the order each

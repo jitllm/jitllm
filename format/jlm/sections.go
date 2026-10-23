@@ -554,7 +554,7 @@ func bitsSet(f Flags) int {
 
 // --- Vision -------------------------------------------------------------
 
-func encodeVision(v *Vision) []byte {
+func encodeVision(v *Vision, ver uint32) []byte {
 	if v == nil {
 		return nil
 	}
@@ -572,6 +572,28 @@ func encodeVision(v *Vision) []byte {
 		w.f32(v.Std[i])
 	}
 	w.u32(uint32(v.Flags))
+	// From v31, the conventions the tensors do not show.
+	if ver >= 31 {
+		c := v.Conv
+		for _, b := range []uint8{uint8(c.Norm), uint8(c.ProjAct), uint8(c.Class), uint8(c.PosChain), uint8(c.PosFilter)} {
+			w.u8(b)
+		}
+		if r := c.Rope; r == nil {
+			w.u8(0)
+		} else {
+			w.u8(1)
+			w.f32(r.Base)
+			w.u32(r.FreqDim)
+			w.u32(r.Offset)
+			w.bool(r.Neox)
+			w.u32(uint32(len(r.Runs)))
+			for _, u := range r.Runs {
+				for _, x := range []uint32{u.Pairs, u.Axis, u.Freq, u.Step} {
+					w.u32(x)
+				}
+			}
+		}
+	}
 	// The optional tail: a tiling preprocessor's crop count bounds (InternVL),
 	// then Qwen2.5-VL's window attention, each written only when it or a field
 	// after it is set, so every earlier tower's section is byte-identical.
@@ -601,7 +623,7 @@ func encodeVision(v *Vision) []byte {
 	return w.b
 }
 
-func decodeVision(b []byte) (*Vision, error) {
+func decodeVision(b []byte, ver uint32) (*Vision, error) {
 	if len(b) == 0 {
 		return nil, nil
 	}
@@ -620,6 +642,23 @@ func decodeVision(b []byte) (*Vision, error) {
 		v.Std[i] = r.f32()
 	}
 	v.Flags = Flags(r.u32())
+	if ver >= 31 {
+		c := &v.Conv
+		c.Norm, c.ProjAct, c.Class = VisionNorm(r.u8()), VisionAct(r.u8()), VisionClass(r.u8())
+		c.PosChain, c.PosFilter = ResampleChain(r.u8()), ResampleFilter(r.u8())
+		if r.u8() == 1 {
+			rp := &VisionRope{Base: r.f32(), FreqDim: r.u32(), Offset: r.u32(), Neox: r.bool()}
+			n := r.u32()
+			if r.err == nil && uint64(n)*16 > uint64(len(r.b)) {
+				return nil, fmt.Errorf("jlm: a tower rotary of %d runs in %d bytes", n, len(r.b))
+			}
+			rp.Runs = make([]VisionRun, n)
+			for i := range rp.Runs {
+				rp.Runs[i] = VisionRun{Pairs: r.u32(), Axis: r.u32(), Freq: r.u32(), Step: r.u32()}
+			}
+			c.Rope = rp
+		}
+	}
 	// The optional tail; absent is a tower that takes one square and has no
 	// windows.
 	if r.err == nil && len(r.b) > 0 {

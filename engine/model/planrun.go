@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/jitllm/jitllm/backend"
@@ -138,6 +139,41 @@ func (c composing) ActWindow() int { return c.m.ActWindow() }
 // Tower is false: the text model's view.
 func (c composing) Tower() bool { return false }
 
+// Segment is the model's vision segment, the tower as the composer reads it
+// (TowerComposing); nil where the model has no tower or the tower is not
+// stated as ops.
+func (c composing) Segment() jit.Model {
+	s, err := c.m.towerView()
+	if err != nil {
+		return nil
+	}
+	return *s
+}
+
+// WithPlanPictureRows composes a planned model's vision segment for
+// pictures of up to n rows of its tower; the default is a fixed-size
+// tower's own grid, and a tower whose grid follows the picture composes
+// none without it.
+func WithPlanPictureRows(n int) Option { return func(l *loadOpts) { l.opt.planPictureRows = n } }
+
+// planPictureRows is the rows of a picture's step the model's plan composes
+// its vision segment for, 0 for none.
+func (m *Model) planPictureRows() int {
+	if m.tower == nil {
+		return 0
+	}
+	if _, err := m.towerView(); err != nil {
+		return 0
+	}
+	if n := m.opt.planPictureRows; n > 0 {
+		return n
+	}
+	if c := m.tower.Cfg; !c.Dynamic() {
+		return c.Seq()
+	}
+	return 0
+}
+
 // Rotaries is the model's rotaries as its rotary ops state them: the
 // model's own, then the sliding layers' where it trains two.
 func (c composing) Rotaries() []graph.Rotary {
@@ -180,7 +216,7 @@ func (m *Model) runner(keys int) (*run.Runner, error) {
 	if r := m.runners[keys]; r != nil {
 		return r, nil
 	}
-	r, err := run.New(m.Composing(), m.opt.planDev, m.opt.planGPU, keys)
+	r, err := run.New(m.Composing(), m.opt.planDev, m.opt.planGPU, keys, m.runOpts()...)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +256,7 @@ func (m *Model) planRunner(keys, rows int) (*run.Runner, error) {
 	if m.chunkRunners == nil {
 		m.chunkRunners, m.chunkErrs = map[[2]int]*run.Runner{}, map[[2]int]error{}
 	}
-	r, err := run.New(m.Composing(), m.opt.planDev, m.opt.planGPU, keys, run.WithRows(rows))
+	r, err := run.New(m.Composing(), m.opt.planDev, m.opt.planGPU, keys, append(m.runOpts(), run.WithRows(rows))...)
 	if err != nil {
 		m.chunkErrs[at] = err
 		return nil, err
@@ -240,6 +276,50 @@ func (m *Model) closeRunners() {
 		r.Close()
 		delete(m.chunkRunners, k)
 	}
+	if m.planRes != nil {
+		m.planRes.Close()
+		m.planRes = nil
+	}
+}
+
+// WithPlanBudget holds a planned model's weights and its sessions' buffers
+// on the plan's device within n bytes (the device tier's -vram); the
+// default is page.BudgetFor of what the device reports free. Every block
+// pages whatever the budget: it decides only whether eviction fires.
+func WithPlanBudget(n uint64) Option { return func(l *loadOpts) { l.opt.planBudget = n } }
+
+// SetPlanBudget retargets the plan's device budget while the model runs,
+// paging blocks out until it holds (run.Residency.SetBudget); before the
+// first runner it is the budget the residency opens with.
+func (m *Model) SetPlanBudget(n uint64) {
+	m.planMu.Lock()
+	defer m.planMu.Unlock()
+	m.opt.planBudget = n
+	if m.planRes != nil {
+		m.planRes.SetBudget(n)
+	}
+}
+
+// PlanResidency is the model's weights on the plan's device, nil before its
+// first runner.
+func (m *Model) PlanResidency() *run.Residency {
+	m.planMu.Lock()
+	defer m.planMu.Unlock()
+	return m.planRes
+}
+
+// runOpts is what every runner of the model's plan is made with: the one
+// residency of its weights on the device, and its vision segment where it
+// composes one. planMu is held.
+func (m *Model) runOpts() []run.Option {
+	if m.planRes == nil {
+		m.planRes = run.NewResidency(m.Composing(), m.opt.planDev, nil, m.opt.planBudget)
+	}
+	opts := []run.Option{run.WithResidency(m.planRes)}
+	if n := m.planPictureRows(); n > 0 {
+		opts = append(opts, run.WithPictureRows(n))
+	}
+	return opts
 }
 
 // openPlan gives s a session on the runner at its capacity; an error waits
@@ -257,10 +337,14 @@ func (s *State) planForward(token int32) ([]float32, error) {
 	if s.planErr != nil {
 		return nil, s.planErr
 	}
-	logits, _, err := s.planSess.Step(token, s.bpos[0])
+	if s.nseq > 1 {
+		return nil, s.planRefuses("a batch of sequences (NewBatch)")
+	}
+	logits, tok, err := s.planSess.Step(token, s.bpos[0])
 	if err != nil {
 		return nil, err
 	}
+	s.planTok = tok
 	copy(s.logits, logits)
 	s.tok = token
 	s.bpos[0]++
@@ -275,27 +359,62 @@ func (s *State) planPrefill(tokens []int32) ([]float32, error) {
 	if s.planErr != nil {
 		return nil, s.planErr
 	}
-	chunk := s.m.opt.planChunk
-	if chunk > 1 && len(tokens) > 1 && s.planChunk == nil {
+	return s.planRows(tokens, nil)
+}
+
+// chunkSession is the session a prompt's n rows run on: the chunk
+// runner's, its sequence the decode session's, where WithPlanChunk asks
+// for steps of several rows and n is several; nil for a row a step.
+func (s *State) chunkSession(n int) (*run.Session, error) {
+	if s.m.opt.planChunk > 1 && n > 1 && s.planChunk == nil {
 		if r, err := s.m.chunkRunner(s.maxSeq); err == nil {
 			if s.planChunk, err = r.NewSessionOf(s.planSess); err != nil {
 				return nil, err
 			}
 		}
 	}
+	if n > 1 {
+		return s.planChunk, nil
+	}
+	return nil, nil
+}
+
+// planRows runs a prompt's rows: tokens, and where from is given each row's
+// picture row (run.Session.SpanRows), a negative one its token's. The rows
+// are a step each, or with WithPlanChunk up to its rows a step.
+func (s *State) planRows(tokens, from []int32) ([]float32, error) {
+	cs, err := s.chunkSession(len(tokens))
+	if err != nil {
+		return nil, err
+	}
 	var out []float32
 	for len(tokens) > 0 {
-		if s.planChunk == nil || len(tokens) == 1 {
-			var err error
-			if out, err = s.planForward(tokens[0]); err != nil {
-				return nil, err
+		if cs == nil || len(tokens) == 1 {
+			if from == nil {
+				if out, err = s.planForward(tokens[0]); err != nil {
+					return nil, err
+				}
+			} else {
+				logits, tok, err := s.planSess.SpanRows(tokens[:1], s.bpos[0], from[:1])
+				if err != nil {
+					return nil, err
+				}
+				s.planTok, s.tok = tok, tokens[0]
+				out = s.logits[:copy(s.logits, logits)]
+				s.bpos[0]++
+				s.pos = max(s.pos, s.bpos[0])
+				from = from[1:]
 			}
 			s.promptRows++
 			tokens = tokens[1:]
 			continue
 		}
-		n := min(len(tokens), chunk)
-		logits, _, err := s.planChunk.Rows(tokens[:n], s.bpos[0])
+		n := min(len(tokens), s.m.opt.planChunk)
+		var f []int32
+		if from != nil {
+			f, from = from[:n], from[n:]
+		}
+		logits, _, err := cs.SpanRows(tokens[:n], s.bpos[0], f)
 		if err != nil {
 			return nil, err
 		}
@@ -345,6 +464,63 @@ func (d *Decider) planScores(ids []int32, qt jlm.QuestionType, markers []int, v 
 	copy(out, got)
 	d.input += len(ids)
 	return out, nil
+}
+
+// planPrefillMixed is PrefillMixed on the plan: a token span's tokens a
+// step, a picture's step of the model's vision segment, then a step a row of
+// its span, each taking its projected row at the picture's place -- one
+// session, the picture's rows never leaving the device. A span the plan does
+// not compose is refused by what it is.
+func (s *State) planPrefillMixed(spans []Span) ([]float32, error) {
+	if s.planErr != nil {
+		return nil, s.planErr
+	}
+	var out []float32
+	for _, sp := range spans {
+		switch {
+		case sp.Embd != nil || sp.Deep != nil || sp.Bidir:
+			return nil, errors.New("model: embedding rows, deepstack rows and bidirectional spans do not run on the composer's plan yet")
+		case sp.Picture == nil:
+			var err error
+			if out, err = s.planPrefill(sp.Tokens); err != nil {
+				return nil, err
+			}
+		default:
+			var err error
+			if out, err = s.planPicture(sp.Picture); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return out, nil
+}
+
+// planPicture is a picture span on the plan: the vision segment's step over
+// its patches, then its projected rows at the next positions.
+func (s *State) planPicture(pc *Picture) ([]float32, error) {
+	t := s.m.tower
+	switch {
+	case t == nil:
+		return nil, errors.New("model: a picture span on a model with no tower")
+	case s.m.planPictureRows() == 0:
+		return nil, errors.New("model: the plan composes no vision segment for this tower (WithPlanPictureRows)")
+	case s.c.RopeSections != [4]int{} || s.c.RopeInterleaved:
+		return nil, errors.New("model: a picture's rows on a multi-axis text rotary do not run on the composer's plan yet")
+	case pc.Pixels2 != nil:
+		return nil, errors.New("model: a video's frame pair does not run on the composer's plan yet")
+	}
+	if cap(s.planBlank) < pc.Rows {
+		s.planBlank, s.planFrom = make([]int32, pc.Rows), make([]int32, pc.Rows)
+		for j := range s.planFrom {
+			s.planFrom[j] = int32(j)
+		}
+	}
+	// The picture's step on the sequence's first session: every session of
+	// the sequence binds its projected rows (run.Runner.NewSessionOf).
+	if err := s.planSess.Picture(t.TowerPicture(pc.Pixels, pc.GH, pc.GW)); err != nil {
+		return nil, err
+	}
+	return s.planRows(s.planBlank[:pc.Rows], s.planFrom[:pc.Rows])
 }
 
 // planRefuses is the error of an entry point the runner does not cover, nil

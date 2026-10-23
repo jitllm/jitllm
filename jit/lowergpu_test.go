@@ -10,7 +10,7 @@ import (
 // to a name a backend accepts: PTX refuses "reduce+map" and "reduce.part".
 func TestGPUEntryNamesAreIdentifiers(t *testing.T) {
 	f := composing(t, *composeModel+".jlm")
-	parts, err := jit.Front(f)
+	parts, err := jit.Front(f, false)
 	if err != nil {
 		t.Fatal(err)
 	}

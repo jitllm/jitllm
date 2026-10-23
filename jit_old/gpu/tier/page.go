@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/engine/sched"
+	devpage "github.com/jitllm/jitllm/engine/page"
 	"github.com/jitllm/jitllm/jit_old/gpu/kernels"
 )
 
@@ -42,19 +42,14 @@ const minSlots = 1
 // frees, and nothing else. ws is the shape, not a copy of the bytes; ensure
 // refreshes where the host holds them.
 type page struct {
+	// Rec is the record the shared policy reads (page.Rec): Bytes, Round
+	// (scratch.go), In, and Uses, the submissions reading the block, under
+	// mu.
+	devpage.Rec
 	ws []nn.Weight // the block's matrices, in layer.tensors() order
 	// got is a page-in's refreshed list, reused so a page-in allocates no
 	// slice for it.
-	got   []nn.Weight
-	bytes uint64 // what the set costs on the device while it is resident
-	// round is the driver's page rounding of those buffers beyond bytes, which
-	// a page-in also has to find room for (scratch.go).
-	round uint64
-	in    bool // resident right now
-	// uses is how many submissions -- running, or paged in and about to run
-	// (submit) -- read the block: it is no victim while any does, whichever
-	// session's prologue is looking for room. Under mu.
-	uses int
+	got []nn.Weight
 	// ensure re-points every slice in ws at where the host holds those bytes
 	// NOW, and is nil for a caller that does not page its own weights.
 	// See nn.LayerWeights.Ensure.
@@ -212,43 +207,24 @@ func (g *devTier) slotsIfPerm(n uint64) int {
 	return int(avail / g.widest)
 }
 
-// victim is the resident block whose next use is furthest away, or -1. On the
-// cyclic layer scan that is Belady's optimum and it is computable
-// (sched.NextUse, shared with the host ring; see engine/sched/cyclic.go): LRU is
-// pessimal there, while this pins a prefix of slots-1 blocks and thrashes only
-// the last slot.
-//
-// A block outside the scan is never used again in it, so it goes first. Ties
-// break on the lowest index, so the choice does not depend on map iteration
-// order. Callers hold g.mu.
+// victim is the block a page-in evicts, or -1, by the shared policy
+// (page.Pick): the resident block whose next use is furthest away. Callers
+// hold g.mu.
 //
 // streamed limits the candidates to streamed blocks (devTier.stream): making
 // room for a streamed block, or for history, never evicts a resident one. Only
 // the budget's owner (trim) and a demoted block coming back take any unpinned
-// block.
+// block. A device's blocks need not be contiguous, so the map is walked; one
+// outside the scan goes first.
 func (g *devTier) victim(cur, lo, hi int, streamed bool) int {
-	best, bestD := -1, -1
+	p := devpage.NewPick(cur, lo, hi)
 	for li, l := range g.layers {
-		if l == nil || l.pg == nil || !l.pg.in || li == cur || g.pinned[li] || streamed && !g.stream[li] ||
-			l.pg.uses > 0 {
+		if l == nil || l.pg == nil || g.pinned[li] || streamed && !g.stream[li] {
 			continue
 		}
-		// A block whose page-out frees nothing is not a candidate: wrapped
-		// weights (resident.imported) reclaim zero bytes, and under trim()
-		// evicting them would demote every block for nothing. A partially
-		// wrapped block prices only its copied half, so it stays a candidate.
-		if l.pg.bytes == 0 {
-			continue
-		}
-		// The map is walked rather than the range (so this is not
-		// sched.CyclicVictim): a device's blocks need not be contiguous, and
-		// one outside the scan reports sched.Never and goes first.
-		d := sched.NextUse(li, cur, lo, hi)
-		if d > bestD || (d == bestD && li < best) {
-			best, bestD = li, d
-		}
+		p.Offer(li, &l.pg.Rec)
 	}
-	return best
+	return p.Victim()
 }
 
 // dropTensors frees a block's pageable weights and gives the budget back. The
@@ -295,7 +271,7 @@ func (g *devTier) dropImported(li int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	l := g.layers[li]
-	if l == nil || l.pg == nil || !l.pg.in {
+	if l == nil || l.pg == nil || !l.pg.In {
 		return
 	}
 	for _, rp := range l.tensors() {
@@ -310,16 +286,16 @@ func (g *devTier) dropImported(li int) {
 // its history untouched. Callers hold g.mu.
 func (g *devTier) pageOut(li int) uint64 {
 	l := g.layers[li]
-	if l == nil || l.pg == nil || !l.pg.in {
+	if l == nil || l.pg == nil || !l.pg.In {
 		return 0
 	}
 	// A recording names device addresses, which stop meaning anything once
 	// these buffers are freed. See dropGraph.
 	g.dropGraph()
 	freed := g.dropTensors(l)
-	l.pg.in = false
+	l.pg.In = false
 	g.pagesIn--
-	g.pageBytes -= min(g.pageBytes, freed+l.pg.round)
+	g.pageBytes -= min(g.pageBytes, freed+l.pg.Round)
 	g.PageOuts++
 	return freed
 }
@@ -371,8 +347,8 @@ func (g *devTier) reclaimFor(n uint64) bool {
 // it (page.uses). Callers hold g.mu.
 func (g *devTier) victimHeld(cur int, streamed bool) bool {
 	for li, l := range g.layers {
-		if l != nil && l.pg != nil && l.pg.in && li != cur && !g.pinned[li] && !(streamed && !g.stream[li]) &&
-			l.pg.bytes > 0 && l.pg.uses > 0 {
+		if l != nil && l.pg != nil && l.pg.In && li != cur && !g.pinned[li] && !(streamed && !g.stream[li]) &&
+			l.pg.Bytes > 0 && l.pg.Uses > 0 {
 			return true
 		}
 	}
@@ -384,14 +360,14 @@ func (g *devTier) victimHeld(cur int, streamed bool) bool {
 // whether every one is on the card to be held. Callers hold g.mu.
 func (g *devTier) holdPages(lo, hi int) bool {
 	for li := lo; li < hi; li++ {
-		if l := g.layers[li]; l == nil || !l.ok || l.pg != nil && !l.pg.in {
+		if l := g.layers[li]; l == nil || !l.ok || l.pg != nil && !l.pg.In {
 			g.dropPages(lo, li)
 			return false
 		}
 	}
 	for li := lo; li < hi; li++ {
 		if l := g.layers[li]; l.pg != nil {
-			l.pg.uses++
+			l.pg.Uses++
 		}
 	}
 	return true
@@ -401,8 +377,8 @@ func (g *devTier) holdPages(lo, hi int) bool {
 // (reclaim). Callers hold g.mu.
 func (g *devTier) dropPages(lo, hi int) {
 	for li := lo; li < hi; li++ {
-		if l := g.layers[li]; l != nil && l.pg != nil && l.pg.uses > 0 {
-			l.pg.uses--
+		if l := g.layers[li]; l != nil && l.pg != nil && l.pg.Uses > 0 {
+			l.pg.Uses--
 		}
 	}
 	g.idle.Broadcast()
@@ -522,19 +498,19 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 	if l == nil || !l.ok {
 		return false
 	}
-	if l.pg == nil || l.pg.in {
+	if l.pg == nil || l.pg.In {
 		return g.holdPages(li, li+1)
 	}
 	if err := g.quiesce(); err != nil {
 		g.LastErr = err.Error()
 		return false
 	}
-	if l.pg.in {
+	if l.pg.In {
 		return g.holdPages(li, li+1)
 	}
-	if need := l.pg.bytes + l.pg.round; !g.kvCompact(need, nil) && !g.reclaim(need, li, lo, hi) {
+	if need := l.pg.Bytes + l.pg.Round; !g.kvCompact(need, nil) && !g.reclaim(need, li, lo, hi) {
 		g.LastErr = fmt.Sprintf("block %d needs %d bytes and nothing can be paged out (%d of %d used, %d slot(s))",
-			li, l.pg.bytes+l.pg.round, g.used, g.limit, g.slots())
+			li, l.pg.Bytes+l.pg.Round, g.used, g.limit, g.slots())
 		return false
 	}
 	// Whatever the recording named is about to be joined by buffers that did not
@@ -542,7 +518,7 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 	g.dropGraph()
 	// The room asked for above may have been waited for, and the block paged in
 	// by another session meanwhile.
-	if l.pg.in {
+	if l.pg.In {
 		return g.holdPages(li, li+1)
 	}
 	// The host bytes are asked for again before any is read: l.pg.ws holds
@@ -606,11 +582,11 @@ func (g *devTier) pageInHold(li, lo, hi int) bool {
 		}
 		*ts[i] = r
 	}
-	l.pg.in = true
+	l.pg.In = true
 	g.pagesIn++
-	g.pageBytes += l.pg.bytes + l.pg.round
+	g.pageBytes += l.pg.Bytes + l.pg.Round
 	g.PageIns++
-	g.PageBytes += l.pg.bytes
+	g.PageBytes += l.pg.Bytes
 	return g.holdPages(li, li+1)
 }
 
@@ -678,7 +654,7 @@ func (g *devTier) pinBytes() uint64 {
 	var n uint64
 	for li := range g.pinned {
 		if l := g.layers[li]; l != nil && l.pg != nil {
-			n += l.pg.bytes
+			n += l.pg.Bytes
 		}
 	}
 	return n

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/internal/testmodels/fresh"
 )
 
 // TestRecipesRun runs every command block of docs/recipes/*.md against the
@@ -226,6 +227,11 @@ func runRecipe(t *testing.T, blocks []recipeBlock, env []string) int {
 			continue
 		}
 		for _, f := range b.needs {
+			// A container an earlier build left is reconverted, as every
+			// gate's is (fresh).
+			if err := fresh.Container(testmodels.Path(f)); err != nil {
+				t.Fatal(err)
+			}
 			if _, err := os.Stat(testmodels.Path(f)); err != nil {
 				t.Run("needs "+f, func(t *testing.T) {
 					testmodels.Missing(t, "this block and every later one need %s in %s (internal/testmodels/fetch.sh fetches it): %v",

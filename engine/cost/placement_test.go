@@ -48,7 +48,7 @@ func TestSuggestPlacesFromTheIR(t *testing.T) {
 		}
 		t.Logf("%-13s %+v", name, e)
 	}
-	parts, _ := jit.Front(f)
+	parts, _ := jit.Front(f, false)
 	for _, part := range parts {
 		t.Logf("suggested: %s on %d", part, p(part).Kind)
 	}

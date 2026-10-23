@@ -1,6 +1,10 @@
 package graph
 
-import "github.com/jitllm/jitllm/format/jlm"
+import (
+	"fmt"
+
+	"github.com/jitllm/jitllm/format/jlm"
+)
 
 // TowerEntry is a vision tower's input rows: the picture's patches through
 // the patch embedding (RoleVPatchEmbd, Patch x Patch x 3 wide, stored K
@@ -53,29 +57,16 @@ func (e *TowerEntry) Build() *Graph {
 	return g
 }
 
-// A position table's resample to the grid (OpPosResample): the source
-// coordinate of output index i on an axis of size n over a table of side s,
-// each step one float32 rounding.
+// A position table's resample to the grid (OpPosResample): the
+// container's coordinate chains and filters (jlm.ResampleChain,
+// jlm.ResampleFilter), each step one float32 rounding.
 const (
-	// ChainAligned is i*(s-1)/(n-1): aligned corners.
-	ChainAligned uint8 = iota + 1
-	// ChainHalfPixel is (i+0.5)*(s/n) - 0.5.
-	ChainHalfPixel
-	// ChainGridSample is ((((i+0.5)/n*2 - 1) + 1)*s - 1)/2: grid_sample's
-	// normalised coordinate, unnormalised.
-	ChainGridSample
-)
-
-// The taps reading a source coordinate x, fl = floor(x) and t = x - fl.
-const (
-	// FilterBilinear is two taps at fl and fl+1, max(1-|t|, 0) and
-	// max(1-|t-1|, 0).
-	FilterBilinear uint8 = iota + 1
-	// FilterLinear is two taps, 1-t and t, x clamped below at 0 first.
-	FilterLinear
-	// FilterCubic is four taps at fl-1 to fl+2, the cubic convolution at
-	// A = -0.75.
-	FilterCubic
+	ChainAligned    = uint8(jlm.ChainAligned)
+	ChainHalfPixel  = uint8(jlm.ChainHalfPixel)
+	ChainGridSample = uint8(jlm.ChainGridSample)
+	FilterBilinear  = uint8(jlm.FilterBilinear)
+	FilterLinear    = uint8(jlm.FilterLinear)
+	FilterCubic     = uint8(jlm.FilterCubic)
 )
 
 // TowerHead is a vision tower's projection: the LayerNorm after the blocks
@@ -88,6 +79,9 @@ const (
 // where ProjBias) to the text model's; the output's rows in the request's
 // order where Take.
 type TowerHead struct {
+	// Taps is the deepstack taps' rows the head reads after its residual
+	// (TowerTap), each concatenated after the projected row.
+	Taps                           int
 	NEmbd, Scale, ProjDim, Hidden  int
 	PostNorm, RMS, Class, ProjBias bool
 	Fold, Take                     bool
@@ -98,6 +92,10 @@ type TowerHead struct {
 func (h *TowerHead) Build() *Graph {
 	g := &Graph{Block: -1}
 	x := g.Input("x", h.NEmbd)
+	taps := []ValueID{}
+	for i := range h.Taps {
+		taps = append(taps, g.Input(fmt.Sprintf("tap%d", i), h.ProjDim))
+	}
 	switch {
 	case h.PostNorm && h.RMS:
 		x = g.row("post_norm", h.NEmbd, Op{Kind: OpNorm, In: []ValueID{x},
@@ -135,6 +133,35 @@ func (h *TowerHead) Build() *Graph {
 	if h.Take {
 		y = g.row("ordered", h.ProjDim, Op{Kind: OpTakeRows, In: []ValueID{y}})
 	}
+	if h.Taps > 0 {
+		y = g.row("with_taps", h.ProjDim*(1+h.Taps), Op{Kind: OpConcat, In: append([]ValueID{y}, taps...)})
+	}
 	g.Out = []ValueID{y}
+	return g
+}
+
+// TowerTap is a deepstack tap after block Block: the residual passed on
+// unchanged, and as a second output its merged rows -- the grid regrouped
+// Scale x Scale, LayerNormed (RoleVDsNorm and its bias), RoleVDsFC1 and its
+// bias to Hidden, the tanh GELU, RoleVDsFC2 and its bias to ProjDim -- its
+// tensors the tower's at the index Block.
+type TowerTap struct {
+	Block, NEmbd, Scale, Hidden, ProjDim int
+	Eps                                  float64
+}
+
+func (t *TowerTap) Build() *Graph {
+	g := &Graph{Block: t.Block}
+	x := g.Input("x", t.NEmbd)
+	w := t.NEmbd * t.Scale * t.Scale
+	y := g.row("tap_regrouped", w, Op{Kind: OpRegroup, In: []ValueID{x}, Attr: Attrs{Span: t.Scale}})
+	y = g.row("tap_norm", w, Op{Kind: OpLayerNorm, In: []ValueID{y},
+		Weight: []Binding{{Role: jlm.RoleVDsNorm, K: w}, {Role: jlm.RoleVDsNormBias, K: w}}, Attr: Attrs{Eps: t.Eps}})
+	y = g.row("tap_fc1", t.Hidden, Op{Kind: OpMatVec, In: []ValueID{y},
+		Weight: []Binding{{Role: jlm.RoleVDsFC1, K: w, Rows: t.Hidden}, {Role: jlm.RoleVDsFC1Bias, K: t.Hidden}}})
+	y = g.row("tap_act", t.Hidden, Op{Kind: OpAct, In: []ValueID{y}, Attr: Attrs{Act: ActGELUTanh}})
+	y = g.row("tap_rows", t.ProjDim, Op{Kind: OpMatVec, In: []ValueID{y},
+		Weight: []Binding{{Role: jlm.RoleVDsFC2, K: t.Hidden, Rows: t.ProjDim}, {Role: jlm.RoleVDsFC2Bias, K: t.ProjDim}}})
+	g.Out = []ValueID{x, y}
 	return g
 }

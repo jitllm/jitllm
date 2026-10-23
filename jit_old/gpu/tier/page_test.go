@@ -2,6 +2,7 @@ package tier
 
 import (
 	"fmt"
+	devpage "github.com/jitllm/jitllm/engine/page"
 	"testing"
 
 	"github.com/jitllm/jitllm/format/quant"
@@ -347,7 +348,7 @@ func TestPagedBlockGetsTheSameBytesBack(t *testing.T) {
 	one.mu.Lock()
 	one.pageOut(0)
 	one.mu.Unlock()
-	if one.layers[0].pg.in {
+	if one.layers[0].pg.In {
 		t.Fatal("pageOut left the page marked resident")
 	}
 	if !one.pageIn(0, 0, 1) {
@@ -508,7 +509,7 @@ func TestVictimIsTheBlockJustComputed(t *testing.T) {
 	for li := 0; li < 5; li++ {
 		// bytes is what a page-out would reclaim; a block that frees nothing
 		// is not a candidate (see below).
-		g.layers[li] = &layer{ok: true, pg: &page{in: true, bytes: 1 << 20}}
+		g.layers[li] = &layer{ok: true, pg: &page{Rec: devpage.Rec{In: true, Bytes: 1 << 20}}}
 	}
 	if got := g.victim(2, 0, 5, false); got != 1 {
 		t.Fatalf("victim at block 2 of a 0..4 scan is %d, want 1 (the block just computed). "+
@@ -519,26 +520,26 @@ func TestVictimIsTheBlockJustComputed(t *testing.T) {
 			"the cursor is still the furthest from its next use", got)
 	}
 	// A block outside the scan is never used again in it, so it goes first.
-	g.layers[9] = &layer{ok: true, pg: &page{in: true, bytes: 1 << 20}}
+	g.layers[9] = &layer{ok: true, pg: &page{Rec: devpage.Rec{In: true, Bytes: 1 << 20}}}
 	if got := g.victim(2, 0, 5, false); got != 9 {
 		t.Fatalf("victim is %d with block 9 resident and outside the scan [0,5): a block the "+
 			"token will not visit must go before any block it will", got)
 	}
 	// A page already out is not a candidate (no double eviction).
-	g.layers[9].pg.in = false
+	g.layers[9].pg.In = false
 	if got := g.victim(2, 0, 5, false); got != 1 {
 		t.Fatalf("victim is %d after block 9 was paged out; it must not be a candidate twice", got)
 	}
 	// A block whose page-out would reclaim nothing is not a candidate either:
 	// on a device that imports the packed arena, evicting frees zero bytes,
 	// and trim() would otherwise walk the whole resident set.
-	g.layers[1].pg.bytes = 0
+	g.layers[1].pg.Bytes = 0
 	if got := g.victim(2, 0, 5, false); got != 0 {
 		t.Fatalf("victim is %d with block 1 holding no reclaimable bytes; the choice must "+
 			"move on to the next furthest block, which is 0", got)
 	}
 	for li := range g.layers {
-		g.layers[li].pg.bytes = 0
+		g.layers[li].pg.Bytes = 0
 	}
 	if got := g.victim(2, 0, 5, false); got != -1 {
 		t.Fatalf("victim is %d when no resident block holds a reclaimable byte, want -1: "+
@@ -553,7 +554,7 @@ func TestVictimIsTheBlockJustComputed(t *testing.T) {
 func TestOnlyAStreamedBlockIsAStreamedVictim(t *testing.T) {
 	g := newDevice(&devShared{layers: map[int]*layer{}, stream: map[int]bool{3: true}})
 	for li := 0; li < 5; li++ {
-		g.layers[li] = &layer{ok: true, pg: &page{in: true, bytes: 1 << 20}}
+		g.layers[li] = &layer{ok: true, pg: &page{Rec: devpage.Rec{In: true, Bytes: 1 << 20}}}
 	}
 	if got := g.victim(2, 0, 5, true); got != 3 {
 		t.Fatalf("the streamed victim at block 2 is %d, want 3: the one streamed block, "+

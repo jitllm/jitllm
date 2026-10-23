@@ -109,6 +109,9 @@ func FromShards(meta fs.FS, name string, open []*safetensors.File, dst string, f
 		fp.Writer = jlm.WriterID()
 	}
 	s.Origin = originOf(name, open)
+	if err := stateTower(s); err != nil {
+		return nil, err
+	}
 	return jlm.Write(dst, s, fp)
 }
 

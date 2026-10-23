@@ -36,7 +36,7 @@ var (
 // telling two apart.
 func (c *Context) rotaryTable(a graph.Attrs) (Operand, error) {
 	if len(c.Rotaries) <= 1 {
-		return tableAngles, nil
+		return Operand{Kind: OperandTable, Name: tableName(c.RotaryBase)}, nil
 	}
 	found := -1
 	for i, r := range c.Rotaries {
@@ -47,7 +47,7 @@ func (c *Context) rotaryTable(a graph.Attrs) (Operand, error) {
 	if found < 0 {
 		return Operand{}, fmt.Errorf("a rotary of %d at base %v the model states no table of", a.NRot, a.Base)
 	}
-	return Operand{Kind: OperandTable, Name: tableName(found)}, nil
+	return Operand{Kind: OperandTable, Name: tableName(c.RotaryBase + found)}, nil
 }
 
 // decomposeRope turns each head's first NRot elements in pairs by the

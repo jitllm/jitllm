@@ -33,7 +33,9 @@ func init() {
 	migrations[27] = migrate27
 	migrations[28] = migrate28
 	migrations[29] = migrate29
+	migrations[30] = migrate30
 }
+
 
 // Upgradable reports whether a chain of migrations reaches Version from v.
 func Upgradable(v uint32) bool {
@@ -160,6 +162,31 @@ func (f *File) storedBytes(e *Entry) ([]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+// migrate30 is version 30 to 31: the vision section states the tower's
+// conventions (VisionConv), what its projector meant to a v30 reader
+// (ConventionsOf), as a conversion states them. A container with no tower
+// changes only its version word, in place.
+func migrate30(path string) error {
+	f, err := openAt(path, 30)
+	if err != nil {
+		return err
+	}
+	if f.vis == nil {
+		f.Close()
+		return setVersion(path, 31)
+	}
+	defer f.Close()
+	vis := *f.vis
+	if vis.Conv, err = ConventionsOf(&vis); err != nil {
+		return err
+	}
+	src := &Source{Config: f.cfg, Vision: &vis, Vocab: f.voc}
+	for i := range f.tab {
+		src.Tensors = append(src.Tensors, f.carried(&f.tab[i]))
+	}
+	return f.publish(path, src, 31)
 }
 
 // migrate29 is version 29 to 30: the audio tower's depthwise bias folded into
