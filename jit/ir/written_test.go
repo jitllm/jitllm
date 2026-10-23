@@ -3,8 +3,8 @@ package ir_test
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // TestWrittenParamsNamesTheOutputs holds the mask a concurrent Metal encoder

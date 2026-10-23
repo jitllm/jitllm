@@ -1879,14 +1879,15 @@ type devShared struct {
 	// not a lane's: a matvec a host block offers runs while a session's
 	// submission holds whichever lane it took.
 	mvc mvCall
-	// fmc is a composed matvec's call (formedSession) and forms its kernels
-	// by shape, the composer's (composer) compiled on this device.
-	fmc       fmCall
-	fmcFn     func(backend.Session)
-	forms     map[jit.Key]*formed
-	formKeys  map[formedKey]jit.Key
-	// shadow is nil outside a jitllmtest build's shadowed gate (shadow.go).
-	shadow *shadowTier
+	// fmc is a composed matvec's call (formedSession); forms are the
+	// composer's (composer) kernels compiled on this device by jit.Key, and
+	// formKeys a lone matvec's call-site shape's Key.
+	fmc      fmCall
+	fmcFn    func(backend.Session)
+	forms    map[jit.Key]*formed
+	formKeys map[formedKey]jit.Key
+	// shadow is nil but in a jitllmtest build's shadowed gate (shadow.go).
+	shadow    *shadowTier
 	composer  *jit.Registry
 	mvTo      launchTo
 	mvPart    backend.Buf

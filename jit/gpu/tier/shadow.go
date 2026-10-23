@@ -1,3 +1,5 @@
+//go:build jitllmtest
+
 package tier
 
 import (
@@ -14,7 +16,8 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
-// The shadow (ShadowForTest, jitllmtest builds only) asks the composer for
+// The shadow (ShadowForTest; a jitllmtest build's alone, see shadow_off.go)
+// asks the composer for
 // slices of each block the tier has just run, as the call sites will once
 // the composer serves them: it runs the composer's kernels on the slice's
 // inputs, read from the tier's buffers, into its own buffers and compares
@@ -61,9 +64,25 @@ func count(m *map[string]int, k string) {
 	(*m)[k]++
 }
 
-// shadowDefault is the log a tier opened in a jitllmtest build shadows into
-// (ShadowForTest); nil, and no tier shadows, elsewhere.
+// shadowDefault is the log a tier opened after ShadowForTest shadows into.
 var shadowDefault *ShadowLog
+
+// ShadowForTest makes every device opened after it shadow its blocks into
+// log, and returns the function that stops it. Not safe against a concurrent
+// open.
+func ShadowForTest(log *ShadowLog) (restore func()) {
+	old := shadowDefault
+	shadowDefault = log
+	return func() { shadowDefault = old }
+}
+
+// openShadow is a new device's shadow, nil unless ShadowForTest set a log.
+func openShadow() *shadowTier {
+	if shadowDefault == nil {
+		return nil
+	}
+	return newShadow(shadowDefault)
+}
 
 // shadowTier is one tier's shadow: the slices the composer formed, by
 // shape, and the inputs captured from the block running now.
@@ -182,20 +201,6 @@ func shadowFFN(l *layer, p *nn.LayerPlan) string {
 		return "scaled residual"
 	}
 	return ""
-}
-
-// shadowWhy names what about the step, or this place in it, keeps a slice
-// from being shadowed, "" for nothing.
-func shadowWhy(R int, ragged, persist, skips bool, here string) string {
-	switch {
-	case R != 1 || ragged:
-		return "not a one-row step"
-	case persist:
-		return "the persistent block holds its launches"
-	case skips:
-		return "a bisection probe skips phases"
-	}
-	return here
 }
 
 var shadowActs = map[kernels.ActKind]graph.Act{
@@ -472,17 +477,6 @@ func doubled(g *devTier, s backend.Session, b backend.Buf, n int) (backend.Buf, 
 	return d, nil
 }
 
-// withoutInt8 is r with no int8 form on the GPU: a matvec decodes its
-// weights and keeps its activation float.
-func withoutInt8(r *jit.Registry) *jit.Registry {
-	fr := *r
-	fr.Profiles = maps.Clone(fr.Profiles)
-	gp := fr.Profiles[jit.DeviceGPU]
-	gp.Int8 = nil
-	fr.Profiles[jit.DeviceGPU] = gp
-	return &fr
-}
-
 func readF32(s backend.Session, b backend.Buf, n int, into []float32) ([]float32, error) {
 	into = append(into[:0], make([]float32, n)...)
 	if err := s.Read(b, f32b(into)); err != nil {
@@ -517,7 +511,7 @@ func (sh *shadowTier) form(g *devTier, sl *shadowSlice, float bool) (*shadowForm
 	r := g.composer
 	if float {
 		if sh.float == nil {
-			sh.float = withoutInt8(g.composer)
+			sh.float = g.composer.WithoutInt8(jit.DeviceGPU)
 		}
 		r = sh.float
 	}

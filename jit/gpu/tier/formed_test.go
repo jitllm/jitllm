@@ -35,7 +35,7 @@ func TestServedMatVecIsComposed(t *testing.T) {
 			if float {
 				name += "/float"
 				for _, d := range g.devs {
-					d.composer = withoutInt8(jit.Default())
+					d.composer = jit.Default().WithoutInt8(jit.DeviceGPU)
 				}
 			}
 			t.Run(name, func(t *testing.T) { servedMatVecIsComposed(t, g, float) })

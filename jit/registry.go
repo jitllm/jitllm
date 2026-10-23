@@ -2,6 +2,7 @@ package jit
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -78,6 +79,18 @@ type Registry struct {
 	// copy of the registry shares it: the profile and the lowering are in
 	// the Key.
 	cache *formCache
+}
+
+// WithoutInt8 is r with no int8 form on device kind: a matvec there decodes
+// its weights and keeps its activation float. It shares r's cache; the
+// profile is in the Key.
+func (r *Registry) WithoutInt8(kind DeviceKind) *Registry {
+	fr := *r
+	fr.Profiles = maps.Clone(r.Profiles)
+	p := fr.Profiles[kind]
+	p.Int8 = nil
+	fr.Profiles[kind] = p
+	return &fr
 }
 
 // PoisonWorkgroupMemory has the GPU lowering poison every workgroup array

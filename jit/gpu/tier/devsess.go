@@ -230,9 +230,7 @@ func newDevice(sh *devShared) *devTier {
 	ds := &devSess{}
 	dv := &devTier{devShared: sh, devSess: ds, lane: l0, Stats: &sh.tot}
 	sh.lane0, sh.dv = l0, dv
-	if shadowDefault != nil {
-		sh.shadow = newShadow(shadowDefault)
-	}
+	sh.shadow = openShadow()
 	sh.sess = map[uint64]*devSess{0: ds}
 	sh.idle.L = &sh.mu
 	return dv
