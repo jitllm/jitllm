@@ -122,7 +122,7 @@ type shadowSlice struct {
 	// and their widths in floats.
 	tables     map[string]backend.Buf
 	tableWidth map[string]int
-	roles  []jlm.Role
+	roles      []jlm.Role
 }
 
 // shadowForm is a slice's kernels compiled on the device with the buffers
