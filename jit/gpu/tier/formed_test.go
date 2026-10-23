@@ -9,6 +9,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/oracle"
 	"github.com/jitllm/jitllm/internal/testdevices"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
@@ -17,17 +18,29 @@ import (
 // holds it to the oracle's matvec over the same int8 form of the row
 // (oracle.PackActivationsInto, dequantized). The row is uploaded as floats
 // and quantized by the composer's kernels; the stats count that they ran.
+// The float arm forms it with no int8 form, the weights decoded and the row
+// kept float, as the shadow's reference slice is (shadow.go), and holds it
+// to the oracle over the row itself.
 func TestServedMatVecIsComposed(t *testing.T) {
 	ran := 0
 	for _, spec := range testdevices.Specs("cuda", "vulkan", "metal") {
-		g, err := OpenWith(WithDevices(spec), WithDeviceTune(TuneOff), WithMinMatVecBytes(0))
-		if err != nil || g == nil {
-			t.Logf("%s: no device (%v)", spec, err)
-			continue
+		for _, float := range []bool{false, true} {
+			g, err := OpenWith(WithDevices(spec), WithDeviceTune(TuneOff), WithMinMatVecBytes(0))
+			if err != nil || g == nil {
+				t.Logf("%s: no device (%v)", spec, err)
+				continue
+			}
+			ran++
+			name := spec
+			if float {
+				name += "/float"
+				for _, d := range g.devs {
+					d.composer = withoutInt8(jit.Default())
+				}
+			}
+			t.Run(name, func(t *testing.T) { servedMatVecIsComposed(t, g, float) })
+			g.Close()
 		}
-		ran++
-		t.Run(spec, func(t *testing.T) { servedMatVecIsComposed(t, g) })
-		g.Close()
 	}
 	if ran == 0 {
 		t.Fatal("no device of any backend: this gate proved nothing")
@@ -35,7 +48,7 @@ func TestServedMatVecIsComposed(t *testing.T) {
 }
 
 // servedMatVecIsComposed is TestServedMatVecIsComposed on the device of g.
-func servedMatVecIsComposed(t *testing.T, g *GPU) {
+func servedMatVecIsComposed(t *testing.T, g *GPU, float bool) {
 	rng := rand.New(rand.NewSource(3))
 	const rows, k = 96, 512
 	checked := 0
@@ -60,6 +73,9 @@ func servedMatVecIsComposed(t *testing.T, g *GPU) {
 		for i := range xq {
 			xq[i] = float32(int8(a[i/4]>>(8*(i%4)))) * as[i/32]
 		}
+		if float {
+			xq = x
+		}
 		want := make([]float32, rows)
 		if err := oracle.MatVec(want, typ, w, xq, rows, k); err != nil {
 			t.Fatal(err)
@@ -82,7 +98,7 @@ func servedMatVecIsComposed(t *testing.T, g *GPU) {
 		}
 		nmse := num / den
 		if math.IsNaN(nmse) || !(nmse < 1e-9) {
-			t.Fatalf("%v: NMSE %.3e against the oracle over the row's int8 form", typ, nmse)
+			t.Fatalf("%v: NMSE %.3e against the oracle (float row %v)", typ, nmse, float)
 		}
 		t.Logf("%v: NMSE %.2e", typ, nmse)
 		checked++

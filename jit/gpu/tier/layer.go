@@ -8748,6 +8748,9 @@ func (g *devTier) layersSession(s backend.Session) {
 						lc.la(bs.sigMul, R*qdim, bs.ogate, bs.xb, bs.ogated)
 						aSrc = bs.ogated
 					}
+					if g.shadow != nil {
+						g.shadow.capture(g, s, l, li, p, bs.x, aSrc, qdim, shadowWhy(R, rag != nil, persist, len(g.kb.skip) > 0, bs.sigMul != nil))
+					}
 					// The attention output projection quantizing its own
 					// operand (fuseActIn), with the residual add it already
 					// carries.
@@ -9565,6 +9568,9 @@ func (g *devTier) layersSession(s backend.Session) {
 					addRes(bs.x2, fout, bs.x)
 				}
 			}
+			if g.shadow != nil {
+				g.shadow.compare(g, lc, s, l, li, p, p.NHead*p.HeadDim, bs.x)
+			}
 			// BERT's output norm, over x + mlp, out of place and back.
 			if l.nResid != nil && !skip["norm"] {
 				norm(bs.x, l.nResid, l.nResidB)
@@ -9775,7 +9781,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		//   in a replay.
 		// - History streamed from home: its uploads and waits are per call.
 		if (R > 1 && rag == nil) || !parOK || g.NoGraph || g.graphOff || g.PerLayerSubmit ||
-			a.paging || streamed || bs.pkv != nil && bs.pkv.st != nil {
+			a.paging || streamed || bs.pkv != nil && bs.pkv.st != nil || g.shadow != nil {
 			te := time.Now()
 			emit()
 			g.TEmit += time.Since(te)

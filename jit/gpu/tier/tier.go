@@ -1884,6 +1884,8 @@ type devShared struct {
 	fmc       fmCall
 	fmcFn     func(backend.Session)
 	forms     map[formedKey]*formed
+	// shadow is nil outside a jitllmtest build's shadowed gate (shadow.go).
+	shadow *shadowTier
 	composer  *jit.Registry
 	mvTo      launchTo
 	mvPart    backend.Buf
@@ -2658,6 +2660,9 @@ func (g *devTier) Close() {
 	// runs on one.
 	g.quiesce()
 	g.formsClose()
+	if g.shadow != nil {
+		g.shadow.close()
+	}
 	g.khClose() // before dhClose: its programs launch dh's kernels
 	g.dhClose()
 	for _, ds := range g.sess {

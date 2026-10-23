@@ -151,7 +151,10 @@ func decomposeMatVec(o graph.Op, c *Context) ([]Prim, error) {
 	switch wo.Format {
 	case jlm.TypeF32:
 	case jlm.TypeQ8:
-		return decomposeMatVecQ8(o, c, wo)
+		if c.Int8 != nil {
+			return decomposeMatVecQ8(o, c, wo)
+		}
+		fallthrough
 	default:
 		if l, ok := jlm.Layout(wo.Format); ok {
 			if prims, ok := decomposeMatVecInt8(o, c, wo, l); ok {
