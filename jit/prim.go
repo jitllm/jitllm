@@ -46,6 +46,9 @@ type Operand struct {
 	// Temp is a value a decomposition passes between its own primitives,
 	// read by nothing past them.
 	Temp bool
+	// Out is a value its graph hands back: read past every kernel, so no
+	// kernel is its one reader and its store is never dropped.
+	Out bool
 	// Of is the model's part the operand belongs to; a table of the step
 	// belongs to none unless it is a part's own state (PerPart).
 	Of      int

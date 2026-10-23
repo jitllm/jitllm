@@ -204,6 +204,7 @@ const (
 	OpDepWait
 	OpDepSignal
 	OpDepExit
+	OpOr
 	nKind
 )
 
@@ -218,7 +219,7 @@ var kindName = [nKind]string{
 	"tile.load", "tile.splat", "tile.mma", "tile.store", "sub.f16x2", "fma.f16x2",
 	"loadv", "loadv.get", "storev", "funnel",
 	"subgroup.reduce", "subgroup.broadcast", "shuffle", "laneid", "subgroup.size", "prefetch",
-	"grid.barrier", "dep.task", "dep.epoch", "dep.wait", "dep.signal", "dep.exit",
+	"grid.barrier", "dep.task", "dep.epoch", "dep.wait", "dep.signal", "dep.exit", "or",
 }
 
 func (k Kind) String() string { return kindName[k] }
@@ -363,6 +364,7 @@ func (b *Builder) Shl(t Type, x, y Value) Value { return b.bin(OpShl, t, x, y) }
 func (b *Builder) Shr(t Type, x, y Value) Value { return b.bin(OpShr, t, x, y) }
 func (b *Builder) And(t Type, x, y Value) Value { return b.bin(OpAnd, t, x, y) }
 func (b *Builder) Xor(t Type, x, y Value) Value { return b.bin(OpXor, t, x, y) }
+func (b *Builder) Or(t Type, x, y Value) Value  { return b.bin(OpOr, t, x, y) }
 
 // Funnel is (hi:lo) >> n, n in [0,31]: see OpFunnel.
 func (b *Builder) Funnel(lo, hi, n Value) Value {

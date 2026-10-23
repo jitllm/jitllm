@@ -17,11 +17,13 @@ import (
 // contraction, generated from ops and shaped by its passes -- on the float
 // row it uploads. The row is never quantized in Go.
 
-// formedKey is a lone matvec's call-site shape: its weight's format and
-// shape at an activation window. It names the request's jit.Key
+// formedKey is a lone matvec's call-site shape: the composer asked, its
+// weight's format and shape at an activation window. It names the request's
+// jit.Key
 // (devShared.formKeys) so the slice is not built again to be keyed; the
 // kernels are found by the Key.
 type formedKey struct {
+	r            *jit.Registry
 	t            jlm.Type
 	rows, k, win int
 }
@@ -62,15 +64,15 @@ const formRole = jlm.RoleOutput
 // formedMatVec is the composed matvec of format t at rows x k, compiled once
 // on this device. Callers hold g.mu.
 func (g *devTier) formedMatVec(t jlm.Type, rows, k int) (*formed, error) {
-	sk := formedKey{t, rows, k, g.actWin}
+	if g.composer == nil {
+		g.composer = jit.Default()
+	}
+	sk := formedKey{g.composer, t, rows, k, g.actWin}
 	if key, ok := g.formKeys[sk]; ok {
 		if f := g.forms[key]; f != nil {
 			return f, nil
 		}
 		return nil, fmt.Errorf("tier: the composed matvec of %v at %dx%d did not form earlier (%s)", t, rows, k, g.LastErr)
-	}
-	if g.composer == nil {
-		g.composer = jit.Default()
 	}
 	key, codes, err := g.composer.Form(jit.Request{
 		Graph:   graph.MatVec(formRole, rows, k),

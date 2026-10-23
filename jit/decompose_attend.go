@@ -35,7 +35,12 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, fmt.Errorf("an attention of %d heads over %d, window %d, softcap %v", a.NHead, a.NKVHead, a.Window, a.Softcap)
 	}
 	kw := a.NKVHead * a.HeadDim
-	g := attendGeom{D: a.HeadDim, KW: kw, Keys: tableKeys, Values: tableValues}
+	for _, l := range []Pool{c.History.Keys, c.History.Values} {
+		if err := l.check(kw); err != nil {
+			return nil, err
+		}
+	}
+	g := attendGeom{D: a.HeadDim, KW: kw, Keys: c.History.Keys.operand(tableKeys), Values: c.History.Values.operand(tableValues)}
 	if len(o.In) == 2 {
 		// A block selection: the positions each kv group's mask keeps.
 		m := maskOf(c, o.In[1])
@@ -94,10 +99,9 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	pos, first := position(&dx)
 	pid, off := page(&dx, held(&dx, pos, first))
 	kh := dx.op(OpDiv, U, h, dx.u(uint32(gqa)))
-	pool := []int{c.pages(), pg, kw}
 	kd := dx.op(OpAdd, U, dx.op(OpMul, U, kh, dx.u(uint32(D))), d)
 	qat := dx.op(OpAdd, U, dx.op(OpMul, U, dx.op(OpAdd, U, dx.op(OpMul, U, dx.coord(0), dx.u(uint32(H))), h), dx.u(uint32(D))), d)
-	dx.op(OpMul, F, dx.load(0, qat), dx.at(3, pool, pid, off, kd))
+	dx.op(OpMul, F, dx.load(0, qat), c.poolRead(&dx, 3, c.History.Keys, kw, pid, off, kd))
 
 	var sx exprs
 	spos, sfirst := position(&sx)
@@ -136,7 +140,7 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	vkh := vx.op(OpDiv, U, vh, vx.u(uint32(gqa)))
 	vd2 := vx.op(OpAdd, U, vx.op(OpMul, U, vkh, vx.u(uint32(D))), vd)
 	w := vx.at(0, keys, vx.coord(0), vh, vk)
-	vx.op(OpMul, F, w, vx.at(3, pool, vpid, voff, vd2))
+	vx.op(OpMul, F, w, c.poolRead(&vx, 3, c.History.Values, kw, vpid, voff, vd2))
 
 	var ox exprs
 	nv := ox.at(0, dims, ox.coord(0), ox.coord(1), ox.coord(2))

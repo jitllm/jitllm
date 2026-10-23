@@ -7617,6 +7617,9 @@ func (g *devTier) layersSession(s backend.Session) {
 	hx, hcs, hcsSWA, pn, koffs, kposs, rposs := a.hx, a.hcs, a.hcsSWA, a.pn, a.koffs, a.kposs, a.rposs
 	p, rag, pe, key := a.p, a.rag, a.pe, a.key
 	R, nrow, kvDim, qdim, kst, nCap, gatherN, rrows := a.R, a.nrow, a.kvDim, a.qdim, a.kst, a.nCap, a.gatherN, a.rrows
+	if g.shadow != nil {
+		g.shadow.step(R)
+	}
 	sm, smG, smW := a.sm, a.smG, a.smW
 	fold, ropeDev, argmax, sampleK, samplePen, pick := a.fold, a.ropeDev, a.argmax, a.sampleK, a.samplePen, a.pick
 	ragHead, parOK, allRows, hNorm := a.ragHead, a.parOK, a.allRows, a.hNorm
@@ -8010,6 +8013,9 @@ func (g *devTier) layersSession(s backend.Session) {
 			// and the attention.
 			voltaOnly := R > 1 && rag == nil && g.voltaBlock(l, R, bs.tok) && l.altRouter == nil && l.ds4 == nil &&
 				l.k3 == nil && l.q4e == nil
+			if g.shadow != nil {
+				g.shadow.block(voltaOnly)
+			}
 			// A held add this block's norm will not take runs alone first.
 			if pendX != nil && !g.foldTakes(l, R, voltaOnly, skip) {
 				addRes(pendX, pendY, bs.x)
@@ -8271,7 +8277,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						case bs.splitQG != nil:
 							here = "a gated query"
 						}
-						g.shadow.attnIn(g, lc, s, l, li, p, ain, bs.q, bs.k, bs.v, qdim, kvDim, shadowWhy(R, rag != nil, persist, len(g.kb.skip) > 0, here))
+						g.shadow.attnIn(g, lc, s, l, li, p, ain, bs.q, bs.k, bs.v, qdim, kvDim, shadowWhy(rag != nil, persist, len(g.kb.skip) > 0, here))
 					}
 					// The per-head norm goes between the projection and RoPE, and only
 					// there: a rotation preserves each pair's norm but not the per-head
@@ -8504,7 +8510,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						if bs.csSWA != nil && p.LocalRope(li) {
 							rcs = bs.csSWA
 						}
-						g.shadow.query(g, lc, s, l, li, p, bs.q, nQ, rcs, bs.qr, qdim, shadowWhy(R, rag != nil, persist, len(g.kb.skip) > 0, here))
+						g.shadow.query(g, lc, s, l, li, p, bs.q, nQ, rcs, bs.qr, qdim, shadowWhy(rag != nil, persist, len(g.kb.skip) > 0, here))
 					}
 					// Where the score kernel reads q: the rotated buffer, or q itself on
 					// an unrotated layer (bs.qr would hold the last block's).
@@ -8618,6 +8624,27 @@ func (g *devTier) layersSession(s backend.Session) {
 						if err == nil && !(ragOn && pk.ragAlone) {
 							err = pk.attend(s, lc, g.kvp.layers[l.kvSrc], qAtt, kDst, vDst, bs.n, bs.xb, pgTab, dec, sk)
 							g.PagedLaunches++
+							if g.shadow != nil && err == nil {
+								here := ""
+								switch {
+								case shared:
+									here = "k and v are another block's"
+								case bs.clampQ != nil || l.clampB != nil:
+									here = "clamped k and v"
+								case kHeads != p.NKVHead:
+									here = "an indexer key beside k's heads"
+								}
+								var kn backend.Buf
+								if bs.qNorm != nil && nK != nil {
+									kn = nK
+								}
+								rcs := bs.cs
+								if bs.csSWA != nil && p.LocalRope(li) {
+									rcs = bs.csSWA
+								}
+								g.shadow.keyAttend(g, lc, s, l, li, p, g.kvp.layers[li], bs.k, bs.v, qAtt, kn, rcs, l.sinks, pk.pRow, qOff, bs.xb,
+									g.kvp.p, nCap, roped, shadowWhy(rag != nil, persist, len(g.kb.skip) > 0, here))
+							}
 							if pk.cur.plan.Path == kernels.PathStaged {
 								g.PagedStagedLaunches++
 							}
@@ -8779,7 +8806,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						if bs.sigMul != nil {
 							here = "an output gate"
 						}
-						g.shadow.capture(g, s, l, li, p, bs.x, aSrc, qdim, shadowWhy(R, rag != nil, persist, len(g.kb.skip) > 0, here))
+						g.shadow.capture(g, s, l, li, p, bs.x, aSrc, qdim, shadowWhy(rag != nil, persist, len(g.kb.skip) > 0, here))
 					}
 					// The attention output projection quantizing its own
 					// operand (fuseActIn), with the residual add it already
@@ -9599,7 +9626,11 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 			}
 			if g.shadow != nil {
-				g.shadow.postAttention(g, lc, s, l, li, p, p.NHead*p.HeadDim, bs.x)
+				ffn, want := backend.Buf(nil), bs.x
+				if pendX != nil {
+					ffn, want = pendY, nil
+				}
+				g.shadow.postAttention(g, lc, s, l, li, p, p.NHead*p.HeadDim, bs.x2, ffn, want)
 			}
 			// BERT's output norm, over x + mlp, out of place and back.
 			if l.nResid != nil && !skip["norm"] {
@@ -9770,7 +9801,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					if bs.normVar != nil {
 						here = "LayerNorm"
 					}
-					g.shadow.head(g, lc, s, p, bs.x, hNorm, bs.head, bs.logits, shadowWhy(R, rag != nil, persist, len(g.kb.skip) > 0, here))
+					g.shadow.head(g, lc, s, p, bs.x, hNorm, bs.head, bs.logits, shadowWhy(rag != nil, persist, len(g.kb.skip) > 0, here))
 				}
 			}
 			if bs.headCap != nil {

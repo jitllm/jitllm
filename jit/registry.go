@@ -57,8 +57,10 @@ type Context struct {
 	Rotaries   []graph.Rotary
 	RotaryBase int
 	// Of is the part's index in the model's parts, the blocks consecutive.
-	Of     int
-	formed map[graph.ValueID]bool
+	Of int
+	// History is how the part's history pools lay out a page.
+	History History
+	formed  map[graph.ValueID]bool
 }
 
 // blockPart is the part of block li, for a block part's decomposition: the

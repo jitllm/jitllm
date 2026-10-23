@@ -67,7 +67,7 @@ func sameSpace(a, b *Kernel) bool {
 // another part reads is a part's output, which the engine reads too (the
 // logits, a residual at a device seam): never solely c's.
 func soleReader(ks []*Kernel, c *Kernel, o Operand) bool {
-	if o.Kind == OperandValue && o.Of != c.Of {
+	if o.Kind == OperandValue && (o.Of != c.Of || o.Out) {
 		return false
 	}
 	for _, k := range ks {

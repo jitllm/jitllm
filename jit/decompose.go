@@ -2,6 +2,7 @@ package jit
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -50,7 +51,7 @@ func decompositions() map[graph.OpKind]Decomposition {
 }
 
 func (c *Context) value(v graph.ValueID) Operand {
-	o := Operand{Kind: OperandValue, Value: v, Name: c.Graph.Values[v].Name}
+	o := Operand{Kind: OperandValue, Value: v, Name: c.Graph.Values[v].Name, Out: slices.Contains(c.Graph.Out, v)}
 	if c.Graph.Values[v].Elem == graph.ElemU32 {
 		o.Elem = ir.U32
 	}

@@ -10,7 +10,6 @@ import (
 func gpuProfile() Profile {
 	contract := []PrimKind{PrimContract}
 	return Profile{Int8: &Int8Form{Window: 32, Word: 4, Sums: 16}, Passes: []Pass{
-		Layout{},
 		Offsets{Table: tableQOff},
 		RunLengths{Grain: 128, Align: 32},
 		SplitRange{Pad: 32, Copies: 32, Work: mainWorkgroups},

@@ -122,16 +122,38 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 	}
 	var prims []Prim
 	for i, pool := range []Operand{tableKeys, tableValues} {
+		l := [2]Pool{c.History.Keys, c.History.Values}[i]
 		v := o.In[i]
 		sh := c.rows(v)
 		w := sh[1]
+		if err := l.check(w); err != nil {
+			return nil, err
+		}
 		var x exprs
 		d := x.coord(1)
 		pid, off := slot(&x)
-		val := x.at(0, sh, x.coord(0), d)
-		prims = append(prims, Prim{Kind: PrimMap, Shape: sh, In: []Operand{c.value(v), tableRows, tablePages}, Expr: x.e,
+		at := []int{pid, off, d}
+		ext := []int{c.pages(), page, w}
+		shape := sh
+		var val int
+		switch {
+		case l.Half:
+			// A word a thread: its position's two halves, the lower element
+			// low, so no two threads write one word.
+			U := ir.U32
+			lo := x.at(0, sh, x.coord(0), x.op(OpMul, U, d, x.u(2)))
+			hi := x.at(0, sh, x.coord(0), x.op(OpAdd, U, x.op(OpMul, U, d, x.u(2)), x.u(1)))
+			val = x.op(OpOr, U, x.un(OpHalf, U, lo), x.op(OpShl, U, x.un(OpHalf, U, hi), x.u(16)))
+			shape, ext = []int{sh[0], w / 2}, []int{c.pages(), page, w / 2}
+		case l.ByDim:
+			val = x.at(0, sh, x.coord(0), d)
+			at, ext = []int{pid, d, off}, []int{c.pages(), w, page}
+		default:
+			val = x.at(0, sh, x.coord(0), d)
+		}
+		prims = append(prims, Prim{Kind: PrimMap, Shape: shape, In: []Operand{c.value(v), tableRows, tablePages}, Expr: x.e,
 			Facts:  Facts{Extents: map[int]int{1: c.Step.Rows * rowWords, 2: c.pages()}},
-			Stores: []PrimStore{{Out: pool, Ax: []int{pid, off, d}, Ext: []int{c.pages(), page, w}, Value: val}}})
+			Stores: []PrimStore{{Out: l.operand(pool), Ax: at, Ext: ext, Value: val}}})
 	}
 	return prims, nil
 }

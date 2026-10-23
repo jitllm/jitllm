@@ -91,3 +91,22 @@ func (s *Slice) Rope(x ValueID, headDim, nRot int, base float64, layout RopeLayo
 	s.G.op(Op{Kind: OpRope, In: []ValueID{x}, Out: []ValueID{y}, Attr: Attrs{HeadDim: headDim, NRot: nRot, Base: base, Layout: layout}})
 	return y
 }
+
+// KVAppend writes k and v as the step's rows of the block's history: it
+// reads the history's version n and writes n+1, which it returns.
+func (s *Slice) KVAppend(k, v ValueID, n int) int {
+	s.G.op(Op{Kind: OpKVAppend, In: []ValueID{k, v}, Reads: []StateRef{{Name: "kv", Version: n}}, Writes: []StateRef{{Name: "kv", Version: n + 1}}})
+	return n + 1
+}
+
+// Attend is q's attention over the history's version n, of a's heads,
+// scale, window and softcap, with the per-head sinks of sinks where given.
+func (s *Slice) Attend(q ValueID, n int, a Attrs, sinks ...jlm.Role) ValueID {
+	var w []Binding
+	for _, r := range sinks {
+		w = append(w, Binding{Role: r, K: a.NHead})
+	}
+	y := s.value("attend", s.width(q))
+	s.G.op(Op{Kind: OpAttend, In: []ValueID{q}, Out: []ValueID{y}, Weight: w, Reads: []StateRef{{Name: "kv", Version: n}}, Attr: a})
+	return y
+}

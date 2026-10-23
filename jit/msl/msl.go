@@ -360,6 +360,8 @@ func (l *lowerer) arith(i int, o ir.Op) error {
 		bin("&")
 	case ir.OpXor:
 		bin("^")
+	case ir.OpOr:
+		bin("|")
 	case ir.OpFunnel:
 		// (hi:lo) >> n with the shift split so n == 0 never shifts by 32.
 		l.def(i, ir.U32, "((%s >> %s) | ((%s << 1u) << (31u - %s)))", a, c, b, c)

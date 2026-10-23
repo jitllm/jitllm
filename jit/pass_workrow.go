@@ -38,7 +38,7 @@ func (w WorkRow) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			m := out[mi]
 			if m.Kind == PrimMap && len(m.Loops) == 0 && len(m.Space) == len(r.Space)+1 && slices.Equal(m.Space[:len(r.Space)], r.Space) &&
 				m.Space[len(r.Space)] == r.Loops[c].Trip && readsRow(m, sum, len(r.Space)) && soleReader(out, m, sum) &&
-				(len(r.Space) > 1 || reducedAgain(out[mi+1:], m)) {
+				(len(r.Space) > 1 || reducedAgain(out[mi+1:], m)) && !movesPast(out[ri+1:mi], m) {
 				j := w.join(r, c, f, m, sum, group)
 				j.Passes = append(append([]string(nil), r.Passes...), w.Name())
 				out[ri] = j
@@ -51,6 +51,17 @@ func (w WorkRow) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 	}
 	return out, nil
+}
+
+// movesPast reports whether m may not move before any of ks, the kernels
+// between it and the place a join puts it.
+func movesPast(ks []*Kernel, m *Kernel) bool {
+	for _, x := range ks {
+		if conflicts(x, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // reducedAgain reports whether a later reduction reads what m stores.

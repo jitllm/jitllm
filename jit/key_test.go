@@ -48,6 +48,9 @@ func TestFormIsCachedByKey(t *testing.T) {
 			x.Profiles[DeviceGPU] = p
 		},
 		"the lowering": func(_ *Request, x *Registry) { x.Lowerings[DeviceGPU] = gpuLowering{Poison: true} },
+		"a decomposition": func(_ *Request, x *Registry) {
+			x.Decompositions[graph.OpMatVec] = func(o graph.Op, c *Context) ([]Prim, error) { return nil, nil }
+		},
 	}
 	for what, change := range moved {
 		q, x := keyRequest(), Default()

@@ -20,25 +20,53 @@ import (
 // and quantized by the composer's kernels; the stats count that they ran.
 // The float arm forms it with no int8 form, the weights decoded and the row
 // kept float, as the shadow's reference slice is (shadow.go), and holds it
-// to the oracle over the row itself.
+// to the oracle over the row itself. The violation forms the int8 form over
+// windows of 64, not the oracle's 32: every packed type must part from the
+// oracle.
 func TestServedMatVecIsComposed(t *testing.T) {
 	ran := 0
 	for _, spec := range testdevices.Specs("cuda", "vulkan", "metal") {
-		for _, float := range []bool{false, true} {
+		for _, arm := range []string{"int8", "float", "violation"} {
 			g, err := OpenWith(WithDevices(spec), WithDeviceTune(TuneOff), WithMinMatVecBytes(0))
 			if err != nil || g == nil {
 				t.Logf("%s: no device (%v)", spec, err)
 				continue
 			}
 			ran++
-			name := spec
-			if float {
-				name += "/float"
-				for _, d := range g.devs {
-					d.composer = jit.Default().WithoutInt8(jit.DeviceGPU)
-				}
+			r := jit.Default()
+			switch arm {
+			case "float":
+				r = r.WithoutInt8(jit.DeviceGPU)
+			case "violation":
+				p := r.Profiles[jit.DeviceGPU]
+				w := *p.Int8
+				w.Window = 64
+				p.Int8 = &w
+				r.Profiles[jit.DeviceGPU] = p
 			}
-			t.Run(name, func(t *testing.T) { servedMatVecIsComposed(t, g, float) })
+			for _, d := range g.devs {
+				d.composer = r
+			}
+			t.Run(spec+"/"+arm, func(t *testing.T) {
+				nmses, declined := servedMatVecIsComposed(t, g, arm == "float")
+				for typ, why := range declined {
+					if arm != "violation" {
+						t.Errorf("%v: the device declined a lone matvec (%s)", typ, why)
+					} else {
+						t.Logf("%v: no form under the violation (%s)", typ, why)
+					}
+				}
+				for typ, e := range nmses {
+					switch {
+					case arm == "violation" && !(e > 1e-9):
+						t.Errorf("%v: with the int8 form over windows of 64 the NMSE is %.3e: the gate cannot see the wrong form", typ, e)
+					case arm != "violation" && (math.IsNaN(e) || !(e < 1e-9)):
+						t.Errorf("%v: NMSE %.3e against the oracle", typ, e)
+					default:
+						t.Logf("%v: NMSE %.2e", typ, e)
+					}
+				}
+			})
 			g.Close()
 		}
 	}
@@ -47,11 +75,13 @@ func TestServedMatVecIsComposed(t *testing.T) {
 	}
 }
 
-// servedMatVecIsComposed is TestServedMatVecIsComposed on the device of g.
-func servedMatVecIsComposed(t *testing.T, g *GPU, float bool) {
+// servedMatVecIsComposed runs every packed type's lone matvec on the device
+// of g and returns each served one's NMSE against the oracle, and why the
+// device declined the rest.
+func servedMatVecIsComposed(t *testing.T, g *GPU, float bool) (map[quant.Type]float64, map[quant.Type]string) {
 	rng := rand.New(rand.NewSource(3))
 	const rows, k = 96, 512
-	checked := 0
+	nmses, declined := map[quant.Type]float64{}, map[quant.Type]string{}
 	for _, typ := range quant.PackedTypes {
 		q, ok := quantOf(typ)
 		if !ok {
@@ -86,7 +116,8 @@ func servedMatVecIsComposed(t *testing.T, g *GPU, float bool) {
 		}
 		before := g.Stats().Formed
 		if !g.MatVec(out, typ, w, x, rows, k) {
-			t.Fatalf("%v: the device declined a lone matvec (%s)", typ, g.Err())
+			declined[typ] = g.Err()
+			continue
 		}
 		if g.Stats().Formed != before+1 {
 			t.Fatalf("%v: the matvec was served but not by the composer's kernels", typ)
@@ -96,16 +127,12 @@ func servedMatVecIsComposed(t *testing.T, g *GPU, float bool) {
 			d := float64(out[r]) - float64(want[r])
 			num, den = num+d*d, den+float64(want[r])*float64(want[r])
 		}
-		nmse := num / den
-		if math.IsNaN(nmse) || !(nmse < 1e-9) {
-			t.Fatalf("%v: NMSE %.3e against the oracle (float row %v)", typ, nmse, float)
-		}
-		t.Logf("%v: NMSE %.2e", typ, nmse)
-		checked++
+		nmses[typ] = num / den
 	}
-	if checked == 0 {
-		t.Fatal("no packed type was served: this gate proved nothing")
+	if len(nmses) == 0 {
+		t.Fatalf("no packed type was served: this gate proved nothing (declined %v)", declined)
 	}
+	return nmses, declined
 }
 
 // formedTestWeights is random GGUF blocks of q with finite scales near one:

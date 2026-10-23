@@ -590,6 +590,8 @@ func (l *lowerer) arith(o ir.Op) (uint32, error) {
 		inst(&l.m.funcs, opBitwiseAnd, t, id, a, b)
 	case ir.OpXor:
 		inst(&l.m.funcs, opBitwiseXor, t, id, a, b)
+	case ir.OpOr:
+		inst(&l.m.funcs, opBitwiseOr, t, id, a, b)
 	case ir.OpFunnel:
 		// (hi:lo) >> n as shifts: the left one split (<<1, then <<31-n) so n
 		// == 0 never shifts by 32, which SPIR-V leaves undefined. The halves

@@ -18,6 +18,9 @@ type Request struct {
 	Rotaries []graph.Rotary
 	Step     Step
 	Device   Device
+	// History is the layout of the pools the slice's history ops write and
+	// read: the call site's, addressed as it is.
+	History History
 }
 
 // Form is req's kernels in launch order, and the Key they are cached under:
@@ -57,6 +60,7 @@ func (r *Registry) form(req Request) ([]Code, error) {
 		return nil, fmt.Errorf("jit: no profile for %s", req.Device.Kind)
 	}
 	c := r.context(req.Graph, req.Part, req.Formats, req.Rotaries, req.Step, req.Device)
+	c.History = req.History
 	prims, err := r.decomposeOps(c, 0)
 	if err != nil {
 		return nil, fmt.Errorf("jit: cannot form %s at %d rows on %s: %w", slice(req.Graph), req.Step.Rows, req.Device.Kind, err)

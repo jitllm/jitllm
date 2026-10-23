@@ -64,6 +64,7 @@ const (
 	opFOrdLessThan       = 184
 	opSelect             = 169
 	opBitwiseAnd         = 199
+	opBitwiseOr          = 197
 	opBitwiseXor         = 198
 	opULessThan          = 176
 	opFAdd               = 129

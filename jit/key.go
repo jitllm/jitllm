@@ -34,8 +34,9 @@ type formed struct {
 func newFormCache() *formCache { return &formCache{m: map[Key]formed{}} }
 
 // keyOf is req's Key and the words it hashes: req, then the profile and the
-// lowering of its device, each walked field by field, so a field added to
-// any of them is keyed without being named here.
+// lowering of its device and the registry's decompositions, each walked
+// field by field, so a field added to any of them is keyed without being
+// named here.
 func (r *Registry) keyOf(req Request) (Key, []uint64, error) {
 	var w keyWords
 	if err := w.walk(reflect.ValueOf(req)); err != nil {
@@ -45,6 +46,11 @@ func (r *Registry) keyOf(req Request) (Key, []uint64, error) {
 		return 0, nil, err
 	}
 	if err := w.walk(reflect.ValueOf(&r.Lowerings).Elem().MapIndex(reflect.ValueOf(req.Device.Kind))); err != nil {
+		return 0, nil, err
+	}
+	// The decompositions, each by its code: a registry whose entry was
+	// replaced forms another Key, never the old entry's kernels.
+	if err := w.walk(reflect.ValueOf(r.Decompositions)); err != nil {
 		return 0, nil, err
 	}
 	h := fnv.New64a()
@@ -120,6 +126,10 @@ func (w *keyWords) walk(v reflect.Value) error {
 			w.str(v.Elem().Type().String())
 			return w.walk(v.Elem())
 		}
+	case reflect.Func:
+		// A function is its code: within the process that holds the
+		// cache, one address is one function.
+		*w = append(*w, uint64(v.Pointer()))
 	case reflect.Struct:
 		for i := range v.NumField() {
 			if err := w.walk(v.Field(i)); err != nil {

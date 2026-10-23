@@ -168,10 +168,10 @@ func Lower(k *ir.Kernel, target string) (string, error) {
 			b.Op("%s.%s %v,%v,%v;", op, sfx(o.Type), r, reg[a0], reg[a1])
 			reg[v] = r
 
-		case ir.OpShl, ir.OpShr, ir.OpAnd, ir.OpXor:
+		case ir.OpShl, ir.OpShr, ir.OpAnd, ir.OpXor, ir.OpOr:
 			r := b.Reg(B32)
 			// shr.u32, not shr.s32: OpShr is logical (see the IR comment).
-			op := map[ir.Kind]string{ir.OpShl: "shl.b32", ir.OpShr: "shr.u32", ir.OpAnd: "and.b32", ir.OpXor: "xor.b32"}[o.Kind]
+			op := map[ir.Kind]string{ir.OpShl: "shl.b32", ir.OpShr: "shr.u32", ir.OpAnd: "and.b32", ir.OpXor: "xor.b32", ir.OpOr: "or.b32"}[o.Kind]
 			b.Op("%s %v,%v,%v;", op, r, reg[a0], reg[a1])
 			reg[v] = r
 

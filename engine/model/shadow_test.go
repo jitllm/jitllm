@@ -3,6 +3,7 @@
 package model
 
 import (
+	"fmt"
 	"os"
 	"slices"
 	"testing"
@@ -26,9 +27,15 @@ import (
 // of its weights the wrong way round.
 func TestShadowDenseDecode(t *testing.T) {
 	// The composer's distance from the tier, as a fraction of the slice's
-	// int8 band: 0.069 at worst on these models (Qwen3-0.6B, CUDA).
+	// int8 band: 0.115 at worst on these models (Qwen3-0.6B's FFN output).
 	const ratio = 0.25
-	slicesOf := []string{"attention in", "query", "post-attention"}
+	// The largest band a slice may have: the tier's int8 arithmetic is at
+	// most this far from the float slice (0.227 at worst, Qwen3-0.6B).
+	const maxBand = 0.5
+	// The tier's binary16 contractions against the float slice: 1.4e-6 at
+	// worst (Llama-3.2-1B prefill, CUDA).
+	const floatBound = 1e-5
+	slicesOf := []string{"attention in", "post-attention"}
 	const head = "head"
 	violations := []struct {
 		slice string
@@ -64,11 +71,11 @@ func TestShadowDenseDecode(t *testing.T) {
 			opened := map[string]bool{}
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					run := func(swap [2]jlm.Role, perturb jlm.Role, table ...string) *tier.ShadowLog {
-						log := &tier.ShadowLog{Ratio: ratio, Floor: 1e-9, Swap: swap, Perturb: perturb}
-						if len(table) > 0 {
-							log.PerturbTable = table[0]
-						}
+					prefill := false
+					wrongHistory := false
+					run := func(swap [2]jlm.Role, perturb jlm.Role, table string) *tier.ShadowLog {
+						log := &tier.ShadowLog{Ratio: ratio, Floor: 1e-9, MaxBand: maxBand, FloatBound: floatBound,
+							Swap: swap, Perturb: perturb, PerturbTable: table, WrongHistory: wrongHistory}
 						restore := tier.ShadowForTest(log)
 						defer restore()
 						g, err := tier.OpenWith(slices.Concat([]tier.Option{tier.WithDevices(dev),
@@ -89,64 +96,112 @@ func TestShadowDenseDecode(t *testing.T) {
 						if st.devCount() != m.Cfg.NLayer {
 							t.Fatalf("placed %d of %d blocks: %v %s", st.devCount(), m.Cfg.NLayer, st.DeviceDeclines(), g.Err())
 						}
-						for _, id := range ids {
-							if _, err := st.Forward(id); err != nil {
+						if prefill {
+							if _, err := st.Prefill(ids); err != nil {
 								t.Fatal(err)
 							}
+						} else {
+							for _, id := range ids {
+								if _, err := st.Forward(id); err != nil {
+									t.Fatal(err)
+								}
+							}
+						}
+						if len(log.Errors) > 0 {
+							t.Fatalf("the shadow's own runs went wrong: %v", log.Errors[:min(4, len(log.Errors))])
 						}
 						return log
 					}
-					log := run([2]jlm.Role{}, 0)
-					t.Logf("%d blocks x %d positions on %s: compared %v; worst NMSE composer-tier %.3g, tier-float %.3g, composer-float %.3g, worst composer-tier over the slice's band %.3g; refused %v; unformed %v",
-						m.Cfg.NLayer, len(ids), dev, log.Compared, log.Worst, log.WorstTier, log.WorstComposer, log.WorstRatio, log.Refused, log.Unformed)
+					// caught holds a violation to failing every slice of the
+					// kind it touches that was checked, compared or a gap.
+					caught := func(what, slice string, bad *tier.ShadowLog) {
+						t.Helper()
+						checked := bad.Compared[slice] + bad.GapSlices[slice]
+						if checked == 0 || bad.FailedSlices[slice] != checked {
+							t.Fatalf("%s: %d of %d %s slices failed; a violation must fail every one (worst %.3g)",
+								what, bad.FailedSlices[slice], checked, slice, bad.Worst)
+						}
+						t.Logf("%s: every one of %d %s slices failed", what, checked, slice)
+					}
+					clean := func(what string, log *tier.ShadowLog) {
+						t.Helper()
+						t.Logf("%s on %s: compared %v, gaps %v; composer-tier %.3g, tier-float %.3g, composer-float %.3g, band ratio %.3g; refused %v",
+							what, dev, log.Compared, log.GapSlices, log.Worst, log.WorstTier, log.WorstComposer, log.WorstRatio, log.Refused)
+						if len(log.Unformed) > 0 || len(log.Failed) > 0 {
+							for _, f := range log.Failed[:min(12, len(log.Failed))] {
+								t.Log(f)
+							}
+							t.Fatalf("%s: unformed %v; %d failed", what, log.Unformed, len(log.Failed))
+						}
+					}
+					log := run([2]jlm.Role{}, 0, "")
+					clean("decode", log)
 					if c.refuse {
 						if log.Compared[residual[0]]+log.Compared[residual[1]] != 0 || len(log.Refused) == 0 {
-							t.Fatalf("compared %v and refused %v: this model's residual is not the plain one and its slices must be refused by name", log.Compared, log.Refused)
+							t.Fatalf("this model's residual is not the plain one and its slices must be refused by name")
 						}
-						if len(log.Failed) > 0 || len(log.Unformed) > 0 {
-							t.Fatalf("its plain slices parted from the tier or did not form: %v, %v", log.Failed[:min(4, len(log.Failed))], log.Unformed)
+					} else {
+						if len(log.Refused) > 0 {
+							t.Fatalf("refused %v", log.Refused)
 						}
-						return
+						for _, name := range append(slicesOf, "key+attend", "pools") {
+							if want := m.Cfg.NLayer * len(ids); log.Compared[name] != want {
+								t.Fatalf("compared %d %s slices, want every block at every position (%d)", log.Compared[name], name, want)
+							}
+						}
+						t.Logf("the appended keys at most %.3g from the tier's, every value word the same", log.PoolKeys)
 					}
-					if len(log.Unformed) > 0 || len(log.Refused) > 0 {
-						t.Fatalf("a slice did not form or was refused: unformed %v, refused %v", log.Unformed, log.Refused)
-					}
-					for _, name := range slicesOf {
-						if want := m.Cfg.NLayer * len(ids); log.Compared[name] != want {
-							t.Fatalf("compared %d %s slices, want every block at every position (%d)", log.Compared[name], name, want)
-						}
+					// The query and the head are plain ops whatever the residual.
+					if log.Compared["query"] != m.Cfg.NLayer*len(ids) {
+						t.Fatalf("compared %d queries, want every block at every position (%d)", log.Compared["query"], m.Cfg.NLayer*len(ids))
 					}
 					if log.Compared[head] != len(ids) {
 						t.Fatalf("compared %d heads, want one at every position (%d)", log.Compared[head], len(ids))
 					}
-					if len(log.Failed) > 0 {
-						t.Fatalf("%d slices parted from the tier: %v", len(log.Failed), log.Failed[:min(4, len(log.Failed))])
-					}
-					for _, v := range violations {
-						bad := run(v.swap, 0)
-						if len(bad.Failed) == 0 {
-							t.Fatalf("%s with %v and %v bound the wrong way round: no compare failed (worst %.3g), the gate cannot see a wrong slice",
-								v.slice, v.swap[0], v.swap[1], bad.Worst)
+					if !c.refuse {
+						for _, v := range violations {
+							caught(fmt.Sprintf("%v and %v bound the wrong way round", v.swap[0], v.swap[1]), v.slice, run(v.swap, 0, ""))
 						}
-						t.Logf("violation in %s: %d failed outputs over %d compared slices", v.slice, len(bad.Failed), bad.Compared[v.slice])
 					}
-					if bad := run([2]jlm.Role{}, 0, "rope.cs"); len(bad.Failed) == 0 {
-						t.Fatalf("the query read the rotary table doubled and no compare failed (worst %.3g)", bad.Worst)
-					} else {
-						t.Logf("violation in the rotary table: %d failed outputs over %d compared queries", len(bad.Failed), bad.Compared["query"])
+					rot := run([2]jlm.Role{}, 0, "rope.cs")
+					caught("the rotary table read doubled", "query", rot)
+					if !c.refuse {
+						// At position 0 the rotation is by 0 and a doubled
+						// table doubles k, which attention over one key cannot
+						// see; the keys it appends show it at every position.
+						caught("the rotary table read doubled", "pools", rot)
+						wrongHistory = true
+						caught("the keys' pool stated laid out by position", "pools", run([2]jlm.Role{}, 0, ""))
+						wrongHistory = false
 					}
 					if m.Cfg.QKNorm {
-						bad := run([2]jlm.Role{}, jlm.RoleAttnQNorm)
-						if len(bad.Failed) == 0 {
-							t.Fatalf("the query read its norm at twice its values and no compare failed (worst %.3g)", bad.Worst)
+						caught("the q norm read doubled", "query", run([2]jlm.Role{}, jlm.RoleAttnQNorm, ""))
+					}
+					caught("the output norm read doubled", head, run([2]jlm.Role{}, jlm.RoleOutputNorm, ""))
+					if c.refuse {
+						return
+					}
+
+					// The prompt as one step: every block's slices at once over
+					// its rows, each compared or a named gap.
+					prefill = true
+					pre := run([2]jlm.Role{}, 0, "")
+					clean("prefill", pre)
+					for gap, n := range pre.Gaps {
+						t.Logf("gap: %s (%d)", gap, n)
+					}
+					for _, name := range append(slicesOf, "query") {
+						if n := pre.Compared[name] + pre.GapSlices[name]; n != m.Cfg.NLayer {
+							t.Fatalf("prefill checked %d %s slices (compared %d, gaps %d), want every block (%d)",
+								n, name, pre.Compared[name], pre.GapSlices[name], m.Cfg.NLayer)
 						}
-						t.Logf("violation in the query: %d failed outputs over %d compared queries", len(bad.Failed), bad.Compared["query"])
 					}
-					bad := run([2]jlm.Role{}, jlm.RoleOutputNorm)
-					if len(bad.Failed) == 0 {
-						t.Fatalf("the head read its norm at twice its values and no compare failed (worst %.3g)", bad.Worst)
+					// A prompt chunk's head runs on the row-logits path, which
+					// the head's slice does not reach.
+					if len(pre.Refused) > 0 || pre.Compared[head] != 0 {
+						t.Fatalf("prefill refused %v and compared %d heads, want neither", pre.Refused, pre.Compared[head])
 					}
-					t.Logf("violation in the head: %d failed outputs over %d compared heads", len(bad.Failed), bad.Compared[head])
+					caught("prefill with gate and up bound the wrong way round", "post-attention", run([2]jlm.Role{jlm.RoleFFNGate, jlm.RoleFFNUp}, 0, ""))
 				})
 			}
 		})

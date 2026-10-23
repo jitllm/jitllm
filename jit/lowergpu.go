@@ -272,6 +272,8 @@ func (e *lowerer) get(i int) ir.Value {
 		v = b.Dot4(e.get(nd.A), e.get(nd.B), e.get(nd.C))
 	case OpWidenHalf:
 		v = b.CvtF16H(e.get(nd.A))
+	case OpHalf:
+		v = b.PackF16(e.get(nd.A), b.Const(ir.F32, 0))
 	case OpLess:
 		x, y := e.get(nd.A), e.get(nd.B)
 		v = b.Lt(e.n.Nodes[nd.A].Type, x, y)
@@ -291,7 +293,7 @@ func (e *lowerer) get(i int) ir.Value {
 		} else {
 			v = b.Sub(ir.U32, x, b.Mul(ir.U32, b.CTAID(), b.NTID()))
 		}
-	case OpAdd, OpSub, OpMul, OpDiv, OpRem, OpMin, OpMax, OpShl, OpShr, OpAnd, OpXor:
+	case OpAdd, OpSub, OpMul, OpDiv, OpRem, OpMin, OpMax, OpShl, OpShr, OpAnd, OpXor, OpOr:
 		x, y := e.get(nd.A), e.get(nd.B)
 		v = binary(b, nd.Op, nd.Type, x, y)
 	default:
@@ -439,6 +441,8 @@ func binary(b *ir.Builder, op Op, t ir.Type, x, y ir.Value) ir.Value {
 		return b.And(t, x, y)
 	case OpXor:
 		return b.Xor(t, x, y)
+	case OpOr:
+		return b.Or(t, x, y)
 	}
 	return b.Max(t, x, y)
 }

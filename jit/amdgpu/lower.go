@@ -394,6 +394,8 @@ func (l *lowerer) op(i int, o ir.Op, v ir.Value) error {
 		l.emit("%s = and i32 %s, %s", r, val(a0), val(a1))
 	case ir.OpXor:
 		l.emit("%s = xor i32 %s, %s", r, val(a0), val(a1))
+	case ir.OpOr:
+		l.emit("%s = or i32 %s, %s", r, val(a0), val(a1))
 	case ir.OpFunnel:
 		// (hi:lo) >> n for n in [0,31]: fshr's operands are (hi, lo, n).
 		l.declare("declare i32 @llvm.fshr.i32(i32, i32, i32)")

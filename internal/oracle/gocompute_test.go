@@ -68,7 +68,7 @@ func TestNoGoComputeOnTheInferencePath(t *testing.T) {
 	// walking the parent of the repository.
 	t.Chdir(root)
 	found := map[string][]int{}
-	for _, pkg := range []string{"engine/model", "engine/nn", "jit/gpu/tier", "backend", "engine/sched", "jit/cpu", "jit/gpu/kernels"} {
+	for _, pkg := range []string{"engine/model", "engine/nn", "jit/gpu/tier", "backend", "engine/sched", "jit/cpu", "jit/gpu/kernels", "jit", "engine/graph"} {
 		fset := token.NewFileSet()
 		ents, err := os.ReadDir(filepath.Join(root, pkg))
 		if err != nil {
@@ -89,7 +89,7 @@ func TestNoGoComputeOnTheInferencePath(t *testing.T) {
 			}
 			files = append(files, f)
 		}
-		info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}}
+		info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}}
 		conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil), Error: func(error) {}}
 		conf.Check(pkg, fset, files, info)
 		if len(info.Types) == 0 {
@@ -155,15 +155,65 @@ func goComputeLines(fset *token.FileSet, info *types.Info, body *ast.BlockStmt) 
 		b, ok := tv.Type.Underlying().(*types.Basic)
 		return ok && b.Info()&types.IsFloat != 0
 	}
-	floatElem := func(n ast.Node) bool {
+	// tainted holds the float locals a loop assigns from data: an element
+	// of a float slice, or another such local. Arithmetic through them is
+	// arithmetic on data, as `g := float64(x[i]); s += g * g` is.
+	tainted := map[types.Object]bool{}
+	objOf := func(id *ast.Ident) types.Object {
+		if o := info.Defs[id]; o != nil {
+			return o
+		}
+		return info.Uses[id]
+	}
+	var floatElem func(n ast.Node) bool
+	floatElem = func(n ast.Node) bool {
 		hit := false
 		ast.Inspect(n, func(z ast.Node) bool {
-			if ix, ok := z.(*ast.IndexExpr); ok && isFloat(ix) {
-				hit = true
+			switch x := z.(type) {
+			case *ast.IndexExpr:
+				if isFloat(x) {
+					hit = true
+				}
+			case *ast.Ident:
+				if o := objOf(x); o != nil && tainted[o] {
+					hit = true
+				}
 			}
 			return !hit
 		})
 		return hit
+	}
+	taint := func(loop ast.Node) {
+		for changed := true; changed; {
+			changed = false
+			ast.Inspect(loop, func(m ast.Node) bool {
+				as, ok := m.(*ast.AssignStmt)
+				if !ok {
+					return true
+				}
+				for i, l := range as.Lhs {
+					id, ok := l.(*ast.Ident)
+					if !ok {
+						continue
+					}
+					o := objOf(id)
+					if o == nil {
+						continue
+					}
+					if b, ok := o.Type().Underlying().(*types.Basic); !ok || b.Info()&types.IsFloat == 0 {
+						continue
+					}
+					rhs := as.Rhs[0]
+					if len(as.Rhs) == len(as.Lhs) {
+						rhs = as.Rhs[i]
+					}
+					if !tainted[o] && floatElem(rhs) {
+						tainted[o], changed = true, true
+					}
+				}
+				return true
+			})
+		}
 	}
 	mathCall := func(c *ast.CallExpr) bool {
 		se, ok := c.Fun.(*ast.SelectorExpr)
@@ -199,6 +249,7 @@ func goComputeLines(fset *token.FileSet, info *types.Info, body *ast.BlockStmt) 
 		if loop == nil {
 			return true
 		}
+		taint(loop)
 		ast.Inspect(loop, func(m ast.Node) bool {
 			switch x := m.(type) {
 			case *ast.CallExpr:
