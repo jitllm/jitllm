@@ -20,14 +20,16 @@ import (
 // of a plain dense model is compared in each slice, the slices must form,
 // and the composer's distance from the tier's may be at most a quarter of
 // the slice's int8 band, the tier's own distance from the slice with float
-// activations (tier.ShadowLog). A block that is not a slice is refused by
-// name, never compared; each slice's violation binds two of its weights the
-// wrong way round.
+// activations (tier.ShadowLog); so is the output head (the output norm and
+// the vocabulary projection) at every position. A block that is not a slice
+// is refused by name, never compared; each block slice's violation binds two
+// of its weights the wrong way round.
 func TestShadowDenseDecode(t *testing.T) {
 	// The composer's distance from the tier, as a fraction of the slice's
 	// int8 band: 0.069 at worst on these models (Qwen3-0.6B, CUDA).
 	const ratio = 0.25
 	slicesOf := []string{"attention in", "post-attention"}
+	const head = "head"
 	violations := []struct {
 		slice string
 		swap  [2]jlm.Role
@@ -58,8 +60,8 @@ func TestShadowDenseDecode(t *testing.T) {
 			opened := map[string]bool{}
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					run := func(swap [2]jlm.Role) *tier.ShadowLog {
-						log := &tier.ShadowLog{Ratio: ratio, Floor: 1e-9, Swap: swap}
+					run := func(swap [2]jlm.Role, perturb jlm.Role) *tier.ShadowLog {
+						log := &tier.ShadowLog{Ratio: ratio, Floor: 1e-9, Swap: swap, Perturb: perturb}
 						restore := tier.ShadowForTest(log)
 						defer restore()
 						g, err := tier.OpenWith(slices.Concat([]tier.Option{tier.WithDevices(dev),
@@ -87,11 +89,11 @@ func TestShadowDenseDecode(t *testing.T) {
 						}
 						return log
 					}
-					log := run([2]jlm.Role{})
+					log := run([2]jlm.Role{}, 0)
 					t.Logf("%d blocks x %d positions on %s: compared %v; worst NMSE composer-tier %.3g, tier-float %.3g, composer-float %.3g, worst composer-tier over the slice's band %.3g; refused %v; unformed %v",
 						m.Cfg.NLayer, len(ids), dev, log.Compared, log.Worst, log.WorstTier, log.WorstComposer, log.WorstRatio, log.Refused, log.Unformed)
 					if c.refuse {
-						if len(log.Compared) != 0 || len(log.Refused) == 0 {
+						if log.Compared[slicesOf[0]]+log.Compared[slicesOf[1]] != 0 || len(log.Refused) == 0 {
 							t.Fatalf("compared %v and refused %v: this model's blocks are not the plain slices and must be refused by name", log.Compared, log.Refused)
 						}
 						return
@@ -104,17 +106,25 @@ func TestShadowDenseDecode(t *testing.T) {
 							t.Fatalf("compared %d %s slices, want every block at every position (%d)", log.Compared[name], name, want)
 						}
 					}
+					if log.Compared[head] != len(ids) {
+						t.Fatalf("compared %d heads, want one at every position (%d)", log.Compared[head], len(ids))
+					}
 					if len(log.Failed) > 0 {
 						t.Fatalf("%d slices parted from the tier: %v", len(log.Failed), log.Failed[:min(4, len(log.Failed))])
 					}
 					for _, v := range violations {
-						bad := run(v.swap)
+						bad := run(v.swap, 0)
 						if len(bad.Failed) == 0 {
 							t.Fatalf("%s with %v and %v bound the wrong way round: no compare failed (worst %.3g), the gate cannot see a wrong slice",
 								v.slice, v.swap[0], v.swap[1], bad.Worst)
 						}
 						t.Logf("violation in %s: %d failed outputs over %d compared slices", v.slice, len(bad.Failed), bad.Compared[v.slice])
 					}
+					bad := run([2]jlm.Role{}, jlm.RoleOutputNorm)
+					if len(bad.Failed) == 0 {
+						t.Fatalf("the head read its norm at twice its values and no compare failed (worst %.3g)", bad.Worst)
+					}
+					t.Logf("violation in the head: %d failed outputs over %d compared heads", len(bad.Failed), bad.Compared[head])
 				})
 			}
 		})

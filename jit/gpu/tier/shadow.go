@@ -37,6 +37,9 @@ type ShadowLog struct {
 	// wrong way round in the composer's slice: a slice that forms and runs
 	// and computes the wrong thing, a violation the compare must see.
 	Swap [2]jlm.Role
+	// Perturb has the composer's slice read this role's vector at twice its
+	// values: another violation, for a slice with one weight.
+	Perturb jlm.Role
 	// Compared counts compared slices by name.
 	Compared map[string]int
 	// Worst is the largest NMSE between a composer's slice and the tier's;
@@ -79,9 +82,10 @@ type sliceKind uint8
 const (
 	sliceAttnIn sliceKind = iota + 1
 	slicePostAttn
+	sliceHead
 )
 
-var sliceNames = [...]string{sliceAttnIn: "attention in", slicePostAttn: "post-attention"}
+var sliceNames = [...]string{sliceAttnIn: "attention in", slicePostAttn: "post-attention", sliceHead: "head"}
 
 // shadowSlice is one call site's slice of the block that just ran: its
 // generic ops, and the block's weights and vectors under their roles, its
@@ -202,8 +206,18 @@ var shadowActs = map[kernels.ActKind]graph.Act{
 	kernels.ActReLU:      graph.ActReLU,
 }
 
-// jlmType is a resident's format as the container names it.
+// jlmType is a resident's format as the container names it: a packed type,
+// or a float weight the device keeps verbatim, row-major, as the container
+// does.
 func jlmType(q kernels.Quant) (jlm.Type, bool) {
+	switch q {
+	case kernels.Float32:
+		return jlm.TypeF32, true
+	case kernels.Float16:
+		return jlm.TypeF16, true
+	case kernels.BFloat16:
+		return jlm.TypeBF16, true
+	}
 	for _, t := range quant.PackedTypes {
 		if k, ok := kernels.QuantOf(t); ok && k == q {
 			return jlm.TypeOf(t)
@@ -336,6 +350,36 @@ func (sh *shadowTier) postAttention(g *devTier, lc *launcher, s backend.Session,
 	sh.check(g, lc, s, li, sl, [][]float32{sh.x, sh.a}, []backend.Buf{want})
 }
 
+// head is the output head: logits = W RMSNorm(x), held to the tier's logits
+// before any softcap.
+func (sh *shadowTier) head(g *devTier, lc *launcher, s backend.Session, p *nn.LayerPlan, x, norm backend.Buf, w *resident, logits backend.Buf, why string) {
+	if why == "" && norm == nil {
+		why = "a head with no norm"
+	}
+	if why != "" {
+		count(&sh.log.Refused, "head: "+why)
+		return
+	}
+	sl := &shadowSlice{
+		kind:    sliceHead,
+		weights: map[jlm.Role]*resident{jlm.RoleOutput: w},
+		vectors: map[jlm.Role]backend.Buf{jlm.RoleOutputNorm: norm},
+	}
+	if err := sl.setFormats(jlm.RoleOutput); err != nil {
+		count(&sh.log.Unformed, err.Error())
+		return
+	}
+	b := graph.NewSlice()
+	b.Out(b.MatVec(b.Norm(b.In("x", p.NEmbd), jlm.RoleOutputNorm, p.RMSEps), jlm.RoleOutput, w.nrows))
+	sl.graph = b.G
+	in, err := readF32(s, x, p.NEmbd, nil)
+	if err != nil {
+		count(&sh.log.Refused, "capture: "+err.Error())
+		return
+	}
+	sh.check(g, lc, s, -1, sl, [][]float32{in}, []backend.Buf{logits})
+}
+
 // check forms sl with and without the int8 form, runs both on ins, and holds
 // each output to the tier's buffer in wants.
 func (sh *shadowTier) check(g *devTier, lc *launcher, s backend.Session, li int, sl *shadowSlice, ins [][]float32, wants []backend.Buf) {
@@ -349,6 +393,18 @@ func (sh *shadowTier) check(g *devTier, lc *launcher, s backend.Session, li int,
 			count(&sh.log.Unformed, name+": "+err.Error())
 			return
 		}
+		arms[0] = &v
+	}
+	if r := sh.log.Perturb; r != 0 && sl.vectors[r] != nil {
+		buf, err := doubled(g, s, sl.vectors[r], vectorWidth(sl.graph, r))
+		if err != nil {
+			sh.log.Failed = append(sh.log.Failed, fmt.Sprintf("block %d, %s: %v", li, name, err))
+			return
+		}
+		defer buf.Free()
+		v := *arms[0]
+		v.vectors = maps.Clone(arms[0].vectors)
+		v.vectors[r] = buf
 		arms[0] = &v
 	}
 	var outs [2][][]float32
@@ -382,6 +438,38 @@ func (sh *shadowTier) check(g *devTier, lc *launcher, s backend.Session, li int,
 		}
 	}
 	count(&sh.log.Compared, name)
+}
+
+// vectorWidth is the width the graph binds role's vector at.
+func vectorWidth(gr *graph.Graph, role jlm.Role) int {
+	for _, o := range gr.Ops {
+		for _, w := range o.Weight {
+			if w.Role == role {
+				return w.K
+			}
+		}
+	}
+	return 0
+}
+
+// doubled is a copy of the n floats of b at twice their values.
+func doubled(g *devTier, s backend.Session, b backend.Buf, n int) (backend.Buf, error) {
+	f, err := readF32(s, b, n, nil)
+	if err != nil {
+		return nil, err
+	}
+	for i := range f {
+		f[i] *= 2
+	}
+	d, err := g.dev.Alloc(len(f) * 4)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Write(d, f32b(f)); err != nil {
+		d.Free()
+		return nil, err
+	}
+	return d, nil
 }
 
 // withoutInt8 is r with no int8 form on the GPU: a matvec decodes its

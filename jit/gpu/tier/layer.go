@@ -9749,6 +9749,13 @@ func (g *devTier) layersSession(s backend.Session) {
 					mvrun(bs.mvHead, bs.head, bs.logits)
 				}
 				mvrun(bs.mvHead, bs.head, bs.logits)
+				if g.shadow != nil {
+					here := ""
+					if bs.normVar != nil {
+						here = "LayerNorm"
+					}
+					g.shadow.head(g, lc, s, p, bs.x, hNorm, bs.head, bs.logits, shadowWhy(R, rag != nil, persist, len(g.kb.skip) > 0, here))
+				}
 			}
 			if bs.headCap != nil {
 				lc.la(bs.headCap, bs.mvHead.rows, bs.logits, bs.logitsCap)
