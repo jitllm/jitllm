@@ -28,7 +28,7 @@ func TestShadowDenseDecode(t *testing.T) {
 	// The composer's distance from the tier, as a fraction of the slice's
 	// int8 band: 0.069 at worst on these models (Qwen3-0.6B, CUDA).
 	const ratio = 0.25
-	slicesOf := []string{"attention in", "post-attention"}
+	slicesOf := []string{"attention in", "query", "post-attention"}
 	const head = "head"
 	violations := []struct {
 		slice string
@@ -37,9 +37,13 @@ func TestShadowDenseDecode(t *testing.T) {
 		{"attention in", [2]jlm.Role{jlm.RoleAttnK, jlm.RoleAttnV}},
 		{"post-attention", [2]jlm.Role{jlm.RoleFFNGate, jlm.RoleFFNUp}},
 	}
+	// The slices a block's residual makes: a model whose residual is not
+	// the plain one has these refused by name, while its query and head,
+	// plain ops whatever the residual, are compared.
+	residual := []string{"attention in", "post-attention"}
 	for _, c := range []struct {
 		file   string
-		refuse bool // every block refused by name: not the plain slices
+		refuse bool // every block's residual slices refused by name
 	}{
 		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", false},
 		{"Qwen3-0.6B-Q8_0.gguf", false},
@@ -60,8 +64,11 @@ func TestShadowDenseDecode(t *testing.T) {
 			opened := map[string]bool{}
 			for _, dev := range stepDevices() {
 				t.Run(dev, func(t *testing.T) {
-					run := func(swap [2]jlm.Role, perturb jlm.Role) *tier.ShadowLog {
+					run := func(swap [2]jlm.Role, perturb jlm.Role, table ...string) *tier.ShadowLog {
 						log := &tier.ShadowLog{Ratio: ratio, Floor: 1e-9, Swap: swap, Perturb: perturb}
+						if len(table) > 0 {
+							log.PerturbTable = table[0]
+						}
 						restore := tier.ShadowForTest(log)
 						defer restore()
 						g, err := tier.OpenWith(slices.Concat([]tier.Option{tier.WithDevices(dev),
@@ -93,8 +100,11 @@ func TestShadowDenseDecode(t *testing.T) {
 					t.Logf("%d blocks x %d positions on %s: compared %v; worst NMSE composer-tier %.3g, tier-float %.3g, composer-float %.3g, worst composer-tier over the slice's band %.3g; refused %v; unformed %v",
 						m.Cfg.NLayer, len(ids), dev, log.Compared, log.Worst, log.WorstTier, log.WorstComposer, log.WorstRatio, log.Refused, log.Unformed)
 					if c.refuse {
-						if log.Compared[slicesOf[0]]+log.Compared[slicesOf[1]] != 0 || len(log.Refused) == 0 {
-							t.Fatalf("compared %v and refused %v: this model's blocks are not the plain slices and must be refused by name", log.Compared, log.Refused)
+						if log.Compared[residual[0]]+log.Compared[residual[1]] != 0 || len(log.Refused) == 0 {
+							t.Fatalf("compared %v and refused %v: this model's residual is not the plain one and its slices must be refused by name", log.Compared, log.Refused)
+						}
+						if len(log.Failed) > 0 || len(log.Unformed) > 0 {
+							t.Fatalf("its plain slices parted from the tier or did not form: %v, %v", log.Failed[:min(4, len(log.Failed))], log.Unformed)
 						}
 						return
 					}
@@ -119,6 +129,18 @@ func TestShadowDenseDecode(t *testing.T) {
 								v.slice, v.swap[0], v.swap[1], bad.Worst)
 						}
 						t.Logf("violation in %s: %d failed outputs over %d compared slices", v.slice, len(bad.Failed), bad.Compared[v.slice])
+					}
+					if bad := run([2]jlm.Role{}, 0, "rope.cs"); len(bad.Failed) == 0 {
+						t.Fatalf("the query read the rotary table doubled and no compare failed (worst %.3g)", bad.Worst)
+					} else {
+						t.Logf("violation in the rotary table: %d failed outputs over %d compared queries", len(bad.Failed), bad.Compared["query"])
+					}
+					if m.Cfg.QKNorm {
+						bad := run([2]jlm.Role{}, jlm.RoleAttnQNorm)
+						if len(bad.Failed) == 0 {
+							t.Fatalf("the query read its norm at twice its values and no compare failed (worst %.3g)", bad.Worst)
+						}
+						t.Logf("violation in the query: %d failed outputs over %d compared queries", len(bad.Failed), bad.Compared["query"])
 					}
 					bad := run([2]jlm.Role{}, jlm.RoleOutputNorm)
 					if len(bad.Failed) == 0 {

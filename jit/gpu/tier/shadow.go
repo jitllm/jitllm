@@ -41,8 +41,10 @@ type ShadowLog struct {
 	// and computes the wrong thing, a violation the compare must see.
 	Swap [2]jlm.Role
 	// Perturb has the composer's slice read this role's vector at twice its
-	// values: another violation, for a slice with one weight.
-	Perturb jlm.Role
+	// values, and PerturbTable this step's table: violations for a slice
+	// with one weight or none.
+	Perturb      jlm.Role
+	PerturbTable string
 	// Compared counts compared slices by name.
 	Compared map[string]int
 	// Worst is the largest NMSE between a composer's slice and the tier's;
@@ -102,9 +104,10 @@ const (
 	sliceAttnIn sliceKind = iota + 1
 	slicePostAttn
 	sliceHead
+	sliceQuery
 )
 
-var sliceNames = [...]string{sliceAttnIn: "attention in", slicePostAttn: "post-attention", sliceHead: "head"}
+var sliceNames = [...]string{sliceAttnIn: "attention in", slicePostAttn: "post-attention", sliceHead: "head", sliceQuery: "query"}
 
 // shadowSlice is one call site's slice of the block that just ran: its
 // generic ops, and the block's weights and vectors under their roles, its
@@ -115,7 +118,11 @@ type shadowSlice struct {
 	formats map[jlm.Role]jlm.Type
 	weights map[jlm.Role]*resident
 	vectors map[jlm.Role]backend.Buf
-	roles   []jlm.Role
+	// tables are the step's tables the slice reads, by the composer's name,
+	// and their widths in floats.
+	tables     map[string]backend.Buf
+	tableWidth map[string]int
+	roles  []jlm.Role
 }
 
 // shadowForm is a slice's kernels compiled on the device with the buffers
@@ -137,6 +144,7 @@ type shadowArg struct {
 	role   jlm.Role
 	region int
 	vector bool
+	table  string
 }
 
 const shadowOwn = -1
@@ -355,6 +363,47 @@ func (sh *shadowTier) postAttention(g *devTier, lc *launcher, s backend.Session,
 	sh.check(g, lc, s, li, sl, [][]float32{sh.x, sh.a}, []backend.Buf{want})
 }
 
+// query is the query's way to the scores: its per-head norm (or one over
+// the row, where the plan's norm is wide) where the block has one, then the
+// rotary by the step's table, held to the tier's rotated q.
+func (sh *shadowTier) query(g *devTier, lc *launcher, s backend.Session, l *layer, li int, p *nn.LayerPlan, q, norm, cs, qr backend.Buf, qdim int, why string) {
+	switch {
+	case why != "":
+	case p.QKL2Norm:
+		why = "an L2 query norm"
+	case p.QKNormPost:
+		why = "a query norm after the rotary"
+	case p.RopeSplit:
+		why = "a rotary turned by several tables"
+	}
+	if why != "" {
+		count(&sh.log.Refused, "query: "+why)
+		return
+	}
+	sl := &shadowSlice{kind: sliceQuery, vectors: map[jlm.Role]backend.Buf{jlm.RoleAttnQNorm: norm},
+		tables: map[string]backend.Buf{"rope.cs": cs}, tableWidth: map[string]int{"rope.cs": p.NRot}}
+	layout := graph.RopeNorm
+	if p.RopeNeox {
+		layout = graph.RopeNeox
+	}
+	b := graph.NewSlice()
+	x := b.In("q", qdim)
+	switch {
+	case norm != nil && p.QKNorm && p.QKNormWide:
+		x = b.Norm(x, jlm.RoleAttnQNorm, p.RMSEps)
+	case norm != nil:
+		x = b.HeadNorm(x, jlm.RoleAttnQNorm, p.HeadDim, p.RMSEps)
+	}
+	b.Out(b.Rope(x, p.HeadDim, p.NRot, p.RopeBase, layout))
+	sl.graph = b.G
+	in, err := readF32(s, q, qdim, nil)
+	if err != nil {
+		count(&sh.log.Refused, "capture: "+err.Error())
+		return
+	}
+	sh.check(g, lc, s, li, sl, [][]float32{in}, []backend.Buf{qr})
+}
+
 // head is the output head: logits = W RMSNorm(x), held to the tier's logits
 // before any softcap.
 func (sh *shadowTier) head(g *devTier, lc *launcher, s backend.Session, p *nn.LayerPlan, x, norm backend.Buf, w *resident, logits backend.Buf, why string) {
@@ -412,6 +461,18 @@ func (sh *shadowTier) check(g *devTier, lc *launcher, s backend.Session, li int,
 		v.vectors[r] = buf
 		arms[0] = &v
 	}
+	if n := sh.log.PerturbTable; n != "" && sl.tables[n] != nil {
+		buf, err := doubled(g, s, sl.tables[n], sl.tableWidth[n])
+		if err != nil {
+			sh.log.Failed = append(sh.log.Failed, fmt.Sprintf("block %d, %s: %v", li, name, err))
+			return
+		}
+		defer buf.Free()
+		v := *arms[0]
+		v.tables = maps.Clone(arms[0].tables)
+		v.tables[n] = buf
+		arms[0] = &v
+	}
 	var outs [2][][]float32
 	for i, float := range [2]bool{false, true} {
 		f, err := sh.form(g, arms[i], float)
@@ -434,7 +495,9 @@ func (sh *shadowTier) check(g *devTier, lc *launcher, s backend.Session, li int,
 		e, et, ec := nmse(got, tier), nmse(tier, ref), nmse(got, ref)
 		sh.log.Worst = max(sh.log.Worst, e)
 		sh.log.WorstTier, sh.log.WorstComposer = max(sh.log.WorstTier, et), max(sh.log.WorstComposer, ec)
-		if et > 0 {
+		// A slice with no int8 form has no band above the floor, and a
+		// ratio to it measures rounding.
+		if et > sh.log.Floor {
 			sh.log.WorstRatio = max(sh.log.WorstRatio, e/et)
 		}
 		if !(e <= sh.log.Ratio*et+sh.log.Floor) {
@@ -585,6 +648,8 @@ func (sh *shadowTier) form(g *devTier, sl *shadowSlice, float bool) (*shadowForm
 				args = append(args, shadowArg{buf: shadowOwn, role: o.Role, region: o.Region})
 			case o.Kind == jit.OperandVector:
 				args = append(args, shadowArg{buf: shadowOwn, role: o.Role, vector: true})
+			case o.Kind == jit.OperandTable && sl.tables[o.Name] != nil:
+				args = append(args, shadowArg{buf: shadowOwn, table: o.Name})
 			case bd.Words != nil || o.Kind == jit.OperandScratch:
 				i, ok := own[o]
 				if !ok {
@@ -640,6 +705,8 @@ func (sh *shadowTier) run(lc *launcher, s backend.Session, f *shadowForm, sl *sh
 				fc.bufs[j] = f.bufs[a.buf]
 			case a.vector:
 				fc.bufs[j] = sl.vectors[a.role]
+			case a.table != "":
+				fc.bufs[j] = sl.tables[a.table]
 			default:
 				if r := weights[a.role]; r != nil {
 					fc.bufs[j] = [3]backend.Buf{r.qs, r.d, r.sc}[a.region]

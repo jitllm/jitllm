@@ -25,5 +25,8 @@ func (*shadowTier) attnIn(*devTier, *launcher, backend.Session, *layer, int, *nn
 func (*shadowTier) postAttention(*devTier, *launcher, backend.Session, *layer, int, *nn.LayerPlan, int, backend.Buf) {
 }
 
+func (*shadowTier) query(*devTier, *launcher, backend.Session, *layer, int, *nn.LayerPlan, backend.Buf, backend.Buf, backend.Buf, backend.Buf, int, string) {
+}
+
 func (*shadowTier) head(*devTier, *launcher, backend.Session, *nn.LayerPlan, backend.Buf, backend.Buf, *resident, backend.Buf, string) {
 }

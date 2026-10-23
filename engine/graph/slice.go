@@ -74,3 +74,20 @@ func (s *Slice) ActMul(act Act, a, b ValueID) ValueID {
 	s.G.op(Op{Kind: OpActMul, In: []ValueID{a, b}, Out: []ValueID{z}, Attr: Attrs{Act: act}})
 	return z
 }
+
+// HeadNorm is RMSNorm over each head of headDim within x, role's scale of
+// headDim shared by every head.
+func (s *Slice) HeadNorm(x ValueID, role jlm.Role, headDim int, eps float64) ValueID {
+	y := s.value(role.String(), s.width(x))
+	s.G.op(Op{Kind: OpHeadNorm, In: []ValueID{x}, Out: []ValueID{y}, Weight: []Binding{{Role: role, K: headDim}},
+		Attr: Attrs{Eps: eps, HeadDim: headDim}})
+	return y
+}
+
+// Rope turns each head of headDim's first nRot elements by the step's
+// rotary table, in pairs of layout, at base.
+func (s *Slice) Rope(x ValueID, headDim, nRot int, base float64, layout RopeLayout) ValueID {
+	y := s.value("rope", s.width(x))
+	s.G.op(Op{Kind: OpRope, In: []ValueID{x}, Out: []ValueID{y}, Attr: Attrs{HeadDim: headDim, NRot: nRot, Base: base, Layout: layout}})
+	return y
+}

@@ -8490,6 +8490,22 @@ func (g *devTier) layersSession(s backend.Session) {
 							laKV(copyV, vThreads, vSrc, vDst, vOff)
 						}
 					}
+					if g.shadow != nil && roped {
+						here := ""
+						switch {
+						case bs.clampQ != nil || bs.splitQG != nil:
+							here = "a clamped or gated query"
+						case bs.qTemp != nil:
+							here = "a query temperature"
+						case (bs.qNorm == nil) != (nQ == nil):
+							here = "a query norm the tier half holds"
+						}
+						rcs := bs.cs
+						if bs.csSWA != nil && p.LocalRope(li) {
+							rcs = bs.csSWA
+						}
+						g.shadow.query(g, lc, s, l, li, p, bs.q, nQ, rcs, bs.qr, qdim, shadowWhy(R, rag != nil, persist, len(g.kb.skip) > 0, here))
+					}
 					// Where the score kernel reads q: the rotated buffer, or q itself on
 					// an unrotated layer (bs.qr would hold the last block's).
 					qAtt := bs.qr
