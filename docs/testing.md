@@ -73,7 +73,7 @@ the release builds:
 
 The model-free run is every package of the five modules but `./dev/bench`
 (its perf floors want a quiet box, RULE 4), `./ui/stage` (the ui job's) and,
-on macOS, `./jit/gpu/backend` (the runner's paravirtual Metal device allows
+on macOS, `./backend` (the runner's paravirtual Metal device allows
 512-thread pipelines, and the backend's gates force 1024-thread splits),
 `engine/model` and `common/engine` included, plus the SSE tier under
 `-tags jitllmtest` on amd64, Windows included. It sets `JITLLM_MODEL_FREE=1`
@@ -250,7 +250,7 @@ The per-test variables this replaces are gone: `JITLLM_STEP_DEVICES`,
 `JITLLM_AB_DEVICE`. No script read them, so there is no alias. A stale one is
 ignored, not an error.
 
-`jit/gpu/backend`'s tests open their devices through `backend.Open`, which
+`backend`'s tests open their devices through `backend.Open`, which
 takes a discrete card before an integrated one -- so on a laptop with both, the
 iGPU is never tested unless it is named. The test binary (not the package,
 which reads no environment) maps these onto the `backend.Opts` `Open` uses:
@@ -262,7 +262,7 @@ which reads no environment) maps these onto the `backend.Opts` `Open` uses:
 | `JITLLM_VK_MAXGROUPS` | workgroups per Vulkan dispatch, below the device's own `maxComputeWorkGroupCount`; `7` sends nearly every launch in the suite through a split dispatch | the device's own |
 | `JITLLM_VK_VALIDATION` | the prefix the Khronos validation layer is installed under, for `backend.TestSplitLaunchesAreValidVulkanUsage`; `apt-get download vulkan-validationlayers && dpkg-deb -x` the `.deb` into DIR and pass `DIR/usr` | `/usr`, else the test skips |
 
-    JITLLM_VK_DEVICE=1 JITLLM_VK_MAXGROUPS=7 ./scripts/cap 8G -- go test ./jit/gpu/backend/ -count=1
+    JITLLM_VK_DEVICE=1 JITLLM_VK_MAXGROUPS=7 ./scripts/cap 8G -- go test ./backend/ -count=1
 
 The `model` device gates take the same limit, as `tier.WithVulkanMaxGroups`:
 `JITLLM_VK_MAXGROUPS` reaches every tier the step gates

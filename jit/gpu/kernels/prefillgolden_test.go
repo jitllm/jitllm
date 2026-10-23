@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 var updatePrefill = flag.Bool("update-prefill", false, "rewrite testdata/prefill_ir.sha")

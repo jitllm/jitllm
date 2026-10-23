@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
 )
 
 // A block moving between two devices of one tier: the target takes the block

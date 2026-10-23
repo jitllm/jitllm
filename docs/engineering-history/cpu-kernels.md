@@ -4059,7 +4059,7 @@ paying for the threads the tests before it had left masked. The engine now integ
 its own vocabulary instead: `cmd/jitllm` aligns `GOMAXPROCS` to the engine's
 width at startup, `PCores`/`ECores`/`SMTSiblings` intersect `sched_getaffinity`
 so a narrower `taskset` yields fewer workers, and `LockOSThread` survives only
-where an API genuinely binds state to a thread (CUDA contexts, `jit/gpu/cuda`).
+where an API genuinely binds state to a thread (CUDA contexts, `backend/cuda`).
 
 **Measure at the thread count that SHIPS.** A win measured on one core has
 evaporated or reversed at the real thread count eight times here — the single

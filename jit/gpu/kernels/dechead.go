@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // A decision head's kernels (Clef's joint schema head, tier/dechead.go): a
@@ -51,7 +51,7 @@ func DHMatABt(batch, m, n, k, lda, ldb, ldo, sa, sb, so int, scale float32, bias
 	}
 	o := b.Add(ir.U32, b.Mul(ir.U32, bb, u32(b, so)), b.Add(ir.U32, b.Mul(ir.U32, i, u32(b, ldo)), j))
 	b.Store(pOut, o, v, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // DHMatAB is out[b*so + i*ldo + j] = sum_c A[b*sa + i*lda + c] *
@@ -84,7 +84,7 @@ func DHMatAB(batch, m, n, k, lda, ldb, ldo, sa, sb, so int) (*ir.Kernel, error) 
 	b.EndLoop()
 	o := b.Add(ir.U32, b.Mul(ir.U32, bb, u32(b, so)), b.Add(ir.U32, b.Mul(ir.U32, i, u32(b, ldo)), j))
 	b.Store(pOut, o, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // DHNormRows is a norm of each of rows rows of width: torch's LayerNorm
@@ -132,7 +132,7 @@ func DHNormRows(width, rows int, eps float32, rms, bias bool) (*ir.Kernel, error
 	b.Store(pOut, at, v, 0)
 	b.SetPhi(c3, b.Add(ir.U32, c3, u32(b, 1)))
 	b.EndLoop()
-	return b.Done(), nil
+	return b.Done()
 }
 
 // DHGatherAdd is out[r][c] = in[r][c] + T[idx[r]][c] for rows rows of
@@ -153,7 +153,7 @@ func DHGatherAdd(width, rows int) (*ir.Kernel, error) {
 	tr := b.Load(ir.U32, pIdx, r, 0)
 	v := b.Add(ir.F32, b.Load(ir.F32, pIn, i, 0), b.Load(ir.F32, pT, b.Add(ir.U32, b.Mul(ir.U32, tr, w), c), 0))
 	b.Store(pOut, i, v, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // DHL2Rows is y = x / max(||x||, 1e-12) for each of rows rows of width
@@ -183,7 +183,7 @@ func DHL2Rows(width, rows int) (*ir.Kernel, error) {
 	b.Store(pOut, at, b.Mul(ir.F32, b.Load(ir.F32, pX, at, 0), inv), 0)
 	b.SetPhi(c2, b.Add(ir.U32, c2, u32(b, 1)))
 	b.EndLoop()
-	return b.Done(), nil
+	return b.Done()
 }
 
 // DHRowDot is out[r] = sum_c A[r][c] * B[idx[r]][c] for rows rows of width.
@@ -212,7 +212,7 @@ func DHRowDot(width, rows int) (*ir.Kernel, error) {
 	b.SetPhi(c, b.Add(ir.U32, c, u32(b, 1)))
 	b.EndLoop()
 	b.Store(pOut, r, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // DHFeatures is the joint scorer's input for each of rows options: the
@@ -238,7 +238,7 @@ func DHFeatures(width, rows int) (*ir.Kernel, error) {
 	b.Store(pOut, b.Add(ir.U32, at, w), o, 0)
 	b.Store(pOut, b.Add(ir.U32, at, u32(b, 2*width)), b.Mul(ir.F32, f, o), 0)
 	b.Store(pOut, b.Add(ir.U32, at, u32(b, 3*width)), b.Max(ir.F32, d, b.Sub(ir.F32, b.ConstF32(0), d)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // DHCombine is out = s0*prior + s2*(s1*cos + res) over n options: Clef's
@@ -257,5 +257,5 @@ func DHCombine(n int, s0, s1, s2 float32) (*ir.Kernel, error) {
 	joint := b.Add(ir.F32, b.Mul(ir.F32, b.ConstF32(s1), b.Load(ir.F32, pC, i, 0)), b.Load(ir.F32, pR, i, 0))
 	v := b.Add(ir.F32, b.Mul(ir.F32, b.ConstF32(s0), b.Load(ir.F32, pP, i, 0)), b.Mul(ir.F32, b.ConstF32(s2), joint))
 	b.Store(pOut, i, v, 0)
-	return b.Done(), nil
+	return b.Done()
 }

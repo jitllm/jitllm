@@ -3,10 +3,10 @@ package tier
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // Qwen3.8-Flash-Next on the device (nn.LayerPlan.Q4E; engine/model/q4e.go is

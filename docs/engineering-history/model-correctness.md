@@ -7668,7 +7668,7 @@ masks are the reference's f32 subtraction and division, so they are its masks
 bit for bit; a 0/0 gap (a zero logit beside a zero maximum) is kept, as
 torch's `masked_fill` keeps a NaN comparison. Against
 `internal/oracle.SparseMixer`, the kernel gates (`jit/cpu` and
-`jit/gpu/backend`) catch every fault the reference can carry: no mask (97 of 98
+`backend`) catch every fault the reference can carry: no mask (97 of 98
 inputs), the first expert kept in the second softmax (98), the weights
 renormalised (98), the clamp dropped from the factor (4 -- it only matters
 where |s_j| is below the maximum, a negative maximum).

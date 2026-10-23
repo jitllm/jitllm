@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/vulkan"
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/backend/vulkan"
 )
 
 // fakeHost stands three CUDA cards and a Vulkan list behind the backend

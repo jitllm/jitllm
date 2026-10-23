@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // The packed arena, at the tier's level: a block uploaded, released and

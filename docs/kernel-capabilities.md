@@ -42,7 +42,7 @@ Sources by family: [CPU dispatch](../jit/cpu/emitters.go), [CPU orchestration](.
 | GPU integer tensor-core kernel / lowering | Ordinary batched dot-product kernel generated from IR | `batchMV` → `batchMVDot4` in [layer.go](../jit/gpu/tier/layer.go) |
 | GPU attention matrix-instruction path | Tiled FMA score kernel, including sliding-window form | `initScratch` in [layer.go](../jit/gpu/tier/layer.go) |
 | Suitable GPU subgroup softmax | Scalar device kernel generated and compiled for the row shape | `pickSoftmax` in [layer.go](../jit/gpu/tier/layer.go) |
-| Native packed-dot instruction in Metal's exposed compute model | Generated MSL helper arithmetic for IR `Dot4`, including bounded-input variants | [MSL lowerer](../jit/gpu/msl/msl.go) |
+| Native packed-dot instruction in Metal's exposed compute model | Generated MSL helper arithmetic for IR `Dot4`, including bounded-input variants | [MSL lowerer](../jit/msl/msl.go) |
 | A single fused attention kernel | Generated score + softmax + value-accumulation kernels, assembled into layer execution | `initScratch` and `layersOnce` in [layer.go](../jit/gpu/tier/layer.go) |
 | A single fused dense / MoE / recurrent / MLA block kernel | The model-specific sequence of generated primitives, with buffers, shapes and state bindings prepared at runtime | [`LayerPlan`](../engine/nn/device.go), [`planFor`](../engine/model/forward.go), `PrepLayer`, `emitLinear`, `emitMLA` in [layer.go](../jit/gpu/tier/layer.go) |
 | Device admission for a supported block | Host execution using generated CPU kernels | `offerRange` in [forward.go](../engine/model/forward.go) |

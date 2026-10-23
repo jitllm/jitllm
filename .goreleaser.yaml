@@ -19,7 +19,7 @@ builds:
     binary: jitllm
     env:
       # There is no cgo anywhere: CUDA, Vulkan and Metal are opened at run time
-      # through goffi (jit/gpu/ffi), and every kernel is generated in process. So one Linux
+      # through goffi (backend/ffi), and every kernel is generated in process. So one Linux
       # runner cross-builds every target.
       - CGO_ENABLED=0
     flags:

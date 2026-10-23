@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // ActIn is a decode matvec's operand prologue: each workgroup builds the int8

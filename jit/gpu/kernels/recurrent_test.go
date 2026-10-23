@@ -82,7 +82,7 @@ func TestConv1dRowsMatchesTheHostWindow(t *testing.T) {
 }
 
 // runConvRef evaluates the two kernels' arithmetic on the host, so the shape is
-// gated without a card; jit/gpu/backend runs them for real.
+// gated without a card; backend runs them for real.
 func runConvRef(taps, chans, rows, m int, st, x, w []float32) (out, ns []float32) {
 	pre := taps - 1
 	out = make([]float32, rows*chans)

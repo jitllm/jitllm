@@ -3,7 +3,7 @@ package tier
 import (
 	"time"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/backend"
 )
 
 // This package, and backend, vulkan and kernels below it, read no

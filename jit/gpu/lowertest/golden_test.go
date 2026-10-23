@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/msl"
-	"github.com/jitllm/jitllm/jit/gpu/ptx"
-	"github.com/jitllm/jitllm/jit/gpu/spirv"
+	"github.com/jitllm/jitllm/jit/msl"
+	"github.com/jitllm/jitllm/jit/ptx"
+	"github.com/jitllm/jitllm/jit/spirv"
 )
 
 var update = flag.Bool("update", false, "rewrite testdata/kernels.sha")

@@ -3,8 +3,8 @@ package tier
 import (
 	"time"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 

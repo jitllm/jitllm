@@ -3,10 +3,10 @@ package tier
 import (
 	"fmt"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // MiniMax Sparse Attention on the device (nn.LayerPlan.MSA;

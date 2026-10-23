@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // The batched mixture's grouping, on the device. A chunk's router picks k
@@ -94,7 +94,7 @@ func ExpertGroupBlockCount(rows, k, nExp int) (*ir.Kernel, error) {
 	b.SetPhi(j, b.Add(ir.U32, j, one))
 	b.EndLoop()
 	b.Store(pBC, t, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ExpertGroupCount writes cnt[e], the pairs routed to e, and off[b*nExp+e],
@@ -128,7 +128,7 @@ func ExpertGroupCount(rows, k, nExp int) (*ir.Kernel, error) {
 	isLast := b.Select(ir.U32, b.Lt(ir.U32, blk, b.Const(ir.U32, int64(nb-1))), zero, one)
 	at := b.Add(ir.U32, e, b.Mul(ir.U32, b.Sub(ir.U32, one, isLast), ce))
 	b.Store(pCnt, at, b.Add(ir.U32, acc, b.Load(ir.U32, pBC, t, 0)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ExpertGroupEnds writes ends[e] = sum over f <= e of cnt[f] padded to unit.
@@ -150,7 +150,7 @@ func ExpertGroupEnds(nExp, unit int) (*ir.Kernel, error) {
 	b.SetPhi(f, b.Add(ir.U32, f, one))
 	b.EndLoop()
 	b.Store(pEnds, e, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // expertOf is the expert whose padded run holds column j: the number of runs
@@ -190,7 +190,7 @@ func ExpertGroupColumns(rows, nExp, np int, pair bool) (*ir.Kernel, error) {
 	if pair {
 		b.Store(pPair, j, b.Const(ir.U32, 0), 0)
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ExpertGroupScatter places each of rows*k pairs: its column is its expert's
@@ -240,7 +240,7 @@ func ExpertGroupScatter(rows, k, nExp, unit int, pair bool) (*ir.Kernel, error) 
 	if pair {
 		b.Store(pPair, col, i, 0)
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ExpertGroupTiles writes tsel[t], the expert of columns t*u .. t*u+u-1, for
@@ -256,5 +256,5 @@ func ExpertGroupTiles(nExp, nt, u int) (*ir.Kernel, error) {
 	t := b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID()), b.Const(ir.U32, int64(nt-1)))
 	j := b.Mul(ir.U32, t, b.Const(ir.U32, int64(u)))
 	b.Store(pTsel, t, expertOf(b, pEnds, j, nExp), 0)
-	return b.Done(), nil
+	return b.Done()
 }

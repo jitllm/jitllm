@@ -17,7 +17,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
@@ -339,14 +339,7 @@ func timeMatVecMode(d backend.Device, q kernels.Quant, nrows, k, split, rounds i
 	if err != nil {
 		return 0, 0, err
 	}
-	x := make([]float32, k)
-	for i := range x {
-		x[i] = float32(rng.NormFloat64())
-	}
-	av, as, asum, err := kernels.PackActivations(x)
-	if err != nil {
-		return 0, 0, err
-	}
+	av, as, asum := randActivations(rng, k)
 	kk, err := kernels.MatVec(kernels.MatVecShape{T: q, K: k, Rows: nrows, Split: split, GroupSplit: groupSplit})
 	if err != nil {
 		return 0, 0, err
@@ -581,15 +574,8 @@ func timeBatched(d backend.Device, q kernels.Quant, nrows, k, ntok, tok, rowt, r
 	// token j's scales sit at j*nb and its sums at NTok*nb + j*(K/16).
 	var av []uint32
 	var as, asum []float32
-	x := make([]float32, k)
 	for t := 0; t < ntok; t++ {
-		for i := range x {
-			x[i] = float32(rng.NormFloat64())
-		}
-		v, s1, s2, err := kernels.PackActivations(x)
-		if err != nil {
-			return 0, 0, err
-		}
+		v, s1, s2 := randActivations(rng, k)
 		av = append(av, v...)
 		as = append(as, s1...)
 		asum = append(asum, s2...)
@@ -686,4 +672,19 @@ func timeBatched(d backend.Device, q kernels.Quant, nrows, k, ntok, tok, rowt, r
 		}
 	}
 	return best, float64(len(qs)+len(dw)+len(scw)) * 4, nil
+}
+
+// randActivations is a row's int8 form for timing: random codes, a fixed
+// scale per 32 and zero sums. A matvec's time does not depend on the values
+// it reads, so nothing is quantized.
+func randActivations(rng *rand.Rand, k int) (a []uint32, as, sum []float32) {
+	a = make([]uint32, k/4)
+	for i := range a {
+		a[i] = rng.Uint32()
+	}
+	as = make([]float32, k/32)
+	for i := range as {
+		as[i] = 1.0 / 127
+	}
+	return a, as, make([]float32, 2*(k/32))
 }

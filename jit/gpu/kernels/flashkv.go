@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // FlashKVWidth is FlashDecodeKV's workgroup width for s: s.Warps warps, or
@@ -596,5 +596,5 @@ func FlashDecodeKV(s FlashShape) (*ir.Kernel, error) {
 			b.Store(out, add(mul(head, u(s.Dim)), dim), b.Mul(ir.F32, acc[g][r], factor), 0)
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }

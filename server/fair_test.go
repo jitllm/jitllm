@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/backend"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 

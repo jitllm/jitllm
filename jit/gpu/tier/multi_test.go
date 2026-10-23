@@ -9,8 +9,8 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
 )
 
 // The multi-device tier, on fake devices. Every assertion is about which

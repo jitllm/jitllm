@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // FlashPrefill70Shape is one batched attention geometry for FlashPrefill70.
@@ -78,7 +78,7 @@ func FlashPrefill70Groups(s FlashPrefill70Shape) int {
 }
 
 // FlashPrefill70 is the batched attention of a prompt chunk in one kernel on
-// sm_70's m8n8k4 (ir.MMAVolta): scores, a running softmax and the weighted sum
+// sm_70's m8n8k4 (ir.MMAVolta()): scores, a running softmax and the weighted sum
 // of V per 32-key tile, with the probabilities never leaving the workgroup.
 //
 // It replaces AttnScoresMMA70, the softmax and AttnAccMMA70, which wrote and
@@ -366,7 +366,7 @@ func FlashPrefill70(s FlashPrefill70Shape) (*ir.Kernel, error) {
 		af := []ir.Value{b.Load(ir.U32, shK, kRow, int64(2*st)), b.Load(ir.U32, shK, kRow, int64(2*st+1))}
 		for j := 0; j < 2; j++ {
 			bf := []ir.Value{b.Load(ir.U32, shQ, qRow[j], int64(2*st)), b.Load(ir.U32, shQ, qRow[j], int64(2*st+1))}
-			sacc[j] = b.MMA(ir.MMAVolta, af, bf, sacc[j])
+			sacc[j] = b.MMA(ir.MMAVolta(), af, bf, sacc[j])
 		}
 	}
 
@@ -454,7 +454,7 @@ func FlashPrefill70(s FlashPrefill70Shape) (*ir.Kernel, error) {
 		for dt := 0; dt < dts; dt++ {
 			af := []ir.Value{b.Load(ir.U32, shV, dRowV[dt], int64(2*st)), b.Load(ir.U32, shV, dRowV[dt], int64(2*st+1))}
 			for j := 0; j < 2; j++ {
-				od[dt][j] = b.MMA(ir.MMAVolta, af, bf[j], od[dt][j])
+				od[dt][j] = b.MMA(ir.MMAVolta(), af, bf[j], od[dt][j])
 			}
 		}
 	}
@@ -525,7 +525,7 @@ func FlashPrefill70(s FlashPrefill70Shape) (*ir.Kernel, error) {
 				}
 			}
 		}
-		return b.Done(), nil
+		return b.Done()
 	}
 	var lsum [2][4]ir.Value
 	for j := 0; j < 2; j++ {
@@ -547,7 +547,7 @@ func FlashPrefill70(s FlashPrefill70Shape) (*ir.Kernel, error) {
 			}
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // slotOf is which of the four column slots accumulator i's column is: i and

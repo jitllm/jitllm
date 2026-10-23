@@ -1,7 +1,7 @@
 package model
 
 import (
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/backend"
 	"math"
 	"os"
 	"strings"

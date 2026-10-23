@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // The mixture-of-experts router, on the device.
@@ -206,7 +206,7 @@ func ExpertGroupScore(r MoERoute) (*ir.Kernel, error) {
 		gs = b.Add(ir.F32, m1, m2)
 	}
 	b.Store(pGS, atG(g), gs, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ExpertGroupMask writes the selection plane: each expert's biased score, or
@@ -262,7 +262,7 @@ func ExpertGroupMask(r MoERoute) (*ir.Kernel, error) {
 	}
 	keep := b.Lt(ir.U32, rank, b.Const(ir.U32, int64(r.NGroupUsed)))
 	b.Store(pBM, atL(e), b.Select(ir.F32, keep, score, b.ConstF32(negBig)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ExpertRank writes the ids of the k highest router logits, best first, and the
@@ -387,7 +387,7 @@ func ExpertRank(r MoERoute) (*ir.Kernel, error) {
 		top = gateScore(b, r, b.Load(ir.F32, pL, atL(e), 0))
 	}
 	b.Store(pTop, slot, top, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ExpertWeights turns the k selected logits into the mixture weights.
@@ -470,7 +470,7 @@ func ExpertWeights(r MoERoute) (*ir.Kernel, error) {
 	b.Store(pW, atW(n), w, 0)
 	b.SetPhi(n, b.Add(ir.U32, n, one))
 	b.EndLoop()
-	return b.Done(), nil
+	return b.Done()
 }
 
 // MoESumFloor is added to the renormalising divisor so an all-underflowed
@@ -523,7 +523,7 @@ func expertWeightsSigmoid(r MoERoute) (*ir.Kernel, error) {
 	b.Store(pW, atW(n), w, 0)
 	b.SetPhi(n, b.Add(ir.U32, n, one))
 	b.EndLoop()
-	return b.Done(), nil
+	return b.Done()
 }
 
 // weightsGroup is the weights kernels' group: one thread for one token, as it
@@ -650,7 +650,7 @@ func ExpertRoute(r MoERoute) (*ir.Kernel, error) {
 		wv = b.Mul(ir.F32, wv, b.ConstF32(sc))
 	}
 	b.Store(pW, slot, wv, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ExpertRouteWarp is ExpertRoute for the renormalised softmax route on one
@@ -776,7 +776,7 @@ func ExpertRouteWarp(r MoERoute) (*ir.Kernel, error) {
 	b.Store(pW, o, w, 0)
 	b.SetPhi(o, b.Add(ir.U32, o, one))
 	b.EndLoop()
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ExpertRouteWidth is ExpertRoute's workgroup: the expert count rounded up to
@@ -814,7 +814,7 @@ func ExpertCombine(n, slots int) (*ir.Kernel, error) {
 	b.SetPhi(idx, b.Add(ir.U32, idx, stride))
 	b.EndLoop()
 	b.Store(pOut, i, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // RouterMatVecOf is out[r] = SUM_i W[r*k+i] * x[i] over float32 weights: the
@@ -915,7 +915,7 @@ func routerMatVec(rows, k, ntok int, f16 bool) (*ir.Kernel, error) {
 	// Every thread stores the same bits to the same word -- the benign shape
 	// MatVec's GroupSplit uses.
 	b.Store(pOut, out, b.Load(ir.F32, part, zeroU, 0), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // routerGroup is RouterMatVec's workgroup: one per row.
@@ -970,7 +970,7 @@ func SharedExpertAdd(n, rows int) (*ir.Kernel, error) {
 	sig := b.Div(ir.F32, one, b.Add(ir.F32, one, b.Exp(b.Sub(ir.F32, b.ConstF32(0), g))))
 	b.Store(pDst, i, b.Add(ir.F32, b.Load(ir.F32, pAcc, i, 0),
 		b.Mul(ir.F32, sig, b.Load(ir.F32, pV, i, 0))), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ExpertWeightScale multiplies each routed weight by its expert's own factor,
@@ -993,7 +993,7 @@ func ExpertWeightScale(rows, k int) (*ir.Kernel, error) {
 	si := b.Add(ir.U32, i, b.Div(ir.U32, i, nk)) // r*(k+1)+j = i + r
 	e := b.Load(ir.U32, pSel, si, 0)
 	b.Store(pOut, i, b.Mul(ir.F32, b.Load(ir.F32, pW, i, 0), b.Load(ir.F32, pScale, e, 0)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // IndexedBiasAdd adds each slot's expert bias to its rows:
@@ -1018,5 +1018,5 @@ func IndexedBiasAdd(k, rows int) (*ir.Kernel, error) {
 	e := b.Load(ir.U32, pSel, j, 0)
 	bi := b.Add(ir.U32, b.Mul(ir.U32, e, nr), r)
 	b.Store(pOut, i, b.Add(ir.F32, b.Load(ir.F32, pIn, i, 0), b.Load(ir.F32, pBias, bi, 0)), 0)
-	return b.Done(), nil
+	return b.Done()
 }

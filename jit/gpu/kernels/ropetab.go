@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // RopeTable builds the rotary table on the device: the fourth transcription of
@@ -148,5 +148,5 @@ func RopeTable(npairs, rows int) (*ir.Kernel, error) {
 	out := b.Mul(ir.U32, flat, b.Const(ir.U32, 2))
 	b.Store(pOut, out, b.Mul(ir.F32, cv, ms), 0)
 	b.Store(pOut, out, b.Mul(ir.F32, sv, ms), 1)
-	return b.Done(), nil
+	return b.Done()
 }

@@ -38,7 +38,7 @@ func TestLayoutMatchesThePacker(t *testing.T) {
 		want := TypeLayout{
 			Sub: sub, Planes: [2]int{bits, kernels.HiPlane(q)}, SuperSub: perSuper,
 			ScaleOff: scOff, HasMin: biasArray, Signed: kernels.SignedPayload(q),
-			Codes: kernels.Codes(q), D32: kernels.D32(q),
+			Codes: kernels.Codes(q), D32: kernels.D32(q), E8M0: kernels.E8M0(q),
 		}
 		if !biasArray {
 			want.Bias = biasK

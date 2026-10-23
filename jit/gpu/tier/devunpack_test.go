@@ -8,8 +8,8 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testlock"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
@@ -23,7 +23,7 @@ import (
 // byte-level check. Only counters tell them apart: Stats.Unpacks and
 // Stats.Packs are asserted in every test, each against a violating arm.
 
-// gpuLock is jit/gpu/backend's cross-process test lock (internal/testlock), so
+// gpuLock is backend's cross-process test lock (internal/testlock), so
 // this package and backend's unpack gate do not allocate on one card at the
 // same time under `go test ./...`.
 func gpuLock(t *testing.T) { testlock.GPU(t) }

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // FlashShape specializes online attention. KStride == 0 means row-major K;
@@ -353,7 +353,7 @@ func FlashAttention(s FlashShape) (*ir.Kernel, error) {
 		// Replicated metadata gives each lane its own address, avoiding racing stores.
 		b.Store(out, add(base, lane), mx, int64(padded))
 		b.Store(out, add(base, lane), sum, int64(padded+32))
-		return b.Done(), nil
+		return b.Done()
 	}
 	factor := b.ConstF32(1)
 	denom := sum
@@ -367,7 +367,7 @@ func FlashAttention(s FlashShape) (*ir.Kernel, error) {
 	for i, dim := range dims {
 		b.Store(out, add(qbase, dim), b.Mul(ir.F32, accum[i], factor), 0)
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // FlashPartialFloats is the scratch size for a split invocation, in floats.
@@ -426,7 +426,7 @@ func FlashAttentionMerge(s FlashShape) (*ir.Kernel, error) {
 		}
 		b.Store(out, add(b.Mul(ir.U32, item, u(s.Dim)), dim), b.Mul(ir.F32, acc, inv), 0)
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // FlashAttentionMergeWide is FlashAttentionMerge with a thread per output
@@ -490,5 +490,5 @@ func FlashAttentionMergeWide(s FlashShape) (*ir.Kernel, error) {
 	}
 	inv := b.Div(ir.F32, b.ConstF32(1), b.Max(ir.F32, sum, b.ConstF32(1e-30)))
 	b.Store(out, flat, b.Mul(ir.F32, acc, inv), 0)
-	return b.Done(), nil
+	return b.Done()
 }

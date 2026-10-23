@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
 )
 
 // testFuncs is every Test function declared in the module's *_test.go files

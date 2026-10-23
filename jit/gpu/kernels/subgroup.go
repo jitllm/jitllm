@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // SubgroupProbeOuts is how many t-typed results SubgroupProbe writes per
@@ -52,7 +52,10 @@ func SubgroupProbe(t ir.Type) (*ir.Kernel, error) {
 	m := b.Mul(ir.U32, i, c(SubgroupProbeMeta))
 	b.Store(pMeta, m, b.LaneID(), 0)
 	b.Store(pMeta, m, b.SubgroupSize(), 1)
-	k := b.Done()
+	k, err := b.Done()
+	if err != nil {
+		return nil, err
+	}
 	if err := k.Validate(); err != nil {
 		return nil, err
 	}

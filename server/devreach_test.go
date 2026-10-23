@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/backend"
 )
 
 // reachable says whether a -devices name can be opened on this host, and why

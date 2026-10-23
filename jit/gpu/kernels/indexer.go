@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // DeepSeek V3.2's lightning indexer on a device (engine/model/indexer.go has
@@ -70,7 +70,7 @@ func IdxScoresPaged(rows, heads, dim, tcap, page, rowW, koff int, scale float32)
 	b.SetPhi(i, b.Add(ir.U32, i, one))
 	b.EndLoop()
 	b.Store(pOut, flat, tot, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // IdxSelect writes each row's top positions: position t of row r lands in
@@ -107,7 +107,7 @@ func IdxSelect(rows, tcap, k int) (*ir.Kernel, error) {
 	kk := b.Const(ir.U32, int64(k))
 	slot := b.Select(ir.U32, b.Lt(ir.U32, t, end), b.Select(ir.U32, b.Lt(ir.U32, rank, kk), rank, kk), kk)
 	b.Store(pSel, b.Add(ir.U32, b.Mul(ir.U32, r, b.Const(ir.U32, int64(k+1))), slot), t, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // IdxGatherPages is the gathered pages' count a row: k keys of page P.
@@ -149,7 +149,7 @@ func IdxGather(rows, k, width, page, rowW int) (*ir.Kernel, error) {
 	dst := b.Add(ir.U32, b.Mul(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, r, b.Const(ir.U32, int64(ppr*page))), j),
 		b.Const(ir.U32, int64(width))), e)
 	b.Store(pDst, dst, b.Load(ir.F32, pSrc, src, 0), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // IdxDesc writes the gathered pages' descriptors: row r's table at
@@ -174,5 +174,5 @@ func IdxDesc(rows, k, page int) (*ir.Kernel, error) {
 		b.Select(ir.U32, b.Lt(ir.U32, w, b.Const(ir.U32, PRowEnd+1)), b.Const(ir.U32, 1), zero))
 	v := b.Select(ir.U32, isTab, tab, b.Mul(ir.U32, isEnd, kept))
 	b.Store(pOut, flat, v, 0)
-	return b.Done(), nil
+	return b.Done()
 }

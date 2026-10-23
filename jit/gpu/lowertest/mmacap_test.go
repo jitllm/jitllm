@@ -4,11 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/gpu/msl"
-	"github.com/jitllm/jitllm/jit/gpu/ptx"
-	"github.com/jitllm/jitllm/jit/gpu/spirv"
+	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/jit/msl"
+	"github.com/jitllm/jitllm/jit/ptx"
+	"github.com/jitllm/jitllm/jit/spirv"
 )
 
 // Which backends lower ir.OpMMA and the tile ops is a list in the repo, asserted
@@ -30,7 +30,7 @@ var (
 
 // mmaProbe is the smallest kernel that contains an OpMMA: one tile, results
 // stored so nothing is dead. Every lowerer sees the same one.
-func mmaProbe(sh ir.MMAShape) *ir.Kernel {
+func mmaProbe(t testing.TB, sh ir.MMAShape) *ir.Kernel {
 	b := ir.New("mmaprobe", [3]int{32, 1, 1})
 	pA := b.Param("pA", ir.U32)
 	pB := b.Param("pB", ir.U32)
@@ -54,7 +54,7 @@ func mmaProbe(sh ir.MMAShape) *ir.Kernel {
 	for i, v := range d {
 		b.Store(pOut, b.Const(ir.U32, int64(i)), v, 0)
 	}
-	return b.Done()
+	return mustBuild(t, b)
 }
 
 func TestMMACoversExactlyWhatItClaims(t *testing.T) {
@@ -87,7 +87,7 @@ func TestMMACoversExactlyWhatItClaims(t *testing.T) {
 	// a backend could lower one and not the other.
 	shapes := []ir.MMAShape{{M: 16, N: 8, K: 16, Kind: ir.MMAS8}, {M: 16, N: 8, K: 16, Kind: ir.MMAF16}}
 	for _, sh := range shapes {
-		k := mmaProbe(sh)
+		k := mmaProbe(t, sh)
 		if err := k.Validate(); err != nil {
 			t.Fatalf("the probe itself does not validate: %v", err)
 		}

@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // The perf floors of sessions running at once, beside the correctness gates
@@ -74,7 +74,11 @@ func queuesRatio(t *testing.T, d backend.Device, qd backend.Queued) (med, q1, q3
 	b.SetPhi(x, b.Fma(x, one, one))
 	b.EndLoop()
 	b.Store(pOut, i, x, 0)
-	kern, err := d.Compile(b.Done())
+	built, err := b.Done()
+	if err != nil {
+		t.Fatal(err)
+	}
+	kern, err := d.Compile(built)
 	if err != nil {
 		t.Skipf("compile: %v", err)
 	}

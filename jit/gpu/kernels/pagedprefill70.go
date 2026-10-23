@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // PagedAttnScoresMMA70Warps is how many warps PagedAttnScoresMMA70 launches
@@ -98,7 +98,7 @@ func PagedAttnScoresMMA70(s FlashShape, mt, nt int) (*ir.Kernel, error) {
 		}
 		for i := 0; i < mt; i++ {
 			for j := 0; j < nt; j++ {
-				acc[i][j] = b.MMA(ir.MMAVolta, af[i], bf[j], acc[i][j])
+				acc[i][j] = b.MMA(ir.MMAVolta(), af[i], bf[j], acc[i][j])
 			}
 		}
 	}
@@ -122,7 +122,7 @@ func PagedAttnScoresMMA70(s FlashShape, mt, nt int) (*ir.Kernel, error) {
 		}
 	}
 	b.EndLoop()
-	return b.Done(), nil
+	return b.Done()
 }
 
 // PagedAttnAccMMA70Warps is how many warps PagedAttnAccMMA70 launches (groups
@@ -269,7 +269,7 @@ func PagedAttnAccMMA70(s FlashShape, mt, nt int) (*ir.Kernel, error) {
 		}
 		for i := 0; i < mt; i++ {
 			for j := 0; j < nt; j++ {
-				d[i][j] = b.MMA(ir.MMAVolta, af[i], bf[j], d[i][j])
+				d[i][j] = b.MMA(ir.MMAVolta(), af[i], bf[j], d[i][j])
 			}
 		}
 	}
@@ -359,5 +359,5 @@ func PagedAttnAccMMA70(s FlashShape, mt, nt int) (*ir.Kernel, error) {
 			}
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }

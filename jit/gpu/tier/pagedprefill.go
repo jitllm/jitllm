@@ -3,9 +3,9 @@ package tier
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // A prefill chunk's attention over pages: the rows of one sequence in position

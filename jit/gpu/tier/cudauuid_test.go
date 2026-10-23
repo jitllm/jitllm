@@ -3,7 +3,7 @@ package tier
 import (
 	"encoding/hex"
 
-	"github.com/jitllm/jitllm/jit/gpu/cuda"
+	"github.com/jitllm/jitllm/backend/cuda"
 )
 
 // cudaUUIDForTest is the identity of CUDA device ord WITHOUT opening it, in the

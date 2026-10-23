@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // VoltaTile is GemmVolta's blocking: a workgroup of WM*WN warps, each warp MT
@@ -13,7 +13,7 @@ import (
 // WN*NT*8 tokens.
 //
 // F16K picks the warp's matrix instruction: 0 is sm_70's m8n8k4
-// (ir.MMAVolta), 16 is m16n8k16 (sm_80 on) and 8 is m16n8k8 (sm_75's
+// (ir.MMAVolta()), 16 is m16n8k16 (sm_80 on) and 8 is m16n8k8 (sm_75's
 // binary16 shape). The staging is the same for all three; only the fragment
 // reads, the instruction and the epilogue's lane map differ.
 //
@@ -97,7 +97,7 @@ func voltaSwizzle(b *ir.Builder, r ir.Value, c int, weights bool) ir.Value {
 }
 
 // GemmVolta is the batched quantized matvec on sm_70's f16 tensor cores
-// (ir.MMAVolta) with both operands staged through shared memory: MatVecMMA70's
+// (ir.MMAVolta()) with both operands staged through shared memory: MatVecMMA70's
 // arithmetic, blocked like a GEMM. It reads ActF16T's token-major activations.
 //
 // MatVecMMA70 gives every warp its own rows and its own dequant and reads the
@@ -624,7 +624,7 @@ func gemmVolta(s MatVecShape, t VoltaTile, into *gemmCtx) (*ir.Kernel, error) {
 		for x := 0; x < 2; x++ {
 			for i := 0; i < t.MT; i++ {
 				for j := 0; j < t.NT; j++ {
-					d[i][j] = b.MMA(ir.MMAVolta, af[i][2*x:2*x+2], bf[j][2*x:2*x+2], d[i][j])
+					d[i][j] = b.MMA(ir.MMAVolta(), af[i][2*x:2*x+2], bf[j][2*x:2*x+2], d[i][j])
 				}
 			}
 		}
@@ -723,7 +723,7 @@ func gemmVolta(s MatVecShape, t VoltaTile, into *gemmCtx) (*ir.Kernel, error) {
 	if into != nil {
 		return nil, nil
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // GemmVoltaSegments is several GemmVolta GEMMs over one binary16 operand in
@@ -779,7 +779,7 @@ func GemmVoltaSegments(segs []MatVecShape, tiles []VoltaTile) (*ir.Kernel, error
 		b.EndLoop()
 		start += blocks[i]
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // GemmVoltaSegmentsGrid is GemmVoltaSegments' launch: the workgroups each

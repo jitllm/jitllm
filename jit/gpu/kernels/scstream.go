@@ -1,6 +1,6 @@
 package kernels
 
-import "github.com/jitllm/jitllm/jit/gpu/ir"
+import "github.com/jitllm/jitllm/jit/ir"
 
 // ScStreamWords is how many SC words a row's super-block holds in a format
 // whose sub-block scales and minima are 6-bit fields (ScStream): sixteen of

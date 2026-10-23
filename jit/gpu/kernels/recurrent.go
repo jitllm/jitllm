@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // The recurrent half of a hybrid block, as device kernels.
@@ -97,7 +97,7 @@ func Conv1dRows(taps, chans, rows int) (*ir.Kernel, error) {
 	// output is never copied out; the real row count only decides the state,
 	// which is Conv1dShift's job.
 	b.Store(pOut, idx, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // Conv1dShift produces the next state: the last taps-1 real columns of
@@ -133,7 +133,7 @@ func Conv1dShift(taps, chans, rows int) (*ir.Kernel, error) {
 	sv := b.Load(ir.F32, pS, b.Add(ir.U32, base, b.Min(ir.U32, sIdx, b.Const(ir.U32, n-1))), 0)
 	xv := b.Load(ir.F32, pX, b.Min(ir.U32, xIdx, b.Const(ir.U32, int64(rows*chans)-1)), 0)
 	b.Store(pSOut, b.Add(ir.U32, base, idx), b.Select(ir.F32, inS, sv, xv), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // A step whose rows are several sequences -- a batched decode, a step across
@@ -222,7 +222,7 @@ func Conv1dRowsRuns(taps, chans, rows int) (*ir.Kernel, error) {
 			b.Select(ir.F32, inS, sv, xv), acc)
 	}
 	b.Store(pOut, idx, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // Conv1dShiftRuns is Conv1dShift for Conv1dRowsRuns' runs: each run's next
@@ -259,7 +259,7 @@ func Conv1dShiftRuns(taps, chans, rows int) (*ir.Kernel, error) {
 	xv := b.Load(ir.F32, pX, b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, xr, cw), c),
 		b.Const(ir.U32, int64(rows*chans)-1)), 0)
 	b.Store(pSOut, b.Add(ir.U32, base, w), b.Select(ir.F32, inS, sv, xv), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // CopySlots copies rows slots of w floats from pSrc to pDst through a
@@ -285,7 +285,7 @@ func CopySlots(w, rows int) (*ir.Kernel, error) {
 	src := b.Add(ir.U32, b.Mul(ir.U32, slotOut(b, pMap, j), ww), i)
 	dst := b.Add(ir.U32, b.Mul(ir.U32, slotIn(b, pMap, j), ww), i)
 	b.Store(pDst, dst, b.Load(ir.F32, pSrc, src, 0), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // GatedDeltaStep is one token of the gated delta rule, out of place.
@@ -427,7 +427,7 @@ func gatedDeltaStep(vHeads, vDim, kDim, rep int, perChan bool, tiledK, stride in
 		o = b.Fma(nv, b.Load(ir.F32, pQ, b.Add(ir.U32, kBase, ci), 0), o)
 	}
 	b.Store(pOut, row, o, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // DeltaGateRows computes the two per-head gates a linear block needs:
@@ -495,7 +495,7 @@ func DeltaGateRows(heads, rows int) (*ir.Kernel, error) {
 
 	bl := b.Load(ir.F32, pBRaw, i, 0)
 	b.Store(pBeta, i, b.Div(ir.F32, one, b.Add(ir.F32, one, b.Exp(b.Sub(ir.F32, zero, bl)))), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // SplitDeltaGatesRows deinterleaves the beta/alpha projection into one value per
@@ -535,7 +535,7 @@ func SplitDeltaGatesRows(kHeads, rep, rows int) (*ir.Kernel, error) {
 	base := b.Add(ir.U32, b.Mul(ir.U32, kh, b.Const(ir.U32, int64(2*rep))), r)
 	b.Store(pBRaw, vh, b.Load(ir.F32, pBA, base, 0), 0)
 	b.Store(pAlpha, vh, b.Load(ir.F32, pBA, base, int64(rep)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // SliceRows copies one contiguous field out of a row-major buffer.
@@ -562,7 +562,7 @@ func SliceRows(n, stride, off, rows int) (*ir.Kernel, error) {
 	j := b.Sub(ir.U32, i, b.Mul(ir.U32, r, nw))
 	src := b.Add(ir.U32, b.Mul(ir.U32, r, b.Const(ir.U32, int64(stride))), j)
 	b.Store(pOut, i, b.Load(ir.F32, pSrc, src, int64(off)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // DeltaScan is the geometry of GatedDeltaScan: the gated delta rule over a
@@ -1054,7 +1054,7 @@ func gatedDeltaScan(d DeltaScan, f *DeltaFuse) (*ir.Kernel, error) {
 	for r := 0; r < nr; r++ {
 		b.Store(pSOut, outBase, s[r], int64(r*L))
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // deltaDecay is DeltaGate's decay, exp(A * softplus(alpha + dt)), transcribed
@@ -1110,7 +1110,7 @@ func DeltaDecayBoundRows(n, rows int, lb float32) (*ir.Kernel, error) {
 	}
 	b.Store(pDecay, i, boundDecay(b, b.Load(ir.F32, pAlpha, i, 0), b.Load(ir.F32, pDt, c, 0),
 		b.Load(ir.F32, pA, c, 0), lb), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ssdGateOf is Mamba-2's dt = softplus(raw + bias) and decay = exp(A*dt),

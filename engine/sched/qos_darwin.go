@@ -7,7 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/jitllm/jitllm/jit/gpu/ffi"
+	"github.com/jitllm/jitllm/backend/ffi"
 )
 
 // QoS classes (sys/qos.h). macOS exposes no processor affinity; on Apple

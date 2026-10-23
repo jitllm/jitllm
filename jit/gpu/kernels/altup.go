@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // Gemma 3n's AltUp and LAuReL on a device (engine/model/altup.go has the
@@ -49,7 +49,7 @@ func AltUpRoute(rows, d, s int) (*ir.Kernel, error) {
 	b.SetPhi(i, b.Add(ir.U32, i, one))
 	b.EndLoop()
 	b.Store(pM, flat, tanhOf(b, b.Mul(ir.F32, acc, b.ConstF32(1/float32(d)))), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AltUpPredict is AltUp's prediction: out_k = x_k + sum_j c_kj x_j with
@@ -82,7 +82,7 @@ func AltUpPredict(rows, d, s int) (*ir.Kernel, error) {
 		acc = b.Fma(c, b.Load(ir.F32, pX, rem, int64(j*plane)), acc)
 	}
 	b.Store(pOut, flat, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AltUpCorrect is AltUp's correction: out_k = pred_k + (1 + sum_i m_i T_ik) *
@@ -113,7 +113,7 @@ func AltUpCorrect(rows, d, s int) (*ir.Kernel, error) {
 	c = b.Add(ir.F32, c, b.ConstF32(1))
 	inn := b.Sub(ir.F32, b.Load(ir.F32, pO, rem, 0), b.Load(ir.F32, pPred, rem, 0))
 	b.Store(pOut, flat, b.Fma(c, inn, b.Load(ir.F32, pPred, flat, 0)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AltUpFinish adds the per-layer input's projection p to every stream but the
@@ -133,7 +133,7 @@ func AltUpFinish(rows, d, s int) (*ir.Kernel, error) {
 	rest := b.Lt(ir.U32, b.Const(ir.U32, int64(plane-1)), flat)
 	p := b.Select(ir.F32, rest, b.Load(ir.F32, pP, rem, 0), b.ConstF32(0))
 	b.Store(pOut, flat, b.Add(ir.F32, b.Load(ir.F32, pSrc, flat, 0), p), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // MulRows is out[r][i] = x[r][i] * w[i] over rows rows of d: the corrected
@@ -150,7 +150,7 @@ func MulRows(rows, d int) (*ir.Kernel, error) {
 	flat := flatOf(b, rows*d)
 	i := b.Rem(ir.U32, flat, b.Const(ir.U32, int64(d)))
 	b.Store(pOut, flat, b.Mul(ir.F32, b.Load(ir.F32, pX, flat, 0), b.Load(ir.F32, pW, i, 0)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // LaurelJoin is the attention's residual add with LAuReL's branch beside it:
@@ -167,7 +167,7 @@ func LaurelJoin(n int) (*ir.Kernel, error) {
 	i := flatOf(b, n)
 	v := b.Add(ir.F32, b.Add(ir.F32, b.Load(ir.F32, pX, i, 0), b.Load(ir.F32, pY, i, 0)), b.Load(ir.F32, pZ, i, 0))
 	b.Store(pOut, i, b.Mul(ir.F32, v, b.ConstF32(float32(1/math.Sqrt2))), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // GaussTopKApplyRows is Gemma 3n's activation sparsity over rows rows of k,
@@ -193,5 +193,5 @@ func GaussTopKApplyRows(k, parts int, c float32, rows int) (*ir.Kernel, error) {
 	sd := b.Sqrt(b.Mul(ir.F32, vsum, b.ConstF32(1/float32(k))))
 	cut := b.Fma(sd, b.ConstF32(c), mean)
 	b.Store(pOut, i, b.Max(ir.F32, b.Sub(ir.F32, b.Load(ir.F32, pX, i, 0), cut), b.ConstF32(0)), 0)
-	return b.Done(), nil
+	return b.Done()
 }

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // Qwen3.8-Flash-Next on the device (nn.LayerPlan.Q4E; engine/model/q4e.go is
@@ -84,7 +84,7 @@ func Q4EGroupNorm(d, h, rows int, eps float32, streamMajor bool) (*ir.Kernel, er
 	b.Store(pOut, b.Add(ir.U32, outBase, idx), b.Mul(ir.F32, b.Mul(ir.F32, x, scale), w), 0)
 	b.SetPhi(i2, b.Add(ir.U32, i2, step))
 	b.EndLoop()
-	return b.Done(), nil
+	return b.Done()
 }
 
 // treeSum is a workgroup's sum of every thread's v, through shared part.
@@ -118,7 +118,7 @@ func Q4EScaleSiLU(n, h int, unscaled bool) (*ir.Kernel, error) {
 		x = b.Mul(ir.F32, x, b.ConstF32(1/float32(h)))
 	}
 	b.Store(pOut, i, act(b, x, ActSiLU), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // Q4EGateMix is each row's sublayer input, the mean over its h streams of
@@ -147,7 +147,7 @@ func Q4EGateMix(d, h, rows int, plain bool) (*ir.Kernel, error) {
 		acc = b.Add(ir.F32, acc, x)
 	}
 	b.Store(pOut, flat, b.Mul(ir.F32, acc, b.ConstF32(1/float32(h))), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // Q4EInject is each row's placement weights from its h logits: 2*sigmoid(
@@ -171,7 +171,7 @@ func Q4EInject(n, h, place int) (*ir.Kernel, error) {
 		w = b.Mul(ir.F32, b.ConstF32(2), w)
 	}
 	b.Store(pOut, i, w, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // Q4EPlace adds each row's sublayer output into every stream at its weight:
@@ -192,7 +192,7 @@ func Q4EPlace(d, h, rows int) (*ir.Kernel, error) {
 	r := b.Div(ir.U32, rd, b.Const(ir.U32, int64(d)))
 	w := b.Load(ir.F32, pW, b.Add(ir.U32, b.Mul(ir.U32, r, b.Const(ir.U32, int64(h))), k), 0)
 	b.Store(pOut, flat, b.Fma(w, b.Load(ir.F32, pY, rd, 0), b.Load(ir.F32, pX, flat, 0)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // Q4EStreamDot is the n-gram block's gate per (row, stream): the signed
@@ -225,7 +225,7 @@ func Q4EStreamDot(d, h, rows int) (*ir.Kernel, error) {
 	b.EndLoop()
 	s := b.Mul(ir.F32, treeSum(b, part, tid, acc, g), b.ConstF32(float32(1/math.Sqrt(float64(d)))))
 	b.Store(pOut, row, act(b, s, ActSqrtSigmoid), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // Q4EGatedValue is each (row, stream)'s gated value, gate[r*h + k] times the
@@ -245,7 +245,7 @@ func Q4EGatedValue(d, h, rows int) (*ir.Kernel, error) {
 	r := b.Div(ir.U32, rk, b.Const(ir.U32, int64(h)))
 	v := b.Load(ir.F32, pVal, b.Add(ir.U32, b.Mul(ir.U32, r, b.Const(ir.U32, int64(d))), i), 0)
 	b.Store(pOut, flat, b.Mul(ir.F32, b.Load(ir.F32, pGate, rk, 0), v), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // Q4ENGramConv is the n-gram block's convolution over a call's rows, one
@@ -353,7 +353,7 @@ func Q4ENGramConv(hd, taps, dil, rows, stride, off int, runs, noConv bool) (*ir.
 	b.SetPhi(prevJ, j)
 	b.SetPhi(e, b.Add(ir.U32, e, b.Const(ir.U32, 1)))
 	b.EndLoop()
-	return b.Done(), nil
+	return b.Done()
 }
 
 // Q4ENGramAdd adds the n-gram block's gated value and its convolution into
@@ -378,5 +378,5 @@ func Q4ENGramAdd(d, h, rows int) (*ir.Kernel, error) {
 		b.Const(ir.U32, int64(d))), i)
 	s := b.Add(ir.F32, b.Load(ir.F32, pGV, rk, 0), b.Load(ir.F32, pConv, rk, 0))
 	b.Store(pOut, flat, b.Add(ir.F32, b.Load(ir.F32, pX, flat, 0), s), 0)
-	return b.Done(), nil
+	return b.Done()
 }

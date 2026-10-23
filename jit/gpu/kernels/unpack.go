@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // Unpack turns raw GGUF bytes into the device weight layout, on the device.
@@ -212,7 +212,10 @@ func unpackQ4K(nrows, k int) (*ir.Kernel, error) {
 		}
 	}
 
-	kk := b.Done()
+	kk, err := b.Done()
+	if err != nil {
+		return nil, err
+	}
 	if err := kk.Validate(); err != nil {
 		return nil, fmt.Errorf("kernels: Unpack: %w", err)
 	}

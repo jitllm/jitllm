@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,8 +22,9 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
@@ -710,6 +710,8 @@ type Stats struct {
 	// never ran".
 	KVGrows int
 	Served  int // matvecs served on the device
+	// Formed is how many of Served ran the composer's kernels (formed.go).
+	Formed int
 	// Forgotten counts lone-matvec copies dropped because the host said the
 	// bytes at their address changed (Forget): the selection check that a
 	// refilled frame reached the device at all.
@@ -1171,8 +1173,6 @@ type Stats struct {
 	// only the encoding) could buy on a backend with no recording.
 	TEmit                         time.Duration
 	TStage, TLaunch, TRead, TConv time.Duration
-	TQuant, TUp                   time.Duration
-	Restaged                      int
 	// Packs is PackWeights calls this device made outside the arena: every
 	// pack when the arena is off and the ones it declined when it is on. Only
 	// the sum with ArenaStats.Packs answers "did the pack run once"
@@ -1283,6 +1283,7 @@ func (s *Stats) add(o Stats) {
 	s.RecBytes += o.RecBytes
 	s.KVGrows += o.KVGrows
 	s.Served += o.Served
+	s.Formed += o.Formed
 	s.RowtTiles += o.RowtTiles
 	s.RowtPlain += o.RowtPlain
 	s.VoltaMV += o.VoltaMV
@@ -1481,9 +1482,6 @@ func (s *Stats) add(o Stats) {
 	s.TLaunch += o.TLaunch
 	s.TRead += o.TRead
 	s.TConv += o.TConv
-	s.TQuant += o.TQuant
-	s.TUp += o.TUp
-	s.Restaged += o.Restaged
 	s.Packs += o.Packs
 	// Slots sums: two devices with three slots each hold six blocks between
 	// them. DevStats still says where they are.
@@ -1880,7 +1878,13 @@ type devShared struct {
 	// its launch target and mvPart its partial sums. They are matVec's own and
 	// not a lane's: a matvec a host block offers runs while a session's
 	// submission holds whichever lane it took.
-	mvc       mvCall
+	mvc mvCall
+	// fmc is a composed matvec's call (formedSession) and forms its kernels
+	// by shape, the composer's (composer) compiled on this device.
+	fmc       fmCall
+	fmcFn     func(backend.Session)
+	forms     map[formedKey]*formed
+	composer  *jit.Registry
 	mvTo      launchTo
 	mvPart    backend.Buf
 	mvPartCap int
@@ -1951,16 +1955,10 @@ type devShared struct {
 	// PickOf), in place of the head's whole matvec and pickK's gather; nil
 	// where the head's format or a cap needs the whole row.
 	pickMV backend.Kernel
-	hostA  []uint32
-	hostAX []float32
 
-	// Host-side scratch, reused rather than allocated per matvec. It is per
-	// device even though it is host memory, because lastX/staged say "the
-	// activation already sitting in this device's aBuf".
+	// Host-side scratch, reused rather than allocated per matvec.
 	hostRaw []byte
 	hostOut []float32 // a view over hostRaw, for the readback
-	lastX   []float32 // the activation vector already staged, for reuse
-	staged  bool
 
 	// mv accumulates the sample that decides whether serving matvecs one at a
 	// time pays on this device, per session, so the verdict is a property of
@@ -2659,6 +2657,7 @@ func (g *devTier) Close() {
 	// Every session's queue, before the device that owns them, once nothing
 	// runs on one.
 	g.quiesce()
+	g.formsClose()
 	g.khClose() // before dhClose: its programs launch dh's kernels
 	g.dhClose()
 	for _, ds := range g.sess {
@@ -2851,6 +2850,9 @@ func (g *devTier) matVec(sid uint64, out []float32, t quant.Type, w []byte, x []
 		// NoRoom (the card), and either way another card may have the room.
 		return noRoom
 	}
+	if !kernels.IsFloat(q) {
+		return g.formedMatVecCall(out, t, r, w, x, nrows, k)
+	}
 	split := chooseSplit(nrows, k/32, g.kb.split)
 	kern := g.kernel(q, k, nrows, split, 1, false)
 	if kern == nil {
@@ -2868,7 +2870,7 @@ func (g *devTier) matVec(sid uint64, out []float32, t quant.Type, w []byte, x []
 	t0 := time.Now()
 	// Buffers are sized outside the session: Alloc takes its own ownership hop
 	// and cannot nest inside one.
-	fresh, ok := g.prepare(x, nrows, k, !kernels.IsFloat(q))
+	ok = g.prepare(nrows, k)
 	if !ok || !g.sizeMVPart(nrows*split) || (kernels.IsFloat(q) && !g.sizeXF(k)) {
 		return noRoom
 	}
@@ -2876,7 +2878,7 @@ func (g *devTier) matVec(sid uint64, out []float32, t quant.Type, w []byte, x []
 
 	// One ownership hop for the whole matvec: two uploads, a launch and a
 	// readback batched in one Session.
-	g.mvc = mvCall{fresh: fresh, float: kernels.IsFloat(q), r: r, x: x, nrows: nrows, k: k,
+	g.mvc = mvCall{float: kernels.IsFloat(q), r: r, x: x, nrows: nrows, k: k,
 		split: split, kern: kern, red: red}
 	if g.mvcFn == nil {
 		g.mvcFn = g.matVecSession
@@ -2908,7 +2910,7 @@ func (g *devTier) matVec(sid uint64, out []float32, t quant.Type, w []byte, x []
 // matvec a host block offered (a mixture's router, every token). g.mu is held
 // across the call.
 type mvCall struct {
-	fresh, float    bool
+	float           bool
 	r               *resident
 	x               []float32
 	nrows, k, split int
@@ -2916,19 +2918,11 @@ type mvCall struct {
 	err             error
 }
 
-// matVecSession is matVec's Session: two uploads, a launch and a readback.
+// matVecSession is a float weight's matVec Session: the activation's
+// upload, a launch and a readback.
 func (g *devTier) matVecSession(sess backend.Session) {
 	c := &g.mvc
 	k, nrows, split := c.k, c.nrows, c.split
-	nb := k / 32
-	if c.fresh {
-		if c.err = sess.Write(g.aBuf, u32b(g.hostA[:k/4])); c.err != nil {
-			return
-		}
-		if c.err = sess.Write(g.axBuf, f32b(g.hostAX[:3*nb])); c.err != nil {
-			return
-		}
-	}
 	dst := g.outBuf
 	if split > 1 {
 		dst = g.mvPart
@@ -3568,96 +3562,14 @@ func (g *devTier) regrow(dst *backend.Buf, have *int, n, unit int, drop, poison 
 	return false
 }
 
-// prepare quantizes the activation vector if it changed and makes sure every
-// device buffer is big enough. It performs no device calls except Alloc, so the
-// caller can run the transfers inside one session.
-//
-// It skips everything when x has not changed: q, k and v share one vector, and
-// gate and up another, so seven matvecs a layer need four quantizations.
-//
-// quantize is false for a float weight, whose kernel reads the raw f32
-// activation out of the scale plane's slot and never looks at the int8 planes,
-// so they are not computed.
-func (g *devTier) prepare(x []float32, nrows, k int, quantize bool) (fresh, ok bool) {
-	if !g.sizeOut(nrows) {
-		return false, false
-	}
-	if !quantize {
-		// The int8 buffers are still sized, because the kernel's signature
-		// binds them whatever the weight's format; only the arithmetic is
-		// skipped.
-		nb := k / 32
-		if !g.sizeAct(k/4, 3*nb) {
-			return false, false
-		}
-		return false, true
-	}
-	if g.staged && len(g.lastX) == len(x) && sameF64(g.lastX, x) {
-		return false, true
-	}
-	g.Restaged++
-	nb := k / 32
-	if cap(g.hostA) < k/4 {
-		g.hostA = make([]uint32, k/4)
-		g.hostAX = make([]float32, 3*nb)
-	}
-	tq := time.Now()
-	a, ax := g.hostA[:k/4], g.hostAX[:3*nb]
-	// Fanned out across cores when large enough (see quantPar): blocks are
-	// independent, so the split needs no synchronisation beyond the wait.
-	quantPar(a, ax[:nb], ax[nb:], x, nb, g.actWin)
-	g.TQuant += time.Since(tq)
-
-	if !g.sizeAct(len(a), len(ax)) {
-		return false, false
-	}
-	g.lastX = append(g.lastX[:0], x...)
-	g.staged = true
-	return true, true
-}
-
-// quantPar quantizes float32 activations, split across cores. Each 32-element
-// block is independent.
-func quantPar(a []uint32, as, sum []float32, x []float32, nb, window int) {
-	if window < 32 {
-		window = 32
-	}
-	// The split must land on a window boundary: each worker computes the amax
-	// of its slice, so cutting a window in half would give its halves
-	// different scales from the CPU tier's.
-	blocksPerWin := window / 32
-	n := runtime.GOMAXPROCS(0)
-	if n > 6 {
-		n = 6 // decode uses six P-cores; more threads buy variance
-	}
-	// Fan out only when there is enough work to pay for the goroutines: a
-	// typical 2048-float vector is faster serial.
-	if nb < 512 {
-		n = 1
-	}
-	if n == 1 {
-		kernels.PackActivationsInto(a, as, sum, x, window)
-		return
-	}
-	per := (nb + n - 1) / n
-	per = ((per + blocksPerWin - 1) / blocksPerWin) * blocksPerWin
-	var wg sync.WaitGroup
-	for w := 0; w < n; w++ {
-		lo := w * per
-		hi := lo + per
-		if hi > nb {
-			hi = nb
-		}
-		if lo >= hi {
-			continue
-		}
-		wg.Add(1)
-		go func(lo, hi int) {
-			defer wg.Done()
-			kernels.PackActivationsInto(a[lo*8:hi*8], as[lo:hi], sum[lo*2:hi*2], x[lo*32:hi*32], window)
-		}(lo, hi)
-	}
-	wg.Wait()
+// prepare makes sure every device buffer a float weight's matvec binds is
+// big enough. It performs no device calls except Alloc, so the caller can run
+// the transfers inside one session. A float weight's kernel reads the raw f32
+// activation out of the scale plane's slot and never looks at the int8
+// planes, but its signature binds them whatever the weight's format, so they
+// are sized and never written.
+func (g *devTier) prepare(nrows, k int) bool {
+	return g.sizeOut(nrows) && g.sizeAct(k/4, 3*(k/32))
 }
 
 // Reserve sizes every per-call scratch buffer once, for the largest shape the

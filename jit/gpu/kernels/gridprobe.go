@@ -1,6 +1,6 @@
 package kernels
 
-import "github.com/jitllm/jitllm/jit/gpu/ir"
+import "github.com/jitllm/jitllm/jit/ir"
 
 // GridProbePhases is how many phases GridProbe runs.
 const GridProbePhases = 8
@@ -16,7 +16,7 @@ const GridProbePhases = 8
 // answer is then the poison plus something.
 //
 // The parameters are out0..out7, pSink, pSync.
-func GridProbe(groups, width int) *ir.Kernel {
+func GridProbe(groups, width int) (*ir.Kernel, error) {
 	n := groups * width
 	b := ir.New("gridprobe", [3]int{width, 1, 1})
 	var out [GridProbePhases]ir.Value

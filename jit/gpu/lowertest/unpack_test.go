@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/gpu/msl"
-	"github.com/jitllm/jitllm/jit/gpu/ptx"
-	"github.com/jitllm/jitllm/jit/gpu/spirv"
+	"github.com/jitllm/jitllm/jit/msl"
+	"github.com/jitllm/jitllm/jit/ptx"
+	"github.com/jitllm/jitllm/jit/spirv"
 )
 
 // Which formats the device can unpack is a list in the repo. A page-in with no

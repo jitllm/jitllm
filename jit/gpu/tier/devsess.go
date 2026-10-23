@@ -4,8 +4,8 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
 )
 
 // A device serves several sessions at once. What it holds for all of them --

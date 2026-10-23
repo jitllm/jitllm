@@ -3,7 +3,7 @@ package tier
 import (
 	"slices"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/backend"
 )
 
 // Submissions in flight.

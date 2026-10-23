@@ -26,7 +26,7 @@ Why it is likely relevant given where jitllm is:
 What to be careful about:
 
 - A different language's memory model makes some techniques untransferable.
-  jitllm is Go with goffi (jit/gpu/ffi) and no cgo, deliberately, and a technique that needs
+  jitllm is Go with goffi (backend/ffi) and no cgo, deliberately, and a technique that needs
   cgo is not a technique jitllm can take.
 - RULE 7: the architecture list is a LIST and adding to it is a decision. A
   broader stack's coverage is not an argument for matching it.

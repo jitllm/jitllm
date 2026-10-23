@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
 )
 
 // install puts the selection in force at the backend for the test and takes it

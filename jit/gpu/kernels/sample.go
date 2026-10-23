@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // The sampler's device half: the repeat penalty and the top-k selection, so a
@@ -63,7 +63,7 @@ func SamplePenalty(n int) (*ir.Kernel, error) {
 	b.SetPhi(j, b.Add(ir.U32, j, b.Const(ir.U32, 1)))
 	b.EndLoop()
 	b.Store(pOut, i, v, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // SampleGroups is how many groups SamplePenalty takes over n logits, and
@@ -171,5 +171,5 @@ func SampleTopK(n, per, k int, ids bool) (*ir.Kernel, error) {
 	b.SetPhi(pv, wv)
 	b.SetPhi(pi, wi)
 	b.EndLoop()
-	return b.Done(), nil
+	return b.Done()
 }

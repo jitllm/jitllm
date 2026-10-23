@@ -3,11 +3,11 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // AttnScoresMMA70 is the batched attention scores on sm_70's f16 tensor cores
-// (ir.MMAVolta): AttnScoresMMA's product for a card whose matrix instruction is
+// (ir.MMAVolta()): AttnScoresMMA's product for a card whose matrix instruction is
 // m8n8k4, with the operands the other way round.
 //
 // The keys are the A operand and the queries the B, because of where each is
@@ -130,7 +130,7 @@ func AttnScoresMMA70(nHeads, headDim, kvDim, gqa, maxSeq int, scale float32, row
 		}
 		for i := 0; i < mt; i++ {
 			for j := 0; j < nt; j++ {
-				acc[i][j] = b.MMA(ir.MMAVolta, af[i], bf[j], acc[i][j])
+				acc[i][j] = b.MMA(ir.MMAVolta(), af[i], bf[j], acc[i][j])
 			}
 		}
 	}
@@ -160,7 +160,7 @@ func AttnScoresMMA70(nHeads, headDim, kvDim, gqa, maxSeq int, scale float32, row
 		}
 	}
 	b.EndLoop()
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AttnScoresMMA70Warps is how many warps AttnScoresMMA70 launches for a score
@@ -250,7 +250,7 @@ func AttnAccMMA70(nHeads, headDim, kvDim, gqa, maxSeq, rows, mt, nt int) (*ir.Ke
 		}
 		for i := 0; i < mt; i++ {
 			for j := 0; j < nt; j++ {
-				d[i][j] = b.MMA(ir.MMAVolta, af[i], bf[j], d[i][j])
+				d[i][j] = b.MMA(ir.MMAVolta(), af[i], bf[j], d[i][j])
 			}
 		}
 	}
@@ -314,7 +314,7 @@ func AttnAccMMA70(nHeads, headDim, kvDim, gqa, maxSeq, rows, mt, nt int) (*ir.Ke
 			}
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AttnAccMMA70Warps is how many warps AttnAccMMA70 launches.

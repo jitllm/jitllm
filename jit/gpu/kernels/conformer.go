@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // A FastConformer block's kernels (d1-omni's audio tower; engine/model's
@@ -64,7 +64,7 @@ func RelPosScores(r, heads, kd int) (*ir.Kernel, error) {
 	b.EndLoop()
 	s := b.Mul(ir.F32, acc, b.ConstF32(float32(1/math.Sqrt(float64(kd)))))
 	b.Store(pOut, i, b.Select(ir.F32, b.Lt(ir.U32, j, t), s, b.ConstF32(-3e38)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AttnAccRows is multi-head attention's weighted sum over the first t keys:
@@ -97,7 +97,7 @@ func AttnAccRows(r, heads, kd int) (*ir.Kernel, error) {
 	b.SetPhi(j, b.Add(ir.U32, j, u32(b, 1)))
 	b.EndLoop()
 	b.Store(pOut, i, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // DWConv1dRows is a depthwise convolution of k taps (k odd) centred on each
@@ -131,7 +131,7 @@ func DWConv1dRows(k, c, r int) (*ir.Kernel, error) {
 		acc = b.Select(ir.F32, ok, b.Fma(wv, xv, acc), acc)
 	}
 	b.Store(pOut, i, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AffineRows is out = x*s + h, s and h one value a column shared by every
@@ -149,7 +149,7 @@ func AffineRows(width, rows int) (*ir.Kernel, error) {
 	i := convItem(b, width*rows)
 	c := b.Rem(ir.U32, i, u32(b, width))
 	b.Store(pOut, i, b.Fma(b.Load(ir.F32, pX, i, 0), b.Load(ir.F32, pS, c, 0), b.Load(ir.F32, pH, c, 0)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AddHalf is out = a + b/2, one rounding (ir.Fma, as AddScaled): a
@@ -165,5 +165,5 @@ func AddHalf(n int) (*ir.Kernel, error) {
 	pOut := b.Param("pOut", ir.F32)
 	i := convItem(b, n)
 	b.Store(pOut, i, b.Fma(b.ConstF32(0.5), b.Load(ir.F32, pB, i, 0), b.Load(ir.F32, pA, i, 0)), 0)
-	return b.Done(), nil
+	return b.Done()
 }

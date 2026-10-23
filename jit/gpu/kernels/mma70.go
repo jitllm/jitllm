@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
-// voltaLane is where lane l sits in ir.MMAVolta: its quad-pair q, the A row /
+// voltaLane is where lane l sits in ir.MMAVolta(): its quad-pair q, the A row /
 // B column r it holds, and the D row and column of accumulator i (see
-// ir.MMAVolta); every kernel on this shape derives its indices here.
+// ir.MMAVolta()); every kernel on this shape derives its indices here.
 type voltaLane struct {
 	b    *ir.Builder
 	lane ir.Value
@@ -54,7 +54,7 @@ func (v voltaLane) dCol(i int) ir.Value {
 // float) by B columns 8q..8q+7 (B is 4x32, row-major float) and stores the
 // 8x8 product at out[(8q+row)*8 + col]. It exists to hold the lowering and the
 // lane layout in voltaLane to a CPU reference.
-func MMAVoltaProbe() *ir.Kernel {
+func MMAVoltaProbe() (*ir.Kernel, error) {
 	b := ir.New("mmavoltaprobe", [3]int{32, 1, 1})
 	pA := b.Param("pA", ir.F32)
 	pB := b.Param("pB", ir.F32)
@@ -76,7 +76,7 @@ func MMAVoltaProbe() *ir.Kernel {
 	for i := range c {
 		c[i] = zero
 	}
-	d := b.MMA(ir.MMAVolta, a, bb, c)
+	d := b.MMA(ir.MMAVolta(), a, bb, c)
 	for i, x := range d {
 		row := b.Add(ir.U32, q8, v.dRow(i))
 		b.Store(pOut, b.Add(ir.U32, b.Shl(ir.U32, row, b.Const(ir.U32, 3)), v.dCol(i)), x, 0)
@@ -179,7 +179,7 @@ func ActF16(q Quant, ntok, k int) (*ir.Kernel, error) {
 	out := b.Mul(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, s, b.Const(ir.U32, int64(ntok))), t), b.Const(ir.U32, 2))
 	b.Store(pB, out, b.PackF16(val(0), val(1)), 0)
 	b.Store(pB, out, b.PackF16(val(2), val(3)), 1)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ActF16T is ActF16 laid out TOKEN-major, for GemmVolta: token t's steps in
@@ -226,7 +226,7 @@ func ActMulF16T(q Quant, ntok, k int, kind ActKind) (*ir.Kernel, error) {
 		return actMulValue(b, kind, b.Load(ir.F32, pG, at, 0), func() ir.Value { return b.Load(ir.F32, pU, at, 0) })
 	}
 	b.Store(pB, wd, b.PackF16(val(e0), val(e1)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ActMulF16TThreads is ActMulF16T's launch: one thread an output word.
@@ -277,7 +277,7 @@ func actF16T(q Quant, ntok, k int) (*ir.Kernel, error) {
 		x = append(x, b.LoadV(ir.F32, pX, in, int64(o), 4)...)
 	}
 	storeF16T(b, qi, pB, tid, x)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // storeF16T writes one (token, sub-block)'s values x, in natural order, as
@@ -338,11 +338,11 @@ func ActF16TGather(q Quant, ntok, k, nsrc int) (*ir.Kernel, error) {
 	for o := 0; o < len(w); o += 4 {
 		b.StoreV(pB, out, int64(o), w[o:o+4]...)
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // MatVecMMA70 is the batched quantized matvec on sm_70's f16 tensor cores
-// (ir.MMAVolta), for a card with no integer matrix instruction.
+// (ir.MMAVolta()), for a card with no integer matrix instruction.
 //
 // The weight is dequantized in registers, two halves at a time: a nibble
 // pair Or-ed into the bits of 1024.0 is 1024+q in two integer ops, less 1024
@@ -464,7 +464,7 @@ func MatVecMMA70(s MatVecShape) (*ir.Kernel, error) {
 		}
 		for i := 0; i < mt; i++ {
 			for j := 0; j < nt; j++ {
-				d[i][j] = b.MMA(ir.MMAVolta, af[i][st], bf[j], d[i][j])
+				d[i][j] = b.MMA(ir.MMAVolta(), af[i][st], bf[j], d[i][j])
 			}
 		}
 	}
@@ -505,7 +505,7 @@ func MatVecMMA70(s MatVecShape) (*ir.Kernel, error) {
 			}
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // voltaDeq is the dequantization MatVecMMA70 and GemmVolta share: one row's

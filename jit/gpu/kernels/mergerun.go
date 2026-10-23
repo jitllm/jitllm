@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // FlashAttentionMergeRun folds one pass of partials into a running partial:
@@ -65,5 +65,5 @@ func FlashAttentionMergeRun(s FlashShape, first bool) (*ir.Kernel, error) {
 	b.Store(pOut, b.Add(ir.U32, rb, d), acc, 0)
 	b.Store(pOut, b.Add(ir.U32, rb, rep), mx, int64(padded))
 	b.Store(pOut, b.Add(ir.U32, rb, rep), sum, int64(padded+32))
-	return b.Done(), nil
+	return b.Done()
 }

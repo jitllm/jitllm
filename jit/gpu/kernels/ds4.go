@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // DeepSeek V4 on the device (nn.LayerPlan.DS4; engine/model/ds4.go is the
@@ -61,7 +61,7 @@ func HCFlat(d, rows int) (*ir.Kernel, error) {
 	src := b.Add(ir.U32, b.Mul(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, k, b.Const(ir.U32, int64(rows))), r),
 		b.Const(ir.U32, int64(d))), i)
 	b.Store(pOut, flat, b.Load(ir.F32, pX, src, 0), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // HCMix is the hyper-connection mixer, one thread a row (jit/cpu/hc_const.go
@@ -164,7 +164,7 @@ func HCMix(rows, iters int, eps float32) (*ir.Kernel, error) {
 	for i := 0; i < h*h; i++ {
 		b.Store(pOut, base, cm[i], int64(2*h+i))
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // HCCollapse is each row's sublayer input, sum_k pre_k x_k, pre the mixer's
@@ -187,7 +187,7 @@ func HCCollapse(d, rows int) (*ir.Kernel, error) {
 		acc = b.Fma(b.Load(ir.F32, pHC, hb, int64(k)), x, acc)
 	}
 	b.Store(pOut, flat, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // HCPost is every stream's next value from the sublayer output y and the
@@ -221,7 +221,7 @@ func HCPost(d, rows int, rowsFault bool) (*ir.Kernel, error) {
 		acc = b.Fma(b.Load(ir.F32, pHC, b.Add(ir.U32, hb, ci), 0), x, acc)
 	}
 	b.Store(pOut, flat, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // RoPETail turns the last nRot dimensions of each of heads heads hd wide in
@@ -260,7 +260,7 @@ func RoPETail(heads, hd, nRot, rows int, inverse bool) (*ir.Kernel, error) {
 	oddV := b.Add(ir.F32, b.Mul(ir.F32, x0, s), b.Mul(ir.F32, x1, c))
 	rot := b.Select(ir.F32, b.Lt(ir.U32, b.Const(ir.U32, 0), odd), oddV, even)
 	b.Store(pOut, flat, b.Select(ir.F32, isNope, b.Load(ir.F32, pX, flat, 0), rot), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ds4Pos is row r's position: its descriptor's write position.
@@ -284,7 +284,7 @@ func DS4ApeAdd(n, rate, rows int) (*ir.Kernel, error) {
 	ph := b.Rem(ir.U32, ds4Pos(b, pRow, r), b.Const(ir.U32, int64(rate)))
 	ai := b.Add(ir.U32, b.Mul(ir.U32, ph, b.Const(ir.U32, int64(n))), i)
 	b.Store(pOut, flat, b.Add(ir.F32, b.Load(ir.F32, pG, flat, 0), b.Load(ir.F32, pAPE, ai, 0)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ds4Closing returns, for row r at position t, whether t closes an entry
@@ -393,7 +393,7 @@ func DS4Pool(rows, page, rowW, kvo, gto, wd, rate int, overlap, noOverlap bool) 
 	b.SetPhi(s2, b.Add(ir.U32, s2, one))
 	b.EndLoop()
 	b.Store(pOut, flat, b.Div(ir.F32, acc, sum), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // DS4EntWrite caches each row's n floats at column col of the entry its
@@ -420,7 +420,7 @@ func DS4EntWrite(n, rows, page, entW, col, rate int) (*ir.Kernel, error) {
 	zero := b.Const(ir.U32, 0)
 	row := b.Select(ir.U32, closing, poolRow(b, pTab, pagedDesc(b, pRow, r, PRowTab), w, page, entW), zero)
 	b.Store(pDst, b.Add(ir.U32, row, b.Add(ir.U32, i, b.Const(ir.U32, int64(col)))), b.Load(ir.F32, pSrc, flat, 0), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ds4Visible is how many entries row r at t may read: (t+1)/rate.
@@ -449,7 +449,7 @@ func DS4EntDesc(rows, rate int) (*ir.Kernel, error) {
 		b.Select(ir.U32, b.Lt(ir.U32, wd, b.Const(ir.U32, PRowEnd)), zero,
 			b.Select(ir.U32, b.Lt(ir.U32, wd, b.Const(ir.U32, PRowEnd+1)), nv, zero)))
 	b.Store(pOut, flat, v, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // DS4Keys is how a row's keys are chosen: its window of W positions, then
@@ -528,7 +528,7 @@ func DS4Gather(rows, kmax, hd, page, rowT, rowE int, k DS4Keys) (*ir.Kernel, err
 	dst := b.Add(ir.U32, b.Mul(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, r, b.Const(ir.U32, int64(ppr*page))), j),
 		b.Const(ir.U32, int64(hd))), e)
 	b.Store(pDst, dst, val, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // DS4Desc writes the gathered pages' descriptors: row r's table at
@@ -552,7 +552,7 @@ func DS4Desc(rows, kmax, page int, k DS4Keys) (*ir.Kernel, error) {
 		b.Select(ir.U32, b.Lt(ir.U32, wd, b.Const(ir.U32, PRowEnd)), zero,
 			b.Select(ir.U32, b.Lt(ir.U32, wd, b.Const(ir.U32, PRowEnd+1)), n, zero)))
 	b.Store(pOut, flat, v, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // DS4RouteBias writes each row's selection bias for the router
@@ -575,7 +575,7 @@ func DS4RouteBias(nExpert, k, vocab, rows int, table bool) (*ir.Kernel, error) {
 	e := b.Rem(ir.U32, flat, b.Const(ir.U32, int64(nExpert)))
 	if !table {
 		b.Store(pOut, flat, b.Load(ir.F32, pSrc, e, 0), 0)
-		return b.Done(), nil
+		return b.Done()
 	}
 	r := b.Div(ir.U32, flat, b.Const(ir.U32, int64(nExpert)))
 	id := b.Min(ir.U32, b.Load(ir.U32, pIDs, r, 0), b.Const(ir.U32, int64(vocab-1)))
@@ -591,5 +591,5 @@ func DS4RouteBias(nExpert, k, vocab, rows int, table bool) (*ir.Kernel, error) {
 	b.SetPhi(i, b.Add(ir.U32, i, one))
 	b.EndLoop()
 	b.Store(pOut, flat, b.Select(ir.F32, b.Lt(ir.U32, zero, hit), b.ConstF32(0), negInfF32(b)), 0)
-	return b.Done(), nil
+	return b.Done()
 }

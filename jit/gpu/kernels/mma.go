@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // MMAProbe is a bare int8 GEMM through one warp-level matrix instruction, used
@@ -75,7 +75,7 @@ func MMAProbe(sh ir.MMAShape) (*ir.Kernel, error) {
 		col := b.Add(ir.U32, b.Mul(ir.U32, t, b.Const(ir.U32, 2)), b.Const(ir.U32, int64(i%2)))
 		b.Store(pOut, b.Add(ir.U32, b.Mul(ir.U32, row, b.Const(ir.U32, int64(sh.N))), col), v, 0)
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // MatVecMMA is the prefill GEMM on the warp-level matrix instruction (int8
@@ -602,7 +602,7 @@ func MatVecMMA(s MatVecShape) (*ir.Kernel, error) {
 			}
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // outTokIdx is the output column this lane owns: n-tile j, pair member c.
@@ -672,5 +672,5 @@ func mmaProbeF16(sh ir.MMAShape) (*ir.Kernel, error) {
 		col := b.Add(ir.U32, two, b.Const(ir.U32, int64(i%2)))
 		b.Store(pOut, b.Add(ir.U32, b.Mul(ir.U32, row, b.Const(ir.U32, int64(sh.N))), col), v, 0)
 	}
-	return b.Done(), nil
+	return b.Done()
 }

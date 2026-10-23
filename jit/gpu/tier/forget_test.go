@@ -5,9 +5,9 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
 )
 
 // TestForgetFreesTheCopiesInItsRange is the device's half of placement.md 15v:

@@ -6,9 +6,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
-	"github.com/jitllm/jitllm/jit/gpu/vulkan"
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/backend/vulkan"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // TestDivRNIsTheIEEEQuotient holds divRN to Go's float32 division, which is
@@ -101,7 +101,11 @@ func divRNRun(t *testing.T, d backend.Device, num, den []float32, hw ...bool) []
 		q = b.Div(ir.F32, x, y)
 	}
 	b.Store(pO, i, q, 0)
-	k, err := d.Compile(b.Done())
+	built, err := b.Done()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := d.Compile(built)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +202,11 @@ func quantScalesRun(t *testing.T, d backend.Device, amax []float32) []uint32 {
 	i2 := b.Mul(ir.U32, i, b.Const(ir.U32, 2))
 	b.Store(pO, i2, dd, 0)
 	b.Store(pO, i2, inv, 1)
-	k, err := d.Compile(b.Done())
+	built, err := b.Done()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := d.Compile(built)
 	if err != nil {
 		t.Fatal(err)
 	}

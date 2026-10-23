@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // Attention over a history whose oldest pages are at home (kvevict.go).

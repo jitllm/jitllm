@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // TileProbe is the smallest kernel that exercises a collective matrix end to
@@ -13,7 +13,7 @@ import (
 // The chain is what matters: a cooperative value must survive from one MulAdd
 // to the next without a memory round trip, which a single MMA would not test.
 // The device's shapes are a list it enumerates
-// (jit/gpu/vulkan.CooperativeMatrixShapes) and operand, accumulator and
+// (backend/vulkan.CooperativeMatrixShapes) and operand, accumulator and
 // storage types must all match, so one numeric probe checks them all.
 //
 // A and B are row-major, k tiles of them laid end to end. The reference is
@@ -53,7 +53,7 @@ func TileProbe(m, n, k, chain int, elem ir.TileElem) (*ir.Kernel, error) {
 		c = b.TileMMA(av, bv, c)
 	}
 	b.TileStore(pOut, b.Const(ir.U32, 0), outStride, c, false)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // acc2scalar is the scalar type a splat's seed carries. The accumulator's

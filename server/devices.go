@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/sched"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
 )
 
 // DeviceInfo is one enumerated compute resource, in Go terms.

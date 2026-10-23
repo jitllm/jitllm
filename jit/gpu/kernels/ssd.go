@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // GroupNormRows is Mamba-2's gated norm's RMSNorm: rows vectors of
@@ -58,7 +58,7 @@ func GroupNormRows(groups, width int, eps float64, rows, lanes int) (*ir.Kernel,
 		w := b.Load(ir.F32, pW, wBase, int64(k*32))
 		b.Store(pOut, base, b.Mul(ir.F32, b.Mul(ir.F32, v, inv), w), int64(k*32))
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // groupNormScalar is GroupNormRows' one-thread form, headNormScalar with the
@@ -96,5 +96,5 @@ func groupNormScalar(groups, width, n int, eps float64) (*ir.Kernel, error) {
 	b.SetPhi(oi, b.Add(ir.U32, oi, one))
 	b.SetPhi(wi, b.Add(ir.U32, wi, one))
 	b.EndLoop()
-	return b.Done(), nil
+	return b.Done()
 }

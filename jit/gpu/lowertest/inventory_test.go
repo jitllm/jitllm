@@ -30,7 +30,7 @@ var gpuElementwiseInventory = []string{
 // registered, which is what makes TestLowersEverywhere cover it.
 //
 // It is a coverage check, not a correctness one: assembling is not computing.
-// Correctness for these lives in jit/gpu/backend, against a reference on every
+// Correctness for these lives in backend, against a reference on every
 // device present.
 func TestEveryElementwiseOpLowersEverywhere(t *testing.T) {
 	ks := all(t)

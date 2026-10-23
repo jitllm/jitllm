@@ -18,12 +18,12 @@ step() {
 	"$@" 2>&1 | tee -a "$log"
 }
 
-step ./scripts/cap 8G -- go test ./jit/gpu/hip -count=1 -v -run 'TestRealROCmLoadsOrSaysWhy'
-step ./scripts/cap 8G -- go test ./jit/gpu/amdgpu ./jit/gpu/hip -count=1
+step ./scripts/cap 8G -- go test ./backend/hip -count=1 -v -run 'TestRealROCmLoadsOrSaysWhy'
+step ./scripts/cap 8G -- go test ./jit/amdgpu ./backend/hip -count=1
 step ./scripts/cap 8G -- go test ./jit/gpu/lowertest -count=1 -v -run 'AMDGPU'
 # Every backend kernel gate runs on every device backend.Open returns, the
 # HIP device among them; TestHIP* are its own.
-step ./scripts/cap 16G -- go test ./jit/gpu/backend -count=1 -v
+step ./scripts/cap 16G -- go test ./backend -count=1 -v
 step ./scripts/cap 8G -- go test ./jit/gpu/tier -count=1
 # The model gates. gpu:0 is the first device backend.Open returns, which on a
 # host with no CUDA is the HIP device.

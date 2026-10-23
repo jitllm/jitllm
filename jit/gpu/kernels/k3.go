@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // Kimi-K3's residual attention on the device (nn.LayerPlan.K3;
@@ -66,7 +66,7 @@ func K3ResScores(d, rows, nb int, eps float32, raw bool) (*ir.Kernel, error) {
 		s = b.Div(ir.F32, dot, b.Sqrt(ms))
 	}
 	b.Store(pS, t, s, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // K3ResMix writes each row's mix over x: sum_j p_j v_j[i], p the softmax of
@@ -107,7 +107,7 @@ func K3ResMix(d, rows, nb int) (*ir.Kernel, error) {
 		acc = b.Fma(b.Div(ir.F32, sc[j], sum), b.Load(ir.F32, pX, at, 0), acc)
 	}
 	b.Store(pOut, t, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // K3Post writes every stream of out from x and a sublayer's output y
@@ -140,5 +140,5 @@ func K3Post(d, rows, streams, push int, restart bool) (*ir.Kernel, error) {
 		v = b.Select(ir.F32, b.Lt(ir.U32, k, b.Const(ir.U32, int64(push))), v, at)
 	}
 	b.Store(pOut, t, b.Select(ir.F32, b.Lt(ir.U32, k, b.Const(ir.U32, 1)), s0, v), 0)
-	return b.Done(), nil
+	return b.Done()
 }

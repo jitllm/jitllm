@@ -11,8 +11,8 @@ import (
 
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // TestStepAcrossSessionsMatchesEachAlone decodes three States -- three

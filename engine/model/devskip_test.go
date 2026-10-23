@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/backend/vulkan"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/vulkan"
 )
 
 // noDevice is what a device arm does when its device would not open: skip,

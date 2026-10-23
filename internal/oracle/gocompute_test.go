@@ -68,7 +68,7 @@ func TestNoGoComputeOnTheInferencePath(t *testing.T) {
 	// walking the parent of the repository.
 	t.Chdir(root)
 	found := map[string][]int{}
-	for _, pkg := range []string{"engine/model", "engine/nn", "jit/gpu/tier", "jit/gpu/backend", "engine/sched", "jit/cpu"} {
+	for _, pkg := range []string{"engine/model", "engine/nn", "jit/gpu/tier", "backend", "engine/sched", "jit/cpu", "jit/gpu/kernels"} {
 		fset := token.NewFileSet()
 		ents, err := os.ReadDir(filepath.Join(root, pkg))
 		if err != nil {

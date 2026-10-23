@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/jitllm/jitllm/format/quant"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // Quant is the weight format the device kernels understand.
@@ -226,6 +226,10 @@ func Layout(q Quant) (sub, bits int, biasK float32, biasArray bool) {
 // D32 reports whether q's d word is the scale as an f32 (TQ2F): a reader
 // takes its bits rather than converting an f16 half.
 func D32(q Quant) bool { return q.info().d32 }
+
+// E8M0 reports whether q's d word holds E8M0 exponents, one byte a block
+// (MXFP4).
+func E8M0(q Quant) bool { return q.info().e8m0 }
 
 // MinInD reports a format whose minimum is the d word's high half alone, with
 // no per-sub-block integer to multiply it by: Q5_1. Its bias is dmin itself,
@@ -632,7 +636,7 @@ func matVec(s MatVecShape, into *segCtx) (*ir.Kernel, error) {
 		if into != nil {
 			return nil, nil
 		}
-		return b.Done(), nil
+		return b.Done()
 	}
 	pQS := b.Param("pQS"+suffix, ir.U32) // payload, transposed
 	// A float format has no scale plane; its slot carries the float activation
@@ -1485,7 +1489,7 @@ func MatVecSegmentsIn(segs []MatVecShape, split int, grp bool, in ActIn) (*ir.Ke
 		b.EndLoop()
 		start += blocks[i]
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // SegmentsGrid is MatVecSegments' launch: the workgroups each segment owns, in
@@ -1561,7 +1565,7 @@ func Reduce(rows, split int) (*ir.Kernel, error) {
 	b.EndLoop()
 
 	b.Store(pOut, row, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // StreamWide is a read-bandwidth probe: every thread sums per u32 with a grid
@@ -1612,7 +1616,7 @@ func StreamWideSpread(per, w, spread int) (*ir.Kernel, error) {
 		b.SetPhi(idx, b.Add(ir.U32, idx, stride))
 		b.EndLoop()
 		b.Store(pOut, tid, acc, 0)
-		return b.Done(), nil
+		return b.Done()
 	}
 	const group = 256
 	b := ir.New("streamwidespread", [3]int{group, 1, 1})
@@ -1639,7 +1643,7 @@ func StreamWideSpread(per, w, spread int) (*ir.Kernel, error) {
 	b.EndLoop()
 
 	b.Store(pOut, tid, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 func log2(n int) int {

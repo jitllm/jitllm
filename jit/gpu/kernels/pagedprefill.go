@@ -5,7 +5,7 @@ import (
 	"math"
 	"math/bits"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // The staged prefill over paged KV (docs/design/device-kv-paging.md): a
@@ -343,7 +343,7 @@ func PagedAttnScoresTiled(s FlashShape, qt, kt int) (*ir.Kernel, error) {
 			b.Store(pOut, add(ob, slots[x]), b.Select(ir.F32, ok, softcapped(b, accs[r*kt+x], s), negInf), 0)
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // splitsOf is how many splits a staged prefill shape's partition has: its
@@ -492,7 +492,7 @@ func PagedPrefillSoftmax(s FlashShape, lanes, qt int) (*ir.Kernel, error) {
 		b.Store(pOut, wi, b.Mul(ir.F32, b.Exp(b.Sub(ir.F32, b.Load(ir.F32, pA, wi, 0), mm)), inv), 0)
 		b.SetPhi(wi, add(wi, step))
 		b.EndLoop()
-		return b.Done(), nil
+		return b.Done()
 	}
 	startW := add(add(pb, z0), lane)
 	b.LoopN(count(z0, z1))
@@ -518,7 +518,7 @@ func PagedPrefillSoftmax(s FlashShape, lanes, qt int) (*ir.Kernel, error) {
 			b.Store(pPart, pp, l, int64(padded+32+r))
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // PagedAttnAccTiledThreads is how many threads PagedAttnAccTiled takes
@@ -711,7 +711,7 @@ func PagedAttnAccTiled(s FlashShape, qt int) (*ir.Kernel, error) {
 			b.Store(pPart, add(at, j), acc[r], o)
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // PagedAttnScoresMMAWarps is how many warps PagedAttnScoresMMA launches
@@ -821,5 +821,5 @@ func PagedAttnScoresMMA(s FlashShape, nt int) (*ir.Kernel, error) {
 		}
 	}
 	b.EndLoop()
-	return b.Done(), nil
+	return b.Done()
 }

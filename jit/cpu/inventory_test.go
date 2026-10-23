@@ -7,7 +7,7 @@ import "testing"
 // an elementwise op means adding a row here, so an omission is a visible diff.
 //
 // The GPU twins are enumerated in jit/gpu/lowertest, which lowers each of them
-// on all three backends; jit/gpu/backend/layernorm_test.go runs the two that
+// on all three backends; backend/layernorm_test.go runs the two that
 // were added last against a float64 reference on real hardware.
 var elementwiseInventory = []struct {
 	name string

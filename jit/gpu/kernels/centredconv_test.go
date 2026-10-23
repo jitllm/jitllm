@@ -3,7 +3,7 @@ package kernels
 import (
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // TestConv3CentredValidates: the kernel builds and passes ir.Validate (its

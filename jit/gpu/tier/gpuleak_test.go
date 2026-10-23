@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// A CUDA context is per OS thread, so jit/gpu/cuda keeps one owner goroutine per
+// A CUDA context is per OS thread, so backend/cuda keeps one owner goroutine per
 // device on a locked thread, which makes the GPU path the one place a thread
 // leak can hide from sched's gates. One locked thread per open device is the
 // design; the failure is a count that grows with open/close cycles.

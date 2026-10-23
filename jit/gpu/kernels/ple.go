@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // PLESlice gathers one block's slice of Gemma 4's per-layer embedding inputs:
@@ -26,5 +26,5 @@ func PLESlice(rows, width, p int) (*ir.Kernel, error) {
 	off := b.Load(ir.U32, pOff, b.Const(ir.U32, 0), 0)
 	src := b.Add(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, r, b.Const(ir.U32, int64(width))), off), j)
 	b.Store(pOut, i, b.Load(ir.F32, pIn, src, 0), 0)
-	return b.Done(), nil
+	return b.Done()
 }

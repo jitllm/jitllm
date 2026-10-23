@@ -86,7 +86,7 @@ type Config struct {
 	JointSteps JointSteps
 
 	// ROCm is the ROCm library directory the AMD backend loads from, or empty
-	// for the default search (jit/gpu/hip). jitllmd fills it from JITLLM_ROCM.
+	// for the default search (backend/hip). jitllmd fills it from JITLLM_ROCM.
 	ROCm string
 
 	// TuneCache is the directory the device tuners keep their answers in

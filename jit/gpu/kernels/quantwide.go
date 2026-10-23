@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // Wide amax windows. A window whose words do not fit one Quantize group --
@@ -140,7 +140,7 @@ func quantizeWide(n, window int, kind *ActKind, pad *rowPad) (*ir.Kernel, error)
 			b.Barrier()
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // treeMax reduces every thread's x to the group's maximum through sh, a

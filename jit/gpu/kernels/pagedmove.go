@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // PagedGatherPages copies pages of a paged pool into one contiguous buffer:
@@ -25,5 +25,5 @@ func PagedGatherPages(words, n int) (*ir.Kernel, error) {
 	i := b.Rem(ir.U32, flat, u(words))
 	pid := b.Load(ir.U32, tab, j, 0)
 	b.Store(dst, flat, b.Load(ir.F32, src, b.Add(ir.U32, b.Mul(ir.U32, pid, u(words)), i), 0), 0)
-	return b.Done(), nil
+	return b.Done()
 }

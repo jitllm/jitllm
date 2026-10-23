@@ -16,8 +16,8 @@ import (
 	"github.com/jitllm/jitllm/dev/bench"
 	"github.com/jitllm/jitllm/engine/model"
 	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 func verifyCmd(args []string) error {

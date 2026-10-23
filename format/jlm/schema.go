@@ -146,6 +146,9 @@ type TypeLayout struct {
 	Codes *[16]uint8
 	// D32: the d word is the scale as an f32, one row a word (TypeTQ2F).
 	D32 bool
+	// E8M0: the super-scale is a power of two stored as one byte, four rows
+	// to a d word, the byte shifted left 23 the f32 itself (TypeMX4).
+	E8M0 bool
 }
 
 // Layout returns the on-disk description of a packed type, and ok=false for a
@@ -169,7 +172,7 @@ func Layout(t Type) (TypeLayout, bool) {
 	case TypeQ6S:
 		return TypeLayout{Sub: 16, Planes: [2]int{4, 2}, SuperSub: 16, ScaleOff: -128, Bias: 32}, true
 	case TypeMX4:
-		return TypeLayout{Sub: 32, Planes: [2]int{4, 0}, SuperSub: 1, Bias: 12, Codes: &mx4Codes}, true
+		return TypeLayout{Sub: 32, Planes: [2]int{4, 0}, SuperSub: 1, Bias: 12, Codes: &mx4Codes, E8M0: true}, true
 	case TypeQ51:
 		// HasMin at SuperSub 1: there is no per-sub-block minimum to read, so
 		// the minimum is the d word's high half, stored negated.

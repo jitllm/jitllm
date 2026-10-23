@@ -533,13 +533,13 @@ card runs the model at all, and on this model the knob has two settings.
                                    with a block it cannot reclaim, what SetBudget
                                    does to one, and the arena's term in
                                    HostReserved
-    jit/gpu/backend/import_test.go  the hardware gate, on every device the host
+    backend/import_test.go  the hardware gate, on every device the host
                                    has. The assertion is a MUTATION of the host
                                    bytes with no upload of any kind: an imported
                                    buffer's next launch must see it and an
                                    uploaded one must not -- the copy arm is the
                                    violation, not a control
-    jit/gpu/metal/import_test.go    -contents must BE the pointer handed in,
+    backend/metal/import_test.go    -contents must BE the pointer handed in,
                                    plus the four shapes the driver refuses
     jit/gpu/kernels/arena_test.go   every packed array starts AND ends on a
                                    HostAlign() boundary; the length half is what

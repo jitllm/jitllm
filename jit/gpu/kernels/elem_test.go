@@ -2,11 +2,12 @@ package kernels_test
 
 import (
 	"fmt"
+	"github.com/jitllm/jitllm/internal/oracle"
 	"math"
 	"sync"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
@@ -73,7 +74,7 @@ func TestQuantizeMatchesCPU(t *testing.T) {
 	wantA := make([]uint32, k/4)
 	wantD := make([]float32, k/32)
 	wantS := make([]float32, k/16)
-	if err := kernels.PackActivationsInto(wantA, wantD, wantS, x64, 32); err != nil {
+	if err := oracle.PackActivationsInto(wantA, wantD, wantS, x64, 32); err != nil {
 		t.Fatal(err)
 	}
 
@@ -156,7 +157,7 @@ func quantizeWideCase(t *testing.T, k, window int) {
 	wantA := make([]uint32, k/4)
 	wantD := make([]float32, k/32)
 	wantS := make([]float32, k/16)
-	if err := kernels.PackActivationsInto(wantA, wantD, wantS, x64, window); err != nil {
+	if err := oracle.PackActivationsInto(wantA, wantD, wantS, x64, window); err != nil {
 		t.Fatal(err)
 	}
 	kern, err := kernels.Quantize(k, window)

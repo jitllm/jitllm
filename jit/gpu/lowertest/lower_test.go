@@ -13,11 +13,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/gpu/msl"
-	"github.com/jitllm/jitllm/jit/gpu/ptx"
-	"github.com/jitllm/jitllm/jit/gpu/spirv"
+	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/jit/msl"
+	"github.com/jitllm/jitllm/jit/ptx"
+	"github.com/jitllm/jitllm/jit/spirv"
 )
 
 func all(t *testing.T) map[string]*ir.Kernel {
@@ -84,7 +84,7 @@ func all(t *testing.T) map[string]*ir.Kernel {
 	add("dh/combine", func() (*ir.Kernel, error) { return kernels.DHCombine(5, 1.5, 2, .25) })
 	// The grid barrier's gate kernel (kernels/gridprobe.go), so ptxas and
 	// spirv-val see the atomics and the spin loop.
-	add("grid/probe", func() (*ir.Kernel, error) { return kernels.GridProbe(4, 128), nil })
+	add("grid/probe", func() (*ir.Kernel, error) { return kernels.GridProbe(4, 128) })
 	// A kernel that uses shared memory and a barrier, so the vendors'
 	// assemblers see that surface. The barrier is load-bearing: each thread
 	// stages one element and reads its neighbour's.
@@ -98,7 +98,7 @@ func all(t *testing.T) map[string]*ir.Kernel {
 		b.Barrier()
 		other := b.Rem(ir.U32, b.Add(ir.U32, tid, b.Const(ir.U32, 1)), b.Const(ir.U32, 64))
 		b.Store(pOut, tid, b.Load(ir.F32, sh, other, 0), 0)
-		return b.Done(), nil
+		return b.Done()
 	})
 
 	// Every subgroup collective at every scalar type, so the assemblers see

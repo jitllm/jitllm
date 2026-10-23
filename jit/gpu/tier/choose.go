@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
@@ -107,15 +107,16 @@ func probe(devs []backend.Device) (best int, rates []float64) {
 		return 0, rates
 	}
 	_ = scw
-	x := make([]float32, k)
-	for i := range x {
-		x[i] = float32(rng.NormFloat64())
+	// Random codes and fixed scales: a matvec's time does not depend on the
+	// activation it reads, so nothing is quantized to time one.
+	a := make([]uint32, k/4)
+	for i := range a {
+		a[i] = rng.Uint32()
 	}
-	a, as, sum, err := kernels.PackActivations(x)
-	if err != nil {
-		return 0, rates
+	ax := make([]float32, 3*nb)
+	for i := range ax[:nb] {
+		ax[i] = 1.0 / 127
 	}
-	ax := append(append([]float32{}, as...), sum...)
 	macs := float64(rows) * float64(k)
 
 	for i, d := range devs {

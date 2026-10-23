@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/backend"
 )
 
 // TestKVPoolPages holds the device page pool to its contract

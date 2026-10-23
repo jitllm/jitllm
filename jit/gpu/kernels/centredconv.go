@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // Conv3Centred is LFM2's encoder convolution (d1-omni's trunk) over a whole
@@ -51,5 +51,5 @@ func Conv3Centred(chans, rows int) (*ir.Kernel, error) {
 	acc = b.Fma(w0, b.Select(ir.F32, okL, xl, zero), acc)
 	acc = b.Fma(w2, b.Select(ir.F32, okR, xr, zero), acc)
 	b.Store(pOut, idx, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }

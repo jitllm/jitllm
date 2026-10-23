@@ -120,7 +120,7 @@ GPU source files: [`matvec.go`](../jit/gpu/kernels/matvec.go), [`mma.go`](../jit
 | Vulkan | `spirv.Emit` writes the SPIR-V module directly; Vulkan creates a shader module and compute pipeline. | Prepared compute pipelines. No runtime dependency on `glslang` or `spirv-val`. |
 | Metal | `msl.Emit` emits MSL; `newLibraryWithSource:options:error:` compiles it and the framework creates the compute pipeline. | Prepared Metal kernels/pipelines. |
 
-Key sources: [`engine/nn/jit.go:293`](../engine/nn/jit.go#L293), [`engine/nn/norm.go`](../engine/nn/norm.go), [`engine/nn/matmul.go`](../engine/nn/matmul.go), [`engine/nn/packedmm.go`](../engine/nn/packedmm.go), [`cpu/baseline.go`](../jit/cpu/baseline.go), [`cpu/exec_linux.go`](../jit/cpu/exec_linux.go), [`cpu/exec_darwin.go`](../jit/cpu/exec_darwin.go), [`tier/tier.go:2051`](../jit/gpu/tier/tier.go#L2051), [`backend/cuda.go:628`](../jit/gpu/backend/cuda.go#L628), [`backend/vulkan.go:103`](../jit/gpu/backend/vulkan.go#L103), [`backend/metal.go:90`](../jit/gpu/backend/metal.go#L90).
+Key sources: [`engine/nn/jit.go:293`](../engine/nn/jit.go#L293), [`engine/nn/norm.go`](../engine/nn/norm.go), [`engine/nn/matmul.go`](../engine/nn/matmul.go), [`engine/nn/packedmm.go`](../engine/nn/packedmm.go), [`cpu/baseline.go`](../jit/cpu/baseline.go), [`cpu/exec_linux.go`](../jit/cpu/exec_linux.go), [`cpu/exec_darwin.go`](../jit/cpu/exec_darwin.go), [`tier/tier.go:2051`](../jit/gpu/tier/tier.go#L2051), [`backend/cuda.go:628`](../backend/cuda.go#L628), [`backend/vulkan.go:103`](../backend/vulkan.go#L103), [`backend/metal.go:90`](../backend/metal.go#L90).
 
 ## Runtime layer construction
 
@@ -164,7 +164,7 @@ The higher-level generators construct their kernels from lower-level operations 
 
 Matrix-operation coverage is deliberately specific: fragment-shaped `OpMMA` lowers through PTX; collective tile operations have SPIR-V and MSL implementations with shape/type constraints. The presence of tile support in a lowerer does not mean every production projection selects that path. The layer's `MatVecMMA` fallback above is the relevant production decision.
 
-Sources: [`cpu/asm.go`](../jit/cpu/asm.go), [`cpu/a64.go`](../jit/cpu/a64.go), [`cpu/sse.go`](../jit/cpu/sse.go), [`cpu/sse_helpers.go`](../jit/cpu/sse_helpers.go), [`gpu/ir/ir.go`](../jit/gpu/ir/ir.go), [`gpu/ir/tile.go`](../jit/gpu/ir/tile.go), [`gpu/ptx/lower.go`](../jit/gpu/ptx/lower.go), [`gpu/spirv/lower.go`](../jit/gpu/spirv/lower.go), [`gpu/msl/msl.go`](../jit/gpu/msl/msl.go).
+Sources: [`cpu/asm.go`](../jit/cpu/asm.go), [`cpu/a64.go`](../jit/cpu/a64.go), [`cpu/sse.go`](../jit/cpu/sse.go), [`cpu/sse_helpers.go`](../jit/cpu/sse_helpers.go), [`gpu/ir/ir.go`](../jit/ir/ir.go), [`gpu/ir/tile.go`](../jit/ir/tile.go), [`gpu/ptx/lower.go`](../jit/ptx/lower.go), [`gpu/spirv/lower.go`](../jit/spirv/lower.go), [`gpu/msl/msl.go`](../jit/msl/msl.go).
 
 ## Boundaries that matter for accurate wording
 

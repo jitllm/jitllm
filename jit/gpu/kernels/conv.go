@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // A convolutional tower's own kernels (Gemma 3n's MobileNet-V5), over
@@ -47,7 +47,7 @@ func PadRows(h, w, c, hp, wp, top, left int) (*ir.Kernel, error) {
 	v = b.Select(ir.F32, b.Lt(ir.U32, sx, u32(b, w)), v, zero)
 	v = b.Select(ir.F32, b.Lt(ir.U32, sy, u32(b, h)), v, zero)
 	b.Store(pOut, i, v, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // DWConv is a depthwise k x k convolution at stride s over a padded grid wp
@@ -83,7 +83,7 @@ func DWConv(k, s, wp, c, ho, wo int) (*ir.Kernel, error) {
 	b.SetPhi(t, b.Add(ir.U32, t, u32(b, 1)))
 	b.EndLoop()
 	b.Store(pOut, i, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // Im2col unfolds a padded grid wp samples wide for a full k x k convolution at
@@ -114,7 +114,7 @@ func Im2col(k, s, wp, c, wo, kpad, n, padLen int) (*ir.Kernel, error) {
 	v := b.Load(ir.F32, pPad, b.Min(ir.U32, idx, u32(b, padLen-1)), 0)
 	v = b.Select(ir.F32, b.Lt(ir.U32, j, u32(b, k*k*c)), v, b.ConstF32(0))
 	b.Store(pOut, i, v, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // MQAScores is multi-query attention's scores: n rows of heads queries of kd
@@ -143,7 +143,7 @@ func MQAScores(n, m, heads, kd int) (*ir.Kernel, error) {
 	b.SetPhi(d, b.Add(ir.U32, d, u32(b, 1)))
 	b.EndLoop()
 	b.Store(pOut, i, b.Mul(ir.F32, acc, b.ConstF32(float32(1/math.Sqrt(float64(kd))))), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // RowSoftmax is a softmax over each of rows rows of m, one thread a row.
@@ -177,7 +177,7 @@ func RowSoftmax(rows, m int) (*ir.Kernel, error) {
 	b.Store(pOut, at, b.Mul(ir.F32, b.Exp(b.Sub(ir.F32, b.Load(ir.F32, pX, at, 0), mx)), inv), 0)
 	b.SetPhi(j3, b.Add(ir.U32, j3, u32(b, 1)))
 	b.EndLoop()
-	return b.Done(), nil
+	return b.Done()
 }
 
 // MQAAcc is multi-query attention's weighted sum: out[(r*heads+h)*kd+d] = sum
@@ -205,5 +205,5 @@ func MQAAcc(n, m, heads, kd int) (*ir.Kernel, error) {
 	b.SetPhi(j, b.Add(ir.U32, j, u32(b, 1)))
 	b.EndLoop()
 	b.Store(pOut, i, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }

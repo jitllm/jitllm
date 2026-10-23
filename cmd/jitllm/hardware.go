@@ -11,10 +11,10 @@ import (
 
 	"github.com/jitllm/jitllm/format/quant"
 
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/backend/vulkan"
 	"github.com/jitllm/jitllm/engine/sched"
 	"github.com/jitllm/jitllm/jit/cpu"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/vulkan"
 )
 
 // hardware reports what compute this machine offers jitllm.

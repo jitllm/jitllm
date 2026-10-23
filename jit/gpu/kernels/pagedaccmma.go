@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // PagedAttnAccMMAWarps is how many warps PagedAttnAccMMA launches (groups of
@@ -242,5 +242,5 @@ func PagedAttnAccMMA(s FlashShape, mt, nt int) (*ir.Kernel, error) {
 			}
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }

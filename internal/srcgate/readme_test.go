@@ -132,7 +132,7 @@ func TestNoCgo(t *testing.T) {
 		for _, im := range f.Imports {
 			if path, _ := strconv.Unquote(im.Path.Value); path == "C" {
 				t.Errorf("%s imports \"C\": the engine, server and app build with CGO_ENABLED=0 and open "+
-					"native libraries at run time through goffi (jit/gpu/ffi)", fset.Position(im.Pos()))
+					"native libraries at run time through goffi (backend/ffi)", fset.Position(im.Pos()))
 			}
 		}
 		return nil

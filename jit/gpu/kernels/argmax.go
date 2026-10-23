@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // ArgmaxGroup is Argmax's one workgroup.
@@ -100,5 +100,5 @@ func argmaxRows(n, rows int) (*ir.Kernel, error) {
 		at = row
 	}
 	b.Store(pOut, at, b.Load(ir.U32, si, b.Const(ir.U32, 0), 0), 0)
-	return b.Done(), nil
+	return b.Done()
 }

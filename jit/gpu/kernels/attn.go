@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // Attention kernels. The score and accumulate loops run pos+1 times and pos
@@ -74,7 +74,7 @@ func ropeRows(nHeads, headDim, nRot int, neox, split bool, rows, dstStride int) 
 	flat := b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID()),
 		b.Const(ir.U32, int64(nHeads*pairs*rows-1)))
 	ropeBody(b, nHeads, headDim, nRot, neox, split, rows, dstStride, pSrc, pCS, pOff, pDst, flat)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ropeBody is ropeRows after its thread index: the pair flat (clamped by the
@@ -172,7 +172,7 @@ func CopyAtRowsT(n, rows, dstStride int) (*ir.Kernel, error) {
 	off := b.Load(ir.U32, pOff, row, 0)
 	dst := b.Add(ir.U32, b.Mul(ir.U32, i, b.Const(ir.U32, int64(dstStride))), off)
 	b.Store(pDst, dst, b.Load(ir.F32, pSrc, flat, 0), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // Restride copies a rows x cols block of 32-bit words from a source laid out at
@@ -194,7 +194,7 @@ func Restride(rows, cols, srcStride, dstStride int) (*ir.Kernel, error) {
 	src := b.Add(ir.U32, b.Mul(ir.U32, r, b.Const(ir.U32, int64(srcStride))), c)
 	dst := b.Add(ir.U32, b.Mul(ir.U32, r, b.Const(ir.U32, int64(dstStride))), c)
 	b.Store(pDst, dst, b.Load(ir.F32, pSrc, src, 0), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // CopyAtF16 writes the V cache as packed binary16, two elements per u32.
@@ -240,14 +240,14 @@ func copyAt(n int, f16 bool, rows int) (*ir.Kernel, error) {
 	}
 	if !f16 {
 		b.Store(pDst, b.Add(ir.U32, off, i), b.Load(ir.F32, pSrc, i, 0), 0)
-		return b.Done(), nil
+		return b.Done()
 	}
 	two := b.Mul(ir.U32, i, b.Const(ir.U32, 2))
 	w := b.PackF16(b.Load(ir.F32, pSrc, two, 0), b.Load(ir.F32, pSrc, two, 1))
 	// pOff counts elements; the packed cache is indexed in words.
 	wOff := b.Shr(ir.U32, off, b.Const(ir.U32, 1))
 	b.Store(pDst, b.Add(ir.U32, wOff, i), b.Bitcast(ir.F32, w), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // windowed masks a score to -inf when its key lies before the row's sliding
@@ -315,7 +315,7 @@ func attnScoresOne(nHeads, headDim, kvDim, gqa, maxSeq int, scale float32, kStri
 		v = windowed(b, v, pos, n, window, b.Bitcast(ir.F32, b.Const(ir.U32, 0xFF800000)))
 	}
 	b.Store(pOut, out, v, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AttnScoresWarp is AttnScores with one warp per (head, position): the 32 lanes
@@ -366,7 +366,7 @@ func AttnScoresWarp(nHeads, headDim, kvDim, gqa, maxSeq int, scale float32) (*ir
 	}
 	out := b.Add(ir.U32, b.Mul(ir.U32, h, b.Const(ir.U32, int64(maxSeq))), pos)
 	b.Store(pOut, out, b.Mul(ir.F32, acc, b.ConstF32(scale)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // SoftmaxRows normalises each head's score row. `lanes` is how many threads
@@ -507,7 +507,7 @@ func softmaxWarp(nHeads, maxSeq, perQuery, qt, sinkHeads int) (*ir.Kernel, error
 	b.Store(pOut, ni, b.Mul(ir.F32, e, inv), 0)
 	b.SetPhi(ni, b.Add(ir.U32, ni, step))
 	b.EndLoop()
-	return b.Done(), nil
+	return b.Done()
 }
 
 // butterfly reduces v across the 32 lanes of a warp, leaving the answer in every
@@ -575,7 +575,7 @@ func softmaxScalar(nHeads, maxSeq, sinkHeads int) (*ir.Kernel, error) {
 	b.Store(pOut, ni, b.Mul(ir.F32, e, inv), 0)
 	b.SetPhi(ni, b.Add(ir.U32, ni, one))
 	b.EndLoop()
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AttnAccSplitF16 is AttnAccSplit against a V cache packed as binary16, two
@@ -641,7 +641,7 @@ func AttnAccSplitF16(nHeads, headDim, kvDim, gqa, maxSeq, split int) (*ir.Kernel
 		b.Mul(ir.U32, tid, b.Const(ir.U32, 2)))
 	b.Store(pOut, base, acc0, 0)
 	b.Store(pOut, base, acc1, 1)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AttnAccSplit is AttnAcc with the position loop divided among Split threads
@@ -696,7 +696,7 @@ func AttnAccSplit(nHeads, headDim, kvDim, gqa, maxSeq, split int) (*ir.Kernel, e
 	b.SetPhi(vi, b.Add(ir.U32, vi, sKv))
 	b.EndLoop()
 	b.Store(pOut, flat, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AttnAcc sums the value vectors weighted by the normalised scores.
@@ -726,7 +726,7 @@ func AttnAcc(nHeads, headDim, kvDim, gqa, maxSeq int) (*ir.Kernel, error) {
 	b.SetPhi(vi, b.Add(ir.U32, vi, kvd))
 	b.EndLoop()
 	b.Store(pOut, tid, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // HeadNorm RMS-normalises each head of a q or k vector independently, with a
@@ -789,7 +789,7 @@ func HeadNorm(nHeads, headDim int, eps float64, lanes int) (*ir.Kernel, error) {
 		w := b.Load(ir.F32, pW, lane, int64(k*32))
 		b.Store(pOut, base, b.Mul(ir.F32, b.Mul(ir.F32, v, inv), w), int64(k*32))
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // headNormScalar is one thread per head and two sequential passes: the twin of
@@ -831,7 +831,7 @@ func headNormScalar(nHeads, headDim int, eps float64) (*ir.Kernel, error) {
 	b.SetPhi(oi, b.Add(ir.U32, oi, one))
 	b.SetPhi(wi, b.Add(ir.U32, wi, one))
 	b.EndLoop()
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AttnScoresTiled computes q . k[t] for `rows` consecutive query positions --
@@ -951,7 +951,7 @@ func AttnScoresTiledW(nHeads, headDim, kvDim, gqa, maxSeq int, scale float32, ro
 			b.Store(pOut, b.Add(ir.U32, row, poss[x]), v, 0)
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AttnAccTiled is AttnAcc over `rows` query positions, each walking only its
@@ -1018,7 +1018,7 @@ func AttnAccTiled(nHeads, headDim, kvDim, gqa, maxSeq, rows, qt int) (*ir.Kernel
 	for u := 0; u < qt; u++ {
 		b.Store(pOut, outBase, accs[u], int64(u*nHeads*headDim))
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // HeadNormRows applies HeadNorm to `rows` consecutive vectors. At lanes=32 that
@@ -1168,7 +1168,7 @@ func AttnScoresMMAW(nHeads, headDim, kvDim, gqa, maxSeq int, scale float32, rows
 			b.Store(pOut, out, v, 0)
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AttnScoresRagged is AttnScoresTiledW at one query row per tile for a batch
@@ -1247,7 +1247,7 @@ func AttnScoresRagged(nHeads, headDim, kvDim, gqa, maxSeq int, scale float32, ro
 		v = windowed(b, v, poss[x], cnt, window, negInf)
 		b.Store(pOut, b.Add(ir.U32, row, poss[x]), v, 0)
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AttnAccRagged is AttnAccTiled for a batch of different sequences: row r
@@ -1288,5 +1288,5 @@ func AttnAccRagged(nHeads, headDim, kvDim, gqa, maxSeq, rows int) (*ir.Kernel, e
 	b.SetPhi(vi, b.Add(ir.U32, vi, kvd))
 	b.EndLoop()
 	b.Store(pOut, b.Add(ir.U32, b.Mul(ir.U32, row, perRow), tid), acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }

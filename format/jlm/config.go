@@ -1109,3 +1109,36 @@ func (p Projector) String() string {
 	}
 	return "projector(" + itoa(uint64(p)) + ")"
 }
+
+// GLU is the bounded gated unit an FFN's activation is, as the container
+// states it, in numbers: act(gate) * up, where the gate is clamped above at
+// GateMax and up to [UpMin, UpMax] (where Clamp), up then shifted by UpShift;
+// the gate's linear factor, and then up, are each bounded b*tanh(x/b) by
+// GateTanh and UpTanh (where set); and the activation is the gate's linear
+// factor over 1 + exp(-SigScale * gate), SigScale zero being one. The zero
+// value is SwiGLU. The numbers are the flags' and fields' definitions:
+// FlagSwiGLUOAI is swiglu-oai's limit 7, alpha 1.702 and up + 1;
+// Flag2SwiGLUClamp a swiglu_limit of 10; SituBeta and SituLinearBeta situ's
+// two bounds.
+type GLU struct {
+	Clamp                          bool
+	GateMax, UpMin, UpMax, UpShift float32
+	SigScale                       float32
+	GateTanh, UpTanh               float32
+}
+
+// Bounded reports whether g is other than SwiGLU.
+func (g GLU) Bounded() bool { return g != GLU{} }
+
+// GLU is the gated unit c's activation states.
+func (c *Config) GLU() GLU {
+	switch {
+	case c.Flags.Has(FlagSwiGLUOAI):
+		return GLU{Clamp: true, GateMax: 7, UpMin: -7, UpMax: 7, UpShift: 1, SigScale: 1.702}
+	case c.Flags2.Has(Flag2SwiGLUClamp):
+		return GLU{Clamp: true, GateMax: 10, UpMin: -10, UpMax: 10}
+	case c.SituBeta != 0:
+		return GLU{GateTanh: c.SituBeta, UpTanh: c.SituLinearBeta}
+	}
+	return GLU{}
+}

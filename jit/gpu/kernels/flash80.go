@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // FlashPrefill80Rows is how many query rows one FlashPrefill80 workgroup
@@ -434,7 +434,7 @@ func flashPrefill80(s FlashPrefill70Shape, k8 bool) (*ir.Kernel, error) {
 				b.Store(pOut, b.Add(ir.U32, pbOf(rows[x>>1]), dimOf(n, x)), o[n][x], 0)
 			}
 		}
-		return b.Done(), nil
+		return b.Done()
 	}
 	var inv [2]ir.Value
 	for r := 0; r < 2; r++ {
@@ -446,5 +446,5 @@ func flashPrefill80(s FlashPrefill70Shape, k8 bool) (*ir.Kernel, error) {
 			b.Store(pOut, at, b.Mul(ir.F32, o[n][x], inv[x>>1]), 0)
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }

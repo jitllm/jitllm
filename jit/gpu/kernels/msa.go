@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // MiniMax Sparse Attention on a device (engine/model/msa.go has the graph).
@@ -68,7 +68,7 @@ func MSAScoresPaged(rows, heads, dim, tcap, page, kvRow, koff int) (*ir.Kernel, 
 	b.SetPhi(i, b.Add(ir.U32, i, one))
 	b.EndLoop()
 	b.Store(pOut, flat, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // MSABlocks is how many blocks of blk positions tcap positions span.
@@ -134,7 +134,7 @@ func MSABlockMax(rows, heads, tcap, blk, local int) (*ir.Kernel, error) {
 	v := b.Select(ir.F32, forced, posInf, mx)
 	v = b.Select(ir.F32, b.Lt(ir.U32, own, bi), negInf, v)
 	b.Store(pOut, flat, v, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // MSASelect flags each row's and group's kept blocks: block b is kept when it
@@ -184,7 +184,7 @@ func msaSelect(rows, heads, tcap, blk, k int, m selMode) (*ir.Kernel, error) {
 	b.EndLoop()
 	kept := b.Select(ir.U32, b.Lt(ir.U32, rank, keep), b.Select(ir.U32, b.Lt(ir.U32, bi, n), one, zero), zero)
 	b.Store(pFlag, flat, kept, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // MSACompact lists each row's and group's kept blocks in ascending order: a
@@ -216,7 +216,7 @@ func MSACompact(rows, heads, tcap, blk, k int) (*ir.Kernel, error) {
 	mine := b.Load(ir.U32, pFlag, flat, 0)
 	at := b.Select(ir.U32, b.Lt(ir.U32, zero, mine), b.Min(ir.U32, slot, kk), kk)
 	b.Store(pSel, b.Add(ir.U32, b.Mul(ir.U32, rh, b.Const(ir.U32, int64(k+1))), at), bi, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // MSAGatherPages is the gathered pages a row: k blocks of blk keys, pages of P.
@@ -302,7 +302,7 @@ func msaGatherK(rows, heads, headDim, blk, k, page, kvRow int, m selMode) (*ir.K
 	dst := b.Add(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, gp, b.Const(ir.U32, int64(page*w))),
 		b.Mul(ir.U32, e, b.Const(ir.U32, int64(page)))), pageRem(b, j, page))
 	b.Store(pDst, dst, b.Load(ir.F32, pSrc, src, 0), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // MSAGatherV copies each row's kept values into its gathered V pages, both
@@ -355,7 +355,7 @@ func msaGatherV(rows, heads, headDim, blk, k, page, kvRow int, f16 bool, m selMo
 	dst := b.Add(ir.U32, b.Mul(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, gp, b.Const(ir.U32, int64(page))),
 		pageRem(b, j, page)), b.Const(ir.U32, int64(ww))), u)
 	b.Store(pDst, dst, b.Load(ir.F32, pSrc, src, 0), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // MSADesc writes the gathered pages' descriptors: row r's table at
@@ -390,7 +390,7 @@ func msaDesc(rows, blk, k, page int, m selMode) (*ir.Kernel, error) {
 		b.Select(ir.U32, b.Lt(ir.U32, w, b.Const(ir.U32, PRowEnd+1)), b.Const(ir.U32, 1), zero))
 	v := b.Select(ir.U32, isTab, tab, b.Mul(ir.U32, isEnd, kept))
 	b.Store(pOut, flat, v, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // QSAScores is QSA's block score (Qwen3.8-Flash-Next; engine/model/qsa.go is
@@ -564,5 +564,5 @@ func QSAScores(rows, heads, dim, nb, blk, groups, page, kvRow, koff, nRot int, n
 	for g := 0; g < groups; g++ {
 		b.Store(pOut, ob, score, int64(g*nb))
 	}
-	return b.Done(), nil
+	return b.Done()
 }

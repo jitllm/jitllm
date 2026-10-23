@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/gpu/msl"
-	"github.com/jitllm/jitllm/jit/gpu/ptx"
+	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/jit/msl"
+	"github.com/jitllm/jitllm/jit/ptx"
 )
 
 // TestTileKernelsAssemble lowers the shipped collective-tile kernels

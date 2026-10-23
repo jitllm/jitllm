@@ -1,6 +1,6 @@
 package tier
 
-import "github.com/jitllm/jitllm/jit/gpu/backend"
+import "github.com/jitllm/jitllm/backend"
 
 // launcher is a submission's launch path: its session, and the slice every
 // launch's buffer list is copied into before the call reaches the session. A

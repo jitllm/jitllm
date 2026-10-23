@@ -9,10 +9,10 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/sched"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/backend/metal"
+	"github.com/jitllm/jitllm/backend/vulkan"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
-	"github.com/jitllm/jitllm/jit/gpu/metal"
-	"github.com/jitllm/jitllm/jit/gpu/vulkan"
 )
 
 // This file is the opening half of the tier: which devices, what each one may

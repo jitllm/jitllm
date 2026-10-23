@@ -22,7 +22,7 @@
 //
 // Left out: ./dev/bench, the measurements with throughput floors (RULE 4 puts
 // perf floors there), since a shared runner is not a quiet box; ./ui/stage,
-// which CI's ui job runs beside the app's build; and ./jit/gpu/backend on
+// which CI's ui job runs beside the app's build; and ./backend on
 // macOS only (see notRun).
 package main
 
@@ -53,7 +53,7 @@ func notRun() map[string]string {
 	// and the gates fail. The Linux and Windows runners, which have no GPU,
 	// still run the package.
 	if runtime.GOOS == "darwin" {
-		m["github.com/jitllm/jitllm/jit/gpu/backend"] = "the runner's paravirtual Metal device allows 512-thread pipelines; the gates force 1024"
+		m["github.com/jitllm/jitllm/backend"] = "the runner's paravirtual Metal device allows 512-thread pipelines; the gates force 1024"
 	}
 	return m
 }

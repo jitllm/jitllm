@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // RoPEQKVPaged is a decode block's three position writers as one launch: q
@@ -50,7 +50,10 @@ func RoPEQKVPaged(nHead, nKVHead, headDim, nRot int, neox bool, rows, page int, 
 	ropeBody(b, nHead, headDim, nRot, neox, false, rows, 0, pQ, pCS, pQOff, pQDst, clamp(nq))
 	pagedRopeBody(b, nKVHead, headDim, nKVHead*headDim, nRot, neox, page, pK, pCS, pKPool, pTab, pRow, clamp(nk))
 	pagedCopyBody(b, vw, page, vw, 0, f16, pV, pVPool, pTab, pRow, clamp(nv))
-	k := b.Done()
+	k, err := b.Done()
+	if err != nil {
+		return nil, err
+	}
 	return k, k.Validate()
 }
 

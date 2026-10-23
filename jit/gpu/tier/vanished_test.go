@@ -5,9 +5,9 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/backend/vulkan"
 	"github.com/jitllm/jitllm/internal/testdevices"
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/vulkan"
 )
 
 // TestMain fails the binary when any Vulkan enumeration in it shrank. A

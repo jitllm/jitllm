@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // The staged decode over paged KV, in bounded chunks (docs/design/
@@ -326,7 +326,7 @@ func PagedStagedScores(s FlashShape, lanes int) (*ir.Kernel, error) {
 		}
 		b.Store(pOut, ob, b.Select(ir.F32, valid, score, b.ConstF32(-math.MaxFloat32)), int64(g*S*C))
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // PagedStagedSoftmax reduces each split's slots: its maximum m and its
@@ -418,7 +418,7 @@ func PagedStagedSoftmax(s FlashShape, lanes int) (*ir.Kernel, error) {
 			b.Store(pPart, pb, l, int64(padded+32+r))
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // PagedStagedAcc is each split's weighted sum of V: a thread per (row, head
@@ -553,5 +553,5 @@ func PagedStagedAcc(s FlashShape) (*ir.Kernel, error) {
 			b.Store(pPart, add(pb, j), acc[g], o)
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }

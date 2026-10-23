@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jitllm/jitllm/jit/gpu/amdgpu"
-	"github.com/jitllm/jitllm/jit/gpu/hip"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/backend/hip"
+	"github.com/jitllm/jitllm/jit/amdgpu"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // amdTargets are the generations the offline gate generates for: CDNA2

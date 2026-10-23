@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 

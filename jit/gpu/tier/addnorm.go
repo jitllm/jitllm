@@ -1,6 +1,6 @@
 package tier
 
-import "github.com/jitllm/jitllm/jit/gpu/backend"
+import "github.com/jitllm/jitllm/backend"
 
 // foldTakes says block l's attention norm, in a prompt chunk on the binary16
 // GEMM path, is the plain RMSNorm of bs.x that a held residual add can be

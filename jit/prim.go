@@ -1,0 +1,184 @@
+package jit
+
+import (
+	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/jit/ir"
+)
+
+type PrimKind uint8
+
+const (
+	PrimMap PrimKind = iota
+	PrimReduce
+	PrimContract
+	PrimGather
+	PrimScatter
+	PrimScan
+	PrimLayout
+)
+
+type OperandKind uint8
+
+const (
+	OperandValue OperandKind = iota
+	// OperandWeight is a matrix's payload, words whatever its format.
+	OperandWeight
+	// OperandVector is a vector weight, floats.
+	OperandVector
+	OperandScratch
+	// OperandTable is one of the step's tables.
+	OperandTable
+	// OperandConsts is a kernel's block of constants.
+	OperandConsts
+)
+
+// Operand is a tensor a primitive reads or writes: a graph value, a weight
+// by role, a table of the step or the composer's own scratch, its elements
+// of Elem (floats where unset).
+type Operand struct {
+	Kind   OperandKind
+	Value  graph.ValueID
+	Role   jlm.Role
+	Format jlm.Type
+	Name   string
+	Elem   ir.Type
+	// Temp is a value a decomposition passes between its own primitives,
+	// read by nothing past them.
+	Temp bool
+	// Of is the model's part the operand belongs to; a table of the step
+	// belongs to none unless it is a part's own state (PerPart).
+	Of      int
+	PerPart bool
+	// Copy, where a pairing set it, is the head of a pair whose rows these
+	// are, 0 for the first.
+	Copy int
+	// Region is which of a weight's stored regions it is, in
+	// jlm.File.Span's order: its quants (an unquantized weight's values),
+	// its scales, its sub-scales.
+	Region int
+}
+
+// Expr is one node of a primitive's scalar function: an operation on earlier
+// nodes, or a leaf.
+type Expr struct {
+	Op      Op
+	Type    ir.Type
+	A, B, C int
+	In      int
+	Imm     int64
+	Ax, Ext []int
+}
+
+// The leaves: ExprCoord is coordinate A of the primitive's Shape; ExprAt
+// reads operand In at the coordinates Ax of a space of extents Ext; ExprLoad
+// reads it at the flat index node A; ExprLive is the first position past
+// the attended range; ExprPos is the position at the range's coordinate.
+const (
+	ExprCoord Op = 255 - iota
+	ExprAt
+	ExprLoad
+	ExprLive
+	ExprPos
+)
+
+// PrimStore is one store a map's element makes: operand Out at the
+// coordinates Ax of a space of extents Ext, or at the flat index node Index
+// where Ax is nil.
+type PrimStore struct {
+	Out          Operand
+	Ax, Ext      []int
+	Index, Value int
+	// Extent is how many elements Index reaches, where Ax is not set.
+	Extent int
+}
+
+// Prim is one primitive over the coordinates of Shape:
+//   - Map: an element of Shape is Expr, stored to Out at its coordinates or
+//     by Stores.
+//   - Reduce: the last axis of Shape is combined by Combine from Init, the
+//     rest is the output.
+//   - Contract: a Reduce of products, each term's product summed.
+//
+// A reduction begins from Init, or from its first term where Start says;
+// it stores at Index, an expression of its output's coordinates, where set.
+type Prim struct {
+	Kind    PrimKind
+	Shape   []int
+	In      []Operand
+	Out     Operand
+	Expr    []Expr
+	Combine Op
+	Init    int64
+	Start   Start
+	Type    ir.Type
+	Stores  []PrimStore
+	Index   []Expr
+	// Carry is, for a reduction by OpMax, a value carried with the result:
+	// a term above the result so far brings its own, an equal one does not,
+	// and the first term's starts it. CarryOut is where it is stored.
+	Carry    []Expr
+	CarryOut Operand
+	Facts    Facts
+}
+
+type Start uint8
+
+const (
+	StartConst Start = iota
+	StartFirst
+)
+
+// Facts are what a decomposition knows that a pass needs, carried as data.
+type Facts struct {
+	// Range is an axis of attended positions.
+	Range *Range
+	// Heads is the primitive's space as attention's.
+	Heads *Heads
+	// Rows is how many of the leading axis's rows are live, an expression
+	// the step's tables give at run time.
+	Rows []Expr
+	// Words are the contents of inputs whose words are fixed, by input.
+	Words map[int][]uint32
+	// Extents are how many elements the flat loads of an input reach, by
+	// input, where no shaped load states it; OutExtent is how many a
+	// reduction stored at Index reaches.
+	Extents   map[int]int
+	OutExtent int
+	// Quarter is a reduction the expression makes of an angle to quarter
+	// turns.
+	Quarter *Quarter
+	// Least, where set, is a value every element the primitive stores is at
+	// least.
+	Least float32
+}
+
+// Quarter is an angle Sum + Rest in quarter turns reduced: Turn its nearest
+// whole quarter turn, of which only the two low bits are read and either
+// neighbour may be taken at a tie, and Part the angle's Sum mod 4 less Turn.
+// Sum is at most Bound in magnitude; the four are expressions.
+type Quarter struct {
+	Sum, Rest, Turn, Part int
+	Bound                 float64
+}
+
+// Range is axis Axis of the primitive's Shape as positions: coordinate k at
+// First plus k, attended from First up to End, both expressions of the
+// coordinates.
+type Range struct {
+	Axis       int
+	First, End []Expr
+}
+
+// Heads is attention's geometry: rows, query heads, key heads, head width.
+type Heads struct {
+	Rows, Query, Key, Dim int
+}
+
+// outShape is a primitive's output space.
+func (p *Prim) outShape() []int {
+	if p.Kind == PrimReduce || p.Kind == PrimContract {
+		return p.Shape[:len(p.Shape)-1]
+	}
+	return p.Shape
+}

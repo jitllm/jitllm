@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // GetRowsPacked gathers ntok rows of a packed weight into float32:
@@ -140,7 +140,7 @@ func GetRowsPacked(q Quant, nrows, k, ntok int, scale float32) (*ir.Kernel, erro
 				put(w*4+bb, qv)
 			}
 		}
-		return b.Done(), nil
+		return b.Done()
 	}
 	if qi.bits == 2 {
 		// TQ2: byte p's field fi is element p + fi*run (packSub).
@@ -154,7 +154,7 @@ func GetRowsPacked(q Quant, nrows, k, ntok int, scale float32) (*ir.Kernel, erro
 				}
 			}
 		}
-		return b.Done(), nil
+		return b.Done()
 	}
 	// The secondary plane: element l's code is (word >> (8*(l%4) + hi*((l/4)%lanes)))
 	// & (1<<hi - 1), word (pw + (l/4)/lanes) of the sub-block. See packSub.
@@ -190,7 +190,7 @@ func GetRowsPacked(q Quant, nrows, k, ntok int, scale float32) (*ir.Kernel, erro
 			put(l+h, b.CvtF32(q1))
 		}
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // GetRowsThreads is how many threads GetRowsPacked launches.
@@ -211,5 +211,5 @@ func CopySpan(n int) (*ir.Kernel, error) {
 	i := b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID()), b.Const(ir.U32, int64(n-1)))
 	off := b.Load(ir.U32, pOff, b.Const(ir.U32, 0), 0)
 	b.Store(pDst, i, b.Load(ir.F32, pSrc, b.Add(ir.U32, off, i), 0), 0)
-	return b.Done(), nil
+	return b.Done()
 }

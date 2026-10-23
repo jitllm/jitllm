@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // The persistent decode block (Config.Persist): a decode block's launches,

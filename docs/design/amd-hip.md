@@ -1,7 +1,7 @@
 # A native AMD backend: HIP through goffi, kernels from the IR
 
 **Status: built and gated offline; not yet run on an AMD card.** The binding
-(`jit/gpu/hip`), the lowering (`jit/gpu/amdgpu`), the device (`backend.hipDev`)
+(`backend/hip`), the lowering (`jit/amdgpu`), the device (`backend.hipDev`)
 and the `hip:N` naming through the tier, the CLI and the server are in. Every
 kernel `lowertest` registers (125) compiles to a code object for gfx90a, gfx942,
 gfx1030, gfx1100 and gfx1201 through comgr with no GPU present, under comgr 3
@@ -28,7 +28,7 @@ Two more, stated by the user and binding:
    production file under `jit/`, `engine/`, `format/`, `tok/` and `convert/`
    (the commands under `cmd/`, `ui/` and `scripts/` are programs, not the
    engine).
-2. **ROCm is discovered and loaded at run time**, as `jit/gpu/cuda` finds
+2. **ROCm is discovered and loaded at run time**, as `backend/cuda` finds
    libcuda. Sonames first (`libamdhip64.so.7`, `.so.6`, `.so`;
    `libamd_comgr.so.3`, `.so.2`, `.so`), through the loader's own search path,
    then `/opt/rocm/lib`, every `/opt/rocm-*/lib` newest version first, and
@@ -56,7 +56,7 @@ There were two ways to hand comgr something to turn into a code object:
 
 **LLVM IR, as text.** It is what PTX is to ptxas: a virtual-register assembly
 the vendor's back end owns instruction selection, register allocation and
-scheduling for -- exactly the division `jit/gpu/ir`'s package comment draws ("the
+scheduling for -- exactly the division `jit/ir`'s package comment draws ("the
 device driver owns instruction selection, register allocation and scheduling on
 every target"). Writing GCN assembly would mean writing that back end, four
 times over (gfx9, gfx10, gfx11, gfx12 differ in encodings, wave size and hazards).
@@ -272,7 +272,7 @@ installed (`/opt/rocm`). From the repo root on that host:
 
     JITLLM_MODELS=/path/to/models ./scripts/hip-gates.sh
 
-which runs, under `scripts/cap`, the offline gates, `jit/gpu/backend`'s kernel
+which runs, under `scripts/cap`, the offline gates, `backend`'s kernel
 gates with `-run` over every oracle comparison, and the model gates
 (`TestEveryModelRunsGenerated`, `TestGreedyMatchesLlamaCpp`,
 `TestBatchMatchesForward`, `TestDecodeDoesNotAllocate`, the relocation and paging

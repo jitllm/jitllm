@@ -2626,7 +2626,7 @@ on gemma's shapes, what the rule cost (the case for `tuneSplit`):
 Moved from ARCHITECTURE.md (§5a and §5a-bis) when that file was retired; nothing
 else recorded them. Paths and names were checked against the tree at that move. At the time the
 driver libraries were reached through purego and the tier lived in a second Go module; today the FFI
-is goffi (`jit/gpu/ffi`) and there is one module. Every number below is from the tier's first measurements and predates
+is goffi (`backend/ffi`) and there is one module. Every number below is from the tier's first measurements and predates
 whole-block submission (RULE 12), so it describes kernels, not tokens.
 
 **The design said the GPU tier needed no generated code, and the first prefill probe reversed that.**
@@ -2647,14 +2647,14 @@ CPU reference:
 **18.7x from the tile alone**, against 1.63x for the same sweep on the CPU (`TestGEMMTileSweep`).
 ptxas owns register allocation, but the TILE is a source-level decision the generator makes. The probe
 also measured codegen plus ptxas at 8-28 ms per shape against ~18 us for the CPU emitter; the driver's
-on-disk cache keyed on the PTX text (`~/.nv/ComputeCache`, see `jit/gpu/cuda/api.go`) is what makes a
+on-disk cache keyed on the PTX text (`~/.nv/ComputeCache`, see `backend/cuda/api.go`) is what makes a
 second process pay 0.108 ms instead of 36.7. One more constraint came out of the probe and is why the
 PTX emitter writes `.version 7.8`: nvcc 12.9 emitted `.version 8.8`, which driver 550.163.01 (CUDA
 12.4, maximum ISA 8.4) rejected at RUN time with "compiled with an unsupported toolchain".
 
-**Then the IR.** `jit/gpu/ir` is a typed IR (about two dozen ops on that day) lowered by three
-backends: `ptx` (run through `jit/gpu/cuda`), `spirv` (`jit/gpu/vulkan`) and `msl`
-(`jit/gpu/metal`). Verified on the RTX 3050 Ti (PTX and Vulkan), Intel Iris Xe, llvmpipe and the
+**Then the IR.** `jit/ir` is a typed IR (about two dozen ops on that day) lowered by three
+backends: `ptx` (run through `backend/cuda`), `spirv` (`backend/vulkan`) and `msl`
+(`backend/metal`). Verified on the RTX 3050 Ti (PTX and Vulkan), Intel Iris Xe, llvmpipe and the
 Apple M4. Three things it established:
 
 1. **Buffers are indexed by element, not addressed by byte pointer.** Byte-pointer arithmetic is a
@@ -2667,7 +2667,7 @@ Apple M4. Three things it established:
 3. **`spirv-val` is a gate, not a lint.** Two emitter bugs -- `OpVariable` with its result type and
    result id swapped, and `PackedVectorFormat4x8Bit` written as 1 where it is 0 -- each crashed
    NVIDIA's compiler inside `vkCreateComputePipelines` with a SIGSEGV and no diagnostic; the validator
-   named each in one line. `jit/gpu/spirv/spirv_test.go` runs it when it is installed.
+   named each in one line. `jit/spirv/spirv_test.go` runs it when it is installed.
 
 **Bit-exact across five GPU stacks and three vendors, not within tolerance.** int8 x int8 into int32 is
 integer arithmetic, so two correct backends agree to the last bit, and a tolerance would have hidden
@@ -2962,7 +2962,7 @@ launched 64 wide) is refused by name on cuda:0, vulkan:0 and vulkan:1
 (`TestStagedPagedPrefillGateDiscriminates`).
 
 To find any other kernel with the mismatch, every `engine/model` test that
-opens a device tier (270), and the `jit/gpu/tier` and `jit/gpu/backend`
+opens a device tier (270), and the `jit/gpu/tier` and `backend`
 packages, ran with every refusal logged: on the RTX 3050 Ti's cuda:0 and
 vulkan:0, and on the V100 box in eight slices, one card each (cuda:0 and
 vulkan:k), plus the tier package. The log held the deliberate violations and
@@ -3803,7 +3803,7 @@ that `fuseQKV` fuses -- split 1, or in-group -- on any model, dense too
 (Llama-3.2-1B: `JITLLM_GPU_TUNE=0 JITLLM_GPU_SPLIT=2 JITLLM_GPU_FORCE_GROUP=1
 jitllm run -devices vulkan:2`; the same on vulkan:0, vulkan:1 and cuda:0 gave
 the host's ids). The kernel gate reproduced it without a model:
-`JITLLM_VK_DEVICE=2 go test ./jit/gpu/backend -run
+`JITLLM_VK_DEVICE=2 go test ./backend -run
 TestMatVecSegmentsIsTheSeparateLaunches` faulted on its first spirv case.
 spirv-val passed the module, the validation layer reported nothing, and the
 fault was a load through a null base.
@@ -3902,7 +3902,7 @@ so `TestSoftwareVulkanIsDeclined` narrows it to lavapipe in a child process.
 **And the skip is loud now.** `enumerate` remembers the process's first device
 count and returns `vulkan.ErrDevicesVanished` for an enumeration that comes
 back shorter. `engine/model`'s device arms skip through `noDevice`, which fails
-on that error; `engine/model`, `jit/gpu/backend` and `jit/gpu/tier` fail the
+on that error; `engine/model`, `backend` and `jit/gpu/tier` fail the
 binary from `TestMain` when any enumeration shrank, for a skip `noDevice` does
 not reach. Against the unfixed engine the latent sequence that had skipped
 four Vulkan arms failed them ("was there earlier in this process and is gone
@@ -4489,7 +4489,7 @@ number without a counter.** RULE 10, caught by the counter rather than by care.
 
   ★★★★★ **AND THE EIGHT POINTS ARE TWO TERMS, NOT ONE -- MEASURED BY
   THE GPU's OWN CLOCK, AND THE ON-DEVICE HALF IS PER LAYER RATHER THAN PER
-  BYTE.** Every counter in `jit/gpu/metal` is a CPU timer: they bound
+  BYTE.** Every counter in `backend/metal` is a CPU timer: they bound
   SUBMISSION and cannot tell a device that is streaming from one idling between
   two dependent dispatches. `MTLCommandBuffer.GPUStartTime/GPUEndTime` bracket
   execution ON the device, so `token wall - GPU busy` is a measurement rather

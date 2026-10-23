@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // XIELU is Apertus's xIELU over n elements, out of place, the device twin of
@@ -48,5 +48,5 @@ func XIELU(n int) (*ir.Kernel, error) {
 	neg := b.Add(ir.F32, b.Mul(ir.F32, b.Add(ir.F32, g, b.Sub(ir.F32, m, x)), an), bx)
 	pos := b.Add(ir.F32, b.Mul(ir.F32, b.Mul(ir.F32, ap, x), x), bx)
 	b.Store(pOut, i, b.Select(ir.F32, b.Lt(ir.F32, b.ConstF32(0), x), pos, neg), 0)
-	return b.Done(), nil
+	return b.Done()
 }

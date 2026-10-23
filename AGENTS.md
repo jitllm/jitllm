@@ -259,7 +259,7 @@ coreset A/B: pe 0.864x, smt 0.965x, all 0.807x against p).
   next. `cmd/jitllm` aligns `GOMAXPROCS` to the engine's width,
   `PCores`/`ECores`/`SMTSiblings` intersect `sched_getaffinity` so a narrower
   `taskset` yields fewer workers, and `LockOSThread` survives only where an API
-  binds state to a thread (CUDA contexts, `jit/gpu/cuda`).
+  binds state to a thread (CUDA contexts, `backend/cuda`).
 - **The shipped per-region dispatch cost** is `model.TestFusionCeiling`'s
   2.70 us on Linux and 3.008 us on the M4.
 - **Measure at the thread count that SHIPS.** A win measured on one core has
@@ -943,7 +943,7 @@ budget.
 - **The test suite converts** (`engine/model/jlm_helper_test.go`) because it has
   to run what ships; an open error is a failure, never a `t.Skipf`.
 - **Three GPU backends, one interface.** CUDA, Vulkan and Metal are reached
-  through goffi (`jit/gpu/ffi`) with no cgo, one `backend.Device` interface over
+  through goffi (`backend/ffi`) with no cgo, one `backend.Device` interface over
   three implementations. **Do not add a fourth abstraction in advance of a second
   implementation of anything.**
 - **Models live on a dedicated model disk** (`JITLLM_MODELS`) — never `~`, never `/tmp`.

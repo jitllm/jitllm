@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // A batched mixture runs its experts over (token, slot) pairs sorted by expert,
@@ -32,7 +32,7 @@ func GatherRows(n, p, nsrc int) (*ir.Kernel, error) {
 	v := b.Load(ir.F32, pSrc, b.Add(ir.U32, b.Mul(ir.U32, b.Min(ir.U32, src, last), cn), i), 0)
 	v = b.Select(ir.F32, b.Lt(ir.U32, last, src), b.ConstF32(0), v)
 	b.Store(pDst, flat, v, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ExpertCombineGrouped is ExpertCombine for many tokens whose expert outputs sit
@@ -64,5 +64,5 @@ func ExpertCombineGrouped(n, k, rows int) (*ir.Kernel, error) {
 	b.SetPhi(s, b.Add(ir.U32, s, one))
 	b.EndLoop()
 	b.Store(pOut, flat, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }

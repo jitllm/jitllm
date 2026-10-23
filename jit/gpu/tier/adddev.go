@@ -3,7 +3,7 @@ package tier
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/backend"
+	"github.com/jitllm/jitllm/backend"
 )
 
 // AddDevices opens the devices spec names (ParseDevices' grammar) and adds

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math/bits"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // Paged KV addressing, the ABI of docs/design/device-kv-paging.md.
@@ -105,7 +105,7 @@ func PagedCopyRowsT(n, rows, page int) (*ir.Kernel, error) {
 	dst := b.Add(ir.U32, b.Mul(ir.U32, pid, b.Const(ir.U32, int64(page*n))),
 		b.Add(ir.U32, b.Mul(ir.U32, i, b.Const(ir.U32, int64(page))), off))
 	b.Store(pDst, dst, b.Load(ir.F32, pSrc, flat, 0), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // PagedCopyRows is CopyAtRows (f16: CopyAtF16) into a paged row-major pool:
@@ -134,7 +134,7 @@ func PagedCopyRows(n, rows, page, width, col int, f16 bool) (*ir.Kernel, error) 
 	flat := b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID()),
 		b.Const(ir.U32, int64(per*rows-1)))
 	pagedCopyBody(b, n, page, width, col, f16, pSrc, pDst, pTab, pRow, flat)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // pagedCopyBody is PagedCopyRows after its thread index (clamped by the
@@ -197,7 +197,7 @@ func pagedRoPERowsT(nHeads, headDim, rowW, nRot int, neox bool, rows, page int) 
 	u := func(x int) ir.Value { return b.Const(ir.U32, int64(x)) }
 	flat := b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID()), u(nHeads*pairs*rows-1))
 	pagedRopeBody(b, nHeads, headDim, rowW, nRot, neox, page, pSrc, pCS, pDst, pTab, pRow, flat)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // pagedRopeBody is PagedRoPERowsT after its thread index (clamped by the
@@ -259,7 +259,7 @@ func PagedCopyRowsTF16(n, rows, page int) (*ir.Kernel, error) {
 	w := b.PackF16(b.Load(ir.F32, pSrc, src, 0), b.Load(ir.F32, pSrc, src, 1))
 	dst := b.Add(ir.U32, b.Mul(ir.U32, pid, u(page*per)), b.Add(ir.U32, b.Mul(ir.U32, i, u(page)), off))
 	b.Store(pDst, dst, b.Bitcast(ir.F32, w), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // PagedRoPERowsTF16 is PagedRoPERowsT into a binary16 K pool: a thread
@@ -314,7 +314,7 @@ func PagedRoPERowsTF16(nHeads, headDim, nRot int, neox bool, rows, page int) (*i
 		e := mul(it, u(2))
 		y0, y1 := rot(it, e, add(e, u(1)))
 		word(e, y0, y1)
-		return b.Done(), nil
+		return b.Done()
 	}
 	// Pairs p = 2*it and p+1: dimensions p, p+1 (one word) and p+pairs,
 	// p+1+pairs (another, pairs being even).
@@ -327,5 +327,5 @@ func PagedRoPERowsTF16(nHeads, headDim, nRot int, neox bool, rows, page int) (*i
 	}
 	word(p, a0, c0)
 	word(add(p, u(pairs)), a1, c1)
-	return b.Done(), nil
+	return b.Done()
 }

@@ -4306,7 +4306,7 @@ on an open error, so the refusal would otherwise have turned the whole suite
 green in 0.001 s.
 
 CPU and GPU. The GPU tier is built: CUDA, Vulkan and Metal, reached through
-goffi (`jit/gpu/ffi`) with no cgo, one `backend.Device` interface over three implementations.
+goffi (`backend/ffi`) with no cgo, one `backend.Device` interface over three implementations.
 That interface earned itself by having three; **do not add a fourth abstraction
 in advance of a second implementation of anything.**
 

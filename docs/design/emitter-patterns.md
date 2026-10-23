@@ -84,12 +84,12 @@ All non-test Go files directly under `jit/gpu/kernels` total **17,703 lines**.
 
 | Layer/backend | Files and lines | Total |
 |---|---|---:|
-| Typed IR, builder, validation, fragment/collective matrix contracts | `jit/gpu/ir/ir.go` 757; `tile.go` 410 | 1,167 |
-| CUDA/PTX | `jit/gpu/ptx/lower.go` 486; `buf.go` 121 | 607 |
-| Vulkan/SPIR-V | `jit/gpu/spirv/lower.go` 695; `spirv.go` 141; `tile.go` 236 | 1,072 |
-| Metal/MSL | `jit/gpu/msl/msl.go` 472; `tile.go` 140 | 612 |
+| Typed IR, builder, validation, fragment/collective matrix contracts | `jit/ir/ir.go` 757; `tile.go` 410 | 1,167 |
+| CUDA/PTX | `jit/ptx/lower.go` 486; `buf.go` 121 | 607 |
+| Vulkan/SPIR-V | `jit/spirv/lower.go` 695; `spirv.go` 141; `tile.go` 236 | 1,072 |
+| Metal/MSL | `jit/msl/msl.go` 472; `tile.go` 140 | 612 |
 
-These lowerers are already the shared backend mechanism. I would leave them outside the initial factoring effort. PTX performs an ordered walk of IR; driver compilation owns physical allocation and scheduling ([lower.go:9](../../jit/gpu/ptx/lower.go)).
+These lowerers are already the shared backend mechanism. I would leave them outside the initial factoring effort. PTX performs an ordered walk of IR; driver compilation owns physical allocation and scheduling ([lower.go:9](../../jit/ptx/lower.go)).
 
 ### Where `engine/nn` consumes the emitters
 
@@ -172,7 +172,7 @@ A practical template is an **emission-time control structure with explicit instr
 
 5. **Host attention is not uniformly online-softmax attention.** It has separate score and accumulation kernels consumed through `nn.AttnSet`. Device flash kernels implement the online-softmax pattern; a template must not silently convert host attention to it ([engine/nn/attn.go:1](../../engine/nn/attn.go)).
 
-6. **Fragment MMA and collective matrices have different ownership.** `OpMMA` exposes lane fragments; collective tile operations leave lane layout to the driver. Preserve separate inner policies ([ir.go:132](../../jit/gpu/ir/ir.go)).
+6. **Fragment MMA and collective matrices have different ownership.** `OpMMA` exposes lane fragments; collective tile operations leave lane layout to the driver. Preserve separate inner policies ([ir.go:132](../../jit/ir/ir.go)).
 
 7. **Paging and surplus-thread safety are part of the pattern.** Clamping loads, masking scores, descriptor interpretation and out-of-place writes must remain in their current positions. Multiplication by zero cannot replace masking potentially poisoned values.
 
@@ -180,7 +180,7 @@ A practical template is an **emission-time control structure with explicit instr
 
 On the host, the emitter owns **physical registers**. For example, the packed fused emitter allocates registers in sequence, and the tiled emitter borrows dead activation/payload registers for its epilogue. A template must accept those exact assignments and lifetimes, not recalculate a “better” allocation ([packedfused.go:99](../../jit/cpu/packedfused.go), [packedtiled.go:176](../../jit/cpu/packedtiled.go)).
 
-On devices, the builder assigns SSA IDs by append order. Moving a constant creation earlier changes IDs and downstream text even when the computation is equivalent ([ir.go:253](../../jit/gpu/ir/ir.go)). Callbacks therefore need to preserve **when** each IR operation is emitted. Precomputing callback arguments can itself break equality.
+On devices, the builder assigns SSA IDs by append order. Moving a constant creation earlier changes IDs and downstream text even when the computation is equivalent ([ir.go:253](../../jit/ir/ir.go)). Callbacks therefore need to preserve **when** each IR operation is emitted. Precomputing callback arguments can itself break equality.
 
 An exact-output template has no reason to slow the generated instruction stream. Its possible costs are **emission time, Go allocation, binary size, and preparation/cache behaviour**. A template that homogenises schedules, adds runtime branches, changes memory operands or expands live ranges is a different change and should fail the refactor gate.
 

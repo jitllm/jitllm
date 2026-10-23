@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // The ops between the matvecs, so the residual stream stays on the device
@@ -173,7 +173,7 @@ func quantize(k, window int, kind *ActKind, pad *rowPad) (*ir.Kernel, error) {
 	}
 	b.Store(pAX, blk, d, 0)
 	b.Store(pAX, b.Div(ir.U32, word, b.Const(ir.U32, 4)), s16, int64(nb))
-	return b.Done(), nil
+	return b.Done()
 }
 
 // NormPart is the first half of RMSNorm: partial sums of squares.
@@ -211,7 +211,7 @@ func NormPartRows(k, parts, rows int) (*ir.Kernel, error) {
 	b.SetPhi(idx, b.Add(ir.U32, idx, b.Const(ir.U32, 1)))
 	b.EndLoop()
 	b.Store(pOut, p, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // NormApply finishes RMSNorm: out[i] = x[i] * rsqrt(mean + eps) * w[i].
@@ -443,7 +443,7 @@ func rmsNormRowsAs(k, rows int, eps float32, addOne, add bool, window int, warp 
 		b.SetPhi(i3, b.Add(ir.U32, i3, step))
 		b.EndLoop()
 	}
-	return b.Done(), nil
+	return b.Done()
 }
 
 // quantPhase is RMSNormQuantRows' second half: Quantize's arithmetic over the
@@ -572,7 +572,7 @@ func NormApplyRows(k, parts int, eps float32, addOne bool, rows int) (*ir.Kernel
 		w = b.Add(ir.F32, w, b.ConstF32(1))
 	}
 	b.Store(pOut, i, b.Mul(ir.F32, b.Mul(ir.F32, b.Load(ir.F32, pX, i, 0), scale), w), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ActMul is the FFN's gate: out[i] = act(gate[i]) * up[i], with the
@@ -594,7 +594,7 @@ func ActMul(n int, k ActKind) (*ir.Kernel, error) {
 	i := b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID()),
 		b.Const(ir.U32, int64(n-1)))
 	b.Store(pOut, i, actMulValue(b, k, b.Load(ir.F32, pG, i, 0), func() ir.Value { return b.Load(ir.F32, pU, i, 0) }), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // actMulKind refuses an activation ActMul has no gated form of.
@@ -678,7 +678,7 @@ func ActMulWeighted(n, per int, k ActKind, indexed bool) (*ir.Kernel, error) {
 	g := b.Mul(ir.F32, w, b.Load(ir.F32, pG, i, 0))
 	u := b.Mul(ir.F32, w, b.Load(ir.F32, pU, i, 0))
 	b.Store(pOut, i, b.Mul(ir.F32, act(b, g, k), u), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ScaleRowsByCount multiplies each row of a block of rows x width floats by a
@@ -711,7 +711,7 @@ func ScaleRowsByCount(rows, width, div, off, tabLen int) (*ir.Kernel, error) {
 	pos := b.Sub(ir.U32, b.Max(ir.U32, cnt, u(1)), u(1))
 	k := b.Min(ir.U32, b.Div(ir.U32, b.Add(ir.U32, pos, u(off)), u(div)), u(tabLen-1))
 	b.Store(pOut, i, b.Mul(ir.F32, b.Load(ir.F32, pX, i, 0), b.Load(ir.F32, pTab, k, 0)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // SigmoidMul gates one vector by another: out[i] = sigma(g[i]) * v[i].
@@ -731,7 +731,7 @@ func SigmoidMul(n int) (*ir.Kernel, error) {
 	one := b.ConstF32(1)
 	sig := b.Div(ir.F32, one, b.Add(ir.F32, one, b.Exp(b.Sub(ir.F32, b.ConstF32(0), g))))
 	b.Store(pOut, i, b.Mul(ir.F32, sig, b.Load(ir.F32, pV, i, 0)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // Softcap is out[i] = c*tanh(x[i]/c), gemma2's attention logit cap, with tanh
@@ -757,7 +757,7 @@ func Softcap(n int, c float32) (*ir.Kernel, error) {
 	y := b.Mul(ir.F32, b.ConstF32(c), t)
 	masked := b.Lt(ir.F32, x, b.ConstF32(-1e30))
 	b.Store(pOut, i, b.Select(ir.F32, masked, x, y), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // Clamp is out[i] = min(max(x[i], -c), c), DBRX's clip on q, k and v, the
@@ -774,7 +774,7 @@ func Clamp(n int, c float32) (*ir.Kernel, error) {
 		b.Const(ir.U32, int64(n-1)))
 	x := b.Load(ir.F32, pX, i, 0)
 	b.Store(pOut, i, b.Min(ir.F32, b.Max(ir.F32, x, b.ConstF32(-c)), b.ConstF32(c)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // ClampAt is out[i] = min(max(x[i], b[off]), b[off+1]): Gemma 4's clipped
@@ -795,7 +795,7 @@ func ClampAt(n, off int) (*ir.Kernel, error) {
 	lo := b.Load(ir.F32, pB, b.Const(ir.U32, int64(off)), 0)
 	hi := b.Load(ir.F32, pB, b.Const(ir.U32, int64(off+1)), 0)
 	b.Store(pOut, i, b.Min(ir.F32, b.Max(ir.F32, x, lo), hi), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // act is x*sigma(x) (SiLU), x*sigma(1.702x) (quick-GELU), max(x, 0)^2
@@ -895,7 +895,7 @@ func Act(n int, k ActKind) (*ir.Kernel, error) {
 	i := b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID()),
 		b.Const(ir.U32, int64(n-1)))
 	b.Store(pOut, i, act(b, b.Load(ir.F32, pX, i, 0), k), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // LayerNormPartRows is the first of three kernels: partial sums of x.
@@ -929,7 +929,7 @@ func LayerNormPartRows(k, parts, rows int) (*ir.Kernel, error) {
 	b.SetPhi(idx, b.Add(ir.U32, idx, b.Const(ir.U32, 1)))
 	b.EndLoop()
 	b.Store(pOut, p, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // LayerNormVarRows is the second: partial sums of (x - mean)^2, with the mean
@@ -969,7 +969,7 @@ func LayerNormVarRows(k, parts, rows int) (*ir.Kernel, error) {
 	b.SetPhi(idx, b.Add(ir.U32, idx, b.Const(ir.U32, 1)))
 	b.EndLoop()
 	b.Store(pOut, p, acc, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // LayerNormApplyRows is the third: out = (x - mean) * rsqrt(var + eps) * w + b.
@@ -1014,7 +1014,7 @@ func LayerNormApplyRows(k, parts int, eps float32, bias bool, rows int) (*ir.Ker
 		v = b.Add(ir.F32, v, b.Load(ir.F32, pB, wi, 0))
 	}
 	b.Store(pOut, i, v, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // layerNormMean re-sums the partials and divides by k.
@@ -1047,7 +1047,7 @@ func Add(n int) (*ir.Kernel, error) {
 	i := b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID()),
 		b.Const(ir.U32, int64(n-1)))
 	b.Store(pOut, i, b.Add(ir.F32, b.Load(ir.F32, pA, i, 0), b.Load(ir.F32, pB, i, 0)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // AddScaled is the residual add of a block output that is scaled first
@@ -1069,7 +1069,7 @@ func AddScaled(n int) (*ir.Kernel, error) {
 	i := b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID()),
 		b.Const(ir.U32, int64(n-1)))
 	b.Store(pOut, i, b.Fma(b.Load(ir.F32, pAlpha, zero, 0), b.Load(ir.F32, pB, i, 0), b.Load(ir.F32, pA, i, 0)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // Scale is out[i] = a[i] * alpha, with alpha read from a one-element buffer.
@@ -1089,7 +1089,7 @@ func Scale(n int) (*ir.Kernel, error) {
 	i := b.Min(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, b.CTAID(), b.NTID()), b.TID()),
 		b.Const(ir.U32, int64(n-1)))
 	b.Store(pOut, i, b.Mul(ir.F32, b.Load(ir.F32, pA, i, 0), b.Load(ir.F32, pAlpha, zero, 0)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // SplitHeadGate deinterleaves a double-width query projection into the query
@@ -1127,7 +1127,7 @@ func SplitHeadGate(nHead, headDim, rows int) (*ir.Kernel, error) {
 			b.Mul(ir.U32, hh, b.Const(ir.U32, int64(2*headDim)))), j)
 	b.Store(pQ, i, b.Load(ir.F32, pSrc, src, 0), 0)
 	b.Store(pGate, i, b.Load(ir.F32, pSrc, src, int64(headDim)), 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // amaxOf is the largest magnitude among v: the sign bit masked off, then Max.
@@ -1194,7 +1194,7 @@ func WindowMaskRows(rows, heads, sstride int) (*ir.Kernel, error) {
 	v := b.Select(ir.F32, b.Lt(ir.U32, j, lo), negInf, x)
 	v = b.Select(ir.F32, b.Lt(ir.U32, j, hi), v, negInf)
 	b.Store(pOut, i, v, 0)
-	return b.Done(), nil
+	return b.Done()
 }
 
 // BiasAct is act(x + bias) over rows rows of width: bias is one value a
@@ -1217,5 +1217,5 @@ func BiasAct(width, rows int, k ActKind) (*ir.Kernel, error) {
 		b.Const(ir.U32, int64(width*rows-1)))
 	c := b.Rem(ir.U32, i, b.Const(ir.U32, int64(width)))
 	b.Store(pOut, i, act(b, b.Add(ir.F32, b.Load(ir.F32, pX, i, 0), b.Load(ir.F32, pBias, c, 0)), k), 0)
-	return b.Done(), nil
+	return b.Done()
 }

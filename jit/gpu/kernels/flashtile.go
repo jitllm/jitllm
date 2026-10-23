@@ -3,7 +3,7 @@ package kernels
 import (
 	"fmt"
 
-	"github.com/jitllm/jitllm/jit/gpu/ir"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // FlashTile is FlashPrefillTile's blocking: SG simdgroups of eight query rows
@@ -444,7 +444,7 @@ func FlashPrefillTile(s FlashPrefill70Shape, t FlashTile) (*ir.Kernel, error) {
 		for d := 0; d < dpl; d++ {
 			b.Store(pOut, b.Add(ir.U32, pb, dimL), b.Bitcast(ir.F32, b.Load(ir.U32, shO, oRow, int64(d))), int64(d))
 		}
-		return b.Done(), nil
+		return b.Done()
 	}
 	inv := b.Div(ir.F32, f(1), b.Max(ir.F32, l, f(1e-30)))
 	dst := b.Add(ir.U32, b.Mul(ir.U32, b.Add(ir.U32, b.Mul(ir.U32, rowOf(b.Add(ir.U32, row0, row)), c(int64(s.Heads))), h),
@@ -453,5 +453,5 @@ func FlashPrefillTile(s FlashPrefill70Shape, t FlashTile) (*ir.Kernel, error) {
 		o := b.Bitcast(ir.F32, b.Load(ir.U32, shO, oRow, int64(d)))
 		b.Store(pOut, dst, b.Mul(ir.F32, o, inv), int64(d))
 	}
-	return b.Done(), nil
+	return b.Done()
 }
