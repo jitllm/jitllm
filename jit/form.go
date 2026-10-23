@@ -2,6 +2,7 @@ package jit
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -19,13 +20,38 @@ type Request struct {
 	Device   Device
 }
 
-// Form is req's kernels in launch order: the slice decomposed, generated,
-// passed and lowered as a model's part is (Kernels, Lower). What it cannot
-// form is an error naming the op and the slice's shape.
-func (r *Registry) Form(req Request) ([]Code, error) {
+// Form is req's kernels in launch order, and the Key they are cached under:
+// the slice decomposed, generated, passed and lowered as a model's part is
+// (Kernels, Lower), once per Key. What it cannot form is an error naming the
+// op and the slice's shape, remembered as the kernels are. The codes are
+// shared by every request of the Key and are not the caller's to change.
+func (r *Registry) Form(req Request) (Key, []Code, error) {
 	if req.Graph == nil {
-		return nil, fmt.Errorf("jit: a request with no graph")
+		return 0, nil, fmt.Errorf("jit: a request with no graph")
 	}
+	key, words, err := r.keyOf(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	c := r.cache
+	if c == nil {
+		codes, err := r.form(req)
+		return key, codes, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if f, ok := c.m[key]; ok {
+		if !slices.Equal(f.words, words) {
+			return 0, nil, fmt.Errorf("jit: two requests share the key %#x", key)
+		}
+		return key, f.codes, f.err
+	}
+	codes, err := r.form(req)
+	c.m[key] = formed{words: words, codes: codes, err: err}
+	return key, codes, err
+}
+
+func (r *Registry) form(req Request) ([]Code, error) {
 	prof, ok := r.Profiles[req.Device.Kind]
 	if !ok {
 		return nil, fmt.Errorf("jit: no profile for %s", req.Device.Kind)

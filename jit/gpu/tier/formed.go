@@ -17,8 +17,10 @@ import (
 // contraction, generated from ops and shaped by its passes -- on the float
 // row it uploads. The row is never quantized in Go.
 
-// formedKey names a composed matvec: its weight's format and shape at an
-// activation window.
+// formedKey is a lone matvec's call-site shape: its weight's format and
+// shape at an activation window. It names the request's jit.Key
+// (devShared.formKeys) so the slice is not built again to be keyed; the
+// kernels are found by the Key.
 type formedKey struct {
 	t            jlm.Type
 	rows, k, win int
@@ -60,31 +62,38 @@ const formRole = jlm.RoleOutput
 // formedMatVec is the composed matvec of format t at rows x k, compiled once
 // on this device. Callers hold g.mu.
 func (g *devTier) formedMatVec(t jlm.Type, rows, k int) (*formed, error) {
-	key := formedKey{t, rows, k, g.actWin}
-	if f, ok := g.forms[key]; ok {
-		if f == nil {
-			return nil, fmt.Errorf("tier: the composed matvec of %v at %dx%d did not form earlier (%s)", t, rows, k, g.LastErr)
+	sk := formedKey{t, rows, k, g.actWin}
+	if key, ok := g.formKeys[sk]; ok {
+		if f := g.forms[key]; f != nil {
+			return f, nil
 		}
-		return f, nil
+		return nil, fmt.Errorf("tier: the composed matvec of %v at %dx%d did not form earlier (%s)", t, rows, k, g.LastErr)
 	}
-	if g.forms == nil {
-		g.forms = map[formedKey]*formed{}
-	}
-	// A slice that does not form is remembered, as a compile failure is
-	// (kernel): it is not tried again on every matvec.
-	g.forms[key] = nil
 	if g.composer == nil {
 		g.composer = jit.Default()
 	}
-	codes, err := g.composer.Form(jit.Request{
+	key, codes, err := g.composer.Form(jit.Request{
 		Graph:   graph.MatVec(formRole, rows, k),
 		Formats: map[jlm.Role]jlm.Type{formRole: t},
 		Step:    jit.Step{Rows: 1, Page: 64, Keys: 1, ActWindow: g.actWin},
 		Device:  jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: g.pickLanes()},
 	})
+	if g.formKeys == nil {
+		g.formKeys, g.forms = map[formedKey]jit.Key{}, map[jit.Key]*formed{}
+	}
+	// A slice that does not form or compile is remembered, as a compile
+	// failure is (kernel): it is not tried again on every matvec.
+	g.formKeys[sk] = key
 	if err != nil {
 		return nil, err
 	}
+	if f, ok := g.forms[key]; ok {
+		if f == nil {
+			return nil, fmt.Errorf("tier: the composed matvec of %v at %dx%d did not compile earlier", t, rows, k)
+		}
+		return f, nil
+	}
+	g.forms[key] = nil
 	f := &formed{}
 	scratch := map[jit.Operand]int{}
 	for _, c := range codes {
@@ -166,6 +175,7 @@ func (g *devTier) formsClose() {
 		}
 		delete(g.forms, k)
 	}
+	clear(g.formKeys)
 }
 
 // fmCall is one composed matvec's device side, handed to formedSession

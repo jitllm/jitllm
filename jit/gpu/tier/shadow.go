@@ -66,7 +66,7 @@ var shadowDefault *ShadowLog
 // shape, and the inputs captured from the block running now.
 type shadowTier struct {
 	log   *ShadowLog
-	forms map[shadowKey]*shadowForm
+	forms map[jit.Key]*shadowForm
 	// float is the composer with no int8 form: the float slice's.
 	float *jit.Registry
 	// li is the block whose post-attention inputs x and a hold, -1 for none.
@@ -83,25 +83,11 @@ const (
 
 var sliceNames = [...]string{sliceAttnIn: "attention in", slicePostAttn: "post-attention"}
 
-// shadowKey is a slice's shape: what the composer's kernels for it depend
-// on.
-type shadowKey struct {
-	kind         sliceKind
-	embd, n0, n1 int
-	win          int
-	act          graph.Act
-	eps          uint64
-	t            [4]jlm.Type
-	bias         [4]bool
-	float        bool
-	swapped      bool
-}
-
 // shadowSlice is one call site's slice of the block that just ran: its
-// shape, its generic ops, and the block's weights and vectors under their
-// roles, its weights' roles in order.
+// generic ops, and the block's weights and vectors under their roles, its
+// weights' roles in order.
 type shadowSlice struct {
-	key     shadowKey
+	kind    sliceKind
 	graph   *graph.Graph
 	formats map[jlm.Role]jlm.Type
 	weights map[jlm.Role]*resident
@@ -133,7 +119,7 @@ type shadowArg struct {
 const shadowOwn = -1
 
 func newShadow(log *ShadowLog) *shadowTier {
-	return &shadowTier{log: log, forms: map[shadowKey]*shadowForm{}, li: -1}
+	return &shadowTier{log: log, forms: map[jit.Key]*shadowForm{}, li: -1}
 }
 
 func (sh *shadowTier) close() {
@@ -226,18 +212,17 @@ func jlmType(q kernels.Quant) (jlm.Type, bool) {
 	return 0, false
 }
 
-// setFormats fills the slice's formats, and its key's, from its weights in
-// roles' order.
+// setFormats fills the slice's formats from its weights in roles' order.
 func (sl *shadowSlice) setFormats(roles ...jlm.Role) error {
 	sl.roles = roles
 	sl.formats = map[jlm.Role]jlm.Type{}
-	for i, r := range roles {
+	for _, r := range roles {
 		w := sl.weights[r]
 		t, ok := jlmType(w.t)
 		if !ok {
 			return fmt.Errorf("format %d has no container type", w.t)
 		}
-		sl.key.t[i], sl.formats[r] = t, t
+		sl.formats[r] = t
 	}
 	return nil
 }
@@ -260,9 +245,9 @@ func (sh *shadowTier) attnIn(g *devTier, lc *launcher, s backend.Session, l *lay
 		count(&sh.log.Refused, why)
 		return
 	}
+	bias := [3]bool{l.mvq.bias != nil, l.mvk.bias != nil, l.mvv.bias != nil}
 	sl := &shadowSlice{
-		key: shadowKey{kind: sliceAttnIn, embd: p.NEmbd, n0: qdim, n1: kvDim, win: g.actWin, eps: math.Float64bits(p.RMSEps),
-			bias: [4]bool{l.mvq.bias != nil, l.mvk.bias != nil, l.mvv.bias != nil}},
+		kind:    sliceAttnIn,
 		weights: map[jlm.Role]*resident{jlm.RoleAttnQ: l.wq, jlm.RoleAttnK: l.wk, jlm.RoleAttnV: l.wv},
 		vectors: map[jlm.Role]backend.Buf{jlm.RoleAttnNorm: l.nAttn, jlm.RoleAttnQBias: l.mvq.bias,
 			jlm.RoleAttnKBias: l.mvk.bias, jlm.RoleAttnVBias: l.mvv.bias},
@@ -273,9 +258,9 @@ func (sh *shadowTier) attnIn(g *devTier, lc *launcher, s backend.Session, l *lay
 	}
 	b := graph.NewSlice()
 	n := b.Norm(b.In("x", p.NEmbd), jlm.RoleAttnNorm, p.RMSEps)
-	b.Out(b.MatVec(n, jlm.RoleAttnQ, qdim, biasOf(sl.key.bias[0], jlm.RoleAttnQBias)...),
-		b.MatVec(n, jlm.RoleAttnK, kvDim, biasOf(sl.key.bias[1], jlm.RoleAttnKBias)...),
-		b.MatVec(n, jlm.RoleAttnV, kvDim, biasOf(sl.key.bias[2], jlm.RoleAttnVBias)...))
+	b.Out(b.MatVec(n, jlm.RoleAttnQ, qdim, biasOf(bias[0], jlm.RoleAttnQBias)...),
+		b.MatVec(n, jlm.RoleAttnK, kvDim, biasOf(bias[1], jlm.RoleAttnKBias)...),
+		b.MatVec(n, jlm.RoleAttnV, kvDim, biasOf(bias[2], jlm.RoleAttnVBias)...))
 	sl.graph = b.G
 	in, err := readF32(s, x, p.NEmbd, nil)
 	if err != nil {
@@ -328,9 +313,9 @@ func (sh *shadowTier) postAttention(g *devTier, lc *launcher, s backend.Session,
 		return
 	}
 	nffn := l.gate.nrows
+	bias := [4]bool{l.mvo.bias != nil, false, l.mvu.bias != nil, l.mvd.bias != nil}
 	sl := &shadowSlice{
-		key: shadowKey{kind: slicePostAttn, embd: p.NEmbd, n0: qdim, n1: nffn, win: g.actWin, act: act, eps: math.Float64bits(p.RMSEps),
-			bias: [4]bool{l.mvo.bias != nil, false, l.mvu.bias != nil, l.mvd.bias != nil}},
+		kind:    slicePostAttn,
 		weights: map[jlm.Role]*resident{jlm.RoleAttnOut: l.wo, jlm.RoleFFNGate: l.gate, jlm.RoleFFNUp: l.up, jlm.RoleFFNDown: l.down},
 		vectors: map[jlm.Role]backend.Buf{jlm.RoleFFNNorm: l.nFFN, jlm.RoleAttnOutBias: l.mvo.bias,
 			jlm.RoleFFNUpBias: l.mvu.bias, jlm.RoleFFNDownBias: l.mvd.bias},
@@ -342,11 +327,11 @@ func (sh *shadowTier) postAttention(g *devTier, lc *launcher, s backend.Session,
 	b := graph.NewSlice()
 	x := b.In("x", p.NEmbd)
 	a := b.In("attn", qdim)
-	x2 := b.Add(x, b.MatVec(a, jlm.RoleAttnOut, p.NEmbd, biasOf(sl.key.bias[0], jlm.RoleAttnOutBias)...))
+	x2 := b.Add(x, b.MatVec(a, jlm.RoleAttnOut, p.NEmbd, biasOf(bias[0], jlm.RoleAttnOutBias)...))
 	n := b.Norm(x2, jlm.RoleFFNNorm, p.RMSEps)
 	gt := b.MatVec(n, jlm.RoleFFNGate, nffn)
-	up := b.MatVec(n, jlm.RoleFFNUp, nffn, biasOf(sl.key.bias[2], jlm.RoleFFNUpBias)...)
-	b.Out(b.Add(x2, b.MatVec(b.ActMul(act, gt, up), jlm.RoleFFNDown, p.NEmbd, biasOf(sl.key.bias[3], jlm.RoleFFNDownBias)...)))
+	up := b.MatVec(n, jlm.RoleFFNUp, nffn, biasOf(bias[2], jlm.RoleFFNUpBias)...)
+	b.Out(b.Add(x2, b.MatVec(b.ActMul(act, gt, up), jlm.RoleFFNDown, p.NEmbd, biasOf(bias[3], jlm.RoleFFNDownBias)...)))
 	sl.graph = b.G
 	sh.check(g, lc, s, li, sl, [][]float32{sh.x, sh.a}, []backend.Buf{want})
 }
@@ -354,7 +339,7 @@ func (sh *shadowTier) postAttention(g *devTier, lc *launcher, s backend.Session,
 // check forms sl with and without the int8 form, runs both on ins, and holds
 // each output to the tier's buffer in wants.
 func (sh *shadowTier) check(g *devTier, lc *launcher, s backend.Session, li int, sl *shadowSlice, ins [][]float32, wants []backend.Buf) {
-	name := sliceNames[sl.key.kind]
+	name := sliceNames[sl.kind]
 	arms := [2]*shadowSlice{sl, sl}
 	if a, b := sh.log.Swap[0], sh.log.Swap[1]; sl.weights[a] != nil && sl.weights[b] != nil {
 		v := *sl
@@ -364,7 +349,6 @@ func (sh *shadowTier) check(g *devTier, lc *launcher, s backend.Session, li int,
 			count(&sh.log.Unformed, name+": "+err.Error())
 			return
 		}
-		v.key.swapped = true
 		arms[0] = &v
 	}
 	var outs [2][][]float32
@@ -436,17 +420,9 @@ func nmse(got, want []float32) float64 {
 	return num / den
 }
 
-// form is sl's kernels on g's device, with the int8 form or without it.
+// form is sl's kernels on g's device, with the int8 form or without it,
+// compiled once for the composer's Key.
 func (sh *shadowTier) form(g *devTier, sl *shadowSlice, float bool) (*shadowForm, error) {
-	key := sl.key
-	key.float = float
-	if f, ok := sh.forms[key]; ok {
-		if f == nil {
-			return nil, fmt.Errorf("the slice at %+v did not form earlier", key)
-		}
-		return f, nil
-	}
-	sh.forms[key] = nil
 	if g.composer == nil {
 		g.composer = jit.Default()
 	}
@@ -458,7 +434,7 @@ func (sh *shadowTier) form(g *devTier, sl *shadowSlice, float bool) (*shadowForm
 		r = sh.float
 	}
 	gr := sl.graph
-	codes, err := r.Form(jit.Request{
+	key, codes, err := r.Form(jit.Request{
 		Graph:   gr,
 		Formats: sl.formats,
 		Step:    jit.Step{Rows: 1, Page: 64, Keys: 1, ActWindow: g.actWin},
@@ -467,6 +443,13 @@ func (sh *shadowTier) form(g *devTier, sl *shadowSlice, float bool) (*shadowForm
 	if err != nil {
 		return nil, err
 	}
+	if f, ok := sh.forms[key]; ok {
+		if f == nil {
+			return nil, fmt.Errorf("the slice of key %#x did not compile earlier", key)
+		}
+		return f, nil
+	}
+	sh.forms[key] = nil
 	f := &shadowForm{}
 	vals := map[graph.ValueID]int{}
 	own := map[jit.Operand]int{}

@@ -74,6 +74,10 @@ type Registry struct {
 	Decompositions map[graph.OpKind]Decomposition
 	Profiles       map[DeviceKind]Profile
 	Lowerings      map[DeviceKind]Lowering
+	// cache is what Form formed, by Key; nil forms every request afresh. A
+	// copy of the registry shares it: the profile and the lowering are in
+	// the Key.
+	cache *formCache
 }
 
 // PoisonWorkgroupMemory has the GPU lowering poison every workgroup array
@@ -88,6 +92,7 @@ func Default() *Registry {
 		Decompositions: decompositions(),
 		Profiles:       map[DeviceKind]Profile{DeviceGPU: gpuProfile(), DeviceCPU: cpuProfile()},
 		Lowerings:      map[DeviceKind]Lowering{DeviceGPU: gpuLowering{}, DeviceCPU: cpuLowering{Shuffles: true}},
+		cache:          newFormCache(),
 	}
 }
 

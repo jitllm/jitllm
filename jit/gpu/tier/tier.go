@@ -1883,7 +1883,8 @@ type devShared struct {
 	// by shape, the composer's (composer) compiled on this device.
 	fmc       fmCall
 	fmcFn     func(backend.Session)
-	forms     map[formedKey]*formed
+	forms     map[jit.Key]*formed
+	formKeys  map[formedKey]jit.Key
 	// shadow is nil outside a jitllmtest build's shadowed gate (shadow.go).
 	shadow *shadowTier
 	composer  *jit.Registry
