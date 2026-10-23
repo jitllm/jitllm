@@ -11,6 +11,9 @@ import (
 // it, scalar nodes, and the stores each element makes, in order.
 type Kernel struct {
 	Name string
+	// Ones, where the CPU's binding set it, is 1 + the vector register
+	// holding sixteen-bit ones for the whole kernel.
+	Ones int
 	// Space is the element space's extents, the last fastest. Under Work an
 	// element is a workgroup of Group threads, else a thread.
 	Space  []int
@@ -299,12 +302,18 @@ const (
 	// OpCopy is A in another register.
 	OpCopy
 	// OpDot4 is C plus the sum of the products of A's and B's signed bytes,
-	// lane by lane of the four in each word.
+	// lane by lane of the four in each word. B is an int8 form's codes,
+	// rounded within ±127: never -128.
 	OpDot4
 	// OpWidenHalf is word A's low binary16 half as a float.
 	OpWidenHalf
+	// OpDot4U is OpDot4 with A's bytes unsigned.
+	OpDot4U
 	numOps
 )
+
+// byteDot reports whether op is a dot of four bytes a word.
+func (op Op) byteDot() bool { return op == OpDot4 || op == OpDot4U }
 
 // Node is one value: a scalar, or inside a loop of Lanes a vector of them.
 // A load's At, where a cursor set it, is 1 + the loop whose address it reads
@@ -320,9 +329,9 @@ type Node struct {
 	Ax      []int
 	// Reg, where a register binding set it, is 1 + the register holding
 	// the value; a load's Ptr, where a cursor set it, is the pointer it
-	// reads from (see Cursor). Tmp is 1 + a register the value's code
-	// needs besides its own.
-	Reg, Ptr, Tmp int
+	// reads from (see Cursor). Tmp and Tmp2 are 1 + registers the value's
+	// code needs besides its own.
+	Reg, Ptr, Tmp, Tmp2 int
 	// Spill, where the CPU's register binding set it, is 1 + the red-zone
 	// slot a value lives in: stored where it is made, loaded at every read;
 	// -1 for an argument word read from the argument block at every read.
@@ -424,7 +433,7 @@ func (n *Kernel) Elements() int {
 
 var opNames = [numOps]string{"const", "coord", "iter", "fold", "load", "add", "sub", "mul", "div", "rem", "min", "max", "fma", "bitcast",
 	"less", "select", "sqrt", "exp", "shl", "shr", "and", "xor", "cvtf32", "cvti32", "thread", "groupsum", "groupmax", "exchange",
-	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "unpack", "upper", "round", "span", "hmax", "hmin", "eq", "or", "lanes", "sar", "dupeven", "dupodd", "swappairs", "addsub", "firstlane", "copy", "dot4", "widenhalf"}
+	"local", "flat", "shuffle", "param", "broadcast", "length", "hsum", "half", "gtw", "andnot", "zip", "unpack", "upper", "round", "span", "hmax", "hmin", "eq", "or", "lanes", "sar", "dupeven", "dupodd", "swappairs", "addsub", "firstlane", "copy", "dot4", "widenhalf", "dot4u"}
 
 func (o Op) String() string {
 	if int(o) < len(opNames) {

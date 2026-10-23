@@ -19,7 +19,12 @@ func (l cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 	if k.Seq == nil {
 		return Lowered{}, fmt.Errorf("the x86 lowering of %s: the kernel is not ordered", k.Name)
 	}
-	e := &x86Lowerer{k: k, a: &x86.Buf{}, top: map[int]int{}, end: map[int]int{}, preset: map[int]bool{}, home: k.Homes(), words: k.VectorWords(), shuffles: l.Shuffles}
+	e := &x86Lowerer{k: k, a: &x86.Buf{}, top: map[int]int{}, end: map[int]int{}, preset: map[int]bool{}, home: k.Homes(), words: k.VectorWords(), shuffles: l.Shuffles,
+		isa: x86.ISA(d.ISA)}
+	if r := x86.Reg(k.Ones - 1); k.Ones > 0 {
+		e.a.VPCMPEQW(r, r, r)
+		e.a.VPSRLW(r, r, 15)
+	}
 	for _, en := range k.Seq {
 		if e.err != nil {
 			break
@@ -65,7 +70,13 @@ type x86Lowerer struct {
 	// cur is the node being made, -1 between nodes; reloads counts the
 	// spilled reads, which take the reload registers in turn.
 	cur, reloads int
+	// isa is the instruction sets the host executes.
+	isa x86.ISA
 }
+
+// shiftCount is the red-zone word a vector shift by a general register's
+// count reads it from: slot 16, which no spill takes.
+var shiftCount = x86.At(x86.RSP, -128)
 
 // spillSlot is red-zone slot s, 1-based, below RSP.
 func spillSlot(s int) x86.Mem { return x86.At(x86.RSP, int32(-8*s)) }
@@ -222,6 +233,17 @@ func (e *x86Lowerer) node(i int) {
 			a.VBROADCASTSS(e.reg(i), e.addr(init.Buf, init.A, init.Ptr))
 		case init.Op == OpConst && e.words[nd.B] && init.Reg > 0:
 			a.VMOVAPSReg(e.reg(i), e.reg(nd.B))
+		case init.Op != OpConst && (init.Reg > 0 || init.Spill != 0) && (e.home[nd.B] < 0 || !k.within(e.home[nd.B], nd.At)):
+			// A sum that starts at a value made outside its loop: the value,
+			// copied into the sum's register where it is not already there.
+			r, from := e.reg(i), e.reg(nd.B)
+			switch {
+			case r == from:
+			case e.gpr(i):
+				a.MOVQ(r, from)
+			default:
+				a.VMOVAPSReg(r, from)
+			}
 		default:
 			e.fail("a sum from %s", init.Op)
 		}
@@ -257,24 +279,79 @@ func (e *x86Lowerer) node(i int) {
 	case OpBitcast:
 		switch {
 		case e.gpr(nd.A) && !e.gpr(i):
-			a.MOVDToX(e.reg(i), e.reg(nd.A))
+			a.VMOVDToX(e.reg(i), e.reg(nd.A))
 		case e.gpr(nd.A) && e.reg(i) != e.reg(nd.A):
 			a.MOVQ(e.reg(i), e.reg(nd.A))
 		case e.reg(i) != e.reg(nd.A):
-			e.fail("a bitcast into another register")
+			// The operand is read again after: its bits in a register of
+			// their own.
+			a.VMOVAPSReg(e.reg(i), e.reg(nd.A))
 		}
+	case OpDot4, OpDot4U:
+		// Each lane's four byte products and C: A's magnitudes as unsigned
+		// bytes times B with A's signs (B is never -128, so neither the
+		// sign nor a pair's sum overflows), or A as it is where its bytes
+		// are unsigned; the pairs summed by ones.
+		if nd.Tmp == 0 || nd.Tmp2 == 0 || e.gpr(i) {
+			e.fail("node %d: a byte dot outside vector lanes", i)
+			return
+		}
+		t, u := x86.Reg(nd.Tmp-1), x86.Reg(nd.Tmp2-1)
+		if nd.Op == OpDot4U || e.unsignedBytes(nd.A) {
+			// A's bytes are already magnitudes: A times B as they are.
+			u, t = e.reg(nd.A), e.reg(nd.B)
+		} else {
+			a.VPSIGNB(t, e.reg(nd.B), e.reg(nd.A))
+			a.VPABSB(u, e.reg(nd.A))
+		}
+		if e.isa&x86.ISAVNNI != 0 {
+			// VPDPBUSD sums each lane's four products into it at once.
+			r := e.reg(i)
+			switch {
+			case r == e.reg(nd.C):
+				a.VPDPBUSD(r, u, t)
+			case r == u || r == t:
+				// The result takes an operand's register: summed aside.
+				s := x86.Reg(nd.Tmp - 1)
+				a.VMOVAPSReg(s, e.reg(nd.C))
+				a.VPDPBUSD(s, u, t)
+				a.VMOVAPSReg(r, s)
+			default:
+				a.VMOVAPSReg(r, e.reg(nd.C))
+				a.VPDPBUSD(r, u, t)
+			}
+			return
+		}
+		p := x86.Reg(nd.Tmp - 1)
+		a.VPMADDUBSW(p, u, t)
+		u, t = x86.Reg(nd.Tmp2-1), p
+		ones := x86.Reg(e.k.Ones - 1)
+		if e.k.Ones == 0 {
+			a.VPCMPEQW(u, u, u)
+			a.VPSRLW(u, u, 15)
+			ones = u
+		}
+		a.VPMADDWD(t, t, ones)
+		a.VPADDD(e.reg(i), e.reg(nd.C), t)
 	case OpWidenHalf:
 		switch {
 		case e.gpr(nd.A):
-			a.MOVDToX(e.reg(i), e.reg(nd.A))
+			a.VMOVDToX(e.reg(i), e.reg(nd.A))
 			a.VCVTPH2PSReg(e.reg(i), e.reg(i))
 		case e.lanes(e.home[i]) == 0:
 			// A word's low half in a vector register's first lane: the
 			// conversion's first half.
 			a.VCVTPH2PSReg(e.reg(i), e.reg(nd.A))
 		default:
-			// Each lane's low half: the conversion reads halves side by side.
-			e.fail("node %d: halves widened lane by lane", i)
+			// Each lane's low half: the high halves cleared, the dwords
+			// packed to words within each 128-bit half, the halves' low
+			// quadwords gathered, and the eight halves converted.
+			r := e.reg(i)
+			a.VPSLLD(r, e.reg(nd.A), 16)
+			a.VPSRLD(r, r, 16)
+			a.VPACKUSDW(r, r, r)
+			a.VPERMQ(r, r, 0x08)
+			a.VCVTPH2PSReg(r, r)
 		}
 	case OpConst:
 		if nd.Type == ir.F32 && nd.Imm == 0 && nd.Reg > 0 {
@@ -290,9 +367,9 @@ func (e *x86Lowerer) node(i int) {
 			e.fail("a splat with no scratch word")
 		}
 		a.MOVimm32(t, int32(uint32(nd.Imm)))
-		a.MOVDToX(e.reg(i), t)
+		a.VMOVDToX(e.reg(i), t)
 		if e.feedsHalves(i) {
-			a.PSHUFD(e.reg(i), e.reg(i), 0)
+			a.VPSHUFDx(e.reg(i), e.reg(i), 0)
 		} else {
 			a.VPBROADCASTDReg(e.reg(i), e.reg(i))
 		}
@@ -339,6 +416,11 @@ func (e *x86Lowerer) node(i int) {
 	case OpAddSub:
 		a.VADDSUBPS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 	case OpSar:
+		if k.Nodes[nd.B].Op != OpConst && !e.words[nd.B] {
+			a.MOVStore(shiftCount, e.reg(nd.B))
+			a.VPSRADMem(e.reg(i), e.reg(nd.A), shiftCount)
+			return
+		}
 		if k.Nodes[nd.B].Op != OpConst {
 			a.VPSRAVD(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 			return
@@ -392,6 +474,17 @@ func (e *x86Lowerer) node(i int) {
 		}
 		// A shift by a computed count shifts each lane by its own; only a
 		// constant count is an immediate.
+		if e.words[i] && (nd.Op == OpShl || nd.Op == OpShr) && k.Nodes[nd.B].Op != OpConst && !e.words[nd.B] {
+			// One count for every lane, from a general register: through
+			// the count's word below RSP.
+			a.MOVStore(shiftCount, e.reg(nd.B))
+			if nd.Op == OpShl {
+				a.VPSLLDMem(e.reg(i), e.reg(nd.A), shiftCount)
+			} else {
+				a.VPSRLDMem(e.reg(i), e.reg(nd.A), shiftCount)
+			}
+			return
+		}
 		if e.words[i] && nd.Op == OpShl {
 			if k.Nodes[nd.B].Op != OpConst {
 				a.VPSLLVD(e.reg(i), e.reg(nd.A), e.reg(nd.B))
@@ -436,8 +529,23 @@ func (e *x86Lowerer) node(i int) {
 			return
 		}
 		x, y := e.reg(nd.A), e.reg(nd.B)
-		if nd.Type == ir.I32 && nd.Op == OpMin {
-			a.VPMINSD(e.reg(i), x, y)
+		if nd.Type != ir.F32 {
+			// Integer lanes: signed for i32, unsigned for u32.
+			signed := nd.Type == ir.I32
+			switch {
+			case nd.Op == OpSub:
+				a.VPSUBD(e.reg(i), x, y)
+			case nd.Op == OpMin && signed:
+				a.VPMINSD(e.reg(i), x, y)
+			case nd.Op == OpMin:
+				a.VPMINUD(e.reg(i), x, y)
+			case nd.Op == OpMax && signed:
+				a.VPMAXSD(e.reg(i), x, y)
+			case nd.Op == OpMax:
+				a.VPMAXUD(e.reg(i), x, y)
+			default:
+				e.fail("node %d: %s of integer lanes", i, nd.Op)
+			}
 			return
 		}
 		switch nd.Op {
@@ -495,7 +603,7 @@ func (e *x86Lowerer) node(i int) {
 			if k.Nodes[nd.A].Type == ir.I32 {
 				a.MOVSXD(src, src)
 			}
-			a.CVTSI2SS(e.reg(i), e.reg(i), src)
+			a.VCVTSI2SS(e.reg(i), e.reg(i), src)
 			return
 		}
 		a.VCVTDQ2PS(e.reg(i), e.reg(nd.A))
@@ -539,6 +647,37 @@ func (e *x86Lowerer) node(i int) {
 	default:
 		e.fail("node %d: no x86 form of %s.%s", i, nd.Op, nd.Type)
 	}
+}
+
+// unsignedBytes reports whether every byte of node i is below 0x80: a mask
+// of bytes each of which is.
+func (e *x86Lowerer) unsignedBytes(i int) bool {
+	nd := e.k.Nodes[i]
+	if nd.Op != OpAnd {
+		return false
+	}
+	for _, c := range []int{nd.A, nd.B} {
+		if v, ok := e.constWord(c); ok && v&0x80808080 == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// constWord is node i's word where it is fixed: a constant, or a constant
+// block's word at a constant index.
+func (e *x86Lowerer) constWord(i int) (uint32, bool) {
+	nd := e.k.Nodes[i]
+	switch {
+	case nd.Op == OpConst:
+		return uint32(nd.Imm), true
+	case nd.Op == OpLoad && e.k.Bufs[nd.Buf].Words != nil && e.k.Nodes[nd.A].Op == OpConst:
+		w := e.k.Bufs[nd.Buf].Words
+		if x := int(e.k.Nodes[nd.A].Imm); x >= 0 && x < len(w) {
+			return w[x], true
+		}
+	}
+	return 0, false
 }
 
 // keepIf jumps to skip where the compare just made leaves dst as it is: a
@@ -693,6 +832,14 @@ func (e *x86Lowerer) store(i int) {
 	}
 	if s.Narrow {
 		e.a.VMOVDQUStorex(m, e.reg(s.Val))
+		return
+	}
+	if e.gpr(s.Val) {
+		if e.k.Bufs[s.Buf].Half {
+			e.fail("store %d: a half from a general register", i)
+			return
+		}
+		e.a.MOVLStore(m, e.reg(s.Val))
 		return
 	}
 	if e.k.Bufs[s.Buf].Half {

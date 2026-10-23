@@ -52,7 +52,13 @@ func decomposeMatVecQ8(o graph.Op, c *Context, wo Operand) ([]Prim, error) {
 	u := d.op(OpAdd, U, d.op(OpMul, U, b, d.u(q8Words)), j)
 	wq := d.load(0, d.op(OpAdd, U, d.op(OpMul, U, u, d.u(uint32(rows))), row))
 	xq := d.load(1, d.op(OpAdd, U, d.op(OpMul, U, r, d.u(uint32(nwd))), u))
-	d.add(Expr{Op: OpDot4, Type: I, A: wq, B: xq, C: d.i(0)})
+	if c.unsignedDot {
+		// Each weight byte offset by 128, unsigned: the dot is 128 times
+		// the codes' sum more, taken off below.
+		d.add(Expr{Op: OpDot4U, Type: I, A: d.op(OpXor, U, wq, d.u(0x80808080)), B: xq, C: d.i(0)})
+	} else {
+		d.add(Expr{Op: OpDot4, Type: I, A: wq, B: xq, C: d.i(0)})
+	}
 
 	// The output: each block's dot by the weight's scale and the input's.
 	var s exprs
@@ -63,6 +69,17 @@ func decomposeMatVecQ8(o graph.Op, c *Context, wo Operand) ([]Prim, error) {
 	wd := s.un(OpWidenHalf, F, s.op(OpShr, U, word, shift))
 	xd := s.load(2, s.op(OpAdd, U, s.op(OpMul, U, sr, s.u(uint32(nb))), sb))
 	id := s.un(OpCvtF32, F, s.at(0, []int{R, rows, nb}, sr, srow, sb))
+	if c.unsignedDot {
+		// The block's codes' sum: its Sums-wide sums after the windows'
+		// scales.
+		per := q8Block / q.Sums
+		sumAt := s.op(OpAdd, U, s.u(uint32(R*c.width(v)/c.window(v))), s.op(OpAdd, U, s.op(OpMul, U, sr, s.u(uint32(ns))), s.op(OpMul, U, sb, s.u(uint32(per)))))
+		csum := s.load(2, sumAt)
+		for t := 1; t < per; t++ {
+			csum = s.op(OpAdd, F, csum, s.load(2, s.op(OpAdd, U, sumAt, s.u(uint32(t)))))
+		}
+		id = s.op(OpSub, F, id, s.op(OpMul, F, s.f(128), csum))
+	}
 	s.op(OpMul, F, s.op(OpMul, F, id, wd), xd)
 
 	return append(prims,

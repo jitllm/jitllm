@@ -68,8 +68,10 @@ type Regs struct {
 	Reloads [2]int
 }
 
-// spillSlots is the red zone's 8-byte slots below RSP a kernel spills into.
-const spillSlots = 16
+// spillSlots is the red zone's 8-byte slots below RSP a kernel spills into:
+// all sixteen but the last, which holds a vector shift's count
+// (lowercpu.go, shiftCount).
+const spillSlots = 15
 
 func (Regs) Name() string { return "regs" }
 
@@ -86,13 +88,13 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		late := w.lateParams()
 		for range len(k.Nodes) {
 			m := w.clone()
-			b := binder86{k: m, p: p, used: map[int]bool{}, late: late}
+			b := binder86{k: m, p: p, used: map[int]bool{}, late: late, isa: x86.ISA(d.ISA)}
 			b.lives()
 			if b.gprs() != nil {
 				// The words do not fit: again with the reload registers kept
 				// out of every pool, spilling where none is free.
 				m = w.clone()
-				b = binder86{k: m, p: p, used: map[int]bool{}, late: late, spill: true}
+				b = binder86{k: m, p: p, used: map[int]bool{}, late: late, spill: true, isa: x86.ISA(d.ISA)}
 				b.lives()
 				if b.gprs() != nil {
 					return nil, false, nil
@@ -100,6 +102,13 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			}
 			if b.vectors() == nil {
 				return []*Kernel{m}, true, nil
+			}
+			if m.Ones > 0 {
+				// Again with the byte dots making their ones each time.
+				b.noOnes = true
+				if b.vectors() == nil {
+					return []*Kernel{m}, true, nil
+				}
 			}
 			if !w.rematerialize(moved) {
 				return nil, false, nil
@@ -116,7 +125,13 @@ type binder86 struct {
 	// spill binds with the reload registers held back, a word that finds no
 	// register taking one from the live value read latest, which spills.
 	spill bool
-	slots int
+	// isa is the instruction sets the host executes; noOnes keeps no
+	// register of ones for the kernel's byte dots.
+	isa    x86.ISA
+	noOnes bool
+	// owner is each slot's holder: 0 none, 1 + a value's node, or -1 for a
+	// loop's iteration or an address copy, which hold theirs to the end.
+	owner [spillSlots + 1]int
 	// counters are registers a spilling binding holds back for the loops
 	// past the two the profile's counters count.
 	counters []int
@@ -239,7 +254,12 @@ func (b *binder86) gprs() error {
 	// read through what they address rather than as values.
 	freed, valued := map[int]int{}, map[int]bool{}
 	if b.spill {
+		// The reload registers, and the counters, which a spilling
+		// binding keeps for its loops rather than its values.
 		for _, r := range p.Reloads {
+			b.used[r] = true
+		}
+		for _, r := range p.Counters {
 			b.used[r] = true
 		}
 	}
@@ -281,12 +301,13 @@ func (b *binder86) gprs() error {
 				if r < 0 && b.spill {
 					r = b.rereadParam()
 				}
-				if r < 0 && b.spill && b.slots < spillSlots {
+				if r < 0 && b.spill {
 					// The iteration in a slot: zeroed on entry, counted
 					// there, loaded where it is read.
-					b.slots++
-					k.Nodes[it].Spill = b.slots
-					continue
+					if s := b.slot(pos, -1); s > 0 {
+						k.Nodes[it].Spill = s
+						continue
+					}
 				}
 				if r < 0 {
 					return errors.New("no register for a loop's iteration")
@@ -327,7 +348,10 @@ func (b *binder86) gprs() error {
 			r = b.take([]int{p.Outer})
 		case nd.Op == OpParam && k.madeCounts(i) != nil:
 			r = b.take([]int{p.Counters[0]})
-		case nd.Op != OpParam && k.madeCount(i) >= 0:
+		// A count is its loop's counter only where the loop is entered once:
+		// a loop inside another counts its own copy, the count kept for the
+		// next entry.
+		case nd.Op != OpParam && k.madeCount(i) >= 0 && k.Loops[k.madeCount(i)].Parent < 0:
 			c := k.madeCount(i)
 			if k.Loops[c].Lanes > 0 && b.last[nd.A] == b.def[i] && k.Nodes[nd.A].Reg == p.Counters[0]+1 {
 				r = p.Counters[0]
@@ -338,7 +362,7 @@ func (b *binder86) gprs() error {
 				k.Loops[c].Reg = r + 1
 				direct[c] = true
 			}
-		case nd.Op == OpParam && read && len(ls) == 1 && !k.isBaseNode(i) && b.uses(i) == 0:
+		case nd.Op == OpParam && read && len(ls) == 1 && !k.isBaseNode(i) && b.uses(i) == 0 && k.Loops[ls[0]].Parent < 0:
 			c := ls[0]
 			switch l := k.Loops[c]; {
 			case l.Lanes > 0:
@@ -391,12 +415,19 @@ func (b *binder86) gprs() error {
 		if r < 0 && b.spill {
 			r = b.rereadParam()
 		}
-		if r < 0 && b.spill && b.slots < spillSlots && nd.Op != OpParam {
+		if r < 0 && b.spill && nd.Op == OpParam && !k.isBaseNode(i) {
+			// An argument word with no register: read from the argument
+			// block wherever it is read.
+			k.Nodes[i].Spill = -1
+			continue
+		}
+		if r < 0 && b.spill && nd.Op != OpParam {
 			// Made in the reloaded addresses' register and stored to a slot
 			// at once: its reads load it from there.
-			b.slots++
-			k.Nodes[i].Reg, k.Nodes[i].Spill = int(reloadReg)+1, b.slots
-			continue
+			if s := b.slot(b.def[i], i+1); s > 0 {
+				k.Nodes[i].Reg, k.Nodes[i].Spill = int(reloadReg)+1, s
+				continue
+			}
 		}
 		if r < 0 {
 			return errors.New("more words live at once than registers")
@@ -459,10 +490,11 @@ func (b *binder86) gprs() error {
 					if r < 0 {
 						r = b.take(p.Spare)
 					}
-					if r < 0 && b.spill && b.slots < spillSlots {
-						b.slots++
-						k.Ptrs[cu.Ptr-1].Spill = b.slots
-						continue
+					if r < 0 && b.spill {
+						if s := b.slot(0, -1); s > 0 {
+							k.Ptrs[cu.Ptr-1].Spill = s
+							continue
+						}
 					}
 					if r < 0 {
 						return errors.New("no register for a copy of an address")
@@ -518,7 +550,7 @@ func (b *binder86) gprs() error {
 			} else if i >= 2 {
 				free = !b.used[r] && b.counterFree(r, c)
 			}
-			if !held[r] && free {
+			if !held[r] && free && !b.copyIn(r) {
 				l.Reg = r + 1
 				b.used[r] = true
 				break
@@ -545,7 +577,18 @@ func (b *binder86) counterFree(r, c int) bool {
 			return false
 		}
 	}
-	return true
+	return !b.copyIn(r)
+}
+
+// copyIn reports whether a copy of an address a loop walks is held in
+// register r.
+func (b *binder86) copyIn(r int) bool {
+	for _, p := range b.k.Ptrs {
+		if p.Reg == r+1 {
+			return true
+		}
+	}
+	return false
 }
 
 // uses is how many nodes read node i.
@@ -561,6 +604,18 @@ func (b *binder86) uses(i int) int {
 	return n
 }
 
+// slot is a red-zone slot free from sequence position from on, taken for
+// owner (1 + a value's node, or -1 for good); -1 where none is.
+func (b *binder86) slot(from, owner int) int {
+	for s := 1; s <= spillSlots; s++ {
+		if o := b.owner[s]; o == 0 || o > 0 && b.last[o-1] < from {
+			b.owner[s] = owner
+			return s
+		}
+	}
+	return -1
+}
+
 // evict spills the held value read latest past node i and returns its
 // register, -1 where nothing can spill: the value is stored where it is made
 // and loaded at every read, so its register is free from here on.
@@ -570,9 +625,6 @@ func (b *binder86) evict(freed map[int]int, i int) int {
 
 // evictAt is evict at sequence position pos.
 func (b *binder86) evictAt(freed map[int]int, pos int) int {
-	if b.slots >= spillSlots {
-		return -1
-	}
 	v, last := -1, -1
 	for x := range freed {
 		if l := b.last[x]; l > pos && l > last {
@@ -582,8 +634,11 @@ func (b *binder86) evictAt(freed map[int]int, pos int) int {
 	if v < 0 {
 		return -1
 	}
-	b.slots++
-	b.k.Nodes[v].Spill = b.slots
+	s := b.slot(b.def[v], v+1)
+	if s < 0 {
+		return -1
+	}
+	b.k.Nodes[v].Spill = s
 	r := freed[v]
 	delete(freed, v)
 	return r
@@ -646,16 +701,13 @@ func (b *binder86) reloads(i int) bool {
 		if bf.Base != i+1 {
 			continue
 		}
+		// The address itself walked is held; copies a loop takes of it
+		// read it once a take, from its argument word.
 		for _, l := range k.Loops {
 			for _, cu := range l.Cursors {
-				if cu.Buf == j {
+				if cu.Buf == j && cu.Ptr == 0 {
 					return false
 				}
-			}
-		}
-		for _, p := range k.Ptrs {
-			if p.Buf == j {
-				return false
 			}
 		}
 	}
@@ -726,7 +778,7 @@ func (k *Kernel) VectorWords() map[int]bool {
 		switch {
 		case nd.Op == OpLanes || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandConsts && nd.Type != ir.F32:
 			out[i] = true
-		case vec && (nd.Op == OpCvtF32 || nd.Op == OpBitcast && nd.Type == ir.F32):
+		case vec && (nd.Op == OpCvtF32 || nd.Op == OpWidenHalf || nd.Op == OpBitcast && nd.Type == ir.F32):
 			if data(nd.A) && k.Nodes[nd.A].Op != OpConst {
 				out[nd.A] = true
 			}
@@ -748,7 +800,12 @@ func (k *Kernel) VectorWords() map[int]bool {
 				if nd.Op == OpLoad || nd.Op == OpFold {
 					continue
 				}
-				for _, a := range k.Operands(&nd) {
+				for x, a := range k.Operands(&nd) {
+					// A shift's count shifts every lane alike: it is a vector
+					// only where it is made of one.
+					if x == 1 && (nd.Op == OpShl || nd.Op == OpShr || nd.Op == OpSar) {
+						continue
+					}
 					if data(*a) && k.Nodes[*a].Op != OpConst && !out[*a] && k.Nodes[*a].Type != ir.Pred {
 						out[*a], changed = true, true
 					}
@@ -957,6 +1014,18 @@ func (b *binder86) vectors() error {
 		k.Nodes[i].Reg, k.Nodes[i].Tmp = r+1, scratch+1
 		busy[r] = true
 	}
+	k.Ones = 0
+	if b.isa&x86.ISAVNNI == 0 && !b.noOnes {
+		for i, nd := range k.Nodes {
+			if nd.Op.byteDot() && k.needsVector(i) {
+				// A byte dot's pair sums by ones, made once for the kernel.
+				if r := b.p.Vectors - len(splats) - 1; r >= 0 && !busy[r] {
+					busy[r], k.Ones = true, r+1
+				}
+				break
+			}
+		}
+	}
 	cp := k.copies()
 	for pos, e := range k.Seq {
 		if e.Kind == EntryNode && cp[e.I] > 0 {
@@ -1050,8 +1119,10 @@ func (b *binder86) vectors() error {
 				if b.last[nd.C] != pos || !k.needsVector(nd.C) {
 					first = nd.A
 				}
+			case OpDot4, OpDot4U:
+				first = nd.C
 			}
-			if reg < 0 && first >= 0 && k.Nodes[first].Reg > 0 && k.needsVector(first) && (b.last[first] == pos || nd.Op == OpBitcast) {
+			if reg < 0 && first >= 0 && k.Nodes[first].Reg > 0 && k.needsVector(first) && b.last[first] == pos {
 				reg = k.Nodes[first].Reg - 1
 			}
 			if reg < 0 {
@@ -1073,6 +1144,32 @@ func (b *binder86) vectors() error {
 		}
 		if err := give(i, reg); err != nil {
 			return err
+		}
+		if nd.Op.byteDot() && k.needsVector(i) {
+			// Two registers besides its own and its operands': the
+			// signed operand and the pairs' sums, then the ones.
+			var held []int
+			for _, a := range k.Operands(&nd) {
+				if r := k.Nodes[*a].Reg - 1; r >= 0 && k.needsVector(*a) && !busy[r] {
+					busy[r] = true
+					held = append(held, r)
+				}
+			}
+			t := lowest(0, hs[i])
+			if t >= 0 {
+				busy[t] = true
+			}
+			t2 := lowest(0, hs[i])
+			if t >= 0 {
+				busy[t] = false
+			}
+			for _, r := range held {
+				busy[r] = false
+			}
+			if t < 0 || t2 < 0 {
+				return errors.New("no registers for a byte dot")
+			}
+			k.Nodes[i].Tmp, k.Nodes[i].Tmp2 = t+1, t2+1
 		}
 		if nd.Op == OpSelect || nd.Op == OpZip {
 			var held []int

@@ -91,11 +91,20 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	a.abs(a.at(0, sh, a.coord(0), a.op(OpAdd, U, a.op(OpMul, U, a.coord(1), a.u(uint32(ww))), a.coord(2))))
 
 	var d exprs
-	ds := d.scale(d.at(0, win, d.coord(0), d.coord(1)))
+	var ds int
+	if q.ExactDiv {
+		ds = d.op(OpDiv, F, d.at(0, win, d.coord(0), d.coord(1)), d.f(127))
+	} else {
+		ds = d.scale(d.at(0, win, d.coord(0), d.coord(1)))
+	}
 	dix := flat(&d, d.coord(0), d.coord(1), nw)
 
 	var r exprs
-	r.inverse(r.at(0, win, r.coord(0), r.coord(1)), r.load(1, flat(&r, r.coord(0), r.coord(1), nw)))
+	if dd := r.load(1, flat(&r, r.coord(0), r.coord(1), nw)); q.ExactDiv {
+		r.sel(F, r.op(OpLess, ir.Pred, r.f(0), dd), r.op(OpDiv, F, r.f(1), dd), r.f(0))
+	} else {
+		r.inverse(r.at(0, win, r.coord(0), r.coord(1)), dd)
+	}
 
 	var k exprs
 	t := k.op(OpMul, F, k.at(0, sh, k.coord(0), k.coord(1)), k.at(1, win, k.coord(0), k.op(OpDiv, U, k.coord(1), k.u(uint32(ww)))))

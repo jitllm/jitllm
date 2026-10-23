@@ -140,6 +140,21 @@ func (g *alg) of(i int) lin {
 		}
 	case OpShr, OpAnd:
 		c, ok := g.of(nd.B).constant()
+		if nd.Op == OpShr && ok && c > 0 && c < 32 {
+			// A sum whose every term is a multiple of 2^c shifts term by
+			// term: nothing is shifted out.
+			l, whole := g.of(nd.A), true
+			for _, v := range l {
+				whole = whole && v%(1<<c) == 0
+			}
+			if whole && len(l) > 1 {
+				out := lin{}
+				for m, v := range l {
+					out[m] = v >> c
+				}
+				return g.merged(out)
+			}
+		}
 		x, single := g.of(nd.A).single()
 		if !ok || !single {
 			return leaf

@@ -91,9 +91,9 @@ func (k *Kernel) fixed(i int) bool {
 }
 
 // bindCounts makes each loop count the call fixes an argument word, the
-// loops taken outermost first. A loop that carries a sum takes the length
-// it was split from whole, its own count derived in the kernel; any other
-// loop takes its count.
+// loops taken outermost first: the length a count was split from, whole,
+// the count derived from it in the kernel. The call states lengths, never
+// what a kernel makes of them.
 func (k *Kernel) bindCounts(f ArgFields) {
 	next := 0
 	field := func(c int) int {
@@ -114,7 +114,7 @@ func (k *Kernel) bindCounts(f ArgFields) {
 		if n < 0 || bound[n] || k.Nodes[n].Op == OpConst || k.Nodes[n].Op == OpParam || !k.fixed(n) {
 			continue
 		}
-		if len(k.foldsOf(c)) > 0 {
+		{
 			ln := k.lengthIn(n)
 			if ln < 0 && k.computedFrom(n, OpParam) {
 				continue

@@ -176,3 +176,27 @@ func (a *Buf) ADDMemImm32(m Mem, imm int32) {
 	a.modrmMem(Y0, m)
 	a.u32(uint32(imm))
 }
+
+// VMOVDToX is dst's low dword = gp's low 32 bits, the rest zeroed: the VEX
+// form, which leaves no upper-state penalty beside 256-bit code.
+func (a *Buf) VMOVDToX(dst, gp Reg) {
+	a.vex(dst, Y0, gp, noIndex, false, p66, m0F, 0)
+	a.u8(0x6E)
+	a.modrmReg(dst, gp)
+}
+
+// VCVTSI2SS is dst = src1 with its low float gp's signed 64-bit value.
+func (a *Buf) VCVTSI2SS(dst, src1, gp Reg) {
+	a.vex(dst, src1, gp, noIndex, false, pF3, m0F, 1)
+	a.u8(0x2A)
+	a.modrmReg(dst, gp)
+}
+
+// VPSHUFDx is dst's four dwords picked from src's by imm, the 128-bit VEX
+// form.
+func (a *Buf) VPSHUFDx(dst, src Reg, imm byte) {
+	a.vex(dst, Y0, src, noIndex, false, p66, m0F, 0)
+	a.u8(0x70)
+	a.modrmReg(dst, src)
+	a.u8(imm)
+}

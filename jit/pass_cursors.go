@@ -130,6 +130,11 @@ func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (l
 		if cu.as[a].home != p {
 			continue
 		}
+		// A fresh copy is taken as the scope's first loop starts: an
+		// access the scope makes itself would read it before then.
+		if fresh {
+			return nil, false
+		}
 		d := copyLin(ix[j])
 		d.add(at, -1)
 		c, ok := g.merged(d).constant()

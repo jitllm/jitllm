@@ -259,6 +259,12 @@ func (a *Buf) VPOR(dst, src1, src2 Reg)       { a.vop(0xEB, p66, m0F, 0, dst, sr
 func (a *Buf) VPANDN(dst, src1, src2 Reg)     { a.vop(0xDF, p66, m0F, 0, dst, src1, src2) }
 
 func (a *Buf) VPMINSD(dst, src1, src2 Reg) { a.vop(0x39, p66, m0F38, 0, dst, src1, src2) }
+
+// VPMINUD, VPMAXSD and VPMAXUD are the unsigned minimum and the signed and
+// unsigned maximum of each dword lane.
+func (a *Buf) VPMINUD(dst, src1, src2 Reg) { a.vop(0x3B, p66, m0F38, 0, dst, src1, src2) }
+func (a *Buf) VPMAXSD(dst, src1, src2 Reg) { a.vop(0x3D, p66, m0F38, 0, dst, src1, src2) }
+func (a *Buf) VPMAXUD(dst, src1, src2 Reg) { a.vop(0x3F, p66, m0F38, 0, dst, src1, src2) }
 func (a *Buf) VPXOR(dst, src1, src2 Reg)   { a.vop(0xEF, p66, m0F, 0, dst, src1, src2) }
 func (a *Buf) VADDPS(dst, src1, src2 Reg)  { a.vop(0x58, pNone, m0F, 0, dst, src1, src2) }
 func (a *Buf) VMULPS(dst, src1, src2 Reg)  { a.vop(0x59, pNone, m0F, 0, dst, src1, src2) }
@@ -274,6 +280,12 @@ func (a *Buf) VPSLLW(dst, src Reg, imm byte) { a.vshiftImm(0x71, 6, dst, src, im
 func (a *Buf) VPSLLD(dst, src Reg, imm byte) { a.vshiftImm(0x72, 6, dst, src, imm) }
 
 func (a *Buf) VPSRAD(dst, src Reg, imm byte) { a.vshiftImm(0x72, 4, dst, src, imm) }
+
+// VPSRLDMem, VPSLLDMem and VPSRADMem shift every lane of src by the count
+// in the 64-bit word at m.
+func (a *Buf) VPSRLDMem(dst, src Reg, m Mem) { a.vopMem(0xD2, p66, m0F, 0, dst, src, m) }
+func (a *Buf) VPSLLDMem(dst, src Reg, m Mem) { a.vopMem(0xF2, p66, m0F, 0, dst, src, m) }
+func (a *Buf) VPSRADMem(dst, src Reg, m Mem) { a.vopMem(0xE2, p66, m0F, 0, dst, src, m) }
 
 func (a *Buf) vshiftImm(op byte, ext, dst, src Reg, imm byte) {
 	a.vex(Reg(ext), dst, src, noIndex, true, p66, m0F, 0)
@@ -454,6 +466,10 @@ func (a *Buf) VPSUBD(dst, src1, src2 Reg) { a.vop(0xFA, p66, m0F, 0, dst, src1, 
 func (a *Buf) VPSHUFB(dst, src1, src2 Reg) { a.vop(0x00, p66, m0F38, 0, dst, src1, src2) }
 
 func (a *Buf) VCVTPH2PSReg(dst, src Reg) { a.vop(0x13, p66, m0F38, 0, dst, Y0, src) }
+
+// VPACKUSDW packs src1's and src2's dwords into words with unsigned
+// saturation, within each 128-bit half.
+func (a *Buf) VPACKUSDW(dst, src1, src2 Reg) { a.vop(0x2B, p66, m0F38, 0, dst, src1, src2) }
 
 func (a *Buf) VPMOVZXBD(dst Reg, m Mem)  { a.vopMem(0x31, p66, m0F38, 0, dst, Y0, m) }
 func (a *Buf) VPMOVZXBDReg(dst, src Reg) { a.vop(0x31, p66, m0F38, 0, dst, Y0, src) }

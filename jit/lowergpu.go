@@ -270,6 +270,8 @@ func (e *lowerer) get(i int) ir.Value {
 		v = b.Fma(x, y, z)
 	case OpDot4:
 		v = b.Dot4(e.get(nd.A), e.get(nd.B), e.get(nd.C))
+	case OpDot4U:
+		e.fail("node %d: a byte dot of unsigned bytes, which no device profile here asks of a GPU", i)
 	case OpWidenHalf:
 		v = b.CvtF16H(e.get(nd.A))
 	case OpHalf:

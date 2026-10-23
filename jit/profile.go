@@ -52,6 +52,7 @@ func cpuProfile() Profile {
 		Quarters{Regs: []int{4, 6, 7, 8, 10, 12, 9, 15}},
 		Prescale{},
 		Bounds{},
+		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimReduce, Unrolled: true}}},
 		Serial{},
 		Simplify{ConstLast: true},
 		RunLengths{},
@@ -68,7 +69,8 @@ func cpuProfile() Profile {
 		Exp{Scratch: [3]int{0, 1, 2}},
 		FMA{},
 		FirstTerm{},
-		Jam{Lanes: 8, Sums: 8, Walk: true, Spread: []int{15, 13}, Rows: 14},
+		HalfWords{},
+		Jam{Lanes: 8, Sums: 8, Temps: map[Op]int{OpDot4: 2, OpDot4U: 2}, Spread: []int{15, 13}, Rows: 14},
 		Vectorize{Lanes: 8, Pairs: [5]int{0, 2, 3, 4, 5}, Carry: []int{9, 10, 8}, Keep: true, Quads: true, QuadRegs: []int{13, 15, 9}},
 		InPlace{},
 		Unroll{Vectors: 4},
@@ -123,7 +125,7 @@ func mainBlock() []uint32 {
 // mainArgs is main's host argument block: Out, W, A, AScale, Rows, K, Scr,
 // Q32, and the paired kernels' Out2, Q2 and AScale2.
 func mainArgs() ArgFields {
-	return ArgFields{Out: []int{0, 120}, Weight: 8, Act: 16, Query: 112, Second: map[int]int{0: 120, 112: 128, 24: 136}, Consts: 56, In: []int{24, 136}, Vectors: 40, Tail: 32, Counts: []int{32, 40}}
+	return ArgFields{Out: []int{0, 120}, Weight: 8, Act: 16, Query: 112, Second: map[int]int{0: 120, 112: 128, 24: 136}, Consts: 56, In: []int{24, 136, 104, 64}, Vectors: 40, Tail: 32, Counts: []int{32, 40}}
 }
 
 // mainSampleArgs is main's convention for a sample part's words: the

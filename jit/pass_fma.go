@@ -22,11 +22,11 @@ func (p FMA) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				continue
 			}
 			acc, dot := nd.A, nd.B
-			if k.Nodes[dot].Op != OpDot4 {
+			if !k.Nodes[dot].Op.byteDot() {
 				acc, dot = dot, acc
 			}
 			dn := k.Nodes[dot]
-			if dn.Op != OpDot4 || k.uses(dot) != 1 {
+			if !dn.Op.byteDot() || k.uses(dot) != 1 {
 				continue
 			}
 			if z := k.Nodes[dn.C]; z.Op != OpConst || z.Imm != 0 {
@@ -35,7 +35,7 @@ func (p FMA) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			if m == nil {
 				m = k.clone()
 			}
-			m.Nodes[i] = Node{Op: OpDot4, Type: dn.Type, A: dn.A, B: dn.B, C: acc}
+			m.Nodes[i] = Node{Op: dn.Op, Type: dn.Type, A: dn.A, B: dn.B, C: acc}
 		}
 		if p.All {
 			for i, nd := range k.Nodes {

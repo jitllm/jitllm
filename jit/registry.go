@@ -30,6 +30,9 @@ func (k DeviceKind) String() string {
 type Device struct {
 	Kind         DeviceKind
 	Slots, Lanes int
+	// ISA, on a CPU, is the instruction sets it executes, as jit/x86 names
+	// them (x86.ISA's bits).
+	ISA uint64
 }
 
 // Lowered is a kernel in its backend's form.
@@ -52,6 +55,9 @@ type Context struct {
 	Formats map[jlm.Role]jlm.Type
 	Step    Step
 	Int8    *Int8Form
+	// unsignedDot is whether this device's byte dot takes an unsigned
+	// operand (Int8Form.UnsignedDot).
+	unsignedDot bool
 	// Rotaries is the part's segment's rotaries, each a table of the step,
 	// the first named the model's RotaryBase'th (tableName).
 	Rotaries   []graph.Rotary
@@ -131,6 +137,9 @@ func (r *Registry) context(g *graph.Graph, k PartKind, f map[jlm.Role]jlm.Type, 
 		w := *q
 		w.Window = s.ActWindow
 		c.Int8 = &w
+	}
+	if q := c.Int8; q != nil {
+		c.unsignedDot = q.UnsignedDot != 0 && d.ISA&q.UnsignedDot == q.UnsignedDot
 	}
 	return c
 }
