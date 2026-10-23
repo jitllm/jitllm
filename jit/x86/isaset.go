@@ -15,14 +15,15 @@ const (
 	ISAFMA
 	ISAF16C
 	ISAVNNI
+	ISABMI2
 )
 
 const (
 	ISATierSSE  = ISASSE2 | ISASSE3 | ISASSSE3 | ISASSE41
-	ISATierAVX2 = ISAAVX2 | ISAFMA | ISAF16C
+	ISATierAVX2 = ISAAVX2 | ISAFMA | ISAF16C | ISABMI2
 )
 
-var isaNames = [...]string{"sse2", "sse3", "ssse3", "sse4.1", "sse4.2", "popcnt", "avx2", "fma", "f16c", "avx-vnni"}
+var isaNames = [...]string{"sse2", "sse3", "ssse3", "sse4.1", "sse4.2", "popcnt", "avx2", "fma", "f16c", "avx-vnni", "bmi2"}
 
 func (s ISA) Names() []string {
 	var out []string

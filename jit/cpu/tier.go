@@ -74,6 +74,8 @@ const (
 	ISAF16C
 	// ISAVNNI is AVX-VNNI, the VEX-encoded VPDPBUSD.
 	ISAVNNI
+	// ISABMI2 is SHRX and SHLX, which every AVX2 part has.
+	ISABMI2
 )
 
 // ISATierSSE is the floor of the SSE tier: what every SSE-tier kernel may
@@ -84,11 +86,11 @@ const (
 const ISATierSSE = ISASSE2 | ISASSE3 | ISASSSE3 | ISASSE41
 
 // ISATierAVX2 is what an UNDECLARED kernel needs: the AVX2 tier's floor.
-const ISATierAVX2 = ISAAVX2 | ISAFMA | ISAF16C
+const ISATierAVX2 = ISAAVX2 | ISAFMA | ISAF16C | ISABMI2
 
 var isaNames = [...]string{
 	"sse2", "sse3", "ssse3", "sse4.1", "sse4.2", "popcnt",
-	"avx2", "fma", "f16c", "avx-vnni",
+	"avx2", "fma", "f16c", "avx-vnni", "bmi2",
 }
 
 // Names lists the extensions in the set, in a fixed order.
@@ -132,6 +134,7 @@ func (f Features) ISA() ISA {
 	set(avx && f.FMA, ISAFMA)
 	set(avx && f.F16C, ISAF16C)
 	set(avx && f.AVXVNNI, ISAVNNI)
+	set(f.BMI2, ISABMI2)
 	return s
 }
 

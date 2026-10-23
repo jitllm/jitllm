@@ -1,6 +1,7 @@
 package jit
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/jitllm/jitllm/jit/ir"
@@ -55,8 +56,28 @@ func (p Args) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 		m.bindCounts(f)
 		m.bindBufs(f)
+		if err := m.oneBufferAField(); err != nil {
+			return nil, false, err
+		}
 		return []*Kernel{m}, true, nil
 	})
+}
+
+// oneBufferAField refuses a kernel whose argument words give one field to two
+// buffers: the second would overwrite the first's address.
+func (k *Kernel) oneBufferAField() error {
+	by := map[int]Operand{}
+	for _, a := range k.Args {
+		if a.Buf < 0 {
+			continue
+		}
+		o := k.Bufs[a.Buf].Operand
+		if p, ok := by[a.Field]; ok && p != o {
+			return fmt.Errorf("jit: %s: argument field %d holds both %s and %s", k.Name, a.Field, p.Name, o.Name)
+		}
+		by[a.Field] = o
+	}
+	return nil
 }
 
 // fixed reports whether no loop of k moves node i.
@@ -210,7 +231,7 @@ func (k *Kernel) bindBufs(f ArgFields) {
 		}
 	}
 	outs, ins := 0, 0
-	acts, weight, weighted := false, false, false
+	acts, weight, weighted, consts := false, false, false, false
 	for _, o := range kept {
 		if o.Kind == OperandWeight || o.Kind == OperandVector {
 			weight = true
@@ -236,8 +257,8 @@ func (k *Kernel) bindBufs(f ArgFields) {
 			} else {
 				fl = f.Out[0]
 			}
-		case o.Kind == OperandConsts || k.fixedWords(o):
-			fl = f.Consts
+		case (o.Kind == OperandConsts || k.fixedWords(o)) && !consts:
+			fl, consts = f.Consts, true
 		case (o.Kind == OperandWeight || o.Kind == OperandTable && k.indirect(o, offsets[o]) || narrows) && !weighted:
 			fl, weighted = f.Weight, true
 		case weight && f.Act > 0 && !acts && o.Kind != OperandVector:

@@ -6,6 +6,19 @@ import (
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
+// powerOfTwo is n where node i is the constant 2^n, n at least one.
+func (k *Kernel) powerOfTwo(i int) (int, bool) {
+	nd := k.Nodes[i]
+	if nd.Op != OpConst || nd.Imm < 2 || nd.Imm&(nd.Imm-1) != 0 {
+		return 0, false
+	}
+	n := 0
+	for v := nd.Imm; v > 1; v >>= 1 {
+		n++
+	}
+	return n, true
+}
+
 // Simplify folds what the IR's structure decides: equal nodes merged, the
 // integer arithmetic of constants done, identities removed, a loop of one
 // trip and no carried value dropped, and what a loop's iteration is known
@@ -218,6 +231,10 @@ func (k *Kernel) foldDecided() bool {
 				to(i, a)
 			} else if x, ok := k.multipleOf(a, b); ok {
 				to(i, x)
+			} else if n, ok := k.powerOfTwo(b); ok && nd.Type == ir.U32 {
+				// An unsigned quotient by 2^n is a shift by n.
+				k.Nodes[i] = Node{Op: OpShr, Type: ir.U32, A: a, B: k.u32(n)}
+				changed = true
 			}
 		case OpBitcast:
 			if x := k.Nodes[a]; nd.Type == ir.F32 && x.Op == OpLoad && x.Type == ir.U32 && k.uses(a) == 1 && k.Bufs[x.Buf].Operand.Kind == OperandTable {
@@ -242,6 +259,10 @@ func (k *Kernel) foldDecided() bool {
 		case OpRem:
 			if k.isConst(b, 1) || k.isConst(a, 0) {
 				k.Nodes[i] = Node{Op: OpConst, Type: nd.Type}
+				changed = true
+			} else if n, ok := k.powerOfTwo(b); ok && nd.Type == ir.U32 {
+				// An unsigned remainder by 2^n is its low n bits.
+				k.Nodes[i] = Node{Op: OpAnd, Type: ir.U32, A: a, B: k.u32(1<<n - 1)}
 				changed = true
 			}
 		case OpLess:

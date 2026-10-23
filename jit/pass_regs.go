@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/jit/ir"
+	"github.com/jitllm/jitllm/jit/x86"
 )
 
 // Regs binds an ordered kernel's values to registers. An argument word
@@ -61,7 +62,14 @@ type Regs struct {
 	// outside every loop takes, each its own, upward; Keep is 1 + the
 	// register of the zero a tail keeps lanes with.
 	Scalars, Keep int
+	// Reloads are the general registers a spilled value is loaded into at
+	// its reads, taken from every pool when a kernel's words do not fit and
+	// the binding spills (spillReg).
+	Reloads [2]int
 }
+
+// spillSlots is the red zone's 8-byte slots below RSP a kernel spills into.
+const spillSlots = 16
 
 func (Regs) Name() string { return "regs" }
 
@@ -81,7 +89,14 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			b := binder86{k: m, p: p, used: map[int]bool{}, late: late}
 			b.lives()
 			if b.gprs() != nil {
-				return nil, false, nil
+				// The words do not fit: again with the reload registers kept
+				// out of every pool, spilling where none is free.
+				m = w.clone()
+				b = binder86{k: m, p: p, used: map[int]bool{}, late: late, spill: true}
+				b.lives()
+				if b.gprs() != nil {
+					return nil, false, nil
+				}
 			}
 			if b.vectors() == nil {
 				return []*Kernel{m}, true, nil
@@ -98,10 +113,20 @@ type binder86 struct {
 	k    *Kernel
 	p    Regs
 	used map[int]bool
-	late map[int]bool
-	def  map[int]int
-	last map[int]int
-	end  map[int]int
+	// spill binds with the reload registers held back, a word that finds no
+	// register taking one from the live value read latest, which spills.
+	spill bool
+	slots int
+	// counters are registers a spilling binding holds back for the loops
+	// past the two the profile's counters count.
+	counters []int
+	// params are the argument words held in a register that a spill may
+	// take: re-read from the argument block at each read instead.
+	params map[int]int
+	late   map[int]bool
+	def    map[int]int
+	last   map[int]int
+	end    map[int]int
 }
 
 func (b *binder86) take(pool []int) int {
@@ -182,6 +207,25 @@ func (b *binder86) lives() {
 // gprs binds argument words, counts, loop counters and cursor copies.
 func (b *binder86) gprs() error {
 	k, p := b.k, b.p
+	if b.spill {
+		// Loops count at once only along one nest: its depth past the two
+		// counters is what to hold back.
+		depth := 0
+		for c := range k.Loops {
+			d := 0
+			for x := c; x >= 0; x = k.Loops[x].Parent {
+				if !k.Loops[x].once() {
+					d++
+				}
+			}
+			depth = max(depth, d)
+		}
+		for range depth - 2 {
+			if r := b.take(p.Spare); r >= 0 {
+				b.counters = append(b.counters, r)
+			}
+		}
+	}
 	readers := map[int][]int{}
 	for c, l := range k.Loops {
 		if l.Count > 0 {
@@ -190,13 +234,90 @@ func (b *binder86) gprs() error {
 	}
 	direct := map[int]bool{}
 	words := k.VectorWords()
-	for _, e := range k.Seq {
-		if e.Kind != EntryNode {
+	// A value made in a general register frees it after its last read; an
+	// argument word, a length, a count and a buffer's address keep theirs,
+	// read through what they address rather than as values.
+	freed, valued := map[int]int{}, map[int]bool{}
+	if b.spill {
+		for _, r := range p.Reloads {
+			b.used[r] = true
+		}
+	}
+	foldOf := map[int]int{}
+	for f, nd := range k.Nodes {
+		if nd.Op == OpFold {
+			foldOf[nd.A] = f
+		}
+	}
+	keeps := func(i int) bool {
+		nd := k.Nodes[i]
+		if nd.Op == OpParam || nd.Op == OpLength || nd.Op == OpSpan || nd.Op == OpFold || k.madeCount(i) >= 0 {
+			return true
+		}
+		if _, ok := readers[i]; ok {
+			return true
+		}
+		for j := range k.Bufs {
+			if k.Bufs[j].Base == i+1 {
+				return true
+			}
+		}
+		return false
+	}
+	// A loop whose iteration a value reads holds it in a register of its own
+	// from the loop's start to its end.
+	iterReg := map[int]int{}
+	for pos, e := range k.Seq {
+		switch e.Kind {
+		case EntryLoop:
+			if it := k.iterOf(e.I); it >= 0 && k.Nodes[it].Reg == 0 && b.uses(it) > 0 {
+				r := b.take(p.Spare)
+				if r < 0 {
+					r = b.take(p.Kept)
+				}
+				if r < 0 && b.spill {
+					r = b.evictAt(freed, pos)
+				}
+				if r < 0 && b.spill {
+					r = b.rereadParam()
+				}
+				if r < 0 && b.spill && b.slots < spillSlots {
+					// The iteration in a slot: zeroed on entry, counted
+					// there, loaded where it is read.
+					b.slots++
+					k.Nodes[it].Spill = b.slots
+					continue
+				}
+				if r < 0 {
+					return errors.New("no register for a loop's iteration")
+				}
+				k.Nodes[it].Reg = r + 1
+				iterReg[e.I] = r
+				valued[r] = true
+			}
+			continue
+		case EntryEnd:
+			if r, ok := iterReg[e.I]; ok {
+				b.used[r] = false
+			}
+			continue
+		case EntryStore:
 			continue
 		}
 		i := e.I
 		nd := k.Nodes[i]
-		if nd.Op != OpParam && (nd.Type == ir.F32 || nd.Op == OpConst || nd.Op == OpLoad || words[i]) {
+		if nd.Op != OpParam && (nd.Type == ir.F32 || nd.Op == OpConst || nd.Op == OpLoad && k.needsVector(i) || words[i]) {
+			continue
+		}
+		for v, r := range freed {
+			if b.last[v] < b.def[i] {
+				b.used[r] = false
+				delete(freed, v)
+			}
+		}
+		if f, ok := foldOf[i]; ok && k.Nodes[f].Reg > 0 && k.Nodes[f].Type != ir.F32 {
+			// A sum's step writes the sum's register.
+			k.Nodes[i].Reg = k.Nodes[f].Reg
 			continue
 		}
 		r := -1
@@ -231,6 +352,13 @@ func (b *binder86) gprs() error {
 				k.Loops[c].Reg = r + 1
 				direct[c] = true
 			}
+		case b.reloads(i):
+			for j := range k.Bufs {
+				if k.Bufs[j].Base == i+1 {
+					k.Bufs[j].Reload = true
+				}
+			}
+			continue
 		case nd.Op == OpParam && k.isBaseNode(i) && !b.late[i]:
 			r = b.take(p.Fields[int(nd.Imm)])
 		case b.late[i]:
@@ -238,24 +366,63 @@ func (b *binder86) gprs() error {
 		case nd.Op == OpParam:
 			r = b.take(p.Kept)
 		default:
-			if x := nd.A; b.last[x] == b.def[i] && k.Nodes[x].Reg > 0 && k.Nodes[x].Type != ir.F32 {
-				r = k.Nodes[x].Reg - 1
-			} else {
+			// A value takes the register of an operand read last here: the
+			// lowering reads both before it writes, whichever it takes.
+			dies := func(x int) bool {
+				return b.last[x] == b.def[i] && k.Nodes[x].Reg > 0 && k.Nodes[x].Spill == 0 && k.Nodes[x].Type != ir.F32 && !keeps(x) && k.Nodes[x].Op != OpIter
+			}
+			switch {
+			case dies(nd.A):
+				r = k.Nodes[nd.A].Reg - 1
+				delete(freed, nd.A)
+			case b.spill && binaryInt(nd.Op) && dies(nd.B):
+				r = k.Nodes[nd.B].Reg - 1
+				delete(freed, nd.B)
+			default:
 				r = b.take(p.Kept)
 			}
 		}
 		if r < 0 {
 			r = b.take(p.Spare)
 		}
+		if r < 0 && b.spill {
+			r = b.evict(freed, i)
+		}
+		if r < 0 && b.spill {
+			r = b.rereadParam()
+		}
+		if r < 0 && b.spill && b.slots < spillSlots && nd.Op != OpParam {
+			// Made in the reloaded addresses' register and stored to a slot
+			// at once: its reads load it from there.
+			b.slots++
+			k.Nodes[i].Reg, k.Nodes[i].Spill = int(reloadReg)+1, b.slots
+			continue
+		}
 		if r < 0 {
 			return errors.New("more words live at once than registers")
 		}
 		k.Nodes[i].Reg = r + 1
+		valued[r] = true
+		if b.spill && nd.Op == OpParam && !k.isBaseNode(i) && !b.countsIn(r) {
+			if b.params == nil {
+				b.params = map[int]int{}
+			}
+			b.params[i] = r
+		}
+		if !keeps(i) {
+			freed[i] = r
+		}
 		for j := range k.Bufs {
 			if k.Bufs[j].Base == i+1 {
 				k.Bufs[j].Reg = r + 1
 			}
 		}
+	}
+	// The counters and copies bound below are bound after the values, so a
+	// register a value or an iteration held at any point stays taken: freed
+	// in the walk, it was free only between that value's reads.
+	for r := range valued {
+		b.used[r] = true
 	}
 	for c := range k.Loops {
 		l := &k.Loops[c]
@@ -284,13 +451,18 @@ func (b *binder86) gprs() error {
 		switch e.Kind {
 		case EntryLoop:
 			for _, cu := range k.Loops[e.I].Cursors {
-				if cu.Take && k.Ptrs[cu.Ptr-1].Reg == 0 {
+				if cu.Take && k.Ptrs[cu.Ptr-1].Reg == 0 && k.Ptrs[cu.Ptr-1].Spill == 0 {
 					r := -1
 					if passes {
 						r = b.take(p.Walks)
 					}
 					if r < 0 {
 						r = b.take(p.Spare)
+					}
+					if r < 0 && b.spill && b.slots < spillSlots {
+						b.slots++
+						k.Ptrs[cu.Ptr-1].Spill = b.slots
+						continue
 					}
 					if r < 0 {
 						return errors.New("no register for a copy of an address")
@@ -337,8 +509,16 @@ func (b *binder86) gprs() error {
 				continue
 			}
 		}
-		for _, r := range []int{p.Counters[0], p.Counters[1]} {
-			if !held[r] && (!b.used[r] || b.counterFree(r, c)) {
+		// The counters first, then any register no value holds while the
+		// loop runs: a third nested loop counts in one of those.
+		for i, r := range slices.Concat([]int{p.Counters[0], p.Counters[1]}, b.counters, p.Spare, p.Kept) {
+			free := !b.used[r] || b.counterFree(r, c)
+			if i >= 2 && i < 2+len(b.counters) {
+				free = b.counterFree(r, c)
+			} else if i >= 2 {
+				free = !b.used[r] && b.counterFree(r, c)
+			}
+			if !held[r] && free {
 				l.Reg = r + 1
 				b.used[r] = true
 				break
@@ -381,6 +561,107 @@ func (b *binder86) uses(i int) int {
 	return n
 }
 
+// evict spills the held value read latest past node i and returns its
+// register, -1 where nothing can spill: the value is stored where it is made
+// and loaded at every read, so its register is free from here on.
+func (b *binder86) evict(freed map[int]int, i int) int {
+	return b.evictAt(freed, b.def[i])
+}
+
+// evictAt is evict at sequence position pos.
+func (b *binder86) evictAt(freed map[int]int, pos int) int {
+	if b.slots >= spillSlots {
+		return -1
+	}
+	v, last := -1, -1
+	for x := range freed {
+		if l := b.last[x]; l > pos && l > last {
+			v, last = x, l
+		}
+	}
+	if v < 0 {
+		return -1
+	}
+	b.slots++
+	b.k.Nodes[v].Spill = b.slots
+	r := freed[v]
+	delete(freed, v)
+	return r
+}
+
+// rereadParam takes the register of an argument word held in one, which is
+// read from the argument block at each read from here on (Node.Spill -1),
+// and returns it; -1 where none is held.
+func (b *binder86) rereadParam() int {
+	v := -1
+	for x := range b.params {
+		if v < 0 || x < v {
+			v = x
+		}
+	}
+	if v < 0 {
+		return -1
+	}
+	r := b.params[v]
+	delete(b.params, v)
+	b.k.Nodes[v].Spill = -1
+	return r
+}
+
+// binaryInt reports whether the CPU lowering's general-register form of op
+// writes its result after reading both operands, whatever the result's
+// register: a result in the second operand's register is the same answer.
+func binaryInt(op Op) bool {
+	switch op {
+	case OpAdd, OpSub, OpMul, OpAnd, OpOr, OpXor, OpShl, OpShr, OpMin, OpMax:
+		return true
+	}
+	return false
+}
+
+// countsIn reports whether a loop counts in register r.
+func (b *binder86) countsIn(r int) bool {
+	for _, l := range b.k.Loops {
+		if l.Reg == r+1 {
+			return true
+		}
+	}
+	return false
+}
+
+// reloadReg is the register a kernel with no vector loop reloads a buffer's
+// address into at each access, for a buffer no loop walks: such an address
+// holds no register for the kernel's life.
+const reloadReg = x86.R15
+
+// reloads reports whether buffer address i is reloaded at each access rather
+// than held: a kernel with no vector loop, a buffer no loop's cursor walks and
+// no pointer copies, and an address read as nothing but an address.
+func (b *binder86) reloads(i int) bool {
+	k := b.k
+	if !k.isBaseNode(i) || b.uses(i) > 0 {
+		return false
+	}
+	for j, bf := range k.Bufs {
+		if bf.Base != i+1 {
+			continue
+		}
+		for _, l := range k.Loops {
+			for _, cu := range l.Cursors {
+				if cu.Buf == j {
+					return false
+				}
+			}
+		}
+		for _, p := range k.Ptrs {
+			if p.Buf == j {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (k *Kernel) isBaseNode(i int) bool {
 	for _, b := range k.Bufs {
 		if b.Base == i+1 {
@@ -407,10 +688,27 @@ func (k *Kernel) needsVector(i int) bool {
 	if nd.Mem {
 		return false
 	}
-	if nd.Type == ir.F32 || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandWeight {
+	if nd.Type == ir.F32 || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandWeight && k.vectorized() {
 		return nd.Op != OpConst || nd.Imm == 0 && k.zeroOperand(i)
 	}
 	return k.VectorWords()[i]
+}
+
+// vectorized reports whether any loop of k runs in vector lanes. A kernel
+// none of whose loops does keeps its integers in general registers: an
+// index, a weight's word and what is made from them.
+func (k *Kernel) vectorized() bool {
+	for _, l := range k.Loops {
+		if l.Lanes > 0 || l.Wide > 0 {
+			return true
+		}
+	}
+	for _, nd := range k.Nodes {
+		if nd.Op == OpLanes {
+			return true
+		}
+	}
+	return false
 }
 
 // VectorWords is the words held in vector registers: the halves a float is
@@ -423,11 +721,12 @@ func (k *Kernel) VectorWords() map[int]bool {
 		nd := k.Nodes[i]
 		return nd.Type != ir.F32 && nd.Op != OpParam && nd.Op != OpIter && nd.Op != OpLength && nd.Op != OpSpan && nd.Op != OpCoord
 	}
+	vec := k.vectorized()
 	for i, nd := range k.Nodes {
 		switch {
 		case nd.Op == OpLanes || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandConsts && nd.Type != ir.F32:
 			out[i] = true
-		case nd.Op == OpCvtF32 || nd.Op == OpBitcast && nd.Type == ir.F32:
+		case vec && (nd.Op == OpCvtF32 || nd.Op == OpBitcast && nd.Type == ir.F32):
 			if data(nd.A) && k.Nodes[nd.A].Op != OpConst {
 				out[nd.A] = true
 			}
@@ -622,14 +921,36 @@ func (b *binder86) vectors() error {
 			splats = append(splats, e.I)
 		}
 	}
+	if len(splats) > b.p.Vectors {
+		return fmt.Errorf("%d constants to splat and %d vector registers", len(splats), b.p.Vectors)
+	}
+	// The splats are made before every loop, so their scratch is no
+	// loop's counter and no parameter's register, which hold across them.
+	across := map[int]bool{}
+	for _, l := range k.Loops {
+		if l.Reg > 0 {
+			across[l.Reg-1] = true
+		}
+	}
+	for _, nd := range k.Nodes {
+		if nd.Op == OpParam && nd.Reg > 0 {
+			across[nd.Reg-1] = true
+		}
+	}
 	scratch := b.p.Scratch
-	if b.used[scratch] {
-		for _, r := range b.p.Spare {
-			if !b.used[r] {
+	if b.used[scratch] || across[scratch] {
+		scratch = -1
+		for _, r := range slices.Concat(b.p.Spare, b.p.Kept) {
+			if !b.used[r] && !across[r] {
 				scratch = r
 				break
 			}
 		}
+	}
+	if scratch < 0 {
+		// The reloaded addresses' register: it holds one only inside a
+		// loop, and the splats are made before them.
+		scratch = int(reloadReg)
 	}
 	for j, i := range splats {
 		r := b.p.Vectors - len(splats) + j

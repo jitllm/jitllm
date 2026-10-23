@@ -24,9 +24,14 @@ func (l cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 		if e.err != nil {
 			break
 		}
+		e.cur = -1
 		switch en.Kind {
 		case EntryNode:
+			e.cur = en.I
 			e.node(en.I)
+			if s := k.Nodes[en.I].Spill; s > 0 && k.Nodes[en.I].Reg > 0 {
+				e.a.MOVStore(spillSlot(s), x86.Reg(k.Nodes[en.I].Reg-1))
+			}
 		case EntryStore:
 			e.store(en.I)
 		case EntryLoop:
@@ -57,7 +62,17 @@ type x86Lowerer struct {
 	preset   map[int]bool
 	err      error
 	shuffles bool
+	// cur is the node being made, -1 between nodes; reloads counts the
+	// spilled reads, which take the reload registers in turn.
+	cur, reloads int
 }
+
+// spillSlot is red-zone slot s, 1-based, below RSP.
+func spillSlot(s int) x86.Mem { return x86.At(x86.RSP, int32(-8*s)) }
+
+// spillRegs are the registers a spilled value is loaded into at a read
+// (Regs.Reloads in the CPU profile).
+var spillRegs = [2]x86.Reg{x86.R13, x86.RBX}
 
 func (e *x86Lowerer) fail(format string, args ...any) {
 	if e.err == nil {
@@ -66,6 +81,18 @@ func (e *x86Lowerer) fail(format string, args ...any) {
 }
 
 func (e *x86Lowerer) reg(i int) x86.Reg {
+	if nd := e.k.Nodes[i]; nd.Spill < 0 {
+		r := spillRegs[e.reloads%2]
+		e.reloads++
+		e.a.MOVLoad(r, x86.At(x86.RDI, int32(nd.Imm)))
+		return r
+	}
+	if s := e.k.Nodes[i].Spill; s > 0 && i != e.cur {
+		r := spillRegs[e.reloads%2]
+		e.reloads++
+		e.a.MOVLoad(r, spillSlot(s))
+		return r
+	}
 	r := e.k.Nodes[i].Reg
 	if r == 0 {
 		e.fail("node %d (%s) has no register", i, e.k.Nodes[i].Op)
@@ -79,7 +106,17 @@ func (e *x86Lowerer) addr(b, ix, ptr int) x86.Mem {
 	k := e.k
 	nd := k.Nodes[ix]
 	if nd.Op != OpConst {
-		e.fail("an access of %s at a computed index", k.Bufs[b].Operand.Name)
+		// A computed index: the buffer's address plus the index's register
+		// times an element.
+		switch {
+		case k.Bufs[b].Word > 0:
+			e.fail("an argument word of %s at a computed index", k.Bufs[b].Operand.Name)
+		case e.words[ix] || nd.Type == ir.F32:
+			// The binder holds this index in a vector register: an address
+			// needs it in a general one.
+			e.fail("an index of %s held in a vector register", k.Bufs[b].Operand.Name)
+		}
+		return x86.Idx(e.ptrReg(b, ptr), e.reg(ix), uint8(ElemBytes(k.Bufs[b])), 0)
 	}
 
 	if w := k.Bufs[b].Word; w > 0 {
@@ -93,11 +130,30 @@ func (e *x86Lowerer) ptrReg(b, ptr int) x86.Reg {
 	r := e.k.Bufs[b].Reg
 	if ptr > 0 {
 		r = e.k.Ptrs[ptr-1].Reg
+		if s := e.k.Ptrs[ptr-1].Spill; r == 0 && s > 0 {
+			e.a.MOVLoad(reloadReg, spillSlot(s))
+			return reloadReg
+		}
+	}
+	if r == 0 && ptr == 0 && e.k.Bufs[b].Reload && e.k.Bufs[b].Base > 0 {
+		e.a.MOVLoad(reloadReg, x86.At(x86.RDI, int32(e.k.Nodes[e.k.Bufs[b].Base-1].Imm)))
+		return reloadReg
 	}
 	if r == 0 {
 		e.fail("%s has no register", e.k.Bufs[b].Operand.Name)
 	}
 	return x86.Reg(max(r-1, 0))
+}
+
+// reloaded reports whether param i is a buffer address the code reloads at
+// each access.
+func (e *x86Lowerer) reloaded(i int) bool {
+	for _, bf := range e.k.Bufs {
+		if bf.Base == i+1 && bf.Reload {
+			return true
+		}
+	}
+	return false
 }
 
 // ElemBytes is the bytes of one of buffer b's elements.
@@ -143,6 +199,9 @@ func (e *x86Lowerer) node(i int) {
 	nd := k.Nodes[i]
 	switch nd.Op {
 	case OpParam:
+		if nd.Reg == 0 && e.reloaded(i) || nd.Spill < 0 {
+			return
+		}
 		a.MOVLoad(e.reg(i), x86.At(x86.RDI, int32(nd.Imm)))
 	case OpFold:
 		init := k.Nodes[nd.B]
@@ -151,6 +210,9 @@ func (e *x86Lowerer) node(i int) {
 			if nd.Reg != init.Reg {
 				e.fail("a sum carried on out of its register")
 			}
+		case init.Op == OpConst && init.Imm == 0 && e.gpr(i):
+			r := e.reg(i)
+			a.XORQ(r, r)
 		case init.Op == OpConst && init.Imm == 0:
 			r := e.reg(i)
 			a.VPXOR(r, r, r)
@@ -169,6 +231,10 @@ func (e *x86Lowerer) node(i int) {
 		}
 		home := e.home[i]
 		m := e.addr(nd.Buf, nd.A, nd.Ptr)
+		if e.gpr(i) && !k.Bufs[nd.Buf].Half {
+			a.MOVLLoad(e.reg(i), m)
+			return
+		}
 		if k.Bufs[nd.Buf].Half {
 			if e.lanes(home) == 0 {
 				a.VPINSRWLoad(e.reg(i), e.reg(i), m, 0)
@@ -189,8 +255,26 @@ func (e *x86Lowerer) node(i int) {
 			a.VMOVSSLoad(e.reg(i), m)
 		}
 	case OpBitcast:
-		if e.reg(i) != e.reg(nd.A) {
+		switch {
+		case e.gpr(nd.A) && !e.gpr(i):
+			a.MOVDToX(e.reg(i), e.reg(nd.A))
+		case e.gpr(nd.A) && e.reg(i) != e.reg(nd.A):
+			a.MOVQ(e.reg(i), e.reg(nd.A))
+		case e.reg(i) != e.reg(nd.A):
 			e.fail("a bitcast into another register")
+		}
+	case OpWidenHalf:
+		switch {
+		case e.gpr(nd.A):
+			a.MOVDToX(e.reg(i), e.reg(nd.A))
+			a.VCVTPH2PSReg(e.reg(i), e.reg(i))
+		case e.lanes(e.home[i]) == 0:
+			// A word's low half in a vector register's first lane: the
+			// conversion's first half.
+			a.VCVTPH2PSReg(e.reg(i), e.reg(nd.A))
+		default:
+			// Each lane's low half: the conversion reads halves side by side.
+			e.fail("node %d: halves widened lane by lane", i)
 		}
 	case OpConst:
 		if nd.Type == ir.F32 && nd.Imm == 0 && nd.Reg > 0 {
@@ -237,6 +321,10 @@ func (e *x86Lowerer) node(i int) {
 		}
 		a.VPANDN(e.reg(i), e.reg(nd.B), e.reg(nd.A))
 	case OpOr:
+		if e.gpr(i) {
+			e.integer(i)
+			return
+		}
 		a.VPOR(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 	case OpDupEven:
 		a.VMOVSLDUP(e.reg(i), e.reg(nd.A))
@@ -251,6 +339,10 @@ func (e *x86Lowerer) node(i int) {
 	case OpAddSub:
 		a.VADDSUBPS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 	case OpSar:
+		if k.Nodes[nd.B].Op != OpConst {
+			a.VPSRAVD(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+			return
+		}
 		a.VPSRAD(e.reg(i), e.reg(nd.A), byte(k.Nodes[nd.B].Imm))
 	case OpEq:
 		a.VCMPPS(e.reg(i), e.reg(nd.A), e.reg(nd.B), 0)
@@ -298,11 +390,21 @@ func (e *x86Lowerer) node(i int) {
 			a.VPADDD(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 			return
 		}
+		// A shift by a computed count shifts each lane by its own; only a
+		// constant count is an immediate.
 		if e.words[i] && nd.Op == OpShl {
+			if k.Nodes[nd.B].Op != OpConst {
+				a.VPSLLVD(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+				return
+			}
 			a.VPSLLD(e.reg(i), e.reg(nd.A), byte(k.Nodes[nd.B].Imm))
 			return
 		}
 		if e.words[i] && nd.Op == OpShr {
+			if k.Nodes[nd.B].Op != OpConst {
+				a.VPSRLVD(e.reg(i), e.reg(nd.A), e.reg(nd.B))
+				return
+			}
 			a.VPSRLD(e.reg(i), e.reg(nd.A), byte(k.Nodes[nd.B].Imm))
 			return
 		}
@@ -329,6 +431,10 @@ func (e *x86Lowerer) node(i int) {
 			a.VADDPS(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 		}
 	case OpSub, OpDiv, OpMin, OpMax:
+		if e.gpr(i) {
+			e.integer(i)
+			return
+		}
 		x, y := e.reg(nd.A), e.reg(nd.B)
 		if nd.Type == ir.I32 && nd.Op == OpMin {
 			a.VPMINSD(e.reg(i), x, y)
@@ -377,8 +483,21 @@ func (e *x86Lowerer) node(i int) {
 	case OpCvtI32:
 		a.VCVTTPS2DQ(e.reg(i), e.reg(nd.A))
 	case OpXor:
+		if e.gpr(i) {
+			e.integer(i)
+			return
+		}
 		a.VPXOR(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 	case OpCvtF32:
+		if src := e.reg(nd.A); e.gpr(nd.A) {
+			// A word converted from a general register: an i32 is its low
+			// half sign-extended, a u32 is the register as it is.
+			if k.Nodes[nd.A].Type == ir.I32 {
+				a.MOVSXD(src, src)
+			}
+			a.CVTSI2SS(e.reg(i), e.reg(i), src)
+			return
+		}
 		a.VCVTDQ2PS(e.reg(i), e.reg(nd.A))
 	case OpFma:
 		if c := k.Nodes[nd.C]; c.Op != OpLoad || !c.Mem {
@@ -422,29 +541,146 @@ func (e *x86Lowerer) node(i int) {
 	}
 }
 
-// integer is an integer node on a word register: the operand moved in
-// where the result has a register of its own, the operation on it.
+// keepIf jumps to skip where the compare just made leaves dst as it is: a
+// minimum keeps a value at or below the other, a maximum one at or above,
+// unsigned for u32 and signed for i32.
+func (e *x86Lowerer) keepIf(nd Node, skip int) {
+	signed := nd.Type == ir.I32
+	switch {
+	case nd.Op == OpMin && signed:
+		e.a.JLE(skip)
+	case nd.Op == OpMin:
+		e.a.JBE(skip)
+	case signed:
+		e.a.JGE(skip)
+	default:
+		e.a.JAE(skip)
+	}
+}
+
+// gpr reports whether node i is held in a general register: an integer a
+// vector register does not hold.
+func (e *x86Lowerer) gpr(i int) bool {
+	nd := e.k.Nodes[i]
+	return nd.Type != ir.F32 && nd.Type != ir.Pred && !nd.Mem && !e.words[i] && !e.k.needsVector(i)
+}
+
+// integer is an integer node in general registers: by a constant through
+// its immediate form, else register to register, a shift by a register
+// through SHRX or SHLX. A 32-bit result that can reach past 32 bits is cut
+// back to them, so a later shift reads no bit above.
 func (e *x86Lowerer) integer(i int) {
 	k, a := e.k, e.a
 	nd := k.Nodes[i]
-	b := k.Nodes[nd.B]
-	if b.Op != OpConst {
-		e.fail("node %d: %s of a computed word", i, nd.Op)
-		return
-	}
 	dst := e.reg(i)
-	if src := e.reg(nd.A); src != dst {
-		a.MOVQ(dst, src)
+	A, B := nd.A, nd.B
+	commutes := nd.Op == OpAdd || nd.Op == OpMul || nd.Op == OpAnd || nd.Op == OpOr || nd.Op == OpXor
+	if commutes && k.Nodes[A].Op == OpConst && k.Nodes[B].Op != OpConst {
+		A, B = B, A
+	}
+	if c := k.Nodes[B]; c.Op == OpConst {
+		src, imm := e.reg(A), int32(c.Imm)
+		if nd.Op == OpMul {
+			a.IMULimm(dst, src, imm)
+		} else {
+			if src != dst {
+				a.MOVQ(dst, src)
+			}
+			switch nd.Op {
+			case OpShr:
+				a.SHRimm(dst, byte(c.Imm))
+			case OpShl:
+				a.SHLimm(dst, byte(c.Imm))
+			case OpAnd:
+				a.ANDimm32(dst, imm)
+			case OpAdd:
+				a.ADDimm(dst, imm)
+			case OpSub:
+				a.ADDimm(dst, -imm)
+			case OpXor:
+				a.XORimm32(dst, imm)
+			case OpOr:
+				a.ORimm32(dst, imm)
+			case OpMin, OpMax:
+				// dst is a; where a is past the constant, the constant.
+				skip := a.Label()
+				a.CMPLimm(dst, imm)
+				e.keepIf(nd, skip)
+				a.MOVLimm(dst, uint32(imm))
+				a.Bind(skip)
+			default:
+				e.fail("node %d: no general-register form of %s by a constant", i, nd.Op)
+				return
+			}
+		}
+	} else {
+		var x x86.Reg
+		if c := k.Nodes[A]; c.Op == OpConst {
+			// A constant first operand of an operation that has no form
+			// taking it as an immediate: made in the reload register, free
+			// between one access's address and the next.
+			x = reloadReg
+			a.MOVLimm(x, uint32(c.Imm))
+		} else {
+			x = e.reg(A)
+		}
+		y := e.reg(B)
+		switch nd.Op {
+		case OpShr:
+			a.SHRX(dst, x, y)
+		case OpShl:
+			a.SHLX(dst, x, y)
+		case OpSub:
+			if dst == y {
+				a.NEGQ(dst)
+				a.ADDQ(dst, x)
+			} else {
+				if dst != x {
+					a.MOVQ(dst, x)
+				}
+				a.SUBQ(dst, y)
+			}
+		case OpMin, OpMax:
+			if dst == y {
+				x, y = y, x
+			}
+			if dst != x {
+				a.MOVQ(dst, x)
+			}
+			skip := a.Label()
+			a.CMPL(dst, y)
+			e.keepIf(nd, skip)
+			a.MOVQ(dst, y)
+			a.Bind(skip)
+		case OpAdd, OpMul, OpAnd, OpOr, OpXor:
+			if dst == y {
+				x, y = y, x
+			}
+			if dst != x {
+				a.MOVQ(dst, x)
+			}
+			switch nd.Op {
+			case OpAdd:
+				a.ADDQ(dst, y)
+			case OpMul:
+				a.IMUL(dst, y)
+			case OpAnd:
+				a.ANDQ(dst, y)
+			case OpOr:
+				a.ORQ(dst, y)
+			case OpXor:
+				a.XORQ(dst, y)
+			}
+		default:
+			e.fail("node %d: no general-register form of %s", i, nd.Op)
+			return
+		}
 	}
 	switch nd.Op {
-	case OpShr:
-		a.SHRimm(dst, byte(b.Imm))
-	case OpShl:
-		a.SHLimm(dst, byte(b.Imm))
-	case OpAnd:
-		a.ANDimm8(dst, int8(b.Imm))
-	default:
-		e.fail("node %d: no word form of %s", i, nd.Op)
+	case OpAdd, OpSub, OpMul, OpShl, OpXor, OpOr, OpMin, OpMax:
+		// An immediate sign-extends: xor or or by one with its top bit set
+		// sets the high half too.
+		a.MOVL(dst, dst)
 	}
 }
 
@@ -485,8 +721,16 @@ func (e *x86Lowerer) counter(c int) x86.Reg {
 func (e *x86Lowerer) enter(c int) {
 	k, a := e.k, e.a
 	l := k.Loops[c]
+	if it := k.iterOf(c); it >= 0 && k.Nodes[it].Reg > 0 {
+		r := e.reg(it)
+		a.XORQ(r, r)
+	} else if it >= 0 && k.Nodes[it].Spill > 0 {
+		a.MOVMemImm(spillSlot(k.Nodes[it].Spill), 0)
+	}
 	for _, cu := range l.Cursors {
-		if cu.Take {
+		if cu.Take && cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0 {
+			a.MOVStore(spillSlot(k.Ptrs[cu.Ptr-1].Spill), e.ptrReg(cu.Buf, 0))
+		} else if cu.Take {
 			a.MOVQ(e.ptrReg(cu.Buf, cu.Ptr), e.ptrReg(cu.Buf, 0))
 		}
 	}
@@ -525,9 +769,22 @@ func (e *x86Lowerer) leave(c int) {
 	k, a := e.k, e.a
 	l := k.Loops[c]
 	for _, cu := range l.Cursors {
-		if cu.Elems != 0 {
-			a.ADDimm(e.ptrReg(cu.Buf, cu.Ptr), int32(cu.Elems*ElemBytes(k.Bufs[cu.Buf])))
+		step := int32(cu.Elems * ElemBytes(k.Bufs[cu.Buf]))
+		switch {
+		case cu.Elems == 0:
+		case cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Spill > 0:
+			a.ADDMemImm32(spillSlot(k.Ptrs[cu.Ptr-1].Spill), step)
+		default:
+			a.ADDimm(e.ptrReg(cu.Buf, cu.Ptr), step)
 		}
+	}
+	// An iteration counts the loop's iterations, Lanes of them a vector
+	// and Copies vectors a trip.
+	step := int32(max(1, l.Lanes) * max(1, l.Copies))
+	if it := k.iterOf(c); it >= 0 && k.Nodes[it].Reg > 0 {
+		a.ADDimm(e.reg(it), step)
+	} else if it >= 0 && k.Nodes[it].Spill > 0 {
+		a.ADDMemImm32(spillSlot(k.Nodes[it].Spill), step)
 	}
 	if l.once() {
 		return

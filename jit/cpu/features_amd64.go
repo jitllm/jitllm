@@ -32,6 +32,8 @@ type Features struct {
 	AVX2 bool
 	FMA  bool
 	F16C bool
+	// BMI2 carries SHRX/SHLX, shifts by a register that is not CL.
+	BMI2 bool
 
 	// AVXVNNI is the VEX-encoded VPDPBUSD every quantized kernel emits:
 	// one instruction for a four-byte int8 dot product. Alder Lake and Zen 4
@@ -165,6 +167,7 @@ func probeFeatures() {
 		_, ebx7, ecx7, _, ok := cpuid(7, 0)
 		if ok {
 			features.AVX2 = ebx7&(1<<5) != 0
+			features.BMI2 = ebx7&(1<<8) != 0
 			features.AVX512F = ebx7&(1<<16) != 0
 			features.AVX512DQ = ebx7&(1<<17) != 0
 			features.AVX512BW = ebx7&(1<<30) != 0
@@ -196,7 +199,7 @@ func applyForcedTier(f *Features, t Tier) {
 		return
 	}
 	// Below the AVX2 tier: no VEX-encoded unit of any kind is usable.
-	f.AVX2, f.FMA, f.F16C = false, false, false
+	f.AVX2, f.FMA, f.F16C, f.BMI2 = false, false, false, false
 	f.AVXVNNI, f.AVX512VNNI = false, false
 	f.AVX512F, f.AVX512BW, f.AVX512DQ, f.AVX512VL = false, false, false, false
 	f.OSAVX, f.OSAVX512 = false, false

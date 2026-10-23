@@ -145,6 +145,8 @@ type Cursor struct {
 // register Reg (1 + the register, where a binding set it).
 type Ptr struct {
 	Buf, Reg int
+	// Spill, where set, is 1 + the red-zone slot the copy lives in.
+	Spill int
 }
 
 type BufKind uint8
@@ -177,6 +179,9 @@ type Buf struct {
 	// Reg, where a register binding set it, is 1 + the register holding the
 	// address.
 	Reg int
+	// Reload, where a register binding set it, says the buffer's address is
+	// loaded from its argument word at each access rather than held.
+	Reload bool
 	// Words is a block of constants' contents, the caller's to supply.
 	Words []uint32
 	// Dims, where a run-time length set them, are 1 + the node of each
@@ -318,6 +323,10 @@ type Node struct {
 	// reads from (see Cursor). Tmp is 1 + a register the value's code
 	// needs besides its own.
 	Reg, Ptr, Tmp int
+	// Spill, where the CPU's register binding set it, is 1 + the red-zone
+	// slot a value lives in: stored where it is made, loaded at every read;
+	// -1 for an argument word read from the argument block at every read.
+	Spill int
 	// Mem is a load its one reader takes as a memory operand.
 	Mem bool
 	// Copy, where a pairing set it, is the head of the pair a copied value
