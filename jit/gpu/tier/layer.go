@@ -8263,6 +8263,16 @@ func (g *devTier) layersSession(s backend.Session) {
 							mvrun(l.mvv, l.wv, bs.v)
 						}
 					}
+					if g.shadow != nil {
+						here := ""
+						switch {
+						case shared:
+							here = "k and v are another block's"
+						case bs.splitQG != nil:
+							here = "a gated query"
+						}
+						g.shadow.attnIn(g, lc, s, l, li, p, ain, bs.q, bs.k, bs.v, qdim, kvDim, shadowWhy(R, rag != nil, persist, len(g.kb.skip) > 0, here))
+					}
 					// The per-head norm goes between the projection and RoPE, and only
 					// there: a rotation preserves each pair's norm but not the per-head
 					// scaling, so norming afterwards is a different function.
@@ -8749,7 +8759,11 @@ func (g *devTier) layersSession(s backend.Session) {
 						aSrc = bs.ogated
 					}
 					if g.shadow != nil {
-						g.shadow.capture(g, s, l, li, p, bs.x, aSrc, qdim, shadowWhy(R, rag != nil, persist, len(g.kb.skip) > 0, bs.sigMul != nil))
+						here := ""
+						if bs.sigMul != nil {
+							here = "an output gate"
+						}
+						g.shadow.capture(g, s, l, li, p, bs.x, aSrc, qdim, shadowWhy(R, rag != nil, persist, len(g.kb.skip) > 0, here))
 					}
 					// The attention output projection quantizing its own
 					// operand (fuseActIn), with the residual add it already
@@ -9569,7 +9583,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 			}
 			if g.shadow != nil {
-				g.shadow.compare(g, lc, s, l, li, p, p.NHead*p.HeadDim, bs.x)
+				g.shadow.postAttention(g, lc, s, l, li, p, p.NHead*p.HeadDim, bs.x)
 			}
 			// BERT's output norm, over x + mlp, out of place and back.
 			if l.nResid != nil && !skip["norm"] {
