@@ -1542,7 +1542,7 @@ func (s *State) placeHead() {
 // newHead is the output projection as a device takes it.
 func (s *State) newHead() *nn.Head {
 	c := s.c
-	h := &nn.Head{Model: s.m.id, Norm: s.outNorm, W: wt(*s.outW), Logits: s.logits,
+	h := &nn.Head{Model: s.m.id, Graph: s.m.frontGraphs().head, Norm: s.outNorm, W: wt(*s.outW), Logits: s.logits,
 		Softcap: c.FinalSoftcap, Embeds: c.TiedEmbd, EmbdScale: float32(c.EmbdScale)}
 	// The final softcap rides the head: a tier that takes it applies the cap on
 	// the device (nn.Head.Softcap), which is what lets a gemma2 token end in
@@ -2066,6 +2066,13 @@ func (s *State) planFor(li int) *nn.LayerPlan {
 	// from its global ones), its v (no projection of its own) and its output
 	// scalar.
 	plan.HeadDim, plan.NKVHead, plan.NRot = c.HeadDimAt(li), c.NKVHeadAt(li), c.NRotAt(li)
+	// The block as ops, from the container: what a device serving it whole
+	// forms (front.go). nil where the front end states none -- a prediction
+	// block past the layers among them.
+	plan.Graph = nil
+	if b := s.m.frontGraphs().blocks; li < len(b) {
+		plan.Graph = b[li]
+	}
 	plan.Sliding = c.GeomSplit() && c.SWA(li)
 	plan.BidirOff = c.BidirSWA && !c.SWA(li)
 	plan.VFromK, plan.OutScale = l.vFromK, l.outScale

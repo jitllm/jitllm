@@ -496,7 +496,14 @@ func (e *lowerer) lowerLoop(c int) {
 		steps[j] = e.get(n.Nodes[f].A)
 	}
 	for _, st := range n.Stores {
-		if st.At == c && !st.Run && !st.Barrier {
+		switch {
+		case st.At != c || st.Run:
+		case st.Barrier:
+			// Only where every thread of the workgroup takes the trip.
+			if l.Uniform {
+				b.Barrier()
+			}
+		default:
 			ix, v := e.storeIndex(st), e.get(st.Val)
 			b.Store(e.params[st.Buf], ix, v, 0)
 		}

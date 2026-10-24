@@ -167,6 +167,29 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 					t.Run("step-solo", func(t *testing.T) { stepAllocs(t, m, g, stepSolo) })
 					checkLinearRowsForm(t, m, g)
 				})
+				// Every block served whole by the composer, and the head
+				// (Config.Composed), on a tier of its own: its warm token
+				// allocates nothing either. Without the captured graph too,
+				// where every token runs the served code (a replayed
+				// recording runs none of it).
+				if name == "Llama-3.2-1B-Instruct-Q4_K_M.gguf" {
+					for _, noGraph := range []bool{false, true} {
+						t.Run(fmt.Sprintf("%s/composed blocks and head/no graph %v", spec, noGraph), func(t *testing.T) {
+							gc, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
+								tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph = tier.ComposedBlock|tier.ComposedHead, noGraph })}, testTierOpts(t)...)...)
+							if err != nil || gc == nil {
+								noDevice(t, spec, err)
+							}
+							defer gc.Close()
+							decodeAllocs(t, m, gc)
+							for _, k := range []tier.Parts{tier.ComposedBlock, tier.ComposedHead} {
+								if n, _, _ := gc.Stats().ServedPart(k); n == 0 {
+									t.Fatalf("composed part %#x never ran: this arm measured the tier's own", uint8(k))
+								}
+							}
+						})
+					}
+				}
 			}
 		})
 	}

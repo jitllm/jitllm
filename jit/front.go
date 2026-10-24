@@ -138,12 +138,6 @@ func unread(f Model, block int32, read ...jlm.Role) error {
 	return nil
 }
 
-// has reports whether model m holds a tensor of role at block and index.
-func has(m Model, role jlm.Role, block, index int32) bool {
-	_, ok := m.Find(role, block, index)
-	return ok
-}
-
 // Front is the model's graph: the step's rotary table, its input rows,
 // every block's graph as the model states it, the head, then the sampling of
 // its logits. Where vision, the model's vision segment comes first, its parts

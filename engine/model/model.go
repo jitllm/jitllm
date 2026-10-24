@@ -1238,6 +1238,8 @@ type Model struct {
 	Container bool
 
 	container *jlm.File
+	// front is the model's graphs as the composer reads them (front.go).
+	front frontState
 
 	// basePlans is ensureBlock's read plan for every text block -- the block's
 	// own weights, without its routed banks -- built once. The entries are

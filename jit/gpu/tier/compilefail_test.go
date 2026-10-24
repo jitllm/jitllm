@@ -24,10 +24,10 @@ func TestCompileFailureIsCounted(t *testing.T) {
 		defer g.Close()
 		// Armed after New, so only the matvec's own compile can fail.
 		d.failCompile = failCompile
-		w := make([]byte, rows*(k/32)*18) // Q4_0: 18 bytes per 32 weights
+		w := make([]byte, rows*k*2)
 		x := make([]float32, k)
 		out := make([]float32, rows)
-		ok := g.MatVec(out, quant.Q4_0, w, x, rows, k)
+		ok := g.MatVec(out, quant.F16, w, x, rows, k)
 		return ok, g.Stats()
 	}
 

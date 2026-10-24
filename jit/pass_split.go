@@ -8,7 +8,9 @@ import "github.com/jitllm/jitllm/jit/ir"
 // threads under twice Slots (the device's where Slots is 0), and the trips
 // divide into Block-wide blocks a segment. Where Parts is set the segments
 // are instead the most, at most Parts and a power of two, that divide the
-// trips. Where Group is set and the elements allow, a row's segments are
+// trips and keep the elements' threads within the device's slots: elements
+// that fill the device alone -- a vocabulary's rows -- are not split. Where
+// Group is set and the elements allow, a row's segments are
 // instead one workgroup's (main's GroupSplit): 32 rows by the segments,
 // 128 to 1024 threads, each segment's sum through workgroup memory and the
 // row written whole, with no partial planes and no combine. Where Matrix is
@@ -39,7 +41,7 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 	S := 1
 	if s.Parts > 0 {
 		S = s.Parts
-		for S > 1 && T%S != 0 {
+		for S > 1 && (T%S != 0 || E*S > slots) {
 			S /= 2
 		}
 	}

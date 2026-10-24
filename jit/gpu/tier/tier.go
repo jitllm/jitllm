@@ -178,6 +178,16 @@ type Config struct {
 	// of its own instead of folding it into the next block's attention norm
 	// (the binary16 GEMM path's add-and-norm kernel): the A/B arm.
 	NoAddNormFold bool
+	// Composed is the parts of the model the composer serves in the tier's
+	// own submission (served.go): each block whole from its graph, and the
+	// head, in place of the tier's kernels for them. A part named here that
+	// the composer does not form fails the step, naming why; the tier's
+	// kernels never run in its place.
+	Composed Parts
+	// ComposedFloat forms the served parts with float activations, no
+	// int8 form: the reference a gate holds the int8 forms and the tier's
+	// own kernels to.
+	ComposedFloat bool
 	// GateUp2 runs a dense gated FFN's gate and up as one Gate2 matvec
 	// (kernels.MatVecShape.Gate2): each workgroup sums its rows of both
 	// matrices over the one operand and writes act(gate)*up: the bits the
@@ -650,7 +660,7 @@ type Stats struct {
 	// LastErr, which the last writer wins (a later prefill refusal would
 	// overwrite why a block was declined).
 	DeclineWhy string
-	NoKernel   int // matvecs refused because the quant format has no GPU kernel
+	NoKernel   int // matvecs refused because their format has no lone-matvec kernel
 	// Failed counts matvec kernels (and their split reductions) the device
 	// would not compile. A shape counts once: the failure is cached, and every
 	// later matvec of that shape is refused without another attempt.
@@ -710,8 +720,20 @@ type Stats struct {
 	// never ran".
 	KVGrows int
 	Served  int // matvecs served on the device
-	// Formed is how many of Served ran the composer's kernels (formed.go).
-	Formed int
+	// PartsServed counts the parts the composer ran in the tier's
+	// submission, by part (Config.Composed): the steps emitted, not those a
+	// recording replayed.
+	PartsServed [numParts]int
+	// PartsDeclined counts the decode steps (one row) a served part was not
+	// asked for, by part: a block with no graph, or a head or block the
+	// serving conditions leave out (a LayerNorm head, a window, the
+	// persistent block, history at home).
+	PartsDeclined [numParts]int
+	// PartsUnasked counts the steps the composer is asked for no part of
+	// at all, by part: a prompt chunk's rows, a vision tower's encode, a step
+	// over several sessions' rows. They run the tier's own kernels; this is
+	// where they are seen.
+	PartsUnasked [numParts]int
 	// Forgotten counts lone-matvec copies dropped because the host said the
 	// bytes at their address changed (Forget): the selection check that a
 	// refilled frame reached the device at all.
@@ -1256,6 +1278,11 @@ func (s *Stats) add(o Stats) {
 		s.DeclineWhy = o.DeclineWhy
 	}
 	s.Failed += o.Failed
+	for i := range s.PartsServed {
+		s.PartsServed[i] += o.PartsServed[i]
+		s.PartsDeclined[i] += o.PartsDeclined[i]
+		s.PartsUnasked[i] += o.PartsUnasked[i]
+	}
 	s.TooSmall += o.TooSmall
 	s.Forgotten += o.Forgotten
 	if o.LastErr != "" {
@@ -1283,7 +1310,6 @@ func (s *Stats) add(o Stats) {
 	s.RecBytes += o.RecBytes
 	s.KVGrows += o.KVGrows
 	s.Served += o.Served
-	s.Formed += o.Formed
 	s.RowtTiles += o.RowtTiles
 	s.RowtPlain += o.RowtPlain
 	s.VoltaMV += o.VoltaMV
@@ -1879,21 +1905,21 @@ type devShared struct {
 	// not a lane's: a matvec a host block offers runs while a session's
 	// submission holds whichever lane it took.
 	mvc mvCall
-	// fmc is a composed matvec's call (formedSession); forms are the
-	// composer's (composer) kernels compiled on this device by jit.Key, and
-	// formKeys a lone matvec's call-site shape's Key.
-	fmc      fmCall
-	fmcFn    func(backend.Session)
-	forms    map[jit.Key]*formed
-	formKeys map[formedKey]jit.Key
-	// shadow is nil but in a jitllmtest build's shadowed gate (shadow.go).
-	shadow    *shadowTier
+	// served are the parts the composer serves, by their key, and their
+	// forms by the composer's Key (served.go).
+	served      map[servedKey]*servedPart
+	servedForms map[jit.Key]*partForm
+	// capturing says a submission is being recorded: a served part not
+	// formed yet is not formed inside it (errServedCold).
+	capturing bool
 	composer  *jit.Registry
-	mvTo      launchTo
-	mvPart    backend.Buf
-	mvPartCap int
-	used      uint64
-	limit     uint64
+	// composerFloat is composer with no int8 form (Config.ComposedFloat).
+	composerFloat *jit.Registry
+	mvTo          launchTo
+	mvPart        backend.Buf
+	mvPartCap     int
+	used          uint64
+	limit         uint64
 	// why is where limit came from, in words, for the report.
 	why string
 
@@ -2661,10 +2687,7 @@ func (g *devTier) Close() {
 	// Every session's queue, before the device that owns them, once nothing
 	// runs on one.
 	g.quiesce()
-	g.formsClose()
-	if g.shadow != nil {
-		g.shadow.close()
-	}
+	g.partsClose()
 	g.khClose() // before dhClose: its programs launch dh's kernels
 	g.dhClose()
 	for _, ds := range g.sess {
@@ -2835,8 +2858,10 @@ func (g *devTier) MatVec(out []float32, t quant.Type, w []byte, x []float32, nro
 }
 
 func (g *devTier) matVec(sid uint64, out []float32, t quant.Type, w []byte, x []float32, nrows, k int) decline {
+	// A quantized weight reaches a lone matvec only in the source's row-major
+	// layout, which no container carries (nn.RowMajorQuantCalls).
 	q, ok := quantOf(t)
-	if !ok || k%q.Elems() != 0 || nrows <= 0 || len(w) == 0 {
+	if !ok || !kernels.IsFloat(q) || k%q.Elems() != 0 || nrows <= 0 || len(w) == 0 {
 		g.mu.Lock()
 		g.NoKernel++
 		g.mu.Unlock()
@@ -2856,9 +2881,6 @@ func (g *devTier) matVec(sid uint64, out []float32, t quant.Type, w []byte, x []
 		// resident() has already counted this as Declined (the budget) or
 		// NoRoom (the card), and either way another card may have the room.
 		return noRoom
-	}
-	if !kernels.IsFloat(q) {
-		return g.formedMatVecCall(out, t, r, w, x, nrows, k)
 	}
 	split := chooseSplit(nrows, k/32, g.kb.split)
 	kern := g.kernel(q, k, nrows, split, 1, false)
@@ -3621,15 +3643,6 @@ func (g *devTier) sizeOut(nrows int) bool {
 		g.hostOut = unsafe.Slice((*float32)(unsafe.Pointer(&g.hostRaw[0])), cap(g.hostRaw)/4)
 	}
 	return g.regrow(&g.outBuf, &g.outCap, nrows, 4, false, false)
-}
-
-func sameF64(a, b []float32) bool {
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // u32b and f32b view a slice as bytes. An empty slice is empty bytes, not a

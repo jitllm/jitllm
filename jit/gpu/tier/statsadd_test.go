@@ -29,6 +29,12 @@ func TestStatsAddSumsEveryCounter(t *testing.T) {
 			f.SetUint(7)
 		case reflect.Float64:
 			f.SetFloat(7)
+		case reflect.Array:
+			if f.Type().Elem().Kind() == reflect.Int {
+				for j := 0; j < f.Len(); j++ {
+					f.Index(j).SetInt(7)
+				}
+			}
 		}
 	}
 
@@ -51,6 +57,15 @@ func TestStatsAddSumsEveryCounter(t *testing.T) {
 			zeroSrc, zeroDst = src.Uint() == 0, dst.Uint() == 0
 		case reflect.Float64:
 			zeroSrc, zeroDst = src.Float() == 0, dst.Float() == 0
+		case reflect.Array:
+			// A counter per kind: every element its own counter.
+			if src.Type().Elem().Kind() != reflect.Int {
+				continue
+			}
+			for j := 0; j < src.Len(); j++ {
+				zeroSrc = zeroSrc || src.Index(j).Int() == 0
+				zeroDst = zeroDst || dst.Index(j).Int() == 0
+			}
 		default:
 			continue // not a counter: bool, slice, string
 		}

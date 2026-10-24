@@ -44,7 +44,7 @@ func newSynth(t *testing.T, typ jlm.Type) *synth {
 	s.embed = &graph.Graph{Block: -1, Values: []graph.Value{{Name: "x", Width: synthEmbd}}, Out: []graph.ValueID{0},
 		Ops: []graph.Op{{Kind: graph.OpEmbed, Out: []graph.ValueID{0},
 			Weight: []graph.Binding{{Role: jlm.RoleTokenEmbd, K: synthEmbd, Rows: synthVocab}}}}}
-	h := graph.NewSlice()
+	h := graph.New()
 	h.G.Block = -1
 	h.Out(h.MatVec(h.Norm(h.In("x", synthEmbd), jlm.RoleOutputNorm, 1e-5), jlm.RoleOutput, synthVocab))
 	s.head = h.G
@@ -59,7 +59,7 @@ func newSynth(t *testing.T, typ jlm.Type) *synth {
 }
 
 func synthBlock(li int) *graph.Graph {
-	b := graph.NewSlice()
+	b := graph.New()
 	b.G.Block = li
 	x := b.In("x", synthEmbd)
 	n := b.Norm(x, jlm.RoleFFNNorm, 1e-5)

@@ -14,7 +14,7 @@ func TestScratchIsWrittenBeforeItIsRead(t *testing.T) {
 	r := Default().WithoutInt8(DeviceGPU)
 	for _, slots := range []int{0, 64} {
 		for _, keys := range []int{1, 5, 128} {
-			b := graph.NewSlice()
+			b := graph.New()
 			n := b.KVAppend(b.In("k", 1024), b.In("v", 1024), 0)
 			b.Out(b.Attend(b.In("q", 2048), n, graph.Attrs{NHead: 16, NKVHead: 8, HeadDim: 128, Scale: 0.088}))
 			req := Request{Graph: b.G, Step: Step{Rows: 1, Page: 64, Keys: keys}, Device: Device{Kind: DeviceGPU, Slots: slots, Lanes: 32},

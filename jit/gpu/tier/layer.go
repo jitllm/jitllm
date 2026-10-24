@@ -12,6 +12,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
@@ -27,6 +28,9 @@ import (
 
 // layer is one block's device-resident state.
 type layer struct {
+	// graph is the block as ops from the model's front end
+	// (nn.LayerPlan.Graph): what serving it whole forms (served.go).
+	graph          *graph.Graph
 	wq, wk, wv, wo *resident
 	gate, up, down *resident
 	// conv is a convolutional tower block's program and vectors (conv.go),
@@ -2125,6 +2129,9 @@ func (l *layer) kvOf(sid uint64) *kvPair {
 // blockScratch is the per-call staging every layer of a lane shares: a call
 // holds its lane (devsess.go), so one block runs in it at a time.
 type blockScratch struct {
+	// headGraph is the head as ops from the model's front end (nn.Head.Graph):
+	// what serving the head forms (served.go).
+	headGraph *graph.Graph
 	// headShared says head, mvHead, hNorm, hNormB and headCap are another
 	// scratch's -- lane0's, borrowed by a clone (shareHead) -- and are not
 	// freed or refunded with this one.
@@ -3071,7 +3078,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	if g.layers == nil {
 		g.layers = map[int]*layer{}
 	}
-	l := &layer{nonCausal: p.NonCausal, windowed: p.Windowed, geo: geoOf(p), vFromK: p.VFromK}
+	l := &layer{nonCausal: p.NonCausal, windowed: p.Windowed, geo: geoOf(p), vFromK: p.VFromK, graph: p.Graph}
 	if p.NonCausal {
 		l.nffn, l.ungated, l.act = p.NFFN, ungatedFFN(p), p.Act
 		l.noRope = p.NRot == 0 || p.NoPosEnc
@@ -6322,6 +6329,8 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	if bs == nil || h == nil {
 		return false
 	}
+	// The head as ops from the model's front end: what the composer serves.
+	bs.headGraph = h.Graph
 	// The head is the model's: a second State on this tier finds it placed.
 	// Building it again allocated a second norm and logits buffer over the
 	// first ones, leaking both and charging the budget twice.
@@ -7617,9 +7626,6 @@ func (g *devTier) layersSession(s backend.Session) {
 	hx, hcs, hcsSWA, pn, koffs, kposs, rposs := a.hx, a.hcs, a.hcsSWA, a.pn, a.koffs, a.kposs, a.rposs
 	p, rag, pe, key := a.p, a.rag, a.pe, a.key
 	R, nrow, kvDim, qdim, kst, nCap, gatherN, rrows := a.R, a.nrow, a.kvDim, a.qdim, a.kst, a.nCap, a.gatherN, a.rrows
-	if g.shadow != nil {
-		g.shadow.step(R)
-	}
 	sm, smG, smW := a.sm, a.smG, a.smW
 	fold, ropeDev, argmax, sampleK, samplePen, pick := a.fold, a.ropeDev, a.argmax, a.sampleK, a.samplePen, a.pick
 	ragHead, parOK, allRows, hNorm := a.ragHead, a.parOK, a.allRows, a.hNorm
@@ -8013,13 +8019,38 @@ func (g *devTier) layersSession(s backend.Session) {
 			// and the attention.
 			voltaOnly := R > 1 && rag == nil && g.voltaBlock(l, R, bs.tok) && l.altRouter == nil && l.ds4 == nil &&
 				l.k3 == nil && l.q4e == nil
-			if g.shadow != nil {
-				g.shadow.block(voltaOnly)
-			}
 			// A held add this block's norm will not take runs alone first.
 			if pendX != nil && !g.foldTakes(l, R, voltaOnly, skip) {
 				addRes(pendX, pendY, bs.x)
 				pendX, pendY = nil, nil
+			}
+			// The block the composer serves whole (Config.Composed): its graph
+			// from the model's front end, formed as one unit and launched on
+			// the block's own weights and history, in place of all of the
+			// tier's for it.
+			if g.Composed&ComposedBlock != 0 {
+				if R != 1 || rag != nil {
+					g.PartsUnasked[partBlock]++
+				} else if !g.blockServes(l, li, p, bs, persist) {
+					g.PartsDeclined[partBlock]++
+				} else {
+					rcs := bs.cs
+					if bs.csSWA != nil && p.LocalRope(li) {
+						rcs = bs.csSWA
+					}
+					sv, serr := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.zero, p.MaxSeq, g.kvp.p)
+					switch {
+					case serr != nil:
+					case !sv.f.inPlace(0, 0):
+						serr = fmt.Errorf("tier: the composed block %d reads x after writing its output over it", li)
+					default:
+						serr = sv.run(g, lc, []backend.Buf{bs.x}, []backend.Buf{bs.x})
+					}
+					if err == nil {
+						err = serr
+					}
+					continue
+				}
 			}
 			// Gemma 3n: every stream's prediction, the block run on the active
 			// one (altup.go).
@@ -8085,7 +8116,8 @@ func (g *devTier) layersSession(s backend.Session) {
 				// where q/k/v run as the fused launch below (qkvIn) or as
 				// their three launches (qkvSep), and nothing else reads the
 				// normed row (bs.h).
-				qkvPro := R == 1 && rag == nil && g.actInOn() && l.k3 == nil && l.q4e == nil && !l.mla && l.clampB == nil &&
+				// Not a selecting block: its indexer projects the normed row too.
+				qkvPro := R == 1 && rag == nil && g.actInOn() && l.k3 == nil && l.q4e == nil && !l.mla && !l.msa && !l.qsa && l.clampB == nil &&
 					l.kvSrc == li && !l.vFromK && !g.TableSplit && l.altRouter == nil && bs.normVar == nil &&
 					l.nAttnB == nil && l.nAttn != nil && !voltaOnly && !skip["norm"] && !skip["quant"] && !skip["qkvo"]
 				qkvIn := qkvPro && l.qkv != nil && l.qkvIn != nil &&
@@ -8268,16 +8300,6 @@ func (g *devTier) layersSession(s backend.Session) {
 							mvrun(l.mvk, l.wk, bs.k)
 							mvrun(l.mvv, l.wv, bs.v)
 						}
-					}
-					if g.shadow != nil {
-						here := ""
-						switch {
-						case shared:
-							here = "k and v are another block's"
-						case bs.splitQG != nil:
-							here = "a gated query"
-						}
-						g.shadow.attnIn(g, lc, s, l, li, p, ain, bs.q, bs.k, bs.v, qdim, kvDim, shadowWhy(rag != nil, persist, len(g.kb.skip) > 0, here))
 					}
 					// The per-head norm goes between the projection and RoPE, and only
 					// there: a rotation preserves each pair's norm but not the per-head
@@ -8496,22 +8518,6 @@ func (g *devTier) layersSession(s backend.Session) {
 							laKV(copyV, vThreads, vSrc, vDst, vOff)
 						}
 					}
-					if g.shadow != nil && roped {
-						here := ""
-						switch {
-						case bs.clampQ != nil || bs.splitQG != nil:
-							here = "a clamped or gated query"
-						case bs.qTemp != nil:
-							here = "a query temperature"
-						case (bs.qNorm == nil) != (nQ == nil):
-							here = "a query norm the tier half holds"
-						}
-						rcs := bs.cs
-						if bs.csSWA != nil && p.LocalRope(li) {
-							rcs = bs.csSWA
-						}
-						g.shadow.query(g, lc, s, l, li, p, bs.q, nQ, rcs, bs.qr, qdim, shadowWhy(rag != nil, persist, len(g.kb.skip) > 0, here))
-					}
 					// Where the score kernel reads q: the rotated buffer, or q itself on
 					// an unrotated layer (bs.qr would hold the last block's).
 					qAtt := bs.qr
@@ -8624,27 +8630,6 @@ func (g *devTier) layersSession(s backend.Session) {
 						if err == nil && !(ragOn && pk.ragAlone) {
 							err = pk.attend(s, lc, g.kvp.layers[l.kvSrc], qAtt, kDst, vDst, bs.n, bs.xb, pgTab, dec, sk)
 							g.PagedLaunches++
-							if g.shadow != nil && err == nil {
-								here := ""
-								switch {
-								case shared:
-									here = "k and v are another block's"
-								case bs.clampQ != nil || l.clampB != nil:
-									here = "clamped k and v"
-								case kHeads != p.NKVHead:
-									here = "an indexer key beside k's heads"
-								}
-								var kn backend.Buf
-								if bs.qNorm != nil && nK != nil {
-									kn = nK
-								}
-								rcs := bs.cs
-								if bs.csSWA != nil && p.LocalRope(li) {
-									rcs = bs.csSWA
-								}
-								g.shadow.keyAttend(g, lc, s, l, li, p, g.kvp.layers[li], bs.k, bs.v, qAtt, kn, rcs, l.sinks, pk.pRow, qOff, bs.xb,
-									g.kvp.p, nCap, roped, shadowWhy(rag != nil, persist, len(g.kb.skip) > 0, here))
-							}
 							if pk.cur.plan.Path == kernels.PathStaged {
 								g.PagedStagedLaunches++
 							}
@@ -8800,13 +8785,6 @@ func (g *devTier) layersSession(s backend.Session) {
 					if bs.sigMul != nil {
 						lc.la(bs.sigMul, R*qdim, bs.ogate, bs.xb, bs.ogated)
 						aSrc = bs.ogated
-					}
-					if g.shadow != nil {
-						here := ""
-						if bs.sigMul != nil {
-							here = "an output gate"
-						}
-						g.shadow.capture(g, s, l, li, p, bs.x, aSrc, qdim, shadowWhy(rag != nil, persist, len(g.kb.skip) > 0, here))
 					}
 					// The attention output projection quantizing its own
 					// operand (fuseActIn), with the residual add it already
@@ -9625,13 +9603,6 @@ func (g *devTier) layersSession(s backend.Session) {
 					addRes(bs.x2, fout, bs.x)
 				}
 			}
-			if g.shadow != nil {
-				ffn, want := backend.Buf(nil), bs.x
-				if pendX != nil {
-					ffn, want = pendY, nil
-				}
-				g.shadow.postAttention(g, lc, s, l, li, p, p.NHead*p.HeadDim, bs.x2, ffn, want)
-			}
 			// BERT's output norm, over x + mlp, out of place and back.
 			if l.nResid != nil && !skip["norm"] {
 				norm(bs.x, l.nResid, l.nResidB)
@@ -9763,45 +9734,59 @@ func (g *devTier) layersSession(s backend.Session) {
 		} else if head != nil {
 			// The output norm and the vocabulary projection, in the same
 			// submission: the residual stream never comes home.
-			if hNorm == nil {
-				// No output norm: the row as it is.
-				lc.la(bs.copyRows, R*p.NEmbd, bs.x, bs.h)
-			} else if bs.normVar != nil {
-				// A LayerNorm head (C6): its mean, variance and apply, with
-				// the output norm's bias (zeros where the file has none).
-				norm(bs.x, hNorm, bs.hNormB)
-			} else {
-				lc.la(bs.normPart, R*bs.parts, bs.x, bs.part)
+			pickOnly := pick && g.pickMV != nil && bs.headCap == nil && R == 1
+			// The head the composer serves (Config.Composed), where it is asked
+			// for this one: the step fails if it does not form.
+			served := false
+			if g.Composed&ComposedHead != 0 && R != 1 {
+				g.PartsUnasked[partHead]++
+			} else if g.Composed&ComposedHead != 0 {
+				if !headServes(R, bs.headGraph, hNorm, bs.normVar != nil, pickOnly, persist) {
+					g.PartsDeclined[partHead]++
+				} else {
+					sv, serr := g.servedHead(bs.headGraph, bs.head, hNorm)
+					if serr == nil {
+						serr = sv.run(g, lc, []backend.Buf{bs.x}, []backend.Buf{bs.logits})
+					}
+					if err == nil {
+						err = serr
+					}
+					served = true
+				}
 			}
-			// HeadNormRepeat is a probe, not a feature: normApply is idempotent, so
-			// each repeat costs exactly one extra tiny dispatch, which prices whether
-			// the head's fixed per-token cost is dispatch structure or work (see the
-			// Metal entries in AGENTS.md).
-			if bs.normVar == nil && hNorm != nil {
-				for r := 0; r < g.HeadNormRepeat; r++ {
+			if !served {
+				if hNorm == nil {
+					// No output norm: the row as it is.
+					lc.la(bs.copyRows, R*p.NEmbd, bs.x, bs.h)
+				} else if bs.normVar != nil {
+					// A LayerNorm head (C6): its mean, variance and apply, with
+					// the output norm's bias (zeros where the file has none).
+					norm(bs.x, hNorm, bs.hNormB)
+				} else {
+					lc.la(bs.normPart, R*bs.parts, bs.x, bs.part)
+				}
+				// HeadNormRepeat is a probe, not a feature: normApply is idempotent, so
+				// each repeat costs exactly one extra tiny dispatch, which prices whether
+				// the head's fixed per-token cost is dispatch structure or work (see the
+				// Metal entries in AGENTS.md).
+				if bs.normVar == nil && hNorm != nil {
+					for r := 0; r < g.HeadNormRepeat; r++ {
+						lc.la(bs.normApply, p.NEmbd, bs.x, hNorm, bs.part, bs.h)
+					}
 					lc.la(bs.normApply, p.NEmbd, bs.x, hNorm, bs.part, bs.h)
 				}
-				lc.la(bs.normApply, p.NEmbd, bs.x, hNorm, bs.part, bs.h)
-			}
-			lc.la(bs.quantE, kernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
-			// HeadMatvecRepeat is the same idempotent-repeat probe on the head
-			// matvec, pricing it by repetition.
-			pickOnly := pick && g.pickMV != nil && bs.headCap == nil && R == 1
-			if pickOnly {
-				// The label pick projects the picked rows alone (pickMV).
-				lc.la(g.pickMV, pickMax, bs.head.qs, bs.head.d, bs.head.sc, bs.a, bs.ax, g.pickOut, g.pickIDs)
-				g.PickRows++
-			} else {
-				for r := 0; r < g.HeadMatvecRepeat; r++ {
-					mvrun(bs.mvHead, bs.head, bs.logits)
-				}
-				mvrun(bs.mvHead, bs.head, bs.logits)
-				if g.shadow != nil {
-					here := ""
-					if bs.normVar != nil {
-						here = "LayerNorm"
+				lc.la(bs.quantE, kernels.QuantizeThreads(R*ePad(p)/32), bs.h, bs.a, bs.ax)
+				// HeadMatvecRepeat is the same idempotent-repeat probe on the head
+				// matvec, pricing it by repetition.
+				if pickOnly {
+					// The label pick projects the picked rows alone (pickMV).
+					lc.la(g.pickMV, pickMax, bs.head.qs, bs.head.d, bs.head.sc, bs.a, bs.ax, g.pickOut, g.pickIDs)
+					g.PickRows++
+				} else {
+					for r := 0; r < g.HeadMatvecRepeat; r++ {
+						mvrun(bs.mvHead, bs.head, bs.logits)
 					}
-					g.shadow.head(g, lc, s, p, bs.x, hNorm, bs.head, bs.logits, shadowWhy(rag != nil, persist, len(g.kb.skip) > 0, here))
+					mvrun(bs.mvHead, bs.head, bs.logits)
 				}
 			}
 			if bs.headCap != nil {
@@ -9849,7 +9834,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		//   in a replay.
 		// - History streamed from home: its uploads and waits are per call.
 		if (R > 1 && rag == nil) || !parOK || g.NoGraph || g.graphOff || g.PerLayerSubmit ||
-			a.paging || streamed || bs.pkv != nil && bs.pkv.st != nil || g.shadow != nil {
+			a.paging || streamed || bs.pkv != nil && bs.pkv.st != nil {
 			te := time.Now()
 			emit()
 			g.TEmit += time.Since(te)
@@ -9858,8 +9843,21 @@ func (g *devTier) layersSession(s backend.Session) {
 		cur, have := g.recs[key]
 		if !have {
 			tc := time.Now()
+			g.capturing = true
 			r, e := backend.Record(rec, emit)
+			g.capturing = false
 			g.TCapture += time.Since(tc)
+			if errors.Is(err, errServedCold) {
+				// A served slice not formed yet: its compile and its
+				// constants' upload have no place in a capture, so this step
+				// is issued unrecorded, forming it, and the next is captured.
+				if r != nil {
+					g.stale = append(g.stale, r)
+				}
+				err = nil
+				emit()
+				return
+			}
 			if e != nil || err != nil {
 				// A capture executes nothing, so the work has still to be
 				// issued -- the ordinary way, since a capture that failed

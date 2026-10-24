@@ -42,6 +42,7 @@ func gpuProfile() Profile {
 		SplitExtreme{Parts: 32, Kinds: []PrimKind{PrimReduce}},
 		FMA{},
 		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimMap, Unrolled: true}}},
+		Siblings{},
 		Affine{},
 	}}
 }

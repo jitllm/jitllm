@@ -249,24 +249,6 @@ func (n *Kernel) iterOf(c int) int {
 	return -1
 }
 
-// flat is the element's index in the space from its coordinates, the last
-// fastest, coordinates from first on.
-func (n *Kernel) flat(first int) int {
-	ix := -1
-	for d := first; d < len(n.Space); d++ {
-		c := n.add(Node{Op: OpCoord, A: d, Type: ir.U32})
-		if ix < 0 {
-			ix = c
-			continue
-		}
-		ix = n.bin(OpAdd, ir.U32, n.bin(OpMul, ir.U32, ix, n.u32(n.Space[d])), c)
-	}
-	if ix < 0 {
-		return n.u32(0)
-	}
-	return ix
-}
-
 // copyInto is src's node root as nodes of dst: each node src reaches from
 // root copied, its operands first, a load into dst's buffer of the same
 // operand, kind and shape; leaf, where it answers, stands for a node,
@@ -458,17 +440,6 @@ func (k *Kernel) compact() {
 		q.Span, q.Part = re(p.Span), re(p.Part)
 		k.Positions = &q
 	}
-}
-
-// loopOf is the innermost loop node i varies in, -1 for none.
-func (n *Kernel) loopOf(i int) int {
-	best := -1
-	for c := range n.Loops {
-		if n.Varies(i, c) && (best < 0 || n.within(c, best)) {
-			best = c
-		}
-	}
-	return best
 }
 
 // insertLoop puts l at index at, the loops from at on one later.

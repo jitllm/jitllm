@@ -85,8 +85,15 @@ func (g *devTier) runUnlocked(f func(backend.Session)) {
 // session's half flips), a streamed block (the expert cache and its staging),
 // a DeepSeek V4 block (its compressed history's staging), a step over several
 // sessions' rows, or a call streaming evicted history through free pages
-// another session's prologue could take. Callers hold g.mu.
+// another session's prologue could take, or any step on a device serving
+// composed parts (Config.Composed): a served part's form, its own device
+// buffers and its launch arguments are one per device. That is this code's
+// choice, not the device's: forms per lane would let them run beside each
+// other. Callers hold g.mu.
 func (g *devTier) exclusiveRange(lo, hi int, rag *ragStep, bs *blockScratch) bool {
+	if g.Composed != 0 {
+		return true
+	}
 	if rag != nil && rag.sid != nil {
 		return true
 	}

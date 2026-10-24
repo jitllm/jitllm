@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/quant"
 )
 
@@ -341,6 +342,10 @@ type SSMWeights struct {
 type Head struct {
 	// Model is which model the head belongs to; see LayerPlan.Model.
 	Model uint64
+	// Graph is the head as ops from the model's front end, nil where it
+	// states none: what a device serving the head forms (tier
+	// Config.Composed).
+	Graph *graph.Graph
 	Norm  []float32 // output_norm.weight
 	// NormB is the output LayerNorm's bias (C6), non-nil exactly when the
 	// model's norms are LayerNorms (LayerPlan.LayerNorm) -- zeros where the
@@ -730,6 +735,11 @@ func (d *DS4Plan) EntRowAt(comp, hd int) int {
 // wrong text when ignored, so a tier that cannot apply one must decline the
 // block by name (see RULE 8a in AGENTS.md).
 type LayerPlan struct {
+	// Graph is the block's graph of generic ops as the model's front end
+	// built it from the container (engine/model/front.go), nil for a block
+	// it states none of: what a device asks the composer to form when it
+	// serves the block whole (tier Config.Composed).
+	Graph *graph.Graph
 	// KPad is the width the block's matrices that read the residual or the
 	// attention's output were packed at, when NEmbd is not a whole number of
 	// 32-element blocks (a tower 144 wide, packed at 160 with zero columns

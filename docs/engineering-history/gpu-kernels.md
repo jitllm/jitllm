@@ -6568,3 +6568,38 @@ reading:
 The split-k it removes was buying its own parallelism: the unsplit k and v
 blocks finish late in q's grid. What would change it: a register-lighter tile
 for the segments, or segments that keep k's split.
+
+## The composer's decode block against the tier's, kernel by kernel
+
+V100-SXM2-16GB, CUDA, Llama-3.2-1B Q4_K_M, one decode token, graphs off
+(`nvprof --print-gpu-trace`), every block served whole by the composer
+(`JITLLM_GPU_COMPOSED=1`) against the tier's own kernels.
+
+Where the composer forms the same work as one of the tier's kernels it
+matches it: the output projection 7.6 us against 8.9, down 22.8 against
+22.3. The gap was launches the tier's authors fused by hand: 14 composed
+launches a block against 9, about 140 us against 90.
+
+- **Siblings** (`jit.Siblings`): independent kernels reading one input run as
+  one launch, each its own workgroups under a guard loop that runs once in
+  them. q, k and v went from three launches (23.6 us) to one (13.2; the
+  tier's `matvecseg` 9.9), gate and up from two (38.0) to one (30.4; the
+  tier's `gu` 30.7). A share's thread index is made its guard's: before that,
+  values made from the thread index alone were hoisted above every guard,
+  live across all shares, and the merged q/k/v kernel needed more registers
+  than a 1024-wide workgroup allows (`backend.ErrGroupTooWide`).
+- **The head's split** (`jit.Split` with Parts): it cut a reduction 64 ways
+  whatever its rows, so the 128256-row output projection ran 8016 workgroups
+  of 1024 threads, 383.6 us. A reduction whose elements fill the device's
+  slots is not split: one row a thread, 1002 workgroups of 128, 261.5 us (the
+  tier's 259.2).
+- **A producer run in its consumer's workgroups** was built and measured, and
+  removed. The attention's norm and int8 form inside q/k/v took 23.6 us
+  against 6.8 + 13.2 apart: the norm is a reduction over the row, and every
+  workgroup paid its latency before its own matvec, so only the launch gap
+  went. Its body is its own workgroup width's (a 1024-thread producer run in
+  256-thread gate/up workgroups computed the wrong values). The int8 forms of
+  the attention's output and of the activation could not join their matvec
+  at all: their windows combine through a workgroup exchange and its barrier,
+  which a loop whose trips differ by thread cannot hold, where the tier's
+  quantize combines a window in one warp's shuffles.

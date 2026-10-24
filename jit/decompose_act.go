@@ -26,28 +26,8 @@ func (x *exprs) fma(a, b, c int) int { return x.add(Expr{Op: OpFma, Type: ir.F32
 
 func (x *exprs) neg(a int) int { return x.op(OpSub, ir.F32, x.f(0), a) }
 
-func (x *exprs) clamp(v int, lo, hi float32) int {
-	return x.op(OpMax, ir.F32, x.op(OpMin, ir.F32, v, x.f(hi)), x.f(lo))
-}
-
 func (x *exprs) sigmoid(v int) int {
 	return x.op(OpDiv, ir.F32, x.f(1), x.op(OpAdd, ir.F32, x.f(1), x.un(OpExp, ir.F32, x.neg(v))))
-}
-
-// tanh is v P(v^2)/Q(v^2) on v clamped to +-tanhClamp.
-func (x *exprs) tanh(v int) int {
-	F := ir.F32
-	v = x.clamp(v, -tanhClamp, tanhClamp)
-	v2 := x.op(OpMul, F, v, v)
-	p := x.f(tanhP[0])
-	for _, k := range tanhP[1:] {
-		p = x.fma(p, v2, x.f(k))
-	}
-	q := x.f(tanhQ[0])
-	for _, k := range tanhQ[1:] {
-		q = x.fma(q, v2, x.f(k))
-	}
-	return x.op(OpDiv, F, x.op(OpMul, F, p, v), q)
 }
 
 // act is activation a of v.

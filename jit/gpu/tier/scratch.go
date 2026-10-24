@@ -462,6 +462,7 @@ func (g *devTier) prewarmPromptWidths() {
 	g.prewarmHeadKernels()
 	g.prewarmPrompt()
 	g.prewarmDecodePlans()
+	g.prewarmComposed()
 	grain := g.promptGrain()
 	if g.NoExactPrompt || g.promptW <= grain {
 		return

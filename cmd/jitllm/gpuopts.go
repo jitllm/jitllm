@@ -224,6 +224,11 @@ func gpuOptions() []tier.Option {
 		set func(*tier.Config)
 	}{
 		{"JITLLM_GPU_GRAPH", os.Getenv("JITLLM_GPU_GRAPH") == "0", func(c *tier.Config) { c.NoGraph = true }},
+		// =1 serves every block the model's front end states whole, and the
+		// head, from the composer (tier.Config.Composed); =0 the tier's own.
+		{"JITLLM_GPU_COMPOSED", os.Getenv("JITLLM_GPU_COMPOSED") == "1",
+			func(c *tier.Config) { c.Composed = tier.ComposedBlock | tier.ComposedHead }},
+		{"JITLLM_GPU_COMPOSED", os.Getenv("JITLLM_GPU_COMPOSED") == "0", func(c *tier.Config) { c.Composed = 0 }},
 		{"JITLLM_GPU_UNPACK", os.Getenv("JITLLM_GPU_UNPACK") == "0", func(c *tier.Config) { c.NoUnpack = true }},
 		{"JITLLM_NO_GPU_BATCH", set("JITLLM_NO_GPU_BATCH"), func(c *tier.Config) { c.NoBatch = true }},
 		{"JITLLM_GPU_NO_TAIL", set("JITLLM_GPU_NO_TAIL"), func(c *tier.Config) { c.NoTail = true }},

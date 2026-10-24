@@ -109,6 +109,9 @@ func (g *devTier) releaseModel() {
 	for li := range g.layers {
 		g.releaseBlock(li)
 	}
+	// The composed forms go with the model: a whole block's names the
+	// model's graph, and the recordings that launched any of them are gone.
+	g.partsClose()
 	// The head's projection is keyed on its address like a lone matvec's, and
 	// goes with its scratch.
 	if bs := g.bs; bs != nil && bs.head != nil {

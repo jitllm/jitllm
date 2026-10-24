@@ -116,21 +116,6 @@ func (k *Kernel) readsNode(i, x int) bool {
 	return false
 }
 
-// readByLive reports whether a node the code computes reads node i.
-func (k *Kernel) readByLive(i int, live map[int]bool) bool {
-	for j, nd := range k.Nodes {
-		if !live[j] {
-			continue
-		}
-		for _, a := range k.Operands(&nd) {
-			if *a == i {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // dataReaders is the live nodes that read node i as data: not a load, and
 // feeding no address.
 func (k *Kernel) dataReaders(i int, live map[int]bool) []int {

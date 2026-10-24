@@ -131,6 +131,9 @@ type Loop struct {
 	// Nonempty, where a guard set it, is a loop the caller never runs for
 	// no trips, entered without a test.
 	Nonempty bool
+	// Uniform, where a pass set it, is a loop whose count is one value for
+	// every thread of a workgroup: a barrier in it is met by all of them.
+	Uniform bool
 	// Of, where a split set it, is 1 + the loop this one takes trips of.
 	Of int
 }
