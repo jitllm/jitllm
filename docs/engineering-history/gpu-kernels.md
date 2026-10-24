@@ -6687,3 +6687,18 @@ row where the composer's reads two.
   where the composer's lowering forms a kernel, not first where a backend
   compiles it. Every kernel of `jit/gpu/kernels` keeps the rule; the
   front-end test fails with it on the kept index.
+- **What did not pay.** Prefetching each thread's first eight weight words
+  before an int8 prologue (main's `ActIn.Prefetch`, as a pass) made the
+  output projection and down slower, 18.37 to 19.41 us averaged over about
+  14000 launches each, and moved nothing at the wall: taken out. The norm
+  as a prologue with the matvecs split 16 ways, where q/k/v's 56 registers
+  fit two 512-thread workgroups a multiprocessor: q/k/v and gate/up with
+  their norms took 28.39 us a launch against 21.01 + 7.41 apart -- the
+  launches go and none of the norm's time with them, its reduction and int8
+  form run in series at the head of every workgroup -- and the 16-way split
+  cost the output projection and down 18.36 to 22.33 us. Two ways remain
+  open. The int8 codes do not depend on the norm's row scale, so the scale
+  can multiply the matvec's output instead, and the reduction leave the
+  path before the matvec. And which form wins depends on what the device's
+  compiler allocates, registers and so waves: the tier measuring the
+  composer's alternatives, as `tuneActIn` measures its own.
