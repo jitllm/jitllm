@@ -6916,3 +6916,32 @@ row where the composer's reads two.
   and keeps the median at 1.5 times. The one-position-off check asks for
   ten times the arm's worst rather than a hundred, which still sets a wrong
   part (NMSE 4-6) an order of magnitude past any arm.
+- **rnj-1's 43rd step is a near tie, not a composed gap.** Measured on one
+  V100 under CUDA and Vulkan, over the gate's 140 teacher-forced steps. The
+  composed blocks compute the tier's arithmetic: rnj-1's last block served
+  alone moves the logits 3e-14 from the tier's at the median step. Over the
+  other 139 steps the composed CUDA blocks sit nearer the float reference
+  than CUDA's tier (mean NMSE 1.2e-3 against 1.4e-3). Step 43 decodes a flat
+  distribution, its logits' squared norm 2.1e5 against 6.4e6 at the median
+  step. There the int8 rounding of a single block, every other block float,
+  moves the logits 0.016 from the reference, 1800 times that block's median
+  effect, and every int8 arrangement lands somewhere else. Main's CUDA tier
+  lands at 0.029, and at 0.079 at one lane (WithLanes(1)); the Vulkan tier
+  at 0.0023, and 0.022 at one lane. The composed blocks land at 0.19 on CUDA
+  and 0.032 on Vulkan, and composing a quarter or a half of the blocks
+  beside the tier's lands anywhere from 0.0017 to 0.21. The two float
+  references stay 6e-4 apart. The gate holds an arm's worst step to four
+  times the widest of the two tiers' distances, 0.0425 at step 91, so rnj-1
+  fails it on CUDA by 11% and stays in formedModels, its comment now naming
+  the tie. The spikes do not recur at one key count modulo 16, 32 or 64. The
+  backends' forms differ only in the attention and the post-norms' sums,
+  which CUDA, whose slots are known, stages and splits, and the matvecs'
+  forms are the same at K 4096 and 16384. The YaRN scale is applied once:
+  the composed rotary reads the tier's table, never the op's Mscale.
+  Composed blocks on CUDA at one lane (WithLanes(1)) leave every step's
+  logits at NMSE 1.0 from the reference, one block enough: rnj-1,
+  Llama-3.2-1B, and stories15M on a laptop's RTX 3050 Ti. There the split
+  attention's output reaches 4e30 where q, k and v are right, and turning
+  SplitRange off restores it. The tier at one lane is sound, and so are the
+  composed blocks on Vulkan at one lane, whose slots are unknown and whose
+  attention is not split: open.

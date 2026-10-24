@@ -75,9 +75,13 @@ var headDeclined = map[string]string{
 // formedModels is what the front end states and the serving gate does not
 // run: a model the tier cannot place (stories260K's 172-wide rows, which its
 // quantizer refuses), float fixtures whose composed logits equal the float
-// reference's, which the gate's band cannot measure, and rnj-1, whose
-// composed blocks reach 0.19 from the float reference at one step where both
-// backends' tiers stay under 0.03: a gap the serving gate fails, open.
+// reference's, which the gate's band cannot measure, and rnj-1, whose 43rd
+// teacher-forced step is a near tie the two tiers measure too narrowly: the
+// composed blocks compute the tier's arithmetic (block 31 alone moves the
+// logits 3e-14 from the tier's), yet one block's int8 rounding alone moves
+// that step 0.016 from the float reference, main's CUDA tier lands at 0.029
+// there (0.079 at one lane) and the composed blocks at 0.19, past four times
+// the tiers' widest (0.0425).
 var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
 	"stories260K.gguf", "synth-ernie45.gguf", "synth-phi4v.gguf", "synth-seedoss.gguf", "synth-smollm3.gguf",
 	"gemma-3-1b-it-Q4_K_M.gguf", "synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "newarch/synth-olmo2-q8.gguf",
