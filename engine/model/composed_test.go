@@ -55,24 +55,26 @@ func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts
 
 // servedModels is every checkpoint whose blocks and head the front end states
 // as ops and that one card of 16 GiB holds: dense models of the llama, qwen2,
-// qwen3, gemma, gemma2, gemma3, olmo2, exaone4, arcee, granite, hunyuan and
-// phi3 classes.
+// qwen3, gemma, gemma2, gemma3, olmo2, exaone4, arcee, granite, hunyuan,
+// phi3 and falcon classes.
 var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf", "tinyllama-1.1b-q3_K_M.gguf",
 	"gemma-2b.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf", "qwen2.5-1.5b-instruct-q4_k_m.gguf",
 	"SmolLM2-360M-Instruct-Q8_0.gguf", "stories15M-q8_0.gguf", "SmolVLM-256M-Instruct-Q8_0.gguf",
 	"newarch/OLMo-2-0425-1B-Instruct-Q4_K_M.gguf", "newarch/EXAONE-4.0-1.2B-Q4_K_M.gguf", "newarch/AFM-4.5B-Q4_K_M.gguf",
 	"granite/granite-3.3-2b-instruct-Q4_K_M.gguf", "granite/granite-4.0-micro-Q4_K_M.gguf",
 	"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf", "Phi-3.5-mini-instruct-Q4_K_M.gguf",
-	"gemma-3-1b-it-Q4_K_M.gguf", "gemma-3-4b-it-Q4_K_M.gguf", "gemma-2-2b-it-Q4_K_M.gguf"}
+	"gemma-3-1b-it-Q4_K_M.gguf", "gemma-3-4b-it-Q4_K_M.gguf", "gemma-2-2b-it-Q4_K_M.gguf",
+	"falcon/falcon-7b-instruct.Q4_K_M.gguf"}
 
 // headDeclined is why the tier still declines a served model's head where it
 // does, by its name (tier.DeclineName): a head graph past the norm and the
-// projection (granite's logit scale, gemma2's final softcap), which the
-// composed head does not take yet.
+// projection (granite's logit scale, gemma2's final softcap, falcon's
+// LayerNorm), which the composed head does not take yet.
 var headDeclined = map[string]string{
 	"granite/granite-3.3-2b-instruct-Q4_K_M.gguf": "a head graph other than a norm and its projection",
 	"granite/granite-4.0-micro-Q4_K_M.gguf":       "a head graph other than a norm and its projection",
 	"gemma-2-2b-it-Q4_K_M.gguf":                   "a head graph other than a norm and its projection",
+	"falcon/falcon-7b-instruct.Q4_K_M.gguf":       "a head graph other than a norm and its projection",
 }
 
 // formedModels is what the front end states and the serving gate does not
@@ -88,7 +90,28 @@ var headDeclined = map[string]string{
 var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
 	"stories260K.gguf", "synth-ernie45.gguf", "synth-phi4v.gguf", "synth-seedoss.gguf", "synth-smollm3.gguf",
 	"synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "newarch/synth-olmo2-q8.gguf", "synth-arcee.gguf", "synth-exaone4.gguf",
-	"synth-olmo3.gguf", "synth-phi3", "synth-glm4.gguf", "rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf"}
+	"synth-olmo3.gguf", "synth-phi3", "synth-glm4.gguf", "rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf",
+	"synth-phi2.gguf", "synth-starcoder.gguf", "synth-stablelm.gguf", "synth-stablelm-par.gguf",
+	"synth-starcoder2.gguf", "synth-falcon.gguf", "synth-falcon40.gguf", "synth-nemotron.gguf",
+	"synth-commandr.gguf", "synth-cohere2.gguf"}
+
+// headUnstated is the models of servedModels and formedModels whose head the
+// front end names as not stated yet, by the reason it gives: a LayerNorm head.
+// Their blocks and input rows form; a head that becomes stated fails the front
+// test until its entry goes.
+var headUnstated = map[string]Uncovered{
+	"falcon/falcon-7b-instruct.Q4_K_M.gguf": UncoveredClassic,
+	"synth-phi2.gguf":                       UncoveredClassic,
+	"synth-starcoder.gguf":                  UncoveredClassic,
+	"synth-stablelm.gguf":                   UncoveredClassic,
+	"synth-stablelm-par.gguf":               UncoveredClassic,
+	"synth-starcoder2.gguf":                 UncoveredClassic,
+	"synth-falcon.gguf":                     UncoveredClassic,
+	"synth-falcon40.gguf":                   UncoveredClassic,
+	"synth-nemotron.gguf":                   UncoveredClassic,
+	"synth-commandr.gguf":                   UncoveredClassic,
+	"synth-cohere2.gguf":                    UncoveredClassic,
+}
 
 // composedResidue is what the tier still launches of its own on a one-row
 // step whose blocks and head the composer serves: the rotary table.

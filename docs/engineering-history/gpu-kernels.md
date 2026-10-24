@@ -7012,3 +7012,55 @@ row where the composer's reads two.
   composer served the decode they break. The cost estimator prices a
   windowed attention over its whole history, an upper bound, because a step
   states no window.
+- **The classic transformer kit as ops.** The front end refused every block
+  of a LayerNorm model or a parallel one (UncoveredClassic), and the tier held
+  no vector for a LayerNorm's bias. A norm before a sublayer is now a
+  LayerNorm with its stored bias where the model's norms are mean-centred,
+  and an RMSNorm elsewhere; the norms after a sublayer and the q/k norms stay
+  RMS, as main runs them. The verifier holds a LayerNorm's second weight to a
+  vector of the row's width. A parallel block's MLP reads the block's input:
+  through its own norm where the container stores one (Falcon-40B's), through
+  the attention's where the two share one (phi-2, Falcon-7B, Command-R). Both
+  outputs add into the residual in main's order. The tier binds the two norm
+  biases. The front end now states phi-2, StarCoder, StarCoder2, StableLM
+  (serial and parallel), Falcon, Falcon-40B, Nemotron, Command-R and Cohere2
+  whole, and Falcon-7B-instruct; DBRX stays a mixture. Their heads stay the
+  tier's: a LayerNorm head is not stated yet.
+  - Served on a V100, CUDA and Vulkan, each fixture's blocks at every decode
+    step (3 blocks over 9 steps is 27 block steps; Cohere2's three sliding
+    layers are declined by the one named reason, a window, and its global
+    layer served, 9 of 36), the logits within 4.6e-14 to 6.7e-12 of the
+    host's. Each feature taken out of the device session alone, as the
+    composer reads the container too, moves them by 1.2e-4 to 2.5: the norm's
+    bias, the FFN's biases, the centring, the parallel residual, one norm for
+    both branches, the two norms swapped, the position table. Falcon-7B-instruct
+    Q4_K_M (4544 wide, 71 heads on one kv head) is served in every arm of
+    the serving gate on both backends: 4480 block steps, a median 1.037 (CUDA)
+    and 1.044 (Vulkan) of the tier's distance from the float reference, the
+    worst step 4.2e-05 and 4.5e-05 where the tier reaches 4.7e-05 and
+    6.5e-05. Its head is held to the named decline, 140 steps.
+  - The first Falcon-7B run found a bug in the tier, not in the composer. The
+    head folded into a prompt's last chunk (a quantized head over every
+    block) launched the RMS norm's two kernels for a LayerNorm model. On CUDA
+    the prompt's 65024 logits read zero (a launch is not checked for the
+    count of its buffers); on Vulkan the apply kernel was refused with 4
+    buffers where it wants 6, and the chunk fell to a row at a time. The fold
+    now runs the mean, the variance about it and the apply with the bias, as
+    the one-row head does. TestPrefillFoldsALayerNormHead (phi-2 with a q8
+    head) fails on Vulkan without it.
+  - TestComposedGPULayerNorm executes the LayerNorm on every backend, with
+    and without a bias, at widths of 1 to 4544 and up to 9 rows, with a guard
+    of poisoned words after the result, against the oracle and against three
+    violations (the scale's or the bias's words moved by one, the RMS norm of
+    the same shape): 49 shapes a backend, 1.5 s on a V100's CUDA and 101 s on
+    its Vulkan, where the 230-shape sweep it was cut from took 35 s and
+    1550 s, and passed on the V100's and an RTX 3050 Ti's two backends.
+    TestComposedCPULayerNorm does the same on the CPU, and
+    finds the CPU composer's norms short, RMS norm included: of 230 shapes
+    its RMS norm is right on 86; the LayerNorm is right on all 24 of those at
+    one element or whole vectors and on 40 of 62 ragged widths. The fused
+    reduce-then-map reads a ragged tail wrong, a row of 2 or more at 8 wide
+    or more is wrong for the RMS norm, and the register binder panics on a
+    one-row norm 10 to 15 wide (`l.Of - 1` of a vector tail no split made).
+    The test lists those shapes with their numbers as the CPU's work list and
+    asserts the rest.

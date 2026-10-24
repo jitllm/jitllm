@@ -120,6 +120,11 @@ func TestComposedCPUMatVec(t *testing.T) {
 // a weight's planes, the composer's scratch and constant blocks, each where
 // its call words say.
 func runCPU(codes []Code, x []float32, n int, planes [3][]uint32) ([]float32, error) {
+	return runCPUVectors(codes, x, n, planes, nil)
+}
+
+// runCPUVectors is runCPU with the vector weights vecs binds, by role.
+func runCPUVectors(codes []Code, x []float32, n int, planes [3][]uint32, vecs map[jlm.Role][]float32) ([]float32, error) {
 	out := make([]float32, n)
 	for i := range out {
 		out[i] = float32(math.NaN())
@@ -156,6 +161,9 @@ func runCPU(codes []Code, x []float32, n int, planes [3][]uint32) ([]float32, er
 				words = unsafe.Slice((*uint32)(unsafe.Pointer(&out[0])), len(out))
 			case o.Kind == OperandWeight && o.Region >= 0 && o.Region < 3:
 				words = planes[o.Region]
+			case o.Kind == OperandVector && len(vecs[o.Role]) > 0:
+				v := vecs[o.Role]
+				words = unsafe.Slice((*uint32)(unsafe.Pointer(&v[0])), len(v))
 			case o.Kind == OperandScratch:
 				if scratch[o] == nil {
 					size := 1 << 16

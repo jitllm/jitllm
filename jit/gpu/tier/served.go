@@ -707,6 +707,10 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.nAttn
 	case jlm.RoleFFNNorm:
 		return l.nFFN
+	case jlm.RoleAttnNormBias:
+		return l.nAttnB
+	case jlm.RoleFFNNormBias:
+		return l.nFFNB
 	case jlm.RolePostAttnNorm:
 		return l.nPostAttn
 	case jlm.RolePostFFNNorm:

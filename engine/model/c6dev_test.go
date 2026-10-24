@@ -15,18 +15,10 @@ import (
 // nothing, so each must move the device's logits.
 var c6DevViolations = map[string][]c6Violation{
 	"synth-phi2": {
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
-		{"no norm biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.attnNormB = nil })
-		}},
-		{"no FFN biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.upB, l.downB = nil, nil })
-		}},
-		{"serial residual", func(m *Model) func() {
-			undo := cfgMut(m, func(c *Config) { c.Parallel = false })
-			undoL := eachLayer(m, func(l *layer) { l.ffnNorm, l.ffnNormB = l.attnNorm, l.attnNormB })
-			return func() { undoL(); undo() }
-		}},
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
+		{"no norm biases", noNormBiases},
+		{"no FFN biases", noFFNBiases},
+		{"serial residual", serialFromShared},
 		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
 		{"no output norm bias", func(m *Model) func() {
 			was := m.outNormB
@@ -37,16 +29,12 @@ var c6DevViolations = map[string][]c6Violation{
 	"synth-starcoder": {
 		{"no position table", noPosTable},
 		{"rotary instead of none", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.NoPosEnc = false }) }},
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
-		{"no norm biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.attnNormB, l.ffnNormB = nil, nil })
-		}},
-		{"no FFN biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.upB, l.downB = nil, nil })
-		}},
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
+		{"no norm biases", noNormBiases},
+		{"no FFN biases", noFFNBiases},
 	},
 	"synth-stablelm": {
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
 		{"parallel residual", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Parallel = true }) }},
 		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
 	},
@@ -54,27 +42,23 @@ var c6DevViolations = map[string][]c6Violation{
 		{"serial residual", serialFromShared},
 	},
 	"synth-starcoder2": {
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
 		{"parallel residual", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Parallel = true }) }},
 		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
-		{"no FFN biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.upB, l.downB = nil, nil })
-		}},
+		{"no FFN biases", noFFNBiases},
 	},
 	"synth-falcon": {
 		{"serial residual", serialFromShared},
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
 	},
 	"synth-falcon40": {
 		{"the two norms swapped", swapNorms},
-		{"one norm for both branches", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.ffnNorm, l.ffnNormB = nil, nil })
-		}},
+		{"one norm for both branches", oneNormForBoth},
 	},
 	"synth-nemotron": {
 		{"GELU for relu2", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Act = nn.ActGELU }) }},
 		{"SiLU for relu2", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Act = nn.ActSiLU }) }},
-		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
+		{"RMSNorm for LayerNorm", rmsForLayerNorm},
 		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
 	},
 	"synth-dbrx": {

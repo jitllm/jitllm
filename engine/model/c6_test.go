@@ -222,7 +222,44 @@ func logitScale(m *Model) func() { return cfgMut(m, func(c *Config) { c.LogitSca
 func serialFromShared(m *Model) func() {
 	undo := cfgMut(m, func(c *Config) { c.Parallel = false })
 	undoL := eachLayer(m, func(l *layer) { l.ffnNorm, l.ffnNormB = l.attnNorm, l.attnNormB })
-	return func() { undoL(); undo() }
+	undoR := m.restate(func(inv map[jlm.Role]graph.Shape) {
+		for _, r := range [][2]jlm.Role{{jlm.RoleAttnNorm, jlm.RoleFFNNorm}, {jlm.RoleAttnNormBias, jlm.RoleFFNNormBias}} {
+			if s, ok := inv[r[0]]; ok {
+				inv[r[1]] = s
+			}
+		}
+	})
+	return func() { undoR(); undoL(); undo() }
+}
+
+// noNormBiases takes the pre-norms' biases away, in the model's layers and as
+// the composer reads the container; rmsForLayerNorm is the config's
+// mean-centring off with them.
+func noNormBiases(m *Model) func() {
+	undoL := eachLayer(m, func(l *layer) { l.attnNormB, l.ffnNormB = nil, nil })
+	undoR := dropStored(m, jlm.RoleAttnNormBias, jlm.RoleFFNNormBias)
+	return func() { undoR(); undoL() }
+}
+
+func rmsForLayerNorm(m *Model) func() {
+	undoC := cfgMut(m, func(c *Config) { c.LayerNorm = false })
+	undoR := dropStored(m, jlm.RoleAttnNormBias, jlm.RoleFFNNormBias)
+	return func() { undoR(); undoC() }
+}
+
+// noFFNBiases takes an ungated FFN's two biases away, in the layers and as
+// the composer reads the container.
+func noFFNBiases(m *Model) func() {
+	undoL := eachLayer(m, func(l *layer) { l.upB, l.downB = nil, nil })
+	undoR := dropStored(m, jlm.RoleFFNUpBias, jlm.RoleFFNDownBias)
+	return func() { undoR(); undoL() }
+}
+
+// oneNormForBoth makes a two-norm parallel block share its attention's norm.
+func oneNormForBoth(m *Model) func() {
+	undoL := eachLayer(m, func(l *layer) { l.ffnNorm, l.ffnNormB = nil, nil })
+	undoR := dropStored(m, jlm.RoleFFNNorm, jlm.RoleFFNNormBias)
+	return func() { undoR(); undoL() }
 }
 
 // noPosTable takes the learned position table away.

@@ -9716,9 +9716,16 @@ func (g *devTier) layersSession(s backend.Session) {
 			// out because mvrun's R is the chunk's.
 			hr := hb.head
 			lc.la(hb.spanK, p.NEmbd, bs.x, hb.x, hb.spanOff)
-			if hNorm == nil {
+			switch {
+			case hNorm == nil:
 				lc.la(hb.copyRows, p.NEmbd, hb.x, hb.h)
-			} else {
+			case hb.normVar != nil:
+				// A LayerNorm head (C6): the mean, the variance about it, and
+				// the apply with the norm's bias, as the one-row head's norm.
+				lc.la(hb.normPart, hb.parts, hb.x, hb.part)
+				lc.la(hb.normVar, hb.parts, hb.x, hb.part, hb.part2)
+				lc.la(hb.normApply, p.NEmbd, hb.x, hNorm, hb.part, hb.part2, hb.hNormB, hb.h)
+			default:
 				lc.la(hb.normPart, hb.parts, hb.x, hb.part)
 				lc.la(hb.normApply, p.NEmbd, hb.x, hNorm, hb.part, hb.h)
 			}

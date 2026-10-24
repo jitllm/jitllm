@@ -122,6 +122,9 @@ func Verify(g *Graph, f Facts) error {
 			if o.Weight[0].K != width(o.In[0]) || width(o.Out[0]) != width(o.In[0]) {
 				bad("%s: a scale of %d over a row of %d into %d", at, o.Weight[0].K, width(o.In[0]), width(o.Out[0]))
 			}
+			if o.Kind == OpLayerNorm && (len(o.Weight) > 2 || len(o.Weight) == 2 && (o.Weight[1].Rows != 0 || o.Weight[1].K != width(o.In[0]))) {
+				bad("%s: %d weights where a scale and a bias of the row's %d are", at, len(o.Weight), width(o.In[0]))
+			}
 		case OpHeadNorm:
 			if len(o.In) != 1 || len(o.Out) != 1 || o.Attr.HeadDim <= 0 || width(o.In[0])%o.Attr.HeadDim != 0 {
 				bad("%s: heads of %d over a row of %d", at, o.Attr.HeadDim, width(o.In[0]))

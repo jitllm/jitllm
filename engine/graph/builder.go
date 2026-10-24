@@ -63,6 +63,19 @@ func (s *Builder) Norm(x ValueID, role jlm.Role, eps float64) ValueID {
 	return y
 }
 
+// LayerNorm is the mean-centred norm of x with role's scale and each bias
+// role's vector.
+func (s *Builder) LayerNorm(x ValueID, role jlm.Role, eps float64, bias ...jlm.Role) ValueID {
+	k := s.width(x)
+	w := []Binding{{Role: role, K: k}}
+	for _, b := range bias {
+		w = append(w, Binding{Role: b, K: k})
+	}
+	y := s.value(role.String(), k)
+	s.G.op(Op{Kind: OpLayerNorm, In: []ValueID{x}, Out: []ValueID{y}, Weight: w, Attr: Attrs{Eps: eps}})
+	return y
+}
+
 // Add is x + y.
 func (s *Builder) Add(x, y ValueID) ValueID {
 	z := s.value("sum", s.width(x))

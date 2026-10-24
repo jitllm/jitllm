@@ -35,10 +35,18 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 					t.Fatalf("block %d has no graph: %s %v", li, m.Uncovered(li), m.UncoveredErr(li))
 				}
 			}
-			if f.HeadGraph() == nil || f.EmbedGraph() == nil {
-				t.Fatalf("no head (%s %v) or input rows (%s %v)", m.Uncovered(-1), m.UncoveredErr(-1), m.Uncovered(-2), m.UncoveredErr(-2))
+			if f.EmbedGraph() == nil {
+				t.Fatalf("no input rows (%s %v)", m.Uncovered(-2), m.UncoveredErr(-2))
 			}
-			parts, err := jit.Front(f, false)
+			// A head the list holds to its reason is refused by it, and a head
+			// not on the list is stated.
+			want, unstated := headUnstated[file]
+			if why := m.Uncovered(-1); unstated && (f.HeadGraph() != nil || why != want) {
+				t.Fatalf("the head is listed as refused by %q and is stated or refused by %q: take it off headUnstated", want, why)
+			} else if !unstated && f.HeadGraph() == nil {
+				t.Fatalf("no head (%s %v)", why, m.UncoveredErr(-1))
+			}
+			parts, err := frontParts(f, unstated)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -70,6 +78,7 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 		want Uncovered
 	}{
 		{"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", UncoveredMixture},
+		{"synth-dbrx.gguf", UncoveredMixture},
 		{"synth-bitnet-f16.gguf", UncoveredSubNorm},
 		{"synth-qwen2vl.gguf", UncoveredRopeAxes},
 	} {
@@ -88,6 +97,20 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 			}
 		})
 	}
+}
+
+// frontParts is the model's parts as the composer forms them: the whole
+// front, or where the head is not stated yet (headUnstated) the input rows
+// and the blocks, which are.
+func frontParts(f jit.Model, headless bool) ([]jit.Part, error) {
+	if !headless {
+		return jit.Front(f, false)
+	}
+	parts := []jit.Part{{Kind: jit.PartEmbed, Block: -1, Graph: f.EmbedGraph()}}
+	for li := range f.Blocks() {
+		parts = append(parts, jit.Part{Kind: jit.PartBlock, Block: li, Graph: f.BlockGraph(li)})
+	}
+	return parts, nil
 }
 
 // TestFrontNamesNoFamily holds the front end to reading numbers: its source

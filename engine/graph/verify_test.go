@@ -67,3 +67,53 @@ func TestVerifierHoldsTheStructure(t *testing.T) {
 		t.Errorf("a stored bias no op binds is reported as %v", u)
 	}
 }
+
+// TestVerifierHoldsALayerNormsBias holds a LayerNorm's optional second weight
+// to a vector of the row's width, and a stored bias the op does not bind to
+// being reported.
+func TestVerifierHoldsALayerNormsBias(t *testing.T) {
+	const d = 8
+	build := func() (*Graph, Facts) {
+		b := NewBlock(0)
+		b.Out(b.LayerNorm(b.In("x", d), jlm.RoleAttnNorm, 1e-5, jlm.RoleAttnNormBias))
+		return b.G, Facts{Inventory: map[jlm.Role]Shape{jlm.RoleAttnNorm: {K: d}, jlm.RoleAttnNormBias: {K: d}}}
+	}
+	g, f := build()
+	if err := Verify(g, f); err != nil {
+		t.Fatalf("a LayerNorm with its bias is refused: %v", err)
+	}
+	if u := Unbound(g, f); len(u) != 0 {
+		t.Fatalf("a LayerNorm with its bias leaves %v unbound", u)
+	}
+	for _, c := range []struct {
+		name   string
+		break_ func(g *Graph, f Facts)
+	}{
+		{"a bias wider than the row", func(g *Graph, f Facts) {
+			g.Ops[0].Weight[1].K = 2 * d
+			f.Inventory[jlm.RoleAttnNormBias] = Shape{K: 2 * d}
+		}},
+		{"a bias that is a matrix", func(g *Graph, f Facts) {
+			g.Ops[0].Weight[1].Rows = d
+			f.Inventory[jlm.RoleAttnNormBias] = Shape{K: d, Rows: d}
+		}},
+		{"a third weight", func(g *Graph, f Facts) {
+			g.Ops[0].Weight = append(g.Ops[0].Weight, Binding{Role: jlm.RoleFFNNormBias, K: d})
+			f.Inventory[jlm.RoleFFNNormBias] = Shape{K: d}
+		}},
+	} {
+		g, f := build()
+		c.break_(g, f)
+		if err := Verify(g, f); err == nil || !strings.Contains(err.Error(), "a scale and a bias") {
+			t.Errorf("%s: Verify said %v, want an error naming the scale and the bias", c.name, err)
+		}
+	}
+	g, f = build()
+	g.Ops[0].Weight = g.Ops[0].Weight[:1]
+	if err := Verify(g, f); err != nil {
+		t.Fatalf("a LayerNorm without a bias is refused: %v", err)
+	}
+	if u := Unbound(g, f); len(u) != 1 || u[0] != jlm.RoleAttnNormBias {
+		t.Errorf("a stored norm bias no op binds is reported as %v", u)
+	}
+}

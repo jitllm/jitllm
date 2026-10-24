@@ -294,8 +294,6 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredRopeAxes
 	case c.NonCausal || c.BidirSWA:
 		return UncoveredNonCausal
-	case c.LayerNorm || c.Parallel:
-		return UncoveredClassic
 	case c.QKL2Norm || c.QKNormPost && c.QKNormWide:
 		return UncoveredQKNormPlace
 	case c.VNorm:
@@ -344,12 +342,14 @@ func (m *Model) ropeAt(li int) nn.Rope {
 }
 
 // blockGraph is block li's graph: the attention block the container states
-// -- an RMSNorm where it stores one, q, k and v with their stored biases, the
-// q/k norm, the rotary, the history append, attention of the block's heads,
-// scale, window, softcap and sinks, the output projection, a norm over it
-// where stored and the residual, scaled where the container states a scale;
-// then the MLP the same way, gated where it stores a gate -- or why it has
-// none.
+// -- a norm where it stores one (a LayerNorm with its bias where the model's
+// norms are mean-centred), q, k and v with their stored biases, the q/k norm,
+// the rotary, the history append, attention of the block's heads, scale,
+// window, softcap and sinks, the output projection, a norm over it where
+// stored and the residual, scaled where the container states a scale; then
+// the MLP the same way, gated where it stores a gate, reading the residual
+// after the attention or, in a parallel block, the block's input -- or why
+// it has none.
 func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if why := m.uncovered(li); why != Covered {
 		return nil, why, nil
@@ -374,6 +374,17 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		}
 		return v
 	}
+	// preNorm is the norm before a sublayer: mean-centred, with its stored
+	// bias, where the model's are; the post-norms and the q/k norms stay RMS.
+	preNorm := func(v graph.ValueID, r, bias jlm.Role) graph.ValueID {
+		if _, ok := f.Inventory[r]; !ok {
+			return v
+		}
+		if c.LayerNorm {
+			return b.LayerNorm(v, r, c.RMSEps, stored(bias)...)
+		}
+		return b.Norm(v, r, c.RMSEps)
+	}
 	resid := func(x, y graph.ValueID) graph.ValueID {
 		if s := c.ResidualScale; s != 0 && s != 1 {
 			return b.Emit(graph.OpAdd, []graph.ValueID{x, y}, []graph.Result{{Name: "sum", Width: d}}, nil, graph.Attrs{Alpha: s}, nil, nil)[0]
@@ -381,7 +392,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		return b.Add(x, y)
 	}
 	x := b.In("x", d)
-	n := norm(x, jlm.RoleAttnNorm)
+	n := preNorm(x, jlm.RoleAttnNorm, jlm.RoleAttnNormBias)
 	q := b.MatVec(n, jlm.RoleAttnQ, qdim, stored(jlm.RoleAttnQBias)...)
 	k := b.MatVec(n, jlm.RoleAttnK, kvDim, stored(jlm.RoleAttnKBias)...)
 	v := b.MatVec(n, jlm.RoleAttnV, kvDim, stored(jlm.RoleAttnVBias)...)
@@ -420,7 +431,16 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	att := b.Attend(q, hist, a, stored(jlm.RoleAttnSinks)...)
 	x2 := resid(x, norm(b.MatVec(att, jlm.RoleAttnOut, d, stored(jlm.RoleAttnOutBias)...), jlm.RolePostAttnNorm))
-	n2 := norm(x2, jlm.RoleFFNNorm)
+	// A parallel block's MLP reads the block's input: through its own norm
+	// where it stores one, through the attention's where the two share one.
+	ffnIn := x2
+	if c.Parallel {
+		ffnIn = x
+	}
+	n2 := preNorm(ffnIn, jlm.RoleFFNNorm, jlm.RoleFFNNormBias)
+	if _, own := f.Inventory[jlm.RoleFFNNorm]; c.Parallel && !own {
+		n2 = n
+	}
 	var h graph.ValueID
 	if _, ok := f.Inventory[jlm.RoleFFNGate]; ok {
 		gt := b.MatVec(n2, jlm.RoleFFNGate, nffn)
