@@ -44,6 +44,7 @@ and the code has moved since (RULE 12). Paths below are under
 | a biased bank's expert cache | gpt-oss's experts carry biases indexed by the selection, which the cache rewrites as slots, so its hybrid blocks keep no cache (`cacheable`); a second buffer of true ids would lift it | same |
 | the split for a chunk's rows | a chunk of more than eight rows runs every row's experts on the host; the card's cache could run each row's hits as decode's split does | same |
 | the tuners' picks and the greedy text | the split tuner's per-process picks move the rounding and with it a MoE's text and hit rate (20.1-27.5 tok/s over six tune states of one build); whether the in-situ retune should cover every dense decode matvec (a linear block's and the hyper-connections' are left to the single-matrix trial) is unmeasured, since a rate on one text cannot resolve it | same |
+| the composed split attention at one lane | composed blocks at one lane (`tier.WithLanes(1)`) leave every step's logits at NMSE 1.0 wherever SplitRange splits the attention: its output reaches 4e30 while q, k and v are right, the partial's per-partition maxima and sums are wrong, and turning SplitRange off restores it; the tier at one lane is sound | gpu-kernels.md "rnj-1's 43rd step reads as a near tie" |
 | the shelved levers | small levers re-opened under RULE 6 | below |
 | the smaller items | SPIR-V Tok-invariance, the M4 MoE rows, `centerMinTok`, the amd64 f16 KV rate, the arm64 integer fold for Q4_K/Q5_K, `emitA64KScales`' mask immediates | below |
 

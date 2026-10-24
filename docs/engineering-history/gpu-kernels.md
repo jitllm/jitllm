@@ -6916,32 +6916,42 @@ row where the composer's reads two.
   and keeps the median at 1.5 times. The one-position-off check asks for
   ten times the arm's worst rather than a hundred, which still sets a wrong
   part (NMSE 4-6) an order of magnitude past any arm.
-- **rnj-1's 43rd step is a near tie, not a composed gap.** Measured on one
-  V100 under CUDA and Vulkan, over the gate's 140 teacher-forced steps. The
-  composed blocks compute the tier's arithmetic: rnj-1's last block served
-  alone moves the logits 3e-14 from the tier's at the median step. Over the
-  other 139 steps the composed CUDA blocks sit nearer the float reference
-  than CUDA's tier (mean NMSE 1.2e-3 against 1.4e-3). Step 43 decodes a flat
-  distribution, its logits' squared norm 2.1e5 against 6.4e6 at the median
-  step. There the int8 rounding of a single block, every other block float,
-  moves the logits 0.016 from the reference, 1800 times that block's median
-  effect, and every int8 arrangement lands somewhere else. Main's CUDA tier
-  lands at 0.029, and at 0.079 at one lane (WithLanes(1)); the Vulkan tier
-  at 0.0023, and 0.022 at one lane. The composed blocks land at 0.19 on CUDA
-  and 0.032 on Vulkan, and composing a quarter or a half of the blocks
-  beside the tier's lands anywhere from 0.0017 to 0.21. The two float
-  references stay 6e-4 apart. The gate holds an arm's worst step to four
-  times the widest of the two tiers' distances, 0.0425 at step 91, so rnj-1
-  fails it on CUDA by 11% and stays in formedModels, its comment now naming
-  the tie. The spikes do not recur at one key count modulo 16, 32 or 64. The
-  backends' forms differ only in the attention and the post-norms' sums,
-  which CUDA, whose slots are known, stages and splits, and the matvecs'
-  forms are the same at K 4096 and 16384. The YaRN scale is applied once:
-  the composed rotary reads the tier's table, never the op's Mscale.
-  Composed blocks on CUDA at one lane (WithLanes(1)) leave every step's
-  logits at NMSE 1.0 from the reference, one block enough: rnj-1,
-  Llama-3.2-1B, and stories15M on a laptop's RTX 3050 Ti. There the split
-  attention's output reaches 4e30 where q, k and v are right, and turning
-  SplitRange off restores it. The tier at one lane is sound, and so are the
-  composed blocks on Vulkan at one lane, whose slots are unknown and whose
-  attention is not split: open.
+- **rnj-1's 43rd step reads as a near tie.** Measured on one V100 under
+  CUDA and Vulkan, over the gate's 140 teacher-forced steps. rnj-1's last
+  block composed alone moves the logits 3e-14 from the tier's at the median
+  step. Over the other 139 steps the composed CUDA blocks sit nearer the
+  float reference than CUDA's tier (mean NMSE 1.2e-3 against 1.4e-3). Step
+  43 decodes a flat distribution, its logits' squared norm 2.1e5 against
+  6.4e6 at the median step. There the int8 rounding of a single block,
+  every other block float, moves the logits 0.016 from the reference, 1800
+  times that block's median effect, and every int8 arrangement lands
+  somewhere else. Main's CUDA tier lands at 0.029, and at 0.079 at one lane
+  (WithLanes(1)); the Vulkan tier at 0.0023, and 0.022 at one lane. The
+  composed blocks land at 0.19 on CUDA and 0.032 on Vulkan, and composing a
+  quarter or a half of the blocks beside the tier's lands anywhere from
+  0.0017 to 0.21. The two float references stay 6e-4 apart. The gate holds
+  an arm's worst step to four times the widest of the two tiers' distances,
+  0.0425 at step 91, so rnj-1 fails it on CUDA by 11% and stays in
+  formedModels. One alternative is untested: CUDA's split attention.
+  SplitRange cuts a step's keys into max(1, ceil(keys/chunk), min(sq,
+  capped)) partitions (jit/geometry.go): sq is the square root of keys/8
+  rounded to a power of two, capped the splits the device's slots hold at
+  1280 threads a query-head group (1 where the device reports no slots, as
+  the V100's Vulkan does), and chunk the geometry's partition, 896 positions
+  for rnj-1 at 32 lanes. At the gate's key bound of 256, CUDA cuts rnj-1's
+  attention 8 ways and Vulkan does not cut it, so only the CUDA arms run the
+  split. Step 43 on CUDA at 32 lanes with SplitRange off, against on,
+  decides it; until then the gap is open. The spikes do not recur at one key
+  count modulo 16, 32 or 64. The matvecs' forms are the same on both
+  backends at K 4096 and 16384; only the attention and the post-norms' sums
+  differ. The YaRN scale is applied once: the composed rotary reads the
+  tier's table, never the op's Mscale. Composed blocks at one lane
+  (WithLanes(1)) leave every step's logits at NMSE 1.0 where the attention
+  splits: rnj-1 and Llama-3.2-1B under the V100's CUDA, and stories15M on a
+  laptop's RTX 3050 Ti, one block enough on the last two. The split
+  attention's output reaches 4e30 there while q, k and v are right, and
+  turning SplitRange off restores it. At one lane the chunk is 504
+  positions for rnj-1 and 1016 for stories15M, so a device that reports no
+  slots splits only a session whose key bound passes it: the V100's Vulkan
+  at the gate's 256 did not split, and its one-lane composed runs were
+  sound. The tier at one lane is sound: open (open-questions.md).
