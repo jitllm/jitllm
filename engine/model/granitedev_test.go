@@ -87,7 +87,9 @@ func TestGraniteOnEveryDevice(t *testing.T) {
 					if why != "" {
 						t.Fatal(why)
 					}
-					if cs.ResidScaled == 0 {
+					// The scaled add is the tier's own, or the composer's block (a
+					// composed build), whose add carries the scale as its factor.
+					if composed, _, _ := cs.ServedPart(tier.ComposedBlock); cs.ResidScaled == 0 && composed == 0 {
 						t.Fatalf("no residual add took the scale (Stats.ResidScaled 0): the scaled path was not selected")
 					}
 					worst := 0.0
@@ -389,12 +391,15 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 						bound float64
 					}{{"decode", decode, wantDec, 1e-6}, {"prefill", prefill, wantPre, 1e-5}} {
 						got, s := onDevice(arm.run)
-						if s.ResidScaled == 0 {
+						// The scaled add is the tier's own, or the composer's block
+						// (a composed build), whose add carries the scale as its factor.
+						composed, _, _ := s.ServedPart(tier.ComposedBlock)
+						if s.ResidScaled == 0 && composed == 0 {
 							t.Fatalf("%s: no residual add took the scale -- the scaled path was not selected", arm.name)
 						}
 						w := worstOf(arm.want, got)
 						t.Logf("%s, %d blocks and the head on %s: worst logit NMSE %.3e against the host "+
-							"(%d scaled residual adds)", arm.name, m.Cfg.NLayer, dev, w, s.ResidScaled)
+							"(%d scaled residual adds, %d block steps composed)", arm.name, m.Cfg.NLayer, dev, w, s.ResidScaled, composed)
 						if !(w < arm.bound) {
 							t.Fatalf("%s: worst logit NMSE %.3e against the host, bound %.0e", arm.name, w, arm.bound)
 						}
@@ -423,6 +428,16 @@ func TestGraniteScalesOnEveryDevice(t *testing.T) {
 						{"logit divisor skipped", nil, func() func() {
 							c.LogitScale = 1
 							return func() { c.LogitScale = 8 }
+						}},
+						// The same two scales as the model's statement of them, which
+						// reaches the composer's blocks as it reaches the tier's: a
+						// fault in the tier's kernels reaches the decode only where
+						// they are the tier's own.
+						{"residual scale not stated", nil, func() func() {
+							return cfgMut(m, func(c *Config) { c.ResidualScale = 1 })
+						}},
+						{"attention at 1/sqrt(head_dim), stated", nil, func() func() {
+							return cfgMut(m, func(c *Config) { c.AttnScale = 1 / math.Sqrt(float64(c.HeadDim)) })
 						}},
 					} {
 						var opts []tier.Option
