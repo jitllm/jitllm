@@ -6800,3 +6800,16 @@ row where the composer's reads two.
   states, the tier cannot place stories260K (its quantizer refuses the
   172-wide rows), and float fixtures equal the float reference, which the
   gate's band cannot measure; the front-end test forms both.
+- **A form's life.** A composed form's buffers were the device's without
+  the budget knowing: allocated beside the blocks, freed only when the
+  device closed, and a block placed again after a move formed at its first
+  step. A form now charges its bytes when it builds (one the budget cannot
+  hold is refused), counts the served parts that launch it and goes with the
+  last of them when its block is released, and every placement of a block
+  forms its part, a move's and a re-offer's too. On Llama-3.2-1B the forms of
+  a whole placement are about 21.7 MB: walking the seam home and back six
+  times charges the same budget at every whole placement and forms no part
+  at a step (a release that does not refund reads 1076730144 bytes against
+  1055018128 at the second cycle; a placement that does not form reads 16
+  parts formed at a step). Poisoned scratch poisons the forms' workgroup
+  arrays too, and the poisoned arm's logits do not move.

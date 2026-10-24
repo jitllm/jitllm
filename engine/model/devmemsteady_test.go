@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -18,6 +19,11 @@ import (
 // every cycle, so two cycles in a row below the first fail. One cycle below is
 // not enough, because the figure is the whole card's and another process
 // allocating on it moves it too.
+//
+// With the composer serving the blocks and the head, every placement forms
+// the blocks' parts and every release frees them: the budget the tier
+// charges at the whole placement is the same each cycle, no step forms a
+// part, and the composer serves through all of it.
 func TestDeviceMemoryHoldsSteadyAcrossMoves(t *testing.T) {
 	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	if _, err := os.Stat(p); err != nil {
@@ -28,7 +34,14 @@ func TestDeviceMemoryHoldsSteadyAcrossMoves(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	g, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff))
+	for _, parts := range []tier.Parts{0, tier.ComposedBlock | tier.ComposedHead} {
+		t.Run(fmt.Sprintf("composed%d", parts), func(t *testing.T) { memoryAcrossMoves(t, m, parts) })
+	}
+}
+
+func memoryAcrossMoves(t *testing.T, m *Model, parts tier.Parts) {
+	g, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff),
+		tier.WithConfig(func(c *tier.Config) { c.Composed = parts }))
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}
@@ -45,7 +58,7 @@ func TestDeviceMemoryHoldsSteadyAcrossMoves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var steady uint64
+	var steady, charged uint64
 	below := 0
 	for c := 0; c < cycles; c++ {
 		for i, n := range []int{full / 2, 0, full / 3, full} {
@@ -56,6 +69,18 @@ func TestDeviceMemoryHoldsSteadyAcrossMoves(t *testing.T) {
 				if lg, err = st.Forward(Greedy(lg)); err != nil {
 					t.Fatal(err)
 				}
+			}
+		}
+		if parts != 0 {
+			s := g.Stats()
+			if s.FormedAtStep != 0 {
+				t.Fatalf("cycle %d: %d composed part(s) formed at a step: a placement did not form them", c, s.FormedAtStep)
+			}
+			if c == 0 {
+				charged = s.BudgetUsed
+			} else if s.BudgetUsed != charged {
+				t.Fatalf("cycle %d: the whole placement charges %d bytes, cycle 0 %d: a form's bytes leak or go uncharged",
+					c, s.BudgetUsed, charged)
 			}
 		}
 		free := g.DeviceFree()[0]
@@ -75,6 +100,11 @@ func TestDeviceMemoryHoldsSteadyAcrossMoves(t *testing.T) {
 			}
 		default:
 			below = 0
+		}
+	}
+	if parts != 0 {
+		if n, d, _ := g.Stats().ServedPart(parts); n == 0 || d != 0 {
+			t.Fatalf("the composer served %d part steps and declined %d across the moves", n, d)
 		}
 	}
 }

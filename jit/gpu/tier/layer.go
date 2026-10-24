@@ -2891,6 +2891,16 @@ func declineWeights(w *nn.LayerWeights) string {
 // card with room still gets the block and only when no device has room does
 // anybody swap.
 func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeights, mayPage bool) (placed bool) {
+	// Every placement of a block forms its composed part, a move's and a
+	// re-offer's too: a step would otherwise meet it first. Deferred first,
+	// it runs after the body's own deferred unlocks.
+	defer func() {
+		if placed {
+			g.mu.Lock()
+			g.prewarmComposedBlock(li)
+			g.mu.Unlock()
+		}
+	}()
 	// The host side of a hybrid block is the offering session's: a placed
 	// block is shared by every session that attaches, and each runs its experts
 	// on its own State (runHost looks it up by the call's session). Recorded
@@ -10264,6 +10274,9 @@ func (g *devTier) releaseBlock(li int) {
 	g.freeRecSnaps(li)
 	if l == nil {
 		return
+	}
+	if l.graph != nil {
+		g.dropServed(l.graph)
 	}
 	// The same free path as a page-out (layer.tensors()); a release also
 	// gives up the KV cache and the block itself.

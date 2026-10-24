@@ -58,6 +58,12 @@ type partForm struct {
 	bufs  []backend.Buf
 	// width is each output's width in floats at the form's rows.
 	width []int
+	// key is the composer's Key the form is kept under, bytes what its
+	// buffers charge the device's budget, and refs the served parts that
+	// launch it: the form goes with the last of them.
+	key   jit.Key
+	bytes uint64
+	refs  int
 }
 
 // partCode is one of a form's kernels, its launch shape and its arguments,
@@ -152,6 +158,7 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 		}
 		g.poisonBuf(b, max(n, 4))
 		f.bufs = append(f.bufs, b)
+		f.bytes += uint64(max(n, 4))
 		return len(f.bufs) - 1, nil
 	}
 	for _, c := range codes {
@@ -213,6 +220,13 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 		f.args = append(f.args, args)
 		f.codes[len(f.codes)-1].bufs = make([]backend.Buf, len(args))
 	}
+	// The form's buffers are the device's like a block's weights: charged to
+	// its budget, which a form it cannot hold refuses.
+	if !g.room(f.bytes) {
+		f.close()
+		return nil, fmt.Errorf("its buffers need %d bytes, which the device's budget does not hold", f.bytes)
+	}
+	g.charge(f.bytes)
 	return f, nil
 }
 
@@ -261,15 +275,43 @@ func (f *partForm) close() {
 	f.codes, f.bufs = nil, nil
 }
 
+// freeForm frees form f and gives its buffers' bytes back to the budget.
+// Callers hold g.mu.
+func (g *devTier) freeForm(f *partForm) {
+	f.close()
+	g.refund(f.bytes)
+	f.bytes = 0
+}
+
 // partsClose frees every served part's form. Callers hold g.mu.
 func (g *devTier) partsClose() {
 	for k, f := range g.servedForms {
 		if f != nil {
-			f.close()
+			g.freeForm(f)
 		}
 		delete(g.servedForms, k)
 	}
 	clear(g.served)
+}
+
+// dropServed forgets the served parts of graph gr, a failed one's included,
+// and frees each form no part launches any more: a block's parts go with the
+// block, and a block placed again forms them again. Callers hold g.mu and
+// drop the graph, so no recording launches a form it frees.
+func (g *devTier) dropServed(gr *graph.Graph) {
+	for sk, sv := range g.served {
+		if sk.graph != gr {
+			continue
+		}
+		delete(g.served, sk)
+		if sv == nil {
+			continue
+		}
+		if sv.f.refs--; sv.f.refs == 0 {
+			delete(g.servedForms, sv.f.key)
+			g.freeForm(sv.f)
+		}
+	}
 }
 
 // Parts names the parts of a model the composer serves (Config.Composed).
@@ -390,6 +432,11 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	}
 	if g.composer == nil {
 		g.composer = jit.Default()
+		// Poisoned scratch poisons the forms' workgroup arrays too: a kernel
+		// reading one it never wrote changes the logits.
+		if g.kb.poisonScratch {
+			g.composer.PoisonWorkgroupMemory()
+		}
 	}
 	r := g.composer
 	if g.ComposedFloat {
@@ -414,8 +461,10 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 			g.LastErr = err.Error()
 			return nil, fmt.Errorf("the composed %s: %w", partNames[sk.kind], err)
 		}
+		f.key = key
 		g.servedForms[key] = f
 	}
+	f.refs++
 	sv := &servedPart{sl: sl, f: f, n: len(sl.graph.In), m: len(sl.graph.Out)}
 	g.served[sk] = sv
 	return sv, nil
@@ -587,28 +636,36 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 // placement, as prewarmDecodePlans builds the decode plans: a form met first
 // at a token compiles inside it. Callers hold g.mu.
 func (g *devTier) prewarmComposed() {
+	for li := range g.layers {
+		g.prewarmComposedBlock(li)
+	}
+	g.prewarmComposedHead()
+}
+
+// prewarmComposedBlock forms block li's part where the composer serves it:
+// at the placement, and at every placement of the block after it (a move, a
+// seam grown back), which a step would otherwise meet first. A form that
+// does not build is named in LastErr and leaves the other blocks to form.
+// Callers hold g.mu.
+func (g *devTier) prewarmComposedBlock(li int) {
 	bs := g.bs
-	if g.Composed == 0 || bs == nil || bs.pkv == nil || g.kvp == nil {
+	if g.NoPromptPrewarm || g.Composed&ComposedBlock == 0 || bs == nil || bs.pkv == nil || g.kvp == nil ||
+		li >= len(g.layers) || g.layers[li] == nil {
+		return
+	}
+	l := g.layers[li]
+	if g.blockServes(l, li, &bs.p, bs, false) != partServes {
 		return
 	}
 	g.prewarming = true
 	defer func() { g.prewarming = false }()
-	if g.Composed&ComposedBlock != 0 {
-		for li, l := range g.layers {
-			if l == nil || g.blockServes(l, li, &bs.p, bs, false) != partServes {
-				continue
-			}
-			rcs := bs.cs
-			if bs.csSWA != nil && bs.p.LocalRope(li) {
-				rcs = bs.csSWA
-			}
-			if _, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.zero, bs.p.MaxSeq, g.kvp.p); err != nil {
-				g.LastErr = "the composed block: " + err.Error()
-				return
-			}
-		}
+	rcs := bs.cs
+	if bs.csSWA != nil && bs.p.LocalRope(li) {
+		rcs = bs.csSWA
 	}
-	g.prewarmComposedHead()
+	if _, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.zero, bs.p.MaxSeq, g.kvp.p); err != nil {
+		g.LastErr = "the composed block: " + err.Error()
+	}
 }
 
 // prewarmComposedHead forms the head's part where the composer serves it,
