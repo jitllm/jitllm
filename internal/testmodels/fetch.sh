@@ -133,6 +133,7 @@ newarch/EXAONE-4.0-1.2B-Q4_K_M.gguf                LGAI-EXAONE/EXAONE-4.0-1.2B-G
 newarch/SmolLM3-3B-Q4_K_M.gguf                     unsloth/SmolLM3-3B-GGUF                                SmolLM3-3B-Q4_K_M.gguf                                                          1915306528   default
 newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf   mistralai/Ministral-3-3B-Instruct-2512-GGUF            Ministral-3-3B-Instruct-2512-Q4_K_M.gguf                                        2147023008   default
 newarch/AFM-4.5B-Q4_K_M.gguf                       arcee-ai/AFM-4.5B-GGUF                                 AFM-4.5B-Q4_K_M.gguf                                                            2916301824   default
+rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf         bartowski/EssentialAI_rnj-1-instruct-GGUF              EssentialAI_rnj-1-instruct-Q4_K_M.gguf                                          5113914656   default
 # --- vision: text model and projector ---
 SmolVLM-256M-Instruct-Q8_0.gguf                    ggml-org/SmolVLM-256M-Instruct-GGUF                    SmolVLM-256M-Instruct-Q8_0.gguf                                                 175054528    default
 mmproj-SmolVLM-256M-Instruct-Q8_0.gguf             ggml-org/SmolVLM-256M-Instruct-GGUF                    mmproj-SmolVLM-256M-Instruct-Q8_0.gguf                                          103769856    default

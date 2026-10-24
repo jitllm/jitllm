@@ -6869,3 +6869,50 @@ row where the composer's reads two.
   those locals' values, never their addresses, and `go build -gcflags=-m`
   moves none of them. TestDecodeDoesNotAllocate passes again on
   Llama-3.2-1B on every arm, default and composed builds alike.
+- **Post-norms, scaled residuals and ungated MLPs as ops.** The front end
+  refused a block with a norm over a sublayer's output and one whose
+  residual is scaled. It also bound a pre-norm and a gate whether or not the
+  container stored one, so a post-norm block (OLMo 2, EXAONE 4) and an
+  ungated one (AFM) did not verify. A block now binds a pre-norm and a gate
+  only where they are stored, and applies an RMSNorm to an output where
+  that is stored. A scale on the residual becomes the add's own factor, and
+  an ungated MLP is its activation over the up projection. A model whose
+  blocks were stated already builds the same graph, op for op, so its forms
+  and their keys do not move. The tier binds the post-norms main uploads.
+  The front end now states OLMo-2-1B, EXAONE-4.0-1.2B, AFM-4.5B,
+  granite-3.3-2b, granite-4.0-micro and rnj-1 whole. The serving gate runs
+  the first five, granite's head held to its one named decline, a head
+  graph past the norm and the projection, until the head takes its logit
+  scale. rnj-1 forms and is not served: at one CUDA step its composed blocks
+  reach 0.19 from the float reference, where both backends' tiers stay
+  under 0.043. That gap is open.
+  gemma-3-1b and the OLMo 2, arcee and EXAONE fixtures form; their sliding
+  layers are the tier's until it serves windows. A failed form now carries
+  its cause to every later step. The first OLMo 2 run read only "did not
+  form earlier", and the cause was a binding missing from the tier.
+- **Partial rotaries, a q norm after the rotary and windows past the
+  session.** A rotary over part of each head forms as one over the whole:
+  the rotation turns the first NRot elements and copies the rest. A q norm
+  after the rotary keeps k's before it, as main runs Hunyuan: the converter
+  folds k's weight into q's, and an unweighted norm commutes with the
+  rotation. A window at least the session's length cuts nothing (Phi-3.5's
+  262144 against its 131072 context), so the tier serves such a block. This
+  states Hunyuan-0.5B and Phi-3.5-mini and forms the glm4 fixture. A rotary
+  over several position axes (M-RoPE's sections, Qwen3-VL's interleaving,
+  XD) stays uncovered by name until the composer's table holds several
+  positions a row.
+- **The serving gate's band is the tier's backends' spread.** Held to the
+  tier on its own backend, OLMo-2-0425-1B and EXAONE-4.0-1.2B failed on
+  CUDA and Vulkan, yet against the float reference they sat at the tier's
+  distance at the median step: 0.96-1.06 of it. Step by step, OLMo 2 is
+  quiet (2e-3) everywhere but its fifth teacher-forced step. There the
+  tier is 0.167 from the float reference on CUDA and 0.021 on Vulkan, and
+  main's two backends are 0.118 apart: a near tie each implementation
+  leaves on one side or the other. The composed path left it at 0.21 and
+  0.16. EXAONE is noisy throughout on both paths, and at its worst CUDA
+  step the composed path is nearer the reference than the tier. The gate
+  now measures the tier against the reference on every device first. It
+  holds each arm's worst step to four times the widest of those backends,
+  and keeps the median at 1.5 times. The one-position-off check asks for
+  ten times the arm's worst rather than a hundred, which still sets a wrong
+  part (NMSE 4-6) an order of magnitude past any arm.

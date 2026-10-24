@@ -35,7 +35,6 @@ const (
 	UncoveredSelect
 	UncoveredStreams
 	UncoveredRopeAxes
-	UncoveredPartialRope
 	UncoveredNonCausal
 	UncoveredClassic
 	UncoveredQKNormPlace
@@ -45,13 +44,11 @@ const (
 	UncoveredOutGate
 	UncoveredClamp
 	UncoveredTemp
-	UncoveredResidScale
 	UncoveredPLE
 	UncoveredCompressed
 	UncoveredNGram
 	UncoveredSparseAct
 	UncoveredAct
-	UncoveredPostNorm
 	UncoveredSubNorm
 	UncoveredPooling
 	UncoveredEmbedRows
@@ -70,23 +67,20 @@ var uncoveredNames = [numUncovered]string{
 	UncoveredSelect:      "an attention indexer or sparse key selection",
 	UncoveredStreams:     "several residual streams",
 	UncoveredRopeAxes:    "a rotary over several position axes or per element",
-	UncoveredPartialRope: "a rotary over part of each head",
 	UncoveredNonCausal:   "non-causal attention",
 	UncoveredClassic:     "LayerNorm or a parallel attention and FFN",
-	UncoveredQKNormPlace: "a q/k norm after the rotary or without a weight",
+	UncoveredQKNormPlace: "a q/k norm without a weight, or one over the whole projection after the rotary",
 	UncoveredVNorm:       "a norm over v",
 	UncoveredKVShared:    "a block reading another block's history",
 	UncoveredVFromK:      "v taken from k's projection",
 	UncoveredOutGate:     "a gate on the attention's output",
 	UncoveredClamp:       "clamped projections",
 	UncoveredTemp:        "an attention temperature per position",
-	UncoveredResidScale:  "a scaled residual",
 	UncoveredPLE:         "per-layer embeddings",
 	UncoveredCompressed:  "compressed or grouped attention",
 	UncoveredNGram:       "an n-gram embedding",
 	UncoveredSparseAct:   "a gaussian top-k activation",
 	UncoveredAct:         "an activation the op language does not state",
-	UncoveredPostNorm:    "a norm over a sublayer's output before the residual",
 	UncoveredSubNorm:     "a norm inside a sublayer before its output projection",
 	UncoveredPooling:     "a pooled head (an embedding model's)",
 	UncoveredEmbedRows:   "input rows beyond the token's row, a scale and a position table",
@@ -302,7 +296,7 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredNonCausal
 	case c.LayerNorm || c.Parallel:
 		return UncoveredClassic
-	case c.QKNormPost || c.QKL2Norm:
+	case c.QKL2Norm || c.QKNormPost && c.QKNormWide:
 		return UncoveredQKNormPlace
 	case c.VNorm:
 		return UncoveredVNorm
@@ -316,8 +310,6 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredClamp
 	case c.AttnTempScale != 0:
 		return UncoveredTemp
-	case c.ResidualScale != 0 && c.ResidualScale != 1:
-		return UncoveredResidScale
 	case c.PLEDim != 0:
 		return UncoveredPLE
 	case len(c.CompKinds) != 0 || c.OGroups != 0:
@@ -330,14 +322,8 @@ func (m *Model) uncovered(li int) Uncovered {
 	if _, ok := graphActs[c.Act]; !ok {
 		return UncoveredAct
 	}
-	if m.stores(li, jlm.RolePostAttnNorm) || m.stores(li, jlm.RolePostFFNNorm) {
-		return UncoveredPostNorm
-	}
 	if m.stores(li, jlm.RoleAttnSubNorm) || m.stores(li, jlm.RoleFFNSubNorm) {
 		return UncoveredSubNorm
-	}
-	if r := m.ropeAt(li); c.RopeAt(li) && r.NRot != hd {
-		return UncoveredPartialRope
 	}
 	return Covered
 }
@@ -357,11 +343,13 @@ func (m *Model) ropeAt(li int) nn.Rope {
 	return m.rope
 }
 
-// blockGraph is block li's graph: the pre-norm attention block the
-// container states -- RMSNorm, q, k and v with their stored biases, the q/k
-// norm, the rotary, the history append, attention of the block's heads,
-// scale, window, softcap and sinks, the output projection and the residual,
-// then the RMSNormed gated MLP and its residual -- or why it has none.
+// blockGraph is block li's graph: the attention block the container states
+// -- an RMSNorm where it stores one, q, k and v with their stored biases, the
+// q/k norm, the rotary, the history append, attention of the block's heads,
+// scale, window, softcap and sinks, the output projection, a norm over it
+// where stored and the residual, scaled where the container states a scale;
+// then the MLP the same way, gated where it stores a gate -- or why it has
+// none.
 func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if why := m.uncovered(li); why != Covered {
 		return nil, why, nil
@@ -380,17 +368,33 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	d, hd, nkv := c.NEmbd, c.HeadDimAt(li), c.NKVHeadAt(li)
 	qdim, kvDim, nffn := c.NHead*hd, nkv*hd, c.NFFNAt(li)
 	b := graph.NewBlock(li)
+	norm := func(v graph.ValueID, r jlm.Role) graph.ValueID {
+		if _, ok := f.Inventory[r]; ok {
+			return b.Norm(v, r, c.RMSEps)
+		}
+		return v
+	}
+	resid := func(x, y graph.ValueID) graph.ValueID {
+		if s := c.ResidualScale; s != 0 && s != 1 {
+			return b.Emit(graph.OpAdd, []graph.ValueID{x, y}, []graph.Result{{Name: "sum", Width: d}}, nil, graph.Attrs{Alpha: s}, nil, nil)[0]
+		}
+		return b.Add(x, y)
+	}
 	x := b.In("x", d)
-	n := b.Norm(x, jlm.RoleAttnNorm, c.RMSEps)
+	n := norm(x, jlm.RoleAttnNorm)
 	q := b.MatVec(n, jlm.RoleAttnQ, qdim, stored(jlm.RoleAttnQBias)...)
 	k := b.MatVec(n, jlm.RoleAttnK, kvDim, stored(jlm.RoleAttnKBias)...)
 	v := b.MatVec(n, jlm.RoleAttnV, kvDim, stored(jlm.RoleAttnVBias)...)
-	if c.QKNormAt(li) {
-		if c.QKNormWide {
-			q, k = b.Norm(q, jlm.RoleAttnQNorm, c.RMSEps), b.Norm(k, jlm.RoleAttnKNorm, c.RMSEps)
-		} else {
-			q, k = b.HeadNorm(q, jlm.RoleAttnQNorm, hd, c.RMSEps), b.HeadNorm(k, jlm.RoleAttnKNorm, hd, c.RMSEps)
-		}
+	// A q norm after the rotary keeps k's before it: the converter folded k's
+	// weight into q's, and an unweighted norm commutes with the rotation.
+	postQ := c.QKNormAt(li) && c.QKNormPost
+	switch {
+	case postQ:
+		k = b.HeadNorm(k, jlm.RoleAttnKNorm, hd, c.RMSEps)
+	case c.QKNormAt(li) && c.QKNormWide:
+		q, k = b.Norm(q, jlm.RoleAttnQNorm, c.RMSEps), b.Norm(k, jlm.RoleAttnKNorm, c.RMSEps)
+	case c.QKNormAt(li):
+		q, k = b.HeadNorm(q, jlm.RoleAttnQNorm, hd, c.RMSEps), b.HeadNorm(k, jlm.RoleAttnKNorm, hd, c.RMSEps)
 	}
 	if c.RopeAt(li) {
 		r := m.ropeAt(li)
@@ -402,6 +406,9 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		q = b.Emit(graph.OpRope, []graph.ValueID{q}, []graph.Result{{Name: "q.rope", Width: qdim}}, nil, a, nil, nil)[0]
 		k = b.Emit(graph.OpRope, []graph.ValueID{k}, []graph.Result{{Name: "k.rope", Width: kvDim}}, nil, a, nil, nil)[0]
 	}
+	if postQ {
+		q = b.HeadNorm(q, jlm.RoleAttnQNorm, hd, c.RMSEps)
+	}
 	hist := b.KVAppend(k, v, 0)
 	scale := c.AttnScale
 	if scale == 0 {
@@ -412,12 +419,19 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		a.Window, a.Chunked = c.SWAWindow, c.SWAChunked
 	}
 	att := b.Attend(q, hist, a, stored(jlm.RoleAttnSinks)...)
-	x2 := b.Add(x, b.MatVec(att, jlm.RoleAttnOut, d, stored(jlm.RoleAttnOutBias)...))
-	n2 := b.Norm(x2, jlm.RoleFFNNorm, c.RMSEps)
-	gt := b.MatVec(n2, jlm.RoleFFNGate, nffn)
-	up := b.MatVec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...)
-	down := b.MatVec(b.ActMul(graphActs[c.Act], gt, up), jlm.RoleFFNDown, d, stored(jlm.RoleFFNDownBias)...)
-	b.Out(b.Add(x2, down))
+	x2 := resid(x, norm(b.MatVec(att, jlm.RoleAttnOut, d, stored(jlm.RoleAttnOutBias)...), jlm.RolePostAttnNorm))
+	n2 := norm(x2, jlm.RoleFFNNorm)
+	var h graph.ValueID
+	if _, ok := f.Inventory[jlm.RoleFFNGate]; ok {
+		gt := b.MatVec(n2, jlm.RoleFFNGate, nffn)
+		up := b.MatVec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...)
+		h = b.ActMul(graphActs[c.Act], gt, up)
+	} else {
+		up := b.MatVec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...)
+		h = b.Emit(graph.OpAct, []graph.ValueID{up}, []graph.Result{{Name: "act", Width: nffn}}, nil, graph.Attrs{Act: graphActs[c.Act]}, nil, nil)[0]
+	}
+	down := b.MatVec(h, jlm.RoleFFNDown, d, stored(jlm.RoleFFNDownBias)...)
+	b.Out(resid(x2, norm(down, jlm.RolePostFFNNorm)))
 	if err := graph.Verify(b.G, f); err != nil {
 		return nil, UncoveredUnverified, fmt.Errorf("the block's graph does not verify: %w", err)
 	}

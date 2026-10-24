@@ -349,6 +349,7 @@ func (g *devTier) dropLaneParts(l *lane) {
 		delete(l.served, sk)
 		g.dropPart(sv)
 	}
+	clear(l.formErr)
 }
 
 // dropServed forgets the served parts of graph gr in every lane, a failed
@@ -361,6 +362,7 @@ func (g *devTier) dropServed(gr *graph.Graph) {
 		for sk, sv := range l.served {
 			if sk.graph == gr {
 				delete(l.served, sk)
+				delete(l.formErr, sk)
 				g.dropPart(sv)
 			}
 		}
@@ -498,7 +500,7 @@ var errServedCold = errors.New("tier: a served part forms outside a capture")
 func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*servedPart, error) {
 	if sv, ok := g.served[sk]; ok {
 		if sv == nil {
-			return nil, fmt.Errorf("the composed %s did not form earlier (%s)", partNames[sk.kind], g.LastErr)
+			return nil, fmt.Errorf("the composed %s did not form earlier: %w", partNames[sk.kind], g.formErr[sk])
 		}
 		return sv, nil
 	}
@@ -509,6 +511,14 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		g.served = map[servedKey]*servedPart{}
 	}
 	g.served[sk] = nil
+	fail := func(err error) error {
+		if g.formErr == nil {
+			g.formErr = map[servedKey]error{}
+		}
+		g.formErr[sk] = err
+		g.LastErr = err.Error()
+		return err
+	}
 	defer g.subUnlock(g.subLock())
 	if g.servedForms == nil {
 		g.servedForms = map[jit.Key]*partForm{}
@@ -533,19 +543,16 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	}
 	sl, err := build()
 	if err != nil {
-		g.LastErr = err.Error()
-		return nil, err
+		return nil, fail(err)
 	}
 	key, codes, err := g.askPart(r, &sl, sk.rows)
 	if err != nil {
-		g.LastErr = err.Error()
-		return nil, fmt.Errorf("the composed %s: %w", partNames[sk.kind], err)
+		return nil, fail(fmt.Errorf("the composed %s: %w", partNames[sk.kind], err))
 	}
 	f, ok := g.servedForms[key]
 	if !ok {
 		if f, err = g.compilePart(&sl, codes, sk.rows); err != nil {
-			g.LastErr = err.Error()
-			return nil, fmt.Errorf("the composed %s: %w", partNames[sk.kind], err)
+			return nil, fail(fmt.Errorf("the composed %s: %w", partNames[sk.kind], err))
 		}
 		f.key = key
 		g.servedForms[key] = f
@@ -556,8 +563,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 			delete(g.servedForms, key)
 			f.close()
 		}
-		g.LastErr = err.Error()
-		return nil, fmt.Errorf("the composed %s: %w", partNames[sk.kind], err)
+		return nil, fail(fmt.Errorf("the composed %s: %w", partNames[sk.kind], err))
 	}
 	f.refs++
 	sv := &servedPart{sl: sl, f: f, inst: in, n: len(sl.graph.In), m: len(sl.graph.Out)}
@@ -676,6 +682,10 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.nAttn
 	case jlm.RoleFFNNorm:
 		return l.nFFN
+	case jlm.RolePostAttnNorm:
+		return l.nPostAttn
+	case jlm.RolePostFFNNorm:
+		return l.nPostFFN
 	case jlm.RoleAttnQNorm:
 		return l.nQ
 	case jlm.RoleAttnKNorm:
@@ -700,7 +710,8 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 
 // blockServes is why block li of this one-row step is not one the composer
 // serves whole, serves where it is: a graph from the front end, the paged
-// decode, none of its history at home, no window (not yet held to the
+// decode, none of its history at home, no window shorter than the session
+// (a window cuts nothing below it; one that does is not yet held to the
 // tier), outside the persistent block and a fault probe.
 func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, persist bool) partDecline {
 	pk := bs.pkv
@@ -721,7 +732,7 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partLatent
 	case l.kvSrc != li:
 		return partShared
-	case l.windowed || p.Window(li) != 0:
+	case l.windowed || p.Window(li) != 0 && p.Window(li) < p.MaxSeq:
 		return partWindow
 	}
 	return partServes

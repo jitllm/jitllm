@@ -155,8 +155,10 @@ type lane struct {
 	// served are the parts the composer serves on this lane, by their key,
 	// each the lane's instance of a device's form (served.go); capturing says
 	// the lane's submission is being recorded, so a part not formed yet is
-	// not formed inside it (errServedCold).
+	// not formed inside it (errServedCold). formErr is why a part whose
+	// entry is nil did not form.
 	served    map[servedKey]*servedPart
+	formErr   map[servedKey]error
 	capturing bool
 	// bbs is the batched-prefill scratch, one per chunk width: a prompt asks
 	// for the full chunk and then a narrower tail, and each width bakes its own

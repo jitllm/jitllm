@@ -70,8 +70,8 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 		want Uncovered
 	}{
 		{"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", UncoveredMixture},
-		{"gemma-3-1b-it-Q4_K_M.gguf", UncoveredPostNorm},
-		{"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf", UncoveredQKNormPlace},
+		{"synth-bitnet-f16.gguf", UncoveredSubNorm},
+		{"synth-qwen2vl.gguf", UncoveredRopeAxes},
 	} {
 		t.Run(c.file, func(t *testing.T) {
 			// Every block of these models has the feature: every block is
