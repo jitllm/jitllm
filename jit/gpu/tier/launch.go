@@ -36,15 +36,12 @@ type launcher struct {
 	// g is the submission's device view, for the persistent path's plans
 	// (persist.go).
 	g *devTier
-	// census, where set, counts this submission's launches of the tier's
-	// own kernels (Config.Census).
-	census *launchCensus
 }
 
 // launch is s.Launch through the reused buffer list, counted where the
 // submission takes a census.
 func (l *launcher) launch(k backend.Kernel, groups, width int, bufs ...backend.Buf) error {
-	if c := l.census; c != nil {
+	if c := l.to.census; c != nil {
 		c.count(k)
 	}
 	return l.issue(k, groups, width, bufs...)
@@ -98,6 +95,11 @@ type launchTo struct {
 	// what is held.
 	ps    *persister
 	psess persistSession
+	// census, where set, counts the submission's launches of the tier's own
+	// kernels (Config.Census). Here and not on the launcher: a pointer the
+	// launch hands on from the launcher itself would take every local a
+	// launcher points at to the heap, four objects a token.
+	census *launchCensus
 }
 
 // la is the ordinary launch: threads in groups of 128, nothing once the

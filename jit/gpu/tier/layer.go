@@ -7683,7 +7683,8 @@ func (g *devTier) layersSession(s backend.Session) {
 		if g.census == nil {
 			g.census = &launchCensus{n: map[string]int{}}
 		}
-		lc.census = g.census
+		g.launchTo.census = g.census
+		defer func() { g.launchTo.census = nil }()
 	}
 
 	// lamv launches a decode matvec at its own workgroup width: an in-group

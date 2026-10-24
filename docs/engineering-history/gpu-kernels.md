@@ -6856,3 +6856,16 @@ row where the composer's reads two.
   a violation reaches the composer as a different graph and never as a hook
   in main's kernels. The three violations read 9.2e-02, 1.01 and 1.46, the
   same as main's path.
+- **The launch census put a warm decode on the heap.** Counting the tier's
+  own launches (Config.Census) read the census from the launcher and handed
+  it to a counter whose mutex leaks its receiver. Escape analysis is not
+  field-sensitive, so leaking that one field leaked the launcher's contents.
+  Every local the launcher points at (the submission's error, the quantized
+  source, the activation memo) then moved to the heap on every submission:
+  four objects a token on main's own decode, census off, from the commit
+  that added it. The jitllmcomposed sweep's allocation gate found it, where
+  600 subtests failed that pass on main. The census now hangs on launchTo,
+  which the launch already leaks two dereferences deep. There it takes only
+  those locals' values, never their addresses, and `go build -gcflags=-m`
+  moves none of them. TestDecodeDoesNotAllocate passes again on
+  Llama-3.2-1B on every arm, default and composed builds alike.
