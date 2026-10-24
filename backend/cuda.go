@@ -1016,7 +1016,7 @@ func (c *cudaDev) Compile(k *ir.Kernel) (Kernel, error) {
 		return nil, err
 	}
 	if c.maxRegs > 0 {
-		src = strings.Replace(src, ")\n{\n", fmt.Sprintf(")\n.maxnreg %d\n{\n", c.maxRegs), 1)
+		src = strings.Replace(src, "\n{\n", fmt.Sprintf("\n.maxnreg %d\n{\n", c.maxRegs), 1)
 	}
 	var m *cuda.Module
 	var a cuda.Attrs

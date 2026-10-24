@@ -6702,3 +6702,44 @@ row where the composer's reads two.
   path before the matvec. And which form wins depends on what the device's
   compiler allocates, registers and so waves: the tier measuring the
   composer's alternatives, as `tuneActIn` measures its own.
+- **Divisions by a power of two.** At 32 registers and one wave the
+  composer's q/k/v still took 12 us against the tier's 9.2, and its machine
+  code was 1488 instructions against the tier's 856 (`cuobjdump -sass`,
+  sm_70; the counters are an administrator's on that box): the same dot
+  products and loads, three times the integer index arithmetic, and 13
+  `MUFU`/`F2I` pairs -- whole integer divisions in the loop, by divisors the
+  device compiler did not see as constants, though every one was a power
+  of two. `Affine` takes an unsigned division by 2^n as a shift and a
+  remainder as a mask: by site, down with its int8 form 28.9 to 23.9 us, the
+  attention stage 10.2 to 7.8, each norm 8.2 to 6.5, the output projection
+  11.9 to 10.1, q/k/v 12.4 to 11.2; gate/up 30.1 to 31.3, at 38 registers
+  where it had 32. The output head went the other way, 261.8 to 291.6 us:
+  the same four byte dots a trip, but 16 loads where it had 11, the same
+  plane offsets read again from other base registers. The words of a trip
+  were reached as (16i + c) >> 4 and ((16i + c) & 15 & 7) >> 2 for c of 0,
+  4, 8 and 12 -- c = 0 and c = 8 one word, 4 and 12 another -- which the
+  device compiler had proved equal through the divisions and could not
+  through the shifts. `Affine` takes such bits apart itself: (a*C + c) &
+  (2^n - 1) is c's bits where C is a multiple of 2^n, exactly, and the
+  shift by n is a*(C >> n) for c below 2^n where a is a loop's iteration
+  whose trips keep a*C + c below 2^32. The head's weight loads went from
+  ten to five in the IR, its machine code from 128 instructions to 96 (144
+  with the divisions), its registers to 27.
+- **A value kept past its loop.** The validator's loop rule found a second
+  shape of the bug above: a value no loop changes, first asked for inside a
+  loop nested in another, was made inside the outer loop's body and kept
+  after it closed. The lowering forgets, when any loop closes, what its
+  body made, and makes it again where it is asked for. The rule holds a
+  value to a loop of a run-time count only: the tier's tensor-core GEMMs
+  read an MMA's accumulators after a loop of a fixed count, whose last
+  trip's values stay readable, while a guard's count can be zero and leave
+  nothing.
+- **A launch bound from the grid.** The shifts left gate/up at 38
+  registers: six of its 256-thread workgroups a multiprocessor, 480 places
+  for its 512. A launch with more workgroups than the device has
+  multiprocessors states how many each must hold at once for one wave
+  (`ir.Kernel.Resident`, PTX `.maxntid` and `.minnctapersm`; the tier
+  passes the multiprocessors as `jit.Device.Units`), and ptxas fits its
+  registers to it: gate/up 32 registers, no spill, seven a multiprocessor.
+  Unlike `.maxnreg 32` on every kernel, it asks only what the grid needs,
+  and nothing of a launch that fits the device in one wave already.

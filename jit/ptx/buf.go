@@ -91,7 +91,7 @@ func (b *Buf) Bind(l string) { fmt.Fprintf(&b.body, "%s:\n", l) }
 // The .reg declarations are written last, from the counters. Declared up front
 // from an estimate, a too-small count made ptxas reject the module in a way
 // that looked like a hardware limit.
-func (b *Buf) Text(target, entry string, params []Param) string {
+func (b *Buf) Text(target, entry string, params []Param, group [3]int, resident int) string {
 	var s strings.Builder
 	fmt.Fprintf(&s, ".version 7.8\n.target %s\n.address_size 64\n", target)
 	fmt.Fprintf(&s, ".visible .entry %s(\n", entry)
@@ -102,7 +102,11 @@ func (b *Buf) Text(target, entry string, params []Param) string {
 		}
 		fmt.Fprintf(&s, "  .param .%s %s%s\n", p.Type, p.Name, sep)
 	}
-	s.WriteString(")\n{\n")
+	s.WriteString(")\n")
+	if resident > 0 {
+		fmt.Fprintf(&s, ".maxntid %d, %d, %d\n.minnctapersm %d\n", max(group[0], 1), max(group[1], 1), max(group[2], 1), resident)
+	}
+	s.WriteString("{\n")
 	for c := Class(0); c < nClass; c++ {
 		if b.next[c] > 0 {
 			fmt.Fprintf(&s, " .reg %s %%%s<%d>;\n", classDecl[c], className[c], b.next[c])

@@ -262,8 +262,13 @@ type Kernel struct {
 	// for ShuffleXor, MMA and the tile ops; Validate checks it in both
 	// directions, and a kernel with Lanes != 0 only runs on a device that
 	// guarantees that width (backend.GuaranteedLanes).
-	Lanes   int
-	Comment string
+	Lanes int
+	// Resident, where set, is how many workgroups each multiprocessor must
+	// hold at once for the launch to run in one wave: a launch bound the
+	// device's compiler fits its register allocation to (PTX .minnctapersm).
+	// A backend with no such bound ignores it.
+	Resident int
+	Comment  string
 }
 
 // SubgroupLanes is the one width this IR's cross-lane ops are defined at: a
@@ -541,44 +546,34 @@ func (b *Builder) Done() (*Kernel, error) {
 	return &b.k, nil
 }
 
-// validateScopes holds every value to its loop: one made inside a loop's
-// body is not read once the loop has closed, where a target's structured
-// form has no value for it and a register holds whatever the last trip
-// left, or nothing for a loop that ran none. A loop's own phis are its
-// result and stay readable after it.
+// validateScopes holds a value to a loop whose count is a run-time value: one
+// made inside such a loop's body is not read once the loop has closed, where
+// the loop may have run no trip and left nothing -- a register holding
+// whatever it held before, and no value at all in a target's structured form.
+// A loop of a fixed count runs, and its last trip's values stay readable
+// after it (an MMA's accumulators); a loop's own phis are its result.
 func (k *Kernel) validateScopes() error {
 	end := map[int]int{}
+	parent := map[int]int{}
+	home := make([]int, len(k.Ops))
 	var open []int
 	for i, o := range k.Ops {
+		home[i] = -1
+		if n := len(open); n > 0 {
+			home[i] = open[n-1]
+		}
 		switch o.Kind {
 		case OpLoop:
+			parent[i] = home[i]
 			open = append(open, i)
 		case OpEndLoop:
 			if n := len(open); n > 0 {
 				end[open[n-1]] = i
 				open = open[:n-1]
 			}
-		}
-	}
-	home := make([]int, len(k.Ops))
-	open = open[:0]
-	for i, o := range k.Ops {
-		home[i] = -1
-		if n := len(open); n > 0 {
-			home[i] = open[n-1]
-			if o.Kind == OpPhi {
-				home[i] = -1
-				if n > 1 {
-					home[i] = open[n-2]
-				}
-			}
-		}
-		switch o.Kind {
-		case OpLoop:
-			open = append(open, i)
-		case OpEndLoop:
-			if n := len(open); n > 0 {
-				open = open[:n-1]
+		case OpPhi:
+			if home[i] >= 0 {
+				home[i] = parent[home[i]]
 			}
 		}
 	}
@@ -589,9 +584,9 @@ func (k *Kernel) validateScopes() error {
 			if a == 0 || int(a) > len(k.Ops) || o.Kind == OpPhi && n == 1 {
 				continue
 			}
-			if h := home[a-1]; h >= 0 {
-				if e, ok := end[h]; ok && e < i {
-					return fmt.Errorf("ir: op %d (%s) reads value %d, made inside the loop at op %d after it closed at op %d",
+			for h := home[a-1]; h >= 0; h = parent[h] {
+				if e, ok := end[h]; ok && e < i && k.Ops[h].Args[0] != 0 {
+					return fmt.Errorf("ir: op %d (%s) reads value %d, made inside the loop of a run-time count at op %d after it closed at op %d",
 						i, o.Kind, a, h, e)
 				}
 			}

@@ -22,11 +22,29 @@ func (g gpuLowering) Lower(n *Kernel, d Device) (Lowered, error) {
 	e := &lowerer{n: n, b: ir.New(entryName(n.Name), [3]int{n.Group, 1, 1}), poison: g.Poison}
 	k, err := e.run()
 	if err == nil {
+		k.Resident = resident(n, d)
+	}
+	if err == nil {
 		// Held to the IR's invariants where it is formed, not first where a
 		// backend compiles it.
 		err = k.Validate()
 	}
 	return Lowered{GPU: k}, err
+}
+
+// resident is how many of n's workgroups each of the device's units must
+// hold at once for a launch to run in one wave, where its workgroups
+// outnumber the units and that many fit one; 0 where one wave needs no bound.
+func resident(n *Kernel, d Device) int {
+	g := n.groups()
+	if d.Units <= 0 || d.Slots <= 0 || n.Group <= 0 || g <= d.Units {
+		return 0
+	}
+	per := (g + d.Units - 1) / d.Units
+	if per*n.Group > d.Slots/d.Units {
+		return 0
+	}
+	return per
 }
 
 // entryName is a kernel's name as a backend's entry point can carry it:
@@ -541,8 +559,10 @@ func (e *lowerer) lowerLoop(c int) {
 	b.SetPhi(it, b.Add(ir.U32, it, step))
 	b.EndLoop()
 	e.open = e.open[:len(e.open)-1]
+	// What the body made is the body's: a value no loop changes, first
+	// asked for inside it, is made again where it is asked for after it.
 	for i := range e.val {
-		if e.inside(e.home[i], c) || scope && saved[i] == 0 {
+		if e.inside(e.home[i], c) || saved[i] == 0 {
 			e.val[i] = saved[i]
 		}
 	}

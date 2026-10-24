@@ -550,7 +550,7 @@ func Lower(k *ir.Kernel, target string) (string, error) {
 		}
 	}
 	b.Op("ret;")
-	return b.Text(target, k.Name, params), nil
+	return b.Text(target, k.Name, params, k.Group, k.Resident), nil
 }
 
 // reduceOp is the PTX instruction an OpSubgroupReduce combines with.

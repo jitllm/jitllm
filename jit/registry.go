@@ -30,6 +30,9 @@ func (k DeviceKind) String() string {
 type Device struct {
 	Kind         DeviceKind
 	Slots, Lanes int
+	// Units, where known, is the multiprocessors (compute units) the Slots
+	// are spread over.
+	Units int
 	// ISA, on a CPU, is the instruction sets it executes, as jit/x86 names
 	// them (x86.ISA's bits).
 	ISA uint64

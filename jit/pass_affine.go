@@ -20,6 +20,7 @@ func (p Affine) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		for {
 			step := m.cse()
 			step = m.foldConstants() || step
+			step = m.powersOfTwo() || step
 			step = m.constantsOutward() || step
 			if !step {
 				break
@@ -39,6 +40,87 @@ func (p Affine) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 }
 
 // foldConstants does the u32 arithmetic of two constants.
+// powersOfTwo takes an unsigned division by 2^n as a shift by n and a
+// remainder as a mask, which they are exactly: a device compiler that cannot
+// see the divisor is a constant -- one made outside the loop that divides --
+// otherwise emits a whole division in the loop.
+func (k *Kernel) powersOfTwo() bool {
+	changed := false
+	for i, nd := range k.Nodes {
+		if nd.Type != ir.U32 || nd.Op != OpDiv && nd.Op != OpRem {
+			continue
+		}
+		n, ok := k.powerOfTwo(nd.B)
+		if !ok || k.Nodes[nd.B].Type != ir.U32 {
+			continue
+		}
+		if nd.Op == OpDiv {
+			k.Nodes[i] = Node{Op: OpShr, Type: ir.U32, A: nd.A, B: k.u32(n)}
+		} else {
+			k.Nodes[i] = Node{Op: OpAnd, Type: ir.U32, A: nd.A, B: k.u32(1<<n - 1)}
+		}
+		changed = true
+	}
+	return k.aligned() || changed
+}
+
+// aligned takes the low and high bits of a*C + c apart where C is a multiple
+// of 2^n: the mask 2^n-1 keeps c's bits alone, exactly in the u32 ring, and
+// the shift by n is a*(C>>n) for c below 2^n where a is a loop's iteration
+// whose trips keep a*C + c below 2^32 -- so two places of one word, reached
+// by different constants, become one address.
+func (k *Kernel) aligned() bool {
+	cst := func(i int) (uint32, bool) {
+		nd := k.Nodes[i]
+		return uint32(nd.Imm), nd.Op == OpConst && nd.Type == ir.U32
+	}
+	// split is node i as a*C + c with C and c constants.
+	split := func(i int) (a int, C, c uint32, ok bool) {
+		nd := k.Nodes[i]
+		if nd.Op == OpAdd {
+			if v, ok := cst(nd.B); ok {
+				c, i, nd = v, nd.A, k.Nodes[nd.A]
+			}
+		}
+		if nd.Op != OpMul {
+			return 0, 0, 0, false
+		}
+		v, ok := cst(nd.B)
+		return nd.A, v, c, ok
+	}
+	changed := false
+	for i, nd := range k.Nodes {
+		if nd.Type != ir.U32 || nd.Op != OpAnd && nd.Op != OpShr {
+			continue
+		}
+		b, ok := cst(nd.B)
+		if !ok {
+			continue
+		}
+		a, C, c, ok := split(nd.A)
+		if !ok {
+			continue
+		}
+		switch nd.Op {
+		case OpAnd:
+			if b&(b+1) != 0 || C&b != 0 {
+				continue
+			}
+			k.Nodes[i] = Node{Op: OpConst, Type: ir.U32, Imm: int64(c & b)}
+		case OpShr:
+			n := b
+			it := k.Nodes[a]
+			if n == 0 || n > 31 || C&(1<<n-1) != 0 || c >= 1<<n || it.Op != OpIter || k.Loops[it.At].Count > 0 ||
+				uint64(k.Loops[it.At].Trip)*uint64(C)+uint64(c) >= 1<<32 {
+				continue
+			}
+			k.Nodes[i] = Node{Op: OpMul, Type: ir.U32, A: a, B: k.u32(int(C >> n))}
+		}
+		changed = true
+	}
+	return changed
+}
+
 func (k *Kernel) foldConstants() bool {
 	changed := false
 	for i, nd := range k.Nodes {

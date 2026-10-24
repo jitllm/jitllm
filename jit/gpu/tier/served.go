@@ -108,6 +108,14 @@ func jlmType(q kernels.Quant) (jlm.Type, bool) {
 	return 0, false
 }
 
+// units is the device's multiprocessors where its backend says, else 0.
+func units(d backend.Device) int {
+	if m, ok := d.(backend.MultiprocessorDevice); ok {
+		return m.Multiprocessors()
+	}
+	return 0
+}
+
 // askPart asks r for sl at a step of rows: the request's Key, and what it
 // forms.
 func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key, []jit.Code, error) {
@@ -115,7 +123,7 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 		Graph:   sl.graph,
 		Formats: sl.formats,
 		Step:    jit.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: g.actWin},
-		Device:  jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: g.pickLanes()},
+		Device:  jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: g.pickLanes(), Units: units(g.dev)},
 		History: sl.history,
 	})
 }
