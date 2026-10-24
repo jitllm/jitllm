@@ -2278,6 +2278,9 @@ func New(slots []Slot, options ...Option) (*GPU, error) {
 	// (PersistByDefaultForTest), so the regression gates run through it.
 	cfg.Persist = persistDefault
 	cfg.PersistDeps = persistDepsDefault
+	// A jitllmcomposed build serves every tier's blocks and head through the
+	// composer by default.
+	cfg.Composed = composedDefault
 	// Gate2 is allowed by default; tuneFFN takes it per shape where it
 	// measures faster. On a V100 it read 1.008-1.028 of the two launches on
 	// Llama 1B, 3B and 8B.

@@ -7,6 +7,8 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
+
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // The mixture families (glm4moe, qwen2moe, hunyuan, ernie4_5) held to
@@ -148,9 +150,7 @@ var moeViolations = map[string][]c6Violation{
 		{"no routed scale", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertScale = 1 }) }},
 		{"no shared expert", noSharedExpert},
 		{"no q/k norm", noQKNorm},
-		{"no q/k/v biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.bq, l.bk, l.bv = nil, nil, nil })
-		}},
+		{"no q/k/v biases", noQKVBias},
 		{"NORM rotary for NEOX", hostNormRotary},
 		{"the prediction block run as a trunk block", mtpInTrunk},
 	},
@@ -161,9 +161,7 @@ var moeViolations = map[string][]c6Violation{
 		}},
 		{"no shared-expert gate", noSharedGate},
 		{"no shared expert", noSharedExpert},
-		{"no q/k/v biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.bq, l.bk, l.bv = nil, nil, nil })
-		}},
+		{"no q/k/v biases", noQKVBias},
 		{"NORM rotary for NEOX", hostNormRotary},
 	},
 	"synth-ernie45moe": {
@@ -277,7 +275,9 @@ var moeDevViolations = map[string][]c6Violation{
 
 // noQKNorm drops the q/k norm by the one switch both tiers read (QKNormAt).
 func noQKNorm(m *Model) func() {
-	return cfgMut(m, func(c *Config) { c.QKNorm = false })
+	undoC := cfgMut(m, func(c *Config) { c.QKNorm = false })
+	undoR := dropStored(m, jlm.RoleAttnQNorm, jlm.RoleAttnKNorm)
+	return func() { undoR(); undoC() }
 }
 
 // hostNormRotary pairs the host's rotary (2i, 2i+1) where the model pairs

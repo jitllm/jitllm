@@ -10,6 +10,9 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
+
+	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // c6Golden is scripts/c6gold.py's golden: transformers' own class over twelve
@@ -281,6 +284,58 @@ func eachLayer(m *Model, f func(l *layer)) func() {
 	return func() { copy(m.layers, was) }
 }
 
+// restate has the front end read the blocks' stored tensors through f until
+// the returned undo: a violation that drops, renames or resizes tensors in the
+// model's layers states the same model to the composer, which reads the
+// container (frontState.restate).
+func (m *Model) restate(f func(inv map[jlm.Role]graph.Shape)) func() {
+	fr := &m.front
+	fr.mu.Lock()
+	was := fr.restate
+	fr.restate = func(block int32, inv map[jlm.Role]graph.Shape) {
+		if block != jlm.DenseBlock {
+			f(inv)
+		}
+	}
+	fr.restated++
+	fr.mu.Unlock()
+	return func() {
+		fr.mu.Lock()
+		fr.restate = was
+		fr.restated++
+		fr.mu.Unlock()
+	}
+}
+
+// dropStored states the blocks without roles to the composer.
+func dropStored(m *Model, roles ...jlm.Role) func() {
+	return m.restate(func(inv map[jlm.Role]graph.Shape) {
+		for _, r := range roles {
+			delete(inv, r)
+		}
+	})
+}
+
+// noQKVBias, noPostAttnNorm and noPostFFNNorm are blocks without those
+// tensors, in the model's layers and as the composer reads them.
+func noQKVBias(m *Model) func() {
+	undoL := eachLayer(m, func(l *layer) { l.bq, l.bk, l.bv = nil, nil, nil })
+	undoR := dropStored(m, jlm.RoleAttnQBias, jlm.RoleAttnKBias, jlm.RoleAttnVBias)
+	return func() { undoR(); undoL() }
+}
+
+func noPostAttnNorm(m *Model) func() {
+	undoL := eachLayer(m, func(l *layer) { l.postAttnNorm = nil })
+	undoR := dropStored(m, jlm.RolePostAttnNorm)
+	return func() { undoR(); undoL() }
+}
+
+func noPostFFNNorm(m *Model) func() {
+	undoL := eachLayer(m, func(l *layer) { l.postFFNNorm = nil })
+	undoR := dropStored(m, jlm.RolePostFFNNorm)
+	return func() { undoR(); undoL() }
+}
+
 func cfgMut(m *Model, f func(c *Config)) func() {
 	was := m.Cfg
 	c := *was
@@ -299,9 +354,7 @@ var c6Violations = map[string][]c6Violation{
 		{"no FFN biases", func(m *Model) func() {
 			return eachLayer(m, func(l *layer) { l.upB, l.downB = nil, nil })
 		}},
-		{"no q/k/v biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.bq, l.bk, l.bv = nil, nil, nil })
-		}},
+		{"no q/k/v biases", noQKVBias},
 		{"no head bias", func(m *Model) func() {
 			was := m.outB
 			m.outB = nil
@@ -337,9 +390,7 @@ var c6Violations = map[string][]c6Violation{
 		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
 		{"parallel residual", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Parallel = true }) }},
 		{"NORM rotary for NEOX", hostNormRotary},
-		{"no q/k/v biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.bq, l.bk, l.bv = nil, nil, nil })
-		}},
+		{"no q/k/v biases", noQKVBias},
 	},
 	"synth-stablelm-par": {
 		{"serial residual", serialFromShared},

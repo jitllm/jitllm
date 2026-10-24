@@ -18,15 +18,13 @@ func init() {
 			l.postFFNNorm != nil && l.gate.e != nil && c.NKVHead < c.NHead && !c.TiedEmbd
 	}})
 	c6Violations["synth-glm4"] = []c6Violation{
-		{"no q/k/v biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.bq, l.bk, l.bv = nil, nil, nil })
-		}},
-		{"no post-attention norm", func(m *Model) func() { return eachLayer(m, func(l *layer) { l.postAttnNorm = nil }) }},
-		{"no post-FFN norm", func(m *Model) func() { return eachLayer(m, func(l *layer) { l.postFFNNorm = nil }) }},
+		{"no q/k/v biases", noQKVBias},
+		{"no post-attention norm", noPostAttnNorm},
+		{"no post-FFN norm", noPostFFNNorm},
 		{"NEOX rotary for NORM", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = true }) }},
 	}
 	c6DevViolations["synth-glm4"] = []c6Violation{
-		{"no post-FFN norm", func(m *Model) func() { return eachLayer(m, func(l *layer) { l.postFFNNorm = nil }) }},
+		{"no post-FFN norm", noPostFFNNorm},
 		{"NEOX rotary for NORM", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = true }) }},
 	}
 	principleFixtures = append(principleFixtures, "synth-glm4.gguf")

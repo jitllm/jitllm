@@ -6835,3 +6835,24 @@ row where the composer's reads two.
   where the clone's head declined to the tier's and its logits differ in the
   last bit. The memory cost is a whole set of instances per lane, about
   21.7 MB on Llama-3.2-1B beside the lane's scratch.
+- **The principles' device gates, composed.** A jitllmcomposed build serves
+  every tier's blocks and head through the composer (a constant per build),
+  and the two-tier hop, the moves between cards and the batch beside a
+  session carry a composed arm of their own on the models the front end
+  states whole. Their first run found two things.
+  - The prewarm bounds-checked a device's layers, which are a map keyed by
+    block, like a slice. A card holding only the upper blocks (a second
+    card, a move's target) skipped their forms, and the first step formed
+    them: 11 parts at a step on tinyllama's upper-half move.
+  - The family gates' violations mutate the model's config, rotary and
+    loaded tensors, which main's device path reads at placement. The front
+    end built its graphs once, from the container. Under the composed build
+    the composer served the unmutated model, so a violation was invisible
+    ("rotary on the NoPE layer" read 2.3e-12 against a clean 2.3e-12) or
+    refused the form, as a dropped bias left a bound role unheld.
+  Now the front end builds again for a model stated otherwise, and takes the
+  rotary's pairing from the config, as main does. A test that drops, renames
+  or resizes a stored tensor restates it to the composer (Model.restate), so
+  a violation reaches the composer as a different graph and never as a hook
+  in main's kernels. The three violations read 9.2e-02, 1.01 and 1.46, the
+  same as main's path.

@@ -82,6 +82,15 @@
       "needs": {"device": true},
       "note": "the backends against the oracle on a real device"
     },
+    "composer": {
+      "module": ".", "packages": ["./jit", "./jit/x86/...", "./engine/graph/...", "./engine/cost/...", "./engine/probe/..."], "cap": "16G",
+      "note": "the composer: the graph, its lowering and passes, the one keyed cache, the estimator and the hardware probes"
+    },
+    "composed": {
+      "module": ".", "packages": ["./engine/model"], "run": "TestFrontStatesTheModelAsOps|TestComposedBlocksServe|TestPlacedPromptsCompileNothing|TestDeviceMemoryHoldsSteadyAcrossMoves|TestSessionsStepAtOnceComposed|TestSessionsRelocateAtOnceComposed|TestABatchLeavesAnotherSessionAlone|TestLayerRelocatesToAnotherDevice|TestBlocksMoveBetweenDevices", "cap": "16G",
+      "needs": {"models": true, "device": true},
+      "note": "the composer serving the tier's blocks and heads: every block served, none formed at a step, forms charged and freed, sessions side by side, moves; -tags jitllmcomposed runs every device gate composed (docs/testing.md)"
+    },
     "gpu-tier": {
       "module": ".", "packages": ["./jit/gpu/tier/..."], "cap": "16G",
       "needs": {"device": true},
@@ -115,7 +124,7 @@
     }
   },
   "entries": [
-    {"prefix": "engine/model/", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["model-correctness", "five-principles", "relocation", "device-model", "vet"]},
+    {"prefix": "engine/model/", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["model-correctness", "five-principles", "relocation", "device-model", "composed", "vet"]},
     {"prefix": "engine/nn/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["nn", "jit-cpu", "model-correctness", "five-principles", "vet"]},
     {"prefix": "engine/grammar/", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["nn", "server", "vet"]},
     {"prefix": "engine/sched/", "evidence": "docs/engineering-history/scheduling-and-measurement.md", "checks": ["sched", "five-principles", "vet"]},
@@ -133,7 +142,12 @@
     {"prefix": "backend/metal/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "device-model", "vet"]},
     {"prefix": "backend/hip/", "evidence": "docs/design/amd-hip.md", "checks": ["gpu-backend", "vet"]},
     {"prefix": "backend/ffi/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["gpu-backend", "vet"]},
-    {"prefix": "jit/gpu/tier/", "evidence": "docs/engineering-history/placement.md", "checks": ["gpu-tier", "relocation", "device-model", "five-principles", "vet"]},
+    {"prefix": "jit/gpu/tier/", "evidence": "docs/engineering-history/placement.md", "checks": ["gpu-tier", "relocation", "device-model", "five-principles", "composed", "vet"]},
+    {"prefix": "jit/x86/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["composer", "vet"]},
+    {"prefix": "jit/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "composed", "vet"]},
+    {"prefix": "engine/graph/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "composed", "vet"]},
+    {"prefix": "engine/cost/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "vet"]},
+    {"prefix": "engine/probe/", "evidence": "docs/engineering-history/gpu-kernels.md", "checks": ["composer", "vet"]},
     {"prefix": "format/jlm/", "evidence": "docs/engineering-history/placement.md", "checks": ["format", "five-principles", "model-correctness", "capabilities", "vet"]},
     {"prefix": "format/quant/", "evidence": "docs/engineering-history/cpu-kernels.md", "checks": ["format", "jit-cpu", "capabilities", "srcgate", "vet"]},
     {"prefix": "convert/", "evidence": "docs/engineering-history/model-correctness.md", "checks": ["convert", "srcgate", "capabilities", "model-correctness", "vet"]},

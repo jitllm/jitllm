@@ -24,14 +24,27 @@ func TestABatchLeavesAnotherSessionAlone(t *testing.T) {
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS to the model directory) -- this gate proved nothing", err)
 	}
-	m, err := Open(jlmOf(t, p), noTune, noGEMM)
+	path := jlmOf(t, p)
+	m, err := Open(path, noTune, noGEMM)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer m.Close()
+	for _, parts := range composedArms(t, path) {
+		if parts == 0 {
+			aBatchLeavesAnotherSessionAlone(t, m, 0)
+			continue
+		}
+		t.Run("composed", func(t *testing.T) { aBatchLeavesAnotherSessionAlone(t, m, parts) })
+	}
+}
+
+// aBatchLeavesAnotherSessionAlone is TestABatchLeavesAnotherSessionAlone
+// with the composer serving parts.
+func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 	const seq, rows, before, after = 256, 3, 3, 5
 	open := func(t *testing.T, spec string) *tier.GPU {
-		g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+		g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff), composedOpt(parts))
 		if err != nil || g == nil {
 			noDevice(t, spec, err)
 		}
@@ -173,10 +186,12 @@ func TestABatchLeavesAnotherSessionAlone(t *testing.T) {
 	// Room for both: B's rows grow B's caches and nobody else's.
 	var bFull uint64
 	t.Run("room", func(t *testing.T) {
-		b := run(t, open(t, "gpu:0"))
+		g := open(t, "gpu:0")
+		b := run(t, g)
 		if b.devCount() != m.Cfg.NLayer {
 			t.Fatalf("with room for both, B placed %d of %d blocks", b.devCount(), m.Cfg.NLayer)
 		}
+		composedRan(t, parts, nil, g)
 		bFull = held(b)
 		t.Logf("A alone charged %d bytes; B holds %d for %d rows of %d", usedA, bFull, rows, seq)
 	})
@@ -187,11 +202,13 @@ func TestABatchLeavesAnotherSessionAlone(t *testing.T) {
 	// Room for A and half of B's rows: B takes blocks home for itself, and A
 	// keeps every one.
 	t.Run("tight", func(t *testing.T) {
-		b := run(t, open(t, testdevices.Like(t, "cuda:0")+"="+strconv.FormatUint(usedA+bFull/2, 10)))
+		g := open(t, testdevices.Like(t, "cuda:0")+"="+strconv.FormatUint(usedA+bFull/2, 10))
+		b := run(t, g)
 		if n := b.devCount(); n == 0 || n == m.Cfg.NLayer {
 			t.Fatalf("B placed %d of %d blocks: the budget did not make B split, so this "+
 				"compared nothing", n, m.Cfg.NLayer)
 		}
+		composedRan(t, parts, nil, g)
 		t.Logf("B kept %d of %d blocks on the card; A kept all of them", b.devCount(), m.Cfg.NLayer)
 	})
 }

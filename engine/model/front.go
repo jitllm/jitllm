@@ -101,9 +101,22 @@ func (u Uncovered) String() string {
 	return fmt.Sprintf("uncovered(%d)", uint8(u))
 }
 
-// frontState is the model's graphs, built on first use.
+// frontState is the model's graphs, built on first use and again for a
+// model stated otherwise since: its config, its rotary or the tensors the
+// container stores (restate), which only a test's violation changes after
+// Open.
 type frontState struct {
-	once        sync.Once
+	mu  sync.Mutex
+	set *frontSet
+	// restate is a test's statement of the stored tensors in place of the
+	// container's, nil otherwise; restated counts its changes.
+	restate  func(block int32, inv map[jlm.Role]graph.Shape)
+	restated int
+}
+
+// frontSet is the graphs one statement of the model builds, and the
+// statement.
+type frontSet struct {
 	blocks      []*graph.Graph
 	why         []Uncovered
 	errs        []error
@@ -112,6 +125,28 @@ type frontState struct {
 	embedWhy    Uncovered
 	headErr     error
 	embedErr    error
+	key         frontKey
+}
+
+// frontKey is what a set's graphs were built from beside the container.
+type frontKey struct {
+	cfg           *Config
+	rope, ropeSWA ropeKey
+	restated      int
+}
+
+// ropeKey is what the front end reads of a rotary.
+type ropeKey struct {
+	nrot             int
+	base, scale      float64
+	neox, freqs, set bool
+}
+
+func ropeKeyOf(r *nn.Rope) ropeKey {
+	if r == nil {
+		return ropeKey{}
+	}
+	return ropeKey{nrot: r.NRot, base: r.Base, scale: r.Scale, neox: r.Neox, freqs: len(r.Freqs) > 0, set: true}
 }
 
 // composing is the model as the composer reads it.
@@ -185,18 +220,23 @@ func (m *Model) uncoveredAt(li int) (Uncovered, error) {
 	return UncoveredUnverified, fmt.Errorf("no block %d", li)
 }
 
-func (m *Model) frontGraphs() *frontState {
+func (m *Model) frontGraphs() *frontSet {
 	f := &m.front
-	f.once.Do(func() {
-		n := m.Cfg.NLayer
-		f.blocks, f.why, f.errs = make([]*graph.Graph, n), make([]Uncovered, n), make([]error, n)
-		for li := range n {
-			f.blocks[li], f.why[li], f.errs[li] = m.blockGraph(li)
-		}
-		f.head, f.headWhy, f.headErr = m.headGraph()
-		f.embed, f.embedWhy, f.embedErr = m.embedGraph()
-	})
-	return f
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	k := frontKey{cfg: m.Cfg, rope: ropeKeyOf(&m.rope), ropeSWA: ropeKeyOf(m.ropeSWA), restated: f.restated}
+	if f.set != nil && f.set.key == k {
+		return f.set
+	}
+	n := m.Cfg.NLayer
+	s := &frontSet{key: k, blocks: make([]*graph.Graph, n), why: make([]Uncovered, n), errs: make([]error, n)}
+	for li := range n {
+		s.blocks[li], s.why[li], s.errs[li] = m.blockGraph(li)
+	}
+	s.head, s.headWhy, s.headErr = m.headGraph()
+	s.embed, s.embedWhy, s.embedErr = m.embedGraph()
+	f.set = s
+	return s
 }
 
 // inventory is what the container stores for block (jlm.DenseBlock for the
@@ -222,6 +262,9 @@ func (m *Model) inventory(block int32) (graph.Facts, bool) {
 			s.Sheets = int(e.Dims[2])
 		}
 		inv[e.Role] = s
+	}
+	if r := m.front.restate; r != nil {
+		r(block, inv)
 	}
 	return graph.Facts{Inventory: inv}, perExpert
 }
@@ -352,7 +395,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if c.RopeAt(li) {
 		r := m.ropeAt(li)
 		layout := graph.RopeNorm
-		if r.Neox {
+		if c.RopeNeox {
 			layout = graph.RopeNeox
 		}
 		a := graph.Attrs{HeadDim: hd, NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}

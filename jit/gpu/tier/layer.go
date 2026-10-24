@@ -2895,7 +2895,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// re-offer's too: a step would otherwise meet it first. Deferred first,
 	// it runs after the body's own deferred unlocks.
 	defer func() {
-		if placed {
+		if placed && g.Composed&ComposedBlock != 0 {
 			g.mu.Lock()
 			g.prewarmComposedBlock(li)
 			g.mu.Unlock()

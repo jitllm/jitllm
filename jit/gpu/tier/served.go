@@ -745,7 +745,7 @@ func (g *devTier) prewarmComposed() {
 func (g *devTier) prewarmComposedBlock(li int) {
 	bs := g.bs
 	if g.NoPromptPrewarm || g.Composed&ComposedBlock == 0 || bs == nil || bs.pkv == nil || g.kvp == nil ||
-		li >= len(g.layers) || g.layers[li] == nil {
+		g.layers[li] == nil {
 		return
 	}
 	l := g.layers[li]

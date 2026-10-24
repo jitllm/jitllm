@@ -5,6 +5,9 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/engine/nn"
+
+	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // The dense llama-family architectures (jlm.ArchSmolLM3 and its siblings) are
@@ -149,9 +152,7 @@ var denseViolations = map[string][]c6Violation{
 		{"GELU for relu2", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Act = nn.ActGELU }) }},
 	},
 	"synth-seedoss": {
-		{"no q/k/v biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.bq, l.bk, l.bv = nil, nil, nil })
-		}},
+		{"no q/k/v biases", noQKVBias},
 		{"NORM rotary for NEOX", neoxOff},
 		{"the attention's norm before the FFN", func(m *Model) func() {
 			return eachLayer(m, func(l *layer) { l.ffnNorm = l.attnNorm })
@@ -159,8 +160,8 @@ var denseViolations = map[string][]c6Violation{
 	},
 	"synth-olmo2": {
 		{"a per-head q/k norm", perHeadQK},
-		{"no post-attention norm", func(m *Model) func() { return eachLayer(m, func(l *layer) { l.postAttnNorm = nil }) }},
-		{"no post-FFN norm", func(m *Model) func() { return eachLayer(m, func(l *layer) { l.postFFNNorm = nil }) }},
+		{"no post-attention norm", noPostAttnNorm},
+		{"no post-FFN norm", noPostFFNNorm},
 		{"the post-norms as pre-norms", postAsPre},
 		{"NORM rotary for NEOX", neoxOff},
 	},
@@ -168,7 +169,7 @@ var denseViolations = map[string][]c6Violation{
 		{"rotary on the global layer", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.NoPEGlobal = false }) }},
 		{"no sliding window", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.SWAWindow = 0 }) }},
 		{"no q/k norm", noQKNorm},
-		{"no post-FFN norm", func(m *Model) func() { return eachLayer(m, func(l *layer) { l.postFFNNorm = nil }) }},
+		{"no post-FFN norm", noPostFFNNorm},
 		{"the post-norms as pre-norms", postAsPre},
 	},
 	"synth-mistral3": {
@@ -225,16 +226,32 @@ func perHeadQK(m *Model) func() {
 	undoC := cfgMut(m, func(c *Config) { c.QKNormWide = false })
 	hd := m.Cfg.HeadDim
 	undoL := eachLayer(m, func(l *layer) { l.qNorm, l.kNorm = l.qNorm[:hd], l.kNorm[:hd] })
-	return func() { undoL(); undoC() }
+	undoR := m.restate(func(inv map[jlm.Role]graph.Shape) {
+		for _, r := range []jlm.Role{jlm.RoleAttnQNorm, jlm.RoleAttnKNorm} {
+			if _, ok := inv[r]; ok {
+				inv[r] = graph.Shape{K: hd}
+			}
+		}
+	})
+	return func() { undoR(); undoL(); undoC() }
 }
 
 // postAsPre moves each post-norm to the pre-norm slot of its branch, which is
 // llama's block with OLMo 2's weights.
 func postAsPre(m *Model) func() {
-	return eachLayer(m, func(l *layer) {
+	undoL := eachLayer(m, func(l *layer) {
 		l.attnNorm, l.ffnNorm = l.postAttnNorm, l.postFFNNorm
 		l.postAttnNorm, l.postFFNNorm = nil, nil
 	})
+	undoR := m.restate(func(inv map[jlm.Role]graph.Shape) {
+		for _, r := range [][2]jlm.Role{{jlm.RolePostAttnNorm, jlm.RoleAttnNorm}, {jlm.RolePostFFNNorm, jlm.RoleFFNNorm}} {
+			if s, ok := inv[r[0]]; ok {
+				inv[r[1]] = s
+				delete(inv, r[0])
+			}
+		}
+	})
+	return func() { undoR(); undoL() }
 }
 
 var denseDevViolations = map[string][]c6Violation{
@@ -255,9 +272,7 @@ var denseDevViolations = map[string][]c6Violation{
 		{"SiLU for relu2", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Act = nn.ActSiLU }) }},
 	},
 	"synth-seedoss": {
-		{"no q/k/v biases", func(m *Model) func() {
-			return eachLayer(m, func(l *layer) { l.bq, l.bk, l.bv = nil, nil, nil })
-		}},
+		{"no q/k/v biases", noQKVBias},
 		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
 	},
 	"synth-olmo2": {

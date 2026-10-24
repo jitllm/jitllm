@@ -272,24 +272,28 @@ func TestLayerRelocatesToAnotherDevice(t *testing.T) {
 	// fused relocation is TestFusedRunsFollowARelocation.
 	defer fusedRunsCheck(t, false)()
 	for _, name := range relocModels() {
-		t.Run(name, func(t *testing.T) { layerRelocatesToAnotherDevice(t, jlmOf(t, testmodels.Path(name))) })
+		path := jlmOf(t, testmodels.Path(name))
+		for _, parts := range composedArms(t, path) {
+			t.Run(composedArm(name, parts), func(t *testing.T) { layerRelocatesToAnotherDevice(t, path, parts) })
+		}
 	}
 }
 
-// layerRelocatesToAnotherDevice is TestLayerRelocatesToAnotherDevice on one model.
-func layerRelocatesToAnotherDevice(t *testing.T, path string) {
+// layerRelocatesToAnotherDevice is TestLayerRelocatesToAnotherDevice on one
+// model, with the composer serving parts.
+func layerRelocatesToAnotherDevice(t *testing.T, path string, parts tier.Parts) {
 
 	// Both tiers' split tuner off: each tier tunes its own splits, so two
 	// tuned tiers can sum a matvec in different orders, and the two arms then
 	// part at a knife-edge argmax whatever the relocation did (it read token
 	// 7 of tinyllama either way on a V100, on main and on a branch alike).
 	// An equality gate pins every knob its equality depends on (RULE 11c).
-	a, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff))
+	a, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), composedOpt(parts))
 	if err != nil || a == nil {
 		noDevice(t, "device", err)
 	}
 	defer a.Close()
-	b, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff))
+	b, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff), composedOpt(parts))
 	if err != nil || b == nil {
 		noDevice(t, "second tier", err)
 	}
@@ -348,4 +352,5 @@ func layerRelocatesToAnotherDevice(t *testing.T, path string) {
 				"token %d: hopped %v, static %v", i, hopped, static)
 		}
 	}
+	composedRan(t, parts, nil, a, b)
 }

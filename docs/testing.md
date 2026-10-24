@@ -275,6 +275,19 @@ and every other caller of `swaTier`). `JITLLM_TEST_DEVICES` names their device:
 `cmd/jitllm` reads `JITLLM_VK_DEVICE` and `JITLLM_VK_MAXGROUPS` too, as
 `tier.WithVulkanDevice` and `tier.WithVulkanMaxGroups`.
 
+## Running the device gates composed
+
+A test binary built with `-tags jitllmcomposed` opens every tier with the
+composer serving the blocks and the head (`Config.Composed`) unless a gate
+sets its own, so every device gate runs the composed path on what the front
+end states and the tier's own kernels on the rest. The relocation, move and
+session gates carry a composed arm in every build as well, on the models the
+front end states whole, held to the composer having served
+(`composedRan`: part steps served, none formed at a step, no decline outside
+the arm's stated reasons):
+
+    JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test -tags jitllmcomposed ./engine/model -run TestBlocksMoveBetweenDevices
+
 ## Reference scripts
 
 The scripts under `scripts/` that build fixtures and record goldens

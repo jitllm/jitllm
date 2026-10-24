@@ -41,11 +41,15 @@ func moveDevices(t *testing.T) (string, string) {
 func TestBlocksMoveBetweenDevices(t *testing.T) {
 	names := append([]string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf"}, relocModels()...)
 	for _, name := range names {
-		t.Run(name, func(t *testing.T) { blocksMoveBetweenDevices(t, jlmOf(t, testmodels.Path(name)), moveWhole) })
-		t.Run(name+"/host", func(t *testing.T) {
-			blocksMoveBetweenDevices(t, jlmOf(t, testmodels.Path(name)), moveHost, WithDirectMoves(false))
-		})
-		t.Run(name+"/upper", func(t *testing.T) { blocksMoveBetweenDevices(t, jlmOf(t, testmodels.Path(name)), moveUpper) })
+		path := jlmOf(t, testmodels.Path(name))
+		for _, parts := range composedArms(t, path) {
+			arm := composedArm(name, parts)
+			t.Run(arm, func(t *testing.T) { blocksMoveBetweenDevices(t, path, moveWhole, parts) })
+			t.Run(arm+"/host", func(t *testing.T) {
+				blocksMoveBetweenDevices(t, path, moveHost, parts, WithDirectMoves(false))
+			})
+			t.Run(arm+"/upper", func(t *testing.T) { blocksMoveBetweenDevices(t, path, moveUpper, parts) })
+		}
 	}
 }
 
@@ -56,9 +60,9 @@ const (
 	moveUpper
 )
 
-func blocksMoveBetweenDevices(t *testing.T, path string, arm int, opts ...Option) {
+func blocksMoveBetweenDevices(t *testing.T, path string, arm int, parts tier.Parts, opts ...Option) {
 	a, b := moveDevices(t)
-	g, err := tier.OpenWith(tier.WithDevices(a+","+b), tier.WithDeviceTune(tier.TuneOff))
+	g, err := tier.OpenWith(tier.WithDevices(a+","+b), tier.WithDeviceTune(tier.TuneOff), composedOpt(parts))
 	if err != nil || g == nil {
 		noDevice(t, a+","+b, err)
 	}
@@ -191,6 +195,7 @@ func blocksMoveBetweenDevices(t *testing.T, path string, arm int, opts ...Option
 			t.Fatalf("token %d: the moved logits are %g from the control's, outside the band", i, worst)
 		}
 	}
+	composedRan(t, parts, nil, g)
 }
 
 // placedOn lists the blocks the named device holds for this State.
