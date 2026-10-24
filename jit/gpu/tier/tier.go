@@ -1920,14 +1920,11 @@ type devShared struct {
 	// not a lane's: a matvec a host block offers runs while a session's
 	// submission holds whichever lane it took.
 	mvc mvCall
-	// served are the parts the composer serves, by their key, and their
-	// forms by the composer's Key (served.go).
-	served      map[servedKey]*servedPart
+	// servedForms are the forms of the parts the composer serves, by the
+	// composer's Key, every lane's (served.go). prewarming says a placement
+	// or PrepHead is forming them (Stats.FormedAtStep).
 	servedForms map[jit.Key]*partForm
-	// capturing says a submission is being recorded: a served part not
-	// formed yet is not formed inside it (errServedCold). prewarming says a
-	// placement or PrepHead is forming them (Stats.FormedAtStep).
-	capturing, prewarming bool
+	prewarming  bool
 	// census is Config.Census's count, made at the first step it counts.
 	census   *launchCensus
 	composer *jit.Registry
@@ -2395,6 +2392,30 @@ func (g *GPU) Census() map[string]int {
 			c.mu.Unlock()
 		}
 		d.mu.Unlock()
+	}
+	return out
+}
+
+// LaneParts is, device by device, how many composed parts each lane holds an
+// instance of, lane0 first. Every lane holds every part the device serves: a
+// lane short of one forms it at a step, and one holding more keeps a released
+// block's instance charged.
+func (g *GPU) LaneParts() [][]int {
+	var out [][]int
+	for _, d := range g.devs {
+		d.mu.Lock()
+		var n []int
+		d.eachLane(func(l *lane) {
+			k := 0
+			for _, sv := range l.served {
+				if sv != nil {
+					k++
+				}
+			}
+			n = append(n, k)
+		})
+		d.mu.Unlock()
+		out = append(out, n)
 	}
 	return out
 }

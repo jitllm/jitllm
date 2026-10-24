@@ -6813,3 +6813,25 @@ row where the composer's reads two.
   1055018128 at the second cycle; a placement that does not form reads 16
   parts formed at a step). Poisoned scratch poisons the forms' workgroup
   arrays too, and the poisoned arm's logits do not move.
+- **A form per device, an instance per lane.** A tier serving composed
+  parts ran every submission exclusively, because a form's buffers and launch
+  arguments were the device's and two sessions would have written them at
+  once. That was a choice of this code, not of the device. Now a form's
+  compiled kernels are the device's, one per composer Key. Each lane holds
+  its own instance of the form: the values between its kernels, its scratch
+  and its constants, charged to the budget. It also holds the bindings it
+  rebinds every step. A clone lane takes an instance of every part lane0
+  serves; every placement spreads the block's instance to every lane; a
+  release drops it from every lane; and a lane dropped frees its own. Two
+  sessions of stories15M on a composed laptop GPU step at once with ids and
+  logits identical to each alone, 47 of 48 steps overlapped and 51-60
+  submissions started beside another's. One session moving its seam twice and
+  hopping to a second tier beside the other holds the same bar. Each lane
+  holds an instance of every placed block and the head, and no part forms at
+  a step. Five violations each fail a gate: the exclusive clause put back
+  (serialised); a clone without instances (7 parts formed at a step); a
+  placement that does not spread (lanes holding 7 and 4); a release in one
+  lane only (lanes holding 4 and 7); and a shared head without its graph,
+  where the clone's head declined to the tier's and its logits differ in the
+  last bit. The memory cost is a whole set of instances per lane, about
+  21.7 MB on Llama-3.2-1B beside the lane's scratch.

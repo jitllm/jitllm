@@ -175,7 +175,24 @@ func TestSessionsStepAtOnce(t *testing.T) {
 	defer m.Close()
 	for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "vulkan:1", "metal") {
 		t.Run(spec, func(t *testing.T) {
-			stepAtOnce(t, m, atOncePrompts(m), spec, m.Cfg.NLayer, true)
+			stepAtOnce(t, m, atOncePrompts(m), spec, m.Cfg.NLayer, true, 0)
+		})
+	}
+}
+
+// TestSessionsStepAtOnceComposed is TestSessionsStepAtOnce with the composer
+// serving the blocks and the head: each lane holds its own instance of the
+// device's forms, so the sessions' submissions run beside each other and
+// each still produces exactly what it produces alone.
+func TestSessionsStepAtOnceComposed(t *testing.T) {
+	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "metal") {
+		t.Run(spec, func(t *testing.T) {
+			stepAtOnce(t, m, atOncePrompts(m), spec, m.Cfg.NLayer, true, tier.ComposedBlock|tier.ComposedHead)
 		})
 	}
 }
@@ -196,7 +213,7 @@ func TestSessionsStepAtOnceHybrid(t *testing.T) {
 		for _, blocks := range []int{nl, nl / 2} {
 			for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "vulkan:1", "metal") {
 				t.Run(fmt.Sprintf("%s/%d-of-%d/%s", o.name, blocks, nl, spec), func(t *testing.T) {
-					stepAtOnce(t, m, hybridPrompts, spec, blocks, false)
+					stepAtOnce(t, m, hybridPrompts, spec, blocks, false, 0)
 				})
 			}
 		}
@@ -242,10 +259,14 @@ func atOncePlace(t *testing.T, m *Model, g *tier.GPU, seq int, prompt []int32, b
 // alone and then both at once from two goroutines, and holds the run at once
 // to the runs alone. beside also demands that the device ran a submission
 // beside another's.
-func stepAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, blocks int, beside bool) {
+func stepAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, blocks int, beside bool, parts tier.Parts) {
 	t.Helper()
 	const seq = 256
-	g := atOnceTier(t, spec, nil)
+	var cfg func(*tier.Config)
+	if parts != 0 {
+		cfg = func(c *tier.Config) { c.Composed = parts }
+	}
+	g := atOnceTier(t, spec, cfg)
 	var alone [2]atOnceRun
 	for k := range prompts {
 		st, next := atOncePlace(t, m, g, seq, prompts[k], blocks)
@@ -280,6 +301,39 @@ func stepAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, blocks 
 		t.Fatal("no submission started while another was in flight: the sessions' device calls " +
 			"were serialised")
 	}
+	if parts != 0 {
+		if n, d, _ := after.ServedPart(parts); n == 0 || d != 0 {
+			t.Fatalf("the composer served %d part steps and declined %d", n, d)
+		}
+		if f := after.FormedAtStep - before.FormedAtStep; f != 0 {
+			t.Fatalf("%d composed part(s) formed at a step: a lane did not hold its instance", f)
+		}
+		if err := lanesHold(g, blocks, parts, 2); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// lanesHold is nil when g has at least lanes lanes and each holds an
+// instance of the composed part of each of blocks placed blocks, and of the
+// head where parts names it.
+func lanesHold(g *tier.GPU, blocks int, parts tier.Parts, lanes int) error {
+	want := blocks
+	if parts&tier.ComposedHead != 0 {
+		want++
+	}
+	for _, d := range g.LaneParts() {
+		if len(d) < lanes {
+			return fmt.Errorf("%d lane(s), %v parts each: the sessions did not run in lanes of their own", len(d), d)
+		}
+		for _, n := range d {
+			if n != want {
+				return fmt.Errorf("the lanes hold %v composed parts, %d each placed: a lane is short of an "+
+					"instance or keeps a released block's", d, want)
+			}
+		}
+	}
+	return nil
 }
 
 // TestSessionsPageAtOnce: two sessions stepping at once on a device that
@@ -556,7 +610,27 @@ func TestSessionsRelocateAtOnce(t *testing.T) {
 	for _, half := range []bool{false, true} {
 		for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "metal") {
 			t.Run(fmt.Sprintf("%s/half=%v", spec, half), func(t *testing.T) {
-				relocateAtOnce(t, m, atOncePrompts(m), spec, half, !half)
+				relocateAtOnce(t, m, atOncePrompts(m), spec, half, !half, 0)
+			})
+		}
+	}
+}
+
+// TestSessionsRelocateAtOnceComposed is TestSessionsRelocateAtOnce with the
+// composer serving the blocks and the head: the relocating session's moves
+// free its blocks' instances in every lane and form them again at the
+// placement, beside the other session's composed submissions, and the hop
+// forms them on the second tier. No form is built at a step on either tier.
+func TestSessionsRelocateAtOnceComposed(t *testing.T) {
+	m, err := Open(jlmOf(t, testmodels.Path("stories15M-q8_0.gguf")), noTune)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	for _, half := range []bool{false, true} {
+		for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "metal") {
+			t.Run(fmt.Sprintf("%s/half=%v", spec, half), func(t *testing.T) {
+				relocateAtOnce(t, m, atOncePrompts(m), spec, half, !half, tier.ComposedBlock|tier.ComposedHead)
 			})
 		}
 	}
@@ -576,7 +650,7 @@ func TestSessionsRelocateAtOnceHybrid(t *testing.T) {
 		for _, half := range []bool{false, true} {
 			for _, spec := range testdevices.Specs("cuda:0", "vulkan:0", "metal") {
 				t.Run(fmt.Sprintf("%s/%s/half=%v", o.name, spec, half), func(t *testing.T) {
-					relocateAtOnce(t, m, hybridPrompts, spec, half, false)
+					relocateAtOnce(t, m, hybridPrompts, spec, half, false, 0)
 				})
 			}
 		}
@@ -584,13 +658,18 @@ func TestSessionsRelocateAtOnceHybrid(t *testing.T) {
 }
 
 // relocateAtOnce is TestSessionsRelocateAtOnce's arm for m on spec. beside
-// demands that the device ran a submission beside another's.
-func relocateAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, half, beside bool) {
+// demands that the device ran a submission beside another's; parts names
+// what the composer serves.
+func relocateAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, half, beside bool, parts tier.Parts) {
 	t.Helper()
 	const seq = 256
 	nl := m.Cfg.NLayer
-	g := atOnceTier(t, spec, nil)
-	g2 := atOnceTier(t, spec, nil)
+	var cfg func(*tier.Config)
+	if parts != 0 {
+		cfg = func(c *tier.Config) { c.Composed = parts }
+	}
+	g := atOnceTier(t, spec, cfg)
+	g2 := atOnceTier(t, spec, cfg)
 	place := func(prompt []int32, blocks int) (*State, int32) {
 		return atOncePlace(t, m, g, seq, prompt, blocks)
 	}
@@ -610,6 +689,11 @@ func relocateAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, hal
 			case 16:
 				if got := st.SetGPULayers(nl); got != nl {
 					return fmt.Errorf("the seam came back to %d blocks, asked %d", got, nl)
+				}
+				if parts != 0 {
+					if err := lanesHold(g, nl, parts, 1); err != nil {
+						return err
+					}
 				}
 			case 24:
 				if err := st.SetDevice(g2); err != nil {
@@ -638,7 +722,7 @@ func relocateAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, hal
 	}
 	st.Close()
 
-	before := g.Stats()
+	before, before2 := g.Stats(), g2.Stats()
 	a, na := atOnceState(t, m, g, seq, prompts[0])
 	b, nb := place(prompts[1], bBlocks)
 	var runs [2]atOnceRun
@@ -668,6 +752,25 @@ func relocateAtOnce(t *testing.T, m *Model, prompts [2][]int32, spec string, hal
 	// one to running beside each other as well.
 	if beside && ran == 0 {
 		t.Fatal("no submission ran on the device while another's did: the sessions ran one after another")
+	}
+	if parts != 0 {
+		if err := lanesHold(g, bBlocks, parts, 2); err != nil {
+			t.Fatal(err)
+		}
+		if err := lanesHold(g2, nl, parts, 1); err != nil {
+			t.Fatal(err)
+		}
+		after2 := g2.Stats()
+		for k, s := range [2][2]tier.Stats{{before, after}, {before2, after2}} {
+			n, d, _ := s[1].ServedPart(parts)
+			n0, d0, _ := s[0].ServedPart(parts)
+			if n-n0 == 0 || d-d0 != 0 {
+				t.Fatalf("tier %d: the composer served %d part steps and declined %d", k+1, n-n0, d-d0)
+			}
+			if f := s[1].FormedAtStep - s[0].FormedAtStep; f != 0 {
+				t.Fatalf("tier %d: %d composed part(s) formed at a step: a move left a lane without its instance", k+1, f)
+			}
+		}
 	}
 }
 

@@ -152,6 +152,12 @@ type devSess struct {
 // holds the lane it runs in until it returns.
 type lane struct {
 	bs *blockScratch
+	// served are the parts the composer serves on this lane, by their key,
+	// each the lane's instance of a device's form (served.go); capturing says
+	// the lane's submission is being recorded, so a part not formed yet is
+	// not formed inside it (errServedCold).
+	served    map[servedKey]*servedPart
+	capturing bool
 	// bbs is the batched-prefill scratch, one per chunk width: a prompt asks
 	// for the full chunk and then a narrower tail, and each width bakes its own
 	// row count into every kernel. See prepBatch.
@@ -602,6 +608,10 @@ func (g *devTier) cloneLane() (*lane, bool) {
 		}
 		nl.argmaxOut = b
 	}
+	if err := g.cloneParts(nl); err != nil {
+		g.LastErr = "a lane's composed parts: " + err.Error()
+		return fail()
+	}
 	return nl, true
 }
 
@@ -609,7 +619,7 @@ func (g *devTier) cloneLane() (*lane, bool) {
 // cap are the model's and stay src's, and dst gets logits of its own to write.
 // Callers hold g.mu inside a scratch window.
 func (g *devTier) shareHead(dst, src *blockScratch) bool {
-	dst.head, dst.mvHead = src.head, src.mvHead
+	dst.head, dst.mvHead, dst.headGraph = src.head, src.mvHead, src.headGraph
 	dst.hNorm, dst.hNormB, dst.headCap = src.hNorm, src.hNormB, src.headCap
 	dst.headEmbeds, dst.embScale = src.headEmbeds, src.embScale
 	dst.headShared = true
@@ -636,7 +646,7 @@ func unshareHead(dst *blockScratch) {
 	if dst == nil || !dst.headShared {
 		return
 	}
-	dst.head, dst.mvHead = nil, mv{}
+	dst.head, dst.mvHead, dst.headGraph = nil, mv{}, nil
 	dst.hNorm, dst.hNormB, dst.headCap = nil, nil, nil
 	dst.headShared = false
 }
@@ -650,6 +660,7 @@ func (g *devTier) dropLane(l *lane) {
 	defer g.scratchWin().close()
 	v := &devTier{devShared: g.devShared, devSess: g.devSess, lane: l, Stats: g.Stats}
 	v.dropLaneGraph()
+	g.dropLaneParts(l)
 	for _, s := range l.geoSets {
 		unshareHead(s.bs)
 	}

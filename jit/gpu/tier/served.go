@@ -3,6 +3,7 @@ package tier
 import (
 	"errors"
 	"fmt"
+	"maps"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/graph"
@@ -49,29 +50,45 @@ type composedPart struct {
 }
 
 // partForm is a part's kernels compiled on the device, in launch order, and
-// the composer's own buffers they share: the values between its kernels,
-// its scratch and its constants. The part's inputs and outputs are the
-// caller's.
+// the plan of what each binds: the caller's inputs and outputs, the part's
+// weights, vectors and tables, and the form's own buffers -- the values
+// between its kernels, its scratch and its constants -- which each lane
+// holds its own of (partInst). One per composer Key on a device, every
+// lane's.
 type partForm struct {
 	codes []partCode
 	args  [][]partArg
-	bufs  []backend.Buf
+	// own is each of the form's own buffers: its bytes, and the words a
+	// constant is written with.
+	own []partBuf
 	// width is each output's width in floats at the form's rows.
 	width []int
-	// key is the composer's Key the form is kept under, bytes what its
-	// buffers charge the device's budget, and refs the served parts that
-	// launch it: the form goes with the last of them.
-	key   jit.Key
-	bytes uint64
-	refs  int
+	// key is the composer's Key the form is kept under, and refs the served
+	// parts, of every lane, that launch it: the form goes with the last.
+	key  jit.Key
+	refs int
 }
 
-// partCode is one of a form's kernels, its launch shape and its arguments,
-// reused from step to step.
+// partBuf is one of a form's own buffers: n bytes, holding words where it
+// is a constant.
+type partBuf struct {
+	n     int
+	words []uint32
+}
+
+// partCode is one of a form's kernels and its launch shape.
 type partCode struct {
 	k             backend.Kernel
 	groups, width int
-	bufs          []backend.Buf
+}
+
+// partInst is one lane's instance of a form: the form's own buffers, what
+// they charge the device's budget, and each kernel's argument list, bound
+// again every step.
+type partInst struct {
+	bufs   []backend.Buf
+	launch [][]backend.Buf
+	bytes  uint64
 }
 
 // partArg is what one kernel parameter binds: one of the form's own
@@ -149,17 +166,9 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 	}
 	vals := map[graph.ValueID]int{}
 	own := map[jit.Operand]int{}
-	// Every buffer of the form is poisoned where the tier's scratch is
-	// (WithPoisonScratch): a kernel reading what no kernel wrote shows.
-	alloc := func(n int) (int, error) {
-		b, err := g.dev.Alloc(max(n, 4))
-		if err != nil {
-			return 0, err
-		}
-		g.poisonBuf(b, max(n, 4))
-		f.bufs = append(f.bufs, b)
-		f.bytes += uint64(max(n, 4))
-		return len(f.bufs) - 1, nil
+	buf := func(n int, words []uint32) int {
+		f.own = append(f.own, partBuf{n: max(n, 4), words: words})
+		return len(f.own) - 1
 	}
 	for _, c := range codes {
 		if c.GPU == nil {
@@ -183,10 +192,7 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 				}
 				i, ok := vals[o.Value]
 				if !ok {
-					if i, err = alloc(4 * rows * gr.Values[o.Value].Width); err != nil {
-						f.close()
-						return nil, err
-					}
+					i = buf(4*rows*gr.Values[o.Value].Width, nil)
 					vals[o.Value] = i
 				}
 				args = append(args, partArg{kind: partOwn, i: i})
@@ -199,16 +205,7 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 			case bd.Words != nil || o.Kind == jit.OperandScratch:
 				i, ok := own[o]
 				if !ok {
-					if i, err = alloc(int(max(bd.Bytes, 4*int64(len(bd.Words))))); err != nil {
-						f.close()
-						return nil, err
-					}
-					if bd.Words != nil {
-						if err := f.bufs[i].Write(u32b(bd.Words)); err != nil {
-							f.close()
-							return nil, err
-						}
-					}
+					i = buf(int(max(bd.Bytes, 4*int64(len(bd.Words)))), bd.Words)
 					own[o] = i
 				}
 				args = append(args, partArg{kind: partOwn, i: i})
@@ -218,28 +215,68 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 			}
 		}
 		f.args = append(f.args, args)
-		f.codes[len(f.codes)-1].bufs = make([]backend.Buf, len(args))
 	}
-	// The form's buffers are the device's like a block's weights: charged to
-	// its budget, which a form it cannot hold refuses.
-	if !g.room(f.bytes) {
-		f.close()
-		return nil, fmt.Errorf("its buffers need %d bytes, which the device's budget does not hold", f.bytes)
-	}
-	g.charge(f.bytes)
 	return f, nil
 }
 
-// launch binds the form's kernels to the caller's inputs and outputs and
-// the part's weights, vectors and tables, and launches them in order.
-func (f *partForm) launch(lc *launcher, sl *composedPart, in, out []backend.Buf) error {
+// instance is a lane's instance of form f: its own buffers, poisoned where
+// the tier's scratch is (WithPoisonScratch) so that a kernel reading what no
+// kernel wrote shows, its constants written, and charged to the device's
+// budget like a block's weights -- one the budget cannot hold is refused.
+// Callers hold g.mu.
+func (g *devTier) instance(f *partForm) (*partInst, error) {
+	var n uint64
+	for _, b := range f.own {
+		n += uint64(b.n)
+	}
+	if !g.room(n) {
+		return nil, fmt.Errorf("its buffers need %d bytes, which the device's budget does not hold", n)
+	}
+	in := &partInst{}
+	for _, b := range f.own {
+		d, err := g.dev.Alloc(b.n)
+		if err != nil {
+			in.free()
+			return nil, err
+		}
+		g.poisonBuf(d, b.n)
+		in.bufs = append(in.bufs, d)
+		if b.words != nil {
+			if err := d.Write(u32b(b.words)); err != nil {
+				in.free()
+				return nil, err
+			}
+		}
+	}
+	for _, args := range f.args {
+		in.launch = append(in.launch, make([]backend.Buf, len(args)))
+	}
+	in.bytes = n
+	g.charge(n)
+	return in, nil
+}
+
+// free frees an instance's buffers; what they charged is the caller's to
+// give back.
+func (in *partInst) free() {
+	for _, b := range in.bufs {
+		b.Free()
+	}
+	in.bufs = nil
+}
+
+// launch binds the form's kernels to the caller's inputs and outputs, the
+// lane's instance and the part's weights, vectors and tables, and launches
+// them in order.
+func (sv *servedPart) launch(lc *launcher, in, out []backend.Buf) error {
+	f, sl := sv.f, &sv.sl
 	for i := range f.codes {
-		fc := &f.codes[i]
+		fc, bufs := &f.codes[i], sv.inst.launch[i]
 		for j, a := range f.args[i] {
 			var b backend.Buf
 			switch a.kind {
 			case partOwn:
-				b = f.bufs[a.i]
+				b = sv.inst.bufs[a.i]
 			case partIn:
 				b = in[a.i]
 			case partOut:
@@ -256,9 +293,9 @@ func (f *partForm) launch(lc *launcher, sl *composedPart, in, out []backend.Buf)
 			if b == nil {
 				return fmt.Errorf("the composer's kernel %d reads %v, which the call site does not hold", i, a.role)
 			}
-			fc.bufs[j] = b
+			bufs[j] = b
 		}
-		if err := lc.issue(fc.k, fc.groups, fc.width, fc.bufs...); err != nil {
+		if err := lc.issue(fc.k, fc.groups, fc.width, bufs...); err != nil {
 			return err
 		}
 	}
@@ -269,49 +306,90 @@ func (f *partForm) close() {
 	for _, c := range f.codes {
 		c.k.Close()
 	}
-	for _, b := range f.bufs {
-		b.Free()
+	f.codes = nil
+}
+
+// clone is a copy of the part whose bindings, bound again every step, are
+// its own.
+func (sl composedPart) clone() composedPart {
+	sl.weights, sl.vectors, sl.tables = maps.Clone(sl.weights), maps.Clone(sl.vectors), maps.Clone(sl.tables)
+	return sl
+}
+
+// dropPart frees a lane's served part sv: its instance, whose bytes go back
+// to the budget, and its form where no part launches it any more. Callers
+// hold g.mu, with no submission running.
+func (g *devTier) dropPart(sv *servedPart) {
+	if sv == nil {
+		return
 	}
-	f.codes, f.bufs = nil, nil
+	sv.inst.free()
+	g.refund(sv.inst.bytes)
+	sv.inst.bytes = 0
+	if sv.f.refs--; sv.f.refs == 0 {
+		delete(g.servedForms, sv.f.key)
+		sv.f.close()
+	}
 }
 
-// freeForm frees form f and gives its buffers' bytes back to the budget.
-// Callers hold g.mu.
-func (g *devTier) freeForm(f *partForm) {
-	f.close()
-	g.refund(f.bytes)
-	f.bytes = 0
-}
-
-// partsClose frees every served part's form. Callers hold g.mu.
+// partsClose frees every lane's served parts and every form. Callers hold
+// g.mu.
 func (g *devTier) partsClose() {
+	g.eachLane(func(l *lane) { g.dropLaneParts(l) })
 	for k, f := range g.servedForms {
-		if f != nil {
-			g.freeForm(f)
-		}
+		f.close()
 		delete(g.servedForms, k)
 	}
-	clear(g.served)
 }
 
-// dropServed forgets the served parts of graph gr, a failed one's included,
-// and frees each form no part launches any more: a block's parts go with the
-// block, and a block placed again forms them again. Callers hold g.mu and
-// drop the graph, so no recording launches a form it frees.
-func (g *devTier) dropServed(gr *graph.Graph) {
-	for sk, sv := range g.served {
-		if sk.graph != gr {
-			continue
-		}
-		delete(g.served, sk)
-		if sv == nil {
-			continue
-		}
-		if sv.f.refs--; sv.f.refs == 0 {
-			delete(g.servedForms, sv.f.key)
-			g.freeForm(sv.f)
-		}
+// dropLaneParts frees lane l's served parts. Callers hold g.mu, with no
+// submission running.
+func (g *devTier) dropLaneParts(l *lane) {
+	for sk, sv := range l.served {
+		delete(l.served, sk)
+		g.dropPart(sv)
 	}
+}
+
+// dropServed forgets the served parts of graph gr in every lane, a failed
+// one's included, and frees each form no part launches any more: a block's
+// parts go with the block, and a block placed again forms them again.
+// Callers hold g.mu and drop the graph, so no recording launches what it
+// frees.
+func (g *devTier) dropServed(gr *graph.Graph) {
+	g.eachLane(func(l *lane) {
+		for sk, sv := range l.served {
+			if sk.graph == gr {
+				delete(l.served, sk)
+				g.dropPart(sv)
+			}
+		}
+	})
+}
+
+// cloneParts gives lane nl an instance of every part lane0 serves, on the
+// device's forms: a clone's first step forms nothing. Callers hold g.mu.
+func (g *devTier) cloneParts(nl *lane) error { return g.spreadParts(g.lane0, nl, nil) }
+
+// spreadParts gives lane nl an instance of each part lane src serves that it
+// does not, of graph gr where gr is not nil, on the device's forms. Callers
+// hold g.mu.
+func (g *devTier) spreadParts(src, nl *lane, gr *graph.Graph) error {
+	for sk, sv := range src.served {
+		if sv == nil || gr != nil && sk.graph != gr || nl.served[sk] != nil {
+			continue
+		}
+		in, err := g.instance(sv.f)
+		if err != nil {
+			return fmt.Errorf("the composed %s: %w", partNames[sk.kind], err)
+		}
+		sv.f.refs++
+		if nl.served == nil {
+			nl.served = map[servedKey]*servedPart{}
+		}
+		nl.served[sk] = &servedPart{sl: sv.sl.clone(), f: sv.f, inst: in, n: sv.n, m: sv.m}
+	}
+	return nil
 }
 
 // Parts names the parts of a model the composer serves (Config.Composed).
@@ -403,6 +481,7 @@ type servedKey struct {
 type servedPart struct {
 	sl      composedPart
 	f       *partForm
+	inst    *partInst
 	in, out [4]backend.Buf
 	n, m    int
 }
@@ -411,8 +490,11 @@ type servedPart struct {
 // formed: the capture is abandoned and the step issued unrecorded.
 var errServedCold = errors.New("tier: a served part forms outside a capture")
 
-// servedFor is the served part of key sk, built by build on its first
-// step and formed through the composer's one keyed cache. Callers hold g.mu.
+// servedFor is the lane's served part of key sk, built by build on its
+// first step and formed through the composer's one keyed cache, its form the
+// device's and its instance the lane's. A submission beside other sessions'
+// takes the device's lock for the build (subLock); callers otherwise hold
+// g.mu.
 func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*servedPart, error) {
 	if sv, ok := g.served[sk]; ok {
 		if sv == nil {
@@ -424,9 +506,13 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		return nil, errServedCold
 	}
 	if g.served == nil {
-		g.served, g.servedForms = map[servedKey]*servedPart{}, map[jit.Key]*partForm{}
+		g.served = map[servedKey]*servedPart{}
 	}
 	g.served[sk] = nil
+	defer g.subUnlock(g.subLock())
+	if g.servedForms == nil {
+		g.servedForms = map[jit.Key]*partForm{}
+	}
 	if !g.prewarming {
 		g.FormedAtStep++
 	}
@@ -464,8 +550,17 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		f.key = key
 		g.servedForms[key] = f
 	}
+	in, err := g.instance(f)
+	if err != nil {
+		if f.refs == 0 {
+			delete(g.servedForms, key)
+			f.close()
+		}
+		g.LastErr = err.Error()
+		return nil, fmt.Errorf("the composed %s: %w", partNames[sk.kind], err)
+	}
 	f.refs++
-	sv := &servedPart{sl: sl, f: f, n: len(sl.graph.In), m: len(sl.graph.Out)}
+	sv := &servedPart{sl: sl, f: f, inst: in, n: len(sl.graph.In), m: len(sl.graph.Out)}
 	g.served[sk] = sv
 	return sv, nil
 }
@@ -474,7 +569,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 func (sv *servedPart) run(g *devTier, lc *launcher, in, out []backend.Buf) error {
 	copy(sv.in[:sv.n], in)
 	copy(sv.out[:sv.m], out)
-	if err := sv.f.launch(lc, &sv.sl, sv.in[:sv.n], sv.out[:sv.m]); err != nil {
+	if err := sv.launch(lc, sv.in[:sv.n], sv.out[:sv.m]); err != nil {
 		return err
 	}
 	g.PartsServed[sv.sl.kind]++
@@ -665,7 +760,18 @@ func (g *devTier) prewarmComposedBlock(li int) {
 	}
 	if _, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.zero, bs.p.MaxSeq, g.kvp.p); err != nil {
 		g.LastErr = "the composed block: " + err.Error()
+		return
 	}
+	// Every other lane's instance too: a session's first step after a move
+	// forms nothing.
+	g.eachLane(func(o *lane) {
+		if o == g.lane {
+			return
+		}
+		if err := g.spreadParts(g.lane, o, l.graph); err != nil {
+			g.LastErr = "a lane's composed block: " + err.Error()
+		}
+	})
 }
 
 // prewarmComposedHead forms the head's part where the composer serves it,
