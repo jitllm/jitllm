@@ -290,6 +290,8 @@ func (k *vkKern) Launch(groups, width int, bufs ...Buf) error {
 
 func (k *vkKern) Close() { k.k.Close() }
 
+func (k *vkKern) Name() string { return k.name }
+
 func same(a, b []Buf) bool {
 	if len(a) != len(b) {
 		return false

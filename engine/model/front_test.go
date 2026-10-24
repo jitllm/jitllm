@@ -12,12 +12,9 @@ import (
 	"github.com/jitllm/jitllm/jit"
 )
 
-// uncoveredReasons is every reason the front end names.
-var uncoveredReasons = []string{UncoveredKind, UncoveredMixture, UncoveredLatent, UncoveredValueWidth, UncoveredGeometry,
-	UncoveredSelect, UncoveredStreams, UncoveredRopeAxes, UncoveredPartialRope, UncoveredNonCausal, UncoveredClassic,
-	UncoveredQKNormPlace, UncoveredVNorm, UncoveredKVShared, UncoveredVFromK, UncoveredOutGate, UncoveredClamp,
-	UncoveredTemp, UncoveredResidScale, UncoveredPLE, UncoveredCompressed, UncoveredNGram, UncoveredSparseAct,
-	UncoveredAct, UncoveredPostNorm, UncoveredSubNorm, UncoveredPooling, UncoveredEmbedRows}
+// namedReason reports whether u is a feature the front end names as not yet
+// written: not Covered, and not a graph it built wrong.
+func namedReason(u Uncovered) bool { return u > Covered && u < UncoveredUnbound }
 
 // TestFrontStatesTheModelAsOps builds every block's, the head's and the
 // input rows' graph from the container of plain dense models (biases, q/k
@@ -29,18 +26,17 @@ var uncoveredReasons = []string{UncoveredKind, UncoveredMixture, UncoveredLatent
 // block by a reason it names, never by a graph that fails to verify.
 func TestFrontStatesTheModelAsOps(t *testing.T) {
 	step := jit.Step{Rows: 1, Page: 64, Keys: 16, ActWindow: 32}
-	for _, file := range []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf", "tinyllama-1.1b-q3_K_M.gguf",
-		"gemma-2b.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf"} {
+	for _, file := range append(slices.Clone(servedModels), formedModels...) {
 		t.Run(file, func(t *testing.T) {
 			m := frontModel(t, file)
 			f := m.Composing()
 			for li := range m.Cfg.NLayer {
 				if f.BlockGraph(li) == nil {
-					t.Fatalf("block %d has no graph: %s", li, m.Uncovered(li))
+					t.Fatalf("block %d has no graph: %s %v", li, m.Uncovered(li), m.UncoveredErr(li))
 				}
 			}
 			if f.HeadGraph() == nil || f.EmbedGraph() == nil {
-				t.Fatalf("no head (%s) or input rows (%s)", m.Uncovered(-1), m.Uncovered(-2))
+				t.Fatalf("no head (%s %v) or input rows (%s %v)", m.Uncovered(-1), m.UncoveredErr(-1), m.Uncovered(-2), m.UncoveredErr(-2))
 			}
 			parts, err := jit.Front(f, false)
 			if err != nil {
@@ -69,7 +65,10 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 			}
 		})
 	}
-	for _, c := range []struct{ file, want string }{
+	for _, c := range []struct {
+		file string
+		want Uncovered
+	}{
 		{"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", UncoveredMixture},
 		{"gemma-3-1b-it-Q4_K_M.gguf", UncoveredPostNorm},
 		{"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf", UncoveredQKNormPlace},
@@ -83,7 +82,7 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 				if why != c.want {
 					t.Fatalf("block %d is refused by %q, want %q", li, why, c.want)
 				}
-				if !slices.Contains(uncoveredReasons, why) {
+				if !namedReason(why) {
 					t.Fatalf("block %d is refused by %q, which is not a named reason", li, why)
 				}
 			}
@@ -125,9 +124,9 @@ func frontModel(t *testing.T, file string) *Model {
 func TestFrontRefusesWhatItDropsFromABlock(t *testing.T) {
 	m := frontModel(t, "Qwen3-0.6B-Q8_0.gguf")
 	m.Cfg.QKNorm = false
-	why := m.Uncovered(0)
-	if !strings.Contains(why, "does not bind") || !strings.Contains(why, jlm.RoleAttnQNorm.String()) {
-		t.Fatalf("a block built without its stored q norm is refused by %q, want the unbound q norm named", why)
+	why, err := m.Uncovered(0), m.UncoveredErr(0)
+	if why != UncoveredUnbound || err == nil || !strings.Contains(err.Error(), jlm.RoleAttnQNorm.String()) {
+		t.Fatalf("a block built without its stored q norm is refused by %q (%v), want the unbound q norm named", why, err)
 	}
-	t.Logf("block 0 without its q/k norm: %s", why)
+	t.Logf("block 0 without its q/k norm: %s: %v", why, err)
 }

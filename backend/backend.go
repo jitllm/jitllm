@@ -74,6 +74,13 @@ type Kernel interface {
 	Close()
 }
 
+// NamedKernel is a kernel that reports the name it was compiled under
+// (ir.Kernel.Name): what a census of launches counts by.
+type NamedKernel interface {
+	Kernel
+	Name() string
+}
+
 // checkWidth refuses a launch whose workgroup is not the one the kernel
 // declares, on every backend, by the kernel's name.
 //

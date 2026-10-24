@@ -244,7 +244,7 @@ func (f *partForm) launch(lc *launcher, sl *composedPart, in, out []backend.Buf)
 			}
 			fc.bufs[j] = b
 		}
-		if err := lc.launch(fc.k, fc.groups, fc.width, fc.bufs...); err != nil {
+		if err := lc.issue(fc.k, fc.groups, fc.width, fc.bufs...); err != nil {
 			return err
 		}
 	}
@@ -280,6 +280,53 @@ const (
 	// ComposedBlock serves a block whole from its graph (nn.LayerPlan.Graph).
 	ComposedBlock Parts = 1 << partBlock
 )
+
+// partDecline is why a one-row decode step's composed part is not asked for:
+// what the serving conditions leave to the tier's own kernels, counted by
+// reason (Stats.BlockDeclines, HeadDeclines).
+type partDecline uint8
+
+const (
+	partServes partDecline = iota
+	partNoGraph
+	partPersist
+	partSkip
+	partNoPool
+	partPrefill
+	partStream
+	partLatent
+	partShared
+	partWindow
+	partHeadShape
+	partHeadNorm
+	partPick
+	numPartDeclines
+)
+
+var partDeclineNames = [numPartDeclines]string{
+	partServes:    "served",
+	partNoGraph:   "no graph from the front end",
+	partPersist:   "inside the persistent block",
+	partSkip:      "a fault probe skips blocks",
+	partNoPool:    "no paged history on the device",
+	partPrefill:   "the history is mid-prefill",
+	partStream:    "the history streams",
+	partLatent:    "a latent attention's history",
+	partShared:    "the history of another block",
+	partWindow:    "a window",
+	partHeadShape: "a head graph other than a norm and its projection",
+	partHeadNorm:  "no norm buffer, or a LayerNorm head",
+	partPick:      "a head that picks labels only",
+}
+
+// DeclineName is the reason a decline count is kept under, by its index in
+// Stats.BlockDeclines or HeadDeclines.
+func DeclineName(i int) string {
+	if i < 0 || i >= int(numPartDeclines) {
+		return fmt.Sprintf("decline %d", i)
+	}
+	return partDeclineNames[i]
+}
 
 // ServedPart is how many steps the composer served the parts of k in, how
 // many one-row decode steps it was not asked for, and how many other block
@@ -338,6 +385,9 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		g.served, g.servedForms = map[servedKey]*servedPart{}, map[jit.Key]*partForm{}
 	}
 	g.served[sk] = nil
+	if !g.prewarming {
+		g.FormedAtStep++
+	}
 	if g.composer == nil {
 		g.composer = jit.Default()
 	}
@@ -382,13 +432,23 @@ func (sv *servedPart) run(g *devTier, lc *launcher, in, out []backend.Buf) error
 	return nil
 }
 
-// headServes says a step's head is the one the composer is asked for: one
-// row, and the model's head graph the device's share of main's head -- a
-// norm and the vocabulary's projection, its softcap applied after it by the
-// tier and its bias and scale on the host -- not the label pick, not inside
-// the persistent block.
-func headServes(R int, gr *graph.Graph, norm backend.Buf, layerNorm, pickOnly, persist bool) bool {
-	return R == 1 && normThenProjection(gr) && norm != nil && !layerNorm && !pickOnly && !persist
+// headServes is why a one-row step's head is not the one the composer is
+// asked for, serves where it is: the model's head graph the device's share
+// of main's head -- a norm and the vocabulary's projection, its softcap
+// applied after it by the tier and its bias and scale on the host -- not
+// the label pick, not inside the persistent block.
+func headServes(gr *graph.Graph, norm backend.Buf, layerNorm, pickOnly, persist bool) partDecline {
+	switch {
+	case !normThenProjection(gr):
+		return partHeadShape
+	case norm == nil || layerNorm:
+		return partHeadNorm
+	case pickOnly:
+		return partPick
+	case persist:
+		return partPersist
+	}
+	return partServes
 }
 
 // normThenProjection says gr is a norm and a projection of its output, with
@@ -494,14 +554,33 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 	return nil
 }
 
-// blockServes says block li of this step is one the composer serves whole:
-// a graph from the front end, a one-row step of the paged decode, none of
-// its history at home, no window (not yet held to the tier), outside the
-// persistent block and a fault probe.
-func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, persist bool) bool {
+// blockServes is why block li of this one-row step is not one the composer
+// serves whole, serves where it is: a graph from the front end, the paged
+// decode, none of its history at home, no window (not yet held to the
+// tier), outside the persistent block and a fault probe.
+func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, persist bool) partDecline {
 	pk := bs.pkv
-	return l.graph != nil && !persist && len(g.kb.skip) == 0 && pk != nil && !pk.prefill && pk.st == nil &&
-		g.kvp != nil && g.kvp.layers[li] != nil && !g.kvp.layers[li].geom.mla && l.kvSrc == li && !l.windowed && p.Window(li) == 0
+	switch {
+	case l.graph == nil:
+		return partNoGraph
+	case persist:
+		return partPersist
+	case len(g.kb.skip) != 0:
+		return partSkip
+	case pk == nil || g.kvp == nil || g.kvp.layers[li] == nil:
+		return partNoPool
+	case pk.prefill:
+		return partPrefill
+	case pk.st != nil:
+		return partStream
+	case g.kvp.layers[li].geom.mla:
+		return partLatent
+	case l.kvSrc != li:
+		return partShared
+	case l.windowed || p.Window(li) != 0:
+		return partWindow
+	}
+	return partServes
 }
 
 // prewarmComposed forms every placed block's part and the head's at
@@ -512,9 +591,11 @@ func (g *devTier) prewarmComposed() {
 	if g.Composed == 0 || bs == nil || bs.pkv == nil || g.kvp == nil {
 		return
 	}
+	g.prewarming = true
+	defer func() { g.prewarming = false }()
 	if g.Composed&ComposedBlock != 0 {
 		for li, l := range g.layers {
-			if l == nil || !g.blockServes(l, li, &bs.p, bs, false) {
+			if l == nil || g.blockServes(l, li, &bs.p, bs, false) != partServes {
 				continue
 			}
 			rcs := bs.cs
@@ -536,9 +617,11 @@ func (g *devTier) prewarmComposed() {
 func (g *devTier) prewarmComposedHead() {
 	bs := g.bs
 	if g.NoPromptPrewarm || g.Composed&ComposedHead == 0 || bs == nil || bs.head == nil ||
-		!headServes(1, bs.headGraph, bs.hNorm, bs.normVar != nil, false, false) {
+		headServes(bs.headGraph, bs.hNorm, bs.normVar != nil, false, false) != partServes {
 		return
 	}
+	g.prewarming = true
+	defer func() { g.prewarming = false }()
 	if _, err := g.servedHead(bs.headGraph, bs.head, bs.hNorm); err != nil {
 		g.LastErr = "the composed head: " + err.Error()
 	}

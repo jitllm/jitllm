@@ -15,8 +15,7 @@ func sinkVec(o graph.Op) Operand {
 	return Operand{Kind: OperandVector, Role: o.Weight[0].Role, Name: o.Weight[0].Role.String()}
 }
 
-// scoreMap is the score primitive, reading the temperature's table as its
-// fourth operand where there is one.
+// scoreMap is the score primitive.
 func scoreMap(shape []int, in []Operand, out Operand, e []Expr, f Facts) Prim {
 	return Prim{Kind: PrimMap, Shape: shape, In: in, Out: out, Expr: e, Facts: f}
 }
@@ -64,16 +63,16 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 type attendGeom struct {
 	D, KW        int
 	Keys, Values Operand
-	// Mask, where set, is an indexer's keep mask (decomposeIndexSelect,
-	// decomposeBlockSelect), MaskGroups groups of the query heads each a
-	// row of it: a position it does not keep scores as the least float.
+	// Mask, where set, is a selection's keep mask, the attention's second
+	// input, MaskGroups groups of the query heads each a row of it: a
+	// position it does not keep scores as the least float.
 	Mask       *Operand
 	MaskGroups int
 }
 
 // attend is decodeAttend's primitives for the query q (rows by heads by
 // g.D) into out (the same), o's attributes its heads, scale, window,
-// softcap, temperature and sinks.
+// softcap and sinks.
 func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	a := o.Attr
 	U, F := ir.U32, ir.F32

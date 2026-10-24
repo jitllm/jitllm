@@ -121,7 +121,7 @@ const (
 	// (Weight[0], channel-major, the oldest first) against the window's rows
 	// and the row, Out[0] a row of the input's width; the window then drops
 	// its oldest row and takes the row. A primitive with a state of its own:
-	// a recurrent mixer's convolution (DecomposeRecurrent).
+	// a recurrent mixer's convolution.
 	OpStateConv
 	// OpPool is the step's live rows of In[0] pooled into one row, Out[0]
 	// it in every row: their mean, the first's or the last's (Pooling, a

@@ -6785,3 +6785,18 @@ row where the composer's reads two.
   0.0321 (main's tier 0.0137) while staying inside the gate's bound. Kept
   refused until that is explained: the reduction's order over gate/up's
   256-thread workgroups, or a defect in a reduction merged into a consumer.
+- **What a composed step still launches of main's.** The serving gate holds
+  every block placed, the device's fallback off, no demotion, and on the arm
+  without a recording every block of every step served (a block bypassing
+  the composed branch, neither served nor declined, reads 2100 block steps
+  where 140 steps of 16 blocks are 2240). A census of the tier's own launches
+  on the steps the composer is asked for (`Config.Census`, by the name each
+  kernel was compiled under) reads, on Llama-3.2-1B: with the blocks
+  composed, the head's two norm kernels, its quantize and its vocabulary
+  matvec, and the rotary table, once a step each; with the blocks and the
+  head, the rotary table alone. The gate holds the second to that list.
+  Every form is built at a placement or PrepHead (`Stats.FormedAtStep` 0),
+  and a decline is counted by its reason. Of the checkpoints the front end
+  states, the tier cannot place stories260K (its quantizer refuses the
+  172-wide rows), and float fixtures equal the float reference, which the
+  gate's band cannot measure; the front-end test forms both.

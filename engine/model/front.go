@@ -18,47 +18,100 @@ import (
 // no graph, and Uncovered says why by name; main's runtime runs every model
 // whatever its graphs are, so a missing graph refuses nothing at Open.
 
-// The reasons a block or a model-wide graph has none, by name. Shrinking
-// this list is the front end's work list.
+// Uncovered is why the front end states no graph for a block, the head or
+// the input rows, Covered where it does: a feature the op language does not
+// state yet -- shrinking that list is the front end's work list -- or a graph
+// it built wrong (UncoveredUnbound, UncoveredUnverified), which a gate holds
+// as a failure and UncoveredErr details.
+type Uncovered uint8
+
 const (
-	UncoveredKind        = "a layer that is not an attention block (a recurrent or state-space mixer)"
-	UncoveredMixture     = "a mixture of experts"
-	UncoveredLatent      = "latent attention (a compressed KV)"
-	UncoveredValueWidth  = "a value head of another width than the key's"
-	UncoveredGeometry    = "a layer of its own head width, head count or rotary width"
-	UncoveredSelect      = "an attention indexer or sparse key selection"
-	UncoveredStreams     = "several residual streams"
-	UncoveredRopeAxes    = "a rotary over several position axes or per element"
-	UncoveredPartialRope = "a rotary over part of each head"
-	UncoveredNonCausal   = "non-causal attention"
-	UncoveredClassic     = "LayerNorm or a parallel attention and FFN"
-	UncoveredQKNormPlace = "a q/k norm after the rotary or without a weight"
-	UncoveredVNorm       = "a norm over v"
-	UncoveredKVShared    = "a block reading another block's history"
-	UncoveredVFromK      = "v taken from k's projection"
-	UncoveredOutGate     = "a gate on the attention's output"
-	UncoveredClamp       = "clamped projections"
-	UncoveredTemp        = "an attention temperature per position"
-	UncoveredResidScale  = "a scaled residual"
-	UncoveredPLE         = "per-layer embeddings"
-	UncoveredCompressed  = "compressed or grouped attention"
-	UncoveredNGram       = "an n-gram embedding"
-	UncoveredSparseAct   = "a gaussian top-k activation"
-	UncoveredAct         = "an activation the op language does not state"
-	UncoveredPostNorm    = "a norm over a sublayer's output before the residual"
-	UncoveredSubNorm     = "a norm inside a sublayer before its output projection"
-	UncoveredPooling     = "a pooled head (an embedding model's)"
-	UncoveredEmbedRows   = "input rows beyond the token's row, a scale and a position table"
+	Covered Uncovered = iota
+	UncoveredKind
+	UncoveredMixture
+	UncoveredLatent
+	UncoveredValueWidth
+	UncoveredGeometry
+	UncoveredSelect
+	UncoveredStreams
+	UncoveredRopeAxes
+	UncoveredPartialRope
+	UncoveredNonCausal
+	UncoveredClassic
+	UncoveredQKNormPlace
+	UncoveredVNorm
+	UncoveredKVShared
+	UncoveredVFromK
+	UncoveredOutGate
+	UncoveredClamp
+	UncoveredTemp
+	UncoveredResidScale
+	UncoveredPLE
+	UncoveredCompressed
+	UncoveredNGram
+	UncoveredSparseAct
+	UncoveredAct
+	UncoveredPostNorm
+	UncoveredSubNorm
+	UncoveredPooling
+	UncoveredEmbedRows
+	UncoveredUnbound
+	UncoveredUnverified
+	numUncovered
 )
+
+var uncoveredNames = [numUncovered]string{
+	Covered:              "covered",
+	UncoveredKind:        "a layer that is not an attention block (a recurrent or state-space mixer)",
+	UncoveredMixture:     "a mixture of experts",
+	UncoveredLatent:      "latent attention (a compressed KV)",
+	UncoveredValueWidth:  "a value head of another width than the key's",
+	UncoveredGeometry:    "a layer of its own head width, head count or rotary width",
+	UncoveredSelect:      "an attention indexer or sparse key selection",
+	UncoveredStreams:     "several residual streams",
+	UncoveredRopeAxes:    "a rotary over several position axes or per element",
+	UncoveredPartialRope: "a rotary over part of each head",
+	UncoveredNonCausal:   "non-causal attention",
+	UncoveredClassic:     "LayerNorm or a parallel attention and FFN",
+	UncoveredQKNormPlace: "a q/k norm after the rotary or without a weight",
+	UncoveredVNorm:       "a norm over v",
+	UncoveredKVShared:    "a block reading another block's history",
+	UncoveredVFromK:      "v taken from k's projection",
+	UncoveredOutGate:     "a gate on the attention's output",
+	UncoveredClamp:       "clamped projections",
+	UncoveredTemp:        "an attention temperature per position",
+	UncoveredResidScale:  "a scaled residual",
+	UncoveredPLE:         "per-layer embeddings",
+	UncoveredCompressed:  "compressed or grouped attention",
+	UncoveredNGram:       "an n-gram embedding",
+	UncoveredSparseAct:   "a gaussian top-k activation",
+	UncoveredAct:         "an activation the op language does not state",
+	UncoveredPostNorm:    "a norm over a sublayer's output before the residual",
+	UncoveredSubNorm:     "a norm inside a sublayer before its output projection",
+	UncoveredPooling:     "a pooled head (an embedding model's)",
+	UncoveredEmbedRows:   "input rows beyond the token's row, a scale and a position table",
+	UncoveredUnbound:     "stored tensors its graph does not bind",
+	UncoveredUnverified:  "a graph that does not verify",
+}
+
+func (u Uncovered) String() string {
+	if u < numUncovered {
+		return uncoveredNames[u]
+	}
+	return fmt.Sprintf("uncovered(%d)", uint8(u))
+}
 
 // frontState is the model's graphs, built on first use.
 type frontState struct {
 	once        sync.Once
 	blocks      []*graph.Graph
-	why         []string
+	why         []Uncovered
+	errs        []error
 	head, embed *graph.Graph
-	headWhy     string
-	embedWhy    string
+	headWhy     Uncovered
+	embedWhy    Uncovered
+	headErr     error
+	embedErr    error
 }
 
 // composing is the model as the composer reads it.
@@ -105,31 +158,43 @@ func (c composing) Tower() bool { return false }
 
 func (c composing) Segment() jit.Model { return nil }
 
-// Uncovered is why block li has no graph ("" for a block that has one); li
-// of -1 is the head's, -2 the input rows'.
-func (m *Model) Uncovered(li int) string {
+// Uncovered is why block li has no graph, Covered for a block that has one;
+// li of -1 is the head's, -2 the input rows'.
+func (m *Model) Uncovered(li int) Uncovered {
+	u, _ := m.uncoveredAt(li)
+	return u
+}
+
+// UncoveredErr is what a graph built wrong got wrong (UncoveredUnbound,
+// UncoveredUnverified), nil for any other reason.
+func (m *Model) UncoveredErr(li int) error {
+	_, err := m.uncoveredAt(li)
+	return err
+}
+
+func (m *Model) uncoveredAt(li int) (Uncovered, error) {
 	f := m.frontGraphs()
 	switch {
 	case li == -1:
-		return f.headWhy
+		return f.headWhy, f.headErr
 	case li == -2:
-		return f.embedWhy
+		return f.embedWhy, f.embedErr
 	case li >= 0 && li < len(f.why):
-		return f.why[li]
+		return f.why[li], f.errs[li]
 	}
-	return fmt.Sprintf("no block %d", li)
+	return UncoveredUnverified, fmt.Errorf("no block %d", li)
 }
 
 func (m *Model) frontGraphs() *frontState {
 	f := &m.front
 	f.once.Do(func() {
 		n := m.Cfg.NLayer
-		f.blocks, f.why = make([]*graph.Graph, n), make([]string, n)
+		f.blocks, f.why, f.errs = make([]*graph.Graph, n), make([]Uncovered, n), make([]error, n)
 		for li := range n {
-			f.blocks[li], f.why[li] = m.blockGraph(li)
+			f.blocks[li], f.why[li], f.errs[li] = m.blockGraph(li)
 		}
-		f.head, f.headWhy = m.headGraph()
-		f.embed, f.embedWhy = m.embedGraph()
+		f.head, f.headWhy, f.headErr = m.headGraph()
+		f.embed, f.embedWhy, f.embedErr = m.embedGraph()
 	})
 	return f
 }
@@ -168,9 +233,9 @@ var graphActs = map[nn.ActKind]graph.Act{
 }
 
 // uncovered is why block li's features are not all ones this front end
-// writes, "" for none. It reads numbers the container states, never what the
+// writes, Covered for none. It reads numbers the container states, never what the
 // model is called.
-func (m *Model) uncovered(li int) string {
+func (m *Model) uncovered(li int) Uncovered {
 	c := m.Cfg
 	hd := c.HeadDimAt(li)
 	switch {
@@ -231,7 +296,7 @@ func (m *Model) uncovered(li int) string {
 	if r := m.ropeAt(li); c.RopeAt(li) && r.NRot != hd {
 		return UncoveredPartialRope
 	}
-	return ""
+	return Covered
 }
 
 // stores reports whether the container stores role for block li.
@@ -254,14 +319,14 @@ func (m *Model) ropeAt(li int) nn.Rope {
 // norm, the rotary, the history append, attention of the block's heads,
 // scale, window, softcap and sinks, the output projection and the residual,
 // then the RMSNormed gated MLP and its residual -- or why it has none.
-func (m *Model) blockGraph(li int) (*graph.Graph, string) {
-	if why := m.uncovered(li); why != "" {
-		return nil, why
+func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
+	if why := m.uncovered(li); why != Covered {
+		return nil, why, nil
 	}
 	c := m.Cfg
 	f, perExpert := m.inventory(int32(li))
 	if perExpert {
-		return nil, UncoveredMixture
+		return nil, UncoveredMixture, nil
 	}
 	stored := func(r jlm.Role) []jlm.Role {
 		if _, ok := f.Inventory[r]; ok {
@@ -311,26 +376,26 @@ func (m *Model) blockGraph(li int) (*graph.Graph, string) {
 	down := b.MatVec(b.ActMul(graphActs[c.Act], gt, up), jlm.RoleFFNDown, d, stored(jlm.RoleFFNDownBias)...)
 	b.Out(b.Add(x2, down))
 	if err := graph.Verify(b.G, f); err != nil {
-		return nil, "the block's graph does not verify: " + err.Error()
+		return nil, UncoveredUnverified, fmt.Errorf("the block's graph does not verify: %w", err)
 	}
 	if u := graph.Unbound(b.G, f); len(u) != 0 {
-		return nil, fmt.Sprintf("the container stores %v for the block, which its graph does not bind", u)
+		return nil, UncoveredUnbound, fmt.Errorf("the container stores %v for the block, which its graph does not bind", u)
 	}
-	return b.G, ""
+	return b.G, Covered, nil
 }
 
 // headGraph is the head: the RMSNormed row's projection to the vocabulary
 // (the embedding's where the model ties them) with its stored bias, then the
 // final softcap and the logit scale, main's order over the logits.
-func (m *Model) headGraph() (*graph.Graph, string) {
+func (m *Model) headGraph() (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	switch {
 	case c.Pooling != jlm.PoolNone:
-		return nil, UncoveredPooling
+		return nil, UncoveredPooling, nil
 	case c.Streams() > 1:
-		return nil, UncoveredStreams
+		return nil, UncoveredStreams, nil
 	case c.LayerNorm:
-		return nil, UncoveredClassic
+		return nil, UncoveredClassic, nil
 	}
 	f, _ := m.inventory(jlm.DenseBlock)
 	out := jlm.RoleOutput
@@ -358,25 +423,25 @@ func (m *Model) headGraph() (*graph.Graph, string) {
 	}
 	b.Out(l)
 	if err := graph.Verify(b.G, f); err != nil {
-		return nil, "the head's graph does not verify: " + err.Error()
+		return nil, UncoveredUnverified, fmt.Errorf("the head's graph does not verify: %w", err)
 	}
-	return b.G, ""
+	return b.G, Covered, nil
 }
 
 // embedGraph is the step's input rows: each row's token's row of the
 // embedding, times the stored scale, plus its position's row where the
 // container stores a position table.
-func (m *Model) embedGraph() (*graph.Graph, string) {
+func (m *Model) embedGraph() (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	f, _ := m.inventory(jlm.DenseBlock)
 	_, types := f.Inventory[jlm.RoleTokenTypes]
 	switch {
 	case c.Streams() > 1:
-		return nil, UncoveredStreams
+		return nil, UncoveredStreams, nil
 	case c.PLEDim != 0:
-		return nil, UncoveredPLE
+		return nil, UncoveredPLE, nil
 	case types || m.hardEmbd != nil:
-		return nil, UncoveredEmbedRows
+		return nil, UncoveredEmbedRows, nil
 	}
 	b := graph.NewBlock(-1)
 	x := b.Emit(graph.OpEmbed, nil, []graph.Result{{Name: "embd", Width: c.NEmbd}},
@@ -392,7 +457,7 @@ func (m *Model) embedGraph() (*graph.Graph, string) {
 	}
 	b.Out(x)
 	if err := graph.Verify(b.G, f); err != nil {
-		return nil, "the input rows' graph does not verify: " + err.Error()
+		return nil, UncoveredUnverified, fmt.Errorf("the input rows' graph does not verify: %w", err)
 	}
-	return b.G, ""
+	return b.G, Covered, nil
 }

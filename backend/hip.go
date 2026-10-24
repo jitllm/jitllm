@@ -367,6 +367,8 @@ func (k *hipKern) Close() {
 	})
 }
 
+func (k *hipKern) Name() string { return k.name }
+
 func hipArgs(bufs []Buf) ([]*hip.Ptr, error) {
 	out := make([]*hip.Ptr, len(bufs))
 	for i, b := range bufs {

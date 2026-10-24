@@ -188,6 +188,10 @@ type Config struct {
 	// int8 form: the reference a gate holds the int8 forms and the tier's
 	// own kernels to.
 	ComposedFloat bool
+	// Census counts the tier's own launches by kernel name on the one-row
+	// steps the composer is asked for (GPU.Census): what still runs main's
+	// kernels where the composer serves.
+	Census bool
 	// GateUp2 runs a dense gated FFN's gate and up as one Gate2 matvec
 	// (kernels.MatVecShape.Gate2): each workgroup sums its rows of both
 	// matrices over the one operand and writes act(gate)*up: the bits the
@@ -734,6 +738,12 @@ type Stats struct {
 	// over several sessions' rows. They run the tier's own kernels; this is
 	// where they are seen.
 	PartsUnasked [numParts]int
+	// BlockDeclines and HeadDeclines are PartsDeclined's block and head
+	// steps by reason (DeclineName).
+	BlockDeclines, HeadDeclines [numPartDeclines]int
+	// FormedAtStep counts the parts formed at a step rather than at a
+	// placement or PrepHead: a form a step met first, built inside it.
+	FormedAtStep int
 	// Forgotten counts lone-matvec copies dropped because the host said the
 	// bytes at their address changed (Forget): the selection check that a
 	// refilled frame reached the device at all.
@@ -1283,6 +1293,11 @@ func (s *Stats) add(o Stats) {
 		s.PartsDeclined[i] += o.PartsDeclined[i]
 		s.PartsUnasked[i] += o.PartsUnasked[i]
 	}
+	for i := range s.BlockDeclines {
+		s.BlockDeclines[i] += o.BlockDeclines[i]
+		s.HeadDeclines[i] += o.HeadDeclines[i]
+	}
+	s.FormedAtStep += o.FormedAtStep
 	s.TooSmall += o.TooSmall
 	s.Forgotten += o.Forgotten
 	if o.LastErr != "" {
@@ -1910,9 +1925,12 @@ type devShared struct {
 	served      map[servedKey]*servedPart
 	servedForms map[jit.Key]*partForm
 	// capturing says a submission is being recorded: a served part not
-	// formed yet is not formed inside it (errServedCold).
-	capturing bool
-	composer  *jit.Registry
+	// formed yet is not formed inside it (errServedCold). prewarming says a
+	// placement or PrepHead is forming them (Stats.FormedAtStep).
+	capturing, prewarming bool
+	// census is Config.Census's count, made at the first step it counts.
+	census   *launchCensus
+	composer *jit.Registry
 	// composerFloat is composer with no int8 form (Config.ComposedFloat).
 	composerFloat *jit.Registry
 	mvTo          launchTo
@@ -2361,6 +2379,24 @@ func (g *GPU) Stats() Stats {
 		s.add(d.stats())
 	}
 	return s
+}
+
+// Census is every device's Config.Census: the tier's own launches by kernel
+// name on the one-row steps the composer was asked for.
+func (g *GPU) Census() map[string]int {
+	out := map[string]int{}
+	for _, d := range g.devs {
+		d.mu.Lock()
+		if c := d.census; c != nil {
+			c.mu.Lock()
+			for k, v := range c.n {
+				out[k] += v
+			}
+			c.mu.Unlock()
+		}
+		d.mu.Unlock()
+	}
+	return out
 }
 
 // DeviceKernels is one device's compiled kernels and what each cost it.

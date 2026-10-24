@@ -1,6 +1,10 @@
 package tier
 
-import "github.com/jitllm/jitllm/backend"
+import (
+	"sync"
+
+	"github.com/jitllm/jitllm/backend"
+)
 
 // launcher is a submission's launch path: its session, and the slice every
 // launch's buffer list is copied into before the call reaches the session. A
@@ -32,10 +36,22 @@ type launcher struct {
 	// g is the submission's device view, for the persistent path's plans
 	// (persist.go).
 	g *devTier
+	// census, where set, counts this submission's launches of the tier's
+	// own kernels (Config.Census).
+	census *launchCensus
 }
 
-// launch is s.Launch through the reused buffer list.
+// launch is s.Launch through the reused buffer list, counted where the
+// submission takes a census.
 func (l *launcher) launch(k backend.Kernel, groups, width int, bufs ...backend.Buf) error {
+	if c := l.census; c != nil {
+		c.count(k)
+	}
+	return l.issue(k, groups, width, bufs...)
+}
+
+// issue is launch without the census: the composer's own forms.
+func (l *launcher) issue(k backend.Kernel, groups, width int, bufs ...backend.Buf) error {
 	t := l.to
 	if ps := t.ps; ps != nil && ps.on {
 		if ps.add(k, groups, width, bufs) {
@@ -51,6 +67,24 @@ func (l *launcher) launch(k backend.Kernel, groups, width int, bufs ...backend.B
 	err := t.s.Launch(k, groups, width, t.bufs...)
 	clear(t.bufs)
 	return err
+}
+
+// launchCensus is the tier's own kernels launched on the one-row steps the
+// composer is asked for, by the name each was compiled under: what main still
+// runs where the composer serves (Config.Census).
+type launchCensus struct {
+	mu sync.Mutex
+	n  map[string]int
+}
+
+func (c *launchCensus) count(k backend.Kernel) {
+	name := "?"
+	if nk, ok := k.(backend.NamedKernel); ok {
+		name = nk.Name()
+	}
+	c.mu.Lock()
+	c.n[name]++
+	c.mu.Unlock()
 }
 
 // launchTo is where a launcher sends its launches: the submission's session

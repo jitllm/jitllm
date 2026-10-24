@@ -1327,6 +1327,8 @@ func (k *cudaKern) Launch(groups, width int, bufs ...Buf) error {
 
 func (k *cudaKern) Close() { k.dev.do(func() { k.m.Unload() }) }
 
+func (k *cudaKern) Name() string { return k.name }
+
 // cudaQueue is one non-blocking stream, with the argument array its sessions
 // launch from (cuda.Module's own is shared by every caller of the kernel)
 // and the session SessionOn hands out, reused so a call allocates nothing.

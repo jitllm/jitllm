@@ -7669,6 +7669,12 @@ func (g *devTier) layersSession(s backend.Session) {
 	defer func() { g.launchTo.s = nil }()
 	lc := &launcher{to: &g.launchTo, err: &err, fsrc: &fsrc,
 		memoK: &actMemoK, memoSrc: &actMemoSrc, a: bs.a, ax: bs.ax, g: g}
+	if g.Census && g.Composed != 0 && g.sub.R == 1 && g.sub.rag == nil {
+		if g.census == nil {
+			g.census = &launchCensus{n: map[string]int{}}
+		}
+		lc.census = g.census
+	}
 
 	// lamv launches a decode matvec at its own workgroup width: an in-group
 	// split is 32 rows by Split segments (kernels.GroupSplitWidth), every
@@ -8032,8 +8038,9 @@ func (g *devTier) layersSession(s backend.Session) {
 			if g.Composed&ComposedBlock != 0 {
 				if R != 1 || rag != nil {
 					g.PartsUnasked[partBlock]++
-				} else if !g.blockServes(l, li, p, bs, persist) {
+				} else if why := g.blockServes(l, li, p, bs, persist); why != partServes {
 					g.PartsDeclined[partBlock]++
+					g.BlockDeclines[why]++
 				} else {
 					rcs := bs.cs
 					if bs.csSWA != nil && p.LocalRope(li) {
@@ -9742,8 +9749,9 @@ func (g *devTier) layersSession(s backend.Session) {
 			if g.Composed&ComposedHead != 0 && R != 1 {
 				g.PartsUnasked[partHead]++
 			} else if g.Composed&ComposedHead != 0 {
-				if !headServes(R, bs.headGraph, hNorm, bs.normVar != nil, pickOnly, persist) {
+				if why := headServes(bs.headGraph, hNorm, bs.normVar != nil, pickOnly, persist); why != partServes {
 					g.PartsDeclined[partHead]++
+					g.HeadDeclines[why]++
 				} else {
 					sv, serr := g.servedHead(bs.headGraph, bs.head, hNorm)
 					if serr == nil {

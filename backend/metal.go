@@ -307,6 +307,8 @@ func (k *mtlKern) Launch(groups, width int, bufs ...Buf) error {
 
 func (k *mtlKern) Close() { k.k.Close() }
 
+func (k *mtlKern) Name() string { return k.name }
+
 // Session encodes every launch in the batch into one command buffer. Metal's
 // cost is building, committing and waiting on a command buffer, not the
 // dispatch, so one per launch would dominate a decode token.
