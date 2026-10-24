@@ -3,6 +3,7 @@
 package cpu
 
 import (
+	"github.com/jitllm/jitllm/internal/oracle"
 	"os"
 	"sort"
 	"strconv"
@@ -108,7 +109,7 @@ func TestGEMMTileSweep(t *testing.T) {
 		sc := make([]float32, nbAct*tok)
 		sm := make([]int32, nbAct*tok)
 		hm := make([]int32, 2*nbAct*tok)
-		if err := PackGEMMActivationsRange(qt, q, sc, sm, hm, x, tok, k, 0, tok, win); err != nil {
+		if err := oracle.PackGEMMActivations(q, sc, sm, hm, x, tok, k, 0, tok, -1, -1, win, int(BiasC(qt)), NeedsHalfSums(qt)); err != nil {
 			t.Fatal(err)
 		}
 		out := make([]float32, rows*tok)

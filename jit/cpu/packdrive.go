@@ -17,8 +17,10 @@ func PackActConsts(t quant.Type) []float32 {
 		math.Float32frombits(uint32(int32(BiasC(t))))}
 }
 
-// PackActJIT is packGEMM driven by the generated kernel, one call per
-// (token, amax window).
+// PackActJIT quantizes tokens and lays them out as EmitGEMMWindow reads them
+// (the layout internal/oracle.PackGEMMActivations states) with the generated
+// kernel, one call per (token, amax window); a caller with no kernel gets an
+// error, never Go arithmetic in its place.
 //
 // The window is the call unit, which keeps the call overhead small (a k=2048
 // matrix at the wide window is eight calls per token). The kernel is handed
@@ -28,7 +30,7 @@ func PackActConsts(t quant.Type) []float32 {
 func PackActJIT(code *Code, t quant.Type, konst []float32, dst []int8, scale []float32,
 	sum, half []int32, x []float32, tok, k, blo, bhi, window int) error {
 	if code == nil {
-		return packGEMM(t, dst, scale, sum, half, x, tok, k, 0, tok, blo, bhi, window)
+		return fmt.Errorf("jit: PackActJIT: no generated packer for %v", t)
 	}
 	if k%Q8Block != 0 {
 		return fmt.Errorf("jit: PackActJIT: k=%d is not a multiple of %d", k, Q8Block)

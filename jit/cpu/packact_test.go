@@ -1,6 +1,7 @@
 package cpu
 
 import (
+	"github.com/jitllm/jitllm/internal/oracle"
 	"math"
 	"math/rand"
 	"testing"
@@ -56,7 +57,7 @@ func packActCase(t *testing.T, tok int, tp quant.Type, window int, mode string) 
 			make([]int32, nb*tok), make([]int32, 2*nb*tok)
 	}
 	dA, sA, mA, hA := mk()
-	if err := packGEMM(tp, dA, sA, mA, hA, x, tok, k, 0, tok, 0, nb, window); err != nil {
+	if err := oracle.PackGEMMActivations(dA, sA, mA, hA, x, tok, k, 0, tok, 0, nb, window, int(BiasC(tp)), NeedsHalfSums(tp)); err != nil {
 		t.Fatal(err)
 	}
 

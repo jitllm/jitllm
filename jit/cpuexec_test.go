@@ -263,3 +263,59 @@ func cpuTestWeights(t quant.Type, q kernels.Quant, rows, k int, rng *rand.Rand) 
 	}
 	return raw
 }
+
+// TestComposedCPUHonoursTheDevicesISA forms every packed matvec for a CPU
+// stated without BMI2: each forms, with no SHRX or SHLX, which fault there,
+// and each is right. Its kernels are mapped with the ISA declared, so an
+// instruction past it fails at assembly.
+func TestComposedCPUHonoursTheDevicesISA(t *testing.T) {
+	const rows, k = 64, 256
+	rng := rand.New(rand.NewSource(7))
+	isa := uint64(cpu.CPU().ISA()) &^ uint64(x86.ISABMI2)
+	r := Default().WithoutInt8(DeviceCPU)
+	right := 0
+	for _, typ := range append([]quant.Type{quant.F32}, quant.PackedTypes...) {
+		q, ok := kernels.QuantOf(typ)
+		if typ == quant.F32 {
+			q, ok = kernels.Float32, true
+		}
+		jt, jok := jlm.TypeOf(typ)
+		if !ok || !jok {
+			continue
+		}
+		w := cpuTestWeights(typ, q, rows, k, rng)
+		qs, d, sc, err := kernels.PackWeights(q, w, rows, k)
+		if err != nil {
+			t.Fatalf("%v: %v", typ, err)
+		}
+		x := make([]float32, k)
+		for i := range x {
+			x[i] = float32(rng.NormFloat64())
+		}
+		want := make([]float32, rows)
+		if err := oracle.MatVec(want, typ, w, x, rows, k); err != nil {
+			t.Fatal(err)
+		}
+		_, codes, err := r.Form(Request{
+			Graph:   graph.MatVec(jlm.RoleOutput, rows, k),
+			Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jt},
+			Step:    Step{Rows: 1, Page: 64, Keys: 1, ActWindow: 32},
+			Device:  Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: isa},
+		})
+		if err != nil {
+			t.Errorf("%v without BMI2 does not form: %v", typ, err)
+			continue
+		}
+		got, err := runCPU(codes, x, rows, [3][]uint32{qs, d, sc})
+		if err != nil {
+			t.Errorf("%v: %v", typ, err)
+			continue
+		}
+		if e := cpuNMSE(got, want); math.IsNaN(e) || !(e < 1e-9) {
+			t.Errorf("%v without BMI2: NMSE %.3e against the oracle", typ, e)
+			continue
+		}
+		right++
+	}
+	t.Logf("without BMI2: %d formed and right", right)
+}

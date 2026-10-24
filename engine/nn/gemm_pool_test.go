@@ -3,6 +3,7 @@
 package nn
 
 import (
+	"github.com/jitllm/jitllm/internal/oracle"
 	"sort"
 	"testing"
 	"time"
@@ -75,7 +76,7 @@ func TestGEMMPoolRate(t *testing.T) {
 	sc := make([]float32, nb*tok)
 	sm := make([]int32, nb*tok)
 	hm := make([]int32, 2*nb*tok)
-	if err := cpu.PackGEMMActivationsRange(quant.Q8_0, q, sc, sm, hm, x, tok, k, 0, tok, cpu.Q8Block); err != nil {
+	if err := oracle.PackGEMMActivations(q, sc, sm, hm, x, tok, k, 0, tok, -1, -1, cpu.Q8Block, int(cpu.BiasC(quant.Q8_0)), cpu.NeedsHalfSums(quant.Q8_0)); err != nil {
 		t.Fatal(err)
 	}
 	out := make([]float32, rows*tok)

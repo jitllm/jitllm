@@ -32,8 +32,9 @@ var imagePathFiles = []string{
 var imagePathAllowed = map[string]string{
 	"imageproc.go:aaFloats": "the antialiased resize's filter taps in float64: geometry from the sizes, " +
 		"O(output x support) once per picture (and once per grid for Phi-4's position table)",
-	"image.go:bilinearTaps": "the bilinear path's resampling matrix: two taps per output from the sizes, once per picture",
-	"imageproc.go:normLUT":  "the normalisation's 256 entries per channel from the tower's mean and std; PixLUT reads it per sample",
+	"imageproc.go:aaWeights": "the same taps in fixed point and the precision they share: geometry from the sizes, once per picture",
+	"image.go:bilinearTaps":  "the bilinear path's resampling matrix: two taps per output from the sizes, once per picture",
+	"imageproc.go:normLUT":   "the normalisation's 256 entries per channel from the tower's mean and std; PixLUT reads it per sample",
 	"llama4vision.go:bf16NormLUT": "Llama 4's bfloat16 normalisation's 256 entries per channel, the same table read " +
 		"the same way",
 	"slices.go:slicedGrid": "MiniCPM-V's slice grid: a log of an aspect ratio per candidate grid, from the picture's sizes",

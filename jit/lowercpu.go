@@ -21,6 +21,9 @@ func (l cpuLowering) Lower(k *Kernel, d Device) (Lowered, error) {
 	}
 	e := &x86Lowerer{k: k, a: &x86.Buf{}, top: map[int]int{}, end: map[int]int{}, preset: map[int]bool{}, home: k.Homes(), words: k.VectorWords(), shuffles: l.Shuffles,
 		isa: x86.ISA(d.ISA)}
+	if d.ISA != 0 {
+		e.a.DeclareISA(e.isa)
+	}
 	if r := x86.Reg(k.Ones - 1); k.Ones > 0 {
 		e.a.VPCMPEQW(r, r, r)
 		e.a.VPSRLW(r, r, 15)
@@ -697,6 +700,37 @@ func (e *x86Lowerer) keepIf(nd Node, skip int) {
 	}
 }
 
+// shiftCL is dst = x shifted by y on a device without SHRX and SHLX: the
+// count in CL, the shift made in the reload register, RCX kept in the
+// shift-count word, which only a vector shift holds and only for its one
+// instruction.
+func (e *x86Lowerer) shiftCL(op Op, dst, x, y x86.Reg) {
+	a := e.a
+	a.MOVStore(shiftCount, x86.RCX)
+	if y == reloadReg {
+		a.MOVQ(x86.RCX, y)
+		if x == x86.RCX {
+			a.MOVLoad(reloadReg, shiftCount)
+		} else {
+			a.MOVQ(reloadReg, x)
+		}
+	} else {
+		if x != reloadReg {
+			a.MOVQ(reloadReg, x)
+		}
+		if y != x86.RCX {
+			a.MOVQ(x86.RCX, y)
+		}
+	}
+	if op == OpShr {
+		a.SHRCL(reloadReg)
+	} else {
+		a.SHLCL(reloadReg)
+	}
+	a.MOVLoad(x86.RCX, shiftCount)
+	a.MOVQ(dst, reloadReg)
+}
+
 // gpr reports whether node i is held in a general register: an integer a
 // vector register does not hold.
 func (e *x86Lowerer) gpr(i int) bool {
@@ -764,6 +798,13 @@ func (e *x86Lowerer) integer(i int) {
 			x = e.reg(A)
 		}
 		y := e.reg(B)
+		if (nd.Op == OpShr || nd.Op == OpShl) && e.isa&x86.ISABMI2 == 0 {
+			e.shiftCL(nd.Op, dst, x, y)
+			if nd.Op == OpShl {
+				a.MOVL(dst, dst)
+			}
+			return
+		}
 		switch nd.Op {
 		case OpShr:
 			a.SHRX(dst, x, y)

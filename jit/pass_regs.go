@@ -421,9 +421,10 @@ func (b *binder86) gprs() error {
 			k.Nodes[i].Spill = -1
 			continue
 		}
-		if r < 0 && b.spill && nd.Op != OpParam {
+		if r < 0 && b.spill && nd.Op != OpParam && nd.Op != OpFold {
 			// Made in the reloaded addresses' register and stored to a slot
-			// at once: its reads load it from there.
+			// at once: its reads load it from there. Not a sum, whose step
+			// writes its register each trip and stores nothing.
 			if s := b.slot(b.def[i], i+1); s > 0 {
 				k.Nodes[i].Reg, k.Nodes[i].Spill = int(reloadReg)+1, s
 				continue

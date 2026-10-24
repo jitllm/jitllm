@@ -590,6 +590,20 @@ func (a *Buf) SHRimm(dst Reg, imm byte) {
 	a.u8(imm)
 }
 
+// SHRCL is dst >>= CL, logical, on 64 bits.
+func (a *Buf) SHRCL(dst Reg) {
+	a.rex(true, Y0, noIndex, dst)
+	a.u8(0xD3)
+	a.modrmReg(Reg(5), dst)
+}
+
+// SHLCL is dst <<= CL on 64 bits.
+func (a *Buf) SHLCL(dst Reg) {
+	a.rex(true, Y0, noIndex, dst)
+	a.u8(0xD3)
+	a.modrmReg(Reg(4), dst)
+}
+
 func (a *Buf) SHLimm(dst Reg, imm byte) {
 	a.rex(true, Y0, noIndex, dst)
 	a.u8(0xC1)

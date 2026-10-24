@@ -74,7 +74,8 @@ const (
 	ISAF16C
 	// ISAVNNI is AVX-VNNI, the VEX-encoded VPDPBUSD.
 	ISAVNNI
-	// ISABMI2 is SHRX and SHLX, which every AVX2 part has.
+	// ISABMI2 is SHRX and SHLX: not in the AVX2 tier's floor, so a CPU
+	// with AVX2 and without BMI2 keeps the AVX2 tier's kernels.
 	ISABMI2
 )
 
@@ -86,7 +87,7 @@ const (
 const ISATierSSE = ISASSE2 | ISASSE3 | ISASSSE3 | ISASSE41
 
 // ISATierAVX2 is what an UNDECLARED kernel needs: the AVX2 tier's floor.
-const ISATierAVX2 = ISAAVX2 | ISAFMA | ISAF16C | ISABMI2
+const ISATierAVX2 = ISAAVX2 | ISAFMA | ISAF16C
 
 var isaNames = [...]string{
 	"sse2", "sse3", "ssse3", "sse4.1", "sse4.2", "popcnt",

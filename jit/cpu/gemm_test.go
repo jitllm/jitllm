@@ -3,6 +3,7 @@
 package cpu
 
 import (
+	"github.com/jitllm/jitllm/internal/oracle"
 	"math"
 	"math/rand"
 	"testing"
@@ -80,7 +81,7 @@ func gemmVsReferenceWin(t *testing.T, wt quant.Type, mr, nr, k, window int) {
 	scale := make([]float32, nbAct*tok)
 	sum := make([]int32, nbAct*tok)
 	half := make([]int32, 2*nbAct*tok)
-	if err := PackGEMMActivationsRange(wt, q, scale, sum, half, x, tok, k, 0, tok, window); err != nil {
+	if err := oracle.PackGEMMActivations(q, scale, sum, half, x, tok, k, 0, tok, -1, -1, window, int(BiasC(wt)), NeedsHalfSums(wt)); err != nil {
 		t.Fatal(err)
 	}
 	konst := KernelConst(wt)

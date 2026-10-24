@@ -35,6 +35,7 @@ var goComputeAllowed = map[string]string{
 	"jit/gpu/tier/layer.go:l4TempTab":          "Llama 4's attention-temperature table, once per plan",
 	"engine/model/image.go:bilinearTaps":       "the resize's resampling matrix: geometry from the image's sizes, once per image",
 	"engine/model/imageproc.go:aaFloats":       "the antialiased resize's filter taps: geometry from the image's sizes, once per image (and once per grid for Phi-4's position table)",
+	"engine/model/imageproc.go:aaWeights":      "the same taps in fixed point, and the precision they share: geometry from the image's sizes, once per image",
 	"engine/model/imageproc.go:normLUT":        "the normalisation's 256-entry table per channel, from the tower's mean and std",
 	"engine/model/llama4vision.go:bf16NormLUT": "the bfloat16 normalisation's 256-entry table per channel, from the tower's mean and std",
 	// Geometry of a picture or a grid, from its sizes alone: no pixel and no
@@ -187,6 +188,18 @@ func goComputeLines(fset *token.FileSet, info *types.Info, body *ast.BlockStmt) 
 		for changed := true; changed; {
 			changed = false
 			ast.Inspect(loop, func(m ast.Node) bool {
+				// A float a range takes from a slice or array is an element
+				// of it, as x[i] is.
+				if rs, ok := m.(*ast.RangeStmt); ok {
+					if id, ok := rs.Value.(*ast.Ident); ok {
+						if o := objOf(id); o != nil && !tainted[o] {
+							if b, ok := o.Type().Underlying().(*types.Basic); ok && b.Info()&types.IsFloat != 0 {
+								tainted[o], changed = true, true
+							}
+						}
+					}
+					return true
+				}
 				as, ok := m.(*ast.AssignStmt)
 				if !ok {
 					return true
@@ -249,7 +262,8 @@ func goComputeLines(fset *token.FileSet, info *types.Info, body *ast.BlockStmt) 
 		if loop == nil {
 			return true
 		}
-		taint(loop)
+		// The loop with its header, where a range's value is declared.
+		taint(n)
 		ast.Inspect(loop, func(m ast.Node) bool {
 			switch x := m.(type) {
 			case *ast.CallExpr:

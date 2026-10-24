@@ -111,11 +111,11 @@ func TestISANamesAreTheProbesNames(t *testing.T) {
 	if got := ISATierSSE.String(); got != "sse2, sse3, ssse3, sse4.1" {
 		t.Errorf("ISATierSSE = %q", got)
 	}
-	if got := ISATierAVX2.String(); got != "avx2, fma, f16c, bmi2" {
+	if got := ISATierAVX2.String(); got != "avx2, fma, f16c" {
 		t.Errorf("ISATierAVX2 = %q", got)
 	}
 	f := Features{SSE2: true, SSE3: true, AVX2: true, FMA: true, F16C: true}
-	if got := missingNames(f, ISATierAVX2|ISATierSSE); got != "ssse3, sse4.1, avx2 (present, but the OS does not save YMM state), fma (present, but unusable without OS YMM state), f16c (present, but unusable without OS YMM state), bmi2" {
+	if got := missingNames(f, ISATierAVX2|ISATierSSE); got != "ssse3, sse4.1, avx2 (present, but the OS does not save YMM state), fma (present, but unusable without OS YMM state), f16c (present, but unusable without OS YMM state)" {
 		t.Errorf("missingNames = %q", got)
 	}
 	for tier, want := range map[Tier]string{TierNone: "none", TierSSE: "sse", TierAVX2: "avx2", TierNEON: "neon"} {
@@ -136,8 +136,8 @@ func TestISANamesAreTheProbesNames(t *testing.T) {
 	}
 	noBMI2 := avx
 	noBMI2.BMI2 = false
-	if tierOf(noBMI2) != TierSSE {
-		t.Errorf("AVX2 without BMI2 is tier %v, want sse: the tier's kernels shift with SHRX", tierOf(noBMI2))
+	if tierOf(noBMI2) != TierAVX2 {
+		t.Errorf("AVX2 without BMI2 is tier %v, want avx2: no AVX2-tier kernel shifts with SHRX", tierOf(noBMI2))
 	}
 	noOS := avx
 	noOS.OSAVX = false
