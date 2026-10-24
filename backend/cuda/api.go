@@ -42,6 +42,9 @@ type Device struct {
 	// see Module.Resident.
 	sms  int
 	coop bool
+	// l2 is CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE, bytes, 0 where the driver
+	// would not say.
+	l2 int
 	// mapHost is whether the device can address registered host memory
 	// (CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY and HOST_REGISTER_SUPPORTED),
 	// and integrated whether its memory is the host's
@@ -60,6 +63,7 @@ const (
 	attrSMCount = 16 // CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT
 	attrMaxTPM  = 39 // CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR
 	attrMaxGrid = 5  // CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X
+	attrL2      = 38 // CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE
 
 	attrIntegrated   = 18 // CU_DEVICE_ATTRIBUTE_INTEGRATED
 	attrCanMapHost   = 19 // CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY
@@ -165,6 +169,10 @@ func openDevice(ord int) (*Device, error) {
 		if cuDeviceGetAttribute(&grid, attrMaxGrid, d.dev) == 0 && grid > 0 {
 			d.maxGrid = int(grid)
 		}
+		var l2 int32
+		if cuDeviceGetAttribute(&l2, attrL2, d.dev) == 0 && l2 > 0 {
+			d.l2 = int(l2)
+		}
 		var mapHost, reg, integ int32
 		d.mapHost = cuDeviceGetAttribute(&mapHost, attrCanMapHost, d.dev) == 0 && mapHost != 0 &&
 			cuDeviceGetAttribute(&reg, attrHostRegister, d.dev) == 0 && reg != 0
@@ -180,6 +188,13 @@ func (d *Device) MaxGrid() int { return d.maxGrid }
 // Slots is the number of threads this device can hold resident, or 0 when the
 // driver would not say.
 func (d *Device) Slots() int { return d.slots }
+
+// Multiprocessors is the device's multiprocessor count, 0 where the driver
+// would not say.
+func (d *Device) Multiprocessors() int { return d.sms }
+
+// L2Bytes is the bytes its L2 cache holds, 0 where the driver would not say.
+func (d *Device) L2Bytes() int { return d.l2 }
 
 // Ordinal is the CUDA device this context was opened on.
 func (d *Device) Ordinal() int { return d.ord }

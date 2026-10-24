@@ -87,6 +87,8 @@ func (m *mtlDev) API() string  { return "msl" }
 // a core count, and deriving one from the GPU name is the kind of table this
 // project exists to avoid. 0 means "use the caller's default".
 func (m *mtlDev) Slots() int { return 0 }
+
+func (m *mtlDev) Multiprocessors() int { return metal.GPUCores() }
 func (m *mtlDev) Close() {
 	m.c.Close()
 	m.release(&ownedDevices)
