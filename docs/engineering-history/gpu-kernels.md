@@ -6970,3 +6970,42 @@ row where the composer's reads two.
   Llama-3.2-1B, Qwen3-8B and OLMoE read the same allocations (0) and
   node-affine regions (5120, 11520, 6094 to 6144) before and after. The
   details are in cpu-kernels.md, "Two gates that failed only on the Xeon".
+- **Windows served.** A block whose attention slides, or attends an aligned
+  chunk, now serves. Its attention reads each row's range from the windowed
+  descriptors the tier already stages for its own windowed kernels (pRowW,
+  the window's start their first position), through the same page table,
+  which past windowPages holds only the window's pages. The composer no
+  longer computes the window itself. Under the paged gate's "window" fault (a
+  windowed layer reads the full descriptors), a start computed in the
+  kernel as well hid the lost window: the composed arm sat 0.000e+00 from
+  the clean one. Reading the descriptor alone, it sits 8.6e-02 away. The
+  tier serves the block where the graph's window is the plan's, or where the
+  window is at least the session's and cuts nothing; any other graph window
+  is declined by name. The sliding-window gates changed the config in place
+  under graphs built for another window, which that decline caught; they now
+  restate it as a copy. A captured graph's replays of the parts are counted
+  (Stats.PartsReplayed). The window gates now hold the composer to every
+  block of every one-row step, recording on: gemma-3-1b at 712 positions,
+  18512 of 18512 block steps, 2.3e-04 from the host on CUDA and Vulkan
+  against a window effect of 0.21. synth-exaone4 and synth-olmo3 ran 6112
+  of 6112 steps each over 1528 positions, their releases exact (15 pages)
+  and their logits bit-equal to the keep-every-page control. A larger second
+  session on one tier now forms its parts when the scratch grows
+  (ensureKVCap), not inside its first step. Off-by-one windows are device
+  violations on both fixtures (one key wider, one narrower), and the release
+  gate now also loses the window outright. On the composed path the logits
+  move at step 4 with the window lost and at step 259 with the window's own
+  page released. On the fixtures' window of 4, a window one key wider moves
+  the logits by NMSE 0.89 to 1.38, and one key narrower by 0.91 to 1.56,
+  against a clean 2.7e-12. The serving gate now decodes past a window the
+  context can outrun: gemma-3-1b by 70 positions over 576 steps. It counts
+  every block of every step, replayed or emitted, and serves gemma-3-1b on
+  CUDA and Vulkan in every arm. The median ratios to the tier's distance are
+  1.046 and 1.099; the worst steps are 0.0177 and 0.0321, against the bound of
+  0.059. gemma-2-2b (4160 steps past its 4096 window) and gemma-3-4b (1088)
+  form but have not finished the gate on both backends. The paged fault
+  gate pins its arms to the tier's kernels, whose violations it holds: in a
+  jitllmcomposed build eight of its ten cases had read 0.000e+00, since the
+  composer served the decode they break. The cost estimator prices a
+  windowed attention over its whole history, an upper bound, because a step
+  states no window.

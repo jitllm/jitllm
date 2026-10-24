@@ -339,7 +339,7 @@ func layerRelocatesToAnotherDevice(t *testing.T, path string, parts tier.Parts) 
 		return out, placed
 	}
 
-	static, _ := run(false)
+	static, stayed := run(false)
 	hopped, placed := run(true)
 	t.Logf("%s -> %s: blocks %v", a.Name(), b.Name(), placed)
 	if len(placed) < 2 || placed[1] == 0 {
@@ -353,4 +353,6 @@ func layerRelocatesToAnotherDevice(t *testing.T, path string, parts tier.Parts) 
 		}
 	}
 	composedRan(t, parts, nil, a, b)
+	// Every token of the static run on a's blocks, and of the hop on b's.
+	composedBlocksRan(t, parts, 0, ntok*(stayed[0]+placed[1]), a, b)
 }

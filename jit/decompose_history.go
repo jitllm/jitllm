@@ -175,12 +175,14 @@ func StepWord(o Operand, w int, s Step) (float64, bool) {
 
 // historyWord is a word of the history's tables at step s: a decode row
 // attends its s.Keys positions from the first, its page table from the
-// table's start, and the table holds the pages in order.
+// table's start, and the table holds the pages in order. The windows'
+// descriptors are laid out as the rows', and a step states no window, so a
+// windowed attention is priced over its whole history: an upper bound.
 func historyWord(o Operand, w int, s Step) (float64, bool) {
 	if o.Kind == tablePages.Kind && o.Name == tablePages.Name {
 		return float64(w), true
 	}
-	if o.Kind != tableRows.Kind || o.Name != tableRows.Name {
+	if o.Kind != tableRows.Kind || o.Name != tableRows.Name && o.Name != tableWindows.Name {
 		return 0, false
 	}
 	switch w % rowWords {

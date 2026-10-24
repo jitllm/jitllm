@@ -125,6 +125,12 @@ func localYarn(m *Model) func() {
 	return func() { m.ropeSWA = was }
 }
 
+// windowBy is the model with its sliding window d keys wider: a window off
+// by one position, which the device arm must see past the window.
+func windowBy(d int) func(m *Model) func() {
+	return func(m *Model) func() { return cfgMut(m, func(c *Config) { c.SWAWindow += d }) }
+}
+
 func localScaled(m *Model) func() {
 	was := m.ropeSWA.Scale
 	m.ropeSWA.Scale = m.rope.Scale
@@ -264,6 +270,8 @@ var denseDevViolations = map[string][]c6Violation{
 		{"YaRN on the sliding layers", localYarn},
 		{"YaRN's magnitude on the sliding layers", localScaled},
 		{"no sliding window", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.SWAWindow = 0 }) }},
+		{"a window one key wider", windowBy(1)},
+		{"a window one key narrower", windowBy(-1)},
 	},
 	"synth-smollm3": {
 		{"rotary on the NoPE layer", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.NoPEGlobal = false }) }},
@@ -283,6 +291,8 @@ var denseDevViolations = map[string][]c6Violation{
 	"synth-exaone4": {
 		{"rotary on the global layer", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.NoPEGlobal = false }) }},
 		{"no sliding window", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.SWAWindow = 0 }) }},
+		{"a window one key wider", windowBy(1)},
+		{"a window one key narrower", windowBy(-1)},
 		{"the post-norms as pre-norms", postAsPre},
 	},
 	"synth-mistral3": {

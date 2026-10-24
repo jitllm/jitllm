@@ -24,9 +24,11 @@ func scoreMap(shape []int, in []Operand, out Operand, e []Expr, f Facts) Prim {
 // query head, each key's dot with the query, scaled and softcapped where the
 // op is, the scores masked outside what the row attends, their maximum, the
 // weights and their sum (at least one, its largest term exp 0), the weighted
-// values and the row they make divided by the sum. A windowed op attends
-// from the window's first position, the host's (engine/model/kvpage.go):
-// the Window positions ending at the query's, or the query's aligned chunk.
+// values and the row they make divided by the sum. A causal windowed op
+// attends what the rows' windowed descriptors (the step's window table)
+// say, as the engine's own windowed kernels do: the engine stages each
+// row's first position as its window's start, the Window positions ending
+// at the query's or the query's aligned chunk.
 func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
 	if len(o.In) != 1 && len(o.In) != 2 || len(o.Out) != 1 || len(o.Weight) > 1 || a.Window < 0 || a.Softcap < 0 ||
@@ -159,7 +161,7 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	scored := rng(2)
 	scored.Extents[0] = R * H * D
 	desc := tableRows
-	if a.RowWindows {
+	if a.RowWindows || a.Window > 0 && !a.Bidir {
 		desc = tableWindows
 	}
 	tables := func(ops ...Operand) []Operand { return append([]Operand{ops[0], desc, tablePages}, ops[1:]...) }
@@ -203,9 +205,9 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 
 // history is how a primitive reads the paged history of a row: the rows'
 // descriptors its operand 1 and the page table its operand 2, row r its
-// coordinate 0, the attended positions those a's window keeps -- the
-// Window ending at the row's end, or for a bidirectional op the symmetric
-// window of Window/2 either side of the row's own position.
+// coordinate 0, the attended positions those the descriptor states -- a
+// causal window's descriptors carry its start -- or for a bidirectional op
+// the symmetric window of Window/2 either side of the row's own position.
 type history struct {
 	a        graph.Attrs
 	pageSize int
@@ -217,27 +219,17 @@ func (hs history) row(x *exprs, w int) int {
 	return x.load(1, x.op(OpAdd, U, x.op(OpMul, U, x.coord(0), x.u(rowWords)), x.u(uint32(w))))
 }
 
-// start is the first position the row attends: its first, or past it the
-// window's.
+// start is the first position the row attends: its first, or past it a
+// bidirectional window's. A causal window's first is its descriptor's: a
+// start computed here as well would hide a descriptor that lost the window.
 func (hs history) start(x *exprs) int {
 	U, a := ir.U32, hs.a
 	first := hs.row(x, rowStart)
-	if a.Window == 0 {
+	if a.Window == 0 || !a.Bidir {
 		return first
 	}
-	if a.Bidir {
-		half := x.u(uint32(a.Window / 2))
-		return x.op(OpMax, U, first, x.op(OpSub, U, x.op(OpMax, U, hs.row(x, rowWrite), half), half))
-	}
-	W := x.u(uint32(a.Window))
-	end := hs.row(x, rowEnd)
-	var from int
-	if a.Chunked {
-		from = x.op(OpMul, U, x.op(OpDiv, U, x.op(OpSub, U, x.op(OpMax, U, end, x.u(1)), x.u(1)), W), W)
-	} else {
-		from = x.op(OpSub, U, x.op(OpMax, U, end, W), W)
-	}
-	return x.op(OpMax, U, first, from)
+	half := x.u(uint32(a.Window / 2))
+	return x.op(OpMax, U, first, x.op(OpSub, U, x.op(OpMax, U, hs.row(x, rowWrite), half), half))
 }
 
 // span is the attended range along axis, its bounds the row's.

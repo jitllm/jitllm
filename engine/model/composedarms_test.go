@@ -37,6 +37,18 @@ func composedArms(t *testing.T, path string) []tier.Parts {
 	return []tier.Parts{0, composedParts}
 }
 
+// composedOf is the parts g's composer serves of m: what g asks it for
+// (Config.Composed, every part in a jitllmcomposed build), where the front
+// end states every block of m as ops, and nothing where it does not.
+func composedOf(m *Model, g *tier.GPU) tier.Parts {
+	for li := range m.Cfg.NLayer {
+		if m.Uncovered(li) != Covered {
+			return 0
+		}
+	}
+	return g.Composed
+}
+
 // composedArm is the subtest name of name's arm: name itself for the tier's
 // own kernels, so a gate's existing names select what they always did.
 func composedArm(name string, parts tier.Parts) string {
@@ -84,4 +96,44 @@ func composedRan(t *testing.T, parts tier.Parts, allow []string, gs ...*tier.GPU
 			t.Fatalf("the composer declined %d part step(s): %s", k, why)
 		}
 	}
+}
+
+// composedBlockSteps is the block steps the composer ran on the tiers gs:
+// those it emitted and those a recording of them replayed.
+func composedBlockSteps(gs ...*tier.GPU) int {
+	n := 0
+	for _, g := range gs {
+		s := g.Stats()
+		b, _, _ := s.ServedPart(tier.ComposedBlock)
+		n += b + s.ReplayedPart(tier.ComposedBlock)
+	}
+	return n
+}
+
+// composedBlocksRan fails t unless the composer, asked for parts on the
+// tiers gs, ran want block steps past the before already counted
+// (composedBlockSteps) -- every one-row step of every block a decode placed
+// -- formed none at a step and declined none.
+func composedBlocksRan(t *testing.T, parts tier.Parts, before, want int, gs ...*tier.GPU) {
+	t.Helper()
+	if parts&tier.ComposedBlock == 0 {
+		return
+	}
+	declined, formed := map[string]int{}, 0
+	for _, g := range gs {
+		s := g.Stats()
+		formed += s.FormedAtStep
+		for i, k := range s.BlockDeclines {
+			if k > 0 {
+				declined[tier.DeclineName(i)] += k
+			}
+		}
+	}
+	if formed != 0 || len(declined) != 0 {
+		t.Fatalf("the composer formed %d block(s) at a step and declined block steps %v", formed, declined)
+	}
+	if n := composedBlockSteps(gs...) - before; n != want {
+		t.Fatalf("the composer ran %d block steps, where the decode's one-row steps of its placed blocks are %d", n, want)
+	}
+	t.Logf("the composer ran every one of the %d block steps", want)
 }

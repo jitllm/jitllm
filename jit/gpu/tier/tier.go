@@ -738,6 +738,10 @@ type Stats struct {
 	// over several sessions' rows. They run the tier's own kernels; this is
 	// where they are seen.
 	PartsUnasked [numParts]int
+	// PartsReplayed counts the steps a recording replayed the composer's
+	// parts in, by part: what PartsServed, counted where a step is emitted,
+	// does not see.
+	PartsReplayed [numParts]int
 	// BlockDeclines and HeadDeclines are PartsDeclined's block and head
 	// steps by reason (DeclineName).
 	BlockDeclines, HeadDeclines [numPartDeclines]int
@@ -1292,6 +1296,7 @@ func (s *Stats) add(o Stats) {
 		s.PartsServed[i] += o.PartsServed[i]
 		s.PartsDeclined[i] += o.PartsDeclined[i]
 		s.PartsUnasked[i] += o.PartsUnasked[i]
+		s.PartsReplayed[i] += o.PartsReplayed[i]
 	}
 	for i := range s.BlockDeclines {
 		s.BlockDeclines[i] += o.BlockDeclines[i]

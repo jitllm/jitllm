@@ -30,7 +30,8 @@ type pagedFaultCase struct {
 // violation, in the kernels and in the tier's wiring, and demands the
 // difference lands outside the band the gate allows (RULE 10): a gate that
 // passes a wrong page, a lost window or two sequences reading one table
-// proves nothing.
+// proves nothing. Its arms run the tier's own kernels in every build (a
+// jitllmcomposed one too): the violations and the split control are theirs.
 //
 //	go test -tags jitllmfault ./engine/model -run TestPagedKVGateDiscriminates
 func TestPagedKVGateDiscriminates(t *testing.T) {
@@ -72,14 +73,15 @@ func TestPagedKVGateDiscriminates(t *testing.T) {
 			}
 			// The clean paged run row at a time, and the order-only control
 			// beside it (two splits), which sizes the band.
-			want, _ := pagedRun(t, m, seq, prompt, forced, rowwise(pagedOpts(pagedKVPage), 1))
-			ctl, _ := pagedRun(t, m, seq, prompt, forced, rowwise(pagedOpts(pagedKVPage), 2))
-			arm := rowwise(pagedOpts(pagedKVPage), 1)
+			paged := func() []tier.Option { return append(pagedOpts(pagedKVPage), composedOpt(0)) }
+			want, _ := pagedRun(t, m, seq, prompt, forced, rowwise(paged(), 1))
+			ctl, _ := pagedRun(t, m, seq, prompt, forced, rowwise(paged(), 2))
+			arm := rowwise(paged(), 1)
 			if c.staged {
 				arm = append(arm, tier.WithConfig(func(cf *tier.Config) { cf.StagedDecode = true }))
 			}
 			if c.prefill {
-				arm = append(pagedOpts(pagedKVPage), tier.WithConfig(func(cf *tier.Config) { cf.PrefillPass = c.pass }))
+				arm = append(paged(), tier.WithConfig(func(cf *tier.Config) { cf.PrefillPass = c.pass }))
 				// The clean arm first: the same batched configuration must sit
 				// inside the band, or the violation's distance means nothing.
 				clean, st := pagedRun(t, m, seq, prompt, forced, arm)

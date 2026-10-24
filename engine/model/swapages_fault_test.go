@@ -12,9 +12,12 @@ import (
 
 // TestWindowReleaseGateDiscriminates runs the device arm of
 // TestWindowedLayersHoldTheirWindow with the page each window starts in
-// released too (tier.SetPagedFault "winrelease"), and demands that the logits
-// move or the decode fail: a gate that passes it cannot tell a window read
-// from a released page.
+// released too (tier.SetPagedFault "winrelease"), and with the window lost --
+// its layers reading the full descriptors ("window") -- and demands that the
+// logits move or the decode fail: a gate that passes it cannot tell a window
+// read from a released page or from the whole history. Where the composer
+// serves the blocks (a jitllmcomposed build), it ran every block of every
+// step of both.
 func TestWindowReleaseGateDiscriminates(t *testing.T) {
 	specs := testdevices.Specs("cuda", "vulkan", "metal")
 	m, err := Open(jlmOf(t, testmodels.Path("synth-exaone4.gguf")), noTune)
@@ -33,6 +36,7 @@ func TestWindowReleaseGateDiscriminates(t *testing.T) {
 			t.Skipf("CARD TOO SMALL: %d of %d blocks -- this arm proved nothing", s.GPULayers(), m.Cfg.NLayer)
 		}
 		var sums []uint64
+		before := composedBlockSteps(g)
 		for i := 0; i < maxSeq-8; i++ {
 			lg, err := s.Forward(int32(3 + (i*7)%61))
 			if err != nil {
@@ -40,6 +44,7 @@ func TestWindowReleaseGateDiscriminates(t *testing.T) {
 			}
 			sums = append(sums, hashLogits(lg))
 		}
+		composedBlocksRan(t, composedOf(m, g), before, (maxSeq-8)*m.Cfg.NLayer, g)
 		return sums, nil
 	}
 	for _, spec := range specs {
@@ -58,17 +63,21 @@ func TestWindowReleaseGateDiscriminates(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			tier.SetPagedFault("winrelease")
 			defer tier.SetPagedFault("")
-			g = open()
-			defer g.Close()
-			got, err := decode(g)
-			if g.Stats().KVWindowReleased == 0 {
-				t.Fatal("no windowed page was released: the violation was never exercised")
-			}
-			t.Logf("violation: %s", violationWhat(err, got, want))
-			if err == nil && equalSums(got, want) {
-				t.Fatal("releasing the page each window starts in changed no logit on the device")
+			for _, fault := range []string{"winrelease", "window"} {
+				tier.SetPagedFault(fault)
+				g := open()
+				got, err := decode(g)
+				released := g.Stats().KVWindowReleased
+				g.Close()
+				tier.SetPagedFault("")
+				if released == 0 {
+					t.Fatalf("%s: no windowed page was released: the violation was never exercised", fault)
+				}
+				t.Logf("violation %q: %s", fault, violationWhat(err, got, want))
+				if err == nil && equalSums(got, want) {
+					t.Fatalf("%s: the violation changed no logit on the device", fault)
+				}
 			}
 		})
 	}

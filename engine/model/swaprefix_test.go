@@ -76,6 +76,10 @@ func TestPrefixCacheRestoresAWindowedLayer(t *testing.T) {
 							s.SetKVStore(st)
 							mustKey(t, s, "window/prefix")
 						}
+						before := 0
+						if g != nil {
+							before = composedBlockSteps(g)
+						}
 						lg, err := s.PrefillCached(p)
 						if err != nil {
 							t.Fatal(err)
@@ -87,6 +91,15 @@ func TestPrefixCacheRestoresAWindowedLayer(t *testing.T) {
 							if lg, err = s.Forward(id); err != nil {
 								t.Fatal(err)
 							}
+						}
+						if g != nil {
+							// The decode's steps, and the prompt's last row
+							// where it is the one the store left to prefill.
+							steps := gen
+							if len(p)-s.KVRestored() == 1 {
+								steps++
+							}
+							composedBlocksRan(t, composedOf(m, g), before, steps*s.GPULayers(), g)
 						}
 						stored, fetched, _ := s.KVPageStats()
 						t.Logf("restored %d: %d page(s) stored, %d fetched, %d sync failure(s), %d unmigratable, %d mismatched",

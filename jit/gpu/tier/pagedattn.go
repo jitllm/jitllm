@@ -884,6 +884,15 @@ func (g *devTier) pagedStage(pg *pagedScratch, p *nn.LayerPlan, rows []pagedRow)
 	}
 }
 
+// windowDesc is the descriptors block li's decode attention reads under
+// plan p: the windowed ones on a windowed block, the full ones elsewhere.
+func (pg *pagedScratch) windowDesc(p *nn.LayerPlan, li int) backend.Buf {
+	if p.Window(li) > 0 && !pagedFaulted("window") {
+		return pg.pRowW
+	}
+	return pg.pRow
+}
+
 // pagedRows fills dst with a call's rows: one sequence's positions pos.. for a
 // decode or a prefill chunk, or a LayersRows step's sequences, with R-nrow
 // padding rows. dst is reused, so a token allocates nothing.

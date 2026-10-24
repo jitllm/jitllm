@@ -55,13 +55,15 @@ func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts
 
 // servedModels is every checkpoint whose blocks and head the front end states
 // as ops and that one card of 16 GiB holds: dense models of the llama, qwen2,
-// qwen3, gemma, olmo2, exaone4, arcee, granite, hunyuan and phi3 classes.
+// qwen3, gemma, gemma3, olmo2, exaone4, arcee, granite, hunyuan and phi3
+// classes.
 var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf", "tinyllama-1.1b-q3_K_M.gguf",
 	"gemma-2b.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf", "qwen2.5-1.5b-instruct-q4_k_m.gguf",
 	"SmolLM2-360M-Instruct-Q8_0.gguf", "stories15M-q8_0.gguf", "SmolVLM-256M-Instruct-Q8_0.gguf",
 	"newarch/OLMo-2-0425-1B-Instruct-Q4_K_M.gguf", "newarch/EXAONE-4.0-1.2B-Q4_K_M.gguf", "newarch/AFM-4.5B-Q4_K_M.gguf",
 	"granite/granite-3.3-2b-instruct-Q4_K_M.gguf", "granite/granite-4.0-micro-Q4_K_M.gguf",
-	"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf", "Phi-3.5-mini-instruct-Q4_K_M.gguf"}
+	"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf", "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+	"gemma-3-1b-it-Q4_K_M.gguf"}
 
 // headDeclined is why the tier still declines a served model's head where it
 // does, by its name (tier.DeclineName): a head graph past the norm and the
@@ -73,7 +75,9 @@ var headDeclined = map[string]string{
 }
 
 // formedModels is what the front end states and the serving gate does not
-// run: a model the tier cannot place (stories260K's 172-wide rows, which its
+// run: gemma-2-2b and gemma-3-4b, whose decodes past their windows (4160 and
+// 1088 steps) the gate has not finished on both backends; a model the tier
+// cannot place (stories260K's 172-wide rows, which its
 // quantizer refuses), float fixtures whose composed logits equal the float
 // reference's, which the gate's band cannot measure, and rnj-1, whose
 // composed blocks reach 0.19 from the float reference on CUDA at its 43rd
@@ -84,8 +88,9 @@ var headDeclined = map[string]string{
 // which Vulkan does not split at this key bound, is not yet ruled out.
 var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
 	"stories260K.gguf", "synth-ernie45.gguf", "synth-phi4v.gguf", "synth-seedoss.gguf", "synth-smollm3.gguf",
-	"gemma-3-1b-it-Q4_K_M.gguf", "synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "newarch/synth-olmo2-q8.gguf",
-	"synth-arcee.gguf", "synth-exaone4.gguf", "synth-glm4.gguf", "rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf"}
+	"synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "newarch/synth-olmo2-q8.gguf", "synth-arcee.gguf", "synth-exaone4.gguf",
+	"synth-olmo3.gguf", "synth-phi3", "synth-glm4.gguf", "rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf",
+	"gemma-2-2b-it-Q4_K_M.gguf", "gemma-3-4b-it-Q4_K_M.gguf"}
 
 // composedResidue is what the tier still launches of its own on a one-row
 // step whose blocks and head the composer serves: the rotary table.
@@ -95,16 +100,18 @@ var composedResidue = []string{"ropetable"}
 // by the composer from its graph (the model's front end's, from the
 // container), and the head, in main's runtime (Config.Composed), against the
 // tier's own kernels: every block placed, with and without the captured
-// graph, 140 teacher-forced steps (past the first key bound). Each arm is held
-// to a float reference -- the same blocks and head formed with float
-// activations, which neither the tier nor the arm computes: from the first
+// graph, 140 teacher-forced steps (past the first key bound), and on a model
+// whose sliding window cuts inside its context, steps past the window. Each
+// arm is held to a float reference -- the same blocks and head formed with
+// float activations, which neither the tier nor the arm computes: from the first
 // decoded step its distance from it may be no more than bandRatio times the
 // tier's at the median step, and no more than bandWorst times the widest the
 // tier's own backends come at their worst: a model whose decode passes a
 // near tie (OLMo 2's fifth step) sends each implementation to one side of it
 // or the other, main's CUDA and Vulkan tiers 0.118 apart there, and the arm
 // is held to that spread, not to the side one backend's tier landed on.
-// Stats().ServedPart is the selection check, a poisoned arm must change
+// Stats().ServedPart with ReplayedPart is the selection check, every block
+// of every step served whether emitted or replayed, a poisoned arm must change
 // nothing, and one position off must be ten times the arm's worst: the
 // comparison discriminates.
 func TestComposedBlocksServe(t *testing.T) {
@@ -130,8 +137,25 @@ func TestComposedBlocksServe(t *testing.T) {
 			defer m.Close()
 			ids := m.Vocab.Encode("The capital of France is", true)
 			n := 140
-			if c := int(m.Cfg.NCtx); c > 0 {
+			// A window the context can outrun is decoded past, so it cuts:
+			// the window's last position and windowPast more.
+			const windowPast = 64
+			w, c := 0, int(m.Cfg.NCtx)
+			for li := range m.Cfg.NLayer {
+				if m.Cfg.SWA(li) {
+					w = m.Cfg.SWAWindow
+				}
+			}
+			if w > 0 && (c <= 0 || w+windowPast+len(ids)+4 <= c) {
+				n = max(n, w+windowPast)
+			}
+			if c > 0 {
 				n = min(n, c-len(ids)-4)
+			}
+			if w > 0 && len(ids)+n > w {
+				t.Logf("the decode runs %d positions past the window of %d", len(ids)+n-w, w)
+			} else if w > 0 {
+				t.Logf("the window of %d cuts nothing in the model's context of %d", w, c)
 			}
 			toks := make([]int32, n)
 			for i := range toks {
@@ -204,8 +228,19 @@ func TestComposedBlocksServe(t *testing.T) {
 										t.Fatalf("composed parts %#x served %d steps and were declined %d: the arm did not run them (%s)", uint8(k), n, d, st.LastErr)
 									}
 								}
-								// Without a recording every step runs every block, so a
-								// block the composer did not serve shows in the count.
+								// Every step runs every block, emitted or replayed in a
+								// recording, so a block the composer did not serve shows
+								// in the count.
+								blocks, _, _ := st.ServedPart(tier.ComposedBlock)
+								if replayed := st.ReplayedPart(tier.ComposedBlock); blocks+replayed != len(toks)*m.Cfg.NLayer {
+									t.Fatalf("the composer ran %d block steps (%d of them replayed) where %d steps of %d blocks are %d",
+										blocks+replayed, replayed, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer)
+								}
+								heads, _, _ := st.ServedPart(tier.ComposedHead)
+								if replayed := st.ReplayedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn &&
+									headDeclined[file] == "" && heads+replayed != len(toks) {
+									t.Fatalf("the composer ran the head %d times (%d of them replayed) in %d steps", heads+replayed, replayed, len(toks))
+								}
 								if noGraph {
 									t.Logf("composed %s: the tier's own launches on the steps it served: %v", a.name, census)
 									// With the blocks and the head the composer's, what the tier

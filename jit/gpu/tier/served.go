@@ -435,7 +435,7 @@ var partDeclineNames = [numPartDeclines]string{
 	partStream:    "the history streams",
 	partLatent:    "a latent attention's history",
 	partShared:    "the history of another block",
-	partWindow:    "a window",
+	partWindow:    "a graph whose window is not the plan's",
 	partHeadShape: "a head graph other than a norm and its projection",
 	partHeadNorm:  "no norm buffer, or a LayerNorm head",
 	partPick:      "a head that picks labels only",
@@ -463,6 +463,18 @@ func (s Stats) ServedPart(k Parts) (served, declined, unasked int) {
 		}
 	}
 	return served, declined, unasked
+}
+
+// ReplayedPart is how many steps a recording replayed the parts of k in
+// (Stats.PartsReplayed).
+func (s Stats) ReplayedPart(k Parts) int {
+	n := 0
+	for i := range s.PartsReplayed {
+		if k&(1<<i) != 0 {
+			n += s.PartsReplayed[i]
+		}
+	}
+	return n
 }
 
 // servedKey is a served part's shape: the part, its graph, the step's rows,
@@ -635,6 +647,19 @@ func (g *devTier) servedHead(gr *graph.Graph, w *resident, norm backend.Buf) (*s
 	return sv, nil
 }
 
+// attendWindow is the window gr's attention states, and whether it is an
+// aligned chunk.
+func attendWindow(gr *graph.Graph) (int, bool) {
+	if gr != nil {
+		for _, o := range gr.Ops {
+			if o.Kind == graph.OpAttend {
+				return o.Attr.Window, o.Attr.Chunked
+			}
+		}
+	}
+	return 0, false
+}
+
 // inPlace says the form may write output out over input in: every kernel
 // that binds in launches before the first that binds out.
 func (f *partForm) inPlace(in, out int) bool {
@@ -710,9 +735,8 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 
 // blockServes is why block li of this one-row step is not one the composer
 // serves whole, serves where it is: a graph from the front end, the paged
-// decode, none of its history at home, no window shorter than the session
-// (a window cuts nothing below it; one that does is not yet held to the
-// tier), outside the persistent block and a fault probe.
+// decode, none of its history at home, the window the plan holds the block
+// to (windowHeld), outside the persistent block and a fault probe.
 func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, persist bool) partDecline {
 	pk := bs.pkv
 	switch {
@@ -732,10 +756,21 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partLatent
 	case l.kvSrc != li:
 		return partShared
-	case l.windowed || p.Window(li) != 0 && p.Window(li) < p.MaxSeq:
+	case !l.windowHeld(li, p):
 		return partWindow
 	}
 	return partServes
+}
+
+// windowHeld says the window block l's graph states is the plan's for block
+// li, whose descriptors the tier stages (pagedStage), or one that cuts
+// nothing in the plan's session, where the full descriptors start where the
+// window would.
+func (l *layer) windowHeld(li int, p *nn.LayerPlan) bool {
+	if w := p.Window(li); w > 0 {
+		return l.win == w && l.chunked == p.SWAChunked
+	}
+	return l.win == 0 || l.win >= p.MaxSeq
 }
 
 // prewarmComposed forms every placed block's part and the head's at
@@ -769,7 +804,8 @@ func (g *devTier) prewarmComposedBlock(li int) {
 	if bs.csSWA != nil && bs.p.LocalRope(li) {
 		rcs = bs.csSWA
 	}
-	if _, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.zero, bs.p.MaxSeq, g.kvp.p); err != nil {
+	if _, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(&bs.p, li), bs.zero, bs.p.MaxSeq,
+		g.kvp.p); err != nil {
 		g.LastErr = "the composed block: " + err.Error()
 		return
 	}
@@ -803,12 +839,14 @@ func (g *devTier) prewarmComposedHead() {
 
 // servedBlock is block li served whole: its graph formed as one unit on the
 // block's weights and vectors by role, its rotary table cs and its history
-// in the tier's pool layer pl, for a session of maxSeq positions.
+// in the tier's pool layer pl, through the rows' descriptors, a windowed
+// attention through rowsW (pagedScratch.windowDesc), for a session of
+// maxSeq positions.
 //
 // The form is the session's: its attention runs as many trips as the row's
 // live positions need, a count it reads at run time (jit.Trips), so the
 // session's capacity is its key bound and no position compiles a form.
-func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, qOff backend.Buf, maxSeq, page int) (*servedPart, error) {
+func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, rowsW, qOff backend.Buf, maxSeq, page int) (*servedPart, error) {
 	keys := (maxSeq + scoreGrain - 1) / scoreGrain * scoreGrain
 	sk := servedKey{kind: partBlock, graph: l.graph, rows: 1, keys: keys, page: page, half: pl.geom.f16}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
@@ -819,7 +857,8 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 		gr.Block = 0
 		sl := composedPart{kind: partBlock, graph: &gr, formats: map[jlm.Role]jlm.Type{},
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{},
-			tables:  map[string]backend.Buf{"rope.cs": cs, "kv.k": pl.k, "kv.v": pl.v, "pages": pl.tab, "rows": rows, "q.off": qOff},
+			tables: map[string]backend.Buf{"rope.cs": cs, "kv.k": pl.k, "kv.v": pl.v, "pages": pl.tab, "rows": rows,
+				"rows.win": rowsW, "q.off": qOff},
 			history: jit.History{Keys: jit.Pool{ByDim: true}, Values: jit.Pool{Half: pl.geom.f16}},
 			keys:    keys, page: page}
 		for _, o := range l.graph.Ops {
@@ -857,6 +896,6 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 		sv.sl.vectors[r] = l.roleVector(r)
 	}
 	t := sv.sl.tables
-	t["rope.cs"], t["kv.k"], t["kv.v"], t["pages"], t["rows"], t["q.off"] = cs, pl.k, pl.v, pl.tab, rows, qOff
+	t["rope.cs"], t["kv.k"], t["kv.v"], t["pages"], t["rows"], t["rows.win"], t["q.off"] = cs, pl.k, pl.v, pl.tab, rows, rowsW, qOff
 	return sv, nil
 }

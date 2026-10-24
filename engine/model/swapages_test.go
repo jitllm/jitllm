@@ -191,6 +191,7 @@ func windowOnDevice(t *testing.T, m *Model, spec string, run windowRun, win []in
 	if err != nil {
 		t.Fatal(err)
 	}
+	composedBlocksRan(t, composedOf(m, gc), 0, n*cs.GPULayers(), gc)
 	cs.Close()
 	gc.Close()
 	g := open(false)
@@ -202,6 +203,7 @@ func windowOnDevice(t *testing.T, m *Model, spec string, run windowRun, win []in
 	}
 	placed, head := ds.GPULayers(), ds.HeadOnDevice()
 	ds.Close()
+	composedBlocksRan(t, composedOf(m, g), 0, n*placed, g)
 	if placed != c.NLayer || !head {
 		t.Skipf("CARD TOO SMALL: %d of %d blocks, head %v -- this arm proved nothing", placed, c.NLayer, head)
 	}

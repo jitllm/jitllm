@@ -229,7 +229,10 @@ func fixtureOnEveryDeviceWithin(t *testing.T, m *Model, g *c6Golden, vs []c6Viol
 		probe.Close()
 		ran++
 		t.Run(spec, func(t *testing.T) {
-			onDevice := func(run func(*State) [][]float32) ([][]float32, string) {
+			// onDevice runs run on a fresh tier of spec, every block and the
+			// head placed; steps is its one-row steps, every one of which the
+			// composer runs where it serves blocks the front end states.
+			onDevice := func(run func(*State) [][]float32, steps int) ([][]float32, string) {
 				gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
 					tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
 				if err != nil {
@@ -250,15 +253,17 @@ func fixtureOnEveryDeviceWithin(t *testing.T, m *Model, g *c6Golden, vs []c6Viol
 				if n := st.GPULayers(); n != nl {
 					t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpu.Err())
 				}
+				composedBlocksRan(t, composedOf(m, gpu), 0, steps*nl, gpu)
 				return got, ""
 			}
 			worst := 0.0
 			for _, arm := range []struct {
-				name string
-				run  func(*State) [][]float32
-				want [][]float32
-			}{{"decode", decode, wantDec}, {"prefill", prefill, wantPre}} {
-				got, why := onDevice(arm.run)
+				name  string
+				run   func(*State) [][]float32
+				want  [][]float32
+				steps int
+			}{{"decode", decode, wantDec, len(g.IDs)}, {"prefill", prefill, wantPre, 0}} {
+				got, why := onDevice(arm.run, arm.steps)
 				if why != "" {
 					t.Fatalf("%s: %s", arm.name, why)
 				}
@@ -283,7 +288,7 @@ func fixtureOnEveryDeviceWithin(t *testing.T, m *Model, g *c6Golden, vs []c6Viol
 			}
 			for _, v := range vs {
 				undo := v.mut(m)
-				got, why := onDevice(decode)
+				got, why := onDevice(decode, len(g.IDs))
 				undo()
 				if why != "" {
 					t.Errorf("%s: the device declined the violation rather than running it: %s", v.name, why)

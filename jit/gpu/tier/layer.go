@@ -29,8 +29,11 @@ import (
 // layer is one block's device-resident state.
 type layer struct {
 	// graph is the block as ops from the model's front end
-	// (nn.LayerPlan.Graph): what serving it whole forms (served.go).
+	// (nn.LayerPlan.Graph): what serving it whole forms (served.go), and
+	// win and chunked the window its attention states.
 	graph          *graph.Graph
+	win            int
+	chunked        bool
 	wq, wk, wv, wo *resident
 	gate, up, down *resident
 	// conv is a convolutional tower block's program and vectors (conv.go),
@@ -3089,6 +3092,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		g.layers = map[int]*layer{}
 	}
 	l := &layer{nonCausal: p.NonCausal, windowed: p.Windowed, geo: geoOf(p), vFromK: p.VFromK, graph: p.Graph}
+	l.win, l.chunked = attendWindow(p.Graph)
 	if p.NonCausal {
 		l.nffn, l.ungated, l.act = p.NFFN, ungatedFFN(p), p.Act
 		l.noRope = p.NRot == 0 || p.NoPosEnc
@@ -8057,7 +8061,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					if bs.csSWA != nil && p.LocalRope(li) {
 						rcs = bs.csSWA
 					}
-					sv, serr := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.zero, p.MaxSeq, g.kvp.p)
+					sv, serr := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(p, li), bs.zero, p.MaxSeq, g.kvp.p)
 					switch {
 					case serr != nil:
 					case !sv.f.inPlace(0, 0):
@@ -9863,6 +9867,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		cur, have := g.recs[key]
 		if !have {
 			tc := time.Now()
+			parts := g.PartsServed
 			g.capturing = true
 			r, e := backend.Record(rec, emit)
 			g.capturing = false
@@ -9874,7 +9879,8 @@ func (g *devTier) layersSession(s backend.Session) {
 				if r != nil {
 					g.stale = append(g.stale, r)
 				}
-				err = nil
+				// The capture ran no part: the issue below counts them.
+				err, g.PartsServed = nil, parts
 				emit()
 				return
 			}
@@ -9884,7 +9890,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				// once will fail again. A recording that came back around a
 				// failed launch is complete as far as the driver knows and
 				// wrong as far as jitllm does, so it is retired unused.
-				g.graphOff, err = true, nil
+				g.graphOff, err, g.PartsServed = true, nil, parts
 				if e != nil {
 					g.LastErr = "graphs disabled: " + e.Error()
 				}
@@ -9899,6 +9905,13 @@ func (g *devTier) layersSession(s backend.Session) {
 			}
 			g.recs[key], cur = r, r
 			g.Captures++
+			if g.recParts == nil {
+				g.recParts = map[graphKey][numParts]int{}
+			}
+			for i := range parts {
+				parts[i] = g.PartsServed[i] - parts[i]
+			}
+			g.recParts[key] = parts
 		}
 		if e := rec.Replay(cur); e != nil {
 			g.graphOff, g.LastErr = true, "graphs disabled: "+e.Error()
@@ -9913,6 +9926,9 @@ func (g *devTier) layersSession(s backend.Session) {
 			g.recUsed[key] = g.recTick
 			if have {
 				g.replayRecurrent(sid, lo, hi)
+				for i, n := range g.recParts[key] {
+					g.PartsReplayed[i] += n
+				}
 			}
 		}
 	}
@@ -11238,6 +11254,10 @@ func (g *devTier) ensureKVCap(pos int) bool {
 			return false
 		}
 	}
+	// The composer's parts follow the scratch: formed here, at the bound the
+	// rebuild took, as a placement forms them, not inside the step.
+	g.useGeom(home)
+	g.prewarmComposed()
 	return true
 }
 

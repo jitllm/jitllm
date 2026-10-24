@@ -20,18 +20,23 @@ const swaSlice = 4096
 // swaRun prefills ids and returns logits on the device when g is non-nil: every
 // position's first swaSlice logits for a per-token run, the last position's for
 // a batched one (Prefill returns nothing else). It fails if the device let go
-// of a block, since the State would silently finish on the host.
+// of a block, since the State would silently finish on the host, and where the
+// composer serves the blocks, unless it ran every block of every token.
 func swaRun(t *testing.T, m *Model, g *tier.GPU, ids []int32, batched bool) [][]float32 {
 	t.Helper()
 	// One size for every arm, so no arm's result depends on the order the
 	// arms ran in (TestATierServesALargerSecondSession covers that order).
 	st := m.NewState(swaMaxSeq)
 	defer st.Close()
-	placed := 0
+	placed, before := 0, 0
 	if g != nil {
 		st.SetDevice(g)
 		if placed = st.GPULayers(); placed == 0 {
 			t.Fatalf("0 of %d blocks placed: %q", m.Cfg.NLayer, g.Err())
+		}
+		before = composedBlockSteps(g)
+		if !batched {
+			defer func() { composedBlocksRan(t, composedOf(m, g), before, len(ids)*placed, g) }()
 		}
 	}
 	keep := func(lg []float32) []float32 { return append([]float32(nil), lg[:min(len(lg), swaSlice)]...) }
@@ -59,6 +64,11 @@ func swaRun(t *testing.T, m *Model, g *tier.GPU, ids []int32, batched bool) [][]
 }
 
 const swaMaxSeq = 1024
+
+// swaWindow states m with a window of w keys: a config of its own, as every
+// restatement of the model is, so the front end builds the blocks' graphs
+// again from it (frontKey).
+func swaWindow(m *Model, w int) { cfgMut(m, func(c *Config) { c.SWAWindow = w }) }
 
 func swaNMSE(a, b []float32) float64 {
 	var num, den float64
@@ -162,7 +172,7 @@ func TestSlidingWindowRunsOnTheDevice(t *testing.T) {
 			}
 			defer m.Close()
 			if c.window > 0 {
-				m.Cfg.SWAWindow, m.Cfg.SWAPeriod = c.window, m.Cfg.NLayer+1
+				cfgMut(m, func(cf *Config) { cf.SWAWindow, cf.SWAPeriod = c.window, cf.NLayer+1 })
 			}
 			w := m.Cfg.SWAWindow
 			if w <= 0 || w >= c.n {
@@ -171,9 +181,9 @@ func TestSlidingWindowRunsOnTheDevice(t *testing.T) {
 			ids := m.Vocab.Encode(strings.Repeat("The quick brown fox jumps over the lazy dog. ", 200), true)[:c.n]
 
 			host := swaRun(t, m, nil, ids, false)
-			m.Cfg.SWAWindow = swaMaxSeq * 4
+			swaWindow(m, swaMaxSeq*4)
 			open := swaRun(t, m, nil, ids, false)
-			m.Cfg.SWAWindow = w
+			swaWindow(m, w)
 			for _, batched := range []bool{false, true} {
 				href, oref := host, open
 				if batched {
@@ -183,9 +193,9 @@ func TestSlidingWindowRunsOnTheDevice(t *testing.T) {
 				// The bound is this device's own band, measured with a window
 				// that cannot bite, on its own tier.
 				gb := swaTier(t)
-				m.Cfg.SWAWindow = swaMaxSeq * 4
+				swaWindow(m, swaMaxSeq*4)
 				base := swaMedian(swaRun(t, m, gb, ids, batched), oref, w)
-				m.Cfg.SWAWindow = w
+				swaWindow(m, w)
 				gb.Close()
 				// At least a twentieth of what the window itself moves, because
 				// base is one noisy sample and rounding amplifies over many
@@ -234,9 +244,9 @@ func TestATierServesALargerSecondSession(t *testing.T) {
 	}
 	ids := m.Vocab.Encode(strings.Repeat("The quick brown fox jumps over the lazy dog. ", 200), true)[:n]
 	host := swaRun(t, m, nil, ids, false)
-	m.Cfg.SWAWindow = swaMaxSeq * 4
+	swaWindow(m, swaMaxSeq*4)
 	open := swaRun(t, m, nil, ids, false)
-	m.Cfg.SWAWindow = w
+	swaWindow(m, w)
 
 	g := swaTier(t)
 	defer g.Close()
