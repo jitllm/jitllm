@@ -78,7 +78,7 @@ func TestComposedCPUMatVec(t *testing.T) {
 					Graph:   graph.MatVec(jlm.RoleOutput, rows, k),
 					Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jt},
 					Step:    Step{Rows: tokens, Page: 64, Keys: 1, ActWindow: 32},
-					Device:  Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: arm.isa},
+					Device:  Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: arm.isa, ExactDiv: true},
 				})
 				if err != nil {
 					unformed[name] = err.Error()
@@ -194,7 +194,7 @@ func runCPU(codes []Code, x []float32, n int, planes [3][]uint32) ([]float32, er
 func withCPUInt8() *Registry {
 	r := Default()
 	p := r.Profiles[DeviceCPU]
-	p.Int8 = &Int8Form{Window: 32, Word: 4, Sums: 16, ExactDiv: true, UnsignedDot: uint64(x86.ISAVNNI)}
+	p.Int8 = &Int8Form{Window: 32, Word: 4, Sums: 16, UnsignedDot: uint64(x86.ISAVNNI)}
 	r.Profiles[DeviceCPU] = p
 	return r
 }
@@ -300,7 +300,7 @@ func TestComposedCPUHonoursTheDevicesISA(t *testing.T) {
 			Graph:   graph.MatVec(jlm.RoleOutput, rows, k),
 			Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jt},
 			Step:    Step{Rows: 1, Page: 64, Keys: 1, ActWindow: 32},
-			Device:  Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: isa},
+			Device:  Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: isa, ExactDiv: true},
 		})
 		if err != nil {
 			t.Errorf("%v without BMI2 does not form: %v", typ, err)

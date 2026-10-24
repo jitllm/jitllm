@@ -90,8 +90,8 @@ func (p Prologue) fits(pr, c *Kernel, d Device) bool {
 		switch nd.Op {
 		// A reduction over the whole workgroup -- a norm's sum of squares --
 		// is paid for in every consumer workgroup before its own work starts:
-		// a row's norm inside q/k/v measured 25.3 us against 6.5 + 13.4 apart
-		// (V100, Llama-3.2-1B), and inside gate/up 39.8 against 39.0.
+		// a row's norm inside q/k/v and gate/up measured slower than apart
+		// (docs/engineering-history/gpu-kernels.md).
 		case OpFlat, OpThread, OpGroupSum, OpGroupMax:
 			return false
 		case OpShuffle:
@@ -202,7 +202,10 @@ func (p Prologue) merge(pr, c *Kernel, d Device) *Kernel {
 		}
 	}
 	// A producer of threads is a spread loop over its elements, its stores
-	// in a guard of the real ones where they come in whole warps.
+	// in a guard of the real ones where they come in whole warps. There the
+	// element is the guard's iteration, so a warp past the last element
+	// skips the work -- unless it exchanges through workgroup slots, which
+	// every thread meets, a surplus one at the last element.
 	wrap, guard, raw, coord := -1, -1, -1, make([]int, len(pr.Space))
 	if pr.Work {
 		for a := range coord {
@@ -213,13 +216,23 @@ func (p Prologue) merge(pr, c *Kernel, d Device) *Kernel {
 		wrap = k.loop(n, -1)
 		k.Loops[wrap].Spread = true
 		raw = k.add(Node{Op: OpIter, At: wrap, Type: ir.U32})
+		rest := -1
 		if d.Lanes > 1 && n%d.Lanes == 0 && k.Group%d.Lanes == 0 {
 			guard = k.loop(1, wrap)
 			in := k.add(Node{Op: OpLess, Type: ir.Pred, A: raw, B: k.u32(n)})
 			count := k.add(Node{Op: OpSelect, Type: ir.U32, A: in, B: k.u32(1), C: k.u32(0)})
 			k.Loops[guard].Count, k.Loops[guard].Kept = count+1, true
+			exchanges := false
+			for _, nd := range pr.Nodes {
+				exchanges = exchanges || nd.Op == OpExchange
+			}
+			if !exchanges {
+				rest = k.bin(OpAdd, ir.U32, raw, k.add(Node{Op: OpIter, At: guard, Type: ir.U32}))
+			}
 		}
-		rest := k.bin(OpMin, ir.U32, raw, k.u32(n-1))
+		if rest < 0 {
+			rest = k.bin(OpMin, ir.U32, raw, k.u32(n-1))
+		}
 		for a := len(pr.Space) - 1; a >= 0; a-- {
 			switch ext := pr.Space[a]; {
 			case ext == 1:

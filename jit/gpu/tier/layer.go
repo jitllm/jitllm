@@ -6469,6 +6469,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		}
 	}
 	g.prewarmHeadKernels()
+	g.prewarmComposedHead()
 	return true
 }
 

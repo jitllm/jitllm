@@ -34,7 +34,7 @@ func (c Coarsen) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if i > 0 && out[i-1].Work && out[i-1].Part == out[i].Part {
 			host = out[i-1]
 		}
-		m, ok := Coarsen{Unit: unit}.form(out[i:i+n], host, d.Lanes)
+		m, ok := Coarsen{Unit: unit}.form(out[i:i+n], host, d.Lanes, true)
 		if !ok {
 			continue
 		}
@@ -194,9 +194,14 @@ type coarse struct {
 	host    *Kernel
 	hostVal map[Operand]Store
 	err     error
+
+	// under is a guard's phase computed in it, the unit its iteration: the
+	// warps past the last unit skip the phase. exchanged is an exchange
+	// formed there, which a warp that skips would never meet.
+	under, exchanged bool
 }
 
-func (c Coarsen) form(members []*Kernel, host *Kernel, lanes int) (*Kernel, bool) {
+func (c Coarsen) form(members []*Kernel, host *Kernel, lanes int, under bool) (*Kernel, bool) {
 	E := 0
 	for _, k := range members {
 		E = max(E, terms(k))
@@ -226,19 +231,26 @@ func (c Coarsen) form(members []*Kernel, host *Kernel, lanes int) (*Kernel, bool
 				k.hostVal[host.Bufs[s.Buf].Operand] = s
 			}
 		}
-		if lanes > 1 && T%lanes == 0 {
-			// The units dealt over the workgroup in whole warps: every
-			// thread computes its unit, a surplus one the last, and only a
-			// real one stores -- so the warps past the last unit hold only
-			// copies, and a window combines within a warp by its lanes.
+		if lanes > 1 && T%lanes == 0 && host.Group%lanes == 0 {
+			// The units dealt over the workgroup in whole warps, and only a
+			// real one stores, so a window combines within a warp by its
+			// lanes. The phase is the guard's, the unit its iteration: the
+			// warps past the last unit skip it. Where it exchanges through
+			// workgroup slots every thread computes a unit, a surplus one the
+			// last, and the warps past the last unit hold copies.
 			sp := k.m.loop(T, -1)
 			k.m.Loops[sp].Spread = true
 			it := k.m.add(Node{Op: OpIter, At: sp, Type: ir.U32})
-			k.u = k.m.bin(OpMin, ir.U32, it, k.m.u32(T-1))
 			k.guard = k.m.loop(1, sp)
 			in := k.m.add(Node{Op: OpLess, Type: ir.Pred, A: it, B: k.m.u32(T)})
 			count := k.m.add(Node{Op: OpSelect, Type: ir.U32, A: in, B: k.m.u32(1), C: k.m.u32(0)})
 			k.m.Loops[k.guard].Count, k.m.Loops[k.guard].Kept = count+1, true
+			k.under = under
+			if under {
+				k.u = k.m.bin(OpAdd, ir.U32, it, k.m.add(Node{Op: OpIter, At: k.guard, Type: ir.U32}))
+			} else {
+				k.u = k.m.bin(OpMin, ir.U32, it, k.m.u32(T-1))
+			}
 		} else {
 			th := k.m.add(Node{Op: OpThread, Type: ir.U32})
 			k.u = k.m.bin(OpMin, ir.U32, k.m.bin(OpAdd, ir.U32, th, k.m.u32(0)), k.m.u32(T-1))
@@ -283,6 +295,9 @@ func (c Coarsen) form(members []*Kernel, host *Kernel, lanes int) (*Kernel, bool
 	}
 	if k.err != nil {
 		return nil, false
+	}
+	if k.under && k.exchanged {
+		return c.form(members, host, lanes, false)
 	}
 	if host != nil {
 		k.m.Stores = append(k.m.Stores, Store{Barrier: true, At: -1})
@@ -339,13 +354,21 @@ func (k *coarse) coordLeaf(n *Kernel, coords []int) func(i int, nd Node) (int, b
 func (k *coarse) read(n *Kernel, i int, nd Node, coords []int) (int, bool) {
 	o := n.Bufs[nd.Buf].Operand
 	if s, ok := k.hostVal[o]; ok && nd.Ax != nil && len(nd.Ax) == len(s.Ax) {
+		// One element, read by a window's amax and again by its code, is
+		// one value: its place named as produce names a member's.
+		key := fmt.Sprintf("host %d %v", s.Val, k.keys(nd.Ax))
+		if v, ok := k.memo[key]; ok {
+			return v, true
+		}
 		jc := k.host.Loops[s.At].Elem - 1
 		row := s.Ax[0]
 		sub := map[int]int{jc: nd.Ax[len(nd.Ax)-1]}
 		if h := k.host.Nodes[row]; h.Op == OpCoord && k.m.Nodes[nd.Ax[0]].Op == OpConst {
 			sub[row] = nd.Ax[0]
 		}
-		return k.m.copyOf(s.Val, sub), true
+		v := k.m.copyOf(s.Val, sub)
+		k.memo[key] = v
+		return v, true
 	}
 	for _, p := range k.members {
 		for _, s := range p.Stores {
@@ -598,6 +621,7 @@ func (k *coarse) reduce(n *Kernel, s Store, coords []int, g int) int {
 		}
 		return v
 	}
+	k.exchanged = true
 	at := m.bin(OpMul, ir.U32, m.bin(OpDiv, ir.U32, k.local, m.u32(slots)), m.u32(slots))
 	return m.add(Node{Op: OpExchange, Type: ir.F32, A: acc, B: at, C: init, Imm: int64(slots), At: int(comb)})
 }

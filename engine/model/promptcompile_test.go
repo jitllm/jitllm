@@ -21,11 +21,21 @@ import (
 // JITLLM_VIOLATE_PROMPT_PREWARM=1 switches the prewarm off (Config.
 // NoPromptPrewarm), which must fail. Both tuning modes run: the shipping
 // default (TuneAuto) retunes the decode's splits, compiling candidates, and
-// that belongs to the placement too.
+// that belongs to the placement too. With the composer serving the blocks
+// and the head, their forms are built at placement and at PrepHead, which a
+// model calls after placing its blocks.
 func TestPlacedPromptsCompileNothing(t *testing.T) {
 	violate := os.Getenv("JITLLM_VIOLATE_PROMPT_PREWARM") != ""
 	ran := 0
-	for _, name := range []string{"Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf"} {
+	for _, arm := range []struct {
+		name     string
+		composed tier.Parts
+	}{
+		{"Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", 0},
+		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", 0},
+		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", tier.ComposedBlock | tier.ComposedHead},
+	} {
+		name := arm.name
 		p := testmodels.Path(name)
 		if _, err := os.Stat(p); err != nil {
 			if _, err := os.Stat(strings.TrimSuffix(p, ".gguf") + ".jlm"); err != nil {
@@ -34,9 +44,9 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 			}
 		}
 		for _, tune := range []tier.TuneMode{tier.TuneOff, tier.TuneAuto} {
-			t.Run(fmt.Sprintf("%s/tune%d", name, tune), func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s/tune%d/composed%d", name, tune, arm.composed), func(t *testing.T) {
 				g, err := tier.OpenWith(tier.WithDeviceTune(tune),
-					tier.WithConfig(func(c *tier.Config) { c.NoPromptPrewarm = violate }))
+					tier.WithConfig(func(c *tier.Config) { c.NoPromptPrewarm, c.Composed = violate, arm.composed }))
 				if err != nil || g == nil {
 					t.Skipf("no GPU device: %v", err)
 				}
@@ -93,6 +103,9 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 				}
 				if got != 0 {
 					t.Fatalf("%d kernel(s) compiled after the blocks were placed", got)
+				}
+				if served, _, _ := st.ServedPart(arm.composed); arm.composed != 0 && served == 0 {
+					t.Fatalf("the composer served none of the parts asked of it: %s", g.Err())
 				}
 				ran++
 			})

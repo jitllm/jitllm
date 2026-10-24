@@ -92,7 +92,7 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 
 	var d exprs
 	var ds int
-	if q.ExactDiv {
+	if c.exactDiv {
 		ds = d.op(OpDiv, F, d.at(0, win, d.coord(0), d.coord(1)), d.f(127))
 	} else {
 		ds = d.scale(d.at(0, win, d.coord(0), d.coord(1)))
@@ -100,7 +100,7 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	dix := flat(&d, d.coord(0), d.coord(1), nw)
 
 	var r exprs
-	if dd := r.load(1, flat(&r, r.coord(0), r.coord(1), nw)); q.ExactDiv {
+	if dd := r.load(1, flat(&r, r.coord(0), r.coord(1), nw)); c.exactDiv {
 		r.sel(F, r.op(OpLess, ir.Pred, r.f(0), dd), r.op(OpDiv, F, r.f(1), dd), r.f(0))
 	} else {
 		r.inverse(r.at(0, win, r.coord(0), r.coord(1)), dd)

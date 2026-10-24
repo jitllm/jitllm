@@ -35,7 +35,7 @@ func Host() (cost.Device, error) {
 		return cost.Device{}, err
 	}
 	workers := max(1, len(sched.PCores()))
-	d := cost.Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: workers, Lanes: hostLanes()}}
+	d := cost.Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: workers, Lanes: hostLanes(), ExactDiv: true}}
 	sizes, err := cacheSizes()
 	if err != nil {
 		return d, err

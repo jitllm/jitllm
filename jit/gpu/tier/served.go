@@ -123,7 +123,8 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 		Graph:   sl.graph,
 		Formats: sl.formats,
 		Step:    jit.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: g.actWin},
-		Device:  jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: g.pickLanes(), Units: units(g.dev)},
+		Device: jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: g.pickLanes(), Units: units(g.dev),
+			ExactDiv: kernels.DivExact(g.dev.API())},
 		History: sl.history,
 	})
 }
@@ -526,10 +527,20 @@ func (g *devTier) prewarmComposed() {
 			}
 		}
 	}
-	if g.Composed&ComposedHead != 0 && bs.head != nil && headServes(1, bs.headGraph, bs.hNorm, bs.normVar != nil, false, false) {
-		if _, err := g.servedHead(bs.headGraph, bs.head, bs.hNorm); err != nil {
-			g.LastErr = "the composed head: " + err.Error()
-		}
+	g.prewarmComposedHead()
+}
+
+// prewarmComposedHead forms the head's part where the composer serves it,
+// at placement and again at PrepHead, which a model calls after placing its
+// blocks: a head met first at a token formed inside it. Callers hold g.mu.
+func (g *devTier) prewarmComposedHead() {
+	bs := g.bs
+	if g.NoPromptPrewarm || g.Composed&ComposedHead == 0 || bs == nil || bs.head == nil ||
+		!headServes(1, bs.headGraph, bs.hNorm, bs.normVar != nil, false, false) {
+		return
+	}
+	if _, err := g.servedHead(bs.headGraph, bs.head, bs.hNorm); err != nil {
+		g.LastErr = "the composed head: " + err.Error()
 	}
 }
 

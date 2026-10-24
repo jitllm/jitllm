@@ -11,9 +11,10 @@ var hardware = []Profile{
 		Source: "probe",
 		Device: Device{
 			Device: jit.Device{
-				Kind:  jit.DeviceCPU,
-				Slots: 6,
-				Lanes: 8,
+				Kind:     jit.DeviceCPU,
+				Slots:    6,
+				Lanes:    8,
+				ExactDiv: true,
 			},
 			Bandwidth: 4.716e+10,
 			Thread:    2.367e+10,
@@ -98,9 +99,10 @@ var hardware = []Profile{
 		Source: "probe",
 		Device: Device{
 			Device: jit.Device{
-				Kind:  jit.DeviceCPU,
-				Slots: 4,
-				Lanes: 4,
+				Kind:     jit.DeviceCPU,
+				Slots:    4,
+				Lanes:    4,
+				ExactDiv: true,
 			},
 			Bandwidth: 7.389e+10,
 			Thread:    6.493e+10,
@@ -243,9 +245,10 @@ var hardware = []Profile{
 		Source: "probe",
 		Device: Device{
 			Device: jit.Device{
-				Kind:  jit.DeviceCPU,
-				Slots: 4,
-				Lanes: 4,
+				Kind:     jit.DeviceCPU,
+				Slots:    4,
+				Lanes:    4,
+				ExactDiv: true,
 			},
 			Bandwidth: 1.336e+10,
 			Thread:    6.228e+09,
@@ -319,9 +322,10 @@ var hardware = []Profile{
 		Source: "probe",
 		Device: Device{
 			Device: jit.Device{
-				Kind:  jit.DeviceCPU,
-				Slots: 14,
-				Lanes: 8,
+				Kind:     jit.DeviceCPU,
+				Slots:    14,
+				Lanes:    8,
+				ExactDiv: true,
 			},
 			Bandwidth: 5.565e+10,
 			Thread:    1.604e+10,
@@ -403,9 +407,10 @@ var hardware = []Profile{
 		Source: "probe",
 		Device: Device{
 			Device: jit.Device{
-				Kind:  jit.DeviceCPU,
-				Slots: 4,
-				Lanes: 8,
+				Kind:     jit.DeviceCPU,
+				Slots:    4,
+				Lanes:    8,
+				ExactDiv: true,
 			},
 			Bandwidth: 2.731e+10,
 			Thread:    1.268e+10,
@@ -488,9 +493,10 @@ var hardware = []Profile{
 		Source: "probe",
 		Device: Device{
 			Device: jit.Device{
-				Kind:  jit.DeviceGPU,
-				Slots: 221184,
-				Lanes: 32,
+				Kind:     jit.DeviceGPU,
+				Slots:    221184,
+				Lanes:    32,
+				ExactDiv: true,
 			},
 			Units:     108,
 			Bandwidth: 1.366e+12,
@@ -558,9 +564,10 @@ var hardware = []Profile{
 		Source: "probe",
 		Device: Device{
 			Device: jit.Device{
-				Kind:  jit.DeviceGPU,
-				Slots: 30720,
-				Lanes: 32,
+				Kind:     jit.DeviceGPU,
+				Slots:    30720,
+				Lanes:    32,
+				ExactDiv: true,
 			},
 			Units:     20,
 			Bandwidth: 1.191e+11,
@@ -628,9 +635,10 @@ var hardware = []Profile{
 		Source: "probe",
 		Device: Device{
 			Device: jit.Device{
-				Kind:  jit.DeviceGPU,
-				Slots: 270336,
-				Lanes: 32,
+				Kind:     jit.DeviceGPU,
+				Slots:    270336,
+				Lanes:    32,
+				ExactDiv: true,
 			},
 			Units:     132,
 			Bandwidth: 2.862e+12,
@@ -698,9 +706,10 @@ var hardware = []Profile{
 		Source: "probe",
 		Device: Device{
 			Device: jit.Device{
-				Kind:  jit.DeviceGPU,
-				Slots: 89088,
-				Lanes: 32,
+				Kind:     jit.DeviceGPU,
+				Slots:    89088,
+				Lanes:    32,
+				ExactDiv: true,
 			},
 			Units:     58,
 			Bandwidth: 2.379e+11,
@@ -768,9 +777,10 @@ var hardware = []Profile{
 		Source: "probe",
 		Device: Device{
 			Device: jit.Device{
-				Kind:  jit.DeviceGPU,
-				Slots: 40960,
-				Lanes: 32,
+				Kind:     jit.DeviceGPU,
+				Slots:    40960,
+				Lanes:    32,
+				ExactDiv: true,
 			},
 			Units:     40,
 			Bandwidth: 2.136e+11,
@@ -838,9 +848,10 @@ var hardware = []Profile{
 		Source: "probe",
 		Device: Device{
 			Device: jit.Device{
-				Kind:  jit.DeviceGPU,
-				Slots: 163840,
-				Lanes: 32,
+				Kind:     jit.DeviceGPU,
+				Slots:    163840,
+				Lanes:    32,
+				ExactDiv: true,
 			},
 			Units:     80,
 			Bandwidth: 8.711e+11,

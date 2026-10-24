@@ -6743,3 +6743,45 @@ row where the composer's reads two.
   registers to it: gate/up 32 registers, no spill, seven a multiprocessor.
   Unlike `.maxnreg 32` on every kernel, it asks only what the grid needs,
   and nothing of a launch that fits the device in one wave already.
+- **A phase past its last unit.** The norm's int8 phase deals 256 units
+  over a workgroup of 1024 threads, and the warps past the last unit
+  computed clamped copies of it: about 450 instructions a thread
+  (`cuobjdump -sass`, sm_70) in 32 warps for 8 warps' work. Where the units
+  come in whole warps and the phase forms no exchange through workgroup
+  slots, the phase is now its guard's -- the unit is the spread loop's
+  iteration plus the guard's, so the lowering homes it there -- and those
+  warps branch past it; `Prologue` does the same for a producer of threads.
+  The norm is bound by its chain of latencies, not by issue, so its own
+  time moved little (nvprof, 6.53-6.77 to 6.56 us), while the graphed
+  decode's device time went 1886.5 to 1864.2 us a token (V100, CUDA,
+  Llama-3.2-1B, `speed` tg128, three interleaved rounds).
+- **The head formed inside the first token.** The tier's placement prewarm
+  forms every composed block and the head, but a model prepares its head
+  after placing its blocks, so the head formed, its capture abandoned,
+  inside the first decode step: 20-37 ms of an 8-token decode's 38-51
+  (main's 15). `PrepHead` forms it now, as it builds the tier's own head
+  kernels: the 8-token decode 17 ms; 264 tokens 545-548 ms against main's
+  476-485 (V100, CUDA, Llama-3.2-1B, `run`).
+- **Exact division where the device has it.** The int8 form's scale
+  amax/127 and inverse 1/d were the integer routines on every GPU, about
+  100 instructions a thread, because one profile serves backends whose
+  division is not the IEEE quotient (SPIR-V's OpFDiv is allowed 2.5 ulp).
+  `jit.Device.ExactDiv` states it per device: PTX's div.rn and a CPU's
+  division are the quotient the routines compute, and the tier states it
+  from the backend (`kernels.DivExact`). Device time 1861.9 to 1821.8 us a
+  token, same box and rounds.
+- **An element read twice.** A window's amax and its codes reached each
+  element of the norm's output through the host's value at two index
+  expressions of one place, 33 loads where 17 do. The host's values are
+  named by their place's value at every unit, as a member's are: 1821.8 to
+  1795.7 us a token. Main took 1587.6 in the same rounds: the composer at
+  0.884 of it in device time, tg128 519-527 tok/s against 585-592.
+- **The norm as a prologue, again.** With the phase skipped by the warps
+  past its last unit, the norm inside q/k/v and gate/up took 1878.8 us a
+  token against 1867.5 apart; after exact division and single loads, 1778.7
+  against 1799.7. The second is faster, but its greedy tokens part from the
+  norm-apart form's at the sixth decode token, and the serving gate's worst
+  distance to the float reference on Llama-3.2-1B rose from 0.00727 to
+  0.0321 (main's tier 0.0137) while staying inside the gate's bound. Kept
+  refused until that is explained: the reduction's order over gate/up's
+  256-thread workgroups, or a defect in a reduction merged into a consumer.

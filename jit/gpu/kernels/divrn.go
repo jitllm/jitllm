@@ -33,6 +33,11 @@ func divRN(b *ir.Builder, num, den ir.Value) ir.Value {
 	return roundQuotient(b, num, den, b.Div(ir.F32, num, den), divRNReach)
 }
 
+// DivExact reports whether ir.OpDiv is the IEEE quotient on the backend of
+// api: PTX's div.rn is. SPIR-V's OpFDiv is allowed 2.5 ulp, and Metal's
+// division is the library's math mode's.
+func DivExact(api string) bool { return api == "ptx" }
+
 // div127 is x/127 correctly rounded, for x positive: the quantizer's scale,
 // in integers and without the backend's division. The mantissa ma times 256
 // over 127 is a 25- or 26-bit integer quotient q, and its bits below the 24

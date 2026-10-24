@@ -36,6 +36,10 @@ type Device struct {
 	// ISA, on a CPU, is the instruction sets it executes, as jit/x86 names
 	// them (x86.ISA's bits).
 	ISA uint64
+	// ExactDiv is a device whose float division is correctly rounded, as
+	// IEEE 754 states it: a CPU's, PTX's div.rn. The int8 form's scale and
+	// inverse are divisions there, and made exact in integers where not.
+	ExactDiv bool
 }
 
 // Lowered is a kernel in its backend's form.
@@ -59,8 +63,9 @@ type Context struct {
 	Step    Step
 	Int8    *Int8Form
 	// unsignedDot is whether this device's byte dot takes an unsigned
-	// operand (Int8Form.UnsignedDot).
-	unsignedDot bool
+	// operand (Int8Form.UnsignedDot), exactDiv whether its division is
+	// correctly rounded (Device.ExactDiv).
+	unsignedDot, exactDiv bool
 	// Rotaries is the part's segment's rotaries, each a table of the step,
 	// the first named the model's RotaryBase'th (tableName).
 	Rotaries   []graph.Rotary
@@ -135,7 +140,8 @@ func (r *Registry) decompose(f Model, part Part, of int, s Step, d Device) ([]Pr
 // context is a decomposition's context for graph g of a part of kind k on
 // device d, the device's int8 form at the step's window.
 func (r *Registry) context(g *graph.Graph, k PartKind, f map[jlm.Role]jlm.Type, rots []graph.Rotary, s Step, d Device) *Context {
-	c := &Context{Graph: g, Part: k, Formats: f, Step: s, Int8: r.Profiles[d.Kind].Int8, Rotaries: rots, formed: map[graph.ValueID]bool{}}
+	c := &Context{Graph: g, Part: k, Formats: f, Step: s, Int8: r.Profiles[d.Kind].Int8, Rotaries: rots, exactDiv: d.ExactDiv,
+		formed: map[graph.ValueID]bool{}}
 	if q := c.Int8; q != nil && s.ActWindow > 0 && s.ActWindow != q.Window {
 		w := *q
 		w.Window = s.ActWindow

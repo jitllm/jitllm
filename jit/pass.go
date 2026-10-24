@@ -20,16 +20,14 @@ type Profile struct {
 // Int8Form is the int8 form a device keeps of a block's contraction inputs
 // produced by a row's op: windows of Window by an exact scale amax/127,
 // codes rounded half away from zero packed Word to a word, the codes' sums
-// a Sums. ExactDiv is a device whose float division is correctly rounded,
-// as IEEE 754 states it: the scale and its inverse are divisions there,
-// and are made exact in integers on a device whose division is not.
+// a Sums: the scale and its inverse divisions where the device's are exact
+// (Device.ExactDiv), made exact in integers where they are not.
 // UnsignedDot is the instruction sets (Device.ISA's bits) under which the
 // device's byte dot reads one operand's bytes unsigned and sums them
 // without saturating (OpDot4U), 0 for none: a signed weight's dot is there
 // its bytes offset by 128, less 128 times the input codes' sum.
 type Int8Form struct {
 	Window, Word, Sums int
-	ExactDiv           bool
 	UnsignedDot        uint64
 }
 

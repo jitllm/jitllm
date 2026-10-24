@@ -46,6 +46,11 @@ func TestDivRNIsTheIEEEQuotient(t *testing.T) {
 				t.Fatalf("%s: %d of %d quotients are not the IEEE one (first %g/%g: got %g, want %g)", d.API(), bad,
 					n, num[first], den[first], math.Float32frombits(got[first]), num[first]/den[first])
 			}
+			// DivExact is what the composer forms the int8 form's divisions
+			// on: a backend it names returns the IEEE quotient itself.
+			if DivExact(d.API()) && hwBad > 0 {
+				t.Fatalf("%s: DivExact, but the backend's own division differs in %d of %d quotients", d.API(), hwBad, n)
+			}
 			t.Logf("%s: %d quotients bit for bit; the backend's own division differs in %d", d.API(), n, hwBad)
 		})
 	}
