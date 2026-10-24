@@ -7,8 +7,9 @@ import (
 )
 
 // Coarsen runs a chain of maps and reductions, each after the first reading
-// what an earlier one wrote, as one thread a Unit of the chain's finest
-// elements. A member is computed where its value is read, from its own
+// what an earlier one wrote, as one thread a unit of the chain's finest
+// elements: Unit, or more where a reduction's group would span more than a
+// warp's lanes -- the unit that keeps every combine within one warp. A member is computed where its value is read, from its own
 // kernel's nodes at the reading coordinates: a finer one at each element of
 // the thread's unit, a coarser reduction as each thread's partial over its
 // own terms exchanged through a workgroup slot and combined over its group's
@@ -25,7 +26,7 @@ func (Coarsen) Name() string { return "coarsen" }
 func (c Coarsen) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	out := append([]*Kernel(nil), ks...)
 	for i := 0; i < len(out); i++ {
-		n := c.chain(out, i)
+		n, unit := c.chain(out, i, d.Lanes)
 		if n == 0 {
 			continue
 		}
@@ -33,7 +34,7 @@ func (c Coarsen) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if i > 0 && out[i-1].Work && out[i-1].Part == out[i].Part {
 			host = out[i-1]
 		}
-		m, ok := c.form(out[i:i+n], host)
+		m, ok := Coarsen{Unit: unit}.form(out[i:i+n], host, d.Lanes)
 		if !ok {
 			continue
 		}
@@ -121,11 +122,11 @@ func readsMatrix(k *Kernel) bool {
 	return false
 }
 
-// chain is how many kernels from i form a chain: naive maps and reductions
+// chain is how many kernels from i form a chain -- naive maps and reductions
 // of one part, none reading a weight matrix, each after the first reading
-// what an earlier one wrote, one of them at the unit's granularity. Zero for
-// none.
-func (c Coarsen) chain(ks []*Kernel, i int) int {
+// what an earlier one wrote, one of them at the unit's granularity or a
+// divisor of it -- and the unit it forms at. Zero for none.
+func (c Coarsen) chain(ks []*Kernel, i, lanes int) (int, int) {
 	written := map[Operand]bool{}
 	j := i
 	for ; j < len(ks); j++ {
@@ -154,22 +155,35 @@ func (c Coarsen) chain(ks []*Kernel, i int) int {
 		}
 	}
 	if j-i < 2 {
-		return 0
+		return 0, 0
 	}
 	E := 0
 	for _, k := range ks[i:j] {
 		E = max(E, terms(k))
 	}
-	for _, k := range ks[i:j] {
-		if E/k.Elements() == c.Unit {
-			return j - i
+	unit := c.Unit
+	if lanes > 1 {
+		for _, k := range ks[i:j] {
+			if g := E / k.Elements(); k.Kind == PrimReduce && g > unit*lanes && g%lanes == 0 {
+				unit = g / lanes
+			}
 		}
 	}
-	return 0
+	for _, k := range ks[i:j] {
+		if g := E / k.Elements(); g <= unit && unit%g == 0 && g%c.Unit == 0 {
+			return j - i, unit
+		}
+	}
+	return 0, 0
 }
 
 type coarse struct {
-	c       Coarsen
+	c     Coarsen
+	lanes int
+	// guard, where set, is the loop in which a host's phase stores: the
+	// units dealt over the workgroup, the threads past the last one clamped
+	// to it and left out of the guard. -1 where they store the last unit too.
+	guard   int
 	m       *Kernel
 	members []*Kernel
 	E, T    int
@@ -182,7 +196,7 @@ type coarse struct {
 	err     error
 }
 
-func (c Coarsen) form(members []*Kernel, host *Kernel) (*Kernel, bool) {
+func (c Coarsen) form(members []*Kernel, host *Kernel, lanes int) (*Kernel, bool) {
 	E := 0
 	for _, k := range members {
 		E = max(E, terms(k))
@@ -198,7 +212,7 @@ func (c Coarsen) form(members []*Kernel, host *Kernel) (*Kernel, bool) {
 		}
 	}
 	T := E / U
-	k := &coarse{c: c, members: members, E: E, T: T, memo: map[string]int{}, values: map[int][]uint32{}}
+	k := &coarse{c: c, members: members, E: E, T: T, lanes: lanes, guard: -1, memo: map[string]int{}, values: map[int][]uint32{}}
 	if host != nil {
 		// The phase reads what the host's whole row wrote: one workgroup.
 		if host.Elements() != 1 || T > host.Group {
@@ -212,10 +226,36 @@ func (c Coarsen) form(members []*Kernel, host *Kernel) (*Kernel, bool) {
 				k.hostVal[host.Bufs[s.Buf].Operand] = s
 			}
 		}
-		th := k.m.add(Node{Op: OpThread, Type: ir.U32})
-		k.u = k.m.bin(OpMin, ir.U32, k.m.bin(OpAdd, ir.U32, th, k.m.u32(0)), k.m.u32(T-1))
+		if lanes > 1 && T%lanes == 0 {
+			// The units dealt over the workgroup in whole warps: every
+			// thread computes its unit, a surplus one the last, and only a
+			// real one stores -- so the warps past the last unit hold only
+			// copies, and a window combines within a warp by its lanes.
+			sp := k.m.loop(T, -1)
+			k.m.Loops[sp].Spread = true
+			it := k.m.add(Node{Op: OpIter, At: sp, Type: ir.U32})
+			k.u = k.m.bin(OpMin, ir.U32, it, k.m.u32(T-1))
+			k.guard = k.m.loop(1, sp)
+			in := k.m.add(Node{Op: OpLess, Type: ir.Pred, A: it, B: k.m.u32(T)})
+			count := k.m.add(Node{Op: OpSelect, Type: ir.U32, A: in, B: k.m.u32(1), C: k.m.u32(0)})
+			k.m.Loops[k.guard].Count, k.m.Loops[k.guard].Kept = count+1, true
+		} else {
+			th := k.m.add(Node{Op: OpThread, Type: ir.U32})
+			k.u = k.m.bin(OpMin, ir.U32, k.m.bin(OpAdd, ir.U32, th, k.m.u32(0)), k.m.u32(T-1))
+		}
 	} else {
-		k.m = &Kernel{Name: "chain", Kind: members[0].Kind, Space: []int{T}, Group: members[0].Group, Part: members[0].Part, Of: members[0].Of}
+		// The widest workgroup, in whole warps, the units fill: no thread is
+		// clamped, so a window combines within a warp by its lanes.
+		group := members[0].Group
+		if lanes > 1 && group > 0 && T%group != 0 {
+			for g := group - lanes; g >= lanes; g -= lanes {
+				if T%g == 0 && g%lanes == 0 {
+					group = g
+					break
+				}
+			}
+		}
+		k.m = &Kernel{Name: "chain", Kind: members[0].Kind, Space: []int{T}, Group: group, Part: members[0].Part, Of: members[0].Of}
 		k.u = k.m.add(Node{Op: OpCoord, A: 0, Type: ir.U32})
 	}
 	k.local = k.m.add(Node{Op: OpLocal, Type: ir.U32, A: k.u})
@@ -227,7 +267,7 @@ func (c Coarsen) form(members []*Kernel, host *Kernel) (*Kernel, bool) {
 			for _, idx := range k.indices(n) {
 				coords := k.m.decode(idx, n.Space)
 				v := k.produce(n, s, coords)
-				ns := Store{Buf: k.m.bufLike(n.Bufs[s.Buf]), At: -1}
+				ns := Store{Buf: k.m.bufLike(n.Bufs[s.Buf]), At: k.guard}
 				ns.Val = v
 				leaf := k.coordLeaf(n, coords)
 				if s.Ax != nil {
@@ -533,11 +573,32 @@ func (k *coarse) reduce(n *Kernel, s Store, coords []int, g int) int {
 		}
 		acc = m.bin(comb, t, acc, v)
 	}
-	at := m.bin(OpMul, ir.U32, m.bin(OpDiv, ir.U32, k.local, m.u32(slots)), m.u32(slots))
 	init := -1
 	if start >= 0 {
 		init = m.add(n.Nodes[n.Nodes[f].B])
 	}
+	// A group of slots inside one warp -- consecutive lanes, aligned to the
+	// group -- is combined by an xor butterfly that leaves the total in
+	// every lane: no workgroup memory and no barrier. Only where no thread is
+	// clamped to the last element: the exchange reads a clamped thread's
+	// group by its clamped place, where it finds the real group's slots; a
+	// butterfly pairs it by lane, with copies of one slot, and its total
+	// would land on the last output beside the real one.
+	whole := k.T%m.Group == 0
+	if k.host != nil {
+		whole = k.T == m.Group || k.guard >= 0
+	}
+	if whole && k.lanes > 1 && slots&(slots-1) == 0 && k.lanes%slots == 0 {
+		v := acc
+		for s := 1; s < slots; s *= 2 {
+			v = m.bin(comb, t, v, m.add(Node{Op: OpShuffle, Type: t, A: v, Imm: int64(s)}))
+		}
+		if init >= 0 {
+			v = m.bin(comb, t, init, v)
+		}
+		return v
+	}
+	at := m.bin(OpMul, ir.U32, m.bin(OpDiv, ir.U32, k.local, m.u32(slots)), m.u32(slots))
 	return m.add(Node{Op: OpExchange, Type: ir.F32, A: acc, B: at, C: init, Imm: int64(slots), At: int(comb)})
 }
 

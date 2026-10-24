@@ -21,6 +21,11 @@ func (g gpuLowering) Lower(n *Kernel, d Device) (Lowered, error) {
 	}
 	e := &lowerer{n: n, b: ir.New(entryName(n.Name), [3]int{n.Group, 1, 1}), poison: g.Poison}
 	k, err := e.run()
+	if err == nil {
+		// Held to the IR's invariants where it is formed, not first where a
+		// backend compiles it.
+		err = k.Validate()
+	}
 	return Lowered{GPU: k}, err
 }
 
@@ -49,12 +54,14 @@ type lowerer struct {
 	home   []int
 	coords []ir.Value
 	flat   ir.Value
-	tid    ir.Value
 	shared map[int]ir.Value
 	open   []int
 	iter   map[int]ir.Value
 	phi    map[int]ir.Value
 	done   []bool
+	// stored marks each store emitted: one no loop reached is a kernel
+	// the lowering cannot place, never a store left out.
+	stored []bool
 	err    error
 }
 
@@ -62,6 +69,7 @@ func (e *lowerer) run() (*ir.Kernel, error) {
 	n, b := e.n, e.b
 	e.val = make([]ir.Value, len(n.Nodes))
 	e.done = make([]bool, len(n.Loops))
+	e.stored = make([]bool, len(n.Stores))
 	e.iter, e.phi, e.shared = map[int]ir.Value{}, map[int]ir.Value{}, map[int]ir.Value{}
 	e.homes()
 	for i, bf := range n.Bufs {
@@ -122,17 +130,24 @@ func (e *lowerer) run() (*ir.Kernel, error) {
 			}
 		}
 	}
-	for _, st := range n.Stores {
+	for si, st := range n.Stores {
 		switch {
 		case st.At >= 0:
-			if !e.done[st.At] {
-				e.lowerLoop(st.At)
+			// A store in a nested loop is its outermost loop's.
+			if c := e.childOf(st.At, -1); !e.done[c] {
+				e.lowerLoop(c)
 			}
 		case st.Barrier:
 			b.Barrier()
 		default:
 			ix, v := e.storeIndex(st), e.get(st.Val)
 			b.Store(e.params[st.Buf], ix, v, 0)
+			e.stored[si] = true
+		}
+	}
+	for si, st := range n.Stores {
+		if !st.Barrier && !st.Run && !e.stored[si] {
+			e.fail("store %d (at loop %d) was never emitted", si, st.At)
 		}
 	}
 	if e.err != nil {
@@ -325,12 +340,10 @@ func (e *lowerer) storeIndex(st Store) ir.Value {
 	return e.get(st.Ix)
 }
 
-func (e *lowerer) thread() ir.Value {
-	if e.tid == 0 {
-		e.tid = e.b.TID()
-	}
-	return e.tid
-}
+// thread is the thread's index in its workgroup, read where it is used: a
+// copy kept from the first use would be one a scope made, which the threads
+// that skip the scope never set.
+func (e *lowerer) thread() ir.Value { return e.b.TID() }
 
 // groupReduce is x combined over the workgroup: a butterfly in each
 // subgroup, each subgroup's result to its slot, and a butterfly over the
@@ -457,12 +470,20 @@ func (e *lowerer) innermost() int {
 }
 
 // lowerLoop is loop c: what its trips read that does not change from trip to
-// trip first, then the loop with its folds as phis and its stores.
+// trip first, then the loop with its folds as phis and its stores. A
+// run-once loop every thread of the workgroup takes or skips together -- a
+// share's guard -- is a scope instead: what its body reads is made inside it
+// where the body first asks, and forgotten when it closes, so nothing it
+// reads lives across the loops beside it, and a value of the thread's or the
+// workgroup's index alone stays one the device can make again where it uses
+// it.
 func (e *lowerer) lowerLoop(c int) {
 	n, b := e.n, e.b
 	folds := n.foldsOf(c)
+	l := n.Loops[c]
+	scope := l.Uniform && l.Kept && l.Trip == 1 && len(folds) == 0
 	for _, i := range e.body(c) {
-		if h := e.home[i]; !e.inside(h, c) {
+		if h := e.home[i]; !e.inside(h, c) && !scope {
 			e.get(i)
 		}
 	}
@@ -470,7 +491,6 @@ func (e *lowerer) lowerLoop(c int) {
 	for j, f := range folds {
 		inits[j] = e.get(n.Nodes[f].B)
 	}
-	l := n.Loops[c]
 	var count ir.Value
 	if l.Count > 0 {
 		count = e.get(l.Count - 1)
@@ -495,8 +515,14 @@ func (e *lowerer) lowerLoop(c int) {
 	for j, f := range folds {
 		steps[j] = e.get(n.Nodes[f].A)
 	}
-	for _, st := range n.Stores {
+	for si, st := range n.Stores {
 		switch {
+		case st.At != c && st.At >= 0 && n.within(st.At, c):
+			// A store in a loop inside c: that loop, where its first
+			// store falls in c's trip.
+			if d := e.childOf(st.At, c); !e.done[d] {
+				e.lowerLoop(d)
+			}
 		case st.At != c || st.Run:
 		case st.Barrier:
 			// Only where every thread of the workgroup takes the trip.
@@ -506,6 +532,7 @@ func (e *lowerer) lowerLoop(c int) {
 		default:
 			ix, v := e.storeIndex(st), e.get(st.Val)
 			b.Store(e.params[st.Buf], ix, v, 0)
+			e.stored[si] = true
 		}
 	}
 	for j, f := range folds {
@@ -515,11 +542,20 @@ func (e *lowerer) lowerLoop(c int) {
 	b.EndLoop()
 	e.open = e.open[:len(e.open)-1]
 	for i := range e.val {
-		if e.inside(e.home[i], c) {
+		if e.inside(e.home[i], c) || scope && saved[i] == 0 {
 			e.val[i] = saved[i]
 		}
 	}
 	e.done[c] = true
+}
+
+// childOf is the loop holding loop h that sits directly in c (-1: at the
+// top), h itself where it does.
+func (e *lowerer) childOf(h, c int) int {
+	for e.n.Loops[h].Parent != c {
+		h = e.n.Loops[h].Parent
+	}
+	return h
 }
 
 // inside reports whether loop h is c or sits in it.

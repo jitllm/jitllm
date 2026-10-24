@@ -32,6 +32,7 @@ func gpuProfile() Profile {
 		LiveRows{},
 		WorkRow{Group: 1024, Heads: 32},
 		Coarsen{Unit: 4},
+		DeadStores{},
 		Parts{Kinds: []PrimKind{PrimMap}},
 		Split{Slots: 30720, Max: 32, Block: 32, Kinds: contract},
 		Blocks{Size: 32, Kinds: contract},
@@ -43,6 +44,7 @@ func gpuProfile() Profile {
 		FMA{},
 		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimMap, Unrolled: true}}},
 		Siblings{},
+		Prologue{Words: 12 << 10},
 		Affine{},
 	}}
 }

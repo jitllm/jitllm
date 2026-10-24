@@ -6603,3 +6603,87 @@ launches a block against 9, about 140 us against 90.
   at all: their windows combine through a workgroup exchange and its barrier,
   which a loop whose trips differ by thread cannot hold, where the tier's
   quantize combines a window in one warp's shuffles.
+
+### Where a decode token's time went, against the tier's
+
+Same card, Llama-3.2-1B Q4_K_M, graphs off, per decode token by kernel name
+from `nvprof --print-gpu-summary`: a 264-token run less an 8-token run, so
+the startup's trial kernels cancel. That holds for the composer's kernels,
+whose names the trials never use. The tier's trial kernels share their
+decode kernels' names and their count differs from run to run: its column is
+the run whose differences came out at 16.4 launches a token for each
+per-block kernel, and a second run's, which did not (12.2 for `gu_nin`), is
+not quoted.
+
+| site, a block | tier | composer |
+|---|---|---|
+| attention norm and q/k/v | `matvecseg_…_nin`, 12.8 us | norm + int8 form 6.8, q/k/v 13.4 |
+| FFN norm and gate/up | `…_gu_nin`, 30.5 | norm + int8 form 6.8, gate/up 30.0 |
+| attention (about 140 keys) | rope 2.8, `flashkvpaged` 5.5, merge 1.8 | rope 3.0, one stage 9.8, merge 2.4 |
+| attention output | `…_qin`, 7.3 | int8 form 4.2, output projection 7.6 |
+| activation and down | quantize 2.9, down 14.7-24.3 | act x up + int8 form 5.7, down 20 |
+
+The tier runs both norms as its matvec's prologue (`kernels.ActIn`) and its
+gate/up kernel applies the activation, so its quantize before down reads one
+row where the composer's reads two.
+
+- **The k-quant window.** Every k-quant model quantizes its activations over
+  a 256-element window (`cpu.WideActWindow`: the host hoists the scale, and
+  the device must quantize as the host does, which writes the same KV
+  cache). At four elements a thread a window spans 64 threads, two warps, so
+  the composer combined it through a 64-slot workgroup exchange -- a
+  barrier and 64 workgroup-memory loads in every thread -- and the shuffle
+  combine only ever applied to 32-element windows. `Coarsen` takes the unit
+  that keeps every combine within one warp (eight elements at 256), and a
+  chain's workgroup is the widest in whole warps that its units fill (64
+  for TinyLlama's 704), so no lane is clamped into a butterfly.
+- **Dead float rows.** The norms' float rows and the activation's product
+  were written and never read once their consumers read the int8 form;
+  `DeadStores` drops a value's store no kernel reads and the graph does not
+  hand back, and runs again after `Coarsen`.
+- **Stores in a nested loop.** A host phase dealt as a spread loop with its
+  stores in a guard of the real units left the GPU lowering with stores it
+  never reached: it emitted the spread loop and skipped the guard's stores,
+  and the kernel lowered without them. It lowers a store's loop inside its
+  parent now, and fails on a store it never emits; the front-end test lowers
+  every GPU kernel of the five models, and fails on that violation.
+- **A producer in its consumer's workgroups, again** (`jit.Prologue`, with
+  the shuffle combines and guarded host phases above). Every producer site
+  of a Llama block merged -- q/k/v, gate/up, the output projection and down,
+  seven launches a block where there were eleven -- and the decode token's
+  kernels took 2.44 ms against 2.33 without it (385.7 tok/s against 396.6).
+  By site: q/k/v with the norm 25.3 us against 6.5 + 13.4 apart, gate/up
+  with the norm 39.8 against 39.0, the output projection and down with the
+  int8 form 19.0 against 19.5. A norm's reduction over the row is paid in
+  every consumer workgroup before its matvec starts, and gate/up runs 512
+  of them; the pass refuses a producer with a reduction over the whole
+  workgroup. The int8 forms it keeps: interleaved with graphs on (the
+  shipping launch), eight rounds, the composer read 1.022 of itself without
+  them, inside an A/A control of 0.987 and IQR/median 0.037 -- unresolved,
+  not a regression, so kept and not quoted.
+- **Registers and the second wave.** The composer's q/k/v launch ran 96
+  workgroups of 1024 threads at 40 registers (`ptxas -v`, sm_70): one
+  workgroup a multiprocessor, so 96 workgroups on 80 multiprocessors ran
+  in two waves, where the tier's `matvecseg` holds 32 and runs them in one.
+  Each projection alone was 32; a `Siblings` share wrapped alone was 44.
+  The share's thread index and coordinates were made through its guard's
+  iteration (thread + iter), which kept them in registers where the device
+  re-reads `%tid.x` and `%ctaid.x` for free. The lowering takes a run-once
+  uniform loop as a scope instead -- what the body reads is made inside it
+  on demand and forgotten when it closes -- and the shares read the thread
+  index plainly: q/k/v 32 registers, gate/up 44 to 32. A register cap does
+  not do it: `.maxnreg 32` on every kernel spilled, q/k/v and gate/up 22.9
+  to 32.8 us, the attention stage 9.8 to 24.2. Loading a share's buffer
+  pointers inside its guard changed nothing (ptxas rematerializes them),
+  nor did making constants at their use, and both were taken out.
+- **A value kept from its first use.** The scope rule passed on Vulkan and
+  faulted on CUDA ("an illegal memory access", sm_70 and sm_86): the
+  lowering kept the thread index from the first place a kernel asked for
+  it, which under the rule was inside the first share, so every later share
+  read a register its own workgroups never set. Vulkan's robust buffer
+  access clamped the reads it made of it. The index is read where it is
+  used now, and `ir.Validate` holds every value to its loop -- one made
+  inside a loop's body is not read after the loop closes, its phis aside --
+  where the composer's lowering forms a kernel, not first where a backend
+  compiles it. Every kernel of `jit/gpu/kernels` keeps the rule; the
+  front-end test fails with it on the kept index.

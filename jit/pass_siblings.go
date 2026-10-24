@@ -13,9 +13,9 @@ import "github.com/jitllm/jitllm/jit/ir"
 // A kernel joins when its element is a workgroup of the first's size, it
 // is of the first's kind, it carries no positions, heads or live rows, it
 // reads no index of the whole launch, and every store it makes is its
-// workgroup's own, outside its loops. A share's thread index is its guard's
-// too, so what it derives is made inside the guard and dies there: the
-// launch holds one share's values at a time.
+// workgroup's own, outside its loops. A guard is a scope to the lowering:
+// what a share reads is made inside its guard and dies there, so the launch
+// holds one share's values at a time.
 type Siblings struct{}
 
 func (Siblings) Name() string { return "siblings" }
@@ -129,21 +129,17 @@ func (s Siblings) merge(ms []*Kernel) *Kernel {
 		count := k.add(Node{Op: OpSelect, Type: ir.U32, A: under, B: k.add(Node{Op: OpSelect, Type: ir.U32, A: below, B: zero, C: one}), C: zero})
 		g := k.loop(1, -1)
 		k.Loops[g].Count, k.Loops[g].Kept, k.Loops[g].Uniform = count+1, true, true
-		// The share's element, through the guard's one trip: every node
-		// that reads a coordinate is the guard's, never hoisted past it.
-		iter := k.add(Node{Op: OpIter, At: g, Type: ir.U32})
-		local := k.bin(OpAdd, ir.U32, k.bin(OpSub, ir.U32, e, lo), iter)
+		local := k.bin(OpSub, ir.U32, e, lo)
 		k.Stores = append(k.Stores, Store{Run: true, At: g})
-		s.share(k, m, g, local, iter)
+		s.share(k, m, g, local)
 		off += n
 	}
 	return k
 }
 
-// share is kernel m in loop g of k, its element local and iter g's
-// iteration: its coordinates unflattened from local, its thread index
-// offset by iter, its loops inside g, its stores at g's trip.
-func (Siblings) share(k, m *Kernel, g, local, iter int) {
+// share is kernel m in loop g of k, its element local: its coordinates
+// unflattened from local, its loops inside g, its stores at g's trip.
+func (Siblings) share(k, m *Kernel, g, local int) {
 	coord := make([]int, len(m.Space))
 	rest := local
 	for a := len(m.Space) - 1; a >= 0; a-- {
@@ -196,12 +192,8 @@ func (Siblings) share(k, m *Kernel, g, local, iter int) {
 			return nodeOf[i]
 		}
 		nd := m.Nodes[i]
-		switch nd.Op {
-		case OpCoord:
+		if nd.Op == OpCoord {
 			nodeOf[i] = coord[nd.A]
-			return nodeOf[i]
-		case OpThread:
-			nodeOf[i] = k.bin(OpAdd, nd.Type, k.add(nd), iter)
 			return nodeOf[i]
 		}
 		if nd.Op == OpIter || nd.Op == OpFold {

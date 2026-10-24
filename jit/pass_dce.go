@@ -1,7 +1,9 @@
 package jit
 
-// DeadStores drops the stores of a decomposition's temporaries that no
-// kernel of the part reads.
+// DeadStores drops the stores that no kernel of the part reads: of a
+// decomposition's temporaries, and of the graph's values it does not hand
+// back -- a norm's float row once its consumers read the int8 form a
+// producer makes from the row's inputs.
 type DeadStores struct{}
 
 func (DeadStores) Name() string { return "deadstores" }
@@ -14,12 +16,17 @@ func (p DeadStores) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				read[k.Bufs[nd.Buf].Operand] = true
 			}
 		}
+		for _, l := range k.Loops {
+			for _, c := range l.Cursors {
+				read[k.Bufs[c.Buf].Operand] = true
+			}
+		}
 	}
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		var keep []Store
 		for _, s := range k.Stores {
 			if !s.Barrier && !s.Run {
-				if o := k.Bufs[s.Buf].Operand; o.Temp && !read[o] && k.Bufs[s.Buf].Kind != BufShared {
+				if o := k.Bufs[s.Buf].Operand; (o.Temp || o.Kind == OperandValue && !o.Out) && !read[o] && k.Bufs[s.Buf].Kind != BufShared {
 					continue
 				}
 			}

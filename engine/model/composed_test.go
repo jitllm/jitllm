@@ -85,90 +85,93 @@ func TestComposedBlocksServe(t *testing.T) {
 				toks[i] = int32((int(ids[i%len(ids)])*7 + i) % m.Vocab.Size())
 			}
 			for _, dev := range stepDevices() {
-				for _, noGraph := range []bool{false, true} {
-					name := dev
-					if noGraph {
-						name += "/no graph"
-					}
-					want, _, _ := composedDecode(t, m, dev, ids, toks, 0, noGraph, false)
-					ref, _, _ := composedDecode(t, m, dev, ids, toks, tier.ComposedBlock|tier.ComposedHead, noGraph, true)
-					for _, a := range arms {
-						t.Run(name+"/"+a.name, func(t *testing.T) {
-							got, st, headOn := composedDecode(t, m, dev, ids, toks, a.parts, noGraph, false)
-							// Every part the arm asks for served, and none declined: a
-							// head the device does not hold (it did not fit beside the
-							// blocks) is named, not demanded.
-							served, _, unasked := st.ServedPart(a.parts)
-							for _, k := range []tier.Parts{tier.ComposedBlock, tier.ComposedHead} {
-								if a.parts&k == 0 {
-									continue
-								}
-								n, d, _ := st.ServedPart(k)
-								if k == tier.ComposedHead && !headOn {
-									t.Logf("the head runs at home here (it does not fit beside the blocks): the composed head has nothing to serve")
-									continue
-								}
-								if n == 0 || d != 0 {
-									t.Fatalf("composed parts %#x served %d steps and were declined %d: the arm did not run them (%s)", uint8(k), n, d, st.LastErr)
-								}
+				// A device the box does not have skips its own subtest, not the model's.
+				t.Run(dev, func(t *testing.T) {
+					for _, noGraph := range []bool{false, true} {
+						want, _, _ := composedDecode(t, m, dev, ids, toks, 0, noGraph, false)
+						ref, _, _ := composedDecode(t, m, dev, ids, toks, tier.ComposedBlock|tier.ComposedHead, noGraph, true)
+						for _, a := range arms {
+							name := a.name
+							if noGraph {
+								name = "no graph/" + a.name
 							}
-							t.Logf("composed %s: %d block steps of the prompt asked for nothing (prefill is not served)", a.name, unasked)
-							worst := 0.0
-							for i := range want {
-								e := logitNMSE(got[i], want[i])
-								if math.IsNaN(e) {
-									t.Errorf("step %d: with the composed %s the logits are not finite", i, a.name)
-								}
-								worst = max(worst, e)
-							}
-							off := 0.0
-							for i := 1; i < len(want); i++ {
-								off = max(off, logitNMSE(got[i], want[i-1]))
-							}
-							if !(off > max(1e-9, 100*worst)) {
-								t.Fatalf("one position off the logits are within %.3g of the tier's, where the arm's worst is %.3g: the comparison cannot see a wrong part", off, worst)
-							}
-							// Step 0 is the prompt's last row, and the prompt is
-							// not served: every arm's first logits are the tier's.
-							if !slices.Equal(got[0], want[0]) || !slices.Equal(ref[0], want[0]) {
-								t.Fatalf("the prompt is not served, yet its logits differ from the tier's: the composed setting reached the prompt")
-							}
-							{
-								var ratios []float64
-								worstTier, worstGot := 0.0, 0.0
-								for i := 1; i < len(ref); i++ {
-									et, eg := logitNMSE(want[i], ref[i]), logitNMSE(got[i], ref[i])
-									if math.IsNaN(et) || math.IsNaN(eg) || !(et > 0) {
-										t.Fatalf("step %d: the float reference is %.3g from the tier and %.3g from the arm: a degenerate reference proves nothing", i, et, eg)
+							t.Run(name, func(t *testing.T) {
+								got, st, headOn := composedDecode(t, m, dev, ids, toks, a.parts, noGraph, false)
+								// Every part the arm asks for served, and none declined: a
+								// head the device does not hold (it did not fit beside the
+								// blocks) is named, not demanded.
+								served, _, unasked := st.ServedPart(a.parts)
+								for _, k := range []tier.Parts{tier.ComposedBlock, tier.ComposedHead} {
+									if a.parts&k == 0 {
+										continue
 									}
-									ratios = append(ratios, eg/et)
-									worstTier, worstGot = max(worstTier, et), max(worstGot, eg)
-								}
-								slices.Sort(ratios)
-								med := ratios[len(ratios)/2]
-								if !(med <= bandRatio) || !(worstGot <= bandWorst*worstTier) {
-									t.Errorf("against the float reference the composed %s is %.3g at the median of the tier's distance and %.3g at its worst against the tier's %.3g (bounds %.1f and %.1fx)",
-										a.name, med, worstGot, worstTier, bandRatio, bandWorst)
-								}
-								t.Logf("composed %s against the float reference: median ratio to the tier's distance %.3f (range %.3f..%.3f), worst %.3g against the tier's %.3g",
-									a.name, med, ratios[0], ratios[len(ratios)-1], worstGot, worstTier)
-							}
-							t.Logf("composed %s: %d part steps served, worst NMSE from the tier %.3g, one position off %.3g", a.name, served, worst, off)
-							// Every buffer filled with NaN at allocation: a
-							// composed kernel reading what nothing wrote shows
-							// as a changed logit.
-							if a.parts == tier.ComposedBlock|tier.ComposedHead {
-								poisoned, _, _ := composedDecode(t, m, dev, ids, toks, a.parts, noGraph, false, tier.WithPoisonScratch(true), tier.WithPoisonKV(true))
-								for i := range got {
-									if !slices.Equal(poisoned[i], got[i]) {
-										t.Fatalf("step %d: with every buffer poisoned the logits change: a composed kernel reads what nothing wrote", i)
+									n, d, _ := st.ServedPart(k)
+									if k == tier.ComposedHead && !headOn {
+										t.Logf("the head runs at home here (it does not fit beside the blocks): the composed head has nothing to serve")
+										continue
+									}
+									if n == 0 || d != 0 {
+										t.Fatalf("composed parts %#x served %d steps and were declined %d: the arm did not run them (%s)", uint8(k), n, d, st.LastErr)
 									}
 								}
-							}
-							ran++
-						})
+								t.Logf("composed %s: %d block steps of the prompt asked for nothing (prefill is not served)", a.name, unasked)
+								worst := 0.0
+								for i := range want {
+									e := logitNMSE(got[i], want[i])
+									if math.IsNaN(e) {
+										t.Errorf("step %d: with the composed %s the logits are not finite", i, a.name)
+									}
+									worst = max(worst, e)
+								}
+								off := 0.0
+								for i := 1; i < len(want); i++ {
+									off = max(off, logitNMSE(got[i], want[i-1]))
+								}
+								if !(off > max(1e-9, 100*worst)) {
+									t.Fatalf("one position off the logits are within %.3g of the tier's, where the arm's worst is %.3g: the comparison cannot see a wrong part", off, worst)
+								}
+								// Step 0 is the prompt's last row, and the prompt is
+								// not served: every arm's first logits are the tier's.
+								if !slices.Equal(got[0], want[0]) || !slices.Equal(ref[0], want[0]) {
+									t.Fatalf("the prompt is not served, yet its logits differ from the tier's: the composed setting reached the prompt")
+								}
+								{
+									var ratios []float64
+									worstTier, worstGot := 0.0, 0.0
+									for i := 1; i < len(ref); i++ {
+										et, eg := logitNMSE(want[i], ref[i]), logitNMSE(got[i], ref[i])
+										if math.IsNaN(et) || math.IsNaN(eg) || !(et > 0) {
+											t.Fatalf("step %d: the float reference is %.3g from the tier and %.3g from the arm: a degenerate reference proves nothing", i, et, eg)
+										}
+										ratios = append(ratios, eg/et)
+										worstTier, worstGot = max(worstTier, et), max(worstGot, eg)
+									}
+									slices.Sort(ratios)
+									med := ratios[len(ratios)/2]
+									if !(med <= bandRatio) || !(worstGot <= bandWorst*worstTier) {
+										t.Errorf("against the float reference the composed %s is %.3g at the median of the tier's distance and %.3g at its worst against the tier's %.3g (bounds %.1f and %.1fx)",
+											a.name, med, worstGot, worstTier, bandRatio, bandWorst)
+									}
+									t.Logf("composed %s against the float reference: median ratio to the tier's distance %.3f (range %.3f..%.3f), worst %.3g against the tier's %.3g",
+										a.name, med, ratios[0], ratios[len(ratios)-1], worstGot, worstTier)
+								}
+								t.Logf("composed %s: %d part steps served, worst NMSE from the tier %.3g, one position off %.3g", a.name, served, worst, off)
+								// Every buffer filled with NaN at allocation: a
+								// composed kernel reading what nothing wrote shows
+								// as a changed logit.
+								if a.parts == tier.ComposedBlock|tier.ComposedHead {
+									poisoned, _, _ := composedDecode(t, m, dev, ids, toks, a.parts, noGraph, false, tier.WithPoisonScratch(true), tier.WithPoisonKV(true))
+									for i := range got {
+										if !slices.Equal(poisoned[i], got[i]) {
+											t.Fatalf("step %d: with every buffer poisoned the logits change: a composed kernel reads what nothing wrote", i)
+										}
+									}
+								}
+								ran++
+							})
+						}
 					}
-				}
+				})
 			}
 		})
 	}

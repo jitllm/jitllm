@@ -541,6 +541,65 @@ func (b *Builder) Done() (*Kernel, error) {
 	return &b.k, nil
 }
 
+// validateScopes holds every value to its loop: one made inside a loop's
+// body is not read once the loop has closed, where a target's structured
+// form has no value for it and a register holds whatever the last trip
+// left, or nothing for a loop that ran none. A loop's own phis are its
+// result and stay readable after it.
+func (k *Kernel) validateScopes() error {
+	end := map[int]int{}
+	var open []int
+	for i, o := range k.Ops {
+		switch o.Kind {
+		case OpLoop:
+			open = append(open, i)
+		case OpEndLoop:
+			if n := len(open); n > 0 {
+				end[open[n-1]] = i
+				open = open[:n-1]
+			}
+		}
+	}
+	home := make([]int, len(k.Ops))
+	open = open[:0]
+	for i, o := range k.Ops {
+		home[i] = -1
+		if n := len(open); n > 0 {
+			home[i] = open[n-1]
+			if o.Kind == OpPhi {
+				home[i] = -1
+				if n > 1 {
+					home[i] = open[n-2]
+				}
+			}
+		}
+		switch o.Kind {
+		case OpLoop:
+			open = append(open, i)
+		case OpEndLoop:
+			if n := len(open); n > 0 {
+				open = open[:n-1]
+			}
+		}
+	}
+	for i, o := range k.Ops {
+		uses := append(o.Args[:0:0], o.Args[:]...)
+		uses = append(uses, o.Vargs...)
+		for n, a := range uses {
+			if a == 0 || int(a) > len(k.Ops) || o.Kind == OpPhi && n == 1 {
+				continue
+			}
+			if h := home[a-1]; h >= 0 {
+				if e, ok := end[h]; ok && e < i {
+					return fmt.Errorf("ir: op %d (%s) reads value %d, made inside the loop at op %d after it closed at op %d",
+						i, o.Kind, a, h, e)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // Validate checks the invariants a backend relies on that the device compilers
 // cannot see, such as a dangling value or an unclosed loop, which would
 // otherwise produce well-formed but wrong output.
@@ -552,6 +611,9 @@ func (k *Kernel) Validate() error {
 		return err
 	}
 	if err := k.validateDeps(); err != nil {
+		return err
+	}
+	if err := k.validateScopes(); err != nil {
 		return err
 	}
 	depth := 0

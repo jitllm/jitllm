@@ -23,7 +23,8 @@ var uncoveredReasons = []string{UncoveredKind, UncoveredMixture, UncoveredLatent
 // input rows' graph from the container of plain dense models (biases, q/k
 // norms, GQA, a GELU and a SiLU MLP, tied and untied heads), verifies each,
 // and has the composer form the whole model from them for a CPU and a GPU
-// device, every part: the model as ops, formed without running anything.
+// device, every part, and lower the GPU's: the model as ops, formed without
+// running anything.
 // Models with features the front end does not write yet are refused block by
 // block by a reason it names, never by a graph that fails to verify.
 func TestFrontStatesTheModelAsOps(t *testing.T) {
@@ -50,9 +51,19 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 				for _, p := range parts {
 					run = append(run, jit.PartPlan{Part: p, Device: d})
 				}
-				ks, err := jit.Default().Kernels(f, run, 0, step)
+				reg := jit.Default()
+				ks, err := reg.Kernels(f, run, 0, step)
 				if err != nil {
 					t.Fatalf("%v: %v", d.Kind, err)
+				}
+				// Lowering runs nothing: a kernel the device's lowering
+				// cannot emit fails here, not first on a card.
+				if d.Kind == jit.DeviceGPU {
+					for _, k := range ks {
+						if _, err := reg.Lowerings[d.Kind].Lower(k, d); err != nil {
+							t.Fatalf("lowering %s: %v", k.Name, err)
+						}
+					}
 				}
 				t.Logf("%v: %d parts formed into %d kernels", d.Kind, len(parts), len(ks))
 			}

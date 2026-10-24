@@ -2,13 +2,13 @@ package jit
 
 import "github.com/jitllm/jitllm/jit/ir"
 
-// Affine simplifies the index arithmetic of a kernel's global loads, exact
-// in the u32 ring: equal nodes merged, the arithmetic of constants done,
-// constants carried outward --
-// (a+c1)*c2 as a*c2 + c1*c2, (a+c1)+b as (a+b)+c1 -- and folded, so the
-// unrolled steps of a walk share one address and differ by a constant, and
-// a load of a+c reads a at c past it, the constant the access's immediate
-// offset. A workgroup-memory address main computes whole, and so it stays.
+// Affine simplifies the index arithmetic of a kernel's loads, exact in the
+// u32 ring: equal nodes merged, the arithmetic of constants done, constants
+// carried outward -- (a+c1)*c2 as a*c2 + c1*c2, (a+c1)+b as (a+b)+c1 -- and
+// folded, so the unrolled steps of a walk share one address and differ by a
+// constant, and a load of a+c reads a at c past it, the constant the
+// access's immediate offset: a workgroup's partials read as one register
+// and a displacement each, not an address each.
 type Affine struct{}
 
 func (Affine) Name() string { return "affine" }
@@ -99,8 +99,7 @@ func (k *Kernel) addConst(i int) (x int, c uint32, ok bool) {
 	return nd.A, uint32(k.Nodes[nd.B].Imm), true
 }
 
-// globalIndex is every u32 add and multiply a global load's flat index is
-// made of.
+// globalIndex is every u32 add and multiply a load's flat index is made of.
 func (k *Kernel) globalIndex() map[int]bool {
 	out := map[int]bool{}
 	var walk func(i int)
@@ -114,15 +113,15 @@ func (k *Kernel) globalIndex() map[int]bool {
 		walk(nd.B)
 	}
 	for _, nd := range k.Nodes {
-		if nd.Op == OpLoad && nd.Ax == nil && k.Bufs[nd.Buf].Kind != BufShared {
+		if nd.Op == OpLoad && nd.Ax == nil {
 			walk(nd.A)
 		}
 	}
 	return out
 }
 
-// constantsOutward carries u32 constants outward in a global load's index
-// and folds them.
+// constantsOutward carries u32 constants outward in a load's index and
+// folds them.
 func (k *Kernel) constantsOutward() bool {
 	changed := false
 	index := k.globalIndex()
@@ -249,7 +248,7 @@ func (k *Kernel) dividedBy(i int, m uint32) (int, bool) {
 func (k *Kernel) immediates() bool {
 	changed := false
 	for i, nd := range k.Nodes {
-		if nd.Op != OpLoad || nd.Ax != nil || k.Bufs[nd.Buf].Kind == BufShared {
+		if nd.Op != OpLoad || nd.Ax != nil {
 			continue
 		}
 		x, c, ok := k.addConst(nd.A)
