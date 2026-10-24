@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -77,15 +78,10 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 	"Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "Qwen3VL-2B-Instruct-Q4_K_M.gguf"}
 
 // headDeclined is why the tier still declines a served model's head where it
-// does, by its name (tier.DeclineName): a head graph past the norm and the
-// projection (granite's logit scale, gemma2's final softcap, falcon's
-// LayerNorm), which the composed head does not take yet.
-var headDeclined = map[string]string{
-	"granite/granite-3.3-2b-instruct-Q4_K_M.gguf": "a head graph other than a norm and its projection",
-	"granite/granite-4.0-micro-Q4_K_M.gguf":       "a head graph other than a norm and its projection",
-	"gemma-2-2b-it-Q4_K_M.gguf":                   "a head graph other than a norm and its projection",
-	"falcon/falcon-7b-instruct.Q4_K_M.gguf":       "a head graph other than a norm and its projection",
-}
+// does, by its name (tier.DeclineName). The composed head takes a norm (an
+// RMSNorm, or a LayerNorm with its bias), the projection with its bias, the
+// final softcap and the logit scale, so every served model's head is served.
+var headDeclined = map[string]string{}
 
 // formedModels is what the front end states and the serving gate does not
 // run: a model the tier cannot place (stories260K's 172-wide rows, which its
@@ -125,6 +121,24 @@ var headUnstated = map[string]Uncovered{
 	"synth-nemotron.gguf":                   UncoveredClassic,
 	"synth-commandr.gguf":                   UncoveredClassic,
 	"synth-cohere2.gguf":                    UncoveredClassic,
+}
+
+// declinesOf is every decline the tier counted, the head's and the blocks',
+// by name (tier.DeclineName).
+func declinesOf(st tier.Stats) string {
+	var out []string
+	for i := range st.HeadDeclines {
+		if k := st.HeadDeclines[i]; k > 0 {
+			out = append(out, fmt.Sprintf("head %d: %s", k, tier.DeclineName(i)))
+		}
+		if k := st.BlockDeclines[i]; k > 0 {
+			out = append(out, fmt.Sprintf("blocks %d: %s", k, tier.DeclineName(i)))
+		}
+	}
+	if len(out) == 0 {
+		return "none counted"
+	}
+	return strings.Join(out, "; ")
 }
 
 // composedResidue is what the tier still launches of its own on a one-row
@@ -293,7 +307,7 @@ func TestComposedBlocksServe(t *testing.T) {
 										continue
 									}
 									if n == 0 || d != 0 {
-										t.Fatalf("composed parts %#x served %d steps and were declined %d: the arm did not run them (%s)", uint8(k), n, d, st.LastErr)
+										t.Fatalf("composed parts %#x served %d steps and were declined %d: the arm did not run them (declines: %s; last error %q)", uint8(k), n, d, declinesOf(st), st.LastErr)
 									}
 								}
 								// Every step runs every block, emitted or replayed in a

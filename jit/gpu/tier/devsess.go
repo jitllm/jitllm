@@ -628,7 +628,7 @@ func (g *devTier) cloneLane() (*lane, bool) {
 // Callers hold g.mu inside a scratch window.
 func (g *devTier) shareHead(dst, src *blockScratch) bool {
 	dst.head, dst.mvHead, dst.headGraph = src.head, src.mvHead, src.headGraph
-	dst.hNorm, dst.hNormB, dst.headCap = src.hNorm, src.hNormB, src.headCap
+	dst.hNorm, dst.hNormB, dst.hBias, dst.headCap = src.hNorm, src.hNormB, src.hBias, src.headCap
 	dst.headEmbeds, dst.embScale = src.headEmbeds, src.embScale
 	dst.headShared = true
 	n := src.mvHead.rows
@@ -655,7 +655,7 @@ func unshareHead(dst *blockScratch) {
 		return
 	}
 	dst.head, dst.mvHead, dst.headGraph = nil, mv{}, nil
-	dst.hNorm, dst.hNormB, dst.headCap = nil, nil, nil
+	dst.hNorm, dst.hNormB, dst.hBias, dst.headCap = nil, nil, nil, nil
 	dst.headShared = false
 }
 

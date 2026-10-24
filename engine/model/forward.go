@@ -1546,13 +1546,15 @@ func (s *State) placeHead() {
 func (s *State) newHead() *nn.Head {
 	c := s.c
 	h := &nn.Head{Model: s.m.id, Graph: s.m.frontGraphs().head, Norm: s.outNorm, W: wt(*s.outW), Logits: s.logits,
-		Softcap: c.FinalSoftcap, Embeds: c.TiedEmbd, EmbdScale: float32(c.EmbdScale)}
+		Softcap: c.FinalSoftcap, Embeds: c.TiedEmbd, EmbdScale: float32(c.EmbdScale),
+		Stages: s.m.headStages(), Bias: s.m.outB}
 	// The final softcap rides the head: a tier that takes it applies the cap on
 	// the device (nn.Head.Softcap), which is what lets a gemma2 token end in
 	// the device argmax instead of a 256,000-float readback.
 	// A LayerNorm head (C6) carries its bias, zeros where the file has none.
-	// The head's own bias (phi-2's output.bias) is added by finishLogits on
-	// the host after either arm, so the device never sees it.
+	// The head's own bias (phi-2's output.bias) and the logit scale are added
+	// by finishDevLogits on the host after the device, unless the device
+	// served the head's graph and says so (nn.Head.Applied).
 	if c.LayerNorm {
 		h.NormB = s.m.lnBias(s.m.outNormB)
 	}
@@ -2962,11 +2964,43 @@ func (s *State) finishLogits(x []float32) {
 }
 
 // finishDevLogits is finishLogits for logits the device head produced, which
-// already carry the final softcap (capping twice is a different function). No
-// model has both a head bias and a final softcap, so the order is safe.
+// already carry the final softcap (capping twice is a different function). A
+// device that served the head's graph applied the bias and the scale too, and
+// says so (nn.Head.Applied); applying either again is a different function.
+// No model has both a head bias and a final softcap, so the order is safe.
 func (s *State) finishDevLogits(x []float32) {
-	s.headBias(x)
-	s.scaleLogits(x)
+	var applied nn.HeadStage
+	if s.head != nil {
+		applied = s.head.Applied
+	}
+	s.finishApplied(x, applied)
+}
+
+// finishApplied is finishDevLogits for a device that applied the stages a of
+// the head: the one a step across sessions ran for all of them.
+func (s *State) finishApplied(x []float32, a nn.HeadStage) {
+	if a&nn.HeadBias == 0 {
+		s.headBias(x)
+	}
+	if a&nn.HeadScale == 0 {
+		s.scaleLogits(x)
+	}
+}
+
+// headStages is what the model's head does past the projection, in the order
+// finishLogits applies it.
+func (m *Model) headStages() nn.HeadStage {
+	var st nn.HeadStage
+	if m.outB != nil {
+		st |= nn.HeadBias
+	}
+	if m.Cfg.FinalSoftcap != 0 {
+		st |= nn.HeadCap
+	}
+	if m.Cfg.LogitScale != 1 {
+		st |= nn.HeadScale
+	}
+	return st
 }
 
 // headBias adds the output projection's bias (phi-2) to one or more whole rows
@@ -3521,8 +3555,9 @@ func (s *State) Forward(token int32) ([]float32, error) {
 // exactly the logits Forward would return.
 func (s *State) ForwardGreedy(token int32) (int32, error) {
 	h := s.head
-	// Not with a head bias, which is added on the host (finishLogits).
-	onDev := h != nil && s.m.outB == nil
+	// A device that leaves the head's bias to the host (finishLogits) declines
+	// the request, and the logits come home (nn.Head.Applied).
+	onDev := h != nil
 	if onDev {
 		h.ArgmaxOnly, h.Token = true, -1
 		defer func() { h.ArgmaxOnly = false }()
@@ -3547,15 +3582,17 @@ func (s *State) ForwardGreedy(token int32) (int32, error) {
 // the logits Forward returns: the device selects exactly the host's
 // candidates, and the softmax, cuts and draw are the host sampler's own.
 //
-// Not under a head bias or a logit scale, which are added on the host after
-// the head (finishLogits) and would come after the device's penalty rather
-// than before it. A greedy smp is ForwardGreedy.
+// A head bias or a logit scale the device left to the host (finishLogits) in
+// its last call (nn.Head.Left) would come after the device's penalty rather
+// than before it, so such a head is sampled from the logits that come home;
+// the device declines the request itself in any call that would leave either.
+// A greedy smp is ForwardGreedy.
 func (s *State) ForwardSample(token int32, smp *Sampler) (int32, error) {
 	if smp == nil || smp.Temp <= 0 {
 		return s.ForwardGreedy(token)
 	}
 	h := s.head
-	onDev := h != nil && s.m.outB == nil && s.c.LogitScale == 1 && smp.Bounded(s.c.NVocab) &&
+	onDev := h != nil && h.Left()&(nn.HeadBias|nn.HeadScale) == 0 && smp.Bounded(s.c.NVocab) &&
 		s.m.opt.devSample != DeviceSampleOff
 	// Auto: the key's verdict, or the probe's arm for this token
 	// (devsample.go). Both arms return the same token.

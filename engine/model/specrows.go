@@ -139,7 +139,7 @@ func (s *State) stepRows(src []func(dst []float32) error, ids []int32, out *rows
 	s.rows = out
 	defer func() { s.rows = nil }()
 	h := s.head
-	if out.argmax && len(src) == 1 && h != nil && s.m.outB == nil { // as ForwardGreedy
+	if out.argmax && len(src) == 1 && h != nil { // as ForwardGreedy
 		h.ArgmaxOnly, h.Token = true, -1
 		defer func() { h.ArgmaxOnly = false }()
 	}

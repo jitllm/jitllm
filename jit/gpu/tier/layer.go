@@ -2139,7 +2139,7 @@ type blockScratch struct {
 	// headGraph is the head as ops from the model's front end (nn.Head.Graph):
 	// what serving the head forms (served.go).
 	headGraph *graph.Graph
-	// headShared says head, mvHead, hNorm, hNormB and headCap are another
+	// headShared says head, mvHead, hNorm, hNormB, hBias and headCap are another
 	// scratch's -- lane0's, borrowed by a clone (shareHead) -- and are not
 	// freed or refunded with this one.
 	headShared bool
@@ -2262,9 +2262,12 @@ type blockScratch struct {
 	// spanK and spanOff move a batched chunk's last residual row into this
 	// (decode) scratch's x, so the output projection can ride the chunk's own
 	// submission (layersOnce's folded head). Made on first use.
-	spanK         backend.Kernel
-	spanOff       backend.Buf
-	hNormB        backend.Buf // a LayerNorm head's bias (C6)
+	spanK   backend.Kernel
+	spanOff backend.Buf
+	hNormB  backend.Buf // a LayerNorm head's bias (C6)
+	// hBias is the output projection's bias (nn.Head.Bias), held where the
+	// composer serves a head graph that binds it.
+	hBias         backend.Buf
 	head          *resident
 	mvHead        mv
 	hRaw          []byte
@@ -6358,9 +6361,12 @@ func (g *devTier) dropHeadScratch(bs *blockScratch) {
 		if bs.hNormB != nil {
 			n += uint64(bs.p.NEmbd * 4)
 		}
+		if bs.hBias != nil {
+			n += uint64(bs.mvHead.rows * 4)
+		}
 		g.refund(n)
 	}
-	for _, b := range []*backend.Buf{&bs.hNorm, &bs.hNormB, &bs.logits} {
+	for _, b := range []*backend.Buf{&bs.hNorm, &bs.hNormB, &bs.hBias, &bs.logits} {
 		if *b != nil {
 			(*b).Free()
 			*b = nil
@@ -6482,6 +6488,20 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	bs.headEmbeds, bs.embScale = h.Embeds, h.EmbdScale
 	if bs.embScale == 0 {
 		bs.embScale = 1
+	}
+	// The output bias, for a head graph the composer serves that binds it. A
+	// head without it (no room, a bias of another width) is declined by name
+	// (partHeadBias) and the caller adds the bias.
+	if spec, ok := headShape(h.Graph); ok && spec.hasBias && g.Composed&ComposedHead != 0 && len(h.Bias) == h.W.Rows &&
+		g.room(uint64(h.W.Rows*4)) {
+		if b, e := g.dev.Alloc(h.W.Rows * 4); e == nil {
+			if b.Write(f32b(h.Bias)) == nil {
+				bs.hBias = b
+				g.charge(uint64(h.W.Rows * 4))
+			} else {
+				b.Free()
+			}
+		}
 	}
 	// The final softcap, which the contract on nn.Head.Softcap makes this
 	// tier's to apply once it accepts the head -- so a failure here is a
@@ -6996,6 +7016,9 @@ type graphKey struct {
 	noActFuse bool
 	// ffnForm is Config.FFNForm, verify -ab ffn's switch.
 	ffnForm FFNForm
+	// headSrv says the head ran as the composer's graph, which the tier's own
+	// norm, projection and cap are not.
+	headSrv bool
 }
 
 // canRecord reports whether this device's sessions can capture a launch
@@ -7464,14 +7487,54 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// Retire on nCap, keep on lo/hi. nCap only increases, so a key differing
 	// only there is dead once a longer one appears; lo/hi/head is a placement,
 	// and a partial seam alternates two of them every token.
-	argmax := head != nil && head.ArgmaxOnly && g.argmaxK != nil && R == 1
+	//
+	// The persistent path: decode only, and not over history streamed from
+	// home, whose uploads sit between launches.
+	persistOn := R == 1 && rag == nil && !(bs.pkv != nil && bs.pkv.st != nil) && g.ensurePersist()
+	// The head the composer serves in this call, and so what the call leaves
+	// to the caller after the logits (nn.Head.Applied): a call that serves the
+	// head's graph applies all of its stages, any other the final softcap
+	// alone. The token, the candidates and the picked labels are read before
+	// the caller finishes the logits, so a request for them is declined while
+	// a stage that bears on them is the caller's.
+	var applied, left nn.HeadStage
+	headWhy := partServes
+	composedHead := head != nil && g.Composed&ComposedHead != 0 && R == 1 && !g.prompt && rag == nil && !allRows && !fold
+	if head != nil && hb.headCap != nil {
+		applied = nn.HeadCap
+	}
+	if composedHead {
+		switch {
+		case head.Graph != bs.headGraph:
+			headWhy = partHeadOther
+		case head.Hidden != nil:
+			headWhy = partHeadHidden
+		default:
+			headWhy = bs.headServes(hNorm, false, persistOn)
+		}
+		if headWhy == partServes {
+			applied |= head.Stages
+		}
+	}
+	if head != nil {
+		left = head.Stages &^ applied
+	}
+	argmax := head != nil && head.ArgmaxOnly && g.argmaxK != nil && R == 1 && left&nn.HeadBias == 0
 	sampleK, samplePen := 0, false
-	if head != nil && !argmax && head.SampleK > 0 && R == 1 && rag == nil && !allRows && !fold && g.prepSample(head) {
+	if head != nil && !argmax && head.SampleK > 0 && R == 1 && rag == nil && !allRows && !fold &&
+		left&(nn.HeadBias|nn.HeadScale) == 0 && g.prepSample(head) {
 		sampleK, samplePen = head.SampleK, head.SampleArgs[0] > 0
 	}
 	// The label pick: one row's logits, a decode's or a folded chunk's last.
 	pick := head != nil && !argmax && sampleK == 0 && len(head.Pick) > 0 && rag == nil && !allRows &&
-		(R == 1 || fold) && g.prepPick(head)
+		(R == 1 || fold) && left&(nn.HeadBias|nn.HeadScale) == 0 && g.prepPick(head)
+	// A pick that projects its labels' rows alone leaves no logits to apply
+	// the head's other stages to, so a head with one is projected whole.
+	pickOnly := pick && !fold && g.pickMV != nil && bs.headCap == nil && R == 1 && head.Stages&(nn.HeadBias|nn.HeadScale) == 0
+	if composedHead && headWhy == partServes && pickOnly {
+		headWhy = partPick
+	}
+	headSrv := composedHead && headWhy == partServes
 	ragN, ragRuns, ragHead, ragMap := 0, 0, 0, 0
 	if bs.pkv != nil {
 		// The width, and whether the decode plan runs beside it (ragAlone):
@@ -7494,11 +7557,8 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	if allRows {
 		ragHead = head.WantedRows(nrow)
 	}
-	// The persistent path: decode only, and not over history streamed from
-	// home, whose uploads sit between launches.
-	persistOn := R == 1 && rag == nil && !(bs.pkv != nil && bs.pkv.st != nil) && g.ensurePersist()
 	key := graphKey{lo, hi, nCap, R, head != nil, g.TableSplit, g.ScalarSoftmax, g.flashOn(), g.KVF16,
-		ropeDev, argmax, sampleK, samplePen, pick, ragN, ragRuns, par, pagedVar, ragHead, ragMap, hNormID, persistOn, persistOn && g.PersistDeps, g.GateUpFuse, g.GateUp2, g.GateUp2Force, g.NoAddNormFold, sid, g.NoFuse, g.NoActFuse, g.FFNForm}
+		ropeDev, argmax, sampleK, samplePen, pick, ragN, ragRuns, par, pagedVar, ragHead, ragMap, hNormID, persistOn, persistOn && g.PersistDeps, g.GateUpFuse, g.GateUp2, g.GateUp2Force, g.NoAddNormFold, sid, g.NoFuse, g.NoActFuse, g.FFNForm, headSrv}
 	if lo == hi {
 		// The head alone reads no history, so the capacity is not part of
 		// what it records: keyed by it, prompts on either side of a growth
@@ -7552,7 +7612,8 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		p: p, rag: rag, pe: pe, key: key, R: R, nrow: nrow, kvDim: kvDim, qdim: qdim,
 		kst: kst, nCap: nCap, gatherN: gatherN, rrows: rrows, sm: sm, smG: smG, smW: smW,
 		fold: fold, ropeDev: ropeDev, argmax: argmax, sampleK: sampleK, samplePen: samplePen, pick: pick, ragHead: ragHead, parOK: parOK,
-		allRows: allRows, hNorm: hNorm,
+		allRows: allRows, hNorm: hNorm, headWhy: headWhy, pickOnly: pickOnly,
+		headCapped: head != nil && head.Stages&nn.HeadCap != 0,
 	}
 	if g.subFn == nil {
 		g.subFn = g.layersSession
@@ -7593,6 +7654,9 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	if err != nil {
 		g.LastErr = err.Error()
 		return false
+	}
+	if head != nil {
+		head.Applied = applied
 	}
 	if head != nil && !direct {
 		for i := range head.Logits {
@@ -7650,6 +7714,13 @@ type submitArgs struct {
 	samplePen, pick         bool
 	parOK, allRows          bool
 	hNorm                   backend.Buf
+	// headWhy is why the composer is not asked for the head at this one-row
+	// step, partServes where it is; pickOnly says the head projects the
+	// picked labels alone; headCapped says the head's graph states the final
+	// softcap.
+	headWhy    partDecline
+	pickOnly   bool
+	headCapped bool
 	// What the session hands back.
 	err    error
 	direct bool
@@ -7680,6 +7751,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	sm, smG, smW := a.sm, a.smG, a.smW
 	fold, ropeDev, argmax, sampleK, samplePen, pick := a.fold, a.ropeDev, a.argmax, a.sampleK, a.samplePen, a.pick
 	ragHead, parOK, allRows, hNorm := a.ragHead, a.parOK, a.allRows, a.hNorm
+	headWhy, pickOnly, headCapped := a.headWhy, a.pickOnly, a.headCapped
 	var err error
 	direct := false
 	defer func() { a.err, a.direct = err, direct }()
@@ -9853,11 +9925,13 @@ func (g *devTier) layersSession(s backend.Session) {
 		} else if head != nil {
 			// The output norm and the vocabulary projection, in the same
 			// submission: the residual stream never comes home.
-			pickOnly := pick && g.pickMV != nil && bs.headCap == nil && R == 1
 			// The head the composer serves (Config.Composed), where it is asked
 			// for this one: the step fails if it does not form. A prompt's head
-			// over its last row is one row and still the prompt's.
-			served := false
+			// over its last row is one row and still the prompt's. A graph that
+			// states the final softcap writes the capped logits, where the
+			// tier's own cap would have, and the tier's cap is not launched
+			// over them.
+			served, capped := false, false
 			if g.Composed&ComposedHead != 0 && R == 1 && g.prompt {
 				// Declined by name where the prompt is asked
 				// (ComposedPrompt), else asked for nothing.
@@ -9868,13 +9942,17 @@ func (g *devTier) layersSession(s backend.Session) {
 					g.PartsUnasked[partHead]++
 				}
 			} else if g.Composed&ComposedHead != 0 && R == 1 {
-				if why := headServes(bs.headGraph, hNorm, bs.normVar != nil, pickOnly, persist); why != partServes {
+				if headWhy != partServes {
 					g.PartsDeclined[partHead]++
-					g.HeadDeclines[why]++
+					g.HeadDeclines[headWhy]++
 				} else {
-					sv, serr := g.servedHead(bs.headGraph, bs.head, hNorm)
+					out := bs.logits
+					if headCapped && bs.headCap != nil {
+						out, capped = bs.logitsCap, true
+					}
+					sv, serr := g.servedHead(bs, hNorm)
 					if serr == nil {
-						serr = sv.run(g, lc, sv.inst, []backend.Buf{bs.x}, []backend.Buf{bs.logits})
+						serr = sv.run(g, lc, sv.inst, []backend.Buf{bs.x}, []backend.Buf{out})
 					}
 					if err == nil {
 						err = serr
@@ -9917,7 +9995,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					mvrun(bs.mvHead, bs.head, bs.logits)
 				}
 			}
-			if bs.headCap != nil {
+			if bs.headCap != nil && !capped {
 				lc.la(bs.headCap, bs.mvHead.rows, bs.logits, bs.logitsCap)
 			}
 			if argmax && err == nil {

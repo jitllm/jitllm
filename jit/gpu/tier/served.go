@@ -525,6 +525,9 @@ const (
 	partHeadRows
 	partPromptHead
 	partShadowed
+	partHeadBias
+	partHeadOther
+	partHeadHidden
 	numPartDeclines
 )
 
@@ -539,8 +542,8 @@ var partDeclineNames = [numPartDeclines]string{
 	partLatent:     "a latent attention's history",
 	partShared:     "the history of another block",
 	partWindow:     "a graph whose window is not the plan's",
-	partHeadShape:  "a head graph other than a norm and its projection",
-	partHeadNorm:   "no norm buffer, or a LayerNorm head",
+	partHeadShape:  "a head graph other than a norm, its projection and elementwise ops after it",
+	partHeadNorm:   "no norm buffer, a norm of another kind than the tier's, or a norm bias it holds none of",
 	partPick:       "a head that picks labels only",
 	partRagged:     "a ragged step's rows",
 	partRowLogits:  "every row's logits (speculative rows)",
@@ -550,6 +553,9 @@ var partDeclineNames = [numPartDeclines]string{
 	partHeadRows:   "a head over several rows",
 	partPromptHead: "a prompt's one-row head",
 	partShadowed:   "a prompt outside the shadow arm",
+	partHeadBias:   "a head bias the tier holds no vector for",
+	partHeadOther:  "a head graph of another State than the offered one",
+	partHeadHidden: "a head whose normed row is read back",
 }
 
 // DeclineName is the reason a decline count is kept under, by its index in
@@ -716,17 +722,66 @@ func (sv *servedPart) runAs(g *devTier, lc *launcher, inst *partInst, kind partK
 	return nil
 }
 
-// headServes is why a one-row step's head is not the one the composer is
-// asked for, serves where it is: the model's head graph the device's share
-// of main's head -- a norm and the vocabulary's projection, its softcap
-// applied after it by the tier and its bias and scale on the host -- not
-// the label pick, not inside the persistent block.
-func headServes(gr *graph.Graph, norm backend.Buf, layerNorm, pickOnly, persist bool) partDecline {
+// headSpec is a head graph the tier serves: a norm (an RMSNorm, or a
+// LayerNorm with its optional bias), the projection to the vocabulary with
+// its optional bias, and a chain of elementwise ops on its logits, whatever
+// they compute.
+type headSpec struct {
+	norm, normBias, out, bias       jlm.Role
+	layerNorm, hasNormBias, hasBias bool
+}
+
+// headShape is gr read as a head the tier serves, false for any other graph.
+func headShape(gr *graph.Graph) (headSpec, bool) {
+	var hs headSpec
+	if gr == nil || len(gr.In) != 1 || len(gr.Out) != 1 || len(gr.Ops) < 2 {
+		return hs, false
+	}
+	n, mv := gr.Ops[0], gr.Ops[1]
 	switch {
-	case !normThenProjection(gr):
+	case n.Kind == graph.OpNorm && len(n.Weight) == 1:
+	case n.Kind == graph.OpLayerNorm && (len(n.Weight) == 1 || len(n.Weight) == 2):
+		hs.layerNorm = true
+	default:
+		return hs, false
+	}
+	if len(n.In) != 1 || n.In[0] != gr.In[0] || len(n.Out) != 1 ||
+		mv.Kind != graph.OpMatVec || len(mv.In) != 1 || mv.In[0] != n.Out[0] || len(mv.Out) != 1 ||
+		len(mv.Weight) < 1 || len(mv.Weight) > 2 {
+		return hs, false
+	}
+	hs.norm, hs.out = n.Weight[0].Role, mv.Weight[0].Role
+	if len(n.Weight) == 2 {
+		hs.normBias, hs.hasNormBias = n.Weight[1].Role, true
+	}
+	if len(mv.Weight) == 2 {
+		hs.bias, hs.hasBias = mv.Weight[1].Role, true
+	}
+	last := mv.Out[0]
+	for _, o := range gr.Ops[2:] {
+		if o.Kind != graph.OpMap || len(o.Weight) != 0 || len(o.In) != 1 || o.In[0] != last || len(o.Out) != 1 {
+			return hs, false
+		}
+		last = o.Out[0]
+	}
+	return hs, gr.Out[0] == last
+}
+
+// headServes is why a one-row step's head is not the one the composer is
+// asked for, serves where it is: the model's head graph (headShape) -- a
+// norm, the vocabulary's projection with its bias, and what the graph does to
+// the logits after it, the final softcap and the scale -- with the norm and
+// the vectors it binds the tier's, not the label pick, not inside the
+// persistent block.
+func (bs *blockScratch) headServes(norm backend.Buf, pickOnly, persist bool) partDecline {
+	hs, ok := headShape(bs.headGraph)
+	switch {
+	case !ok:
 		return partHeadShape
-	case norm == nil || layerNorm:
+	case norm == nil || hs.layerNorm != (bs.normVar != nil) || hs.hasNormBias && bs.hNormB == nil:
 		return partHeadNorm
+	case hs.hasBias && bs.hBias == nil:
+		return partHeadBias
 	case pickOnly:
 		return partPick
 	case persist:
@@ -735,37 +790,43 @@ func headServes(gr *graph.Graph, norm backend.Buf, layerNorm, pickOnly, persist 
 	return partServes
 }
 
-// normThenProjection says gr is a norm and a projection of its output, with
-// no bias, the projection the graph's output.
-func normThenProjection(gr *graph.Graph) bool {
-	if gr == nil || len(gr.Ops) != 2 || len(gr.Out) != 1 {
-		return false
+// servedHead is the model's head graph served at one row: its norm bound to
+// the tier's norm (and its bias, for a LayerNorm head), its projection to the
+// head's weight and its bias to the tier's, under the roles the graph names
+// (the embedding's where the model ties them).
+func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf) (*servedPart, error) {
+	gr, w := bs.headGraph, bs.head
+	hs, ok := headShape(gr)
+	if !ok {
+		return nil, errors.New("the composed head: a graph that is not a norm, a projection and elementwise ops")
 	}
-	n, mv := gr.Ops[0], gr.Ops[1]
-	return n.Kind == graph.OpNorm && len(n.Weight) == 1 && len(n.Out) == 1 &&
-		mv.Kind == graph.OpMatVec && len(mv.Weight) == 1 && len(mv.In) == 1 && len(mv.Out) == 1 &&
-		mv.In[0] == n.Out[0] && mv.Out[0] == gr.Out[0]
-}
-
-// servedHead is the model's head graph gr served at one row: its norm bound
-// to the tier's norm and its projection to the head's weight w, under the
-// roles the graph names (the embedding's where the model ties them).
-func (g *devTier) servedHead(gr *graph.Graph, w *resident, norm backend.Buf) (*servedPart, error) {
 	t, ok := jlmType(w.t)
 	if !ok {
 		return nil, fmt.Errorf("the composed head: format %d has no container type", w.t)
 	}
-	normRole, outRole := gr.Ops[0].Weight[0].Role, gr.Ops[1].Weight[0].Role
+	bind := func(sl *composedPart) {
+		sl.weights[hs.out], sl.vectors[hs.norm] = w, norm
+		if hs.hasNormBias {
+			sl.vectors[hs.normBias] = bs.hNormB
+		}
+		if hs.hasBias {
+			sl.vectors[hs.bias] = bs.hBias
+		}
+	}
 	sk := servedKey{kind: partHead, graph: gr, rows: 1, t: t}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
-		return composedPart{kind: partHead, graph: gr, formats: map[jlm.Role]jlm.Type{outRole: t},
-			weights: map[jlm.Role]*resident{outRole: w}, vectors: map[jlm.Role]backend.Buf{normRole: norm}}, nil
+		sl := composedPart{kind: partHead, graph: gr, formats: map[jlm.Role]jlm.Type{hs.out: t},
+			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{}}
+		if hs.hasBias {
+			sl.formats[hs.bias] = jlm.TypeF32
+		}
+		bind(&sl)
+		return sl, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	sv.sl.weights[outRole] = w
-	sv.sl.vectors[normRole] = norm
+	bind(&sv.sl)
 	return sv, nil
 }
 
@@ -1061,12 +1122,12 @@ func keyBound(maxSeq int) int { return (maxSeq + scoreGrain - 1) / scoreGrain * 
 func (g *devTier) prewarmComposedHead() {
 	bs := g.bs
 	if g.NoPromptPrewarm || g.Composed&ComposedHead == 0 || bs == nil || bs.head == nil ||
-		headServes(bs.headGraph, bs.hNorm, bs.normVar != nil, false, false) != partServes {
+		bs.headServes(bs.hNorm, false, false) != partServes {
 		return
 	}
 	g.prewarming = true
 	defer func() { g.prewarming = false }()
-	if _, err := g.servedHead(bs.headGraph, bs.head, bs.hNorm); err != nil {
+	if _, err := g.servedHead(bs, bs.hNorm); err != nil {
 		g.LastErr = "the composed head: " + err.Error()
 	}
 }

@@ -596,7 +596,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 			if c.streamHead() {
 				st.finishLogits(st.logits)
 			} else {
-				st.finishDevLogits(st.logits)
+				st.finishApplied(st.logits, h.Applied)
 			}
 			out[i] = st.logits
 			at++

@@ -7550,3 +7550,54 @@ row where the composer's reads two.
     heads whose width is not a power of two did not form on the CPU (no
     general-register division by a constant); it is now a space of row, head
     and element, as the head norm's.
+- **The head's ops as ops: LayerNorm, bias, softcap and scale.** The composed
+  head served a norm and a projection and declined every other head by name.
+  rnj-1's reason, which the serving gate printed as "()" because it read the
+  tier's last error and a decline sets none, was "a head graph other than a
+  norm and its projection": its final softcap of 30 (one step declined on
+  CUDA, eight on Vulkan). Granite's logit scale, gemma-2's softcap, a head's
+  bias and a LayerNorm head (the C6 kit's falcon and phi-2, which the front
+  end refused as classic) were the same. graph.Head now states the head: an
+  RMSNorm, or a LayerNorm with its stored bias; the projection with its
+  stored bias; the final softcap; the logit scale. The softcap's tanh is
+  2*sigmoid(2y) - 1, finite at both ends, where the quotient of exponentials
+  it replaces is NaN past |y| of 44. The tier serves any chain of elementwise
+  ops on the logits and holds the head's bias beside its norm. A served head
+  that caps writes the capped logits where the tier's cap does, and the tier's
+  cap, which launched after the head, is not launched over them (gemma-2 would
+  cap twice). nn.Head says what the model's head does (Stages) and the device
+  says what it applied (Applied), in every call: finishDevLogits, the
+  device's argmax and sampler, ForwardSample and a step across sessions read
+  that report and no longer the model's config, so the composed head selects
+  tokens after the bias and the scale, and a head the composer declines runs
+  as it did, the cap on the device and the bias and the scale on the host. A
+  head whose normed row is read back (a prediction block's) is declined by
+  name, as the form keeps that row inside.
+  A gate on each op runs against the oracle (float32 norm and projection, the
+  rest in float64) with every op taken out. On the CPU, one row at a time
+  (TestComposedCPUHead), every arm reads 8e-15 to 1e-12 against a bound of
+  1e-9, and the softcap dropped, the scale inverted, the bias dropped, the
+  norm's bias dropped and an RMSNorm for the LayerNorm read 0.10, 4.0e+03,
+  0.35, 0.10 and 0.10. On a V100's CUDA and Vulkan (TestComposedHeadOps, over
+  an RMSNorm head, phi-2's LayerNorm with both biases and falcon's LayerNorm
+  over the tied embedding), the composed head reads at most 3.0e-13 and the
+  tier's own head, the host finishing its logits, at most 1.4e-13, against a
+  bound of 1e-9, except where a model has both a softcap and a bias, which the
+  tier applies in the other order and no model has. The softcap dropped reads
+  3.5e-02 to 4.5e-02, the scale inverted 4.0e+03, the bias negated 0.13 and
+  the norm's bias dropped 0.10 and 0.71. TestComposedHeadTokens holds the
+  greedy token and the sampler's draws to the logits the device returns: the
+  composed head selects all eight tokens and all 24 draws on the device, the
+  tier's own head none of the draws of a head with a scale or a bias and none
+  of the tokens of one with a bias, and a head told it has no stage to leave
+  parts in the draws (2, 2, 23 and 4 of 24) when the tier's own selects them.
+  TestFrontStatesTheModelAsOps forms gemma-2-2b, granite-3.3-2b and
+  granite-4.0-micro whole (31, 44 and 44 parts).
+  The device gates run in a composed build on CUDA and Vulkan:
+  TestFinalSoftcapReachesTheDeviceHead, TestGemma2SoftcapOnDevice (2.8e-03 of
+  2e-02) and TestGraniteScalesOnEveryDevice, which failed before this change
+  and not for the head. Its dense fixture's decode runs on the composer's
+  blocks, and the gate counted the tier's own scaled adds. It now counts a
+  composed block as the scaled path and states the two scales as the model's
+  own configuration as well, which the composer's forms read as the tier's
+  kernels do (0.85 and 8.1e-03 against a clean 3e-14).

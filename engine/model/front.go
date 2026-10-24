@@ -124,8 +124,21 @@ type frontSet struct {
 // frontKey is what a set's graphs were built from beside the container.
 type frontKey struct {
 	cfg           *Config
+	head          headKey
 	rope, ropeSWA ropeKey
 	restated      int
+}
+
+// headKey is what the head's graph reads of the config: a test that sets one
+// of them in place states another head.
+type headKey struct {
+	softcap    float32
+	scale, eps float64
+	layerNorm  bool
+}
+
+func headKeyOf(c *Config) headKey {
+	return headKey{softcap: c.FinalSoftcap, scale: c.LogitScale, eps: c.RMSEps, layerNorm: c.LayerNorm}
 }
 
 // ropeKey is what the front end reads of a rotary.
@@ -219,7 +232,7 @@ func (m *Model) frontGraphs() *frontSet {
 	f := &m.front
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	k := frontKey{cfg: m.Cfg, rope: ropeKeyOf(&m.rope), ropeSWA: ropeKeyOf(m.ropeSWA), restated: f.restated}
+	k := frontKey{cfg: m.Cfg, head: headKeyOf(m.Cfg), rope: ropeKeyOf(&m.rope), ropeSWA: ropeKeyOf(m.ropeSWA), restated: f.restated}
 	if f.set != nil && f.set.key == k {
 		return f.set
 	}
@@ -550,9 +563,11 @@ func xielu(b *graph.Builder, x graph.ValueID, width int) graph.ValueID {
 	return op("xielu", graph.MapAdd, none, pick, op("xielu.bx", graph.MapMul, beta, x))
 }
 
-// headGraph is the head: the RMSNormed row's projection to the vocabulary
-// (the embedding's where the model ties them) with its stored bias, then the
-// final softcap and the logit scale, main's order over the logits.
+// headGraph is the head (graph.Head) of what the container stores: a
+// LayerNorm with its stored bias where the model's norms are LayerNorms, an
+// RMSNorm otherwise, the projection to the vocabulary (the embedding's where
+// the model ties them) with its stored bias, then the final softcap and the
+// logit scale, main's order over the logits.
 func (m *Model) headGraph() (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	switch {
@@ -560,38 +575,23 @@ func (m *Model) headGraph() (*graph.Graph, Uncovered, error) {
 		return nil, UncoveredPooling, nil
 	case c.Streams() > 1:
 		return nil, UncoveredStreams, nil
-	case c.LayerNorm:
-		return nil, UncoveredClassic, nil
 	}
 	f, _ := m.inventory(jlm.DenseBlock)
-	out := jlm.RoleOutput
-	if _, ok := f.Inventory[out]; !ok {
-		out = jlm.RoleTokenEmbd
+	stored := func(r jlm.Role) bool {
+		_, ok := f.Inventory[r]
+		return ok
 	}
-	b := graph.NewBlock(-1)
-	n := b.Norm(b.In("x", c.NEmbd), jlm.RoleOutputNorm, c.RMSEps)
-	var bias []jlm.Role
-	if _, ok := f.Inventory[jlm.RoleOutputBias]; ok {
-		bias = []jlm.Role{jlm.RoleOutputBias}
+	h := graph.Head{NEmbd: c.NEmbd, NVocab: c.NVocab, Eps: c.RMSEps, LayerNorm: c.LayerNorm,
+		NormBias: stored(jlm.RoleOutputNormBias), Output: jlm.RoleOutput, Bias: stored(jlm.RoleOutputBias),
+		Softcap: float64(c.FinalSoftcap), Scale: c.LogitScale}
+	if !stored(h.Output) {
+		h.Output = jlm.RoleTokenEmbd
 	}
-	l := b.MatVec(n, out, c.NVocab, bias...)
-	mapc := func(name string, fn graph.MapFn, k float64, in ...graph.ValueID) graph.ValueID {
-		return b.Emit(graph.OpMap, in, []graph.Result{{Name: name, Width: c.NVocab}}, nil, graph.Attrs{Fn: fn, Const: k}, nil, nil)[0]
-	}
-	if s := float64(c.FinalSoftcap); s != 0 {
-		// s*tanh(l/s), tanh(y) as (e-1)/(e+1) with e = exp(2y).
-		e := mapc("softcap.exp", graph.MapExp, 0, mapc("softcap.arg", graph.MapMul, 2/s, l))
-		t := mapc("softcap.tanh", graph.MapDiv, 0, mapc("softcap.num", graph.MapSub, 1, e), mapc("softcap.den", graph.MapAdd, 1, e))
-		l = mapc("capped", graph.MapMul, s, t)
-	}
-	if s := c.LogitScale; s != 0 && s != 1 {
-		l = mapc("scaled", graph.MapMul, 1/s, l)
-	}
-	b.Out(l)
-	if err := graph.Verify(b.G, f); err != nil {
+	g := h.Build()
+	if err := graph.Verify(g, f); err != nil {
 		return nil, UncoveredUnverified, fmt.Errorf("the head's graph does not verify: %w", err)
 	}
-	return b.G, Covered, nil
+	return g, Covered, nil
 }
 
 // embedGraph is the step's input rows: each row's token's row of the

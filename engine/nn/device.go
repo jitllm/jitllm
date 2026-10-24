@@ -336,6 +336,21 @@ type SSMWeights struct {
 	In Weight
 }
 
+// HeadStage is a step of the head past the output norm and the projection,
+// in the order the model applies them: the bias, the final softcap, the
+// logit scale.
+type HeadStage uint8
+
+const (
+	// HeadBias is the output projection's bias (phi-2's), added to the
+	// logits.
+	HeadBias HeadStage = 1 << iota
+	// HeadCap is the final softcap, c*tanh(x/c) (gemma2's, Head.Softcap).
+	HeadCap
+	// HeadScale is the logit scale, a divisor (Granite's).
+	HeadScale
+)
+
 // Head is the tail of a token: the output norm and the vocabulary projection.
 // It runs in the same submission as the last block, so a token ends with one
 // readback and the residual stream never comes home.
@@ -360,6 +375,22 @@ type Head struct {
 	// after the projection and before both the readback and the argmax, so
 	// Logits come home capped and the caller must not cap them again.
 	Softcap float32
+	// Stages is what the model's head does past the projection, and Bias the
+	// output bias HeadBias adds, NVocab wide (nil without it). A device that
+	// serves Graph applies every stage the model has, in the model's order;
+	// one that runs the head itself applies HeadCap alone and leaves the
+	// others to the caller.
+	Stages HeadStage
+	Bias   []float32
+	// Applied is which Stages the device applied to the logits in the call
+	// that last ran this head, set by every such call: HeadCap where it
+	// capped them, and with it HeadBias and HeadScale where it served Graph.
+	// The caller applies the rest (State.finishDevLogits). A device asked for
+	// the token (ArgmaxOnly) of a head whose bias it leaves to the caller, or
+	// for the candidates (SampleK) or the picked labels (Pick) of one whose
+	// bias or scale it leaves, declines the request and returns the logits, as
+	// for any request it cannot serve.
+	Applied HeadStage
 	// Embeds says W is also the model's token embedding (a tied model), so a
 	// tier holding the head can look prompt tokens up itself -- see
 	// EmbedDevice. EmbdScale multiplies a looked-up row (gemma's sqrt(n_embd));
@@ -389,9 +420,10 @@ type Head struct {
 	// in place of the row: a decision readout's label ids. A tier that serves
 	// it fills PickVals (as long as Pick at least), leaves Logits untouched
 	// and sets Picked; one that cannot fills Logits as always. The values are
-	// the projection's own, capped where the head caps (Softcap): a head bias
-	// and a logit scale are the caller's, which is why a caller with either
-	// does not ask. See model.Decider.
+	// the projection's own, capped where the head caps (Softcap), and with
+	// the bias and the scale where the device served Graph (Applied): a
+	// caller with either does not ask, for one that leaves them to the caller
+	// declines. See model.Decider.
 	Pick     []int32
 	PickVals []float32
 	Picked   bool
@@ -399,8 +431,9 @@ type Head struct {
 	Tokens []int32
 	// RowLogits asks LayersRows to read every row's logits back as well, into
 	// Logits, row-major and NVocab wide per row, for a caller that samples.
-	// They are the projection's raw output: a head bias and a logit scale are
-	// the caller's to apply (finishLogits), as for one sequence.
+	// They are the per-row head's output: capped where the head caps
+	// (Softcap), a head bias and a logit scale the caller's to apply
+	// (finishLogits), as for one sequence.
 	//
 	// On a Layers call of several rows (a prompt chunk) it asks for every
 	// row's projection rather than the last row's alone: a speculative
@@ -429,6 +462,10 @@ func (h *Head) WantedRows(n int) int {
 	}
 	return n
 }
+
+// Left is the stages of the head the device left to the caller in the call
+// that last ran it: the model's Stages less what it Applied.
+func (h *Head) Left() HeadStage { return h.Stages &^ h.Applied }
 
 // MLA reports whether this block runs multi-head latent attention.
 func (p *LayerPlan) MLA() bool { return p.KVLoraRank > 0 }
