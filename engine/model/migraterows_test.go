@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bytes"
 	"math"
 	"os"
 	"runtime"
@@ -218,7 +219,7 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			continue
 		}
 		t.Run(arm.name, func(t *testing.T) {
-			gr0 := runtime.NumGoroutine()
+			gr0 := armGoroutines()
 			// Retires put the rows at different positions: row 1 restarts at
 			// step 3, row 2 at step 6, so at the first move they sit at 8, 5
 			// and 2.
@@ -419,10 +420,10 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 			g.Close()
 			// Nothing the moves started is left running.
 			deadline := time.Now().Add(3 * time.Second)
-			for runtime.NumGoroutine() > gr0 && time.Now().Before(deadline) {
+			for armGoroutines() > gr0 && time.Now().Before(deadline) {
 				time.Sleep(20 * time.Millisecond)
 			}
-			if n := runtime.NumGoroutine(); n > gr0 {
+			if n := armGoroutines(); n > gr0 {
 				buf := make([]byte, 1<<16)
 				t.Errorf("%d goroutine(s) before the arm, %d after:\n%s", gr0, n, buf[:runtime.Stack(buf, true)])
 			}
@@ -488,4 +489,14 @@ func TestBatchSeamMovesCarryEveryRowSSM(t *testing.T) {
 			batchSeamMoves(t, p, 1e-4, false)
 		})
 	}
+}
+
+// armGoroutines is the goroutines running but the container's page-I/O
+// workers: the file starts them at its first partial read, wherever that
+// falls -- inside an arm on a host whose budget holds the whole model -- and
+// they end with its Close, not with a move.
+func armGoroutines() int {
+	buf := make([]byte, 1<<20)
+	buf = buf[:runtime.Stack(buf, true)]
+	return runtime.NumGoroutine() - bytes.Count(buf, []byte("format/jlm.(*File).startIO.func1("))
 }
