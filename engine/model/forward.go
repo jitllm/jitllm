@@ -296,6 +296,9 @@ type State struct {
 	// face (nn.TokenDevice).
 	ldInputs nn.LayerInputDevice
 	ldTokens nn.TokenDevice
+	// ldPrompt is its prompt face (nn.PromptDevice): told when the calls
+	// are a chunked prompt's.
+	ldPrompt nn.PromptDevice
 	// ldNGram is its n-gram face (nn.NGramDevice), Qwen3.8-Flash-Next's.
 	ldNGram nn.NGramDevice
 	// ldQSA is its QSA face (nn.QSADevice), Qwen3.8-Flash-Next's.
@@ -4668,6 +4671,7 @@ func (s *State) setLD(ld nn.LayerDevice) {
 	s.ldNamed, _ = ld.(nn.NamedDevice)
 	s.ldInputs, _ = ld.(nn.LayerInputDevice)
 	s.ldTokens, _ = ld.(nn.TokenDevice)
+	s.ldPrompt, _ = ld.(nn.PromptDevice)
 	s.ldNGram, _ = ld.(nn.NGramDevice)
 	s.ldQSA, _ = ld.(nn.QSADevice)
 }

@@ -401,6 +401,14 @@ var ErrPrefillInterrupted = errors.New("model: prefill interrupted")
 // inside one.
 func (s *State) SetPrefillInterrupt(f func() bool) { s.interrupt = f }
 
+// promptCalls tells the device whether the calls that follow are a prompt's
+// (nn.PromptDevice).
+func (s *State) promptCalls(on bool) {
+	if s.ldPrompt != nil {
+		s.ldPrompt.SetPrompt(on)
+	}
+}
+
 // prefillSrc is the chunked prefill over an abstract row source. src[i] fills
 // one n_embd-wide row of the residual stream, and is either a vocabulary
 // lookup or a caller-supplied embedding -- the two entry points differ in
@@ -465,6 +473,10 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 	}
 	s.recPrefill = true
 	defer func() { s.recPrefill = false }()
+	// Every device call from here on is the prompt's, its last row's head
+	// too (nn.PromptDevice).
+	s.promptCalls(true)
+	defer s.promptCalls(false)
 	// A bidirectional embedding run is one chunk: no row's attention exists
 	// until every row's k and v are in the cache.
 	bidir := s.emb != nil && s.emb.bidir

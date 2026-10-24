@@ -7683,7 +7683,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	defer func() { g.launchTo.s = nil }()
 	lc := &launcher{to: &g.launchTo, err: &err, fsrc: &fsrc,
 		memoK: &actMemoK, memoSrc: &actMemoSrc, a: bs.a, ax: bs.ax, g: g}
-	if g.Census && g.Composed != 0 && g.sub.R == 1 && g.sub.rag == nil {
+	if g.Census && g.Composed != 0 && g.sub.R == 1 && g.sub.rag == nil && !g.prompt {
 		if g.census == nil {
 			g.census = &launchCensus{n: map[string]int{}}
 		}
@@ -8051,7 +8051,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			// the block's own weights and history, in place of all of the
 			// tier's for it.
 			if g.Composed&ComposedBlock != 0 {
-				if R != 1 || rag != nil {
+				if R != 1 || rag != nil || g.prompt {
 					g.PartsUnasked[partBlock]++
 				} else if why := g.blockServes(l, li, p, bs, persist); why != partServes {
 					g.PartsDeclined[partBlock]++
@@ -9766,9 +9766,10 @@ func (g *devTier) layersSession(s backend.Session) {
 			// submission: the residual stream never comes home.
 			pickOnly := pick && g.pickMV != nil && bs.headCap == nil && R == 1
 			// The head the composer serves (Config.Composed), where it is asked
-			// for this one: the step fails if it does not form.
+			// for this one: the step fails if it does not form. A prompt's head
+			// over its last row is one row and still the prompt's.
 			served := false
-			if g.Composed&ComposedHead != 0 && R != 1 {
+			if g.Composed&ComposedHead != 0 && (R != 1 || g.prompt) {
 				g.PartsUnasked[partHead]++
 			} else if g.Composed&ComposedHead != 0 {
 				if why := headServes(bs.headGraph, hNorm, bs.normVar != nil, pickOnly, persist); why != partServes {

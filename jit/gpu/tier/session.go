@@ -57,7 +57,13 @@ type gpuSession struct {
 	ng []float32
 	// marks is the rows' rotary marks (SetRopeMarks).
 	marks []int32
+	// prompt says the calls are a prompt's (SetPrompt).
+	prompt bool
 }
+
+// SetPrompt says whether the session's calls that follow are a prompt's
+// (nn.PromptDevice), handed to every device a call holds with its inputs.
+func (s *gpuSession) SetPrompt(on bool) { s.prompt = on }
 
 // PlanBlocks forwards the placement's block count; see GPU.PlanBlocks.
 func (s *gpuSession) PlanBlocks(n int, extra uint64) { s.g.PlanBlocks(n, extra) }

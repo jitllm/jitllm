@@ -115,6 +115,9 @@ type devSess struct {
 	// qsaMarks is the rows' rotary marks for the next call (SetRopeMarks),
 	// which a QSA block's pooled keys turn by (qsa.go).
 	qsaMarks []int32
+	// prompt says the session's calls are a prompt's (SetPrompt): the
+	// composer serves a step's parts and none of a prompt's (Config.Composed).
+	prompt bool
 	// recSteps counts the linear blocks whose emitLinear completed with the
 	// submission still good, for the current Layers call: the measured answer
 	// to "may a failed submission be restarted on the host". Positional proxies

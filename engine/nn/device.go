@@ -1399,6 +1399,15 @@ type TokenDevice interface {
 	SetTokenIDs(ids []int32)
 }
 
+// PromptDevice is an optional LayerDevice told that the calls that follow
+// are a prompt's -- its chunks, a chunk's rows retried one at a time, the
+// head over its last row -- until it is told they are not. A one-row call
+// is not a step by its width alone: a device that runs a step's calls
+// apart from a prompt's reads this.
+type PromptDevice interface {
+	SetPrompt(on bool)
+}
+
 // RowsDevice is an optional LayerDevice that runs ONE decode step for several
 // independent sequences at once, so the weights are read once for all of them.
 //
