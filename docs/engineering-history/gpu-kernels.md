@@ -7076,3 +7076,42 @@ row where the composer's reads two.
     one-row norm 10 to 15 wide (`l.Of - 1` of a vector tail no split made).
     The test lists those shapes with their numbers as the CPU's work list and
     asserts the rest.
+- **A rotary over several position axes.** The composer's rotary table
+  holds four positions a row (`rope.pos.axes`: the live row count, then
+  axis a of row r at word 1+4r+a). Each pair's axis sits in a block the
+  plan carries (`rope.axes`), derived from the table's stated sections:
+  contiguous runs that cover every pair (Qwen2-VL's and Qwen2.5-VL's
+  M-RoPE), or Qwen3-VL's interleaving pair by pair. A pair turns by its
+  axis's position at its own frequency, so the planes are the one-axis
+  table's and the rotation is unchanged; the split is data, one form for
+  any. The front end states the sections and the interleaving on the
+  rotary op and the table. A rotary they do not state (XD-RoPE, whose pair
+  halves turn apart) stays UncoveredRopeAxes, held on the hunyuanvl
+  fixture. TestComposedRopeTableOverAxes runs five rows at 1 to 64 pairs on
+  ptx and spirv, on an RTX 3050 Ti and a V100 alike: within 7.5e-9 of
+  main's host table (nn.Rope.TableAt) and
+  6.0e-8 of the float64 table, each pair equal to the one-axis table at its
+  axis's position to the bit, and two axes swapped 1.6 to 2.0 away. A wrong
+  interleaving rule fails every interleaved case on both. Qwen2-VL-2B,
+  Qwen2.5-VL-3B and Qwen3-VL-2B (f16 and Q4_K_M) are served on CUDA and
+  Vulkan, every arm. Against the float reference the median ratio to the
+  tier's distance is 1.007 and 1.073 for Qwen2-VL-2B, 1.030 and 1.024 for
+  Qwen2.5-VL-3B, and 1.025 and 1.026 for Qwen3-VL's Q4_K_M (CUDA, then
+  Vulkan).
+  Qwen3-VL's f16 blocks and head run their float form, so that arm equals
+  the float reference (ratio 0) and the band measures nothing there; the
+  Q4_K_M holds the interleaved rotary to it. The f16 checkpoint's first run
+  failed every arm, and the failure was not the rotary's. Its float head
+  does not fold
+  into a batched chunk, so the prompt's last-row head was a one-row call of
+  its own, and the tier served that call as a step's. The engine now tells
+  the device when its calls are a prompt's (nn.PromptDevice), and the tier
+  serves none of a prompt's blocks or its head.
+  The CPU's table convention is main's, one row a call. It gained the
+  fields a multi-axis table reads, so the CPU forms the table, and at one
+  row the real geometries match the host table to the bit. Two gaps are
+  open on the x86 lowering. A nine-pair [0,2,7,0] split fails to lower:
+  its base parameters on fields 8 and 104 take main's registers for those
+  fields, which collide. A one-pair table on axis 0 passes its position as
+  a moving word, its offset reading the axis block, which no caller can
+  supply.

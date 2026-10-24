@@ -139,9 +139,11 @@ func mainSampleArgs() ArgFields {
 }
 
 // mainTableArgs is main's convention for a table part's words: the table
-// in Out, its input planes in AScale, the one input word in K.
+// in Out, its input planes in AScale, the one input word in K. A table over
+// several position axes reads more buffers, in the fields a block's take:
+// its positions, read at an index a load gives, in W.
 func mainTableArgs() ArgFields {
-	return ArgFields{Out: []int{0}, Consts: 56, In: []int{24}, Word: 40, Vectors: 40, Tail: 32, Counts: []int{32}}
+	return ArgFields{Out: []int{0}, Weight: 8, Consts: 56, In: []int{24, 104, 64}, Word: 40, Vectors: 40, Tail: 32, Counts: []int{32}}
 }
 
 // mainWorkgroups is main's layout of a range's partitions over workgroups.

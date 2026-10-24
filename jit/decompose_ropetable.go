@@ -13,10 +13,14 @@ import (
 // live row count, then a position a row), the model's planes (a position's
 // four base-128 digits' angles a pair, for the sine's sum and the cosine's,
 // then the table's scale) and the constant block of the range reduction
-// and the two polynomials.
+// and the two polynomials. A table over several position axes reads its
+// positions from tableAxisPos (the live row count, then ropeAxes positions a
+// row) and each pair's axis from a block the plan carries (tableAxes).
 var (
 	tablePos     = Operand{Kind: OperandTable, Name: "rope.pos", Elem: ir.U32}
+	tableAxisPos = Operand{Kind: OperandTable, Name: "rope.pos.axes", Elem: ir.U32}
 	tablePlanes  = Operand{Kind: OperandTable, Name: "rope.planes"}
+	tableAxes    = Operand{Kind: OperandTable, Name: "rope.axes", Elem: ir.U32}
 	tableRopeKon = Operand{Kind: OperandTable, Name: "rope.const", Elem: ir.U32}
 )
 
@@ -25,6 +29,9 @@ const (
 	ropeDigitBits = 7
 	ropeGrid      = 1 << 12
 	ropeLanes     = 8
+	// ropeAxes is a row's positions in a table over several axes, one an
+	// axis the sections can name.
+	ropeAxes = len(graph.Attrs{}.Sections)
 )
 
 // The constant block's words.
@@ -54,7 +61,8 @@ const (
 // grid with a truncating convert (stated as a Quarter, which a device may
 // reduce another way), the remainder's
 // sine and cosine by polynomials, swapped and signed by the quadrant, each
-// times the table's scale.
+// times the table's scale. Over several position axes the position is the
+// row's on the pair's axis, and the rest is the same.
 func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.Out) != 1 || o.Attr.NRot <= 0 || o.Attr.NRot%2 != 0 {
 		return nil, fmt.Errorf("a rotary table of %d", o.Attr.NRot)
@@ -63,13 +71,36 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	P := o.Attr.NRot / 2
 	stride := (P + ropeLanes - 1) &^ (ropeLanes - 1)
 	R := c.Step.Rows
+	out := Operand{Kind: OperandTable, Name: c.Graph.Values[o.Out[0]].Name}
+	of := strings.TrimPrefix(out.Name, tableAngles.Name)
+	var axes []uint32
+	if o.Attr.Sections != [ropeAxes]int{} {
+		if o.Attr.Grid {
+			return nil, fmt.Errorf("a rotary table of grid cells over the axes of sections %v", o.Attr.Sections)
+		}
+		var err error
+		if axes, err = ropeAxisWords(o.Attr, P); err != nil {
+			return nil, err
+		}
+	}
 	var x exprs
 	r, p := x.coord(0), x.coord(1)
 	cw := func(w int) int { return x.load(2, x.u(uint32(w))) }
 	cf := func(w int) int { return x.un(OpBitcast, F, cw(w)) }
-	pos := x.load(0, x.op(OpAdd, U, r, x.u(1)))
 	in := []Operand{tablePos, Operand{}, tableRopeKon}
 	ext := map[int]int{0: 1 + R, 1: 8*stride + 1}
+	words := map[int][]uint32{2: ropeConsts()}
+	var pos int
+	if axes != nil {
+		// The pair's axis, then the row's position on it.
+		axis := x.load(3, p)
+		pos = x.load(0, x.op(OpAdd, U, x.op(OpAdd, U, x.op(OpMul, U, r, x.u(uint32(ropeAxes))), axis), x.u(1)))
+		in[0] = tableAxisPos
+		in = append(in, Operand{Kind: tableAxes.Kind, Name: tableAxes.Name + of, Elem: tableAxes.Elem})
+		ext[0], ext[3], words[3] = 1+R*ropeAxes, P, axes
+	} else {
+		pos = x.load(0, x.op(OpAdd, U, r, x.u(1)))
+	}
 	if o.Attr.Grid {
 		// The position is a cell of the grid the request's first word
 		// wide; the pair's axis, after the planes' scale, picks its row (0)
@@ -130,13 +161,50 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 
 	var live exprs
 	live.load(0, live.u(0))
-	out := Operand{Kind: OperandTable, Name: c.Graph.Values[o.Out[0]].Name}
-	planes := Operand{Kind: OperandTable, Name: tablePlanes.Name + strings.TrimPrefix(out.Name, tableAngles.Name)}
-	in[1] = planes
+	in[1] = Operand{Kind: OperandTable, Name: tablePlanes.Name + of}
 	return []Prim{{Kind: PrimMap, Shape: []int{R, P}, In: in, Expr: x.e,
 		Stores: []PrimStore{{Out: out, Index: at, Value: cvs, Extent: 2 * R * P}, {Out: out, Index: at1, Value: svs, Extent: 2 * R * P}},
-		Facts: Facts{Rows: live.e, Words: map[int][]uint32{2: ropeConsts()}, Extents: ext,
+		Facts: Facts{Rows: live.e, Words: words, Extents: ext,
 			Quarter: &Quarter{Sum: s, Rest: co, Turn: n, Part: f, Bound: 1 << (ropeDigitBits + 4)}}}}, nil
+}
+
+// ropeAxisWords is each of a table's pairs' axis as its sections assign it
+// (graph.Attrs.Sections): contiguous runs that cover every pair, or pair by
+// pair where Interleaved, over the first three axes.
+func ropeAxisWords(a graph.Attrs, pairs int) ([]uint32, error) {
+	w := make([]uint32, pairs)
+	sum := 0
+	for _, n := range a.Sections {
+		if n < 0 {
+			return nil, fmt.Errorf("rotary sections %v", a.Sections)
+		}
+		sum += n
+	}
+	if a.Interleaved {
+		if a.Sections[3] != 0 {
+			return nil, fmt.Errorf("interleaved rotary sections %v: a fourth axis is not interleaved", a.Sections)
+		}
+		for p := range w {
+			switch {
+			case p%3 == 1 && p < 3*a.Sections[1]:
+				w[p] = 1
+			case p%3 == 2 && p < 3*a.Sections[2]:
+				w[p] = 2
+			}
+		}
+		return w, nil
+	}
+	if sum != pairs {
+		return nil, fmt.Errorf("rotary sections %v over %d pairs: contiguous sections cover every pair", a.Sections, pairs)
+	}
+	p := 0
+	for ax, n := range a.Sections {
+		for range n {
+			w[p] = uint32(ax)
+			p++
+		}
+	}
+	return w, nil
 }
 
 // ropeConsts is the rotary table's constant block, word for word.
@@ -159,9 +227,9 @@ func ropeConsts() []uint32 {
 
 // ropeWord is a word of the rotary table's positions at step s: the live
 // rows first, then each row's position, a decode row's the last of its
-// history.
+// history on every axis.
 func ropeWord(o Operand, w int, s Step) (float64, bool) {
-	if o.Kind != tablePos.Kind || o.Name != tablePos.Name {
+	if o.Kind != tablePos.Kind || o.Name != tablePos.Name && o.Name != tableAxisPos.Name {
 		return 0, false
 	}
 	if w == 0 {

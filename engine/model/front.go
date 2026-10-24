@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 
 	"github.com/jitllm/jitllm/engine/graph"
@@ -66,7 +67,7 @@ var uncoveredNames = [numUncovered]string{
 	UncoveredGeometry:    "a layer of its own head width, head count or rotary width",
 	UncoveredSelect:      "an attention indexer or sparse key selection",
 	UncoveredStreams:     "several residual streams",
-	UncoveredRopeAxes:    "a rotary over several position axes or per element",
+	UncoveredRopeAxes:    "a rotary over position axes its sections do not state (a pair's halves turned apart)",
 	UncoveredNonCausal:   "non-causal attention",
 	UncoveredClassic:     "LayerNorm or a parallel attention and FFN",
 	UncoveredQKNormPlace: "a q/k norm without a weight, or one over the whole projection after the rotary",
@@ -131,7 +132,7 @@ type frontKey struct {
 
 // ropeKey is what the front end reads of a rotary.
 type ropeKey struct {
-	nrot             int
+	nrot, runs       int
 	base, scale      float64
 	neox, freqs, set bool
 }
@@ -140,7 +141,7 @@ func ropeKeyOf(r *nn.Rope) ropeKey {
 	if r == nil {
 		return ropeKey{}
 	}
-	return ropeKey{nrot: r.NRot, base: r.Base, scale: r.Scale, neox: r.Neox, freqs: len(r.Freqs) > 0, set: true}
+	return ropeKey{nrot: r.NRot, runs: len(r.Runs), base: r.Base, scale: r.Scale, neox: r.Neox, freqs: len(r.Freqs) > 0, set: true}
 }
 
 // composing is the model as the composer reads it.
@@ -172,15 +173,17 @@ func (c composing) EmbedGraph() *graph.Graph { return c.m.frontGraphs().embed }
 // Rotaries is the model's rotary, then its sliding layers' where it trains
 // two: the tables the blocks' rotaries turn by.
 func (c composing) Rotaries() []graph.Rotary {
-	out := []graph.Rotary{rotaryOf(c.m.rope)}
+	out := []graph.Rotary{c.m.rotaryOf(c.m.rope)}
 	if c.m.ropeSWA != nil {
-		out = append(out, rotaryOf(*c.m.ropeSWA))
+		out = append(out, c.m.rotaryOf(*c.m.ropeSWA))
 	}
 	return out
 }
 
-func rotaryOf(r nn.Rope) graph.Rotary {
-	return graph.Rotary{NRot: r.NRot, Base: r.Base, Freqs: len(r.Freqs) > 0}
+func (m *Model) rotaryOf(r nn.Rope) graph.Rotary {
+	g := graph.Rotary{NRot: r.NRot, Base: r.Base, Freqs: len(r.Freqs) > 0}
+	g.Sections, g.Interleaved = m.ropeAxes(r)
+	return g
 }
 
 func (c composing) Tower() bool { return false }
@@ -290,7 +293,7 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredSelect
 	case c.Streams() > 1:
 		return UncoveredStreams
-	case c.RopeSections != [4]int{} || c.RopeInterleaved || c.RopeXD:
+	case c.RopeAt(li) && !m.ropeAxesStated(m.ropeAt(li)):
 		return UncoveredRopeAxes
 	case c.NonCausal || c.BidirSWA:
 		return UncoveredNonCausal
@@ -339,6 +342,32 @@ func (m *Model) ropeAt(li int) nn.Rope {
 		return *m.ropeSWA
 	}
 	return m.rope
+}
+
+// ropeAxes is the position axes rotary r turns its pairs by, as the op
+// language states them (graph.Attrs.Sections, Interleaved): none for a
+// rotary of one position.
+func (m *Model) ropeAxes(r nn.Rope) (sections [4]int, interleaved bool) {
+	if len(r.Runs) == 0 {
+		return sections, false
+	}
+	return m.Cfg.RopeSections, m.Cfg.RopeInterleaved
+}
+
+// ropeAxesStated reports whether the sections ropeAxes states are rotary
+// r's: every pair in a run of the sections' axes at its own frequency, so
+// a pair turns by one angle. A pair whose two halves turn by different
+// axes (RopeXD) is not.
+func (m *Model) ropeAxesStated(r nn.Rope) bool {
+	if len(r.Runs) == 0 {
+		return true
+	}
+	sec, il := m.ropeAxes(r)
+	want := nn.MRopeRuns(sec[:])
+	if il {
+		want = nn.IMRopeRuns(sec[:], r.NRot/2)
+	}
+	return !m.Cfg.RopeXD && nn.RopeRuns(r.Runs) == r.NRot/2 && slices.Equal(want, r.Runs)
 }
 
 // blockGraph is block li's graph: the attention block the container states
@@ -414,6 +443,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 			layout = graph.RopeNeox
 		}
 		a := graph.Attrs{HeadDim: hd, NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
+		a.Sections, a.Interleaved = m.ropeAxes(r)
 		q = b.Emit(graph.OpRope, []graph.ValueID{q}, []graph.Result{{Name: "q.rope", Width: qdim}}, nil, a, nil, nil)[0]
 		k = b.Emit(graph.OpRope, []graph.ValueID{k}, []graph.Result{{Name: "k.rope", Width: kvDim}}, nil, a, nil, nil)[0]
 	}

@@ -56,7 +56,11 @@ func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts
 // servedModels is every checkpoint whose blocks and head the front end states
 // as ops and that one card of 16 GiB holds: dense models of the llama, qwen2,
 // qwen3, gemma, gemma2, gemma3, olmo2, exaone4, arcee, granite, hunyuan,
-// phi3 and falcon classes.
+// phi3 and falcon classes, and the text models of qwen2vl and qwen3vl, whose
+// rotaries turn over several position axes. Qwen3-VL-2B's f16 blocks and head
+// run their float form, so that arm equals the float reference and its band
+// measures nothing; the Q4_K_M of the same model holds the interleaved rotary
+// to the band.
 var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf", "tinyllama-1.1b-q3_K_M.gguf",
 	"gemma-2b.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf", "qwen2.5-1.5b-instruct-q4_k_m.gguf",
 	"SmolLM2-360M-Instruct-Q8_0.gguf", "stories15M-q8_0.gguf", "SmolVLM-256M-Instruct-Q8_0.gguf",
@@ -64,7 +68,9 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 	"granite/granite-3.3-2b-instruct-Q4_K_M.gguf", "granite/granite-4.0-micro-Q4_K_M.gguf",
 	"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf", "Phi-3.5-mini-instruct-Q4_K_M.gguf",
 	"gemma-3-1b-it-Q4_K_M.gguf", "gemma-3-4b-it-Q4_K_M.gguf", "gemma-2-2b-it-Q4_K_M.gguf",
-	"falcon/falcon-7b-instruct.Q4_K_M.gguf"}
+	"falcon/falcon-7b-instruct.Q4_K_M.gguf",
+	"Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "Qwen3-VL-2B-Instruct-f16.gguf",
+	"Qwen3VL-2B-Instruct-Q4_K_M.gguf"}
 
 // headDeclined is why the tier still declines a served model's head where it
 // does, by its name (tier.DeclineName): a head graph past the norm and the
@@ -93,7 +99,8 @@ var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1
 	"synth-olmo3.gguf", "synth-phi3", "synth-glm4.gguf", "rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf",
 	"synth-phi2.gguf", "synth-starcoder.gguf", "synth-stablelm.gguf", "synth-stablelm-par.gguf",
 	"synth-starcoder2.gguf", "synth-falcon.gguf", "synth-falcon40.gguf", "synth-nemotron.gguf",
-	"synth-commandr.gguf", "synth-cohere2.gguf"}
+	"synth-commandr.gguf", "synth-cohere2.gguf",
+	"synth-qwen2vl.gguf", "synth-qwen25vl.gguf", "synth-qwen3vl.gguf"}
 
 // headUnstated is the models of servedModels and formedModels whose head the
 // front end names as not stated yet, by the reason it gives: a LayerNorm head.

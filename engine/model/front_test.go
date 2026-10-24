@@ -100,7 +100,7 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 		{"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", UncoveredMixture},
 		{"synth-dbrx.gguf", UncoveredMixture},
 		{"synth-bitnet-f16.gguf", UncoveredSubNorm},
-		{"synth-qwen2vl.gguf", UncoveredRopeAxes},
+		{"synth-hunyuanvl.gguf", UncoveredRopeAxes},
 	} {
 		t.Run(c.file, func(t *testing.T) {
 			// Every block of these models has the feature: every block is

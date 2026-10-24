@@ -55,11 +55,16 @@ const (
 	// SourceWindows is the rows' descriptors as SourceRows lays them, each
 	// row's attended range its window.
 	SourceWindows
+	// SourceRopeAxisPositions is a step's positions on a rotary's several
+	// axes: the live row count, then RopeAxes words a row, axis a of row r
+	// at 1+r*RopeAxes+a.
+	SourceRopeAxisPositions
 	numSources
 )
 
 var sourceNames = [numSources]string{"step", "weight", "input", "rows", "pages", "query offset",
-	"rotary positions", "rotary planes", "keys", "values", "words", "transfer", "tokens", "state", "request", "windows"}
+	"rotary positions", "rotary planes", "keys", "values", "words", "transfer", "tokens", "state", "request", "windows",
+	"rotary axis positions"}
 
 func (s Source) String() string {
 	if s < numSources {
@@ -83,6 +88,9 @@ const (
 	RowWrite = rowWrite
 	RowWords = rowWords
 )
+
+// RopeAxes is a row's positions in SourceRopeAxisPositions.
+const RopeAxes = ropeAxes
 
 // Storage is one buffer a step binds: the key every binding of it shares,
 // where its contents come from, and the bytes the step reaches in it (0 for
@@ -148,7 +156,7 @@ func (s StorageKeys) Key(o Operand) Operand {
 // tableSources is the source of each table the decompositions declare.
 var tableSources = map[string]Source{
 	tableRows.Name: SourceRows, tablePages.Name: SourcePages, tableQOff.Name: SourceQueryOffset,
-	tablePos.Name: SourceRopePositions, tablePlanes.Name: SourceRopePlanes,
+	tablePos.Name: SourceRopePositions, tableAxisPos.Name: SourceRopeAxisPositions, tablePlanes.Name: SourceRopePlanes,
 	tableKeys.Name: SourceKeys, tableValues.Name: SourceValues, tableRequest.Name: SourceRequest, tableWindows.Name: SourceWindows, tableAngles.Name: SourceStep,
 	tableTokens.Name: SourceTokens,
 }

@@ -218,7 +218,7 @@ func segmentParts(f Model, seg Segment, first, rotBase, picture, picW int, headl
 		if r.NRot == 0 {
 			continue
 		}
-		rt := graph.RopeTable{NRot: r.NRot, Name: tableName(rotBase + i), Grid: r.Grid}
+		rt := graph.RopeTable{NRot: r.NRot, Name: tableName(rotBase + i), Grid: r.Grid, Sections: r.Sections, Interleaved: r.Interleaved}
 		parts = append(parts, Part{Kind: PartTable, Segment: seg, Block: -1, Graph: rt.Build()})
 	}
 	var seamRoles []jlm.Role

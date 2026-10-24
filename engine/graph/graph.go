@@ -109,6 +109,8 @@ const (
 	OpConcat
 	// OpRopeTable is a step's rotary table: for each row's position and each
 	// of NRot/2 pairs, the pair's cos and sin, Out[0] two elements a pair.
+	// Where Sections states several axes, a row has a position on each, and
+	// a pair's angle is its axis's position's.
 	OpRopeTable
 	// OpEmbed is a step's input rows: each row's token's row of Weight[0],
 	// the token a word of the step's own a row; where Positional, each
@@ -316,9 +318,13 @@ type Attrs struct {
 	Freqs   bool // the rotary divides each pair's theta by stored factors (the container's rope_freqs)
 	// Sections splits the rotary's pairs between a row's position axes
 	// (M-RoPE: time, height, width and a fourth); all zero is one axis.
-	// Interleaved assigns the axes pair by pair rather than in contiguous
-	// runs. The row's positions on each axis are the row's, so
-	// the op is the same rotation over a table built per row.
+	// Contiguous, Sections[i] consecutive pairs turn by axis i, the
+	// sections covering every pair. Interleaved assigns the axes pair by
+	// pair: pair p by axis 1 where p%3 == 1 and p < 3*Sections[1], by axis 2
+	// where p%3 == 2 and p < 3*Sections[2], by axis 0 otherwise. Pair p's
+	// frequency is p's either way. The row's positions on each axis are the
+	// row's, so OpRope is the same rotation over a table built per row
+	// (OpRopeTable's, which reads them).
 	Sections    [4]int
 	Interleaved bool
 	// Mscale multiplies the rotary's cos and sin; 0 is one.

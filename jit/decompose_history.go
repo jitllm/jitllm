@@ -33,19 +33,25 @@ var (
 
 // rotaryTable is the step's table a rotary op turns by: the model's one
 // where it has one, else the rotary its width and base name, its factors
-// telling two apart.
+// telling two apart. A table turns its pairs by the position axes the op
+// states, or it is not the op's.
 func (c *Context) rotaryTable(a graph.Attrs) (Operand, error) {
+	axes := func(r graph.Rotary) bool { return r.Sections == a.Sections && r.Interleaved == a.Interleaved }
 	if len(c.Rotaries) <= 1 {
+		if len(c.Rotaries) == 1 && !axes(c.Rotaries[0]) {
+			return Operand{}, fmt.Errorf("a rotary over the axes of sections %v (interleaved %v), where the model's table turns by sections %v (interleaved %v)",
+				a.Sections, a.Interleaved, c.Rotaries[0].Sections, c.Rotaries[0].Interleaved)
+		}
 		return Operand{Kind: OperandTable, Name: tableName(c.RotaryBase)}, nil
 	}
 	found := -1
 	for i, r := range c.Rotaries {
-		if r.NRot == a.NRot && r.Base == a.Base && (found < 0 || r.Freqs == a.Freqs) {
+		if r.NRot == a.NRot && r.Base == a.Base && axes(r) && (found < 0 || r.Freqs == a.Freqs) {
 			found = i
 		}
 	}
 	if found < 0 {
-		return Operand{}, fmt.Errorf("a rotary of %d at base %v the model states no table of", a.NRot, a.Base)
+		return Operand{}, fmt.Errorf("a rotary of %d at base %v over sections %v the model states no table of", a.NRot, a.Base, a.Sections)
 	}
 	return Operand{Kind: OperandTable, Name: tableName(c.RotaryBase + found)}, nil
 }
@@ -55,13 +61,9 @@ func (c *Context) rotaryTable(a graph.Attrs) (Operand, error) {
 func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
 	// The angles are the step's table, built from the engine's rotary: its
-	// per-pair factors (Freqs) and its cos/sin scale (Mscale) are in it. A
-	// row carries one coordinate: a rotary whose pairs turn by several (a
-	// row's position on several axes) needs a table of per-element angles,
-	// not formed yet, and is refused rather than turned by the one.
-	if a.Sections != [4]int{} || a.Interleaved {
-		return nil, fmt.Errorf("a rotary of several position axes (sections %v): per-element angle tables are not formed yet", a.Sections)
-	}
+	// per-pair factors (Freqs), its cos/sin scale (Mscale) and, over several
+	// position axes (Sections), each pair's axis are in it. Each pair turns
+	// by one angle either way, so the rotation is the same.
 	if len(o.In) != 1 || len(o.Out) != 1 || a.HeadDim <= 0 || c.width(o.In[0])%a.HeadDim != 0 ||
 		a.NRot <= 0 || a.NRot%2 != 0 || a.NRot > a.HeadDim ||
 		a.Layout != graph.RopeNorm && a.Layout != graph.RopeNeox {
