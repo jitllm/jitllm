@@ -51,11 +51,12 @@ func TestPagedPrefillGatesDiscriminate(t *testing.T) {
 		f     prefillForm
 	}
 	sh16 := ir.MMAShape{M: 16, N: 8, K: 16, Kind: ir.MMAF16}
+	volta := ir.MMAVolta()
 	paths := []path{
 		{name: "tiled", f: prefillForm{scoresQT: 2, scoresKT: 2, accQT: 2, smLanes: 32}},
 		{name: "mma", mma: &sh16, f: prefillForm{mmaNT: 2, accQT: 4, smLanes: 32}},
-		{name: "volta", mma: &ir.MMAVolta(), f: prefillForm{voltaMT: 1, voltaNT: 2, smLanes: 32}},
-		{name: "flash70", mma: &ir.MMAVolta(), flash: true},
+		{name: "volta", mma: &volta, f: prefillForm{voltaMT: 1, voltaNT: 2, smLanes: 32}},
+		{name: "flash70", mma: &volta, flash: true},
 		{name: "flashtile", tile: true, flash: true},
 	}
 	ran := 0
