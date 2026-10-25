@@ -26,6 +26,7 @@ func namedReason(u Uncovered) bool { return u > Covered && u < UncoveredUnbound 
 // block by a reason it names, never by a graph that fails to verify.
 func TestFrontStatesTheModelAsOps(t *testing.T) {
 	step := jit.Step{Rows: 1, Page: 64, Keys: 16, ActWindow: 32}
+	headlessModels, headlessTables := 0, 0
 	for _, file := range append(slices.Clone(servedModels), formedModels...) {
 		t.Run(file, func(t *testing.T) {
 			m := frontModel(t, file)
@@ -50,6 +51,24 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Every rotary the model states is a table part, a headless model's
+			// among them: no part kind is left out of what is formed.
+			wantTables := 0
+			for _, r := range f.Rotaries() {
+				if r.NRot != 0 {
+					wantTables++
+				}
+			}
+			if len(f.Rotaries()) == 0 && f.Config().NRot != 0 {
+				wantTables = 1
+			}
+			if got := rotaryTables(parts); got != wantTables {
+				t.Fatalf("%d rotary table part(s) of %d parts, where the model states %d rotar(ies)", got, len(parts), wantTables)
+			}
+			if unstated {
+				headlessModels++
+				headlessTables += wantTables
+			}
 			for _, d := range []jit.Device{{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, {Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}} {
 				var run []jit.PartPlan
 				for _, p := range parts {
@@ -73,6 +92,7 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 			}
 		})
 	}
+	t.Logf("%d headless model(s) formed %d rotary table part(s) beside their input rows and blocks", headlessModels, headlessTables)
 	for _, c := range []struct {
 		file string
 		want Uncovered
@@ -100,17 +120,25 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 }
 
 // frontParts is the model's parts as the composer forms them: the whole
-// front, or where the head is not stated yet (headUnstated) the input rows
-// and the blocks, which are.
+// front, or where the head is not stated yet (headUnstated) the same parts
+// less the head and the sampling, which jit.FrontHeadless leaves out and no
+// other.
 func frontParts(f jit.Model, headless bool) ([]jit.Part, error) {
-	if !headless {
-		return jit.Front(f, false)
+	if headless {
+		return jit.FrontHeadless(f)
 	}
-	parts := []jit.Part{{Kind: jit.PartEmbed, Block: -1, Graph: f.EmbedGraph()}}
-	for li := range f.Blocks() {
-		parts = append(parts, jit.Part{Kind: jit.PartBlock, Block: li, Graph: f.BlockGraph(li)})
+	return jit.Front(f, false)
+}
+
+// rotaryTables is how many of parts are a rotary's table.
+func rotaryTables(parts []jit.Part) int {
+	n := 0
+	for _, p := range parts {
+		if p.Kind == jit.PartTable {
+			n++
+		}
 	}
-	return parts, nil
+	return n
 }
 
 // TestFrontNamesNoFamily holds the front end to reading numbers: its source

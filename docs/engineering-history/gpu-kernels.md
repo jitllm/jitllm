@@ -7024,8 +7024,20 @@ row where the composer's reads two.
   outputs add into the residual in main's order. The tier binds the two norm
   biases. The front end now states phi-2, StarCoder, StarCoder2, StableLM
   (serial and parallel), Falcon, Falcon-40B, Nemotron, Command-R and Cohere2
-  whole, and Falcon-7B-instruct; DBRX stays a mixture. Their heads stay the
-  tier's: a LayerNorm head is not stated yet.
+  whole, and Falcon-7B-instruct; DBRX stays a mixture. What is not composed
+  yet is missing implementation, each with its owner, and the tier's own
+  kernels running it meanwhile is not a resting state:
+    - The LayerNorm head of all of them (A4): the front end refuses it
+      (UncoveredClassic), so the tier declines "a head graph other than a norm
+      and its projection". The front test pins each such model to that refusal,
+      and fails when a head becomes stated until the entry goes.
+    - The input rows part (nobody owns it yet): the tier serves blocks and
+      heads only, so StarCoder's learned position table, like every model's
+      token lookup, is done by main's runtime. The front end states it
+      (a positional OpEmbed) and the composer forms and lowers it.
+    - Cohere2's three sliding layers, declined by "a window" (the tier does
+      not serve a window shorter than the session), and DBRX's mixture (unowned).
+    - The CPU composer's norms, below (unowned).
   - Served on a V100, CUDA and Vulkan, each fixture's blocks at every decode
     step (3 blocks over 9 steps is 27 block steps; Cohere2's three sliding
     layers are declined by the one named reason, a window, and its global
