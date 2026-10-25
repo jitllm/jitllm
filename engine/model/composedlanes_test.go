@@ -100,8 +100,17 @@ func TestComposedBlocksAtEachLaneCount(t *testing.T) {
 								t.Fatalf("the composer served %d block steps and declined %d where %d steps of %d blocks are %d (%s)",
 									nb, d, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer, st.LastErr)
 							}
-							if nh, d, _ := st.ServedPart(tier.ComposedHead); headOn && (nh != len(toks) || d != 0) {
-								t.Fatalf("the composer served the head %d times and declined it %d in %d steps", nh, d, len(toks))
+							if nh, d, _ := st.ServedPart(tier.ComposedHead); headOn {
+								// The prompt's head is the tier's, declined by its path's
+								// name (composedLater); every decode step's head is served.
+								for i, c := range st.HeadDeclines {
+									if slices.Contains(composedLater, tier.DeclineName(i)) {
+										d -= c
+									}
+								}
+								if nh != len(toks) || d != 0 {
+									t.Fatalf("the composer served the head %d times and declined it %d past the prompt's path in %d steps", nh, d, len(toks))
+								}
 							}
 							var ratios []float64
 							worst, worstAt, worstTier, fromTier := 0.0, 0, 0.0, 0.0
