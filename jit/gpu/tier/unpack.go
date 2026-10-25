@@ -61,7 +61,7 @@ func (g *devTier) unpackKernel(q kernels.Quant, nrows, k int) backend.Kernel {
 		g.unks[kk], g.UnpackWhy = nil, err.Error()
 		return nil
 	}
-	c, err := g.dev.Compile(ker)
+	c, err := g.compile(ker)
 	if err != nil {
 		g.unks[kk], g.UnpackWhy = nil, err.Error()
 		return nil

@@ -1941,6 +1941,9 @@ type devShared struct {
 	// a budget raised. A caller that gave blocks up reads it to know when
 	// asking for them back could succeed. See GPU.RoomGen.
 	roomGen atomic.Uint64
+	// cause is what kind of refusal the last call was (nn.FailCause), written
+	// by the code that met it and cleared at the head of every call.
+	cause atomic.Uint32
 	dev     backend.Device
 	pool    *Pool
 	// ord is this device's place in the tier's order, fastest first, and part

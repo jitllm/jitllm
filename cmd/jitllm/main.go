@@ -1019,8 +1019,13 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 		if g, ok := dev.(*tier.GPU); ok && g.Err() != "" {
 			why = ": " + g.Err()
 		}
+		ev := st.Evacuations()
 		fmt.Fprintf(os.Stderr,
-			"★ the device failed %d time(s) and its blocks moved to the host%s; this rate is NOT comparable with a run that kept the card\n", d, why)
+			"★ the device refused %d time(s) (%d fault, %d decline) and its blocks moved to the CPU device%s; this rate is NOT comparable with a run that kept the card\n",
+			d, ev.DemotedFault, ev.DemotedDecline, why)
+	}
+	if n := st.Evacuations().BuildRefused; n > 0 {
+		fmt.Fprintf(os.Stderr, "★ %d call(s) ended because a kernel did not build on the device; nothing was moved\n", n)
 	}
 	// Placement is not execution. The load banner says what each device holds;
 	// this says what each device ran and read back (tier.Stats.Blocks counts

@@ -831,7 +831,7 @@ func (g *devTier) gatherKernel(words, n int) (backend.Kernel, error) {
 	if err != nil {
 		return nil, err
 	}
-	k, err := g.dev.Compile(ker)
+	k, err := g.compile(ker)
 	if err != nil {
 		return nil, err
 	}

@@ -42,7 +42,7 @@ func (g *devTier) prepSample(head *nn.Head) bool {
 		if err != nil {
 			return false
 		}
-		c, err := g.dev.Compile(kk)
+		c, err := g.compile(kk)
 		if err != nil {
 			g.LastErr = "the sampler's penalty: " + err.Error()
 			return false
@@ -59,12 +59,12 @@ func (g *devTier) prepSample(head *nn.Head) bool {
 		if err != nil {
 			return false
 		}
-		c1, err := g.dev.Compile(k1)
+		c1, err := g.compile(k1)
 		if err != nil {
 			g.LastErr = "the sampler's first pass: " + err.Error()
 			return false
 		}
-		c2, err := g.dev.Compile(k2)
+		c2, err := g.compile(k2)
 		if err != nil {
 			c1.Close()
 			g.LastErr = "the sampler's second pass: " + err.Error()

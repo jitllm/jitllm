@@ -78,7 +78,7 @@ func (g *devTier) embedKernel(bs *blockScratch) bool {
 	kk, err := kernels.GetRowsPacked(r.t, r.nrows, r.k, batchWidth, es)
 	var k backend.Kernel
 	if err == nil {
-		k, err = g.dev.Compile(kk)
+		k, err = g.compile(kk)
 	}
 	var ib backend.Buf
 	if err == nil {

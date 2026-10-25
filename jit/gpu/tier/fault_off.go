@@ -2,6 +2,8 @@
 
 package tier
 
+import "github.com/jitllm/jitllm/jit"
+
 // The release build: no fault injection. Both of these inline to a constant, so
 // the check in Layers costs nothing and JITLLM_DEVICE_FAIL_AT does nothing at all.
 // See fault.go for why this is a build tag rather than a runtime flag.
@@ -19,3 +21,7 @@ func rowsFaulted(string) bool { return false }
 func moeFaulted(string) bool { return false }
 
 func roomFaulted(string) bool { return false }
+
+func (g *devTier) rewriteComposer(*jit.Registry) {}
+
+func formFaultedAsDevice() bool { return false }

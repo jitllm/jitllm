@@ -36,7 +36,7 @@ func (g *devTier) prepPick(head *nn.Head) bool {
 			g.LastErr = "the label pick: " + err.Error()
 			return false
 		}
-		c, err := g.dev.Compile(kk)
+		c, err := g.compile(kk)
 		if err != nil {
 			g.LastErr = "the label pick: " + err.Error()
 			return false

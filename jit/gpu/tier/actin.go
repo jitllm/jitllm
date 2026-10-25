@@ -175,7 +175,7 @@ func (g *devTier) segInKernel(segs []kernels.MatVecShape, split int, grp bool, i
 	ker, err := kernels.MatVecSegmentsIn(segs, split, grp, in)
 	var k backend.Kernel
 	if err == nil {
-		k, err = g.dev.Compile(ker)
+		k, err = g.compile(ker)
 	}
 	if err != nil {
 		g.actInDeclined(err)

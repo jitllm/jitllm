@@ -64,6 +64,10 @@ func TestDemotedDevicePrefillFinishesOnTheHost(t *testing.T) {
 		t.Fatalf("%d demotion(s) and %d blocks still on the device: the host restart was not reached",
 			dev.DeviceDemotions(), dev.GPULayers())
 	}
+	// A device fault is counted as one, and no build failure came of it.
+	if ev := dev.Evacuations(); ev.DemotedFault != dev.DeviceDemotions() || ev.DemotedDecline != 0 || ev.BuildRefused != 0 {
+		t.Fatalf("the injected failures were counted as %+v for %d demotion(s)", ev, dev.DeviceDemotions())
+	}
 	var num, den float64
 	for i := range want {
 		d := float64(got[i] - want[i])

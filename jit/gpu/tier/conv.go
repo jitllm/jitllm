@@ -153,7 +153,7 @@ func (g *devTier) convKern(key convKey, build func() (*ir.Kernel, error)) backen
 	ker, err := build()
 	var c backend.Kernel
 	if err == nil {
-		c, err = g.dev.Compile(ker)
+		c, err = g.compile(ker)
 	}
 	if err != nil {
 		g.LastErr = fmt.Sprintf("%s: %v", key.name, err)

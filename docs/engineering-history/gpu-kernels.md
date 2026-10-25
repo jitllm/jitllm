@@ -7698,3 +7698,38 @@ row where the composer's reads two.
   every host, CUDA and Vulkan arm, and `go build -gcflags=-m` over
   engine/graph, jit and engine/model reads the same 199 heap moves as the
   tree before this work.
+- **A kernel that does not build is returned, never moved around.** The device
+  call's refusal now carries a cause (`nn.FailCause`: decline, build, fault).
+  The tier records a build failure at the funnel every kernel the call cannot do
+  without goes through (`devTier.compile`, `buildFailed` for the composer's
+  forms and the cached "did not form earlier" answer) and a fault where the
+  submission's session errors or the injected failure fires; the model reads it
+  (`nn.CauseReporter`) at each place a failed `Layers` call used to demote, retry
+  or fall to the CPU device. A build failure returns `*nn.BuildError` naming the
+  block and moves nothing: no demotion, no relocation (`relocateUntil` stops
+  where `ReserveKV` or `RowsRoom` failed to build, and the step that needs the
+  kernel returns it), no head on the CPU device, no per-row retry of a chunk
+  whose kernel did not build. `SetDeviceFallback` now evacuates only for a fault
+  or a named decline (room); `State.Evacuations` counts demotions by cause,
+  relocations and build refusals (`jitllm run` prints them). Gates, both
+  injected as rewrites and never in a kernel: `SetFormFault` replaces the
+  composer registry's matvec decomposition with one that fails
+  (`TestBuildFailureMovesNothing`, block and head arms), and its violation
+  (the same failure reported as the device failing) must evacuate, which the
+  gate demands; `JITLLM_DEVICE_FAIL_AT` still evacuates and is counted a fault
+  (`TestDeviceFaultAtDecodeEvacuatesAndIsCounted`,
+  `TestDemotedDevicePrefillFinishesOnTheHost`). A first run of the relocation
+  set failed 6 tests, all `relocate-then-reclaim`: `RowsRoom` did not clear the
+  cause, a compile that an earlier call had refused read as this call's build
+  failure, and no block moved; every call a `fits` closure makes now clears it.
+  Card 0 (V100, cuda:0), default and composed builds: the fault set, the
+  relocation set (`TestLayerRelocatesToAnotherDevice`,
+  `TestKVPagesRelocateWithTheLayer`, the eleven `TestBatchSeamMovesCarryEveryRow`
+  variants) and `TestDecodeDoesNotAllocate` on Llama (28 passes, cuda:0 and
+  vulkan:0) all pass. Escape analysis against the tree before this work adds
+  only failure-path escapes (`BuildError`, `errors.As`' target); no line of
+  forward.go, step.go, layer.go's warm path or launch.go changes. Open: the
+  kernels' own IR constructors (about 80 `kernels.X` call sites in the tier)
+  and the placement-time matvec compiles record no cause, so their refusals are
+  still declines; a session error that is not the driver's (a tier logic error
+  inside the submission) is read as a fault.

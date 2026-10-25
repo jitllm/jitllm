@@ -3837,7 +3837,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			g.LastErr = e.Error()
 			return false
 		}
-		if l.mvRouter, e = g.dev.Compile(rk); e != nil {
+		if l.mvRouter, e = g.compile(rk); e != nil {
 			g.LastErr = e.Error()
 			return false
 		}
@@ -6520,7 +6520,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		if e != nil {
 			return false
 		}
-		c, e := g.dev.Compile(ck)
+		c, e := g.compile(ck)
 		if e != nil {
 			return false
 		}
@@ -7662,6 +7662,11 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	g.sub = submitArgs{}
 	if err != nil {
 		g.LastErr = err.Error()
+		if nn.IsBuildError(err) {
+			g.noteCause(nn.FailBuild)
+		} else {
+			g.noteCause(nn.FailFault)
+		}
 		return false
 	}
 	if head != nil {
@@ -11290,7 +11295,7 @@ func (g *devTier) intBatchMV(m mv, ntok, tok int) (mv, bool) {
 				T: m.q, K: m.k, Rows: m.rows, NTok: ntok, MT: mt, NT: nt,
 				Bias: m.bias != nil, ActWin: g.actWinFor(ntok)})
 			if err == nil {
-				c, err = g.dev.Compile(ker)
+				c, err = g.compile(ker)
 			}
 			if err != nil {
 				// A backend without a matrix instruction is a property of the
@@ -11752,7 +11757,7 @@ func (g *devTier) restride(src, dst backend.Buf, rows, cols, srcStride, dstStrid
 			g.LastErr = err.Error()
 			return false
 		}
-		if k, err = g.dev.Compile(ker); err != nil {
+		if k, err = g.compile(ker); err != nil {
 			g.LastErr = err.Error()
 			return false
 		}
@@ -12594,7 +12599,7 @@ func (g *devTier) volta70Attn(bs *blockScratch, kvDim, gqa int, scale float32) b
 		if err != nil {
 			return nil
 		}
-		c, err := g.dev.Compile(k)
+		c, err := g.compile(k)
 		if err != nil {
 			return nil
 		}
@@ -12698,7 +12703,7 @@ func (g *devTier) flashTileAttn(bs *blockScratch, kvDim, gqa int, scale float32)
 		if err != nil {
 			return nil
 		}
-		c, err := g.dev.Compile(k)
+		c, err := g.compile(k)
 		if err != nil {
 			return nil
 		}
@@ -12727,7 +12732,7 @@ func (g *devTier) spanKernel(hb *blockScratch) error {
 	kk, e := kernels.CopySpan(hb.p.NEmbd)
 	var k backend.Kernel
 	if e == nil {
-		k, e = g.dev.Compile(kk)
+		k, e = g.compile(kk)
 	}
 	var ob backend.Buf
 	if e == nil {

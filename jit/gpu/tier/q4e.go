@@ -163,7 +163,7 @@ func (g *devTier) initQ4E(bs *blockScratch) error {
 		if kk, err = mk(); err != nil {
 			return
 		}
-		*dst, err = g.dev.Compile(kk)
+		*dst, err = g.compile(kk)
 	}
 	al := func(dst *backend.Buf, n int) {
 		if err == nil && n > 0 {

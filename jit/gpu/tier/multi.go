@@ -1078,6 +1078,7 @@ func (g *GPU) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) 
 // is the placement PrepHead makes; elsewhere it becomes its own submission, one
 // more crossing and still worth it for the densest unit of a large model.
 func (g *GPU) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
+	g.resetCause()
 	ok := g.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
 	// A refusal before any device ran leaves the head device's promise
 	// unconsumed; it lives for one call (devTier.layersCall).
@@ -1612,6 +1613,7 @@ func (g *GPU) ReserveKVSeqs(bases, ends []int) bool {
 
 // reserveKVSeqs asks every device holding a block; see devTier.ReserveKVSeqs.
 func (g *GPU) reserveKVSeqs(sid uint64, bases, ends []int) bool {
+	g.resetCause()
 	var buf [ownersStack]*devTier
 	for _, d := range g.owners(buf[:0]) {
 		if !d.reserveKVSeqs(sid, bases, ends) {
@@ -1631,6 +1633,7 @@ func (g *GPU) ReserveKV(pos int) bool {
 // partial reservation would leave one sequence split across two tiers at two
 // different depths.
 func (g *GPU) reserveKV(sid uint64, pos int) bool {
+	g.resetCause()
 	var buf [ownersStack]*devTier
 	var refused *devTier
 	for _, d := range g.owners(buf[:0]) {

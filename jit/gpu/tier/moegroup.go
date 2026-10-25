@@ -146,7 +146,7 @@ func (g *devTier) newMoeGroup(p *nn.LayerPlan, rows int) *moeGroup {
 		}
 		var kk *ir.Kernel
 		if kk, err = mk(); err == nil {
-			*dst, err = g.dev.Compile(kk)
+			*dst, err = g.compile(kk)
 		}
 	}
 	buf := func(dst *backend.Buf, n int) {
@@ -463,7 +463,7 @@ func (g *devTier) moeKern(key moeKernKey, why string, mk func() (*ir.Kernel, err
 	ker, err := mk()
 	var c backend.Kernel
 	if err == nil {
-		c, err = g.dev.Compile(ker)
+		c, err = g.compile(ker)
 	}
 	if err != nil {
 		g.LastErr = why + err.Error()
@@ -564,7 +564,7 @@ func (g *devTier) moeFloatHalf(m *moeGroup, p *nn.LayerPlan) bool {
 		}
 		var kk *ir.Kernel
 		if kk, err = mk(); err == nil {
-			*dst, err = g.dev.Compile(kk)
+			*dst, err = g.compile(kk)
 		}
 	}
 	buf := func(dst *backend.Buf, n int) {

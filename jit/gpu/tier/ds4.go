@@ -307,7 +307,7 @@ func (g *devTier) initDS4(bs *blockScratch) error {
 		if k, err = mk(); err != nil {
 			return
 		}
-		*dst, err = g.dev.Compile(k)
+		*dst, err = g.compile(k)
 	}
 	al := func(dst *backend.Buf, n int) {
 		if err == nil && n > 0 {

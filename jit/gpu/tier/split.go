@@ -731,7 +731,7 @@ func (g *devTier) retuneIndexed() bool {
 			if err != nil {
 				return nil, nil, false
 			}
-			c, err := g.dev.Compile(kern)
+			c, err := g.compile(kern)
 			if err != nil {
 				return nil, nil, false
 			}
@@ -1047,7 +1047,7 @@ func (g *devTier) fuseMoE(l *layer) {
 		var k backend.Kernel
 		ker, err := kernels.MatVec(s)
 		if err == nil {
-			k, err = g.dev.Compile(ker)
+			k, err = g.compile(ker)
 		}
 		if err != nil {
 			g.LastErr, k = err.Error(), nil
@@ -1138,7 +1138,7 @@ func (g *devTier) fuseSegs(ms []mv) *segLaunch {
 	if !ok {
 		ker, err := kernels.MatVecSegments(segs, m0.split, m0.group)
 		if err == nil {
-			k, err = g.dev.Compile(ker)
+			k, err = g.compile(ker)
 		}
 		if err != nil {
 			g.LastErr = err.Error()
@@ -1219,7 +1219,7 @@ func (g *devTier) fuseQKV(l *layer) {
 	if !ok {
 		ker, err := kernels.MatVecSegments(segs, q.split, q.group)
 		if err == nil {
-			k, err = g.dev.Compile(ker)
+			k, err = g.compile(ker)
 		}
 		if err != nil {
 			g.LastErr = err.Error()

@@ -476,7 +476,7 @@ func (g *devTier) ownActKern(l *layer) bool {
 		k, err = kernels.Act(bs.rows*l.nffn, l.act)
 	}
 	if err == nil {
-		l.actK, err = g.dev.Compile(k)
+		l.actK, err = g.compile(k)
 	}
 	if err != nil {
 		g.LastErr = fmt.Sprintf("a non-causal block's own %s activation: %v", l.act, err)
@@ -545,6 +545,7 @@ func (g *devTier) headSetAt(rows int) bool {
 // ReserveRows asks every device (nn.RowsReserver); one holding no tower block
 // says yes.
 func (g *GPU) ReserveRows(n int) bool {
+	g.resetCause()
 	g.mu.Lock()
 	ds := g.devs
 	g.mu.Unlock()
@@ -590,6 +591,7 @@ func (g *GPU) LayersPhase(lo, hi, pos, n, keys, phase int, x, cs, csSWA []float3
 }
 
 func (g *GPU) layersPhase(sid uint64, lo, hi, pos, n, keys, phase int, x, cs, csSWA []float32) bool {
+	g.resetCause()
 	if phase != 1 && phase != 2 || keys < pos+n {
 		return false
 	}

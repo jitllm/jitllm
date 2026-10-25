@@ -273,7 +273,7 @@ func (g *devTier) winMaskLocked(bs *blockScratch) bool {
 		g.LastErr = "windowed runs: " + err.Error()
 		return false
 	}
-	c, err := g.dev.Compile(k)
+	c, err := g.compile(k)
 	if err != nil {
 		g.LastErr = fmt.Sprintf("windowed runs: %s declined the mask: %v", g.dev.API(), err)
 		return false

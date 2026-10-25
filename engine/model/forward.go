@@ -413,6 +413,11 @@ type State struct {
 	// other arm of the fold's gate and nothing else sets it.
 	noHeadFold bool
 	devDemoted int
+	// demotedBy counts the demotions by the cause the device gave, and
+	// buildRefused the calls a kernel that did not build ended: a build
+	// failure moves nothing, so it has no demotion to count.
+	demotedBy    [nFailCauses]int
+	buildRefused int
 	// devRowChunks counts prompt chunks the device refused whole and ran
 	// again a row at a time (prefillSrc's per-row retry). See DeviceRowChunks.
 	devRowChunks int
@@ -2307,6 +2312,7 @@ func (s *State) SetDeviceFallback(on bool) { s.devFallback = on }
 // The history moves before the blocks do: releasing first would free the only
 // copy of their keys and values.
 func (s *State) demoteAll() bool {
+	cause := s.devCause()
 	// The set, not the prefix: a hybrid's prefix can be zero with blocks
 	// placed.
 	if s.ld == nil || s.devCount() == 0 {
@@ -2331,6 +2337,7 @@ func (s *State) demoteAll() bool {
 	// is a decision for whoever handles the report, not for the next token.
 	s.gpuTarget, s.seam = 0, nil
 	s.devDemoted++
+	s.demotedBy[cause]++
 	return true
 }
 
@@ -2426,6 +2433,12 @@ func (s *State) relocateUntil(pos int, fits func() bool) {
 	}
 	defer func() { s.roomSeen = s.roomGen() }() // our own moves are not news
 	for s.devCount() > 0 && !fits() {
+		// A kernel that did not build is not room, and no block's move gives
+		// it one: nothing moves, and the step that needs the kernel meets the
+		// failure and returns it (buildRefusal).
+		if s.devCause() == nn.FailBuild {
+			return
+		}
 		li := s.relocationVictim()
 		if li < 0 {
 			return // every device block is pinned: the token takes the refusal
@@ -3815,6 +3828,9 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 				return nil, err
 			}
 			if !s.ld.Layers(li, hi, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.NRotSWA), fold) {
+				if err := s.buildRefusal(li); err != nil {
+					return nil, err
+				}
 				s.ngramUndoRows()
 				// A failed run demotes everything and restarts the token on the
 				// host from the embeddings (Layers may have written part of the
@@ -4349,6 +4365,8 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 		}
 		if s.ld.Layers(s.gpuLayers, s.gpuLayers, s.pos, 1, s.resid(), s.cs[:c.RopeW()], s.swaTable(c.NRotSWA), s.head) {
 			done = true
+		} else if err := s.buildRefusal(s.gpuLayers); err != nil {
+			return nil, err
 		} else if !s.devFallback {
 			return nil, errDevice{s.gpuLayers, s.devWhy()}
 		}

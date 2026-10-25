@@ -299,7 +299,7 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 			fail(err)
 			return nil
 		}
-		c, err := g.dev.Compile(k)
+		c, err := g.compile(k)
 		if err != nil {
 			fail(err)
 			return nil
@@ -376,6 +376,7 @@ func (g *GPU) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA [
 // for self's.
 func (g *GPU) layersRows(self uint64, lo, hi int, pos, slot []int, sid []uint64, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
 	g.resetRecSteps(self)
+	g.resetCause()
 	g.mu.Lock()
 	rs, ok := g.runsInto(g.runBuf, lo, hi)
 	g.runBuf = nil
@@ -485,6 +486,7 @@ func (g *GPU) RowsWidth(want int) int {
 // the head has its per-row head too. A scratch that does not build is an
 // error, not a shortage of room.
 func (g *GPU) rowsRoom(sid uint64, rows, seqs int, head *nn.Head) (bool, error) {
+	g.resetCause()
 	if roomFaulted("noseat-lie") || roomFaulted("narrow-lie") {
 		return true, nil
 	}
@@ -734,7 +736,7 @@ func (g *devTier) headOneMV(R int) (mv, bool) {
 		ker, err := kernels.MatVec(kernels.MatVecShape{Center: g.center, T: q, K: k, Rows: m.rows,
 			Split: m.split, ActRows: R})
 		if err == nil {
-			c, err = g.dev.Compile(ker)
+			c, err = g.compile(ker)
 		}
 		if err != nil {
 			g.LastErr = "rows: the one-row head: " + err.Error()
@@ -829,7 +831,7 @@ func (g *devTier) groupKern(m mv, ntok, R int, epi groupEpi, act kernels.ActKind
 			Tok: ntok, ActRows: R, Split: split, GroupSplit: grp, Bias: m.bias != nil || epi == groupRes,
 			BiasRows: epi == groupRes, Gate: epi == groupGate, GateAct: act})
 		if err == nil {
-			k, err = g.dev.Compile(ker)
+			k, err = g.compile(ker)
 		}
 		if err != nil {
 			k = nil
@@ -893,7 +895,7 @@ func (g *devTier) groupQKV(l *layer, ntok, R int) (segLaunch, bool) {
 	if !ok {
 		ker, err := kernels.MatVecSegments(segs, split, grp)
 		if err == nil {
-			k, err = g.dev.Compile(ker)
+			k, err = g.compile(ker)
 		}
 		if err != nil {
 			g.LastErr = err.Error()
@@ -953,7 +955,7 @@ func (g *devTier) dot4Split(m mv, ntok, tok, rowt, split int) (mv, bool) {
 			ker, err := kernels.MatVec(kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok,
 				Tok: tok, Rowt: rowt, Split: split, Bias: m.bias != nil})
 			if err == nil {
-				k, err = g.dev.Compile(ker)
+				k, err = g.compile(ker)
 			}
 			if err != nil {
 				refusal = err.Error()
@@ -1046,7 +1048,7 @@ func (g *devTier) voltaMV(m mv, ntok int) (mv, bool) {
 			ker, err := kernels.MatVecMMA70(kernels.MatVecShape{Center: g.center, T: m.q, K: m.k, Rows: m.rows, NTok: ntok,
 				MT: mt, NT: nt, Split: split, Bias: m.bias != nil})
 			if err == nil {
-				k, err = g.dev.Compile(ker)
+				k, err = g.compile(ker)
 			}
 			if err != nil {
 				k = nil
@@ -1068,7 +1070,7 @@ func (g *devTier) voltaMV(m mv, ntok int) (mv, bool) {
 	if !ok {
 		ker, err := kernels.ActF16(m.q, ntok, m.k)
 		if err == nil {
-			a, err = g.dev.Compile(ker)
+			a, err = g.compile(ker)
 		}
 		if err != nil {
 			a = nil
@@ -1125,7 +1127,7 @@ func (g *devTier) tileMV(m mv, ntok int) (mv, bool) {
 		if !ok {
 			ker, err := kernels.GemmTile(s, tl)
 			if err == nil {
-				c, err = g.dev.Compile(ker)
+				c, err = g.compile(ker)
 			}
 			if err != nil {
 				g.tileOff, g.TileWhy = true, err.Error()
@@ -1144,7 +1146,7 @@ func (g *devTier) tileMV(m mv, ntok int) (mv, bool) {
 		if !ok {
 			ker, err := kernels.ActF16T(m.q, ntok, m.k)
 			if err == nil {
-				a, err = g.dev.Compile(ker)
+				a, err = g.compile(ker)
 			}
 			if err != nil {
 				a = nil
@@ -1360,7 +1362,7 @@ func (g *devTier) fusedKern(key ragKey, build func() (*ir.Kernel, error)) backen
 	ker, err := build()
 	var c backend.Kernel
 	if err == nil {
-		if c, err = g.dev.Compile(ker); err != nil {
+		if c, err = g.compile(ker); err != nil {
 			c = nil
 		}
 	}
@@ -1537,7 +1539,7 @@ func (g *devTier) int8Gemm(m mv, ntok int) (mv, bool) {
 			if !ok {
 				ker, err := kernels.GemmInt8(s, tl)
 				if err == nil {
-					k, err = g.dev.Compile(ker)
+					k, err = g.compile(ker)
 				}
 				if err != nil {
 					k = nil
@@ -1646,7 +1648,7 @@ func (g *devTier) stagedGemm(m mv, ntok int, tiles []kernels.VoltaTile, f16k, fi
 			if !ok {
 				ker, err := kernels.GemmVolta(s, tl)
 				if err == nil {
-					k, err = g.dev.Compile(ker)
+					k, err = g.compile(ker)
 				}
 				if err != nil {
 					k = nil
@@ -1676,7 +1678,7 @@ func (g *devTier) stagedGemm(m mv, ntok int, tiles []kernels.VoltaTile, f16k, fi
 		if !ok {
 			ker, err := kernels.ActF16T(m.q, ntok, m.k)
 			if err == nil {
-				a, err = g.dev.Compile(ker)
+				a, err = g.compile(ker)
 			}
 			if err != nil {
 				a = nil
@@ -1788,7 +1790,7 @@ func (g *devTier) prepRagLinear(bs *blockScratch, n int) bool {
 	} {
 		var kk *ir.Kernel
 		if kk, err = k.mk(); err == nil && kk != nil {
-			*k.dst, err = g.dev.Compile(kk)
+			*k.dst, err = g.compile(kk)
 		}
 		if err != nil {
 			for _, c := range []backend.Kernel{rk.conv, rk.shift, rk.delta, rk.ngConv} {

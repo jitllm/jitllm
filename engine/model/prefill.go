@@ -784,6 +784,9 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 					li = hi - 1
 					continue
 				}
+				if err := s.buildRefusal(li); err != nil {
+					return nil, err
+				}
 				s.ngramUndoRows()
 				// A hybrid's speculation step is rolled back as one pass, and a
 				// recurrent block run row by row could not be: the device's
@@ -842,6 +845,9 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 								s.rowStreams(s.bx[:n*c.ResidW()], i, n, true)
 							}
 							continue
+						}
+						if err := s.buildRefusal(li); err != nil {
+							return nil, err
 						}
 						s.ngramUndoRows()
 						if !s.devFallback {
@@ -1002,6 +1008,9 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 				return nil, err
 			}
 			return s.logits, nil
+		}
+		if err := s.buildRefusal(s.gpuLayers); err != nil {
+			return nil, err
 		}
 		if !s.devFallback {
 			return nil, errDevice{s.gpuLayers, s.devWhy()}

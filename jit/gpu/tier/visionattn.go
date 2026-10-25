@@ -95,7 +95,7 @@ func (g *devTier) allocAttnChunks(bs *blockScratch, qdim int, al func(*backend.B
 	comp := func(dst *backend.Kernel, build func(int) (*ir.Kernel, error)) {
 		k, err := build(n)
 		if err == nil {
-			*dst, err = g.dev.Compile(k)
+			*dst, err = g.compile(k)
 		}
 		if err != nil {
 			g.LastErr = err.Error()

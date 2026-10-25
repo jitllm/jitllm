@@ -834,7 +834,7 @@ func (g *devTier) slotCopy(w, rows int) (backend.Kernel, error) {
 	if err != nil {
 		return nil, err
 	}
-	k, err := g.dev.Compile(kk)
+	k, err := g.compile(kk)
 	if err != nil {
 		return nil, err
 	}

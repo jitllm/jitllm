@@ -151,7 +151,7 @@ func (g *devTier) dhKern(key dhKey, build func() (*ir.Kernel, error)) (backend.K
 	ker, err := build()
 	var k backend.Kernel
 	if err == nil {
-		k, err = g.dev.Compile(ker)
+		k, err = g.compile(ker)
 	}
 	if err != nil {
 		g.dh.kerns[key] = nil

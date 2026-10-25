@@ -210,7 +210,7 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 			f.close()
 			return nil, fmt.Errorf("%s has no GPU code", c.Name)
 		}
-		kern, err := g.dev.Compile(c.GPU)
+		kern, err := g.compile(c.GPU)
 		if err != nil {
 			f.close()
 			return nil, fmt.Errorf("compiling %s: %w", c.Name, err)
@@ -631,7 +631,7 @@ var errServedCold = errors.New("tier: a served part forms outside a capture")
 func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*servedPart, error) {
 	if sv, ok := g.served[sk]; ok {
 		if sv == nil {
-			return nil, fmt.Errorf("the composed %s did not form earlier: %w", partNames[sk.kind], g.formErr[sk])
+			return nil, g.buildFailed(fmt.Errorf("the composed %s did not form earlier: %w", partNames[sk.kind], g.formErr[sk]))
 		}
 		return sv, nil
 	}
@@ -643,6 +643,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	}
 	g.served[sk] = nil
 	fail := func(err error) error {
+		err = g.buildFailed(err)
 		if g.formErr == nil {
 			g.formErr = map[servedKey]error{}
 		}
@@ -659,6 +660,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	}
 	if g.composer == nil {
 		g.composer = jit.Default()
+		g.rewriteComposer(g.composer)
 		// Poisoned scratch poisons the forms' workgroup arrays too: a kernel
 		// reading one it never wrote changes the logits.
 		if g.kb.poisonScratch {

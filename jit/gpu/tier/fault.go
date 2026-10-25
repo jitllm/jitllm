@@ -3,10 +3,15 @@
 package tier
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit"
 )
 
 // Fault injection, compiled in only under the `jitllmfault` build tag.
@@ -50,11 +55,43 @@ func (g *devTier) injectedFail() bool {
 	for _, n := range g.failAt {
 		if g.calls == n {
 			g.LastErr = "injected device failure (JITLLM_DEVICE_FAIL_AT)"
+			g.noteCause(nn.FailFault)
 			return true
 		}
 	}
 	return false
 }
+
+// formFault is a rewrite of the composer's registry: the decomposition of one
+// op kind is replaced by one that fails, so every part holding that op fails
+// to form, as a kernel the composer cannot build would. Nothing in a kernel is
+// touched.
+var formFault struct {
+	on       bool
+	kind     graph.OpKind
+	asDevice bool
+}
+
+// SetFormFault makes the composer fail to form every part holding an op of
+// kind, for the tiers that create their composer after it. asDevice is the
+// violation a gate must not survive (RULE 10): the failure is reported as the
+// device failing, which moves work. SetFormFault with on false disarms.
+func SetFormFault(on bool, kind graph.OpKind, asDevice bool) {
+	formFault.on, formFault.kind, formFault.asDevice = on, kind, asDevice
+}
+
+var errInjectedForm = errors.New("injected form failure (SetFormFault)")
+
+func (g *devTier) rewriteComposer(r *jit.Registry) {
+	if !formFault.on {
+		return
+	}
+	r.Decompositions[formFault.kind] = func(graph.Op, *jit.Context) ([]jit.Prim, error) {
+		return nil, errInjectedForm
+	}
+}
+
+func formFaultedAsDevice() bool { return formFault.on && formFault.asDevice }
 
 // pagedFault names a deliberate error in the paged history's wiring, so a gate
 // can run each violation and demand it fails (RULE 10); the kernels' own are

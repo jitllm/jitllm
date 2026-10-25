@@ -71,7 +71,7 @@ func (g *devTier) newMLABatch(bs *blockScratch, p *nn.LayerPlan, rows int) *mlaB
 		}
 		var kk *ir.Kernel
 		if kk, err = mk(); err == nil {
-			*dst, err = g.dev.Compile(kk)
+			*dst, err = g.compile(kk)
 		}
 	}
 	buf := func(dst *backend.Buf, n int) {
@@ -140,7 +140,7 @@ func (g *devTier) newMLABatch(bs *blockScratch, p *nn.LayerPlan, rows int) *mlaB
 			if e != nil {
 				return nil
 			}
-			c, e := g.dev.Compile(kk)
+			c, e := g.compile(kk)
 			if e != nil {
 				return nil
 			}

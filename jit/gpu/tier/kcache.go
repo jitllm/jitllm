@@ -45,12 +45,12 @@ func irKey(k *ir.Kernel) (string, error) {
 func (g *devTier) compileShared(k *ir.Kernel) (backend.Kernel, error) {
 	key, err := irKey(k)
 	if err != nil {
-		return g.dev.Compile(k)
+		return g.compile(k)
 	}
 	if c, ok := g.kshared[key]; ok {
 		return c, nil
 	}
-	c, err := g.dev.Compile(k)
+	c, err := g.compile(k)
 	if err != nil {
 		return nil, err
 	}
