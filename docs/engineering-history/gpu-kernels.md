@@ -7733,3 +7733,80 @@ row where the composer's reads two.
   and the placement-time matvec compiles record no cause, so their refusals are
   still declines; a session error that is not the driver's (a tier logic error
   inside the submission) is read as a fault.
+- **The step's inputs as parts: the rotary table, the input row and the
+  greedy token.** A served step still launched the tier's own rotary table
+  (composedResidue was ["ropetable"]), and the State filled the input row
+  and the tier's argmax picked the token. Three part kinds join the block
+  and the head, each a Config.Composed bit (ComposedTable, ComposedEmbed,
+  ComposedSample; ComposedStep is all five, the jitllmcomposed build's
+  default and JITLLM_GPU_COMPOSED=1's), each formed at the placement or
+  PrepHead from the front end's graph and counted served, replayed or
+  declined by name (Stats.StepDeclines). The table is jit.Front's PartTable
+  graph (jit.TableGraph), one per rotary the plan states
+  (nn.LayerPlan.Tables), writing cs and csSWA where the tier's kernel did;
+  it reads the planes the tier already holds, and a rotary over several
+  axes has its planes in the plan too (RopeTabAxes, which RopeTab leaves
+  nil). Its positions are the State's: before each decode call the State
+  tells the device the row's rotary position on every axis
+  (nn.RopeAxesDevice; ropeOf, which a picture moves off the cache
+  position), staged with the call's other writes, so a recording replays
+  the table at this token's positions. A table over several axes with no
+  positions for the call, XD-RoPE's and one the caller keeps on the upload
+  (RopeTableHost) are declined by name. The input row is the front end's
+  graph of the input rows (nn.Head.Embed) gathered from the resident head
+  where the head is the embedding: the State, told at PrepHead that the
+  device gathers a row (nn.Head.GatherRow), promises it the token
+  (nn.EmbedDevice) in place of filling the row, and refills it only if the
+  device fails the token. An untied embedding or a position table is
+  declined by name (tinyllama, stories15M); a prompt's chunk keeps the
+  tier's gather. The token is graph.Sample over the logits the head wrote,
+  into the word the tier's argmax writes (the buffer the device sampler's
+  readback shares), asked only where the head's report leaves no stage to
+  the host (nn.Head.Applied, as ForwardSample reads it). The sampler's
+  top-k with its penalty, and the label pick, state no graph yet and are
+  declined by name.
+  On a V100 (CUDA and Vulkan, every arm with and without the graph) the
+  serving gate's whole-step arm leaves the tier's own launches on a served
+  step empty (composedResidue is nil): stories15M, Llama-3.2-1B,
+  Qwen3-0.6B, gemma-3-1b (two tables), Qwen2-VL-2B (a table over three
+  axes at text positions), SmolLM2-360M and tinyllama. Each part has a
+  violation the gate must see, the State's statement changed under the
+  served part: every row told a rotary position 16 past its own reads a
+  median 3.7 (Llama-3.2-1B) to 13.8 (Qwen3-0.6B) times the tier's distance
+  from the float reference (band 1.5), and every row gathered at the next
+  token 308 to 1850 times. One position off is inside the band on
+  stories15M (median 1.10 and 1.14): its tier is 0.14 from the float
+  reference at its worst, wider than one position moves it.
+  TestMRopeMatchesTransformers decodes after the picture with the step
+  served, every table at the row's own positions, off the cache's: within
+  4e-13 to 6e-8 of transformers on qwen2vl, qwen2.5vl, qwen3vl, qwen3vlmoe,
+  qwen35vl, glm4v and glm4vmoe, 5 tables served in 5 steps each, and told
+  one position off 1.5e-2 to 8.2e-1 with 0 to 5 argmax flips.
+  TestComposedHeadTokens' composed-token arm selects every greedy token of
+  synth-qwen2, synth-phi2 and synth-falcon on the device (8 of 8, served
+  or replayed), and over the logits negated (a wrong pick) all 8 part from
+  the host's. TestRopeTableOnDeviceMatchesTheUpload holds the composer's
+  table to the host's upload as it holds the tier's kernel: on Llama-3.2-1B
+  and gemma-3-1b (both tables), 24 tokens identical and the logits equal on
+  an RTX 3050 Ti, and passing on the V100. In the jitllmcomposed build,
+  whose tiers now serve the whole step, TestC6OnEveryDevice,
+  TestQwenVLMatchesTransformersEndToEnd, TestGemma3GlobalLayersAreLinearlyScaled,
+  TestSlidingWindowRunsOnTheDevice, TestFinalSoftcapReachesTheDeviceHead,
+  TestGemma2SoftcapOnDevice, TestGraniteScalesOnEveryDevice,
+  TestForwardSampleMatchesSampleOverForward and TestComposedPromptIsNotServed
+  pass on the V100.
+  TestDecodeDoesNotAllocate's composed arms on Llama-3.2-1B (the step,
+  and the step shadowed; graph on and off) make no engine allocation, a
+  greedy decode with the token served included.
+  TestForwardSampleMatchesSampleOverForward, TestComposedPromptIsNotServed
+  and TestComposedShadowHoldsEveryBlock (Llama-3.2-1B) pass.
+  Escape analysis against the tree before this work (go build -gcflags=-m,
+  line numbers dropped, jit, jit/gpu/tier, engine/model, engine/nn,
+  engine/graph) adds the forms' builds (their maps and a table's planes
+  name, once a form), error paths, the placement's planes and table list,
+  and appends onto the staging bytes the tier reuses (the rows' positions,
+  the promised id), none on a warm step's path.
+  Open: the sampler's top-k with its penalty and the label pick, which no
+  graph states; a prompt chunk's gather, the tier's; a promise of a row the
+  head's device is not block 0's device makes real at home with the tier's
+  gather (GPU.embedRows), as a decode across two cards does.
