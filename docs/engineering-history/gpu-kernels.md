@@ -7575,8 +7575,8 @@ row where the composer's reads two.
   name, as the form keeps that row inside.
   A gate on each op runs against the oracle (float32 norm and projection, the
   rest in float64) with every op taken out. On the CPU, one row at a time
-  (TestComposedCPUHead), every arm reads 8e-15 to 1e-12 against a bound of
-  1e-9, and the softcap dropped, the scale inverted, the bias dropped, the
+  and four at once (TestComposedCPUHead), every arm reads 6e-15 to 1e-12
+  against a bound of 1e-9, and the softcap dropped, the scale inverted, the bias dropped, the
   norm's bias dropped and an RMSNorm for the LayerNorm read 0.10, 4.0e+03,
   0.35, 0.10 and 0.10. On a V100's CUDA and Vulkan (TestComposedHeadOps, over
   an RMSNorm head, phi-2's LayerNorm with both biases and falcon's LayerNorm
@@ -7601,3 +7601,28 @@ row where the composer's reads two.
   composed block as the scaled path and states the two scales as the model's
   own configuration as well, which the composer's forms read as the tier's
   kernels do (0.85 and 8.1e-03 against a clean 3e-14).
+  The serving gate takes gemma-2-2b, granite-3.3-2b and granite-4.0-micro
+  with their heads served and the headDeclined list empty. On a V100 the
+  composed block and head read a median 1.028, 1.000 and 0.994 of the tier's
+  own distance from the float reference on CUDA (worst NMSE from the tier
+  0.0217, 0.0036 and 0.0174) and 0.981, 1.002 and 1.075 on Vulkan (0.035,
+  0.0076 and 0.020), over 3780, 5740 and 5740 part steps each, inside the
+  gate's band as it stood. rnj-1 is formed whole and its head served where its
+  blocks are not (TestComposedHeadServesWhereTheBlocksDoNot). The composed
+  head serves a single-row step; a folded prompt's last row, a ragged step and
+  a chunk projecting every row keep the tier's own head.
+  Two composer defects surfaced on the way. Formation: Affine's cse redirected
+  each duplicate with a pass over the kernel of its own (the profile put 90%
+  of the time in Affine, cse, redirectAll, redirect, Operands), so
+  granite-4.0-micro's head with a scale, over a 100k-row vocabulary, took 12.7
+  to 16.3 s as int8 and over 45 s as float against 10 to 21 ms without the
+  scale; one sweep over every duplicate brings them to 0.22 s and 3.7 s. The
+  CPU vectorizer: a norm over two or more rows read NMSE 5e+05 to 8e+05 (one
+  row, 1e-14), because broadcastInto broadcast only values made from a lane
+  sum and left a row loop's scalar in lane 0, and then because it wrote its
+  broadcasts through operand pointers an append had moved (a LayerNorm without
+  a bias lost one of its two scalars that way). With both fixed every head arm
+  reads 1e-14 to 1e-12 over four rows at once (TestComposedCPUHead), and the
+  original pass fails the same gate at 5e+05 to 8e+05 and 3.8 on the softcap.
+  Open: the other redirectAll call sites (foldDecided, the affine pass) have
+  the same shape as the cse that was quadratic and are not profiled.

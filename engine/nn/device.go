@@ -421,9 +421,9 @@ type Head struct {
 	// it fills PickVals (as long as Pick at least), leaves Logits untouched
 	// and sets Picked; one that cannot fills Logits as always. The values are
 	// the projection's own, capped where the head caps (Softcap), and with
-	// the bias and the scale where the device served Graph (Applied): a
-	// caller with either does not ask, for one that leaves them to the caller
-	// declines. See model.Decider.
+	// the bias and the scale where the device served Graph (Applied). A device
+	// that leaves either to the caller declines the request, and a caller
+	// whose head has either does not ask. See model.Decider.
 	Pick     []int32
 	PickVals []float32
 	Picked   bool
