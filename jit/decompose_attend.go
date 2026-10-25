@@ -36,12 +36,13 @@ func decomposeAttend(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, fmt.Errorf("an attention of %d heads over %d, window %d, softcap %v", a.NHead, a.NKVHead, a.Window, a.Softcap)
 	}
 	kw := a.NKVHead * a.HeadDim
-	for _, l := range []Pool{c.History.Keys, c.History.Values} {
+	values, vl := c.History.values()
+	for _, l := range []Pool{c.History.Keys, vl} {
 		if err := l.check(kw); err != nil {
 			return nil, err
 		}
 	}
-	g := attendGeom{D: a.HeadDim, KW: kw, Keys: c.History.Keys.operand(tableKeys), Values: c.History.Values.operand(tableValues)}
+	g := attendGeom{D: a.HeadDim, KW: kw, Keys: c.History.Keys.operand(tableKeys), Values: values, ValuePool: vl}
 	if len(o.In) == 2 {
 		// A block selection: the positions each kv group's mask keeps.
 		m := maskOf(c, o.In[1])
@@ -70,6 +71,8 @@ type attendGeom struct {
 	// position it does not keep scores as the least float.
 	Mask       *Operand
 	MaskGroups int
+	// ValuePool is how the values' pool lays out a page.
+	ValuePool Pool
 }
 
 // attend is decodeAttend's primitives for the query q (rows by heads by
@@ -141,7 +144,7 @@ func attend(o graph.Op, c *Context, q, out Operand, g attendGeom) []Prim {
 	vkh := vx.op(OpDiv, U, vh, vx.u(uint32(gqa)))
 	vd2 := vx.op(OpAdd, U, vx.op(OpMul, U, vkh, vx.u(uint32(D))), vd)
 	w := vx.at(0, keys, vx.coord(0), vh, vk)
-	vx.op(OpMul, F, w, c.poolRead(&vx, 3, c.History.Values, kw, vpid, voff, vd2))
+	vx.op(OpMul, F, w, c.poolRead(&vx, 3, g.ValuePool, kw, vpid, voff, vd2))
 
 	var ox exprs
 	nv := ox.at(0, dims, ox.coord(0), ox.coord(1), ox.coord(2))

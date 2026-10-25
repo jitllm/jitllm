@@ -310,27 +310,45 @@ func decomposeTile(o graph.Op, c *Context) ([]Prim, error) {
 }
 
 // decomposeConcat is its inputs end to end: each input's elements at its
-// offset, one store a input.
+// offset, one store a input; joined head by head, each input's head at its
+// offset within the output's head.
 func decomposeConcat(o graph.Op, c *Context) ([]Prim, error) {
-	if len(o.In) < 1 || len(o.Out) != 1 || len(o.Weight) != 0 {
-		return nil, fmt.Errorf("a concatenation of %d operands", len(o.In))
+	H := max(1, o.Attr.NHead)
+	if len(o.In) < 1 || len(o.Out) != 1 || len(o.Weight) != 0 || c.width(o.Out[0])%H != 0 {
+		return nil, fmt.Errorf("a concatenation of %d operands in %d heads", len(o.In), H)
 	}
+	U := ir.U32
 	out := c.value(o.Out[0])
 	osh := c.rows(o.Out[0])
+	ohd := osh[1] / H
 	var prims []Prim
 	off := 0
 	for _, v := range o.In {
 		sh := c.rows(v)
+		if sh[1]%H != 0 {
+			return nil, fmt.Errorf("a concatenation of a row of %d in %d heads", sh[1], H)
+		}
+		hd := sh[1] / H
 		var x exprs
-		r, i := x.coord(0), x.coord(1)
-		val := x.at(0, sh, r, i)
-		at := x.op(OpAdd, ir.U32, x.u(uint32(off)), i)
-		prims = append(prims, Prim{Kind: PrimMap, Shape: sh, In: []Operand{c.value(v)}, Expr: x.e,
-			Stores: []PrimStore{{Out: out, Ax: []int{r, at}, Ext: osh, Value: val}}})
-		off += sh[1]
+		var p Prim
+		if H == 1 {
+			r, i := x.coord(0), x.coord(1)
+			val := x.at(0, sh, r, i)
+			at := x.op(OpAdd, U, x.u(uint32(off)), i)
+			p = Prim{Kind: PrimMap, Shape: sh, In: []Operand{c.value(v)}, Expr: x.e,
+				Stores: []PrimStore{{Out: out, Ax: []int{r, at}, Ext: osh, Value: val}}}
+		} else {
+			r, h, i := x.coord(0), x.coord(1), x.coord(2)
+			val := x.at(0, sh, r, x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(hd))), i))
+			at := x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(ohd))), x.op(OpAdd, U, x.u(uint32(off)), i))
+			p = Prim{Kind: PrimMap, Shape: []int{sh[0], H, hd}, In: []Operand{c.value(v)}, Expr: x.e,
+				Stores: []PrimStore{{Out: out, Ax: []int{r, at}, Ext: osh, Value: val}}}
+		}
+		prims = append(prims, p)
+		off += hd
 	}
-	if off != osh[1] {
-		return nil, fmt.Errorf("a concatenation of %d into %d", off, osh[1])
+	if off != ohd {
+		return nil, fmt.Errorf("a concatenation of %d into heads of %d", off, ohd)
 	}
 	return prims, nil
 }

@@ -16,8 +16,20 @@ type Pool struct {
 
 // History is the layout of the pools a part's history lives in: the call
 // site's storage, stated as numbers, which the composer addresses as it is.
+// ValuesInKeys is one pool for both: a position's value row is its key row,
+// held once in the keys' pool, and an append whose value is not its key is
+// refused.
 type History struct {
 	Keys, Values Pool
+	ValuesInKeys bool
+}
+
+// values is the pool the values are read from, its operand and its layout.
+func (h History) values() (Operand, Pool) {
+	if h.ValuesInKeys {
+		return h.Keys.operand(tableKeys), h.Keys
+	}
+	return h.Values.operand(tableValues), h.Values
 }
 
 func (l Pool) check(width int) error {

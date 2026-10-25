@@ -71,8 +71,21 @@ func TestMLAOnEveryDevice(t *testing.T) {
 					}
 					worst, worstD := compare(t, want, got)
 					// The latent history is paged like every other: a run that
-					// read the contiguous cache is not the path that ships.
-					if ps := gpu.Stats(); ps.PagedLaunches == 0 {
+					// read the contiguous cache is not the path that ships. A
+					// block the composer serves reads the tier's pool by its
+					// binding, and every step of it is counted; where the tier
+					// runs any block, it ran through its paged attention.
+					covered := 0
+					for li := range m.Cfg.NLayer {
+						if m.Uncovered(li) == Covered {
+							covered++
+						}
+					}
+					composed := gpu.Composed&tier.ComposedBlock != 0
+					if composed {
+						composedCovers(t, m, len(ids), wantPlaced, false, gpu)
+					}
+					if ps := gpu.Stats(); ps.PagedLaunches == 0 && (!composed || covered < wantPlaced) {
 						t.Fatalf("%s decoded %s through no paged attention: the latent cache was not paged",
 							name, spec)
 					}
@@ -125,8 +138,11 @@ func TestMLADeviceFaultsAreCaught(t *testing.T) {
 			{"per-head-sheet-off-by-one", tier.MLAFaultSheetOff},
 		} {
 			t.Run(spec+"/"+f.name, func(t *testing.T) {
+				// The faults are in the tier's own latent kernels, which the arm
+				// runs whatever the build; the composer's violations are
+				// rewrites of its statement (TestComposedLatentViolations).
 				gpu, err := tier.OpenWith(tier.WithDevices(spec),
-					tier.WithDeviceTune(tier.TuneOff), tier.WithMLAFault(f.kind))
+					tier.WithDeviceTune(tier.TuneOff), tier.WithMLAFault(f.kind), composedOpt(0))
 				if err != nil || gpu == nil {
 					t.Fatalf("%s: %v", spec, err)
 				}

@@ -119,14 +119,15 @@ func decomposeTopKRanked(o graph.Op, c *Context) ([]Prim, error) {
 // of the input against the sheet of the bank the selection names at j --
 // over the input's int8 form where the format and the form allow, as a
 // plain matvec runs, else the weights decoded -- and the bank's bias row
-// for that expert added after where the op binds one.
+// for that expert added after where the op binds one. With no selection
+// pair j reads sheet j.
 func decomposeExpertMatVec(o graph.Op, c *Context) ([]Prim, error) {
-	if len(o.In) != 2 || len(o.Out) != 1 || len(o.Weight) < 1 || len(o.Weight) > 2 {
+	if len(o.In) != 1 && len(o.In) != 2 || len(o.Out) != 1 || len(o.Weight) < 1 || len(o.Weight) > 2 {
 		return nil, fmt.Errorf("an expert matvec of %d operands, %d weights", len(o.In), len(o.Weight))
 	}
 	w := o.Weight[0]
-	E, P, K, rows := w.Sheets, c.width(o.In[1]), w.K, w.Rows
-	if E < 1 || c.width(o.In[0]) != P*K || c.width(o.Out[0]) != P*rows {
+	E, P, K, rows := w.Sheets, pairsOf(o, c), w.K, w.Rows
+	if E < 1 || len(o.In) == 1 && P != E || c.width(o.In[0]) != P*K || c.width(o.Out[0]) != P*rows {
 		return nil, fmt.Errorf("an expert matvec of %d pairs of %d over %d", P, K, c.width(o.In[0]))
 	}
 	wo, err := c.weight(w)
@@ -155,28 +156,59 @@ func decomposeExpertMatVec(o graph.Op, c *Context) ([]Prim, error) {
 		R := c.Step.Rows
 		var x exprs
 		r, j, row := x.coord(0), x.coord(1), x.coord(2)
-		sel := x.op(OpMin, U, x.at(1, []int{R, P}, r, j), x.u(uint32(E-1)))
-		b := x.load(2, x.op(OpAdd, U, x.op(OpMul, U, sel, x.u(uint32(rows))), row))
-		x.op(OpAdd, ir.F32, x.at(0, []int{R, P, rows}, r, j, row), b)
+		in := []Operand{out}
+		var f Facts
+		sel := sheetAt(o, c, &x, &in, &f, 1, r, j)
 		bias := Operand{Kind: OperandVector, Role: o.Weight[1].Role, Name: o.Weight[1].Role.String()}
-		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, P, rows}, In: []Operand{out, c.value(o.In[1]), bias},
-			Out: c.value(o.Out[0]), Expr: x.e, Facts: Facts{Extents: map[int]int{2: E * rows}}})
+		b := x.load(len(in), x.op(OpAdd, U, x.op(OpMul, U, sel, x.u(uint32(rows))), row))
+		x.op(OpAdd, ir.F32, x.at(0, []int{R, P, rows}, r, j, row), b)
+		if f.Extents == nil {
+			f.Extents = map[int]int{}
+		}
+		f.Extents[len(in)] = E * rows
+		prims = append(prims, Prim{Kind: PrimMap, Shape: []int{R, P, rows}, In: append(in, bias),
+			Out: c.value(o.Out[0]), Expr: x.e, Facts: f})
 	}
 	return prims, nil
+}
+
+// pairsOf is how many pairs an expert matvec runs: its selection's width,
+// or with none its bank's sheets.
+func pairsOf(o graph.Op, c *Context) int {
+	if len(o.In) == 1 {
+		return o.Weight[0].Sheets
+	}
+	return c.width(o.In[1])
+}
+
+// sheetAt is the sheet pair j of row r reads: the selection's word, which
+// it appends to in as operand at, bounded by the bank, or with no selection
+// j itself.
+func sheetAt(o graph.Op, c *Context, x *exprs, in *[]Operand, f *Facts, at, r, j int) int {
+	if len(o.In) == 1 {
+		return j
+	}
+	*in = append(*in, c.value(o.In[1]))
+	P, E := c.width(o.In[1]), o.Weight[0].Sheets
+	if f.Extents == nil {
+		f.Extents = map[int]int{}
+	}
+	f.Extents[at] = c.Step.Rows * P
+	return x.op(OpMin, ir.U32, x.at(at, []int{c.Step.Rows, P}, r, j), x.u(uint32(E-1)))
 }
 
 // expertDecoded is each pair's sum over K of its sheet's weights, decoded,
 // times the pair's input.
 func expertDecoded(o graph.Op, c *Context, wo Operand, out Operand) (Prim, error) {
 	w := o.Weight[0]
-	E, P, K, rows := w.Sheets, c.width(o.In[1]), w.K, w.Rows
+	E, P, K, rows := w.Sheets, pairsOf(o, c), w.K, w.Rows
 	U := ir.U32
 	R := c.Step.Rows
 	var x exprs
 	r, j, row, col := x.coord(0), x.coord(1), x.coord(2), x.coord(3)
-	in := []Operand{c.value(o.In[0]), c.value(o.In[1])}
-	facts := Facts{Extents: map[int]int{0: R * P * K, 1: R * P}}
-	sel := x.op(OpMin, U, x.at(1, []int{R, P}, r, j), x.u(uint32(E-1)))
+	in := []Operand{c.value(o.In[0])}
+	facts := Facts{Extents: map[int]int{0: R * P * K}}
+	sel := sheetAt(o, c, &x, &in, &facts, 1, r, j)
 	xv := x.at(0, []int{R, P, K}, r, j, col)
 	var wv int
 	if jlm.Verbatim(wo.Format) {
@@ -214,20 +246,20 @@ func expertInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout, out Operan
 		prims = c.int8(v)
 	}
 	U, I, F := ir.U32, ir.I32, ir.F32
-	E, P, R, rows, K := w.Sheets, c.width(o.In[1]), c.Step.Rows, w.Rows, w.K
+	E, P, R, rows, K := w.Sheets, pairsOf(o, c), c.Step.Rows, w.Rows, w.K
 	nsub, nwd, nw, ns := K/l.Sub, P*K/q.Word, P*K/win, P*K/q.Sums
 	x := c.value(v)
 	words := Operand{Kind: OperandScratch, Name: x.Name + ".q8a", Elem: U}
 	scales := Operand{Kind: OperandScratch, Name: x.Name + ".q8x"}
 	dot := Operand{Kind: OperandScratch, Name: c.value(o.Out[0]).Name + ".dot", Elem: I, Temp: true}
-	sel := c.value(o.In[1])
 
 	var d exprs
 	r, j, row, s, t := d.coord(0), d.coord(1), d.coord(2), d.coord(3), d.coord(4)
-	in := []Operand{words, sel}
-	facts := Facts{Extents: map[int]int{0: R * nwd, 1: R * P}}
+	in := []Operand{words}
+	facts := Facts{Extents: map[int]int{0: R * nwd}}
+	sheet := sheetAt(o, c, &d, &in, &facts, 1, r, j)
 	p := packedOperands(&d, wo, l, rows, K, &in, &facts)
-	p.bank(d.op(OpMin, U, d.at(1, []int{R, P}, r, j), d.u(uint32(E-1))), E)
+	p.bank(sheet, E)
 	at := func(col int) int { return d.op(OpAdd, U, d.op(OpMul, U, j, d.u(uint32(K))), col) }
 	per := l.Sub
 	if l.WordCodes() {
@@ -249,10 +281,11 @@ func expertInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout, out Operan
 
 	var e exprs
 	er, ej, erow, es := e.coord(0), e.coord(1), e.coord(2), e.coord(3)
-	ein := []Operand{dot, scales, sel}
-	efacts := Facts{Extents: map[int]int{0: R * P * rows * nsub, 1: R * (nw + ns), 2: R * P}}
+	ein := []Operand{dot, scales}
+	efacts := Facts{Extents: map[int]int{0: R * P * rows * nsub, 1: R * (nw + ns)}}
+	esheet := sheetAt(o, c, &e, &ein, &efacts, 2, er, ej)
 	ep := packedOperands(&e, wo, l, rows, K, &ein, &efacts)
-	ep.bank(e.op(OpMin, U, e.at(2, []int{R, P}, er, ej), e.u(uint32(E-1))), E)
+	ep.bank(esheet, E)
 	first := e.op(OpMul, U, es, e.u(uint32(l.Sub)))
 	_, scale, bias := jlm.DecodeParts[int](ep, l, rows, erow, first)
 	df := e.un(OpCvtF32, F, e.at(0, []int{R, P, rows, nsub}, er, ej, erow, es))

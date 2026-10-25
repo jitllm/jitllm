@@ -49,7 +49,9 @@ const (
 	OpActMul
 	// OpExpertMatVec is OpMatVec per pair: row j of In[0] against the sheet
 	// of Weight[0]'s bank the selection In[1] names at pair j, an optional
-	// Weight[1] the bank's bias (one row per expert) added after.
+	// Weight[1] the bank's bias (one row per expert) added after. With no
+	// selection, pair j reads sheet j: a matvec per group of the row, the
+	// bank's sheets in order, one a group.
 	OpExpertMatVec
 	// OpLayerNorm is LayerNorm over a row: (x - mean) * rsqrt(var + Eps) * w,
 	// plus an optional bias Weight[1] (the classic block's, C6).
@@ -108,7 +110,10 @@ const (
 	// residual) without naming what the groups are.
 	OpTile
 	// OpConcat is its inputs joined end to end, In[0] first: Out[0] the
-	// sum of their widths. The same input twice repeats it. A primitive.
+	// sum of their widths. The same input twice repeats it. Where NHead is
+	// set, each input is NHead heads of its width over NHead and they are
+	// joined head by head: head h of Out[0] is each input's head h in turn.
+	// A primitive.
 	OpConcat
 	// OpRopeTable is a step's rotary table: for each row's position and each
 	// of NRot/2 pairs, the pair's cos and sin, Out[0] two elements a pair.

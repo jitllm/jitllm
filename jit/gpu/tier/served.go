@@ -611,7 +611,6 @@ const (
 	partNoPool
 	partPrefill
 	partStream
-	partLatent
 	partShared
 	partWindow
 	partHeadShape
@@ -649,7 +648,6 @@ var partDeclineNames = [numPartDeclines]string{
 	partNoPool:      "no paged history on the device",
 	partPrefill:     "the history is mid-prefill",
 	partStream:      "the history streams",
-	partLatent:      "a latent attention's history",
 	partShared:      "the history of another block",
 	partWindow:      "a graph whose window is not the plan's",
 	partHeadShape:   "a head graph other than a norm, its projection and elementwise ops after it",
@@ -724,6 +722,7 @@ type servedKey struct {
 	rows       int
 	keys, page int
 	half       bool
+	latent     bool
 	t          jlm.Type
 }
 
@@ -1268,6 +1267,20 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 		return l.up
 	case jlm.RoleFFNDown:
 		return l.down
+	case jlm.RoleAttnQA:
+		return l.wqa
+	case jlm.RoleAttnQB:
+		return l.wqb
+	case jlm.RoleAttnKVA:
+		return l.wkva
+	case jlm.RoleAttnKB:
+		return l.wkb
+	case jlm.RoleAttnVB:
+		return l.wvb
+	case jlm.RoleAttnGate:
+		if l.mla {
+			return l.mlaGate
+		}
 	}
 	return nil
 }
@@ -1312,6 +1325,10 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.nSubFFN
 	case jlm.RoleXIELU:
 		return l.xielu
+	case jlm.RoleAttnQANorm:
+		return l.nQA
+	case jlm.RoleAttnKVANorm:
+		return l.nKVA
 	}
 	return nil
 }
@@ -1339,8 +1356,6 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partPrefill
 	case pk.st != nil:
 		return partStream
-	case g.kvp.layers[li].geom.mla:
-		return partLatent
 	case l.kvSrc != li:
 		return partShared
 	case !l.windowHeld(li, p):
@@ -1628,6 +1643,17 @@ func (g *devTier) prewarmComposedHead() {
 	}
 }
 
+// poolHistory is how a pool layer of geometry k lays out its pages for the
+// composer: keys by dimension and values by position, binary16 where the
+// layer holds them so; a latent layer's one row a position, its value the
+// row itself.
+func poolHistory(k kvGeom) jit.History {
+	if k.mla {
+		return jit.History{ValuesInKeys: true}
+	}
+	return jit.History{Keys: jit.Pool{ByDim: true}, Values: jit.Pool{Half: k.f16}}
+}
+
 // servedBlock is block li served whole at a step of R rows: its graph formed
 // as one unit on the block's weights and vectors by role, its rotary table
 // cs and its history in the tier's pool layer pl, through the rows'
@@ -1644,7 +1670,7 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 	if R > 1 {
 		kind = partPrompt
 	}
-	sk := servedKey{kind: kind, graph: l.graph, rows: R, keys: keys, page: page, half: pl.geom.f16}
+	sk := servedKey{kind: kind, graph: l.graph, rows: R, keys: keys, page: page, half: pl.geom.f16, latent: pl.geom.mla}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		// The request names no block: blocks of one structure and formats
 		// share a form, each launched on its own bindings, one after
@@ -1655,7 +1681,7 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{},
 			tables: map[string]backend.Buf{"rope.cs": cs, "kv.k": pl.k, "kv.v": pl.v, "pages": pl.tab, "rows": rows,
 				"rows.win": rowsW, "q.off": qOff},
-			history: jit.History{Keys: jit.Pool{ByDim: true}, Values: jit.Pool{Half: pl.geom.f16}},
+			history: poolHistory(pl.geom),
 			keys:    keys, page: page}
 		for _, o := range l.graph.Ops {
 			for _, w := range o.Weight {

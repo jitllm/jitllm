@@ -187,7 +187,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 				// each block's form beside the tier's kernels and compares
 				// the two (Config.ComposedShadow): its buffers are made at the
 				// placement, so a warm step makes none.
-				if name == "Llama-3.2-1B-Instruct-Q4_K_M.gguf" {
+				if slices.Contains(composedAllocModels, name) {
 					for _, shadow := range []bool{false, true} {
 						for _, noGraph := range []bool{false, true} {
 							arm := "composed step"
@@ -224,6 +224,11 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 		})
 	}
 }
+
+// composedAllocModels are the models whose composed step the gate measures:
+// a dense model, and a latent attention model whose every block the front end
+// states (JITLLM_ALLOC_MODELS names it).
+var composedAllocModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "synth-deepseek-dense"}
 
 // TestLongDecodeDoesNotAllocate is TestDecodeDoesNotAllocate's host arm past
 // four KV pages of context, which that gate's window -- under one page, by

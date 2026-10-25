@@ -8077,3 +8077,46 @@ row where the composer's reads two.
   drops its divisor check). `go build -gcflags=-m` over the touched packages:
   three new heap moves, all at placement (a CUDA attribute read, the compile
   workers' wait group and count).
+- **Latent attention as ops.** The front end states a block that projects
+  its history through a latent (the container stores RoleAttnKVA) from
+  generic ops and the container's widths, reusing main's absorbed form and
+  its paged latent pool: the query down, normed and up where the block
+  stores the two projections; the latent row's first KVLoraRank normed (at
+  LatentNormEps) and the rest turned by the rotary, joined as the cached row,
+  appended once; each head's first HeadDim-NRot through its sheet of
+  RoleAttnKB (an expert matvec with no selection: pair j reads sheet j),
+  joined head by head with its turned rest (OpConcat with NHead); attention
+  of every head over the one cached row a position, the value the whole row;
+  each head's first KVLoraRank of the result through its sheet of RoleAttnVB,
+  then the output projection. The composer's history layout gains
+  ValuesInKeys, one pool whose value rows are its key rows, which the tier
+  states for a latent pool (`poolHistory`), so the append writes the row once
+  and the attention reads its values from the keys' pool. `UncoveredLatent`,
+  `UncoveredValueWidth` (a value head of its own width outside a latent is a
+  head width, UncoveredGeometry, and main runs none) and the tier's
+  `partLatent` are gone. The value accumulates over the whole row, NRot more
+  than the KVLoraRank the result keeps (64 of 576 on DeepSeek-V3): a cost,
+  stated, for one head width through every attention pass. On a V100
+  (card 5), cuda:0 and vulkan:5, `TestComposedBlocksServe` serves
+  synth-deepseek-dense every arm, every block step, none declined (median
+  ratio to the tier's distance 0.985 on CUDA, 0.898 on Vulkan);
+  `TestComposedLatentViolations` holds the composed blocks to the band
+  (median 0.927 and 0.895) and sees the latent norm dropped (median ratio
+  9.5e11), the rotation a pair short (3.6e7 to 4.4e7), the banks swapped
+  (5.0e12) and the value read from the key's end (5.5e12); the same fixture
+  stated without position encoding (0.959, 0.952), the YaRN fixture (0.957,
+  0.946) and DeepSeek-V2-Lite at Q4_K_M, whose dense lead block the composer
+  serves at every step beside 26 mixture blocks the tier runs (1.011 and
+  0.991), pass too; `TestComposedCPUHeadSheets` runs the two new statements
+  on the CPU device. The block is formed once for its device at placement,
+  as every block is; no form of a width or a prompt was added for it. The MLA device gates pass in both builds;
+  in the composed build `TestMLAOnEveryDevice` counts the composer's block
+  steps where it serves every block (its attention binds the tier's paged
+  pool) and the tier's paged launches where the tier runs any, and
+  `TestMLADeviceFaultsAreCaught` asks the tier's own kernels, whose faults
+  they are. Every real latent checkpoint on the box (DeepSeek-V2-Lite and
+  Coder-V2-Lite, Moonlight, GLM-4.7-Flash, Kimi-Linear) is a mixture past its
+  dense lead, refused by `UncoveredMixture`; deepseek32 is refused by
+  `UncoveredSelect`, Kimi-Linear's and K3's linear blocks by `UncoveredKind`.
+  `go build -gcflags=-m` over the four touched packages moves nothing more to
+  the heap (247 lines either side).

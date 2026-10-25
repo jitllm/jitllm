@@ -107,10 +107,18 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 }
 
 // decomposeKVAppend writes each row's key and value into its page of the key
-// and value pools, each a page of positions of the width.
+// and value pools, each a page of positions of the width: the key alone
+// where the values are the keys' rows.
 func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.In) != 2 || c.Step.Page <= 0 {
 		return nil, fmt.Errorf("a history append of %d values over pages of %d", len(o.In), c.Step.Page)
+	}
+	pools := []Operand{tableKeys, tableValues}
+	if c.History.ValuesInKeys {
+		if o.In[0] != o.In[1] {
+			return nil, fmt.Errorf("a history append of a value other than its key, into a pool whose values are its keys")
+		}
+		pools = pools[:1]
 	}
 	U := ir.U32
 	page := c.Step.Page
@@ -123,7 +131,7 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 		return pid, x.op(OpRem, U, pos, x.u(uint32(page)))
 	}
 	var prims []Prim
-	for i, pool := range []Operand{tableKeys, tableValues} {
+	for i, pool := range pools {
 		l := [2]Pool{c.History.Keys, c.History.Values}[i]
 		v := o.In[i]
 		sh := c.rows(v)

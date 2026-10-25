@@ -738,3 +738,84 @@ func TestComposedCPUSubNorm(t *testing.T) {
 		})
 	}
 }
+
+// TestComposedCPUHeadSheets runs the two statements a latent attention block
+// adds, formed for the host's CPU: a matvec of each head of a row through its
+// own sheet of a bank (an expert matvec with no selection), held to the sum
+// at f64 within the f32 sum's worst rounding, and two rows joined head by
+// head, held exact. The bank's sheets in another order, and the rows joined
+// end to end, must each be seen.
+func TestComposedCPUHeadSheets(t *testing.T) {
+	for _, c := range []struct{ heads, k, rows, tail int }{{4, 16, 16, 8}, {3, 7, 5, 2}, {2, 64, 128, 64}} {
+		rng := rand.New(rand.NewSource(int64(c.heads*1000 + c.k*10 + c.rows)))
+		x := make([]float32, c.heads*c.k)
+		bank := make([]float32, c.heads*c.rows*c.k)
+		tail := make([]float32, c.heads*c.tail)
+		for _, s := range [][]float32{x, bank, tail} {
+			for i := range s {
+				s[i] = float32(rng.NormFloat64())
+			}
+		}
+		want := make([]float32, c.heads*c.rows)
+		bound := make([]float64, c.heads*c.rows)
+		for h := range c.heads {
+			for r := range c.rows {
+				sum, mag := 0.0, 0.0
+				for j := range c.k {
+					p := float64(bank[(h*c.rows+r)*c.k+j]) * float64(x[h*c.k+j])
+					sum, mag = sum+p, mag+math.Abs(p)
+				}
+				want[h*c.rows+r], bound[h*c.rows+r] = float32(sum), float64(c.k+1)*ulp/2*mag+math.Abs(sum)*ulp
+			}
+		}
+		joined := make([]float32, c.heads*(c.rows+c.tail))
+		for h := range c.heads {
+			copy(joined[h*(c.rows+c.tail):], want[h*c.rows:(h+1)*c.rows])
+			copy(joined[h*(c.rows+c.tail)+c.rows:], tail[h*c.tail:(h+1)*c.tail])
+		}
+		run := func(sheets []float32, heads int) (y, out []float32) {
+			b := graph.New()
+			in := b.In("x", c.heads*c.k)
+			tv := b.In("tail", c.heads*c.tail)
+			yv := b.Emit(graph.OpExpertMatVec, []graph.ValueID{in}, []graph.Result{{Name: "y", Width: c.heads * c.rows}},
+				[]graph.Binding{{Role: jlm.RoleAttnKB, K: c.k, Rows: c.rows, Sheets: c.heads}}, graph.Attrs{}, nil, nil)[0]
+			ov := b.Emit(graph.OpConcat, []graph.ValueID{yv, tv}, []graph.Result{{Name: "joined", Width: c.heads * (c.rows + c.tail)}}, nil,
+				graph.Attrs{NHead: heads}, nil, nil)[0]
+			b.Out(ov)
+			y, yBack := guarded(c.heads * c.rows)
+			out, oBack := guarded(c.heads * (c.rows + c.tail))
+			w := unsafe.Slice((*uint32)(unsafe.Pointer(&sheets[0])), len(sheets))
+			cpuExec(t, cpuForm(t, b.G, []jlm.Role{jlm.RoleAttnKB}), nil, map[jlm.Role][3][]uint32{jlm.RoleAttnKB: {w}},
+				map[graph.ValueID][]float32{in: x, tv: tail, yv: y, ov: out})
+			checkGuard(t, "the head matvec", yBack, len(y))
+			checkGuard(t, "the head-wise join", oBack, len(out))
+			return y, out
+		}
+		y, out := run(bank, c.heads)
+		worst := 0.0
+		for i := range want {
+			e := math.Abs(float64(y[i]) - float64(want[i]))
+			if !(e <= bound[i]) {
+				t.Fatalf("%d heads of %d into %d: element %d is %.3g from the sum, bound %.3g", c.heads, c.k, c.rows, i, e, bound[i])
+			}
+			worst = max(worst, e/max(bound[i], 1e-30))
+		}
+		for h := range c.heads {
+			copy(joined[h*(c.rows+c.tail):], y[h*c.rows:(h+1)*c.rows])
+		}
+		if i := slices.IndexFunc(joined, func(v float32) bool { return false }); !slices.Equal(out, joined) {
+			t.Fatalf("%d heads: the join is not each head's rows then its tail (%d)", c.heads, i)
+		}
+		t.Logf("%d heads of %d into %d: the head matvec at %.3g of its bound, the join exact", c.heads, c.k, c.rows, worst)
+		rev := make([]float32, len(bank))
+		for h := range c.heads {
+			copy(rev[h*c.rows*c.k:], bank[(c.heads-1-h)*c.rows*c.k:(c.heads-h)*c.rows*c.k])
+		}
+		if bad, _ := run(rev, c.heads); slices.Equal(bad, y) {
+			t.Errorf("%d heads: the bank's sheets reversed leave the head matvec as it was", c.heads)
+		}
+		if _, bad := run(bank, 0); slices.Equal(bad, out) {
+			t.Errorf("%d heads: the rows joined end to end leave the head-wise join as it was", c.heads)
+		}
+	}
+}
