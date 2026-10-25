@@ -7078,40 +7078,53 @@ row where the composer's reads two.
     asserts the rest.
 - **A rotary over several position axes.** The composer's rotary table
   holds four positions a row (`rope.pos.axes`: the live row count, then
-  axis a of row r at word 1+4r+a). Each pair's axis sits in a block the
-  plan carries (`rope.axes`), derived from the table's stated sections:
+  axis a of row r at word 1+4r+a) and each pair's axis in a block the plan
+  carries (`rope.axes`), derived from the table's stated sections:
   contiguous runs that cover every pair (Qwen2-VL's and Qwen2.5-VL's
   M-RoPE), or Qwen3-VL's interleaving pair by pair. A pair turns by its
   axis's position at its own frequency, so the planes are the one-axis
-  table's and the rotation is unchanged; the split is data, one form for
-  any. The front end states the sections and the interleaving on the
-  rotary op and the table. A rotary they do not state (XD-RoPE, whose pair
-  halves turn apart) stays UncoveredRopeAxes, held on the hunyuanvl
-  fixture. TestComposedRopeTableOverAxes runs five rows at 1 to 64 pairs on
-  ptx and spirv, on an RTX 3050 Ti and a V100 alike: within 7.5e-9 of
-  main's host table (nn.Rope.TableAt) and
-  6.0e-8 of the float64 table, each pair equal to the one-axis table at its
-  axis's position to the bit, and two axes swapped 1.6 to 2.0 away. A wrong
-  interleaving rule fails every interleaved case on both. Qwen2-VL-2B,
-  Qwen2.5-VL-3B and Qwen3-VL-2B (f16 and Q4_K_M) are served on CUDA and
-  Vulkan, every arm. Against the float reference the median ratio to the
-  tier's distance is 1.007 and 1.073 for Qwen2-VL-2B, 1.030 and 1.024 for
-  Qwen2.5-VL-3B, and 1.025 and 1.026 for Qwen3-VL's Q4_K_M (CUDA, then
-  Vulkan).
-  Qwen3-VL's f16 blocks and head run their float form, so that arm equals
-  the float reference (ratio 0) and the band measures nothing there; the
-  Q4_K_M holds the interleaved rotary to it. The f16 checkpoint's first run
-  failed every arm, and the failure was not the rotary's. Its float head
-  does not fold
-  into a batched chunk, so the prompt's last-row head was a one-row call of
-  its own, and the tier served that call as a step's. The engine now tells
-  the device when its calls are a prompt's (nn.PromptDevice), and the tier
-  serves none of a prompt's blocks or its head.
-  The CPU's table convention is main's, one row a call. It gained the
-  fields a multi-axis table reads, so the CPU forms the table, and at one
-  row the real geometries match the host table to the bit. Two gaps are
-  open on the x86 lowering. A nine-pair [0,2,7,0] split fails to lower:
-  its base parameters on fields 8 and 104 take main's registers for those
-  fields, which collide. A one-pair table on axis 0 passes its position as
-  a moving word, its offset reading the axis block, which no caller can
-  supply.
+  table's. A split whose pairs all turn by one axis reads that axis's
+  position and carries no block. The front end states the sections and the
+  interleaving on the rotary op and the table. A rotary they do not state
+  (XD-RoPE, whose pair halves turn apart) stays UncoveredRopeAxes, held on
+  the hunyuanvl fixture.
+  TestComposedRopeTableOverAxes runs the table at 1 to 64 pairs, one axis,
+  contiguous and interleaved, on ptx and spirv at one row and at five, on an
+  RTX 3050 Ti and a V100. It comes within 7.5e-9 of main's host table
+  (nn.Rope.TableAt) and 6.0e-8 of the float64 table, each pair equal to the
+  one-axis table at its axis's position to the bit, and two axes swapped
+  move it by 1.6 to 2.0. A wrong interleaving rule fails every interleaved
+  case. On the CPU at one row, its table convention's (one row a call,
+  which gained the input fields such a table reads), each table equals
+  main's host table to the bit, with no argument at an offset a caller
+  would compute.
+  No served step runs that table: a served block turns by main's table,
+  and a decode row's axes agree. The serving gate serves Qwen2-VL-2B,
+  Qwen2.5-VL-3B and Qwen3-VL-2B's Q4_K_M on CUDA and Vulkan, every arm, at
+  text positions. Their median ratios to the tier's distance from the float
+  reference are 1.007 and 1.073, 1.030 and 1.024, and 1.025 and 1.026 (CUDA,
+  then Vulkan). Qwen3-VL-2B's f16 is formed, not served: its blocks and
+  head run their float form and equal the float reference, ratio 0.
+  TestMRopeMatchesTransformers now also decodes after the picture with the
+  composer serving, the rows off their cache positions. Each step serves
+  every stated block (qwen2vl's, qwen2.5vl's, qwen3vl's and glm4v's all,
+  glm4vmoe's dense lead) and declines the rest by name: a mixture of experts
+  on qwen3vlmoe and glm4vmoe, a gate on the attention's output and a
+  recurrent mixer on qwen35vl.
+  Qwen3-VL's f16 first failed every serving arm, and not on the rotary. Its
+  float head does not fold into a batched chunk, so the prompt's last-row
+  head was a one-row call of its own, and the tier served it as a step's.
+  The engine now tells the device when its calls are a prompt's
+  (nn.PromptDevice: a chunked prompt's calls and a batch slot's prompt), and
+  the tier serves none of a prompt's parts. TestComposedPromptIsNotServed
+  counts it on a float-head fixture, three rows and nine: six decode steps
+  serve the head six times with the prompt's call unasked, and with the
+  prompt kept from the device, seven.
+  Two x86 gaps are open, and neither is the multi-axis table's. A one-axis
+  CPU table at 8k+1 pairs (9, 17 and on to 129) does not lower: its vector
+  loop's one-trip tail, flattened, holds more than the registers ("a
+  constant held across the loops on a register a loop's value is hinted
+  to"), which the register pass declines without saying so. engine/cost's
+  CPU plans hold a reduce kernel the same pass declines ("a pair's later
+  head with no twin"). Naming the decline at the pass fails that placement
+  test, so the pass is left as it was.

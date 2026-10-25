@@ -1400,10 +1400,13 @@ type TokenDevice interface {
 }
 
 // PromptDevice is an optional LayerDevice told that the calls that follow
-// are a prompt's -- its chunks, a chunk's rows retried one at a time, the
-// head over its last row -- until it is told they are not. A one-row call
-// is not a step by its width alone: a device that runs a step's calls
-// apart from a prompt's reads this.
+// are a prompt's until it is told they are not: every call of a chunked
+// prompt (a prompt of tokens or of mixed spans, an embedding run, and a
+// speculation step's rows when they go as a prompt chunk) -- its chunks, a
+// chunk's rows retried one at a time, the head over its last row -- and a
+// batch slot's prompt, its last token's one-row step included. A one-row
+// call is not a step by its width alone. A prompt the State runs as decode
+// steps, a token at a time, is steps.
 type PromptDevice interface {
 	SetPrompt(on bool)
 }

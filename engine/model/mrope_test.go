@@ -302,6 +302,7 @@ func mRopeMatchesTransformers(t *testing.T, name string) {
 				t.Fatalf("the device built %d rotary rows and took %d from the host (%q): an M-RoPE table "+
 					"built from cache positions is the violation", s.RopeTables, s.RopeTableUploads, s.RopeTableWhy)
 			}
+			composedAfterPicture(t, m, g, spec, n)
 			viol, err := run(false)
 			if err != nil {
 				t.Fatal(err)
@@ -645,4 +646,50 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 			})
 		}
 	})
+}
+
+// composedAfterPicture decodes the golden's continuation after its picture
+// with the composer serving every block and the head the front end states
+// (Config.Composed), held to transformers as the tier is. The blocks turn by
+// main's table: a decode row after the picture turns at its own position,
+// off its cache position, and on a text row every axis's position is the
+// same. Each step serves every stated block once and declines every other by
+// name, every step run without a recording so that each counts; the reasons
+// are logged.
+func composedAfterPicture(t *testing.T, m *Model, g *qvlGolden, spec string, n int) {
+	t.Helper()
+	cg, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
+		tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph = tier.ComposedBlock|tier.ComposedHead, true }))
+	if err != nil || cg == nil {
+		t.Fatalf("%s did not open for the composed decode: %v", spec, err)
+	}
+	defer cg.Close()
+	st := m.NewState(n)
+	defer st.Close()
+	st.SetDeviceLayers(cg, -1)
+	if got := st.GPULayers(); got != m.Cfg.NLayer {
+		t.Fatalf("composed: placed %d of %d blocks: %v", got, m.Cfg.NLayer, cg.Err())
+	}
+	rows := qvlRun(t, st, g, true)
+	w, flips := qvlWorst(g, rows)
+	if !(w < 1e-5) || flips > 0 {
+		t.Fatalf("composed: worst NMSE %.3e against transformers, %d argmax flips", w, flips)
+	}
+	stated, why := 0, map[string]int{}
+	for li := range m.Cfg.NLayer {
+		if u := m.Uncovered(li); u == Covered {
+			stated++
+		} else {
+			why[u.String()]++
+		}
+	}
+	steps := len(g.Cont) - 1
+	nb, db, _ := cg.Stats().ServedPart(tier.ComposedBlock)
+	if nb != steps*stated || db != steps*(m.Cfg.NLayer-stated) {
+		t.Fatalf("composed: %d block steps served and %d declined, where %d steps of %d stated and %d other blocks are %d and %d",
+			nb, db, steps, stated, m.Cfg.NLayer-stated, steps*stated, steps*(m.Cfg.NLayer-stated))
+	}
+	nh, dh, _ := cg.Stats().ServedPart(tier.ComposedHead)
+	t.Logf("composed after the picture: worst %.3e; %d of %d blocks stated, %d block steps served, %d declined %v; head served %d, declined %d",
+		w, stated, m.Cfg.NLayer, nb, db, why, nh, dh)
 }

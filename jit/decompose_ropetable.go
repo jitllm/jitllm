@@ -92,12 +92,20 @@ func decomposeRopeTable(o graph.Op, c *Context) ([]Prim, error) {
 	words := map[int][]uint32{2: ropeConsts()}
 	var pos int
 	if axes != nil {
-		// The pair's axis, then the row's position on it.
-		axis := x.load(3, p)
-		pos = x.load(0, x.op(OpAdd, U, x.op(OpAdd, U, x.op(OpMul, U, r, x.u(uint32(ropeAxes))), axis), x.u(1)))
+		// The pair's axis, then the row's position on it. A split whose
+		// pairs all turn by one axis reads that axis's position, its index
+		// one a caller can compute.
+		row := x.op(OpMul, U, r, x.u(uint32(ropeAxes)))
+		if a, one := oneAxis(axes); one {
+			pos = x.load(0, x.op(OpAdd, U, row, x.u(a+1)))
+		} else {
+			axis := x.load(3, p)
+			pos = x.load(0, x.op(OpAdd, U, x.op(OpAdd, U, row, axis), x.u(1)))
+			in = append(in, Operand{Kind: tableAxes.Kind, Name: tableAxes.Name + of, Elem: tableAxes.Elem})
+			ext[3], words[3] = P, axes
+		}
 		in[0] = tableAxisPos
-		in = append(in, Operand{Kind: tableAxes.Kind, Name: tableAxes.Name + of, Elem: tableAxes.Elem})
-		ext[0], ext[3], words[3] = 1+R*ropeAxes, P, axes
+		ext[0] = 1 + R*ropeAxes
 	} else {
 		pos = x.load(0, x.op(OpAdd, U, r, x.u(1)))
 	}
@@ -205,6 +213,17 @@ func ropeAxisWords(a graph.Attrs, pairs int) ([]uint32, error) {
 		}
 	}
 	return w, nil
+}
+
+// oneAxis is the axis every pair of axes turns by, where they all turn by
+// one.
+func oneAxis(axes []uint32) (uint32, bool) {
+	for _, a := range axes {
+		if a != axes[0] {
+			return 0, false
+		}
+	}
+	return axes[0], true
 }
 
 // ropeConsts is the rotary table's constant block, word for word.

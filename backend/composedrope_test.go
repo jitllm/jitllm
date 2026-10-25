@@ -4,27 +4,34 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"runtime"
 	"testing"
+	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/jit/cpu"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
-// TestComposedRopeTableOverAxes runs the composer's rotary table on every
-// backend present, five rows of it, over one position axis, contiguous
-// sections and interleaved ones, at ragged pair counts, and holds each row
+// TestComposedRopeTableOverAxes runs the composer's rotary table over one
+// position axis, contiguous sections and interleaved ones, at ragged pair
+// counts, on every backend present at one row and at five. Each row is held
 // to main's host table at the row's positions (nn.Rope.Table, and
 // nn.Rope.TableAt over the runs main builds from the same sections) and to
 // the float64 table of each pair at its axis's position. Each pair of a
 // table over several axes must also be, to the bit, the composer's one-axis
 // table's pair at the position of the pair's axis as main's runs assign it.
 // A guard after the output must survive, and with two axes' positions
-// swapped the table must not match.
+// swapped the table must not match. On this host's CPU, at one row (the
+// CPU's table convention, one row a call), each table must be main's host
+// table to the bit, and no argument may be one whose offset a caller would
+// have to compute.
 func TestComposedRopeTableOverAxes(t *testing.T) {
+	t.Run("cpu/1 rows", func(t *testing.T) { composedRopeAxes(t, cpuRope, 1, true) })
 	gpuLock(t)
 	devs := backend.Open()
 	if len(devs) == 0 {
@@ -32,7 +39,9 @@ func TestComposedRopeTableOverAxes(t *testing.T) {
 	}
 	for _, d := range devs {
 		defer d.Close()
-		t.Run(d.API(), func(t *testing.T) { composedRopeAxes(t, gpuRope(d), 5) })
+		for _, rows := range []int{1, 5} {
+			t.Run(fmt.Sprintf("%s/%d rows", d.API(), rows), func(t *testing.T) { composedRopeAxes(t, gpuRope(d), rows, false) })
+		}
 	}
 }
 
@@ -41,7 +50,11 @@ func TestComposedRopeTableOverAxes(t *testing.T) {
 // shows, and a word written past the table changes it.
 const composedRopeGuard = 0x7fc0dead
 
-func composedRopeAxes(t *testing.T, run ropeRunner, rows int) {
+// composedRopeAxes holds run's tables at rows rows; exact holds each to main's
+// host table to the bit, which is itself the one-axis table run by run
+// (nn.Rope.TableAt), in place of the cross-check against the composer's own
+// one-axis table.
+func composedRopeAxes(t *testing.T, run ropeRunner, rows int, exact bool) {
 	// The device table's bound against the host's and the float64 table's
 	// (TestRopeTableOnDeviceMatchesHost's).
 	const bound = 3e-7
@@ -121,8 +134,8 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int) {
 					}
 				}
 			}
-			if worstHost > bound || worstOracle > bound {
-				t.Fatalf("the composer's table is %.3e from the host's and %.3e from the float64 table, past %.0e", worstHost, worstOracle, bound)
+			if worstHost > bound || worstOracle > bound || exact && worstHost != 0 {
+				t.Fatalf("the composer's table is %.3e from the host's and %.3e from the float64 table, past %.0e (exact %v)", worstHost, worstOracle, bound, exact)
 			}
 			if !multi {
 				t.Logf("one axis: %.3e from the host's table, %.3e from the float64 table", worstHost, worstOracle)
@@ -131,9 +144,14 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int) {
 			}
 			// Each row's position on each axis, the one-axis table of a row
 			// there: pair p of row r is pair p of that table at p's axis.
+			// Where exact, the host's table to the bit is that check.
 			plain := rope
 			plain.Runs = nil
-			for r := range rows {
+			cross := rows
+			if exact {
+				cross = 0
+			}
+			for r := range cross {
 				var flat [jit.RopeAxes][]float32
 				for a, p := range at[r] {
 					flat[a] = run(t, plain, [4]int{}, false, 1, []uint32{1, uint32(p)})
@@ -288,4 +306,61 @@ func gpuRope(d backend.Device) ropeRunner {
 		}
 		return unguard(t, guarded, n)
 	}
+}
+
+// cpuRope calls the table on this host's CPU, each operand where its call
+// words say.
+func cpuRope(t *testing.T, rope nn.Rope, sections [4]int, interleaved bool, rows int, pos []uint32) []float32 {
+	t.Helper()
+	codes := composedRopeCodes(t, jit.Device{Kind: jit.DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true},
+		rope, sections, interleaved, rows)
+	n := rows * rope.NRot
+	out := guardedTable(n)
+	tables := map[string][]uint32{"rope.pos": pos, "rope.pos.axes": pos, "rope.planes": planeWords(rope), "rope.cs": out}
+	var keep [][]uint32
+	for _, c := range codes {
+		if c.CPU == nil {
+			t.Fatalf("%s has no CPU code", c.Name)
+		}
+		code, err := cpu.Map(c.CPU)
+		if err != nil {
+			t.Fatalf("mapping %s: %v", c.Name, err)
+		}
+		var args cpu.Args
+		base := unsafe.Pointer(&args)
+		for _, a := range c.Args {
+			if a.Field < 0 || uintptr(a.Field)+8 > unsafe.Sizeof(args) {
+				code.Close()
+				t.Fatalf("%s: a call word at %d past the argument block", c.Name, a.Field)
+			}
+			slot := (*uint64)(unsafe.Add(base, a.Field))
+			if a.Length || a.Value {
+				*slot = uint64(a.Extent)
+				continue
+			}
+			if a.Moving {
+				code.Close()
+				t.Fatalf("%s: %s sits at an offset a caller would compute, which no caller of a table can", c.Name, a.Operand.Name)
+			}
+			words := a.Words
+			switch o := a.Operand; {
+			case words != nil:
+			case o.Kind == jit.OperandTable && tables[o.Name] != nil:
+				words = tables[o.Name]
+			default:
+				code.Close()
+				t.Fatalf("%s binds %+v, which the table's call site does not hold", c.Name, o)
+			}
+			keep = append(keep, words)
+			if a.Word {
+				*slot = uint64(words[a.Offset])
+				continue
+			}
+			*slot = uint64(uintptr(unsafe.Pointer(&words[0]))) + uint64(4*a.Offset)
+		}
+		code.Call(&args)
+		code.Close()
+	}
+	runtime.KeepAlive(keep)
+	return unguard(t, out, n)
 }

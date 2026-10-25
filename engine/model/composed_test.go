@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"slices"
@@ -56,11 +57,11 @@ func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts
 // servedModels is every checkpoint whose blocks and head the front end states
 // as ops and that one card of 16 GiB holds: dense models of the llama, qwen2,
 // qwen3, gemma, gemma2, gemma3, olmo2, exaone4, arcee, granite, hunyuan,
-// phi3 and falcon classes, and the text models of qwen2vl and qwen3vl, whose
-// rotaries turn over several position axes. Qwen3-VL-2B's f16 blocks and head
-// run their float form, so that arm equals the float reference and its band
-// measures nothing; the Q4_K_M of the same model holds the interleaved rotary
-// to the band.
+// phi3 and falcon classes, and the text models of qwen2vl and qwen3vl. Those
+// state their rotaries over several position axes, but a served block turns
+// by main's table, and on a text row every axis's position is the same:
+// serving them says the blocks are stated and served at text positions,
+// nothing about the axes.
 var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf", "tinyllama-1.1b-q3_K_M.gguf",
 	"gemma-2b.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf", "qwen2.5-1.5b-instruct-q4_k_m.gguf",
 	"SmolLM2-360M-Instruct-Q8_0.gguf", "stories15M-q8_0.gguf", "SmolVLM-256M-Instruct-Q8_0.gguf",
@@ -69,8 +70,7 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 	"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf", "Phi-3.5-mini-instruct-Q4_K_M.gguf",
 	"gemma-3-1b-it-Q4_K_M.gguf", "gemma-3-4b-it-Q4_K_M.gguf", "gemma-2-2b-it-Q4_K_M.gguf",
 	"falcon/falcon-7b-instruct.Q4_K_M.gguf",
-	"Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "Qwen3-VL-2B-Instruct-f16.gguf",
-	"Qwen3VL-2B-Instruct-Q4_K_M.gguf"}
+	"Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "Qwen3VL-2B-Instruct-Q4_K_M.gguf"}
 
 // headDeclined is why the tier still declines a served model's head where it
 // does, by its name (tier.DeclineName): a head graph past the norm and the
@@ -85,8 +85,10 @@ var headDeclined = map[string]string{
 
 // formedModels is what the front end states and the serving gate does not
 // run: a model the tier cannot place (stories260K's 172-wide rows, which its
-// quantizer refuses), float fixtures whose composed logits equal the float
-// reference's, which the gate's band cannot measure, and rnj-1, whose
+// quantizer refuses), float fixtures and checkpoints whose composed logits
+// equal the float reference's, which the gate's band cannot measure
+// (Qwen3-VL-2B's f16: its blocks and head run their float form, median ratio
+// 0), and rnj-1, whose
 // composed blocks reach 0.19 from the float reference on CUDA at its 43rd
 // teacher-forced step, past four times the tiers' widest (0.0425): open. The
 // step reads as a near tie (one block's int8 rounding alone moves it 0.016,
@@ -100,7 +102,8 @@ var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1
 	"synth-phi2.gguf", "synth-starcoder.gguf", "synth-stablelm.gguf", "synth-stablelm-par.gguf",
 	"synth-starcoder2.gguf", "synth-falcon.gguf", "synth-falcon40.gguf", "synth-nemotron.gguf",
 	"synth-commandr.gguf", "synth-cohere2.gguf",
-	"synth-qwen2vl.gguf", "synth-qwen25vl.gguf", "synth-qwen3vl.gguf"}
+	"synth-qwen2vl.gguf", "synth-qwen25vl.gguf", "synth-qwen3vl.gguf",
+	"Qwen3-VL-2B-Instruct-f16.gguf"}
 
 // headUnstated is the models of servedModels and formedModels whose head the
 // front end names as not stated yet, by the reason it gives: a LayerNorm head.
@@ -353,5 +356,97 @@ func TestComposedBlocksServe(t *testing.T) {
 	}
 	if ran == 0 {
 		t.Fatal("no arm ran")
+	}
+}
+
+// TestComposedPromptIsNotServed holds a prompt's calls to the prompt
+// (nn.PromptDevice) with the composer serving the blocks and the head. A
+// float head does not fold into a batched chunk and a prompt of a few rows
+// runs as one ragged step, so either way the prompt's last-row head is a
+// one-row call of its own: it must count as unasked, never as a step the
+// composer serves. Each decode step after it serves every block and the head
+// once. With the State keeping the prompt from the device (the violation)
+// the head is served once more than the steps, which the gate must see.
+func TestComposedPromptIsNotServed(t *testing.T) {
+	const file, steps = "synth-qwen3vl.gguf", 6
+	path := testmodels.Path(file)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
+	}
+	m, err := Open(jlmOf(t, path), noTune)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	ran := 0
+	for _, dev := range stepDevices() {
+		// Three rows run as one ragged step, nine as a chunk whose float head
+		// does not fold.
+		for _, rows := range []int{3, 9} {
+			t.Run(fmt.Sprintf("%s/%d rows", dev, rows), func(t *testing.T) {
+				run := func(withhold bool) (heads, unasked, blocks int) {
+					// Without a recording every step runs every part, so the
+					// counts are the steps'.
+					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+						tier.WithConfig(func(c *tier.Config) {
+							c.Composed, c.Census, c.NoGraph = tier.ComposedBlock|tier.ComposedHead, true, true
+						})},
+						testTierOpts(t)...)...)
+					if err != nil || g == nil {
+						noDevice(t, dev, err)
+					}
+					defer g.Close()
+					s := m.NewState(rows + steps + 4)
+					defer s.Close()
+					s.SetDeviceFallback(false)
+					if err := s.SetDevice(g); err != nil {
+						t.Fatal(err)
+					}
+					if s.GPULayers() != m.Cfg.NLayer || !s.HeadOnDevice() {
+						t.Fatalf("%s took %d of %d blocks, head on it %v: %s", dev, s.GPULayers(), m.Cfg.NLayer, s.HeadOnDevice(), g.Err())
+					}
+					if withhold {
+						s.ldPrompt = nil
+					}
+					ids := make([]int32, rows)
+					for i := range ids {
+						ids[i] = int32((i*7 + 3) % m.Vocab.Size())
+					}
+					if _, err := s.Prefill(ids); err != nil {
+						t.Fatal(err)
+					}
+					for i := range steps {
+						if _, err := s.Forward(int32((i*11 + 5) % m.Vocab.Size())); err != nil {
+							t.Fatal(err)
+						}
+					}
+					st := g.Stats()
+					heads, _, unasked = st.ServedPart(tier.ComposedHead)
+					blocks, _, _ = st.ServedPart(tier.ComposedBlock)
+					if !withhold {
+						for k := range g.Census() {
+							if !slices.Contains(composedResidue, k) {
+								t.Fatalf("the tier launched its own %s on a call it counts as a step (%v)", k, g.Census())
+							}
+						}
+					}
+					return heads, unasked, blocks
+				}
+				heads, unasked, blocks := run(false)
+				if heads != steps || unasked < 1 || blocks != steps*m.Cfg.NLayer {
+					t.Fatalf("the head was served %d times and left unasked %d in %d steps, the blocks served %d times where %d steps of %d blocks are %d",
+						heads, unasked, steps, blocks, steps, m.Cfg.NLayer, steps*m.Cfg.NLayer)
+				}
+				leaked, _, _ := run(true)
+				if leaked != steps+1 {
+					t.Fatalf("with the prompt kept from the device the head was served %d times in %d steps: the gate cannot see a prompt's head served", leaked, steps)
+				}
+				t.Logf("the head served %d times in %d steps, %d of its calls unasked; kept from the device, %d", heads, steps, unasked, leaked)
+				ran++
+			})
+		}
+	}
+	if ran == 0 {
+		t.Fatal("no device ran")
 	}
 }

@@ -167,6 +167,9 @@ func (s *State) prefillSeqDevice(slot int, tokens []int32) ([]float32, error) {
 	if len(s.blogits) < s.nseq*nv {
 		s.blogits = make([]float32, s.nseq*nv)
 	}
+	// The last token's one-row step is the prompt's too (nn.PromptDevice).
+	s.promptCalls(true)
+	defer s.promptCalls(false)
 	for done := 0; done < len(tokens); {
 		k := min(len(tokens)-1-done, nn.MaxDevicePrefillChunk)
 		var lg []float32
