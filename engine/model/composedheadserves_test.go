@@ -3,6 +3,7 @@ package model
 import (
 	"math"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/internal/testmodels"
@@ -17,7 +18,8 @@ var headServedModels = []string{"rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf"}
 // TestComposedHeadServesWhereTheBlocksDoNot decodes each of headServedModels
 // with the composer asked for the head alone, every block on the tier's own
 // kernels, on each device: the head is served at every step, formed at its
-// placement and declined by no name, and the tier's own cap is not launched
+// placement and declined by no name but the prompt's own (composedLater), and
+// the tier's own cap is not launched
 // over the capped logits it writes. The logits are held to the tier's own head
 // and cap, tenfold nearer than the same logits capped twice, or not at all,
 // which the head that did either would be.
@@ -56,6 +58,13 @@ func TestComposedHeadServesWhereTheBlocksDoNot(t *testing.T) {
 						t.Skipf("the head does not fit beside the blocks on %s", dev)
 					}
 					served, declined, _ := st.ServedPart(tier.ComposedHead)
+					// The prompt's heads are the tier's, declined by their
+					// path's name (composedLater).
+					for i, c := range st.HeadDeclines {
+						if slices.Contains(composedLater, tier.DeclineName(i)) {
+							declined -= c
+						}
+					}
 					if served != len(toks) || declined != 0 || st.FormedAtStep != 0 {
 						t.Fatalf("the composed head served %d of %d steps, was declined %d (%s) and %d formed at a step",
 							served, len(toks), declined, declinesOf(st), st.FormedAtStep)

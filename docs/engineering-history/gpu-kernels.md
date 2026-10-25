@@ -7583,12 +7583,16 @@ row where the composer's reads two.
   over the tied embedding), the composed head reads at most 3.0e-13 and the
   tier's own head, the host finishing its logits, at most 1.4e-13, against a
   bound of 1e-9. A head with both a softcap and a bias, which no model has,
-  was capped by every device path before the host added the bias, the other
-  order of the model's; PrepHead now refuses it by name, the host runs it in
-  the model's order, and the gate holds that to the oracle (the arm asserts
-  the refusal, the blocks all on the device and the logits). The softcap
-  dropped reads
-  3.5e-02 to 4.5e-02, the scale inverted 4.0e+03, the bias negated 0.13 and
+  is missing work, declined by name: every device path of the tier's own head
+  caps the logits before the host adds the bias, the other order of the
+  model's (bias, softcap, scale), so PrepHead refuses the pair (its LastErr
+  names it) and the head stays at home, where the order is the model's. The
+  composed graph states the pair in the model's order (TestComposedCPUHead's
+  "all" arm), so the work is the tier's own cap on the device ahead of the
+  host's bias, or the retirement of the tier's own head. The gate's arm
+  asserts the refusal, the blocks all on the device and the logits against
+  the oracle, and takes the softcap only on heads without a bias. The
+  softcap dropped reads 3.5e-02 to 4.5e-02, the scale inverted 4.0e+03, the bias negated 0.13 and
   the norm's bias dropped 0.10 and 0.71. TestComposedHeadTokens holds the
   greedy token and the sampler's draws to the logits the device returns: the
   composed head selects all eight tokens and all 24 draws on the device, the
@@ -7606,8 +7610,9 @@ row where the composer's reads two.
   own configuration as well, which the composer's forms read as the tier's
   kernels do (0.85 and 8.1e-03 against a clean 3e-14).
   The serving gate takes gemma-2-2b, granite-3.3-2b, granite-4.0-micro and
-  falcon-7b with their heads served and the headDeclined and headUnstated
-  lists empty. On a V100 the composed block and head read a median 0.987,
+  falcon-7b with their heads served: no head is declined or unstated, and
+  the lists that held them, the headless front (jit.FrontHeadless) and
+  UncoveredClassic are gone, nothing reading them. On a V100 the composed block and head read a median 0.987,
   1.000, 0.994 and 1.003 of the tier's own distance from the float reference
   on CUDA (worst NMSE from the tier 0.052, 0.0036, 0.0174 and 3.9e-05) and
   0.996, 1.002, 1.075 and 0.997 on Vulkan (0.0635, 0.0076, 0.0204 and
@@ -7622,12 +7627,9 @@ row where the composer's reads two.
   (TestComposedHeadServesWhereTheBlocksDoNot). The composed head serves a
   single-row step that is not a prompt's: a folded prompt's last row, a
   prompt's own calls, a ragged step and a chunk projecting every row keep the
-  tier's own head, so the first draw after a prompt is made over logits the
-  host finished and every draw after it is the device's. That C6 gate had
-  counted synth-cohere2's windowed blocks as declined (9 block steps served
-  and 27 declined); once the windows were served it read 36 served and none
-  declined, as it does on the tree before this work, and it now expects every
-  covered block served.
+  tier's own head (a prompt's, by a composedLater name where the prompt is
+  asked), so the first draw after a prompt is made over logits the host
+  finished and every draw after it is the device's.
   Two composer defects surfaced on the way. Formation: Affine's cse redirected
   each duplicate with a pass over the kernel of its own (the profile put 90%
   of the time in Affine, cse, redirectAll, redirect, Operands), so

@@ -6385,9 +6385,10 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	if bs == nil || h == nil {
 		return false
 	}
-	// Every device path caps the logits before the host adds the bias, the
-	// other order of the model's head (bias, softcap, scale): a head with both
-	// stays on the host, where it runs in the model's order.
+	// Every device path of the tier's own head caps the logits before the host
+	// adds the bias, the other order of the model's head (bias, softcap,
+	// scale). No model has both: the pair is declined by name, at home where
+	// the order is the model's, until the cap can follow the bias.
 	if h.Softcap != 0 && h.Bias != nil {
 		g.LastErr = "the head states a final softcap and an output bias: the device caps before the host adds the bias, " +
 			"the other order of the model's head, so the head stays on the host"
