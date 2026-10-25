@@ -381,3 +381,132 @@ func TestComposedGPUQuantMaps(t *testing.T) {
 
 // subnormal reports whether v is a nonzero float below the normal range.
 func subnormal(v float32) bool { return v != 0 && math.Abs(float64(v)) < 0x1p-126 }
+
+// TestComposedGPUDivision holds a map's division by a vector to the IEEE
+// quotient bit for bit on every device present, with the device's own
+// division where it is exact and with the integer form a device without
+// one takes (exprs.div): signed operands over sixty binades, the repeat
+// penalty's divisors among them, every value and quotient in the normal
+// range, guard words after the result. Its violation is the device's own
+// quotient on a device that is not exact (TestComposedGPUDivisionViolation).
+func TestComposedGPUDivision(t *testing.T) {
+	testlock.GPU(t)
+	devs := backend.Open()
+	if len(devs) == 0 {
+		t.Fatal("no GPU backend on this host: the gate runs on one")
+	}
+	xs, ds := divisionOperands()
+	for _, d := range devs {
+		defer d.Close()
+		t.Run(d.API(), func(t *testing.T) {
+			dev := gpuDevice(d)
+			for _, exact := range []bool{dev.ExactDiv, false} {
+				dv := dev
+				dv.ExactDiv = exact
+				bad, ran := divisionMisses(t, d, dv, xs, ds)
+				if bad > 0 {
+					t.Fatalf("exact %v: %d of %d quotients off", exact, bad, ran)
+				}
+				t.Logf("exact %v: %d quotients the IEEE ones", exact, ran)
+			}
+		})
+	}
+}
+
+// TestComposedGPUDivisionViolation is the gate's violation: a device that
+// is not exact told it is, so the map takes the device's own division. On
+// Vulkan that is allowed 2.5 ulp and some quotient must be off; where the
+// device's division is exact there is nothing to violate.
+func TestComposedGPUDivisionViolation(t *testing.T) {
+	testlock.GPU(t)
+	devs := backend.Open()
+	if len(devs) == 0 {
+		t.Fatal("no GPU backend on this host: the gate runs on one")
+	}
+	xs, ds := divisionOperands()
+	ran := 0
+	for _, d := range devs {
+		defer d.Close()
+		dev := gpuDevice(d)
+		if dev.ExactDiv {
+			continue
+		}
+		ran++
+		dev.ExactDiv = true
+		if bad, n := divisionMisses(t, d, dev, xs, ds); bad == 0 {
+			t.Errorf("%s: the device's own division matched the IEEE quotient at all %d: the violation is invisible", d.API(), n)
+		} else {
+			t.Logf("%s: the device's own division is off at %d of %d", d.API(), bad, n)
+		}
+	}
+	if ran == 0 {
+		t.Fatal("no device without an exact division here: the violation ran on none")
+	}
+}
+
+// divisionOperands are TestComposedGPUDivision's numerators and divisors.
+func divisionOperands() (xs, ds []float32) {
+	const n = 4096
+	rng := rand.New(rand.NewSource(43))
+	xs, ds = make([]float32, n), make([]float32, n)
+	for i := range xs {
+		xs[i] = float32(rng.NormFloat64() * math.Exp2(rng.Float64()*60-30))
+		switch i % 4 {
+		case 0:
+			ds[i] = float32(1 + rng.Float64())
+		case 1:
+			ds[i] = 1.1
+		case 2:
+			ds[i] = 127
+		default:
+			ds[i] = float32(rng.NormFloat64() * math.Exp2(rng.Float64()*40-20))
+		}
+	}
+	xs[0], ds[0] = 0, 3
+	return xs, ds
+}
+
+// divisionMisses forms x / ds on d under dv and counts the quotients that
+// are not Go's, of those in the normal range.
+func divisionMisses(t *testing.T, d backend.Device, dv jit.Device, xs, ds []float32) (bad, ran int) {
+	t.Helper()
+	const guard = 64
+	n := len(xs)
+	b := graph.New()
+	x := b.In("x", n)
+	b.Out(b.Emit(graph.OpMap, []graph.ValueID{x}, []graph.Result{{Name: "y", Width: n}},
+		[]graph.Binding{{Role: jlm.RoleOutputNorm, K: n, Rows: 1}}, graph.Attrs{Fn: graph.MapDiv}, nil, nil)[0])
+	_, codes, err := jit.Default().Form(jit.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{},
+		Step: jit.Step{Rows: 1, Page: 64, Keys: 1}, Device: dv})
+	if err != nil {
+		t.Fatalf("exact %v: %v", dv.ExactDiv, err)
+	}
+	op, err := compileLone(d, codes)
+	if err != nil {
+		t.Fatalf("exact %v: %v", dv.ExactDiv, err)
+	}
+	res, tail, err := op.run(xs, n, guard, map[jlm.Role][]float32{jlm.RoleOutputNorm: ds})
+	op.close()
+	if err != nil {
+		t.Fatalf("exact %v: %v", dv.ExactDiv, err)
+	}
+	for i, v := range tail {
+		if v != guardWord {
+			t.Fatalf("exact %v: the guard word %d past the result was written", dv.ExactDiv, i)
+		}
+	}
+	for i, v := range xs {
+		w := v / ds[i]
+		if subnormal(v) || subnormal(w) || math.IsInf(float64(w), 0) {
+			continue
+		}
+		ran++
+		if math.Float32bits(res[i]) != math.Float32bits(w) {
+			bad++
+			if bad < 5 && !dv.ExactDiv {
+				t.Errorf("%g/%g = %g (%#x), want %g (%#x)", v, ds[i], res[i], math.Float32bits(res[i]), w, math.Float32bits(w))
+			}
+		}
+	}
+	return bad, ran
+}

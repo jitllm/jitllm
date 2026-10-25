@@ -59,7 +59,10 @@ func (x *exprs) mapFn(f graph.MapFn, a []int, exact bool) (int, error) {
 	case graph.MapMul:
 		return x.op(OpMul, F, a[0], a[1]), nil
 	case graph.MapDiv:
-		return x.op(OpDiv, F, a[0], a[1]), nil
+		if exact {
+			return x.op(OpDiv, F, a[0], a[1]), nil
+		}
+		return x.div(a[0], a[1]), nil
 	case graph.MapMax:
 		return x.op(OpMax, F, a[0], a[1]), nil
 	case graph.MapMin:
