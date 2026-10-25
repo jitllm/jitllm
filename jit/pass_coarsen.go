@@ -190,10 +190,15 @@ type coarse struct {
 	m       *Kernel
 	members []*Kernel
 	E, T    int
+	// R and P are the units' periods and the units a period (uval): R the
+	// rows every member's leading axis holds a multiple of, T = R*P.
+	R, P    int
 	u       int
 	local   int
 	memo    map[string]int
-	values  map[int][]uint32
+	values  map[int]*uval
+	classOf map[int]int
+	classes map[string]int
 	host    *Kernel
 	hostVal map[Operand]Store
 	err     error
@@ -221,7 +226,17 @@ func (c Coarsen) form(members []*Kernel, host *Kernel, d Device, under bool) (*K
 		}
 	}
 	T := E / U
-	k := &coarse{c: c, members: members, E: E, T: T, lanes: lanes, warp: warp, guard: -1, memo: map[string]int{}, values: map[int][]uint32{}}
+	R := 0
+	for _, n := range members {
+		if len(n.Space) > 0 {
+			R = gcd(R, n.Space[0])
+		}
+	}
+	if R < 1 || T%R != 0 {
+		R = 1
+	}
+	k := &coarse{c: c, members: members, E: E, T: T, R: R, P: T / R, lanes: lanes, warp: warp, guard: -1, memo: map[string]int{},
+		values: map[int]*uval{}, classOf: map[int]int{}, classes: map[string]int{}}
 	if host != nil {
 		// The phase reads what the host's whole row wrote: one workgroup.
 		if host.Elements() != 1 || T > host.Group {
@@ -436,18 +451,14 @@ func alike(a *Kernel, x int, b *Kernel, y int) bool {
 }
 
 // key names a value at coords after prefix, each coordinate by its value:
-// a coordinate that is a function of the thread's unit alone, by its value
-// at every unit, so two expressions of one value -- (4u+j)/32 for each j of
-// a unit's four elements -- are one; any other by its node. The values are
-// the units' words, not their text: a chunk's rows make thousands of units.
+// a coordinate that is a function of the thread's unit alone, by the class
+// of that function, so two expressions of one value -- (4u+j)/32 for each j
+// of a unit's four elements -- are one; any other by its node.
 func (k *coarse) key(prefix string, coords []int) string {
 	b := append([]byte(prefix), '|')
 	for _, c := range coords {
-		if v, ok := k.value(c); ok {
-			b = append(b, 'v')
-			for _, x := range v {
-				b = bin.LittleEndian.AppendUint32(b, x)
-			}
+		if id, ok := k.class(c); ok {
+			b = bin.AppendUvarint(append(b, 'v'), uint64(id))
 			continue
 		}
 		b = bin.AppendUvarint(append(b, 'n'), uint64(c))
@@ -455,23 +466,109 @@ func (k *coarse) key(prefix string, coords []int) string {
 	return string(b)
 }
 
+// class is the function of the unit node i computes, numbered: two nodes
+// share a class exactly where they compute the same value at every unit.
+// False where i is not a function of the unit alone.
+func (k *coarse) class(i int) (int, bool) {
+	if id, ok := k.classOf[i]; ok {
+		return id, id >= 0
+	}
+	v, ok := k.value(i)
+	if !ok {
+		k.classOf[i] = -1
+		return 0, false
+	}
+	var b []byte
+	if v.full == nil {
+		b = append(b, 'p')
+		for _, x := range v.a {
+			b = bin.LittleEndian.AppendUint32(b, x)
+		}
+		b = bin.LittleEndian.AppendUint32(b, v.c)
+	} else {
+		b = append(b, 'f')
+		for _, x := range v.full {
+			b = bin.LittleEndian.AppendUint32(b, x)
+		}
+	}
+	id, ok := k.classes[string(b)]
+	if !ok {
+		id = len(k.classes)
+		k.classes[string(b)] = id
+	}
+	k.classOf[i] = id
+	return id, true
+}
+
+// uval is a node's value at the T units, where it is a function of the unit
+// alone. The units are R periods of P -- R the rows the chain's members
+// share -- and unit r*P+q holds a[q] + c*r, P words and one where the
+// value is that, whatever the rows; full holds every unit's value where it
+// is not. A function has one uval, so equal uvals are equal functions.
+type uval struct {
+	a    []uint32
+	c    uint32
+	full []uint32
+}
+
+// at is v at unit t.
+func (k *coarse) at(v *uval, t int) uint32 {
+	if v.full != nil {
+		return v.full[t]
+	}
+	return v.a[t%k.P] + v.c*uint32(t/k.P)
+}
+
+// whole is v at every unit, a[q] + c*r in integers: no unit's value
+// wrapped past 32 bits, so a division of it divides the integer.
+func (k *coarse) whole(v *uval) bool {
+	if v.full != nil {
+		return false
+	}
+	top := uint64(v.c) * uint64(k.R-1)
+	for _, x := range v.a {
+		if uint64(x)+top > 1<<32-1 {
+			return false
+		}
+	}
+	return true
+}
+
+// konst is the word v is at every unit, where it is one.
+func (v *uval) konst() (uint32, bool) {
+	if v.full != nil || v.c != 0 {
+		return 0, false
+	}
+	for _, x := range v.a[1:] {
+		if x != v.a[0] {
+			return 0, false
+		}
+	}
+	return v.a[0], true
+}
+
 // value is node i of the formed kernel at each of the T units, or false
 // where it is not a function of the unit alone.
-func (k *coarse) value(i int) ([]uint32, bool) {
+func (k *coarse) value(i int) (*uval, bool) {
 	if v, ok := k.values[i]; ok {
 		return v, v != nil
 	}
 	k.values[i] = nil
 	nd := k.m.Nodes[i]
-	out := make([]uint32, k.T)
+	var v *uval
 	switch {
 	case i == k.u:
-		for t := range out {
-			out[t] = uint32(t)
+		v = &uval{a: make([]uint32, k.P)}
+		for q := range v.a {
+			v.a[q] = uint32(q)
+		}
+		if k.R > 1 {
+			v.c = uint32(k.P)
 		}
 	case nd.Op == OpConst && nd.Type == ir.U32:
-		for t := range out {
-			out[t] = uint32(nd.Imm)
+		v = &uval{a: make([]uint32, k.P)}
+		for q := range v.a {
+			v.a[q] = uint32(nd.Imm)
 		}
 	case nd.Type == ir.U32 && (nd.Op == OpAdd || nd.Op == OpSub || nd.Op == OpMul || nd.Op == OpDiv || nd.Op == OpRem || nd.Op == OpMin ||
 		nd.Op == OpMax || nd.Op == OpShl || nd.Op == OpShr || nd.Op == OpAnd):
@@ -483,41 +580,180 @@ func (k *coarse) value(i int) ([]uint32, bool) {
 		if !ok {
 			return nil, false
 		}
-		for t := range out {
-			x, y := a[t], b[t]
-			switch nd.Op {
-			case OpAdd:
-				out[t] = x + y
-			case OpSub:
-				out[t] = x - y
-			case OpMul:
-				out[t] = x * y
-			case OpDiv, OpRem:
-				if y == 0 {
-					return nil, false
-				}
-				if nd.Op == OpDiv {
-					out[t] = x / y
-				} else {
-					out[t] = x % y
-				}
-			case OpMin:
-				out[t] = min(x, y)
-			case OpMax:
-				out[t] = max(x, y)
-			case OpShl:
-				out[t] = x << (y & 31)
-			case OpShr:
-				out[t] = x >> (y & 31)
-			case OpAnd:
-				out[t] = x & y
-			}
+		if v, ok = k.binop(nd.Op, a, b); !ok {
+			return nil, false
 		}
 	default:
 		return nil, false
 	}
-	k.values[i] = out
-	return out, true
+	k.values[i] = v
+	return v, true
+}
+
+// binop is x op y at every unit, false where a division meets a zero. It
+// stays P words a period where the op keeps that form (periodic), and is
+// every unit's word where not.
+func (k *coarse) binop(op Op, x, y *uval) (*uval, bool) {
+	if v, zero, done := k.periodic(op, x, y); done {
+		return v, !zero
+	}
+	out := make([]uint32, k.T)
+	for t := range out {
+		a, b := k.at(x, t), k.at(y, t)
+		switch op {
+		case OpAdd:
+			out[t] = a + b
+		case OpSub:
+			out[t] = a - b
+		case OpMul:
+			out[t] = a * b
+		case OpDiv, OpRem:
+			if b == 0 {
+				return nil, false
+			}
+			if op == OpDiv {
+				out[t] = a / b
+			} else {
+				out[t] = a % b
+			}
+		case OpMin:
+			out[t] = min(a, b)
+		case OpMax:
+			out[t] = max(a, b)
+		case OpShl:
+			out[t] = a << (b & 31)
+		case OpShr:
+			out[t] = a >> (b & 31)
+		case OpAnd:
+			out[t] = a & b
+		}
+	}
+	return k.fold(out), true
+}
+
+// fold is a function given at every unit as its uval: P words a period
+// where each period is the first plus a step a row.
+func (k *coarse) fold(full []uint32) *uval {
+	P := k.P
+	if k.R == 1 {
+		return &uval{a: full}
+	}
+	c := full[P] - full[0]
+	for t := P; t < len(full); t++ {
+		if full[t] != full[t-P]+c {
+			return &uval{full: full}
+		}
+	}
+	return &uval{a: append([]uint32(nil), full[:P]...), c: c}
+}
+
+func gcd(a, b int) int {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
+}
+
+// periodic is x op y as P words a period and a step a row, where the op
+// keeps that form at every unit: done false where it does not, zero where
+// a division meets a zero divisor.
+func (k *coarse) periodic(op Op, x, y *uval) (v *uval, zero, done bool) {
+	if x.full != nil || y.full != nil {
+		return nil, false, false
+	}
+	flat := x.c == 0 && y.c == 0
+	d, dk := y.konst()
+	v = &uval{a: make([]uint32, k.P)}
+	each := func(f func(a, b uint32) uint32) {
+		for q := range v.a {
+			v.a[q] = f(x.a[q], y.a[q])
+		}
+	}
+	scale := func(s *uval, f func(a uint32) uint32) {
+		for q := range v.a {
+			v.a[q] = f(s.a[q])
+		}
+		v.c = f(s.c)
+	}
+	switch op {
+	case OpAdd:
+		each(func(a, b uint32) uint32 { return a + b })
+		v.c = x.c + y.c
+	case OpSub:
+		each(func(a, b uint32) uint32 { return a - b })
+		v.c = x.c - y.c
+	case OpMul:
+		switch xk, xok := x.konst(); {
+		case flat:
+			each(func(a, b uint32) uint32 { return a * b })
+		case dk:
+			scale(x, func(a uint32) uint32 { return a * d })
+		case xok:
+			scale(y, func(a uint32) uint32 { return a * xk })
+		default:
+			return nil, false, false
+		}
+	case OpDiv, OpRem:
+		if y.c != 0 {
+			return nil, false, false
+		}
+		for _, b := range y.a {
+			if b == 0 {
+				return nil, true, true
+			}
+		}
+		switch {
+		case flat && op == OpDiv:
+			each(func(a, b uint32) uint32 { return a / b })
+		case flat:
+			each(func(a, b uint32) uint32 { return a % b })
+		case !dk || x.c%d != 0 || !k.whole(x):
+			return nil, false, false
+		case op == OpDiv:
+			scale(x, func(a uint32) uint32 { return a / d })
+		default:
+			scale(x, func(a uint32) uint32 { return a % d })
+			v.c = 0
+		}
+	case OpMin, OpMax:
+		if !flat {
+			return nil, false, false
+		}
+		if op == OpMin {
+			each(func(a, b uint32) uint32 { return min(a, b) })
+		} else {
+			each(func(a, b uint32) uint32 { return max(a, b) })
+		}
+	case OpShl:
+		switch {
+		case flat:
+			each(func(a, b uint32) uint32 { return a << (b & 31) })
+		case dk:
+			scale(x, func(a uint32) uint32 { return a << (d & 31) })
+		default:
+			return nil, false, false
+		}
+	case OpShr:
+		switch {
+		case flat:
+			each(func(a, b uint32) uint32 { return a >> (b & 31) })
+		case dk && x.c%(1<<(d&31)) == 0 && k.whole(x):
+			scale(x, func(a uint32) uint32 { return a >> (d & 31) })
+		default:
+			return nil, false, false
+		}
+	case OpAnd:
+		switch m := uint64(d) + 1; {
+		case flat:
+			each(func(a, b uint32) uint32 { return a & b })
+		case dk && m&(m-1) == 0 && uint64(x.c)%m == 0 && k.whole(x):
+			scale(x, func(a uint32) uint32 { return a & d })
+			v.c = 0
+		default:
+			return nil, false, false
+		}
+	}
+	return v, false, true
 }
 
 // produce is member n's value stored by s at its coordinates coords.
