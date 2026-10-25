@@ -66,7 +66,7 @@ func (s *PlacementService) SetPlacement(ctx context.Context, req *connect.Reques
 	start := time.Now()
 	sess.mu.Lock()
 	if len(want) == 0 {
-		// Everything home.
+		// Everything on the CPU.
 		sess.st.SetGPULayers(0)
 	} else {
 		max := -1

@@ -17,7 +17,7 @@ import "fmt"
 //   - A sequence letting a named page go drops its hold (releaseID); the page
 //     stays named, for the next prompt, until its room is wanted: then the
 //     unheld named pages go first (reclaimNamed), before the layer grows.
-//   - Eviction sends a sequence's view of a named page home and drops its
+//   - Eviction sends a sequence's view of a named page to host memory and drops its
 //     hold; compaction gives the unheld named pages back first and leaves a
 //     layer with held ones as it is.
 

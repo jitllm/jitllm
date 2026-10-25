@@ -1,7 +1,7 @@
 package tier
 
 // KVRoom is how many more positions of attention history the devices can take
-// without sending a page home: in every layer a device's pool holds, the pages
+// without evicting a page to host memory: in every layer a device's pool holds, the pages
 // it has free and the pages the budget lets it grow by, priced at one page of
 // every layer at once, and the fewest of any device, since a sequence grows in
 // every layer together. page is the pool's positions a page (0 with no pool);
@@ -9,7 +9,7 @@ package tier
 // to it. A device with no attention layer does not bound it.
 //
 // It is what a scheduler admits by: rows whose histories fit it all stay on
-// the card and step together, where rows past it send their oldest pages home
+// the card and step together, where rows past it evict their oldest pages to host memory
 // and stream them back every token (kvevict.go) -- correct, and slower by the
 // whole history crossing the bus once a step.
 func (g *GPU) KVRoom() (positions, page int) {
@@ -83,7 +83,7 @@ const kvTightMargin = 64 << 20
 // room for them is spoken for: a batched scratch of a width nobody reserved
 // is not built into it (prepBatch), so a scratch built after admission does
 // not take the pages the admitted rows were promised and send their history
-// home. 0 withdraws the promise.
+// to host memory. 0 withdraws the promise.
 func (g *GPU) PromiseKV(positions int) {
 	for _, d := range g.devs {
 		d.mu.Lock()

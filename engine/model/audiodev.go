@@ -104,7 +104,7 @@ func (s *State) audWeights(li int) nn.LayerWeights {
 }
 
 // setAudioDevice places the audio blocks on d through their segment State,
-// every one the device takes; nil takes them home.
+// every one the device takes; nil takes them to the CPU.
 func (e *Embedder) setAudioDevice(d nn.Device) error {
 	if e.m.audio == nil {
 		return nil

@@ -668,7 +668,7 @@ func (g *devTier) SetBudget(bytes uint64) int {
 	g.trim()
 	// Below the slot floor the pages go all the way out, since there is
 	// nothing to swap through: the next call returns false and model/'s
-	// demotion path brings the KV history home.
+	// demotion path moves the KV history to the CPU.
 	for g.slots() < minSlots && g.pagesIn > 0 {
 		v := g.victim(-1, 0, 0, false)
 		if v < 0 {

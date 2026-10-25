@@ -21,7 +21,7 @@ import (
 // under it for that reason).
 const hostStepNMSE = 1e-3
 
-// TestStepRunsOnTheHostSharesOnePass is the gate on StepRuns' host arm
+// TestStepRunsOnTheCPUSharesOnePass is the gate on StepRuns' host arm
 // (stepHost): two sessions decode while a third session's prompt rides beside
 // them in chunks of three tokens, then all three decode together, every
 // State on the host. Teacher-forced against each session alone (Prefill and
@@ -36,7 +36,7 @@ const hostStepNMSE = 1e-3
 //
 // A dense model, a hybrid (recurrent state per row), a mixture and a sliding
 // window model.
-func TestStepRunsOnTheHostSharesOnePass(t *testing.T) {
+func TestStepRunsOnTheCPUSharesOnePass(t *testing.T) {
 	for _, c := range []struct{ name, file string }{
 		{"dense", "Llama-3.2-1B-Instruct-Q4_K_M.gguf"},
 		{"hybrid", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"},

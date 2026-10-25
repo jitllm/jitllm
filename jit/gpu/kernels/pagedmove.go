@@ -8,7 +8,7 @@ import (
 
 // PagedGatherPages copies pages of a paged pool into one contiguous buffer:
 // dst[j*words + i] = src[pTab[j]*words + i] for the n pages the table names.
-// It is how a sequence's history leaves the device (a block moving home, a
+// It is how a sequence's history leaves the device (a block moving to the CPU, a
 // seam shrinking): Buf reads a whole buffer, and a pool is every sequence's.
 // Parameters: pSrc (the pool), pDst, pTab.
 func PagedGatherPages(words, n int) (*ir.Kernel, error) {

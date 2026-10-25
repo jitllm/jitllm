@@ -11,7 +11,7 @@ import (
 // to share its weight read, and the router decides that only at run time -- so
 // the chunk is routed on the device, kernels.ExpertGroup* sort the (token,
 // slot) pairs by expert with each expert's run padded to a whole matvec token
-// group, the used column count comes home (the one word the grouped launches
+// group, the used column count is read back (the one word the grouped launches
 // are sized by), and the expert matvecs run in that order with one expert per
 // group (kernels.MatVec's grouped shape). ExpertCombineGrouped reads the
 // outputs back in token order.
@@ -90,7 +90,7 @@ type moeGroup struct {
 	// hsum is a split step's host sum of its rows (streamBank.hostRowsLate).
 	hsum backend.Buf
 	// gcount..gtilesU group the chunk's pairs by expert on the device
-	// (kernels.ExpertGroup*), into cnt and ends; endsH is ends read home, whose
+	// (kernels.ExpertGroup*), into cnt and ends; endsH is ends read back, whose
 	// last word is the used column count the grouped launches are sized by.
 	gbcount, gcount, gends, gcols, gscatter, gtiles, gtilesU backend.Kernel
 	bc, off, cnt, ends                                       backend.Buf
@@ -611,7 +611,7 @@ func (g *devTier) groupedMV(m mv, bank, np int) (backend.Kernel, bool) {
 }
 
 // emitGroupedMoE is a batched chunk's routed mixture, from the normed rows in
-// bs.h to the weighted expert sum in bs.mvOut. It reads the selection home, so
+// bs.h to the weighted expert sum in bs.mvOut. It reads the selection back, so
 // it runs inside the submission but outside any captured graph.
 //
 // Every launch goes through lc's reused buffer list, as the rest of the
@@ -725,7 +725,7 @@ func (g *devTier) emitGroupedMoE(sid uint64, s backend.Session, lc *launcher, bs
 		}
 	}
 	// The grouping runs on the device (kernels.ExpertGroup*) and only the used
-	// column count comes home.
+	// column count is read back.
 	nbe := kernels.GroupBlocks(rows, m.k) * e
 	la(m.gbcount, nbe, 128, m.rsel, m.bc)
 	la(m.gcount, nbe, 128, m.bc, m.off, m.cnt)

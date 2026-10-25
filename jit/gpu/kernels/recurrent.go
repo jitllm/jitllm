@@ -27,7 +27,7 @@ import (
 // The pool is two buffers and a step reads one and writes the other, so the
 // two slots are the same in the doubled form; the shared form reads its one
 // state buffer at the in slot and writes a compact next-state scratch at the
-// out slot (CopySlots moves it home). The convolution's window is always
+// out slot (CopySlots reads it back). The convolution's window is always
 // doubled and uses the in slot on both sides. A chunk is one sequence (j =
 // 0); a step of several sequences reads the run descriptor below, whose
 // first words are these.
@@ -265,7 +265,7 @@ func Conv1dShiftRuns(taps, chans, rows int) (*ir.Kernel, error) {
 // CopySlots copies rows slots of w floats from pSrc to pDst through a
 // recurrent descriptor: sequence j's slot in pDst is its IN slot, pMap[1+2j],
 // and it is filled from its OUT slot of pSrc, pMap[2+2j]. That is the shared
-// form's way home -- the step wrote a compact next state at the out slot, and
+// form's way back -- the step wrote a compact next state at the out slot, and
 // the pool reads it at the in slot -- inside the step's own submission, where
 // a device copy (backend.Device.Copy) cannot go. Launch rows*w threads; the
 // grid is clamped.

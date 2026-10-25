@@ -7,11 +7,11 @@ import (
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
-// TestParkBringsTheDeviceHistoryHomeAndBack: a session with every block on
+// TestParkTakesTheCardHistoryOffAndBack: a session with every block on
 // the device parks (its KV pages come home and the device's blocks are given
 // back), resumes onto the device, and decodes the tokens its solo run on the
 // device decodes.
-func TestParkBringsTheDeviceHistoryHomeAndBack(t *testing.T) {
+func TestParkTakesTheCardHistoryOffAndBack(t *testing.T) {
 	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.jlm")
 	if src := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"); fileExists(src) {
 		p = jlmOf(t, src)

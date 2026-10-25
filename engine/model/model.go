@@ -1212,12 +1212,12 @@ type Model struct {
 	// read: Close closes the first and waits on the second.
 	preloadStop, preloadDone chan struct{}
 	preloadErr               error
-	// hostUse[li] counts the live States that run block li on the host, under
+	// cpuUse[li] counts the live States that run block li on the CPU, under
 	// bind. A State placing a block gives its host page back only when the
 	// count is zero: placement is per State and the binding per Model, so
 	// another State running the block on the host would otherwise find it
 	// unbound between its pageIn and its matvecs.
-	hostUse []int32
+	cpuUse []int32
 	// pages is the page budget as the caller set it, and the devices on the
 	// host's own memory whose holdings come off it (hostheld.go).
 	pages pageAsk
@@ -2499,15 +2499,15 @@ func (m *Model) PagerReadWait() time.Duration {
 	return m.container.ReadWait()
 }
 
-// hostRuns adds d to hostUse over blocks [lo, hi).
-func (m *Model) hostRuns(lo, hi int, d int32) {
+// cpuRuns adds d to cpuUse over blocks [lo, hi).
+func (m *Model) cpuRuns(lo, hi int, d int32) {
 	m.bind.Lock()
 	defer m.bind.Unlock()
-	if m.hostUse == nil {
-		m.hostUse = make([]int32, len(m.layers))
+	if m.cpuUse == nil {
+		m.cpuUse = make([]int32, len(m.layers))
 	}
 	for li := max(lo, 0); li < min(hi, len(m.layers)); li++ {
-		m.hostUse[li] += d
+		m.cpuUse[li] += d
 	}
 }
 

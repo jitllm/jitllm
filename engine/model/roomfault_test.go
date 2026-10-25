@@ -15,7 +15,7 @@ import (
 // survive (RULE 10): a recurrent seat reset from host-written zeros, a
 // Scheduler clamped to the batched scratch the device holds (nn.RowsWidther),
 // and a step whose recurrent seats do not fit run with the blocks home
-// (nn.RowsRoomer, SchedulerStats.RoomHome). Every forced arm's tokens are the
+// (nn.RowsRoomer, SchedulerStats.RoomToCPU). Every forced arm's tokens are the
 // host's.
 
 // roomBatch is the hybrid fixture's batch on the host: the tokens each forced
@@ -117,8 +117,8 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 		if err != nil {
 			t.Fatalf("a device holding only 64-row scratch: %v", err)
 		}
-		if st.RoomHome != 0 {
-			t.Fatalf("%d step(s) came home: the clamp, not the fallback, was to carry it", st.RoomHome)
+		if st.RoomToCPU != 0 {
+			t.Fatalf("%d step(s) came home: the clamp, not the fallback, was to carry it", st.RoomToCPU)
 		}
 		// Against the same device stepped at 64 rows by a stated budget: the
 		// same steps, so the same tokens (the host is another reduction
@@ -149,7 +149,7 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 		if err != nil {
 			t.Fatalf("a device with no room for the batch's seats: %v", err)
 		}
-		if st.RoomHome == 0 {
+		if st.RoomToCPU == 0 {
 			t.Fatal("no step came home: the forced path never ran")
 		}
 		same(t, got)
@@ -173,17 +173,17 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "does not build") {
 			t.Fatalf("a step whose twins do not build gave %v, want the step refused by name", err)
 		}
-		if st.RoomHome != 0 {
-			t.Fatalf("%d step(s) came home for a scratch that does not build", st.RoomHome)
+		if st.RoomToCPU != 0 {
+			t.Fatalf("%d step(s) came home for a scratch that does not build", st.RoomToCPU)
 		}
 		t.Logf("refused: %v", err)
 		tier.SetRoomFault("nobuild-room")
 		_, st, err = roomBatch(t, m, g, 0)
 		tier.SetRoomFault("")
-		if err != nil || st.RoomHome == 0 {
+		if err != nil || st.RoomToCPU == 0 {
 			t.Fatalf("the violation (a build failure read as no room) gave %v with %d step(s) home: "+
-				"the refusal is untested", err, st.RoomHome)
+				"the refusal is untested", err, st.RoomToCPU)
 		}
-		t.Logf("the violation ran on the host: %d step(s) home", st.RoomHome)
+		t.Logf("the violation ran on the host: %d step(s) home", st.RoomToCPU)
 	})
 }

@@ -121,7 +121,7 @@ type stepLoop struct {
 	// before its request waits for admission.
 	beforeQueueWait func(*row)
 	// parkFault makes every park of a time slice fail, as a device that
-	// cannot take a session's history home does.
+	// cannot take a session's history to the CPU does.
 	parkFault error
 
 	// fair is the fairness level, 0 to 100 (batchfair.go); rr turns the
@@ -543,7 +543,7 @@ func (lp *stepLoop) admit() {
 // beyond its prompt. A row's max_tokens is a bound, not a forecast (an
 // unbounded chat request's is the context), so promising all of it would
 // admit one row at a time; past the lookahead a row grows into whatever room
-// is left, and on a full card its oldest pages go home and stream back
+// is left, and on a full card its oldest pages go to host memory and stream back
 // (kvevict.go), as before there was admission. Parking the newest rows whole
 // when the card fills is the upgrade; a time slice (batchfair.go) parks rows
 // only for a request waiting to be admitted.
@@ -569,8 +569,8 @@ func rowPages(r *row, pos, page int) int {
 // host, or no history on the card to price.
 //
 // Admission keeps the rows' histories on the card. A row admitted past the
-// room would send the oldest pages of others home, and a step with two
-// sequences' pages at home is refused as one step: every row then runs alone
+// room would send the oldest pages of others to host memory, and a step with two
+// sequences' pages in host memory is refused as one step: every row then runs alone
 // and re-streams its evicted prefix each token -- 172 of 256 requests failed
 // at 64 concurrent on a V100 that way. A row that does not fit waits for the
 // rows ahead of it to retire, or above fairness level 0 for rows past their
@@ -1082,7 +1082,7 @@ func (lp *stepLoop) ran(u unit, logits []float32) {
 	r.logits = logits
 	if r.seal {
 		// The store gets this prompt as PrefillCached would have left it, once
-		// the step is over: sealing reads the whole history home from the card
+		// the step is over: sealing reads the whole history back from the card
 		// and copies it into the store, which costs several times the prompt's
 		// own prefill, and inside the step it was counted as the prompt's
 		// time -- stepBudget read prompt tokens as dear and fed every later

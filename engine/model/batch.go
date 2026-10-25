@@ -89,6 +89,10 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 			return nil, fmt.Errorf("model: the device refused a %d-row step: %w", n, err)
 		}
 		if !room {
+			if !s.cpuListed() {
+				return nil, fmt.Errorf("model: the device refused a %d-row step: %w", n,
+					errCPUUnlisted("the cards have no room for it"))
+			}
 			s.SetGPULayers(0)
 		}
 	}

@@ -353,7 +353,7 @@ const (
 
 // Head is the tail of a token: the output norm and the vocabulary projection.
 // It runs in the same submission as the last block, so a token ends with one
-// readback and the residual stream never comes home.
+// readback and the residual stream is never read back.
 type Head struct {
 	// Model is which model the head belongs to; see LayerPlan.Model.
 	Model uint64
@@ -376,7 +376,11 @@ type Head struct {
 	// false), and PosEmbd a learned position table, zero where the model has
 	// none: the tables Embed reads beside the head.
 	TokEmbd, PosEmbd Weight
-	Norm             []float32 // output_norm.weight
+	// NoCPU says the caller did not list the CPU among the devices
+	// (model.WithCPU): a device that pages blocks takes the projection while
+	// the slots a swap needs are left, rather than only when it costs none.
+	NoCPU bool
+	Norm  []float32 // output_norm.weight
 	// NormB is the output LayerNorm's bias (C6), non-nil exactly when the
 	// model's norms are LayerNorms (LayerPlan.LayerNorm) -- zeros where the
 	// file carries none.
@@ -388,7 +392,7 @@ type Head struct {
 	// Softcap is the model's final logit softcap (gemma2), x = c*tanh(x/c)
 	// with c this value; 0 is none. A device that accepts the head applies it
 	// after the projection and before both the readback and the argmax, so
-	// Logits come home capped and the caller must not cap them again.
+	// Logits are read back capped and the caller must not cap them again.
 	Softcap float32
 	// Stages is what the model's head does past the projection, and Bias the
 	// output bias HeadBias adds, NVocab wide (nil without it). A device that
@@ -1182,7 +1186,7 @@ type LayerDevice interface {
 	// head, when non-nil, continues that same submission with the output norm
 	// and the vocabulary projection, and fills head.Logits instead of reading x
 	// back. It is only offered when the device took every block, since anything
-	// left on the CPU needs the residual stream home anyway.
+	// left on the CPU needs the residual stream read back anyway.
 	// csSWA is the local layers' rotary table where SWAPeriod is set, and nil
 	// for every architecture with a single base. A tier that is handed nil and
 	// has a local block to run must decline rather than substitute cs.
@@ -1525,7 +1529,7 @@ type RowsWidther interface {
 // now within the device's budget, and with head -- the head the step will hand
 // LayersRows, nil when the host projects -- the per-row head on the device
 // holding it. A step it has no room for is refused before anything runs, so a
-// caller asks first and brings its blocks home rather than fail the step. An
+// caller asks first and moves its blocks to the CPU rather than fail the step. An
 // error is a step whose scratch does not build whatever the room -- a kernel
 // the device refused, the head not on it -- which no move gives room: the
 // caller returns it.
@@ -1592,7 +1596,7 @@ type KVPrewarmer interface {
 
 // BlockMover is a NamedDevice that moves a placed block to another of its
 // devices itself, the session's history copied from the source's pages into
-// the target's without coming home (tier.GPU, move.go).
+// the target's without a round trip through host memory (tier.GPU, move.go).
 type BlockMover interface {
 	// StageBlock prepares block li on the named device -- weights uploaded,
 	// kernels built, room for positions of history -- without routing it

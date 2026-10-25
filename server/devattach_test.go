@@ -167,7 +167,7 @@ func TestADeviceOutsideTheTierJoinsIt(t *testing.T) {
 	}
 }
 
-// TestAMiddleRangeMovesUpAndASubRangeComesHome: blocks of a host-loaded
+// TestAMiddleRangeMovesUpAndASubRangeMovesToTheCPU: blocks of a host-loaded
 // model's session go to a device as a range in the middle of the stack, with
 // the blocks either side left at home, and a sub-range of them comes home
 // again leaving a hole between two device runs; each reply is the unmoved
@@ -176,7 +176,7 @@ func TestADeviceOutsideTheTierJoinsIt(t *testing.T) {
 // VIOLATION SIGNATURE. Put back "only a range that EXTENDS the set" and the
 // first move is refused; send the range to the head and the placement holds
 // no host block below the range.
-func TestAMiddleRangeMovesUpAndASubRangeComesHome(t *testing.T) {
+func TestAMiddleRangeMovesUpAndASubRangeMovesToTheCPU(t *testing.T) {
 	dev := testdevices.Take(t, 1, "cuda:0")[0]
 	name := deviceModel
 	if _, err := os.Stat(testmodels.Path(name)); err != nil {

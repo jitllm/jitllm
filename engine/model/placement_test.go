@@ -43,18 +43,18 @@ func TestPlacement(t *testing.T) {
 		if n, ok := st.ld.(nn.NamedDevice).DeviceOf(li); ok {
 			return n
 		}
-		return "host"
+		return nn.CPU
 	}
 
 	t.Run("where-named", func(t *testing.T) {
 		m, st, _, err := attach(t, "cuda:0,vulkan:1", Placement{Strict: true,
-			Blocks: map[int]Place{0: {On: "host"}, 1: {On: "vulkan:1"}, 2: {On: "cuda:0"},
-				3: {On: "host"}, 4: {On: "cuda:0"}, 5: {On: "vulkan:1"}},
+			Blocks: map[int]Place{0: {On: nn.CPU}, 1: {On: "vulkan:1"}, 2: {On: "cuda:0"},
+				3: {On: nn.CPU}, 4: {On: "cuda:0"}, 5: {On: "vulkan:1"}},
 			Head: &Place{On: "vulkan:1"}})
 		if err != nil {
 			t.Fatal(err)
 		}
-		for li, want := range map[int]string{0: "host", 1: "vulkan:1", 2: "cuda:0", 3: "host", 4: "cuda:0", 5: "vulkan:1"} {
+		for li, want := range map[int]string{0: nn.CPU, 1: "vulkan:1", 2: "cuda:0", 3: nn.CPU, 4: "cuda:0", 5: "vulkan:1"} {
 			if got := on(st, li); got != want {
 				t.Errorf("block %d on %s, named %s", li, got, want)
 			}
@@ -133,7 +133,7 @@ func TestPlacement(t *testing.T) {
 	})
 
 	t.Run("head-on-host", func(t *testing.T) {
-		_, st, _, err := attach(t, "cuda:0", Placement{Head: &Place{On: "host"}})
+		_, st, _, err := attach(t, "cuda:0", Placement{Head: &Place{On: nn.CPU}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -214,7 +214,7 @@ func TestParsePlacementStreams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for li, want := range map[int]Place{0: {On: "host"}, 1: {On: "cuda:0", Pin: true, Stream: true},
+	for li, want := range map[int]Place{0: {On: nn.CPU}, 1: {On: "cuda:0", Pin: true, Stream: true},
 		3: {On: "cuda:0", Pin: true, Stream: true}} {
 		if got := p.Blocks[li]; got != want {
 			t.Errorf("block %d reads %+v, want %+v", li, got, want)

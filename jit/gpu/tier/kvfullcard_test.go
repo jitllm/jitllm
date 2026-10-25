@@ -6,7 +6,7 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
-// TestHistoryComesHomeFromAFullCard is the small card a server parks rows on:
+// TestHistoryMovesToTheCPUFromAFullCard is the small card a server parks rows on:
 // a budget past what the driver has free (a 4 GiB RTX 3050 Ti beside a
 // desktop, its budget set 1 GiB past placement), so the card is full while
 // the tier's arithmetic still has room. Two sessions hold history on the one
@@ -19,7 +19,7 @@ import (
 // past what the driver reports free (this fake reports nothing, so none), and
 // a scheduler holds rows back rather than admitting history the card cannot
 // take.
-func TestHistoryComesHomeFromAFullCard(t *testing.T) {
+func TestHistoryMovesToTheCPUFromAFullCard(t *testing.T) {
 	p := fakePlan()
 	d := &fakeDev{}
 	g, err := New([]Slot{{Dev: d, Bytes: 1 << 40}}, WithDeviceTune(TuneOff),

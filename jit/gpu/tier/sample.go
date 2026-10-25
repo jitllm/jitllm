@@ -8,7 +8,7 @@ import (
 
 // The device sampler (nn.Head.SampleK): after the head, the repeat penalty
 // and the two top-k passes run in the token's submission and k candidates
-// come home in place of the vocabulary's logits. The softmax over them, the
+// are read back in place of the vocabulary's logits. The softmax over them, the
 // cuts and the draw are the host sampler's (model.Sampler), on the same
 // candidates it would have chosen from the whole row.
 

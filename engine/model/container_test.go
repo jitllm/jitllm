@@ -30,9 +30,9 @@ func TestGGUFCannotBeInferred(t *testing.T) {
 	t.Logf("refused, and said how:\n%s", nc)
 }
 
-// TestContainerRunsOnTheHost: the container the refusal points at must actually
+// TestContainerRunsOnTheCPU: the container the refusal points at must actually
 // run. Same model, converted, decoding real tokens through the packed kernels.
-func TestContainerRunsOnTheHost(t *testing.T) {
+func TestContainerRunsOnTheCPU(t *testing.T) {
 	path := jlmOf(t, testmodels.Path("tinyllama-1.1b-q3_K_M.gguf"))
 	m, err := Open(path)
 	if err != nil {

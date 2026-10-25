@@ -121,10 +121,10 @@ func (s *State) relocateRows(took []int, rows, nlogit int) error {
 			buildErr = err
 			return ok || err != nil
 		}
-		// Counted once a step: blocks go home for the step's room here,
+		// Counted once a step: blocks go to the CPU for the step's room here,
 		// or all at once in forwardRows when relocation is off.
 		if !room() {
-			s.roomHome++
+			s.roomToCPU++
 		}
 	}
 	sd, ok := s.ld.(nn.SeqKVDevice)

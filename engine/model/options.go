@@ -76,6 +76,8 @@ type modelOpts struct {
 	headPlace bool
 	// place is WithPlacement's map, nil when the engine decides everything.
 	place *Placement
+	// noCPU leaves the CPU out of the devices the engine may choose (WithCPU).
+	noCPU bool
 	// elemPool runs the vision tower's elementwise passes on the pool.
 	elemPool bool
 	// towerGPULayers caps how many tower blocks are offered; negative is all.
@@ -266,7 +268,7 @@ func WithHeadPlacement(on bool) Option { return func(l *loadOpts) { l.opt.headPl
 
 // Place is where one block, or the output projection, runs.
 type Place struct {
-	// On is "host", or a device as the -devices entry that opened it names it:
+	// On is "cpu" (nn.CPU), or a device as the -devices entry that opened it names it:
 	// "cuda:0", "vulkan:1", "metal", "gpu:0". A device opened by all or auto
 	// has no name a placement can use.
 	On string
@@ -331,21 +333,41 @@ func (p *Placement) Streams() bool {
 // WithPlacement places blocks and the head where the map says whenever a
 // device is attached (State.SetDevice).
 func WithPlacement(p Placement) Option {
+	// "host" is the CPU's older spelling.
+	cpu := func(pl Place) Place {
+		if pl.On == "host" {
+			pl.On = nn.CPU
+		}
+		return pl
+	}
 	blocks := make(map[int]Place, len(p.Blocks))
 	for k, v := range p.Blocks {
-		blocks[k] = v
+		blocks[k] = cpu(v)
 	}
 	p.Blocks = blocks
 	if p.Head != nil {
-		h := *p.Head
+		h := cpu(*p.Head)
 		p.Head = &h
 	}
 	if p.Rest != nil {
-		r := *p.Rest
+		r := cpu(*p.Rest)
 		p.Rest = &r
 	}
 	return func(l *loadOpts) { l.opt.place = &p }
 }
+
+// WithCPU says whether the CPU is one of the devices the caller listed for
+// this model's blocks. Listed (the default, and what a device spec of "auto"
+// or one naming cpu means), the engine may choose it as any other device: a
+// block no card takes, a block relocation or a fault moves off a card. Not
+// listed, a block runs on the cards attached (State.SetDevice) and on nothing
+// else: one that no card holds resident pages through a card's slots, every
+// block streamed (Place.Stream), and a block that cannot run there even paged
+// fails the placement by name. A fault or a history the cards cannot grow is
+// then the step's error, never a move to the CPU. A caller's own move to the
+// CPU (MoveBlocks, SetGPULayers, a Placement naming "cpu") is its choice and
+// is honoured either way.
+func WithCPU(listed bool) Option { return func(l *loadOpts) { l.opt.noCPU = !listed } }
 
 // WithKVHeadMajor selects the head-major KV layout for States this model
 // creates afterwards. A running State cannot change layout, because its cache
@@ -424,11 +446,11 @@ func WithSeamTuneSchedule(warmup, perRun, rounds int, verbose bool) Option {
 // ParsePlacement reads a placement written as comma-separated SEL=WHERE entries,
 // the form -placement takes:
 //
-//	0=host,1-7=cuda:0,8=host!,9-15=vulkan:1~,head=vulkan:1
+//	0=cpu,1-7=cuda:0,8=cpu!,9-15=vulkan:1~,head=vulkan:1
 //	*=cuda:0~
 //
 // SEL is a block, an inclusive range of blocks, "head", or "*" for every block
-// no other entry names. WHERE is "host" or a device as -devices names it; a
+// no other entry names. WHERE is "cpu" (or "host") or a device as -devices names it; a
 // trailing "!" pins that entry (Place.Pin) and a trailing "~" streams it
 // through the device (Place.Stream), in either order.
 func ParsePlacement(spec string, strict bool) (Placement, error) {
@@ -462,14 +484,16 @@ func ParsePlacement(spec string, strict bool) (Placement, error) {
 			}
 			break
 		}
-		pl.On = where
-		if pl.On != "host" {
-			pl.On = nn.DeviceName(pl.On)
-		} else if pl.Experts != "" {
+		// "host" is the CPU's older spelling.
+		if where == "host" {
+			where = nn.CPU
+		}
+		pl.On = nn.DeviceName(where)
+		if onCPU(pl.On) && pl.Experts != "" {
 			return Placement{}, fmt.Errorf("model: placement %q: %q places a block's experts beside "+
-				"a block that is on the host already", spec, e)
-		} else if pl.Stream {
-			return Placement{}, fmt.Errorf("model: placement %q: %q streams a block through the host, "+
+				"a block that is on the CPU already", spec, e)
+		} else if onCPU(pl.On) && pl.Stream {
+			return Placement{}, fmt.Errorf("model: placement %q: %q streams a block through the CPU, "+
 				"which has no slots to stream through", spec, e)
 		}
 		sel = strings.TrimSpace(sel)

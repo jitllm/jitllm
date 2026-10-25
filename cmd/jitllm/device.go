@@ -45,8 +45,8 @@ func openDevices(spec string, vram, hostBudget uint64, streamGroups, stepRows in
 	if err != nil {
 		return nil, nil, "", err
 	}
-	// cpu alone is the one spec that opens nothing. Beside a device it is
-	// explicit rather than empty -- the host always runs what no device took.
+	// cpu alone is the one spec that opens nothing. Beside a device it lists
+	// the CPU as one more device the engine may choose (model.WithCPU).
 	device := false
 	for _, e := range es {
 		device = device || e.Device()
@@ -77,15 +77,15 @@ func openDevices(spec string, vram, hostBudget uint64, streamGroups, stepRows in
 	return g, g.Close, g.Name(), nil
 }
 
-// relocatable refuses -relocate on a device spec that leaves the host out.
-// Relocating moves blocks to the CPU, and a spec that names only devices asked
-// for them and nothing else -- the same reading openDevices gives it.
+// relocatable refuses -relocate on a device spec that leaves the CPU out.
+// Relocating moves blocks to the CPU, and a spec that names only cards asked
+// for them and nothing else (model.WithCPU).
 func relocatable(spec string) error {
 	ok, err := tier.AdmitsHost(spec)
 	if err != nil || ok {
 		return err
 	}
-	return fmt.Errorf("-relocate moves blocks to the host, and -devices %q leaves it out: "+
+	return fmt.Errorf("-relocate moves blocks to the CPU, and -devices %q leaves it out: "+
 		"use auto, or add cpu (-devices %s,cpu)", spec, spec)
 }
 

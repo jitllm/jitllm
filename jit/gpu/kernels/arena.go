@@ -7,7 +7,7 @@ import (
 	"unsafe"
 )
 
-// Arena is the host-resident home of packed weights, in the device layout.
+// Arena is the host-resident store of packed weights, in the device layout.
 //
 // Packing costs roughly three times an upload,
 // so a block evicted from a card and wanted again is a DMA if its packed bytes

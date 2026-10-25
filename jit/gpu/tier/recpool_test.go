@@ -178,7 +178,7 @@ func TestRecurrentPoolReturnsEveryByte(t *testing.T) {
 	}
 }
 
-// TestMigrateRecBringsOnlyItsSeatHome: MigrateRec reads a session's recurrent
+// TestMigrateRecMovesOnlyItsSeat: MigrateRec reads a session's recurrent
 // state home (the -kv-cache seal, a seam moving), and a pool holds every
 // session's state for the block. A buffer reads from its start, so a session
 // seated above slot 0 used to bring every state below it home too -- other
@@ -186,7 +186,7 @@ func TestRecurrentPoolReturnsEveryByte(t *testing.T) {
 // read it back: each must get exactly its own, and the host must read exactly
 // its seat's bytes, in both forms of the pool, on every real device. The
 // sizes are not multiples of 16 floats, so every seat's offset is ragged.
-func TestMigrateRecBringsOnlyItsSeatHome(t *testing.T) {
+func TestMigrateRecMovesOnlyItsSeat(t *testing.T) {
 	devs := realDevices(t)
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")

@@ -149,7 +149,7 @@ func (s *State) markParting(key []int32) {
 }
 
 // recChunkPoint is a chunk's end: where it ends on a restore point, a placed
-// linear block's summary is brought home from the device and stored as the
+// linear block's summary is read back from the device and stored as the
 // point (its row loop runs there, out of recRowPoint's reach). pos is where
 // the chunk ended.
 func (s *State) recChunkPoint(slot, pos int) {
@@ -160,7 +160,7 @@ func (s *State) recChunkPoint(slot, pos int) {
 		if !s.onDev[li] || s.rconv[li] == nil || s.recDev(li) != nil {
 			continue
 		}
-		// Brought home where the device keeps no points.
+		// Read back where the device keeps no points.
 		if !s.migrateRecLayer(li, false) {
 			s.kv.syncFailed++
 			return

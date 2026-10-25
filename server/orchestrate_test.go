@@ -4,12 +4,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
 // orchFixture loads two models on one card whose shared pool cannot hold
-// both, and the same two on the host alone as the controls.
+// both, and the same two on the CPU alone as the controls.
 type orchFixture struct {
 	e   *Engine
 	c   clients
@@ -23,12 +24,13 @@ func newOrchFixture(t *testing.T, cfg Config) *orchFixture {
 	e := New(cfg)
 	t.Cleanup(e.Close)
 	// 1200 MiB of one card: the first model fits, the second does not beside it.
+	// The CPU is listed: it is where the orchestrator moves a victim's blocks.
 	spec := devs[0] + "=1200M"
 	for _, m := range []struct{ id, file string }{
 		{"a", "Qwen3-0.6B-Q8_0.jlm"},
 		{"b", "Llama-3.2-1B-Instruct-Q4_K_M.jlm"},
 	} {
-		if _, err := e.LoadModel(LoadOptions{Path: modelPath(t, m.file), ModelID: m.id, DeviceIDs: []string{spec}}); err != nil {
+		if _, err := e.LoadModel(LoadOptions{Path: modelPath(t, m.file), ModelID: m.id, DeviceIDs: []string{spec, nn.CPU}}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := e.LoadModel(LoadOptions{Path: modelPath(t, m.file), ModelID: m.id + "-host", DeviceIDs: []string{"cpu"}}); err != nil {

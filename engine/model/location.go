@@ -1,11 +1,15 @@
 package model
 
-import "github.com/jitllm/jitllm/engine/nn"
+import (
+	"fmt"
+
+	"github.com/jitllm/jitllm/engine/nn"
+)
 
 // A block's location is the device that runs it for this State, the CPU
 // among them: nn.CPU, or the name the attached tier gives the device holding
 // it. onDev and gpuLayers are where the State keeps it, written only by
-// markOnDev, unmarkOnDev, clearOnDev, shrinkOnDev and holdHostRuns
+// markOnDev, unmarkOnDev, clearOnDev, shrinkOnDev and holdCPURuns
 // (srcgate.TestBlockLocationIsWrittenByItsSetters).
 
 // WhereIs is the device running block li: nn.CPU for a block this State runs
@@ -38,3 +42,14 @@ func (s *State) Locations() []string {
 
 // onCPU reports whether to names the CPU.
 func onCPU(to string) bool { return nn.DeviceName(to) == nn.CPU }
+
+// cpuListed reports whether the engine may choose the CPU for a block
+// (WithCPU): as the destination of a block no card takes, of a relocation, of
+// a fault's evacuation.
+func (s *State) cpuListed() bool { return !s.m.opt.noCPU }
+
+// errCPUUnlisted is the refusal of a move the engine would have made to the
+// CPU, had the caller listed it.
+func errCPUUnlisted(what string) error {
+	return fmt.Errorf("model: %s, and the CPU is not one of the devices listed (WithCPU)", what)
+}

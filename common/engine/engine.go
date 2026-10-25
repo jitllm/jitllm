@@ -373,10 +373,10 @@ func (e *Engine) activate(en *entry) error {
 	m, path := en.m, en.path
 
 	window := maxSeq(m, e.st.MaxSeq.Get())
-	// A context that outgrows the card hands blocks to the host one at a time
-	// -- only where the device choice lets the host run them, as the CLI's
-	// -relocate does. A choice of devices alone keeps the model off the CPU, so
-	// there the token takes the device's refusal instead.
+	// A context that outgrows the card moves blocks to the CPU one at a time
+	// -- only where the device choice lists the CPU, as the CLI's -relocate
+	// does. A choice of cards alone keeps the model off the CPU, so there the
+	// token takes the cards' refusal instead (model.WithCPU).
 	relocate, _ := tier.AdmitsHost(en.spec)
 	o := server.SessionOptions{ModelID: en.lm.ID(), MaxSeq: window, KeepOffHost: !relocate}
 	cacheOff := "turned off in Settings"

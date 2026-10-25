@@ -221,7 +221,7 @@ func TestHostBatchConcurrentGeneratesEqualAlone(t *testing.T) {
 // host's step across sessions is the alone path's arithmetic, row for row,
 // because a host model the loop runs sums every packed matmul in the
 // matvec's order (LoadModel's GEMMExact; model's
-// TestStepRunsOnTheHostSharesOnePass reads NMSE 0 under it), so a seeded
+// TestStepRunsOnTheCPUSharesOnePass reads NMSE 0 under it), so a seeded
 // sampler fed the same logits draws the same tokens. Against rows sharing a
 // random stream, or fed each other's tokens, the draws part; against the
 // shipped prefill arithmetic on a host whose GEMM sums otherwise, they part

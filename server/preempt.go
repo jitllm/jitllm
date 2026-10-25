@@ -11,7 +11,7 @@ import (
 // (SetKVBudget): the bytes its sessions' histories may hold at once, wherever
 // they live (model.State.HistoryBytes). A generate that would take the model
 // past it parks other sessions of the model first (model.State.Park: their
-// blocks' KV and recurrent state home from the device, their sealed pages
+// blocks' KV and recurrent state to the CPU from the device, their sealed pages
 // into a store) and the parked session resumes, byte for byte, the next time
 // it generates. Nothing is refused for it and nothing is recomputed.
 //
@@ -25,7 +25,7 @@ import (
 type preemptStats struct {
 	parks, resumes    atomic.Int64
 	pagesOut, pagesIn atomic.Int64
-	// blocksHome is the blocks parking brought home from a device.
+	// blocksHome is the blocks parking moved to the CPU from a device.
 	blocksHome         atomic.Int64
 	overBudgetAdmitted atomic.Int64
 }

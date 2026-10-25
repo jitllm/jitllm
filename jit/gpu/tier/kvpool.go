@@ -87,13 +87,13 @@ type kvLayerPool struct {
 	// ctx is the pages a session's context takes in a layer that holds it on
 	// the card (pagedLayer), 0 in one that grows as sequences write.
 	ctx int
-	// home holds sequence s's evicted pages at home, page j's K words then its
+	// home holds sequence s's evicted pages in host memory, page j's K words then its
 	// V words, in the device's layout (kvevict.go); owned[s][j] is 0 for each.
 	home map[seqID][][]float32
 	// win is the block's window in keys, 0 for one that reads its whole
 	// history; chunked makes it aligned chunks. A windowed layer releases the
 	// pages behind its window (devTier.windowPages): their ids are 0 in the
-	// sequence's run and, below the evicted prefix, their home copy is nil.
+	// sequence's run and, below the evicted prefix, their host copy is nil.
 	win     int
 	chunked bool
 	// rel is where windowPages' walk starts for sequence s: every page below
@@ -148,12 +148,12 @@ type kvPool struct {
 	// (word 0 is the dummy entry); tabFree runs given back, reused first-fit.
 	tabWords, tabTop int
 	tabFree          []tabRange
-	// evicted is how many of sequence s's leading pages are at home, the same
+	// evicted is how many of sequence s's leading pages are in host memory, the same
 	// count in every layer that holds s (kvevict.go).
 	evicted map[seqID]int
 	// written is the positions of sequence s a completed submission wrote:
 	// only pages wholly below it may leave, so a page a call is about to write
-	// is never sent home under it.
+	// is never sent to host memory under it.
 	written map[seqID]int
 }
 
@@ -310,7 +310,7 @@ func (g *devTier) allocPages(sid uint64, kp *kvPool, l *kvLayerPool, s seqID, co
 	}
 	if len(l.free) < count {
 		// Growth first -- a page-out of streamed weights or more pool -- and
-		// when nothing can grow, cold history goes home (kvevict.go). A
+		// when nothing can grow, cold history goes to host memory (kvevict.go). A
 		// driver's refusal inside the budget is no room either.
 		err := g.growKVLayer(kp, l, l.n+count-len(l.free))
 		switch {
@@ -542,8 +542,8 @@ func (l *kvLayerPool) reserveFences() {
 	l.fencedAt = slices.Grow(l.fencedAt, l.n-len(l.fencedAt))
 }
 
-// fenceIDs fences every id of ids that is a page on the card (0 is one at
-// home), at the ticket the next submission takes.
+// fenceIDs fences every id of ids that is a page on the card (0 is one in
+// host memory), at the ticket the next submission takes.
 func (l *kvLayerPool) fenceIDs(ids []uint32) {
 	for _, id := range ids {
 		if id != 0 {
@@ -627,7 +627,7 @@ func (g *devTier) shrinkKVLayer(kp *kvPool, l *kvLayerPool) error {
 	if l.heldNamed() {
 		return nil
 	}
-	// A layer with history at home keeps one id free to stream it through.
+	// A layer with history in host memory keeps one id free to stream it through.
 	// streamRoom ensured it; a compaction forced by another layer's growth
 	// took it back, and the next call found no page to stream through.
 	want := live
@@ -691,7 +691,7 @@ func (g *devTier) shrinkKVLayer(kp *kvPool, l *kvLayerPool) error {
 	for _, s := range seqs {
 		ids := l.owned[s]
 		for i := range ids {
-			if ids[i] != 0 { // 0 is a page at home (kvevict.go)
+			if ids[i] != 0 { // 0 is a page in host memory (kvevict.go)
 				ids[i] = next
 				next++
 			}
@@ -719,7 +719,7 @@ func (g *devTier) shrinkKVLayer(kp *kvPool, l *kvLayerPool) error {
 // wherever it can be.
 func (g *devTier) compactViaHost(kp *kvPool, l *kvLayerPool, order []uint32, n int) (k, v backend.Buf, err error) {
 	kw, vw := l.geom.kWords(kp.p), l.geom.vWords(kp.p)
-	// The layer is read home whole: nothing in flight may still write it.
+	// The layer is read back whole: nothing in flight may still write it.
 	g.quiesce()
 	hk, err := readPages(l.k, kw, l.n)
 	if err != nil {
@@ -891,7 +891,7 @@ func u32view(v []uint32) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), 4*len(v))
 }
 
-// anyEvicted reports that some sequence has pages at home.
+// anyEvicted reports that some sequence has pages in host memory.
 func (kp *kvPool) anyEvicted() bool {
 	for _, e := range kp.evicted {
 		if e > 0 {

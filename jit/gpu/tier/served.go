@@ -830,6 +830,12 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	f.refs++
 	sv := &servedPart{sl: sl, f: f, inst: in, args: f.launchArgs(), n: len(sl.graph.In), m: len(sl.graph.Out)}
 	g.served[sk] = sv
+	if sk.kind == partBlock && sk.graph.Block >= 0 {
+		if b := sk.graph.Block; b >= len(g.blockForms) {
+			g.blockForms = append(g.blockForms, make([]int, b+1-len(g.blockForms))...)
+		}
+		g.blockForms[sk.graph.Block]++
+	}
 	return sv, nil
 }
 
@@ -1337,7 +1343,7 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 // whole, serves where it is: a graph from the front end, a block the caller
 // leaves to it, the paged decode -- or a prompt chunk's, which the tier's
 // own kernels would run through its paged prefill attention -- none of its
-// history at home, the window the plan holds the block to (windowHeld),
+// history in host memory, the window the plan holds the block to (windowHeld),
 // outside the persistent block and a fault probe.
 func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, persist, prompt bool) partDecline {
 	pk := bs.pkv

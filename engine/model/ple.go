@@ -149,7 +149,7 @@ func (s *State) kvSpan(li int) (lo, hi int) {
 // attends to its source's history, which lives on exactly one side, so the
 // source and every block reading it must be placed together. A group split by
 // the placement -- a device that took the source and declined a reader, or a
-// relocation that took one member home -- comes home whole, with the source's
+// relocation that took one member to the CPU -- moves to the CPU whole, with the source's
 // history. The device declines a reader whose source it does not hold (tier)
 // and offerRange offers a group only whole, so this is the third half.
 func (s *State) fixKVGroups() {
@@ -162,7 +162,7 @@ func (s *State) fixKVGroups() {
 		if s.devAt(li) == s.devAt(src) {
 			continue
 		}
-		// Every block of src's group comes home.
+		// Every block of src's group moves to the CPU.
 		for b := 0; b < c.NLayer; b++ {
 			if b != src && c.KVSource(b) != src {
 				continue

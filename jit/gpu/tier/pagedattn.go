@@ -764,7 +764,7 @@ func (g *devTier) windowPages(sid uint64, kp *kvPool, li int, l *kvLayerPool, se
 			g.KVWindowReleased++
 		}
 		if j < len(l.home[s]) {
-			l.home[s][j] = nil // at home, and behind the window all the same
+			l.home[s][j] = nil // in host memory, and behind the window all the same
 		}
 	}
 	l.rel[s] = max(l.rel[s], first)
@@ -954,7 +954,7 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	// gathers, which a streamed pass does not serve: they never leave.
 	// So does a selection over the whole history (the lightning indexer,
 	// MiniMax-M3's and QSA's block selections): a streamed pass cannot serve
-	// it, so its pages cannot go home either.
+	// it, so its pages cannot go to host memory either.
 	kp.layers[li].noEvict = p.DS4 != nil || selectsHistory(p)
 	// A history that cannot leave the card is held at the context asked for,
 	// charged here with the block, so the budget declines the block at
@@ -1161,7 +1161,7 @@ func (kp *kvPool) trimSeq(s seqID, pos int) bool {
 // between host and device: k and v are [pos][kvRow] float32 on the host. To
 // the device each page is laid out on the host in the layer's layout and
 // written at its offset; from the device the sequence's pages are gathered
-// into one buffer by a generated kernel and read home. Callers hold g.mu.
+// into one buffer by a generated kernel and read back. Callers hold g.mu.
 func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int, toDevice bool) error {
 	kp := g.kvPages()
 	pl, ok := kp.layers[li]
@@ -1175,10 +1175,10 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 		return fmt.Errorf("%d positions of %d floats do not fit the host's %d/%d", pos, kvRow, len(k), len(v))
 	}
 	npages := (pos + P - 1) / P
-	// The sequence's oldest pages may be at home (kvevict.go): the same count
+	// The sequence's oldest pages may be in host memory (kvevict.go): the same count
 	// in every layer, so a layer joining keeps them there too.
 	// Sent up, the host's position is the history: past it the device's
-	// record is a sequence that has since restarted lower. Read home, pos is
+	// record is a sequence that has since restarted lower. Read back, pos is
 	// only how much of the history is wanted (a prefix a store saves), and the
 	// device keeps the rest.
 	if toDevice {
@@ -1267,7 +1267,7 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 		}
 	}
 	if e > 0 {
-		// The pages at home ahead of the ones read from the card. A windowed
+		// The pages in host memory ahead of the ones read from the card. A windowed
 		// layer's page released behind its window has no copy: zeros, which
 		// nothing reads (the host trusts this history only from its window).
 		hk, hv := make([]float32, 0, npages*kw), make([]float32, 0, npages*vw)
@@ -1304,8 +1304,8 @@ func (g *devTier) pagedMigrate(sid uint64, li, base int, k, v []float32, pos int
 }
 
 // readPages gathers pages ids of one of layer l's buffers, words each, into
-// one staging buffer on the device and reads it home. When the card refuses
-// that buffer the pages come home a page at a time through the layer's
+// one staging buffer on the device and reads it back. When the card refuses
+// that buffer the pages are read back a page at a time through the layer's
 // reserve (kvLayerPool.stage): a park or an eviction is how a full card makes
 // room, so it must not need room of its own.
 func (g *devTier) readPages(l *kvLayerPool, src backend.Buf, ids []uint32, words int) ([]float32, error) {
@@ -1495,7 +1495,7 @@ func (g *devTier) pagedHeldBy(sid uint64) uint64 {
 	for _, l := range g.kvp.layers {
 		for s, ids := range l.owned {
 			if s.sid == sid {
-				// Resident pages: an id of 0 is at home or released.
+				// Resident pages: an id of 0 is in host memory or released.
 				for _, id := range ids {
 					if id != 0 {
 						n += g.kvp.pageBytes(l)

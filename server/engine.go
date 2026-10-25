@@ -311,6 +311,9 @@ type LoadedModel struct {
 	deviceIDs []string
 	// callerPlaced is a model whose placement the load named (orchestrate.go).
 	callerPlaced bool
+	// cpuListed is a load whose devices list the CPU (model.WithCPU): the
+	// orchestrator moves its blocks there to make room only then.
+	cpuListed bool
 	// hwIDs are the devices the tier opened, by their own ids, whatever the
 	// load called them (auto, gpu:0): what a new device is listed beside.
 	hwIDs []string
@@ -618,7 +621,14 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		gateKeys = e.deviceGateKeys(g)
 	}
 
-	opts := []model.Option{model.WithPageBudget(hostBudget), model.WithPreload(preloadDepth)}
+	// A list of cards alone keeps every block on them, paging where they do
+	// not hold the model; auto and a list naming cpu let the engine choose it.
+	cpuListed, err := tier.AdmitsHost(strings.Join(DefaultDevices(o.DeviceIDs), ","))
+	if err != nil {
+		closeDev()
+		return nil, &DeviceError{err}
+	}
+	opts := []model.Option{model.WithPageBudget(hostBudget), model.WithPreload(preloadDepth), model.WithCPU(cpuListed)}
 	kv := cmp.Or(o.KVF16, e.cfg.KVF16)
 	if kv != nil {
 		opts = append(opts, model.WithKVF16(*kv))
@@ -671,6 +681,7 @@ func (e *Engine) LoadModel(o LoadOptions) (*LoadedModel, error) {
 		pin:       o.PageBudgetBytes,
 		open:      o,
 		maxBlocks: o.MaxDeviceBlocks,
+		cpuListed: cpuListed,
 		sessions:  map[string]*Session{},
 		// A load that names the host alone, or caps the device blocks, is a
 		// placement the caller chose: the orchestrator leaves it (and its
@@ -1904,7 +1915,7 @@ func (e *Engine) Generate(ctx context.Context, o GenerateOptions, emit func(Even
 	// is drawn from logits. Only a reply that wants no row after the prompt
 	// takes it -- no grammar mask and no logprobs, both of which read the
 	// host's logits -- so a device holding the head selects the candidates
-	// and only they come home.
+	// and only they move to the CPU.
 	pending := int32(-1)
 	for ; n < maxTokens; n++ {
 		if ctx.Err() != nil {
@@ -2553,7 +2564,7 @@ type tierBox struct{ d nn.Device }
 
 // bindSession attaches the session's State to the model's current tier when it
 // is on another (or on none), keeping as many blocks on a device as it had.
-// model.State.SetDeviceLayers brings the history home before it changes tier,
+// model.State.SetDeviceLayers moves the history to the CPU before it changes tier,
 // so the answer does not change; the blocks go back up after.
 func (e *Engine) bindSession(s *Session) error {
 	dev := s.lm.device()

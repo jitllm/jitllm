@@ -9,7 +9,7 @@ import (
 	"github.com/jitllm/jitllm/jit/ir"
 )
 
-// Attention over a history whose oldest pages are at home (kvevict.go).
+// Attention over a history whose oldest pages are in host memory (kvevict.go).
 //
 // The history goes in passes of w pages. A pass over evicted pages first
 // uploads them into w of the layer's free ids and points the sequence's table
@@ -85,7 +85,7 @@ func (st *pagedStream) writes(w func(backend.Buf, []byte)) {
 // pagedStreamPrep readies the call's streaming, or leaves pg.st nil when no
 // row reads an evicted page and every row's keys fit the call's plan. The
 // passes reach the furthest live row, so every row's keys are covered
-// whichever sequence it belongs to; only one sequence has pages at home
+// whichever sequence it belongs to; only one sequence has pages in host memory
 // (evictVictim). A call whose staged plan was built for a pass
 // (stagedPassKeys) and whose deepest row reads past it goes in passes too,
 // over pages already on the card: nothing is uploaded and nothing waits.
@@ -106,7 +106,7 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow,
 		far = max(far, r.pos)
 		if kp.evicted[r.s] > 0 {
 			if over && r.s != s {
-				return fmt.Errorf("two sequences with pages at home in one call: %v and %v", s, r.s)
+				return fmt.Errorf("two sequences with pages in host memory in one call: %v and %v", s, r.s)
 			}
 			s, over = r.s, true
 		}
@@ -124,7 +124,7 @@ func (g *devTier) pagedStreamPrep(sid uint64, bs *blockScratch, rows []pagedRow,
 		}
 		if err := g.heldLayers(sid, func(li int, l *kvLayerPool) error {
 			w = min(w, g.streamWidth(l, e))
-			// Every layer holding s holds the same prefix at home (kvevict.go);
+			// Every layer holding s holds the same prefix in host memory (kvevict.go);
 			// one that does not would have the passes read past its copies.
 			if len(l.owned[s]) > 0 && len(l.home[s]) != e {
 				return fmt.Errorf("block %d holds %d page(s) of sequence %v at home and the pool counts %d",

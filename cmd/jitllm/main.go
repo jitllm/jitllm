@@ -436,6 +436,13 @@ func run(path, prompt string, n, depth int, devSpec string, gpuLayers int, vram,
 	if place != nil {
 		opts = append(opts, model.WithPlacement(*place))
 	}
+	// A -devices list without cpu (or auto) keeps every block on its devices,
+	// paging where they do not hold the model.
+	listed, err := tier.AdmitsHost(devSpec)
+	if err != nil {
+		return err
+	}
+	opts = append(opts, model.WithCPU(listed))
 	m, err := model.Open(path, opts...)
 	// The meter starts at Open, not after placement: on a streamed model
 	// admission is the largest read, and starting later leaves it uncounted.

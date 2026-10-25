@@ -553,7 +553,7 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 	// The head's Logits is s0's single-sequence destination; the step borrows
 	// it for the wanted rows and hands it back. A step no row wants logits
 	// from runs no head. AltUp's head reads the streams' mean, which the host
-	// takes: the rows come home and the host projects them.
+	// takes: the rows are read back and the host projects them.
 	var h *nn.Head
 	var logits []float32
 	if nlogit > 0 && c.streamHead() {

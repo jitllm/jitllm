@@ -17,7 +17,7 @@ import (
 // depends on the link, the card and the host in front of it, so it is measured:
 // the first chunk runs as placed, the second with the host blocks streamed (their
 // history moved up, outside the timed window), and the faster rate per token
-// keeps the rest of the prompt. After the prompt the streamed blocks go home,
+// keeps the rest of the prompt. After the prompt the streamed blocks move to the CPU,
 // history and all, once, and decode runs as placed.
 //
 // It is a placement like any other, so the caller forces it either way
@@ -48,7 +48,7 @@ func WithPrefillStreamDebug(on bool) Option {
 }
 
 // prefillStreamMargin is how much faster, per token, the streamed chunk must
-// run to keep streaming: moving the blocks home at the end costs a migration
+// run to keep streaming: moving the blocks to the CPU at the end costs a migration
 // the chunks after the measured one have to repay.
 const prefillStreamMargin = 1.05
 
@@ -132,7 +132,7 @@ func (ps *prefillStreamer) after(n int, sec float64, end int) {
 	}
 }
 
-// finish brings the streamed blocks home after the prompt's last chunk.
+// finish moves the streamed blocks to the CPU after the prompt's last chunk.
 func (ps *prefillStreamer) finish(pos int) {
 	if ps == nil {
 		return
@@ -144,7 +144,7 @@ func (ps *prefillStreamer) finish(pos int) {
 }
 
 // start offers every host block to the device streamed and moves its history
-// up. A block the device declines, or whose history does not move, stays home.
+// up. A block the device declines, or whose history does not move, stays on the CPU.
 func (ps *prefillStreamer) start(pos int) {
 	s := ps.s
 	for li := s.lo; li < s.hi; li++ {
@@ -158,7 +158,7 @@ func (ps *prefillStreamer) start(pos int) {
 			continue
 		}
 		// A block the placement keeps on the host stays there.
-		if pl, named := s.placeOf(li); named && pl.On == "host" {
+		if pl, named := s.placeOf(li); named && onCPU(pl.On) {
 			continue
 		}
 		ps.nd.Stream(li, true)
@@ -177,16 +177,16 @@ func (ps *prefillStreamer) start(pos int) {
 	}
 }
 
-// stop brings every streamed block home, its history first, as relocation
+// stop moves every streamed block to the CPU, its history first, as relocation
 // does, and clears its stream mark. pos is the history's length.
 func (ps *prefillStreamer) stop(pos int) {
 	s := ps.s
 	for _, li := range ps.streamed {
 		if !s.devAt(li) {
-			// Relocation already took it home during the prompt, history and
+			// Relocation already took it to the CPU during the prompt, history and
 			// all, and marked it for reclaim -- which would place it back
 			// RESIDENT at the next room report, and a streamed block was
-			// never the placement's. It stays home, as the placement had it.
+			// never the placement's. It stays on the CPU, as the placement had it.
 			if s.moved != nil {
 				s.moved[li] = false
 			}
@@ -197,7 +197,7 @@ func (ps *prefillStreamer) stop(pos int) {
 			s.ld.ReleaseLayers(li, li+1)
 			s.unmarkOnDev(li)
 		}
-		// A block whose history did not come home stays on the device,
+		// A block whose history did not move to the CPU stays on the device,
 		// streamed: running it there is right, only slower for decode.
 		ps.nd.Stream(li, s.devAt(li))
 	}

@@ -618,7 +618,7 @@ func (s *kvPages) gather(l kvLayout, slot, n int, k, v []float32) bool {
 		return true
 	}
 	// A shared page does not move to a device for one of its holders: the
-	// block stays home (kvshare.go).
+	// block stays on the CPU (kvshare.go).
 	if s.anyShared() {
 		return false
 	}
@@ -726,7 +726,7 @@ func (s *State) migrateKV(li, pos int, toDevice bool) bool {
 		return s.migrateKVRows(li, toDevice)
 	}
 	// A shared page does not move to a device for one of its holders: the
-	// block stays home (kvshare.go).
+	// block stays on the CPU (kvshare.go).
 	if toDevice && pg.anyShared() {
 		s.kv.shareRefused++
 		return false
@@ -773,7 +773,7 @@ func kvMigBufs(kvl kvLayout, n int) (k, v, fk, fv []float32) {
 }
 
 // migrateKVAs runs move between the q8 rows and the float32 a device holds: a
-// q8 history leaves widened to d*q (nn.WidenKVRows) and comes home quantized
+// q8 history leaves widened to d*q (nn.WidenKVRows) and comes back quantized
 // again (nn.QuantizeKVRows). Widening then quantizing gives the same int8
 // back and each scale to within an ulp (the block's amax widens to 127*d), so
 // a history that travels and returns keeps its rows; what the device wrote
@@ -919,7 +919,7 @@ func (s *State) migrateRec(li int, toDevice bool) bool {
 // the one part of a recurrent state the host keeps for itself:
 // Qwen3.8-Flash-Next's n-gram predecessors, which the host hashes whichever
 // side runs the block, so the device's copy of them is never the live one
-// and a migration home keeps the host's.
+// and a migration to the CPU keeps the host's.
 func (s *State) migrateRecLayer(li int, toDevice bool) bool {
 	if toDevice || !s.c.NGramAt(li) {
 		return s.ld.MigrateRec(li, s.rconv[li], s.rstate[li], toDevice)
@@ -1780,11 +1780,11 @@ func (s *State) syncKVFromDevice() error {
 	if _, ok := s.kv.store.(NoStore); ok {
 		return nil
 	}
-	// The recurrent summary comes home too: sealRecurrentTail writes through
+	// The recurrent summary is read back too: sealRecurrentTail writes through
 	// s.rconv/s.rstate, which are stale for a placed linear block.
 	// A sharing session's placed blocks are named on the card (kvCache.seal)
 	// and keep their restore points there (recshare.go): neither their
-	// history nor their state comes home.
+	// history nor their state is read back.
 	if s.kv.share != nil && s.kvShareDevice() {
 		s.kv.seal(s.pos)
 		return nil

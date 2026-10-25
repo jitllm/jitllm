@@ -12,7 +12,7 @@ import (
 // itself. When a session starts a generate, its host blocks are offered to
 // its model's devices (promote); when a card declines for lack of room, the
 // least deserving idle sessions on the cards -- other models' first, lowest
-// priority, then idle longest -- bring their blocks home with their history
+// priority, then idle longest -- move their blocks to the CPU with their history
 // (demote), and the offer is made again. A running session is never a victim,
 // a session or model the caller placed is never moved, and nothing is
 // refused: a promotion that does not fit runs where it is.
@@ -46,7 +46,7 @@ type OrchMove struct {
 	At      time.Time
 	Session string
 	Model   string
-	// Blocks moved, ToHost where they went home (else onto the cards), Why,
+	// Blocks moved, ToHost where they went to the CPU (else onto the cards), Why,
 	// and For the session room was made for (whyMakeRoom).
 	Blocks int
 	ToHost bool
@@ -96,7 +96,7 @@ func (e *Engine) OrchMoves() []OrchMove {
 }
 
 // OrchCounts is what the orchestrator has done: promotions, demotions, and
-// the blocks they moved up and home.
+// the blocks they moved up and to the CPU.
 func (e *Engine) OrchCounts() (promotions, demotions, blocksUp, blocksHome int64) {
 	o := &e.orch
 	o.mu.Lock()
@@ -154,15 +154,16 @@ func (e *Engine) place(s *Session, why orchWhy) int {
 }
 
 // demotionVictim is the least deserving session holding device blocks that
-// is not s, not running, not pinned and not caller-placed: other models'
-// sessions first, then the lowest priority, then the one idle longest. nil
-// when there is none. One pass, no list.
+// is not s, not running, not pinned, not caller-placed and of a model whose
+// devices list the CPU (the one destination demote moves blocks to): other
+// models' sessions first, then the lowest priority, then the one idle
+// longest. nil when there is none. One pass, no list.
 func (e *Engine) demotionVictim(s *Session) *Session {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	var best *Session
 	for _, v := range e.sessions {
-		if v == s || v.closed.Load() || v.running.Load() || v.pinned.Load() || v.lm.callerPlaced ||
+		if v == s || v.closed.Load() || v.running.Load() || v.pinned.Load() || v.lm.callerPlaced || !v.lm.cpuListed ||
 			v.snapDevBlocks.Load() == 0 {
 			continue
 		}
@@ -185,8 +186,8 @@ func lessDeserving(a, b *Session, lm *LoadedModel) bool {
 	return a.lastUsed.Load() < b.lastUsed.Load()
 }
 
-// demote brings v's blocks home with their history, for the session named
-// for, when v's lock is free (an idle session; a busy one is skipped, never
+// demote moves v's blocks to the CPU device with their history, for the
+// session named for, when v's lock is free (an idle session; a busy one is skipped, never
 // waited on). It reports whether it moved anything.
 func (e *Engine) demote(v *Session, forID string) bool {
 	if !v.mu.TryLock() {

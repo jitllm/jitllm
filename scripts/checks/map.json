@@ -64,7 +64,7 @@
       "note": "the five principles' host gates: generated code, paging and zero-allocation decode"
     },
     "relocation": {
-      "module": ".", "packages": ["./engine/model"], "run": "TestLayerRelocatesToAnotherDevice|TestRelocatedBlocksComeBack|TestKVPagesRelocateWithTheLayer|TestBatchSeamMovesCarryEveryRow|TestMLASeamMovesWithItsHistory|TestShrinkingTheSeamBringsTheSummaryHome", "cap": "16G",
+      "module": ".", "packages": ["./engine/model"], "run": "TestLayerRelocatesToAnotherDevice|TestRelocatedBlocksComeBack|TestKVPagesRelocateWithTheLayer|TestBatchSeamMovesCarryEveryRow|TestMLASeamMovesWithItsHistory|TestShrinkingTheSeamMovesTheSummaryToTheCPU|TestBlocksPageOnTheListedCard", "cap": "16G",
       "needs": {"models": true, "device": true},
       "note": "relocation, host <-> device and between devices"
     },

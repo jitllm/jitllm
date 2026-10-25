@@ -31,7 +31,7 @@ import (
 // large picture once does not make every later one run its rows, and calls
 // whose sizes alternate (an encoder's questions, short and long) do not
 // rebuild the set -- and compile its kernels -- at every call. A picture the budget cannot hold is
-// refused with nothing allocated, and the State takes tower blocks home until
+// refused with nothing allocated, and the State takes tower blocks to the CPU until
 // it fits (model.State.reserveTowerRows): the picture encodes on the host,
 // never out of memory. The last tower block to leave takes the set with it
 // (dropIdleTower), and so does a first block the budget refused.
@@ -312,7 +312,7 @@ func (g *devTier) resizeTower(n, want int) bool {
 	// A streamed tower swaps its blocks through the device's slots, so
 	// the set may take the room the resident ones hold but must leave
 	// minSlots of the widest block to swap through; a set that leaves
-	// fewer is refused as before, and the blocks run at home.
+	// fewer is refused as before, and the blocks run on the CPU.
 	keep := g.towerKeep()
 	if want > g.visCap || g.visKeys > 0 {
 		// Asked before anything is allocated. The step may not fit where the
@@ -359,7 +359,7 @@ func (g *devTier) resizeTower(n, want int) bool {
 	}
 	why := g.LastErr
 	// What fitted before fits again: the old rows, or nothing at all, and the
-	// caller takes blocks home.
+	// caller moves blocks to the CPU.
 	g.visKeys = prevKeys
 	if !g.towerAt(&plan, prev) {
 		g.LastErr = fmt.Sprintf("%s; and the set's %d rows could not be rebuilt: %s", why, prev, g.LastErr)

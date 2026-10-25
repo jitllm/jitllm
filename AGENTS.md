@@ -51,8 +51,8 @@ gate below before it counts.
 |---|---|---|
 | **JIT** | every kernel is emitted at run time for the device in front of it; no pregenerated or copied kernels (RULE 8) | `cpu.TestNoAssemblyBesidesTheTrampolines`; device paths through `kernels`/IR only |
 | **No Go compute** | no arithmetic a token runs is a Go loop; a missing kernel is a BASIC generated kernel, never a fallback (RULE 8) | `TestNoProductionCodeImportsTheOracle`, `model.TestEveryModelRunsGenerated` |
-| **Relocation** | any block, its KV pages and its recurrent state can move host <-> device and between devices mid-sequence, with the same answer | `TestLayerRelocatesToAnotherDevice`, `TestBlocksMoveBetweenDevices`, `TestRelocatedBlocksComeBack`, `TestKVPagesRelocateWithTheLayer`, `TestBatchSeamMovesCarryEveryRow(Hybrid)`, `TestMLASeamMovesWithItsHistory`, `TestShrinkingTheSeamBringsTheSummaryHome`; decision models: `TestDecisionRelocatesMidPrompt`, `TestDecisionMovesBetweenCards`, `TestDecisionDistributes` |
-| **Paging** | paging is the design, never a mode: a model that does not fit pages, a budget below the model evicts and re-reads with the same answer, every entry point faults its blocks in, and a windowed layer holds its window and not the context (placement.md 15z) | `TestPagingDoesNotChangeTheAnswer`, `TestOpenHonoursAPageBudget`, `TestForwardBatchFaultsItsBlocksIn`, `TestTwoPagedModels*`, `TestWindowedLayersHoldTheirWindow`, `TestPrefixCacheRestoresAWindowedLayer`, `TestKVIsHeldOnce` (a position's history in one place: no page held by a session and the prefix cache both, no host copy of a card's history); decision models: `TestDecisionPagesWithTheSameAnswer`, `TestLayaPagesWithTheSameAnswer` |
+| **Relocation** | any block, its KV pages and its recurrent state can move between any two devices, the CPU among them, mid-sequence, with the same answer; no device is a default where blocks live, and every move names its destination | `TestLayerRelocatesToAnotherDevice`, `TestBlocksMoveBetweenDevices`, `TestRelocatedBlocksComeBack`, `TestKVPagesRelocateWithTheLayer`, `TestBatchSeamMovesCarryEveryRow(Hybrid)`, `TestMLASeamMovesWithItsHistory`, `TestShrinkingTheSeamMovesTheSummaryToTheCPU`; decision models: `TestDecisionRelocatesMidPrompt`, `TestDecisionMovesBetweenCards`, `TestDecisionDistributes` |
+| **Paging** | paging is the design, never a mode: a model that does not fit pages, a budget below the model evicts and re-reads with the same answer, every entry point faults its blocks in, and a windowed layer holds its window and not the context (placement.md 15z) | `TestPagingDoesNotChangeTheAnswer`, `TestOpenHonoursAPageBudget`, `TestForwardBatchFaultsItsBlocksIn`, `TestTwoPagedModels*`, `TestWindowedLayersHoldTheirWindow`, `TestPrefixCacheRestoresAWindowedLayer`, `TestKVIsHeldOnce` (a position's history in one place: no page held by a session and the prefix cache both, no host copy of a card's history), `TestBlocksPageOnTheListedCard` (cards listed without the CPU, `WithCPU(false)`, page the model on themselves and nothing runs on the CPU); decision models: `TestDecisionPagesWithTheSameAnswer`, `TestLayaPagesWithTheSameAnswer` |
 | **Low to no Go allocation** | a warm decode token and a warm step make zero engine heap allocations on the host and every device backend; weights and frames live off the heap (RULE 2f) | `model.TestDecodeDoesNotAllocate` (JITLLM_ALLOC_MODELS adds models), `TestTwoPagedModels*`; a decision model's warm question: `TestDecisionDoesNotAllocate` |
 
 A new architecture is added to each gate's model list, not only to the
@@ -362,10 +362,10 @@ an addition is chosen from and priced against.
    it. A position-0 comparison cannot see a rotary bug (a rotation by 0 is the
    identity), and a greedy gate cannot see a positive logit divisor -- compare
    values, past position 0.
-4. **Every tier**: the host on amd64 and arm64, and CUDA, Vulkan and Metal with
-   every block placed against the host (RULE 11c), plus a partial seam that
-   leaves blocks home -- a gate asserting every block placed runs no host
-   attention and cannot see a host-side bug.
+4. **Every tier**: the CPU device on amd64 and arm64, and CUDA, Vulkan and
+   Metal with every block placed against the CPU (RULE 11c), plus a partial
+   seam that leaves blocks on the CPU -- a gate asserting every block placed
+   on a card runs no CPU attention and cannot see a CPU-side bug.
 5. **The five principles' gates**, with the model added to each gate's list.
 6. **A real checkpoint against llama.cpp**, teacher-forced
    (`TestGreedyMatchesLlamaCpp`; `JITLLM_GREEDY_MODEL` names one over its size
@@ -908,8 +908,8 @@ budget.
   one tier each get their own KV history through `tier.GPU.Attach()`, which
   satisfies `nn.LayerDevice` unchanged. Refusing a second State is not an option,
   stated by the user: *"we can't refuse, jitllm is an inference os multimodel
-  multi devices multi instances"*. A session bringing a block home leaves it on
-  the card for every other session using it
+  multi devices multi instances"*. A session moving a block off a card leaves
+  it on the card for every other session using it
   (`model.TestABatchLeavesAnotherSessionAlone`).
 - **KV is never held twice.** Host storage follows ownership: a page lives on
   the host or on the device that owns it, never as a standing mirror of both,

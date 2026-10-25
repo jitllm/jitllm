@@ -10,7 +10,7 @@ import (
 
 // The label pick (nn.Head.Pick): after the head, the logits at a handful of
 // vocabulary ids are gathered on the device (kernels.GatherRows, rows of one
-// float) and those alone come home in place of the vocabulary's. A decision
+// float) and those alone are read back in place of the vocabulary's. A decision
 // model's readout reads a question's label ids (model.Decider): a few
 // hundred bytes where the row is the vocabulary's 65536-151936 floats.
 

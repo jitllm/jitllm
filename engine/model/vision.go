@@ -1080,7 +1080,7 @@ func (t *Tower) newState(j *nn.JIT, owned bool) *State {
 	// (reserveTowerRows), as a history that does not fit takes text blocks.
 	s := &State{m: m, c: c, lo: t.base, hi: t.base + tc.NLayer,
 		maxSeq: n, reqSeq: n, nseq: 1, prof: m.opt.profile, outW: &tensor{}, relocate: true}
-	s.holdHostRuns()
+	s.holdCPURuns()
 	v := &visRun{t: t, attStride: nn.SoftmaxPad(n), borrowed: !owned}
 	s.vis = v
 	s.jit = j

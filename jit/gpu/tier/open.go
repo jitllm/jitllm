@@ -160,9 +160,10 @@ func OpenWith(options ...Option) (*GPU, error) {
 //
 // BYTES is a byte count with an optional unit: 3G, 3GiB, 3.5g, 512M, 800000000.
 //
-// cpu in a list is not a device: whatever no device takes runs on the host
-// anyway. Only `-devices cpu` alone changes anything: offer the model to
-// nothing.
+// cpu lists the CPU as a device: alone it offers the model to no card, and
+// beside cards it is one more device a block may be placed on. A list without
+// it (and without auto) keeps every block on the cards it names, paging where
+// they do not hold the model (model.WithCPU, AdmitsHost).
 func ParseDevices(spec string) ([]Entry, error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "" {
@@ -309,10 +310,11 @@ func DeviceName(s string) string { return nn.DeviceName(s) }
 // Device reports whether this entry asks for a device at all: "cpu" does not.
 func (e Entry) Device() bool { return e.API != "cpu" }
 
-// AdmitsHost reports whether a device spec lets blocks run on the host: "auto",
-// or a list that names cpu. Relocation hands a device's blocks to the host
-// when its history outgrows the card, so it is on exactly when this is true;
-// a spec of devices alone is a caller keeping the model off the CPU.
+// AdmitsHost reports whether a device spec lists the CPU among its devices:
+// "auto", or a list that names cpu. The engine chooses the CPU for a block --
+// one no card holds, one a relocation or a fault moves -- exactly when this is
+// true (model.WithCPU); a spec of cards alone is a caller keeping the model
+// off the CPU.
 func AdmitsHost(spec string) (bool, error) {
 	es, err := ParseDevices(spec)
 	if err != nil {

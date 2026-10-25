@@ -10,7 +10,7 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
-// TestDemotedDevicePrefillFinishesOnTheHost fails the device partway through a
+// TestDemotedDevicePrefillFinishesOnTheCPU fails the device partway through a
 // prompt whose every block it held, and demands the host finish it with the
 // same logits a host-only prefill gives. A device-only prompt allocates no host
 // rows (growDeviceBatch), so the host restart after demotion must allocate
@@ -18,7 +18,7 @@ import (
 // retry after one success (3).
 //
 // Build with -tags jitllmfault; tier reads JITLLM_DEVICE_FAIL_AT at Open.
-func TestDemotedDevicePrefillFinishesOnTheHost(t *testing.T) {
+func TestDemotedDevicePrefillFinishesOnTheCPU(t *testing.T) {
 	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	if _, err := os.Stat(p); err != nil {
 		t.Skipf("MODEL MISSING: %v (set JITLLM_MODELS) -- this gate proved nothing", err)

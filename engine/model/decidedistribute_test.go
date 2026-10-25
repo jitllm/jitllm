@@ -405,11 +405,11 @@ func TestDecisionBatchMatchesAlone(t *testing.T) {
 						// A device with no room for a step brings the session's
 						// blocks home first (nn.RowsRoomer); otherwise the
 						// session holds what the Decider holds.
-						if d.BatchDeviceBlocks() != placed && st.RoomHome == 0 {
+						if d.BatchDeviceBlocks() != placed && st.RoomToCPU == 0 {
 							t.Fatalf("the batch session holds %d device blocks, the Decider %d", d.BatchDeviceBlocks(), placed)
 						}
-						if st.RoomHome > 0 {
-							t.Logf("%d step(s) found no room on the device and ran with the blocks home", st.RoomHome)
+						if st.RoomToCPU > 0 {
+							t.Logf("%d step(s) found no room on the device and ran with the blocks home", st.RoomToCPU)
 						}
 					}
 					// The band each readout is held to against llama.cpp: a batch

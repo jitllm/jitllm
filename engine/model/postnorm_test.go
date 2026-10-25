@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
@@ -274,7 +275,7 @@ func TestPostNormDeviceErrorIsAmplification(t *testing.T) {
 			}
 			report("jitllm host, f32 KV vs f16 KV", host32, host)
 			bent := decode(nil, true, 1.05)
-			onHost := &Place{On: "host"}
+			onHost := &Place{On: nn.CPU}
 			for _, spec := range specs {
 				t.Run(spec, func(t *testing.T) {
 					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),

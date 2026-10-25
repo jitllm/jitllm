@@ -198,7 +198,7 @@ type lane struct {
 	argmaxOut backend.Buf
 	// The device sampler's buffers (sample.go), made the first time a call
 	// in this lane samples: the history, the penalized row, the first
-	// pass's candidates and the k that come home.
+	// pass's candidates and the k that are read back.
 	sampleArgs, samplePen, sampleV1, sampleI1, sampleV, sampleI backend.Buf
 	// The label pick's ids and the logits it gathers (pick.go), made the
 	// first time a call in this lane picks, and the ids' host staging.

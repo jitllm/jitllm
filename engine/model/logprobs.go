@@ -26,7 +26,7 @@ type TopLogprob struct {
 // logits: higher value first, lower id on a tie). The values carry the
 // engine's exp, ~5e-5 relative at worst, so a log-probability is good to
 // ~1e-4 absolute. The logits are on the host wherever a token is
-// sampled -- Forward brings them home; only a greedy ForwardGreedy keeps them
+// sampled -- Forward reads them back; only a greedy ForwardGreedy keeps them
 // on a device, and a request for logprobs does not take that path. A warm
 // Take allocates nothing: the row, the ordering and Top are reused, so Top is
 // valid until the next call.

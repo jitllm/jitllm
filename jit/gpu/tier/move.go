@@ -11,7 +11,7 @@ import (
 // A block moving between two devices of one tier: the target takes the block
 // (staged ahead, or prepared now), the session's history is copied from the
 // source's pages into pages the target allocates, the route switches and the
-// source frees the block. The history never comes home to the State's cache:
+// source frees the block. The history never passes through the State's cache:
 // it goes card to card (backend.PeerCopier) where the backend can, and
 // otherwise through a host buffer in chunks, the read of one overlapping the
 // write of the last.

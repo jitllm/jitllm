@@ -582,10 +582,10 @@ type State struct {
 	ldSpill nn.Spiller
 	ldStep  nn.SessionStepper
 	ldRows  nn.RowsDevice
-	// roomHome counts batch steps whose device had no room for them, so the
-	// blocks came home before the step (relocateRows, forwardRows).
-	roomHome int
-	ldNamed  nn.NamedDevice
+	// roomToCPU counts batch steps whose device had no room for them, so the
+	// blocks moved to the CPU device before the step (relocateRows, forwardRows).
+	roomToCPU int
+	ldNamed   nn.NamedDevice
 	// The lists a step this State leads reuses (step.go): Step's runs, the
 	// rows' sessions and positions, the wanted rows' logits and the result.
 	stepRuns   []Run
@@ -614,9 +614,9 @@ type State struct {
 	// sizes and seamtune moves), while a hybrid whose kinds alternate can have
 	// placed blocks with a prefix of zero.
 	onDev []bool
-	// hostHeld says this State is counted in m.hostUse for the blocks of
+	// cpuHeld says this State is counted in m.cpuUse for the blocks of
 	// [lo, hi) it does not place, from its making until Close.
-	hostHeld bool
+	cpuHeld bool
 	// head is non-nil when the device also runs the output norm and the
 	// vocabulary projection, which it is only offered when it took every block.
 	// headReady is what head is set back to by SetHeadOnDevice.
@@ -753,7 +753,7 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 		devFallback: true, relocate: true, prof: m.opt.profile, outNorm: m.outNorm, outW: &m.output,
 		fuseOff: m.opt.noFuse, groupOff: m.opt.noGroups, lookOff: m.opt.noLook,
 		residFold: m.opt.residFold}
-	s.holdHostRuns()
+	s.holdCPURuns()
 	m.live.add(s)
 	// A State over a prediction block projects through that block's head.
 	if lo < len(m.layers) {
@@ -1051,12 +1051,12 @@ func (s *State) Close() error {
 	}
 	s.m.kvPool.put(s.kv)
 	// The blocks this State ran on the host no longer need their pages for
-	// it. Close may be called twice; hostHeld makes the second a no-op.
-	if s.hostHeld {
-		s.hostHeld = false
+	// it. Close may be called twice; cpuHeld makes the second a no-op.
+	if s.cpuHeld {
+		s.cpuHeld = false
 		for li := s.lo; li < s.hi; li++ {
 			if !s.devAt(li) {
-				s.m.hostRuns(li, li+1, -1)
+				s.m.cpuRuns(li, li+1, -1)
 			}
 		}
 	}
@@ -1286,6 +1286,9 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 		s.placing, s.placeErr = true, nil
 		s.autoStreamed = 0
 		s.offerRange(s.lo, hi)
+		if s.placeErr == nil {
+			s.placeErr = s.pageOnCards(s.lo, hi)
+		}
 		s.placing = false
 		pl.EndPlacement()
 		// Blocks no card could hold went on streamed by default; whether that
@@ -1296,6 +1299,9 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 	} else {
 		s.placing, s.placeErr = true, nil
 		s.offerRange(s.lo, hi)
+		if s.placeErr == nil {
+			s.placeErr = s.pageOnCards(s.lo, hi)
+		}
 		s.placing = false
 	}
 	if err := s.placeErr; err != nil {
@@ -1368,11 +1374,11 @@ func (s *State) reserveRows() error {
 	total := s.nseq * s.maxSeq
 	for s.nseq > 1 && s.devCount() > 0 && !s.ld.ReserveKV(total) {
 		li := s.relocationVictim()
-		if p := s.m.opt.place; li < 0 || p != nil && p.Strict {
+		if p := s.m.opt.place; li < 0 || p != nil && p.Strict || !s.cpuListed() {
 			return fmt.Errorf("model: the devices cannot hold %d rows of %d positions "+
-				"for the blocks placed on them", s.nseq, s.maxSeq)
+				"for the blocks placed on them, and no other listed device takes one", s.nseq, s.maxSeq)
 		}
-		s.relocateHome(li)
+		s.relocateToCPU(li)
 	}
 	return nil
 }
@@ -1393,7 +1399,7 @@ func (s *State) placeOf(li int) (Place, bool) {
 // pinnedOnDev reports a device block WithPlacement pinned there.
 func (s *State) pinnedOnDev(li int) bool {
 	pl, ok := s.placeOf(li)
-	return ok && pl.Pin && pl.On != "host" && s.devAt(li)
+	return ok && pl.Pin && !onCPU(pl.On) && s.devAt(li)
 }
 
 // finishPlacement checks a strict placement against where every named block
@@ -1412,7 +1418,7 @@ func (s *State) finishPlacement() error {
 	where, _ := s.ld.(nn.NamedDevice)
 	on := func(li int) string {
 		if !s.devAt(li) {
-			return "host"
+			return nn.CPU
 		}
 		if where != nil {
 			if n, ok := where.DeviceOf(li); ok {
@@ -1433,13 +1439,13 @@ func (s *State) finishPlacement() error {
 			if !named {
 				continue
 			}
-			if got := on(li); got != nn.DeviceName(pl.On) && !(pl.On == "host" && got == "host") {
+			if got := on(li); got != nn.DeviceName(pl.On) {
 				s.SetGPULayers(0)
 				return fmt.Errorf("model: strict placement: block %d is on %s, not %s", li, got, pl.On)
 			}
 		}
 		if p.Head != nil {
-			got := "host"
+			got := nn.CPU
 			if s.head != nil {
 				got = "a device"
 				if hn, ok := s.ld.(nn.NamedDevice); ok {
@@ -1448,7 +1454,7 @@ func (s *State) finishPlacement() error {
 					}
 				}
 			}
-			if got != nn.DeviceName(p.Head.On) && !(p.Head.On == "host" && got == "host") {
+			if got != nn.DeviceName(p.Head.On) {
 				s.SetGPULayers(0)
 				return fmt.Errorf("model: strict placement: the head is on %s, not %s", got, p.Head.On)
 			}
@@ -1459,7 +1465,7 @@ func (s *State) finishPlacement() error {
 	// State's moves instead (pinnedOnDev).
 	pin, _ := s.ld.(nn.NamedDevice)
 	for li := s.lo; li < s.hi; li++ {
-		if pl, named := s.placeOf(li); named && pl.Pin && !pl.Stream && pl.On != "host" && s.devAt(li) && pin != nil {
+		if pl, named := s.placeOf(li); named && pl.Pin && !pl.Stream && !onCPU(pl.On) && s.devAt(li) && pin != nil {
 			pin.Pin(li, true)
 		}
 	}
@@ -1488,7 +1494,7 @@ func (s *State) placeHead() {
 	}
 	// The placement's head, when it names one.
 	if p := s.m.opt.place; p != nil && p.Head != nil {
-		if p.Head.On == "host" {
+		if onCPU(p.Head.On) {
 			return
 		}
 		if s.placeHeadOn(p.Head.On) || p.Strict {
@@ -1548,7 +1554,9 @@ func (s *State) placeHead() {
 		// resident the head is pure upside and a refusal means the card is
 		// simply full; giving up a block there would trade a whole block's
 		// bytes for the head's and add a seam that does not exist.
-		if s.gpuLayers >= s.hi || s.gpuLayers == s.lo+1 {
+		// A block given up for the head runs on the CPU, which only a caller
+		// that listed it lets the engine choose.
+		if s.gpuLayers >= s.hi || s.gpuLayers == s.lo+1 || !s.cpuListed() {
 			restore()
 			return
 		}
@@ -1579,7 +1587,7 @@ func (s *State) newHead() *nn.Head {
 	f := s.m.frontGraphs()
 	h := &nn.Head{Model: s.m.id, Graph: f.head, Sample: f.sample, Embed: f.embed, Norm: s.outNorm, W: wt(*s.outW), Logits: s.logits,
 		Softcap: c.FinalSoftcap, Embeds: c.TiedEmbd, EmbdScale: float32(c.EmbdScale),
-		Stages: s.m.headStages(), Bias: s.m.outB}
+		Stages: s.m.headStages(), Bias: s.m.outB, NoCPU: !s.cpuListed()}
 	if !c.TiedEmbd && s.m.embd.e != nil {
 		h.TokEmbd = wt(s.m.embd)
 	}
@@ -1831,7 +1839,7 @@ func (s *State) offerRange(lo, hi int) {
 		// A block the placement keeps on the host is not offered: while the
 		// placement is applied, and afterwards too when it is pinned.
 		place, named := s.placeOf(li)
-		if named && place.On == "host" && (s.placing || place.Pin) {
+		if named && onCPU(place.On) && (s.placing || place.Pin) {
 			continue
 		}
 		// The block is read here, for the device, and its host page released
@@ -1911,7 +1919,7 @@ func (s *State) offerRange(lo, hi int) {
 			return
 		}
 		took := false
-		if named && place.On != "host" && s.placing {
+		if named && !onCPU(place.On) && s.placing {
 			po, ok := adm.(nn.NamedDevice)
 			if !ok {
 				s.placeErr = fmt.Errorf("model: the placement names %q for block %d, and this "+
@@ -1941,7 +1949,7 @@ func (s *State) offerRange(lo, hi int) {
 		// at 4.84 tok/s, and with all 24 streamed and their experts on the
 		// host at 9.56 (placement.md 16c-3). The stream trial measures it
 		// against the host like any auto-streamed placement.
-		if !took && c.MoEAt(li) && !(named && place.On == "host") {
+		if !took && c.MoEAt(li) && !(named && onCPU(place.On)) {
 			if as, ok := ld.(nn.AutoStreamer); ok {
 				total, bank := s.m.blockBytes(li)
 				if bank > 0 && as.AutoStream(li, total, bank, c.NExpert, c.NExpertUsed, c.NLayer, s.m.meanBase()) {
@@ -2024,11 +2032,11 @@ func (s *State) releasePlacedPage(ld nn.LayerDevice, li int) {
 	if r, ok := ld.(nn.HostPageReleaser); ok && r.ReleasesHostPage(li) && l.mtp == nil {
 		// Under bind, as pageIn binds: another State may be binding or
 		// reading this block's spans while this one places it. A State
-		// that runs the block on the host keeps it bound (hostUse): it
+		// that runs the block on the CPU keeps it bound (cpuUse): it
 		// faults the block in once and then reads its spans unlocked
 		// through every matvec of the block.
 		s.m.bind.Lock()
-		if s.m.hostUse[li] == 0 {
+		if s.m.cpuUse[li] == 0 {
 			keep := false
 			if eh, ok := ld.(nn.ExpertHolder); ok {
 				keep = !eh.HoldsExperts(li)
@@ -2229,7 +2237,7 @@ func (s *State) markOnDev(li int) {
 		s.onDev = make([]bool, len(s.m.layers))
 	}
 	if !s.onDev[li] {
-		s.hostRun(li, -1)
+		s.cpuRun(li, -1)
 	}
 	s.onDev[li] = true
 	n := s.lo
@@ -2243,7 +2251,7 @@ func (s *State) markOnDev(li int) {
 // twin: the prefix ends at the first block not placed.
 func (s *State) unmarkOnDev(li int) {
 	if s.onDev[li] {
-		s.hostRun(li, 1)
+		s.cpuRun(li, 1)
 	}
 	s.onDev[li] = false
 	s.gpuLayers = min(s.gpuLayers, li)
@@ -2264,7 +2272,7 @@ func (s *State) placedFrom(lo int) []int {
 func (s *State) clearOnDev() {
 	for i := range s.onDev {
 		if s.onDev[i] {
-			s.hostRun(i, 1)
+			s.cpuRun(i, 1)
 		}
 		s.onDev[i] = false
 	}
@@ -2281,7 +2289,7 @@ func (s *State) clearOnDev() {
 func (s *State) shrinkOnDev(n int) {
 	for i := n; i < len(s.onDev); i++ {
 		if s.onDev[i] {
-			s.hostRun(i, 1)
+			s.cpuRun(i, 1)
 		}
 		s.onDev[i] = false
 	}
@@ -2290,19 +2298,20 @@ func (s *State) shrinkOnDev(n int) {
 	}
 }
 
-// holdHostRuns counts this State in m.hostUse for every block of [lo, hi): a
-// new State runs them all on the host, so its device prefix is empty.
-func (s *State) holdHostRuns() {
+// holdCPURuns counts this State in m.cpuUse for every block of [lo, hi): a
+// State with no device attached runs them all on the CPU device, so its card
+// prefix is empty.
+func (s *State) holdCPURuns() {
 	s.gpuLayers = s.lo
-	s.m.hostRuns(s.lo, s.hi, 1)
-	s.hostHeld = true
+	s.m.cpuRuns(s.lo, s.hi, 1)
+	s.cpuHeld = true
 }
 
-// hostRun moves this State's count on block li in m.hostUse by d, as the
-// block leaves (-1) or returns to (+1) the host for it.
-func (s *State) hostRun(li, d int) {
-	if s.hostHeld && li >= s.lo && li < s.hi {
-		s.m.hostRuns(li, li+1, int32(d))
+// cpuRun moves this State's count on block li in m.cpuUse by d, as the
+// block leaves (-1) or moves to (+1) the CPU device for it.
+func (s *State) cpuRun(li, d int) {
+	if s.cpuHeld && li >= s.lo && li < s.hi {
+		s.m.cpuRuns(li, li+1, int32(d))
 	}
 }
 
@@ -2373,14 +2382,19 @@ func (s *State) embed(token int32) error {
 }
 
 // SetDeviceFallback decides what happens when the device fails mid-sequence:
-// bring the history home and finish on the host (true, the default), or return
-// an error (false).
+// move every block and its history to the CPU device and finish there (true,
+// the default), or return an error (false). A model whose caller did not list
+// the CPU (WithCPU(false)) takes the error either way.
 //
 // A service would rather serve slowly than fail; a benchmark wants the error,
 // since a run silently finished on the CPU produces a meaningless number.
 func (s *State) SetDeviceFallback(on bool) { s.devFallback = on }
 
-// demoteAll brings every device block's history home and hands the blocks back.
+// fallsBack reports whether a device failure moves the blocks to the CPU
+// (demoteAll) rather than failing the step.
+func (s *State) fallsBack() bool { return s.devFallback && s.cpuListed() }
+
+// demoteAll moves every device block and its history to the CPU device.
 //
 // The history moves before the blocks do: releasing first would free the only
 // copy of their keys and values.
@@ -2498,10 +2512,12 @@ func (s *State) relocateUntil(pos int, fits func() bool) {
 	s.fixKVGroups()
 	defer s.fixKVGroups()
 	sp := s.ldSpill
-	if !s.relocate && sp == nil {
+	// The CPU is a destination only where the caller listed it.
+	toCPU := s.relocate && s.cpuListed()
+	if !toCPU && sp == nil {
 		return
 	}
-	if s.relocate {
+	if toCPU {
 		s.reclaim(pos)
 	}
 	defer func() { s.roomSeen = s.roomGen() }() // our own moves are not news
@@ -2538,17 +2554,18 @@ func (s *State) relocateUntil(pos int, fits func() bool) {
 		}
 		// A block on its new card without its history would attend over
 		// nothing, so that one comes home even without SetRelocate.
-		if !s.relocate && !spilled {
+		if !toCPU && !spilled {
 			return
 		}
-		s.relocateHome(li)
+		s.relocateToCPU(li)
 	}
 }
 
-// relocateHome brings block li home for this State and remembers it, so that
-// reclaim offers it back once the device reports room. The block's history
-// must already be home (or never have been written).
-func (s *State) relocateHome(li int) {
+// relocateToCPU moves block li to the CPU device for this State and
+// remembers it, so that reclaim offers it back once the device reports room.
+// The block's history must already be in this State's cache (or never have
+// been written).
+func (s *State) relocateToCPU(li int) {
 	s.ld.ReleaseLayers(li, li+1)
 	s.unmarkOnDev(li)
 	// -gpu-grow would adopt the block straight back next token.
@@ -3927,7 +3944,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 				// host from the embeddings (Layers may have written part of the
 				// residual), unless SetDeviceFallback(false) asked for the
 				// error.
-				if !s.devFallback {
+				if !s.fallsBack() {
 					return nil, errDevice{li, s.devWhy()}
 				}
 				// A hybrid cannot restart once a placed linear block has
@@ -4458,7 +4475,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 			done = true
 		} else if err := s.buildRefusal(s.gpuLayers); err != nil {
 			return nil, err
-		} else if !s.devFallback {
+		} else if !s.fallsBack() {
 			return nil, errDevice{s.gpuLayers, s.devWhy()}
 		}
 	}

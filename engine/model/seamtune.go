@@ -86,7 +86,9 @@ func (s *State) initSeamTuner() {
 // other while the streamed one prefilled 1.5x faster (placement.md 16c), so
 // which wins is a property of the box, the disk and the link, not a rule.
 func (s *State) initStreamTrial() {
-	if s.ld == nil || s.gpuLayers <= s.lo {
+	// Two of its arms run on the CPU, a destination only a caller that
+	// listed it lets the engine try.
+	if s.ld == nil || s.gpuLayers <= s.lo || !s.cpuListed() {
 		return
 	}
 	full := s.gpuLayers
@@ -134,7 +136,9 @@ func (s *State) SetSeamTuning(on bool) {
 		}
 		return
 	}
-	if s.seam == nil {
+	// The tuner's seams leave blocks on the CPU: with the CPU unlisted there
+	// is no seam to tune.
+	if s.seam == nil && s.cpuListed() {
 		s.initSeamTuner()
 	}
 }

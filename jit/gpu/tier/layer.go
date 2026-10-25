@@ -291,7 +291,7 @@ type layer struct {
 //
 // A mixture routing few of many experts can make a resident bank tens of times
 // the bytes a token reads, so on a small card the choice is streaming or the
-// host. The price is a host round trip mid-block: the selection must come home
+// host. The price is a host round trip mid-block: the selection must be read back
 // before anyone knows which sheets to send, so the submission suspends after
 // ExpertRank and resumes after the upload, and such a block cannot be captured
 // into a graph (a recording has nowhere to put a readback).
@@ -299,7 +299,7 @@ type streamBank struct {
 	// sh is the per-expert sheet size of each plane, in bytes, for gate, up and
 	// down in that order: [matrix][qs, d, sc].
 	sh [3][3]int
-	// sel is the selection, read home each token. It is len NExpertUsed and is
+	// sel is the selection, read back each token. It is len NExpertUsed and is
 	// reused rather than allocated per token.
 	sel []uint32
 	// w is the host side of this block. ensure re-points its spans at wherever
@@ -534,7 +534,7 @@ func (st *streamBank) prefetch(g *devTier) {
 
 // runHostRows is runHost for a chunk of rows: the selections (row stride
 // k+1, ExpertRank's layout), the weights (stride k) and the rows of in come
-// home, the host runs each row's experts, and the rows of the sum go back.
+// back, the host runs each row's experts, and the rows of the sum go back.
 func (st *streamBank) runHostRows(sid uint64, g *devTier, s backend.Session, sel, w, in, out backend.Buf, n, k, rows int) error {
 	if cap(st.hin) < rows*n {
 		st.hin = make([]float32, rows*n)
@@ -591,7 +591,7 @@ func (st *streamBank) runHostRows(sid uint64, g *devTier, s backend.Session, sel
 // verification, a few-row chunk): every row's selection goes through split
 // and splitWeights as one token's does -- its heat counted, its hits mapped
 // to their cache slots, nothing evicted or admitted. The rows' input, weights
-// and selections come home; sel and w are written back as the card's share
+// and selections are read back; sel and w are written back as the card's share
 // (split's slots, splitWeights' weights with the misses zeroed) for the
 // grouped expert kernels over the cache bank, each cached expert read once
 // for every row that chose it, and the misses are kept (st.rowSel, a hit's
@@ -713,7 +713,7 @@ type hostSide struct {
 	uses []uint32
 }
 
-// splitIn brings a split step's input and routing weights home and divides
+// splitIn brings a split step's input and routing weights back and divides
 // the weights between the card and the host. The Sync before the selection
 // was read covers in.
 func (st *streamBank) splitIn(s backend.Session, in, w backend.Buf, n, k int) error {
@@ -799,7 +799,7 @@ func (g *devTier) splitAdmit() int {
 
 // runHost is the hybrid suspension: in (the experts' input, n wide -- the
 // expert width, which is the latent on Kimi-K3) and the k routing weights
-// come home, the host's experts sum into hout, and the sum is
+// are read back, the host's experts sum into hout, and the sum is
 // written to out, where the combine kernel would have put it. The Sync makes
 // the launches that write in land first.
 func (st *streamBank) runHost(sid uint64, g *devTier, s backend.Session, in, w, out backend.Buf, n, k int) error {
@@ -2008,7 +2008,7 @@ func (g *devTier) addSessionRec(sid uint64, l *layer, p *nn.LayerPlan) bool {
 }
 
 // ensureRecNext makes the shared form's next-state scratch hold rows
-// sequences' states and compiles the copy that moves them home, charging the
+// sequences' states and compiles the copy that reads them back, charging the
 // ledger for any growth. It runs outside a session (growSeat, LayersRows
 // before submit), where Compile is allowed. Callers hold g.mu.
 func (g *devTier) ensureRecNext(rows int) bool {
@@ -2483,7 +2483,7 @@ type blockScratch struct {
 	// and the dt projection to the output and the next state, at any row
 	// count and any lanes; ssdNorm its grouped gated norm (ssdNormL the lanes
 	// it was built at), and copyRes the copy a block with no FFN ends with,
-	// moving the residual home from bs.x2.
+	// moving the residual back from bs.x2.
 	ssdScan, ssdNorm, copyRes backend.Kernel
 	ssdNormL                  int
 	// Mamba-1's (nn.RecurrentPlan.Mamba1): the convolution's bias and SiLU,
@@ -2749,7 +2749,7 @@ func (g *devTier) scoreScale(p *nn.LayerPlan) float32 {
 
 // llama4WhyNot names the Llama 4 attention or mixture feature this tier cannot
 // run, or "". Each is fluent when skipped (a sliding mask is exact inside
-// the first chunk, a rotated NoPE layer at position 0), so the block goes home
+// the first chunk, a rotated NoPE layer at position 0), so the block goes to the CPU
 // by name rather than running wrong (RULE 8a). What remains are combinations no
 // model ships: an input-weighted mixture with expert biases, and a chunk on an
 // MLA or vision block. A temperature on every layer (mistral3's form) runs:
@@ -6435,7 +6435,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	}
 	// Every device path of the tier's own head caps the logits before the host
 	// adds the bias, the other order of the model's head (bias, softcap,
-	// scale). No model has both: the pair is declined by name, at home where
+	// scale). No model has both: the pair is declined by name, on the CPU where
 	// the order is the model's, until the cap can follow the bias.
 	if h.Softcap != 0 && h.Bias != nil {
 		g.LastErr = "the head states a final softcap and an output bias: the device caps before the host adds the bias, " +
@@ -6460,8 +6460,24 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	// and the head is permanent while a slot turns over every block. The head
 	// runs once per token and a block NLayer times, so the projection is taken
 	// only when it costs no slot.
-	if len(g.stream) > 0 {
-		want := uint64(len(h.W.Data))
+	// A caller that did not list the CPU has no other device for it: the
+	// projection is taken while a swap still has its slots, the streamed
+	// blocks paging out to make the room.
+	if want := uint64(len(h.W.Data)); len(g.stream) > 0 && h.NoCPU {
+		if foot, err := g.planesFootprint(q, h.W.Rows, h.W.K); err == nil {
+			want = foot
+		}
+		if after := g.slotsIfPerm(want); after < minSlots {
+			g.LastErr = fmt.Sprintf("the output projection needs %d bytes and taking them "+
+				"would leave %d block slot(s), below the %d a swap needs", want, after, minSlots)
+			return false
+		}
+		if !g.reclaim(want, -1, 0, 0) {
+			g.LastErr = fmt.Sprintf("the output projection needs %d bytes and no streamed block "+
+				"can be paged out for it", want)
+			return false
+		}
+	} else if len(g.stream) > 0 {
 		if now, after := g.slots(), g.slotsIfPerm(want); after < now {
 			g.LastErr = fmt.Sprintf("the output projection needs %d bytes and "+
 				"taking them would leave %d block slot(s) instead of %d, so it "+
@@ -7108,14 +7124,14 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	// Every wait comes first. The prologue below reads what other sessions
-	// change -- this session's pages, whether any are at home, the blocks --
+	// change -- this session's pages, whether any are in host memory, the blocks --
 	// into the submission's descriptors, and a wait after it would let one of
 	// them change under the submission (another session's page-in or
 	// eviction). Alone on the device: wait for every submission in flight.
 	// Beside the others: wait for a quiesce in progress to have its turn. From
 	// here to the submission nothing lets g.mu go (prologueHeld).
 	// The question is asked again after every wait: another session's
-	// prologue may have sent this session's history home meanwhile.
+	// prologue may have sent this session's history to host memory meanwhile.
 	var excl bool
 	for {
 		if excl = g.exclusiveRange(lo, hi, g.rag, bs) || g.evictedFor(sid, g.rag); excl {
@@ -7163,7 +7179,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// A batched chunk may carry the head, which then runs on the last row:
 	// prefill wants logits for its final position only. The row is copied into
 	// the decode scratch on the card, its norm, quantize and projection run
-	// there, and only the logits come home -- no second session, no readback of
+	// there, and only the logits are read back -- no second session, no readback of
 	// the chunk.
 	// A chunk whose head wants every row's logits (nn.Head.RowLogits: a
 	// speculative verification) runs the ragged step's per-row head over the
@@ -7605,7 +7621,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// and a partial seam alternates two of them every token.
 	//
 	// The persistent path: decode only, and not over history streamed from
-	// home, whose uploads sit between launches.
+	// back, whose uploads sit between launches.
 	persistOn := R == 1 && rag == nil && !(bs.pkv != nil && bs.pkv.st != nil) && g.ensurePersist()
 	// The head the composer serves in this call, and so what the call leaves
 	// to the caller after the logits (nn.Head.Applied): a call that serves the
@@ -7763,8 +7779,8 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	g.sub.persist = persistOn
 	g.sessQueue()
 	// The prologue streams this call's history only when some of it was at
-	// home before the prologue began (evictedFor), which made the call one
-	// to run alone; nothing can have gone home since, so this is a check of
+	// in host memory before the prologue began (evictedFor), which made the call one
+	// to run alone; nothing can have gone to host memory since, so this is a check of
 	// that reasoning and not a path.
 	if !excl && g.exclusiveRange(lo, hi, rag, bs) {
 		return refuse("a submission that must run alone was prepared to run beside others")
@@ -7814,7 +7830,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	g.Blocks += hi - lo
 	// The submission has completed (its readback waited for it), so pages
 	// released before it are no longer read by anything in flight, and the
-	// rows it wrote are history eviction may send home.
+	// rows it wrote are history eviction may send to host memory.
 	if pk := bs.pkv; pk != nil && pk.cur != nil && g.kvp != nil {
 		g.kvp.wrote(pk.rows)
 	}
@@ -8246,7 +8262,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	// counter drift.
 	streamed := false
 	for li := lo; li < hi && !streamed; li++ {
-		// A batched mixture reads its selection home too (moegroup.go).
+		// A batched mixture reads its selection back too (moegroup.go).
 		if l := g.layers[li]; l != nil && (l.stream != nil || (R > 1 && l.router != nil)) {
 			streamed = true
 		}
@@ -9190,7 +9206,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			}
 
 			// A block that is its mixer alone ends here: the residual add, and
-			// the sum moved home to bs.x, where the next block reads it.
+			// the sum moved back to bs.x, where the next block reads it.
 			if l.noFFN {
 				if !skip["add"] && !attnFused {
 					addRes(bs.x, aout, bs.x2)
@@ -9446,7 +9462,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					}
 					route(l, true)
 					// The next hybrid block's router over this block's row, queued
-					// before the wait so its selection comes home with this one's:
+					// before the wait so its selection is read back with this one's:
 					// a prediction, which only moves sheets (predictAdmit).
 					var predNx *layer
 					if g.splitPredict() > 0 && l.stream != nil && l.stream.hybrid && li+1 < hi {
@@ -9456,7 +9472,7 @@ func (g *devTier) layersSession(s backend.Session) {
 							predNx = nx
 						}
 					}
-					// The suspension, for a streamed bank: the selection comes home, k
+					// The suspension, for a streamed bank: the selection is read back, k
 					// sheets of gate/up/down are uploaded at their compact offsets, and the
 					// submission resumes indexing 0..k-1, because the bank it reads is the
 					// selection. The Sync is required: Launch does not wait, and the uploads
@@ -9537,7 +9553,7 @@ func (g *devTier) layersSession(s backend.Session) {
 						}
 						if err == nil && hybrid && !split {
 							// Hybrid: the experts' input and the routing weights come
-							// home, the host runs the selected experts, and their sum
+							// back, the host runs the selected experts, and their sum
 							// goes back where the combine would have written it.
 							if latent {
 								g.k3LatentIn(lc, bs, l, 1, mvrun)
@@ -9547,7 +9563,7 @@ func (g *devTier) layersSession(s backend.Session) {
 									err = l.stream.admit(g, s, l, p.NExpert, g.splitAdmit())
 								}
 							} else {
-								// The input and weights come home now; the host runs
+								// The input and weights are read back now; the host runs
 								// the experts once the shared expert is queued.
 								err = l.stream.hybridIn(s, ein, bs.rw, p.ExpWidth(), bs.nUsed)
 								late, lateDst = true, eout
@@ -10003,7 +10019,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		if head != nil && (rag != nil || allRows) {
 			// The output norm, the projection of the rows that want logits
 			// (they lead) and a per-row argmax over them: their tokens and
-			// logits come home. A chunk asking for every row's logits
+			// logits are read back. A chunk asking for every row's logits
 			// (nn.Head.RowLogits on Layers) takes the same tail.
 			hr := g.bs.head
 			norm(bs.x, hNorm, g.bs.hNormB)
@@ -10104,7 +10120,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			g.HeadFolds++
 		} else if head != nil {
 			// The output norm and the vocabulary projection, in the same
-			// submission: the residual stream never comes home.
+			// submission: the residual stream is never read back.
 			// The head the composer serves (Config.Composed), where it is asked
 			// for this one: the step fails if it does not form. A prompt's head
 			// over its last row is one row and still the prompt's. A graph that
@@ -10225,7 +10241,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		//   allocates the buffers afresh.
 		// - A streamed block: the mid-FFN host readback and upload have no place
 		//   in a replay.
-		// - History streamed from home: its uploads and waits are per call.
+		// - History streamed from host memory: its uploads and waits are per call.
 		if (R > 1 && rag == nil) || !parOK || g.NoGraph || g.graphOff || g.PerLayerSubmit ||
 			a.paging || streamed || bs.pkv != nil && bs.pkv.st != nil {
 			te := time.Now()
@@ -10490,7 +10506,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		err = s.Read(bs.x, f32b(x))
 		direct = true
 	case p.Streams() > 1:
-		// Every stream comes home, stream-major at R rows (streamRows cuts it).
+		// Every stream is read back, stream-major at R rows (streamRows cuts it).
 		err = s.Read(bs.x, bs.hraw[:R*p.ResidW()*4])
 	default:
 		err = s.Read(bs.x, bs.hraw[:nrow*p.NEmbd*4])
@@ -10513,7 +10529,7 @@ func (g *devTier) recorderOf(s backend.Session) (backend.Recorder, bool) {
 type stagingBytes struct {
 	pn, koffs, kposs, rposs []byte
 	raxes                   []byte // a table over several axes' positions
-	tok                     []byte // a ragged step's tokens, read home
+	tok                     []byte // a ragged step's tokens, read back
 	mlaPOff                 []byte // a batched latent attention's rotary key slots
 	embIDs                  []byte // a prompt chunk's ids for the gather on the card (embIDs)
 	embPos                  []byte // the composer's gather's positions (embedWords)
@@ -10930,7 +10946,7 @@ func (g *devTier) migrateRec(sid uint64, li int, conv, state []float32, toDevice
 		// The seat was never grown to the batch, and it grows at the batch's
 		// first step (LayersRows) or before a state is sent up (below): no
 		// step has run these rows here, so the host's copy is the current one
-		// and there is nothing to bring home.
+		// and there is nothing to read back.
 		return true
 	case st.rows < rows:
 		// Sent up for a batch the seat does not hold yet: grow it first.
@@ -10956,7 +10972,7 @@ func (g *devTier) migrateRec(sid uint64, li int, conv, state []float32, toDevice
 		rd := func(b backend.Buf, v []float32, w int, name string) bool {
 			// A buffer reads from its start, so a seat above slot 0 is first
 			// copied to a buffer of its own on the device: reading the pool
-			// directly would bring every other session's state below it home
+			// directly would bring every other session's state below it to the CPU
 			// too.
 			err := func() error {
 				if len(v) == 0 {
@@ -12257,7 +12273,7 @@ func (g *devTier) emitLinear(sid uint64, s backend.Session, bs *blockScratch, l 
 	}
 
 	if g.recShared {
-		// The new state home, before the next block reuses the scratch: each
+		// The new state back, before the next block reuses the scratch: each
 		// sequence's row of recNext (its out slot) to its slot of the pool.
 		// Compiled before the session (ensureRecNext): Compile inside one
 		// deadlocks CUDA's owner goroutine.

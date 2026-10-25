@@ -108,7 +108,7 @@ func schedulerOnSplit(t *testing.T, p string) {
 		n := m.Cfg.NLayer - onHost
 		for li := 0; li < m.Cfg.NLayer; li++ {
 			if li >= n || len(four) < 4 {
-				pl[li] = Place{On: "host"}
+				pl[li] = Place{On: nn.CPU}
 				continue
 			}
 			pl[li] = Place{On: four[li*4/n]}
@@ -211,7 +211,7 @@ func schedulerOnSplit(t *testing.T, p string) {
 			}
 			dev, _ := sc.st.ld.(nn.NamedDevice)
 			for li, pl := range arm.place {
-				got := "host"
+				got := nn.CPU
 				if n, ok := dev.DeviceOf(li); ok {
 					got = n
 				}
@@ -344,8 +344,8 @@ func spread(placed []int) int {
 // side: block 0 and the middle block on the host, blocks 1-3 on cuda:0, and the
 // rest on the second device.
 func sandwich(second string) map[int]Place {
-	return map[int]Place{0: {On: "host"}, 1: {On: "cuda:0"}, 2: {On: "cuda:0"}, 3: {On: "cuda:0"},
-		4: {On: second}, 5: {On: second}, 6: {On: second}, 7: {On: second}, 8: {On: "host"},
+	return map[int]Place{0: {On: nn.CPU}, 1: {On: "cuda:0"}, 2: {On: "cuda:0"}, 3: {On: "cuda:0"},
+		4: {On: second}, 5: {On: second}, 6: {On: second}, 7: {On: second}, 8: {On: nn.CPU},
 		9: {On: second}, 10: {On: second}, 11: {On: second}, 12: {On: second},
 		13: {On: second}, 14: {On: second}, 15: {On: second}}
 }

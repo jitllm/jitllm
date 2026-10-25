@@ -283,7 +283,7 @@ The gates:
                    block releases; every byte and buffer back at the end; the
                    device copies carry exactly the seats held, the host reads
                    nothing and uploads only the slots no carry fills.
-    tier.TestMigrateRecBringsOnlyItsSeatHome            three sessions on
+    tier.TestMigrateRecMovesOnlyItsSeat            three sessions on
                    every real device, both forms: each reads back exactly its
                    own state and exactly its seat's bytes.
     backend.TestDeviceCopyMovesExactlyTheRange          ragged offsets and

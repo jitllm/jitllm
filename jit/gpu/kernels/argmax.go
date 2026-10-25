@@ -13,7 +13,7 @@ const ArgmaxGroup = 1024
 // index winning a tie -- the host's rule (jit/cpu/argmax.go), so a greedy
 // decode takes the same token on either side of the bus.
 //
-// It keeps greedy decode from bringing the logits home: the next token is one
+// It keeps greedy decode from reading the logits back: the next token is one
 // integer, so this reads four bytes instead of the whole vocabulary. One
 // workgroup: each thread keeps the best of a strided run, seeded with its
 // first element so no -Inf constant is needed, and a shared tree reduces the

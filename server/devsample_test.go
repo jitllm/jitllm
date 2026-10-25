@@ -9,7 +9,7 @@ import (
 	"github.com/jitllm/jitllm/engine/model"
 )
 
-// TestTheRowComesHomeWhenTheReplyReadsIt: with the head on the device, a reply
+// TestTheRowIsReadBackWhenTheReplyReadsIt: with the head on the device, a reply
 // that asks for logprobs or runs under a grammar reads every row back and
 // samples on the host -- those read the raw logits, which a device-selected
 // token never brings home -- whatever the device sampler's mode. Asserted on
@@ -22,7 +22,7 @@ import (
 //     its device turns (the first and last of each ABBA quartet), after it
 //     every token where the verdict is the device and none where it is the
 //     host (model.State.DeviceSampleChoice).
-func TestTheRowComesHomeWhenTheReplyReadsIt(t *testing.T) {
+func TestTheRowIsReadBackWhenTheReplyReadsIt(t *testing.T) {
 	for _, mode := range []model.DeviceSampleMode{model.DeviceSampleOn, model.DeviceSampleAuto} {
 		t.Run(fmt.Sprintf("mode=%d", mode), func(t *testing.T) { rowComesHome(t, mode) })
 	}

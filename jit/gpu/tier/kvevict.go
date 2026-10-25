@@ -5,13 +5,13 @@ import (
 	"unsafe"
 )
 
-// Eviction: a pool that cannot grow sends pages home rather than refusing
+// Eviction: a pool that cannot grow sends pages to host memory rather than refusing
 // (docs/design/device-kv-paging.md, "Errors and eviction").
 //
 // A sequence's pages leave oldest first, the same page in every layer that
 // holds the sequence, so its evicted prefix is one count (kvPool.evicted) and
 // one set of descriptors still serves every layer. An evicted page's id in the
-// sequence's run is 0 -- the dummy -- and its bytes are the layer's home copy.
+// sequence's run is 0 -- the dummy -- and its bytes are the layer's host copy.
 // Attention over a history with an evicted prefix streams (pagedstream.go):
 // a pass uploads as many evicted pages as the layer has free ids into them,
 // runs over them, and the passes' partials fold into one. A pass costs a Sync,
@@ -43,7 +43,7 @@ func (kp *kvPool) wrote(rows []pagedRow) {
 
 // evictable is how many more of s's pages can leave in layer l: those wholly
 // below what s has written. A full page is never written again, and the page a
-// call writes into is not full, so no write lands on a page at home.
+// call writes into is not full, so no write lands on a page in host memory.
 func (kp *kvPool) evictable(l *kvLayerPool, s seqID) int {
 	if l.noEvict {
 		return 0
@@ -126,7 +126,7 @@ func (g *devTier) evictableIn(sid uint64, kp *kvPool, l *kvLayerPool) int {
 			}
 		}
 		// Only a page with an id frees one here: a windowed layer's pages
-		// released behind its window go home as nothing.
+		// released behind its window go to host memory as nothing.
 		e := kp.evicted[s]
 		for j := e; j < e+spare; j++ {
 			if l.owned[s][j] != 0 {
@@ -137,7 +137,7 @@ func (g *devTier) evictableIn(sid uint64, kp *kvPool, l *kvLayerPool) int {
 	return n
 }
 
-// evictPage sends s's oldest resident page home in every layer that holds s,
+// evictPage sends s's oldest resident page to host memory in every layer that holds s,
 // freeing one id in each. Callers hold g.mu, between submissions: it waits for
 // every submission in flight first (s may be another session's, stepping),
 // so nothing reads the page and its id is free at once.
@@ -177,7 +177,7 @@ func (g *devTier) evictPage(kp *kvPool, s seqID) error {
 		l.home[s] = append(l.home[s], page)
 		l.owned[s][j] = 0
 		if l.isNamed(id) {
-			l.releaseID(id) // others may hold it: this sequence's view went home
+			l.releaseID(id) // others may hold it: this sequence's view went to host memory
 		} else {
 			l.free = append(l.free, id)
 		}
@@ -193,9 +193,9 @@ func (g *devTier) evictPage(kp *kvPool, s seqID) error {
 	return nil
 }
 
-// evictForRoom sends pages home until layer l has want free ids and one more
+// evictForRoom sends pages to host memory until layer l has want free ids and one more
 // to stream through, and reports whether it did. All or nothing: a shortfall
-// sends nothing home, since pages at home with no room left to stream them
+// sends nothing to host memory, since pages in host memory with no room left to stream them
 // back would refuse every later call rather than this one.
 // Callers hold g.mu, between submissions.
 func (g *devTier) evictForRoom(sid uint64, kp *kvPool, l *kvLayerPool, want int) bool {
@@ -220,7 +220,7 @@ func (g *devTier) evictForRoom(sid uint64, kp *kvPool, l *kvLayerPool, want int)
 }
 
 // streamRoom makes sure every layer the session holds keeps a free id once a
-// call's pages are taken, when anything is at home: streaming needs one.
+// call's pages are taken, when anything is in host memory: streaming needs one.
 func (g *devTier) streamRoom(sid uint64) error {
 	kp := g.kvPages()
 	if len(kp.evicted) == 0 {
@@ -247,19 +247,19 @@ func (g *devTier) streamWidth(l *kvLayerPool, left int) int {
 // rewind tells the pool that sequence s's history now ends at pos: the
 // sequence restarted lower (a State reset and taking a new prompt, a row
 // retired and reused, a rollback), and its positions from pos on are about to
-// be written again. Pages at home past pos are not its history any more, and
+// be written again. Pages in host memory past pos are not its history any more, and
 // a page a call writes into must be on the card, so the evicted prefix comes
 // down to the pages wholly below pos: the page pos lies inside, when it is at
-// home, comes back to the card with its home copy (its rows below pos are
+// in host memory, comes back to the card with its host copy (its rows below pos are
 // still the sequence's), and every page past it is released, as trimSeq
 // releases them, for the call to take fresh. The written mark comes down to
-// pos, so no page about to be written counts as full and goes home.
+// pos, so no page about to be written counts as full and goes to host memory.
 //
 // Left as it was -- the count and the mark were only ever raised -- the rows
-// written into a page at home landed on the dummy, the stream uploaded the old
+// written into a page in host memory landed on the dummy, the stream uploaded the old
 // copy over them, and a layer joining later (pagedMigrate) took a shorter
 // prefix than the count every other layer streams: the index past a layer's
-// home copies in streamDecode.
+// host copies in streamDecode.
 //
 // All or nothing: the one id per layer the page pos lies inside needs is
 // taken first and given back if any layer cannot have it, so a refused call
@@ -331,7 +331,7 @@ func (g *devTier) rewind(sid uint64, kp *kvPool, s seqID, pos int) error {
 	return g.flushTabs()
 }
 
-// forgetFrom drops s's history from page keep on: evicted pages go from home
+// forgetFrom drops s's history from page keep on: evicted pages go from host memory
 // and the counts shrink to match. Callers hold g.mu.
 func (kp *kvPool) forgetFrom(s seqID, keep int) {
 	for _, l := range kp.layers {
@@ -356,7 +356,7 @@ func (kp *kvPool) forgetFrom(s seqID, keep int) {
 }
 
 // residentIDs appends ids' resident entries -- every id but 0, which marks a
-// page at home -- to dst.
+// page in host memory -- to dst.
 func residentIDs(dst, ids []uint32) []uint32 {
 	for _, id := range ids {
 		if id != 0 {

@@ -61,9 +61,9 @@ type SchedulerStats struct {
 	PromptRows, MixedRows, MaxChunk int
 	// MaxSeqs is the most sequences one step carried rows of.
 	MaxSeqs int
-	// RoomHome is the steps whose device had no room for them
-	// (nn.RowsRoomer), so blocks came home before the step.
-	RoomHome int
+	// RoomToCPU is the steps whose device had no room for them
+	// (nn.RowsRoomer), so blocks moved to the CPU device before the step.
+	RoomToCPU int
 }
 
 // SchedulerOption configures a Scheduler (NewScheduler).
@@ -140,7 +140,7 @@ func (sc *Scheduler) Live() int {
 // Stats is what the Steps so far have run.
 func (sc *Scheduler) Stats() SchedulerStats {
 	st := sc.stats
-	st.RoomHome = sc.st.roomHome
+	st.RoomToCPU = sc.st.roomToCPU
 	return st
 }
 

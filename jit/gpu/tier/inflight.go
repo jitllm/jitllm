@@ -110,7 +110,7 @@ func (g *devTier) exclusiveRange(lo, hi int, rag *ragStep, bs *blockScratch) boo
 }
 
 // evictedFor reports that a call of session sid -- or, in a step over several
-// sessions' rows, of any of them -- reads history with pages at home: it
+// sessions' rows, of any of them -- reads history with pages in host memory: it
 // streams them through the pool's free pages (pagedstream.go), which another
 // session's prologue could take, so it runs alone. Callers hold g.mu.
 func (g *devTier) evictedFor(sid uint64, rag *ragStep) bool {

@@ -62,7 +62,7 @@ func (m *Model) encState(j *nn.JIT) *State {
 	n := m.encMaxRows()
 	s := &State{m: m, c: c, lo: 0, hi: m.encBlocks(), maxSeq: n, reqSeq: n, nseq: 1,
 		prof: m.opt.profile, outW: &tensor{}, relocate: true}
-	s.holdHostRuns()
+	s.holdCPURuns()
 	s.enc = &encRun{}
 	s.jit = j
 	// The segment keeps no history: a non-causal block's keys live one call

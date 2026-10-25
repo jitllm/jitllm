@@ -5,7 +5,7 @@ import "fmt"
 // Parking is preemption for a session between tokens: Park gives back what the
 // session holds on the device and, with a store, its sealed host KV pages;
 // Resume takes them back. It is built from the two moves the five principles
-// already gate -- relocation (a block's KV pages and recurrent state come home
+// already gate -- relocation (a block's KV pages and recurrent state move to the CPU
 // from the device and go back with the same answer, SetGPULayers) and KV
 // paging (a sealed page is evicted into the store and faulted back, trim and
 // fault) -- so a parked session resumes byte for byte where it stopped.
@@ -19,7 +19,7 @@ import "fmt"
 
 // ParkStats counts what a Park moved.
 type ParkStats struct {
-	// Blocks is how many blocks came home from the device, KV and state with
+	// Blocks is how many blocks moved from the device to the CPU, KV and state with
 	// them; PagesOut how many host KV pages (a key and a value page each count)
 	// went to the store.
 	Blocks, PagesOut int
@@ -86,7 +86,7 @@ func (s *State) park() (ParkStats, error) {
 }
 
 // Resume undoes Park: every page Park evicted comes back from the store, then
-// the blocks it brought home are offered to the device again, their history
+// the blocks it moved to the CPU are offered to the device again, their history
 // with them. It returns how many pages came back.
 func (s *State) Resume() (int, error) {
 	if !s.parked {

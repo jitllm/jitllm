@@ -3558,7 +3558,7 @@ ASKING WHAT STATE A BLOCK MUTATES BEFORE IT CAN FAIL.**
 CANNOT REACH MID-BLOCK.** `injectedFail()` is the first statement of `Layers`;
 its vocabulary is an ordinal over whole calls. `SetGPULayers(0)` takes the same
 ReleaseLayers path through the same migrate pair and is public API, so
-`TestShrinkingTheSeamBringsTheSummaryHome` runs six tokens with the seam moved
+`TestShrinkingTheSeamMovesTheSummaryToTheCPU` runs six tokens with the seam moved
 in the middle and compares the tail against a pure-host run: **1e-4 with the
 rescue, 8.5e-01 without.** A `phase@block` injector is what the other three
 need and is owed.

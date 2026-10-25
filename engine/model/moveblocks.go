@@ -22,7 +22,7 @@ type BlockMove struct {
 	RecBytes uint64
 	// Path is how the history travelled, the slowest any block took: "peer"
 	// card to card, "staged" through a host buffer the tier holds, "host"
-	// home to this State's cache and up again; "" when there was none.
+	// back to this State's host cache and up again; "" when there was none.
 	Path string
 	// Copied is the bytes the tier copied between the devices (the history
 	// in the devices' own page layout).
@@ -65,7 +65,7 @@ type PendingMove struct {
 // token reads exactly the rows it would have read where it was, and no row of
 // the prompt is computed again. It is the relocation of the Scope's "move
 // layers and pages between them", reachable by a caller rather than only
-// through SetDevice, which brings everything home first.
+// through SetDevice, which moves everything to the CPU first.
 //
 // Between two cards it is PrepareMove and Commit at once: the target is
 // prepared inside the call. A caller that can keep generating meanwhile
@@ -356,8 +356,8 @@ func slowerPath(a, b string) string {
 }
 
 // moveBlockDirect moves block li through the tier: the history is copied from
-// the source's pages to the target's and never comes home. A linear block's
-// summary, a few kilobytes, comes home and goes up as it does on every other
+// the source's pages to the target's and never passes through host memory. A linear block's
+// summary, a few kilobytes, is read back and goes up as it does on every other
 // move. nn.ErrNotDirect changed nothing.
 func (s *State) moveBlockDirect(mover nn.BlockMover, li int, to string, plan *nn.LayerPlan) (string, uint64, bool, error) {
 	if !s.migrateRec(li, false) {
@@ -385,7 +385,7 @@ func (s *State) moveBlockDirect(mover nn.BlockMover, li int, to string, plan *nn
 }
 
 // moveBlockViaHost moves block li to the device named to through this State's
-// own cache: the history comes home (MigrateKV copies, so the source keeps
+// own cache: the history is read back to the State's cache (MigrateKV copies, so the source keeps
 // its rows until the target has them), the target takes the block, which
 // frees it on the source, and the history goes up to the target. False means
 // the target refused the block, which then stays where it was.
@@ -402,7 +402,7 @@ func (s *State) moveBlockViaHost(nd nn.NamedDevice, li int, to string) (bool, er
 		return false, err
 	}
 	if !s.migrateKV(li, s.pos, true) || !s.migrateRec(li, true) {
-		// The weights are on the target with no history; the history is home,
+		// The weights are on the target with no history; the history is in host memory,
 		// so the block runs there instead of attending over empty pages.
 		s.ld.ReleaseLayers(li, li+1)
 		s.unmarkOnDev(li)

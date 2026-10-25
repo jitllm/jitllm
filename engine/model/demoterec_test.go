@@ -7,14 +7,14 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
-// TestShrinkingTheSeamBringsTheSummaryHome: shrinking the seam on a hybrid must
+// TestShrinkingTheSeamMovesTheSummaryToTheCPU: shrinking the seam on a hybrid must
 // bring the recurrent summary home, not free it. A linear block's history is a
 // running summary the host cannot re-derive, so a release that moved only the
 // KV cache would resume the host from a summary that never saw a token (fluent
 // wrong text). SetGPULayers(0) takes the same ReleaseLayers path a demotion
 // does, through migrateKV/migrateRec, without a fault injector. The seam moves
 // mid-run; the tail is compared against a pure-host run.
-func TestShrinkingTheSeamBringsTheSummaryHome(t *testing.T) {
+func TestShrinkingTheSeamMovesTheSummaryToTheCPU(t *testing.T) {
 	defer fusedRunsCheck(t, true)()
 	m := hybridModelOpt(t, hyOpt{moe: true, layers: 8})
 	defer m.Close()

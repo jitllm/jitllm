@@ -856,7 +856,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 							return nil, err
 						}
 						s.ngramUndoRows()
-						if !s.devFallback {
+						if !s.fallsBack() {
 							return nil, errDevice{0, s.devWhy()}
 						}
 						// The host restart re-runs rows 0..i from the
@@ -883,7 +883,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 					li = s.lo - 1
 					continue
 				}
-				if !s.devFallback {
+				if !s.fallsBack() {
 					return nil, errDevice{li, s.devWhy()}
 				}
 				// A hybrid cannot restart: re-running the linear blocks before li
@@ -1018,7 +1018,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 		if err := s.buildRefusal(s.gpuLayers); err != nil {
 			return nil, err
 		}
-		if !s.devFallback {
+		if !s.fallsBack() {
 			return nil, errDevice{s.gpuLayers, s.devWhy()}
 		}
 	}

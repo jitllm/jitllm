@@ -25,7 +25,7 @@ import (
 //     is its own; the first page where two prompts diverge is computed by
 //     each (its key covers the diverging tokens, so it never matches).
 //   - A shared page is never written in place. Every write path (the token's
-//     append, a migration scattering rows home) copies a shared page into a
+//     append, a migration scattering rows into the CPU's cache) copies a shared page into a
 //     private one first and drops its reference: copy-on-write.
 //   - A reference is dropped wherever the session lets a page go (eviction, a
 //     restore's truncation, a window's release, Close), never handed to the

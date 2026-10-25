@@ -559,7 +559,7 @@ type Config struct {
 	// block, so it is an instrument, never a mode to run in.
 	StreamProbe bool
 	// StreamSelLog, when set, is handed every streamed block's selection as it
-	// comes home (block index, the k expert ids in rank order). The slice is
+	// is read back (block index, the k expert ids in rank order). The slice is
 	// reused; copy it to keep it.
 	StreamSelLog func(block int, sel []uint32)
 	// Persist composes each decode block's launches into persistent kernels
@@ -753,7 +753,7 @@ type Stats struct {
 	// it serves -- a decode step, and a prompt chunk with ComposedPrompt --
 	// by part: a block with no graph, or a head or block the serving
 	// conditions leave out (a LayerNorm head, a window, the persistent
-	// block, history at home, a ragged step's rows).
+	// block, history in host memory, a ragged step's rows).
 	PartsDeclined [numParts]int
 	// PartsUnasked counts the steps the composer is asked for no part of
 	// at all, by part: a prompt chunk's rows without ComposedPrompt, a
@@ -776,6 +776,13 @@ type Stats struct {
 	// FormedAtStep counts the parts formed at a step rather than at a
 	// placement or PrepHead: a form a step met first, built inside it.
 	FormedAtStep int
+	// BlockForms counts, by block, the times a device formed the block's
+	// served one-row part (servedFor): the composer's keyed form, compiled
+	// once per Key and shared by blocks of one structure, with the block's
+	// own bindings. A block is formed once on the device that holds it and
+	// once more for each relocation; paging its weights out and in forms
+	// nothing. Summed over the devices.
+	BlockForms []int
 	// ShadowWorst is, per block the composer's form ran beside the tier's own
 	// kernels (Config.ComposedShadow), the worst drift of the form's output
 	// from the tier's over the steps compared: the squared distance between
@@ -1085,10 +1092,10 @@ type Stats struct {
 	// PagedPrefillLaunches counts layer attentions of a prefill chunk that ran
 	// the paged prefill kernels (pagedprefill.go) rather than FlashDecodeKV.
 	PagedPrefillLaunches int
-	// KVEvictions counts pages sent home (kvevict.go), one per layer-page.
+	// KVEvictions counts pages sent to host memory (kvevict.go), one per layer-page.
 	KVEvictions int
 	// KVStageReads counts page reads the card refused a buffer for, which
-	// came home through the pool's reserve (readStaged).
+	// was read back through the pool's reserve (readStaged).
 	KVStageReads int
 	// KVWindowReleased counts a windowed layer's pages released behind its
 	// window (devTier.windowPages), one per layer-page.
@@ -1350,6 +1357,12 @@ func (s *Stats) add(o Stats) {
 		s.DeclineBuilt[i] += o.DeclineBuilt[i]
 	}
 	s.FormedAtStep += o.FormedAtStep
+	if n := len(o.BlockForms); n > len(s.BlockForms) {
+		s.BlockForms = append(s.BlockForms, make([]int, n-len(s.BlockForms))...)
+	}
+	for i, n := range o.BlockForms {
+		s.BlockForms[i] += n
+	}
 	// A block is on one device, so its slot is the only one that is not zero.
 	if n := len(o.ShadowWorst); n > len(s.ShadowWorst) {
 		s.ShadowWorst = append(s.ShadowWorst, make([]float32, n-len(s.ShadowWorst))...)
@@ -1912,7 +1925,7 @@ type devShared struct {
 	recS, recC   int
 	// recNext is the one "next state" buffer the shared form writes, sized
 	// for the widest step that needed it; recCopies holds the CopySlots
-	// kernels that move it home, by slot width and sequence count.
+	// kernels that read it back, by slot width and sequence count.
 	recNext      backend.Buf
 	recNextBytes uint64
 	recCopies    map[[2]int]backend.Kernel
@@ -1990,6 +2003,8 @@ type devShared struct {
 	// or PrepHead is forming them (Stats.FormedAtStep).
 	servedForms map[jit.Key]*partForm
 	prewarming  bool
+	// blockForms is Stats.BlockForms, this device's.
+	blockForms []int
 	// census is Config.Census's count, made at the first step it counts.
 	census   *launchCensus
 	composer *jit.Registry
@@ -2551,6 +2566,7 @@ func (d *devTier) stats() Stats {
 	s.ScratchBytes, s.ReservedPrompt, s.ReservedStep = d.scratch, d.promptW, d.stepW
 	s.TowerRows = d.visCap
 	s.Allocated, s.RoundingBytes = uint64(d.allocated()), d.rounding
+	s.BlockForms = append([]int(nil), d.blockForms...)
 	if d.shadowing() {
 		d.shadowStats(&s)
 	}

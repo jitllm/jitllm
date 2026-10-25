@@ -29,7 +29,7 @@ import (
 // recPool is one linear block's recurrent states for every session on this
 // device: the delta rule's state and the convolution's window, each in two
 // halves of slots slots. In the shared form s[1] is nil and a step writes the
-// device's recNext, which CopySlots moves home.
+// device's recNext, which CopySlots reads back.
 type recPool struct {
 	s, c  [2]backend.Buf
 	slots int
@@ -408,7 +408,7 @@ func (g *devTier) growSeat(sid uint64, rows int) bool {
 			return false
 		}
 	}
-	// The batch's copy home, and a single sequence's for the session's own
+	// The batch's copy back, and a single sequence's for the session's own
 	// decode and prompts.
 	if shared && !(g.ensureRecNext(rows) && g.ensureRecNext(1)) {
 		restore()
@@ -435,7 +435,7 @@ type seatStates map[*layer][2][2]backend.Buf
 
 // readSeat copies st's slots of every pool into buffers of their own on the
 // device, which a rebuild leaves alone: the seat may move, and its states
-// must not come home through the host to follow it. Callers hold g.mu,
+// must not be read back through the host to follow it. Callers hold g.mu,
 // outside a session, and free the result (seatStates.free).
 func (g *devTier) readSeat(st recSeat) (seatStates, error) {
 	out := seatStates{}
@@ -889,7 +889,7 @@ func (g *devTier) prepRecRows(sid uint64, lo, hi int, rs *ragStep) bool {
 			return false
 		}
 	}
-	// recNext holds a next state a run, and the copy home is compiled for the
+	// recNext holds a next state a run, and the copy back is compiled for the
 	// step's row count, which the run descriptor is sized by.
 	return !g.recShared || g.ensureRecNext(len(rs.pos))
 }

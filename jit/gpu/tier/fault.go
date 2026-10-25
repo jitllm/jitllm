@@ -17,7 +17,7 @@ import (
 // Fault injection, compiled in only under the `jitllmfault` build tag.
 //
 // It makes a device fail on demand, which is the only way to exercise the
-// recovery path that brings the KV cache home and finishes on the host. It is
+// recovery path that moves the KV cache to the CPU and finishes on the host. It is
 // a tag rather than a runtime flag so that no release binary can be told to
 // pretend its GPU broke; the untagged build compiles to `return false`.
 //
@@ -174,12 +174,12 @@ func rowsFaulted(f string) bool { return rowsFault == f }
 //	                  clamps the Scheduler's steps to it
 //	"narrow-lie"      the same, and RowsWidth says the requested width fits
 //	"noseat"          no recurrent seat for a batch fits: RowsRoom says so,
-//	                  and the blocks come home before the step
+//	                  and the blocks move to the CPU before the step
 //	"noseat-lie"      the same, and RowsRoom says there is room
 //	"nobuild"         a ragged step's twins do not build: RowsRoom returns
 //	                  the error and the step is refused by name
 //	"nobuild-room"    the same, and RowsRoom reads it as no room, so the
-//	                  blocks come home and the step runs on the host
+//	                  blocks move to the CPU and the step runs on the host
 var roomFault string
 
 // SetRoomFault arms one shortage for the calls after it; "" disarms.

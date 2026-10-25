@@ -7718,7 +7718,7 @@ row where the composer's reads two.
   (the same failure reported as the device failing) must evacuate, which the
   gate demands; `JITLLM_DEVICE_FAIL_AT` still evacuates and is counted a fault
   (`TestDeviceFaultAtDecodeEvacuatesAndIsCounted`,
-  `TestDemotedDevicePrefillFinishesOnTheHost`). A first run of the relocation
+  `TestDemotedDevicePrefillFinishesOnTheCPU`). A first run of the relocation
   set failed 6 tests, all `relocate-then-reclaim`: `RowsRoom` did not clear the
   cause, a compile that an earlier call had refused read as this call's build
   failure, and no block moved; every call a `fits` closure makes now clears it.
@@ -8123,3 +8123,33 @@ row where the composer's reads two.
   its input rows declined by name (the fixture's embedding is not its head's).
   `go build -gcflags=-m` over the four touched packages moves nothing more to
   the heap (247 lines either side).
+- No device is a default where blocks live. `model.WithCPU(listed)` says
+  whether the caller listed the CPU among its devices (`tier.AdmitsHost`:
+  `auto`, or a `-devices` list naming `cpu`); `cmd/jitllm run` and the
+  server's `LoadModel` pass it from the spec. Listed, the engine may choose
+  the CPU as any other device. Not listed, every choice the engine made for
+  the CPU goes to the cards or fails by name: placement marks every block it
+  decides streamed where it is (`State.pageOnCards`, no block released or
+  formed again) and offers the rest, so the model pages through the card's
+  slots; the output projection is taken while a swap keeps its slot
+  (`nn.Head.NoCPU`, the streamed blocks paged out for it); `placeHead`
+  buys no room with a block, a fault does not demote (`fallsBack`),
+  relocation spills only to a later card, a batch with no room and a
+  batch's rows that do not fit are the step's error, and the stream trial
+  and the seam tuner, whose arms run on the CPU, do not start. The server's
+  orchestrator takes a victim only from a model whose devices list the CPU
+  (its gate's fixture now lists it). A caller's own move to the CPU is
+  honoured either way. The placement's CPU is spelled `cpu` (`host` read as
+  its older spelling), the CPU-run accounting is `cpuRuns`, the relocation
+  to the CPU `relocateToCPU`, the batch counter `RoomToCPU`, and ten test
+  names lost "home" and "on the host". `TestBlocksPageOnTheListedCard`:
+  Llama-3.2-1B on one V100 card at three fifths of its weights (459 MiB),
+  the CPU unlisted, holds 16 of 16 blocks and the head on the card at every
+  step, 124 page-ins on cuda:0 and 126 on vulkan:2, the resident control's
+  greedy token at every step (worst logit 0 on cuda:0, 0.469 on vulkan:2),
+  and each block formed once on the card in the composed build
+  (`tier.Stats.BlockForms`, 144 page-ins) and once more after a caller's move
+  to the CPU and back; a 1 MiB card fails `SetDevice` naming every block.
+  Its violations: the CPU listed spills 7 blocks (13 composed) and the check
+  names them, and the first form of `pageOnCards`, which released the
+  resident blocks and offered them again streamed, formed blocks 0-7 twice.
