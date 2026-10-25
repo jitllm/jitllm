@@ -127,9 +127,11 @@ func mainBlock() []uint32 {
 }
 
 // mainArgs is main's host argument block: Out, W, A, AScale, Rows, K, Scr,
-// Q32, and the paired kernels' Out2, Q2 and AScale2.
+// Q32, and the paired kernels' Out2, Q2 and AScale2; a call's coordinates
+// in Cols and OutStr.
 func mainArgs() ArgFields {
-	return ArgFields{Out: []int{0, 120}, Weight: 8, Act: 16, Query: 112, Second: map[int]int{0: 120, 112: 128, 24: 136}, Consts: 56, In: []int{24, 136, 104, 64}, Vectors: 40, Tail: 32, Counts: []int{32, 40}}
+	return ArgFields{Out: []int{0, 120}, Weight: 8, Act: 16, Query: 112, Second: map[int]int{0: 120, 112: 128, 24: 136}, Consts: 56, In: []int{24, 136, 104, 64}, Vectors: 40, Tail: 32, Counts: []int{32, 40},
+		Coords: []int{80, 88}}
 }
 
 // mainSampleArgs is main's convention for a sample part's words: the

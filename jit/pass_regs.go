@@ -209,6 +209,13 @@ func (b *binder86) lives() {
 			}
 			for _, a := range k.Operands(&nd) {
 				use(*a, pos, hs[e.I])
+				// A load its reader takes as a memory operand reads its
+				// index where the reader runs, not where the load sits.
+				if x := &k.Nodes[*a]; x.Op == OpLoad && x.Mem {
+					for _, ix := range k.Operands(x) {
+						use(*ix, pos, hs[e.I])
+					}
+				}
 			}
 		case EntryStore:
 			s := k.Stores[e.I]
@@ -636,7 +643,7 @@ func (b *binder86) evict(freed map[int]int, i int) int {
 func (b *binder86) evictAt(freed map[int]int, pos int) int {
 	v, last := -1, -1
 	for x := range freed {
-		if l := b.last[x]; l > pos && l > last {
+		if l := b.last[x]; l > pos && (l > last || l == last && x < v) {
 			v, last = x, l
 		}
 	}

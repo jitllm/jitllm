@@ -54,9 +54,11 @@ type Kernel struct {
 
 // Arg is the call's argument word at byte offset Field: the address of
 // buffer Buf, offset by the buffer's Offset, or where Buf is -1 the value
-// of node Node-1, a count of the call computed by the caller.
+// of node Node-1, a count of the call computed by the caller. Coord, where
+// set, is 1 + the axis of the calls' space whose coordinate the word is.
 type Arg struct {
 	Field, Buf, Node int
+	Coord            int
 }
 
 // Entry is one entry of a kernel's sequence: node I, store I, the start of

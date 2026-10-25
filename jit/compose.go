@@ -59,6 +59,10 @@ type Code struct {
 	Groups int
 	// Args is a host call's argument words.
 	Args []CallArg
+	// Calls is a host kernel's calls' space, the outermost first: the
+	// kernel runs once at each of its coordinates, any order, each call's
+	// own passed in the words its Args say. Empty is one call.
+	Calls []int
 }
 
 // Writes reports whether the kernel writes operand o.
@@ -87,6 +91,9 @@ type CallArg struct {
 	Value   bool
 	Length  bool
 	Extent  int
+	// Coord, where set, is 1 + the axis of Calls whose coordinate the word
+	// is, set for each call.
+	Coord int
 }
 
 // Binding is a buffer a kernel binds: its operand and whether the kernel
@@ -285,6 +292,9 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 			continue
 		}
 		c := Code{Name: k.Name, Passes: k.Passes, Lowered: l, Groups: k.groups()}
+		if l.CPU != nil && !k.Work && k.Group <= 0 {
+			c.Calls = append([]int(nil), k.Space...)
+		}
 		for _, a := range k.Args {
 			if a.Buf >= 0 {
 				b := k.Bufs[a.Buf]
@@ -297,6 +307,10 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 					}
 				}
 				c.Args = append(c.Args, ca)
+				continue
+			}
+			if a.Coord > 0 {
+				c.Args = append(c.Args, CallArg{Field: a.Field, Value: true, Coord: a.Coord})
 				continue
 			}
 			nd := k.Nodes[a.Node-1]

@@ -40,6 +40,11 @@ type ArgFields struct {
 	In            []int
 	Vectors, Tail int
 	Counts        []int
+	// Coords, where set, are the words each axis of a kernel's calls'
+	// space passes its coordinate in, the outermost first, and the kernel
+	// addresses every buffer from the address it is given with the whole of
+	// its indices: no offset is the caller's but a constant one.
+	Coords []int
 }
 
 func (Args) Name() string { return "args" }
@@ -54,6 +59,9 @@ func (p Args) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if pf, ok := p.Parts[k.Part]; ok {
 			f = pf
 		}
+		if err := m.bindCoords(f); err != nil {
+			return nil, false, err
+		}
 		m.bindCounts(f)
 		m.bindBufs(f)
 		if err := m.oneBufferAField(); err != nil {
@@ -61,6 +69,35 @@ func (p Args) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		}
 		return []*Kernel{m}, true, nil
 	})
+}
+
+// bindCoords makes each coordinate of the calls' space the kernel still
+// reads a word the caller passes: a kernel whose space has more axes than
+// the device has words for is refused.
+func (k *Kernel) bindCoords(f ArgFields) error {
+	if f.Coords == nil {
+		return nil
+	}
+	bound := map[int]int{}
+	for i := range k.Nodes {
+		nd := k.Nodes[i]
+		if nd.Op != OpCoord {
+			continue
+		}
+		if nd.A >= len(k.Space) || nd.A >= len(f.Coords) {
+			return fmt.Errorf("%s reads coordinate %d of a calls' space of %d axes, where the device passes %d", k.Name, nd.A, len(k.Space), len(f.Coords))
+		}
+		if k.Space[nd.A] == 1 {
+			k.Nodes[i] = Node{Op: OpConst, Type: ir.U32}
+			continue
+		}
+		if _, ok := bound[nd.A]; !ok {
+			bound[nd.A] = i
+			k.Args = append(k.Args, Arg{Field: f.Coords[nd.A], Buf: -1, Node: i + 1, Coord: nd.A + 1})
+		}
+		k.Nodes[i] = Node{Op: OpParam, Type: ir.U32, Imm: int64(f.Coords[nd.A])}
+	}
+	return nil
 }
 
 // oneBufferAField refuses a kernel whose argument words give one field to two
@@ -117,6 +154,11 @@ func (k *Kernel) bindCounts(f ArgFields) {
 		{
 			ln := k.lengthIn(n)
 			if ln < 0 && k.computedFrom(n, OpParam) {
+				continue
+			}
+			// Where the kernel addresses whole indices it counts what it
+			// loads itself: a count made from a table's words is its own.
+			if ln < 0 && f.Coords != nil && k.computedFrom(n, OpLoad) {
 				continue
 			}
 			if ln < 0 {
@@ -217,7 +259,7 @@ func (k *Kernel) bindBufs(f ArgFields) {
 	}
 	offsets := map[Operand]int{}
 	for _, o := range order {
-		offsets[o] = k.split(byOp[o])
+		offsets[o] = k.split(byOp[o], f.Coords != nil)
 	}
 	code := k.Live()
 	var kept []Operand
@@ -339,7 +381,9 @@ func (k *Kernel) firstBuf(o Operand) int {
 // split moves the part of the accesses' indices no loop moves, and the
 // least constant they share, into an offset the caller adds, 1 + its node
 // (0 for none); each access is left a flat index from the buffer's address.
-func (k *Kernel) split(as []access) int {
+// Where whole is set only the least constant is moved: the kernel computes
+// the rest itself.
+func (k *Kernel) split(as []access, whole bool) int {
 	g := newAlg(k)
 	ls := make([]lin, len(as))
 	for i, a := range as {
@@ -353,7 +397,7 @@ func (k *Kernel) split(as []access) int {
 	}
 	fixed := lin{}
 	for m, v := range ls[0] {
-		if m != "" && g.still(lin{m: 1}) {
+		if m != "" && !whole && g.still(lin{m: 1}) {
 			fixed[m] = v
 		}
 	}
