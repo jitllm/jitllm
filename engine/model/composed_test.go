@@ -63,7 +63,7 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 	"newarch/OLMo-2-0425-1B-Instruct-Q4_K_M.gguf", "newarch/EXAONE-4.0-1.2B-Q4_K_M.gguf", "newarch/AFM-4.5B-Q4_K_M.gguf",
 	"granite/granite-3.3-2b-instruct-Q4_K_M.gguf", "granite/granite-4.0-micro-Q4_K_M.gguf",
 	"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf", "Phi-3.5-mini-instruct-Q4_K_M.gguf",
-	"gemma-3-1b-it-Q4_K_M.gguf"}
+	"gemma-3-1b-it-Q4_K_M.gguf", "gemma-3-4b-it-Q4_K_M.gguf"}
 
 // headDeclined is why the tier still declines a served model's head where it
 // does, by its name (tier.DeclineName): a head graph past the norm and the
@@ -75,9 +75,9 @@ var headDeclined = map[string]string{
 }
 
 // formedModels is what the front end states and the serving gate does not
-// run: gemma-2-2b and gemma-3-4b, whose decodes past their windows (4160 and
-// 1088 steps) the gate has not finished on both backends; a model the tier
-// cannot place (stories260K's 172-wide rows, which its
+// run: gemma-2-2b, whose decode past its window (4160 steps) the gate has
+// not finished on Vulkan; a model the tier cannot place (stories260K's
+// 172-wide rows, which its
 // quantizer refuses), float fixtures whose composed logits equal the float
 // reference's, which the gate's band cannot measure, and rnj-1, whose
 // composed blocks reach 0.19 from the float reference on CUDA at its 43rd
@@ -90,7 +90,7 @@ var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1
 	"stories260K.gguf", "synth-ernie45.gguf", "synth-phi4v.gguf", "synth-seedoss.gguf", "synth-smollm3.gguf",
 	"synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "newarch/synth-olmo2-q8.gguf", "synth-arcee.gguf", "synth-exaone4.gguf",
 	"synth-olmo3.gguf", "synth-phi3", "synth-glm4.gguf", "rnj/EssentialAI_rnj-1-instruct-Q4_K_M.gguf",
-	"gemma-2-2b-it-Q4_K_M.gguf", "gemma-3-4b-it-Q4_K_M.gguf"}
+	"gemma-2-2b-it-Q4_K_M.gguf"}
 
 // composedResidue is what the tier still launches of its own on a one-row
 // step whose blocks and head the composer serves: the rotary table.
