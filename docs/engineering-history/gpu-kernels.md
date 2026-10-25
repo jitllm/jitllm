@@ -7004,10 +7004,10 @@ row where the composer's reads two.
   1.046 and 1.099; the worst steps are 0.0177 and 0.0321, against the bound of
   0.059. gemma-3-4b, 1088 steps, each backend in a run of its own, reads
   1.006 and 1.022, worst 0.0123 and 0.0063, against bounds of 0.070 and
-  0.021. gemma-2-2b, 4160 steps past its 4096 window, forms; its Vulkan
-  float reference alone runs past an hour at that length, so it has not
-  finished the gate. The paged fault
-  gate pins its arms to the tier's kernels, whose violations it holds: in a
+  0.021. gemma-2-2b, 4160 steps (70 past its 4096 window), each backend in a
+  run of its own, reads 0.978 and 1.003, worst 0.057 and 0.045, against
+  bounds of 0.21 and 0.23. Its final-softcap head is held to its named
+  decline, as granite's is. The paged fault gate pins its arms to the tier's kernels, whose violations it holds: in a
   jitllmcomposed build eight of its ten cases had read 0.000e+00, since the
   composer served the decode they break. The cost estimator prices a
   windowed attention over its whole history, an upper bound, because a step
