@@ -83,7 +83,7 @@ func (k *Kernel) cse() bool {
 		}
 	}
 	seen := map[string]int{}
-	changed := false
+	same := map[int]int{}
 	for i := range k.Nodes {
 		nd := k.Nodes[i]
 		switch nd.Op {
@@ -94,9 +94,15 @@ func (k *Kernel) cse() bool {
 				continue
 			}
 		}
+		// The operands as the merges so far leave them, which are swept
+		// into the kernel once, at the end.
 		var ops []int
 		for _, a := range k.Operands(&nd) {
-			ops = append(ops, *a)
+			o := *a
+			if j, ok := same[o]; ok {
+				o = j
+			}
+			ops = append(ops, o)
 		}
 		key := fmt.Sprint(nd.Op, nd.Type, ops, nd.At, nd.Buf, nd.Imm)
 		if nd.Op == OpConst || nd.Op == OpCoord || nd.Op == OpParam || nd.Op == OpLength || nd.Op == OpSpan {
@@ -106,13 +112,80 @@ func (k *Kernel) cse() bool {
 			key = fmt.Sprint(nd.Op, nd.At)
 		}
 		if j, ok := seen[key]; ok {
-			k.redirectAll(i, j)
-			changed = true
+			same[i] = j
 			continue
 		}
 		seen[key] = i
 	}
-	return changed
+	k.redirectMany(same)
+	return len(same) > 0
+}
+
+// redirectMany is redirectAll for each node of same, to the node it maps to,
+// in one sweep: a kernel of two hundred thousand nodes with as many
+// duplicates read every node once per duplicate.
+func (k *Kernel) redirectMany(same map[int]int) {
+	if len(same) == 0 {
+		return
+	}
+	node := func(x *int) {
+		if j, ok := same[*x]; ok {
+			*x = j
+		}
+	}
+	// A reference that is one past its node, zero for none.
+	next := func(x *int) {
+		if j, ok := same[*x-1]; ok && *x > 0 {
+			*x = j + 1
+		}
+	}
+	for i := range k.Nodes {
+		for _, p := range k.Operands(&k.Nodes[i]) {
+			node(p)
+		}
+	}
+	for i := range k.Stores {
+		if k.Stores[i].Barrier || k.Stores[i].Run {
+			continue
+		}
+		for _, p := range k.storeArgs(&k.Stores[i]) {
+			node(p)
+		}
+	}
+	for i := range k.Loops {
+		l := &k.Loops[i]
+		next(&l.Count)
+		next(&l.Span)
+		next(&l.Elem)
+		next(&l.End)
+	}
+	next(&k.Rows)
+	next(&k.Clamp)
+	for i := range k.Bufs {
+		next(&k.Bufs[i].Base)
+		next(&k.Bufs[i].Offset)
+		for j := range k.Bufs[i].Dims {
+			next(&k.Bufs[i].Dims[j])
+		}
+	}
+	for i := range k.Args {
+		next(&k.Args[i].Node)
+	}
+	if p := k.Positions; p != nil {
+		q := *p
+		node(&q.First)
+		node(&q.End)
+		q.Live = append([]int(nil), p.Live...)
+		q.Pos = append([]int(nil), p.Pos...)
+		for _, xs := range [][]int{q.Live, q.Pos} {
+			for j := range xs {
+				node(&xs[j])
+			}
+		}
+		next(&q.Span)
+		next(&q.Part)
+		k.Positions = &q
+	}
 }
 
 // redirectAll points every reader of node from at node to: nodes, stores,
