@@ -172,10 +172,20 @@ func (k *Kernel) vectorize(c, L int, carry []int, quads bool, quadRegs []int) {
 		step := k.Nodes[f].A
 		sub[f] = ft
 		k.Nodes[ft].A = k.copyKeep(step, sub)
-		if st := &k.Nodes[k.Nodes[ft].A]; st.Op == OpAdd && st.A == ft && !k.zeroKept(st.B, t) {
-			term := st.B
-			st.B = k.add(Node{Op: OpFirstLane, Type: ir.F32, A: term, B: k.add(Node{Op: OpConst, Type: ir.F32})})
-			kept[term] = st.B
+		si := k.Nodes[ft].A
+		if st := k.Nodes[si]; st.Op == OpAdd && st.A == ft && !k.zeroKept(st.B, t) {
+			v := k.firstLane(st.B)
+			k.Nodes[si].B = v
+			kept[st.B] = v
+		} else if st.Op == OpFma && st.C == ft && !k.zeroKept(st.A, t) && !k.zeroKept(st.B, t) {
+			// A product's factors kept to the first lane: the others' are
+			// zero, so the product adds nothing there.
+			a := k.firstLane(st.A)
+			b := a
+			if st.B != st.A {
+				b = k.firstLane(st.B)
+			}
+			k.Nodes[si].A, k.Nodes[si].B = a, b
 		}
 		h := k.add(Node{Op: OpHSum, Type: k.Nodes[f].Type, A: ft})
 		hs := k.Homes()
@@ -243,6 +253,12 @@ func (k *Kernel) vectorize(c, L int, carry []int, quads bool, quadRegs []int) {
 		hi := Store{Buf: a.Buf, At: c, Ix: k.bin(OpAdd, U, a.Ix, k.u32(L)), Val: k.add(Node{Op: OpZip, Type: ir.F32, A: a.Val, B: b.Val, Imm: 1})}
 		k.Stores[pair[0]], k.Stores[pair[1]] = lo, hi
 	}
+}
+
+// firstLane is node x in the first lane and zero in the others.
+func (k *Kernel) firstLane(x int) int {
+	z := k.add(Node{Op: OpConst, Type: ir.F32})
+	return k.add(Node{Op: OpFirstLane, Type: ir.F32, A: x, B: z})
 }
 
 // zeroKept reports whether node i is zero in the lanes past the first

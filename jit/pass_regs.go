@@ -86,6 +86,8 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			w.residents(p.Resident, moved)
 		}
 		late := w.lateParams()
+		sunk := map[int]bool{}
+		var why error
 		for range len(k.Nodes) {
 			m := w.clone()
 			b := binder86{k: m, p: p, used: map[int]bool{}, late: late, isa: x86.ISA(d.ISA)}
@@ -96,25 +98,28 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				m = w.clone()
 				b = binder86{k: m, p: p, used: map[int]bool{}, late: late, spill: true, isa: x86.ISA(d.ISA)}
 				b.lives()
-				if b.gprs() != nil {
-					return nil, false, nil
+				if err := b.gprs(); err != nil {
+					return nil, false, fmt.Errorf("%s: the words do not fit the general registers: %w", k.Name, err)
 				}
 			}
-			if b.vectors() == nil {
+			if why = b.vectors(); why == nil {
 				return []*Kernel{m}, true, nil
 			}
 			if m.Ones > 0 {
 				// Again with the byte dots making their ones each time.
 				b.noOnes = true
-				if b.vectors() == nil {
+				if why = b.vectors(); why == nil {
 					return []*Kernel{m}, true, nil
 				}
 			}
-			if !w.rematerialize(moved) {
-				return nil, false, nil
+			if !w.rematerialize(moved) && !w.sink(sunk) {
+				break
 			}
 		}
-		return nil, false, nil
+		if why == nil {
+			why = errors.New("no binding within a rematerialization per node")
+		}
+		return nil, false, fmt.Errorf("%s: the floats do not fit the vector registers: %w", k.Name, why)
 	})
 }
 
@@ -525,6 +530,9 @@ func (b *binder86) gprs() error {
 		if passes && k.vectorTail(c) {
 			copies := map[int]bool{}
 			for _, d := range []int{c, l.Of - 1} {
+				if d < 0 {
+					continue
+				}
 				for _, cu := range k.Loops[d].Cursors {
 					if cu.Ptr > 0 && k.Ptrs[cu.Ptr-1].Reg > 0 {
 						copies[k.Ptrs[cu.Ptr-1].Reg-1] = true
@@ -747,9 +755,10 @@ func (k *Kernel) needsVector(i int) bool {
 	return k.VectorWords()[i]
 }
 
-// vectorized reports whether any loop of k runs in vector lanes. A kernel
-// none of whose loops does keeps its integers in general registers: an
-// index, a weight's word and what is made from them.
+// vectorized reports whether any loop of k runs in vector lanes, or any
+// value is a byte dot, which only vector lanes make. A kernel of neither
+// keeps its integers in general registers: an index, a weight's word and
+// what is made from them.
 func (k *Kernel) vectorized() bool {
 	for _, l := range k.Loops {
 		if l.Lanes > 0 || l.Wide > 0 {
@@ -757,7 +766,7 @@ func (k *Kernel) vectorized() bool {
 		}
 	}
 	for _, nd := range k.Nodes {
-		if nd.Op == OpLanes {
+		if nd.Op == OpLanes || nd.Op.byteDot() {
 			return true
 		}
 	}
@@ -1091,7 +1100,7 @@ func (b *binder86) vectors() error {
 				want = lowest(chain[i], hs[i])
 			}
 			if depth[pos] == 0 && nd.Op == OpLoad && inner[want] && k.readInLoop(i) {
-				return errors.New("a constant held across the loops on a register a loop's value is hinted to")
+				return fmt.Errorf("a constant held across the loops on a register a loop's value is hinted to (node %d, register %d, hint %d)", i, want, nd.Hint)
 			}
 			reg = want
 		} else if r, ok := b.resident(i); ok {
@@ -1368,6 +1377,7 @@ func (k *Kernel) copyRegs(cp []int, splats int) error {
 		}
 	}
 	tw := k.twins(cp)
+	var aside []int
 	for i := range k.Nodes {
 		if cp[i] == 0 || !k.needsVector(i) {
 			continue
@@ -1388,12 +1398,54 @@ func (k *Kernel) copyRegs(cp []int, splats int) error {
 			k.Nodes[i].Reg = r
 			continue
 		}
+		if k.Nodes[t].Hint > 0 {
+			// The twin's register is its hint, not the first head's run of
+			// registers: the copy takes one no value takes.
+			aside = append(aside, i)
+			continue
+		}
 		k.Nodes[i].Reg = k.Nodes[t].Reg + cp[i]*n
 		if k.Nodes[t].Tmp > 0 {
 			k.Nodes[i].Tmp = k.Nodes[t].Tmp + cp[i]*n
 		}
 		if k.Nodes[i].Reg > 16-splats || k.Nodes[i].Tmp > 16-splats {
 			return errors.New("a pair's heads take more vector registers than there are")
+		}
+	}
+	taken := make([]bool, 16)
+	if k.Ones > 0 {
+		taken[k.Ones-1] = true
+	}
+	for i, nd := range k.Nodes {
+		if !k.needsVector(i) {
+			continue
+		}
+		for _, r := range []int{nd.Reg, nd.Tmp, nd.Tmp2} {
+			if r > 0 && r <= len(taken) {
+				taken[r-1] = true
+			}
+		}
+	}
+	// From the top down: the low registers are the ones passes take as
+	// scratch for an operation's code (Exp's).
+	free := func() int {
+		for r := 16 - splats - 1; r >= 0; r-- {
+			if !taken[r] {
+				taken[r] = true
+				return r + 1
+			}
+		}
+		return 0
+	}
+	for _, i := range aside {
+		t := tw[i]
+		if k.Nodes[i].Reg = free(); k.Nodes[i].Reg == 0 {
+			return errors.New("a pair's heads take more vector registers than there are")
+		}
+		if k.Nodes[t].Tmp > 0 {
+			if k.Nodes[i].Tmp = free(); k.Nodes[i].Tmp == 0 {
+				return errors.New("a pair's heads take more vector registers than there are")
+			}
 		}
 	}
 	return nil
@@ -1465,31 +1517,148 @@ func (k *Kernel) rematerialize(moved map[int]bool) bool {
 		}
 		return out
 	}
-	best, at := -1, -1
-	for i, nd := range k.Nodes {
-		p, in := pos[i]
-		if o := k.Bufs[nd.Buf].Operand.Kind; !in || moved[i] || nd.Op != OpLoad || o != OperandConsts && k.Bufs[nd.Buf].Words == nil || hs[i] >= 0 {
-			continue
-		}
-		rs := readers(i)
-		ok := len(rs) > 0
-		first := -1
-		for _, r := range rs {
-			if hs[r] < 0 {
-				ok = false
+	pick := func(outside bool) int {
+		best, at := -1, -1
+		for i, nd := range k.Nodes {
+			p, in := pos[i]
+			if o := k.Bufs[nd.Buf].Operand.Kind; !in || moved[i] || nd.Op != OpLoad || o != OperandConsts && k.Bufs[nd.Buf].Words == nil || hs[i] >= 0 {
+				continue
 			}
-			if rp := pos[r]; first < 0 || rp < first {
-				first = rp
+			rs := readers(i)
+			ok := len(rs) > 0
+			first := -1
+			for _, r := range rs {
+				if hs[r] < 0 && !outside {
+					ok = false
+				}
+				if rp := pos[r]; first < 0 || rp < first {
+					first = rp
+				}
+			}
+			if ok && first > p && (at < 0 || first > at) {
+				best, at = i, first
 			}
 		}
-		if ok && first > p && (at < 0 || first > at) {
-			best, at = i, first
-		}
+		return best
+	}
+	// A constant read outside every loop -- by a tail of one trip run
+	// without its loop, or by a kernel of no loops -- is loaded where each
+	// reader reads it once none read only in the loops is left.
+	best := pick(false)
+	if best < 0 {
+		best = pick(true)
 	}
 	if best < 0 {
 		return false
 	}
 	k.reload(best, moved)
+	return true
+}
+
+// sink moves a vector value made in a run of straight code long before its
+// one reader, with what only it reads, to just before the reader: the
+// floats made between then hold no register for it. The value with the
+// most vector values between it and its reader moves first; false where
+// none is left. A paired kernel's statements stand beside their twins and
+// stay.
+func (k *Kernel) sink(sunk map[int]bool) bool {
+	for _, c := range k.copies() {
+		if c > 0 {
+			return false
+		}
+	}
+	pos := map[int]int{}
+	for p, e := range k.Seq {
+		if e.Kind == EntryNode {
+			pos[e.I] = p
+		}
+	}
+	readers := map[int][]int{}
+	for j := range k.Nodes {
+		if _, in := pos[j]; !in {
+			continue
+		}
+		for _, a := range k.Operands(&k.Nodes[j]) {
+			if _, in := pos[*a]; in && !slices.Contains(readers[*a], j) {
+				readers[*a] = append(readers[*a], j)
+			}
+		}
+	}
+	for i := range k.Stores {
+		for _, a := range k.storeArgs(&k.Stores[i]) {
+			readers[*a] = append(readers[*a], -1)
+		}
+	}
+	straight := func(from, to int) bool {
+		for q := from + 1; q < to; q++ {
+			if k.Seq[q].Kind != EntryNode {
+				return false
+			}
+		}
+		return true
+	}
+	movable := func(i int) bool {
+		nd := k.Nodes[i]
+		return nd.Op != OpFold && nd.Op != OpConst && nd.Share == 0 && nd.Spill == 0
+	}
+	best, gap, to := -1, 0, 0
+	for p, e := range k.Seq {
+		x := e.I
+		if e.Kind != EntryNode || sunk[x] || !movable(x) || !k.needsVector(x) || len(readers[x]) != 1 || readers[x][0] < 0 {
+			continue
+		}
+		rp := pos[readers[x][0]]
+		if rp <= p+1 || !straight(p, rp) {
+			continue
+		}
+		n := 0
+		for q := p + 1; q < rp; q++ {
+			if k.needsVector(k.Seq[q].I) {
+				n++
+			}
+		}
+		if n > gap {
+			best, gap, to = x, n, rp
+		}
+	}
+	if best < 0 {
+		return false
+	}
+	sunk[best] = true
+	group := map[int]bool{best: true}
+	for grew := true; grew; {
+		grew = false
+		for i := range group {
+			for _, a := range k.Operands(&k.Nodes[i]) {
+				x := *a
+				if group[x] || !movable(x) || pos[x] >= to {
+					continue
+				}
+				if _, in := pos[x]; !in || !straight(pos[x], pos[best]) {
+					continue
+				}
+				only := true
+				for _, r := range readers[x] {
+					only = only && r >= 0 && group[r]
+				}
+				if only {
+					group[x], grew = true, true
+				}
+			}
+		}
+	}
+	var out, moving []Entry
+	for p, e := range k.Seq {
+		if p == to {
+			out = append(out, moving...)
+		}
+		if e.Kind == EntryNode && group[e.I] {
+			moving = append(moving, e)
+			continue
+		}
+		out = append(out, e)
+	}
+	k.Seq = out
 	return true
 }
 

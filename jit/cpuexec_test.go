@@ -21,10 +21,10 @@ import (
 // TestComposedCPUMatVec executes the composer's lone matvec on the CPU: each
 // kernel it forms mapped by cpu.Map and called through the trampoline with
 // its arguments where its call words say, every packed type at one and four
-// tokens, held to the oracle. What does not form is the CPU's work list,
-// named; what forms must be right, and with its weight's words moved by one
-// it must not be. The int8 arm is held to the oracle over the row as the
-// int8 form quantizes it, the float arm to the oracle over the row.
+// tokens, held to the oracle. Every shape must form and be right, and with
+// its weight's words moved by one it must not be. The int8 arm is held to
+// the oracle over the row as the int8 form quantizes it, the float arm to
+// the oracle over the row.
 func TestComposedCPUMatVec(t *testing.T) {
 	const rows, k = 64, 256
 	rng := rand.New(rand.NewSource(5))
@@ -108,7 +108,7 @@ func TestComposedCPUMatVec(t *testing.T) {
 		}
 	}
 	for name, why := range unformed {
-		t.Logf("work list: %s: %s", name, why)
+		t.Errorf("%s does not form on the CPU: %s", name, why)
 	}
 	t.Logf("%d formed and right, %d formed and wrong, %d not formed", right, wrong, len(unformed))
 	if right == 0 {

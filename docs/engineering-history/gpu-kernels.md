@@ -7810,3 +7810,52 @@ row where the composer's reads two.
   graph states; a prompt chunk's gather, the tier's; a promise of a row the
   head's device is not block 0's device makes real at home with the tier's
   gather (GPU.embedRows), as a decode across two cards does.
+- **The CPU device's lowering: every work list of jit's CPU gates at zero.**
+  The register pass declined silently (`Regs` returned the kernel unbound and
+  the x86 lowering failed later on "node N has no register", or nothing lowered
+  it at all); it now refuses by name ("the floats do not fit the vector
+  registers: ..."), which exposed the declines it had hidden, each fixed at its
+  cause. (1) `Cursors` gave a scope's own accesses their displacement from where
+  the scope started while a loop beside them advanced the buffer's own
+  register: a flattened one-trip tail read 8 elements past (the RMS norm at
+  widths 9, 65, 257 was NMSE 2e-2 to 1.5e-1). A loop that moves the pointer in a
+  scope with its own accesses now moves a copy. (2) `Vectorize` kept an add's
+  tail term to lane 0 but not an fma's, so a LayerNorm's (x - mean)^2 tail added
+  mean^2 in seven lanes: every ragged width was wrong (NMSE 3e-2 to 9e-1, 150
+  shapes); the fma's factors are now kept to lane 0. (3) `removeLoop` cut a
+  tail's tie to the vector loop it took trips of when an unrolled loop of no
+  trips went, and the binding indexed loop -1 (a panic at width 15); the
+  family now passes to the loop the removed one took trips of, or its first
+  member. (4) A constant read by a flattened tail or a kernel of no loops was
+  never rematerialized (the one-axis rotary table at 9, 17 and 129 pairs, the
+  exact reciprocal on a device without exact division); such constants are now
+  reloaded where read once none read only in loops is left. (5) A kernel with
+  byte dots and no vector loop kept its integers in general registers, where no
+  byte dot is ("a byte dot outside vector lanes": 30 of 36 three-token int8
+  ternary shapes); a byte dot now makes a kernel vectorized. (6) `Simplify`
+  folds and, shl and shr of constants (a one-row ternary matvec held an index
+  of constants in no register). (7) When nothing is left to rematerialize, the
+  binding sinks a vector value with one reader, and what only it reads, to just
+  before that reader within straight code (Q4_K at four tokens, int8: eight
+  weight words were live across the byte-dot chain). (8) A pair of query heads
+  read the history twice where their kv head is one: (2h+1)/r and 2h/r are now
+  one node for a constant r the pair's factor divides (`sameQuotient`, shifts
+  and quotients), so the second head's load is the first's and has a twin
+  ("a pair's later head with no twin" refused 20 of the front test's models on
+  the CPU, and engine/cost's placement test); and a copy whose twin's register
+  is a hint, not the first head's run, takes a register no value takes rather
+  than hint + n, which overflowed and could alias. Numbers on the laptop
+  (i9-12900HK, AVX2 and VNNI): `TestComposedCPUMatVec` 70 of 72 to 72 of 72
+  formed and right (the float, int8 and int8-without-VNNI arms, at one and four
+  tokens); `TestComposedCPULayerNorm` 206 of 230 controls right and 150 shapes
+  on the work list to 230 of 230 RMS norms and 230 LayerNorms right, the gate
+  now asserting every width; `TestComposedTernaryMatVecPerToken` 40 shapes not
+  formed to none, 72 of 72 right in each arm; the rotary gate gains one-axis
+  tables at 9, 17 and 129 pairs, each main's table to the bit. All three gates
+  now fail on a shape that does not form. engine/cost passes with the register
+  pass refusing by name, as do the CPU forms of the 20 front-test models it
+  had refused. On the Xeon E5-2680 v4 (AVX2, no VNNI): the jit CPU gates (48 of
+  48 matvec shapes), the rotary table's CPU arm and the engine/model CPU gates
+  pass. Escape analysis of jit: 146 moved-to-heap lines before and after, the
+  same set. Open: the pairs' kernels now form on the CPU device but no gate
+  executes an attention kernel there; that is the runner's work.

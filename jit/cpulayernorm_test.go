@@ -49,13 +49,10 @@ func rowsNMSE(got, want []float32) float64 {
 // norm of the same shape lands far from the oracle, and with the scale's or
 // the bias's words moved by one the kernel is wrong too: the gate sees both.
 //
-// The CPU's own RMS norm is the control of every shape: where it is not right
-// against the oracle's RMS norm, the shape is the CPU composer's work list
-// (its norm does not form there, or reads a row's sum wrong), named with its
-// numbers, and says nothing of the LayerNorm. Where the control is right the
-// LayerNorm must be, at one element and at a whole number of vectors; at a
-// ragged width the CPU's LayerNorm is the work list too (see the comment on
-// the check), listed with its numbers.
+// The CPU's own RMS norm is the control of every shape and must be right
+// against the oracle's RMS norm; the LayerNorm must be right at every width,
+// a whole number of vectors, a ragged one, a tail of one element or one
+// element alone.
 func TestComposedCPULayerNorm(t *testing.T) {
 	const eps, guard = 1e-5, 64
 	rng := rand.New(rand.NewSource(13))
@@ -77,8 +74,7 @@ func TestComposedCPULayerNorm(t *testing.T) {
 	}
 	rotated := func(v []float32) []float32 { return append(append([]float32(nil), v[1:]...), v[0]) }
 	nan := float32(math.NaN())
-	right, raggedRight, controlled, wrong := 0, 0, 0, 0
-	workList := map[string]string{}
+	right, controlled, wrong := 0, 0, 0
 	for _, bias := range []bool{false, true} {
 		for _, rows := range []int{1, 2, 3, 8, 9} {
 			for _, w := range []int{1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 100, 255, 256, 257, 1000, 4544} {
@@ -120,16 +116,16 @@ func TestComposedCPULayerNorm(t *testing.T) {
 				}
 				rmsCodes, err := form(rb.G, rows)
 				if err != nil {
-					workList[name] = "the RMS norm does not form: " + err.Error()
+					t.Errorf("%s: the RMS norm does not form: %v", name, err)
 					continue
 				}
 				rmsGot, err := run(rmsCodes, scale, nil)
 				if err != nil {
-					workList[name] = "the RMS norm does not run: " + err.Error()
+					t.Errorf("%s: the RMS norm does not run: %v", name, err)
 					continue
 				}
 				if e := rowsNMSE(rmsGot, rmsWant); math.IsNaN(e) || !(e < 1e-9) {
-					workList[name] = fmt.Sprintf("the RMS norm is wrong here: NMSE %.3e", e)
+					t.Errorf("%s: the RMS norm is NMSE %.3e from the oracle's", name, e)
 					continue
 				}
 				controlled++
@@ -155,18 +151,6 @@ func TestComposedCPULayerNorm(t *testing.T) {
 				e := math.NaN()
 				if err == nil {
 					e = rowsNMSE(got, want)
-				}
-				// A width that is not a whole number of vectors takes the
-				// scalar tail of the fused reduce-then-map kernel, which reads
-				// the LayerNorm wrong where the RMS norm's is right: the CPU
-				// composer's work list, not asserted until it is fixed.
-				if w > 1 && w%dev.Lanes != 0 {
-					if err != nil || !(e < 1e-9) {
-						workList[name] = fmt.Sprintf("the LayerNorm of a ragged width is wrong on the CPU where the RMS norm is right: NMSE %.3e %v", e, err)
-					} else {
-						raggedRight++
-					}
-					continue
 				}
 				if err != nil {
 					wrong++
@@ -202,11 +186,7 @@ func TestComposedCPULayerNorm(t *testing.T) {
 			}
 		}
 	}
-	for name, why := range workList {
-		t.Logf("work list: %s: %s", name, why)
-	}
-	t.Logf("%d shapes where the CPU's RMS norm is right: %d LayerNorms right at whole vectors or one element, %d wrong, %d right at a ragged width; %d shapes are the CPU composer's work list",
-		controlled, right, wrong, raggedRight, len(workList))
+	t.Logf("%d shapes where the CPU's RMS norm is right: %d LayerNorms right, %d wrong", controlled, right, wrong)
 	if right == 0 {
 		t.Fatal("no LayerNorm was held to the oracle on the CPU: this gate proved nothing")
 	}

@@ -83,9 +83,8 @@ func perRowWant(t *testing.T, typ quant.Type, w []byte, x []float32, rows, k, wi
 // take the integer path (its codes packed into words) and the decoded arm
 // must not, and three violations must fail: the weight's words moved by one,
 // the reference over 32-wide windows rather than the row, and the reference
-// rounding the codes half to even. A shape the CPU's lowering does not emit
-// is its work list, named; what forms must be right. The device's form
-// (TestComposedGPUTernaryPerToken, jit) forms every shape.
+// rounding the codes half to even. Every shape must form on the CPU, as the
+// device's form (TestComposedGPUTernaryPerToken, jit) forms every shape.
 func TestComposedTernaryMatVecPerToken(t *testing.T) {
 	rng := rand.New(rand.NewSource(11))
 	int8Reg := jit.Default()
@@ -192,7 +191,7 @@ func TestComposedTernaryMatVecPerToken(t *testing.T) {
 		}
 	}
 	for name, why := range unformed {
-		t.Logf("work list: %s: %s", name, why)
+		t.Errorf("%s does not form on the CPU: %s", name, why)
 	}
 	t.Logf("formed, right and seeing the violations: %v, the rounding at %v; %d not formed", right, evens, len(unformed))
 	for _, arm := range arms {

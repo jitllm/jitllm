@@ -2,6 +2,7 @@ package jit
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/jitllm/jitllm/jit/ir"
 )
@@ -304,6 +305,9 @@ func (k *Kernel) foldDecided() bool {
 				to(i, a)
 			} else if x, ok := k.multipleOf(a, b); ok {
 				to(i, x)
+			} else if m := k.Nodes[b]; m.Op == OpConst && m.Imm > 0 && nd.Type == ir.U32 && k.sameQuotient(a, m.Imm) >= 0 {
+				k.Nodes[i].A = k.sameQuotient(a, m.Imm)
+				changed = true
 			} else if n, ok := k.powerOfTwo(b); ok && nd.Type == ir.U32 {
 				// An unsigned quotient by 2^n is a shift by n.
 				k.Nodes[i] = Node{Op: OpShr, Type: ir.U32, A: a, B: k.u32(n)}
@@ -324,10 +328,35 @@ func (k *Kernel) foldDecided() bool {
 				k.Nodes[i] = x
 				changed = true
 			}
+		case OpAnd:
+			if k.isConst(a, 0) || k.isConst(b, 0) {
+				k.Nodes[i] = Node{Op: OpConst, Type: nd.Type}
+				changed = true
+			} else if ca, cb := k.Nodes[a], k.Nodes[b]; ca.Op == OpConst && cb.Op == OpConst {
+				k.Nodes[i] = Node{Op: OpConst, Type: nd.Type, Imm: int64(uint32(ca.Imm) & uint32(cb.Imm))}
+				changed = true
+			}
+		case OpShl:
+			if ca, cb := k.Nodes[a], k.Nodes[b]; ca.Op == OpConst && cb.Op == OpConst && cb.Imm >= 0 && cb.Imm < 32 {
+				k.Nodes[i] = Node{Op: OpConst, Type: nd.Type, Imm: int64(uint32(ca.Imm) << cb.Imm)}
+				changed = true
+			}
 		case OpShr:
-			if x := k.Nodes[a]; x.Op == OpShr && k.Nodes[x.B].Op == OpConst && k.Nodes[b].Op == OpConst {
+			if ca, cb := k.Nodes[a], k.Nodes[b]; ca.Op == OpConst && cb.Op == OpConst && cb.Imm >= 0 && cb.Imm < 32 {
+				k.Nodes[i] = Node{Op: OpConst, Type: nd.Type, Imm: int64(uint32(ca.Imm) >> cb.Imm)}
+				changed = true
+			} else if x := k.Nodes[a]; x.Op == OpShr && k.Nodes[x.B].Op == OpConst && k.Nodes[b].Op == OpConst {
 				k.Nodes[i] = Node{Op: OpShr, Type: nd.Type, A: x.A, B: k.u32(int(k.Nodes[x.B].Imm + k.Nodes[b].Imm))}
 				changed = true
+			} else if n := k.Nodes[b]; n.Op == OpConst && nd.Type == ir.U32 && n.Imm > 0 && n.Imm < 32 {
+				// (x*2^n + c) >> n is x where c is below 2^n, as the quotient
+				// is.
+				if x, ok := k.multipleOfImm(a, 1<<n.Imm); ok {
+					to(i, x)
+				} else if y := k.sameQuotient(a, 1<<n.Imm); y >= 0 {
+					k.Nodes[i].A = y
+					changed = true
+				}
 			}
 		case OpRem:
 			if k.isConst(b, 1) || k.isConst(a, 0) {
@@ -407,7 +436,8 @@ func (k *Kernel) dropUnitLoops() bool {
 }
 
 // removeLoop deletes loop c: its stores and inner loops move to its parent,
-// later loops' indices close up.
+// later loops' indices close up, and the loops that took trips of it take
+// them of the loop c took its own of, or else of the first of them.
 func (k *Kernel) removeLoop(c int) {
 	parent := k.Loops[c].Parent
 	re := func(x int) int {
@@ -419,11 +449,18 @@ func (k *Kernel) removeLoop(c int) {
 		}
 		return x
 	}
+	heir := k.Loops[c].Of - 1
+	if heir < 0 {
+		heir = slices.IndexFunc(k.Loops, func(l Loop) bool { return l.Of == c+1 })
+	}
 	for i := range k.Loops {
 		k.Loops[i].Parent = re(k.Loops[i].Parent)
 		if of := k.Loops[i].Of; of > 0 {
 			if of-1 == c {
 				k.Loops[i].Of = 0
+				if heir >= 0 && heir != i {
+					k.Loops[i].Of = re(heir) + 1
+				}
 			} else {
 				k.Loops[i].Of = re(of-1) + 1
 			}
@@ -489,6 +526,40 @@ func (k *Kernel) dropEmptyLoops() bool {
 	return false
 }
 
+// sameQuotient is y where node a is y + c, y a multiple of a constant g
+// that divides m and c a constant below g: no multiple of m lies past y up
+// to y + c, so a / m is y / m; -1 where a is not.
+func (k *Kernel) sameQuotient(a int, m int64) int {
+	nd := k.Nodes[a]
+	if nd.Op != OpAdd {
+		return -1
+	}
+	c := k.Nodes[nd.B]
+	if g := k.factor(nd.A); c.Op != OpConst || c.Imm <= 0 || g <= c.Imm || m%g != 0 {
+		return -1
+	}
+	return nd.A
+}
+
+// factor is a constant that node i's integer is a known multiple of: a
+// product's constant, 2^n for a shift left by n; 1 where none is known.
+func (k *Kernel) factor(i int) int64 {
+	nd := k.Nodes[i]
+	switch nd.Op {
+	case OpMul:
+		for _, c := range []int{nd.A, nd.B} {
+			if x := k.Nodes[c]; x.Op == OpConst && x.Imm > 0 {
+				return x.Imm
+			}
+		}
+	case OpShl:
+		if x := k.Nodes[nd.B]; x.Op == OpConst && x.Imm > 0 && x.Imm < 32 {
+			return 1 << x.Imm
+		}
+	}
+	return 1
+}
+
 // multipleOf is x where node a is x*m + j, m node b's constant and j a
 // constant below it: what a divided by m is.
 func (k *Kernel) multipleOf(a, b int) (int, bool) {
@@ -496,14 +567,19 @@ func (k *Kernel) multipleOf(a, b int) (int, bool) {
 	if mb.Op != OpConst || mb.Imm <= 0 {
 		return 0, false
 	}
+	return k.multipleOfImm(a, mb.Imm)
+}
+
+// multipleOfImm is multipleOf by the integer m.
+func (k *Kernel) multipleOfImm(a int, m int64) (int, bool) {
 	nd := k.Nodes[a]
 	j := int64(0)
 	if nd.Op == OpAdd {
-		if c := k.Nodes[nd.B]; c.Op == OpConst && c.Imm >= 0 && c.Imm < mb.Imm {
+		if c := k.Nodes[nd.B]; c.Op == OpConst && c.Imm >= 0 && c.Imm < m {
 			j, nd = c.Imm, k.Nodes[nd.A]
 		}
 	}
-	if nd.Op == OpMul && k.isConst(nd.B, mb.Imm) && j < mb.Imm {
+	if nd.Op == OpMul && k.isConst(nd.B, m) && j < m {
 		return nd.A, true
 	}
 	return 0, false

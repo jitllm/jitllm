@@ -126,10 +126,12 @@ func (cu *cursorer) in(a, c int) bool {
 func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (lin, bool) {
 	k, g := cu.k, cu.g
 	at := copyLin(pos)
+	direct := false
 	for j, a := range as {
 		if cu.as[a].home != p {
 			continue
 		}
+		direct = true
 		// A fresh copy is taken as the scope's first loop starts: an
 		// access the scope makes itself would read it before then.
 		if fresh {
@@ -195,7 +197,9 @@ func (cu *cursorer) walk(p, ptr int, fresh bool, pos lin, as []int, ix []lin) (l
 		}
 		after := g.merged(addLin(at, g.times(trips, step)))
 		q, take := ptr, fresh
-		aside := !fresh && (k.Loops[c].Walk || cu.laterNeeds(loops[li+1:], as, ix, after))
+		// The scope's own accesses stand where it started, wherever they
+		// run among its loops: a loop that moves the pointer moves a copy.
+		aside := !fresh && (k.Loops[c].Walk || direct && len(g.merged(g.times(trips, step))) > 0 || cu.laterNeeds(loops[li+1:], as, ix, after))
 		if passes {
 			aside = false
 			if family(c) != pass {

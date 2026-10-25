@@ -63,7 +63,7 @@ func composedRopeAxes(t *testing.T, run ropeRunner, rows int, exact bool) {
 		sections    [4]int
 		interleaved bool
 	}{
-		{pairs: 1}, {pairs: 7}, {pairs: 64},
+		{pairs: 1}, {pairs: 7}, {pairs: 9}, {pairs: 17}, {pairs: 64}, {pairs: 129},
 		{pairs: 64, sections: [4]int{16, 24, 24, 0}},
 		{pairs: 13, sections: [4]int{3, 5, 4, 1}},
 		{pairs: 9, sections: [4]int{0, 2, 7, 0}},
