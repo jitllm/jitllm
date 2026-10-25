@@ -313,34 +313,21 @@ func (g *devTier) materializeLocked(pe *embPend) {
 	if bs == nil || bs.head == nil || !g.embedKernel(bs) {
 		return
 	}
-	r, kern, ib := bs.head, bs.embK, bs.embIds
-	n := len(pe.ids)
 	if bs.embOut == nil {
-		b, err := g.dev.Alloc(batchWidth * r.k * 4)
+		b, err := g.dev.Alloc(batchWidth * bs.head.k * 4)
 		if err != nil {
 			g.LastErr = err.Error()
 			return
 		}
 		bs.embOut = b
 	}
-	ob := bs.embOut
-	var err error
-	g.dev.Session(func(s backend.Session) {
-		g.subBytes.embIDs = embIDs(g.subBytes.embIDs, pe.ids, batchWidth, r.nrows)
-		if err = s.Write(ib, g.subBytes.embIDs); err != nil {
-			return
-		}
-		threads := kernels.GetRowsThreads(r.t, r.k, n)
-		if err = s.Launch(kern, (threads+127)/128, 128, r.qs, r.d, r.sc, ib, ob); err != nil {
-			return
-		}
-		err = s.Read(ob, f32b(pe.dst[:n*r.k]))
-	})
-	if err != nil {
-		g.LastErr = err.Error()
-		return
+	rd := &g.embRd
+	if rd.gatherFn == nil {
+		rd.gatherFn = g.gatherSession
 	}
-	g.EmbedLaunches++
+	if g.readBack(pe, nil, rd.gatherFn) {
+		g.EmbedLaunches++
+	}
 }
 
 // materializeComposed is materializeLocked for the composer's promise: its
@@ -351,14 +338,13 @@ func (g *devTier) materializeLocked(pe *embPend) {
 func (g *devTier) materializeComposed(pe *embPend) {
 	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
 	bs := g.bs
-	n := len(pe.ids)
 	if bs == nil || bs.embedServes() != partServes || !g.embedBufs(bs) {
 		g.LastErr = "the composer's input rows were promised and are no longer held"
 		return
 	}
-	k, R := bs.embW.k, g.embedRowsAt(bs, n)
+	R := g.embedRowsAt(bs, len(pe.ids))
 	if bs.embCast == nil {
-		b, err := g.dev.Alloc(batchWidth * k * 4)
+		b, err := g.dev.Alloc(batchWidth * bs.embW.k * 4)
 		if err != nil {
 			g.LastErr = err.Error()
 			return
@@ -370,27 +356,86 @@ func (g *devTier) materializeComposed(pe *embPend) {
 		g.LastErr = "the composed input rows: " + err.Error()
 		return
 	}
-	tok, pos := g.embedWords(pe, R)
-	g.dev.Session(func(s backend.Session) {
-		if err = s.Write(bs.embTok, tok); err != nil {
-			return
-		}
-		if bs.posW != nil {
-			if err = s.Write(bs.embPos, pos); err != nil {
-				return
-			}
-		}
-		g.embTo.s = s
-		defer func() { g.embTo.s = nil }()
-		lc := &launcher{to: &g.embTo, err: &err}
-		if err = sv.runAs(g, lc, sv.inst, pe.kind, nil, []backend.Buf{bs.embCast}); err != nil {
-			return
-		}
-		err = s.Read(bs.embCast, f32b(pe.dst[:n*k]))
-	})
+	rd := &g.embRd
+	rd.tok, rd.pos = g.embedWords(pe, R)
+	if rd.composedFn == nil {
+		rd.composedFn = g.composedSession
+	}
+	g.readBack(pe, sv, rd.composedFn)
+}
+
+// embRead is a promised gather made real in a submission of its own: what
+// its session reads, and the session bodies, bound once. A closure over the
+// call's locals, and the error it set, were heap objects a call -- a token's
+// worth where the head is on another card than block 0's.
+type embRead struct {
+	pe       *embPend
+	sv       *servedPart
+	tok, pos []byte
+	err      error
+	lc       launcher
+
+	gatherFn, composedFn func(backend.Session)
+}
+
+// readBack runs fn, one of embRead's session bodies, over the promise pe
+// and, for the composer's, its form sv, and reports whether the rows came
+// back.
+func (g *devTier) readBack(pe *embPend, sv *servedPart, fn func(backend.Session)) bool {
+	rd := &g.embRd
+	rd.pe, rd.sv, rd.err = pe, sv, nil
+	rd.lc = launcher{to: &g.embTo, err: &rd.err}
+	g.dev.Session(fn)
+	err := rd.err
+	rd.pe, rd.sv, rd.err = nil, nil, nil
 	if err != nil {
 		g.LastErr = err.Error()
+		return false
 	}
+	g.EmbedReadBacks++
+	return true
+}
+
+// gatherSession is materializeLocked's submission: the tier's gather from
+// the tied head, and the rows read back.
+func (g *devTier) gatherSession(s backend.Session) {
+	rd, bs := &g.embRd, g.bs
+	r, pe := bs.head, rd.pe
+	n := len(pe.ids)
+	g.subBytes.embIDs = embIDs(g.subBytes.embIDs, pe.ids, batchWidth, r.nrows)
+	if rd.err = s.Write(bs.embIds, g.subBytes.embIDs); rd.err != nil {
+		return
+	}
+	g.embTo.s = s
+	defer g.embTo.leave()
+	threads := kernels.GetRowsThreads(r.t, r.k, n)
+	if rd.err = rd.lc.issue(bs.embK, (threads+127)/128, 128, r.qs, r.d, r.sc, bs.embIds, bs.embOut); rd.err != nil {
+		return
+	}
+	rd.err = s.Read(bs.embOut, f32b(pe.dst[:n*r.k]))
+}
+
+// composedSession is materializeComposed's submission: the composer's form
+// of the input rows, and the rows read back.
+func (g *devTier) composedSession(s backend.Session) {
+	rd, bs := &g.embRd, g.bs
+	pe, sv := rd.pe, rd.sv
+	if rd.err = s.Write(bs.embTok, rd.tok); rd.err != nil {
+		return
+	}
+	if bs.posW != nil {
+		if rd.err = s.Write(bs.embPos, rd.pos); rd.err != nil {
+			return
+		}
+	}
+	g.embTo.s = s
+	defer g.embTo.leave()
+	out := [1]backend.Buf{bs.embCast}
+	if err := sv.runAs(g, &rd.lc, sv.inst, pe.kind, nil, out[:]); err != nil {
+		rd.err = err
+		return
+	}
+	rd.err = s.Read(bs.embCast, f32b(pe.dst[:len(pe.ids)*bs.embW.k]))
 }
 
 // embIDs is the first rows entries of the id buffer: the promised ids, then

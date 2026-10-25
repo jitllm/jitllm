@@ -142,6 +142,38 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 					decodeAllocs(t, mc, nil)
 				})
 			}
+			// The head on one device and the blocks on another, every part
+			// composed: each token's input row is gathered on the head's device
+			// and read back, and block 0's device uploads it as the residual
+			// crosses (tier's materializeComposed). Two physical cards where
+			// JITLLM_TEST_DEVICES names them.
+			if name == "Llama-3.2-1B-Instruct-Q4_K_M.gguf" {
+				t.Run("two-device", func(t *testing.T) {
+					d := testdevices.Take(t, 2, "cuda:0,vulkan:1")
+					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(d[0] + "," + d[1]),
+						tier.WithConfig(func(c *tier.Config) { c.Composed = tier.ComposedStep })}, testTierOpts(t)...)...)
+					if err != nil || g == nil {
+						noDevice(t, d[0]+","+d[1], err)
+					}
+					defer g.Close()
+					m2, err := Open(jlmOf(t, p), noTune, resident, WithStreamTrial(false),
+						WithPlacement(Placement{Rest: &Place{On: d[1]}, Head: &Place{On: d[0]}}))
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer m2.Close()
+					r0 := g.Stats()
+					decodeAllocs(t, m2, g)
+					st := g.Stats()
+					backs := st.EmbedReadBacks - r0.EmbedReadBacks
+					n, _, _ := st.ServedPart(tier.ComposedEmbed)
+					if backs < 64 || n < 64 {
+						t.Fatalf("%d rows read back and %d composed on %s for blocks on %s: the arm did not cross devices (%s)",
+							backs, n, d[0], d[1], declinesOf(st))
+					}
+					t.Logf("%d rows gathered on %s and read back for blocks on %s", backs, d[0], d[1])
+				})
+			}
 			// The stream trial pinned off with the tuners: it migrates blocks
 			// between its runs, and a migration's page-ins are not a decode.
 			m, err := Open(jlmOf(t, p), noTune, resident, WithStreamTrial(false))

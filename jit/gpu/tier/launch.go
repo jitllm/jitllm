@@ -102,6 +102,9 @@ type launchTo struct {
 	census *launchCensus
 }
 
+// leave drops the session once its submission is done.
+func (t *launchTo) leave() { t.s = nil }
+
 // la is the ordinary launch: threads in groups of 128, nothing once the
 // submission has failed.
 func (l *launcher) la(k backend.Kernel, threads int, bufs ...backend.Buf) {

@@ -1201,6 +1201,10 @@ type Stats struct {
 	// the tied head (EmbedRows) -- the selection check that the host lookup
 	// was actually skipped.
 	EmbedLaunches int
+	// EmbedReadBacks counts promised rows gathered in a submission of their
+	// own and read back (materializeLocked): a head on another card than
+	// block 0's hands its rows over this way.
+	EmbedReadBacks int
 	// HeadFolds counts batched chunks that ran the output projection on
 	// their last row inside their own submission.
 	HeadFolds int
@@ -1563,6 +1567,7 @@ func (s *Stats) add(o Stats) {
 	s.RagForms += o.RagForms
 	s.PagedPrefillPasses += o.PagedPrefillPasses
 	s.EmbedLaunches += o.EmbedLaunches
+	s.EmbedReadBacks += o.EmbedReadBacks
 	s.HeadFolds += o.HeadFolds
 	s.TowerChunked += o.TowerChunked
 	s.TowerPhases += o.TowerPhases
@@ -2014,6 +2019,7 @@ type devShared struct {
 	// embTo is the composer's gather made real on its own
 	// (materializeComposed).
 	embTo     launchTo
+	embRd     embRead
 	mvPart    backend.Buf
 	mvPartCap int
 	used      uint64
