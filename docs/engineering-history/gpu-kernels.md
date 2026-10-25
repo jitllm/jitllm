@@ -7859,3 +7859,71 @@ row where the composer's reads two.
   pass. Escape analysis of jit: 146 moved-to-heap lines before and after, the
   same set. Open: the pairs' kernels now form on the CPU device but no gate
   executes an attention kernel there; that is the runner's work.
+- **A projection over a chunk's rows runs in row tiles.** At R rows a
+  projection was one naive sum an output element, and once its elements
+  filled the device no split took it; the late unrolled fuse
+  (`Fuse{Reduce→Map, Unrolled}`) then wrote every trip of it into the map
+  that read it, the SiLU's or a rotary's: single kernels of 25,071 ops in the
+  int8 form and 17,675 to 103,666 in the float form of a Llama-3.2-1B block
+  from 32 and 64 rows on. A pass on the naive nest, `RowTiles`
+  (`jit/pass_rowtiles.go`, after the int8 dot's fuse and before `Threads`),
+  cuts the leading axis of a sum over a weight matrix into tiles of T rows,
+  T the most rows, a power of two dividing R and at most 16, that leave the
+  launch four warps a multiprocessor (`Device.Units` times its lanes, or
+  30,720 threads where the device states no multiprocessors, as Vulkan
+  does): a thread is one tile's outputs at one column, the nodes that do not
+  depend on the row (the weight's loads and decode) made once a trip and read
+  by every row of the tile, each row its own fold and store. A tiled kernel
+  has T stores, so neither a split nor the unrolled fuse takes it, and its
+  ops grow with T, never with R. A one-row kernel never tiles: the lowered
+  kernels of the 25 served models at one row (both device statements, int8
+  and float, SPIR-V and PTX) hash the same before and after. Coarsen's memo
+  printed each unit's value with fmt to name a coordinate; at 512 rows that
+  was 8.3 s of the 9.1 s a block took to form, and the key is now the units'
+  words (the same equivalence: the forms of three models at 1 and 64 rows are
+  byte for byte the same). One Llama-3.2-1B block, int8 form, on the V100
+  CUDA statement, before → after: 1 row 4,195 ops (120 KB SPIR-V, 150 KB PTX)
+  unchanged; 32 rows 5,563 → 6,684 ops (143 → 193 KB, 181 → 241 KB);
+  64 rows 34,104 → 6,986 (1.08 MB → 208 KB, 1.37 MB → 257 KB); 128, 256 and
+  512 rows 7,701, 7,879 and 8,291 ops after (238 to 261 KB SPIR-V, 294 to
+  324 KB PTX), the largest kernel 2,347 ops, an attention kernel the same at
+  every R. The float form: 32 rows 21,920 → 4,724 ops (612 → 121 KB SPIR-V),
+  64 rows 142,976 → 4,795 (3.8 MB → 123 KB, 5.2 MB → 157 KB PTX), 5,131 at
+  512. On a V100 (card 3) with the drivers' caches off, compiling the block
+  takes 0.55 to 0.93 s on cuda:0 and 0.64 to 1.69 s on vulkan:3 at every R
+  from 1 to 512, in either form; before, the int8 form took 2 min 16 s at 64
+  rows on cuda:0 and 1 min 37 s to 1 min 45 s at 128 to 512, and 11 min 55 s
+  at 32 rows on vulkan:3, where no split takes the 25,071-op kernel even
+  there (the rest of the base Vulkan rows were not run). Forming on the
+  V100's host is 0.2 s at one row to 3.1 s at 512 (16.2 s before, 12.9 s
+  with the tiles before the key change). Gates: `TestRowTilesHoldTheOps`
+  (jit) forms a Llama-shaped MLP over Q4_K, Q6_K and Q8_0 at 1 to 512 rows
+  on both statements, every projection
+  tiled from 128 rows, none at one, no kernel past 1,000 ops and the largest
+  within 1% from 128 to 512 rows; with the pass off the float form at 32 rows
+  reads 17,675 and fails. `TestComposedGPURowTiles` runs a 2048-by-256
+  projection at 1, 3, 32 and 256 rows over F32, Q8_0, Q3_K, Q4_K, Q5_K and
+  Q6_K, int8 and float, on CUDA and Vulkan (the laptop's and the V100's):
+  48 forms each, 24 tiled, every row under NMSE 1e-9 from the oracle with
+  guard words after the output, and the weight's words or the input's rows
+  moved by one each fail. Llama-3.2-1B, tinyllama (Q3_K), Qwen2-1.5B and
+  Qwen3-1.7B join `promptModels`: on cuda:0 and vulkan:3 every arm of
+  `TestComposedBlocksServe` passes, every block step of the prompt served,
+  none declined (Llama's median ratio 1.047 and 1.031, tinyllama's 1.241 and
+  0.948). `TestPrefillMatchesForward/device` adds tinyllama's arms; its
+  composed last rows read 1.77e-3 (Llama) and 3.2e-4 (tinyllama) on CUDA,
+  2.11e-3 and 2.1e-4 on Vulkan. `TestPlacedPromptsCompileNothing` passes, its
+  composed-prompt arm placing in 20 s (64 s with the tiles alone);
+  `TestDecodeDoesNotAllocate` on Llama passes every arm, the composed arms
+  with ComposedPrompt on CUDA and Vulkan; the jit package's 22 tests pass on
+  the V100. `go build -gcflags=-m` over jit adds one heap move, a pass's
+  node copy at form time (the idiom of 60 others). Placement of
+  Llama-3.2-1B at the default width of 512, with the drivers' caches off, is
+  still minutes: 2 min 1 s on cuda:0 and 3 min 11 s on vulkan:3 with the
+  blocks, the head and the prompt served, against 44 s and 1 min 42 s for the
+  tier's own kernels and 41 s and 1 min 51 s with the blocks and head alone.
+  A CPU profile of the CUDA arms names what remains: every warmed width forms
+  and compiles each distinct block's form (16 widths), forming 45 s of which
+  Coarsen's per-unit values (linear in the rows) are 33 s, compiling the
+  forms 43 s; and the tier's own per-width prompt kernels are still compiled
+  beside them, about 40 s, where the composer serves the prompt.
