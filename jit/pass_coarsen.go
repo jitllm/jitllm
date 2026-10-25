@@ -1,6 +1,7 @@
 package jit
 
 import (
+	bin "encoding/binary"
 	"fmt"
 
 	"github.com/jitllm/jitllm/jit/ir"
@@ -359,7 +360,7 @@ func (k *coarse) read(n *Kernel, i int, nd Node, coords []int) (int, bool) {
 	if s, ok := k.hostVal[o]; ok && nd.Ax != nil && len(nd.Ax) == len(s.Ax) {
 		// One element, read by a window's amax and again by its code, is
 		// one value: its place named as produce names a member's.
-		key := fmt.Sprintf("host %d %v", s.Val, k.keys(nd.Ax))
+		key := k.key(fmt.Sprintf("host %d", s.Val), nd.Ax)
 		if v, ok := k.memo[key]; ok {
 			return v, true
 		}
@@ -434,20 +435,24 @@ func alike(a *Kernel, x int, b *Kernel, y int) bool {
 	return true
 }
 
-// keys names each coordinate by its value: a coordinate that is a function
-// of the thread's unit alone, by its value at every unit, so two
-// expressions of one value -- (4u+j)/32 for each j of a unit's four
-// elements -- are one; any other by its node.
-func (k *coarse) keys(coords []int) []string {
-	out := make([]string, len(coords))
-	for i, c := range coords {
+// key names a value at coords after prefix, each coordinate by its value:
+// a coordinate that is a function of the thread's unit alone, by its value
+// at every unit, so two expressions of one value -- (4u+j)/32 for each j of
+// a unit's four elements -- are one; any other by its node. The values are
+// the units' words, not their text: a chunk's rows make thousands of units.
+func (k *coarse) key(prefix string, coords []int) string {
+	b := append([]byte(prefix), '|')
+	for _, c := range coords {
 		if v, ok := k.value(c); ok {
-			out[i] = fmt.Sprint(v)
+			b = append(b, 'v')
+			for _, x := range v {
+				b = bin.LittleEndian.AppendUint32(b, x)
+			}
 			continue
 		}
-		out[i] = fmt.Sprint("n", c)
+		b = bin.AppendUvarint(append(b, 'n'), uint64(c))
 	}
-	return out
+	return string(b)
 }
 
 // value is node i of the formed kernel at each of the T units, or false
@@ -517,7 +522,7 @@ func (k *coarse) value(i int) ([]uint32, bool) {
 
 // produce is member n's value stored by s at its coordinates coords.
 func (k *coarse) produce(n *Kernel, s Store, coords []int) int {
-	key := fmt.Sprintf("%p %d %v", n, s.Val, k.keys(coords))
+	key := k.key(fmt.Sprintf("%p %d", n, s.Val), coords)
 	g := k.E / n.Elements()
 	if n.Kind == PrimReduce && g > k.c.Unit {
 		key = fmt.Sprintf("%p %d", n, s.Val)
