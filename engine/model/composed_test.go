@@ -208,15 +208,13 @@ var composedResidue []string
 const bandRatio, bandWorst = 1.5, 4.0
 
 // promptModels are the served models whose prompt the gate has the composer
-// serve too, at the chunk's rows (ComposedPrompt): three Q8_0 models, and
+// serve too, at the chunk's rows (ComposedPrompt): three Q8_0 models, the
+// k-quant Llama-3.2-1B, tinyllama (Q3_K), Qwen2-1.5B and Qwen3-1.7B, whose
+// projections at a chunk's rows run in row tiles (jit.RowTiles), and
 // gemma-3-1b, whose sliding layers' chunk reads the windowed descriptors.
-// The others' prompts run the tier's kernels: their k-quant projections at a
-// chunk's rows are single kernels of tens of thousands of ops, and a Vulkan
-// driver compiles the float form of a 32-row Llama-3.2-1B block (2.7 MB of
-// SPIR-V) for longer than the gate's two hours. Open until the row forms
-// take the tiled projections.
 var promptModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "SmolLM2-360M-Instruct-Q8_0.gguf",
-	"gemma-3-1b-it-Q4_K_M.gguf"}
+	"gemma-3-1b-it-Q4_K_M.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "tinyllama-1.1b-q3_K_M.gguf",
+	"Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf"}
 
 // TestComposedBlocksServe decodes dense models with each block served whole
 // by the composer from its graph (the model's front end's, from the
