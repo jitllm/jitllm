@@ -154,6 +154,8 @@ func recFaulted(f string) bool { return recFault == f }
 //	           alone: every other row's logits are another step's
 //	"foldrow"  the composed folded head reads the chunk's first row, not
 //	           its last
+//	"nohidden" the composed head is the graph that writes the logits
+//	           alone: the hidden readback reads normed rows nothing wrote
 //	"swatab"   a step's local layers are handed the global rotary table
 //	           (csSWA is cs), the shape of the table a rows step once
 //	           never passed; it reaches the logits only where the device

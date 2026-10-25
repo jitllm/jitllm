@@ -107,6 +107,8 @@ type frontSet struct {
 	why         []Uncovered
 	errs        []error
 	head, embed *graph.Graph
+	// headHidden is head writing the norm's rows too (nn.Head.HiddenGraph).
+	headHidden *graph.Graph
 	// tables are the step's rotary tables, the model's rotary's then its
 	// sliding layers', as jit.Front states them (nil for one that turns
 	// nothing); sample is the step's greedy sampling of the head's logits.
@@ -239,7 +241,10 @@ func (m *Model) frontGraphs() *frontSet {
 	for li := range n {
 		s.blocks[li], s.why[li], s.errs[li] = m.blockGraph(li)
 	}
-	s.head, s.headWhy, s.headErr = m.headGraph()
+	s.head, s.headWhy, s.headErr = m.headGraph(false)
+	if s.head != nil {
+		s.headHidden, _, _ = m.headGraph(true)
+	}
 	s.embed, s.embedWhy, s.embedErr = m.embedGraph()
 	for i, r := range (composing{m.container, m}).Rotaries() {
 		var t *graph.Graph
@@ -776,8 +781,9 @@ func mapRow(b *graph.Builder, name string, a graph.Attrs, w []graph.Binding, wid
 // LayerNorm with its stored bias where the model's norms are LayerNorms, an
 // RMSNorm otherwise, the projection to the vocabulary (the embedding's where
 // the model ties them) with its stored bias, then the final softcap and the
-// logit scale, main's order over the logits.
-func (m *Model) headGraph() (*graph.Graph, Uncovered, error) {
+// logit scale, main's order over the logits. With hidden it writes the
+// norm's rows too (graph.Head.Hidden).
+func (m *Model) headGraph(hidden bool) (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	switch {
 	case c.Pooling != jlm.PoolNone:
@@ -792,7 +798,7 @@ func (m *Model) headGraph() (*graph.Graph, Uncovered, error) {
 	}
 	h := graph.Head{NEmbd: c.NEmbd, NVocab: c.NVocab, Eps: c.RMSEps, LayerNorm: c.LayerNorm,
 		NormBias: stored(jlm.RoleOutputNormBias), Output: jlm.RoleOutput, Bias: stored(jlm.RoleOutputBias),
-		Softcap: float64(c.FinalSoftcap), Scale: c.LogitScale}
+		Softcap: float64(c.FinalSoftcap), Scale: c.LogitScale, Hidden: hidden}
 	if !stored(h.Output) {
 		h.Output = jlm.RoleTokenEmbd
 	}

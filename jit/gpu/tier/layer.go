@@ -2140,8 +2140,9 @@ func (l *layer) kvOf(sid uint64) *kvPair {
 // holds its lane (devsess.go), so one block runs in it at a time.
 type blockScratch struct {
 	// headGraph is the head as ops from the model's front end (nn.Head.Graph):
-	// what serving the head forms (served.go).
-	headGraph *graph.Graph
+	// what serving the head forms (served.go); headHidden is it writing its
+	// normed rows too (nn.Head.HiddenGraph), a call reading them back's.
+	headGraph, headHidden *graph.Graph
 	// sampleGraph is the greedy token over the head's logits as ops from the
 	// front end (nn.Head.Sample): what serving the argmax forms.
 	sampleGraph *graph.Graph
@@ -6454,7 +6455,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		return false
 	}
 	// The head as ops from the model's front end: what the composer serves.
-	bs.headGraph, bs.sampleGraph, bs.embedGraph = h.Graph, h.Sample, h.Embed
+	bs.headGraph, bs.headHidden, bs.sampleGraph, bs.embedGraph = h.Graph, h.HiddenGraph, h.Sample, h.Embed
 	h.GatherRow = g.Composed&ComposedEmbed != 0 && h.Embed != nil
 	// The head is the model's: a second State on this tier finds it placed.
 	// Building it again allocated a second norm and logits buffer over the
@@ -7654,10 +7655,8 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	}
 	if composedHead {
 		switch {
-		case head.Graph != hb.headGraph:
+		case head.Graph != hb.headGraph || head.HiddenGraph != hb.headHidden:
 			headWhy = partHeadOther
-		case head.Hidden != nil:
-			headWhy = partHeadHidden
 		default:
 			headWhy = hb.headServes(hNorm, false, persistOn)
 		}
@@ -10051,7 +10050,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			}
 			sv, serr := g.servedHead(hb, hNorm, rows)
 			if serr == nil {
-				serr = sv.run(g, lc, sv.inst, []backend.Buf{bs.x}, []backend.Buf{out})
+				serr = sv.runHead(g, lc, bs.x, out, bs.h)
 			}
 			if err == nil {
 				err = serr
@@ -10127,7 +10126,7 @@ func (g *devTier) layersSession(s backend.Session) {
 			}
 			sv, serr := g.servedHead(hb, hNorm, 1)
 			if serr == nil {
-				serr = sv.run(g, lc, sv.inst, []backend.Buf{in}, []backend.Buf{out})
+				serr = sv.runHead(g, lc, in, out, hb.h)
 			}
 			if err == nil {
 				err = serr
@@ -10201,7 +10200,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				sv, serr := g.servedHead(bs, hNorm, 1)
 				if serr == nil {
-					serr = sv.run(g, lc, sv.inst, []backend.Buf{bs.x}, []backend.Buf{out})
+					serr = sv.runHead(g, lc, bs.x, out, bs.h)
 				}
 				if err == nil {
 					err = serr
@@ -10502,6 +10501,10 @@ func (g *devTier) layersSession(s backend.Session) {
 			err = fmt.Errorf("a %d-float hidden destination for %d rows of %d", len(head.Hidden), rows, p.NEmbd)
 		} else {
 			err = s.Read(src, f32b(head.Hidden[:rows*p.NEmbd]))
+		}
+		if err == nil && key.headSrv {
+			g.HiddenHeads++
+			g.HiddenRows += rows
 		}
 	}
 	switch {

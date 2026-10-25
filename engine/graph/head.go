@@ -19,6 +19,9 @@ type Head struct {
 	// Softcap is c of c*tanh(x/c), 0 for none. Scale is the divisor of the
 	// logits, 0 or 1 for none.
 	Softcap, Scale float64
+	// Hidden makes the norm's rows the graph's second output, after the
+	// logits: what a step reading the trunk's normed rows back reads.
+	Hidden bool
 }
 
 // Build is the head's graph.
@@ -55,5 +58,8 @@ func (h *Head) Build() *Graph {
 		l = op("scaled", MapMul, 1/s, l)
 	}
 	b.Out(l)
+	if h.Hidden {
+		b.Out(n)
+	}
 	return b.G
 }

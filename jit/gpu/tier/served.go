@@ -618,7 +618,6 @@ const (
 	partNoRoom      = jit.DeclineNoRoom
 	partHeadBias    = jit.DeclineHeadBias
 	partHeadOther   = jit.DeclineHeadOther
-	partHeadHidden  = jit.DeclineHeadHidden
 	partNoTable     = jit.DeclineNoTable
 	partTableHeld   = jit.DeclineTableHeld
 	partNoAxes      = jit.DeclineNoAxes
@@ -819,9 +818,14 @@ type headSpec struct {
 }
 
 // headShape is gr read as a head the tier serves, false for any other graph.
+// Its outputs are the logits, then the norm's rows where it writes them too
+// (graph.Head.Hidden).
 func headShape(gr *graph.Graph) (headSpec, bool) {
 	var hs headSpec
-	if gr == nil || len(gr.In) != 1 || len(gr.Out) != 1 || len(gr.Ops) < 2 {
+	if gr == nil || len(gr.In) != 1 || len(gr.Out) < 1 || len(gr.Out) > 2 || len(gr.Ops) < 2 {
+		return hs, false
+	}
+	if len(gr.Out) == 2 && (len(gr.Ops[0].Out) != 1 || gr.Out[1] != gr.Ops[0].Out[0]) {
 		return hs, false
 	}
 	n, mv := gr.Ops[0], gr.Ops[1]
@@ -862,8 +866,9 @@ func headShape(gr *graph.Graph) (headSpec, bool) {
 // persistent block.
 func (bs *blockScratch) headServes(norm backend.Buf, pickOnly, persist bool) partDecline {
 	hs, ok := headShape(bs.headGraph)
+	hh, hok := headShape(bs.headHidden)
 	switch {
-	case !ok:
+	case !ok || !hok || hh != hs || len(bs.headHidden.Out) != 2:
 		return partHeadShape
 	case norm == nil || hs.layerNorm != (bs.normVar != nil) || hs.hasNormBias && bs.hNormB == nil:
 		return partHeadNorm
@@ -877,13 +882,25 @@ func (bs *blockScratch) headServes(norm backend.Buf, pickOnly, persist bool) par
 	return partServes
 }
 
+// runHead launches the served head sv on in, its logits into out and its
+// normed rows into h.
+func (sv *servedPart) runHead(g *devTier, lc *launcher, in, out, h backend.Buf) error {
+	return sv.run(g, lc, sv.inst, []backend.Buf{in}, []backend.Buf{out, h}[:sv.m])
+}
+
 // servedHead is the model's head graph served at a step of rows: its norm
 // bound to the tier's norm (and its bias, for a LayerNorm head), its
 // projection to the head's weight and its bias to the tier's, under the roles
 // the graph names (the embedding's where the model ties them). A form a row
 // count: a decode step's one row, a ragged step's or a chunk's wanted rows.
+// The graph is the one that writes the norm's rows too (nn.Head.HiddenGraph),
+// into the scratch's normed rows as the tier's own head does (runHead): what
+// a call's hidden readback reads (nn.Head.Hidden).
 func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf, rows int) (*servedPart, error) {
-	gr, w := bs.headGraph, bs.head
+	gr, w := bs.headHidden, bs.head
+	if rowsFaulted("nohidden") {
+		gr = bs.headGraph
+	}
 	hs, ok := headShape(gr)
 	if !ok {
 		return nil, errors.New("the composed head: a graph that is not a norm, a projection and elementwise ops")

@@ -783,6 +783,10 @@ type Stats struct {
 	// once more for each relocation; paging its weights out and in forms
 	// nothing. Summed over the devices.
 	BlockForms []int
+	// HiddenHeads counts the calls whose head the composer served and whose
+	// normed rows the caller read back (nn.Head.Hidden), HiddenRows those
+	// rows: a speculation step's verification is one call of several.
+	HiddenHeads, HiddenRows int
 	// ShadowWorst is, per block the composer's form ran beside the tier's own
 	// kernels (Config.ComposedShadow), the worst drift of the form's output
 	// from the tier's over the steps compared: the squared distance between
@@ -1367,6 +1371,8 @@ func (s *Stats) add(o Stats) {
 	for i, n := range o.BlockForms {
 		s.BlockForms[i] += n
 	}
+	s.HiddenHeads += o.HiddenHeads
+	s.HiddenRows += o.HiddenRows
 	// A block is on one device, so its slot is the only one that is not zero.
 	if n := len(o.ShadowWorst); n > len(s.ShadowWorst) {
 		s.ShadowWorst = append(s.ShadowWorst, make([]float32, n-len(s.ShadowWorst))...)

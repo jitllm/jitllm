@@ -26,7 +26,6 @@ const (
 	DeclineNoRoom
 	DeclineHeadBias
 	DeclineHeadOther
-	DeclineHeadHidden
 	DeclineNoTable
 	DeclineTableHeld
 	DeclineNoAxes
@@ -72,7 +71,6 @@ var declineNames = [NumDeclines]string{
 	DeclineNoRoom:        "its buffers do not fit the device's budget",
 	DeclineHeadBias:      "a head bias the tier holds no vector for",
 	DeclineHeadOther:     "a head graph of another State than the offered one",
-	DeclineHeadHidden:    "a head whose normed row is read back",
 	DeclineNoTable:       "no table graph from the front end",
 	DeclineTableHeld:     "a table whose planes or positions the tier does not hold",
 	DeclineNoAxes:        "a table over several axes with no rotary positions for the row",

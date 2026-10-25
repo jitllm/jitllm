@@ -1595,7 +1595,7 @@ func (s *State) placeHead() {
 func (s *State) newHead() *nn.Head {
 	c := s.c
 	f := s.m.frontGraphs()
-	h := &nn.Head{Model: s.m.id, Graph: f.head, Sample: f.sample, Embed: f.embed, Norm: s.outNorm, W: wt(*s.outW), Logits: s.logits,
+	h := &nn.Head{Model: s.m.id, Graph: f.head, HiddenGraph: f.headHidden, Sample: f.sample, Embed: f.embed, Norm: s.outNorm, W: wt(*s.outW), Logits: s.logits,
 		Softcap: c.FinalSoftcap, Embeds: c.TiedEmbd, EmbdScale: float32(c.EmbdScale),
 		Stages: s.m.headStages(), Bias: s.m.outB, NoCPU: !s.cpuListed()}
 	if !c.TiedEmbd && s.m.embd.e != nil {

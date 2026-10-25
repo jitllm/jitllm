@@ -361,6 +361,10 @@ type Head struct {
 	// states none: what a device serving the head forms (tier
 	// Config.Composed).
 	Graph *graph.Graph
+	// HiddenGraph is Graph writing the norm's rows too, its second output
+	// (graph.Head.Hidden): what a device serving the head forms, so a call
+	// reading them back (Hidden) reads the rows the head normed.
+	HiddenGraph *graph.Graph
 	// Sample is the greedy token of the head's logits as ops from the front
 	// end (graph.Sample), nil where it states none: what a device serving
 	// the argmax forms.

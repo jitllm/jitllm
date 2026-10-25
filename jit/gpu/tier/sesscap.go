@@ -18,6 +18,7 @@ func moveHead(dst, src *blockScratch) {
 		return
 	}
 	dst.head, dst.mvHead, dst.headGraph, dst.sampleGraph = src.head, src.mvHead, src.headGraph, src.sampleGraph
+	dst.headHidden, src.headHidden = src.headHidden, nil
 	dst.hNorm, dst.hNormB, dst.hBias, dst.logits, dst.hRaw, dst.hOut = src.hNorm, src.hNormB, src.hBias, src.logits, src.hRaw, src.hOut
 	dst.logitsCap, dst.headCap = src.logitsCap, src.headCap
 	dst.headEmbeds, dst.embScale, dst.embedGraph = src.headEmbeds, src.embScale, src.embedGraph

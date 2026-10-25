@@ -50,6 +50,34 @@ func TestComposedRowsDiscriminate(t *testing.T) {
 		t.Run(dev+"/foldrow", func(t *testing.T) {
 			composedFoldParts(t, m, dev)
 		})
+		t.Run(dev+"/nohidden", func(t *testing.T) {
+			want, _ := composedHidden(t, m, dev, 0, composedHiddenRows, false)
+			tier.SetRowsFault("nohidden")
+			got, st := composedHidden(t, m, dev, composedParts, composedHiddenRows, false)
+			tier.SetRowsFault("")
+			if st.HiddenHeads == 0 {
+				t.Fatalf("no served head's normed rows were read back: the arm did not select the served head")
+			}
+			at := []int{0, 1, 2, 3, 4, 5}
+			d := m.Cfg.NEmbd
+			worst, off := 0.0, math.Inf(1)
+			for j, i := range at {
+				e := logitNMSE(got[j*d:(j+1)*d], want[i*d:(i+1)*d])
+				if math.IsNaN(e) || math.IsInf(e, 0) {
+					worst = math.Inf(1)
+					break
+				}
+				worst = max(worst, e)
+				if i > 0 {
+					off = min(off, logitNMSE(got[j*d:(j+1)*d], want[(i-1)*d:i*d]))
+				}
+			}
+			if off > max(1e-9, 10*worst) {
+				t.Fatalf("under \"nohidden\" the normed rows sit %.3e from the tier's and %.3e from a neighbour's: the gate cannot see it",
+					worst, off)
+			}
+			t.Logf("\"nohidden\": the normed rows read back sit %.3e from the tier's -- caught", worst)
+		})
 	}
 }
 
@@ -58,15 +86,17 @@ func TestComposedRowsDiscriminate(t *testing.T) {
 // head, folded into the last chunk and as the tail call, under "foldrow",
 // and demands the logits part.
 func composedFoldParts(t *testing.T, m *Model, dev string) {
+	// Chunks of at most 32 rows: the device reserves and warms the widths up
+	// to 32, each a form of the composer's.
 	g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
-		composedOpt(composedParts|tier.ComposedPrompt))
+		composedOpt(composedParts|tier.ComposedPrompt), tier.WithConfig(func(c *tier.Config) { c.PromptRows = 32 }))
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
 	}
 	defer g.Close()
 	text := strings.Repeat("The river rose every spring until the bridges were islands, "+
 		"and the clerk counted barrels of salt on the upper floor. ", 8)
-	ids := m.Vocab.Encode(text, true)[:150]
+	ids := m.Vocab.Encode(text, true)[:40]
 	run := func(fold bool) ([]float32, int) {
 		st := m.NewState(len(ids) + 4)
 		defer st.Close()

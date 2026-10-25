@@ -8378,3 +8378,22 @@ row where the composer's reads two.
   reserves a multiple of 32 (stepRows), so a 3-row step builds an 8-row
   scratch at its first step, beside the reserved one, for the tier's own
   kernels as for the composer's forms.
+- **The served head writes its normed rows.** The head the composer serves
+  is the front end's graph with the norm's rows a second output
+  (graph.Head.Hidden, nn.Head.HiddenGraph), written into the scratch's
+  normed rows where the hidden readback reads them, so a speculation step's
+  head is served and the decline "a head whose normed row is read back" is
+  gone; it is the same form at the same row counts as before, with one more
+  output. TestComposedHeadWritesItsHidden (Llama-3.2-1B, cuda:0 and
+  vulkan:6) holds the rows read back to the tier's own head's: a 6-row
+  verification as ragged rows, one row as decode and a prompt chunk's
+  folded last row, worst NMSE 1.2e-3 to 2.0e-3 from the tier's own against
+  0.33 to 0.87 from a neighbouring position's (Stats.HiddenHeads,
+  HiddenRows count the served heads read back). Under "nohidden" (the
+  logits-only graph served) the rows read back sit 1.0 from the tier's,
+  caught on both backends, beside pos, alias, headrow and foldrow (now at
+  32-row chunks of a 40-token prompt, NMSE 0.94). Open:
+  TestABatchLeavesAnotherSessionAlone's composed arm still forms at a
+  session's first ragged step (34 parts): the ragged blocks and the per-row
+  head are formed per row count, which composing once with the rows a
+  run-time argument removes.
