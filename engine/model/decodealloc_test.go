@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/engine/sched"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
@@ -114,6 +116,15 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 				if nodes < 2 {
 					t.Skipf("the pool spans %d node(s) under this process's CPU mask: no DoNodes region can be "+
 						"node-affine", nodes)
+				}
+				// DoNodes takes a dense weight whose rows are a whole number of
+				// node rounds; every other runs the plain region the host arm
+				// measured. A mixture's experts are placed by their pages, so a
+				// mixture is never skipped here.
+				rows, round := packedRows(mn), nn.NUMARound(nodes)
+				if !mn.Cfg.MoE() && !slices.ContainsFunc(rows, func(r int) bool { return r%round == 0 }) {
+					t.Skipf("the packed weights have %v rows and none is a multiple of %d, the node round of "+
+						"%d nodes: no matvec can run node-affine", rows, round, nodes)
 				}
 				if decodeAllocs(t, mn, nil).affine == 0 {
 					t.Fatal("no region of the window ran node-affine: this arm measured the plain host decode twice")
@@ -636,6 +647,20 @@ func anyPackedBlock(m *Model) bool {
 		}
 	}
 	return m.output.packed != nil
+}
+
+// packedRows is the distinct row counts of the packed weights in m's container,
+// ascending. It walks the container, not a list of weight fields, so a weight
+// the list forgot cannot make the host-numa arm's skip a false one.
+func packedRows(m *Model) []int {
+	var rows []int
+	for _, e := range m.container.Entries() {
+		if e.NDim >= 2 && jlm.Packed(e.Type) {
+			rows = append(rows, e.Rows())
+		}
+	}
+	slices.Sort(rows)
+	return slices.Compact(rows)
 }
 
 // TestOffCardDecodeDoesNotAllocate is TestDecodeDoesNotAllocate's device arms

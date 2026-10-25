@@ -6955,3 +6955,18 @@ row where the composer's reads two.
   slots splits only a session whose key bound passes it: the V100's Vulkan
   at the gate's 256 did not split, and its one-lane composed runs were
   sound. The tier at one lane is sound: open (open-questions.md).
+- **The node-affine allocation arm named the BitNet fixtures' size.** On the
+  two-socket box `TestDecodeDoesNotAllocate/.../host-numa` failed on
+  synth-bitnet-f16 and synth-bitnet-i2s (`0 region(s) node-affine`) at the
+  base commit, in the default and the composed build alike. Neither the
+  composer nor the ternary path is at fault: BitNet's weights reach the same
+  fused matvec as every packed format (1344 of them in a window), and DoNodes
+  places only a weight whose rows are a whole number of rounds of 1024 rows a
+  node, 2048 on two nodes, where the fixtures' have 128 to 512. The arm now
+  skips such a dense model naming its row counts, and
+  `nn.TestFusedMatVecRunsNodeAffine` holds all eleven fused formats, TQ2_0 and
+  TQ2_F32 included, to the node-affine path and the plain pool's bits. The
+  engine only names the rule `numaRows` already applied (`nn.NUMARound`):
+  Llama-3.2-1B, Qwen3-8B and OLMoE read the same allocations (0) and
+  node-affine regions (5120, 11520, 6094 to 6144) before and after. The
+  details are in cpu-kernels.md, "Two gates that failed only on the Xeon".

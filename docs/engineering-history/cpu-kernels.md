@@ -3661,6 +3661,44 @@ The DoNodes path is the same shape of exposure -- a region only a two-node
 pool runs, and what `cmd/jitllm` ships on that box -- so the gate has a
 `host-numa` arm too, which skips naming the reason on a one-node mask.
 
+The arm failed on both BitNet fixtures there (`0 region(s) node-affine`), and
+the cause was the fixtures' size, not the format. DoNodes places a packed
+weight in blocks of one 4 KiB page of a word-line, 1024 rows, one block to each
+node in turn (`jlm.TestInterleaveFollowsThePageAddress` is why a block that
+size sits on one node), and `numaRows` takes a weight only when its row count
+is a whole number of rounds of one block per node: 2048 rows on two nodes.
+Every other count runs the plain region, correct and only slower, whatever the
+format. The fixtures' weights have 128, 256 and 512 rows. Their 1344 fused
+matvecs in the window (64 tokens, 21 weights a token) all went through the
+call site that asks `numaRows`, as every packed format's do, so the ternary
+path was never at fault. Counted over the same 64 tokens on the two-socket
+E5-2680 v4 (six CPUs a socket), Llama-3.2-1B took 5120 node-affine regions,
+the 80 a token of its 16 blocks' wq, wo, gate, up and down (2048 and 8192
+rows), none for wk and wv (512 rows) or the head (128256); Qwen3-8B took 11520,
+the 180 a token of its 36 blocks' same five, none for the 1024-row wk and wv or
+the head.
+
+The arm now skips a dense model none of whose packed weights has such a row
+count (`nn.NUMARound`), naming the counts it found and the round. It reads the
+counts from the container's entries, not from a list of weight fields that a
+hybrid's own projections would escape. A mixture is never skipped: its experts
+are placed by their pages.
+
+`nn.TestFusedMatVecRunsNodeAffine` holds each of the eleven fused packed
+formats, TQ2_0 and TQ2_F32 among them, to the node-affine path at two rounds of
+rows and to the plain pool's bits, with a block past a round and a ragged count
+as the controls that the counter discriminates (33 pairs). It states the
+1024-row block itself and does not read nn's, so a change to the layout fails
+it. Against violations: with `numaRows` declining everything it fails the
+eleven two-round pairs and the arm fails Llama-3.2-1B; with ternary alone
+declining it fails the two ternary pairs; with the block halved to 512 rows it
+fails the eleven block-past-a-round controls.
+
+BitNet b1.58 2B-4T, the one ternary release, has 2560-, 640- and 6912-row
+projections (its safetensors header's 640, 160 and 1728 rows are four codes to a
+byte), none a multiple of 2048, so by this rule it takes no node-affine region
+on a two-socket host.
+
 
 ## Why the host kernel gate is NMSE < 1e-10, and not bit equality or ggml's budget
 
