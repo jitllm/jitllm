@@ -6385,6 +6385,14 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	if bs == nil || h == nil {
 		return false
 	}
+	// Every device path caps the logits before the host adds the bias, the
+	// other order of the model's head (bias, softcap, scale): a head with both
+	// stays on the host, where it runs in the model's order.
+	if h.Softcap != 0 && h.Bias != nil {
+		g.LastErr = "the head states a final softcap and an output bias: the device caps before the host adds the bias, " +
+			"the other order of the model's head, so the head stays on the host"
+		return false
+	}
 	// The head as ops from the model's front end: what the composer serves.
 	bs.headGraph = h.Graph
 	// The head is the model's: a second State on this tier finds it placed.

@@ -3,6 +3,7 @@ package model
 import (
 	"math"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/graph"
@@ -127,6 +128,9 @@ type headArm struct {
 	applied    []nn.HeadStage
 	steps      int
 	stagesWant nn.HeadStage
+	// refused says the tier is to leave the head on the host, and the host
+	// runs it in the model's order: a softcap with a bias.
+	refused bool
 }
 
 func (a *headArm) run(t *testing.T) {
@@ -157,7 +161,13 @@ func (a *headArm) run(t *testing.T) {
 	if err := st.SetDevice(g); err != nil {
 		t.Fatal(err)
 	}
-	if st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice() {
+	switch {
+	case a.refused:
+		if st.GPULayers() != m.Cfg.NLayer || st.HeadOnDevice() || !strings.Contains(g.Err(), "final softcap and an output bias") {
+			t.Fatalf("wanted every block on %s and the head refused by name, got %d of %d blocks, the head %v and %q",
+				a.dev, st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice(), g.Err())
+		}
+	case st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice():
 		t.Fatalf("wanted every block and the head on %s, got %d of %d blocks and the head %v: %s", a.dev, st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice(), g.Err())
 	}
 	a.worst, a.steps, a.applied = 0, len(ids), nil
@@ -167,7 +177,9 @@ func (a *headArm) run(t *testing.T) {
 			t.Fatal(err)
 		}
 		a.worst = math.Max(a.worst, headNMSE(lg, wants[p]))
-		a.applied = append(a.applied, st.head.Applied)
+		if st.head != nil {
+			a.applied = append(a.applied, st.head.Applied)
+		}
 	}
 	a.stats = g.Stats()
 }
@@ -250,16 +262,24 @@ func TestComposedHeadOps(t *testing.T) {
 							// The composer's head, then the tier's own with the
 							// host finishing the logits.
 							for _, parts := range []tier.Parts{tier.ComposedHead, 0} {
-								if parts == 0 && arm.cap != 0 && outB != nil {
-									// The tier's own head caps on the device and the host adds
-									// the bias after it: no model has both. The composed head
-									// takes the bias, the cap and the scale in the model's
-									// order (finishLogits).
-									continue
-								}
-								a := &headArm{fx: fx, dev: dev, parts: parts, xs: xs, lnb: lnb, outB: outB, want: set, cfg: set}
+								// Every device path caps before the host adds the bias,
+								// and the model's head biases first: no model has both,
+								// and the tier leaves such a head on the host, which
+								// runs it in the model's order (finishLogits).
+								refused := arm.cap != 0 && outB != nil
+								a := &headArm{fx: fx, dev: dev, parts: parts, xs: xs, lnb: lnb, outB: outB, want: set, cfg: set, refused: refused}
 								a.run(t)
 								n, d, _ := a.stats.ServedPart(tier.ComposedHead)
+								if refused {
+									if n != 0 || d != 0 || !(a.worst < bound) {
+										t.Fatalf("parts %d: a head the tier refuses: %d composed head steps served, %d declined, %.3e from the oracle, bound %.0e",
+											parts, n, d, a.worst, bound)
+									}
+									t.Logf("parts %d: the tier refuses the softcap with the bias by name, and the host runs the head %.3e from the oracle over %d steps",
+										parts, a.worst, a.steps)
+									ran++
+									continue
+								}
 								want := a.stagesWant
 								if parts == 0 {
 									want &= nn.HeadCap
@@ -284,15 +304,22 @@ func TestComposedHeadOps(t *testing.T) {
 						})
 					}
 					// Each op taken out of the composed head parts from the oracle.
-					full := func(c *Config) { c.FinalSoftcap, c.LogitScale = capAt, 8 }
+					// A head with a bias takes no softcap (the tier refuses the
+					// pair), so its full head is the scale alone.
+					capped := func(c *Config) {
+						if outB == nil {
+							c.FinalSoftcap = capAt
+						}
+					}
+					full := func(c *Config) { capped(c); c.LogitScale = 8 }
 					violations := []struct {
 						name string
 						skip bool
 						cfg  func(c *Config)
 						mut  func(m *Model) func()
 					}{
-						{name: "softcap dropped", cfg: func(c *Config) { c.FinalSoftcap, c.LogitScale = 0, 8 }},
-						{name: "scale inverted", cfg: func(c *Config) { c.FinalSoftcap, c.LogitScale = capAt, 1.0/8 }},
+						{name: "softcap dropped", skip: outB != nil, cfg: func(c *Config) { c.FinalSoftcap, c.LogitScale = 0, 8 }},
+						{name: "scale inverted", cfg: func(c *Config) { capped(c); c.LogitScale = 1.0 / 8 }},
 						{name: "bias negated", skip: outB == nil, cfg: full, mut: func(m *Model) func() {
 							was := m.outB
 							m.outB = slices.Clone(was)

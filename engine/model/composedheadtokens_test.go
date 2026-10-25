@@ -37,7 +37,15 @@ func TestComposedHeadTokens(t *testing.T) {
 						defer g.Close()
 						m := fx.open(t)
 						defer m.Close()
-						defer cfgMut(m, func(c *Config) { c.FinalSoftcap, c.LogitScale = 1.5, 8 })()
+						// A head with a bias takes no softcap: the tier leaves the
+						// pair to the host.
+						biased := m.outB != nil
+						defer cfgMut(m, func(c *Config) {
+							if !biased {
+								c.FinalSoftcap = 1.5
+							}
+							c.LogitScale = 8
+						})()
 						m.opt.devSample = DeviceSampleOn
 						stages := m.headStages()
 						ids := headTokens(m)
