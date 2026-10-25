@@ -107,7 +107,10 @@ func xieluRun(k xieluKernel, x []float32, p [4]float32) ([]float32, bool) {
 }
 
 // xieluTol is the error a correctly rounded f32 evaluation of the terms can
-// carry: a few ulps of each term the result is a sum of.
+// carry: a few ulps of each term the result is a sum of. It leaves out the
+// truncation error of the exp the kernel takes below -1/2, which grows as the
+// sixth power of the reduced argument and so peaks at an edge this gate's
+// random inputs do not reach; xieluEdgeTol adds it.
 func xieluTol(x float64, p [4]float32) float64 {
 	ap, an, b, e := float64(p[0]), float64(p[1]), float64(p[2]), float64(p[3])
 	m := math.Min(x, e)
@@ -180,6 +183,120 @@ func TestXIELUViolations(t *testing.T) {
 				got, _ := xieluRun(ks[0], x, p)
 				for i, v := range x {
 					if d := math.Abs(float64(got[i]) - f.f(float64(v), p)); d > xieluTol(float64(v), p) {
+						hits++
+					}
+				}
+			}
+		}
+		if hits == 0 {
+			t.Errorf("%s: the gate cannot see it", f.name)
+		}
+		t.Logf("%s caught on %d elements", f.name, hits)
+	}
+}
+
+// xieluExpBound is the relative error of the exp the kernels take below -1/2
+// (emitExpPS on every tier): a degree-5 Taylor sum on the reduced argument
+// |r| <= ln2/2, whose remainder is 3.24e-6 of exp(r) at r = -ln2/2, and a few
+// units in the last place for the rest. The gate above passes the kernels on
+// the inputs it samples, none of which sits at that edge.
+const xieluExpBound = 3.5e-6
+
+// xieluEdges are the arguments, for eight periods of exp's range reduction
+// below zero, where the reduced argument sits just inside either edge of
+// [-ln2/2, ln2/2] and exp's Taylor remainder peaks.
+func xieluEdges() []float32 {
+	var xs []float32
+	for n := -1; n >= -8; n-- {
+		for _, r := range []float64{-math.Ln2 / 2 * 0.9999, math.Ln2 / 2 * 0.9999} {
+			xs = append(xs, float32(float64(n)*math.Ln2+r))
+		}
+	}
+	return xs
+}
+
+// xieluEdgeTol is xieluTol with exp's error added where the kernel takes exp:
+// below -1/2 the activation carries exp(m) - 1 - m, so the term alpha_n*exp(m)
+// carries xieluExpBound of itself.
+func xieluEdgeTol(x float64, p [4]float32) float64 {
+	t := xieluTol(x, p)
+	if m := math.Min(x, float64(p[3])); m <= -0.5 {
+		t += xieluExpBound * math.Abs(float64(p[1])) * math.Exp(m)
+	}
+	return t
+}
+
+// xieluShortExp is the activation below -1/2 with exp a Taylor term short,
+// degree 4 where the kernels sum to degree 5.
+func xieluShortExp(x float64, p [4]float32) float64 {
+	m := math.Min(x, float64(p[3]))
+	if m > -0.5 || x > 0 {
+		return oracle.XIELU(x, float64(p[0]), float64(p[1]), float64(p[2]), float64(p[3]))
+	}
+	n := math.Round(m / math.Ln2)
+	r := m - n*math.Ln2
+	e := math.Ldexp(1+r*(1+r*(0.5+r*(1.0/6+r/24))), int(n))
+	return (e-1-m+(m-x))*float64(p[1]) + float64(p[2])*x
+}
+
+// TestXIELUAtTheExpEdges runs the kernels over the arguments where exp's
+// remainder peaks, at the gate's widths and numbers, under the bound with
+// exp's error added. Main's gate bound alone does not hold there; the log has
+// how far each tier stands from it. A fault in the arithmetic, or in exp
+// itself, must leave the bound.
+func TestXIELUAtTheExpEdges(t *testing.T) {
+	ks, done := xieluKernels(t)
+	defer done()
+	edges := xieluEdges()
+	tiled := func(n int) []float32 {
+		x := make([]float32, n)
+		for i := range x {
+			x[i] = edges[i%len(edges)]
+		}
+		return x
+	}
+	for _, k := range ks {
+		worst, worstOld := 0.0, 0.0
+		for _, n := range xieluWidths {
+			for pi, p := range xieluParams {
+				x := tiled(n)
+				got, guarded := xieluRun(k, x, p)
+				if !guarded {
+					t.Fatalf("%s n=%d: the kernel wrote past its %d elements", k.name, n, n)
+				}
+				for i, v := range x {
+					want := oracle.XIELU(float64(v), float64(p[0]), float64(p[1]), float64(p[2]), float64(p[3]))
+					d := math.Abs(float64(got[i]) - want)
+					if !(d <= xieluEdgeTol(float64(v), p)) {
+						t.Fatalf("%s n=%d params %d: x[%d]=%g gives %g, want %g (|d| %.3g, bound %.3g)",
+							k.name, n, pi, i, v, got[i], want, d, xieluEdgeTol(float64(v), p))
+					}
+					worst = math.Max(worst, d/xieluEdgeTol(float64(v), p))
+					worstOld = math.Max(worstOld, d/xieluTol(float64(v), p))
+				}
+			}
+		}
+		t.Logf("%s: worst %.3f of the bound with exp's error, %.3f of the gate's bound alone", k.name, worst, worstOld)
+	}
+	for _, f := range []struct {
+		name string
+		f    func(x float64, p [4]float32) float64
+	}{
+		{"the alphas exchanged", func(x float64, p [4]float32) float64 {
+			return oracle.XIELU(x, float64(p[1]), float64(p[0]), float64(p[2]), float64(p[3]))
+		}},
+		{"no beta*x", func(x float64, p [4]float32) float64 {
+			return oracle.XIELU(x, float64(p[0]), float64(p[1]), 0, float64(p[3]))
+		}},
+		{"exp a Taylor term short", xieluShortExp},
+	} {
+		hits := 0
+		for _, n := range xieluWidths {
+			for _, p := range xieluParams {
+				x := tiled(n)
+				got, _ := xieluRun(ks[0], x, p)
+				for i, v := range x {
+					if math.Abs(float64(got[i])-f.f(float64(v), p)) > xieluEdgeTol(float64(v), p) {
 						hits++
 					}
 				}

@@ -7386,6 +7386,73 @@ row where the composer's reads two.
     by `UncoveredTokenAct` (24 or 36 declined block steps in 12). Of the 25
     classic-kit and dense fixtures 7 are served whole, 3 have sliding layers
     declined for their window, and 15 are declined by the front end.
+- **The attention output gate and xIELU as ops; the norms inside a sublayer
+  stated, and reached by no container.** The front end refused three block
+  features by name. A gate on the attention's output (the q projection twice
+  as wide, each head's query then that head's gate) is two per-head slices of
+  that projection and the attention's output times the sigmoid of the gate
+  before the output projection, as main's `applyOutGate` has it. xIELU (four
+  numbers a block, folded at conversion into `jlm.RoleXIELU`) is maps over the
+  up projection, each reading one number of the stored vector, which a map's
+  bound vector now allows (`Attrs.Offset` and `Width` window it, held to the
+  vector by the verifier), and one new generic map, `MapExpm1`: a Taylor sum
+  within |x| < 1/2, exp(x) - 1 past it, where exp(x) - 1 near zero would
+  cancel every digit. `UncoveredOutGate` goes. The rotary of the qwen3next
+  shape (an interleaving, no sections) is one position axis and the converted
+  qwen35's, over its sections, is the multi-axis table's, so both attention
+  blocks are stated (`TestFrontStatesTheQwen35FixturesAttention`).
+  - The norms inside a sublayer (BitNet's, before the output projection and
+    before down) are stated too, as the RMSNorm op on the attention's output
+    and on the FFN's product, and the tier binds `RoleAttnSubNorm` and
+    `RoleFFNSubNorm`. **No container reaches that statement.** A model stores
+    those norms only where it quantizes every projection input per token
+    (`model.go` refuses one without the other), the op language does not state
+    that quantization, and the front end refuses it first, by a new reason,
+    `UncoveredTokenAct`; `UncoveredSubNorm` goes with the statement it named.
+    So no block of any model is served through the sub-norm ops or the two
+    bindings, and no device gate runs them. They stand on a CPU gate over a
+    hand-built graph (`TestComposedCPUSubNorm`) and a structure test with the
+    flag taken from the config (`TestFrontStatesTheNormsInsideASublayer`);
+    the device gate belongs to the change that states the quantization.
+  - On card 7 in a composed build, cuda:0 and vulkan:7, on the tree rebased
+    onto the classic kit, the windowed blocks and the multi-axis rotary, every
+    composed arm asserts the composer ran steps x the blocks the front end
+    states, emitted or replayed from a recording (`composedCovers`, on the
+    counter `composedBlocksRan` uses), and declined every other block step for
+    having no graph and nothing else, exactly where the run issues every step
+    itself. The tier serves a sliding layer and declines only a graph whose
+    window is not the plan's, so the check takes no window decline: an
+    earlier version of it let any sliding model decline any window. The 25
+    classic-kit and dense fixtures of `TestC6OnEveryDevice` (76 passes): 20
+    are served whole, the ten classic ones (phi2, starcoder, stablelm,
+    stablelm-par, starcoder2, falcon, falcon40, nemotron, commandr, cohere2),
+    synth-apertus, -smollm3, -arcee, -seedoss, -olmo2, -olmo2-gqa, -glm4 and
+    the three with sliding layers (exaone4, olmo3, olmo3-af: 48 block steps in
+    12, the sliding ones included); five are declined by the front end,
+    synth-dbrx for a mixture, synth-mistral3 and -mistral3-af for an attention
+    temperature per position, synth-deepseek-yarn and -yarn-af for latent
+    attention. synth-apertus: 36 block steps in 12 steps of 3 blocks, its
+    logits 2.5e-12 from the host's in NMSE at decode, and the eight violations
+    on its xIELU and rotary read 3e-4 to 1.9. The four BitNet fixtures are
+    declined by `UncoveredTokenAct` (24 or 36 block steps in 12, none served).
+    The qwen3next-shaped hybrid's attention block is served (8 block steps in
+    8) in its dense, tiled and 256-wide dense (`bigdense`: Qwen3-Next-80B's
+    16 heads of 256 with a dense FFN, logits 1.1e-4 and 1.0e-4 from the host's
+    on cuda and vulkan) variants, its recurrent blocks declined by kind, and
+    its mixture variants' (`moe`, `big`, `widemoe`) attention blocks by
+    `UncoveredMixture`, so nothing of those is served.
+  - The out gate is held to being seen. `TestHybridOutGateViolationsOnDevice`
+    gives the composer a graph rewritten after the front end built it (the
+    tier's own kernels never read it), runs the hybrid gate's verdict on it
+    (logits past the 5e-3 block bound at the deep arm and the shallow control
+    past it too), and counts that the composer served the block it was
+    handed. Dense fixture, cuda:0 and vulkan:7 alike: the gate left out reads
+    0.143 (28x the bound) at the deep arm and 0.368 (74x) at the control; the
+    halves of the double-width query swapped 7.7e-2 (15x) and 5.7e-2 (11x);
+    the halves read whole rather than per head 1.3e-2 (2.7x) and 5.4e-2
+    (11x). The 256-wide fixture: 2.4e-2 (5x) and 7.7e-2 (15x); 6.6e-3 (1.3x)
+    and 3.2e-2 (6x); 1.6e-2 (3x) and 4.0e-2 (8x). Unrewritten the gate
+    reads 4.5e-5 and 1.1e-4.
   - Each new form is executed on the CPU against the oracle. xIELU is held to
     the engine's own bound for its kernel (4e-7 of the sum of the terms'
     sizes) plus exp's error where the form takes exp (3.5e-6 of exp(m), the
@@ -7393,8 +7460,7 @@ row where the composer's reads two.
     widths 1 to 100 with a guard after the output and at the arguments where
     that remainder peaks. The composed form reads 0.19 to 0.58 of the bound
     and main's kernel the same to three digits; against the engine's bound
-    alone both read up to 1.59, which its gate does not see because it does
-    not sample those arguments. The first bound, 2e-6 of the result, is met
+    alone both read up to 1.59. The first bound, 2e-6 of the result, is met
     by neither (main's kernel reads up to 2.4e-4 of the result, where the
     terms cancel). Six violations (the alphas exchanged, beta dropped, eps
     ignored or moved, the windows one element along, expm1 stated as
@@ -7402,6 +7468,75 @@ row where the composer's reads two.
     projection is exact and its gated output 0.6e-6 to 2.8e-6 from the
     definition, main's kernel's own figures, under 3.6e-6; the norm in front
     of a projection is 1.6e-14 from the oracle in NMSE.
+  - The expm1 bound is looser than the first version of its gate. That held
+    every input to 4e-7 and read 1.46e-6 past the Taylor window, at 3.7 times
+    the bound. Past |x| = 1/2 expm1 is exp(x) - 1, and exp is the degree-5
+    Taylor sum on a reduced argument |r| <= ln2/2 that main's kernels use
+    too (`jit/pass_exp.go`, `emitExpPS`): its remainder is 3.24e-6 of exp(r)
+    at r = -ln2/2, so exp holds 3.5e-6 (read 1.54e-6), and exp(x) - 1
+    multiplies that by e^x/|e^x - 1|, 2.54 at x = 1/2 and falling away, so the
+    bound past the window is 2.6 x 3.5e-6 + 1 ulp = 9.2e-6. Within the window
+    the form is a few ulps and keeps 4e-7 (read 6.5e-8). The bound is derived
+    from the exp the engine already ships, not fitted to the reading, and
+    exp(x) - 1 stated the naive way still reads 1.0 within the window.
+  - Main's xIELU gate did not sample the arguments where exp's remainder
+    peaks, and its own kernel reads 1.59 of its bound there (x = -1.04, the
+    edge of the reduced argument; 0.584 with exp's error added). It now does:
+    `TestXIELUAtTheExpEdges` (jit/cpu, avx2 and sse) runs the sixteen
+    arguments at both edges of eight ranges under `xieluTol` plus
+    3.5e-6 |alpha_n| exp(m), and fails an exp a Taylor term short (caught on
+    306 elements) and the other faults. The backend's gate (2e-6 of the
+    terms, cuda ptx and vulkan spirv) takes the same arguments: they read
+    0.01 and 0.00 of its bound, against 0.03 to 0.05 for its sampled ones, so
+    its bound stands.
+  - The other hybrid device gates in the composed build, on card 7, before
+    the rebase: the 38 tests that place a hybrid on a device and that the
+    attention block's composition could move (`TestHybridDeviceErrorIsAmplification`,
+    `TestHybridDeviceErrorGrowsWithPosition`, the second-session, seam,
+    paging, scheduler, streaming and prefill gates) ran 28 to a pass, 2 to a
+    failure and 8 to a skip, 81 passes counting subtests. The failures and
+    skips named files the box did not hold (the Kimi-K3, kimilinear, mamba2
+    and image-chat fixtures and goldens, and the Qwen3.5-0.8B checkpoint),
+    each a missing artefact, not the change. The checkpoint was fetched on the
+    box from Hugging Face and its five gates pass in the composed build (13
+    passes; six two-device subtests skip: they name vulkan:1, which the
+    one-card selection does not hold). The seven gates on the other fixtures
+    pass on the laptop's GPU (29 passes). The two fault-injection hybrid
+    gates and the four step-fault gates that share their file carry the
+    `jitllmfault` tag, which the sweep's binary leaves out; a binary built
+    with it passes all six (29 passes).
+    `TestBlocksMoveBetweenDevices` needs two distinct cards and is not part
+    of this.
+  - `TestComposedBlocksServe` over its 17 models, cuda:0 and vulkan:7, whole
+    block and whole block with the head, with and without the recording, the
+    exported tree of the first commit: 14 passes a model, none skipped. Each
+    arm's median distance from the float reference is at most 1.21 times the
+    tier's (gemma-2b; bound 1.5) and its worst at most 1.75 times the widest
+    the tier's backends reach (Qwen3-1.7B; bound 4). On the rebased tree four
+    of them, Llama-3.2-1B, Qwen3-0.6B, EXAONE-4.0-1.2B and gemma-3-1b-it, the
+    last two with sliding layers the tier now serves, pass 14 each as well, at
+    most 1.10 of the tier's distance at the median and 2.18 of the widest
+    backend's at the worst (gemma-3-1b-it).
+  - The escape analysis against seam-wip's head. `go build -gcflags=-m` over
+    `jit/gpu/tier`, `jit`, `engine/graph` and `engine/model` reads 41235
+    heap diagnostics there and 41297 here. The 24 entries that differ are in
+    `jit/decompose_map.go` (a form), `engine/graph/verify.go` (the verifier)
+    and `engine/model/front.go` (the graph a model states), all built once;
+    none is in `jit/gpu/tier`, `jit/pass_regs.go` or a file a token runs.
+  - Logs. V100, `~/jitllm-test/gates/engine/model/`: `g5-*.out` the first
+    commit's default build (`g5-serve-*`, `g5-c6-full`) and the new tree's
+    composed build (`g5-violations-c`, `g5-hybrid-block-c`, `g5-hybrid-sib-c`,
+    `g5-apertus-c`, `g5-bitnet-c`, `g5-c6-full-c`, `g5-xielu-backend`);
+    `g6-qwen35-c`; `g7-*` the final composed binary (`g7-violations`,
+    `g7-hybrid-block`, `g7-bitnet`, `g7-c6-full`, the source of the refusals
+    named above); `g8-*` the first commit's composed build; `g9-room-step`
+    the fault-tagged composed binary; `g10-*` the rebased tree (`g10-c6-full`
+    the counts of the 25 fixtures, `g10-violations`, `g10-hybrid-block`,
+    `g10-bitnet`, `g10-serve-*`). Laptop, `agent-scratch/gates/`: `cpu7.out`
+    (the composed CPU gates and all 59 rows of `TestFrontStatesTheModelAsOps`
+    on the rebased tree, two of which the V100 box has no file for and which
+    need no device), `cpu8.out` (the corrected qwen35 test), `xielu-cpu.out`,
+    `lap-hybrid.out`, `esc-compare.out`.
   - The width gate found a bug in the CPU lowering. `ZerosPerLoop` redirects a
     reader to a zero made for its loop through an operand pointer taken before
     the append that adds the zero, and the append moves the nodes, so the

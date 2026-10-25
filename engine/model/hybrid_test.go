@@ -11,6 +11,7 @@ import (
 
 	"github.com/jitllm/jitllm/format/jlm"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
@@ -558,20 +559,30 @@ func TestHybridAttentionBlockOnDevice(t *testing.T) {
 		opt  hyOpt
 	}{
 		{"dense", hyOpt{}}, {"moe", hyOpt{moe: true}}, {"tiled", hyOpt{tiled: true}},
-		{"big", hyOpt{moe: true, big: true}},
+		{"big", hyOpt{moe: true, big: true}}, {"bigdense", hyOpt{big: true}},
 		{"widemoe", hyOpt{moe: true, wideMoE: true}}} {
 		// Every backend, not "gpu:0". See hybridDeviceNMSEOn.
 		for _, spec := range stepDevices() {
 			t.Run(c.name+"/"+spec, func(t *testing.T) {
-				hybridDeviceBlockOn(t, c.opt, spec, false)
+				hybridDeviceBlockOn(t, c.opt, spec, hyDev{})
 				if composedByDefault {
 					// The composer's counts are of the steps emitted, which a
 					// recording replays: the arm that counts runs without one.
-					hybridDeviceBlockOn(t, c.opt, spec, true)
+					hybridDeviceBlockOn(t, c.opt, spec, hyDev{noGraph: true})
 				}
 			})
 		}
 	}
+}
+
+// hyDev is how hybridDeviceNMSEOn drives the device. noGraph issues each
+// token's launches one at a time, which the composer's counts need; composed
+// asks the composer for the blocks whatever the build; rewrite states every
+// block to the composer as the rewrite of its graph, a violation that reaches
+// the composer and nothing the tier runs of its own.
+type hyDev struct {
+	noGraph, composed bool
+	rewrite           func(*graph.Graph) *graph.Graph
 }
 
 // hybridDeviceBound is what a placed block may differ from the host by. It
@@ -588,29 +599,51 @@ const hybridDeviceBound = 5e-3
 // same geometry at two layers with the seam one block from the bottom. A fault
 // in the block moves both arms; amplification moves only the deep one. See
 // docs/engineering-history/placement.md 15i.
-func hybridDeviceBlockOn(t *testing.T, o hyOpt, spec string, noGraph bool) {
-	worst, at := hybridDeviceNMSEOn(t, o, spec, noGraph)
-	if worst <= hybridDeviceBound {
-		return
+func hybridDeviceBlockOn(t *testing.T, o hyOpt, spec string, how hyDev) {
+	t.Helper()
+	v := hybridDeviceVerdict(t, o, spec, how)
+	if v.failed {
+		t.Fatalf("pos %d: logit NMSE %.3e, and the SHALLOW control is %.3e at "+
+			"pos %d -- both arms moved, so the device block does not compute "+
+			"what the host does", v.at, v.worst, v.ctl, v.ctlAt)
+	}
+	if v.worst > hybridDeviceBound {
+		t.Logf("pos %d: logit NMSE %.3e is AMPLIFICATION: the same block with one "+
+			"host block below it reads %.3e (%.0fx over two more recurrences)",
+			v.at, v.worst, v.ctl, v.worst/v.ctl)
+	}
+}
+
+// hyVerdict is what hybridDeviceBlockOn decides on: the worst logit NMSE of
+// the fixture and where, and when it passes the bound the shallow control's.
+// failed says the gate fails: both arms are past the bound.
+type hyVerdict struct {
+	worst, ctl float64
+	at, ctlAt  int
+	failed     bool
+}
+
+// hybridDeviceVerdict is hybridDeviceBlockOn's decision, for a gate that
+// holds a violation to failing it.
+func hybridDeviceVerdict(t *testing.T, o hyOpt, spec string, how hyDev) hyVerdict {
+	t.Helper()
+	var v hyVerdict
+	v.worst, v.at = hybridDeviceNMSEOn(t, o, spec, how)
+	if v.worst <= hybridDeviceBound {
+		return v
 	}
 	so := o
 	so.layers, so.solo = 2, 2
-	ctl, cat := hybridDeviceNMSEOn(t, so, spec, noGraph)
-	if ctl > hybridDeviceBound {
-		t.Fatalf("pos %d: logit NMSE %.3e, and the SHALLOW control is %.3e at "+
-			"pos %d -- both arms moved, so the device block does not compute "+
-			"what the host does", at, worst, ctl, cat)
-	}
-	t.Logf("pos %d: logit NMSE %.3e is AMPLIFICATION: the same block with one "+
-		"host block below it reads %.3e (%.0fx over two more recurrences)",
-		at, worst, ctl, worst/ctl)
+	v.ctl, v.ctlAt = hybridDeviceNMSEOn(t, so, spec, how)
+	v.failed = v.ctl > hybridDeviceBound
+	return v
 }
 
 // hybridDeviceNMSEOn places every block of the fixture on a named backend and
 // returns the worst per-position logit NMSE against the host, with the position
 // it was at. "gpu:0" resolves to CUDA wherever it exists, so a gate asking only for
 // "gpu:0" never ran the gated delta rule on SPIR-V.
-func hybridDeviceNMSEOn(t *testing.T, o hyOpt, spec string, noGraph bool) (float64, int) {
+func hybridDeviceNMSEOn(t *testing.T, o hyOpt, spec string, how hyDev) (float64, int) {
 	m := hybridModelOpt(t, o)
 	defer m.Close()
 	if !m.Cfg.AttnOutGate || m.Cfg.NRot == m.Cfg.HeadDim {
@@ -634,14 +667,20 @@ func hybridDeviceNMSEOn(t *testing.T, o hyOpt, spec string, noGraph bool) (float
 	// unpinned placements disagree in the last bits, which a deep hybrid
 	// amplifies (TestHybridDeviceErrorIsAmplification).
 	opts := []tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)}
-	if noGraph {
+	if how.noGraph {
 		opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
+	}
+	if how.composed {
+		opts = append(opts, composedOpt(composedParts))
 	}
 	g, err := tier.OpenWith(opts...)
 	if err != nil || g == nil {
 		noDevice(t, spec, err)
 	}
 	defer g.Close()
+	if how.rewrite != nil {
+		defer m.rewriteBlocks(t, how.rewrite)()
+	}
 
 	dev := m.NewState(16)
 	defer dev.Close()
@@ -687,7 +726,7 @@ func hybridDeviceNMSEOn(t *testing.T, o hyOpt, spec string, noGraph bool) (float
 			worst, at = nmse, p
 		}
 	}
-	if noGraph {
+	if how.noGraph {
 		composedCovers(t, m, len(ids), dev.GPULayers(), true, g)
 	}
 	return worst, at

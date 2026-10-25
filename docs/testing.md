@@ -296,6 +296,11 @@ from a recording (`composedCovers`, on the counter `composedBlocksRan` uses),
 and to declining every other block step for having no graph and no other
 reason. A model the front end states in part runs once more with every step
 issued, which counts those declines exactly.
+`TestHybridOutGateViolationsOnDevice` runs the hybrid's attention block
+composed with its graph rewritten (the gate left out, the halves of each
+head's double-width query swapped or read whole), which only the composer
+reads, and holds the hybrid gate's own verdict on it to a failure: past the
+block bound with the shallow control past it too.
 
 ## The shadow arm
 

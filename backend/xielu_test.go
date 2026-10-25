@@ -23,8 +23,8 @@ func TestXIELUMatchesTheOracle(t *testing.T) {
 	if len(devs) == 0 {
 		t.Skip("no GPU backend on this host")
 	}
-	const n = 1000
-	in := make([]float32, n)
+	const sampled = 1000
+	in := make([]float32, sampled)
 	for i := range in {
 		f := float64(i)
 		switch i % 6 {
@@ -42,6 +42,17 @@ func TestXIELUMatchesTheOracle(t *testing.T) {
 			in[i] = float32(5 * math.Abs(math.Sin(f*0.53)))
 		}
 	}
+	// The arguments, for eight periods of a range reduction by ln2 below zero,
+	// where the reduced argument sits just inside either edge of [-ln2/2,
+	// ln2/2]: where a polynomial exp's remainder peaks (jit/cpu's gate holds
+	// the host kernels there). The device exp is the backend's own and is held
+	// to this bound, whatever it is built on.
+	for k := -1; k >= -8; k-- {
+		for _, r := range []float64{-math.Ln2 / 2 * 0.9999, math.Ln2 / 2 * 0.9999} {
+			in = append(in, float32(float64(k)*math.Ln2+r))
+		}
+	}
+	n := len(in)
 	params := [][4]float32{{0.8, 0.95, 0.5, -1e-6}, {1.31, 0.42, 0.37, -0.25}}
 	tol := func(x float64, p [4]float32) float64 {
 		ap, an, b, e := float64(p[0]), float64(p[1]), float64(p[2]), float64(p[3])
@@ -83,7 +94,7 @@ func TestXIELUMatchesTheOracle(t *testing.T) {
 				got := func(i int) float64 {
 					return float64(math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:])))
 				}
-				worst := 0.0
+				worst, worstEdge := 0.0, 0.0
 				for i, v := range in {
 					x := float64(v)
 					want := oracle.XIELU(x, float64(p[0]), float64(p[1]), float64(p[2]), float64(p[3]))
@@ -91,7 +102,11 @@ func TestXIELUMatchesTheOracle(t *testing.T) {
 					if !(d <= tol(x, p)) {
 						t.Fatalf("params %v: x[%d]=%g gives %g, want %g", p, i, v, got(i), want)
 					}
-					worst = max(worst, d/tol(x, p))
+					if i < sampled {
+						worst = max(worst, d/tol(x, p))
+					} else {
+						worstEdge = max(worstEdge, d/tol(x, p))
+					}
 				}
 				// Each wrong form must leave the bound on some input.
 				for _, f := range []struct {
@@ -118,7 +133,7 @@ func TestXIELUMatchesTheOracle(t *testing.T) {
 						t.Errorf("params %v: %s: the gate cannot see it", p, f.name)
 					}
 				}
-				t.Logf("params %v: %d elements within bound, worst at %.2f of it", p, n, worst)
+				t.Logf("params %v: %d elements within bound, worst at %.2f of it on the %d sampled and %.2f on the %d at exp's edges", p, n, worst, sampled, worstEdge, n-sampled)
 			}
 		})
 	}

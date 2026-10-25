@@ -304,6 +304,8 @@ func (m *Model) uncovered(li int) Uncovered {
 	case m.layers[li].vFromK:
 		return UncoveredVFromK
 	case c.TokenAct:
+		// The norms inside a sublayer are stored only with this (model.go), so
+		// until it is stated no container reaches the graph's statement of them.
 		return UncoveredTokenAct
 	case c.ClampKQV != 0:
 		return UncoveredClamp

@@ -228,9 +228,14 @@ func TestFrontStatesTheActivationFromTheBlocksNumbers(t *testing.T) {
 // TestFrontStatesTheNormsInsideASublayer holds the two norms a model applies
 // inside a sublayer -- the attention's output before the output projection and
 // the product of the gate and up projections before down -- to their place in
-// the graph, and forms them. The model quantizes its projection inputs per
-// token, which the front end refuses by name, so the statement is read with
-// that taken from the config; a norm of the wrong width is refused.
+// the graph, and forms them; a norm of the wrong width is refused.
+//
+// No container reaches this statement yet. A model stores these norms only
+// where it quantizes its projection inputs per token (model.go refuses one
+// without the other), and the front end refuses that first, by name
+// (UncoveredTokenAct), so the graph is read here with the flag taken from the
+// config. Until a later change states the quantization, no block of any model
+// is served through these norms, and no device gate runs them.
 func TestFrontStatesTheNormsInsideASublayer(t *testing.T) {
 	m := frontModel(t, "synth-bitnet-f16.gguf")
 	if !m.Cfg.TokenAct {
@@ -270,29 +275,49 @@ func TestFrontStatesTheNormsInsideASublayer(t *testing.T) {
 	}
 }
 
-// TestFrontNamesWhatTheQwen35FixtureStillLacks holds a converted hybrid: its
-// recurrent mixers are refused by their kind, and its attention blocks, whose
-// output gate the front end states, by the next thing they carry that it does
-// not, a rotary over several position axes.
-func TestFrontNamesWhatTheQwen35FixtureStillLacks(t *testing.T) {
+// TestFrontStatesTheQwen35FixturesAttention holds a converted hybrid: its
+// recurrent mixers are refused by their kind, and its attention blocks -- an
+// output gate and a rotary over several position axes, interleaved -- are
+// stated, with the output gate's ops and every rotary carrying the sections
+// the container states, and form.
+func TestFrontStatesTheQwen35FixturesAttention(t *testing.T) {
 	m := frontModel(t, "synth-qwen35-hybrid-mtp.gguf")
 	if !m.Cfg.AttnOutGate || m.Cfg.RopeSections == [4]int{} {
 		t.Fatal("the fixture lost its output gate or its rotary sections: this gate is about both")
 	}
-	attn, mixers := 0, 0
+	var stated []int
+	mixers := 0
 	for li := range m.Cfg.NLayer {
-		want := UncoveredKind
-		if m.Cfg.LayerKind(li) == jlm.LayerFullAttn {
-			want = UncoveredRopeAxes
-			attn++
-		} else {
+		if m.Cfg.LayerKind(li) != jlm.LayerFullAttn {
+			if why := m.Uncovered(li); why != UncoveredKind {
+				t.Fatalf("block %d, a recurrent mixer, is refused by %q (%v), want %q", li, why, m.UncoveredErr(li), UncoveredKind)
+			}
 			mixers++
+			continue
 		}
-		if why := m.Uncovered(li); why != want {
-			t.Fatalf("block %d is refused by %q (%v), want %q", li, why, m.UncoveredErr(li), want)
+		if why := m.Uncovered(li); why != Covered {
+			t.Fatalf("attention block %d is refused by %q (%v)", li, why, m.UncoveredErr(li))
 		}
+		var ropes, gates int
+		for _, o := range m.Composing().BlockGraph(li).Ops {
+			switch {
+			case o.Kind == graph.OpRope:
+				ropes++
+				if o.Attr.Sections != m.Cfg.RopeSections || o.Attr.Interleaved != m.Cfg.RopeInterleaved {
+					t.Fatalf("block %d: a rotary over sections %v (interleaved %v), where the container states %v (%v)",
+						li, o.Attr.Sections, o.Attr.Interleaved, m.Cfg.RopeSections, m.Cfg.RopeInterleaved)
+				}
+			case o.Kind == graph.OpActMul && o.Attr.Act == graph.ActSigmoid:
+				gates++
+			}
+		}
+		if ropes != 2 || gates != 1 {
+			t.Fatalf("block %d states %d rotaries and %d output gates, want 2 and 1", li, ropes, gates)
+		}
+		stated = append(stated, li)
 	}
-	if attn == 0 || mixers == 0 {
-		t.Fatalf("the fixture has %d attention blocks and %d recurrent mixers: it is no hybrid", attn, mixers)
+	if len(stated) == 0 || mixers == 0 {
+		t.Fatalf("the fixture has %d attention blocks and %d recurrent mixers: it is no hybrid", len(stated), mixers)
 	}
+	formBlocks(t, m, stated)
 }

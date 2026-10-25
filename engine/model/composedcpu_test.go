@@ -673,7 +673,8 @@ func rowsNMSE(got, want []float32) float64 {
 // oracle: an RMSNorm with the block's own scale, then the next projection's
 // matrix product. The bound is the NMSE TestComposedCPUMatVec (jit) holds the
 // composer's projection to. The scale all ones, or the norm left out, leaves
-// it by orders of magnitude.
+// it by orders of magnitude. It is the only execution of these norms: no
+// container reaches them (TestFrontStatesTheNormsInsideASublayer).
 func TestComposedCPUSubNorm(t *testing.T) {
 	const eps, bound = 1e-5, 1e-9
 	for _, c := range []struct {

@@ -71,6 +71,7 @@ func composedOpt(parts tier.Parts) tier.Option {
 // were named.
 var composedLater = []string{"a prompt chunk's folded head", "a head over several rows", "a ragged step's rows",
 	"every row's logits (speculative rows)", "a prompt's one-row head", "a prompt outside the shadow arm"}
+
 // composedNoGraph is the reason the tier declines a block the front end
 // states no graph for (tier.DeclineName).
 const composedNoGraph = "no graph from the front end"
@@ -92,10 +93,13 @@ func composedCovers(t *testing.T, m *Model, steps, placed int, exact bool, gs ..
 		return
 	}
 	covered := 0
+	refused := map[string]int{}
 	for li := range placed {
-		if m.Uncovered(li) == Covered {
-			covered++
+		if why := m.Uncovered(li); why != Covered {
+			refused[why.String()]++
+			continue
 		}
+		covered++
 	}
 	formed := 0
 	declined := map[string]int{}
@@ -114,8 +118,8 @@ func composedCovers(t *testing.T, m *Model, steps, placed int, exact bool, gs ..
 		}
 	}
 	ran := composedBlockSteps(gs...)
-	t.Logf("the front end states %d of %d blocks: the composer ran %d block steps in %d steps, declined %d for no graph",
-		covered, placed, ran, steps, declined[composedNoGraph])
+	t.Logf("the front end states %d of %d blocks (refused: %v): the composer ran %d block steps in %d steps, declined %d for no graph",
+		covered, placed, refused, ran, steps, declined[composedNoGraph])
 	if formed != 0 {
 		t.Errorf("%d composed part(s) formed at a step", formed)
 	}
