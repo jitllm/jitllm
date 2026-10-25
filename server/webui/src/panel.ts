@@ -249,7 +249,7 @@ function drawPlacement() {
   const no = target ? "" : "no GPU on this server";
   const move = async (first: number, last: number, toHost: boolean, what: string) => {
     try {
-      const r = await placement.relocateBlocks({ sessionId: placeSession, firstBlock: first, lastBlock: last, toHost, toDeviceId: toHost ? "" : target!.ref!.id });
+      const r = await placement.relocateBlocks({ sessionId: placeSession, firstBlock: first, lastBlock: last, toDeviceId: toHost ? "cpu" : target!.ref!.id });
       lastMove = r.declined[0] ? `Declined: ${r.declined[0].reason}` : `${what}: ${r.blocksMoved} layer(s) moved in ${r.millis} ms`;
       ctx.toast(lastMove, !!r.declined[0]);
     } catch (e) { lastMove = errText(e); ctx.toast(lastMove, true); }

@@ -8,6 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/jitllm/jitllm/internal/testdevices"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -38,6 +39,7 @@ func deviceEngine(t *testing.T) (*Engine, clients) {
 // is refused with its reason. With RelocateBlocks' tail check removed the
 // hole is accepted and the placement silently differs from the request.
 func TestTheSeamMovesThroughThePlacementService(t *testing.T) {
+	testdevices.Refusing(t, "cuda:7")
 	e, c := deviceEngine(t)
 	ctx := context.Background()
 	if _, err := e.CreateSession(SessionOptions{ModelID: "dev", SessionID: "d", MaxSeq: 64}); err != nil {
@@ -65,7 +67,7 @@ func TestTheSeamMovesThroughThePlacementService(t *testing.T) {
 
 	// The tail of the device set comes home.
 	home, err := c.placement.RelocateBlocks(ctx, req(&v1.RelocateBlocksRequest{
-		SessionId: "d", FirstBlock: n - 1, LastBlock: n - 1, ToHost: true,
+		SessionId: "d", FirstBlock: n - 1, LastBlock: n - 1, ToDeviceId: "cpu",
 	}))
 	if err != nil {
 		t.Fatal(err)

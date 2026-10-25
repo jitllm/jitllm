@@ -744,14 +744,10 @@ type RelocateBlocksRequest struct {
 	// Inclusive block range. `first_block` == `last_block` moves one block.
 	FirstBlock int32 `protobuf:"varint,2,opt,name=first_block,json=firstBlock,proto3" json:"first_block,omitempty"`
 	LastBlock  int32 `protobuf:"varint,3,opt,name=last_block,json=lastBlock,proto3" json:"last_block,omitempty"`
-	// Where to put them. Empty `to_device_id` with `to_host` true brings them
-	// home; a non-empty id moves them to that device. A range already on the
-	// session's devices moves between them: each block's KV pages and
-	// recurrent summary go with it, and no prompt row is computed again. The
-	// device must be one the session's model was loaded with (the tier owns
-	// the devices).
+	// The device to put them on, the CPU ("cpu") as any other: each block's KV
+	// pages and recurrent summary go with it, and no prompt row is computed
+	// again. A card the session's model was not loaded with joins its tier.
 	ToDeviceId    string `protobuf:"bytes,4,opt,name=to_device_id,json=toDeviceId,proto3" json:"to_device_id,omitempty"`
-	ToHost        bool   `protobuf:"varint,5,opt,name=to_host,json=toHost,proto3" json:"to_host,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -812,13 +808,6 @@ func (x *RelocateBlocksRequest) GetToDeviceId() string {
 		return x.ToDeviceId
 	}
 	return ""
-}
-
-func (x *RelocateBlocksRequest) GetToHost() bool {
-	if x != nil {
-		return x.ToHost
-	}
-	return false
 }
 
 type RelocateBlocksResponse struct {
@@ -1491,7 +1480,7 @@ const file_jitllm_v1_placement_proto_rawDesc = "" +
 	"\x0f_head_on_device\"b\n" +
 	"\x14SetPlacementResponse\x122\n" +
 	"\tplacement\x18\x01 \x01(\v2\x14.jitllm.v1.PlacementR\tplacement\x12\x16\n" +
-	"\x06millis\x18\x02 \x01(\x03R\x06millis\"\xb1\x01\n" +
+	"\x06millis\x18\x02 \x01(\x03R\x06millis\"\xa7\x01\n" +
 	"\x15RelocateBlocksRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
@@ -1500,8 +1489,7 @@ const file_jitllm_v1_placement_proto_rawDesc = "" +
 	"\n" +
 	"last_block\x18\x03 \x01(\x05R\tlastBlock\x12 \n" +
 	"\fto_device_id\x18\x04 \x01(\tR\n" +
-	"toDeviceId\x12\x17\n" +
-	"\ato_host\x18\x05 \x01(\bR\x06toHost\"\xd9\x03\n" +
+	"toDeviceIdJ\x04\b\x05\x10\x06R\ato_host\"\xd9\x03\n" +
 	"\x16RelocateBlocksResponse\x122\n" +
 	"\tplacement\x18\x01 \x01(\v2\x14.jitllm.v1.PlacementR\tplacement\x12!\n" +
 	"\fblocks_moved\x18\x02 \x01(\x05R\vblocksMoved\x127\n" +

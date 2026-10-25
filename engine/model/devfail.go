@@ -55,4 +55,3 @@ func (s *State) Evacuations() Evacuations {
 		BuildRefused:   s.buildRefused,
 	}
 }
-

@@ -105,6 +105,48 @@ func TestARefusalIsAViolationOnlyWhenTheTestNamedTheDevice(t *testing.T) {
 	}
 }
 
+// TestADeliberateRefusalIsNotAViolation: a device a test declares with
+// Refusing is refused and not recorded, every other device outside the
+// selection still is, and the declaration ends with its test.
+func TestADeliberateRefusalIsNotAViolation(t *testing.T) {
+	testdevices.SetForTest(t, "vulkan:99")
+	install(t)
+	open := func(ord int) error {
+		d, err := backend.OpenCUDA(ord)
+		if d != nil {
+			d.Close()
+		}
+		return err
+	}
+
+	t.Run("declared", func(t *testing.T) {
+		testdevices.Refusing(t, "cuda:7")
+		if err := open(7); err == nil || !strings.Contains(err.Error(), "outside JITLLM_TEST_DEVICES") {
+			t.Fatalf("OpenCUDA(7) declared refused = %v, want a refusal", err)
+		}
+		if v := testdevices.Violations(); len(v) != 0 {
+			t.Fatalf("a declared refusal was recorded: %v", v)
+		}
+		if err := open(6); err == nil {
+			t.Fatal("OpenCUDA(6) under vulkan:99 opened")
+		}
+		if v := testdevices.Violations(); len(v) != 1 || v[0] != "cuda:6 x1" {
+			t.Fatalf("Violations = %v, want the undeclared cuda:6 alone", v)
+		}
+	})
+	testdevices.Reset()
+	if err := open(7); err == nil {
+		t.Fatal("OpenCUDA(7) under vulkan:99 opened")
+	}
+	if v := testdevices.Violations(); len(v) != 1 || v[0] != "cuda:7 x1" {
+		t.Fatalf("after its test ended the declaration still holds: Violations = %v", v)
+	}
+	if code := testdevices.Fail(0); code != 1 {
+		t.Fatalf("Fail(0) = %d with a violation recorded", code)
+	}
+	testdevices.Reset()
+}
+
 // TestOnlyTheSelectedDevicesOpen runs on a host with the variable set, which
 // is what a shared box does: it asks every ordinal of every backend the host
 // has to open, by name, and the devices that open are exactly the selected

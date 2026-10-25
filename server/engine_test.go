@@ -974,17 +974,17 @@ func TestPlacementRefusesWhatAHostOnlySessionCannotDo(t *testing.T) {
 		m    *v1.RelocateBlocksRequest
 		want connect.Code
 	}{
-		{"a negative first block", &v1.RelocateBlocksRequest{SessionId: "p", FirstBlock: -1, LastBlock: 0, ToHost: true},
+		{"a negative first block", &v1.RelocateBlocksRequest{SessionId: "p", FirstBlock: -1, LastBlock: 0, ToDeviceId: "cpu"},
 			connect.CodeInvalidArgument},
-		{"a range past the last block", &v1.RelocateBlocksRequest{SessionId: "p", FirstBlock: 0, LastBlock: 5, ToHost: true},
+		{"a range past the last block", &v1.RelocateBlocksRequest{SessionId: "p", FirstBlock: 0, LastBlock: 5, ToDeviceId: "cpu"},
 			connect.CodeInvalidArgument},
-		{"a reversed range", &v1.RelocateBlocksRequest{SessionId: "p", FirstBlock: 3, LastBlock: 2, ToHost: true},
+		{"a reversed range", &v1.RelocateBlocksRequest{SessionId: "p", FirstBlock: 3, LastBlock: 2, ToDeviceId: "cpu"},
 			connect.CodeInvalidArgument},
 		{"no destination", &v1.RelocateBlocksRequest{SessionId: "p", FirstBlock: 0, LastBlock: 1},
 			connect.CodeInvalidArgument},
 		{"a device that does not exist", &v1.RelocateBlocksRequest{SessionId: "p", FirstBlock: 0, LastBlock: 1, ToDeviceId: "nosuch:0"},
 			connect.CodeFailedPrecondition},
-		{"an unknown session", &v1.RelocateBlocksRequest{SessionId: "nope", ToHost: true}, connect.CodeNotFound},
+		{"an unknown session", &v1.RelocateBlocksRequest{SessionId: "nope", ToDeviceId: "cpu"}, connect.CodeNotFound},
 	} {
 		_, err := c.placement.RelocateBlocks(ctx, req(tc.m))
 		wantCode(t, "RelocateBlocks with "+tc.what, err, tc.want)

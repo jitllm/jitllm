@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -193,7 +194,8 @@ func (e *Engine) demote(v *Session, forID string) bool {
 	}
 	defer v.mu.Unlock()
 	start := time.Now()
-	n, _ := v.st.ReleaseBlocks(0, v.lm.m.Cfg.NLayer)
+	mv, _ := v.st.MoveBlocks(0, v.lm.m.Cfg.NLayer, nn.CPU)
+	n := len(mv.Moved)
 	v.refresh()
 	if n == 0 {
 		return false

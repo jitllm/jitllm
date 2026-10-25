@@ -8,6 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
 
@@ -93,20 +94,15 @@ func (s *PlacementService) SetPlacement(ctx context.Context, req *connect.Reques
 	}), nil
 }
 
-// RelocateBlocks moves a contiguous block range while serving: between the
-// host and the devices, and between the devices of the session's tier.
+// RelocateBlocks moves a contiguous block range while serving, to any device
+// of the session's tier or to the CPU ("cpu"), each block's history with it
+// (model.State.MoveBlocks).
 //
-// A range that is wholly on devices and names a device moves there, each
-// block's history with it (Engine.MoveBlocks). Otherwise the engine's seam is
-// a count (SetGPULayers(n): the first n blocks are on the device), so a range
-// that extends or trims the device set is honoured. These are refused with
-// their reason:
-//
-//	a hole in the middle   the seam is a count; there is no "blocks 3..7 on
-//	                       the card and 8..12 at home" to set.
-//
-// A device the model's tier was not opened with, and a model loaded host-only,
-// are not refused: the device joins the model's tier (Engine.attachDevice).
+// A range wholly on devices that names a card moves there through
+// Engine.MoveBlocks, so a generating session keeps generating while the
+// target prepares. A card the model's tier was not opened with, and a model
+// loaded host-only, are not refused: the card joins the model's tier
+// (Engine.attachDevice).
 func (s *PlacementService) RelocateBlocks(ctx context.Context, req *connect.Request[v1.RelocateBlocksRequest]) (*connect.Response[v1.RelocateBlocksResponse], error) {
 	sess, err := s.E.Session(req.Msg.SessionId)
 	if err != nil {
@@ -118,88 +114,54 @@ func (s *PlacementService) RelocateBlocks(ctx context.Context, req *connect.Requ
 	if first < 0 || last < first || last >= nLayer {
 		return nil, invalid("relocate: block range %d..%d is outside 0..%d", first, last, nLayer-1)
 	}
-	if !m.ToHost && m.ToDeviceId == "" {
-		return nil, invalid("relocate: set to_host, or name a to_device_id")
+	to := m.ToDeviceId
+	if to == "" {
+		return nil, invalid("relocate: name a to_device_id (%q for the CPU)", nn.CPU)
 	}
-	if m.ToDeviceId != "" {
-		if err := s.reach(sess, m.ToDeviceId); err != nil {
+	cpu := nn.DeviceName(to) == nn.CPU
+	if !cpu {
+		if err := s.reach(sess, to); err != nil {
 			return nil, err
 		}
 	}
 	// The caller placed this session: the orchestrator leaves it alone.
 	sess.pinned.Store(true)
-	if m.ToDeviceId != "" && sess.onDevices(first, last) {
-		return s.moveBetweenDevices(ctx, sess, first, last, m.ToDeviceId)
+	if !cpu && sess.onDevices(first, last) {
+		return s.moveBetweenDevices(ctx, sess, first, last, to)
 	}
 
 	start := time.Now()
 	sess.mu.Lock()
-	var moved int
-	var declined []*v1.PlacementDecline
-	if m.ToHost {
-		n, err := sess.st.ReleaseBlocks(first, last+1)
-		moved = n
-		if err != nil {
-			declined = append(declined, &v1.PlacementDecline{BlockIndex: int32(first), Reason: err.Error()})
-		}
-	} else {
-		n, err := sess.st.PlaceBlocks(first, last+1)
-		moved = n
-		if err != nil {
-			declined = append(declined, &v1.PlacementDecline{BlockIndex: int32(first), DeviceId: m.ToDeviceId, Reason: err.Error()})
-		} else if want := last + 1 - first; n < want && !s.allOnDevices(sess, first, last) {
-			declined = append(declined, &v1.PlacementDecline{
-				BlockIndex:  int32(first),
-				DeviceId:    m.ToDeviceId,
-				Reason:      fmt.Sprintf("the device took %d of the %d block(s) asked for", n, want),
-				OutOfMemory: true,
-			})
-		}
-	}
+	mv, err := sess.st.MoveBlocks(first, last+1, to)
 	sess.refresh()
 	sess.mu.Unlock()
-
-	// The tier chose a card for what it placed; a named card gets the blocks
-	// that landed elsewhere, moved there with their history.
-	if !m.ToHost && moved > 0 && m.ToDeviceId != "" {
-		if lo, hi, ok := s.elsewhere(sess, first, last, m.ToDeviceId); ok {
-			if _, err := s.moveBetweenDevices(ctx, sess, lo, hi, m.ToDeviceId); err != nil {
-				declined = append(declined, &v1.PlacementDecline{BlockIndex: int32(lo), DeviceId: m.ToDeviceId, Reason: err.Error()})
-			}
-		}
+	dev := to
+	if cpu {
+		dev = ""
 	}
-
+	var declined []*v1.PlacementDecline
+	if err != nil {
+		declined = append(declined, &v1.PlacementDecline{BlockIndex: int32(first), DeviceId: dev, Reason: err.Error()})
+	}
+	for _, li := range mv.Declined {
+		declined = append(declined, &v1.PlacementDecline{
+			BlockIndex:  int32(li),
+			DeviceId:    dev,
+			Reason:      "the device refused the block; it stays where it was, with its history",
+			OutOfMemory: true,
+		})
+	}
 	return connect.NewResponse(&v1.RelocateBlocksResponse{
 		Placement:   s.E.pbPlacement(sess),
-		BlocksMoved: int32(moved),
+		BlocksMoved: int32(len(mv.Moved)),
 		Declined:    declined,
 		Millis:      millis(time.Since(start)),
+		Path:        pbRelocationPath(mv.Path),
+		History:     pbBytes(mv.KVBytes + mv.RecBytes),
+		HeadMoved:   mv.Head,
+		Copied:      pbBytes(mv.Copied),
+		PauseMicros: mv.Pause.Microseconds(),
 	}), nil
-}
-
-// allOnDevices reports whether blocks first..last are all on a device now.
-func (s *PlacementService) allOnDevices(sess *Session, first, last int) bool {
-	return sess.onDevices(first, last)
-}
-
-// elsewhere is the hull of the blocks in first..last that sit on a device
-// other than want, when that hull is wholly on devices.
-func (s *PlacementService) elsewhere(sess *Session, first, last int, want string) (lo, hi int, ok bool) {
-	on := sess.placement().on
-	lo, hi = -1, -1
-	for li := first; li <= last && li < len(on); li++ {
-		if on[li] == "" || s.E.gateKey(on[li]) == s.E.gateKey(want) {
-			continue
-		}
-		if lo < 0 {
-			lo = li
-		}
-		hi = li
-	}
-	if lo < 0 || !sess.onDevices(lo, hi) {
-		return 0, 0, false
-	}
-	return lo, hi, true
 }
 
 func (s *PlacementService) SetRelocation(ctx context.Context, req *connect.Request[v1.SetRelocationRequest]) (*connect.Response[v1.SetRelocationResponse], error) {

@@ -7927,3 +7927,47 @@ row where the composer's reads two.
   Coarsen's per-unit values (linear in the rows) are 33 s, compiling the
   forms 43 s; and the tier's own per-width prompt kernels are still compiled
   beside them, about 40 s, where the composer serves the prompt.
+- **A block's location is a device name, and the CPU is one of them.** A
+  block is on "cpu" (`nn.CPU`) or on a card, read through `State.WhereIs(li)`
+  and `State.Locations()`; the placement set and its seam are written only by
+  their setters (`markOnDev`, `unmarkOnDev`, `clearOnDev`, `shrinkOnDev`,
+  `holdHostRuns`), which `srcgate.TestBlockLocationIsWrittenByItsSetters`
+  holds over 105 files and 10 writes (a constructor's `gpuLayers: lo` put
+  back fails it). Placing and releasing are one call, `State.MoveBlocks(lo,
+  hi, to)`, `to` a card or "cpu": to the CPU device the history comes off the
+  card first, to a card each block is offered to that card by name
+  (`PrepLayerOn`) and its history follows; `ReleaseBlocks` is gone. The
+  placement service's `RelocateBlocks` takes `to_device_id: "cpu"` where it
+  took `to_host` (field 5 reserved, regenerated with `buf generate`), and
+  the orchestrator's demotion and `jitllmd place` go through it.
+  `TestBlocksMoveToTheCPUAndBack` moves the upper half of every model to the
+  CPU device and back, cut at a KV-sharing group's edge: 40 pass, 0 fail, 0
+  skip in the default and composed builds on a V100 (cuda:0 and vulkan:2),
+  and its violation (the move without its history) is 15.4 logits off the
+  CPU control at token 3. Two composed-build declines on relocation paths
+  came out of the run: `TestRelocatedBlocksComeBack/shorter-prompt` failed 2
+  of 2 on the tree before this work and on this change alike, and
+  `TestPlacement/stream` failed the same way (on this change; the tree
+  before it was not run under vulkan:1). A composed
+  part's instance was asked only `room`, so after a 64-row prefill (0.66 MB
+  free, the 15 trimmed history pages still in the pool) block 15's 8137828
+  bytes were refused, and that refusal was recorded as a build failure and
+  cached, leaving the block placed with no kernel. `devTier.instance` now
+  makes room as state does outside a submission (`stateFits`: the pool's
+  free pages, then a streamed block paged out), and a refusal for room is a
+  `partRoomError`, a decline that is not remembered. Shorter-prompt passes
+  at 4.66e-04 against its 3.83e-03 bound with the card back at the probe's
+  1132199936 bytes; stream places 16 of 16 blocks with 32 page-ins. A real
+  build failure is still one: `TestBuildFailureMovesNothing` and the fault
+  set pass in both builds, and a form failure routed as a room refusal fails
+  both its arms (no `nn.BuildError`, the State demoted instead). The moves
+  set reads 325 pass, 0 fail, 13 skip in each build (the skips are the q8_0
+  cache arms refused by name and the attention-free state-space models),
+  `TestDecodeDoesNotAllocate` on Llama 0 engine allocations on all 32 arms
+  in each, and `go build -gcflags=-m` over the packages touched 361 heap
+  moves before and after, the same set.
+  `testdevices.Refusing` declares a device a test names to see it refused:
+  the server's cuda:7 refusal cases no longer fail the binary (14 pass, exit
+  0), the same run without the declaration exits 1 on `cuda:7 x2`, and an
+  undeclared device beside a declared one is still a violation
+  (`TestADeliberateRefusalIsNotAViolation`).

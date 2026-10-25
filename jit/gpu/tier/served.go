@@ -276,15 +276,17 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 // instance is a lane's instance of form f: its own buffers, poisoned where
 // the tier's scratch is (WithPoisonScratch) so that a kernel reading what no
 // kernel wrote shows, its constants written, and charged to the device's
-// budget like a block's weights -- one the budget cannot hold is refused.
+// budget like a block's weights -- one the budget cannot hold is refused,
+// a partRoomError. Outside a submission the room is made as for state
+// (stateFits): the pools' free pages first, then a streamed block paged out.
 // Callers hold g.mu.
 func (g *devTier) instance(f *partForm) (*partInst, error) {
 	var n uint64
 	for _, b := range f.own {
 		n += uint64(b.n)
 	}
-	if !g.room(n) {
-		return nil, fmt.Errorf("its buffers need %d bytes, which the device's budget does not hold", n)
+	if !g.room(n) && (g.inSub || g.prologueHeld || !g.stateFits(n, nil)) {
+		return nil, partRoomError{n}
 	}
 	in := &partInst{}
 	for _, b := range f.own {
@@ -305,6 +307,14 @@ func (g *devTier) instance(f *partForm) (*partInst, error) {
 	in.bytes = n
 	g.charge(n)
 	return in, nil
+}
+
+// partRoomError is an instance the device's budget does not hold: a decline
+// for room, which a move can answer, never a build failure.
+type partRoomError struct{ need uint64 }
+
+func (e partRoomError) Error() string {
+	return fmt.Sprintf("its buffers need %d bytes, which the device's budget does not hold", e.need)
 }
 
 // launchArgs is an argument list for each of f's kernels, bound again every
@@ -741,7 +751,15 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 				delete(g.servedForms, key)
 				f.close()
 			}
-			return nil, fail(fmt.Errorf("the composed %s: %w", partNames[sk.kind], err))
+			err = fmt.Errorf("the composed %s: %w", partNames[sk.kind], err)
+			// Room is not remembered: the part forms at the next ask, once
+			// a move or a page given back has made it.
+			if errors.As(err, new(partRoomError)) {
+				delete(g.served, sk)
+				g.LastErr = err.Error()
+				return nil, err
+			}
+			return nil, fail(err)
 		}
 	}
 	f.refs++

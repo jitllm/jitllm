@@ -405,7 +405,7 @@ func TestABinary16HistoryMovesToTheDevice(t *testing.T) {
 
 // TestAnyRangeMovesWithItsHistory: placement is a set. A middle range of
 // blocks goes to the device mid-sequence (PlaceBlocks), part of it comes home
-// leaving a hole between two device runs (ReleaseBlocks), the rest after it,
+// leaving a hole between two device runs (MoveBlocks to the CPU), the rest after it,
 // and every token stays in the band of a host run that never moved.
 func TestAnyRangeMovesWithItsHistory(t *testing.T) {
 	a, _ := moveDevices(t)
@@ -452,15 +452,15 @@ func TestAnyRangeMovesWithItsHistory(t *testing.T) {
 					t.Fatalf("the placement is not the range asked")
 				}
 			case move && i == holeAt:
-				got, err := st.ReleaseBlocks(n/4+1, n/4+3)
-				if err != nil || got != 2 {
-					t.Fatalf("released %d: %v", got, err)
+				got, err := st.MoveBlocks(n/4+1, n/4+3, nn.CPU)
+				if err != nil || len(got.Moved) != 2 {
+					t.Fatalf("moved %v to the CPU: %v", got.Moved, err)
 				}
 				if !st.devAt(n/4) || st.devAt(n/4+1) || !st.devAt(n/4+3) {
 					t.Fatalf("no hole between two device runs")
 				}
 			case move && i == homeAt:
-				if _, err := st.ReleaseBlocks(0, n); err != nil {
+				if _, err := st.MoveBlocks(0, n, nn.CPU); err != nil {
 					t.Fatal(err)
 				}
 				if st.devCount() != 0 {
@@ -547,7 +547,7 @@ func TestTwoModelsShareACardThroughTheRegistry(t *testing.T) {
 			if shared && nb == mb.Cfg.NLayer {
 				t.Fatalf("both models fit a shared 1G card whole (%d+%d blocks): the gate cannot see the pool", na, nb)
 			}
-			if _, err := sa.ReleaseBlocks(0, ma.Cfg.NLayer); err != nil || sa.GPULayers() != 0 {
+			if _, err := sa.MoveBlocks(0, ma.Cfg.NLayer, nn.CPU); err != nil || sa.GPULayers() != 0 {
 				t.Fatalf("the first model kept %d blocks: %v", sa.GPULayers(), err)
 			}
 			if _, err := sb.PlaceBlocks(0, mb.Cfg.NLayer); err != nil {

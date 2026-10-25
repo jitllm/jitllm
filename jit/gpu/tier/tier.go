@@ -1947,8 +1947,8 @@ type devShared struct {
 	// cause is what kind of refusal the last call was (nn.FailCause), written
 	// by the code that met it and cleared at the head of every call.
 	cause atomic.Uint32
-	dev     backend.Device
-	pool    *Pool
+	dev   backend.Device
+	pool  *Pool
 	// ord is this device's place in the tier's order, fastest first, and part
 	// of its label.
 	ord   int

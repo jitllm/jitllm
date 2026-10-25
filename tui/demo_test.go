@@ -236,18 +236,17 @@ func TestKeysAskForTheMoves(t *testing.T) {
 		first int32
 		last  int32
 		to    string
-		home  bool
 	}{
-		{"m", 0, 5, "vulkan:1", false},
-		{"h", 0, 5, "", true},
-		{"5", 4, 4, "cuda:0", false},
+		{"m", 0, 5, "vulkan:1"},
+		{"h", 0, 5, "cpu"},
+		{"5", 4, 4, "cuda:0"},
 	} {
 		if press(c.key) == nil {
 			t.Fatalf("%q sent no move", c.key)
 		}
 		got := f.relocates[len(f.relocates)-1]
 		if got.GetSessionId() != "s-1" || got.GetFirstBlock() != c.first || got.GetLastBlock() != c.last ||
-			got.GetToDeviceId() != c.to || got.GetToHost() != c.home {
+			got.GetToDeviceId() != c.to {
 			t.Errorf("%q asked for %+v", c.key, got)
 		}
 	}

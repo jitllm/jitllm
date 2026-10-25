@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jitllm/jitllm/common/session"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/server/client"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
@@ -52,6 +53,14 @@ type moveReq struct {
 	First, Last int
 	To          string // a device id; hostID when Home
 	Home        bool
+}
+
+// device is the device the request names: the CPU when Home.
+func (r moveReq) device() string {
+	if r.Home {
+		return nn.CPU
+	}
+	return r.To
 }
 
 // moveInfo is a finished move as the banner tells it.
@@ -386,7 +395,7 @@ func (d *demo) relocate(r moveReq) tea.Cmd {
 		before := prefilled()
 		t0 := time.Now()
 		resp, err := c.Placement.RelocateBlocks(ctx, connect.NewRequest(&v1.RelocateBlocksRequest{
-			SessionId: sid, FirstBlock: int32(r.First), LastBlock: int32(r.Last), ToDeviceId: r.To, ToHost: r.Home}))
+			SessionId: sid, FirstBlock: int32(r.First), LastBlock: int32(r.Last), ToDeviceId: r.device()}))
 		took := time.Since(t0)
 		info := moveInfo{From: from, To: to, First: r.First, Last: r.Last, AtToken: atToken, Took: took,
 			Recomputed: prefilled() - before, Err: err}

@@ -1078,7 +1078,7 @@ func (t *Tower) newState(j *nn.JIT, owned bool) *State {
 	n := tc.MaxSeq()
 	// relocate: a picture the device cannot hold takes tower blocks home
 	// (reserveTowerRows), as a history that does not fit takes text blocks.
-	s := &State{m: m, c: c, lo: t.base, hi: t.base + tc.NLayer, gpuLayers: t.base,
+	s := &State{m: m, c: c, lo: t.base, hi: t.base + tc.NLayer,
 		maxSeq: n, reqSeq: n, nseq: 1, prof: m.opt.profile, outW: &tensor{}, relocate: true}
 	s.holdHostRuns()
 	v := &visRun{t: t, attStride: nn.SoftmaxPad(n), borrowed: !owned}

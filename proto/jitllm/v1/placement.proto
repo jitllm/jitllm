@@ -157,14 +157,12 @@ message RelocateBlocksRequest {
   // Inclusive block range. `first_block` == `last_block` moves one block.
   int32 first_block = 2;
   int32 last_block = 3;
-  // Where to put them. Empty `to_device_id` with `to_host` true brings them
-  // home; a non-empty id moves them to that device. A range already on the
-  // session's devices moves between them: each block's KV pages and
-  // recurrent summary go with it, and no prompt row is computed again. The
-  // device must be one the session's model was loaded with (the tier owns
-  // the devices).
+  // The device to put them on, the CPU ("cpu") as any other: each block's KV
+  // pages and recurrent summary go with it, and no prompt row is computed
+  // again. A card the session's model was not loaded with joins its tier.
   string to_device_id = 4;
-  bool to_host = 5;
+  reserved 5;
+  reserved "to_host";
 }
 
 message RelocateBlocksResponse {

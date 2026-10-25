@@ -11,6 +11,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 	v1 "github.com/jitllm/jitllm/server/gen/jitllm/v1"
 )
@@ -112,14 +113,11 @@ func relocateBlocks(ctx context.Context, c cli, cn *conn, session, spec, to stri
 	if err != nil {
 		return err
 	}
-	req := &v1.RelocateBlocksRequest{
-		SessionId: session, FirstBlock: first, LastBlock: last,
+	if to == "" || to == "host" {
+		to = nn.CPU
 	}
-	switch {
-	case to == "" || to == "host" || to == "cpu":
-		req.ToHost = true
-	default:
-		req.ToDeviceId = to
+	req := &v1.RelocateBlocksRequest{
+		SessionId: session, FirstBlock: first, LastBlock: last, ToDeviceId: to,
 	}
 	resp, err := cn.Placement.RelocateBlocks(ctx, connect.NewRequest(req))
 	if err != nil {

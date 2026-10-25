@@ -15,9 +15,9 @@ ones that went quiet. Every decision is one a caller can force or forbid.
   session resumes byte for byte. It moves history, never weights, and never
   across models.
 - Plasticity in the engine: `tier.GPU.AddDevices` (a running model takes a
-  card), `State.PlaceBlocks` / `ReleaseBlocks` (any block range, with its
-  history), `State.MoveBlocks` (between devices), binary16 histories that
-  travel converted.
+  card), `State.MoveBlocks` (any block range to any device, the CPU ("cpu")
+  among them, with its history; `State.PlaceBlocks` is it from the CPU with
+  the tier choosing the card), binary16 histories that travel converted.
 
 ## v1: promote on demand, demote the idle to make room
 
@@ -30,8 +30,8 @@ loaded on the CPU when the server has a device.
 **Make room.** When the card declines for lack of room, the orchestrator
 demotes the least deserving sessions on that card -- not generating (their
 lock is free), lowest priority, then idle longest, sessions of other models
-first -- by bringing their blocks home with their history (`ReleaseBlocks`),
-then offers again. A block's weights leave the card when no session of its
+first -- by bringing their blocks home with their history (`MoveBlocks` to
+"cpu"), then offers again. A block's weights leave the card when no session of its
 model holds it there (the tier's rule). It never demotes a running session,
 and it stops when the promotion fits or no victim is left: then the session
 runs where it is, as before (nothing is refused).

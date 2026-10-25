@@ -546,6 +546,9 @@ type State struct {
 	// map applies; placeErr is what it could not do.
 	placing  bool
 	placeErr error
+	// offerOn is the device MoveBlocks is placing CPU blocks on: offerRange
+	// offers each to it alone ("" lets the tier choose).
+	offerOn string
 	// Attention scores per (sequence, head). atth/attf are the nseq==1 case;
 	// a batch parallelises over sequences and heads, so every pair needs a row.
 	bathf []float32
@@ -746,7 +749,7 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 	if maxSeq > c.NCtx {
 		maxSeq = c.NCtx
 	}
-	s := &State{m: m, c: m.Cfg, lo: lo, hi: hi, gpuLayers: lo, maxSeq: maxSeq, reqSeq: req, nseq: nseq,
+	s := &State{m: m, c: m.Cfg, lo: lo, hi: hi, maxSeq: maxSeq, reqSeq: req, nseq: nseq,
 		devFallback: true, relocate: true, prof: m.opt.profile, outNorm: m.outNorm, outW: &m.output,
 		fuseOff: m.opt.noFuse, groupOff: m.opt.noGroups, lookOff: m.opt.noLook,
 		residFold: m.opt.residFold}
@@ -1881,13 +1884,18 @@ func (s *State) offerRange(lo, hi int) {
 		// again cost every new session the whole model from disk -- most of a
 		// 1B model's time to first token on a 4 GB card (placement.md,
 		// "Measurements once cited in engine/model's comments").
-		if bh, ok := ld.(nn.BlockHolder); ok && !named && bh.HoldsBlock(li) {
+		if bh, ok := ld.(nn.BlockHolder); ok && !named && bh.HoldsBlock(li) && s.heldOnOffer(adm, li) {
 			w := nn.LayerWeights{Ensure: s.ensureLayer(li), EnsureExperts: s.ensureSelected(li),
 				PrefetchExperts: s.prefetchSelected(li), SpeculateExperts: s.speculateSelected(li),
 				HostExperts:     s.hostExpertsFor(li),
 				HostExpertsRows: s.hostExpertsRowsFor(li), ExpertUses: s.hot.layer(li)}
 			plan := *s.planFor(li)
-			if adm.PrepLayer(li, &plan, &w) {
+			took, err := s.prepOffered(adm, li, &plan, &w)
+			if err != nil {
+				s.placeErr = err
+				return
+			}
+			if took {
 				s.markOnDev(li)
 				continue
 			}
@@ -1917,8 +1925,9 @@ func (s *State) offerRange(lo, hi int) {
 					"the engine placed it instead", place.On, li))
 				took = adm.PrepLayer(li, &plan, &w)
 			}
-		} else {
-			took = adm.PrepLayer(li, &plan, &w)
+		} else if took, err = s.prepOffered(adm, li, &plan, &w); err != nil {
+			s.placeErr = err
+			return
 		}
 		// A mixture block refused for room on every card goes on streamed,
 		// its base on a card and its experts off it, rather than to the host:
@@ -1930,7 +1939,11 @@ func (s *State) offerRange(lo, hi int) {
 			if as, ok := ld.(nn.AutoStreamer); ok {
 				total, bank := s.m.blockBytes(li)
 				if bank > 0 && as.AutoStream(li, total, bank, c.NExpert, c.NExpertUsed, c.NLayer, s.m.meanBase()) {
-					if took = adm.PrepLayer(li, &plan, &w); took {
+					if took, err = s.prepOffered(adm, li, &plan, &w); err != nil {
+						s.placeErr = err
+						return
+					}
+					if took {
 						s.autoStreamed++
 					} else if ep, ok := ld.(nn.ExpertPlacer); ok && !(named && place.Experts != "") && s.m.opt.experts == "" {
 						// It cannot stream either (a float bank with no host
@@ -1960,6 +1973,35 @@ func (s *State) offerRange(lo, hi int) {
 		s.markOnDev(li)
 		s.releasePlacedPage(ld, li)
 	}
+}
+
+// prepOffered offers block li to the device MoveBlocks names (offerOn), or to
+// the tier's choice when it names none.
+func (s *State) prepOffered(adm nn.LayerDevice, li int, plan *nn.LayerPlan, w *nn.LayerWeights) (bool, error) {
+	if s.offerOn == "" {
+		return adm.PrepLayer(li, plan, w), nil
+	}
+	po, ok := adm.(nn.NamedDevice)
+	if !ok {
+		return false, fmt.Errorf("model: block %d is moved to %q by name, and this device "+
+			"cannot place a block by name", li, s.offerOn)
+	}
+	return po.PrepLayerOn(s.offerOn, li, plan, w)
+}
+
+// heldOnOffer reports whether a block another session holds is where offerOn
+// asks for it. A held block is attached where it is, so one held elsewhere is
+// offered to offerOn whole, and the tier says why it cannot move.
+func (s *State) heldOnOffer(adm nn.LayerDevice, li int) bool {
+	if s.offerOn == "" {
+		return true
+	}
+	nd, ok := adm.(nn.NamedDevice)
+	if !ok {
+		return false
+	}
+	at, ok := nd.DeviceOf(li)
+	return ok && at == nn.DeviceName(s.offerOn)
 }
 
 // releasePlacedPage gives back the host page of block li once a device holds
@@ -2243,8 +2285,9 @@ func (s *State) shrinkOnDev(n int) {
 }
 
 // holdHostRuns counts this State in m.hostUse for every block of [lo, hi): a
-// new State runs them all on the host.
+// new State runs them all on the host, so its device prefix is empty.
 func (s *State) holdHostRuns() {
+	s.gpuLayers = s.lo
 	s.m.hostRuns(s.lo, s.hi, 1)
 	s.hostHeld = true
 }

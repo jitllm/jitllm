@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jitllm/jitllm/engine/nn"
@@ -58,42 +59,115 @@ type PendingMove struct {
 	headStaged bool
 }
 
-// MoveBlocks moves blocks [lo, hi) from the devices they are on to the device
-// named to, while the sequence keeps its place: each block's history (its KV
-// pages, a linear block's recurrent summary) goes with it, so the next token
-// reads exactly the rows it would have read where it was, and no row of the
-// prompt is computed again. It is the device-to-device relocation of the
-// Scope's "move layers and pages between them", reachable by a caller rather
-// than only through SetDevice, which brings everything home first.
+// MoveBlocks moves blocks [lo, hi) to the device named to, the CPU (nn.CPU)
+// as any other, while the sequence keeps its place: each block's history (its
+// KV pages, a linear block's recurrent summary) goes with it, so the next
+// token reads exactly the rows it would have read where it was, and no row of
+// the prompt is computed again. It is the relocation of the Scope's "move
+// layers and pages between them", reachable by a caller rather than only
+// through SetDevice, which brings everything home first.
 //
-// It is PrepareMove and Commit at once: the target is prepared inside the
-// call. A caller that can keep generating meanwhile prepares first and
-// commits at a later token.
+// Between two cards it is PrepareMove and Commit at once: the target is
+// prepared inside the call. A caller that can keep generating meanwhile
+// prepares first and commits at a later token.
 //
 // Call it between tokens: like every placement call it must not overlap a
 // Forward of this State. Blocks already on to are left alone, and a block the
 // target refuses stays where it was and is reported. When no block of this
 // State is left on the device holding the output projection, the projection
-// follows them.
+// follows them; a move to the CPU brings it to the CPU with them.
 //
-// Every block of the range must be on a device: a host block is placed by
-// SetGPULayers (or WithPlacement) instead, and a range that does not hold a
-// KV-sharing group whole is refused, since the group's readers attend to its
-// source's history wherever it is.
+// A pinned block refuses the call before anything moves. Between two cards a
+// range that does not hold a KV-sharing group whole is refused, since the
+// group's readers attend to its source's history wherever it is; a group the
+// move to or from the CPU splits ends where its source is (fixKVGroups).
 func (s *State) MoveBlocks(lo, hi int, to string) (BlockMove, error) {
-	p, err := s.PrepareMove(lo, hi, to)
-	if err != nil {
-		return BlockMove{}, err
+	if lo < s.lo || hi > s.hi || lo >= hi {
+		return BlockMove{}, fmt.Errorf("model: blocks %d..%d are outside this State's %d..%d", lo, hi-1, s.lo, s.hi-1)
 	}
-	return p.Commit()
+	if s.pending != nil {
+		return BlockMove{}, fmt.Errorf("model: a move of blocks %d..%d to %s is pending",
+			s.pending.lo, s.pending.hi-1, s.pending.to)
+	}
+	if onCPU(to) {
+		return s.moveToCPU(lo, hi)
+	}
+	var cpu []int
+	for li := lo; li < hi; li++ {
+		if !s.devAt(li) {
+			cpu = append(cpu, li)
+			continue
+		}
+		if err := s.movable(li, lo, hi); err != nil {
+			return BlockMove{}, err
+		}
+	}
+	var mv BlockMove
+	t0 := time.Now()
+	if len(cpu) > 0 {
+		placed, err := s.placeFromCPU(lo, hi, to)
+		for _, li := range placed {
+			mv.KVBytes += s.blockHistoryAt(li, s.pos)
+			mv.RecBytes += s.recBytesOf(li)
+		}
+		mv.Moved = placed
+		if err != nil {
+			return mv, err
+		}
+	}
+	placing := time.Since(t0)
+	p, err := s.prepareMove(lo, hi, to, true)
+	if err != nil {
+		return mv, err
+	}
+	dm, err := p.Commit()
+	mv.Moved = append(mv.Moved, dm.Moved...)
+	slices.Sort(mv.Moved)
+	mv.Declined = dm.Declined
+	for _, li := range cpu {
+		if !s.devAt(li) {
+			mv.Declined = append(mv.Declined, li)
+		}
+	}
+	slices.Sort(mv.Declined)
+	mv.KVBytes += dm.KVBytes
+	mv.RecBytes += dm.RecBytes
+	mv.Path, mv.Copied, mv.Head = dm.Path, dm.Copied, dm.Head
+	mv.Staged, mv.Prepare = dm.Staged, dm.Prepare
+	mv.Pause = dm.Pause + placing
+	return mv, err
 }
 
-// PrepareMove starts a move of blocks [lo, hi) to the device named to (see
-// MoveBlocks) and returns at once: the target prepares the blocks while the
-// State keeps generating on the source, and nothing the State runs changes
-// until Commit. Call it, Commit and Cancel between tokens; a State holds one
-// pending move at a time.
+// movable refuses a move of placed block li inside [lo, hi): a block sharing
+// its history beyond the range, or one the placement pins where it is.
+func (s *State) movable(li, lo, hi int) error {
+	if glo, ghi := s.kvSpan(li); glo < lo || ghi > hi {
+		return fmt.Errorf("model: block %d shares its history with blocks %d..%d, "+
+			"which move together", li, glo, ghi-1)
+	}
+	if s.pinnedOnDev(li) {
+		return fmt.Errorf("model: block %d is pinned where it is by the placement", li)
+	}
+	return nil
+}
+
+// PrepareMove starts a move of placed blocks [lo, hi) to the card named to
+// (see MoveBlocks) and returns at once: the target prepares the blocks while
+// the State keeps generating on the source, and nothing the State runs
+// changes until Commit. Call it, Commit and Cancel between tokens; a State
+// holds one pending move at a time. A block on the CPU is refused: there is
+// nothing on a card to keep generating from, and MoveBlocks places it.
 func (s *State) PrepareMove(lo, hi int, to string) (*PendingMove, error) {
+	if onCPU(to) {
+		return nil, fmt.Errorf("model: a move to the CPU is not prepared ahead; MoveBlocks makes it")
+	}
+	return s.prepareMove(lo, hi, to, false)
+}
+
+// prepareMove is PrepareMove; with skipCPU the blocks of the range on the
+// CPU, the ones the target refused when MoveBlocks offered them, are left out
+// rather than refused.
+func (s *State) prepareMove(lo, hi int, to string, skipCPU bool) (*PendingMove, error) {
 	nd, ok := s.ld.(nn.NamedDevice)
 	if !ok {
 		return nil, fmt.Errorf("model: no device that places blocks by name is attached, " +
@@ -108,19 +182,21 @@ func (s *State) PrepareMove(lo, hi int, to string) (*PendingMove, error) {
 	}
 	for li := lo; li < hi; li++ {
 		if !s.devAt(li) {
-			return nil, fmt.Errorf("model: block %d is on the host; a move between devices "+
-				"moves placed blocks, and SetGPULayers places one", li)
+			if skipCPU {
+				continue
+			}
+			return nil, fmt.Errorf("model: block %d is on the CPU; a move prepared ahead "+
+				"moves placed blocks, and MoveBlocks places one", li)
 		}
-		if glo, ghi := s.kvSpan(li); glo < lo || ghi > hi {
-			return nil, fmt.Errorf("model: block %d shares its history with blocks %d..%d, "+
-				"which move together", li, glo, ghi-1)
-		}
-		if s.pinnedOnDev(li) {
-			return nil, fmt.Errorf("model: block %d is pinned where it is by the placement", li)
+		if err := s.movable(li, lo, hi); err != nil {
+			return nil, err
 		}
 	}
 	p := &PendingMove{s: s, lo: lo, hi: hi, to: to, done: make(chan struct{})}
 	for li := lo; li < hi; li++ {
+		if !s.devAt(li) {
+			continue
+		}
 		if at, _ := nd.DeviceOf(li); at == nn.DeviceName(to) {
 			continue
 		}

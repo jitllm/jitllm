@@ -1825,6 +1825,10 @@ type ExpertModer interface {
 	SetExpertMode(where string) int
 }
 
+// CPU is the CPU's device name: a block a State runs on the CPU is at CPU as
+// one a card runs is at that card's name.
+const CPU = "cpu"
+
 // DeviceName is a device name as a placement compares it: lower case, and the
 // API spellings (ptx, amdgcn, spirv, msl) under the backend ones -devices prints, so
 // "PTX:0" and "cuda:0" are one device.

@@ -92,7 +92,7 @@ func TestAHostLoadedModelRelocatesToADeviceAndBack(t *testing.T) {
 		t.Fatalf("after the move to %s the reply parts from the host control: %v and %v", dev, got, ctl[1])
 	}
 	if _, err := c.placement.RelocateBlocks(ctx, req(&v1.RelocateBlocksRequest{
-		SessionId: "moved", FirstBlock: 0, LastBlock: int32(devBlocks("moved")) - 1, ToHost: true,
+		SessionId: "moved", FirstBlock: 0, LastBlock: int32(devBlocks("moved")) - 1, ToDeviceId: "cpu",
 	})); err != nil {
 		t.Fatalf("bringing the blocks home: %v", err)
 	}
@@ -222,9 +222,9 @@ func TestAMiddleRangeMovesUpAndASubRangeComesHome(t *testing.T) {
 	}
 	move := func(first, last int, toHost bool) {
 		t.Helper()
-		r := &v1.RelocateBlocksRequest{SessionId: "moved", FirstBlock: int32(first), LastBlock: int32(last), ToHost: toHost}
-		if !toHost {
-			r.ToDeviceId = dev
+		r := &v1.RelocateBlocksRequest{SessionId: "moved", FirstBlock: int32(first), LastBlock: int32(last), ToDeviceId: dev}
+		if toHost {
+			r.ToDeviceId = "cpu"
 		}
 		resp, err := c.placement.RelocateBlocks(ctx, req(r))
 		if err != nil {

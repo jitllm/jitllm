@@ -225,6 +225,7 @@ var (
 	mu       sync.Mutex
 	violated = map[string]int{}
 	narrowed = map[string]int{}
+	refusing = map[device]int{}
 )
 
 // admit is the backend.Restriction: the selection's answer to one device open.
@@ -250,9 +251,45 @@ func admit(api string, ord int, enumerated bool) (int, error) {
 			return refuse(api, "", enumerated)
 		}
 	case !allowed(device{api, ord}):
+		if expected(device{api, ord}) {
+			return -1, fmt.Errorf("%s is outside %s=%s", device{api, ord}, Var, strings.Join(Selection(), ","))
+		}
 		return refuse(api, strconv.Itoa(ord), enumerated)
 	}
 	return ord, nil
+}
+
+func expected(d device) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	return refusing[d] > 0
+}
+
+// Refusing declares spec ("cuda:7") a device the test names on purpose to see
+// it refused. While the test runs, an open of it outside the selection is
+// refused as every such open is, and not recorded as a violation; an open of
+// any other device outside the selection still is. A spec the selection holds
+// is a test error: that device would open.
+func Refusing(t testing.TB, spec string) {
+	t.Helper()
+	ds, err := parse(spec)
+	if err != nil || len(ds) != 1 {
+		t.Fatalf("testdevices.Refusing(%q): want one device spec (%v)", spec, err)
+	}
+	d := ds[0]
+	if selected && allowed(d) {
+		t.Fatalf("testdevices.Refusing(%q): %s=%s selects it, so it would open", spec, Var, strings.Join(Selection(), ","))
+	}
+	mu.Lock()
+	refusing[d]++
+	mu.Unlock()
+	t.Cleanup(func() {
+		mu.Lock()
+		if refusing[d]--; refusing[d] == 0 {
+			delete(refusing, d)
+		}
+		mu.Unlock()
+	})
 }
 
 // refuse records an open the selection does not allow, and the error that
