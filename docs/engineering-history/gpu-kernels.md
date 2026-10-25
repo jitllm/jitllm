@@ -7582,8 +7582,12 @@ row where the composer's reads two.
   an RMSNorm head, phi-2's LayerNorm with both biases and falcon's LayerNorm
   over the tied embedding), the composed head reads at most 3.0e-13 and the
   tier's own head, the host finishing its logits, at most 1.4e-13, against a
-  bound of 1e-9, except where a model has both a softcap and a bias, which the
-  tier applies in the other order and no model has. The softcap dropped reads
+  bound of 1e-9. A head with both a softcap and a bias, which no model has,
+  was capped by every device path before the host added the bias, the other
+  order of the model's; PrepHead now refuses it by name, the host runs it in
+  the model's order, and the gate holds that to the oracle (the arm asserts
+  the refusal, the blocks all on the device and the logits). The softcap
+  dropped reads
   3.5e-02 to 4.5e-02, the scale inverted 4.0e+03, the bias negated 0.13 and
   the norm's bias dropped 0.10 and 0.71. TestComposedHeadTokens holds the
   greedy token and the sampler's draws to the logits the device returns: the
@@ -7601,16 +7605,29 @@ row where the composer's reads two.
   composed block as the scaled path and states the two scales as the model's
   own configuration as well, which the composer's forms read as the tier's
   kernels do (0.85 and 8.1e-03 against a clean 3e-14).
-  The serving gate takes gemma-2-2b, granite-3.3-2b and granite-4.0-micro
-  with their heads served and the headDeclined list empty. On a V100 the
-  composed block and head read a median 1.028, 1.000 and 0.994 of the tier's
-  own distance from the float reference on CUDA (worst NMSE from the tier
-  0.0217, 0.0036 and 0.0174) and 0.981, 1.002 and 1.075 on Vulkan (0.035,
-  0.0076 and 0.020), over 3780, 5740 and 5740 part steps each, inside the
-  gate's band as it stood. rnj-1 is formed whole and its head served where its
-  blocks are not (TestComposedHeadServesWhereTheBlocksDoNot). The composed
-  head serves a single-row step; a folded prompt's last row, a ragged step and
-  a chunk projecting every row keep the tier's own head.
+  The serving gate takes gemma-2-2b, granite-3.3-2b, granite-4.0-micro and
+  falcon-7b with their heads served and the headDeclined and headUnstated
+  lists empty. On a V100 the composed block and head read a median 0.987,
+  1.000, 0.994 and 1.003 of the tier's own distance from the float reference
+  on CUDA (worst NMSE from the tier 0.052, 0.0036, 0.0174 and 3.9e-05) and
+  0.996, 1.002, 1.075 and 0.997 on Vulkan (0.0635, 0.0076, 0.0204 and
+  5.1e-05), over 112320, 5740, 5740 and 4620 part steps each, inside the
+  gate's band as it stood. Falcon's LayerNorm head is the composer's: the
+  tier's own launches on its served steps are the rotary table alone. The
+  front test requires a head graph of every model on its lists, whose first
+  op is a LayerNorm exactly where the model's norms are, and the composed C6
+  gate asks for the head beside the blocks of the ten classic fixtures and
+  holds it to a served step at every decode step. rnj-1 is formed whole and
+  its head served where its blocks are not
+  (TestComposedHeadServesWhereTheBlocksDoNot). The composed head serves a
+  single-row step that is not a prompt's: a folded prompt's last row, a
+  prompt's own calls, a ragged step and a chunk projecting every row keep the
+  tier's own head, so the first draw after a prompt is made over logits the
+  host finished and every draw after it is the device's. That C6 gate had
+  counted synth-cohere2's windowed blocks as declined (9 block steps served
+  and 27 declined); once the windows were served it read 36 served and none
+  declined, as it does on the tree before this work, and it now expects every
+  covered block served.
   Two composer defects surfaced on the way. Formation: Affine's cse redirected
   each duplicate with a pass over the kernel of its own (the profile put 90%
   of the time in Affine, cse, redirectAll, redirect, Operands), so
@@ -7624,5 +7641,11 @@ row where the composer's reads two.
   a bias lost one of its two scalars that way). With both fixed every head arm
   reads 1e-14 to 1e-12 over four rows at once (TestComposedCPUHead), and the
   original pass fails the same gate at 5e+05 to 8e+05 and 3.8 on the softcap.
+  Escape analysis (go build -gcflags=-m, line numbers dropped) against the
+  tree before this work, over jit, jit/gpu/tier, engine/model, engine/nn and
+  engine/graph, adds no heap escape to forward.go, step.go, layer.go or
+  launch.go: the additions are graph.Head.Build's thirteen (built once, then
+  cached), two appends and a local in the cse sweep (formation) and one error
+  in servedHead (its failure path); front.go loses four.
   Open: the other redirectAll call sites (foldDecided, the affine pass) have
   the same shape as the cse that was quadratic and are not profiled.
