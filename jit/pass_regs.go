@@ -73,54 +73,87 @@ type Regs struct {
 // (lowercpu.go, shiftCount).
 const spillSlots = 15
 
+// ErrRegisterPressure is a kernel Regs refuses for holding more values live
+// at once than the device's registers.
+var ErrRegisterPressure = errors.New("register pressure")
+
+// PressureError is Regs' refusal of a run's kernels for register pressure:
+// the parts they are of (Kernel.Of), and the first kernel's reason.
+type PressureError struct {
+	Parts []int
+	Err   error
+}
+
+func (e *PressureError) Error() string { return e.Err.Error() }
+
+func (e *PressureError) Unwrap() error { return e.Err }
+
 func (Regs) Name() string { return "regs" }
 
 func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
-	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
-		if k.Seq == nil {
+	var refused *PressureError
+	out, err := eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
+		ns, changed, err := p.bind(k, d)
+		if errors.Is(err, ErrRegisterPressure) {
+			if refused == nil {
+				refused = &PressureError{Err: err}
+			}
+			refused.Parts = append(refused.Parts, k.Of)
 			return nil, false, nil
 		}
-		w := k.clone()
-		moved := map[int]bool{}
-		if p.Resident != nil {
-			w.residents(p.Resident, moved)
-		}
-		late := w.lateParams()
-		sunk := map[int]bool{}
-		var why error
-		for range len(k.Nodes) {
-			m := w.clone()
-			b := binder86{k: m, p: p, used: map[int]bool{}, late: late, isa: x86.ISA(d.ISA)}
+		return ns, changed, err
+	})
+	if err == nil && refused != nil {
+		return nil, refused
+	}
+	return out, err
+}
+
+// bind is k bound to the registers, or the reason it cannot be.
+func (p Regs) bind(k *Kernel, d Device) ([]*Kernel, bool, error) {
+	if k.Seq == nil {
+		return nil, false, nil
+	}
+	w := k.clone()
+	moved := map[int]bool{}
+	if p.Resident != nil {
+		w.residents(p.Resident, moved)
+	}
+	late := w.lateParams()
+	sunk := map[int]bool{}
+	var why error
+	for range len(k.Nodes) {
+		m := w.clone()
+		b := binder86{k: m, p: p, used: map[int]bool{}, late: late, isa: x86.ISA(d.ISA)}
+		b.lives()
+		if b.gprs() != nil {
+			// The words do not fit: again with the reload registers kept
+			// out of every pool, spilling where none is free.
+			m = w.clone()
+			b = binder86{k: m, p: p, used: map[int]bool{}, late: late, spill: true, isa: x86.ISA(d.ISA)}
 			b.lives()
-			if b.gprs() != nil {
-				// The words do not fit: again with the reload registers kept
-				// out of every pool, spilling where none is free.
-				m = w.clone()
-				b = binder86{k: m, p: p, used: map[int]bool{}, late: late, spill: true, isa: x86.ISA(d.ISA)}
-				b.lives()
-				if err := b.gprs(); err != nil {
-					return nil, false, fmt.Errorf("%s: the words do not fit the general registers: %w", k.Name, err)
-				}
+			if err := b.gprs(); err != nil {
+				return nil, false, fmt.Errorf("%s: the words do not fit the general registers: %w: %w", k.Name, ErrRegisterPressure, err)
 			}
+		}
+		if why = b.vectors(); why == nil {
+			return []*Kernel{m}, true, nil
+		}
+		if m.Ones > 0 {
+			// Again with the byte dots making their ones each time.
+			b.noOnes = true
 			if why = b.vectors(); why == nil {
 				return []*Kernel{m}, true, nil
 			}
-			if m.Ones > 0 {
-				// Again with the byte dots making their ones each time.
-				b.noOnes = true
-				if why = b.vectors(); why == nil {
-					return []*Kernel{m}, true, nil
-				}
-			}
-			if !w.rematerialize(moved) && !w.sink(sunk) {
-				break
-			}
 		}
-		if why == nil {
-			why = errors.New("no binding within a rematerialization per node")
+		if !w.rematerialize(moved) && !w.sink(sunk) {
+			break
 		}
-		return nil, false, fmt.Errorf("%s: the floats do not fit the vector registers: %w", k.Name, why)
-	})
+	}
+	if why == nil {
+		why = errors.New("no binding within a rematerialization per node")
+	}
+	return nil, false, fmt.Errorf("%s: the floats do not fit the vector registers: %w: %w", k.Name, ErrRegisterPressure, why)
 }
 
 type binder86 struct {

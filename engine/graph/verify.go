@@ -133,7 +133,41 @@ func Verify(g *Graph, f Facts) error {
 			if len(o.Weight) > 0 && o.Weight[0].K != o.Attr.HeadDim {
 				bad("%s: a scale of %d over heads of %d", at, o.Weight[0].K, o.Attr.HeadDim)
 			}
-		case OpAdd, OpActMul:
+		case OpExpr:
+			if len(o.Out) != 1 || len(o.Attr.Expr) == 0 {
+				bad("%s: wants one output and a term", at)
+				break
+			}
+			for _, id := range o.In {
+				if w := width(id); w <= 0 || width(o.Out[0])%w != 0 {
+					bad("%s: an operand of %d under a row of %d", at, w, width(o.Out[0]))
+				}
+			}
+			for k, t := range o.Attr.Expr {
+				n := t.Fn.Arity()
+				if n == 0 {
+					bad("%s: term %d has no function", at, k)
+				}
+				for j, a := range t.Args {
+					ok := true
+					switch {
+					case j >= n:
+						ok = a.Kind == ArgNone
+					case a.Kind == ArgIn:
+						ok = a.Index >= 0 && a.Index < len(o.In)
+					case a.Kind == ArgWeight:
+						ok = a.Index >= 0 && a.Index < len(o.Weight) && o.Weight[a.Index].Rows <= 1 && a.Elem >= 0 && a.Elem < o.Weight[a.Index].K
+					case a.Kind == ArgTerm:
+						ok = a.Index >= 0 && a.Index < k
+					default:
+						ok = a.Kind == ArgConst
+					}
+					if !ok {
+						bad("%s: term %d's operand %d does not name one the op has", at, k, j)
+					}
+				}
+			}
+		case OpAdd:
 			if len(o.In) != 2 || len(o.Out) != 1 || width(o.In[0]) != width(o.In[1]) || width(o.Out[0]) != width(o.In[0]) {
 				bad("%s: widths %d and %d into %d", at, width(o.In[0]), width(o.In[1]), width(o.Out[0]))
 			}

@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"math"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
@@ -56,8 +57,8 @@ var c6DevViolations = map[string][]c6Violation{
 		{"one norm for both branches", oneNormForBoth},
 	},
 	"synth-nemotron": {
-		{"GELU for relu2", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Act = nn.ActGELU }) }},
-		{"SiLU for relu2", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Act = nn.ActSiLU }) }},
+		{"GELU for relu2", actSwap(nn.ActGELU)},
+		{"SiLU for relu2", actSwap(nn.ActSiLU)},
 		{"RMSNorm for LayerNorm", rmsForLayerNorm},
 		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
 	},
@@ -298,6 +299,9 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 				}
 				t.Logf("%s, %d blocks and the head on %s: worst logit NMSE %.3e", arm.name, nl, spec, w)
 				worst = math.Max(worst, w)
+			}
+			if composedByDefault && counted {
+				vs = append(slices.Clone(vs), statedViolations(m)...)
 			}
 			for _, v := range vs {
 				undo := v.mut(m)

@@ -188,13 +188,38 @@ func (r *Registry) formRun(f Model, run []PartPlan, first int, s Step) error {
 }
 
 // Kernels is a run's final IR: its parts decomposed and generated, the run
-// passed as one.
+// passed as one. Where the registers refuse a kernel, the largest expression
+// its part formed as one map is formed a map a term and the run passed again.
 func (r *Registry) Kernels(f Model, run []PartPlan, first int, s Step) ([]*Kernel, error) {
+	prof, ok := r.Profiles[run[0].Device.Kind]
+	if !ok {
+		return nil, fmt.Errorf("jit: no profile for %s", run[0].Device.Kind)
+	}
+	sp := newExprSplit()
+	for {
+		ks, errs, err := r.generated(f, run, first, s, sp)
+		if err != nil {
+			return nil, err
+		}
+		ks, err = prof.run(ks, run[0].Device)
+		if sp.splitRefused(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return ks, errors.Join(errs...)
+	}
+}
+
+// generated is a run's parts decomposed and generated, and the parts that
+// did not decompose.
+func (r *Registry) generated(f Model, run []PartPlan, first int, s Step, sp *exprSplit) ([]*Kernel, []error, error) {
 	d := run[0].Device
 	var ks []*Kernel
 	var errs []error
 	for i, pp := range run {
-		prims, err := r.decompose(f, pp.Part, first+i, s, d)
+		prims, err := r.decompose(f, pp.Part, first+i, s, d, sp)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", pp.Part, err))
 			continue
@@ -202,22 +227,14 @@ func (r *Registry) Kernels(f Model, run []PartPlan, first int, s Step) ([]*Kerne
 		for _, p := range prims {
 			k, err := generate(p)
 			if err != nil {
-				return nil, fmt.Errorf("%s: %w", pp.Part, err)
+				return nil, nil, fmt.Errorf("%s: %w", pp.Part, err)
 			}
 			k.Part, k.Of = pp.Part.Kind, first+i
 			ks = append(ks, k)
 		}
 	}
 	boundaries(ks, run, first)
-	prof, ok := r.Profiles[d.Kind]
-	if !ok {
-		return nil, fmt.Errorf("jit: no profile for %s", d.Kind)
-	}
-	ks, err := prof.run(ks, d)
-	if err != nil {
-		return nil, err
-	}
-	return ks, errors.Join(errs...)
+	return ks, errs, nil
 }
 
 // boundaries names each part's input in ks as the operand the run's part

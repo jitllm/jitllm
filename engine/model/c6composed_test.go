@@ -2,6 +2,7 @@ package model
 
 import (
 	"math"
+	"slices"
 	"testing"
 
 	"github.com/jitllm/jitllm/jit/gpu/tier"
@@ -102,7 +103,7 @@ func TestC6ServesComposed(t *testing.T) {
 						t.Fatalf("worst logit NMSE %.3e, %d argmax flips, against the host", worst, flips)
 					}
 					t.Logf("composed blocks on %s: worst logit NMSE %.3e", dev, worst)
-					for _, v := range c6DevViolations[name] {
+					for _, v := range append(slices.Clone(c6DevViolations[name]), statedViolations(m)...) {
 						undo := v.mut(m)
 						bad, _ := run(t, dev)
 						undo()

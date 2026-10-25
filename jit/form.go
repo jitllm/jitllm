@@ -59,23 +59,32 @@ func (r *Registry) form(req Request) ([]Code, error) {
 	if !ok {
 		return nil, fmt.Errorf("jit: no profile for %s", req.Device.Kind)
 	}
-	c := r.context(req.Graph, req.Part, req.Formats, req.Rotaries, req.Step, req.Device)
-	c.History = req.History
-	prims, err := r.decomposeOps(c, 0)
-	if err != nil {
-		return nil, fmt.Errorf("jit: cannot form %s at %d rows on %s: %w", slice(req.Graph), req.Step.Rows, req.Device.Kind, err)
-	}
+	sp := newExprSplit()
 	var ks []*Kernel
-	for _, p := range prims {
-		k, err := generate(p)
+	for {
+		c := r.context(req.Graph, req.Part, req.Formats, req.Rotaries, req.Step, req.Device)
+		c.History, c.split = req.History, sp
+		prims, err := r.decomposeOps(c, 0)
 		if err != nil {
-			return nil, fmt.Errorf("jit: cannot form %s: %w", slice(req.Graph), err)
+			return nil, fmt.Errorf("jit: cannot form %s at %d rows on %s: %w", slice(req.Graph), req.Step.Rows, req.Device.Kind, err)
 		}
-		k.Part = req.Part
-		ks = append(ks, k)
-	}
-	if ks, err = prof.run(ks, req.Device); err != nil {
-		return nil, err
+		ks = nil
+		for _, p := range prims {
+			k, err := generate(p)
+			if err != nil {
+				return nil, fmt.Errorf("jit: cannot form %s: %w", slice(req.Graph), err)
+			}
+			k.Part = req.Part
+			ks = append(ks, k)
+		}
+		ks, err = prof.run(ks, req.Device)
+		if sp.splitRefused(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		break
 	}
 	codes, err := r.Lower(ks, req.Device)
 	if err != nil {

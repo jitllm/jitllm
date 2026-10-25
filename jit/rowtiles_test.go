@@ -31,7 +31,7 @@ func ffnBlock(embd, ffn int) *graph.Graph {
 	n := b.Norm(x, jlm.RoleFFNNorm, 1e-5)
 	gate := b.MatVec(n, jlm.RoleFFNGate, ffn)
 	up := b.MatVec(n, jlm.RoleFFNUp, ffn)
-	b.Out(b.Add(x, b.MatVec(b.ActMul(graph.ActSiLU, gate, up), jlm.RoleFFNDown, embd)))
+	b.Out(b.Add(x, b.MatVec(siluMul(b, gate, up, ffn), jlm.RoleFFNDown, embd)))
 	return b.G
 }
 

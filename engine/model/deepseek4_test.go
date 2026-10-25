@@ -132,9 +132,7 @@ var ds4Violations = []c6Violation{
 	{"a sigmoid gate", func(m *Model) func() {
 		return cfgMut(m, func(c *Config) { c.ExpertSqrtSoftplus, c.ExpertSigmoid = false, true })
 	}},
-	{"plain SwiGLU", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.Act = nn.ActSiLU })
-	}},
+	{"plain SwiGLU", actSwap(nn.ActSiLU)},
 }
 
 // ds4DevViolations are every violation the device runs itself: all of them

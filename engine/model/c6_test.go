@@ -454,7 +454,7 @@ var c6Violations = map[string][]c6Violation{
 		}},
 	},
 	"synth-nemotron": {
-		{"GELU for relu2", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Act = nn.ActGELU }) }},
+		{"GELU for relu2", actSwap(nn.ActGELU)},
 		{"LayerNorm1p's 1 added again", onePlusAgain},
 		{"RMSNorm for LayerNorm", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.LayerNorm = false }) }},
 		{"NORM rotary for NEOX", hostNormRotary},

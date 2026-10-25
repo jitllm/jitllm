@@ -8187,3 +8187,33 @@ row where the composer's reads two.
   all 224 x 16 block steps served, at about 8.3 s a token where main's
   whole 224-token arm took 6.7 s (not a RULE 2 row): the composed matvecs
   are single calls on one core, the largest gap.
+- **Activations are expressions the container states.** The engine knew
+  each activation's formula twice: jit's `exprs.act` switched on a named
+  `graph.Act`, and the front end built xIELU's maps itself. The converter now
+  states every block's FFN activation in the op language
+  (`convert.StateActivations`, `jlm.Config.Acts` and `ActLayers`: terms of
+  `jlm.Fn` over the gate and up rows, constants, a stored vector's elements,
+  row reductions and the row's width), carried as a thirteenth optional tail
+  of the config record, which an older reader drops with no version bump; the
+  front end copies it into the block graph (`graph.Builder.Stated`: reductions
+  as `OpReduce`, the terms between them one `OpExpr`), and the composer lowers
+  the functions it is handed (`decomposeExpr`, with `tanh` and `erf` now maps
+  of their own). `OpActMul`, `OpAct`, `graph.Act`, the named switch and the
+  front end's xIELU are gone; Gemma 3n's gaussian top-k is a statement too,
+  so `UncoveredSparseAct` is gone, and `UncoveredAct` now names a container
+  that states no activation (one written before the tail). A CPU map holds 32
+  lowered nodes (`Profile.MapNodes`): the gated SiLU is 12, GELU 28 and bind
+  as one map, xIELU's 51 do not fit the sixteen vector registers and form a
+  map a term, as its maps did before. The family-name counter over jit/,
+  engine/graph and front.go went from 1 file to 0. `convert`'s
+  `TestStatedActivationsAreTheReferences` holds nine statements (SiLU, GELU
+  tanh and erf, squared ReLU, xIELU, the gaussian top-k, both clamped
+  SwiGLUs, situ) to their references and tells every moved constant and
+  swapped select apart; the composed C6 arms move each stated activation
+  (a constant, a select's branches) where only the composer reads it: a
+  constant moved by a quarter read 7e-4 to 7e-3 of NMSE on every classic
+  fixture but synth-nemotron, whose squared ReLU's max(x, 0.25) read 4.8e-5,
+  under the arm's 1e-4, so the violation moves it by one. `TestFrontStatesTheModelAsOps` passes its
+  67 models on the V100, `TestDecodeDoesNotAllocate` on Llama both builds,
+  and the escape compare over the touched packages reads 360 moved-to-heap
+  lines on both sides.

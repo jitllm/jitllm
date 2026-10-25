@@ -166,11 +166,12 @@ var shadowRefused = map[string]string{
 var shadowFaults = []shadowFault{
 	{"the activation is another", func(g *graph.Graph) bool {
 		for i := range g.Ops {
-			if o := &g.Ops[i]; o.Kind == graph.OpActMul || o.Kind == graph.OpAct {
-				if o.Attr.Act == graph.ActReLU2 {
-					o.Attr.Act = graph.ActSiLU
+			if o := &g.Ops[i]; o.Kind == graph.OpExpr && !isOutGate(*o) {
+				gated := len(o.In) == 2
+				if slices.Equal(o.Attr.Expr, gatedBy(reluSquaredTerms, gated)) {
+					o.Attr.Expr = gatedBy(siluTerms, gated)
 				} else {
-					o.Attr.Act = graph.ActReLU2
+					o.Attr.Expr = gatedBy(reluSquaredTerms, gated)
 				}
 				return true
 			}

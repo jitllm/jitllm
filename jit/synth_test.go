@@ -65,8 +65,22 @@ func synthBlock(li int) *graph.Graph {
 	n := b.Norm(x, jlm.RoleFFNNorm, 1e-5)
 	gate := b.MatVec(n, jlm.RoleFFNGate, synthFFN)
 	up := b.MatVec(n, jlm.RoleFFNUp, synthFFN)
-	b.Out(b.Add(x, b.MatVec(b.ActMul(graph.ActSiLU, gate, up), jlm.RoleFFNDown, synthEmbd)))
+	b.Out(b.Add(x, b.MatVec(siluMul(b, gate, up, synthFFN), jlm.RoleFFNDown, synthEmbd)))
 	return b.G
+}
+
+// siluMul is silu(g)*u as a converter states a gated SiLU.
+func siluMul(b *graph.Builder, g, u graph.ValueID, width int) graph.ValueID {
+	in := func(i int) graph.Arg { return graph.Arg{Kind: graph.ArgIn, Index: i} }
+	t := func(i int) graph.Arg { return graph.Arg{Kind: graph.ArgTerm, Index: i} }
+	k := func(v float64) graph.Arg { return graph.Arg{Kind: graph.ArgConst, Const: v} }
+	return b.Expr("act", width, []graph.Term{
+		{Fn: graph.MapSub, Args: [3]graph.Arg{k(0), in(0)}},
+		{Fn: graph.MapExp, Args: [3]graph.Arg{t(0)}},
+		{Fn: graph.MapAdd, Args: [3]graph.Arg{k(1), t(1)}},
+		{Fn: graph.MapDiv, Args: [3]graph.Arg{in(0), t(2)}},
+		{Fn: graph.MapMul, Args: [3]graph.Arg{t(3), in(1)}},
+	}, nil, g, u)
 }
 
 func (s *synth) Config() *jlm.Config            { return &s.cfg }

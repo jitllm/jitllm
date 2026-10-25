@@ -154,8 +154,8 @@ var denseViolations = map[string][]c6Violation{
 		{"NoPE every second layer", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.SWAPeriod = 2 }) }},
 	},
 	"synth-arcee": {
-		{"SiLU for relu2", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Act = nn.ActSiLU }) }},
-		{"GELU for relu2", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Act = nn.ActGELU }) }},
+		{"SiLU for relu2", actSwap(nn.ActSiLU)},
+		{"GELU for relu2", actSwap(nn.ActGELU)},
 	},
 	"synth-seedoss": {
 		{"no q/k/v biases", noQKVBias},
@@ -277,7 +277,7 @@ var denseDevViolations = map[string][]c6Violation{
 		{"rotary on the NoPE layer", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.NoPEGlobal = false }) }},
 	},
 	"synth-arcee": {
-		{"SiLU for relu2", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Act = nn.ActSiLU }) }},
+		{"SiLU for relu2", actSwap(nn.ActSiLU)},
 	},
 	"synth-seedoss": {
 		{"no q/k/v biases", noQKVBias},

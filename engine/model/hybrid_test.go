@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/format/jlm"
 
 	"github.com/jitllm/jitllm/engine/graph"
@@ -274,6 +275,9 @@ func hybridModelOpt(t *testing.T, o hyOpt) *Model {
 			BOS: 0, EOS: 1, Unk: -1, Pad: -1, Sep: -1, Mask: -1,
 		},
 		Tensors: tensors,
+	}
+	if err := convert.StateActivations(src); err != nil {
+		t.Fatal(err)
 	}
 	dst := filepath.Join(t.TempDir(), "hybrid"+jlm.Ext)
 	if _, err := jlm.Write(dst, src, jlm.Fingerprint{Host: "test"}); err != nil {

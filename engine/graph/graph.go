@@ -14,7 +14,7 @@ import (
 
 // Version is the op language this package writes and the verifier reads. A
 // graph of another version is refused, never guessed at.
-const Version = 1
+const Version = 2
 
 // OpKind is an operation. Each kind's semantics are fixed per Version: a
 // change of meaning is a new kind or a new Version, not a reinterpretation.
@@ -45,8 +45,13 @@ const (
 	OpAttend
 	// OpAdd is In[0] + In[1].
 	OpAdd
-	// OpActMul is Act(In[0]) * In[1], elementwise.
-	OpActMul
+	// OpExpr is an elementwise function of its operands, stated as terms
+	// (Attr.Expr) in order: each term's Fn over its Args -- In[j] (an operand
+	// narrower than Out[0] broadcast as OpMap's), element Elem of the bound
+	// vector Weight[j] read as a scalar, a constant or an earlier term.
+	// Out[0] is the last term. A primitive: an activation the container
+	// states, whatever its formula.
+	OpExpr
 	// OpExpertMatVec is OpMatVec per pair: row j of In[0] against the sheet
 	// of Weight[0]'s bank the selection In[1] names at pair j, an optional
 	// Weight[1] the bank's bias (one row per expert) added after. With no
@@ -56,8 +61,6 @@ const (
 	// OpLayerNorm is LayerNorm over a row: (x - mean) * rsqrt(var + Eps) * w,
 	// plus an optional bias Weight[1] (the classic block's, C6).
 	OpLayerNorm
-	// OpAct is Act(In[0]) elementwise.
-	OpAct
 	// OpClamp is In[0] clamped to [-Bound, Bound], or with a bounds table
 	// bound (Weight[0]) to [t[Offset], t[Offset+1]], bounds not necessarily
 	// symmetric.
@@ -179,7 +182,7 @@ const (
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "act_mul", "expert_matvec", "layer_norm", "act", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -208,22 +211,29 @@ func (l RopeLayout) String() string {
 	return fmt.Sprintf("layout%d", l)
 }
 
-// Act is an activation an OpActMul applies to its first input.
-type Act uint8
+// Term is one function of an OpExpr: Fn over Fn.Arity() of Args.
+type Term struct {
+	Fn   MapFn
+	Args [3]Arg
+}
+
+// Arg is a term's operand.
+type Arg struct {
+	Kind  ArgKind
+	Index int     // the input, the bound vector or the earlier term
+	Elem  int     // ArgWeight's element of the vector
+	Const float64 // ArgConst's
+}
+
+// ArgKind is what a term's operand is.
+type ArgKind uint8
 
 const (
-	ActSiLU Act = iota + 1
-	ActGELUTanh
-	// ActSigmoid is sigma(In[0]) * In[1]: a gated norm's sigmoid gate.
-	ActSigmoid
-	// ActGELUErf is the exact (erf) GELU.
-	ActGELUErf
-	// ActReLU2 is relu(x)^2.
-	ActReLU2
-	// ActReLU is max(x, 0).
-	ActReLU
-	// ActQuickGELU is x*sigma(1.702x), OpenAI's CLIP's.
-	ActQuickGELU
+	ArgNone ArgKind = iota
+	ArgIn
+	ArgWeight
+	ArgConst
+	ArgTerm
 )
 
 // ValueID names a value in a Graph's Values.
@@ -251,50 +261,32 @@ const (
 	ElemI8
 )
 
-// MapFn is an OpMap's function, or an OpReduce's combiner.
-type MapFn uint8
+// MapFn is an OpMap's or an OpExpr term's function, or an OpReduce's
+// combiner: the container's own codes (jlm.Fn), so a stated expression is
+// read as it is written.
+type MapFn = jlm.Fn
 
 const (
-	MapAdd      MapFn = iota + 1 // a + b
-	MapSub                       // a - b
-	MapMul                       // a * b
-	MapDiv                       // a / b
-	MapMax                       // max(a, b)
-	MapMin                       // min(a, b)
-	MapExp                       // exp(a)
-	MapSigmoid                   // 1 / (1 + exp(-a))
-	MapSoftplus                  // log(1 + exp(a))
-	MapSqrt                      // sqrt(a)
-	MapWhere                     // b where a > 0, else c
-	MapLess                      // 1 where a < b, else 0
-	MapFma                       // a*b + c, the product not rounded before the sum
-	MapExpm1                     // exp(a) - 1, exact near zero where the difference cancels
-	MapAbs                       // |a|
-	MapRound                     // a to the nearest integer, halves away from zero
-	MapRecip                     // 1 / a
+	MapAdd      = jlm.FnAdd      // a + b
+	MapSub      = jlm.FnSub      // a - b
+	MapMul      = jlm.FnMul      // a * b
+	MapDiv      = jlm.FnDiv      // a / b
+	MapMax      = jlm.FnMax      // max(a, b)
+	MapMin      = jlm.FnMin      // min(a, b)
+	MapExp      = jlm.FnExp      // exp(a)
+	MapSigmoid  = jlm.FnSigmoid  // 1 / (1 + exp(-a))
+	MapSoftplus = jlm.FnSoftplus // log(1 + exp(a))
+	MapSqrt     = jlm.FnSqrt     // sqrt(a)
+	MapWhere    = jlm.FnWhere    // b where a > 0, else c
+	MapLess     = jlm.FnLess     // 1 where a < b, else 0
+	MapFma      = jlm.FnFma      // a*b + c, the product not rounded before the sum
+	MapExpm1    = jlm.FnExpm1    // exp(a) - 1, exact near zero where the difference cancels
+	MapAbs      = jlm.FnAbs      // |a|
+	MapRound    = jlm.FnRound    // a to the nearest integer, halves away from zero
+	MapRecip    = jlm.FnRecip    // 1 / a
+	MapTanh     = jlm.FnTanh     // tanh(a)
+	MapErf      = jlm.FnErf      // erf(a)
 )
-
-// Arity is how many operands f takes.
-func (f MapFn) Arity() int {
-	switch f {
-	case MapExp, MapSigmoid, MapSoftplus, MapSqrt, MapExpm1, MapAbs, MapRound, MapRecip:
-		return 1
-	case MapWhere, MapFma:
-		return 3
-	case MapAdd, MapSub, MapMul, MapDiv, MapMax, MapMin, MapLess:
-		return 2
-	}
-	return 0
-}
-
-var mapFnNames = [...]string{"?", "add", "sub", "mul", "div", "max", "min", "exp", "sigmoid", "softplus", "sqrt", "where", "less", "fma", "expm1", "abs", "round", "recip"}
-
-func (f MapFn) String() string {
-	if int(f) < len(mapFnNames) {
-		return mapFnNames[f]
-	}
-	return fmt.Sprintf("fn%d", f)
-}
 
 // Order is an OpReduce's: the order its additions run in is part of its
 // arithmetic, so it is stated.
@@ -358,7 +350,8 @@ type Attrs struct {
 	// keys within Window/2 of it either side.
 	Bidir   bool
 	Softcap float64
-	Act     Act
+	// Expr is OpExpr's terms.
+	Expr []Term
 	// Experts and TopK are a bank's experts and how many pairs a selection
 	// holds (OpExpertMatVec, OpTopK).
 	Experts, TopK int

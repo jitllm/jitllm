@@ -83,6 +83,10 @@ func (x *exprs) mapFn(f graph.MapFn, a []int, exact bool) (int, error) {
 		return x.fma(a[0], a[1], a[2]), nil
 	case graph.MapExpm1:
 		return x.expm1(a[0]), nil
+	case graph.MapTanh:
+		return x.tanh(a[0]), nil
+	case graph.MapErf:
+		return x.erf(a[0]), nil
 	}
 	return 0, fmt.Errorf("no formula for the map %v", f)
 }

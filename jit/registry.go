@@ -80,6 +80,8 @@ type Context struct {
 	// operand (Int8Form.UnsignedDot), exactDiv whether its division is
 	// correctly rounded (Device.ExactDiv).
 	unsignedDot, exactDiv bool
+	// split is the run's expressions formed a map a term.
+	split *exprSplit
 	// Rotaries is the part's segment's rotaries, each a table of the step,
 	// the first named the model's RotaryBase'th (tableName).
 	Rotaries   []graph.Rotary
@@ -139,7 +141,7 @@ func Default() *Registry {
 	}
 }
 
-func (r *Registry) decompose(f Model, part Part, of int, s Step, d Device) ([]Prim, error) {
+func (r *Registry) decompose(f Model, part Part, of int, s Step, d Device, sp *exprSplit) ([]Prim, error) {
 	view, rots, base := f, f.Rotaries(), 0
 	if part.Segment == SegmentVision {
 		view, base = f.Segment(), len(textRotaries(f))
@@ -147,7 +149,7 @@ func (r *Registry) decompose(f Model, part Part, of int, s Step, d Device) ([]Pr
 	}
 	s = s.stepOf(part.Segment)
 	c := r.context(part.Graph, part.Kind, formats(view, part), rots, s, d)
-	c.RotaryBase, c.Of = base, of
+	c.RotaryBase, c.Of, c.split = base, of, sp
 	return r.decomposeOps(c, of)
 }
 

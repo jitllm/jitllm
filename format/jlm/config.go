@@ -673,6 +673,13 @@ type Config struct {
 	DecisionRouting uint32
 	DecisionEps     float32
 
+	// Acts are the FFN activations the blocks apply, each stated in the op
+	// language (Expr), and ActLayers each layer's index into them (none:
+	// Acts[0] for every layer). The converter states them; the engine reads
+	// no activation's formula. A thirteenth optional tail; see encodeConfig.
+	Acts      []Expr
+	ActLayers []uint8
+
 	Flags Flags
 }
 

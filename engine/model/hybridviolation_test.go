@@ -66,7 +66,7 @@ func rewriteOps(t *testing.T, g *graph.Graph, f func(i int, o *graph.Op) bool) *
 func withoutTheGate(t *testing.T) func(*graph.Graph) *graph.Graph {
 	return func(g *graph.Graph) *graph.Graph {
 		return rewriteOps(t, g, func(_ int, o *graph.Op) bool {
-			if o.Kind != graph.OpActMul || o.Attr.Act != graph.ActSigmoid {
+			if !isOutGate(*o) {
 				return false
 			}
 			*o = graph.Op{Kind: graph.OpMap, In: []graph.ValueID{o.In[1]}, Out: o.Out, Attr: graph.Attrs{Fn: graph.MapMul, Const: 1}}

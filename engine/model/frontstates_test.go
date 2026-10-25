@@ -168,8 +168,8 @@ func checkOutputGate(t *testing.T, m *Model, li int) {
 		t.Fatalf("block %d: the halves are taken from %v, want the query at 0 and the gate at %d", li, offsets, hd)
 	}
 	var gated []graph.Op
-	for _, o := range opsOf(g, graph.OpActMul) {
-		if o.Attr.Act == graph.ActSigmoid {
+	for _, o := range opsOf(g, graph.OpExpr) {
+		if isOutGate(o) {
 			gated = append(gated, o)
 		}
 	}
@@ -185,10 +185,10 @@ func checkOutputGate(t *testing.T, m *Model, li int) {
 }
 
 // TestFrontStatesTheActivationFromTheBlocksNumbers holds an ungated MLP whose
-// activation is stated by four stored numbers a block to maps of the up
-// projection that read each number as a scalar of the stored vector, and no
-// activation op; it forms. A model whose container lacks the numbers is
-// refused, not given an activation of nothing.
+// activation the container states over four stored numbers a block to one
+// expression of the up projection that reads each number as a scalar of the
+// stored vector; it forms. A model whose container lacks the numbers is
+// refused, naming them, not given an activation of nothing.
 func TestFrontStatesTheActivationFromTheBlocksNumbers(t *testing.T) {
 	m := frontModel(t, "synth-apertus.gguf")
 	for li := range m.Cfg.NLayer {
@@ -196,20 +196,24 @@ func TestFrontStatesTheActivationFromTheBlocksNumbers(t *testing.T) {
 			t.Fatalf("block %d is refused by %q (%v)", li, why, m.UncoveredErr(li))
 		}
 		g := m.Composing().BlockGraph(li)
-		if n := len(opsOf(g, graph.OpAct)) + len(opsOf(g, graph.OpActMul)); n != 0 {
-			t.Fatalf("block %d: %d activation ops, want the maps of the numbers", li, n)
+		exprs := opsOf(g, graph.OpExpr)
+		if len(exprs) != 1 {
+			t.Fatalf("block %d: %d expressions, want the activation's one", li, len(exprs))
+		}
+		o := exprs[0]
+		if len(o.Weight) != 1 || o.Weight[0].Role != jlm.RoleXIELU || o.Weight[0].K != 4 {
+			t.Fatalf("block %d: the activation binds %v, want the four numbers of %s", li, o.Weight, jlm.RoleXIELU)
 		}
 		offsets := map[int]int{}
 		expm1 := 0
-		for _, o := range opsOf(g, graph.OpMap) {
-			if o.Attr.Fn == graph.MapExpm1 {
+		for _, tm := range o.Attr.Expr {
+			if tm.Fn == graph.MapExpm1 {
 				expm1++
 			}
-			for _, w := range o.Weight {
-				if w.Role != jlm.RoleXIELU || w.K != 4 || o.Attr.Width != 1 {
-					t.Fatalf("block %d: a map binds %s of %d with a window of %d, want one scalar of the four", li, w.Role, w.K, o.Attr.Width)
+			for _, a := range tm.Args {
+				if a.Kind == graph.ArgWeight {
+					offsets[a.Elem]++
 				}
-				offsets[o.Attr.Offset]++
 			}
 		}
 		if len(offsets) != 4 || expm1 != 1 {
@@ -220,7 +224,7 @@ func TestFrontStatesTheActivationFromTheBlocksNumbers(t *testing.T) {
 	undo := dropStored(m, jlm.RoleXIELU)
 	defer undo()
 	why, err := m.Uncovered(0), m.UncoveredErr(0)
-	if why != UncoveredUnverified || err == nil || !strings.Contains(err.Error(), jlm.RoleXIELU.String()) {
+	if why != UncoveredAct || err == nil || !strings.Contains(err.Error(), jlm.RoleXIELU.String()) {
 		t.Fatalf("a block without its stored numbers is refused by %q (%v), want them named", why, err)
 	}
 }
@@ -256,7 +260,7 @@ func TestFrontStatesTheNormsInsideASublayer(t *testing.T) {
 			t.Fatalf("block %d: the output projection reads %d, want the inner norm's output", li, wo.In[0])
 		}
 		sub = readerOf(t, g, jlm.RoleFFNSubNorm)
-		if p := producerOf(t, g, sub.In[0]); p.Kind != graph.OpActMul {
+		if p := producerOf(t, g, sub.In[0]); p.Kind != graph.OpExpr || len(p.In) != 2 {
 			t.Fatalf("block %d: the FFN's inner norm reads a %s, want the gated product", li, p.Kind)
 		}
 		if down := readerOf(t, g, jlm.RoleFFNDown); down.In[0] != sub.Out[0] {
@@ -307,7 +311,7 @@ func TestFrontStatesTheQwen35FixturesAttention(t *testing.T) {
 					t.Fatalf("block %d: a rotary over sections %v (interleaved %v), where the container states %v (%v)",
 						li, o.Attr.Sections, o.Attr.Interleaved, m.Cfg.RopeSections, m.Cfg.RopeInterleaved)
 				}
-			case o.Kind == graph.OpActMul && o.Attr.Act == graph.ActSigmoid:
+			case isOutGate(o):
 				gates++
 			}
 		}

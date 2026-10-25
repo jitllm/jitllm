@@ -91,9 +91,7 @@ func nemotronhViolations(device bool) []c6Violation {
 				}
 			})
 		}},
-		{"SiLU for the squared ReLU", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.Act = nn.ActSiLU })
-		}},
+		{"SiLU for the squared ReLU", actSwap(nn.ActSiLU)},
 	}
 	if !device {
 		vs = append(vs, c6Violation{"value heads paired with key groups tiled", func(m *Model) func() {

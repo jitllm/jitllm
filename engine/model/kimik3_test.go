@@ -123,9 +123,7 @@ var k3Violations = []c6Violation{
 	{"the MLA latent norms at rms_norm_eps (llama.cpp's)", func(m *Model) func() {
 		return cfgMut(m, func(c *Config) { c.LatentNormEps = c.RMSEps })
 	}},
-	{"plain SwiGLU", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.Act = nn.ActSiLU })
-	}},
+	{"plain SwiGLU", actSwap(nn.ActSiLU)},
 }
 
 // TestKimiK3FeaturesAreLoadBearing runs each violation through decode.

@@ -21,7 +21,11 @@ func block(d, ffn int) (*Graph, Facts) {
 	m := b.Norm(x2, jlm.RoleFFNNorm, 1e-5)
 	g := b.MatVec(m, jlm.RoleFFNGate, ffn)
 	u := b.MatVec(m, jlm.RoleFFNUp, ffn)
-	b.Out(b.Add(x2, b.MatVec(b.ActMul(ActSiLU, g, u), jlm.RoleFFNDown, d)))
+	b.Out(b.Add(x2, b.MatVec(b.Expr("act", ffn, []Term{
+		{Fn: MapSigmoid, Args: [3]Arg{{Kind: ArgIn, Index: 0}}},
+		{Fn: MapMul, Args: [3]Arg{{Kind: ArgIn, Index: 0}, {Kind: ArgTerm, Index: 0}}},
+		{Fn: MapMul, Args: [3]Arg{{Kind: ArgTerm, Index: 1}, {Kind: ArgIn, Index: 1}}},
+	}, nil, g, u), jlm.RoleFFNDown, d)))
 	inv := map[jlm.Role]Shape{
 		jlm.RoleAttnNorm: {K: d}, jlm.RoleFFNNorm: {K: d},
 		jlm.RoleAttnQ: {K: d, Rows: d}, jlm.RoleAttnK: {K: d, Rows: d}, jlm.RoleAttnV: {K: d, Rows: d}, jlm.RoleAttnOut: {K: d, Rows: d},

@@ -184,7 +184,10 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// runs the model as the backbone it is, a model that generates.
 	// The twelfth, Clef's routing blocks and head epsilon, implies the first
 	// eleven; an older reader refuses its decision kind by code.
-	clef := c.DecisionRouting != 0 || c.DecisionEps != 0
+	// The thirteenth, the stated activations, implies the first twelve; an
+	// older reader drops it and runs the activation its flags name.
+	acts := len(c.Acts) != 0 || len(c.ActLayers) != 0
+	clef := acts || c.DecisionRouting != 0 || c.DecisionEps != 0
 	q4e := clef || c.HCLowRank != 0 || c.QSARatio != 0 || c.NGramBlock != 0
 	dec := q4e || c.Decision != DecisionNone || c.DecisionBlocks != 0 || c.DecisionHeadTokens != 0 || len(c.DecisionTemps) != 0 ||
 		c.DecisionHeads != 0
@@ -286,6 +289,9 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	if clef {
 		w.u32(c.DecisionRouting)
 		w.f32(c.DecisionEps)
+	}
+	if acts {
+		encodeExprs(w, c)
 	}
 	return w.b
 }
@@ -433,8 +439,14 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 		c.DecisionRouting = r.u32()
 		c.DecisionEps = r.f32()
 	}
+	if r.err == nil && len(r.b) > 0 {
+		decodeExprs(r, c)
+	}
 	if r.err != nil {
 		return nil, r.err
+	}
+	if err := exprsValid(c); err != nil {
+		return nil, err
 	}
 	if err := ngramValid(c); err != nil {
 		return nil, err

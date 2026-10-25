@@ -83,10 +83,11 @@ func (s *Builder) Add(x, y ValueID) ValueID {
 	return z
 }
 
-// ActMul is act(a) * b.
-func (s *Builder) ActMul(act Act, a, b ValueID) ValueID {
-	z := s.value("actmul", s.width(a))
-	s.G.op(Op{Kind: OpActMul, In: []ValueID{a, b}, Out: []ValueID{z}, Attr: Attrs{Act: act}})
+// Expr is the elementwise function terms states over in and the bound
+// vectors w, into a row of width.
+func (s *Builder) Expr(name string, width int, terms []Term, w []Binding, in ...ValueID) ValueID {
+	z := s.value(name, width)
+	s.G.op(Op{Kind: OpExpr, In: in, Out: []ValueID{z}, Weight: w, Attr: Attrs{Expr: terms}})
 	return z
 }
 

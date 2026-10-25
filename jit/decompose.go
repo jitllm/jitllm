@@ -17,8 +17,7 @@ func decompositions() map[graph.OpKind]Decomposition {
 		graph.OpHeadNorm:     decomposeHeadNorm,
 		graph.OpMatVec:       decomposeMatVec,
 		graph.OpAdd:          decomposeAdd,
-		graph.OpActMul:       decomposeActMul,
-		graph.OpAct:          decomposeAct,
+		graph.OpExpr:         decomposeExpr,
 		graph.OpMap:          decomposeMap,
 		graph.OpLayerNorm:    decomposeLayerNorm,
 		graph.OpRope:         decomposeRope,
@@ -210,12 +209,12 @@ func decomposeBiased(o graph.Op, c *Context) ([]Prim, error) {
 }
 
 // producedByRow reports whether value v is the output of an op computing a
-// row from the row alone: a norm or a gated activation.
+// row from the row alone: a norm or an elementwise expression.
 func (c *Context) producedByRow(v graph.ValueID) bool {
 	for _, o := range c.Graph.Ops {
 		for _, out := range o.Out {
 			if out == v {
-				return o.Kind == graph.OpNorm || o.Kind == graph.OpActMul
+				return o.Kind == graph.OpNorm || o.Kind == graph.OpExpr
 			}
 		}
 	}
@@ -239,25 +238,6 @@ func decomposeAdd(o graph.Op, c *Context) ([]Prim, error) {
 	if o.Attr.Scale != 0 {
 		// A scaled add, (x + y) * Scale.
 		x.op(OpMul, F, sum, x.f(float32(o.Attr.Scale)))
-	}
-	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), c.value(o.In[1])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
-}
-
-// decomposeActMul is the gated activation: act(gate) times up.
-func decomposeActMul(o graph.Op, c *Context) ([]Prim, error) {
-	if len(o.In) != 2 || len(o.Out) != 1 {
-		return nil, fmt.Errorf("an act_mul of %d operands", len(o.In))
-	}
-	F := ir.F32
-	sh := c.rows(o.Out[0])
-	var x exprs
-	r, i := x.coord(0), x.coord(1)
-	if o.Attr.Act == graph.ActSiLU {
-		g := x.at(0, sh, r, i)
-		g = x.op(OpDiv, F, g, x.op(OpAdd, F, x.f(1), x.un(OpExp, F, x.op(OpSub, F, x.f(0), g))))
-		x.op(OpMul, F, g, x.at(1, sh, r, i))
-	} else if _, err := x.actMul(o.Attr.Act, x.at(0, sh, r, i), x.at(1, sh, r, i)); err != nil {
-		return nil, err
 	}
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0]), c.value(o.In[1])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }

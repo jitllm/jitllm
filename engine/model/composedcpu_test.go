@@ -11,6 +11,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/jitllm/jitllm/convert"
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -237,6 +238,13 @@ func naiveExpm1(g *graph.Graph) *graph.Graph {
 	out.Values = slices.Clone(g.Values)
 	out.Ops = nil
 	for _, o := range g.Ops {
+		if o.Kind == graph.OpExpr {
+			// One map a term, as an expression whose one map the CPU's
+			// registers refuse is formed (jit.ErrRegisterPressure).
+			o.Attr.Expr = naiveExpm1Terms(o.Attr.Expr)
+			out.Ops = append(out.Ops, exprAsMaps(o, &out.Values)...)
+			continue
+		}
 		if o.Kind != graph.OpMap || o.Attr.Fn != graph.MapExpm1 {
 			out.Ops = append(out.Ops, o)
 			continue
@@ -250,14 +258,120 @@ func naiveExpm1(g *graph.Graph) *graph.Graph {
 	return &out
 }
 
-// rotateWindows is g with each map's window of the bound vector k wide moved
-// one element along: the numbers read at the wrong places.
+// TestComposedCPUTanhErf holds the composer's tanh and erf, the maps a stated
+// GELU reads, to math.Tanh and math.Erf over the sweep, at absolute bounds
+// derived from the composed exp's (expBound, relative): tanh's 1 - 2/(e + 1)
+// moves by at most half of e's relative error, erf's 1 - p(t) t e^(-z^2) by
+// all of it, its product being at most one, beside erf's rational
+// approximation's 1.5e-7 (Abramowitz and Stegun 7.1.26), and each a few
+// units of 1 in its subtractions. Each held to the other's definition is
+// wrong by its whole value.
+func TestComposedCPUTanhErf(t *testing.T) {
+	const units = 4 * 0x1p-23
+	xs := sweep(13, 80)
+	ref := map[graph.MapFn]func(float64) float64{graph.MapTanh: math.Tanh, graph.MapErf: math.Erf}
+	bounds := map[graph.MapFn]float64{graph.MapTanh: expBound/2 + units, graph.MapErf: expBound + 1.5e-7 + units}
+	for _, fn := range []graph.MapFn{graph.MapTanh, graph.MapErf} {
+		bound := bounds[fn]
+		got := unary(t, fn, xs)
+		other := graph.MapErf
+		if fn == graph.MapErf {
+			other = graph.MapTanh
+		}
+		worst, wrong := 0.0, 0.0
+		for i, x := range xs {
+			e := math.Abs(float64(got[i]) - ref[fn](float64(x)))
+			if math.IsNaN(e) {
+				e = math.Inf(1)
+			}
+			worst = max(worst, e)
+			wrong = max(wrong, math.Abs(float64(got[i])-ref[other](float64(x))))
+		}
+		t.Logf("%v: worst absolute error %.3g over %d inputs (bound %g); %.3g from %v", fn, worst, len(xs), bound, wrong, other)
+		if !(worst <= bound) {
+			t.Errorf("%v is %.3g from its definition, bound %g", fn, worst, bound)
+		}
+		if !(wrong > 1e3*bound) {
+			t.Errorf("%v is only %.3g from %v: the comparison cannot tell them apart", fn, wrong, other)
+		}
+	}
+}
+
+// exprAsMaps is expression o as one OpMap a term, in order: each term's
+// operands its inputs, then a bound scalar, then a constant, as OpMap reads
+// them, each term but the last a value of its own.
+func exprAsMaps(o graph.Op, values *[]graph.Value) []graph.Op {
+	width := (*values)[o.Out[0]].Width
+	ids := make([]graph.ValueID, len(o.Attr.Expr))
+	var ops []graph.Op
+	for k, t := range o.Attr.Expr {
+		m := graph.Op{Kind: graph.OpMap, Attr: graph.Attrs{Fn: t.Fn}}
+		for _, a := range t.Args[:t.Fn.Arity()] {
+			switch a.Kind {
+			case graph.ArgIn:
+				m.In = append(m.In, o.In[a.Index])
+			case graph.ArgTerm:
+				m.In = append(m.In, ids[a.Index])
+			case graph.ArgWeight:
+				m.Weight, m.Attr.Offset, m.Attr.Width = []graph.Binding{o.Weight[a.Index]}, a.Elem, 1
+			case graph.ArgConst:
+				m.Attr.Const = a.Const
+			}
+		}
+		if k == len(o.Attr.Expr)-1 {
+			m.Out = o.Out
+		} else {
+			*values = append(*values, graph.Value{Name: fmt.Sprintf("naive.t%d", k), Width: width})
+			ids[k] = graph.ValueID(len(*values) - 1)
+			m.Out = []graph.ValueID{ids[k]}
+		}
+		ops = append(ops, m)
+	}
+	return ops
+}
+
+// naiveExpm1Terms is terms with each expm1 term stated as exp(x) - 1, the
+// terms after it renumbered.
+func naiveExpm1Terms(terms []graph.Term) []graph.Term {
+	var out []graph.Term
+	at := make([]int, len(terms))
+	for k, t := range terms {
+		for j := range t.Args {
+			if t.Args[j].Kind == graph.ArgTerm {
+				t.Args[j].Index = at[t.Args[j].Index]
+			}
+		}
+		if t.Fn == graph.MapExpm1 {
+			t.Fn = graph.MapExp
+			out = append(out, t)
+			t = term(graph.MapSub, argTerm(len(out)-1), argK(1))
+		}
+		at[k] = len(out)
+		out = append(out, t)
+	}
+	return out
+}
+
+// rotateWindows is g with each map's window of the bound vector k wide, and
+// each expression's element of it, moved one element along: the numbers read
+// at the wrong places.
 func rotateWindows(g *graph.Graph, k int) *graph.Graph {
 	out := *g
 	out.Ops = slices.Clone(g.Ops)
 	for i := range out.Ops {
-		if o := &out.Ops[i]; o.Kind == graph.OpMap && o.Attr.Width > 0 {
+		o := &out.Ops[i]
+		if o.Kind == graph.OpMap && o.Attr.Width > 0 {
 			o.Attr.Offset = (o.Attr.Offset + 1) % k
+		}
+		if o.Kind == graph.OpExpr {
+			o.Attr.Expr = slices.Clone(o.Attr.Expr)
+			for t := range o.Attr.Expr {
+				for j := range o.Attr.Expr[t].Args {
+					if a := &o.Attr.Expr[t].Args[j]; a.Kind == graph.ArgWeight {
+						a.Elem = (a.Elem + 1) % k
+					}
+				}
+			}
 		}
 	}
 	return &out
@@ -403,7 +517,7 @@ func TestComposedCPUHeadSlices(t *testing.T) {
 					graph.Attrs{HeadDim: 2 * c.d, Offset: off, Width: c.d}, nil, nil)[0]
 			}
 			qv, gv := slice("q", qOff), slice("gate", gateOff)
-			ov := b.ActMul(graph.ActSigmoid, gv, a)
+			ov := sigmoidGate(b, gv, a, qdim)
 			b.Out(qv, ov)
 			q, qBack = guarded(qdim)
 			out, outBack = guarded(qdim)
@@ -513,11 +627,19 @@ func expEdges() []float32 {
 	return xs
 }
 
-// xieluGraph is the activation the front end states, over a row of n.
-func xieluGraph(n int) (g *graph.Graph, x, y graph.ValueID) {
+// xieluGraph is the activation the converter states for Apertus's ungated
+// FFN, as the front end copies it, over a row of n.
+func xieluGraph(t *testing.T, n int) (g *graph.Graph, x, y graph.ValueID) {
+	t.Helper()
+	e, err := convert.Activation(&jlm.Config{Arch: jlm.ArchApertus, NLayer: 1}, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	b := graph.New()
 	x = b.In("x", n)
-	y = xielu(b, x, n)
+	if y, err = b.Stated("act", &e, []graph.ValueID{x}, n, graph.Facts{Inventory: map[jlm.Role]graph.Shape{jlm.RoleXIELU: {K: 4}}}); err != nil {
+		t.Fatal(err)
+	}
 	b.Out(y)
 	return b.G, x, y
 }
@@ -593,8 +715,9 @@ func TestComposedCPUXIELU(t *testing.T) {
 		if k := slices.Index(kinds, fam.name); k >= 0 {
 			kind = k
 		}
-		g, x, y := xieluGraph(n)
+		g, x, y := xieluGraph(t, n)
 		codes := cpuForm(t, g, []jlm.Role{jlm.RoleXIELU})
+		t.Logf("%s: %d kernels", fam.name, len(codes))
 		run := func(codes []jit.Code, p [4]float32) []float32 {
 			row, back := guarded(n)
 			cpuExec(t, codes, map[jlm.Role][]float32{jlm.RoleXIELU: p[:]}, nil, map[graph.ValueID][]float32{x: fam.xs, y: row})

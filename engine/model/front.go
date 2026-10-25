@@ -44,7 +44,6 @@ const (
 	UncoveredPLE
 	UncoveredCompressed
 	UncoveredNGram
-	UncoveredSparseAct
 	UncoveredAct
 	UncoveredPooling
 	UncoveredEmbedRows
@@ -71,8 +70,7 @@ var uncoveredNames = [numUncovered]string{
 	UncoveredPLE:         "per-layer embeddings",
 	UncoveredCompressed:  "compressed or grouped attention",
 	UncoveredNGram:       "an n-gram embedding",
-	UncoveredSparseAct:   "a gaussian top-k activation",
-	UncoveredAct:         "an activation the op language does not state",
+	UncoveredAct:         "an activation the container does not state, or not over the block's operands",
 	UncoveredPooling:     "a pooled head (an embedding model's)",
 	UncoveredEmbedRows:   "input rows beyond the token's row, a scale and a position table",
 	UncoveredUnbound:     "stored tensors its graph does not bind",
@@ -285,12 +283,6 @@ func (m *Model) inventory(block int32) (graph.Facts, bool) {
 	return graph.Facts{Inventory: inv}, perExpert
 }
 
-// graphActs is the activations the op language states.
-var graphActs = map[nn.ActKind]graph.Act{
-	nn.ActSiLU: graph.ActSiLU, nn.ActGELU: graph.ActGELUTanh, nn.ActGELUErf: graph.ActGELUErf,
-	nn.ActQuickGELU: graph.ActQuickGELU, nn.ActReLU: graph.ActReLU, nn.ActReLU2: graph.ActReLU2,
-}
-
 // uncovered is why block li's features are not all ones this front end
 // writes, Covered for none. It reads numbers the container states, never what the
 // model is called.
@@ -331,12 +323,7 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredCompressed
 	case c.NGramAt(li):
 		return UncoveredNGram
-	case c.SparseStd != 0:
-		return UncoveredSparseAct
-	}
-	// xIELU is stated for an ungated FFN, from the four numbers its block
-	// stores; the gated activations are the ones graphActs lists.
-	if _, ok := graphActs[c.Act]; !ok && !(c.Act == nn.ActXIELU && !m.stores(li, jlm.RoleFFNGate)) {
+	case m.container.Config().ActAt(li) == nil:
 		return UncoveredAct
 	}
 	return Covered
@@ -391,8 +378,8 @@ func (m *Model) ropeAxesStated(r nn.Rope) bool {
 // sinks, the output gate and the norm inside the sublayer where stored, the
 // output projection, a norm over it where stored and the residual, scaled
 // where the container states a scale; then the MLP the same way, gated where
-// it stores a gate, its activation from the block's numbers where it states
-// them, reading the residual after the attention or, in a parallel block, the
+// it stores a gate, its activation the expression the container states for
+// the block, over the gate and the up or the up alone, reading the residual after the attention or, in a parallel block, the
 // block's input -- or why it has none.
 func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if why := m.uncovered(li); why != Covered {
@@ -529,7 +516,10 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	att := b.Attend(q, hist, a, stored(jlm.RoleAttnSinks)...)
 	if c.AttnOutGate {
-		att = b.ActMul(graph.ActSigmoid, gate, att)
+		att = b.Expr("gated", qdim, []graph.Term{
+			{Fn: graph.MapSigmoid, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}}},
+			{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 0}, {Kind: graph.ArgIn, Index: 1}}},
+		}, nil, gate, att)
 	}
 	return m.blockRest(b, f, li, x, n, att, preNorm, norm, resid, matvec, stored, has)
 }
@@ -555,17 +545,14 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	if _, own := f.Inventory[jlm.RoleFFNNorm]; c.Parallel && !own {
 		n2 = n
 	}
-	var h graph.ValueID
-	switch {
-	case has(jlm.RoleFFNGate):
-		gt := matvec(n2, jlm.RoleFFNGate, nffn)
-		up := matvec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...)
-		h = b.ActMul(graphActs[c.Act], gt, up)
-	case c.Act == nn.ActXIELU:
-		h = xielu(b, matvec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...), nffn)
-	default:
-		up := matvec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...)
-		h = b.Emit(graph.OpAct, []graph.ValueID{up}, []graph.Result{{Name: "act", Width: nffn}}, nil, graph.Attrs{Act: graphActs[c.Act]}, nil, nil)[0]
+	var acts []graph.ValueID
+	if has(jlm.RoleFFNGate) {
+		acts = append(acts, matvec(n2, jlm.RoleFFNGate, nffn))
+	}
+	acts = append(acts, matvec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...))
+	h, err := b.Stated("act", m.container.Config().ActAt(li), acts, nffn, f)
+	if err != nil {
+		return nil, UncoveredAct, fmt.Errorf("the block's stated activation: %w", err)
 	}
 	h = norm(h, jlm.RoleFFNSubNorm)
 	down := matvec(h, jlm.RoleFFNDown, d, stored(jlm.RoleFFNDownBias)...)
@@ -648,37 +635,6 @@ func (m *Model) latentAttention(b *graph.Builder, li int, n, q graph.ValueID, ha
 // mapRow is one OpMap of in by a into a row of width, binding w.
 func mapRow(b *graph.Builder, name string, a graph.Attrs, w []graph.Binding, width int, in ...graph.ValueID) graph.ValueID {
 	return b.Emit(graph.OpMap, in, []graph.Result{{Name: name, Width: width}}, w, a, nil, nil)[0]
-}
-
-// xielu is the activation of x from the four numbers its block stores
-// (jlm.RoleXIELU: alpha_p, alpha_n, beta, eps, each read as a scalar of the
-// stored vector), as maps over x:
-//
-//	x > 0:   alpha_p*x*x + beta*x
-//	x <= 0:  (expm1(min(x, eps)) - x)*alpha_n + beta*x
-func xielu(b *graph.Builder, x graph.ValueID, width int) graph.ValueID {
-	const (
-		alphaP = iota
-		alphaN
-		beta
-		eps
-		numbers
-	)
-	// none is a map that reads no number: its operands are its inputs.
-	const none = -1
-	op := func(name string, fn graph.MapFn, number int, in ...graph.ValueID) graph.ValueID {
-		var w []graph.Binding
-		a := graph.Attrs{Fn: fn}
-		if number != none {
-			w, a.Offset, a.Width = []graph.Binding{{Role: jlm.RoleXIELU, K: numbers}}, number, 1
-		}
-		return b.Emit(graph.OpMap, in, []graph.Result{{Name: name, Width: width}}, w, a, nil, nil)[0]
-	}
-	diff := op("xielu.diff", graph.MapSub, none, op("xielu.expm1", graph.MapExpm1, none, op("xielu.min", graph.MapMin, eps, x)), x)
-	neg := op("xielu.neg", graph.MapMul, alphaN, diff)
-	pos := op("xielu.pos", graph.MapMul, none, op("xielu.ax", graph.MapMul, alphaP, x), x)
-	pick := op("xielu.pick", graph.MapWhere, none, x, pos, neg)
-	return op("xielu", graph.MapAdd, none, pick, op("xielu.bx", graph.MapMul, beta, x))
 }
 
 // headGraph is the head (graph.Head) of what the container stores: a

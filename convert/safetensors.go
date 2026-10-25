@@ -527,6 +527,9 @@ func hfSourceOf(dir hfDir, shards []*safetensors.File) (*jlm.Source, error) {
 	if len(s.Tensors) == 0 {
 		return nil, fmt.Errorf("convert: %s: no tensor in this model has a role", dir)
 	}
+	if err := StateActivations(s); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 

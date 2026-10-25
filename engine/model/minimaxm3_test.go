@@ -83,9 +83,7 @@ var m3Violations = []c6Violation{
 			}
 		})
 	}},
-	{"plain SwiGLU", func(m *Model) func() {
-		return cfgMut(m, func(c *Config) { c.Act = nn.ActSiLU })
-	}},
+	{"plain SwiGLU", actSwap(nn.ActSiLU)},
 }
 
 // TestMiniMaxM3MatchesTransformers holds each fixture to transformers' own

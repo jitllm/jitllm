@@ -185,7 +185,7 @@ var bitnetViolations = []c6Violation{
 	{"no FFN inner norm", func(m *Model) func() {
 		return eachLayer(m, func(l *layer) { l.ffnSubNorm = nil })
 	}},
-	{"SiLU for relu2", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.Act = nn.ActSiLU }) }},
+	{"SiLU for relu2", actSwap(nn.ActSiLU)},
 	{"NORM rotary", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
 	{"activations per 32, not per token", func(m *Model) func() {
 		return cfgMut(m, func(c *Config) { c.TokenAct = false })

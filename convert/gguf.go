@@ -465,6 +465,9 @@ func sourceOf(f *meta.File) (*jlm.Source, error) {
 			return nil, err
 		}
 	}
+	if err := StateActivations(s); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 

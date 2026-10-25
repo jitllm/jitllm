@@ -213,7 +213,7 @@ func (o *orderer) need(i, c int) {
 	}
 	k := o.k
 	nd := k.Nodes[i]
-	if nd.Op == OpConst && !o.words[i] && !(nd.Type == ir.F32 && nd.Imm == 0) || nd.Op == OpIter {
+	if o.unmade(i) {
 		return
 	}
 	if nd.Op == OpFold {
@@ -269,6 +269,13 @@ func (o *orderer) pending() map[int]int {
 	return memo
 }
 
+// unmade reports whether node i is a value no entry makes: a constant the
+// code takes as an immediate, or an iteration.
+func (o *orderer) unmade(i int) bool {
+	nd := o.k.Nodes[i]
+	return nd.Op == OpConst && !o.words[i] && !o.k.isZero(i) || nd.Op == OpIter
+}
+
 // constLoad reports whether node i loads a constant from the constant
 // block.
 func (o *orderer) constLoad(i int) bool {
@@ -292,7 +299,7 @@ func (o *orderer) beforeShare(i, c int) {
 			reads, ready := false, true
 			for _, a := range k.Operands(&k.Nodes[r]) {
 				reads = reads || *a == x
-				ready = ready && (o.done[*a] || k.Nodes[*a].Op == OpConst)
+				ready = ready && (o.done[*a] || k.Nodes[*a].Op == OpConst && o.unmade(*a))
 			}
 			if reads && ready {
 				o.node(r)
