@@ -80,7 +80,7 @@ func (g *devTier) shadowBegin(lc *launcher, bs *blockScratch, sv *servedPart, l 
 	}
 	lc.la(bs.copyRows, bs.p.NEmbd, bs.x, bs.shIn)
 	lc.la(bs.copyRows, bs.p.NEmbd, bs.x, bs.shForm)
-	if err := sv.run(g, lc, []backend.Buf{bs.shForm}, []backend.Buf{bs.shForm}); err != nil {
+	if err := sv.run(g, lc, sv.inst, []backend.Buf{bs.shForm}, []backend.Buf{bs.shForm}); err != nil {
 		return err
 	}
 	sh.cmp, sh.l = cmp, l
@@ -92,7 +92,7 @@ func (g *devTier) shadowBegin(lc *launcher, bs *blockScratch, sv *servedPart, l 
 func (g *devTier) shadowEnd(lc *launcher, bs *blockScratch, sh *shadowStep) error {
 	cmp, l := sh.cmp, sh.l
 	*sh = shadowStep{}
-	return cmp.run(g, lc, []backend.Buf{bs.shIn, bs.x, bs.shForm, l.shadow}, []backend.Buf{l.shadow})
+	return cmp.run(g, lc, cmp.inst, []backend.Buf{bs.shIn, bs.x, bs.shForm, l.shadow}, []backend.Buf{l.shadow})
 }
 
 // shadowStats fills s with every placed block's worst drift and the steps

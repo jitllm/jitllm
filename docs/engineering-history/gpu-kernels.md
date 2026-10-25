@@ -7286,3 +7286,70 @@ row where the composer's reads two.
   arms under the same squeeze, synth-gemma4-kv and synth-hunyuan, hand one
   block more home than before, the per-row head now held to the budget;
   every other arm's figures are unchanged to the third digit.
+- **Prompt chunks served at their rows.** A Config.Composed bit,
+  ComposedPrompt, asks the composer for each block of a prompt chunk at
+  the chunk's width: one sequence's rows, each its own descriptor, the
+  step's row offsets bound as the query's. A form's key holds its rows, so
+  a block forms at every width the device warms, as main keeps a kernel a
+  width: the placement's width loop and prepBatch form them. An R-row
+  form's buffers live in its width's scratch, shared by the blocks of the
+  form and freed with the scratch; one the budget does not hold declines
+  by name. A windowed block's chunk reads the windowed descriptors main's
+  prefill stages, a row each (windowDesc), never the full history. A
+  prompt's one-row calls (nn.PromptDevice) are the prompt's: a call's
+  blocks are served at its row and counted as the prompt's, never as a
+  step, and its head is declined by name; without ComposedPrompt a
+  prompt's calls ask for nothing, as before. No gate yet reaches a one-row
+  call with blocks (a chunked prompt's last row alone, 513 tokens at the
+  512-row width); the float head's one-row call is
+  TestComposedPromptIsNotServed's. A ragged step's rows and speculative rows
+  wanting every row's logits stay on the tier's kernels by name, and so does
+  a head over several rows: a chunk's folded head, a ragged step's,
+  speculative rows', each declined by its path's name where they had
+  counted as unasked. The shadow arm compares a decode step's forms alone:
+  a prompt there is the tier's, declined by name. A narrowed subgroup
+  (Config.ComposedLanes) reaches the row forms through the one request.
+  On sm_70 a chunk folds a block's residual add into the next block's
+  attention norm (foldAddNorm), asking foldTakes, which did not know the
+  next block was served: the served block ran without the add and the held
+  sum then overwrote its output. A held add now runs alone before a served
+  block. TestPrefillMatchesForward's device arms hold a Prefill to a
+  Forward loop on one tier. On a V100's CUDA card, with every other block
+  kept on the tier's kernels (Config.TierBlocks), the last row is 1.05e-3
+  from the loop and 16 decoded steps agree; without the rule it is 2.67.
+  Every block served reads 1.81e-3, the tier's own kernels 2.30e-3. On
+  gemma-3-1b over a 608-token prompt, 96 positions past its 512 window in
+  64-token chunks, the composer reads 5.5e-5 (the tier 7.8e-5); its prompt
+  rows bound to the full history instead read 1.6e-2, past the 1e-2 bar.
+  Measured on Llama-3.2-1B before building: an R-row form bound the int8
+  sub-block dots, {R, rows, K/32} int32 that a pass keeps in registers and
+  no kernel reads or writes: 300 MB of a 309 MB instance at 32 rows and
+  2.5 GB of 2.64 GB at 512, a block. A binding no kernel reads or writes
+  now gets a word. A block's instance is then 7.8 MB at one row (17.1
+  before), 9.0 MB at 32 rows, 17 at 64, 34 at 128, 68 at 256 and 136 at 512
+  over 256 keys. The attention's dots, scores and weights over {R, H, Keys}
+  are 48 MB of those 136, 96 MB over 512 keys; over 4096 keys they are
+  768 MB and over Llama 3.2's 131072 keys 24 GB, so a staged attention
+  comes before a real context's prompt is served. The gates bound the
+  widths they warm (Config.PromptRows).
+  Forming a row form is quadratic while cse points every reader at a
+  merged node in a walk of the kernel per merge: 78% of a 64-row form, 140 s
+  for a Llama-3.2-1B block's one- and 64-row forms on the laptop. With cse
+  merging in one walk a block forms on a V100's host in 0.2 s at one row,
+  0.9 s at 32 rows, 6.5 s at 64, 8.1 s at 128, 11 s at 256 and 16 s at 512,
+  so a placement warming every width spends minutes forming (643 s for the
+  prompt-compile gate's eight widths). The projections at a chunk's rows
+  are single kernels of up to 25,000 ops in the int8 form and 104,000 in
+  the float one: the float form of a 32-row Llama block is a 2.7 MB SPIR-V
+  module that NVIDIA's Vulkan driver compiled for over 21 minutes, past
+  the serving gate's two hours. The row forms want the tiled projections
+  main runs before they are fast. Until then the serving gate holds the
+  composed prompt on three Q8_0 models and the windowed gemma-3-1b
+  (promptModels), every block of the chunk served and its last row in the
+  band, and the other served models' prompts to the tier's own logits, as
+  before. The change moves nothing to the heap in jit/gpu/tier or
+  engine/model (`go build -gcflags=-m`, 96 lines before and after), and a
+  warm decode token with the prompt's row forms placed allocates nothing:
+  TestDecodeDoesNotAllocate on Llama-3.2-1B with ComposedPrompt on, 0
+  engine allocations over 64 tokens on a V100's CUDA and Vulkan, with and
+  without the captured graph. The prompt chunk itself is not measured.

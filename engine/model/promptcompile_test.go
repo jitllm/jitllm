@@ -34,6 +34,7 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 		{"Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", 0},
 		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", 0},
 		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", tier.ComposedBlock | tier.ComposedHead},
+		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", tier.ComposedBlock | tier.ComposedHead | tier.ComposedPrompt},
 	} {
 		name := arm.name
 		p := testmodels.Path(name)
@@ -46,7 +47,14 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 		for _, tune := range []tier.TuneMode{tier.TuneOff, tier.TuneAuto} {
 			t.Run(fmt.Sprintf("%s/tune%d/composed%d", name, tune, arm.composed), func(t *testing.T) {
 				g, err := tier.OpenWith(tier.WithDeviceTune(tune),
-					tier.WithConfig(func(c *tier.Config) { c.NoPromptPrewarm, c.Composed = violate, arm.composed }))
+					tier.WithConfig(func(c *tier.Config) {
+						c.NoPromptPrewarm, c.Composed = violate, arm.composed
+						// The composer forms a prompt block at each width the
+						// device warms: the widest chunk here is 224 rows.
+						if arm.composed&tier.ComposedPrompt != 0 {
+							c.PromptRows = 256
+						}
+					}))
 				if err != nil || g == nil {
 					t.Skipf("no GPU device: %v", err)
 				}
@@ -106,6 +114,16 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 				}
 				if served, _, _ := st.ServedPart(arm.composed); arm.composed != 0 && served == 0 {
 					t.Fatalf("the composer served none of the parts asked of it: %s", g.Err())
+				}
+				// Every chunk's every block step the composer's, each at its
+				// own width's form.
+				if arm.composed&tier.ComposedPrompt != 0 {
+					np, dp, up := st.ServedPart(tier.ComposedPrompt)
+					if np != len(chunks)*m.Cfg.NLayer || dp != 0 || up != 0 {
+						t.Fatalf("the composer served %d block steps of %d chunks of %d blocks, declined %d and was not asked for %d: %s",
+							np, len(chunks), m.Cfg.NLayer, dp, up, g.Err())
+					}
+					t.Logf("the composer served the prompt's %d block steps", np)
 				}
 				ran++
 			})

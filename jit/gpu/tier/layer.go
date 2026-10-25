@@ -2153,6 +2153,10 @@ type blockScratch struct {
 	// rewrites their matvecs, the walk would find what it found then (0: never
 	// walked).
 	walked uint64
+	// prompt is the lane's instance of each form the composer serves a
+	// prompt chunk's blocks with at this scratch's rows, shared by the blocks
+	// of the form (served.go): freed and refunded with the scratch.
+	prompt map[*partForm]*partInst
 	p      nn.LayerPlan
 	// rows is how many token positions this scratch runs at once: 1 for decode
 	// and the prefill chunk width for the batched arm. Every buffer is sized
@@ -2912,7 +2916,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// re-offer's too: a step would otherwise meet it first. Deferred first,
 	// it runs after the body's own deferred unlocks.
 	defer func() {
-		if placed && g.Composed&ComposedBlock != 0 {
+		if placed && g.Composed&(ComposedBlock|ComposedPrompt) != 0 {
 			g.mu.Lock()
 			g.prewarmComposedBlock(li)
 			g.mu.Unlock()
@@ -4365,12 +4369,17 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	// first prompt or step, they were asked of a card the blocks had filled:
 	// 12 MB for Llama-3.2-1B on a Volta-class card, a driver out-of-memory on a
 	// full card and the last swap slot on a streaming one.
+	// The composer's prompt forms of the block at those widths are the
+	// placement's too (promptForms).
 	if !p.NonCausal {
+		was := g.prewarming
+		g.prewarming = true
 		for _, w := range []int{g.promptW, g.stepW} {
 			if w > 0 {
 				g.prepBatch(w)
 			}
 		}
+		g.prewarming = was
 	}
 	// Admitting a block charges its KV cache forever, so the slot count just
 	// fell; give back whatever no longer fits under it.
@@ -8076,47 +8085,64 @@ func (g *devTier) layersSession(s backend.Session) {
 			// and the attention.
 			voltaOnly := R > 1 && rag == nil && g.voltaBlock(l, R, bs.tok) && l.altRouter == nil && l.ds4 == nil &&
 				l.k3 == nil && l.q4e == nil
-			// A held add this block's norm will not take runs alone first.
-			if pendX != nil && !g.foldTakes(l, R, voltaOnly, skip) {
-				addRes(pendX, pendY, bs.x)
-				pendX, pendY = nil, nil
-			}
 			// The block the composer serves whole (Config.Composed): its graph
 			// from the model's front end, formed as one unit and launched on
 			// the block's own weights and history, in place of all of the
-			// tier's for it.
-			if g.Composed&ComposedBlock != 0 {
-				if R != 1 || rag != nil || g.prompt {
-					g.PartsUnasked[partBlock]++
-				} else if why := g.blockServes(l, li, p, bs, persist); why != partServes {
-					g.PartsDeclined[partBlock]++
-					g.BlockDeclines[why]++
-				} else {
-					rcs := bs.cs
-					if bs.csSWA != nil && p.LocalRope(li) {
-						rcs = bs.csSWA
-					}
-					sv, serr := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(p, li), bs.zero, p.MaxSeq, g.kvp.p)
-					beside := false
-					switch {
-					case serr != nil:
-					case g.shadowing():
-						// The form runs beside the tier's kernels, which go on
-						// to run the block below and serve.
-						serr = g.shadowBegin(lc, bs, sv, l, li, &sh)
-						beside = serr == nil
-					case !sv.f.inPlace(0, 0):
-						serr = fmt.Errorf("tier: the composed block %d reads x after writing its output over it", li)
-					default:
-						serr = sv.run(g, lc, []backend.Buf{bs.x}, []backend.Buf{bs.x})
-					}
+			// tier's for it -- a decode step's, or a prompt's at its rows
+			// (ComposedPrompt): a chunk, or a one-row call of the prompt
+			// (nn.PromptDevice), never counted as a step. Without
+			// ComposedPrompt a prompt's calls ask for nothing.
+			kind := partBlock
+			if (R > 1 || g.prompt) && g.Composed&ComposedPrompt != 0 {
+				kind = partPrompt
+			}
+			asked, why := g.Composed&(1<<kind) != 0, partServes
+			switch {
+			case !asked:
+			case kind == partBlock && (R != 1 || rag != nil || g.prompt):
+				g.PartsUnasked[partBlock]++
+				asked = false
+			case kind == partPrompt:
+				why = g.promptServes(l, li, p, bs, persist, rag != nil, allRows)
+			default:
+				why = g.blockServes(l, li, p, bs, persist, false)
+			}
+			var sv *servedPart
+			var inst *partInst
+			if asked && why == partServes {
+				var serr error
+				if sv, inst, serr = g.servedStep(bs, l, li, p, R); serr != nil {
 					if err == nil {
 						err = serr
 					}
-					if !beside {
-						continue
-					}
+					continue
 				}
+				if inst == nil {
+					why = partNoRoom
+				}
+			}
+			// A held add this block's norm will not take runs alone first: a
+			// block the composer serves or shadows takes none, its graph
+			// reading x whole.
+			if pendX != nil && (inst != nil || !g.foldTakes(l, R, voltaOnly, skip)) {
+				addRes(pendX, pendY, bs.x)
+				pendX, pendY = nil, nil
+			}
+			if asked && why != partServes {
+				g.PartsDeclined[kind]++
+				g.BlockDeclines[why]++
+			}
+			if inst != nil && kind == partBlock && g.shadowing() {
+				// The form runs beside the tier's kernels, which go on to run
+				// the block below and serve.
+				if serr := g.shadowBegin(lc, bs, sv, l, li, &sh); err == nil {
+					err = serr
+				}
+			} else if inst != nil {
+				if serr := sv.runAs(g, lc, inst, kind, []backend.Buf{bs.x}, []backend.Buf{bs.x}); err == nil {
+					err = serr
+				}
+				continue
 			}
 			// Gemma 3n: every stream's prediction, the block run on the active
 			// one (altup.go).
@@ -9707,6 +9733,21 @@ func (g *devTier) layersSession(s backend.Session) {
 		if pendX != nil {
 			addRes(pendX, pendY, bs.x)
 		}
+		// A head over several rows is the tier's: the composer serves a
+		// one-row step's, and each other path declines by its name.
+		if head != nil && g.Composed&ComposedHead != 0 && (R != 1 || rag != nil) {
+			why := partHeadRows
+			switch {
+			case rag != nil:
+				why = partRagged
+			case allRows:
+				why = partRowLogits
+			case fold:
+				why = partFolded
+			}
+			g.PartsDeclined[partHead]++
+			g.HeadDeclines[why]++
+		}
 		if head != nil && (rag != nil || allRows) {
 			// The output norm, the projection of the rows that want logits
 			// (they lead) and a per-row argmax over them: their tokens and
@@ -9817,16 +9858,23 @@ func (g *devTier) layersSession(s backend.Session) {
 			// for this one: the step fails if it does not form. A prompt's head
 			// over its last row is one row and still the prompt's.
 			served := false
-			if g.Composed&ComposedHead != 0 && (R != 1 || g.prompt) {
-				g.PartsUnasked[partHead]++
-			} else if g.Composed&ComposedHead != 0 {
+			if g.Composed&ComposedHead != 0 && R == 1 && g.prompt {
+				// Declined by name where the prompt is asked
+				// (ComposedPrompt), else asked for nothing.
+				if g.Composed&ComposedPrompt != 0 {
+					g.PartsDeclined[partHead]++
+					g.HeadDeclines[partPromptHead]++
+				} else {
+					g.PartsUnasked[partHead]++
+				}
+			} else if g.Composed&ComposedHead != 0 && R == 1 {
 				if why := headServes(bs.headGraph, hNorm, bs.normVar != nil, pickOnly, persist); why != partServes {
 					g.PartsDeclined[partHead]++
 					g.HeadDeclines[why]++
 				} else {
 					sv, serr := g.servedHead(bs.headGraph, bs.head, hNorm)
 					if serr == nil {
-						serr = sv.run(g, lc, []backend.Buf{bs.x}, []backend.Buf{bs.logits})
+						serr = sv.run(g, lc, sv.inst, []backend.Buf{bs.x}, []backend.Buf{bs.logits})
 					}
 					if err == nil {
 						err = serr
@@ -11030,6 +11078,9 @@ func (g *devTier) prepBatch(width int) bool {
 			return false
 		}
 	}
+	// The composer's prompt forms at this width and their instances
+	// (ComposedPrompt).
+	g.promptForms(bb)
 	bb.walked = g.layerGen + 1
 	return true
 }

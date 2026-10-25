@@ -139,6 +139,11 @@ func (g *devTier) settleScratch(d int64) {
 // dropScratch frees bs and refunds what it held. Callers hold g.mu.
 func (g *devTier) dropScratch(bs *blockScratch) {
 	defer g.scratchWin().close()
+	if bs != nil {
+		for f := range bs.prompt {
+			g.dropPromptInst(bs, f)
+		}
+	}
 	freeScratch(bs)
 }
 
@@ -467,6 +472,10 @@ func (g *devTier) prewarmPromptWidths() {
 	if g.NoExactPrompt || g.promptW <= grain {
 		return
 	}
+	// The composer's prompt forms of each width are formed by its walk
+	// (promptForms) and stay with their blocks when the scratch is dropped.
+	g.prewarming = true
+	defer func() { g.prewarming = false }()
 	for w := grain; w < g.promptW; w += grain {
 		if g.bbs[w] != nil || w == g.stepW {
 			continue

@@ -127,7 +127,7 @@ func shadowDriftOn(t *testing.T, spec string) {
 					return
 				}
 			}
-			if lerr = sv.run(d, lc, bufs[:], bufs[3:]); lerr != nil {
+			if lerr = sv.run(d, lc, sv.inst, bufs[:], bufs[3:]); lerr != nil {
 				return
 			}
 			if lerr = s.Read(bufs[3], raw[:]); lerr != nil {

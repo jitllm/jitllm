@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/graph"
@@ -30,10 +31,13 @@ const (
 	// partShadow is the shadow arm's comparison of a block's two outputs
 	// (shadow.go).
 	partShadow
+	// partPrompt is a whole block at a prompt chunk's rows: one sequence's
+	// positions, each row its own descriptor.
+	partPrompt
 	numParts
 )
 
-var partNames = [...]string{partHead: "head", partBlock: "block", partShadow: "shadow"}
+var partNames = [...]string{partHead: "head", partBlock: "block", partShadow: "shadow", partPrompt: "prompt block"}
 
 // composedPart is a part of the model as the composer is asked for it: its
 // graph of generic ops, the formats of the weights it binds, and the tier's
@@ -85,13 +89,11 @@ type partCode struct {
 	groups, width int
 }
 
-// partInst is one lane's instance of a form: the form's own buffers, what
-// they charge the device's budget, and each kernel's argument list, bound
-// again every step.
+// partInst is one lane's instance of a form: the form's own buffers and
+// what they charge the device's budget.
 type partInst struct {
-	bufs   []backend.Buf
-	launch [][]backend.Buf
-	bytes  uint64
+	bufs  []backend.Buf
+	bytes uint64
 }
 
 // partArg is what one kernel parameter binds: one of the form's own
@@ -192,6 +194,17 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 		f.own = append(f.own, partBuf{n: max(n, 4), words: words})
 		return len(f.own) - 1
 	}
+	// A scratch binding no kernel reads or writes -- a sum a pass carried in
+	// registers, still a parameter -- is bound to a word: at a prompt's rows
+	// the sub-block dots alone are gigabytes.
+	live := map[jit.Operand]bool{}
+	for _, c := range codes {
+		for _, bd := range c.Binds {
+			if bd.Read || bd.Writes {
+				live[bd.Operand] = true
+			}
+		}
+	}
 	for _, c := range codes {
 		if c.GPU == nil {
 			f.close()
@@ -227,7 +240,11 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 			case bd.Words != nil || o.Kind == jit.OperandScratch:
 				i, ok := own[o]
 				if !ok {
-					i = buf(int(max(bd.Bytes, 4*int64(len(bd.Words)))), bd.Words)
+					n := int(max(bd.Bytes, 4*int64(len(bd.Words))))
+					if bd.Words == nil && !live[o] {
+						n = 4
+					}
+					i = buf(n, bd.Words)
 					own[o] = i
 				}
 				args = append(args, partArg{kind: partOwn, i: i})
@@ -270,12 +287,19 @@ func (g *devTier) instance(f *partForm) (*partInst, error) {
 			}
 		}
 	}
-	for _, args := range f.args {
-		in.launch = append(in.launch, make([]backend.Buf, len(args)))
-	}
 	in.bytes = n
 	g.charge(n)
 	return in, nil
+}
+
+// launchArgs is an argument list for each of f's kernels, bound again every
+// step.
+func (f *partForm) launchArgs() [][]backend.Buf {
+	out := make([][]backend.Buf, len(f.args))
+	for i, args := range f.args {
+		out[i] = make([]backend.Buf, len(args))
+	}
+	return out
 }
 
 // free frees an instance's buffers; what they charged is the caller's to
@@ -288,17 +312,17 @@ func (in *partInst) free() {
 }
 
 // launch binds the form's kernels to the caller's inputs and outputs, the
-// lane's instance and the part's weights, vectors and tables, and launches
-// them in order.
-func (sv *servedPart) launch(lc *launcher, in, out []backend.Buf) error {
+// lane's instance inst and the part's weights, vectors and tables, and
+// launches them in order.
+func (sv *servedPart) launch(lc *launcher, inst *partInst, in, out []backend.Buf) error {
 	f, sl := sv.f, &sv.sl
 	for i := range f.codes {
-		fc, bufs := &f.codes[i], sv.inst.launch[i]
+		fc, bufs := &f.codes[i], sv.args[i]
 		for j, a := range f.args[i] {
 			var b backend.Buf
 			switch a.kind {
 			case partOwn:
-				b = sv.inst.bufs[a.i]
+				b = inst.bufs[a.i]
 			case partIn:
 				b = in[a.i]
 			case partOut:
@@ -339,18 +363,55 @@ func (sl composedPart) clone() composedPart {
 }
 
 // dropPart frees a lane's served part sv: its instance, whose bytes go back
-// to the budget, and its form where no part launches it any more. Callers
-// hold g.mu, with no submission running.
+// to the budget, and its form where no part launches it any more, with every
+// lane's prompt instances of it. Callers hold g.mu, with no submission
+// running.
 func (g *devTier) dropPart(sv *servedPart) {
 	if sv == nil {
 		return
 	}
-	sv.inst.free()
-	g.refund(sv.inst.bytes)
-	sv.inst.bytes = 0
+	if in := sv.inst; in != nil {
+		in.free()
+		g.refund(in.bytes)
+		in.bytes = 0
+	}
 	if sv.f.refs--; sv.f.refs == 0 {
+		g.eachLane(func(l *lane) {
+			for _, bs := range l.bbs {
+				g.dropPromptInst(bs, sv.f)
+			}
+		})
 		delete(g.servedForms, sv.f.key)
 		sv.f.close()
+	}
+}
+
+// promptInst is the lane's instance of prompt form f at bs's rows, made
+// where the scratch holds none, nil where the budget does not hold it.
+// Callers hold g.mu.
+func (g *devTier) promptInst(bs *blockScratch, f *partForm) *partInst {
+	if in := bs.prompt[f]; in != nil {
+		return in
+	}
+	in, err := g.instance(f)
+	if err != nil {
+		g.LastErr = "the composed prompt block: " + err.Error()
+		return nil
+	}
+	if bs.prompt == nil {
+		bs.prompt = map[*partForm]*partInst{}
+	}
+	bs.prompt[f] = in
+	return in
+}
+
+// dropPromptInst frees bs's instance of form f and gives its bytes back.
+// Callers hold g.mu, with no submission running.
+func (g *devTier) dropPromptInst(bs *blockScratch, f *partForm) {
+	if in := bs.prompt[f]; in != nil {
+		in.free()
+		g.refund(in.bytes)
+		delete(bs.prompt, f)
 	}
 }
 
@@ -396,22 +457,25 @@ func (g *devTier) dropServed(gr *graph.Graph) {
 func (g *devTier) cloneParts(nl *lane) error { return g.spreadParts(g.lane0, nl, nil) }
 
 // spreadParts gives lane nl an instance of each part lane src serves that it
-// does not, of graph gr where gr is not nil, on the device's forms. Callers
-// hold g.mu.
+// does not, of graph gr where gr is not nil, on the device's forms: a prompt
+// part's instance is its scratch's (promptInst). Callers hold g.mu.
 func (g *devTier) spreadParts(src, nl *lane, gr *graph.Graph) error {
 	for sk, sv := range src.served {
 		if sv == nil || gr != nil && sk.graph != gr || nl.served[sk] != nil {
 			continue
 		}
-		in, err := g.instance(sv.f)
-		if err != nil {
-			return fmt.Errorf("the composed %s: %w", partNames[sk.kind], err)
+		var in *partInst
+		if sk.kind != partPrompt {
+			var err error
+			if in, err = g.instance(sv.f); err != nil {
+				return fmt.Errorf("the composed %s: %w", partNames[sk.kind], err)
+			}
 		}
 		sv.f.refs++
 		if nl.served == nil {
 			nl.served = map[servedKey]*servedPart{}
 		}
-		nl.served[sk] = &servedPart{sl: sv.sl.clone(), f: sv.f, inst: in, n: sv.n, m: sv.m}
+		nl.served[sk] = &servedPart{sl: sv.sl.clone(), f: sv.f, inst: in, args: sv.f.launchArgs(), n: sv.n, m: sv.m}
 	}
 	return nil
 }
@@ -427,11 +491,16 @@ const (
 	// Config.Composed takes no such bit: Config.ComposedShadow is its own
 	// switch.
 	PartShadow Parts = 1 << partShadow
+	// ComposedPrompt serves a prompt chunk's blocks whole at the chunk's
+	// rows: a form a width, as the tier keeps a scratch a width.
+	ComposedPrompt Parts = 1 << partPrompt
 )
 
-// partDecline is why a one-row decode step's composed part is not asked for:
-// what the serving conditions leave to the tier's own kernels, counted by
-// reason (Stats.BlockDeclines, HeadDeclines).
+// partDecline is why a decode step's or a prompt chunk's composed part is
+// not asked for: what the serving conditions leave to the tier's own
+// kernels, counted by reason (Stats.BlockDeclines, HeadDeclines). A head
+// over a step of several rows -- a chunk's folded head, a ragged step's,
+// speculative rows' -- is the tier's, declined by its path's name.
 type partDecline uint8
 
 const (
@@ -448,23 +517,39 @@ const (
 	partHeadShape
 	partHeadNorm
 	partPick
+	partRagged
+	partRowLogits
+	partCaller
+	partNoRoom
+	partFolded
+	partHeadRows
+	partPromptHead
+	partShadowed
 	numPartDeclines
 )
 
 var partDeclineNames = [numPartDeclines]string{
-	partServes:    "served",
-	partNoGraph:   "no graph from the front end",
-	partPersist:   "inside the persistent block",
-	partSkip:      "a fault probe skips blocks",
-	partNoPool:    "no paged history on the device",
-	partPrefill:   "the history is mid-prefill",
-	partStream:    "the history streams",
-	partLatent:    "a latent attention's history",
-	partShared:    "the history of another block",
-	partWindow:    "a graph whose window is not the plan's",
-	partHeadShape: "a head graph other than a norm and its projection",
-	partHeadNorm:  "no norm buffer, or a LayerNorm head",
-	partPick:      "a head that picks labels only",
+	partServes:     "served",
+	partNoGraph:    "no graph from the front end",
+	partPersist:    "inside the persistent block",
+	partSkip:       "a fault probe skips blocks",
+	partNoPool:     "no paged history on the device",
+	partPrefill:    "the history is mid-prefill",
+	partStream:     "the history streams",
+	partLatent:     "a latent attention's history",
+	partShared:     "the history of another block",
+	partWindow:     "a graph whose window is not the plan's",
+	partHeadShape:  "a head graph other than a norm and its projection",
+	partHeadNorm:   "no norm buffer, or a LayerNorm head",
+	partPick:       "a head that picks labels only",
+	partRagged:     "a ragged step's rows",
+	partRowLogits:  "every row's logits (speculative rows)",
+	partCaller:     "the caller keeps it on the tier's kernels",
+	partNoRoom:     "its buffers do not fit the device's budget",
+	partFolded:     "a prompt chunk's folded head",
+	partHeadRows:   "a head over several rows",
+	partPromptHead: "a prompt's one-row head",
+	partShadowed:   "a prompt outside the shadow arm",
 }
 
 // DeclineName is the reason a decline count is kept under, by its index in
@@ -477,7 +562,7 @@ func DeclineName(i int) string {
 }
 
 // ServedPart is how many steps the composer served the parts of k in, how
-// many one-row decode steps it was not asked for, and how many other block
+// many steps where they serve it was not asked for, and how many other block
 // steps asked it for nothing (Stats.PartsServed, PartsDeclined,
 // PartsUnasked).
 func (s Stats) ServedPart(k Parts) (served, declined, unasked int) {
@@ -516,12 +601,14 @@ type servedKey struct {
 	t          jlm.Type
 }
 
-// servedPart is a served part and its form, with the
-// arguments its launch binds, reused every step.
+// servedPart is a served part and its form, with the arguments its launch
+// binds, reused every step: its own instance, or for a prompt part none,
+// its instance its scratch's (promptInst).
 type servedPart struct {
 	sl      composedPart
 	f       *partForm
 	inst    *partInst
+	args    [][]backend.Buf
 	in, out [4]backend.Buf
 	n, m    int
 }
@@ -595,28 +682,37 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		f.key = key
 		g.servedForms[key] = f
 	}
-	in, err := g.instance(f)
-	if err != nil {
-		if f.refs == 0 {
-			delete(g.servedForms, key)
-			f.close()
+	var in *partInst
+	if sk.kind != partPrompt {
+		if in, err = g.instance(f); err != nil {
+			if f.refs == 0 {
+				delete(g.servedForms, key)
+				f.close()
+			}
+			return nil, fail(fmt.Errorf("the composed %s: %w", partNames[sk.kind], err))
 		}
-		return nil, fail(fmt.Errorf("the composed %s: %w", partNames[sk.kind], err))
 	}
 	f.refs++
-	sv := &servedPart{sl: sl, f: f, inst: in, n: len(sl.graph.In), m: len(sl.graph.Out)}
+	sv := &servedPart{sl: sl, f: f, inst: in, args: f.launchArgs(), n: len(sl.graph.In), m: len(sl.graph.Out)}
 	g.served[sk] = sv
 	return sv, nil
 }
 
-// run launches the served part on in and out, the block's own buffers.
-func (sv *servedPart) run(g *devTier, lc *launcher, in, out []backend.Buf) error {
+// run launches the served part on in and out, the block's own buffers, in
+// instance inst.
+func (sv *servedPart) run(g *devTier, lc *launcher, inst *partInst, in, out []backend.Buf) error {
+	return sv.runAs(g, lc, inst, sv.sl.kind, in, out)
+}
+
+// runAs is run, counted as a step of part kind: a prompt's one-row call
+// launches a decode step's form and is the prompt's.
+func (sv *servedPart) runAs(g *devTier, lc *launcher, inst *partInst, kind partKind, in, out []backend.Buf) error {
 	copy(sv.in[:sv.n], in)
 	copy(sv.out[:sv.m], out)
-	if err := sv.launch(lc, sv.in[:sv.n], sv.out[:sv.m]); err != nil {
+	if err := sv.launch(lc, inst, sv.in[:sv.n], sv.out[:sv.m]); err != nil {
 		return err
 	}
-	g.PartsServed[sv.sl.kind]++
+	g.PartsServed[kind]++
 	return nil
 }
 
@@ -763,22 +859,26 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 	return nil
 }
 
-// blockServes is why block li of this one-row step is not one the composer
-// serves whole, serves where it is: a graph from the front end, the paged
-// decode, none of its history at home, the window the plan holds the block
-// to (windowHeld), outside the persistent block and a fault probe.
-func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, persist bool) partDecline {
+// blockServes is why block li of this step is not one the composer serves
+// whole, serves where it is: a graph from the front end, a block the caller
+// leaves to it, the paged decode -- or a prompt chunk's, which the tier's
+// own kernels would run through its paged prefill attention -- none of its
+// history at home, the window the plan holds the block to (windowHeld),
+// outside the persistent block and a fault probe.
+func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, persist, prompt bool) partDecline {
 	pk := bs.pkv
 	switch {
 	case l.graph == nil:
 		return partNoGraph
+	case slices.Contains(g.TierBlocks, li):
+		return partCaller
 	case persist:
 		return partPersist
 	case len(g.kb.skip) != 0:
 		return partSkip
 	case pk == nil || g.kvp == nil || g.kvp.layers[li] == nil:
 		return partNoPool
-	case pk.prefill:
+	case pk.prefill && !prompt:
 		return partPrefill
 	case pk.st != nil:
 		return partStream
@@ -803,6 +903,48 @@ func (l *layer) windowHeld(li int, p *nn.LayerPlan) bool {
 	return l.win == 0 || l.win >= p.MaxSeq
 }
 
+// servedStep is block li's served part at this step of R rows and the
+// lane's instance it launches in, nil where the budget does not hold the
+// instance of a prompt's form.
+func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan, R int) (*servedPart, *partInst, error) {
+	rcs := bs.cs
+	if bs.csSWA != nil && p.LocalRope(li) {
+		rcs = bs.csSWA
+	}
+	qOff := bs.zero
+	if R > 1 {
+		qOff = bs.roff
+	}
+	sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(p, li), qOff, p.MaxSeq, g.kvp.p, R)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !sv.f.inPlace(0, 0) {
+		return nil, nil, fmt.Errorf("tier: the composed block %d reads x after writing its output over it", li)
+	}
+	if R == 1 {
+		return sv, sv.inst, nil
+	}
+	return sv, g.promptInst(bs, sv.f), nil
+}
+
+// promptServes is why block li of a prompt's call is not one the composer
+// serves whole, serves where it is: outside the shadow arm, which compares a
+// decode step's forms alone; the rows one sequence's (a ragged step's rows,
+// and speculative rows wanting every row's logits, stay on the tier's
+// kernels, by name); and what blockServes asks.
+func (g *devTier) promptServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, persist, ragged, rowLogits bool) partDecline {
+	switch {
+	case g.shadowing():
+		return partShadowed
+	case ragged:
+		return partRagged
+	case rowLogits:
+		return partRowLogits
+	}
+	return g.blockServes(l, li, p, bs, persist, true)
+}
+
 // prewarmComposed forms every placed block's part and the head's at
 // placement, as prewarmDecodePlans builds the decode plans: a form met first
 // at a token compiles inside it. Callers hold g.mu.
@@ -819,25 +961,30 @@ func (g *devTier) prewarmComposed() {
 // does not build is named in LastErr and leaves the other blocks to form.
 // Callers hold g.mu.
 func (g *devTier) prewarmComposedBlock(li int) {
-	bs := g.bs
-	if g.NoPromptPrewarm || g.Composed&ComposedBlock == 0 || bs == nil || bs.pkv == nil || g.kvp == nil ||
-		g.layers[li] == nil {
-		return
-	}
-	l := g.layers[li]
-	if g.blockServes(l, li, &bs.p, bs, false) != partServes {
+	bs, l := g.bs, g.layers[li]
+	if g.NoPromptPrewarm || g.Composed&(ComposedBlock|ComposedPrompt) == 0 || bs == nil || bs.pkv == nil ||
+		g.kvp == nil || l == nil {
 		return
 	}
 	g.prewarming = true
 	defer func() { g.prewarming = false }()
-	rcs := bs.cs
-	if bs.csSWA != nil && bs.p.LocalRope(li) {
-		rcs = bs.csSWA
+	if g.Composed&ComposedBlock != 0 && g.blockServes(l, li, &bs.p, bs, false, false) == partServes {
+		rcs := bs.cs
+		if bs.csSWA != nil && bs.p.LocalRope(li) {
+			rcs = bs.csSWA
+		}
+		if _, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(&bs.p, li), bs.zero, bs.p.MaxSeq,
+			g.kvp.p, 1); err != nil {
+			g.LastErr = "the composed block: " + err.Error()
+			return
+		}
 	}
-	if _, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(&bs.p, li), bs.zero, bs.p.MaxSeq,
-		g.kvp.p); err != nil {
-		g.LastErr = "the composed block: " + err.Error()
-		return
+	// Every prompt width the lane holds a scratch for: its first chunk
+	// forms and allocates nothing.
+	if g.Composed&ComposedPrompt != 0 {
+		for _, bb := range g.bbs {
+			g.prewarmPromptBlock(bb, li)
+		}
 	}
 	// The shadow arm's comparison of the block's two outputs.
 	if g.shadowing() {
@@ -858,6 +1005,50 @@ func (g *devTier) prewarmComposedBlock(li int) {
 	})
 }
 
+// prewarmPromptBlock forms block li's part at the rows of bb, a prompt
+// width's scratch, where the composer serves it, and the scratch's instance
+// of its form. Callers hold g.mu and say whether this is the placement's
+// (g.prewarming).
+func (g *devTier) prewarmPromptBlock(bb *blockScratch, li int) {
+	l := g.layers[li]
+	if l == nil || bb == nil || bb.rows < 2 || bb.pkv == nil || g.kvp == nil ||
+		g.promptServes(l, li, &bb.p, bb, false, false, false) != partServes {
+		return
+	}
+	rcs := bb.cs
+	if bb.csSWA != nil && bb.p.LocalRope(li) {
+		rcs = bb.csSWA
+	}
+	sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bb.pkv.pRow, bb.pkv.windowDesc(&bb.p, li), bb.roff, bb.p.MaxSeq,
+		g.kvp.p, bb.rows)
+	if err != nil {
+		g.LastErr = "the composed prompt block: " + err.Error()
+		return
+	}
+	g.promptInst(bb, sv.f)
+}
+
+// promptForms forms every placed block's part at bb's rows where the
+// composer serves it, with bb's instance of its form: a scratch built for a
+// chunk (keepExact) allocates here, outside the submission, and a block
+// placed after the placement's width loop (a seam grown back) forms here, as
+// the walk compiles the tier's own kernels for it. At a placement
+// (reserveScratch) that is the placement's forming. Callers hold g.mu.
+func (g *devTier) promptForms(bb *blockScratch) {
+	if g.Composed&ComposedPrompt == 0 || bb == nil || bb.rows < 2 {
+		return
+	}
+	was := g.prewarming
+	g.prewarming = was || g.reserving
+	defer func() { g.prewarming = was }()
+	for li := range g.layers {
+		g.prewarmPromptBlock(bb, li)
+	}
+}
+
+// keyBound is a block form's key bound for a session of maxSeq positions.
+func keyBound(maxSeq int) int { return (maxSeq + scoreGrain - 1) / scoreGrain * scoreGrain }
+
 // prewarmComposedHead forms the head's part where the composer serves it,
 // at placement and again at PrepHead, which a model calls after placing its
 // blocks: a head met first at a token formed inside it. Callers hold g.mu.
@@ -874,25 +1065,30 @@ func (g *devTier) prewarmComposedHead() {
 	}
 }
 
-// servedBlock is block li served whole: its graph formed as one unit on the
-// block's weights and vectors by role, its rotary table cs and its history
-// in the tier's pool layer pl, through the rows' descriptors, a windowed
-// attention through rowsW (pagedScratch.windowDesc), for a session of
-// maxSeq positions.
+// servedBlock is block li served whole at a step of R rows: its graph formed
+// as one unit on the block's weights and vectors by role, its rotary table
+// cs and its history in the tier's pool layer pl, through the rows'
+// descriptors, a windowed attention through rowsW
+// (pagedScratch.windowDesc), for a session of maxSeq positions.
 //
-// The form is the session's: its attention runs as many trips as the row's
+// The form is the session's: its attention runs as many trips as each row's
 // live positions need, a count it reads at run time (jit.Trips), so the
-// session's capacity is its key bound and no position compiles a form.
-func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, rowsW, qOff backend.Buf, maxSeq, page int) (*servedPart, error) {
-	keys := (maxSeq + scoreGrain - 1) / scoreGrain * scoreGrain
-	sk := servedKey{kind: partBlock, graph: l.graph, rows: 1, keys: keys, page: page, half: pl.geom.f16}
+// session's capacity is its key bound and no position compiles a form. A
+// prompt chunk's form is its width's, as the tier's kernels are.
+func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, rowsW, qOff backend.Buf, maxSeq, page, R int) (*servedPart, error) {
+	keys := keyBound(maxSeq)
+	kind := partBlock
+	if R > 1 {
+		kind = partPrompt
+	}
+	sk := servedKey{kind: kind, graph: l.graph, rows: R, keys: keys, page: page, half: pl.geom.f16}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		// The request names no block: blocks of one structure and formats
 		// share a form, each launched on its own bindings, one after
 		// another on the device's queue.
 		gr := *l.graph
 		gr.Block = 0
-		sl := composedPart{kind: partBlock, graph: &gr, formats: map[jlm.Role]jlm.Type{},
+		sl := composedPart{kind: kind, graph: &gr, formats: map[jlm.Role]jlm.Type{},
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{},
 			tables: map[string]backend.Buf{"rope.cs": cs, "kv.k": pl.k, "kv.v": pl.v, "pages": pl.tab, "rows": rows,
 				"rows.win": rowsW, "q.off": qOff},

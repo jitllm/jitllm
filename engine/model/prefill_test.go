@@ -6,9 +6,12 @@ import (
 	"math"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
 // TestPrefillMatchesForward is the gate for the whole batched path.
@@ -43,6 +46,113 @@ func TestPrefillMatchesForward(t *testing.T) {
 		defer nn.ResetForTest()
 		prefillVsForward(t, path, false)
 	})
+	// On each device, both sessions on one tier: the tier's own kernels; the
+	// composer serving the decode's blocks, the prompt's at the chunk's rows
+	// and the head (ComposedPrompt); and the same with every other block left
+	// to the tier's kernels (Config.TierBlocks), so a chunk runs the two in
+	// turn; and gemma-3-1b's sliding layers over a prompt past their window,
+	// whose rows read the windowed descriptors; and the shadow arm, whose
+	// prompt stays on the tier's kernels by name. The shipped mode's bar: a
+	// block whose output a neighbour's held add overwrote, or a windowed row
+	// that read the whole history, misses it by orders.
+	t.Run("device", func(t *testing.T) {
+		const parts = tier.ComposedBlock | tier.ComposedHead | tier.ComposedPrompt
+		llama, gemma := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"), testmodels.Path("gemma-3-1b-it-Q4_K_M.gguf")
+		for _, p := range []string{llama, gemma} {
+			if _, ok := existingModel(p); !ok {
+				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", p)
+			}
+		}
+		for _, dev := range stepDevices() {
+			for _, arm := range []struct {
+				name                   string
+				path                   string
+				parts                  tier.Parts
+				mixed, windows, shadow bool
+			}{{"tier", llama, 0, false, false, false}, {"composed", llama, parts, false, false, false},
+				{"mixed", llama, parts, true, false, false}, {"windowed tier", gemma, 0, false, true, false},
+				{"windowed", gemma, parts, false, true, false}, {"shadowed", llama, parts, false, false, true}} {
+				t.Run(dev+"/"+arm.name, func(t *testing.T) {
+					prefillOnDevice(t, arm.path, dev, arm.parts, arm.mixed, arm.windows, arm.shadow)
+				})
+			}
+		}
+	})
+}
+
+// prefillOnDevice is prefillVsForward on device dev, both sessions on one
+// tier asking the composer for parts, every odd block kept on the tier's
+// kernels where mixed, the prompt past the model's sliding window where
+// windows, the shadow arm on where shadow: the composer served every prompt
+// block step it was asked for and declined only the blocks kept, or, in the
+// shadow arm, declined every prompt block step by that name.
+func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, mixed, windows, shadow bool) {
+	m, err := Open(jlmOf(t, path), noTune)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	var keep []int
+	for li := 1; mixed && li < m.Cfg.NLayer; li += 2 {
+		keep = append(keep, li)
+	}
+	minTok := 0
+	if windows {
+		if m.Cfg.SWAWindow == 0 {
+			t.Fatalf("%s states no sliding window: this arm would read no windowed descriptor", path)
+		}
+		minTok = m.Cfg.SWAWindow + 96
+	}
+	// The prompt goes in chunks of at most 64 rows: the device reserves and
+	// warms the widths up to 64, each a form of the composer's.
+	opts := []tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+		tier.WithConfig(func(c *tier.Config) { c.Composed, c.TierBlocks, c.PromptRows = parts, keep, 64 })}
+	if shadow {
+		opts = append(opts, tier.WithComposedShadow())
+	}
+	g, err := tier.OpenWith(append(opts, testTierOpts(t)...)...)
+	if err != nil || g == nil {
+		noDevice(t, dev, err)
+	}
+	defer g.Close()
+	prefillVsForwardModel(t, m, false, minTok, func(s *State) {
+		// A device that fails is an error here, never a sequence finished at home.
+		s.SetDeviceFallback(false)
+		if err := s.SetDevice(g); err != nil {
+			t.Fatal(err)
+		}
+		if s.GPULayers() != m.Cfg.NLayer {
+			t.Fatalf("%s took %d of %d blocks: %s", dev, s.GPULayers(), m.Cfg.NLayer, g.Err())
+		}
+	})
+	if parts == 0 {
+		return
+	}
+	var allow []string
+	if mixed {
+		allow = []string{"the caller keeps it on the tier's kernels"}
+	}
+	composedRan(t, parts, allow, g)
+	st := g.Stats()
+	np, dp, up := st.ServedPart(tier.ComposedPrompt)
+	if shadow {
+		named := 0
+		for i, c := range st.BlockDeclines {
+			if tier.DeclineName(i) == "a prompt outside the shadow arm" {
+				named = c
+			}
+		}
+		if np != 0 || dp == 0 || named != dp || dp%m.Cfg.NLayer != 0 || up != 0 {
+			t.Fatalf("in the shadow arm the composer served %d block steps of the prompt and declined %d, %d of them outside the shadow, and was not asked for %d",
+				np, dp, named, up)
+		}
+		t.Logf("in the shadow arm the prompt's %d block steps declined by name", dp)
+		return
+	}
+	if per := m.Cfg.NLayer - len(keep); np == 0 || np%per != 0 || up != 0 {
+		t.Fatalf("the composer served %d block steps of the prompt, %d of a chunk, and was not asked for %d", np, per, up)
+	}
+	t.Logf("the composer served %d block steps of the prompt, the tier's kernels %d blocks a step", np, len(keep))
 }
 
 // prefillVsForward compares Prefill against a Forward loop. exact demands bit
@@ -66,12 +176,34 @@ func prefillVsForwardOpts(t *testing.T, path string, exact bool, extra ...Option
 		t.Skip(err)
 	}
 	defer m.Close()
+	prefillVsForwardModel(t, m, exact, 0, nil)
+}
+
+// prefillVsForwardModel compares m's Prefill against a Forward loop, each
+// session given to attach first where it is not nil, over a prompt of at
+// least minTok tokens where minTok is not 0.
+func prefillVsForwardModel(t *testing.T, m *Model, exact bool, minTok int, attach func(*State)) {
+	var err error
+	newState := func(n int) *State {
+		s := m.NewState(n)
+		if attach != nil {
+			attach(s)
+		}
+		return s
+	}
 
 	// A prompt longer than one chunk, so the cross-chunk causal bound is
 	// exercised rather than assumed.
-	full := m.Vocab.Encode("The capital of France is Paris, and the capital of "+
-		"Germany is Berlin, and the capital of Italy is Rome, and the capital "+
-		"of Spain is Madrid, and the capital of Portugal is", true)
+	text := "The capital of France is Paris, and the capital of " +
+		"Germany is Berlin, and the capital of Italy is Rome, and the capital " +
+		"of Spain is Madrid, and the capital of Portugal is"
+	full := m.Vocab.Encode(text, true)
+	if minTok > 0 {
+		if full = m.Vocab.Encode(strings.Repeat(text+" Lisbon. ", minTok/len(full)+1), true); len(full) < minTok {
+			t.Fatalf("%d prompt tokens, %d wanted", len(full), minTok)
+		}
+		full = full[:minTok]
+	}
 	n := len(full)
 	if v := os.Getenv("JITLLM_TEST_NTOK"); v != "" {
 		if k, err := strconv.Atoi(v); err == nil && k > 0 && k <= n {
@@ -81,7 +213,7 @@ func prefillVsForwardOpts(t *testing.T, path string, exact bool, extra ...Option
 	ids := full[:n]
 	t.Logf("prompt is %d tokens, max chunk %d", len(ids), MaxPrefillChunk)
 
-	ref := m.NewState(len(ids) + 40)
+	ref := newState(len(ids) + 40)
 	defer ref.Close()
 	var want []float32
 	for _, id := range ids {
@@ -89,11 +221,19 @@ func prefillVsForwardOpts(t *testing.T, path string, exact bool, extra ...Option
 			t.Fatal(err)
 		}
 	}
-	batch := m.NewState(len(ids) + 40)
+	batch := newState(len(ids) + 40)
 	defer batch.Close()
-	got, err := batch.Prefill(ids)
-	if err != nil {
-		t.Fatal(err)
+	// A long prompt goes in prompts of 64 tokens, each a chunk of a width
+	// the device warmed.
+	chunk := len(ids)
+	if minTok > 0 {
+		chunk = 64
+	}
+	var got []float32
+	for off := 0; off < len(ids); off += chunk {
+		if got, err = batch.Prefill(ids[off:min(off+chunk, len(ids))]); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if batch.Pos() != ref.Pos() {
 		t.Fatalf("position %d after Prefill, want %d", batch.Pos(), ref.Pos())

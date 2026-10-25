@@ -184,6 +184,9 @@ type Config struct {
 	// the composer does not form fails the step, naming why; the tier's
 	// kernels never run in its place.
 	Composed Parts
+	// TierBlocks are blocks the caller keeps on the tier's own kernels where
+	// the composer would serve them, each declined by that name.
+	TierBlocks []int
 	// ComposedFloat forms the served parts with float activations, no
 	// int8 form: the reference a gate holds the int8 forms and the tier's
 	// own kernels to.
@@ -746,15 +749,16 @@ type Stats struct {
 	// (Config.ComposedLanes, else the device's lanes): the selection check of
 	// a gate that narrows it.
 	ComposedLanes int
-	// PartsDeclined counts the decode steps (one row) a served part was not
-	// asked for, by part: a block with no graph, or a head or block the
-	// serving conditions leave out (a LayerNorm head, a window, the
-	// persistent block, history at home).
+	// PartsDeclined counts the steps a served part was not asked for where
+	// it serves -- a decode step, and a prompt chunk with ComposedPrompt --
+	// by part: a block with no graph, or a head or block the serving
+	// conditions leave out (a LayerNorm head, a window, the persistent
+	// block, history at home, a ragged step's rows).
 	PartsDeclined [numParts]int
 	// PartsUnasked counts the steps the composer is asked for no part of
-	// at all, by part: a prompt chunk's rows, a vision tower's encode, a step
-	// over several sessions' rows. They run the tier's own kernels; this is
-	// where they are seen.
+	// at all, by part: a prompt chunk's rows without ComposedPrompt, a
+	// vision tower's encode, a step over several sessions' rows. They run
+	// the tier's own kernels; this is where they are seen.
 	PartsUnasked [numParts]int
 	// PartsReplayed counts the steps a recording replayed the composer's
 	// parts in, by part: what PartsServed, counted where a step is emitted,

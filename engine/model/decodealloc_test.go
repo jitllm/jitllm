@@ -179,7 +179,8 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 					checkLinearRowsForm(t, m, g)
 				})
 				// Every block served whole by the composer, and the head
-				// (Config.Composed), on a tier of its own: its warm token
+				// (Config.Composed), on a tier of its own, with the prompt's
+				// row forms placed beside them (ComposedPrompt): its warm token
 				// allocates nothing either. Without the captured graph too,
 				// where every token runs the served code (a replayed
 				// recording runs none of it). The shadow arm too, which runs
@@ -197,7 +198,9 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 							}
 							t.Run(fmt.Sprintf("%s/%s/no graph %v", spec, arm, noGraph), func(t *testing.T) {
 								opts := []tier.Option{tier.WithDevices(spec),
-									tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph = tier.ComposedBlock|tier.ComposedHead, noGraph })}
+									tier.WithConfig(func(c *tier.Config) {
+										c.Composed, c.NoGraph, c.PromptRows = tier.ComposedBlock|tier.ComposedHead|tier.ComposedPrompt, noGraph, 64
+									})}
 								if shadow {
 									opts = append(opts, tier.WithComposedShadow())
 								}
