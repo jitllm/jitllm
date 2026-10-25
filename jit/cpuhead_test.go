@@ -259,7 +259,8 @@ func describeCodes(codes []Code) string {
 // holds it to the oracle, one arm for each of its ops: the RMSNorm, the
 // LayerNorm with and without its bias, the projection's bias, the final
 // softcap and the logit scale, then all of them, over several rows run one at
-// a time: the head is served at one row. Each op is then taken out of the
+// a time and then all at once: the norm of rows beyond the first reads a
+// scalar its own row made. Each op is then taken out of the
 // graph and must part from the oracle by far more than any arm does: the
 // softcap dropped, the scale inverted, the projection's bias dropped, the
 // norm's bias dropped, and an RMSNorm for the LayerNorm.
@@ -317,6 +318,18 @@ func TestComposedCPUHead(t *testing.T) {
 			formed++
 		}
 		t.Logf("%s: worst NMSE %.3e against the oracle over %d rows", a.name, worst, nrows)
+		got, err := formHeadOnCPU(t, a.spec.Build(), nrows, x, h)
+		if err != nil {
+			t.Errorf("%s, %d rows at once: %v", a.name, nrows, err)
+			continue
+		}
+		e := cpuNMSE(got, headWant(t, h, a.spec, x, nrows))
+		t.Logf("%s: NMSE %.3e against the oracle over %d rows at once", a.name, e, nrows)
+		if math.IsNaN(e) || !(e < bound) {
+			t.Errorf("%s, %d rows at once: NMSE %.3e against the oracle, bound %.0e", a.name, nrows, e, bound)
+			continue
+		}
+		formed++
 	}
 	all := arms[len(arms)-1].spec
 	violations := []struct {
@@ -347,7 +360,7 @@ func TestComposedCPUHead(t *testing.T) {
 			t.Errorf("%s: NMSE %.3e from the oracle: the gate cannot see it", v.name, least)
 		}
 	}
-	if want := nrows * len(arms); formed != want {
+	if want := (nrows + 1) * len(arms); formed != want {
 		t.Fatalf("%d of %d head arms ran", formed, want)
 	}
 }

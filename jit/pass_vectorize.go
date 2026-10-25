@@ -555,24 +555,37 @@ func (k *Kernel) pairStores(c int) ([2]int, bool) {
 	return [2]int{at[0], at[1]}, true
 }
 
-// broadcastInto puts each value made from a lane sum, maximum or minimum
-// that vector loop c reads, made outside it, in every lane once before the loop.
+// broadcastInto puts each value that vector loop c reads, made outside it,
+// in every lane once before the loop: a value made from a lane sum, maximum
+// or minimum, and one made in a scalar loop around it, whose lane 0 alone
+// holds it.
 func (k *Kernel) broadcastInto(c int) {
 	hs := k.Homes()
 	made := map[int]int{}
 	for i := range k.Nodes {
 		if hs[i] >= 0 && k.within(hs[i], c) {
-			for _, a := range k.Operands(&k.Nodes[i]) {
-				x := *a
-				if x >= len(hs) || hs[x] >= 0 && k.within(hs[x], c) || k.Nodes[x].Type != ir.F32 || k.Nodes[x].Op == OpBroadcast || !k.computedFrom(x, OpHSum) && !k.computedFrom(x, OpHMax) && !k.computedFrom(x, OpHMin) {
+			ops := k.Operands(&k.Nodes[i])
+			for j := range ops {
+				x := *ops[j]
+				if x >= len(hs) || hs[x] >= 0 && k.within(hs[x], c) || k.Nodes[x].Type != ir.F32 || k.Nodes[x].Op == OpBroadcast {
+					continue
+				}
+				if xn := k.Nodes[x]; xn.Op == OpFold && xn.At == c {
+					continue
+				}
+				scalar := hs[x] >= 0 && k.Loops[hs[x]].Lanes == 0
+				if !scalar && !k.computedFrom(x, OpHSum) && !k.computedFrom(x, OpHMax) && !k.computedFrom(x, OpHMin) {
 					continue
 				}
 				b, ok := made[x]
 				if !ok {
 					b = k.add(Node{Op: OpBroadcast, Type: ir.F32, A: x})
 					made[x] = b
+					// The append may have moved the nodes: the operands are
+					// fields of the new copy of this one.
+					ops = k.Operands(&k.Nodes[i])
 				}
-				*a = b
+				*ops[j] = b
 			}
 		}
 	}
