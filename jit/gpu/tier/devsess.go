@@ -115,6 +115,11 @@ type devSess struct {
 	// qsaMarks is the rows' rotary marks for the next call (SetRopeMarks),
 	// which a QSA block's pooled keys turn by (qsa.go).
 	qsaMarks []int32
+	// ropeAxes is the rows' rotary positions, four words a row, for the
+	// call at cache position ropeAxesAt (SetRopeAxes), which the composer's
+	// table turns them by (served.go).
+	ropeAxes   []int32
+	ropeAxesAt int
 	// prompt says the session's calls are a prompt's (SetPrompt): the
 	// composer serves a step's parts and none of a prompt's (Config.Composed).
 	prompt bool
@@ -627,9 +632,9 @@ func (g *devTier) cloneLane() (*lane, bool) {
 // cap are the model's and stay src's, and dst gets logits of its own to write.
 // Callers hold g.mu inside a scratch window.
 func (g *devTier) shareHead(dst, src *blockScratch) bool {
-	dst.head, dst.mvHead, dst.headGraph = src.head, src.mvHead, src.headGraph
+	dst.head, dst.mvHead, dst.headGraph, dst.sampleGraph = src.head, src.mvHead, src.headGraph, src.sampleGraph
 	dst.hNorm, dst.hNormB, dst.hBias, dst.headCap = src.hNorm, src.hNormB, src.hBias, src.headCap
-	dst.headEmbeds, dst.embScale = src.headEmbeds, src.embScale
+	dst.headEmbeds, dst.embScale, dst.embedGraph = src.headEmbeds, src.embScale, src.embedGraph
 	dst.headShared = true
 	n := src.mvHead.rows
 	var err error
@@ -654,7 +659,7 @@ func unshareHead(dst *blockScratch) {
 	if dst == nil || !dst.headShared {
 		return
 	}
-	dst.head, dst.mvHead, dst.headGraph = nil, mv{}, nil
+	dst.head, dst.mvHead, dst.headGraph, dst.sampleGraph = nil, mv{}, nil, nil
 	dst.hNorm, dst.hNormB, dst.hBias, dst.headCap = nil, nil, nil, nil
 	dst.headShared = false
 }

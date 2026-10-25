@@ -18,6 +18,8 @@ import (
 type embPend struct {
 	dst []float32
 	ids []int32
+	// composed says a decode row the composer gathers (ComposedEmbed).
+	composed bool
 }
 
 // same reports whether x is exactly pe's destination -- the slice the caller
@@ -40,6 +42,30 @@ func (g *devTier) EmbedRows(ids []int32, dst []float32) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	bs := g.bs
+	// A decode row is the composer's to gather (ComposedEmbed), its decline
+	// named; the tier's own gather is a prompt's.
+	if n == 1 && !g.prompt && bs != nil {
+		if g.Composed&ComposedEmbed == 0 {
+			return false
+		}
+		why := bs.embedServes()
+		switch {
+		case why != partServes:
+		case len(dst) != bs.head.k || ids[0] < 0 || int(ids[0]) >= bs.head.nrows:
+			why = partEmbedHeld
+		case !g.embedTokens(bs):
+			why = partNoRoom
+		}
+		if why != partServes {
+			g.PartsDeclined[partEmbed]++
+			g.StepDeclines[why]++
+			return false
+		}
+		pe := &g.embBuf
+		pe.dst, pe.ids, pe.composed = dst, append(pe.ids[:0], ids...), true
+		g.embPend = pe
+		return true
+	}
 	if n == 0 || n > batchWidth || bs == nil || bs.head == nil || !bs.head.ok || !bs.headEmbeds ||
 		len(dst) != n*bs.head.k || kernels.IsFloat(bs.head.t) {
 		return false
@@ -55,8 +81,24 @@ func (g *devTier) EmbedRows(ids []int32, dst []float32) bool {
 		return false
 	}
 	pe := &g.embBuf
-	pe.dst, pe.ids = dst, append(pe.ids[:0], ids...)
+	pe.dst, pe.ids, pe.composed = dst, append(pe.ids[:0], ids...), false
 	g.embPend = pe
+	return true
+}
+
+// embedTokens makes bs's token word for the composer's gather if it has
+// none, outside any Session. Callers hold mu.
+func (g *devTier) embedTokens(bs *blockScratch) bool {
+	if bs.embTok != nil {
+		return true
+	}
+	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
+	b, err := g.dev.Alloc(4)
+	if err != nil {
+		g.LastErr = err.Error()
+		return false
+	}
+	bs.embTok = b
 	return true
 }
 

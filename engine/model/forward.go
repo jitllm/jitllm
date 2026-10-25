@@ -296,6 +296,15 @@ type State struct {
 	// face (nn.TokenDevice).
 	ldInputs nn.LayerInputDevice
 	ldTokens nn.TokenDevice
+	// ldRope is its rotary-position face (nn.RopeAxesDevice), and axes1 the
+	// one row's positions it is handed.
+	ldRope nn.RopeAxesDevice
+	axes1  [4]int32
+	// ldEmbed is its gather face (nn.EmbedDevice), and tokFill says the
+	// token being stepped fills its row from the embedding (Forward), which
+	// the device may gather instead (embedOnDevice).
+	ldEmbed nn.EmbedDevice
+	tokFill bool
 	// ldPrompt is its prompt face (nn.PromptDevice): told when the calls
 	// are a chunked prompt's.
 	ldPrompt nn.PromptDevice
@@ -1097,6 +1106,16 @@ func ropeTabPlanes(r *nn.Rope, nrot int) []float32 {
 	return r.TabPlanes(nrot / 2)
 }
 
+// ropeAxesPlanes is the folded planes of a rotary over several position
+// axes, nil for any other: the composer's table reads them with each row's
+// positions on the axes (nn.RopeAxesDevice).
+func ropeAxesPlanes(r *nn.Rope, nrot int) []float32 {
+	if r == nil || nrot <= 0 || len(r.Runs) == 0 {
+		return nil
+	}
+	return r.TabPlanes(nrot / 2)
+}
+
 // SetDeviceLayers is SetDevice with a cap on how many blocks the device is
 // offered. -1 offers all of them and lets the device's own memory decide, which
 // is the useful default; a positive cap is for pinning the split by hand, and
@@ -1183,7 +1202,11 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 		// builds its own table and the two tiers agree by construction.
 		RopeTab:    ropeTabPlanes(&s.m.rope, c.NRot),
 		RopeTabSWA: ropeTabPlanes(s.m.ropeSWA, c.NRotSWA),
-		RopeSplit:  c.RopeXD,
+		// The tables as the front end states them, and a multi-axis
+		// rotary's planes, for a device that serves them (front.go).
+		Tables:      s.m.frontGraphs().tables,
+		RopeTabAxes: ropeAxesPlanes(&s.m.rope, c.NRot),
+		RopeSplit:   c.RopeXD,
 		// The sliding window itself (TestSlidingWindowRunsOnTheDevice).
 		SWAWindow: windowFor(c, s.maxSeq),
 		SWALocal:  c.periodLocal,
@@ -1550,7 +1573,8 @@ func (s *State) placeHead() {
 // newHead is the output projection as a device takes it.
 func (s *State) newHead() *nn.Head {
 	c := s.c
-	h := &nn.Head{Model: s.m.id, Graph: s.m.frontGraphs().head, Norm: s.outNorm, W: wt(*s.outW), Logits: s.logits,
+	f := s.m.frontGraphs()
+	h := &nn.Head{Model: s.m.id, Graph: f.head, Sample: f.sample, Embed: f.embed, Norm: s.outNorm, W: wt(*s.outW), Logits: s.logits,
 		Softcap: c.FinalSoftcap, Embeds: c.TiedEmbd, EmbdScale: float32(c.EmbdScale),
 		Stages: s.m.headStages(), Bias: s.m.outB}
 	// The final softcap rides the head: a tier that takes it applies the cap on
@@ -3554,7 +3578,24 @@ func (s *State) Forward(token int32) ([]float32, error) {
 	}
 	s.kv.note(s.bpos[0], token)
 	s.tok = token
-	return s.forward(func() error { return s.embed(token) })
+	s.tokFill = true
+	l, err := s.forward(func() error { return s.embed(token) })
+	s.tokFill = false
+	return l, err
+}
+
+// embedOnDevice promises the token's row to the device that runs block 0,
+// which gathers it itself (nn.EmbedDevice), where the step's input rows are
+// the token's row alone, scaled: no position table, stream or per-layer
+// input. The host's fill runs only if the device fails the token.
+func (s *State) embedOnDevice() bool {
+	c := s.c
+	if !s.tokFill || s.ldEmbed == nil || s.head == nil || !s.head.GatherRow || s.lo != 0 || !s.devAt(0) || c.PLEDim != 0 || s.m.posEmbd.e != nil ||
+		c.AltUp != 0 || c.DSV4() || c.Q4E() || c.ResAttn() || c.Streams() > 1 {
+		return false
+	}
+	s.tok1[0] = s.tok
+	return s.ldEmbed.EmbedRows(s.tok1[:], s.resid())
 }
 
 // ForwardGreedy is Forward for a caller that only wants the greedy next token:
@@ -3773,8 +3814,10 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 		}
 	}
 	s.relocateFor(s.pos + 1)
-	if err := fill(); err != nil {
-		return nil, err
+	if !s.embedOnDevice() {
+		if err := fill(); err != nil {
+			return nil, err
+		}
 	}
 
 	// Each contiguous run of device blocks is one call (one upload, one
@@ -3822,6 +3865,7 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 			s.layerInputs(s.ple)
 			s.tok1[0] = s.tok
 			s.tokenIDs(s.tok1[:])
+			s.ropeAxes(s.pos, rp)
 			// Qwen3.8-Flash-Next's n-gram rows, when the run holds its n-gram
 			// block (q4edev.go).
 			if err := s.ngramToDevice(li, hi, 1, nil, s.selfSlot0, s.tok1At); err != nil {
@@ -4729,6 +4773,19 @@ func (s *State) setLD(ld nn.LayerDevice) {
 	s.ldPrompt, _ = ld.(nn.PromptDevice)
 	s.ldNGram, _ = ld.(nn.NGramDevice)
 	s.ldQSA, _ = ld.(nn.QSADevice)
+	s.ldRope, _ = ld.(nn.RopeAxesDevice)
+	s.ldEmbed, _ = ld.(nn.EmbedDevice)
+}
+
+// ropeAxes tells the device the rotary positions of the one row of the call
+// about to be made at cache position pos (nn.RopeAxesDevice): rp on every
+// axis, the row's rotary position (ropeOf).
+func (s *State) ropeAxes(pos, rp int) {
+	if s.ldRope == nil {
+		return
+	}
+	s.axes1 = [4]int32{int32(rp), int32(rp), int32(rp), int32(rp)}
+	s.ldRope.SetRopeAxes(pos, s.axes1[:])
 }
 
 // layerInputs hands the device the rows' per-layer embedding inputs for the

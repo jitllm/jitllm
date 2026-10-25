@@ -59,6 +59,10 @@ type gpuSession struct {
 	marks []int32
 	// prompt says the calls are a prompt's (SetPrompt).
 	prompt bool
+	// axes and axesAt are the rows' rotary positions and the cache position
+	// they are of (SetRopeAxes).
+	axes   []int32
+	axesAt int
 }
 
 // SetPrompt says whether the session's calls that follow are a prompt's
@@ -288,7 +292,9 @@ func (s *gpuSession) ReleaseLayers(lo, hi int) {
 // EmbedRows is nn.EmbedDevice: the rows are gathered on the card holding the
 // head, under this session's device locks like any other call.
 func (s *gpuSession) EmbedRows(ids []int32, dst []float32) bool {
-	defer s.leave(s.step())
+	// The session's inputs first: whether its calls are a prompt's decides
+	// whose gather a row is.
+	defer s.leave(s.inputsTo(s.step()))
 	return s.g.embedRows(s.sid, ids, dst)
 }
 

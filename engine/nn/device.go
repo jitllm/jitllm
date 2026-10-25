@@ -361,7 +361,18 @@ type Head struct {
 	// states none: what a device serving the head forms (tier
 	// Config.Composed).
 	Graph *graph.Graph
-	Norm  []float32 // output_norm.weight
+	// Sample is the greedy token of the head's logits as ops from the front
+	// end (graph.Sample), nil where it states none: what a device serving
+	// the argmax forms.
+	Sample *graph.Graph
+	// Embed is the step's input rows as ops from the front end, nil where
+	// it states none: what a device holding the embedding (Embeds) forms to
+	// gather a decode row's (nn.EmbedDevice). GatherRow is the device's
+	// answer at PrepHead: it is asked to gather a decode row itself, so the
+	// caller promises it the row rather than filling it.
+	Embed     *graph.Graph
+	GatherRow bool
+	Norm      []float32 // output_norm.weight
 	// NormB is the output LayerNorm's bias (C6), non-nil exactly when the
 	// model's norms are LayerNorms (LayerPlan.LayerNorm) -- zeros where the
 	// file carries none.
@@ -777,6 +788,15 @@ type LayerPlan struct {
 	// it states none of: what a device asks the composer to form when it
 	// serves the block whole (tier Config.Composed).
 	Graph *graph.Graph
+	// Tables are the step's rotary tables as the front end states them (the
+	// model's rotary's, then the local layers' where SWAPeriod is set; nil
+	// for none): what a device serving the tables forms, writing cs and
+	// csSWA. RopeTabAxes is the folded planes (Rope.TabPlanes) of a rotary
+	// over several position axes, which RopeTab leaves nil: its table turns
+	// each row by its positions on the axes (RopeAxesDevice), never by its
+	// cache position.
+	Tables      []*graph.Graph
+	RopeTabAxes []float32
 	// KPad is the width the block's matrices that read the residual or the
 	// attention's output were packed at, when NEmbd is not a whole number of
 	// 32-element blocks (a tower 144 wide, packed at 160 with zero columns
@@ -1434,6 +1454,14 @@ type EntDevice interface {
 // row whose embedding was supplied, which such a block refuses.
 type TokenDevice interface {
 	SetTokenIDs(ids []int32)
+}
+
+// RopeAxesDevice is an optional LayerDevice told the rotary positions of
+// the rows of the next call at cache position pos: four words a row, its
+// position on each axis (on a one-axis rotary, or a text row, the same four),
+// which an image earlier in the sequence moves off the cache position.
+type RopeAxesDevice interface {
+	SetRopeAxes(pos int, at []int32)
 }
 
 // PromptDevice is an optional LayerDevice told that the calls that follow

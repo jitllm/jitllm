@@ -2139,6 +2139,9 @@ type blockScratch struct {
 	// headGraph is the head as ops from the model's front end (nn.Head.Graph):
 	// what serving the head forms (served.go).
 	headGraph *graph.Graph
+	// sampleGraph is the greedy token over the head's logits as ops from the
+	// front end (nn.Head.Sample): what serving the argmax forms.
+	sampleGraph *graph.Graph
 	// headShared says head, mvHead, hNorm, hNormB, hBias and headCap are another
 	// scratch's -- lane0's, borrowed by a clone (shareHead) -- and are not
 	// freed or refunded with this one.
@@ -2259,6 +2262,10 @@ type blockScratch struct {
 	embK           backend.Kernel
 	embW           int
 	embIds, embOut backend.Buf
+	// embedGraph is the step's input rows as ops (nn.Head.Embed), and embTok
+	// the token word the composer's gather of a decode row reads.
+	embedGraph *graph.Graph
+	embTok     backend.Buf
 	// spanK and spanOff move a batched chunk's last residual row into this
 	// (decode) scratch's x, so the output projection can ride the chunk's own
 	// submission (layersOnce's folded head). Made on first use.
@@ -2314,8 +2321,12 @@ type blockScratch struct {
 	// block, uploaded once; rpos is the R positions, the only input rewritten per
 	// token. ropeTable is nil wherever the table is uploaded instead (a vision
 	// block, a refused compile, or Config.RopeTableHost).
-	ropeTab, ropeTabSWA    backend.Buf
-	ropeConst, rpos        backend.Buf
+	ropeTab, ropeTabSWA backend.Buf
+	ropeConst, rpos     backend.Buf
+	// ropeTabAxes and rposAxes are what the composer's table over several
+	// position axes reads (nn.LayerPlan.RopeTabAxes): its planes, and the
+	// live row count then each row's four positions.
+	ropeTabAxes, rposAxes  backend.Buf
 	ropeTable              backend.Kernel
 	ropeNPairs             int
 	quantE, quantF, quantQ backend.Kernel
@@ -4511,6 +4522,30 @@ func (g *devTier) initRopeTable(bs *blockScratch, p *nn.LayerPlan, rows int) err
 	return nil
 }
 
+// initRopeAxes holds what the composer's table over several position axes
+// reads where the plan has one (RopeTabAxes): its planes, uploaded once, and
+// the rows' positions, staged every call.
+func (g *devTier) initRopeAxes(bs *blockScratch, p *nn.LayerPlan, rows int) error {
+	if len(p.RopeTabAxes) == 0 || p.NonCausal || p.NRot <= 0 || bs.cs == nil {
+		return nil
+	}
+	b, err := g.dev.Alloc(len(p.RopeTabAxes) * 4)
+	if err != nil {
+		return err
+	}
+	if err := b.Write(f32b(p.RopeTabAxes)); err != nil {
+		b.Free()
+		return err
+	}
+	a, err := g.dev.Alloc((1 + 4*rows) * 4)
+	if err != nil {
+		b.Free()
+		return err
+	}
+	bs.ropeTabAxes, bs.rposAxes = b, a
+	return nil
+}
+
 // initScratch allocates and compiles everything that does not depend on which
 // block is running.
 func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
@@ -4800,6 +4835,9 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	}
 	if err == nil {
 		err = g.initRopeTable(bs, p, rows)
+	}
+	if err == nil {
+		err = g.initRopeAxes(bs, p, rows)
 	}
 	// A linear block's scratch, sized from the plan's own geometry. al() is a
 	// no-op at zero, so other architectures allocate nothing here.
@@ -6395,7 +6433,8 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		return false
 	}
 	// The head as ops from the model's front end: what the composer serves.
-	bs.headGraph = h.Graph
+	bs.headGraph, bs.sampleGraph, bs.embedGraph = h.Graph, h.Sample, h.Embed
+	h.GatherRow = g.Composed&ComposedEmbed != 0
 	// The head is the model's: a second State on this tier finds it placed.
 	// Building it again allocated a second norm and logits buffer over the
 	// first ones, leaking both and charging the budget twice.
@@ -7026,8 +7065,9 @@ type graphKey struct {
 	// ffnForm is Config.FFNForm, verify -ab ffn's switch.
 	ffnForm FFNForm
 	// headSrv says the head ran as the composer's graph, which the tier's own
-	// norm, projection and cap are not.
-	headSrv bool
+	// norm, projection and cap are not; tableSrv and sampleSrv say the same
+	// of the step's tables and its token.
+	headSrv, tableSrv, sampleSrv bool
 }
 
 // canRecord reports whether this device's sessions can capture a launch
@@ -7225,7 +7265,16 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// on the host.
 	pe := g.takeEmbedLocked(x)
 	var gatherN int
-	if pe != nil {
+	embedSrv := false
+	if pe != nil && pe.composed {
+		// The composer's gather of one row (ComposedEmbed): a call of
+		// one row, its promise refused for any other.
+		if R == 1 && nrow == 1 && rag == nil && g.bs.embTok != nil && g.bs.embedServes() == partServes {
+			embedSrv = true
+		} else {
+			return refuse("the composer's gather of a decode row was promised to a call of %d rows", nrow)
+		}
+	} else if pe != nil {
 		hr := g.bs.head
 		gatherN = kernels.GetRowsThreads(hr.t, hr.k, R)
 		if !g.embedKernel(g.bs) || hr.k != p.NEmbd || len(pe.ids) > R || gatherN%128 != 0 {
@@ -7468,8 +7517,40 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			return refuse("%v", e)
 		}
 	}
+	// The step's tables the composer serves (ComposedTable), which write cs
+	// and csSWA where the tier's own table would.
+	tableSrv, tableMulti := false, false
+	var raxes []byte
+	if g.Composed&ComposedTable != 0 && bs.cs != nil && p.NRot > 0 {
+		switch why := g.tableServes(bs, p, pos); {
+		case R != 1 || rag != nil || g.prompt:
+			g.PartsUnasked[partRope]++
+		case why != partServes:
+			g.PartsDeclined[partRope]++
+			g.StepDeclines[why]++
+		default:
+			tableSrv, tableMulti = true, tableAxes(p.Tables[0])
+		}
+	}
 	var rposs []byte
-	if ropeDev {
+	switch {
+	case tableSrv && tableMulti:
+		raxes = binary.LittleEndian.AppendUint32(g.subBytes.raxes[:0], 1)
+		for _, v := range g.ropeAxes[:4] {
+			raxes = binary.LittleEndian.AppendUint32(raxes, uint32(v))
+		}
+		g.subBytes.raxes = raxes
+	case tableSrv:
+		// The row's rotary position where the caller states it for this
+		// position, else its cache position, which is the same on a
+		// rotary over one axis.
+		at := pos
+		if len(g.ropeAxes) == 4 && g.ropeAxesAt == pos {
+			at = int(g.ropeAxes[0])
+		}
+		rposs = binary.LittleEndian.AppendUint32(g.subBytes.rposs[:0], 1)
+		rposs = binary.LittleEndian.AppendUint32(rposs, uint32(at))
+	case ropeDev:
 		rposs = append(g.subBytes.rposs[:0], u32one(uint32(rrows))...)
 		for r := 0; r < R; r++ {
 			at := pos + r
@@ -7486,9 +7567,11 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		if bs.csSWA != nil {
 			g.RopeTables += rrows
 		}
-	} else if bs.cs != nil {
+	case bs.cs != nil:
 		g.RopeTableUploads += R
 	}
+	// The positions are the call's: a later call states its own or none.
+	g.ropeAxes = nil
 
 	// Retire recordings before the session opens: freeing one is a driver call
 	// that cannot nest inside a session. See dropGraph.
@@ -7537,6 +7620,29 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// The label pick: one row's logits, a decode's or a folded chunk's last.
 	pick := head != nil && !argmax && sampleK == 0 && len(head.Pick) > 0 && rag == nil && !allRows &&
 		(R == 1 || fold) && left&(nn.HeadBias|nn.HeadScale) == 0 && g.prepPick(head)
+	// The token the composer selects (ComposedSample): a one-row step's
+	// greedy token, written where the tier's argmax writes it. The sampler's
+	// candidates and the label pick are named, not served.
+	sampleSrv := false
+	if g.Composed&ComposedSample != 0 && head != nil && (argmax || sampleK > 0 || pick) {
+		why := partServes
+		switch {
+		case R != 1 || rag != nil || g.prompt || fold:
+			g.PartsUnasked[partSample]++
+		case sampleK > 0:
+			why = partSampleTopK
+		case pick:
+			why = partSamplePick
+		case bs.sampleGraph == nil || head.Sample != bs.sampleGraph:
+			why = partNoSample
+		default:
+			sampleSrv = true
+		}
+		if why != partServes {
+			g.PartsDeclined[partSample]++
+			g.StepDeclines[why]++
+		}
+	}
 	// A pick that projects its labels' rows alone leaves no logits to apply
 	// the head's other stages to, so a head with one is projected whole.
 	pickOnly := pick && !fold && g.pickMV != nil && bs.headCap == nil && R == 1 && head.Stages&(nn.HeadBias|nn.HeadScale) == 0
@@ -7567,7 +7673,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		ragHead = head.WantedRows(nrow)
 	}
 	key := graphKey{lo, hi, nCap, R, head != nil, g.TableSplit, g.ScalarSoftmax, g.flashOn(), g.KVF16,
-		ropeDev, argmax, sampleK, samplePen, pick, ragN, ragRuns, par, pagedVar, ragHead, ragMap, hNormID, persistOn, persistOn && g.PersistDeps, g.GateUpFuse, g.GateUp2, g.GateUp2Force, g.NoAddNormFold, sid, g.NoFuse, g.NoActFuse, g.FFNForm, headSrv}
+		ropeDev, argmax, sampleK, samplePen, pick, ragN, ragRuns, par, pagedVar, ragHead, ragMap, hNormID, persistOn, persistOn && g.PersistDeps, g.GateUpFuse, g.GateUp2, g.GateUp2Force, g.NoAddNormFold, sid, g.NoFuse, g.NoActFuse, g.FFNForm, headSrv, tableSrv, sampleSrv}
 	if lo == hi {
 		// The head alone reads no history, so the capacity is not part of
 		// what it records: keyed by it, prompts on either side of a growth
@@ -7620,6 +7726,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		hx: hx, hcs: hcs, hcsSWA: hcsSWA, pn: pn, koffs: koffs, kposs: kposs, rposs: rposs,
 		p: p, rag: rag, pe: pe, key: key, R: R, nrow: nrow, kvDim: kvDim, qdim: qdim,
 		kst: kst, nCap: nCap, gatherN: gatherN, rrows: rrows, sm: sm, smG: smG, smW: smW,
+		tableSrv: tableSrv, sampleSrv: sampleSrv, embedSrv: embedSrv, raxes: raxes,
 		fold: fold, ropeDev: ropeDev, argmax: argmax, sampleK: sampleK, samplePen: samplePen, pick: pick, ragHead: ragHead, parOK: parOK,
 		allRows: allRows, hNorm: hNorm, headWhy: headWhy, pickOnly: pickOnly,
 		headCapped: head != nil && head.Stages&nn.HeadCap != 0,
@@ -7724,10 +7831,16 @@ type submitArgs struct {
 	smG, smW                int
 	ragHead                 int
 	fold, ropeDev, argmax   bool
-	sampleK                 int
-	samplePen, pick         bool
-	parOK, allRows          bool
-	hNorm                   backend.Buf
+	// tableSrv and sampleSrv say the composer serves the step's tables and
+	// its token; raxes is a table over several axes' staged positions.
+	tableSrv, sampleSrv bool
+	// embedSrv says the composer gathers the decode row.
+	embedSrv        bool
+	raxes           []byte
+	sampleK         int
+	samplePen, pick bool
+	parOK, allRows  bool
+	hNorm           backend.Buf
 	// headWhy is why the composer is not asked for the head at this one-row
 	// step, partServes where it is; pickOnly says the head projects the
 	// picked labels alone; headCapped says the head's graph states the final
@@ -7764,6 +7877,7 @@ func (g *devTier) layersSession(s backend.Session) {
 	R, nrow, kvDim, qdim, kst, nCap, gatherN, rrows := a.R, a.nrow, a.kvDim, a.qdim, a.kst, a.nCap, a.gatherN, a.rrows
 	sm, smG, smW := a.sm, a.smG, a.smW
 	fold, ropeDev, argmax, sampleK, samplePen, pick := a.fold, a.ropeDev, a.argmax, a.sampleK, a.samplePen, a.pick
+	tableSrv, sampleSrv, embedSrv, raxes := a.tableSrv, a.sampleSrv, a.embedSrv, a.raxes
 	ragHead, parOK, allRows, hNorm := a.ragHead, a.parOK, a.allRows, a.hNorm
 	headWhy, pickOnly, headCapped := a.headWhy, a.pickOnly, a.headCapped
 	var err error
@@ -8139,11 +8253,28 @@ func (g *devTier) layersSession(s backend.Session) {
 		// The rotary table first: every block reads it and nothing writes it again.
 		// Both launches are pure functions of buffers, so a replay rebuilds it from
 		// whatever bs.rpos holds this token.
-		if ropeDev {
+		switch {
+		case tableSrv:
+			for i, gr := range p.Tables {
+				if gr == nil {
+					continue
+				}
+				cs, planes, at := g.tableBinds(bs, i)
+				sv, serr := g.servedTable(gr, cs, planes, at)
+				if serr == nil {
+					serr = sv.run(g, lc, sv.inst, nil, nil)
+				}
+				if err == nil {
+					err = serr
+				}
+			}
+		case ropeDev:
 			lc.la(bs.ropeTable, rrows*bs.ropeNPairs, bs.cs, bs.ropeTab, bs.ropeConst, bs.rpos)
 			if bs.csSWA != nil {
 				lc.la(bs.ropeTable, rrows*bs.ropeNPairs, bs.csSWA, bs.ropeTabSWA, bs.ropeConst, bs.rpos)
 			}
+		}
+		if ropeDev {
 			g.ds4Tables(lc, bs, R)
 		}
 		// A block-end residual add held for the next block's attention norm
@@ -10012,7 +10143,14 @@ func (g *devTier) layersSession(s backend.Session) {
 			if bs.headCap != nil && !capped {
 				lc.la(bs.headCap, bs.mvHead.rows, bs.logits, bs.logitsCap)
 			}
-			if argmax && err == nil {
+			switch {
+			case argmax && sampleSrv && err == nil:
+				sv, serr := g.servedSample(bs.sampleGraph)
+				if serr == nil {
+					serr = sv.run(g, lc, sv.inst, []backend.Buf{bs.headOut()}, []backend.Buf{g.argmaxOut})
+				}
+				err = serr
+			case argmax && err == nil:
 				err = lc.launch(g.argmaxK, 1, kernels.ArgmaxGroup, bs.headOut(), g.argmaxOut)
 			}
 			if sampleK > 0 && err == nil {
@@ -10134,7 +10272,16 @@ func (g *devTier) layersSession(s backend.Session) {
 	if fold {
 		w(hb.spanOff, g.u32b(uint32((nrow-1)*p.NEmbd)))
 	}
-	if pe != nil {
+	if embedSrv {
+		w(g.bs.embTok, g.u32b(uint32(pe.ids[0])))
+		sv, serr := g.servedEmbed(g.bs, g.bs.embTok)
+		if serr == nil && err == nil {
+			serr = sv.run(g, lc, sv.inst, nil, []backend.Buf{bs.x})
+		}
+		if err == nil {
+			err = serr
+		}
+	} else if pe != nil {
 		hr := g.bs.head
 		g.subBytes.embIDs = embIDs(g.subBytes.embIDs, pe.ids, R, hr.nrows)
 		w(g.bs.embIds, g.subBytes.embIDs)
@@ -10148,10 +10295,13 @@ func (g *devTier) layersSession(s backend.Session) {
 	if bs.pleIn != nil {
 		w(bs.pleIn, f32b(g.pleRows(R*p.PLEWidth)))
 	}
-	if ropeDev {
+	switch {
+	case raxes != nil:
+		w(bs.rposAxes, raxes)
+	case ropeDev || tableSrv:
 		// Four bytes a row in place of NRot*4; the table never crosses the bus.
 		w(bs.rpos, rposs)
-	} else {
+	default:
 		if bs.cs != nil {
 			// nil for a block with no rotary; nothing reads it and there is
 			// no buffer to write into.
@@ -10320,6 +10470,7 @@ func (g *devTier) recorderOf(s backend.Session) (backend.Recorder, bool) {
 // reused so a decode token allocates none of them.
 type stagingBytes struct {
 	pn, koffs, kposs, rposs []byte
+	raxes                   []byte // a table over several axes' positions
 	tok                     []byte // a ragged step's tokens, read home
 	mlaPOff                 []byte // a batched latent attention's rotary key slots
 	embIDs                  []byte // a prompt chunk's ids for the gather on the card (embIDs)

@@ -110,11 +110,16 @@ type frontSet struct {
 	why         []Uncovered
 	errs        []error
 	head, embed *graph.Graph
-	headWhy     Uncovered
-	embedWhy    Uncovered
-	headErr     error
-	embedErr    error
-	key         frontKey
+	// tables are the step's rotary tables, the model's rotary's then its
+	// sliding layers', as jit.Front states them (nil for one that turns
+	// nothing); sample is the step's greedy sampling of the head's logits.
+	tables   []*graph.Graph
+	sample   *graph.Graph
+	headWhy  Uncovered
+	embedWhy Uncovered
+	headErr  error
+	embedErr error
+	key      frontKey
 }
 
 // frontKey is what a set's graphs were built from beside the container.
@@ -239,6 +244,17 @@ func (m *Model) frontGraphs() *frontSet {
 	}
 	s.head, s.headWhy, s.headErr = m.headGraph()
 	s.embed, s.embedWhy, s.embedErr = m.embedGraph()
+	for i, r := range (composing{m.container, m}).Rotaries() {
+		var t *graph.Graph
+		if r.NRot > 0 {
+			t = jit.TableGraph(r, i)
+		}
+		s.tables = append(s.tables, t)
+	}
+	if s.head != nil && len(s.head.Out) == 1 && s.head.Values[s.head.Out[0]].Width == m.Cfg.NVocab {
+		sm := graph.Sample{NVocab: m.Cfg.NVocab}
+		s.sample = sm.Build()
+	}
 	f.set = s
 	return s
 }

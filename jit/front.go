@@ -115,6 +115,13 @@ func tableName(i int) string {
 	return fmt.Sprintf("rope.cs.%d", i)
 }
 
+// TableGraph is the step's table of rotary r, the model's i-th: its
+// PartTable part's graph.
+func TableGraph(r graph.Rotary, i int) *graph.Graph {
+	rt := graph.RopeTable{NRot: r.NRot, Name: tableName(i), Grid: r.Grid, Sections: r.Sections, Interleaved: r.Interleaved}
+	return rt.Build()
+}
+
 // unread is the first tensor of block (jlm.DenseBlock for none) whose role
 // the front end does not read: what it does not read, it refuses rather than
 // composing a model without it.
@@ -208,8 +215,7 @@ func segmentParts(f Model, seg Segment, first, rotBase, picture, picW int) ([]Pa
 		if r.NRot == 0 {
 			continue
 		}
-		rt := graph.RopeTable{NRot: r.NRot, Name: tableName(rotBase + i), Grid: r.Grid, Sections: r.Sections, Interleaved: r.Interleaved}
-		parts = append(parts, Part{Kind: PartTable, Segment: seg, Block: -1, Graph: rt.Build()})
+		parts = append(parts, Part{Kind: PartTable, Segment: seg, Block: -1, Graph: TableGraph(r, rotBase+i)})
 	}
 	var seamRoles []jlm.Role
 	var taps []int

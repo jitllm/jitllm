@@ -17,11 +17,11 @@ func moveHead(dst, src *blockScratch) {
 	if dst == nil || src == nil || dst == src {
 		return
 	}
-	dst.head, dst.mvHead, dst.headGraph = src.head, src.mvHead, src.headGraph
+	dst.head, dst.mvHead, dst.headGraph, dst.sampleGraph = src.head, src.mvHead, src.headGraph, src.sampleGraph
 	dst.hNorm, dst.hNormB, dst.hBias, dst.logits, dst.hRaw, dst.hOut = src.hNorm, src.hNormB, src.hBias, src.logits, src.hRaw, src.hOut
 	dst.logitsCap, dst.headCap = src.logitsCap, src.headCap
-	dst.headEmbeds, dst.embScale = src.headEmbeds, src.embScale
-	src.head, src.mvHead, src.headGraph = nil, mv{}, nil
+	dst.headEmbeds, dst.embScale, dst.embedGraph = src.headEmbeds, src.embScale, src.embedGraph
+	src.head, src.mvHead, src.headGraph, src.sampleGraph = nil, mv{}, nil, nil
 	src.hNorm, src.hNormB, src.hBias, src.logits, src.hRaw, src.hOut = nil, nil, nil, nil, nil, nil
 	src.logitsCap, src.headCap = nil, nil
 }

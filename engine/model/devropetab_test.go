@@ -18,8 +18,21 @@ import (
 //
 // Both arms run in one process against one copy of the weights, with the tier
 // opened with TuneOff (the split is the reduction order), so the bar is
-// identical token ids and near-identical logits.
+// identical token ids and near-identical logits. The device's table is the
+// tier's own kernel, and with the step served by the composer
+// (tier.ComposedStep) the composer's table, each held to the upload under the
+// same parts; the upload arm serves no table (RopeTableHost is the caller's).
 func TestRopeTableOnDeviceMatchesTheUpload(t *testing.T) {
+	for _, parts := range []tier.Parts{0, tier.ComposedStep} {
+		name := "tier's table"
+		if parts != 0 {
+			name = "composed table"
+		}
+		t.Run(name, func(t *testing.T) { ropeTableMatchesTheUpload(t, parts) })
+	}
+}
+
+func ropeTableMatchesTheUpload(t *testing.T, parts tier.Parts) {
 	for _, c := range []struct {
 		file  string
 		quirk string
@@ -46,12 +59,18 @@ func TestRopeTableOnDeviceMatchesTheUpload(t *testing.T) {
 			// Poisoned scratch on both arms: position 0's sine plane is zero, so
 			// an unwritten table would read as correct from a zeroed buffer.
 			g, err := tier.OpenWith(tier.WithDeviceTune(tier.TuneOff),
-				tier.WithPoisonScratch(true))
+				tier.WithPoisonScratch(true), tier.WithConfig(func(c *tier.Config) { c.Composed = parts }))
 			if err != nil || g == nil {
 				noDevice(t, "device", err)
 			}
 			defer g.Close()
 
+			// built is the tables the device made: the tier's kernel's, or
+			// the composer's served and replayed.
+			built := func(s tier.Stats) int {
+				n, _, _ := s.ServedPart(tier.ComposedTable)
+				return s.RopeTables + n + s.ReplayedPart(tier.ComposedTable)
+			}
 			run := func(host bool) ([]int32, [][]float32, tier.Stats) {
 				g.RopeTableHost = host
 				before := g.Stats()
@@ -79,7 +98,7 @@ func TestRopeTableOnDeviceMatchesTheUpload(t *testing.T) {
 				}
 				now := g.Stats()
 				return out, logits, tier.Stats{
-					RopeTables:       now.RopeTables - before.RopeTables,
+					RopeTables:       built(now) - built(before),
 					RopeTableUploads: now.RopeTableUploads - before.RopeTableUploads,
 					RopeTableWhy:     now.RopeTableWhy,
 				}
@@ -105,6 +124,13 @@ func TestRopeTableOnDeviceMatchesTheUpload(t *testing.T) {
 			if hostSt.RopeTableUploads == 0 {
 				t.Fatal("the host arm uploaded no table at all, so it is not the control " +
 					"this comparison needs")
+			}
+			// Which device table the decode ran: the composer's where it
+			// serves the step (the prompt's chunk is the tier's), the tier's
+			// where it does not.
+			all := g.Stats()
+			if n, _, _ := all.ServedPart(tier.ComposedTable); (parts != 0) != (n > 0) {
+				t.Fatalf("the composer served %d tables with parts %#x", n, uint8(parts))
 			}
 
 			for i := range hostIDs {

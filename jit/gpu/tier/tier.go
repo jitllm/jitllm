@@ -767,6 +767,8 @@ type Stats struct {
 	// BlockDeclines and HeadDeclines are PartsDeclined's block and head
 	// steps by reason (DeclineName).
 	BlockDeclines, HeadDeclines [numPartDeclines]int
+	// StepDeclines is PartsDeclined's table and sample steps by reason.
+	StepDeclines [numPartDeclines]int
 	// FormedAtStep counts the parts formed at a step rather than at a
 	// placement or PrepHead: a form a step met first, built inside it.
 	FormedAtStep int
@@ -1336,6 +1338,7 @@ func (s *Stats) add(o Stats) {
 	for i := range s.BlockDeclines {
 		s.BlockDeclines[i] += o.BlockDeclines[i]
 		s.HeadDeclines[i] += o.HeadDeclines[i]
+		s.StepDeclines[i] += o.StepDeclines[i]
 	}
 	s.FormedAtStep += o.FormedAtStep
 	// A block is on one device, so its slot is the only one that is not zero.
@@ -2774,12 +2777,25 @@ func (g *devTier) setRecSteps(sid uint64, n int) {
 
 // setInputs hands session sid's per-layer inputs and token ids to this device
 // for its next call (gpuSession.inputsTo).
-func (g *devTier) setInputs(sid uint64, ple []float32, ids []int32, ng []float32, marks []int32, prompt bool) {
+func (g *devTier) setInputs(sid uint64, ple []float32, ids []int32, ng []float32, marks []int32, prompt bool, axes []int32, axesAt int) {
 	g.mu.Lock()
 	ds := g.sessOf(sid)
 	ds.pleHost, ds.tokIDs, ds.ngHost, ds.qsaMarks, ds.prompt = ple, ids, ng, marks, prompt
+	ds.ropeAxes, ds.ropeAxesAt = axes, axesAt
 	g.mu.Unlock()
 }
+
+// SetRopeAxes takes the rotary positions of the rows of the next call at
+// cache position pos (nn.RopeAxesDevice).
+func (g *devTier) SetRopeAxes(pos int, at []int32) {
+	g.mu.Lock()
+	g.ropeAxes, g.ropeAxesAt = at, pos
+	g.mu.Unlock()
+}
+
+// SetRopeAxes keeps the rows' rotary positions for this session's next call,
+// which hands them to every device it holds (inputsTo).
+func (s *gpuSession) SetRopeAxes(pos int, at []int32) { s.axes, s.axesAt = at, pos }
 
 func (g *devTier) Close() {
 	// The layers go first, through ReleaseLayers (the refunds, freeRaw, the

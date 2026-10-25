@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
@@ -17,6 +18,76 @@ import (
 // every step's logits, the tier's stats and its census of the launches of
 // its own kernels on the steps the composer was asked for.
 func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts tier.Parts, noGraph, float bool, extra ...tier.Option) ([][]float32, tier.Stats, bool, map[string]int) {
+	t.Helper()
+	return composedDecodeWith(t, m, dev, ids, toks, parts, noGraph, float, nil, extra...)
+}
+
+// axesShift states each row's rotary positions d past the State's: the
+// violation of a served table that turns a row by the positions it is told.
+type axesShift struct {
+	nn.RopeAxesDevice
+	d   int32
+	buf [4]int32
+}
+
+func (a *axesShift) SetRopeAxes(pos int, at []int32) {
+	for i, v := range at[:min(len(at), 4)] {
+		a.buf[i] = v + a.d
+	}
+	a.RopeAxesDevice.SetRopeAxes(pos, a.buf[:min(len(at), 4)])
+}
+
+// composedTables is how many rotary tables the front end states for m: the
+// tables a served step writes.
+func composedTables(m *Model) int {
+	n := 0
+	for _, g := range m.frontGraphs().tables {
+		if g != nil {
+			n++
+		}
+	}
+	return n
+}
+
+// tokenShift promises each row's gather at the token d past its own: the
+// violation of a served gather that reads the row it is promised.
+type tokenShift struct {
+	nn.EmbedDevice
+	d, vocab int32
+	ids      [1]int32
+}
+
+func (e *tokenShift) EmbedRows(ids []int32, dst []float32) bool {
+	if len(ids) != 1 {
+		return e.EmbedDevice.EmbedRows(ids, dst)
+	}
+	e.ids[0] = (ids[0] + e.d) % e.vocab
+	return e.EmbedDevice.EmbedRows(e.ids[:], dst)
+}
+
+// shiftTokens has the State promise its device every decode row's gather d
+// tokens past its own.
+func shiftTokens(d, vocab int) func(*State) {
+	return func(s *State) {
+		if s.ldEmbed != nil {
+			s.ldEmbed = &tokenShift{EmbedDevice: s.ldEmbed, d: int32(d), vocab: int32(vocab)}
+		}
+	}
+}
+
+// shiftAxes has the State tell its device every row's rotary positions d
+// past their own.
+func shiftAxes(d int32) func(*State) {
+	return func(s *State) {
+		if s.ldRope != nil {
+			s.ldRope = &axesShift{RopeAxesDevice: s.ldRope, d: d}
+		}
+	}
+}
+
+// composedDecodeWith is composedDecode with after applied to the State once
+// its device is attached.
+func composedDecodeWith(t *testing.T, m *Model, dev string, ids, toks []int32, parts tier.Parts, noGraph, float bool, after func(*State), extra ...tier.Option) ([][]float32, tier.Stats, bool, map[string]int) {
 	t.Helper()
 	// The prompt is one chunk of a few rows: every arm reserves and warms the
 	// widths up to 64, each a form of the composer's where it serves them.
@@ -41,6 +112,9 @@ func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts
 	if s.GPULayers() != m.Cfg.NLayer {
 		t.Fatalf("%s took %d of %d blocks: %s", dev, s.GPULayers(), m.Cfg.NLayer, g.Err())
 	}
+	if after != nil {
+		after(s)
+	}
 	l, err := s.Prefill(ids)
 	if err != nil {
 		t.Fatal(err)
@@ -63,10 +137,11 @@ func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts
 // as ops and that one card of 16 GiB holds: dense models of the llama, qwen2,
 // qwen3, gemma, gemma2, gemma3, olmo2, exaone4, arcee, granite, hunyuan,
 // phi3 and falcon classes, and the text models of qwen2vl and qwen3vl. Those
-// state their rotaries over several position axes, but a served block turns
-// by main's table, and on a text row every axis's position is the same:
-// serving them says the blocks are stated and served at text positions,
-// nothing about the axes.
+// state their rotaries over several position axes, which the served table
+// turns each row by as the State states them; on a text row every axis's
+// position is the same, so serving them here says the blocks and the table
+// are served at text positions. TestMRopeMatchesTransformers decodes after a
+// picture, where the rotary positions leave the cache's.
 var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf", "tinyllama-1.1b-q3_K_M.gguf",
 	"gemma-2b.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf", "qwen2.5-1.5b-instruct-q4_k_m.gguf",
 	"SmolLM2-360M-Instruct-Q8_0.gguf", "stories15M-q8_0.gguf", "SmolVLM-256M-Instruct-Q8_0.gguf",
@@ -111,6 +186,9 @@ func declinesOf(st tier.Stats) string {
 		if k := st.BlockDeclines[i]; k > 0 {
 			out = append(out, fmt.Sprintf("blocks %d: %s", k, tier.DeclineName(i)))
 		}
+		if k := st.StepDeclines[i]; k > 0 {
+			out = append(out, fmt.Sprintf("tables and tokens %d: %s", k, tier.DeclineName(i)))
+		}
 	}
 	if len(out) == 0 {
 		return "none counted"
@@ -119,8 +197,8 @@ func declinesOf(st tier.Stats) string {
 }
 
 // composedResidue is what the tier still launches of its own on a one-row
-// step whose blocks and head the composer serves: the rotary table.
-var composedResidue = []string{"ropetable"}
+// step whose tables, blocks and head the composer serves: nothing.
+var composedResidue []string
 
 // bandRatio and bandWorst hold a composed arm to the spread of the tier's own
 // backends: at the median step it may be no further from the float reference
@@ -166,7 +244,7 @@ func TestComposedBlocksServe(t *testing.T) {
 		parts tier.Parts
 	}{
 		{"whole block", tier.ComposedBlock},
-		{"whole block and head", tier.ComposedBlock | tier.ComposedHead},
+		{"whole step", tier.ComposedStep},
 	}
 	ran := 0
 	for _, file := range servedModels {
@@ -252,7 +330,7 @@ func TestComposedBlocksServe(t *testing.T) {
 								// head the device does not hold (it did not fit beside the
 								// blocks) is named, not demanded.
 								served, _, unasked := st.ServedPart(parts)
-								for _, k := range []tier.Parts{tier.ComposedBlock, tier.ComposedHead, tier.ComposedPrompt} {
+								for _, k := range []tier.Parts{tier.ComposedTable, tier.ComposedBlock, tier.ComposedHead, tier.ComposedPrompt} {
 									if parts&k == 0 {
 										continue
 									}
@@ -281,6 +359,26 @@ func TestComposedBlocksServe(t *testing.T) {
 								if replayed := st.ReplayedPart(tier.ComposedBlock); blocks+replayed != len(toks)*m.Cfg.NLayer {
 									t.Fatalf("the composer ran %d block steps (%d of them replayed) where %d steps of %d blocks are %d",
 										blocks+replayed, replayed, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer)
+								}
+								// Every step writes every table the plan states.
+								if a.parts&tier.ComposedTable != 0 {
+									nt, _, _ := st.ServedPart(tier.ComposedTable)
+									if replayed := st.ReplayedPart(tier.ComposedTable); nt+replayed != len(toks)*composedTables(m) {
+										t.Fatalf("the composer wrote %d tables (%d of them replayed) in %d steps of %d tables", nt+replayed, replayed, len(toks), composedTables(m))
+									}
+								}
+								// Every step's input row gathered by the composer where
+								// the device holds the embedding as the head, and declined
+								// by name where it does not.
+								if a.parts&tier.ComposedEmbed != 0 {
+									ne, de, _ := st.ServedPart(tier.ComposedEmbed)
+									switch {
+									case ne+de != len(toks):
+										t.Fatalf("the input rows of %d steps served %d times and declined %d", len(toks), ne, de)
+									case m.Cfg.TiedEmbd && headOn && ne != len(toks):
+										t.Fatalf("the head is the embedding, yet the composer gathered %d of %d steps' rows (%s)", ne, len(toks), declinesOf(st))
+									}
+									t.Logf("composed %s: %d input rows gathered, %d declined (%s)", a.name, ne, de, declinesOf(st))
 								}
 								heads, _, _ := st.ServedPart(tier.ComposedHead)
 								if replayed := st.ReplayedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn &&
@@ -367,6 +465,37 @@ func TestComposedBlocksServe(t *testing.T) {
 										a.name, med, ratios[0], ratios[len(ratios)-1], worstGot, worstTier, widest[g])
 								}
 								t.Logf("composed %s: %d part steps served, worst NMSE from the tier %.3g, one position off %.3g", a.name, served, worst, off)
+								// A part the composer serves wrong must fall outside the
+								// band the arm is held to: the State's statement of the
+								// step changed under the served part, k the part.
+								violated := func(what string, k tier.Parts, after func(*State)) {
+									bad, bst, _, _ := composedDecodeWith(t, m, dev, ids, toks, parts, noGraph, false, after)
+									if n, d, _ := bst.ServedPart(k); n == 0 || d != 0 {
+										t.Fatalf("the arm with %s served the part %d times and declined it %d", what, n, d)
+									}
+									var ratios []float64
+									worstBad := 0.0
+									for i := first; i < len(ref); i++ {
+										eg := logitNMSE(bad[i], ref[i])
+										ratios = append(ratios, eg/logitNMSE(want[i], ref[i]))
+										worstBad = max(worstBad, eg)
+									}
+									slices.Sort(ratios)
+									med := ratios[len(ratios)/2]
+									if med <= bandRatio && worstBad <= bandWorst*widest[g] {
+										t.Fatalf("with %s the arm is %.3g at the median of the tier's distance and %.3g at its worst, inside the band (%.1f and %.1fx of %.3g): the gate cannot see it",
+											what, med, worstBad, bandRatio, bandWorst, widest[g])
+									}
+									t.Logf("with %s: median ratio %.3g, worst %.3g against the band's %.3g", what, med, worstBad, bandWorst*widest[g])
+								}
+								// The served tables turn each row by the positions the
+								// State states for it; the gathered row is the token's.
+								if a.parts&tier.ComposedTable != 0 {
+									violated("every row told a position 16 past its own", tier.ComposedTable, shiftAxes(16))
+								}
+								if ne, _, _ := st.ServedPart(tier.ComposedEmbed); ne > 0 {
+									violated("every row gathered at the next token's", tier.ComposedEmbed, shiftTokens(1, m.Vocab.Size()))
+								}
 								// Every buffer filled with NaN at allocation: a
 								// composed kernel reading what nothing wrote shows
 								// as a changed logit.
@@ -421,7 +550,7 @@ func TestComposedPromptIsNotServed(t *testing.T) {
 					// counts are the steps'.
 					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
 						tier.WithConfig(func(c *tier.Config) {
-							c.Composed, c.Census, c.NoGraph = tier.ComposedBlock|tier.ComposedHead, true, true
+							c.Composed, c.Census, c.NoGraph = tier.ComposedStep, true, true
 						})},
 						testTierOpts(t)...)...)
 					if err != nil || g == nil {

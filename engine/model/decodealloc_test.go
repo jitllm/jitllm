@@ -190,16 +190,16 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 				if name == "Llama-3.2-1B-Instruct-Q4_K_M.gguf" {
 					for _, shadow := range []bool{false, true} {
 						for _, noGraph := range []bool{false, true} {
-							arm := "composed blocks and head"
-							parts := []tier.Parts{tier.ComposedBlock, tier.ComposedHead}
+							arm := "composed step"
+							parts := []tier.Parts{tier.ComposedEmbed, tier.ComposedTable, tier.ComposedBlock, tier.ComposedHead, tier.ComposedSample}
 							if shadow {
-								arm = "composed blocks shadowed and head"
+								arm = "composed step shadowed"
 								parts = append(parts, tier.PartShadow)
 							}
 							t.Run(fmt.Sprintf("%s/%s/no graph %v", spec, arm, noGraph), func(t *testing.T) {
 								opts := []tier.Option{tier.WithDevices(spec),
 									tier.WithConfig(func(c *tier.Config) {
-										c.Composed, c.NoGraph, c.PromptRows = tier.ComposedBlock|tier.ComposedHead|tier.ComposedPrompt, noGraph, 64
+										c.Composed, c.NoGraph, c.PromptRows = tier.ComposedStep|tier.ComposedPrompt, noGraph, 64
 									})}
 								if shadow {
 									opts = append(opts, tier.WithComposedShadow())
@@ -210,6 +210,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 								}
 								defer gc.Close()
 								decodeAllocs(t, m, gc)
+								greedyAllocs(t, m, gc)
 								for _, k := range parts {
 									if n, _, _ := gc.Stats().ServedPart(k); n == 0 {
 										t.Fatalf("composed part %#x never ran: this arm measured the tier's own", uint8(k))
@@ -406,6 +407,36 @@ func stepAllocs(t *testing.T, m *Model, g *tier.GPU, mode stepMode) {
 // decodeAllocs decodes warm tokens on a fresh State -- on g when it is not
 // nil -- and fails on any heap allocation a token makes. It returns what the
 // host ran in the window, for an arm's selection check.
+// greedyAllocs is decodeAllocs's window decoded by ForwardGreedy, the token
+// selected on the device: a warm one allocates nothing.
+func greedyAllocs(t *testing.T, m *Model, g *tier.GPU) {
+	const warm, n = 160, 64
+	s := m.NewState(warm + n + 8)
+	defer s.Close()
+	if err := s.SetDevice(g); err != nil {
+		t.Fatal(err)
+	}
+	tok := int32(5)
+	for range warm {
+		got, err := s.ForwardGreedy(tok)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tok = got
+	}
+	c0, r0 := g.Stats(), m.container.Reads()
+	w := countAllocs(func() {
+		for range n {
+			got, err := s.ForwardGreedy(tok)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tok = got
+		}
+	})
+	allocVerdict(t, "greedy decode", w, n, m.container.Reads()-r0, g.Stats().Captures-c0.Captures)
+}
+
 func decodeAllocs(t *testing.T, m *Model, g *tier.GPU) decodeWindow {
 	// The window is positions warm..warm+n-1, inside one of the device's
 	// 128-position score grains (tier's scoreGrain): crossing one re-captures

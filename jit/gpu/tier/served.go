@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/graph"
@@ -34,17 +35,30 @@ const (
 	// partPrompt is a whole block at a prompt chunk's rows: one sequence's
 	// positions, each row its own descriptor.
 	partPrompt
+	// partRope is a step's rotary table (nn.LayerPlan.Tables), written where
+	// every block reads it.
+	partRope
+	// partSample is a step's greedy token over the head's logits
+	// (nn.Head.Sample), written where the device's argmax writes it.
+	partSample
+	// partEmbed is a decode step's input row (nn.Head.Embed), gathered from
+	// the resident head where the head is the embedding.
+	partEmbed
 	numParts
 )
 
-var partNames = [...]string{partHead: "head", partBlock: "block", partShadow: "shadow", partPrompt: "prompt block"}
+var partNames = [...]string{partHead: "head", partBlock: "block", partShadow: "shadow", partPrompt: "prompt block",
+	partRope: "table", partSample: "sample", partEmbed: "input rows"}
 
 // composedPart is a part of the model as the composer is asked for it: its
 // graph of generic ops, the formats of the weights it binds, and the tier's
 // buffers it binds them to -- weights and vectors by role, the step's tables
 // by the composer's name.
 type composedPart struct {
-	kind    partKind
+	kind partKind
+	// part is what the composer is asked to form it as: a block's (the
+	// zero), a table's or a sampling's.
+	part    jit.PartKind
 	graph   *graph.Graph
 	formats map[jlm.Role]jlm.Type
 	weights map[jlm.Role]*resident
@@ -154,6 +168,7 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 	g.Stats.ComposedLanes = lanes
 	return r.Form(jit.Request{
 		Graph:   sl.graph,
+		Part:    sl.part,
 		Formats: sl.formats,
 		Step:    jit.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: g.actWin},
 		Device: jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: lanes, Units: units(g.dev),
@@ -494,6 +509,19 @@ const (
 	// ComposedPrompt serves a prompt chunk's blocks whole at the chunk's
 	// rows: a form a width, as the tier keeps a scratch a width.
 	ComposedPrompt Parts = 1 << partPrompt
+	// ComposedTable serves a one-row step's rotary tables from their graphs
+	// (nn.LayerPlan.Tables) at the row's rotary positions.
+	ComposedTable Parts = 1 << partRope
+	// ComposedSample serves a one-row step's greedy token from its graph
+	// (nn.Head.Sample).
+	ComposedSample Parts = 1 << partSample
+	// ComposedEmbed serves a decode step's input row from its graph
+	// (nn.Head.Embed), gathered on the device the caller promises it to
+	// (nn.EmbedDevice).
+	ComposedEmbed Parts = 1 << partEmbed
+	// ComposedStep is every part of a one-row step: its input row, tables,
+	// blocks, head and token.
+	ComposedStep = ComposedEmbed | ComposedTable | ComposedBlock | ComposedHead | ComposedSample
 )
 
 // partDecline is why a decode step's or a prompt chunk's composed part is
@@ -528,6 +556,14 @@ const (
 	partHeadBias
 	partHeadOther
 	partHeadHidden
+	partNoTable
+	partTableHeld
+	partNoAxes
+	partNoSample
+	partSampleTopK
+	partSamplePick
+	partNoEmbed
+	partEmbedHeld
 	numPartDeclines
 )
 
@@ -556,6 +592,14 @@ var partDeclineNames = [numPartDeclines]string{
 	partHeadBias:   "a head bias the tier holds no vector for",
 	partHeadOther:  "a head graph of another State than the offered one",
 	partHeadHidden: "a head whose normed row is read back",
+	partNoTable:    "no table graph from the front end",
+	partTableHeld:  "a table whose planes or positions the tier does not hold",
+	partNoAxes:     "a table over several axes with no rotary positions for the row",
+	partNoSample:   "no sample graph from the front end",
+	partSampleTopK: "the sampler's top-k and penalty, which no graph states",
+	partSamplePick: "the label pick, which no graph states",
+	partNoEmbed:    "no input rows graph from the front end",
+	partEmbedHeld:  "input rows whose table the device does not hold (an embedding not the head's, a position table)",
 }
 
 // DeclineName is the reason a decline count is kept under, by its index in
@@ -832,6 +876,194 @@ func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf) (*servedPart, e
 	return sv, nil
 }
 
+// tableName is the table gr writes: rope.cs, or rope.cs.i past the first.
+func tableName(gr *graph.Graph) string {
+	if gr == nil || len(gr.Out) != 1 {
+		return ""
+	}
+	return gr.Values[gr.Out[0]].Name
+}
+
+// tableAxes says gr is a table over several position axes, which reads each
+// row's positions on them (rope.pos.axes) rather than one (rope.pos).
+func tableAxes(gr *graph.Graph) bool {
+	for _, o := range gr.Ops {
+		if o.Kind == graph.OpRopeTable && o.Attr.Sections != [4]int{} {
+			return true
+		}
+	}
+	return false
+}
+
+// servedTable is a step's rotary table gr served at one row: writing cs, its
+// planes those the tier folded for it and its positions pos, the live row
+// count and then each row's (four a row over several axes).
+func (g *devTier) servedTable(gr *graph.Graph, cs, planes, pos backend.Buf) (*servedPart, error) {
+	sk := servedKey{kind: partRope, graph: gr, rows: 1}
+	sv, err := g.servedFor(sk, func() (composedPart, error) {
+		name := tableName(gr)
+		if !strings.HasPrefix(name, "rope.cs") {
+			return composedPart{}, fmt.Errorf("the composed table writes %q, which is not a rotary table", name)
+		}
+		pn := "rope.pos"
+		if tableAxes(gr) {
+			pn = "rope.pos.axes"
+		}
+		pl := "rope.planes" + strings.TrimPrefix(name, "rope.cs")
+		return composedPart{kind: partRope, part: jit.PartTable, graph: gr, formats: map[jlm.Role]jlm.Type{},
+			tables: map[string]backend.Buf{name: cs, pl: planes, pn: pos}}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Bound again every step, by the names the build gave them.
+	for k := range sv.sl.tables {
+		switch {
+		case strings.HasPrefix(k, "rope.cs"):
+			sv.sl.tables[k] = cs
+		case strings.HasPrefix(k, "rope.planes"):
+			sv.sl.tables[k] = planes
+		default:
+			sv.sl.tables[k] = pos
+		}
+	}
+	return sv, nil
+}
+
+// tableServes is why a one-row step's tables at cache position pos are not
+// the ones the composer is asked for, serves where they are: a table graph
+// for each table the tier holds (cs, and csSWA where the plan has local
+// layers), the planes and positions each reads, and over several axes the
+// row's positions on them, which the caller states for this position
+// (SetRopeAxes). Callers hold g.mu.
+func (g *devTier) tableServes(bs *blockScratch, p *nn.LayerPlan, pos int) partDecline {
+	n := 0
+	for _, gr := range p.Tables {
+		if gr != nil {
+			n++
+		}
+	}
+	want := 1
+	if bs.csSWA != nil {
+		want = 2
+	}
+	switch {
+	case g.RopeTableHost:
+		return partCaller
+	case n != want || len(p.Tables) != want || p.Tables[0] == nil:
+		return partNoTable
+	case p.RopeSplit:
+		return partTableHeld
+	}
+	for i, gr := range p.Tables {
+		multi := tableAxes(gr)
+		cs, planes, at := g.tableBinds(bs, i)
+		switch {
+		case cs == nil || planes == nil || at == nil || multi && i > 0:
+			return partTableHeld
+		case multi && (len(g.ropeAxes) != 4 || g.ropeAxesAt != pos):
+			return partNoAxes
+		}
+	}
+	return partServes
+}
+
+// tableBinds is what table i of the plan writes and reads: the global table
+// cs or the local one, its planes, and its positions (rope.pos, or over
+// several axes rope.pos.axes).
+func (g *devTier) tableBinds(bs *blockScratch, i int) (cs, planes, pos backend.Buf) {
+	if i > 0 {
+		return bs.csSWA, bs.ropeTabSWA, bs.rpos
+	}
+	if p := &bs.p; len(p.Tables) > 0 && p.Tables[0] != nil && tableAxes(p.Tables[0]) {
+		return bs.cs, bs.ropeTabAxes, bs.rposAxes
+	}
+	return bs.cs, bs.ropeTab, bs.rpos
+}
+
+// prewarmComposedTables forms the step's tables where the composer serves
+// them, at placement: a table met first at a token formed inside it.
+// Callers hold g.mu.
+func (g *devTier) prewarmComposedTables() {
+	bs := g.bs
+	if g.NoPromptPrewarm || g.Composed&ComposedTable == 0 || bs == nil || bs.cs == nil {
+		return
+	}
+	g.prewarming = true
+	defer func() { g.prewarming = false }()
+	for i, gr := range bs.p.Tables {
+		if gr == nil {
+			continue
+		}
+		cs, planes, at := g.tableBinds(bs, i)
+		if cs == nil || planes == nil || at == nil {
+			continue
+		}
+		if _, err := g.servedTable(gr, cs, planes, at); err != nil {
+			g.LastErr = "the composed table: " + err.Error()
+		}
+	}
+}
+
+// embedServes is why a decode step's input row is not the one the composer
+// is asked for, serves where it is: the front end's graph of the input rows,
+// whose every table is the token embedding, which the device holds as the
+// head (nn.Head.Embeds).
+func (bs *blockScratch) embedServes() partDecline {
+	if bs.embedGraph == nil {
+		return partNoEmbed
+	}
+	if bs.head == nil || !bs.head.ok || !bs.headEmbeds {
+		return partEmbedHeld
+	}
+	// A promise a later call does not take is made real at home by the
+	// tier's gather (materializeLocked), which reads packed rows.
+	if _, ok := jlmType(bs.head.t); !ok || kernels.IsFloat(bs.head.t) {
+		return partEmbedHeld
+	}
+	for _, o := range bs.embedGraph.Ops {
+		for _, w := range o.Weight {
+			if w.Role != jlm.RoleTokenEmbd {
+				return partEmbedHeld
+			}
+		}
+	}
+	return partServes
+}
+
+// servedEmbed is the step's input row served at one row: each weight the
+// token embedding, which the device holds as the head, and the row's token
+// in tok.
+func (g *devTier) servedEmbed(bs *blockScratch, tok backend.Buf) (*servedPart, error) {
+	gr, w := bs.embedGraph, bs.head
+	t, ok := jlmType(w.t)
+	if !ok {
+		return nil, fmt.Errorf("the composed input rows: format %d has no container type", w.t)
+	}
+	sk := servedKey{kind: partEmbed, graph: gr, rows: 1, t: t}
+	sv, err := g.servedFor(sk, func() (composedPart, error) {
+		return composedPart{kind: partEmbed, part: jit.PartEmbed, graph: gr,
+			formats: map[jlm.Role]jlm.Type{jlm.RoleTokenEmbd: t}, weights: map[jlm.Role]*resident{jlm.RoleTokenEmbd: w},
+			tables: map[string]backend.Buf{"tokens": tok}}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sv.sl.weights[jlm.RoleTokenEmbd], sv.sl.tables["tokens"] = w, tok
+	return sv, nil
+}
+
+// servedSample is the step's greedy token, gr, served over one row's logits.
+func (g *devTier) servedSample(gr *graph.Graph) (*servedPart, error) {
+	if gr == nil || len(gr.In) != 1 || len(gr.Out) != 1 {
+		return nil, errors.New("the composed sample: a graph that is not logits in and a token out")
+	}
+	sk := servedKey{kind: partSample, graph: gr, rows: 1}
+	return g.servedFor(sk, func() (composedPart, error) {
+		return composedPart{kind: partSample, part: jit.PartSample, graph: gr, formats: map[jlm.Role]jlm.Type{}}, nil
+	})
+}
+
 // attendWindow is the window gr's attention states, and whether it is an
 // aligned chunk.
 func attendWindow(gr *graph.Graph) (int, bool) {
@@ -1018,6 +1250,7 @@ func (g *devTier) promptServes(l *layer, li int, p *nn.LayerPlan, bs *blockScrat
 // placement, as prewarmDecodePlans builds the decode plans: a form met first
 // at a token compiles inside it. Callers hold g.mu.
 func (g *devTier) prewarmComposed() {
+	g.prewarmComposedTables()
 	for li := range g.layers {
 		g.prewarmComposedBlock(li)
 	}
@@ -1123,6 +1356,20 @@ func keyBound(maxSeq int) int { return (maxSeq + scoreGrain - 1) / scoreGrain * 
 // blocks: a head met first at a token formed inside it. Callers hold g.mu.
 func (g *devTier) prewarmComposedHead() {
 	bs := g.bs
+	if !g.NoPromptPrewarm && g.Composed&ComposedSample != 0 && bs != nil && bs.sampleGraph != nil && g.argmaxOut != nil {
+		g.prewarming = true
+		if _, err := g.servedSample(bs.sampleGraph); err != nil {
+			g.LastErr = "the composed sample: " + err.Error()
+		}
+		g.prewarming = false
+	}
+	if !g.NoPromptPrewarm && g.Composed&ComposedEmbed != 0 && bs != nil && bs.embedServes() == partServes && g.embedTokens(bs) {
+		g.prewarming = true
+		if _, err := g.servedEmbed(bs, bs.embTok); err != nil {
+			g.LastErr = "the composed input rows: " + err.Error()
+		}
+		g.prewarming = false
+	}
 	if g.NoPromptPrewarm || g.Composed&ComposedHead == 0 || bs == nil || bs.head == nil ||
 		bs.headServes(bs.hNorm, false, false) != partServes {
 		return

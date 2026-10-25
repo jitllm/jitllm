@@ -1,11 +1,25 @@
 package model
 
 import (
+	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
+
+// negatedSample is sample over the logits negated: the token of the
+// smallest, a wrong pick's violation.
+func negatedSample(s *graph.Graph) *graph.Graph {
+	g := cloneGraph(s)
+	neg := graph.ValueID(len(g.Values))
+	g.Values = append(g.Values, graph.Value{Name: "negated", Width: g.Values[g.In[0]].Width})
+	g.Ops = slices.Insert(g.Ops, 0, graph.Op{Kind: graph.OpMap, In: []graph.ValueID{g.In[0]}, Out: []graph.ValueID{neg},
+		Attr: graph.Attrs{Fn: graph.MapMul, Const: -1}})
+	g.Ops[1].In = []graph.ValueID{neg}
+	return g
+}
 
 // TestComposedHeadTokens holds the tokens a device head selects -- the greedy
 // one (nn.Head.ArgmaxOnly) and the sampler's (nn.Head.SampleK) -- to the
@@ -16,16 +30,21 @@ import (
 // the host selects from the logits it finished. Either way the tokens are the
 // host's own, and the counts say which arm ran: a gate that cannot tell the
 // two would certify a device that selected before the bias, or a host that
-// never asked.
+// never asked. With the token served too (ComposedSample) the composer
+// selects every greedy token the device does, and over the logits negated
+// (a wrong pick) the tokens part from the host's.
 func TestComposedHeadTokens(t *testing.T) {
 	const gen = 24
 	ran := 0
 	for _, fx := range headFixtures {
 		t.Run(fx.name, func(t *testing.T) {
 			for _, dev := range stepDevices() {
-				for _, parts := range []tier.Parts{tier.ComposedHead, 0} {
+				for _, parts := range []tier.Parts{tier.ComposedHead | tier.ComposedSample, tier.ComposedHead, 0} {
 					name := dev + "/own head"
-					if parts != 0 {
+					switch {
+					case parts&tier.ComposedSample != 0:
+						name = dev + "/composed head and token"
+					case parts != 0:
 						name = dev + "/composed head"
 					}
 					t.Run(name, func(t *testing.T) {
@@ -90,6 +109,62 @@ func TestComposedHeadTokens(t *testing.T) {
 						}
 						if served != wantServed {
 							t.Fatalf("the device selected %d of %d greedy tokens, want %d (stages %03b, parts %d)", served, len(ids), wantServed, stages, parts)
+						}
+						if parts&tier.ComposedSample != 0 {
+							ns, ds, _ := g.Stats().ServedPart(tier.ComposedSample)
+							ns += g.Stats().ReplayedPart(tier.ComposedSample)
+							if ns != served || ds != 0 {
+								t.Fatalf("the composer selected %d of the %d greedy tokens the device did and was declined %d (%s)", ns, served, ds, declinesOf(g.Stats()))
+							}
+							// The violation: the token over the logits negated, on
+							// a tier of its own that records nothing, so that no
+							// recording of the right token replays.
+							set := m.frontGraphs()
+							orig := set.sample
+							m.front.mu.Lock()
+							set.sample = negatedSample(orig)
+							m.front.mu.Unlock()
+							vg, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+								tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph = parts, true }))
+							if err != nil || vg == nil {
+								t.Fatalf("%s did not open for the violation: %v", dev, err)
+							}
+							defer vg.Close()
+							vState := func() *State {
+								st := m.NewState(len(ids) + gen + 4)
+								st.SetDeviceFallback(false)
+								if err := st.SetDevice(vg); err != nil {
+									t.Fatal(err)
+								}
+								return st
+							}
+							va, vb := vState(), vState()
+							parted := 0
+							for _, id := range ids {
+								lg, err := va.Forward(id)
+								if err != nil {
+									t.Fatal(err)
+								}
+								got, err := vb.ForwardGreedy(id)
+								if err != nil {
+									t.Fatal(err)
+								}
+								if got != Greedy(lg) {
+									parted++
+								}
+							}
+							va.Close()
+							vb.Close()
+							m.front.mu.Lock()
+							set.sample = orig
+							m.front.mu.Unlock()
+							if vn, _, _ := vg.Stats().ServedPart(tier.ComposedSample); vn != len(ids) {
+								t.Fatalf("the violation's tier selected %d of %d tokens: it did not run the negated pick (%s)", vn, len(ids), declinesOf(vg.Stats()))
+							}
+							if parted == 0 {
+								t.Fatalf("with the token taken over the logits negated every greedy token is the host's: the gate cannot see a wrong pick")
+							}
+							t.Logf("%d greedy tokens selected by the composer; over the logits negated %d of %d part", ns, parted, len(ids))
 						}
 						// The sampler: the same seeded draws over the device's
 						// candidates and over the logits it returned.
