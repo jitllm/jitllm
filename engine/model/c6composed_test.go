@@ -13,11 +13,6 @@ import (
 var classicFixtures = []string{"synth-phi2", "synth-starcoder", "synth-stablelm", "synth-stablelm-par",
 	"synth-starcoder2", "synth-falcon", "synth-falcon40", "synth-nemotron", "synth-commandr", "synth-cohere2"}
 
-// classicDecline is the one reason the tier leaves a block the front end
-// states to its own kernels on these fixtures: a window shorter than the
-// session (synth-cohere2's sliding layers).
-const classicDecline = "a window"
-
 // coveredBlocks is how many of m's blocks the front end states as ops.
 func coveredBlocks(m *Model) int {
 	n := 0
@@ -29,23 +24,10 @@ func coveredBlocks(m *Model) int {
 	return n
 }
 
-// windowedBlocks is how many of m's blocks attend inside a window shorter than
-// a session of sessionLen positions, which the tier does not serve whole.
-func windowedBlocks(m *Model, sessionLen int) int {
-	n := 0
-	for li := range m.Cfg.NLayer {
-		if m.Cfg.SWA(li) && m.Cfg.SWAWindow < sessionLen {
-			n++
-		}
-	}
-	return n
-}
-
 // TestC6ServesComposed holds the composer to each classic-transformer
 // fixture's blocks on every device present: every block the front end states
 // served whole at every decode step -- served block steps equal steps times
-// the blocks the front end covers, less the windowed blocks, which the tier
-// declines by the one name classicDecline and counts exactly -- the logits
+// the blocks the front end covers, windowed ones among them, none declined -- the logits
 // within the device band of the host's, and each feature taken out of the
 // device session alone, as the composer reads it too, moving them: the composed
 // arm of TestC6OnEveryDevice, asked for in any build.
@@ -83,22 +65,20 @@ func TestC6ServesComposed(t *testing.T) {
 				// The blocks alone are asked for: the head's graph is the head's own work.
 				got, st, _, _ := composedDecode(t, m, dev, prompt, toks, tier.ComposedBlock, true, false)
 				served, declined, _ := st.ServedPart(tier.ComposedBlock)
-				windowed := windowedBlocks(m, len(g.IDs))
-				wantServed, wantDeclined := len(toks)*(covered-windowed), len(toks)*windowed
-				if served != wantServed || declined != wantDeclined || served == 0 {
-					t.Fatalf("%d block steps served and %d declined, where %d steps of %d covered blocks, %d of them windowed, are %d and %d",
-						served, declined, len(toks), covered, windowed, wantServed, wantDeclined)
+				if want := len(toks) * covered; served != want || declined != 0 {
+					t.Fatalf("%d block steps served and %d declined, where %d steps of %d covered blocks are %d served",
+						served, declined, len(toks), covered, want)
 				}
 				for i, k := range st.BlockDeclines {
-					if k > 0 && (tier.DeclineName(i) != classicDecline || k != wantDeclined) {
-						t.Fatalf("%d block step(s) declined because %s, where %d are windowed", k, tier.DeclineName(i), wantDeclined)
+					if k > 0 {
+						t.Fatalf("%d block step(s) declined because %s", k, tier.DeclineName(i))
 					}
 				}
 				if st.FormedAtStep != 0 {
 					t.Fatalf("%d composed block(s) formed at a step, not at the placement", st.FormedAtStep)
 				}
-				t.Logf("%s: %d of %d block steps served, %d declined by %q; the head is the tier's (front end: %s)",
-					dev, served, len(toks)*covered, declined, classicDecline, m.Uncovered(-1))
+				t.Logf("%s: %d of %d block steps served; the head is the tier's (front end: %s)",
+					dev, served, len(toks)*covered, m.Uncovered(-1))
 				for i := range got {
 					p := promptLen - 1 + i
 					e := logitNMSE(got[i], want[p])
