@@ -7651,3 +7651,50 @@ row where the composer's reads two.
   in servedHead (its failure path); front.go loses four.
   Open: the other redirectAll call sites (foldDecided, the affine pass) have
   the same shape as the cse that was quadratic and are not profiled.
+- **BitNet's per-token int8 inputs as ops; ternary weights in the composer's
+  matvec.** The front end refused BitNet by `UncoveredTokenAct`. Each
+  projection's input is now stated as main computes it
+  (`graph.Builder.Int8Codes`): the row's amax (`OpReduce` max over a new
+  `MapAbs`), its scale amax/127, the scale's reciprocal (a new `MapRecip`,
+  zero where the scale is), the row times it rounded half away from zero (a
+  new `MapRound`) and clamped to [-128, 127], a row of codes (a new value
+  element, `graph.ElemI8`); the product over the codes, then the row's scale
+  times it, the bias after. An input several projections share is quantized
+  once. The composer's int8 matvec takes a code row as its own int8 form, no
+  window and no scale (`Context.int8Codes`, the packing half of the int8 form
+  split out as `int8Pack`), so a TQ2_0 or TQ2_F32 weight runs as ternary
+  fields against int8 codes through `OpDot4`, its decode the format's generic
+  reading rules (`jlm.DecodeWord`), and no weight goes to a float; a device
+  without the int8 form (the CPU's profile) runs the decoded product over the
+  same codes. On a device whose division is not correctly rounded (Vulkan)
+  the reciprocal is the nearest float found in integers and x/127 the
+  quantizer's exact integer form, |x|'s with x's sign. A map operand one
+  element wide is read at element 0 rather than at i/W, which the CPU
+  lowering could not emit at a width that is not a power of two.
+  `UncoveredTokenAct` goes. Gates: `TestComposedGPUTernaryPerToken` (jit) on
+  a V100, CUDA and Vulkan, 80 of 80 shapes each (TQ2_0 and TQ2_F32, 1 to 129
+  rows, k 256 and 768, one and three tokens) against the oracle's quantizer
+  and matvec at NMSE under 1e-9 with guard words after the output, and each
+  sees the weight's words moved by one, the reference over 32-wide windows
+  and (at 78 of 80, the rest a cancelling sum) the codes rounded half to even;
+  `TestComposedGPUQuantMaps` holds the four maps to Go bit for bit through
+  both division forms (the integer forms' subnormals are the device's, as
+  main's `div127`). On the CPU (`TestComposedTernaryMatVecPerToken`) the
+  decoded form is right at 68 of 72 shapes and the int8 form, which the CPU's
+  profile does not ship, at 36 of 72: the rest are the x86 lowering's work
+  list, the same at base for any packed format (a one-row TQ2_0 matvec runs
+  out of registers, and a byte dot over three tokens at ragged row counts is
+  left outside vector lanes). The four synthetic fixtures' every block is
+  served on CUDA and Vulkan (composedCovers: 3 of 3 and 2 of 2 blocks, 36 and
+  24 block steps in 12, none declined), decode against the host at
+  9.6e-14..1.8e-13, every device violation 3.2e-02 or more;
+  `TestBitNetRealMatchesReference` keeps every arm, worst NMSE 1.2e-02..8.2e-02
+  against the 2e-01 bound, no confident flip; and bitnet-b1.58-2B-4T-i2_s
+  joins `servedModels`: on CUDA the composed blocks read a median 0.918 of the
+  tier's distance from the float reference (worst 0.0509, the widest backend's
+  0.0938), on Vulkan 1.053 (worst 0.0245), 4200 block and 4340 block-and-head
+  part steps each. `TestDecodeDoesNotAllocate` on synth-bitnet-i2s, every
+  block on the card in the composed build, reads 0 engine allocations on
+  every host, CUDA and Vulkan arm, and `go build -gcflags=-m` over
+  engine/graph, jit and engine/model reads the same 199 heap moves as the
+  tree before this work.

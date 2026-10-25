@@ -240,6 +240,10 @@ const (
 	ElemF32 Elem = iota
 	// ElemU32 is an index row: a selection's experts, a top-k's positions.
 	ElemU32
+	// ElemI8 is an int8 code row: every element an integer in [-128, 127],
+	// held as its float. A matrix product over one is over the codes, its
+	// scale applied by the ops after it.
+	ElemI8
 )
 
 // MapFn is an OpMap's function, or an OpReduce's combiner.
@@ -260,12 +264,15 @@ const (
 	MapLess                      // 1 where a < b, else 0
 	MapFma                       // a*b + c, the product not rounded before the sum
 	MapExpm1                     // exp(a) - 1, exact near zero where the difference cancels
+	MapAbs                       // |a|
+	MapRound                     // a to the nearest integer, halves away from zero
+	MapRecip                     // 1 / a
 )
 
 // Arity is how many operands f takes.
 func (f MapFn) Arity() int {
 	switch f {
-	case MapExp, MapSigmoid, MapSoftplus, MapSqrt, MapExpm1:
+	case MapExp, MapSigmoid, MapSoftplus, MapSqrt, MapExpm1, MapAbs, MapRound, MapRecip:
 		return 1
 	case MapWhere, MapFma:
 		return 3
@@ -275,7 +282,7 @@ func (f MapFn) Arity() int {
 	return 0
 }
 
-var mapFnNames = [...]string{"?", "add", "sub", "mul", "div", "max", "min", "exp", "sigmoid", "softplus", "sqrt", "where", "less", "fma", "expm1"}
+var mapFnNames = [...]string{"?", "add", "sub", "mul", "div", "max", "min", "exp", "sigmoid", "softplus", "sqrt", "where", "less", "fma", "expm1", "abs", "round", "recip"}
 
 func (f MapFn) String() string {
 	if int(f) < len(mapFnNames) {

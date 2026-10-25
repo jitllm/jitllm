@@ -150,24 +150,35 @@ func decomposeMatVecDecoded(rows, k int, wo Operand, x, out Operand, R int) (Pri
 // int8 form, main's arithmetic: each sub-block's integer dot of the
 // weight's codes and the input's, then the sum over sub-blocks of the
 // input's window scale times the weight's scale times that dot, less the
-// weight's bias times the input's codes' sum over the sub-block. ok is false
-// where the format's sub-blocks do not sit in the form's windows.
+// weight's bias times the input's codes' sum over the sub-block. An input
+// the graph states as codes (graph.ElemI8) is its own int8 form, of no
+// window and no scale: the sum is the codes' product with the weight. ok is
+// false where the format's sub-blocks do not sit in the form's windows.
 func decomposeMatVecInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout) (prims []Prim, ok bool) {
 	w, q, v := o.Weight[0], c.Int8, o.In[0]
 	if q == nil || q.Word != 4 || l.Sub%q.Sums != 0 || w.K%(l.Sub*l.SuperSub) != 0 {
 		return nil, false
 	}
-	win := c.window(v)
-	if win%l.Sub != 0 || c.width(v)%win != 0 {
-		return nil, false
+	codes := c.Graph.Values[v].Elem == graph.ElemI8
+	win, nw := 0, 0
+	if !codes {
+		win = c.window(v)
+		if win%l.Sub != 0 || c.width(v)%win != 0 {
+			return nil, false
+		}
+		nw = c.width(v) / win
 	}
 	if !c.formed[v] {
 		c.formed[v] = true
-		prims = c.int8(v)
+		if codes {
+			prims = c.int8Codes(v)
+		} else {
+			prims = c.int8(v)
+		}
 	}
 	U, I, F := ir.U32, ir.I32, ir.F32
 	R, rows, K := c.Step.Rows, w.Rows, w.K
-	nsub, nwd, nw, ns := K/l.Sub, K/q.Word, c.width(v)/win, c.width(v)/q.Sums
+	nsub, nwd, ns := K/l.Sub, K/q.Word, c.width(v)/q.Sums
 	x := c.value(v)
 	words := Operand{Kind: OperandScratch, Name: x.Name + ".q8a", Elem: U}
 	scales := Operand{Kind: OperandScratch, Name: x.Name + ".q8x"}
@@ -209,13 +220,19 @@ func decomposeMatVecInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout) (
 	first := e.op(OpMul, U, es, e.u(uint32(l.Sub)))
 	_, scale, bias := jlm.DecodeParts[int](ep, l, rows, erow, first)
 	df := e.un(OpCvtF32, F, e.at(0, []int{R, rows, nsub}, er, erow, es))
-	xs := e.load(1, e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(nw))), e.op(OpDiv, U, first, e.u(uint32(win)))))
+	xs := -1
+	if !codes {
+		xs = e.load(1, e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(nw))), e.op(OpDiv, U, first, e.u(uint32(win)))))
+	}
 	sumAt := e.op(OpAdd, U, e.u(uint32(R*nw)), e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(ns))), e.op(OpDiv, U, first, e.u(uint32(q.Sums)))))
 	csum := e.load(1, sumAt)
 	for t := 1; t < l.Sub/q.Sums; t++ {
 		csum = e.op(OpAdd, F, csum, e.load(1, e.op(OpAdd, U, sumAt, e.u(uint32(t)))))
 	}
-	e.op(OpMul, F, xs, e.op(OpSub, F, e.op(OpMul, F, scale, df), e.op(OpMul, F, bias, csum)))
+	sum := e.op(OpSub, F, e.op(OpMul, F, scale, df), e.op(OpMul, F, bias, csum))
+	if !codes {
+		e.op(OpMul, F, xs, sum)
+	}
 	return append(prims, Prim{Kind: PrimReduce, Shape: []int{R, rows, nsub}, In: ein, Out: c.value(o.Out[0]), Combine: OpAdd,
 		Expr: e.e, Facts: efacts}), true
 }

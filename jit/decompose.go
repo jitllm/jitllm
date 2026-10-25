@@ -149,10 +149,11 @@ func decomposeMatVec(o graph.Op, c *Context) ([]Prim, error) {
 	if err != nil {
 		return nil, err
 	}
+	codes := c.Graph.Values[o.In[0]].Elem == graph.ElemI8
 	switch wo.Format {
 	case jlm.TypeF32:
 	case jlm.TypeQ8:
-		if c.Int8 != nil {
+		if c.Int8 != nil && !codes {
 			return decomposeMatVecQ8(o, c, wo)
 		}
 		fallthrough
@@ -172,7 +173,7 @@ func decomposeMatVec(o graph.Op, c *Context) ([]Prim, error) {
 	r, row, k := x.coord(0), x.coord(1), x.coord(2)
 	x.op(OpMul, ir.F32, x.at(0, []int{w.Rows, w.K}, row, k), x.at(1, c.rows(o.In[0]), r, k))
 	var prims []Prim
-	if v := o.In[0]; c.Int8 != nil && c.Part == PartBlock && !c.formed[v] && c.producedByRow(v) && c.width(v)%c.Int8.Window == 0 {
+	if v := o.In[0]; c.Int8 != nil && c.Part == PartBlock && !codes && !c.formed[v] && c.producedByRow(v) && c.width(v)%c.Int8.Window == 0 {
 		c.formed[v] = true
 		prims = c.int8(v)
 	}

@@ -141,3 +141,24 @@ func (s *Builder) Emit(kind OpKind, in []ValueID, outs []Result, w []Binding, a 
 	s.G.op(Op{Kind: kind, In: in, Out: ids, Weight: w, Attr: a, Reads: reads, Writes: writes})
 	return ids
 }
+
+// Int8Codes is x quantized to int8 per row by its largest magnitude: the
+// row's amax over 127 is its scale d, and each element times 1/d (0 where d
+// is 0) rounded half away from zero and clamped to int8's range is its code.
+// A matrix product over the codes, times d, is the product over x's int8
+// form.
+func (s *Builder) Int8Codes(x ValueID) (codes, scale ValueID) {
+	w := s.width(x)
+	m := func(name string, fn MapFn, k float64, width int, in ...ValueID) ValueID {
+		return s.Emit(OpMap, in, []Result{{Name: name, Width: width}}, nil, Attrs{Fn: fn, Const: k}, nil, nil)[0]
+	}
+	amax := s.Emit(OpReduce, []ValueID{m("q8.abs", MapAbs, 0, w, x)}, []Result{{Name: "q8.amax", Width: 1}}, nil,
+		Attrs{Fn: MapMax}, nil, nil)[0]
+	scale = m("q8.scale", MapDiv, 127, 1, amax)
+	inv := m("q8.inv", MapWhere, 0, 1, scale, m("q8.recip", MapRecip, 0, 1, scale))
+	r := m("q8.round", MapRound, 0, w, m("q8.t", MapMul, 0, w, x, inv))
+	hi := m("q8.hi", MapMin, 127, w, r)
+	codes = s.Emit(OpMap, []ValueID{hi}, []Result{{Name: "q8.codes", Width: w, Elem: ElemI8}}, nil,
+		Attrs{Fn: MapMax, Const: -128}, nil, nil)[0]
+	return codes, scale
+}

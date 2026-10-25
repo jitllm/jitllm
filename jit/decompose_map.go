@@ -38,10 +38,20 @@ func (x *exprs) expm1(a int) int {
 	return x.sel(F, x.op(OpLess, ir.Pred, x.op(OpMax, F, a, x.neg(a)), x.f(0.5)), small, big)
 }
 
-// mapFn is f over operands a.
-func (x *exprs) mapFn(f graph.MapFn, a []int) (int, error) {
+// mapFn is f over operands a, its divisions correctly rounded where exact
+// says the device's are.
+func (x *exprs) mapFn(f graph.MapFn, a []int, exact bool) (int, error) {
 	F := ir.F32
 	switch f {
+	case graph.MapAbs:
+		return x.abs(a[0]), nil
+	case graph.MapRound:
+		return x.round(a[0]), nil
+	case graph.MapRecip:
+		if exact {
+			return x.op(OpDiv, F, x.f(1), a[0]), nil
+		}
+		return x.recip(a[0]), nil
 	case graph.MapAdd:
 		return x.op(OpAdd, F, a[0], a[1]), nil
 	case graph.MapSub:
@@ -83,7 +93,7 @@ func decomposeMap(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.Out) != 1 || len(o.Weight) > 1 {
 		return nil, fmt.Errorf("a map of %d outputs, %d weights", len(o.Out), len(o.Weight))
 	}
-	if c.Graph.Values[o.Out[0]].Elem != graph.ElemF32 {
+	if e := c.Graph.Values[o.Out[0]].Elem; e != graph.ElemF32 && e != graph.ElemI8 {
 		return nil, fmt.Errorf("a map to %s values", c.Graph.Values[o.Out[0]].Name)
 	}
 	sh := c.rows(o.Out[0])
@@ -95,7 +105,10 @@ func decomposeMap(o graph.Op, c *Context) ([]Prim, error) {
 			return 0, fmt.Errorf("an operand of %d elements under a map of %d", n, W)
 		}
 		e := i
-		if n != W {
+		switch {
+		case n == 1:
+			e = x.u(0)
+		case n != W:
 			e = x.op(OpDiv, ir.U32, i, x.u(uint32(W/n)))
 		}
 		return x.at(j, []int{R, n}, r, e), nil
@@ -143,13 +156,20 @@ func decomposeMap(o graph.Op, c *Context) ([]Prim, error) {
 		in = append(in, Operand{Kind: OperandVector, Role: w.Role, Name: w.Role.String()})
 	}
 	n := o.Attr.Fn.Arity()
-	if len(args) < n {
+	byConst := len(args) < n
+	if byConst {
 		args = append(args, x.f(float32(o.Attr.Const)))
 	}
 	if len(args) != n {
 		return nil, fmt.Errorf("a %v of %d operands", o.Attr.Fn, len(args))
 	}
-	if _, err := x.mapFn(o.Attr.Fn, args); err != nil {
+	if o.Attr.Fn == graph.MapDiv && byConst && o.Attr.Const == 127 && !c.exactDiv {
+		// A division by 127 is correctly rounded in integers: |a|'s, with
+		// a's sign.
+		U := ir.U32
+		q := x.un(OpBitcast, U, x.scale(x.abs(args[0])))
+		x.un(OpBitcast, ir.F32, x.op(OpAdd, U, q, x.op(OpAnd, U, x.un(OpBitcast, U, args[0]), x.u(0x80000000))))
+	} else if _, err := x.mapFn(o.Attr.Fn, args, c.exactDiv); err != nil {
 		return nil, err
 	}
 	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e}}, nil

@@ -75,7 +75,8 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 	"hunyuan/tencent_Hunyuan-0.5B-Instruct-Q4_K_M.gguf", "Phi-3.5-mini-instruct-Q4_K_M.gguf",
 	"gemma-3-1b-it-Q4_K_M.gguf", "gemma-3-4b-it-Q4_K_M.gguf", "gemma-2-2b-it-Q4_K_M.gguf",
 	"falcon/falcon-7b-instruct.Q4_K_M.gguf",
-	"Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "Qwen3VL-2B-Instruct-Q4_K_M.gguf"}
+	"Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+	"bitnet-b1.58-2B-4T-i2_s.gguf"}
 
 // formedModels is what the front end states and the serving gate does not
 // run: a model the tier cannot place (stories260K's 172-wide rows, which its
@@ -97,7 +98,7 @@ var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1
 	"synth-starcoder2.gguf", "synth-falcon.gguf", "synth-falcon40.gguf", "synth-nemotron.gguf",
 	"synth-commandr.gguf", "synth-cohere2.gguf",
 	"synth-qwen2vl.gguf", "synth-qwen25vl.gguf", "synth-qwen3vl.gguf",
-	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-apertus.gguf"}
+	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-apertus.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf"}
 
 // declinesOf is every decline the tier counted, the head's and the blocks',
 // by name (tier.DeclineName).

@@ -34,10 +34,42 @@ func (x *exprs) scale(amax int) int {
 // corrected to the float nearest 1/d by testing the four candidates below
 // it in integers where every exponent allows, zero where d is not positive.
 func (x *exprs) inverse(amax, d int) int {
+	v, pos := x.nearestRecip(d, x.op(OpDiv, ir.F32, x.f(127), amax))
+	return x.sel(ir.F32, pos, v, x.f(0))
+}
+
+// recip is 1/a correctly rounded: the nearest float to the reciprocal of |a|
+// from the device's 1/|a|, with a's sign; the device's own where an exponent
+// leaves the integer test's range.
+func (x *exprs) recip(a int) int {
 	U, F := ir.U32, ir.F32
-	r := x.op(OpDiv, F, x.f(127), amax)
+	m := x.abs(a)
+	r := x.op(OpDiv, F, x.f(1), m)
+	v, _ := x.nearestRecip(m, r)
+	normal := x.op(OpLess, ir.Pred, x.op(OpSub, U, x.op(OpShr, U, x.un(OpBitcast, U, m), x.u(23)), x.u(1)), x.u(254))
+	v = x.sel(F, normal, v, r)
+	return x.un(OpBitcast, F, x.op(OpAdd, U, x.un(OpBitcast, U, v), x.op(OpAnd, U, x.un(OpBitcast, U, a), x.u(0x80000000))))
+}
+
+// round is a to the nearest integer, halves away from zero: |a|'s integer
+// part, one more where the fraction is a half or over, with a's sign; a
+// itself from 2^23 on, where every float is an integer.
+func (x *exprs) round(a int) int {
+	U, F := ir.U32, ir.F32
+	m := x.abs(a)
+	f := x.un(OpCvtF32, F, x.un(OpCvtI32, ir.I32, m))
+	r := x.sel(F, x.op(OpLess, ir.Pred, x.op(OpSub, F, m, f), x.f(0.5)), f, x.op(OpAdd, F, f, x.f(1)))
+	r = x.un(OpBitcast, F, x.op(OpAdd, U, x.un(OpBitcast, U, r), x.op(OpAnd, U, x.un(OpBitcast, U, a), x.u(0x80000000))))
+	return x.sel(F, x.op(OpLess, ir.Pred, m, x.f(1<<23)), r, a)
+}
+
+// nearestRecip is the float nearest 1/d from r within a few units of it:
+// r refined once by Newton, then the four candidates below it tested in
+// integers where every exponent allows, r where one does not; pos is d > 0.
+func (x *exprs) nearestRecip(d, r int) (v, pos int) {
+	U, F := ir.U32, ir.F32
 	r = x.op(OpAdd, F, r, x.op(OpMul, F, r, x.op(OpSub, F, x.f(1), x.op(OpMul, F, d, r))))
-	pos := x.op(OpLess, ir.Pred, x.f(0), d)
+	pos = x.op(OpLess, ir.Pred, x.f(0), d)
 	ob, db := x.un(OpBitcast, U, x.f(1)), x.un(OpBitcast, U, d)
 	oe, de := x.op(OpShr, U, ob, x.u(23)), x.op(OpShr, U, db, x.u(23))
 	om := x.op(OpAdd, U, x.op(OpAnd, U, ob, x.u(0x7fffff)), x.u(0x800000))
@@ -55,10 +87,10 @@ func (x *exprs) inverse(amax, d int) int {
 	okO := x.op(OpLess, ir.Pred, x.op(OpSub, U, oe, x.u(1)), x.u(254))
 	okD := x.op(OpLess, ir.Pred, x.op(OpSub, U, de, x.u(1)), x.u(254))
 	okR := x.op(OpLess, ir.Pred, x.op(OpSub, U, x.op(OpShr, U, rb, x.u(23)), x.u(2)), x.u(252))
-	v := x.sel(F, okR, x.un(OpBitcast, F, acc), r)
+	v = x.sel(F, okR, x.un(OpBitcast, F, acc), r)
 	v = x.sel(F, okD, v, r)
 	v = x.sel(F, okO, v, r)
-	return x.sel(F, pos, v, x.f(0))
+	return v, pos
 }
 
 // window is how many of value v's elements share a scale: the form's
@@ -76,13 +108,12 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	sh := c.rows(v)
 	R, W := sh[0], sh[1]
 	ww := c.window(v)
-	nw, nwd, ns := W/ww, W/q.Word, W/q.Sums
+	nw, ns := W/ww, W/q.Sums
 	x := c.value(v)
 	temp := func(name string, t ir.Type) Operand {
 		return Operand{Kind: OperandScratch, Name: x.Name + "." + name, Elem: t, Temp: true}
 	}
-	amax, inv, codes, wsum := temp("amax", F), temp("inv", F), temp("q", I), temp("wsum", I)
-	words := Operand{Kind: OperandScratch, Name: x.Name + ".q8a", Elem: U}
+	amax, inv, codes := temp("amax", F), temp("inv", F), temp("q", I)
 	scales := Operand{Kind: OperandScratch, Name: x.Name + ".q8x"}
 	win := []int{R, nw}
 	flat := func(e *exprs, r, i, n int) int { return e.op(OpAdd, U, e.op(OpMul, U, r, e.u(uint32(n))), i) }
@@ -111,10 +142,45 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	half := k.un(OpBitcast, F, k.op(OpAdd, U, k.op(OpAnd, U, k.un(OpBitcast, U, t), k.u(0x80000000)), k.u(0x3f000000)))
 	k.un(OpCvtI32, I, k.op(OpAdd, F, t, half))
 
+	ext := R * (nw + ns)
+	return append([]Prim{
+		{Kind: PrimReduce, Shape: []int{R, nw, ww}, In: []Operand{x}, Out: amax, Combine: OpMax, Expr: a.e},
+		{Kind: PrimMap, Shape: win, In: []Operand{amax}, Expr: d.e, Stores: []PrimStore{{Out: scales, Index: dix, Value: ds, Extent: ext}}},
+		{Kind: PrimMap, Shape: win, In: []Operand{amax, scales}, Out: inv, Expr: r.e, Facts: Facts{Extents: map[int]int{1: ext}}},
+		{Kind: PrimMap, Shape: sh, In: []Operand{x, inv}, Out: codes, Expr: k.e},
+	}, c.int8Pack(v, codes, false, nw)...)
+}
+
+// int8Codes is the int8 form of value v, a row of codes the graph states
+// (graph.ElemI8, held as floats): its codes packed into words, each word's
+// sum and the sums a Sums, the sums the scales' only words.
+func (c *Context) int8Codes(v graph.ValueID) []Prim { return c.int8Pack(v, c.value(v), true, 0) }
+
+// int8Pack is the codes of value v packed Word to a word, each word's sum,
+// and the sums a Sums into its scales after the windows' nw a row: the codes
+// i32, or floats where float is set.
+func (c *Context) int8Pack(v graph.ValueID, codes Operand, float bool, nw int) []Prim {
+	q := c.Int8
+	U, F, I := ir.U32, ir.F32, ir.I32
+	sh := c.rows(v)
+	R, W := sh[0], sh[1]
+	nwd, ns := W/q.Word, W/q.Sums
+	x := c.value(v)
+	wsum := Operand{Kind: OperandScratch, Name: x.Name + ".wsum", Elem: I, Temp: true}
+	words := Operand{Kind: OperandScratch, Name: x.Name + ".q8a", Elem: U}
+	scales := Operand{Kind: OperandScratch, Name: x.Name + ".q8x"}
+	code := func(e *exprs, ax ...int) int {
+		a := e.at(0, sh, ax...)
+		if float {
+			a = e.un(OpCvtI32, I, a)
+		}
+		return a
+	}
+
 	var p exprs
 	packed := -1
 	for j := 0; j < q.Word; j++ {
-		e := p.at(0, sh, p.coord(0), p.op(OpAdd, U, p.op(OpMul, U, p.coord(1), p.u(uint32(q.Word))), p.u(uint32(j))))
+		e := code(&p, p.coord(0), p.op(OpAdd, U, p.op(OpMul, U, p.coord(1), p.u(uint32(q.Word))), p.u(uint32(j))))
 		b := p.op(OpAnd, U, e, p.u(255))
 		if j > 0 {
 			packed = p.op(OpAdd, U, packed, p.op(OpShl, U, b, p.u(uint32(8*j))))
@@ -124,20 +190,16 @@ func (c *Context) int8(v graph.ValueID) []Prim {
 	}
 
 	var s exprs
-	s.at(0, sh, s.coord(0), s.op(OpAdd, U, s.op(OpMul, U, s.coord(1), s.u(uint32(q.Word))), s.coord(2)))
+	code(&s, s.coord(0), s.op(OpAdd, U, s.op(OpMul, U, s.coord(1), s.u(uint32(q.Word))), s.coord(2)))
 
 	per := q.Sums / q.Word
 	var f exprs
 	f.un(OpCvtF32, F, f.at(0, []int{R, nwd}, f.coord(0), f.op(OpAdd, U, f.op(OpMul, U, f.coord(1), f.u(uint32(per))), f.coord(2))))
 	var fi exprs
-	fi.op(OpAdd, U, flat(&fi, fi.coord(0), fi.coord(1), ns), fi.u(uint32(R*nw)))
+	fi.op(OpAdd, U, fi.op(OpAdd, U, fi.op(OpMul, U, fi.coord(0), fi.u(uint32(ns))), fi.coord(1)), fi.u(uint32(R*nw)))
 
 	ext := R * (nw + ns)
 	return []Prim{
-		{Kind: PrimReduce, Shape: []int{R, nw, ww}, In: []Operand{x}, Out: amax, Combine: OpMax, Expr: a.e},
-		{Kind: PrimMap, Shape: win, In: []Operand{amax}, Expr: d.e, Stores: []PrimStore{{Out: scales, Index: dix, Value: ds, Extent: ext}}},
-		{Kind: PrimMap, Shape: win, In: []Operand{amax, scales}, Out: inv, Expr: r.e, Facts: Facts{Extents: map[int]int{1: ext}}},
-		{Kind: PrimMap, Shape: sh, In: []Operand{x, inv}, Out: codes, Expr: k.e},
 		{Kind: PrimMap, Shape: []int{R, nwd}, In: []Operand{codes}, Out: words, Expr: p.e},
 		{Kind: PrimReduce, Shape: []int{R, nwd, q.Word}, In: []Operand{codes}, Out: wsum, Combine: OpAdd, Type: I, Expr: s.e},
 		{Kind: PrimReduce, Shape: []int{R, ns, per}, In: []Operand{wsum}, Out: scales, Combine: OpAdd, Start: StartFirst,

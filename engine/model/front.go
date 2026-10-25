@@ -48,7 +48,6 @@ const (
 	UncoveredNGram
 	UncoveredSparseAct
 	UncoveredAct
-	UncoveredTokenAct
 	UncoveredPooling
 	UncoveredEmbedRows
 	UncoveredUnbound
@@ -78,7 +77,6 @@ var uncoveredNames = [numUncovered]string{
 	UncoveredNGram:       "an n-gram embedding",
 	UncoveredSparseAct:   "a gaussian top-k activation",
 	UncoveredAct:         "an activation the op language does not state",
-	UncoveredTokenAct:    "projection inputs quantized to int8 per token",
 	UncoveredPooling:     "a pooled head (an embedding model's)",
 	UncoveredEmbedRows:   "input rows beyond the token's row, a scale and a position table",
 	UncoveredUnbound:     "stored tensors its graph does not bind",
@@ -314,10 +312,6 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredKVShared
 	case m.layers[li].vFromK:
 		return UncoveredVFromK
-	case c.TokenAct:
-		// The norms inside a sublayer are stored only with this (model.go), so
-		// until it is stated no container reaches the graph's statement of them.
-		return UncoveredTokenAct
 	case c.ClampKQV != 0:
 		return UncoveredClamp
 	case c.AttnTempScale != 0:
@@ -436,6 +430,26 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		}
 		return b.Add(x, y)
 	}
+	// A projection's input is quantized to int8 per token where the model's
+	// are (Config.TokenAct): the product is over the row's codes, then scaled
+	// by the row's scale, the bias added after. Inputs shared by several
+	// projections are quantized once.
+	codes := map[graph.ValueID][2]graph.ValueID{}
+	matvec := func(x graph.ValueID, r jlm.Role, rows int, bias ...jlm.Role) graph.ValueID {
+		if !c.TokenAct {
+			return b.MatVec(x, r, rows, bias...)
+		}
+		q, ok := codes[x]
+		if !ok {
+			q[0], q[1] = b.Int8Codes(x)
+			codes[x] = q
+		}
+		y := mapRow(b, "scaled", graph.Attrs{Fn: graph.MapMul}, nil, rows, b.MatVec(q[0], r, rows), q[1])
+		for _, br := range bias {
+			y = mapRow(b, "biased", graph.Attrs{Fn: graph.MapAdd}, []graph.Binding{{Role: br, K: rows}}, rows, y)
+		}
+		return y
+	}
 	x := b.In("x", d)
 	n := preNorm(x, jlm.RoleAttnNorm, jlm.RoleAttnNormBias)
 	// With an output gate the q projection is double width: each head's query,
@@ -444,9 +458,9 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if c.AttnOutGate {
 		qrows = 2 * qdim
 	}
-	q := b.MatVec(n, jlm.RoleAttnQ, qrows, stored(jlm.RoleAttnQBias)...)
-	k := b.MatVec(n, jlm.RoleAttnK, kvDim, stored(jlm.RoleAttnKBias)...)
-	v := b.MatVec(n, jlm.RoleAttnV, kvDim, stored(jlm.RoleAttnVBias)...)
+	q := matvec(n, jlm.RoleAttnQ, qrows, stored(jlm.RoleAttnQBias)...)
+	k := matvec(n, jlm.RoleAttnK, kvDim, stored(jlm.RoleAttnKBias)...)
+	v := matvec(n, jlm.RoleAttnV, kvDim, stored(jlm.RoleAttnVBias)...)
 	var gate graph.ValueID
 	if c.AttnOutGate {
 		both := q
@@ -495,7 +509,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		att = b.ActMul(graph.ActSigmoid, gate, att)
 	}
 	att = norm(att, jlm.RoleAttnSubNorm)
-	x2 := resid(x, norm(b.MatVec(att, jlm.RoleAttnOut, d, stored(jlm.RoleAttnOutBias)...), jlm.RolePostAttnNorm))
+	x2 := resid(x, norm(matvec(att, jlm.RoleAttnOut, d, stored(jlm.RoleAttnOutBias)...), jlm.RolePostAttnNorm))
 	// A parallel block's MLP reads the block's input: through its own norm
 	// where it stores one, through the attention's where the two share one.
 	ffnIn := x2
@@ -509,17 +523,17 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	var h graph.ValueID
 	switch {
 	case has(jlm.RoleFFNGate):
-		gt := b.MatVec(n2, jlm.RoleFFNGate, nffn)
-		up := b.MatVec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...)
+		gt := matvec(n2, jlm.RoleFFNGate, nffn)
+		up := matvec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...)
 		h = b.ActMul(graphActs[c.Act], gt, up)
 	case c.Act == nn.ActXIELU:
-		h = xielu(b, b.MatVec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...), nffn)
+		h = xielu(b, matvec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...), nffn)
 	default:
-		up := b.MatVec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...)
+		up := matvec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...)
 		h = b.Emit(graph.OpAct, []graph.ValueID{up}, []graph.Result{{Name: "act", Width: nffn}}, nil, graph.Attrs{Act: graphActs[c.Act]}, nil, nil)[0]
 	}
 	h = norm(h, jlm.RoleFFNSubNorm)
-	down := b.MatVec(h, jlm.RoleFFNDown, d, stored(jlm.RoleFFNDownBias)...)
+	down := matvec(h, jlm.RoleFFNDown, d, stored(jlm.RoleFFNDownBias)...)
 	b.Out(resid(x2, norm(down, jlm.RolePostFFNNorm)))
 	if err := graph.Verify(b.G, f); err != nil {
 		return nil, UncoveredUnverified, fmt.Errorf("the block's graph does not verify: %w", err)
@@ -528,6 +542,11 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		return nil, UncoveredUnbound, fmt.Errorf("the container stores %v for the block, which its graph does not bind", u)
 	}
 	return b.G, Covered, nil
+}
+
+// mapRow is one OpMap of in by a into a row of width, binding w.
+func mapRow(b *graph.Builder, name string, a graph.Attrs, w []graph.Binding, width int, in ...graph.ValueID) graph.ValueID {
+	return b.Emit(graph.OpMap, in, []graph.Result{{Name: name, Width: width}}, w, a, nil, nil)[0]
 }
 
 // xielu is the activation of x from the four numbers its block stores
