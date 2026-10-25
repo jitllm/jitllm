@@ -182,23 +182,38 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 				// (Config.Composed), on a tier of its own: its warm token
 				// allocates nothing either. Without the captured graph too,
 				// where every token runs the served code (a replayed
-				// recording runs none of it).
+				// recording runs none of it). The shadow arm too, which runs
+				// each block's form beside the tier's kernels and compares
+				// the two (Config.ComposedShadow): its buffers are made at the
+				// placement, so a warm step makes none.
 				if name == "Llama-3.2-1B-Instruct-Q4_K_M.gguf" {
-					for _, noGraph := range []bool{false, true} {
-						t.Run(fmt.Sprintf("%s/composed blocks and head/no graph %v", spec, noGraph), func(t *testing.T) {
-							gc, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-								tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph = tier.ComposedBlock|tier.ComposedHead, noGraph })}, testTierOpts(t)...)...)
-							if err != nil || gc == nil {
-								noDevice(t, spec, err)
+					for _, shadow := range []bool{false, true} {
+						for _, noGraph := range []bool{false, true} {
+							arm := "composed blocks and head"
+							parts := []tier.Parts{tier.ComposedBlock, tier.ComposedHead}
+							if shadow {
+								arm = "composed blocks shadowed and head"
+								parts = append(parts, tier.PartShadow)
 							}
-							defer gc.Close()
-							decodeAllocs(t, m, gc)
-							for _, k := range []tier.Parts{tier.ComposedBlock, tier.ComposedHead} {
-								if n, _, _ := gc.Stats().ServedPart(k); n == 0 {
-									t.Fatalf("composed part %#x never ran: this arm measured the tier's own", uint8(k))
+							t.Run(fmt.Sprintf("%s/%s/no graph %v", spec, arm, noGraph), func(t *testing.T) {
+								opts := []tier.Option{tier.WithDevices(spec),
+									tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph = tier.ComposedBlock|tier.ComposedHead, noGraph })}
+								if shadow {
+									opts = append(opts, tier.WithComposedShadow())
 								}
-							}
-						})
+								gc, err := tier.OpenWith(append(opts, testTierOpts(t)...)...)
+								if err != nil || gc == nil {
+									noDevice(t, spec, err)
+								}
+								defer gc.Close()
+								decodeAllocs(t, m, gc)
+								for _, k := range parts {
+									if n, _, _ := gc.Stats().ServedPart(k); n == 0 {
+										t.Fatalf("composed part %#x never ran: this arm measured the tier's own", uint8(k))
+									}
+								}
+							})
+						}
 					}
 				}
 			}

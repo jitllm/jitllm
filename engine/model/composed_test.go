@@ -127,6 +127,13 @@ var headUnstated = map[string]Uncovered{
 // step whose blocks and head the composer serves: the rotary table.
 var composedResidue = []string{"ropetable"}
 
+// bandRatio and bandWorst hold a composed arm to the spread of the tier's own
+// backends: at the median step it may be no further from the float reference
+// than bandRatio times the tier, and at its worst no further than bandWorst
+// times the widest the tier's backends come at theirs. Both gates that hold an
+// arm to a reference take them from here.
+const bandRatio, bandWorst = 1.5, 4.0
+
 // TestComposedBlocksServe decodes dense models with each block served whole
 // by the composer from its graph (the model's front end's, from the
 // container), and the head, in main's runtime (Config.Composed), against the
@@ -146,7 +153,6 @@ var composedResidue = []string{"ropetable"}
 // nothing, and one position off must be ten times the arm's worst: the
 // comparison discriminates.
 func TestComposedBlocksServe(t *testing.T) {
-	const bandRatio, bandWorst = 1.5, 4.0
 	arms := []struct {
 		name  string
 		parts tier.Parts

@@ -23,7 +23,10 @@ import (
 // With the composer serving the blocks and the head, every placement forms
 // the blocks' parts and every release frees them: the budget the tier
 // charges at the whole placement is the same each cycle, no step forms a
-// part, and the composer serves through all of it.
+// part, and the composer serves through all of it. The shadow arm adds, to
+// each block it compares, its state, the two copies of the stream and the
+// comparison's own buffers: charged at the placement and given back at the
+// release like the rest, so its figure holds as well.
 func TestDeviceMemoryHoldsSteadyAcrossMoves(t *testing.T) {
 	p := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf")
 	if _, err := os.Stat(p); err != nil {
@@ -34,14 +37,25 @@ func TestDeviceMemoryHoldsSteadyAcrossMoves(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Close()
-	for _, parts := range []tier.Parts{0, tier.ComposedBlock | tier.ComposedHead} {
-		t.Run(fmt.Sprintf("composed%d", parts), func(t *testing.T) { memoryAcrossMoves(t, m, parts) })
+	for _, arm := range []struct {
+		parts  tier.Parts
+		shadow bool
+	}{{0, false}, {tier.ComposedBlock | tier.ComposedHead, false}, {tier.ComposedBlock | tier.ComposedHead, true}} {
+		name := fmt.Sprintf("composed%d", arm.parts)
+		if arm.shadow {
+			name += "shadowed"
+		}
+		t.Run(name, func(t *testing.T) { memoryAcrossMoves(t, m, arm.parts, arm.shadow) })
 	}
 }
 
-func memoryAcrossMoves(t *testing.T, m *Model, parts tier.Parts) {
-	g, err := tier.OpenWith(tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff),
-		tier.WithConfig(func(c *tier.Config) { c.Composed = parts }))
+func memoryAcrossMoves(t *testing.T, m *Model, parts tier.Parts, shadow bool) {
+	opts := []tier.Option{tier.WithDevices(testdevices.Like(t, "cuda:0")), tier.WithDeviceTune(tier.TuneOff),
+		tier.WithConfig(func(c *tier.Config) { c.Composed = parts })}
+	if shadow {
+		opts = append(opts, tier.WithComposedShadow())
+	}
+	g, err := tier.OpenWith(opts...)
 	if err != nil || g == nil {
 		noDevice(t, "device", err)
 	}
@@ -105,6 +119,11 @@ func memoryAcrossMoves(t *testing.T, m *Model, parts tier.Parts) {
 	if parts != 0 {
 		if n, d, _ := g.Stats().ServedPart(parts); n == 0 || d != 0 {
 			t.Fatalf("the composer served %d part steps and declined %d across the moves", n, d)
+		}
+	}
+	if shadow {
+		if n, _, _ := g.Stats().ServedPart(tier.PartShadow); n == 0 {
+			t.Fatalf("the shadow arm compared nothing across the moves: this arm measured the tier without it")
 		}
 	}
 }

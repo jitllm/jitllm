@@ -27,10 +27,13 @@ const (
 	partHead partKind = iota + 1
 	// partBlock is a whole block, its graph the model's front end's.
 	partBlock
+	// partShadow is the shadow arm's comparison of a block's two outputs
+	// (shadow.go).
+	partShadow
 	numParts
 )
 
-var partNames = [...]string{partHead: "head", partBlock: "block"}
+var partNames = [...]string{partHead: "head", partBlock: "block", partShadow: "shadow"}
 
 // composedPart is a part of the model as the composer is asked for it: its
 // graph of generic ops, the formats of the weights it binds, and the tier's
@@ -401,6 +404,10 @@ const (
 	ComposedHead Parts = 1 << partHead
 	// ComposedBlock serves a block whole from its graph (nn.LayerPlan.Graph).
 	ComposedBlock Parts = 1 << partBlock
+	// PartShadow selects the shadow arm's comparisons in Stats.ServedPart.
+	// Config.Composed takes no such bit: Config.ComposedShadow is its own
+	// switch.
+	PartShadow Parts = 1 << partShadow
 )
 
 // partDecline is why a one-row decode step's composed part is not asked for:
@@ -812,6 +819,13 @@ func (g *devTier) prewarmComposedBlock(li int) {
 		g.kvp.p); err != nil {
 		g.LastErr = "the composed block: " + err.Error()
 		return
+	}
+	// The shadow arm's comparison of the block's two outputs.
+	if g.shadowing() {
+		if _, err := g.servedShadow(l, bs.p.NEmbd); err != nil {
+			g.LastErr = "the composed shadow: " + err.Error()
+			return
+		}
 	}
 	// Every other lane's instance too: a session's first step after a move
 	// forms nothing.

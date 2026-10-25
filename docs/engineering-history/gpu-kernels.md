@@ -7128,3 +7128,58 @@ row where the composer's reads two.
   CPU plans hold a reduce kernel the same pass declines ("a pair's later
   head with no twin"). Naming the decline at the pass fails that placement
   test, so the pass is left as it was.
+- **The shadow arm.** `tier.WithComposedShadow()` runs the composer's form of
+  each block it would serve beside the tier's own kernels, on a copy of the
+  block's input, at every one-row step, issued or replayed from a recording.
+  A comparison the composer forms from generic ops (`graph.Drift`: 14
+  kernels from a map, two reductions and a slice, no hand-written kernel and
+  no Go loop over a device buffer) writes the squared distance between the
+  two outputs over the squared distance the block moved its input into a
+  two-float slot of the block, its worst and a count. `Stats.ShadowWorst[li]`
+  and `ShadowSteps[li]` read it back. The tier's kernels serve, so the stream
+  and the logits are the tier's whatever the form computes.
+  - The history is decided by order, not by a scratch row. The form runs
+    first and appends its key and value to the page the step writes. The
+    tier's kernels then write the same row, and theirs is the one kept. The
+    plan's order (the tier first, the form after) would leave the form's row
+    in the history, and the form's rounding would reach every later step
+    the tier takes. A scratch row would let the form read the tier's key at
+    the current position and never its own, so a wrong key projection could
+    not show. Run first, the form attends over the rows the tier wrote and
+    its own at this position. Run the other way, as a throwaway variant, the
+    gate fails at the second decode step: on Vulkan in every clean arm, the
+    form's rows differing from the tier's in the last bit; on CUDA, where the
+    form's key and value rows come out bit for bit the tier's, only in the
+    arm that puts the key projection on the value's weights.
+  - Buffers are made at the placement: a block's two-float state, two copies
+    of the stream in the decode scratch, the form and the comparison at
+    the prewarm. A warm decode makes no engine allocation over 64 tokens,
+    graph and no graph, CUDA and Vulkan, shadowed or not; one heap
+    allocation added to the comparison fails the shadowed arms with 1028 to
+    1032 objects over the 64 tokens, the stack at the comparison, and not the
+    unshadowed ones (CUDA's replayed arm runs no Go emit code and cannot see
+    it, the no-graph arm can). Across six cycles of moves the card's free
+    memory holds at 14667 MiB shadowed against 14675 without (8 MiB, the
+    driver's rounding of the extra buffers).
+  - `TestComposedShadowHoldsEveryBlock`, on a V100 (CUDA and Vulkan), over
+    Llama-3.2-1B, Qwen3-0.6B, gemma-2b and OLMo-2-1B, 140 teacher-forced
+    steps each. The logits equal the tier's bit for bit at every step, with
+    the launches issued one at a time and with CUDA replaying a recording
+    (2 recordings, and the device counted 140 comparisons a block over the
+    140 steps); served alone the same blocks change them at 140 of 141 steps,
+    so the equality can see a difference. The band is the tier's own distance
+    from the float form, block by block, on its two backends, with
+    TestComposedBlocksServe's constants (4.0 against the widest backend, 1.5
+    at the median block). The int8 forms sit at a median of 0.007 to 0.157
+    of the tier's own distance and at most 0.41 at the worst block, on both
+    backends, at every depth. Rewriting block k's graph (another activation,
+    a 32-position window, a doubled attention scale, the rotary paired the
+    other way, the key projection on the value's weights) is flagged at k
+    alone, on all 40 arms, 11x to 1769x past the bound and never before the
+    step where the rewrite can first differ: the window at step 26 or 27,
+    exactly where it first cuts a key, every other arm at step 0 but
+    OLMo-2's scale and rotary arms, at step 1.
+  - With the option off, TestComposedBlocksServe on Llama-3.2-1B, Qwen3-0.6B
+    and OLMo-2-1B prints the same worst NMSE from the tier and the same
+    median against the float reference as the base commit's own run, line for
+    line.

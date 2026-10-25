@@ -327,6 +327,12 @@ func WithPersist(on bool, grid int) Option {
 	return WithConfig(func(c *Config) { c.Persist, c.PersistDeps, c.PersistGrid = on, false, grid })
 }
 
+// WithComposedShadow sets Config.ComposedShadow: the composer's form of each
+// block it would serve runs beside the tier's own kernels and is compared with
+// them at every step (Stats.ShadowWorst). It changes no answer, and needs
+// Config.Composed to ask for the blocks.
+func WithComposedShadow() Option { return WithConfig(func(c *Config) { c.ComposedShadow = true }) }
+
 // WithGateUp2 sets Config.GateUp2: a dense gated FFN's gate and up as one
 // Gate2 matvec writing act(gate)*up. On by default.
 func WithGateUp2(on bool) Option { return WithConfig(func(c *Config) { c.GateUp2 = on }) }

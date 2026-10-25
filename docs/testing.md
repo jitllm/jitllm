@@ -288,6 +288,22 @@ the arm's stated reasons):
 
     JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test -tags jitllmcomposed ./engine/model -run TestBlocksMoveBetweenDevices
 
+## The shadow arm
+
+`tier.WithComposedShadow()` (`Config.ComposedShadow`, beside a `Config.Composed`
+that asks for blocks) runs the composer's form of each block it would serve
+beside the tier's own kernels, at every one-row step, and a reduction the
+composer forms from generic ops (`graph.Drift`) writes the block's worst drift
+from the tier's output into a slot of its own, read back as
+`Stats().ShadowWorst` and `ShadowSteps`. The tier's kernels serve, so the
+option changes no answer. `TestComposedShadowHoldsEveryBlock` runs the four
+checkpoints in `shadowModels` on every device selected, with and without the
+captured graph, and holds them to the tier's logits bit for bit, to the spread
+of the tier's backends at every depth, and to flagging a rewrite of one block's
+graph at that block and no other:
+
+    JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test -tags jitllmcomposed ./engine/model -run TestComposedShadowHoldsEveryBlock
+
 ## Reference scripts
 
 The scripts under `scripts/` that build fixtures and record goldens

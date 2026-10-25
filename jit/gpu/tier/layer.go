@@ -216,6 +216,10 @@ type layer struct {
 	// pP), nil elsewhere.
 	xielu         backend.Buf
 	mvq, mvk, mvv mv
+	// shadow is the shadow arm's state for the block (Config.ComposedShadow):
+	// the worst drift of the form from the tier's kernels and the steps
+	// compared, two floats the comparison keeps (shadow.go).
+	shadow backend.Buf
 	// qkv is q, k and v in one launch (kernels.MatVecSegments), each still
 	// writing its own buffer; nil where fuseQKV declined. qkvBlocks and qkvW
 	// are its grid.
@@ -2221,6 +2225,10 @@ type blockScratch struct {
 	roff              backend.Buf // RoPE-q destination offsets, one per row
 	kpos              backend.Buf // RoPE-k destination offsets: positions when K is transposed
 	hNorm, logits     backend.Buf
+	// shIn and shForm are the shadow arm's copies of a block's input
+	// (Config.ComposedShadow): the comparison's, and the form's, which runs
+	// on its copy in place (shadow.go). Allocated with the decode scratch.
+	shIn, shForm backend.Buf
 	// headCap and logitsCap are the head's final softcap (nn.Head.Softcap):
 	// the capped logits land in their own buffer, since no kernel may write
 	// what it reads. Both nil on every model without one.
@@ -4013,6 +4021,12 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		up(&l.xielu, w.XIELU)
 		l.auxBytes += 16
 	}
+	// The shadow arm's state, the worst drift and the steps compared, both
+	// zero: written here, since a device buffer is not.
+	if g.shadowing() && p.Graph != nil {
+		up(&l.shadow, []float32{0, 0})
+		l.auxBytes += 8
+	}
 	if w.AttnNormB != nil {
 		up(&l.nAttnB, w.AttnNormB)
 	}
@@ -4622,6 +4636,12 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		x2 = p.ResidW()
 	}
 	al(&bs.x2, rows*x2*4)
+	// The shadow arm's copies of a block's input: the decode scratch's alone,
+	// since the composer is asked for one-row steps.
+	if g.shadowing() && rows == 1 {
+		al(&bs.shIn, p.NEmbd*4)
+		al(&bs.shForm, p.NEmbd*4)
+	}
 	al(&bs.h, rows*p.NEmbd*4)
 	al(&bs.mvOut, rows*p.NEmbd*4)
 	al(&bs.part, rows*bs.parts*4)
@@ -5119,8 +5139,9 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 			return nil, nil
 		}},
 		{&bs.copyRows, func() (*ir.Kernel, error) {
-			// A block with no pre-norm copies the residual into h instead.
-			if !p.NoPreNorm && p.Q4E == nil {
+			// A block with no pre-norm copies the residual into h instead, and
+			// the shadow arm copies a block's input.
+			if !p.NoPreNorm && p.Q4E == nil && !(g.shadowing() && rows == 1) {
 				return nil, nil
 			}
 			return kernels.Restride(rows, p.NEmbd, p.NEmbd, p.NEmbd)
@@ -8028,7 +8049,15 @@ func (g *devTier) layersSession(s backend.Session) {
 		// to do in its own launch (foldAddNorm): x = pendX + pendY.
 		var pendX, pendY backend.Buf
 		var pendNorm, pendConv backend.Kernel
+		// The block the shadow arm ran its form beside, until the tier's
+		// kernels have written its output and it is compared (shadow.go).
+		var sh shadowStep
 		for li := lo; li < hi; li++ {
+			if sh.cmp != nil {
+				if serr := g.shadowEnd(lc, bs, &sh); err == nil {
+					err = serr
+				}
+			}
 			attnFused, ffnFused := false, false
 			l := g.layers[li]
 			// The previous block's held launches go out; this block's are
@@ -8062,8 +8091,14 @@ func (g *devTier) layersSession(s backend.Session) {
 						rcs = bs.csSWA
 					}
 					sv, serr := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(p, li), bs.zero, p.MaxSeq, g.kvp.p)
+					beside := false
 					switch {
 					case serr != nil:
+					case g.shadowing():
+						// The form runs beside the tier's kernels, which go on
+						// to run the block below and serve.
+						serr = g.shadowBegin(lc, bs, sv, l, li, &sh)
+						beside = serr == nil
 					case !sv.f.inPlace(0, 0):
 						serr = fmt.Errorf("tier: the composed block %d reads x after writing its output over it", li)
 					default:
@@ -8072,7 +8107,9 @@ func (g *devTier) layersSession(s backend.Session) {
 					if err == nil {
 						err = serr
 					}
-					continue
+					if !beside {
+						continue
+					}
 				}
 			}
 			// Gemma 3n: every stream's prediction, the block run on the active
@@ -9656,6 +9693,11 @@ func (g *devTier) layersSession(s backend.Session) {
 				lc.la(bs.scaleX, R*p.NEmbd, bs.h, bs.one, bs.x)
 			}
 		}
+		if sh.cmp != nil {
+			if serr := g.shadowEnd(lc, bs, &sh); err == nil {
+				err = serr
+			}
+		}
 		if pendX != nil {
 			addRes(pendX, pendY, bs.x)
 		}
@@ -10203,6 +10245,7 @@ func (l *layer) auxBufs() []backend.Buf {
 		l.mvu.bias, l.mvd.bias,
 		l.outScale,                                         // Gemma 4's output scalar
 		l.xielu,                                            // Apertus's activation numbers
+		l.shadow,                                           // the shadow arm's state
 		l.nFFN2, l.nPost1, l.nPost2, l.nRouter, l.expScale, // Gemma 4's mixture block
 		l.nPLE, l.pleOff, // Gemma 4's per-layer embedding
 	), append(append(l.ds4.bufs(), l.k3.bufs()...), l.q4e.bufs()...)...) // DeepSeek V4's, Kimi-K3's, Qwen3.8-Flash-Next's

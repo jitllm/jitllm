@@ -87,7 +87,7 @@
       "note": "the composer: the graph, its lowering and passes, the one keyed cache, the estimator and the hardware probes"
     },
     "composed": {
-      "module": ".", "packages": ["./engine/model"], "run": "TestFrontStatesTheModelAsOps|TestComposedBlocksServe|TestC6ServesComposed|TestPrefillFoldsALayerNormHead|TestPlacedPromptsCompileNothing|TestDeviceMemoryHoldsSteadyAcrossMoves|TestSessionsStepAtOnceComposed|TestSessionsRelocateAtOnceComposed|TestABatchLeavesAnotherSessionAlone|TestLayerRelocatesToAnotherDevice|TestBlocksMoveBetweenDevices", "cap": "16G",
+      "module": ".", "packages": ["./engine/model"], "run": "TestFrontStatesTheModelAsOps|TestComposedBlocksServe|TestComposedShadowHoldsEveryBlock|TestC6ServesComposed|TestPrefillFoldsALayerNormHead|TestPlacedPromptsCompileNothing|TestDeviceMemoryHoldsSteadyAcrossMoves|TestSessionsStepAtOnceComposed|TestSessionsRelocateAtOnceComposed|TestABatchLeavesAnotherSessionAlone|TestLayerRelocatesToAnotherDevice|TestBlocksMoveBetweenDevices", "cap": "16G",
       "needs": {"models": true, "device": true},
       "note": "the composer serving the tier's blocks and heads: every block served, none formed at a step, forms charged and freed, sessions side by side, moves; -tags jitllmcomposed runs every device gate composed (docs/testing.md)"
     },
