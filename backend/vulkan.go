@@ -250,6 +250,25 @@ type vkKern struct {
 
 func (k *vkKern) IR() *ir.Kernel { return k.src }
 
+// Multiprocessors is the compute units a vendor extension states
+// (vulkan/cores.go, GridLimit's source), 0 where none does.
+func (v *vkDev) Multiprocessors() int {
+	n, _ := v.c.Cores()
+	return n
+}
+
+// ConcurrentCompile: Compile's Vulkan calls (vkCreateShaderModule,
+// vkCreateDescriptorSetLayout, vkCreatePipelineLayout, vkCreateComputePipelines
+// with no pipeline cache, vkCreateDescriptorPool, and vkAllocateDescriptorSets
+// on the kernel's own pool) name no parameter the specification's threading
+// behavior says must be externally synchronized, and the context's kernel set
+// is locked (vulkan/run.go).
+func (v *vkDev) ConcurrentCompile() bool { return true }
+
+// ThreadRegisters is a lane's registers at the most resident waves, as a
+// vendor extension states them, 0 where none does.
+func (v *vkDev) ThreadRegisters() int { return v.c.ThreadRegisters() }
+
 // GridLimit is one workgroup per compute unit, as a vendor extension states
 // the count (vulkan/cores.go); a device none states cannot run a grid barrier.
 func (v *vkDev) GridLimit(k Kernel) (int, error) {

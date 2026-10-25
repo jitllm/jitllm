@@ -42,6 +42,10 @@ type Device struct {
 	// see Module.Resident.
 	sms  int
 	coop bool
+	// threadRegs is CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_MULTIPROCESSOR over
+	// its most resident threads, 0 where the driver would not say. See
+	// ThreadRegisters.
+	threadRegs int
 	// l2 is CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE, bytes, 0 where the driver
 	// would not say.
 	l2 int
@@ -64,6 +68,7 @@ const (
 	attrMaxTPM  = 39 // CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR
 	attrMaxGrid = 5  // CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X
 	attrL2      = 38 // CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE
+	attrRegsSM  = 82 // CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_MULTIPROCESSOR
 
 	attrIntegrated   = 18 // CU_DEVICE_ATTRIBUTE_INTEGRATED
 	attrCanMapHost   = 19 // CU_DEVICE_ATTRIBUTE_CAN_MAP_HOST_MEMORY
@@ -160,6 +165,10 @@ func openDevice(ord int) (*Device, error) {
 		if cuDeviceGetAttribute(&sm, attrSMCount, d.dev) == 0 &&
 			cuDeviceGetAttribute(&tpm, attrMaxTPM, d.dev) == 0 && sm > 0 && tpm > 0 {
 			d.slots = int(sm) * int(tpm)
+			var regs int32
+			if cuDeviceGetAttribute(&regs, attrRegsSM, d.dev) == 0 && regs > 0 {
+				d.threadRegs = int(regs) / int(tpm)
+			}
 		}
 		d.sms = int(sm)
 		var coop int32
@@ -192,6 +201,11 @@ func (d *Device) Slots() int { return d.slots }
 // Multiprocessors is the device's multiprocessor count, 0 where the driver
 // would not say.
 func (d *Device) Multiprocessors() int { return d.sms }
+
+// ThreadRegisters is the 32-bit registers a thread holds when its
+// multiprocessor holds the most threads it can, 0 where the driver would not
+// say.
+func (d *Device) ThreadRegisters() int { return d.threadRegs }
 
 // L2Bytes is the bytes its L2 cache holds, 0 where the driver would not say.
 func (d *Device) L2Bytes() int { return d.l2 }

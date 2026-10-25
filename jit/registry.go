@@ -33,6 +33,9 @@ type Device struct {
 	// Units, where known, is the multiprocessors (compute units) the Slots
 	// are spread over.
 	Units int
+	// Regs, where known, is the 32-bit registers a thread holds when a
+	// multiprocessor holds the most threads it can.
+	Regs int
 	// ISA, on a CPU, is the instruction sets it executes, as jit/x86 names
 	// them (x86.ISA's bits).
 	ISA uint64

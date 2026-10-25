@@ -7,14 +7,20 @@ import "github.com/jitllm/jitllm/jit/ir"
 // the other coordinates, what does not depend on the row -- the weight's
 // loads and its decode -- made once a trip and read by every row of the
 // tile, each row its own sum and store. T is the most rows, a power of two
-// dividing the rows and at most Rows, that leave the launch at least Warps
-// warps a multiprocessor (Fill threads where the device states no
-// multiprocessors): the kernel's ops grow with T, never with the step's
-// rows. A kernel of one row, or whose rows' work reads no weight it could
-// share, is left as it is.
+// dividing the rows, that leave the launch at least Warps warps a
+// multiprocessor (Fill threads where the device states no multiprocessors)
+// and whose sums and terms, rowRegs registers a row, fit the registers a
+// thread holds at the device's most resident threads (Rows rows where the
+// device states no registers): the kernel's ops grow with T, never with the
+// step's rows. A kernel of one row, or whose rows' work reads no weight it
+// could share, is left as it is.
 type RowTiles struct {
 	Rows, Warps, Fill int
 }
+
+// rowRegs is the registers a tile's row holds through its trips: its sum and
+// the term it adds.
+const rowRegs = 2
 
 func (RowTiles) Name() string { return "rowtiles" }
 
@@ -51,8 +57,12 @@ func (p RowTiles) tile(k *Kernel, d Device) int {
 	if fill == 0 {
 		fill = p.Fill
 	}
+	most := p.Rows
+	if d.Regs > 0 {
+		most = d.Regs / rowRegs
+	}
 	R, E, t := k.Space[0], k.Elements(), 1
-	for 2*t <= p.Rows && R%(2*t) == 0 && E/(2*t) >= fill {
+	for 2*t <= most && R%(2*t) == 0 && E/(2*t) >= fill {
 		t *= 2
 	}
 	return t

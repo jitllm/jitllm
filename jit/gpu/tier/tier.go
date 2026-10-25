@@ -769,6 +769,10 @@ type Stats struct {
 	BlockDeclines, HeadDeclines [numPartDeclines]int
 	// StepDeclines is PartsDeclined's table and sample steps by reason.
 	StepDeclines [numPartDeclines]int
+	// DeclineBuilt counts, by reason, the prompt blocks whose own batched
+	// kernels were compiled at a call because their prompt declined there:
+	// the placement compiles none for a block the composer serves.
+	DeclineBuilt [numPartDeclines]int
 	// FormedAtStep counts the parts formed at a step rather than at a
 	// placement or PrepHead: a form a step met first, built inside it.
 	FormedAtStep int
@@ -1222,6 +1226,10 @@ type Stats struct {
 	// PromptWidthsWarmed counts the prompt grain widths whose kernels were
 	// built at the end of a placement (prewarmPromptWidths).
 	PromptWidthsWarmed int
+	// PromptBlocksLeft counts the blocks of the warmed prompt widths, the
+	// reserved one included, whose own batched kernels the placement left
+	// uncompiled for the composer serves their prompt there (promptHeld).
+	PromptBlocksLeft int
 	// SoftmaxLanes is 32 when the device passed pickSoftmax's on-device check
 	// of the warp reduction, and 1 when it fell back to a thread per head. The
 	// two produce slightly different floats (a tree sum against a sequential
@@ -1339,6 +1347,7 @@ func (s *Stats) add(o Stats) {
 		s.BlockDeclines[i] += o.BlockDeclines[i]
 		s.HeadDeclines[i] += o.HeadDeclines[i]
 		s.StepDeclines[i] += o.StepDeclines[i]
+		s.DeclineBuilt[i] += o.DeclineBuilt[i]
 	}
 	s.FormedAtStep += o.FormedAtStep
 	// A block is on one device, so its slot is the only one that is not zero.
@@ -1554,6 +1563,7 @@ func (s *Stats) add(o Stats) {
 	s.TileTail += o.TileTail
 	s.ExactPrompts += o.ExactPrompts
 	s.PromptWidthsWarmed += o.PromptWidthsWarmed
+	s.PromptBlocksLeft += o.PromptBlocksLeft
 	if o.TileWhy != "" {
 		s.TileWhy = o.TileWhy
 	}

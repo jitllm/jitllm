@@ -178,13 +178,15 @@ func check(r Result, what string) error {
 // Ctx is an open device: instance, logical device, queue and command pool.
 type Ctx struct {
 	// cores and coresFrom are the compute-unit count and the extension that
-	// stated it (cores.go).
-	cores     int
-	coresFrom string
-	inst      Instance
-	phys      PhysDevice
-	dev       Device
-	family    uint32
+	// stated it, threadRegs a lane's registers at the most resident waves
+	// (cores.go).
+	cores      int
+	coresFrom  string
+	threadRegs int
+	inst       Instance
+	phys       PhysDevice
+	dev        Device
+	family     uint32
 	// rec is the context's own line of submissions, for calls made on it
 	// directly; queues (NewQueue) are others. hw is the compute family's
 	// queues, queues is the count handed out and every queue not closed.
@@ -350,7 +352,7 @@ func OpenDeviceWith(sel string, cfg Config) (*Ctx, error) {
 		return nil, err
 	}
 	c.sg = readSubgroups(c.phys, pick.apiVer, hasSizeCtl)
-	c.cores, c.coresFrom = readCores(c.phys, pick.apiVer)
+	c.cores, c.coresFrom, c.threadRegs = readCores(c.phys, pick.apiVer)
 	c.sg.Off, c.sg.Forced = subgroupEnv(cfg)
 
 	// The tile features are likewise read before the device is made and

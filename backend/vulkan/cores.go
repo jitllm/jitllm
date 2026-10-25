@@ -51,10 +51,12 @@ type amdCoreProps struct {
 }
 
 // readCores asks the two vendor extensions for the compute-unit count; 0 and
-// an empty source when neither answers.
-func readCores(p PhysDevice, apiVer uint32) (int, string) {
+// an empty source when neither answers. VK_AMD_shader_core_properties states
+// a SIMD's registers and its most resident waves too, and regs is a lane's
+// share of them at that occupancy; VK_NV_shader_sm_builtins states none.
+func readCores(p PhysDevice, apiVer uint32) (cores int, from string, regs int) {
 	if apiVer < apiVersionForProps {
-		return 0, ""
+		return 0, "", 0
 	}
 	if ok, err := hasExtension(p, extSMBuiltins); err == nil && ok {
 		var sp smBuiltinsProps
@@ -63,7 +65,7 @@ func readCores(p PhysDevice, apiVer uint32) (int, string) {
 		vkGetPhysicalDeviceProperties2(p, up(&p2))
 		runtime.KeepAlive(sp)
 		if sp.smCount > 0 {
-			return int(sp.smCount), extSMBuiltins
+			return int(sp.smCount), extSMBuiltins, 0
 		}
 	}
 	if ok, err := hasExtension(p, extAMDCoreProps); err == nil && ok {
@@ -73,12 +75,19 @@ func readCores(p PhysDevice, apiVer uint32) (int, string) {
 		vkGetPhysicalDeviceProperties2(p, up(&p2))
 		runtime.KeepAlive(ap)
 		if n := ap.shaderEngineCount * ap.shaderArraysPerEngine * ap.computeUnitsPerShaderArr; n > 0 {
-			return int(n), extAMDCoreProps
+			if ap.wavefrontsPerSimd > 0 {
+				regs = int(ap.vgprsPerSimd / ap.wavefrontsPerSimd)
+			}
+			return int(n), extAMDCoreProps, regs
 		}
 	}
-	return 0, ""
+	return 0, "", 0
 }
 
 // Cores is the device's compute-unit count and the extension that stated it,
 // or 0 and "" when no extension does.
 func (c *Ctx) Cores() (int, string) { return c.cores, c.coresFrom }
+
+// ThreadRegisters is a lane's registers when its SIMD holds the most waves it
+// can, as a vendor extension states them, 0 where none does.
+func (c *Ctx) ThreadRegisters() int { return c.threadRegs }

@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/graph"
@@ -160,6 +162,15 @@ func units(d backend.Device) int {
 	return 0
 }
 
+// threadRegs is a thread's registers at the device's most resident threads
+// where its backend says, else 0.
+func threadRegs(d backend.Device) int {
+	if r, ok := d.(backend.RegisterDevice); ok {
+		return r.ThreadRegisters()
+	}
+	return 0
+}
+
 // askPart asks r for sl at a step of rows: the request's Key, and what it
 // forms.
 func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key, []jit.Code, error) {
@@ -174,7 +185,7 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 		Formats: sl.formats,
 		Step:    jit.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: g.actWin},
 		Device: jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: lanes, Units: units(g.dev),
-			ExactDiv: kernels.DivExact(g.dev.API())},
+			Regs: threadRegs(g.dev), ExactDiv: kernels.DivExact(g.dev.API())},
 		History: sl.history,
 	})
 }
@@ -224,15 +235,15 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 	}
 	for _, c := range codes {
 		if c.GPU == nil {
-			f.close()
 			return nil, fmt.Errorf("%s has no GPU code", c.Name)
 		}
-		kern, err := g.compile(c.GPU)
-		if err != nil {
-			f.close()
-			return nil, fmt.Errorf("compiling %s: %w", c.Name, err)
-		}
-		f.codes = append(f.codes, partCode{k: kern, groups: c.Groups, width: c.GPU.Group[0]})
+	}
+	kerns, err := g.compileCodes(codes)
+	if err != nil {
+		return nil, err
+	}
+	for ci, c := range codes {
+		f.codes = append(f.codes, partCode{k: kerns[ci], groups: c.Groups, width: c.GPU.Group[0]})
 		var args []partArg
 		for _, bd := range c.Binds {
 			o := bd.Operand
@@ -266,6 +277,9 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 				}
 				args = append(args, partArg{kind: partOwn, i: i})
 			default:
+				for _, k := range kerns[ci+1:] {
+					k.Close()
+				}
 				f.close()
 				return nil, fmt.Errorf("%s binds %+v, which the part's call site does not provide", c.Name, o)
 			}
@@ -373,6 +387,49 @@ func (sv *servedPart) launch(lc *launcher, inst *partInst, in, out []backend.Buf
 		}
 	}
 	return nil
+}
+
+// compileCodes compiles each code's GPU kernel: side by side, on as many
+// goroutines as the process runs threads, where the device's compiles run
+// beside each other (backend.ConcurrentCompiler), else one after another. On
+// an error it closes what it compiled.
+func (g *devTier) compileCodes(codes []jit.Code) ([]backend.Kernel, error) {
+	kerns := make([]backend.Kernel, len(codes))
+	errs := make([]error, len(codes))
+	workers := 1
+	if c, ok := g.dev.(backend.ConcurrentCompiler); ok && c.ConcurrentCompile() {
+		workers = min(runtime.GOMAXPROCS(0), len(codes))
+	}
+	if workers <= 1 {
+		for i, c := range codes {
+			if kerns[i], errs[i] = g.compile(c.GPU); errs[i] != nil {
+				break
+			}
+		}
+	} else {
+		var wg sync.WaitGroup
+		for w := range workers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := w; i < len(codes); i += workers {
+					kerns[i], errs[i] = g.compile(codes[i].GPU)
+				}
+			}()
+		}
+		wg.Wait()
+	}
+	for i, err := range errs {
+		if err != nil {
+			for _, k := range kerns {
+				if k != nil {
+					k.Close()
+				}
+			}
+			return nil, fmt.Errorf("compiling %s: %w", codes[i].Name, err)
+		}
+	}
+	return kerns, nil
 }
 
 func (f *partForm) close() {
@@ -1411,10 +1468,20 @@ func (g *devTier) prewarmComposedBlock(li int) {
 // of its form. Callers hold g.mu and say whether this is the placement's
 // (g.prewarming).
 func (g *devTier) prewarmPromptBlock(bb *blockScratch, li int) {
-	l := g.layers[li]
-	if l == nil || bb == nil || bb.rows < 2 || bb.pkv == nil || g.kvp == nil ||
-		g.promptServes(l, li, &bb.p, bb, false, false, false) != partServes {
-		return
+	if l := g.layers[li]; l != nil && bb != nil {
+		g.promptServed(l, li, bb, false, false)
+	}
+}
+
+// promptServed reports whether the composer serves block li of a prompt call
+// at bb's rows, as the call's submission decides it (promptServes, at the
+// call's ragged and every-row-logits conditions): its form formed and the
+// scratch's instance of it held, both made here where they are not, outside
+// the submission. Callers hold g.mu.
+func (g *devTier) promptServed(l *layer, li int, bb *blockScratch, ragged, rowLogits bool) bool {
+	if g.Composed&ComposedPrompt == 0 || bb.rows < 2 || bb.pkv == nil || g.kvp == nil ||
+		g.promptServes(l, li, &bb.p, bb, false, ragged, rowLogits) != partServes {
+		return false
 	}
 	rcs := bb.cs
 	if bb.csSWA != nil && bb.p.LocalRope(li) {
@@ -1424,9 +1491,67 @@ func (g *devTier) prewarmPromptBlock(bb *blockScratch, li int) {
 		g.kvp.p, bb.rows)
 	if err != nil {
 		g.LastErr = "the composed prompt block: " + err.Error()
-		return
+		return false
 	}
-	g.promptInst(bb, sv.f)
+	return g.promptInst(bb, sv.f) != nil
+}
+
+// promptHeld reports whether a placement leaves block li's own batched
+// kernels at bb's rows uncompiled: the composer serves its prompt there
+// (promptServed), and the width is above the ragged step's, whose rows
+// decline by name (partRagged). They are compiled where the block's prompt
+// declines (declineTwins). Callers hold g.mu.
+func (g *devTier) promptHeld(l *layer, li int, bb *blockScratch) bool {
+	return bb.rows > g.stepW && g.promptServed(l, li, bb, false, false)
+}
+
+// promptDeclines readies, before a prompt call's submission at bs's rows,
+// every block of [lo, hi) whose prompt the composer does not serve at this
+// call: the tier's own kernels the placement left it (declineTwins). It
+// reports whether any block of the range runs them. Callers hold g.mu,
+// outside any submission.
+func (g *devTier) promptDeclines(bs *blockScratch, lo, hi int, ragged, rowLogits bool) (bool, error) {
+	tier := false
+	for li := lo; li < hi; li++ {
+		l := g.layers[li]
+		if l == nil || !l.ok || g.promptServed(l, li, bs, ragged, rowLogits) {
+			continue
+		}
+		tier = true
+		why := g.promptServes(l, li, &bs.p, bs, false, ragged, rowLogits)
+		if why == partServes {
+			why = partNoRoom
+		}
+		if err := g.declineTwins(l, li, bs, why); err != nil {
+			return true, err
+		}
+	}
+	return tier, nil
+}
+
+// declineTwins compiles block li's own batched kernels at bs's rows, which
+// the placement left to the composer (promptHeld) and its prompt now
+// declines (why): the block's matvecs, its fused operands and the staged
+// attention's span variants, counted by reason (Stats.DeclineBuilt).
+// Callers hold g.mu, outside any submission.
+func (g *devTier) declineTwins(l *layer, li int, bs *blockScratch, why partDecline) error {
+	if li >= len(bs.left) || !bs.left[li] {
+		return nil
+	}
+	for _, m := range l.batchedMVs() {
+		if m.kern == nil || m.slots > 0 {
+			continue
+		}
+		if _, ok := g.batchMV(*m, bs.rows, bs.tok); !ok {
+			return fmt.Errorf("tier: block %d's prompt declines (%s) and has no batched twin at %d rows",
+				li, partDeclineNames[why], bs.rows)
+		}
+	}
+	g.fusedTwins(bs, l)
+	g.spanVariants(bs)
+	bs.left[li] = false
+	g.DeclineBuilt[why]++
+	return nil
 }
 
 // promptForms forms every placed block's part at bb's rows where the

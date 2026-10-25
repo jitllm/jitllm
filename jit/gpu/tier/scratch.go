@@ -468,6 +468,9 @@ func (g *devTier) prewarmPromptWidths() {
 	g.prewarmPrompt()
 	g.prewarmDecodePlans()
 	g.prewarmComposed()
+	if bb := g.bbs[g.promptW]; bb != nil {
+		g.PromptBlocksLeft += countLeft(bb)
+	}
 	grain := g.promptGrain()
 	if g.NoExactPrompt || g.promptW <= grain {
 		return
@@ -482,10 +485,22 @@ func (g *devTier) prewarmPromptWidths() {
 		}
 		if g.prepBatch(w) {
 			g.PromptWidthsWarmed++
+			g.PromptBlocksLeft += countLeft(g.bbs[w])
 			g.prewarmFused(g.bbs[w])
 		}
 		g.dropBatch(w)
 	}
+}
+
+// countLeft is how many blocks bs's walk left to the composer (promptHeld).
+func countLeft(bs *blockScratch) int {
+	n := 0
+	for _, l := range bs.left {
+		if l {
+			n++
+		}
+	}
+	return n
 }
 
 // prewarmDecodePlans builds the decode scratch's attention plan at every key

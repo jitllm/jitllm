@@ -158,6 +158,15 @@ type OrdinalDevice interface{ Ordinal() int }
 // it runs workgroups on.
 type MultiprocessorDevice interface{ Multiprocessors() int }
 
+// ConcurrentCompiler is a Device whose Compile may be called from several
+// goroutines at once, each compile running beside the others.
+type ConcurrentCompiler interface{ ConcurrentCompile() bool }
+
+// RegisterDevice is a Device that can say how many 32-bit registers a
+// thread holds when a multiprocessor holds the most threads it can, 0 where
+// its driver would not.
+type RegisterDevice interface{ ThreadRegisters() int }
+
 // L2Device is a Device that can say how many bytes its last cache holds, 0
 // where its driver would not.
 type L2Device interface{ L2Bytes() int }

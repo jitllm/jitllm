@@ -1449,10 +1449,24 @@ func (g *devTier) prewarmPrompt() {
 // prewarmPrompt's at the reserved width, prewarmPromptWidths' at each exact
 // prompt width. Callers hold g.mu.
 func (g *devTier) prewarmFused(bs *blockScratch) {
-	R := bs.rows
-	// The staged attention's span variants (prefillVariantAt), every span a
-	// chunk can reach at this scratch's capacity: a chunk compiles the one
-	// its history needs otherwise.
+	tier := false
+	for li, l := range g.layers {
+		if l != nil && l.ok && (li >= len(bs.left) || !bs.left[li]) {
+			g.fusedTwins(bs, l)
+			tier = true
+		}
+	}
+	// A width whose every block the composer serves runs none of the tier's
+	// attention: its variants are a decline's work (declineTwins).
+	if tier {
+		g.spanVariants(bs)
+	}
+}
+
+// spanVariants compiles the staged attention's span variants
+// (prefillVariantAt), every span a chunk can reach at bs's capacity: a chunk
+// compiles the one its history needs otherwise.
+func (g *devTier) spanVariants(bs *blockScratch) {
 	if pg := bs.pkv; pg != nil && pg.pf != nil && pg.pf.flash == nil {
 		hi, _ := g.prefillPass()
 		if m := bs.p.MaxSeq; m > 0 && m < hi {
@@ -1464,18 +1478,18 @@ func (g *devTier) prewarmFused(bs *blockScratch) {
 			}
 		}
 	}
-	for _, l := range g.layers {
-		if l == nil || !l.ok {
-			continue
-		}
-		g.rmsF16For(bs, l.mvq, R, false)
-		first := l.mvg
-		if first.kern == nil {
-			first = l.mvu
-		}
-		g.rmsF16For(bs, first, R, true)
-		g.actF16For(bs, l.mvd, R)
+}
+
+// fusedTwins compiles block l's fused operand kernels at bs's rows.
+func (g *devTier) fusedTwins(bs *blockScratch, l *layer) {
+	R := bs.rows
+	g.rmsF16For(bs, l.mvq, R, false)
+	first := l.mvg
+	if first.kern == nil {
+		first = l.mvu
 	}
+	g.rmsF16For(bs, first, R, true)
+	g.actF16For(bs, l.mvd, R)
 }
 
 // int8GemmOn reports whether the device lowers GemmInt8, probed once by a

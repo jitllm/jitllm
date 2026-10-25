@@ -105,6 +105,28 @@ func TestRowTilesHoldTheOps(t *testing.T) {
 		t.Fatalf("without the pass the largest kernel at 32 rows is %d ops: the gate cannot see it", largest)
 	}
 	t.Logf("without the pass the float form's largest kernel at 32 rows is %d ops", largest)
+	// The device's registers size the tile: a V100's 32 a thread hold the
+	// sixteen rows a device stating none takes, and four hold two.
+	sized := map[int]int{}
+	for _, regs := range []int{0, 32, 4} {
+		d := cuda
+		d.Regs = regs
+		_, codes, err := jit.Default().Form(jit.Request{Graph: ffnBlock(2048, 8192), Formats: formats(jlm.TypeQ4S),
+			Step: jit.Step{Rows: 512, Page: 64, Keys: 1, ActWindow: 32}, Device: d})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range codes {
+			if slices.Contains(c.Passes, "rowtiles") {
+				sized[regs] = max(sized[regs], len(c.GPU.Ops))
+			}
+		}
+	}
+	if sized[0] == 0 || sized[32] != sized[0] || sized[4] >= sized[32] {
+		t.Fatalf("the largest tiled kernel at 512 rows: %d ops with no registers stated, %d at 32 a thread, %d at 4",
+			sized[0], sized[32], sized[4])
+	}
+	t.Logf("the largest tiled kernel at 512 rows: %d ops with no registers stated or 32 a thread, %d at 4", sized[32], sized[4])
 }
 
 // tiledWeights is rows of k of t, random, with finite scales near one.

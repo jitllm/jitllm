@@ -2156,6 +2156,10 @@ type blockScratch struct {
 	// rewrites their matvecs, the walk would find what it found then (0: never
 	// walked).
 	walked uint64
+	// left marks, by block, the blocks whose prompt the composer serves at
+	// this scratch's rows and whose own batched kernels the walk left
+	// uncompiled: a decline's work (declineTwins).
+	left []bool
 	// prompt is the lane's instance of each form the composer serves a
 	// prompt chunk's blocks with at this scratch's rows, shared by the blocks
 	// of the form (served.go): freed and refunded with the scratch.
@@ -7441,7 +7445,17 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		if rag != nil && pk.cur != nil {
 			g.ragPrep(bs)
 		}
-		pk.prefill = pk.pf != nil && pk.cur != nil && pk.st == nil && rag == nil && R > 1 && nrow > 0
+		// A call whose every block the composer serves runs none of the
+		// tier's attention and stages none; a block it declines has the
+		// tier's kernels readied here (promptDeclines).
+		tierRuns := true
+		if R > 1 {
+			var e error
+			if tierRuns, e = g.promptDeclines(bs, lo, hi, rag != nil, allRows); e != nil {
+				return refuse("%v", e)
+			}
+		}
+		pk.prefill = tierRuns && pk.pf != nil && pk.cur != nil && pk.st == nil && rag == nil && R > 1 && nrow > 0
 		if pk.prefill {
 			if e := g.prefillPrep(bs, nrow); e != nil {
 				return refuse("paged prefill attention: %v", e)
@@ -8309,8 +8323,10 @@ func (g *devTier) layersSession(s backend.Session) {
 			// the int8 activation, so it skips the quantize: the norm runs alone and
 			// fsrc names the float row the ActF16 conversion reads.
 			// Not an AltUp block, whose LAuReL branch quantizes between the norm
-			// and the attention.
-			voltaOnly := R > 1 && rag == nil && g.voltaBlock(l, R, bs.tok) && l.altRouter == nil && l.ds4 == nil &&
+			// and the attention. Not asked of a block the placement left to
+			// the composer (promptHeld): its matvecs have no twins to ask.
+			left := R > 1 && li < len(bs.left) && bs.left[li]
+			voltaOnly := R > 1 && rag == nil && !left && g.voltaBlock(l, R, bs.tok) && l.altRouter == nil && l.ds4 == nil &&
 				l.k3 == nil && l.q4e == nil
 			// The block the composer serves whole (Config.Composed): its graph
 			// from the model's front end, formed as one unit and launched on
@@ -8358,6 +8374,15 @@ func (g *devTier) layersSession(s backend.Session) {
 			if asked && why != partServes {
 				g.PartsDeclined[kind]++
 				g.BlockDeclines[why]++
+			}
+			// The tier's own kernels of a block the placement left to the
+			// composer are readied before the submission (promptDeclines);
+			// a block reaching them unreadied is refused.
+			if inst == nil && left {
+				if err == nil {
+					err = fmt.Errorf("tier: block %d at %d rows runs the tier's kernels, which no decline readied", li, R)
+				}
+				continue
 			}
 			if inst != nil && kind == partBlock && g.shadowing() {
 				// The form runs beside the tier's kernels, which go on to run
@@ -11230,10 +11255,19 @@ func (g *devTier) prepBatch(width int) bool {
 	if bb.walked == g.layerGen+1 {
 		return true
 	}
-	for _, l := range g.layers {
+	// The composer's prompt forms at this width and their instances
+	// (ComposedPrompt): a block it serves compiles none of its own batched
+	// kernels here.
+	g.promptForms(bb)
+	if len(bb.left) != len(g.layers) {
+		bb.left = make([]bool, len(g.layers))
+	}
+	for li, l := range g.layers {
+		bb.left[li] = false
 		if l == nil || !l.ok {
 			continue
 		}
+		held := g.promptHeld(l, li, bb)
 		// Only this scratch set's blocks: another set's are prepared with its
 		// own batched scratch (gemma4.go), which this one may not be able to
 		// run -- MiniMax-M3's dense lead set has no mixture scratch for the
@@ -11249,14 +11283,12 @@ func (g *devTier) prepBatch(width int) bool {
 		}
 		// Every matvec a batched block can launch (prepLayer's list), or the rest
 		// would compile lazily inside the session.
-		for _, m := range []*mv{&l.mvq, &l.mvk, &l.mvv, &l.mvo, &l.mvg, &l.mvu, &l.mvd,
-			&l.mvsg, &l.mvsu, &l.mvsd, &l.mvSG, &l.mvBA, &l.mvSO,
-			&l.mvQA, &l.mvQB, &l.mvKVA, &l.mvKB, &l.mvVB,
-			&l.mvFA, &l.mvFB, &l.mvGA, &l.mvGB, &l.mvpg, &l.mvpp,
-			&l.mvIQ, &l.mvIK, &l.mvIW, &l.mvLL, &l.mvLR, &l.mvSI, &l.mvMQ,
-			&l.mvCKV, &l.mvCG, &l.mvICKV, &l.mvICG,
-			&l.mvHAD, &l.mvHAU, &l.mvHAI, &l.mvHFD, &l.mvHFU, &l.mvHFI, &l.mvNGK, &l.mvNGV} {
+		for _, m := range l.batchedMVs() {
 			if m.kern == nil {
+				continue
+			}
+			if held && m.slots == 0 {
+				bb.left[li] = true
 				continue
 			}
 			if m.slots > 0 && l.mla && (m == &l.mvKB || m == &l.mvVB) {
@@ -11339,11 +11371,19 @@ func (g *devTier) prepBatch(width int) bool {
 			return false
 		}
 	}
-	// The composer's prompt forms at this width and their instances
-	// (ComposedPrompt).
-	g.promptForms(bb)
 	bb.walked = g.layerGen + 1
 	return true
+}
+
+// batchedMVs is every matvec a batched block can launch.
+func (l *layer) batchedMVs() [43]*mv {
+	return [...]*mv{&l.mvq, &l.mvk, &l.mvv, &l.mvo, &l.mvg, &l.mvu, &l.mvd,
+		&l.mvsg, &l.mvsu, &l.mvsd, &l.mvSG, &l.mvBA, &l.mvSO,
+		&l.mvQA, &l.mvQB, &l.mvKVA, &l.mvKB, &l.mvVB,
+		&l.mvFA, &l.mvFB, &l.mvGA, &l.mvGB, &l.mvpg, &l.mvpp,
+		&l.mvIQ, &l.mvIK, &l.mvIW, &l.mvLL, &l.mvLR, &l.mvSI, &l.mvMQ,
+		&l.mvCKV, &l.mvCG, &l.mvICKV, &l.mvICG,
+		&l.mvHAD, &l.mvHAU, &l.mvHAI, &l.mvHFD, &l.mvHFU, &l.mvHFI, &l.mvNGK, &l.mvNGV}
 }
 
 // batchGrain is the coarsest granularity every batched kernel divides: the
