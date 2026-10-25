@@ -8024,3 +8024,56 @@ row where the composer's reads two.
   OpTopK's ranked lowering is quadratic in the row (1.6e10 compares at a
   128k vocabulary), the penalty has no op, and its correctly rounded
   division is PTX's alone; a multi-axis local table, which no model states.
+- **A placement compiles none of the tier's prompt kernels for a block the
+  composer serves.** The walk of every warmed prompt width compiled each
+  block's batched matvecs, fused operands and the staged attention's span
+  variants beside the composer's form of the block. A block whose prompt the
+  composer serves at a width, its instance held, is now left uncompiled there
+  (`promptHeld`, `Stats.PromptBlocksLeft`); a call whose blocks decline (rows
+  of a ragged step, every row's logits, history streamed, an instance the
+  budget refused) has their kernels compiled before its submission
+  (`promptDeclines`, counted by reason in `Stats.DeclineBuilt`), and a chunk
+  whose every block is served stages no prefill attention. Widths up to a
+  ragged step's compile as before. A first attempt left `voltaBlock` asking
+  every block's twins at the chunk, and the first prefill compiled 34 kernels
+  (`TestPlacedPromptsCompileNothing` named them); the chunk no longer asks a
+  left block. Coarsen's per-unit values are a period of the rows and a step a
+  row wherever the op keeps that form (`uval`), every unit's word elsewhere,
+  each function numbered once: the same classes, so the 25 served models'
+  lowered kernels at one row (both statements, int8 and float, PTX and
+  SPIR-V, 100 arms, 1,882 distinct kernels) hash as at 95645ee5, and Coarsen
+  left the profile (33 s before). Vulkan now states its compute units from
+  the vendor extension `GridLimit` reads, so RowTiles' 30,720-thread fill is
+  used only where no extension states one; CUDA
+  (`MAX_REGISTERS_PER_MULTIPROCESSOR` over its most resident threads, 32 on a
+  V100) and AMD's Vulkan (`vgprsPerSimd` over `wavefrontsPerSimd`) state a
+  thread's registers, and a tile takes the rows whose sum and term fit them,
+  16 rows on a V100, 16 where a device states none (NVIDIA's Vulkan). The
+  composer's forms compile side by side where the device's compiles run
+  beside each other: Vulkan, whose pipeline creation the specification
+  leaves unsynchronised (48 matvec kernels on a V100: 983 ms on one
+  goroutine, 190 ms on eight); CUDA's driver serialises them (0.67 s on one
+  thread, 1.2 to 1.4 s on two to eight), so it compiles in turn. Placement of
+  Llama-3.2-1B at the 512-row width with the blocks, head and prompt served,
+  V100 card 3, single runs on a shared box, drivers' caches off (cold) and
+  on after a filling run (warm): at 95645ee5 1 min 55 s cold and 49.1 s warm
+  on cuda:0, 2 min 57 s and 46.8 s on vulkan:3; with the walk left and
+  Coarsen periodic 49.4 s and 13.4 s, and 54.9 s and 13.9 s; with Vulkan's
+  compiles side by side 40.5 to 60.7 s cold (the tier-only arm read 37.5 and
+  42.2 s on the same box in the two passes) and 13.8 s warm on cuda:0, 43.8
+  to 47.9 s and 14.4 s on vulkan:3. The tier-only arm is unchanged in work
+  (686 compiles at 512 rows, 37.5 to 42.2 s cold, 2.9 s warm). A CPU profile
+  of the cold CUDA prompt arm names what remains: the driver compiling the
+  composer's forms (30 s: 16 widths of about 28 kernels; CUDA cannot run them
+  side by side), the tier's scratch kernels each width's scratch still
+  builds (`initScratch`, 12.5 s), and forming (11.5 s, FMA's and Affine's
+  passes). Gates on the V100 (cuda:0, vulkan:3): `TestPlacedPromptsCompileNothing`
+  (6 arms; Ministral-3-3B is not on the box), `TestPrefillMatchesForward/device`
+  (16 arms), `TestComposedBlocksServe` on the 8 `promptModels` (14 each),
+  `TestDecodeDoesNotAllocate` on Llama in both builds (28 each), the jit
+  package (`TestRowTilesHoldTheOps` now also holds the registers' sizing:
+  657 ops a tiled kernel at 512 rows with 32 registers or none stated, 218 at
+  4; `TestCoarsenClassesAreTheUnitsValues` fails when the division rule
+  drops its divisor check). `go build -gcflags=-m` over the touched packages:
+  three new heap moves, all at placement (a CUDA attribute read, the compile
+  workers' wait group and count).
