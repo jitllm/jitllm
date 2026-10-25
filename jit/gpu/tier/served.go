@@ -598,9 +598,7 @@ const (
 
 // partDecline is why a decode step's or a prompt chunk's composed part is
 // not asked for: what the serving conditions leave to the tier's own
-// kernels, counted by reason (Stats.BlockDeclines, HeadDeclines). A head
-// over a step of several rows -- a chunk's folded head, a ragged step's,
-// speculative rows' -- is the tier's, declined by its path's name.
+// kernels, counted by reason (Stats.BlockDeclines, HeadDeclines).
 type partDecline = jit.Decline
 
 const (
@@ -616,14 +614,8 @@ const (
 	partHeadShape   = jit.DeclineHeadShape
 	partHeadNorm    = jit.DeclineHeadNorm
 	partPick        = jit.DeclinePick
-	partRagged      = jit.DeclineRagged
-	partRowLogits   = jit.DeclineRowLogits
 	partCaller      = jit.DeclineCaller
 	partNoRoom      = jit.DeclineNoRoom
-	partFolded      = jit.DeclineFolded
-	partHeadRows    = jit.DeclineHeadRows
-	partPromptHead  = jit.DeclinePromptHead
-	partShadowed    = jit.DeclineShadowed
 	partHeadBias    = jit.DeclineHeadBias
 	partHeadOther   = jit.DeclineHeadOther
 	partHeadHidden  = jit.DeclineHeadHidden
@@ -862,7 +854,7 @@ func headShape(gr *graph.Graph) (headSpec, bool) {
 	return hs, gr.Out[0] == last
 }
 
-// headServes is why a one-row step's head is not the one the composer is
+// headServes is why a step's head is not the one the composer is
 // asked for, serves where it is: the model's head graph (headShape) -- a
 // norm, the vocabulary's projection with its bias, and what the graph does to
 // the logits after it, the final softcap and the scale -- with the norm and
@@ -885,11 +877,12 @@ func (bs *blockScratch) headServes(norm backend.Buf, pickOnly, persist bool) par
 	return partServes
 }
 
-// servedHead is the model's head graph served at one row: its norm bound to
-// the tier's norm (and its bias, for a LayerNorm head), its projection to the
-// head's weight and its bias to the tier's, under the roles the graph names
-// (the embedding's where the model ties them).
-func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf) (*servedPart, error) {
+// servedHead is the model's head graph served at a step of rows: its norm
+// bound to the tier's norm (and its bias, for a LayerNorm head), its
+// projection to the head's weight and its bias to the tier's, under the roles
+// the graph names (the embedding's where the model ties them). A form a row
+// count: a decode step's one row, a ragged step's or a chunk's wanted rows.
+func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf, rows int) (*servedPart, error) {
 	gr, w := bs.headGraph, bs.head
 	hs, ok := headShape(gr)
 	if !ok {
@@ -908,7 +901,7 @@ func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf) (*servedPart, e
 			sl.vectors[hs.bias] = bs.hBias
 		}
 	}
-	sk := servedKey{kind: partHead, graph: gr, rows: 1, t: t}
+	sk := servedKey{kind: partHead, graph: gr, rows: rows, t: t}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		sl := composedPart{kind: partHead, graph: gr, formats: map[jlm.Role]jlm.Type{hs.out: t},
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{}}
@@ -1410,23 +1403,6 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 	return sv, g.promptInst(bs, sv.f), nil
 }
 
-// promptServes is why block li of a prompt's call is not one the composer
-// serves whole, serves where it is: outside the shadow arm, which compares a
-// decode step's forms alone; the rows one sequence's (a ragged step's rows,
-// and speculative rows wanting every row's logits, stay on the tier's
-// kernels, by name); and what blockServes asks.
-func (g *devTier) promptServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, persist, ragged, rowLogits bool) partDecline {
-	switch {
-	case g.shadowing():
-		return partShadowed
-	case ragged:
-		return partRagged
-	case rowLogits:
-		return partRowLogits
-	}
-	return g.blockServes(l, li, p, bs, persist, true)
-}
-
 // prewarmComposed forms every placed block's part and the head's at
 // placement, as prewarmDecodePlans builds the decode plans: a form met first
 // at a token compiles inside it. Callers hold g.mu.
@@ -1462,10 +1438,10 @@ func (g *devTier) prewarmComposedBlock(li int) {
 			return
 		}
 	}
-	// Every prompt width the lane holds a scratch for: its first chunk
-	// forms and allocates nothing.
-	if g.Composed&ComposedPrompt != 0 {
-		for _, bb := range g.bbs {
+	// Every prompt width the lane holds a scratch for, and a ragged step's:
+	// its first chunk or step forms and allocates nothing.
+	for _, bb := range g.bbs {
+		if g.rowsForms(bb) {
 			g.prewarmPromptBlock(bb, li)
 		}
 	}
@@ -1494,18 +1470,17 @@ func (g *devTier) prewarmComposedBlock(li int) {
 // (g.prewarming).
 func (g *devTier) prewarmPromptBlock(bb *blockScratch, li int) {
 	if l := g.layers[li]; l != nil && bb != nil {
-		g.promptServed(l, li, bb, false, false)
+		g.promptServed(l, li, bb)
 	}
 }
 
 // promptServed reports whether the composer serves block li of a prompt call
-// at bb's rows, as the call's submission decides it (promptServes, at the
-// call's ragged and every-row-logits conditions): its form formed and the
-// scratch's instance of it held, both made here where they are not, outside
-// the submission. Callers hold g.mu.
-func (g *devTier) promptServed(l *layer, li int, bb *blockScratch, ragged, rowLogits bool) bool {
-	if g.Composed&ComposedPrompt == 0 || bb.rows < 2 || bb.pkv == nil || g.kvp == nil ||
-		g.promptServes(l, li, &bb.p, bb, false, ragged, rowLogits) != partServes {
+// or a ragged step at bb's rows (rowsForms, blockServes): its form formed and
+// the scratch's instance of it held, both made here where they are not,
+// outside the submission. Callers hold g.mu.
+func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
+	if bb.rows < 2 || bb.pkv == nil || g.kvp == nil || !g.rowsForms(bb) ||
+		g.blockServes(l, li, &bb.p, bb, false, true) != partServes {
 		return false
 	}
 	rcs := bb.cs
@@ -1522,12 +1497,11 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch, ragged, rowLo
 }
 
 // promptHeld reports whether a placement leaves block li's own batched
-// kernels at bb's rows uncompiled: the composer serves its prompt there
-// (promptServed), and the width is above the ragged step's, whose rows
-// decline by name (partRagged). They are compiled where the block's prompt
-// declines (declineTwins). Callers hold g.mu.
+// kernels at bb's rows uncompiled: the composer serves its prompt or ragged
+// step there (promptServed). They are compiled where the block's rows
+// decline (declineTwins). Callers hold g.mu.
 func (g *devTier) promptHeld(l *layer, li int, bb *blockScratch) bool {
-	return bb.rows > g.stepW && g.promptServed(l, li, bb, false, false)
+	return g.promptServed(l, li, bb)
 }
 
 // promptDeclines readies, before a prompt call's submission at bs's rows,
@@ -1535,15 +1509,15 @@ func (g *devTier) promptHeld(l *layer, li int, bb *blockScratch) bool {
 // call: the tier's own kernels the placement left it (declineTwins). It
 // reports whether any block of the range runs them. Callers hold g.mu,
 // outside any submission.
-func (g *devTier) promptDeclines(bs *blockScratch, lo, hi int, ragged, rowLogits bool) (bool, error) {
+func (g *devTier) promptDeclines(bs *blockScratch, lo, hi int) (bool, error) {
 	tier := false
 	for li := lo; li < hi; li++ {
 		l := g.layers[li]
-		if l == nil || !l.ok || g.promptServed(l, li, bs, ragged, rowLogits) {
+		if l == nil || !l.ok || g.promptServed(l, li, bs) {
 			continue
 		}
 		tier = true
-		why := g.promptServes(l, li, &bs.p, bs, false, ragged, rowLogits)
+		why := g.blockServes(l, li, &bs.p, bs, false, true)
 		if why == partServes {
 			why = partNoRoom
 		}
@@ -1586,7 +1560,7 @@ func (g *devTier) declineTwins(l *layer, li int, bs *blockScratch, why partDecli
 // the walk compiles the tier's own kernels for it. At a placement
 // (reserveScratch) that is the placement's forming. Callers hold g.mu.
 func (g *devTier) promptForms(bb *blockScratch) {
-	if bb == nil || bb.rows < 2 {
+	if bb == nil || bb.rows < 2 || !g.rowsForms(bb) {
 		return
 	}
 	was := g.prewarming
@@ -1604,6 +1578,14 @@ func (g *devTier) promptForms(bb *blockScratch) {
 	for li := range g.layers {
 		g.prewarmPromptBlock(bb, li)
 	}
+}
+
+// rowsForms says the blocks are served at the rows of batched scratch bb:
+// a prompt's width where the prompt is asked (ComposedPrompt), and the
+// ragged step's (Config.StepRows) where the blocks are.
+func (g *devTier) rowsForms(bb *blockScratch) bool {
+	return g.Composed&ComposedPrompt != 0 ||
+		g.Composed&ComposedBlock != 0 && bb != nil && g.stepW > 0 && bb.rows == g.stepW
 }
 
 // keyBound is a block form's key bound for a session of maxSeq positions.
@@ -1648,8 +1630,19 @@ func (g *devTier) prewarmComposedHead() {
 	}
 	g.prewarming = true
 	defer func() { g.prewarming = false }()
-	if _, err := g.servedHead(bs, bs.hNorm); err != nil {
+	if _, err := g.servedHead(bs, bs.hNorm, 1); err != nil {
 		g.LastErr = "the composed head: " + err.Error()
+	}
+	// A ragged step's head at each count of rows that want logits, up to
+	// the server's step (Config.StepRows): its first step forms nothing.
+	if g.stepW == 0 {
+		return
+	}
+	for n := 2; n <= min(g.StepRows, g.stepW); n++ {
+		if _, err := g.servedHead(bs, bs.hNorm, n); err != nil {
+			g.LastErr = "the composed rows head: " + err.Error()
+			return
+		}
 	}
 }
 

@@ -7478,7 +7478,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		tierRuns := true
 		if R > 1 {
 			var e error
-			if tierRuns, e = g.promptDeclines(bs, lo, hi, rag != nil, allRows); e != nil {
+			if tierRuns, e = g.promptDeclines(bs, lo, hi); e != nil {
 				return refuse("%v", e)
 			}
 		}
@@ -7642,18 +7642,24 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// a stage that bears on them is the caller's.
 	var applied, left nn.HeadStage
 	headWhy := partServes
-	composedHead := head != nil && g.Composed&ComposedHead != 0 && R == 1 && !g.prompt && rag == nil && !allRows && !fold
+	// Every head is the head scratch's graph at the rows it projects: a
+	// decode step's or a prompt's one row, a chunk's folded last row, a
+	// ragged step's wanted rows or every row of a chunk. A prompt's call
+	// asks only where the prompt is asked (ComposedPrompt); its folded head
+	// is the head's.
+	composedHead := head != nil && g.Composed&ComposedHead != 0 &&
+		(!g.prompt || fold || g.Composed&ComposedPrompt != 0)
 	if head != nil && hb.headCap != nil {
 		applied = nn.HeadCap
 	}
 	if composedHead {
 		switch {
-		case head.Graph != bs.headGraph:
+		case head.Graph != hb.headGraph:
 			headWhy = partHeadOther
 		case head.Hidden != nil:
 			headWhy = partHeadHidden
 		default:
-			headWhy = bs.headServes(hNorm, false, persistOn)
+			headWhy = hb.headServes(hNorm, false, persistOn)
 		}
 		if headWhy == partServes {
 			applied |= head.Stages
@@ -7697,7 +7703,10 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	// A pick that projects its labels' rows alone leaves no logits to apply
 	// the head's other stages to, so a head with one is projected whole.
 	pickOnly := pick && !fold && g.pickMV != nil && bs.headCap == nil && R == 1 && head.Stages&(nn.HeadBias|nn.HeadScale) == 0
-	if composedHead && headWhy == partServes && pickOnly {
+	// The fold's pick projects the picked rows alone as the one-row pick
+	// does (pickMV).
+	foldPickOnly := fold && pick && g.pickMV != nil && hb.headCap == nil
+	if composedHead && headWhy == partServes && (pickOnly || foldPickOnly) {
 		headWhy = partPick
 	}
 	headSrv := composedHead && headWhy == partServes
@@ -8362,20 +8371,22 @@ func (g *devTier) layersSession(s backend.Session) {
 			// (ComposedPrompt): a chunk, or a one-row call of the prompt
 			// (nn.PromptDevice), never counted as a step. Without
 			// ComposedPrompt a prompt's calls ask for nothing.
+			// A ragged step's rows are a decode step of several sessions,
+			// each row at its own position and history (its descriptor):
+			// its blocks are asked as decode's, at the step's rows, and a
+			// prompt's ragged rows as the prompt's.
 			kind := partBlock
-			if (R > 1 || g.prompt) && g.Composed&ComposedPrompt != 0 {
+			if (R > 1 || g.prompt) && (rag == nil || g.prompt) && g.Composed&ComposedPrompt != 0 {
 				kind = partPrompt
 			}
 			asked, why := g.Composed&(1<<kind) != 0, partServes
 			switch {
 			case !asked:
-			case kind == partBlock && (R != 1 || rag != nil || g.prompt):
+			case kind == partBlock && (g.prompt || rag == nil && R != 1):
 				g.PartsUnasked[partBlock]++
 				asked = false
-			case kind == partPrompt:
-				why = g.promptServes(l, li, p, bs, persist, rag != nil, allRows)
 			default:
-				why = g.blockServes(l, li, p, bs, persist, false)
+				why = g.blockServes(l, li, p, bs, persist, kind == partPrompt)
 			}
 			var sv *servedPart
 			var inst *partInst
@@ -8411,7 +8422,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				continue
 			}
-			if inst != nil && kind == partBlock && g.shadowing() {
+			if inst != nil && kind == partBlock && R == 1 && g.shadowing() {
 				// The form runs beside the tier's kernels, which go on to run
 				// the block below and serve.
 				if serr := g.shadowBegin(lc, bs, sv, l, li, &sh); err == nil {
@@ -10012,22 +10023,46 @@ func (g *devTier) layersSession(s backend.Session) {
 		if pendX != nil {
 			addRes(pendX, pendY, bs.x)
 		}
-		// A head over several rows is the tier's: the composer serves a
-		// one-row step's, and each other path declines by its name.
-		if head != nil && g.Composed&ComposedHead != 0 && (R != 1 || rag != nil) {
-			why := partHeadRows
-			switch {
-			case rag != nil:
-				why = partRagged
-			case allRows:
-				why = partRowLogits
-			case fold:
-				why = partFolded
-			}
+		// The head the composer serves (Config.Composed), where it is asked
+		// for this one: the step fails if it does not form. A graph that
+		// states the final softcap writes the capped logits, where the
+		// tier's own cap would have, and the tier's cap is not launched over
+		// them.
+		headSrv := key.headSrv
+		switch {
+		case head == nil || g.Composed&ComposedHead == 0 || headSrv:
+		case g.prompt && !fold && g.Composed&ComposedPrompt == 0:
+			g.PartsUnasked[partHead]++
+		default:
 			g.PartsDeclined[partHead]++
-			g.HeadDeclines[why]++
+			g.HeadDeclines[headWhy]++
 		}
-		if head != nil && (rag != nil || allRows) {
+		if head != nil && (rag != nil || allRows) && headSrv {
+			// The wanted rows (they lead) at their own count, written where
+			// the tier's projection writes them, then capped and picked as
+			// it does.
+			out, capped := bs.ragLogits, false
+			if headCapped && bs.ragCapK != nil && !rowsFaulted("nocap") {
+				out, capped = bs.ragCap, true
+			}
+			rows := ragHead
+			if rowsFaulted("headrow") {
+				rows = 1
+			}
+			sv, serr := g.servedHead(hb, hNorm, rows)
+			if serr == nil {
+				serr = sv.run(g, lc, sv.inst, []backend.Buf{bs.x}, []backend.Buf{out})
+			}
+			if err == nil {
+				err = serr
+			}
+			if bs.ragCapK != nil && !rowsFaulted("nocap") && !capped {
+				lc.la(bs.ragCapK, ragHead*hb.head.nrows, bs.ragLogits, bs.ragCap)
+			}
+			if err == nil {
+				err = lc.launch(bs.ragArgmax, ragHead, kernels.ArgmaxGroup, bs.ragOut(), bs.ragTok)
+			}
+		} else if head != nil && (rag != nil || allRows) {
 			// The output norm, the projection of the rows that want logits
 			// (they lead) and a per-row argmax over them: their tokens and
 			// logits are read back. A chunk asking for every row's logits
@@ -10078,6 +10113,32 @@ func (g *devTier) layersSession(s backend.Session) {
 			if err == nil {
 				err = lc.launch(bs.ragArgmax, ragHead, kernels.ArgmaxGroup, bs.ragOut(), bs.ragTok)
 			}
+		} else if fold && headSrv {
+			// The chunk's last row, into the decode scratch, and decode's
+			// head on it.
+			lc.la(hb.spanK, p.NEmbd, bs.x, hb.x, hb.spanOff)
+			out, capped := hb.logits, false
+			if headCapped && hb.headCap != nil {
+				out, capped = hb.logitsCap, true
+			}
+			in := hb.x
+			if rowsFaulted("foldrow") {
+				in = bs.x
+			}
+			sv, serr := g.servedHead(hb, hNorm, 1)
+			if serr == nil {
+				serr = sv.run(g, lc, sv.inst, []backend.Buf{in}, []backend.Buf{out})
+			}
+			if err == nil {
+				err = serr
+			}
+			if hb.headCap != nil && !capped {
+				lc.la(hb.headCap, hb.mvHead.rows, hb.logits, hb.logitsCap)
+			}
+			if pick {
+				lc.la(g.pickK, pickMax, hb.headOut(), g.pickIDs, g.pickOut)
+			}
+			g.HeadFolds++
 		} else if fold {
 			// The chunk's last row, into the decode scratch, and the decode
 			// scratch's head sequence on it -- mvrun's one-row arm, spelled
@@ -10132,42 +10193,20 @@ func (g *devTier) layersSession(s backend.Session) {
 		} else if head != nil {
 			// The output norm and the vocabulary projection, in the same
 			// submission: the residual stream is never read back.
-			// The head the composer serves (Config.Composed), where it is asked
-			// for this one: the step fails if it does not form. A prompt's head
-			// over its last row is one row and still the prompt's. A graph that
-			// states the final softcap writes the capped logits, where the
-			// tier's own cap would have, and the tier's cap is not launched
-			// over them.
-			served, capped := false, false
-			if g.Composed&ComposedHead != 0 && R == 1 && g.prompt {
-				// Declined by name where the prompt is asked
-				// (ComposedPrompt), else asked for nothing.
-				if g.Composed&ComposedPrompt != 0 {
-					g.PartsDeclined[partHead]++
-					g.HeadDeclines[partPromptHead]++
-				} else {
-					g.PartsUnasked[partHead]++
+			capped := false
+			if headSrv {
+				out := bs.logits
+				if headCapped && bs.headCap != nil {
+					out, capped = bs.logitsCap, true
 				}
-			} else if g.Composed&ComposedHead != 0 && R == 1 {
-				if headWhy != partServes {
-					g.PartsDeclined[partHead]++
-					g.HeadDeclines[headWhy]++
-				} else {
-					out := bs.logits
-					if headCapped && bs.headCap != nil {
-						out, capped = bs.logitsCap, true
-					}
-					sv, serr := g.servedHead(bs, hNorm)
-					if serr == nil {
-						serr = sv.run(g, lc, sv.inst, []backend.Buf{bs.x}, []backend.Buf{out})
-					}
-					if err == nil {
-						err = serr
-					}
-					served = true
+				sv, serr := g.servedHead(bs, hNorm, 1)
+				if serr == nil {
+					serr = sv.run(g, lc, sv.inst, []backend.Buf{bs.x}, []backend.Buf{out})
 				}
-			}
-			if !served {
+				if err == nil {
+					err = serr
+				}
+			} else {
 				if hNorm == nil {
 					// No output norm: the row as it is.
 					lc.la(bs.copyRows, R*p.NEmbd, bs.x, bs.h)

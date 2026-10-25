@@ -22,14 +22,8 @@ const (
 	DeclineHeadShape
 	DeclineHeadNorm
 	DeclinePick
-	DeclineRagged
-	DeclineRowLogits
 	DeclineCaller
 	DeclineNoRoom
-	DeclineFolded
-	DeclineHeadRows
-	DeclinePromptHead
-	DeclineShadowed
 	DeclineHeadBias
 	DeclineHeadOther
 	DeclineHeadHidden
@@ -74,14 +68,8 @@ var declineNames = [NumDeclines]string{
 	DeclineHeadShape:     "a head graph other than a norm, its projection and elementwise ops after it",
 	DeclineHeadNorm:      "no norm buffer, a norm of another kind than the tier's, or a norm bias it holds none of",
 	DeclinePick:          "a head that picks labels only",
-	DeclineRagged:        "a ragged step's rows",
-	DeclineRowLogits:     "every row's logits (speculative rows)",
 	DeclineCaller:        "the caller keeps it on the tier's kernels",
 	DeclineNoRoom:        "its buffers do not fit the device's budget",
-	DeclineFolded:        "a prompt chunk's folded head",
-	DeclineHeadRows:      "a head over several rows",
-	DeclinePromptHead:    "a prompt's one-row head",
-	DeclineShadowed:      "a prompt outside the shadow arm",
 	DeclineHeadBias:      "a head bias the tier holds no vector for",
 	DeclineHeadOther:     "a head graph of another State than the offered one",
 	DeclineHeadHidden:    "a head whose normed row is read back",

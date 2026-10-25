@@ -63,15 +63,6 @@ func composedOpt(parts tier.Parts) tier.Option {
 	return tier.WithConfig(func(c *tier.Config) { c.Composed = parts })
 }
 
-// composedLater are the declines the composer's paths not yet asked of it
-// count, by name (tier.DeclineName): a head over several rows -- a prompt
-// chunk's folded head, a ragged step's, speculative rows' -- a prompt's
-// one-row head, and, where the prompt is asked, a ragged step's blocks and a
-// prompt outside the shadow arm. They ran the tier's kernels before they
-// were named.
-var composedLater = []string{"a prompt chunk's folded head", "a head over several rows", "a ragged step's rows",
-	"every row's logits (speculative rows)", "a prompt's one-row head", "a prompt outside the shadow arm"}
-
 // composedNoGraph is the reason the tier declines a block the front end
 // states no graph for (tier.DeclineName).
 const composedNoGraph = "no graph from the front end"
@@ -134,7 +125,7 @@ func composedCovers(t *testing.T, m *Model, steps, placed int, exact bool, gs ..
 
 // composedRan fails t unless the composer, asked for parts on the tiers gs,
 // served part steps, formed none at a step and declined none for a reason
-// outside allow and composedLater (tier.DeclineName).
+// outside allow (tier.DeclineName).
 func composedRan(t *testing.T, parts tier.Parts, allow []string, gs ...*tier.GPU) {
 	t.Helper()
 	if parts == 0 {
@@ -161,7 +152,7 @@ func composedRan(t *testing.T, parts tier.Parts, allow []string, gs ...*tier.GPU
 		t.Fatalf("%d composed part(s) formed at a step", formed)
 	}
 	for why, k := range declined {
-		if !slices.Contains(allow, why) && !slices.Contains(composedLater, why) {
+		if !slices.Contains(allow, why) {
 			t.Fatalf("the composer declined %d part step(s): %s", k, why)
 		}
 	}

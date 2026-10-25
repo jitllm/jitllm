@@ -909,7 +909,11 @@ func (g *devTier) pagedRows(sid uint64, dst []pagedRow, R, nrow, pos int, rag *r
 			if rag.sid != nil && !pagedFaulted("session") {
 				s = rag.sid[r]
 			}
-			rows[r] = pagedRow{s: seqID{s, base}, pos: rag.pos[r]}
+			at := rag.pos[r]
+			if r == 1 && pagedFaulted("pos") {
+				at /= 2
+			}
+			rows[r] = pagedRow{s: seqID{s, base}, pos: at}
 		case rag == nil && r < nrow:
 			rows[r] = pagedRow{s: seqID{sid, 0}, pos: pos + r}
 		default:

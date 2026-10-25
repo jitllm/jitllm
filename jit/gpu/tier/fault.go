@@ -104,6 +104,10 @@ func formFaultedAsDevice() bool { return formFault.on && formFault.asDevice }
 //	          it is given
 //	"session" every row of a step across sessions reads and writes the
 //	          calling session's pages, not its own session's
+//	"pos"     a ragged step's second row states half its position: it
+//	          writes its key over an earlier one and attends the keys before
+//	          it alone (a position off by a constant would not show: the
+//	          rotary is relative)
 //	"passclip" a prefill pass reads every key, not its own: each key counts
 //	          once per pass
 //	"winrelease" a windowed layer releases the page its window starts in,
@@ -146,6 +150,10 @@ func recFaulted(f string) bool { return recFault == f }
 //	           wanted row's sums where the second row's scales are
 //	"nocap"    the per-row head skips the final softcap: every row's argmax
 //	           and logits are the uncapped projection's
+//	"headrow"  the composed per-row head projects the first wanted row
+//	           alone: every other row's logits are another step's
+//	"foldrow"  the composed folded head reads the chunk's first row, not
+//	           its last
 //	"swatab"   a step's local layers are handed the global rotary table
 //	           (csSWA is cs), the shape of the table a rows step once
 //	           never passed; it reaches the logits only where the device

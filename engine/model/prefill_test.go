@@ -85,7 +85,7 @@ func TestPrefillMatchesForward(t *testing.T) {
 	// turn; tinyllama's Q3_K blocks on the tier's kernels and the composer's;
 	// and gemma-3-1b's sliding layers over a prompt past their window,
 	// whose rows read the windowed descriptors; and the shadow arm, whose
-	// prompt stays on the tier's kernels by name. The shipped mode's bar: a
+	// prompt the composer serves as well. The shipped mode's bar: a
 	// block whose output a neighbour's held add overwrote, or a windowed row
 	// that read the whole history, misses it by orders.
 	t.Run("device", func(t *testing.T) {
@@ -119,8 +119,8 @@ func TestPrefillMatchesForward(t *testing.T) {
 // tier asking the composer for parts, every odd block kept on the tier's
 // kernels where mixed, the prompt past the model's sliding window where
 // windows, the shadow arm on where shadow: the composer served every prompt
-// block step it was asked for and declined only the blocks kept, or, in the
-// shadow arm, declined every prompt block step by that name.
+// block step it was asked for and declined only the blocks kept, in the
+// shadow arm too, which compares a decode step's blocks.
 func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, mixed, windows, shadow bool) {
 	m, err := Open(jlmOf(t, path), noTune)
 	if err != nil {
@@ -170,22 +170,11 @@ func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, mixed, wi
 	composedRan(t, parts, allow, g)
 	st := g.Stats()
 	np, dp, up := st.ServedPart(tier.ComposedPrompt)
-	if shadow {
-		named := 0
-		for i, c := range st.BlockDeclines {
-			if tier.DeclineName(i) == "a prompt outside the shadow arm" {
-				named = c
-			}
-		}
-		if np != 0 || dp == 0 || named != dp || dp%m.Cfg.NLayer != 0 || up != 0 {
-			t.Fatalf("in the shadow arm the composer served %d block steps of the prompt and declined %d, %d of them outside the shadow, and was not asked for %d",
-				np, dp, named, up)
-		}
-		t.Logf("in the shadow arm the prompt's %d block steps declined by name", dp)
-		return
+	if per := m.Cfg.NLayer - len(keep); np == 0 || np%per != 0 || up != 0 || dp != 0 && !mixed {
+		t.Fatalf("the composer served %d block steps of the prompt, %d of a chunk, declined %d and was not asked for %d", np, per, dp, up)
 	}
-	if per := m.Cfg.NLayer - len(keep); np == 0 || np%per != 0 || up != 0 {
-		t.Fatalf("the composer served %d block steps of the prompt, %d of a chunk, and was not asked for %d", np, per, up)
+	if hs, hd, _ := st.ServedPart(tier.ComposedHead); parts&tier.ComposedHead != 0 && (hs == 0 || hd != 0) {
+		t.Fatalf("the composer served the head %d times and declined it %d (%s)", hs, hd, declinesOf(st))
 	}
 	t.Logf("the composer served %d block steps of the prompt, the tier's kernels %d blocks a step", np, len(keep))
 }

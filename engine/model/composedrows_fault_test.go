@@ -1,0 +1,102 @@
+//go:build jitllmfault
+
+package model
+
+import (
+	"math"
+	"strings"
+	"testing"
+
+	"github.com/jitllm/jitllm/jit/gpu/tier"
+)
+
+// TestComposedRowsDiscriminate runs the composed rows' gates under each
+// violation of the rows the composer serves and demands each fires (RULE
+// 10): a ragged row stating half its position ("pos") and every row reading the
+// first row's pages ("alias") must part a row from the host past a tie, as
+// must a per-row head that projects the first wanted row alone ("headrow"),
+// whose other rows' logits are another step's; and a folded head reading the
+// chunk's first row ("foldrow") must part from the tail call
+// TestPrefillFoldsTheHead holds it to.
+func TestComposedRowsDiscriminate(t *testing.T) {
+	m := composedRowsModel(t)
+	defer m.Close()
+	ids := make([][]int32, len(composedRowsPrompts))
+	for i, p := range composedRowsPrompts {
+		ids[i] = m.Vocab.Encode(p, true)
+	}
+	const gen = 12
+	want := make([][]int32, len(ids))
+	for i := range ids {
+		want[i] = hostGreedy(t, m, ids[i], gen)
+	}
+	for _, dev := range stepDevices() {
+		for _, f := range []struct {
+			name string
+			arm  func(string)
+		}{{"pos", tier.SetPagedFault}, {"alias", tier.SetPagedFault}, {"headrow", tier.SetRowsFault}} {
+			t.Run(dev+"/"+f.name, func(t *testing.T) {
+				f.arm(f.name)
+				got, _, _ := batchGreedy(t, m, ids, gen, 256, []tier.Option{tier.WithDevices(dev), composedOpt(composedParts)})
+				f.arm("")
+				composedRowsServed(t, m, lastBatchStats)
+				i, j, gap := composedRowsPart(t, m, ids, want, got)
+				if i < 0 {
+					t.Fatalf("under %q every row matched the host to a tie: the gate cannot see it", f.name)
+				}
+				t.Logf("%q: row %d parts from the host at token %d, %.3f apart -- caught", f.name, i, j, gap)
+			})
+		}
+		t.Run(dev+"/foldrow", func(t *testing.T) {
+			composedFoldParts(t, m, dev)
+		})
+	}
+}
+
+// composedFoldParts prefills a prompt that ends partway into a chunk with
+// every block on device dev and the composer serving the head, folded into
+// the last chunk and as the tail call, under "foldrow", and demands the
+// logits part.
+func composedFoldParts(t *testing.T, m *Model, dev string) {
+	g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff), composedOpt(composedParts))
+	if err != nil || g == nil {
+		noDevice(t, dev, err)
+	}
+	defer g.Close()
+	text := strings.Repeat("The river rose every spring until the bridges were islands, "+
+		"and the clerk counted barrels of salt on the upper floor. ", 8)
+	ids := m.Vocab.Encode(text, true)[:150]
+	run := func(fold bool) ([]float32, int) {
+		st := m.NewState(len(ids) + 4)
+		defer st.Close()
+		st.SetDeviceFallback(false)
+		if err := st.SetDevice(g); err != nil {
+			t.Fatal(err)
+		}
+		if st.GPULayers() != m.Cfg.NLayer || !st.HeadOnDevice() {
+			t.Fatalf("placed %d of %d blocks, head %v: %s", st.GPULayers(), m.Cfg.NLayer, st.HeadOnDevice(), g.Err())
+		}
+		st.noHeadFold = !fold
+		before := g.Stats().HeadFolds
+		lg, err := st.Prefill(ids)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return append([]float32(nil), lg...), g.Stats().HeadFolds - before
+	}
+	want, _ := run(false)
+	tier.SetRowsFault("foldrow")
+	got, folds := run(true)
+	tier.SetRowsFault("")
+	if folds == 0 {
+		t.Fatalf("no head folded: the arm did not select the fold")
+	}
+	if hs, hd, _ := g.Stats().ServedPart(tier.ComposedHead); hs == 0 || hd != 0 {
+		t.Fatalf("the composer served the head %d times and declined it %d (%s)", hs, hd, declinesOf(g.Stats()))
+	}
+	nmse := logitNMSE(got, want)
+	if math.IsNaN(nmse) || !(nmse > 1e-10) {
+		t.Fatalf("under \"foldrow\" the folded head sits %.3e from the tail call: the fold gate cannot see it", nmse)
+	}
+	t.Logf("\"foldrow\": the folded head parts from the tail call by NMSE %.3e -- caught", nmse)
+}

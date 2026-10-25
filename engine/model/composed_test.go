@@ -402,15 +402,6 @@ func TestComposedBlocksServe(t *testing.T) {
 										continue
 									}
 									n, d, _ := st.ServedPart(k)
-									// The prompt's head is the tier's, declined by its
-									// path's name (composedLater).
-									if k == tier.ComposedHead {
-										for i, c := range st.HeadDeclines {
-											if slices.Contains(composedLater, tier.DeclineName(i)) {
-												d -= c
-											}
-										}
-									}
 									if k == tier.ComposedHead && !headOn {
 										t.Logf("the head runs at home here (it does not fit beside the blocks): the composed head has nothing to serve")
 										continue
