@@ -141,9 +141,17 @@ func TestComposedHeadTokens(t *testing.T) {
 						if parted != 0 {
 							t.Fatalf("%d of %d draws from the device's candidates parted from the draws over its logits", parted, gen)
 						}
+						// A prompt is not a step the composer is asked for, so the
+						// report a draw reads after it says the bias and the scale
+						// were left to the host: the first draw is made over the
+						// logits the host finished, and every draw after it is the
+						// device's.
 						wantSampled := int64(gen)
-						if parts == 0 && stages&(nn.HeadBias|nn.HeadScale) != 0 {
-							wantSampled = 0
+						if stages&(nn.HeadBias|nn.HeadScale) != 0 {
+							wantSampled = int64(gen - 1)
+							if parts == 0 {
+								wantSampled = 0
+							}
 						}
 						if onDev != wantSampled {
 							t.Fatalf("the device selected %d of %d sampled tokens, want %d (stages %03b, parts %d)", onDev, gen, wantSampled, stages, parts)
