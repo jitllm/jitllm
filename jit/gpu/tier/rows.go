@@ -110,24 +110,7 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 		return false
 	}
 	g.mu.Lock()
-	// The row grain is the matrix instruction's 32 only where there is one;
-	// the dp4a twin (ragMV) and every attention tile take 8, and padding to
-	// 32 would do 32 rows of work. One compile settles which this device has.
-	grain := batchGrain
-	if l := g.layers[lo]; l != nil && l.ok {
-		// The block's first projection: a latent block with a query latent
-		// has no mvq, and a linear block none of the attention's.
-		for _, m := range []mv{l.mvq, l.mvQA, l.mvKVA, l.mvSO} {
-			if m.kern != nil {
-				g.batchMV(m, batchGrain, 1)
-				break
-			}
-		}
-	}
-	if g.mmaOff || g.NoMMA {
-		grain = 8
-	}
-	w := (n + grain - 1) / grain * grain
+	w := g.rowsWidth(lo, n)
 	if w > batchWidth {
 		g.mu.Unlock()
 		return fail("%d rows, more than the batch width %d", n, batchWidth)
@@ -207,6 +190,31 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 	return true
 }
 
+// rowsWidth is the width a ragged step of n rows from block lo runs at: n
+// rounded up to the row grain, the matrix instruction's 32 only where there
+// is one -- the dp4a twin (ragMV) and every attention tile take 8, and padding
+// to 32 would do 32 rows of work. One compile settles which this device has.
+// Callers hold g.mu.
+func (g *devTier) rowsWidth(lo, n int) int {
+	grain := batchGrain
+	if lo >= 0 && lo < len(g.layers) {
+		if l := g.layers[lo]; l != nil && l.ok {
+			// The block's first projection: a latent block with a query latent
+			// has no mvq, and a linear block none of the attention's.
+			for _, m := range []mv{l.mvq, l.mvQA, l.mvKVA, l.mvSO} {
+				if m.kern != nil {
+					g.batchMV(m, batchGrain, 1)
+					break
+				}
+			}
+		}
+	}
+	if g.mmaOff || g.NoMMA {
+		grain = 8
+	}
+	return (n + grain - 1) / grain * grain
+}
+
 // prepRagged builds bs's ragged-decode set once, outside any session: Compile
 // and Alloc are driver calls a capture forbids. Callers hold g.mu. The head's
 // part (the batched projection and the per-row argmax) is built only for a
@@ -216,8 +224,26 @@ func (g *devTier) prepRagged(bs *blockScratch, rowsHead *nn.Head, n int) bool {
 		return false
 	}
 	defer g.scratchWin().close()
-	// Every block's matvecs, on every call: a map lookup once compiled, and
-	// the one place they can be compiled (Compile is refused inside a session).
+	if bs.ragWalked != g.layerGen+1 || bs.ragWalkN != n {
+		if !g.prepRaggedBlocks(bs, n) {
+			return false
+		}
+		bs.ragWalked, bs.ragWalkN = g.layerGen+1, n
+	}
+	return g.prepRowsHead(bs, rowsHead, n)
+}
+
+// prepRaggedBlocks builds every block's part of bs's ragged-decode set for a
+// step of n rows: the one place its matvecs can be compiled (Compile is
+// refused inside a session), a map lookup a matvec once they are. prepRagged
+// walks it once until a block is placed or released or the retune rewrites
+// their matvecs (layerGen), so a warm step's walk is a comparison. Callers
+// hold g.mu.
+func (g *devTier) prepRaggedBlocks(bs *blockScratch, n int) bool {
+	if roomFaulted("nobuild") || roomFaulted("nobuild-room") {
+		g.LastErr = "rows: no ragged twin builds (roomFault)"
+		return false
+	}
 	for _, l := range g.layers {
 		if l == nil || !l.ok {
 			continue // a block of a split placement that another tier runs
@@ -256,7 +282,7 @@ func (g *devTier) prepRagged(bs *blockScratch, rowsHead *nn.Head, n int) bool {
 		g.groupKern(l.mvu, n, bs.rows, groupGate, bs.p.Act)
 		g.groupQKV(l, n, bs.rows)
 	}
-	return g.prepRowsHead(bs, rowsHead, n)
+	return true
 }
 
 // prepRowsHead builds bs's per-row head -- the batched projection over the
@@ -454,41 +480,139 @@ func (g *GPU) RowsWidth(want int) int {
 }
 
 // rowsRoom is RowsRoom for session sid: on every device holding a block, the
-// batched scratch for rows rows (batchFor) and, where a linear block is
-// placed, the session's recurrent seat for seqs sequences (growSeat).
-func (g *GPU) rowsRoom(sid uint64, rows, seqs int) bool {
+// step's scratch (stepRoom) and, where a linear block is placed, the session's
+// recurrent seat for seqs sequences (growSeat); with head, the device holding
+// the head has its per-row head too. A scratch that does not build is an
+// error, not a shortage of room.
+func (g *GPU) rowsRoom(sid uint64, rows, seqs int, head *nn.Head) (bool, error) {
 	if roomFaulted("noseat-lie") || roomFaulted("narrow-lie") {
-		return true
+		return true, nil
 	}
-	r := (rows + 7) / 8 * 8
+	g.mu.Lock()
+	hd := g.head
+	g.mu.Unlock()
 	for _, d := range g.devs {
 		v := d.as(sid)
 		if v == nil {
 			continue
 		}
+		h := head
+		if d != hd {
+			h = nil
+		}
 		v.mu.Lock()
-		held, linear := false, false
-		for _, l := range v.layers {
+		lo, linear := -1, false
+		for li, l := range v.layers {
 			if l != nil && l.ok {
-				held = true
+				if lo < 0 {
+					lo = li
+				}
 				linear = linear || l.linear
 			}
 		}
-		ok := !held || v.bs != nil && r <= batchWidth && v.batchFor(r) >= r && (!linear || v.growSeat(sid, seqs))
+		ok, err := lo < 0 && h == nil, error(nil)
+		if !ok && v.bs != nil {
+			ok, err = v.stepRoom(lo, rows, h)
+			ok = ok && (!linear || v.growSeat(sid, seqs))
+		}
 		v.mu.Unlock()
 		v.done()
+		if err != nil {
+			return false, fmt.Errorf("%s: %w", label(d.dev, d.ord), err)
+		}
 		if !ok {
-			return false
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
+}
+
+// errStepBuild is a ragged step's scratch that did not build: a kernel the
+// device refused, a buffer the driver did not give, the head not on the
+// device. No relocation gives it room, so the step is refused by name.
+type errStepBuild struct{ why string }
+
+func (e errStepBuild) Error() string { return "the step's scratch does not build: " + e.why }
+
+// stepRoom reports whether a ragged step of n rows from block lo has its
+// scratch here: the batched scratch for the width it runs at (rowsWidth,
+// batchFor) and the ragged set the step builds in it (prepRagged), with
+// head's per-row head. They are built now, outside any session, and held to
+// the budget as a width built after placement is (prepBatch): a step whose
+// scratch would pass it has no room, and the caller relocates blocks to make
+// some rather than the device charging past its budget. The per-row head is
+// priced before it is asked for, a padded step's head being the scratch's
+// rows of logits. A set that does not build is an errStepBuild. Callers hold
+// g.mu.
+func (g *devTier) stepRoom(lo, n int, head *nn.Head) (bool, error) {
+	w := g.rowsWidth(lo, n)
+	if w > batchWidth {
+		return false, nil
+	}
+	if w = g.batchFor(w); w == 0 {
+		return false, nil
+	}
+	bs := g.bbs[w]
+	if head != nil {
+		if g.bs == nil || g.bs.head == nil || !g.bs.head.ok {
+			return false, errStepBuild{"the step's head is not on this device"}
+		}
+		if !g.rowsHeadRoom(bs, head) {
+			return false, nil
+		}
+	}
+	if !g.prepRagged(bs, head, n) {
+		if roomFaulted("nobuild-room") {
+			return false, nil
+		}
+		return false, errStepBuild{g.LastErr}
+	}
+	if g.NoScratchReserve || g.kvCompact(g.promisedBytes(), nil) {
+		return true, nil
+	}
+	g.LastErr = fmt.Sprintf("a %d-row step's scratch passes the budget (%d of %d bytes charged)", w, g.used, g.limit)
+	return false, nil
+}
+
+// rowsHeadRoom reports whether bs's per-row head for head fits the budget:
+// the logits every row of the scratch projects into, the tokens their argmax
+// writes and a final softcap's capped copy, as prepRowsHead allocates them,
+// priced as the card spends them beside the history promised to admitted
+// rows. What is built costs nothing, and a width reserved at placement had
+// them reserved with it (reserveRowsHead). Callers hold g.mu, with the head
+// on this device.
+func (g *devTier) rowsHeadRoom(bs *blockScratch, head *nn.Head) bool {
+	if g.NoScratchReserve {
+		return true
+	}
+	R, vocab := bs.rows, g.bs.head.nrows
+	// A head of another width than the one reserved gives back every buffer
+	// (prepRowsHead's freeRagOut) and asks for them all again.
+	fresh := bs.ragArgmax == nil && bs.ragLogits != nil && bs.ragVocab != vocab
+	var need uint64
+	if bs.ragArgmax == nil && (bs.ragLogits == nil || fresh) {
+		need += g.footprint(R*vocab*4) + g.footprint(R*4)
+	}
+	if c := head.Softcap; c != 0 && (fresh || bs.ragCap == nil && (bs.ragCapK == nil || bs.ragCapC != c)) {
+		need += g.footprint(R * vocab * 4)
+	}
+	if need == 0 || g.kvCompact(need+g.promisedBytes(), nil) {
+		return true
+	}
+	g.LastErr = fmt.Sprintf("a %d-row step's per-row head (%d bytes) does not fit the budget (%d of %d bytes charged)",
+		R, need, g.used, g.limit)
+	return false
 }
 
 // RowsRoom is rowsRoom for the zero session (nn.RowsRoomer).
-func (g *GPU) RowsRoom(rows, seqs int) bool { return g.rowsRoom(0, rows, seqs) }
+func (g *GPU) RowsRoom(rows, seqs int, head *nn.Head) (bool, error) {
+	return g.rowsRoom(0, rows, seqs, head)
+}
 
 // RowsRoom is the session's (nn.RowsRoomer): its recurrent seat is its own.
-func (s *gpuSession) RowsRoom(rows, seqs int) bool { return s.g.rowsRoom(s.sid, rows, seqs) }
+func (s *gpuSession) RowsRoom(rows, seqs int, head *nn.Head) (bool, error) {
+	return s.g.rowsRoom(s.sid, rows, seqs, head)
+}
 
 // RowsWidth forwards the tier's (nn.RowsWidther): scratch is the device's,
 // not a session's.

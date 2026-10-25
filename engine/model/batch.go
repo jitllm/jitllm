@@ -73,14 +73,24 @@ func (s *State) forwardRows(tokens []int32, seq, pos []int, nlogit int) ([]float
 	// A device that cannot hold the batch's history hands blocks to the host
 	// (or a later card) before the step, as Forward does; every row's history
 	// travels with them.
-	// The step's own room -- its batched scratch, a recurrent state a
-	// sequence (nn.RowsRoomer) -- counts too, asked before the step so nothing
-	// has run. A device that still has no room once relocation is done (or
-	// is off) would refuse the step: the blocks come home with their history
-	// (SetGPULayers) and the step runs on the host.
-	s.relocateRows(took, n)
-	if rr, ok := s.ld.(nn.RowsRoomer); ok && s.devCount() > 0 && !rr.RowsRoom(n, s.nseq) {
-		s.SetGPULayers(0)
+	// The step's own room -- its scratch and the per-row head it projects
+	// into, a recurrent state a sequence (nn.RowsRoomer) -- counts too, asked
+	// before the step so nothing has run. A device that still has no room
+	// once relocation is done (or is off) would refuse the step: the blocks
+	// come home with their history (SetGPULayers) and the step runs on the
+	// host. A scratch that does not build is the step's error, as the device
+	// refusing it would be: no move gives it room.
+	if err := s.relocateRows(took, n, nlogit); err != nil {
+		return nil, fmt.Errorf("model: the device refused a %d-row step: %w", n, err)
+	}
+	if rr, ok := s.ld.(nn.RowsRoomer); ok && s.devCount() > 0 {
+		room, err := rr.RowsRoom(n, s.nseq, s.stepHead(nlogit))
+		if err != nil {
+			return nil, fmt.Errorf("model: the device refused a %d-row step: %w", n, err)
+		}
+		if !room {
+			s.SetGPULayers(0)
+		}
 	}
 	// A model wholly on one device runs the ragged step there. Otherwise the
 	// device's blocks go as rows with their own slots (nn.RowsDevice): the

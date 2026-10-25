@@ -35,6 +35,45 @@ func TestSelectionHistoryStaysOnTheCard(t *testing.T) {
 		t.Fatalf("three sequences hold %d pages, want %d", got, want)
 	}
 
+	// Placed on a device, a selecting block's layer holds its context, and a
+	// compaction for another layer's room leaves it there: the context is its
+	// floor. With the working set's floor the first compaction gave it back.
+	// A plain block's layer comes down to its working set.
+	tg, err := New([]Slot{{Dev: &fakeDev{}, Bytes: 1 << 30}}, WithDeviceTune(TuneOff))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := tg.devs[0]
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for li, c := range []struct {
+		name string
+		p    nn.LayerPlan
+		ctx  bool
+	}{
+		{"plain", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16}, false},
+		{"qsa", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16, Q4E: &nn.Q4EPlan{QSARatio: 4}}, true},
+		{"indexer", nn.LayerPlan{MaxSeq: 4096, NKVHead: 1, HeadDim: 16, IdxHeads: 4}, true},
+	} {
+		if err := d.pagedLayer(1, &layer{}, li, &c.p); err != nil {
+			t.Fatal(err)
+		}
+		kp := d.kvPages()
+		l := kp.layers[li]
+		want := 2
+		if c.ctx {
+			want = contextPages(kp, c.p.MaxSeq, 1)
+		}
+		held := l.n
+		if err := d.shrinkKVLayer(kp, l); err != nil {
+			t.Fatal(err)
+		}
+		if held < want || l.n != want {
+			t.Fatalf("%s: placed at %d pages, %d after a compaction, want %d held", c.name, held, l.n, want)
+		}
+		t.Logf("%s: %d pages placed, %d after a compaction", c.name, held, l.n)
+	}
+
 	// The pool's own side: a noEvict layer offers no page, a plain one does.
 	s := seqID{1, 0}
 	kp.written = map[seqID]int{s: 640}

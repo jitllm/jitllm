@@ -639,6 +639,9 @@ func (g *devTier) retuneDecode() {
 	// form the prologue tuner chose.
 	g.tuneFFN()
 	g.tuneGemm()
+	// The blocks' matvecs may have been rewritten: a scratch's walk keyed on
+	// layerGen (prepBatch, prepRagged) finds their twins again.
+	g.layerGen++
 }
 
 // splitMax is the widest split the tuner offers a shape of rows output rows.

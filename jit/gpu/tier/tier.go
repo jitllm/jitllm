@@ -3052,14 +3052,19 @@ func (g *devTier) resident(block, slot int, q kernels.Quant, w []byte, nrows, k 
 		return r
 	}
 	need := uint64(pq+pd+psc) * 4
+	// Admitted at what the card spends on the three buffers, the driver's
+	// page rounding included, as a block is (blockBytes): a lone matvec
+	// admitted at its bytes alone put the card past its budget by the
+	// rounding.
+	foot := g.planeFootprint(pq) + g.planeFootprint(pd) + g.planeFootprint(psc)
 
 	// A bank in expert pages is assembled on the device, one sheet at a time:
 	// there is no host span of the whole bank, and gathering one would hold a
 	// layer's every expert in host memory at once.
 	if pre != nil && pre.Sheet != nil {
-		if !g.room(need) {
+		if !g.room(foot) {
 			g.Declined++
-			g.LastErr = fmt.Sprintf("%s %dx%d needs %d, %d of %d used", q, nrows, k, need, g.used, g.limit)
+			g.LastErr = fmt.Sprintf("%s %dx%d needs %d, %d of %d used", q, nrows, k, foot, g.used, g.limit)
 			return r
 		}
 		tu := time.Now()
@@ -3099,10 +3104,10 @@ func (g *devTier) resident(block, slot int, q kernels.Quant, w []byte, nrows, k 
 			pk = p // the wrap was refused; upload these same bytes instead
 		}
 	}
-	if !g.room(need) {
+	if !g.room(foot) {
 		g.Declined++
 		g.LastErr = fmt.Sprintf("%s %dx%d needs %d, %d of %d used (pool %s: %d of %d)",
-			q, nrows, k, need, g.used, g.limit, g.pool.Name(), g.pool.Used(), g.pool.Limit())
+			q, nrows, k, foot, g.used, g.limit, g.pool.Name(), g.pool.Used(), g.pool.Limit())
 		return r // declines from here on; the CPU keeps this tensor
 	}
 	// A converted container skips every path below: its bytes are already what
@@ -4026,10 +4031,12 @@ func (g *devTier) residentCompact(q kernels.Quant, rows, k, slots int) (*residen
 	// as it prices the full one and the refund on release matches the charge.
 	r := &resident{nrows: rows * slots, k: k, t: q}
 	need := uint64(pq+pd+psc) * 4 * uint64(slots)
-	if !g.room(need) {
+	// Admitted at what the card spends on the three buffers, as resident is.
+	foot := g.planeFootprint(pq*slots) + g.planeFootprint(pd*slots) + g.planeFootprint(psc*slots)
+	if !g.room(foot) {
 		g.Declined++
 		g.LastErr = fmt.Sprintf("%s %dx%d x %d sheets needs %d, %d of %d used",
-			q, rows, k, slots, need, g.used, g.limit)
+			q, rows, k, slots, foot, g.used, g.limit)
 		return nil, sh, false
 	}
 	bufs := [3]backend.Buf{}

@@ -160,4 +160,30 @@ func TestRoomShortagesAreSurvived(t *testing.T) {
 			t.Fatal("the violation (RowsRoom saying there is room) ran: the fallback is untested")
 		}
 	})
+
+	// A step whose scratch does not build is refused by name: no move gives a
+	// kernel the device refused room, so none is made, where reading it as no
+	// room sent every block home and the batch ran on the host, green.
+	t.Run("build-refused", func(t *testing.T) {
+		g := swaTier(t)
+		defer g.Close()
+		tier.SetRoomFault("nobuild")
+		_, st, err := roomBatch(t, m, g, 0)
+		tier.SetRoomFault("")
+		if err == nil || !strings.Contains(err.Error(), "does not build") {
+			t.Fatalf("a step whose twins do not build gave %v, want the step refused by name", err)
+		}
+		if st.RoomHome != 0 {
+			t.Fatalf("%d step(s) came home for a scratch that does not build", st.RoomHome)
+		}
+		t.Logf("refused: %v", err)
+		tier.SetRoomFault("nobuild-room")
+		_, st, err = roomBatch(t, m, g, 0)
+		tier.SetRoomFault("")
+		if err != nil || st.RoomHome == 0 {
+			t.Fatalf("the violation (a build failure read as no room) gave %v with %d step(s) home: "+
+				"the refusal is untested", err, st.RoomHome)
+		}
+		t.Logf("the violation ran on the host: %d step(s) home", st.RoomHome)
+	})
 }

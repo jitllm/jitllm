@@ -2129,9 +2129,15 @@ type blockScratch struct {
 	// scratch's -- lane0's, borrowed by a clone (shareHead) -- and are not
 	// freed or refunded with this one.
 	headShared bool
+	// ragWalked is walked for prepRagged's walk of a ragged step of ragWalkN
+	// rows, whose twins and fusions are keyed by the step's rows.
+	ragWalked uint64
+	ragWalkN  int
+
 	// walked is g.layerGen+1 at prepBatch's last successful layer walk for
-	// this scratch: until a block is placed or released, the walk would find
-	// what it found then (0: never walked).
+	// this scratch: until a block is placed or released or the decode retune
+	// rewrites their matvecs, the walk would find what it found then (0: never
+	// walked).
 	walked uint64
 	p      nn.LayerPlan
 	// rows is how many token positions this scratch runs at once: 1 for decode
