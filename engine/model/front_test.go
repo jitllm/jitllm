@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
@@ -46,8 +47,10 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 			want, unstated := headUnstated[file]
 			if why := m.Uncovered(-1); unstated && (f.HeadGraph() != nil || why != want) {
 				t.Fatalf("the head is listed as refused by %q and is stated or refused by %q: take it off headUnstated", want, why)
-			} else if !unstated && f.HeadGraph() == nil {
+			} else if hg := f.HeadGraph(); !unstated && hg == nil {
 				t.Fatalf("no head (%s %v)", why, m.UncoveredErr(-1))
+			} else if !unstated && m.Cfg.LayerNorm != (hg.Ops[0].Kind == graph.OpLayerNorm) {
+				t.Fatalf("the head's first op is %v, where the model's norms are LayerNorm: %v", hg.Ops[0].Kind, m.Cfg.LayerNorm)
 			}
 			parts, err := frontParts(f, unstated)
 			if err != nil {

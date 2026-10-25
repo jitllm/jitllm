@@ -25,9 +25,10 @@ func coveredBlocks(m *Model) int {
 }
 
 // TestC6ServesComposed holds the composer to each classic-transformer
-// fixture's blocks on every device present: every block the front end states
-// served whole at every decode step -- served block steps equal steps times
-// the blocks the front end covers, windowed ones among them, none declined -- the logits
+// fixture's blocks and head on every device present: every block the front end
+// states served whole at every decode step -- served block steps equal steps
+// times the blocks the front end covers, windowed ones among them, none
+// declined -- and the LayerNorm head served at each, the logits
 // within the device band of the host's, and each feature taken out of the
 // device session alone, as the composer reads it too, moving them: the composed
 // arm of TestC6OnEveryDevice, asked for in any build.
@@ -62,12 +63,14 @@ func TestC6ServesComposed(t *testing.T) {
 				if covered != m.Cfg.NLayer {
 					t.Fatalf("the front end states %d of %d blocks: %s %v", covered, m.Cfg.NLayer, m.Uncovered(0), m.UncoveredErr(0))
 				}
-				// The blocks alone are asked for: the head's graph is the head's own work.
-				got, st, _, _ := composedDecode(t, m, dev, prompt, toks, tier.ComposedBlock, true, false)
+				got, st, _, _ := composedDecode(t, m, dev, prompt, toks, tier.ComposedBlock|tier.ComposedHead, true, false)
 				served, declined, _ := st.ServedPart(tier.ComposedBlock)
 				if want := len(toks) * covered; served != want || declined != 0 {
 					t.Fatalf("%d block steps served and %d declined, where %d steps of %d covered blocks are %d served",
 						served, declined, len(toks), covered, want)
+				}
+				if heads, hd, _ := st.ServedPart(tier.ComposedHead); heads != len(toks) || hd != 0 {
+					t.Fatalf("%d head steps served and %d declined, where the %d steps are one-row steps (%s)", heads, hd, len(toks), declinesOf(st))
 				}
 				for i, k := range st.BlockDeclines {
 					if k > 0 {
@@ -77,8 +80,8 @@ func TestC6ServesComposed(t *testing.T) {
 				if st.FormedAtStep != 0 {
 					t.Fatalf("%d composed block(s) formed at a step, not at the placement", st.FormedAtStep)
 				}
-				t.Logf("%s: %d of %d block steps served; the head is the tier's (front end: %s)",
-					dev, served, len(toks)*covered, m.Uncovered(-1))
+				t.Logf("%s: %d of %d block steps served; the head served at all %d steps",
+					dev, served, len(toks)*covered, len(toks))
 				for i := range got {
 					p := promptLen - 1 + i
 					e := logitNMSE(got[i], want[p])

@@ -106,22 +106,12 @@ var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1
 	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-apertus.gguf"}
 
 // headUnstated is the models of servedModels and formedModels whose head the
-// front end names as not stated yet, by the reason it gives: a LayerNorm head.
-// Their blocks and input rows form; a head that becomes stated fails the front
-// test until its entry goes.
-var headUnstated = map[string]Uncovered{
-	"falcon/falcon-7b-instruct.Q4_K_M.gguf": UncoveredClassic,
-	"synth-phi2.gguf":                       UncoveredClassic,
-	"synth-starcoder.gguf":                  UncoveredClassic,
-	"synth-stablelm.gguf":                   UncoveredClassic,
-	"synth-stablelm-par.gguf":               UncoveredClassic,
-	"synth-starcoder2.gguf":                 UncoveredClassic,
-	"synth-falcon.gguf":                     UncoveredClassic,
-	"synth-falcon40.gguf":                   UncoveredClassic,
-	"synth-nemotron.gguf":                   UncoveredClassic,
-	"synth-commandr.gguf":                   UncoveredClassic,
-	"synth-cohere2.gguf":                    UncoveredClassic,
-}
+// front end names as not stated yet, by the reason it gives. Their blocks and
+// input rows form; a head that becomes stated fails the front test until its
+// entry goes. Every head of the lists is stated: the LayerNorm heads of the
+// classic kit (falcon, phi-2, starcoder, nemotron, command-r) left it with
+// graph.Head.
+var headUnstated = map[string]Uncovered{}
 
 // declinesOf is every decline the tier counted, the head's and the blocks',
 // by name (tier.DeclineName).
