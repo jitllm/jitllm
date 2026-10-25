@@ -319,8 +319,7 @@ func (f *JIT) prepActRagged(t quant.Type, x []float32, kx, k, nb int) {
 // other shape runs unaffine, which is correct and only slower.
 func (f *JIT) numaRows(p *Packed, row, stride, grp int) (block, first int) {
 	n := f.pool.Nodes()
-	const rowsPerPage = 4096 / 4
-	if n < 2 || rowsPerPage%grp != 0 || row%rowsPerPage != 0 || stride%(rowsPerPage*n) != 0 ||
+	if n < 2 || numaRowsPerPage%grp != 0 || row%numaRowsPerPage != 0 || stride%NUMARound(n) != 0 ||
 		uintptr(unsafe.Pointer(&p.QS[0]))%4096 != 0 {
 		return 0, 0
 	}
@@ -328,8 +327,17 @@ func (f *JIT) numaRows(p *Packed, row, stride, grp int) (block, first int) {
 	if first < 0 {
 		return 0, 0
 	}
-	return rowsPerPage / grp, first
+	return numaRowsPerPage / grp, first
 }
+
+// numaRowsPerPage is how many rows of a word-line one 4 KiB page holds.
+const numaRowsPerPage = 4096 / 4
+
+// NUMARound is the row count a packed weight's stride must divide by for
+// numaRows to lay it out over nodes NUMA nodes: one block of numaRowsPerPage
+// rows to each. A gate that means to cover the node-affine path asks it, to
+// tell a model with nothing to place from one whose path stopped running.
+func NUMARound(nodes int) int { return numaRowsPerPage * nodes }
 
 // fusedSliceElems and fusedSliceRows decide when a matrix is split over k
 // across workers as well as over rows: at least fusedSliceElems weights, and a
