@@ -50,7 +50,8 @@ func TestPrefillMatchesForward(t *testing.T) {
 	// composer serving the decode's blocks, the prompt's at the chunk's rows
 	// and the head (ComposedPrompt); and the same with every other block left
 	// to the tier's kernels (Config.TierBlocks), so a chunk runs the two in
-	// turn; and gemma-3-1b's sliding layers over a prompt past their window,
+	// turn; tinyllama's Q3_K blocks on the tier's kernels and the composer's;
+	// and gemma-3-1b's sliding layers over a prompt past their window,
 	// whose rows read the windowed descriptors; and the shadow arm, whose
 	// prompt stays on the tier's kernels by name. The shipped mode's bar: a
 	// block whose output a neighbour's held add overwrote, or a windowed row
@@ -58,7 +59,8 @@ func TestPrefillMatchesForward(t *testing.T) {
 	t.Run("device", func(t *testing.T) {
 		const parts = tier.ComposedBlock | tier.ComposedHead | tier.ComposedPrompt
 		llama, gemma := testmodels.Path("Llama-3.2-1B-Instruct-Q4_K_M.gguf"), testmodels.Path("gemma-3-1b-it-Q4_K_M.gguf")
-		for _, p := range []string{llama, gemma} {
+		tiny := testmodels.Path("tinyllama-1.1b-q3_K_M.gguf")
+		for _, p := range []string{llama, gemma, tiny} {
 			if _, ok := existingModel(p); !ok {
 				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", p)
 			}
@@ -71,7 +73,8 @@ func TestPrefillMatchesForward(t *testing.T) {
 				mixed, windows, shadow bool
 			}{{"tier", llama, 0, false, false, false}, {"composed", llama, parts, false, false, false},
 				{"mixed", llama, parts, true, false, false}, {"windowed tier", gemma, 0, false, true, false},
-				{"windowed", gemma, parts, false, true, false}, {"shadowed", llama, parts, false, false, true}} {
+				{"windowed", gemma, parts, false, true, false}, {"shadowed", llama, parts, false, false, true},
+				{"tinyllama tier", tiny, 0, false, false, false}, {"tinyllama composed", tiny, parts, false, false, false}} {
 				t.Run(dev+"/"+arm.name, func(t *testing.T) {
 					prefillOnDevice(t, arm.path, dev, arm.parts, arm.mixed, arm.windows, arm.shadow)
 				})
