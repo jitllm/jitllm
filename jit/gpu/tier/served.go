@@ -855,6 +855,12 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.mvd.bias
 	case jlm.RoleAttnSinks:
 		return l.sinks
+	case jlm.RoleAttnSubNorm:
+		return l.nSubAttn
+	case jlm.RoleFFNSubNorm:
+		return l.nSubFFN
+	case jlm.RoleXIELU:
+		return l.xielu
 	}
 	return nil
 }

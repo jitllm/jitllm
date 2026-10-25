@@ -23,6 +23,21 @@ func (x *exprs) softplus(z int) int {
 	return x.op(OpAdd, F, x.op(OpMax, F, z, x.f(0)), x.op(OpMul, F, x.f(2), x.op(OpMul, F, w, s)))
 }
 
+// expm1 is e^a - 1. Within |a| < 1/2 it is the Taylor sum a + a^2(1/2 + a/6 +
+// ... + a^6/8!), where exp(a) - 1 would cancel every digit of exp(a) against
+// the one; the next term is under 1e-8 of the sum at the edge. Past it
+// exp(a) - 1 loses nothing.
+func (x *exprs) expm1(a int) int {
+	F := ir.F32
+	p := x.f(1.0 / 40320)
+	for _, k := range []float32{1.0 / 5040, 1.0 / 720, 1.0 / 120, 1.0 / 24, 1.0 / 6, 0.5} {
+		p = x.fma(p, a, x.f(k))
+	}
+	small := x.op(OpAdd, F, a, x.op(OpMul, F, x.op(OpMul, F, p, a), a))
+	big := x.op(OpSub, F, x.un(OpExp, F, a), x.f(1))
+	return x.sel(F, x.op(OpLess, ir.Pred, x.op(OpMax, F, a, x.neg(a)), x.f(0.5)), small, big)
+}
+
 // mapFn is f over operands a.
 func (x *exprs) mapFn(f graph.MapFn, a []int) (int, error) {
 	F := ir.F32
@@ -53,13 +68,17 @@ func (x *exprs) mapFn(f graph.MapFn, a []int) (int, error) {
 		return x.sel(F, x.op(OpLess, ir.Pred, a[0], a[1]), x.f(1), x.f(0)), nil
 	case graph.MapFma:
 		return x.fma(a[0], a[1], a[2]), nil
+	case graph.MapExpm1:
+		return x.expm1(a[0]), nil
 	}
 	return 0, fmt.Errorf("no formula for the map %v", f)
 }
 
 // decomposeMap is an elementwise function of its operands -- its inputs,
 // then its bound vector, then its constant -- an operand narrower than the
-// output read at element i/(w/n), an index row read as its float.
+// output read at element i/(w/n), an index row read as its float. The bound
+// vector is its Width elements from Offset where Width is set, and one such
+// element is a scalar read at a fixed place.
 func decomposeMap(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.Out) != 1 || len(o.Weight) > 1 {
 		return nil, fmt.Errorf("a map of %d outputs, %d weights", len(o.Out), len(o.Weight))
@@ -98,12 +117,27 @@ func decomposeMap(o graph.Op, c *Context) ([]Prim, error) {
 		if w.Rows > 1 {
 			return nil, fmt.Errorf("a map over a matrix")
 		}
-		e := i
-		if w.K != W {
-			if w.K <= 0 || W%w.K != 0 {
-				return nil, fmt.Errorf("a vector of %d under a map of %d", w.K, W)
+		n, off, window := w.K, 0, o.Attr.Width > 0
+		if window {
+			n, off = o.Attr.Width, o.Attr.Offset
+			if off < 0 || off+n > w.K {
+				return nil, fmt.Errorf("a window of %d from %d on a vector of %d", n, off, w.K)
 			}
-			e = x.op(OpDiv, ir.U32, i, x.u(uint32(W/w.K)))
+		}
+		var e int
+		if window && n == 1 {
+			e = x.u(uint32(off))
+		} else {
+			e = i
+			if n != W {
+				if n <= 0 || W%n != 0 {
+					return nil, fmt.Errorf("a vector of %d under a map of %d", n, W)
+				}
+				e = x.op(OpDiv, ir.U32, i, x.u(uint32(W/n)))
+			}
+			if off > 0 {
+				e = x.op(OpAdd, ir.U32, e, x.u(uint32(off)))
+			}
 		}
 		args = append(args, x.at(len(in), []int{w.K}, e))
 		in = append(in, Operand{Kind: OperandVector, Role: w.Role, Name: w.Role.String()})
@@ -201,24 +235,39 @@ func decomposeSlice(o graph.Op, c *Context) ([]Prim, error) {
 		return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{{Kind: OperandVector, Role: w.Role, Name: w.Role.String()}},
 			Out: c.value(o.Out[0]), Expr: x.e, Facts: Facts{Extents: map[int]int{0: w.K * max(1, w.Rows)}}}}, nil
 	}
-	in := c.rows(o.In[0])
-	col := x.op(OpAdd, U, x.u(uint32(a.Offset)), e)
-	want := a.Width
 	if a.HeadDim > 0 {
-		if in[1]%a.HeadDim != 0 || a.Offset+a.Width > a.HeadDim {
-			return nil, fmt.Errorf("a slice of %d from %d in heads of %d", a.Width, a.Offset, a.HeadDim)
-		}
-		want = in[1] / a.HeadDim * a.Width
-		h := x.op(OpDiv, U, e, x.u(uint32(a.Width)))
-		col = x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(a.HeadDim))), x.op(OpAdd, U, x.u(uint32(a.Offset)), x.op(OpRem, U, e, x.u(uint32(a.Width)))))
-	} else if a.Offset+a.Width > in[1] {
+		return decomposeHeadSlice(o, c)
+	}
+	in := c.rows(o.In[0])
+	switch {
+	case a.Offset+a.Width > in[1]:
 		return nil, fmt.Errorf("a slice of %d from %d of %d", a.Width, a.Offset, in[1])
+	case sh[1] != a.Width:
+		return nil, fmt.Errorf("a slice of %d into %d", a.Width, sh[1])
 	}
-	if sh[1] != want {
-		return nil, fmt.Errorf("a slice of %d into %d", want, sh[1])
-	}
-	x.at(0, in, r, col)
+	x.at(0, in, r, x.op(OpAdd, U, x.u(uint32(a.Offset)), e))
 	return []Prim{{Kind: PrimMap, Shape: sh, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
+}
+
+// decomposeHeadSlice copies Width elements from Offset of each head of
+// HeadDim in a row. Its space is the row, the head and the element, so no head
+// is found by dividing: a head of any width forms on a device with no integer
+// division by a constant.
+func decomposeHeadSlice(o graph.Op, c *Context) ([]Prim, error) {
+	a := o.Attr
+	in, out := c.rows(o.In[0]), c.rows(o.Out[0])
+	if in[1]%a.HeadDim != 0 || a.Offset < 0 || a.Offset+a.Width > a.HeadDim {
+		return nil, fmt.Errorf("a slice of %d from %d in heads of %d", a.Width, a.Offset, a.HeadDim)
+	}
+	heads := in[1] / a.HeadDim
+	if out[1] != heads*a.Width {
+		return nil, fmt.Errorf("a slice of %d into %d", heads*a.Width, out[1])
+	}
+	U := ir.U32
+	var x exprs
+	r, h, e := x.coord(0), x.coord(1), x.coord(2)
+	x.at(0, in, r, x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(a.HeadDim))), x.op(OpAdd, U, x.u(uint32(a.Offset)), e)))
+	return []Prim{{Kind: PrimMap, Shape: []int{out[0], heads, a.Width}, In: []Operand{c.value(o.In[0])}, Out: c.value(o.Out[0]), Expr: x.e}}, nil
 }
 
 // decomposeTile is the row repeated: element i of the output its input's

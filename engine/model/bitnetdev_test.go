@@ -56,6 +56,20 @@ func TestBitNetOnEveryDevice(t *testing.T) {
 	}
 }
 
+// bitnetArm is one run of the device gate: what it runs, the host's answer, the
+// blocks it places (-1: every block and the head), whether its attention stays
+// f32, its bound, and whether it runs without a recording to count the steps
+// the composer served.
+type bitnetArm struct {
+	name    string
+	run     func(*State) [][]float32
+	want    [][]float32
+	layers  int
+	f32Attn bool
+	bound   float64
+	noGraph bool
+}
+
 // bitnetDevPrefill is the shipping prefill arm's bound: binary16 Q K^T
 // tiles under per-token int8 activations (see TestBitNetOnEveryDevice).
 const bitnetDevPrefill = 2e-2
@@ -120,13 +134,16 @@ func bitnetOnEveryDevice(t *testing.T, m *Model, g *c6Golden) {
 		t.Run(spec, func(t *testing.T) {
 			// layers -1 places every block and the head; n > 0 the first n
 			// and leaves the rest, the head included, on the host.
-			onDevice := func(run func(*State) [][]float32, layers int, f32Attn bool) ([][]float32, string) {
+			onDevice := func(run func(*State) [][]float32, layers int, f32Attn, noGraph bool) ([][]float32, string) {
 				opts := append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)},
 					testTierOpts(t)...)
 				if f32Attn {
 					opts = append(opts, tier.WithConfig(func(c *tier.Config) {
 						c.NoMMA, c.NoVolta, c.NoFlashPrefill = true, true, true
 					}))
+				}
+				if noGraph {
+					opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
 				}
 				gpu, err := tier.OpenWith(opts...)
 				if err != nil {
@@ -150,23 +167,28 @@ func bitnetOnEveryDevice(t *testing.T, m *Model, g *c6Golden) {
 				if n := st.GPULayers(); n != want {
 					t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpu.Err())
 				}
+				if noGraph {
+					composedCovers(t, m, len(g.IDs), want, true, gpu)
+				}
 				return got, ""
 			}
-			for _, arm := range []struct {
-				name    string
-				run     func(*State) [][]float32
-				want    [][]float32
-				layers  int
-				f32Attn bool
-				bound   float64
-			}{
-				{"decode", decode, wantDec, -1, false, bitnetNMSE},
-				{"prefill, f32 attention", prefill, wantPre, -1, true, bitnetNMSE},
-				{"prefill", prefill, wantPre, -1, false, bitnetDevPrefill},
-				{"decode, partial seam", decode, wantDec, nl - 1, false, bitnetNMSE},
-				{"prefill, partial seam, f32 attention", prefill, wantPre, nl - 1, true, bitnetNMSE},
-			} {
-				got, why := onDevice(arm.run, arm.layers, arm.f32Attn)
+			arms := []bitnetArm{
+				{"decode", decode, wantDec, -1, false, bitnetNMSE, false},
+				{"prefill, f32 attention", prefill, wantPre, -1, true, bitnetNMSE, false},
+				{"prefill", prefill, wantPre, -1, false, bitnetDevPrefill, false},
+				{"decode, partial seam", decode, wantDec, nl - 1, false, bitnetNMSE, false},
+				{"prefill, partial seam, f32 attention", prefill, wantPre, nl - 1, true, bitnetNMSE, false},
+			}
+			if composedByDefault {
+				// A step a recording replays emits nothing the composer's
+				// counts see: the arms that count run without one, over the
+				// whole seam and a partial one.
+				arms = append(arms,
+					bitnetArm{"decode, no recording", decode, wantDec, -1, false, bitnetNMSE, true},
+					bitnetArm{"decode, partial seam, no recording", decode, wantDec, nl - 1, false, bitnetNMSE, true})
+			}
+			for _, arm := range arms {
+				got, why := onDevice(arm.run, arm.layers, arm.f32Attn, arm.noGraph)
 				if why != "" {
 					t.Fatalf("%s: %s", arm.name, why)
 				}
@@ -183,7 +205,7 @@ func bitnetOnEveryDevice(t *testing.T, m *Model, g *c6Golden) {
 			}
 			for _, v := range bitnetDevViolations {
 				undo := v.mut(m)
-				got, why := onDevice(decode, nl, false) // every block; the head may stay home
+				got, why := onDevice(decode, nl, false, false) // every block; the head may stay home
 				undo()
 				if why != "" {
 					t.Errorf("%s: the device declined the violation rather than running it: %s", v.name, why)

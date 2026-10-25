@@ -137,6 +137,15 @@ func Verify(g *Graph, f Facts) error {
 			if len(o.In) != 2 || len(o.Out) != 1 || width(o.In[0]) != width(o.In[1]) || width(o.Out[0]) != width(o.In[0]) {
 				bad("%s: widths %d and %d into %d", at, width(o.In[0]), width(o.In[1]), width(o.Out[0]))
 			}
+		case OpMap:
+			if a := o.Attr; a.Width != 0 {
+				switch {
+				case len(o.Weight) != 1:
+					bad("%s: a window of %d on %d bound vectors", at, a.Width, len(o.Weight))
+				case a.Width < 0 || a.Offset < 0 || a.Offset+a.Width > o.Weight[0].K:
+					bad("%s: a window of %d from %d on a vector of %d", at, a.Width, a.Offset, o.Weight[0].K)
+				}
+			}
 		}
 	}
 	for _, id := range g.Out {

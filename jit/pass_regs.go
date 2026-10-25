@@ -1225,8 +1225,10 @@ func (k *Kernel) zerosPerLoop() {
 			if e.Kind != EntryNode || e.I >= len(hs) || hs[e.I] < 0 {
 				continue
 			}
-			for _, a := range k.Operands(&k.Nodes[e.I]) {
-				if *a != z {
+			// An operand is fetched again after a zero is added: the append
+			// can move the nodes, and a pointer taken before it writes the old ones.
+			for j := range len(k.Operands(&k.Nodes[e.I])) {
+				if *k.Operands(&k.Nodes[e.I])[j] != z {
 					continue
 				}
 				c := hs[e.I]
@@ -1240,7 +1242,7 @@ func (k *Kernel) zerosPerLoop() {
 					k.Seq = append(k.Seq[:p], append([]Entry{{Kind: EntryNode, I: n}}, k.Seq[p:]...)...)
 					p++
 				}
-				*a = n
+				*k.Operands(&k.Nodes[e.I])[j] = n
 			}
 		}
 	}

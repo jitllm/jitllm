@@ -288,6 +288,15 @@ the arm's stated reasons):
 
     JITLLM_TEST_DEVICES=cuda:2,vulkan:2 ./scripts/cap 8G -- go test -tags jitllmcomposed ./engine/model -run TestBlocksMoveBetweenDevices
 
+In a composed build the classic-kit and dense (`TestC6OnEveryDevice`), hybrid
+attention (`TestHybridAttentionBlockOnDevice`) and BitNet
+(`TestBitNetOnEveryDevice`) device gates hold the composer to having run
+exactly the steps times the blocks the front end states, emitted or replayed
+from a recording (`composedCovers`, on the counter `composedBlocksRan` uses),
+and to declining every other block step for having no graph and no other
+reason. A model the front end states in part runs once more with every step
+issued, which counts those declines exactly.
+
 ## The shadow arm
 
 `tier.WithComposedShadow()` (`Config.ComposedShadow`, beside a `Config.Composed`

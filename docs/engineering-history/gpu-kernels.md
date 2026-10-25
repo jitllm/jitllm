@@ -7353,3 +7353,65 @@ row where the composer's reads two.
   TestDecodeDoesNotAllocate on Llama-3.2-1B with ComposedPrompt on, 0
   engine allocations over 64 tokens on a V100's CUDA and Vulkan, with and
   without the captured graph. The prompt chunk itself is not measured.
+- **The attention output gate, xIELU and the norms inside a sublayer as
+  ops.** The front end refused three block features by name. A gate on the
+  attention's output (the q projection twice as wide, each head's query then
+  that head's gate) is two per-head slices of that projection and the
+  attention's output times the sigmoid of the gate before the output
+  projection, as main's `applyOutGate` has it. xIELU (four numbers a block,
+  folded at conversion into `jlm.RoleXIELU`) is maps over the up projection,
+  each reading one number of the stored vector, which a map's bound vector now
+  allows (`Attrs.Offset` and `Width` window it, held to the vector by the
+  verifier), and one new generic map, `MapExpm1`: a Taylor sum within |x| <
+  1/2, exp(x) - 1 past it, where exp(x) - 1 near zero would cancel every
+  digit. A norm inside a sublayer (BitNet's, before the output projection and
+  before down) is the RMSNorm op on the attention's output and on the FFN's
+  product. The tier binds `RoleAttnSubNorm`, `RoleFFNSubNorm` and
+  `RoleXIELU` to the buffers main uploads. BitNet also quantizes every
+  projection input per token, which the op language does not state, so the
+  front end refuses its model by a new reason, `UncoveredTokenAct`, and no
+  block of it is served. `UncoveredOutGate` and `UncoveredSubNorm` go, and a
+  rotary with an interleaving but no sections (qwen3next's) is one position
+  axis, no longer `UncoveredRopeAxes`.
+  - On card 7 in a composed build, cuda:0 and vulkan:7, every composed arm
+    asserts the composer served steps x the blocks the front end states, and
+    declined every other block step by name. synth-apertus is served whole:
+    36 block steps in 12 steps of 3 blocks, its logits 2.5e-12 from the
+    host's in NMSE at decode, and the eight violations on its xIELU and
+    rotary read 3e-4 to 1.9. The qwen3next-shaped hybrid's attention block is
+    served (8 block steps in 8) and its three recurrent blocks declined by
+    kind (24), its mixture variants' attention blocks by `UncoveredMixture`.
+    The converted qwen35 fixture's attention blocks stay declined by their
+    rotary sections and its recurrent ones by kind; the four BitNet fixtures
+    by `UncoveredTokenAct` (24 or 36 declined block steps in 12). Of the 25
+    classic-kit and dense fixtures 7 are served whole, 3 have sliding layers
+    declined for their window, and 15 are declined by the front end.
+  - Each new form is executed on the CPU against the oracle. xIELU is held to
+    the engine's own bound for its kernel (4e-7 of the sum of the terms'
+    sizes) plus exp's error where the form takes exp (3.5e-6 of exp(m), the
+    remainder of the degree-5 Taylor sum both engines build exp on), at
+    widths 1 to 100 with a guard after the output and at the arguments where
+    that remainder peaks. The composed form reads 0.19 to 0.58 of the bound
+    and main's kernel the same to three digits; against the engine's bound
+    alone both read up to 1.59, which its gate does not see because it does
+    not sample those arguments. The first bound, 2e-6 of the result, is met
+    by neither (main's kernel reads up to 2.4e-4 of the result, where the
+    terms cancel). Six violations (the alphas exchanged, beta dropped, eps
+    ignored or moved, the windows one element along, expm1 stated as
+    exp(x) - 1) each read at least 1.8e4 of the bound. The split of a gated
+    projection is exact and its gated output 0.6e-6 to 2.8e-6 from the
+    definition, main's kernel's own figures, under 3.6e-6; the norm in front
+    of a projection is 1.6e-14 from the oracle in NMSE.
+  - The width gate found a bug in the CPU lowering. `ZerosPerLoop` redirects a
+    reader to a zero made for its loop through an operand pointer taken before
+    the append that adds the zero, and the append moves the nodes, so the
+    redirect wrote the old copy. A tail loop kept reading the zero made in the
+    vector loop's body, which a row narrower than a vector never runs: the
+    compare read whatever its register held, and xIELU at width 7 read about
+    2e6 of the bound on two or three of six sets, differing run to run. The
+    operand is fetched after the append, and a gate over the node sequence
+    holds every float zero to being made in a loop that encloses its reader
+    (8 kernels; the zeros merged back into one are seen in all 8). A slice of
+    heads whose width is not a power of two did not form on the CPU (no
+    general-register division by a constant); it is now a space of row, head
+    and element, as the head norm's.

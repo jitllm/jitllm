@@ -79,7 +79,10 @@ const (
 	// In[2] in order, then Weight[0] (a bound vector), then Const, as many as
 	// Fn takes. An operand narrower than Out[0] is broadcast: element i reads
 	// its element i/(w/n), w the output's width and n the operand's (one
-	// element a group of w/n; width 1 is a scalar). A primitive
+	// element a group of w/n; width 1 is a scalar). The bound vector is its
+	// Width elements from Offset where Width is set, the whole vector where it
+	// is 0: Width 1 reads one element of a stored table as a scalar, a
+	// per-block constant a buffer holds. A primitive
 	// (docs/design/composer.md, "Decomposition").
 	OpMap
 	// OpReduce combines each group of Span elements of In[0] (the whole row
@@ -256,12 +259,13 @@ const (
 	MapWhere                     // b where a > 0, else c
 	MapLess                      // 1 where a < b, else 0
 	MapFma                       // a*b + c, the product not rounded before the sum
+	MapExpm1                     // exp(a) - 1, exact near zero where the difference cancels
 )
 
 // Arity is how many operands f takes.
 func (f MapFn) Arity() int {
 	switch f {
-	case MapExp, MapSigmoid, MapSoftplus, MapSqrt:
+	case MapExp, MapSigmoid, MapSoftplus, MapSqrt, MapExpm1:
 		return 1
 	case MapWhere, MapFma:
 		return 3
@@ -271,7 +275,7 @@ func (f MapFn) Arity() int {
 	return 0
 }
 
-var mapFnNames = [...]string{"?", "add", "sub", "mul", "div", "max", "min", "exp", "sigmoid", "softplus", "sqrt", "where", "less", "fma"}
+var mapFnNames = [...]string{"?", "add", "sub", "mul", "div", "max", "min", "exp", "sigmoid", "softplus", "sqrt", "where", "less", "fma", "expm1"}
 
 func (f MapFn) String() string {
 	if int(f) < len(mapFnNames) {
@@ -365,7 +369,8 @@ type Attrs struct {
 	// Bound is OpClamp's.
 	Bound float64
 	// Offset and Width are OpSlice's; Offset is the leading rows of
-	// OpPatchify, OpLeadRow and OpDropRows too.
+	// OpPatchify, OpLeadRow and OpDropRows too, and both are the window of
+	// OpMap's bound vector.
 	Offset, Width int
 	// Fn, Order, Span and Const are the primitives' (OpMap, OpReduce,
 	// OpTopK, OpRank, OpTile): the function, the order a reduction runs in, the

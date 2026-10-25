@@ -42,7 +42,6 @@ const (
 	UncoveredVNorm
 	UncoveredKVShared
 	UncoveredVFromK
-	UncoveredOutGate
 	UncoveredClamp
 	UncoveredTemp
 	UncoveredPLE
@@ -50,7 +49,7 @@ const (
 	UncoveredNGram
 	UncoveredSparseAct
 	UncoveredAct
-	UncoveredSubNorm
+	UncoveredTokenAct
 	UncoveredPooling
 	UncoveredEmbedRows
 	UncoveredUnbound
@@ -74,7 +73,6 @@ var uncoveredNames = [numUncovered]string{
 	UncoveredVNorm:       "a norm over v",
 	UncoveredKVShared:    "a block reading another block's history",
 	UncoveredVFromK:      "v taken from k's projection",
-	UncoveredOutGate:     "a gate on the attention's output",
 	UncoveredClamp:       "clamped projections",
 	UncoveredTemp:        "an attention temperature per position",
 	UncoveredPLE:         "per-layer embeddings",
@@ -82,7 +80,7 @@ var uncoveredNames = [numUncovered]string{
 	UncoveredNGram:       "an n-gram embedding",
 	UncoveredSparseAct:   "a gaussian top-k activation",
 	UncoveredAct:         "an activation the op language does not state",
-	UncoveredSubNorm:     "a norm inside a sublayer before its output projection",
+	UncoveredTokenAct:    "projection inputs quantized to int8 per token",
 	UncoveredPooling:     "a pooled head (an embedding model's)",
 	UncoveredEmbedRows:   "input rows beyond the token's row, a scale and a position table",
 	UncoveredUnbound:     "stored tensors its graph does not bind",
@@ -305,8 +303,8 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredKVShared
 	case m.layers[li].vFromK:
 		return UncoveredVFromK
-	case c.AttnOutGate:
-		return UncoveredOutGate
+	case c.TokenAct:
+		return UncoveredTokenAct
 	case c.ClampKQV != 0:
 		return UncoveredClamp
 	case c.AttnTempScale != 0:
@@ -320,11 +318,10 @@ func (m *Model) uncovered(li int) Uncovered {
 	case c.SparseStd != 0:
 		return UncoveredSparseAct
 	}
-	if _, ok := graphActs[c.Act]; !ok {
+	// xIELU is stated for an ungated FFN, from the four numbers its block
+	// stores; the gated activations are the ones graphActs lists.
+	if _, ok := graphActs[c.Act]; !ok && !(c.Act == nn.ActXIELU && !m.stores(li, jlm.RoleFFNGate)) {
 		return UncoveredAct
-	}
-	if m.stores(li, jlm.RoleAttnSubNorm) || m.stores(li, jlm.RoleFFNSubNorm) {
-		return UncoveredSubNorm
 	}
 	return Covered
 }
@@ -372,13 +369,15 @@ func (m *Model) ropeAxesStated(r nn.Rope) bool {
 
 // blockGraph is block li's graph: the attention block the container states
 // -- a norm where it stores one (a LayerNorm with its bias where the model's
-// norms are mean-centred), q, k and v with their stored biases, the q/k norm,
-// the rotary, the history append, attention of the block's heads, scale,
-// window, softcap and sinks, the output projection, a norm over it where
-// stored and the residual, scaled where the container states a scale; then
-// the MLP the same way, gated where it stores a gate, reading the residual
-// after the attention or, in a parallel block, the block's input -- or why
-// it has none.
+// norms are mean-centred), q, k and v with their stored biases (q split from
+// its gate where the projection carries one), the q/k norm, the rotary, the
+// history append, attention of the block's heads, scale, window, softcap and
+// sinks, the output gate and the norm inside the sublayer where stored, the
+// output projection, a norm over it where stored and the residual, scaled
+// where the container states a scale; then the MLP the same way, gated where
+// it stores a gate, its activation from the block's numbers where it states
+// them, reading the residual after the attention or, in a parallel block, the
+// block's input -- or why it has none.
 func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if why := m.uncovered(li); why != Covered {
 		return nil, why, nil
@@ -388,8 +387,12 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if perExpert {
 		return nil, UncoveredMixture, nil
 	}
+	has := func(r jlm.Role) bool {
+		_, ok := f.Inventory[r]
+		return ok
+	}
 	stored := func(r jlm.Role) []jlm.Role {
-		if _, ok := f.Inventory[r]; ok {
+		if has(r) {
 			return []jlm.Role{r}
 		}
 		return nil
@@ -398,7 +401,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	qdim, kvDim, nffn := c.NHead*hd, nkv*hd, c.NFFNAt(li)
 	b := graph.NewBlock(li)
 	norm := func(v graph.ValueID, r jlm.Role) graph.ValueID {
-		if _, ok := f.Inventory[r]; ok {
+		if has(r) {
 			return b.Norm(v, r, c.RMSEps)
 		}
 		return v
@@ -422,9 +425,24 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	x := b.In("x", d)
 	n := preNorm(x, jlm.RoleAttnNorm, jlm.RoleAttnNormBias)
-	q := b.MatVec(n, jlm.RoleAttnQ, qdim, stored(jlm.RoleAttnQBias)...)
+	// With an output gate the q projection is double width: each head's query,
+	// then that head's gate.
+	qrows := qdim
+	if c.AttnOutGate {
+		qrows = 2 * qdim
+	}
+	q := b.MatVec(n, jlm.RoleAttnQ, qrows, stored(jlm.RoleAttnQBias)...)
 	k := b.MatVec(n, jlm.RoleAttnK, kvDim, stored(jlm.RoleAttnKBias)...)
 	v := b.MatVec(n, jlm.RoleAttnV, kvDim, stored(jlm.RoleAttnVBias)...)
+	var gate graph.ValueID
+	if c.AttnOutGate {
+		both := q
+		half := func(name string, off int) graph.ValueID {
+			return b.Emit(graph.OpSlice, []graph.ValueID{both}, []graph.Result{{Name: name, Width: qdim}}, nil,
+				graph.Attrs{HeadDim: 2 * hd, Offset: off, Width: hd}, nil, nil)[0]
+		}
+		q, gate = half("q", 0), half("gate", hd)
+	}
 	// A q norm after the rotary keeps k's before it: the converter folded k's
 	// weight into q's, and an unweighted norm commutes with the rotation.
 	postQ := c.QKNormAt(li) && c.QKNormPost
@@ -460,6 +478,10 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		a.Window, a.Chunked = c.SWAWindow, c.SWAChunked
 	}
 	att := b.Attend(q, hist, a, stored(jlm.RoleAttnSinks)...)
+	if c.AttnOutGate {
+		att = b.ActMul(graph.ActSigmoid, gate, att)
+	}
+	att = norm(att, jlm.RoleAttnSubNorm)
 	x2 := resid(x, norm(b.MatVec(att, jlm.RoleAttnOut, d, stored(jlm.RoleAttnOutBias)...), jlm.RolePostAttnNorm))
 	// A parallel block's MLP reads the block's input: through its own norm
 	// where it stores one, through the attention's where the two share one.
@@ -472,14 +494,18 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		n2 = n
 	}
 	var h graph.ValueID
-	if _, ok := f.Inventory[jlm.RoleFFNGate]; ok {
+	switch {
+	case has(jlm.RoleFFNGate):
 		gt := b.MatVec(n2, jlm.RoleFFNGate, nffn)
 		up := b.MatVec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...)
 		h = b.ActMul(graphActs[c.Act], gt, up)
-	} else {
+	case c.Act == nn.ActXIELU:
+		h = xielu(b, b.MatVec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...), nffn)
+	default:
 		up := b.MatVec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...)
 		h = b.Emit(graph.OpAct, []graph.ValueID{up}, []graph.Result{{Name: "act", Width: nffn}}, nil, graph.Attrs{Act: graphActs[c.Act]}, nil, nil)[0]
 	}
+	h = norm(h, jlm.RoleFFNSubNorm)
 	down := b.MatVec(h, jlm.RoleFFNDown, d, stored(jlm.RoleFFNDownBias)...)
 	b.Out(resid(x2, norm(down, jlm.RolePostFFNNorm)))
 	if err := graph.Verify(b.G, f); err != nil {
@@ -489,6 +515,37 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		return nil, UncoveredUnbound, fmt.Errorf("the container stores %v for the block, which its graph does not bind", u)
 	}
 	return b.G, Covered, nil
+}
+
+// xielu is the activation of x from the four numbers its block stores
+// (jlm.RoleXIELU: alpha_p, alpha_n, beta, eps, each read as a scalar of the
+// stored vector), as maps over x:
+//
+//	x > 0:   alpha_p*x*x + beta*x
+//	x <= 0:  (expm1(min(x, eps)) - x)*alpha_n + beta*x
+func xielu(b *graph.Builder, x graph.ValueID, width int) graph.ValueID {
+	const (
+		alphaP = iota
+		alphaN
+		beta
+		eps
+		numbers
+	)
+	// none is a map that reads no number: its operands are its inputs.
+	const none = -1
+	op := func(name string, fn graph.MapFn, number int, in ...graph.ValueID) graph.ValueID {
+		var w []graph.Binding
+		a := graph.Attrs{Fn: fn}
+		if number != none {
+			w, a.Offset, a.Width = []graph.Binding{{Role: jlm.RoleXIELU, K: numbers}}, number, 1
+		}
+		return b.Emit(graph.OpMap, in, []graph.Result{{Name: name, Width: width}}, w, a, nil, nil)[0]
+	}
+	diff := op("xielu.diff", graph.MapSub, none, op("xielu.expm1", graph.MapExpm1, none, op("xielu.min", graph.MapMin, eps, x)), x)
+	neg := op("xielu.neg", graph.MapMul, alphaN, diff)
+	pos := op("xielu.pos", graph.MapMul, none, op("xielu.ax", graph.MapMul, alphaP, x), x)
+	pick := op("xielu.pick", graph.MapWhere, none, x, pos, neg)
+	return op("xielu", graph.MapAdd, none, pick, op("xielu.bx", graph.MapMul, beta, x))
 }
 
 // headGraph is the head: the RMSNormed row's projection to the vocabulary

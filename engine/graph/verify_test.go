@@ -117,3 +117,37 @@ func TestVerifierHoldsALayerNormsBias(t *testing.T) {
 		t.Errorf("a stored norm bias no op binds is reported as %v", u)
 	}
 }
+
+// TestVerifierHoldsAMapsWindow verifies a map reading one element of a stored
+// vector, then each window the vector cannot give, every one refused naming it.
+func TestVerifierHoldsAMapsWindow(t *testing.T) {
+	build := func(off, width int, bound bool) (*Graph, Facts) {
+		b := NewBlock(0)
+		x := b.In("x", 8)
+		var w []Binding
+		if bound {
+			w = []Binding{{Role: jlm.RoleXIELU, K: 4}}
+		}
+		b.Out(b.Emit(OpMap, []ValueID{x}, []Result{{Name: "y", Width: 8}}, w, Attrs{Fn: MapMul, Offset: off, Width: width}, nil, nil)[0])
+		return b.G, Facts{Inventory: map[jlm.Role]Shape{jlm.RoleXIELU: {K: 4}}}
+	}
+	if g, f := build(3, 1, true); Verify(g, f) != nil {
+		t.Fatalf("the last element of the vector is refused: %v", Verify(g, f))
+	}
+	for _, c := range []struct {
+		name       string
+		off, width int
+		bound      bool
+	}{
+		{"past the vector", 4, 1, true},
+		{"wider than the vector", 2, 3, true},
+		{"before the vector", -1, 1, true},
+		{"a negative width", 0, -1, true},
+		{"no vector", 0, 1, false},
+	} {
+		g, f := build(c.off, c.width, c.bound)
+		if err := Verify(g, f); err == nil || !strings.Contains(err.Error(), "a window of") {
+			t.Errorf("%s: Verify said %v, want an error naming the window", c.name, err)
+		}
+	}
+}

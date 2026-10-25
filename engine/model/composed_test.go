@@ -107,7 +107,7 @@ var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1
 	"synth-starcoder2.gguf", "synth-falcon.gguf", "synth-falcon40.gguf", "synth-nemotron.gguf",
 	"synth-commandr.gguf", "synth-cohere2.gguf",
 	"synth-qwen2vl.gguf", "synth-qwen25vl.gguf", "synth-qwen3vl.gguf",
-	"Qwen3-VL-2B-Instruct-f16.gguf"}
+	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-apertus.gguf"}
 
 // headUnstated is the models of servedModels and formedModels whose head the
 // front end names as not stated yet, by the reason it gives: a LayerNorm head.

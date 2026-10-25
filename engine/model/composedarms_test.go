@@ -71,6 +71,62 @@ func composedOpt(parts tier.Parts) tier.Option {
 // were named.
 var composedLater = []string{"a prompt chunk's folded head", "a head over several rows", "a ragged step's rows",
 	"every row's logits (speculative rows)", "a prompt's one-row head", "a prompt outside the shadow arm"}
+// composedNoGraph is the reason the tier declines a block the front end
+// states no graph for (tier.DeclineName).
+const composedNoGraph = "no graph from the front end"
+
+// composedCovers is a composed tier's check of one fixture's decode, by the
+// counter composedBlocksRan uses (composedBlockSteps: the steps the composer
+// emitted and those a recording replayed). Of steps one-row steps over blocks
+// [0, placed) of m on the fresh tiers gs it ran every block the front end
+// states, formed none at a step, and declined no block step but for the front
+// end having no graph: exactly as many of those as the blocks it states none
+// of take where the run issues every step itself (exact: no recording, which
+// replays nothing a decline is counted from), at most that where it does not.
+// A sliding layer is served like any other, the tier declining only a graph
+// whose window is not the plan's, so a window decline fails here by its name.
+// A tier that is not asked for blocks is not checked.
+func composedCovers(t *testing.T, m *Model, steps, placed int, exact bool, gs ...*tier.GPU) {
+	t.Helper()
+	if len(gs) == 0 || gs[0].Composed&tier.ComposedBlock == 0 {
+		return
+	}
+	covered := 0
+	for li := range placed {
+		if m.Uncovered(li) == Covered {
+			covered++
+		}
+	}
+	formed := 0
+	declined := map[string]int{}
+	for _, g := range gs {
+		s := g.Stats()
+		formed += s.FormedAtStep
+		for i, k := range s.BlockDeclines {
+			if k > 0 {
+				declined[tier.DeclineName(i)] += k
+			}
+		}
+	}
+	for why, k := range declined {
+		if why != composedNoGraph {
+			t.Errorf("the composer declined %d block step(s): %s", k, why)
+		}
+	}
+	ran := composedBlockSteps(gs...)
+	t.Logf("the front end states %d of %d blocks: the composer ran %d block steps in %d steps, declined %d for no graph",
+		covered, placed, ran, steps, declined[composedNoGraph])
+	if formed != 0 {
+		t.Errorf("%d composed part(s) formed at a step", formed)
+	}
+	if want := steps * covered; ran != want {
+		t.Errorf("the composer ran %d block steps, want %d: %d steps of the %d blocks it states", ran, want, steps, covered)
+	}
+	got, want := declined[composedNoGraph], steps*(placed-covered)
+	if exact && got != want || got > want {
+		t.Errorf("%d block steps declined for no graph, want %d (at most, with a recording): %d steps of the %d blocks it states none of", got, want, steps, placed-covered)
+	}
+}
 
 // composedRan fails t unless the composer, asked for parts on the tiers gs,
 // served part steps, formed none at a step and declined none for a reason

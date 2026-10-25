@@ -562,7 +562,14 @@ func TestHybridAttentionBlockOnDevice(t *testing.T) {
 		{"widemoe", hyOpt{moe: true, wideMoE: true}}} {
 		// Every backend, not "gpu:0". See hybridDeviceNMSEOn.
 		for _, spec := range stepDevices() {
-			t.Run(c.name+"/"+spec, func(t *testing.T) { hybridDeviceBlockOn(t, c.opt, spec) })
+			t.Run(c.name+"/"+spec, func(t *testing.T) {
+				hybridDeviceBlockOn(t, c.opt, spec, false)
+				if composedByDefault {
+					// The composer's counts are of the steps emitted, which a
+					// recording replays: the arm that counts runs without one.
+					hybridDeviceBlockOn(t, c.opt, spec, true)
+				}
+			})
 		}
 	}
 }
@@ -581,14 +588,14 @@ const hybridDeviceBound = 5e-3
 // same geometry at two layers with the seam one block from the bottom. A fault
 // in the block moves both arms; amplification moves only the deep one. See
 // docs/engineering-history/placement.md 15i.
-func hybridDeviceBlockOn(t *testing.T, o hyOpt, spec string) {
-	worst, at := hybridDeviceNMSEOn(t, o, spec)
+func hybridDeviceBlockOn(t *testing.T, o hyOpt, spec string, noGraph bool) {
+	worst, at := hybridDeviceNMSEOn(t, o, spec, noGraph)
 	if worst <= hybridDeviceBound {
 		return
 	}
 	so := o
 	so.layers, so.solo = 2, 2
-	ctl, cat := hybridDeviceNMSEOn(t, so, spec)
+	ctl, cat := hybridDeviceNMSEOn(t, so, spec, noGraph)
 	if ctl > hybridDeviceBound {
 		t.Fatalf("pos %d: logit NMSE %.3e, and the SHALLOW control is %.3e at "+
 			"pos %d -- both arms moved, so the device block does not compute "+
@@ -603,7 +610,7 @@ func hybridDeviceBlockOn(t *testing.T, o hyOpt, spec string) {
 // returns the worst per-position logit NMSE against the host, with the position
 // it was at. "gpu:0" resolves to CUDA wherever it exists, so a gate asking only for
 // "gpu:0" never ran the gated delta rule on SPIR-V.
-func hybridDeviceNMSEOn(t *testing.T, o hyOpt, spec string) (float64, int) {
+func hybridDeviceNMSEOn(t *testing.T, o hyOpt, spec string, noGraph bool) (float64, int) {
 	m := hybridModelOpt(t, o)
 	defer m.Close()
 	if !m.Cfg.AttnOutGate || m.Cfg.NRot == m.Cfg.HeadDim {
@@ -626,7 +633,11 @@ func hybridDeviceNMSEOn(t *testing.T, o hyOpt, spec string) (float64, int) {
 	// k-split per placement and a split is the f32 reduction order, so two
 	// unpinned placements disagree in the last bits, which a deep hybrid
 	// amplifies (TestHybridDeviceErrorIsAmplification).
-	g, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff))
+	opts := []tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)}
+	if noGraph {
+		opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
+	}
+	g, err := tier.OpenWith(opts...)
 	if err != nil || g == nil {
 		noDevice(t, spec, err)
 	}
@@ -675,6 +686,9 @@ func hybridDeviceNMSEOn(t *testing.T, o hyOpt, spec string) (float64, int) {
 		if nmse > worst {
 			worst, at = nmse, p
 		}
+	}
+	if noGraph {
+		composedCovers(t, m, len(ids), dev.GPULayers(), true, g)
 	}
 	return worst, at
 }

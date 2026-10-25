@@ -140,7 +140,7 @@ func TestC6OnEveryDevice(t *testing.T) {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openC6(t, fx.name)
 			defer m.Close()
-			fixtureOnEveryDevice(t, m, g, c6DevViolations[fx.name])
+			fixtureOnEveryDeviceCounted(t, m, g, c6DevViolations[fx.name], 1e-5, true)
 		})
 	}
 }
@@ -157,6 +157,15 @@ func fixtureOnEveryDevice(t *testing.T, m *Model, g *c6Golden, vs []c6Violation)
 // bound named: the binary16 attention tiles' band, which a graph that
 // renormalises a small branch (Gemma 4's mixture block) amplifies.
 func fixtureOnEveryDeviceWithin(t *testing.T, m *Model, g *c6Golden, vs []c6Violation, preBound float64) {
+	t.Helper()
+	fixtureOnEveryDeviceCounted(t, m, g, vs, preBound, false)
+}
+
+// fixtureOnEveryDeviceCounted is fixtureOnEveryDeviceWithin, and where counted
+// is set a composed build (composedByDefault) adds a decode arm that counts
+// the composer's served block steps against the blocks the front end states
+// (composedCovers).
+func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Violation, preBound float64, counted bool) {
 	t.Helper()
 	decode := func(st *State) [][]float32 {
 		var out [][]float32
@@ -216,9 +225,13 @@ func fixtureOnEveryDeviceWithin(t *testing.T, m *Model, g *c6Golden, vs []c6Viol
 			// onDevice runs run on a fresh tier of spec, every block and the
 			// head placed; steps is its one-row steps, every one of which the
 			// composer runs where it serves blocks the front end states.
-			onDevice := func(run func(*State) [][]float32, steps int) ([][]float32, string) {
-				gpu, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(spec),
-					tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)...)
+			// noGraph issues every step itself, which counts the declines.
+			onDevice := func(run func(*State) [][]float32, steps int, noGraph bool) ([][]float32, string) {
+				opts := append([]tier.Option{tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff)}, testTierOpts(t)...)
+				if noGraph {
+					opts = append(opts, tier.WithConfig(func(c *tier.Config) { c.NoGraph = true }))
+				}
+				gpu, err := tier.OpenWith(opts...)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -237,17 +250,33 @@ func fixtureOnEveryDeviceWithin(t *testing.T, m *Model, g *c6Golden, vs []c6Viol
 				if n := st.GPULayers(); n != nl {
 					t.Fatalf("the session fell to the host (%d blocks left): %v", n, gpu.Err())
 				}
-				composedBlocksRan(t, composedOf(m, gpu), 0, steps*nl, gpu)
+				if counted || composedOf(m, gpu) != 0 {
+					composedCovers(t, m, steps, nl, noGraph, gpu)
+				}
 				return got, ""
 			}
 			worst := 0.0
-			for _, arm := range []struct {
-				name  string
-				run   func(*State) [][]float32
-				want  [][]float32
-				steps int
-			}{{"decode", decode, wantDec, len(g.IDs)}, {"prefill", prefill, wantPre, 0}} {
-				got, why := onDevice(arm.run, arm.steps)
+			arms := []struct {
+				name    string
+				run     func(*State) [][]float32
+				want    [][]float32
+				steps   int
+				noGraph bool
+			}{{"decode", decode, wantDec, len(g.IDs), false}, {"prefill", prefill, wantPre, 0, false}}
+			if composedByDefault && counted {
+				// A recording replays what a decline is counted from only when
+				// it is emitted, so a model the front end states in part runs
+				// once more with every step issued, to count its declines.
+				for li := range nl {
+					if m.Uncovered(li) != Covered {
+						arms = append(arms, arms[0])
+						arms[2].name, arms[2].noGraph = "decode, no recording", true
+						break
+					}
+				}
+			}
+			for _, arm := range arms {
+				got, why := onDevice(arm.run, arm.steps, arm.noGraph)
 				if why != "" {
 					t.Fatalf("%s: %s", arm.name, why)
 				}
@@ -272,7 +301,7 @@ func fixtureOnEveryDeviceWithin(t *testing.T, m *Model, g *c6Golden, vs []c6Viol
 			}
 			for _, v := range vs {
 				undo := v.mut(m)
-				got, why := onDevice(decode, len(g.IDs))
+				got, why := onDevice(decode, len(g.IDs), false)
 				undo()
 				if why != "" {
 					t.Errorf("%s: the device declined the violation rather than running it: %s", v.name, why)
