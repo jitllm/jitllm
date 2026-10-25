@@ -8336,7 +8336,8 @@ row where the composer's reads two.
 - **The rows the composer serves: a ragged step, a chunk's head, a prompt's
   head.** A head is the head graph at the rows it projects, through the one
   keyed form cache (the row count in the key): a chunk's folded last row and
-  a prompt's one-row call take decode's one-row form, a ragged step's wanted
+  a prompt's one-row call take decode's one-row form (a prompt's, folded or
+  not, asked where the prompt is, ComposedPrompt), a ragged step's wanted
   rows and a chunk wanting every row's logits a form at their count, written
   where the tier's projection wrote them, then capped and picked as before.
   A ragged step's blocks are asked as decode's (ComposedBlock) and served at
@@ -8352,16 +8353,28 @@ row where the composer's reads two.
   a batch of three prompts of different lengths decoded together, 880 block
   steps and every head served, 12 tokens a row the host's greedy to a tie),
   TestPrefillMatchesForward/device (12 arms, the shadow arm's 16 prompt
-  block steps served), TestPrefillFoldsTheHead and
-  TestPrefillFoldsALayerNormHead in the jitllmcomposed build (the folded
-  served head against the tail call: NMSE 8e-15 to 5e-14, 8 tokens equal),
-  TestComposedHeadServesWhereTheBlocksDoNot (24 steps and the fold, worst
-  NMSE 2.3e-12 against 8.2e-04 capped twice) and
+  block steps and the folded head served), TestPrefillFoldsTheHead and
+  TestPrefillFoldsALayerNormHead in the jitllmcomposed build (which does
+  not ask the prompt: NMSE 8e-15 to 5e-14 fold against tail, 8 tokens
+  equal), TestComposedHeadServesWhereTheBlocksDoNot and
   TestComposedPromptIsNotServed pass. TestComposedRowsDiscriminate
   (jitllmfault) fires on each violation: a ragged row stating half its
   position ("pos", 13.9 apart at token 1), every row reading row 0's pages
   ("alias", 9.5), the per-row head projecting the first row alone
   ("headrow", 12.0), the folded head reading the chunk's first row
   ("foldrow", NMSE 0.96). A position off by a constant does not show: the
-  rotary is relative. Escape analysis of jit/gpu/tier against the tree
-  before (go build -gcflags=-m, line numbers dropped) is unchanged.
+  rotary is relative. TestDecodeDoesNotAllocate on Llama-3.2-1B makes no
+  engine allocation in either build; TestBatchSeamMovesCarryEveryRow,
+  TestBatchMatchesForward, TestRaggedBatchMatchesForward,
+  TestForwardBatchGreedyMatchesEachSequenceAlone,
+  TestSchedulerOnDeviceMatchesEachSequenceAlone and TestSpecLookupOnDevice
+  pass in the jitllmcomposed build. Escape analysis of jit/gpu/tier against
+  the tree before (go build -gcflags=-m, line numbers dropped) is unchanged.
+  Open: TestABatchLeavesAnotherSessionAlone's composed arm forms 34 parts at
+  B's first steps (a width no placement reserved, and the head at B's
+  wanted-row counts). With StepRows the head counts form at placement, and
+  16 still form at a step: on a device with no integer matrix instruction
+  (sm_70) a ragged step runs at a multiple of 8 (rowsWidth) while StepRows
+  reserves a multiple of 32 (stepRows), so a 3-row step builds an 8-row
+  scratch at its first step, beside the reserved one, for the tier's own
+  kernels as for the composer's forms.

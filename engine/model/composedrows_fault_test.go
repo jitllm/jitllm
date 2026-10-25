@@ -54,11 +54,12 @@ func TestComposedRowsDiscriminate(t *testing.T) {
 }
 
 // composedFoldParts prefills a prompt that ends partway into a chunk with
-// every block on device dev and the composer serving the head, folded into
-// the last chunk and as the tail call, under "foldrow", and demands the
-// logits part.
+// every block on device dev and the composer serving the prompt and the
+// head, folded into the last chunk and as the tail call, under "foldrow",
+// and demands the logits part.
 func composedFoldParts(t *testing.T, m *Model, dev string) {
-	g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff), composedOpt(composedParts))
+	g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+		composedOpt(composedParts|tier.ComposedPrompt))
 	if err != nil || g == nil {
 		noDevice(t, dev, err)
 	}

@@ -7644,11 +7644,11 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	headWhy := partServes
 	// Every head is the head scratch's graph at the rows it projects: a
 	// decode step's or a prompt's one row, a chunk's folded last row, a
-	// ragged step's wanted rows or every row of a chunk. A prompt's call
-	// asks only where the prompt is asked (ComposedPrompt); its folded head
-	// is the head's.
+	// ragged step's wanted rows or every row of a chunk. A prompt's call,
+	// its folded head too, asks only where the prompt is asked
+	// (ComposedPrompt).
 	composedHead := head != nil && g.Composed&ComposedHead != 0 &&
-		(!g.prompt || fold || g.Composed&ComposedPrompt != 0)
+		(!g.prompt || g.Composed&ComposedPrompt != 0)
 	if head != nil && hb.headCap != nil {
 		applied = nn.HeadCap
 	}
@@ -10031,7 +10031,7 @@ func (g *devTier) layersSession(s backend.Session) {
 		headSrv := key.headSrv
 		switch {
 		case head == nil || g.Composed&ComposedHead == 0 || headSrv:
-		case g.prompt && !fold && g.Composed&ComposedPrompt == 0:
+		case g.prompt && g.Composed&ComposedPrompt == 0:
 			g.PartsUnasked[partHead]++
 		default:
 			g.PartsDeclined[partHead]++

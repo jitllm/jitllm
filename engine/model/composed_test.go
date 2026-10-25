@@ -443,10 +443,16 @@ func TestComposedBlocksServe(t *testing.T) {
 									}
 									t.Logf("composed %s: %d input rows gathered, %d declined, the prompt's %d (%s)", a.name, ne, de, np, declinesOf(st))
 								}
+								// Every step's head, and the prompt's once where the prompt
+								// is asked.
+								wantHeads := len(toks)
+								if prompt != 0 {
+									wantHeads++
+								}
 								heads, _, _ := st.ServedPart(tier.ComposedHead)
 								if replayed := st.ReplayedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn &&
-									heads+replayed != len(toks) {
-									t.Fatalf("the composer ran the head %d times (%d of them replayed) in %d steps", heads+replayed, replayed, len(toks))
+									heads+replayed != wantHeads {
+									t.Fatalf("the composer ran the head %d times (%d of them replayed) in %d steps and the prompt (%d asked)", heads+replayed, replayed, len(toks), prompt)
 								}
 								if noGraph {
 									t.Logf("composed %s: the tier's own launches on the steps it served: %v", a.name, census)
@@ -463,8 +469,8 @@ func TestComposedBlocksServe(t *testing.T) {
 										t.Fatalf("the composer served %d block steps where %d steps of %d blocks are %d",
 											nb, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer)
 									}
-									if nh, _, _ := st.ServedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn && nh != len(toks) {
-										t.Fatalf("the composer served the head %d times in %d steps", nh, len(toks))
+									if nh, _, _ := st.ServedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn && nh != wantHeads {
+										t.Fatalf("the composer served the head %d times in %d steps and the prompt (%d asked)", nh, len(toks), prompt)
 									}
 								}
 								// The prompt's every block step served, in whole chunks.
