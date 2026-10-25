@@ -37,7 +37,6 @@ const (
 	UncoveredStreams
 	UncoveredRopeAxes
 	UncoveredNonCausal
-	UncoveredClassic
 	UncoveredQKNormPlace
 	UncoveredVNorm
 	UncoveredKVShared
@@ -68,7 +67,6 @@ var uncoveredNames = [numUncovered]string{
 	UncoveredStreams:     "several residual streams",
 	UncoveredRopeAxes:    "a rotary over position axes its sections do not state (a pair's halves turned apart)",
 	UncoveredNonCausal:   "non-causal attention",
-	UncoveredClassic:     "LayerNorm or a parallel attention and FFN",
 	UncoveredQKNormPlace: "a q/k norm without a weight, or one over the whole projection after the rotary",
 	UncoveredVNorm:       "a norm over v",
 	UncoveredKVShared:    "a block reading another block's history",

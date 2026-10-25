@@ -29,7 +29,6 @@ func namedReason(u Uncovered) bool { return u > Covered && u < UncoveredUnbound 
 // block by a reason it names, never by a graph that fails to verify.
 func TestFrontStatesTheModelAsOps(t *testing.T) {
 	step := jit.Step{Rows: 1, Page: 64, Keys: 16, ActWindow: 32}
-	headlessModels, headlessTables := 0, 0
 	for _, file := range append(slices.Clone(servedModels), formedModels...) {
 		t.Run(file, func(t *testing.T) {
 			m := frontModel(t, file)
@@ -42,22 +41,21 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 			if f.EmbedGraph() == nil {
 				t.Fatalf("no input rows (%s %v)", m.Uncovered(-2), m.UncoveredErr(-2))
 			}
-			// A head the list holds to its reason is refused by it, and a head
-			// not on the list is stated.
-			want, unstated := headUnstated[file]
-			if why := m.Uncovered(-1); unstated && (f.HeadGraph() != nil || why != want) {
-				t.Fatalf("the head is listed as refused by %q and is stated or refused by %q: take it off headUnstated", want, why)
-			} else if hg := f.HeadGraph(); !unstated && hg == nil {
-				t.Fatalf("no head (%s %v)", why, m.UncoveredErr(-1))
-			} else if !unstated && m.Cfg.LayerNorm != (hg.Ops[0].Kind == graph.OpLayerNorm) {
+			// The head is stated, and its first op is a LayerNorm exactly where
+			// the model's norms are.
+			hg := f.HeadGraph()
+			if hg == nil {
+				t.Fatalf("no head (%s %v)", m.Uncovered(-1), m.UncoveredErr(-1))
+			}
+			if m.Cfg.LayerNorm != (hg.Ops[0].Kind == graph.OpLayerNorm) {
 				t.Fatalf("the head's first op is %v, where the model's norms are LayerNorm: %v", hg.Ops[0].Kind, m.Cfg.LayerNorm)
 			}
-			parts, err := frontParts(f, unstated)
+			parts, err := jit.Front(f, false)
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Every rotary the model states is a table part, a headless model's
-			// among them: no part kind is left out of what is formed.
+			// Every rotary the model states is a table part: no part kind is
+			// left out of what is formed.
 			wantTables := 0
 			for _, r := range f.Rotaries() {
 				if r.NRot != 0 {
@@ -69,10 +67,6 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 			}
 			if got := rotaryTables(parts); got != wantTables {
 				t.Fatalf("%d rotary table part(s) of %d parts, where the model states %d rotar(ies)", got, len(parts), wantTables)
-			}
-			if unstated {
-				headlessModels++
-				headlessTables += wantTables
 			}
 			for _, d := range []jit.Device{{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, {Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 8},
 				{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 1}, {Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}} {
@@ -104,7 +98,6 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 			}
 		})
 	}
-	t.Logf("%d headless model(s) formed %d rotary table part(s) beside their input rows and blocks", headlessModels, headlessTables)
 	for _, c := range []struct {
 		file string
 		want Uncovered
@@ -129,17 +122,6 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 			}
 		})
 	}
-}
-
-// frontParts is the model's parts as the composer forms them: the whole
-// front, or where the head is not stated yet (headUnstated) the same parts
-// less the head and the sampling, which jit.FrontHeadless leaves out and no
-// other.
-func frontParts(f jit.Model, headless bool) ([]jit.Part, error) {
-	if headless {
-		return jit.FrontHeadless(f)
-	}
-	return jit.Front(f, false)
 }
 
 // rotaryTables is how many of parts are a rotary's table.

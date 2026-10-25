@@ -77,12 +77,6 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 	"falcon/falcon-7b-instruct.Q4_K_M.gguf",
 	"Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "Qwen3VL-2B-Instruct-Q4_K_M.gguf"}
 
-// headDeclined is why the tier still declines a served model's head where it
-// does, by its name (tier.DeclineName). The composed head takes a norm (an
-// RMSNorm, or a LayerNorm with its bias), the projection with its bias, the
-// final softcap and the logit scale, so every served model's head is served.
-var headDeclined = map[string]string{}
-
 // formedModels is what the front end states and the serving gate does not
 // run: a model the tier cannot place (stories260K's 172-wide rows, which its
 // quantizer refuses), float fixtures and checkpoints whose composed logits
@@ -104,14 +98,6 @@ var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1
 	"synth-commandr.gguf", "synth-cohere2.gguf",
 	"synth-qwen2vl.gguf", "synth-qwen25vl.gguf", "synth-qwen3vl.gguf",
 	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-apertus.gguf"}
-
-// headUnstated is the models of servedModels and formedModels whose head the
-// front end names as not stated yet, by the reason it gives. Their blocks and
-// input rows form; a head that becomes stated fails the front test until its
-// entry goes. Every head of the lists is stated: the LayerNorm heads of the
-// classic kit (falcon, phi-2, starcoder, nemotron, command-r) left it with
-// graph.Head.
-var headUnstated = map[string]Uncovered{}
 
 // declinesOf is every decline the tier counted, the head's and the blocks',
 // by name (tier.DeclineName).
@@ -283,19 +269,6 @@ func TestComposedBlocksServe(t *testing.T) {
 										t.Logf("the head runs at home here (it does not fit beside the blocks): the composed head has nothing to serve")
 										continue
 									}
-									if why := headDeclined[file]; k == tier.ComposedHead && why != "" {
-										named := 0
-										for i, c := range st.HeadDeclines {
-											if tier.DeclineName(i) == why {
-												named = c
-											}
-										}
-										if n != 0 || d == 0 || named != d {
-											t.Fatalf("the head was served %d steps and declined %d, %d of them because %s: the decline it is known for did not hold", n, d, named, why)
-										}
-										t.Logf("the head declined %d steps: %s", d, why)
-										continue
-									}
 									if n == 0 || d != 0 {
 										t.Fatalf("composed parts %#x served %d steps and were declined %d: the arm did not run them (declines: %s; last error %q)", uint8(k), n, d, declinesOf(st), st.LastErr)
 									}
@@ -310,14 +283,14 @@ func TestComposedBlocksServe(t *testing.T) {
 								}
 								heads, _, _ := st.ServedPart(tier.ComposedHead)
 								if replayed := st.ReplayedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn &&
-									headDeclined[file] == "" && heads+replayed != len(toks) {
+									heads+replayed != len(toks) {
 									t.Fatalf("the composer ran the head %d times (%d of them replayed) in %d steps", heads+replayed, replayed, len(toks))
 								}
 								if noGraph {
 									t.Logf("composed %s: the tier's own launches on the steps it served: %v", a.name, census)
 									// With the blocks and the head the composer's, what the tier
 									// still launches on a step is the residual list, nothing more.
-									if a.parts&tier.ComposedHead != 0 && headOn && headDeclined[file] == "" {
+									if a.parts&tier.ComposedHead != 0 && headOn {
 										for k := range census {
 											if !slices.Contains(composedResidue, k) {
 												t.Fatalf("the tier launched its own %s on a step the composer served whole (%v)", k, census)
@@ -328,7 +301,7 @@ func TestComposedBlocksServe(t *testing.T) {
 										t.Fatalf("the composer served %d block steps where %d steps of %d blocks are %d",
 											nb, len(toks), m.Cfg.NLayer, len(toks)*m.Cfg.NLayer)
 									}
-									if nh, _, _ := st.ServedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn && headDeclined[file] == "" && nh != len(toks) {
+									if nh, _, _ := st.ServedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn && nh != len(toks) {
 										t.Fatalf("the composer served the head %d times in %d steps", nh, len(toks))
 									}
 								}

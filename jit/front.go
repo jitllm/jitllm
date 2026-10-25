@@ -144,17 +144,7 @@ func unread(f Model, block int32, read ...jlm.Role) error {
 // the one model's: its rotary, its entry over a picture, its blocks, its
 // projector, whose rows the text step's input rows take at the picture's
 // place. A model-wide tensor no graph binds, the front end refuses.
-func Front(f Model, vision bool) ([]Part, error) { return front(f, vision, false) }
-
-// FrontHeadless is Front for the text model of a model whose head graph is nil
-// (not stated yet): the same parts, the rotary tables, input rows and blocks
-// included, with the head and the sampling of its logits the only parts left
-// out. Their tensors are the head's, so the front end's refusal of a
-// model-wide tensor no graph binds is not made. A model that states a head is
-// refused, as Front refuses one that does not.
-func FrontHeadless(f Model) ([]Part, error) { return front(f, false, true) }
-
-func front(f Model, vision, headless bool) ([]Part, error) {
+func Front(f Model, vision bool) ([]Part, error) {
 	rots := textRotaries(f)
 	var parts []Part
 	picture, picW := -1, 0
@@ -163,7 +153,7 @@ func front(f Model, vision, headless bool) ([]Part, error) {
 		if v == nil {
 			return nil, fmt.Errorf("jit: the model has no vision segment")
 		}
-		vp, err := segmentParts(v, SegmentVision, len(parts), len(rots), -1, 0, false)
+		vp, err := segmentParts(v, SegmentVision, len(parts), len(rots), -1, 0)
 		if err != nil {
 			return nil, fmt.Errorf("jit: vision: %w", err)
 		}
@@ -176,7 +166,7 @@ func front(f Model, vision, headless bool) ([]Part, error) {
 		}
 		picW = hp.Graph.Values[hp.Graph.Out[0]].Width
 	}
-	tp, err := segmentParts(f, SegmentText, len(parts), 0, picture, picW, headless)
+	tp, err := segmentParts(f, SegmentText, len(parts), 0, picture, picW)
 	if err != nil {
 		return nil, err
 	}
@@ -195,12 +185,12 @@ func textRotaries(f Model) []graph.Rotary {
 // segmentParts is segment seg of the model f states, its parts from index
 // first on, its rotaries' tables named from rotBase; where picture is a
 // part's index, the input rows take that part's rows where the step names
-// them (OpSplice). Where headless, the head and the sampling are not parts.
-func segmentParts(f Model, seg Segment, first, rotBase, picture, picW int, headless bool) ([]Part, error) {
+// them (OpSplice).
+func segmentParts(f Model, seg Segment, first, rotBase, picture, picW int) ([]Part, error) {
 	c := f.Config()
 	em, h := f.EmbedGraph(), f.HeadGraph()
-	if em == nil || (h == nil) != headless {
-		return nil, fmt.Errorf("jit: the model states no input rows, or a head where none was asked for, or none where one was")
+	if em == nil || h == nil {
+		return nil, fmt.Errorf("jit: the model states no head or input rows")
 	}
 	var embedFeeds []Feed
 	if picture >= 0 {
@@ -262,9 +252,6 @@ func segmentParts(f Model, seg Segment, first, rotBase, picture, picW int, headl
 		parts = append(parts, Part{Kind: PartBlock, Segment: seg, Block: li, Graph: g, Feeds: feeds})
 	}
 	seam(f.Blocks())
-	if h == nil {
-		return parts, nil
-	}
 	bound := seamRoles
 	for _, g := range []*graph.Graph{em, h} {
 		for _, o := range g.Ops {
