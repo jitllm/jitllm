@@ -156,6 +156,13 @@ type shadowFault struct {
 	first func(prompt int) int
 }
 
+// shadowRefused is the faults the tier declines by name before the form can
+// run them, so the shadow arm never compares the rewritten block: a graph
+// window that is not the plan's (the windowed descriptors are the plan's).
+var shadowRefused = map[string]string{
+	fmt.Sprintf("the attention sees %d positions", faultWindow): "a graph whose window is not the plan's",
+}
+
 var shadowFaults = []shadowFault{
 	{"the activation is another", func(g *graph.Graph) bool {
 		for i := range g.Ops {
@@ -383,6 +390,30 @@ func TestComposedShadowHoldsEveryBlock(t *testing.T) {
 						}
 						defer restore()
 						run := shadowDecode(t, m, dev, ids, toks, true, false)
+						if why := shadowRefused[f.name]; why != "" {
+							for i := range run.logits {
+								if !slices.Equal(run.logits[i], plain[dev][1][i]) {
+									t.Fatalf("step %d: the rewrite reached the tier's logits: the stream is not the tier's", i)
+								}
+							}
+							named := 0
+							for i, n := range run.st.BlockDeclines {
+								if n == 0 {
+									continue
+								}
+								if tier.DeclineName(i) != why {
+									t.Fatalf("%d block step(s) declined because %s, where the rewrite is refused as %q", n, tier.DeclineName(i), why)
+								}
+								named += n
+							}
+							if named != len(toks) || run.st.ShadowSteps[k] != 0 {
+								t.Fatalf("%d block steps declined as %q and block %d compared in %d, where its %d steps are all refused",
+									named, why, k, run.st.ShadowSteps[k], len(toks))
+							}
+							t.Logf("block %d refused as %q at all %d steps, never compared", k, why, len(toks))
+							ran++
+							return
+						}
 						shadowCompared(t, run, nb, len(toks), true)
 						for i := range run.logits {
 							if !slices.Equal(run.logits[i], plain[dev][1][i]) {
