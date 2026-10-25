@@ -24,6 +24,17 @@ func (p Runs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			if !l.Range || l.Bound == Unbound || l.End == 0 || l.Align <= 1 {
 				continue
 			}
+			// A run inside one block of the range's alignment keeps its
+			// first position's page for each of its positions; one of whole
+			// blocks is all past the live span where the hold moves it, so
+			// its first position's place in the page is its own.
+			run := l.Unit
+			if l.Bound == BoundRuns {
+				run = d.Lanes
+			}
+			if run <= 0 || l.Align%run != 0 {
+				continue
+			}
 			for _, i := range m.bodyOf(c) {
 				nd := m.Nodes[i]
 				if nd.Op != OpDiv && nd.Op != OpRem || m.Nodes[nd.B].Op != OpConst {
@@ -35,7 +46,7 @@ func (p Runs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 					continue
 				}
 				lane := m.laneOf()
-				if nd.Op == OpRem && (l.Bound != BoundRuns || lane < 0) {
+				if nd.Op == OpRem && (l.Bound != BoundRuns || lane < 0 || run%l.Align != 0) {
 					continue
 				}
 				start := m.runStart(x, c, l.Bound)

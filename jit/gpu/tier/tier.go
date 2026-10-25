@@ -196,6 +196,12 @@ type Config struct {
 	// form computes, so the option changes no answer. It needs
 	// ComposedBlock, and works on a step issued or recorded alike.
 	ComposedShadow bool
+	// ComposedLanes, where not zero, is the subgroup the composer forms the
+	// served parts for in place of the device's (pickLanes): a narrower one,
+	// which a gate forms at to hold each lane count's forms to the tier. A
+	// count the device does not hold whole -- not a power of two, or wider
+	// than the lanes it guarantees -- is refused.
+	ComposedLanes int
 	// Census counts the tier's own launches by kernel name on the one-row
 	// steps the composer is asked for (GPU.Census): what still runs main's
 	// kernels where the composer serves.
@@ -736,6 +742,10 @@ type Stats struct {
 	// submission, by part (Config.Composed): the steps emitted, not those a
 	// recording replayed.
 	PartsServed [numParts]int
+	// ComposedLanes is the subgroup the composer formed the served parts for
+	// (Config.ComposedLanes, else the device's lanes): the selection check of
+	// a gate that narrows it.
+	ComposedLanes int
 	// PartsDeclined counts the decode steps (one row) a served part was not
 	// asked for, by part: a block with no graph, or a head or block the
 	// serving conditions leave out (a LayerNorm head, a window, the
@@ -1310,6 +1320,9 @@ func (s *Stats) add(o Stats) {
 		s.DeclineWhy = o.DeclineWhy
 	}
 	s.Failed += o.Failed
+	if o.ComposedLanes > 0 && (s.ComposedLanes == 0 || o.ComposedLanes < s.ComposedLanes) {
+		s.ComposedLanes = o.ComposedLanes
+	}
 	for i := range s.PartsServed {
 		s.PartsServed[i] += o.PartsServed[i]
 		s.PartsDeclined[i] += o.PartsDeclined[i]

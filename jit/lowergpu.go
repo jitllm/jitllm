@@ -19,7 +19,7 @@ func (g gpuLowering) Lower(n *Kernel, d Device) (Lowered, error) {
 	if n.Group <= 0 {
 		return Lowered{}, fmt.Errorf("no workgroup: the profile binds none")
 	}
-	e := &lowerer{n: n, b: ir.New(entryName(n.Name), [3]int{n.Group, 1, 1}), poison: g.Poison}
+	e := &lowerer{n: n, b: ir.New(entryName(n.Name), [3]int{n.Group, 1, 1}), poison: g.Poison, lanes: d.Lanes}
 	k, err := e.run()
 	if err == nil {
 		k.Resident = resident(n, d)
@@ -67,6 +67,8 @@ type lowerer struct {
 	n      *Kernel
 	b      *ir.Builder
 	poison bool
+	// lanes is the subgroup the device guarantees (Device.Lanes).
+	lanes  int
 	params []ir.Value
 	val    []ir.Value
 	home   []int
@@ -365,7 +367,8 @@ func (e *lowerer) thread() ir.Value { return e.b.TID() }
 
 // groupReduce is x combined over the workgroup: a butterfly in each
 // subgroup, each subgroup's result to its slot, and a butterfly over the
-// slots.
+// slots. A device that does not guarantee the IR's subgroup combines with
+// no shuffle: each thread's value to its slot, every slot read by each.
 func (e *lowerer) groupReduce(i int, x ir.Value, max bool) ir.Value {
 	b := e.b
 	comb := func(p, q ir.Value) ir.Value {
@@ -373,6 +376,23 @@ func (e *lowerer) groupReduce(i int, x ir.Value, max bool) ir.Value {
 			return b.Max(ir.F32, p, q)
 		}
 		return b.Add(ir.F32, p, q)
+	}
+	if e.lanes < ir.SubgroupLanes {
+		sh := e.shared[i]
+		b.Store(sh, e.thread(), x, 0)
+		b.Barrier()
+		acc := b.Load(ir.F32, sh, b.Const(ir.U32, 0), 0)
+		if e.n.Group == 1 {
+			return acc
+		}
+		one := b.Const(ir.U32, 1)
+		b.Loop(int64(e.n.Group - 1))
+		j := b.Phi(ir.U32, one)
+		acc = b.Phi(ir.F32, acc)
+		b.SetPhi(acc, comb(acc, b.Load(ir.F32, sh, j, 0)))
+		b.SetPhi(j, b.Add(ir.U32, j, one))
+		b.EndLoop()
+		return acc
 	}
 	butterfly := func(v ir.Value) ir.Value {
 		for m := ir.SubgroupLanes / 2; m >= 1; m /= 2 {

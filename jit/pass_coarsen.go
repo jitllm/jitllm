@@ -34,7 +34,7 @@ func (c Coarsen) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if i > 0 && out[i-1].Work && out[i-1].Part == out[i].Part {
 			host = out[i-1]
 		}
-		m, ok := Coarsen{Unit: unit}.form(out[i:i+n], host, d.Lanes, true)
+		m, ok := Coarsen{Unit: unit}.form(out[i:i+n], host, d, true)
 		if !ok {
 			continue
 		}
@@ -178,8 +178,10 @@ func (c Coarsen) chain(ks []*Kernel, i, lanes int) (int, int) {
 }
 
 type coarse struct {
-	c     Coarsen
-	lanes int
+	c Coarsen
+	// lanes is the device's, and warp the threads a combine by shuffles
+	// takes whole there (Device.warp).
+	lanes, warp int
 	// guard, where set, is the loop in which a host's phase stores: the
 	// units dealt over the workgroup, the threads past the last one clamped
 	// to it and left out of the guard. -1 where they store the last unit too.
@@ -201,7 +203,8 @@ type coarse struct {
 	under, exchanged bool
 }
 
-func (c Coarsen) form(members []*Kernel, host *Kernel, lanes int, under bool) (*Kernel, bool) {
+func (c Coarsen) form(members []*Kernel, host *Kernel, d Device, under bool) (*Kernel, bool) {
+	lanes, warp := d.Lanes, d.warp()
 	E := 0
 	for _, k := range members {
 		E = max(E, terms(k))
@@ -217,7 +220,7 @@ func (c Coarsen) form(members []*Kernel, host *Kernel, lanes int, under bool) (*
 		}
 	}
 	T := E / U
-	k := &coarse{c: c, members: members, E: E, T: T, lanes: lanes, guard: -1, memo: map[string]int{}, values: map[int][]uint32{}}
+	k := &coarse{c: c, members: members, E: E, T: T, lanes: lanes, warp: warp, guard: -1, memo: map[string]int{}, values: map[int][]uint32{}}
 	if host != nil {
 		// The phase reads what the host's whole row wrote: one workgroup.
 		if host.Elements() != 1 || T > host.Group {
@@ -231,7 +234,7 @@ func (c Coarsen) form(members []*Kernel, host *Kernel, lanes int, under bool) (*
 				k.hostVal[host.Bufs[s.Buf].Operand] = s
 			}
 		}
-		if lanes > 1 && T%lanes == 0 && host.Group%lanes == 0 {
+		if warp > 0 && T%warp == 0 && host.Group%warp == 0 {
 			// The units dealt over the workgroup in whole warps, and only a
 			// real one stores, so a window combines within a warp by its
 			// lanes. The phase is the guard's, the unit its iteration: the
@@ -259,9 +262,9 @@ func (c Coarsen) form(members []*Kernel, host *Kernel, lanes int, under bool) (*
 		// The widest workgroup, in whole warps, the units fill: no thread is
 		// clamped, so a window combines within a warp by its lanes.
 		group := members[0].Group
-		if lanes > 1 && group > 0 && T%group != 0 {
-			for g := group - lanes; g >= lanes; g -= lanes {
-				if T%g == 0 && g%lanes == 0 {
+		if warp > 0 && group > 0 && T%group != 0 {
+			for g := group - warp; g >= warp; g -= warp {
+				if T%g == 0 && g%warp == 0 {
 					group = g
 					break
 				}
@@ -297,7 +300,7 @@ func (c Coarsen) form(members []*Kernel, host *Kernel, lanes int, under bool) (*
 		return nil, false
 	}
 	if k.under && k.exchanged {
-		return c.form(members, host, lanes, false)
+		return c.form(members, host, d, false)
 	}
 	if host != nil {
 		k.m.Stores = append(k.m.Stores, Store{Barrier: true, At: -1})
@@ -611,7 +614,7 @@ func (k *coarse) reduce(n *Kernel, s Store, coords []int, g int) int {
 	if k.host != nil {
 		whole = k.T == m.Group || k.guard >= 0
 	}
-	if whole && k.lanes > 1 && slots&(slots-1) == 0 && k.lanes%slots == 0 {
+	if whole && k.warp > 0 && m.Group%k.warp == 0 && slots&(slots-1) == 0 && k.lanes%slots == 0 {
 		v := acc
 		for s := 1; s < slots; s *= 2 {
 			v = m.bin(comb, t, v, m.add(Node{Op: OpShuffle, Type: t, A: v, Imm: int64(s)}))

@@ -16,7 +16,11 @@ import "github.com/jitllm/jitllm/jit/ir"
 //     lanes over the axis, held to it, and warps over the positions, the
 //     warps' sums through workgroup memory combined by a thread an element
 //     of the axis;
-//   - a loop of stores alone: lanes over its trips.
+//   - a loop of stores alone: lanes over its trips, dealt a trip a thread
+//     where they do not divide the workgroup.
+//
+// Lanes combine by shuffles only where the workgroup is whole subgroups
+// (Device.warp); at one lane a warp is a thread.
 type Bind struct{}
 
 func (Bind) Name() string { return "bind" }
@@ -27,7 +31,7 @@ func (p Bind) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			return nil, false, nil
 		}
 		m := k.clone()
-		b := binder{k: m, L: d.Lanes, W: k.Group / d.Lanes}
+		b := binder{k: m, L: d.Lanes, W: k.Group / d.Lanes, shuffle: d.warp() > 0 && k.Group%d.warp() == 0}
 		b.tid = m.add(Node{Op: OpThread, Type: ir.U32})
 		b.lane = m.bin(OpRem, ir.U32, b.tid, m.u32(b.L))
 		b.warp = m.bin(OpDiv, ir.U32, b.tid, m.u32(b.L))
@@ -49,11 +53,12 @@ func (p Bind) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				b.spread(c)
 			case !l.Range && len(inner) == 1 && m.Loops[inner[0]].Range && l.Trip <= b.L:
 				b.warps(c, inner[0])
-			case !l.Range && len(inner) == 1 && m.Loops[inner[0]].Range && l.Trip <= b.W*b.L &&
-				m.Loops[inner[0]].Parent == c:
+			case !l.Range && len(inner) == 1 && m.Loops[inner[0]].Range:
 				b.warpsWide(c, inner[0])
 			case !l.Range && len(inner) == 0 && len(m.foldsOf(c)) == 0 && m.Group%l.Trip == 0:
 				b.lanes(c)
+			case !l.Range && len(inner) == 0 && len(m.foldsOf(c)) == 0:
+				b.deal(c)
 			default:
 				continue
 			}
@@ -70,6 +75,9 @@ type binder struct {
 	k               *Kernel
 	L, W            int
 	tid, lane, warp int
+	// shuffle is a workgroup of whole subgroups (Device.warp): the lanes
+	// combine by shuffles. Elsewhere every thread's sum takes a slot.
+	shuffle bool
 }
 
 func (k *Kernel) itersOf(c int) []int {
@@ -206,7 +214,9 @@ func (b *binder) runsSliced(c, in, wd int) {
 }
 
 // spread is a position a thread over the workgroup, and the loop's sums
-// combined over the workgroup.
+// combined over the workgroup: over each warp's lanes by shuffles where its
+// warps are whole subgroups, each warp's sum to a slot; else every thread's
+// to a slot of its own.
 func (b *binder) spread(c int) {
 	k := b.k
 	T := b.W * b.L
@@ -228,22 +238,28 @@ func (b *binder) spread(c int) {
 		t := k.Nodes[f].Type
 		comb := k.Nodes[k.Nodes[f].A].Op
 		v := f
-		for m := 1; m < b.L; m *= 2 {
-			v = k.bin(comb, t, v, k.add(Node{Op: OpShuffle, Type: t, A: v, Imm: int64(m)}))
+		n, stride := b.W*b.L, 1
+		if b.shuffle {
+			for m := 1; m < b.L; m *= 2 {
+				v = k.bin(comb, t, v, k.add(Node{Op: OpShuffle, Type: t, A: v, Imm: int64(m)}))
+			}
+			n, stride = b.W, b.L
 		}
 		slot := k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, k.bin(OpAdd, ir.U32, k.u32(i*b.W), b.warp), k.u32(b.L)), b.lane)
 		add = append(add, Store{Buf: x, Ix: slot, Val: v, At: -1})
 		acc := k.add(k.Nodes[k.Nodes[f].B])
-		for w := 0; w < b.W; w++ {
-			acc = k.bin(comb, t, acc, k.load(x, k.u32((i*b.W+w)*b.L)))
+		for w := 0; w < n; w++ {
+			acc = k.bin(comb, t, acc, k.load(x, k.u32(i*b.W*b.L+w*stride)))
 		}
 		totals[i] = acc
 	}
 	add = append(add, Store{Barrier: true, At: -1})
-	k.Stores = append(k.Stores[:at+1:at+1], append(add, k.Stores[at+1:]...)...)
+	// The readers are redirected before the slots' stores join: a thread's
+	// partial at one lane is the fold itself, and its slot must keep it.
 	for i, f := range folds {
 		k.redirectOutside(f, totals[i], c, start)
 	}
+	k.Stores = append(k.Stores[:at+1:at+1], append(add, k.Stores[at+1:]...)...)
 }
 
 // warps is lanes over the loop's axis and warps over the positions of the
@@ -309,8 +325,8 @@ func (b *binder) warps(c, in int) {
 // warpsWide is warps for an axis wider than a warp: the axis a loop of
 // ceil(D/L) trips, a lane an element of it a trip, the loop within it over
 // warps inside it; each trip's sums to workgroup memory, combined after the
-// loop by a thread an element of the axis, which the workgroup's threads
-// cover.
+// loop by a thread an element of the axis -- a loop of the workgroup's
+// threads over it where it is wider than they are.
 func (b *binder) warpsWide(c, in int) {
 	k := b.k
 	D := k.Loops[c].Trip
@@ -325,7 +341,14 @@ func (b *binder) warpsWide(c, in int) {
 	})
 	k.Loops[in].Trip = (k.Loops[in].Trip + b.W - 1) / b.W
 	k.Loops[in].Unit, k.Loops[in].Bound = b.W, BoundWarps
-	d2 := k.bin(OpMin, ir.U32, b.tid, k.u32(D-1))
+	T, at, d2 := b.W*b.L, -1, 0
+	if D <= T {
+		d2 = k.bin(OpMin, ir.U32, b.tid, k.u32(D-1))
+	} else {
+		at = k.loop((D+T-1)/T, -1)
+		it := k.add(Node{Op: OpIter, At: at, Type: ir.U32})
+		d2 = k.bin(OpMin, ir.U32, k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, it, k.u32(T)), b.tid), k.u32(D-1))
+	}
 	folds := k.foldsOf(in)
 	G := len(folds)
 	// Each trip's sums are written while later trips still read what the
@@ -356,7 +379,7 @@ func (b *binder) warpsWide(c, in int) {
 			if s.Run {
 				continue
 			}
-			s.At = -1
+			s.At = at
 			r := replica{k: k, sub: map[int]int{d: d2}, memo: map[int]int{}}
 			for i, f := range folds {
 				r.sub[f] = totals[i]
@@ -367,6 +390,19 @@ func (b *binder) warpsWide(c, in int) {
 		out = append(out, s)
 	}
 	k.Stores = out
+}
+
+// deal is the loop's trips over the workgroup's threads where they do not
+// divide it: a trip a thread, as many times as the threads take to cover
+// them, a thread past the last trip storing the last one's again.
+func (b *binder) deal(c int) {
+	k := b.k
+	C, T := k.Loops[c].Trip, b.W*b.L
+	b.setIter(c, func(it int) int {
+		return k.bin(OpMin, ir.U32, k.bin(OpAdd, ir.U32, k.bin(OpMul, ir.U32, it, k.u32(T)), b.tid), k.u32(C-1))
+	})
+	k.Loops[c].Trip = (C + T - 1) / T
+	k.Loops[c].Unit, k.Loops[c].Bound = T, BoundSpread
 }
 
 // lanes is the loop's trips over the workgroup's threads.

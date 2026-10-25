@@ -42,6 +42,17 @@ type Device struct {
 	ExactDiv bool
 }
 
+// warp is the threads a combine by lane shuffles takes whole on d: its
+// lanes, which on a GPU hold the IR's subgroup -- the IR's shuffles name
+// every lane of one (ir.SubgroupLanes), and a device guaranteeing fewer
+// runs none. Zero where d combines by no shuffle.
+func (d Device) warp() int {
+	if d.Lanes <= 1 || d.Kind == DeviceGPU && d.Lanes < ir.SubgroupLanes {
+		return 0
+	}
+	return d.Lanes
+}
+
 // Lowered is a kernel in its backend's form.
 type Lowered struct {
 	GPU *ir.Kernel

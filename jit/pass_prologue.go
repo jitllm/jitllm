@@ -101,7 +101,7 @@ func (p Prologue) fits(pr, c *Kernel, d Device) bool {
 		}
 	}
 	// A combine by lanes needs the consumer's warps whole.
-	if shuffles && (d.Lanes <= 1 || c.Group%d.Lanes != 0) {
+	if shuffles && (d.warp() == 0 || c.Group%d.warp() != 0) {
 		return false
 	}
 	if pr.Work {
@@ -126,7 +126,7 @@ func (p Prologue) fits(pr, c *Kernel, d Device) bool {
 		}
 	} else {
 		n := pr.Elements()
-		if len(pr.Loops) > 0 || exchanges && n > c.Group || shuffles && n%d.Lanes != 0 {
+		if len(pr.Loops) > 0 || exchanges && n > c.Group || shuffles && n%d.warp() != 0 {
 			return false
 		}
 	}
@@ -217,7 +217,7 @@ func (p Prologue) merge(pr, c *Kernel, d Device) *Kernel {
 		k.Loops[wrap].Spread = true
 		raw = k.add(Node{Op: OpIter, At: wrap, Type: ir.U32})
 		rest := -1
-		if d.Lanes > 1 && n%d.Lanes == 0 && k.Group%d.Lanes == 0 {
+		if w := d.warp(); w > 0 && n%w == 0 && k.Group%w == 0 {
 			guard = k.loop(1, wrap)
 			in := k.add(Node{Op: OpLess, Type: ir.Pred, A: raw, B: k.u32(n)})
 			count := k.add(Node{Op: OpSelect, Type: ir.U32, A: in, B: k.u32(1), C: k.u32(0)})

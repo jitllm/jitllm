@@ -10,6 +10,7 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/jit/ir"
 )
 
 // namedReason reports whether u is a feature the front end names as not yet
@@ -20,8 +21,9 @@ func namedReason(u Uncovered) bool { return u > Covered && u < UncoveredUnbound 
 // input rows' graph from the container of plain dense models (biases, q/k
 // norms, GQA, a GELU and a SiLU MLP, tied and untied heads), verifies each,
 // and has the composer form the whole model from them for a CPU and a GPU
-// device, every part, and lower the GPU's: the model as ops, formed without
-// running anything.
+// device, every part, and lower the GPU's at a subgroup of 32, 8 and 1 lanes,
+// the narrower with no op that depends on one: the model as ops, formed
+// without running anything.
 // Models with features the front end does not write yet are refused block by
 // block by a reason it names, never by a graph that fails to verify.
 func TestFrontStatesTheModelAsOps(t *testing.T) {
@@ -69,7 +71,8 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 				headlessModels++
 				headlessTables += wantTables
 			}
-			for _, d := range []jit.Device{{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, {Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}} {
+			for _, d := range []jit.Device{{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, {Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 8},
+				{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 1}, {Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}} {
 				var run []jit.PartPlan
 				for _, p := range parts {
 					run = append(run, jit.PartPlan{Part: p, Device: d})
@@ -81,14 +84,20 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 				}
 				// Lowering runs nothing: a kernel the device's lowering
 				// cannot emit fails here, not first on a card.
+				// A device that guarantees no subgroup is given no op whose
+				// result depends on one.
 				if d.Kind == jit.DeviceGPU {
 					for _, k := range ks {
-						if _, err := reg.Lowerings[d.Kind].Lower(k, d); err != nil {
-							t.Fatalf("lowering %s: %v", k.Name, err)
+						l, err := reg.Lowerings[d.Kind].Lower(k, d)
+						if err != nil {
+							t.Fatalf("%d lanes: lowering %s: %v", d.Lanes, k.Name, err)
+						}
+						if d.Lanes < ir.SubgroupLanes && l.GPU.Lanes != 0 {
+							t.Fatalf("%d lanes: %s depends on a subgroup of %d", d.Lanes, k.Name, l.GPU.Lanes)
 						}
 					}
 				}
-				t.Logf("%v: %d parts formed into %d kernels", d.Kind, len(parts), len(ks))
+				t.Logf("%v at %d lanes: %d parts formed into %d kernels", d.Kind, d.Lanes, len(parts), len(ks))
 			}
 		})
 	}

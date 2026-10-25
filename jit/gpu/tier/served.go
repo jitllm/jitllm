@@ -145,14 +145,33 @@ func units(d backend.Device) int {
 // askPart asks r for sl at a step of rows: the request's Key, and what it
 // forms.
 func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key, []jit.Code, error) {
+	lanes, err := g.composedLanes()
+	if err != nil {
+		return 0, nil, err
+	}
+	g.Stats.ComposedLanes = lanes
 	return r.Form(jit.Request{
 		Graph:   sl.graph,
 		Formats: sl.formats,
 		Step:    jit.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: g.actWin},
-		Device: jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: g.pickLanes(), Units: units(g.dev),
+		Device: jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: lanes, Units: units(g.dev),
 			ExactDiv: kernels.DivExact(g.dev.API())},
 		History: sl.history,
 	})
+}
+
+// composedLanes is the subgroup the composer forms for: the device's lanes,
+// or Config.ComposedLanes where that narrows them to a power of two they
+// hold whole.
+func (g *devTier) composedLanes() (int, error) {
+	own, n := g.pickLanes(), g.Config.ComposedLanes
+	switch {
+	case n == 0:
+		return own, nil
+	case n < 0 || n&(n-1) != 0 || n > own:
+		return 0, fmt.Errorf("a composed subgroup of %d lanes on a device that guarantees %d: the forms need a power of two it holds whole", n, own)
+	}
+	return n, nil
 }
 
 // compilePart compiles what the composer formed for sl at a step of rows.

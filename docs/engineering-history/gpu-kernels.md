@@ -7183,3 +7183,57 @@ row where the composer's reads two.
     and OLMo-2-1B prints the same worst NMSE from the tier and the same
     median against the float reference as the base commit's own run, line for
     line.
+- **A narrower subgroup than 32 lanes.** Composed blocks on a device that
+  does not guarantee 32 lanes (WithLanes(1)) read NMSE 1.0 from the first
+  step: stories15M on the laptop's RTX 3050 Ti, rnj-1 and Llama-3.2-1B on
+  the V100. At one lane a warp is a thread, so Bind's spread had no
+  butterfly, and a thread's partial was the fold itself. The redirect that
+  points the fold's readers at the workgroup total also rewrote the store
+  that publishes the partial, so every slot held a sum of unwritten slots:
+  each partition's maximum and sum were stale workgroup memory (2.019, the
+  attention norm's third element). The redirect now runs before the slots'
+  stores join. Bind also left two loops for every thread to run whole at
+  one lane: the values over a head 48 wide (warpsWide wanted it no wider
+  than the workgroup's 8 threads) and the 32 copies of each maximum and
+  sum (lanes wanted the 8 threads to divide 32). The combine after the
+  values is now a loop over the head, and the copies are dealt a trip a
+  thread. With that, the block still read NMSE 1-15 at one and 8 lanes,
+  on CUDA alone (Vulkan reports no slots and never splits); turning off
+  Unroll or Runs alone restored it. Runs takes a run's page and place in
+  the page from its first position held to the range's last aligned run,
+  which is harmless only for a run of whole 32-position blocks, as 32
+  lanes make it: a one-lane run in the last partial block read the block's
+  first key, and at 8 lanes a trip of 24 positions crossed a page. Runs now
+  rewrites only a run inside one block of the alignment, and the place in
+  the page only for one of whole blocks. Three other places took 32 lanes
+  for granted. The lowering's group reduction butterflied over 32 lanes
+  whatever the device stated. Coarsen and Prologue took "whole warps" to
+  mean whole subgroups of the device's lanes, which at 8 lanes formed a
+  shuffling stage of 48 threads the IR refuses, and a guard skipped by
+  part of a 32-lane warp around a shuffle, which hung the laptop's GPU
+  and, unfixed, a V100 until the test's 15-minute timeout. The IR's
+  shuffles name every lane of a 32-lane subgroup, so a device guaranteeing
+  fewer lanes is now given none (Device.warp): its reductions go through
+  workgroup memory.
+  TestComposedBlocksAtEachLaneCount holds blocks and head composed at 1, 8
+  and 32 lanes, and with the whole tier at one lane, to the serving gate's
+  band against the tier on the same device, poisoned and unpoisoned.
+  Unfixed, it read 447 times the tier's distance at one lane on the laptop
+  and 508 times on the V100, and at 8 lanes the stage did not lower.
+  TestFrontStatesTheModelAsOps lowers every served model at 32, 8 and 1
+  lanes and refuses any op that depends on a subgroup below 32, and
+  TestNarrowSubgroupsShuffleNothing does the same for a norm and three
+  split attentions without a model. At the device's own 32 lanes the 17
+  served models' lowered kernels are byte-identical to before (2 device
+  descriptions, 3 steps), and no keyed field changed, so their keys stay.
+- **rnj-1's step 43 is the split's reduction order.** On a V100 at 32
+  lanes, rnj-1's composed blocks read 0.189 from the float reference at
+  teacher-forced step 43 with SplitRange on, and 0.0325 with it off, every
+  other knob pinned; the CUDA tier reads 0.029 there and Vulkan's composed
+  blocks 0.032. Vulkan reports no slots, so its attention never splits: its
+  logits with SplitRange on and off are equal at all 141 steps. The float
+  reference does not move with the split (0.0000 at step 43, 2e-13 at the
+  median step), so the split's arithmetic is the unsplit's to f32 rounding,
+  and what differs is where its reduction order leaves the int8
+  activations at a step every implementation finds sensitive (the tier's
+  own distance there is a hundred times its median).
