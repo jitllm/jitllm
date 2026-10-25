@@ -7971,3 +7971,56 @@ row where the composer's reads two.
   0), the same run without the declaration exits 1 on `cuda:7 x2`, and an
   undeclared device beside a declared one is still a violation
   (`TestADeliberateRefusalIsNotAViolation`).
+- **Every input row the composer's: untied embeddings, position tables,
+  prompt chunks, and no fallback gather.** A ComposedEmbed tier gathered only
+  a decode row, from a head that was the embedding, and a promise no call
+  took was made real by the tier's own gather (materializeLocked's
+  GetRowsPacked), which is why float embeddings were declined. Now the input
+  rows graph (nn.Head.Embed) is served at any row count a call carries: a
+  decode row, a prompt chunk at its scratch's rows (counted apart, under
+  tier.PromptEmbed), and a promise no call takes, formed at the narrowest
+  width the placement formed and read back (materializeComposed) -- which is
+  also how a head on another card than block 0's hands the rows over: the
+  head's card gathers, and block 0's uploads them as the residual crosses
+  between cards. The tables are whatever the graph reads, held for the
+  model at PrepHead: the head where it is the embedding, the token
+  embedding beside it where not (nn.Head.TokEmbd, tinyllama and stories15M),
+  and a learned position table (nn.Head.PosEmbd, starcoder), indexed by the
+  positions EmbedRows now carries. A tier with ComposedEmbed off keeps main's
+  prompt gather. The State promises the rows wherever the front end states
+  them (Head.GatherRow is set only then): embedOnDevice's family tests
+  (DSV4, Q4E, ResAttn, AltUp, Streams, PLEDim, the position table) are gone,
+  the front end's UncoveredStreams and UncoveredPLE refusals covering them,
+  and the prefill's position add is skipped where the device gathered. The
+  one decline that named three causes is three: partEmbedFormat,
+  partEmbedWeight, partEmbedToken. ScaleFaultEmbd is a rewrite of the
+  graph (its scale dropped), not a hook in a kernel. On a V100 (CUDA and
+  Vulkan, graph on and off) the serving gate's whole-step arm gathers every
+  decode row and the prompt's on all 25 served models; the composer's prompt
+  rows leave the prompt's logits equal to the tier's bit for bit, and a row
+  gathered at the next token's reads a median 61 to 2620 times the tier's
+  distance. The table's violation, every row told a position 16 past its
+  own, read 1.03 to 22.6 and sat inside the band on Qwen2.5-VL-3B (1.22 and
+  1.36): a rotary turns by differences, and every decoded row is shifted
+  alike, so only the prompt's keys move. It is now twice the position and 16
+  past, which reads a median 8.2 on Qwen2.5-VL-3B, 73 on Llama-3.2-1B and
+  71 to 77 on stories15M. TestC6ServesComposed's whole-step arm runs every
+  classic fixture with its rows gathered on the device, synth-starcoder's
+  position table among
+  them (4.0e-14 from the CPU on CUDA, a row at the next token's 1.65e-2, at
+  the next position's 8.7e-3). TestRefusedInputRowsStayOnTheCPU
+  holds the refusals: gemma3n (AltUp and per-layer embeddings), deepseek4
+  and qwen4exp (hyper-connection streams) are refused as streams and
+  synth-gemma4-e as per-layer embeddings, no device is asked for their rows,
+  and with the plain rows' graph stated in their place gemma4-e's decode
+  parts from the CPU's by 2.46 while the stream models' rows are declined by
+  name every step. TestDecodeDoesNotAllocate's composed arms on
+  Llama-3.2-1B make no engine allocation with every row gathered, both
+  builds. Escape analysis against the tree before (jit/gpu/tier,
+  engine/model, engine/nn): the forms' builds, the fault rewrite, error paths
+  and the staging bytes' growth, none on a warm step's path; the cross-card
+  read-back's session closure allocates, as main's did. Open: the sampler's
+  top-k with its penalty and the label pick (partSampleTopK, partSamplePick):
+  OpTopK's ranked lowering is quadratic in the row (1.6e10 compares at a
+  128k vocabulary), the penalty has no op, and its correctly rounded
+  division is PTX's alone; a multi-axis local table, which no model states.

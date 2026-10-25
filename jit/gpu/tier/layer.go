@@ -2254,18 +2254,24 @@ type blockScratch struct {
 	ragCap  backend.Buf
 	ragCapC float32
 	// headEmbeds and embScale are nn.Head.Embeds and EmbdScale: the resident
-	// head is also the token embedding, and EmbedRows gathers from it. embK is
-	// GetRowsPacked at embW rows, with its id and output buffers; all three are
-	// made on first use.
+	// head is also the token embedding, and EmbedRows gathers a prompt chunk's
+	// rows from it where the composer does not. embK is GetRowsPacked at the
+	// widest chunk, with its id and output buffers, made on first use.
 	headEmbeds     bool
 	embScale       float32
 	embK           backend.Kernel
-	embW           int
 	embIds, embOut backend.Buf
-	// embedGraph is the step's input rows as ops (nn.Head.Embed), and embTok
-	// the token word the composer's gather of a decode row reads.
-	embedGraph *graph.Graph
-	embTok     backend.Buf
+	// embedGraph is the input rows as ops (nn.Head.Embed); embW and posW the
+	// tables they read, the token embedding (the head where it is the
+	// embedding) and a learned position table, resident for the model, and
+	// embWhy why PrepHead could not hold them. embTok and embPos are the
+	// rows' tokens and positions the composer's gather reads, embCast the
+	// rows a promise no call takes are gathered into (materializeLocked).
+	embedGraph     *graph.Graph
+	embW, posW     *resident
+	embWhy         partDecline
+	embTok, embPos backend.Buf
+	embCast        backend.Buf
 	// spanK and spanOff move a batched chunk's last residual row into this
 	// (decode) scratch's x, so the output projection can ride the chunk's own
 	// submission (layersOnce's folded head). Made on first use.
@@ -6434,7 +6440,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	}
 	// The head as ops from the model's front end: what the composer serves.
 	bs.headGraph, bs.sampleGraph, bs.embedGraph = h.Graph, h.Sample, h.Embed
-	h.GatherRow = g.Composed&ComposedEmbed != 0
+	h.GatherRow = g.Composed&ComposedEmbed != 0 && h.Embed != nil
 	// The head is the model's: a second State on this tier finds it placed.
 	// Building it again allocated a second norm and logits buffer over the
 	// first ones, leaking both and charging the budget twice.
@@ -6537,6 +6543,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	if bs.embScale == 0 {
 		bs.embScale = 1
 	}
+	g.prepEmbed(bs, h)
 	// The output bias, for a head graph the composer serves that binds it. A
 	// head without it (no room, a bias of another width) is declined by name
 	// (partHeadBias) and the caller adds the bias.
@@ -7067,7 +7074,7 @@ type graphKey struct {
 	// headSrv says the head ran as the composer's graph, which the tier's own
 	// norm, projection and cap are not; tableSrv and sampleSrv say the same
 	// of the step's tables and its token.
-	headSrv, tableSrv, sampleSrv bool
+	headSrv, tableSrv, sampleSrv, embedSrv bool
 }
 
 // canRecord reports whether this device's sessions can capture a launch
@@ -7267,12 +7274,15 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	var gatherN int
 	embedSrv := false
 	if pe != nil && pe.composed {
-		// The composer's gather of one row (ComposedEmbed): a call of
-		// one row, its promise refused for any other.
-		if R == 1 && nrow == 1 && rag == nil && g.bs.embTok != nil && g.bs.embedServes() == partServes {
+		// The composer's gather (ComposedEmbed) at the call's rows; a call
+		// it cannot write them for (a ragged step's rows, each its own
+		// sequence's) takes them made real by the same form.
+		if len(pe.ids) == nrow && nrow <= R && rag == nil && g.bs.embedServes() == partServes && g.embedBufs(g.bs) &&
+			g.bs.embW.k == p.NEmbd {
 			embedSrv = true
 		} else {
-			return refuse("the composer's gather of a decode row was promised to a call of %d rows", nrow)
+			g.materializeLocked(pe)
+			pe = nil
 		}
 	} else if pe != nil {
 		hr := g.bs.head
@@ -7673,7 +7683,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		ragHead = head.WantedRows(nrow)
 	}
 	key := graphKey{lo, hi, nCap, R, head != nil, g.TableSplit, g.ScalarSoftmax, g.flashOn(), g.KVF16,
-		ropeDev, argmax, sampleK, samplePen, pick, ragN, ragRuns, par, pagedVar, ragHead, ragMap, hNormID, persistOn, persistOn && g.PersistDeps, g.GateUpFuse, g.GateUp2, g.GateUp2Force, g.NoAddNormFold, sid, g.NoFuse, g.NoActFuse, g.FFNForm, headSrv, tableSrv, sampleSrv}
+		ropeDev, argmax, sampleK, samplePen, pick, ragN, ragRuns, par, pagedVar, ragHead, ragMap, hNormID, persistOn, persistOn && g.PersistDeps, g.GateUpFuse, g.GateUp2, g.GateUp2Force, g.NoAddNormFold, sid, g.NoFuse, g.NoActFuse, g.FFNForm, headSrv, tableSrv, sampleSrv, embedSrv}
 	if lo == hi {
 		// The head alone reads no history, so the capacity is not part of
 		// what it records: keyed by it, prompts on either side of a growth
@@ -10273,10 +10283,17 @@ func (g *devTier) layersSession(s backend.Session) {
 		w(hb.spanOff, g.u32b(uint32((nrow-1)*p.NEmbd)))
 	}
 	if embedSrv {
-		w(g.bs.embTok, g.u32b(uint32(pe.ids[0])))
-		sv, serr := g.servedEmbed(g.bs, g.bs.embTok)
+		tok, at := g.embedWords(pe, R)
+		w(g.bs.embTok, tok)
+		if g.bs.posW != nil {
+			w(g.bs.embPos, at)
+		}
+		if pe.kind == partEmbedRows {
+			g.EmbedLaunches++
+		}
+		sv, serr := g.servedEmbed(g.bs, R)
 		if serr == nil && err == nil {
-			serr = sv.run(g, lc, sv.inst, nil, []backend.Buf{bs.x})
+			serr = sv.runAs(g, lc, sv.inst, pe.kind, nil, []backend.Buf{bs.x})
 		}
 		if err == nil {
 			err = serr
@@ -10474,6 +10491,7 @@ type stagingBytes struct {
 	tok                     []byte // a ragged step's tokens, read home
 	mlaPOff                 []byte // a batched latent attention's rotary key slots
 	embIDs                  []byte // a prompt chunk's ids for the gather on the card (embIDs)
+	embPos                  []byte // the composer's gather's positions (embedWords)
 	one                     [4]byte
 }
 

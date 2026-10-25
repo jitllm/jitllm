@@ -22,17 +22,18 @@ func composedDecode(t *testing.T, m *Model, dev string, ids, toks []int32, parts
 	return composedDecodeWith(t, m, dev, ids, toks, parts, noGraph, float, nil, extra...)
 }
 
-// axesShift states each row's rotary positions d past the State's: the
-// violation of a served table that turns a row by the positions it is told.
+// axesShift states each row's rotary positions as k times the State's and d
+// past that: the violation of a served table that turns a row by the
+// positions it is told.
 type axesShift struct {
 	nn.RopeAxesDevice
-	d   int32
-	buf [4]int32
+	k, d int32
+	buf  [4]int32
 }
 
 func (a *axesShift) SetRopeAxes(pos int, at []int32) {
 	for i, v := range at[:min(len(at), 4)] {
-		a.buf[i] = v + a.d
+		a.buf[i] = a.k*v + a.d
 	}
 	a.RopeAxesDevice.SetRopeAxes(pos, a.buf[:min(len(at), 4)])
 }
@@ -49,38 +50,48 @@ func composedTables(m *Model) int {
 	return n
 }
 
-// tokenShift promises each row's gather at the token d past its own: the
-// violation of a served gather that reads the row it is promised.
+// tokenShift promises each row's gather, a decode step's and a prompt's, at
+// the token d past its own and the position p past its own: the violation
+// of a served gather that reads the rows it is promised.
 type tokenShift struct {
 	nn.EmbedDevice
 	d, vocab int32
-	ids      [1]int32
+	p        int
+	ids      []int32
 }
 
-func (e *tokenShift) EmbedRows(ids []int32, dst []float32) bool {
-	if len(ids) != 1 {
-		return e.EmbedDevice.EmbedRows(ids, dst)
+func (e *tokenShift) EmbedRows(ids []int32, pos int, dst []float32) bool {
+	e.ids = e.ids[:0]
+	for _, id := range ids {
+		e.ids = append(e.ids, (id+e.d)%e.vocab)
 	}
-	e.ids[0] = (ids[0] + e.d) % e.vocab
-	return e.EmbedDevice.EmbedRows(e.ids[:], dst)
+	return e.EmbedDevice.EmbedRows(e.ids, pos+e.p, dst)
 }
 
-// shiftTokens has the State promise its device every decode row's gather d
-// tokens past its own.
-func shiftTokens(d, vocab int) func(*State) {
+// shiftTokens has the State promise its device every row's gather d tokens
+// past its own.
+func shiftTokens(d, vocab int) func(*State) { return shiftEmbed(d, 0, vocab) }
+
+// shiftEmbed has the State promise its device every row's gather d tokens
+// and p positions past its own.
+func shiftEmbed(d, p, vocab int) func(*State) {
 	return func(s *State) {
 		if s.ldEmbed != nil {
-			s.ldEmbed = &tokenShift{EmbedDevice: s.ldEmbed, d: int32(d), vocab: int32(vocab)}
+			s.ldEmbed = &tokenShift{EmbedDevice: s.ldEmbed, d: int32(d), vocab: int32(vocab), p: p}
 		}
 	}
 }
 
 // shiftAxes has the State tell its device every row's rotary positions d
 // past their own.
-func shiftAxes(d int32) func(*State) {
+func shiftAxes(d int32) func(*State) { return stretchAxes(1, d) }
+
+// stretchAxes has the State tell its device every row's rotary positions as
+// k times their own and d past that.
+func stretchAxes(k, d int32) func(*State) {
 	return func(s *State) {
 		if s.ldRope != nil {
-			s.ldRope = &axesShift{RopeAxesDevice: s.ldRope, d: d}
+			s.ldRope = &axesShift{RopeAxesDevice: s.ldRope, k: k, d: d}
 		}
 	}
 }
@@ -365,18 +376,23 @@ func TestComposedBlocksServe(t *testing.T) {
 										t.Fatalf("the composer wrote %d tables (%d of them replayed) in %d steps of %d tables", nt+replayed, replayed, len(toks), composedTables(m))
 									}
 								}
-								// Every step's input row gathered by the composer where
-								// the device holds the embedding as the head, and declined
-								// by name where it does not.
+								// Every step's input row gathered by the composer, from
+								// the head where it is the embedding and from the token
+								// embedding the device holds beside it where it is not
+								// (tinyllama, stories15M), and the prompt's rows too.
 								if a.parts&tier.ComposedEmbed != 0 {
 									ne, de, _ := st.ServedPart(tier.ComposedEmbed)
+									ne += st.ReplayedPart(tier.ComposedEmbed)
+									np, dp, _ := st.ServedPart(tier.PromptEmbed)
 									switch {
 									case ne+de != len(toks):
 										t.Fatalf("the input rows of %d steps served %d times and declined %d", len(toks), ne, de)
-									case m.Cfg.TiedEmbd && headOn && ne != len(toks):
-										t.Fatalf("the head is the embedding, yet the composer gathered %d of %d steps' rows (%s)", ne, len(toks), declinesOf(st))
+									case headOn && ne != len(toks):
+										t.Fatalf("the composer gathered %d of %d steps' rows (%s)", ne, len(toks), declinesOf(st))
+									case headOn && (np == 0 || dp != 0):
+										t.Fatalf("the composer gathered the prompt's rows %d times and declined them %d (%s)", np, dp, declinesOf(st))
 									}
-									t.Logf("composed %s: %d input rows gathered, %d declined (%s)", a.name, ne, de, declinesOf(st))
+									t.Logf("composed %s: %d input rows gathered, %d declined, the prompt's %d (%s)", a.name, ne, de, np, declinesOf(st))
 								}
 								heads, _, _ := st.ServedPart(tier.ComposedHead)
 								if replayed := st.ReplayedPart(tier.ComposedHead); a.parts&tier.ComposedHead != 0 && headOn &&
@@ -435,6 +451,8 @@ func TestComposedBlocksServe(t *testing.T) {
 								// where it is, they are the composer's, held to the band
 								// with every decoded step, the band's widest still the
 								// tier's backends' over the decoded steps alone.
+								// The prompt's input rows, where the composer gathers
+								// them, are the same rows as the tier's and the CPU's.
 								first := 0
 								if prompt == 0 {
 									if !slices.Equal(got[0], want[0]) || !slices.Equal(ref[0], want[0]) {
@@ -488,8 +506,23 @@ func TestComposedBlocksServe(t *testing.T) {
 								}
 								// The served tables turn each row by the positions the
 								// State states for it; the gathered row is the token's.
+								// The positions are not one off: the band is relative to
+								// the tier's own distance from the float reference, and
+								// on stories15M that distance is wide (0.14 at its
+								// worst), wider than one position moves a 288-wide
+								// model's logits -- one position off reads a median 1.10
+								// and 1.14 of the tier's distance there, inside the 1.5
+								// band. Nor are they shifted alike: a rotary turns a
+								// query and a key by their difference, and every row
+								// decoded here is told its shift, so among the decoded
+								// rows a uniform shift moves only the few prompt keys --
+								// 16 past read a median 1.22 to 1.36 on Qwen2.5-VL-3B,
+								// inside the band. Twice the position and 16 past moves
+								// every distance. The M-RoPE gate holds its tables to
+								// transformers itself, with no tier between, and one
+								// position is seen there.
 								if a.parts&tier.ComposedTable != 0 {
-									violated("every row told a position 16 past its own", tier.ComposedTable, shiftAxes(16))
+									violated("every row told twice its position and 16 past", tier.ComposedTable, stretchAxes(2, 16))
 								}
 								if ne, _, _ := st.ServedPart(tier.ComposedEmbed); ne > 0 {
 									violated("every row gathered at the next token's", tier.ComposedEmbed, shiftTokens(1, m.Vocab.Size()))

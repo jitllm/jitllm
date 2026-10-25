@@ -583,11 +583,17 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 		// Over the pool: in the packed layout one row's words are a
 		// vocabulary's width apart (see Model.embedRow), so each row is many
 		// cache misses, and rows are independent.
+		gathered := false
 		refill := func() error {
-			// On the card when it holds the tied embedding and the block run
-			// starts there: the device gathers the rows far faster (EmbedRows).
-			if ids != nil && s.head != nil && s.devAt(s.lo) && s.c.TiedEmbd && c.PLEDim == 0 {
-				if ed, ok := s.ld.(nn.EmbedDevice); ok && ed.EmbedRows(ids[base:base+n], s.bx[:n*c.NEmbd]) {
+			// On the card when the block run starts there and the device
+			// gathers the step's input rows (nn.Head.GatherRow), or its tier
+			// gathers the tied embedding: far faster than the host (EmbedRows).
+			// Its input rows are the front end's, a position table's included.
+			gathered = false
+			if ids != nil && s.head != nil && s.devAt(s.lo) &&
+				(s.head.GatherRow || s.c.TiedEmbd && c.PLEDim == 0 && m.posEmbd.e == nil) {
+				if s.ldEmbed != nil && s.ldEmbed.EmbedRows(ids[base:base+n], p0, s.bx[:n*c.NEmbd]) {
+					gathered = true
 					return nil
 				}
 			}
@@ -662,7 +668,7 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 		if m.posEmbd.e != nil {
 			fill := refill
 			refill = func() error {
-				if err := fill(); err != nil {
+				if err := fill(); err != nil || gathered {
 					return err
 				}
 				for i := 0; i < n; i++ {

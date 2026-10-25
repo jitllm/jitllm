@@ -291,11 +291,11 @@ func (s *gpuSession) ReleaseLayers(lo, hi int) {
 
 // EmbedRows is nn.EmbedDevice: the rows are gathered on the card holding the
 // head, under this session's device locks like any other call.
-func (s *gpuSession) EmbedRows(ids []int32, dst []float32) bool {
+func (s *gpuSession) EmbedRows(ids []int32, pos int, dst []float32) bool {
 	// The session's inputs first: whether its calls are a prompt's decides
 	// whose gather a row is.
 	defer s.leave(s.inputsTo(s.step()))
-	return s.g.embedRows(s.sid, ids, dst)
+	return s.g.embedRows(s.sid, ids, pos, dst)
 }
 
 func (s *gpuSession) PrepHead(h *nn.Head) bool {

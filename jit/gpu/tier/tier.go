@@ -1986,10 +1986,13 @@ type devShared struct {
 	// composerFloat is composer with no int8 form (Config.ComposedFloat).
 	composerFloat *jit.Registry
 	mvTo          launchTo
-	mvPart        backend.Buf
-	mvPartCap     int
-	used          uint64
-	limit         uint64
+	// embTo is the composer's gather made real on its own
+	// (materializeComposed).
+	embTo     launchTo
+	mvPart    backend.Buf
+	mvPartCap int
+	used      uint64
+	limit     uint64
 	// why is where limit came from, in words, for the report.
 	why string
 

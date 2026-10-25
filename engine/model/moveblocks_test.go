@@ -43,12 +43,24 @@ func TestBlocksMoveBetweenDevices(t *testing.T) {
 	for _, name := range names {
 		path := jlmOf(t, testmodels.Path(name))
 		for _, parts := range composedArms(t, path) {
-			arm := composedArm(name, parts)
-			t.Run(arm, func(t *testing.T) { blocksMoveBetweenDevices(t, path, moveWhole, parts) })
-			t.Run(arm+"/host", func(t *testing.T) {
-				blocksMoveBetweenDevices(t, path, moveHost, parts, WithDirectMoves(false))
-			})
-			t.Run(arm+"/upper", func(t *testing.T) { blocksMoveBetweenDevices(t, path, moveUpper, parts) })
+			arms := []tier.Parts{parts}
+			// The whole step composed too: a decode row's and a prompt's input
+			// rows gathered by the composer on the head's card, wherever
+			// block 0 has moved.
+			if parts != 0 {
+				arms = append(arms, tier.ComposedStep)
+			}
+			for _, parts := range arms {
+				arm := composedArm(name, parts)
+				if parts == tier.ComposedStep {
+					arm = name + "/step"
+				}
+				t.Run(arm, func(t *testing.T) { blocksMoveBetweenDevices(t, path, moveWhole, parts) })
+				t.Run(arm+"/host", func(t *testing.T) {
+					blocksMoveBetweenDevices(t, path, moveHost, parts, WithDirectMoves(false))
+				})
+				t.Run(arm+"/upper", func(t *testing.T) { blocksMoveBetweenDevices(t, path, moveUpper, parts) })
+			}
 		}
 	}
 }
@@ -196,6 +208,15 @@ func blocksMoveBetweenDevices(t *testing.T, path string, arm int, parts tier.Par
 		}
 	}
 	composedRan(t, parts, nil, g)
+	if parts&tier.ComposedEmbed != 0 {
+		st := g.Stats()
+		n, d, _ := st.ServedPart(tier.ComposedEmbed)
+		np, dp, _ := st.ServedPart(tier.PromptEmbed)
+		if n == 0 || d != 0 || np == 0 || dp != 0 {
+			t.Fatalf("the composer gathered %d steps' rows (%d declined) and %d prompts' (%d declined): %s", n, d, np, dp, declinesOf(st))
+		}
+		t.Logf("the composer gathered %d steps' rows and %d prompts', the head moved %v", n, np, moves[0].Head)
+	}
 }
 
 // placedOn lists the blocks the named device holds for this State.

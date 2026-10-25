@@ -1352,19 +1352,20 @@ func (g *GPU) PrepHead(h *nn.Head) bool {
 	return false
 }
 
-// EmbedRows gathers token rows on the device that holds the head
-// (nn.EmbedDevice); false when no device holds one that is also the embedding.
+// EmbedRows gathers the input rows on the device that holds the head
+// (nn.EmbedDevice); false when that device does not gather them.
 //
 // The head's device gathers inside its next submission, which is the chunk's
-// first only when it also holds block 0; on any other placement the rows are
-// made real on the host at once and uploaded as always.
-func (g *GPU) EmbedRows(ids []int32, dst []float32) bool {
-	return g.embedRows(0, ids, dst)
+// first only when it also holds block 0; on any other placement it gathers
+// them at once and reads them back, and block 0's device uploads them as the
+// residual crosses between cards (layersFor).
+func (g *GPU) EmbedRows(ids []int32, pos int, dst []float32) bool {
+	return g.embedRows(0, ids, pos, dst)
 }
 
 // embedRows is EmbedRows for session sid: the promise is the session's, and
 // only its next submission gathers it.
-func (g *GPU) embedRows(sid uint64, ids []int32, dst []float32) bool {
+func (g *GPU) embedRows(sid uint64, ids []int32, pos int, dst []float32) bool {
 	g.mu.Lock()
 	hd := g.head
 	// The device running block 0, where the chunk's first submission goes.
@@ -1378,7 +1379,7 @@ func (g *GPU) embedRows(sid uint64, ids []int32, dst []float32) bool {
 		return false
 	}
 	defer v.done()
-	if !v.EmbedRows(ids, dst) {
+	if !v.EmbedRows(ids, pos, dst) {
 		return false
 	}
 	if first != hd {

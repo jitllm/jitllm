@@ -111,6 +111,7 @@ func TestC6ServesComposed(t *testing.T) {
 						}
 						t.Logf("violation %q: worst NMSE %.3e", v.name, bad)
 					}
+					wholeStepC6(t, m, dev, prompt, toks, want, bound)
 					ran++
 				})
 			}
@@ -118,5 +119,56 @@ func TestC6ServesComposed(t *testing.T) {
 	}
 	if ran == 0 {
 		t.Skip("no device on this host")
+	}
+}
+
+// wholeStepC6 is TestC6ServesComposed's whole-step arm: the input rows, the
+// tables, the blocks, the head and the token the composer's, every decode
+// row and the prompt's rows gathered on the device, a learned position
+// table's rows among them (starcoder's), within bound of the host's logits
+// want. Each row gathered at the next token's, and on a model with a
+// position table each row at the next position's, must fall outside it.
+func wholeStepC6(t *testing.T, m *Model, dev string, prompt, toks []int32, want [][]float32, bound float64) {
+	t.Helper()
+	decode := func(after func(*State)) (worst float64, flips int) {
+		got, st, _, _ := composedDecodeWith(t, m, dev, prompt, toks, tier.ComposedStep, true, false, after)
+		ne, de, _ := st.ServedPart(tier.ComposedEmbed)
+		np, dp, _ := st.ServedPart(tier.PromptEmbed)
+		if ne != len(toks) || de != 0 || np == 0 || dp != 0 {
+			t.Fatalf("the composer gathered %d of %d steps' rows (%d declined) and the prompt's %d times (%d declined): %s",
+				ne, len(toks), de, np, dp, declinesOf(st))
+		}
+		for i := range got {
+			p := len(prompt) - 1 + i
+			e := logitNMSE(got[i], want[p])
+			if math.IsNaN(e) {
+				t.Fatalf("pos %d: the logits are not finite", p)
+			}
+			worst = max(worst, e)
+			if Greedy(got[i]) != Greedy(want[p]) {
+				flips++
+			}
+		}
+		return worst, flips
+	}
+	worst, flips := decode(nil)
+	if !(worst < bound) || flips > 0 {
+		t.Fatalf("the whole step: worst logit NMSE %.3e, %d argmax flips, against the host", worst, flips)
+	}
+	t.Logf("the whole step on %s: worst logit NMSE %.3e, every row gathered by the composer", dev, worst)
+	type violation struct {
+		name  string
+		after func(*State)
+	}
+	vs := []violation{{"every row gathered at the next token's", shiftEmbed(1, 0, m.Vocab.Size())}}
+	if m.posEmbd.e != nil {
+		vs = append(vs, violation{"every row's position table row the next position's", shiftEmbed(0, 1, m.Vocab.Size())})
+	}
+	for _, v := range vs {
+		bad, _ := decode(v.after)
+		if !(bad > 100*worst) || !(bad > 1e-4) {
+			t.Errorf("%s: the whole step cannot see it -- worst NMSE %.3e against a clean %.3e", v.name, bad, worst)
+		}
+		t.Logf("violation %q: worst NMSE %.3e", v.name, bad)
 	}
 }

@@ -42,13 +42,15 @@ const (
 	// (nn.Head.Sample), written where the device's argmax writes it.
 	partSample
 	// partEmbed is a decode step's input row (nn.Head.Embed), gathered from
-	// the resident head where the head is the embedding.
+	// the tables the device holds; partEmbedRows a prompt chunk's input
+	// rows, its rows at the chunk's.
 	partEmbed
+	partEmbedRows
 	numParts
 )
 
 var partNames = [...]string{partHead: "head", partBlock: "block", partShadow: "shadow", partPrompt: "prompt block",
-	partRope: "table", partSample: "sample", partEmbed: "input rows"}
+	partRope: "table", partSample: "sample", partEmbed: "input rows", partEmbedRows: "prompt input rows"}
 
 // composedPart is a part of the model as the composer is asked for it: its
 // graph of generic ops, the formats of the weights it binds, and the tier's
@@ -506,7 +508,7 @@ func (g *devTier) spreadParts(src, nl *lane, gr *graph.Graph) error {
 }
 
 // Parts names the parts of a model the composer serves (Config.Composed).
-type Parts uint8
+type Parts uint16
 
 const (
 	ComposedHead Parts = 1 << partHead
@@ -525,10 +527,13 @@ const (
 	// ComposedSample serves a one-row step's greedy token from its graph
 	// (nn.Head.Sample).
 	ComposedSample Parts = 1 << partSample
-	// ComposedEmbed serves a decode step's input row from its graph
-	// (nn.Head.Embed), gathered on the device the caller promises it to
-	// (nn.EmbedDevice).
+	// ComposedEmbed serves the input rows from their graph (nn.Head.Embed),
+	// a decode step's and a prompt chunk's, gathered on the device the
+	// caller promises them to (nn.EmbedDevice).
 	ComposedEmbed Parts = 1 << partEmbed
+	// PromptEmbed counts what ComposedEmbed serves of a prompt chunk's input
+	// rows (Stats.ServedPart), apart from a decode step's.
+	PromptEmbed Parts = 1 << partEmbedRows
 	// ComposedStep is every part of a one-row step: its input row, tables,
 	// blocks, head and token.
 	ComposedStep = ComposedEmbed | ComposedTable | ComposedBlock | ComposedHead | ComposedSample
@@ -573,43 +578,47 @@ const (
 	partSampleTopK
 	partSamplePick
 	partNoEmbed
-	partEmbedHeld
+	partEmbedFormat
+	partEmbedWeight
+	partEmbedToken
 	numPartDeclines
 )
 
 var partDeclineNames = [numPartDeclines]string{
-	partServes:     "served",
-	partNoGraph:    "no graph from the front end",
-	partPersist:    "inside the persistent block",
-	partSkip:       "a fault probe skips blocks",
-	partNoPool:     "no paged history on the device",
-	partPrefill:    "the history is mid-prefill",
-	partStream:     "the history streams",
-	partLatent:     "a latent attention's history",
-	partShared:     "the history of another block",
-	partWindow:     "a graph whose window is not the plan's",
-	partHeadShape:  "a head graph other than a norm, its projection and elementwise ops after it",
-	partHeadNorm:   "no norm buffer, a norm of another kind than the tier's, or a norm bias it holds none of",
-	partPick:       "a head that picks labels only",
-	partRagged:     "a ragged step's rows",
-	partRowLogits:  "every row's logits (speculative rows)",
-	partCaller:     "the caller keeps it on the tier's kernels",
-	partNoRoom:     "its buffers do not fit the device's budget",
-	partFolded:     "a prompt chunk's folded head",
-	partHeadRows:   "a head over several rows",
-	partPromptHead: "a prompt's one-row head",
-	partShadowed:   "a prompt outside the shadow arm",
-	partHeadBias:   "a head bias the tier holds no vector for",
-	partHeadOther:  "a head graph of another State than the offered one",
-	partHeadHidden: "a head whose normed row is read back",
-	partNoTable:    "no table graph from the front end",
-	partTableHeld:  "a table whose planes or positions the tier does not hold",
-	partNoAxes:     "a table over several axes with no rotary positions for the row",
-	partNoSample:   "no sample graph from the front end",
-	partSampleTopK: "the sampler's top-k and penalty, which no graph states",
-	partSamplePick: "the label pick, which no graph states",
-	partNoEmbed:    "no input rows graph from the front end",
-	partEmbedHeld:  "input rows whose table the device does not hold (an embedding not the head's, a position table)",
+	partServes:      "served",
+	partNoGraph:     "no graph from the front end",
+	partPersist:     "inside the persistent block",
+	partSkip:        "a fault probe skips blocks",
+	partNoPool:      "no paged history on the device",
+	partPrefill:     "the history is mid-prefill",
+	partStream:      "the history streams",
+	partLatent:      "a latent attention's history",
+	partShared:      "the history of another block",
+	partWindow:      "a graph whose window is not the plan's",
+	partHeadShape:   "a head graph other than a norm, its projection and elementwise ops after it",
+	partHeadNorm:    "no norm buffer, a norm of another kind than the tier's, or a norm bias it holds none of",
+	partPick:        "a head that picks labels only",
+	partRagged:      "a ragged step's rows",
+	partRowLogits:   "every row's logits (speculative rows)",
+	partCaller:      "the caller keeps it on the tier's kernels",
+	partNoRoom:      "its buffers do not fit the device's budget",
+	partFolded:      "a prompt chunk's folded head",
+	partHeadRows:    "a head over several rows",
+	partPromptHead:  "a prompt's one-row head",
+	partShadowed:    "a prompt outside the shadow arm",
+	partHeadBias:    "a head bias the tier holds no vector for",
+	partHeadOther:   "a head graph of another State than the offered one",
+	partHeadHidden:  "a head whose normed row is read back",
+	partNoTable:     "no table graph from the front end",
+	partTableHeld:   "a table whose planes or positions the tier does not hold",
+	partNoAxes:      "a table over several axes with no rotary positions for the row",
+	partNoSample:    "no sample graph from the front end",
+	partSampleTopK:  "the sampler's top-k and penalty, which no graph states",
+	partSamplePick:  "the label pick, which no graph states",
+	partNoEmbed:     "no input rows graph from the front end",
+	partEmbedFormat: "input rows in a format with no container type",
+	partEmbedWeight: "input rows reading a weight other than the token embedding and a position table",
+	partEmbedToken:  "a token or position outside its table's rows",
 }
 
 // DeclineName is the reason a decline count is kept under, by its index in
@@ -1023,52 +1032,124 @@ func (g *devTier) prewarmComposedTables() {
 	}
 }
 
-// embedServes is why a decode step's input row is not the one the composer
-// is asked for, serves where it is: the front end's graph of the input rows,
-// whose every table is the token embedding, which the device holds as the
-// head (nn.Head.Embeds).
+// embedServes is why a step's or a prompt chunk's input rows are not the
+// ones the composer is asked for, serves where they are: the front end's
+// graph of the input rows, each of whose weights is a table the device holds
+// in a format the composer reads -- the token embedding (the head where it is
+// the embedding, nn.Head.TokEmbd otherwise) and a learned position table
+// (nn.Head.PosEmbd).
 func (bs *blockScratch) embedServes() partDecline {
 	if bs.embedGraph == nil {
 		return partNoEmbed
 	}
-	if bs.head == nil || !bs.head.ok || !bs.headEmbeds {
-		return partEmbedHeld
-	}
-	// A promise a later call does not take is made real at home by the
-	// tier's gather (materializeLocked), which reads packed rows.
-	if _, ok := jlmType(bs.head.t); !ok || kernels.IsFloat(bs.head.t) {
-		return partEmbedHeld
+	if bs.embWhy != partServes {
+		return bs.embWhy
 	}
 	for _, o := range bs.embedGraph.Ops {
 		for _, w := range o.Weight {
-			if w.Role != jlm.RoleTokenEmbd {
-				return partEmbedHeld
+			r := bs.embTable(w.Role)
+			if r == nil || !r.ok {
+				return partEmbedWeight
+			}
+			if _, ok := jlmType(r.t); !ok {
+				return partEmbedFormat
 			}
 		}
 	}
 	return partServes
 }
 
-// servedEmbed is the step's input row served at one row: each weight the
-// token embedding, which the device holds as the head, and the row's token
-// in tok.
-func (g *devTier) servedEmbed(bs *blockScratch, tok backend.Buf) (*servedPart, error) {
-	gr, w := bs.embedGraph, bs.head
+// embTable is the resident table of role the input rows read, nil for a
+// role the device holds none of.
+func (bs *blockScratch) embTable(role jlm.Role) *resident {
+	switch role {
+	case jlm.RoleTokenEmbd:
+		return bs.embW
+	case jlm.RolePosEmbd:
+		return bs.posW
+	}
+	return nil
+}
+
+// servedEmbed is the input rows served at R rows: the token embedding and a
+// position table where the graph reads one, each row's token in embTok and
+// its position in embPos (the live row count, then a word a row).
+func (g *devTier) servedEmbed(bs *blockScratch, R int) (*servedPart, error) {
+	gr, w := bs.embedGraph, bs.embW
+	if gr == nil || w == nil {
+		return nil, errors.New("the composed input rows: no graph, or no token embedding on the device")
+	}
 	t, ok := jlmType(w.t)
 	if !ok {
 		return nil, fmt.Errorf("the composed input rows: format %d has no container type", w.t)
 	}
-	sk := servedKey{kind: partEmbed, graph: gr, rows: 1, t: t}
+	sk := servedKey{kind: partEmbed, graph: gr, rows: R, t: t}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
-		return composedPart{kind: partEmbed, part: jit.PartEmbed, graph: gr,
-			formats: map[jlm.Role]jlm.Type{jlm.RoleTokenEmbd: t}, weights: map[jlm.Role]*resident{jlm.RoleTokenEmbd: w},
-			tables: map[string]backend.Buf{"tokens": tok}}, nil
+		formats := map[jlm.Role]jlm.Type{}
+		weights := map[jlm.Role]*resident{}
+		for _, o := range gr.Ops {
+			for _, w := range o.Weight {
+				r := bs.embTable(w.Role)
+				if r == nil {
+					return composedPart{}, fmt.Errorf("the composed input rows read %v, which the device does not hold", w.Role)
+				}
+				t, ok := jlmType(r.t)
+				if !ok {
+					return composedPart{}, fmt.Errorf("the composed input rows: format %d has no container type", r.t)
+				}
+				formats[w.Role], weights[w.Role] = t, r
+			}
+		}
+		cp := composedPart{kind: partEmbed, part: jit.PartEmbed, graph: g.embedFault(gr), formats: formats, weights: weights,
+			tables: map[string]backend.Buf{"tokens": bs.embTok}}
+		if bs.posW != nil {
+			cp.tables["rope.pos"] = bs.embPos
+		}
+		return cp, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	sv.sl.weights[jlm.RoleTokenEmbd], sv.sl.tables["tokens"] = w, tok
+	// Bound again every step: a rebuilt scratch holds buffers of its own.
+	for role := range sv.sl.weights {
+		sv.sl.weights[role] = bs.embTable(role)
+	}
+	sv.sl.tables["tokens"] = bs.embTok
+	if _, ok := sv.sl.tables["rope.pos"]; ok {
+		sv.sl.tables["rope.pos"] = bs.embPos
+	}
 	return sv, nil
+}
+
+// embedFault is gr with its scale dropped under ScaleFaultEmbd: the input
+// rows formed unscaled, the violation Granite's gate must see.
+func (g *devTier) embedFault(gr *graph.Graph) *graph.Graph {
+	if g.kb.scaleFault != ScaleFaultEmbd {
+		return gr
+	}
+	f := *gr
+	f.Ops = nil
+	alias := map[graph.ValueID]graph.ValueID{}
+	for _, o := range gr.Ops {
+		o.In = slices.Clone(o.In)
+		for i, v := range o.In {
+			if a, ok := alias[v]; ok {
+				o.In[i] = a
+			}
+		}
+		if o.Kind == graph.OpMap && o.Attr.Fn == graph.MapMul && len(o.In) == 1 && len(o.Out) == 1 {
+			alias[o.Out[0]] = o.In[0]
+			continue
+		}
+		f.Ops = append(f.Ops, o)
+	}
+	f.Out = slices.Clone(gr.Out)
+	for i, v := range f.Out {
+		if a, ok := alias[v]; ok {
+			f.Out[i] = a
+		}
+	}
+	return &f
 }
 
 // servedSample is the step's greedy token, gr, served over one row's logits.
@@ -1355,12 +1436,21 @@ func (g *devTier) prewarmPromptBlock(bb *blockScratch, li int) {
 // the walk compiles the tier's own kernels for it. At a placement
 // (reserveScratch) that is the placement's forming. Callers hold g.mu.
 func (g *devTier) promptForms(bb *blockScratch) {
-	if g.Composed&ComposedPrompt == 0 || bb == nil || bb.rows < 2 {
+	if bb == nil || bb.rows < 2 {
 		return
 	}
 	was := g.prewarming
 	g.prewarming = was || g.reserving
 	defer func() { g.prewarming = was }()
+	// The input rows at bb's rows, where the composer gathers a chunk's.
+	if bs := g.bs; g.Composed&ComposedEmbed != 0 && bs != nil && bs.embedServes() == partServes && g.embedBufs(bs) {
+		if _, err := g.servedEmbed(bs, bb.rows); err != nil {
+			g.LastErr = "the composed input rows: " + err.Error()
+		}
+	}
+	if g.Composed&ComposedPrompt == 0 {
+		return
+	}
 	for li := range g.layers {
 		g.prewarmPromptBlock(bb, li)
 	}
@@ -1381,10 +1471,24 @@ func (g *devTier) prewarmComposedHead() {
 		}
 		g.prewarming = false
 	}
-	if !g.NoPromptPrewarm && g.Composed&ComposedEmbed != 0 && bs != nil && bs.embedServes() == partServes && g.embedTokens(bs) {
+	// The input rows at one row, at every prompt width the lane holds a
+	// scratch for, and at every exact width a chunk's scratch is cut to
+	// (keepExact), as prewarmPromptWidths forms the blocks'.
+	if !g.NoPromptPrewarm && g.Composed&ComposedEmbed != 0 && bs != nil && bs.embedServes() == partServes && g.embedBufs(bs) {
 		g.prewarming = true
-		if _, err := g.servedEmbed(bs, bs.embTok); err != nil {
-			g.LastErr = "the composed input rows: " + err.Error()
+		form := func(rows int) {
+			if _, err := g.servedEmbed(bs, rows); err != nil {
+				g.LastErr = "the composed input rows: " + err.Error()
+			}
+		}
+		form(1)
+		for w := range g.bbs {
+			form(w)
+		}
+		if grain := g.promptGrain(); !g.NoExactPrompt && grain > 0 {
+			for w := grain; w < g.promptW; w += grain {
+				form(w)
+			}
 		}
 		g.prewarming = false
 	}

@@ -7,6 +7,7 @@ import (
 	"unsafe"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
@@ -18,8 +19,12 @@ import (
 type embPend struct {
 	dst []float32
 	ids []int32
-	// composed says a decode row the composer gathers (ComposedEmbed).
+	// pos is the first row's position; composed says the composer gathers
+	// the rows (ComposedEmbed), counted as kind: a decode step's or a
+	// prompt's.
+	pos      int
 	composed bool
+	kind     partKind
 }
 
 // same reports whether x is exactly pe's destination -- the slice the caller
@@ -28,45 +33,49 @@ func (pe *embPend) same(x []float32) bool {
 	return len(x) > 0 && len(x) == len(pe.dst) && unsafe.SliceData(x) == unsafe.SliceData(pe.dst)
 }
 
-// EmbedRows promises dst's first len(ids) rows as the token embedding,
-// gathered on the card from the resident head (nn.EmbedDevice). It needs a
-// head that is also the embedding (nn.Head.Embeds) in a format
-// kernels.GetRowsPacked reads; otherwise it returns false and writes nothing.
+// EmbedRows promises dst's first len(ids) rows as the input rows of tokens
+// ids at positions pos onwards (nn.EmbedDevice). Where the composer serves
+// them (ComposedEmbed) they are the front end's graph of the input rows over
+// the tables the device holds, any rows a call carries, each decline named;
+// otherwise the tier gathers a prompt chunk's from a head that is also the
+// embedding (nn.Head.Embeds) in a format kernels.GetRowsPacked reads. False
+// writes nothing.
 //
 // The gather rides the next submission rather than running here: reading the
 // rows back into a fresh prompt buffer cost more than the host lookup it
 // replaced. The chunk's Layers call gathers straight into its scratch
 // (takeEmbed), which also skips uploading x.
-func (g *devTier) EmbedRows(ids []int32, dst []float32) bool {
+func (g *devTier) EmbedRows(ids []int32, pos int, dst []float32) bool {
 	n := len(ids)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	bs := g.bs
-	// A decode row is the composer's to gather (ComposedEmbed), its decline
-	// named; the tier's own gather is a prompt's.
-	if n == 1 && !g.prompt && bs != nil {
-		if g.Composed&ComposedEmbed == 0 {
+	if g.Composed&ComposedEmbed != 0 {
+		if n == 0 || n > batchWidth || bs == nil {
 			return false
 		}
+		kind := partEmbed
+		if n > 1 || g.prompt {
+			kind = partEmbedRows
+		}
 		why := bs.embedServes()
-		switch {
-		case why != partServes:
-		case len(dst) != bs.head.k || ids[0] < 0 || int(ids[0]) >= bs.head.nrows:
-			why = partEmbedHeld
-		case !g.embedTokens(bs):
+		if why == partServes {
+			why = bs.embedFits(ids, pos, dst)
+		}
+		if why == partServes && !g.embedBufs(bs) {
 			why = partNoRoom
 		}
 		if why != partServes {
-			g.PartsDeclined[partEmbed]++
+			g.PartsDeclined[kind]++
 			g.StepDeclines[why]++
 			return false
 		}
 		pe := &g.embBuf
-		pe.dst, pe.ids, pe.composed = dst, append(pe.ids[:0], ids...), true
+		pe.dst, pe.ids, pe.pos, pe.composed, pe.kind = dst, append(pe.ids[:0], ids...), pos, true, kind
 		g.embPend = pe
 		return true
 	}
-	if n == 0 || n > batchWidth || bs == nil || bs.head == nil || !bs.head.ok || !bs.headEmbeds ||
+	if n == 0 || n == 1 && !g.prompt || n > batchWidth || bs == nil || bs.head == nil || !bs.head.ok || !bs.headEmbeds ||
 		len(dst) != n*bs.head.k || kernels.IsFloat(bs.head.t) {
 		return false
 	}
@@ -81,25 +90,139 @@ func (g *devTier) EmbedRows(ids []int32, dst []float32) bool {
 		return false
 	}
 	pe := &g.embBuf
-	pe.dst, pe.ids, pe.composed = dst, append(pe.ids[:0], ids...), false
+	pe.dst, pe.ids, pe.pos, pe.composed = dst, append(pe.ids[:0], ids...), pos, false
 	g.embPend = pe
 	return true
 }
 
-// embedTokens makes bs's token word for the composer's gather if it has
-// none, outside any Session. Callers hold mu.
-func (g *devTier) embedTokens(bs *blockScratch) bool {
-	if bs.embTok != nil {
+// embedFits is why the rows of tokens ids at positions pos onwards into dst
+// are not the composer's input rows, serves where they are: each token a row
+// of the embedding, each position one of the position table's, and dst the
+// rows' width.
+func (bs *blockScratch) embedFits(ids []int32, pos int, dst []float32) partDecline {
+	w := bs.embW
+	if len(dst) != len(ids)*w.k {
+		return partEmbedToken
+	}
+	for _, id := range ids {
+		if id < 0 || int(id) >= w.nrows {
+			return partEmbedToken
+		}
+	}
+	if p := bs.posW; p != nil && (pos < 0 || pos+len(ids) > p.nrows) {
+		return partEmbedToken
+	}
+	return partServes
+}
+
+// prepEmbed holds the tables the head's input rows read (nn.Head.Embed)
+// where the composer serves them: the token embedding, the head itself
+// where it is the embedding, and a learned position table, each uploaded
+// once for the model. A table that does not fit is named (bs.embWhy).
+// Callers hold mu.
+func (g *devTier) prepEmbed(bs *blockScratch, h *nn.Head) {
+	bs.embW, bs.posW, bs.embWhy = nil, nil, partServes
+	if g.Composed&ComposedEmbed == 0 || h.Embed == nil {
+		return
+	}
+	bs.embW = bs.head
+	if !h.Embeds {
+		bs.embW, bs.embWhy = g.embedTable(h.TokEmbd)
+	}
+	if len(h.PosEmbd.Data) > 0 && bs.embWhy == partServes {
+		bs.posW, bs.embWhy = g.embedTable(h.PosEmbd)
+	}
+}
+
+// embedTable is w resident for the input rows, taken under paging only where
+// it costs no block slot, as the head is (PrepHead).
+func (g *devTier) embedTable(w nn.Weight) (*resident, partDecline) {
+	q, ok := quantOf(w.T)
+	if !ok || len(w.Data) == 0 {
+		return nil, partEmbedFormat
+	}
+	if len(g.stream) > 0 {
+		if now, after := g.slots(), g.slotsIfPerm(uint64(len(w.Data))); after < now {
+			return nil, partNoRoom
+		}
+	}
+	r := g.resident(-1, 0, q, w.Data, w.Rows, w.K, w.Packed)
+	if r == nil || !r.ok {
+		return nil, partNoRoom
+	}
+	return r, partServes
+}
+
+// embedBufs makes bs's token and position words for the composer's gather
+// if it has none, outside any Session: a word a row of the widest chunk,
+// and the positions' live row count. Callers hold mu.
+func (g *devTier) embedBufs(bs *blockScratch) bool {
+	if bs.embTok != nil && bs.embPos != nil {
 		return true
 	}
 	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
-	b, err := g.dev.Alloc(4)
-	if err != nil {
-		g.LastErr = err.Error()
-		return false
+	for _, b := range [...]struct {
+		buf   *backend.Buf
+		words int
+	}{{&bs.embTok, batchWidth}, {&bs.embPos, 1 + batchWidth}} {
+		if *b.buf != nil {
+			continue
+		}
+		nb, err := g.dev.Alloc(b.words * 4)
+		if err != nil {
+			g.LastErr = err.Error()
+			return false
+		}
+		*b.buf = nb
 	}
-	bs.embTok = b
 	return true
+}
+
+// embedWords stages the composer's gather of pe's rows at R rows: each row's
+// token, then the live row count and each row's position, the rows past the
+// promise's repeating its last.
+func (g *devTier) embedWords(pe *embPend, R int) (tok, pos []byte) {
+	n := len(pe.ids)
+	tok = slices.Grow(g.subBytes.embIDs[:0], R*4)
+	pos = slices.Grow(g.subBytes.embPos[:0], (R+1)*4)
+	pos = binary.LittleEndian.AppendUint32(pos, uint32(n))
+	for r := range R {
+		i := min(r, n-1)
+		tok = binary.LittleEndian.AppendUint32(tok, uint32(pe.ids[i]))
+		pos = binary.LittleEndian.AppendUint32(pos, uint32(pe.pos+i))
+	}
+	g.subBytes.embIDs, g.subBytes.embPos = tok, pos
+	return tok, pos
+}
+
+// embedRowsAt is the rows the composer gathers n promised rows of bs at on
+// their own: one for one, else the narrowest width at least n whose form the
+// placement formed, else the narrowest prompt width the lane holds a scratch
+// for, else n.
+func (g *devTier) embedRowsAt(bs *blockScratch, n int) int {
+	if n <= 1 {
+		return 1
+	}
+	t, _ := jlmType(bs.embW.t)
+	formed, held := 0, 0
+	for w := range g.bbs {
+		if w < n {
+			continue
+		}
+		if held == 0 || w < held {
+			held = w
+		}
+		if g.served[servedKey{kind: partEmbed, graph: bs.embedGraph, rows: w, t: t}] != nil && (formed == 0 || w < formed) {
+			formed = w
+		}
+	}
+	switch {
+	case formed > 0:
+		return formed
+	case held > 0:
+		return held
+	}
+	return n
 }
 
 // embedKernel makes bs's gather kernel and id buffer if it has none -- here,
@@ -181,6 +304,10 @@ func (g *devTier) takeEmbedLocked(x []float32) *embPend {
 // materializeLocked runs a promised gather on its own and reads the rows back
 // into the promised slice. Callers hold mu.
 func (g *devTier) materializeLocked(pe *embPend) {
+	if pe.composed {
+		g.materializeComposed(pe)
+		return
+	}
 	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
 	bs := g.bs
 	if bs == nil || bs.head == nil || !g.embedKernel(bs) {
@@ -214,6 +341,56 @@ func (g *devTier) materializeLocked(pe *embPend) {
 		return
 	}
 	g.EmbedLaunches++
+}
+
+// materializeComposed is materializeLocked for the composer's promise: its
+// form of the input rows run in a submission of its own, into embCast, and
+// the rows read back -- where the call that takes them is not this card's
+// (a head on another card than block 0's), whose upload then moves them as
+// the residual crosses between cards. Callers hold mu.
+func (g *devTier) materializeComposed(pe *embPend) {
+	defer g.scratchWin().close() // the scratch's own buffers (scratch.go)
+	bs := g.bs
+	n := len(pe.ids)
+	if bs == nil || bs.embedServes() != partServes || !g.embedBufs(bs) {
+		g.LastErr = "the composer's input rows were promised and are no longer held"
+		return
+	}
+	k, R := bs.embW.k, g.embedRowsAt(bs, n)
+	if bs.embCast == nil {
+		b, err := g.dev.Alloc(batchWidth * k * 4)
+		if err != nil {
+			g.LastErr = err.Error()
+			return
+		}
+		bs.embCast = b
+	}
+	sv, err := g.servedEmbed(bs, R)
+	if err != nil {
+		g.LastErr = "the composed input rows: " + err.Error()
+		return
+	}
+	tok, pos := g.embedWords(pe, R)
+	g.dev.Session(func(s backend.Session) {
+		if err = s.Write(bs.embTok, tok); err != nil {
+			return
+		}
+		if bs.posW != nil {
+			if err = s.Write(bs.embPos, pos); err != nil {
+				return
+			}
+		}
+		g.embTo.s = s
+		defer func() { g.embTo.s = nil }()
+		lc := &launcher{to: &g.embTo, err: &err}
+		if err = sv.runAs(g, lc, sv.inst, pe.kind, nil, []backend.Buf{bs.embCast}); err != nil {
+			return
+		}
+		err = s.Read(bs.embCast, f32b(pe.dst[:n*k]))
+	})
+	if err != nil {
+		g.LastErr = err.Error()
+	}
 }
 
 // embIDs is the first rows entries of the id buffer: the promised ids, then

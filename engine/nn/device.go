@@ -366,13 +366,17 @@ type Head struct {
 	// the argmax forms.
 	Sample *graph.Graph
 	// Embed is the step's input rows as ops from the front end, nil where
-	// it states none: what a device holding the embedding (Embeds) forms to
-	// gather a decode row's (nn.EmbedDevice). GatherRow is the device's
-	// answer at PrepHead: it is asked to gather a decode row itself, so the
-	// caller promises it the row rather than filling it.
+	// it states none: what a device forms to gather a step's or a prompt
+	// chunk's rows (nn.EmbedDevice). GatherRow is the device's answer at
+	// PrepHead: it is asked to gather the rows itself, so the caller
+	// promises it the rows rather than filling them.
 	Embed     *graph.Graph
 	GatherRow bool
-	Norm      []float32 // output_norm.weight
+	// TokEmbd is the token embedding where the head is not it (Embeds
+	// false), and PosEmbd a learned position table, zero where the model has
+	// none: the tables Embed reads beside the head.
+	TokEmbd, PosEmbd Weight
+	Norm             []float32 // output_norm.weight
 	// NormB is the output LayerNorm's bias (C6), non-nil exactly when the
 	// model's norms are LayerNorms (LayerPlan.LayerNorm) -- zeros where the
 	// file carries none.
@@ -1243,18 +1247,20 @@ type LayerDevice interface {
 }
 
 // EmbedDevice is an optional LayerDevice that fills residual rows from token
-// ids on the card, out of the head it holds when that head is also the token
-// embedding (Head.Embeds): dst's rows become EmbdScale * embedding[id]. True
-// is a promise, not a write: the device gathers the rows into the next Layers
-// call whose x is dst, without the rows crossing the bus, and makes them real
-// in dst first if anything else reaches it. So the caller hands dst to Layers
-// next and does not read it before. False means nothing was promised and the
-// caller looks the rows up itself.
+// ids on the card: dst's rows become the step's input rows (Head.Embed) of
+// the tokens ids at positions pos, pos+1, ..., gathered from the tables the
+// device holds (the head where it is the embedding, Head.TokEmbd and
+// Head.PosEmbd otherwise). True is a promise, not a write: the device gathers
+// the rows into the next Layers call whose x is dst, without the rows
+// crossing the bus, and makes them real in dst first if anything else
+// reaches it. So the caller hands dst to Layers next and does not read it
+// before. False means nothing was promised and the caller looks the rows up
+// itself.
 //
 // It exists because a host lookup in the packed layout is a cache miss per
 // word: one row's words sit a vocabulary's width apart.
 type EmbedDevice interface {
-	EmbedRows(ids []int32, dst []float32) bool
+	EmbedRows(ids []int32, pos int, dst []float32) bool
 }
 
 // KeyRun is a run of rows [Lo, Hi) that attend to each other in both

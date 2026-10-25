@@ -1580,6 +1580,12 @@ func (s *State) newHead() *nn.Head {
 	h := &nn.Head{Model: s.m.id, Graph: f.head, Sample: f.sample, Embed: f.embed, Norm: s.outNorm, W: wt(*s.outW), Logits: s.logits,
 		Softcap: c.FinalSoftcap, Embeds: c.TiedEmbd, EmbdScale: float32(c.EmbdScale),
 		Stages: s.m.headStages(), Bias: s.m.outB}
+	if !c.TiedEmbd && s.m.embd.e != nil {
+		h.TokEmbd = wt(s.m.embd)
+	}
+	if s.m.posEmbd.e != nil {
+		h.PosEmbd = wt(s.m.posEmbd)
+	}
 	// The final softcap rides the head: a tier that takes it applies the cap on
 	// the device (nn.Head.Softcap), which is what lets a gemma2 token end in
 	// the device argmax instead of a 256,000-float readback.
@@ -3628,17 +3634,15 @@ func (s *State) Forward(token int32) ([]float32, error) {
 }
 
 // embedOnDevice promises the token's row to the device that runs block 0,
-// which gathers it itself (nn.EmbedDevice), where the step's input rows are
-// the token's row alone, scaled: no position table, stream or per-layer
-// input. The host's fill runs only if the device fails the token.
+// which gathers it itself (nn.EmbedDevice) where the front end states the
+// step's input rows (nn.Head.Embed, which GatherRow answers). The host's
+// fill runs only if the device fails the token.
 func (s *State) embedOnDevice() bool {
-	c := s.c
-	if !s.tokFill || s.ldEmbed == nil || s.head == nil || !s.head.GatherRow || s.lo != 0 || !s.devAt(0) || c.PLEDim != 0 || s.m.posEmbd.e != nil ||
-		c.AltUp != 0 || c.DSV4() || c.Q4E() || c.ResAttn() || c.Streams() > 1 {
+	if !s.tokFill || s.ldEmbed == nil || s.head == nil || !s.head.GatherRow || s.lo != 0 || !s.devAt(0) {
 		return false
 	}
 	s.tok1[0] = s.tok
-	return s.ldEmbed.EmbedRows(s.tok1[:], s.resid())
+	return s.ldEmbed.EmbedRows(s.tok1[:], s.pos, s.resid())
 }
 
 // ForwardGreedy is Forward for a caller that only wants the greedy next token:
