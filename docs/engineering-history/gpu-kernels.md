@@ -7237,3 +7237,52 @@ row where the composer's reads two.
   and what differs is where its reduction order leaves the int8
   activations at a step every implementation finds sensitive (the tier's
   own distance there is a hundred times its median).
+- **A batch step's room is the room it takes, and relocation makes it.**
+  The relocate-then-reclaim arms on synth-deepseek32, synth-minimaxm3 and
+  synth-qwen4exp relocated nothing, on the V100 (CUDA and Vulkan) and the
+  laptop alike. A 3-row step's own scratch did not fit the squeezed card,
+  so the step padded into the 512-row prompt scratch, which RowsRoom
+  counted as room, and then built that width's per-row head: 512 rows of
+  logits, 265 MB at deepseek32's vocabulary on a 103 MB budget, charged
+  unchecked (369 MB charged; minimaxm3 533 MB on 122 MB). RowsRoom now
+  builds the step's scratch at the width the step runs (the grain was 8
+  where the step takes 32), prices the per-row head before asking for it,
+  and holds the whole to the budget as a width built after placement is.
+  A step that would pass it has no room, and relocateUntil hands a block
+  home; the model asks with the head the step will hand the device. A
+  scratch that does not build (a kernel the device refuses, the head not
+  on it) is not a shortage: RowsRoom returns it as an error and the step
+  is refused by name, as the device refusing it was before, where reading
+  it as no room sent every block home and ran the batch on the host
+  (TestRoomShortagesAreSurvived's build-refused arm and its violation).
+  The step's walk of every block's ragged twins is kept on layerGen, as
+  prepBatch's is, so a warm step's room query walks nothing; the decode
+  retune now moves layerGen, since it rewrites the blocks' matvecs. A warm
+  3-row step on Llama-3.2-1B Q4_K_M, every block on a V100 over CUDA, 40
+  steps a sample, process per sample, interleaved: the fix against the
+  base reads 0.9917 (IQR 0.9745-1.0049, n=24; the base against itself
+  1.0004, IQR/median 0.069, n=8), 2.8 ms a step and two allocations a
+  ForwardBatch in both.
+  The default path changes in three more places, each a charge past the
+  budget the arm's new check found. A block that selects from its whole
+  history held its context at placement, but its floor stayed the working
+  set, so the first compaction gave the context back (393216 bytes on
+  deepseek32, the slack the rows' first pages then fit in); such a layer
+  is now floored at its context. A lone matvec and a routed compact bank
+  were admitted at their bytes rather than their footprint, as blocks
+  already are (2240 bytes over on minimaxm3); both are admitted at the
+  footprint. And a device step that wants no logits runs no head
+  (forwardRowsDevice handed rowsStep nil logits, which reads as greedy).
+  Blocks placed, before and after, on the V100's CUDA: on the whole card
+  the same for Llama-3.2-1B (16 of 16), synth-qwen4exp (4 of 4) and
+  synth-deepseek32 (3 of 3), a sequence and a 3-row batch alike; at 60% of
+  a sequence's attach Llama-3.2-1B places the same (7, and 6 for a batch),
+  synth-deepseek32 one more, a sequence and a batch (2 of 3 where it placed
+  1), and synth-qwen4exp's batch one fewer (1 of 4 where it placed 2), each
+  after its first prompt or four steps.
+  Each of the three arms now hands one block home and reclaims it
+  (deepseek32 2.1e-06 after the move, minimaxm3 6.4e-12, qwen4exp 1.4e-11),
+  on the V100's CUDA and Vulkan in both builds and on the laptop. Two other
+  arms under the same squeeze, synth-gemma4-kv and synth-hunyuan, hand one
+  block more home than before, the per-row head now held to the budget;
+  every other arm's figures are unchanged to the third digit.

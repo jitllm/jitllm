@@ -333,6 +333,17 @@ func batchSeamMovesWith(t *testing.T, p string, bound float64, relocate bool, mo
 						s1 = g.Stats()
 					}
 				}
+				// A squeezed card holds what it was given: a step's scratch
+				// charged past the budget is room taken that relocation was
+				// there to make (a 3-row step's per-row logits over the
+				// 512-row prompt scratch put synth-deepseek32 at 3.6 times
+				// its budget, and nothing relocated).
+				if arm.squeeze && step > 0 && step <= first {
+					if b := g.Bytes(); b > squeezed {
+						t.Fatalf("step %d: the device charges %d bytes against a budget of %d (%q)",
+							step, b, squeezed, g.Err())
+					}
+				}
 				if arm.squeeze && step == first {
 					if paged && st.Relocations() == 0 {
 						t.Fatalf("step %d: the rows outgrew a card squeezed to the attach and no "+

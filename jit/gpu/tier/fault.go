@@ -139,6 +139,10 @@ func rowsFaulted(f string) bool { return rowsFault == f }
 //	"noseat"          no recurrent seat for a batch fits: RowsRoom says so,
 //	                  and the blocks come home before the step
 //	"noseat-lie"      the same, and RowsRoom says there is room
+//	"nobuild"         a ragged step's twins do not build: RowsRoom returns
+//	                  the error and the step is refused by name
+//	"nobuild-room"    the same, and RowsRoom reads it as no room, so the
+//	                  blocks come home and the step runs on the host
 var roomFault string
 
 // SetRoomFault arms one shortage for the calls after it; "" disarms.

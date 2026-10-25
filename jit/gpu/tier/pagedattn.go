@@ -956,6 +956,14 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 	// MiniMax-M3's and QSA's block selections): a streamed pass cannot serve
 	// it, so its pages cannot go home either.
 	kp.layers[li].noEvict = p.DS4 != nil || selectsHistory(p)
+	// A history that cannot leave the card is held at the context asked for,
+	// charged here with the block, so the budget declines the block at
+	// placement rather than a call failing for want of a page mid-prompt. It
+	// is the layer's floor (pagedSeat), so a compaction for another layer's
+	// room does not give it back.
+	if selectsHistory(p) {
+		kp.layers[li].ctx = (g.capped(p).MaxSeq + kp.p - 1) / kp.p
+	}
 	if d := p.DS4; d != nil && p.Comp != nn.DS4CompNone {
 		ek := entKey(li)
 		geom := kvGeom{kvRow: d.EntRowAt(p.Comp, p.HeadDim), mla: true}
@@ -981,19 +989,6 @@ func (g *devTier) pagedLayer(sid uint64, l *layer, li int, p *nn.LayerPlan) erro
 			return err
 		}
 	}
-	// A history that cannot leave the card is held at the context asked for,
-	// charged here with the block, so the budget declines the block at
-	// placement rather than a call failing for want of a page mid-prompt.
-	if selectsHistory(p) {
-		if want := contextPages(kp, g.capped(p).MaxSeq, seats); kp.layers[li].n < want {
-			if err := g.growKVLayer(kp, kp.layers[li], want); err != nil {
-				if fresh {
-					delete(l.kv, sid)
-				}
-				return err
-			}
-		}
-	}
 	return nil
 }
 
@@ -1007,8 +1002,9 @@ func contextPages(kp *kvPool, maxSeq, seats int) int {
 	return 1 + seats*((maxSeq+kp.p-1)/kp.p)
 }
 
-// pagedSeat raises layer li's floor to its attached sessions' working set and
-// grows it there. Callers hold g.mu.
+// pagedSeat raises layer li's floor to its attached sessions' working set --
+// or their contexts, where the layer holds them (contextPages) -- and grows it
+// there. Callers hold g.mu.
 func (g *devTier) pagedSeat(kp *kvPool, li int, bl *layer) error {
 	l := kp.layers[li]
 	seats := 0
@@ -1017,7 +1013,7 @@ func (g *devTier) pagedSeat(kp *kvPool, li int, bl *layer) error {
 			seats++
 		}
 	}
-	l.floor = 1 + seats
+	l.floor = 1 + seats*max(l.ctx, 1)
 	if l.n < l.floor {
 		return g.growKVLayer(kp, l, l.floor)
 	}

@@ -1449,12 +1449,17 @@ type RowsWidther interface {
 }
 
 // RowsRoomer is a RowsDevice that says, before a step runs, whether every
-// device holding a block has room for it: the batched scratch for rows rows
-// and a recurrent state for each of seqs sequences, built or grown now. A step
-// it has no room for is refused before anything runs, so a caller asks first
-// and brings its blocks home rather than fail the step.
+// device holding a block has room for it: the scratch a step of rows rows
+// runs in and a recurrent state for each of seqs sequences, built or grown
+// now within the device's budget, and with head -- the head the step will hand
+// LayersRows, nil when the host projects -- the per-row head on the device
+// holding it. A step it has no room for is refused before anything runs, so a
+// caller asks first and brings its blocks home rather than fail the step. An
+// error is a step whose scratch does not build whatever the room -- a kernel
+// the device refused, the head not on it -- which no move gives room: the
+// caller returns it.
 type RowsRoomer interface {
-	RowsRoom(rows, seqs int) bool
+	RowsRoom(rows, seqs int, head *Head) (bool, error)
 }
 
 // KVShareDevice is a device whose KV pages the prefix cache can name and map

@@ -41,8 +41,11 @@ func (s *State) ForwardBatchGreedy(tokens []int32) ([]int32, error) {
 // row's slot names its sequence and its position its place in it.
 func (s *State) forwardRowsDevice(tokens []int32, seq, pos, took []int, nlogit int) ([]float32, error) {
 	nv := s.c.NVocab
-	if len(s.blogits) < nlogit*nv {
-		s.blogits = make([]float32, nlogit*nv)
+	// A row's worth at least: rowsStep reads nil logits as a greedy step,
+	// which runs the head that a step wanting none was given no room for
+	// (stepHead).
+	if len(s.blogits) < max(nlogit, 1)*nv {
+		s.blogits = make([]float32, max(nlogit, 1)*nv)
 	}
 	if err := s.rowsStep(tokens, pos, s.flatSlots(seq, pos), s.blogits[:nlogit*nv], nlogit); err != nil {
 		return nil, err
@@ -91,11 +94,13 @@ func (s *State) rowsTake(seq, pos []int) ([]int, error) {
 	return took, nil
 }
 
-// relocateRows is relocateFor for a step in which slot q takes took[q] rows:
-// what has to fit is each stepping sequence's next took[q] positions.
-func (s *State) relocateRows(took []int, rows int) {
+// relocateRows is relocateFor for a step in which slot q takes took[q] rows
+// and the first nlogit want logits: what has to fit is each stepping
+// sequence's next took[q] positions and the step's own room. A step whose
+// scratch does not build is its error, returned rather than relocated for.
+func (s *State) relocateRows(took []int, rows, nlogit int) error {
 	if s.ld == nil {
-		return
+		return nil
 	}
 	end := 0
 	for q, k := range took {
@@ -103,9 +108,19 @@ func (s *State) relocateRows(took []int, rows int) {
 			end = max(end, s.bpos[q]+k)
 		}
 	}
+	var buildErr error
 	room := func() bool { return true }
 	if rr, ok := s.ld.(nn.RowsRoomer); ok && s.devCount() > 0 {
-		room = func() bool { return rr.RowsRoom(rows, s.nseq) }
+		// The head is asked again as blocks move: one that takes the last
+		// block home leaves the projection to the host (stepHead).
+		room = func() bool {
+			if buildErr != nil {
+				return true
+			}
+			ok, err := rr.RowsRoom(rows, s.nseq, s.stepHead(nlogit))
+			buildErr = err
+			return ok || err != nil
+		}
 		// Counted once a step: blocks go home for the step's room here,
 		// or all at once in forwardRows when relocation is off.
 		if !room() {
@@ -116,7 +131,7 @@ func (s *State) relocateRows(took []int, rows int) {
 	if !ok || !sd.PerSequenceKV() || s.nseq == 1 {
 		s.relocateFor(end)
 		s.relocateUntil(end, room)
-		return
+		return buildErr
 	}
 	// The State's own slices, so a warm step allocates nothing.
 	bases, ends := s.rlBases[:0], s.rlEnds[:0]
@@ -127,6 +142,7 @@ func (s *State) relocateRows(took []int, rows int) {
 	}
 	s.rlBases, s.rlEnds = bases, ends
 	s.relocateUntil(end, func() bool { return room() && sd.ReserveKVSeqs(bases, ends) })
+	return buildErr
 }
 
 // flatSlots is each row's place in the device's flat history, sequence q's
@@ -244,6 +260,18 @@ func (s *State) rowsRefusal() error {
 // holding the blocks had no room for it -- it is a step of its own there.
 func (s *State) headWithLastBlock() bool {
 	return s.head != nil && s.devAt(s.hi-1)
+}
+
+// stepHead is the head a batch step whose first nlogit rows want logits hands
+// the device -- the rows step's (rowsStep) and a split's last device run's
+// (rowsHost), both where the head rides the last block -- or nil where the
+// host projects: a stream-major residual's head (altRowsStep), a step that
+// wants no logits. It is what the step's room is asked for (nn.RowsRoomer).
+func (s *State) stepHead(nlogit int) *nn.Head {
+	if nlogit == 0 || s.c.streamHead() || s.devCount() == 0 || !s.headWithLastBlock() {
+		return nil
+	}
+	return s.head
 }
 
 // rowsRun runs device blocks [lo, hi) of a split placement for the rows at
