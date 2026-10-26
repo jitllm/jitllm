@@ -2255,6 +2255,9 @@ type blockScratch struct {
 	// what it reads. Both nil on every model without one.
 	headCap   backend.Kernel
 	logitsCap backend.Buf
+	// capC is the head's final softcap, 0 for none: what a per-row head
+	// built at placement caps by (prepRowsReserved).
+	capC float32
 	// ragCapK and ragCap are the same for the per-row head: ragLogits capped
 	// into a buffer of their own, which the per-row argmax and the readback
 	// take. ragCapC is the cap ragCapK was built for.
@@ -2330,6 +2333,9 @@ type blockScratch struct {
 	// rows reads as the rows it runs (jit.CallRows); headCalls the rows a
 	// call's head over rows projects.
 	calls, headCalls backend.Buf
+	// instNoRoom says a composed instance at the scratch's rows did not fit
+	// the budget (promptInst): the reserved width narrows (fitReserved).
+	instNoRoom bool
 	// csSWA is the local layers' rotary table, allocated only for an
 	// architecture that trains two bases (LayerPlan.SWAPeriod). nil elsewhere,
 	// which is what keeps ropeTable a nil check for every other model.
@@ -2950,6 +2956,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 	defer func() {
 		if placed && g.Composed&(ComposedBlock|ComposedPrompt) != 0 {
 			g.mu.Lock()
+			g.prewarmComposedTables()
 			g.prewarmComposedBlock(li)
 			g.mu.Unlock()
 		}
@@ -6616,6 +6623,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 		bs.headCap, bs.logitsCap = c, b
 		g.charge(uint64(h.W.Rows * 4))
 	}
+	bs.capC = h.Softcap
 	// The greedy token on the device (nn.Head.ArgmaxOnly). Without it the head
 	// still runs and every caller gets its logits, so a failure is not one.
 	if g.argmaxK == nil {
@@ -6633,6 +6641,7 @@ func (g *devTier) PrepHead(h *nn.Head) bool {
 	}
 	g.prewarmHeadKernels()
 	g.prewarmComposedHead()
+	g.prepRowsReserved()
 	return true
 }
 
@@ -6839,6 +6848,33 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 			g.LastErr = fmt.Sprintf("a %d-row chunk of %d streams this device would have to cut by rows", n,
 				dbs.p.Streams())
 			return false
+		}
+		// A call the composer serves longer than the reserved width runs in
+		// chunks of it, the last carrying the head, folded as a call of the
+		// reserved width folds it.
+		if composed && n > sub && dbs != nil && !(head != nil && head.RowLogits) && !noFold {
+			nr, e := dbs.p.RopeW(), dbs.p.NEmbd
+			g.mu.Lock()
+			g.PromptSplits++
+			g.mu.Unlock()
+			for off := 0; off < n; off += sub {
+				m := min(sub, n-off)
+				var rcs, rswa []float32
+				if nr > 0 {
+					rcs = cs[off*nr : (off+m)*nr]
+					if len(csSWA) >= (off+m)*nr {
+						rswa = csSWA[off*nr : (off+m)*nr]
+					}
+				}
+				var h *nn.Head
+				if off+m == n {
+					h = head
+				}
+				if !g.layersFor(sid, lo, hi, pos+off, m, x[off*e:(off+m)*e], rcs, rswa, h) {
+					return false
+				}
+			}
+			return true
 		}
 		// A head rides only the one-submission path. Every fallback splits the
 		// chunk, so there the head runs on the last row as its own submission;
@@ -7489,10 +7525,6 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 				return refuse("the block selection reads the whole history and part of it is evicted")
 			}
 		}
-		pk.ragRows = 0
-		if rag != nil && pk.cur != nil {
-			g.ragPrep(bs)
-		}
 		// A call whose every block the composer serves runs none of the
 		// tier's attention and stages none; a block it declines has the
 		// tier's kernels readied here (promptDeclines).
@@ -7502,6 +7534,10 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			if tierRuns, e = g.promptDeclines(bs, lo, hi); e != nil {
 				return refuse("%v", e)
 			}
+		}
+		pk.ragRows = 0
+		if rag != nil && pk.cur != nil && tierRuns {
+			g.ragPrep(bs)
 		}
 		pk.prefill = tierRuns && pk.pf != nil && pk.cur != nil && pk.st == nil && rag == nil && R > 1 && nrow > 0
 		if pk.prefill {
@@ -7742,7 +7778,7 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 		}
 	}
 	// Counted here rather than in emit, which a replayed recording skips.
-	if ragHead == 1 {
+	if ragHead == 1 && !headSrv {
 		if _, ok := g.headOneMV(R); ok {
 			g.RagHeadOne++
 		}

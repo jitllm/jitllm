@@ -240,14 +240,14 @@ func (g *devTier) makeStage(l *kvLayerPool, p int) error {
 	if l.stage, err = g.dev.Alloc(max(kw, vw) * 4); err != nil {
 		return err
 	}
-	if l.stageTab, err = g.dev.Alloc(4); err != nil {
+	if l.stageTab, err = g.dev.Alloc(8); err != nil {
 		return err
 	}
 	for _, w := range []int{kw, vw} {
 		if w == 0 {
 			continue
 		}
-		if _, err = g.gatherKernel(w, 1); err != nil {
+		if _, err = g.gatherKernel(w); err != nil {
 			return err
 		}
 	}
@@ -802,32 +802,37 @@ func writePagesIn(b backend.Buf, host []byte, words int, order []uint32) error {
 }
 
 // gatherInto copies pages order[j] of src, words each, to page j of dst. The
-// kernel is compiled per shape and kept, as restride's are.
+// kernel is a page's words', compiled where the pool layer is made
+// (makeStage) and reading the count from its table: no count compiles one.
 func (g *devTier) gatherInto(src, dst backend.Buf, order []uint32, words int) error {
 	n := len(order)
-	k, err := g.gatherKernel(words, n)
+	if n == 0 {
+		return nil
+	}
+	k, err := g.gatherKernel(words)
 	if err != nil {
 		return err
 	}
-	tab, err := g.dev.Alloc(n * 4)
+	tab, err := g.dev.Alloc((n + 1) * 4)
 	if err != nil {
 		return err
 	}
 	defer tab.Free()
-	if err := tab.Write(u32view(order)); err != nil {
+	g.gatherTab = append(append(g.gatherTab[:0], uint32(n)), order...)
+	if err := tab.Write(u32view(g.gatherTab)); err != nil {
 		return err
 	}
 	return k.Launch((n*words+127)/128, 128, src, dst, tab)
 }
 
-// gatherKernel is the gather of n pages of words each, compiled once and kept
+// gatherKernel is the gather of pages of words each, compiled once and kept
 // with the restrides.
-func (g *devTier) gatherKernel(words, n int) (backend.Kernel, error) {
-	key := [4]int{-1, words, n, 0}
+func (g *devTier) gatherKernel(words int) (backend.Kernel, error) {
+	key := [4]int{-1, words, 0, 0}
 	if k := g.restrides[key]; k != nil {
 		return k, nil
 	}
-	ker, err := kernels.PagedGatherPages(words, n)
+	ker, err := kernels.PagedGatherPages(words)
 	if err != nil {
 		return nil, err
 	}

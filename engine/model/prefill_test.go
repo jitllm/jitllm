@@ -138,6 +138,11 @@ func prefillOnDevice(t *testing.T, path, dev string, parts tier.Parts, mixed, wi
 		}
 		minTok = m.Cfg.SWAWindow + 96
 	}
+	// JITLLM_TEST_MINTOK lengthens the prompt to at least that many tokens,
+	// which JITLLM_TEST_NTOK then cuts to the length a run holds.
+	if k, err := strconv.Atoi(os.Getenv("JITLLM_TEST_MINTOK")); err == nil && k > minTok {
+		minTok = k
+	}
 	// The prompt goes in chunks of at most 64 rows: the device reserves and
 	// warms the widths up to 64, each a form of the composer's.
 	opts := []tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
@@ -248,9 +253,9 @@ func prefillVsForwardModel(t *testing.T, m *Model, exact bool, minTok int, attac
 	batch := newState(len(ids) + 40)
 	defer batch.Close()
 	// A long prompt goes in prompts of 64 tokens, each a chunk of a width
-	// the device warmed.
+	// the device warmed; one lengthened by JITLLM_TEST_MINTOK goes whole.
 	chunk := len(ids)
-	if minTok > 0 {
+	if minTok > 0 && os.Getenv("JITLLM_TEST_MINTOK") == "" {
 		chunk = 64
 	}
 	var got []float32

@@ -31,7 +31,7 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 		name     string
 		composed tier.Parts
 	}{
-		{"Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", 0},
+		{"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", 0},
 		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", 0},
 		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", tier.ComposedBlock | tier.ComposedHead},
 		{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", tier.ComposedBlock | tier.ComposedHead | tier.ComposedPrompt},

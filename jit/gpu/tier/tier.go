@@ -795,6 +795,11 @@ type Stats struct {
 	// of what a placement composes, which no prompt, step or session after
 	// it moves.
 	PartsFormed, PartKernels, ScratchBuilds int
+	// ReservedRows is the rows of the reserved width a device holds the
+	// composer's prompt and ragged forms at, its buffers in the budget
+	// (fitReserved): its capacity, a call of more rows running in chunks of
+	// it. Over several devices, the narrowest.
+	ReservedRows int
 	// HiddenHeads counts the calls whose head the composer served and whose
 	// normed rows the caller read back (nn.Head.Hidden), HiddenRows those
 	// rows: a speculation step's verification is one call of several.
@@ -1386,6 +1391,9 @@ func (s *Stats) add(o Stats) {
 	s.PartsFormed += o.PartsFormed
 	s.PartKernels += o.PartKernels
 	s.ScratchBuilds += o.ScratchBuilds
+	if o.ReservedRows > 0 && (s.ReservedRows == 0 || o.ReservedRows < s.ReservedRows) {
+		s.ReservedRows = o.ReservedRows
+	}
 	s.HiddenHeads += o.HiddenHeads
 	s.HiddenRows += o.HiddenRows
 	// A block is on one device, so its slot is the only one that is not zero.
@@ -2070,6 +2078,9 @@ type devShared struct {
 	// (unix ns): the background tuner waits for tuneQuiet past it.
 	lastSub   atomic.Int64
 	restrides map[[4]int]backend.Kernel // kernels.Restride by shape; see copyKVAcrossStride
+	// gatherTab is a gather's table as written, the count and then the
+	// pages (gatherInto, readStaged), reused.
+	gatherTab []uint32
 	segKerns  map[string]backend.Kernel // kernels.MatVecSegments by shapes; see fuseQKV
 	// actInWin is tuneActIn's verdict per operand-prologue site key: true where
 	// the prologue measured faster than the two launches on this card.

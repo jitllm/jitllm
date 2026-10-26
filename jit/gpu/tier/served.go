@@ -488,6 +488,9 @@ func (g *devTier) promptInst(bs *blockScratch, f *partForm) *partInst {
 	in, err := g.instance(f)
 	if err != nil {
 		g.LastErr = "the composed prompt block: " + err.Error()
+		if _, room := err.(partRoomError); room {
+			bs.instNoRoom = true
+		}
 		return nil
 	}
 	if bs.prompt == nil {
@@ -1477,6 +1480,7 @@ func (g *devTier) prewarmComposed() {
 		g.prewarmComposedBlock(li)
 	}
 	g.prewarmComposedHead()
+	g.prepRowsReserved()
 }
 
 // prewarmComposedBlock forms block li's part where the composer serves it:
@@ -1510,6 +1514,7 @@ func (g *devTier) prewarmComposedBlock(li int) {
 			g.prewarmPromptBlock(bb, li)
 		}
 	}
+	g.fitReserved()
 	// The shadow arm's comparison of the block's two outputs.
 	if g.shadowing() {
 		if _, err := g.servedShadow(l, bs.p.NEmbd); err != nil {
@@ -1562,10 +1567,15 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 }
 
 // promptHeld reports whether a placement leaves block li's own batched
-// kernels at bb's rows uncompiled: the composer serves its prompt or ragged
-// step there (promptServed). They are compiled where the block's rows
-// decline (declineTwins). Callers hold g.mu.
+// kernels at bb's rows uncompiled: the composer serves its prompt or the
+// server's ragged step there (promptServed). They are compiled where the
+// block's rows decline (declineTwins). The reserved width a ragged step
+// alone is composed in keeps them for the prompts the tier runs there.
+// Callers hold g.mu.
 func (g *devTier) promptHeld(l *layer, li int, bb *blockScratch) bool {
+	if g.Composed&ComposedPrompt == 0 && (g.stepW <= 0 || bb.rows != g.stepW) {
+		return false
+	}
 	return g.promptServed(l, li, bb)
 }
 
@@ -1650,7 +1660,7 @@ func (g *devTier) promptForms(bb *blockScratch) {
 // ragged step's (Config.StepRows) where the blocks are.
 func (g *devTier) rowsForms(bb *blockScratch) bool {
 	return g.Composed&ComposedPrompt != 0 ||
-		g.Composed&ComposedBlock != 0 && bb != nil && g.stepW > 0 && bb.rows == g.stepW
+		g.Composed&ComposedBlock != 0 && bb != nil && (g.stepW > 0 && bb.rows == g.stepW || bb == g.reservedFor(ComposedBlock))
 }
 
 // keyBound is a block form's key bound for a session of maxSeq positions.

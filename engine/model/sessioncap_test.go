@@ -206,7 +206,7 @@ func aBatchLeavesAnotherSessionAlone(t *testing.T, m *Model, parts tier.Parts) {
 		b := run(t, g)
 		if n := b.devCount(); n == 0 || n == m.Cfg.NLayer {
 			t.Fatalf("B placed %d of %d blocks: the budget did not make B split, so this "+
-				"compared nothing", n, m.Cfg.NLayer)
+				"compared nothing (%d of %d bytes charged: %s)", n, m.Cfg.NLayer, g.Budgets()[0].Used, g.Budgets()[0].Limit, g.Err())
 		}
 		composedRan(t, parts, nil, g)
 		t.Logf("B kept %d of %d blocks on the card; A kept all of them", b.devCount(), m.Cfg.NLayer)

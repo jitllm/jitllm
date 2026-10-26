@@ -8419,3 +8419,36 @@ row where the composer's reads two.
   The capacity is still in jit.Key: the forms do not move with a call's
   rows, but their codes and schedules still read the capacity, and the CPU
   device's forms have none.
+- **Nothing composes, compiles or builds a scratch after placement.** A
+  ragged step the composer serves runs in the reserved width at its own rows
+  whether the prompt is asked of the composer or only the blocks
+  (rowsComposed: a step's blocks are decode's, ComposedBlock), and so do the
+  room check before it (stepRoom) and the scheduler's admission (RowsWidth
+  answers the reserved width and builds nothing, so a batch of more prompt
+  rows than the width is admitted a width a step; a wider step is refused by
+  name). The per-row argmax and softcap of the reserved width are built at
+  PrepHead (prepRowsReserved), the tier's one-row head over a wider scratch
+  and its ragged flash prefill are not built where the composer serves the
+  head and every block, and a prompt longer than the width runs in chunks of
+  it with the head folded into the last. A server's step width is a floor on
+  the reserved width, not a scratch and forms of its own, and the 32-row
+  rounding is gone from that path. Relocation forms the rotary tables on the
+  destination with the block. A KV compaction's page gather reads its page
+  count at run time (kernels.PagedGatherPages(words)), compiled where the
+  pool layer is made, where it compiled per count at a second session's
+  prompt on a 4 GB card. The reserved width narrows from the budget when the
+  composer's instance at it does not fit (fitReserved); Stats.ReservedRows
+  names a card's capacity: 512 rows on a V100 (Llama-3.2-1B), 256 on the
+  laptop's 4 GB RTX 3050 Ti, whose composed prompt block needs about 1.1 GB
+  of buffers at the census's 3.4k-position session. Sessions share the
+  capacity scratch: a lane is a call in flight, not a session, and a second
+  session or the scheduler's State runs in lane0's scratch with no build; a
+  clone lane is built only for calls that overlap, which hold their own
+  intermediates (the KV is the pool's, owned per sequence).
+  TestPlacementComposesOnce now also runs a four-sequence batch of 592
+  prompt rows against the 512-row width, closes the other sessions and moves
+  half the blocks to the CPU and back (each block composed once at placement
+  and once more at the move, Stats.BlockForms), and has a two-card arm (the
+  upper half and the head on a second card, then the lower half moved over);
+  it counts DeclineBuilt and FormedAtStep beside forms, scratches and
+  compiles, and names any kernel compiled after placement.

@@ -1335,12 +1335,13 @@ func (g *devTier) readPages(l *kvLayerPool, src backend.Buf, ids []uint32, words
 // readStaged is readPages through l's reserve, a page a pass, with the gather
 // makeStage compiled: nothing is allocated or compiled on the device.
 func (g *devTier) readStaged(l *kvLayerPool, src backend.Buf, ids []uint32, words int, out []float32) error {
-	k, err := g.gatherKernel(words, 1)
+	k, err := g.gatherKernel(words)
 	if err != nil {
 		return err
 	}
 	for i := range ids {
-		if err := l.stageTab.Write(u32view(ids[i : i+1])); err != nil {
+		g.gatherTab = append(g.gatherTab[:0], 1, ids[i])
+		if err := l.stageTab.Write(u32view(g.gatherTab)); err != nil {
 			return err
 		}
 		if err := k.Launch((words+127)/128, 128, src, l.stage, l.stageTab); err != nil {

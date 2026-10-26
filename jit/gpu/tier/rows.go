@@ -110,7 +110,20 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 		return false
 	}
 	g.mu.Lock()
-	w := g.rowsWidth(lo, n)
+	// A step the composer serves whole runs in the reserved width, its rows
+	// the call's, as a prompt does (rowsComposed): no width is built,
+	// formed or compiled for its count of rows, and a wider step is refused
+	// (RowsWidth admits none). So does a head over the rows on a device
+	// that holds none of the step's blocks.
+	composed := g.rowsComposed(lo, hi) || lo == hi && g.headReserved()
+	w := g.promptW
+	switch {
+	case composed && n > g.promptW:
+		g.mu.Unlock()
+		return fail("%d rows, more than the reserved width %d the composer serves", n, g.promptW)
+	case !composed:
+		w = g.rowsWidth(lo, n)
+	}
 	if w > batchWidth {
 		g.mu.Unlock()
 		return fail("%d rows, more than the batch width %d", n, batchWidth)
@@ -138,11 +151,7 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 	// The step's own width, or the reserved one when that does not fit.
 	ok := g.bs != nil && (head == nil || g.bs.head != nil && g.bs.head.ok)
 	if ok {
-		// A step the composer serves whole runs in the reserved width, its
-		// rows the call's, as a prompt does (promptComposed).
-		if n <= g.promptW && g.promptComposed(lo, hi) {
-			w = g.promptW
-		} else {
+		if !composed {
 			w = g.batchFor(w)
 		}
 		ok = w > 0 && g.prepRagged(g.bbs[w], head, n)
@@ -250,7 +259,7 @@ func (g *devTier) prepRaggedBlocks(bs *blockScratch, n int) bool {
 	}
 	// A step in the reserved width whose every block the composer serves
 	// runs none of the tier's twins: nothing is built for its count of rows.
-	composed := bs == g.bbs[g.promptW] && g.composedWidths()
+	composed := bs == g.bbs[g.promptW] && g.rowsReserved()
 	for _, l := range g.layers {
 		if l == nil || !l.ok || composed {
 			continue // a block of a split placement that another tier runs
@@ -322,8 +331,9 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 	// The composer's head over rows serves any count of them in the
 	// reserved width (servedHead): the tier's per-count projections are not
 	// built for it.
-	if !(g.Composed&ComposedHead != 0 && bs == g.bbs[g.promptW] && g.composedWidths() &&
-		g.bs.headServes(g.bs.hNorm, false, false) == partServes) {
+	served := g.Composed&ComposedHead != 0 && bs == g.bbs[g.promptW] && g.rowsReserved() &&
+		g.bs.headServes(g.bs.hNorm, false, false) == partServes
+	if !served {
 		g.groupMV(g.headMV(), rowsHead.WantedRows(n), R)
 		g.headOneMV(R)
 	}
@@ -332,9 +342,12 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 		if amk == nil {
 			return false
 		}
-		hm, ok := g.ragMV(mv{q: head.t, k: p.NEmbd, rows: head.nrows}, R)
-		if !ok {
-			return fail(fmt.Errorf("no batched head matvec: %s", g.LastErr))
+		var hm mv
+		if !served {
+			var ok bool
+			if hm, ok = g.ragMV(mv{q: head.t, k: p.NEmbd, rows: head.nrows}, R); !ok {
+				return fail(fmt.Errorf("no batched head matvec: %s", g.LastErr))
+			}
 		}
 		// reserveRowsHead may have allocated them at placement, from the
 		// plan's vocabulary; a head of another width replaces them.
@@ -374,6 +387,20 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 		bs.ragCapK, bs.ragCapC = k, c
 	}
 	return true
+}
+
+// prepRowsReserved builds the reserved width's per-row head where a ragged
+// step's rows run there (rowsReserved) -- the per-row argmax and the final
+// softcap, the composer's head writing the logits they read -- at placement
+// and at PrepHead, so no step compiles them. Callers hold g.mu.
+func (g *devTier) prepRowsReserved() {
+	bb := g.reservedFor(ComposedBlock)
+	if bb == nil || g.bs == nil || g.bs.head == nil || !g.bs.head.ok || !g.rowsReserved() {
+		return
+	}
+	if !g.prepRowsHead(bb, &nn.Head{Softcap: g.bs.capC}, bb.rows) {
+		g.LastErr = "the reserved width's per-row head: " + g.LastErr
+	}
 }
 
 // LayersRows runs blocks [lo, hi) for the rows, one call per device run, the
@@ -460,8 +487,9 @@ func (g *GPU) layersRows(self uint64, lo, hi int, pos, slot []int, sid []uint64,
 
 // RowsWidth is the widest step of at most want rows every device holding a
 // block can run (nn.RowsWidther): each device's batched scratch for it held
-// or built now (batchFor), halving the width until one fits. 0 when none
-// does, or no device holds a block.
+// or built now (batchFor), halving the width until one fits; on a device
+// whose every block the composer serves in the reserved width, that width
+// (rowsReserved). 0 when none does, or no device holds a block.
 func (g *GPU) RowsWidth(want int) int {
 	w := min(want, batchWidth)
 	if roomFaulted("narrow-lie") {
@@ -476,7 +504,12 @@ func (g *GPU) RowsWidth(want int) int {
 				break
 			}
 		}
-		if held && d.bs != nil {
+		switch {
+		case held && d.rowsReserved():
+			// The composer serves every block in the reserved width at any
+			// count of rows up to it: nothing is built for the step.
+			w = min(w, d.promptW)
+		case held && d.bs != nil:
 			for w >= 8 {
 				r := (w + 7) / 8 * 8
 				if b := d.batchFor(r); b >= r {
@@ -560,12 +593,22 @@ func (e errStepBuild) Error() string { return "the step's scratch does not build
 // rows of logits. A set that does not build is an errStepBuild. Callers hold
 // g.mu.
 func (g *devTier) stepRoom(lo, n int, head *nn.Head) (bool, error) {
-	w := g.rowsWidth(lo, n)
-	if w > batchWidth {
-		return false, nil
-	}
-	if w = g.batchFor(w); w == 0 {
-		return false, nil
+	var w int
+	switch {
+	case g.rowsReserved() || lo < 0 && g.headReserved():
+		// The step runs in the reserved width (layersRows): nothing is
+		// built for its rows.
+		if n > g.promptW {
+			return false, errStepBuild{fmt.Sprintf("%d rows, more than the reserved width %d the composer serves", n, g.promptW)}
+		}
+		w = g.promptW
+	default:
+		if w = g.rowsWidth(lo, n); w > batchWidth {
+			return false, nil
+		}
+		if w = g.batchFor(w); w == 0 {
+			return false, nil
+		}
 	}
 	bs := g.bbs[w]
 	if head != nil {

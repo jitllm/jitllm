@@ -303,7 +303,14 @@ func (g *devTier) reserveScratch(p *nn.LayerPlan, need uint64) {
 	if g.PromptRows > 0 {
 		want = roundUp(min(g.PromptRows, batchWidth), batchGrain)
 	}
-	if sw := g.stepRows(); sw > 0 && g.stepW != sw {
+	// Where the composer serves a ragged step's rows, they run in the
+	// reserved width at the step's own count (rowsComposed): the server's
+	// step width is a floor on it, not a scratch and a form of its own.
+	if g.Composed&ComposedBlock != 0 && !g.ComposedWidths {
+		if g.StepRows > 0 {
+			want = max(want, roundUp(min(g.StepRows, batchWidth), 8))
+		}
+	} else if sw := g.stepRows(); sw > 0 && g.stepW != sw {
 		if g.prepBatch(sw) && g.reserveRowsHead(g.bbs[sw], p) && g.reservePaged(g.bbs[sw]) && g.room(need) {
 			g.stepW = sw
 		} else {
@@ -444,9 +451,40 @@ func (g *devTier) batchFor(w int) int {
 // formed or compiled for the call's length, and a call longer than the
 // reserved width runs in chunks of it. A block that is not served is named
 // in LastErr. Callers hold g.mu, outside any submission.
-func (g *devTier) promptComposed(lo, hi int) bool {
+func (g *devTier) promptComposed(lo, hi int) bool { return g.rangeComposed(lo, hi, ComposedPrompt) }
+
+// rowsComposed is promptComposed for a ragged step over blocks [lo, hi): its
+// blocks are asked as decode's (ComposedBlock), a prompt's ragged rows as the
+// prompt's.
+func (g *devTier) rowsComposed(lo, hi int) bool {
+	if g.prompt {
+		return g.promptComposed(lo, hi)
+	}
+	return g.rangeComposed(lo, hi, ComposedBlock)
+}
+
+// reservedFor is the reserved width's scratch where calls asked of the
+// composer as part run there, nil where they do not.
+func (g *devTier) reservedFor(part Parts) *blockScratch {
 	bb := g.bbs[g.promptW]
-	if g.promptW < 2 || bb == nil || g.Composed&ComposedPrompt == 0 || g.ComposedWidths || lo >= hi {
+	if g.promptW < 2 || bb == nil || g.Composed&part == 0 || g.ComposedWidths {
+		return nil
+	}
+	return bb
+}
+
+// headReserved reports whether the composer serves a head over rows in the
+// reserved width, formed there at placement (prewarmComposedHead).
+func (g *devTier) headReserved() bool {
+	return g.reservedFor(ComposedHead) != nil && g.bs != nil && g.bs.head != nil &&
+		g.bs.headServes(g.bs.hNorm, false, false) == partServes
+}
+
+// rangeComposed reports whether the composer serves, as part, every block of
+// [lo, hi) in the reserved width (composedBlock).
+func (g *devTier) rangeComposed(lo, hi int, part Parts) bool {
+	bb := g.reservedFor(part)
+	if bb == nil || lo >= hi {
 		return false
 	}
 	for li := lo; li < hi; li++ {
@@ -473,12 +511,41 @@ func (g *devTier) composedBlock(li int, bb *blockScratch) bool {
 	return true
 }
 
-// composedWidths reports whether every block placed on the device has its
-// prompt in the reserved width (promptComposed): a placement then warms no
-// other width. Callers hold g.mu.
-func (g *devTier) composedWidths() bool {
-	bb := g.bbs[g.promptW]
-	if g.promptW < 2 || bb == nil || g.Composed&ComposedPrompt == 0 || g.ComposedWidths {
+// fitReserved sizes the reserved width from the budget with the composer's
+// buffers in it: where the composed instance at the width does not fit
+// (instNoRoom), the width is halved, the scratch built again at it and every
+// placed block formed there, until one fits. The width a card holds is its
+// capacity (Stats.ReservedRows); a call of more rows runs in chunks of it
+// and no width is formed for a call's rows. At placement, callers hold g.mu.
+func (g *devTier) fitReserved() {
+	for {
+		bb := g.bbs[g.promptW]
+		if bb == nil || !g.rowsForms(bb) || !bb.instNoRoom {
+			break
+		}
+		w := g.promptW / 2 / batchGrain * batchGrain
+		if w < batchGrain {
+			g.LastErr = fmt.Sprintf("the reserved width of %d rows is the narrowest, and the composer's buffers do not fit beside it", g.promptW)
+			break
+		}
+		g.dropBatch(g.promptW)
+		if !g.prepBatch(w) || !g.reservePaged(g.bbs[w]) || !g.reserveRowsHead(g.bbs[w], &g.bs.p) {
+			g.dropBatch(w)
+			g.LastErr = fmt.Sprintf("no reserved width of %d rows builds beside the blocks placed", w)
+			break
+		}
+		g.promptW = w
+		g.promptForms(g.bbs[w])
+	}
+	g.ReservedRows = g.promptW
+}
+
+// rowsReserved reports whether every block placed on the device has its
+// ragged rows in the reserved width (rowsComposed): a step of any count of
+// rows up to it builds, forms and compiles nothing. Callers hold g.mu.
+func (g *devTier) rowsReserved() bool {
+	bb := g.reservedFor(ComposedBlock)
+	if bb == nil {
 		return false
 	}
 	n := 0
