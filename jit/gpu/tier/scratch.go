@@ -452,7 +452,9 @@ func (g *devTier) batchFor(w int) int {
 // formed or compiled for the call's length, and a call longer than the
 // reserved width runs in chunks of it. A block that is not served is named
 // in LastErr. Callers hold g.mu, outside any submission.
-func (g *devTier) promptComposed(lo, hi int) bool { return g.rangeComposed(lo, hi, ComposedPrompt, true) }
+func (g *devTier) promptComposed(lo, hi int) bool {
+	return g.rangeComposed(lo, hi, ComposedPrompt, true)
+}
 
 // rowsComposed is promptComposed for a ragged step over blocks [lo, hi): its
 // blocks are asked as decode's (ComposedBlock), a prompt's ragged rows as the

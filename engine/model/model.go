@@ -21,6 +21,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/tok"
 )
 
@@ -1419,7 +1420,45 @@ func Open(path string, options ...Option) (*Model, error) {
 	if err := nn.HostRefusal(); err != nil {
 		return nil, fmt.Errorf("model: %w", err)
 	}
-	return openContainer(path, options...)
+	m, err := openContainer(path, options...)
+	if err != nil {
+		return nil, err
+	}
+	// Where the composer serves, a container written before the converter
+	// stated its activations would run every block on the tier's own kernels
+	// and say nothing: refused, with the command that states them.
+	if jit.ComposedByDefault || m.opt.composedCPU {
+		if err := m.statesActivations(path); err != nil {
+			m.Close()
+			return nil, err
+		}
+	}
+	return m, nil
+}
+
+// statesActivations is an UpgradeRequiredError where the container states no
+// activation and the front end refuses a block for wanting one.
+func (m *Model) statesActivations(path string) error {
+	if len(m.container.Config().Acts) > 0 {
+		return nil
+	}
+	for li := range m.Cfg.NLayer {
+		if m.Uncovered(li) == UncoveredAct {
+			return &UpgradeRequiredError{Path: path, What: "activations"}
+		}
+	}
+	return nil
+}
+
+// UpgradeRequiredError is a container written before this build states what
+// the composer reads of it. It carries the upgrade command.
+type UpgradeRequiredError struct{ Path, What string }
+
+// Error names the file, what it does not state and the command that states
+// it, in place.
+func (e *UpgradeRequiredError) Error() string {
+	return fmt.Sprintf("jitllm: %s was written before this build states its %s, which the composer reads.\n"+
+		"  Upgrade it once:  jitllm upgrade %s", e.Path, e.What, e.Path)
 }
 
 // Option configures a load.
