@@ -8703,6 +8703,8 @@ row where the composer's reads two.
   chunk boundary each leaves the band (median ratios 257 to 5272). Open:
   Qwen3.5's attention blocks on the composed CPU read 11.3 of main's spread
   (worst 0.071 against 0.00534) where the card's are in band, so the whole
-  model is not in the CPU's served lists; the card's prompt and ragged rows
+  model is not in the CPU's served lists: it is the partial rotary, which
+  GLM-4-9B-0414 (64 of 128, NORM pairs) shows at 695 of main's spread while
+  gemma-2b (head 256, full rotary) reads 0.32; the card's prompt and ragged rows
   of a linear block; the one-row decomposition is a launch per row of a
   prompt where a chunked scan would be one.
