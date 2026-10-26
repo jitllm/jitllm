@@ -141,7 +141,10 @@ func (s *State) relocateRows(took []int, rows, nlogit int) error {
 		}
 	}
 	s.rlBases, s.rlEnds = bases, ends
-	s.relocateUntil(end, func() bool { return room() && sd.ReserveKVSeqs(bases, ends) })
+	// The room after the reservation: the pages it takes are charged with
+	// what the allocator rounds them up to, which can carry the card past
+	// its budget, and only a move made here gives that back.
+	s.relocateUntil(end, func() bool { return sd.ReserveKVSeqs(bases, ends) && room() })
 	return buildErr
 }
 
