@@ -2,10 +2,12 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit"
 )
 
 // TestEveryModelRunsGenerated drives every model available through all three
@@ -73,6 +76,9 @@ func TestEveryModelRunsGenerated(t *testing.T) {
 			defer m.Close()
 			auditRun(t, m)
 			done = true
+			if m.enc == nil && m.Decision() == jlm.DecisionNone {
+				t.Run("composed-cpu", func(t *testing.T) { auditComposedCPU(t, name, path) })
+			}
 		})
 		switch {
 		case done:
@@ -152,6 +158,45 @@ func auditRun(t *testing.T, m *Model) {
 		t.Fatalf("ForwardBatch: %v", err)
 	}
 	bs.Close()
+}
+
+// auditComposedCPU is the gate's composed CPU arm: every entry point again
+// with the CPU's blocks on what the composer forms for it, and a decode whose
+// every block step is counted, served or declined by name -- all of them
+// served on the models the composer serves on the CPU (cpuServedModels).
+func auditComposedCPU(t *testing.T, name, path string) {
+	m, err := Open(path, WithComposedCPU(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	auditRun(t, m)
+	const steps = 3
+	s := m.NewState(16)
+	defer s.Close()
+	for i := range steps {
+		lg, err := s.Forward(int32(1 + i))
+		if err != nil {
+			t.Fatalf("Forward: %v", err)
+		}
+		finite(t, "Forward", lg)
+	}
+	served, declined := s.CPUBlockSteps()
+	total := served
+	var named []string
+	for i, n := range declined {
+		total += n
+		if n > 0 {
+			named = append(named, fmt.Sprintf("%d %s", n, jit.DeclineName(i)))
+		}
+	}
+	if want := steps * m.Cfg.NLayer; total != want {
+		t.Fatalf("the census counts %d block steps on the CPU, where the decode ran %d", total, want)
+	}
+	t.Logf("composed CPU: %d of %d block steps served; declined: %s (%v)", served, total, strings.Join(named, ", "), s.CPUFormErr())
+	if slices.Contains(cpuServedModels, name) && served != total {
+		t.Fatalf("a model the composer serves on the CPU declined %d block steps", total-served)
+	}
 }
 
 func finite(t *testing.T, what string, v []float32) {

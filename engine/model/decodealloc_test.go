@@ -130,6 +130,18 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 					t.Fatal("no region of the window ran node-affine: this arm measured the plain host decode twice")
 				}
 			})
+			// The CPU's blocks on what the composer forms for it, on the models
+			// it serves there: every block step of the window served.
+			if slices.Contains(cpuServedModels, name) {
+				t.Run("host-composed", func(t *testing.T) {
+					mc, err := Open(jlmOf(t, p), noTune, resident, WithStreamTrial(false), WithComposedCPU(true))
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer mc.Close()
+					decodeAllocs(t, mc, nil)
+				})
+			}
 			// The stream trial pinned off with the tuners: it migrates blocks
 			// between its runs, and a migration's page-ins are not a decode.
 			m, err := Open(jlmOf(t, p), noTune, resident, WithStreamTrial(false))
@@ -494,6 +506,11 @@ func decodeAllocs(t *testing.T, m *Model, g *tier.GPU) decodeWindow {
 		captures = g.Stats().Captures - c0.Captures
 	}
 	_, a1 := s.jit.NUMA()
+	if m.opt.composedCPU {
+		if served, _ := s.CPUBlockSteps(); served != (warm+n)*m.Cfg.NLayer {
+			t.Fatalf("the composed CPU served %d of %d block steps (%v): this arm measured main's decode", served, (warm+n)*m.Cfg.NLayer, s.CPUFormErr())
+		}
+	}
 	dw := decodeWindow{ksliced: s.jit.KSliced() - k0, affine: a1 - a0}
 	allocVerdict(t, fmt.Sprintf("%d of %d blocks placed, %d matvec(s) split over k, %d region(s) node-affine",
 		s.GPULayers(), m.Cfg.NLayer, dw.ksliced, dw.affine), w, n, m.container.Reads()-r0, captures)

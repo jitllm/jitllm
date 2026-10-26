@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit"
 )
 
 // TestBatchMatchesForward holds ForwardBatch to the decode path it batches.
@@ -37,6 +38,12 @@ func TestBatchMatchesForward(t *testing.T) {
 			})
 			t.Run("shipped", func(t *testing.T) {
 				batchVsForward(t, path, false, noTune)
+			})
+			// The single sequences on the composed CPU's blocks, the batch on
+			// main's (a step of several rows, declined by name): held to the
+			// shipped mode's bar.
+			t.Run("composed-cpu", func(t *testing.T) {
+				batchVsForward(t, path, false, noTune, WithComposedCPU(true))
 			})
 		})
 	}
@@ -72,6 +79,23 @@ func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 				t.Fatal(err)
 			}
 			want[i] = append(want[i], append([]float32(nil), lg...))
+		}
+		if m.opt.composedCPU {
+			served, declined := s.CPUBlockSteps()
+			total := served
+			for j, n := range declined {
+				total += n
+				if n > 0 {
+					t.Logf("row %d: %d block steps declined: %s", i, n, jit.DeclineName(j))
+				}
+			}
+			if total != steps*m.Cfg.NLayer {
+				s.Close()
+				t.Fatalf("the census counts %d block steps on the CPU, where the decode ran %d", total, steps*m.Cfg.NLayer)
+			}
+			if i == 0 {
+				t.Logf("the composed CPU served %d of %d block steps", served, total)
+			}
 		}
 		s.Close()
 	}

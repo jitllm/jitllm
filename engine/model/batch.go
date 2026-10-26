@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit"
 )
 
 // ForwardBatch runs one token for each of the session's nseq sequences and
@@ -288,6 +289,7 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 		if err := m.pageIn(li); err != nil {
 			return nil, err
 		}
+		s.cpuDeclined(jit.DeclineBatch)
 		l := &m.layers[li]
 		// DeepSeek V4's block is its own (ds4.go): each row its sequence's
 		// slot, position and token.

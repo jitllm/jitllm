@@ -11,6 +11,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
@@ -45,6 +46,37 @@ func TestPrefillMatchesForward(t *testing.T) {
 		nn.ResetForTest()
 		defer nn.ResetForTest()
 		prefillVsForward(t, path, false)
+	})
+	// The forward loop on the composed CPU's blocks over the history main's
+	// prompt kernels wrote (a prompt's rows, declined by name), held to the
+	// shipped mode's bar: the two read and write one layout of the pages.
+	t.Run("composed-cpu", func(t *testing.T) {
+		nn.ResetForTest()
+		defer nn.ResetForTest()
+		// A model the composer serves every block of on the CPU
+		// (cpuServedModels), not the bench model, which may be one it
+		// declines by name.
+		m, err := Open(jlmOf(t, testmodels.Path("Qwen3-0.6B-Q8_0.gguf")), noTune, WithComposedCPU(true))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer m.Close()
+		var states []*State
+		prefillVsForwardModel(t, m, false, 0, func(s *State) { states = append(states, s) })
+		served, prompt := 0, 0
+		for _, s := range states {
+			n, d := s.CPUBlockSteps()
+			served, prompt = served+n, prompt+d[jit.DeclineBatch]
+			for i, k := range d {
+				if k > 0 && i != int(jit.DeclineBatch) {
+					t.Errorf("%d block steps declined: %s (%v)", k, jit.DeclineName(i), s.CPUFormErr())
+				}
+			}
+		}
+		if served == 0 || prompt == 0 {
+			t.Fatalf("the composed CPU served %d block steps and declined %d of the prompt: this arm did not run both", served, prompt)
+		}
+		t.Logf("composed CPU: %d block steps served, %d of the prompt on main's kernels", served, prompt)
 	})
 	// On each device, both sessions on one tier: the tier's own kernels; the
 	// composer serving the decode's blocks, the prompt's at the chunk's rows

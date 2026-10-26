@@ -41,6 +41,13 @@ func TestPagingDoesNotChangeTheAnswer(t *testing.T) {
 			pagingDoesNotChangeTheAnswer(t, jlmOf(t, testmodels.Path(name)), WithKVType(KVQ8_0))
 		})
 	}
+	// And with the CPU's blocks on what the composer forms for it: a block
+	// paged out and back binds its weights where they now are.
+	for _, name := range cpuServedModels {
+		t.Run(name+"/composed-cpu", func(t *testing.T) {
+			pagingDoesNotChangeTheAnswer(t, jlmOf(t, testmodels.Path(name)), WithComposedCPU(true))
+		})
+	}
 }
 
 // pagingDoesNotChangeTheAnswer is TestPagingDoesNotChangeTheAnswer on one model.
@@ -79,6 +86,11 @@ func pagingDoesNotChangeTheAnswer(t *testing.T, path string, opts ...Option) {
 			out = append(out, best)
 			if logits, err = st.Forward(best); err != nil {
 				t.Fatal(err)
+			}
+		}
+		if m.opt.composedCPU {
+			if served, _ := st.CPUBlockSteps(); served != 8*m.Cfg.NLayer {
+				t.Fatalf("the composed CPU served %d of %d block steps (%v)", served, 8*m.Cfg.NLayer, st.CPUFormErr())
 			}
 		}
 		got, faults, _ := m.PageStats()

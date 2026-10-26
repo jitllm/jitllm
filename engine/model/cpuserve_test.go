@@ -1,0 +1,165 @@
+package model
+
+import (
+	"math"
+	"slices"
+	"testing"
+
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit"
+)
+
+// cpuServedModels are the models whose every block the composer serves on
+// the CPU at decode.
+var cpuServedModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf"}
+
+// TestComposedCPUBlocksServe runs each model's blocks on the CPU three ways,
+// teacher-forced on one token sequence: on main's kernels, on what the
+// composer forms for the CPU (float activations: the CPU's profile has no
+// int8 form), and on main's kernels at another activation window, main's own
+// spread (the control), the history in the State's KV pages. Every block
+// step must be served (served = steps x blocks, nothing declined, each block
+// composed once), and the composed logits held to main's within main's own
+// spread, by the band the card arms are held to (bandRatio, bandWorst): at
+// the median step no further from main than bandRatio times the control, at
+// the worst no further than bandWorst times the control's worst. Each
+// violation -- the first history page pointed at another slot, the first key
+// row moved by one -- must leave the band.
+func TestComposedCPUBlocksServe(t *testing.T) {
+	const steps, page = 80, 32
+	for _, file := range cpuServedModels {
+		t.Run(file, func(t *testing.T) {
+			path := jlmOf(t, testmodels.Path(file))
+			ref, err := Open(path, noTune)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ref.Close()
+			ref.setKVPageForTest(page)
+			toks := cpuTokens(t, ref, steps)
+			want := cpuLogits(t, ref, toks, cpuFaultNone, false)
+			cm, err := Open(path, noTune, WithJITOptions(nn.WithActWindow(cpuControlWindow)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cm.Close()
+			cm.setKVPageForTest(page)
+			ctl := cpuLogits(t, cm, toks, cpuFaultNone, false)
+			m, err := Open(path, noTune, WithComposedCPU(true))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			m.setKVPageForTest(page)
+			got := cpuLogits(t, m, toks, cpuFaultNone, true)
+			med, worst, widest := cpuBand(t, want, got, ctl)
+			_, agree := cpuCompare(want, got)
+			t.Logf("over %d steps the composed CPU is %.3f of main's spread from main at the median, worst NMSE %.3g where main's control reaches %.3g; argmax agrees with main %d/%d",
+				steps, med, worst, widest, agree, steps)
+			if !(med <= bandRatio) || !(worst <= bandWorst*widest) {
+				t.Fatalf("the composed CPU blocks leave main's band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
+					med, bandRatio, worst, bandWorst, widest)
+			}
+			for _, f := range []cpuFault{cpuFaultPage, cpuFaultRow} {
+				bad := cpuLogits(t, m, toks, f, true)
+				bm, bw, _ := cpuBand(t, want, bad, ctl)
+				t.Logf("violation %d: median ratio %.3f, worst %.3g", f, bm, bw)
+				if bm <= bandRatio && bw <= bandWorst*widest {
+					t.Errorf("violation %d stays in the band (median ratio %.3f, worst %.3g): the gate cannot see it", f, bm, bw)
+				}
+			}
+		})
+	}
+}
+
+// cpuControlWindow is the activation window main's control arm quantizes
+// over, in place of the one its weight types decide (32 or 256): its distance from main
+// is main's own int8 spread.
+const cpuControlWindow = 64
+
+// cpuBand is an arm's distance from main against the control's: the median
+// over the steps of their ratio, the arm's worst and the control's worst.
+func cpuBand(t *testing.T, want, got, ctl [][]float32) (med, worst, widest float64) {
+	t.Helper()
+	var ratios []float64
+	for i := range want {
+		ec, eg := logitNMSE(ctl[i], want[i]), logitNMSE(got[i], want[i])
+		if math.IsNaN(ec) || math.IsNaN(eg) || !(ec > 0) {
+			t.Fatalf("step %d: the control is %.3g from main and the arm %.3g: a degenerate control proves nothing", i, ec, eg)
+		}
+		ratios = append(ratios, eg/ec)
+		worst, widest = max(worst, eg), max(widest, ec)
+	}
+	slices.Sort(ratios)
+	return ratios[len(ratios)/2], worst, widest
+}
+
+func cpuTokens(t *testing.T, m *Model, n int) []int32 {
+	t.Helper()
+	s := m.NewState(n + 1)
+	defer s.Close()
+	toks := []int32{1}
+	for len(toks) < n {
+		lg, err := s.Forward(toks[len(toks)-1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		toks = append(toks, int32(argmaxOf(lg)))
+	}
+	return toks
+}
+
+func cpuLogits(t *testing.T, m *Model, toks []int32, f cpuFault, composed bool) [][]float32 {
+	t.Helper()
+	s := m.NewState(len(toks) + 1)
+	defer s.Close()
+	s.cpu.fault = f
+	var out [][]float32
+	for _, tk := range toks {
+		lg, err := s.Forward(tk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, append([]float32(nil), lg...))
+	}
+	served, declined := s.CPUBlockSteps()
+	if composed {
+		for i, n := range declined {
+			if n > 0 {
+				t.Errorf("%d block steps declined: %s (%v)", n, jit.DeclineName(i), s.CPUFormErr())
+			}
+		}
+		if want := len(toks) * m.Cfg.NLayer; served != want {
+			t.Fatalf("%d block steps served, want %d (steps x blocks)", served, want)
+		}
+		// Composed once, at placement: no step composes.
+		for li, n := range s.CPUCompositions() {
+			if n != 1 {
+				t.Fatalf("block %d was composed for the CPU %d times, where it was placed there once", li, n)
+			}
+		}
+	} else if served != 0 {
+		t.Fatalf("main's arm served %d composed block steps", served)
+	}
+	return out
+}
+
+func cpuCompare(want, got [][]float32) (worst float64, agree int) {
+	for i := range want {
+		var num, den float64
+		for j := range want[i] {
+			d := float64(got[i][j] - want[i][j])
+			num += d * d
+			den += float64(want[i][j]) * float64(want[i][j])
+		}
+		e := num / den
+		if math.IsNaN(e) || e > worst || math.IsNaN(worst) {
+			worst = e
+		}
+		if argmaxOf(want[i]) == argmaxOf(got[i]) {
+			agree++
+		}
+	}
+	return worst, agree
+}

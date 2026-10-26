@@ -7,12 +7,14 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/cpu"
 )
 
@@ -199,6 +201,39 @@ func ssemRun(t *testing.T, path string, ids []int32, gen int, opts ...Option) ss
 	return a
 }
 
+// ssemComposedDeclines is the SSE gate's composed CPU arm: the composer's
+// CPU lowering emits AVX2, so on the SSE tier every block step is declined
+// by that name, before any form is mapped, and the decode is the SSE arm's
+// to the bit (forced).
+func ssemComposedDeclines(t *testing.T, path string, ids []int32, forced [][]float32, opts ...Option) {
+	t.Helper()
+	m, err := Open(path, append(opts, WithComposedCPU(true))...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	before := cpu.MappedByTier()
+	s := m.NewState(len(ids) + 1)
+	defer s.Close()
+	for pos, id := range ids {
+		l, err := s.Forward(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(l, forced[pos]) {
+			t.Fatalf("pos %d: the composed CPU's declined decode is not the SSE arm's", pos)
+		}
+	}
+	if d := cpu.MappedByTier()[cpu.TierAVX2] - before[cpu.TierAVX2]; d != 0 {
+		t.Fatalf("the composed CPU mapped %d AVX2 kernels on the SSE tier", d)
+	}
+	served, declined := s.CPUBlockSteps()
+	if want := len(ids) * m.Cfg.NLayer; served != 0 || declined[jit.DeclineISA] != want {
+		t.Fatalf("on the SSE tier the composed CPU served %d block steps and declined %d by %q, want 0 and %d",
+			served, declined[jit.DeclineISA], jit.DeclineISA, want)
+	}
+}
+
 func ssemMaxAbs(a, b []float32) float64 {
 	var d float64
 	for i := range a {
@@ -291,6 +326,7 @@ func TestEveryModelRunsSSE(t *testing.T) {
 			if after[cpu.TierSSE] == before[cpu.TierSSE] {
 				t.Fatal("the SSE arm mapped no SSE-tier kernel -- it ran nothing it claims to")
 			}
+			ssemComposedDeclines(t, path, ids, got.forced, f32, split)
 
 			for pos, l := range got.forced {
 				for _, v := range l {

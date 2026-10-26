@@ -1229,6 +1229,8 @@ type Model struct {
 	step *stepBuf
 	// kvPool is the host KV pages closed States gave back (kvPagePool).
 	kvPool kvPagePool
+	// cpuForms is the composed CPU blocks' forms (cpuserve.go).
+	cpuForms cpuForms
 
 	// TokErr is why Vocab is nil, when it is. The weights still loaded.
 	TokErr error
@@ -2060,6 +2062,7 @@ func (m *Model) Close() error {
 	for _, o := range owners {
 		o.ReleaseModel(m.id)
 	}
+	m.cpuForms.close()
 	err := m.container.Close()
 	m.devMu.Lock()
 	m.forgetters, m.owners = nil, nil

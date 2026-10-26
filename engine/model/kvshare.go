@@ -462,6 +462,9 @@ func (kc *kvCache) publishSealed(li, n int, key string) {
 	// A page the store holds already: the session reads the held copy, and
 	// its own memory goes to its spare, where the next page it needs is taken
 	// from (page0).
+	if s.arenaPage(n) {
+		return
+	}
 	k := kc.share.publish(kvStoreKey{key, li * 2, n}, s.k[n])
 	if &k[0] != &s.k[n][0] {
 		s.spare = append(s.spare, s.k[n])

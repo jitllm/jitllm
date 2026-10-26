@@ -17,6 +17,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/cpu"
 )
 
@@ -78,6 +79,9 @@ func ResetProfile() {
 // State is one generation session: the KV cache plus the scratch buffers the
 // forward pass reuses. One State is one conversation; it is not safe to share.
 type State struct {
+	// cpu is the blocks this State runs on the CPU as the composer forms
+	// them (WithComposedCPU, cpuserve.go).
+	cpu cpuState
 	// bidirAll makes a mixed prompt's every row one bidirectional run
 	// (bidirRuns): a non-causal decoder's prompt with pictures in it.
 	bidirAll bool
@@ -934,6 +938,12 @@ func (m *Model) newStateRange(nseq, maxSeq, lo, hi int) *State {
 	s.kv = newKVCacheRange(c, nextCacheID(), nseq, s.kvl, nil, s.m.opt.kvPage, s.lo, s.hi)
 	s.kv.usePool(&m.kvPool)
 	s.kv.reserve(s.maxSeq)
+	if m.opt.composedCPU {
+		if err := s.kv.useArenas(s.maxSeq); err != nil {
+			s.cpu.formErr = err
+		}
+		s.cpuPlace()
+	}
 	// Specialize on the shapes this model actually has. A transformer reuses a
 	// handful of (type, K) pairs across all its layers, so this is a few
 	// kernels rather than one per layer.
@@ -2310,6 +2320,7 @@ func (s *State) holdCPURuns() {
 // cpuRun moves this State's count on block li in m.cpuUse by d, as the
 // block leaves (-1) or moves to (+1) the CPU device for it.
 func (s *State) cpuRun(li, d int) {
+	s.cpuRelocated(li, d > 0)
 	if s.cpuHeld && li >= s.lo && li < s.hi {
 		s.m.cpuRuns(li, li+1, int32(d))
 	}
@@ -4001,8 +4012,21 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 		if err := m.pageIn(li); err != nil {
 			return nil, err
 		}
-		s.fuseRun()
 		l := &m.layers[li]
+		if m.opt.composedCPU {
+			s.unfuse()
+			why, err := s.cpuStep(li, l, s.ropeTable(li, s.cs, s.csSWA, 0))
+			if err != nil {
+				return nil, err
+			}
+			if why == jit.DeclineServes {
+				s.cpu.served++
+				m.trace(li, "ffn_resid", s.x)
+				continue
+			}
+			s.cpu.declined[why]++
+		}
+		s.fuseRun()
 		if c.DSV4() {
 			s.ds.rslot[0], s.ds.rpos[0], s.ds.rid[0] = 0, s.pos, s.tok
 			if err := s.ds4Block(li, l, s.xa, 1); err != nil {

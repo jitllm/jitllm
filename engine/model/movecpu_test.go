@@ -6,6 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
@@ -22,11 +23,50 @@ import (
 func TestBlocksMoveToTheCPUAndBack(t *testing.T) {
 	names := append([]string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf"}, relocModels()...)
 	for _, name := range names {
-		t.Run(name, func(t *testing.T) { blocksMoveToTheCPUAndBack(t, jlmOf(t, testmodels.Path(name))) })
+		t.Run(name, func(t *testing.T) { blocksMoveToTheCPUAndBack(t, jlmOf(t, testmodels.Path(name)), false) })
+	}
+	// The CPU's blocks on what the composer forms for it: each block composed
+	// for the CPU at its placement and again at each move back, and every
+	// block step the CPU runs between the moves served.
+	for _, name := range cpuServedModels {
+		t.Run(name+"/composed-cpu", func(t *testing.T) { blocksMoveToTheCPUAndBack(t, jlmOf(t, testmodels.Path(name)), true) })
 	}
 }
 
-func blocksMoveToTheCPUAndBack(t *testing.T, path string) {
+// composedMoves holds st's composed CPU census to the moves: on the control
+// every decode step of every block served; on the moved run each block
+// composed at the State's placement, again at the move to the CPU and once
+// more for the upper half, and the block steps between the moves served.
+func composedMoves(t *testing.T, st *State, n, half int, devices bool, ntok, toCPU, toB, halfCPU, toA int) {
+	t.Helper()
+	served, declined := st.CPUBlockSteps()
+	for i, k := range declined {
+		if k > 0 && i != int(jit.DeclineBatch) {
+			t.Errorf("%d block steps declined on the CPU: %s (%v)", k, jit.DeclineName(i), st.CPUFormErr())
+		}
+	}
+	want := ntok * n
+	if devices {
+		want = (toB-toCPU)*n + (toA-halfCPU)*(n-half)
+	}
+	if served != want {
+		t.Errorf("the composed CPU served %d block steps, where the CPU ran %d", served, want)
+	}
+	if !devices {
+		return
+	}
+	for li, k := range st.CPUCompositions() {
+		w := 2
+		if li >= half {
+			w = 3
+		}
+		if k != w {
+			t.Errorf("block %d was composed for the CPU %d times, where it was placed there %d times", li, k, w)
+		}
+	}
+}
+
+func blocksMoveToTheCPUAndBack(t *testing.T, path string, composed bool) {
 	a, b := moveDevices(t)
 	g, err := tier.OpenWith(tier.WithDevices(a+","+b), tier.WithDeviceTune(tier.TuneOff))
 	if err != nil || g == nil {
@@ -34,7 +74,12 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string) {
 	}
 	defer g.Close()
 	distinctCards(t, g)
-	m, err := Open(path, WithKVF16(false))
+	opt := WithKVF16(false)
+	if composed {
+		// The composed CPU keeps its history binary16 (jit.Halves).
+		opt = WithComposedCPU(true)
+	}
+	m, err := Open(path, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,9 +110,13 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string) {
 		where(st, lo, hi, to)
 		return mv
 	}
+	half := n / 2
 	run := func(ids []int32, devices bool) [][]float32 {
 		st := m.NewState(len(prompt) + ntok + 1)
 		defer st.Close()
+		if composed {
+			defer func() { composedMoves(t, st, n, half, devices, ntok, toCPU, toB, halfCPU, toA) }()
+		}
 		if devices {
 			if err := st.SetDevice(g); err != nil {
 				t.Fatal(err)
@@ -100,7 +149,6 @@ func blocksMoveToTheCPUAndBack(t *testing.T, path string) {
 				case halfCPU:
 					// A KV-sharing group the cut splits comes to the CPU
 					// whole (fixKVGroups), so the cut is where none crosses.
-					half := n / 2
 					for li := 0; li < n; li++ {
 						if glo, ghi := st.kvSpan(li); glo < half && ghi > half {
 							half, li = glo, -1

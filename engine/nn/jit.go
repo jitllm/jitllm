@@ -568,6 +568,18 @@ func (f *JIT) Parallel(n, chunk int, fn func(lo, hi int)) {
 	f.pool.DoRange(n, chunk, fn)
 }
 
+// ParallelWorkers is Parallel for a body that wants the id, below Workers,
+// of the worker running each range.
+func (f *JIT) ParallelWorkers(n, chunk int, fn func(worker, lo, hi int)) {
+	if f == nil || n <= 0 {
+		if n > 0 {
+			fn(0, 0, n)
+		}
+		return
+	}
+	f.pool.Do(n, chunk, fn)
+}
+
 // Workers is the pool size, 1 when unthreaded.
 // SetSpinning switches the pool's workers between spinning for the next region
 // and parking at once (sched.Pool.SetSpinning).

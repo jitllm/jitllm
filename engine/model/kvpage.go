@@ -191,6 +191,9 @@ type kvPages struct {
 	shared   []bool
 	sh       *SharedStore
 	cowFault bool
+	// arena, where set, is where every page this layer grows lives
+	// (kvArena): a composed CPU block's pool.
+	arena *kvArena
 }
 
 // keyStart is the first key position pos attends on this layer: the window's
@@ -242,7 +245,7 @@ func (s *kvPages) recycle(n int) {
 		return
 	}
 	for _, b := range [2][]float32{s.k[n], s.v[n]} {
-		if b != nil && len(b) == s.pp && len(s.spare) < s.spareMax() {
+		if b != nil && len(b) == s.pp && len(s.spare) < s.spareMax() && !s.inArena(n, b) {
 			s.spare = append(s.spare, b)
 		}
 		if s.latent {
@@ -289,6 +292,9 @@ func (s *kvPages) reserve(maxSeq int) {
 // drop lets page n go for good: nothing is to be faulted back into it.
 func (s *kvPages) drop(n int) {
 	s.unshare(n)
+	if s.arenaPage(n) {
+		s.releaseSlot(n)
+	}
 	s.k[n], s.v[n] = nil, nil
 	if n < len(s.out) {
 		s.out[n] = false
@@ -316,6 +322,12 @@ func (s *kvPages) grow(n int) {
 	}
 	// It refills a hole, not only the tail: eviction and a restored prefix
 	// leave nil slots inside the slice.
+	if s.k[n] == nil && s.v[n] == nil {
+		if k, v := s.arenaSlot(n); k != nil {
+			s.k[n], s.v[n] = k, v
+			return
+		}
+	}
 	if s.k[n] == nil {
 		s.k[n] = s.page0()
 	}
@@ -2743,7 +2755,7 @@ func (s *kvPages) keepOnReset(n int) {
 		return
 	}
 	for _, b := range [2][]float32{s.k[n], s.v[n]} {
-		if b != nil && len(b) == s.pp && (s.win <= 0 || len(s.spare) < s.spareMax()) {
+		if b != nil && len(b) == s.pp && (s.win <= 0 || len(s.spare) < s.spareMax()) && !s.inArena(n, b) {
 			s.spare = append(s.spare, b)
 		}
 		if s.latent {

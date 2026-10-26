@@ -8153,3 +8153,37 @@ row where the composer's reads two.
   Its violations: the CPU listed spills 7 blocks (13 composed) and the check
   names them, and the first form of `pageOnCards`, which released the
   resident blocks and offered them again streamed, formed blocks 0-7 twice.
+- The CPU device serves composed blocks (`WithComposedCPU`, off by default).
+  A block placed on the CPU is composed once, at its placement (a new
+  State, or `MoveBlocks` to "cpu"), and its composition released as it
+  leaves; `State.CPUCompositions` counts them and no step composes. Its
+  history is the layer's host KV pages held as one off-heap span
+  (`kvArena`), page n at slot n, so a declined step's main kernels and a
+  composed step read one set of pages. The census is the tier's: the
+  decline names moved to `jit.Decline`, the tier's `partDecline` an alias
+  with its names and numbers unchanged, and the CPU's reasons appended
+  (a windowed, latent, shared, recurrent or batched block, a history not
+  binary16, a CPU below AVX2/FMA/F16C, a block not composed at placement);
+  a prompt's or a batch's block step on the CPU is counted declined
+  (`DeclineBatch`). Two composer bugs were behind C2's paired-head
+  attention reading 0.32 to 33 and changing run to run: the CPU's register
+  binding took a load folded into its reader as a memory operand to read
+  its index where the load sat, so the index's register was handed to the
+  history's next index before the reader ran and the query was read at the
+  history's offset, out of its buffer (`binder86.lives`, fixed; a spill
+  tie now takes the lower node); and the CPU call site keyed a kernel's
+  constant block by its name, so the attention's 1/sqrt(d) scale was the
+  residual add's coefficient (`buildCPUForm`, each kernel's block its own).
+  `TestComposedCPUAttend` holds the decode attention to the definition at
+  NMSE 9e-14 to 3e-13 over the served shapes. `TestComposedCPUBlocksServe`
+  serves 80 steps x every block of stories15M, Qwen3-0.6B and Llama-3.2-1B,
+  each block composed once, at 0.475, 0.500 and 0.858 of main's own spread
+  from main at the median (the control is main at another activation
+  window; the composed CPU has no int8 form), worst 0.0046, 0.052 and 0.39
+  against the control's 0.0073, 0.024 and 0.26; a page pointed at another
+  slot and the first row moved sit at 16.9-229 and 2.7-14.1 times main's
+  spread at the median. On the V100 box's Xeon, `TestDecodeDoesNotAllocate`'s
+  host-composed arm on Llama makes 0 engine allocations over 64 tokens with
+  all 224 x 16 block steps served, at about 8.3 s a token where main's
+  whole 224-token arm took 6.7 s (not a RULE 2 row): the composed matvecs
+  are single calls on one core, the largest gap.

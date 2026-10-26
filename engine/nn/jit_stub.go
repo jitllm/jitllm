@@ -96,6 +96,13 @@ func (f *JIT) Parallel(n, chunk int, fn func(lo, hi int)) {
 // Workers is the pool size, 1 when unthreaded.
 func (f *JIT) Workers() int { return 1 }
 
+// ParallelWorkers runs fn over [0,n) on worker 0.
+func (f *JIT) ParallelWorkers(n, chunk int, fn func(worker, lo, hi int)) {
+	if n > 0 {
+		fn(0, 0, n)
+	}
+}
+
 // AddShape generates a shape-specialized kernel. There are none here.
 func (f *JIT) AddShape(t quant.Type, k int) {}
 

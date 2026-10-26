@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit"
 )
 
 // MaxPrefillChunk sizes the batched scratch. The width used is tuned per
@@ -1293,6 +1294,7 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 	if err := m.pageIn(li); err != nil {
 		return err
 	}
+	s.cpuDeclined(jit.DeclineBatch)
 	l := &m.layers[li]
 	// DeepSeek V4's block is its own (ds4.go): the chunk's rows are
 	// successive positions of this slot, their tokens set by the caller.

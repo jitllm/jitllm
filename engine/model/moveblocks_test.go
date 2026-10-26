@@ -63,6 +63,15 @@ func TestBlocksMoveBetweenDevices(t *testing.T) {
 			}
 		}
 	}
+	// With the composed CPU on: a block the State composed for the CPU at
+	// its placement there releases its composition as it goes to a card,
+	// and the moves between the cards are the same moves.
+	for _, name := range cpuServedModels {
+		path := jlmOf(t, testmodels.Path(name))
+		t.Run(name+"/composed-cpu", func(t *testing.T) {
+			blocksMoveBetweenDevices(t, path, moveWhole, 0, WithComposedCPU(true))
+		})
+	}
 }
 
 // The arms of TestBlocksMoveBetweenDevices.

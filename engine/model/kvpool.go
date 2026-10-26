@@ -48,6 +48,7 @@ func (p *kvPagePool) put(kc *kvCache) {
 	var n uint64
 	for li := kc.lo; li < len(kc.layers); li++ {
 		s := &kc.layers[li]
+		s.unmapArena()
 		for i := range s.k {
 			if s.k[i] != nil {
 				n += 4 * uint64(len(s.k[i]))
