@@ -349,15 +349,39 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 			nd := k.Nodes[a.Node-1]
 			c.Args = append(c.Args, CallArg{Field: a.Field, Value: true, Length: nd.Op == OpLength, Extent: int(nd.Imm)})
 		}
-		read := map[int]bool{}
-		for i := range k.Live() {
+		// What the code reads: the loads its stores, loop counts and launch
+		// clamp reach, and the buffers its cursors walk.
+		read, written := map[int]bool{}, map[int]bool{}
+		live := k.Live()
+		for at := []int{k.Clamp - 1}; len(at) > 0; {
+			i := at[len(at)-1]
+			at = at[:len(at)-1]
+			if i < 0 || live[i] {
+				continue
+			}
+			live[i] = true
+			for _, a := range k.Operands(&k.Nodes[i]) {
+				at = append(at, *a)
+			}
+		}
+		for i := range live {
 			if nd := k.Nodes[i]; nd.Op == OpLoad {
 				read[nd.Buf] = true
 			}
 		}
+		for _, l := range k.Loops {
+			for _, c := range l.Cursors {
+				read[c.Buf] = true
+			}
+		}
+		for _, s := range k.Stores {
+			if !s.Barrier && !s.Run {
+				written[s.Buf] = true
+			}
+		}
 		for bi, b := range k.Bufs {
 			if b.Kind != BufShared {
-				c.Binds = append(c.Binds, Binding{Operand: b.Operand, Writes: b.Kind == BufOut, Bytes: b.bytes(), Words: b.Words, Read: read[bi]})
+				c.Binds = append(c.Binds, Binding{Operand: b.Operand, Writes: b.Kind == BufOut && written[bi], Bytes: b.bytes(), Words: b.Words, Read: read[bi]})
 			}
 		}
 		codes = append(codes, PartCode{Code: c, Part: k.Of})

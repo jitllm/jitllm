@@ -40,7 +40,9 @@ func (p LiveRows) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 // launch alone, its last workgroup's threads past the call's rows computing
 // rows of the capacity no live row reads, as clamping them would hand a
 // combine copies of another element; such a kernel reading or writing the
-// history, which a stale row would address, is an error naming it.
+// history, which a stale row would address, is an error naming it -- unless
+// its workgroups are a row each (a staged attention's), whose launch holds
+// the call's rows exactly.
 type CallRows struct{}
 
 func (CallRows) Name() string { return "callrows" }
@@ -53,7 +55,9 @@ func (p CallRows) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		m := k.clone()
 		m.RowsHeld = true
 		if m.Work && len(m.Space) > 1 || !m.Work && combines(m) {
-			if o, ok := m.history(); ok {
+			// Workgroups a row each launch the call's rows and no other: no
+			// surplus row reaches the history.
+			if o, ok := m.history(); ok && !(m.Work && m.Space[0] == m.Capacity) {
 				return nil, false, fmt.Errorf("jit: %s combines across threads and binds %s, which a row past the call's would address",
 					m.Name, o.Name)
 			}

@@ -94,7 +94,7 @@ func (s SplitRange) split(ch []*Kernel, d Device) (int, []*Kernel, bool) {
 	C := mx.k.Loops[mx.loop].Trip
 	g := s.Work.geometry(h, d.Lanes)
 	S := s.Work.splits(g, h, C, d.Slots)
-	if S < 2 {
+	if S < 1 {
 		return 0, nil, false
 	}
 	J := g.chunk
@@ -127,6 +127,7 @@ func (s SplitRange) split(ch []*Kernel, d Device) (int, []*Kernel, bool) {
 	}
 	cp, mg := s.copies(h, S, stride, part, mx.out, sm.out), s.merge(last, h, S, stride, part, vl.out, sm.out)
 	cp.Part, cp.Of, mg.Of = last.Part, last.Of, last.Of
+	cp.Capacity, mg.Capacity = last.Capacity, last.Capacity
 	ns = append(ns, cp, mg)
 	return len(mem) + 1, ns, true
 }
