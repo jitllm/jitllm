@@ -29,6 +29,23 @@ func (x *exprs) recSlot(j, w, n int) int {
 	return x.op(OpMul, ir.U32, x.load(j, x.u(uint32(w))), x.u(uint32(n)))
 }
 
+// keyHead is value head h's key head of H value heads over KH key heads:
+// h mod KH where the pairing is tiled, else h over the value heads a key
+// head serves.
+func (x *exprs) keyHead(h, H, KH int, tiled bool) int {
+	U := ir.U32
+	if tiled {
+		if KH&(KH-1) == 0 {
+			return x.op(OpAnd, U, h, x.u(uint32(KH-1)))
+		}
+		return x.op(OpSub, U, h, x.op(OpMul, U, x.op(OpDiv, U, h, x.u(uint32(KH))), x.u(uint32(KH))))
+	}
+	if rep := H / KH; rep&(rep-1) == 0 {
+		return x.op(OpShr, U, h, x.u(uint32(bits.TrailingZeros(uint(rep)))))
+	}
+	return x.op(OpDiv, U, h, x.u(uint32(H/KH)))
+}
+
 // decomposeDeltaRule is the delta rule over the part's state at one row:
 // each state row's decayed dot with its key head's k, the row's (v - that
 // dot) times beta, then the decayed state plus k times it into a scratch
@@ -36,7 +53,7 @@ func (x *exprs) recSlot(j, w, n int) int {
 // so no kernel reads the state while writing it.
 func decomposeDeltaRule(o graph.Op, c *Context) ([]Prim, error) {
 	a := o.Attr
-	if len(o.In) != 5 || len(o.Out) != 1 || c.Step.Rows != 1 {
+	if len(o.In) != 5 || len(o.Out) != 1 || c.Step.Rows < 1 {
 		return nil, fmt.Errorf("a delta rule of %d operands over %d rows", len(o.In), c.Step.Rows)
 	}
 	U, F := ir.U32, ir.F32
@@ -47,6 +64,9 @@ func decomposeDeltaRule(o graph.Op, c *Context) ([]Prim, error) {
 	Dv := c.width(o.In[2]) / H
 	chanDecay := c.width(o.In[3]) == H*Dk
 	N := H * Dv * Dk
+	if c.Step.Rows > 1 {
+		return deltaScan(o, c, H, KH, Dk, Dv, chanDecay)
+	}
 	sh := []int{1, H, Dv, Dk}
 	name := c.value(o.Out[0]).Name
 	sk := Operand{Kind: OperandScratch, Name: name + ".sk"}
@@ -56,18 +76,7 @@ func decomposeDeltaRule(o graph.Op, c *Context) ([]Prim, error) {
 
 	// keyHead is value head h's key head; flat is the state's element at
 	// (h, j, i) of the slot read; g is the decay on the element at (h, i).
-	keyHead := func(x *exprs, h int) int {
-		if a.Tiled {
-			if KH&(KH-1) == 0 {
-				return x.op(OpAnd, U, h, x.u(uint32(KH-1)))
-			}
-			return x.op(OpSub, U, h, x.op(OpMul, U, x.op(OpDiv, U, h, x.u(uint32(KH))), x.u(uint32(KH))))
-		}
-		if rep := H / KH; rep&(rep-1) == 0 {
-			return x.op(OpShr, U, h, x.u(uint32(bits.TrailingZeros(uint(rep)))))
-		}
-		return x.op(OpDiv, U, h, x.u(uint32(H/KH)))
-	}
+	keyHead := func(x *exprs, h int) int { return x.keyHead(h, H, KH, a.Tiled) }
 	flat := func(x *exprs, desc, h, j, i int) int {
 		at := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(Dv))), j), x.u(uint32(Dk))), i)
 		return x.op(OpAdd, U, x.recSlot(desc, 1, N), at)
@@ -113,3 +122,47 @@ func decomposeDeltaRule(o graph.Op, c *Context) ([]Prim, error) {
 			Stores: []PrimStore{{Out: tableRecStateOut, Index: to, Value: val, Extent: N}}},
 	}, nil
 }
+
+// deltaScan is the delta rule over a step of several rows: a scan whose
+// state rows are the value heads' rows, each stepped through its run's
+// rows in order -- a prompt chunk's rows one run, a ragged step's
+// sequences a run each -- its run's slot read at the start and its slot
+// written after the last row. A row's step is the one-row rule's: the
+// decayed state's dot with k, (v - that dot) times beta along k, and the
+// new state's dot with q.
+func deltaScan(o graph.Op, c *Context, H, KH, Dk, Dv int, chanDecay bool) ([]Prim, error) {
+	U, F := ir.U32, ir.F32
+	R := c.Step.Rows
+	N := H * Dv * Dk
+	q, k, v, decay, beta := c.value(o.In[0]), c.value(o.In[1]), c.value(o.In[2]), c.value(o.In[3]), c.value(o.In[4])
+	in := []Operand{q, k, v, decay, beta, tableRecState, tableRecRows}
+	const desc = 6
+	var x exprs
+	h, j, i, r, run := x.coord(0), x.coord(1), x.coord(2), x.coord(3), x.coord(4)
+	kh := x.keyHead(h, H, KH, o.Attr.Tiled)
+	place := x.op(OpAdd, U, x.op(OpMul, U, x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(Dv))), j), x.u(uint32(Dk))), i)
+	slot := func(w int) int {
+		at := x.op(OpAdd, U, x.op(OpAdd, U, run, run), x.u(uint32(w)))
+		return x.op(OpAdd, U, x.op(OpMul, U, x.load(desc, at), x.u(uint32(N))), place)
+	}
+	init := x.load(5, slot(1))
+	final := slot(2)
+	g := x.at(3, []int{R, H}, r, h)
+	if chanDecay {
+		g = x.at(3, []int{R, H, Dk}, r, h, i)
+	}
+	kk := x.at(1, []int{R, KH, Dk}, r, kh, i)
+	sb := x.op(OpMul, F, x.add(Expr{Op: ExprState, Type: F}), g)
+	dot := x.un(OpGroupSum, F, x.op(OpMul, F, sb, kk))
+	d := x.op(OpMul, F, x.op(OpSub, F, x.at(2, []int{R, H, Dv}, r, h, j), dot), x.at(4, []int{R, H}, r, h))
+	next := x.op(OpAdd, F, sb, x.op(OpMul, F, kk, d))
+	y := x.un(OpGroupSum, F, x.op(OpMul, F, next, x.at(0, []int{R, KH, Dk}, r, kh, i)))
+	return []Prim{{Kind: PrimScan, Shape: []int{H, Dv, Dk}, In: in, Expr: x.e,
+		Stores: []PrimStore{{Out: c.value(o.Out[0]), Ax: []int{r, h, j}, Ext: []int{R, H, Dv}, Value: y}},
+		Scan:   &Scan{Desc: desc, Init: init, Next: next, Final: tableRecStateOut, Index: final, Extent: N},
+		Facts:  Facts{Extents: map[int]int{5: N, desc: recDescWords(R)}}}}, nil
+}
+
+// recDescWords is how many words a run descriptor of rows rows holds
+// (kernels.RunDescWords).
+func recDescWords(rows int) int { return 1 + 7*rows }

@@ -770,8 +770,10 @@ type runKey struct {
 // (kernels.RecDescWords); for a ragged step, the run descriptor
 // (kernels.RunDescWords) over the step's runs (groupRuns), each run's slots
 // being its sequence's seat row of its session's seat. In the shared form a
-// run's out slot is its place in recNext. Callers hold g.mu.
-func (g *devTier) recDesc(sid uint64, nrow int) []byte {
+// run's out slot is its place in recNext -- but for the composer's forms
+// (inPlace), which step the one state in place: each run's slot written is
+// its slot read. Callers hold g.mu.
+func (g *devTier) recDesc(sid uint64, nrow int, inPlace bool) []byte {
 	rag := g.rag
 	slots := func(sid uint64, seat, j int) (uint32, uint32) {
 		if recFaulted("slot") && rag != nil && rag.sid != nil {
@@ -779,23 +781,41 @@ func (g *devTier) recDesc(sid uint64, nrow int) []byte {
 		}
 		in := g.recSeats[sid].base + seat
 		out := in
-		if g.recShared {
+		if g.recShared && !inPlace {
 			out = j
 		}
 		return uint32(in), uint32(out)
 	}
 	// The words are the devTier's, reused: the descriptor is written to the
 	// device before the submission goes on, and read by nothing after.
+	held := &g.recDescW
+	if inPlace {
+		held = &g.recDescC
+	}
 	words := func(k int) []uint32 {
-		w := slices.Grow(g.recDescW[:0], k)[:k]
+		w := slices.Grow((*held)[:0], k)[:k]
 		clear(w)
-		g.recDescW = w
+		*held = w
 		return w
 	}
 	if rag == nil || len(rag.runs) == 0 {
+		// One sequence's rows, one run: the run descriptor whose first three
+		// words are the chunk's (kernels.RecDescWords), so the tier's
+		// kernels and the composer's (a run a sequence) read the one staging.
 		in, out := slots(sid, 0, 0)
-		w := words(3)
-		w[0], w[1], w[2] = uint32(nrow), in, out
+		n := max(nrow, 1)
+		w := words(kernels.RunDescWords(n))
+		w[0] = uint32(nrow)
+		for j := range n {
+			w[1+2*j], w[2+2*j] = in, out
+			w[1+2*n+2*j], w[2+2*n+2*j] = 0, uint32(n)
+			w[1+4*n+j], w[1+5*n+j] = uint32(j), uint32(j)
+			if recFaulted("chain") {
+				// Every row its own run: each reads the state from before
+				// the chunk.
+				w[1+2*n+2*j], w[2+2*n+2*j], w[1+6*n+j] = uint32(j), 1, uint32(j)
+			}
+		}
 		return u32view(w)
 	}
 	n, S := len(rag.pos), len(rag.runs)

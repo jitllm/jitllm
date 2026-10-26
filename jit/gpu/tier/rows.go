@@ -162,7 +162,8 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 		g.RowsPadded += w - n
 	}
 	if ok && linear {
-		ok = g.prepRagLinear(bs, n) && g.prepRecRows(sid, lo, hi, rs)
+		// A range the composer serves whole steps its runs in its own forms.
+		ok = (composed || g.prepRagLinear(bs, n)) && g.prepRecRows(sid, lo, hi, rs)
 	}
 	g.rag = rs
 	g.mu.Unlock()

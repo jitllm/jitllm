@@ -1484,7 +1484,7 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partPersist
 	case len(g.kb.skip) != 0:
 		return partSkip
-	case l.linear && !g.recHeld(l, p, bs, prompt):
+	case l.linear && !g.recHeld(l, p, bs):
 		return partRecurrent
 	case l.linear:
 		return partServes
@@ -1503,26 +1503,36 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 }
 
 // recHeld says linear block l's recurrent state is where the composer's
-// form steps it: a decode step's, in the block's pool of two halves of
-// slots of the delta rule's state alone (no tail), the step's recurrent
-// descriptor naming its slots. A prompt's rows and a pool of one shared
-// half are the tier's kernels' still.
-func (g *devTier) recHeld(l *layer, p *nn.LayerPlan, bs *blockScratch, prompt bool) bool {
-	return !prompt && !g.recShared && l.pool != nil && l.pool.s[1] != nil && bs.dRows != nil &&
+// form steps it: in the block's pool of slots of the delta rule's state
+// alone (no tail), the step's recurrent descriptor naming each run's slots
+// -- a decode's one row, a prompt chunk's rows as one run, a ragged step's
+// sequences a run each. A pool of two halves is read in one and written in
+// the other; a pool of one shared half is stepped in place, through the
+// composer's own descriptor (bs.cRows).
+func (g *devTier) recHeld(l *layer, p *nn.LayerPlan, bs *blockScratch) bool {
+	return l.pool != nil && bs.dRows != nil && (l.pool.s[1] != nil || g.recShared && bs.cRows != nil) &&
 		p.Recurrent.TailLen == 0 && !l.centred && l.k3 == nil && l.q4e == nil
 }
 
 // bindRec binds linear block l's step in sv to session sid's half of its
-// pool, read, and the other half, written, as emitLinear does, or says it
-// cannot: the session holds no seat in the pool.
-func (g *devTier) bindRec(sv *servedPart, sid uint64, l *layer) bool {
+// pool, read, and the other half, written, as emitLinear does -- in the
+// shared form the one half both, through the composer's descriptor -- or
+// says it cannot: the session holds no seat in the pool.
+func (g *devTier) bindRec(sv *servedPart, bs *blockScratch, sid uint64, l *layer) bool {
 	par, has := g.stepPar(sid, l)
 	if !has || l.pool == nil {
 		return false
 	}
 	t := sv.sl.tables
-	t["rec.state"], t["rec.state.out"] = l.pool.s[par], l.pool.s[1-par]
 	t["rec.conv"], t["rec.conv.out"] = l.pool.c[par], l.pool.c[1-par]
+	if g.recShared {
+		if bs.cRows == nil {
+			return false
+		}
+		t["rec.state"], t["rec.state.out"], t["rec.rows"] = l.pool.s[0], l.pool.s[0], bs.cRows
+		return true
+	}
+	t["rec.state"], t["rec.state.out"] = l.pool.s[par], l.pool.s[1-par]
 	return true
 }
 
@@ -1880,7 +1890,12 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 			keys:    keys, page: page}
 		if l.linear && l.pool != nil {
 			t := sl.tables
-			t["rec.state"], t["rec.state.out"], t["rec.conv"], t["rec.conv.out"] = l.pool.s[0], l.pool.s[1], l.pool.c[0], l.pool.c[1]
+			// The shared form holds one half, stepped in place (bindRec).
+			out := l.pool.s[1]
+			if out == nil {
+				out = l.pool.s[0]
+			}
+			t["rec.state"], t["rec.state.out"], t["rec.conv"], t["rec.conv.out"] = l.pool.s[0], out, l.pool.c[0], l.pool.c[1]
 			t["rec.rows"] = rec
 		}
 		for _, o := range l.graph.Ops {

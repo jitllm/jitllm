@@ -151,7 +151,7 @@ func TestFrontNamesNoFamily(t *testing.T) {
 func frontModel(t *testing.T, file string) *Model {
 	t.Helper()
 	path := testmodels.Path(file)
-	if _, err := os.Stat(path); err != nil {
+	if _, err := os.Stat(fixtureSource(path)); err != nil {
 		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
 	}
 	m, err := Open(jlmOf(t, path), noTune)

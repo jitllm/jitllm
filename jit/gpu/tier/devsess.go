@@ -139,8 +139,9 @@ type devSess struct {
 	subBytes stagingBytes
 	// launchTo is the submission's launch target; see launcher.
 	launchTo launchTo
-	// recDescW is recDesc's words between submissions.
-	recDescW []uint32
+	// recDescW is recDesc's words between submissions, recDescC the
+	// composer's in the shared form.
+	recDescW, recDescC []uint32
 	// stepRS is the ragStep GPU.layersRows hands this device, its slices
 	// reused from step to step.
 	stepRS ragStep

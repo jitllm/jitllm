@@ -2,6 +2,7 @@ package jit
 
 import (
 	"fmt"
+	"maps"
 	"math"
 
 	"github.com/jitllm/jitllm/engine/graph"
@@ -482,8 +483,11 @@ func decomposeClamp(o graph.Op, c *Context) ([]Prim, error) {
 // row and to the slot written, so no kernel reads the window while
 // writing it.
 func decomposeStateConv(o graph.Op, c *Context) ([]Prim, error) {
-	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || c.Step.Rows != 1 {
+	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || c.Step.Rows < 1 {
 		return nil, fmt.Errorf("a state convolution of %d operands over %d rows", len(o.In), c.Step.Rows)
+	}
+	if c.Step.Rows > 1 {
+		return stateConvRuns(o, c)
 	}
 	U, F := ir.U32, ir.F32
 	C, T := c.width(o.In[0]), o.Attr.Taps
@@ -539,6 +543,96 @@ func decomposeStateConv(o graph.Op, c *Context) ([]Prim, error) {
 		Prim{Kind: PrimMap, Shape: []int{T - 1, C}, In: []Operand{next, tableRecRows}, Expr: k.e, Facts: Facts{Extents: map[int]int{0: W, 1: 3}},
 			Stores: []PrimStore{{Out: tableRecConvOut, Index: to, Value: v, Extent: W}}},
 	), nil
+}
+
+// stateConvRuns is the causal convolution over a step of several rows, each
+// row in its run (a sequence's rows of the step, in order, the run
+// descriptor's): a row's window is its run's window state (the run's slot
+// read) followed by the run's rows before it, the taps in order. Then each
+// run's window after its last row -- the newest Taps-1 of its state and its
+// rows -- to its slot written. A row or run past the step's live count is
+// the last live one's, as every row op of the step repeats it.
+func stateConvRuns(o graph.Op, c *Context) ([]Prim, error) {
+	U, F := ir.U32, ir.F32
+	R, C, T := c.Step.Rows, c.width(o.In[0]), o.Attr.Taps
+	if T < 2 || o.Weight[0].K != T || o.Weight[0].Rows != C {
+		return nil, fmt.Errorf("a state convolution of %d taps over %d channels", T, C)
+	}
+	wo, err := c.weight(o.Weight[0])
+	if err != nil {
+		return nil, err
+	}
+	if !jlm.Verbatim(wo.Format) {
+		return nil, fmt.Errorf("a state convolution over %s taps", wo.Format)
+	}
+	src := c.value(o.In[0])
+	W := (T - 1) * C
+	const desc = 2
+	// word is the descriptor's word at a+b*n; the n and run are the step's
+	// live rows and a run clamped to them.
+	type at struct{ n, run, start, count int }
+	runOf := func(x *exprs, j int) at {
+		n := x.load(desc, x.u(0))
+		j = x.op(OpMin, U, j, x.op(OpSub, U, x.op(OpMax, U, n, x.u(1)), x.u(1)))
+		word := func(a, b, j int) int {
+			return x.load(desc, x.op(OpAdd, U, x.op(OpAdd, U, x.u(uint32(a)), x.op(OpMul, U, n, x.u(uint32(b)))), j))
+		}
+		twoJ := x.op(OpAdd, U, j, j)
+		return at{n: n, run: j, start: word(1, 2, twoJ), count: word(2, 2, twoJ)}
+	}
+	slot := func(x *exprs, a at, w int) int {
+		return x.op(OpMul, U, x.load(desc, x.op(OpAdd, U, x.op(OpAdd, U, a.run, a.run), x.u(uint32(w)))), x.u(uint32(W)))
+	}
+	order := func(x *exprs, a at, e int) int {
+		return x.load(desc, x.op(OpAdd, U, x.op(OpAdd, U, x.u(1), x.op(OpMul, U, a.n, x.u(4))), x.op(OpAdd, U, a.start, e)))
+	}
+	// value is the run's window state and rows as one sequence at place p
+	// (p < Taps-1 the state's row p, else the run's row p-(Taps-1)).
+	value := func(x *exprs, a at, p, ch int) int {
+		held := x.op(OpLess, ir.Pred, p, x.u(uint32(T-1)))
+		row := order(x, a, x.sel(U, held, x.u(0), x.op(OpSub, U, p, x.u(uint32(T-1)))))
+		st := x.load(1, x.op(OpAdd, U, slot(x, a, 1), x.op(OpAdd, U, x.op(OpMul, U, x.sel(U, held, p, x.u(0)), x.u(uint32(C))), ch)))
+		return x.sel(F, held, st, x.at(0, []int{R, C}, row, ch))
+	}
+	ext := map[int]int{1: W, desc: recDescWords(R)}
+
+	var x exprs
+	r, ch := x.coord(0), x.coord(1)
+	tapIn := []Operand{src, tableRecConv, tableRecRows}
+	facts := Facts{Extents: maps.Clone(ext)}
+	n := x.load(desc, x.u(0))
+	rr := x.op(OpMin, U, r, x.op(OpSub, U, x.op(OpMax, U, n, x.u(1)), x.u(1)))
+	word := func(a, b, j int) int {
+		return x.load(desc, x.op(OpAdd, U, x.op(OpAdd, U, x.u(uint32(a)), x.op(OpMul, U, n, x.u(uint32(b)))), j))
+	}
+	a := runOf(&x, word(1, 6, rr))
+	// The row's place in its run's sequence: Taps-1 past its entry's.
+	p := x.op(OpAdd, U, x.op(OpSub, U, word(1, 5, rr), a.start), x.u(uint32(T-1)))
+	acc := -1
+	for t := 0; t < T; t++ {
+		tap, err := weightElement(&x, wo, C, T, &tapIn, &facts, ch, x.u(uint32(t)))
+		if err != nil {
+			return nil, err
+		}
+		v := x.op(OpMul, F, value(&x, a, x.op(OpSub, U, p, x.u(uint32(T-1-t))), ch), tap)
+		if acc < 0 {
+			acc = v
+			continue
+		}
+		acc = x.op(OpAdd, F, acc, v)
+	}
+
+	var w exprs
+	j, wr, wc := w.coord(0), w.coord(1), w.coord(2)
+	wa := runOf(&w, j)
+	// The window's row wr after the run: place count+wr of its sequence.
+	wv := value(&w, wa, w.op(OpAdd, U, wa.count, wr), wc)
+	to := w.op(OpAdd, U, slot(&w, wa, 2), w.op(OpAdd, U, w.op(OpMul, U, wr, w.u(uint32(C))), wc))
+	return []Prim{
+		{Kind: PrimMap, Shape: []int{R, C}, In: tapIn, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts},
+		{Kind: PrimMap, Shape: []int{R, T - 1, C}, In: []Operand{src, tableRecConv, tableRecRows}, Expr: w.e,
+			Facts: Facts{Extents: maps.Clone(ext)}, Stores: []PrimStore{{Out: tableRecConvOut, Index: to, Value: wv, Extent: W}}},
+	}, nil
 }
 
 // decomposeRowConv is a centred depthwise convolution across the step's

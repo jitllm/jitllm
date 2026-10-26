@@ -2534,7 +2534,9 @@ type blockScratch struct {
 	dQ, dQn, dK, dKn, dV backend.Buf
 	dOut, dOutN, dAct    backend.Buf
 	dRows, dScale        backend.Buf
-	rec                  nn.RecurrentPlan
+	// cRows is the composer's recurrent descriptor in the shared form.
+	cRows backend.Buf
+	rec   nn.RecurrentPlan
 	// qkLanes is how many threads cooperate on one head in those two kernels:
 	// 32 where the device guarantees a subgroup that wide, 1 where it does not
 	// (devTier.pickLanes, as for the softmax). qkWidth is the launch width -- the
@@ -4959,6 +4961,9 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		// block's pool; for a ragged step, the run descriptor its rows are
 		// grouped by (kernels.RunDescWords, the longer of the two).
 		al(&bs.dRows, 4*kernels.RunDescWords(rows))
+		// The composer's, where the pool is one shared half: its forms step
+		// each run's state in place (recDesc's inPlace).
+		al(&bs.cRows, 4*kernels.RunDescWords(rows))
 	}
 	// MLA's scratch, allocated only where the model has a latent block.
 	if p.MLA() {
@@ -7523,7 +7528,10 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 	var pagedVar *pagedVariant
 	if pk := bs.pkv; pk != nil {
 		pk.rows = g.pagedRows(sid, pk.rows, R, nrow, pos, rag)
-		if e := g.pagedPrep(sid, bs, pk.rows); e != nil {
+		// A call of rows the composer serves whole in the reserved width runs
+		// none of the tier's attention: it stages the descriptors alone.
+		stageOnly := R > 1 && bs == g.bbs[g.promptW] && g.rowsComposed(lo, hi)
+		if e := g.pagedPrep(sid, bs, pk.rows, stageOnly); e != nil {
 			return refuse("paged attention: %v", e)
 		}
 		pk.st = nil
@@ -7553,6 +7561,18 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			var e error
 			if tierRuns, e = g.promptDeclines(bs, lo, hi); e != nil {
 				return refuse("%v", e)
+			}
+		}
+		if tierRuns {
+			// A block declined: the variant's kernels, and the streaming
+			// its plan decides.
+			built, e := g.pagedPlanNow(bs)
+			if e == nil && built && pk.cur != nil {
+				pf := pk.pf != nil && rag == nil && R > 1 && nrow > 0
+				e = g.pagedStreamPrep(sid, bs, pk.rows, pf)
+			}
+			if e != nil {
+				return refuse("paged attention: %v", e)
 			}
 		}
 		pk.ragRows = 0
@@ -8489,11 +8509,6 @@ func (g *devTier) layersSession(s backend.Session) {
 				asked = false
 			default:
 				why = g.blockServes(l, li, p, bs, persist, kind == partPrompt)
-				// A linear block's form steps one row of one session, its
-				// slots the decode descriptor's.
-				if why == partServes && l.linear && (rag != nil || R != 1) {
-					why = partRecurrent
-				}
 			}
 			var sv *servedPart
 			var inst *partInst
@@ -8505,7 +8520,7 @@ func (g *devTier) layersSession(s backend.Session) {
 					}
 					continue
 				}
-				if l.linear && !g.bindRec(sv, sid, l) {
+				if l.linear && !g.bindRec(sv, bs, sid, l) {
 					inst, why = nil, partRecurrent
 				} else if inst == nil {
 					why = partNoRoom
@@ -8549,6 +8564,9 @@ func (g *devTier) layersSession(s backend.Session) {
 				if l.linear && err == nil {
 					g.stepFlip(sid, l)
 					g.recSteps++
+					if rag != nil && rag.sid != nil {
+						g.SessionLinear++
+					}
 				}
 				continue
 			}
@@ -10592,7 +10610,10 @@ func (g *devTier) layersSession(s backend.Session) {
 		// the convolution's shift and the delta rule as tokens. Its slots
 		// are where each sequence's state is in the pools, which a
 		// recording therefore does not bake.
-		w(bs.dRows, g.recDesc(sid, nrow))
+		w(bs.dRows, g.recDesc(sid, nrow, false))
+		if g.recShared && bs.cRows != nil {
+			w(bs.cRows, g.recDesc(sid, nrow, true))
+		}
 	}
 	w(bs.koff, koffs)
 	if kst > 0 {

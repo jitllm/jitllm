@@ -114,9 +114,10 @@ func slice(g *graph.Graph) string {
 // formed for, its leading axis the step's rows: a call runs the rows its
 // table states (tableCall), at most these (Kernel.Capacity) -- a GPU's
 // launch held to them (CallRows), a CPU's calls (RowCalls). 0 for a one-row
-// step's, whose form is decode's.
+// step's, whose form is decode's, and for a scan's, whose launch is its
+// state rows and whose trips are the step's rows.
 func liveOf(p Prim, s Step, d Device) int {
-	if s.Rows < 2 || len(p.Shape) == 0 || p.Shape[0] != s.Rows {
+	if s.Rows < 2 || len(p.Shape) == 0 || p.Shape[0] != s.Rows || p.Kind == PrimScan {
 		return 0
 	}
 	return s.Rows

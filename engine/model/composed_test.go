@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
@@ -171,7 +173,7 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 	"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "DeepSeek-V2-Lite.Q4_K_M.gguf",
 	"synth-glm4moe.gguf", "synth-qwen2moe.gguf", "synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf",
 	"synth-minimaxm2.gguf", "synth-bailingmoe2.gguf", "synth-dots1.gguf", "synth-gptoss.gguf", "synth-deepseek",
-	"synth-deepseek-lite", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"}
+	"synth-deepseek-lite", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "synth-kimilinear@q8"}
 
 // formedModels is what the front end states and the serving gate does not
 // run: a model the tier cannot place (stories260K, unblockedModels),
@@ -185,6 +187,12 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 // main's CUDA tier lands at 0.029), and its last block composed alone matches
 // the tier's logits to 3e-14 at the median step, but CUDA's split attention,
 // which Vulkan does not split at this key bound, is not yet ruled out.
+// Qwen3.5's mixture fixture at Q8_0 serves in the band (median 1.17 of the
+// tier's distance on CUDA, 1.35 on Vulkan, its prompt's blocks and every
+// decode step's served) but the gate cannot discriminate on it: the random
+// hybrid is so sensitive that the tier's own backends sit 0.28 and 0.34 from
+// the float reference, the arm 0.34 from the tier on Vulkan, and one
+// position off reads 2.61, under ten times that.
 var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
 	"stories260K.gguf", "synth-ernie45.gguf", "synth-phi4v.gguf", "synth-seedoss.gguf", "synth-smollm3.gguf",
 	"synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "newarch/synth-olmo2-q8.gguf", "synth-arcee.gguf", "synth-exaone4.gguf",
@@ -193,7 +201,8 @@ var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1
 	"synth-starcoder2.gguf", "synth-falcon.gguf", "synth-falcon40.gguf", "synth-nemotron.gguf",
 	"synth-commandr.gguf", "synth-cohere2.gguf",
 	"synth-qwen2vl.gguf", "synth-qwen25vl.gguf", "synth-qwen3vl.gguf",
-	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf"}
+	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf",
+	"synth-qwen35moe-hybrid-mtp-q8_0.gguf"}
 
 // mixtureModels are the mixtures the front end states whole and the serving
 // gate does not run: tiny-qwen3moe, whose eight-wide rows the tier cannot
@@ -279,11 +288,15 @@ const bandRatio, bandWorst = 1.5, 4.0
 // promptModels are the served models whose prompt the gate has the composer
 // serve too, at the chunk's rows (ComposedPrompt): three Q8_0 models, the
 // k-quant Llama-3.2-1B, tinyllama (Q3_K), Qwen2-1.5B and Qwen3-1.7B, whose
-// projections at a chunk's rows run in row tiles (jit.RowTiles), and
-// gemma-3-1b, whose sliding layers' chunk reads the windowed descriptors.
+// projections at a chunk's rows run in row tiles (jit.RowTiles),
+// gemma-3-1b, whose sliding layers' chunk reads the windowed descriptors,
+// and the hybrids, whose linear blocks scan the chunk's rows as one run:
+// Qwen3.5-0.8B and Kimi-Linear's fixture (Kimi Delta Attention, its decay
+// per key channel) at Q8_0.
 var promptModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "SmolLM2-360M-Instruct-Q8_0.gguf",
 	"gemma-3-1b-it-Q4_K_M.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "tinyllama-1.1b-q3_K_M.gguf",
-	"Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf"}
+	"Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf",
+	"synth-kimilinear@q8"}
 
 // TestComposedBlocksServe decodes dense models with each block served whole
 // by the composer from its graph (the model's front end's, from the
@@ -321,7 +334,7 @@ func TestComposedBlocksServe(t *testing.T) {
 				prompt = tier.ComposedPrompt
 			}
 			path := testmodels.Path(file)
-			if _, err := os.Stat(path); err != nil {
+			if _, err := os.Stat(fixtureSource(path)); err != nil {
 				t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
 			}
 			m, err := Open(jlmOf(t, path), noTune)
@@ -575,8 +588,11 @@ func TestComposedBlocksServe(t *testing.T) {
 								// inside the band. Twice the position and 16 past moves
 								// every distance. The M-RoPE gate holds its tables to
 								// transformers itself, with no tier between, and one
-								// position is seen there.
-								if a.parts&tier.ComposedTable != 0 {
+								// position is seen there. A model whose attention
+								// applies no positional encoding (FlagNoPosEnc,
+								// Kimi-Linear's latent attention) reads no position:
+								// there is nothing for the violation to move.
+								if a.parts&tier.ComposedTable != 0 && !m.container.Config().Flags.Has(jlm.FlagNoPosEnc) {
 									violated("every row told twice its position and 16 past", tier.ComposedTable, stretchAxes(2, 16))
 								}
 								if ne, _, _ := st.ServedPart(tier.ComposedEmbed); ne > 0 {
@@ -603,6 +619,59 @@ func TestComposedBlocksServe(t *testing.T) {
 	}
 	if ran == 0 {
 		t.Fatal("no arm ran")
+	}
+}
+
+// TestComposedSharedPoolMatchesTheDoubledOne decodes Qwen3.5-0.8B with its
+// prompt and every step's blocks and head served by the composer, its
+// recurrent pools in the shared form (Config.SharedRec: one state a slot,
+// stepped in place through the composer's own descriptor) and in the doubled
+// one, and demands the same logits bit for bit: the scan and the one-row
+// rule read a slot and write it after, as they read one half and write the
+// other. Stats.RecShared and the served counts are the selection check.
+func TestComposedSharedPoolMatchesTheDoubledOne(t *testing.T) {
+	const file = "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"
+	path := testmodels.Path(file)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("MODEL MISSING: %s (set JITLLM_MODELS)", path)
+	}
+	m, err := Open(jlmOf(t, path), noTune)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	ids := m.Vocab.Encode("The clerk counted barrels of salt on the upper floor, and the river rose", true)
+	toks := m.Vocab.Encode(" every spring until the bridges were islands and the town kept its boats", false)
+	parts := tier.ComposedBlock | tier.ComposedHead | tier.ComposedPrompt
+	ran := 0
+	for _, dev := range testdevices.Specs("cuda:0", "vulkan:0", "metal") {
+		t.Run(dev, func(t *testing.T) {
+			want, wst, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false)
+			got, st, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false,
+				tier.WithConfig(func(c *tier.Config) { c.SharedRec = true }))
+			if wst.RecShared != 0 || st.RecShared == 0 {
+				t.Fatalf("the doubled arm grew %d shared state(s) and the shared arm %d: the gate compared one form with itself",
+					wst.RecShared, st.RecShared)
+			}
+			for _, s := range []tier.Stats{wst, st} {
+				np, dp, _ := s.ServedPart(tier.ComposedPrompt)
+				nb, db, _ := s.ServedPart(tier.ComposedBlock)
+				if np < m.Cfg.NLayer || dp != 0 || nb < len(toks)*m.Cfg.NLayer || db != 0 {
+					t.Fatalf("the composer served %d prompt block steps (%d declined) and %d decode block steps (%d declined): %s",
+						np, dp, nb, db, declinesOf(s))
+				}
+			}
+			for i := range want {
+				if !slices.Equal(got[i], want[i]) {
+					t.Fatalf("step %d: the shared pool's logits differ from the doubled one's (NMSE %.3g)", i, logitNMSE(got[i], want[i]))
+				}
+			}
+			t.Logf("%d shared state(s); %d steps identical", st.RecShared, len(want))
+			ran++
+		})
+	}
+	if ran == 0 {
+		t.Fatal("no device ran")
 	}
 }
 

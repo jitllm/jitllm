@@ -67,8 +67,12 @@ type pagedScratch struct {
 	desc, descW []uint32
 	// cur is the variant the current call runs, chosen before the submission
 	// (pagedPrep) and read by layersOnce; nil when this session holds no
-	// attention block here.
-	cur *pagedVariant
+	// attention block here. A call the composer serves whole stages the
+	// descriptors alone: cur is staged, which holds no kernel, until a block
+	// of the call declines (pagedPlanNow), keys the call's key count.
+	cur    *pagedVariant
+	staged pagedVariant
+	keys   int
 	// pf is a batched scratch's prefill attention (pagedprefill.go); nil
 	// runs a chunk through FlashDecodeKV.
 	pf *pagedPrefill
@@ -812,7 +816,7 @@ func (g *devTier) pagedAppendRows(sid uint64, rows []pagedRow) bool {
 // keys, and a check that every row's page is there (pagedAppend took them).
 // Compiling and allocating are driver calls, so it runs before the
 // submission's session. Callers hold g.mu.
-func (g *devTier) pagedPrep(sid uint64, bs *blockScratch, rows []pagedRow) error {
+func (g *devTier) pagedPrep(sid uint64, bs *blockScratch, rows []pagedRow, stageOnly bool) error {
 	kp, pg := g.kvPages(), bs.pkv
 	held := false
 	g.pgSeqs = seqEnds(g.pgSeqs, rows)
@@ -834,8 +838,26 @@ func (g *devTier) pagedPrep(sid uint64, bs *blockScratch, rows []pagedRow) error
 	// captured graph serves every token of a grain rather than recapturing
 	// each time the square root moves (graphKey.pagedVar).
 	keys := ds4KeyCap(bs, msaKeys(&bs.p, idxKeys(&bs.p, (pagedKeys(rows)+scoreGrain-1)/scoreGrain*scoreGrain)))
+	pg.keys = keys
+	if stageOnly {
+		pg.cur = &pg.staged
+		return nil
+	}
 	pg.cur, err = g.pagedPlanFor(bs, keys)
 	return err
+}
+
+// pagedPlanNow gives a call that staged its descriptors alone (pagedPrep's
+// stageOnly) its variant's kernels, a block of it running the tier's
+// attention after all. Callers hold g.mu, outside any submission.
+func (g *devTier) pagedPlanNow(bs *blockScratch) (bool, error) {
+	pg := bs.pkv
+	if pg == nil || pg.cur != &pg.staged {
+		return false, nil
+	}
+	var err error
+	pg.cur, err = g.pagedPlanFor(bs, pg.keys)
+	return true, err
 }
 
 // pagedRow is one query row of a call: its sequence and its position.

@@ -13,8 +13,8 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
-// TestPlacementComposesOnce holds the composer's census on Llama-3.2-1B with
-// every part composed and a reserved prompt width of 512 rows
+// TestPlacementComposesOnce holds the composer's census on Llama-3.2-1B and
+// the hybrid Qwen3.5-0.8B (composeOnceModels) with every part composed and a reserved prompt width of 512 rows
 // (JITLLM_COMPOSE_ONCE_ROWS another): once a State's blocks are placed,
 // prompts of 1, 5, 33, 100, 511, 512, 513 and 2000 tokens, each followed by
 // decode steps, a second session's prompt and decode, and a ragged batch of
@@ -34,13 +34,6 @@ import (
 // (Config.ComposedWidths), a form keyed by rows, which must fail.
 func TestPlacementComposesOnce(t *testing.T) {
 	violate := os.Getenv("JITLLM_VIOLATE_COMPOSE_ONCE") != ""
-	const name = "Llama-3.2-1B-Instruct-Q4_K_M.gguf"
-	p := testmodels.Path(name)
-	if _, err := os.Stat(p); err != nil {
-		if _, err := os.Stat(strings.TrimSuffix(p, ".gguf") + ".jlm"); err != nil {
-			testmodels.Missing(t, "MODEL MISSING: "+name)
-		}
-	}
 	// JITLLM_COMPOSE_ONCE_ROWS reserves another prompt width, for a card
 	// whose budget does not hold a 512-row composed block beside the model.
 	width := 512
@@ -65,37 +58,52 @@ func TestPlacementComposesOnce(t *testing.T) {
 		t.Cleanup(g.Close)
 		return g
 	}
-	path := jlmOf(t, p)
-	t.Run("one-card", func(t *testing.T) {
-		m, err := Open(path, noTune)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer m.Close()
-		composesOnce(t, m, open(t, testdevices.Take(t, 1, "cuda:0")[0]), width, "")
-	})
-	t.Run("two-cards", func(t *testing.T) {
-		a, b := moveDevices(t)
-		g := open(t, a+","+b)
-		distinctCards(t, g)
-		up := map[int]Place{}
-		m0, err := Open(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		n := m0.Cfg.NLayer
-		m0.Close()
-		for li := n / 2; li < n; li++ {
-			up[li] = Place{On: b}
-		}
-		m, err := Open(path, noTune, WithPlacement(Placement{Blocks: up, Rest: &Place{On: a}, Head: &Place{On: b}, Strict: true}))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer m.Close()
-		composesOnce(t, m, g, width, b)
-	})
+	for _, name := range composeOnceModels {
+		t.Run(name, func(t *testing.T) {
+			p := testmodels.Path(name)
+			if _, err := os.Stat(p); err != nil {
+				if _, err := os.Stat(strings.TrimSuffix(p, ".gguf") + ".jlm"); err != nil {
+					testmodels.Missing(t, "MODEL MISSING: %s", name)
+				}
+			}
+			path := jlmOf(t, p)
+			t.Run("one-card", func(t *testing.T) {
+				m, err := Open(path, noTune)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer m.Close()
+				composesOnce(t, m, open(t, testdevices.Take(t, 1, "cuda:0")[0]), width, "")
+			})
+			t.Run("two-cards", func(t *testing.T) {
+				a, b := moveDevices(t)
+				g := open(t, a+","+b)
+				distinctCards(t, g)
+				up := map[int]Place{}
+				m0, err := Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				n := m0.Cfg.NLayer
+				m0.Close()
+				for li := n / 2; li < n; li++ {
+					up[li] = Place{On: b}
+				}
+				m, err := Open(path, noTune, WithPlacement(Placement{Blocks: up, Rest: &Place{On: a}, Head: &Place{On: b}, Strict: true}))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer m.Close()
+				composesOnce(t, m, g, width, b)
+			})
+		})
+	}
 }
+
+// composeOnceModels are the census's models: Llama-3.2-1B, and Qwen3.5-0.8B,
+// a hybrid whose linear blocks step their recurrent state in the composer's
+// scans, a prompt's chunk a run and a ragged step's sequences a run each.
+var composeOnceModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"}
 
 // composesOnce is TestPlacementComposesOnce's census of m on g. With to set,
 // the relocation moves the blocks on the first one's device to it; without,

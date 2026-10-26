@@ -12,6 +12,8 @@ import (
 func generate(p Prim) (*Kernel, error) {
 	switch p.Kind {
 	case PrimMap, PrimReduce, PrimContract:
+	case PrimScan:
+		return generateScan(p)
 	default:
 		return nil, fmt.Errorf("jit: no naive form of primitive %d", p.Kind)
 	}

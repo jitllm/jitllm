@@ -383,6 +383,14 @@ func (e *lowerer) groupReduce(i int, x ir.Value, max bool) ir.Value {
 		}
 		return b.Add(ir.F32, p, q)
 	}
+	// Inside a loop the next trip writes the slots again: every thread must
+	// have read them first.
+	reread := func(v ir.Value) ir.Value {
+		if len(e.open) > 0 {
+			b.Barrier()
+		}
+		return v
+	}
 	if e.lanes < ir.SubgroupLanes {
 		sh := e.shared[i]
 		b.Store(sh, e.thread(), x, 0)
@@ -398,7 +406,7 @@ func (e *lowerer) groupReduce(i int, x ir.Value, max bool) ir.Value {
 		b.SetPhi(acc, comb(acc, b.Load(ir.F32, sh, j, 0)))
 		b.SetPhi(j, b.Add(ir.U32, j, one))
 		b.EndLoop()
-		return acc
+		return reread(acc)
 	}
 	butterfly := func(v ir.Value) ir.Value {
 		for m := ir.SubgroupLanes / 2; m >= 1; m /= 2 {
@@ -415,7 +423,7 @@ func (e *lowerer) groupReduce(i int, x ir.Value, max bool) ir.Value {
 	lane := b.And(ir.U32, tid, b.Const(ir.U32, ir.SubgroupLanes-1))
 	warps := (e.n.Group + ir.SubgroupLanes - 1) / ir.SubgroupLanes
 	if warps >= ir.SubgroupLanes {
-		return butterfly(b.Load(ir.F32, sh, lane, 0))
+		return reread(butterfly(b.Load(ir.F32, sh, lane, 0)))
 	}
 	// Only the workgroup's warps wrote a slot: a lane past them reads the
 	// last one written (a maximum's identity) or adds nothing.
@@ -423,7 +431,7 @@ func (e *lowerer) groupReduce(i int, x ir.Value, max bool) ir.Value {
 	if !max {
 		v = b.Select(ir.F32, b.Lt(ir.U32, lane, b.Const(ir.U32, int64(warps))), v, b.Const(ir.F32, 0))
 	}
-	return butterfly(v)
+	return reread(butterfly(v))
 }
 
 // poisonShared has every thread write NaN to its slots of each workgroup

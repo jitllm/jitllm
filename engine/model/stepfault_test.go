@@ -404,3 +404,38 @@ func TestStepAcrossSessionsDenseGateDiscriminates(t *testing.T) {
 		})
 	}
 }
+
+// TestComposedPromptChainGateDiscriminates runs the hybrid's prompt through
+// the composer (ComposedPrompt), its linear blocks scanning the chunk's rows
+// as one run, with every row of the chunk made its own run -- each reading
+// the state from before the chunk -- and demands the prompt's logits part
+// from the same prompt chained: the serving gate's prompt arm
+// (TestComposedBlocksServe, promptModels) can see a chunk that does not
+// chain. Both arms must have served every block of the prompt.
+//
+//	go test -tags jitllmfault ./engine/model -run TestComposedPromptChainGateDiscriminates
+func TestComposedPromptChainGateDiscriminates(t *testing.T) {
+	m := openStepHybrid(t)
+	defer m.Close()
+	ids := m.Vocab.Encode("The clerk counted barrels of salt on the upper floor, and the river rose", true)
+	toks := []int32{ids[1], ids[2]}
+	parts := tier.ComposedBlock | tier.ComposedHead | tier.ComposedPrompt
+	for _, dev := range stepDevices() {
+		t.Run(dev, func(t *testing.T) {
+			want, st, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false)
+			tier.SetRecFault("chain")
+			got, fst, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false)
+			tier.SetRecFault("")
+			for _, s := range []tier.Stats{st, fst} {
+				if n, d, _ := s.ServedPart(tier.ComposedPrompt); n < m.Cfg.NLayer || d != 0 {
+					t.Fatalf("the composer served %d block steps of the prompt and declined %d, of %d blocks", n, d, m.Cfg.NLayer)
+				}
+			}
+			w := logitNMSE(want[0], got[0])
+			t.Logf("chain: the prompt's logits %.3e apart (NMSE)", w)
+			if w < mlaDeviceNMSE {
+				t.Fatalf("the gate passed with a composed chunk's rows not chaining, at NMSE %.3e", w)
+			}
+		})
+	}
+}

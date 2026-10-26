@@ -8766,3 +8766,55 @@ row where the composer's reads two.
   row and at five of eight, each turned element within 1e-5 of the
   definition and every tail element equal to the input's bit for bit; the
   fix reverted fails it, and the tail moved by one element parts.
+- **A linear block's rows are a scan the composer forms.** The op language
+  gains no op: OpDeltaRule and OpStateConv over a step of several rows
+  decompose into a new primitive, PrimScan (jit/generate_scan.go), and two
+  maps. A scan's state rows are the value heads' rows, a workgroup of one
+  subgroup each, every thread holding components lane, lane+32, ... as
+  folds; it loops over the runs the step's run descriptor lists
+  (kernels.RunDescWords' layout) and over each run's rows in order, the
+  two dots group sums, the state read at the run's slot and written after
+  its last row. The convolution reads each row's window from its run's
+  state and the run's rows before it, and writes each run's last Taps-1.
+  One form of a width serves every row count (the counts are the
+  descriptor's), a prompt chunk as one run and a ragged step's sequences a
+  run each, so the tier stages the run descriptor for a chunk too (its
+  first three words are the chunk's, which its own kernels read). The
+  card serves a linear block's prompt and ragged rows (DeclineRecurrent
+  now names only a recurrent tail and the centred, K3 and n-gram
+  variants), and the shared pool in place, through a descriptor of its
+  own whose slot written is the slot read. A call the composer serves
+  whole stages its paged descriptors without building the decode plan's
+  kernels: on Qwen3.5 a 511-token prompt compiled two of them
+  (flashkvpaged, flashmergewide) after the placement. Gates: the scan and
+  the convolution on CUDA and Vulkan over chunks of 8, 5 and 1 rows and
+  ragged steps of interleaved runs, NaN padding rows, held to the oracle
+  (2e-5, 1e-5) over five delta shapes (tiled, per-channel decay, Dk 7 to
+  128) and five convolutions, every slot outside the step's untouched;
+  each row made its own run parts 40 times. Qwen3.5-0.8B Q4_K_M on the
+  V100: TestComposedBlocksServe with its prompt composed, every arm on
+  cuda:0 and vulkan:3, 24 block steps of the prompt served, median 0.996
+  of the tier's distance from the float reference; the composed chunk's
+  rows made runs of one (the "chain" fault) move the prompt's logits
+  1.28 in NMSE. TestPlacementComposesOnce gains Qwen3.5: 19 forms at
+  placement, prompts of 1 to 2000 tokens (264 prompt block steps), a
+  second session, a ragged batch and a relocation compose nothing after
+  the placement, one card and two. The shared pool decodes a composed
+  prompt and 14 steps bit for bit as the doubled one (18 shared states,
+  cuda:0 and vulkan:3). Kimi Delta Attention serves end to end on
+  Kimi-Linear's fixture converted to Q8_0 (synth-kimilinear@q8, the
+  transformers weights every parameter and buffer random, convert.WithQ8):
+  every arm on both backends, median 0.96 (CUDA) and 1.00 (Vulkan) of the
+  tier's distance; its rows told other positions is no violation there,
+  the latent attention applying none (FlagNoPosEnc). Qwen3.5's mixture
+  fixture at Q8_0 serves in band (1.17, 1.35) but cannot discriminate (its
+  tiers sit 0.28 to 0.34 from the float reference, one position off reads
+  2.61 against the arm's 0.34): formedModels. In the composed build,
+  TestBatchSeamMovesCarryEveryRowHybrid, TestBlocksMoveBetweenDevices,
+  TestLayerRelocatesToAnotherDevice, TestBlocksMoveToTheCPUAndBack and
+  TestKVPagesRelocateWithTheLayer pass on Qwen3.5-0.8B and both Q8_0
+  hybrid fixtures (the principle lists now carry them),
+  TestPagingDoesNotChangeTheAnswer on Qwen3.5-0.8B, and the mixtures'
+  paging gate on both fixtures (343 and 167 page-ins under one page, every
+  logit the resident run's); and the group sum a scan makes in a loop waits for every
+  thread's read before the next row writes its slots (lowergpu).

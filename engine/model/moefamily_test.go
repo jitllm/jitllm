@@ -501,6 +501,25 @@ func TestMoEFamiliesPageWithTheSameAnswer(t *testing.T) {
 	}
 }
 
+// TestHybridMixturesPageWithTheSameAnswer is the mixtures' paging gate on the
+// hybrid mixtures (principleMixtures): their linear blocks' recurrent state
+// stays put while the blocks' and the experts' pages are evicted and read
+// back, and every logit is the resident run's.
+func TestHybridMixturesPageWithTheSameAnswer(t *testing.T) {
+	for _, name := range []string{"synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-kimilinear" + q8Suffix} {
+		t.Run(name, func(t *testing.T) {
+			src := jlmOf(t, testmodels.Path(name))
+			m, err := Open(src, noTune)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids := m.Vocab.Encode("The clerk counted barrels of salt on the upper floor, and the river rose", true)
+			m.Close()
+			pagesWithTheSameAnswer(t, ids, src)
+		})
+	}
+}
+
 // pagesWithTheSameAnswer runs src's decode over ids, their prefill and the
 // batched path in pairs, resident and under a one-page budget, and holds every
 // logit bit for bit; the page-in count is the selection check.

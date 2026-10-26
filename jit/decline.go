@@ -80,7 +80,7 @@ var declineNames = [NumDeclines]string{
 	DeclineEmbedWeight:   "input rows reading a weight other than the token embedding and a position table",
 	DeclineEmbedToken:    "a token or position outside its table's rows",
 	DeclineFeeds:         "a block graph reading more than the residual",
-	DeclineRecurrent:     "a recurrent state the form does not step (several rows of it, or none held)",
+	DeclineRecurrent:     "a recurrent state the form does not step (a tail or a variant it does not hold, none held, or the CPU's several rows)",
 	DeclineHistoryWindow: "a windowed layer's history",
 	DeclineKVFormat:      "a history not binary16 (f32 or q8_0)",
 	DeclineHeadMajor:     "a head-major history",

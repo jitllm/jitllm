@@ -24,7 +24,7 @@ func jlmOfSafetensors(t testing.TB, dir string) string {
 	if err != nil {
 		t.Skipf("MODEL MISSING: %s (%v) (set JITLLM_MODELS to the model directory) -- this gate proved nothing", dir, err)
 	}
-	dst, err := convertDir(real)
+	dst, err := convertDir(real, false)
 	if err != nil {
 		t.Fatalf("convert %s: %v", dir, err)
 	}

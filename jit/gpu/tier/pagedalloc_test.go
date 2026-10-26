@@ -36,7 +36,7 @@ func TestPagedStagingAllocatesNothing(t *testing.T) {
 		}
 		d.mu.Lock()
 		bs.pkv.rows = d.pagedRows(0, bs.pkv.rows, 1, 1, pos, nil)
-		if err := d.pagedPrep(0, bs, bs.pkv.rows); err != nil {
+		if err := d.pagedPrep(0, bs, bs.pkv.rows, false); err != nil {
 			d.mu.Unlock()
 			t.Fatal(err)
 		}

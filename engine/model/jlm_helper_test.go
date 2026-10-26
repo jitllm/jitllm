@@ -41,6 +41,16 @@ type convertResult struct {
 // passes straight through (see jlmOfPair).
 func jlmOf(t testing.TB, path string) string { return jlmOfPair(t, path, "") }
 
+// q8Suffix names a safetensors fixture converted with its matrices quantized
+// to Q8_0 (convert.WithQ8): "synth-kimilinear@q8" is synth-kimilinear's
+// transformers weights, every parameter and buffer random (scripts/hfgold.py),
+// in the container's Q8_0, so a gate holding int8 activations to a float
+// reference measures a distance on it.
+const q8Suffix = "@q8"
+
+// fixtureSource is the file or directory a model name reads from.
+func fixtureSource(path string) string { return strings.TrimSuffix(path, q8Suffix) }
+
 // BuildIDForTest identifies this test binary by its bytes; it is what
 // jlm.Fingerprint.Writer carries for a test-converted file. The mtime is not an
 // identity (`go test` relinks every run), the content is. An unreadable
@@ -145,13 +155,15 @@ func convertPair(path, mmproj string) (string, error) {
 		return path, fresh.Container(path)
 	}
 	// A HuggingFace directory converts through the safetensors path to a
-	// container beside its real files, named for the directory.
-	if fi, err := os.Stat(path); err == nil && fi.IsDir() && mmproj == "" {
-		real, err := filepath.EvalSymlinks(path)
+	// container beside its real files, named for the directory; named with
+	// q8Suffix, its matrices quantized to Q8_0 (convert.WithQ8).
+	dir, q8 := strings.CutSuffix(path, q8Suffix)
+	if fi, err := os.Stat(dir); err == nil && fi.IsDir() && mmproj == "" {
+		real, err := filepath.EvalSymlinks(dir)
 		if err != nil {
 			return "", err
 		}
-		return convertDir(real)
+		return convertDir(real, q8)
 	}
 	dst := strings.TrimSuffix(path, filepath.Ext(path)) + jlm.Ext
 	if mmproj != "" {
@@ -259,8 +271,13 @@ func sweepServedCopies(dst string) {
 // convertDir is convertPair for a HuggingFace directory: the container is
 // <dir>.jlm, reconverted when any file in the directory is newer or another
 // build wrote it.
-func convertDir(dir string) (string, error) {
+func convertDir(dir string, q8 bool) (string, error) {
 	dst := filepath.Clean(dir) + jlm.Ext
+	var opts []convert.Option
+	if q8 {
+		dst = filepath.Clean(dir) + "-q8" + jlm.Ext
+		opts = append(opts, convert.WithQ8())
+	}
 	v, _ := convertOnce.LoadOrStore(dst, &convertResult{})
 	r := v.(*convertResult)
 	r.once.Do(func() {
@@ -286,7 +303,7 @@ func convertDir(dir string) (string, error) {
 		}
 		tmp := servedName(dst, os.Getpid())
 		sweepServedCopies(dst)
-		if _, err := convert.FromSafetensors(dir, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}); err != nil {
+		if _, err := convert.FromSafetensors(dir, tmp, jlm.Fingerprint{Host: "test", Writer: BuildIDForTest()}, opts...); err != nil {
 			os.Remove(tmp)
 			r.err = err
 			return

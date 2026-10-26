@@ -16,6 +16,16 @@ import (
 	"github.com/jitllm/jitllm/engine/nn"
 )
 
+func init() {
+	// The hybrids under every principle gate: their linear blocks carry a
+	// recurrent state a relocation moves, a page budget evicts and a step
+	// steps. Qwen3.5-0.8B; the mixtures, whose expert pages are a page size of
+	// their own: Qwen3.5's mixture fixture at Q8_0 and Kimi-Linear's (Kimi
+	// Delta Attention beside latent attention) at Q8_0.
+	principleFixtures = append(principleFixtures, "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf")
+	principleMixtures = append(principleMixtures, "synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-kimilinear"+q8Suffix)
+}
+
 // A hybrid, built out of ordinary Go values: qwen3next's geometry (16 key heads
 // against 32 value heads, a fused q|k|v projection, a gated double-width query,
 // a short convolution) at a tiny size, so the plumbing gates run in a second.

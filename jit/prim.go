@@ -83,6 +83,8 @@ const (
 	ExprLoad
 	ExprLive
 	ExprPos
+	// ExprState is a scan's state component before the row its step runs.
+	ExprState
 )
 
 // PrimStore is one store a map's element makes: operand Out at the
@@ -102,6 +104,12 @@ type PrimStore struct {
 //   - Reduce: the last axis of Shape is combined by Combine from Init, the
 //     rest is the output.
 //   - Contract: a Reduce of products, each term's product summed.
+//   - Scan: Shape is state rows then their components; each row of state
+//     steps through the rows of every run the step's run descriptor lists
+//     (Scan), in order. Expr is one row's step at coordinates (the state
+//     row's, the component, the step's row, the run): ExprState the
+//     component before the row, OpGroupSum a sum over the state row's
+//     components. Stores are what a row stores.
 //
 // A reduction begins from Init, or from its first term where Start says;
 // it stores at Index, an expression of its output's coordinates, where set.
@@ -123,6 +131,23 @@ type Prim struct {
 	Carry    []Expr
 	CarryOut Operand
 	Facts    Facts
+	// Scan is a scan's state, where Kind is PrimScan.
+	Scan *Scan
+}
+
+// Scan is a scan's descriptor and state. The descriptor is input Desc, in
+// kernels.RunDescWords' layout: the row count, each run's slot read and
+// slot written, each run's first entry of the order list and its rows, the
+// order list (the step's rows, run after run), each row's entry and run.
+// Init is the node of a component at its run's start, Next the node of it
+// after a row; the state after a run's last row is stored to Final at the
+// node Index (a component's place, of Extent elements), every component of
+// the state row.
+type Scan struct {
+	Desc          int
+	Init, Next    int
+	Final         Operand
+	Index, Extent int
 }
 
 type Start uint8

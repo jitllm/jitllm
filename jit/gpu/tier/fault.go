@@ -134,8 +134,9 @@ func pagedFaulted(f string) bool { return pagedFault == f }
 //	          copied there: it reads a half its last step did not write
 //	"resize"  a pool rebuilt at another size, or a seat that grows, carries
 //	          no session's state
-//	"chain"   every row of a ragged step is its own run: a prompt chunk's
-//	          rows each read their sequence's state from before the step
+//	"chain"   every row of a ragged step, and of a chunk the composer
+//	          scans, is its own run: a prompt chunk's rows each read their
+//	          sequence's state from before the step
 var recFault string
 
 // SetRecFault arms one violation for the calls after it; "" disarms.
