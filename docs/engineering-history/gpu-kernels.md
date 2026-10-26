@@ -8818,3 +8818,52 @@ row where the composer's reads two.
   paging gate on both fixtures (343 and 167 page-ins under one page, every
   logit the resident run's); and the group sum a scan makes in a loop waits for every
   thread's read before the next row writes its slots (lowergpu).
+- **The CPU serves its head and its samplers composed, and the selection
+  form forms.** Where no card holds the head, the State's logits come from
+  the head's graph composed for the CPU (graph.Head: the norm, the
+  projection and its bias, softcap and scale, the norm's rows a second
+  output where a step reads them back), a greedy token from graph.Sample
+  and a top-k draw's candidates from graph.SampleTopK, each composed at
+  the first step that asks for it and counted served or declined by name
+  (CPUHeadSteps, CPUSampleSteps); a graph apart from the residual binds
+  each input and output to a place of its own (cpuArgIO). The selection
+  form (vocabularies past 1024) took five fixes, each by structure: the
+  argument block's In fields reach five more words (48, 72, 144, 152,
+  160); an integer compare whose mask a general register holds has a
+  general-register form (CMP and a mask), as does an and-not; an index one
+  lane of a vector register holds in a scalar loop is moved to the reload
+  register for its address; a compare a vector word reads is a vector
+  compare, and an index, a length or an argument word a vector reads is
+  read through a broadcast (Splats); x86's integer compare is signed, so
+  a compare of words that may pass 2^31 compares them with their top bits
+  flipped (Unsigned); and the binder's lifetimes follow where the sequence
+  places a node, not its home -- a reader of a loop's counter (Induction)
+  sat in the loop while its home said outside, and the threshold it read
+  was overwritten each trip (the last round's counts came out 1531 of
+  1531). TestComposedCPUSampleTopK holds every SampleCases vocabulary (37
+  to 151936) bit for bit, the selection form on 20 of 30. The Cursors skip
+  for (row, head) calls is gone: the fused softmax's vector loop preset its
+  tail's counter from a register the sequence had not yet written (the
+  tail ran the whole count, its maximum past the row's range); the preset
+  now waits for the count to be made. A kernel the registers refuse is
+  formed again a head a call (HeadPairs), with no rows across lanes (Jam),
+  then indexing its buffers (Cursors), before anything is split or
+  unfused: stories260K's pair with no twin and Qwen3-MOE's expert matvecs
+  (more words than general registers) now form on the CPU. Speed on the
+  Xeon D-2123IT (taskset 0-3, Llama-3.2-1B Q4_K_M, n=20, two passes, A/A
+  0.999-1.004): composed prefill 0.1220 and 0.1227 of main at pp33 (15.9
+  against 129.8 tok/s), 0.1247 and 0.1244 at pp100 (17.7 against 141.9),
+  0.1211 and 0.1200 at pp512 (16.9 against 139.8), within a percent of
+  the form before; composed decode 0.1775 and 0.1773 (6.0 tok/s, 4.8 GB/s,
+  12% of the 41.4 GB/s wall; main 33.5 tok/s, 65%) where it read 0.1998
+  with main's head: the head's 128256-row projection now runs composed, at
+  the composed matvec's rate. The head and its greedy sampler add about 5 s
+  (Qwen3-0.6B) and 8 s (Llama-3.2-1B) to the first token on the laptop,
+  composed at the first step that asks; placement is unchanged. Gates:
+  the jit package; TestComposedCPUBlocksServe (head violation leaves the
+  band at a median ratio of 578-6510), TestComposedCPURowsServe,
+  TestBatchMatchesForward, TestCPUComposesOnce, TestComposedCPURowsDoNotAllocate
+  and TestPagingDoesNotChangeTheAnswer's composed-CPU arms on the laptop;
+  TestFrontStatesTheModelAsOps' CPU arm forms stories260K and Qwen3-MOE.
+  Open: a batch's head serves a row a call; specrows, altup and the label
+  pick keep main's head.
