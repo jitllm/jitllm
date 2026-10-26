@@ -1069,7 +1069,7 @@ func (g *devTier) tableServes(bs *blockScratch, p *nn.LayerPlan, pos int) partDe
 		multi := tableAxes(gr)
 		cs, planes, at := g.tableBinds(bs, i)
 		switch {
-		case cs == nil || planes == nil || at == nil || multi && i > 0:
+		case cs == nil || planes == nil || at == nil:
 			return partTableHeld
 		case multi && (len(g.ropeAxes) != 4 || g.ropeAxesAt != pos):
 			return partNoAxes

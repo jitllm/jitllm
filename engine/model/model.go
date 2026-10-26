@@ -3052,6 +3052,10 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 		if cfg.SWARopePlain {
 			r.Scale = 1
 		}
+		if len(r.Runs) > 0 {
+			return nil, fmt.Errorf("model: %s: rotary sections on the sliding layers' own rotary, which the converter refuses",
+				cfg.Arch)
+		}
 		m.ropeSWA = &r
 	}
 	// Per-pair rotary factors are a tensor: llama 3.1+ ships rope_freqs and

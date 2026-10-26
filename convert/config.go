@@ -200,10 +200,28 @@ func ArchitectureGraph(name string) (jlm.Arch, bool) {
 }
 
 func configOf(f *meta.File) (*jlm.Config, error) {
+	var c *jlm.Config
+	var err error
 	if head, ok := d1OmniHead(f); ok {
-		return d1OmniConfig(f, head)
+		c, err = d1OmniConfig(f, head)
+	} else {
+		c, err = configOfFile(f)
 	}
-	return configOfFile(f)
+	if err != nil {
+		return nil, err
+	}
+	return c, localAxes(c)
+}
+
+// localAxes refuses rotary sections under a second rotary, the sliding
+// layers' own base or width: a table over several position axes on the
+// local layers, which no architecture in archOf or hfArchTable states.
+func localAxes(c *jlm.Config) error {
+	if c.RopeSections == [4]uint32{} || c.RopeBaseSWA == 0 && (c.NRotSWA == 0 || c.NRotSWA == c.NRot) {
+		return nil
+	}
+	return fmt.Errorf("convert: %s: rotary sections %v on the sliding layers' own rotary: %w",
+		c.Arch, c.RopeSections, ErrNotImplemented)
 }
 
 // configOfFile is configOf for every file but the ones read through a view

@@ -316,6 +316,9 @@ func hfSourceOf(dir hfDir, shards []*safetensors.File) (*jlm.Source, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := localAxes(cfg); err != nil {
+		return nil, err
+	}
 	s := &jlm.Source{Config: cfg}
 
 	voc, err := hfVocabOf(dir, cfg.NVocab)
