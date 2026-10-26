@@ -2,6 +2,7 @@ package jit
 
 import (
 	"fmt"
+	"math/bits"
 
 	"github.com/jitllm/jitllm/jit/ir"
 	"github.com/jitllm/jitllm/jit/x86"
@@ -731,6 +732,51 @@ func (e *x86Lowerer) shiftCL(op Op, dst, x, y x86.Reg) {
 	a.MOVQ(dst, reloadReg)
 }
 
+// divConst is dst = src / c, or src % c, for a 32-bit unsigned src and a
+// constant c > 1, by a multiply: a power of two a shift or a mask, any other
+// c Granlund and Montgomery's round-up multiplier m = floor(2^32 (2^l - c)/c)
+// + 1, l = ceil(log2 c), whose 33rd bit is the add after the high product:
+// t = (src m) >> 32, q = (t + ((src - t) >> 1)) >> (l - 1). The product of
+// two 32-bit values fits the 64-bit multiply. The reload register holds t,
+// free between one access's address and the next.
+func (e *x86Lowerer) divConst(op Op, dst, src x86.Reg, c uint32) {
+	a := e.a
+	if c&(c-1) == 0 {
+		if dst != src {
+			a.MOVQ(dst, src)
+		}
+		if op == OpDiv {
+			a.SHRimm(dst, byte(bits.TrailingZeros32(c)))
+		} else {
+			a.ANDimm32(dst, int32(c-1))
+		}
+		return
+	}
+	if op == OpRem && dst == src || dst == reloadReg || src == reloadReg {
+		e.fail("no general-register form of %s by %d here: the dividend's, the result's and the reload register are not three", op, c)
+		return
+	}
+	l := bits.Len32(c - 1)
+	m := uint32((uint64(1)<<32)*(uint64(1)<<l-uint64(c))/uint64(c) + 1)
+	t := reloadReg
+	a.MOVimm(t, int64(m))
+	a.IMUL(t, src)
+	a.SHRimm(t, 32)
+	if dst != src {
+		a.MOVQ(dst, src)
+	}
+	a.SUBQ(dst, t)
+	a.SHRimm(dst, 1)
+	a.ADDQ(dst, t)
+	a.SHRimm(dst, byte(l-1))
+	if op == OpRem {
+		a.IMULimm(t, dst, int32(c))
+		a.NEGQ(t)
+		a.ADDQ(t, src)
+		a.MOVQ(dst, t)
+	}
+}
+
 // gpr reports whether node i is held in a general register: an integer a
 // vector register does not hold.
 func (e *x86Lowerer) gpr(i int) bool {
@@ -753,6 +799,10 @@ func (e *x86Lowerer) integer(i int) {
 	}
 	if c := k.Nodes[B]; c.Op == OpConst {
 		src, imm := e.reg(A), int32(c.Imm)
+		if (nd.Op == OpDiv || nd.Op == OpRem) && nd.Type == ir.U32 && c.Imm > 1 && c.Imm < 1<<31 {
+			e.divConst(nd.Op, dst, src, uint32(c.Imm))
+			return
+		}
 		if nd.Op == OpMul {
 			a.IMULimm(dst, src, imm)
 		} else {

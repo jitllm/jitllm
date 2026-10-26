@@ -132,8 +132,10 @@ func f32Words(x []float32) []uint32 { return unsafe.Slice((*uint32)(unsafe.Point
 // one.
 func TestComposedCPUAttend(t *testing.T) {
 	// The served models' attention shapes: stories15M's, Llama-3.2-1B's and
-	// Qwen3-0.6B's, and a pairing of two query heads to a kv head.
-	for _, sh := range []struct{ heads, kvh, dim int }{{6, 6, 48}, {32, 8, 64}, {16, 8, 128}, {8, 2, 64}} {
+	// Qwen3-0.6B's, a pairing of two query heads to a kv head, and groups of
+	// three and six (SmolLM2-360M's, Qwen2.5-1.5B's), a division by a
+	// constant no shift makes.
+	for _, sh := range []struct{ heads, kvh, dim int }{{6, 6, 48}, {32, 8, 64}, {16, 8, 128}, {8, 2, 64}, {15, 5, 64}, {12, 2, 128}} {
 		t.Run(fmt.Sprintf("%dq%dkv%dd", sh.heads, sh.kvh, sh.dim), func(t *testing.T) {
 			composedCPUAttend(t, sh.heads, sh.kvh, sh.dim)
 		})
