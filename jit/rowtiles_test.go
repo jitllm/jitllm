@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/rand"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/jitllm/jitllm/backend"
@@ -41,8 +42,8 @@ func ffnBlock(embd, ffn int) *graph.Graph {
 // of CUDA's statement and one of Vulkan's: from 128 rows on the largest
 // kernel's op count stays within 1% (an address constant's form, a tail's
 // guard), from two rows on every projection is tiled, and no kernel passes
-// 1,000 ops. At one row nothing is tiled. With the pass off the float form's up
-// projection, unrolled into its SiLU, passes 1,000 ops: the gate sees it.
+// 1,000 ops. At one row nothing is tiled. With the pass off the projections
+// run a row a thread, at eight times the workgroups or more: the gate sees it.
 func TestRowTilesHoldTheOps(t *testing.T) {
 	cuda := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true}
 	formats := func(typ jlm.Type) map[jlm.Role]jlm.Type {
@@ -89,23 +90,31 @@ func TestRowTilesHoldTheOps(t *testing.T) {
 			}
 		}
 	}
-	reg := jit.Default().WithoutInt8(jit.DeviceGPU)
-	p := reg.Profiles[jit.DeviceGPU]
-	p.Off = map[string]bool{"rowtiles": true}
-	reg.Profiles[jit.DeviceGPU] = p
-	_, codes, err := reg.Form(jit.Request{Graph: ffnBlock(2048, 8192), Formats: formats(jlm.TypeQ4S),
-		Step: jit.Step{Rows: 32, Page: 64, Keys: 1, ActWindow: 32}, Device: cuda})
-	if err != nil {
-		t.Fatal(err)
+	groups := func(off bool) int {
+		reg := jit.Default().WithoutInt8(jit.DeviceGPU)
+		if off {
+			p := reg.Profiles[jit.DeviceGPU]
+			p.Off = map[string]bool{"rowtiles": true}
+			reg.Profiles[jit.DeviceGPU] = p
+		}
+		_, codes, err := reg.Form(jit.Request{Graph: ffnBlock(2048, 8192), Formats: formats(jlm.TypeQ4S),
+			Step: jit.Step{Rows: 32, Page: 64, Keys: 1, ActWindow: 32}, Device: cuda})
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, c := range codes {
+			if strings.HasPrefix(c.Name, "reduce") {
+				n += c.Groups
+			}
+		}
+		return n
 	}
-	largest := 0
-	for _, c := range codes {
-		largest = max(largest, len(c.GPU.Ops))
+	on, off := groups(false), groups(true)
+	if off < 8*on {
+		t.Fatalf("without the pass the float form reductions launch %d workgroups at 32 rows, with it %d: the gate cannot see it", off, on)
 	}
-	if largest <= 1000 {
-		t.Fatalf("without the pass the largest kernel at 32 rows is %d ops: the gate cannot see it", largest)
-	}
-	t.Logf("without the pass the float form's largest kernel at 32 rows is %d ops", largest)
+	t.Logf("the float form's reductions at 32 rows launch %d workgroups with the pass and %d without", on, off)
 	// The device's registers size the tile: a V100's 32 a thread hold the
 	// sixteen rows a device stating none takes, and four hold two.
 	sized := map[int]int{}

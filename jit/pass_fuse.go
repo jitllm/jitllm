@@ -127,7 +127,8 @@ func (f Fuse) allows(p, c *Kernel, atStores bool) bool {
 // joinsUnrolled finds a reduction's output c alone reads, each read at
 // leading coordinates of c's own -- or, where c is a reduction too, at its
 // coordinates and its own loop's iteration, a short reduction (Trip at most
-// unrolledTrips) summed once a trip of c's.
+// unrolledTrips) summed once a trip of c's. Its trips written out stay
+// within unrolledNodes.
 func (f Fuse) joinsUnrolled(p, c *Kernel, ks []*Kernel) (Operand, bool) {
 	allowed := false
 	for _, pr := range f.Pairs {
@@ -136,7 +137,8 @@ func (f Fuse) joinsUnrolled(p, c *Kernel, ks []*Kernel) (Operand, bool) {
 	fd, ok := p.fold()
 	if !allowed || !ok || p.Work || c.Work || len(c.Loops) > 0 && c.Kind != PrimReduce || len(p.Stores) != 1 ||
 		!p.storesOwn(p.Stores[0]) || p.Stores[0].Val != fd || p.Loops[0].Count > 0 ||
-		c.Kind == PrimReduce && (len(p.Loops) != 1 || p.Loops[0].Trip > unrolledTrips) {
+		c.Kind == PrimReduce && (len(p.Loops) != 1 || p.Loops[0].Trip > unrolledTrips) ||
+		p.Loops[0].Trip*len(p.Nodes) > unrolledNodes {
 		return Operand{}, false
 	}
 	o := p.Bufs[p.Stores[0].Buf].Operand
@@ -165,6 +167,11 @@ func (f Fuse) joinsUnrolled(p, c *Kernel, ks []*Kernel) (Operand, bool) {
 // unrolledTrips is the longest reduction joinsUnrolled sums inside another's
 // loop, every trip of it written out.
 const unrolledTrips = 32
+
+// unrolledNodes bounds a reduction's trips times its nodes, what
+// joinsUnrolled writes out: a head's 2304-column dot written out into its
+// softcap was a 55341-op kernel a V100's Vulkan driver would not build.
+const unrolledNodes = 4096
 
 // unrolled is c with each read of p's output v p's sum at the read's
 // coordinates, its terms unrolled from its start.

@@ -8867,3 +8867,20 @@ row where the composer's reads two.
   TestFrontStatesTheModelAsOps' CPU arm forms stories260K and Qwen3-MOE.
   Open: a batch's head serves a row a call; specrows, altup and the label
   pick keep main's head.
+- **A long reduction is not written out into its map.** The unrolled
+  fusion (Fuse's Reduce-to-Map pair) bounded a reduction's trips only where
+  its reader was a reduction too, so a map reading a projection took the
+  whole row's dot written out: gemma-2-2b's one-row head and its softcap's
+  first scale formed one kernel of 8178 IR ops with the int8 form and 55341
+  ops (1.67 MB of SPIR-V) in the float reference. A V100's Vulkan driver
+  spent 50 minutes on the latter and refused it (VkResult -13); the
+  laptop's RTX 3050 Ti built its 13.9k-op variants in about 5 s each. The
+  fusion now writes out at most 4096 nodes (trips times the reduction's
+  nodes): the head forms a 133-op reduction with the int8 form and 94 ops
+  without, its scale a map of its own (one more launch a token on a
+  softcapped head), and a split matvec's 64-part combine still fuses into
+  its map (block 0 of Llama-3.2-1B, Qwen3-0.6B, gemma-2-2b, SmolLM2-360M
+  and granite-3.3-2b forms byte-identical kernels before and after).
+  Gate: TestALongReductionIsNotWrittenOutInItsMap (a 2304-column, 256000-row
+  projection and a map, Q6, Q8 and f32, with and without the int8 form),
+  which fails at 8178, 2264, 55341 and 34593 ops with the old bound.
