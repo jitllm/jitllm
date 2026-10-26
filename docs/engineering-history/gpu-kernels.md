@@ -8570,3 +8570,21 @@ row where the composer's reads two.
   OpRank do not lower on the CPU device, top-1 included ("an index of x
   held in a vector register"), so the sampler's candidates form there on
   no request.
+- A container that states no activations is refused where the composer
+  serves. Written before the converter stated them, it opened and ran every
+  block on the tier's own kernels with nothing said: the front end refuses
+  its blocks (UncoveredAct) and the tier serves them itself. A benchmark's
+  container of that age read as a 5.5% decode loss at every commit from
+  120d0de8 on (V100 card 7, CUDA, Llama-3.2-1B Q4_K_M, tg128 after a
+  512-token prompt, tuning off, 20 rounds interleaved: 0.9445 against
+  cb858b79, the A/A 1.003); nvprof showed the tier's matvecs where
+  cb858b79 ran the composer's. Open now returns an UpgradeRequiredError
+  naming `jitllm upgrade` where the build composes by default
+  (jit.ComposedByDefault, which the tier's default reads) or the CPU device
+  composes, when the container states no activation and the front end
+  refuses a block for wanting one (TestOpenRefusesAContainerThatStatesNoActivations,
+  which fails with the check off). The same binary on that container and
+  on its upgraded copy is a composed-against-main row: the composer decodes
+  at 1.057 of main's kernels (201.6 against 190.3 tok/s, IQR/median 0.018,
+  A/A 1.000, n=20), about 162 GB/s at 803 MB a token, 18% of the card's
+  900 GB/s specification (no wall was measured in the pass).
