@@ -58,7 +58,7 @@ func formBlocks(t *testing.T, m *Model, blocks []int) {
 	t.Helper()
 	f := m.Composing()
 	step := jit.Step{Rows: 1, Page: 64, Keys: 16, ActWindow: 32}
-	for _, d := range []jit.Device{{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, {Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}} {
+	for _, d := range []jit.Device{{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, composedCPUDevice(6)} {
 		reg := jit.Default()
 		for _, li := range blocks {
 			run := []jit.PartPlan{{Part: jit.Part{Kind: jit.PartBlock, Block: li, Graph: f.BlockGraph(li)}, Device: d}}
