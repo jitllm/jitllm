@@ -112,16 +112,22 @@ type exprSplit struct {
 	terms map[exprAt]bool
 	whole map[int][]exprSize
 	// unfused is the parts formed with their kernels joined to none,
-	// unjammed those formed with each row a call of its own (RowJam).
-	unfused, unjammed map[int]bool
+	// unjammed those formed with each row a call of its own (RowJam),
+	// unpaired those formed with each head a call of its own (HeadPairs),
+	// unwide those formed with no loop's rows across lanes (Jam),
+	// uncursored those formed indexing their buffers (Cursors).
+	unfused, unjammed, unpaired, unwide, uncursored map[int]bool
 }
 
 func newExprSplit() *exprSplit {
-	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]bool{}}
+	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]bool{}, unpaired: map[int]bool{}, unwide: map[int]bool{}, uncursored: map[int]bool{}}
 }
 
 // splitRefused forms a part whose refused kernel ran several rows a call
-// with a row a call; else a map a term the largest expression formed whole
+// with a row a call, one whose refused kernel ran two heads a call with a
+// head a call, and one whose refused kernel jammed a loop's rows across
+// lanes with none; else one whose refused kernel walked its addresses
+// indexing them; else a map a term the largest expression formed whole
 // in each part of the kernels refused, or a part with none left unfused,
 // reporting whether it changed a part.
 func (sp *exprSplit) splitRefused(err error) bool {
@@ -136,6 +142,24 @@ func (sp *exprSplit) splitRefused(err error) bool {
 	for _, of := range pe.Jammed {
 		if !sp.unjammed[of] {
 			sp.unjammed[of], more = true, true
+		}
+	}
+	for _, of := range pe.Paired {
+		if !sp.unpaired[of] {
+			sp.unpaired[of], more = true, true
+		}
+	}
+	for _, of := range pe.Wide {
+		if !sp.unwide[of] {
+			sp.unwide[of], more = true, true
+		}
+	}
+	if more {
+		return true
+	}
+	for _, of := range pe.Cursored {
+		if !sp.uncursored[of] {
+			sp.uncursored[of], more = true, true
 		}
 	}
 	if more {

@@ -126,9 +126,13 @@ func (e *x86Lowerer) addr(b, ix, ptr int) x86.Mem {
 		switch {
 		case k.Bufs[b].Word > 0:
 			e.fail("an argument word of %s at a computed index", k.Bufs[b].Operand.Name)
+		case (e.words[ix] || nd.Type == ir.F32) && e.lanes(e.home[ix]) == 0:
+			// One index in a vector register's first lane: the address
+			// made from it in the reload register.
+			return e.laneAddr(b, ix, ptr)
 		case e.words[ix] || nd.Type == ir.F32:
-			// The binder holds this index in a vector register: an address
-			// needs it in a general one.
+			// The binder holds each lane's index in a vector register: an
+			// address needs it in a general one.
 			e.fail("an index of %s held in a vector register", k.Bufs[b].Operand.Name)
 		}
 		return x86.Idx(e.ptrReg(b, ptr), e.reg(ix), uint8(ElemBytes(k.Bufs[b])), 0)
@@ -138,6 +142,29 @@ func (e *x86Lowerer) addr(b, ix, ptr int) x86.Mem {
 		return x86.At(x86.RDI, int32(w-1)+int32(nd.Imm)*int32(ElemBytes(k.Bufs[b])))
 	}
 	return x86.At(e.ptrReg(b, ptr), int32(nd.Imm)*int32(ElemBytes(k.Bufs[b])))
+}
+
+// laneAddr is the memory operand of buffer b through pointer ptr at the
+// index a vector register's first lane holds: the index scaled to bytes in
+// the reload register, the pointer added from its register or its word.
+func (e *x86Lowerer) laneAddr(b, ix, ptr int) x86.Mem {
+	k, a := e.k, e.a
+	r := reloadReg
+	a.VMOVDFromX(r, e.reg(ix))
+	a.SHLimm(r, byte(bits.TrailingZeros(uint(ElemBytes(k.Bufs[b])))))
+	switch {
+	case ptr > 0 && k.Ptrs[ptr-1].Reg == 0 && k.Ptrs[ptr-1].Spill > 0:
+		a.ADDQmem(r, spillSlot(k.Ptrs[ptr-1].Spill))
+	case ptr > 0 && k.Ptrs[ptr-1].Reg > 0:
+		a.ADDQ(r, x86.Reg(k.Ptrs[ptr-1].Reg-1))
+	case ptr == 0 && k.Bufs[b].Reg == 0 && k.Bufs[b].Reload && k.Bufs[b].Base > 0:
+		a.ADDQmem(r, x86.At(x86.RDI, int32(k.Nodes[k.Bufs[b].Base-1].Imm)))
+	case ptr == 0 && k.Bufs[b].Reg > 0:
+		a.ADDQ(r, x86.Reg(k.Bufs[b].Reg-1))
+	default:
+		e.fail("%s has no register", k.Bufs[b].Operand.Name)
+	}
+	return x86.At(r, 0)
 }
 
 // ptrReg is the register of buffer b's pointer ptr.
@@ -382,6 +409,10 @@ func (e *x86Lowerer) node(i int) {
 	case OpGtW:
 		a.VPCMPGTWx(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 	case OpLess:
+		if k.Nodes[nd.A].Type != ir.F32 && !e.words[i] && !k.needsVector(i) {
+			e.lessGPR(i)
+			return
+		}
 		if k.Nodes[nd.A].Type != ir.F32 {
 			a.VPCMPGTD(e.reg(i), e.reg(nd.B), e.reg(nd.A))
 			return
@@ -396,6 +427,10 @@ func (e *x86Lowerer) node(i int) {
 		a.VPAND(e.reg(i), e.reg(nd.A), e.reg(nd.B))
 		a.VPOR(e.reg(i), e.reg(i), t)
 	case OpAndNot:
+		if e.gpr(i) {
+			e.andNotGPR(i)
+			return
+		}
 		if e.half(i) {
 			a.VPANDNx(e.reg(i), e.reg(nd.B), e.reg(nd.A))
 			return
@@ -567,6 +602,11 @@ func (e *x86Lowerer) node(i int) {
 	case OpBroadcast:
 		if x := k.Nodes[nd.A]; x.Mem {
 			a.VBROADCASTSS(e.reg(i), e.addr(x.Buf, x.A, x.Ptr))
+			return
+		}
+		if e.gpr(nd.A) {
+			a.VMOVDToX(e.reg(i), e.reg(nd.A))
+			a.VPBROADCASTDReg(e.reg(i), e.reg(i))
 			return
 		}
 		a.VBROADCASTSSReg(e.reg(i), e.reg(nd.A))
@@ -814,6 +854,68 @@ func (e *x86Lowerer) gpr(i int) bool {
 	return nd.Type != ir.F32 && nd.Type != ir.Pred && !nd.Mem && !e.words[i] && !e.k.needsVector(i)
 }
 
+// lessGPR is an integer compare whose mask a general register holds: all
+// ones where a is below b, signed, as the vector compare reads its words,
+// else zero, in the low 32 bits.
+func (e *x86Lowerer) lessGPR(i int) {
+	k, a := e.k, e.a
+	nd := k.Nodes[i]
+	skip := a.Label()
+	switch {
+	case k.Nodes[nd.B].Op == OpConst:
+		a.CMPLimm(e.reg(nd.A), int32(k.Nodes[nd.B].Imm))
+		a.MOVLimm(e.reg(i), 0)
+		a.JGE(skip)
+	case k.Nodes[nd.A].Op == OpConst:
+		a.CMPLimm(e.reg(nd.B), int32(k.Nodes[nd.A].Imm))
+		a.MOVLimm(e.reg(i), 0)
+		a.JLE(skip)
+	default:
+		a.CMPL(e.reg(nd.A), e.reg(nd.B))
+		a.MOVLimm(e.reg(i), 0)
+		a.JGE(skip)
+	}
+	a.MOVLimm(e.reg(i), 0xFFFFFFFF)
+	a.Bind(skip)
+}
+
+// andNotGPR is a &^ b in general registers, cut back to 32 bits.
+func (e *x86Lowerer) andNotGPR(i int) {
+	k, a := e.k, e.a
+	nd := k.Nodes[i]
+	dst := e.reg(i)
+	switch {
+	case k.Nodes[nd.B].Op == OpConst:
+		if x := e.reg(nd.A); x != dst {
+			a.MOVQ(dst, x)
+		}
+		a.ANDimm32(dst, ^int32(k.Nodes[nd.B].Imm))
+	case k.Nodes[nd.A].Op == OpConst:
+		if y := e.reg(nd.B); y != dst {
+			a.MOVQ(dst, y)
+		}
+		a.NOTQ(dst)
+		a.ANDimm32(dst, int32(k.Nodes[nd.A].Imm))
+	default:
+		x, y := e.reg(nd.A), e.reg(nd.B)
+		switch {
+		case x == y:
+			a.XORQ(dst, dst)
+		case dst != x:
+			if dst != y {
+				a.MOVQ(dst, y)
+			}
+			a.NOTQ(dst)
+			a.ANDQ(dst, x)
+		default:
+			a.MOVQ(reloadReg, y)
+			a.NOTQ(reloadReg)
+			a.ANDQ(dst, reloadReg)
+		}
+	}
+	a.MOVL(dst, dst)
+}
+
 // integer is an integer node in general registers: by a constant through
 // its immediate form, else register to register, a shift by a register
 // through SHRX or SHLX. A 32-bit result that can reach past 32 bits is cut
@@ -1014,7 +1116,10 @@ func (e *x86Lowerer) enter(c int) {
 		} else if src := e.reg(l.Count - 1); src != ctr && !e.preset[c] {
 			a.MOVQ(ctr, src)
 		}
-		if t := c + 1; l.Lanes > 0 && t < len(k.Loops) && k.Loops[t].Of == c+1 && k.passes() && k.Loops[t].Count > 0 {
+		// The tail's count is set here only where the sequence makes it
+		// before this loop: one made after it reads the register as it
+		// stands then.
+		if t := c + 1; l.Lanes > 0 && t < len(k.Loops) && k.Loops[t].Of == c+1 && k.passes() && k.Loops[t].Count > 0 && e.madeBefore(k.Loops[t].Count-1, c) {
 			if tc, src := e.counter(t), e.reg(k.Loops[t].Count-1); tc != ctr && tc != src && k.Nodes[k.Loops[t].Count-1].Op != OpConst {
 				a.MOVQ(tc, src)
 				e.preset[t] = true
@@ -1031,6 +1136,20 @@ func (e *x86Lowerer) enter(c int) {
 	}
 	e.top[c] = a.Label()
 	a.Bind(e.top[c])
+}
+
+// madeBefore reports whether node i is made in the sequence before loop c
+// begins.
+func (e *x86Lowerer) madeBefore(i, c int) bool {
+	for _, en := range e.k.Seq {
+		switch {
+		case en.Kind == EntryNode && en.I == i:
+			return true
+		case en.Kind == EntryLoop && en.I == c:
+			return false
+		}
+	}
+	return false
 }
 
 func (e *x86Lowerer) leave(c int) {

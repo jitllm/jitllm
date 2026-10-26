@@ -15,7 +15,7 @@ func (HeadPairs) Name() string { return "pairs" }
 func (p HeadPairs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		h := k.Heads
-		if p.N < 2 || h == nil || len(k.Space) < 2 || k.Space[1] != h.Query || h.Key <= 0 || (h.Query/h.Key)%p.N != 0 || !k.readsHistory() {
+		if p.N < 2 || k.Unpaired || h == nil || len(k.Space) < 2 || k.Space[1] != h.Query || h.Key <= 0 || (h.Query/h.Key)%p.N != 0 || !k.readsHistory() {
 			return nil, false, nil
 		}
 		m := k.clone()
@@ -118,4 +118,14 @@ func (k *Kernel) ownRows() {
 			s.Buf = own(s.Buf, s.Copy)
 		}
 	}
+}
+
+// paired reports whether k runs a pair of heads a call (HeadPairs).
+func (k *Kernel) paired() bool {
+	for _, nd := range k.Nodes {
+		if nd.Copy > 0 {
+			return true
+		}
+	}
+	return false
 }

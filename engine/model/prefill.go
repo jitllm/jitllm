@@ -1023,6 +1023,12 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 			return nil, errDevice{s.gpuLayers, s.devWhy()}
 		}
 	}
+	if len(s.HostPick) == 0 && s.cpuHead(s.x, s.logits, nil) == jit.DeclineServes {
+		if err := s.kvCheck(); err != nil {
+			return nil, err
+		}
+		return s.logits, nil
+	}
 	s.norm(s.h, s.x, s.outNorm, m.outNormB)
 	s.jit.NewInput()
 	if s.pickOnHost() {

@@ -17,12 +17,7 @@ func (Cursors) Name() string { return "cursors" }
 
 func (p Cursors) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
-		// A kernel called over (row, head) coordinates (RowCalls) keeps its
-		// indexing: its copies of an address read past a row's range on a
-		// row whose every score is far below zero (TestComposedCPUAttendRows'
-		// negative arm), which the indexed form does not. A kernel over
-		// (row, tile) calls (Workers) takes its cursors.
-		if k.Args == nil || k.Calls >= 2 && !k.TileMajor {
+		if k.Args == nil || k.Uncursored {
 			return nil, false, nil
 		}
 		m := k.clone()
@@ -344,4 +339,14 @@ func scaleLin(a lin, f int64) lin {
 	out := lin{}
 	out.add(a, f)
 	return out
+}
+
+// cursored reports whether a loop of k walks an address (Cursors).
+func (k *Kernel) cursored() bool {
+	for _, l := range k.Loops {
+		if len(l.Cursors) > 0 {
+			return true
+		}
+	}
+	return false
 }

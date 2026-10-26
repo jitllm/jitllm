@@ -48,6 +48,11 @@ type Kernel struct {
 	// Unjammed a kernel of a part whose jammed form the registers refused.
 	Jam      int
 	Unjammed bool
+	// Unpaired is a kernel of a part whose form of a pair of heads a call
+	// (HeadPairs) the registers refused, Unwide one whose form jamming a
+	// loop's rows across lanes (Jam) they refused, Uncursored one whose
+	// form walking its buffers' addresses (Cursors) they refused.
+	Unpaired, Unwide, Uncursored bool
 	// Rows is 1 + the node of how many of the leading axis's rows are live;
 	// Clamp, where a pass set it, 1 + the node of the elements a launch
 	// holds its threads to.

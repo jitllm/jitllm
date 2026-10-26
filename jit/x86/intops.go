@@ -90,6 +90,13 @@ func (a *Buf) MOVSXD(dst, src Reg) {
 	a.modrmReg(dst, src)
 }
 
+// NOTQ is dst = ^dst on 64 bits.
+func (a *Buf) NOTQ(dst Reg) {
+	a.rex(true, Y0, noIndex, dst)
+	a.u8(0xF7)
+	a.modrmReg(Reg(2), dst)
+}
+
 func (a *Buf) NEGQ(dst Reg) {
 	a.rex(true, Y0, noIndex, dst)
 	a.u8(0xF7)
@@ -183,6 +190,13 @@ func (a *Buf) VMOVDToX(dst, gp Reg) {
 	a.vex(dst, Y0, gp, noIndex, false, p66, m0F, 0)
 	a.u8(0x6E)
 	a.modrmReg(dst, gp)
+}
+
+// VMOVDFromX is gp = src's low dword, zero-extended.
+func (a *Buf) VMOVDFromX(gp, src Reg) {
+	a.vex(src, Y0, gp, noIndex, false, p66, m0F, 0)
+	a.u8(0x7E)
+	a.modrmReg(src, gp)
 }
 
 // VCVTSI2SS is dst = src1 with its low float gp's signed 64-bit value.

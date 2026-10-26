@@ -132,18 +132,18 @@ func TestComposedCPUTopK(t *testing.T) {
 	}
 }
 
-// TestComposedCPUSampleTopKRanked forms the sampler's candidates
-// (graph.SampleTopK) on the CPU for every case (SampleCases) whose
-// vocabulary the ranked form takes (selectMin and below), and holds each to
+// TestComposedCPUSampleTopK forms the sampler's candidates
+// (graph.SampleTopK) on the CPU for every case (SampleCases), the ranked
+// form at selectMin and below and the selection form past it, and holds each to
 // the host sampler's candidates bit for bit in value and id, guard words
 // past every output, ties among the kept on some. The violation: the form
 // with the penalty on the id after each history entry's (SampleNeighbour)
 // parts on every case with a history.
-func TestComposedCPUSampleTopKRanked(t *testing.T) {
-	ran, ties, want := 0, 0, 0
+func TestComposedCPUSampleTopK(t *testing.T) {
+	ran, ties, want, selected := 0, 0, 0, 0
 	for _, c := range SampleCases() {
 		if c.V > selectMin {
-			continue
+			selected++
 		}
 		want++
 		s := graph.SampleTopK{NVocab: c.V, K: c.K, Hist: c.B}
@@ -180,7 +180,10 @@ func TestComposedCPUSampleTopKRanked(t *testing.T) {
 	if ties == 0 {
 		t.Fatal("no case keeps two places of one value: the ties to the lower id are not held")
 	}
-	t.Logf("%d cases held bit for bit, %d with ties among the kept", ran, ties)
+	if selected == 0 || selected == ran {
+		t.Fatalf("%d of %d cases past selectMin: both forms are not held", selected, ran)
+	}
+	t.Logf("%d cases held bit for bit (%d through the selection form), %d with ties among the kept", ran, selected, ties)
 }
 
 // TestComposedCPUSampleGreedy forms greedy sampling (graph.Sample, the

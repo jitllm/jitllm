@@ -706,7 +706,10 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 	// Unlike Prefill, every decoding row's logits are wanted: each one is a
 	// live sequence that has to be sampled. So lm_head runs for those rows,
 	// which lead -- the widest matmul of the token, and the shape it likes.
-	if !headOnDev && nlogit > 0 {
+	// The CPU's composed head runs each wanted row and applies every stage
+	// of the head's graph.
+	headed := !headOnDev && nlogit > 0 && s.cpuHeads(s.bx, s.blogits, nlogit)
+	if !headOnDev && nlogit > 0 && !headed {
 		t0 = s.tick()
 		s.batchNormB(s.bh, s.bx, s.outNorm, m.outNormB, c.NEmbd, nlogit)
 		s.tock(opRMSNorm, t0)
@@ -716,9 +719,10 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 	}
 	// The wanted rows' logits, which is one contiguous run of nlogit*NVocab:
 	// capped already where the device ran the head.
-	if headOnDev {
+	switch {
+	case headOnDev:
 		s.finishDevLogits(s.blogits[:nlogit*c.NVocab])
-	} else {
+	case !headed:
 		s.finishLogits(s.blogits[:nlogit*c.NVocab])
 	}
 	return s.blogits[:nlogit*c.NVocab], nil

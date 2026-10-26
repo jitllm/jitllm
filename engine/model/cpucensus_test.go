@@ -90,13 +90,46 @@ func TestCPUComposesOnce(t *testing.T) {
 					t.Fatalf("a prompt of %d: %v", n, err)
 				}
 				off += n
-				for range decode {
-					if l, err = s.Forward(argmaxID(l)); err != nil {
-						t.Fatal(err)
-					}
-					off++
+				// The first token greedy, the CPU's sampler's against the
+				// definition; the second a top-k draw from its candidates.
+				tok := argmaxID(l)
+				got, err := s.ForwardGreedy(tok)
+				if err != nil {
+					t.Fatal(err)
 				}
+				if want := argmaxID(s.logits); got != want {
+					t.Fatalf("a prompt of %d: the CPU's greedy token %d, the logits' largest %d", n, got, want)
+				}
+				smp := &Sampler{Temp: 0.8, TopK: 40, TopP: 1, RepeatPen: 1.1, Seed: int64(n)}
+				smp.Observe(tok)
+				if _, err := s.ForwardSample(got, smp); err != nil {
+					t.Fatal(err)
+				}
+				off += decode
 				served = held("a prompt of "+strconv.Itoa(n)+" tokens and its decode", s, served, (1+decode)*nl)
+			}
+			// Every prompt's head and both decode steps' on the CPU's
+			// composed head, both decode tokens from its samplers.
+			for _, c := range []struct {
+				what  string
+				steps func() (int, [jit.NumDeclines]int)
+				want  int
+			}{
+				{"head", s.CPUHeadSteps, len(tc.lengths) * (1 + decode)},
+				{"sampler", s.CPUSampleSteps, len(tc.lengths) * decode},
+			} {
+				got, declined := c.steps()
+				for why, n := range declined {
+					if n > 0 {
+						t.Errorf("%d %s step(s) declined to main's kernels: %s (%v)", n, c.what, jit.DeclineName(why), s.CPUFormErr())
+					}
+				}
+				if got != c.want {
+					t.Errorf("%d %s steps served on the CPU, want %d", got, c.what, c.want)
+				}
+			}
+			if t.Failed() {
+				t.FailNow()
 			}
 
 			s2 := m.NewState(512)
@@ -135,6 +168,16 @@ func TestCPUComposesOnce(t *testing.T) {
 				}
 			}
 			held("a batch of four sequences", sc.st, 0, steps*nl)
+			// Every decoding row's head in the batch on the CPU's head.
+			bh, bd := sc.st.CPUHeadSteps()
+			for why, n := range bd {
+				if n > 0 {
+					t.Fatalf("the batch: %d head step(s) declined to main's kernels: %s", n, jit.DeclineName(why))
+				}
+			}
+			if bh < steps {
+				t.Fatalf("the batch: %d head rows served on the CPU over %d steps", bh, steps)
+			}
 
 			// The lower half of a session's CPU blocks to a card and back,
 			// mid-sequence: those composed for the CPU again at their return,

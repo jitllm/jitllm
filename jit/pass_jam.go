@@ -34,6 +34,9 @@ func (Jam) Name() string { return "jam" }
 
 func (p Jam) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
+		if k.Unwide {
+			return nil, false, nil
+		}
 		for o, l := range k.Loops {
 			in := k.innerLoops(o)
 			if l.Lanes > 0 || l.Wide > 0 || l.Count == 0 && l.Trip%p.Lanes != 0 || len(in) != 1 || len(k.innerLoops(in[0])) > 0 {
@@ -360,4 +363,14 @@ func (k *Kernel) jam(o, i int, p Jam, runtime bool, n int) *Kernel {
 	m.Loops[i].Wide, m.Loops[i].Walk = L, p.Walk
 	m.compact()
 	return m
+}
+
+// wide reports whether a loop of k runs rows across lanes (Jam).
+func (k *Kernel) wide() bool {
+	for _, l := range k.Loops {
+		if l.Wide > 0 {
+			return true
+		}
+	}
+	return false
 }

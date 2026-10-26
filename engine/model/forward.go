@@ -3704,6 +3704,9 @@ func (s *State) ForwardGreedy(token int32) (int32, error) {
 	if onDev && h.Token >= 0 {
 		return h.Token, nil
 	}
+	if tok, ok := s.cpuGreedy(logits); ok {
+		return tok, nil
+	}
 	return Greedy(logits), nil
 }
 
@@ -3756,10 +3759,17 @@ func (s *State) ForwardSample(token int32, smp *Sampler) (int32, error) {
 		return 0, err
 	}
 	var tok int32
-	if onDev && h.Sampled {
+	switch {
+	case onDev && h.Sampled:
 		s.SampledOnDevice++
 		tok = smp.SampleFrom(h.SampleVals, h.SampleIDs)
-	} else {
+	case h == nil && smp.TopK > 0 && smp.TopK <= MaxTopK && smp.Bounded(s.c.NVocab):
+		if vals, ids, ok := s.cpuCandidates(logits, smp, smp.TopK); ok {
+			tok = smp.SampleFrom(vals, ids)
+		} else {
+			tok = smp.Sample(logits)
+		}
+	default:
 		tok = smp.Sample(logits)
 	}
 	if choice != nil {
@@ -4509,7 +4519,16 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 			return nil, errDevice{s.gpuLayers, s.devWhy()}
 		}
 	}
+	// The CPU's composed head applies every stage of the head's graph.
+	headed := false
 	if !done {
+		var hidden []float32
+		if s.rows != nil && !c.Q4E() {
+			hidden = s.rows.hidden
+		}
+		headed = s.cpuHead(s.x, s.logits, hidden) == jit.DeclineServes
+	}
+	if !done && !headed {
 		s.norm(s.h, s.x, s.outNorm, m.outNormB)
 		s.jit.NewInput()
 		m.trace(-1, "out_norm", s.h)
@@ -4523,9 +4542,10 @@ func (s *State) forward(fill func() error) ([]float32, error) {
 	s.unfuse()
 	// After both arms: when the tier ran the head it also applied the final
 	// softcap, so that arm takes only the scale.
-	if done {
+	switch {
+	case done:
 		s.finishDevLogits(s.logits)
-	} else {
+	case !headed:
 		s.finishLogits(s.logits)
 	}
 	// Through advance, not s.pos++: Prefill reads bpos, so a Prefill after a

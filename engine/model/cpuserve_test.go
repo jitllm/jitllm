@@ -24,9 +24,10 @@ var cpuServedModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "
 // composed once), and the composed logits held to main's within main's own
 // spread, by the band the card arms are held to (bandRatio, bandWorst): at
 // the median step no further from main than bandRatio times the control, at
-// the worst no further than bandWorst times the control's worst. Each
-// violation -- the first history page pointed at another slot, the first key
-// row moved by one -- must leave the band.
+// the worst no further than bandWorst times the control's worst. Every
+// step's head is the CPU's composed head. Each violation -- the first
+// history page pointed at another slot, the first key row moved by one, the
+// head reading another row than the residual -- must leave the band.
 func TestComposedCPUBlocksServe(t *testing.T) {
 	const steps, page = 80, 32
 	for _, file := range cpuServedModels {
@@ -62,7 +63,7 @@ func TestComposedCPUBlocksServe(t *testing.T) {
 				t.Fatalf("the composed CPU blocks leave main's band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
 					med, bandRatio, worst, bandWorst, widest)
 			}
-			for _, f := range []cpuFault{cpuFaultPage, cpuFaultRow} {
+			for _, f := range []cpuFault{cpuFaultPage, cpuFaultRow, cpuFaultHead} {
 				bad := cpuLogits(t, m, toks, f, true)
 				bm, bw, _ := cpuBand(t, want, bad, ctl)
 				t.Logf("violation %d: median ratio %.3f, worst %.3g", f, bm, bw)
@@ -139,6 +140,16 @@ func cpuLogits(t *testing.T, m *Model, toks []int32, f cpuFault, composed bool) 
 			if n != 1 {
 				t.Fatalf("block %d was composed for the CPU %d times, where it was placed there once", li, n)
 			}
+		}
+		// Every step's head on the CPU's composed head.
+		heads, hdecl := s.CPUHeadSteps()
+		for i, n := range hdecl {
+			if n > 0 {
+				t.Errorf("%d head steps declined: %s (%v)", n, jit.DeclineName(i), s.CPUFormErr())
+			}
+		}
+		if heads != len(toks) {
+			t.Fatalf("%d head steps served, want %d", heads, len(toks))
 		}
 	} else if served != 0 {
 		t.Fatalf("main's arm served %d composed block steps", served)

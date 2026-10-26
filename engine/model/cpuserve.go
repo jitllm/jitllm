@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"unsafe"
 
@@ -55,6 +56,10 @@ const (
 	cpuArgRecState
 	cpuArgRecConv
 	cpuArgRecRows
+	// cpuArgIO is an input or output of a graph whose output is not its
+	// input (the head's, the sampler's): the bound buffer of that place,
+	// the inputs' then the outputs' (cpuBound.io).
+	cpuArgIO
 )
 
 // cpuArg is one call word: its byte field in cpu.Args and where its value
@@ -169,6 +174,7 @@ type cpuState struct {
 	// fault is a violation a gate sets: the bindings rewritten so a kernel
 	// reads the wrong history page or the wrong first row.
 	fault cpuFault
+	head  cpuHeadState
 }
 
 // cpuFault is a gate's violation of the composed CPU path's bindings.
@@ -190,6 +196,9 @@ const (
 	// cpuFaultChunk starts each prompt chunk after the first from a summary
 	// of zeros: the recurrence not carried across the chunk boundary.
 	cpuFaultChunk
+	// cpuFaultHead binds the head's input to the State's norm row in place
+	// of the residual.
+	cpuFaultHead
 )
 
 // cpuBlock is block li's forms on the CPU, its graph the one they were
@@ -234,7 +243,14 @@ type cpuBound struct {
 	// and recOf the State that holds them.
 	recLi int
 	recOf *State
+	// io is the buffers of a graph apart from its residual (cpuArgIO), its
+	// inputs' then its outputs'.
+	io [cpuIO]unsafe.Pointer
 }
+
+// cpuIO is the most inputs and outputs a graph apart from its residual
+// binds: the sampler's candidates read three and write two.
+const cpuIO = 6
 
 // composedCPUDevice is the CPU as the composer forms for it.
 func composedCPUDevice(workers int) jit.Device {
@@ -553,7 +569,7 @@ func (s *State) cpuWeights(f *cpuBlockForm, l *layer) jit.Decline {
 		for _, a := range f.codes[i].args {
 			switch a.src {
 			case cpuArgWeight:
-				w := cpuRoleWeight(l, a.role)
+				w := s.cpuRoleWeight(l, a.role)
 				if w == nil || w.packed == nil && len(w.data) == 0 {
 					return jit.DeclineNoWeight
 				}
@@ -561,7 +577,7 @@ func (s *State) cpuWeights(f *cpuBlockForm, l *layer) jit.Decline {
 					return jit.DeclineCutWeight
 				}
 			case cpuArgVector:
-				if len(cpuRoleVector(l, a.role)) == 0 {
+				if len(s.cpuRoleVector(l, a.role)) == 0 {
 					return jit.DeclineNoWeight
 				}
 			}
@@ -638,17 +654,19 @@ func (s *State) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 			continue
 		case cpuArgX:
 			p = unsafe.Pointer(&b.x[0])
+		case cpuArgIO:
+			p = b.io[ar.i]
 		case cpuArgOwn:
 			p = unsafe.Pointer(&b.own[ar.i][0])
 		case cpuArgWeight:
-			w := cpuRoleWeight(b.l, ar.role)
+			w := s.cpuRoleWeight(b.l, ar.role)
 			if w.packed == nil {
 				p = unsafe.Pointer(&w.data[0])
 			} else {
 				p = unsafe.Pointer(&[3][]byte{w.packed.QS, w.packed.D, w.packed.SC}[ar.region][0])
 			}
 		case cpuArgVector:
-			p = unsafe.Pointer(&cpuRoleVector(b.l, ar.role)[0])
+			p = unsafe.Pointer(&s.cpuRoleVector(b.l, ar.role)[0])
 		case cpuArgRope:
 			p = unsafe.Pointer(&b.cs[0])
 		case cpuArgKeys:
@@ -880,6 +898,11 @@ func (m *Model) formCPUBlock(s *State, li int, cb *cpuBlock, rows int) (*cpuBloc
 	req := jit.Request{Graph: &gr, Formats: formats,
 		Step:   jit.Step{Rows: rows, Page: page, Keys: max(pg.arenaSlots(), 1) * page, ActWindow: 32, Seqs: max(s.nseq, 1)},
 		Device: composedCPUDevice(workers)}
+	return m.cpuFormOf(req, &gr, rows, false)
+}
+
+// cpuFormOf is req's form on the CPU, mapped once for the model by its Key.
+func (m *Model) cpuFormOf(req jit.Request, gr *graph.Graph, rows int, apart bool) (*cpuBlockForm, error) {
 	c := &m.cpuForms
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -899,7 +922,7 @@ func (m *Model) formCPUBlock(s *State, li int, cb *cpuBlock, rows int) (*cpuBloc
 	if err, ok := c.err[key]; ok {
 		return nil, err
 	}
-	fm, err := buildCPUForm(&gr, codes, rows)
+	fm, err := buildCPUForm(gr, codes, rows, apart)
 	if err != nil {
 		c.err[key] = err
 		return nil, err
@@ -909,8 +932,12 @@ func (m *Model) formCPUBlock(s *State, li int, cb *cpuBlock, rows int) (*cpuBloc
 	return fm, nil
 }
 
-// buildCPUForm maps codes and plans each call word's source.
-func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int) (*cpuBlockForm, error) {
+// buildCPUForm maps codes and plans each call word's source: the graph's
+// input and output the residual, or with apart each an io place of its own.
+func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int, apart bool) (*cpuBlockForm, error) {
+	if apart && len(gr.In)+len(gr.Out) > cpuIO {
+		return nil, fmt.Errorf("a graph of %d inputs and %d outputs, past the %d places the CPU's call site binds", len(gr.In), len(gr.Out), cpuIO)
+	}
 	f := &cpuBlockForm{consts: map[int][]uint32{}, rows: rows}
 	// A kernel's constant block is its own: two kernels' blocks may share a
 	// name and hold different words.
@@ -1004,6 +1031,10 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int) (*cpuBlockForm, e
 				return nil, fmt.Errorf("%s: an offset of %v the caller computes", c.Name, o)
 			case a.Words != nil:
 				ar.src, ar.i = cpuArgOwn, ownOf(o, ci, len(a.Words), a.Words)
+			case apart && o.Kind == jit.OperandValue && slices.Contains(gr.In, o.Value):
+				ar.src, ar.i = cpuArgIO, slices.Index(gr.In, o.Value)
+			case apart && o.Kind == jit.OperandValue && slices.Contains(gr.Out, o.Value):
+				ar.src, ar.i = cpuArgIO, len(gr.In)+slices.Index(gr.Out, o.Value)
 			case o.Kind == jit.OperandValue && len(gr.In) > 0 && o.Value == gr.In[0],
 				o.Kind == jit.OperandValue && len(gr.Out) > 0 && o.Value == gr.Out[0]:
 				ar.src = cpuArgX
@@ -1062,7 +1093,7 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int) (*cpuBlockForm, e
 		cc.code = code
 		f.codes = append(f.codes, cc)
 	}
-	if !f.inPlace() {
+	if !apart && !f.inPlace() {
 		f.close()
 		return nil, fmt.Errorf("the block reads its residual after writing its output over it")
 	}
@@ -1085,8 +1116,15 @@ func (f *cpuBlockForm) inPlace() bool {
 	return lastRead < firstWrite
 }
 
-// cpuRoleWeight is block l's matrix of role r, nil for one it does not hold.
-func cpuRoleWeight(l *layer, r jlm.Role) *tensor {
+// cpuRoleWeight is block l's matrix of role r, nil for one it does not hold;
+// with no block, the head's.
+func (s *State) cpuRoleWeight(l *layer, r jlm.Role) *tensor {
+	if l == nil {
+		if r == jlm.RoleOutput || r == jlm.RoleTokenEmbd {
+			return s.outW
+		}
+		return nil
+	}
 	switch r {
 	case jlm.RoleAttnQ:
 		return &l.wq
@@ -1125,8 +1163,19 @@ func cpuRoleWeight(l *layer, r jlm.Role) *tensor {
 }
 
 // cpuRoleVector is block l's vector of role r, nil for one it does not
-// hold.
-func cpuRoleVector(l *layer, r jlm.Role) []float32 {
+// hold; with no block, the head's.
+func (s *State) cpuRoleVector(l *layer, r jlm.Role) []float32 {
+	if l == nil {
+		switch r {
+		case jlm.RoleOutputNorm:
+			return s.outNorm
+		case jlm.RoleOutputNormBias:
+			return s.m.outNormB
+		case jlm.RoleOutputBias:
+			return s.m.outB
+		}
+		return nil
+	}
 	switch r {
 	case jlm.RoleAttnNorm:
 		return l.attnNorm

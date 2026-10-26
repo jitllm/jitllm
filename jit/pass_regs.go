@@ -82,9 +82,11 @@ var ErrRegisterPressure = errors.New("register pressure")
 type PressureError struct {
 	Parts []int
 	// Jammed is the parts of Parts a refused kernel ran several rows a
-	// call in (RowJam).
-	Jammed []int
-	Err    error
+	// call in (RowJam), Paired those it ran two heads a call in
+	// (HeadPairs), Wide those it jammed a loop's rows across lanes in
+	// (Jam), Cursored those whose loops walked its addresses (Cursors).
+	Jammed, Paired, Wide, Cursored []int
+	Err                            error
 }
 
 func (e *PressureError) Error() string { return e.Err.Error() }
@@ -104,6 +106,15 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			refused.Parts = append(refused.Parts, k.Of)
 			if k.Jam > 1 {
 				refused.Jammed = append(refused.Jammed, k.Of)
+			}
+			if k.paired() {
+				refused.Paired = append(refused.Paired, k.Of)
+			}
+			if k.wide() {
+				refused.Wide = append(refused.Wide, k.Of)
+			}
+			if k.cursored() {
+				refused.Cursored = append(refused.Cursored, k.Of)
 			}
 			return nil, false, nil
 		}
@@ -242,21 +253,33 @@ func (b *binder86) lives() {
 		}
 		b.last[v] = max(b.last[v], pos)
 	}
+	// A node runs in the loops its place in the sequence opens, which may
+	// be deeper than its home: a reader of a loop's counter (Induction)
+	// whose other operands are outside it.
+	var open []int
 	for pos, e := range k.Seq {
 		switch e.Kind {
+		case EntryEnd:
+			if len(open) > 0 {
+				open = open[:len(open)-1]
+			}
 		case EntryNode:
 			nd := k.Nodes[e.I]
 			if nd.Op == OpFold {
 				use(nd.B, pos, k.Loops[nd.At].Parent)
 				continue
 			}
+			at := hs[e.I]
+			if len(open) > 0 {
+				at = open[len(open)-1]
+			}
 			for _, a := range k.Operands(&nd) {
-				use(*a, pos, hs[e.I])
+				use(*a, pos, at)
 				// A load its reader takes as a memory operand reads its
 				// index where the reader runs, not where the load sits.
 				if x := &k.Nodes[*a]; x.Op == OpLoad && x.Mem {
 					for _, ix := range k.Operands(x) {
-						use(*ix, pos, hs[e.I])
+						use(*ix, pos, at)
 					}
 				}
 			}
@@ -270,6 +293,7 @@ func (b *binder86) lives() {
 			if l.Count > 0 {
 				use(l.Count-1, pos, l.Parent)
 			}
+			open = append(open, e.I)
 		}
 	}
 }
@@ -868,7 +892,7 @@ func (k *Kernel) VectorWords() map[int]bool {
 	}
 	for i, nd := range k.Nodes {
 		switch {
-		case nd.Op == OpLanes || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandConsts && nd.Type != ir.F32:
+		case nd.Op == OpLanes || nd.Op == OpBroadcast && nd.Type != ir.F32 || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandConsts && nd.Type != ir.F32:
 			out[i] = true
 		case vec && nd.Op == OpLoad && nd.Type != ir.F32 && !k.Bufs[nd.Buf].Half && i < len(hs) && hs[i] >= 0 && k.Loops[hs[i]].Lanes > 0:
 			// A word a vector loop loads is a lane's each.
@@ -892,7 +916,9 @@ func (k *Kernel) VectorWords() map[int]bool {
 					continue
 				}
 				nd := k.Nodes[i]
-				if nd.Op == OpLoad || nd.Op == OpFold {
+				// A broadcast of a computed word reads it from a general
+				// register (Splats).
+				if nd.Op == OpLoad || nd.Op == OpFold || nd.Op == OpBroadcast && nd.Type != ir.F32 {
 					continue
 				}
 				for x, a := range k.Operands(&nd) {
@@ -901,7 +927,8 @@ func (k *Kernel) VectorWords() map[int]bool {
 					if x == 1 && (nd.Op == OpShl || nd.Op == OpShr || nd.Op == OpSar) {
 						continue
 					}
-					if data(*a) && k.Nodes[*a].Op != OpConst && !out[*a] && k.Nodes[*a].Type != ir.Pred {
+					// A compare a vector word reads is a vector compare.
+					if data(*a) && k.Nodes[*a].Op != OpConst && !out[*a] && (k.Nodes[*a].Type != ir.Pred || k.Nodes[*a].Op == OpLess) {
 						out[*a], changed = true, true
 					}
 				}

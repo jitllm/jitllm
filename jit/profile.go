@@ -62,6 +62,7 @@ func cpuProfile() Profile {
 		Workers{Rows: 16, Tile: 64},
 		RowJam{N: 2},
 		Serial{},
+		Unsigned{},
 		Simplify{ConstLast: true},
 		RunLengths{},
 		Simplify{ConstLast: true},
@@ -89,6 +90,7 @@ func cpuProfile() Profile {
 		BitMask{},
 		BitSelect{Regs: []int{5, 6, 7}},
 		Induction{Tail: 13},
+		Splats{},
 		Consts{Shared: mainBlock()},
 		Args{Fields: mainArgs(), Parts: map[PartKind]ArgFields{PartSample: mainSampleArgs(), PartTable: mainTableArgs()}},
 		Simplify{ConstLast: true},
@@ -136,7 +138,7 @@ func mainBlock() []uint32 {
 // Q32, and the paired kernels' Out2, Q2 and AScale2; a call's coordinates
 // in Cols and OutStr.
 func mainArgs() ArgFields {
-	return ArgFields{Out: []int{0, 120}, Weight: 8, Act: 16, Query: 112, Second: map[int]int{0: 120, 112: 128, 24: 136}, Consts: 56, In: []int{24, 136, 104, 64}, Vectors: 40, Tail: 32, Counts: []int{32, 40},
+	return ArgFields{Out: []int{0, 120}, Weight: 8, Act: 16, Query: 112, Second: map[int]int{0: 120, 112: 128, 24: 136}, Consts: 56, In: []int{24, 136, 104, 64, 48, 72, 144, 152, 160}, Vectors: 40, Tail: 32, Counts: []int{32, 40},
 		Coords: []int{80, 88}}
 }
 
