@@ -61,12 +61,16 @@ func (s *Sampler) Observe(t int32) {
 	if n <= 0 {
 		n = 64
 	}
+	// The window slides within its backing arrays: a slice cut from the
+	// front would leave each append less room, and grow it again every
+	// window or so of tokens.
+	if len(s.hist) >= n {
+		copy(s.hist, s.hist[len(s.hist)-n+1:])
+		copy(s.hoff, s.hoff[len(s.hoff)-n+1:])
+		s.hist, s.hoff = s.hist[:n-1], s.hoff[:n-1]
+	}
 	s.hist = append(s.hist, t)
 	s.hoff = append(s.hoff, 4*int64(t))
-	if len(s.hist) > n {
-		s.hist = s.hist[len(s.hist)-n:]
-		s.hoff = s.hoff[len(s.hoff)-n:]
-	}
 }
 
 // sampleGrowStart is how many candidates the unbounded configuration takes

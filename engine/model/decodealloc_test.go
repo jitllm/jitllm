@@ -255,6 +255,7 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 								defer gc.Close()
 								decodeAllocs(t, m, gc)
 								greedyAllocs(t, m, gc)
+								sampledAllocs(t, m, gc)
 								for _, k := range parts {
 									if n, _, _ := gc.Stats().ServedPart(k); n == 0 {
 										t.Fatalf("composed part %#x never ran: this arm measured the tier's own", uint8(k))
@@ -485,6 +486,49 @@ func greedyAllocs(t *testing.T, m *Model, g *tier.GPU) {
 		}
 	})
 	allocVerdict(t, "greedy decode", w, n, m.container.Reads()-r0, g.Stats().Captures-c0.Captures)
+}
+
+// sampledAllocs is greedyAllocs for a sampled decode, top-k and the repeat
+// penalty over a history that grows every token, on a tier whose composer
+// serves the token: the composer's one form selects every one of the
+// window's candidate sets.
+func sampledAllocs(t *testing.T, m *Model, g *tier.GPU) {
+	const warm, n = 160, 64
+	was := m.opt.devSample
+	m.opt.devSample = DeviceSampleOn
+	defer func() { m.opt.devSample = was }()
+	s := m.NewState(warm + n + 8)
+	defer s.Close()
+	if err := s.SetDevice(g); err != nil {
+		t.Fatal(err)
+	}
+	smp := &Sampler{Temp: 1.3, TopK: 40, TopP: 0.9, MinP: 0.01, RepeatPen: 1.3, RepeatLastN: 32, Seed: 4242}
+	tok := int32(5)
+	step := func() {
+		got, err := s.ForwardSample(tok, smp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		smp.Observe(got)
+		tok = got
+	}
+	for range warm {
+		step()
+	}
+	c0, r0, d0 := g.Stats(), m.container.Reads(), s.SampledOnDevice
+	w := countAllocs(func() {
+		for range n {
+			step()
+		}
+	})
+	c1 := g.Stats()
+	if d := s.SampledOnDevice - d0; d != n {
+		t.Fatalf("the device selected %d of the window's %d candidate sets", d, n)
+	}
+	if k := composedSamples(c1) - composedSamples(c0); k != n {
+		t.Fatalf("the composer selected %d of the window's %d candidate sets (%s)", k, n, declinesOf(c1))
+	}
+	allocVerdict(t, "sampled decode", w, n, m.container.Reads()-r0, c1.Captures-c0.Captures)
 }
 
 func decodeAllocs(t *testing.T, m *Model, g *tier.GPU) decodeWindow {
