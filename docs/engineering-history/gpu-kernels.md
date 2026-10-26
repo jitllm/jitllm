@@ -8235,3 +8235,59 @@ row where the composer's reads two.
   V100's CUDA and Vulkan, and 2.36e-3 (falcon) to 0.171 (cohere2) on the
   nineteen fixtures of `TestC6OnEveryDevice` on both, against a
   bound of 1e-4 and a hundred times a clean arm's 7e-12 at most.
+- The CPU device's composed decode, from 280 times main's time a token to
+  about twice. Profiled per kernel on Llama-3.2-1B at Q4_K_M (the Xeon
+  E5-2680 v4, one socket's twelve cores, `numactl --membind=0`; one run of
+  each arm, not RULE 2 rows), the three gaps were: the float form, which
+  decodes each packed weight element by scalar code (block 0's gate, up and
+  down matvecs 141, 140 and 87 ms each, 7475 ms a token); every matvec one
+  call on one core; and the int8 matvec's index arithmetic, recomputed and
+  spilled per window. The CPU profile now keeps the int8 form (windows of
+  32, VPDPBUSD where the device states AVX-VNNI, the AVX2 byte-dot path on
+  the Xeon, which has none): 853 ms a token. `Workers` deals a kernel over
+  a weight's rows across the device's workers (`Device.Slots`, the pool's):
+  the space's last axis cut into calls, the cut that leaves the busiest
+  worker the fewest rows, each call a multiple of 16 rows; Args moves the
+  call's rows into its buffers' offsets (`CallArg.Per`), which the CPU call
+  site adds per call, so the dealt kernel is the one-worker kernel byte for
+  byte, its cursors, halves and jam intact: 78 ms. Simplify takes the low
+  bits and the shifts of aligned sums and products and folds constant
+  differences, minima, maxima and shifts by zero; it no longer merges two
+  loads of a weight's word (streamed, a second read hits the cache, and the
+  register one merged load holds across the body is one the jam needs: Q4_K,
+  Q5_0, Q5_1 and Q5_K shapes stopped binding their vector registers when
+  the index folds made each nibble pair's word one load); and `Periods` runs a loop of sums a whole period of its iteration
+  a trip where it indexes by the iteration's low bits, so a super-block's
+  sub-block scales are constant words and shifts (the Q4_K loop body 2240
+  instructions per eight windows before, 1267 after, a third of them still
+  spills). Regs keeps its vector words while it binds (the period's larger
+  bodies made `sink` quadratic: 58 s for `TestComposedCPUMatVec` against
+  30 s). A cold placement composes faster, not slower: a new State's
+  blocks on the laptop composed in 0.98 s for Llama-3.2-1B against 48.9 s
+  before (the float form's bodies), 0.14 s against 0.21 s for Qwen3-0.6B.
+  `TestComposedCPUAB` on the Xeon, 16-token rounds, n = 20: the A/A
+  controls read 0.9974 (IQR/median 1.6%) and 1.0105 (3.1%); composed
+  against main read 0.504 on Llama-3.2-1B (803 MB a token, main 54.2 tok/s
+  = 43.6 GB/s = 78% of the 56.0 GB/s wall, composed 27.6 tok/s = 22.1 GB/s
+  = 39%) and 0.528 on Qwen3-0.6B (634 MB, 62.2 against 33.4 tok/s, 68% and
+  36% of the 58.2 GB/s wall), both UNSTABLE (IQR/median 14.9% and 47.6%,
+  the composed arm's): not quotable rows. On the laptop the A/A control
+  failed under other jobs' load (0.954 and IQR/median 13.4%). One laptop
+  run at six P-cores, per kernel: composed 27.2 ms a token against main's
+  16.1, its block kernels 22.9 ms, the largest the Q6_K down projection
+  (8.7 ms, 25 GB/s), gate and up (4.9 ms each), q and o (1.4 ms each).
+  `TestComposedCPUMatVec` runs 64 rows at one and six workers and 48 and
+  80 at six, a guard past the output: 180 formed and right, and a call
+  base one row short fails all 108 six-worker arms. `TestComposedCPUBlocksServe`
+  holds stories15M, Qwen3-0.6B and Llama-3.2-1B at 0.543, 0.438 and 1.054
+  of main's spread at the median, every block step served, each block
+  composed once, on the laptop and the Xeon; `TestDecodeDoesNotAllocate`'s
+  host-composed arm on Llama makes 0 engine allocations over 64 tokens on
+  both; `TestBatchMatchesForward`'s and `TestPagingDoesNotChangeTheAnswer`'s
+  composed-CPU arms pass on the laptop, and `TestEveryModelRunsGenerated`'s
+  ran 152 composed-CPU arms on the Xeon with no error (every block step of
+  the served families served, bitnet-b1.58's ternary blocks among them)
+  before the run was stopped, still converting the rest. The GPU forms of the three served models hash the same as before
+  (78, 308 and 144 kernels at one row), and `go build -gcflags=-m` moves
+  one value more to the heap, at compose time (the Workers pass's copy of a
+  range).
