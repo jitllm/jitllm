@@ -903,6 +903,18 @@ func (e *estimator) footprint(ix, ax []int, h, b int) float64 {
 			thread = true
 		case jit.OpFlat:
 			flat = true
+		case jit.OpParam:
+			// A call's word: its coordinate along the calls' space
+			// (jit.Workers), or the node that computes it.
+			for _, a := range k.Args {
+				if a.Buf < 0 && a.Field == int(nd.Imm) {
+					if a.Coord > 0 {
+						axes[a.Coord-1] = true
+					} else if a.Node > 0 {
+						walk(a.Node - 1)
+					}
+				}
+			}
 		}
 		if nd.Op == jit.OpLoad && nd.Ax == nil {
 			walk(nd.A)

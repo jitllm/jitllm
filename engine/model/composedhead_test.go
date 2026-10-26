@@ -410,7 +410,7 @@ func TestComposedHeadForms(t *testing.T) {
 				t.Errorf("the head's norm is %v for LayerNorm %v, it states %d softcap(s) and ends in %v %v by %v: want one softcap and a scale of 1/8",
 					gr.Ops[0].Kind, m.Cfg.LayerNorm, caps, last.Kind, last.Attr.Fn, last.Attr.Const)
 			}
-			for _, d := range []jit.Device{{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, {Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}} {
+			for _, d := range []jit.Device{{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, composedCPUDevice(6)} {
 				_, codes, err := jit.Default().Form(jit.Request{Graph: gr, Formats: formats, Step: step, Device: d})
 				if err != nil {
 					t.Fatalf("%v: %v", d.Kind, err)

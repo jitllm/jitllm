@@ -69,7 +69,7 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 				t.Fatalf("%d rotary table part(s) of %d parts, where the model states %d rotar(ies)", got, len(parts), wantTables)
 			}
 			for _, d := range []jit.Device{{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, {Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 8},
-				{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 1}, {Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}} {
+				{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 1}, composedCPUDevice(6)} {
 				var run []jit.PartPlan
 				for _, p := range parts {
 					run = append(run, jit.PartPlan{Part: p, Device: d})

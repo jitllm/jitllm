@@ -16,7 +16,7 @@ func TestSuggestPlacesFromTheIR(t *testing.T) {
 	f := composing(t, *composeModel+".jlm")
 	r := jit.Default()
 	gpu := Device{Device: jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, Bandwidth: 800e9, Launch: 4e-6, Link: 12e9}
-	cpu := Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}, Bandwidth: 40e9, Launch: 3e-6, Link: 12e9}
+	cpu := Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8, ExactDiv: true}, Bandwidth: 40e9, Launch: 3e-6, Link: 12e9}
 	s := jit.Step{Rows: 1, Page: 64, Keys: 5}
 	forced := map[string]Placement{
 		"card":          func(jit.Part) Device { return gpu },
@@ -61,7 +61,7 @@ func TestEngineTakesOrForcesThePlacement(t *testing.T) {
 	f := composing(t, *composeModel+".jlm")
 	r := jit.Default()
 	gpu := Device{Device: jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, Bandwidth: 800e9, Launch: 4e-6, Link: 12e9}
-	cpu := Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}, Bandwidth: 40e9, Launch: 3e-6, Link: 12e9}
+	cpu := Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8, ExactDiv: true}, Bandwidth: 40e9, Launch: 3e-6, Link: 12e9}
 	s := jit.Step{Rows: 1, Page: 64, Keys: 5}
 	suggested, _, err := Suggest(r, f, s, []Device{gpu, cpu})
 	if err != nil {

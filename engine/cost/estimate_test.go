@@ -35,7 +35,7 @@ func estimateRun(t *testing.T, d Device, s jit.Step) ([]*jit.Kernel, []Cost) {
 }
 
 var (
-	testCPU = Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}, Bandwidth: 40e9, Thread: 15e9, Launch: 50e-9,
+	testCPU = Device{Device: jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8, ExactDiv: true}, Bandwidth: 40e9, Thread: 15e9, Launch: 50e-9,
 		Caches: [3]Cache{{Bytes: 32 << 10, Rate: Rate{Thread: 100e9}}, {Bytes: 1 << 20, Rate: Rate{Thread: 50e9}}, {Bytes: 12 << 20, Rate: Rate{Thread: 30e9}}},
 		Rates:  [NumClasses]Rate{ClassFloat: {Thread: 8e9}}}
 	testGPU = Device{Device: jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, Bandwidth: 800e9, Thread: 2e7, Launch: 4e-6,

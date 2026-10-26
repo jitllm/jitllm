@@ -3,6 +3,7 @@ package cost
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/jitllm/jitllm/jit"
 )
@@ -237,9 +238,62 @@ func Suggest(r Former, f jit.Model, s jit.Step, devices []Device) (Placement, Co
 	for i := n - 1; i > 0; i-- {
 		pick[i-1] = from[i][pick[i]]
 	}
-	at := map[[2]int]Device{}
-	for i, part := range parts {
-		at[[2]int{int(part.Kind), part.Block}] = devices[pick[i]]
+	place := func(pick []int) Placement {
+		at := map[[2]int]Device{}
+		for i, part := range parts {
+			at[[2]int{int(part.Kind), part.Block}] = devices[pick[i]]
+		}
+		return func(p jit.Part) Device { return at[[2]int{int(p.Kind), p.Block}] }
 	}
-	return func(p jit.Part) Device { return at[[2]int{int(p.Kind), p.Block}] }, best[n-1][end], nil
+	// The search prices each part alone, but a run of parts on one device
+	// shares what the parts alone do not: a boundary fused, a value read
+	// from the cache it was written to. So the pick is held, priced as whole
+	// runs, against each device alone and against each of its runs moved
+	// whole onto a neighbour's device.
+	c := best[n-1][end]
+	if e, err := Estimate(r, f, s, place(pick)); err == nil {
+		c = e
+	}
+	for better := true; better; {
+		better = false
+		for _, q := range neighbours(pick, m) {
+			if e, err := Estimate(r, f, s, place(q)); err == nil && e.Seconds < c.Seconds {
+				pick, c, better = q, e, true
+			}
+		}
+	}
+	return place(pick), c, nil
+}
+
+// neighbours is each placement over m devices that puts every part on one
+// device, and each that moves one run of pick, its parts on one device,
+// onto the device of the run before or after it.
+func neighbours(pick []int, m int) [][]int {
+	var out [][]int
+	with := func(lo, hi, d int) {
+		q := slices.Clone(pick)
+		for i := lo; i < hi; i++ {
+			q[i] = d
+		}
+		if !slices.Equal(q, pick) {
+			out = append(out, q)
+		}
+	}
+	for d := range m {
+		with(0, len(pick), d)
+	}
+	for lo := 0; lo < len(pick); {
+		hi := lo + 1
+		for hi < len(pick) && pick[hi] == pick[lo] {
+			hi++
+		}
+		if lo > 0 {
+			with(lo, hi, pick[lo-1])
+		}
+		if hi < len(pick) {
+			with(lo, hi, pick[hi])
+		}
+		lo = hi
+	}
+	return out
 }
