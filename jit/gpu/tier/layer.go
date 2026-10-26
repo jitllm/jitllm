@@ -255,6 +255,9 @@ type layer struct {
 	// routerF16 is whether l.router holds binary16 (Mixtral) rather than f32;
 	// the batched mixture picks its router kernel by it.
 	routerF16 bool
+	// routerW is l.router as the composer binds a matrix: its buffer, not a
+	// second copy of it.
+	routerW resident
 	// gpt-oss's per-head attention sinks and its router and expert biases, nil
 	// for every other architecture (LayerPlan.AttnSinks, MoEBias).
 	sinks, routerB             backend.Buf
@@ -3876,6 +3879,10 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 			return false
 		}
 		l.router, l.routerF16 = b, es == 2
+		l.routerW = resident{qs: b, nrows: p.NExpert, k: p.NEmbd, t: kernels.Float32, ok: true}
+		if es == 2 {
+			l.routerW.t = kernels.Float16
+		}
 	}
 	var err error
 	// Norms and biases arrive as f32, which is what the device reads.
@@ -4568,6 +4575,10 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 	// so the scratch is built for what the device holds, not the full context.
 	cp := g.capped(p)
 	p = &cp
+	if why := unblockedRow(p, rows); why != "" {
+		g.LastErr = why
+		return nil
+	}
 	// A vision block's attention may go in query chunks (visionChunk), whose
 	// scratch is rounded up to whole chunks before anything is sized by it.
 	if p.NonCausal && rows > 1 {
@@ -11444,6 +11455,20 @@ func (g *devTier) actWinFor(ntok int) int {
 // pad32 is n rounded up to the activation quantizer's 32-element block: the
 // width a ragged activation is quantized at, its tail zero.
 func pad32(n int) int { return (n + 31) / 32 * 32 }
+
+// unblockedRow names the row of a rows-wide scratch for p that the tier's
+// int8 activation blocks (32 wide) do not divide, which its quantizers refuse
+// to build, or "".
+func unblockedRow(p *nn.LayerPlan, rows int) string {
+	const why = "a row of %d (%s) that the tier's int8 activation blocks of 32 do not divide"
+	switch {
+	case p.KPad == 0 && rows*p.NEmbd%32 != 0:
+		return fmt.Sprintf(why, p.NEmbd, "the model's width")
+	case rows*p.NFFN%32 != 0:
+		return fmt.Sprintf(why, p.NFFN, "the MLP's width")
+	}
+	return ""
+}
 
 // quantizeRows is the quantizer of rows activations n wide: Quantize over
 // them where n is a whole number of blocks, QuantizePadded with a zero tail

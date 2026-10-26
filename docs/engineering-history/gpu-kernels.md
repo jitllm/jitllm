@@ -8291,3 +8291,45 @@ row where the composer's reads two.
   (78, 308 and 144 kernels at one row), and `go build -gcflags=-m` moves
   one value more to the heap, at compose time (the Workers pass's copy of a
   range).
+- **A mixture is a graph of generic ops.** The front end states a mixture
+  block (`Model.mixture`): the router's matvec with its stored bias, each
+  expert's score the expression the container states over the logits
+  (`jlm.Config.RouterScore`, an optional tail the converter writes:
+  softmax, sigmoid or sqrt(softplus) as `convert.RouterScore` says, held to
+  the references by `convert.TestRouterScoreIsTheReferences`), the
+  selection bias, a group limit as a top-k within each group, a reduction
+  and a rank, `OpTopK` and `OpTake` for the weights, the renormalisation
+  and the routed scale, the banks as `OpExpertMatVec` over the selection,
+  and a shared expert with its sigmoid gate. `UncoveredMixture` is gone;
+  what is left is named: `UncoveredRouterScore` (a router whose container
+  states no score, phimoe's sparsemixer) and `UncoveredExperts` (experts
+  weighting their input, a dense MLP beside the mixture, latent experts,
+  per-expert scales), and `DeclineExperts` where a bank is not whole on the
+  device (streamed or cached blocks, and the CPU device, which keeps every
+  expert in a page of its own). Thirteen mixtures join the served models in
+  both builds, every arm on a V100's CUDA and Vulkan: Qwen3-MOE-4x0.6B,
+  OLMoE-1B-7B, DeepSeek-V2-Lite and the glm4moe, qwen2moe, ernie45moe,
+  hunyuanmoe, minimaxm2, bailingmoe2, dots1, gpt-oss, deepseek and
+  deepseek-lite fixtures, at median ratios 0.836 to 1.032 of the tier's
+  distance from the float reference on CUDA. Six router violations, set in
+  the model's config and in what the front end reads, fire on both devices
+  in `TestMoEFamiliesOnEveryDevice` against its bound of 1e-5: the
+  selection bias dropped (5.48e-2 to 1.16), the group limit removed (0.570),
+  the renormalisation removed (2.83e-2 to 1.31), one expert fewer (0.246 to
+  1.15), the routed scale dropped (0.356 to 0.613) and the shared expert's
+  gate dropped (0.880). The swaps of a score ("softmax for sigmoid", "sigmoid
+  for softmax") set the config alone and read a clean 4e-12 in the composed
+  build; they restate the container's score through the converter now
+  (`routerSwap`) and read 0.121 to 0.789, and bailingmoe2's "rotary over the
+  whole head" sets the rotary the front end reads (0.753, from a clean arm).
+  A part the registers refuse with no expression left to split is formed
+  unfused. A model whose rows the tier's int8 activation blocks of
+  32 do not divide (stories260K's 172-wide MLP, tiny-qwen3moe's 8-wide
+  residual) is refused at placement by that name before any kernel is built
+  (`TestTierNamesTheRowsItCannotBlock`), where its quantizer's error stood.
+  Open: on the CPU profile that takes the int8 form, Qwen3-MOE-4x0.6B's
+  mixture parts refuse the registers in `TestFrontStatesTheModelAsOps`
+  (fused pairs of reductions of 557 to 1263 nodes, then the reduction alone:
+  "more words live at once than registers"), on the laptop and on the Xeon;
+  the CPU device serves no mixture (`DeclineExperts`), and the GPU forms of
+  every mixture form. Before that profile the gate formed it on the CPU.

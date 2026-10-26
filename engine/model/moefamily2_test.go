@@ -88,7 +88,7 @@ func hostFullRotary(m *Model) func() {
 
 var moe2Violations = map[string][]c6Violation{
 	"synth-bailingmoe2": {
-		{"softmax for sigmoid", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertSigmoid = false }) }},
+		{"softmax for sigmoid", routerSwap(false)},
 		{"no selection bias", noSelectionBias},
 		{"no group limit", ungrouped},
 		{"the routed weights not renormalised", func(m *Model) func() {
@@ -101,7 +101,7 @@ var moe2Violations = map[string][]c6Violation{
 		{"rotary over the whole head", hostFullRotary},
 	},
 	"synth-dots1": {
-		{"softmax for sigmoid", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertSigmoid = false }) }},
+		{"softmax for sigmoid", routerSwap(false)},
 		{"no selection bias", noSelectionBias},
 		{"the routed weights not renormalised", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
@@ -150,7 +150,9 @@ var moe2DevViolations = map[string][]c6Violation{
 		// Ungrouped too: the device's softmax route forms no group scores, and
 		// declines a grouped one by name rather than running it.
 		{"softmax for sigmoid", func(m *Model) func() {
-			return cfgMut(m, func(c *Config) { c.ExpertSigmoid, c.NExpertGroup, c.NExpertGroupUsed = false, 0, 0 })
+			undoS := routerSwap(false)(m)
+			undoG := ungrouped(m)
+			return func() { undoG(); undoS() }
 		}},
 		{"no selection bias", noSelectionBias},
 		{"no group limit", ungrouped},
@@ -161,10 +163,10 @@ var moe2DevViolations = map[string][]c6Violation{
 		{"no shared expert", noSharedExpert},
 		{"no q/k norm", noQKNorm},
 		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
-		{"rotary over the whole head", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.NRot = c.HeadDim }) }},
+		{"rotary over the whole head", hostFullRotary},
 	},
 	"synth-dots1": {
-		{"softmax for sigmoid", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertSigmoid = false }) }},
+		{"softmax for sigmoid", routerSwap(false)},
 		{"no selection bias", noSelectionBias},
 		{"the routed weights not renormalised", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })

@@ -637,6 +637,7 @@ const (
 	partEmbedFormat = jit.DeclineEmbedFormat
 	partEmbedWeight = jit.DeclineEmbedWeight
 	partEmbedToken  = jit.DeclineEmbedToken
+	partExperts     = jit.DeclineExperts
 	numPartDeclines = jit.NumDeclines
 )
 
@@ -1246,8 +1247,38 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 		if l.mla {
 			return l.mlaGate
 		}
+	case jlm.RoleRouter:
+		if l.router != nil {
+			return &l.routerW
+		}
+	case jlm.RoleExpGateBank, jlm.RoleExpUpBank, jlm.RoleExpDownBank:
+		// The banks whole on the card; a streamed block's hold its
+		// selection's sheets only.
+		if l.router == nil || l.stream != nil {
+			return nil
+		}
+		return [...]*resident{l.gate, l.up, l.down}[r-jlm.RoleExpGateBank]
+	case jlm.RoleShExpGate:
+		return l.shGate
+	case jlm.RoleShExpUp:
+		return l.shUp
+	case jlm.RoleShExpDown:
+		return l.shDown
 	}
 	return nil
+}
+
+// expertsHeld says block l holds every routed expert its graph binds, whole,
+// on the card.
+func (l *layer) expertsHeld() bool {
+	for _, o := range l.graph.Ops {
+		for _, w := range o.Weight {
+			if jlm.ExpertBank(w.Role) && l.roleWeight(w.Role) == nil {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // roleVector is the block's vector its graph binds under role, nil for one
@@ -1294,6 +1325,18 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.nQA
 	case jlm.RoleAttnKVANorm:
 		return l.nKVA
+	case jlm.RoleRouterBias:
+		return l.routerB
+	case jlm.RoleExpGateBias:
+		return l.expGateB
+	case jlm.RoleExpUpBias:
+		return l.expUpB
+	case jlm.RoleExpDownBias:
+		return l.expDownB
+	case jlm.RoleExpProbsB:
+		return l.expSelB
+	case jlm.RoleShRouter:
+		return l.shRouter
 	}
 	return nil
 }
@@ -1309,6 +1352,8 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 	switch {
 	case l.graph == nil:
 		return partNoGraph
+	case !l.expertsHeld():
+		return partExperts
 	case slices.Contains(g.TierBlocks, li):
 		return partCaller
 	case persist:
@@ -1650,7 +1695,8 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 			keys:    keys, page: page}
 		for _, o := range l.graph.Ops {
 			for _, w := range o.Weight {
-				if w.Rows > 0 {
+				// A bank's bias is a row an expert, held as one vector.
+				if w.Rows > 0 && l.roleVector(w.Role) == nil {
 					r := l.roleWeight(w.Role)
 					if r == nil {
 						return sl, fmt.Errorf("the composed block %d binds %v, which the tier holds no matrix for", li, w.Role)

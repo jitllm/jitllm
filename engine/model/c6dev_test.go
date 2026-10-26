@@ -301,7 +301,7 @@ func fixtureOnEveryDeviceCounted(t *testing.T, m *Model, g *c6Golden, vs []c6Vio
 				worst = math.Max(worst, w)
 			}
 			if composedByDefault && counted {
-				vs = append(slices.Clone(vs), statedViolations(m)...)
+				vs = append(append(slices.Clone(vs), statedViolations(m)...), routerViolations(m)...)
 			}
 			for _, v := range vs {
 				undo := v.mut(m)

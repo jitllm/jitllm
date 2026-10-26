@@ -153,7 +153,10 @@ func composedDecodeWith(t *testing.T, m *Model, dev string, ids, toks []int32, p
 // the served table turns each row by as the State states them; on a text row every axis's
 // position is the same, so serving them here says the blocks and the table
 // are served at text positions. TestMRopeMatchesTransformers decodes after a
-// picture, where the rotary positions leave the cache's.
+// picture, where the rotary positions leave the cache's. And the mixtures:
+// routers softmax, sigmoid, biased, grouped, renormalised or not and scaled,
+// gated and ungated shared experts, dense lead blocks, biased banks, and
+// latent attention beside them.
 var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf", "tinyllama-1.1b-q3_K_M.gguf",
 	"gemma-2b.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf", "qwen2.5-1.5b-instruct-q4_k_m.gguf",
 	"SmolLM2-360M-Instruct-Q8_0.gguf", "stories15M-q8_0.gguf", "SmolVLM-256M-Instruct-Q8_0.gguf",
@@ -164,11 +167,15 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 	"falcon/falcon-7b-instruct.Q4_K_M.gguf",
 	"Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "Qwen3VL-2B-Instruct-Q4_K_M.gguf",
 	"bitnet-b1.58-2B-4T-i2_s.gguf", "synth-deepseek-dense", "synth-deepseek-yarn.gguf", "synth-deepseek-yarn-af.gguf",
-	"synth-apertus.gguf"}
+	"synth-apertus.gguf",
+	"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "DeepSeek-V2-Lite.Q4_K_M.gguf",
+	"synth-glm4moe.gguf", "synth-qwen2moe.gguf", "synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf",
+	"synth-minimaxm2.gguf", "synth-bailingmoe2.gguf", "synth-dots1.gguf", "synth-gptoss.gguf", "synth-deepseek",
+	"synth-deepseek-lite"}
 
 // formedModels is what the front end states and the serving gate does not
-// run: a model the tier cannot place (stories260K's 172-wide rows, which its
-// quantizer refuses), float fixtures and checkpoints whose composed logits
+// run: a model the tier cannot place (stories260K, unblockedModels),
+// float fixtures and checkpoints whose composed logits
 // equal the float reference's, which the gate's band cannot measure
 // (Qwen3-VL-2B's f16: its blocks and head run their float form, median ratio
 // 0), and rnj-1, whose
@@ -187,6 +194,55 @@ var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1
 	"synth-commandr.gguf", "synth-cohere2.gguf",
 	"synth-qwen2vl.gguf", "synth-qwen25vl.gguf", "synth-qwen3vl.gguf",
 	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf"}
+
+// mixtureModels are the mixtures the front end states whole and the serving
+// gate does not run: tiny-qwen3moe, whose eight-wide rows the tier cannot
+// place (unblockedModels).
+var mixtureModels = []string{"tiny-qwen3moe-f32.gguf"}
+
+// unblockedModels are the models whose rows the tier's int8 activation
+// blocks (32 wide) do not divide: stories260K's 172-wide MLP and
+// tiny-qwen3moe's 8-wide residual. The device refuses their blocks at
+// placement, by that name.
+var unblockedModels = []string{"stories260K.gguf", "tiny-qwen3moe-f32.gguf"}
+
+// TestTierNamesTheRowsItCannotBlock places each of unblockedModels on every
+// device, its blocks composed: the device takes none and names the row.
+func TestTierNamesTheRowsItCannotBlock(t *testing.T) {
+	ran := 0
+	for _, file := range unblockedModels {
+		t.Run(file, func(t *testing.T) {
+			m, err := Open(jlmOf(t, testmodels.Path(file)), noTune)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			for _, dev := range stepDevices() {
+				t.Run(dev, func(t *testing.T) {
+					g, err := tier.OpenWith(append([]tier.Option{tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+						tier.WithConfig(func(c *tier.Config) { c.Composed = tier.ComposedStep })}, testTierOpts(t)...)...)
+					if err != nil || g == nil {
+						noDevice(t, dev, err)
+					}
+					defer g.Close()
+					s := m.NewState(64)
+					defer s.Close()
+					if err := s.SetDevice(g); err != nil {
+						t.Fatal(err)
+					}
+					if n, why := s.GPULayers(), g.Err(); n != 0 || !strings.Contains(why, "int8 activation blocks of 32") {
+						t.Fatalf("%s took %d of %d blocks (%q), want none, refused by the row", dev, n, m.Cfg.NLayer, why)
+					}
+					t.Logf("%s refuses every block: %s", dev, g.Err())
+					ran++
+				})
+			}
+		})
+	}
+	if ran == 0 {
+		t.Fatal("no device ran")
+	}
+}
 
 // declinesOf is every decline the tier counted, the head's and the blocks',
 // by name (tier.DeclineName).

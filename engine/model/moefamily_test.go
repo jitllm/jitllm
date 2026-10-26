@@ -5,6 +5,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jitllm/jitllm/convert"
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testmodels"
 
@@ -142,7 +144,7 @@ func unweightedQKNorm(m *Model) func() {
 // the host. Each must move the logits far past c6NMSE.
 var moeViolations = map[string][]c6Violation{
 	"synth-glm4moe": {
-		{"softmax for sigmoid", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertSigmoid = false }) }},
+		{"softmax for sigmoid", routerSwap(false)},
 		{"no selection bias", noSelectionBias},
 		{"the routed weights not renormalised", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
@@ -155,7 +157,7 @@ var moeViolations = map[string][]c6Violation{
 		{"the prediction block run as a trunk block", mtpInTrunk},
 	},
 	"synth-qwen2moe": {
-		{"sigmoid for softmax", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertSigmoid = true }) }},
+		{"sigmoid for softmax", routerSwap(true)},
 		{"the routed weights renormalised", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.NoExpertNorm = false })
 		}},
@@ -165,7 +167,7 @@ var moeViolations = map[string][]c6Violation{
 		{"NORM rotary for NEOX", hostNormRotary},
 	},
 	"synth-ernie45moe": {
-		{"sigmoid for softmax", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertSigmoid = true }) }},
+		{"sigmoid for softmax", routerSwap(true)},
 		{"no selection bias", noSelectionBias},
 		{"the routed weights not renormalised", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
@@ -177,7 +179,7 @@ var moeViolations = map[string][]c6Violation{
 		{"the q/k norm before the rotary", hunyuanNormBeforeRope},
 		{"an unweighted q/k norm", unweightedQKNorm},
 		{"no q/k norm", noQKNorm},
-		{"sigmoid for softmax", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertSigmoid = true }) }},
+		{"sigmoid for softmax", routerSwap(true)},
 		{"the routed weights not renormalised", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
 		}},
@@ -194,7 +196,7 @@ var moeViolations = map[string][]c6Violation{
 		{"NEOX rotary for NORM", hostNeoxRotary},
 	},
 	"synth-minimaxm2": {
-		{"softmax for sigmoid", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertSigmoid = false }) }},
+		{"softmax for sigmoid", routerSwap(false)},
 		{"no selection bias", noSelectionBias},
 		{"the routed weights not renormalised", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
@@ -212,7 +214,7 @@ var moeDevViolations = map[string][]c6Violation{
 	"synth-glm4moe": {
 		// With the selection bias kept, which is the device's softmax-with-bias
 		// route (ERNIE's).
-		{"softmax for sigmoid", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertSigmoid = false }) }},
+		{"softmax for sigmoid", routerSwap(false)},
 		{"no selection bias", noSelectionBias},
 		{"the routed weights not renormalised", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
@@ -223,7 +225,7 @@ var moeDevViolations = map[string][]c6Violation{
 		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
 	},
 	"synth-qwen2moe": {
-		{"sigmoid for softmax", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertSigmoid = true }) }},
+		{"sigmoid for softmax", routerSwap(true)},
 		{"the routed weights renormalised", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.NoExpertNorm = false })
 		}},
@@ -232,7 +234,7 @@ var moeDevViolations = map[string][]c6Violation{
 		{"NORM rotary for NEOX", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = false }) }},
 	},
 	"synth-ernie45moe": {
-		{"sigmoid for softmax", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertSigmoid = true }) }},
+		{"sigmoid for softmax", routerSwap(true)},
 		{"no selection bias", noSelectionBias},
 		{"the routed weights not renormalised", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
@@ -244,7 +246,7 @@ var moeDevViolations = map[string][]c6Violation{
 		{"the q/k norm before the rotary", hunyuanNormBeforeRope},
 		{"an unweighted q/k norm", unweightedQKNorm},
 		{"no q/k norm", noQKNorm},
-		{"sigmoid for softmax", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertSigmoid = true }) }},
+		{"sigmoid for softmax", routerSwap(true)},
 		{"the routed weights not renormalised", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
 		}},
@@ -261,7 +263,7 @@ var moeDevViolations = map[string][]c6Violation{
 		{"NEOX rotary for NORM", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.RopeNeox = true }) }},
 	},
 	"synth-minimaxm2": {
-		{"softmax for sigmoid", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertSigmoid = false }) }},
+		{"softmax for sigmoid", routerSwap(false)},
 		{"no selection bias", noSelectionBias},
 		{"the routed weights not renormalised", func(m *Model) func() {
 			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
@@ -300,7 +302,9 @@ func hostRotary(m *Model, neox bool) func() {
 
 // noSelectionBias drops the router's selection-only bias from every block.
 func noSelectionBias(m *Model) func() {
-	return eachLayer(m, func(l *layer) { l.expProbsB = nil })
+	undoL := eachLayer(m, func(l *layer) { l.expProbsB = nil })
+	undoR := dropStored(m, jlm.RoleExpProbsB)
+	return func() { undoR(); undoL() }
 }
 
 // noSharedExpert drops the shared expert, and its gate where it has one; the
@@ -308,12 +312,89 @@ func noSelectionBias(m *Model) func() {
 func noSharedExpert(m *Model) func() {
 	undo := cfgMut(m, func(c *Config) { c.NFFNShExp = 0 })
 	undoL := eachLayer(m, func(l *layer) { l.shGate, l.shUp, l.shDown, l.shRouter = tensor{}, tensor{}, tensor{}, nil })
-	return func() { undoL(); undo() }
+	undoR := dropStored(m, jlm.RoleShExpGate, jlm.RoleShExpUp, jlm.RoleShExpDown, jlm.RoleShRouter)
+	return func() { undoR(); undoL(); undo() }
 }
 
 // noSharedGate runs the shared expert at weight one: its sigmoid gate dropped.
 func noSharedGate(m *Model) func() {
-	return eachLayer(m, func(l *layer) { l.shRouter = nil })
+	undoL := eachLayer(m, func(l *layer) { l.shRouter = nil })
+	undoR := dropStored(m, jlm.RoleShRouter)
+	return func() { undoR(); undoL() }
+}
+
+// routerSwap scores every expert by its logit's sigmoid, or by the softmax
+// over the experts: in the model's config, which main's kernels read, and
+// stated by the converter, as a container of that router states it, for the
+// front end and the composer.
+func routerSwap(sigmoid bool) func(*Model) func() {
+	return func(m *Model) func() {
+		undoC := cfgMut(m, func(c *Config) { c.ExpertSigmoid = sigmoid })
+		c := m.container.Config()
+		was := c.RouterScore
+		s := *c
+		s.Flags &^= jlm.FlagExpertSigmoid
+		s.Flags2 &^= jlm.Flag2ExpertSqrtSoftplus
+		if sigmoid {
+			s.Flags |= jlm.FlagExpertSigmoid
+		}
+		c.RouterScore = convert.RouterScore(&s)
+		undo := m.restate(func(map[jlm.Role]graph.Shape) {})
+		return func() {
+			c.RouterScore = was
+			undo()
+			undoC()
+		}
+	}
+}
+
+// routerViolations are the router's features a mixture m has, each taken out
+// of the model's config or its stored tensors, which main's kernels and the
+// front end both read: the selection bias, the group limit, the
+// renormalisation, the routed scale, the shared expert's gate, and the
+// number of experts chosen one fewer. A model whose blocks the front end
+// refuses runs none of them composed, so it has none.
+func routerViolations(m *Model) []c6Violation {
+	c := m.Cfg
+	if !c.MoE() || coveredBlocks(m) != c.NLayer {
+		return nil
+	}
+	var vs []c6Violation
+	stores := func(r jlm.Role) bool {
+		for li := range c.NLayer {
+			if m.stores(li, r) {
+				return true
+			}
+		}
+		return false
+	}
+	if stores(jlm.RoleExpProbsB) {
+		vs = append(vs, c6Violation{"router: the selection bias dropped", noSelectionBias})
+	}
+	if c.NExpertGroup > 1 && c.NExpertGroupUsed < c.NExpertGroup {
+		vs = append(vs, c6Violation{"router: the group limit removed", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.NExpertGroupUsed = c.NExpertGroup })
+		}})
+	}
+	if !c.NoExpertNorm {
+		vs = append(vs, c6Violation{"router: the renormalisation removed", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })
+		}})
+	}
+	if c.NExpertUsed > 1 {
+		vs = append(vs, c6Violation{"router: one expert fewer chosen", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.NExpertUsed-- })
+		}})
+	}
+	if c.ExpertScale != 0 && c.ExpertScale != 1 {
+		vs = append(vs, c6Violation{"router: the routed scale dropped", func(m *Model) func() {
+			return cfgMut(m, func(c *Config) { c.ExpertScale = 1 })
+		}})
+	}
+	if stores(jlm.RoleShRouter) {
+		vs = append(vs, c6Violation{"router: the shared expert's gate dropped", noSharedGate})
+	}
+	return vs
 }
 
 // mtpInTrunk runs the prediction blocks as more trunk blocks: what a converter
@@ -401,7 +482,7 @@ func TestMoEFamiliesOnEveryDevice(t *testing.T) {
 		t.Run(fx.name, func(t *testing.T) {
 			m, g := openMoE(t, fx.name)
 			defer m.Close()
-			fixtureOnEveryDevice(t, m, g, moeDevViolations[fx.name])
+			fixtureOnEveryDeviceCounted(t, m, g, moeDevViolations[fx.name], 1e-5, true)
 		})
 	}
 }
