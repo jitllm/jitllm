@@ -19,7 +19,9 @@ func (p InPlace) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				continue
 			}
 			ob := k.Bufs[st.Buf]
-			if ob.Operand.Kind == OperandTable || k.readsAt(ob.Operand, st) {
+			// An earlier kernel writing the output keeps its storage: the
+			// value's elements it stores would be apart from these.
+			if ob.Operand.Kind == OperandTable || k.readsAt(ob.Operand, st) || writtenBy(out[:i], ob.Operand) {
 				continue
 			}
 			in := -1
@@ -118,6 +120,22 @@ func readLater(ks []*Kernel, o Operand) bool {
 	for _, k := range ks {
 		for _, nd := range k.Nodes {
 			if nd.Op == OpLoad && k.Bufs[nd.Buf].Operand == o {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// writtenBy reports whether a kernel of ks stores operand o, any head's
+// copy of it.
+func writtenBy(ks []*Kernel, o Operand) bool {
+	o.Copy = 0
+	for _, k := range ks {
+		for _, s := range k.Stores {
+			w := k.Bufs[s.Buf].Operand
+			w.Copy = 0
+			if !s.Barrier && w == o {
 				return true
 			}
 		}

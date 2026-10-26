@@ -8752,3 +8752,17 @@ row where the composer's reads two.
   inputs than the argument block's In fields, and past that its integer
   compares feed vector selects from general registers ("node (const) has
   no register"), and making them vectors runs out of registers.
+- The CPU's partial rotary left each head's unturned tail out of the
+  output. decomposeRope forms two maps over one output, the pairs and the
+  tail's copy; InPlace put the tail copy's output over its input (the input
+  is read by nothing after it), so the copy wrote the input onto itself and
+  the output's tail kept whatever its storage last held, while the pair map
+  went on writing the output's own storage. It is the likely cause of GLM-4's and Qwen3.5's
+  out-of-band CPU spread (695x and 11.3x main's; not yet rerun on those
+  checkpoints); a full rotary is one map
+  and was right. InPlace now leaves an output an earlier kernel writes in
+  its own storage. TestComposedCPURope forms full and partial rotaries (128
+  of 64, 256 of 64, 64 of 32, 80 of 40, 128 of 128), both layouts, at one
+  row and at five of eight, each turned element within 1e-5 of the
+  definition and every tail element equal to the input's bit for bit; the
+  fix reverted fails it, and the tail moved by one element parts.
