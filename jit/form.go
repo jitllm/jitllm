@@ -110,12 +110,13 @@ func slice(g *graph.Graph) string {
 	return s
 }
 
-// liveOf is the capacity in rows a primitive of a step of several rows on a
-// GPU is formed for, its leading axis the step's rows: a call runs the rows
-// its table states (tableCall), at most these (Kernel.Capacity). 0 for a one-row
-// step's, whose form is decode's, and a host's.
+// liveOf is the capacity in rows a primitive of a step of several rows is
+// formed for, its leading axis the step's rows: a call runs the rows its
+// table states (tableCall), at most these (Kernel.Capacity) -- a GPU's
+// launch held to them (CallRows), a CPU's calls (RowCalls). 0 for a one-row
+// step's, whose form is decode's.
 func liveOf(p Prim, s Step, d Device) int {
-	if d.Kind != DeviceGPU || s.Rows < 2 || len(p.Shape) == 0 || p.Shape[0] != s.Rows {
+	if s.Rows < 2 || len(p.Shape) == 0 || p.Shape[0] != s.Rows {
 		return 0
 	}
 	return s.Rows

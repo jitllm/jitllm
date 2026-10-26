@@ -133,13 +133,24 @@ func (k *Kernel) liveElements(space []int, live int) int {
 	return k.bin(OpMul, U, units, k.u32(inner))
 }
 
+// LiveUnitsOf is the coordinates of the code's leading axis a call of rows
+// rows reaches: on a GPU the units its launch runs (LiveGroups), on a CPU
+// the leading axis of the calls the caller runs (RowCalls); the whole axis
+// where the code holds no rows of a step.
+func (c *Code) LiveUnitsOf(rows int) int {
+	if c.Live == 0 || rows >= c.Live {
+		return c.LiveUnits
+	}
+	return (max(rows, 1)*c.LiveUnits + c.Live - 1) / c.Live
+}
+
 // LiveGroups is the workgroups a launch of the code runs at a call of rows
 // rows: its capacity's where it holds no rows of a step.
 func (c *Code) LiveGroups(rows int) int {
 	if c.Live == 0 || rows >= c.Live {
 		return c.Groups
 	}
-	units := (max(rows, 1)*c.LiveUnits + c.Live - 1) / c.Live
+	units := c.LiveUnitsOf(rows)
 	if c.Work {
 		return units * c.LiveInner
 	}

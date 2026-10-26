@@ -85,7 +85,19 @@ func runCPUCalls(codes []Code, g *graph.Graph, bufs map[string][]uint32) error {
 					*slot = uint64(words[a.Offset])
 					continue
 				}
-				*slot = uint64(uintptr(unsafe.Pointer(&words[0]))) + uint64(4*a.Offset)
+				elem := 4
+				if a.Elem > 0 {
+					elem = a.Elem
+				}
+				off := a.Offset
+				for ax, per := range a.Per {
+					v := at
+					for x := len(c.Calls) - 1; x > ax; x-- {
+						v /= c.Calls[x]
+					}
+					off += v % c.Calls[ax] * per
+				}
+				*slot = uint64(uintptr(unsafe.Pointer(&words[0]))) + uint64(elem*off)
 			}
 			code.Call(&args)
 		}
@@ -251,4 +263,161 @@ func composedCPUAttend(t *testing.T, heads, kvh, dim int) {
 	if e := errOf(run([]uint32{0, 1, 2, 3}, 1)); !(e > 1e-6) {
 		t.Errorf("with the first row moved the NMSE is %.3e: the gate cannot see a wrong row", e)
 	}
+}
+
+// TestComposedCPUAttendRows executes the composer's attention over a chunk
+// of rows on the CPU, a form of several rows whose calls run the rows the
+// call states: each row's key and value appended to the paged binary16
+// history, each row attending causally to its own position, held to the
+// definition row by row (an NMSE of 1e-8: scores of thousands carry
+// float32's rounding of them into the softmax), at scores of unit size,
+// at large ones and at large ones all far below zero (a
+// model's biased keys). The first attended row moved by one must fail it.
+func TestComposedCPUAttendRows(t *testing.T) {
+	for _, sh := range []struct{ heads, kvh, dim int }{{6, 6, 48}, {16, 8, 128}, {12, 2, 128}} {
+		for _, mag := range []float32{1, 8, -16} {
+			t.Run(fmt.Sprintf("%dq%dkv%dd/x%g", sh.heads, sh.kvh, sh.dim, mag), func(t *testing.T) {
+				composedCPUAttendRows(t, sh.heads, sh.kvh, sh.dim, mag)
+			})
+		}
+	}
+}
+
+func composedCPUAttendRows(t *testing.T, heads, kvh, dim int, mag float32) {
+	const page, p0, R, capRows = 32, 40, 9, 16
+	g := attendGraph(heads, kvh, dim)
+	_, codes, err := Default().Form(Request{Graph: g,
+		Step:   Step{Rows: capRows, Page: page, Keys: 4 * page, ActWindow: 32, Seqs: 1},
+		Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rng := rand.New(rand.NewSource(7))
+	w, qw := kvh*dim, heads*dim
+	rnd := func(n int, m float32) []float32 {
+		x := make([]float32, n)
+		for i := range x {
+			x[i] = float32(rng.NormFloat64()) * m
+		}
+		return x
+	}
+	ks, vs := make([][]float32, p0+R), make([][]float32, p0+R)
+	for p := range p0 + R {
+		ks[p], vs[p] = rnd(w, mag), rnd(w, 1)
+		if mag < 0 {
+			for i := range ks[p] {
+				ks[p][i] = float32(math.Abs(float64(ks[p][i])))
+			}
+		}
+	}
+	q := rnd(capRows*qw, mag)
+	if mag < 0 {
+		for i := range q {
+			q[i] = -float32(math.Abs(float64(q[i])))
+		}
+	}
+	k, v := make([]float32, capRows*w), make([]float32, capRows*w)
+	for r := range R {
+		copy(k[r*w:], ks[p0+r])
+		copy(v[r*w:], vs[p0+r])
+	}
+	pool := func(rows [][]float32) []uint32 {
+		out := make([]uint32, 4*page*w/2)
+		for p := range p0 {
+			for d, x := range rows[p] {
+				h, i := uint32(quant.EncodeHalf(x)), p*w+d
+				if d%2 == 0 {
+					out[i/2] = out[i/2]&0xFFFF0000 | h
+				} else {
+					out[i/2] = out[i/2]&0xFFFF | h<<16
+				}
+			}
+		}
+		return out
+	}
+	round := func(x float32) float64 { return float64(quant.DecodeHalf(quant.EncodeHalf(x))) }
+	want := make([]float64, R*qw)
+	for r := range R {
+		end := p0 + r + 1
+		for h := range heads {
+			kv := h / (heads / kvh)
+			sc := make([]float64, end)
+			mx := math.Inf(-1)
+			for p := range end {
+				var s float64
+				for d := range dim {
+					s += float64(q[r*qw+h*dim+d]) * round(ks[p][kv*dim+d])
+				}
+				sc[p] = s * 0.125
+				mx = math.Max(mx, sc[p])
+			}
+			var sum float64
+			for p := range sc {
+				sc[p] = math.Exp(sc[p] - mx)
+				sum += sc[p]
+			}
+			for d := range dim {
+				var o float64
+				for p := range sc {
+					o += sc[p] / sum * round(vs[p][kv*dim+d])
+				}
+				want[r*qw+h*dim+d] = o
+			}
+		}
+	}
+	run := func(shift uint32) []float32 {
+		out := make([]float32, capRows*qw)
+		rows := make([]uint32, capRows*4)
+		for r := range R {
+			p := uint32(p0 + r)
+			copy(rows[r*4:], []uint32{0, shift, p + 1, p})
+		}
+		bufs := map[string][]uint32{"q": f32Words(q), "k": f32Words(k), "v": f32Words(v),
+			"rows": rows, "pages": {0, 1, 2, 3}, "q.off": make([]uint32, capRows*4), "rows.n": {R},
+			"kv.k": pool(ks), "kv.v": pool(vs)}
+		bufs[g.Values[g.Out[0]].Name] = f32Words(out)
+		if err := runCPURows(codes, g, bufs, R); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	worst := 0.0
+	got := run(0)
+	for r := range R {
+		var num, den float64
+		for i := range qw {
+			d := float64(got[r*qw+i]) - want[r*qw+i]
+			num += d * d
+			den += want[r*qw+i] * want[r*qw+i]
+		}
+		e := num / den
+		if math.IsNaN(e) || e > 1e-8 {
+			t.Errorf("row %d at position %d: NMSE %.3e against the definition", r, p0+r, e)
+		}
+		worst = max(worst, e)
+	}
+	t.Logf("%d rows of a %d-row form: worst NMSE %.3e against the definition", R, capRows, worst)
+	bad := run(1)
+	var num, den float64
+	for i := range R * qw {
+		d := float64(bad[i]) - want[i]
+		num += d * d
+		den += want[i] * want[i]
+	}
+	if !(num/den > 1e-6) {
+		t.Errorf("with every row's first key moved the NMSE is %.3e: the gate cannot see a wrong row", num/den)
+	}
+}
+
+// runCPURows is runCPUCalls for a form of several rows called for rows of
+// them: each code's calls' leading axis cut to the units the rows reach.
+func runCPURows(codes []Code, g *graph.Graph, bufs map[string][]uint32, rows int) error {
+	cut := make([]Code, len(codes))
+	for i, c := range codes {
+		cut[i] = c
+		if c.Live > 0 && len(c.Calls) > 0 {
+			cut[i].Calls = append([]int{c.LiveUnitsOf(rows)}, c.Calls[1:]...)
+		}
+	}
+	return runCPUCalls(cut, g, bufs)
 }

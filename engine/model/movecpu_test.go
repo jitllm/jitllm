@@ -34,26 +34,27 @@ func TestBlocksMoveToTheCPUAndBack(t *testing.T) {
 }
 
 // composedMoves holds st's composed CPU census to the moves: on the control
-// every decode step of every block served; on the moved run each block
+// the prompt's and every decode step of every block served; on the moved
+// run each block
 // composed at the State's placement, again at the move to the CPU and once
 // more for the upper half, and the block steps between the moves served.
 func composedMoves(t *testing.T, st *State, n, half int, devices bool, ntok, toCPU, toB, halfCPU, toA int) {
 	t.Helper()
 	served, declined := st.CPUBlockSteps()
 	for i, k := range declined {
-		if k > 0 && i != int(jit.DeclineBatch) {
+		if k > 0 {
 			t.Errorf("%d block steps declined on the CPU: %s (%v)", k, jit.DeclineName(i), st.CPUFormErr())
 		}
 	}
-	want := ntok * n
-	if devices {
-		want = (toB-toCPU)*n + (toA-halfCPU)*(n-half)
-	}
-	if served != want {
-		t.Errorf("the composed CPU served %d block steps, where the CPU ran %d", served, want)
-	}
 	if !devices {
+		// The prompt's chunks, every block of each, and the decode's steps.
+		if served < (ntok+1)*n || served%n != 0 {
+			t.Errorf("the composed CPU served %d block steps, where the CPU ran the prompt and %d", served, ntok*n)
+		}
 		return
+	}
+	if want := (toB-toCPU)*n + (toA-halfCPU)*(n-half); served != want {
+		t.Errorf("the composed CPU served %d block steps, where the CPU ran %d", served, want)
 	}
 	for li, k := range st.CPUCompositions() {
 		w := 2

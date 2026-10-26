@@ -25,7 +25,10 @@ func (s *State) ForwardBatch(tokens []int32) ([]float32, error) {
 	if len(tokens) != n {
 		return nil, errBatchWidth{len(tokens), n}
 	}
-	seq, pos := make([]int, n), make([]int, n)
+	if len(s.batchSeq) < n {
+		s.batchSeq, s.batchPos = make([]int, n), make([]int, n)
+	}
+	seq, pos := s.batchSeq[:n], s.batchPos[:n]
 	for i := range seq {
 		seq[i], pos[i] = i, s.bpos[i]
 	}
@@ -289,8 +292,24 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 		if err := m.pageIn(li); err != nil {
 			return nil, err
 		}
-		s.cpuDeclined(jit.DeclineBatch)
 		l := &m.layers[li]
+		if m.opt.composedCPU {
+			var why jit.Decline
+			var err error
+			if len(s.rowOwn) > 0 {
+				why, err = s.cpuSessions(li, l, s.bx[:n*c.ResidW()], cs, seq, pos, nlogit)
+			} else {
+				why, err = s.cpuRows(li, l, s.bx[:n*c.ResidW()], cs, seq, pos)
+			}
+			if err != nil {
+				return nil, err
+			}
+			if why == jit.DeclineServes {
+				s.cpu.served++
+				continue
+			}
+			s.cpu.declined[why]++
+		}
 		// DeepSeek V4's block is its own (ds4.go): each row its sequence's
 		// slot, position and token.
 		if c.DSV4() {

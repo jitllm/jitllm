@@ -604,6 +604,9 @@ type State struct {
 	rowOwn []*State
 	rowWin []bool
 	rowSeq []int
+	// batchSeq and batchPos are a ForwardBatch step's rows' slots and
+	// positions.
+	batchSeq, batchPos []int
 	// stepb is the model's step scratch holder while this State leads a
 	// host step (borrowStep).
 	stepb *stepBuf
@@ -1148,8 +1151,11 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 	// (State.migrateKVAs).
 	// An empty binary16 cache steps down to the f32 the device holds; one
 	// with history keeps its format and travels converted, widened on its way
-	// to the device and narrowed home (migrateKVAs), as a q8_0 one does.
-	if s.kvFmt == cpu.KVF16 && d != nil && s.pos == 0 {
+	// to the device and narrowed home (migrateKVAs), as a q8_0 one does. A
+	// State whose CPU blocks run composed keeps the binary16 its CPU device
+	// holds (jit.Halves), in the arenas its blocks were bound to, as a cache
+	// with history does.
+	if s.kvFmt == cpu.KVF16 && d != nil && s.pos == 0 && !s.m.opt.composedCPU {
 		s.stepDownKVToF32()
 	}
 	// The history comes home before the device changes (or detaches), or the

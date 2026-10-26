@@ -50,6 +50,8 @@ const (
 	DeclineISA
 	DeclineUnplaced
 	DeclineExperts
+	DeclineBidir
+	DeclineSessions
 	NumDeclines
 )
 
@@ -94,6 +96,8 @@ var declineNames = [NumDeclines]string{
 	DeclineNotFormed:     "the composer did not form the block",
 	DeclineUnplaced:      "a block not composed for the device at its placement",
 	DeclineExperts:       "routed experts not held whole on the device (streamed, cached, run on another device or in expert pages)",
+	DeclineBidir:         "a run of rows attending both ways",
+	DeclineSessions:      "a row whose history the CPU's form does not bound (another model's session, or past its keys)",
 	DeclineISA:           "a CPU the composer's CPU lowering does not emit for (x86-64 below AVX2, FMA and F16C, or arm64)",
 }
 

@@ -47,9 +47,9 @@ func TestPrefillMatchesForward(t *testing.T) {
 		defer nn.ResetForTest()
 		prefillVsForward(t, path, false)
 	})
-	// The forward loop on the composed CPU's blocks over the history main's
-	// prompt kernels wrote (a prompt's rows, declined by name), held to the
-	// shipped mode's bar: the two read and write one layout of the pages.
+	// The prompt and the forward loop both on the composed CPU's blocks --
+	// the prompt's rows through its form of several rows -- held to the
+	// shipped mode's bar.
 	t.Run("composed-cpu", func(t *testing.T) {
 		nn.ResetForTest()
 		defer nn.ResetForTest()
@@ -63,20 +63,20 @@ func TestPrefillMatchesForward(t *testing.T) {
 		defer m.Close()
 		var states []*State
 		prefillVsForwardModel(t, m, false, 0, func(s *State) { states = append(states, s) })
-		served, prompt := 0, 0
+		served := 0
 		for _, s := range states {
 			n, d := s.CPUBlockSteps()
-			served, prompt = served+n, prompt+d[jit.DeclineBatch]
+			served += n
 			for i, k := range d {
-				if k > 0 && i != int(jit.DeclineBatch) {
+				if k > 0 {
 					t.Errorf("%d block steps declined: %s (%v)", k, jit.DeclineName(i), s.CPUFormErr())
 				}
 			}
 		}
-		if served == 0 || prompt == 0 {
-			t.Fatalf("the composed CPU served %d block steps and declined %d of the prompt: this arm did not run both", served, prompt)
+		if served == 0 || len(states) == 0 {
+			t.Fatalf("the composed CPU served %d block steps over %d sessions: this arm ran nothing", served, len(states))
 		}
-		t.Logf("composed CPU: %d block steps served, %d of the prompt on main's kernels", served, prompt)
+		t.Logf("composed CPU: %d block steps served over %d sessions, the prompts' and the decodes'", served, len(states))
 	})
 	// On each device, both sessions on one tier: the tier's own kernels; the
 	// composer serving the decode's blocks, the prompt's at the chunk's rows

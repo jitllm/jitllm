@@ -134,6 +134,8 @@ func runCPUGraph(codes []Code, g *graph.Graph, rows int, x []float32, h *headWei
 		}
 		var args cpu.Args
 		base := unsafe.Pointer(&args)
+		var coords []CallArg
+		var moving []movingArg
 		for _, a := range c.Args {
 			if a.Field < 0 || uintptr(a.Field)+8 > unsafe.Sizeof(args) {
 				code.Close()
@@ -143,6 +145,9 @@ func runCPUGraph(codes []Code, g *graph.Graph, rows int, x []float32, h *headWei
 			var words []uint32
 			o := a.Operand
 			switch {
+			case a.Coord > 0:
+				coords = append(coords, a)
+				continue
 			case a.Length || a.Value:
 				*slot = uint64(a.Extent)
 				continue
@@ -178,9 +183,16 @@ func runCPUGraph(codes []Code, g *graph.Graph, rows int, x []float32, h *headWei
 				*slot = uint64(words[a.Offset])
 				continue
 			}
-			*slot = uint64(uintptr(unsafe.Pointer(&words[0]))) + uint64(4*a.Offset)
+			elem := 4
+			if a.Elem > 0 {
+				elem = a.Elem
+			}
+			*slot = uint64(uintptr(unsafe.Pointer(&words[0]))) + uint64(elem*a.Offset)
+			if len(a.Per) > 0 {
+				moving = append(moving, movingArg{a, *slot, elem})
+			}
 		}
-		code.Call(&args)
+		callAll(code, &args, c.Calls, coords, moving)
 		code.Close()
 	}
 	runtime.KeepAlive(keep)

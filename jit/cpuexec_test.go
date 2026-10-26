@@ -237,31 +237,7 @@ func runCPUVectors(codes []Code, x []float32, n int, planes [3][]uint32, vecs ma
 				moving = append(moving, movingArg{a, *slot, elem})
 			}
 		}
-		calls := 1
-		for _, n := range c.Calls {
-			calls *= n
-		}
-		for at := range calls {
-			for _, a := range coords {
-				v := at
-				for ax := len(c.Calls) - 1; ax > a.Coord-1; ax-- {
-					v /= c.Calls[ax]
-				}
-				*(*uint64)(unsafe.Add(base, a.Field)) = uint64(v % c.Calls[a.Coord-1])
-			}
-			for _, m := range moving {
-				addr := m.at
-				for ax, per := range m.a.Per {
-					v := at
-					for a := len(c.Calls) - 1; a > ax; a-- {
-						v /= c.Calls[a]
-					}
-					addr += uint64((v % c.Calls[ax]) * per * m.elem)
-				}
-				*(*uint64)(unsafe.Add(base, m.a.Field)) = addr
-			}
-			code.Call(&args)
-		}
+		callAll(code, &args, c.Calls, coords, moving)
 		code.Close()
 	}
 	runtime.KeepAlive(keep)
@@ -271,6 +247,35 @@ func runCPUVectors(codes []Code, x []float32, n int, planes [3][]uint32, vecs ma
 		}
 	}
 	return out[:n], nil
+}
+
+// callAll calls code once at each coordinate of the calls' space calls, its
+// coordinate words and its moving addresses set for each.
+func callAll(code *cpu.Code, args *cpu.Args, calls []int, coords []CallArg, moving []movingArg) {
+	base := unsafe.Pointer(args)
+	n := 1
+	for _, c := range calls {
+		n *= c
+	}
+	coord := func(at, ax int) int {
+		for a := len(calls) - 1; a > ax; a-- {
+			at /= calls[a]
+		}
+		return at % calls[ax]
+	}
+	for at := range n {
+		for _, a := range coords {
+			*(*uint64)(unsafe.Add(base, a.Field)) = uint64(coord(at, a.Coord-1))
+		}
+		for _, m := range moving {
+			addr := m.at
+			for ax, per := range m.a.Per {
+				addr += uint64(coord(at, ax) * per * m.elem)
+			}
+			*(*uint64)(unsafe.Add(base, m.a.Field)) = addr
+		}
+		code.Call(args)
+	}
 }
 
 // withCPUInt8 is the default registry with the CPU keeping the int8 form,

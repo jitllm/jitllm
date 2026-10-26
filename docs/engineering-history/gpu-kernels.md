@@ -8470,3 +8470,39 @@ row where the composer's reads two.
   at about 4.6k, but pp512 falls from about 15.0k to 12.6k tok/s, pp1024
   from 11.8k to 8.6k, pp4096 from 14.5k to 5.85k, and the cold placement
   (attach) grows from 3.97 s to 5.5 s.
+- The CPU device serves rows. A block placed on the CPU is composed twice
+  at its placement, once: decode's one-row form and a form at a capacity of
+  64 rows (cpuRowsCap), whose calls run the rows the call states. The
+  capacity is the GPU's (Kernel.Capacity, liveOf now device-generic); the
+  CPU's RowCalls pass holds a kernel to the call's rows by keeping its
+  leading axis, the step's rows, as the calls' space (rows and query heads
+  for a kernel over heads), and the call site runs the units the rows reach
+  (Code.LiveUnitsOf, which the GPU's LiveGroups now reads too). A prompt's
+  chunk (hostRows), a batched step (ForwardBatch), a step across sessions
+  (StepRuns, each session's rows on its own form and history, the rows after
+  the logit rows first) and several sequences in one State are served: each
+  row's descriptor names its sequence's page table, the pool addressed a
+  sequence's page at a time (a page holds every sequence's positions), the
+  KV writes through kvWritable, grow, cow and the arena. A page the KV budget
+  evicted is faulted back into its arena slot (kvCache.fault), so a paged
+  history is served rather than declined (DeclinePageOut); a composed State
+  attaching a card at position 0 keeps its binary16 history and arenas.
+  Kernels over (row, head) calls keep their indexing (Cursors skips them):
+  with cursors, a row whose every score sat far below zero (Qwen2's biased
+  keys) took its softmax's maximum past its range and came out uniform,
+  97 times main's spread on Qwen2-VL at 33 rows; TestComposedCPUAttendRows
+  holds that case. Gates: TestCPUComposesOnce passes on stories15M and
+  Qwen3-0.6B (prompts to 2000 tokens, a second session, a scheduler's four
+  sequences, and the lower half moved to cuda:0 and back: 2 compositions
+  for the moved blocks, 1 for the rest, none after), nothing declined;
+  TestComposedCPURowsServe holds prompts (5 to 513), a paged prompt (11760
+  pages evicted, 10920 faulted back on Qwen3), a 3-sequence batch and 3
+  sessions stepped together inside main's band (median 0.29-0.63 of the
+  spread), both violations leaving it; a warm 33-row chunk and a warm
+  4-sequence step allocate nothing (countAllocs). Speed on the Xeon
+  D-2123IT, 4 cores, Llama-3.2-1B Q4_K_M, A/A 1.002-1.003: composed prefill
+  is 0.085 of main's (pp33 10.9 against 129.8 tok/s, pp100 12.1 against
+  141.9, pp512 11.9 against 140.0): a row a call re-reads the weights per
+  row, and kernels writing a scratch run their calls serially. Composed
+  decode reads 0.198 of main (6.7 against 33.7 tok/s) where 1155a8d9 reads
+  0.198: not regressed.

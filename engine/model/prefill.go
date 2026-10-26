@@ -1294,8 +1294,22 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 	if err := m.pageIn(li); err != nil {
 		return err
 	}
-	s.cpuDeclined(jit.DeclineBatch)
 	l := &m.layers[li]
+	if m.opt.composedCPU {
+		why := jit.DeclineBidir
+		if !bidir {
+			seq, pos := s.cpuRowsOf(slot, p0, n)
+			var err error
+			if why, err = s.cpuRows(li, l, s.bx[:n*c.ResidW()], s.bcs, seq, pos); err != nil {
+				return err
+			}
+		}
+		if why == jit.DeclineServes {
+			s.cpu.served++
+			return nil
+		}
+		s.cpu.declined[why]++
+	}
 	// DeepSeek V4's block is its own (ds4.go): the chunk's rows are
 	// successive positions of this slot, their tokens set by the caller.
 	if c.DSV4() {

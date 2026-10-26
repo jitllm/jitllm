@@ -1,0 +1,216 @@
+package model
+
+import (
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/internal/testdevices"
+	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
+)
+
+// TestCPUComposesOnce holds the CPU device to the census the cards are held
+// to (TestPlacementComposesOnce): every block a State keeps on the CPU is
+// composed for it once, at its placement, and serves every step after it --
+// prompts of every length and their decode, a second session, a scheduler's
+// batch of several sequences -- declining none to main's kernels. Each phase
+// names what it declined, by reason, and how many block steps it served.
+func TestCPUComposesOnce(t *testing.T) {
+	for _, tc := range []struct {
+		file    string
+		lengths []int
+	}{
+		{"stories15M-q8_0.gguf", []int{1, 5, 33, 100}},
+		{"Qwen3-0.6B-Q8_0.gguf", []int{1, 5, 33, 100, 511, 512, 513, 2000}},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			m, err := Open(jlmOf(t, testmodels.Path(tc.file)), noTune, WithComposedCPU(true))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			m.setKVPageForTest(32)
+			const decode = 2
+			total := 0
+			for _, n := range tc.lengths {
+				total += n + decode
+			}
+			text := strings.Repeat("The river rose every spring until the bridges were islands, "+
+				"and the clerk counted barrels of salt on the upper floor. ", 400)
+			ids := m.Vocab.Encode(text, true)
+			if len(ids) < total {
+				t.Fatalf("%d prompt tokens, %d wanted", len(ids), total)
+			}
+			nl := m.Cfg.NLayer
+			// held is the census of s after a phase: every block composed for
+			// the CPU once, nothing declined, and at least want more block
+			// steps served than before.
+			held := func(what string, s *State, before, want int) int {
+				t.Helper()
+				served, declined := s.CPUBlockSteps()
+				for why, n := range declined {
+					if n > 0 {
+						t.Errorf("%s: %d block step(s) declined to main's kernels: %s (%v)", what, n, jit.DeclineName(why), s.CPUFormErr())
+					}
+				}
+				for li, n := range s.CPUCompositions() {
+					if n != 1 {
+						t.Errorf("%s: block %d composed for the CPU %d time(s), want 1", what, li, n)
+					}
+				}
+				if served-before < want {
+					t.Errorf("%s: %d block steps served, want at least %d", what, served-before, want)
+				}
+				if t.Failed() {
+					t.FailNow()
+				}
+				t.Logf("%s: %d block steps served", what, served-before)
+				return served
+			}
+
+			s := m.NewState(total + 128)
+			defer s.Close()
+			if got := len(s.CPUCompositions()); got != nl {
+				t.Fatalf("%d blocks placed on the CPU of %d", got, nl)
+			}
+			served := held("the placement", s, 0, 0)
+			off := 0
+			for _, n := range tc.lengths {
+				// A model of a short context (stories15M's 128) starts the
+				// session over where the prompt and its decode would not fit.
+				if s.pos+n+decode > s.maxSeq {
+					s.Reset()
+				}
+				l, err := s.Prefill(ids[off : off+n])
+				if err != nil {
+					t.Fatalf("a prompt of %d: %v", n, err)
+				}
+				off += n
+				for range decode {
+					if l, err = s.Forward(argmaxID(l)); err != nil {
+						t.Fatal(err)
+					}
+					off++
+				}
+				served = held("a prompt of "+strconv.Itoa(n)+" tokens and its decode", s, served, (1+decode)*nl)
+			}
+
+			s2 := m.NewState(512)
+			defer s2.Close()
+			l, err := s2.Prefill(ids[:100])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s2.Forward(argmaxID(l)); err != nil {
+				t.Fatal(err)
+			}
+			held("a second session's prompt and decode", s2, 0, 2*nl)
+			held("the first session beside the second", s, served, 0)
+
+			sc := NewScheduler(m, 4, 256)
+			defer sc.Close()
+			seqs := []*Seq{{Prompt: ids[:7], MaxTokens: 4}, {Prompt: ids[50:83], MaxTokens: 6},
+				{Prompt: ids[200:300], MaxTokens: 5}, {Prompt: ids[1000:1064], MaxTokens: 3}}
+			for _, q := range seqs {
+				sc.Submit(q)
+			}
+			steps := 0
+			for done := 0; done < len(seqs); steps++ {
+				if steps > 200 {
+					t.Fatalf("the batch made no progress: %d of %d retired", done, len(seqs))
+				}
+				d, err := sc.Step()
+				if err != nil {
+					t.Fatal(err)
+				}
+				done += len(d)
+			}
+			for i, q := range seqs {
+				if q.Err != nil {
+					t.Fatalf("sequence %d: %v", i, q.Err)
+				}
+			}
+			held("a batch of four sequences", sc.st, 0, steps*nl)
+
+			// The lower half of a session's CPU blocks to a card and back,
+			// mid-sequence: those composed for the CPU again at their return,
+			// the rest not again, and nothing composed after it.
+			t.Run("relocation", func(t *testing.T) {
+				dev := testdevices.Take(t, 1, "cuda:0")[0]
+				g, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff))
+				if err != nil || g == nil {
+					noDevice(t, dev, err)
+				}
+				defer g.Close()
+				r := m.NewState(512)
+				defer r.Close()
+				if err := r.SetDeviceLayers(g, 0); err != nil {
+					t.Fatal(err)
+				}
+				half := nl / 2
+				turn := func(what string, at, n int) {
+					t.Helper()
+					l, err := r.Prefill(ids[at : at+n])
+					if err != nil {
+						t.Fatalf("%s: %v", what, err)
+					}
+					if _, err := r.Forward(argmaxID(l)); err != nil {
+						t.Fatalf("%s: %v", what, err)
+					}
+				}
+				move := func(lo, hi int, to string) {
+					t.Helper()
+					mv, err := r.MoveBlocks(lo, hi, to)
+					if err != nil || len(mv.Declined) > 0 {
+						t.Fatalf("blocks %d..%d to %s: %v (declined %v; %s)", lo, hi-1, to, err, mv.Declined, g.Err())
+					}
+					for li := lo; li < hi; li++ {
+						if got := r.WhereIs(li); got != nn.DeviceName(to) {
+							t.Fatalf("block %d is on %q, sent to %q", li, got, to)
+						}
+					}
+				}
+				census := func(what string, before, want int) int {
+					t.Helper()
+					served, declined := r.CPUBlockSteps()
+					for why, n := range declined {
+						if n > 0 {
+							t.Fatalf("%s: %d block step(s) declined: %s (%v)", what, n, jit.DeclineName(why), r.CPUFormErr())
+						}
+					}
+					for li, n := range r.CPUCompositions() {
+						w := 1
+						if li < half && what != "the placement" {
+							w = 2
+						}
+						if n != w {
+							t.Fatalf("%s: block %d composed for the CPU %d time(s), want %d", what, li, n, w)
+						}
+					}
+					if served-before < want {
+						t.Fatalf("%s: %d block steps served, want at least %d", what, served-before, want)
+					}
+					t.Logf("%s: %d block steps served", what, served-before)
+					return served
+				}
+				turn("the first prompt", 0, 33)
+				served := census("the placement", 0, 2*nl)
+				move(0, half, dev)
+				turn("a prompt with the lower half on "+dev, 40, 20)
+				before := served
+				served, _ = r.CPUBlockSteps()
+				if got := served - before; got < 2*(nl-half) {
+					t.Fatalf("with the lower half on %s the CPU served %d block steps, want at least %d", dev, got, 2*(nl-half))
+				}
+				move(0, half, nn.CPU)
+				turn("a prompt with every block back", 70, 33)
+				served = census("after the return", served, 2*nl)
+				turn("a prompt after the return", 110, 5)
+				census("after the return, again", served, 2*nl)
+			})
+		})
+	}
+}

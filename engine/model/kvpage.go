@@ -2047,6 +2047,9 @@ func (kc *kvCache) trim(pos int) {
 				continue
 			}
 			s.unshare(n)
+			if s.arenaPage(n) {
+				s.releaseSlot(n)
+			}
 			s.k[n], s.v[n] = nil, nil
 			s.out[n] = true
 			kc.evicted += 2
@@ -2076,22 +2079,32 @@ func (kc *kvCache) fault(li, n int) error {
 		return kc.faultShared(li, n, key)
 	}
 	// The length is checked here, where the geometry is: a short page would
-	// leave zeros read back as keys the model never wrote.
-	k := make([]float32, s.pp)
-	v := make([]float32, s.pp)
-	kw := newSliceWriter(kvBytesOf(k))
-	if err := kc.store.Get(key, li*2, n, kw); err != nil {
+	// leave zeros read back as keys the model never wrote. A layer with an
+	// arena reads the page back into its slot, where a composed CPU block
+	// addresses it (kvArena); a failed read hands the slot back zeroed.
+	k, v := s.arenaSlot(n)
+	if k == nil || s.latent {
+		k, v = make([]float32, s.pp), make([]float32, s.pp)
+	}
+	miss := func(err error) error {
+		if s.inArena(n, k) {
+			s.releaseSlot(n)
+		}
 		return kc.miss(key, err)
 	}
+	kw := newSliceWriter(kvBytesOf(k))
+	if err := kc.store.Get(key, li*2, n, kw); err != nil {
+		return miss(err)
+	}
 	if kw.n != len(kw.b) {
-		return kc.miss(key, shortPage(li, n, kw.n, len(kw.b)))
+		return miss(shortPage(li, n, kw.n, len(kw.b)))
 	}
 	vw := newSliceWriter(kvBytesOf(v))
 	if err := kc.store.Get(key, li*2+1, n, vw); err != nil {
-		return kc.miss(key, err)
+		return miss(err)
 	}
 	if vw.n != len(vw.b) {
-		return kc.miss(key, shortPage(li, n, vw.n, len(vw.b)))
+		return miss(shortPage(li, n, vw.n, len(vw.b)))
 	}
 	s.k[n], s.v[n] = k, v
 	s.out[n] = false

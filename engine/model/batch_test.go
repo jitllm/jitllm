@@ -39,9 +39,8 @@ func TestBatchMatchesForward(t *testing.T) {
 			t.Run("shipped", func(t *testing.T) {
 				batchVsForward(t, path, false, noTune)
 			})
-			// The single sequences on the composed CPU's blocks, the batch on
-			// main's (a step of several rows, declined by name): held to the
-			// shipped mode's bar.
+			// The single sequences and the batch on the composed CPU's
+			// blocks: held to the shipped mode's bar.
 			t.Run("composed-cpu", func(t *testing.T) {
 				batchVsForward(t, path, false, noTune, WithComposedCPU(true))
 			})
@@ -68,8 +67,11 @@ func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 		}
 	}
 
-	// The single-sequence answer, one State per row.
+	// The single-sequence answer, one State per row, and on the composed
+	// CPU the block steps of a step it served, summed over the rows, and
+	// what it declined.
 	want := make([][][]float32, nseq)
+	decServed, decDeclined := 0, [jit.NumDeclines]int{}
 	for i := range streams {
 		s := m.NewState(steps + 1)
 		for _, id := range streams[i] {
@@ -82,6 +84,10 @@ func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 		}
 		if m.opt.composedCPU {
 			served, declined := s.CPUBlockSteps()
+			decServed += served / steps
+			for j, n := range declined {
+				decDeclined[j] += n
+			}
 			total := served
 			for j, n := range declined {
 				total += n
@@ -116,6 +122,20 @@ func batchVsForward(t *testing.T, path string, exact bool, opts ...Option) {
 		}
 	}
 	judge.finish(t)
+	// The batch's rows on the composed CPU's blocks: every step of every
+	// block the decode served, served, and declined only by a reason the
+	// decode declined the block by.
+	if m.opt.composedCPU {
+		served, declined := b.CPUBlockSteps()
+		for i, n := range declined {
+			if n > 0 && decDeclined[i] == 0 {
+				t.Errorf("the batch declined %d block steps the decode served: %s (%v)", n, jit.DeclineName(i), b.CPUFormErr())
+			}
+		}
+		if want := steps * decServed / nseq; served != want {
+			t.Errorf("the composed CPU served %d of the batch's block steps, where the decode served %d", served, want)
+		}
+	}
 }
 
 // logitJudge holds a batched path's logits to the single-sequence ones in one
