@@ -498,6 +498,30 @@ func (n *Kernel) Homes() []int {
 		if nd.Op != OpFold {
 			continue
 		}
+		// reaches is reachesFold(i, f), each node's answer kept: the nodes
+		// below the folds are acyclic.
+		known := map[int]bool{}
+		var reaches func(i int) bool
+		reaches = func(i int) bool {
+			if i == f {
+				return true
+			}
+			if r, ok := known[i]; ok {
+				return r
+			}
+			known[i] = false
+			x := n.Nodes[i]
+			if x.Op == OpFold {
+				return false
+			}
+			for _, a := range n.Operands(&x) {
+				if reaches(*a) {
+					known[i] = true
+					return true
+				}
+			}
+			return false
+		}
 		var walk func(i int)
 		walk = func(i int) {
 			if i == f {
@@ -507,7 +531,7 @@ func (n *Kernel) Homes() []int {
 				return
 			}
 			x := n.Nodes[i]
-			if x.Op == OpFold || !n.reachesFold(i, f) {
+			if x.Op == OpFold || !reaches(i) {
 				return
 			}
 			step[i] = nd.At

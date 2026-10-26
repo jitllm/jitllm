@@ -83,6 +83,9 @@ type cpuCode struct {
 	// they reach, each of inner calls (jit.RowCalls).
 	live  jit.Code
 	inner int
+	// tiles is a kernel whose inner calls tile a weight (jit.Code.TileMajor):
+	// its calls run a tile for every live row before the next tile.
+	tiles bool
 }
 
 // cpuBlockForm is a block's kernels for the CPU at one composer Key, mapped
@@ -92,7 +95,12 @@ type cpuBlockForm struct {
 	// rows is the rows the form holds: 1 for decode's, else its capacity;
 	// keys the positions of a sequence's history it attends at most.
 	rows, keys int
-	own        []int
+	// unit is the most rows a unit of a kernel's leading axis holds
+	// (jit.RowJam): a call's rows past a whole number of them are run
+	// from a copy of the residual, so a unit's rows past the call's write
+	// no other rows.
+	unit int
+	own  []int
 	// consts is an own buffer's constant words, by its index.
 	consts map[int][]uint32
 }
@@ -138,6 +146,9 @@ type cpuState struct {
 	rowsTab    []uint32
 	call       [4]uint32
 	rseq, rpos []int
+	// xpad is a call's residual rows where its kernels' units reach past
+	// them (cpuBlockForm.unit).
+	xpad []float32
 	// own is each form's own buffers, by form: blocks of one form run one
 	// after another, so they share them.
 	own map[*cpuBlockForm][][]uint32
@@ -183,10 +194,11 @@ const cpuRowsCap = 64
 
 // cpuRegion is the kernel a pool region calls, its calls the region's range.
 type cpuRegion struct {
-	s  *State
-	b  *cpuBound
-	c  *cpuCode
-	fn func(worker, lo, hi int)
+	s    *State
+	b    *cpuBound
+	c    *cpuCode
+	live int
+	fn   func(worker, lo, hi int)
 }
 
 // cpuBound is a block's step as its words read it: n rows of the residual
@@ -385,11 +397,23 @@ func (s *State) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x, cs []float32, s
 				d[1]++
 			}
 		}
-		*b = cpuBound{li: li, l: l, own: s.cpuOwn(f), cs: cs[r0*nrot:], x: x[r0*w:], rows: s.cpu.rowsTab, n: k,
+		bx := x[r0*w:]
+		staged := f.unit > 1 && k%f.unit != 0
+		if staged {
+			if len(s.cpu.xpad) < f.rows*w {
+				s.cpu.xpad = make([]float32, f.rows*w)
+			}
+			copy(s.cpu.xpad, bx[:k*w])
+			bx = s.cpu.xpad
+		}
+		*b = cpuBound{li: li, l: l, own: s.cpuOwn(f), cs: cs[r0*nrot:], x: bx, rows: s.cpu.rowsTab, n: k,
 			kv: pg, pages: s.cpu.pages}
 		s.cpu.call[0] = uint32(k)
 		for i := range f.codes {
 			s.cpuCall(b, &f.codes[i])
+		}
+		if staged {
+			copy(x[r0*w:(r0+k)*w], s.cpu.xpad[:k*w])
 		}
 	}
 	if pg.p > 0 && end > pg.written {
@@ -482,21 +506,35 @@ func (s *State) cpuOwn(f *cpuBlockForm) [][]uint32 {
 
 // cpuCall runs one kernel of a block: once, or over its calls on the pool.
 func (s *State) cpuCall(b *cpuBound, c *cpuCode) {
-	n := c.n
+	n, live := c.n, 0
 	if c.live.Live > 0 {
-		n = c.live.LiveUnitsOf(b.n) * c.inner
+		live = c.live.LiveUnitsOf(b.n)
+		n = live * c.inner
+	}
+	if !c.tiles {
+		live = 0
 	}
 	if n <= 1 || c.serial || s.jit == nil || s.jit.Workers() <= 1 {
 		a := &s.cpu.args[0]
-		for at := range max(n, 1) {
-			s.cpuWords(a, b, c, at)
+		for i := range max(n, 1) {
+			s.cpuWords(a, b, c, c.callAt(i, live))
 			c.code.Call(a)
 		}
 		return
 	}
 	r := &s.cpu.run
-	r.s, r.b, r.c = s, b, c
+	r.s, r.b, r.c, r.live = s, b, c, live
 	s.jit.ParallelWorkers(n, 1, r.fn)
+}
+
+// callAt is the call the i-th of a kernel's calls runs: in order, or for a
+// kernel tiling a weight over live units of rows (tiles), a tile's every
+// unit before the next tile's.
+func (c *cpuCode) callAt(i, live int) int {
+	if live <= 0 {
+		return i
+	}
+	return i%live*c.inner + i/live
 }
 
 // cpuWords writes call at's words of kernel c into a.
@@ -568,8 +606,8 @@ func cpuCoord(calls []int, at, ax int) int {
 // worker w's words.
 func (r *cpuRegion) region(w, lo, hi int) {
 	a := &r.s.cpu.args[w]
-	for at := lo; at < hi; at++ {
-		r.s.cpuWords(a, r.b, r.c, at)
+	for i := lo; i < hi; i++ {
+		r.s.cpuWords(a, r.b, r.c, r.c.callAt(i, r.live))
 		r.c.code.Call(a)
 	}
 }
@@ -826,6 +864,8 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int) (*cpuBlockForm, e
 				return nil, fmt.Errorf("%s at %d rows: its calls %v hold no rows of a call (live %d of %d units)", c.Name, rows, c.Calls, c.Live, c.LiveUnits)
 			}
 			cc.live, cc.inner = jit.Code{Live: c.Live, LiveUnits: c.LiveUnits}, cc.n/c.Calls[0]
+			cc.tiles = c.TileMajor && cc.inner > 1
+			f.unit = max(f.unit, c.Live/c.LiveUnits)
 		}
 		bytes := map[jit.Operand]int64{}
 		for _, bd := range c.Binds {

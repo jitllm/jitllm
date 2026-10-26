@@ -656,16 +656,46 @@ func (e *x86Lowerer) node(i int) {
 // unsignedBytes reports whether every byte of node i is below 0x80: a mask
 // of bytes each of which is.
 func (e *x86Lowerer) unsignedBytes(i int) bool {
-	nd := e.k.Nodes[i]
-	if nd.Op != OpAnd {
-		return false
+	return e.wordBits(i, 6)&0x80808080 == 0
+}
+
+// wordBits is the bits of node i's words that may be set, from the
+// constants its masks, shifts and disjoint sums read, depth nodes deep; all
+// of them where it cannot tell.
+func (e *x86Lowerer) wordBits(i, depth int) uint32 {
+	if v, ok := e.constWord(i); ok {
+		return v
 	}
-	for _, c := range []int{nd.A, nd.B} {
-		if v, ok := e.constWord(c); ok && v&0x80808080 == 0 {
-			return true
+	nd := e.k.Nodes[i]
+	if depth == 0 || nd.Type != ir.U32 && nd.Type != ir.I32 {
+		return ^uint32(0)
+	}
+	shift := func() (uint32, bool) {
+		v, ok := e.constWord(nd.B)
+		return v, ok && v < 32
+	}
+	switch nd.Op {
+	case OpBitcast, OpBroadcast:
+		return e.wordBits(nd.A, depth-1)
+	case OpAnd:
+		return e.wordBits(nd.A, depth-1) & e.wordBits(nd.B, depth-1)
+	case OpOr, OpXor:
+		return e.wordBits(nd.A, depth-1) | e.wordBits(nd.B, depth-1)
+	case OpAdd:
+		// Two words with no bit both may set sum with no carry: their or.
+		if a, b := e.wordBits(nd.A, depth-1), e.wordBits(nd.B, depth-1); a&b == 0 {
+			return a | b
+		}
+	case OpShl:
+		if s, ok := shift(); ok {
+			return e.wordBits(nd.A, depth-1) << s
+		}
+	case OpShr:
+		if s, ok := shift(); ok {
+			return e.wordBits(nd.A, depth-1) >> s
 		}
 	}
-	return false
+	return ^uint32(0)
 }
 
 // constWord is node i's word where it is fixed: a constant, or a constant

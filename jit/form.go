@@ -74,7 +74,7 @@ func (r *Registry) form(req Request) ([]Code, error) {
 			if err != nil {
 				return nil, fmt.Errorf("jit: cannot form %s: %w", slice(req.Graph), err)
 			}
-			k.Part, k.Unfused = req.Part, sp.unfused[k.Of]
+			k.Part, k.Unfused, k.Unjammed = req.Part, sp.unfused[k.Of], sp.unjammed[k.Of]
 			k.Capacity = liveOf(p, req.Step, req.Device)
 			ks = append(ks, k)
 		}

@@ -9,52 +9,79 @@ import "github.com/jitllm/jitllm/jit/ir"
 // space, each call a run of consecutive rows. The cut divides the rows
 // exactly, each call a whole number of Rows rows, and is the one that
 // leaves the busiest worker the fewest rows, the fewest calls among equals.
+//
+// A kernel held to a call's rows (RowCalls) is cut into tiles of at most
+// Tile of the weight's rows instead, a calls' axis after the step's rows,
+// whatever the workers: the caller runs a tile's calls for every row of the
+// step before the next tile's (Code.TileMajor), so a tile of the weight is
+// read from memory once for all the step's rows.
 type Workers struct {
-	Rows int
+	Rows, Tile int
 }
 
 func (Workers) Name() string { return "workers" }
 
 func (p Workers) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
-	if d.Slots <= 1 {
-		return ks, nil
-	}
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
-		if k.Work || k.Group > 0 || k.Heads != nil || k.Calls > 0 || len(k.Space) == 0 || len(k.Loops) == 0 || !k.readsWeight() {
+		rows := k.RowsHeld && k.Calls == 1 && k.Heads == nil && len(k.Space) >= 2
+		if k.Work || k.Group > 0 || k.Heads != nil || k.Calls > 0 && !rows || len(k.Space) == 0 || len(k.Loops) == 0 || !k.readsWeight() {
 			return nil, false, nil
 		}
 		a := len(k.Space) - 1
-		parts := workerParts(k.Space[a], d.Slots, max(p.Rows, 1))
+		var parts int
+		switch {
+		case rows:
+			parts = tileParts(k.Space[a], max(p.Rows, 1), p.Tile)
+		case d.Slots > 1:
+			parts = workerParts(k.Space[a], d.Slots, max(p.Rows, 1))
+		}
 		if parts <= 1 {
 			return nil, false, nil
 		}
+		at := k.Calls
 		m := k.clone()
 		chunk := m.Space[a] / parts
-		var at []int
+		var cut []int
 		for i := range m.Nodes {
-			if nd := &m.Nodes[i]; nd.Op == OpCoord {
+			if nd := &m.Nodes[i]; nd.Op == OpCoord && nd.A >= at {
 				if nd.A == a {
-					at = append(at, i)
+					cut = append(cut, i)
 				}
 				nd.A++
 			}
 		}
-		part := m.add(Node{Op: OpCoord, A: 0, Type: ir.U32})
+		part := m.add(Node{Op: OpCoord, A: at, Type: ir.U32})
 		base := m.bin(OpMul, ir.U32, part, m.u32(chunk))
-		for _, i := range at {
+		for _, i := range cut {
 			inner := m.add(Node{Op: OpCoord, A: a + 1, Type: ir.U32})
 			m.Nodes[i] = Node{Op: OpAdd, Type: ir.U32, A: inner, B: base}
 		}
-		if pos := m.Positions; pos != nil && pos.Axis >= 0 {
+		if pos := m.Positions; pos != nil && pos.Axis >= at {
 			q := *pos
 			q.Axis++
 			m.Positions = &q
 		}
-		m.Space = append([]int{parts}, m.Space...)
+		m.Space = append(append(append([]int(nil), m.Space[:at]...), parts), m.Space[at:]...)
 		m.Space[a+1] = chunk
-		m.Calls = 1
+		m.Calls = at + 1
+		m.TileMajor = rows
 		return []*Kernel{m}, true, nil
 	})
+}
+
+// tileParts is the tiles rows rows are cut into for a kernel held to a
+// call's rows: the fewest dividing rows that leave each a multiple of unit
+// rows and at most tile; 1 where tile is unset or no cut does.
+func tileParts(rows, unit, tile int) int {
+	if tile <= 0 {
+		return 1
+	}
+	for parts := 2; parts*unit <= rows; parts++ {
+		if rows%parts == 0 && (rows/parts)%unit == 0 && rows/parts <= tile {
+			return parts
+		}
+	}
+	return 1
 }
 
 // workerParts is the calls rows rows are cut into over workers: a divisor

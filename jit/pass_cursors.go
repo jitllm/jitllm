@@ -20,8 +20,9 @@ func (p Cursors) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		// A kernel called over (row, head) coordinates (RowCalls) keeps its
 		// indexing: its copies of an address read past a row's range on a
 		// row whose every score is far below zero (TestComposedCPUAttendRows'
-		// negative arm), which the indexed form does not.
-		if k.Args == nil || k.Calls >= 2 {
+		// negative arm), which the indexed form does not. A kernel over
+		// (row, tile) calls (Workers) takes its cursors.
+		if k.Args == nil || k.Calls >= 2 && !k.TileMajor {
 			return nil, false, nil
 		}
 		m := k.clone()

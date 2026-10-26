@@ -44,6 +44,10 @@ type Kernel struct {
 	// Unfused is a kernel of a part the registers refused fused, with no
 	// expression left to split: Fuse joins it to nothing.
 	Unfused bool
+	// Jam is the rows a call of the kernel runs where RowJam set it;
+	// Unjammed a kernel of a part whose jammed form the registers refused.
+	Jam      int
+	Unjammed bool
 	// Rows is 1 + the node of how many of the leading axis's rows are live;
 	// Clamp, where a pass set it, 1 + the node of the elements a launch
 	// holds its threads to.
@@ -55,6 +59,9 @@ type Kernel struct {
 	Capacity int
 	// RowsHeld is set where a pass held the kernel to the call's rows.
 	RowsHeld bool
+	// TileMajor is a kernel whose calls over a step's rows and a weight's
+	// tiles (Workers) run every row of a tile before the next tile.
+	TileMajor bool
 	// Seq, where a schedule set it, is the kernel as a sequence: each node,
 	// store and loop in the order the code runs them.
 	Seq []Entry

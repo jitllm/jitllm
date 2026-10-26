@@ -81,7 +81,10 @@ var ErrRegisterPressure = errors.New("register pressure")
 // the parts they are of (Kernel.Of), and the first kernel's reason.
 type PressureError struct {
 	Parts []int
-	Err   error
+	// Jammed is the parts of Parts a refused kernel ran several rows a
+	// call in (RowJam).
+	Jammed []int
+	Err    error
 }
 
 func (e *PressureError) Error() string { return e.Err.Error() }
@@ -99,6 +102,9 @@ func (p Regs) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				refused = &PressureError{Err: err}
 			}
 			refused.Parts = append(refused.Parts, k.Of)
+			if k.Jam > 1 {
+				refused.Jammed = append(refused.Jammed, k.Of)
+			}
 			return nil, false, nil
 		}
 		return ns, changed, err

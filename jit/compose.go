@@ -69,6 +69,10 @@ type Code struct {
 	// kernel runs once at each of its coordinates, any order, each call's
 	// own passed in the words its Args say. Empty is one call.
 	Calls []int
+	// TileMajor is a kernel whose calls' second axis tiles a weight
+	// (Workers): its calls are best run every live row of a tile, then the
+	// next tile, so a tile is read from memory once for the step's rows.
+	TileMajor bool
 }
 
 // Writes reports whether the kernel writes operand o.
@@ -240,7 +244,7 @@ func (r *Registry) generated(f Model, run []PartPlan, first int, s Step, sp *exp
 			if err != nil {
 				return nil, nil, fmt.Errorf("%s: %w", pp.Part, err)
 			}
-			k.Part, k.Of, k.Unfused = pp.Part.Kind, first+i, sp.unfused[first+i]
+			k.Part, k.Of, k.Unfused, k.Unjammed = pp.Part.Kind, first+i, sp.unfused[first+i], sp.unjammed[first+i]
 			ks = append(ks, k)
 		}
 	}
@@ -325,6 +329,7 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 		}
 		if k.Capacity > 0 && k.RowsHeld && len(k.Space) > 0 && k.Space[0] > 0 {
 			c.Live, c.LiveUnits, c.LiveInner, c.LiveGroup = k.Capacity, k.Space[0], k.Elements()/k.Space[0], k.Group
+			c.TileMajor = k.TileMajor
 		}
 		for _, a := range k.Args {
 			if a.Buf >= 0 {

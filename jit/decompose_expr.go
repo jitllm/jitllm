@@ -111,16 +111,18 @@ type exprSize struct {
 type exprSplit struct {
 	terms map[exprAt]bool
 	whole map[int][]exprSize
-	// unfused is the parts formed with their kernels joined to none.
-	unfused map[int]bool
+	// unfused is the parts formed with their kernels joined to none,
+	// unjammed those formed with each row a call of its own (RowJam).
+	unfused, unjammed map[int]bool
 }
 
 func newExprSplit() *exprSplit {
-	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}}
+	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}, unjammed: map[int]bool{}}
 }
 
-// splitRefused forms a map a term the largest expression formed whole in
-// each part of the kernels refused, or forms a part with none left unfused,
+// splitRefused forms a part whose refused kernel ran several rows a call
+// with a row a call; else a map a term the largest expression formed whole
+// in each part of the kernels refused, or a part with none left unfused,
 // reporting whether it changed a part.
 func (sp *exprSplit) splitRefused(err error) bool {
 	if err == nil {
@@ -131,6 +133,14 @@ func (sp *exprSplit) splitRefused(err error) bool {
 		return false
 	}
 	more := false
+	for _, of := range pe.Jammed {
+		if !sp.unjammed[of] {
+			sp.unjammed[of], more = true, true
+		}
+	}
+	if more {
+		return true
+	}
 	for _, of := range pe.Parts {
 		split := false
 		if ws := sp.whole[of]; len(ws) > 0 {

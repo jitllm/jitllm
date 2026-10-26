@@ -17,7 +17,7 @@ func (Induction) Name() string { return "induction" }
 func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		var m *Kernel
-		live := k.Live()
+		live, addr := k.Live(), k.addressNodes()
 		vec := map[int]int{}
 		for c := range k.Loops {
 			it := k.iterOf(c)
@@ -25,12 +25,12 @@ func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				continue
 			}
 			l := k.Loops[c]
-			from, data := it, k.dataReaders(it, live)
+			from, data := it, k.dataReaders(it, live, addr)
 			v, cont := vec[l.Of-1]
 			if l.Lanes == 0 && l.Of > 0 && cont {
 				for d, nd := range k.Nodes {
 					if nd.Op == OpAdd && nd.B == it && live[d] {
-						if dr := k.dataReaders(d, live); len(dr) > 0 {
+						if dr := k.dataReaders(d, live, addr); len(dr) > 0 {
 							from, data = d, dr
 						}
 					}
@@ -73,30 +73,44 @@ func (p Induction) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	})
 }
 
-// addresses reports whether node i feeds an index a load or a store reads.
-func (k *Kernel) addresses(i int) bool {
+// addressNodes is the nodes that feed an index a load or a store reads:
+// every node an index is computed from, a fold's reads not followed, as
+// readsNode walks them.
+func (k *Kernel) addressNodes() map[int]bool {
+	seen := map[int]bool{}
+	var stack []int
+	push := func(i int) {
+		if !seen[i] {
+			seen[i] = true
+			stack = append(stack, i)
+		}
+	}
 	for _, nd := range k.Nodes {
 		if nd.Op == OpLoad {
 			for _, a := range k.Operands(&nd) {
-				if k.readsNode(*a, i) {
-					return true
-				}
+				push(*a)
 			}
 		}
 	}
 	for _, s := range k.Stores {
-		if !s.Barrier && !s.Run && (k.readsNode(s.Ix, i) || s.Ax != nil && func() bool {
-			for _, a := range s.Ax {
-				if k.readsNode(a, i) {
-					return true
-				}
-			}
-			return false
-		}()) {
-			return true
+		if s.Barrier || s.Run {
+			continue
+		}
+		push(s.Ix)
+		for _, a := range s.Ax {
+			push(a)
 		}
 	}
-	return false
+	for len(stack) > 0 {
+		i := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if nd := k.Nodes[i]; nd.Op != OpFold {
+			for _, a := range k.Operands(&nd) {
+				push(*a)
+			}
+		}
+	}
+	return seen
 }
 
 // readsNode reports whether node i is computed from node x.
@@ -118,10 +132,10 @@ func (k *Kernel) readsNode(i, x int) bool {
 
 // dataReaders is the live nodes that read node i as data: not a load, and
 // feeding no address.
-func (k *Kernel) dataReaders(i int, live map[int]bool) []int {
+func (k *Kernel) dataReaders(i int, live, addr map[int]bool) []int {
 	var out []int
 	for j, nd := range k.Nodes {
-		if !live[j] || nd.Op == OpLoad || k.addresses(j) {
+		if !live[j] || nd.Op == OpLoad || addr[j] {
 			continue
 		}
 		for _, a := range k.Operands(&nd) {

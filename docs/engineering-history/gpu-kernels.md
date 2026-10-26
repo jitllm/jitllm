@@ -8588,3 +8588,52 @@ row where the composer's reads two.
   at 1.057 of main's kernels (201.6 against 190.3 tok/s, IQR/median 0.018,
   A/A 1.000, n=20), about 162 GB/s at 803 MB a token, 18% of the card's
   900 GB/s specification (no wall was measured in the pass).
+- **The CPU device runs a prompt's matvecs a tile of the weight at a time,
+  two rows a call.** In the rows' form (cpuRowsCap), Workers cuts a
+  matvec held to a call's rows into tiles of at most 64 of the weight's
+  rows, a calls' axis after the step's rows (Code.TileMajor), and the call
+  site runs a tile for every live unit before the next (cpuCode.callAt), so
+  a tile is read from memory once for the chunk. RowJam then runs two rows
+  a call: the leading axis counts units of two rows, each row a copy of
+  the values it reaches (its activation's loads, sums and stores) beside
+  one decode of the weight's values. A unit's row past the call's rows
+  reads and writes the form's capacity, never another row: a call whose
+  rows are not whole units runs from a copy of the residual
+  (cpuForms.xpad). A jammed kernel the registers refuse is formed again a
+  row a call before anything is split or unfused (PressureError.Jammed,
+  exprSplit.unjammed). Tiles alone were 0.207 of main on the laptop
+  against 0.235 without them: without cursors (C5's Cursors skip for every
+  kernel of two call axes, now kept only for (row, head) calls) the
+  indexing cost what the reuse saved, and at four rows a call the fused
+  kernel is 32.6 KB, forming took over ten minutes and a fused rotary
+  epilogue was unfused into a map no call holds to rows (stories15M), so
+  two it is. Forming the jammed form exposed two quadratic walks:
+  Induction asked readsNode of every node against every load (65 s of a
+  144 s placement on Llama-3.2-1B), now one cone walk (addressNodes), and
+  Homes asked reachesFold afresh for every node of a fold's step (21 s),
+  now memoised per fold; placement with the jammed form is 60 s on the
+  busy laptop against 55 s for the unjammed form. And the byte dot takes
+  a weight's codes as unsigned wherever the bits they may set leave every
+  byte's top bit clear (wordBits: masks, shifts, ors and disjoint sums), so
+  Q6_K, Q5_K and Q3_K's codes (a low field plus high bits shifted above it)
+  lose their VPSIGNB and VPABSB: a Q6_K decode matvec's 32 signed dots go
+  to none (4060 to 3740 bytes). Speed on the Xeon D-2123IT (4 cores,
+  taskset 0-3, Llama-3.2-1B Q4_K_M, the same pass, A/A 0.999-1.003, n=20):
+  composed prefill 0.1235 of main at pp33 (16.0 against 129.9 tok/s),
+  0.1245 at pp100 (17.6 against 141.7), 0.1229 at pp512 (17.2 against
+  139.8), where 7794821d reads 0.0821 (10.6) and 0.0837 (11.9): 1.50x;
+  composed decode 0.1998 (6.8 tok/s, 5.4 GB/s, 13% of the 41.5 GB/s wall)
+  against 7794821d's 0.1966 (6.6); a second pass reads 0.1239, 0.1254
+  and 0.1228, decode 0.1988 against 0.1960: not regressed, and the
+  unsigned dot does not show there. Laptop (i9-12900HK, 6 P-cores, one harness): pp100 125
+  tok/s against 98 for the form with neither tiles nor jam. Gates: the jit package; TestComposedCPURowsServe,
+  TestCPUComposesOnce, TestComposedCPURowsDoNotAllocate (a 33-row chunk,
+  odd, runs from the copy) and TestComposedCPUBlocksServe on stories15M,
+  Qwen3-0.6B and Llama-3.2-1B; TestComposedCPUMatVec's int8 arm fails with
+  every dot taken unsigned. Open: the rows' form runs one session's single
+  row a call as a unit of two (twice the dot work, one weight decode); a
+  prompt still decodes the weight once per two rows where main's
+  stationary GEMM decodes it once per call of up to its token tile, so
+  prefill stays at an eighth of main's; and a part the registers refuse
+  unfused can leave a map over (row, head) of no capacity that the rows'
+  form cannot hold to rows ("its calls [64 6] hold no rows of a call").
