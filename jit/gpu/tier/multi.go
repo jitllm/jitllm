@@ -85,9 +85,12 @@ func (g *GPU) Bytes() uint64 {
 }
 
 // Err reports the last reason a device operation declined, for diagnostics.
-func (g *GPU) Err() string {
+func (g *GPU) Err() string { return g.errOf(&g.rows) }
+
+// errOf is Err for the rows call c: its own reason first.
+func (g *GPU) errOf(c *rowsCall) string {
 	g.mu.Lock()
-	e := g.rowsErr
+	e := c.err
 	g.mu.Unlock()
 	if e != "" {
 		return e
@@ -1082,7 +1085,7 @@ func (g *GPU) Layers(lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) 
 // is the placement PrepHead makes; elsewhere it becomes its own submission, one
 // more crossing and still worth it for the densest unit of a large model.
 func (g *GPU) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, head *nn.Head) bool {
-	g.resetCause()
+	g.resetCause(sid, true)
 	ok := g.layersCall(sid, lo, hi, pos, n, x, cs, csSWA, head)
 	// A refusal before any device ran leaves the head device's promise
 	// unconsumed; it lives for one call (devTier.layersCall).
@@ -1096,17 +1099,63 @@ func (g *GPU) layersFor(sid uint64, lo, hi, pos, n int, x, cs, csSWA []float32, 
 }
 
 // PipelineDepth is how many devices hold blocks (nn.Pipeliner): a prompt chunk
-// crosses each once, in order.
+// crosses each once, in order. It allocates nothing: the server's step loop
+// asks it every step.
 func (g *GPU) PipelineDepth() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	seen := map[*devTier]bool{}
-	for _, d := range g.own {
-		if d != nil {
-			seen[d] = true
+	n := 0
+	for _, d := range g.devs {
+		for _, o := range g.own {
+			if o == d {
+				n++
+				break
+			}
 		}
 	}
-	return len(seen)
+	return n
+}
+
+// RowsComposed reports whether a step over rows runs every block on a device,
+// and the head, in the composer's reserved width (devTier.rowsComposed,
+// headReserved): one kernel for every row count, so a row's arithmetic is the
+// same whatever rows share its step. The tier's own kernels are chosen per
+// row count (groupMV up to four rows, the tiles above it, a split by the
+// width), so there a row's logits move with its step's company. The server's
+// decode groups split a step's rows on their own only where this holds.
+func (g *GPU) RowsComposed() bool {
+	placed := false
+	for i := 0; ; i++ {
+		d := g.dev(i)
+		if d == nil {
+			break
+		}
+		d.mu.Lock()
+		ok := true
+		for li, l := range d.layers {
+			if l == nil || !l.ok {
+				continue
+			}
+			placed = true
+			if !d.rangeComposed(li, li+1, ComposedBlock, false) {
+				ok = false
+				break
+			}
+		}
+		d.mu.Unlock()
+		if !ok {
+			return false
+		}
+	}
+	g.mu.Lock()
+	hd := g.head
+	g.mu.Unlock()
+	if !placed || hd == nil {
+		return false
+	}
+	hd.mu.Lock()
+	defer hd.mu.Unlock()
+	return hd.headReserved()
 }
 
 // nonCausalAt reports whether block li is a non-causal block, whose rows --
@@ -1618,7 +1667,7 @@ func (g *GPU) ReserveKVSeqs(bases, ends []int) bool {
 
 // reserveKVSeqs asks every device holding a block; see devTier.ReserveKVSeqs.
 func (g *GPU) reserveKVSeqs(sid uint64, bases, ends []int) bool {
-	g.resetCause()
+	g.resetCause(sid, true)
 	var buf [ownersStack]*devTier
 	for _, d := range g.owners(buf[:0]) {
 		if !d.reserveKVSeqs(sid, bases, ends) {
@@ -1638,7 +1687,7 @@ func (g *GPU) ReserveKV(pos int) bool {
 // partial reservation would leave one sequence split across two tiers at two
 // different depths.
 func (g *GPU) reserveKV(sid uint64, pos int) bool {
-	g.resetCause()
+	g.resetCause(sid, true)
 	var buf [ownersStack]*devTier
 	var refused *devTier
 	for _, d := range g.owners(buf[:0]) {

@@ -73,6 +73,9 @@ type oaChatRequest struct {
 	// JitllmSpeculate turns speculative decoding on or off for the request
 	// (Speculation); absent takes the session's.
 	JitllmSpeculate *bool `json:"jitllm_speculate,omitempty"`
+	// JitllmDecodeGroups bounds the step loop's decode groups while the
+	// request decodes (GenerateOptions.DecodeGroups).
+	JitllmDecodeGroups int `json:"jitllm_decode_groups,omitempty"`
 	// ResponseFormat is OpenAI's structured output: text, json_object or
 	// json_schema (grammar.go).
 	ResponseFormat json.RawMessage `json:"response_format"`
@@ -94,6 +97,9 @@ type oaCompletionRequest struct {
 	// JitllmSpeculate turns speculative decoding on or off for the request
 	// (Speculation); absent takes the session's.
 	JitllmSpeculate *bool `json:"jitllm_speculate,omitempty"`
+	// JitllmDecodeGroups bounds the step loop's decode groups while the
+	// request decodes (GenerateOptions.DecodeGroups).
+	JitllmDecodeGroups int `json:"jitllm_decode_groups,omitempty"`
 	// ResponseFormat is OpenAI's structured output: text, json_object or
 	// json_schema (grammar.go).
 	ResponseFormat json.RawMessage `json:"response_format"`
@@ -351,14 +357,15 @@ func (e *compat) openAIChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o := GenerateOptions{
-		Prompt:      Prompt{Kind: PromptChat, Chat: chat},
-		MaxTokens:   maxTok,
-		Stop:        oaStop(req.Stop),
-		Sampling:    sampling,
-		IgnoreEOS:   req.IgnoreEOS,
-		Seeds:       seeds,
-		Speculation: oaSpeculation(req.JitllmSpeculate),
-		Priority:    req.JitllmPriority,
+		Prompt:       Prompt{Kind: PromptChat, Chat: chat},
+		MaxTokens:    maxTok,
+		Stop:         oaStop(req.Stop),
+		Sampling:     sampling,
+		IgnoreEOS:    req.IgnoreEOS,
+		Seeds:        seeds,
+		Speculation:  oaSpeculation(req.JitllmSpeculate),
+		Priority:     req.JitllmPriority,
+		DecodeGroups: req.JitllmDecodeGroups,
 	}
 	if o.Grammar, err = oaResponseFormat(req.ResponseFormat); err != nil {
 		oaFailErr(w, err)
@@ -441,15 +448,16 @@ func (e *compat) openAICompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	o := GenerateOptions{
-		Prompt:      ps[0],
-		MaxTokens:   maxTok,
-		Stop:        oaStop(req.Stop),
-		Echo:        req.Echo,
-		Sampling:    sampling,
-		IgnoreEOS:   req.IgnoreEOS,
-		Seeds:       seeds,
-		Speculation: oaSpeculation(req.JitllmSpeculate),
-		Priority:    req.JitllmPriority,
+		Prompt:       ps[0],
+		MaxTokens:    maxTok,
+		Stop:         oaStop(req.Stop),
+		Echo:         req.Echo,
+		Sampling:     sampling,
+		IgnoreEOS:    req.IgnoreEOS,
+		Seeds:        seeds,
+		Speculation:  oaSpeculation(req.JitllmSpeculate),
+		Priority:     req.JitllmPriority,
+		DecodeGroups: req.JitllmDecodeGroups,
 	}
 	if o.Grammar, err = oaResponseFormat(req.ResponseFormat); err != nil {
 		oaFailErr(w, err)

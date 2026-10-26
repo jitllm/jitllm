@@ -222,6 +222,10 @@ func composesOnce(t *testing.T, m *Model, g *tier.GPU, width int, to string) {
 		t.Fatal(err)
 	}
 	held("a second session's prompt and decode")
+	if to != "" {
+		groupedCensus(t, m, g, ids)
+		held("decode groups stepping at once on the two cards")
+	}
 
 	// Four prompts of more rows than the reserved width: the scheduler admits
 	// at most the reserved width a step.

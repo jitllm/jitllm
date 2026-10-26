@@ -174,6 +174,13 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 					t.Logf("%d rows gathered on %s and read back for blocks on %s", backs, d[0], d[1])
 				})
 			}
+			// The server's decode groups: a dense model, a mixture and a
+			// hybrid split over two devices, two groups stepping at once.
+			switch name {
+			case "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf",
+				"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf":
+				t.Run("two-device-groups", func(t *testing.T) { groupedStepAllocs(t, p, noTune, resident) })
+			}
 			// The stream trial pinned off with the tuners: it migrates blocks
 			// between its runs, and a migration's page-ins are not a decode.
 			m, err := Open(jlmOf(t, p), noTune, resident, WithStreamTrial(false))

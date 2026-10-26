@@ -545,7 +545,7 @@ func (g *devTier) headSetAt(rows int) bool {
 // ReserveRows asks every device (nn.RowsReserver); one holding no tower block
 // says yes.
 func (g *GPU) ReserveRows(n int) bool {
-	g.resetCause()
+	g.resetCause(0, true)
 	g.mu.Lock()
 	ds := g.devs
 	g.mu.Unlock()
@@ -591,7 +591,7 @@ func (g *GPU) LayersPhase(lo, hi, pos, n, keys, phase int, x, cs, csSWA []float3
 }
 
 func (g *GPU) layersPhase(sid uint64, lo, hi, pos, n, keys, phase int, x, cs, csSWA []float32) bool {
-	g.resetCause()
+	g.resetCause(sid, true)
 	if phase != 1 && phase != 2 || keys < pos+n {
 		return false
 	}

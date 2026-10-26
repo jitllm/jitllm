@@ -403,23 +403,37 @@ func (g *devTier) prepRowsReserved() {
 	}
 }
 
+// rowsCall is what a rows call keeps between its calls: its runs slice,
+// reused so a step allocates none, and why its last call failed, naming the
+// device (the devices' LastErr summed by Stats is whichever wrote last, not
+// the one that refused). The zero session's is the GPU's, a session's its own:
+// steps led by different sessions at once -- the server's decode groups --
+// share none of it.
+type rowsCall struct {
+	runs []run
+	err  string
+	// in is the session whose inputs (gpuSession.inputsTo) each device takes
+	// as the call reaches it, nil for none.
+	in *gpuSession
+}
+
 // LayersRows runs blocks [lo, hi) for the rows, one call per device run, the
 // residual crossing to the next device through x. Each row's history for a
 // block lives in the cache of the device that holds the block. The head rides
 // the last block's step where it is on that device, and is a step of its own
 // on the device holding it otherwise.
 func (g *GPU) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
-	return g.layersRows(0, lo, hi, pos, slot, nil, seqLen, x, cs, csSWA, head)
+	return g.layersRows(&g.rows, 0, lo, hi, pos, slot, nil, seqLen, x, cs, csSWA, head)
 }
 
 // layersRows is LayersRows for session self, with each row's session, or nil
-// for self's.
-func (g *GPU) layersRows(self uint64, lo, hi int, pos, slot []int, sid []uint64, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
-	g.resetRecSteps(self)
-	g.resetCause()
+// for self's; c is self's rows call.
+func (g *GPU) layersRows(c *rowsCall, self uint64, lo, hi int, pos, slot []int, sid []uint64, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
+	beside := g.rowsCalls.Add(1) > 1
+	defer g.rowsCalls.Add(-1)
 	g.mu.Lock()
-	rs, ok := g.runsInto(g.runBuf, lo, hi)
-	g.runBuf = nil
+	rs, ok := g.runsInto(c.runs, lo, hi)
+	c.runs = nil
 	why := ""
 	switch {
 	case lo == hi && head != nil && g.head != nil:
@@ -441,10 +455,17 @@ func (g *GPU) layersRows(self uint64, lo, hi int, pos, slot []int, sid []uint64,
 			rs = append(rs, run{dev: g.head, lo: hi, hi: hi, split: g.split})
 		}
 	}
-	g.rowsErr = why
+	c.err = why
 	g.mu.Unlock()
-	defer g.putRuns(rs)
+	defer g.keepRuns(c, rs)
+	// The call's counts and causes start at zero, and the session's inputs
+	// go to each device, as the call reaches it (stageBegin): a device runs
+	// one step's stage at a time holding its lock, so touching a device
+	// another step is on would hold this one at its head until that stage
+	// ended, and steps led by different sessions would never overlap.
+	g.startRows(self, rs, !beside)
 	if why != "" {
+		g.startRest(self, rs, 0)
 		return false
 	}
 	for i, r := range rs {
@@ -455,11 +476,20 @@ func (g *GPU) layersRows(self uint64, lo, hi int, pos, slot []int, sid []uint64,
 		// A step of its own on each device: its rows' grouping is the
 		// device's. The ragStep is the session's on that device, its slices
 		// reused.
+		g.stageBegin(r.dev)
+		if !slices.ContainsFunc(rs[:i], func(o run) bool { return o.dev == r.dev }) {
+			r.dev.startCall(self)
+			if c.in != nil {
+				c.in.inputsOn(r.dev)
+			}
+		}
 		v := r.dev.as(self)
 		if v == nil {
+			g.stageEnd(r.dev)
+			g.startRest(self, rs, i+1)
 			why = fmt.Sprintf("%s: no scratch for this session: %s", label(r.dev.dev, r.dev.ord), r.dev.stats().LastErr)
 			g.mu.Lock()
-			g.rowsErr = why
+			c.err = why
 			g.mu.Unlock()
 			return false
 		}
@@ -474,15 +504,86 @@ func (g *GPU) layersRows(self uint64, lo, hi int, pos, slot []int, sid []uint64,
 		// whose rows index past this one's.
 		st.pos, st.slot, st.sid = nil, nil, nil
 		st.runs, st.runSid, st.runSeat, st.sess = st.runs[:0], st.runSid[:0], st.runSeat[:0], st.sess[:0]
+		g.stageEnd(r.dev)
 		if !ok {
+			g.startRest(self, rs, i+1)
 			why = fmt.Sprintf("%s, blocks [%d,%d): %s", label(r.dev.dev, r.dev.ord), r.lo, r.hi, r.dev.stats().LastErr)
 			g.mu.Lock()
-			g.rowsErr = why
+			c.err = why
 			g.mu.Unlock()
 			return false
 		}
 	}
 	return true
+}
+
+// startRows starts a rows call of session self over rs on the devices it
+// does not run on, which no step's stage holds: their counts and causes for
+// self go to zero, and every device's own cause too when no other rows call
+// is in flight (shared). The devices of rs start as the call reaches them.
+func (g *GPU) startRows(self uint64, rs []run, shared bool) {
+	for i := 0; ; i++ {
+		d := g.dev(i)
+		if d == nil {
+			return
+		}
+		if shared {
+			d.cause.Store(0)
+		}
+		if !slices.ContainsFunc(rs, func(o run) bool { return o.dev == d }) {
+			d.startCall(self)
+		}
+	}
+}
+
+// startRest starts the call on the devices of rs from rs[from] on that a
+// failed call never reached, so a step refused part way reads no count left
+// by an earlier one.
+func (g *GPU) startRest(self uint64, rs []run, from int) {
+	for j := from; j < len(rs); j++ {
+		d := rs[j].dev
+		if !slices.ContainsFunc(rs[:j], func(o run) bool { return o.dev == d }) {
+			d.startCall(self)
+		}
+	}
+}
+
+// keepRuns hands a rows call's runs slice back to c for its next call.
+func (g *GPU) keepRuns(c *rowsCall, rs []run) {
+	g.mu.Lock()
+	c.runs = rs
+	g.mu.Unlock()
+}
+
+// stageBegin waits for d to finish any other call's rows stage and marks one
+// running there, counting an overlap on d when another device is running
+// one: a call runs its stages one after another, so that stage is another
+// call's. A card runs one step's stage at a time, so steps led by different
+// sessions -- the server's decode groups -- that reach a card together go
+// through it one after the other and leave it offset by a stage, each on its
+// own card from then on, where a lane each would run them on the same card
+// at once and in step, and the other cards idle.
+func (g *GPU) stageBegin(d *devTier) {
+	d.stageMu.Lock()
+	g.stageMu.Lock()
+	other := g.stages > d.stages
+	g.stages++
+	d.stages++
+	g.stageMu.Unlock()
+	if other {
+		d.mu.Lock()
+		d.Stats.StageOverlaps++
+		d.mu.Unlock()
+	}
+}
+
+// stageEnd ends what stageBegin began.
+func (g *GPU) stageEnd(d *devTier) {
+	g.stageMu.Lock()
+	g.stages--
+	d.stages--
+	g.stageMu.Unlock()
+	d.stageMu.Unlock()
 }
 
 // RowsWidth is the widest step of at most want rows every device holding a
@@ -532,7 +633,7 @@ func (g *GPU) RowsWidth(want int) int {
 // the head has its per-row head too. A scratch that does not build is an
 // error, not a shortage of room.
 func (g *GPU) rowsRoom(sid uint64, rows, seqs int, head *nn.Head) (bool, error) {
-	g.resetCause()
+	g.resetCause(sid, true)
 	if roomFaulted("noseat-lie") || roomFaulted("narrow-lie") {
 		return true, nil
 	}
@@ -677,8 +778,9 @@ func (s *gpuSession) RowsRoom(rows, seqs int, head *nn.Head) (bool, error) {
 func (s *gpuSession) RowsWidth(want int) int { return s.g.RowsWidth(want) }
 
 func (s *gpuSession) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, csSWA []float32, head *nn.Head) bool {
-	defer s.leave(s.inputsTo(s.step()))
-	return s.g.layersRows(s.sid, lo, hi, pos, slot, nil, seqLen, x, cs, csSWA, head)
+	defer s.leave(s.step())
+	s.rows.in = s
+	return s.g.layersRows(&s.rows, s.sid, lo, hi, pos, slot, nil, seqLen, x, cs, csSWA, head)
 }
 
 // LayersSessions runs one step for rows of different sessions on this GPU, row
@@ -690,7 +792,6 @@ func (s *gpuSession) LayersRows(lo, hi int, pos, slot []int, seqLen int, x, cs, 
 // repeat); every row's K and V are written before any row attends, so a
 // chunk's rows see each other causally.
 func (s *gpuSession) LayersSessions(lo, hi int, sess []nn.LayerDevice, pos []int, x, cs, csSWA []float32, head *nn.Head) bool {
-	s.g.resetRecSteps(s.sid)
 	// The session's own lists, reused: a session steps from one goroutine.
 	s.sidBuf = slices.Grow(s.sidBuf[:0], len(sess))[:len(sess)]
 	s.slotBuf = slices.Grow(s.slotBuf[:0], len(sess))[:len(sess)]
@@ -698,17 +799,19 @@ func (s *gpuSession) LayersSessions(lo, hi int, sess []nn.LayerDevice, pos []int
 	for i, d := range sess {
 		o, ok := d.(*gpuSession)
 		if !ok || o.g != s.g {
+			s.g.resetRecSteps(s.sid)
 			s.g.mu.Lock()
-			s.g.rowsErr = fmt.Sprintf("sessions: row %d is not a session of this GPU", i)
+			s.rows.err = fmt.Sprintf("sessions: row %d is not a session of this GPU", i)
 			s.g.mu.Unlock()
 			return false
 		}
 		sid[i], slot[i] = o.sid, pos[i]
 	}
-	defer s.leave(s.inputsTo(s.step()))
+	defer s.leave(s.step())
+	s.rows.in = s
 	// A session is one sequence whose slots are its positions, so the span a
 	// sequence takes is no matter: every row's sequence is its session's 0.
-	return s.g.layersRows(s.sid, lo, hi, pos, slot, sid, 0, x, cs, csSWA, head)
+	return s.g.layersRows(&s.rows, s.sid, lo, hi, pos, slot, sid, 0, x, cs, csSWA, head)
 }
 
 // ragKey names a ragged step's compiled matvec in devTier.ragK: the kind of

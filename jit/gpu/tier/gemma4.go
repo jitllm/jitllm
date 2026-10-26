@@ -207,9 +207,14 @@ func (s *gpuSession) SetLayerInputs(in []float32) { s.ple = in }
 // inputsTo hands the session's per-layer inputs to the devices enter took.
 func (s *gpuSession) inputsTo(ds []*devTier) []*devTier {
 	for _, d := range ds {
-		d.setInputs(s.sid, s.ple, s.ids, s.ng, s.marks, s.prompt, s.axes, s.axesAt)
+		s.inputsOn(d)
 	}
 	return ds
+}
+
+// inputsOn hands the session's inputs to d alone.
+func (s *gpuSession) inputsOn(d *devTier) {
+	d.setInputs(s.sid, s.ple, s.ids, s.ng, s.marks, s.prompt, s.axes, s.axesAt)
 }
 
 // pleRows is the staged per-layer inputs, n floats: the caller's rows, then

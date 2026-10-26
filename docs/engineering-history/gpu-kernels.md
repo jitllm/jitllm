@@ -8637,3 +8637,39 @@ row where the composer's reads two.
   prefill stays at an eighth of main's; and a part the registers refuse
   unfused can leave a map over (row, head) of no capacity that the rows'
   form cannot hold to rows ("its calls [64 6] hold no rows of a call").
+- **Decode groups: a model over several cards decodes on every card at
+  once.** A joint step runs card 1's blocks, then card 2's
+  (tier.GPU.layersRows), so with one step in flight one card works. The
+  server's step loop (server/batchgroups.go) now deals a multi-card model's
+  decoding rows into one group per card holding blocks and steps each group
+  on a long-lived worker of its own (model.StepJoint, the joint arm for a
+  group of any size, one included); admission, the room check, prompts
+  (GPU.pipeline) and a move stay the loop's, and any of them ends grouped
+  decoding once the groups in flight land. The tier's per-call state became
+  per call: a rows call's runs and error are its session's (tier.rowsCall),
+  a refusal's cause is noted per session as well as per device
+  (devSess.sessCause), and a card runs one step's stage at a time
+  (devShared.stageMu) so groups that reach it together leave it a stage
+  apart. The first version overlapped nothing: a step's head reset every
+  device's count and cause and handed every device its inputs, each under
+  that device's lock, which a rows step holds across its submission, so a
+  second group waited at its head for the first's last stage (5.7 s of
+  setRecSteps blocking in a 20 s trace). That bookkeeping now happens as the
+  call reaches each device, and StageOverlaps (a stage beginning while
+  another card runs another step's) went from 4 of 64 steps to 127 of 128
+  on the laptop's two devices (RTX 3050 Ti under CUDA and Vulkan). Tokens:
+  the loop groups by itself only where every block and the head run in the
+  composer's reserved width (tier.GPU.RowsComposed), one kernel for every
+  row count; there TestBatchDecodeGroupsKeepTheTokens holds stories15M,
+  Llama-3.2-1B and Qwen3-MOE-4x0.6B bit for bit between one group, a group
+  per card and a group per row. The tier's own kernels are chosen per row
+  count (groupMV up to four rows, the tiles above, a split by the width), and
+  forced groups there part from one group at tokens 1 to 9 (laptop and
+  V100, dense, mixture and hybrid; Qwen3.5's linear blocks are not composed,
+  so the composed build reports false for it too); there the loop keeps one
+  group unless the caller forces a count (-decode-groups, or
+  jitllm_decode_groups per request). Groups forced to step one after another
+  overlap nothing (0 of 40), which the gate refuses. A warm grouped step
+  allocates nothing (TestDecodeDoesNotAllocate's two-device-groups arm,
+  Llama, olmoe and Qwen3.5). The V100 throughput rows (gpt-oss-120b on 5
+  cards, Qwen3-30B-A3B on 2, Qwen3-Next-80B on 4) are not yet measured.

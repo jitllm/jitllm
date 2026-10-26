@@ -131,6 +131,15 @@ type stepLoop struct {
 	// nanoseconds, that bound the quantum from below (stepLoop.quantum).
 	parkNs, resumeNs, stepNs float64
 
+	// groupsCfg is Config.DecodeGroups; groups the decode groups' long-lived
+	// workers, made as a model first needs them, and landed where each tells
+	// the loop its step is done (batchgroups.go). serialGroups, false but in
+	// a gate's violation, runs the groups' steps one after another.
+	groupsCfg    int
+	groups       []*decGroup
+	landed       chan *decGroup
+	serialGroups bool
+
 	stats batchCounters
 }
 
@@ -165,6 +174,9 @@ type batchCounters struct {
 	// postedTokens is tokens whose text and event the helper produced while
 	// their step ran.
 	postedTokens atomic.Int64
+	// groupRounds counts the times the decoding rows were dealt into decode
+	// groups, groupSteps the steps those groups ran (batchgroups.go).
+	groupRounds, groupSteps atomic.Int64
 	// maxPromptBeside is the most prompt tokens one step carried beside a
 	// decoding row: the bound stepBudget keeps.
 	maxPromptBeside atomic.Int64
@@ -207,6 +219,7 @@ func newStepLoop(e *Engine, lm *LoadedModel) *stepLoop {
 		choice:      newJointChoice(e.cfg.JointSteps),
 		budget:      newStepBudget(e.cfg.StepPromptTokens, e.cfg.PromptChunk, e.cfg.StepCost),
 		fair:        fairLevel(e.cfg.Fairness),
+		groupsCfg:   e.cfg.DecodeGroups,
 		ctx:         ctx,
 		quit:        quit,
 		done:        make(chan struct{}),
@@ -249,6 +262,9 @@ type row struct {
 	// is when it began waiting: its arrival, or when it was last parked.
 	prio  int
 	since time.Time
+	// groups is the request's bound on the loop's decode groups, 0 none
+	// (GenerateOptions.DecodeGroups).
+	groups int
 
 	// admitted closes when the loop takes the row; done when it lets go of
 	// the row for good, after its last event is in the outbox.
@@ -402,6 +418,9 @@ func (lp *stepLoop) close() {
 	lp.quit()
 	<-lp.done
 	lp.post.close()
+	for _, g := range lp.groups {
+		close(g.start)
+	}
 	for _, r := range waiting {
 		r.result.err = errUnloaded
 		close(r.done)
@@ -647,6 +666,10 @@ func (lp *stepLoop) iterate() {
 			r.s.serveMove(false)
 		}
 	}
+	if n := lp.groupCount(); n > 1 {
+		lp.decodeGrouped(n)
+		return
+	}
 	units := lp.decodeUnits()
 	decoding := len(units)
 	budget := lp.promptChunk
@@ -732,50 +755,56 @@ func (lp *stepLoop) sealPrompts() {
 // token is never fed (unless the row ignores it, and then it is a token like
 // any other), and a stop string ends the row before its token is fed.
 func (lp *stepLoop) decodeUnits() []unit {
-	vocab := lp.lm.m.Vocab
 	units := lp.units[:0]
 	lp.walk = append(lp.walk[:0], lp.rows...)
 	for _, r := range lp.walk {
-		if r.prompting() {
-			continue
+		if !r.prompting() && lp.nextToken(r) {
+			units = append(units, unit{r: r, tokens: r.next[:], logits: true})
 		}
-		if r.cancelled.Load() {
-			lp.finish(r, FinishCancelled, "", nil)
-			continue
-		}
-		if r.n >= r.maxTokens && !lp.dropMaxTokens {
-			lp.finish(r, FinishMaxTokens, "", nil)
-			continue
-		}
-		next := r.sampler.Sample(r.logits)
-		if sampleTap != nil {
-			sampleTap(r.sampler.Temp, r.logits, next)
-		}
-		r.sampler.Observe(next)
-		tlp := takeLogprob(r.logprobs, vocab, r.logits, next)
-		if !r.ignoreEOS && vocab.IsEOG(next) {
-			lp.finish(r, FinishEOS, "", nil)
-			continue
-		}
-		r.out = append(r.out, next)
-		if !r.stops {
-			// No stop string can end the row here, so its text is not
-			// needed to decide the step: the helper makes it while the
-			// step runs.
-			lp.post.add(r, next, r.n, tlp)
-		} else {
-			chunk, hit, match := r.stream.push(r.out)
-			r.push(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: r.n, Logprob: tlp}})
-			if hit {
-				r.n++
-				lp.finish(r, FinishStop, match, nil)
-				continue
-			}
-		}
-		r.next[0] = next
-		units = append(units, unit{r: r, tokens: r.next[:], logits: true})
 	}
 	return units
+}
+
+// nextToken samples decoding row r's next token into r.next from the logits
+// its last step left, reporting false when r ends here instead (decodeUnits
+// has the order).
+func (lp *stepLoop) nextToken(r *row) bool {
+	vocab := lp.lm.m.Vocab
+	if r.cancelled.Load() {
+		lp.finish(r, FinishCancelled, "", nil)
+		return false
+	}
+	if r.n >= r.maxTokens && !lp.dropMaxTokens {
+		lp.finish(r, FinishMaxTokens, "", nil)
+		return false
+	}
+	next := r.sampler.Sample(r.logits)
+	if sampleTap != nil {
+		sampleTap(r.sampler.Temp, r.logits, next)
+	}
+	r.sampler.Observe(next)
+	tlp := takeLogprob(r.logprobs, vocab, r.logits, next)
+	if !r.ignoreEOS && vocab.IsEOG(next) {
+		lp.finish(r, FinishEOS, "", nil)
+		return false
+	}
+	r.out = append(r.out, next)
+	if !r.stops {
+		// No stop string can end the row here, so its text is not
+		// needed to decide the step: the helper makes it while the
+		// step runs.
+		lp.post.add(r, next, r.n, tlp)
+	} else {
+		chunk, hit, match := r.stream.push(r.out)
+		r.push(Event{Kind: EventToken, Token: &Token{ID: next, Text: chunk, Index: r.n, Logprob: tlp}})
+		if hit {
+			r.n++
+			lp.finish(r, FinishStop, match, nil)
+			return false
+		}
+	}
+	r.next[0] = next
+	return true
 }
 
 // promptUnits is admission: the admitted prompts' next chunks, the fairness
@@ -1176,6 +1205,7 @@ func (e *Engine) generateBatched(ctx context.Context, lp *stepLoop, s *Session, 
 		enqueued:  now,
 		since:     now,
 		prio:      rowPriority(o.Priority),
+		groups:    o.DecodeGroups,
 		admitted:  make(chan struct{}),
 		done:      make(chan struct{}),
 		notify:    make(chan struct{}, 1),

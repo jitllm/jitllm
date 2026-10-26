@@ -8,19 +8,26 @@ import (
 
 // noteCause records what kind of refusal the device's last call was. A fault
 // outranks a build failure, which outranks a decline, so a call that met both
-// reports the one that cannot be moved around.
+// reports the one that cannot be moved around. A session's view records it as
+// that session's, so two sessions' calls at once each read their own.
 func (g *devTier) noteCause(c nn.FailCause) {
+	at := &g.cause
+	if g != g.dv {
+		at = &g.devSess.sessCause
+	}
 	for {
-		old := g.cause.Load()
-		if uint32(c) <= old || g.cause.CompareAndSwap(old, uint32(c)) {
+		old := at.Load()
+		if uint32(c) <= old || at.CompareAndSwap(old, uint32(c)) {
 			return
 		}
 	}
 }
 
 // ErrCause is what kind of refusal the last call on this device was
-// (nn.CauseReporter).
-func (g *devTier) ErrCause() nn.FailCause { return nn.FailCause(g.cause.Load()) }
+// (nn.CauseReporter), the zero session's included.
+func (g *devTier) ErrCause() nn.FailCause {
+	return nn.FailCause(max(g.cause.Load(), g.devSess.sessCause.Load()))
+}
 
 // compile is Compile for a kernel the call cannot do without: a failure is a
 // build failure, named as one, and the call that needed it reports it. A
@@ -51,28 +58,46 @@ func (g *devTier) buildFailed(err error) error {
 
 // ErrCause is the worst refusal kind any device met since the last call began
 // (nn.CauseReporter).
-func (g *GPU) ErrCause() nn.FailCause {
+func (g *GPU) ErrCause() nn.FailCause { return g.errCause(0) }
+
+// errCause is ErrCause for session sid: each device's own cause and the one
+// sid's calls met there.
+func (g *GPU) errCause(sid uint64) nn.FailCause {
 	c := nn.FailDecline
 	for i := 0; ; i++ {
 		d := g.dev(i)
 		if d == nil {
 			return c
 		}
-		c = max(c, d.ErrCause())
+		c = max(c, nn.FailCause(d.cause.Load()))
+		d.mu.Lock()
+		if ds := d.sess[sid]; ds != nil {
+			c = max(c, nn.FailCause(ds.sessCause.Load()))
+		}
+		d.mu.Unlock()
 	}
 }
 
-// resetCause forgets every device's last refusal kind at the head of a call,
-// as resetRecSteps does for its count: a call that refuses reads its own
-// cause, not the one an earlier call left.
-func (g *GPU) resetCause() {
+// resetCause forgets every device's last refusal kind, and session sid's, at
+// the head of a call, as resetRecSteps does for its count: a call that
+// refuses reads its own cause, not the one an earlier call left. A rows call
+// beside another (shared false) forgets only its session's: the device's own
+// may be the other call's.
+func (g *GPU) resetCause(sid uint64, shared bool) {
 	for i := 0; ; i++ {
 		d := g.dev(i)
 		if d == nil {
 			return
 		}
-		d.cause.Store(0)
+		if shared {
+			d.cause.Store(0)
+		}
+		d.mu.Lock()
+		if ds := d.sess[sid]; ds != nil {
+			ds.sessCause.Store(0)
+		}
+		d.mu.Unlock()
 	}
 }
 
-func (s *gpuSession) ErrCause() nn.FailCause { return s.g.ErrCause() }
+func (s *gpuSession) ErrCause() nn.FailCause { return s.g.errCause(s.sid) }

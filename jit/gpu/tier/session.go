@@ -49,6 +49,8 @@ type gpuSession struct {
 	// sidBuf and slotBuf are LayersSessions' row lists, reused.
 	sidBuf  []uint64
 	slotBuf []int
+	// rows is the session's rows calls' own state (rowsCall).
+	rows rowsCall
 	// ple is the rows' per-layer inputs for the next call (SetLayerInputs),
 	// ids their token ids (SetTokenIDs).
 	ple []float32
@@ -325,7 +327,7 @@ func (s *gpuSession) Reserve(maxRows, maxK int) bool {
 	return s.g.Reserve(maxRows, maxK)
 }
 
-func (s *gpuSession) Err() string { return s.g.Err() }
+func (s *gpuSession) Err() string { return s.g.errOf(&s.rows) }
 
 func (s *gpuSession) PrepLayerOn(name string, li int, p *nn.LayerPlan, w *nn.LayerWeights) (bool, error) {
 	defer s.leave(s.enter())

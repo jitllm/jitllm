@@ -85,6 +85,14 @@ type Config struct {
 	// does run: measured per row count (the default), always joint, or never.
 	JointSteps JointSteps
 
+	// DecodeGroups is how many groups the step loop splits a model's
+	// decoding rows into when its blocks are on several cards, each group
+	// stepping on its own so the groups fill the cards' pipeline
+	// (batchgroups.go): 0 one group per card holding blocks where the device's
+	// steps are one kernel for every row count, and one group elsewhere; 1 one
+	// group (every decoding row in each step); n at most n.
+	DecodeGroups int
+
 	// ROCm is the ROCm library directory the AMD backend loads from, or empty
 	// for the default search (backend/hip). jitllmd fills it from JITLLM_ROCM.
 	ROCm string
@@ -1442,6 +1450,10 @@ type GenerateOptions struct {
 	// Priority is a request's claim on the host budget (prioritise): ""
 	// leaves it as it is.
 	Priority string
+	// DecodeGroups bounds the decode groups the model's step loop splits its
+	// rows into while this request decodes (Config.DecodeGroups): 1 keeps
+	// every row in one step, 0 leaves it to the server.
+	DecodeGroups int
 	// Speculation overrides the session's; nil takes it.
 	Speculation *Speculation
 	// Grammar constrains the output to GBNF text (grammar.go): every

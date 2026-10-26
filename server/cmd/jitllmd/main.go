@@ -188,6 +188,10 @@ func serve(args []string) {
 	jointSteps := fs.String("joint-steps", "auto",
 		"how a batch's decode step runs: auto (time joint against one session after another, "+
 			"per row count, and run the faster), always (one joint step) or never (each session alone)")
+	decodeGroups := fs.Int("decode-groups", 0,
+		"how many groups a batch splits its decoding rows into on a model over several cards, each "+
+			"group stepping on its own so every card works at once: 0 one per card holding blocks where the "+
+			"steps are one kernel for every row count (the composer's), 1 one group, n at most n")
 	warm := fs.Bool("warm", true,
 		"after every load, run a short prefill and a decode step so the first request does not pay for them")
 	noStore := fs.Bool("no-mem-cache", false,
@@ -327,6 +331,7 @@ func serve(args []string) {
 		StepCost:         *stepCost,
 		Fairness:         fairness,
 		JointSteps:       joint,
+		DecodeGroups:     *decodeGroups,
 		DefaultMaxSeq:    *maxSeq,
 		Version:          *version,
 		// The ROCm library directory; the server package reads no environment.

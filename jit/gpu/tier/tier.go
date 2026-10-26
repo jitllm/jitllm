@@ -1139,6 +1139,12 @@ type Stats struct {
 	// PipelinePieces counts the pieces of pipelined prompt chunks this device
 	// ran (GPU.pipeline).
 	PipelinePieces int
+	// StageOverlaps counts rows stages that began on this device while
+	// another device ran a stage of another step (GPU.layersRows): the
+	// selection check that steps led by different sessions -- the server's
+	// decode groups -- kept several cards working at once rather than one
+	// after another.
+	StageOverlaps int
 	// SubsBeside counts submissions that started while another was in flight
 	// on the device (beginSub): the selection check that sessions stepped at
 	// once rather than one after another.
@@ -1575,6 +1581,7 @@ func (s *Stats) add(o Stats) {
 	s.KVStreamPasses += o.KVStreamPasses
 	s.StagedPasses += o.StagedPasses
 	s.PipelinePieces += o.PipelinePieces
+	s.StageOverlaps += o.StageOverlaps
 	s.SubsBeside += o.SubsBeside
 	s.RanBeside += o.RanBeside
 	s.LanesWaited += o.LanesWaited
@@ -2004,8 +2011,16 @@ type devShared struct {
 	// cause is what kind of refusal the last call was (nn.FailCause), written
 	// by the code that met it and cleared at the head of every call.
 	cause atomic.Uint32
-	dev   backend.Device
-	pool  *Pool
+	// notComposed is the block and width composedBlock last found not the
+	// composer's, and notComposedWhy the reason it gave.
+	notComposed    [2]int
+	notComposedWhy string
+	// stages is the rows stages running here, under the GPU's stageMu, and
+	// stageMu is held by the one running (GPU.stageBegin).
+	stages  int
+	stageMu sync.Mutex
+	dev     backend.Device
+	pool    *Pool
 	// ord is this device's place in the tier's order, fastest first, and part
 	// of its label.
 	ord   int
@@ -2298,10 +2313,17 @@ type GPU struct {
 	// convRuns is ConvLayers' runs, reused under convMu.
 	convRuns []run
 	convMu   sync.Mutex
-	// rowsErr is why the last LayersRows failed, naming the device: the
-	// devices' LastErr summed by Stats is whichever wrote last, not the one
-	// that refused.
-	rowsErr string
+	// rows is the zero session's rows call (rowsCall); a session's is its
+	// own, so steps led by different sessions share none of it.
+	rows rowsCall
+	// stages is how many rows stages are running on every device, each
+	// device's own count beside it (devShared.stages), under stageMu: a stage
+	// that starts while another device runs one is another call's, and counts
+	// as an overlap (Stats.StageOverlaps). rowsCalls is how many rows calls
+	// are in flight.
+	stageMu   sync.Mutex
+	stages    int
+	rowsCalls atomic.Int32
 	// refused is the device whose last ReserveKV said no, or nil. See Refused.
 	refused *devTier
 	// spillFrom, when set, sends the next PrepLayer of block spillLi to a
@@ -2838,6 +2860,16 @@ func (g *devTier) recStepsOf(sid uint64) int {
 		return ds.recSteps
 	}
 	return 0
+}
+
+// startCall zeroes session sid's count and cause here at the head of its call
+// (GPU.startRows).
+func (g *devTier) startCall(sid uint64) {
+	g.mu.Lock()
+	ds := g.sessOf(sid)
+	ds.recSteps = 0
+	ds.sessCause.Store(0)
+	g.mu.Unlock()
 }
 
 // setRecSteps sets session sid's count; see GPU.resetRecSteps.

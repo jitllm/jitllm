@@ -167,6 +167,18 @@ const MaxStepRows = nn.MaxDevicePrefillChunk
 // after another (Prefill for a chunk, Forward for one token), which is the
 // same answer.
 func StepRuns(runs []Run) ([][]float32, error) {
+	return stepRuns(runs, false)
+}
+
+// StepJoint is StepRuns for runs a caller grouped itself -- the server's
+// decode groups: a lone Steppable State's tokens go through the joint arm too,
+// as a step of one session, where StepRuns runs it on the one-at-a-time arm.
+// A row then takes the same step in a group of one as among others.
+func StepJoint(runs []Run) ([][]float32, error) {
+	return stepRuns(runs, true)
+}
+
+func stepRuns(runs []Run, lone bool) ([][]float32, error) {
 	rows, pictures := 0, false
 	for i, r := range runs {
 		if r.State == nil || (len(r.Tokens) == 0 && r.Spans == nil && r.Encode == nil) {
@@ -186,6 +198,9 @@ func StepRuns(runs []Run) ([][]float32, error) {
 	}
 	if ss, ok := stepper(runs, rows); ok {
 		return stepTogether(runs, rows, ss)
+	}
+	if lone && len(runs) == 1 && rows <= MaxStepRows && runs[0].State.Steppable() {
+		return stepTogether(runs, rows, runs[0].State.ldStep)
 	}
 	if hostStepper(runs, rows) {
 		return stepHost(runs, rows)

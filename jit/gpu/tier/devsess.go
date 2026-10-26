@@ -1,6 +1,7 @@
 package tier
 
 import (
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -48,6 +49,9 @@ type devSess struct {
 	// nothing after them, 2 runs the chunk's queries over the ncKeys keys
 	// phase 1 wrote and the rest of the block. 0 is a whole call.
 	ncPhase, ncKeys int
+	// sessCause is the refusal kind the session's last call met here, noted by
+	// its view (devTier.noteCause).
+	sessCause atomic.Uint32
 	// inSub says the session's submission is running outside g.mu: what it
 	// builds on the way (a kernel, a grown staging buffer) takes g.mu for the
 	// build (subLock; subHeld while it does), and nothing it calls may
