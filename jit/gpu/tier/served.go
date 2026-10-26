@@ -107,6 +107,10 @@ type partCode struct {
 	k             backend.Kernel
 	groups, width int
 	geom          jit.Code
+	// atElem is each input and output of the form (partIn's and partOut's
+	// i) the code reads the input only at the elements it writes the
+	// output at (jit.Binding.AtElement).
+	atElem [][2]int
 }
 
 // partInst is one lane's instance of a form: the form's own buffers and
@@ -125,6 +129,9 @@ type partArg struct {
 	role   jlm.Role
 	region int
 	table  string
+	// read and writes are whether the code reads and writes it
+	// (jit.Binding.Read, Writes): a binding is not always both.
+	read, writes bool
 }
 
 const (
@@ -286,6 +293,17 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 				}
 				f.close()
 				return nil, fmt.Errorf("%s binds %+v, which the part's call site does not provide", c.Name, o)
+			}
+		}
+		pc := &f.codes[len(f.codes)-1]
+		for j, bd := range c.Binds {
+			args[j].read, args[j].writes = bd.Read, bd.Writes
+			for _, o := range bd.AtElement {
+				for jj, ob := range c.Binds {
+					if args[j].kind == partIn && args[jj].kind == partOut && ob.Operand == o {
+						pc.atElem = append(pc.atElem, [2]int{args[j].i, args[jj].i})
+					}
+				}
 			}
 		}
 		f.args = append(f.args, args)
@@ -661,6 +679,7 @@ const (
 	partEmbedToken  = jit.DeclineEmbedToken
 	partExperts     = jit.DeclineExperts
 	partRecurrent   = jit.DeclineRecurrent
+	partNoWeight    = jit.DeclineNoWeight
 	numPartDeclines = jit.NumDeclines
 )
 
@@ -1292,20 +1311,21 @@ func attendWindow(gr *graph.Graph) (int, bool) {
 }
 
 // inPlace says the form may write output out over input in: every kernel
-// that binds in launches before the first that binds out.
+// that reads in launches before the first that writes out, but the first
+// where it reads in only at the elements it writes out at.
 func (f *partForm) inPlace(in, out int) bool {
 	lastRead, firstWrite := -1, len(f.codes)
 	for i, args := range f.args {
 		for _, a := range args {
-			if a.kind == partIn && a.i == in {
+			if a.kind == partIn && a.i == in && a.read {
 				lastRead = i
 			}
-			if a.kind == partOut && a.i == out {
+			if a.kind == partOut && a.i == out && a.writes {
 				firstWrite = min(firstWrite, i)
 			}
 		}
 	}
-	return lastRead < firstWrite
+	return lastRead < firstWrite || lastRead == firstWrite && slices.Contains(f.codes[lastRead].atElem, [2]int{in, out})
 }
 
 // roleWeight is the block's matrix its graph binds under role, nil for one
@@ -1344,11 +1364,28 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 			return l.ssmGate
 		}
 	case jlm.RoleAttnQKV:
-		if l.linear && !l.withAttn {
+		if l.withAttn {
+			return l.ssmIn
+		}
+		if l.linear {
 			return l.wq
 		}
-	case jlm.RoleSSMBA:
+	case jlm.RoleSCX:
+		if l.linear {
+			return l.wq
+		}
+	case jlm.RoleSCB:
+		return l.ssmGate
+	case jlm.RoleSCC, jlm.RoleSSMBA:
 		return l.ssmBA
+	case jlm.RoleSSMXDt:
+		return l.ssmFA
+	case jlm.RoleSSMDtProj:
+		return l.ssmFB
+	case jlm.RoleSSMXB:
+		return l.ssmGA
+	case jlm.RoleSSMXC:
+		return l.ssmGB
 	case jlm.RoleSSMOut:
 		return l.ssmOut
 	case jlm.RoleSSMFA:
@@ -1390,6 +1427,19 @@ func (l *layer) expertsHeld() bool {
 	for _, o := range l.graph.Ops {
 		for _, w := range o.Weight {
 			if jlm.ExpertBank(w.Role) && l.roleWeight(w.Role) == nil {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// weightsHeld says block l holds every matrix and vector its graph binds,
+// as servedBlock binds them.
+func (l *layer) weightsHeld() bool {
+	for _, o := range l.graph.Ops {
+		for _, w := range o.Weight {
+			if l.roleVector(w.Role) == nil && (w.Rows == 0 || l.roleWeight(w.Role) == nil) {
 				return false
 			}
 		}
@@ -1459,6 +1509,16 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.ssmDt
 	case jlm.RoleSSMNorm:
 		return l.ssmNorm
+	case jlm.RoleSSMD:
+		return l.ssmD
+	case jlm.RoleSSMConvBias:
+		return l.ssmCB
+	case jlm.RoleSSMDtNorm:
+		return l.m1DtN
+	case jlm.RoleSSMBNorm:
+		return l.m1BN
+	case jlm.RoleSSMCNorm:
+		return l.m1CN
 	}
 	return nil
 }
@@ -1468,7 +1528,8 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 // leaves to it, the paged decode -- or a prompt chunk's, which the tier's
 // own kernels would run through its paged prefill attention -- none of its
 // history in host memory, the window the plan holds the block to (windowHeld),
-// outside the persistent block and a fault probe.
+// outside the persistent block and a fault probe, and every weight and
+// vector its graph binds held (weightsHeld).
 func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratch, persist, prompt bool) partDecline {
 	pk := bs.pkv
 	switch {
@@ -1476,6 +1537,8 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partNoGraph
 	case !l.expertsHeld():
 		return partExperts
+	case !l.weightsHeld():
+		return partNoWeight
 	case slices.Contains(g.TierBlocks, li):
 		return partCaller
 	case persist:
@@ -1484,7 +1547,7 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partSkip
 	case l.linear && !g.recHeld(l, p, bs):
 		return partRecurrent
-	case l.linear:
+	case l.linear && !l.withAttn:
 		return partServes
 	case pk == nil || g.kvp == nil || g.kvp.layers[li] == nil:
 		return partNoPool
@@ -1867,10 +1930,11 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 	if R > 1 {
 		kind = partPrompt
 	}
-	// A linear block holds no history: its state is its pool's (bindRec).
+	// A linear block holds no history, unless it attends too: its state is
+	// its pool's (bindRec).
 	var kk, kv, tab backend.Buf
 	var geom kvGeom
-	if pl != nil && !l.linear {
+	if pl != nil && (!l.linear || l.withAttn) {
 		kk, kv, tab, geom = pl.k, pl.v, pl.tab, pl.geom
 	}
 	sk := servedKey{kind: kind, graph: l.graph, rows: R, keys: keys, page: page, half: geom.f16, latent: geom.mla}

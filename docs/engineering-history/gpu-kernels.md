@@ -8981,3 +8981,38 @@ row where the composer's reads two.
   flipped the attention no longer faults but reads NMSE 0.2 from the
   definition, a second defect not found; the rule that a difference of two
   small words is small stays.
+- **The state-space mixers are the delta rule without its key dot.** The
+  op language gains one attribute, no op: OpDeltaRule's Additive drops the
+  dot of the state against k, so the row's update is the decayed state
+  plus (v times beta) along k -- a selective state update, beta its dt. The
+  front end states a block by its mixer's structure (engine/model/
+  frontssm.go): the selective update with one decay a head (the mixed
+  projection's C, B and x through the state convolution with its stored
+  bias and SiLU, dt the softplus of its projection plus the stored bias,
+  the decay exp(A dt), D times x added, y times SiLU of the gate, the
+  grouped norm before or after the gate as an unweighted head norm over
+  each group times the stored weight), the same update with one decay a
+  state element of each channel (dt's bottleneck, B and C off the
+  convolved x, each normed where stored, the decay exp(dt A) as a map whose
+  narrower dt broadcasts over the state), and the gated short convolution
+  (B times x through the state convolution, times C). A block that attends
+  as well projects its mixer beside the attention's output, and a block
+  with no MLP ends at its first residual. The scan and the one-row form
+  serve them unchanged on CUDA, Vulkan and the CPU device. Five things
+  stood in the way, each fixed by structure: a key head of one was a
+  division by the value heads (OpDiv by 1536 has no x86 general-register
+  form here; one key head is now the constant 0); a map's bound table of
+  several rows (A stored [16, 1536], the grouped norm [64, 2]) was refused
+  as a matrix and is read as its elements in order; the prologue pass laid
+  a consumer's workgroup array out by the producer's shape where the
+  consumer reads it at another (a head norm of a 2-D gate, read at 3
+  coordinates); the tier read "binds" as "reads and writes", so a split's
+  part kernel that binds the output and writes only its planes, and an
+  epilogue that reads x only at the element it writes, were refused in
+  place (jit.Binding.AtElement; inPlace uses Read, Writes and it); and the
+  converter stated a mixture with ungated expert banks as gated
+  (convert/acts.go reads the banks). The CPU device steps a block that
+  attends as well through its pages (cpuRecRows readies each row's
+  history, as cpuStep does). A block whose graph binds a weight or vector
+  the card does not hold is declined by name (DeclineNoWeight) rather than
+  failing to form.

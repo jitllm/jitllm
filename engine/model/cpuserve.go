@@ -390,10 +390,17 @@ func (s *State) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []
 	}
 	w, nrot := s.c.ResidW(), s.c.RopeW()
 	b := &s.cpu.bound
+	pg := &s.kv.layers[li]
 	for i := range pos {
 		r := i
 		if order != nil {
 			r = order[i]
+		}
+		// A block that attends as well writes and reads the row's history.
+		if pg.p > 0 {
+			if why := s.cpuHistory(li, pos[r]); why != jit.DeclineServes {
+				return why, nil
+			}
 		}
 		o, slot := s.rowOwner(r, seq)
 		if s.cpu.fault == cpuFaultChunk && base > 0 && i == 0 {
@@ -405,11 +412,14 @@ func (s *State) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []
 		if nrot > 0 {
 			b.cs = cs[r*nrot:]
 		}
-		s.cpu.rows = [4]uint32{0, 0, uint32(pos[r] + 1), uint32(pos[r])}
+		s.cpu.rows = [4]uint32{0, uint32(pg.keyStart(pos[r])), uint32(pos[r] + 1), uint32(pos[r])}
 		s.cpu.recRows = [3]uint32{1, uint32(slot), uint32(slot)}
 		s.cpu.call[0] = 1
 		for k := range cb.f.codes {
 			s.cpuCall(b, &cb.f.codes[k])
+		}
+		if pg.p > 0 && pos[r]+1 > pg.written {
+			pg.written = pos[r] + 1
 		}
 		if base >= 0 {
 			s.rows.snapRow(s, li, slot, base+r)
@@ -1154,11 +1164,24 @@ func (s *State) cpuRoleWeight(l *layer, r jlm.Role) *tensor {
 	case jlm.RoleFFNDown:
 		return &l.down
 	case jlm.RoleAttnQKV:
+		if l.ssmIn.rows != 0 {
+			return &l.ssmIn
+		}
 		return &l.wq
-	case jlm.RoleAttnGate:
+	case jlm.RoleSCX:
+		return &l.wq
+	case jlm.RoleAttnGate, jlm.RoleSCB:
 		return &l.ssmGate
-	case jlm.RoleSSMBA:
+	case jlm.RoleSSMBA, jlm.RoleSCC:
 		return &l.ssmBA
+	case jlm.RoleSSMXDt:
+		return &l.ssmXDt
+	case jlm.RoleSSMXB:
+		return &l.ssmXB
+	case jlm.RoleSSMXC:
+		return &l.ssmXC
+	case jlm.RoleSSMDtProj:
+		return &l.ssmDtProj
 	case jlm.RoleSSMOut:
 		return &l.ssmOut
 	case jlm.RoleSSMFA:
@@ -1232,6 +1255,16 @@ func (s *State) cpuRoleVector(l *layer, r jlm.Role) []float32 {
 		return l.ssmDtBias
 	case jlm.RoleSSMNorm:
 		return l.ssmNorm
+	case jlm.RoleSSMD:
+		return l.ssmD
+	case jlm.RoleSSMConvBias:
+		return l.ssmConvB
+	case jlm.RoleSSMDtNorm:
+		return l.ssmDtNorm
+	case jlm.RoleSSMBNorm:
+		return l.ssmBNorm
+	case jlm.RoleSSMCNorm:
+		return l.ssmCNorm
 	}
 	return nil
 }

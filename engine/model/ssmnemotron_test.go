@@ -66,7 +66,7 @@ var nemotronhFixtures = []struct {
 // gate is held by the dense set's "SiLU for the squared ReLU", which an
 // ungated activation runs through every expert too.
 var nemotronhMoEViolations = []c6Violation{
-	{"softmax for sigmoid", func(m *Model) func() { return cfgMut(m, func(c *Config) { c.ExpertSigmoid = false }) }},
+	{"softmax for sigmoid", routerSwap(false)},
 	{"no selection bias", noSelectionBias},
 	{"the routed weights not renormalised", func(m *Model) func() {
 		return cfgMut(m, func(c *Config) { c.NoExpertNorm = true })

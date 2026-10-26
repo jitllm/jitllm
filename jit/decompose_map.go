@@ -145,8 +145,9 @@ func (x *exprs) mapFn(f graph.MapFn, a []int, exact bool) (int, error) {
 // decomposeMap is an elementwise function of its operands -- its inputs,
 // then its bound vector, then its constant -- an operand narrower than the
 // output read at element i/(w/n), an index row read as its float. The bound
-// vector is its Width elements from Offset where Width is set, and one such
-// element is a scalar read at a fixed place.
+// vector (a stored table of several rows its elements in order) is its
+// Width elements from Offset where Width is set, and one such element is a
+// scalar read at a fixed place.
 func decomposeMap(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.Out) != 1 || len(o.Weight) > 1 {
 		return nil, fmt.Errorf("a map of %d outputs, %d weights", len(o.Out), len(o.Weight))
@@ -190,14 +191,13 @@ func decomposeMap(o graph.Op, c *Context) ([]Prim, error) {
 		in, args = append(in, c.value(v)), append(args, a)
 	}
 	for _, w := range o.Weight {
-		if w.Rows > 1 {
-			return nil, fmt.Errorf("a map over a matrix")
-		}
-		n, off, window := w.K, 0, o.Attr.Width > 0
+		// A stored table of several rows is read as its elements in order.
+		K := w.K * max(w.Rows, 1)
+		n, off, window := K, 0, o.Attr.Width > 0
 		if window {
 			n, off = o.Attr.Width, o.Attr.Offset
-			if off < 0 || off+n > w.K {
-				return nil, fmt.Errorf("a window of %d from %d on a vector of %d", n, off, w.K)
+			if off < 0 || off+n > K {
+				return nil, fmt.Errorf("a window of %d from %d on a vector of %d", n, off, K)
 			}
 		}
 		var e int
@@ -215,7 +215,7 @@ func decomposeMap(o graph.Op, c *Context) ([]Prim, error) {
 				e = x.op(OpAdd, ir.U32, e, x.u(uint32(off)))
 			}
 		}
-		args = append(args, x.at(len(in), []int{w.K}, e))
+		args = append(args, x.at(len(in), []int{K}, e))
 		in = append(in, Operand{Kind: OperandVector, Role: w.Role, Name: w.Role.String()})
 	}
 	n := o.Attr.Fn.Arity()

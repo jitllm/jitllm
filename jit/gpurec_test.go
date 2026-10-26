@@ -244,6 +244,8 @@ func recurrentRuns(t *testing.T, d backend.Device, dev jit.Device) {
 		{h: 8, kh: 2, dk: 40, dv: 4, chans: true},
 		{h: 2, kh: 1, dk: 128, dv: 3, chans: true},
 		{h: 6, kh: 3, dk: 33, dv: 2, tiled: true},
+		{h: 4, kh: 2, dk: 16, dv: 8, additive: true},
+		{h: 40, kh: 1, dk: 16, dv: 1, chans: true, additive: true},
 	} {
 		g := deltaGraphOf(s)
 		fr, err := formRec(d, dev, g, R, map[jlm.Role]jlm.Type{})
@@ -320,8 +322,8 @@ func recurrentRuns(t *testing.T, d backend.Device, dev jit.Device) {
 // deltaShape is a delta rule's geometry: value heads, key heads, the key's
 // and the value's head widths, the pairing and the decay's width.
 type deltaShape struct {
-	h, kh, dk, dv int
-	tiled, chans  bool
+	h, kh, dk, dv          int
+	tiled, chans, additive bool
 }
 
 func deltaGraphOf(s deltaShape) *graph.Graph {
@@ -333,7 +335,7 @@ func deltaGraphOf(s deltaShape) *graph.Graph {
 	q, k := b.In("q", s.kh*s.dk), b.In("k", s.kh*s.dk)
 	v, d, beta := b.In("v", s.h*s.dv), b.In("decay", nd), b.In("beta", s.h)
 	b.Out(b.Emit(graph.OpDeltaRule, []graph.ValueID{q, k, v, d, beta}, []graph.Result{{Name: "o", Width: s.h * s.dv}}, nil,
-		graph.Attrs{NHead: s.h, NKVHead: s.kh, HeadDim: s.dk, Tiled: s.tiled},
+		graph.Attrs{NHead: s.h, NKVHead: s.kh, HeadDim: s.dk, Tiled: s.tiled, Additive: s.additive},
 		[]graph.StateRef{{Name: "rec.state"}}, []graph.StateRef{{Name: "rec.state", Version: 1}})[0])
 	return b.G
 }
@@ -459,9 +461,23 @@ func deltaOracleOf(s deltaShape, st []float64, q, k, v, d, beta []float32) []flo
 		pad := func(x []float64) []float64 { return append(append([]float64(nil), x...), make([]float64, n-len(x))...) }
 		ko, qo := pad(f(k[kh*s.dk:][:s.dk])), pad(f(q[kh*s.dk:][:s.dk]))
 		vo, oo := pad(f(v[h*s.dv:][:s.dv])), make([]float64, n)
-		if s.chans {
+		switch {
+		case s.additive && s.chans:
+			// Each row's decay exp(dt a) with dt beta: a is the decay's log
+			// over beta.
+			dt, a := make([]float64, n), make([]float64, n*n)
+			for j := range n {
+				dt[j] = float64(beta[h])
+				for i := range s.dk {
+					a[j*n+i] = math.Log(float64(d[h*s.dk+i])) / float64(beta[h])
+				}
+			}
+			oracle.SelScan(oo, sq, ko, qo, vo, dt, a, make([]float64, n))
+		case s.additive:
+			oracle.GatedSSD(oo, sq, ko, qo, vo, float64(d[h]), float64(beta[h]), 0)
+		case s.chans:
 			oracle.GatedDeltaChan(oo, sq, ko, qo, vo, pad(f(d[h*s.dk:][:s.dk])), float64(beta[h]))
-		} else {
+		default:
 			oracle.GatedDelta(oo, sq, ko, qo, vo, float64(d[h]), float64(beta[h]))
 		}
 		copy(o[h*s.dv:], oo[:s.dv])

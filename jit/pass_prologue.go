@@ -1,6 +1,10 @@
 package jit
 
-import "github.com/jitllm/jitllm/jit/ir"
+import (
+	"slices"
+
+	"github.com/jitllm/jitllm/jit/ir"
+)
 
 // Prologue runs a producer whose outputs only the kernels right after it read
 // -- a row's norm and int8 form, an activation's int8 form -- inside each of
@@ -153,7 +157,7 @@ func (p Prologue) fits(pr, c *Kernel, d Device) bool {
 			return false
 		case readsOperand(c, b.Operand):
 			n := b.bytes()
-			if n == 0 {
+			if n == 0 || !sameShapeRead(c, b) {
 				return false
 			}
 			words += int((n + 3) / 4)
@@ -171,6 +175,17 @@ func readsOperand(k *Kernel, o Operand) bool {
 		}
 	}
 	return false
+}
+
+// sameShapeRead says every load of k at coordinates of producer buffer b's
+// operand is at b's shape: the workgroup array is laid out by b's.
+func sameShapeRead(k *Kernel, b Buf) bool {
+	for _, nd := range k.Nodes {
+		if x := k.Bufs[nd.Buf]; nd.Op == OpLoad && nd.Ax != nil && x.Operand == b.Operand && !slices.Equal(x.Shape, b.Shape) {
+			return false
+		}
+	}
+	return true
 }
 
 // readsShaped says k loads operand o at coordinates of its shape.

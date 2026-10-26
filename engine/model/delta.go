@@ -4,6 +4,7 @@ import (
 	"math"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // The gated delta net: the other half of a hybrid's block loop.
@@ -94,6 +95,33 @@ func (c *Config) delta() deltaGeom {
 		g.mamba1, g.chans, g.qkBytes, g.rank = true, int(c.SSM.Inner), 0, c.dtRank
 	}
 	return g
+}
+
+// mixer is a recurrent block's mixer by its structure, as the front end
+// states it.
+type mixer uint8
+
+const (
+	mixNone      mixer = iota
+	mixDelta           // the gated delta rule (jlm.LayerLinearAttn)
+	mixSelective       // the additive update, one decay a head (jlm.LayerSSD, LayerSSDAttn)
+	mixScan            // the additive update, one decay a state element of each channel (jlm.LayerMamba1)
+	mixShortConv       // the gated short convolution (jlm.LayerShortConv)
+)
+
+// mixerAt is block li's recurrent mixer, mixNone for a block with none.
+func (c *Config) mixerAt(li int) mixer {
+	switch c.LayerKind(li) {
+	case jlm.LayerLinearAttn:
+		return mixDelta
+	case jlm.LayerSSD, jlm.LayerSSDAttn:
+		return mixSelective
+	case jlm.LayerMamba1:
+		return mixScan
+	case jlm.LayerShortConv:
+		return mixShortConv
+	}
+	return mixNone
 }
 
 // keyHead is the key/query head value head vh reads.

@@ -51,7 +51,7 @@ const (
 
 var uncoveredNames = [numUncovered]string{
 	Covered:              "covered",
-	UncoveredKind:        "a layer that is not an attention block or a delta rule (a state-space or short-convolution mixer)",
+	UncoveredKind:        "a layer whose kind is not an attention block or a recurrent mixer the front end states",
 	UncoveredRouterScore: "a router whose score the container does not state, or whose weights are not the scores it selects",
 	UncoveredExperts: "routed experts weighted at their input, beside a dense MLP, in a latent of their own, " +
 		"scaled one by one or stored one matrix each",
@@ -323,10 +323,10 @@ func (m *Model) inventory(block int32) (graph.Facts, bool) {
 func (m *Model) uncovered(li int) Uncovered {
 	c := m.Cfg
 	hd := c.HeadDimAt(li)
-	switch c.LayerKind(li) {
-	case jlm.LayerLinearAttn:
+	switch k := c.LayerKind(li); {
+	case c.mixerAt(li) != mixNone && !k.Attends():
 		return m.uncoveredRest(li)
-	case jlm.LayerFullAttn:
+	case k == jlm.LayerFullAttn || c.mixerAt(li) != mixNone:
 	default:
 		return UncoveredKind
 	}
@@ -516,12 +516,29 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	x := b.In("x", d)
 	n := preNorm(x, jlm.RoleAttnNorm, jlm.RoleAttnNormBias)
-	if c.LayerKind(li) == jlm.LayerLinearAttn {
-		mix, err := m.deltaMixer(b, f, n, has, matvec)
-		if err != nil {
-			return nil, UncoveredUnverified, err
+	var mix graph.ValueID
+	var err error
+	switch c.mixerAt(li) {
+	case mixDelta:
+		mix, err = m.deltaMixer(b, f, n, has, matvec)
+	case mixSelective:
+		mix, err = m.ssdMixer(b, f, n, has, matvec)
+	case mixScan:
+		mix, err = m.scanMixer(b, f, n, has, matvec)
+	case mixShortConv:
+		mix, err = m.shortConvMixer(b, n, matvec)
+	}
+	if err != nil {
+		return nil, UncoveredUnverified, err
+	}
+	// A recurrent block's mixer is the block's own, or, where the block
+	// attends as well, projected beside the attention's output.
+	var side []graph.ValueID
+	if c.mixerAt(li) != mixNone {
+		if !c.LayerKind(li).Attends() {
+			return m.blockRest(b, f, li, x, n, mix, jlm.RoleSSMOut, preNorm, norm, resid, matvec, stored, has)
 		}
-		return m.blockRest(b, f, li, x, n, mix, jlm.RoleSSMOut, preNorm, norm, resid, matvec, stored, has)
+		side = append(side, matvec(mix, jlm.RoleSSMOut, d))
 	}
 	// With an output gate the q projection is double width: each head's query,
 	// then that head's gate.
@@ -542,7 +559,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		if err != nil {
 			return nil, UncoveredUnverified, err
 		}
-		return m.blockRest(b, f, li, x, n, att, jlm.RoleAttnOut, preNorm, norm, resid, matvec, stored, has)
+		return m.blockRest(b, f, li, x, n, att, jlm.RoleAttnOut, preNorm, norm, resid, matvec, stored, has, side...)
 	}
 	// A block that stores no v projection reads k's as its value, before
 	// k's norm and rotary.
@@ -643,20 +660,29 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if c.AttnOutGate {
 		att = sigmoidMul(b, "gated", gate, att)
 	}
-	return m.blockRest(b, f, li, x, n, att, jlm.RoleAttnOut, preNorm, norm, resid, matvec, stored, has)
+	return m.blockRest(b, f, li, x, n, att, jlm.RoleAttnOut, preNorm, norm, resid, matvec, stored, has, side...)
 }
 
 // blockRest is block li's graph after its mixer's output att: the norm
-// inside the sublayer where stored, the output projection out, a norm over
-// it where stored and the residual; then the MLP.
+// inside the sublayer where stored, the output projection out plus each
+// side output (a second mixer's, projected), a norm over it where stored
+// and the residual; then the MLP, where the block stores one.
 func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att graph.ValueID, out jlm.Role,
 	preNorm func(graph.ValueID, jlm.Role, jlm.Role) graph.ValueID, norm func(graph.ValueID, jlm.Role) graph.ValueID,
 	resid func(graph.ValueID, graph.ValueID) graph.ValueID, matvec func(graph.ValueID, jlm.Role, int, ...jlm.Role) graph.ValueID,
-	stored func(jlm.Role) []jlm.Role, has func(jlm.Role) bool) (*graph.Graph, Uncovered, error) {
+	stored func(jlm.Role) []jlm.Role, has func(jlm.Role) bool, side ...graph.ValueID) (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	d, nffn := c.NEmbd, c.NFFNAt(li)
 	att = norm(att, jlm.RoleAttnSubNorm)
-	x2 := resid(x, norm(matvec(att, out, d, stored(jlm.RoleAttnOutBias)...), jlm.RolePostAttnNorm))
+	proj := matvec(att, out, d, stored(jlm.RoleAttnOutBias)...)
+	for _, s := range side {
+		proj = b.Add(proj, s)
+	}
+	x2 := resid(x, norm(proj, jlm.RolePostAttnNorm))
+	if !c.MoEAt(li) && !has(jlm.RoleFFNUp) && !has(jlm.RoleFFNDown) {
+		b.Out(x2)
+		return verified(b, f)
+	}
 	// A parallel block's MLP reads the block's input: through its own norm
 	// where it stores one, through the attention's where the two share one.
 	ffnIn := x2
@@ -688,6 +714,12 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		ffn = matvec(h, jlm.RoleFFNDown, d, stored(jlm.RoleFFNDownBias)...)
 	}
 	b.Out(resid(x2, norm(ffn, jlm.RolePostFFNNorm)))
+	return verified(b, f)
+}
+
+// verified is b's graph where it verifies against f and binds every tensor
+// f stores.
+func verified(b *graph.Builder, f graph.Facts) (*graph.Graph, Uncovered, error) {
 	if err := graph.Verify(b.G, f); err != nil {
 		return nil, UncoveredUnverified, fmt.Errorf("the block's graph does not verify: %w", err)
 	}

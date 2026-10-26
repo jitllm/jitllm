@@ -136,7 +136,7 @@ func rotaryTables(parts []jit.Part) int {
 // names no model family.
 func TestFrontNamesNoFamily(t *testing.T) {
 	family := regexp.MustCompile(`(?i)gemma|llama|qwen|deepseek|kimi|mistral|mixtral|granite|hunyuan|minimax|nemotron|jamba|mamba|olmo|ernie|glm|bitnet|phi[0-9]|phimoe|gpt-?oss|falcon|starcoder|command-?r|cohere|stablelm|dbrx|exaone|smollm|arcee|seed_?oss|apertus|bailing|dots1|bert|lfm|clip|altup|laurel|jlm\.Arch|\.Arch\b`)
-	for _, file := range []string{"front.go", "frontdelta.go"} {
+	for _, file := range []string{"front.go", "frontdelta.go", "frontssm.go"} {
 		src, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)

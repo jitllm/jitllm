@@ -137,7 +137,8 @@ func Activation(c *jlm.Config, li int, gated bool) (jlm.Expr, error) {
 
 // StateActivations states every layer's FFN activation in s's config: one
 // expression a distinct activation, and each layer's index into them where
-// the layers differ. A layer is gated unless it stores an up and no gate.
+// the layers differ. A layer is gated unless it stores an up and no gate
+// (a dense one or an expert bank).
 func StateActivations(s *jlm.Source) error {
 	c := s.Config
 	if c == nil || c.NLayer == 0 || c.Arch == jlm.ArchCLIP {
@@ -150,9 +151,9 @@ func StateActivations(s *jlm.Source) error {
 			continue
 		}
 		switch t.Role {
-		case jlm.RoleFFNUp:
+		case jlm.RoleFFNUp, jlm.RoleExpUpBank:
 			up[t.Block] = true
-		case jlm.RoleFFNGate:
+		case jlm.RoleFFNGate, jlm.RoleExpGateBank:
 			gate[t.Block] = true
 		}
 	}
@@ -167,13 +168,17 @@ func StateStored(f *jlm.File, c *jlm.Config) (bool, error) {
 	if len(c.Acts) != 0 && len(c.RouterScore.Terms) == len(RouterScore(c).Terms) || c.NLayer == 0 || c.Arch == jlm.ArchCLIP {
 		return false, nil
 	}
-	stores := func(r jlm.Role) func(int) bool {
+	stores := func(rs ...jlm.Role) func(int) bool {
 		return func(li int) bool {
-			_, ok := f.Find(r, int32(li), -1)
-			return ok
+			for _, r := range rs {
+				if _, ok := f.Find(r, int32(li), -1); ok {
+					return true
+				}
+			}
+			return false
 		}
 	}
-	return true, StateGated(c, gating(int(c.NLayer), stores(jlm.RoleFFNGate), stores(jlm.RoleFFNUp)))
+	return true, StateGated(c, gating(int(c.NLayer), stores(jlm.RoleFFNGate, jlm.RoleExpGateBank), stores(jlm.RoleFFNUp, jlm.RoleExpUpBank)))
 }
 
 // gating is each of n layers' gating: gated unless it stores an up and no

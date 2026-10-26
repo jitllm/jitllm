@@ -30,10 +30,13 @@ func (x *exprs) recSlot(j, w, n int) int {
 }
 
 // keyHead is value head h's key head of H value heads over KH key heads:
-// h mod KH where the pairing is tiled, else h over the value heads a key
-// head serves.
+// the one where there is one, h mod KH where the pairing is tiled, else h
+// over the value heads a key head serves.
 func (x *exprs) keyHead(h, H, KH int, tiled bool) int {
 	U := ir.U32
+	if KH == 1 {
+		return x.u(0)
+	}
 	if tiled {
 		if KH&(KH-1) == 0 {
 			return x.op(OpAnd, U, h, x.u(uint32(KH-1)))
@@ -48,7 +51,7 @@ func (x *exprs) keyHead(h, H, KH int, tiled bool) int {
 
 // decomposeDeltaRule is the delta rule over the part's state at one row:
 // each state row's decayed dot with its key head's k, the row's (v - that
-// dot) times beta, then the decayed state plus k times it into a scratch
+// dot) times beta (v times beta where the rule is additive), then the decayed state plus k times it into a scratch
 // state, its dot with q the output, and the scratch into the slot written,
 // so no kernel reads the state while writing it.
 func decomposeDeltaRule(o graph.Op, c *Context) ([]Prim, error) {
@@ -95,7 +98,11 @@ func decomposeDeltaRule(o graph.Op, c *Context) ([]Prim, error) {
 
 	var e exprs
 	r, h, j = e.coord(0), e.coord(1), e.coord(2)
-	e.op(OpMul, F, e.op(OpSub, F, e.at(0, []int{1, H, Dv}, r, h, j), e.at(1, []int{1, H, Dv}, r, h, j)), e.at(2, []int{1, H}, r, h))
+	if a.Additive {
+		e.op(OpMul, F, e.at(0, []int{1, H, Dv}, r, h, j), e.at(1, []int{1, H}, r, h))
+	} else {
+		e.op(OpMul, F, e.op(OpSub, F, e.at(0, []int{1, H, Dv}, r, h, j), e.at(1, []int{1, H, Dv}, r, h, j)), e.at(2, []int{1, H}, r, h))
+	}
 
 	var u exprs
 	r, h, j, i = u.coord(0), u.coord(1), u.coord(2), u.coord(3)
@@ -113,14 +120,20 @@ func decomposeDeltaRule(o graph.Op, c *Context) ([]Prim, error) {
 	val := w.load(0, ix)
 	to := w.op(OpAdd, U, w.recSlot(1, 2, N), ix)
 	desc := func(j int) Facts { return Facts{Extents: map[int]int{0: N, j: 3}} }
-	return []Prim{
-		{Kind: PrimReduce, Shape: sh, In: []Operand{tableRecState, k, decay, tableRecRows}, Out: sk, Combine: OpAdd, Expr: s.e, Facts: desc(3)},
-		{Kind: PrimMap, Shape: sh[:3], In: []Operand{v, sk, beta}, Out: delta, Expr: e.e},
-		{Kind: PrimMap, Shape: sh, In: []Operand{tableRecState, k, delta, decay, tableRecRows}, Out: next, Expr: u.e, Facts: desc(4)},
-		{Kind: PrimReduce, Shape: sh, In: []Operand{next, q}, Out: c.value(o.Out[0]), Combine: OpAdd, Expr: y.e},
-		{Kind: PrimMap, Shape: []int{H * Dv, Dk}, In: []Operand{next, tableRecRows}, Expr: w.e, Facts: desc(1),
+	var ps []Prim
+	if a.Additive {
+		ps = append(ps, Prim{Kind: PrimMap, Shape: sh[:3], In: []Operand{v, beta}, Out: delta, Expr: e.e})
+	} else {
+		ps = append(ps,
+			Prim{Kind: PrimReduce, Shape: sh, In: []Operand{tableRecState, k, decay, tableRecRows}, Out: sk, Combine: OpAdd, Expr: s.e, Facts: desc(3)},
+			Prim{Kind: PrimMap, Shape: sh[:3], In: []Operand{v, sk, beta}, Out: delta, Expr: e.e})
+	}
+	return append(ps,
+		Prim{Kind: PrimMap, Shape: sh, In: []Operand{tableRecState, k, delta, decay, tableRecRows}, Out: next, Expr: u.e, Facts: desc(4)},
+		Prim{Kind: PrimReduce, Shape: sh, In: []Operand{next, q}, Out: c.value(o.Out[0]), Combine: OpAdd, Expr: y.e},
+		Prim{Kind: PrimMap, Shape: []int{H * Dv, Dk}, In: []Operand{next, tableRecRows}, Expr: w.e, Facts: desc(1),
 			Stores: []PrimStore{{Out: tableRecStateOut, Index: to, Value: val, Extent: N}}},
-	}, nil
+	), nil
 }
 
 // deltaScan is the delta rule over a step of several rows: a scan whose
@@ -153,8 +166,11 @@ func deltaScan(o graph.Op, c *Context, H, KH, Dk, Dv int, chanDecay bool) ([]Pri
 	}
 	kk := x.at(1, []int{R, KH, Dk}, r, kh, i)
 	sb := x.op(OpMul, F, x.add(Expr{Op: ExprState, Type: F}), g)
-	dot := x.un(OpGroupSum, F, x.op(OpMul, F, sb, kk))
-	d := x.op(OpMul, F, x.op(OpSub, F, x.at(2, []int{R, H, Dv}, r, h, j), dot), x.at(4, []int{R, H}, r, h))
+	vj := x.at(2, []int{R, H, Dv}, r, h, j)
+	if !o.Attr.Additive {
+		vj = x.op(OpSub, F, vj, x.un(OpGroupSum, F, x.op(OpMul, F, sb, kk)))
+	}
+	d := x.op(OpMul, F, vj, x.at(4, []int{R, H}, r, h))
 	next := x.op(OpAdd, F, sb, x.op(OpMul, F, kk, d))
 	y := x.un(OpGroupSum, F, x.op(OpMul, F, next, x.at(0, []int{R, KH, Dk}, r, kh, i)))
 	return []Prim{{Kind: PrimScan, Shape: []int{H, Dv, Dk}, In: in, Expr: x.e,

@@ -14,7 +14,8 @@ import (
 // the CPU at decode: Ministral-3-3B among them, the attention temperature
 // read at each row's position, and HunyuanOCR's XD-RoPE.
 var cpuServedModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf",
-	"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "hunyuanvl/HunyuanOCR-Q8_0.gguf"}
+	"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "hunyuanvl/HunyuanOCR-Q8_0.gguf",
+	"mamba/mamba-130m-hf.Q8_0.gguf", "lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf"}
 
 // TestComposedCPUBlocksServe runs each model's blocks on the CPU three ways,
 // teacher-forced on one token sequence: on main's kernels, on what the
@@ -65,7 +66,7 @@ func TestComposedCPUBlocksServe(t *testing.T) {
 				t.Fatalf("the composed CPU blocks leave main's band: median ratio %.3f (bound %.1f), worst %.3g (bound %.1f x %.3g)",
 					med, bandRatio, worst, bandWorst, widest)
 			}
-			for _, f := range []cpuFault{cpuFaultPage, cpuFaultRow, cpuFaultHead} {
+			for _, f := range append(cpuFaultsOf(t, m), cpuFaultHead) {
 				bad := cpuLogits(t, m, toks, f, true)
 				bm, bw, _ := cpuBand(t, want, bad, ctl)
 				t.Logf("violation %d: median ratio %.3f, worst %.3g", f, bm, bw)
@@ -75,6 +76,31 @@ func TestComposedCPUBlocksServe(t *testing.T) {
 			}
 		})
 	}
+}
+
+// cpuFaultsOf is the violations a composed CPU gate runs on m: the
+// history's page and key row where a block attends, every recurrent block
+// bound to the first's state where it has several.
+func cpuFaultsOf(t *testing.T, m *Model) []cpuFault {
+	t.Helper()
+	var fs []cpuFault
+	attends, rec := false, 0
+	for li := range m.Cfg.NLayer {
+		attends = attends || m.Cfg.LayerKind(li).Attends() || !m.Cfg.LayerKind(li).Recurrent()
+		if m.Cfg.LayerKind(li).Recurrent() {
+			rec++
+		}
+	}
+	if attends {
+		fs = append(fs, cpuFaultPage, cpuFaultRow)
+	}
+	if rec > 1 {
+		fs = append(fs, cpuFaultRec)
+	}
+	if len(fs) == 0 {
+		t.Fatal("no violation reaches the model: the gate cannot discriminate")
+	}
+	return fs
 }
 
 // cpuControlWindow is the activation window main's control arm quantizes

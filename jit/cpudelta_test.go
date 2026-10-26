@@ -15,8 +15,8 @@ import (
 // deltaShape is a delta rule's geometry: value heads, key heads, the key's
 // and the value's head widths, the pairing and the decay's width.
 type deltaShape struct {
-	h, kh, dk, dv int
-	tiled, chans  bool
+	h, kh, dk, dv          int
+	tiled, chans, additive bool
 }
 
 // deltaGraph is OpDeltaRule alone over q, k, v, decay and beta.
@@ -29,7 +29,7 @@ func deltaGraph(s deltaShape) *graph.Graph {
 	q, k := b.In("q", s.kh*s.dk), b.In("k", s.kh*s.dk)
 	v, d, beta := b.In("v", s.h*s.dv), b.In("decay", nd), b.In("beta", s.h)
 	b.Out(b.Emit(graph.OpDeltaRule, []graph.ValueID{q, k, v, d, beta}, []graph.Result{{Name: "o", Width: s.h * s.dv}}, nil,
-		graph.Attrs{NHead: s.h, NKVHead: s.kh, HeadDim: s.dk, Tiled: s.tiled},
+		graph.Attrs{NHead: s.h, NKVHead: s.kh, HeadDim: s.dk, Tiled: s.tiled, Additive: s.additive},
 		[]graph.StateRef{{Name: "rec.state"}}, []graph.StateRef{{Name: "rec.state", Version: 1}})[0])
 	return b.G
 }
@@ -60,9 +60,23 @@ func deltaOracle(s deltaShape, st []float64, q, k, v, d, beta []float32) []float
 		pad := func(x []float64) []float64 { return append(append([]float64(nil), x...), make([]float64, n-len(x))...) }
 		ko, qo := pad(f(k[kh*s.dk:][:s.dk])), pad(f(q[kh*s.dk:][:s.dk]))
 		vo, oo := pad(f(v[h*s.dv:][:s.dv])), make([]float64, n)
-		if s.chans {
+		switch {
+		case s.additive && s.chans:
+			// Each row's decay exp(dt a) with dt beta: a is the decay's log
+			// over beta.
+			dt, a := make([]float64, n), make([]float64, n*n)
+			for j := range n {
+				dt[j] = float64(beta[h])
+				for i := range s.dk {
+					a[j*n+i] = math.Log(float64(d[h*s.dk+i])) / float64(beta[h])
+				}
+			}
+			oracle.SelScan(oo, sq, ko, qo, vo, dt, a, make([]float64, n))
+		case s.additive:
+			oracle.GatedSSD(oo, sq, ko, qo, vo, float64(d[h]), float64(beta[h]), 0)
+		case s.chans:
 			oracle.GatedDeltaChan(oo, sq, ko, qo, vo, pad(f(d[h*s.dk:][:s.dk])), float64(beta[h]))
-		} else {
+		default:
 			oracle.GatedDelta(oo, sq, ko, qo, vo, float64(d[h]), float64(beta[h]))
 		}
 		copy(o[h*s.dv:], oo[:s.dv])
@@ -76,9 +90,10 @@ func deltaOracle(s deltaShape, st []float64, q, k, v, d, beta []float32) []float
 // TestComposedCPUDeltaRule forms OpDeltaRule on the CPU device over ragged
 // head widths, both pairings of value heads with key heads and both decay
 // widths, and runs it three rows on, the state carried in its table, held
-// to the oracle's delta rule at every row's output and at the state after.
-// With the pairing turned, the decay dropped or beta dropped, the form
-// must part from the oracle.
+// to the oracle's delta rule at every row's output and at the state after,
+// and the additive rule (no key dot) to the oracle's state-space updates.
+// With the pairing turned, the decay dropped, beta dropped or the key dot
+// taken or left the other way, the form must part from the oracle.
 func TestComposedCPUDeltaRule(t *testing.T) {
 	rng := rand.New(rand.NewSource(7))
 	shapes := []deltaShape{
@@ -87,6 +102,9 @@ func TestComposedCPUDeltaRule(t *testing.T) {
 		{h: 4, kh: 2, dk: 7, dv: 5, tiled: true},
 		{h: 8, kh: 2, dk: 9, dv: 8, chans: true},
 		{h: 4, kh: 2, dk: 16, dv: 16, tiled: true, chans: true},
+		{h: 4, kh: 2, dk: 7, dv: 5, additive: true},
+		{h: 8, kh: 1, dk: 16, dv: 1, chans: true, additive: true},
+		{h: 5, kh: 1, dk: 3, dv: 1, chans: true, additive: true},
 	}
 	type fault uint8
 	const (
@@ -94,17 +112,21 @@ func TestComposedCPUDeltaRule(t *testing.T) {
 		turned
 		noDecay
 		noBeta
+		keyDot
 	)
 	parted := map[fault]int{}
 	for _, s := range shapes {
-		for _, fl := range []fault{none, turned, noDecay, noBeta} {
+		for _, fl := range []fault{none, turned, noDecay, noBeta, keyDot} {
 			if fl == turned && s.kh == 1 {
 				continue
 			}
 			name := fmt.Sprintf("%+v fault %d", s, fl)
 			fs := s
-			if fl == turned {
+			switch fl {
+			case turned:
 				fs.tiled = !s.tiled
+			case keyDot:
+				fs.additive = !s.additive
 			}
 			g := deltaGraph(fs)
 			_, codes, err := Default().Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice()})
@@ -180,7 +202,7 @@ func TestComposedCPUDeltaRule(t *testing.T) {
 			}
 		}
 	}
-	for _, fl := range []fault{turned, noDecay, noBeta} {
+	for _, fl := range []fault{turned, noDecay, noBeta, keyDot} {
 		if parted[fl] == 0 {
 			t.Fatalf("fault %d never parts from the oracle: the gate cannot see it", fl)
 		}

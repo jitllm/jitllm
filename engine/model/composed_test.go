@@ -201,7 +201,12 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 // the float reference, the arm 0.34 from the tier on Vulkan, and one
 // position off reads 2.61, under ten times that. The float fixtures of dbrx,
 // mistral3 and Llama 4 are served against the host with each feature taken
-// out (TestC6ServesComposed, TestSynthLlama4ServesComposed).
+// out (TestC6ServesComposed, TestSynthLlama4ServesComposed). LFM2-1.2B serves
+// every arm on Vulkan (median 0.974 of the tier's distance) and reads 1.503 on
+// CUDA, past the 1.5 band: open. Jamba-reasoning-3B reads 43 to 55 times the
+// tier's distance and its poisoned arm moves: a composed kernel reads what
+// nothing wrote on it (its random fixture, synth-jamba, is clean on both
+// backends): open.
 var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
 	"stories260K.gguf", "synth-ernie45.gguf", "synth-phi4v.gguf", "synth-seedoss.gguf", "synth-smollm3.gguf",
 	"synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "newarch/synth-olmo2-q8.gguf", "synth-arcee.gguf", "synth-exaone4.gguf",
@@ -212,7 +217,7 @@ var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1
 	"synth-qwen2vl.gguf", "synth-qwen25vl.gguf", "synth-qwen3vl.gguf",
 	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf",
 	"synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-dbrx.gguf", "synth-llama4.gguf", "synth-mistral3.gguf",
-	"synth-mistral3-af.gguf"}
+	"synth-mistral3-af.gguf", "lfm2/LFM2-1.2B-Q4_K_M.gguf", "jamba/jamba-reasoning-3b-Q4_K_M.gguf"}
 
 // mixtureModels are the mixtures the front end states whole and the serving
 // gate does not run: tiny-qwen3moe, whose eight-wide rows the tier cannot
@@ -307,6 +312,19 @@ var promptModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "Smo
 	"gemma-3-1b-it-Q4_K_M.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "tinyllama-1.1b-q3_K_M.gguf",
 	"Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf",
 	"synth-kimilinear@q8"}
+
+// ssmServed are the state-space models served (servedModels), their
+// prompts too (promptModels): a chunk's rows the scan's. A selective update
+// with one decay a head beside attention and an MLP (granite-4.0-h, and
+// Falcon-H1's mixer beside its attention in one block) and the gated short
+// convolution beside attention (LFM2).
+var ssmServed = []string{"lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf",
+	"falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf", "falconh1/Falcon-H1-1.5B-Instruct-Q8_0.gguf"}
+
+func init() {
+	servedModels = append(servedModels, ssmServed...)
+	promptModels = append(promptModels, ssmServed...)
+}
 
 // TestComposedBlocksServe decodes dense models with each block served whole
 // by the composer from its graph (the model's front end's, from the

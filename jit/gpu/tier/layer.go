@@ -4189,7 +4189,7 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		up(&l.ssmConv1d, w.SSM.Conv1d)
 		l.auxBytes += uint64(len(w.SSM.Conv1d) * 4)
-		if !r.ShortConv && !r.SSD && !r.Mamba1 {
+		if !r.Centred {
 			taps := make([]float32, len(w.SSM.Conv1d))
 			for u := range r.Conv {
 				for c := range r.Chans {

@@ -83,7 +83,8 @@ const (
 	// Weight[1]): a BatchNorm folded at conversion.
 	OpAffine
 	// OpMap is an elementwise function Fn of its operands: In[0], In[1] and
-	// In[2] in order, then Weight[0] (a bound vector), then Const, as many as
+	// In[2] in order, then Weight[0] (a bound vector, a stored table of
+	// several rows its elements in order), then Const, as many as
 	// Fn takes. An operand narrower than Out[0] is broadcast: element i reads
 	// its element i/(w/n), w the output's width and n the operand's (one
 	// element a group of w/n; width 1 is a scalar). The bound vector is its
@@ -189,7 +190,8 @@ const (
 	// value head or one a key channel of each (NHead or NHead*HeadDim wide)
 	// and beta In[4] one a value head. Each row, in order: S times the
 	// decay (a channel's factor on its column), then S plus the outer
-	// product of (v - S k) times beta and k, then Out[0] = S q. It reads
+	// product of (v - S k) times beta and k (v times beta where Additive),
+	// then Out[0] = S q. It reads
 	// state version n and writes n+1. A primitive with a state of its own:
 	// a linear-attention mixer's recurrence.
 	OpDeltaRule
@@ -396,6 +398,10 @@ type Attrs struct {
 	Chain, Filter uint8
 	// Tiled pairs OpDeltaRule's value head h with key head h mod NKVHead.
 	Tiled bool
+	// Additive makes OpDeltaRule's update the decayed S plus the outer
+	// product of v times beta and k, with no dot of S against k: a
+	// selective state update.
+	Additive bool
 	// RowWindows makes OpAttend read each row's attended range from the
 	// step's window table, not its history descriptor: a vision tower's
 	// window attention, a row's keys its window's rows.

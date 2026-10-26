@@ -27,6 +27,11 @@ func TestCPUComposesOnce(t *testing.T) {
 		{"Qwen3-0.6B-Q8_0.gguf", []int{1, 5, 33, 100, 511, 512, 513, 2000}},
 		{"synth-qwen35-hybrid-mtp.gguf", []int{1, 5, 33, 100, 513}},
 		{"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", []int{1, 5, 33, 100}},
+		{"synth-mamba2.gguf", []int{1, 5, 33, 100}},
+		{"synth-mamba1.gguf", []int{1, 5, 33, 100}},
+		{"synth-lfm2.gguf", []int{1, 5, 33, 100}},
+		{"synth-falconh1.gguf", []int{1, 5, 33, 100}},
+		{"synth-nemotronh.gguf", []int{1, 5, 33, 100}},
 	} {
 		t.Run(tc.file, func(t *testing.T) {
 			m, err := Open(jlmOf(t, testmodels.Path(tc.file)), noTune, WithComposedCPU(true))
