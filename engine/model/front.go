@@ -627,7 +627,10 @@ func (m *Model) latentAttention(b *graph.Builder, li int, n, q graph.ValueID, ha
 	att := b.Attend(qrow, hist, a, stored(jlm.RoleAttnSinks)...)
 	o := sheets(slice(att, "att.latent", row, 0, lat, nh*lat), "att.v", jlm.RoleAttnVB, lat, hdv)
 	if has(jlm.RoleAttnGate) {
-		o = b.ActMul(graph.ActSigmoid, matvec(n, jlm.RoleAttnGate, nh*hdv), o)
+		o = b.Expr("att.gated", nh*hdv, []graph.Term{
+			{Fn: graph.MapSigmoid, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}}},
+			{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 0}, {Kind: graph.ArgIn, Index: 1}}},
+		}, nil, matvec(n, jlm.RoleAttnGate, nh*hdv), o)
 	}
 	return o, nil
 }

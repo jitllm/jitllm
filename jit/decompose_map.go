@@ -38,8 +38,9 @@ func (x *exprs) expm1(a int) int {
 	return x.sel(F, x.op(OpLess, ir.Pred, x.op(OpMax, F, a, x.neg(a)), x.f(0.5)), small, big)
 }
 
-// mapFn is f over operands a, its divisions correctly rounded where exact
-// says the device's are.
+// mapFn is f over operands a. A division is the device's own where exact
+// says that suffices (the device's is correctly rounded, or the op asks for
+// no more: graph.Attrs.Exact), else correctly rounded in integers.
 func (x *exprs) mapFn(f graph.MapFn, a []int, exact bool) (int, error) {
 	F := ir.F32
 	switch f {
@@ -176,7 +177,7 @@ func decomposeMap(o graph.Op, c *Context) ([]Prim, error) {
 		U := ir.U32
 		q := x.un(OpBitcast, U, x.scale(x.abs(args[0])))
 		x.un(OpBitcast, ir.F32, x.op(OpAdd, U, q, x.op(OpAnd, U, x.un(OpBitcast, U, args[0]), x.u(0x80000000))))
-	} else if _, err := x.mapFn(o.Attr.Fn, args, c.exactDiv); err != nil {
+	} else if _, err := x.mapFn(o.Attr.Fn, args, c.exactDiv || !o.Attr.Exact); err != nil {
 		return nil, err
 	}
 	return []Prim{{Kind: PrimMap, Shape: sh, In: in, Out: c.value(o.Out[0]), Expr: x.e}}, nil

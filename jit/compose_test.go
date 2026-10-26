@@ -14,7 +14,7 @@ func TestEveryKernelRecordsItsPasses(t *testing.T) {
 	f := newSynth(t, jlm.TypeF32)
 	r := jit.Default()
 	s := jit.Step{Rows: 1, Page: 64, Keys: 5}
-	for _, d := range []jit.Device{{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, {Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}} {
+	for _, d := range []jit.Device{{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}, {Kind: jit.DeviceCPU, Slots: 6, Lanes: 8, ExactDiv: true}} {
 		plan, err := r.Compose(f, s, func(jit.Part) jit.Device { return d })
 		if err != nil {
 			t.Fatal(err)
@@ -59,7 +59,7 @@ func (p runProbe) Apply(ks []*jit.Kernel, d jit.Device) ([]*jit.Kernel, error) {
 func TestPassesSeeRuns(t *testing.T) {
 	f := newSynth(t, jlm.TypeF32)
 	gpu := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32}
-	cpu := jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8}
+	cpu := jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8, ExactDiv: true}
 	for _, tc := range []struct {
 		name string
 		host func(jit.Part) bool

@@ -205,7 +205,7 @@ func exprPrim(o graph.Op, c *Context, ks []int, rows []Operand) (Prim, error) {
 				return Prim{}, fmt.Errorf("term %d's operand %d is of kind %d", k, j, a.Kind)
 			}
 		}
-		v, err := x.mapFn(t.Fn, args, c.exactDiv)
+		v, err := x.mapFn(t.Fn, args, true)
 		if err != nil {
 			return Prim{}, err
 		}

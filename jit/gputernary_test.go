@@ -475,7 +475,7 @@ func divisionMisses(t *testing.T, d backend.Device, dv jit.Device, xs, ds []floa
 	b := graph.New()
 	x := b.In("x", n)
 	b.Out(b.Emit(graph.OpMap, []graph.ValueID{x}, []graph.Result{{Name: "y", Width: n}},
-		[]graph.Binding{{Role: jlm.RoleOutputNorm, K: n, Rows: 1}}, graph.Attrs{Fn: graph.MapDiv}, nil, nil)[0])
+		[]graph.Binding{{Role: jlm.RoleOutputNorm, K: n, Rows: 1}}, graph.Attrs{Fn: graph.MapDiv, Exact: true}, nil, nil)[0])
 	_, codes, err := jit.Default().Form(jit.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{},
 		Step: jit.Step{Rows: 1, Page: 64, Keys: 1}, Device: dv})
 	if err != nil {

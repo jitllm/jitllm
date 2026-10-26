@@ -385,6 +385,10 @@ type Attrs struct {
 	Order Order
 	Span  int
 	Const float64
+	// Exact asks a MapDiv for the IEEE quotient where the device's own
+	// division is not correctly rounded; without it a division takes the
+	// device's, within the gates' band like every other kernel form.
+	Exact bool
 }
 
 // Op is one operation.
