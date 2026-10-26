@@ -30,7 +30,7 @@ func llamaBlock() *graph.Graph {
 	m := b.Norm(x2, jlm.RoleFFNNorm, 1e-5)
 	gate := b.MatVec(m, jlm.RoleFFNGate, ffn)
 	up := b.MatVec(m, jlm.RoleFFNUp, ffn)
-	b.Out(b.Add(x2, b.MatVec(b.ActMul(graph.ActSiLU, gate, up), jlm.RoleFFNDown, embd)))
+	b.Out(b.Add(x2, b.MatVec(siluMul(b, gate, up, ffn), jlm.RoleFFNDown, embd)))
 	return b.G
 }
 
