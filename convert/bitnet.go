@@ -216,16 +216,22 @@ func floatsOf(t jlm.Type, data []byte, n int) ([]float32, error) {
 // ternaryGGUF re-packs a GGUF tensor of a ternary source type the container
 // has no code for, and reports false for any other type.
 func ternaryGGUF(t quant.Type, data []byte, n uint64) ([]byte, quant.Type, bool, error) {
-	switch t {
-	case quant.TQ1_0:
-		b, ty, err := tq1ToTQ2(data, n)
-		return b, ty, true, err
-	case quant.I2_S:
-		b, ty, err := i2sToTQ2(data, n)
-		return b, ty, true, err
+	if !repackedTernary(t) {
+		return nil, 0, false, nil
 	}
-	return nil, 0, false, nil
+	repack := i2sToTQ2
+	if t == quant.TQ1_0 {
+		repack = tq1ToTQ2
+	}
+	b, ty, err := repack(data, n)
+	return b, ty, true, err
 }
+
+// repackedTernary reports whether ternaryGGUF re-packs source type t.
+func repackedTernary(t quant.Type) bool { return t == quant.TQ1_0 || t == quant.I2_S }
+
+// ternaryPacked is the types ternaryPack writes.
+func ternaryPacked() []quant.Type { return []quant.Type{quant.TQ2_0, quant.TQ2_F32} }
 
 // bitnetScaleOf reports a GGUF's optional per-tensor projection scale
 // (llama.cpp's "blk.N.attn_q.scale"): the tensor name it scales.

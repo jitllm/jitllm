@@ -9,6 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/convert/gguf"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/format/quant"
 	"github.com/jitllm/jitllm/internal/testmodels"
 )
 
@@ -109,9 +110,16 @@ func TestEveryTensorHasARole(t *testing.T) {
 			// kernel for, and the refusal for that belongs to configOf.
 			// DeepSeek V4's token table is I32 ids in the file and F32 in the
 			// container: sourceOf rewrites it (ds4HashTable) rather than
-			// storing the file's type.
-			if _, err := typeOf(f.Tensors[i].Type); err != nil && supported && role != jlm.RoleHashExperts {
-				t.Errorf("%s: %q: %v", filepath.Base(p), n, err)
+			// storing the file's type. A ternary type with no code is
+			// re-packed (ternaryGGUF), so the types it becomes are checked.
+			stored := []quant.Type{f.Tensors[i].Type}
+			if repackedTernary(stored[0]) {
+				stored = ternaryPacked()
+			}
+			for _, st := range stored {
+				if _, err := typeOf(st); err != nil && supported && role != jlm.RoleHashExperts {
+					t.Errorf("%s: %q: %v", filepath.Base(p), n, err)
+				}
 			}
 		}
 		f.Close()
