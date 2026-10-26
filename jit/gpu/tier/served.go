@@ -601,89 +601,48 @@ const (
 // kernels, counted by reason (Stats.BlockDeclines, HeadDeclines). A head
 // over a step of several rows -- a chunk's folded head, a ragged step's,
 // speculative rows' -- is the tier's, declined by its path's name.
-type partDecline uint8
+type partDecline = jit.Decline
 
 const (
-	partServes partDecline = iota
-	partNoGraph
-	partPersist
-	partSkip
-	partNoPool
-	partPrefill
-	partStream
-	partShared
-	partWindow
-	partHeadShape
-	partHeadNorm
-	partPick
-	partRagged
-	partRowLogits
-	partCaller
-	partNoRoom
-	partFolded
-	partHeadRows
-	partPromptHead
-	partShadowed
-	partHeadBias
-	partHeadOther
-	partHeadHidden
-	partNoTable
-	partTableHeld
-	partNoAxes
-	partNoSample
-	partSampleTopK
-	partSamplePick
-	partNoEmbed
-	partEmbedFormat
-	partEmbedWeight
-	partEmbedToken
-	numPartDeclines
+	partServes      = jit.DeclineServes
+	partNoGraph     = jit.DeclineNoGraph
+	partPersist     = jit.DeclinePersist
+	partSkip        = jit.DeclineSkip
+	partNoPool      = jit.DeclineNoPool
+	partPrefill     = jit.DeclinePrefill
+	partStream      = jit.DeclineStream
+	partShared      = jit.DeclineShared
+	partWindow      = jit.DeclineWindow
+	partHeadShape   = jit.DeclineHeadShape
+	partHeadNorm    = jit.DeclineHeadNorm
+	partPick        = jit.DeclinePick
+	partRagged      = jit.DeclineRagged
+	partRowLogits   = jit.DeclineRowLogits
+	partCaller      = jit.DeclineCaller
+	partNoRoom      = jit.DeclineNoRoom
+	partFolded      = jit.DeclineFolded
+	partHeadRows    = jit.DeclineHeadRows
+	partPromptHead  = jit.DeclinePromptHead
+	partShadowed    = jit.DeclineShadowed
+	partHeadBias    = jit.DeclineHeadBias
+	partHeadOther   = jit.DeclineHeadOther
+	partHeadHidden  = jit.DeclineHeadHidden
+	partNoTable     = jit.DeclineNoTable
+	partTableHeld   = jit.DeclineTableHeld
+	partNoAxes      = jit.DeclineNoAxes
+	partNoSample    = jit.DeclineNoSample
+	partSampleTopK  = jit.DeclineSampleTopK
+	partSamplePick  = jit.DeclineSamplePick
+	partNoEmbed     = jit.DeclineNoEmbed
+	partEmbedFormat = jit.DeclineEmbedFormat
+	partEmbedWeight = jit.DeclineEmbedWeight
+	partEmbedToken  = jit.DeclineEmbedToken
+	numPartDeclines = jit.NumDeclines
 )
 
-var partDeclineNames = [numPartDeclines]string{
-	partServes:      "served",
-	partNoGraph:     "no graph from the front end",
-	partPersist:     "inside the persistent block",
-	partSkip:        "a fault probe skips blocks",
-	partNoPool:      "no paged history on the device",
-	partPrefill:     "the history is mid-prefill",
-	partStream:      "the history streams",
-	partShared:      "the history of another block",
-	partWindow:      "a graph whose window is not the plan's",
-	partHeadShape:   "a head graph other than a norm, its projection and elementwise ops after it",
-	partHeadNorm:    "no norm buffer, a norm of another kind than the tier's, or a norm bias it holds none of",
-	partPick:        "a head that picks labels only",
-	partRagged:      "a ragged step's rows",
-	partRowLogits:   "every row's logits (speculative rows)",
-	partCaller:      "the caller keeps it on the tier's kernels",
-	partNoRoom:      "its buffers do not fit the device's budget",
-	partFolded:      "a prompt chunk's folded head",
-	partHeadRows:    "a head over several rows",
-	partPromptHead:  "a prompt's one-row head",
-	partShadowed:    "a prompt outside the shadow arm",
-	partHeadBias:    "a head bias the tier holds no vector for",
-	partHeadOther:   "a head graph of another State than the offered one",
-	partHeadHidden:  "a head whose normed row is read back",
-	partNoTable:     "no table graph from the front end",
-	partTableHeld:   "a table whose planes or positions the tier does not hold",
-	partNoAxes:      "a table over several axes with no rotary positions for the row",
-	partNoSample:    "no sample graph from the front end",
-	partSampleTopK:  "the sampler's top-k and penalty, which no graph states",
-	partSamplePick:  "the label pick, which no graph states",
-	partNoEmbed:     "no input rows graph from the front end",
-	partEmbedFormat: "input rows in a format with no container type",
-	partEmbedWeight: "input rows reading a weight other than the token embedding and a position table",
-	partEmbedToken:  "a token or position outside its table's rows",
-}
-
 // DeclineName is the reason a decline count is kept under, by its index in
-// Stats.BlockDeclines or HeadDeclines.
-func DeclineName(i int) string {
-	if i < 0 || i >= int(numPartDeclines) {
-		return fmt.Sprintf("decline %d", i)
-	}
-	return partDeclineNames[i]
-}
+// Stats.BlockDeclines or HeadDeclines (jit.DeclineName).
+func DeclineName(i int) string { return jit.DeclineName(i) }
 
 // ServedPart is how many steps the composer served the parts of k in, how
 // many steps where they serve it was not asked for, and how many other block
