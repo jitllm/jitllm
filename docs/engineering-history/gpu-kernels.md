@@ -8464,4 +8464,9 @@ row where the composer's reads two.
   Open: TestABatchLeavesAnotherSessionAlone's composed tight arm, where B
   keeps none of 16 blocks: the budget it derives sits 320 KB under what is
   charged once A has decoded, and the composed step's room check
-  (stepRoom) refuses at every relocation.
+  (stepRoom) refuses at every relocation. And a regression: against the
+  tree before the capacity forms (V100 card 3, CUDA, jitllmcomposed, three
+  interleaved rounds, `jitllm speed`), tg128 holds at 190-192 tok/s and pp64
+  at about 4.6k, but pp512 falls from about 15.0k to 12.6k tok/s, pp1024
+  from 11.8k to 8.6k, pp4096 from 14.5k to 5.85k, and the cold placement
+  (attach) grows from 3.97 s to 5.5 s.
