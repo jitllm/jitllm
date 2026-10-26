@@ -351,6 +351,77 @@ func TestDecisionOnEveryDevice(t *testing.T) {
 							t.Errorf("%s moved the answers %.5f on %d blocks: the gate does not see it", v.name, seen, n)
 						}
 					})
+					t.Run("composed", func(t *testing.T) {
+						// Every block and the head offered to the composer,
+						// prompts included: a decoder's labels are picked by its
+						// forms (the head over the picked rows alone, or the
+						// gather), one form whatever the labels, every pick the
+						// composer's.
+						need := m.WeightBytes()
+						need += need/8 + 1<<30
+						// Each run on a device of its own, the last one's room
+						// given back first (as the violation's arm above).
+						composed := func(noPickMV bool) *tier.GPU {
+							return open(tier.WithBudget(need), tier.WithHostBudget(need), tier.WithConfig(func(c *tier.Config) {
+								c.Composed, c.NoPickMV = tier.ComposedStep|tier.ComposedPrompt, noPickMV
+							}))
+						}
+						g := composed(false)
+						defer g.Close()
+						all := func(n int) bool { return n == nb }
+						got, placed, why, picked := decideOn(t, m, g, -1, all)
+						if placed != nb {
+							cardTooSmall(t, why, "%s held %d of %d blocks in the composed arm", spec, placed, nb)
+						}
+						worst := decisionDiff(t, host, got)
+						if worst > tol {
+							t.Errorf("the answers moved %.5f from the host's, past %.3f", worst, tol)
+						}
+						st := g.Stats()
+						served, declined, _ := st.ServedPart(tier.ComposedSample)
+						t.Logf("composed, every block on %s: worst difference from the host %.5f; %d prompts picked, %d picks by the composer (%d by the picked rows' projection), %d declined (%s)",
+							spec, worst, picked, served, st.PickRows, declined, declinesOf(st))
+						if m.IsEncoder() || c.kind == jlm.DecisionClef || c.kind == jlm.DecisionKev {
+							return
+						}
+						if picked == 0 || served != picked || declined != 0 {
+							t.Fatalf("%d prompts picked on %s, %d by the composer, %d declined: the composer did not pick every prompt's labels (%s)",
+								picked, spec, served, declined, declinesOf(st))
+						}
+						if st.PickRows != picked {
+							t.Fatalf("%d of %d picks by the picked rows' projection: the composer's head over the picked rows did not run", st.PickRows, picked)
+						}
+						g.Close()
+						go1 := composed(false)
+						defer go1.Close()
+						off, n, why, _ := decideOn(t, m, go1, -1, all, "pick-off-by-one")
+						if off == nil {
+							cardTooSmall(t, why, "%s held %d of %d blocks in the composed arm's violation", spec, n, nb)
+						}
+						if seen := decisionDiff(t, got, off); seen <= tol {
+							t.Errorf("a pick one past each label moved the composed answers %.5f: the gate does not see the pick", seen)
+						}
+						// The whole head and the composer's gather over its
+						// logits (Config.NoPickMV): the same placement, every
+						// pick the gather's, the answers within the band.
+						go1.Close()
+						gg := composed(true)
+						defer gg.Close()
+						gat, n, why, gp := decideOn(t, m, gg, -1, all)
+						if gat == nil {
+							cardTooSmall(t, why, "%s held %d of %d blocks in the composed gather arm", spec, n, nb)
+						}
+						gs := gg.Stats()
+						gn, gd, _ := gs.ServedPart(tier.ComposedSample)
+						if gp == 0 || gn != gp || gd != 0 || gs.PickRows != 0 {
+							t.Fatalf("the gather arm: %d prompts picked, %d by the composer, %d declined, %d by the picked rows' projection (%s)", gp, gn, gd, gs.PickRows, declinesOf(gs))
+						}
+						w := decisionDiff(t, got, gat)
+						t.Logf("the composer's gather over the whole head on %s: %d picks, %.6f from the picked rows' projection", spec, gn, w)
+						if w > tol {
+							t.Errorf("the gather answers %.5f from the picked rows' projection, past %.3f", w, tol)
+						}
+					})
 				})
 			}
 			if ran == 0 {

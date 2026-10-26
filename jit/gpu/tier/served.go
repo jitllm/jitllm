@@ -655,8 +655,6 @@ const (
 	partTableHeld   = jit.DeclineTableHeld
 	partNoAxes      = jit.DeclineNoAxes
 	partNoSample    = jit.DeclineNoSample
-	partSampleTopK  = jit.DeclineSampleTopK
-	partSamplePick  = jit.DeclineSamplePick
 	partNoEmbed     = jit.DeclineNoEmbed
 	partEmbedFormat = jit.DeclineEmbedFormat
 	partEmbedWeight = jit.DeclineEmbedWeight
@@ -986,6 +984,41 @@ func (g *devTier) servedHead(bs *blockScratch, norm backend.Buf, rows int) (*ser
 	return sv, nil
 }
 
+// servedPickHead is the head projecting the picked rows alone
+// (nn.Head.PickHead): the head's norm and its weight bound as servedHead
+// binds them, the ids its second input. One form for the head's label bound,
+// the labels a run-time input.
+func (g *devTier) servedPickHead(bs *blockScratch, norm backend.Buf) (*servedPart, error) {
+	gr, w := bs.pickHead, bs.head
+	if gr == nil || len(gr.In) != 2 || len(gr.Out) != 1 || len(gr.Ops) < 2 || len(gr.Ops[0].Weight) < 1 ||
+		gr.Ops[1].Kind != graph.OpMatVec || len(gr.Ops[1].In) != 2 || len(gr.Ops[1].Weight) != 1 {
+		return nil, errors.New("the composed pick head: a graph that is not a norm and a row-selected projection")
+	}
+	t, ok := jlmType(w.t)
+	if !ok {
+		return nil, fmt.Errorf("the composed pick head: format %d has no container type", w.t)
+	}
+	n, out := gr.Ops[0].Weight, gr.Ops[1].Weight[0].Role
+	bind := func(sl *composedPart) {
+		sl.weights[out], sl.vectors[n[0].Role] = w, norm
+		if len(n) == 2 {
+			sl.vectors[n[1].Role] = bs.hNormB
+		}
+	}
+	sk := servedKey{kind: partHead, graph: gr, rows: 1, t: t}
+	sv, err := g.servedFor(sk, func() (composedPart, error) {
+		sl := composedPart{kind: partHead, graph: gr, formats: map[jlm.Role]jlm.Type{out: t},
+			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{}}
+		bind(&sl)
+		return sl, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	bind(&sv.sl)
+	return sv, nil
+}
+
 // tableName is the table gr writes: rope.cs, or rope.cs.i past the first.
 func tableName(gr *graph.Graph) string {
 	if gr == nil || len(gr.Out) != 1 {
@@ -1237,8 +1270,8 @@ func (g *devTier) embedFault(gr *graph.Graph) *graph.Graph {
 
 // servedSample is the step's greedy token, gr, served over one row's logits.
 func (g *devTier) servedSample(gr *graph.Graph) (*servedPart, error) {
-	if gr == nil || len(gr.In) != 1 || len(gr.Out) != 1 {
-		return nil, errors.New("the composed sample: a graph that is not logits in and a token out")
+	if gr == nil || !(len(gr.In) == 1 && len(gr.Out) == 1 || len(gr.In) == 3 && len(gr.Out) == 2 || len(gr.In) == 2 && len(gr.Out) == 1) {
+		return nil, errors.New("the composed sample: a graph that is not logits in and a token out, the sampler's candidates or the label pick")
 	}
 	sk := servedKey{kind: partSample, graph: gr, rows: 1}
 	return g.servedFor(sk, func() (composedPart, error) {
@@ -1678,6 +1711,20 @@ func (g *devTier) prewarmComposedHead() {
 		}
 		g.prewarming = false
 	}
+	// The sampler's candidates and the label pick, one form each whatever
+	// k, the history and the labels.
+	if !g.NoPromptPrewarm && g.Composed&ComposedSample != 0 && bs != nil && g.argmaxOut != nil {
+		g.prewarming = true
+		for _, gr := range [...]*graph.Graph{bs.sampleTopK, bs.pickGraph} {
+			if gr == nil {
+				continue
+			}
+			if _, err := g.servedSample(gr); err != nil {
+				g.LastErr = "the composed sampler's candidates or label pick: " + err.Error()
+			}
+		}
+		g.prewarming = false
+	}
 	// The input rows at one row, at every prompt width the lane holds a
 	// scratch for, and at every exact width a chunk's scratch is cut to
 	// (keepExact), as prewarmPromptWidths forms the blocks'.
@@ -1710,6 +1757,11 @@ func (g *devTier) prewarmComposedHead() {
 	defer func() { g.prewarming = false }()
 	if _, err := g.servedHead(bs, bs.hNorm, 1); err != nil {
 		g.LastErr = "the composed head: " + err.Error()
+	}
+	if g.Composed&ComposedSample != 0 && bs.pickHead != nil && bs.headCap == nil {
+		if _, err := g.servedPickHead(bs, bs.hNorm); err != nil {
+			g.LastErr = "the composed pick head: " + err.Error()
+		}
 	}
 	// A head over rows at each width the lane holds a scratch for, its rows
 	// a call's (jit.CallRows): a step of any count of wanted rows forms

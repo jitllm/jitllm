@@ -137,6 +137,9 @@ func decomposeHeadNorm(o graph.Op, c *Context) ([]Prim, error) {
 // decomposeMatVec is each output row's sum over K of the weight's row times
 // the input.
 func decomposeMatVec(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) == 2 {
+		return decomposeMatVecRows(o, c)
+	}
 	if len(o.Weight) == 2 && len(o.In) == 1 && len(o.Out) == 1 {
 		return decomposeBiased(o, c)
 	}

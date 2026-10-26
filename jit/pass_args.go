@@ -523,6 +523,17 @@ func (g *alg) flat(b, ix int, ax []int) lin {
 
 // computedFrom reports whether node i is computed from a node of op.
 func (k *Kernel) computedFrom(i int, op Op) bool {
+	return k.computedFromSeen(i, op, make([]bool, len(k.Nodes)))
+}
+
+// computedFromSeen is computedFrom past the nodes seen, each node asked
+// once: a chain whose nodes each read the one before more than once is
+// walked in its length, not in two to its length.
+func (k *Kernel) computedFromSeen(i int, op Op, seen []bool) bool {
+	if seen[i] {
+		return false
+	}
+	seen[i] = true
 	nd := k.Nodes[i]
 	if nd.Op == op {
 		return true
@@ -531,7 +542,7 @@ func (k *Kernel) computedFrom(i int, op Op) bool {
 		return false
 	}
 	for _, a := range k.Operands(&nd) {
-		if k.computedFrom(*a, op) {
+		if k.computedFromSeen(*a, op, seen) {
 			return true
 		}
 	}

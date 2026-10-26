@@ -348,6 +348,10 @@ func (e *lowerer) get(i int) ir.Value {
 // flatten is coordinates ax of buffer bf's shape as its flat index.
 func (e *lowerer) flatten(bf int, ax []int) ir.Value {
 	b, sh := e.b, e.n.Bufs[bf].Shape
+	if len(ax) > len(sh) {
+		e.fail("%s: %s read at %d coordinates of a shape of %d", e.n.Name, e.n.Bufs[bf].Operand.Name, len(ax), len(sh))
+		return b.Const(ir.U32, 0)
+	}
 	ix := e.get(ax[0])
 	for d := 1; d < len(ax); d++ {
 		ix = b.Add(ir.U32, b.Mul(ir.U32, ix, b.Const(ir.U32, int64(sh[d]))), e.get(ax[d]))

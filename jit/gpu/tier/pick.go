@@ -5,6 +5,7 @@ import (
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
 )
 
@@ -17,19 +18,23 @@ import (
 // pickMax is the most ids a pick reads. It sizes the lane's buffers once, so a
 // recording, which names them, never outlives a regrown one. It is this
 // tier's choice, not a device limit: a longer pick reads the row back and the
-// caller gathers there. Lev's codes are at most 255; d1's groups two a code.
-const pickMax = 512
+// caller gathers there.
+const pickMax = nn.PickMax
 
-// prepPick readies the pick for head: the device's gather over its rows and
-// this lane's buffers. False leaves the call to read the logits back.
-// Callers hold g.mu, outside any Session.
-func (g *devTier) prepPick(head *nn.Head) bool {
+// prepPick readies the pick for head: the device's gather over its rows,
+// unless the composer picks (composed), and this lane's buffers. False
+// leaves the call to read the logits back. Callers hold g.mu, outside any
+// Session.
+func (g *devTier) prepPick(head *nn.Head, composed bool) bool {
 	n, k := head.W.Rows, len(head.Pick)
 	if k < 1 || k > pickMax || len(head.PickVals) < k {
 		return false
 	}
 	w := g.scratchWin()
 	defer w.close()
+	if composed {
+		return g.pickBufs()
+	}
 	if g.pickK == nil {
 		kk, err := kernels.GatherRows(1, pickMax, n)
 		if err != nil {
@@ -52,6 +57,11 @@ func (g *devTier) prepPick(head *nn.Head) bool {
 			g.pickMV = c
 		}
 	}
+	return g.pickBufs()
+}
+
+// pickBufs makes this lane's pick buffers: the ids and the picked logits.
+func (g *devTier) pickBufs() bool {
 	l := g.lane
 	if l.pickIDs != nil {
 		return true
@@ -115,4 +125,46 @@ func (g *devTier) headRes() *resident {
 		return nil
 	}
 	return g.bs.head
+}
+
+// runPick is the label pick over bs's logits into the lane's: the
+// composer's gather (composed), or the tier's.
+func (g *devTier) runPick(lc *launcher, bs *blockScratch, composed bool) error {
+	if !composed {
+		lc.la(g.pickK, pickMax, bs.headOut(), g.pickIDs, g.pickOut)
+		return nil
+	}
+	sv, err := g.servedSample(bs.pickGraph)
+	if err != nil {
+		return err
+	}
+	return sv.run(g, lc, sv.inst, []backend.Buf{bs.headOut(), g.pickIDs}, []backend.Buf{g.pickOut})
+}
+
+// runPickHead is the composer's head projecting the picked rows of in alone
+// into the lane's picked logits: the step's head and its pick in one form.
+func (g *devTier) runPickHead(lc *launcher, bs *blockScratch, norm, in backend.Buf) error {
+	sv, err := g.servedPickHead(bs, norm)
+	if err != nil {
+		return err
+	}
+	if err := sv.run(g, lc, sv.inst, []backend.Buf{in, g.pickIDs}, []backend.Buf{g.pickOut}); err != nil {
+		return err
+	}
+	g.PartsServed[partSample]++
+	g.PickRows++
+	return nil
+}
+
+// pickRowsExact says the composer's head over the picked rows is the head's
+// own arithmetic at them, so a pick is the row's value to the bit: a Q8_0
+// head, whose row-selected matvec is the plain matvec's form
+// (decomposeMatVecQ8). Any other format reads the rows by expert matvec's
+// decode, a different order of the same sum, and picks by the gather.
+func (bs *blockScratch) pickRowsExact() bool {
+	if bs.head == nil {
+		return false
+	}
+	t, ok := jlmType(bs.head.t)
+	return ok && t == jlm.TypeQ8
 }

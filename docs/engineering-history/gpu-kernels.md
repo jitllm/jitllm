@@ -8506,3 +8506,59 @@ row where the composer's reads two.
   row, and kernels writing a scratch run their calls serially. Composed
   decode reads 0.198 of main (6.7 against 33.7 tok/s) where 1155a8d9 reads
   0.198: not regressed.
+- **The sampler's candidates and the label pick are each one form at
+  placement.** The sampler (nn.Head.SampleK, the repeat penalty and top-k)
+  is graph.SampleTopK at nn.SampleMaxK and SampleMaxHist: the K+Hist best of
+  the row, the penalty on those alone (a penalty above one never raises a
+  value, so the K best after it are among them), applied once per history
+  entry in sixteen-step expressions whose division is MapDiv's exact
+  quotient, then ranked by id and by value so that a tie goes to the lower
+  id. Neither k nor the history's length enters the form: the host reads
+  the first k, and the history's words past its count are an id no row
+  has. Its selection is a new lowering of OpTopK for a group past 1024
+  (decomposeTopKSelect): the K-th largest order key found four bits a round
+  (eight rounds of fifteen counts), the keys above it and the first equal
+  ones written in index order by block prefix counts, then the K ranked --
+  a few passes over the row and K^2 compares, where ranking the row was S^2
+  (1.6e10 at a 128k vocabulary). Counting a candidate's history entries
+  takes MapEqual (jlm.FnEqual; over two index rows their integers, by the
+  bits of their difference: through two compares, the CPU device's vector
+  lanes held words 2^25 apart equal). The label pick
+  is graph.Pick (OpTake of the logits at the ids) or, where the composer
+  serves the head, nothing is left after the projection and the head is
+  Q8_0, the head with Pick set: a row-selected matvec (OpMatVec with a
+  selection), decomposeMatVecQ8's own form at the selected rows, so a pick
+  is the row's value to the bit; any other format reads the rows by expert
+  matvec's decode (a different order of the same sum, 1e-6 from the row on
+  lev) and the tier gathers instead. DeclineSampleTopK and
+  DeclineSamplePick are gone (41 declines to 39). Three composer bugs these
+  forms met: computedFrom walked a chain of nodes that each read the one
+  before twice in two to its length (a sixteen-step penalty hung forming);
+  the prologue pass merged a scatter into a reader that loads it at
+  coordinates (a shapeless workgroup array, a panic in the GPU lowering,
+  now a named error); and coarsening chained reductions whose Temp outputs
+  a later kernel reads, dropping their stores (a kernel binding nothing at
+  a 51200 or 49152 vocabulary, which Vulkan's Compile indexed into; it now
+  refuses one by name). And the host sampler's history slid by cutting its
+  front, which made each append regrow it every window of tokens: four
+  allocations over 64 sampled tokens, now none. Gates, laptop (RTX 3050 Ti,
+  PTX and SPIR-V): TestComposedGPUSampleTopK holds 30 rows (vocabularies 37
+  to 151936, histories 0 to 256, ties among the kept on 27) to the host
+  sampler bit for bit, the penalty on the next id parting every row with a
+  history; TestComposedGPUEqual and TestComposedCPUEqual hold MapEqual at
+  ragged widths (words 2^25 apart, which a float merges);
+  TestComposedCPURowsMatVec holds 120 row-selected matvecs (every packed
+  type, float and int8, 1 to 64 ids, one past the matrix) to the oracle,
+  moved weights and a selection one row off parting. V100 (cuda:0 and
+  vulkan on cards 5 and 6, both builds): TestComposedHeadTokens 22 of 22
+  (the composer selects every candidate set the device does; k+1 parts 22
+  of 24 draws, the penalty on the next id 20 of 24);
+  TestDecisionMatchesLlamaCpp's composed arm holds d1-3B, lev, openjev and
+  vllm-d3 to llama.cpp with every prompt's labels the composer's (5 to 7 a
+  request, none declined); TestDecisionOnEveryDevice's composed arm picks
+  every prompt by the head over the picked rows (d1-3B 10, lev 14) within
+  the device band (0.016 and 0.056), a pick one label off moves it past
+  the band, and the gather arm answers within 2e-6 of it. Open: OpTopK and
+  OpRank do not lower on the CPU device, top-1 included ("an index of x
+  held in a vector register"), so the sampler's candidates form there on
+  no request.

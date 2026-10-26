@@ -18,7 +18,9 @@ const (
 
 // decomposeMatVecQ8 is a matvec over Q8_0 weights against the input's int8
 // form: each block's integer dot of eight words, then each output the sum
-// over blocks of that dot times the weight's scale and the input's.
+// over blocks of that dot times the weight's scale and the input's. With a
+// selection (In[1]) output j is the selected row's, bounded by the matrix:
+// the same arithmetic at the rows it names.
 func decomposeMatVecQ8(o graph.Op, c *Context, wo Operand) ([]Prim, error) {
 	w := o.Weight[0]
 	q := c.Int8
@@ -33,6 +35,18 @@ func decomposeMatVecQ8(o graph.Op, c *Context, wo Operand) ([]Prim, error) {
 	}
 	U, F, I := ir.U32, ir.F32, ir.I32
 	R, rows, K := c.Step.Rows, w.Rows, w.K
+	P := rows
+	if len(o.In) == 2 {
+		P = c.width(o.In[1])
+	}
+	// rowOf is output p's row of the matrix: p, or the selection's word at
+	// p, operand at of the primitive.
+	rowOf := func(x *exprs, r, p, at int) int {
+		if len(o.In) != 2 {
+			return p
+		}
+		return x.op(OpMin, U, x.load(at, x.op(OpAdd, U, x.op(OpMul, U, r, x.u(uint32(P))), p)), x.u(uint32(rows-1)))
+	}
 	nb, nwd := K/q8Block, K/4
 	ns := c.width(v) / q.Sums
 	x := c.value(v)
@@ -48,7 +62,8 @@ func decomposeMatVecQ8(o graph.Op, c *Context, wo Operand) ([]Prim, error) {
 	// The block's integer dot: the eight words of row row's block b against
 	// the input row's.
 	var d exprs
-	r, row, b, j := d.coord(0), d.coord(1), d.coord(2), d.coord(3)
+	r, p, b, j := d.coord(0), d.coord(1), d.coord(2), d.coord(3)
+	row := rowOf(&d, r, p, 2)
 	u := d.op(OpAdd, U, d.op(OpMul, U, b, d.u(q8Words)), j)
 	wq := d.load(0, d.op(OpAdd, U, d.op(OpMul, U, u, d.u(uint32(rows))), row))
 	xq := d.load(1, d.op(OpAdd, U, d.op(OpMul, U, r, d.u(uint32(nwd))), u))
@@ -62,13 +77,14 @@ func decomposeMatVecQ8(o graph.Op, c *Context, wo Operand) ([]Prim, error) {
 
 	// The output: each block's dot by the weight's scale and the input's.
 	var s exprs
-	sr, srow, sb := s.coord(0), s.coord(1), s.coord(2)
+	sr, sp, sb := s.coord(0), s.coord(1), s.coord(2)
+	srow := rowOf(&s, sr, sp, 3)
 	at := s.op(OpAdd, U, s.op(OpMul, U, sb, s.u(uint32(half))), s.op(OpShr, U, srow, s.u(1)))
 	word := s.load(1, at)
 	shift := s.op(OpMul, U, s.op(OpAnd, U, srow, s.u(1)), s.u(16))
 	wd := s.un(OpWidenHalf, F, s.op(OpShr, U, word, shift))
 	xd := s.load(2, s.op(OpAdd, U, s.op(OpMul, U, sr, s.u(uint32(nb))), sb))
-	id := s.un(OpCvtF32, F, s.at(0, []int{R, rows, nb}, sr, srow, sb))
+	id := s.un(OpCvtF32, F, s.at(0, []int{R, P, nb}, sr, sp, sb))
 	if c.unsignedDot {
 		// The block's codes' sum: its Sums-wide sums after the windows'
 		// scales.
@@ -82,10 +98,17 @@ func decomposeMatVecQ8(o graph.Op, c *Context, wo Operand) ([]Prim, error) {
 	}
 	s.op(OpMul, F, s.op(OpMul, F, id, wd), xd)
 
+	dIn, sIn := []Operand{qs, words}, []Operand{dot, ds, scales}
+	dExt := map[int]int{0: nwd * rows, 1: R * nwd}
+	sExt := map[int]int{1: nb * half, 2: R * (c.width(v)/q.Window + ns)}
+	if len(o.In) == 2 {
+		dIn, sIn = append(dIn, c.value(o.In[1])), append(sIn, c.value(o.In[1]))
+		dExt[2], sExt[3] = R*P, R*P
+	}
 	return append(prims,
-		Prim{Kind: PrimReduce, Shape: []int{R, rows, nb, q8Words}, In: []Operand{qs, words}, Out: dot, Combine: OpAdd, Type: I, Expr: d.e,
-			Facts: Facts{Extents: map[int]int{0: nwd * rows, 1: R * nwd}}},
-		Prim{Kind: PrimReduce, Shape: []int{R, rows, nb}, In: []Operand{dot, ds, scales}, Out: c.value(o.Out[0]), Combine: OpAdd, Expr: s.e,
-			Facts: Facts{Extents: map[int]int{1: nb * half, 2: R * (c.width(v)/q.Window + ns)}}},
+		Prim{Kind: PrimReduce, Shape: []int{R, P, nb, q8Words}, In: dIn, Out: dot, Combine: OpAdd, Type: I, Expr: d.e,
+			Facts: Facts{Extents: dExt}},
+		Prim{Kind: PrimReduce, Shape: []int{R, P, nb}, In: sIn, Out: c.value(o.Out[0]), Combine: OpAdd, Expr: s.e,
+			Facts: Facts{Extents: sExt}},
 	), nil
 }

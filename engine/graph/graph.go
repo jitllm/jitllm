@@ -30,7 +30,9 @@ const (
 	// ones.
 	OpHeadNorm
 	// OpMatVec is out = W x, W's rows the output; Weight[0] is W, an
-	// optional Weight[1] its bias added after.
+	// optional Weight[1] its bias added after. With a selection In[1] (u32)
+	// and no bias, element j of Out[0] is W's row In[1][j] times x: the rows
+	// it names alone, a name past W's rows read as its last.
 	OpMatVec
 	// OpRope turns each head's first NRot elements by the position, in the
 	// pair Layout, at Base.
@@ -286,6 +288,7 @@ const (
 	MapRecip    = jlm.FnRecip    // 1 / a
 	MapTanh     = jlm.FnTanh     // tanh(a)
 	MapErf      = jlm.FnErf      // erf(a)
+	MapEqual    = jlm.FnEqual    // 1 where a == b, else 0; over two index rows, their integers
 )
 
 // Order is an OpReduce's: the order its additions run in is part of its
@@ -385,9 +388,10 @@ type Attrs struct {
 	Order Order
 	Span  int
 	Const float64
-	// Exact asks a MapDiv for the IEEE quotient where the device's own
-	// division is not correctly rounded; without it a division takes the
-	// device's, within the gates' band like every other kernel form.
+	// Exact asks a MapDiv, an OpMap's or an OpExpr term's, for the IEEE
+	// quotient where the device's own division is not correctly rounded;
+	// without it a division takes the device's, within the gates' band like
+	// every other kernel form.
 	Exact bool
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testmodels"
+	"github.com/jitllm/jitllm/jit/gpu/tier"
 	"github.com/jitllm/jitllm/tok/jinja"
 )
 
@@ -193,6 +194,48 @@ func TestDecisionMatchesLlamaCpp(t *testing.T) {
 						checkDecisions(t, qs, ans, gold, arm.tol, !c.ownConfidence)
 					})
 				}
+				if m.IsEncoder() {
+					continue
+				}
+				// The composed arm: every block and the head on the first
+				// device present, prompts included, the labels picked by the
+				// composer's forms, against the same golden.
+				t.Run(req+"/composed", func(t *testing.T) {
+					m.SetKVF16(false)
+					var g *tier.GPU
+					for _, spec := range stepDevices() {
+						if d, err := tier.OpenWith(tier.WithDevices(spec), tier.WithDeviceTune(tier.TuneOff),
+							tier.WithConfig(func(c *tier.Config) { c.Composed = tier.ComposedStep | tier.ComposedPrompt })); err == nil && d != nil {
+							g = d
+							break
+						}
+					}
+					if g == nil {
+						noDevice(t, "device", nil)
+					}
+					defer g.Close()
+					state, qs := decisionRequest(t, filepath.Join("testdata", "decision", req+".json"))
+					d, err := m.NewDecider(4096)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer d.Close()
+					if err := d.SetDevice(g, -1); err != nil {
+						cardTooSmall(t, g.Err()+" "+err.Error(), "%v", err)
+						t.Fatal(err)
+					}
+					ans, err := d.Decide(state, qs, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					checkDecisions(t, qs, ans, gold, c.tol, !c.ownConfidence)
+					st := g.Stats()
+					served, declined, _ := st.ServedPart(tier.ComposedSample)
+					t.Logf("%d device blocks; %d prompts picked, %d picks by the composer, %d declined (%s)", d.DeviceBlocks(), d.picked, served, declined, declinesOf(st))
+					if c.kind != jlm.DecisionClef && c.kind != jlm.DecisionKev && (d.picked == 0 || served != d.picked || declined != 0) {
+						t.Fatalf("%d prompts picked, %d by the composer, %d declined", d.picked, served, declined)
+					}
+				})
 			}
 		})
 	}

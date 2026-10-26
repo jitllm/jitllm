@@ -111,14 +111,19 @@ type frontSet struct {
 	headHidden *graph.Graph
 	// tables are the step's rotary tables, the model's rotary's then its
 	// sliding layers', as jit.Front states them (nil for one that turns
-	// nothing); sample is the step's greedy sampling of the head's logits.
-	tables   []*graph.Graph
-	sample   *graph.Graph
-	headWhy  Uncovered
-	embedWhy Uncovered
-	headErr  error
-	embedErr error
-	key      frontKey
+	// nothing); sample is the step's greedy sampling of the head's logits,
+	// topK the sampler's candidates over them.
+	tables []*graph.Graph
+	sample *graph.Graph
+	topK   *graph.Graph
+	// pick is the label pick over the logits, pickHead the head projecting
+	// the picked rows alone.
+	pick, pickHead *graph.Graph
+	headWhy        Uncovered
+	embedWhy       Uncovered
+	headErr        error
+	embedErr       error
+	key            frontKey
 }
 
 // frontKey is what a set's graphs were built from beside the container.
@@ -256,6 +261,11 @@ func (m *Model) frontGraphs() *frontSet {
 	if s.head != nil && len(s.head.Out) == 1 && s.head.Values[s.head.Out[0]].Width == m.Cfg.NVocab {
 		sm := graph.Sample{NVocab: m.Cfg.NVocab}
 		s.sample = sm.Build()
+		tk := graph.SampleTopK{NVocab: m.Cfg.NVocab, K: nn.SampleMaxK, Hist: nn.SampleMaxHist}
+		s.topK = tk.Build()
+		pk := graph.Pick{NVocab: m.Cfg.NVocab, N: nn.PickMax}
+		s.pick = pk.Build()
+		s.pickHead, _ = m.pickHeadGraph()
 	}
 	f.set = s
 	return s
@@ -807,6 +817,35 @@ func (m *Model) headGraph(hidden bool) (*graph.Graph, Uncovered, error) {
 		return nil, UncoveredUnverified, fmt.Errorf("the head's graph does not verify: %w", err)
 	}
 	return g, Covered, nil
+}
+
+// pickHeadGraph is the head projecting the rows of nn.PickMax ids alone,
+// nil for a head with a bias or one the front end states no graph for.
+func (m *Model) pickHeadGraph() (*graph.Graph, error) {
+	g, why, err := m.headGraph(false)
+	if g == nil || why != Covered || err != nil {
+		return nil, err
+	}
+	c := m.Cfg
+	f, _ := m.inventory(jlm.DenseBlock)
+	stored := func(r jlm.Role) bool {
+		_, ok := f.Inventory[r]
+		return ok
+	}
+	if stored(jlm.RoleOutputBias) {
+		return nil, nil
+	}
+	h := graph.Head{NEmbd: c.NEmbd, NVocab: c.NVocab, Eps: c.RMSEps, LayerNorm: c.LayerNorm,
+		NormBias: stored(jlm.RoleOutputNormBias), Output: jlm.RoleOutput,
+		Softcap: float64(c.FinalSoftcap), Scale: c.LogitScale, Pick: nn.PickMax}
+	if !stored(h.Output) {
+		h.Output = jlm.RoleTokenEmbd
+	}
+	pg := h.Build()
+	if err := graph.Verify(pg, f); err != nil {
+		return nil, fmt.Errorf("the head's pick graph does not verify: %w", err)
+	}
+	return pg, nil
 }
 
 // embedGraph is the step's input rows: each row's token's row of the

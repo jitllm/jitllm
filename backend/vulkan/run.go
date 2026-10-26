@@ -295,6 +295,9 @@ func (c *Ctx) Compile(spv []byte, entry string, nbuf, lanes int) (*Kernel, error
 		return nil, fmt.Errorf("vulkan: %s cannot guarantee a %d-lane subgroup for %q: %s",
 			c.name, lanes, entry, why)
 	}
+	if nbuf < 1 {
+		return nil, fmt.Errorf("vulkan: %q binds no buffer", entry)
+	}
 	k := &Kernel{c: c, nbuf: nbuf}
 	sm := shaderCI{sType: stShaderModuleCI, size: uint64(len(spv)), pCode: uintptr(up(&spv[0]))}
 	if err := check(vkCreateShaderModule(c.dev, up(&sm), nil, up(&k.mod)), "vkCreateShaderModule"); err != nil {

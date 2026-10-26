@@ -130,6 +130,13 @@ func (p Prologue) fits(pr, c *Kernel, d Device) bool {
 			return false
 		}
 	}
+	// A value stored at a computed index -- a scatter -- has no shape for
+	// the consumer's reads at coordinates to lay its workgroup array out by.
+	for _, st := range pr.Stores {
+		if st.Ax == nil && readsShaped(c, pr.Bufs[st.Buf].Operand) {
+			return false
+		}
+	}
 	words, read := 0, false
 	for _, b := range c.Bufs {
 		if b.Kind == BufShared {
@@ -160,6 +167,16 @@ func (p Prologue) fits(pr, c *Kernel, d Device) bool {
 func readsOperand(k *Kernel, o Operand) bool {
 	for _, b := range k.Bufs {
 		if b.Kind == BufIn && b.Operand == o {
+			return true
+		}
+	}
+	return false
+}
+
+// readsShaped says k loads operand o at coordinates of its shape.
+func readsShaped(k *Kernel, o Operand) bool {
+	for _, nd := range k.Nodes {
+		if nd.Op == OpLoad && nd.Ax != nil && k.Bufs[nd.Buf].Operand == o {
 			return true
 		}
 	}

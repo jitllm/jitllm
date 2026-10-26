@@ -1,6 +1,8 @@
 package tier
 
 import (
+	"encoding/binary"
+
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
@@ -18,17 +20,18 @@ import (
 // not a device limit: a larger k or history reads the row back and the host
 // sampler selects from it, as it does with no top-k at all.
 const (
-	sampleMaxK    = 256
-	sampleMaxHist = 256
+	sampleMaxK    = nn.SampleMaxK
+	sampleMaxHist = nn.SampleMaxHist
 )
 
 // sampleKerns is one k's two top-k passes.
 type sampleKerns struct{ p1, p2 backend.Kernel }
 
 // prepSample readies the sampler for head: the device's kernels for its rows
-// and k, and this lane's buffers. False leaves the call to read the logits
-// back. Callers hold g.mu, outside any Session.
-func (g *devTier) prepSample(head *nn.Head) bool {
+// and k, unless the composer selects the candidates (composed), and this
+// lane's buffers. False leaves the call to read the logits back. Callers hold
+// g.mu, outside any Session.
+func (g *devTier) prepSample(head *nn.Head, composed bool) bool {
 	n, k := head.W.Rows, head.SampleK
 	if k < 1 || k >= n || k > sampleMaxK || len(head.SampleVals) < k || len(head.SampleIDs) < k ||
 		len(head.SampleArgs) < 2 || len(head.SampleArgs) > kernels.SampleArgsWords(sampleMaxHist) ||
@@ -37,6 +40,9 @@ func (g *devTier) prepSample(head *nn.Head) bool {
 	}
 	w := g.scratchWin()
 	defer w.close()
+	if composed {
+		return g.sampleBufs(n)
+	}
 	if g.samplePenK == nil {
 		kk, err := kernels.SamplePenalty(n)
 		if err != nil {
@@ -75,12 +81,19 @@ func (g *devTier) prepSample(head *nn.Head) bool {
 		}
 		g.sampleKs[k] = sampleKerns{c1, c2}
 	}
+	return g.sampleBufs(n)
+}
+
+// sampleBufs makes this lane's sampler buffers for a row of n, sized for the
+// bounds: the composer's form and the tier's kernels write the same
+// candidates.
+func (g *devTier) sampleBufs(n int) bool {
 	l := g.lane
 	if l.sampleArgs != nil {
 		return true
 	}
 	cand := kernels.SampleSlices(n) * sampleMaxK
-	sizes := [...]int{4 * kernels.SampleArgsWords(sampleMaxHist), 4 * n, 4 * cand, 4 * cand, 4 * sampleMaxK, 4 * sampleMaxK}
+	sizes := [...]int{4 * kernels.SampleArgsWords(sampleMaxHist), 4 * n, 4 * cand, 4 * cand, 4 * sampleMaxK, 4 * sampleMaxK, 4}
 	var bufs [len(sizes)]backend.Buf
 	for i, sz := range sizes {
 		b, err := g.dev.Alloc(sz)
@@ -93,9 +106,24 @@ func (g *devTier) prepSample(head *nn.Head) bool {
 		}
 		bufs[i] = b
 	}
-	l.sampleArgs, l.samplePen, l.sampleV1, l.sampleI1, l.sampleV, l.sampleI =
-		bufs[0], bufs[1], bufs[2], bufs[3], bufs[4], bufs[5]
+	l.sampleArgs, l.samplePen, l.sampleV1, l.sampleI1, l.sampleV, l.sampleI, l.samplePenalty =
+		bufs[0], bufs[1], bufs[2], bufs[3], bufs[4], bufs[5], bufs[6]
+	l.sampleStage = make([]byte, 4*kernels.SampleArgsWords(sampleMaxHist))
 	return true
+}
+
+// stageSample is head's argument words as the composed sampler reads them:
+// the count, the penalty's bits and the history, an id no row has past it.
+func (l *lane) stageSample(head *nn.Head) []byte {
+	b := l.sampleStage
+	for i := range len(b) / 4 {
+		w := uint32(0xffffffff)
+		if i < len(head.SampleArgs) {
+			w = head.SampleArgs[i]
+		}
+		binary.LittleEndian.PutUint32(b[4*i:], w)
+	}
+	return b
 }
 
 // launchSample is the sampler's launches over the head's n logits: the
@@ -120,7 +148,7 @@ func (g *devTier) launchSample(lc *launcher, logits backend.Buf, n, k int, pen b
 
 // freeSample gives back the lane's sampler buffers.
 func (l *lane) freeSample() {
-	for _, b := range [...]*backend.Buf{&l.sampleArgs, &l.samplePen, &l.sampleV1, &l.sampleI1, &l.sampleV, &l.sampleI} {
+	for _, b := range [...]*backend.Buf{&l.sampleArgs, &l.samplePen, &l.sampleV1, &l.sampleI1, &l.sampleV, &l.sampleI, &l.samplePenalty} {
 		if *b != nil {
 			(*b).Free()
 			*b = nil

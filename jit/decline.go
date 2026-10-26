@@ -30,8 +30,6 @@ const (
 	DeclineTableHeld
 	DeclineNoAxes
 	DeclineNoSample
-	DeclineSampleTopK
-	DeclineSamplePick
 	DeclineNoEmbed
 	DeclineEmbedFormat
 	DeclineEmbedWeight
@@ -77,8 +75,6 @@ var declineNames = [NumDeclines]string{
 	DeclineTableHeld:     "a table whose planes or positions the tier does not hold",
 	DeclineNoAxes:        "a table over several axes with no rotary positions for the row",
 	DeclineNoSample:      "no sample graph from the front end",
-	DeclineSampleTopK:    "the sampler's top-k and penalty, which no graph states",
-	DeclineSamplePick:    "the label pick, which no graph states",
 	DeclineNoEmbed:       "no input rows graph from the front end",
 	DeclineEmbedFormat:   "input rows in a format with no container type",
 	DeclineEmbedWeight:   "input rows reading a weight other than the token embedding and a position table",

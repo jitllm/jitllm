@@ -89,10 +89,23 @@ func decomposeTopKRanked(o graph.Op, c *Context) ([]Prim, error) {
 	if K > S {
 		return nil, fmt.Errorf("a top %d of groups of %d", K, S)
 	}
+	sel := c.value(o.Out[0])
+	sel.Elem = ir.U32
+	if G == 1 && S > selectMin && K < S {
+		return decomposeTopKSelect(c, c.value(o.In[0]), sel, c.value(o.Out[1]), S, K), nil
+	}
+	return rankedPlaces(c, c.value(o.In[0]), nil, sel, c.value(o.Out[1]), G, S, K), nil
+}
+
+// rankedPlaces is the K largest of each group of S of in: each element's
+// rank among its group, then each of the K places the index and the value
+// of the element ranked there, the one element of the group whose rank it
+// is. Where ids is given, an element's index is its word of ids rather than
+// its place.
+func rankedPlaces(c *Context, in Operand, ids *Operand, sel, val Operand, G, S, K int) []Prim {
 	U, I, F := ir.U32, ir.I32, ir.F32
 	gs := grouped{c.Step.Rows, G, S}
-	in := c.value(o.In[0])
-	rank := Operand{Kind: OperandScratch, Name: c.value(o.Out[1]).Name + ".rank", Elem: I, Temp: true}
+	rank := Operand{Kind: OperandScratch, Name: val.Name + ".rank", Elem: I, Temp: true}
 
 	// The element at place s: its index, and its value, alone of the group.
 	at := func(x *exprs, val func(r, g, i int) int, t ir.Type, zero func() int) {
@@ -102,18 +115,22 @@ func decomposeTopKRanked(o graph.Op, c *Context) ([]Prim, error) {
 		ks := x.un(OpBitcast, I, s)
 		x.sel(t, x.op(OpLess, ir.Pred, k, ks), zero(), x.sel(t, x.op(OpLess, ir.Pred, k, x.op(OpAdd, I, ks, x.i(1))), val(r, g, i), zero()))
 	}
+	ixIn := []Operand{in, rank}
 	var ix exprs
-	at(&ix, func(_, _, i int) int { return i }, U, func() int { return ix.u(0) })
+	if ids == nil {
+		at(&ix, func(_, _, i int) int { return i }, U, func() int { return ix.u(0) })
+	} else {
+		ixIn = append(ixIn, *ids)
+		at(&ix, func(r, g, i int) int { return gs.at(&ix, 2, r, g, i) }, U, func() int { return ix.u(0) })
+	}
 	var vx exprs
 	at(&vx, func(r, g, i int) int { return gs.at(&vx, 0, r, g, i) }, F, func() int { return vx.f(0) })
 
-	sel := c.value(o.Out[0])
-	sel.Elem = U
 	return []Prim{
 		rankPrim(c, in, rank, G, S),
-		{Kind: PrimReduce, Shape: gs.shape(K, S), In: []Operand{in, rank}, Out: sel, Combine: OpAdd, Type: U, Expr: ix.e},
-		{Kind: PrimReduce, Shape: gs.shape(K, S), In: []Operand{in, rank}, Out: c.value(o.Out[1]), Combine: OpAdd, Expr: vx.e},
-	}, nil
+		{Kind: PrimReduce, Shape: gs.shape(K, S), In: ixIn, Out: sel, Combine: OpAdd, Type: U, Expr: ix.e},
+		{Kind: PrimReduce, Shape: gs.shape(K, S), In: []Operand{in, rank}, Out: val, Combine: OpAdd, Expr: vx.e},
+	}
 }
 
 // decomposeExpertMatVec is a matvec per pair of the selection: pair j's row
@@ -173,6 +190,66 @@ func decomposeExpertMatVec(o graph.Op, c *Context) ([]Prim, error) {
 	return prims, nil
 }
 
+// pairStride is how far apart in the input two pairs' rows are: a row each
+// for an expert matvec, none for a row-selected matvec, whose pairs all read
+// the one input row.
+func pairStride(o graph.Op) int {
+	if o.Kind == graph.OpMatVec {
+		return 0
+	}
+	return o.Weight[0].K
+}
+
+// decomposeMatVecRows is a matvec over the rows its selection names: pair
+// j the selected row of the matrix against the input, the selection bounded
+// by the matrix. Over Q8_0 it is the plain matvec's form at those rows;
+// over any other format the matrix is read by expert matvec's decode, its
+// sheets the matrix's rows.
+func decomposeMatVecRows(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.Weight) != 1 || len(o.In) != 2 || len(o.Out) != 1 || c.width(o.Out[0]) != c.width(o.In[1]) {
+		return nil, fmt.Errorf("a row-selected matvec of %d weights over %d operands", len(o.Weight), len(o.In))
+	}
+	w := o.Weight[0]
+	if c.width(o.In[0]) != w.K {
+		return nil, fmt.Errorf("a row-selected matvec of %d over a row of %d", w.K, c.width(o.In[0]))
+	}
+	rows := o
+	rows.Weight = []graph.Binding{w}
+	rows.Weight[0].Sheets, rows.Weight[0].Rows = w.Rows, 1
+	wo, err := c.weight(w)
+	if err != nil {
+		return nil, err
+	}
+	if wo.Format == jlm.TypeQ8 && c.Int8 != nil && c.Graph.Values[o.In[0]].Elem != graph.ElemI8 {
+		// The plain matvec's Q8_0 form, at the selected rows.
+		return decomposeMatVecQ8(o, c, wo)
+	}
+	out := c.value(o.Out[0])
+	if l, ok := jlm.Layout(wo.Format); ok {
+		if ps, ok := expertInt8(rows, c, wo, l, out); ok {
+			return ps, nil
+		}
+	}
+	p, err := expertDecoded(rows, c, wo, out)
+	if err != nil {
+		return nil, err
+	}
+	return []Prim{p}, nil
+}
+
+// sheetRow is the packed weight a pair reads and the row of it: the pair's
+// sheet of a bank, its row the coordinate's, or for a row-selected matvec
+// the one matrix of the bank's sheets as rows, its row the selection's.
+func sheetRow(o graph.Op, x *exprs, wo Operand, l jlm.TypeLayout, in *[]Operand, facts *Facts, sheet, row int) (p *packed, rows, at int) {
+	w := o.Weight[0]
+	if pairStride(o) == 0 {
+		return packedOperands(x, wo, l, w.Sheets, w.K, in, facts), w.Sheets, sheet
+	}
+	p = packedOperands(x, wo, l, w.Rows, w.K, in, facts)
+	p.bank(sheet, w.Sheets)
+	return p, w.Rows, row
+}
+
 // pairsOf is how many pairs an expert matvec runs: its selection's width,
 // or with none its bank's sheets.
 func pairsOf(o graph.Op, c *Context) int {
@@ -208,11 +285,13 @@ func expertDecoded(o graph.Op, c *Context, wo Operand, out Operand) (Prim, error
 	var x exprs
 	r, j, row, col := x.coord(0), x.coord(1), x.coord(2), x.coord(3)
 	in := []Operand{c.value(o.In[0])}
-	facts := Facts{Extents: map[int]int{0: R * P * K}}
+	stride := pairStride(o)
+	W := (P-1)*stride + K
+	facts := Facts{Extents: map[int]int{0: R * W}}
 	sel := sheetAt(o, c, &x, &in, &facts, 1, r, j)
 	// The input read as the row its producer writes and its other readers
-	// see, pair j's K from j*K.
-	xv := x.at(0, []int{R, P * K}, r, x.op(OpAdd, U, x.op(OpMul, U, j, x.u(uint32(K))), col))
+	// see, pair j's K from j*stride.
+	xv := x.at(0, []int{R, W}, r, x.op(OpAdd, U, x.op(OpMul, U, j, x.u(uint32(stride))), col))
 	var wv int
 	if jlm.Verbatim(wo.Format) {
 		v, err := weightElement(&x, wo, E*rows, K, &in, &facts, x.op(OpAdd, U, x.op(OpMul, U, sel, x.u(uint32(rows))), row), col)
@@ -225,9 +304,8 @@ func expertDecoded(o graph.Op, c *Context, wo Operand, out Operand) (Prim, error
 		if !ok || K%(l.Sub*l.SuperSub) != 0 {
 			return Prim{}, fmt.Errorf("no reading rules for a bank of rows of %d", K)
 		}
-		p := packedOperands(&x, wo, l, rows, K, &in, &facts)
-		p.bank(sel, E)
-		wv = jlm.DecodeElement[int](p, l, rows, row, col)
+		p, dr, dw := sheetRow(o, &x, wo, l, &in, &facts, sel, row)
+		wv = jlm.DecodeElement[int](p, l, dr, dw, col)
 	}
 	x.op(OpMul, ir.F32, wv, xv)
 	return Prim{Kind: PrimReduce, Shape: []int{R, P, rows, K}, In: in, Out: out, Combine: OpAdd, Expr: x.e, Facts: facts}, nil
@@ -249,8 +327,10 @@ func expertInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout, out Operan
 		prims = c.int8(v)
 	}
 	U, I, F := ir.U32, ir.I32, ir.F32
-	E, P, R, rows, K := w.Sheets, pairsOf(o, c), c.Step.Rows, w.Rows, w.K
-	nsub, nwd, nw, ns := K/l.Sub, P*K/q.Word, P*K/win, P*K/q.Sums
+	P, R, rows, K := pairsOf(o, c), c.Step.Rows, w.Rows, w.K
+	stride := pairStride(o)
+	W := (P-1)*stride + K
+	nsub, nwd, nw, ns := K/l.Sub, W/q.Word, W/win, W/q.Sums
 	x := c.value(v)
 	words := Operand{Kind: OperandScratch, Name: x.Name + ".q8a", Elem: U}
 	scales := Operand{Kind: OperandScratch, Name: x.Name + ".q8x"}
@@ -261,19 +341,18 @@ func expertInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout, out Operan
 	in := []Operand{words}
 	facts := Facts{Extents: map[int]int{0: R * nwd}}
 	sheet := sheetAt(o, c, &d, &in, &facts, 1, r, j)
-	p := packedOperands(&d, wo, l, rows, K, &in, &facts)
-	p.bank(sheet, E)
-	at := func(col int) int { return d.op(OpAdd, U, d.op(OpMul, U, j, d.u(uint32(K))), col) }
+	p, dr, dw := sheetRow(o, &d, wo, l, &in, &facts, sheet, row)
+	at := func(col int) int { return d.op(OpAdd, U, d.op(OpMul, U, j, d.u(uint32(stride))), col) }
 	per := l.Sub
 	if l.WordCodes() {
 		per = l.Sub / 4
 		col := d.op(OpAdd, U, d.op(OpMul, U, s, d.u(uint32(l.Sub))), d.op(OpMul, U, t, d.u(4)))
-		wq, _ := jlm.DecodeWord[int](p, l, rows, row, col)
+		wq, _ := jlm.DecodeWord[int](p, l, dr, dw, col)
 		xw := d.load(0, d.op(OpAdd, U, d.op(OpMul, U, r, d.u(uint32(nwd))), d.op(OpShr, U, at(col), d.u(2))))
 		d.add(Expr{Op: OpDot4, Type: I, A: wq, B: xw, C: d.i(0)})
 	} else {
 		col := d.op(OpAdd, U, d.op(OpMul, U, s, d.u(uint32(l.Sub))), t)
-		code, _, _ := jlm.DecodeParts[int](p, l, rows, row, col)
+		code, _, _ := jlm.DecodeParts[int](p, l, dr, dw, col)
 		xw := d.load(0, d.op(OpAdd, U, d.op(OpMul, U, r, d.u(uint32(nwd))), d.op(OpShr, U, at(col), d.u(2))))
 		xb := d.op(OpAnd, U, d.op(OpShr, U, xw, d.op(OpMul, U, d.op(OpAnd, U, col, d.u(3)), d.u(8))), d.u(0xff))
 		xc := d.op(OpSub, U, d.op(OpXor, U, xb, d.u(0x80)), d.u(0x80))
@@ -287,12 +366,11 @@ func expertInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout, out Operan
 	ein := []Operand{dot, scales}
 	efacts := Facts{Extents: map[int]int{0: R * P * rows * nsub, 1: R * (nw + ns)}}
 	esheet := sheetAt(o, c, &e, &ein, &efacts, 2, er, ej)
-	ep := packedOperands(&e, wo, l, rows, K, &ein, &efacts)
-	ep.bank(esheet, E)
+	ep, edr, edw := sheetRow(o, &e, wo, l, &ein, &efacts, esheet, erow)
 	first := e.op(OpMul, U, es, e.u(uint32(l.Sub)))
-	_, scale, bias := jlm.DecodeParts[int](ep, l, rows, erow, first)
+	_, scale, bias := jlm.DecodeParts[int](ep, l, edr, edw, first)
 	df := e.un(OpCvtF32, F, e.at(0, []int{R, P, rows, nsub}, er, ej, erow, es))
-	col := e.op(OpAdd, U, e.op(OpMul, U, ej, e.u(uint32(K))), first)
+	col := e.op(OpAdd, U, e.op(OpMul, U, ej, e.u(uint32(stride))), first)
 	xs := e.load(1, e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(nw))), e.op(OpDiv, U, col, e.u(uint32(win)))))
 	sumAt := e.op(OpAdd, U, e.u(uint32(R*nw)), e.op(OpAdd, U, e.op(OpMul, U, er, e.u(uint32(ns))), e.op(OpDiv, U, col, e.u(uint32(q.Sums)))))
 	csum := e.load(1, sumAt)

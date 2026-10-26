@@ -68,7 +68,7 @@ func TestComposedHeadTokens(t *testing.T) {
 						m.opt.devSample = DeviceSampleOn
 						stages := m.headStages()
 						ids := headTokens(m)
-						newState := func() *State {
+						newStateOn := func(g *tier.GPU) *State {
 							st := m.NewState(len(ids) + gen + 4)
 							st.SetDeviceFallback(false)
 							if err := st.SetDevice(g); err != nil {
@@ -79,6 +79,7 @@ func TestComposedHeadTokens(t *testing.T) {
 							}
 							return st
 						}
+						newState := func() *State { return newStateOn(g) }
 						// Greedy: the token the device selects against Greedy over
 						// the logits of the same position.
 						a, b := newState(), newState()
@@ -178,8 +179,8 @@ func TestComposedHeadTokens(t *testing.T) {
 						// device selected. hide clears the head's stages from the
 						// first, so that nothing tells the device a stage is the
 						// host's to apply.
-						draws := func(hide bool) (parted int, onDev int64) {
-							c, d := newState(), newState()
+						drawsOn := func(g *tier.GPU, hide bool) (parted int, onDev int64) {
+							c, d := newStateOn(g), newStateOn(g)
 							defer c.Close()
 							defer d.Close()
 							if hide {
@@ -212,6 +213,8 @@ func TestComposedHeadTokens(t *testing.T) {
 							}
 							return parted, c.SampledOnDevice
 						}
+						draws := func(hide bool) (int, int64) { return drawsOn(g, hide) }
+						before := composedSamples(g.Stats())
 						parted, onDev := draws(false)
 						if parted != 0 {
 							t.Fatalf("%d of %d draws from the device's candidates parted from the draws over its logits", parted, gen)
@@ -232,6 +235,43 @@ func TestComposedHeadTokens(t *testing.T) {
 							t.Fatalf("the device selected %d of %d sampled tokens, want %d (stages %03b, parts %d)", onDev, gen, wantSampled, stages, parts)
 						}
 						t.Logf("%d greedy tokens (%d on the device) and %d sampled tokens (%d on the device), stages %03b", len(ids), served, gen, onDev, stages)
+						if parts&tier.ComposedSample != 0 {
+							// The composer selects every candidate set the device
+							// does: one form, whatever k and the history.
+							if n := composedSamples(g.Stats()) - before; n != int(onDev) {
+								t.Fatalf("the composer selected %d of the %d candidate sets the device did (%s)", n, onDev, declinesOf(g.Stats()))
+							}
+							// The violations, each on a tier of its own that
+							// records nothing: the k+1 best kept in place of the k
+							// (the best dropped), and the penalty on the
+							// neighbouring id. Each must part the draws, every set
+							// still the composer's.
+							set := m.frontGraphs()
+							orig := set.topK
+							for _, v := range []struct {
+								name string
+								g    *graph.Graph
+							}{{"k+1", sampleShifted(orig)}, {"the penalty on the neighbouring id", sampleNeighbour(orig)}} {
+								m.front.mu.Lock()
+								set.topK = v.g
+								m.front.mu.Unlock()
+								vg, err := tier.OpenWith(tier.WithDevices(dev), tier.WithDeviceTune(tier.TuneOff),
+									tier.WithConfig(func(c *tier.Config) { c.Composed, c.NoGraph = parts, true }))
+								if err != nil || vg == nil {
+									t.Fatalf("%s did not open for the violation: %v", dev, err)
+								}
+								vp, vd := drawsOn(vg, false)
+								vn := composedSamples(vg.Stats())
+								vg.Close()
+								m.front.mu.Lock()
+								set.topK = orig
+								m.front.mu.Unlock()
+								t.Logf("violation, %s: %d of %d draws parted, %d sets selected by the composer", v.name, vp, gen, vn)
+								if vd == 0 || vn < int(vd) || vp == 0 {
+									t.Fatalf("violation, %s: %d of %d draws parted, %d on the device, %d by the composer: the gate cannot see it", v.name, vp, gen, vd, vn)
+								}
+							}
+						}
 						// The violation: the tier's own head, which leaves the bias
 						// and the scale to the host, asked to select as though it
 						// had applied them. It does, before them, and the draws part.
@@ -251,4 +291,55 @@ func TestComposedHeadTokens(t *testing.T) {
 	if ran == 0 {
 		t.Fatal("no arm ran")
 	}
+}
+
+// sampleShifted is the sampler's candidates graph keeping the k+1 best and
+// dropping the best: its last ranking one place wider, read from its second.
+func sampleShifted(s *graph.Graph) *graph.Graph {
+	g := cloneGraph(s)
+	last := -1
+	for i, o := range g.Ops {
+		if o.Kind == graph.OpTopK {
+			last = i
+		}
+	}
+	o := g.Ops[last]
+	k := o.Attr.TopK
+	wide := []graph.ValueID{graph.ValueID(len(g.Values)), graph.ValueID(len(g.Values) + 1)}
+	g.Values = append(g.Values, graph.Value{Name: "shifted.place", Width: k + 1, Elem: graph.ElemU32}, graph.Value{Name: "shifted.vals", Width: k + 1})
+	outs := o.Out
+	o.Attr.TopK, o.Out = k+1, wide
+	g.Ops[last] = o
+	g.Ops = slices.Insert(g.Ops, last+1,
+		graph.Op{Kind: graph.OpSlice, In: []graph.ValueID{wide[0]}, Out: []graph.ValueID{outs[0]}, Attr: graph.Attrs{Offset: 1, Width: k}},
+		graph.Op{Kind: graph.OpSlice, In: []graph.ValueID{wide[1]}, Out: []graph.ValueID{outs[1]}, Attr: graph.Attrs{Offset: 1, Width: k}})
+	return g
+}
+
+// sampleNeighbour is the sampler's candidates graph with every history id
+// moved to the next: the penalty on the neighbouring id.
+func sampleNeighbour(s *graph.Graph) *graph.Graph {
+	g := cloneGraph(s)
+	for i, o := range g.Ops {
+		if o.Kind != graph.OpMap || o.Attr.Fn != graph.MapEqual {
+			continue
+		}
+		// Each candidate's id less one against the history: the penalty
+		// lands on the id after each entry's.
+		cand := o.In[0]
+		less := graph.ValueID(len(g.Values))
+		g.Values = append(g.Values, graph.Value{Name: "cand.less", Width: g.Values[cand].Width})
+		g.Ops[i].In = []graph.ValueID{less, o.In[1]}
+		g.Ops = slices.Insert(g.Ops, i, graph.Op{Kind: graph.OpMap, In: []graph.ValueID{cand}, Out: []graph.ValueID{less},
+			Attr: graph.Attrs{Fn: graph.MapAdd, Const: -1}})
+		break
+	}
+	return g
+}
+
+// composedSamples is how many steps the composer selected a token or the
+// sampler's candidates in, emitted or replayed.
+func composedSamples(s tier.Stats) int {
+	n, _, _ := s.ServedPart(tier.ComposedSample)
+	return n + s.ReplayedPart(tier.ComposedSample)
 }

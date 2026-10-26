@@ -22,12 +22,22 @@ type Head struct {
 	// Hidden makes the norm's rows the graph's second output, after the
 	// logits: what a step reading the trunk's normed rows back reads.
 	Hidden bool
+	// Pick, where set, projects only the rows of Pick ids, the graph's
+	// second input: the logits at those ids, a decision's labels, in place of
+	// the vocabulary's. A head with a bias does not pick.
+	Pick int
 }
 
 // Build is the head's graph.
 func (h *Head) Build() *Graph {
 	b := NewBlock(-1)
 	x := b.In("x", h.NEmbd)
+	width := h.NVocab
+	var ids ValueID
+	if h.Pick > 0 {
+		ids, width = b.In("pick.ids", h.Pick), h.Pick
+		b.G.Values[ids].Elem = ElemU32
+	}
 	var n ValueID
 	if h.LayerNorm {
 		w := []Binding{{Role: jlm.RoleOutputNorm, K: h.NEmbd}}
@@ -43,9 +53,15 @@ func (h *Head) Build() *Graph {
 	if h.Bias {
 		bias = []jlm.Role{jlm.RoleOutputBias}
 	}
-	l := b.MatVec(n, h.Output, h.NVocab, bias...)
+	var l ValueID
+	if h.Pick > 0 {
+		l = b.Emit(OpMatVec, []ValueID{n, ids}, []Result{{Name: "picked", Width: h.Pick}},
+			[]Binding{{Role: h.Output, K: h.NEmbd, Rows: h.NVocab}}, Attrs{}, nil, nil)[0]
+	} else {
+		l = b.MatVec(n, h.Output, h.NVocab, bias...)
+	}
 	op := func(name string, fn MapFn, k float64, in ...ValueID) ValueID {
-		return b.Emit(OpMap, in, []Result{{Name: name, Width: h.NVocab}}, nil, Attrs{Fn: fn, Const: k}, nil, nil)[0]
+		return b.Emit(OpMap, in, []Result{{Name: name, Width: width}}, nil, Attrs{Fn: fn, Const: k}, nil, nil)[0]
 	}
 	if s := h.Softcap; s != 0 {
 		// s*tanh(l/s), tanh(y) as 2*sigmoid(2y) - 1: finite at both ends,

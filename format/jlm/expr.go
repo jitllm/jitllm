@@ -27,6 +27,7 @@ const (
 	FnRecip                  // 1 / a
 	FnTanh                   // tanh(a)
 	FnErf                    // erf(a)
+	FnEqual                  // 1 where a == b, else 0
 	numFns
 )
 
@@ -37,13 +38,13 @@ func (f Fn) Arity() int {
 		return 1
 	case FnWhere, FnFma:
 		return 3
-	case FnAdd, FnSub, FnMul, FnDiv, FnMax, FnMin, FnLess:
+	case FnAdd, FnSub, FnMul, FnDiv, FnMax, FnMin, FnLess, FnEqual:
 		return 2
 	}
 	return 0
 }
 
-var fnNames = [...]string{"?", "add", "sub", "mul", "div", "max", "min", "exp", "sigmoid", "softplus", "sqrt", "where", "less", "fma", "expm1", "abs", "round", "recip", "tanh", "erf"}
+var fnNames = [...]string{"?", "add", "sub", "mul", "div", "max", "min", "exp", "sigmoid", "softplus", "sqrt", "where", "less", "fma", "expm1", "abs", "round", "recip", "tanh", "erf", "equal"}
 
 func (f Fn) String() string {
 	if int(f) < len(fnNames) {

@@ -38,6 +38,22 @@ func (x *exprs) expm1(a int) int {
 	return x.sel(F, x.op(OpLess, ir.Pred, x.op(OpMax, F, a, x.neg(a)), x.f(0.5)), small, big)
 }
 
+// equal is 1 where a == b, else 0: two floats neither less than the other
+// and neither NaN, or two words of the same bits where both are integers.
+func (x *exprs) equal(a, b int, ints bool) int {
+	F, U := ir.F32, ir.U32
+	if ints {
+		// No integer compare: the words' difference in bits, at most one.
+		d := x.op(OpMin, U, x.op(OpXor, U, a, b), x.u(1))
+		return x.op(OpSub, F, x.f(1), x.un(OpCvtF32, F, x.un(OpBitcast, ir.I32, d)))
+	}
+	same := x.sel(F, x.op(OpLess, ir.Pred, a, b), x.f(0), x.sel(F, x.op(OpLess, ir.Pred, b, a), x.f(0), x.f(1)))
+	nan := func(v int) int {
+		return x.op(OpLess, ir.Pred, x.u(0x7f800000), x.op(OpAnd, U, x.un(OpBitcast, U, v), x.u(0x7fffffff)))
+	}
+	return x.sel(F, nan(a), x.f(0), x.sel(F, nan(b), x.f(0), same))
+}
+
 // mapFn is f over operands a. A division is the device's own where exact
 // says that suffices (the device's is correctly rounded, or the op asks for
 // no more: graph.Attrs.Exact), else correctly rounded in integers.
@@ -88,6 +104,8 @@ func (x *exprs) mapFn(f graph.MapFn, a []int, exact bool) (int, error) {
 		return x.tanh(a[0]), nil
 	case graph.MapErf:
 		return x.erf(a[0]), nil
+	case graph.MapEqual:
+		return x.equal(a[0], a[1], false), nil
 	}
 	return 0, fmt.Errorf("no formula for the map %v", f)
 }
@@ -121,6 +139,11 @@ func decomposeMap(o graph.Op, c *Context) ([]Prim, error) {
 		}
 		return x.at(j, []int{R, n}, r, e), nil
 	}
+	// Two index rows compared are compared as their integers.
+	ints := o.Attr.Fn == graph.MapEqual && len(o.In) == 2 && len(o.Weight) == 0
+	for _, v := range o.In {
+		ints = ints && c.Graph.Values[v].Elem == graph.ElemU32
+	}
 	var in []Operand
 	var args []int
 	for _, v := range o.In {
@@ -128,7 +151,7 @@ func decomposeMap(o graph.Op, c *Context) ([]Prim, error) {
 		if err != nil {
 			return nil, err
 		}
-		if c.Graph.Values[v].Elem == graph.ElemU32 {
+		if c.Graph.Values[v].Elem == graph.ElemU32 && !ints {
 			// An index row reads as its float, as main's map takes it.
 			a = x.un(OpCvtF32, ir.F32, x.un(OpBitcast, ir.I32, a))
 		}
@@ -177,6 +200,8 @@ func decomposeMap(o graph.Op, c *Context) ([]Prim, error) {
 		U := ir.U32
 		q := x.un(OpBitcast, U, x.scale(x.abs(args[0])))
 		x.un(OpBitcast, ir.F32, x.op(OpAdd, U, q, x.op(OpAnd, U, x.un(OpBitcast, U, args[0]), x.u(0x80000000))))
+	} else if ints {
+		x.equal(args[0], args[1], true)
 	} else if _, err := x.mapFn(o.Attr.Fn, args, c.exactDiv || !o.Attr.Exact); err != nil {
 		return nil, err
 	}
