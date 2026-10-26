@@ -755,7 +755,11 @@ func (g *devTier) cacheBlock(l *layer, n, k int) bool {
 // placed on. It reports whether n fits. Callers hold g.mu, outside a
 // submission.
 func (g *devTier) dropCaches(n uint64) bool {
-	for li := len(g.layers) - 1; li >= 0 && !g.room(n); li-- {
+	top := -1
+	for li := range g.layers {
+		top = max(top, li)
+	}
+	for li := top; li >= 0 && !g.room(n); li-- {
 		l := g.layers[li]
 		if l == nil || l.stream == nil || !l.stream.cached() || l.stream.plain[2] == nil {
 			continue

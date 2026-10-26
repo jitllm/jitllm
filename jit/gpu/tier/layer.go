@@ -11275,11 +11275,17 @@ func (g *devTier) prepBatch(width int) bool {
 	// (ComposedPrompt): a block it serves compiles none of its own batched
 	// kernels here.
 	g.promptForms(bb)
-	if len(bb.left) != len(g.layers) {
-		bb.left = make([]bool, len(g.layers))
+	// g.layers is keyed by block index and holds only this device's blocks.
+	n := 0
+	for li := range g.layers {
+		n = max(n, li+1)
+	}
+	if len(bb.left) < n {
+		bb.left = make([]bool, n)
+	} else {
+		clear(bb.left)
 	}
 	for li, l := range g.layers {
-		bb.left[li] = false
 		if l == nil || !l.ok {
 			continue
 		}
