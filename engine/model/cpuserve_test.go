@@ -12,7 +12,7 @@ import (
 
 // cpuServedModels are the models whose every block the composer serves on
 // the CPU at decode.
-var cpuServedModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf"}
+var cpuServedModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "Llama-3.2-1B-Instruct-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"}
 
 // TestComposedCPUBlocksServe runs each model's blocks on the CPU three ways,
 // teacher-forced on one token sequence: on main's kernels, on what the
