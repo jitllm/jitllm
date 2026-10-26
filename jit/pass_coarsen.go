@@ -289,6 +289,14 @@ func (c Coarsen) form(members []*Kernel, host *Kernel, d Device, under bool) (*K
 		k.m = &Kernel{Name: "chain", Kind: members[0].Kind, Space: []int{T}, Group: group, Part: members[0].Part, Of: members[0].Of}
 		k.u = k.m.add(Node{Op: OpCoord, A: 0, Type: ir.U32})
 	}
+	// A chain of a form's capacity is the capacity's: its units are rows'
+	// periods, and its launch is held to the call's rows (CallRows).
+	k.m.Capacity = members[0].Capacity
+	for _, n := range members {
+		if n.Capacity != k.m.Capacity || host != nil && host.Capacity != n.Capacity {
+			k.m.Capacity = 0
+		}
+	}
 	k.local = k.m.add(Node{Op: OpLocal, Type: ir.U32, A: k.u})
 	for _, n := range members {
 		for _, s := range n.Stores {

@@ -77,6 +77,15 @@ func int8Projection(t *testing.T, typ quant.Type, w []byte, x []float32, rows, k
 // after it.
 func runGraph(d backend.Device, codes []jit.Code, kerns []backend.Kernel, in, out graph.ValueID, x []float32, n, guard int,
 	planes [3][]uint32) (res []float32, tail []uint32, err error) {
+	return runGraphRows(d, codes, kerns, in, out, x, n, guard, planes, 0)
+}
+
+// runGraphRows is runGraph at a call of rows rows, the call's table's word,
+// each kernel launched at its groups for them
+// (Code.LiveGroups); 0 leaves the table poisoned and launches the form's
+// capacity.
+func runGraphRows(d backend.Device, codes []jit.Code, kerns []backend.Kernel, in, out graph.ValueID, x []float32, n, guard int,
+	planes [3][]uint32, rows int) (res []float32, tail []uint32, err error) {
 	var bufs []backend.Buf
 	defer func() {
 		for _, b := range bufs {
@@ -137,6 +146,15 @@ func runGraph(d backend.Device, codes []jit.Code, kerns []backend.Kernel, in, ou
 				args[i] = b
 			case o.Kind == jit.OperandWeight || o.Kind == jit.OperandVector:
 				return nil, nil, fmt.Errorf("%s binds %+v, which the gate does not hold", c.Name, o)
+			case rows > 0 && o.Kind == jit.OperandTable && o.Name == "rows.n":
+				b, ok := own[o]
+				if !ok {
+					if b, err = alloc(append([]uint32{uint32(rows)}, poisoned(guard)...)); err != nil {
+						return nil, nil, err
+					}
+					own[o] = b
+				}
+				args[i] = b
 			default:
 				b, ok := own[o]
 				if !ok {
@@ -152,7 +170,11 @@ func runGraph(d backend.Device, codes []jit.Code, kerns []backend.Kernel, in, ou
 				args[i] = b
 			}
 		}
-		if err := kerns[ci].Launch(c.Groups, c.GPU.Group[0], args...); err != nil {
+		groups := c.Groups
+		if rows > 0 {
+			groups = c.LiveGroups(rows)
+		}
+		if err := kerns[ci].Launch(groups, c.GPU.Group[0], args...); err != nil {
 			return nil, nil, fmt.Errorf("launching %s: %w", c.Name, err)
 		}
 	}

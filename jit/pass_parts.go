@@ -44,7 +44,7 @@ func (p Parts) joins(group []*Kernel, n *Kernel) bool {
 		return false
 	}
 	for _, g := range group {
-		if g.Group != n.Group || conflicts(g, n) || conflicts(n, g) {
+		if g.Group != n.Group || g.Capacity != n.Capacity || conflicts(g, n) || conflicts(n, g) {
 			return false
 		}
 		// A part whose threads work together addresses its workgroup by its
@@ -83,10 +83,17 @@ func (p Parts) merge(parts []*Kernel) *Kernel {
 	for _, n := range parts {
 		N = max(N, n.Elements())
 	}
-	m := &Kernel{Name: "parts", Space: []int{N}, Group: parts[0].Group, Kind: parts[0].Kind, Part: parts[0].Part, Of: parts[0].Of}
+	m := &Kernel{Name: "parts", Space: []int{N}, Group: parts[0].Group, Kind: parts[0].Kind, Part: parts[0].Part, Of: parts[0].Of,
+		Capacity: parts[0].Capacity}
 	flat := m.add(Node{Op: OpFlat, Type: ir.U32})
 	for _, n := range parts {
-		el := m.bin(OpMin, ir.U32, flat, m.u32(n.Elements()-1))
+		// A part of a form's capacity is held to the call's rows, as its
+		// own launch would be (CallRows).
+		last := m.u32(n.Elements() - 1)
+		if n.Capacity > 0 {
+			last = m.bin(OpSub, ir.U32, m.liveElements(n.Space, n.Capacity), m.u32(1))
+		}
+		el := m.bin(OpMin, ir.U32, flat, last)
 		coords := m.decode(el, n.Space)
 		leaf := func(i int, nd Node) (int, bool) {
 			if nd.Op == OpCoord {

@@ -138,7 +138,13 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 	// The step's own width, or the reserved one when that does not fit.
 	ok := g.bs != nil && (head == nil || g.bs.head != nil && g.bs.head.ok)
 	if ok {
-		w = g.batchFor(w)
+		// A step the composer serves whole runs in the reserved width, its
+		// rows the call's, as a prompt does (promptComposed).
+		if n <= g.promptW && g.promptComposed(lo, hi) {
+			w = g.promptW
+		} else {
+			w = g.batchFor(w)
+		}
 		ok = w > 0 && g.prepRagged(g.bbs[w], head, n)
 	}
 	bs := g.bbs[w]
@@ -242,8 +248,11 @@ func (g *devTier) prepRaggedBlocks(bs *blockScratch, n int) bool {
 		g.LastErr = "rows: no ragged twin builds (roomFault)"
 		return false
 	}
+	// A step in the reserved width whose every block the composer serves
+	// runs none of the tier's twins: nothing is built for its count of rows.
+	composed := bs == g.bbs[g.promptW] && g.composedWidths()
 	for _, l := range g.layers {
-		if l == nil || !l.ok {
+		if l == nil || !l.ok || composed {
 			continue // a block of a split placement that another tier runs
 		}
 		// A block of another scratch set is built when its set's step is
@@ -310,8 +319,14 @@ func (g *devTier) prepRowsHead(bs *blockScratch, rowsHead *nn.Head, n int) bool 
 		return true
 	}
 	head := g.bs.head
-	g.groupMV(g.headMV(), rowsHead.WantedRows(n), R)
-	g.headOneMV(R)
+	// The composer's head over rows serves any count of them in the
+	// reserved width (servedHead): the tier's per-count projections are not
+	// built for it.
+	if !(g.Composed&ComposedHead != 0 && bs == g.bbs[g.promptW] && g.composedWidths() &&
+		g.bs.headServes(g.bs.hNorm, false, false) == partServes) {
+		g.groupMV(g.headMV(), rowsHead.WantedRows(n), R)
+		g.headOneMV(R)
+	}
 	if bs.ragArgmax == nil {
 		amk := comp(kernels.ArgmaxRows(head.nrows, R))
 		if amk == nil {

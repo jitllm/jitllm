@@ -221,6 +221,10 @@ func (g *devTier) embedRowsAt(bs *blockScratch, n int) int {
 		return formed
 	case held > 0:
 		return held
+	case g.promptsReserved():
+		// Rows wider than every width held: the widest a promise holds,
+		// formed at placement (prewarmComposedHead), its rows the call's.
+		return batchWidth
 	}
 	return n
 }

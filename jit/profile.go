@@ -28,7 +28,7 @@ func gpuProfile() Profile {
 		Prefetch{},
 		Fuse{Pairs: []Pair{{From: PrimMap, To: PrimMap, AtStores: true}, {From: PrimContract, To: PrimMap, Additive: true}}},
 		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimReduce, Unrolled: true}}},
-		RowTiles{Rows: 16, Warps: 4, Fill: 30720},
+		RowTiles{Rows: 16},
 		Threads{Group: 128},
 		LiveRows{},
 		WorkRow{Group: 1024, Heads: 32},
@@ -46,6 +46,7 @@ func gpuProfile() Profile {
 		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimMap, Unrolled: true}}},
 		Siblings{},
 		Prologue{Words: 12 << 10},
+		CallRows{},
 		Affine{},
 	}}
 }

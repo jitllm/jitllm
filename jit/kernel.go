@@ -48,6 +48,13 @@ type Kernel struct {
 	// Clamp, where a pass set it, 1 + the node of the elements a launch
 	// holds its threads to.
 	Rows, Clamp int
+	// Capacity, where set, is the rows of a step the kernel's leading axis holds
+	// at the form's capacity, in units of Capacity/Space[0] rows: a call runs
+	// the rows its table states (tableCall), at most Capacity, and
+	// the kernel's threads and its launch are held to them (CallRows).
+	Capacity int
+	// RowsHeld is set where a pass held the kernel to the call's rows.
+	RowsHeld bool
 	// Seq, where a schedule set it, is the kernel as a sequence: each node,
 	// store and loop in the order the code runs them.
 	Seq []Entry

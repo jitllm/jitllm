@@ -110,6 +110,8 @@ func (e *lowerer) run() (*ir.Kernel, error) {
 	var flat ir.Value
 	if n.Work && len(n.Space) > 1 {
 		e.coords = e.workCoords()
+	} else if n.Work && n.Clamp > 0 {
+		flat = b.Min(ir.U32, b.CTAID(), b.Sub(ir.U32, e.get(n.Clamp-1), b.Const(ir.U32, 1)))
 	} else if n.Work {
 		flat = b.Min(ir.U32, b.CTAID(), b.Const(ir.U32, int64(n.Elements()-1)))
 	} else {

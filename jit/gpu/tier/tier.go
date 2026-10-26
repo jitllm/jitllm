@@ -276,6 +276,12 @@ type Config struct {
 	// (a power of two) rather than one built at the chunk's own grain width:
 	// the A/B arm and the bisection switch.
 	NoExactPrompt bool
+	// ComposedWidths runs a prompt the composer serves as the tier's own
+	// kernels run one, at its chunk's grain width, a form and a scratch for
+	// each, in place of the reserved width with its rows the call's
+	// (promptComposed): the violation arm of the gate that a placement
+	// composes once.
+	ComposedWidths bool
 	// NoPromptPrewarm leaves the exact prompt widths' kernels to the first
 	// prompt of each width (prewarmPromptWidths): the violation arm of the
 	// gate that a placed model's prompts compile nothing.
@@ -783,6 +789,12 @@ type Stats struct {
 	// once more for each relocation; paging its weights out and in forms
 	// nothing. Summed over the devices.
 	BlockForms []int
+	// PartsFormed counts the composer's forms the device compiled (a Key it
+	// held no compiled form of), PartKernels their kernels' driver
+	// compiles, and ScratchBuilds the batched scratches built: the census
+	// of what a placement composes, which no prompt, step or session after
+	// it moves.
+	PartsFormed, PartKernels, ScratchBuilds int
 	// HiddenHeads counts the calls whose head the composer served and whose
 	// normed rows the caller read back (nn.Head.Hidden), HiddenRows those
 	// rows: a speculation step's verification is one call of several.
@@ -1371,6 +1383,9 @@ func (s *Stats) add(o Stats) {
 	for i, n := range o.BlockForms {
 		s.BlockForms[i] += n
 	}
+	s.PartsFormed += o.PartsFormed
+	s.PartKernels += o.PartKernels
+	s.ScratchBuilds += o.ScratchBuilds
 	s.HiddenHeads += o.HiddenHeads
 	s.HiddenRows += o.HiddenRows
 	// A block is on one device, so its slot is the only one that is not zero.
@@ -2016,6 +2031,9 @@ type devShared struct {
 	prewarming  bool
 	// blockForms is Stats.BlockForms, this device's.
 	blockForms []int
+	// everyRows is the word a served part whose call states no rows reads
+	// (everyRow).
+	everyRows backend.Buf
 	// census is Config.Census's count, made at the first step it counts.
 	census   *launchCensus
 	composer *jit.Registry

@@ -155,7 +155,10 @@ func (l *loneOp) run(x []float32, n, guard int, vecs map[jlm.Role][]float32) (re
 					vec[o.Role] = b
 				}
 				args[i] = b
-			case bd.Words != nil || o.Kind == jit.OperandScratch:
+			case bd.Words != nil || o.Kind == jit.OperandScratch || o.Kind == jit.OperandTable && o.Name == "rows.n":
+				// A form of several rows reads the call's rows from its
+				// table; poisoned, the word is past the form's capacity and
+				// the call runs the capacity.
 				b, ok := own[o]
 				if !ok {
 					w := bd.Words

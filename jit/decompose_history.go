@@ -27,8 +27,11 @@ var (
 	// attended range (graph.Attrs.RowWindows).
 	tableWindows = Operand{Kind: OperandTable, Name: "rows.win", Elem: ir.U32}
 	tablePages   = Operand{Kind: OperandTable, Name: "pages", Elem: ir.U32}
-	tableKeys    = Operand{Kind: OperandTable, Name: "kv.k", PerPart: true}
-	tableValues  = Operand{Kind: OperandTable, Name: "kv.v", PerPart: true}
+	// tableCall is a call's rows, one word: the rows a form of several
+	// rows runs (CallRows).
+	tableCall   = Operand{Kind: OperandTable, Name: "rows.n", Elem: ir.U32}
+	tableKeys   = Operand{Kind: OperandTable, Name: "kv.k", PerPart: true}
+	tableValues = Operand{Kind: OperandTable, Name: "kv.v", PerPart: true}
 )
 
 // rotaryTable is the step's table a rotary op turns by: the model's one

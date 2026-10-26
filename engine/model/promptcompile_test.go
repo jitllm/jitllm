@@ -49,8 +49,8 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 				g, err := tier.OpenWith(tier.WithDeviceTune(tune),
 					tier.WithConfig(func(c *tier.Config) {
 						c.NoPromptPrewarm, c.Composed = violate, arm.composed
-						// The composer forms a prompt block at each width the
-						// device warms: the widest chunk here is 224 rows.
+						// The composer forms a prompt block once, at the
+						// reserved width: the widest chunk here is 224 rows.
 						if arm.composed&tier.ComposedPrompt != 0 {
 							c.PromptRows = 256
 						}
@@ -105,7 +105,14 @@ func TestPlacedPromptsCompileNothing(t *testing.T) {
 				got := backend.Compiles() - c0
 				t.Logf("%d compile(s) after placement; %d exact prompt chunk(s), %d width(s) warmed",
 					got, st.ExactPrompts, st.PromptWidthsWarmed)
-				if st.ExactPrompts < len(chunks) {
+				// A prompt the composer serves runs in the reserved width, its
+				// rows the call's, and no other width is warmed; the tier's own
+				// kernels run each chunk at its own warmed width.
+				switch {
+				case arm.composed&tier.ComposedPrompt != 0 && (st.ExactPrompts != 0 || st.PromptWidthsWarmed != 0):
+					t.Fatalf("with the composer serving the prompt, %d chunks ran at their own width and %d widths were warmed",
+						st.ExactPrompts, st.PromptWidthsWarmed)
+				case arm.composed&tier.ComposedPrompt == 0 && st.ExactPrompts < len(chunks):
 					t.Fatalf("%d of %d chunks ran at their own width: the warmed widths were not the ones used",
 						st.ExactPrompts, len(chunks))
 				}

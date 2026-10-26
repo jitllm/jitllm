@@ -438,6 +438,62 @@ func (g *devTier) batchFor(w int) int {
 	return 0
 }
 
+// promptComposed reports whether a prompt call over blocks [lo, hi) runs in
+// the reserved width, its rows the call's (jit.CallRows): the composer
+// serves every block's prompt there (promptServed), so no width is built,
+// formed or compiled for the call's length, and a call longer than the
+// reserved width runs in chunks of it. A block that is not served is named
+// in LastErr. Callers hold g.mu, outside any submission.
+func (g *devTier) promptComposed(lo, hi int) bool {
+	bb := g.bbs[g.promptW]
+	if g.promptW < 2 || bb == nil || g.Composed&ComposedPrompt == 0 || g.ComposedWidths || lo >= hi {
+		return false
+	}
+	for li := lo; li < hi; li++ {
+		if !g.composedBlock(li, bb) {
+			return false
+		}
+	}
+	return true
+}
+
+// composedBlock reports whether block li's prompt is the composer's at bb's
+// rows, naming in LastErr why where it is not.
+func (g *devTier) composedBlock(li int, bb *blockScratch) bool {
+	l := g.layers[li]
+	switch {
+	case l == nil || !l.ok:
+		g.LastErr = fmt.Sprintf("block %d is not on the device: a prompt over it runs no reserved width", li)
+		return false
+	case !g.promptServed(l, li, bb):
+		g.LastErr = fmt.Sprintf("block %d's prompt is not the composer's at %d rows (%s): its prompts run at their own widths",
+			li, bb.rows, g.blockServes(l, li, &bb.p, bb, false, true))
+		return false
+	}
+	return true
+}
+
+// composedWidths reports whether every block placed on the device has its
+// prompt in the reserved width (promptComposed): a placement then warms no
+// other width. Callers hold g.mu.
+func (g *devTier) composedWidths() bool {
+	bb := g.bbs[g.promptW]
+	if g.promptW < 2 || bb == nil || g.Composed&ComposedPrompt == 0 || g.ComposedWidths {
+		return false
+	}
+	n := 0
+	for li, l := range g.layers {
+		if l == nil || !l.ok {
+			continue
+		}
+		if !g.composedBlock(li, bb) {
+			return false
+		}
+		n++
+	}
+	return n > 0
+}
+
 // prewarmPromptWidths builds, at the end of a placement, the kernels of every
 // grain width below the reserved prompt width (layersFor's exact prompt
 // scratch), so a prompt of any length compiles nothing: at most
@@ -472,7 +528,7 @@ func (g *devTier) prewarmPromptWidths() {
 		g.PromptBlocksLeft += countLeft(bb)
 	}
 	grain := g.promptGrain()
-	if g.NoExactPrompt || g.promptW <= grain {
+	if g.NoExactPrompt || g.promptW <= grain || g.promptsReserved() {
 		return
 	}
 	// The composer's prompt forms of each width are formed by its walk
@@ -585,4 +641,13 @@ func (g *devTier) noRoomFor(width int) bool {
 		return true
 	}
 	return false
+}
+
+// promptsReserved reports whether the device's prompts run in its reserved
+// width with their rows the call's, where the composer serves them
+// (promptComposed, asked at each call): a placement then warms no other
+// width, and a block whose prompt declines compiles its own kernels at the
+// call (declineTwins), counted by reason.
+func (g *devTier) promptsReserved() bool {
+	return g.promptW >= 2 && g.Composed&ComposedPrompt != 0 && !g.ComposedWidths
 }

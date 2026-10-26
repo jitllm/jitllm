@@ -36,11 +36,12 @@ func ffnBlock(embd, ffn int) *graph.Graph {
 }
 
 // TestRowTilesHoldTheOps forms a Llama-3.2-1B-shaped MLP over Q4_K, Q6_K and
-// Q8_0 weights at a prompt chunk's rows, with int8 and with float
-// activations, on a device of CUDA's statement and one of Vulkan's: from 128
-// rows on, where every projection's tile is whole, the largest kernel's op
-// count stays within 1% (an address constant's form), every projection is
-// tiled, and no kernel passes 1,000 ops. At one row nothing is tiled. With the pass off the float form's up
+// Q8_0 weights at a prompt chunk's rows -- ragged counts among them, whose
+// last tile is guarded -- with int8 and with float activations, on a device
+// of CUDA's statement and one of Vulkan's: from 128 rows on the largest
+// kernel's op count stays within 1% (an address constant's form, a tail's
+// guard), from two rows on every projection is tiled, and no kernel passes
+// 1,000 ops. At one row nothing is tiled. With the pass off the float form's up
 // projection, unrolled into its SiLU, passes 1,000 ops: the gate sees it.
 func TestRowTilesHoldTheOps(t *testing.T) {
 	cuda := jit.Device{Kind: jit.DeviceGPU, Slots: 80 * 2048, Lanes: 32, Units: 80, ExactDiv: true}
@@ -56,7 +57,7 @@ func TestRowTilesHoldTheOps(t *testing.T) {
 				}
 				name := fmt.Sprintf("%v/units %d/float %v", typ, d.Units, float)
 				var held []int
-				for _, R := range []int{1, 32, 128, 256, 512} {
+				for _, R := range []int{1, 3, 7, 31, 33, 100, 128, 256, 511, 512} {
 					_, codes, err := reg.Form(jit.Request{Graph: ffnBlock(2048, 8192), Formats: formats(typ),
 						Step: jit.Step{Rows: R, Page: 64, Keys: 1, ActWindow: 32}, Device: d})
 					if err != nil {
@@ -72,7 +73,7 @@ func TestRowTilesHoldTheOps(t *testing.T) {
 					switch {
 					case R == 1 && tiled != 0:
 						t.Fatalf("%s: %d kernels tiled at one row", name, tiled)
-					case R >= 128 && tiled != 3:
+					case R > 1 && tiled != 3:
 						t.Fatalf("%s at %d rows: %d of 3 projections tiled", name, R, tiled)
 					case largest > 1000:
 						t.Fatalf("%s at %d rows: a kernel of %d ops", name, R, largest)
@@ -82,8 +83,8 @@ func TestRowTilesHoldTheOps(t *testing.T) {
 					}
 					t.Logf("%s at %d rows: %d kernels, the largest %d ops, %d tiled", name, R, len(codes), largest, tiled)
 				}
-				if 100*held[len(held)-1] > 101*held[0] {
-					t.Fatalf("%s: the largest kernel grows from %d to %d ops past 128 rows", name, held[0], held[len(held)-1])
+				if 100*slices.Max(held) > 101*slices.Min(held) {
+					t.Fatalf("%s: the largest kernel runs from %d to %d ops past 128 rows", name, slices.Min(held), slices.Max(held))
 				}
 			}
 		}
@@ -150,21 +151,25 @@ func tiledWeights(t quant.Type, q kernels.Quant, rows, k int, rng *rand.Rand) []
 	return raw
 }
 
-// TestComposedGPURowTiles runs a projection of 2048 rows of 256 at one, three,
-// 32 and 256 rows on every device present, over a float matrix and every
-// packed format of the served models, with int8 and with float activations
-// (a float matrix's product is the float one either way), and holds each row
-// to the oracle with poisoned guard words after the
-// output: the tiled forms (32 and 256 rows, tiles of up to 16) and the
-// untiled (one and three). Two violations must fail: the weight's words
-// moved by one, and the input's rows moved by one.
+// TestComposedGPURowTiles forms a projection of 2048 rows of 256 once at a
+// capacity of 512 rows and once at decode's one row, on every device
+// present, over a float matrix and every packed format of the served
+// models, with int8 and with float activations, and runs the one form at
+// every count of rows a call may state -- 1, 3, 7, 31, 33, 100, 511 and 512,
+// the rows past them poisoned -- each row held to the oracle and every word
+// past the call's rows, to the capacity and the guard after it, untouched.
+// The decode form runs its one row the same way. Three violations must
+// fail: the weight's words moved by one, the input's rows moved by one, and
+// a call stating one row more than its input holds (the threads past the
+// call's rows not held).
 func TestComposedGPURowTiles(t *testing.T) {
 	testlock.GPU(t)
 	devs := backend.Open()
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}
-	const guard, n, k = 64, 2048, 256
+	const guard, n, k, capacity = 64, 2048, 256, 512
+	calls := []int{1, 3, 7, 31, 33, 100, 511, 512}
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
@@ -187,12 +192,26 @@ func TestComposedGPURowTiles(t *testing.T) {
 				}
 				planes := [3][]uint32{qs, dw, sc}
 				moved := [3][]uint32{append(qs[1:len(qs):len(qs)], qs[0]), dw, sc}
+				x := make([]float32, capacity*k)
+				for i := range x {
+					x[i] = float32(rng.NormFloat64() * math.Exp2(float64(rng.Intn(9)-4)))
+				}
 				for _, float := range []bool{false, true} {
 					r := jit.Default()
 					if float {
 						r = r.WithoutInt8(jit.DeviceGPU)
 					}
-					for _, R := range []int{1, 3, 32, 256} {
+					want := make([]float32, capacity*n)
+					if float || typ == quant.F32 {
+						for row := range capacity {
+							if err := oracle.MatVec(want[row*n:(row+1)*n], typ, w, x[row*k:(row+1)*k], n, k); err != nil {
+								t.Fatal(err)
+							}
+						}
+					} else {
+						want = int8Projection(t, typ, w, x, n, k, 32, false)
+					}
+					for _, R := range []int{1, capacity} {
 						name := fmt.Sprintf("%v/float %v/%d rows", typ, float, R)
 						b := graph.New()
 						in := b.In("x", k)
@@ -207,63 +226,77 @@ func TestComposedGPURowTiles(t *testing.T) {
 						for _, c := range formed {
 							tiled = tiled || slices.Contains(c.Passes, "rowtiles")
 						}
-						if tiled != (R >= 32) {
+						if tiled != (R > 1) {
 							t.Fatalf("%s: tiled %v", name, tiled)
 						}
 						op, err := compileLone(d, formed)
 						if err != nil {
 							t.Fatalf("%s: %v", name, err)
 						}
-						x := make([]float32, R*k)
-						for i := range x {
-							x[i] = float32(rng.NormFloat64() * math.Exp2(float64(rng.Intn(9)-4)))
+						// The call's rows, the rest of the capacity poisoned.
+						input := func(L int, x []float32) []float32 {
+							in := make([]float32, R*k)
+							copy(in, x[:L*k])
+							for i := L * k; i < len(in); i++ {
+								in[i] = math.Float32frombits(guardWord)
+							}
+							return in
 						}
-						run := func(x []float32, pl [3][]uint32) []float32 {
-							res, tail, err := runGraph(d, formed, op.kerns, in, out, x, R*n, guard, pl)
+						run := func(L, stated int, x []float32, pl [3][]uint32) ([]float32, bool) {
+							rows := stated
+							if R == 1 {
+								rows = 0
+							}
+							res, tail, err := runGraphRows(d, formed, op.kerns, in, out, input(L, x), R*n, guard, pl, rows)
 							if err != nil {
 								t.Fatalf("%s: %v", name, err)
 							}
-							for i, v := range tail {
-								if v != guardWord {
-									t.Fatalf("%s: the guard word %d past the result was written", name, i)
+							clean := true
+							for _, v := range res[L*n:] {
+								clean = clean && math.Float32bits(v) == guardWord
+							}
+							for _, v := range tail {
+								clean = clean && v == guardWord
+							}
+							return res[:L*n], clean
+						}
+						for _, L := range calls {
+							if L > R {
+								continue
+							}
+							got, clean := run(L, L, x, planes)
+							if !clean {
+								t.Fatalf("%s: a call of %d rows wrote past them", name, L)
+							}
+							for row := range L {
+								if e := gpuNMSE(got[row*n:(row+1)*n], want[row*n:(row+1)*n]); math.IsNaN(e) || !(e < 1e-9) {
+									t.Fatalf("%s: a call of %d rows: row %d reads NMSE %.3e against the oracle", name, L, row, e)
 								}
 							}
-							return res
-						}
-						want := make([]float32, R*n)
-						if float || typ == quant.F32 {
-							for row := range R {
-								if err := oracle.MatVec(want[row*n:(row+1)*n], typ, w, x[row*k:(row+1)*k], n, k); err != nil {
-									t.Fatal(err)
-								}
-							}
-						} else {
-							want = int8Projection(t, typ, w, x, n, k, 32, false)
-						}
-						got := run(x, planes)
-						for row := range R {
-							if e := gpuNMSE(got[row*n:(row+1)*n], want[row*n:(row+1)*n]); math.IsNaN(e) || !(e < 1e-9) {
-								t.Fatalf("%s: row %d reads NMSE %.3e against the oracle", name, row, e)
+							ran++
+							if tiled {
+								tiledRan++
 							}
 						}
-						if e := gpuNMSE(run(x, moved), want); !(e > 1e-6) {
-							t.Fatalf("%s: with the weight's words moved by one the NMSE is %.3e", name, e)
+						L := min(R, 33)
+						if got, _ := run(L, L, x, moved); !(gpuNMSE(got, want[:L*n]) > 1e-6) {
+							t.Fatalf("%s: with the weight's words moved by one the NMSE is %.3e", name, gpuNMSE(got, want[:L*n]))
 						}
 						if R > 1 {
-							rot := append(slices.Clone(x[k:]), x[:k]...)
-							if e := gpuNMSE(run(rot, planes), want); !(e > 1e-6) {
-								t.Fatalf("%s: with the input's rows moved by one the NMSE is %.3e", name, e)
+							rot := append(slices.Clone(x[k:L*k]), x[:k]...)
+							if got, _ := run(L, L, rot, planes); !(gpuNMSE(got, want[:L*n]) > 1e-6) {
+								t.Fatalf("%s: with the input's rows moved by one the NMSE is %.3e", name, gpuNMSE(got, want[:L*n]))
+							}
+							if _, clean := run(L, L+1, x, planes); clean {
+								t.Fatalf("%s: a call stating %d rows over %d wrote nothing past them: the gate cannot see a thread not held",
+									name, L+1, L)
 							}
 						}
 						op.close()
-						ran++
-						if tiled {
-							tiledRan++
-						}
 					}
 				}
 			}
-			t.Logf("%s: %d forms right against the oracle, %d of them tiled, every violation seen", d.API(), ran, tiledRan)
+			t.Logf("%s: %d calls right against the oracle, %d of them tiled, every violation seen", d.API(), ran, tiledRan)
 		})
 	}
 }

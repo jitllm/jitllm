@@ -75,6 +75,7 @@ func (r *Registry) form(req Request) ([]Code, error) {
 				return nil, fmt.Errorf("jit: cannot form %s: %w", slice(req.Graph), err)
 			}
 			k.Part, k.Unfused = req.Part, sp.unfused[k.Of]
+			k.Capacity = liveOf(p, req.Step, req.Device)
 			ks = append(ks, k)
 		}
 		ks, err = prof.run(ks, req.Device)
@@ -107,4 +108,15 @@ func slice(g *graph.Graph) string {
 		s += o.Kind.String()
 	}
 	return s
+}
+
+// liveOf is the capacity in rows a primitive of a step of several rows on a
+// GPU is formed for, its leading axis the step's rows: a call runs the rows
+// its table states (tableCall), at most these (Kernel.Capacity). 0 for a one-row
+// step's, whose form is decode's, and a host's.
+func liveOf(p Prim, s Step, d Device) int {
+	if d.Kind != DeviceGPU || s.Rows < 2 || len(p.Shape) == 0 || p.Shape[0] != s.Rows {
+		return 0
+	}
+	return s.Rows
 }

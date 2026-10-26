@@ -2326,6 +2326,10 @@ type blockScratch struct {
 	clampQ, clampKV           backend.Kernel
 	g, u, act                 backend.Buf
 	cs, n, koff, zero         backend.Buf
+	// calls is a call's rows, one word: what a composed form of several
+	// rows reads as the rows it runs (jit.CallRows); headCalls the rows a
+	// call's head over rows projects.
+	calls, headCalls backend.Buf
 	// csSWA is the local layers' rotary table, allocated only for an
 	// architecture that trains two bases (LayerPlan.SWAPeriod). nil elsewhere,
 	// which is what keeps ropeTable a nil check for every other model.
@@ -4961,6 +4965,8 @@ func (g *devTier) initScratch(p *nn.LayerPlan, rows int) (out *blockScratch) {
 		}
 	}
 	al(&bs.n, (rows+1)*4)
+	al(&bs.calls, 4)
+	al(&bs.headCalls, 4)
 	al(&bs.koff, rows*4)
 	al(&bs.kpos, rows*4)
 	al(&bs.roff, rows*4)
@@ -6769,23 +6775,37 @@ func (g *devTier) layersCall(sid uint64, lo, hi, pos, n int, x, cs, csSWA []floa
 		// kept, the least recently used given back when the budget has no
 		// room for the next or the lane holds maxExactWidths (keepExact);
 		// a dropped width's kernels stay in the caches.
+		//
+		// A call the composer serves whole runs in the reserved width, its
+		// rows the call's, and a longer one in chunks of that width: no
+		// width is built, formed or compiled for a prompt's length.
 		ww := 0
-		if !g.NoExactPrompt && w != bw {
-			if ww = g.keepExact(w); ww != 0 {
-				g.ExactPrompts++
+		composed := g.promptComposed(lo, hi)
+		switch {
+		case composed && n <= g.promptW:
+			ww = g.promptW
+		case composed:
+		default:
+			if !g.NoExactPrompt && w != bw {
+				if ww = g.keepExact(w); ww != 0 {
+					g.ExactPrompts++
+				}
 			}
-		}
-		if ww == 0 {
-			ww = g.batchFor(w)
-		}
-		if ww == 0 && w != bw && g.prepBatch(bw) {
-			ww = bw
+			if ww == 0 {
+				ww = g.batchFor(w)
+			}
+			if ww == 0 && w != bw && g.prepBatch(bw) {
+				ww = bw
+			}
 		}
 		ok := ww > 0
 		if ok {
 			w = ww
 		}
 		bbs, dbs, sub := g.bbs[w], g.bs, max(g.promptW, nn.MaxPrefillChunk)
+		if composed {
+			sub = g.promptW
+		}
 		// A head over every row (a speculative verification) runs only in
 		// the one-submission path, with the per-row head built for it: every
 		// fallback below splits the chunk and projects the last row alone.
@@ -8399,6 +8419,9 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				if inst == nil {
 					why = partNoRoom
+				}
+				if R > 1 {
+					sv.rows = nrow
 				}
 			}
 			// A held add this block's norm will not take runs alone first: a
@@ -10048,8 +10071,11 @@ func (g *devTier) layersSession(s backend.Session) {
 			if rowsFaulted("headrow") {
 				rows = 1
 			}
-			sv, serr := g.servedHead(hb, hNorm, rows)
+			// The head of the step's scratch's capacity, its rows the wanted
+			// ones: one form whatever the count.
+			sv, serr := g.servedHead(hb, hNorm, bs.rows)
 			if serr == nil {
+				sv.rows, sv.sl.tables["rows.n"] = rows, bs.headCalls
 				serr = sv.runHead(g, lc, bs.x, out, bs.h)
 			}
 			if err == nil {
@@ -10419,6 +10445,18 @@ func (g *devTier) layersSession(s backend.Session) {
 		}
 	}
 	w(bs.n, pn)
+	if bs.calls != nil && R > 1 {
+		binary.LittleEndian.PutUint32(g.subBytes.calls[:], uint32(nrow))
+		w(bs.calls, g.subBytes.calls[:])
+	}
+	if bs.headCalls != nil && R > 1 && ragHead > 0 {
+		hr := ragHead
+		if rowsFaulted("headrow") {
+			hr = 1
+		}
+		binary.LittleEndian.PutUint32(g.subBytes.headCalls[:], uint32(hr))
+		w(bs.headCalls, g.subBytes.headCalls[:])
+	}
 	if samplePen {
 		// The history changes every token; the recording reads its count.
 		w(g.sampleArgs, u32b(head.SampleArgs))
@@ -10587,6 +10625,7 @@ type stagingBytes struct {
 	embIDs                  []byte // a prompt chunk's ids for the gather on the card (embIDs)
 	embPos                  []byte // the composer's gather's positions (embedWords)
 	one                     [4]byte
+	calls, headCalls        [4]byte // a call's rows (blockScratch.calls, headCalls)
 }
 
 // u32b is v as four little-endian bytes in the devTier's own scratch, for a
@@ -11292,6 +11331,7 @@ func (g *devTier) prepBatch(width int) bool {
 		if bs == nil {
 			return false
 		}
+		g.ScratchBuilds++
 		bs.tok = tok
 		g.bbs[width] = bs
 		// A width built after placement filled the card must not take what

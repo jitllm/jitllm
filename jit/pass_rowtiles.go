@@ -6,16 +6,18 @@ import "github.com/jitllm/jitllm/jit/ir"
 // leading axis cut into tiles of T rows, each thread one tile's elements at
 // the other coordinates, what does not depend on the row -- the weight's
 // loads and its decode -- made once a trip and read by every row of the
-// tile, each row its own sum and store. T is the most rows, a power of two
-// dividing the rows, that leave the launch at least Warps warps a
-// multiprocessor (Fill threads where the device states no multiprocessors)
-// and whose sums and terms, rowRegs registers a row, fit the registers a
-// thread holds at the device's most resident threads (Rows rows where the
-// device states no registers): the kernel's ops grow with T, never with the
-// step's rows. A kernel of one row, or whose rows' work reads no weight it
-// could share, is left as it is.
+// tile, each row its own sum and store. T is the device's statement alone:
+// the most rows, a power of two, whose sums and terms, rowRegs registers a
+// row, fit the registers a thread holds at the device's most resident
+// threads (Rows rows where the device states no registers), and no more
+// than the form's rows. The kernel's ops grow with T, never with the step's
+// rows, and a call's rows need not fill the last tile: its rows past the
+// call's (Kernel.Capacity) or the step's are guarded, each the last row's copy,
+// so they read and write nothing the rows before them do not. A kernel of
+// one row, or whose rows' work reads no weight it could share, is left as
+// it is.
 type RowTiles struct {
-	Rows, Warps, Fill int
+	Rows int
 }
 
 // rowRegs is the registers a tile's row holds through its trips: its sum and
@@ -53,16 +55,12 @@ func (p RowTiles) tile(k *Kernel, d Device) int {
 	if !shared {
 		return 1
 	}
-	fill := d.Units * d.Lanes * p.Warps
-	if fill == 0 {
-		fill = p.Fill
-	}
 	most := p.Rows
 	if d.Regs > 0 {
 		most = d.Regs / rowRegs
 	}
-	R, E, t := k.Space[0], k.Elements(), 1
-	for 2*t <= most && R%(2*t) == 0 && E/(2*t) >= fill {
+	t := 1
+	for 2*t <= most && 2*t <= k.Space[0] {
 		t *= 2
 	}
 	return t
@@ -103,11 +101,22 @@ func tileRows(k *Kernel, t int) *Kernel {
 			lead = append(lead, i)
 		}
 	}
-	m.Space[0] /= t
-	base := m.bin(OpMul, ir.U32, lead[0], m.u32(t))
+	R := m.Space[0]
+	m.Space[0] = (R + t - 1) / t
+	base := m.bin(OpMul, ir.U32, m.add(Node{Op: OpCoord, A: 0, Type: ir.U32}), m.u32(t))
+	last := -1
+	switch {
+	case m.Capacity > 0:
+		last = m.bin(OpSub, ir.U32, m.liveRows(m.Capacity), m.u32(1))
+	case R%t != 0:
+		last = m.u32(R - 1)
+	}
 	stores := m.Stores
 	for j := 1; j < t; j++ {
 		row := m.bin(OpAdd, ir.U32, base, m.u32(j))
+		if last >= 0 {
+			row = m.bin(OpMin, ir.U32, row, last)
+		}
 		leaf := func(i int, nd Node) (int, bool) {
 			switch {
 			case nd.Op == OpCoord && nd.A == 0:
@@ -127,8 +136,12 @@ func tileRows(k *Kernel, t int) *Kernel {
 			m.Stores = append(m.Stores, c)
 		}
 	}
+	first := base
+	if last >= 0 {
+		first = m.bin(OpMin, ir.U32, base, last)
+	}
 	for _, c := range lead {
-		m.redirect(c, base, base)
+		m.redirect(c, first, first)
 	}
 	m.Name = k.Name + ".tiled"
 	return m

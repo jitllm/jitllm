@@ -101,10 +101,12 @@ type partBuf struct {
 	words []uint32
 }
 
-// partCode is one of a form's kernels and its launch shape.
+// partCode is one of a form's kernels and its launch shape: groups at the
+// form's rows, and its geometry at a call of fewer (jit.Code.LiveGroups).
 type partCode struct {
 	k             backend.Kernel
 	groups, width int
+	geom          jit.Code
 }
 
 // partInst is one lane's instance of a form: the form's own buffers and
@@ -243,7 +245,9 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 		return nil, err
 	}
 	for ci, c := range codes {
-		f.codes = append(f.codes, partCode{k: kerns[ci], groups: c.Groups, width: c.GPU.Group[0]})
+		geom := jit.Code{Groups: c.Groups, Live: c.Live, LiveUnits: c.LiveUnits, LiveInner: c.LiveInner,
+			LiveGroup: c.LiveGroup, Work: c.Work}
+		f.codes = append(f.codes, partCode{k: kerns[ci], groups: c.Groups, width: c.GPU.Group[0], geom: geom})
 		var args []partArg
 		for _, bd := range c.Binds {
 			o := bd.Operand
@@ -382,7 +386,11 @@ func (sv *servedPart) launch(lc *launcher, inst *partInst, in, out []backend.Buf
 			}
 			bufs[j] = b
 		}
-		if err := lc.issue(fc.k, fc.groups, fc.width, bufs...); err != nil {
+		groups := fc.groups
+		if sv.rows > 0 {
+			groups = fc.geom.LiveGroups(sv.rows)
+		}
+		if err := lc.issue(fc.k, groups, fc.width, bufs...); err != nil {
 			return err
 		}
 	}
@@ -507,6 +515,28 @@ func (g *devTier) partsClose() {
 		f.close()
 		delete(g.servedForms, k)
 	}
+	if g.everyRows != nil {
+		g.everyRows.Free()
+		g.everyRows = nil
+	}
+}
+
+// everyRow is the device's word stating more rows than any form holds: a
+// part bound to it runs its form's every row (jit.CallRows).
+func (g *devTier) everyRow() (backend.Buf, error) {
+	if g.everyRows != nil {
+		return g.everyRows, nil
+	}
+	b, err := g.dev.Alloc(4)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.Write([]byte{0xff, 0xff, 0xff, 0xff}); err != nil {
+		b.Free()
+		return nil, err
+	}
+	g.everyRows = b
+	return b, nil
 }
 
 // dropLaneParts frees lane l's served parts. Callers hold g.mu, with no
@@ -687,6 +717,9 @@ type servedPart struct {
 	args    [][]backend.Buf
 	in, out [4]backend.Buf
 	n, m    int
+	// rows, where set, is the call's rows, the word its table states: a
+	// launch runs their groups, not its form's every row's.
+	rows int
 }
 
 // errServedCold is a served part asked for inside a capture before it
@@ -727,6 +760,7 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	}
 	if !g.prewarming {
 		g.FormedAtStep++
+		g.LastErr = fmt.Sprintf("the composed %s formed at %d rows outside a placement", partNames[sk.kind], sk.rows)
 	}
 	if g.composer == nil {
 		g.composer = jit.Default()
@@ -748,6 +782,18 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 	if err != nil {
 		return nil, fail(err)
 	}
+	// A form of several rows reads the rows it runs from the call's word: a
+	// part whose call states none runs its form's every row.
+	if _, ok := sl.tables["rows.n"]; !ok {
+		every, err := g.everyRow()
+		if err != nil {
+			return nil, fail(err)
+		}
+		if sl.tables == nil {
+			sl.tables = map[string]backend.Buf{}
+		}
+		sl.tables["rows.n"] = every
+	}
 	key, codes, err := g.askPart(r, &sl, sk.rows)
 	if err != nil {
 		return nil, fail(fmt.Errorf("the composed %s: %w", partNames[sk.kind], err))
@@ -757,6 +803,8 @@ func (g *devTier) servedFor(sk servedKey, build func() (composedPart, error)) (*
 		if f, err = g.compilePart(&sl, codes, sk.rows); err != nil {
 			return nil, fail(fmt.Errorf("the composed %s: %w", partNames[sk.kind], err))
 		}
+		g.PartsFormed++
+		g.PartKernels += len(codes)
 		f.key = key
 		g.servedForms[key] = f
 	}
@@ -1407,7 +1455,7 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 	if R > 1 {
 		qOff = bs.roff
 	}
-	sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(p, li), qOff, p.MaxSeq, g.kvp.p, R)
+	sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(p, li), qOff, bs.calls, p.MaxSeq, g.kvp.p, R)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1449,7 +1497,7 @@ func (g *devTier) prewarmComposedBlock(li int) {
 		if bs.csSWA != nil && bs.p.LocalRope(li) {
 			rcs = bs.csSWA
 		}
-		if _, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(&bs.p, li), bs.zero, bs.p.MaxSeq,
+		if _, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(&bs.p, li), bs.zero, bs.calls, bs.p.MaxSeq,
 			g.kvp.p, 1); err != nil {
 			g.LastErr = "the composed block: " + err.Error()
 			return
@@ -1504,7 +1552,7 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 	if bb.csSWA != nil && bb.p.LocalRope(li) {
 		rcs = bb.csSWA
 	}
-	sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bb.pkv.pRow, bb.pkv.windowDesc(&bb.p, li), bb.roff, bb.p.MaxSeq,
+	sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bb.pkv.pRow, bb.pkv.windowDesc(&bb.p, li), bb.roff, bb.calls, bb.p.MaxSeq,
 		g.kvp.p, bb.rows)
 	if err != nil {
 		g.LastErr = "the composed prompt block: " + err.Error()
@@ -1634,7 +1682,10 @@ func (g *devTier) prewarmComposedHead() {
 		for w := range g.bbs {
 			form(w)
 		}
-		if grain := g.promptGrain(); !g.NoExactPrompt && grain > 0 {
+		if g.promptsReserved() && g.bbs[batchWidth] == nil {
+			form(batchWidth)
+		}
+		if grain := g.promptGrain(); !g.NoExactPrompt && grain > 0 && !g.promptsReserved() {
 			for w := grain; w < g.promptW; w += grain {
 				form(w)
 			}
@@ -1650,13 +1701,11 @@ func (g *devTier) prewarmComposedHead() {
 	if _, err := g.servedHead(bs, bs.hNorm, 1); err != nil {
 		g.LastErr = "the composed head: " + err.Error()
 	}
-	// A ragged step's head at each count of rows that want logits, up to
-	// the server's step (Config.StepRows): its first step forms nothing.
-	if g.stepW == 0 {
-		return
-	}
-	for n := 2; n <= min(g.StepRows, g.stepW); n++ {
-		if _, err := g.servedHead(bs, bs.hNorm, n); err != nil {
+	// A head over rows at each width the lane holds a scratch for, its rows
+	// a call's (jit.CallRows): a step of any count of wanted rows forms
+	// nothing.
+	for w := range g.bbs {
+		if _, err := g.servedHead(bs, bs.hNorm, w); err != nil {
 			g.LastErr = "the composed rows head: " + err.Error()
 			return
 		}
@@ -1684,7 +1733,7 @@ func poolHistory(k kvGeom) jit.History {
 // live positions need, a count it reads at run time (jit.Trips), so the
 // session's capacity is its key bound and no position compiles a form. A
 // prompt chunk's form is its width's, as the tier's kernels are.
-func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, rowsW, qOff backend.Buf, maxSeq, page, R int) (*servedPart, error) {
+func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, rowsW, qOff, calls backend.Buf, maxSeq, page, R int) (*servedPart, error) {
 	keys := keyBound(maxSeq)
 	kind := partBlock
 	if R > 1 {
@@ -1700,7 +1749,7 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 		sl := composedPart{kind: kind, graph: &gr, formats: map[jlm.Role]jlm.Type{},
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{},
 			tables: map[string]backend.Buf{"rope.cs": cs, "kv.k": pl.k, "kv.v": pl.v, "pages": pl.tab, "rows": rows,
-				"rows.win": rowsW, "q.off": qOff},
+				"rows.win": rowsW, "q.off": qOff, "rows.n": calls},
 			history: poolHistory(pl.geom),
 			keys:    keys, page: page}
 		for _, o := range l.graph.Ops {
@@ -1740,5 +1789,6 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 	}
 	t := sv.sl.tables
 	t["rope.cs"], t["kv.k"], t["kv.v"], t["pages"], t["rows"], t["rows.win"], t["q.off"] = cs, pl.k, pl.v, pl.tab, rows, rowsW, qOff
+	t["rows.n"] = calls
 	return sv, nil
 }

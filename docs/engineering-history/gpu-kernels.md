@@ -8397,3 +8397,25 @@ row where the composer's reads two.
   session's first ragged step (34 parts): the ragged blocks and the per-row
   head are formed per row count, which composing once with the rows a
   run-time argument removes.
+- **A block is composed once for its device; a call's rows are an
+  argument.** A GPU form of several rows is a capacity form: each kernel
+  whose leading axis is the step's rows carries the capacity
+  (jit.Kernel.Capacity), reads the call's rows from one word (the table
+  "rows.n") and is held to them by CallRows -- a kernel of independent
+  threads has its threads clamped to the live elements, a kernel whose
+  threads combine is held by its launch alone and may not bind the
+  history -- and launches Code.LiveGroups(rows). RowTiles sizes its tile
+  from the device's registers alone, its last tile's surplus rows guarded.
+  The tier writes the call's rows each call (blockScratch.calls, headCalls),
+  and a prompt, a ragged step and a head over rows the composer serves run
+  in the reserved width at their own rows: no exact width, no warmed width
+  and no per-count head or ragged twin. On Llama-3.2-1B (V100, Vulkan; the
+  CUDA arms of that run skipped on a box-wide cuInit failure) placement
+  composed 25 forms (83 kernels) and built one scratch where the per-width
+  placement composed 55 (683 kernels) and built 16, and prompts of 1, 5,
+  33, 100, 511, 512, 513 and 2000 tokens with decode after each composed,
+  compiled and built nothing (TestPlacementComposesOnce; its violation, a
+  form at each chunk's grain width, builds a scratch at a 5-token prompt).
+  The capacity is still in jit.Key: the forms do not move with a call's
+  rows, but their codes and schedules still read the capacity, and the CPU
+  device's forms have none.

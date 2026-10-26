@@ -57,6 +57,12 @@ type Code struct {
 	Lowered
 	Binds  []Binding
 	Groups int
+	// Live, where set, is the rows of a step the code holds at its form's
+	// capacity: LiveUnits coordinates of its leading axis, each of
+	// LiveInner elements (workgroups where Work), at LiveGroup threads a
+	// workgroup. A call of fewer rows launches LiveGroups.
+	Live, LiveUnits, LiveInner, LiveGroup int
+	Work                                  bool
 	// Args is a host call's argument words.
 	Args []CallArg
 	// Calls is a host kernel's calls' space, the outermost first: the
@@ -313,9 +319,12 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 			errs = append(errs, fmt.Errorf("jit: lowering %s: %w", k.Name, err))
 			continue
 		}
-		c := Code{Name: k.Name, Passes: k.Passes, Lowered: l, Groups: k.groups()}
+		c := Code{Name: k.Name, Passes: k.Passes, Lowered: l, Groups: k.groups(), Work: k.Work}
 		if l.CPU != nil && !k.Work && k.Group <= 0 {
 			c.Calls = append([]int(nil), k.Space...)
+		}
+		if k.Capacity > 0 && k.RowsHeld && len(k.Space) > 0 && k.Space[0] > 0 {
+			c.Live, c.LiveUnits, c.LiveInner, c.LiveGroup = k.Capacity, k.Space[0], k.Elements()/k.Space[0], k.Group
 		}
 		for _, a := range k.Args {
 			if a.Buf >= 0 {
