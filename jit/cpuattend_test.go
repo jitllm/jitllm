@@ -63,10 +63,9 @@ func runCPUCalls(codes []Code, g *graph.Graph, bufs map[string][]uint32) error {
 				var words []uint32
 				switch {
 				case a.Words != nil:
-					if own[o] == nil {
-						own[o] = append([]uint32(nil), a.Words...)
-					}
-					words = own[o]
+					// A kernel's constant block is its own: two kernels' blocks
+					// may share a name and hold different words.
+					words = a.Words
 				case o.Kind == OperandValue && bufs[g.Values[o.Value].Name] != nil:
 					words = bufs[g.Values[o.Value].Name]
 				case o.Kind == OperandTable && bufs[o.Name] != nil:
@@ -104,6 +103,11 @@ func runCPUCalls(codes []Code, g *graph.Graph, bufs map[string][]uint32) error {
 		code.Close()
 	}
 	runtime.KeepAlive(keep)
+	for o, w := range own {
+		if o.Kind == OperandScratch {
+			bufs["own:"+o.Name] = w
+		}
+	}
 	return nil
 }
 
@@ -272,21 +276,32 @@ func composedCPUAttend(t *testing.T, heads, kvh, dim int) {
 // definition row by row (an NMSE of 1e-8: scores of thousands carry
 // float32's rounding of them into the softmax), at scores of unit size,
 // at large ones and at large ones all far below zero (a
-// model's biased keys). The first attended row moved by one must fail it.
+// model's biased keys), its kernels fused and with none joined to another
+// (as a part the registers refused is formed: the normalising map apart,
+// prescaled). The first attended row moved by one must fail it.
 func TestComposedCPUAttendRows(t *testing.T) {
+	unfused := Default()
+	p := unfused.Profiles[DeviceCPU]
+	p.Off = map[string]bool{"fuse": true}
+	unfused.Profiles[DeviceCPU] = p
 	for _, sh := range []struct{ heads, kvh, dim int }{{6, 6, 48}, {16, 8, 128}, {12, 2, 128}} {
 		for _, mag := range []float32{1, 8, -16} {
-			t.Run(fmt.Sprintf("%dq%dkv%dd/x%g", sh.heads, sh.kvh, sh.dim, mag), func(t *testing.T) {
-				composedCPUAttendRows(t, sh.heads, sh.kvh, sh.dim, mag)
-			})
+			for _, arm := range []struct {
+				name string
+				reg  *Registry
+			}{{"fused", Default()}, {"unfused", unfused}} {
+				t.Run(fmt.Sprintf("%dq%dkv%dd/x%g/%s", sh.heads, sh.kvh, sh.dim, mag, arm.name), func(t *testing.T) {
+					composedCPUAttendRows(t, arm.reg, sh.heads, sh.kvh, sh.dim, mag)
+				})
+			}
 		}
 	}
 }
 
-func composedCPUAttendRows(t *testing.T, heads, kvh, dim int, mag float32) {
+func composedCPUAttendRows(t *testing.T, reg *Registry, heads, kvh, dim int, mag float32) {
 	const page, p0, R, capRows = 32, 40, 9, 16
 	g := attendGraph(heads, kvh, dim)
-	_, codes, err := Default().Form(Request{Graph: g,
+	_, codes, err := reg.Form(Request{Graph: g,
 		Step:   Step{Rows: capRows, Page: page, Keys: 4 * page, ActWindow: 32, Seqs: 1},
 		Device: Device{Kind: DeviceCPU, Slots: 6, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true}})
 	if err != nil {
@@ -378,6 +393,13 @@ func composedCPUAttendRows(t *testing.T, heads, kvh, dim int, mag float32) {
 		bufs[g.Values[g.Out[0]].Name] = f32Words(out)
 		if err := runCPURows(codes, g, bufs, R); err != nil {
 			t.Fatal(err)
+		}
+		// The CPU's in-place pass may leave the output in a scratch the last
+		// kernel writes, over a value nothing reads after.
+		for _, b := range codes[len(codes)-1].Binds {
+			if o := b.Operand; b.Writes && o.Kind == OperandScratch {
+				copy(out, wordsF32(bufs["own:"+o.Name]))
+			}
 		}
 		return out
 	}

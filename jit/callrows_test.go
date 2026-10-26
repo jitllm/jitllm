@@ -12,8 +12,11 @@ import (
 // llamaBlock is a Llama-3.2-1B-shaped block: the attention half (a norm, q,
 // k and v, the rotary on q and k, the history appended and attended, the
 // output and the residual) and the MLP.
-func llamaBlock() *graph.Graph {
-	const embd, heads, kv, dim, ffn = 2048, 32, 8, 64, 8192
+func llamaBlock() *graph.Graph { return blockOf(2048, 32, 8, 64, 8192) }
+
+// blockOf is llamaBlock at a width of embd, heads query heads and kv key
+// heads of dim, and an MLP of ffn.
+func blockOf(embd, heads, kv, dim, ffn int) *graph.Graph {
 	b := graph.New()
 	b.G.Block = 0
 	x := b.In("x", embd)
@@ -125,5 +128,64 @@ func TestCapacityFormsHoldTheCallsRows(t *testing.T) {
 		t.Fatal("with the call's rows unheld the gate passes: it cannot see it")
 	} else {
 		t.Logf("with the call's rows unheld: %v", err)
+	}
+}
+
+// TestCPURowsFormsHoldTheCallsRows forms a stories15M-shaped block on the CPU
+// at 2 and at 64 rows, with Q8 and with Q4 weights, its kernels fused and
+// with no kernel joined to another (as a part the registers refused is
+// formed): every kernel of a form of several rows runs the units of its
+// calls' leading axis a call's rows reach (Code.Live), as the CPU's call
+// site asks of every kernel of a rows form. A form whose kernels lose their
+// hold (rowcalls off) fails.
+func TestCPURowsFormsHoldTheCallsRows(t *testing.T) {
+	d := jit.Device{Kind: jit.DeviceCPU, Slots: 6, Lanes: 8, ExactDiv: true}
+	check := func(reg *jit.Registry, typ jlm.Type, R int) (int, error) {
+		formats := map[jlm.Role]jlm.Type{jlm.RoleAttnNorm: jlm.TypeF32, jlm.RoleFFNNorm: jlm.TypeF32}
+		for _, r := range []jlm.Role{jlm.RoleAttnQ, jlm.RoleAttnK, jlm.RoleAttnV, jlm.RoleAttnOut, jlm.RoleFFNGate, jlm.RoleFFNUp, jlm.RoleFFNDown} {
+			formats[r] = typ
+		}
+		_, codes, err := reg.Form(jit.Request{Graph: blockOf(288, 6, 6, 48, 768), Formats: formats,
+			Step: jit.Step{Rows: R, Page: 64, Keys: 256, ActWindow: 32, Seqs: 1}, Device: d})
+		if err != nil {
+			return 0, err
+		}
+		for _, c := range codes {
+			if c.Live == 0 || len(c.Calls) == 0 || c.Calls[0] != c.LiveUnits {
+				return 0, fmt.Errorf("%s %v: its calls %v hold no rows of a call (live %d of %d units)", c.Name, c.Passes, c.Calls, c.Live, c.LiveUnits)
+			}
+		}
+		return len(codes), nil
+	}
+	ran := 0
+	for _, fused := range []bool{true, false} {
+		reg := jit.Default()
+		if !fused {
+			p := reg.Profiles[jit.DeviceCPU]
+			p.Off = map[string]bool{"fuse": true}
+			reg.Profiles[jit.DeviceCPU] = p
+		}
+		for _, typ := range []jlm.Type{jlm.TypeQ8, jlm.TypeQ4} {
+			for _, R := range []int{2, 64} {
+				n, err := check(reg, typ, R)
+				if err != nil {
+					t.Fatalf("fused %v, type %d, %d rows: %v", fused, typ, R, err)
+				}
+				t.Logf("fused %v, type %d, %d rows: %d kernels, each held to the call's rows", fused, typ, R, n)
+				ran++
+			}
+		}
+	}
+	reg := jit.Default()
+	p := reg.Profiles[jit.DeviceCPU]
+	p.Off = map[string]bool{"rowcalls": true}
+	reg.Profiles[jit.DeviceCPU] = p
+	if _, err := check(reg, jlm.TypeQ8, 64); err == nil {
+		t.Fatal("with the call's rows unheld the gate passes: it cannot see it")
+	} else {
+		t.Logf("with the call's rows unheld: %v", err)
+	}
+	if ran != 8 {
+		t.Fatalf("%d of 8 forms held", ran)
 	}
 }

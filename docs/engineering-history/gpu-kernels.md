@@ -8708,3 +8708,28 @@ row where the composer's reads two.
   gemma-2b (head 256, full rotary) reads 0.32; the card's prompt and ragged rows
   of a linear block; the one-row decomposition is a launch per row of a
   prompt where a chunked scan would be one.
+- The orphan map of an unfused part was Prescale's: the map it builds to
+  scale a contraction's weights (attention's probabilities by 1/sum) took
+  the contraction's space and heads and none of its rows' hold, so Serial
+  made its calls (rows, heads) with no capacity. It now takes the
+  contraction's Capacity, RowsHeld and calls. TestCPURowsFormsHoldTheCallsRows
+  forms a stories15M-shaped block at 2 and 64 rows, Q8 and Q4, fused and
+  with every Fuse off (a refused part's form): every kernel holds the
+  call's rows; with the fix reverted the unfused form fails exactly as the
+  batch did ("map ... its calls [2 6] hold no rows of a call").
+  TestComposedCPUAttendRows gained the unfused arm, which executes the
+  separate normalising and prescaling maps; it exposed two harness bugs,
+  not engine ones: runCPUCalls shared one constant block between two
+  kernels whose blocks share a name (cpuserve keeps them apart), and read
+  the output by name where the in-place pass leaves it in a scratch. With
+  both fixed every arm holds at 1e-8 against the definition. The Cursors
+  skip for (row, head) calls is still needed: with it removed only the
+  fused softmax kernel (max, exp, sum and the normalising map over the
+  scores scratch, cursors on that scratch alone) fails, and only at
+  scores far below zero, where the softmax's shift stops being harmless:
+  its max is taken over the wrong positions. OpRank/OpTopK of K > 1 on the
+  CPU fail to lower because a jammed rank kernel's base index is both a
+  load's address and the vector of each lane's index; a broadcast of it
+  from a general register lowers it but the binder then gives that word
+  and a broadcast float one vector register (ranks wrong on ties). Greedy
+  top-1 (graph.Sample) forms on the CPU at every width tried.
