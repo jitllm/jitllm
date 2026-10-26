@@ -1096,8 +1096,6 @@ func (g *devTier) tableServes(bs *blockScratch, p *nn.LayerPlan, pos int) partDe
 		return partCaller
 	case n != want || len(p.Tables) != want || p.Tables[0] == nil:
 		return partNoTable
-	case p.RopeSplit:
-		return partTableHeld
 	}
 	for i, gr := range p.Tables {
 		multi := tableAxes(gr)

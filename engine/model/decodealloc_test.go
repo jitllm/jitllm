@@ -283,9 +283,11 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 // composedAllocModels are the models whose composed step the gate measures:
 // a dense model, a latent attention model whose every block the front end
 // states (JITLLM_ALLOC_MODELS names it), and a mixture: a sigmoid router with a
-// selection bias beside a shared expert.
+// selection bias beside a shared expert; and the attention features read at
+// a row's position (mistral3's temperature, Llama 4's on its unrotated
+// layers beside its input-weighted experts) and dbrx's clamped q, k and v.
 var composedAllocModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "synth-deepseek-dense", "synth-glm4moe.gguf",
-	"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"}
+	"qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "synth-mistral3.gguf", "synth-llama4-q8.gguf", "synth-dbrx.gguf"}
 
 // TestLongDecodeDoesNotAllocate is TestDecodeDoesNotAllocate's host arm past
 // four KV pages of context, which that gate's window -- under one page, by

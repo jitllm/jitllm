@@ -47,9 +47,14 @@ func (c *Context) rotaryTable(a graph.Attrs) (Operand, error) {
 		}
 		return Operand{Kind: OperandTable, Name: tableName(c.RotaryBase)}, nil
 	}
+	// A split rotary's table holds a pair an element.
+	nrot := a.NRot
+	if a.Layout == graph.RopeSplit {
+		nrot *= 2
+	}
 	found := -1
 	for i, r := range c.Rotaries {
-		if r.NRot == a.NRot && r.Base == a.Base && axes(r) && (found < 0 || r.Freqs == a.Freqs) {
+		if r.NRot == nrot && r.Base == a.Base && axes(r) && (found < 0 || r.Freqs == a.Freqs) {
 			found = i
 		}
 	}
@@ -69,7 +74,7 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	// by one angle either way, so the rotation is the same.
 	if len(o.In) != 1 || len(o.Out) != 1 || a.HeadDim <= 0 || c.width(o.In[0])%a.HeadDim != 0 ||
 		a.NRot <= 0 || a.NRot%2 != 0 || a.NRot > a.HeadDim ||
-		a.Layout != graph.RopeNorm && a.Layout != graph.RopeNeox {
+		a.Layout != graph.RopeNorm && a.Layout != graph.RopeNeox && a.Layout != graph.RopeSplit {
 		return nil, fmt.Errorf("a rotary of %d of %d, layout %d", a.NRot, a.HeadDim, a.Layout)
 	}
 	U, F := ir.U32, ir.F32
@@ -85,10 +90,23 @@ func decomposeRope(o graph.Op, c *Context) ([]Prim, error) {
 	at := x.op(OpAdd, U, x.op(OpMul, U, h, x.u(uint32(hd))), first)
 	at2 := x.op(OpAdd, U, at, x.u(uint32(step)))
 	x0, x1 := x.at(0, sh, r, at), x.at(0, sh, r, at2)
+	// A split rotary's table holds a pair an element: the second element
+	// of pair p turns by the table's pair p + pairs.
 	cs := []int{R, a.NRot}
-	co, si := x.at(1, cs, r, x.op(OpMul, U, p, x.u(2))), x.at(1, cs, r, x.op(OpAdd, U, x.op(OpMul, U, p, x.u(2)), x.u(1)))
+	if a.Layout == graph.RopeSplit {
+		cs[1] = 2 * a.NRot
+	}
+	angle := func(q int) (co, si int) {
+		e := x.op(OpMul, U, q, x.u(2))
+		return x.at(1, cs, r, e), x.at(1, cs, r, x.op(OpAdd, U, e, x.u(1)))
+	}
+	co, si := angle(p)
+	co1, si1 := co, si
+	if a.Layout == graph.RopeSplit {
+		co1, si1 = angle(x.op(OpAdd, U, p, x.u(uint32(pairs))))
+	}
 	y0 := x.op(OpSub, F, x.op(OpMul, F, x0, co), x.op(OpMul, F, x1, si))
-	y1 := x.op(OpAdd, F, x.op(OpMul, F, x0, si), x.op(OpMul, F, x1, co))
+	y1 := x.op(OpAdd, F, x.op(OpMul, F, x0, si1), x.op(OpMul, F, x1, co1))
 	out := c.value(o.Out[0])
 	table, err := c.rotaryTable(a)
 	if err != nil {
@@ -169,6 +187,28 @@ func decomposeKVAppend(o graph.Op, c *Context) ([]Prim, error) {
 			Stores: []PrimStore{{Out: l.operand(pool), Ax: at, Ext: ext, Value: val}}})
 	}
 	return prims, nil
+}
+
+// decomposePosition is each row's history position, the word its key is
+// written at, plus Offset, divided into whole Spans where Span > 1, as a
+// float.
+func decomposePosition(o graph.Op, c *Context) ([]Prim, error) {
+	if len(o.In) != 0 || len(o.Out) != 1 || c.width(o.Out[0]) != 1 {
+		return nil, fmt.Errorf("a position of %d inputs into %d outputs", len(o.In), len(o.Out))
+	}
+	U := ir.U32
+	R := c.Step.Rows
+	var x exprs
+	p := x.load(0, x.op(OpAdd, U, x.op(OpMul, U, x.coord(0), x.u(rowWords)), x.u(rowWrite)))
+	if o.Attr.Offset != 0 {
+		p = x.op(OpAdd, U, p, x.u(uint32(o.Attr.Offset)))
+	}
+	if o.Attr.Span > 1 {
+		p = x.op(OpDiv, U, p, x.u(uint32(o.Attr.Span)))
+	}
+	x.un(OpCvtF32, ir.F32, p)
+	return []Prim{{Kind: PrimMap, Shape: []int{R, 1}, In: []Operand{tableRows}, Out: c.value(o.Out[0]), Expr: x.e,
+		Facts: Facts{Extents: map[int]int{0: R * rowWords}}}}, nil
 }
 
 // pages bounds the pages of the history a step reads: every history's

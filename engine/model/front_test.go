@@ -103,7 +103,6 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 		want Uncovered
 	}{
 		{"synth-phimoe.gguf", UncoveredRouterScore},
-		{"synth-hunyuanvl.gguf", UncoveredRopeAxes},
 	} {
 		t.Run(c.file, func(t *testing.T) {
 			// Every block of these models has the feature: every block is

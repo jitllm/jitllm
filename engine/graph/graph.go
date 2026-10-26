@@ -193,10 +193,14 @@ const (
 	// state version n and writes n+1. A primitive with a state of its own:
 	// a linear-attention mixer's recurrence.
 	OpDeltaRule
+	// OpPosition is each row's position in the block's history, the one its
+	// key is written at, plus Offset and in whole Spans where Span > 1 (an
+	// integer division), as a float: Out[0] one element a row. A primitive.
+	OpPosition
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule", "position"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -213,6 +217,11 @@ const (
 	RopeNorm RopeLayout = iota + 1
 	// RopeNeox pairs (i, i+NRot/2).
 	RopeNeox
+	// RopeSplit pairs (i, i+NRot/2) as RopeNeox does, over a table of NRot
+	// pairs: element i turns by the table's pair i and element i+NRot/2 by
+	// its pair i+NRot/2, so a pair's two elements may turn by two angles
+	// (a coordinate an element, XD-RoPE).
+	RopeSplit
 )
 
 func (l RopeLayout) String() string {
@@ -221,6 +230,8 @@ func (l RopeLayout) String() string {
 		return "norm"
 	case RopeNeox:
 		return "neox"
+	case RopeSplit:
+		return "split"
 	}
 	return fmt.Sprintf("layout%d", l)
 }
@@ -301,6 +312,7 @@ const (
 	MapTanh     = jlm.FnTanh     // tanh(a)
 	MapErf      = jlm.FnErf      // erf(a)
 	MapEqual    = jlm.FnEqual    // 1 where a == b, else 0; over two index rows, their integers
+	MapLog      = jlm.FnLog      // the natural logarithm of a
 )
 
 // Order is an OpReduce's: the order its additions run in is part of its

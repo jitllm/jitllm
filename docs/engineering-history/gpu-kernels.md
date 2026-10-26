@@ -8884,3 +8884,35 @@ row where the composer's reads two.
   Gate: TestALongReductionIsNotWrittenOutInItsMap (a 2304-column, 256000-row
   projection and a map, Q6, Q8 and f32, with and without the int8 form),
   which fails at 8178, 2264, 55341 and 34593 ops with the old bound.
+- **Clamped, normed, tempered and split attention are ops.** The front end
+  states dbrx's clamped q, k and v (OpClamp), Llama 4's weightless q/k norm
+  after the rotary and Gemma 4's over v (OpHeadNorm with no weight), v read
+  from k's projection, the attention temperature 1 + s ln(1 + floor((pos +
+  o)/f)) as a row's history position (OpPosition: the rows table's write
+  word, plus o, in whole f in integers) through a logarithm the composer
+  decomposes (MapLog: exponent and mantissa, ln m as the atanh series to
+  s^11; 0.62 ulp worst on the CPU over 80 inputs, -Inf, +Inf and NaN at
+  the edges), Llama 4's experts weighted at their input (gate and up times
+  the routed weight, the down summed at one), and XD-RoPE as a split
+  rotary (graph.RopeSplit): a table of a pair an element, element i+P
+  turned by pair i+P, the sections doubled, the planes the model folds laid
+  twice, which is main's A-then-B table row. UncoveredQKNormPlace, VNorm,
+  VFromK and Clamp are gone; Temp names only an offset that is not a whole
+  number, RopeAxes only sections that do not match the runs. The x86
+  register binder gave constants read outside every loop a register each
+  past the sixteen; it now stops at the file. On the V100 (cards 5, 6):
+  TestC6ServesComposed over dbrx, mistral3 and mistral3-af on cuda:0 and
+  vulkan:5, every block and the head served, 2e-12 to 6e-12 from the host,
+  no clip_qkv 1.70, the temperature off 0.165; TestComposedBlocksServe on
+  Ministral-3-3B (median 0.95 / 1.03 of the tier's distance), Llama 4's
+  q8 fixture, Pixtral's, HunyuanVL's and HunyuanOCR-Q8_0 (median 1.04),
+  every arm on both backends; TestSynthLlama4ServesComposed 4.5e-12 / 5.0e-12
+  from the host, each feature out moving it 2.4e-5 (the temperature offset
+  a floor further) to 2.6 (a window for the chunk); after HunyuanVL's
+  picture the composed table and blocks read 1.1e-7 (CUDA) and 4.3e-13
+  (Vulkan) from transformers, the sections moved 2.65e-4. The CPU serves
+  Ministral-3-3B in main's band (0.987 of its spread at the median) and
+  declines Llama 4's and dbrx's fixtures by name (routed experts not held
+  whole, a windowed layer's history). Llama 4's q8 fixture fails the host's
+  node-affine allocation arm on the two-socket box (no region ran
+  node-affine), a main-path gap left out of the principle lists.

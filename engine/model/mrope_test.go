@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
@@ -656,8 +657,9 @@ func mRopeKeepsTheFivePrinciples(t *testing.T, name string) {
 // states for it (nn.RopeAxesDevice), and told one past them it must part from
 // transformers. Each step serves the table and every stated block once and
 // declines every other block by name, every step run without a recording so
-// that each counts; the reasons are logged. XD-RoPE's table, whose pair halves
-// turn apart, is declined by name.
+// that each counts; the reasons are logged. XD-RoPE's table, a pair an element
+// so a pair's halves turn apart, is served too, and its sections moved must
+// part from transformers.
 func composedAfterPicture(t *testing.T, m *Model, g *qvlGolden, spec string, n int) {
 	t.Helper()
 	run := func(shift int32) ([][]float32, tier.Stats) {
@@ -694,10 +696,6 @@ func composedAfterPicture(t *testing.T, m *Model, g *qvlGolden, spec string, n i
 	steps := len(g.Cont) - 1
 	nt, dt, _ := stats.ServedPart(tier.ComposedTable)
 	switch {
-	case m.Cfg.RopeXD:
-		if nt != 0 || dt != steps {
-			t.Fatalf("composed: XD-RoPE's table served %d steps and declined %d of %d", nt, dt, steps)
-		}
 	case nt != steps*composedTables(m) || dt != 0:
 		t.Fatalf("composed: %d tables served and %d steps declined (%s), where %d steps of %d tables are %d",
 			nt, dt, declinesOf(stats), steps, composedTables(m), steps*composedTables(m))
@@ -708,6 +706,29 @@ func composedAfterPicture(t *testing.T, m *Model, g *qvlGolden, spec string, n i
 			t.Fatalf("composed: with every row told a position one past its own the worst NMSE is %.3e (%d flips) against %.3e: the gate cannot see a table at a wrong position", wb, fb, w)
 		}
 		t.Logf("composed: the tables one position off reach %.3e against transformers (%d flips)", wb, fb)
+	}
+	// XD-RoPE's coordinates moved: half of the first coordinate's elements
+	// turned by the second's, in the blocks and the table the composer
+	// states and in the host's rotary alike. The rows after the picture
+	// must part from transformers.
+	if m.Cfg.RopeXD {
+		was, a, b := m.Cfg, m.rope.Runs, m.ropeB.Runs
+		c := *was
+		d := c.RopeSections[0] / 2
+		if d == 0 {
+			t.Fatalf("XD-RoPE's sections %v leave no element to move", c.RopeSections)
+		}
+		c.RopeSections[0] -= d
+		c.RopeSections[1] += d
+		m.Cfg = &c
+		m.rope.Runs, m.ropeB.Runs = nn.XDRopeRuns(c.RopeSections[:], c.NRot/2)
+		bad, _ := run(0)
+		m.Cfg, m.rope.Runs, m.ropeB.Runs = was, a, b
+		wb, fb := qvlWorst(g, bad)
+		if !(wb > 1e3*max(w, 1e-12)) {
+			t.Fatalf("composed: with XD-RoPE's sections moved the worst NMSE is %.3e (%d flips) against %.3e: the gate cannot see the coordinates", wb, fb, w)
+		}
+		t.Logf("composed: XD-RoPE's sections moved reach %.3e against transformers (%d flips)", wb, fb)
 	}
 	nb, db, _ := stats.ServedPart(tier.ComposedBlock)
 	if nb != steps*stated || db != steps*(m.Cfg.NLayer-stated) {

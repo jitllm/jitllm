@@ -1124,12 +1124,25 @@ func ropeTabPlanes(r *nn.Rope, nrot int) []float32 {
 
 // ropeAxesPlanes is the folded planes of a rotary over several position
 // axes, nil for any other: the composer's table reads them with each row's
-// positions on the axes (nn.RopeAxesDevice).
-func ropeAxesPlanes(r *nn.Rope, nrot int) []float32 {
+// positions on the axes (nn.RopeAxesDevice). A split rotary's table (XD-RoPE)
+// holds a pair an element, element i+nrot/2 at pair i's frequency: the
+// planes of the nrot/2 pairs twice.
+func ropeAxesPlanes(r *nn.Rope, nrot int, split bool) []float32 {
 	if r == nil || nrot <= 0 || len(r.Runs) == 0 {
 		return nil
 	}
-	return r.TabPlanes(nrot / 2)
+	n := nrot / 2
+	p := r.TabPlanes(n)
+	if !split {
+		return p
+	}
+	out := make([]float32, cpu.RopeTabBlock(2*n))
+	for k := range 2 * cpu.RopeTabDigits {
+		src, dst := p[cpu.RopeTabPlaneOff(k, n):][:n], out[cpu.RopeTabPlaneOff(k, 2*n):]
+		copy(dst[copy(dst, src):], src)
+	}
+	out[cpu.RopeTabScaleOff(2*n)] = p[cpu.RopeTabScaleOff(n)]
+	return out
 }
 
 // SetDeviceLayers is SetDevice with a cap on how many blocks the device is
@@ -1224,7 +1237,7 @@ func (s *State) SetDeviceLayers(d nn.Device, max int) error {
 		// The tables as the front end states them, and a multi-axis
 		// rotary's planes, for a device that serves them (front.go).
 		Tables:      s.m.frontGraphs().tables,
-		RopeTabAxes: ropeAxesPlanes(&s.m.rope, c.NRot),
+		RopeTabAxes: ropeAxesPlanes(&s.m.rope, c.NRot, c.RopeXD),
 		RopeSplit:   c.RopeXD,
 		// The sliding window itself (TestSlidingWindowRunsOnTheDevice).
 		SWAWindow: windowFor(c, s.maxSeq),

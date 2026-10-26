@@ -36,11 +36,7 @@ const (
 	UncoveredStreams
 	UncoveredRopeAxes
 	UncoveredNonCausal
-	UncoveredQKNormPlace
-	UncoveredVNorm
 	UncoveredKVShared
-	UncoveredVFromK
-	UncoveredClamp
 	UncoveredTemp
 	UncoveredPLE
 	UncoveredCompressed
@@ -59,25 +55,21 @@ var uncoveredNames = [numUncovered]string{
 	UncoveredRouterScore: "a router whose score the container does not state, or whose weights are not the scores it selects",
 	UncoveredExperts: "routed experts weighted at their input, beside a dense MLP, in a latent of their own, " +
 		"scaled one by one or stored one matrix each",
-	UncoveredGeometry:    "a layer of its own head width, head count or rotary width",
-	UncoveredSelect:      "an attention indexer or sparse key selection",
-	UncoveredStreams:     "several residual streams",
-	UncoveredRopeAxes:    "a rotary over position axes its sections do not state (a pair's halves turned apart)",
-	UncoveredNonCausal:   "non-causal attention",
-	UncoveredQKNormPlace: "a q/k norm without a weight, or one over the whole projection after the rotary",
-	UncoveredVNorm:       "a norm over v",
-	UncoveredKVShared:    "a block reading another block's history",
-	UncoveredVFromK:      "v taken from k's projection",
-	UncoveredClamp:       "clamped projections",
-	UncoveredTemp:        "an attention temperature per position",
-	UncoveredPLE:         "per-layer embeddings",
-	UncoveredCompressed:  "compressed or grouped attention",
-	UncoveredNGram:       "an n-gram embedding",
-	UncoveredAct:         "an activation the container does not state, or not over the block's operands",
-	UncoveredPooling:     "a pooled head (an embedding model's)",
-	UncoveredEmbedRows:   "input rows beyond the token's row, a scale and a position table",
-	UncoveredUnbound:     "stored tensors its graph does not bind",
-	UncoveredUnverified:  "a graph that does not verify",
+	UncoveredGeometry:   "a layer of its own head width, head count or rotary width",
+	UncoveredSelect:     "an attention indexer or sparse key selection",
+	UncoveredStreams:    "several residual streams",
+	UncoveredRopeAxes:   "a rotary over position axes its sections do not state (a pair's halves turned apart)",
+	UncoveredNonCausal:  "non-causal attention",
+	UncoveredKVShared:   "a block reading another block's history",
+	UncoveredTemp:       "an attention temperature whose position offset is not a whole number",
+	UncoveredPLE:        "per-layer embeddings",
+	UncoveredCompressed: "compressed or grouped attention",
+	UncoveredNGram:      "an n-gram embedding",
+	UncoveredAct:        "an activation the container does not state, or not over the block's operands",
+	UncoveredPooling:    "a pooled head (an embedding model's)",
+	UncoveredEmbedRows:  "input rows beyond the token's row, a scale and a position table",
+	UncoveredUnbound:    "stored tensors its graph does not bind",
+	UncoveredUnverified: "a graph that does not verify",
 }
 
 func (u Uncovered) String() string {
@@ -199,6 +191,10 @@ func (c composing) Rotaries() []graph.Rotary {
 func (m *Model) rotaryOf(r nn.Rope) graph.Rotary {
 	g := graph.Rotary{NRot: r.NRot, Base: r.Base, Freqs: len(r.Freqs) > 0}
 	g.Sections, g.Interleaved = m.ropeAxes(r)
+	// A split rotary's table holds a pair an element (graph.RopeSplit).
+	if m.Cfg.RopeXD && len(r.Runs) != 0 {
+		g.NRot *= 2
+	}
 	return g
 }
 
@@ -326,17 +322,9 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredRopeAxes
 	case c.NonCausal || c.BidirSWA:
 		return UncoveredNonCausal
-	case c.QKL2Norm || c.QKNormPost && c.QKNormWide:
-		return UncoveredQKNormPlace
-	case c.VNorm:
-		return UncoveredVNorm
 	case c.KVShared(li):
 		return UncoveredKVShared
-	case m.layers[li].vFromK:
-		return UncoveredVFromK
-	case c.ClampKQV != 0:
-		return UncoveredClamp
-	case c.AttnTempScale != 0:
+	case c.AttnTempScale != 0 && (c.AttnTempOffs < 0 || c.AttnTempOffs != math.Trunc(c.AttnTempOffs)):
 		return UncoveredTemp
 	case c.PLEDim != 0:
 		return UncoveredPLE
@@ -364,7 +352,8 @@ func (m *Model) uncoveredRest(li int) Uncovered {
 	case !c.MoEAt(li):
 	case len(m.container.Config().RouterScore.Terms) == 0:
 		return UncoveredRouterScore
-	case c.ExpertWeightIn || c.DenseMoE || c.ExpertLatent != 0 || m.layers[li].expScale != nil:
+	case c.ExpertWeightIn && (m.stores(li, jlm.RoleExpGateBias) || m.stores(li, jlm.RoleExpUpBias)) ||
+		c.DenseMoE || c.ExpertLatent != 0 || m.layers[li].expScale != nil:
 		return UncoveredExperts
 	}
 	return Covered
@@ -387,9 +376,17 @@ func (m *Model) ropeAt(li int) nn.Rope {
 
 // ropeAxes is the position axes rotary r turns its pairs by, as the op
 // language states them (graph.Attrs.Sections, Interleaved): none for a
-// rotary of one position.
+// rotary of one position. Under XD-RoPE an element of a head is a pair of
+// the table (graph.RopeSplit), and section i is 2*sections[i] of them: the
+// chunks of a head's elements its coordinates turn.
 func (m *Model) ropeAxes(r nn.Rope) (sections [4]int, interleaved bool) {
 	if len(r.Runs) == 0 {
+		return sections, false
+	}
+	if m.Cfg.RopeXD {
+		for i, n := range m.Cfg.RopeSections {
+			sections[i] = 2 * n
+		}
 		return sections, false
 	}
 	return m.Cfg.RopeSections, m.Cfg.RopeInterleaved
@@ -404,11 +401,21 @@ func (m *Model) ropeAxesStated(r nn.Rope) bool {
 		return true
 	}
 	sec, il := m.ropeAxes(r)
+	if m.Cfg.RopeXD {
+		// Each coordinate's chunk of elements, in order, covering the head's
+		// rotated elements: the first halves' runs XDRopeRuns states.
+		sum := 0
+		for _, n := range sec {
+			sum += n
+		}
+		a, _ := nn.XDRopeRuns(m.Cfg.RopeSections[:], r.NRot/2)
+		return !m.Cfg.RopeInterleaved && sum == r.NRot && slices.Equal(a, r.Runs)
+	}
 	want := nn.MRopeRuns(sec[:])
 	if il {
 		want = nn.IMRopeRuns(sec[:], r.NRot/2)
 	}
-	return !m.Cfg.RopeXD && nn.RopeRuns(r.Runs) == r.NRot/2 && slices.Equal(want, r.Runs)
+	return nn.RopeRuns(r.Runs) == r.NRot/2 && slices.Equal(want, r.Runs)
 }
 
 // blockGraph is block li's graph: the attention block the container states
@@ -517,8 +524,14 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		}
 		return m.blockRest(b, f, li, x, n, att, jlm.RoleAttnOut, preNorm, norm, resid, matvec, stored, has)
 	}
+	// A block that stores no v projection reads k's as its value, before
+	// k's norm and rotary.
+	vFromK := m.layers[li].vFromK
 	k := matvec(n, jlm.RoleAttnK, kvDim, stored(jlm.RoleAttnKBias)...)
-	v := matvec(n, jlm.RoleAttnV, kvDim, stored(jlm.RoleAttnVBias)...)
+	v := k
+	if !vFromK {
+		v = matvec(n, jlm.RoleAttnV, kvDim, stored(jlm.RoleAttnVBias)...)
+	}
 	var gate graph.ValueID
 	if c.AttnOutGate {
 		both := q
@@ -528,10 +541,30 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		}
 		q, gate = half("q", 0), half("gate", hd)
 	}
+	if bound := c.ClampKQV; bound != 0 {
+		clamp := func(x graph.ValueID, name string) graph.ValueID {
+			return b.Emit(graph.OpClamp, []graph.ValueID{x}, []graph.Result{{Name: name, Width: b.G.Values[x].Width}}, nil,
+				graph.Attrs{Bound: float64(bound)}, nil, nil)[0]
+		}
+		if q, k = clamp(q, "q.clamp"), clamp(k, "k.clamp"); vFromK {
+			v = k
+		} else {
+			v = clamp(v, "v.clamp")
+		}
+	}
+	// ones is an RMS norm over each head of x with no weight.
+	ones := func(x graph.ValueID, name string) graph.ValueID {
+		return b.Emit(graph.OpHeadNorm, []graph.ValueID{x}, []graph.Result{{Name: name, Width: b.G.Values[x].Width}}, nil,
+			graph.Attrs{Eps: c.RMSEps, HeadDim: hd}, nil, nil)[0]
+	}
 	// A q norm after the rotary keeps k's before it: the converter folded k's
 	// weight into q's, and an unweighted norm commutes with the rotation.
+	// Under XD-RoPE k's norm follows the rotary too: a pair's elements
+	// turned apart do not keep a head's RMS.
 	postQ := c.QKNormAt(li) && c.QKNormPost
+	postK := postQ && c.RopeXD && c.RopeAt(li)
 	switch {
+	case postK:
 	case postQ:
 		k = b.HeadNorm(k, jlm.RoleAttnKNorm, hd, c.RMSEps)
 	case c.QKNormAt(li) && c.QKNormWide:
@@ -542,16 +575,40 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if c.RopeAt(li) {
 		r := m.ropeAt(li)
 		layout := graph.RopeNorm
-		if c.RopeNeox {
+		switch {
+		case c.RopeXD && len(r.Runs) != 0:
+			layout = graph.RopeSplit
+		case c.RopeNeox:
 			layout = graph.RopeNeox
 		}
 		a := graph.Attrs{HeadDim: hd, NRot: r.NRot, Base: r.Base, Layout: layout, Freqs: len(r.Freqs) > 0, Mscale: r.Scale}
 		a.Sections, a.Interleaved = m.ropeAxes(r)
 		q = b.Emit(graph.OpRope, []graph.ValueID{q}, []graph.Result{{Name: "q.rope", Width: qdim}}, nil, a, nil, nil)[0]
 		k = b.Emit(graph.OpRope, []graph.ValueID{k}, []graph.Result{{Name: "k.rope", Width: kvDim}}, nil, a, nil, nil)[0]
+		if c.QKL2Norm {
+			q, k = ones(q, "q.l2"), ones(k, "k.l2")
+		}
 	}
 	if postQ {
 		q = b.HeadNorm(q, jlm.RoleAttnQNorm, hd, c.RMSEps)
+	}
+	if postK {
+		k = b.HeadNorm(k, jlm.RoleAttnKNorm, hd, c.RMSEps)
+	}
+	if c.VNorm {
+		v = ones(v, "v.norm")
+	}
+	// The attention temperature, 1 + s ln(1 + floor((pos + o) / f)) at the
+	// row's history position, multiplies q: the scores are linear in it.
+	if s := c.AttnTempScale; s != 0 && !(c.NoPEGlobal && c.RopeAt(li)) {
+		pos := b.Emit(graph.OpPosition, nil, []graph.Result{{Name: "pos", Width: 1}}, nil,
+			graph.Attrs{Offset: int(c.AttnTempOffs), Span: int(c.AttnTempFloor)}, nil, nil)[0]
+		temp := b.Expr("temp", 1, []graph.Term{
+			{Fn: graph.MapAdd, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}, {Kind: graph.ArgConst, Const: 1}}},
+			{Fn: graph.MapLog, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 0}}},
+			{Fn: graph.MapFma, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 1}, {Kind: graph.ArgConst, Const: s}, {Kind: graph.ArgConst, Const: 1}}},
+		}, nil, pos)
+		q = mapRow(b, "q.temp", graph.Attrs{Fn: graph.MapMul}, nil, qdim, q, temp)
 	}
 	hist := b.KVAppend(k, v, 0)
 	scale := c.AttnScale
@@ -699,11 +756,21 @@ func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, n graph.ValueID
 		acts = append(acts, bank("experts.gate", in, jlm.RoleExpGateBank, jlm.RoleExpGateBias, d, F))
 	}
 	acts = append(acts, bank("experts.up", in, jlm.RoleExpUpBank, jlm.RoleExpUpBias, d, F))
+	// Weighted at its input, an expert's gate and up are its weight times
+	// the projections (both linear), and its down is summed at one.
+	if c.ExpertWeightIn {
+		for i, a := range acts {
+			acts[i] = mapc("experts.in.weighted", graph.MapMul, 0, K*F, nil, a, w)
+		}
+	}
 	h, err := b.Stated("experts.act", m.container.Config().ActAt(li), acts, K*F, f)
 	if err != nil {
 		return 0, UncoveredAct, fmt.Errorf("the experts' stated activation: %w", err)
 	}
-	down := mapc("experts.weighted", graph.MapMul, 0, K*d, nil, bank("experts.down", h, jlm.RoleExpDownBank, jlm.RoleExpDownBias, F, d), w)
+	down := bank("experts.down", h, jlm.RoleExpDownBank, jlm.RoleExpDownBias, F, d)
+	if !c.ExpertWeightIn {
+		down = mapc("experts.weighted", graph.MapMul, 0, K*d, nil, down, w)
+	}
 	var out graph.ValueID
 	for j := range K {
 		y := b.Emit(graph.OpSlice, []graph.ValueID{down}, []graph.Result{{Name: "experts.out", Width: d}}, nil,

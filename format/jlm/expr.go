@@ -28,13 +28,14 @@ const (
 	FnTanh                   // tanh(a)
 	FnErf                    // erf(a)
 	FnEqual                  // 1 where a == b, else 0
+	FnLog                    // the natural logarithm of a
 	numFns
 )
 
 // Arity is how many operands f takes.
 func (f Fn) Arity() int {
 	switch f {
-	case FnExp, FnSigmoid, FnSoftplus, FnSqrt, FnExpm1, FnAbs, FnRound, FnRecip, FnTanh, FnErf:
+	case FnExp, FnSigmoid, FnSoftplus, FnSqrt, FnExpm1, FnAbs, FnRound, FnRecip, FnTanh, FnErf, FnLog:
 		return 1
 	case FnWhere, FnFma:
 		return 3
@@ -44,7 +45,7 @@ func (f Fn) Arity() int {
 	return 0
 }
 
-var fnNames = [...]string{"?", "add", "sub", "mul", "div", "max", "min", "exp", "sigmoid", "softplus", "sqrt", "where", "less", "fma", "expm1", "abs", "round", "recip", "tanh", "erf", "equal"}
+var fnNames = [...]string{"?", "add", "sub", "mul", "div", "max", "min", "exp", "sigmoid", "softplus", "sqrt", "where", "less", "fma", "expm1", "abs", "round", "recip", "tanh", "erf", "equal", "log"}
 
 func (f Fn) String() string {
 	if int(f) < len(fnNames) {

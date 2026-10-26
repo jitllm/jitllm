@@ -102,8 +102,10 @@ func TestPlacementComposesOnce(t *testing.T) {
 
 // composeOnceModels are the census's models: Llama-3.2-1B, and Qwen3.5-0.8B,
 // a hybrid whose linear blocks step their recurrent state in the composer's
-// scans, a prompt's chunk a run and a ragged step's sequences a run each.
-var composeOnceModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"}
+// scans, a prompt's chunk a run and a ragged step's sequences a run each,
+// and Ministral-3-3B, whose every block scales q by its row's temperature.
+var composeOnceModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf",
+	"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf"}
 
 // composesOnce is TestPlacementComposesOnce's census of m on g. With to set,
 // the relocation moves the blocks on the first one's device to it; without,

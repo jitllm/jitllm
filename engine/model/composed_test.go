@@ -158,7 +158,12 @@ func composedDecodeWith(t *testing.T, m *Model, dev string, ids, toks []int32, p
 // picture, where the rotary positions leave the cache's. And the mixtures:
 // routers softmax, sigmoid, biased, grouped, renormalised or not and scaled,
 // gated and ungated shared experts, dense lead blocks, biased banks, and
-// latent attention beside them.
+// latent attention beside them. And the attention features read at a row's
+// position or stated per element: Ministral-3-3B's and Pixtral's attention
+// temperature on every layer, Llama 4's weightless q/k norm, temperature on
+// its unrotated layers and input-weighted top-1 experts, and HunyuanVL's
+// XD-RoPE, whose pair halves turn by two coordinates (on a text row, one
+// position: TestHunyuanVLTextMatchesTransformers decodes after a picture).
 var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_0.gguf", "tinyllama-1.1b-q3_K_M.gguf",
 	"gemma-2b.gguf", "Qwen2-1.5B-Instruct-Q4_K_M.gguf", "Qwen3-1.7B-Q4_K_M.gguf", "qwen2.5-1.5b-instruct-q4_k_m.gguf",
 	"SmolLM2-360M-Instruct-Q8_0.gguf", "stories15M-q8_0.gguf", "SmolVLM-256M-Instruct-Q8_0.gguf",
@@ -173,7 +178,9 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 	"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "DeepSeek-V2-Lite.Q4_K_M.gguf",
 	"synth-glm4moe.gguf", "synth-qwen2moe.gguf", "synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf",
 	"synth-minimaxm2.gguf", "synth-bailingmoe2.gguf", "synth-dots1.gguf", "synth-gptoss.gguf", "synth-deepseek",
-	"synth-deepseek-lite", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "synth-kimilinear@q8"}
+	"synth-deepseek-lite", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf", "synth-kimilinear@q8",
+	"newarch/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "synth-llama4-q8.gguf", "synth-pixtral.gguf", "synth-hunyuanvl.gguf",
+	"hunyuanvl/HunyuanOCR-Q8_0.gguf"}
 
 // formedModels is what the front end states and the serving gate does not
 // run: a model the tier cannot place (stories260K, unblockedModels),
@@ -192,7 +199,9 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 // decode step's served) but the gate cannot discriminate on it: the random
 // hybrid is so sensitive that the tier's own backends sit 0.28 and 0.34 from
 // the float reference, the arm 0.34 from the tier on Vulkan, and one
-// position off reads 2.61, under ten times that.
+// position off reads 2.61, under ten times that. The float fixtures of dbrx,
+// mistral3 and Llama 4 are served against the host with each feature taken
+// out (TestC6ServesComposed, TestSynthLlama4ServesComposed).
 var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
 	"stories260K.gguf", "synth-ernie45.gguf", "synth-phi4v.gguf", "synth-seedoss.gguf", "synth-smollm3.gguf",
 	"synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "newarch/synth-olmo2-q8.gguf", "synth-arcee.gguf", "synth-exaone4.gguf",
@@ -202,7 +211,8 @@ var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1
 	"synth-commandr.gguf", "synth-cohere2.gguf",
 	"synth-qwen2vl.gguf", "synth-qwen25vl.gguf", "synth-qwen3vl.gguf",
 	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf",
-	"synth-qwen35moe-hybrid-mtp-q8_0.gguf"}
+	"synth-qwen35moe-hybrid-mtp-q8_0.gguf", "synth-dbrx.gguf", "synth-llama4.gguf", "synth-mistral3.gguf",
+	"synth-mistral3-af.gguf"}
 
 // mixtureModels are the mixtures the front end states whole and the serving
 // gate does not run: tiny-qwen3moe, whose eight-wide rows the tier cannot

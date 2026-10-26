@@ -185,3 +185,30 @@ func TestSynthLlama4OnEveryDevice(t *testing.T) {
 		t.Skip("no device on this host")
 	}
 }
+
+// TestSynthLlama4ServesComposed is the Llama 4 fixture's composed arm on
+// every device present (servesComposed): every block and the head the
+// composer's at every decode step, within 1e-6 of the host (the arm reads
+// 5e-12), and each Llama 4 feature taken out of the device session alone
+// moving the logits past 1e-5: the temperature's offset moved a floor reads
+// 2.4e-5 on this fixture, its floor doubled and the rest far more.
+func TestSynthLlama4ServesComposed(t *testing.T) {
+	m, g := openSynthLlama4(t)
+	defer m.Close()
+	mut := func(f func(c *Config)) func(*Model) func() {
+		return func(m *Model) func() { return cfgMut(m, f) }
+	}
+	vs := []c6Violation{
+		{"sliding window instead of a chunk", mut(func(c *Config) { c.SWAChunked = false })},
+		{"every layer rotated", mut(func(c *Config) { c.NoPEGlobal = false })},
+		{"no QK L2 norm", mut(func(c *Config) { c.QKL2Norm = false })},
+		{"weight on the expert's output", mut(func(c *Config) { c.ExpertWeightIn = false })},
+		{"no attention temperature", mut(func(c *Config) { c.AttnTempScale = 0 })},
+		{"the temperature offset a floor further", mut(func(c *Config) { c.AttnTempOffs += c.AttnTempFloor })},
+		{"the temperature's floor doubled", mut(func(c *Config) { c.AttnTempFloor *= 2 })},
+		{"no chunk at all", mut(func(c *Config) { c.SWAWindow = 0 })},
+	}
+	if servesComposed(t, m, g.IDs, 1e-6, vs) == 0 {
+		t.Skip("no device on this host")
+	}
+}

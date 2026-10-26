@@ -8,11 +8,12 @@ import (
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
-// classicFixtures are the dense classic-transformer fixtures (LayerNorm, a
-// parallel attention and FFN, biases, ungated MLPs): synth-dbrx, a mixture, is
-// refused by its name (TestFrontStatesTheModelAsOps).
+// classicFixtures are the classic-transformer fixtures (LayerNorm, a
+// parallel attention and FFN, biases, ungated MLPs), dbrx's mixture with its
+// clamped q, k and v among them, and mistral3's attention temperature.
 var classicFixtures = []string{"synth-phi2", "synth-starcoder", "synth-stablelm", "synth-stablelm-par",
-	"synth-starcoder2", "synth-falcon", "synth-falcon40", "synth-nemotron", "synth-commandr", "synth-cohere2"}
+	"synth-starcoder2", "synth-falcon", "synth-falcon40", "synth-nemotron", "synth-commandr", "synth-cohere2",
+	"synth-dbrx", "synth-mistral3", "synth-mistral3-af"}
 
 // coveredBlocks is how many of m's blocks the front end states as ops.
 func coveredBlocks(m *Model) int {
@@ -39,88 +40,102 @@ func TestC6ServesComposed(t *testing.T) {
 	// and every decoded step reads them: the band a prefilled prompt gets in
 	// fixtureOnEveryDevice (1e-5), where a decode from the first token reads
 	// 1e-12. The violations below land at 1e-4 and up.
-	const bound, promptLen = 1e-5, 3
+	const bound = 1e-5
 	ran := 0
 	for _, name := range classicFixtures {
 		t.Run(name, func(t *testing.T) {
 			m, g := openC6(t, name)
 			defer m.Close()
-			host := m.NewState(len(g.IDs) + 1)
-			var want [][]float32
-			for _, id := range g.IDs {
-				lg, err := host.Forward(id)
-				if err != nil {
-					t.Fatal(err)
-				}
-				want = append(want, append([]float32(nil), lg...))
-			}
-			host.Close()
-			// The prompt takes the batched path, which the composer is not asked
-			// for; each token after it is a one-row step it is.
-			prompt, toks := g.IDs[:promptLen], g.IDs[promptLen:]
-			run := func(t *testing.T, dev string) (worst float64, flips int) {
-				t.Helper()
-				covered := coveredBlocks(m)
-				if covered != m.Cfg.NLayer {
-					t.Fatalf("the front end states %d of %d blocks: %s %v", covered, m.Cfg.NLayer, m.Uncovered(0), m.UncoveredErr(0))
-				}
-				got, st, _, _ := composedDecode(t, m, dev, prompt, toks, tier.ComposedBlock|tier.ComposedHead, true, false)
-				served, declined, _ := st.ServedPart(tier.ComposedBlock)
-				if want := len(toks) * covered; served != want || declined != 0 {
-					t.Fatalf("%d block steps served and %d declined, where %d steps of %d covered blocks are %d served",
-						served, declined, len(toks), covered, want)
-				}
-				if heads, hd, _ := st.ServedPart(tier.ComposedHead); heads != len(toks) || hd != 0 {
-					t.Fatalf("%d head steps served and %d declined, where the %d steps are one-row steps (%s)", heads, hd, len(toks), declinesOf(st))
-				}
-				for i, k := range st.BlockDeclines {
-					if k > 0 {
-						t.Fatalf("%d block step(s) declined because %s", k, tier.DeclineName(i))
-					}
-				}
-				if st.FormedAtStep != 0 {
-					t.Fatalf("%d composed block(s) formed at a step, not at the placement", st.FormedAtStep)
-				}
-				t.Logf("%s: %d of %d block steps served; the head served at all %d steps",
-					dev, served, len(toks)*covered, len(toks))
-				for i := range got {
-					p := promptLen - 1 + i
-					e := logitNMSE(got[i], want[p])
-					if math.IsNaN(e) {
-						t.Fatalf("pos %d: the logits are not finite", p)
-					}
-					worst = max(worst, e)
-					if Greedy(got[i]) != Greedy(want[p]) {
-						flips++
-					}
-				}
-				return worst, flips
-			}
-			for _, dev := range stepDevices() {
-				t.Run(dev, func(t *testing.T) {
-					worst, flips := run(t, dev)
-					if !(worst < bound) || flips > 0 {
-						t.Fatalf("worst logit NMSE %.3e, %d argmax flips, against the host", worst, flips)
-					}
-					t.Logf("composed blocks on %s: worst logit NMSE %.3e", dev, worst)
-					for _, v := range append(slices.Clone(c6DevViolations[name]), statedViolations(m)...) {
-						undo := v.mut(m)
-						bad, _ := run(t, dev)
-						undo()
-						if !(bad > 100*worst) || !(bad > 1e-4) {
-							t.Errorf("%s: the composed arm cannot see it -- worst NMSE %.3e against a clean %.3e", v.name, bad, worst)
-						}
-						t.Logf("violation %q: worst NMSE %.3e", v.name, bad)
-					}
-					wholeStepC6(t, m, dev, prompt, toks, want, bound)
-					ran++
-				})
-			}
+			ran += servesComposed(t, m, g.IDs, bound, append(slices.Clone(c6DevViolations[name]), statedViolations(m)...))
 		})
 	}
 	if ran == 0 {
 		t.Skip("no device on this host")
 	}
+}
+
+// servesComposed is TestC6ServesComposed's arms for one model on every
+// device present, decoding ids after a prompt of three: every block and the
+// head served at every step, within bound of the host's logits with no
+// argmax flip, and each violation of vs, taken out of the model while the
+// device runs, moving them past 100 times the clean arm's worst and past
+// 1e-4. It returns how many devices ran.
+func servesComposed(t *testing.T, m *Model, ids []int32, bound float64, vs []c6Violation) int {
+	t.Helper()
+	const promptLen = 3
+	ran := 0
+	host := m.NewState(len(ids) + 1)
+	var want [][]float32
+	for _, id := range ids {
+		lg, err := host.Forward(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, append([]float32(nil), lg...))
+	}
+	host.Close()
+	// The prompt takes the batched path, which the composer is not asked
+	// for; each token after it is a one-row step it is.
+	prompt, toks := ids[:promptLen], ids[promptLen:]
+	run := func(t *testing.T, dev string) (worst float64, flips int) {
+		t.Helper()
+		covered := coveredBlocks(m)
+		if covered != m.Cfg.NLayer {
+			t.Fatalf("the front end states %d of %d blocks: %s %v", covered, m.Cfg.NLayer, m.Uncovered(0), m.UncoveredErr(0))
+		}
+		got, st, _, _ := composedDecode(t, m, dev, prompt, toks, tier.ComposedBlock|tier.ComposedHead, true, false)
+		served, declined, _ := st.ServedPart(tier.ComposedBlock)
+		if want := len(toks) * covered; served != want || declined != 0 {
+			t.Fatalf("%d block steps served and %d declined, where %d steps of %d covered blocks are %d served",
+				served, declined, len(toks), covered, want)
+		}
+		if heads, hd, _ := st.ServedPart(tier.ComposedHead); heads != len(toks) || hd != 0 {
+			t.Fatalf("%d head steps served and %d declined, where the %d steps are one-row steps (%s)", heads, hd, len(toks), declinesOf(st))
+		}
+		for i, k := range st.BlockDeclines {
+			if k > 0 {
+				t.Fatalf("%d block step(s) declined because %s", k, tier.DeclineName(i))
+			}
+		}
+		if st.FormedAtStep != 0 {
+			t.Fatalf("%d composed block(s) formed at a step, not at the placement", st.FormedAtStep)
+		}
+		t.Logf("%s: %d of %d block steps served; the head served at all %d steps",
+			dev, served, len(toks)*covered, len(toks))
+		for i := range got {
+			p := promptLen - 1 + i
+			e := logitNMSE(got[i], want[p])
+			if math.IsNaN(e) {
+				t.Fatalf("pos %d: the logits are not finite", p)
+			}
+			worst = max(worst, e)
+			if Greedy(got[i]) != Greedy(want[p]) {
+				flips++
+			}
+		}
+		return worst, flips
+	}
+	for _, dev := range stepDevices() {
+		t.Run(dev, func(t *testing.T) {
+			worst, flips := run(t, dev)
+			if !(worst < bound) || flips > 0 {
+				t.Fatalf("worst logit NMSE %.3e, %d argmax flips, against the host", worst, flips)
+			}
+			t.Logf("composed blocks on %s: worst logit NMSE %.3e", dev, worst)
+			for _, v := range vs {
+				undo := v.mut(m)
+				bad, _ := run(t, dev)
+				undo()
+				if !(bad > 100*worst) || !(bad > 10*bound) {
+					t.Errorf("%s: the composed arm cannot see it -- worst NMSE %.3e against a clean %.3e", v.name, bad, worst)
+				}
+				t.Logf("violation %q: worst NMSE %.3e", v.name, bad)
+			}
+			wholeStepC6(t, m, dev, prompt, toks, want, bound)
+			ran++
+		})
+	}
+	return ran
 }
 
 // wholeStepC6 is TestC6ServesComposed's whole-step arm: the input rows, the
@@ -167,7 +182,7 @@ func wholeStepC6(t *testing.T, m *Model, dev string, prompt, toks []int32, want 
 	}
 	for _, v := range vs {
 		bad, _ := decode(v.after)
-		if !(bad > 100*worst) || !(bad > 1e-4) {
+		if !(bad > 100*worst) || !(bad > 10*bound) {
 			t.Errorf("%s: the whole step cannot see it -- worst NMSE %.3e against a clean %.3e", v.name, bad, worst)
 		}
 		t.Logf("violation %q: worst NMSE %.3e", v.name, bad)

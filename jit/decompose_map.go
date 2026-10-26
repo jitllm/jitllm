@@ -2,6 +2,7 @@ package jit
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/format/jlm"
@@ -21,6 +22,35 @@ func (x *exprs) softplus(z int) int {
 		s = x.fma(s, w2, x.f(k))
 	}
 	return x.op(OpAdd, F, x.op(OpMax, F, z, x.f(0)), x.op(OpMul, F, x.f(2), x.op(OpMul, F, w, s)))
+}
+
+// log is the natural logarithm of a: a's exponent e and its mantissa m
+// within [sqrt(1/2), sqrt(2)), ln m as 2 atanh(s), s = (m-1)/(m+1), its odd
+// series to s^11 (|s| < 0.172, the next term under 1e-9 of the sum), and
+// e ln 2 in two parts so the product is exact. A subnormal is scaled by
+// 2^24 first; zero is -Inf, +Inf itself, a negative or NaN NaN.
+func (x *exprs) log(a int) int {
+	F, U, P := ir.F32, ir.U32, ir.Pred
+	small := x.op(OpLess, P, a, x.f(0x1p-126))
+	v := x.sel(F, small, x.op(OpMul, F, a, x.f(0x1p24)), a)
+	b := x.un(OpBitcast, U, v)
+	m := x.un(OpBitcast, F, x.op(OpAdd, U, x.op(OpAnd, U, b, x.u(0x7fffff)), x.u(0x3f800000)))
+	e := x.op(OpSub, F, x.un(OpCvtF32, F, x.op(OpShr, U, b, x.u(23))), x.sel(F, small, x.f(127+24), x.f(127)))
+	up := x.op(OpLess, P, x.f(math.Sqrt2), m)
+	m = x.sel(F, up, x.op(OpMul, F, m, x.f(0.5)), m)
+	e = x.sel(F, up, x.op(OpAdd, F, e, x.f(1)), e)
+	s := x.op(OpDiv, F, x.op(OpSub, F, m, x.f(1)), x.op(OpAdd, F, m, x.f(1)))
+	s2 := x.op(OpMul, F, s, s)
+	p := x.f(1.0 / 11)
+	for _, k := range []float32{1.0 / 9, 1.0 / 7, 1.0 / 5, 1.0 / 3, 1} {
+		p = x.fma(p, s2, x.f(k))
+	}
+	const ln2Hi, ln2Lo = 0.693145751953125, 1.4286068203094172e-06
+	r := x.fma(e, x.f(ln2Hi), x.fma(e, x.f(ln2Lo), x.op(OpMul, F, x.op(OpMul, F, x.f(2), s), p)))
+	r = x.sel(F, x.op(OpLess, P, a, x.f(float32(math.Inf(1)))), r, a)
+	zero := x.op(OpLess, P, x.f(0.5), x.equal(a, x.f(0), false))
+	bad := x.sel(F, zero, x.f(float32(math.Inf(-1))), x.f(float32(math.NaN())))
+	return x.sel(F, x.op(OpLess, P, x.f(0), a), r, bad)
 }
 
 // expm1 is e^a - 1. Within |a| < 1/2 it is the Taylor sum a + a^2(1/2 + a/6 +
@@ -106,6 +136,8 @@ func (x *exprs) mapFn(f graph.MapFn, a []int, exact bool) (int, error) {
 		return x.erf(a[0]), nil
 	case graph.MapEqual:
 		return x.equal(a[0], a[1], false), nil
+	case graph.MapLog:
+		return x.log(a[0]), nil
 	}
 	return 0, fmt.Errorf("no formula for the map %v", f)
 }

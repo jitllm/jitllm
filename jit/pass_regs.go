@@ -1505,7 +1505,7 @@ func (b *binder86) scalar(i int, hs []int, next *int) int {
 			}
 		}
 	}
-	if *next < 0 || nd.Op != OpLoad || k.Bufs[nd.Buf].Operand.Kind != OperandConsts || nd.Type != ir.F32 || hs[i] >= 0 || nd.Hint > 0 {
+	if *next < 0 || *next >= b.p.Vectors || nd.Op != OpLoad || k.Bufs[nd.Buf].Operand.Kind != OperandConsts || nd.Type != ir.F32 || hs[i] >= 0 || nd.Hint > 0 {
 		return -1
 	}
 	if _, ok := b.resident(i); ok {
