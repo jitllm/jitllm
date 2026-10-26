@@ -187,31 +187,8 @@ func (c *Config) ActAt(li int) *Expr {
 
 func encodeExprs(w *wbuf, c *Config) {
 	w.u32(uint32(len(c.Acts)))
-	for _, e := range c.Acts {
-		w.u32(uint32(len(e.Terms)))
-		for _, t := range e.Terms {
-			w.u8(uint8(t.Fn))
-			var fl uint8
-			if t.Reduce {
-				fl |= 1
-			}
-			if t.Tree {
-				fl |= 2
-			}
-			w.u8(fl)
-			for _, a := range t.Args {
-				w.u8(uint8(a.Kind))
-				switch a.Kind {
-				case ArgIn, ArgTerm:
-					w.u32(a.Index)
-				case ArgConst:
-					w.f32(a.Value)
-				case ArgStored:
-					w.u16(uint16(a.Role))
-					w.u32(a.Index)
-				}
-			}
-		}
+	for i := range c.Acts {
+		encodeExpr(w, &c.Acts[i])
 	}
 	w.u32(uint32(len(c.ActLayers)))
 	for _, i := range c.ActLayers {
@@ -219,39 +196,67 @@ func encodeExprs(w *wbuf, c *Config) {
 	}
 }
 
-func decodeExprs(r *rbuf, c *Config) {
-	n := r.count(4)
-	if n == 0 {
-		return
-	}
-	c.Acts = make([]Expr, n)
-	for i := range c.Acts {
-		e := &c.Acts[i]
-		e.Terms = make([]Term, r.count(5))
-		for k := range e.Terms {
-			t := &e.Terms[k]
-			t.Fn = Fn(r.u8())
-			fl := r.u8()
-			t.Reduce, t.Tree = fl&1 != 0, fl&2 != 0
-			for j := range t.Args {
-				a := &t.Args[j]
-				a.Kind = ArgKind(r.u8())
-				switch a.Kind {
-				case ArgIn, ArgTerm:
-					a.Index = r.u32()
-				case ArgConst:
-					a.Value = r.f32()
-				case ArgStored:
-					a.Role = Role(r.u16())
-					a.Index = r.u32()
-				}
+func encodeExpr(w *wbuf, e *Expr) {
+	w.u32(uint32(len(e.Terms)))
+	for _, t := range e.Terms {
+		w.u8(uint8(t.Fn))
+		var fl uint8
+		if t.Reduce {
+			fl |= 1
+		}
+		if t.Tree {
+			fl |= 2
+		}
+		w.u8(fl)
+		for _, a := range t.Args {
+			w.u8(uint8(a.Kind))
+			switch a.Kind {
+			case ArgIn, ArgTerm:
+				w.u32(a.Index)
+			case ArgConst:
+				w.f32(a.Value)
+			case ArgStored:
+				w.u16(uint16(a.Role))
+				w.u32(a.Index)
 			}
+		}
+	}
+}
+
+func decodeExprs(r *rbuf, c *Config) {
+	if n := r.count(4); n > 0 {
+		c.Acts = make([]Expr, n)
+		for i := range c.Acts {
+			decodeExpr(r, &c.Acts[i])
 		}
 	}
 	if m := r.count(1); m > 0 {
 		c.ActLayers = make([]uint8, m)
 		for i := range c.ActLayers {
 			c.ActLayers[i] = r.u8()
+		}
+	}
+}
+
+func decodeExpr(r *rbuf, e *Expr) {
+	e.Terms = make([]Term, r.count(5))
+	for k := range e.Terms {
+		t := &e.Terms[k]
+		t.Fn = Fn(r.u8())
+		fl := r.u8()
+		t.Reduce, t.Tree = fl&1 != 0, fl&2 != 0
+		for j := range t.Args {
+			a := &t.Args[j]
+			a.Kind = ArgKind(r.u8())
+			switch a.Kind {
+			case ArgIn, ArgTerm:
+				a.Index = r.u32()
+			case ArgConst:
+				a.Value = r.f32()
+			case ArgStored:
+				a.Role = Role(r.u16())
+				a.Index = r.u32()
+			}
 		}
 	}
 }
@@ -270,6 +275,14 @@ func exprsValid(c *Config) error {
 	for li, i := range c.ActLayers {
 		if int(i) >= len(c.Acts) {
 			return fmt.Errorf("jlm: layer %d states activation %d of %d", li, i, len(c.Acts))
+		}
+	}
+	if len(c.RouterScore.Terms) != 0 {
+		if err := c.RouterScore.Valid(); err != nil {
+			return fmt.Errorf("the router's score: %w", err)
+		}
+		if n := c.RouterScore.Reads(); n != 1 {
+			return fmt.Errorf("jlm: the router's score reads %d operands, not its logits alone", n)
 		}
 	}
 	return nil

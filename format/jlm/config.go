@@ -679,6 +679,14 @@ type Config struct {
 	// no activation's formula. A thirteenth optional tail; see encodeConfig.
 	Acts      []Expr
 	ActLayers []uint8
+	// RouterScore is a mixture's score of each expert from its router's
+	// logits (operand 0, the row of every expert's logit), stated in the op
+	// language: what the selection ranks and the routed weights are taken
+	// from. Empty where the model has no mixture, or routes by weights that
+	// are not the selected scores. The converter states it; the engine reads
+	// no gating function's name. A fourteenth optional tail; see
+	// encodeConfig.
+	RouterScore Expr
 
 	Flags Flags
 }

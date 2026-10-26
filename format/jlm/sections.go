@@ -185,8 +185,11 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	// The twelfth, Clef's routing blocks and head epsilon, implies the first
 	// eleven; an older reader refuses its decision kind by code.
 	// The thirteenth, the stated activations, implies the first twelve; an
-	// older reader drops it and runs the activation its flags name.
-	acts := len(c.Acts) != 0 || len(c.ActLayers) != 0
+	// older reader drops it and runs the activation its flags name. The
+	// fourteenth, the router's stated score, implies the first thirteen; an
+	// older reader drops it and routes by the gating its flags name.
+	score := len(c.RouterScore.Terms) != 0
+	acts := score || len(c.Acts) != 0 || len(c.ActLayers) != 0
 	clef := acts || c.DecisionRouting != 0 || c.DecisionEps != 0
 	q4e := clef || c.HCLowRank != 0 || c.QSARatio != 0 || c.NGramBlock != 0
 	dec := q4e || c.Decision != DecisionNone || c.DecisionBlocks != 0 || c.DecisionHeadTokens != 0 || len(c.DecisionTemps) != 0 ||
@@ -292,6 +295,9 @@ func encodeConfigAt(c *Config, v uint32) []byte {
 	}
 	if acts {
 		encodeExprs(w, c)
+	}
+	if score {
+		encodeExpr(w, &c.RouterScore)
 	}
 	return w.b
 }
@@ -441,6 +447,9 @@ func decodeConfigAt(b []byte, v uint32) (*Config, error) {
 	}
 	if r.err == nil && len(r.b) > 0 {
 		decodeExprs(r, c)
+	}
+	if r.err == nil && len(r.b) > 0 {
+		decodeExpr(r, &c.RouterScore)
 	}
 	if r.err != nil {
 		return nil, r.err

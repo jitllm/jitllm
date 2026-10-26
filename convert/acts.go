@@ -164,7 +164,7 @@ func StateActivations(s *jlm.Source) error {
 // StateActivations states a source's; false for one that states them or has
 // no layers (jlm.Restate).
 func StateStored(f *jlm.File, c *jlm.Config) (bool, error) {
-	if len(c.Acts) != 0 || c.NLayer == 0 || c.Arch == jlm.ArchCLIP {
+	if len(c.Acts) != 0 && len(c.RouterScore.Terms) == len(RouterScore(c).Terms) || c.NLayer == 0 || c.Arch == jlm.ArchCLIP {
 		return false, nil
 	}
 	stores := func(r jlm.Role) func(int) bool {
@@ -211,5 +211,37 @@ func StateGated(c *jlm.Config, gated []bool) error {
 	if len(c.Acts) == 1 {
 		c.ActLayers = nil
 	}
+	if c.RouterScore = RouterScore(c); len(c.RouterScore.Terms) != 0 {
+		return c.RouterScore.Valid()
+	}
 	return nil
+}
+
+// RouterScore is the score a mixture of config c's router gives each expert
+// from its logits (operand 0), the formula its family's reference computes:
+// what the selection ranks and the routed weights are read from. None for a
+// model with no mixture, or one whose routed weights are not the selected
+// scores (Phi-3.5-MoE's sparsemixer weighs each pick by a softmax over the
+// logits near it).
+func RouterScore(c *jlm.Config) jlm.Expr {
+	if c.NExpert == 0 || c.Arch == jlm.ArchPhiMoE {
+		return jlm.Expr{}
+	}
+	var e expr
+	x := operand(0)
+	switch {
+	case c.Flags2.Has(jlm.Flag2ExpertSqrtSoftplus):
+		e.fn(jlm.FnSqrt, e.fn(jlm.FnSoftplus, x))
+	case c.Flags.Has(jlm.FlagExpertSigmoid):
+		e.fn(jlm.FnSigmoid, x)
+	default:
+		// softmax over the experts: exp(x - max x), over its sum.
+		m := jlm.Arg{Kind: jlm.ArgTerm, Index: uint32(len(e.t))}
+		e.t = append(e.t, jlm.Term{Fn: jlm.FnMax, Reduce: true, Args: [3]jlm.Arg{x}})
+		ex := e.fn(jlm.FnExp, e.fn(jlm.FnSub, x, m))
+		s := jlm.Arg{Kind: jlm.ArgTerm, Index: uint32(len(e.t))}
+		e.t = append(e.t, jlm.Term{Fn: jlm.FnAdd, Reduce: true, Args: [3]jlm.Arg{ex}})
+		e.fn(jlm.FnDiv, ex, s)
+	}
+	return jlm.Expr{Terms: e.t}
 }

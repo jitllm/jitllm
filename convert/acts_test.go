@@ -36,9 +36,16 @@ func evalExpr(t *testing.T, e *jlm.Expr, in [][]float64, stored map[jlm.Role][]f
 	}
 	for k, tm := range e.Terms {
 		if tm.Reduce {
-			s := 0.0
-			for i := range w {
-				s += arg(tm.Args[0], i)
+			s := arg(tm.Args[0], 0)
+			for i := 1; i < w; i++ {
+				switch x := arg(tm.Args[0], i); tm.Fn {
+				case jlm.FnMax:
+					s = math.Max(s, x)
+				case jlm.FnMin:
+					s = math.Min(s, x)
+				default:
+					s += x
+				}
 			}
 			vals[k] = []float64{s}
 			continue
@@ -71,6 +78,8 @@ func evalExpr(t *testing.T, e *jlm.Expr, in [][]float64, stored map[jlm.Role][]f
 				out[i] = math.Expm1(a)
 			case jlm.FnSigmoid:
 				out[i] = 1 / (1 + math.Exp(-a))
+			case jlm.FnSoftplus:
+				out[i] = math.Log1p(math.Exp(a))
 			case jlm.FnSqrt:
 				out[i] = math.Sqrt(a)
 			case jlm.FnTanh:
@@ -250,5 +259,59 @@ func TestStatedActivationsAreTheReferences(t *testing.T) {
 			}
 			t.Logf("%d terms, %d violations told apart", len(e.Terms), moved)
 		})
+	}
+}
+
+// TestRouterScoreIsTheReferences reads the router's score each family's
+// configuration states over a row of logits, against the formula its
+// reference computes: softmax over the experts, sigmoid, sqrt(softplus); and
+// none where the routed weights are not the selected scores. A score that
+// drops the softmax's maximum still agrees in value, so a second row of large
+// logits holds it to the shifted form.
+func TestRouterScoreIsTheReferences(t *testing.T) {
+	softmax := func(x []float64) []float64 {
+		m := slices.Max(x)
+		out, s := make([]float64, len(x)), 0.0
+		for i, v := range x {
+			out[i] = math.Exp(v - m)
+			s += out[i]
+		}
+		for i := range out {
+			out[i] /= s
+		}
+		return out
+	}
+	for _, c := range []struct {
+		name string
+		cfg  jlm.Config
+		ref  func([]float64) []float64
+	}{
+		{"softmax", jlm.Config{NExpert: 6}, softmax},
+		{"sigmoid", jlm.Config{NExpert: 6, Flags: jlm.FlagExpertSigmoid}, func(x []float64) []float64 {
+			return each(func(g, _ float64) float64 { return sig(g) })(x, x)
+		}},
+		{"sqrt softplus", jlm.Config{NExpert: 6, Flags2: jlm.Flag2ExpertSqrtSoftplus}, func(x []float64) []float64 {
+			return each(func(g, _ float64) float64 { return math.Sqrt(math.Log1p(math.Exp(g))) })(x, x)
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := RouterScore(&c.cfg)
+			if err := e.Valid(); err != nil || e.Reads() != 1 {
+				t.Fatalf("the stated score is not an expression of the logits: %v, %d operands", err, e.Reads())
+			}
+			for _, x := range [][]float64{{-1.5, 0.25, 2, -0.75, 1, 0}, {300, 310, 305, 299, 301, 309}} {
+				got, want := evalExpr(t, &e, [][]float64{x}, nil), c.ref(x)
+				for i := range want {
+					if d := math.Abs(got[i] - want[i]); !(d <= 1e-12*math.Max(1, math.Abs(want[i]))) {
+						t.Fatalf("logits %v: expert %d scores %v, the reference %v", x, i, got[i], want[i])
+					}
+				}
+			}
+		})
+	}
+	for _, c := range []jlm.Config{{}, {NExpert: 16, Arch: jlm.ArchPhiMoE}} {
+		if e := RouterScore(&c); len(e.Terms) != 0 {
+			t.Fatalf("%v with %d experts states a score of %d terms, want none", c.Arch, c.NExpert, len(e.Terms))
+		}
 	}
 }
