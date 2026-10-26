@@ -1142,6 +1142,9 @@ type layer struct {
 	// other way round. ssmA and ssmDtBias are per value head and ssmNorm is one
 	// value head wide, shared by all of them.
 	ssmConv1d, ssmA, ssmDtBias, ssmNorm []float32
+	// ssmConvTaps is the convolution kernel as the file stores it, the taps
+	// of a channel contiguous: the composer's OpStateConv reads it so.
+	ssmConvTaps tensor
 	// ssmD and ssmConvB are a Mamba-2 block's skip (one per value head) and
 	// convolution bias (one per channel, in q | k | v order); nil on the gated
 	// delta rule. A Mamba-2 block's ssmNorm is all Inner channels, a weight
@@ -3513,6 +3516,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			// channel, and plane-major makes the convolution elementwise
 			// (see cpu.EmitConv1d).
 			if n := len(l.ssmConv1d); n == g.conv*g.chans {
+				l.ssmConvTaps = f32Tensor(l.ssmConv1d, g.chans, g.conv)
 				wt := make([]float32, n)
 				for c := 0; c < g.chans; c++ {
 					for t := 0; t < g.conv; t++ {

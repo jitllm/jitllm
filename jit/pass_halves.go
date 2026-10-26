@@ -1,6 +1,10 @@
 package jit
 
-import "github.com/jitllm/jitllm/jit/ir"
+import (
+	"strings"
+
+	"github.com/jitllm/jitllm/jit/ir"
+)
 
 // Halves stores the state a part keeps from step to step, its history, as
 // binary16: each store narrows its float, rounded to nearest even and a NaN
@@ -13,11 +17,17 @@ type Halves struct {
 
 func (Halves) Name() string { return "halves" }
 
+// history reports whether o is a part's history: a table of its own that
+// is not a recurrent state ("rec."), which every device keeps at f32.
+func (o Operand) history() bool {
+	return o.Kind == OperandTable && o.PerPart && !strings.HasPrefix(o.Name, "rec.")
+}
+
 func (p Halves) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return eachKernel(p.Name(), ks, func(k *Kernel) ([]*Kernel, bool, error) {
 		any := false
 		for _, b := range k.Bufs {
-			any = any || b.Operand.Kind == OperandTable && b.Operand.PerPart
+			any = any || b.Operand.history()
 		}
 		if !any {
 			return nil, false, nil
@@ -25,7 +35,7 @@ func (p Halves) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		m := k.clone()
 		U := ir.U32
 		for b := range m.Bufs {
-			if o := m.Bufs[b].Operand; o.Kind == OperandTable && o.PerPart {
+			if m.Bufs[b].Operand.history() {
 				m.Bufs[b].Half = true
 			}
 		}

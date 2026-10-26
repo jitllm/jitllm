@@ -660,6 +660,7 @@ const (
 	partEmbedWeight = jit.DeclineEmbedWeight
 	partEmbedToken  = jit.DeclineEmbedToken
 	partExperts     = jit.DeclineExperts
+	partRecurrent   = jit.DeclineRecurrent
 	numPartDeclines = jit.NumDeclines
 )
 
@@ -1341,6 +1342,29 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 		if l.mla {
 			return l.mlaGate
 		}
+		if l.linear {
+			return l.ssmGate
+		}
+	case jlm.RoleAttnQKV:
+		if l.linear && !l.withAttn {
+			return l.wq
+		}
+	case jlm.RoleSSMBA:
+		return l.ssmBA
+	case jlm.RoleSSMOut:
+		return l.ssmOut
+	case jlm.RoleSSMFA:
+		return l.ssmFA
+	case jlm.RoleSSMFB:
+		return l.ssmFB
+	case jlm.RoleSSMGA:
+		return l.ssmGA
+	case jlm.RoleSSMGB:
+		return l.ssmGB
+	case jlm.RoleSSMConv1d:
+		if l.ssmTaps.qs != nil {
+			return &l.ssmTaps
+		}
 	case jlm.RoleRouter:
 		if l.router != nil {
 			return &l.routerW
@@ -1431,6 +1455,12 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.expSelB
 	case jlm.RoleShRouter:
 		return l.shRouter
+	case jlm.RoleSSMA:
+		return l.ssmA
+	case jlm.RoleSSMDtBias:
+		return l.ssmDt
+	case jlm.RoleSSMNorm:
+		return l.ssmNorm
 	}
 	return nil
 }
@@ -1454,6 +1484,10 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partPersist
 	case len(g.kb.skip) != 0:
 		return partSkip
+	case l.linear && !g.recHeld(l, p, bs, prompt):
+		return partRecurrent
+	case l.linear:
+		return partServes
 	case pk == nil || g.kvp == nil || g.kvp.layers[li] == nil:
 		return partNoPool
 	case pk.prefill && !prompt:
@@ -1466,6 +1500,30 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 		return partWindow
 	}
 	return partServes
+}
+
+// recHeld says linear block l's recurrent state is where the composer's
+// form steps it: a decode step's, in the block's pool of two halves of
+// slots of the delta rule's state alone (no tail), the step's recurrent
+// descriptor naming its slots. A prompt's rows and a pool of one shared
+// half are the tier's kernels' still.
+func (g *devTier) recHeld(l *layer, p *nn.LayerPlan, bs *blockScratch, prompt bool) bool {
+	return !prompt && !g.recShared && l.pool != nil && l.pool.s[1] != nil && bs.dRows != nil &&
+		p.Recurrent.TailLen == 0 && !l.centred && l.k3 == nil && l.q4e == nil
+}
+
+// bindRec binds linear block l's step in sv to session sid's half of its
+// pool, read, and the other half, written, as emitLinear does, or says it
+// cannot: the session holds no seat in the pool.
+func (g *devTier) bindRec(sv *servedPart, sid uint64, l *layer) bool {
+	par, has := g.stepPar(sid, l)
+	if !has || l.pool == nil {
+		return false
+	}
+	t := sv.sl.tables
+	t["rec.state"], t["rec.state.out"] = l.pool.s[par], l.pool.s[1-par]
+	t["rec.conv"], t["rec.conv.out"] = l.pool.c[par], l.pool.c[1-par]
+	return true
 }
 
 // windowHeld says the window block l's graph states is the plan's for block
@@ -1491,7 +1549,7 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 	if R > 1 {
 		qOff = bs.roff
 	}
-	sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(p, li), qOff, bs.calls, p.MaxSeq, g.kvp.p, R)
+	sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(p, li), qOff, bs.calls, bs.dRows, p.MaxSeq, g.kvp.p, R)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1534,7 +1592,7 @@ func (g *devTier) prewarmComposedBlock(li int) {
 		if bs.csSWA != nil && bs.p.LocalRope(li) {
 			rcs = bs.csSWA
 		}
-		if _, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(&bs.p, li), bs.zero, bs.calls, bs.p.MaxSeq,
+		if _, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(&bs.p, li), bs.zero, bs.calls, bs.dRows, bs.p.MaxSeq,
 			g.kvp.p, 1); err != nil {
 			g.LastErr = "the composed block: " + err.Error()
 			return
@@ -1590,7 +1648,7 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 	if bb.csSWA != nil && bb.p.LocalRope(li) {
 		rcs = bb.csSWA
 	}
-	sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bb.pkv.pRow, bb.pkv.windowDesc(&bb.p, li), bb.roff, bb.calls, bb.p.MaxSeq,
+	sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bb.pkv.pRow, bb.pkv.windowDesc(&bb.p, li), bb.roff, bb.calls, bb.dRows, bb.p.MaxSeq,
 		g.kvp.p, bb.rows)
 	if err != nil {
 		g.LastErr = "the composed prompt block: " + err.Error()
@@ -1795,13 +1853,19 @@ func poolHistory(k kvGeom) jit.History {
 // live positions need, a count it reads at run time (jit.Trips), so the
 // session's capacity is its key bound and no position compiles a form. A
 // prompt chunk's form is its width's, as the tier's kernels are.
-func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, rowsW, qOff, calls backend.Buf, maxSeq, page, R int) (*servedPart, error) {
+func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool, rows, rowsW, qOff, calls, rec backend.Buf, maxSeq, page, R int) (*servedPart, error) {
 	keys := keyBound(maxSeq)
 	kind := partBlock
 	if R > 1 {
 		kind = partPrompt
 	}
-	sk := servedKey{kind: kind, graph: l.graph, rows: R, keys: keys, page: page, half: pl.geom.f16, latent: pl.geom.mla}
+	// A linear block holds no history: its state is its pool's (bindRec).
+	var kk, kv, tab backend.Buf
+	var geom kvGeom
+	if pl != nil && !l.linear {
+		kk, kv, tab, geom = pl.k, pl.v, pl.tab, pl.geom
+	}
+	sk := servedKey{kind: kind, graph: l.graph, rows: R, keys: keys, page: page, half: geom.f16, latent: geom.mla}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		// The request names no block: blocks of one structure and formats
 		// share a form, each launched on its own bindings, one after
@@ -1810,10 +1874,15 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 		gr.Block = 0
 		sl := composedPart{kind: kind, graph: &gr, formats: map[jlm.Role]jlm.Type{},
 			weights: map[jlm.Role]*resident{}, vectors: map[jlm.Role]backend.Buf{},
-			tables: map[string]backend.Buf{"rope.cs": cs, "kv.k": pl.k, "kv.v": pl.v, "pages": pl.tab, "rows": rows,
+			tables: map[string]backend.Buf{"rope.cs": cs, "kv.k": kk, "kv.v": kv, "pages": tab, "rows": rows,
 				"rows.win": rowsW, "q.off": qOff, "rows.n": calls},
-			history: poolHistory(pl.geom),
+			history: poolHistory(geom),
 			keys:    keys, page: page}
+		if l.linear && l.pool != nil {
+			t := sl.tables
+			t["rec.state"], t["rec.state.out"], t["rec.conv"], t["rec.conv.out"] = l.pool.s[0], l.pool.s[1], l.pool.c[0], l.pool.c[1]
+			t["rec.rows"] = rec
+		}
 		for _, o := range l.graph.Ops {
 			for _, w := range o.Weight {
 				// A bank's bias is a row an expert, held as one vector.
@@ -1850,7 +1919,10 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 		sv.sl.vectors[r] = l.roleVector(r)
 	}
 	t := sv.sl.tables
-	t["rope.cs"], t["kv.k"], t["kv.v"], t["pages"], t["rows"], t["rows.win"], t["q.off"] = cs, pl.k, pl.v, pl.tab, rows, rowsW, qOff
+	t["rope.cs"], t["kv.k"], t["kv.v"], t["pages"], t["rows"], t["rows.win"], t["q.off"] = cs, kk, kv, tab, rows, rowsW, qOff
 	t["rows.n"] = calls
+	if l.linear {
+		t["rec.rows"] = rec
+	}
 	return sv, nil
 }

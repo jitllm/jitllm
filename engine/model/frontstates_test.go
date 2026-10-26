@@ -81,8 +81,8 @@ func formBlocks(t *testing.T, m *Model, blocks []int) {
 // TestFrontStatesTheAttentionOutputGate holds a hybrid's attention blocks --
 // a q projection of twice the width, each head's query then its gate, and the
 // attention's output multiplied by the sigmoid of the gate before the output
-// projection -- to the ops that say so, and forms them, while its recurrent
-// blocks stay refused by their kind; a mixture's attention blocks are stated too.
+// projection -- to the ops that say so, and forms them, with its recurrent
+// blocks stated as delta rules and formed; a mixture's blocks are stated too.
 // A model read as ungated is refused, not given a q of the wrong width.
 func TestFrontStatesTheAttentionOutputGate(t *testing.T) {
 	for _, c := range []struct {
@@ -97,9 +97,8 @@ func TestFrontStatesTheAttentionOutputGate(t *testing.T) {
 			for li := range m.Cfg.NLayer {
 				if m.Cfg.LayerKind(li) != jlm.LayerFullAttn {
 					mixers++
-					if why := m.Uncovered(li); why != UncoveredKind {
-						t.Fatalf("block %d, a recurrent mixer, is refused by %q, want %q", li, why, UncoveredKind)
-					}
+					checkDeltaMixer(t, m, li)
+					stated = append(stated, li)
 					continue
 				}
 				attn++
@@ -135,6 +134,63 @@ func TestFrontStatesTheAttentionOutputGate(t *testing.T) {
 			t.Fatal("the fixture has no attention block")
 		}
 	})
+}
+
+// TestFrontStatesTheDeltaRules holds the linear blocks of a mixture hybrid
+// and of Kimi Delta Attention -- a decay per key channel through a
+// low-rank pair, a low-rank output gate, a sigmoid gate -- to a delta
+// rule's statement, and forms them on a CPU and a GPU device.
+func TestFrontStatesTheDeltaRules(t *testing.T) {
+	for _, file := range []string{"synth-qwen35moe-hybrid-mtp.gguf", "synth-kimilinear"} {
+		t.Run(file, func(t *testing.T) {
+			m := frontModel(t, file)
+			var stated []int
+			for li := range m.Cfg.NLayer {
+				if m.Cfg.LayerKind(li) != jlm.LayerLinearAttn {
+					continue
+				}
+				checkDeltaMixer(t, m, li)
+				stated = append(stated, li)
+			}
+			if len(stated) == 0 {
+				t.Fatal("the model states no delta rule: the gate selects nothing")
+			}
+			if m.Cfg.ChanDecay() {
+				rule := opsOf(m.Composing().BlockGraph(stated[0]), graph.OpDeltaRule)[0]
+				if w := m.Composing().BlockGraph(stated[0]).Values[rule.In[3]].Width; w != rule.Attr.NHead*rule.Attr.HeadDim {
+					t.Fatalf("a decay of %d, where a channel's decay is %d", w, rule.Attr.NHead*rule.Attr.HeadDim)
+				}
+			}
+			formBlocks(t, m, stated[:min(2, len(stated))])
+		})
+	}
+}
+
+// checkDeltaMixer holds recurrent block li to a delta rule's statement: one
+// state convolution over the mixed projection and one delta rule, each
+// stepping its own state, at the container's geometry and pairing, and the
+// mixer projected by the stored output projection.
+func checkDeltaMixer(t *testing.T, m *Model, li int) {
+	t.Helper()
+	if why := m.Uncovered(li); why != Covered {
+		t.Fatalf("block %d, a delta rule, is refused by %q (%v)", li, why, m.UncoveredErr(li))
+	}
+	g := m.Composing().BlockGraph(li)
+	dg := m.Cfg.delta()
+	convs, rules := opsOf(g, graph.OpStateConv), opsOf(g, graph.OpDeltaRule)
+	if len(convs) != 1 || len(rules) != 1 {
+		t.Fatalf("block %d states %d state convolutions and %d delta rules, want one each", li, len(convs), len(rules))
+	}
+	if c := convs[0]; c.In[0] != readerOf(t, g, jlm.RoleAttnQKV).Out[0] || c.Attr.Taps != dg.conv ||
+		len(c.Writes) != 1 || c.Writes[0].Name != "rec.conv" {
+		t.Fatalf("block %d: the convolution %+v is not the mixed projection's over its own window of %d", li, c, dg.conv)
+	}
+	a := rules[0].Attr
+	if a.NHead != dg.vHeads || a.NKVHead != dg.kHeads || a.HeadDim != dg.kDim || a.Tiled != dg.tiled ||
+		len(rules[0].Writes) != 1 || rules[0].Writes[0].Name != "rec.state" {
+		t.Fatalf("block %d: a delta rule of %+v over %+v, want the container's geometry", li, a, dg)
+	}
+	readerOf(t, g, jlm.RoleSSMOut)
 }
 
 // checkOutputGate holds block li's graph to the gate's statement.
@@ -298,9 +354,8 @@ func TestFrontStatesTheQwen35FixturesAttention(t *testing.T) {
 	mixers := 0
 	for li := range m.Cfg.NLayer {
 		if m.Cfg.LayerKind(li) != jlm.LayerFullAttn {
-			if why := m.Uncovered(li); why != UncoveredKind {
-				t.Fatalf("block %d, a recurrent mixer, is refused by %q (%v), want %q", li, why, m.UncoveredErr(li), UncoveredKind)
-			}
+			checkDeltaMixer(t, m, li)
+			stated = append(stated, li)
 			mixers++
 			continue
 		}

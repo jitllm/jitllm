@@ -181,10 +181,22 @@ const (
 	// live rows past Offset tall) mapped to a source coordinate on each axis
 	// by Chain and read through Filter's taps.
 	OpPosResample
+	// OpDeltaRule is the delta rule over the block's recurrent state: for
+	// each value head h of NHead, a matrix S of Dv rows (v's width over
+	// NHead) by HeadDim, paired with key head h/(NHead/NKVHead) of NKVHead,
+	// or h mod NKVHead where Tiled. q and k (In[0], In[1]) are NKVHead heads
+	// of HeadDim, v (In[2]) NHead heads of Dv, the decay In[3] one factor a
+	// value head or one a key channel of each (NHead or NHead*HeadDim wide)
+	// and beta In[4] one a value head. Each row, in order: S times the
+	// decay (a channel's factor on its column), then S plus the outer
+	// product of (v - S k) times beta and k, then Out[0] = S q. It reads
+	// state version n and writes n+1. A primitive with a state of its own:
+	// a linear-attention mixer's recurrence.
+	OpDeltaRule
 	numOps
 )
 
-var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample"}
+var opNames = [...]string{"invalid", "norm", "head_norm", "matvec", "rope", "kv_append", "attend", "add", "expr", "expert_matvec", "layer_norm", "clamp", "slice", "scale", "conv", "affine", "map", "reduce", "top_k", "take", "rank", "tile", "concat", "rope_table", "embed", "state_conv", "pool", "take_rows", "row_conv", "patchify", "regroup", "lead_row", "drop_rows", "fold", "splice", "pos_resample", "delta_rule"}
 
 func (k OpKind) String() string {
 	if int(k) < len(opNames) {
@@ -370,6 +382,8 @@ type Attrs struct {
 	// Chain and Filter are OpPosResample's: the coordinate's convention
 	// and the taps that read it.
 	Chain, Filter uint8
+	// Tiled pairs OpDeltaRule's value head h with key head h mod NKVHead.
+	Tiled bool
 	// RowWindows makes OpAttend read each row's attended range from the
 	// step's window table, not its history descriptor: a vision tower's
 	// window attention, a row's keys its window's rows.

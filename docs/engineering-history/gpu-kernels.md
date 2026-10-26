@@ -8673,3 +8673,36 @@ row where the composer's reads two.
   allocates nothing (TestDecodeDoesNotAllocate's two-device-groups arm,
   Llama, olmoe and Qwen3.5). The V100 throughput rows (gpt-oss-120b on 5
   cards, Qwen3-30B-A3B on 2, Qwen3-Next-80B on 4) are not yet measured.
+- **A linear block is a delta rule the composer forms.** The op language
+  gains OpDeltaRule (value heads over key heads, grouped or tiled, a decay
+  per head or per key channel by its operand's width, beta), and the front
+  end states every LayerLinearAttn block from what the container stores
+  (engine/model/frontdelta.go: the mixed projection, OpStateConv, SiLU, the
+  unit-length q and k as an unweighted head norm, the decay from its
+  logits, dt bias and log decay or the stated lower bound, the gated norm
+  and the output gate the container states); the state-space and short
+  convolution kinds stay UncoveredKind. Both state ops read a slot of a
+  pool the step's recurrent descriptor names ("rec.rows": rows, the slot
+  read, the slot written) and write ".out", so the CPU steps a sequence's
+  state in place and the card reads one half of its pool and writes the
+  other, as its own kernels do (bindRec, then stepFlip); Halves leaves a
+  "rec." table at f32. OpStateConv lost its select over coordinates: the
+  x86 lowering had no register for the constant a `less` compared against.
+  The CPU device serves decode, and a prompt's and a batch's rows a row at a
+  time on the one-row form, with main's per-row restore points; the card
+  serves a decode step of one session and declines a prompt, a ragged step
+  and the shared pool by name (DeclineRecurrent). Qwen3.5-0.8B Q4_K_M on
+  the V100 (cuda:0 and vulkan:4): TestComposedBlocksServe every arm, 3360
+  block steps served a 140-step arm and none declined, median 1.08 (CUDA)
+  and 1.02 (Vulkan) of the tier's distance from the float reference. On
+  the CPU device, its linear blocks composed and its attention blocks
+  main's: decode 0.483 of main's int8 spread at the median (worst NMSE
+  0.00268 against the control's 0.00534), a 700-token prompt over two
+  chunks 0.472; dropping the decay, the gate, the key's norm or the
+  convolution, binding another block's state, or dropping the state at a
+  chunk boundary each leaves the band (median ratios 257 to 5272). Open:
+  Qwen3.5's attention blocks on the composed CPU read 11.3 of main's spread
+  (worst 0.071 against 0.00534) where the card's are in band, so the whole
+  model is not in the CPU's served lists; the card's prompt and ragged rows
+  of a linear block; the one-row decomposition is a launch per row of a
+  prompt where a chunked scan would be one.

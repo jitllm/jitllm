@@ -136,13 +136,15 @@ func rotaryTables(parts []jit.Part) int {
 // TestFrontNamesNoFamily holds the front end to reading numbers: its source
 // names no model family.
 func TestFrontNamesNoFamily(t *testing.T) {
-	src, err := os.ReadFile("front.go")
-	if err != nil {
-		t.Fatal(err)
-	}
 	family := regexp.MustCompile(`(?i)gemma|llama|qwen|deepseek|kimi|mistral|mixtral|granite|hunyuan|minimax|nemotron|jamba|mamba|olmo|ernie|glm|bitnet|phi[0-9]|phimoe|gpt-?oss|falcon|starcoder|command-?r|cohere|stablelm|dbrx|exaone|smollm|arcee|seed_?oss|apertus|bailing|dots1|bert|lfm|clip|altup|laurel|jlm\.Arch|\.Arch\b`)
-	if loc := family.FindIndex(src); loc != nil {
-		t.Fatalf("front.go names a model family or reads the architecture: %q", src[loc[0]:loc[1]])
+	for _, file := range []string{"front.go", "frontdelta.go"} {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loc := family.FindIndex(src); loc != nil {
+			t.Fatalf("%s names a model family or reads the architecture: %q", file, src[loc[0]:loc[1]])
+		}
 	}
 }
 

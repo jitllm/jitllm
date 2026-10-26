@@ -177,6 +177,22 @@ func Verify(g *Graph, f Facts) error {
 			if len(o.In) != 2 || len(o.Out) != 1 || width(o.In[0]) != width(o.In[1]) || width(o.Out[0]) != width(o.In[0]) {
 				bad("%s: widths %d and %d into %d", at, width(o.In[0]), width(o.In[1]), width(o.Out[0]))
 			}
+		case OpDeltaRule:
+			a := o.Attr
+			switch {
+			case len(o.In) != 5 || len(o.Out) != 1:
+				bad("%s: %d inputs and %d outputs", at, len(o.In), len(o.Out))
+			case a.NHead < 1 || a.NKVHead < 1 || a.HeadDim < 1 || a.NHead%a.NKVHead != 0:
+				bad("%s: %d value heads over %d key heads of %d", at, a.NHead, a.NKVHead, a.HeadDim)
+			case width(o.In[0]) != a.NKVHead*a.HeadDim || width(o.In[1]) != width(o.In[0]):
+				bad("%s: q and k of %d and %d over %d heads of %d", at, width(o.In[0]), width(o.In[1]), a.NKVHead, a.HeadDim)
+			case width(o.In[2]) < a.NHead || width(o.In[2])%a.NHead != 0 || width(o.Out[0]) != width(o.In[2]):
+				bad("%s: v of %d into %d over %d heads", at, width(o.In[2]), width(o.Out[0]), a.NHead)
+			case width(o.In[3]) != a.NHead && width(o.In[3]) != a.NHead*a.HeadDim:
+				bad("%s: a decay of %d over %d heads of %d", at, width(o.In[3]), a.NHead, a.HeadDim)
+			case width(o.In[4]) != a.NHead:
+				bad("%s: a beta of %d over %d heads", at, width(o.In[4]), a.NHead)
+			}
 		case OpMap:
 			if a := o.Attr; a.Width != 0 {
 				switch {

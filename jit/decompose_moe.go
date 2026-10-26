@@ -476,10 +476,11 @@ func decomposeClamp(o graph.Op, c *Context) ([]Prim, error) {
 }
 
 // decomposeStateConv is a causal depthwise convolution over the part's
-// window state ("rec.conv", Taps-1 rows of the channels): each channel's
-// row and window against its taps, the newest tap the row's; then the
-// window less its oldest row and with the row, into a scratch row and
-// back, so no kernel reads the window while writing it.
+// window state (a slot of "rec.conv", Taps-1 rows of the channels): each
+// channel's row and window against its taps, the newest tap the row's;
+// then the window less its oldest row and with the row, into a scratch
+// row and to the slot written, so no kernel reads the window while
+// writing it.
 func decomposeStateConv(o graph.Op, c *Context) ([]Prim, error) {
 	if len(o.In) != 1 || len(o.Out) != 1 || len(o.Weight) != 1 || c.Step.Rows != 1 {
 		return nil, fmt.Errorf("a state convolution of %d operands over %d rows", len(o.In), c.Step.Rows)
@@ -496,39 +497,48 @@ func decomposeStateConv(o graph.Op, c *Context) ([]Prim, error) {
 	if !jlm.Verbatim(wo.Format) {
 		return nil, fmt.Errorf("a state convolution over %s taps", wo.Format)
 	}
-	state := Operand{Kind: OperandTable, Name: "rec.conv", PerPart: true}
 	next := Operand{Kind: OperandScratch, Name: c.value(o.Out[0]).Name + ".window"}
 	in := c.value(o.In[0])
 	W := (T - 1) * C
 
 	var x exprs
 	ch := x.coord(1)
-	tapIn := []Operand{in, state}
-	facts := Facts{Extents: map[int]int{1: W}}
+	tapIn := []Operand{in, tableRecConv, tableRecRows}
+	facts := Facts{Extents: map[int]int{1: W, 2: 3}}
 	tap := func(t int) int {
 		v, _ := weightElement(&x, wo, C, T, &tapIn, &facts, ch, x.u(uint32(t)))
 		return v
 	}
+	base := x.recSlot(2, 1, W)
 	acc := x.op(OpMul, F, x.at(0, []int{1, C}, x.coord(0), ch), tap(T-1))
 	for t := 0; t < T-1; t++ {
-		acc = x.op(OpAdd, F, acc, x.op(OpMul, F, x.load(1, x.op(OpAdd, U, x.u(uint32(t*C)), ch)), tap(t)))
+		acc = x.op(OpAdd, F, acc, x.op(OpMul, F, x.load(1, x.op(OpAdd, U, base, x.op(OpAdd, U, x.u(uint32(t*C)), ch))), tap(t)))
 	}
 
+	// The window less its oldest row, then the row after it.
 	var n exprs
 	nt, nc := n.coord(0), n.coord(1)
-	older := n.load(1, n.op(OpAdd, U, n.op(OpMul, U, n.op(OpMin, U, n.op(OpAdd, U, nt, n.u(1)), n.u(uint32(T-2))), n.u(uint32(C))), nc))
-	n.sel(F, n.op(OpLess, ir.Pred, n.op(OpAdd, U, nt, n.u(1)), n.u(uint32(T-1))), older, n.at(0, []int{1, C}, n.u(0), nc))
+	nix := n.op(OpAdd, U, n.op(OpMul, U, nt, n.u(uint32(C))), nc)
+	n.load(0, n.op(OpAdd, U, n.recSlot(1, 1, W), n.op(OpAdd, U, nix, n.u(uint32(C)))))
+	var m exprs
+	mix := m.op(OpAdd, U, m.u(uint32((T-2)*C)), m.coord(1))
+	mv := m.at(0, []int{1, C}, m.coord(0), m.coord(1))
 
 	var k exprs
 	kt, kc := k.coord(0), k.coord(1)
 	ix := k.op(OpAdd, U, k.op(OpMul, U, kt, k.u(uint32(C))), kc)
 	v := k.load(0, ix)
-	return []Prim{
-		{Kind: PrimMap, Shape: []int{1, C}, In: tapIn, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts},
-		{Kind: PrimMap, Shape: []int{T - 1, C}, In: []Operand{in, state}, Out: next, Expr: n.e, Facts: Facts{Extents: map[int]int{1: W}}},
-		{Kind: PrimMap, Shape: []int{T - 1, C}, In: []Operand{next}, Expr: k.e, Facts: Facts{Extents: map[int]int{0: W}},
-			Stores: []PrimStore{{Out: state, Index: ix, Value: v, Extent: W}}},
-	}, nil
+	to := k.op(OpAdd, U, k.recSlot(1, 2, W), ix)
+	ps := []Prim{{Kind: PrimMap, Shape: []int{1, C}, In: tapIn, Out: c.value(o.Out[0]), Expr: x.e, Facts: facts}}
+	if T > 2 {
+		ps = append(ps, Prim{Kind: PrimMap, Shape: []int{T - 2, C}, In: []Operand{tableRecConv, tableRecRows}, Expr: n.e,
+			Facts: Facts{Extents: map[int]int{0: W, 1: 3}}, Stores: []PrimStore{{Out: next, Index: nix, Value: len(n.e) - 1, Extent: W}}})
+	}
+	return append(ps,
+		Prim{Kind: PrimMap, Shape: []int{1, C}, In: []Operand{in}, Expr: m.e, Stores: []PrimStore{{Out: next, Index: mix, Value: mv, Extent: W}}},
+		Prim{Kind: PrimMap, Shape: []int{T - 1, C}, In: []Operand{next, tableRecRows}, Expr: k.e, Facts: Facts{Extents: map[int]int{0: W, 1: 3}},
+			Stores: []PrimStore{{Out: tableRecConvOut, Index: to, Value: v, Extent: W}}},
+	), nil
 }
 
 // decomposeRowConv is a centred depthwise convolution across the step's

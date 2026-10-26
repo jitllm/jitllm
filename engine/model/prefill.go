@@ -1300,7 +1300,12 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 		if !bidir {
 			seq, pos := s.cpuRowsOf(slot, p0, n)
 			var err error
-			if why, err = s.cpuRows(li, l, s.bx[:n*c.ResidW()], s.bcs, seq, pos); err != nil {
+			if c.LayerKind(li).Recurrent() {
+				why, err = s.cpuRecRows(li, l, s.bx[:n*c.ResidW()], s.bcs, seq, pos, nil, base, p0)
+			} else {
+				why, err = s.cpuRows(li, l, s.bx[:n*c.ResidW()], s.bcs, seq, pos)
+			}
+			if err != nil {
 				return err
 			}
 		}

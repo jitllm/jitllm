@@ -84,6 +84,9 @@ type layer struct {
 	mvFA, mvFB, mvGA, mvGB     mv
 	ssmConv1d, ssmA, ssmDt     backend.Buf
 	ssmNorm, ssmOnes           backend.Buf
+	// ssmTaps is the convolution's taps as the file stores them, a
+	// channel's contiguous: the composer's state convolution reads them so.
+	ssmTaps resident
 	// ssmD and ssmCB are a Mamba-2 block's skip and convolution bias
 	// (nn.RecurrentPlan.SSD), and a Mamba-1 block's; nil on the gated delta
 	// rule.
@@ -4184,6 +4187,17 @@ func (g *devTier) prepLayer(sid uint64, li int, p *nn.LayerPlan, w *nn.LayerWeig
 		}
 		up(&l.ssmConv1d, w.SSM.Conv1d)
 		l.auxBytes += uint64(len(w.SSM.Conv1d) * 4)
+		if !r.ShortConv && !r.SSD && !r.Mamba1 {
+			taps := make([]float32, len(w.SSM.Conv1d))
+			for u := range r.Conv {
+				for c := range r.Chans {
+					taps[c*r.Conv+u] = w.SSM.Conv1d[u*r.Chans+c]
+				}
+			}
+			up(&l.ssmTaps.qs, taps)
+			l.ssmTaps = resident{qs: l.ssmTaps.qs, nrows: r.Chans, k: r.Conv, t: kernels.Float32, ok: true}
+			l.auxBytes += uint64(len(taps) * 4)
+		}
 	}
 	// A short convolution (LFM2) has its window and nothing else.
 	if r := p.Recurrent; r.Conv > 0 && !r.ShortConv {
@@ -8471,6 +8485,11 @@ func (g *devTier) layersSession(s backend.Session) {
 				asked = false
 			default:
 				why = g.blockServes(l, li, p, bs, persist, kind == partPrompt)
+				// A linear block's form steps one row of one session, its
+				// slots the decode descriptor's.
+				if why == partServes && l.linear && (rag != nil || R != 1) {
+					why = partRecurrent
+				}
 			}
 			var sv *servedPart
 			var inst *partInst
@@ -8482,7 +8501,9 @@ func (g *devTier) layersSession(s backend.Session) {
 					}
 					continue
 				}
-				if inst == nil {
+				if l.linear && !g.bindRec(sv, sid, l) {
+					inst, why = nil, partRecurrent
+				} else if inst == nil {
 					why = partNoRoom
 				}
 				if R > 1 {
@@ -8518,6 +8539,12 @@ func (g *devTier) layersSession(s backend.Session) {
 			} else if inst != nil {
 				if serr := sv.runAs(g, lc, inst, kind, []backend.Buf{bs.x}, []backend.Buf{bs.x}); err == nil {
 					err = serr
+				}
+				// The form wrote the other half: the session reads it next,
+				// as after emitLinear.
+				if l.linear && err == nil {
+					g.stepFlip(sid, l)
+					g.recSteps++
 				}
 				continue
 			}
@@ -10772,7 +10799,7 @@ func (l *layer) auxBufs() []backend.Buf {
 		l.nQA, l.nKVA, // MLA's two latent norms
 		l.nIdxK, l.nIdxKB, l.nIdxQ, // the indexers' norms (DeepSeek V3.2, MiniMax-M3)
 		l.altRouter, l.altRouterNorm, l.altPredT, l.altCorrT, l.altCorrScale, l.nLaurel, // Gemma 3n
-		l.ssmConv1d, l.ssmA, l.ssmDt, l.ssmNorm, l.ssmOnes, // a linear block
+		l.ssmConv1d, l.ssmA, l.ssmDt, l.ssmNorm, l.ssmOnes, l.ssmTaps.qs, // a linear block
 		l.ssmD, l.ssmCB, // Mamba-2's and Mamba-1's
 		l.m1DtN, l.m1BN, l.m1CN, // Mamba-1's
 		l.router,

@@ -171,7 +171,7 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 	"Qwen3-MOE-4x0.6B-Q4_K_M.gguf", "olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", "DeepSeek-V2-Lite.Q4_K_M.gguf",
 	"synth-glm4moe.gguf", "synth-qwen2moe.gguf", "synth-ernie45moe.gguf", "synth-hunyuanmoe.gguf",
 	"synth-minimaxm2.gguf", "synth-bailingmoe2.gguf", "synth-dots1.gguf", "synth-gptoss.gguf", "synth-deepseek",
-	"synth-deepseek-lite"}
+	"synth-deepseek-lite", "qwen35/Qwen3.5-0.8B-Q4_K_M.gguf"}
 
 // formedModels is what the front end states and the serving gate does not
 // run: a model the tier cannot place (stories260K, unblockedModels),

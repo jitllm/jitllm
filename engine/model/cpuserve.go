@@ -48,6 +48,13 @@ const (
 	cpuArgCoord
 	cpuArgWord
 	cpuArgCall
+	// cpuArgRecState and cpuArgRecConv are a linear block's recurrent states
+	// and its convolution's windows, a slot a sequence, read and written in
+	// place; cpuArgRecRows the call's recurrent descriptor, which names the
+	// call's sequence's slot.
+	cpuArgRecState
+	cpuArgRecConv
+	cpuArgRecRows
 )
 
 // cpuArg is one call word: its byte field in cpu.Args and where its value
@@ -143,8 +150,11 @@ type cpuState struct {
 	// rowsTab is a call's rows' descriptors at the rows' form, call its
 	// "rows.n" word, and rseq and rpos a step's rows' sequences and
 	// positions.
-	rowsTab    []uint32
-	call       [4]uint32
+	rowsTab []uint32
+	call    [4]uint32
+	// recRows is a linear block's call's recurrent descriptor: one row, the
+	// slot it reads and the slot it writes, its sequence's.
+	recRows    [3]uint32
 	rseq, rpos []int
 	// xpad is a call's residual rows where its kernels' units reach past
 	// them (cpuBlockForm.unit).
@@ -174,6 +184,12 @@ const (
 	cpuFaultPage
 	// cpuFaultRow moves the first key row a step attends by one.
 	cpuFaultRow
+	// cpuFaultRec binds every linear block to the recurrent state and
+	// window of the first: each steps a summary that is not its own.
+	cpuFaultRec
+	// cpuFaultChunk starts each prompt chunk after the first from a summary
+	// of zeros: the recurrence not carried across the chunk boundary.
+	cpuFaultChunk
 )
 
 // cpuBlock is block li's forms on the CPU, its graph the one they were
@@ -214,6 +230,10 @@ type cpuBound struct {
 	n     int
 	kv    *kvPages
 	pages []uint32
+	// recLi is the block whose recurrent states a linear block's step binds
+	// and recOf the State that holds them.
+	recLi int
+	recOf *State
 }
 
 // composedCPUDevice is the CPU as the composer forms for it.
@@ -236,11 +256,13 @@ func (s *State) cpuStep(li int, l *layer, cs []float32) (jit.Decline, error) {
 		}
 	}
 	b := &s.cpu.bound
-	*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), cs: cs, x: s.x, rows: s.cpu.rows[:], n: 1, kv: pg, pages: s.cpu.pages}
+	*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), cs: cs, x: s.x, rows: s.cpu.rows[:], n: 1, kv: pg, pages: s.cpu.pages,
+		recLi: s.cpuRecLi(li), recOf: s}
 	if why := s.cpuWeights(cb.f, l); why != jit.DeclineServes {
 		return why, nil
 	}
 	s.cpu.rows = [4]uint32{0, uint32(pg.keyStart(pos)), uint32(pos + 1), uint32(pos)}
+	s.cpu.recRows = [3]uint32{1, 0, 0}
 	s.cpu.call[0] = 1
 	switch s.cpu.fault {
 	case cpuFaultPage:
@@ -320,6 +342,67 @@ func (s *State) cpuOwnerRuns(li int, l *layer, x, cs []float32, seq, pos []int, 
 		a = b
 	}
 	return jit.DeclineServes
+}
+
+// cpuRecRows runs linear block li over the n rows of x on its form of one
+// row, a row at a time in order (each row's index; 0.. where order is nil),
+// each stepping its own sequence's recurrent state -- its owner's, as
+// rowOwner names it -- or says why not: the recurrence is sequential, and
+// the form of a row is the block's whole step. A prompt's rows (base its
+// first row in the prompt, p0 its first position; base -1 for none) keep
+// each row's summary as main's row loop does: the speculative rows'
+// snapshot and the restore points.
+func (s *State) cpuRecRows(li int, l *layer, x, cs []float32, seq, pos, order []int, base, p0 int) (jit.Decline, error) {
+	cb, why := s.cpuBlockOf(li)
+	if why != jit.DeclineServes {
+		return why, nil
+	}
+	if why := s.cpuWeights(cb.f, l); why != jit.DeclineServes {
+		return why, nil
+	}
+	w, nrot := s.c.ResidW(), s.c.RopeW()
+	b := &s.cpu.bound
+	for i := range pos {
+		r := i
+		if order != nil {
+			r = order[i]
+		}
+		o, slot := s.rowOwner(r, seq)
+		if s.cpu.fault == cpuFaultChunk && base > 0 && i == 0 {
+			clear(o.rstate[li][slot*s.dg.stateStride():][:s.dg.stateStride()])
+			clear(o.rconv[li][slot*s.dg.convStateLen():][:s.dg.convStateLen()])
+		}
+		*b = cpuBound{li: li, l: l, own: s.cpuOwn(cb.f), x: x[r*w:], rows: s.cpu.rows[:], n: 1, kv: &s.kv.layers[li],
+			pages: s.cpu.pages, recLi: s.cpuRecLi(li), recOf: o}
+		if nrot > 0 {
+			b.cs = cs[r*nrot:]
+		}
+		s.cpu.rows = [4]uint32{0, 0, uint32(pos[r] + 1), uint32(pos[r])}
+		s.cpu.recRows = [3]uint32{1, uint32(slot), uint32(slot)}
+		s.cpu.call[0] = 1
+		for k := range cb.f.codes {
+			s.cpuCall(b, &cb.f.codes[k])
+		}
+		if base >= 0 {
+			s.rows.snapRow(s, li, slot, base+r)
+			s.recRowPoint(li, slot, p0+r+1)
+		}
+	}
+	return jit.DeclineServes, nil
+}
+
+// cpuRecLi is the block whose recurrent state block li's step binds: its
+// own, or under cpuFaultRec the first linear block's.
+func (s *State) cpuRecLi(li int) int {
+	if s.cpu.fault != cpuFaultRec {
+		return li
+	}
+	for r := range s.rstate {
+		if s.rstate[r] != nil {
+			return r
+		}
+	}
+	return li
 }
 
 // cpuRowsForm is block li's rows' form, its weights the block's, or why
@@ -578,6 +661,12 @@ func (s *State) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 			p = unsafe.Pointer(&b.rows[0])
 		case cpuArgCall:
 			p = unsafe.Pointer(&s.cpu.call[0])
+		case cpuArgRecState:
+			p = unsafe.Pointer(&b.recOf.rstate[b.recLi][0])
+		case cpuArgRecConv:
+			p = unsafe.Pointer(&b.recOf.rconv[b.recLi][0])
+		case cpuArgRecRows:
+			p = unsafe.Pointer(&s.cpu.recRows[0])
 		case cpuArgZero:
 			p = unsafe.Pointer(&s.cpu.zero[0])
 		}
@@ -662,8 +751,9 @@ func (s *State) cpuCompose(li int) {
 		return
 	}
 	cb.f = f
-	cb.rows, err = s.m.formCPUBlock(s, li, cb, cpuRowsCap)
-	if err != nil {
+	if s.c.LayerKind(li).Recurrent() {
+		cb.rowsWhy = jit.DeclineRecurrent
+	} else if cb.rows, err = s.m.formCPUBlock(s, li, cb, cpuRowsCap); err != nil {
 		cb.rowsWhy = s.cpuFormDecline(err)
 	}
 	s.cpu.composed[li]++
@@ -735,7 +825,7 @@ func (s *State) cpuWhy(li int) jit.Decline {
 		// The host keeps every expert in a page of its own: there is no
 		// bank whole for the graph's expert matvecs to read.
 		return jit.DeclineExperts
-	case c.LayerKind(li).Recurrent():
+	case c.LayerKind(li).Recurrent() && (li >= len(s.rstate) || s.rstate[li] == nil || s.rconv[li] == nil || s.dg.tail != 0):
 		return jit.DeclineRecurrent
 	case pg.latent:
 		return jit.DeclineLatent
@@ -939,6 +1029,12 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code, rows int) (*cpuBlockForm, e
 					ar.src = cpuArgRows
 				case "rows.n":
 					ar.src = cpuArgCall
+				case "rec.state", "rec.state.out":
+					ar.src = cpuArgRecState
+				case "rec.conv", "rec.conv.out":
+					ar.src = cpuArgRecConv
+				case "rec.rows":
+					ar.src = cpuArgRecRows
 				case "q.off":
 					ar.src = cpuArgZero
 				default:
@@ -1006,6 +1102,24 @@ func cpuRoleWeight(l *layer, r jlm.Role) *tensor {
 		return &l.up
 	case jlm.RoleFFNDown:
 		return &l.down
+	case jlm.RoleAttnQKV:
+		return &l.wq
+	case jlm.RoleAttnGate:
+		return &l.ssmGate
+	case jlm.RoleSSMBA:
+		return &l.ssmBA
+	case jlm.RoleSSMOut:
+		return &l.ssmOut
+	case jlm.RoleSSMFA:
+		return &l.ssmFA
+	case jlm.RoleSSMFB:
+		return &l.ssmFB
+	case jlm.RoleSSMGA:
+		return &l.ssmGA
+	case jlm.RoleSSMGB:
+		return &l.ssmGB
+	case jlm.RoleSSMConv1d:
+		return &l.ssmConvTaps
 	}
 	return nil
 }
@@ -1050,6 +1164,12 @@ func cpuRoleVector(l *layer, r jlm.Role) []float32 {
 		return l.ffnSubNorm
 	case jlm.RoleXIELU:
 		return l.xielu
+	case jlm.RoleSSMA:
+		return l.ssmA
+	case jlm.RoleSSMDtBias:
+		return l.ssmDtBias
+	case jlm.RoleSSMNorm:
+		return l.ssmNorm
 	}
 	return nil
 }

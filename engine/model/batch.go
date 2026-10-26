@@ -296,9 +296,12 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 		if m.opt.composedCPU {
 			var why jit.Decline
 			var err error
-			if len(s.rowOwn) > 0 {
+			switch {
+			case c.LayerKind(li).Recurrent():
+				why, err = s.cpuRecRows(li, l, s.bx[:n*c.ResidW()], cs, seq, pos, causal, -1, 0)
+			case len(s.rowOwn) > 0:
 				why, err = s.cpuSessions(li, l, s.bx[:n*c.ResidW()], cs, seq, pos, nlogit)
-			} else {
+			default:
 				why, err = s.cpuRows(li, l, s.bx[:n*c.ResidW()], cs, seq, pos)
 			}
 			if err != nil {

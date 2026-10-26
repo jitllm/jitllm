@@ -5,9 +5,10 @@ import (
 	"testing"
 
 	"github.com/jitllm/jitllm/engine/graph"
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
-// rewriteBlocks states every block of m the front end states to the composer
+// rewriteBlocks states every attention block of m the front end states to the composer
 // as rewrite makes of its graph, until the returned undo: a violation that
 // reaches the composer as a different graph and that nothing the tier runs of
 // its own can see. A rewrite that does not verify is the gate's fault, not a
@@ -19,7 +20,9 @@ func (m *Model) rewriteBlocks(t *testing.T, rewrite func(*graph.Graph) *graph.Gr
 	set.blocks = slices.Clone(s.blocks)
 	rewritten := 0
 	for li, g := range set.blocks {
-		if g == nil {
+		// The violations are the attention's; a linear block is the delta
+		// rule's (cpudelta_test.go).
+		if g == nil || m.Cfg.LayerKind(li) != jlm.LayerFullAttn {
 			continue
 		}
 		set.blocks[li] = rewrite(g)

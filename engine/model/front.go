@@ -55,7 +55,7 @@ const (
 
 var uncoveredNames = [numUncovered]string{
 	Covered:              "covered",
-	UncoveredKind:        "a layer that is not an attention block (a recurrent or state-space mixer)",
+	UncoveredKind:        "a layer that is not an attention block or a delta rule (a state-space or short-convolution mixer)",
 	UncoveredRouterScore: "a router whose score the container does not state, or whose weights are not the scores it selects",
 	UncoveredExperts: "routed experts weighted at their input, beside a dense MLP, in a latent of their own, " +
 		"scaled one by one or stored one matrix each",
@@ -307,9 +307,14 @@ func (m *Model) inventory(block int32) (graph.Facts, bool) {
 func (m *Model) uncovered(li int) Uncovered {
 	c := m.Cfg
 	hd := c.HeadDimAt(li)
-	switch {
-	case c.LayerKind(li) != jlm.LayerFullAttn:
+	switch c.LayerKind(li) {
+	case jlm.LayerLinearAttn:
+		return m.uncoveredRest(li)
+	case jlm.LayerFullAttn:
+	default:
 		return UncoveredKind
+	}
+	switch {
 	case hd != c.HeadDim || c.NKVHeadAt(li) != c.NKVHead || c.NRotAt(li) != c.NRot && !(m.ropeSWA != nil && c.SWA(li)) ||
 		!c.MLA() && c.HeadDimV != hd:
 		return UncoveredGeometry
@@ -337,6 +342,21 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredPLE
 	case len(c.CompKinds) != 0 || c.OGroups != 0:
 		return UncoveredCompressed
+	}
+	return m.uncoveredRest(li)
+}
+
+// uncoveredRest is uncovered's reasons that hold for every mixer: the
+// residual, the sequence's direction, the input rows and the MLP.
+func (m *Model) uncoveredRest(li int) Uncovered {
+	c := m.Cfg
+	switch {
+	case c.Streams() > 1:
+		return UncoveredStreams
+	case c.NonCausal:
+		return UncoveredNonCausal
+	case c.PLEDim != 0:
+		return UncoveredPLE
 	case c.NGramAt(li):
 		return UncoveredNGram
 	case m.container.Config().ActAt(li) == nil:
@@ -469,6 +489,13 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	x := b.In("x", d)
 	n := preNorm(x, jlm.RoleAttnNorm, jlm.RoleAttnNormBias)
+	if c.LayerKind(li) == jlm.LayerLinearAttn {
+		mix, err := m.deltaMixer(b, f, n, has, matvec)
+		if err != nil {
+			return nil, UncoveredUnverified, err
+		}
+		return m.blockRest(b, f, li, x, n, mix, jlm.RoleSSMOut, preNorm, norm, resid, matvec, stored, has)
+	}
 	// With an output gate the q projection is double width: each head's query,
 	// then that head's gate.
 	qrows := qdim
@@ -488,7 +515,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 		if err != nil {
 			return nil, UncoveredUnverified, err
 		}
-		return m.blockRest(b, f, li, x, n, att, preNorm, norm, resid, matvec, stored, has)
+		return m.blockRest(b, f, li, x, n, att, jlm.RoleAttnOut, preNorm, norm, resid, matvec, stored, has)
 	}
 	k := matvec(n, jlm.RoleAttnK, kvDim, stored(jlm.RoleAttnKBias)...)
 	v := matvec(n, jlm.RoleAttnV, kvDim, stored(jlm.RoleAttnVBias)...)
@@ -539,20 +566,20 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	if c.AttnOutGate {
 		att = sigmoidMul(b, "gated", gate, att)
 	}
-	return m.blockRest(b, f, li, x, n, att, preNorm, norm, resid, matvec, stored, has)
+	return m.blockRest(b, f, li, x, n, att, jlm.RoleAttnOut, preNorm, norm, resid, matvec, stored, has)
 }
 
-// blockRest is block li's graph after its attention att: the norm inside the
-// sublayer where stored, the output projection, a norm over it where stored
-// and the residual; then the MLP.
-func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att graph.ValueID,
+// blockRest is block li's graph after its mixer's output att: the norm
+// inside the sublayer where stored, the output projection out, a norm over
+// it where stored and the residual; then the MLP.
+func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att graph.ValueID, out jlm.Role,
 	preNorm func(graph.ValueID, jlm.Role, jlm.Role) graph.ValueID, norm func(graph.ValueID, jlm.Role) graph.ValueID,
 	resid func(graph.ValueID, graph.ValueID) graph.ValueID, matvec func(graph.ValueID, jlm.Role, int, ...jlm.Role) graph.ValueID,
 	stored func(jlm.Role) []jlm.Role, has func(jlm.Role) bool) (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	d, nffn := c.NEmbd, c.NFFNAt(li)
 	att = norm(att, jlm.RoleAttnSubNorm)
-	x2 := resid(x, norm(matvec(att, jlm.RoleAttnOut, d, stored(jlm.RoleAttnOutBias)...), jlm.RolePostAttnNorm))
+	x2 := resid(x, norm(matvec(att, out, d, stored(jlm.RoleAttnOutBias)...), jlm.RolePostAttnNorm))
 	// A parallel block's MLP reads the block's input: through its own norm
 	// where it stores one, through the attention's where the two share one.
 	ffnIn := x2

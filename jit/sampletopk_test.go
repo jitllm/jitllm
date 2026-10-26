@@ -131,6 +131,12 @@ func SampleMismatch(gv []float32, gi []uint32, wv []float32, wi []uint32) int {
 // the inputs and receives every value a kernel writes, each followed by
 // guard words checked after; every other storage is NaN until written.
 func runCPUValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32, planes [3][]uint32) error {
+	return runCPUTables(codes, g, vals, planes, nil)
+}
+
+// runCPUTables is runCPUValues with the step's tables by name, each read
+// and written in place.
+func runCPUTables(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32, planes [3][]uint32, tables map[string][]uint32) error {
 	const guard = 16
 	nan := math.Float32bits(float32(math.NaN()))
 	poison := func(n int) []uint32 {
@@ -182,6 +188,8 @@ func runCPUValues(codes []Code, g *graph.Graph, vals map[graph.ValueID][]uint32,
 				words = store[o.Value]
 			case o.Kind == OperandWeight && o.Region >= 0 && o.Region < 3 && len(planes[o.Region]) > 0:
 				words = planes[o.Region]
+			case o.Kind == OperandTable && len(tables[o.Name]) > 0:
+				words = tables[o.Name]
 			case o.Kind == OperandScratch:
 				if scratch[o] == nil {
 					size := 1 << 16
