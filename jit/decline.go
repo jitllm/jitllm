@@ -56,6 +56,7 @@ const (
 	DeclineNotFormed
 	DeclineISA
 	DeclineUnplaced
+	DeclineExperts
 	NumDeclines
 )
 
@@ -106,6 +107,7 @@ var declineNames = [NumDeclines]string{
 	DeclineTable:         "a table the device does not hold",
 	DeclineNotFormed:     "the composer did not form the block",
 	DeclineUnplaced:      "a block not composed for the device at its placement",
+	DeclineExperts:       "routed experts not held whole on the device (streamed, cached, run on another device or in expert pages)",
 	DeclineISA:           "a CPU the composer's CPU lowering does not emit for (x86-64 below AVX2, FMA and F16C, or arm64)",
 }
 

@@ -111,14 +111,17 @@ type exprSize struct {
 type exprSplit struct {
 	terms map[exprAt]bool
 	whole map[int][]exprSize
+	// unfused is the parts formed with their kernels joined to none.
+	unfused map[int]bool
 }
 
 func newExprSplit() *exprSplit {
-	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}}
+	return &exprSplit{terms: map[exprAt]bool{}, whole: map[int][]exprSize{}, unfused: map[int]bool{}}
 }
 
 // splitRefused forms a map a term the largest expression formed whole in
-// each part of the kernels refused, reporting whether there was one.
+// each part of the kernels refused, or forms a part with none left unfused,
+// reporting whether it changed a part.
 func (sp *exprSplit) splitRefused(err error) bool {
 	if err == nil {
 		return false
@@ -129,11 +132,16 @@ func (sp *exprSplit) splitRefused(err error) bool {
 	}
 	more := false
 	for _, of := range pe.Parts {
+		split := false
 		if ws := sp.whole[of]; len(ws) > 0 {
 			big := slices.MaxFunc(ws, func(a, b exprSize) int { return cmp.Compare(a.nodes, b.nodes) })
-			more = more || !sp.terms[big.at]
+			split = !sp.terms[big.at]
 			sp.terms[big.at] = true
 		}
+		if !split && !sp.unfused[of] {
+			sp.unfused[of], split = true, true
+		}
+		more = more || split
 	}
 	clear(sp.whole)
 	return more

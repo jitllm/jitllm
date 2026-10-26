@@ -147,7 +147,7 @@ const (
 	// OpRowConv is a centred depthwise convolution of In[0] across the
 	// step's live rows: each channel's Taps taps (Weight[0], channel-major)
 	// against the rows Taps/2 before to Taps/2 after, zero past the live
-	// rows -- a bidirectional model's short convolution (LFM2's encoder).
+	// rows -- a bidirectional model's short convolution (an encoder's).
 	OpRowConv
 	// OpPatchify is a picture's patches as rows: In[0] is the picture,
 	// [y][x][channel] over the step's rows, a grid of Span x Span patches

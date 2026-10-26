@@ -193,7 +193,8 @@ func (r *Registry) formRun(f Model, run []PartPlan, first int, s Step) error {
 
 // Kernels is a run's final IR: its parts decomposed and generated, the run
 // passed as one. Where the registers refuse a kernel, the largest expression
-// its part formed as one map is formed a map a term and the run passed again.
+// its part formed as one map is formed a map a term and the run passed again;
+// a part with none left is formed with its kernels joined to none.
 func (r *Registry) Kernels(f Model, run []PartPlan, first int, s Step) ([]*Kernel, error) {
 	prof, ok := r.Profiles[run[0].Device.Kind]
 	if !ok {
@@ -233,7 +234,7 @@ func (r *Registry) generated(f Model, run []PartPlan, first int, s Step, sp *exp
 			if err != nil {
 				return nil, nil, fmt.Errorf("%s: %w", pp.Part, err)
 			}
-			k.Part, k.Of = pp.Part.Kind, first+i
+			k.Part, k.Of, k.Unfused = pp.Part.Kind, first+i, sp.unfused[first+i]
 			ks = append(ks, k)
 		}
 	}

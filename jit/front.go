@@ -211,7 +211,7 @@ func segmentParts(f Model, seg Segment, first, rotBase, picture, picW int) ([]Pa
 	var parts []Part
 	at := func() int { return first + len(parts) }
 	for i, r := range rots {
-		// A model that turns nothing (BERT's) has no table to fill.
+		// A model that turns nothing (absolute positions) has no table to fill.
 		if r.NRot == 0 {
 			continue
 		}

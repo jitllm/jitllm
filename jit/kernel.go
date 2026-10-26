@@ -41,6 +41,9 @@ type Kernel struct {
 	Part      PartKind
 	// Of is the model's part the kernel belongs to, by its index.
 	Of int
+	// Unfused is a kernel of a part the registers refused fused, with no
+	// expression left to split: Fuse joins it to nothing.
+	Unfused bool
 	// Rows is 1 + the node of how many of the leading axis's rows are live;
 	// Clamp, where a pass set it, 1 + the node of the elements a launch
 	// holds its threads to.

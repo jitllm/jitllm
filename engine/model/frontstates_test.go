@@ -82,14 +82,14 @@ func formBlocks(t *testing.T, m *Model, blocks []int) {
 // a q projection of twice the width, each head's query then its gate, and the
 // attention's output multiplied by the sigmoid of the gate before the output
 // projection -- to the ops that say so, and forms them, while its recurrent
-// blocks stay refused by their kind and a mixture's attention blocks by theirs.
+// blocks stay refused by their kind; a mixture's attention blocks are stated too.
 // A model read as ungated is refused, not given a q of the wrong width.
 func TestFrontStatesTheAttentionOutputGate(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		opt  hyOpt
 		attn Uncovered
-	}{{"dense", hyOpt{}, Covered}, {"tiled", hyOpt{tiled: true}, Covered}, {"mixture", hyOpt{moe: true}, UncoveredMixture}} {
+	}{{"dense", hyOpt{}, Covered}, {"tiled", hyOpt{tiled: true}, Covered}, {"mixture", hyOpt{moe: true}, Covered}} {
 		t.Run(c.name, func(t *testing.T) {
 			m := hybridModelOpt(t, c.opt)
 			var stated []int
@@ -147,7 +147,12 @@ func checkOutputGate(t *testing.T, m *Model, li int) {
 	if q.Weight[0].Rows != 2*qdim {
 		t.Fatalf("block %d: the q projection is %d rows, want the double width %d", li, q.Weight[0].Rows, 2*qdim)
 	}
-	halves := opsOf(g, graph.OpSlice)
+	var halves []graph.Op
+	for _, s := range opsOf(g, graph.OpSlice) {
+		if s.In[0] == q.Out[0] {
+			halves = append(halves, s)
+		}
+	}
 	if len(halves) != 2 {
 		t.Fatalf("block %d: %d slices of the projection, want its query and its gate", li, len(halves))
 	}
@@ -169,7 +174,7 @@ func checkOutputGate(t *testing.T, m *Model, li int) {
 	}
 	var gated []graph.Op
 	for _, o := range opsOf(g, graph.OpExpr) {
-		if isOutGate(o) {
+		if isOutGate(o) && slices.ContainsFunc(halves, func(s graph.Op) bool { return s.Out[0] == o.In[0] }) {
 			gated = append(gated, o)
 		}
 	}

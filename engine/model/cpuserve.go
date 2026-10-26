@@ -466,6 +466,10 @@ func (s *State) cpuWhy(li int) jit.Decline {
 		return jit.DeclineNoGraph
 	case len(g.In) != 1 || len(g.Out) != 1:
 		return jit.DeclineFeeds
+	case c.MoEAt(li):
+		// The host keeps every expert in a page of its own: there is no
+		// bank whole for the graph's expert matvecs to read.
+		return jit.DeclineExperts
 	case c.LayerKind(li).Recurrent():
 		return jit.DeclineRecurrent
 	case pg.latent:

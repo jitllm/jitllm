@@ -38,6 +38,12 @@ func (f Fuse) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		for pi := ci - 1; pi >= 0; pi-- {
 			p := out[pi]
 			var m *Kernel
+			if p.Unfused || c.Unfused {
+				if conflicts(p, c) {
+					break
+				}
+				continue
+			}
 			if v, st, pl, ok := f.joinsAlongside(p, c); ok {
 				m = mergeAlongside(p, c, v, st, pl)
 			} else if v, st, ok := f.joinsThen(p, c, out); ok {

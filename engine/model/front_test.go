@@ -102,8 +102,7 @@ func TestFrontStatesTheModelAsOps(t *testing.T) {
 		file string
 		want Uncovered
 	}{
-		{"olmoe-1b-7b-0924-instruct-Q4_K_M.gguf", UncoveredMixture},
-		{"synth-dbrx.gguf", UncoveredMixture},
+		{"synth-phimoe.gguf", UncoveredRouterScore},
 		{"synth-hunyuanvl.gguf", UncoveredRopeAxes},
 	} {
 		t.Run(c.file, func(t *testing.T) {

@@ -74,7 +74,7 @@ func (r *Registry) form(req Request) ([]Code, error) {
 			if err != nil {
 				return nil, fmt.Errorf("jit: cannot form %s: %w", slice(req.Graph), err)
 			}
-			k.Part = req.Part
+			k.Part, k.Unfused = req.Part, sp.unfused[k.Of]
 			ks = append(ks, k)
 		}
 		ks, err = prof.run(ks, req.Device)

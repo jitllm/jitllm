@@ -90,28 +90,29 @@ func decomposeTopKRanked(o graph.Op, c *Context) ([]Prim, error) {
 		return nil, fmt.Errorf("a top %d of groups of %d", K, S)
 	}
 	U, I, F := ir.U32, ir.I32, ir.F32
-	R := c.Step.Rows
+	gs := grouped{c.Step.Rows, G, S}
 	in := c.value(o.In[0])
 	rank := Operand{Kind: OperandScratch, Name: c.value(o.Out[1]).Name + ".rank", Elem: I, Temp: true}
 
 	// The element at place s: its index, and its value, alone of the group.
-	at := func(x *exprs, val func(r, g, i int) int, t ir.Type, zero int) {
-		r, g, s, i := x.coord(0), x.coord(1), x.coord(2), x.coord(3)
-		k := x.at(1, []int{R, G, S}, r, g, i)
+	at := func(x *exprs, val func(r, g, i int) int, t ir.Type, zero func() int) {
+		r, g, si := gs.coords(x, 2)
+		s, i := si[0], si[1]
+		k := gs.at(x, 1, r, g, i)
 		ks := x.un(OpBitcast, I, s)
-		x.sel(t, x.op(OpLess, ir.Pred, k, ks), zero, x.sel(t, x.op(OpLess, ir.Pred, k, x.op(OpAdd, I, ks, x.i(1))), val(r, g, i), zero))
+		x.sel(t, x.op(OpLess, ir.Pred, k, ks), zero(), x.sel(t, x.op(OpLess, ir.Pred, k, x.op(OpAdd, I, ks, x.i(1))), val(r, g, i), zero()))
 	}
 	var ix exprs
-	at(&ix, func(_, _, i int) int { return i }, U, ix.u(0))
+	at(&ix, func(_, _, i int) int { return i }, U, func() int { return ix.u(0) })
 	var vx exprs
-	at(&vx, func(r, g, i int) int { return vx.at(0, []int{R, G, S}, r, g, i) }, F, vx.f(0))
+	at(&vx, func(r, g, i int) int { return gs.at(&vx, 0, r, g, i) }, F, func() int { return vx.f(0) })
 
 	sel := c.value(o.Out[0])
 	sel.Elem = U
 	return []Prim{
 		rankPrim(c, in, rank, G, S),
-		{Kind: PrimReduce, Shape: []int{R, G, K, S}, In: []Operand{in, rank}, Out: sel, Combine: OpAdd, Type: U, Expr: ix.e},
-		{Kind: PrimReduce, Shape: []int{R, G, K, S}, In: []Operand{in, rank}, Out: c.value(o.Out[1]), Combine: OpAdd, Expr: vx.e},
+		{Kind: PrimReduce, Shape: gs.shape(K, S), In: []Operand{in, rank}, Out: sel, Combine: OpAdd, Type: U, Expr: ix.e},
+		{Kind: PrimReduce, Shape: gs.shape(K, S), In: []Operand{in, rank}, Out: c.value(o.Out[1]), Combine: OpAdd, Expr: vx.e},
 	}, nil
 }
 
@@ -209,7 +210,9 @@ func expertDecoded(o graph.Op, c *Context, wo Operand, out Operand) (Prim, error
 	in := []Operand{c.value(o.In[0])}
 	facts := Facts{Extents: map[int]int{0: R * P * K}}
 	sel := sheetAt(o, c, &x, &in, &facts, 1, r, j)
-	xv := x.at(0, []int{R, P, K}, r, j, col)
+	// The input read as the row its producer writes and its other readers
+	// see, pair j's K from j*K.
+	xv := x.at(0, []int{R, P * K}, r, x.op(OpAdd, U, x.op(OpMul, U, j, x.u(uint32(K))), col))
 	var wv int
 	if jlm.Verbatim(wo.Format) {
 		v, err := weightElement(&x, wo, E*rows, K, &in, &facts, x.op(OpAdd, U, x.op(OpMul, U, sel, x.u(uint32(rows))), row), col)
@@ -324,13 +327,50 @@ func rankPrim(c *Context, in, out Operand, G, S int) Prim {
 		I = ir.I32
 	}
 	one, zero := func(x *exprs) int { return x.add(Expr{Op: OpConst, Type: I, Imm: 1}) }, func(x *exprs) int { return x.add(Expr{Op: OpConst, Type: I}) }
-	R := c.Step.Rows
+	gs := grouped{c.Step.Rows, G, S}
 	var rk exprs
-	r, g, i, j := rk.coord(0), rk.coord(1), rk.coord(2), rk.coord(3)
-	xi, xj := rk.at(0, []int{R, G, S}, r, g, i), rk.at(0, []int{R, G, S}, r, g, j)
+	r, g, ij := gs.coords(&rk, 2)
+	i, j := ij[0], ij[1]
+	xi, xj := gs.at(&rk, 0, r, g, i), gs.at(&rk, 0, r, g, j)
 	before := rk.sel(I, rk.op(OpLess, ir.Pred, j, i), one(&rk), zero(&rk))
 	rk.sel(I, rk.op(OpLess, ir.Pred, xi, xj), one(&rk), rk.sel(I, rk.op(OpLess, ir.Pred, xj, xi), zero(&rk), before))
-	return Prim{Kind: PrimReduce, Shape: []int{R, G, S, S}, In: []Operand{in}, Out: out, Combine: OpAdd, Type: I, Expr: rk.e}
+	return Prim{Kind: PrimReduce, Shape: gs.shape(S, S), In: []Operand{in}, Out: out, Combine: OpAdd, Type: I, Expr: rk.e}
+}
+
+// grouped is a row seen as G groups of S, the group axis left out where
+// there is one group: a value of one group keeps the [rows][width] its
+// producer and its other readers see it at.
+type grouped struct{ R, G, S int }
+
+// shape is the rows, the group where there are several, then more.
+func (g grouped) shape(more ...int) []int {
+	if g.G == 1 {
+		return append([]int{g.R}, more...)
+	}
+	return append([]int{g.R, g.G}, more...)
+}
+
+// coords is a primitive of g.shape's coordinates: the row's, the group's (a
+// constant 0 where there is one group), and the n after them.
+func (g grouped) coords(x *exprs, n int) (r, grp int, rest []int) {
+	r, at := x.coord(0), 1
+	if g.G == 1 {
+		grp = x.u(0)
+	} else {
+		grp, at = x.coord(1), 2
+	}
+	for k := range n {
+		rest = append(rest, x.coord(at+k))
+	}
+	return r, grp, rest
+}
+
+// at reads operand j, a row of g's groups, at element i of group grp.
+func (g grouped) at(x *exprs, j, r, grp, i int) int {
+	if g.G == 1 {
+		return x.at(j, []int{g.R, g.S}, r, i)
+	}
+	return x.at(j, []int{g.R, g.G, g.S}, r, grp, i)
 }
 
 // decomposeClamp is the input held to [-Bound, Bound], or to the bounds

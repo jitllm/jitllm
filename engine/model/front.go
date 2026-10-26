@@ -29,7 +29,8 @@ type Uncovered uint8
 const (
 	Covered Uncovered = iota
 	UncoveredKind
-	UncoveredMixture
+	UncoveredRouterScore
+	UncoveredExperts
 	UncoveredGeometry
 	UncoveredSelect
 	UncoveredStreams
@@ -55,7 +56,9 @@ const (
 var uncoveredNames = [numUncovered]string{
 	Covered:              "covered",
 	UncoveredKind:        "a layer that is not an attention block (a recurrent or state-space mixer)",
-	UncoveredMixture:     "a mixture of experts",
+	UncoveredRouterScore: "a router whose score the container does not state, or whose weights are not the scores it selects",
+	UncoveredExperts: "routed experts weighted at their input, beside a dense MLP, in a latent of their own, " +
+		"scaled one by one or stored one matrix each",
 	UncoveredGeometry:    "a layer of its own head width, head count or rotary width",
 	UncoveredSelect:      "an attention indexer or sparse key selection",
 	UncoveredStreams:     "several residual streams",
@@ -292,8 +295,6 @@ func (m *Model) uncovered(li int) Uncovered {
 	switch {
 	case c.LayerKind(li) != jlm.LayerFullAttn:
 		return UncoveredKind
-	case c.MoEAt(li):
-		return UncoveredMixture
 	case hd != c.HeadDim || c.NKVHeadAt(li) != c.NKVHead || c.NRotAt(li) != c.NRot && !(m.ropeSWA != nil && c.SWA(li)) ||
 		!c.MLA() && c.HeadDimV != hd:
 		return UncoveredGeometry
@@ -325,6 +326,11 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredNGram
 	case m.container.Config().ActAt(li) == nil:
 		return UncoveredAct
+	case !c.MoEAt(li):
+	case len(m.container.Config().RouterScore.Terms) == 0:
+		return UncoveredRouterScore
+	case c.ExpertWeightIn || c.DenseMoE || c.ExpertLatent != 0 || m.layers[li].expScale != nil:
+		return UncoveredExperts
 	}
 	return Covered
 }
@@ -388,7 +394,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	f, perExpert := m.inventory(int32(li))
 	if perExpert {
-		return nil, UncoveredMixture, nil
+		return nil, UncoveredExperts, nil
 	}
 	has := func(r jlm.Role) bool {
 		_, ok := f.Inventory[r]
@@ -516,10 +522,7 @@ func (m *Model) blockGraph(li int) (*graph.Graph, Uncovered, error) {
 	}
 	att := b.Attend(q, hist, a, stored(jlm.RoleAttnSinks)...)
 	if c.AttnOutGate {
-		att = b.Expr("gated", qdim, []graph.Term{
-			{Fn: graph.MapSigmoid, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}}},
-			{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 0}, {Kind: graph.ArgIn, Index: 1}}},
-		}, nil, gate, att)
+		att = sigmoidMul(b, "gated", gate, att)
 	}
 	return m.blockRest(b, f, li, x, n, att, preNorm, norm, resid, matvec, stored, has)
 }
@@ -545,18 +548,27 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	if _, own := f.Inventory[jlm.RoleFFNNorm]; c.Parallel && !own {
 		n2 = n
 	}
-	var acts []graph.ValueID
-	if has(jlm.RoleFFNGate) {
-		acts = append(acts, matvec(n2, jlm.RoleFFNGate, nffn))
+	var ffn graph.ValueID
+	if c.MoEAt(li) {
+		var why Uncovered
+		var err error
+		if ffn, why, err = m.mixture(b, f, li, n2, has, stored); err != nil {
+			return nil, why, err
+		}
+	} else {
+		var acts []graph.ValueID
+		if has(jlm.RoleFFNGate) {
+			acts = append(acts, matvec(n2, jlm.RoleFFNGate, nffn))
+		}
+		acts = append(acts, matvec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...))
+		h, err := b.Stated("act", m.container.Config().ActAt(li), acts, nffn, f)
+		if err != nil {
+			return nil, UncoveredAct, fmt.Errorf("the block's stated activation: %w", err)
+		}
+		h = norm(h, jlm.RoleFFNSubNorm)
+		ffn = matvec(h, jlm.RoleFFNDown, d, stored(jlm.RoleFFNDownBias)...)
 	}
-	acts = append(acts, matvec(n2, jlm.RoleFFNUp, nffn, stored(jlm.RoleFFNUpBias)...))
-	h, err := b.Stated("act", m.container.Config().ActAt(li), acts, nffn, f)
-	if err != nil {
-		return nil, UncoveredAct, fmt.Errorf("the block's stated activation: %w", err)
-	}
-	h = norm(h, jlm.RoleFFNSubNorm)
-	down := matvec(h, jlm.RoleFFNDown, d, stored(jlm.RoleFFNDownBias)...)
-	b.Out(resid(x2, norm(down, jlm.RolePostFFNNorm)))
+	b.Out(resid(x2, norm(ffn, jlm.RolePostFFNNorm)))
 	if err := graph.Verify(b.G, f); err != nil {
 		return nil, UncoveredUnverified, fmt.Errorf("the block's graph does not verify: %w", err)
 	}
@@ -564,6 +576,121 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		return nil, UncoveredUnbound, fmt.Errorf("the container stores %v for the block, which its graph does not bind", u)
 	}
 	return b.G, Covered, nil
+}
+
+// mixture is block li's mixture of experts over its normed row n: the
+// router's logits (its matrix, with its stored bias), each expert's score
+// the expression the container states over them; the selection ranks the
+// scores plus the stored selection bias, within the best groups where the
+// container states groups (a group scored by the sum of its best two, or
+// its one, the rest of the experts out of reach); each selected expert's
+// weight its unbiased score, renormalised by the weights' sum unless the
+// container says not, and times the routed scale. Each selected expert's
+// gate and up from its sheet of the banks, with their stored biases, the
+// block's stated activation, and its down; the downs summed at their
+// weights. Then the shared expert where the block stores one, scaled by the
+// sigmoid of its gate's logit where it stores a gate.
+func (m *Model) mixture(b *graph.Builder, f graph.Facts, li int, n graph.ValueID, has func(jlm.Role) bool,
+	stored func(jlm.Role) []jlm.Role) (graph.ValueID, Uncovered, error) {
+	c := m.Cfg
+	d, E, K := c.NEmbd, c.NExpert, c.NExpertUsed
+	up, ok := f.Inventory[jlm.RoleExpUpBank]
+	if !ok || up.Sheets != E || E < 1 || K < 1 || K > E {
+		return 0, UncoveredUnverified, fmt.Errorf("a mixture choosing %d of %d experts over a bank of %d sheets", K, E, up.Sheets)
+	}
+	F := up.Rows
+	mapc := func(name string, fn graph.MapFn, k float64, width int, w []graph.Binding, in ...graph.ValueID) graph.ValueID {
+		return b.Emit(graph.OpMap, in, []graph.Result{{Name: name, Width: width}}, w, graph.Attrs{Fn: fn, Const: k}, nil, nil)[0]
+	}
+	reduce := func(name string, x graph.ValueID, span, width int) graph.ValueID {
+		return b.Emit(graph.OpReduce, []graph.ValueID{x}, []graph.Result{{Name: name, Width: width}}, nil,
+			graph.Attrs{Fn: graph.MapAdd, Span: span}, nil, nil)[0]
+	}
+	topk := func(name string, x graph.ValueID, k, span, width int) (sel, best graph.ValueID) {
+		o := b.Emit(graph.OpTopK, []graph.ValueID{x}, []graph.Result{{Name: name + ".sel", Width: width, Elem: graph.ElemU32},
+			{Name: name + ".best", Width: width}}, nil, graph.Attrs{TopK: k, Span: span}, nil, nil)
+		return o[0], o[1]
+	}
+	// stored1 binds the block's vector r at the shape it is stored.
+	stored1 := func(r jlm.Role) []graph.Binding {
+		s := f.Inventory[r]
+		return []graph.Binding{{Role: r, K: s.K, Rows: s.Rows}}
+	}
+	logits := b.MatVec(n, jlm.RoleRouter, E, stored(jlm.RoleRouterBias)...)
+	score, err := b.Stated("router.score", &m.container.Config().RouterScore, []graph.ValueID{logits}, E, f)
+	if err != nil {
+		return 0, UncoveredRouterScore, fmt.Errorf("the router's stated score: %w", err)
+	}
+	choose := score
+	if has(jlm.RoleExpProbsB) {
+		choose = mapc("router.biased", graph.MapAdd, 0, E, stored1(jlm.RoleExpProbsB), score)
+	}
+	if g, kept := c.NExpertGroup, c.NExpertGroupUsed; g > 1 {
+		if E%g != 0 || kept < 1 || kept > g {
+			return 0, UncoveredUnverified, fmt.Errorf("%d experts in %d groups, %d kept", E, g, kept)
+		}
+		take := min(2, E/g)
+		_, best := topk("router.group", choose, take, E/g, g*take)
+		rank := b.Emit(graph.OpRank, []graph.ValueID{reduce("router.group.score", best, take, g)},
+			[]graph.Result{{Name: "router.group.rank", Width: g, Elem: graph.ElemU32}}, nil, graph.Attrs{}, nil, nil)[0]
+		choose = mapc("router.kept", graph.MapWhere, math.Inf(-1), E, nil, mapc("router.group.kept", graph.MapLess, float64(kept), g, nil, rank), choose)
+	}
+	sel, _ := topk("router", choose, K, 0, K)
+	w := b.Emit(graph.OpTake, []graph.ValueID{score, sel}, []graph.Result{{Name: "router.w", Width: K}}, nil, graph.Attrs{}, nil, nil)[0]
+	if !c.NoExpertNorm {
+		w = mapc("router.wn", graph.MapDiv, 0, K, nil, w, mapc("router.sum", graph.MapAdd, 1e-20, 1, nil, reduce("router.wsum", w, 0, 1)))
+	}
+	if s := c.ExpertScale; s != 0 && s != 1 {
+		w = mapc("router.scaled", graph.MapMul, s, K, nil, w)
+	}
+	bank := func(name string, x graph.ValueID, r, bias jlm.Role, k, rows int) graph.ValueID {
+		ws := []graph.Binding{{Role: r, K: k, Rows: rows, Sheets: E}}
+		if has(bias) {
+			ws = append(ws, graph.Binding{Role: bias, K: rows, Rows: E})
+		}
+		return b.Emit(graph.OpExpertMatVec, []graph.ValueID{x, sel}, []graph.Result{{Name: name, Width: K * rows}}, ws,
+			graph.Attrs{}, nil, nil)[0]
+	}
+	in := b.Emit(graph.OpTile, []graph.ValueID{n}, []graph.Result{{Name: "experts.in", Width: K * d}}, nil, graph.Attrs{Span: d}, nil, nil)[0]
+	var acts []graph.ValueID
+	if has(jlm.RoleExpGateBank) {
+		acts = append(acts, bank("experts.gate", in, jlm.RoleExpGateBank, jlm.RoleExpGateBias, d, F))
+	}
+	acts = append(acts, bank("experts.up", in, jlm.RoleExpUpBank, jlm.RoleExpUpBias, d, F))
+	h, err := b.Stated("experts.act", m.container.Config().ActAt(li), acts, K*F, f)
+	if err != nil {
+		return 0, UncoveredAct, fmt.Errorf("the experts' stated activation: %w", err)
+	}
+	down := mapc("experts.weighted", graph.MapMul, 0, K*d, nil, bank("experts.down", h, jlm.RoleExpDownBank, jlm.RoleExpDownBias, F, d), w)
+	var out graph.ValueID
+	for j := range K {
+		y := b.Emit(graph.OpSlice, []graph.ValueID{down}, []graph.Result{{Name: "experts.out", Width: d}}, nil,
+			graph.Attrs{Offset: j * d, Width: d}, nil, nil)[0]
+		if j == 0 {
+			out = y
+		} else {
+			out = b.Add(out, y)
+		}
+	}
+	sh, ok := f.Inventory[jlm.RoleShExpUp]
+	if !ok {
+		return out, Covered, nil
+	}
+	var sa []graph.ValueID
+	if has(jlm.RoleShExpGate) {
+		sa = append(sa, b.MatVec(n, jlm.RoleShExpGate, sh.Rows))
+	}
+	sa = append(sa, b.MatVec(n, jlm.RoleShExpUp, sh.Rows))
+	sh1, err := b.Stated("shared.act", m.container.Config().ActAt(li), sa, sh.Rows, f)
+	if err != nil {
+		return 0, UncoveredAct, fmt.Errorf("the shared expert's stated activation: %w", err)
+	}
+	so := b.MatVec(sh1, jlm.RoleShExpDown, d)
+	if has(jlm.RoleShRouter) {
+		logit := reduce("shared.logit", mapc("shared.gate", graph.MapMul, 0, d, stored1(jlm.RoleShRouter), n), 0, 1)
+		so = sigmoidMul(b, "shared.gated", logit, so)
+	}
+	return b.Add(out, so), Covered, nil
 }
 
 // latentAttention is the attention of a block that projects its history
@@ -627,12 +754,17 @@ func (m *Model) latentAttention(b *graph.Builder, li int, n, q graph.ValueID, ha
 	att := b.Attend(qrow, hist, a, stored(jlm.RoleAttnSinks)...)
 	o := sheets(slice(att, "att.latent", row, 0, lat, nh*lat), "att.v", jlm.RoleAttnVB, lat, hdv)
 	if has(jlm.RoleAttnGate) {
-		o = b.Expr("att.gated", nh*hdv, []graph.Term{
-			{Fn: graph.MapSigmoid, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}}},
-			{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 0}, {Kind: graph.ArgIn, Index: 1}}},
-		}, nil, matvec(n, jlm.RoleAttnGate, nh*hdv), o)
+		o = sigmoidMul(b, "att.gated", matvec(n, jlm.RoleAttnGate, nh*hdv), o)
 	}
 	return o, nil
+}
+
+// sigmoidMul is sigma(gate) * x, gate as wide as x or a scalar over it.
+func sigmoidMul(b *graph.Builder, name string, gate, x graph.ValueID) graph.ValueID {
+	return b.Expr(name, b.G.Values[x].Width, []graph.Term{
+		{Fn: graph.MapSigmoid, Args: [3]graph.Arg{{Kind: graph.ArgIn, Index: 0}}},
+		{Fn: graph.MapMul, Args: [3]graph.Arg{{Kind: graph.ArgTerm, Index: 0}, {Kind: graph.ArgIn, Index: 1}}},
+	}, nil, gate, x)
 }
 
 // mapRow is one OpMap of in by a into a row of width, binding w.
