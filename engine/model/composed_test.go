@@ -147,10 +147,10 @@ func composedDecodeWith(t *testing.T, m *Model, dev string, ids, toks []int32, p
 // servedModels is every checkpoint whose blocks and head the front end states
 // as ops and that one card of 16 GiB holds: dense models of the llama, qwen2,
 // qwen3, gemma, gemma2, gemma3, olmo2, exaone4, arcee, granite, hunyuan,
-// phi3 and falcon classes, the dense latent attention fixtures (DeepSeek-V3's
-// block at f32, and under YaRN), and the text models of qwen2vl and qwen3vl. Those
-// state their rotaries over several position axes, which the served table
-// turns each row by as the State states them; on a text row every axis's
+// phi3, falcon and apertus classes, the dense latent attention fixtures
+// (DeepSeek-V3's block at f32, and under YaRN), and the text models of qwen2vl
+// and qwen3vl. Those state their rotaries over several position axes, which
+// the served table turns each row by as the State states them; on a text row every axis's
 // position is the same, so serving them here says the blocks and the table
 // are served at text positions. TestMRopeMatchesTransformers decodes after a
 // picture, where the rotary positions leave the cache's.
@@ -163,7 +163,8 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 	"gemma-3-1b-it-Q4_K_M.gguf", "gemma-3-4b-it-Q4_K_M.gguf", "gemma-2-2b-it-Q4_K_M.gguf",
 	"falcon/falcon-7b-instruct.Q4_K_M.gguf",
 	"Qwen2-VL-2B-Instruct-Q4_K_M.gguf", "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf", "Qwen3VL-2B-Instruct-Q4_K_M.gguf",
-	"bitnet-b1.58-2B-4T-i2_s.gguf", "synth-deepseek-dense", "synth-deepseek-yarn.gguf", "synth-deepseek-yarn-af.gguf"}
+	"bitnet-b1.58-2B-4T-i2_s.gguf", "synth-deepseek-dense", "synth-deepseek-yarn.gguf", "synth-deepseek-yarn-af.gguf",
+	"synth-apertus.gguf"}
 
 // formedModels is what the front end states and the serving gate does not
 // run: a model the tier cannot place (stories260K's 172-wide rows, which its
@@ -185,7 +186,7 @@ var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1
 	"synth-starcoder2.gguf", "synth-falcon.gguf", "synth-falcon40.gguf", "synth-nemotron.gguf",
 	"synth-commandr.gguf", "synth-cohere2.gguf",
 	"synth-qwen2vl.gguf", "synth-qwen25vl.gguf", "synth-qwen3vl.gguf",
-	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-apertus.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf"}
+	"Qwen3-VL-2B-Instruct-f16.gguf", "synth-bitnet-f16.gguf", "synth-bitnet-i2s.gguf"}
 
 // declinesOf is every decline the tier counted, the head's and the blocks',
 // by name (tier.DeclineName).
