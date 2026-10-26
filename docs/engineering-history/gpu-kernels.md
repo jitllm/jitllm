@@ -8201,19 +8201,34 @@ row where the composer's reads two.
   of their own). `OpActMul`, `OpAct`, `graph.Act`, the named switch and the
   front end's xIELU are gone; Gemma 3n's gaussian top-k is a statement too,
   so `UncoveredSparseAct` is gone, and `UncoveredAct` now names a container
-  that states no activation (one written before the tail). A CPU map holds 32
-  lowered nodes (`Profile.MapNodes`): the gated SiLU is 12, GELU 28 and bind
-  as one map, xIELU's 51 do not fit the sixteen vector registers and form a
-  map a term, as its maps did before. The family-name counter over jit/,
-  engine/graph and front.go went from 1 file to 0. `convert`'s
+  that states no activation (one written before the tail); `jitllm upgrade`
+  states it from the container's own config and tensors (`jlm.Restate` with
+  `convert.StateStored`), byte for byte the container a fresh conversion
+  writes (`convert.TestRestatedIsAFreshConversion`; containers the converter
+  wrote before the tail, of stories15M, synth-nemotron, synth-apertus and
+  synth-gemma3n, upgrade to their fresh conversion but for the 20 bytes of
+  the writer's name in the fingerprint). An expression forms one map; where the
+  register binding refuses a kernel for pressure (`jit.ErrRegisterPressure`,
+  `PressureError` naming the parts), the largest expression formed whole in
+  that part is formed a map a term and the run passed again, at compose time:
+  xIELU binds whole on one element and as nine maps over a vector loop. Its
+  whole map exposed an ordering bug: a twin's reader was emitted with a float
+  zero it reads left out of the sequence (`beforeShare` counted every
+  constant as made), so the lowering found "node 22 (const) has no register";
+  a constant counts as made only where no entry makes it. The family-name
+  counter over jit/, engine/graph and front.go (names of families and of
+  activations, outside comments) went from 4 files to 0. `convert`'s
   `TestStatedActivationsAreTheReferences` holds nine statements (SiLU, GELU
   tanh and erf, squared ReLU, xIELU, the gaussian top-k, both clamped
   SwiGLUs, situ) to their references and tells every moved constant and
-  swapped select apart; the composed C6 arms move each stated activation
-  (a constant, a select's branches) where only the composer reads it: a
-  constant moved by a quarter read 7e-4 to 7e-3 of NMSE on every classic
-  fixture but synth-nemotron, whose squared ReLU's max(x, 0.25) read 4.8e-5,
-  under the arm's 1e-4, so the violation moves it by one. `TestFrontStatesTheModelAsOps` passes its
-  67 models on the V100, `TestDecodeDoesNotAllocate` on Llama both builds,
-  and the escape compare over the touched packages reads 360 moved-to-heap
-  lines on both sides.
+  swapped select apart. The violations that swap a block's activation
+  ("GELU for relu2", "SiLU for relu2") set it in the model's config and in
+  the container's statement through the converter (`actSwap`), so the
+  composed arms see them: 0.713 and 0.717 of NMSE on synth-nemotron, both
+  builds. A stated constant moved by one reads 2.35e-3
+  (falcon), 3.54e-3 (starcoder), 5.27e-3 (falcon40), 5.65e-3 (phi2), 9.79e-3
+  (starcoder2), 1.31e-2 (nemotron), 6.74e-2 (commandr), 0.134 (stablelm),
+  0.140 (stablelm-par) and 0.169 (cohere2) in `TestC6ServesComposed` on a
+  V100's CUDA and Vulkan, and 2.38e-2 to 0.153 on the dense fixtures in
+  `TestC6OnEveryDevice` on its Vulkan, against a
+  bound of 1e-4 and a hundred times a clean arm's 7e-12 at most.

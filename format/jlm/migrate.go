@@ -229,6 +229,29 @@ func migrate29(path string) error {
 	return f.publish(path, src, 30)
 }
 
+// Restate rewrites the current container at path with the config state
+// leaves, every tensor's planes carried as they are: what a container
+// written before a config field an older reader drops was stated is brought
+// forward by, with no version word to change. A container state reports
+// unchanged is left as it is.
+func Restate(path string, state func(f *File, c *Config) (bool, error)) (bool, error) {
+	f, err := openAt(path, Version)
+	if err != nil {
+		return false, err
+	}
+	c := *f.cfg
+	changed, err := state(f, &c)
+	if err != nil || !changed {
+		f.Close()
+		return false, err
+	}
+	src := &Source{Config: &c, Vision: f.vis, Vocab: f.voc}
+	for i := range f.tab {
+		src.Tensors = append(src.Tensors, f.carried(&f.tab[i]))
+	}
+	return true, f.publish(path, src, Version)
+}
+
 // carried is entry e as Write takes it back: its stored planes, read when the
 // writer reaches it, placed without packing.
 func (f *File) carried(e *Entry) Tensor {
