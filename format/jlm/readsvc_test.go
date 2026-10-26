@@ -333,8 +333,16 @@ func TestSpeculativeErrorsDoNotFailATokenButDemandedOnesDo(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("a demand joined to a failed guess hung")
 	}
-	if _, failed := fx.c.SpeculationStats(); failed != 1 {
-		t.Fatalf("%d failed guesses counted, want 1", failed)
+	// The worker counts its failure once the read has returned, after the read
+	// woke the demand that joined it.
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(time.Millisecond) {
+		_, failed := fx.c.SpeculationStats()
+		if failed == 1 {
+			break
+		}
+		if failed > 1 || time.Now().After(deadline) {
+			t.Fatalf("%d failed guesses counted, want 1", failed)
+		}
 	}
 	// The failure did not poison the page or the service.
 	fail.Store(false)
