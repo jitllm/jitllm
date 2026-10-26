@@ -56,8 +56,14 @@ func Must(t testing.TB, path string) {
 func reconvert(path string) error {
 	c, openErr := jlm.Open(path)
 	if openErr == nil {
+		stated := len(c.Config().Acts) > 0
 		c.Close()
-		return nil
+		if stated {
+			return nil
+		}
+		// Written before the converter stated activations: it opens, and the
+		// front end refuses its blocks.
+		openErr = fmt.Errorf("it states no activations")
 	}
 	if _, err := os.Stat(path); err != nil {
 		return nil

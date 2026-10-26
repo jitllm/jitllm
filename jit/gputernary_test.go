@@ -334,7 +334,7 @@ func TestComposedGPUQuantMaps(t *testing.T) {
 					b := graph.New()
 					x := b.In("x", len(xs))
 					b.Out(b.Emit(graph.OpMap, []graph.ValueID{x}, []graph.Result{{Name: "y", Width: len(xs)}}, nil,
-						graph.Attrs{Fn: m.fn, Const: m.k}, nil, nil)[0])
+						graph.Attrs{Fn: m.fn, Const: m.k, Exact: true}, nil, nil)[0])
 					_, codes, err := jit.Default().Form(jit.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{},
 						Step: jit.Step{Rows: 1, Page: 64, Keys: 1}, Device: dv})
 					if err != nil {
