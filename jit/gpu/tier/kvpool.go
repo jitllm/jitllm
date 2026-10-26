@@ -81,8 +81,12 @@ type kvLayerPool struct {
 	// sh is the layer's pages the prefix cache names (kvshare.go).
 	sh sharedIDs
 	// floor is the fewest pages a shrink leaves: the dummy and a page for each
-	// session attached to the layer (its working set).
+	// session attached to the layer (its working set), or ctx pages for each
+	// where the layer holds its context.
 	floor int
+	// ctx is the pages a session's context takes in a layer that holds it on
+	// the card (pagedLayer), 0 in one that grows as sequences write.
+	ctx int
 	// home holds sequence s's evicted pages at home, page j's K words then its
 	// V words, in the device's layout (kvevict.go); owned[s][j] is 0 for each.
 	home map[seqID][][]float32
