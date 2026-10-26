@@ -1524,7 +1524,7 @@ func (g *devTier) declineTwins(l *layer, li int, bs *blockScratch, why partDecli
 		}
 		if _, ok := g.batchMV(*m, bs.rows, bs.tok); !ok {
 			return fmt.Errorf("tier: block %d's prompt declines (%s) and has no batched twin at %d rows",
-				li, partDeclineNames[why], bs.rows)
+				li, why, bs.rows)
 		}
 	}
 	g.fusedTwins(bs, l)
