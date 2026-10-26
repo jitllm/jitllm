@@ -8461,15 +8461,23 @@ row where the composer's reads two.
   592-row batch, the move and the prompts after it compose, compile and
   build nothing. Its violation (a form per chunk width) places 55 forms
   (683 kernels) and 16 scratches and builds a scratch at a 5-token prompt.
-  Open: TestABatchLeavesAnotherSessionAlone's composed tight arm, where B
-  keeps none of 16 blocks: the budget it derives sits 320 KB under what is
-  charged once A has decoded, and the composed step's room check
-  (stepRoom) refuses at every relocation. And a regression: against the
-  tree before the capacity forms (V100 card 3, CUDA, jitllmcomposed, three
-  interleaved rounds, `jitllm speed`), tg128 holds at 190-192 tok/s and pp64
-  at about 4.6k, but pp512 falls from about 15.0k to 12.6k tok/s, pp1024
-  from 11.8k to 8.6k, pp4096 from 14.5k to 5.85k, and the cold placement
-  (attach) grows from 3.97 s to 5.5 s.
+  The tight arm of TestABatchLeavesAnotherSessionAlone, where B kept none
+  of 16 blocks, asked the step's room before the batch's pages were
+  reserved, and the allocator's rounding then carried the card 327,680
+  bytes past its budget; asking after the reservation keeps B 3 of 16 (4 of
+  4 runs failed before, 4 of 4 pass after). The composed buffers had grown
+  with the key bound: a binding stayed written after Stage moved the
+  attention's per-key temporaries into workgroup memory (517 MB at 256 rows
+  over 3328 keys, 13.6 MB now), a key bound of 2048 or less never split its
+  range, and the split and work-fused attention launched every reserved row;
+  the 4 GB card now reserves 512 rows. Prefill against the tree before the
+  capacity forms holds (V100 card 7, CUDA, Llama-3.2-1B Q4_K_M, tuning off,
+  20 rounds interleaved, A/A 1.004): pp512 1.001, pp1024 0.984 (the A/A
+  0.975 at an IQR/median of 0.074), pp4096 0.999, Qwen3-1.7B pp4096 0.999.
+  A fall from 14.5k to 5.85k tok/s at pp4096 read in three rounds came from
+  a binary built before the capacity forms' last commit, whose prompt
+  attention ran another kernel (flashkvpaged, 1.40 s over three prompts,
+  against flashprefill70paged's 190 ms); it does not reproduce.
 - The CPU device serves rows. A block placed on the CPU is composed twice
   at its placement, once: decode's one-row form and a form at a capacity of
   64 rows (cpuRowsCap), whose calls run the rows the call states. The
