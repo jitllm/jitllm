@@ -68,7 +68,7 @@ func (p Jam) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 // o stores only the sums i makes.
 func (k *Kernel) jammable(o, i int) bool {
 	it := k.iterOf(o)
-	if it < 0 {
+	if it < 0 || k.readsAsValue(i, it) {
 		return false
 	}
 	hs := k.Homes()
@@ -120,6 +120,45 @@ func (k *Kernel) jammable(o, i int) bool {
 		}
 	}
 	return true
+}
+
+// readsAsValue reports whether loop i's sums or its stores' values read
+// iteration it other than through a load's address: a jam would hold the
+// iteration both as an address and as each lane's own, in one node the
+// vector words take from the general registers an address needs.
+func (k *Kernel) readsAsValue(i, it int) bool {
+	seen := map[int]bool{}
+	var walk func(x int) bool
+	walk = func(x int) bool {
+		if x == it {
+			return true
+		}
+		if seen[x] {
+			return false
+		}
+		seen[x] = true
+		nd := k.Nodes[x]
+		if nd.Op == OpLoad {
+			return false
+		}
+		for _, a := range k.Operands(&nd) {
+			if walk(*a) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, f := range k.foldsOf(i) {
+		if walk(k.Nodes[f].A) {
+			return true
+		}
+	}
+	for _, s := range k.Stores {
+		if !s.Barrier && !s.Run && walk(s.Val) {
+			return true
+		}
+	}
+	return false
 }
 
 // temps is the most registers besides its own an op of loop i needs.

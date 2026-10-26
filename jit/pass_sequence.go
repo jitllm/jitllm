@@ -72,6 +72,18 @@ func (p CopiesAside) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 	return refineSeq(p.Name(), ks, (*Kernel).copiesAside)
 }
 
+// FoldsAside copies aside a vector fold read in its loop after its step is
+// made: the step takes the fold's register, so a reader after it would see
+// the next trip's value (a counter whose step another value of the trip
+// reads, as a top k's place and the place after it).
+type FoldsAside struct{}
+
+func (FoldsAside) Name() string { return "foldsaside" }
+
+func (p FoldsAside) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
+	return refineSeq(p.Name(), ks, (*Kernel).foldsAside)
+}
+
 // LateWords loads each address word only accesses after every loop read
 // where the first of them is, in a kernel with no tile pass.
 type LateWords struct{}

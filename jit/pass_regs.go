@@ -862,9 +862,16 @@ func (k *Kernel) VectorWords() map[int]bool {
 		return nd.Type != ir.F32 && nd.Op != OpParam && nd.Op != OpIter && nd.Op != OpLength && nd.Op != OpSpan && nd.Op != OpCoord
 	}
 	vec := k.vectorized()
+	var hs []int
+	if vec {
+		hs = k.Homes()
+	}
 	for i, nd := range k.Nodes {
 		switch {
 		case nd.Op == OpLanes || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandConsts && nd.Type != ir.F32:
+			out[i] = true
+		case vec && nd.Op == OpLoad && nd.Type != ir.F32 && !k.Bufs[nd.Buf].Half && i < len(hs) && hs[i] >= 0 && k.Loops[hs[i]].Lanes > 0:
+			// A word a vector loop loads is a lane's each.
 			out[i] = true
 		case vec && (nd.Op == OpCvtF32 || nd.Op == OpWidenHalf || nd.Op == OpBitcast && nd.Type == ir.F32):
 			if data(nd.A) && k.Nodes[nd.A].Op != OpConst {
@@ -1375,6 +1382,52 @@ func (k *Kernel) copiesAside() {
 			return
 		}
 	}
+}
+
+// foldsAside copies each vector fold read in its loop after its step is
+// made where the step is made, those readers reading the copy.
+func (k *Kernel) foldsAside() {
+	for f := range k.Nodes {
+		nd := k.Nodes[f]
+		if nd.Op != OpFold || nd.A == f || !k.needsVector(f) {
+			continue
+		}
+		pos, end := -1, -1
+		for p, e := range k.Seq {
+			if e.Kind == EntryNode && e.I == nd.A {
+				pos = p
+			}
+			if e.Kind == EntryEnd && e.I == nd.At && pos >= 0 {
+				end = p
+				break
+			}
+		}
+		if pos < 0 || end < 0 || !k.readBetween(f, pos+1, end) {
+			continue
+		}
+		c := k.add(Node{Op: OpCopy, Type: nd.Type, A: f})
+		for q := pos + 1; q < end; q++ {
+			for _, a := range k.entryArgs(k.Seq[q]) {
+				if *a == f {
+					*a = c
+				}
+			}
+		}
+		k.Seq = slices.Insert(k.Seq, pos, Entry{Kind: EntryNode, I: c})
+	}
+}
+
+// readBetween reports whether an entry at sequence positions from to end,
+// end excluded, reads node t.
+func (k *Kernel) readBetween(t, from, end int) bool {
+	for p := from; p < end; p++ {
+		for _, a := range k.entryArgs(k.Seq[p]) {
+			if *a == t {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // entryArgs is what sequence entry e reads.

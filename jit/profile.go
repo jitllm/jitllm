@@ -104,6 +104,7 @@ func cpuProfile() Profile {
 		CursorOrder{},
 		ZerosPerLoop{},
 		CopiesAside{},
+		FoldsAside{},
 		LateWords{},
 		Regs{Fields: map[int][]int{0: {int(x86.RCX)}, 8: {int(x86.RDX)}, 16: {int(x86.RSI)}, 24: {int(x86.RDX), int(x86.R8)},
 			56: {int(x86.RBX)}, 112: {int(x86.RSI)}, 120: {int(x86.R8), int(x86.R10)}, 128: {int(x86.R9)}, 136: {int(x86.R12)}},

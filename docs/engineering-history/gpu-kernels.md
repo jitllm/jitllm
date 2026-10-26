@@ -8733,3 +8733,22 @@ row where the composer's reads two.
   from a general register lowers it but the binder then gives that word
   and a broadcast float one vector register (ranks wrong on ties). Greedy
   top-1 (graph.Sample) forms on the CPU at every width tried.
+- The CPU's ranks and top k form and hold (TestComposedCPURank,
+  TestComposedCPUTopK, TestComposedCPUSampleTopKRanked over every sampler
+  case of a vocabulary the ranked form takes, bit for bit with the host's,
+  TestComposedCPUSampleGreedy at ragged widths to 1531). Three bugs stood
+  in the way, each by structure: Jam jammed a loop whose iteration a value
+  reads (the rank's j < i), so one node was both an address and each
+  lane's index and the vector words took it from the general registers
+  (Jam now declines such a loop; jammed by force the ranks part on ties);
+  a fold whose step another value of the trip reads took the step's
+  register before its own later readers ran (the top k's place counter,
+  read a trip ahead: every place zero; FoldsAside copies such a fold aside
+  where the step is made); and a word a vector loop loads was held in a
+  general register, so a vectorized copy of words moved one lane in eight
+  (the sampler's history slice; a word a vector loop loads is a vector
+  word now). Each violation fails its gate. Still open: the selection form
+  (vocabularies over 1024) does not form on the CPU -- a map reads more
+  inputs than the argument block's In fields, and past that its integer
+  compares feed vector selects from general registers ("node (const) has
+  no register"), and making them vectors runs out of registers.
