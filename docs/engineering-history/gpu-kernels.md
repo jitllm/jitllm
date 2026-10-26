@@ -8118,5 +8118,8 @@ row where the composer's reads two.
   Coder-V2-Lite, Moonlight, GLM-4.7-Flash, Kimi-Linear) is a mixture past its
   dense lead, refused by `UncoveredMixture`; deepseek32 is refused by
   `UncoveredSelect`, Kimi-Linear's and K3's linear blocks by `UncoveredKind`.
+  `TestDecodeDoesNotAllocate` measures the composed step on synth-deepseek-dense
+  too (`composedAllocModels`): 0 engine allocations on cuda:0 and vulkan:5,
+  its input rows declined by name (the fixture's embedding is not its head's).
   `go build -gcflags=-m` over the four touched packages moves nothing more to
   the heap (247 lines either side).

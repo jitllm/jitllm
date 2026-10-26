@@ -212,7 +212,14 @@ func TestDecodeDoesNotAllocate(t *testing.T) {
 								decodeAllocs(t, m, gc)
 								greedyAllocs(t, m, gc)
 								for _, k := range parts {
-									if n, _, _ := gc.Stats().ServedPart(k); n == 0 {
+									n, d, _ := gc.Stats().ServedPart(k)
+									// The input rows are gathered where the head is the
+									// embedding, and declined by name where the device
+									// holds no table of them.
+									if k == tier.ComposedEmbed && !m.Cfg.TiedEmbd && n+d > 0 {
+										continue
+									}
+									if n == 0 {
 										t.Fatalf("composed part %#x never ran: this arm measured the tier's own", uint8(k))
 									}
 								}
