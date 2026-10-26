@@ -9015,4 +9015,18 @@ row where the composer's reads two.
   attends as well through its pages (cpuRecRows readies each row's
   history, as cpuStep does). A block whose graph binds a weight or vector
   the card does not hold is declined by name (DeclineNoWeight) rather than
-  failing to form.
+  failing to form. On the V100, cuda:0 and vulkan:3: TestComposedBlocksServe
+  serves LFM2-350M, granite-4.0-h-350m (Q8_0), Falcon-H1-0.5B and
+  Falcon-H1-1.5B (Q8_0) every arm, prompts composed, the poisoned arm
+  unchanged; with a chunk's rows made runs of one the prompt's logits part
+  by 0.17 (LFM2), 0.49 (granite) and 0.24 (Falcon-H1) in NMSE. The CPU
+  device holds mamba-130m, LFM2-350M and granite-4.0-h-350m to main at
+  0.43, 0.90 and 0.47 of main's own spread, every recurrent block bound to
+  the first's state parting 4810, 472 and 4937 times. Open: on the cards
+  the pure state-space checkpoints part from the float reference where
+  their random fixtures do not (mamba-130m 3.3 times the tier's distance,
+  falcon-mamba-7B 80, Jamba-reasoning-3B 50 with a poisoned buffer read,
+  mamba-codestral non-finite at its 103rd step), while the CPU serves
+  mamba-130m in band: a card form of these widths (B and C 16 rows, dt's
+  rank 160 or 48) is the suspect. LFM2-1.2B reads 1.503 against the 1.5
+  band on CUDA (0.974 on Vulkan).
