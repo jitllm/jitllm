@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/rand"
 	"runtime"
+	"slices"
 	"testing"
 	"unsafe"
 
@@ -26,83 +27,97 @@ import (
 // the oracle over the row as the int8 form quantizes it, the float arm to
 // the oracle over the row.
 func TestComposedCPUMatVec(t *testing.T) {
-	const rows, k = 64, 256
+	const k = 256
 	rng := rand.New(rand.NewSource(5))
 	right, wrong, unformed := 0, 0, map[string]string{}
-	for _, typ := range append([]quant.Type{quant.F32}, quant.PackedTypes...) {
-		q, ok := kernels.QuantOf(typ)
-		if typ == quant.F32 {
-			q, ok = kernels.Float32, true
-		}
-		jt, jok := jlm.TypeOf(typ)
-		if !ok || !jok {
-			continue
-		}
-		w := cpuTestWeights(typ, q, rows, k, rng)
-		qs, d, sc, err := kernels.PackWeights(q, w, rows, k)
-		if err != nil {
-			t.Fatalf("%v: %v", typ, err)
-		}
-		host := uint64(cpu.CPU().ISA())
-		arms := []struct {
-			name string
-			r    *Registry
-			isa  uint64
-		}{{"float", Default().WithoutInt8(DeviceCPU), host}, {"int8", withCPUInt8(), host}}
-		if vnni := uint64(x86.ISAVNNI); host&vnni != 0 {
-			arms = append(arms, struct {
+	// 64 rows at one worker and six; at six, 48 and 80 rows too, which six
+	// workers do not divide.
+	for _, rows := range []int{64, 48, 80} {
+		for _, typ := range append([]quant.Type{quant.F32}, quant.PackedTypes...) {
+			q, ok := kernels.QuantOf(typ)
+			if typ == quant.F32 {
+				q, ok = kernels.Float32, true
+			}
+			jt, jok := jlm.TypeOf(typ)
+			if !ok || !jok {
+				continue
+			}
+			w := cpuTestWeights(typ, q, rows, k, rng)
+			qs, d, sc, err := kernels.PackWeights(q, w, rows, k)
+			if err != nil {
+				t.Fatalf("%v: %v", typ, err)
+			}
+			host := uint64(cpu.CPU().ISA())
+			arms := []struct {
 				name string
 				r    *Registry
 				isa  uint64
-			}{"int8 without vnni", withCPUInt8(), host &^ vnni})
-		}
-		for _, arm := range arms {
-			for _, tokens := range []int{1, 4} {
-				name := fmt.Sprintf("%v/%d tokens/%s", typ, tokens, arm.name)
-				x := make([]float32, tokens*k)
-				for i := range x {
-					x[i] = float32(rng.NormFloat64())
-				}
-				ref := x
-				if arm.r.Profiles[DeviceCPU].Int8 != nil && typ != quant.F32 {
-					ref = int8Row(x, 32)
-				}
-				want := make([]float32, tokens*rows)
-				for tk := range tokens {
-					if err := oracle.MatVec(want[tk*rows:(tk+1)*rows], typ, w, ref[tk*k:(tk+1)*k], rows, k); err != nil {
-						t.Fatal(err)
+			}{{"float", Default().WithoutInt8(DeviceCPU), host}, {"int8", withCPUInt8(), host}}
+			if vnni := uint64(x86.ISAVNNI); host&vnni != 0 {
+				arms = append(arms, struct {
+					name string
+					r    *Registry
+					isa  uint64
+				}{"int8 without vnni", withCPUInt8(), host &^ vnni})
+			}
+			for _, arm := range arms {
+				for _, at := range []struct{ tokens, slots int }{{1, 1}, {4, 1}, {1, 6}} {
+					if rows != 64 && at.slots == 1 {
+						continue
 					}
-				}
-				t.Logf("forming %s", name)
-				_, codes, err := arm.r.Form(Request{
-					Graph:   graph.MatVec(jlm.RoleOutput, rows, k),
-					Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jt},
-					Step:    Step{Rows: tokens, Page: 64, Keys: 1, ActWindow: 32},
-					Device:  Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: arm.isa, ExactDiv: true},
-				})
-				if err != nil {
-					unformed[name] = err.Error()
-					continue
-				}
-				planes := [3][]uint32{qs, d, sc}
+					tokens := at.tokens
+					name := fmt.Sprintf("%v/%d rows/%d tokens/%d workers/%s", typ, rows, tokens, at.slots, arm.name)
+					x := make([]float32, tokens*k)
+					for i := range x {
+						x[i] = float32(rng.NormFloat64())
+					}
+					ref := x
+					if arm.r.Profiles[DeviceCPU].Int8 != nil && typ != quant.F32 {
+						ref = int8Row(x, 32)
+					}
+					want := make([]float32, tokens*rows)
+					for tk := range tokens {
+						if err := oracle.MatVec(want[tk*rows:(tk+1)*rows], typ, w, ref[tk*k:(tk+1)*k], rows, k); err != nil {
+							t.Fatal(err)
+						}
+					}
+					t.Logf("forming %s", name)
+					_, codes, err := arm.r.Form(Request{
+						Graph:   graph.MatVec(jlm.RoleOutput, rows, k),
+						Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jt},
+						Step:    Step{Rows: tokens, Page: 64, Keys: 1, ActWindow: 32},
+						Device:  Device{Kind: DeviceCPU, Slots: at.slots, Lanes: 8, ISA: arm.isa, ExactDiv: true},
+					})
+					if err != nil {
+						unformed[name] = err.Error()
+						continue
+					}
+					if at.slots > 1 && !dealtOverWorkers(codes) {
+						t.Errorf("%s: no kernel's rows are dealt over the %d workers", name, at.slots)
+						for _, c := range codes {
+							t.Logf("  %s calls %v passes %v", c.Name, c.Calls, c.Passes)
+						}
+					}
+					planes := [3][]uint32{qs, d, sc}
 
-				got, err := runCPU(codes, x, tokens*rows, planes)
-				if err != nil {
-					unformed[name] = err.Error()
-					continue
-				}
-				if e := cpuNMSE(got, want); math.IsNaN(e) || !(e < 1e-9) {
-					wrong++
-					t.Errorf("%s: NMSE %.3e against the oracle", name, e)
-					continue
-				}
-				right++
-				moved := [3][]uint32{append(qs[1:len(qs):len(qs)], qs[0]), d, sc}
-				bad, err := runCPU(codes, x, tokens*rows, moved)
-				if err != nil {
-					t.Errorf("%s: the violation did not run: %v", name, err)
-				} else if e := cpuNMSE(bad, want); !(e > 1e-6) {
-					t.Errorf("%s: with the weight's words moved by one the NMSE is %.3e: the gate cannot see a wrong kernel", name, e)
+					got, err := runCPU(codes, x, tokens*rows, planes)
+					if err != nil {
+						unformed[name] = err.Error()
+						continue
+					}
+					if e := cpuNMSE(got, want); math.IsNaN(e) || !(e < 1e-9) {
+						wrong++
+						t.Errorf("%s: NMSE %.3e against the oracle", name, e)
+						continue
+					}
+					right++
+					moved := [3][]uint32{append(qs[1:len(qs):len(qs)], qs[0]), d, sc}
+					bad, err := runCPU(codes, x, tokens*rows, moved)
+					if err != nil {
+						t.Errorf("%s: the violation did not run: %v", name, err)
+					} else if e := cpuNMSE(bad, want); !(e > 1e-6) {
+						t.Errorf("%s: with the weight's words moved by one the NMSE is %.3e: the gate cannot see a wrong kernel", name, e)
+					}
 				}
 			}
 		}
@@ -116,6 +131,25 @@ func TestComposedCPUMatVec(t *testing.T) {
 	}
 }
 
+// movingArg is an address word a call moves along its coordinates, at
+// its first call's address.
+type movingArg struct {
+	a    CallArg
+	at   uint64
+	elem int
+}
+
+// dealtOverWorkers reports whether a kernel of codes runs as several
+// calls along a space Workers cut.
+func dealtOverWorkers(codes []Code) bool {
+	for _, c := range codes {
+		if slices.Contains(c.Passes, "workers") && len(c.Calls) > 0 && c.Calls[0] > 1 {
+			return true
+		}
+	}
+	return false
+}
+
 // runCPU runs codes in order on the CPU: the row x, an output of n floats,
 // a weight's planes, the composer's scratch and constant blocks, each where
 // its call words say.
@@ -125,7 +159,8 @@ func runCPU(codes []Code, x []float32, n int, planes [3][]uint32) ([]float32, er
 
 // runCPUVectors is runCPU with the vector weights vecs binds, by role.
 func runCPUVectors(codes []Code, x []float32, n int, planes [3][]uint32, vecs map[jlm.Role][]float32) ([]float32, error) {
-	out := make([]float32, n)
+	const guard = 16
+	out := make([]float32, n+guard)
 	for i := range out {
 		out[i] = float32(math.NaN())
 	}
@@ -141,6 +176,8 @@ func runCPUVectors(codes []Code, x []float32, n int, planes [3][]uint32, vecs ma
 		}
 		var args cpu.Args
 		base := unsafe.Pointer(&args)
+		var coords []CallArg
+		var moving []movingArg
 		for _, a := range c.Args {
 			if a.Field < 0 || uintptr(a.Field)+8 > unsafe.Sizeof(args) {
 				code.Close()
@@ -150,6 +187,9 @@ func runCPUVectors(codes []Code, x []float32, n int, planes [3][]uint32, vecs ma
 			var words []uint32
 			o := a.Operand
 			switch {
+			case a.Coord > 0:
+				coords = append(coords, a)
+				continue
 			case a.Length || a.Value:
 				*slot = uint64(a.Extent)
 				continue
@@ -188,13 +228,49 @@ func runCPUVectors(codes []Code, x []float32, n int, planes [3][]uint32, vecs ma
 				*slot = uint64(words[a.Offset])
 				continue
 			}
-			*slot = uint64(uintptr(unsafe.Pointer(&words[0]))) + uint64(4*a.Offset)
+			elem := 4
+			if a.Elem > 0 {
+				elem = a.Elem
+			}
+			*slot = uint64(uintptr(unsafe.Pointer(&words[0]))) + uint64(elem*a.Offset)
+			if len(a.Per) > 0 {
+				moving = append(moving, movingArg{a, *slot, elem})
+			}
 		}
-		code.Call(&args)
+		calls := 1
+		for _, n := range c.Calls {
+			calls *= n
+		}
+		for at := range calls {
+			for _, a := range coords {
+				v := at
+				for ax := len(c.Calls) - 1; ax > a.Coord-1; ax-- {
+					v /= c.Calls[ax]
+				}
+				*(*uint64)(unsafe.Add(base, a.Field)) = uint64(v % c.Calls[a.Coord-1])
+			}
+			for _, m := range moving {
+				addr := m.at
+				for ax, per := range m.a.Per {
+					v := at
+					for a := len(c.Calls) - 1; a > ax; a-- {
+						v /= c.Calls[a]
+					}
+					addr += uint64((v % c.Calls[ax]) * per * m.elem)
+				}
+				*(*uint64)(unsafe.Add(base, m.a.Field)) = addr
+			}
+			code.Call(&args)
+		}
 		code.Close()
 	}
 	runtime.KeepAlive(keep)
-	return out, nil
+	for i, v := range out[n:] {
+		if math.Float32bits(v) != math.Float32bits(float32(math.NaN())) {
+			return nil, fmt.Errorf("the kernels wrote %v past the output's end, at element %d", v, n+i)
+		}
+	}
+	return out[:n], nil
 }
 
 // withCPUInt8 is the default registry with the CPU keeping the int8 form,

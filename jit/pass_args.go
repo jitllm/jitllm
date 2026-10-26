@@ -257,9 +257,21 @@ func (k *Kernel) bindBufs(f ArgFields) {
 	for _, o := range order {
 		query[o] = k.queries(o)
 	}
+	// A kernel whose rows Workers dealt over calls moves each call's rows
+	// into its buffers' offsets, the caller's to add: its indices are then
+	// the one call's.
+	var coords map[int]bool
+	if k.Calls > 0 {
+		coords = map[int]bool{}
+		for _, a := range k.Args {
+			if a.Coord > 0 {
+				coords[a.Node-1] = true
+			}
+		}
+	}
 	offsets := map[Operand]int{}
 	for _, o := range order {
-		offsets[o] = k.split(byOp[o], f.Coords != nil)
+		offsets[o] = k.split(byOp[o], f.Coords != nil, coords)
 	}
 	code := k.Live()
 	var kept []Operand
@@ -381,9 +393,10 @@ func (k *Kernel) firstBuf(o Operand) int {
 // split moves the part of the accesses' indices no loop moves, and the
 // least constant they share, into an offset the caller adds, 1 + its node
 // (0 for none); each access is left a flat index from the buffer's address.
-// Where whole is set only the least constant is moved: the kernel computes
-// the rest itself.
-func (k *Kernel) split(as []access, whole bool) int {
+// Where whole is set only the least constant is moved, and a constant
+// times one of coords, call coordinates' words, where every access reads
+// elements of one size: the kernel computes the rest itself.
+func (k *Kernel) split(as []access, whole bool, coords map[int]bool) int {
 	g := newAlg(k)
 	ls := make([]lin, len(as))
 	for i, a := range as {
@@ -395,9 +408,14 @@ func (k *Kernel) split(as []access, whole bool) int {
 			ls[i] = g.flat(s.Buf, s.Ix, s.Ax)
 		}
 	}
+	sized := len(coords) > 0
+	for _, a := range as {
+		b := k.Bufs[k.accessBuf(a)]
+		sized = sized && ElemBytes(b) == ElemBytes(k.Bufs[k.accessBuf(as[0])])
+	}
 	fixed := lin{}
 	for m, v := range ls[0] {
-		if m != "" && !whole && g.still(lin{m: 1}) {
+		if m != "" && (!whole && g.still(lin{m: 1}) || whole && sized && g.coordMono(m, coords)) {
 			fixed[m] = v
 		}
 	}
@@ -428,6 +446,59 @@ func (k *Kernel) split(as []access, whole bool) int {
 		return 0
 	}
 	return g.build(fixed) + 1
+}
+
+// accessBuf is the buffer access a reads or writes.
+func (k *Kernel) accessBuf(a access) int {
+	if a.node >= 0 {
+		return k.Nodes[a.node].Buf
+	}
+	return k.Stores[a.store].Buf
+}
+
+// coordMono reports whether monomial m is one of coords' nodes alone.
+func (g *alg) coordMono(m string, coords map[int]bool) bool {
+	ids := monoIDs(m)
+	if len(ids) != 1 {
+		return false
+	}
+	a := g.atoms[ids[0]]
+	return coords[a.node] && a == atom{node: a.node}
+}
+
+// callOffset is node off as a constant and, for each axis of the calls'
+// space, the elements a call adds a unit of its coordinate: false where it
+// is anything else.
+func (k *Kernel) callOffset(off int) (int, []int, bool) {
+	axis := map[int]int{}
+	for _, a := range k.Args {
+		if a.Coord > 0 {
+			axis[a.Node-1] = a.Coord - 1
+		}
+	}
+	g := newAlg(k)
+	var c int
+	var per []int
+	for m, v := range g.of(off) {
+		if m == "" {
+			c = int(v)
+			continue
+		}
+		ids := monoIDs(m)
+		if len(ids) != 1 {
+			return 0, nil, false
+		}
+		a := g.atoms[ids[0]]
+		ax, ok := axis[a.node]
+		if !ok || a != (atom{node: a.node}) {
+			return 0, nil, false
+		}
+		for len(per) <= ax {
+			per = append(per, 0)
+		}
+		per[ax] += int(v)
+	}
+	return c, per, true
 }
 
 // flat is an access's flat index: index ix, or coordinates ax of buffer

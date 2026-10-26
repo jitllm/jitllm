@@ -19,6 +19,9 @@ func (p Serial) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 		if h := k.Heads; h != nil && len(k.Space) >= 2 && k.Space[0] == h.Rows && k.Space[1] == h.Query {
 			calls = 2
 		}
+		if k.Calls > 0 {
+			calls = k.Calls
+		}
 		if calls == len(k.Space) {
 			return nil, false, nil
 		}

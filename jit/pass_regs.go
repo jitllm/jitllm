@@ -124,12 +124,14 @@ func (p Regs) bind(k *Kernel, d Device) ([]*Kernel, bool, error) {
 	var why error
 	for range len(k.Nodes) {
 		m := w.clone()
+		m.vwords = &vectorMemo{n: -1}
 		b := binder86{k: m, p: p, used: map[int]bool{}, late: late, isa: x86.ISA(d.ISA)}
 		b.lives()
 		if b.gprs() != nil {
 			// The words do not fit: again with the reload registers kept
 			// out of every pool, spilling where none is free.
 			m = w.clone()
+			m.vwords = &vectorMemo{n: -1}
 			b = binder86{k: m, p: p, used: map[int]bool{}, late: late, spill: true, isa: x86.ISA(d.ISA)}
 			b.lives()
 			if err := b.gprs(); err != nil {
@@ -137,12 +139,14 @@ func (p Regs) bind(k *Kernel, d Device) ([]*Kernel, bool, error) {
 			}
 		}
 		if why = b.vectors(); why == nil {
+			m.vwords = nil
 			return []*Kernel{m}, true, nil
 		}
 		if m.Ones > 0 {
 			// Again with the byte dots making their ones each time.
 			b.noOnes = true
 			if why = b.vectors(); why == nil {
+				m.vwords = nil
 				return []*Kernel{m}, true, nil
 			}
 		}
@@ -785,6 +789,12 @@ func (k *Kernel) vectorTail(c int) bool {
 // needsVector reports whether node i is a value the code holds in a vector
 // register: a float, a weight's word, or a word of halves.
 func (k *Kernel) needsVector(i int) bool {
+	return k.needsVectorOf(i, nil)
+}
+
+// needsVectorOf is needsVector with the kernel's vector words, where
+// words is set, those already found (VectorWords).
+func (k *Kernel) needsVectorOf(i int, words map[int]bool) bool {
 	nd := k.Nodes[i]
 	if nd.Mem {
 		return false
@@ -792,7 +802,29 @@ func (k *Kernel) needsVector(i int) bool {
 	if nd.Type == ir.F32 || nd.Op == OpLoad && k.Bufs[nd.Buf].Operand.Kind == OperandWeight && k.vectorized() {
 		return nd.Op != OpConst || nd.Imm == 0 && k.zeroOperand(i)
 	}
-	return k.VectorWords()[i]
+	if words == nil {
+		words = k.vectorWords()
+	}
+	return words[i]
+}
+
+// vectorWords is VectorWords, kept while a register binding runs
+// (Kernel.vwords) for as long as the kernel holds as many nodes: the
+// binding adds nodes and never rewrites one's operation in place.
+func (k *Kernel) vectorWords() map[int]bool {
+	if k.vwords == nil {
+		return k.VectorWords()
+	}
+	if k.vwords.n != len(k.Nodes) {
+		k.vwords.n, k.vwords.words = len(k.Nodes), k.VectorWords()
+	}
+	return k.vwords.words
+}
+
+// vectorMemo is a register binding's VectorWords at a count of nodes.
+type vectorMemo struct {
+	n     int
+	words map[int]bool
 }
 
 // vectorized reports whether any loop of k runs in vector lanes, or any
@@ -1641,10 +1673,11 @@ func (k *Kernel) sink(sunk map[int]bool) bool {
 		nd := k.Nodes[i]
 		return nd.Op != OpFold && nd.Op != OpConst && nd.Share == 0 && nd.Spill == 0
 	}
+	words := k.vectorWords()
 	best, gap, to := -1, 0, 0
 	for p, e := range k.Seq {
 		x := e.I
-		if e.Kind != EntryNode || sunk[x] || !movable(x) || !k.needsVector(x) || len(readers[x]) != 1 || readers[x][0] < 0 {
+		if e.Kind != EntryNode || sunk[x] || !movable(x) || !k.needsVectorOf(x, words) || len(readers[x]) != 1 || readers[x][0] < 0 {
 			continue
 		}
 		rp := pos[readers[x][0]]
@@ -1653,7 +1686,7 @@ func (k *Kernel) sink(sunk map[int]bool) bool {
 		}
 		n := 0
 		for q := p + 1; q < rp; q++ {
-			if k.needsVector(k.Seq[q].I) {
+			if k.needsVectorOf(k.Seq[q].I, words) {
 				n++
 			}
 		}

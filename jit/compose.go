@@ -94,6 +94,10 @@ type CallArg struct {
 	// Coord, where set, is 1 + the axis of Calls whose coordinate the word
 	// is, set for each call.
 	Coord int
+	// Per, where set, is the elements, of Elem bytes, the address moves a
+	// unit of each axis of Calls' coordinate: a call's rows (Workers).
+	Per  []int
+	Elem int
 }
 
 // Binding is a buffer a kernel binds: its operand and whether the kernel
@@ -319,6 +323,8 @@ func (r *Registry) Lower(ks []*Kernel, d Device) ([]PartCode, error) {
 				if b.Offset > 0 {
 					if nd := k.Nodes[b.Offset-1]; nd.Op == OpConst {
 						ca.Offset = int(nd.Imm)
+					} else if c, per, ok := k.callOffset(b.Offset - 1); ok && l.CPU != nil {
+						ca.Offset, ca.Per, ca.Elem = c, per, ElemBytes(b)
 					} else {
 						ca.Moving = true
 					}

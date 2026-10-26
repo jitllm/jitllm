@@ -16,7 +16,10 @@ type Kernel struct {
 	Ones int
 	// Space is the element space's extents, the last fastest. Under Work an
 	// element is a workgroup of Group threads, else a thread.
-	Space  []int
+	Space []int
+	// Calls, where a pass dealt the space over a device's workers, is the
+	// leading axes of Space that stay the calls' space (Workers).
+	Calls  int
 	Work   bool
 	Loops  []Loop
 	Nodes  []Node
@@ -50,6 +53,8 @@ type Kernel struct {
 	Args []Arg
 	// Ptrs are the copies of buffers' addresses cursors advance.
 	Ptrs []Ptr
+	// vwords, while a register binding runs, keeps its VectorWords.
+	vwords *vectorMemo
 }
 
 // Arg is the call's argument word at byte offset Field: the address of

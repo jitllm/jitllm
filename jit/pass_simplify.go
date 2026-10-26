@@ -91,7 +91,7 @@ func (k *Kernel) cse() bool {
 		case OpFold, OpExchange, OpShuffle, OpGroupSum, OpGroupMax:
 			continue
 		case OpLoad:
-			if stored[k.Bufs[nd.Buf].Operand] {
+			if stored[k.Bufs[nd.Buf].Operand] || k.Bufs[nd.Buf].Operand.Kind == OperandWeight {
 				continue
 			}
 		}
@@ -279,7 +279,10 @@ func (k *Kernel) foldDecided() bool {
 				changed = true
 			}
 		case OpSub:
-			if k.isConst(b, 0) {
+			if ca, cb := k.Nodes[a], k.Nodes[b]; ca.Op == OpConst && cb.Op == OpConst && nd.Type == ir.U32 {
+				k.Nodes[i] = Node{Op: OpConst, Type: nd.Type, Imm: int64(uint32(ca.Imm) - uint32(cb.Imm))}
+				changed = true
+			} else if k.isConst(b, 0) {
 				to(i, a)
 			} else if x := k.Nodes[a]; x.Op == OpAdd && x.A == b {
 				to(i, x.B)
@@ -296,6 +299,10 @@ func (k *Kernel) foldDecided() bool {
 				changed = true
 			} else if ca, cb := k.Nodes[a], k.Nodes[b]; ca.Op == OpConst && cb.Op == OpConst {
 				k.Nodes[i] = Node{Op: OpConst, Type: nd.Type, Imm: int64(uint32(ca.Imm * cb.Imm))}
+				changed = true
+			} else if x := k.Nodes[a]; nd.Type == ir.U32 && x.Op == OpMul && x.Type == ir.U32 && cb.Op == OpConst && k.Nodes[x.B].Op == OpConst {
+				// (x*c1)*c2 is x*(c1*c2).
+				k.Nodes[i] = Node{Op: OpMul, Type: ir.U32, A: x.A, B: k.u32(int(uint32(k.Nodes[x.B].Imm * cb.Imm)))}
 				changed = true
 			}
 		case OpDiv:
@@ -335,14 +342,25 @@ func (k *Kernel) foldDecided() bool {
 			} else if ca, cb := k.Nodes[a], k.Nodes[b]; ca.Op == OpConst && cb.Op == OpConst {
 				k.Nodes[i] = Node{Op: OpConst, Type: nd.Type, Imm: int64(uint32(ca.Imm) & uint32(cb.Imm))}
 				changed = true
+			} else if c, ok := k.lowBits(a, b); ok && nd.Type == ir.U32 {
+				k.Nodes[i] = Node{Op: OpConst, Type: nd.Type, Imm: c}
+				changed = true
+			} else if x, ok := k.beside(a, b); ok && nd.Type == ir.U32 {
+				// (x + y) & (2^n - 1), y a multiple of 2^n, is x's low bits.
+				k.Nodes[i].A = x
+				changed = true
 			}
 		case OpShl:
-			if ca, cb := k.Nodes[a], k.Nodes[b]; ca.Op == OpConst && cb.Op == OpConst && cb.Imm >= 0 && cb.Imm < 32 {
+			if k.isConst(b, 0) && nd.Type == ir.U32 {
+				to(i, a)
+			} else if ca, cb := k.Nodes[a], k.Nodes[b]; ca.Op == OpConst && cb.Op == OpConst && cb.Imm >= 0 && cb.Imm < 32 {
 				k.Nodes[i] = Node{Op: OpConst, Type: nd.Type, Imm: int64(uint32(ca.Imm) << cb.Imm)}
 				changed = true
 			}
 		case OpShr:
-			if ca, cb := k.Nodes[a], k.Nodes[b]; ca.Op == OpConst && cb.Op == OpConst && cb.Imm >= 0 && cb.Imm < 32 {
+			if k.isConst(b, 0) && nd.Type == ir.U32 {
+				to(i, a)
+			} else if ca, cb := k.Nodes[a], k.Nodes[b]; ca.Op == OpConst && cb.Op == OpConst && cb.Imm >= 0 && cb.Imm < 32 {
 				k.Nodes[i] = Node{Op: OpConst, Type: nd.Type, Imm: int64(uint32(ca.Imm) >> cb.Imm)}
 				changed = true
 			} else if x := k.Nodes[a]; x.Op == OpShr && k.Nodes[x.B].Op == OpConst && k.Nodes[b].Op == OpConst {
@@ -355,6 +373,16 @@ func (k *Kernel) foldDecided() bool {
 					to(i, x)
 				} else if y := k.sameQuotient(a, 1<<n.Imm); y >= 0 {
 					k.Nodes[i].A = y
+					changed = true
+				} else if x := k.Nodes[a]; x.Op == OpMul && x.Type == ir.U32 && k.Nodes[x.B].Op == OpConst && k.Nodes[x.B].Imm%(1<<n.Imm) == 0 {
+					// (x*c) >> n, c a multiple of 2^n, is x*(c >> n).
+					k.Nodes[i] = Node{Op: OpMul, Type: ir.U32, A: x.A, B: k.u32(int(k.Nodes[x.B].Imm >> n.Imm))}
+					changed = true
+				} else if x, p, c, ok := k.shiftedAddend(a, n.Imm); ok {
+					// (x + p*c) >> n, c a multiple of 2^n, is (x >> n) + p*(c >> n).
+					q := k.bin(OpShr, ir.U32, x, b)
+					r := k.bin(OpMul, ir.U32, p, k.u32(int(c>>n.Imm)))
+					k.Nodes[i] = Node{Op: OpAdd, Type: ir.U32, A: q, B: r}
 					changed = true
 				}
 			}
@@ -381,11 +409,17 @@ func (k *Kernel) foldDecided() bool {
 				}
 			}
 		case OpMax:
-			if x := k.Nodes[a]; x.Op == OpAdd && x.A == b && k.Nodes[x.B].Op == OpIter {
+			if ca, cb := k.Nodes[a], k.Nodes[b]; ca.Op == OpConst && cb.Op == OpConst && nd.Type == ir.U32 {
+				k.Nodes[i] = Node{Op: OpConst, Type: nd.Type, Imm: int64(max(uint32(ca.Imm), uint32(cb.Imm)))}
+				changed = true
+			} else if x := k.Nodes[a]; x.Op == OpAdd && x.A == b && k.Nodes[x.B].Op == OpIter {
 				to(i, a)
 			}
 		case OpMin:
-			if k.insideRange(a, b) {
+			if ca, cb := k.Nodes[a], k.Nodes[b]; ca.Op == OpConst && cb.Op == OpConst && nd.Type == ir.U32 {
+				k.Nodes[i] = Node{Op: OpConst, Type: nd.Type, Imm: int64(min(uint32(ca.Imm), uint32(cb.Imm)))}
+				changed = true
+			} else if k.insideRange(a, b) {
 				to(i, a)
 			}
 		}
@@ -558,6 +592,64 @@ func (k *Kernel) factor(i int) int64 {
 		}
 	}
 	return 1
+}
+
+// lowBits is node a's bits under node b's mask 2^n - 1 where they are a
+// constant: a a known multiple of 2^n, or one plus a constant, whose low
+// n bits are the constant's.
+func (k *Kernel) lowBits(a, b int) (int64, bool) {
+	mb := k.Nodes[b]
+	if mb.Op != OpConst || mb.Imm <= 0 || mb.Imm&(mb.Imm+1) != 0 {
+		return 0, false
+	}
+	m := mb.Imm + 1
+	if k.factor(a)%m == 0 {
+		return 0, true
+	}
+	nd := k.Nodes[a]
+	if c := k.Nodes[nd.B]; nd.Op == OpAdd && c.Op == OpConst && k.factor(nd.A)%m == 0 {
+		return int64(uint32(c.Imm) & uint32(mb.Imm)), true
+	}
+	return 0, false
+}
+
+// beside is x where node a is x + y and y a known multiple of 2^n, node
+// b's constant 2^n - 1: a's low n bits are x's.
+func (k *Kernel) beside(a, b int) (int, bool) {
+	mb, nd := k.Nodes[b], k.Nodes[a]
+	if mb.Op != OpConst || mb.Imm <= 0 || mb.Imm&(mb.Imm+1) != 0 || nd.Op != OpAdd || nd.Type != ir.U32 {
+		return 0, false
+	}
+	m := mb.Imm + 1
+	switch {
+	case k.factor(nd.B)%m == 0:
+		return nd.A, true
+	case k.factor(nd.A)%m == 0:
+		return nd.B, true
+	}
+	return 0, false
+}
+
+// shiftedAddend is x, p and c where node a is x + p*c, c a constant
+// multiple of 2^n and x no constant: the addend a shift by n divides
+// exactly.
+func (k *Kernel) shiftedAddend(a int, n int64) (x, p int, c int64, ok bool) {
+	nd := k.Nodes[a]
+	if nd.Op != OpAdd || nd.Type != ir.U32 {
+		return 0, 0, 0, false
+	}
+	for _, s := range [2][2]int{{nd.A, nd.B}, {nd.B, nd.A}} {
+		y := k.Nodes[s[1]]
+		if y.Op != OpMul || k.Nodes[s[0]].Op == OpConst {
+			continue
+		}
+		for _, f := range [2][2]int{{y.A, y.B}, {y.B, y.A}} {
+			if cn := k.Nodes[f[1]]; cn.Op == OpConst && cn.Imm > 0 && cn.Imm%(1<<n) == 0 {
+				return s[0], f[0], cn.Imm, true
+			}
+		}
+	}
+	return 0, 0, 0, false
 }
 
 // multipleOf is x where node a is x*m + j, m node b's constant and j a

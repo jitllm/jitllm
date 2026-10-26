@@ -16,8 +16,9 @@ var cpuServedModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "
 
 // TestComposedCPUBlocksServe runs each model's blocks on the CPU three ways,
 // teacher-forced on one token sequence: on main's kernels, on what the
-// composer forms for the CPU (float activations: the CPU's profile has no
-// int8 form), and on main's kernels at another activation window, main's own
+// composer forms for the CPU (its int8 form: activations quantized in
+// windows of 32, integer dots), and on main's kernels at another activation
+// window, main's own
 // spread (the control), the history in the State's KV pages. Every block
 // step must be served (served = steps x blocks, nothing declined, each block
 // composed once), and the composed logits held to main's within main's own

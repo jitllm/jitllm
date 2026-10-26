@@ -70,6 +70,10 @@ type cpuArg struct {
 	off    int
 	elem   int
 	val    uint64
+	// per is the elements the address moves a unit of each call
+	// coordinate (jit.CallArg.Per), moves whether any does.
+	per   [2]int
+	moves bool
 }
 
 // cpuCode is one kernel of a form, mapped, and its call words; reads and
@@ -307,11 +311,7 @@ func (s *State) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 			*(*uint64)(unsafe.Add(base, ar.field)) = ar.val
 			continue
 		case cpuArgCoord:
-			v := at
-			for ax := len(c.calls) - 1; ax > int(ar.coord); ax-- {
-				v /= c.calls[ax]
-			}
-			*(*uint64)(unsafe.Add(base, ar.field)) = uint64(v % c.calls[ar.coord])
+			*(*uint64)(unsafe.Add(base, ar.field)) = uint64(cpuCoord(c.calls, at, int(ar.coord)))
 			continue
 		case cpuArgWord:
 			*(*uint64)(unsafe.Add(base, ar.field)) = uint64(b.own[ar.i][ar.off])
@@ -342,8 +342,25 @@ func (s *State) cpuWords(a *cpu.Args, b *cpuBound, c *cpuCode, at int) {
 		case cpuArgZero:
 			p = unsafe.Pointer(&s.cpu.zero[0])
 		}
-		*(*uint64)(unsafe.Add(base, ar.field)) = uint64(uintptr(p)) + uint64(ar.off*ar.elem)
+		off := ar.off
+		if ar.moves {
+			for ax := range c.calls {
+				if ax < len(ar.per) && ar.per[ax] != 0 {
+					off += cpuCoord(c.calls, at, ax) * ar.per[ax]
+				}
+			}
+		}
+		*(*uint64)(unsafe.Add(base, ar.field)) = uint64(uintptr(p)) + uint64(off*ar.elem)
 	}
+}
+
+// cpuCoord is call at's coordinate along axis ax of the calls' space calls,
+// the last axis fastest.
+func cpuCoord(calls []int, at, ax int) int {
+	for a := len(calls) - 1; a > ax; a-- {
+		at /= calls[a]
+	}
+	return at % calls[ax]
 }
 
 // region runs the calls [lo, hi) of the kernel the State's run names, on
@@ -590,6 +607,17 @@ func buildCPUForm(gr *graph.Graph, codes []jit.Code) (*cpuBlockForm, error) {
 			if a.Field < 0 || uintptr(a.Field)+8 > unsafe.Sizeof(cpu.Args{}) {
 				f.close()
 				return nil, fmt.Errorf("%s: a call word at %d past the argument block", c.Name, a.Field)
+			}
+			if a.Elem > 0 {
+				ar.elem = a.Elem
+			}
+			if len(a.Per) > len(ar.per) || len(a.Per) > len(c.Calls) {
+				f.close()
+				return nil, fmt.Errorf("%s: an address moving along %d axes of a calls' space of %d", c.Name, len(a.Per), len(c.Calls))
+			}
+			for ax, n := range a.Per {
+				ar.per[ax] = n
+				ar.moves = ar.moves || n != 0
 			}
 			switch {
 			case a.Coord > 0:

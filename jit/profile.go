@@ -52,11 +52,12 @@ func gpuProfile() Profile {
 
 // cpuProfile is main's passes on the host.
 func cpuProfile() Profile {
-	return Profile{Passes: []Pass{
+	return Profile{Int8: &Int8Form{Window: 32, Word: 4, Sums: 16, UnsignedDot: uint64(x86.ISAVNNI)}, Passes: []Pass{
 		Quarters{Regs: []int{4, 6, 7, 8, 10, 12, 9, 15}},
 		Prescale{},
 		Bounds{},
 		Fuse{Pairs: []Pair{{From: PrimReduce, To: PrimReduce, Unrolled: true}}},
+		Workers{Rows: 16},
 		Serial{},
 		Simplify{ConstLast: true},
 		RunLengths{},
@@ -75,6 +76,7 @@ func cpuProfile() Profile {
 		FirstTerm{},
 		HalfWords{},
 		Jam{Lanes: 8, Sums: 8, Temps: map[Op]int{OpDot4: 2, OpDot4U: 2}, Spread: []int{15, 13}, Rows: 14},
+		Periods{Most: 8},
 		Vectorize{Lanes: 8, Pairs: [5]int{0, 2, 3, 4, 5}, Carry: []int{9, 10, 8}, Keep: true, Quads: true, QuadRegs: []int{13, 15, 9}},
 		InPlace{},
 		Unroll{Vectors: 4},
