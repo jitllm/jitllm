@@ -518,14 +518,19 @@ func (g *devTier) composedBlock(li int, bb *blockScratch) bool {
 		g.LastErr = fmt.Sprintf("block %d is not on the device: a prompt over it runs no reserved width", li)
 		return false
 	case !g.promptServed(l, li, bb):
-		// A step over rows asks this every call (rowsComposed): the reason
-		// is formatted once for a block and width, not at every step.
-		if g.notComposed != [2]int{li, bb.rows} || g.notComposedWhy == "" {
-			g.notComposed = [2]int{li, bb.rows}
-			g.notComposedWhy = fmt.Sprintf("block %d's prompt is not the composer's at %d rows (%s): its prompts run at their own widths",
+		// A step over rows asks this every call (rowsComposed), for every
+		// block and width it covers: each reason is formatted once.
+		k := [2]int{li, bb.rows}
+		why, ok := g.notComposedWhy[k]
+		if !ok {
+			why = fmt.Sprintf("block %d's prompt is not the composer's at %d rows (%s): its prompts run at their own widths",
 				li, bb.rows, g.blockServes(l, li, &bb.p, bb, false, true))
+			if g.notComposedWhy == nil {
+				g.notComposedWhy = map[[2]int]string{}
+			}
+			g.notComposedWhy[k] = why
 		}
-		g.LastErr = g.notComposedWhy
+		g.LastErr = why
 		return false
 	}
 	return true

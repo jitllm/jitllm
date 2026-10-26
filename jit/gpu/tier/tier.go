@@ -898,9 +898,10 @@ type Stats struct {
 	PersistLaunches, PersistParts, PersistPhases, PersistCompiles, PersistFallbacks int
 	PersistDepLaunches, PersistDepTiles                                             int
 	PersistWhy                                                                      string
-	// RagHeadOne counts ragged steps whose head ran decode's own projection on
-	// the one row that wanted logits, rather than a batched twin over every
-	// row (a prompt chunk's last row, alone in wanting the head).
+	// RagHeadOne counts ragged steps whose head projected only the one row
+	// that wanted logits, by decode's own projection or the composer's head at
+	// one row, rather than a batched twin over every row (a prompt chunk's
+	// last row, alone in wanting the head).
 	RagHeadOne int
 	// SampleReads counts tokens whose sampler ran on the device and read
 	// back k candidates instead of the vocabulary (nn.Head.SampleK).
@@ -2011,10 +2012,9 @@ type devShared struct {
 	// cause is what kind of refusal the last call was (nn.FailCause), written
 	// by the code that met it and cleared at the head of every call.
 	cause atomic.Uint32
-	// notComposed is the block and width composedBlock last found not the
-	// composer's, and notComposedWhy the reason it gave.
-	notComposed    [2]int
-	notComposedWhy string
+	// notComposedWhy is composedBlock's reason for each block and width it
+	// found not the composer's, formatted once.
+	notComposedWhy map[[2]int]string
 	// stages is the rows stages running here, under the GPU's stageMu, and
 	// stageMu is held by the one running (GPU.stageBegin).
 	stages  int

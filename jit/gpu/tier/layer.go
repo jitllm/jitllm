@@ -7815,9 +7815,13 @@ func (g *devTier) layersOnce(sid uint64, bs *blockScratch, lo, hi, pos int, x, c
 			ragHead = head.WantedRows(ragN)
 		}
 	}
-	// Counted here rather than in emit, which a replayed recording skips.
-	if ragHead == 1 && !headSrv {
-		if _, ok := g.headOneMV(R); ok {
+	// Counted here rather than in emit, which a replayed recording skips. The
+	// composer's head runs the wanted rows' count (servedHead's rows.n), and
+	// ragHead is in the recording's key.
+	if ragHead == 1 {
+		if headSrv {
+			g.RagHeadOne++
+		} else if _, ok := g.headOneMV(R); ok {
 			g.RagHeadOne++
 		}
 	}
