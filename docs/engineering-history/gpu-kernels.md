@@ -8211,7 +8211,10 @@ row where the composer's reads two.
   register binding refuses a kernel for pressure (`jit.ErrRegisterPressure`,
   `PressureError` naming the parts), the largest expression formed whole in
   that part is formed a map a term and the run passed again, at compose time:
-  xIELU binds whole on one element and as nine maps over a vector loop. Its
+  xIELU binds whole on one element and as nine maps over a vector loop, and
+  synth-apertus joins the served models (median ratio 0.906 and 0.915 to the
+  tier's distance on a V100's CUDA and Vulkan). No served model states GELU
+  with erf: only modern-bert's entry does. Its
   whole map exposed an ordering bug: a twin's reader was emitted with a float
   zero it reads left out of the sequence (`beforeShare` counted every
   constant as made), so the lowering found "node 22 (const) has no register";
@@ -8229,6 +8232,6 @@ row where the composer's reads two.
   (falcon), 3.54e-3 (starcoder), 5.27e-3 (falcon40), 5.65e-3 (phi2), 9.79e-3
   (starcoder2), 1.31e-2 (nemotron), 6.74e-2 (commandr), 0.134 (stablelm),
   0.140 (stablelm-par) and 0.169 (cohere2) in `TestC6ServesComposed` on a
-  V100's CUDA and Vulkan, and 2.38e-2 to 0.153 on the dense fixtures in
-  `TestC6OnEveryDevice` on its Vulkan, against a
+  V100's CUDA and Vulkan, and 2.36e-3 (falcon) to 0.171 (cohere2) on the
+  nineteen fixtures of `TestC6OnEveryDevice` on both, against a
   bound of 1e-4 and a hundred times a clean arm's 7e-12 at most.
