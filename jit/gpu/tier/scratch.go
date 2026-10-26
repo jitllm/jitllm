@@ -2,6 +2,7 @@ package tier
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/nn"
@@ -451,16 +452,16 @@ func (g *devTier) batchFor(w int) int {
 // formed or compiled for the call's length, and a call longer than the
 // reserved width runs in chunks of it. A block that is not served is named
 // in LastErr. Callers hold g.mu, outside any submission.
-func (g *devTier) promptComposed(lo, hi int) bool { return g.rangeComposed(lo, hi, ComposedPrompt) }
+func (g *devTier) promptComposed(lo, hi int) bool { return g.rangeComposed(lo, hi, ComposedPrompt, true) }
 
 // rowsComposed is promptComposed for a ragged step over blocks [lo, hi): its
 // blocks are asked as decode's (ComposedBlock), a prompt's ragged rows as the
 // prompt's.
 func (g *devTier) rowsComposed(lo, hi int) bool {
 	if g.prompt {
-		return g.promptComposed(lo, hi)
+		return g.rangeComposed(lo, hi, ComposedPrompt, false)
 	}
-	return g.rangeComposed(lo, hi, ComposedBlock)
+	return g.rangeComposed(lo, hi, ComposedBlock, false)
 }
 
 // reservedFor is the reserved width's scratch where calls asked of the
@@ -481,18 +482,29 @@ func (g *devTier) headReserved() bool {
 }
 
 // rangeComposed reports whether the composer serves, as part, every block of
-// [lo, hi) in the reserved width (composedBlock).
-func (g *devTier) rangeComposed(lo, hi int, part Parts) bool {
+// [lo, hi) in the reserved width (composedBlock). With kept, a block the
+// caller keeps on the tier's kernels (Config.TierBlocks) runs there too, its
+// kernels at that width compiled at placement, as a prompt the composer
+// does not hold runs (promptHeld).
+func (g *devTier) rangeComposed(lo, hi int, part Parts, kept bool) bool {
 	bb := g.reservedFor(part)
 	if bb == nil || lo >= hi {
 		return false
 	}
+	served := false
 	for li := lo; li < hi; li++ {
+		if kept && slices.Contains(g.TierBlocks, li) {
+			if l := g.layers[li]; l == nil || !l.ok {
+				return false
+			}
+			continue
+		}
 		if !g.composedBlock(li, bb) {
 			return false
 		}
+		served = true
 	}
-	return true
+	return served
 }
 
 // composedBlock reports whether block li's prompt is the composer's at bb's

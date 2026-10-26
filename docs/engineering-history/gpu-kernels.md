@@ -8451,4 +8451,17 @@ row where the composer's reads two.
   and once more at the move, Stats.BlockForms), and has a two-card arm (the
   upper half and the head on a second card, then the lower half moved over);
   it counts DeclineBuilt and FormedAtStep beside forms, scratches and
-  compiles, and names any kernel compiled after placement.
+  compiles, and names any kernel compiled after placement. A prompt whose
+  range holds blocks the caller keeps on the tier's kernels runs in the
+  reserved width too, those blocks' kernels at it compiled at placement.
+  On a V100 (Llama-3.2-1B, card 3; the two-card arm cuda:0 on card 3 and
+  vulkan:4): placement composes 10 forms (68 kernels) and builds 1 scratch
+  on CUDA, 15 forms (127 kernels) and 2 scratches over two cards; after it,
+  on CUDA, Vulkan and both cards, the eight prompts, a second session, the
+  592-row batch, the move and the prompts after it compose, compile and
+  build nothing. Its violation (a form per chunk width) places 55 forms
+  (683 kernels) and 16 scratches and builds a scratch at a 5-token prompt.
+  Open: TestABatchLeavesAnotherSessionAlone's composed tight arm, where B
+  keeps none of 16 blocks: the budget it derives sits 320 KB under what is
+  charged once A has decoded, and the composed step's room check
+  (stepRoom) refuses at every relocation.
