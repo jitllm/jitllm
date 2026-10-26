@@ -197,15 +197,13 @@ func (g *devTier) layersRows(lo, hi int, rs *ragStep, x, cs, csSWA []float32, he
 // Callers hold g.mu.
 func (g *devTier) rowsWidth(lo, n int) int {
 	grain := batchGrain
-	if lo >= 0 && lo < len(g.layers) {
-		if l := g.layers[lo]; l != nil && l.ok {
-			// The block's first projection: a latent block with a query latent
-			// has no mvq, and a linear block none of the attention's.
-			for _, m := range []mv{l.mvq, l.mvQA, l.mvKVA, l.mvSO} {
-				if m.kern != nil {
-					g.batchMV(m, batchGrain, 1)
-					break
-				}
+	if l := g.layers[lo]; l != nil && l.ok {
+		// The block's first projection: a latent block with a query latent
+		// has no mvq, and a linear block none of the attention's.
+		for _, m := range []mv{l.mvq, l.mvQA, l.mvKVA, l.mvSO} {
+			if m.kern != nil {
+				g.batchMV(m, batchGrain, 1)
+				break
 			}
 		}
 	}
