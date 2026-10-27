@@ -55,7 +55,7 @@ var uncoveredNames = [numUncovered]string{
 	UncoveredRouterScore: "a router whose score the container does not state, or whose weights are not the scores it selects",
 	UncoveredExperts: "routed experts weighted at their input, beside a dense MLP, in a latent of their own, " +
 		"scaled one by one or stored one matrix each",
-	UncoveredGeometry:   "a layer of its own head width, head count or rotary width",
+	UncoveredGeometry:   "a value head of another width than the key's, or a layer of its own rotary width turned by the model's rotary",
 	UncoveredSelect:     "an attention indexer or sparse key selection",
 	UncoveredStreams:    "several residual streams",
 	UncoveredRopeAxes:   "a rotary over position axes its sections do not state (a pair's halves turned apart)",
@@ -322,7 +322,6 @@ func (m *Model) inventory(block int32) (graph.Facts, bool) {
 // model is called.
 func (m *Model) uncovered(li int) Uncovered {
 	c := m.Cfg
-	hd := c.HeadDimAt(li)
 	switch k := c.LayerKind(li); {
 	case c.mixerAt(li) != mixNone && !k.Attends():
 		return m.uncoveredRest(li)
@@ -331,8 +330,7 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredKind
 	}
 	switch {
-	case hd != c.HeadDim || c.NKVHeadAt(li) != c.NKVHead || c.NRotAt(li) != c.NRot && !(m.ropeSWA != nil && c.SWA(li)) ||
-		!c.MLA() && c.HeadDimV != hd:
+	case c.NRotAt(li) != c.NRot && !(m.ropeSWA != nil && c.SWA(li)) || !c.MLA() && c.HeadDimV != c.HeadDim:
 		return UncoveredGeometry
 	case c.IdxHeads != 0:
 		return UncoveredSelect
@@ -340,7 +338,7 @@ func (m *Model) uncovered(li int) Uncovered {
 		return UncoveredStreams
 	case c.RopeAt(li) && !m.ropeAxesStated(m.ropeAt(li)):
 		return UncoveredRopeAxes
-	case c.NonCausal || c.BidirSWA:
+	case c.NonCausal:
 		return UncoveredNonCausal
 	case c.KVShared(li):
 		return UncoveredKVShared
@@ -680,7 +678,7 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 	}
 	x2 := resid(x, norm(proj, jlm.RolePostAttnNorm))
 	if !c.MoEAt(li) && !has(jlm.RoleFFNUp) && !has(jlm.RoleFFNDown) {
-		b.Out(x2)
+		b.Out(outScaled(b, has, x2))
 		return verified(b, f)
 	}
 	// A parallel block's MLP reads the block's input: through its own norm
@@ -713,8 +711,18 @@ func (m *Model) blockRest(b *graph.Builder, f graph.Facts, li int, x, n, att gra
 		h = norm(h, jlm.RoleFFNSubNorm)
 		ffn = matvec(h, jlm.RoleFFNDown, d, stored(jlm.RoleFFNDownBias)...)
 	}
-	b.Out(resid(x2, norm(ffn, jlm.RolePostFFNNorm)))
+	b.Out(outScaled(b, has, resid(x2, norm(ffn, jlm.RolePostFFNNorm))))
 	return verified(b, f)
+}
+
+// outScaled is the block's output y times the scalar the block stores
+// (jlm.RoleLayerOutScale), y where it stores none.
+func outScaled(b *graph.Builder, has func(jlm.Role) bool, y graph.ValueID) graph.ValueID {
+	if !has(jlm.RoleLayerOutScale) {
+		return y
+	}
+	return mapRow(b, "out.scaled", graph.Attrs{Fn: graph.MapMul, Width: 1}, []graph.Binding{{Role: jlm.RoleLayerOutScale, K: 1}},
+		b.G.Values[y].Width, y)
 }
 
 // verified is b's graph where it verifies against f and binds every tensor

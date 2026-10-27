@@ -1495,6 +1495,8 @@ func (l *layer) roleVector(r jlm.Role) backend.Buf {
 		return l.nSubFFN
 	case jlm.RoleXIELU:
 		return l.xielu
+	case jlm.RoleLayerOutScale:
+		return l.outScale
 	case jlm.RoleAttnQANorm:
 		return l.nQA
 	case jlm.RoleAttnKVANorm:

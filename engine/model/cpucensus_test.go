@@ -32,6 +32,7 @@ func TestCPUComposesOnce(t *testing.T) {
 		{"synth-lfm2.gguf", []int{1, 5, 33, 100}},
 		{"synth-falconh1.gguf", []int{1, 5, 33, 100}},
 		{"synth-nemotronh.gguf", []int{1, 5, 33, 100}},
+		{"synth-gemma4.gguf", []int{1, 5, 33, 100}},
 	} {
 		t.Run(tc.file, func(t *testing.T) {
 			m, err := Open(jlmOf(t, testmodels.Path(tc.file)), noTune, WithComposedCPU(true))

@@ -46,7 +46,7 @@ func TestC6ServesComposed(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			m, g := openC6(t, name)
 			defer m.Close()
-			ran += servesComposed(t, m, g.IDs, bound, append(slices.Clone(c6DevViolations[name]), statedViolations(m)...))
+			ran += servesComposed(t, m, g.IDs, bound, append(slices.Clone(c6DevViolations[name]), statedViolations(m)...), true)
 		})
 	}
 	if ran == 0 {
@@ -59,8 +59,9 @@ func TestC6ServesComposed(t *testing.T) {
 // head served at every step, within bound of the host's logits with no
 // argmax flip, and each violation of vs, taken out of the model while the
 // device runs, moving them past 100 times the clean arm's worst and past
-// 1e-4. It returns how many devices ran.
-func servesComposed(t *testing.T, m *Model, ids []int32, bound float64, vs []c6Violation) int {
+// 1e-4; with whole, every part of each step too (wholeStepC6). It returns
+// how many devices ran.
+func servesComposed(t *testing.T, m *Model, ids []int32, bound float64, vs []c6Violation, whole bool) int {
 	t.Helper()
 	const promptLen = 3
 	ran := 0
@@ -131,7 +132,9 @@ func servesComposed(t *testing.T, m *Model, ids []int32, bound float64, vs []c6V
 				}
 				t.Logf("violation %q: worst NMSE %.3e", v.name, bad)
 			}
-			wholeStepC6(t, m, dev, prompt, toks, want, bound)
+			if whole {
+				wholeStepC6(t, m, dev, prompt, toks, want, bound)
+			}
 			ran++
 		})
 	}

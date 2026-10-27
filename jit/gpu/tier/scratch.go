@@ -661,10 +661,23 @@ func countLeft(bs *blockScratch) int {
 
 // prewarmDecodePlans builds the decode scratch's attention plan at every key
 // count its history can reach (pagedPlanFor follows the count, rounded to
-// scoreGrain): the plans differ in split count at a few depths only, and one
-// met first at a token would compile inside it. Callers hold g.mu.
+// scoreGrain), in every causal scratch set (gemma4.go): the plans differ in
+// split count at a few depths only, and one met first at a token would
+// compile inside it. Callers hold g.mu.
 func (g *devTier) prewarmDecodePlans() {
-	bs := g.bs
+	home := g.geoCur
+	defer g.useGeom(home)
+	for _, k := range append([]geoKey{home}, g.geoKeys()...) {
+		g.useGeom(k)
+		if g.bs != nil && !g.bs.p.NonCausal {
+			g.prewarmDecodePlansOf(g.bs)
+		}
+	}
+}
+
+// prewarmDecodePlansOf is prewarmDecodePlans for the decode scratch bs.
+// Callers hold g.mu.
+func (g *devTier) prewarmDecodePlansOf(bs *blockScratch) {
 	if bs == nil || bs.pkv == nil {
 		return
 	}

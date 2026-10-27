@@ -9219,3 +9219,34 @@ row where the composer's reads two.
   the same requests, ten of them at the same token and host gap (request 10
   in the "23341 2529" loop request 24 fell into before): the parting MP1b
   read as a groups fault is the schedule's path switch.
+- **Gemma 4's two geometries and its picture run, composed.** The front end
+  no longer refuses a layer of its own head width or kv head count (each
+  block's graph is stated at HeadDimAt/NKVHeadAt already) nor a model whose
+  image rows see each other on the sliding layers (Config.BidirSWA): a run
+  is each row's key count in the descriptors the composed attention reads,
+  not a flag, and the stored layer scalar is an op over its bound vector
+  (RoleLayerOutScale). UncoveredGeometry is left to a value head of another
+  width than the key's; UncoveredNonCausal to whole non-causal models. On
+  the CPU device the runs follow the layer (State.runsAt: the sliding layers
+  alone under BidirSWA), and a run longer than a call of 64 rows is no
+  longer declined: a first pass over a copy of the rows writes every row's
+  keys, its outputs dropped, and the second reads them (synth-gemma4v's
+  266-row picture: 48 block steps served, 7e-08 from main; causal
+  everywhere 1.39, bidirectional on every layer 0.196). On the cards the
+  first run of synth-gemma4 and -kv read 1.5 from the host while the CPU
+  sat at 4e-10 and -wide at 1e-10: the prologue pass ran the sliding
+  layers' v append (after their weightless v norm) inside the attention's
+  workgroups and kept its output, the history's value pool, in workgroup
+  memory, so every earlier position read what that memory happened to
+  hold (no v norm: 1e-08). Prologue now leaves a producer that stores a
+  table where it is: served at 4.8e-12 (CUDA) and 4.7e-12 (Vulkan) from the
+  host, -kv 6.5e-12 and 7.0e-12, -wide 1.5e-10 and 4.7e-11, and the picture
+  prompt on the cards at 8.3e-11 and 8.1e-11 (its violations 1.40 and
+  0.197), every block step served. The decode plans are
+  prewarmed in every causal scratch set, not only the one in use (the
+  sliding set compiled flashkvpaged and flashmergewide at a step). Open:
+  the step's tables on a split model (each set holds one table where the
+  plan states two; served, the CUDA laptop card hung in the whole step), so
+  the input rows and tables of Gemma 4 stay declined by name
+  (DeclineNoTable); per-layer embeddings and KV sharing (E2B/E4B) and the
+  26B's dense MLP beside its experts are G4's.

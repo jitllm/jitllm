@@ -1033,8 +1033,10 @@ type layer struct {
 	// before k's norm and rotary run.
 	vFromK bool
 	// outScale multiplies the block's output row after its last residual add
-	// (Gemma 4's layer_scalar). Zero means none.
-	outScale float32
+	// (Gemma 4's layer_scalar). Zero means none. outScaleRow is it as the
+	// container stores it, the vector a composed block binds.
+	outScale    float32
+	outScaleRow []float32
 	// xielu is an Apertus block's activation numbers (jlm.RoleXIELU: alpha_p,
 	// alpha_n, beta, eps), read where Config.Act is ActXIELU; nil elsewhere.
 	xielu []float32
@@ -3397,7 +3399,7 @@ func build(c *jlm.File, options ...tok.Option) (*Model, error) {
 			if len(sc) != 1 {
 				return nil, fmt.Errorf("model: block %d's output scale has %d values, want 1", bi, len(sc))
 			}
-			l.outScale = sc[0]
+			l.outScale, l.outScaleRow = sc[0], sc
 		}
 		if l.postFFNNorm, err = optVec(jlm.RolePostFFNNorm, bi); err != nil {
 			return nil, err

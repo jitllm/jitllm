@@ -164,6 +164,9 @@ type cpuState struct {
 	// xpad is a call's residual rows where its kernels' units reach past
 	// them (cpuBlockForm.unit).
 	xpad []float32
+	// runX is a copy of a step's rows whose keys a first pass writes, where
+	// a bidirectional run takes more calls than one (cpuRowsRun).
+	runX []float32
 	// own is each form's own buffers, by form: blocks of one form run one
 	// after another, so they share them.
 	own map[*cpuBlockForm][][]uint32
@@ -461,15 +464,8 @@ func (s *State) cpuRowsForm(li int, l *layer) (*cpuBlockForm, jit.Decline) {
 
 // cpuRowsReady makes the pages of the history the rows at pos write and
 // read resident, in block li's arena, or says why f cannot run them: a
-// bidirectional run cut across calls, a history past f's key bound, a page
-// outside the arena.
+// history past f's key bound, a page outside the arena.
 func (s *State) cpuRowsReady(li int, f *cpuBlockForm, pos []int) jit.Decline {
-	n := len(pos)
-	// A bidirectional run (bidir.go) counts its rows' keys to its end, every
-	// row of it in one call.
-	if len(s.bidir) > 0 && s.bidirIn(pos[0], n) && n > f.rows {
-		return jit.DeclineBidir
-	}
 	pg := &s.kv.layers[li]
 	if pg.p == 0 {
 		return jit.DeclineServes
@@ -494,11 +490,29 @@ func (s *State) cpuRowsReady(li int, f *cpuBlockForm, pos []int) jit.Decline {
 }
 
 // cpuRowsRun runs block li's rows' form f over the rows of x, their history
-// the State's, a call of at most f's capacity at a time.
+// the State's, a call of at most f's capacity at a time. A bidirectional
+// run (bidir.go) counts its rows' keys to its end; where the step takes
+// more calls than one, a first pass over a copy of the rows writes every
+// row's keys, its outputs dropped and each row reading only the keys
+// before it, and the second reads them all.
 func (s *State) cpuRowsRun(li int, l *layer, f *cpuBlockForm, x, cs []float32, nrot int, seq, pos []int) {
+	runs := s.runsAt(li) && s.bidirIn(pos[0], len(pos))
+	if runs && len(pos) > f.rows {
+		n := len(pos) * s.c.ResidW()
+		if len(s.cpu.runX) < n {
+			s.cpu.runX = make([]float32, n)
+		}
+		copy(s.cpu.runX, x[:n])
+		s.cpuRowsCalls(li, l, f, s.cpu.runX[:n], cs, nrot, seq, pos, false)
+	}
+	s.cpuRowsCalls(li, l, f, x, cs, nrot, seq, pos, runs)
+}
+
+// cpuRowsCalls is cpuRowsRun's calls, each row's keys counted to its run's
+// end where runs is set.
+func (s *State) cpuRowsCalls(li int, l *layer, f *cpuBlockForm, x, cs []float32, nrot int, seq, pos []int, runs bool) {
 	n := len(pos)
 	pg := &s.kv.layers[li]
-	runs := len(s.bidir) > 0 && s.bidirIn(pos[0], n)
 	w := s.c.ResidW()
 	slots := max(pg.arenaSlots(), 1)
 	b := &s.cpu.bound
@@ -1249,6 +1263,8 @@ func (s *State) cpuRoleVector(l *layer, r jlm.Role) []float32 {
 		return l.ffnSubNorm
 	case jlm.RoleXIELU:
 		return l.xielu
+	case jlm.RoleLayerOutScale:
+		return l.outScaleRow
 	case jlm.RoleSSMA:
 		return l.ssmA
 	case jlm.RoleSSMDtBias:

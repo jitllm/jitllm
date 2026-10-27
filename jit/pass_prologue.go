@@ -160,6 +160,11 @@ func (p Prologue) fits(pr, c *Kernel, d Device) bool {
 		switch {
 		case b.Kind == BufShared:
 			words += (b.Size*ElemBytes(b) + 3) / 4
+		case b.Kind == BufOut && b.Operand.Kind == OperandTable:
+			// A table it stores -- a history's pool -- is state the
+			// consumer reads beyond what the producer writes: other
+			// positions' rows, which a workgroup copy would not hold.
+			return false
 		case b.Kind != BufOut:
 		case readsOperand(pr, b.Operand):
 			// An output the producer reads back stays where it reads it.

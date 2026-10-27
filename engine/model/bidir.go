@@ -22,6 +22,13 @@ func (s *State) bidirEnd(pos int) int {
 	return 0
 }
 
+// runsAt reports whether block li's attention honours the State's runs:
+// every block's, or the sliding blocks' alone where the model's image rows
+// see each other on those (Config.BidirSWA).
+func (s *State) runsAt(li int) bool {
+	return len(s.bidir) > 0 && (!s.c.BidirSWA || s.c.SWA(li))
+}
+
 // bidirChunk is a chunk's row count n, starting at position p0, moved so no
 // run is cut: a run that would straddle the end is left to the next chunk when
 // rows come before it, and taken whole (past n) when it starts the chunk.

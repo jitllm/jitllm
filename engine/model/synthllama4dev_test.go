@@ -208,7 +208,7 @@ func TestSynthLlama4ServesComposed(t *testing.T) {
 		{"the temperature's floor doubled", mut(func(c *Config) { c.AttnTempFloor *= 2 })},
 		{"no chunk at all", mut(func(c *Config) { c.SWAWindow = 0 })},
 	}
-	if servesComposed(t, m, g.IDs, 1e-6, vs) == 0 {
+	if servesComposed(t, m, g.IDs, 1e-6, vs, true) == 0 {
 		t.Skip("no device on this host")
 	}
 }

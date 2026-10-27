@@ -4,6 +4,8 @@ import (
 	"math"
 	"slices"
 	"testing"
+
+	"github.com/jitllm/jitllm/format/jlm"
 )
 
 // Gemma 4 held to transformers' own Gemma4ForCausalLM: scripts/gemma4gold.py
@@ -175,7 +177,9 @@ var gemma4MoEViolations = []c6Violation{
 
 // noLayerScalar runs every block at scale one.
 func noLayerScalar(m *Model) func() {
-	return eachLayer(m, func(l *layer) { l.outScale = 0 })
+	undoL := eachLayer(m, func(l *layer) { l.outScale = 0 })
+	undoR := dropStored(m, jlm.RoleLayerOutScale)
+	return func() { undoR(); undoL() }
 }
 
 // globalRopeIsLocal gives the global layers the sliding layers' base with no
