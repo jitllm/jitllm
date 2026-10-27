@@ -195,15 +195,27 @@ func TestComposedGPURowTiles(t *testing.T) {
 	if len(devs) == 0 {
 		t.Fatal("no GPU backend on this host: the gate runs on one")
 	}
-	const guard, n, k, capacity = 64, 2048, 256, 512
+	const guard, capacity = 64, 512
 	calls := []int{1, 3, 7, 31, 33, 100, 511, 512}
+	// Every format at 2048 rows of 256, and a router's shape: 128 rows of
+	// 2048 floats, a sum long enough that a pass would block it.
+	type shape struct {
+		typ  quant.Type
+		n, k int
+	}
+	var shapes []shape
+	for _, typ := range tiledFormats {
+		shapes = append(shapes, shape{typ, 2048, 256})
+	}
+	shapes = append(shapes, shape{quant.F32, 128, 2048})
 	for _, d := range devs {
 		defer d.Close()
 		t.Run(d.API(), func(t *testing.T) {
 			dev := gpuDevice(d)
 			rng := rand.New(rand.NewSource(43))
 			ran, tiledRan, fewRan := 0, 0, 0
-			for _, typ := range tiledFormats {
+			for _, sh := range shapes {
+				typ, n, k := sh.typ, sh.n, sh.k
 				jt, ok := jlm.TypeOf(typ)
 				q, qok := kernels.QuantOf(typ)
 				if typ == quant.F32 {
@@ -239,7 +251,7 @@ func TestComposedGPURowTiles(t *testing.T) {
 						want = int8Projection(t, typ, w, x, n, k, 32, false)
 					}
 					for _, R := range []int{1, capacity} {
-						name := fmt.Sprintf("%v/float %v/%d rows", typ, float, R)
+						name := fmt.Sprintf("%v %dx%d/float %v/%d rows", typ, n, k, float, R)
 						b := graph.New()
 						in := b.In("x", k)
 						out := b.MatVec(in, jlm.RoleAttnQ, n)

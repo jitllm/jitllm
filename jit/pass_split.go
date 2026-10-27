@@ -447,7 +447,9 @@ func (b Blocks) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 
 func (b Blocks) apply(n *Kernel) ([]*Kernel, bool, error) {
 	B := b.Size
-	if !covers(b.Kinds, n.Kind) {
+	// A form for few rows sums as its tiled form does, which blocks none
+	// of its several sums a loop.
+	if !covers(b.Kinds, n.Kind) || n.Few > 0 || n.Many > 0 {
 		return nil, false, nil
 	}
 	var r *Kernel
