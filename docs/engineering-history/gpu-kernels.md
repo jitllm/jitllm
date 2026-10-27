@@ -9076,3 +9076,21 @@ row where the composer's reads two.
   each); Jamba-reasoning-3B (every block has an MLP, so not this) and
   LFM2-1.2B's 1.503 on CUDA (its arm sits 0.142 from the float reference
   on both backends at its worst; CUDA's tier 0.091, Vulkan's 0.109).
+- **A prologue's budget counts the group sums' arrays.** Falcon-H1's scan
+  at the reserved width (512 rows) ran its step map inside its workgroups
+  (Prologue) with a workgroup array of 12288 words, exactly the 12<<10
+  budget, while the lowering gives each group sum, maximum and exchange an
+  array of the workgroup's width beside it: 49280 bytes, past the 48 KiB
+  of static workgroup memory. sm_70's compiler refused the form (the V100's
+  "block 10's prompt is not the composer's at 512 rows", its prompts formed
+  again at their own widths, and the ragged step's cached failure formatted
+  every step) and sm_86 refused it at launch (cuLaunchKernel invalid
+  argument on every prompt and ragged step). The budget now counts those
+  arrays. Gate: TestPromptFormsFitTheWorkgroupsMemory (every block of each
+  served state-space checkpoint at 1, 64 and 512 rows, with and without
+  subgroups; Falcon-H1-0.5B's widest kernel 40192 bytes, LFM2-350M's 36480;
+  without the change Falcon-H1-0.5B's block 0 declares 49280 and fails). On
+  the laptop's sm_86 Falcon-H1-0.5B now passes TestPlacementComposesOnce
+  (one card) and TestDecodeDoesNotAllocate on every cuda arm; its serving
+  gate there reads a median 1.08 and 0.248 at its worst against 4 times
+  the one backend's 0.039 (the V100 holds it to two backends' widest).

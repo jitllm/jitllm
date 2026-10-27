@@ -147,6 +147,15 @@ func (p Prologue) fits(pr, c *Kernel, d Device) bool {
 			words += (b.Size*ElemBytes(b) + 3) / 4
 		}
 	}
+	// The lowering gives each group sum, maximum and exchange an array of
+	// the workgroup's width (lowergpu): they share the workgroup's memory.
+	for _, k := range []*Kernel{c, pr} {
+		for _, nd := range k.Nodes {
+			if nd.Op == OpGroupSum || nd.Op == OpGroupMax || nd.Op == OpExchange {
+				words += c.Group
+			}
+		}
+	}
 	for _, b := range pr.Bufs {
 		switch {
 		case b.Kind == BufShared:
