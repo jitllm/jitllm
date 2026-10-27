@@ -26,7 +26,7 @@ func (s SplitExtreme) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 }
 
 func (s SplitExtreme) apply(n *Kernel) ([]*Kernel, bool, error) {
-	if n.Work || !covers(s.Kinds, n.Kind) {
+	if n.Work || !covers(s.Kinds, n.Kind) || n.Few > 0 || n.Many > 0 {
 		return nil, false, nil
 	}
 	c, ext, car, vs, cs, ok := extremeSplittable(n)

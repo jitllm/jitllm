@@ -135,7 +135,7 @@ func (f Fuse) joinsUnrolled(p, c *Kernel, ks []*Kernel) (Operand, bool) {
 		allowed = allowed || pr.Unrolled && pr.From == p.Kind && pr.To == c.Kind
 	}
 	fd, ok := p.fold()
-	if !allowed || !ok || p.Work || c.Work || len(c.Loops) > 0 && c.Kind != PrimReduce || len(p.Stores) != 1 ||
+	if !allowed || !ok || p.Work || c.Work || p.Few > 0 || p.Many > 0 || len(c.Loops) > 0 && c.Kind != PrimReduce || len(p.Stores) != 1 ||
 		!p.storesOwn(p.Stores[0]) || p.Stores[0].Val != fd || p.Loops[0].Count > 0 ||
 		c.Kind == PrimReduce && (len(p.Loops) != 1 || p.Loops[0].Trip > unrolledTrips) ||
 		p.Loops[0].Trip*len(p.Nodes) > unrolledNodes {

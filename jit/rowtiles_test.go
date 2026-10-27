@@ -154,6 +154,88 @@ func TestRowTilesHoldTheOps(t *testing.T) {
 	t.Logf("the largest tiled kernel at 512 rows: %d ops with no registers stated or 32 a thread, %d at 4", sized[32], sized[4])
 }
 
+// TestComposedGPUWideRowsAreTheirOwn forms a projection whose rows are wide
+// enough to fill a device unsplit -- 65536 outputs of 64 floats, a head's
+// shape -- at a capacity of 16 rows on every device present, and runs it at
+// calls of 1 to 5 and 16 rows: each call's rows are bit for bit the
+// capacity's call's, where the device's arithmetic is exact through the
+// untiled form for few rows (which must be formed there), elsewhere through
+// the tiled form alone. The input's rows moved by one must part a call from
+// the capacity's: the comparison sees a row that is not its own.
+func TestComposedGPUWideRowsAreTheirOwn(t *testing.T) {
+	testlock.GPU(t)
+	devs := backend.Open()
+	if len(devs) == 0 {
+		t.Fatal("no GPU backend on this host: the gate runs on one")
+	}
+	const guard, n, k, R = 64, 65536, 64, 16
+	for _, d := range devs {
+		defer d.Close()
+		t.Run(d.API(), func(t *testing.T) {
+			dev := gpuDevice(d)
+			rng := rand.New(rand.NewSource(47))
+			w := tiledWeights(quant.F32, kernels.Float32, n, k, rng)
+			qs, dw, sc, err := kernels.PackWeights(kernels.Float32, w, n, k)
+			if err != nil {
+				t.Fatal(err)
+			}
+			planes := [3][]uint32{qs, dw, sc}
+			b := graph.New()
+			in := b.In("x", k)
+			out := b.MatVec(in, jlm.RoleOutput, n)
+			b.Out(out)
+			_, formed, err := jit.Default().Form(jit.Request{Graph: b.G, Formats: map[jlm.Role]jlm.Type{jlm.RoleOutput: jlm.TypeF32},
+				Step: jit.Step{Rows: R, Page: 64, Keys: 1, ActWindow: 32}, Device: dev})
+			if err != nil {
+				t.Fatal(err)
+			}
+			few := 0
+			for _, c := range formed {
+				few = max(few, c.Few)
+			}
+			if dev.ExactArith && few == 0 {
+				t.Fatal("no form for few rows on a device whose arithmetic is exact")
+			}
+			op, err := compileLone(d, formed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer op.close()
+			x := make([]float32, R*k)
+			for i := range x {
+				x[i] = float32(rng.NormFloat64())
+			}
+			run := func(L int, x []float32) []float32 {
+				xs := make([]float32, R*k)
+				copy(xs, x[:L*k])
+				for i := L * k; i < len(xs); i++ {
+					xs[i] = math.Float32frombits(guardWord)
+				}
+				res, _, err := runGraphRows(d, formed, op.kerns, in, out, xs, R*n, guard, planes, L)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return res[:L*n]
+			}
+			full := run(R, x)
+			for _, L := range []int{1, 2, 3, 4, 5, R} {
+				got := run(L, x)
+				for i, v := range got {
+					if math.Float32bits(v) != math.Float32bits(full[i]) {
+						t.Fatalf("a call of %d rows writes row %d's element %d as %08x, a call of %d as %08x",
+							L, i/n, i%n, math.Float32bits(v), R, math.Float32bits(full[i]))
+					}
+				}
+			}
+			rot := append(slices.Clone(x[k:3*k]), x[:k]...)
+			if got := run(3, rot); slices.Equal(got[:n], full[:n]) {
+				t.Fatal("a call with the input's rows moved by one wrote row 0 as the capacity's call did: the gate cannot see it")
+			}
+			t.Logf("%s: calls of 1 to 5 and 16 rows bit for bit, the form for few rows up to %d rows", d.API(), few)
+		})
+	}
+}
+
 // tiledWeights is rows of k of t, random, with finite scales near one.
 func tiledWeights(t quant.Type, q kernels.Quant, rows, k int, rng *rand.Rand) []byte {
 	if t == quant.F32 {

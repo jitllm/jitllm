@@ -25,9 +25,10 @@ type Split struct {
 	Slots, Max, Block int
 	Parts             int
 	Group, Matrix     bool
-	// Few, where set, forms beside a tiled kernel's split (groupSplitRows)
-	// its untiled form, each row's sums cut and combined in the tiled one's
-	// order, launched in its place at a call of at most Few rows: a row
+	// Few, where set, forms beside a tiled kernel's split (groupSplitRows),
+	// or beside the tiled kernel where its rows are wide enough to take no
+	// split, its untiled form, each row's sums cut and combined in the tiled
+	// one's order, launched in its place at a call of at most Few rows: a row
 	// computed alone rather than with the tile's copies of it. Only on a
 	// device whose float arithmetic rounds every operation alone
 	// (Device.ExactArith), where the two kernels write a row's same bits.
@@ -42,6 +43,10 @@ func (s Split) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 }
 
 func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
+	if n.Few > 0 || n.Many > 0 {
+		// A pair's two forms are cut alike or not at all.
+		return nil, false, nil
+	}
 	if s.Parts == 0 && n.Tile > 1 && n.Capacity > 0 && !n.Work && covers(s.Kinds, n.Kind) && (!s.Matrix || readsMatrix(n)) {
 		if gs, ok := s.groupSplitRows(n, d); ok {
 			return gs, true, nil
@@ -216,6 +221,21 @@ func (s Split) groupSplitRows(n *Kernel, d Device) ([]*Kernel, bool) {
 	S := 1
 	for S < s.Max && E*S < 2*slots && K%(s.Block*S*2) == 0 && min(max(32*S*2, 128), 1024)*T <= splitShared {
 		S *= 2
+	}
+	if S == 1 {
+		// Rows wide enough to fill the device whole: no split, and the
+		// untiled form for few rows runs a row's sum as the tile does.
+		if s.Few == 0 || !d.ExactArith {
+			return nil, false
+		}
+		u, ok := untiled(n)
+		if !ok {
+			return nil, false
+		}
+		g := n.clone()
+		g.Many, u.Few = s.Few, s.Few
+		u.Name = n.Name + ".few"
+		return []*Kernel{g, u}, true
 	}
 	G := min(max(32*S, 128), 1024)
 	g, ok := splitTile(n, S, G)

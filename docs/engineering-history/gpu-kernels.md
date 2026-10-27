@@ -9250,3 +9250,98 @@ row where the composer's reads two.
   the input rows and tables of Gemma 4 stay declined by name
   (DeclineNoTable); per-layer embeddings and KV sharing (E2B/E4B) and the
   26B's dense MLP beside its experts are G4's.
+- **A lone row steps on the joint arm; the one-row cost is the capacity
+  form's.** On a device whose steps over rows are composed in the reserved
+  width (nn.RowsComposer), StepRuns now sends one State's run through the
+  joint arm as a step of one session (model.stepAlone), a prompt in chunks
+  of the device's width, and Model.LoneRows counts any row that still went
+  through Prefill or Forward there. TestStepRowsAreTheirOwn holds every arm
+  bit for bit, the one-at-a-time ones included, and LoneRows at zero
+  (stories15M and Qwen3-0.6B on the laptop, Qwen3-30B-A3B on two V100s);
+  with the route off both lone arms differ in every logit (up to 0.54 on
+  Qwen3-0.6B) and 2914 rows go lone. TestDecodeGroupsHoldUnderLoad passes
+  on two V100s with Qwen3-30B-A3B (16 requests, prompts 3072 and 384, 64
+  out): 0 of 32 requests part in waves, 0 of 32 in the closed loop, one
+  group from itself 0, 277 grouped steps; arms 8m15, 8m25, 7m38. The price
+  is the reserved-width form at few rows: on Qwen3-30B-A3B over two V100s a
+  lone decode step costs 86 ms on the joint arm against Forward's 11, and a
+  lone 960-token prompt 1.6-2.8 s against Prefill's 0.9-1.25 s
+  (backend.SetCUDAKernelTiming, per kernel, at one row: the tiled
+  projections 44 ms, one tiled float reduce a block 27 ms, 563 us a launch;
+  a 2048-to-128 float matvec, the router's shape, forms at 512 rows as one
+  workgroup of 128 threads at one row). A tiled projection computes its 16 rows a thread whatever the
+  call's rows, with no split of its sum: at one row Qwen3-0.6B's q, k, v, o,
+  gate, up and down launch 8 to 24 workgroups of 128 threads where the
+  one-row form launches 128 to 192 of 1024. Splitting a tiled kernel's sums
+  within a workgroup by the segments one unit of rows alone would take
+  (16 at 32 elements a group) brought the 30B's joint step from 86 ms to
+  52; it is not landed: its combine reads every row's segments, 1441 ops at
+  31 rows against TestRowTilesHoldTheOps' 1,000. A second form, each thread
+  storing only its segment's rows (the tile's row nodes kept on the kernel),
+  holds the bound and passes the rest of jit's tests, but the gate's
+  check that it discriminates reads workgroups, which the split multiplies
+  (5152 untiled against 1184 tiled at 32 rows, where it wants eight times):
+  that check needs a measure of weight loads a row before the form can land,
+  and it was not run on a card. Even split, a tiled form computes all 16
+  rows of its tile at a one-row call. TestLongPromptHasHistoryRoom
+  passes gpt-oss-20b's two 2051-token prompts on one V100 on this base with
+  the route and without it (budget 14620 and 14538 MiB, composed instances
+  10385 and 8347 MiB, reserved width 256 rows).
+- **A tiled projection splits its sums by one row's unit, and few rows run
+  untiled.** Split now cuts a tiled form's sums within a workgroup by the
+  segments one unit of its rows alone would take (groupSplitRows), each
+  thread storing its segment's rows; where the device rounds every float
+  operation alone (PTX's .rn, jit.Device.ExactArith) the split's untiled
+  form is formed beside it on the same operands, each row's sums cut and
+  combined in the tiled one's order, and launched in its place at a call of
+  at most four rows (Split.Few, Code.RunsAt). A row past the call's stores
+  the call's last row's sum from that row's partials: before, the tile's
+  copies of a row were summed apart and SPIR-V wrote row 30 of a 31-row
+  call other bits than the same row at 512. Blocks leaves both forms of a
+  pair alone: it blocked the one-fold form for few rows and never the
+  tiled one, and the 30B's router then summed in two orders (four arms of
+  TestStepRowsAreTheirOwn apart by up to 1.6 a logit); TestComposedGPURowTiles
+  holds every call's rows bit for bit to the capacity's call, a router's
+  128 by 2048 floats among them, and fails without the guard.
+  TestRowTilesHoldTheOps reads weight loads a row where it read workgroups:
+  16x with the pass (1277952 against 20447232 at 32 rows), failing at
+  RowTiles of 2. On Qwen3-30B-A3B over two V100s (CUDA, decode at capacity
+  16, in-process interleaved against Forward a row a State, n=12, A/A
+  0.986 to 1.000): a joint step at 1, 2, 4, 8 and 16 rows reads 86.6, 87.7,
+  91.0, 100.0 ms before and 18.7, 19.9, 22.7, 34.2 and 47.3 after, against
+  Forward's 11.3 ms a row: 1.65, 0.88, 0.50, 0.38 and 0.26 of it. The form
+  for few rows holds fewer elements a workgroup where a row's fill fewer
+  workgroups than the device has multiprocessors (jit.fewGroup, its
+  segments the tiled form's): the router's 128 outputs ran in 4
+  workgroups, 51 us a launch, and run in 64, 14 us (one row 21.3 ms before
+  it). A tiled form whose rows are wide enough to take no split (the
+  head's 151936 outputs) has its untiled form beside it too: the head at
+  one row 0.96 ms before, 0.30 after, against Forward's 0.23 (the wall at
+  one row unresolved, 18.7 and 18.8 ms in two runs;
+  TestComposedGPUWideRowsAreTheirOwn holds 65536 outputs bit for bit at
+  every call and fails with the few form storing the tile's second row).
+  At one row the device runs 22.8 ms and 2119 launches against Forward's
+  13.4 ms and 1371: the mixture's experts, unsplit at a capacity (5.8 ms
+  against Forward's split 4.2), the attention (2.0 ms against 0.9) and the
+  int8 forms Forward runs inside its consumers (241 launches, 1.7 ms).
+  Splitting a capacity's group sums by one row's unit too (every capacity
+  alike, so rows stay their own), before the router's workgroups, brought
+  one row from 21.1 to 18.1 ms and two from 22.2 to 19.9, but 8 and 16
+  rows from 35.6 and 48.5 to 37.6 and 52.9 and the 960-token prompt from
+  1645 to 1917 ms: a regression, not landed. A lone 960-token
+  prompt is 1651 ms on the joint arm (2397 before) against Prefill's 327:
+  the capacity forms at 256 rows against the tier's tensor-core prefill.
+  The routes that still run one State at a time on such a device are
+  counted by name (model.LoneRoute: forward, prefill, prefill-cached,
+  prefill-mixed, verify) and the server warms a model through StepRuns;
+  TestStepRowsAreTheirOwn holds every arm bit for bit with every route at
+  zero. TestStepAcrossSessionsMatchesEachAlone holds a composed build's
+  sessions alone on the joint arm bit for bit to their joint step (the
+  route off, Prefill and Forward, reads 1.8e-3 to 3.2e-3 NMSE), and
+  NoRagHeadOne makes the composer's head project every row of the step, the
+  one-row head's control. TestDecodeGroupsHoldUnderLoad passes on the two
+  V100s (0 of 32 requests part in waves, 0 of 32 in the closed loop, one
+  group from itself 0, 396 grouped steps; arms 6m17, 5m41, 5m09 against
+  8m15, 8m25, 7m38 before), and a lone run's step on the joint arm makes no
+  engine allocation (TestDecodeDoesNotAllocate's step-solo, Llama-3.2-1B on
+  a 3050 Ti, CUDA and Vulkan, the default tier and the four composed arms).
