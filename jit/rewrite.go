@@ -615,8 +615,12 @@ func (n *Kernel) reachesFold(i, f int) bool {
 
 // depth is the length of the longest chain of operations node i is made
 // from, a sum and a leaf 0; an fma multiplying an fma only it reads (a
-// Horner step) adds none, as it needs no register more.
-func (n *Kernel) depth(i int, memo map[int]int) int {
+// Horner step) adds none, as it needs no register more. A node made
+// reports (where made is given) is a leaf too.
+func (n *Kernel) depth(i int, memo map[int]int, made func(int) bool) int {
+	if made != nil && made(i) {
+		return 0
+	}
 	if d, ok := memo[i]; ok {
 		return d
 	}
@@ -631,7 +635,7 @@ func (n *Kernel) depth(i int, memo map[int]int) int {
 		if nd.Op == OpFma && n.Nodes[*a].Op == OpFma && n.uses(*a) == 1 && *a != nd.C {
 			step = 0
 		}
-		d = max(d, n.depth(*a, memo)+step)
+		d = max(d, n.depth(*a, memo, made)+step)
 	}
 	memo[i] = d
 	return d
@@ -640,7 +644,7 @@ func (n *Kernel) depth(i int, memo map[int]int) int {
 // evalArgs is node nd's operands in the order its code evaluates them: the
 // deeper first, the earlier of two alike, an fma's addend the earliest; a
 // Horner step's accumulator before all.
-func (n *Kernel) evalArgs(nd *Node, memo map[int]int) []*int {
+func (n *Kernel) evalArgs(nd *Node, memo map[int]int, made func(int) bool) []*int {
 	args := n.Operands(nd)
 	if nd.Op == OpFma {
 		args = []*int{&nd.C, &nd.A, &nd.B}
@@ -656,7 +660,7 @@ func (n *Kernel) evalArgs(nd *Node, memo map[int]int) []*int {
 	}
 	out := append([]*int(nil), args...)
 	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && n.depth(*out[j], memo) > n.depth(*out[j-1], memo); j-- {
+		for j := i; j > 0 && n.depth(*out[j], memo, made) > n.depth(*out[j-1], memo, made); j-- {
 			out[j], out[j-1] = out[j-1], out[j]
 		}
 	}

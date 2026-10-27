@@ -39,6 +39,9 @@ type Kernel struct {
 	Positions *Positions
 	Heads     *Heads
 	Part      PartKind
+	// Apart is Request.Apart: the graph's inputs and outputs are buffers
+	// of their own.
+	Apart bool
 	// Of is the model's part the kernel belongs to, by its index.
 	Of int
 	// Unfused is a kernel of a part the registers refused fused, with no

@@ -302,7 +302,7 @@ func (s SplitRange) copies(h Heads, S, stride int, part, maxes, sums Operand) *K
 // maximum less the greatest.
 func (s SplitRange) merge(last *Kernel, h Heads, S, stride int, part, values, sums Operand) *Kernel {
 	U, F := ir.U32, ir.F32
-	k := &Kernel{Name: "map", Kind: PrimMap, Space: []int{h.Rows * h.Query * h.Dim}, Heads: &h, Part: last.Part}
+	k := &Kernel{Name: "map", Kind: PrimMap, Space: []int{h.Rows * h.Query * h.Dim}, Heads: &h, Part: last.Part, Apart: last.Apart}
 	e := k.add(Node{Op: OpCoord, A: 0, Type: U})
 	rh, d := k.bin(OpDiv, U, e, k.u32(h.Dim)), k.bin(OpRem, U, e, k.u32(h.Dim))
 	pb := k.buf(Buf{Kind: BufIn, Elem: F, Operand: part, Extent: h.Rows * h.Query * S * stride})

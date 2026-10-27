@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit"
 )
 
 // Step decodes one token for each State at once, tokens[i] for states[i], and
@@ -592,13 +593,17 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		return nil, fmt.Errorf("model: the device refused a step of %d rows across %d sessions: %s",
 			rows, len(runs), why)
 	}
+	headed := false
 	if nlogit > 0 && c.streamHead() {
 		if err := s0.collapseStreams(x, rows); err != nil {
 			return nil, err
 		}
-		s0.altHeadNorm(nlogit)
-		if err := s0.mm(logits, *s0.outW, s0.bh, nlogit); err != nil {
-			return nil, err
+		headed = s0.cpuHeadRows(s0.bx, logits, nil, nlogit) == jit.DeclineServes
+		if !headed {
+			s0.altHeadNorm(nlogit)
+			if err := s0.mm(logits, *s0.outW, s0.bh, nlogit); err != nil {
+				return nil, err
+			}
 		}
 	}
 	out := s0.stepOut(len(runs))
@@ -608,9 +613,11 @@ func stepTogether(runs []Run, rows int, ss nn.SessionStepper) ([][]float32, erro
 		st.kv.note(st.bpos[0], r.Tokens...)
 		if r.Logits {
 			copy(st.logits, logits[at*c.NVocab:(at+1)*c.NVocab])
-			if c.streamHead() {
+			switch {
+			case headed:
+			case c.streamHead():
 				st.finishLogits(st.logits)
-			} else {
+			default:
 				st.finishApplied(st.logits, h.Applied)
 			}
 			out[i] = st.logits

@@ -67,7 +67,7 @@ func (s SplitExtreme) apply(n *Kernel) ([]*Kernel, bool, error) {
 	p.Stores[vs] = Store{Buf: vb, Val: ext, At: -1, Ax: append([]int{seg}, vst.Ax...)}
 	p.Stores[cs] = Store{Buf: cb, Val: car, At: -1, Ax: append([]int{seg}, cst.Ax...)}
 
-	m := &Kernel{Name: n.Name + ".combine", Kind: n.Kind, Space: append([]int(nil), n.Space...), Group: n.Group, Part: n.Part, Of: n.Of}
+	m := &Kernel{Name: n.Name + ".combine", Kind: n.Kind, Space: append([]int(nil), n.Space...), Group: n.Group, Part: n.Part, Apart: n.Apart, Of: n.Of}
 	coords := make([]int, len(m.Space))
 	for i := range coords {
 		coords[i] = m.add(Node{Op: OpCoord, A: i, Type: ir.U32})

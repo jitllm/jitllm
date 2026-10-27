@@ -1023,7 +1023,13 @@ func (s *State) prefillSrc(slot int, src []func(dst []float32) error, ids []int3
 			return nil, errDevice{s.gpuLayers, s.devWhy()}
 		}
 	}
-	if len(s.HostPick) == 0 && s.cpuHead(s.x, s.logits, nil) == jit.DeclineServes {
+	headed := false
+	if len(s.HostPick) > 0 {
+		headed = s.cpuPick(s.x) == jit.DeclineServes
+	} else {
+		headed = s.cpuHead(s.x, s.logits, nil) == jit.DeclineServes
+	}
+	if headed {
 		if err := s.kvCheck(); err != nil {
 			return nil, err
 		}
@@ -1309,7 +1315,7 @@ func (s *State) hostRows(li, slot, base, p0, n, chunkRows int, bidir bool) error
 			if c.LayerKind(li).Recurrent() {
 				why, err = s.cpuRecRows(li, l, s.bx[:n*c.ResidW()], s.bcs, seq, pos, nil, base, p0)
 			} else {
-				why, err = s.cpuRows(li, l, s.bx[:n*c.ResidW()], s.bcs, seq, pos)
+				why, err = s.cpuRows(li, l, s.bx[:n*c.ResidW()], s.bcs, s.bcsSWA, seq, pos)
 			}
 			if err != nil {
 				return err

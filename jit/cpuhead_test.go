@@ -197,23 +197,10 @@ func runCPUGraph(codes []Code, g *graph.Graph, rows int, x []float32, h *headWei
 	}
 	runtime.KeepAlive(keep)
 	runtime.KeepAlive(x)
-	var written []Operand
-	for _, b := range codes[len(codes)-1].Binds {
-		if b.Writes && b.Operand.Kind != OperandConsts {
-			written = append(written, b.Operand)
-		}
-	}
-	if len(written) != 1 {
-		return nil, fmt.Errorf("the last kernel writes %d operands (%+v), where the head's output is one", len(written), written)
-	}
-	var out []uint32
-	switch o := written[0]; o.Kind {
-	case OperandValue:
-		out = value(o.Value)
-	case OperandScratch:
-		out = scratch[o]
-	default:
-		return nil, fmt.Errorf("the last kernel writes %+v, which is not where a head's output lives", o)
+	// The output is where its caller binds it: the graph's output value.
+	out, ok := vals[g.Out[0]]
+	if !ok {
+		return nil, fmt.Errorf("no kernel binds the head's output %s", g.Values[g.Out[0]].Name)
 	}
 	n := rows * g.Values[g.Out[0]].Width
 	if len(out) < n {
@@ -238,6 +225,7 @@ func formHeadOnCPU(t *testing.T, g *graph.Graph, rows int, x []float32, h *headW
 		Formats: formats,
 		Step:    Step{Rows: rows, Page: 64, Keys: 1, ActWindow: 32},
 		Device:  Device{Kind: DeviceCPU, Slots: 1, Lanes: 8, ISA: uint64(cpu.CPU().ISA()), ExactDiv: true},
+		Apart:   true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("forming: %w", err)

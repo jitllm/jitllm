@@ -6,6 +6,7 @@ import (
 
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/format/jlm"
+	"github.com/jitllm/jitllm/jit"
 )
 
 // Gemma 3n's AltUp and LAuReL (Config.AltUp), transcribed from transformers'
@@ -104,12 +105,14 @@ func (s *State) altRowsStep(rd nn.RowsDevice, pos, slot []int, tokens []int32, n
 		return err
 	}
 	s.growBatch(n)
-	s.altHeadNorm(nlogit)
-	if err := s.mm(logits, *s.outW, s.bh, nlogit); err != nil {
-		return err
-	}
-	for i := 0; i < nlogit; i++ {
-		softcap(logits[i*c.NVocab:(i+1)*c.NVocab], c.FinalSoftcap)
+	if s.cpuHeadRows(s.bx, logits, nil, nlogit) != jit.DeclineServes {
+		s.altHeadNorm(nlogit)
+		if err := s.mm(logits, *s.outW, s.bh, nlogit); err != nil {
+			return err
+		}
+		for i := 0; i < nlogit; i++ {
+			softcap(logits[i*c.NVocab:(i+1)*c.NVocab], c.FinalSoftcap)
+		}
 	}
 	if greedy {
 		if len(s.head.Tokens) < n {

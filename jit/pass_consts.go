@@ -47,7 +47,7 @@ func (p Consts) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				floats = floats || nd.Op == OpLanes
 				return
 			}
-			for _, a := range k.evalArgs(&nd, memo) {
+			for _, a := range k.evalArgs(&nd, memo, nil) {
 				walk(*a)
 			}
 		}

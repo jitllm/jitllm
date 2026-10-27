@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jitllm/jitllm/engine/nn"
+	"github.com/jitllm/jitllm/jit"
 )
 
 // The State half of speculative decoding (spec.go): one call that runs rows of
@@ -310,6 +311,15 @@ func (s *State) finishRows(headDone bool, lastBase, total int) error {
 	// decode step runs (batch.go), so under the exact GEMM a row's logits are
 	// the decode path's bit for bit.
 	s.growBatch(cnt)
+	if !r.noCap {
+		var hidden []float32
+		if !c.Q4E() { // its hidden state is the residual, taken in q4eCollapse
+			hidden = r.hidden[:cnt*c.NEmbd]
+		}
+		if s.cpuHeadRows(s.bx[off*c.NEmbd:], r.logits, hidden, cnt) == jit.DeclineServes {
+			return s.kvCheck()
+		}
+	}
 	s.batchNormB(s.bh, s.bx[off*c.NEmbd:], s.outNorm, m.outNormB, c.NEmbd, cnt)
 	if err := s.mm(r.logits, *s.outW, s.bh, cnt); err != nil {
 		return err
@@ -471,6 +481,9 @@ func (s *State) rowsHead(rd nn.RowsDevice, pos, slot []int, n int, logits []floa
 		}
 	}
 	s.growBatch(n)
+	if s.cpuHeadRows(s.bx, logits, nil, nlogit) == jit.DeclineServes {
+		return nil
+	}
 	s.altHeadNorm(nlogit)
 	if err := s.mm(logits, *s.outW, s.bh, nlogit); err != nil {
 		return err

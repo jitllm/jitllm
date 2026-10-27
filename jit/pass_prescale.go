@@ -133,7 +133,7 @@ func (m *Kernel) scalesBy(v Operand) (int, Operand, bool) {
 // axis, times m's factor g: the map and the operand it stores.
 func scaleMap(k, m *Kernel, w Buf, g int) (*Kernel, Operand) {
 	space := append(append([]int(nil), k.Space[:2]...), k.Loops[0].Trip)
-	n := &Kernel{Name: "map", Kind: PrimMap, Space: space, Heads: k.Heads, Part: k.Part, Of: k.Of,
+	n := &Kernel{Name: "map", Kind: PrimMap, Space: space, Heads: k.Heads, Part: k.Part, Apart: k.Apart, Of: k.Of,
 		Capacity: k.Capacity, RowsHeld: k.RowsHeld, Calls: min(k.Calls, 2)}
 	coords := make([]int, 3)
 	for i := range coords {

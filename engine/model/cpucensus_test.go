@@ -47,11 +47,18 @@ func TestCPUComposesOnce(t *testing.T) {
 				t.Fatalf("%d prompt tokens, %d wanted", len(ids), total)
 			}
 			nl := m.Cfg.NLayer
+			// placed is how many forms the model's CPU cache held after the
+			// last placement: a step forms nothing.
+			placed := 0
 			// held is the census of s after a phase: every block composed for
-			// the CPU once, nothing declined, and at least want more block
-			// steps served than before.
+			// the CPU once, nothing declined, nothing formed since the last
+			// placement, and at least want more block steps served than
+			// before.
 			held := func(what string, s *State, before, want int) int {
 				t.Helper()
+				if got := m.cpuFormCount(); got != placed {
+					t.Errorf("%s: %d CPU form(s) made at a step, after the placement's %d", what, got-placed, placed)
+				}
 				served, declined := s.CPUBlockSteps()
 				for why, n := range declined {
 					if n > 0 {
@@ -75,6 +82,7 @@ func TestCPUComposesOnce(t *testing.T) {
 
 			s := m.NewState(total + 128)
 			defer s.Close()
+			placed = m.cpuFormCount()
 			if got := len(s.CPUCompositions()); got != nl {
 				t.Fatalf("%d blocks placed on the CPU of %d", got, nl)
 			}
@@ -135,6 +143,7 @@ func TestCPUComposesOnce(t *testing.T) {
 
 			s2 := m.NewState(512)
 			defer s2.Close()
+			placed = m.cpuFormCount()
 			l, err := s2.Prefill(ids[:100])
 			if err != nil {
 				t.Fatal(err)
@@ -147,6 +156,7 @@ func TestCPUComposesOnce(t *testing.T) {
 
 			sc := NewScheduler(m, 4, 256)
 			defer sc.Close()
+			placed = m.cpuFormCount()
 			seqs := []*Seq{{Prompt: ids[:7], MaxTokens: 4}, {Prompt: ids[50:83], MaxTokens: 6},
 				{Prompt: ids[200:300], MaxTokens: 5}, {Prompt: ids[1000:1064], MaxTokens: 3}}
 			for _, q := range seqs {

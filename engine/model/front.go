@@ -101,6 +101,12 @@ type frontSet struct {
 	head, embed *graph.Graph
 	// headHidden is head writing the norm's rows too (nn.Head.HiddenGraph).
 	headHidden *graph.Graph
+	// cpuHead and cpuHidden are head and headHidden over the row a model of
+	// several streams collapses them to before its head, as the CPU's call
+	// sites do: the same graphs on a model of one.
+	cpuHead, cpuHidden *graph.Graph
+	// cpuSample and cpuTopK are sample and topK over cpuHead's logits.
+	cpuSample, cpuTopK *graph.Graph
 	// tables are the step's rotary tables, the model's rotary's then its
 	// sliding layers', as jit.Front states them (nil for one that turns
 	// nothing); sample is the step's greedy sampling of the head's logits,
@@ -246,6 +252,13 @@ func (m *Model) frontGraphs() *frontSet {
 	if s.head != nil {
 		s.headHidden, _, _ = m.headGraph(true)
 	}
+	s.cpuHead, s.cpuHidden = s.head, s.headHidden
+	if m.Cfg.Streams() > 1 {
+		s.cpuHead, _, _ = m.headGraphOf(false, true)
+		if s.cpuHead != nil {
+			s.cpuHidden, _, _ = m.headGraphOf(true, true)
+		}
+	}
 	s.embed, s.embedWhy, s.embedErr = m.embedGraph()
 	for i, r := range (composing{m.container, m}).Rotaries() {
 		var t *graph.Graph
@@ -262,6 +275,13 @@ func (m *Model) frontGraphs() *frontSet {
 		pk := graph.Pick{NVocab: m.Cfg.NVocab, N: nn.PickMax}
 		s.pick = pk.Build()
 		s.pickHead, _ = m.pickHeadGraph()
+	}
+	s.cpuSample, s.cpuTopK = s.sample, s.topK
+	if s.cpuSample == nil && s.cpuHead != nil && s.cpuHead.Values[s.cpuHead.Out[0]].Width == m.Cfg.NVocab {
+		sm := graph.Sample{NVocab: m.Cfg.NVocab}
+		s.cpuSample = sm.Build()
+		tk := graph.SampleTopK{NVocab: m.Cfg.NVocab, K: nn.SampleMaxK, Hist: nn.SampleMaxHist}
+		s.cpuTopK = tk.Build()
 	}
 	f.set = s
 	return s
@@ -888,11 +908,18 @@ func mapRow(b *graph.Builder, name string, a graph.Attrs, w []graph.Binding, wid
 // logit scale, main's order over the logits. With hidden it writes the
 // norm's rows too (graph.Head.Hidden).
 func (m *Model) headGraph(hidden bool) (*graph.Graph, Uncovered, error) {
+	return m.headGraphOf(hidden, false)
+}
+
+// headGraphOf is headGraph, with collapsed over the row a model of several
+// streams collapses them to, which the head's graph does not read
+// otherwise.
+func (m *Model) headGraphOf(hidden, collapsed bool) (*graph.Graph, Uncovered, error) {
 	c := m.Cfg
 	switch {
 	case c.Pooling != jlm.PoolNone:
 		return nil, UncoveredPooling, nil
-	case c.Streams() > 1:
+	case c.Streams() > 1 && !collapsed:
 		return nil, UncoveredStreams, nil
 	}
 	f, _ := m.inventory(jlm.DenseBlock)

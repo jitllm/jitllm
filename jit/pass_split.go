@@ -86,7 +86,7 @@ func (s Split) apply(n *Kernel, d Device) ([]*Kernel, bool, error) {
 	ax := append([]int{seg}, p.Stores[st].Ax...)
 	p.Stores[st] = Store{Buf: b, Val: val, At: -1, Ax: ax}
 
-	m := &Kernel{Name: n.Name + ".combine", Kind: n.Kind, Space: append([]int(nil), n.Space...), Group: n.Group, Part: n.Part, Of: n.Of}
+	m := &Kernel{Name: n.Name + ".combine", Kind: n.Kind, Space: append([]int(nil), n.Space...), Group: n.Group, Part: n.Part, Apart: n.Apart, Of: n.Of}
 	coords := make([]int, len(m.Space))
 	for i := range coords {
 		coords[i] = m.add(Node{Op: OpCoord, A: i, Type: ir.U32})

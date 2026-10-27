@@ -111,7 +111,7 @@ func sharesActivation(a, b *Kernel) bool {
 // merge is ms as one launch of their workgroups in order.
 func (s Siblings) merge(ms []*Kernel) *Kernel {
 	f := ms[0]
-	k := &Kernel{Name: f.Name, Work: true, Group: f.Group, Kind: f.Kind, Part: f.Part, Of: f.Of, Least: f.Least,
+	k := &Kernel{Name: f.Name, Work: true, Group: f.Group, Kind: f.Kind, Part: f.Part, Apart: f.Apart, Of: f.Of, Least: f.Least,
 		Passes: append(append([]string(nil), f.Passes...), s.Name())}
 	total := 0
 	for _, m := range ms {

@@ -21,6 +21,11 @@ type Request struct {
 	// History is the layout of the pools the slice's history ops write and
 	// read: the call site's, addressed as it is.
 	History History
+	// Apart says the graph's inputs and outputs are buffers of their own,
+	// each the caller's: no output takes another value's storage, and no
+	// value an input's. A block's residual is one buffer, its input's and
+	// its output's.
+	Apart bool
 }
 
 // Form is req's kernels in launch order, and the Key they are cached under:
@@ -75,6 +80,7 @@ func (r *Registry) form(req Request) ([]Code, error) {
 				return nil, fmt.Errorf("jit: cannot form %s: %w", slice(req.Graph), err)
 			}
 			k.Part, k.Unfused, k.Unjammed, k.Unpaired, k.Unwide, k.Uncursored = req.Part, sp.unfused[k.Of], sp.unjammed[k.Of], sp.unpaired[k.Of], sp.unwide[k.Of], sp.uncursored[k.Of]
+			k.Apart = req.Apart
 			k.Capacity = liveOf(p, req.Step, req.Device)
 			ks = append(ks, k)
 		}

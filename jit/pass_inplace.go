@@ -4,7 +4,9 @@ package jit
 // kernel reads at the element it writes, of the same shape and type, that nothing reads after: no later
 // kernel, and no later loop of this one nor this loop at another element.
 // The output takes the input's storage, in the kernel and in every later
-// kernel that reads it, each head's copy of it too.
+// kernel that reads it, each head's copy of it too. In a graph whose inputs
+// and outputs are apart (Request.Apart), an output keeps its own storage
+// and no value takes an input's: each is its caller's buffer.
 type InPlace struct{}
 
 func (InPlace) Name() string { return "inplace" }
@@ -21,7 +23,7 @@ func (p InPlace) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 			ob := k.Bufs[st.Buf]
 			// An earlier kernel writing the output keeps its storage: the
 			// value's elements it stores would be apart from these.
-			if ob.Operand.Kind == OperandTable || k.readsAt(ob.Operand, st) || writtenBy(out[:i], ob.Operand) {
+			if ob.Operand.Kind == OperandTable || k.Apart && ob.Operand.Out || k.readsAt(ob.Operand, st) || writtenBy(out[:i], ob.Operand) {
 				continue
 			}
 			in := -1
@@ -31,6 +33,9 @@ func (p InPlace) Apply(ks []*Kernel, d Device) ([]*Kernel, error) {
 				}
 				b := k.Bufs[nd.Buf]
 				if b.Elem != ob.Elem || !sameShape(b.Shape, ob.Shape) || b.Operand.Kind == OperandTable || b.Operand.Kind == OperandWeight || b.Operand == ob.Operand {
+					continue
+				}
+				if k.Apart && b.Operand.Kind == OperandValue && !writtenBy(out[:i], b.Operand) && !k.writes(b.Operand) {
 					continue
 				}
 				if !readLater(out[i+1:], b.Operand) && (len(k.Stores) == 1 || !k.readsAfter(b.Operand, st)) {

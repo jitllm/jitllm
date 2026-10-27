@@ -231,17 +231,17 @@ func (o *orderer) need(i, c int) {
 	if nd.Op == OpZip || nd.Op == OpUnpack {
 		o.stages(nd.A, nd.B, c)
 	}
-	for _, a := range k.evalArgs(&nd, o.pending()) {
+	for _, a := range k.evalArgs(&nd, map[int]int{}, o.made) {
 		switch k.Nodes[*a].Op {
 		case OpAnd, OpAndNot, OpOr, OpXor:
-			for _, b := range k.evalArgs(&k.Nodes[*a], o.pending()) {
+			for _, b := range k.evalArgs(&k.Nodes[*a], map[int]int{}, o.made) {
 				if !o.constLoad(*b) {
 					o.need(*b, c)
 				}
 			}
 		}
 	}
-	for _, a := range k.evalArgs(&nd, o.pending()) {
+	for _, a := range k.evalArgs(&nd, map[int]int{}, o.made) {
 		o.need(*a, c)
 	}
 	if nd.Share > 0 {
@@ -255,19 +255,10 @@ func (o *orderer) need(i, c int) {
 	}
 }
 
-// pending is the depths evalArgs orders operands by, a value already made
-// and a load of constants leaves. The operands of an operation's bitwise
-// operands are made first, then the operands by what is left to make of
-// them.
-func (o *orderer) pending() map[int]int {
-	memo := map[int]int{}
-	for i := range o.k.Nodes {
-		if o.done[i] || o.constLoad(i) {
-			memo[i] = 0
-		}
-	}
-	return memo
-}
+// made is what evalArgs orders operands by as leaves: a value already made
+// and a load of constants. The operands of an operation's bitwise operands
+// are made first, then the operands by what is left to make of them.
+func (o *orderer) made(i int) bool { return o.done[i] || o.constLoad(i) }
 
 // unmade reports whether node i is a value no entry makes: a constant the
 // code takes as an immediate, or an iteration.

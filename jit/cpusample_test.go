@@ -20,7 +20,7 @@ func formOnCPU(t *testing.T, g *graph.Graph, vals map[graph.ValueID][]uint32, of
 		p.Off[o] = true
 	}
 	reg.Profiles[DeviceCPU] = p
-	_, codes, err := reg.Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice()})
+	_, codes, err := reg.Form(Request{Graph: g, Formats: map[jlm.Role]jlm.Type{}, Step: Step{Rows: 1, Page: 64, Keys: 1}, Device: cpuDevice(), Apart: true})
 	if err != nil {
 		t.Fatalf("forming: %v", err)
 	}

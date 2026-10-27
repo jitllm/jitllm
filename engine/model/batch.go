@@ -300,9 +300,9 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 			case c.LayerKind(li).Recurrent():
 				why, err = s.cpuRecRows(li, l, s.bx[:n*c.ResidW()], cs, seq, pos, causal, -1, 0)
 			case len(s.rowOwn) > 0:
-				why, err = s.cpuSessions(li, l, s.bx[:n*c.ResidW()], cs, seq, pos, nlogit)
+				why, err = s.cpuSessions(li, l, s.bx[:n*c.ResidW()], cs, csSWA, seq, pos, nlogit)
 			default:
-				why, err = s.cpuRows(li, l, s.bx[:n*c.ResidW()], cs, seq, pos)
+				why, err = s.cpuRows(li, l, s.bx[:n*c.ResidW()], cs, csSWA, seq, pos)
 			}
 			if err != nil {
 				return nil, err
@@ -706,9 +706,9 @@ func (s *State) rowsHost(tokens []int32, seq, pos []int, nlogit, seqs int) ([]fl
 	// Unlike Prefill, every decoding row's logits are wanted: each one is a
 	// live sequence that has to be sampled. So lm_head runs for those rows,
 	// which lead -- the widest matmul of the token, and the shape it likes.
-	// The CPU's composed head runs each wanted row and applies every stage
+	// The CPU's composed head runs the wanted rows and applies every stage
 	// of the head's graph.
-	headed := !headOnDev && nlogit > 0 && s.cpuHeads(s.bx, s.blogits, nlogit)
+	headed := !headOnDev && nlogit > 0 && s.cpuHeadRows(s.bx, s.blogits, nil, nlogit) == jit.DeclineServes
 	if !headOnDev && nlogit > 0 && !headed {
 		t0 = s.tick()
 		s.batchNormB(s.bh, s.bx, s.outNorm, m.outNormB, c.NEmbd, nlogit)
