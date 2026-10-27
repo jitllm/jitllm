@@ -59,9 +59,10 @@ func (k *Kernel) counter(i int) bool {
 	return false
 }
 
-// addressCone is the integer nodes an access's index is made of: each
-// index of a load or a store of a buffer other than a constant block, and
-// the integer data it is computed from.
+// addressCone is the integer nodes an access's index or a loop's count is
+// made of: each index of a load or a store of a buffer other than a
+// constant block, each loop's count, and the integer data they are
+// computed from.
 func (k *Kernel) addressCone() map[int]bool {
 	cone := map[int]bool{}
 	var walk func(i int)
@@ -98,6 +99,13 @@ func (k *Kernel) addressCone() map[int]bool {
 	for _, s := range k.Stores {
 		if !s.Barrier && !s.Run {
 			index(s.Buf, s.Ix, s.Ax)
+		}
+	}
+	// A loop's count is a general register's, as an address is: a vector
+	// loop's tail counts what its lanes leave.
+	for _, l := range k.Loops {
+		if l.Count > 0 {
+			walk(l.Count - 1)
 		}
 	}
 	return cone

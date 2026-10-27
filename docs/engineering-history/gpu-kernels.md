@@ -8946,3 +8946,38 @@ row where the composer's reads two.
   history (pagedKeys), so the groups are not bit-identical to one group
   once prompts differ in length; the illegal memory access of the A/B
   (-sessions and -max-batch 128) was not reproduced by the gate.
+- **The CPU's head is composed at its placement and serves every step's
+  rows; a head's stages after its projection land in the caller's logits;
+  a windowed layer's history is served; a vector loop's tail count stays
+  a word.** Every head graph the CPU runs -- the one-row head, its hidden
+  form, the head over 64 rows, the label pick and both samplers -- is
+  composed when the State is placed, and no step forms one
+  (TestCPUComposesOnce counts the model's CPU forms across every phase).
+  A batch's decoding rows, a speculation step's verified rows, the rows a
+  card left to the CPU's head, a model of several streams (its head over
+  the collapsed row) and AltUp's chunk run the rows' form in one call,
+  counted in CPUHeadSteps. The forms cost 6-25 ms each on Qwen3-0.6B
+  (laptop) but the top-k sampler's, 1.27 s, now 0.78 s: the orderer read
+  what is made from a map rebuilt over every node at each need. On
+  Qwen3-0.6B (laptop) the first State's placement goes from 0.35 s to
+  1.09 s, and its first sampled token from 1.41 s to 0.11 s; a later
+  State reuses the model's forms. The head
+  gate had read "the last kernel's written operand": InPlace stored a
+  head's scale or bias over the projection's buffer, so a composed head
+  with a stage after its projection left the caller's logits unwritten
+  (zeros on commandr, cohere2 and phi2; the hidden rows the input's).
+  A graph apart from the residual (Request.Apart) now keeps each output in
+  its own storage and takes no input's; the gate reads the graph's output
+  and fails on the old pass. Windowed attention reads the CPU's own rows
+  descriptor (its start the layer's window) and a sliding layer its own
+  rotary table: cohere2's and EXAONE 4's window of four serve every block
+  step, 3.5e-11 and 1.1e-8 from main over 24 steps and a prompt arm, the
+  window widened to 8 or removed moving them 1.3-2.4, cohere2's logit scale
+  removed 9, phi2's output bias doubled 0.037 (clean 7.3e-13). C4d's
+  segfault with a difference flipped by Unsigned was Splats giving a
+  vector loop's tail count (sub & 7) a broadcast of the difference, so the
+  tail ran a vector register's bits as its trip count: a loop's count is
+  now in the cone Splats keeps in general registers. With the difference
+  flipped the attention no longer faults but reads NMSE 0.2 from the
+  definition, a second defect not found; the rule that a difference of two
+  small words is small stays.
