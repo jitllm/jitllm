@@ -149,6 +149,9 @@ func decomposeExpertMatVec(o graph.Op, c *Context) ([]Prim, error) {
 	if E < 1 || len(o.In) == 1 && P != E || c.width(o.In[0]) != P*K || c.width(o.Out[0]) != P*rows {
 		return nil, fmt.Errorf("an expert matvec of %d pairs of %d over %d", P, K, c.width(o.In[0]))
 	}
+	if n, ok := c.Paged[w.Role]; ok && (n < 1 || n > E) {
+		return nil, fmt.Errorf("a bank of %d experts held in %d sheets", E, n)
+	}
 	wo, err := c.weight(w)
 	if err != nil {
 		return nil, err
@@ -241,14 +244,38 @@ func decomposeMatVecRows(o graph.Op, c *Context) ([]Prim, error) {
 // sheetRow is the packed weight a pair reads and the row of it: the pair's
 // sheet of a bank, its row the coordinate's, or for a row-selected matvec
 // the one matrix of the bank's sheets as rows, its row the selection's.
-func sheetRow(o graph.Op, x *exprs, wo Operand, l jlm.TypeLayout, in *[]Operand, facts *Facts, sheet, row int) (p *packed, rows, at int) {
+func sheetRow(o graph.Op, x *exprs, wo Operand, l jlm.TypeLayout, in *[]Operand, facts *Facts, sheet, sheets, row int) (p *packed, rows, at int) {
 	w := o.Weight[0]
 	if pairStride(o) == 0 {
 		return packedOperands(x, wo, l, w.Sheets, w.K, in, facts), w.Sheets, sheet
 	}
 	p = packedOperands(x, wo, l, w.Rows, w.K, in, facts)
-	p.bank(sheet, w.Sheets)
+	p.bank(sheet, sheets)
 	return p, w.Rows, row
+}
+
+// tableExperts is the step's table of a bank held in pages: a word an
+// expert, the sheet of the held bank that holds it.
+var tableExperts = Operand{Kind: OperandTable, Name: "experts", Elem: ir.U32}
+
+// pageOf is the sheet of o's bank that holds expert sheet, and how many
+// sheets the bank holds: where the call site holds the bank in pages
+// (Context.Paged), the expert's word of the step's table, bounded by the
+// sheets held, which it appends to in; else the expert's own sheet of the
+// whole bank.
+func pageOf(o graph.Op, c *Context, x *exprs, in *[]Operand, f *Facts, sheet int) (slot, sheets int) {
+	w := o.Weight[0]
+	n, ok := c.Paged[w.Role]
+	if !ok {
+		return sheet, w.Sheets
+	}
+	at := len(*in)
+	*in = append(*in, tableExperts)
+	if f.Extents == nil {
+		f.Extents = map[int]int{}
+	}
+	f.Extents[at] = w.Sheets
+	return x.op(OpMin, ir.U32, x.load(at, sheet), x.u(uint32(n-1))), n
 }
 
 // pairsOf is how many pairs an expert matvec runs: its selection's width,
@@ -280,7 +307,7 @@ func sheetAt(o graph.Op, c *Context, x *exprs, in *[]Operand, f *Facts, at, r, j
 // times the pair's input.
 func expertDecoded(o graph.Op, c *Context, wo Operand, out Operand) (Prim, error) {
 	w := o.Weight[0]
-	E, P, K, rows := w.Sheets, pairsOf(o, c), w.K, w.Rows
+	P, K, rows := pairsOf(o, c), w.K, w.Rows
 	U := ir.U32
 	R := c.Step.Rows
 	var x exprs
@@ -289,13 +316,13 @@ func expertDecoded(o graph.Op, c *Context, wo Operand, out Operand) (Prim, error
 	stride := pairStride(o)
 	W := (P-1)*stride + K
 	facts := Facts{Extents: map[int]int{0: R * W}}
-	sel := sheetAt(o, c, &x, &in, &facts, 1, r, j)
+	sel, held := pageOf(o, c, &x, &in, &facts, sheetAt(o, c, &x, &in, &facts, 1, r, j))
 	// The input read as the row its producer writes and its other readers
 	// see, pair j's K from j*stride.
 	xv := x.at(0, []int{R, W}, r, x.op(OpAdd, U, x.op(OpMul, U, j, x.u(uint32(stride))), col))
 	var wv int
 	if jlm.Verbatim(wo.Format) {
-		v, err := weightElement(&x, wo, E*rows, K, &in, &facts, x.op(OpAdd, U, x.op(OpMul, U, sel, x.u(uint32(rows))), row), col)
+		v, err := weightElement(&x, wo, held*rows, K, &in, &facts, x.op(OpAdd, U, x.op(OpMul, U, sel, x.u(uint32(rows))), row), col)
 		if err != nil {
 			return Prim{}, err
 		}
@@ -305,7 +332,7 @@ func expertDecoded(o graph.Op, c *Context, wo Operand, out Operand) (Prim, error
 		if !ok || K%(l.Sub*l.SuperSub) != 0 {
 			return Prim{}, fmt.Errorf("no reading rules for a bank of rows of %d", K)
 		}
-		p, dr, dw := sheetRow(o, &x, wo, l, &in, &facts, sel, row)
+		p, dr, dw := sheetRow(o, &x, wo, l, &in, &facts, sel, held, row)
 		wv = jlm.DecodeElement[int](p, l, dr, dw, col)
 	}
 	x.op(OpMul, ir.F32, wv, xv)
@@ -341,8 +368,8 @@ func expertInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout, out Operan
 	r, j, row, s, t := d.coord(0), d.coord(1), d.coord(2), d.coord(3), d.coord(4)
 	in := []Operand{words}
 	facts := Facts{Extents: map[int]int{0: R * nwd}}
-	sheet := sheetAt(o, c, &d, &in, &facts, 1, r, j)
-	p, dr, dw := sheetRow(o, &d, wo, l, &in, &facts, sheet, row)
+	sheet, held := pageOf(o, c, &d, &in, &facts, sheetAt(o, c, &d, &in, &facts, 1, r, j))
+	p, dr, dw := sheetRow(o, &d, wo, l, &in, &facts, sheet, held, row)
 	at := func(col int) int { return d.op(OpAdd, U, d.op(OpMul, U, j, d.u(uint32(stride))), col) }
 	per := l.Sub
 	if l.WordCodes() {
@@ -366,8 +393,8 @@ func expertInt8(o graph.Op, c *Context, wo Operand, l jlm.TypeLayout, out Operan
 	er, ej, erow, es := e.coord(0), e.coord(1), e.coord(2), e.coord(3)
 	ein := []Operand{dot, scales}
 	efacts := Facts{Extents: map[int]int{0: R * P * rows * nsub, 1: R * (nw + ns)}}
-	esheet := sheetAt(o, c, &e, &ein, &efacts, 2, er, ej)
-	ep, edr, edw := sheetRow(o, &e, wo, l, &ein, &efacts, esheet, erow)
+	esheet, eheld := pageOf(o, c, &e, &ein, &efacts, sheetAt(o, c, &e, &ein, &efacts, 2, er, ej))
+	ep, edr, edw := sheetRow(o, &e, wo, l, &ein, &efacts, esheet, eheld, erow)
 	first := e.op(OpMul, U, es, e.u(uint32(l.Sub)))
 	_, scale, bias := jlm.DecodeParts[int](ep, l, edr, edw, first)
 	df := e.un(OpCvtF32, F, e.at(0, []int{R, P, rows, nsub}, er, ej, erow, es))

@@ -376,6 +376,9 @@ type streamBank struct {
 	// the real one and clears it.
 	pred     []uint32
 	havePred bool
+	// tab is a composed step's page table (servedPart.pagedRun): each
+	// expert's sheet of the bank, reused every token.
+	tab []uint32
 }
 
 // score charges this token's selection to the probe's counters and hands it
@@ -8510,6 +8513,9 @@ func (g *devTier) layersSession(s backend.Session) {
 				asked = false
 			default:
 				why = g.blockServes(l, li, p, bs, persist, kind == partPrompt)
+				if why == partServes && R > 1 {
+					why = l.expertsServe(R)
+				}
 			}
 			var sv, cp *servedPart
 			var inst *partInst
@@ -8556,7 +8562,7 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				continue
 			}
-			if inst != nil && kind == partBlock && R == 1 && g.shadowing() {
+			if inst != nil && kind == partBlock && R == 1 && g.shadowing() && sv.f.split == 0 {
 				// The form runs beside the tier's kernels, which go on to run
 				// the block below and serve.
 				if serr := g.shadowBegin(lc, bs, sv, cp, l, li, &sh); err == nil {
@@ -8567,7 +8573,13 @@ func (g *devTier) layersSession(s backend.Session) {
 				if cp != nil {
 					out = bs.h
 				}
-				if serr := sv.runAs(g, lc, inst, kind, []backend.Buf{bs.x}, []backend.Buf{out}); err == nil {
+				var serr error
+				if sv.f.split > 0 {
+					serr = sv.pagedRun(g, lc, s, inst, kind, l, p.NExpert, g.hostFns[sid][li].uses, []backend.Buf{bs.x}, []backend.Buf{out})
+				} else {
+					serr = sv.runAs(g, lc, inst, kind, []backend.Buf{bs.x}, []backend.Buf{out})
+				}
+				if err == nil {
 					err = serr
 				}
 				if cp != nil {

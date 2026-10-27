@@ -36,6 +36,7 @@ type knobs struct {
 	arena         uint64          // packed-arena retention budget
 	mlaFault      MLAFault        // produce a wrong latent attention on purpose
 	scaleFault    ScaleFault      // drop one of Granite's scales on purpose
+	pageFault     PageFault       // read a routed expert's wrong page on purpose
 	cacheDir      string          // where the tuners' answers persist; "" keeps none
 	lazyTune      bool            // tune a missing shape in the background; see WithLazyTune
 }
@@ -259,6 +260,24 @@ const (
 
 // WithScaleFault drops one of Granite's scales on the device on purpose.
 func WithScaleFault(f ScaleFault) Option { return func(o *openOpts) { o.kb.scaleFault = f } }
+
+// PageFault breaks a composed block's banks held in pages (pagedRun) on
+// purpose, so the gate holding them to whole banks can be shown to fire.
+type PageFault int
+
+const (
+	// PageFaultNone is the engine.
+	PageFaultNone PageFault = iota
+	// PageFaultSwap writes the page table with the step's first two
+	// selected experts' pages swapped: a page read from the wrong expert.
+	PageFaultSwap
+	// PageFaultStale maps the step's selection onto pages without reading a
+	// missed expert into the page it takes: an eviction not re-read.
+	PageFaultStale
+)
+
+// WithPageFault breaks the composed path's expert pages on purpose.
+func WithPageFault(f PageFault) Option { return func(o *openOpts) { o.kb.pageFault = f } }
 
 // WithSkip omits parts of a multi-block submission -- "attn", "ffn", or the
 // finer keys the submission builder tests. It produces wrong answers on

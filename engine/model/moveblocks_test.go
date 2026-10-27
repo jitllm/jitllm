@@ -82,6 +82,12 @@ const (
 )
 
 func blocksMoveBetweenDevices(t *testing.T, path string, arm int, parts tier.Parts, opts ...Option) {
+	blocksMoveBetweenDevicesWith(t, path, arm, parts, nil, opts...)
+}
+
+// blocksMoveBetweenDevicesWith is blocksMoveBetweenDevices with check given
+// the tier's counts once the moves ran.
+func blocksMoveBetweenDevicesWith(t *testing.T, path string, arm int, parts tier.Parts, check func(tier.Stats), opts ...Option) {
 	a, b := moveDevices(t)
 	g, err := tier.OpenWith(tier.WithDevices(a+","+b), tier.WithDeviceTune(tier.TuneOff), composedOpt(parts))
 	if err != nil || g == nil {
@@ -217,6 +223,9 @@ func blocksMoveBetweenDevices(t *testing.T, path string, arm int, parts tier.Par
 		}
 	}
 	composedRan(t, parts, nil, g)
+	if check != nil {
+		check(g.Stats())
+	}
 	if parts&tier.ComposedEmbed != 0 {
 		st := g.Stats()
 		n, d, _ := st.ServedPart(tier.ComposedEmbed)

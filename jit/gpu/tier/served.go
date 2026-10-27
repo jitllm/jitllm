@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jitllm/jitllm/backend"
 	"github.com/jitllm/jitllm/engine/graph"
@@ -76,6 +77,9 @@ type composedPart struct {
 	// key bound and page.
 	history    jit.History
 	keys, page int
+	// paged is each bank a streamed block holds in pages and the sheets it
+	// holds of it (layer.paged), nil for banks held whole.
+	paged map[jlm.Role]int
 }
 
 // partForm is a part's kernels compiled on the device, in launch order, and
@@ -96,6 +100,12 @@ type partForm struct {
 	// parts, of every lane, that launch it: the form goes with the last.
 	key  jit.Key
 	refs int
+	// A form over banks in pages (composedPart.paged) runs in two halves
+	// (pagedRun): its codes before split, up to the selection, then the
+	// rest, which read the bank. sel is the own buffer holding the
+	// selection, of selN words, and table the own buffer the step's table
+	// "experts" is written to.
+	split, sel, selN, table int
 }
 
 // partBuf is one of a form's own buffers: n bytes, holding words where it
@@ -203,6 +213,7 @@ func (g *devTier) askPart(r *jit.Registry, sl *composedPart, rows int) (jit.Key,
 		Graph:   sl.graph,
 		Part:    sl.part,
 		Formats: sl.formats,
+		Paged:   sl.paged,
 		Step:    jit.Step{Rows: rows, Page: max(sl.page, 64), Keys: max(sl.keys, 1), ActWindow: g.actWin},
 		Device: jit.Device{Kind: jit.DeviceGPU, Slots: g.dev.Slots(), Lanes: lanes, Units: units(g.dev),
 			Regs: threadRegs(g.dev), ExactDiv: kernels.DivExact(g.dev.API()), ExactArith: kernels.Gate2Exact(g.dev.API()),
@@ -307,6 +318,16 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 				args = append(args, partArg{kind: partVector, role: o.Role})
 			case o.Kind == jit.OperandTable && sl.tables[o.Name] != nil:
 				args = append(args, partArg{kind: partTable, table: o.Name})
+			case o.Kind == jit.OperandTable && o.Name == expertTable && sl.paged != nil:
+				// The banks' page table, the form's own: written each step
+				// before the codes that read it run (pagedRun).
+				i, ok := own[o]
+				if !ok {
+					i = buf(4, nil)
+					own[o] = i
+				}
+				f.own[i].n = max(f.own[i].n, int(bd.Bytes))
+				args = append(args, partArg{kind: partOwn, i: i})
 			case bd.Words != nil || o.Kind == jit.OperandScratch:
 				i, ok := own[o]
 				if !ok {
@@ -331,7 +352,63 @@ func (g *devTier) compilePart(sl *composedPart, codes []jit.Code, rows int) (*pa
 		}
 		f.args = append(f.args, args)
 	}
+	if sl.paged != nil {
+		if err := f.pagedHalves(gr, vals, own, rows); err != nil {
+			f.close()
+			return nil, err
+		}
+	}
 	return f, nil
+}
+
+// expertTable is the step's table of a bank held in pages, as the composer
+// names it (jit.Request.Paged).
+const expertTable = "experts"
+
+// pagedHalves finds where a form over banks in pages is cut (partForm.split):
+// at its first code that binds a bank, with the selection those codes read
+// written by a code before it, and the page table read after it alone.
+func (f *partForm) pagedHalves(gr *graph.Graph, vals map[graph.ValueID]int, own map[jit.Operand]int, rows int) error {
+	f.split, f.sel, f.table = -1, -1, -1
+	for _, o := range gr.Ops {
+		if o.Kind == graph.OpExpertMatVec && len(o.In) == 2 && len(o.Weight) > 0 && jlm.ExpertBank(o.Weight[0].Role) {
+			i, ok := vals[o.In[1]]
+			switch {
+			case !ok:
+				return fmt.Errorf("the selection of a bank in pages is not one of the form's own values")
+			case f.sel >= 0 && f.sel != i:
+				return fmt.Errorf("the banks in pages read two selections")
+			}
+			f.sel, f.selN = i, rows*gr.Values[o.In[1]].Width
+		}
+	}
+	for o, i := range own {
+		if o.Kind == jit.OperandTable && o.Name == expertTable {
+			f.table = i
+		}
+	}
+	for ci, args := range f.args {
+		for _, a := range args {
+			if a.kind == partWeight && jlm.ExpertBank(a.role) || a.kind == partOwn && a.i == f.table {
+				if f.split < 0 {
+					f.split = ci
+				}
+			}
+		}
+	}
+	if f.sel < 0 || f.table < 0 || f.split <= 0 {
+		return fmt.Errorf("a form over banks in pages with no selection, table or code before its banks (%d, %d, %d)", f.sel, f.table, f.split)
+	}
+	written := false
+	for _, args := range f.args[:f.split] {
+		for _, a := range args {
+			written = written || a.kind == partOwn && a.i == f.sel && a.writes
+		}
+	}
+	if !written {
+		return fmt.Errorf("the selection of a bank in pages is written by no code before the codes that read the bank")
+	}
+	return nil
 }
 
 // instance is a lane's instance of form f: its own buffers, poisoned where
@@ -402,9 +479,14 @@ func (in *partInst) free() {
 // lane's instance inst and the part's weights, vectors and tables, and
 // launches them in order: how many of them were formed on the matrix unit.
 func (sv *servedPart) launch(lc *launcher, inst *partInst, in, out []backend.Buf) (int, error) {
+	return sv.launchCodes(lc, inst, in, out, 0, len(sv.f.codes))
+}
+
+// launchCodes is launch of the form's codes [lo, hi).
+func (sv *servedPart) launchCodes(lc *launcher, inst *partInst, in, out []backend.Buf, lo, hi int) (int, error) {
 	f, sl := sv.f, &sv.sl
 	matrix := 0
-	for i := range f.codes {
+	for i := lo; i < hi; i++ {
 		fc, bufs := &f.codes[i], sv.args[i]
 		if !fc.geom.RunsAt(sv.rows) {
 			continue
@@ -717,6 +799,8 @@ const (
 	partEmbedWeight = jit.DeclineEmbedWeight
 	partEmbedToken  = jit.DeclineEmbedToken
 	partExperts     = jit.DeclineExperts
+	partExpertsHost = jit.DeclineExpertsHost
+	partExpertsRows = jit.DeclineExpertsRows
 	partRecurrent   = jit.DeclineRecurrent
 	partNoWeight    = jit.DeclineNoWeight
 	numPartDeclines = jit.NumDeclines
@@ -777,6 +861,9 @@ type servedKey struct {
 	half       bool
 	latent     bool
 	t          jlm.Type
+	// held is the sheets a streamed block holds of its banks in pages, 0
+	// where they are whole.
+	held int
 }
 
 // servedPart is a served part and its form, with the arguments its launch
@@ -933,6 +1020,76 @@ func (sv *servedPart) runAs(g *devTier, lc *launcher, inst *partInst, kind partK
 	}
 	g.PartsServed[kind]++
 	g.MatrixLaunches[kind] += matrix
+	return nil
+}
+
+// pagedRun is runAs for a form over banks in pages (partForm.split): its
+// codes up to the selection, the selection read back and its experts made
+// resident in block l's pages on the card by the tier's own fill -- each
+// faulted in from the host's pager where the card does not hold it, a
+// cache's least recently used slot evicted for it -- the page table
+// written, each expert's slot, then the codes that read the banks. uses is
+// the session's counts of the block's experts (streamBank.count).
+func (sv *servedPart) pagedRun(g *devTier, lc *launcher, s backend.Session, inst *partInst, kind partKind, l *layer, nExpert int,
+	uses []uint32, in, out []backend.Buf) error {
+	f, st := sv.f, l.stream
+	if st == nil || f.selN != len(st.sel) {
+		return fmt.Errorf("a form over banks in pages selects %d experts where the block's pages are filled for its selection", f.selN)
+	}
+	copy(sv.in[:sv.n], in)
+	copy(sv.out[:sv.m], out)
+	m0, err := sv.launchCodes(lc, inst, sv.in[:sv.n], sv.out[:sv.m], 0, f.split)
+	if err != nil {
+		return err
+	}
+	tw := time.Now()
+	if err := s.Sync(); err != nil {
+		return err
+	}
+	g.TStreamWait += time.Since(tw)
+	if err := s.Read(inst.bufs[f.sel], u32b(st.sel)); err != nil {
+		return err
+	}
+	st.count(uses)
+	tf := time.Now()
+	switch {
+	case g.kb.pageFault != PageFaultStale:
+		err = st.fill(g, s, l, nExpert)
+	case st.cached():
+		st.items = st.items[:0]
+		st.lookup(g)
+	}
+	if err != nil && st.cached() {
+		st.forget()
+	}
+	g.fillDone(time.Since(tf))
+	if err != nil {
+		return err
+	}
+	g.StreamFills++
+	st.tab = growU32(st.tab, nExpert)
+	if st.cached() {
+		for e, slot := range st.slotOf {
+			st.tab[e] = uint32(slot)
+		}
+	} else {
+		for j, e := range st.sel {
+			st.tab[e] = uint32(j)
+		}
+	}
+	if g.kb.pageFault == PageFaultSwap && len(st.sel) > 1 {
+		a, b := st.sel[0], st.sel[1]
+		st.tab[a], st.tab[b] = st.tab[b], st.tab[a]
+	}
+	if err := s.WriteAt(inst.bufs[f.table], 0, u32b(st.tab)); err != nil {
+		return err
+	}
+	m1, err := sv.launchCodes(lc, inst, sv.in[:sv.n], sv.out[:sv.m], f.split, len(f.codes))
+	if err != nil {
+		return err
+	}
+	g.PartsServed[kind]++
+	g.MatrixLaunches[kind] += m0 + m1
 	return nil
 }
 
@@ -1466,9 +1623,9 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 			return &l.routerW
 		}
 	case jlm.RoleExpGateBank, jlm.RoleExpUpBank, jlm.RoleExpDownBank:
-		// The banks whole on the card; a streamed block's hold its
-		// selection's sheets only.
-		if l.router == nil || l.stream != nil {
+		// The banks whole on the card, or a streamed block's in pages: the
+		// sheets its cache or its compact bank holds (heldSheets).
+		if l.router == nil {
 			return nil
 		}
 		return [...]*resident{l.gate, l.up, l.down}[r-jlm.RoleExpGateBank]
@@ -1482,17 +1639,50 @@ func (l *layer) roleWeight(r jlm.Role) *resident {
 	return nil
 }
 
-// expertsHeld says block l holds every routed expert its graph binds, whole,
-// on the card.
-func (l *layer) expertsHeld() bool {
+// expertsServe is why block l's routed experts are not where its form
+// reads them, serves where they are: every bank its graph binds held whole
+// on the card, or a streamed block's in pages -- its cache's slots or its
+// compact bank, each expert reached through the step's table (pagedRun) --
+// at a step of one row, its experts sent to the card rather than run on the
+// host.
+func (l *layer) expertsServe(rows int) partDecline {
+	held, banks := true, false
 	for _, o := range l.graph.Ops {
 		for _, w := range o.Weight {
-			if jlm.ExpertBank(w.Role) && l.roleWeight(w.Role) == nil {
-				return false
+			if jlm.ExpertBank(w.Role) {
+				r := l.roleWeight(w.Role)
+				banks, held = true, held && r != nil && w.Rows > 0 && r.nrows%w.Rows == 0
 			}
 		}
 	}
-	return true
+	switch {
+	case !banks:
+		return partServes
+	case l.stream != nil && l.stream.hybrid:
+		return partExpertsHost
+	case !held:
+		return partExperts
+	case l.stream != nil && rows > 1:
+		return partExpertsRows
+	}
+	return partServes
+}
+
+// paged is each bank of block l's graph a streamed block holds in pages,
+// and the sheets it holds of it; nil for a block whose banks are whole.
+func (l *layer) paged() map[jlm.Role]int {
+	if l.stream == nil {
+		return nil
+	}
+	pg := map[jlm.Role]int{}
+	for _, o := range l.graph.Ops {
+		for _, w := range o.Weight {
+			if r := l.roleWeight(w.Role); jlm.ExpertBank(w.Role) && r != nil && w.Rows > 0 {
+				pg[w.Role] = r.nrows / w.Rows
+			}
+		}
+	}
+	return pg
 }
 
 // weightsHeld says block l holds every matrix and vector its graph binds,
@@ -1598,8 +1788,8 @@ func (g *devTier) blockServes(l *layer, li int, p *nn.LayerPlan, bs *blockScratc
 	switch {
 	case l.graph == nil:
 		return partNoGraph
-	case !l.expertsHeld():
-		return partExperts
+	case l.expertsServe(bs.rows) != partServes:
+		return l.expertsServe(bs.rows)
 	case !l.weightsHeld():
 		return partNoWeight
 	case slices.Contains(g.TierBlocks, li):
@@ -2067,7 +2257,11 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 	if pl != nil && (!l.linear || l.withAttn) {
 		kk, kv, tab, geom = pl.k, pl.v, pl.tab, pl.geom
 	}
+	paged := l.paged()
 	sk := servedKey{kind: kind, graph: l.graph, rows: R, keys: keys, page: page, half: geom.f16, latent: geom.mla}
+	for _, n := range paged {
+		sk.held = max(sk.held, n)
+	}
 	sv, err := g.servedFor(sk, func() (composedPart, error) {
 		// The request names no block: blocks of one structure and formats
 		// share a form, each launched on its own bindings, one after
@@ -2079,7 +2273,7 @@ func (g *devTier) servedBlock(l *layer, li int, cs backend.Buf, pl *kvLayerPool,
 			tables: map[string]backend.Buf{"rope.cs": cs, "kv.k": kk, "kv.v": kv, "pages": tab, "rows": rows,
 				"rows.win": rowsW, "q.off": qOff, "rows.n": calls},
 			history: poolHistory(geom),
-			keys:    keys, page: page}
+			keys:    keys, page: page, paged: paged}
 		if l.linear && l.pool != nil {
 			t := sl.tables
 			// The shared form holds one half, stepped in place (bindRec).

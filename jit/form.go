@@ -21,6 +21,10 @@ type Request struct {
 	// History is the layout of the pools the slice's history ops write and
 	// read: the call site's, addressed as it is.
 	History History
+	// Paged is each bank the call site holds in pages: the sheets it holds of
+	// it, reached through the step's table "experts", one word an expert
+	// naming the sheet that holds it. A bank it does not name is held whole.
+	Paged map[jlm.Role]int
 	// Apart says the graph's inputs and outputs are buffers of their own,
 	// each the caller's: no output takes another value's storage, and no
 	// value an input's. A block's residual is one buffer, its input's and
@@ -86,7 +90,7 @@ func (r *Registry) formKernels(req Request) ([]*Kernel, error) {
 	var ks []*Kernel
 	for {
 		c := r.context(req.Graph, req.Part, req.Formats, req.Rotaries, req.Step, req.Device)
-		c.History, c.split = req.History, sp
+		c.History, c.split, c.Paged = req.History, sp, req.Paged
 		prims, err := r.decomposeOps(c, 0)
 		if err != nil {
 			return nil, fmt.Errorf("jit: cannot form %s at %d rows on %s: %w", slice(req.Graph), req.Step.Rows, req.Device.Kind, err)

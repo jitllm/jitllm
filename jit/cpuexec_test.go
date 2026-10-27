@@ -159,6 +159,12 @@ func runCPU(codes []Code, x []float32, n int, planes [3][]uint32) ([]float32, er
 
 // runCPUVectors is runCPU with the vector weights vecs binds, by role.
 func runCPUVectors(codes []Code, x []float32, n int, planes [3][]uint32, vecs map[jlm.Role][]float32) ([]float32, error) {
+	return runCPUBound(codes, x, n, planes, vecs, nil)
+}
+
+// runCPUBound is runCPUVectors with bind asked first for each operand: the
+// words it returns, or nil for runCPUVectors' own.
+func runCPUBound(codes []Code, x []float32, n int, planes [3][]uint32, vecs map[jlm.Role][]float32, bind func(Operand) []uint32) ([]float32, error) {
 	const guard = 16
 	out := make([]float32, n+guard)
 	for i := range out {
@@ -195,6 +201,8 @@ func runCPUVectors(codes []Code, x []float32, n int, planes [3][]uint32, vecs ma
 				continue
 			case a.Words != nil:
 				words = append([]uint32(nil), a.Words...)
+			case bind != nil && bind(o) != nil:
+				words = bind(o)
 			case o.Kind == OperandValue && o.Value == 0:
 				words = unsafe.Slice((*uint32)(unsafe.Pointer(&x[0])), len(x))
 			case o.Kind == OperandValue && o.Value == 1:

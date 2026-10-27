@@ -106,7 +106,10 @@ type Context struct {
 	Of int
 	// History is how the part's history pools lay out a page.
 	History History
-	formed  map[graph.ValueID]bool
+	// Paged is Request.Paged: the sheets the call site holds of each bank
+	// it holds in pages.
+	Paged  map[jlm.Role]int
+	formed map[graph.ValueID]bool
 }
 
 // blockPart is the part of block li, for a block part's decomposition: the
