@@ -23,6 +23,7 @@ import (
 	"github.com/jitllm/jitllm/format/quant"
 
 	"github.com/jitllm/jitllm/backend"
+	"github.com/jitllm/jitllm/engine/graph"
 	"github.com/jitllm/jitllm/engine/nn"
 	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/kernels"
@@ -2056,6 +2057,9 @@ type devShared struct {
 	// or PrepHead is forming them (Stats.FormedAtStep).
 	servedForms map[jit.Key]*partForm
 	prewarming  bool
+	// copyGraphs are the copies over x by row width (servedCopy), each one
+	// graph so its part keys alike every step.
+	copyGraphs map[int]*graph.Graph
 	// blockForms is Stats.BlockForms, this device's.
 	blockForms []int
 	// everyRows is the word a served part whose call states no rows reads

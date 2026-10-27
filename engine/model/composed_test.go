@@ -12,7 +12,6 @@ import (
 	"github.com/jitllm/jitllm/format/jlm"
 	"github.com/jitllm/jitllm/internal/testdevices"
 	"github.com/jitllm/jitllm/internal/testmodels"
-	"github.com/jitllm/jitllm/jit"
 	"github.com/jitllm/jitllm/jit/gpu/tier"
 )
 
@@ -204,10 +203,9 @@ var servedModels = []string{"Llama-3.2-1B-Instruct-Q4_K_M.gguf", "Qwen3-0.6B-Q8_
 // mistral3 and Llama 4 are served against the host with each feature taken
 // out (TestC6ServesComposed, TestSynthLlama4ServesComposed). LFM2-1.2B serves
 // every arm on Vulkan (median 0.974 of the tier's distance) and reads 1.503 on
-// CUDA, past the 1.5 band: open. Jamba-reasoning-3B reads 43 to 55 times the
-// tier's distance and its poisoned arm moves: a composed kernel reads what
-// nothing wrote on it (its random fixture, synth-jamba, is clean on both
-// backends): open.
+// CUDA, past the 1.5 band: open. Jamba-reasoning-3B's poisoned arm moved
+// because its int8 forms raced (Parts, now fixed: it decodes bit-identically
+// on both backends); its band on the V100 is to be read again.
 var formedModels = []string{"Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf",
 	"stories260K.gguf", "synth-ernie45.gguf", "synth-phi4v.gguf", "synth-seedoss.gguf", "synth-smollm3.gguf",
 	"synth-olmo2.gguf", "synth-olmo2-gqa.gguf", "newarch/synth-olmo2-q8.gguf", "synth-arcee.gguf", "synth-exaone4.gguf",
@@ -318,40 +316,40 @@ var promptModels = []string{"stories15M-q8_0.gguf", "Qwen3-0.6B-Q8_0.gguf", "Smo
 // prompts too (promptModels): a chunk's rows the scan's. A selective update
 // with one decay a head beside attention and an MLP (granite-4.0-h, and
 // Falcon-H1's mixer beside its attention in one block) and the gated short
-// convolution beside attention (LFM2).
+// convolution beside attention (LFM2), and Mamba-1's per-channel update
+// alone (mamba-130m), its output written apart from x (apartModels).
 var ssmServed = []string{"lfm2/LFM2-350M-Q4_K_M.gguf", "granite/granite-4.0-h-350m-Q8_0.gguf",
-	"falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf", "falconh1/Falcon-H1-1.5B-Instruct-Q8_0.gguf"}
+	"granite/granite-4.0-h-1b-Q4_K_M.gguf", "falconh1/Falcon-H1-0.5B-Instruct-Q4_K_M.gguf",
+	"falconh1/Falcon-H1-1.5B-Instruct-Q8_0.gguf", "mamba/mamba-130m-hf.Q8_0.gguf"}
 
 func init() {
 	servedModels = append(servedModels, ssmServed...)
 	promptModels = append(promptModels, ssmServed...)
 }
 
-// overInputModels are the state-space checkpoints whose blocks with no MLP
-// the cards decline by name (DeclineOverInput): the block's last kernel adds
-// the projection to x and writes the output, which the tier binds over x,
-// and a kernel reading x where it writes is not written over it -- its
-// surplus threads are clamped to the last element and the lanes storing an
-// element read it, some after another's store (RULE 13). Served in place,
-// mamba-130m parted from its float reference by 3.3 times the tier's
-// distance and changed under poisoned buffers, falcon-mamba-7B by 80,
-// mamba-codestral went non-finite at its 103rd step, and Nemotron-Nano-9B-v2
-// changed under poisoned buffers. synth-nemotronhmoe-q8, Nemotron-H's
-// mixture fixture, declines its mixer-only block the same way (a quarter of
-// its block steps; it had served in band but could not discriminate).
-var overInputModels = []string{"mamba/mamba-130m-hf.Q8_0.gguf", "falconmamba/falcon-mamba-7B-Q4_K_M.gguf",
+// apartModels are the state-space checkpoints whose blocks with no MLP end
+// in a kernel that adds the projection to x and writes the output: a kernel
+// reading x where it writes is not written over it -- its surplus threads
+// are clamped to the last element and the lanes storing an element read it,
+// some after another's store (RULE 13) -- so the cards write the output
+// apart, in a scratch of their own, and the composer's copy puts it over x
+// (graph.Copy). Written over x, mamba-130m parted from its float reference
+// by 3.3 times the tier's distance and changed under poisoned buffers,
+// falcon-mamba-7B by 80, mamba-codestral went non-finite at its 103rd step,
+// and Nemotron-Nano-9B-v2 changed under poisoned buffers. synth-nemotronhmoe-q8,
+// Nemotron-H's mixture fixture, has such a block a quarter of its steps.
+var apartModels = []string{"mamba/mamba-130m-hf.Q8_0.gguf", "falconmamba/falcon-mamba-7B-Q4_K_M.gguf",
 	"mamba2/mamba-codestral-7b-v0.1-q4_k_m.gguf", "nemotron/nvidia_NVIDIA-Nemotron-Nano-9B-v2-Q4_K_M.gguf",
 	"synth-nemotronhmoe-q8.gguf"}
 
-// TestComposedBlocksDeclineOverInput decodes each overInputModels checkpoint
-// with every block and the head asked of the composer on every device: the
-// blocks whose form would read x where it writes over it are declined by
-// that name and run the tier's kernels, the rest served, every block step
-// counted one or the other, and the logits finite and unchanged under
-// poisoned buffers.
-func TestComposedBlocksDeclineOverInput(t *testing.T) {
+// TestComposedBlocksServeApart decodes each apartModels checkpoint with
+// every block and the head asked of the composer on every device: every
+// block step served, nothing declined, the blocks whose form reads x where
+// it writes served apart and copied over x (a copy served for each), and
+// the logits finite and unchanged under poisoned buffers.
+func TestComposedBlocksServeApart(t *testing.T) {
 	ran := 0
-	for _, file := range overInputModels {
+	for _, file := range apartModels {
 		t.Run(file, func(t *testing.T) {
 			path := testmodels.Path(file)
 			if _, err := os.Stat(fixtureSource(path)); err != nil {
@@ -372,13 +370,13 @@ func TestComposedBlocksDeclineOverInput(t *testing.T) {
 					parts := tier.ComposedBlock | tier.ComposedHead
 					got, st, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false)
 					served, declined, _ := st.ServedPart(tier.ComposedBlock)
-					over := st.BlockDeclines[jit.DeclineOverInput]
-					if over == 0 {
-						t.Fatalf("no block declined as written over its input (%s): the gate selected nothing", declinesOf(st))
+					copies, _, _ := st.ServedPart(tier.PartCopy)
+					if served != len(toks)*m.Cfg.NLayer || declined != 0 {
+						t.Fatalf("%d block steps served and %d declined of %d: %s",
+							served, declined, len(toks)*m.Cfg.NLayer, declinesOf(st))
 					}
-					if served+declined != len(toks)*m.Cfg.NLayer || declined != over {
-						t.Fatalf("%d block steps served and %d declined (%d over the input) of %d: %s",
-							served, declined, over, len(toks)*m.Cfg.NLayer, declinesOf(st))
+					if copies == 0 {
+						t.Fatalf("no copy over x in %d block steps: the gate selected no block written apart", served)
 					}
 					poisoned, _, _, _ := composedDecode(t, m, dev, ids, toks, parts, true, false, tier.WithPoisonScratch(true), tier.WithPoisonKV(true))
 					for i := range got {
@@ -391,7 +389,7 @@ func TestComposedBlocksDeclineOverInput(t *testing.T) {
 							t.Fatalf("step %d: with every buffer poisoned the logits change: a kernel reads what nothing wrote", i)
 						}
 					}
-					t.Logf("%d block steps served, %d declined over the input", served, over)
+					t.Logf("%d block steps served, %d of them written apart and copied over x", served, copies)
 					ran++
 				})
 			}

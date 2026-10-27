@@ -8510,14 +8510,15 @@ func (g *devTier) layersSession(s backend.Session) {
 			default:
 				why = g.blockServes(l, li, p, bs, persist, kind == partPrompt)
 			}
-			var sv *servedPart
+			var sv, cp *servedPart
 			var inst *partInst
 			if asked && why == partServes {
 				var serr error
-				sv, inst, serr = g.servedStep(bs, l, li, p, R)
+				sv, inst, cp, serr = g.servedStep(bs, l, li, p, R)
 				switch {
-				case serr == errOverInput:
-					sv, inst, why = nil, nil, partOverInput
+				case serr == errOverInput || cp != nil && kind == partBlock && R == 1 && g.shadowing():
+					// The shadow arm runs a form on its own copy of x, in place.
+					sv, inst, cp, why = nil, nil, nil, partOverInput
 				case serr != nil:
 					if err == nil {
 						err = serr
@@ -8533,6 +8534,9 @@ func (g *devTier) layersSession(s backend.Session) {
 				}
 				if R > 1 && sv != nil {
 					sv.rows = nrow
+					if cp != nil {
+						cp.rows = nrow
+					}
 				}
 			}
 			// A held add this block's norm will not take runs alone first: a
@@ -8562,8 +8566,17 @@ func (g *devTier) layersSession(s backend.Session) {
 					err = serr
 				}
 			} else if inst != nil {
-				if serr := sv.runAs(g, lc, inst, kind, []backend.Buf{bs.x}, []backend.Buf{bs.x}); err == nil {
+				out := bs.x
+				if cp != nil {
+					out = bs.h
+				}
+				if serr := sv.runAs(g, lc, inst, kind, []backend.Buf{bs.x}, []backend.Buf{out}); err == nil {
 					err = serr
+				}
+				if cp != nil {
+					if serr := cp.run(g, lc, cp.inst, []backend.Buf{bs.h}, []backend.Buf{bs.x}); err == nil {
+						err = serr
+					}
 				}
 				// The form wrote the other half: the session reads it next,
 				// as after emitLinear.

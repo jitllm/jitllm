@@ -48,11 +48,14 @@ const (
 	// rows, its rows at the chunk's.
 	partEmbed
 	partEmbedRows
+	// partCopy is a block's output, written apart from x where its form
+	// reads x in the kernel writing it, copied over x (graph.Copy).
+	partCopy
 	numParts
 )
 
 var partNames = [...]string{partHead: "head", partBlock: "block", partShadow: "shadow", partPrompt: "prompt block",
-	partRope: "table", partSample: "sample", partEmbed: "input rows", partEmbedRows: "prompt input rows"}
+	partRope: "table", partSample: "sample", partEmbed: "input rows", partEmbedRows: "prompt input rows", partCopy: "copy"}
 
 // composedPart is a part of the model as the composer is asked for it: its
 // graph of generic ops, the formats of the weights it binds, and the tier's
@@ -630,6 +633,10 @@ const (
 	// PromptEmbed counts what ComposedEmbed serves of a prompt chunk's input
 	// rows (Stats.ServedPart), apart from a decode step's.
 	PromptEmbed Parts = 1 << partEmbedRows
+	// PartCopy selects in Stats.ServedPart the copies of block outputs
+	// written apart from x (servedCopy). Config.Composed takes no such bit:
+	// a block the composer serves asks for one where it needs it.
+	PartCopy Parts = 1 << partCopy
 	// ComposedStep is every part of a one-row step: its input row, tables,
 	// blocks, head and token.
 	ComposedStep = ComposedEmbed | ComposedTable | ComposedBlock | ComposedHead | ComposedSample
@@ -1612,7 +1619,10 @@ func (l *layer) windowHeld(li int, p *nn.LayerPlan) bool {
 // servedStep is block li's served part at this step of R rows and the
 // lane's instance it launches in, nil where the budget does not hold the
 // instance of a prompt's form.
-func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan, R int) (*servedPart, *partInst, error) {
+// A form that reads x in the kernel writing its output is written apart, in
+// bs.h, and copied over x after (servedCopy): cp is that copy, nil where the
+// form writes over x.
+func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan, R int) (sv *servedPart, inst *partInst, cp *servedPart, err error) {
 	rcs := bs.cs
 	if bs.csSWA != nil && p.LocalRope(li) {
 		rcs = bs.csSWA
@@ -1621,17 +1631,41 @@ func (g *devTier) servedStep(bs *blockScratch, l *layer, li int, p *nn.LayerPlan
 	if R > 1 {
 		qOff = bs.roff
 	}
-	sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(p, li), qOff, bs.calls, bs.dRows, p.MaxSeq, g.kvp.p, R)
+	sv, err = g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(p, li), qOff, bs.calls, bs.dRows, p.MaxSeq, g.kvp.p, R)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if !sv.f.inPlace(0, 0) {
-		return nil, nil, errOverInput
+		if cp, err = g.servedCopy(bs, R); err != nil {
+			return nil, nil, nil, err
+		}
 	}
 	if R == 1 {
-		return sv, sv.inst, nil
+		return sv, sv.inst, cp, nil
 	}
-	return sv, g.promptInst(bs, sv.f), nil
+	return sv, g.promptInst(bs, sv.f), cp, nil
+}
+
+// servedCopy is the copy of a block's output from bs.h over x at a step of
+// rows, formed through the composer like any other part, for a form that
+// cannot write its output over x (partForm.inPlace). errOverInput where bs.h
+// cannot hold the output: a residual of several streams, wider than a row.
+func (g *devTier) servedCopy(bs *blockScratch, rows int) (*servedPart, error) {
+	w := bs.p.ResidW()
+	if w != bs.p.NEmbd || rows > bs.rows {
+		return nil, errOverInput
+	}
+	gr := g.copyGraphs[w]
+	if gr == nil {
+		gr = (&graph.Copy{Width: w}).Build()
+		if g.copyGraphs == nil {
+			g.copyGraphs = map[int]*graph.Graph{}
+		}
+		g.copyGraphs[w] = gr
+	}
+	return g.servedFor(servedKey{kind: partCopy, graph: gr, rows: rows}, func() (composedPart, error) {
+		return composedPart{kind: partCopy, graph: gr}, nil
+	})
 }
 
 // prewarmComposed forms every placed block's part and the head's at
@@ -1664,10 +1698,16 @@ func (g *devTier) prewarmComposedBlock(li int) {
 		if bs.csSWA != nil && bs.p.LocalRope(li) {
 			rcs = bs.csSWA
 		}
-		if _, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(&bs.p, li), bs.zero, bs.calls, bs.dRows, bs.p.MaxSeq,
-			g.kvp.p, 1); err != nil {
+		sv, err := g.servedBlock(l, li, rcs, g.kvp.layers[li], bs.pkv.pRow, bs.pkv.windowDesc(&bs.p, li), bs.zero, bs.calls, bs.dRows, bs.p.MaxSeq,
+			g.kvp.p, 1)
+		if err != nil {
 			g.LastErr = "the composed block: " + err.Error()
 			return
+		}
+		if !sv.f.inPlace(0, 0) {
+			if _, err := g.servedCopy(bs, 1); err != nil {
+				g.LastErr = "the composed block's copy: " + err.Error()
+			}
 		}
 	}
 	// Every prompt width the lane holds a scratch for, and a ragged step's:
@@ -1693,6 +1733,11 @@ func (g *devTier) prewarmComposedBlock(li int) {
 		}
 		if err := g.spreadParts(g.lane, o, l.graph); err != nil {
 			g.LastErr = "a lane's composed block: " + err.Error()
+		}
+		for _, gr := range g.copyGraphs {
+			if err := g.spreadParts(g.lane, o, gr); err != nil {
+				g.LastErr = "a lane's composed copy: " + err.Error()
+			}
 		}
 	})
 }
@@ -1731,8 +1776,10 @@ func (g *devTier) promptServed(l *layer, li int, bb *blockScratch) bool {
 		return false
 	}
 	if !sv.f.inPlace(0, 0) {
-		g.LastErr, g.promptWhy = errOverInput.Error(), partOverInput
-		return false
+		if _, err := g.servedCopy(bb, bb.rows); err != nil {
+			g.LastErr, g.promptWhy = err.Error(), partOverInput
+			return false
+		}
 	}
 	return g.promptInst(bb, sv.f) != nil
 }

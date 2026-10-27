@@ -9098,3 +9098,44 @@ row where the composer's reads two.
   (one card) and TestDecodeDoesNotAllocate on every cuda arm; its serving
   gate there reads a median 1.08 and 0.248 at its worst against 4 times
   the one backend's 0.039 (the V100 holds it to two backends' widest).
+- **Every state-space block served, none over its input.** Four causes,
+  each a gate. (1) A form whose last kernel reads x where it writes its
+  output (a block with no MLP: Mamba, Nemotron-H's mixer layers) is now
+  served apart rather than declined: the cards write its output to the
+  scratch's h and a copy the composer forms (graph.Copy, the part kind
+  partCopy, counted as Stats.ServedPart(PartCopy)) puts it over x.
+  TestComposedBlocksServeApart (TestComposedBlocksDeclineOverInput as it
+  was) serves every block step of mamba-130m (576 of 576 written apart),
+  Nemotron-Nano-9B-v2 (744, 144 apart), mamba-codestral (1536 of 1536) and
+  synth-nemotronhmoe-q8 (96, 24 apart), unchanged under poisoned buffers.
+  (2) A model whose blocks never attend (plain Mamba) states one
+  placeholder head as wide as the embedding; the tier built FlashDecodeKV
+  for it at 4096 wide, which sm_70 refused to JIT (CUresult 218), and
+  falcon-mamba-7B and mamba-codestral placed 0 of 64 blocks. The plan
+  carries NoAttention and the paged variant is built empty. (3) Parts let a
+  part whose threads combine (a workgroup sum or max, a lane shuffle: the
+  int8 forms' amax) join a wider launch, its surplus threads clamped to its
+  last element combining among themselves and storing another scale there
+  (RULE 13). Mamba-1's 1536-channel int8 forms beside a 4608-wide window
+  copy and a 24576-wide state copy made two identical decodes part on the
+  V100 (mamba-130m from step 3, worst logit 10.5 on CUDA and 22.2 on
+  Vulkan; Jamba from step 2; bit-identical with the tier's kernels and with
+  float activations): with the combine counted both decode bit-identically
+  on both backends, poisoned or not (TestPartsJoinNoCombineAcrossWidths).
+  (4) The CPU's InPlace let a head's output take the projection's own
+  buffer, so a head with a logit scale or a final softcap never wrote the
+  caller's logits: granite-4.0-h-350m's composed CPU read zero logits
+  (NMSE 1 from its BOS; G3b2's zero-embedding reading was not the cause). A
+  graph's output now takes only storage its caller holds
+  (TestCPUHeadStoresItsOutputs); granite-4.0-h-350m serves on the CPU at a
+  median 0.510 of main's spread. Open: the CPU head's hidden output
+  (headHidden, a decision model's row taps) is folded into the projection
+  and stored by no kernel. synth-deepseek-yarn's router violations were
+  vacuous: its three blocks are all dense leads, no router runs on any
+  arm, and routerViolations now asks for a routed block. On the V100
+  granite-4.0-h-1b (CUDA median 1.066, Vulkan 0.940, its Vulkan head
+  served) and mamba-130m (1.048 and 0.985; the tier itself sits 98.9 from
+  the float reference at its worst on CUDA) pass every serving arm and are
+  served; synth-nemotronhmoe-q8 serves but its gate cannot discriminate
+  (one position off 2.6, ten times the arm's worst 0.574 wanted), and stays
+  in the over-input gate alone.
